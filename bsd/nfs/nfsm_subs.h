@@ -433,7 +433,7 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 
 /* add NFSv4 COMPOUND header */
 #define NFS4_TAG_LENGTH	12
-#define nfsm_chain_add_compound_header(E, NMC, TAG, NUMOPS) \
+#define nfsm_chain_add_compound_header(E, NMC, TAG, MINOR, NUMOPS) \
 	do { \
 		if ((TAG) && strlen(TAG)) { \
 			/* put tags into a fixed-length space-padded field */ \
@@ -444,7 +444,7 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 		} else { \
 			nfsm_chain_add_32((E), (NMC), 0); \
 		} \
-		nfsm_chain_add_32((E), (NMC), 0); /*minorversion*/ \
+		nfsm_chain_add_32((E), (NMC), (MINOR)); /*minorversion*/ \
 		nfsm_chain_add_32((E), (NMC), (NUMOPS)); \
 	} while (0)
 

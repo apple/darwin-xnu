@@ -2,8 +2,9 @@
  *  ccdes.h
  *  corecrypto
  *
- *  Created by Fabrice Gautier on 12/20/10.
- *  Copyright 2010 Apple, Inc. All rights reserved.
+ *  Created on 12/20/2010
+ *
+ *  Copyright (c) 2010,2012,2015 Apple Inc. All rights reserved.
  *
  */
 

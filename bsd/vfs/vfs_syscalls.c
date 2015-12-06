@@ -99,6 +99,7 @@
 #include <sys/fsctl.h>
 #include <sys/ubc_internal.h>
 #include <sys/disk.h>
+#include <sys/content_protection.h>
 #include <machine/cons.h>
 #include <machine/limits.h>
 #include <miscfs/specfs/specdev.h>
@@ -115,6 +116,7 @@
 
 #include <libkern/OSAtomic.h>
 #include <pexpert/pexpert.h>
+#include <IOKit/IOBSD.h>
 
 #if CONFIG_MACF
 #include <security/mac.h>
@@ -738,7 +740,7 @@ update:
 			if ( (error = namei(&nd)) )
 				goto out1;
 
-			strncpy(mp->mnt_vfsstat.f_mntfromname, nd.ni_cnd.cn_pnbuf, MAXPATHLEN);
+			strlcpy(mp->mnt_vfsstat.f_mntfromname, nd.ni_cnd.cn_pnbuf, MAXPATHLEN);
 			devvp = nd.ni_vp;
 
 			nameidone(&nd);
@@ -989,6 +991,8 @@ update:
 
 		/* Now that mount is setup, notify the listeners */
 		vfs_notify_mount(pvp);
+		IOBSDMountChange(mp, kIOMountChangeMount);
+
 	} else {
 		/* If we fail a fresh mount, there should be no vnodes left hooked into the mountpoint. */
 		if (mp->mnt_vnodelist.tqh_first != NULL) {
@@ -1524,8 +1528,8 @@ relocate_imageboot_source(vnode_t pvp, vnode_t vp, struct componentname *cnp,
 
 	placed = TRUE;
 
-	strncpy(old_mntonname, mp->mnt_vfsstat.f_mntonname, MAXPATHLEN);
-	strncpy(mp->mnt_vfsstat.f_mntonname, cnp->cn_pnbuf, MAXPATHLEN);
+	strlcpy(old_mntonname, mp->mnt_vfsstat.f_mntonname, MAXPATHLEN);
+	strlcpy(mp->mnt_vfsstat.f_mntonname, cnp->cn_pnbuf, MAXPATHLEN);
 
 	/* Forbid future moves */
 	mount_lock(mp);
@@ -1550,7 +1554,7 @@ relocate_imageboot_source(vnode_t pvp, vnode_t vp, struct componentname *cnp,
 
 	return 0;
 out3:
-	strncpy(mp->mnt_vfsstat.f_mntonname, old_mntonname, MAXPATHLEN);
+	strlcpy(mp->mnt_vfsstat.f_mntonname, old_mntonname, MAXPATHLEN);
 
 	mount_lock(mp);
 	mp->mnt_kern_flag &= ~(MNTK_HAS_MOVED);
@@ -1919,6 +1923,8 @@ dounmount(struct mount *mp, int flags, int withref, vfs_context_t ctx)
 			}
 		}
 	}
+
+	IOBSDMountChange(mp, kIOMountChangeUnmount);
 
 #if CONFIG_TRIGGERS
 	vfs_nested_trigger_unmounts(mp, flags, ctx);
@@ -3295,15 +3301,16 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	int flags, oflags;
 	int type, indx, error;
 	struct flock lf;
-	int no_controlling_tty = 0;
-	int deny_controlling_tty = 0;
-	struct session *sessp = SESSION_NULL;
+	struct vfs_context context;
 
 	oflags = uflags;
 
 	if ((oflags & O_ACCMODE) == O_ACCMODE)
 		return(EINVAL);
+
 	flags = FFLAGS(uflags);
+	CLR(flags, FENCRYPTED);
+	CLR(flags, FUNENCRYPTED);
 
 	AUDIT_ARG(fflags, oflags);
 	AUDIT_ARG(mode, vap->va_mode);
@@ -3314,67 +3321,25 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	}
 	uu->uu_dupfd = -indx - 1;
 
-	if (!(p->p_flag & P_CONTROLT)) {
-		sessp = proc_session(p);
-		no_controlling_tty = 1;
-		/*
-		 * If conditions would warrant getting a controlling tty if
-		 * the device being opened is a tty (see ttyopen in tty.c),
-		 * but the open flags deny it, set a flag in the session to
-		 * prevent it.
-		 */
-		if (SESS_LEADER(p, sessp) &&
-		    sessp->s_ttyvp == NULL &&
-		    (flags & O_NOCTTY)) {
-			session_lock(sessp);
-		    	sessp->s_flags |= S_NOCTTY;
-			session_unlock(sessp);
-			deny_controlling_tty = 1;
-		}
-	}
-
 	if ((error = vn_open_auth(ndp, &flags, vap))) {
 		if ((error == ENODEV || error == ENXIO) && (uu->uu_dupfd >= 0)){	/* XXX from fdopen */
 			if ((error = dupfdopen(p->p_fd, indx, uu->uu_dupfd, flags, error)) == 0) {
 				fp_drop(p, indx, NULL, 0);
 			        *retval = indx;
-				if (deny_controlling_tty) {
-					session_lock(sessp);
-					sessp->s_flags &= ~S_NOCTTY;
-					session_unlock(sessp);
-				}
-				if (sessp != SESSION_NULL)
-					session_rele(sessp);
 				return (0);
 			}
 		}
 		if (error == ERESTART)
 		        error = EINTR;
 		fp_free(p, indx, fp);
-
-		if (deny_controlling_tty) {
-			session_lock(sessp);
-			sessp->s_flags &= ~S_NOCTTY;
-			session_unlock(sessp);
-		}
-		if (sessp != SESSION_NULL)
-			session_rele(sessp);
 		return (error);
 	}
 	uu->uu_dupfd = 0;
 	vp = ndp->ni_vp;
 
-	fp->f_fglob->fg_flag = flags & (FMASK | O_EVTONLY);
+	fp->f_fglob->fg_flag = flags & (FMASK | O_EVTONLY | FENCRYPTED | FUNENCRYPTED);
 	fp->f_fglob->fg_ops = &vnops;
 	fp->f_fglob->fg_data = (caddr_t)vp;
-
-#if CONFIG_PROTECT
-	if (VATTR_IS_ACTIVE (vap, va_dataprotect_flags)) {
-		if (vap->va_dataprotect_flags & VA_DP_RAWENCRYPTED) {
-			fp->f_fglob->fg_flag |= FENCRYPTED;
-		}
-	}
-#endif
 
 	if (flags & (O_EXLOCK | O_SHLOCK)) {
 		lf.l_whence = SEEK_SET;
@@ -3403,33 +3368,6 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 		goto bad;
 
 	/*
-	 * If the open flags denied the acquisition of a controlling tty,
-	 * clear the flag in the session structure that prevented the lower
-	 * level code from assigning one.
-	 */
-	if (deny_controlling_tty) {
-		session_lock(sessp);
-		sessp->s_flags &= ~S_NOCTTY;
-		session_unlock(sessp);
-	}
-
-	/*
-	 * If a controlling tty was set by the tty line discipline, then we
-	 * want to set the vp of the tty into the session structure.  We have
-	 * a race here because we can't get to the vp for the tp in ttyopen,
-	 * because it's not passed as a parameter in the open path.
-	 */
-	if (no_controlling_tty && (p->p_flag & P_CONTROLT)) {
-		vnode_t ttyvp;
-
-		session_lock(sessp);
-		ttyvp = sessp->s_ttyvp;
-		sessp->s_ttyvp = vp;
-		sessp->s_ttyvid = vnode_vid(vp);
-		session_unlock(sessp);
-	}
-
-	/*
 	 * For directories we hold some additional information in the fd.
 	 */
 	if (vnode_vtype(vp) == VDIR) {
@@ -3439,6 +3377,18 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	}
 
 	vnode_put(vp);
+
+	/*
+	 * The first terminal open (without a O_NOCTTY) by a session leader
+	 * results in it being set as the controlling terminal.
+	 */
+	if (vnode_istty(vp) && !(p->p_flag & P_CONTROLT) &&
+	    !(flags & O_NOCTTY)) {
+		int tmp = 0;
+
+		(void)(*fp->f_fglob->fg_ops->fo_ioctl)(fp, (int)TIOCSCTTY,
+		    (caddr_t)&tmp, ctx);
+	}
 
 	proc_fdlock(p);
 	if (flags & O_CLOEXEC)
@@ -3451,19 +3401,9 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 
 	*retval = indx;
 
-	if (sessp != SESSION_NULL)
-		session_rele(sessp);
 	return (0);
 bad:
-	if (deny_controlling_tty) {
-		session_lock(sessp);
-		sessp->s_flags &= ~S_NOCTTY;
-		session_unlock(sessp);
-	}
-	if (sessp != SESSION_NULL)
-		session_rele(sessp);
-
-	struct vfs_context context = *vfs_context_current();
+	context = *vfs_context_current();
 	context.vc_ucred = fp->f_fglob->fg_cred;
     
     	if ((fp->f_fglob->fg_flag & FHASLOCK) &&
@@ -3629,15 +3569,27 @@ int open_dprotected_np (__unused proc_t p, struct open_dprotected_np_args *uap, 
 	 * 2. set a flag to mark it as requiring open-raw-encrypted semantics. 
 	 */ 
 	if (flags & O_CREAT) {	
-		VATTR_SET(&va, va_dataprotect_class, class);
+               /* lower level kernel code validates that the class is valid before applying it. */
+               if (class != PROTECTION_CLASS_DEFAULT) {
+                       /*
+                        * PROTECTION_CLASS_DEFAULT implies that we make the class for this
+                        * file behave the same as open (2)
+                        */
+                       VATTR_SET(&va, va_dataprotect_class, class);
+               }
 	}
 	
-	if (dpflags & O_DP_GETRAWENCRYPTED) {
+	if (dpflags & (O_DP_GETRAWENCRYPTED|O_DP_GETRAWUNENCRYPTED)) {
 		if ( flags & (O_RDWR | O_WRONLY)) {
 			/* Not allowed to write raw encrypted bytes */
 			return EINVAL;		
 		}			
-		VATTR_SET(&va, va_dataprotect_flags, VA_DP_RAWENCRYPTED);
+		if (uap->dpflags & O_DP_GETRAWENCRYPTED) {
+		    VATTR_SET(&va, va_dataprotect_flags, VA_DP_RAWENCRYPTED);
+		}
+		if (uap->dpflags & O_DP_GETRAWUNENCRYPTED) {
+		    VATTR_SET(&va, va_dataprotect_flags, VA_DP_RAWUNENCRYPTED);
+		}
 	}
 
 	error = open1(vfs_context_current(), &nd, uap->flags, &va,
@@ -3816,9 +3768,6 @@ mknod(proc_t p, struct mknod_args *uap, __unused int32_t *retval)
 	}
 
 	switch (uap->mode & S_IFMT) {
-	case S_IFMT:	/* used by badsect to flag bad sectors */
-		VATTR_SET(&va, va_type, VBAD);
-		break;
 	case S_IFCHR:
 		VATTR_SET(&va, va_type, VCHR);
 		break;
@@ -4353,17 +4302,18 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
 		error = VNOP_SYMLINK(dvp, &vp, &nd.ni_cnd, &va, path, ctx);
 
 #if CONFIG_MACF
-	if (error == 0)
+	if (error == 0 && vp)
 		error = vnode_label(vnode_mount(vp), dvp, vp, &nd.ni_cnd, VNODE_LABEL_CREATE, ctx);
 #endif
 
 	/* do fallback attribute handling */
-	if (error == 0)
+	if (error == 0 && vp)
 		error = vnode_setattr_fallback(vp, &va, ctx);
 
 	if (error == 0) {
 		int	update_flags = 0;
 
+		/*check if a new vnode was created, else try to get one*/
 		if (vp == NULL) {
 			nd.ni_cnd.cn_nameiop = LOOKUP;
 #if CONFIG_TRIGGERS
@@ -4544,10 +4494,12 @@ lookup_continue:
 		if (!batched) {
 			error = vn_authorize_unlink(dvp, vp, cnp, ctx, NULL);
 			if (error) {
-				if (error == ENOENT &&
-				    retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
-					do_retry = 1;
-					retry_count++;
+				if (error == ENOENT) {
+					assert(retry_count < MAX_AUTHORIZE_ENOENT_RETRIES);
+					if (retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+						do_retry = 1;
+						retry_count++;
+					}
 				}
 				goto out;
 			}
@@ -4612,16 +4564,18 @@ lookup_continue:
 				goto out;
 			}
 			goto lookup_continue;
-		} else if (error == ENOENT && batched &&
-		    retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
-			/*
-			 * For compound VNOPs, the authorization callback may
-			 * return ENOENT in case of racing hardlink lookups
-			 * hitting the name  cache, redrive the lookup.
-			 */
-			do_retry = 1;
-			retry_count += 1;
-			goto out;
+		} else if (error == ENOENT && batched) {
+			assert(retry_count < MAX_AUTHORIZE_ENOENT_RETRIES);
+			if (retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+				/*
+				 * For compound VNOPs, the authorization callback may
+				 * return ENOENT in case of racing hardlink lookups
+				 * hitting the name  cache, redrive the lookup.
+				 */
+				do_retry = 1;
+				retry_count += 1;
+				goto out;
+			}
 		}
 	}
 
@@ -6713,15 +6667,17 @@ continue_lookup:
 	if (!batched) {
 		error = vn_authorize_rename(fdvp, fvp, &fromnd->ni_cnd, tdvp, tvp, &tond->ni_cnd, ctx, NULL);
 		if (error) {
-			if (error == ENOENT &&
-			    retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
-				/*
-				 * We encountered a race where after doing the namei, tvp stops
-				 * being valid. If so, simply re-drive the rename call from the
-				 * top.
-				 */
-				do_retry = 1;
-				retry_count += 1;
+			if (error == ENOENT) {
+				assert(retry_count < MAX_AUTHORIZE_ENOENT_RETRIES);
+				if (retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+					/*
+					 * We encountered a race where after doing the namei, tvp stops
+					 * being valid. If so, simply re-drive the rename call from the
+					 * top.
+					 */
+					do_retry = 1;
+					retry_count += 1;
+				}
 			}
 			goto out1;
 		}
@@ -6994,10 +6950,12 @@ skipped_lookup:
 		 * ENOENT in case of racing hardlink lookups hitting the name
 		 * cache, redrive the lookup.
 		 */
-		if (batched && error == ENOENT &&
-		    retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
-			do_retry = 1;
-			retry_count += 1;
+		if (batched && error == ENOENT) {
+			assert(retry_count < MAX_AUTHORIZE_ENOENT_RETRIES);
+			if (retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+				do_retry = 1;
+				retry_count += 1;
+			}
 		}
 
 		goto out1;
@@ -7424,10 +7382,12 @@ continue_lookup:
 			if (!batched) {
 				error = vn_authorize_rmdir(dvp, vp, &nd.ni_cnd, ctx, NULL);
 				if (error) {
-					if (error == ENOENT &&
-					    restart_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
-						restart_flag = 1;
-						restart_count += 1;
+					if (error == ENOENT) {
+						assert(restart_count < MAX_AUTHORIZE_ENOENT_RETRIES);
+						if (restart_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+							restart_flag = 1;
+							restart_count += 1;
+						}
 					}
 					goto out;
 				}
@@ -7484,16 +7444,18 @@ continue_lookup:
 
 		if (error == EKEEPLOOKING) {
 			goto continue_lookup;
-		} else if (batched && error == ENOENT &&
-		    restart_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
-			/*
-			 * For compound VNOPs, the authorization callback
-			 * may return ENOENT in case of racing hard link lookups
-			 * redrive the lookup.
-			 */
-			restart_flag = 1;
-			restart_count += 1;
-			goto out;
+		} else if (batched && error == ENOENT) {
+			assert(restart_count < MAX_AUTHORIZE_ENOENT_RETRIES);
+			if (restart_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+				/*
+				 * For compound VNOPs, the authorization callback
+				 * may return ENOENT in case of racing hard link lookups
+				 * redrive the lookup.
+				 */
+				restart_flag = 1;
+				restart_count += 1;
+				goto out;
+			}
 		}
 #if CONFIG_APPLEDOUBLE
 		/*
@@ -9308,11 +9270,12 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 
 	memp = NULL;
 
+
 	/*
 	 * ensure the buffer is large enough for underlying calls
 	 */
 #ifndef HFSIOC_GETPATH
-typedef char pn_t[MAXPATHLEN];
+	typedef char pn_t[MAXPATHLEN];
 #define HFSIOC_GETPATH  _IOWR('h', 13, pn_t)
 #endif
 
@@ -9323,7 +9286,6 @@ typedef char pn_t[MAXPATHLEN];
 		/* Round up to MAXPATHLEN regardless of user input */
 		size = MAXPATHLEN;
 	}
-
 
 	if (size > sizeof (stkbuf)) {
 		if ((memp = (caddr_t)kalloc(size)) == 0) return ENOMEM;
@@ -9719,27 +9681,30 @@ ffsctl (proc_t p, struct ffsctl_args *uap, __unused int32_t *retval)
 	
 	/* Get the vnode for the file we are getting info on:  */
 	if ((error = file_vnode(uap->fd, &vp)))
-		goto done;
+		return error;
 	fd = uap->fd;
 	if ((error = vnode_getwithref(vp))) {
-		goto done;
+		file_drop(fd);
+		return error;
 	}
 
 #if CONFIG_MACF
-	error = mac_mount_check_fsctl(ctx, vnode_mount(vp), uap->cmd);
-	if (error) {
-		goto done;
+	if ((error = mac_mount_check_fsctl(ctx, vnode_mount(vp), uap->cmd))) {
+		file_drop(fd);
+		vnode_put(vp);
+		return error;
 	}
 #endif
 
 	error = fsctl_internal(p, &vp, uap->cmd, (user_addr_t)uap->data, uap->options, ctx);
 
-done:
-	if (fd != -1)
-		file_drop(fd);
+	file_drop(fd);
 
-	if (vp)
+	/*validate vp; fsctl_internal() can drop iocount and reset vp to NULL*/
+	if (vp) {
 		vnode_put(vp);
+	}
+
 	return error;
 }
 /* end of fsctl system call */
@@ -9959,7 +9924,12 @@ fsetxattr(proc_t p, struct fsetxattr_args *uap, int *retval)
 		return (EINVAL);
 
 	if ((error = copyinstr(uap->attrname, attrname, sizeof(attrname), &namelen) != 0)) {
-		return (error);
+		if (error == EPERM) {
+			/* if the string won't fit in attrname, copyinstr emits EPERM */
+			return (ENAMETOOLONG);
+		}
+		/* Otherwise return the default error from copyinstr to detect ERANGE, etc */
+		return error;
 	}
 	if (xattr_protected(attrname))
 		return(EPERM);

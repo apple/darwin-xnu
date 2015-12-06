@@ -38,13 +38,11 @@ OSDefineAbstractStructors(IONVRAMController, IOService);
 // init
 //
 // ****************************************************************************
-bool IONVRAMController::start(IOService *provider)
+void IONVRAMController::registerService(IOOptionBits options)
 {
-  if(!super::start(provider)) return false;
-  
-  getPlatform()->registerNVRAMController(this);
-  
-  return true;
+	super::registerService(options);
+
+	getPlatform()->registerNVRAMController(this);
 }
 
 // ****************************************************************************

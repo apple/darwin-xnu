@@ -41,7 +41,7 @@ private:
     IOSimpleLock *guardLock;
     volatile bool threadMustStop;
     IOReturn fResult;
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
     virtual void privateSignal();
 
 public:

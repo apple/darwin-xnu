@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -179,7 +179,6 @@ typedef enum {
 #define		M_SetBitNum(integer,bitNumber) 		((integer) |= (1<<(bitNumber)))
 #define		M_IsOdd(integer) 					(((integer) & 1) != 0)
 #define		M_IsEven(integer) 					(((integer) & 1) == 0)
-#define		M_BTreeHeaderDirty(btreePtr)		btreePtr->flags |= kBTHeaderDirty
 
 #define		M_MapRecordSize(nodeSize)			(nodeSize - sizeof (BTNodeDescriptor) - 6)
 #define		M_HeaderMapRecordSize(nodeSize)		(nodeSize - sizeof(BTNodeDescriptor) - sizeof(BTHeaderRec) - 128 - 8)
@@ -229,8 +228,11 @@ typedef struct BTreeControlBlock {					// fields specific to BTree CBs
 	u_int32_t					 numValidHints;		// Hint used to find correct record.
 	u_int32_t					reservedNodes;
 	BTreeIterator   iterator; // useable when holding exclusive b-tree lock
-} BTreeControlBlock, *BTreeControlBlockPtr;
 
+#if DEBUG
+	void						*madeDirtyBy[2];
+#endif
+} BTreeControlBlock, *BTreeControlBlockPtr;
 
 u_int32_t CalcKeySize(const BTreeControlBlock *btcb, const BTreeKey *key);
 #define CalcKeySize(btcb, key)			( ((btcb)->attributes & kBTBigKeysMask) ? ((key)->length16 + 2) : ((key)->length8 + 1) )
@@ -244,6 +246,13 @@ typedef enum {
 					kBTHeaderDirty	= 0x00000001
 }	BTreeFlags;
 
+static inline void M_BTreeHeaderDirty(BTreeControlBlock *bt) {
+#if DEBUG
+	bt->madeDirtyBy[0] = __builtin_return_address(0);
+	bt->madeDirtyBy[1] = __builtin_return_address(1);
+#endif
+	bt->flags |= kBTHeaderDirty;
+}
 
 typedef	int8_t				*NodeBuffer;
 typedef BlockDescriptor		 NodeRec, *NodePtr;		//€€ remove this someday...

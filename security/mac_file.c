@@ -204,13 +204,13 @@ mac_file_check_lock(struct ucred *cred, struct fileglob *fg, int op,
  */
 int
 mac_file_check_mmap(struct ucred *cred, struct fileglob *fg, int prot,
-    int flags, int *maxprot)
+    int flags, uint64_t offset, int *maxprot)
 {
 	int error;
 	int maxp;
 
 	maxp = *maxprot;
-	MAC_CHECK(file_check_mmap, cred, fg, fg->fg_label, prot, flags, &maxp);
+	MAC_CHECK(file_check_mmap, cred, fg, fg->fg_label, prot, flags, offset, &maxp);
 	if ((maxp | *maxprot) != *maxprot)
 		panic("file_check_mmap increased max protections");
 	*maxprot = maxp;

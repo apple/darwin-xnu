@@ -66,9 +66,9 @@ $(SOBJS): .SFLAGS
 
 $(COMPONENT).filelist: $(OBJS)
 	@echo LDFILELIST $(COMPONENT)
-	$(_v)( for obj in ${OBJS}; do	\
+	$(_v)for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
-	done; ) > $(COMPONENT).filelist
+	done > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist
 

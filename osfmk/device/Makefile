@@ -15,9 +15,14 @@ DATAFILES = \
 	device_types.h device_port.h device_types.defs \
 	${MIG_DEFS}
 
+PRIVATE_DATAFILES = \
+	device_types.h
+
 MIGINCLUDES = \
 
 INSTALL_MI_LIST	= ${DATAFILES} ${_MIG_HDRS_} ${MIGINCLUDES}
+
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MI_DIR = device
 

@@ -106,7 +106,7 @@
  */
 
 #define DECLARE(SYM,VAL) \
-	__asm("#DEFINITION##define " SYM "\t%0" : : "n" ((u_int)(VAL)))
+	__asm("DEFINITION__define__" SYM ":\t .ascii \"%0\"" : : "n"  ((u_int)(VAL)))
 
 int	main(
 		int		argc,
@@ -139,7 +139,6 @@ main(
 	DECLARE("MUTEX_PTR",   offsetof(lck_mtx_t, lck_mtx_ptr));
 	DECLARE("MUTEX_STATE", offsetof(lck_mtx_t, lck_mtx_state));
 	DECLARE("MUTEX_IND",	LCK_MTX_TAG_INDIRECT);
-	DECLARE("MUTEX_PTR",	offsetof(lck_mtx_t, lck_mtx_ptr));
 	DECLARE("MUTEX_ASSERT_OWNED",	LCK_MTX_ASSERT_OWNED);
 	DECLARE("MUTEX_ASSERT_NOTOWNED",LCK_MTX_ASSERT_NOTOWNED);
 	DECLARE("GRP_MTX_STAT_UTIL",	offsetof(lck_grp_t, lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_util_cnt));
@@ -310,17 +309,7 @@ main(
 	DECLARE("ASM_COMM_PAGE32_START_ADDRESS",  _COMM_PAGE32_START_ADDRESS);
 	DECLARE("ASM_COMM_PAGE_SCHED_GEN",  _COMM_PAGE_SCHED_GEN);
 
-	DECLARE("PDESHIFT",	PDESHIFT);
-	DECLARE("PTEMASK",	PTEMASK);
-	DECLARE("PTEINDX",      PTEINDX);
-	DECLARE("INTEL_PTE_PFN",	INTEL_PTE_PFN);
-	DECLARE("INTEL_PTE_VALID",	INTEL_PTE_VALID);
-	DECLARE("INTEL_PTE_WRITE",	INTEL_PTE_WRITE);
-	DECLARE("INTEL_PTE_PS",       INTEL_PTE_PS);
-	DECLARE("INTEL_PTE_USER",        INTEL_PTE_USER);
-	DECLARE("INTEL_PTE_INVALID",	INTEL_PTE_INVALID);
-	DECLARE("NPGPTD", NPGPTD);
-	DECLARE("KERNEL_PML4_INDEX",KERNEL_PML4_INDEX);
+	DECLARE("KERNEL_PML4_INDEX", KERNEL_PML4_INDEX);
 	DECLARE("IDTSZ",	IDTSZ);
 	DECLARE("GDTSZ",	GDTSZ);
 	DECLARE("LDTSZ",	LDTSZ);
@@ -423,8 +412,6 @@ main(
 	DECLARE("CPU_PMAP_PCID_FLUSHES",
 	    offsetof(cpu_data_t, cpu_pmap_pcid_flushes));
 #endif
-	DECLARE("CPU_TLB_INVALID",
-		offsetof(cpu_data_t, cpu_tlb_invalid));
 	DECLARE("CPU_TLB_INVALID_LOCAL",
 	    offsetof(cpu_data_t, cpu_tlb_invalid_local));
 	DECLARE("CPU_TLB_INVALID_GLOBAL",
@@ -442,15 +429,6 @@ main(
 	DECLARE("dgMisc3",		offsetof(struct diagWork, dgMisc3));
 	DECLARE("dgMisc4",		offsetof(struct diagWork, dgMisc4));
 	DECLARE("dgMisc5",		offsetof(struct diagWork, dgMisc5));
-
-	DECLARE("INTEL_PTE_KERNEL",	INTEL_PTE_VALID|INTEL_PTE_WRITE);
-	DECLARE("PDESHIFT",     PDESHIFT);
-	DECLARE("PDESIZE",     PDESIZE);
-	DECLARE("PTESIZE",     PTESIZE);
-
-	DECLARE("KERNELBASEPDE",
-		(LINEAR_KERNEL_ADDRESS >> PDESHIFT) *
-		sizeof(pt_entry_t));
 
 	DECLARE("TSS_ESP0",	offsetof(struct i386_tss, esp0));
 	DECLARE("TSS_SS0",	offsetof(struct i386_tss, ss0));

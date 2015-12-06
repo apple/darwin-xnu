@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -240,6 +240,7 @@ u_int32_t altq_allowed = 0;
 #endif /* PF_ALTQ */
 
 u_int32_t pf_hash_seed;
+int16_t pf_nat64_configured = 0;
 
 /*
  * These are the pf enabled reference counting variables
@@ -1420,12 +1421,15 @@ pf_state_export(struct pfsync_state *sp, struct pf_state_key *sk,
 	sp->lan.xport = sk->lan.xport;
 	sp->gwy.addr = sk->gwy.addr;
 	sp->gwy.xport = sk->gwy.xport;
-	sp->ext.addr = sk->ext.addr;
-	sp->ext.xport = sk->ext.xport;
+	sp->ext_lan.addr = sk->ext_lan.addr;
+	sp->ext_lan.xport = sk->ext_lan.xport;
+	sp->ext_gwy.addr = sk->ext_gwy.addr;
+	sp->ext_gwy.xport = sk->ext_gwy.xport;
 	sp->proto_variant = sk->proto_variant;
 	sp->tag = s->tag;
 	sp->proto = sk->proto;
-	sp->af = sk->af;
+	sp->af_lan = sk->af_lan;
+	sp->af_gwy = sk->af_gwy;
 	sp->direction = sk->direction;
 	sp->flowhash = sk->flowhash;
 
@@ -1473,12 +1477,15 @@ pf_state_import(struct pfsync_state *sp, struct pf_state_key *sk,
 	sk->lan.xport = sp->lan.xport;
 	sk->gwy.addr = sp->gwy.addr;
 	sk->gwy.xport = sp->gwy.xport;
-	sk->ext.addr = sp->ext.addr;
-	sk->ext.xport = sp->ext.xport;
+	sk->ext_lan.addr = sp->ext_lan.addr;
+	sk->ext_lan.xport = sp->ext_lan.xport;
+	sk->ext_gwy.addr = sp->ext_gwy.addr;
+	sk->ext_gwy.xport = sp->ext_gwy.xport;
 	sk->proto_variant = sp->proto_variant;
 	s->tag = sp->tag;
 	sk->proto = sp->proto;
-	sk->af = sp->af;
+	sk->af_lan = sp->af_lan;
+	sk->af_gwy = sp->af_gwy;
 	sk->direction = sp->direction;
 	sk->flowhash = pf_calc_state_key_flowhash(sk);
 
@@ -3087,8 +3094,10 @@ pf_rule_setup(struct pfioc_rule *pr, struct pf_rule *rule,
 	}
 
 	pf_mv_pool(&pf_pabuf, &rule->rpool.list);
+
 	if (((((rule->action == PF_NAT) || (rule->action == PF_RDR) ||
-	    (rule->action == PF_BINAT)) && rule->anchor == NULL) ||
+	    (rule->action == PF_BINAT) || (rule->action == PF_NAT64)) &&
+	    rule->anchor == NULL) ||
 	    (rule->rt > PF_FASTROUTE)) &&
 	    (TAILQ_FIRST(&rule->rpool.list) == NULL))
 		error = EINVAL;
@@ -3097,6 +3106,10 @@ pf_rule_setup(struct pfioc_rule *pr, struct pf_rule *rule,
 		pf_rm_rule(NULL, rule);
 		return (error);
 	}
+	/* For a NAT64 rule the rule's address family is AF_INET6 whereas
+	 * the address pool's family will be AF_INET
+	 */
+	rule->rpool.af = (rule->action == PF_NAT64) ? AF_INET: rule->af;
 	rule->rpool.cur = TAILQ_FIRST(&rule->rpool.list);
 	rule->evaluations = rule->packets[0] = rule->packets[1] =
 	    rule->bytes[0] = rule->bytes[1] = 0;
@@ -3175,6 +3188,9 @@ pfioctl_ioc_rule(u_long cmd, int minordev, struct pfioc_rule *pr, struct proc *p
 		ruleset->rules[rs_num].inactive.rcount++;
 		if (rule->rule_flag & PFRULE_PFM)
 			pffwrules++;
+
+		if (rule->action == PF_NAT64)
+			atomic_add_16(&pf_nat64_configured, 1);
 		break;
 	}
 
@@ -3575,6 +3591,8 @@ pfioctl_ioc_rule(u_long cmd, int minordev, struct pfioc_rule *pr, struct proc *p
 		pf_rule_copyout(rule, &pr->rule);
 		if (rule->rule_flag & PFRULE_PFM)
 			pffwrules++;
+		if (rule->action == PF_NAT64)
+			atomic_add_16(&pf_nat64_configured, 1);
 		break;
 	}
 
@@ -3597,6 +3615,8 @@ pfioctl_ioc_rule(u_long cmd, int minordev, struct pfioc_rule *pr, struct proc *p
 		} else
 			pf_delete_rule_by_owner(pr->rule.owner, req_dev);
 		pr->nr = pffwrules;
+		if (pr->rule.action == PF_NAT64)
+			atomic_add_16(&pf_nat64_configured, -1);
 		break;
 	}
 
@@ -3691,21 +3711,21 @@ pfioctl_ioc_state_kill(u_long cmd, struct pfioc_state_kill *psk, struct proc *p)
 
 			if (sk->direction == PF_OUT) {
 				src = &sk->lan;
-				dst = &sk->ext;
+				dst = &sk->ext_lan;
 			} else {
-				src = &sk->ext;
+				src = &sk->ext_lan;
 				dst = &sk->lan;
 			}
-			if ((!psk->psk_af || sk->af == psk->psk_af) &&
+			if ((!psk->psk_af || sk->af_lan == psk->psk_af) &&
 			    (!psk->psk_proto || psk->psk_proto == sk->proto) &&
 			    PF_MATCHA(psk->psk_src.neg,
 			    &psk->psk_src.addr.v.a.addr,
 			    &psk->psk_src.addr.v.a.mask,
-			    &src->addr, sk->af) &&
+			    &src->addr, sk->af_lan) &&
 			    PF_MATCHA(psk->psk_dst.neg,
 			    &psk->psk_dst.addr.v.a.addr,
 			    &psk->psk_dst.addr.v.a.mask,
-			    &dst->addr, sk->af) &&
+			    &dst->addr, sk->af_lan) &&
 			    (pf_match_xport(psk->psk_proto,
 			    psk->psk_proto_variant, &psk->psk_src.xport,
 			    &src->xport)) &&
@@ -3891,7 +3911,6 @@ pfioctl_ioc_natlook(u_long cmd, struct pfioc_natlook *pnl, struct proc *p)
 		struct pf_state_key_cmp	 key;
 		int			 m = 0, direction = pnl->direction;
 
-		key.af = pnl->af;
 		key.proto = pnl->proto;
 		key.proto_variant = pnl->proto_variant;
 
@@ -3910,20 +3929,24 @@ pfioctl_ioc_natlook(u_long cmd, struct pfioc_natlook *pnl, struct proc *p)
 			 * state tree.
 			 */
 			if (direction == PF_IN) {
-				PF_ACPY(&key.ext.addr, &pnl->daddr, pnl->af);
-				memcpy(&key.ext.xport, &pnl->dxport,
-				    sizeof (key.ext.xport));
+				key.af_gwy = pnl->af;
+				PF_ACPY(&key.ext_gwy.addr, &pnl->daddr,
+					pnl->af);
+				memcpy(&key.ext_gwy.xport, &pnl->dxport,
+				    sizeof (key.ext_gwy.xport));
 				PF_ACPY(&key.gwy.addr, &pnl->saddr, pnl->af);
 				memcpy(&key.gwy.xport, &pnl->sxport,
 				    sizeof (key.gwy.xport));
 				state = pf_find_state_all(&key, PF_IN, &m);
 			} else {
+				key.af_lan = pnl->af;
 				PF_ACPY(&key.lan.addr, &pnl->daddr, pnl->af);
 				memcpy(&key.lan.xport, &pnl->dxport,
 				    sizeof (key.lan.xport));
-				PF_ACPY(&key.ext.addr, &pnl->saddr, pnl->af);
-				memcpy(&key.ext.xport, &pnl->sxport,
-				    sizeof (key.ext.xport));
+				PF_ACPY(&key.ext_lan.addr, &pnl->saddr,
+					pnl->af);
+				memcpy(&key.ext_lan.xport, &pnl->sxport,
+				    sizeof (key.ext_lan.xport));
 				state = pf_find_state_all(&key, PF_OUT, &m);
 			}
 			if (m > 1)
@@ -3932,7 +3955,7 @@ pfioctl_ioc_natlook(u_long cmd, struct pfioc_natlook *pnl, struct proc *p)
 				sk = state->state_key;
 				if (direction == PF_IN) {
 					PF_ACPY(&pnl->rsaddr, &sk->lan.addr,
-					    sk->af);
+					    sk->af_lan);
 					memcpy(&pnl->rsxport, &sk->lan.xport,
 					    sizeof (pnl->rsxport));
 					PF_ACPY(&pnl->rdaddr, &pnl->daddr,
@@ -3941,7 +3964,7 @@ pfioctl_ioc_natlook(u_long cmd, struct pfioc_natlook *pnl, struct proc *p)
 					    sizeof (pnl->rdxport));
 				} else {
 					PF_ACPY(&pnl->rdaddr, &sk->gwy.addr,
-					    sk->af);
+					    sk->af_gwy);
 					memcpy(&pnl->rdxport, &sk->gwy.xport,
 					    sizeof (pnl->rdxport));
 					PF_ACPY(&pnl->rsaddr, &pnl->saddr,

@@ -144,5 +144,12 @@ enum {
     kInterruptAccountingInvalidStatisticIndex /* Sentinel value for checking for a nonsensical index */
 };
 
+/*
+ * IOReporting group name; exposed publicly for the purpose of getting channels by group
+ * name; other strings (subgroup names, statistic names) are not exposed, as we may want
+ * to change them in the future.
+ */
+#define kInterruptAccountingGroupName "Interrupt Statistics (by index)"
+
 #endif /* __IOKIT_IOINTERRUPTACCOUNTING_PRIVATE_H */
 

@@ -303,7 +303,7 @@ typedef struct hibernate_statistics_t hibernate_statistics_t;
 void     IOHibernateSystemInit(IOPMrootDomain * rootDomain);
 
 IOReturn IOHibernateSystemSleep(void);
-IOReturn IOHibernateOpenForDebugData(void);
+void     IOOpenDebugDataFile(const char *fname, uint64_t size);
 IOReturn IOHibernateIOKitSleep(void);
 IOReturn IOHibernateSystemHasSlept(void);
 IOReturn IOHibernateSystemWake(void);
@@ -314,34 +314,6 @@ void     IOHibernateSetWakeCapabilities(uint32_t capability);
 void     IOHibernateSystemRestart(void);
 
 #endif /* __cplusplus */
-
-#ifdef _SYS_CONF_H_
-typedef void (*kern_get_file_extents_callback_t)(void * ref, uint64_t start, uint64_t size);
-
-struct kern_direct_file_io_ref_t *
-kern_open_file_for_direct_io(const char * name, boolean_t create_file,
-			     kern_get_file_extents_callback_t callback, 
-			     void * callback_ref,
-
-                             off_t set_file_size,
-
-                             off_t write_file_offset,
-                             caddr_t write_file_addr,
-                             vm_size_t write_file_len,
-
-			     dev_t * partition_device_result,
-			     dev_t * image_device_result,
-                             uint64_t * partitionbase_result,
-                             uint64_t * maxiocount_result,
-                             uint32_t * oflags);
-int
-kern_write_file(struct kern_direct_file_io_ref_t * ref, off_t offset, caddr_t addr, vm_size_t len, int ioflag);
-void
-kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
-			      off_t write_offset, caddr_t addr, vm_size_t write_length,
-			      off_t discard_offset, off_t discard_end);
-#endif /* _SYS_CONF_H_ */
-
 
 void
 vm_compressor_do_warmup(void);
@@ -358,8 +330,6 @@ hibernate_alloc_page_lists(
 
 kern_return_t 
 hibernate_setup(IOHibernateImageHeader * header,
-                        uint32_t  free_page_ratio,
-                        uint32_t  free_page_time,
                         boolean_t vmflush,
 			hibernate_page_list_t * page_list,
 			hibernate_page_list_t * page_list_wired,

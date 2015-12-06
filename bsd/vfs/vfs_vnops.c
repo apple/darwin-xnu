@@ -115,7 +115,7 @@ int	ubc_setcred(struct vnode *, struct proc *);
 #include <sys/cprotect.h>
 #endif
 
-extern void	sigpup_attach_vnode(vnode_t); /* XXX */
+#include <IOKit/IOBSD.h>
 
 static int vn_closefile(struct fileglob *fp, vfs_context_t ctx);
 static int vn_ioctl(struct fileproc *fp, u_long com, caddr_t data,
@@ -194,8 +194,6 @@ vn_open_auth_finish(vnode_t vp, int fmode, vfs_context_t ctx)
 #endif
 	kauth_authorize_fileop(vfs_context_ucred(ctx), KAUTH_FILEOP_OPEN, 
 						   (uintptr_t)vp, 0);
-
-	sigpup_attach_vnode(vp);
 
 	return 0;
 
@@ -309,6 +307,12 @@ out:
 }
 
 /*
+ * This is the number of times we'll loop in vn_open_auth without explicitly
+ * yielding the CPU when we determine we have to retry.
+ */
+#define RETRY_NO_YIELD_COUNT	5
+
+/*
  * Open a file with authorization, updating the contents of the structures
  * pointed to by ndp, fmodep, and vap as necessary to perform the requested
  * operation.  This function is used for both opens of existing files, and
@@ -367,6 +371,7 @@ vn_open_auth(struct nameidata *ndp, int *fmodep, struct vnode_attr *vap)
 	boolean_t need_vnop_open;
 	boolean_t batched;
 	boolean_t ref_failed;
+	int nretries = 0;
 
 again:
 	vp = NULL;
@@ -446,10 +451,9 @@ continue_create_lookup:
 
 			if (error) {
 				/*
-				 * Check for a creation or unlink race.
+				 * Check for a create race.
 				 */
-				if (((error == EEXIST) && !(fmode & O_EXCL)) ||
-						((error == ENOENT) && (fmode & O_CREAT))){
+				if ((error == EEXIST) && !(fmode & O_EXCL)){
 					if (vp) 
 						vnode_put(vp);
 					goto again;
@@ -571,21 +575,32 @@ continue_create_lookup:
 		}
 
 #if CONFIG_PROTECT
-		/* 
-		 * Perform any content protection access checks prior to calling 
-		 * into the filesystem, if the raw encrypted mode was not 
-		 * requested.  
-		 * 
-		 * If the va_dataprotect_flags are NOT active, or if they are,
-		 * but they do not have the VA_DP_RAWENCRYPTED bit set, then we need 
-		 * to perform the checks.
-		 */
-		if (!(VATTR_IS_ACTIVE (vap, va_dataprotect_flags)) ||
-				((vap->va_dataprotect_flags & VA_DP_RAWENCRYPTED) == 0)) {
-			error = cp_handle_open (vp, fmode);	
-			if (error) {
+		// If raw encrypted mode is requested, handle that here
+		if (VATTR_IS_ACTIVE (vap, va_dataprotect_flags)
+			&& ISSET(vap->va_dataprotect_flags, VA_DP_RAWENCRYPTED)) {
+			fmode |= FENCRYPTED;
+		}
+		if (VATTR_IS_ACTIVE (vap, va_dataprotect_flags)
+			&& ISSET(vap->va_dataprotect_flags, VA_DP_RAWUNENCRYPTED)) {
+			/* Don't allow unencrypted io request from user space unless entitled */
+			boolean_t entitled = FALSE;
+#if !SECURE_KERNEL
+			entitled = IOTaskHasEntitlement(current_task(), "com.apple.private.security.file-unencrypt-access");
+#endif
+			if (!entitled) {
+				error = EPERM;
 				goto bad;
 			}
+			fmode |= FUNENCRYPTED;
+		}
+
+		/*
+		 * Perform any content protection access checks prior to calling 
+		 * into the filesystem.
+		 */
+		error = cp_handle_open (vp, fmode);
+		if (error) {
+			goto bad;
 		}
 #endif
 
@@ -649,6 +664,27 @@ bad:
 		 * EREDRIVEOPEN: means that we were hit by the tty allocation race.
 		 */
 		if (((error == ENOENT) && (*fmodep & O_CREAT)) || (error == EREDRIVEOPEN) || ref_failed) {
+			/*
+			 * We'll retry here but it may be possible that we get
+			 * into a retry "spin" inside the kernel and not allow
+			 * threads, which need to run in order for the retry
+			 * loop to end, to run. An example is an open of a
+			 * terminal which is getting revoked and we spin here
+			 * without yielding becasue namei and VNOP_OPEN are
+			 * successful but vnode_ref fails. The revoke needs
+			 * threads with an iocount to run but if spin here we
+			 * may possibly be blcoking other threads from running.
+			 *
+			 * We start yielding the CPU after some number of
+			 * retries for increasing durations. Note that this is
+			 * still a loop without an exit condition.
+			 */
+			nretries += 1;
+			if (nretries > RETRY_NO_YIELD_COUNT) {
+				/* Every hz/100 secs is 10 msecs ... */
+				tsleep(&nretries, PVFS, "vn_open_auth_retry",
+				    MIN((nretries * (hz/100)), hz));
+			}
 			goto again;
 		}
 	}
@@ -968,6 +1004,12 @@ vn_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	if (fp->f_fglob->fg_flag & FENCRYPTED) {
 		ioflag |= IO_ENCRYPTED;
 	}
+	if (fp->f_fglob->fg_flag & FUNENCRYPTED) {
+		ioflag |= IO_SKIP_ENCRYPTION;
+	}
+	if (fp->f_fglob->fg_flag & O_EVTONLY) {
+		ioflag |= IO_EVTONLY;
+	}
 	if (fp->f_fglob->fg_flag & FNORDAHEAD)
 	    ioflag |= IO_RAOFF;
 
@@ -980,7 +1022,7 @@ vn_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	}
 	count = uio_resid(uio);
 
-	if (vnode_isswap(vp)) {
+	if (vnode_isswap(vp) && !(IO_SKIP_ENCRYPTION & ioflag)) {
 		/* special case for swap files */
 		error = vn_read_swapfile(vp, uio);
 	} else {
@@ -1044,6 +1086,8 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 		ioflag |= IO_NODIRECT;
 	if (fp->f_fglob->fg_flag & FSINGLE_WRITER)
 		ioflag |= IO_SINGLE_WRITER;
+	if (fp->f_fglob->fg_flag & O_EVTONLY)
+		ioflag |= IO_EVTONLY;
 
 	/*
 	 * Treat synchronous mounts and O_FSYNC on the fd as equivalent.
@@ -1254,8 +1298,11 @@ vn_stat_noauth(struct vnode *vp, void *sbptr, kauth_filesec_t *xsec, int isstat6
 		sb64->st_atimespec = va.va_access_time;
 		sb64->st_mtimespec = va.va_modify_time;
 		sb64->st_ctimespec = va.va_change_time;
-		sb64->st_birthtimespec = 
-				VATTR_IS_SUPPORTED(&va, va_create_time) ? va.va_create_time : va.va_change_time;
+		if (VATTR_IS_SUPPORTED(&va, va_create_time)) {
+			sb64->st_birthtimespec =  va.va_create_time;
+		} else {
+			sb64->st_birthtimespec.tv_sec = sb64->st_birthtimespec.tv_nsec = 0;
+		}
 		sb64->st_blksize = va.va_iosize;
 		sb64->st_flags = va.va_flags;
 		sb64->st_blocks = roundup(va.va_total_alloc, 512) / 512;
@@ -1476,26 +1523,32 @@ vn_select(struct fileproc *fp, int which, void *wql, __unused vfs_context_t ctx)
 static int
 vn_closefile(struct fileglob *fg, vfs_context_t ctx)
 {
-	struct vnode *vp = (struct vnode *)fg->fg_data;
+	struct vnode *vp = fg->fg_data;
 	int error;
-	struct flock lf;
 
 	if ( (error = vnode_getwithref(vp)) == 0 ) {
+		if (FILEGLOB_DTYPE(fg) == DTYPE_VNODE &&
+		    ((fg->fg_flag & FHASLOCK) != 0 || 
+		    (fg->fg_lflags & FG_HAS_OFDLOCK) != 0)) {
+			struct flock lf = {
+				.l_whence = SEEK_SET,
+				.l_start = 0,
+				.l_len = 0,
+				.l_type = F_UNLCK
+			};
 
-		if ((fg->fg_flag & FHASLOCK) &&
-		    FILEGLOB_DTYPE(fg) == DTYPE_VNODE) {
-			lf.l_whence = SEEK_SET;
-			lf.l_start = 0;
-			lf.l_len = 0;
-			lf.l_type = F_UNLCK;
+			if ((fg->fg_flag & FHASLOCK) != 0)
+				(void) VNOP_ADVLOCK(vp, (caddr_t)fg,
+				    F_UNLCK, &lf, F_FLOCK, ctx, NULL);
 
-			(void)VNOP_ADVLOCK(vp, (caddr_t)fg, F_UNLCK, &lf, F_FLOCK, ctx, NULL);
+			if ((fg->fg_lflags & FG_HAS_OFDLOCK) != 0)
+				(void) VNOP_ADVLOCK(vp, (caddr_t)fg,
+				    F_UNLCK, &lf, F_OFD_LOCK, ctx, NULL);
 		}
 	        error = vn_close(vp, fg->fg_flag, ctx);
-
-		(void)vnode_put(vp);
+		(void) vnode_put(vp);
 	}
-	return(error);
+	return (error);
 }
 
 /*

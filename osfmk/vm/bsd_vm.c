@@ -120,6 +120,7 @@ typedef struct vnode_pager {
 	struct vnode		*vnode_handle;	/* vnode handle 	     */
 } *vnode_pager_t;
 
+
 #define pager_ikot pager_header.io_bits
 
 ipc_port_t
@@ -1189,13 +1190,13 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 
 	    start = entry->vme_start;
 
-	    pinfo->pri_offset = entry->offset;
+	    pinfo->pri_offset = VME_OFFSET(entry);
 	    pinfo->pri_protection = entry->protection;
 	    pinfo->pri_max_protection = entry->max_protection;
 	    pinfo->pri_inheritance = entry->inheritance;
 	    pinfo->pri_behavior = entry->behavior;
 	    pinfo->pri_user_wired_count = entry->user_wired_count;
-	    pinfo->pri_user_tag = entry->alias;
+	    pinfo->pri_user_tag = VME_ALIAS(entry);
 
 	    if (entry->is_sub_map) {
 		pinfo->pri_flags |= PROC_REGION_SUBMAP;
@@ -1206,7 +1207,7 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 
 
 	    extended.protection = entry->protection;
-	    extended.user_tag = entry->alias;
+	    extended.user_tag = VME_ALIAS(entry);
 	    extended.pages_resident = 0;
 	    extended.pages_swapped_out = 0;
 	    extended.pages_shared_now_private = 0;
@@ -1214,7 +1215,7 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 	    extended.external_pager = 0;
 	    extended.shadow_depth = 0;
 
-	    vm_map_region_walk(map, start, entry, entry->offset, entry->vme_end - start, &extended);
+	    vm_map_region_walk(map, start, entry, VME_OFFSET(entry), entry->vme_end - start, &extended);
 
 	    if (extended.external_pager && extended.ref_count == 2 && extended.share_mode == SM_SHARED)
 	            extended.share_mode = SM_PRIVATE;
@@ -1286,20 +1287,20 @@ fill_procregioninfo_onlymappedvnodes(task_t task, uint64_t arg, struct proc_regi
 		entry = tmp_entry;
 	}
 
-	while ((entry != vm_map_to_entry(map))) {
+	while (entry != vm_map_to_entry(map)) {
 		*vnodeaddr = 0;
 		*vid = 0;
 
 		if (entry->is_sub_map == 0) {
 			if (fill_vnodeinfoforaddr(entry, vnodeaddr, vid)) {
 
-				pinfo->pri_offset = entry->offset;
+				pinfo->pri_offset = VME_OFFSET(entry);
 				pinfo->pri_protection = entry->protection;
 				pinfo->pri_max_protection = entry->max_protection;
 				pinfo->pri_inheritance = entry->inheritance;
 				pinfo->pri_behavior = entry->behavior;
 				pinfo->pri_user_wired_count = entry->user_wired_count;
-				pinfo->pri_user_tag = entry->alias;
+				pinfo->pri_user_tag = VME_ALIAS(entry);
 				
 				if (entry->is_shared)
 					pinfo->pri_flags |= PROC_REGION_SHARED;
@@ -1355,7 +1356,7 @@ fill_vnodeinfoforaddr(
 		 * The last object in the shadow chain has the
 		 * relevant pager information.
 		 */
-		top_object = entry->object.vm_object;
+		top_object = VME_OBJECT(entry);
 		if (top_object == VM_OBJECT_NULL) {
 			object = VM_OBJECT_NULL;
 			shadow_depth = 0;
@@ -1458,7 +1459,7 @@ find_vnode_object(
 		 * relevant pager information.
 		 */
 
-		top_object = entry->object.vm_object;
+		top_object = VME_OBJECT(entry);
 
 		if (top_object) {
 			vm_object_lock(top_object);

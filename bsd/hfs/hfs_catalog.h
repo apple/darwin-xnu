@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -148,11 +148,18 @@ struct cat_fork {
 	u_int32_t      cf_vblocks;     /* virtual (unalloated) blocks */
 	u_int32_t      cf_blocks;      /* total blocks used by this fork */
 	struct HFSPlusExtentDescriptor  cf_extents[8];  /* initial set of extents */
+
+	/*
+	 * NOTE: If you change this structure, make sure you change you change
+	 * hfs_fork_copy.
+	 */
 };
 
 #define cf_clump	cf_union.cfu_clump
 #define cf_bytesread	cf_union.cfu_bytesread
 
+void hfs_fork_copy(struct cat_fork *dst, const struct cat_fork *src,
+				   HFSPlusExtentDescriptor *extents);
 
 /*
  * Directory Hint

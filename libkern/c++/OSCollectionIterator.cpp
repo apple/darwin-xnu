@@ -36,15 +36,6 @@
 
 OSDefineMetaClassAndStructors(OSCollectionIterator, OSIterator)
 
-#if OSALLOCDEBUG
-extern "C" {
-    extern int debug_container_malloc_size;
-};
-#define ACCUMSIZE(s) do { debug_container_malloc_size += (s); } while(0)
-#else
-#define ACCUMSIZE(s)
-#endif
-
 bool OSCollectionIterator::initWithCollection(const OSCollection *inColl)
 {
     if ( !super::init() || !inColl)
@@ -56,7 +47,7 @@ bool OSCollectionIterator::initWithCollection(const OSCollection *inColl)
     initialUpdateStamp = 0;
     valid = false;
 
-    return this;
+    return true;
 }
 
 OSCollectionIterator *
@@ -77,7 +68,7 @@ void OSCollectionIterator::free()
 {
     if (collIterator) {
         kfree(collIterator, collection->iteratorSize());
-	ACCUMSIZE(-(collection->iteratorSize()));
+	OSCONTAINER_ACCUMSIZE(-((size_t) collection->iteratorSize()));
         collIterator = 0;
     }
 
@@ -94,8 +85,8 @@ void OSCollectionIterator::reset()
     valid = false;
 
     if (!collIterator) {
-        collIterator = (void *)kalloc(collection->iteratorSize());
-	ACCUMSIZE(collection->iteratorSize());
+        collIterator = (void *)kalloc_container(collection->iteratorSize());
+	OSCONTAINER_ACCUMSIZE(collection->iteratorSize());
         if (!collIterator)
             return;
     }
@@ -110,8 +101,8 @@ void OSCollectionIterator::reset()
 bool OSCollectionIterator::isValid()
 {
     if (!collIterator) {
-        collIterator = (void *)kalloc(collection->iteratorSize());
-	ACCUMSIZE(collection->iteratorSize());
+        collIterator = (void *)kalloc_container(collection->iteratorSize());
+	OSCONTAINER_ACCUMSIZE(collection->iteratorSize());
         if (!collection->initIterator(collIterator))
             return false;
         initialUpdateStamp = collection->updateStamp;

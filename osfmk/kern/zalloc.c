@@ -401,7 +401,7 @@ get_backup_ptr(vm_size_t  elem_size,
 static inline struct zone_page_metadata *
 get_zone_page_metadata(struct zone_free_element *element)
 {
-	return (struct zone_page_metadata *)(trunc_page((vm_offset_t)element) + PAGE_SIZE - sizeof(struct zone_page_metadata));
+	return (struct zone_page_metadata *)(trunc_page((vm_offset_t)element));
 }
 
 /*
@@ -552,7 +552,6 @@ backup_ptr_mismatch_panic(zone_t        zone,
 	/* Neither are sane, so just guess. */
 	zone_element_was_modified_panic(zone, element, primary, likely_backup, 0);
 }
-
 
 /*
  * Sets the next element of tail to elem.
@@ -815,21 +814,6 @@ struct fake_zone_info {
 };
 
 static const struct fake_zone_info fake_zones[] = {
-	{
-		.name = "kernel_stacks",
-		.init = stack_fake_zone_init,
-		.query = stack_fake_zone_info,
-	},
-	{
-		.name = "page_tables",
-		.init = pt_fake_zone_init,
-		.query = pt_fake_zone_info,
-	},
-	{
-		.name = "kalloc.large",
-		.init = kalloc_fake_zone_init,
-		.query = kalloc_fake_zone_info,
-	},
 };
 static const unsigned int num_fake_zones =
 	sizeof (fake_zones) / sizeof (fake_zones[0]);
@@ -936,6 +920,10 @@ zone_t		zinfo_zone = ZONE_NULL; /* zone of per-task zone info */
 
 vm_offset_t	zdata;
 vm_size_t	zdata_size;
+/*
+ * Align elements that use the zone page list to 32 byte boundaries.
+ */
+#define ZONE_ELEMENT_ALIGNMENT 32
 
 #define zone_wakeup(zone) thread_wakeup((event_t)(zone))
 #define zone_sleep(zone)				\
@@ -998,6 +986,9 @@ boolean_t zone_gc_allowed = TRUE;
 boolean_t zone_gc_forced = FALSE;
 boolean_t panic_include_zprint = FALSE;
 boolean_t zone_gc_allowed_by_time_throttle = TRUE;
+
+vm_offset_t panic_kext_memory_info = 0;
+vm_size_t panic_kext_memory_size = 0;
 
 #define ZALLOC_DEBUG_ZONEGC		0x00000001
 #define ZALLOC_DEBUG_ZCRAM		0x00000002
@@ -1311,12 +1302,12 @@ zleak_activate(void)
 	lck_spin_unlock(&zleak_lock);
 
 	/* Allocate and zero tables */
-	retval = kmem_alloc_kobject(kernel_map, (vm_offset_t*)&allocations_ptr, z_alloc_size);
+	retval = kmem_alloc_kobject(kernel_map, (vm_offset_t*)&allocations_ptr, z_alloc_size, VM_KERN_MEMORY_OSFMK);
 	if (retval != KERN_SUCCESS) {
 		goto fail;
 	}
 
-	retval = kmem_alloc_kobject(kernel_map, (vm_offset_t*)&traces_ptr, z_trace_size);
+	retval = kmem_alloc_kobject(kernel_map, (vm_offset_t*)&traces_ptr, z_trace_size, VM_KERN_MEMORY_OSFMK);
 	if (retval != KERN_SUCCESS) {
 		goto fail;
 	}
@@ -1738,10 +1729,19 @@ use_this_allocation:
 	 * to its page_metadata, and if the wastage in the tail of
 	 * the allocation is not too large
 	 */
-	if (alloc == PAGE_SIZE) {
-		if ((PAGE_SIZE % size) >= sizeof(struct zone_page_metadata)) {
-			use_page_list = TRUE;
-		} else if ((PAGE_SIZE - sizeof(struct zone_page_metadata)) % size <= PAGE_SIZE / 100) {
+
+	/* zone_zone can't use page metadata since the page metadata will overwrite zone metadata */
+	if (alloc == PAGE_SIZE && zone_zone != ZONE_NULL) {
+		vm_offset_t first_element_offset;
+		size_t zone_page_metadata_size = sizeof(struct zone_page_metadata);
+
+		if (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT == 0) {
+			first_element_offset = zone_page_metadata_size;
+		} else {
+			first_element_offset = zone_page_metadata_size + (ZONE_ELEMENT_ALIGNMENT - (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT));
+		}
+
+		if (((PAGE_SIZE - first_element_offset) % size) <= PAGE_SIZE / 100) {
 			use_page_list = TRUE;
 		}
 	}
@@ -1760,7 +1760,8 @@ use_this_allocation:
 	z->count = 0;
 	z->countfree = 0;
 	z->sum_count = 0LL;
-	z->doing_alloc = FALSE;
+	z->doing_alloc_without_vm_priv = FALSE;
+	z->doing_alloc_with_vm_priv = FALSE;
 	z->doing_gc = FALSE;
 	z->exhaustible = FALSE;
 	z->collectable = TRUE;
@@ -1851,7 +1852,8 @@ static void zone_replenish_thread(zone_t z) {
 		lock_zone(z);
 		assert(z->prio_refill_watermark != 0);
 		while ((free_size = (z->cur_size - (z->count * z->elem_size))) < (z->prio_refill_watermark * z->elem_size)) {
-			assert(z->doing_alloc == FALSE);
+			assert(z->doing_alloc_without_vm_priv == FALSE);
+			assert(z->doing_alloc_with_vm_priv == FALSE);
 			assert(z->async_prio_refill == TRUE);
 
 			unlock_zone(z);
@@ -1867,19 +1869,18 @@ static void zone_replenish_thread(zone_t z) {
 			if (z->noencrypt)
 				zflags |= KMA_NOENCRYPT;
 				
-			kr = kernel_memory_allocate(zone_map, &space, alloc_size, 0, zflags);
+			kr = kernel_memory_allocate(zone_map, &space, alloc_size, 0, zflags, VM_KERN_MEMORY_ZONE);
 
 			if (kr == KERN_SUCCESS) {
 #if	ZONE_ALIAS_ADDR
 				if (alloc_size == PAGE_SIZE)
 					space = zone_alias_addr(space);
 #endif
-				ZONE_PAGE_COUNT_INCR(z, (alloc_size / PAGE_SIZE));	
 				zcram(z, space, alloc_size);
 			} else if (kr == KERN_RESOURCE_SHORTAGE) {
 				VM_PAGE_WAIT();
 			} else if (kr == KERN_NO_SPACE) {
-				kr = kernel_memory_allocate(kernel_map, &space, alloc_size, 0, zflags);
+				kr = kernel_memory_allocate(kernel_map, &space, alloc_size, 0, zflags, VM_KERN_MEMORY_ZONE);
 				if (kr == KERN_SUCCESS) {
 #if	ZONE_ALIAS_ADDR
 					if (alloc_size == PAGE_SIZE)
@@ -1924,7 +1925,7 @@ zone_prio_refill_configure(zone_t z, vm_size_t low_water_mark) {
 }
 
 /*
- *	Cram the given memory into the specified zone.
+ *	Cram the given memory into the specified zone. Update the zone page count accordingly.
  */
 void
 zcram(
@@ -1952,17 +1953,20 @@ zcram(
 	if (from_zm && !zone->use_page_list)
 		zone_page_init(newmem, size);
 
+	ZONE_PAGE_COUNT_INCR(zone, (size / PAGE_SIZE));
+
 	lock_zone(zone);
 
 	if (zone->use_page_list) {
 		struct zone_page_metadata *page_metadata;
+		size_t zone_page_metadata_size = sizeof(struct zone_page_metadata);
 
 		assert((newmem & PAGE_MASK) == 0);
 		assert((size & PAGE_MASK) == 0);
 		for (; size > 0; newmem += PAGE_SIZE, size -= PAGE_SIZE) {
 
 			vm_size_t pos_in_page;
-			page_metadata = (struct zone_page_metadata *)(newmem + PAGE_SIZE - sizeof(struct zone_page_metadata));
+			page_metadata = (struct zone_page_metadata *)(newmem);
 			
 			page_metadata->pages.next = NULL;
 			page_metadata->pages.prev = NULL;
@@ -1973,18 +1977,17 @@ zcram(
 
 			enqueue_tail(&zone->pages.all_used, (queue_entry_t)page_metadata);
 
-			for (pos_in_page = 0; (newmem + pos_in_page + elem_size) < (vm_offset_t)page_metadata; pos_in_page += elem_size) {
+			vm_offset_t first_element_offset;
+			if (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT == 0){
+				first_element_offset = zone_page_metadata_size;
+			} else {
+				first_element_offset = zone_page_metadata_size + (ZONE_ELEMENT_ALIGNMENT - (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT));
+			}
+
+			for (pos_in_page = first_element_offset; (newmem + pos_in_page + elem_size) < (vm_offset_t)(newmem + PAGE_SIZE); pos_in_page += elem_size) {
 				page_metadata->alloc_count++;
 				zone->count++;	/* compensate for free_to_zone */
-				if ((newmem + pos_in_page) == (vm_offset_t)zone) {
-					/*
-					 * special case for the "zone_zone" zone, which is using the first
-					 * allocation of its pmap_steal_memory()-ed allocation for
-					 * the "zone_zone" variable already.
-					 */
-				} else {
-					free_to_zone(zone, newmem + pos_in_page, FALSE);
-				}
+				free_to_zone(zone, newmem + pos_in_page, FALSE);
 				zone->cur_size += elem_size;
 			}
 		}
@@ -2046,12 +2049,11 @@ zfill(
 		return 0;
 	size = nelem * zone->elem_size;
 	size = round_page(size);
-	kr = kmem_alloc_kobject(kernel_map, &memory, size);
+	kr = kmem_alloc_kobject(kernel_map, &memory, size, VM_KERN_MEMORY_ZONE);
 	if (kr != KERN_SUCCESS)
 		return 0;
 
 	zone_change(zone, Z_FOREIGN, TRUE);
-	ZONE_PAGE_COUNT_INCR(zone, (size / PAGE_SIZE));
 	zcram(zone, memory, size);
 	nalloc = (int)(size / zone->elem_size);
 	assert(nalloc >= nelem);
@@ -2132,6 +2134,7 @@ zone_bootstrap(void)
 	zone_change(zone_zone, Z_NOENCRYPT, TRUE);
 
 	zcram(zone_zone, zdata, zdata_size);
+	VM_PAGE_MOVE_STOLEN(atop_64(zdata_size));
 
 	/* initialize fake zones and zone info if tracking by task */
 	if (zinfo_per_task) {
@@ -2179,7 +2182,7 @@ zone_init(
 	vm_offset_t	zone_max;
 
 	retval = kmem_suballoc(kernel_map, &zone_min, max_zonemap_size,
-			       FALSE, VM_FLAGS_ANYWHERE | VM_FLAGS_PERMANENT,
+			       FALSE, VM_FLAGS_ANYWHERE | VM_FLAGS_PERMANENT | VM_MAKE_TAG(VM_KERN_MEMORY_ZONE),
 			       &zone_map);
 
 	if (retval != KERN_SUCCESS)
@@ -2259,7 +2262,7 @@ zone_page_table_expand(zone_page_index_t pindex)
 		struct zone_page_table_entry *entry_array;
 
 		if (kmem_alloc_kobject(zone_map, &second_level_array,
-							   second_level_size) != KERN_SUCCESS) {
+							   second_level_size, VM_KERN_MEMORY_OSFMK) != KERN_SUCCESS) {
 			panic("zone_page_table_expand");
 		}
 		zone_map_table_page_count += (second_level_size / PAGE_SIZE);
@@ -2324,6 +2327,7 @@ zalloc_internal(
 #endif
 	thread_t thr = current_thread();
 	boolean_t       check_poison = FALSE;
+	boolean_t       set_doing_alloc_with_vm_priv = FALSE;
 
 #if CONFIG_ZLEAKS
 	uint32_t	zleak_tracedepth = 0;  /* log this allocation if nonzero */
@@ -2395,21 +2399,35 @@ zalloc_internal(
 
 	while ((addr == 0) && canblock) {
 		/*
- 		 *	If nothing was there, try to get more
+ 		 * zone is empty, try to expand it
+		 * 
+		 * Note that we now allow up to 2 threads (1 vm_privliged and 1 non-vm_privliged)
+		 * to expand the zone concurrently...  this is necessary to avoid stalling
+		 * vm_privileged threads running critical code necessary to continue compressing/swapping
+		 * pages (i.e. making new free pages) from stalling behind non-vm_privileged threads
+		 * waiting to acquire free pages when the vm_page_free_count is below the
+		 * vm_page_free_reserved limit.
 		 */
-		if (zone->doing_alloc) {
+		if ((zone->doing_alloc_without_vm_priv || zone->doing_alloc_with_vm_priv) &&
+		    (((thr->options & TH_OPT_VMPRIV) == 0) || zone->doing_alloc_with_vm_priv)) {
 			/*
-			 *	Someone is allocating memory for this zone.
-			 *	Wait for it to show up, then try again.
+			 * This is a non-vm_privileged thread and a non-vm_privileged or
+			 * a vm_privileged thread is already expanding the zone...
+			 *    OR
+			 * this is a vm_privileged thread and a vm_privileged thread is
+			 * already expanding the zone...
+			 *
+			 * In either case wait for a thread to finish, then try again.
 			 */
 			zone->waiting = TRUE;
 			zone_sleep(zone);
 		} else if (zone->doing_gc) {
-			/* zone_gc() is running. Since we need an element
+			/*
+			 * zone_gc() is running. Since we need an element
 			 * from the free list that is currently being
-			 * collected, set the waiting bit and try to
-			 * interrupt the GC process, and try again
-			 * when we obtain the lock.
+			 * collected, set the waiting bit and 
+			 * wait for the GC process to finish
+			 * before trying again
 			 */
 			zone->waiting = TRUE;
 			zone_sleep(zone);
@@ -2445,7 +2463,12 @@ zalloc_internal(
 					panic("zalloc: zone \"%s\" empty.", zone->zone_name);
 				}
 			}
-			zone->doing_alloc = TRUE;
+			if ((thr->options & TH_OPT_VMPRIV)) {
+			        zone->doing_alloc_with_vm_priv = TRUE;
+				set_doing_alloc_with_vm_priv = TRUE;
+			} else {
+			        zone->doing_alloc_without_vm_priv = TRUE;
+			}
 			unlock_zone(zone);
 
 			for (;;) {
@@ -2460,7 +2483,7 @@ zalloc_internal(
 				if (zone->noencrypt)
 					zflags |= KMA_NOENCRYPT;
 				
-				retval = kernel_memory_allocate(zone_map, &space, alloc_size, 0, zflags);
+				retval = kernel_memory_allocate(zone_map, &space, alloc_size, 0, zflags, VM_KERN_MEMORY_ZONE);
 				if (retval == KERN_SUCCESS) {
 #if	ZONE_ALIAS_ADDR
 					if (alloc_size == PAGE_SIZE)
@@ -2485,7 +2508,6 @@ zalloc_internal(
 						}	
 					}
 #endif /* CONFIG_ZLEAKS */
-					ZONE_PAGE_COUNT_INCR(zone, (alloc_size / PAGE_SIZE));
 					zcram(zone, space, alloc_size);
 					
 					break;
@@ -2518,9 +2540,14 @@ zalloc_internal(
 				}
 			}
 			lock_zone(zone);
-			zone->doing_alloc = FALSE; 
+
+			if (set_doing_alloc_with_vm_priv == TRUE)
+			        zone->doing_alloc_with_vm_priv = FALSE;
+			else
+			        zone->doing_alloc_without_vm_priv = FALSE; 
+			
 			if (zone->waiting) {
-				zone->waiting = FALSE;
+			        zone->waiting = FALSE;
 				zone_wakeup(zone);
 			}
 			addr = try_alloc_from_zone(zone, &check_poison);
@@ -3089,6 +3116,13 @@ zone_change(
 			break;
 		case Z_ALIGNMENT_REQUIRED:
 			zone->alignment_required = value;
+			/*
+			 * Disable the page list optimization here to provide
+			 * more of an alignment guarantee. This prevents
+			 * the alignment from being modified by the metadata stored
+			 * at the beginning of the page.
+			 */
+			zone->use_page_list = FALSE;
 #if	ZONE_DEBUG			
 			zone_debug_disable(zone);
 #endif
@@ -3330,7 +3364,7 @@ zone_page_free_element(
 }
 
 
-
+#define ZONEGC_SMALL_ELEMENT_SIZE 	4096
 
 struct {
 	uint64_t	zgc_invoked;
@@ -3402,7 +3436,7 @@ zone_gc(boolean_t all_zones)
 		if (!z->collectable)
 			continue;
 
-		if (all_zones == FALSE && z->elem_size < PAGE_SIZE && !z->use_page_list)
+		if (all_zones == FALSE && z->elem_size < ZONEGC_SMALL_ELEMENT_SIZE && !z->use_page_list)
 			continue;
 
 		lock_zone(z);
@@ -3878,14 +3912,14 @@ task_zone_info(
 
 	names_size = round_page(max_zones * sizeof *names);
 	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &names_addr, names_size);
+				 &names_addr, names_size, VM_KERN_MEMORY_IPC);
 	if (kr != KERN_SUCCESS)
 		return kr;
 	names = (mach_zone_name_t *) names_addr;
 
 	info_size = round_page(max_zones * sizeof *info);
 	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &info_addr, info_size);
+				 &info_addr, info_size, VM_KERN_MEMORY_IPC);
 	if (kr != KERN_SUCCESS) {
 		kmem_free(ipc_kernel_map,
 			  names_addr, names_size);
@@ -3916,7 +3950,7 @@ task_zone_info(
 		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
 
 		zi->tzi_count = (uint64_t)zcopy.count;
-		zi->tzi_cur_size = (uint64_t)zcopy.cur_size;
+		zi->tzi_cur_size = ptoa_64(zcopy.page_count);
 		zi->tzi_max_size = (uint64_t)zcopy.max_size;
 		zi->tzi_elem_size = (uint64_t)zcopy.elem_size;
 		zi->tzi_alloc_size = (uint64_t)zcopy.alloc_size;
@@ -4020,12 +4054,32 @@ mach_zone_info(
 	mach_zone_info_array_t	*infop,
 	mach_msg_type_number_t  *infoCntp)
 {
+	return (mach_memory_info(host, namesp, namesCntp, infop, infoCntp, NULL, NULL));
+}
+
+kern_return_t
+mach_memory_info(
+	host_priv_t		host,
+	mach_zone_name_array_t	*namesp,
+	mach_msg_type_number_t  *namesCntp,
+	mach_zone_info_array_t	*infop,
+	mach_msg_type_number_t  *infoCntp,
+	mach_memory_info_array_t *memoryInfop,
+	mach_msg_type_number_t   *memoryInfoCntp)
+{
 	mach_zone_name_t	*names;
 	vm_offset_t		names_addr;
 	vm_size_t		names_size;
+
 	mach_zone_info_t	*info;
 	vm_offset_t		info_addr;
 	vm_size_t		info_size;
+
+	mach_memory_info_t	*memory_info;
+	vm_offset_t		memory_info_addr;
+	vm_size_t		memory_info_size;
+        unsigned int		num_sites;
+
 	unsigned int		max_zones, i;
 	zone_t			z;
 	mach_zone_name_t	*zn;
@@ -4055,21 +4109,47 @@ mach_zone_info(
 
 	names_size = round_page(max_zones * sizeof *names);
 	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &names_addr, names_size);
+				 &names_addr, names_size, VM_KERN_MEMORY_IPC);
 	if (kr != KERN_SUCCESS)
 		return kr;
 	names = (mach_zone_name_t *) names_addr;
 
 	info_size = round_page(max_zones * sizeof *info);
 	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &info_addr, info_size);
+				 &info_addr, info_size, VM_KERN_MEMORY_IPC);
 	if (kr != KERN_SUCCESS) {
 		kmem_free(ipc_kernel_map,
 			  names_addr, names_size);
 		return kr;
 	}
-
 	info = (mach_zone_info_t *) info_addr;
+
+	num_sites = 0;
+	memory_info_addr = 0;
+	if (memoryInfop && memoryInfoCntp)
+	{
+		num_sites = VM_KERN_MEMORY_COUNT + VM_KERN_COUNTER_COUNT;
+		memory_info_size = round_page(num_sites * sizeof *info);
+		kr = kmem_alloc_pageable(ipc_kernel_map,
+					 &memory_info_addr, memory_info_size, VM_KERN_MEMORY_IPC);
+		if (kr != KERN_SUCCESS) {
+			kmem_free(ipc_kernel_map,
+				  names_addr, names_size);
+			kmem_free(ipc_kernel_map,
+				  info_addr, info_size);
+			return kr;
+		}
+
+		kr = vm_map_wire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_size,
+				     VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC), FALSE);
+		assert(kr == KERN_SUCCESS);
+
+		memory_info = (mach_memory_info_t *) memory_info_addr;
+		vm_page_diagnose(memory_info, num_sites);
+
+		kr = vm_map_unwire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_size, FALSE);
+		assert(kr == KERN_SUCCESS);
+	}
 
 	zn = &names[0];
 	zi = &info[0];
@@ -4093,7 +4173,7 @@ mach_zone_info(
 		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
 
 		zi->mzi_count = (uint64_t)zcopy.count;
-		zi->mzi_cur_size = (uint64_t)zcopy.cur_size;
+		zi->mzi_cur_size = ptoa_64(zcopy.page_count);
 		zi->mzi_max_size = (uint64_t)zcopy.max_size;
 		zi->mzi_elem_size = (uint64_t)zcopy.elem_size;
 		zi->mzi_alloc_size = (uint64_t)zcopy.alloc_size;
@@ -4155,6 +4235,16 @@ mach_zone_info(
 	*infop = (mach_zone_info_t *) copy;
 	*infoCntp = max_zones;
 
+	if (memoryInfop && memoryInfoCntp)
+	{
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)memory_info_addr,
+				   (vm_map_size_t)memory_info_size, TRUE, &copy);
+		assert(kr == KERN_SUCCESS);
+
+		*memoryInfop = (mach_memory_info_t *) copy;
+		*memoryInfoCntp = num_sites;
+	}
+
 	return KERN_SUCCESS;
 }
 
@@ -4213,14 +4303,14 @@ host_zone_info(
 
 	names_size = round_page(max_zones * sizeof *names);
 	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &names_addr, names_size);
+				 &names_addr, names_size, VM_KERN_MEMORY_IPC);
 	if (kr != KERN_SUCCESS)
 		return kr;
 	names = (zone_name_t *) names_addr;
 
 	info_size = round_page(max_zones * sizeof *info);
 	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &info_addr, info_size);
+				 &info_addr, info_size, VM_KERN_MEMORY_IPC);
 	if (kr != KERN_SUCCESS) {
 		kmem_free(ipc_kernel_map,
 			  names_addr, names_size);
@@ -4251,7 +4341,7 @@ host_zone_info(
 		zn->zn_name[sizeof zn->zn_name - 1] = '\0';
 
 		zi->zi_count = zcopy.count;
-		zi->zi_cur_size = zcopy.cur_size;
+		zi->zi_cur_size = ptoa(zcopy.page_count);
 		zi->zi_max_size = zcopy.max_size;
 		zi->zi_elem_size = zcopy.elem_size;
 		zi->zi_alloc_size = zcopy.alloc_size;

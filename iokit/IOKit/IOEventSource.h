@@ -161,7 +161,7 @@ successfully.
 */
     virtual bool init(OSObject *owner, IOEventSource::Action action = 0);
 
-    virtual void free( void );
+    virtual void free( void ) APPLE_KEXT_OVERRIDE;
 
 /*! @function checkForWork
     @abstract Virtual member function used by IOWorkLoop for work

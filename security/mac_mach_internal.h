@@ -64,12 +64,20 @@
 struct uthread;
 int	mac_do_machexc(int64_t code, int64_t subcode, uint32_t flags __unused);
 int	mac_schedule_userret(void);
-struct label *mac_thread_get_threadlabel(struct thread *thread);
-struct label *mac_thread_get_uthreadlabel(struct uthread *uthread);
 
 #if CONFIG_MACF
 void mac_policy_init(void);
 void mac_policy_initmach(void);
+
+/* tasks */
+int	mac_task_check_expose_task(struct task *t);
+
+int	mac_task_check_set_host_special_port(struct task *task,
+	    int id, struct ipc_port *port);
+int	mac_task_check_set_host_exception_port(struct task *task,
+	    unsigned int exception);
+int	mac_task_check_set_host_exception_ports(struct task *task,
+	    unsigned int exception_mask);
 
 /* threads */
 void	act_set_astmacf(struct thread *);

@@ -40,11 +40,11 @@
 /*
  * Temperature measurement constraints.
  */
-#define HFC_DEFAULT_FILE_COUNT	 1000
-#define HFC_DEFAULT_DURATION   	 (3600 * 60)
+#define HFC_DEFAULT_FILE_COUNT	 hfc_default_file_count
+#define HFC_DEFAULT_DURATION     hfc_default_duration
 #define HFC_CUMULATIVE_CYCLES	 3
-#define HFC_MAXIMUM_FILE_COUNT	 5000
-#define HFC_MAXIMUM_FILESIZE	 (10 * 1024 * 1024)
+#define HFC_MAXIMUM_FILE_COUNT	 hfc_max_file_count
+#define HFC_MAXIMUM_FILESIZE	 hfc_max_file_size 
 #define HFC_MINIMUM_TEMPERATURE  24
 
 
@@ -95,9 +95,16 @@ struct HotFilesInfo {
 	u_int32_t	timeleft;    /* time remaining in recording period (secs) */
 	u_int32_t	threshold;
 	u_int32_t	maxfileblks;
-	u_int32_t	maxfilecnt;
+	union {
+		u_int32_t	_maxfilecnt;   // on hdd's we track the max # of files
+		u_int32_t	_usedblocks;   // on ssd's we track how many blocks are used
+	} _u;
 	u_int8_t	tag[32];
 };
+
+#define usedblocks _u._usedblocks
+#define maxfilecnt _u._maxfilecnt
+
 typedef struct HotFilesInfo HotFilesInfo;
 
 #define HFC_MAGIC	0xFF28FF26
@@ -118,6 +125,11 @@ int  hfs_recording_suspend (struct hfsmount *);
 
 int  hfs_addhotfile (struct vnode *);
 int  hfs_removehotfile (struct vnode *);
+int  hfs_hotfile_deleted(struct vnode *vp);   // called when a file is deleted
+void hfs_repin_hotfiles(struct hfsmount *);
+
+// call this to adjust the number of used hotfile blocks either up/down
+int  hfs_hotfile_adjust_blocks(struct vnode *vp, int64_t num_blocks);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

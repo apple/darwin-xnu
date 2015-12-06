@@ -73,7 +73,6 @@
 #include <kern/host.h>
 #include <kern/kalloc.h>
 #include <kern/zalloc.h>
-#include <kern/wait_queue.h>
 #include <kern/sched_prim.h>
 
 #if CONFIG_MACF

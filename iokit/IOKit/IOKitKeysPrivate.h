@@ -63,6 +63,13 @@
 #define kIOClientPrivilegeSecureConsoleProcess  "secureprocess"
 #define kIOClientPrivilegeConsoleSession        "consolesession"
 
+
+// Embedded still throttles NVRAM commits via kIONVRAMSyncNowPropertyKey, but
+// some clients still need a stricter NVRAM commit contract. Please use this with
+// care.
+#define kIONVRAMForceSyncNowPropertyKey		"IONVRAM-FORCESYNCNOW-PROPERTY"
+
+
 // clientHasPrivilege security token for kIOClientPrivilegeSecureConsoleProcess
 typedef struct _IOUCProcessToken {
     void *  token;
@@ -71,11 +78,12 @@ typedef struct _IOUCProcessToken {
 
 #define kIOKernelHasSafeSleep        1
 
-#define kIOPlatformSleepActionKey                    "IOPlatformSleepAction"        /* value is OSNumber (priority) */
-#define kIOPlatformWakeActionKey                     "IOPlatformWakeAction"         /* value is OSNumber (priority) */
-#define kIOPlatformQuiesceActionKey                  "IOPlatformQuiesceAction"      /* value is OSNumber (priority) */
-#define kIOPlatformActiveActionKey                   "IOPlatformActiveAction"       /* value is OSNumber (priority) */
-#define kIOPlatformHaltRestartActionKey              "IOPlatformHaltRestartAction"  /* value is OSNumber (priority) */
+#define kIOPlatformSleepActionKey                    "IOPlatformSleepAction"         /* value is OSNumber (priority) */
+#define kIOPlatformWakeActionKey                     "IOPlatformWakeAction"          /* value is OSNumber (priority) */
+#define kIOPlatformQuiesceActionKey                  "IOPlatformQuiesceAction"       /* value is OSNumber (priority) */
+#define kIOPlatformActiveActionKey                   "IOPlatformActiveAction"        /* value is OSNumber (priority) */
+#define kIOPlatformHaltRestartActionKey              "IOPlatformHaltRestartAction"   /* value is OSNumber (priority) */
+#define kIOPlatformPanicActionKey                    "IOPlatformPanicAction"         /* value is OSNumber (priority) */
 
 #define kIOPlatformFunctionHandlerSet                "IOPlatformFunctionHandlerSet"
 #if defined(__i386__) || defined(__x86_64__)
@@ -95,5 +103,12 @@ enum {
 enum {
     kIOServiceTerminateNeedWillTerminate = 0x00000100,
 };
+
+#define kIOClassNameOverrideKey "IOClassNameOverride"
+
+enum {
+    kIOClassNameOverrideNone = 0x00000001,
+};
+
 
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

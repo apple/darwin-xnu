@@ -35,6 +35,8 @@ DATAFILES = \
 	chroot.2		\
 	close.2			\
 	connect.2		\
+	connectx.2		\
+	disconnectx.2		\
 	dup.2			\
 	dup2.2			\
 	execve.2		\
@@ -81,7 +83,6 @@ DATAFILES = \
 	getgid.2		\
 	getgroups.2		\
 	getitimer.2		\
-	getlcid.2		\
 	getlogin.2		\
 	getpeername.2		\
 	getpgrp.2		\
@@ -105,6 +106,7 @@ DATAFILES = \
 	kill.2			\
 	kevent.2		\
 	kevent64.2		\
+	kevent_qos.2		\
 	kqueue.2		\
 	lchown.2		\
 	link.2			\
@@ -178,7 +180,6 @@ DATAFILES = \
 	setgid.2		\
 	setgroups.2		\
 	setitimer.2		\
-	setlcid.2		\
 	setlogin.2		\
 	setpgid.2		\
 	setpgrp.2		\

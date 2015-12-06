@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -97,6 +97,7 @@
 #include <net/if_var.h>
 #include <net/if_ppp.h>
 #include <net/ethernet.h>
+#include <net/network_agent.h>
 
 #include <net/radix.h>
 #include <net/route.h>
@@ -150,6 +151,7 @@ static int ifioctl_ifdesc(struct ifnet *, u_long, caddr_t, struct proc *);
 static int ifioctl_linkparams(struct ifnet *, u_long, caddr_t, struct proc *);
 static int ifioctl_qstats(struct ifnet *, u_long, caddr_t);
 static int ifioctl_throttle(struct ifnet *, u_long, caddr_t, struct proc *);
+static int ifioctl_netsignature(struct ifnet *, u_long, caddr_t);
 static int ifconf(u_long cmd, user_addr_t ifrp, int * ret_space);
 __private_extern__ void link_rtrequest(int, struct rtentry *, struct sockaddr *);
 void if_rtproto_del(struct ifnet *ifp, int protocol);
@@ -417,7 +419,7 @@ if_next_index(void)
 
 		/* allocate space for the larger arrays */
 		n = (2 * new_if_indexlim + 1) * sizeof(caddr_t);
-		new_ifnet_addrs = _MALLOC(n, M_IFADDR, M_WAITOK);
+		new_ifnet_addrs = _MALLOC(n, M_IFADDR, M_WAITOK | M_ZERO);
 		if (new_ifnet_addrs == NULL) {
 			--if_index;
 			return -1;
@@ -425,7 +427,6 @@ if_next_index(void)
 
 		new_ifindex2ifnet = new_ifnet_addrs 
 			+ new_if_indexlim * sizeof(caddr_t);
-		bzero(new_ifnet_addrs, n);
 		if (ifnet_addrs != NULL) {
 			/* copy the existing data */
 			bcopy((caddr_t)ifnet_addrs, new_ifnet_addrs,
@@ -627,7 +628,6 @@ if_clone_attach(struct if_clone *ifc)
 	ifc->ifc_units = _MALLOC(len, M_CLONE, M_WAITOK | M_ZERO);
 	if (ifc->ifc_units == NULL)
 		return ENOBUFS;
-	bzero(ifc->ifc_units, len);
 	ifc->ifc_bmlen = len;
 
 	LIST_INSERT_HEAD(&if_cloners, ifc, ifc_list);
@@ -689,6 +689,28 @@ if_clone_list(int count, int *ret_total, user_addr_t dst)
 	}
 
 	return (error);
+}
+
+u_int32_t
+if_functional_type(struct ifnet *ifp)
+{
+	u_int32_t ret = IFRTYPE_FUNCTIONAL_UNKNOWN;
+	if (ifp != NULL) {
+		if (ifp->if_flags & IFF_LOOPBACK) {
+			ret = IFRTYPE_FUNCTIONAL_LOOPBACK;
+		} else if (IFNET_IS_WIFI(ifp)) {
+			if (ifp->if_eflags & IFEF_AWDL)
+				ret = IFRTYPE_FUNCTIONAL_WIFI_AWDL;
+			else
+				ret = IFRTYPE_FUNCTIONAL_WIFI_INFRA;
+		} else if (IFNET_IS_CELLULAR(ifp)) {
+			ret = IFRTYPE_FUNCTIONAL_CELLULAR;
+		} else if (IFNET_IS_WIRED(ifp)) {
+			ret = IFRTYPE_FUNCTIONAL_WIRED;
+		}
+	}
+
+	return ret;
 }
 
 /*
@@ -1698,6 +1720,173 @@ ifioctl_throttle(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
 	return (error);
 }
 
+static int
+ifioctl_getnetagents(struct ifnet *ifp, u_int32_t *count, user_addr_t uuid_p)
+{
+	int error = 0;
+	int index = 0;
+	u_int32_t valid_netagent_count = 0;
+	*count = 0;
+	for (index = 0; index < IF_MAXAGENTS; index++) {
+		uuid_t *netagent_uuid = &(ifp->if_agentids[index]);
+		if (!uuid_is_null(*netagent_uuid)) {
+			if (uuid_p != USER_ADDR_NULL) {
+				if ((error = copyout(netagent_uuid,
+						     uuid_p + sizeof(uuid_t) * valid_netagent_count,
+						     sizeof(uuid_t))) != 0) {
+					return (error);
+				}
+			}
+			valid_netagent_count++;
+		}
+	}
+	*count = valid_netagent_count;
+
+	return (0);
+}
+
+static __attribute__((noinline)) int
+ifioctl_netagent(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
+{
+	struct if_agentidreq *ifar = (struct if_agentidreq *)(void *)data;
+	union {
+		struct if_agentidsreq32 s32;
+		struct if_agentidsreq64 s64;
+	} u;
+	int error = 0;
+	int index = 0;
+
+	VERIFY(ifp != NULL);
+
+	switch (cmd) {
+		case SIOCAIFAGENTID: {		/* struct if_agentidreq */
+			uuid_t *first_empty_slot = NULL;
+			// TODO: Use priv_check_cred() instead of root check
+			if ((error = proc_suser(p)) != 0) {
+				break;
+			}
+			for (index = 0; index < IF_MAXAGENTS; index++) {
+				uuid_t *netagent_uuid = &(ifp->if_agentids[index]);
+				if (uuid_compare(*netagent_uuid, ifar->ifar_uuid) == 0) {
+					/* Already present, ignore */
+					break;
+				}
+				if (first_empty_slot == NULL &&
+					uuid_is_null(*netagent_uuid)) {
+					first_empty_slot = netagent_uuid;
+				}
+			}
+			if (first_empty_slot == NULL) {
+				error = ENOMEM; /* No empty slot for a netagent UUID, bail */
+				break;
+			}
+			uuid_copy(*first_empty_slot, ifar->ifar_uuid);
+			netagent_post_updated_interfaces(ifar->ifar_uuid);
+			break;
+		}
+		case SIOCDIFAGENTID: {			/* struct if_agentidreq */
+			bool removed_agent_id = FALSE;
+			// TODO: Use priv_check_cred() instead of root check
+			if ((error = proc_suser(p)) != 0) {
+				break;
+			}
+			for (index = 0; index < IF_MAXAGENTS; index++) {
+				uuid_t *netagent_uuid = &(ifp->if_agentids[index]);
+				if (uuid_compare(*netagent_uuid, ifar->ifar_uuid) == 0) {
+					uuid_clear(*netagent_uuid);
+					removed_agent_id = TRUE;
+					break;
+				}
+			}
+			if (removed_agent_id) {
+				netagent_post_updated_interfaces(ifar->ifar_uuid);
+			}
+			break;
+		}
+		case SIOCGIFAGENTIDS32: {			/* struct if_agentidsreq32 */
+			bcopy(data, &u.s32, sizeof(u.s32));
+			error = ifioctl_getnetagents(ifp, &u.s32.ifar_count, u.s32.ifar_uuids);
+			if (error == 0) {
+				bcopy(&u.s32, data, sizeof(u.s32));
+			}
+			break;
+		}
+		case SIOCGIFAGENTIDS64: {			/* struct if_agentidsreq64 */
+			bcopy(data, &u.s64, sizeof(u.s64));
+			error = ifioctl_getnetagents(ifp, &u.s64.ifar_count, u.s64.ifar_uuids);
+			if (error == 0) {
+				bcopy(&u.s64, data, sizeof(u.s64));
+			}
+			break;
+		}
+		default:
+			VERIFY(0);
+			/* NOTREACHED */
+	}
+
+	return (error);
+}
+
+void
+ifnet_clear_netagent(uuid_t netagent_uuid)
+{
+	struct ifnet *ifp = NULL;
+	int index = 0;
+	bool removed_agent_id = FALSE;
+
+	ifnet_head_lock_shared();
+
+	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
+		for (index = 0; index < IF_MAXAGENTS; index++) {
+			uuid_t *ifp_netagent_uuid = &(ifp->if_agentids[index]);
+			if (uuid_compare(*ifp_netagent_uuid, netagent_uuid) == 0) {
+				uuid_clear(*ifp_netagent_uuid);
+				removed_agent_id = TRUE;
+			}
+		}
+	}
+
+	ifnet_head_done();
+}
+
+static __attribute__((noinline)) int
+ifioctl_netsignature(struct ifnet *ifp, u_long cmd, caddr_t data)
+{
+	struct if_nsreq *ifnsr = (struct if_nsreq *)(void *)data;
+	u_int16_t flags;
+	int error = 0;
+
+	VERIFY(ifp != NULL);
+
+	switch (cmd) {
+	case SIOCSIFNETSIGNATURE:		/* struct if_nsreq */
+		if (ifnsr->ifnsr_len > sizeof (ifnsr->ifnsr_data)) {
+			error = EINVAL;
+			break;
+		}
+		bcopy(&ifnsr->ifnsr_flags, &flags, sizeof (flags));
+		error = ifnet_set_netsignature(ifp, ifnsr->ifnsr_family,
+		    ifnsr->ifnsr_len, flags, ifnsr->ifnsr_data);
+		break;
+
+	case SIOCGIFNETSIGNATURE:		/* struct if_nsreq */
+		ifnsr->ifnsr_len = sizeof (ifnsr->ifnsr_data);
+		error = ifnet_get_netsignature(ifp, ifnsr->ifnsr_family,
+		    &ifnsr->ifnsr_len, &flags, ifnsr->ifnsr_data);
+		if (error == 0)
+			bcopy(&flags, &ifnsr->ifnsr_flags, sizeof (flags));
+		else
+			ifnsr->ifnsr_len = 0;
+		break;
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	return (error);
+}
+
 /*
  * Interface ioctls.
  *
@@ -1730,6 +1919,11 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCIFGCLONERS32:			/* struct if_clonereq32 */
 	case SIOCIFGCLONERS64:			/* struct if_clonereq64 */
 		error = ifioctl_ifclone(cmd, data);
+		goto done;
+
+	case SIOCGIFAGENTDATA32:		/* struct netagent_req32 */
+	case SIOCGIFAGENTDATA64:		/* struct netagent_req64 */
+		error = netagent_ioctl(cmd, data);
 		goto done;
 
 	case SIOCSIFDSTADDR:			/* struct ifreq */
@@ -1775,6 +1969,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCSIFBOND:			/* struct ifreq */
 	case SIOCGIFLLADDR:			/* struct ifreq */
 	case SIOCGIFTYPE:			/* struct ifreq */
+	case SIOCGIFFUNCTIONALTYPE:		/* struct ifreq */
 	case SIOCGIFPSRCADDR:			/* struct ifreq */
 	case SIOCGIFPDSTADDR:			/* struct ifreq */
 	case SIOCGIFGENERIC:			/* struct ifreq */
@@ -1792,7 +1987,12 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCGIFEXPENSIVE:			/* struct ifreq */
 	case SIOCSIFEXPENSIVE: 			/* struct ifreq */
 	case SIOCSIF2KCL:			/* struct ifreq */
-	case SIOCGIF2KCL: {			/* struct ifreq */
+	case SIOCGIF2KCL: 			/* struct ifreq */
+	case SIOCSIFINTERFACESTATE:		/* struct ifreq */
+	case SIOCGIFINTERFACESTATE:		/* struct ifreq */
+	case SIOCSIFPROBECONNECTIVITY:		/* struct ifreq */
+	case SIOCGIFPROBECONNECTIVITY:		/* struct ifreq */
+	case SIOCGSTARTDELAY: {			/* struct ifreq */
 		struct ifreq ifr;
 		bcopy(data, &ifr, sizeof (ifr));
 		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
@@ -1881,6 +2081,22 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		ifp = ifunit(ifname);
 		break;
 
+	case SIOCAIFAGENTID:			/* struct if_agentidreq */
+	case SIOCDIFAGENTID:			/* struct if_agentidreq */
+	case SIOCGIFAGENTIDS32:		/* struct if_agentidsreq32 */
+	case SIOCGIFAGENTIDS64:		/* struct if_agentidsreq64 */
+		bcopy(((struct if_agentidreq *)(void *)data)->ifar_name,
+			  ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
+	case SIOCSIFNETSIGNATURE:		/* struct if_nsreq */
+	case SIOCGIFNETSIGNATURE:		/* struct if_nsreq */
+		bcopy(((struct if_nsreq *)(void *)data)->ifnsr_name,
+			  ifname, IFNAMSIZ);
+		ifp = ifunit(ifname);
+		break;
+
 	default:
 		/*
 		 * This is a bad assumption, but the code seems to
@@ -1946,6 +2162,18 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCSIFTHROTTLE:			/* struct if_throttlereq */
 	case SIOCGIFTHROTTLE:			/* struct if_throttlereq */
 		error = ifioctl_throttle(ifp, cmd, data, p);
+		break;
+
+	case SIOCAIFAGENTID:			/* struct if_agentidreq */
+	case SIOCDIFAGENTID:			/* struct if_agentidreq */
+	case SIOCGIFAGENTIDS32:		/* struct if_agentidsreq32 */
+	case SIOCGIFAGENTIDS64:		/* struct if_agentidsreq64 */
+		error = ifioctl_netagent(ifp, cmd, data, p);
+		break;
+
+	case SIOCSIFNETSIGNATURE:		/* struct if_nsreq */
+	case SIOCGIFNETSIGNATURE:		/* struct if_nsreq */
+		error = ifioctl_netsignature(ifp, cmd, data);
 		break;
 
 	default:
@@ -2334,6 +2562,10 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		ifr->ifr_type.ift_subfamily = ifp->if_subfamily;
 		break;
 
+	case SIOCGIFFUNCTIONALTYPE:
+		ifr->ifr_functional_type = if_functional_type(ifp);
+		break;
+
 	case SIOCGIFPSRCADDR:
 	case SIOCGIFPDSTADDR:
 	case SIOCGIFGENERIC:
@@ -2362,7 +2594,17 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 
 	case SIOCGIFLINKQUALITYMETRIC:
 		ifnet_lock_shared(ifp);
-		ifr->ifr_link_quality_metric = ifp->if_lqm;
+		if ((ifp->if_interface_state.valid_bitmask & 
+		    IF_INTERFACE_STATE_LQM_STATE_VALID))
+			ifr->ifr_link_quality_metric =
+			   ifp->if_interface_state.lqm_state;
+		else if ((ifp->if_refflags & IFRF_ATTACHED)) {
+			ifr->ifr_link_quality_metric =
+			    IFNET_LQM_THRESH_UNKNOWN;
+		} else {
+			ifr->ifr_link_quality_metric =
+			    IFNET_LQM_THRESH_OFF;
+		}
 		ifnet_lock_done(ifp);
 		break;
 
@@ -2438,7 +2680,19 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			ifp->if_eflags &= ~IFEF_2KCL;
 		ifnet_lock_done(ifp);
 		break;
-
+	case SIOCGSTARTDELAY:
+		ifnet_lock_shared(ifp);
+		if (ifp->if_eflags & IFEF_ENQUEUE_MULTI) {
+			ifr->ifr_start_delay_qlen =
+			    ifp->if_start_delay_qlen;
+			ifr->ifr_start_delay_timeout =
+			    ifp->if_start_delay_timeout;
+		} else {
+			ifr->ifr_start_delay_qlen = 0;
+			ifr->ifr_start_delay_timeout = 0;
+		}
+		ifnet_lock_done(ifp);
+		break;
 	case SIOCSIFDSTADDR:
 	case SIOCSIFADDR:
 	case SIOCSIFBRDADDR:
@@ -2498,6 +2752,34 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		}
 		break;
 
+	case SIOCGIFINTERFACESTATE:
+		if_get_state(ifp, &ifr->ifr_interface_state);
+		
+		break;
+	case SIOCSIFINTERFACESTATE:
+		if ((error = priv_check_cred(kauth_cred_get(),
+		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0)
+			return (error);
+
+		error = if_state_update(ifp, &ifr->ifr_interface_state);
+
+		break;
+	case SIOCSIFPROBECONNECTIVITY:
+		if ((error = priv_check_cred(kauth_cred_get(),
+		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0)
+			return (error);
+		error = if_probe_connectivity(ifp,
+		    ifr->ifr_probe_connectivity);
+		break;
+	case SIOCGIFPROBECONNECTIVITY:
+		if ((error = priv_check_cred(kauth_cred_get(),
+		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0)
+			return (error);
+		if (ifp->if_eflags & IFEF_PROBE_CONNECTIVITY)
+			ifr->ifr_probe_connectivity = 1;
+		else
+			ifr->ifr_probe_connectivity = 0;
+		break;
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -4012,6 +4294,15 @@ ifioctl_cassert(void)
 	case SIOCGIFDELEGATE:
 	case SIOCGIFLLADDR:
 	case SIOCGIFTYPE:
+	case SIOCGIFFUNCTIONALTYPE:
+	case SIOCAIFAGENTID:
+	case SIOCDIFAGENTID:
+	case SIOCGIFAGENTIDS32:
+	case SIOCGIFAGENTIDS64:
+	case SIOCGIFAGENTDATA32:
+	case SIOCGIFAGENTDATA64:
+	case SIOCSIFINTERFACESTATE:
+	case SIOCGIFINTERFACESTATE:
 		;
 	}
 }

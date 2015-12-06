@@ -988,7 +988,7 @@ default_pager_objects(
 	osize = vm_map_round_page(actual * sizeof (*objects),
 				  vm_map_page_mask(ipc_kernel_map));
 	opotential = (unsigned int) (osize / sizeof (*objects));
-	kr = kmem_alloc(ipc_kernel_map, &oaddr, osize);
+	kr = kmem_alloc(ipc_kernel_map, &oaddr, osize, VM_KERN_MEMORY_IPC);
 	if (KERN_SUCCESS != kr) {
 		kfree(pagers, psize);
 		return KERN_RESOURCE_SHORTAGE;
@@ -1161,7 +1161,7 @@ default_pager_object_pages(
 
 		size = vm_map_round_page(actual * sizeof (*pages),
 					 vm_map_page_mask(ipc_kernel_map));
-		kr = kmem_alloc(ipc_kernel_map, &addr, size);
+		kr = kmem_alloc(ipc_kernel_map, &addr, size, VM_KERN_MEMORY_IPC);
 		if (KERN_SUCCESS != kr)
 			return KERN_RESOURCE_SHORTAGE;
 

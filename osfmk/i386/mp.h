@@ -66,7 +66,7 @@
 #include <i386/apic.h>
 #include <i386/mp_events.h>
 
-#define MAX_CPUS	32		/* (8*sizeof(long)) */	
+#define MAX_CPUS	64		/* 8 * sizeof(cpumask_t) */
 
 #ifndef	ASSEMBLER
 #include <stdint.h>
@@ -147,13 +147,13 @@ typedef enum	{KDP_XCPU_NONE = 0xffff, KDP_CURRENT_LCPU = 0xfffe} kdp_cpu_t;
 #endif
 
 typedef uint32_t cpu_t;
-typedef volatile long cpumask_t;
+typedef volatile uint64_t cpumask_t;
 static inline cpumask_t
 cpu_to_cpumask(cpu_t cpu)
 {
-	return (cpu < 32) ? (1 << cpu) : 0;
+	return (cpu < MAX_CPUS) ? (1ULL << cpu) : 0;
 }
-#define CPUMASK_ALL	0xffffffff
+#define CPUMASK_ALL	0xffffffffffffffffULL
 #define CPUMASK_SELF	cpu_to_cpumask(cpu_number())
 #define CPUMASK_OTHERS	(CPUMASK_ALL & ~CPUMASK_SELF)
 

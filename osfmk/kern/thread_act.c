@@ -86,7 +86,7 @@ void			special_handler_continue(void);
 
 /*
  * Internal routine to mark a thread as started.
- * Always called with the thread locked.
+ * Always called with the thread mutex locked.
  *
  * Note: function intentionally declared with the noinline attribute to
  * prevent multiple declaration of probe symbols in this file; we would
@@ -391,7 +391,7 @@ thread_abort_safely(
 
 kern_return_t
 thread_info(
-	thread_t				thread,
+	thread_t			thread,
 	thread_flavor_t			flavor,
 	thread_info_t			thread_info_out,
 	mach_msg_type_number_t	*thread_info_count)
@@ -403,7 +403,7 @@ thread_info(
 
 	thread_mtx_lock(thread);
 
-	if (thread->active)
+	if (thread->active || thread->inspection)
 		result = thread_info_internal(
 						thread, flavor, thread_info_out, thread_info_count);
 	else
@@ -449,6 +449,11 @@ thread_get_state(
 		}
 		else
 			result = machine_thread_get_state(
+									thread, flavor, state, state_count);
+	}
+	else if (thread->inspection)
+	{
+		result = machine_thread_get_state(
 									thread, flavor, state, state_count);
 	}
 	else
@@ -736,23 +741,14 @@ void
 install_special_handler_locked(
 	thread_t				thread)
 {
-	ReturnHandler	**rh;
-
-	/* The work handler must always be the last ReturnHandler on the list,
-	   because it can do tricky things like detach the thr_act.  */
-	for (rh = &thread->handlers; *rh; rh = &(*rh)->next)
-		continue;
-
-	if (rh != &thread->special_handler.next)
-		*rh = &thread->special_handler;
-
+	
 	/*
 	 * Temporarily undepress, so target has
 	 * a chance to do locking required to
 	 * block itself in special_handler().
 	 */
 	if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK)
-		SCHED(compute_priority)(thread, TRUE);
+		thread_recompute_sched_pri(thread, TRUE);
 
 	thread_ast_set(thread, AST_APC);
 
@@ -770,45 +766,8 @@ install_special_handler_locked(
 
 /*
  * Activation control support routines internal to this file:
+ *
  */
-
-void
-act_execute_returnhandlers(void)
-{
-	thread_t	thread = current_thread();
-
-	thread_ast_clear(thread, AST_APC);
-	spllo();
-
-	for (;;) {
-		ReturnHandler	*rh;
-
-		thread_mtx_lock(thread);
-
-		(void)splsched();
-		thread_lock(thread);
-
-		rh = thread->handlers;
-		if (rh != NULL) {
-			thread->handlers = rh->next;
-
-			thread_unlock(thread);
-			spllo();
-
-			thread_mtx_unlock(thread);
-
-			/* Execute it */
-			(*rh->handler)(rh, thread);
-		}
-		else
-			break;
-	}
-
-	thread_unlock(thread);
-	spllo();
-
-	thread_mtx_unlock(thread);
-}
 
 /*
  * special_handler_continue
@@ -854,7 +813,6 @@ special_handler_continue(void)
  */
 void
 special_handler(
-	__unused ReturnHandler	*rh,
 	thread_t				thread)
 {
 	spl_t		s;
@@ -872,16 +830,9 @@ special_handler(
 	 */
 	if (thread->active) {
 		if (thread->suspend_count > 0) {
-			if (thread->handlers == NULL) {
-				assert_wait(&thread->suspend_count, THREAD_ABORTSAFE);
-				thread_mtx_unlock(thread);
-				thread_block((thread_continue_t)special_handler_continue);
-				/*NOTREACHED*/
-			}
-
+			assert_wait(&thread->suspend_count, THREAD_ABORTSAFE);
 			thread_mtx_unlock(thread);
-
-			special_handler_continue();
+			thread_block((thread_continue_t)special_handler_continue);
 			/*NOTREACHED*/
 		}
 	}
@@ -946,28 +897,27 @@ act_get_state(
 
 static void
 act_set_ast(
-	    thread_t	thread,
+	    thread_t thread,
 	    ast_t ast)
 {
-	spl_t		s = splsched();
-	
+	spl_t s = splsched();
+
 	if (thread == current_thread()) {
 		thread_ast_set(thread, ast);
 		ast_propagate(thread->ast);
-	}
-	else {
-		processor_t		processor;
+	} else {
+		processor_t processor;
 
 		thread_lock(thread);
 		thread_ast_set(thread, ast);
 		processor = thread->last_processor;
 		if ( processor != PROCESSOR_NULL            &&
 		     processor->state == PROCESSOR_RUNNING  &&
-		     processor->active_thread == thread	     )
+		     processor->active_thread == thread     )
 			cause_ast_check(processor);
 		thread_unlock(thread);
 	}
-	
+
 	splx(s);
 }
 
@@ -976,13 +926,6 @@ act_set_astbsd(
 	thread_t	thread)
 {
 	act_set_ast( thread, AST_BSD );
-}
-
-void
-act_set_apc(
-	thread_t	thread)
-{
-	act_set_ast( thread, AST_APC );
 }
 
 void
@@ -1005,3 +948,11 @@ act_set_astmacf(
 	act_set_ast( thread, AST_MACF);
 }
 #endif
+
+void
+set_astledger(thread_t thread)
+{
+	act_set_ast(thread, AST_LEDGER);
+}
+
+

@@ -78,16 +78,6 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 	return 0;
 }
 
-extern void md_prepare_for_shutdown(int, int, char *);
-
-void
-md_prepare_for_shutdown(
-	__unused int paniced,
-	__unused int howto,
-	__unused char * command)
-{
-}
-
 boolean_t
 pie_required(cpu_type_t exectype __unused, cpu_subtype_t execsubtype __unused)
 {

@@ -1,9 +1,4 @@
-SDKROOT ?= /
-ifeq "$(RC_TARGET_CONFIG)" "iPhone"
-Embedded?=YES
-else
-Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
-endif
+include ../Makefile.common
 
 CC:=$(shell xcrun -sdk "$(SDKROOT)" -find cc)
 
@@ -24,7 +19,7 @@ ARCH_32_FLAGS := $(patsubst %, -arch %, $(ARCH_32))
 ARCH_64 := $(filter %64, $(ARCHS))
 ARCH_64_FLAGS := $(patsubst %, -arch %, $(ARCH_64))
 
-CFLAGS 	:=-g -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+CFLAGS 	:=-g -isysroot $(SDKROOT) -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 
 DSTROOT?=$(shell /bin/pwd)
 SRCROOT?=$(shell /bin/pwd)

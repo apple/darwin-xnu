@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -134,8 +134,8 @@ static void in_ifaddr_free(struct ifaddr *);
 static void in_ifaddr_trace(struct ifaddr *, int);
 
 static int in_getassocids(struct socket *, uint32_t *, user_addr_t);
-static int in_getconnids(struct socket *, associd_t, uint32_t *, user_addr_t);
-static int in_getconninfo(struct socket *, connid_t, uint32_t *,
+static int in_getconnids(struct socket *, sae_associd_t, uint32_t *, user_addr_t);
+static int in_getconninfo(struct socket *, sae_connid_t, uint32_t *,
     uint32_t *, int32_t *, user_addr_t, socklen_t *, user_addr_t, socklen_t *,
     uint32_t *, user_addr_t, uint32_t *);
 
@@ -186,6 +186,10 @@ static struct zone *inifa_zone;			/* zone for in_ifaddr */
 
 #define	INIFA_ZONE_MAX		64		/* maximum elements in zone */
 #define	INIFA_ZONE_NAME		"in_ifaddr"	/* zone name */
+
+static const unsigned int in_extra_size = sizeof (struct in_ifextra);
+static const unsigned int in_extra_bufsize = in_extra_size +
+    sizeof (void *) + sizeof (uint64_t);
 
 /*
  * Return 1 if the address is
@@ -316,10 +320,47 @@ in_domifattach(struct ifnet *ifp)
 
 	VERIFY(ifp != NULL);
 
-	if ((error = proto_plumb(PF_INET, ifp)) && error != EEXIST)
+	if ((error = proto_plumb(PF_INET, ifp)) && error != EEXIST) {
 		log(LOG_ERR, "%s: proto_plumb returned %d if=%s\n",
 		    __func__, error, if_name(ifp));
+	} else if (error == 0 && ifp->if_inetdata == NULL) {
+		void **pbuf, *base;
+		struct in_ifextra *ext;
+		int errorx;
 
+		if ((ext = (struct in_ifextra *)_MALLOC(in_extra_bufsize,
+		    M_IFADDR, M_WAITOK|M_ZERO)) == NULL) {
+			error = ENOMEM;
+			errorx = proto_unplumb(PF_INET, ifp);
+			if (errorx != 0) {
+				log(LOG_ERR,
+				    "%s: proto_unplumb returned %d if=%s%d\n",
+				    __func__, errorx, ifp->if_name,
+				    ifp->if_unit);
+			}
+			goto done;
+		}
+
+		/* Align on 64-bit boundary */
+		base = (void *)P2ROUNDUP((intptr_t)ext + sizeof (uint64_t),
+		    sizeof (uint64_t));
+		VERIFY(((intptr_t)base + in_extra_size) <=
+		    ((intptr_t)ext + in_extra_bufsize));
+		pbuf = (void **)((intptr_t)base - sizeof (void *));
+		*pbuf = ext;
+		ifp->if_inetdata = base;
+		VERIFY(IS_P2ALIGNED(ifp->if_inetdata, sizeof (uint64_t)));
+	}
+done:
+	if (error == 0 && ifp->if_inetdata != NULL) {
+		/*
+		 * Since the structure is never freed, we need to
+		 * zero out its contents to avoid reusing stale data.
+		 * A little redundant with allocation above, but it
+		 * keeps the code simpler for all cases.
+		 */
+		bzero(ifp->if_inetdata, in_extra_size);
+	}
 	return (error);
 }
 
@@ -2137,13 +2178,13 @@ static int
 in_getassocids(struct socket *so, uint32_t *cnt, user_addr_t aidp)
 {
 	struct inpcb *inp = sotoinpcb(so);
-	associd_t aid;
+	sae_associd_t aid;
 
 	if (inp == NULL || inp->inp_state == INPCB_STATE_DEAD)
 		return (EINVAL);
 
 	/* INPCB has no concept of association */
-	aid = ASSOCID_ANY;
+	aid = SAE_ASSOCID_ANY;
 	*cnt = 0;
 
 	/* just asking how many there are? */
@@ -2157,16 +2198,16 @@ in_getassocids(struct socket *so, uint32_t *cnt, user_addr_t aidp)
  * Handle SIOCGCONNIDS ioctl for PF_INET domain.
  */
 static int
-in_getconnids(struct socket *so, associd_t aid, uint32_t *cnt,
+in_getconnids(struct socket *so, sae_associd_t aid, uint32_t *cnt,
     user_addr_t cidp)
 {
 	struct inpcb *inp = sotoinpcb(so);
-	connid_t cid;
+	sae_connid_t cid;
 
 	if (inp == NULL || inp->inp_state == INPCB_STATE_DEAD)
 		return (EINVAL);
 
-	if (aid != ASSOCID_ANY && aid != ASSOCID_ALL)
+	if (aid != SAE_ASSOCID_ANY && aid != SAE_ASSOCID_ALL)
 		return (EINVAL);
 
 	/* if connected, return 1 connection count */
@@ -2177,7 +2218,7 @@ in_getconnids(struct socket *so, associd_t aid, uint32_t *cnt,
 		return (0);
 
 	/* if INPCB is connected, assign it connid 1 */
-	cid = ((*cnt != 0) ? 1 : CONNID_ANY);
+	cid = ((*cnt != 0) ? 1 : SAE_CONNID_ANY);
 
 	return (copyout(&cid, cidp, sizeof (cid)));
 }
@@ -2186,7 +2227,7 @@ in_getconnids(struct socket *so, associd_t aid, uint32_t *cnt,
  * Handle SIOCGCONNINFO ioctl for PF_INET domain.
  */
 static int
-in_getconninfo(struct socket *so, connid_t cid, uint32_t *flags,
+in_getconninfo(struct socket *so, sae_connid_t cid, uint32_t *flags,
     uint32_t *ifindex, int32_t *soerror, user_addr_t src, socklen_t *src_len,
     user_addr_t dst, socklen_t *dst_len, uint32_t *aux_type,
     user_addr_t aux_data, uint32_t *aux_len)
@@ -2207,7 +2248,7 @@ in_getconninfo(struct socket *so, connid_t cid, uint32_t *flags,
 		goto out;
 	}
 
-	if (cid != CONNID_ANY && cid != CONNID_ALL && cid != 1) {
+	if (cid != SAE_CONNID_ANY && cid != SAE_CONNID_ALL && cid != 1) {
 		error = EINVAL;
 		goto out;
 	}

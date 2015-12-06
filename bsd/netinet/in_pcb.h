@@ -220,6 +220,11 @@ struct inpcb {
 	} inp_necp_attributes;
 	struct necp_inpcb_result inp_policyresult;
 #endif
+	u_char *inp_keepalive_data;	/* for keepalive offload */
+	u_int8_t inp_keepalive_datalen; /* keepalive data length */
+	u_int8_t inp_keepalive_type;	/* type of application */
+	u_int16_t inp_keepalive_interval; /* keepalive interval */
+	uint32_t inp_nstat_refcnt __attribute__((aligned(4)));
 	struct inp_stat	*inp_stat;
 	struct inp_stat	*inp_cstat;	/* cellular data */
 	struct inp_stat	*inp_wstat;	/* Wi-Fi data */
@@ -228,7 +233,6 @@ struct inpcb {
 	u_int8_t inp_cstat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
 	u_int8_t inp_wstat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
 	u_int8_t inp_Wstat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
-	uint32_t inp_nstat_refcnt __attribute__((aligned(4)));
 };
 
 #define	INP_ADD_STAT(_inp, _cnt_cellular, _cnt_wifi, _cnt_wired, _a, _n)\
@@ -678,6 +682,7 @@ struct inpcbinfo {
 #define	INP2_NO_IFF_EXPENSIVE	0x00000008 /* do not use expensive interface */
 #define	INP2_INHASHLIST		0x00000010 /* pcb is in inp_hash list */
 #define	INP2_AWDL_UNRESTRICTED	0x00000020 /* AWDL restricted mode allowed */
+#define	INP2_KEEPALIVE_OFFLOAD	0x00000040 /* Enable UDP keepalive offload */
 
 /*
  * Flags passed to in_pcblookup*() functions.
@@ -754,9 +759,14 @@ extern int in_pcb_checkstate(struct inpcb *, int, int);
 extern void in_pcbremlists(struct inpcb *);
 extern void inpcb_to_compat(struct inpcb *, struct inpcb_compat *);
 extern void inpcb_to_xinpcb64(struct inpcb *, struct xinpcb64 *);
+
 extern int get_pcblist_n(short, struct sysctl_req *, struct inpcbinfo *);
-#define	INPCB_GET_PORTS_USED_WILDCARDOK	0x1
-#define	INPCB_GET_PORTS_USED_NOWAKEUPOK	0x2
+#define	INPCB_GET_PORTS_USED_WILDCARDOK	0x01
+#define	INPCB_GET_PORTS_USED_NOWAKEUPOK	0x02
+#define	INPCB_GET_PORTS_USED_RECVANYIFONLY 0x04
+#define	INPCB_GET_PORTS_USED_EXTBGIDLEONLY 0x08
+#define	INPCB_GET_PORTS_USED_ACTIVEONLY 0x10
+
 extern void inpcb_get_ports_used(u_int32_t, int, u_int32_t, bitstr_t *,
     struct inpcbinfo *);
 #define	INPCB_OPPORTUNISTIC_THROTTLEON	0x0001

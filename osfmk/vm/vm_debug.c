@@ -160,7 +160,7 @@ vm32_region_info(
 			}
 
 			if (entry->is_sub_map)
-				nmap = entry->object.sub_map;
+				nmap = VME_SUBMAP(entry);
 			else
 				break;
 
@@ -172,11 +172,11 @@ vm32_region_info(
 
 		/* cmap is read-locked; we have a real entry */
 
-		object = entry->object.vm_object;
+		object = VME_OBJECT(entry);
 		region.vir_start = (natural_t) entry->vme_start;
 		region.vir_end = (natural_t) entry->vme_end;
 		region.vir_object = (natural_t)(uintptr_t) object;
-		region.vir_offset = (natural_t) entry->offset;
+		region.vir_offset = (natural_t) VME_OFFSET(entry);
 		region.vir_needs_copy = entry->needs_copy;
 		region.vir_protection = entry->protection;
 		region.vir_max_protection = entry->max_protection;
@@ -270,7 +270,7 @@ vm32_region_info(
 		size = vm_map_round_page(2 * used * sizeof(vm_info_object_t),
 					 VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE);
+		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
@@ -374,7 +374,7 @@ vm32_region_info_64(
 			}
 
 			if (entry->is_sub_map)
-				nmap = entry->object.sub_map;
+				nmap = VME_SUBMAP(entry);
 			else
 				break;
 
@@ -386,11 +386,11 @@ vm32_region_info_64(
 
 		/* cmap is read-locked; we have a real entry */
 
-		object = entry->object.vm_object;
+		object = VME_OBJECT(entry);
 		region.vir_start = (natural_t) entry->vme_start;
 		region.vir_end = (natural_t) entry->vme_end;
 		region.vir_object = (natural_t)(uintptr_t) object;
-		region.vir_offset = entry->offset;
+		region.vir_offset = VME_OFFSET(entry);
 		region.vir_needs_copy = entry->needs_copy;
 		region.vir_protection = entry->protection;
 		region.vir_max_protection = entry->max_protection;
@@ -484,7 +484,7 @@ vm32_region_info_64(
 		size = vm_map_round_page(2 * used * sizeof(vm_info_object_t),
 					 VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE);
+		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
@@ -562,7 +562,7 @@ vm32_mapped_pages_info(
 				 VM_MAP_PAGE_MASK(ipc_kernel_map));
 
 	for (;;) {
-	    (void) vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE);
+	    (void) vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
 	    (void) vm_map_unwire(
 		    ipc_kernel_map,
 		    vm_map_trunc_page(addr,
@@ -673,7 +673,7 @@ host_virtual_physical_table_info(
 
 		size = vm_map_round_page(actual * sizeof *info,
 					 VM_MAP_PAGE_MASK(ipc_kernel_map));
-		kr = kmem_alloc_pageable(ipc_kernel_map, &addr, size);
+		kr = kmem_alloc_pageable(ipc_kernel_map, &addr, size, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 

@@ -78,7 +78,7 @@
 #if CONFIG_TELEMETRY
 #include <kern/telemetry.h>
 #endif
-#include <kern/wait_queue.h>
+#include <kern/waitq.h>
 #include <kern/ledger.h>
 #include <mach/policy.h>
 #include <machine/trap.h> // for CHUD AST hook
@@ -135,7 +135,7 @@ ast_taken(
 		 * Check for urgent preemption.
 		 */
 		if (	(reasons & AST_URGENT)				&&
-				wait_queue_assert_possible(thread)		) {
+				waitq_wait_possible(thread)		) {
 			if (reasons & AST_PREEMPT) {
 				counter(c_ast_taken_block++);
 				thread_block_reason(THREAD_CONTINUE_NULL, NULL,
@@ -173,8 +173,10 @@ ast_taken(
 			/* 
 			 * Thread APC hook.
 			 */
-			if (reasons & AST_APC)
-				act_execute_returnhandlers();
+			if (reasons & AST_APC) {
+				thread_ast_clear(thread, AST_APC);
+				special_handler(thread);
+			}
 			
 			if (reasons & AST_GUARD) {
 				thread_ast_clear(thread, AST_GUARD);
@@ -209,11 +211,13 @@ ast_taken(
 
 			ml_set_interrupts_enabled(FALSE);
 
+#if CONFIG_SCHED_SFI
 			if (reasons & AST_SFI) {
 				sfi_ast(thread);
 			}
+#endif
 
-			/* 
+			/*
 			 * Check for preemption. Conditions may have changed from when the AST_PREEMPT was originally set.
 			 */
 			thread_lock(thread);
@@ -221,8 +225,9 @@ ast_taken(
 				reasons = csw_check(current_processor(), reasons & AST_QUANTUM);
 			thread_unlock(thread);
 
-			if (	(reasons & AST_PREEMPT)				&&
-					wait_queue_assert_possible(thread)		) {		
+			assert(waitq_wait_possible(thread));
+
+			if (reasons & AST_PREEMPT) {
 				counter(c_ast_taken_block++);
 				thread_block_reason((thread_continue_t)thread_exception_return, NULL, reasons & AST_PREEMPTION);
 			}
@@ -237,13 +242,13 @@ ast_taken(
  */
 void
 ast_check(
-	processor_t		processor)
+	processor_t processor)
 {
-	thread_t			thread = processor->active_thread;
+	thread_t thread = processor->active_thread;
 
-	if (	processor->state == PROCESSOR_RUNNING		||
-			processor->state == PROCESSOR_SHUTDOWN		) {
-		ast_t			preempt;
+	if (processor->state == PROCESSOR_RUNNING ||
+	    processor->state == PROCESSOR_SHUTDOWN) {
+		ast_t preempt;
 
 		/*
 		 *	Propagate thread ast to processor.
@@ -263,6 +268,45 @@ ast_check(
 
 		if ((preempt = csw_check(processor, AST_NONE)) != AST_NONE)
 			ast_on(preempt);
+
 		thread_unlock(thread);
 	}
 }
+
+/*
+ * Set AST flags on current processor
+ * Called at splsched
+ */
+void
+ast_on(ast_t reasons)
+{
+	ast_t *pending_ast = ast_pending();
+
+	*pending_ast |= reasons;
+}
+
+/*
+ * Clear AST flags on current processor
+ * Called at splsched
+ */
+void
+ast_off(ast_t reasons)
+{
+	ast_t *pending_ast = ast_pending();
+
+	*pending_ast &= ~reasons;
+}
+
+/*
+ * Re-set current processor's per-thread AST flags to those set on thread
+ * Called at splsched
+ */
+void
+ast_context(thread_t thread)
+{
+	ast_t *pending_ast = ast_pending();
+
+	*pending_ast = ((*pending_ast & ~AST_PER_THREAD) | thread->ast);
+}
+
+

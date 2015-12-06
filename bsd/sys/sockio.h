@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -226,9 +226,7 @@
 #define	SIOCGIFQUEUESTATS _IOWR('i', 147, struct if_qstatsreq)
 #define	SIOCSIFTHROTTLE	_IOWR('i', 148, struct if_throttlereq)
 #define	SIOCGIFTHROTTLE	_IOWR('i', 149, struct if_throttlereq)
-#endif /* PRIVATE */
 
-#ifdef PRIVATE
 #define	SIOCGASSOCIDS	_IOWR('s', 150, struct so_aidreq) /* get associds */
 #define	SIOCGCONNIDS	_IOWR('s', 151, struct so_cidreq) /* get connids */
 #define	SIOCGCONNINFO	_IOWR('s', 152, struct so_cinforeq) /* get conninfo */
@@ -242,9 +240,7 @@
 #endif /* BSD_KERNEL_PRIVATE */
 #define	SIOCSCONNORDER	_IOWR('s', 153, struct so_cordreq) /* set conn order */
 #define	SIOCGCONNORDER	_IOWR('s', 154, struct so_cordreq) /* get conn order */
-#endif /* PRIVATE */
 
-#ifdef PRIVATE
 #define	SIOCSIFLOG	_IOWR('i', 155, struct ifreq)
 #define	SIOCGIFLOG	_IOWR('i', 156, struct ifreq)
 #define	SIOCGIFDELEGATE	_IOWR('i', 157, struct ifreq)
@@ -254,5 +250,27 @@
 #define	SIOCSIFEXPENSIVE _IOWR('i', 161, struct ifreq) /* mark interface expensive */
 #define	SIOCGIF2KCL	_IOWR('i', 162, struct ifreq)	/* interface prefers 2 KB clusters */
 #define	SIOCSIF2KCL	_IOWR('i', 163, struct ifreq)
+#define	SIOCGSTARTDELAY	_IOWR('i', 164, struct ifreq)
+
+#define	SIOCAIFAGENTID	_IOWR('i', 165, struct if_agentidreq) /* Add netagent id */
+#define	SIOCDIFAGENTID	_IOWR('i', 166, struct if_agentidreq) /* Delete netagent id */
+#define	SIOCGIFAGENTIDS	_IOWR('i', 167, struct if_agentidsreq) /* Get netagent ids */
+#define	SIOCGIFAGENTDATA	_IOWR('i', 168, struct netagent_req) /* Get netagent data */
+#ifdef BSD_KERNEL_PRIVATE
+#define	SIOCGIFAGENTIDS32	_IOWR('i', 167, struct if_agentidsreq32)
+#define	SIOCGIFAGENTIDS64	_IOWR('i', 167, struct if_agentidsreq64)
+#define	SIOCGIFAGENTDATA32		_IOWR('i', 168, struct netagent_req32)
+#define	SIOCGIFAGENTDATA64		_IOWR('i', 168, struct netagent_req64)
+#endif /* BSD_KERNEL_PRIVATE */
+
+#define	SIOCSIFINTERFACESTATE	_IOWR('i', 169, struct ifreq) /* set interface state */
+#define	SIOCGIFINTERFACESTATE	_IOWR('i', 170, struct ifreq) /* get interface state */
+#define	SIOCSIFPROBECONNECTIVITY _IOWR('i', 171, struct ifreq) /* Start/Stop probes to check connectivity */
+#define	SIOCGIFPROBECONNECTIVITY	_IOWR('i', 172, struct ifreq)	/* check if connectivity probes are enabled */
+
+#define	SIOCGIFFUNCTIONALTYPE	_IOWR('i', 173, struct ifreq) /* get interface functional type */
+#define	SIOCSIFNETSIGNATURE	_IOWR('i', 174, struct if_nsreq)
+#define	SIOCGIFNETSIGNATURE	_IOWR('i', 175, struct if_nsreq)
 #endif /* PRIVATE */
+
 #endif /* !_SYS_SOCKIO_H_ */

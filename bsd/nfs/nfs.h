@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,7 +106,6 @@ extern int nfs_ticks;
 #define	NFS_ASYNCTHREADMAXIDLE	60	/* Seconds before idle nfsiods are reaped */
 #define	NFS_DEFSTATFSRATELIMIT 	10	/* Def. max # statfs RPCs per second */
 #define NFS_REQUESTDELAY	10	/* ms interval to check request queue */
-#define NFSRV_DEADSOCKDELAY	5	/* Seconds before dead sockets are reaped */
 #define NFSRV_MAXWGATHERDELAY	100	/* Max. write gather delay (msec) */
 #ifndef NFSRV_WGATHERDELAY
 #define NFSRV_WGATHERDELAY	1	/* Default write gather delay (msec) */
@@ -186,6 +185,7 @@ extern int nfs_ticks;
 #define NFS_MATTR_REALM			24	/* Realm to authenticate with */
 #define NFS_MATTR_PRINCIPAL		25	/* GSS principal to authenticate with */
 #define NFS_MATTR_SVCPRINCIPAL		26	/* GSS principal to authenticate to, the server principal */
+#define NFS_MATTR_NFS_VERSION_RANGE	27	/* Packed version range to try */
 
 /* NFS mount flags */
 #define NFS_MFLAG_SOFT			0	/* soft mount (requests fail if unresponsive) */
@@ -206,6 +206,11 @@ extern int nfs_ticks;
 #define NFS_MFLAG_NOQUOTA		15	/* don't support QUOTA requests */
 #define NFS_MFLAG_MNTUDP		16	/* MOUNT protocol should use UDP */
 #define NFS_MFLAG_MNTQUICK		17	/* use short timeouts while mounting */
+
+/* Macros for packing and unpacking packed versions */
+#define PVER2MAJOR(M) ((uint32_t)(((M) >> 16) & 0xffff))
+#define PVER2MINOR(m) ((uint32_t)((m) & 0xffff))
+#define VER2PVER(M, m) ((uint32_t)((M) << 16) | ((m) & 0xffff))
 
 /* NFS advisory file locking modes */
 #define NFS_LOCK_MODE_ENABLED		0	/* advisory file locking enabled */
@@ -931,8 +936,6 @@ extern lck_grp_t *nfs_request_grp;
 
 #define NFSNOLIST	((void *)0x0badcafe)	/* sentinel value for nfs lists */
 #define NFSREQNOLIST	NFSNOLIST		/* sentinel value for nfsreq lists */
-#define NFSIODCOMPLETING	((void *)0x10d)	/* sentinel value for iod processing
-						   async I/O w/callback being completed */
 
 /* Flag values for r_flags */
 #define R_TIMING	0x00000001	/* timing request (in mntp) */
@@ -952,6 +955,7 @@ extern lck_grp_t *nfs_request_grp;
 #define R_RESENDQ	0x00004000	/* async request currently on resendq */
 #define R_SENDING	0x00008000	/* request currently being sent */
 #define R_SOFT		0x00010000	/* request is soft - don't retry or reconnect */
+#define R_IOD		0x00020000	/* request is being managed by an IOD */
 
 #define R_NOINTR	0x20000000	/* request should not be interupted by a signal */
 #define R_RECOVER	0x40000000	/* a state recovery RPC - during NFSSTA_RECOVER */
@@ -970,7 +974,7 @@ extern int nfs_lockd_mounts, nfs_lockd_request_sent, nfs_single_des;
 extern int nfs_tprintf_initial_delay, nfs_tprintf_delay;
 extern int nfsiod_thread_count, nfsiod_thread_max, nfs_max_async_writes;
 extern int nfs_idmap_ctrl, nfs_callback_port;
-extern int nfs_is_mobile, nfs_readlink_nocache;
+extern int nfs_is_mobile, nfs_readlink_nocache, nfs_root_steals_ctx;
 extern uint32_t nfs_squishy_flags;
 extern uint32_t nfs_debug_ctl;
 
@@ -1050,8 +1054,8 @@ extern struct nfsrv_sock *nfsrv_udpsock, *nfsrv_udp6sock;
  * nfsrv_sockwork - sockets being worked on which may have more work to do (ns_svcq)
  * nfsrv_sockwg - sockets with pending write gather input (ns_wgq)
  */
-extern TAILQ_HEAD(nfsrv_sockhead, nfsrv_sock) nfsrv_socklist, nfsrv_deadsocklist,
-						nfsrv_sockwg, nfsrv_sockwait, nfsrv_sockwork;
+extern TAILQ_HEAD(nfsrv_sockhead, nfsrv_sock) nfsrv_socklist, nfsrv_sockwg,
+						nfsrv_sockwait, nfsrv_sockwork;
 
 /* lock groups for nfsrv_sock's */
 extern lck_grp_t *nfsrv_slp_rwlock_group;
@@ -1123,7 +1127,7 @@ extern in_port_t nfs4_cb_port, nfs4_cb_port6;
 extern thread_call_t	nfs_request_timer_call;
 extern thread_call_t	nfs_buf_timer_call;
 extern thread_call_t	nfs4_callback_timer_call;
-extern thread_call_t	nfsrv_deadsock_timer_call;
+extern thread_call_t	nfsrv_idlesock_timer_call;
 #if CONFIG_FSE
 extern thread_call_t	nfsrv_fmod_timer_call;
 #endif
@@ -1392,13 +1396,14 @@ void	nfsrv_cleancache(void);
 void	nfsrv_cleanup(void);
 int	nfsrv_credcheck(struct nfsrv_descript *, vfs_context_t, struct nfs_export *,
 			struct nfs_export_options *);
-void	nfsrv_deadsock_timer(void *, void *);
+void	nfsrv_idlesock_timer(void *, void *);
 int	nfsrv_dorec(struct nfsrv_sock *, struct nfsd *, struct nfsrv_descript **);
 int	nfsrv_errmap(struct nfsrv_descript *, int);
 int	nfsrv_export(struct user_nfs_export_args *, vfs_context_t);
 int	nfsrv_fhmatch(struct nfs_filehandle *, struct nfs_filehandle *);
 int	nfsrv_fhtovp(struct nfs_filehandle *, struct nfsrv_descript *, vnode_t *,
 			struct nfs_export **, struct nfs_export_options **);
+int	nfsrv_check_exports_allow_address(mbuf_t);
 #if CONFIG_FSE
 void	nfsrv_fmod_timer(void *, void *);
 #endif

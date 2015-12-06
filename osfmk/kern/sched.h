@@ -170,7 +170,6 @@ typedef enum {
 	TH_MODE_REALTIME,					/* time constraints supplied */
 	TH_MODE_FIXED,						/* use fixed priorities, no decay */
 	TH_MODE_TIMESHARE,					/* use timesharing algorithm */
-	TH_MODE_FAIRSHARE					/* use fair-share scheduling */		
 } sched_mode_t;
 
 /*
@@ -203,15 +202,6 @@ struct rt_queue {
 
 	struct runq_stats	runq_stats;
 };
-
-#if defined(CONFIG_SCHED_FAIRSHARE_CORE)
-struct fairshare_queue {
-	int					count;				/* # of threads total */
-	queue_head_t		queue;				/* all runnable threads demoted to fairshare scheduling */
-	
-	struct runq_stats	runq_stats;
-};
-#endif /* CONFIG_SCHED_FAIRSHARE_CORE */
 
 #if defined(CONFIG_SCHED_GRRR_CORE)
 
@@ -259,17 +249,14 @@ struct grrr_run_queue {
 
 #endif /* defined(CONFIG_SCHED_GRRR_CORE) */
 
-#define first_timeslice(processor)		((processor)->timeslice > 0)
-
 extern struct rt_queue		rt_runq;
 
 #if defined(CONFIG_SCHED_MULTIQ)
 sched_group_t   sched_group_create(void);
 void            sched_group_destroy(sched_group_t sched_group);
-
-extern boolean_t sched_groups_enabled;
-
 #endif /* defined(CONFIG_SCHED_MULTIQ) */
+
+
 
 /*
  *	Scheduler routines.
@@ -348,7 +335,7 @@ extern uint32_t		sched_fixed_shift;
 extern int8_t		sched_load_shifts[NRQS];
 extern uint32_t		sched_decay_usage_age_factor;
 extern uint32_t		sched_use_combined_fgbg_decay;
-void sched_traditional_consider_maintenance(uint64_t);
+void sched_timeshare_consider_maintenance(uint64_t);
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
 extern int32_t		sched_poll_yield_shift;

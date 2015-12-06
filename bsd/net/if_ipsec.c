@@ -655,7 +655,12 @@ ipsec_output(ifnet_t	interface,
             ipsec_state.dst = (struct sockaddr *)&ip->ip_dst;
             bzero(&ipsec_state.ro, sizeof(ipsec_state.ro));
 			
-			error = ipsec4_interface_output(&ipsec_state, interface);
+            error = ipsec4_interface_output(&ipsec_state, interface);
+            /* Tunneled in IPv6 - packet is gone */
+            if (error == 0 && ipsec_state.tunneled == 6) {
+                goto done;
+            }
+
             data = ipsec_state.m;
             if (error || data == NULL) {
                 printf("ipsec_output: ipsec4_output error %d.\n", error);
@@ -708,6 +713,11 @@ ipsec_output(ifnet_t	interface,
             bpf_tap_out(pcb->ipsec_ifp, DLT_NULL, data, &af, sizeof(af));
             
             data = ipsec6_splithdr(data);
+			if (data == NULL) {
+				printf("ipsec_output: ipsec6_splithdr returned NULL\n");
+				goto ipsec_output_err;
+			}
+
             ip6 = mtod(data, struct ip6_hdr *);
 			
             bzero(&ipsec_state, sizeof(ipsec_state));
@@ -900,8 +910,12 @@ ipsec_proto_input(ifnet_t interface,
 	mbuf_pkthdr_setrcvif(m, interface);
 	bpf_tap_in(interface, DLT_NULL, m, &af, sizeof(af));
 	
-	if (proto_input(protocol, m) != 0)
+	if (proto_input(protocol, m) != 0) {
+		ifnet_stat_increment_in(interface, 0, 0, 1);
 		m_freem(m);
+	} else {
+		ifnet_stat_increment_in(interface, 1, m->m_pkthdr.len, 0);
+	}
 	
 	return 0;
 }
@@ -966,7 +980,7 @@ ipsec_set_pkthdr_for_interface(ifnet_t interface, mbuf_t packet, int family)
 			if (family == AF_INET) {
 				struct ip *ip = mtod(packet, struct ip *);
 				packet->m_pkthdr.pkt_proto = ip->ip_p;
-			} else if (family == AF_INET) {
+			} else if (family == AF_INET6) {
 				struct ip6_hdr *ip6 = mtod(packet, struct ip6_hdr *);
 				packet->m_pkthdr.pkt_proto = ip6->ip6_nxt;
 			}

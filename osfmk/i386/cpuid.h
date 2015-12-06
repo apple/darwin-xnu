@@ -348,7 +348,7 @@ typedef struct {
 #define cpuid_mwait_sub_Cstates		cpuid_mwait_leaf.sub_Cstates
 	cpuid_thermal_leaf_t	cpuid_thermal_leaf;
 	cpuid_arch_perf_leaf_t	cpuid_arch_perf_leaf;
-	cpuid_xsave_leaf_t	cpuid_xsave_leaf;
+	uint32_t	unused[4];			/* cpuid_xsave_leaf */
 
 	/* Cache details: */
 	uint32_t	cpuid_cache_linesize;
@@ -383,6 +383,7 @@ typedef struct {
 	cpuid_arch_perf_leaf_t	*cpuid_arch_perf_leafp;
 	cpuid_xsave_leaf_t	*cpuid_xsave_leafp;
 	uint64_t		cpuid_leaf7_features;
+	cpuid_xsave_leaf_t	cpuid_xsave_leaf[2];
 } i386_cpu_info_t;
 
 #ifdef MACH_KERNEL_PRIVATE

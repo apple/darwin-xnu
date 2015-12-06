@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -63,9 +63,11 @@
 
 #ifndef _NETINET_TCP_VAR_H_
 #define _NETINET_TCP_VAR_H_
+#include <sys/types.h>
 #include <sys/appleapiopts.h>
 #include <sys/queue.h>
 #include <netinet/in_pcb.h>
+#include <netinet/tcp.h>
 #include <netinet/tcp_timer.h>
 
 #if defined(__LP64__)
@@ -145,7 +147,9 @@ struct name {				\
  * The maximum value of adaptive timeout is set to 10 which will allow
  * transmission of enough number of probes to the peer.
  */
-#define TCP_ADAPTIVE_TIMEOUT_MAX 10
+#define	TCP_ADAPTIVE_TIMEOUT_MAX	10
+
+#define	TCP_CONNECTIVITY_PROBES_MAX	5
 
 /*
  * Kernel variables for tcp.
@@ -176,6 +180,16 @@ struct sackhole {
 struct sackhint {
 	struct sackhole	*nexthole;
 	int	sack_bytes_rexmit;
+};
+
+struct tcp_rxt_seg {
+	tcp_seq rx_start;
+	tcp_seq rx_end;
+	u_int16_t rx_count;
+	u_int16_t rx_flags;
+#define	TCP_RXT_SPURIOUS	0x1	/* received DSACK notification */
+#define	TCP_RXT_DSACK_FOR_TLP	0x2
+	SLIST_ENTRY(tcp_rxt_seg) rx_link;
 };
 
 struct tcptemp {
@@ -235,11 +249,11 @@ struct tcp_ccstate {
 struct tcpcb {
 	struct	tsegqe_head t_segq;
 	int	t_dupacks;		/* consecutive dup acks recd */
+	int	t_state;		/* state of this connection */
 	uint32_t t_timer[TCPT_NTIMERS];	/* tcp timers */
 	struct tcptimerentry tentry;	/* entry in timer list */
 
 	struct	inpcb *t_inpcb;		/* back pointer to internet pcb */
-	int	t_state;		/* state of this connection */
 	uint32_t	t_flags;
 #define	TF_ACKNOW	0x00001		/* ack peer immediately */
 #define	TF_DELACK	0x00002		/* ack, but try to delay it */
@@ -291,9 +305,9 @@ struct tcpcb {
 	u_int32_t	rcv_wnd;		/* receive window */
 	tcp_seq	rcv_up;			/* receive urgent pointer */
 
-	u_int32_t	snd_wnd;		/* send window */
-	u_int32_t	snd_cwnd;		/* congestion-controlled window */
-	u_int32_t	snd_ssthresh;		/* snd_cwnd size threshold for
+	u_int32_t	snd_wnd;	/* send window */
+	u_int32_t	snd_cwnd;	/* congestion-controlled window */
+	u_int32_t	snd_ssthresh;	/* snd_cwnd size threshold for
 					 * for slow start exponential to
 					 * linear switch
 					 */
@@ -314,15 +328,16 @@ struct tcpcb {
 	int	t_srtt;			/* smoothed round-trip time */
 	int	t_rttvar;		/* variance in round-trip time */
 
+	u_int64_t	t_accsleep_ms;	/* accumulated sleep time since last boot */
 	u_int16_t	t_reassqlen;	/* length of reassembly queue */
 	u_int16_t	t_rxtshift;	/* log(2) of rexmt exp. backoff */
-	u_int	t_rttmin;		/* minimum rtt allowed */
-	u_int	t_rttbest;		/* best rtt we've seen */
-	u_int	t_rttcur;		/* most recent value of rtt */
-	u_int32_t	t_rttupdated;		/* number of times rtt sampled */
+	u_int32_t	t_rttmin;	/* minimum rtt allowed */
+	u_int32_t	t_rttbest;	/* best rtt we've seen */
+	u_int32_t	t_rttcur;	/* most recent value of rtt */
+	u_int32_t	t_rttupdated;	/* number of times rtt sampled */
 	u_int32_t	t_rxt_conndroptime;	/* retxmt conn gets dropped after this time, when set */
-	u_int32_t	t_rxtstart;		/* time at which retransmission started */
-	u_int32_t	max_sndwnd;		/* largest window peer has offered */
+	u_int32_t	t_rxtstart;	/* time at which retransmission started */
+	u_int32_t	max_sndwnd;	/* largest window peer has offered */
 
 	int	t_softerror;		/* possible error not yet reported */
 /* out-of-band data */
@@ -331,9 +346,9 @@ struct tcpcb {
 #define	TCPOOB_HAVEDATA	0x01
 #define	TCPOOB_HADDATA	0x02
 /* RFC 1323 variables */
-	u_int8_t	snd_scale;		/* window scaling for send window */
-	u_int8_t	rcv_scale;		/* window scaling for recv window */
-	u_int8_t	request_r_scale;	/* pending window scaling */
+	u_int8_t	snd_scale;	/* window scaling for send window */
+	u_int8_t	rcv_scale;	/* window scaling for recv window */
+	u_int8_t	request_r_scale; /* pending window scaling */
 	u_int8_t	requested_s_scale;
 	u_int8_t	tcp_cc_index;	/* index of congestion control algorithm */
 	u_int8_t	t_adaptive_rtimo;	/* Read timeout used as a multiple of RTT */
@@ -344,21 +359,21 @@ struct tcpcb {
 	u_int16_t	t_early_rexmt_count; /* count of early rexmts */
 	u_int32_t	t_early_rexmt_win; /* window for limiting early rexmts */ 
 
-	u_int32_t	ts_recent;		/* timestamp echo data */
+	u_int32_t	ts_recent;	/* timestamp echo data */
 
-	u_int32_t	ts_recent_age;		/* when last updated */
+	u_int32_t	ts_recent_age;	/* when last updated */
 	tcp_seq	last_ack_sent;
 /* RFC 1644 variables */
 	tcp_cc	cc_send;		/* send connection count */
 	tcp_cc	cc_recv;		/* receive connection count */
 /* RFC 3465 variables */
-	u_int32_t	t_bytes_acked;		/* ABC "bytes_acked" parameter */
+	u_int32_t	t_bytes_acked;	/* ABC "bytes_acked" parameter */
 
 	int	t_lastchain;		/* amount of packets chained last time around */
 	u_int16_t	t_unacksegs;	/* received but unacked segments for delaying acks */
 	u_int8_t	t_rexmtthresh;	/* duplicate ack threshold for entering fast recovery */
 	u_int8_t	t_rtimo_probes; /* number of adaptive rtimo probes sent */
-	u_int32_t	t_persist_timeout;	/* ZWP persistence limit as set by PERSIST_TIMEOUT */
+	u_int32_t	t_persist_timeout; /* ZWP persistence limit as set by PERSIST_TIMEOUT */
 	u_int32_t	t_persist_stop;		/* persistence limit deadline if triggered by ZWP */
 	u_int32_t	t_notsent_lowat;	/* Low water for not sent data */
 
@@ -374,6 +389,8 @@ struct tcpcb {
 #define TE_SENDCWR		0x08	/* Indicate that the next non-retransmit should have the TCP CWR flag set */
 #define TE_SENDECE		0x10	/* Indicate that the next packet should have the TCP ECE flag set */
 #define TE_INRECOVERY		0x20	/* connection entered recovery after receiving ECE */
+#define TE_RECV_ECN_CE		0x40	/* Received IPTOS_ECN_CE marking atleast once */
+#define TE_RECV_ECN_ECE	0x80	/* Received ECE marking atleast once */
 #define TE_ECN_ON		(TE_SETUPSENT | TE_SETUPRECEIVED) /* Indicate ECN was successfully negotiated on a connection) */
 
 /* state for bad retransmit recovery */
@@ -389,18 +406,18 @@ struct tcpcb {
 
 /* SACK related state */
 	int16_t	snd_numholes;		/* number of holes seen by sender */
+	tcp_seq sack_newdata;		/* New data xmitted in this recovery
+					   episode starts at this seq number */
 	TAILQ_HEAD(sackhole_head, sackhole) snd_holes;
 						/* SACK scoreboard (sorted) */
 	tcp_seq	snd_fack;		/* last seq number(+1) sack'd by rcv'r*/
 	int	rcv_numsacks;		/* # distinct sack blks present */
 	struct sackblk sackblks[MAX_SACK_BLKS]; /* seq nos. of sack blocks */
-	tcp_seq sack_newdata;		/* New data xmitted in this recovery
-   					   episode starts at this seq number */
 	struct sackhint	sackhint;	/* SACK scoreboard hint */
 	
-	u_int32_t	t_pktlist_sentlen; /* total bytes in transmit chain */
 	struct mbuf	*t_pktlist_head; /* First packet in transmit chain */
 	struct mbuf	*t_pktlist_tail; /* Last packet in transmit chain */
+	u_int32_t	t_pktlist_sentlen; /* total bytes in transmit chain */
 
 	u_int32_t	t_keepidle;	/* keepalive idle timer (override global if > 0) */
 	u_int32_t	t_keepinit;	/* connection timeout, i.e. idle time 
@@ -409,7 +426,8 @@ struct tcpcb {
 	u_int32_t	t_keepcnt;	/* number of keepalives before close */
 
 	u_int32_t	tso_max_segment_size;	/* TSO maximum segment unit for NIC */
-	u_int32_t	t_pmtud_saved_maxopd;	/* MSS saved before performing PMTU-D BlackHole detection */
+	u_int16_t	t_pmtud_lastseg_size;	/* size of the last sent segment */
+	u_int16_t	t_pmtud_saved_maxopd;	/* MSS saved before performing PMTU-D BlackHole detection */
 	u_int32_t	t_pmtud_start_ts;	/* Time of PMTUD blackhole detection */
 	
 	struct
@@ -445,12 +463,18 @@ struct tcpcb {
 #define TF_FORCE		0x8000		/* force 1 byte out */
 #define	TF_DISABLE_STRETCHACK	0x10000		/* auto-disable stretch ack */
 #define	TF_NOBLACKHOLE_DETECTION 0x20000	/* Disable PMTU blackhole detection */
+#define	TF_DISABLE_DSACK	0x40000		/* Ignore DSACK due to n/w duplication */
+#define	TF_RESCUE_RXT		0x80000		/* SACK rescue retransmit */
+#define	TF_CWND_NONVALIDATED	0x100000	/* cwnd non validated */
+#define	TF_PROBING		0x200000	/* Trigger probe timeout */
+#define	TF_FASTOPEN		0x400000	/* TCP Fastopen is enabled */
 
 #if TRAFFIC_MGT
 	/* Inter-arrival jitter related state */
 	uint32_t 	iaj_rcv_ts;		/* tcp clock when the first packet was received */
 	uint16_t	iaj_size;		/* Size of packet for iaj measurement */
-	uint16_t	iaj_small_pkt;		/* Count of packets smaller than iaj_size */
+	uint8_t		iaj_small_pkt;		/* Count of packets smaller than iaj_size */
+	uint8_t		t_pipeack_ind;		/* index for next pipeack sample */
 	uint16_t	iaj_pktcnt;		/* packet count, to avoid throttling initially */
 	uint16_t	acc_iaj;		/* Accumulated iaj */
 	tcp_seq 	iaj_rwintop;		/* recent max advertised window */
@@ -465,6 +489,19 @@ struct tcpcb {
 /* Tail loss probe related state */
 	tcp_seq		t_tlphighrxt;		/* snd_nxt after PTO */
 	u_int32_t	t_tlpstart;		/* timestamp at PTO */
+/* DSACK data receiver state */
+	tcp_seq		t_dsack_lseq;		/* DSACK left sequence */
+	tcp_seq		t_dsack_rseq;		/* DSACK right sequence */
+/* DSACK data sender state */
+	SLIST_HEAD(tcp_rxt_seghead, tcp_rxt_seg) t_rxt_segments;
+	tcp_seq		t_dsack_lastuna;	/* snd_una when last recovery episode started */
+/* state for congestion window validation (draft-ietf-tcpm-newcwv-07) */
+#define	TCP_PIPEACK_SAMPLE_COUNT	3
+	u_int32_t	t_pipeack_sample[TCP_PIPEACK_SAMPLE_COUNT];	/* pipeack, bytes acked within RTT */
+	tcp_seq		t_pipeack_lastuna; /* una when pipeack measurement started */
+	u_int32_t	t_pipeack;
+	u_int32_t	t_lossflightsize;
+
 #if MPTCP
 	u_int32_t	t_mpflags;		/* flags for multipath TCP */
 
@@ -492,14 +529,64 @@ struct tcpcb {
 #define TMPF_SND_MPFAIL		0x00200000 /* Received mapping csum failure */
 #define TMPF_FASTJOIN_SEND	0x00400000 /* Fast join early data send */
 #define TMPF_FASTJOINBY2_SEND	0x00800000 /* Fast join send after 3 WHS */
+#define TMPF_MPCAP_RETRANSMIT	0x01000000 /* Retransmission of 3rd ACK */
 
-	void			*t_mptcb;	/* pointer to MPTCP TCB */
 	tcp_seq			t_mpuna;	/* unacknowledged sequence */
+	void			*t_mptcb;	/* pointer to MPTCP TCB */
 	struct mpt_dsn_map	t_rcv_map;	/* Receive mapping list */
 	u_int8_t		t_local_aid;	/* Addr Id for authentication */
 	u_int8_t		t_rem_aid;	/* Addr ID of another subflow */
 	u_int8_t		t_mprxtshift;	/* join retransmission */
 #endif /* MPTCP */
+
+#define	TFO_F_OFFER_COOKIE	0x01 /* We will offer a cookie */
+#define	TFO_F_COOKIE_VALID	0x02 /* The received cookie is valid */
+#define	TFO_F_COOKIE_REQ	0x04 /* Client requested a new cookie */
+#define	TFO_F_COOKIE_SENT	0x08 /* Client did send a cookie in the SYN */
+#define	TFO_F_SYN_LOSS		0x10 /* A SYN-loss triggered a fallback to regular TCP on the client-side */
+#define	TFO_F_NO_RCVPROBING	0x20 /* This network is guaranteed to support TFO in the downstream direction */
+#define	TFO_F_NO_SNDPROBING	0x40 /* This network is guaranteed to support TFO in the upstream direction */
+	u_int8_t		t_tfo_flags;
+#define	TFO_S_SYNDATA_RCV	0x01 /* SYN+data has been received */
+#define	TFO_S_COOKIEREQ_RECV	0x02 /* TFO-cookie request received */
+#define	TFO_S_COOKIE_SENT	0x04 /* TFO-cookie announced in SYN/ACK */
+#define	TFO_S_COOKIE_INVALID	0x08 /* Received TFO-cookie is invalid */
+#define	TFO_S_COOKIE_REQ	0x10 /* TFO-cookie requested within the SYN */
+#define	TFO_S_COOKIE_RCV	0x20 /* TFO-cookie received in SYN/ACK */
+#define	TFO_S_SYN_DATA_SENT	0x40 /* SYN+data sent */
+#define	TFO_S_SYN_DATA_ACKED	0x80 /* SYN+data has been acknowledged in SYN/ACK */
+#define	TFO_S_SYN_LOSS		0x0100 /* SYN+TFO has been lost - fallback to regular TCP */
+	u_int16_t		t_tfo_stats;
+
+	u_int8_t		t_tfo_probes; /* TFO-probes we did send */
+/*
+ * This here is the TFO-probing state-machine. Transitions are as follows:
+ *
+ * Current state: PROBE_NONE
+ *		  Event: SYN+DATA acknowledged
+ *			 Action: Transition to PROBE_PROBING and set keepalive-timer
+ *
+ * Current state: PROBE_PROBING (initial state)
+ *		  Event: Receive data
+ *			 Action: Transition to PROBE_NONE and cancel keepalive-timer
+ *		  Event: Receive ACK that does not indicate a hole
+ *			 Action: Transition to PROBE_NONE and cancel keepalive-timer
+ *		  Event: Receive ACK that indicates a hole
+ *			 Action: Transition to PROBE_WAIT_DATA and set a short timer
+ *				 to wait for the final segment.
+ *		  Event: Keepalive-timeout (did not receive any segment)
+ *			 Action: Signal ETIMEDOUT as with regular keepalive-timers
+ *
+ * Current state: PROBE_WAIT_DATA
+ *		  Event: Receive data
+ *			 Action: Transition to PROBE_NONE and cancel keepalive-timer
+ *		  Event: Data-timeout (did not receive the expected data)
+ *			 Action: Signal ENODATA up to the app and close everything.
+ */
+#define	TFO_PROBE_NONE		0 /* Not probing now */
+#define	TFO_PROBE_PROBING	1 /* Sending out TCP-keepalives waiting for reply */
+#define	TFO_PROBE_WAIT_DATA	2 /* Received reply, waiting for data */
+	u_int8_t		t_tfo_probe_state;
 };
 
 #define IN_FASTRECOVERY(tp)	(tp->t_flags & TF_FASTRECOVERY)
@@ -516,6 +603,8 @@ struct tcpcb {
 	(_tp_)->t_flags |= TF_FASTRECOVERY;			\
 	if (INP_IS_FLOW_CONTROLLED((_tp_)->t_inpcb))		\
 		inp_reset_fc_state((_tp_)->t_inpcb);		\
+	if (!SLIST_EMPTY(&tp->t_rxt_segments))			\
+		tcp_rxtseg_clean(tp);				\
 } while(0)
 
 #define EXIT_FASTRECOVERY(_tp_) do {		\
@@ -525,6 +614,8 @@ struct tcpcb {
 	(_tp_)->t_bytes_acked = 0;		\
 	(_tp_)->ecn_flags &= ~TE_INRECOVERY;	\
 	(_tp_)->t_timer[TCPT_PTO] = 0;		\
+	(_tp_)->t_flagsext &= ~TF_RESCUE_RXT;	\
+	(_tp_)->t_lossflightsize = 0;		\
 } while(0)
 
 /*
@@ -547,33 +638,71 @@ extern int tcprexmtthresh;
 		(TF_REQ_TSTMP|TF_RCVD_TSTMP))
 
 /*
+ * This condition is true if window scale option is supported
+ * on a connection
+ */
+#define	TCP_WINDOW_SCALE_ENABLED(_tp_) \
+	(((_tp_)->t_flags & (TF_RCVD_SCALE|TF_REQ_SCALE)) == \
+		(TF_RCVD_SCALE|TF_REQ_SCALE))
+
+/* Is ECN enabled end-to-end */
+#define	TCP_ECN_ENABLED(_tp_) \
+	(((_tp_)->ecn_flags & (TE_ECN_ON)) == (TE_ECN_ON))
+
+/*
  * Gives number of bytes acked by this ack
  */
 #define BYTES_ACKED(_th_, _tp_) \
 	((_th_)->th_ack - (_tp_)->snd_una)
 
+/* Returns true if a DSACK option should be sent */
+#define	TCP_SEND_DSACK_OPT(_tp_) \
+	((_tp_)->t_dsack_lseq > 0 && (_tp_)->t_dsack_rseq > 0)
+
+/* Check if DSACK option should be processed */
+#define	TCP_DSACK_ENABLED(tp)	(tcp_dsack_enable == 1 && \
+    !(tp->t_flagsext & TF_DISABLE_DSACK))
+
+/*
+ * Returns true if a DSACK sequence is within the max send window that will
+ * be accepted. In order to set a window to validate sequence numbers, the
+ * max send window within which a DSACK option is processed is limited.
+ *
+ * We need to choose a maximum window to check if the sequence number is
+ * within the window. One arbitrary choice is 256 * MSS because if the
+ * window is as large as 256 segments it might be big enough to ignore the
+ * DSACK option. Choosing a much larger limit means that the memory for
+ * retransmit segments can be held for a longer time.
+ */
+#define	TCP_DSACK_MAX_SEND_WINDOW(_tp_) ((_tp_)->t_maxseg << 8)
+#define TCP_DSACK_SEQ_IN_WINDOW(_tp_, _seq_, _una_) \
+    (SEQ_LEQ((_seq_), (_tp_)->snd_max) && \
+    SEQ_GEQ((_seq_), ((_una_) - TCP_DSACK_MAX_SEND_WINDOW(_tp_))))
+
+
 enum tcp_cc_event {
-	TCP_CC_CWND_INIT,
-	TCP_CC_INSEQ_ACK_RCVD,
-	TCP_CC_ACK_RCVD,
-	TCP_CC_ENTER_FASTRECOVERY,
-	TCP_CC_IN_FASTRECOVERY,
-	TCP_CC_EXIT_FASTRECOVERY,
-	TCP_CC_PARTIAL_ACK,
-	TCP_CC_IDLE_TIMEOUT,
-	TCP_CC_REXMT_TIMEOUT,
-	TCP_CC_ECN_RCVD,
-	TCP_CC_BAD_REXMT_RECOVERY,
-	TCP_CC_OUTPUT_ERROR,
-	TCP_CC_CHANGE_ALGO,
-	TCP_CC_FLOW_CONTROL,
-	TCP_CC_SUSPEND,
-	TCP_CC_LIMITED_TRANSMIT,
-	TCP_CC_EARLY_RETRANSMIT,
-	TCP_CC_TLP_RECOVERY,
-	TCP_CC_TLP_RECOVER_LASTPACKET,
-	TCP_CC_DELAY_FASTRECOVERY,
-	TCP_CC_TLP_IN_FASTRECOVERY
+	TCP_CC_CWND_INIT,	/* 0 */
+	TCP_CC_INSEQ_ACK_RCVD,	/* 1 */
+	TCP_CC_ACK_RCVD,	/* 2 */
+	TCP_CC_ENTER_FASTRECOVERY, /* 3 */
+	TCP_CC_IN_FASTRECOVERY,	/* 4 */
+	TCP_CC_EXIT_FASTRECOVERY,  /* 5 */
+	TCP_CC_PARTIAL_ACK,	/* 6 */
+	TCP_CC_IDLE_TIMEOUT,	/* 7 */
+	TCP_CC_REXMT_TIMEOUT,	/* 8 */
+	TCP_CC_ECN_RCVD,	/* 9 */
+	TCP_CC_BAD_REXMT_RECOVERY, /* 10 */
+	TCP_CC_OUTPUT_ERROR,	/* 11 */
+	TCP_CC_CHANGE_ALGO,	/* 12 */
+	TCP_CC_FLOW_CONTROL,	/* 13 */
+	TCP_CC_SUSPEND,		/* 14 */
+	TCP_CC_LIMITED_TRANSMIT, /* 15 */
+	TCP_CC_EARLY_RETRANSMIT, /* 16 */
+	TCP_CC_TLP_RECOVERY,	/* 17 */
+	TCP_CC_TLP_RECOVER_LASTPACKET, /* 18 */
+	TCP_CC_DELAY_FASTRECOVERY, /* 19 */
+	TCP_CC_TLP_IN_FASTRECOVERY, /* 20 */
+	TCP_CC_DSACK_BAD_REXMT	/* 21 */
 };
 
 /*
@@ -591,12 +720,15 @@ struct tcpopt {
 #define	TOF_SIGLEN	0x0080	/* signature length valid (RFC2385) */
 #define	TOF_SACK	0x0100		/* Peer sent SACK option */
 #define	TOF_MPTCP	0x0200	/* MPTCP options to be dropped */
+#define	TOF_TFO		0x0400  /* TFO cookie option present */
+#define TOF_TFOREQ	0x0800  /* TFO cookie request present */
 	u_int32_t		to_tsval;
 	u_int32_t		to_tsecr;
 	u_int16_t	to_mss;
 	u_int8_t	to_requested_s_scale;
 	u_int8_t	to_nsacks;	/* number of SACK blocks */
 	u_char		*to_sacks;	/* pointer to the first SACK blocks */
+	u_char		*to_tfo;	/* pointer to the TFO cookie */
 };
 
 /*
@@ -634,6 +766,11 @@ struct rmxp_tao {
 #define	TCP_RTTVAR_SCALE	16	/* multiplier for rttvar; 4 bits */
 #define	TCP_RTTVAR_SHIFT	4	/* shift for rttvar; 4 bits */
 #define	TCP_DELTA_SHIFT		2	/* see tcp_input.c */
+
+/* TFO-specific defines */
+#define	TFO_COOKIE_LEN_MIN	4
+#define	TFO_COOKIE_LEN_DEFAULT	8
+#define	TFO_COOKIE_LEN_MAX	16
 
 /*
  * The initial retransmission should happen at rtt + 4 * rttvar.
@@ -767,6 +904,9 @@ struct tcpcb {
 	u_int32_t t_badrxtwin;		/* window for retransmit recovery */
 };
 
+#define        tcps_ecn_setup  tcps_ecn_client_success
+#define        tcps_sent_cwr   tcps_ecn_recv_ece
+#define        tcps_sent_ece   tcps_ecn_sent_ece
 
 /*
  * TCP statistics.
@@ -924,17 +1064,61 @@ struct	tcpstat {
 	u_int32_t	tcps_rto_after_pto;	/* RTO after a probe */
 	u_int32_t	tcps_tlp_recovery;	/* TLP induced fast recovery */
 	u_int32_t	tcps_tlp_recoverlastpkt; /* TLP recoverd last pkt */
-	u_int32_t	tcps_ecn_setup;		/* connection negotiated ECN */
-	u_int32_t	tcps_sent_cwr;		/* Sent CWR, ECE received */
-	u_int32_t	tcps_sent_ece;		/* Sent ECE notification */
+	u_int32_t	tcps_ecn_client_success; /* client-side connection negotiated ECN */
+	u_int32_t	tcps_ecn_recv_ece;	/* ECE received, sent CWR */
+	u_int32_t	tcps_ecn_sent_ece;	/* Sent ECE notification */
 	u_int32_t	tcps_detect_reordering; /* Detect pkt reordering */
 	u_int32_t	tcps_delay_recovery;	/* Delay fast recovery */
 	u_int32_t	tcps_avoid_rxmt;	/* Retransmission was avoided */
 	u_int32_t	tcps_unnecessary_rxmt;	/* Retransmission was not needed */
 	u_int32_t	tcps_nostretchack;	/* disabled stretch ack algorithm on a connection */
 	u_int32_t	tcps_rescue_rxmt;	/* SACK rescue retransmit */
-	u_int32_t	tcps_pto_in_recovery;	/* PTO during fast recovery */
-	u_int32_t	tcps_pmtudbh_reverted;	/* PMTU Blackhole detection, segement size reverted */
+	u_int32_t	tcps_pto_in_recovery;	/* rescue retransmit in fast recovery */
+	u_int32_t	tcps_pmtudbh_reverted;	/* PMTU Blackhole detection, segment size reverted */
+
+	/* DSACK related statistics */
+	u_int32_t	tcps_dsack_disable;	/* DSACK disabled due to n/w duplication */
+	u_int32_t	tcps_dsack_ackloss;	/* ignore DSACK due to ack loss */
+	u_int32_t	tcps_dsack_badrexmt;	/* DSACK based bad rexmt recovery */
+	u_int32_t	tcps_dsack_sent;	/* Sent DSACK notification */
+	u_int32_t	tcps_dsack_recvd;	/* Received a valid DSACK option */
+	u_int32_t	tcps_dsack_recvd_old;	/* Received an out of window DSACK option */
+
+	/* MPTCP Subflow selection stats */
+	u_int32_t	tcps_mp_sel_symtomsd;	/* By symptomsd */
+	u_int32_t	tcps_mp_sel_rtt;	/* By RTT comparison */
+	u_int32_t	tcps_mp_sel_rto;	/* By RTO comparison */
+	u_int32_t	tcps_mp_sel_peer;	/* By peer's output pattern */
+	u_int32_t	tcps_mp_num_probes;	/* Number of probes sent */
+	u_int32_t	tcps_mp_verdowngrade;	/* MPTCP version downgrade */
+	u_int32_t	tcps_drop_after_sleep;	/* drop after long AP sleep */
+	u_int32_t	tcps_probe_if;		/* probe packets after interface availability */
+	u_int32_t	tcps_probe_if_conflict; /* Can't send probe packets for interface */
+
+	u_int32_t	tcps_ecn_client_setup;	/* Attempted ECN setup from client side */
+	u_int32_t	tcps_ecn_server_setup;	/* Attempted ECN setup from server side */
+	u_int32_t	tcps_ecn_server_success; /* server-side connection negotiated ECN */
+	u_int32_t	tcps_ecn_lost_synack;	/* Lost SYN-ACK with ECN setup */
+	u_int32_t	tcps_ecn_lost_syn;	/* Lost SYN with ECN setup */
+	u_int32_t	tcps_ecn_not_supported;	/* Server did not support ECN setup */
+	u_int32_t	tcps_ecn_recv_ce;	/* Received CE from the network */
+	u_int32_t	tcps_ecn_conn_recv_ce;	/* Number of connections received CE atleast once */
+	u_int32_t	tcps_ecn_conn_recv_ece;	/* Number of connections received ECE atleast once */
+	u_int32_t	tcps_ecn_conn_plnoce;	/* Number of connections that received no CE and sufferred packet loss */
+	u_int32_t	tcps_ecn_conn_pl_ce;	/* Number of connections that received CE and sufferred packet loss */
+	u_int32_t	tcps_ecn_conn_nopl_ce;	/* Number of connections that received CE and sufferred no packet loss */
+
+	/* TFO-related statistics */
+	u_int32_t	tcps_tfo_syn_data_rcv;	/* Received a SYN+data with valid cookie */
+	u_int32_t	tcps_tfo_cookie_req_rcv;/* Received a TFO cookie-request */
+	u_int32_t	tcps_tfo_cookie_sent;	/* Offered a TFO-cookie to the client */
+	u_int32_t	tcps_tfo_cookie_invalid;/* Received an invalid TFO-cookie */
+	u_int32_t	tcps_tfo_cookie_req;	/* Cookie requested with the SYN */
+	u_int32_t	tcps_tfo_cookie_rcv;	/* Cookie received in a SYN/ACK */
+	u_int32_t	tcps_tfo_syn_data_sent;	/* SYN+data+cookie sent */
+	u_int32_t	tcps_tfo_syn_data_acked;/* SYN+data has been acknowledged */
+	u_int32_t	tcps_tfo_syn_loss;	/* SYN+TFO has been lost and we fallback */
+	u_int32_t	tcps_tfo_blackhole;	/* TFO got blackholed by a middlebox. */
 };
 
 struct tcpstat_local {
@@ -1188,21 +1372,22 @@ struct  xtcpcb_n {
 SYSCTL_DECL(_net_inet_tcp);
 #endif /* SYSCTL_DECL */
 
-/*
- * Flags for TCP's connectx(2) user-protocol request routine.
- */
-#if MPTCP
-#define	TCP_CONNREQF_MPTCP	0x1	/* called internally by MPTCP */
-#endif /* MPTCP */
-
 extern	struct inpcbhead tcb;		/* head of queue of active tcpcb's */
 extern	struct inpcbinfo tcbinfo;
 extern	struct tcpstat tcpstat;	/* tcp statistics */
 extern	int tcp_mssdflt;	/* XXX */
 extern	int tcp_minmss;
+#define	TCP_FASTOPEN_SERVER 0x01
+#define	TCP_FASTOPEN_CLIENT 0x02
+
+extern	int tcp_tfo_halfcnt;
+extern	int tcp_tfo_backlog;
+extern	int tcp_fastopen;
+extern	int tcp_tfo_fallback_min;
 extern	int ss_fltsz;
 extern	int ss_fltsz_local;
 extern 	int tcp_do_rfc3390;		/* Calculate ss_fltsz according to RFC 3390 */
+extern int tcp_do_rfc1323;
 extern int target_qdelay;
 extern	u_int32_t tcp_now;		/* for RFC 1323 timestamps */ 
 extern struct timeval tcp_uptime;
@@ -1213,6 +1398,10 @@ extern int tcp_do_rfc3465;
 extern int tcp_do_rfc3465_lim2;
 extern int maxseg_unacked;
 extern int tcp_use_newreno;
+extern struct zone *tcp_reass_zone;
+extern struct zone *tcp_rxt_seg_zone;
+extern int tcp_ecn_outbound;
+extern int tcp_ecn_inbound;
 
 
 #if CONFIG_IFEF_NOWINDOWSCALE
@@ -1255,6 +1444,7 @@ struct rtentry *
 	 tcp_rtlookup(struct inpcb *, unsigned int);
 void	 tcp_setpersist(struct tcpcb *);
 void	 tcp_gc(struct inpcbinfo *);
+void     tcp_itimer(struct inpcbinfo *ipi);
 void 	 tcp_check_timer_state(struct tcpcb *tp);
 void	 tcp_run_timerlist(void *arg1, void *arg2);
 
@@ -1265,6 +1455,8 @@ void	 tcp_trace(int, int, struct tcpcb *, void *, struct tcphdr *, int);
 
 void tcp_sack_doack(struct tcpcb *, struct tcpopt *, struct tcphdr *,
     u_int32_t *);
+extern boolean_t tcp_sack_process_dsack(struct tcpcb *, struct tcpopt *,
+    struct tcphdr *);
 int tcp_detect_bad_rexmt(struct tcpcb *, struct tcphdr *, struct tcpopt *,
     u_int32_t rxtime);
 void	 tcp_update_sack_list(struct tcpcb *tp, tcp_seq rcv_laststart, tcp_seq rcv_lastend);
@@ -1320,8 +1512,25 @@ extern int tcp_input_checksum(int, struct mbuf *, struct tcphdr *, int, int);
 extern void tcp_getconninfo(struct socket *, struct conninfo_tcp *);
 extern void add_to_time_wait(struct tcpcb *, uint32_t delay);
 extern void tcp_pmtud_revert_segment_size(struct tcpcb *tp);
+extern void tcp_rxtseg_insert(struct tcpcb *, tcp_seq, tcp_seq);
+extern struct tcp_rxt_seg *tcp_rxtseg_find(struct tcpcb *, tcp_seq, tcp_seq);
+extern void tcp_rxtseg_clean(struct tcpcb *);
+extern boolean_t tcp_rxtseg_detect_bad_rexmt(struct tcpcb *, tcp_seq);
+extern boolean_t tcp_rxtseg_dsack_for_tlp(struct tcpcb *);
+extern u_int32_t tcp_rxtseg_total_size(struct tcpcb *tp);
+extern void tcp_rexmt_save_state(struct tcpcb *tp);
+extern void tcp_interface_send_probe(u_int16_t if_index_available);
+extern void tcp_probe_connectivity(struct ifnet *ifp, u_int32_t enable);
+extern void tcp_get_connectivity_status(struct tcpcb *,
+    struct tcp_conn_status *);
+
+extern boolean_t tfo_enabled(const struct tcpcb *tp);
+extern void tcp_disable_tfo(struct tcpcb *tp);
+extern void tcp_tfo_gen_cookie(struct inpcb *inp, u_char *out, size_t blk_size);
+#define	TCP_FASTOPEN_KEYLEN 16
+
 #if MPTCP
-extern uint16_t mptcp_input_csum(struct tcpcb *, struct mbuf *, int);
+extern int mptcp_input_preproc(struct tcpcb *, struct mbuf *, int);
 extern void mptcp_output_csum(struct tcpcb *, struct mbuf *, int32_t, unsigned, 
     u_int64_t, u_int32_t *);
 extern int mptcp_adj_mss(struct tcpcb *, boolean_t);

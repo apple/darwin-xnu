@@ -498,9 +498,15 @@ SYSCTL_NODE(_machdep_cpu, OID_AUTO, xsave, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 
 SYSCTL_PROC(_machdep_cpu_xsave, OID_AUTO, extended_state,
 	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
-	    (void *)offsetof(cpuid_xsave_leaf_t, extended_state),
+	    (void *) 0,
 	    sizeof(cpuid_xsave_leaf_t),
-	    cpu_xsave, "IU", "XSAVE Extended State");
+	    cpu_xsave, "IU", "XSAVE Extended State Main Leaf");
+
+SYSCTL_PROC(_machdep_cpu_xsave, OID_AUTO, extended_state1,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *) sizeof(cpuid_xsave_leaf_t),
+	    sizeof(cpuid_xsave_leaf_t),
+	    cpu_xsave, "IU", "XSAVE Extended State Sub-leaf 1");
 
 
 SYSCTL_NODE(_machdep_cpu, OID_AUTO, arch_perf, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
@@ -681,7 +687,7 @@ SYSCTL_PROC(_machdep_cpu_flex_ratio, OID_AUTO, max,
 	    cpu_flex_ratio_max, "I", "Flex ratio max (non-turbo)");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, ucupdate, 
-			CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_LOCKED, 0, 0,
+	    CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_LOCKED, 0, 0,
             cpu_ucode_update, "S", "Microcode update interface");
 
 static const uint32_t apic_timer_vector = (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_TIMER_INTERRUPT);
@@ -690,8 +696,8 @@ static const uint32_t apic_IPI_vector = (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_IN
 SYSCTL_NODE(_machdep, OID_AUTO, vectors, CTLFLAG_RD | CTLFLAG_LOCKED, 0,
 	"Interrupt vector assignments");
 
-SYSCTL_UINT     (_machdep_vectors, OID_AUTO, timer, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (uint32_t *)&apic_timer_vector, 0, "");
-SYSCTL_UINT     (_machdep_vectors, OID_AUTO, IPI, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (uint32_t *)&apic_IPI_vector, 0, "");
+SYSCTL_UINT     (_machdep_vectors, OID_AUTO, timer, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, __DECONST(uint32_t *,&apic_timer_vector), 0, "");
+SYSCTL_UINT     (_machdep_vectors, OID_AUTO, IPI, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, __DECONST(uint32_t *,&apic_IPI_vector), 0, "");
 
 uint64_t pmap_pv_hashlist_walks;
 uint64_t pmap_pv_hashlist_cnts;
@@ -743,19 +749,19 @@ SYSCTL_NODE(_machdep_tsc, OID_AUTO, nanotime,
 	CTLFLAG_RD|CTLFLAG_LOCKED, NULL, "TSC to ns conversion");
 SYSCTL_QUAD(_machdep_tsc_nanotime, OID_AUTO, tsc_base,
 	CTLFLAG_RD | CTLFLAG_LOCKED,
-	(uint64_t *) &pal_rtc_nanotime_info.tsc_base, "");
+	__DECONST(uint64_t *, &pal_rtc_nanotime_info.tsc_base), "");
 SYSCTL_QUAD(_machdep_tsc_nanotime, OID_AUTO, ns_base,
 	CTLFLAG_RD | CTLFLAG_LOCKED,
-	(uint64_t *)&pal_rtc_nanotime_info.ns_base, "");
+	__DECONST(uint64_t *, &pal_rtc_nanotime_info.ns_base), "");
 SYSCTL_UINT(_machdep_tsc_nanotime, OID_AUTO, scale,
 	CTLFLAG_RD | CTLFLAG_LOCKED,
-	(uint32_t *)&pal_rtc_nanotime_info.scale, 0, "");
+	__DECONST(uint32_t *, &pal_rtc_nanotime_info.scale), 0, "");
 SYSCTL_UINT(_machdep_tsc_nanotime, OID_AUTO, shift,
 	CTLFLAG_RD | CTLFLAG_LOCKED,
-	(uint32_t *)&pal_rtc_nanotime_info.shift, 0, "");
+	__DECONST(uint32_t *, &pal_rtc_nanotime_info.shift), 0, "");
 SYSCTL_UINT(_machdep_tsc_nanotime, OID_AUTO, generation,
 	CTLFLAG_RD | CTLFLAG_LOCKED,
-	(uint32_t *)&pal_rtc_nanotime_info.generation, 0, "");
+	__DECONST(uint32_t *, &pal_rtc_nanotime_info.generation), 0, "");
 
 SYSCTL_NODE(_machdep, OID_AUTO, misc, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"Miscellaneous x86 kernel parameters");
@@ -775,7 +781,14 @@ SYSCTL_PROC(_machdep_misc, OID_AUTO, machine_check_panic,
 	    0, 0,
 	    misc_machine_check_panic, "A", "Machine-check exception test");
 
-
+#if DEVELOPMENT || DEBUG
+SYSCTL_QUAD(_machdep, OID_AUTO, reportphyreadabs,
+		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+		&reportphyreaddelayabs, "");
+SYSCTL_INT(_machdep, OID_AUTO, reportphyreadosbt,
+		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+		&reportphyreadosbt, 0, "");
+#endif
 
 extern void timer_queue_trace_cpu(int);
 static int
@@ -848,3 +861,7 @@ extern uint64_t ml_timer_eager_evaluation_max;
 SYSCTL_QUAD(_machdep, OID_AUTO, eager_timer_evaluation_max,
 		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
 		&ml_timer_eager_evaluation_max, "");
+extern uint64_t x86_isr_fp_simd_use;
+SYSCTL_QUAD(_machdep, OID_AUTO, x86_fp_simd_isr_uses,
+		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+		&x86_isr_fp_simd_use, "");

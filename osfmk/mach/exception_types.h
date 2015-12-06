@@ -100,6 +100,8 @@
 
 #define EXC_GUARD		12	/* Violated guarded resource protections */
 
+#define EXC_CORPSE_NOTIFY	13 	/* Abnormal process exited to corpse state */
+
 
 /*
  *	Machine-independent exception behaviors
@@ -139,6 +141,7 @@
 #define EXC_MASK_CRASH			(1 << EXC_CRASH)
 #define EXC_MASK_RESOURCE		(1 << EXC_RESOURCE)
 #define EXC_MASK_GUARD			(1 << EXC_GUARD)
+#define EXC_MASK_CORPSE_NOTIFY		(1 << EXC_CORPSE_NOTIFY)
 
 #define EXC_MASK_ALL	(EXC_MASK_BAD_ACCESS |			\
 			 EXC_MASK_BAD_INSTRUCTION |		\
@@ -154,7 +157,7 @@
 			 EXC_MASK_MACHINE)
 
 #ifdef	KERNEL_PRIVATE
-#define EXC_MASK_VALID	(EXC_MASK_ALL | EXC_MASK_CRASH)
+#define EXC_MASK_VALID	(EXC_MASK_ALL | EXC_MASK_CRASH | EXC_MASK_CORPSE_NOTIFY)
 #endif /* KERNEL_PRIVATE */
 
 #define FIRST_EXCEPTION		1	/* ZERO is illegal */

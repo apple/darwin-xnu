@@ -2,8 +2,9 @@
  *  ccaes.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 12/10/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/10/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2013,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -24,12 +25,21 @@ extern const struct ccmode_ecb ccaes_ltc_ecb_encrypt_mode;
 extern const struct ccmode_cbc ccaes_gladman_cbc_encrypt_mode;
 extern const struct ccmode_cbc ccaes_gladman_cbc_decrypt_mode;
 
-#if CCAES_ARM
+#if !defined(__NO_ASM__) && CCAES_ARM
 extern const struct ccmode_ecb ccaes_arm_ecb_encrypt_mode;
 extern const struct ccmode_ecb ccaes_arm_ecb_decrypt_mode;
 
 extern const struct ccmode_cbc ccaes_arm_cbc_encrypt_mode;
 extern const struct ccmode_cbc ccaes_arm_cbc_decrypt_mode;
+
+extern const struct ccmode_xts ccaes_arm_xts_encrypt_mode;
+extern const struct ccmode_xts ccaes_arm_xts_decrypt_mode;
+
+extern const struct ccmode_cfb ccaes_arm_cfb_encrypt_mode;
+extern const struct ccmode_cfb ccaes_arm_cfb_decrypt_mode;
+
+extern const struct ccmode_ofb ccaes_arm_ofb_crypt_mode;
+
 #endif
 
 #if CCAES_MUX
@@ -40,7 +50,7 @@ extern const struct ccmode_cbc *ccaes_ios_mux_cbc_encrypt_mode(void);
 extern const struct ccmode_cbc *ccaes_ios_mux_cbc_decrypt_mode(void);
 #endif
 
-#if CCAES_INTEL
+#if !defined(__NO_ASM__) && CCAES_INTEL
 //extern const struct ccmode_ecb ccaes_intel_ecb_encrypt_mode;
 //extern const struct ccmode_ecb ccaes_intel_ecb_decrypt_mode;
 

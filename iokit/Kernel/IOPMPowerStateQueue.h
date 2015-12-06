@@ -51,8 +51,8 @@ private:
     IOLock *        queueLock;
 
 protected:
-    virtual bool checkForWork( void );
-    virtual bool init( OSObject * owner, Action action );
+    virtual bool checkForWork( void ) APPLE_KEXT_OVERRIDE;
+    virtual bool init( OSObject * owner, Action action ) APPLE_KEXT_OVERRIDE;
 
 public:
     static IOPMPowerStateQueue * PMPowerStateQueue( OSObject * owner, Action action );

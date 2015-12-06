@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2015 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -137,6 +137,18 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data,
 static void pktmnglr_ipfilter_detach(void *cookie);
 
 static void chksm_update(mbuf_t data);
+
+#define TCP_OPT_MULTIPATH_TCP	30
+#define MPTCP_SBT_VER_OFFSET	2
+
+#define MPTCP_SUBTYPE_MPCAPABLE		0x0
+#define MPTCP_SUBTYPE_MPJOIN		0x1
+#define MPTCP_SUBTYPE_DSS		0x2
+#define MPTCP_SUBTYPE_ADD_ADDR		0x3
+#define MPTCP_SUBTYPE_REM_ADDR		0x4
+#define MPTCP_SUBTYPE_MP_PRIO		0x5
+#define MPTCP_SUBTYPE_MP_FAIL		0x6
+#define MPTCP_SUBTYPE_MP_FASTCLOSE	0x7
 
 /*
  * packet filter global read write lock
@@ -755,57 +767,66 @@ pkt_mnglr_init(void)
 static errno_t pktmnglr_ipfilter_output(void *cookie, mbuf_t *data, ipf_pktopts_t options)
 {
 	struct packet_mangler *p_pkt_mnglr = (struct packet_mangler *)cookie;
-	unsigned char *ptr = (unsigned char *)mbuf_data(*data);
-	struct ip *ip = (struct ip *)(void *)ptr;
-	struct tcphdr *tcp;
+	struct ip ip;
+	struct tcphdr tcp;
 	int optlen = 0;
+	errno_t error = 0;
 
 #pragma unused(tcp, optlen, options)
-
 	if (p_pkt_mnglr == NULL) {
-		return 0;
+		goto output_done;
 	}
 
 	if (!p_pkt_mnglr->activate) {
-		return 0;
-	}
-
-	if (data == NULL) {
-		PKT_MNGLR_LOG(LOG_INFO, "%s:%d Data pointer is NULL\n", __FILE__, __LINE__);
-		return 0;
+		goto output_done;
 	}
 
 	if (p_pkt_mnglr->dir == IN) {
-		return 0;
+		goto output_done;
 	}
 
-	if ((p_pkt_mnglr->lsaddr.ss_family == AF_INET6) && (ip->ip_v == 4)) {
-		return 0;
+	if (data == NULL) {
+		PKT_MNGLR_LOG(LOG_ERR, "Data pointer is NULL");
+		goto output_done;
 	}
 
-	if ((p_pkt_mnglr->lsaddr.ss_family == AF_INET) && (ip->ip_v == 6)) {
-		return 0;
+	/* Check for IP filter options */
+	error = mbuf_copydata(*data, 0, sizeof(ip), &ip);
+	if (error) {
+		PKT_MNGLR_LOG(LOG_ERR, "Could not make local IP header copy");
+		goto output_done;
+	}
+
+	if ((p_pkt_mnglr->lsaddr.ss_family == AF_INET6) && (ip.ip_v == 4)) {
+		goto output_done;
+	}
+
+	if ((p_pkt_mnglr->lsaddr.ss_family == AF_INET) && (ip.ip_v == 6)) {
+		goto output_done;
 	}
 
 	if (p_pkt_mnglr->lsaddr.ss_family == AF_INET) {
 		struct sockaddr_in laddr = *(struct sockaddr_in *)(&(p_pkt_mnglr->lsaddr));
-		if (ip->ip_src.s_addr != laddr.sin_addr.s_addr) {
-			return 0;
+		if (ip.ip_src.s_addr != laddr.sin_addr.s_addr) {
+			goto output_done;
 		}
 	}
 
 	if (p_pkt_mnglr->rsaddr.ss_family == AF_INET) {
 		struct sockaddr_in raddr = *(struct sockaddr_in *)(&(p_pkt_mnglr->rsaddr));
-		if (ip->ip_dst.s_addr != raddr.sin_addr.s_addr) {
-			return 0;
+		if (ip.ip_dst.s_addr != raddr.sin_addr.s_addr) {
+			goto output_done;
 		}
 	}
 
-	if (ip->ip_v != 4) {
-		PKT_MNGLR_LOG(LOG_INFO, "%s:%d Not handling IP version %d\n", __FILE__, __LINE__, ip->ip_v);
-		return 0;
+	if (ip.ip_v != 4) {
+		PKT_MNGLR_LOG(LOG_INFO,
+		    "%s:%d Not handling IP version %d\n",
+		    __FILE__, __LINE__, ip.ip_v);
+		goto output_done;
 	}
 
+output_done:
 	/* Not handling output flow */
 	return 0;
 }
@@ -832,12 +853,12 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 		goto input_done;
 	}
 
-	if (data == NULL) {
-		PKT_MNGLR_LOG(LOG_ERR, "Data pointer is NULL");
+	if (p_pkt_mnglr->dir == OUT) {
 		goto input_done;
 	}
 
-	if (p_pkt_mnglr->dir == OUT) {
+	if (data == NULL) {
+		PKT_MNGLR_LOG(LOG_ERR, "Data pointer is NULL");
 		goto input_done;
 	}
 
@@ -924,7 +945,7 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 	/* Protocol actions */
 	switch (protocol) {
 		case IPPROTO_TCP:
-			if (p_pkt_mnglr->proto_action_mask & PKT_MNGLR_TCP_ACT_NOP_MPTCP) {
+			if (p_pkt_mnglr->proto_action_mask) {
 				int i = 0;
 				tcp_optlen = (tcp.th_off << 2)-sizeof(struct tcphdr);
 				PKT_MNGLR_LOG(LOG_INFO, "Packet from F5 is TCP\n");
@@ -944,18 +965,34 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 						tcp_optlen--;
 						i++;
 						continue;
-					} else if ((tcp_opt_buf[i] != 0) && (tcp_opt_buf[i] != 0x1e)) {
+					} else if ((tcp_opt_buf[i] != 0) && (tcp_opt_buf[i] != TCP_OPT_MULTIPATH_TCP)) {
 						PKT_MNGLR_LOG(LOG_INFO, "Skipping option %x\n", tcp_opt_buf[i]);
 						tcp_optlen -= tcp_opt_buf[i+1];
 						i += tcp_opt_buf[i+1];
 						continue;
-					} else if (tcp_opt_buf[i] == 0x1e) {
+					} else if (tcp_opt_buf[i] == TCP_OPT_MULTIPATH_TCP) {
 						int j = 0;
 						int mptcpoptlen = tcp_opt_buf[i+1];
+						uint8_t sbtver = tcp_opt_buf[i+MPTCP_SBT_VER_OFFSET];
+						uint8_t subtype = sbtver >> 4;
+
 						PKT_MNGLR_LOG(LOG_INFO, "Got MPTCP option %x\n", tcp_opt_buf[i]);
-						PKT_MNGLR_LOG(LOG_INFO, "Overwriting with NOP\n");
+						PKT_MNGLR_LOG(LOG_INFO, "Got MPTCP subtype %x\n", subtype);
+						if (subtype == MPTCP_SUBTYPE_DSS) {
+							PKT_MNGLR_LOG(LOG_INFO, "Got DSS option\n");
+							PKT_MNGLR_LOG(LOG_INFO, "Protocol option mask: %d\n", p_pkt_mnglr->proto_action_mask);
+							if (p_pkt_mnglr->proto_action_mask &
+							    PKT_MNGLR_TCP_ACT_DSS_DROP) {
+								goto drop_it;
+							}
+						}
+
+						PKT_MNGLR_LOG(LOG_INFO, "Got MPTCP option %x\n", tcp_opt_buf[i]);
 						for (; j < mptcpoptlen; j++) {
-							tcp_opt_buf[i+j] = 0x1;
+							if (p_pkt_mnglr->proto_action_mask &
+							    PKT_MNGLR_TCP_ACT_NOP_MPTCP) {
+								tcp_opt_buf[i+j] = 0x1;
+							}
 						}
 						tcp_optlen -= mptcpoptlen;
 						i += mptcpoptlen;
@@ -988,6 +1025,11 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 	chksm_update(*data);
 input_done:
 	return 0;
+
+drop_it:
+	PKT_MNGLR_LOG(LOG_INFO, "Dropping packet\n");
+	mbuf_freem(*data);
+	return EJUSTRETURN;
 }
 
 static void pktmnglr_ipfilter_detach(void *cookie)

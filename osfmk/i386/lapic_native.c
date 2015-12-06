@@ -56,10 +56,6 @@
 #include <i386/machine_check.h>
 #endif
 
-#if CONFIG_COUNTERS
-#include <pmc/pmc.h>
-#endif
-
 #include <sys/kdebug.h>
 
 #if	MP_DEBUG
@@ -121,7 +117,7 @@ legacy_init(void)
 		result = vm_map_find_space(kernel_map,
 					   &lapic_vbase64,
 					   round_page(LAPIC_SIZE), 0,
-					   VM_MAKE_TAG(VM_MEMORY_IOKIT), &entry);
+					   VM_MAKE_TAG(VM_KERN_MEMORY_IOKIT), &entry);
 		/* Convert 64-bit vm_map_offset_t to "pointer sized" vm_offset_t
 		 */
 		lapic_vbase = (vm_offset_t) lapic_vbase64;
@@ -800,15 +796,6 @@ lapic_interrupt(int interrupt_num, x86_saved_state_t *state)
 		break;
 	case LAPIC_PMC_SW_INTERRUPT: 
 		{
-#if CONFIG_COUNTERS
-			thread_t old, new;
-			ml_get_csw_threads(&old, &new);
-
-			if (pmc_context_switch(old, new) == TRUE) {
-				retval = 1;
-				/* No EOI required for SWI */
-			}
-#endif /* CONFIG_COUNTERS */
 		}
 		break;
 	case LAPIC_KICK_INTERRUPT:
@@ -977,7 +964,7 @@ void
 lapic_trigger_MC(void)
 {
 	/* A 64-bit access to any register will do it. */
-	volatile uint64_t dummy = *(uint64_t *) (void *) LAPIC_MMIO(ID);
+	volatile uint64_t dummy = *(volatile uint64_t *) (volatile void *) LAPIC_MMIO(ID);
 	dummy++;
 }
 #endif

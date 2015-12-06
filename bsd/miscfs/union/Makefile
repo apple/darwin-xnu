@@ -10,11 +10,14 @@ include $(MakeInc_def)
 DATAFILES = \
 	union.h
 
+KERNELFILES = \
+	${DATAFILES}
+
 INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_DIR = miscfs/union
 
-EXPORT_MI_LIST	= ${DATAFILES}
+EXPORT_MI_LIST = ${KERNELFILES}
 
 EXPORT_MI_DIR = miscfs/union
 

@@ -694,18 +694,31 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	}
 
 	if (info_p->cpuid_max_basic >= 0xd) {
-		cpuid_xsave_leaf_t	*xsp = &info_p->cpuid_xsave_leaf;
+		cpuid_xsave_leaf_t	*xsp;
 		/*
 		 * XSAVE Features:
 		 */
-		cpuid_fn(0xd, info_p->cpuid_xsave_leaf.extended_state);
+		xsp = &info_p->cpuid_xsave_leaf[0];
 		info_p->cpuid_xsave_leafp = xsp;
-
-		DBG(" XSAVE Leaf:\n");
+		xsp->extended_state[eax] = 0xd;
+		xsp->extended_state[ecx] = 0;
+		cpuid(xsp->extended_state);
+		DBG(" XSAVE Main leaf:\n");
 		DBG("  EAX           : 0x%x\n", xsp->extended_state[eax]);
 		DBG("  EBX           : 0x%x\n", xsp->extended_state[ebx]);
 		DBG("  ECX           : 0x%x\n", xsp->extended_state[ecx]);
 		DBG("  EDX           : 0x%x\n", xsp->extended_state[edx]);
+
+		xsp = &info_p->cpuid_xsave_leaf[1];
+		xsp->extended_state[eax] = 0xd;
+		xsp->extended_state[ecx] = 1;
+		cpuid(xsp->extended_state);
+		DBG(" XSAVE Sub-leaf1:\n");
+		DBG("  EAX           : 0x%x\n", xsp->extended_state[eax]);
+		DBG("  EBX           : 0x%x\n", xsp->extended_state[ebx]);
+		DBG("  ECX           : 0x%x\n", xsp->extended_state[ecx]);
+		DBG("  EDX           : 0x%x\n", xsp->extended_state[edx]);
+
 	}
 
 	if (info_p->cpuid_model >= CPUID_MODEL_IVYBRIDGE) {
@@ -719,8 +732,6 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		DBG("  EBX           : 0x%x\n", reg[ebx]);
 		DBG("  ECX           : 0x%x\n", reg[ecx]);
 	}
-
-	return;
 }
 
 static uint32_t
@@ -940,9 +951,9 @@ leaf7_feature_map[] = {
 	{CPUID_LEAF7_FEATURE_BMI2,     "BMI2"},
 	{CPUID_LEAF7_FEATURE_INVPCID,  "INVPCID"},
 	{CPUID_LEAF7_FEATURE_RTM,      "RTM"},
+	{CPUID_LEAF7_FEATURE_SMAP,     "SMAP"},
 	{CPUID_LEAF7_FEATURE_RDSEED,   "RDSEED"},
 	{CPUID_LEAF7_FEATURE_ADX,      "ADX"},
-	{CPUID_LEAF7_FEATURE_SMAP,     "SMAP"},
 	{0, 0}
 };
 
@@ -1002,7 +1013,7 @@ void
 cpuid_feature_display(
 	const char	*header)
 {
-	char	buf[256];
+       char    buf[320];
 
 	kprintf("%s: %s", header,
 		 cpuid_get_feature_names(cpuid_features(), buf, sizeof(buf)));

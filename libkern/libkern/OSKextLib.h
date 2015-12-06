@@ -35,13 +35,14 @@ __BEGIN_DECLS
 #include <stdint.h>
 #include <mach/kmod.h>
 #include <mach/vm_types.h>
+#include <uuid/uuid.h>
 
 #ifdef KERNEL
 #include <libkern/OSTypes.h>
 #include <libkern/OSReturn.h>
 #else
 #include <CoreFoundation/CoreFoundation.h>
-#include <System/libkern/OSReturn.h>
+#include <libkern/OSReturn.h>
 #endif /* KERNEL */
 
 /*!
@@ -876,6 +877,36 @@ OSReturn OSKextRequestResource(
 OSReturn OSKextCancelRequest(
     OSKextRequestTag    requestTag,
     void             ** contextOut);
+
+
+/*!
+ * @function OSKextGrabPgoData
+ *
+ * @abstract
+ * Grab a LLVM profile data buffer from a loaded kext.
+ *
+ * @param   uuid             the uuid identifying the kext to retrieve data from
+ * @param   pSize            pointer of where to store the size of the buffer.   May be NULL.
+ * @param   pBuffer          pointer to the output buffer.   May be NULL.
+ * @param   bufferSize       size of the buffer pointed to by pBuffer
+ * @param   wait_for_unload  (boolean) sleep until the kext is unloaded
+ * @param   metadata         (boolean) include metadata footer
+ *
+ * @result
+ * 0 on success
+ * ENOTSUP if the kext does not have profile data to retrieve.
+ * ENOTSUP if no kext with the given UUID is found
+ * ERRORS  if the provided buffer is too small
+ * EIO     internal error, such as if __llvm_profile_write_buffer_internal fails
+ */
+int
+OSKextGrabPgoData(uuid_t uuid,
+                  uint64_t *pSize,
+                  char *pBuffer,
+                  uint64_t bufferSize,
+                  int wait_for_unload,
+                  int metadata);
+
 
 
 #if PRAGMA_MARK

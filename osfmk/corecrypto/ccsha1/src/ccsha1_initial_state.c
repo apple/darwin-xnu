@@ -2,8 +2,9 @@
  *  ccsha1_initial_state.c
  *  corecrypto
  *
- *  Created by Fabrice Gautier on 12/7/10.
- *  Copyright 2010 Apple, Inc. All rights reserved.
+ *  Created on 12/07/2010
+ *
+ *  Copyright (c) 2010,2015 Apple Inc. All rights reserved.
  *
  */
 

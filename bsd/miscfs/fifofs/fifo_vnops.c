@@ -327,6 +327,8 @@ fifo_read(struct vnop_read_args *ap)
 	if (error != EWOULDBLOCK) {
 		error = soreceive(rso, (struct sockaddr **)0, uio, (struct mbuf **)0,
 	    					(struct mbuf **)0, &rflags);
+		if (error == 0 && ap->a_vp->v_knotes.slh_first != NULL)
+			KNOTE(&ap->a_vp->v_knotes, 0);
 	}
 	else {
 		/* clear EWOULDBLOCK and return EOF (zero) */
@@ -358,6 +360,8 @@ fifo_write(struct vnop_write_args *ap)
 #endif
 	error = sosend(wso, (struct sockaddr *)0, ap->a_uio, NULL,
 		       (struct mbuf *)0, (ap->a_ioflag & IO_NDELAY) ? MSG_NBIO : 0);
+	if (error == 0 && ap->a_vp->v_knotes.slh_first != NULL)
+		KNOTE(&ap->a_vp->v_knotes, 0);
 
 	return (error);
 }

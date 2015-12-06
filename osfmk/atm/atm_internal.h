@@ -49,34 +49,53 @@
 typedef mach_voucher_attr_value_handle_t atm_voucher_id_t;
 
 struct atm_task_descriptor {
-	decl_lck_mtx_data(,lock)             /* lock to protect reference count */
-	mach_port_t     trace_buffer;		 /* named memory entry registered by user */
-	uint64_t        trace_buffer_size;   /* size of the trace_buffer registered */
-	uint64_t        mailbox_array_size;	 /* Mailbox array size in bytes. */
-	void *          mailbox_kernel_addr; /* Kernel address where the mailbox is mapped. */
-	uint32_t        reference_count:31,
-	                flags:1;
+	decl_lck_mtx_data(,lock)                /* lock to protect reference count */
+	mach_port_t     trace_buffer;		/* named memory entry registered by user */
+	uint64_t        trace_buffer_size;      /* size of the trace_buffer registered */
+	uint32_t        reference_count;
+	uint8_t         flags;
 #if DEVELOPMENT || DEBUG
-	task_t          task;           /* task pointer for debugging purposes */
-	queue_chain_t   descriptor_elt; /* global chain of all descriptors */
+	task_t          task;                   /* task pointer for debugging purposes */
+	queue_chain_t   descriptor_elt;         /* global chain of all descriptors */
 #endif
 };
+
+#define atm_task_desc_reference_internal(elem)	\
+	(hw_atomic_add(&(elem)->reference_count, 1))
+
+#define atm_task_desc_release_internal(elem)	\
+	(hw_atomic_sub(&(elem)->reference_count, 1))
 
 typedef struct atm_task_descriptor *atm_task_descriptor_t;
 #define ATM_TASK_DESCRIPTOR_NULL NULL
 
 struct atm_value {
-	aid_t 		 aid;			/* activity id */
-	queue_head_t 	 listeners;		/* List of listeners who register for this activity */
-	decl_lck_mtx_data( ,listener_lock)	/* Lock to protect listener list */
-	queue_chain_t 	 vid_hash_elt;		/* Next hash element in the global hash table */
+	aid_t            aid;                   /* activity id */
+	queue_head_t     listeners;             /* List of listeners who register for this activity */
+	decl_lck_mtx_data( ,listener_lock)      /* Lock to protect listener list */
+	queue_chain_t    vid_hash_elt;          /* Next hash element in the global hash table */
 #if DEVELOPMENT || DEBUG
-	queue_chain_t	 value_elt;	 	/* global chain of all values */
+	queue_chain_t    value_elt;             /* global chain of all values */
 #endif
-	uint32_t	 sync;			/* Made ref count given to voucher sub system. */
-	uint32_t	 listener_count;	/* Number of Listerners listening on the value. */
-	int32_t		 reference_count;	/* use count on the atm value, 1 taken by the global hash table */	
+	uint32_t         sync;                  /* Made ref count given to voucher sub system. */
+	uint32_t         listener_count;        /* Number of Listerners listening on the value. */
+	uint32_t         reference_count;       /* use count on the atm value, 1 taken by the global hash table */	
 };
+
+#define atm_value_reference_internal(elem)	\
+	(hw_atomic_add(&(elem)->reference_count, 1))
+
+#define atm_value_release_internal(elem)	\
+	(hw_atomic_sub(&(elem)->reference_count, 1))
+
+#define atm_listener_count_incr_internal(elem)	\
+	(hw_atomic_add(&(elem)->listener_count, 1))
+
+#define atm_listener_count_decr_internal(elem)	\
+	(hw_atomic_sub(&(elem)->listener_count, 1))
+
+#define atm_sync_reference_internal(elem)	\
+	(hw_atomic_add(&(elem)->sync, 1))
 
 typedef struct atm_value *atm_value_t;
 #define ATM_VALUE_NULL NULL
@@ -86,10 +105,9 @@ typedef struct atm_value *atm_value_t;
 
 struct atm_link_object {
 	atm_task_descriptor_t  descriptor;
-	void *                 mailbox;		     /* Offset in the mailbox registered by the user for an activity. */
-	uint32_t                reference_count;     /* Refernece count for link object */
-	uint8_t                flags;		     /* Flags used mark for deletion from the listener list */
 	queue_chain_t	       listeners_element;    /* Head is atm_value->listeners. */
+	atm_guard_t            guard;		     /* Guard registered by the user for an activity. */
+	uint32_t               reference_count;      /* Refernece count for link object */
 };
 
 typedef struct atm_link_object *atm_link_object_t;
@@ -109,8 +127,11 @@ typedef struct atm_value_hash *atm_value_hash_t;
 
 void atm_init(void);
 void atm_task_descriptor_destroy(atm_task_descriptor_t task_descriptor);
-kern_return_t atm_register_trace_memory(task_t	task, uint64_t trace_buffer_address, uint64_t buffer_size, uint64_t mailbox_array_size);
+kern_return_t atm_register_trace_memory(task_t	task, uint64_t trace_buffer_address, uint64_t buffer_size);
 kern_return_t atm_send_proc_inspect_notification(task_t task, int32_t traced_pid, uint64_t traced_uniqueid);
+
+kern_return_t atm_set_diagnostic_config(uint32_t);
+uint32_t atm_get_diagnostic_config(void);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

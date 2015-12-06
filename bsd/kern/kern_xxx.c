@@ -88,7 +88,7 @@
 int
 reboot(struct proc *p, register struct reboot_args *uap, __unused int32_t *retval)
 {
-	char command[64];
+	char message[128];
 	int error=0;
 	size_t dummy=0;
 #if CONFIG_MACF
@@ -97,14 +97,23 @@ reboot(struct proc *p, register struct reboot_args *uap, __unused int32_t *retva
 
 	AUDIT_ARG(cmd, uap->opt);
 
-	command[0] = '\0';
+	message[0] = '\0';
 
 	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
 		return(error);	
 	
 	if (uap->opt & RB_COMMAND)
-		error = copyinstr(uap->command,
-					(void *)command, sizeof(command), (size_t *)&dummy);
+                return ENOSYS;
+
+        if (uap->opt & RB_PANIC) {
+#if !(DEVELOPMENT || DEBUG)
+		if (p != initproc) {
+                        return EPERM;
+                }
+#endif
+		error = copyinstr(uap->command, (void *)message, sizeof(message), (size_t *)&dummy);
+        }
+
 #if CONFIG_MACF
 	if (error)
 		return (error);
@@ -114,7 +123,7 @@ reboot(struct proc *p, register struct reboot_args *uap, __unused int32_t *retva
 #endif
 	if (!error) {
 		OSBitOrAtomic(P_REBOOT, &p->p_flag);  /* No more signals for this proc */
-		error = boot(RB_BOOT, uap->opt, command);
+		error = reboot_kernel(uap->opt, message);
 	}
 	return(error);
 }

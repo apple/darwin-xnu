@@ -144,9 +144,6 @@ void pal_register_cache_state(thread_t thread, pal_cache_state_t state);
 /* Catch code running on the except thread that shouldn't be */
 void pal_preemption_assert(void);
 
-void hibernate_pal_prepare(void);
-void pal_efi_hibernate_prepare(void);
-
 /* Include a PAL-specific header, too, for xnu-internal overrides */
 #include <i386/pal_native.h>
 

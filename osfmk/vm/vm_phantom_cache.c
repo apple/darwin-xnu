@@ -110,11 +110,11 @@ vm_phantom_cache_init()
 	vm_phantom_cache_size = sizeof(struct vm_ghost) * vm_phantom_cache_num_entries;
 	vm_phantom_cache_hash_size = sizeof(vm_phantom_hash_entry_t) * vm_phantom_cache_num_entries;
 
-	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&vm_phantom_cache), vm_phantom_cache_size, 0, KMA_KOBJECT) != KERN_SUCCESS)
+	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&vm_phantom_cache), vm_phantom_cache_size, 0, KMA_KOBJECT | KMA_PERMANENT, VM_KERN_MEMORY_PHANTOM_CACHE) != KERN_SUCCESS)
 		panic("vm_phantom_cache_init: kernel_memory_allocate failed\n");
 	bzero(vm_phantom_cache, vm_phantom_cache_size);
 
-	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&vm_phantom_cache_hash), vm_phantom_cache_hash_size, 0, KMA_KOBJECT) != KERN_SUCCESS)
+	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&vm_phantom_cache_hash), vm_phantom_cache_hash_size, 0, KMA_KOBJECT | KMA_PERMANENT, VM_KERN_MEMORY_PHANTOM_CACHE) != KERN_SUCCESS)
 		panic("vm_phantom_cache_init: kernel_memory_allocate failed\n");
 	bzero(vm_phantom_cache_hash, vm_phantom_cache_hash_size);
 

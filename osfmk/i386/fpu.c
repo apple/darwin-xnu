@@ -241,13 +241,10 @@ init_fpu(void)
 	 * AVX/YMM registers
 	 */
 	if (cpuid_features() & CPUID_FEATURE_XSAVE) {
-		cpuid_xsave_leaf_t *xsp = &cpuid_info()->cpuid_xsave_leaf;
+		cpuid_xsave_leaf_t *xsp = &cpuid_info()->cpuid_xsave_leaf[0];
 		if (xsp->extended_state[0] & (uint32_t)XFEM_YMM) {
 			assert(xsp->extended_state[0] & (uint32_t) XFEM_SSE);
 			/* XSAVE container size for all features */
-			if (xsp->extended_state[2] != sizeof(struct x86_avx_thread_state))
-				kprintf("sizeof(struct x86_avx_thread_state)=%lu != xsp->extended_state[2]=%u\n",
-					sizeof(struct x86_avx_thread_state), xsp->extended_state[2]);
 			fp_register_state_size = sizeof(struct x86_avx_thread_state);
 			fpu_YMM_present = TRUE;
 			set_cr4(get_cr4() | CR4_OSXSAVE);
@@ -255,7 +252,8 @@ init_fpu(void)
 			/* Re-evaluate CPUID, once, to reflect OSXSAVE */
 			if (OSCompareAndSwap(0, 1, &cpuid_reevaluated))
 				cpuid_set_info();
-			/* DRK: consider verifying AVX offset with cpuid(d, ECX:2) */
+			/* Verify that now selected state can be accommodated */
+			assert(xsp->extended_state[1] == fp_register_state_size);
 		}
 	}
 	else
@@ -734,6 +732,8 @@ fpinit(void)
  * Coprocessor not present.
  */
 
+uint64_t x86_isr_fp_simd_use;
+
 void
 fpnoextflt(void)
 {
@@ -763,11 +763,17 @@ fpnoextflt(void)
 	clear_ts();			/*  Enable FPU use */
 
 	if (__improbable(get_interrupt_level())) {
-		/*
-		 * Save current coprocessor context if valid
-		 * Initialize coprocessor live context
+		/* Track number of #DNA traps at interrupt context,
+		 * which is likely suboptimal. Racy, but good enough.
 		 */
-		fp_save(thr_act);
+		x86_isr_fp_simd_use++;
+		/*
+		 * Save current FP/SIMD context if valid
+		 * Initialize live FP/SIMD registers
+		 */
+		if (pcb->ifps) {
+			fp_save(thr_act);
+		}
 		fpinit();
 	} else {
 	        if (pcb->ifps == 0) {

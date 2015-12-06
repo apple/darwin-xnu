@@ -32,6 +32,7 @@
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/IOUserClient.h>
 
 extern "C" {
 
@@ -39,6 +40,7 @@ extern "C" {
 #include <kern/clock.h>
 #include <uuid/uuid.h>
 #include <sys/vnode_internal.h>
+#include <sys/mount.h>
 
 // how long to wait for matching root device, secs
 #if DEBUG
@@ -47,10 +49,31 @@ extern "C" {
 #define ROOTDEVICETIMEOUT       60
 #endif
 
+int panic_on_exception_triage = 0;
+
 extern dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys);
 extern dev_t mdevlookup(int devid);
 extern void mdevremoveall(void);
 extern void di_root_ramfile(IORegistryEntry * entry);
+
+
+#if   DEVELOPMENT
+#define IOPOLLED_COREFILE  	1
+// no sizing
+#define kIOCoreDumpSize		0ULL
+#define kIOCoreDumpFreeSize	0ULL
+#else
+#define IOPOLLED_COREFILE  	0
+#endif
+
+
+#if IOPOLLED_COREFILE
+static bool 
+NewKernelCoreMedia(void * target, void * refCon,
+		   IOService * newService,
+		   IONotifier * notifier);
+#endif /* IOPOLLED_COREFILE */
+
 
 kern_return_t
 IOKitBSDInit( void )
@@ -763,3 +786,157 @@ int IOBSDIsMediaEjectable( const char *cdev_name )
 }
 
 } /* extern "C" */
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#include <sys/conf.h>
+#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
+#include <sys/fcntl.h>
+#include <IOKit/IOPolledInterface.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
+
+IOPolledFileIOVars * gIOPolledCoreFileVars;
+
+#if IOPOLLED_COREFILE
+
+static IOReturn 
+IOOpenPolledCoreFile(const char * filename)
+{
+    IOReturn err;
+    unsigned int debug;
+
+    if (gIOPolledCoreFileVars)                             return (kIOReturnBusy);
+    if (!IOPolledInterface::gMetaClass.getInstanceCount()) return (kIOReturnUnsupported);
+
+    debug = 0;
+    PE_parse_boot_argn("debug", &debug, sizeof (debug));
+    if (DB_DISABLE_LOCAL_CORE & debug)                     return (kIOReturnUnsupported);
+
+    err = IOPolledFileOpen(filename, kIOCoreDumpSize, kIOCoreDumpFreeSize,
+			    NULL, 0,
+			    &gIOPolledCoreFileVars, NULL, NULL, 0);
+    if (kIOReturnSuccess != err)                           return (err);
+
+    err = IOPolledFilePollersSetup(gIOPolledCoreFileVars, kIOPolledPreflightCoreDumpState);
+    if (kIOReturnSuccess != err)
+    {
+	IOPolledFileClose(&gIOPolledCoreFileVars, NULL, NULL, 0, 0, 0);
+    }
+
+    return (err);
+}
+
+static void 
+IOClosePolledCoreFile(void)
+{
+    IOPolledFilePollersClose(gIOPolledCoreFileVars, kIOPolledPostflightState);
+    IOPolledFileClose(&gIOPolledCoreFileVars, NULL, NULL, 0, 0, 0);
+}
+
+static thread_call_t gIOOpenPolledCoreFileTC;
+static IONotifier  * gIOPolledCoreFileNotifier;
+static IONotifier  * gIOPolledCoreFileInterestNotifier;
+
+static IOReturn 
+KernelCoreMediaInterest(void * target, void * refCon,
+			UInt32 messageType, IOService * provider,
+			void * messageArgument, vm_size_t argSize )
+{
+    if (kIOMessageServiceIsTerminated == messageType)
+    {
+	gIOPolledCoreFileInterestNotifier->remove();
+	gIOPolledCoreFileInterestNotifier = 0;
+	IOClosePolledCoreFile();
+    }
+
+    return (kIOReturnSuccess);
+}
+
+static void
+OpenKernelCoreMedia(thread_call_param_t p0, thread_call_param_t p1)
+{
+    IOService * newService;
+    OSString  * string;
+    char        filename[16];
+
+    newService = (IOService *) p1;
+    do
+    {
+	if (gIOPolledCoreFileVars) break;
+	string = OSDynamicCast(OSString, newService->getProperty(kIOBSDNameKey));
+	if (!string) break;
+	snprintf(filename, sizeof(filename), "/dev/%s", string->getCStringNoCopy());
+	if (kIOReturnSuccess != IOOpenPolledCoreFile(filename)) break;
+	gIOPolledCoreFileInterestNotifier = newService->registerInterest(
+				gIOGeneralInterest, &KernelCoreMediaInterest, NULL, 0);
+    }
+    while (false);
+
+    newService->release();
+}
+
+static bool 
+NewKernelCoreMedia(void * target, void * refCon,
+		   IOService * newService,
+		   IONotifier * notifier)
+{
+    do
+    {
+	if (gIOPolledCoreFileVars)    break;
+        if (!gIOOpenPolledCoreFileTC) break;
+        newService = newService->getProvider();
+        if (!newService)              break;
+        newService->retain();
+	thread_call_enter1(gIOOpenPolledCoreFileTC, newService);
+    }
+    while (false);
+
+    return (false);
+}
+
+#endif /* IOPOLLED_COREFILE */
+
+extern "C" void 
+IOBSDMountChange(struct mount * mp, uint32_t op)
+{
+#if IOPOLLED_COREFILE
+
+    OSDictionary * bsdMatching;
+    OSDictionary * mediaMatching;
+    OSString     * string;
+
+    if (!gIOPolledCoreFileNotifier) do
+    {
+	if (!gIOOpenPolledCoreFileTC) gIOOpenPolledCoreFileTC = thread_call_allocate(&OpenKernelCoreMedia, NULL);
+	bsdMatching = IOService::serviceMatching("IOMediaBSDClient");
+	if (!bsdMatching) break;
+	mediaMatching = IOService::serviceMatching("IOMedia");
+	string = OSString::withCStringNoCopy("5361644D-6163-11AA-AA11-00306543ECAC");
+	if (!string || !mediaMatching) break;
+	mediaMatching->setObject("Content", string);
+	string->release();
+	bsdMatching->setObject(gIOParentMatchKey, mediaMatching);
+	mediaMatching->release();
+
+	gIOPolledCoreFileNotifier = IOService::addMatchingNotification(
+						  gIOFirstMatchNotification, bsdMatching, 
+						  &NewKernelCoreMedia, NULL, NULL, -1000);
+    }
+    while (false);
+
+#endif /* IOPOLLED_COREFILE */
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+extern "C" boolean_t 
+IOTaskHasEntitlement(task_t task, const char * entitlement)
+{
+    OSObject * obj;
+    obj = IOUserClient::copyClientEntitlement(task, entitlement);
+    if (!obj) return (false);
+    obj->release();
+    return (obj != kOSBooleanFalse);
+}
+

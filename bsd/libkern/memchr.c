@@ -36,7 +36,7 @@ memchr(const void *bigptr, int ch, size_t length)
 	size_t n;
 	for (n = 0; n < length; n++)
 		if (big[n] == ch)
-			return (void *)&big[n];
+			return __DECONST(void *, &big[n]);
 	return NULL;
 }
 

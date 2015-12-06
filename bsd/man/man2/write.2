@@ -32,7 +32,7 @@
 .\"     @(#)write.2	8.5 (Berkeley) 4/2/94
 .\" $FreeBSD: src/lib/libc/sys/write.2,v 1.12.2.7 2001/12/14 18:34:02 ru Exp $
 .\"
-.Dd April 2, 1994
+.Dd March 18, 2015 
 .Dt WRITE 2
 .Os
 .Sh NAME
@@ -65,21 +65,21 @@
 .Fa "int iovcnt"
 .Fc
 .Sh DESCRIPTION
-.Fn Write
+.Fn write
 attempts to write
 .Fa nbyte
 of data to the object referenced by the descriptor
 .Fa fildes
 from the buffer pointed to by
 .Fa buf .
-.Fn Writev
+.Fn writev
 performs the same action, but gathers the output data
 from the
 .Fa iovcnt
 buffers specified by the members of the
 .Fa iov
 array: iov[0], iov[1], ..., iov[iovcnt\|-\|1].
-.Fn Pwrite
+.Fn pwrite
 performs the same function, but writes to the specified position in
 the file without modifying the file pointer.
 .Pp
@@ -100,7 +100,7 @@ Each
 .Fa iovec
 entry specifies the base address and length of an area
 in memory from which data should be written.
-.Fn Writev
+.Fn writev
 will always write a complete area before proceeding
 to the next.
 .Pp
@@ -255,6 +255,8 @@ The destination is no longer available when writing to a
 .Ux
 domain datagram socket on which
 .Xr connect 2
+or
+.Xr connectx 2
 had been used to set a destination address.
 .\" ===========
 .It Bq Er EINVAL

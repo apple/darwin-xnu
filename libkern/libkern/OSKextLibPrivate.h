@@ -39,7 +39,7 @@ __BEGIN_DECLS
 #include <mach/vm_types.h>
 #else
 #include <CoreFoundation/CoreFoundation.h>
-#include <System/mach/kmod.h>
+#include <mach/kmod.h>
 #endif /* KERNEL */
 __END_DECLS
 
@@ -909,6 +909,14 @@ extern OSKextLoadedKextSummaryHeader * gLoadedKextSummaries;
  * gdb can set a breakpoint on this function to detect kext loads and unloads.
  */
 void OSKextLoadedKextSummariesUpdated(void);
+
+#ifdef XNU_KERNEL_PRIVATE
+
+extern const vm_allocation_site_t * OSKextGetAllocationSiteForCaller(uintptr_t address);
+extern uint32_t                     OSKextGetKmodIDForSite(vm_allocation_site_t * site);
+extern void                         OSKextFreeSite(vm_allocation_site_t * site);
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 __END_DECLS
 

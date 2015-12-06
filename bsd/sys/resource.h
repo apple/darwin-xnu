@@ -120,10 +120,12 @@ typedef __uint64_t	rlim_t;
 
 #define PRIO_DARWIN_ROLE        6               /* Second argument is a PID */
 
-#define PRIO_DARWIN_ROLE_DEFAULT        0x0     /* Default state */
+#define PRIO_DARWIN_ROLE_DEFAULT        0x0     /* Reset to default state */
 #define PRIO_DARWIN_ROLE_UI_FOCAL       0x1     /* On  screen,     focal UI */
-#define PRIO_DARWIN_ROLE_UI             0x2     /* On  screen, non-focal UI */
+#define PRIO_DARWIN_ROLE_UI             0x2     /* On  screen UI,  focal unknown */
 #define PRIO_DARWIN_ROLE_NON_UI         0x3     /* Off screen, non-focal UI */
+#define PRIO_DARWIN_ROLE_UI_NON_FOCAL   0x4     /* On  screen, non-focal UI */
+#define PRIO_DARWIN_ROLE_TAL_LAUNCH     0x5     /* Throttled-launch (for OS X TAL resume) */
 
 #endif /* PRIVATE */
 

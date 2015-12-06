@@ -83,6 +83,11 @@ extern void		blkclr(
 			       const char	*from,
 			       int		nbytes);
 
+extern void		memset_word(
+			       int		*dst,
+			       int		pattern,
+			       int		nwords);
+	
 
 /* Move arbitrarily-aligned data from one physical address to another */
 extern void bcopy_phys(addr64_t from, addr64_t to, vm_size_t nbytes);

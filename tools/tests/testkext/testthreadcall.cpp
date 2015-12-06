@@ -7,6 +7,7 @@
 #include "testthreadcall.h"
 
 #include <kern/thread_call.h>
+#include <pexpert/pexpert.h>
 
 #define super IOService
 OSDefineMetaClassAndStructors(testthreadcall, super);
@@ -21,18 +22,29 @@ static void thread_call_test_func2(thread_call_param_t param0,
 
 }
 
+static int my_event;
+
 bool
 testthreadcall::start( IOService * provider )
 {
-	boolean_t ret;
-	uint64_t deadline;
-	int sleepret;
+  boolean_t ret;
+  uint64_t deadline;
+  int sleepret;
+  uint32_t kernel_configuration;
     
     IOLog("%s\n", __PRETTY_FUNCTION__);
     
     if (!super::start(provider)) {
         return false;
     }
+
+    kernel_configuration = PE_i_can_has_kernel_configuration();
+    IOLog("%s: Assertions %s\n", __PRETTY_FUNCTION__,
+	  (kernel_configuration & kPEICanHasAssertions) ? "enabled" : "disabled");
+    IOLog("%s: Statistics %s\n", __PRETTY_FUNCTION__,
+	  (kernel_configuration & kPEICanHasStatistics) ? "enabled" : "disabled");
+    IOLog("%s: Diagnostic API %s\n", __PRETTY_FUNCTION__,
+	  (kernel_configuration & kPEICanHasDiagnosticAPI) ? "enabled" : "disabled");
     
     IOLog("Attempting thread_call_allocate\n");
 	tcall = thread_call_allocate(thread_call_test_func, this);
@@ -62,8 +74,8 @@ testthreadcall::start( IOService * provider )
 
     clock_interval_to_deadline(3, NSEC_PER_SEC, &deadline);
     IOLog("%d sec deadline is %llu\n", 3, deadline);
-    sleepret = IOLockSleepDeadline(tlock2, NULL, deadline, THREAD_INTERRUPTIBLE);
-    IOLog("IOLockSleepDeadline(NULL, %llu) returned %d, expected 0\n", deadline, sleepret);
+    sleepret = IOLockSleepDeadline(tlock2, &my_event, deadline, THREAD_INTERRUPTIBLE);
+    IOLog("IOLockSleepDeadline(&my_event, %llu) returned %d, expected 0\n", deadline, sleepret);
 
     IOLockUnlock(tlock2);
 
@@ -76,8 +88,8 @@ testthreadcall::start( IOService * provider )
 
     clock_interval_to_deadline(3, NSEC_PER_SEC, &deadline);
     IOLog("%d sec deadline is %llu\n", 3, deadline);
-    sleepret = IOLockSleepDeadline(tlock2, NULL, deadline, THREAD_INTERRUPTIBLE);
-    IOLog("IOLockSleepDeadline(NULL, %llu) returned %d, expected 1\n", deadline, sleepret);
+    sleepret = IOLockSleepDeadline(tlock2, &my_event, deadline, THREAD_INTERRUPTIBLE);
+    IOLog("IOLockSleepDeadline(&my_event, %llu) returned %d, expected 1\n", deadline, sleepret);
 
     IOLockUnlock(tlock2);
 	
@@ -102,5 +114,5 @@ static void thread_call_test_func2(thread_call_param_t param0,
 	
 	IOLog("thread_call_test_func2 %p %p\n", param0, param1);
 	
-	IOLockWakeup(self->tlock2, NULL, false);
+	IOLockWakeup(self->tlock2, &my_event, false);
 }

@@ -44,10 +44,10 @@ class IOKitDiagnostics : public OSObject
 
 public:
     static OSObject * diagnostics( void );
-    virtual bool serialize(OSSerialize *s) const;
+    virtual bool serialize(OSSerialize *s) const APPLE_KEXT_OVERRIDE;
 private:
     static void updateOffset( OSDictionary * dict,
-            UInt32 value, const char * name );
+            UInt64 value, const char * name );
 };
 
 #endif /* __cplusplus */
@@ -77,13 +77,15 @@ enum {
     kIOLogHibernate     =         0x00100000ULL,
     kIOStatistics       =         0x04000000ULL,
     kIOSleepWakeWdogOff =         0x40000000ULL,
+    kIOKextSpinDump     =         0x80000000ULL,
 
     // debug aids - change behaviour
     kIONoFreeObjects    =         0x00100000ULL,
     kIOLogSynchronous   =         0x00200000ULL,  // IOLog completes synchronously
-    kOSTraceObjectAlloc =         0x00400000ULL,
+    kIOTracking         =         0x00400000ULL,
     kIOWaitQuietPanics  =         0x00800000ULL,
-    kIOWaitQuietBeforeRoot  =     0x01000000ULL,
+    kIOWaitQuietBeforeRoot =      0x01000000ULL,
+    kIOTrackingBoot     =         0x02000000ULL,
 
     _kIODebugTopFlag    = 0x8000000000000000ULL   // force enum to be 64 bits
 };
@@ -125,6 +127,102 @@ extern void    IOPrintPlane(
 extern void    OSPrintMemory( void );
 #endif
 #define IOPrintMemory OSPrintMemory
+
+
+
+#define kIOKitDiagnosticsClientClassName "IOKitDiagnosticsClient"
+
+enum
+{
+    kIOKitDiagnosticsClientType = 0x99000002
+};
+
+
+struct IOKitDiagnosticsParameters
+{
+    size_t    size;
+    uint64_t  value;
+    uint32_t  options;
+    uint32_t  reserved[3];
+};
+typedef struct IOKitDiagnosticsParameters IOKitDiagnosticsParameters;
+
+enum
+{ 
+    kIOTrackingCallSiteBTs = 16,
+};
+
+struct IOTrackingCallSiteInfo
+{
+    uint32_t      count;
+    size_t        size[2];
+    uintptr_t     bt[kIOTrackingCallSiteBTs];
+};
+
+#define kIOMallocTrackingName	"IOMalloc"
+#define kIOWireTrackingName	"IOWire"
+#define kIOMapTrackingName	"IOMap"
+
+#if KERNEL && IOTRACKING
+
+struct IOTrackingQueue;
+struct IOTrackingCallSite;
+
+struct IOTracking
+{
+    queue_chain_t        link;
+    IOTrackingCallSite * site;
+#if !defined(__LP64__)
+    uint32_t             flags;
+#endif
+};
+
+struct IOTrackingAddress
+{
+    IOTracking    tracking;
+    uintptr_t     address;
+    size_t        size;
+#if defined(__LP64__)
+    uint32_t      flags;
+#endif
+};
+
+void              IOTrackingInit(void);
+IOTrackingQueue * IOTrackingQueueAlloc(const char * name, size_t allocSize, size_t minCaptureSize, bool isAlloc);
+void              IOTrackingQueueFree(IOTrackingQueue * head);
+void              IOTrackingAdd(IOTrackingQueue * head, IOTracking * mem, size_t size, bool address);
+void              IOTrackingRemove(IOTrackingQueue * head, IOTracking * mem, size_t size);
+void              IOTrackingAlloc(IOTrackingQueue * head, uintptr_t address, size_t size);
+void              IOTrackingFree(IOTrackingQueue * head, uintptr_t address, size_t size);
+void              IOTrackingReset(IOTrackingQueue * head);
+void              IOTrackingAccumSize(IOTrackingQueue * head, IOTracking * mem, size_t size);
+kern_return_t     IOTrackingDebug(uint32_t selector, uint32_t options,
+				  const char * names, size_t namesLen, 
+				  size_t size, OSObject ** result);
+
+extern IOTrackingQueue * gIOMallocTracking;
+extern IOTrackingQueue * gIOWireTracking;
+extern IOTrackingQueue * gIOMapTracking;
+
+#endif /* KERNEL && IOTRACKING */
+
+enum
+{
+    kIOTrackingExcludeNames      = 0x00000001,
+};
+
+enum
+{
+    kIOTrackingGetTracking       = 0x00000001,
+    kIOTrackingPrintTracking     = 0x00000002,
+    kIOTrackingResetTracking     = 0x00000003,
+    kIOTrackingStartCapture      = 0x00000004,
+    kIOTrackingStopCapture       = 0x00000005,
+    kIOTrackingSetMinCaptureSize = 0x00000006,
+    kIOTrackingLeaks             = 0x00000007,
+    kIOTrackingInvalid           = 0xFFFFFFFE,
+};
+
 
 #ifdef __cplusplus
 } /* extern "C" */

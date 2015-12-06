@@ -2,8 +2,9 @@
  *  cchmac.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 12/7/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/07/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -29,7 +30,7 @@ typedef union {
 #define cchmac_ctx_n(STATE_SIZE, BLOCK_SIZE)  ccn_nof_size(cchmac_ctx_size((STATE_SIZE), (BLOCK_SIZE)))
 
 #define cchmac_ctx_decl(STATE_SIZE, BLOCK_SIZE, _name_) cc_ctx_decl(struct cchmac_ctx, cchmac_ctx_size(STATE_SIZE, BLOCK_SIZE), _name_)
-#define cchmac_ctx_clear(STATE_SIZE, BLOCK_SIZE, _name_) cc_zero(cchmac_ctx_size(STATE_SIZE, BLOCK_SIZE), _name_)
+#define cchmac_ctx_clear(STATE_SIZE, BLOCK_SIZE, _name_) cc_clear(cchmac_ctx_size(STATE_SIZE, BLOCK_SIZE), _name_)
 #define cchmac_di_decl(_di_, _name_) cchmac_ctx_decl((_di_)->state_size, (_di_)->block_size, _name_)
 #define cchmac_di_clear(_di_, _name_) cchmac_ctx_clear((_di_)->state_size, (_di_)->block_size, _name_)
 

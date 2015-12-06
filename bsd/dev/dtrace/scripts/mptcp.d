@@ -153,7 +153,7 @@ translator mppsinfo_t < struct mppcb *T> {
 typedef struct mptsesinfo {
 	uint16_t	numflows;
 	uint16_t	nummpcapflows;
-	connid_t	connid_last;
+	sae_connid_t	connid_last;
 	uint8_t		flags;
 	struct mptses	*mptses;
 } mptsesinfo_t;
@@ -217,7 +217,7 @@ typedef struct mptsubinfo {
 	uint32_t	flags;
 	uint32_t	evctl;
 	uint32_t	family;
-	connid_t	connid;
+	sae_connid_t	connid;
 	uint32_t	rank;
 	int32_t		error;
 	uint64_t	sndnxt;

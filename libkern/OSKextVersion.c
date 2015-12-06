@@ -31,7 +31,7 @@
 #include <libkern/OSKextLibPrivate.h>
 #else
 #include <libc.h>
-#include <System/libkern/OSKextLib.h>
+#include <libkern/OSKextLib.h>
 #include <System/libkern/OSKextLibPrivate.h>
 #endif /* KERNEL */
 

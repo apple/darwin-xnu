@@ -10,6 +10,12 @@ include $(MakeInc_def)
 DATAFILES = \
 	devfs.h 
 
+KERNELFILES = \
+	devfs.h \
+	fdesc.h \
+	devfs_proto.h \
+	devfsdefs.h
+
 INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_DIR = miscfs/devfs
@@ -18,11 +24,9 @@ INSTALL_KF_MI_LIST = ${DATAFILES}
 
 INSTALL_KF_MI_LCL_LIST = ${DATAFILES} devfs_proto.h devfsdefs.h
 
-EXPORT_MI_LIST	= ${DATAFILES} fdesc.h devfs_proto.h devfsdefs.h
+EXPORT_MI_LIST	= ${KERNELFILES}
 
 EXPORT_MI_DIR =	miscfs/devfs
-
-INSTALL_MI_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

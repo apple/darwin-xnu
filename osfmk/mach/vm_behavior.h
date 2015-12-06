@@ -74,5 +74,6 @@ typedef int		vm_behavior_t;
 #define VM_BEHAVIOR_REUSABLE	((vm_behavior_t) 8)
 #define VM_BEHAVIOR_REUSE	((vm_behavior_t) 9)
 #define VM_BEHAVIOR_CAN_REUSE	((vm_behavior_t) 10)
+#define VM_BEHAVIOR_PAGEOUT	((vm_behavior_t) 11)
 
 #endif	/*_MACH_VM_BEHAVIOR_H_*/

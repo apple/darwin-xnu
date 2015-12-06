@@ -46,7 +46,6 @@ struct utun_pcb {
 	u_int32_t		utun_flags;
 	int				utun_ext_ifdata_stats;
 	u_int32_t		utun_max_pending_packets;
-	u_int32_t		utun_pending_packets;
 	utun_crypto_ctx_t utun_crypto_ctx[UTUN_CRYPTO_CTX_NUM_DIRS];
 };
 

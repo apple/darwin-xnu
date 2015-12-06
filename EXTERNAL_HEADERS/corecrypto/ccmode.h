@@ -2,8 +2,9 @@
  *  ccmode.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 12/6/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/07/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -18,7 +19,7 @@
 /* Declare a ecb key named _name_.  Pass the size field of a struct ccmode_ecb
    for _size_. */
 #define ccecb_ctx_decl(_size_, _name_) cc_ctx_decl(ccecb_ctx, _size_, _name_)
-#define ccecb_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define ccecb_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 CC_INLINE size_t ccecb_context_size(const struct ccmode_ecb *mode)
 {
@@ -63,12 +64,12 @@ CC_INLINE void ccecb_one_shot(const struct ccmode_ecb *mode,
 /* Declare a cbc key named _name_.  Pass the size field of a struct ccmode_cbc
    for _size_. */
 #define cccbc_ctx_decl(_size_, _name_) cc_ctx_decl(cccbc_ctx, _size_, _name_)
-#define cccbc_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define cccbc_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 /* Declare a cbc iv tweak named _name_.  Pass the blocksize field of a
    struct ccmode_cbc for _size_. */
 #define cccbc_iv_decl(_size_, _name_) cc_ctx_decl(cccbc_iv, _size_, _name_)
-#define cccbc_iv_clear(_size_, _name_) cc_ctx_clear(cccbc_iv, _size_, _name_)
+#define cccbc_iv_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 /* Actual symmetric algorithm implementation can provide you one of these.
 
@@ -131,7 +132,7 @@ CC_INLINE void cccbc_one_shot(const struct ccmode_cbc *mode,
 /* Declare a cfb key named _name_.  Pass the size field of a struct ccmode_cfb
    for _size_. */
 #define cccfb_ctx_decl(_size_, _name_) cc_ctx_decl(cccfb_ctx, _size_, _name_)
-#define cccfb_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define cccfb_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 CC_INLINE size_t cccfb_context_size(const struct ccmode_cfb *mode)
 {
@@ -171,7 +172,7 @@ CC_INLINE void cccfb_one_shot(const struct ccmode_cfb *mode,
 /* Declare a cfb8 key named _name_.  Pass the size field of a struct ccmode_cfb8
  for _size_. */
 #define cccfb8_ctx_decl(_size_, _name_) cc_ctx_decl(cccfb8_ctx, _size_, _name_)
-#define cccfb8_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define cccfb8_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 CC_INLINE size_t cccfb8_context_size(const struct ccmode_cfb8 *mode)
 {
@@ -210,7 +211,7 @@ CC_INLINE void cccfb8_one_shot(const struct ccmode_cfb8 *mode,
 /* Declare a ctr key named _name_.  Pass the size field of a struct ccmode_ctr
  for _size_. */
 #define ccctr_ctx_decl(_size_, _name_) cc_ctx_decl(ccctr_ctx, _size_, _name_)
-#define ccctr_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define ccctr_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 /* This is Integer Counter Mode: The IV is the initial value of the counter
  that is incremented by 1 for each new block. Use the mode flags to select
@@ -254,7 +255,7 @@ CC_INLINE void ccctr_one_shot(const struct ccmode_ctr *mode,
 /* Declare a ofb key named _name_.  Pass the size field of a struct ccmode_ofb
  for _size_. */
 #define ccofb_ctx_decl(_size_, _name_) cc_ctx_decl(ccofb_ctx, _size_, _name_)
-#define ccofb_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define ccofb_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 CC_INLINE size_t ccofb_context_size(const struct ccmode_ofb *mode)
 {
@@ -295,12 +296,12 @@ CC_INLINE void ccofb_one_shot(const struct ccmode_ofb *mode,
 /* Declare a xts key named _name_.  Pass the size field of a struct ccmode_xts
  for _size_. */
 #define ccxts_ctx_decl(_size_, _name_) cc_ctx_decl(ccxts_ctx, _size_, _name_)
-#define ccxts_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define ccxts_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 /* Declare a xts tweak named _name_.  Pass the tweak_size field of a
    struct ccmode_xts for _size_. */
 #define ccxts_tweak_decl(_size_, _name_) cc_ctx_decl(ccxts_tweak, _size_, _name_)
-#define ccxts_tweak_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define ccxts_tweak_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 /* Actual symmetric algorithm implementation can provide you one of these.
 
@@ -363,7 +364,7 @@ CC_INLINE void ccxts_one_shot(const struct ccmode_xts *mode,
 /* Declare a gcm key named _name_.  Pass the size field of a struct ccmode_gcm
  for _size_. */
 #define ccgcm_ctx_decl(_size_, _name_) cc_ctx_decl(ccgcm_ctx, _size_, _name_)
-#define ccgcm_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define ccgcm_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 CC_INLINE size_t ccgcm_context_size(const struct ccmode_gcm *mode)
 {
@@ -430,11 +431,11 @@ CC_INLINE void ccgcm_one_shot(const struct ccmode_gcm *mode,
 /* CCM */
 
 #define ccccm_ctx_decl(_size_, _name_) cc_ctx_decl(ccccm_ctx, _size_, _name_)
-#define ccccm_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define ccccm_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 /* Declare a ccm nonce named _name_.  Pass the mode->nonce_ctx_size for _size_. */
 #define ccccm_nonce_decl(_size_, _name_) cc_ctx_decl(ccccm_nonce, _size_, _name_)
-#define ccccm_nonce_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define ccccm_nonce_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 
 CC_INLINE size_t ccccm_context_size(const struct ccmode_ccm *mode)
@@ -509,7 +510,7 @@ CC_INLINE void ccccm_one_shot(const struct ccmode_ccm *mode,
 /* Declare a omac key named _name_.  Pass the size field of a struct ccmode_omac
  for _size_. */
 #define ccomac_ctx_decl(_size_, _name_) cc_ctx_decl(ccomac_ctx, _size_, _name_)
-#define ccomac_ctx_clear(_size_, _name_) cc_zero(_size_, _name_)
+#define ccomac_ctx_clear(_size_, _name_) cc_clear(_size_, _name_)
 
 CC_INLINE size_t ccomac_context_size(const struct ccmode_omac *mode)
 {

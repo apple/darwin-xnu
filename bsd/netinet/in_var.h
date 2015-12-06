@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -163,6 +163,7 @@ struct kev_in_portinuse {
 					      router */
 
 #ifdef BSD_KERNEL_PRIVATE
+#include <net/if.h>
 #include <net/if_var.h>
 #include <kern/locks.h>
 #include <sys/tree.h>
@@ -473,6 +474,15 @@ struct inpcb;
 #define	MCAST_NOTSMEMBER	2	/* This host excluded source */
 #define	MCAST_MUTED		3	/* [deprecated] */
 
+/*
+ * Per-interface IPv4 structures.
+ */
+struct in_ifextra {
+	uint32_t		netsig_len;
+	u_int8_t		netsig[IFNET_SIGNATURELEN];
+};
+#define	IN_IFEXTRA(_ifp)	((struct in_ifextra *)(_ifp->if_inetdata))
+
 extern u_int32_t ipv4_ll_arp_aware;
 
 extern void in_ifaddr_init(void);
@@ -500,6 +510,7 @@ extern int in_inithead(void **, int);
 extern void in_rtqdrain(void);
 extern struct radix_node *in_validate(struct radix_node *);
 extern void ip_input(struct mbuf *);
+extern void ip_input_process_list(struct mbuf *);
 extern int in_ifadown(struct ifaddr *ifa, int);
 extern void in_ifscrub(struct ifnet *, struct in_ifaddr *, int);
 extern u_int32_t inaddr_hashval(u_int32_t);

@@ -61,7 +61,8 @@
 #define RDPMC_FIXED_COUNTER_SELECTOR (1ULL<<30)
 
 /* track the last config we enabled */
-static uint32_t kpc_running = 0;
+static uint64_t kpc_running_cfg_pmc_mask = 0;
+static uint32_t kpc_running_classes = 0;
 
 /* PMC / MSR accesses */
 
@@ -123,22 +124,22 @@ wrIA32_PERFEVTSELx(uint32_t ctr, uint64_t value)
 boolean_t
 kpc_is_running_fixed(void)
 {
-	return (kpc_running & KPC_CLASS_FIXED_MASK) == KPC_CLASS_FIXED_MASK;
+	return (kpc_running_classes & KPC_CLASS_FIXED_MASK) == KPC_CLASS_FIXED_MASK;
 }
 
 boolean_t
-kpc_is_running_configurable(void)
+kpc_is_running_configurable(uint64_t pmc_mask)
 {
-	return (kpc_running & KPC_CLASS_CONFIGURABLE_MASK) == KPC_CLASS_CONFIGURABLE_MASK;
+	assert(kpc_popcount(pmc_mask) <= kpc_configurable_count());
+	return ((kpc_running_classes & KPC_CLASS_CONFIGURABLE_MASK) == KPC_CLASS_CONFIGURABLE_MASK) &&
+	       ((kpc_running_cfg_pmc_mask & pmc_mask) == pmc_mask);
 }
 
 uint32_t
 kpc_fixed_count(void)
 {
 	i386_cpu_info_t	*info = NULL;
-
 	info = cpuid_info();
-
 	return info->cpuid_arch_perf_leaf.fixed_number;
 }
 
@@ -146,9 +147,7 @@ uint32_t
 kpc_configurable_count(void)
 {
 	i386_cpu_info_t	*info = NULL;
-
 	info = cpuid_info();
-
 	return info->cpuid_arch_perf_leaf.number;
 }
 
@@ -159,9 +158,10 @@ kpc_fixed_config_count(void)
 }
 
 uint32_t
-kpc_configurable_config_count(void)
+kpc_configurable_config_count(uint64_t pmc_mask)
 {
-	return kpc_configurable_count();
+	assert(kpc_popcount(pmc_mask) <= kpc_configurable_count());
+	return kpc_popcount(pmc_mask);
 }
 
 uint32_t
@@ -268,33 +268,28 @@ set_running_fixed(boolean_t on)
 }
 
 static void
-set_running_configurable(boolean_t on)
+set_running_configurable(uint64_t target_mask, uint64_t state_mask)
 {
-	uint64_t global = 0, mask = 0;
-	uint64_t cfg, save;
-	int i;
+	uint32_t cfg_count = kpc_configurable_count();
+	uint64_t global = 0ULL, cfg = 0ULL, save = 0ULL;
 	boolean_t enabled;
-	int ncnt = (int) kpc_get_counter_count(KPC_CLASS_CONFIGURABLE_MASK);
 
 	enabled = ml_set_interrupts_enabled(FALSE);
 
 	/* rmw the global control */
 	global = rdmsr64(MSR_IA32_PERF_GLOBAL_CTRL);
-	for( i = 0; i < ncnt; i++ ) {
-		mask |= (1ULL<<i);
 
-		/* need to save and restore counter since it resets when reconfigured */
+	/* need to save and restore counter since it resets when reconfigured */
+	for (uint32_t i = 0; i < cfg_count; ++i) {
 		cfg = IA32_PERFEVTSELx(i);
 		save = IA32_PMCx(i);
 		wrIA32_PERFEVTSELx(i, cfg | IA32_PERFEVTSEL_PMI | IA32_PERFEVTSEL_EN);
 		wrIA32_PMCx(i, save);
 	}
 
-	if( on )
-		global |= mask;
-	else
-		global &= ~mask;
-
+	/* update the global control value */
+	global &= ~target_mask;	/* clear the targeted PMCs bits */
+	global |= state_mask;	/* update the targeted PMCs bits with their new states */
 	wrmsr64(MSR_IA32_PERF_GLOBAL_CTRL, global);
 
 	ml_set_interrupts_enabled(enabled);
@@ -303,17 +298,20 @@ set_running_configurable(boolean_t on)
 static void
 kpc_set_running_mp_call( void *vstate )
 {
-	uint32_t new_state = *(uint32_t*)vstate;
+	struct kpc_running_remote *mp_config = (struct kpc_running_remote*) vstate;
+	assert(mp_config);
 
-	set_running_fixed((new_state & KPC_CLASS_FIXED_MASK) != 0);
-	set_running_configurable((new_state & KPC_CLASS_CONFIGURABLE_MASK) != 0);
+	if (kpc_controls_fixed_counters())
+		set_running_fixed(mp_config->classes & KPC_CLASS_FIXED_MASK);
+
+	set_running_configurable(mp_config->cfg_target_mask,
+				 mp_config->cfg_state_mask);
 }
 
 int
 kpc_get_fixed_config(kpc_config_t *configv)
 {
 	configv[0] = IA32_FIXED_CTR_CTRL();
-
 	return 0;
 }
 
@@ -361,25 +359,31 @@ kpc_get_fixed_counters(uint64_t *counterv)
 }
 
 int
-kpc_get_configurable_config(kpc_config_t *configv)
+kpc_get_configurable_config(kpc_config_t *configv, uint64_t pmc_mask)
 {
-	int i, n = kpc_get_config_count(KPC_CLASS_CONFIGURABLE_MASK);
+	uint32_t cfg_count = kpc_configurable_count();
 
-	for( i = 0; i < n; i++ )
-		configv[i] = IA32_PERFEVTSELx(i);
+	assert(configv);
 
+	for (uint32_t i = 0; i < cfg_count; ++i)
+		if ((1ULL << i) & pmc_mask)
+			*configv++  = IA32_PERFEVTSELx(i);
 	return 0;
 }
 
 static int
-kpc_set_configurable_config(kpc_config_t *configv)
+kpc_set_configurable_config(kpc_config_t *configv, uint64_t pmc_mask)
 {
-	int i, n = kpc_get_config_count(KPC_CLASS_CONFIGURABLE_MASK);
+	uint32_t cfg_count = kpc_configurable_count();
 	uint64_t save;
 
-	for( i = 0; i < n; i++ ) {
+	for (uint32_t i = 0; i < cfg_count; i++ ) {
+		if (((1ULL << i) & pmc_mask) == 0)
+			continue;
+
 		/* need to save and restore counter since it resets when reconfigured */
 		save = IA32_PMCx(i);
+
 		/*
 		 * Some bits are not safe to set from user space.
 		 * Allow these bits to be set:
@@ -402,36 +406,48 @@ kpc_set_configurable_config(kpc_config_t *configv)
 		 *   33     IN_TXCP
 		 *   34-63  Reserved
 		 */
-		wrIA32_PERFEVTSELx(i, configv[i] & 0xffc7ffffull);
+		wrIA32_PERFEVTSELx(i, *configv & 0xffc7ffffull);
 		wrIA32_PMCx(i, save);
+
+		/* next configuration word */
+		configv++;
 	}
 
 	return 0;
 }
 
 int
-kpc_get_configurable_counters(uint64_t *counterv)
+kpc_get_configurable_counters(uint64_t *counterv, uint64_t pmc_mask)
 {
-	int i, n = kpc_get_config_count(KPC_CLASS_CONFIGURABLE_MASK);
-	uint64_t status;
+	uint32_t cfg_count = kpc_configurable_count();
+	uint64_t status, *it_counterv = counterv;
 
 	/* snap the counters */
-	for( i = 0; i < n; i++ ) {
-		counterv[i] = CONFIGURABLE_SHADOW(i) +
-			(IA32_PMCx(i) - CONFIGURABLE_RELOAD(i));
+	for (uint32_t i = 0; i < cfg_count; ++i) {
+		if ((1ULL << i) & pmc_mask) {
+			*it_counterv++ = CONFIGURABLE_SHADOW(i) +
+			                 (IA32_PMCx(i) - CONFIGURABLE_RELOAD(i));
+		}
 	}
 
 	/* Grab the overflow bits */
 	status = rdmsr64(MSR_IA32_PERF_GLOBAL_STATUS);
 
-	/* If the overflow bit is set for a counter, our previous read may or may not have been
+	/* reset the iterator */
+	it_counterv = counterv;
+
+	/*
+	 * If the overflow bit is set for a counter, our previous read may or may not have been
 	 * before the counter overflowed. Re-read any counter with it's overflow bit set so
 	 * we know for sure that it has overflowed. The reason this matters is that the math
-	 * is different for a counter that has overflowed. */
-	for( i = 0; i < n; i++ ) {
-		if ((1ull << i) & status) {
-			counterv[i] = CONFIGURABLE_SHADOW(i) +
-				(kpc_configurable_max() - CONFIGURABLE_RELOAD(i)) + IA32_PMCx(i);
+	 * is different for a counter that has overflowed.
+	 */
+	for (uint32_t i = 0; i < cfg_count; ++i) {
+		if (((1ULL << i) & pmc_mask) &&
+		    ((1ULL << i) & status))
+		{
+			*it_counterv++ = CONFIGURABLE_SHADOW(i) +
+			                 (kpc_configurable_max() - CONFIGURABLE_RELOAD(i)) + IA32_PMCx(i);
 		}
 	}
 
@@ -439,26 +455,69 @@ kpc_get_configurable_counters(uint64_t *counterv)
 }
 
 static void
+kpc_get_curcpu_counters_mp_call(void *args)
+{
+	struct kpc_get_counters_remote *handler = args;
+	int offset=0, r=0;
+
+	assert(handler);
+	assert(handler->buf);
+
+	offset = cpu_number() * handler->buf_stride;
+	r = kpc_get_curcpu_counters(handler->classes, NULL, &handler->buf[offset]);
+
+	/* number of counters added by this CPU, needs to be atomic  */
+	hw_atomic_add(&(handler->nb_counters), r);
+}
+
+int
+kpc_get_all_cpus_counters(uint32_t classes, int *curcpu, uint64_t *buf)
+{
+	int enabled = 0;
+
+	struct kpc_get_counters_remote hdl = {
+		.classes = classes, .nb_counters = 0,
+		.buf_stride = kpc_get_counter_count(classes), .buf = buf
+	};
+
+	assert(buf);
+
+	enabled = ml_set_interrupts_enabled(FALSE);
+
+	if (curcpu)
+		*curcpu = current_processor()->cpu_id;
+	mp_cpus_call(CPUMASK_ALL, ASYNC, kpc_get_curcpu_counters_mp_call, &hdl);
+
+	ml_set_interrupts_enabled(enabled);
+
+	return hdl.nb_counters;
+}
+
+static void
 kpc_set_config_mp_call(void *vmp_config)
 {
+
 	struct kpc_config_remote *mp_config = vmp_config;
-	uint32_t classes = mp_config->classes;
-	kpc_config_t *new_config = mp_config->configv;
-	int count = 0;
+	kpc_config_t *new_config = NULL;
+	uint32_t classes = 0, count = 0;
 	boolean_t enabled;
+
+	assert(mp_config);
+	assert(mp_config->configv);
+	classes = mp_config->classes;
+	new_config = mp_config->configv;
 
 	enabled = ml_set_interrupts_enabled(FALSE);
 	
-	if( classes & KPC_CLASS_FIXED_MASK )
+	if (classes & KPC_CLASS_FIXED_MASK)
 	{
 		kpc_set_fixed_config(&new_config[count]);
 		count += kpc_get_config_count(KPC_CLASS_FIXED_MASK);
 	}
 
-	if( classes & KPC_CLASS_CONFIGURABLE_MASK )
-	{
-		kpc_set_configurable_config(&new_config[count]);
-		count += kpc_get_config_count(KPC_CLASS_CONFIGURABLE_MASK);
+	if (classes & KPC_CLASS_CONFIGURABLE_MASK) {
+		kpc_set_configurable_config(&new_config[count], mp_config->pmc_mask);
+		count += kpc_popcount(mp_config->pmc_mask);
 	}
 
 	ml_set_interrupts_enabled(enabled);
@@ -468,34 +527,51 @@ static void
 kpc_set_reload_mp_call(void *vmp_config)
 {
 	struct kpc_config_remote *mp_config = vmp_config;
-	uint64_t max = kpc_configurable_max();
-	uint32_t i, count = kpc_get_counter_count(KPC_CLASS_CONFIGURABLE_MASK);
-	uint64_t *new_period;
-	uint64_t classes;
-	int enabled;
+	uint64_t *new_period = NULL, max = kpc_configurable_max();
+	uint32_t classes = 0, count = 0;
+	boolean_t enabled;
 
+	assert(mp_config);
+	assert(mp_config->configv);
 	classes = mp_config->classes;
 	new_period = mp_config->configv;
 
+	enabled = ml_set_interrupts_enabled(FALSE);
+
 	if (classes & KPC_CLASS_CONFIGURABLE_MASK) {
-		enabled = ml_set_interrupts_enabled(FALSE);
+		/*
+		 * Update _all_ shadow counters, this cannot be done for only
+		 * selected PMCs. Otherwise, we would corrupt the configurable
+		 * shadow buffer since the PMCs are muxed according to the pmc
+		 * mask.
+		 */
+		uint64_t all_cfg_mask = (1ULL << kpc_configurable_count()) - 1;
+		kpc_get_configurable_counters(&CONFIGURABLE_SHADOW(0), all_cfg_mask);
 
-		kpc_get_configurable_counters(&CONFIGURABLE_SHADOW(0));
+		/* set the new period */
+		count = kpc_configurable_count();
+		for (uint32_t i = 0; i < count; ++i) {
+			/* ignore the counter */
+			if (((1ULL << i) & mp_config->pmc_mask) == 0)
+				continue;
 
-		for (i = 0; i < count; i++) {
-			if (new_period[i] == 0)
-				new_period[i] = kpc_configurable_max();
+			if (*new_period == 0)
+				*new_period = kpc_configurable_max();
 
-			CONFIGURABLE_RELOAD(i) = max - new_period[i];
+			CONFIGURABLE_RELOAD(i) = max - *new_period;
 
+			/* reload the counter */
 			kpc_reload_configurable(i);
 
 			/* clear overflow bit just in case */
 			wrmsr64(MSR_IA32_PERF_GLOBAL_OVF_CTRL, 1ull << i);
-		}
 
-		ml_set_interrupts_enabled(enabled);
+			/* next period value */
+			new_period++;
+		}
 	}
+
+	ml_set_interrupts_enabled(enabled);
 }
 
 int
@@ -522,14 +598,17 @@ kpc_get_classes(void)
 }
 
 int
-kpc_set_running(uint32_t new_state)
+kpc_set_running_arch(struct kpc_running_remote *mp_config)
 {
+	assert(mp_config);
+
 	lapic_set_pmi_func((i386_intr_func_t)kpc_pmi_handler);
 
 	/* dispatch to all CPUs */
-	mp_cpus_call( CPUMASK_ALL, ASYNC, kpc_set_running_mp_call, &new_state );
+	mp_cpus_call(CPUMASK_ALL, ASYNC, kpc_set_running_mp_call, mp_config);
 
-	kpc_running = new_state;
+	kpc_running_cfg_pmc_mask = mp_config->cfg_state_mask;
+	kpc_running_classes = mp_config->classes;
 
 	return 0;
 }
@@ -591,14 +670,24 @@ void kpc_pmi_handler(__unused x86_saved_state_t *state)
 }
 
 int
-kpc_force_all_ctrs_arch( task_t task __unused, int val __unused )
-{
-	/* TODO: reclaim counters ownership from XCPM */
-	return 0;
-}
-
-int
 kpc_set_sw_inc( uint32_t mask __unused )
 {
 	return ENOTSUP;
 }
+
+int
+kpc_get_pmu_version(void)
+{
+	i386_cpu_info_t *info = cpuid_info();
+
+	uint8_t version_id = info->cpuid_arch_perf_leaf.version;
+
+	if (version_id == 3) {
+		return KPC_PMU_INTEL_V3;
+	} else if (version_id == 2) {
+		return KPC_PMU_INTEL_V2;
+	}
+
+	return KPC_PMU_ERROR;
+}
+

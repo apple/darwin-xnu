@@ -85,6 +85,55 @@ The
 parameter for
 .Fn fsetattrlist
 must be a valid file descriptor for the calling process.
+.
+The list of potentially settable attributes via 
+.Fn setattrlist
+is different than the list of attributes that are accessible via 
+.Fn getattrlist
+In particular, only the following attributes are modifiable via 
+.Fn setattrlist
+and not all of them may be supported on all filesystems.
+.Pp
+.
+.Bl -item -compact
+.It
+ATTR_CMN_SCRIPT
+.It 
+ATTR_CMN_CRTIME
+.It
+ATTR_CMN_MODTIME
+.It
+ATTR_CMN_CHGTIME
+.It
+ATTR_CMN_ACCTIME
+.It
+ATTR_CMN_BKUPTIME
+.It
+ATTR_CMN_FNDRINFO
+.It
+ATTR_CMN_OWNERID
+.It
+ATTR_CMN_GRPID
+.It
+ATTR_CMN_ACCESSMASK
+.It
+ATTR_CMN_FLAGS
+.It
+ATTR_CMN_EXTENDED_SECURITY
+.It
+ATTR_CMN_GRPUUID
+.Pp
+.It
+ATTR_VOL_NAME
+.It
+ATTR_VOL_INFO
+.Pp
+.It
+ATTR_FILE_DEVTYPE
+.El
+.Pp
+.
+.
 You must own the file system object in order to set any of the 
 following attributes: 
 .Pp
@@ -101,15 +150,16 @@ ATTR_CMN_CRTIME
 .It
 ATTR_CMN_MODTIME
 .It
-ATTR_CMN_CHGTIME
-.It
 ATTR_CMN_ACCTIME
+.Pp
+ATTR_CMN_CHGTIME 
+.Fa cannot be set programmatically. Any attempt to set change time is ignored.
 .El
 .Pp
 .
 You must be root (that is, your process's effective UID must be 0) in order to change the 
 .Dv ATTR_CMN_OWNERID
-attribute.
+attribute
 Setting other attributes requires that you have write access to the object.
 .Pp
 .

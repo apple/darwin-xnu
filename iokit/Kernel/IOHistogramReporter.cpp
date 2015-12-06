@@ -349,7 +349,8 @@ IOHistogramReporter::tallyValue(int64_t value)
     hist_values.bucket_sum += value;
     hist_values.bucket_hits++;
     
-    if (setElementValues(element_index, (IOReportElementValues *)&hist_values) == kIOReturnSuccess) {
+    if (setElementValues(element_index, (IOReportElementValues *)&hist_values)
+                != kIOReturnSuccess) {
         goto finish;
     }
 

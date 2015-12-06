@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,7 +48,6 @@
 #include <sys/kauth.h>
 #include <sys/uio_internal.h>
 #include <sys/fsctl.h>
-#include <sys/cprotect.h>
 #include <sys/xattr.h>
 #include <string.h>
 #include <sys/fsevents.h>
@@ -71,6 +70,8 @@
 #include "hfs_quota.h"
 #include "hfs_endian.h"
 #include "hfs_kdebug.h"
+#include "hfs_cprotect.h"
+
 
 #include "hfscommon/headers/BTreesInternal.h"
 #include "hfscommon/headers/FileMgrInternal.h"
@@ -107,10 +108,6 @@ static int hfs_move_data(cnode_t *from_cp, cnode_t *to_cp,
 						 hfs_move_data_options_t options);
 static int hfs_move_fork(filefork_t *srcfork, cnode_t *src, 
  						 filefork_t *dstfork, cnode_t *dst);
-static const struct cat_fork *
-hfs_prepare_fork_for_update(const filefork_t *pfork,
-							struct cat_fork *fork_buf,
-							uint32_t block_size);
 
 #if HFS_COMPRESSION
 static int hfs_move_compressed(cnode_t *from_vp, cnode_t *to_vp);
@@ -501,7 +498,7 @@ clear_tombstone_docid(struct  doc_tombstone *ut, __unused struct hfsmount *hfsmp
 		// printf("clearing doc-id from ino %d\n", ocp->c_desc.cd_cnid);
 		ofip->document_id = 0;
 		ocp->c_bsdflags &= ~UF_TRACKED;
-		ocp->c_flag |= C_MODIFIED | C_FORCEUPDATE;   // mark it dirty
+		ocp->c_flag |= C_MODIFIED;
 		/* cat_update(hfsmp, &ocp->c_desc, &ocp->c_attr, NULL, NULL); */
 
 	}
@@ -693,6 +690,38 @@ hfs_vnop_open(struct vnop_open_args *ap)
 	if (hfs_is_journal_file(hfsmp, cp))
 		return (EPERM);
 
+	bool have_lock = false;
+
+#if CONFIG_PROTECT
+	if (ISSET(ap->a_mode, FENCRYPTED) && cp->c_cpentry && vnode_isreg(vp)) {
+		bool have_trunc_lock = false;
+
+
+		if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
+			if (have_trunc_lock)
+				hfs_unlock_truncate(cp, 0);
+			return error;
+		}
+
+		have_lock = true;
+
+		if (cp->c_cpentry->cp_raw_open_count + 1
+			< cp->c_cpentry->cp_raw_open_count) {
+			// Overflow; too many raw opens on this file
+			hfs_unlock(cp);
+			if (have_trunc_lock)
+				hfs_unlock_truncate(cp, 0);
+			return ENFILE;
+		}
+
+
+		if (have_trunc_lock)
+			hfs_unlock_truncate(cp, 0);
+
+		++cp->c_cpentry->cp_raw_open_count;
+	}
+#endif
+
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) ||
 	    (hfsmp->jnl == NULL) ||
 #if NAMEDSTREAMS
@@ -700,10 +729,16 @@ hfs_vnop_open(struct vnop_open_args *ap)
 #else
 	    !vnode_isreg(vp) || vnode_isinuse(vp, 0)) {
 #endif
+
+#if CONFIG_PROTECT
+		if (have_lock)
+			hfs_unlock(cp);
+#endif
+
 		return (0);
 	}
 
-	if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT)))
+	if (!have_lock && (error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT)))
 		return (error);
 
 #if QUOTA
@@ -777,6 +812,13 @@ hfs_vnop_close(ap)
 		return (0);
 	cp = VTOC(vp);
 	hfsmp = VTOHFS(vp);
+
+#if CONFIG_PROTECT
+	if (cp->c_cpentry && ISSET(ap->a_fflag, FENCRYPTED) && vnode_isreg(vp)) {
+		assert(cp->c_cpentry->cp_raw_open_count > 0);
+		--cp->c_cpentry->cp_raw_open_count;
+	}
+#endif
 
 	/* 
 	 * If the rsrc fork is a named stream, it can cause the data fork to
@@ -1008,10 +1050,13 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 		if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT)))
 			return (error);
 		hfs_touchtimes(hfsmp, cp);
-	}
- 	else {
-		if ((error = hfs_lock(cp, HFS_SHARED_LOCK, HFS_LOCK_DEFAULT)))
-			return (error);
+
+		// downgrade to a shared lock since that's all we need from here on out
+		cp->c_lockowner = HFS_SHARED_OWNER;
+		lck_rw_lock_exclusive_to_shared(&cp->c_rwlock);
+
+	} else if ((error = hfs_lock(cp, HFS_SHARED_LOCK, HFS_LOCK_DEFAULT))) {
+		return (error);
 	}
 
 	if (v_type == VDIR) {
@@ -1172,19 +1217,9 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 			VATTR_SET_SUPPORTED(vap, va_acl);
 		}
 	}
-	if (VATTR_IS_ACTIVE(vap, va_access_time)) {
-		/* Access times are lazily updated, get current time if needed */
-		if (cp->c_touch_acctime) {
-			struct timeval tv;
-	
-			microtime(&tv);
-			vap->va_access_time.tv_sec = tv.tv_sec;
-		} else {
-			vap->va_access_time.tv_sec = cp->c_atime;
-		}
-		vap->va_access_time.tv_nsec = 0;
-		VATTR_SET_SUPPORTED(vap, va_access_time);
-	}
+
+	vap->va_access_time.tv_sec = cp->c_atime;
+	vap->va_access_time.tv_nsec = 0;
 	vap->va_create_time.tv_sec = cp->c_itime;
 	vap->va_create_time.tv_nsec = 0;
 	vap->va_modify_time.tv_sec = cp->c_mtime;
@@ -1233,7 +1268,7 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 	 */
 	if (cp->c_flag & C_HARDLINK) {
 		vap->va_linkid = (u_int64_t)hfs_currentcnid(cp);
-		vap->va_parentid = (u_int64_t)hfs_currentparent(cp);
+		vap->va_parentid = (u_int64_t)hfs_currentparent(cp, /* have_lock: */ true);
 	} else {
 		vap->va_linkid = (u_int64_t)cp->c_cnid;
 		vap->va_parentid = (u_int64_t)cp->c_parentcnid;
@@ -1256,7 +1291,6 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 			}
 		} else
 			vap->va_data_size = data_size;
-//		vap->va_supported |= VNODE_ATTR_va_data_size;
 		VATTR_SET_SUPPORTED(vap, va_data_size);
 	}
 #else
@@ -1266,7 +1300,7 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 
 #if CONFIG_PROTECT
 	if (VATTR_IS_ACTIVE(vap, va_dataprotect_class)) {
-    		vap->va_dataprotect_class = cp->c_cpentry ? cp->c_cpentry->cp_pclass : 0;
+    		vap->va_dataprotect_class = cp->c_cpentry ? CP_CLASS(cp->c_cpentry->cp_pclass) : 0;
     		VATTR_SET_SUPPORTED(vap, va_dataprotect_class);
     	} 	
 #endif
@@ -1288,7 +1322,8 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 	}
 
 	/* Mark them all at once instead of individual VATTR_SET_SUPPORTED calls. */
-	vap->va_supported |= VNODE_ATTR_va_create_time | VNODE_ATTR_va_modify_time |
+	vap->va_supported |= VNODE_ATTR_va_access_time |
+						 VNODE_ATTR_va_create_time | VNODE_ATTR_va_modify_time |
 	                     VNODE_ATTR_va_change_time| VNODE_ATTR_va_backup_time |
 	                     VNODE_ATTR_va_iosize | VNODE_ATTR_va_uid |
 	                     VNODE_ATTR_va_gid | VNODE_ATTR_va_mode |
@@ -1421,8 +1456,15 @@ hfs_vnop_setattr(ap)
 	}
 
 #if CONFIG_PROTECT
-	if ((error = cp_handle_vnop(vp, CP_WRITE_ACCESS, 0)) != 0) {
-		return (error);
+	/*
+	 * All metadata changes should be allowed except a size-changing setattr, which
+	 * has effects on file content and requires calling into cp_handle_vnop
+	 * to have content protection check.
+	 */
+	if (VATTR_IS_ACTIVE(vap, va_data_size)) {
+		if ((error = cp_handle_vnop(vp, CP_WRITE_ACCESS, 0)) != 0) {
+			return (error);
+		}
 	}
 #endif /* CONFIG_PROTECT */
 
@@ -1612,6 +1654,7 @@ hfs_vnop_setattr(ap)
 		}
 
 		cp->c_bsdflags = vap->va_flags;
+		cp->c_flag |= C_MODIFIED;
 		cp->c_touch_chgtime = TRUE;
 
 		
@@ -1662,13 +1705,14 @@ hfs_vnop_setattr(ap)
 			 */
 			if ((VTOVCB(vp)->vcbSigWord == kHFSPlusSigWord) &&
 			    (cp->c_cnid != kHFSRootFolderID) &&
+				!VATTR_IS_ACTIVE(vap, va_create_time) &&
 			    (cp->c_mtime < cp->c_itime)) {
 				cp->c_itime = cp->c_mtime;
 			}
 		}
 		if (VATTR_IS_ACTIVE(vap, va_backup_time))
 			cp->c_btime = vap->va_backup_time.tv_sec;
-		cp->c_flag |= C_MODIFIED;
+		cp->c_flag |= C_MINOR_MOD;
 	}
 	
 	/*
@@ -1677,10 +1721,11 @@ hfs_vnop_setattr(ap)
 	VATTR_SET_SUPPORTED(vap, va_encoding);
 	if (VATTR_IS_ACTIVE(vap, va_encoding)) {
 		cp->c_encoding = vap->va_encoding;
+		cp->c_flag |= C_MODIFIED;
 		hfs_setencodingbits(hfsmp, cp->c_encoding);
 	}
 
-	if ((error = hfs_update(vp, TRUE)) != 0)
+	if ((error = hfs_update(vp, 0)) != 0)
 		goto out;
 out:
 	if (cp) {
@@ -1741,8 +1786,12 @@ hfs_chmod(struct vnode *vp, int mode, __unused kauth_cred_t cred, __unused struc
 		return (0);
 	};
 #endif
-	cp->c_mode &= ~ALLPERMS;
-	cp->c_mode |= (mode & ALLPERMS);
+
+	mode_t new_mode = (cp->c_mode & ~ALLPERMS) | (mode & ALLPERMS);
+	if (new_mode != cp->c_mode) {
+		cp->c_mode = new_mode;
+		cp->c_flag |= C_MINOR_MOD;
+	}
 	cp->c_touch_chgtime = TRUE;
 	return (0);
 }
@@ -1841,6 +1890,13 @@ hfs_chown(struct vnode *vp, uid_t uid, gid_t gid, kauth_cred_t cred,
 
 	ogid = cp->c_gid;
 	ouid = cp->c_uid;
+
+	if (ouid == uid && ogid == gid) {
+		// No change, just set change time
+		cp->c_touch_chgtime = TRUE;
+		return 0;
+	}
+
 #if QUOTA
 	if ((error = hfs_getinoquota(cp)))
 		return (error);
@@ -1912,6 +1968,11 @@ good:
 		panic("hfs_chown: lost quota");
 #endif /* QUOTA */
 
+	/*
+	 * Without quotas, we could probably make this a minor
+	 * modification.
+	 */
+	cp->c_flag |= C_MODIFIED;
 
 	/*
 	  According to the SUSv3 Standard, chown() shall mark
@@ -2342,7 +2403,7 @@ hfs_vnop_exchange(ap)
 	 * 2) Drop the special bits from the current flags
 	 * 3) swap the special flag bits to their destination
 	 */	 
-	from_cp->c_flag |= to_flag_special;
+	from_cp->c_flag |= to_flag_special | C_MODIFIED;
 	from_cp->c_attr.ca_recflags = to_cp->c_attr.ca_recflags;
 	bcopy(to_cp->c_finderinfo, from_cp->c_finderinfo, 32);
 
@@ -2371,7 +2432,7 @@ hfs_vnop_exchange(ap)
 	 * Only OR in the "from" flags into our cnode flags below. 
 	 * Leave the rest of the flags alone.
 	 */
-	to_cp->c_flag |= from_flag_special;
+	to_cp->c_flag |= from_flag_special | C_MODIFIED;
 
 	to_cp->c_attr.ca_recflags = tempattr.ca_recflags;
 	bcopy(tempattr.ca_finderinfo, to_cp->c_finderinfo, 32);
@@ -2403,14 +2464,14 @@ exit:
 	    hfs_end_transaction(hfsmp);
 	}
 
+	if (have_cnode_locks)
+		hfs_unlockpair(from_cp, to_cp);
+
 	if (have_from_trunc_lock)
 		hfs_unlock_truncate(from_cp, 0);
 
 	if (have_to_trunc_lock)
 		hfs_unlock_truncate(to_cp, 0);
-
-	if (have_cnode_locks)
-		hfs_unlockpair(from_cp, to_cp);
 
  	return (error);
 }
@@ -2738,10 +2799,10 @@ int hfs_move_data(cnode_t *from_cp, cnode_t *to_cp,
 	struct cat_fork dfork_buf;
 	const struct cat_fork *dfork, *rfork;
 
-	dfork = hfs_prepare_fork_for_update(to_cp->c_datafork, &dfork_buf,
-										hfsmp->blockSize);
-	rfork = hfs_prepare_fork_for_update(from_rfork, &rfork_buf.ff_data,
-										hfsmp->blockSize);
+	dfork = hfs_prepare_fork_for_update(to_cp->c_datafork, NULL,
+										&dfork_buf, hfsmp->blockSize);
+	rfork = hfs_prepare_fork_for_update(from_rfork, NULL,
+										&rfork_buf.ff_data, hfsmp->blockSize);
 
 	// Update the catalog nodes, to_cp first
 	if ((error = cat_update(hfsmp, &to_cp->c_desc, &to_cp->c_attr, 
@@ -2749,7 +2810,7 @@ int hfs_move_data(cnode_t *from_cp, cnode_t *to_cp,
 		goto exit;
 	}
 
-	CLR(to_cp->c_flag, C_MODIFIED);
+	CLR(to_cp->c_flag, C_MODIFIED | C_MINOR_MOD);
 
 	// Update in-memory resource fork data here
 	if (from_rfork) {
@@ -2778,9 +2839,9 @@ int hfs_move_data(cnode_t *from_cp, cnode_t *to_cp,
 	}
 
 	// Currently unnecessary, but might be useful in future...
-	dfork = hfs_prepare_fork_for_update(from_cp->c_datafork, &dfork_buf,
+	dfork = hfs_prepare_fork_for_update(from_cp->c_datafork, NULL, &dfork_buf,
 										hfsmp->blockSize);
-	rfork = hfs_prepare_fork_for_update(from_rfork, &rfork_buf.ff_data,
+	rfork = hfs_prepare_fork_for_update(from_rfork, NULL, &rfork_buf.ff_data,
 										hfsmp->blockSize);
 
 	// Update from_cp
@@ -2789,7 +2850,7 @@ int hfs_move_data(cnode_t *from_cp, cnode_t *to_cp,
 		goto exit;
 	}
 
-	CLR(from_cp->c_flag, C_MODIFIED);
+	CLR(from_cp->c_flag, C_MODIFIED | C_MINOR_MOD);
 
 exit:
 	if (lockflags) {
@@ -2820,8 +2881,9 @@ static int hfs_move_fork(filefork_t *srcfork, cnode_t *src_cp,
 						 filefork_t *dstfork, cnode_t *dst_cp) 
 {
 	// Move the invalid ranges
-	dstfork->ff_invalidranges = srcfork->ff_invalidranges;
-	rl_init(&srcfork->ff_invalidranges);
+	TAILQ_SWAP(&dstfork->ff_invalidranges, &srcfork->ff_invalidranges,
+			   rl_entry, rl_link);
+	rl_remove_all(&srcfork->ff_invalidranges);
 
 	// Move the fork data (copy whole structure)
 	dstfork->ff_data = srcfork->ff_data;
@@ -2868,19 +2930,19 @@ static void hfs_fsync_panic_hook(panic_hook_t *hook_)
  *  cnode must be locked
  */
 int
-hfs_fsync(struct vnode *vp, int waitfor, int fullsync, struct proc *p)
+hfs_fsync(struct vnode *vp, int waitfor, hfs_fsync_mode_t fsyncmode, struct proc *p)
 {
 	struct cnode *cp = VTOC(vp);
 	struct filefork *fp = NULL;
 	int retval = 0;
 	struct hfsmount *hfsmp = VTOHFS(vp);
-	struct rl_entry *invalid_range;
 	struct timeval tv;
 	int waitdata;		/* attributes necessary for data retrieval */
 	int wait;		/* all other attributes (e.g. atime, etc.) */
 	int lockflag;
 	int took_trunc_lock = 0;
 	int locked_buffers = 0;
+	int fsync_default = 1;
 
 	/*
 	 * Applications which only care about data integrity rather than full
@@ -2889,8 +2951,11 @@ hfs_fsync(struct vnode *vp, int waitfor, int fullsync, struct proc *p)
 	 */
 	wait = (waitfor == MNT_WAIT);
 	waitdata = (waitfor == MNT_DWAIT) | wait;
+
 	if (always_do_fullfsync)
-		fullsync = 1;
+		fsyncmode = HFS_FSYNC_FULL;
+	if (fsyncmode != HFS_FSYNC)
+		fsync_default = 0;
 	
 	/* HFS directories don't have any data blocks. */
 	if (vnode_isdir(vp))
@@ -2944,7 +3009,7 @@ hfs_fsync(struct vnode *vp, int waitfor, int fullsync, struct proc *p)
 		cp->c_zftimeout != 0))) {
 
 		microuptime(&tv);
-		if ((cp->c_flag & C_ALWAYS_ZEROFILL) == 0 && !fullsync && tv.tv_sec < (long)cp->c_zftimeout) {
+		if ((cp->c_flag & C_ALWAYS_ZEROFILL) == 0 && fsync_default && tv.tv_sec < (long)cp->c_zftimeout) {
 			/* Remember that a force sync was requested. */
 			cp->c_flag |= C_ZFWANTSYNC;
 			goto datasync;
@@ -2959,30 +3024,11 @@ hfs_fsync(struct vnode *vp, int waitfor, int fullsync, struct proc *p)
 				hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 				took_trunc_lock = 1;
 			}
-			while ((invalid_range = TAILQ_FIRST(&fp->ff_invalidranges))) {
-				off_t start = invalid_range->rl_start;
-				off_t end = invalid_range->rl_end;
-    		
-				/* The range about to be written must be validated
-				 * first, so that VNOP_BLOCKMAP() will return the
-				 * appropriate mapping for the cluster code:
-				 */
-				rl_remove(start, end, &fp->ff_invalidranges);
-
-				/* Don't hold cnode lock when calling into cluster layer. */
-				hfs_unlock(cp);
-				(void) cluster_write(vp, (struct uio *) 0,
-						     fp->ff_size, end + 1, start, (off_t)0,
-						     IO_HEADZEROFILL | IO_NOZERODIRTY | IO_NOCACHE);
-				hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
-				cp->c_flag |= C_MODIFIED;
-			}
+			hfs_flush_invalid_ranges(vp);
 			hfs_unlock(cp);
 			(void) cluster_push(vp, waitdata ? IO_SYNC : 0);
 			hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
 		}
-		cp->c_flag &= ~C_ZFWANTSYNC;
-		cp->c_zftimeout = 0;
 	}
 datasync:
 	if (took_trunc_lock) {
@@ -3029,7 +3075,7 @@ datasync:
 		 * if the vnode is in the middle of a recycle (VL_TERMINATE or VL_DEAD is set).
 		 */
 		if (vnode_isrecycled(vp)) {
-			fullsync = 1;
+			fsync_default = 0;
 		}
 	}
 
@@ -3043,7 +3089,7 @@ metasync:
 		cp->c_touch_chgtime = FALSE;
 		cp->c_touch_modtime = FALSE;
 	} else if ( !(vp->v_flag & VSWAP) ) /* User file */ {
-		retval = hfs_update(vp, wait);
+		retval = hfs_update(vp, HFS_UPDATE_FORCE);
 
 		/*
 		 * When MNT_WAIT is requested push out the catalog record for
@@ -3051,7 +3097,7 @@ metasync:
 		 * because the journal_flush or hfs_metasync_all will push out
 		 * all of the metadata changes.
 		 */
-   		if ((retval == 0) && wait && !fullsync && cp->c_hint &&
+		if ((retval == 0) && wait && fsync_default && cp->c_hint &&
    		    !ISSET(cp->c_flag, C_DELETED | C_NOEXISTS)) {
    			hfs_metasync(VTOHFS(vp), (daddr64_t)cp->c_hint, p);
 		}
@@ -3060,26 +3106,23 @@ metasync:
 		 * If this was a full fsync, make sure all metadata
 		 * changes get to stable storage.
 		 */
-		if (fullsync) {
+		if (!fsync_default) {
 			if (hfsmp->jnl) {
-				hfs_journal_flush(hfsmp, FALSE);
-			
-				if (journal_uses_fua(hfsmp->jnl)) {
-					/*
-					 * the journal_flush did NOT issue a sync track cache command,
-					 * and the fullsync indicates we are supposed to flush all cached
-					 * data to the media, so issue the sync track cache command
-					 * explicitly
-					 */
-					VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, NULL);
-				}
+				if (fsyncmode == HFS_FSYNC_FULL)
+					hfs_flush(hfsmp, HFS_FLUSH_FULL);
+				else
+					hfs_flush(hfsmp,
+					    HFS_FLUSH_JOURNAL_BARRIER);
 			} else {
 				retval = hfs_metasync_all(hfsmp);
 				/* XXX need to pass context! */
-				VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, NULL);
+				hfs_flush(hfsmp, HFS_FLUSH_CACHE);
 			}
 		}
 	}
+
+	if (!hfs_is_dirty(cp) && !ISSET(cp->c_flag, C_DELETED))
+		vnode_cleardirty(vp);
 
 	return (retval);
 }
@@ -3459,9 +3502,9 @@ hfs_removedir(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 
 		dcp->c_touch_chgtime = TRUE;
 		dcp->c_touch_modtime = TRUE;
-		hfs_touchtimes(hfsmp, cp);
-		(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
-		cp->c_flag &= ~(C_MODIFIED | C_FORCEUPDATE);
+		dcp->c_flag |= C_MODIFIED;
+
+		hfs_update(dcp->c_vp, 0);
 	}
 
 	hfs_systemfile_unlock(hfsmp, lockflags);
@@ -3634,6 +3677,8 @@ relock:
 	 * more work.
 	 */
 	if (error == 0) {
+		hfs_hotfile_deleted(vp);
+		
 	   	if (rvp) {
 	    	recycle_rsrc = 1;
 		}
@@ -3756,23 +3801,6 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	/* Don't allow deleting the journal or journal_info_block. */
 	if (hfs_is_journal_file(hfsmp, cp)) {
 		return (EPERM);
-	}
-
-	/*
-	 * If removing a symlink, then we need to ensure that the
-	 * data blocks for the symlink are not still in-flight or pending.  
-	 * If so, we will unlink the symlink here, making its blocks 
-	 * available for re-allocation by a subsequent transaction.  That is OK, but
-	 * then the I/O for the data blocks could then go out before the journal 
-	 * transaction that created it was flushed, leading to I/O ordering issues.
-	 */
-	if (vp->v_type == VLNK) {	
-		/* 
-		 * This will block if the asynchronous journal flush is in progress.
-		 * If this symlink is not being renamed over and doesn't have any open FDs,
-		 * then we'll remove it from the journal's bufs below in kill_block.
-		 */
-		buf_wait_for_shadow_io (vp, 0);
 	}
 
 	/*
@@ -4199,7 +4227,7 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 		cp->c_flag |= C_NOEXISTS;
 		cp->c_flag &= ~C_DELETED;
 		
-		cp->c_touch_chgtime = TRUE;   /* XXX needed ? */
+		cp->c_touch_chgtime = TRUE;
 		--cp->c_linkcount;
 		
 		/* 
@@ -5155,15 +5183,22 @@ skip_rm:
 		}
 		tdcp->c_entries++;
 		tdcp->c_dirchangecnt++;
+		tdcp->c_flag |= C_MODIFIED;
 		hfs_incr_gencount(tdcp);
 
 		if (fdcp->c_entries > 0)
 			fdcp->c_entries--;
 		fdcp->c_dirchangecnt++;
+		fdcp->c_flag |= C_MODIFIED;
 		fdcp->c_touch_chgtime = TRUE;
 		fdcp->c_touch_modtime = TRUE;
 
-		fdcp->c_flag |= C_FORCEUPDATE;  // XXXdbg - force it out!
+		if (ISSET(fcp->c_flag, C_HARDLINK)) {
+			hfs_relorigin(fcp, fdcp->c_fileid);
+			if (fdcp->c_fileid != fdcp->c_cnid)
+				hfs_relorigin(fcp, fdcp->c_cnid);
+		}
+
 		(void) hfs_update(fdvp, 0);
 	}
 	hfs_incr_gencount(fdcp);
@@ -5172,7 +5207,6 @@ skip_rm:
 	tdcp->c_touch_chgtime = TRUE;
 	tdcp->c_touch_modtime = TRUE;
 
-	tdcp->c_flag |= C_FORCEUPDATE;  // XXXdbg - force it out!
 	(void) hfs_update(tdvp, 0);
 
 	/* Update the vnode's name now that the rename has completed. */
@@ -5686,7 +5720,7 @@ hfs_vnop_readdir(ap)
 		/* disk corruption */
 		cp->c_entries++;
 		/* Mark the cnode as dirty. */
-		cp->c_flag |= (C_MODIFIED | C_FORCEUPDATE);
+		cp->c_flag |= C_MODIFIED;
 		printf("hfs_vnop_readdir: repairing valence to non-zero! \n");
 		bump_valence++;
 	}
@@ -5911,48 +5945,50 @@ hfs_vnop_pathconf(ap)
 /*
  * Prepares a fork for cat_update by making sure ff_size and ff_blocks
  * are no bigger than the valid data on disk thus reducing the chance
- * of exposing unitialised data in the event of a non clean unmount.
+ * of exposing uninitialised data in the event of a non clean unmount.
  * fork_buf is where to put the temporary copy if required.  (It can
  * be inside pfork.)
  */
-static const struct cat_fork *
-hfs_prepare_fork_for_update(const filefork_t *pfork,
-							struct cat_fork *fork_buf,
+const struct cat_fork *
+hfs_prepare_fork_for_update(filefork_t *ff,
+							const struct cat_fork *cf,
+							struct cat_fork *cf_buf,
 							uint32_t block_size)
 {
-	if (!pfork)
+	if (!ff)
 		return NULL;
 
-	off_t max_size = pfork->ff_size;
+	if (!cf)
+		cf = &ff->ff_data;
+	if (!cf_buf)
+		cf_buf = &ff->ff_data;
+
+	off_t max_size = ff->ff_size;
 
 	// Check first invalid range
-	if (!TAILQ_EMPTY(&pfork->ff_invalidranges))
-		max_size = TAILQ_FIRST(&pfork->ff_invalidranges)->rl_start;
+	if (!TAILQ_EMPTY(&ff->ff_invalidranges))
+		max_size = TAILQ_FIRST(&ff->ff_invalidranges)->rl_start;
 
-	if (!pfork->ff_unallocblocks && pfork->ff_size <= max_size)
-		return &pfork->ff_data; // Nothing to do
+	if (!ff->ff_unallocblocks && ff->ff_size <= max_size)
+		return cf; // Nothing to do
 
-	if (pfork->ff_blocks < pfork->ff_unallocblocks) {
+	if (ff->ff_blocks < ff->ff_unallocblocks) {
 		panic("hfs: ff_blocks %d is less than unalloc blocks %d\n",
-			  pfork->ff_blocks, pfork->ff_unallocblocks);
+			  ff->ff_blocks, ff->ff_unallocblocks);
 	}
 
-	struct cat_fork *out = fork_buf;
+	struct cat_fork *out = cf_buf;
 
-	if (out != &pfork->ff_data)
-		bcopy(&pfork->ff_data, out, sizeof(*out));
+	if (out != cf)
+		bcopy(cf, out, sizeof(*cf));
 
 	// Adjust cf_blocks for cf_vblocks
 	out->cf_blocks -= out->cf_vblocks;
 
 	/*
-	 * We have to trim the size with the updated cf_blocks.  You might
-	 * think that this is unnecessary because the invalid ranges
-	 * should catch this, but we update invalid ranges *before* we do
-	 * I/O whereas cf_vblocks is updated later in hfs_vnop_blockmap.
-	 * There might still be a chance that we will be exposing
-	 * unitialised data because the metadata takes a different path to
-	 * data but the window should be tiny (if it exists at all).
+	 * Here we trim the size with the updated cf_blocks.  This is
+	 * probably unnecessary now because the invalid ranges should
+	 * catch this (but that wasn't always the case).
 	 */
 	off_t alloc_bytes = hfs_blk_to_bytes(out->cf_blocks, block_size);
 	if (out->cf_size > alloc_bytes)
@@ -5968,13 +6004,11 @@ hfs_prepare_fork_for_update(const filefork_t *pfork,
 /*
  * Update a cnode's on-disk metadata.
  *
- * If waitfor is set, then wait for the disk write of
- * the node to complete.
- *
- * The cnode must be locked exclusive
+ * The cnode must be locked exclusive.  See declaration for possible
+ * options.
  */
 int
-hfs_update(struct vnode *vp, __unused int waitfor)
+hfs_update(struct vnode *vp, int options)
 {
 	struct cnode *cp = VTOC(vp);
 	struct proc *p;
@@ -5987,6 +6021,9 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 	int error;
 	uint32_t tstate = 0;
 
+	if (ISSET(cp->c_flag, C_NOEXISTS))
+		return 0;
+
 	p = current_proc();
 	hfsmp = VTOHFS(vp);
 
@@ -5995,14 +6032,14 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 		return (0);
 	}
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) || (cp->c_mode == 0)) {
-		cp->c_flag &= ~C_MODIFIED;
+		CLR(cp->c_flag, C_MODIFIED | C_MINOR_MOD | C_NEEDS_DATEADDED);
 		cp->c_touch_acctime = 0;
 		cp->c_touch_chgtime = 0;
 		cp->c_touch_modtime = 0;
 		return (0);
 	}
 	if (kdebug_enable) {
-		if (cp->c_touch_acctime)
+		if (cp->c_touch_acctime || cp->c_atime != cp->c_attr.ca_atimeondisk)
 			tstate |= DBG_HFS_UPDATE_ACCTIME;
 		if (cp->c_touch_modtime)
 			tstate |= DBG_HFS_UPDATE_MODTIME;
@@ -6011,58 +6048,65 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 
 		if (cp->c_flag & C_MODIFIED)
 			tstate |= DBG_HFS_UPDATE_MODIFIED;
-		if (cp->c_flag & C_FORCEUPDATE)
+		if (ISSET(options, HFS_UPDATE_FORCE))
 			tstate |= DBG_HFS_UPDATE_FORCE;
 		if (cp->c_flag & C_NEEDS_DATEADDED)
 			tstate |= DBG_HFS_UPDATE_DATEADDED;
+		if (cp->c_flag & C_MINOR_MOD)
+			tstate |= DBG_HFS_UPDATE_MINOR;
 	}
 	hfs_touchtimes(hfsmp, cp);
 
-	/* Nothing to update. */
-	if ((cp->c_flag & (C_MODIFIED | C_FORCEUPDATE)) == 0) {
-		return (0);
+	if (!ISSET(cp->c_flag, C_MODIFIED | C_MINOR_MOD)
+		&& !hfs_should_save_atime(cp)) {
+		// Nothing to update
+		return 0;
 	}
-	
+
+	KDBG(HFSDBG_UPDATE | DBG_FUNC_START, VM_KERNEL_ADDRPERM(vp), tstate);
+
+	bool check_txn = false;
+
+	if (!ISSET(options, HFS_UPDATE_FORCE) && !ISSET(cp->c_flag, C_MODIFIED)) {
+		/*
+		 * This must be a minor modification.  If the current
+		 * transaction already has an update for this node, then we
+		 * bundle in the modification.
+		 */
+		if (hfsmp->jnl
+			&& journal_current_txn(hfsmp->jnl) == cp->c_update_txn) {
+			check_txn = true;
+		} else {
+			tstate |= DBG_HFS_UPDATE_SKIPPED;
+			error = 0;
+			goto exit;
+		}
+	}
+
+	if ((error = hfs_start_transaction(hfsmp)) != 0)
+		goto exit;
+
+	if (check_txn
+		&& journal_current_txn(hfsmp->jnl) != cp->c_update_txn) {
+		hfs_end_transaction(hfsmp);
+		tstate |= DBG_HFS_UPDATE_SKIPPED;
+		error = 0;
+		goto exit;
+	}
+
 	if (cp->c_datafork)
 		dataforkp = &cp->c_datafork->ff_data;
 	if (cp->c_rsrcfork)
 		rsrcforkp = &cp->c_rsrcfork->ff_data;
 
-	/*
-	 * For delayed allocations updates are
-	 * postponed until an fsync or the file
-	 * gets written to disk.
-	 *
-	 * Deleted files can defer meta data updates until inactive.
-	 *
-	 * If we're ever called with the C_FORCEUPDATE flag though
-	 * we have to do the update.
-	 */
-	if (ISSET(cp->c_flag, C_FORCEUPDATE) == 0 &&
-	    (ISSET(cp->c_flag, C_DELETED) || 
-	    (dataforkp && cp->c_datafork->ff_unallocblocks) ||
-	    (rsrcforkp && cp->c_rsrcfork->ff_unallocblocks))) {
-	//	cp->c_flag &= ~(C_ACCESS | C_CHANGE | C_UPDATE);
-		cp->c_flag |= C_MODIFIED;
-
-		return (0);
-	}
-
-	KERNEL_DEBUG_CONSTANT(HFSDBG_UPDATE | DBG_FUNC_START, VM_KERNEL_ADDRPERM(vp), tstate, 0, 0, 0);
-
-	if ((error = hfs_start_transaction(hfsmp)) != 0) {
-	    KERNEL_DEBUG_CONSTANT(HFSDBG_UPDATE | DBG_FUNC_END, VM_KERNEL_ADDRPERM(vp), tstate, error, -1, 0);
-	    return error;
-	}
-
-    /* 
+    /*
      * Modify the values passed to cat_update based on whether or not
      * the file has invalid ranges or borrowed blocks.
      */
-    dataforkp = hfs_prepare_fork_for_update(cp->c_datafork, &datafork, hfsmp->blockSize);
-	rsrcforkp = hfs_prepare_fork_for_update(cp->c_rsrcfork, &rsrcfork, hfsmp->blockSize);
+    dataforkp = hfs_prepare_fork_for_update(cp->c_datafork, NULL, &datafork, hfsmp->blockSize);
+	rsrcforkp = hfs_prepare_fork_for_update(cp->c_rsrcfork, NULL, &rsrcfork, hfsmp->blockSize);
 
-	if (kdebug_enable) {
+	if (__improbable(kdebug_enable & KDEBUG_TRACE)) {
 		long dbg_parms[NUMPARMS];
 		int  dbg_namelen;
 
@@ -6080,19 +6124,22 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 	 */
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
 
-	/* XXX - waitfor is not enforced */
 	error = cat_update(hfsmp, &cp->c_desc, &cp->c_attr, dataforkp, rsrcforkp);
+
+	if (hfsmp->jnl)
+		cp->c_update_txn = journal_current_txn(hfsmp->jnl);
 
 	hfs_systemfile_unlock(hfsmp, lockflags);
 
-	/* After the updates are finished, clear the flags */
-	cp->c_flag &= ~(C_MODIFIED | C_FORCEUPDATE);
+	CLR(cp->c_flag, C_MODIFIED | C_MINOR_MOD);
 
 	hfs_end_transaction(hfsmp);
 
-	KERNEL_DEBUG_CONSTANT(HFSDBG_UPDATE | DBG_FUNC_END, VM_KERNEL_ADDRPERM(vp), tstate, error, 0, 0);
+exit:
 
-	return (error);
+	KDBG(HFSDBG_UPDATE | DBG_FUNC_END, VM_KERNEL_ADDRPERM(vp), tstate, error);
+
+	return error;
 }
 
 /*
@@ -6337,9 +6384,10 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		dcp->c_dirchangecnt++;
 		hfs_incr_gencount(dcp);
 
-		dcp->c_ctime = tv.tv_sec;
-		dcp->c_mtime = tv.tv_sec;
-		(void) cat_update(hfsmp, &dcp->c_desc, &dcp->c_attr, NULL, NULL);
+		dcp->c_touch_chgtime = dcp->c_touch_modtime = true;
+		dcp->c_flag |= C_MODIFIED;
+
+		hfs_update(dcp->c_vp, 0);
 
 #if CONFIG_PROTECT
 		/*
@@ -6378,7 +6426,9 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	hfs_systemfile_unlock(hfsmp, lockflags);
 	if (error)
 		goto exit;
-	
+
+	uint32_t txn = hfsmp->jnl ? journal_current_txn(hfsmp->jnl) : 0;
+
 	/* Invalidate negative cache entries in the directory */
 	if (dcp->c_flag & C_NEG_ENTRIES) {
 		cache_purge_negatives(dvp);
@@ -6412,7 +6462,7 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	 */
 
 	if ((attr.ca_fileid != 0) && (protected_mount) && (protectable_target))  {
-		cp_entry_destroy (entry);
+		cp_entry_destroy (hfsmp, entry);
 		entry = NULL;
 	}
 #endif
@@ -6444,20 +6494,21 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 
 	cp = VTOC(tvp);
 
+	cp->c_update_txn = txn;
+
 	struct  doc_tombstone *ut;
 	ut = get_uthread_doc_tombstone();
 	if (   ut->t_lastop_document_id != 0 
 	    && ut->t_lastop_parent == dvp
 	    && ut->t_lastop_parent_vid == vnode_vid(dvp)
-	    && strcmp((char *)ut->t_lastop_filename, (char *)cp->c_desc.cd_nameptr) == 0) {
+	    && strcmp((char *)ut->t_lastop_filename, (const char *)cp->c_desc.cd_nameptr) == 0) {
 		struct FndrExtendedDirInfo *fip = (struct FndrExtendedDirInfo *)((char *)&cp->c_attr.ca_finderinfo + 16);
 
 		//printf("CREATE: preserving doc-id %lld on %s\n", ut->t_lastop_document_id, ut->t_lastop_filename);
 		fip->document_id = (uint32_t)(ut->t_lastop_document_id & 0xffffffff);
 
 		cp->c_bsdflags |= UF_TRACKED;
-		// mark the cnode dirty
-		cp->c_flag |= C_MODIFIED | C_FORCEUPDATE;
+		cp->c_flag |= C_MODIFIED;
 
 		if ((error = hfs_start_transaction(hfsmp)) == 0) {
 			lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
@@ -6484,6 +6535,36 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		}
 	}
 
+	if ((hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) && (vnode_isfastdevicecandidate(dvp) && !vnode_isautocandidate(dvp))) {
+
+		//printf("hfs: flagging %s (fileid: %d) as VFASTDEVCANDIDATE (dvp name: %s)\n",
+		//       cnp->cn_nameptr ? cnp->cn_nameptr : "<NONAME>",
+		//       cp->c_fileid,
+		//       dvp->v_name ? dvp->v_name : "no-dir-name");
+
+		//
+		// On new files we set the FastDevCandidate flag so that
+		// any new blocks allocated to it will be pinned.
+		//
+		cp->c_attr.ca_recflags |= kHFSFastDevCandidateMask;
+		vnode_setfastdevicecandidate(tvp);
+
+		//
+		// properly inherit auto-cached flags
+		//
+		if (vnode_isautocandidate(dvp)) {
+			cp->c_attr.ca_recflags |= kHFSAutoCandidateMask;
+			vnode_setautocandidate(tvp);
+		}
+
+
+		//
+		// We also want to add it to the hotfile adoption list so
+		// that it will eventually land in the hotfile btree
+		//
+		(void) hfs_addhotfile(tvp);
+	}
+	
 	*vpp = tvp;
 
 #if CONFIG_PROTECT
@@ -6507,7 +6588,7 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 			 * Upon success, the keys were generated and written out. 
 			 * Update the cp pointer in the cnode.
 			 */
-			cp_replace_entry (cp, keyed_entry);
+			cp_replace_entry (hfsmp, cp, keyed_entry);
 			if (nocache) {
 				cache_enter (dvp, tvp, cnp);
 			}
@@ -6578,7 +6659,7 @@ exit:
 	 * out the pointer if it was called already.
 	 */
 	if (entry) {
-		cp_entry_destroy (entry);
+		cp_entry_destroy (hfsmp, entry);
 		entry = NULL;
 	}	
 #endif
@@ -6608,6 +6689,11 @@ exit:
  * hfs_vgetrsrc acquires a resource fork vnode corresponding to the
  * cnode that is found in 'vp'.  The cnode should be locked upon entry
  * and will be returned locked, but it may be dropped temporarily.
+ *
+ * If the resource fork vnode does not exist, HFS will attempt to acquire an
+ * empty (uninitialized) vnode from VFS so as to avoid deadlocks with
+ * jetsam. If we let the normal getnewvnode code produce the vnode for us
+ * we would be doing so while holding the cnode lock of our cnode.
  * 
  * On success, *rvpp wlll hold the resource fork vnode with an
  * iocount.  *Don't* forget the vnode_put.
@@ -6615,7 +6701,8 @@ exit:
 int
 hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp)
 {
-	struct vnode *rvp;
+	struct vnode *rvp = NULLVP;
+	struct vnode *empty_rvp = NULLVP;
 	struct vnode *dvp = NULLVP;
 	struct cnode *cp = VTOC(vp);
 	int error;
@@ -6662,22 +6749,49 @@ restart:
 		int lockflags;
 		int newvnode_flags = 0;
 
-		/*
-		 * Make sure cnode lock is exclusive, if not upgrade it.
+		/* 
+		 * In this case, we don't currently see a resource fork vnode attached
+		 * to this cnode.  In most cases, we were called from a read-only VNOP
+		 * like getattr, so it should be safe to drop the cnode lock and then 
+		 * re-acquire it.  
 		 *
-		 * We assume that we were called from a read-only VNOP (getattr)
-		 * and that its safe to have the cnode lock dropped and reacquired.
+		 * Here, we drop the lock so that we can acquire an empty/husk
+		 * vnode so that we don't deadlock against jetsam.  
+		 *
+		 * It does not currently appear possible to hold the truncate lock via
+		 * FS re-entrancy when we get to this point. (8/2014)
 		 */
-		if (cp->c_lockowner != current_thread()) {
-			/*
-			 * If the upgrade fails we lose the lock and
-			 * have to take the exclusive lock on our own.
-			 */
-			if (lck_rw_lock_shared_to_exclusive(&cp->c_rwlock) == FALSE)
-				lck_rw_lock_exclusive(&cp->c_rwlock);
-			cp->c_lockowner = current_thread();
+		hfs_unlock (cp);
+
+		error = vnode_create_empty (&empty_rvp); 
+
+		hfs_lock_always (cp, HFS_EXCLUSIVE_LOCK);
+
+		if (error) {
+			/* If acquiring the 'empty' vnode failed, then nothing to clean up */
+			return error;
 		}
 
+		/* 
+		 * We could have raced with another thread here while we dropped our cnode
+		 * lock.  See if the cnode now has a resource fork vnode and restart if appropriate.
+		 *
+		 * Note: We just released the cnode lock, so there is a possibility that the
+		 * cnode that we just acquired has been deleted or even removed from disk
+		 * completely, though this is unlikely. If the file is open-unlinked, the 
+		 * check below will resolve it for us.  If it has been completely 
+		 * removed (even from the catalog!), then when we examine the catalog 
+		 * directly, below, while holding the catalog lock, we will not find the
+		 * item and we can fail out properly.
+		 */
+		if (cp->c_rsrc_vp) {
+			/* Drop the empty vnode before restarting */
+			vnode_put (empty_rvp);
+			empty_rvp = NULL;
+			rvp = NULL;
+			goto restart;
+		}
+	
 		/*
 		 * hfs_vgetsrc may be invoked for a cnode that has already been marked
 		 * C_DELETED.  This is because we need to continue to provide rsrc
@@ -6760,6 +6874,8 @@ restart:
 
 		hfs_systemfile_unlock(hfsmp, lockflags);
 		if (error) {
+			/* Drop our 'empty' vnode ! */
+			vnode_put (empty_rvp);
 			return (error);
 		}
 		/*
@@ -6781,20 +6897,33 @@ restart:
 			// Should never happen because cn.cn_nameptr won't ever be long...
 			if (cn.cn_namelen >= MAXPATHLEN) {
 				FREE_ZONE(cn.cn_pnbuf, cn.cn_pnlen, M_NAMEI);
+				/* Drop our 'empty' vnode ! */
+				vnode_put (empty_rvp);
 				return ENAMETOOLONG;
+				
 			}
 		}
 		dvp = vnode_getparent(vp);
+		
+		/* 
+		 * We are about to call hfs_getnewvnode and pass in the vnode that we acquired
+		 * earlier when we were not holding any locks. The semantics of GNV_USE_VP require that
+		 * either hfs_getnewvnode consume the vnode and vend it back to us, properly initialized,
+		 * or it will consume/dispose of it properly if it errors out.
+		 */ 
+		rvp = empty_rvp;
+		
 		error = hfs_getnewvnode(hfsmp, dvp, cn.cn_pnbuf ? &cn : NULL,
-		                        descptr, GNV_WANTRSRC | GNV_SKIPLOCK, &cp->c_attr,
-		                        &rsrcfork, &rvp, &newvnode_flags);
+		                        descptr, (GNV_WANTRSRC | GNV_SKIPLOCK | GNV_USE_VP), 
+								&cp->c_attr, &rsrcfork, &rvp, &newvnode_flags);
+			
 		if (dvp)
 			vnode_put(dvp);
 		if (cn.cn_pnbuf)
 			FREE_ZONE(cn.cn_pnbuf, cn.cn_pnlen, M_NAMEI);
 		if (error)
 			return (error);
-	}
+	}  /* End 'else' for rsrc fork not existing */
 
 	*rvpp = rvp;
 	return (0);
@@ -6941,17 +7070,17 @@ hfsfifo_close(ap)
 static u_int32_t 
 hfs_get_document_id_internal(const uint8_t *finderinfo, mode_t mode)
 {
-	u_int8_t *finfo = NULL;
+	const uint8_t *finfo = NULL;
 	u_int32_t doc_id = 0;
 	
 	/* overlay the FinderInfo to the correct pointer, and advance */
-	finfo = ((uint8_t *)finderinfo) + 16;
+	finfo = finderinfo + 16;
 
 	if (S_ISDIR(mode) || S_ISREG(mode)) {
-		struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+		const struct FndrExtendedFileInfo *extinfo = (const struct FndrExtendedFileInfo *)finfo;
 		doc_id = extinfo->document_id;
 	} else if (S_ISDIR(mode)) {
-		struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((u_int8_t*)finderinfo + 16);
+		const struct FndrExtendedDirInfo *extinfo = (const struct FndrExtendedDirInfo *)finfo;
 		doc_id = extinfo->document_id;
 	}	
 

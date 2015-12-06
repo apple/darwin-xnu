@@ -82,6 +82,10 @@
 #endif
 #include <mach/boolean.h>
 
+#ifdef XNU_KERNEL_PRIVATE
+#include <mach/coalition.h>		/* COALITION_NUM_TYPES */
+#endif
+
 #if defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL) 
 
 struct session;
@@ -178,10 +182,6 @@ struct extern_proc {
 #define	P_AFFINITY	0x00010000	/* xxx */
 #define	P_TRANSLATED	0x00020000	/* xxx */
 #define	P_CLASSIC	P_TRANSLATED	/* xxx */
-/*
-#define	P_FSTRACE	0x10000	/ * tracing via file system (elsewhere?) * /
-#define	P_SSTEP		0x20000	/ * process needs single-step fixup ??? * /
-*/
 
 #define	P_DELAYIDLESLEEP 0x00040000	/* Process is marked to delay idle sleep on disk IO */
 #define	P_CHECKOPENEVT 	0x00080000	/* check if a vnode has the OPENEVT flag set on open */
@@ -193,7 +193,7 @@ struct extern_proc {
 
 #define	P_THCWD		0x01000000	/* process has thread cwd  */
 #define	P_RESV9		0x02000000	/* (P_VFORK)process has vfork children */
-#define	P_RESV10 	0x04000000	/* used to be P_NOATTACH */
+#define	P_RESV10	0x04000000	/* reserved flag */
 #define	P_RESV11	0x08000000	/* (P_INVFORK) proc in vfork */
 
 #define	P_NOSHLIB	0x10000000	/* no shared libs are in use for proc */
@@ -269,6 +269,8 @@ extern int proc_ppid(proc_t);
 extern int proc_noremotehang(proc_t);
 /* returns 1 if the process is marked for force quota */
 extern int proc_forcequota(proc_t);
+/* returns 1 if the process is chrooted */
+extern int proc_chrooted(proc_t);
 
 /* this routine returns 1 if the process is running with 64bit address space, else 0 */
 extern int proc_is64bit(proc_t);
@@ -329,6 +331,8 @@ extern int proc_pidbackgrounded(pid_t pid, uint32_t* state);
  */
 extern uint64_t proc_uniqueid(proc_t);
 
+extern void proc_set_responsible_pid(proc_t target_proc, pid_t responsible_pid);
+
 #endif /* KERNEL_PRIVATE */
 
 #ifdef XNU_KERNEL_PRIVATE
@@ -345,7 +349,7 @@ extern int proc_pidoriginatoruuid(uuid_t uuid_buf, uint32_t buffersize);
 extern uint64_t proc_was_throttled(proc_t);
 extern uint64_t proc_did_throttle(proc_t);
 
-extern uint64_t proc_coalitionid(proc_t);
+extern void proc_coalitionids(proc_t, uint64_t [COALITION_NUM_TYPES]);
 
 #endif /* XNU_KERNEL_PRIVATE*/
 

@@ -81,7 +81,7 @@ public:
         @function free
         @abstract Cleans up the database and deallocates memory allocated at initialization.  This is never called in normal operation of the system.
     */
-    void free( void );
+    void free( void ) APPLE_KEXT_OVERRIDE;
     
     /*!
         @function findDrivers
@@ -215,7 +215,7 @@ public:
         @param s The serializer object.
         @result Returns false if unable to serialize database, most likely due to memory shortage.
      */
-    virtual bool serialize(OSSerialize * s) const;
+    virtual bool serialize(OSSerialize * s) const APPLE_KEXT_OVERRIDE;
 
     bool serializeData(IOOptionBits kind, OSSerialize * s) const;
 

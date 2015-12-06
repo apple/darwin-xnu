@@ -132,8 +132,11 @@ mac_sysvshm_check_shmat(struct ucred *cred, struct shmid_kernel *shmsegptr,
 {
 	int error;
 
-	if (!mac_sysvshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvshm_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvshm_check_shmat, cred, shmsegptr, shmsegptr->label,
 	    shmflg);
@@ -147,8 +150,11 @@ mac_sysvshm_check_shmctl(struct ucred *cred, struct shmid_kernel *shmsegptr,
 {
 	int error;
 
-	if (!mac_sysvshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvshm_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvshm_check_shmctl, cred, shmsegptr, shmsegptr->label,
 	    cmd);
@@ -161,8 +167,11 @@ mac_sysvshm_check_shmdt(struct ucred *cred, struct shmid_kernel *shmsegptr)
 {
 	int error;
 
-	if (!mac_sysvshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvshm_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvshm_check_shmdt, cred, shmsegptr, shmsegptr->label);
 
@@ -175,8 +184,11 @@ mac_sysvshm_check_shmget(struct ucred *cred, struct shmid_kernel *shmsegptr,
 {
 	int error;
 
-	if (!mac_sysvshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvshm_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvshm_check_shmget, cred, shmsegptr, shmsegptr->label,
 	    shmflg);

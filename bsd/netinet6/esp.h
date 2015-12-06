@@ -117,6 +117,10 @@ struct esp_algorithm {
 		struct secasvar *, u_int8_t *, u_int8_t *);
 	int (*blockencrypt)(const struct esp_algorithm *,
 		struct secasvar *, u_int8_t *, u_int8_t *);
+	/* For Authenticated Encryption Methods */
+	size_t icvlen;
+	int (*finalizedecrypt)(struct secasvar *, u_int8_t *, uint);
+	int (*finalizeencrypt)(struct secasvar *, u_int8_t *, uint);
 };
 
 extern const struct esp_algorithm *esp_algorithm_lookup(int);

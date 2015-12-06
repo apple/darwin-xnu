@@ -188,10 +188,16 @@ int sigprop[NSIG + 1] = {
 
 #define	sigcantmask	(sigmask(SIGKILL) | sigmask(SIGSTOP))
 
+#define SIGRESTRICTMASK (sigmask(SIGILL) | sigmask(SIGTRAP) | sigmask(SIGABRT) | \
+                         sigmask(SIGFPE) | sigmask(SIGBUS)  | sigmask(SIGSEGV) | \
+                         sigmask(SIGSYS))
+
+extern unsigned sigrestrict_arg;
+
 /*
  * Machine-independent functions:
  */
-int	coredump(struct proc *p, uint32_t reserve_mb, int ignore_ulimit);
+
 void	execsigs(struct proc *p, thread_t thread);
 void	gsignal(int pgid, int sig);
 int	issignal_locked(struct proc *p);
@@ -203,6 +209,7 @@ void	siginit(struct proc *p);
 void	trapsignal(struct proc *p, int sig, unsigned code);
 void	pt_setrunnable(struct proc *p);
 int	hassigprop(int sig, int prop);
+int setsigvec(proc_t, thread_t, int signum, struct __kern_sigaction *, boolean_t in_sigstart);
 
 /*
  * Machine-dependent functions:
@@ -219,9 +226,6 @@ void	threadsignal(thread_t sig_actthread, int signum,
 int	thread_issignal(proc_t p, thread_t th, sigset_t mask);
 void	psignal_vfork(struct proc *p, task_t new_task, thread_t thread,
 		int signum);
-void	psignal_vtalarm(struct proc *);
-void	psignal_xcpu(struct proc *);
-void	psignal_sigprof(struct proc *);
 void	signal_setast(thread_t sig_actthread);
 void	pgsigio(pid_t pgid, int signalnum);
 
@@ -229,5 +233,18 @@ void sig_lock_to_exit(struct proc *p);
 int sig_try_locked(struct proc *p);
 
 #endif	/* BSD_KERNEL_PRIVATE */
+
+
+#ifdef XNU_KERNEL_PRIVATE
+
+/* Functions exported to Mach as well */
+
+#define COREDUMP_IGNORE_ULIMIT  0x0001 /* Ignore the process's core file ulimit. */
+#define COREDUMP_FULLFSYNC      0x0002 /* Run F_FULLFSYNC on the core file's vnode */
+
+int	coredump(struct proc *p, uint32_t reserve_mb, int coredump_flags);
+
+#endif  /* XNU_KERNEL_PRIVATE */
+
 
 #endif	/* !_SYS_SIGNALVAR_H_ */

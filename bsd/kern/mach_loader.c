@@ -89,6 +89,8 @@
 extern pmap_t	pmap_create(ledger_t ledger, vm_map_size_t size,
 				boolean_t is_64bit);
 
+extern kern_return_t machine_thread_neon_state_initialize(thread_t thread);
+
 /* XXX should have prototypes in a shared header file */
 extern int	get_map_nentries(vm_map_t);
 
@@ -112,6 +114,7 @@ static load_result_t load_result_null = {
 	.validentry = 0,
 	.using_lcmain = 0,
 	.csflags = 0,
+	.has_pagezero = 0,
 	.uuid = { 0 },
 	.min_vm_addr = MACH_VM_MAX_ADDRESS,
 	.max_vm_addr = MACH_VM_MIN_ADDRESS,
@@ -171,9 +174,10 @@ set_code_unprotect(
 	caddr_t				addr,
 	vm_map_t			map,
 	int64_t				slide,
-	struct vnode		*vp,
+	struct vnode			*vp,
+	off_t				macho_offset,
 	cpu_type_t			cputype,
-	cpu_subtype_t		cpusubtype);
+	cpu_subtype_t			cpusubtype);
 #endif
 
 static
@@ -286,6 +290,7 @@ note_all_image_info_section(const struct segment_command_64 *scp,
 	}
 }
 
+
 load_return_t
 load_machfile(
 	struct image_params	*imgp,
@@ -344,15 +349,19 @@ load_machfile(
 		}
 		pmap = pmap_create(get_task_ledger(ledger_task),
 				   (vm_map_size_t) 0,
-				   (imgp->ip_flags & IMGPF_IS_64BIT));
+				   ((imgp->ip_flags & IMGPF_IS_64BIT) != 0));
 		pal_switch_pmap(thread, pmap, imgp->ip_flags & IMGPF_IS_64BIT);
 		map = vm_map_create(pmap,
 				0,
-				vm_compute_max_offset((imgp->ip_flags & IMGPF_IS_64BIT)),
+				vm_compute_max_offset(((imgp->ip_flags & IMGPF_IS_64BIT) == IMGPF_IS_64BIT)),
 				TRUE);
 	} else
 		map = new_map;
 
+#if   (__ARM_ARCH_7K__ >= 2) && defined(PLATFORM_WatchOS)
+	/* enforce 16KB alignment for watch targets with new ABI */
+	vm_map_set_page_shift(map, SIXTEENK_PAGE_SHIFT);
+#endif /* __arm64__ */
 
 #ifndef	CONFIG_ENFORCE_SIGNED_CODE
 	/* This turns off faulting for executable pages, which allows
@@ -412,12 +421,14 @@ load_machfile(
 	/*
 	 * Check to see if the page zero is enforced by the map->min_offset.
 	 */ 
-	if (enforce_hard_pagezero && (vm_map_has_hard_pagezero(map, 0x1000) == FALSE)) {
-		if (create_map) {
-			vm_map_deallocate(map);	/* will lose pmap reference too */
+	if (enforce_hard_pagezero &&
+	    (vm_map_has_hard_pagezero(map, 0x1000) == FALSE)) {
+		{
+			if (create_map) {
+				vm_map_deallocate(map);	/* will lose pmap reference too */
+			}
+			return (LOAD_BADMACHO);
 		}
-		printf("Cannot enforce a hard page-zero for %s\n", imgp->ip_strings);
-		return (LOAD_BADMACHO);
 	}
 
 	/*
@@ -464,12 +475,22 @@ load_machfile(
 			workqueue_mark_exiting(p);
 			task_complete_halt(task);
 			workqueue_exit(p);
+			kqueue_dealloc(p->p_wqkqueue);
+			p->p_wqkqueue = NULL;
 		}
 		old_map = swap_task_map(old_task, thread, map, !spawn);
 		vm_map_deallocate(old_map);
 	}
 	return(LOAD_SUCCESS);
 }
+
+int macho_printf = 0;
+#define MACHO_PRINTF(args)				\
+	do {						\
+		if (macho_printf) {			\
+			printf args;			\
+		}					\
+	} while (0)
 
 /*
  * The file size of a mach-o file is limited to 32 bits; this is because
@@ -511,7 +532,7 @@ parse_machfile(
 	int			pass;
 	proc_t			p = current_proc();		/* XXXX */
 	int			error;
-	int resid=0;
+	int 			resid = 0;
 	size_t			mach_header_sz = sizeof(struct mach_header);
 	boolean_t		abi64;
 	boolean_t		got_code_signatures = FALSE;
@@ -613,12 +634,20 @@ parse_machfile(
 	 /*
 	 *  Scan through the commands, processing each one as necessary.
 	 *  We parse in three passes through the headers:
+	 *  0: determine if TEXT and DATA boundary can be page-aligned
 	 *  1: thread state, uuid, code signature
 	 *  2: segments
 	 *  3: dyld, encryption, check entry point
 	 */
 	
-	for (pass = 1; pass <= 3; pass++) {
+	for (pass = 0; pass <= 3; pass++) {
+
+		if (pass == 0) {
+			/* see if we need to adjust the slide to re-align... */
+			/* no re-alignment needed on X86_64 or ARM32 kernel */
+			continue;
+		} else if (pass == 1) {
+		}
 
 		/*
 		 * Check that the entry point is contained in an executable segments
@@ -667,6 +696,10 @@ parse_machfile(
 			 */
 			switch(lcp->cmd) {
 			case LC_SEGMENT:
+				if (pass == 0) {
+					break;
+				}
+
 				if (pass != 2)
 					break;
 
@@ -819,7 +852,7 @@ parse_machfile(
 					break;
 				ret = set_code_unprotect(
 					(struct encryption_info_command *) lcp,
-					addr, map, slide, vp,
+					addr, map, slide, vp, file_offset,
 					header->cputype, header->cpusubtype);
 				if (ret != LOAD_SUCCESS) {
 					printf("proc %d: set_code_unprotect() error %d "
@@ -836,7 +869,7 @@ parse_machfile(
 						proc_lock(p);
 						p->p_lflag |= P_LTERM_DECRYPTFAIL;
 						proc_unlock(p);
-					}
+					 }
 					 psignal(p, SIGKILL);
 				}
 				break;
@@ -858,34 +891,34 @@ parse_machfile(
 			if (cs_enforcement(NULL)) {
 				ret = LOAD_FAILURE;
 			} else {
-				/*
-				 * No embedded signatures: look for detached by taskgated,
-				 * this is only done on OSX, on embedded platforms we expect everything
-				 * to be have embedded signatures.
-				 */
+                               /*
+                                * No embedded signatures: look for detached by taskgated,
+                                * this is only done on OSX, on embedded platforms we expect everything
+                                * to be have embedded signatures.
+                                */
 				struct cs_blob *blob;
 
 				blob = ubc_cs_blob_get(vp, -1, file_offset);
 				if (blob != NULL) {
-				    unsigned int cs_flag_data = blob->csb_flags;
-				    if(0 != ubc_cs_generation_check(vp)) {
-				    	if (0 != ubc_cs_blob_revalidate(vp, blob, 0)) {
-						/* clear out the flag data if revalidation fails */
-						cs_flag_data = 0;
-						result->csflags &= ~CS_VALID;
+					unsigned int cs_flag_data = blob->csb_flags;
+					if(0 != ubc_cs_generation_check(vp)) {
+						if (0 != ubc_cs_blob_revalidate(vp, blob, 0)) {
+							/* clear out the flag data if revalidation fails */
+							cs_flag_data = 0;
+							result->csflags &= ~CS_VALID;
+						}
 					}
-				    }
-				    /* get flags to be applied to the process */
-				    result->csflags |= cs_flag_data;
+					/* get flags to be applied to the process */
+					result->csflags |= cs_flag_data;
 				}
 			}
 		}
 
 		/* Make sure if we need dyld, we got it */
-		if ((ret == LOAD_SUCCESS) && result->needs_dynlinker && !dlp) {
+		if (result->needs_dynlinker && !dlp) {
 			ret = LOAD_FAILURE;
 		}
-		
+
 		if ((ret == LOAD_SUCCESS) && (dlp != 0)) {
 			/*
 			 * load the dylinker, and slide it by the independent DYLD ASLR
@@ -910,7 +943,7 @@ parse_machfile(
 
 #if CONFIG_CODE_DECRYPTION
 
-#define	APPLE_UNPROTECTED_HEADER_SIZE	(3 * PAGE_SIZE_64)
+#define	APPLE_UNPROTECTED_HEADER_SIZE	(3 * 4096)
 
 static load_return_t
 unprotect_dsmos_segment(
@@ -953,9 +986,20 @@ unprotect_dsmos_segment(
 		crypt_info.crypt_end = NULL;
 #pragma unused(vp, macho_offset)
 		crypt_info.crypt_ops = (void *)0x2e69cf40;
+		vm_map_offset_t crypto_backing_offset;
+		crypto_backing_offset = -1; /* i.e. use map entry's offset */
+#if DEVELOPMENT || DEBUG
+		struct proc *p;
+		p = current_proc();
+		printf("APPLE_PROTECT: %d[%s] map %p [0x%llx:0x%llx] %s(%s)\n",
+		       p->p_pid, p->p_comm, map,
+		       (uint64_t) map_addr, (uint64_t) (map_addr + map_size),
+		       __FUNCTION__, vp->v_name);
+#endif /* DEVELOPMENT || DEBUG */
 		kr = vm_map_apple_protected(map,
 					    map_addr,
 					    map_addr + map_size,
+					    crypto_backing_offset,
 					    &crypt_info);
 	}
 
@@ -979,29 +1023,166 @@ unprotect_dsmos_segment(
 }
 #endif	/* CONFIG_CODE_DECRYPTION */
 
+
+/*
+ * map_segment:
+ *	Maps a Mach-O segment, taking care of mis-alignment (wrt the system
+ *	page size) issues.
+ * 
+ *	The mapping might result in 1, 2 or 3 map entries:
+ * 	1. for the first page, which could be overlap with the previous
+ * 	   mapping,
+ * 	2. for the center (if applicable),
+ * 	3. for the last page, which could overlap with the next mapping.
+ *
+ *	For each of those map entries, we might have to interpose a
+ *	"fourk_pager" to deal with mis-alignment wrt the system page size,
+ *	either in the mapping address and/or size or the file offset and/or
+ *	size.
+ *	The "fourk_pager" itself would be mapped with proper alignment
+ *	wrt the system page size and would then be populated with the
+ *	information about the intended mapping, with a "4KB" granularity.
+ */
+static kern_return_t
+map_segment(
+	vm_map_t		map,
+	vm_map_offset_t		vm_start,
+	vm_map_offset_t		vm_end,
+	memory_object_control_t	control,
+	vm_map_offset_t		file_start,
+	vm_map_offset_t		file_end,
+	vm_prot_t		initprot,
+	vm_prot_t		maxprot)
+{
+	int		extra_vm_flags, cur_extra_vm_flags;
+	vm_map_offset_t	cur_offset, cur_start, cur_end;
+	kern_return_t	ret;
+	vm_map_offset_t	effective_page_mask;
+	
+	if (vm_end < vm_start ||
+	    file_end < file_start) {
+		return LOAD_BADMACHO;
+	}
+	if (vm_end == vm_start ||
+	    file_end == file_start) {
+		/* nothing to map... */
+		return LOAD_SUCCESS;
+	}
+
+	effective_page_mask = MAX(PAGE_MASK, vm_map_page_mask(map));
+
+	extra_vm_flags = 0;
+	if (vm_map_page_aligned(vm_start, effective_page_mask) &&
+	    vm_map_page_aligned(vm_end, effective_page_mask) &&
+	    vm_map_page_aligned(file_start, effective_page_mask) &&
+	    vm_map_page_aligned(file_end, effective_page_mask)) {
+		/* all page-aligned and map-aligned: proceed */
+	} else {
+		panic("map_segment: unexpected mis-alignment "
+		      "vm[0x%llx:0x%llx] file[0x%llx:0x%llx]\n",
+		      (uint64_t) vm_start,
+		      (uint64_t) vm_end,
+		      (uint64_t) file_start,
+		      (uint64_t) file_end);
+	}
+
+	cur_offset = 0;
+	cur_start = vm_start;
+	cur_end = vm_start;
+	if (cur_end >= vm_start + (file_end - file_start)) {
+		/* all mapped: done */
+		goto done;
+	}
+	if (vm_map_round_page(cur_end, effective_page_mask) >=
+	    vm_map_trunc_page(vm_start + (file_end - file_start),
+			      effective_page_mask)) {
+		/* no middle */
+	} else {
+		cur_start = cur_end;
+		if ((vm_start & effective_page_mask) !=
+		    (file_start & effective_page_mask)) {
+			/* one 4K pager for the middle */
+			cur_extra_vm_flags = extra_vm_flags;
+		} else {
+			/* regular mapping for the middle */
+			cur_extra_vm_flags = 0;
+		}
+		cur_end = vm_map_trunc_page(vm_start + (file_end -
+							file_start),
+					    effective_page_mask);
+		if (control != MEMORY_OBJECT_CONTROL_NULL) {
+			ret = vm_map_enter_mem_object_control(
+				map,
+				&cur_start,
+				cur_end - cur_start,
+				(mach_vm_offset_t)0,
+				VM_FLAGS_FIXED | cur_extra_vm_flags,
+				control,
+				file_start + cur_offset,
+				TRUE, /* copy */
+				initprot, maxprot,
+				VM_INHERIT_DEFAULT);
+		} else {
+			ret = vm_map_enter_mem_object(
+				map,
+				&cur_start,
+				cur_end - cur_start,
+				(mach_vm_offset_t)0,
+				VM_FLAGS_FIXED | cur_extra_vm_flags,
+				IPC_PORT_NULL,
+				0, /* offset */
+				TRUE, /* copy */
+				initprot, maxprot,
+				VM_INHERIT_DEFAULT);
+		}
+		if (ret != KERN_SUCCESS) {
+			return (LOAD_NOSPACE);
+		}
+		cur_offset += cur_end - cur_start;
+	}
+	if (cur_end >= vm_start + (file_end - file_start)) {
+		/* all mapped: done */
+		goto done;
+	}
+	cur_start = cur_end;
+done:
+	assert(cur_end >= vm_start + (file_end - file_start));
+	return LOAD_SUCCESS;
+}
+
 static
 load_return_t
 load_segment(
-	struct load_command		*lcp,
-	uint32_t			filetype,
-	void *				control,
-	off_t				pager_offset,
-	off_t				macho_size,
-	struct vnode			*vp,
-	vm_map_t			map,
-	int64_t				slide,
-	load_result_t		*result
-)
+	struct load_command	*lcp,
+	uint32_t		filetype,
+	void *			control,
+	off_t			pager_offset,
+	off_t			macho_size,
+	struct vnode		*vp,
+	vm_map_t		map,
+	int64_t			slide,
+	load_result_t		*result)
 {
 	struct segment_command_64 segment_command, *scp;
 	kern_return_t		ret;
-	vm_map_offset_t		map_addr, map_offset;
-	vm_map_size_t		map_size, seg_size, delta_size;
+	vm_map_size_t		delta_size;
 	vm_prot_t 		initprot;
 	vm_prot_t		maxprot;
 	size_t			segment_command_size, total_section_size,
 				single_section_size;
-	
+	vm_map_offset_t		file_offset, file_size;
+	vm_map_offset_t		vm_offset, vm_size;
+	vm_map_offset_t		vm_start, vm_end, vm_end_aligned;
+	vm_map_offset_t		file_start, file_end;
+	kern_return_t		kr;
+	boolean_t		verbose;
+	vm_map_size_t		effective_page_size;
+	vm_map_offset_t		effective_page_mask;
+
+	effective_page_size = MAX(PAGE_SIZE, vm_map_page_size(map));
+	effective_page_mask = MAX(PAGE_MASK, vm_map_page_mask(map));
+
+	verbose = FALSE;
 	if (LC_SEGMENT_64 == lcp->cmd) {
 		segment_command_size = sizeof(struct segment_command_64);
 		single_section_size  = sizeof(struct section_64);
@@ -1013,11 +1194,25 @@ load_segment(
 		return (LOAD_BADMACHO);
 	total_section_size = lcp->cmdsize - segment_command_size;
 
-	if (LC_SEGMENT_64 == lcp->cmd)
+	if (LC_SEGMENT_64 == lcp->cmd) {
 		scp = (struct segment_command_64 *)lcp;
-	else {
+	} else {
 		scp = &segment_command;
 		widen_segment_command((struct segment_command *)lcp, scp);
+	}
+
+	if (verbose) {
+		MACHO_PRINTF(("+++ load_segment %s "
+			      "vm[0x%llx:0x%llx] file[0x%llx:0x%llx] "
+			      "prot %d/%d flags 0x%x\n",
+			      scp->segname,
+			      (uint64_t)(slide + scp->vmaddr),
+			      (uint64_t)(slide + scp->vmaddr + scp->vmsize),
+			      pager_offset + scp->fileoff,
+			      pager_offset + scp->fileoff + scp->filesize,
+			      scp->initprot,
+			      scp->maxprot,
+			      scp->flags));
 	}
 
 	/*
@@ -1025,19 +1220,31 @@ load_segment(
 	 * by macho_size).
 	 */
 	if (scp->fileoff + scp->filesize < scp->fileoff ||
-	    scp->fileoff + scp->filesize > (uint64_t)macho_size)
+	    scp->fileoff + scp->filesize > (uint64_t)macho_size) {
 		return (LOAD_BADMACHO);
+	}
 	/*
 	 * Ensure that the number of sections specified would fit
 	 * within the load command size.
 	 */
-	if (total_section_size / single_section_size < scp->nsects)
+	if (total_section_size / single_section_size < scp->nsects) {
 		return (LOAD_BADMACHO);
+	}
 	/*
 	 * Make sure the segment is page-aligned in the file.
 	 */
-	if ((scp->fileoff & PAGE_MASK_64) != 0)
+	file_offset = pager_offset + scp->fileoff;	/* limited to 32 bits */
+	file_size = scp->filesize;
+	if ((file_offset & PAGE_MASK_64) != 0 ||
+		/* we can't mmap() it if it's not page-aligned in the file */
+	    (file_offset & vm_map_page_mask(map)) != 0) {
+		/*
+		 * The 1st test would have failed if the system's page size
+		 * was what this process believe is the page size, so let's
+		 * fail here too for the sake of consistency.
+		 */
 		return (LOAD_BADMACHO);
+	}
 
 	/*
 	 * If we have a code signature attached for this slice
@@ -1053,21 +1260,14 @@ load_segment(
 		return LOAD_BADMACHO;
 	}
 
-	/*
-	 *	Round sizes to page size.
-	 */
-	seg_size = round_page_64(scp->vmsize);
-	map_size = round_page_64(scp->filesize);
-	map_addr = trunc_page_64(scp->vmaddr); /* JVXXX note that in XNU TOT this is round instead of trunc for 64 bits */
+	vm_offset = scp->vmaddr + slide;
+	vm_size = scp->vmsize;
 
-	seg_size = vm_map_round_page(seg_size, vm_map_page_mask(map));
-	map_size = vm_map_round_page(map_size, vm_map_page_mask(map));
-
-	if (seg_size == 0)
-		return (KERN_SUCCESS);
-	if (map_addr == 0 &&
-	    map_size == 0 &&
-	    seg_size != 0 &&
+	if (vm_size == 0)
+		return (LOAD_SUCCESS);
+	if (scp->vmaddr == 0 &&
+	    file_size == 0 &&
+	    vm_size != 0 &&
 	    (scp->initprot & VM_PROT_ALL) == VM_PROT_NONE &&
 	    (scp->maxprot & VM_PROT_ALL) == VM_PROT_NONE) {
 		/*
@@ -1076,9 +1276,6 @@ load_segment(
 		 * between the end of page zero and the beginning of the first
 		 * slid segment.
 		 */
-		seg_size += slide;
-		slide = 0;
-
 		/*
 		 * This is a "page zero" segment:  it starts at address 0,
 		 * is not mapped from the binary file and is not accessible.
@@ -1086,53 +1283,89 @@ load_segment(
 		 * make it completely off limits by raising the VM map's
 		 * minimum offset.
 		 */
-		ret = vm_map_raise_min_offset(map, seg_size);
+		vm_end = vm_offset + vm_size;
+		if (vm_end < vm_offset) {
+			return (LOAD_BADMACHO);
+		}
+		if (verbose) {
+			MACHO_PRINTF(("++++++ load_segment: "
+				      "page_zero up to 0x%llx\n",
+				      (uint64_t) vm_end));
+		}
+		{
+			vm_end = vm_map_round_page(vm_end,
+						   PAGE_MASK_64);
+			vm_end_aligned = vm_end;
+		}
+		ret = vm_map_raise_min_offset(map,
+					      vm_end_aligned);
+			
 		if (ret != KERN_SUCCESS) {
 			return (LOAD_FAILURE);
 		}
 		return (LOAD_SUCCESS);
+	} else {
 	}
 
-	/* If a non-zero slide was specified by the caller, apply now */
-	map_addr += slide;
+	{
+		file_start = vm_map_trunc_page(file_offset,
+					       effective_page_mask);
+		file_end = vm_map_round_page(file_offset + file_size,
+					     effective_page_mask);
+		vm_start = vm_map_trunc_page(vm_offset,
+					     effective_page_mask);
+		vm_end = vm_map_round_page(vm_offset + vm_size,
+					   effective_page_mask);
+	}
 
-	if (map_addr < result->min_vm_addr)
-		result->min_vm_addr = map_addr;
-	if (map_addr+seg_size > result->max_vm_addr)
-		result->max_vm_addr = map_addr+seg_size;
+	if (vm_start < result->min_vm_addr)
+		result->min_vm_addr = vm_start;
+	if (vm_end > result->max_vm_addr)
+		result->max_vm_addr = vm_end;
 
 	if (map == VM_MAP_NULL)
 		return (LOAD_SUCCESS);
 
-	map_offset = pager_offset + scp->fileoff;	/* limited to 32 bits */
-
-	if (map_size > 0) {
+	if (vm_size > 0) {
 		initprot = (scp->initprot) & VM_PROT_ALL;
 		maxprot = (scp->maxprot) & VM_PROT_ALL;
 		/*
 		 *	Map a copy of the file into the address space.
 		 */
-		ret = vm_map_enter_mem_object_control(map,
-				&map_addr, map_size, (mach_vm_offset_t)0,
-			        VM_FLAGS_FIXED,	control, map_offset, TRUE,
-				initprot, maxprot,
-				VM_INHERIT_DEFAULT);
-		if (ret != KERN_SUCCESS) {
-			return (LOAD_NOSPACE);
+		if (verbose) {
+			MACHO_PRINTF(("++++++ load_segment: "
+				      "mapping at vm [0x%llx:0x%llx] of "
+				      "file [0x%llx:0x%llx]\n",
+				      (uint64_t) vm_start,
+				      (uint64_t) vm_end,
+				      (uint64_t) file_start,
+				      (uint64_t) file_end));
 		}
-	
+		ret = map_segment(map,
+				  vm_start,
+				  vm_end,
+				  control,
+				  file_start,
+				  file_end,
+				  initprot,
+				  maxprot);
+		if (ret) {
+			return LOAD_NOSPACE;
+		}
+
+#if FIXME
 		/*
 		 *	If the file didn't end on a page boundary,
 		 *	we need to zero the leftover.
 		 */
 		delta_size = map_size - scp->filesize;
-#if FIXME
 		if (delta_size > 0) {
 			mach_vm_offset_t	tmp;
 	
-			ret = mach_vm_allocate(kernel_map, &tmp, delta_size, VM_FLAGS_ANYWHERE);
-			if (ret != KERN_SUCCESS)
+			ret = mach_vm_allocate(kernel_map, &tmp, delta_size, VM_FLAGS_ANYWHERE| VM_MAKE_TAG(VM_KERN_MEMORY_BSD));
+			if (ret != KERN_SUCCESS) {
 				return(LOAD_RESOURCE);
+			}
 	
 			if (copyout(tmp, map_addr + scp->filesize,
 								delta_size)) {
@@ -1151,40 +1384,66 @@ load_segment(
 	 *	than the size from the file, we need to allocate
 	 *	zero fill memory for the rest.
 	 */
-	delta_size = seg_size - map_size;
+	if ((vm_end - vm_start) > (file_end - file_start)) {
+		delta_size = (vm_end - vm_start) - (file_end - file_start);
+	} else {
+		delta_size = 0;
+	}
 	if (delta_size > 0) {
-		mach_vm_offset_t tmp = map_addr + map_size;
+		mach_vm_offset_t tmp;
 
-		ret = mach_vm_map(map, &tmp, delta_size, 0, VM_FLAGS_FIXED,
-				  NULL, 0, FALSE,
-				  scp->initprot, scp->maxprot,
-				  VM_INHERIT_DEFAULT);
-		if (ret != KERN_SUCCESS)
+		tmp = vm_start + (file_end - file_start);
+		if (verbose) {
+			MACHO_PRINTF(("++++++ load_segment: "
+				      "delta mapping vm [0x%llx:0x%llx]\n",
+				      (uint64_t) tmp,
+				      (uint64_t) (tmp + delta_size)));
+		}
+		kr = map_segment(map,
+				 tmp,
+				 tmp + delta_size,
+				 MEMORY_OBJECT_CONTROL_NULL,
+				 0,
+				 delta_size,
+				 scp->initprot,
+				 scp->maxprot);
+		if (kr != KERN_SUCCESS) {
 			return(LOAD_NOSPACE);
+		}
 	}
 
 	if ( (scp->fileoff == 0) && (scp->filesize != 0) )
-		result->mach_header = map_addr;
+		result->mach_header = vm_offset;
 
 	if (scp->flags & SG_PROTECTED_VERSION_1) {
-		ret = unprotect_dsmos_segment(scp->fileoff,
-					scp->filesize,
-					vp,
-					pager_offset,
-					map,
-					map_addr,
-					map_size);
+		ret = unprotect_dsmos_segment(file_start,
+					      file_end - file_start,
+					      vp,
+					      pager_offset,
+					      map,
+					      vm_start,
+					      vm_end - vm_start);
+		if (ret != LOAD_SUCCESS) {
+			return ret;
+		}
 	} else {
 		ret = LOAD_SUCCESS;
 	}
-	if (LOAD_SUCCESS == ret && filetype == MH_DYLINKER &&
-	    result->all_image_info_addr == MACH_VM_MIN_ADDRESS)
+
+	if (LOAD_SUCCESS == ret &&
+	    filetype == MH_DYLINKER &&
+	    result->all_image_info_addr == MACH_VM_MIN_ADDRESS) {
 		note_all_image_info_section(scp,
-		    LC_SEGMENT_64 == lcp->cmd, single_section_size,
-		    (const char *)lcp + segment_command_size, slide, result);
+					    LC_SEGMENT_64 == lcp->cmd,
+					    single_section_size,
+					    ((const char *)lcp +
+					     segment_command_size),
+					    slide,
+					    result);
+	}
 
 	if (result->entry_point != MACH_VM_MIN_ADDRESS) {
-		if ((result->entry_point >= map_addr) && (result->entry_point < (map_addr + map_size))) {
+		if ((result->entry_point >= vm_offset) && (result->entry_point < (vm_offset + vm_size))) {
 			if ((scp->initprot & (VM_PROT_READ|VM_PROT_EXECUTE)) == (VM_PROT_READ|VM_PROT_EXECUTE)) {
 				result->validentry = 1;
 			} else {
@@ -1274,6 +1533,7 @@ load_main(
 		return(LOAD_FAILURE);
 	}
 
+
 	result->unixproc = TRUE;
 	result->thread_count++;
 
@@ -1349,6 +1609,7 @@ load_unixthread(
 		       tcp->cmdsize - sizeof(struct thread_command));
 	if (ret != LOAD_SUCCESS)
 		return (ret);
+
 
 	result->unixproc = TRUE;
 	result->thread_count++;
@@ -1747,8 +2008,9 @@ load_code_signature(
 			    cputype,
 			    macho_offset,
 			    addr,
-			    lcp->datasize, 
-			    0)) {
+			    lcp->datasize,
+			    0,
+			    &blob)) {
 		ret = LOAD_FAILURE;
 		goto out;
 	} else {
@@ -1760,11 +2022,12 @@ load_code_signature(
 	ubc_cs_validation_bitmap_allocate( vp );
 #endif
 		
-	blob = ubc_cs_blob_get(vp, cputype, macho_offset);
-
 	ret = LOAD_SUCCESS;
 out:
 	if (ret == LOAD_SUCCESS) {
+		if (blob == NULL)
+			panic("sucess, but no blob!");
+
 		result->csflags |= blob->csb_flags;
 		result->platform_binary = blob->csb_platform_binary;
 		result->cs_end_offset = blob->csb_end_offset;
@@ -1782,15 +2045,16 @@ out:
 
 static load_return_t
 set_code_unprotect(
-		   struct encryption_info_command *eip,
-		   caddr_t addr, 	
-		   vm_map_t map,
-		   int64_t slide,
-		   struct vnode	*vp,
-		   cpu_type_t cputype,
-		   cpu_subtype_t cpusubtype)
+	struct encryption_info_command *eip,
+	caddr_t addr, 	
+	vm_map_t map,
+	int64_t slide,
+	struct vnode *vp,
+	off_t macho_offset,
+	cpu_type_t cputype,
+	cpu_subtype_t cpusubtype)
 {
-	int result, len;
+	int error, len;
 	pager_crypt_info_t crypt_info;
 	const char * cryptname = 0;
 	char *vpath;
@@ -1799,6 +2063,7 @@ set_code_unprotect(
 	struct segment_command_64 *seg64;
 	struct segment_command *seg32;
 	vm_map_offset_t map_offset, map_size;
+	vm_object_offset_t crypto_backing_offset;
 	kern_return_t kr;
 
 	if (eip->cmdsize < sizeof(*eip)) return LOAD_BADMACHO;
@@ -1826,8 +2091,8 @@ set_code_unprotect(
 	if(vpath == NULL) return LOAD_FAILURE;
 	
 	len = MAXPATHLEN;
-	result = vn_getpath(vp, vpath, &len);
-	if(result) {
+	error = vn_getpath(vp, vpath, &len);
+	if (error) {
 		FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
 		return LOAD_FAILURE;
 	}
@@ -1838,6 +2103,12 @@ set_code_unprotect(
 		.cputype = cputype,
 		.cpusubtype = cpusubtype};
 	kr=text_crypter_create(&crypt_info, cryptname, (void*)&crypt_data);
+#if DEVELOPMENT || DEBUG
+	struct proc *p;
+	p  = current_proc();
+	printf("APPLE_PROTECT: %d[%s] map %p %s(%s) -> 0x%x\n",
+	       p->p_pid, p->p_comm, map, __FUNCTION__, vpath, kr);
+#endif /* DEVELOPMENT || DEBUG */
 	FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
 	
 	if(kr) {
@@ -1876,6 +2147,7 @@ set_code_unprotect(
 				     eip->cryptoff+eip->cryptsize)) {
 					map_offset = seg64->vmaddr + eip->cryptoff - seg64->fileoff + slide;
 					map_size = eip->cryptsize;
+					crypto_backing_offset = macho_offset + eip->cryptoff;
 					goto remap_now;
 				}
 			case LC_SEGMENT:
@@ -1885,6 +2157,7 @@ set_code_unprotect(
 				     eip->cryptoff+eip->cryptsize)) {
 					map_offset = seg32->vmaddr + eip->cryptoff - seg32->fileoff + slide;
 					map_size = eip->cryptsize;
+					crypto_backing_offset = macho_offset + eip->cryptoff;
 					goto remap_now;
 				}
 		}
@@ -1895,10 +2168,16 @@ set_code_unprotect(
 	
 remap_now:
 	/* now remap using the decrypter */
-	kr = vm_map_apple_protected(map, map_offset, map_offset+map_size, &crypt_info);
-	if(kr) {
+	MACHO_PRINTF(("+++ set_code_unprotect: vm[0x%llx:0x%llx]\n",
+		      (uint64_t) map_offset,
+		      (uint64_t) (map_offset+map_size)));
+	kr = vm_map_apple_protected(map,
+				    map_offset,
+				    map_offset+map_size,
+				    crypto_backing_offset,
+				    &crypt_info);
+	if (kr) {
 		printf("set_code_unprotect(): mapping failed with %x\n", kr);
-		crypt_info.crypt_end(crypt_info.crypt_ops);
 		return LOAD_PROTECT;
 	}
 	

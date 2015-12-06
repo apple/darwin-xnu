@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -182,6 +182,7 @@ struct ip6_exthdrs {
 	struct mbuf *ip6e_dest1;
 	struct mbuf *ip6e_rthdr;
 	struct mbuf *ip6e_dest2;
+	boolean_t merged;
 };
 
 /*
@@ -253,6 +254,9 @@ struct	ip6_pktopts {
  */
 #endif /* BSD_KERNEL_PRIVATE */
 
+#define	IP6S_SRCRULE_COUNT 16
+#include <netinet6/scope6_var.h>
+
 struct	ip6stat {
 	u_quad_t ip6s_total;		/* total packets received */
 	u_quad_t ip6s_tooshort;		/* packet too short */
@@ -289,32 +293,35 @@ struct	ip6stat {
 	/*
 	 * statistics for improvement of the source address selection
 	 * algorithm:
-	 * XXX: hardcoded 16 = # of ip6 multicast scope types + 1
 	 */
 	/* number of times that address selection fails */
 	u_quad_t ip6s_sources_none;
 	/* number of times that an address on the outgoing I/F is chosen */
-	u_quad_t ip6s_sources_sameif[16];
+	u_quad_t ip6s_sources_sameif[SCOPE6_ID_MAX];
 	/* number of times that an address on a non-outgoing I/F is chosen */
-	u_quad_t ip6s_sources_otherif[16];
+	u_quad_t ip6s_sources_otherif[SCOPE6_ID_MAX];
 	/*
 	 * number of times that an address that has the same scope
 	 * from the destination is chosen.
 	 */
-	u_quad_t ip6s_sources_samescope[16];
+	u_quad_t ip6s_sources_samescope[SCOPE6_ID_MAX];
 	/*
 	 * number of times that an address that has a different scope
 	 * from the destination is chosen.
 	 */
-	u_quad_t ip6s_sources_otherscope[16];
+	u_quad_t ip6s_sources_otherscope[SCOPE6_ID_MAX];
 	/* number of times that a deprecated address is chosen */
-	u_quad_t ip6s_sources_deprecated[16];
+	u_quad_t ip6s_sources_deprecated[SCOPE6_ID_MAX];
 
 	u_quad_t ip6s_forward_cachehit;
 	u_quad_t ip6s_forward_cachemiss;
 
 	/* number of times that each rule of source selection is applied. */
-	u_quad_t ip6s_sources_rule[16];
+	u_quad_t ip6s_sources_rule[IP6S_SRCRULE_COUNT];
+
+	/* number of times we ignored address on expensive secondary interfaces */
+	u_quad_t ip6s_sources_skip_expensive_secondary_if;
+
 	/* pkt dropped, no mbufs for control data */
 	u_quad_t ip6s_pktdropcntrl;
 

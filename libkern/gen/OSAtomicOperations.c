@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -27,6 +27,8 @@
  */
 
 #include <libkern/OSAtomic.h>
+#include <kern/debug.h>
+#include <machine/atomic.h>
 
 enum {
 	false	= 0,
@@ -37,28 +39,109 @@ enum {
 #define NULL ((void *)0)
 #endif
 
+#define ATOMIC_DEBUG DEBUG
+
+#if ATOMIC_DEBUG
+#define ALIGN_TEST(p,t) do{if((uintptr_t)p&(sizeof(t)-1)) panic("Unaligned atomic pointer %p\n",p);}while(0)
+#else
+#define ALIGN_TEST(p,t) do{}while(0)
+#endif
+
+// 19831745 - start of big hammer!
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-qual"
+
 /*
  * atomic operations
- *	these are _the_ atomic operations, currently cast atop CompareAndSwap,
- *	which is implemented in assembler.	if we are worried about the cost of
- *	this layering (we shouldn't be), then all this stuff could be
- *	implemented in assembler, as it is in MacOS8/9
- *	(derived from SuperMario/NativeLibs/IO/DriverServices/Synchronization.s,
- *	which I wrote for NuKernel in a previous life with a different last name...)
- *
- * native Boolean	CompareAndSwap(UInt32 oldValue, UInt32 newValue, UInt32 * oldValuePtr);
- *
- * We've since implemented a few more of these -- OSAddAtomic, OSDequeueAtomic,
- * OSEnqueueAtomic etc -- in assembler, either for speed or correctness.  See also the
- * commpage atomic operations, and the platform specific versions.
- * Like standards, there are a lot of atomic ops to choose from!
+ *	These are _the_ atomic operations, now implemented via compiler built-ins.
+ *	It is expected that this C implementation is a candidate for Link-Time-
+ *	Optimization inlining, whereas the assembler implementations they replace
+ *	were not.
  */
 
-#if defined(__i386__) || defined(__x86_64__)
-/* Implemented in assembly for i386 and x86_64 */
+#undef OSCompareAndSwap8
+Boolean OSCompareAndSwap8(UInt8 oldValue, UInt8 newValue, volatile UInt8 *address)
+{
+	return __c11_atomic_compare_exchange_strong((_Atomic UInt8 *)address, &oldValue, newValue,
+			memory_order_acq_rel_smp, memory_order_relaxed);
+}
+
+#undef OSCompareAndSwap16
+Boolean OSCompareAndSwap16(UInt16 oldValue, UInt16 newValue, volatile UInt16 *address)
+{
+	return __c11_atomic_compare_exchange_strong((_Atomic UInt16 *)address, &oldValue, newValue,
+			memory_order_acq_rel_smp, memory_order_relaxed);
+}
+
+#undef OSCompareAndSwap
+Boolean OSCompareAndSwap(UInt32 oldValue, UInt32 newValue, volatile UInt32 *address)
+{
+	ALIGN_TEST(address, UInt32);
+	return __c11_atomic_compare_exchange_strong((_Atomic UInt32 *)address, &oldValue, newValue,
+			memory_order_acq_rel_smp, memory_order_relaxed);
+}
+
+#undef OSCompareAndSwap64
+Boolean OSCompareAndSwap64(UInt64 oldValue, UInt64 newValue, volatile UInt64 *address)
+{
+	/*
+	 * _Atomic uint64 requires 8-byte alignment on all architectures.
+	 * This silences the compiler cast warning.  ALIGN_TEST() verifies
+	 * that the cast was legal, if defined.
+	 */
+	_Atomic UInt64 *aligned_addr = (_Atomic UInt64 *)(uintptr_t)address;
+
+	ALIGN_TEST(address, UInt64);
+	return __c11_atomic_compare_exchange_strong(aligned_addr, &oldValue, newValue,
+			memory_order_acq_rel_smp, memory_order_relaxed);
+}
+
+#undef OSCompareAndSwapPtr
+Boolean OSCompareAndSwapPtr(void *oldValue, void *newValue, void * volatile *address)
+{
+#if __LP64__
+  return OSCompareAndSwap64((UInt64)oldValue, (UInt64)newValue, (volatile UInt64 *)address);
 #else
-#error Unsupported arch
+  return OSCompareAndSwap((UInt32)oldValue, (UInt32)newValue, (volatile UInt32 *)address);
 #endif
+}
+
+SInt8 OSAddAtomic8(SInt32 amount, volatile SInt8 *address)
+{
+	return __c11_atomic_fetch_add((_Atomic SInt8*)address, amount, memory_order_relaxed);
+}
+
+SInt16 OSAddAtomic16(SInt32 amount, volatile SInt16 *address)
+{
+	return __c11_atomic_fetch_add((_Atomic SInt16*)address, amount, memory_order_relaxed);
+}
+
+#undef OSAddAtomic
+SInt32 OSAddAtomic(SInt32 amount, volatile SInt32 *address)
+{
+	ALIGN_TEST(address, UInt32);
+	return __c11_atomic_fetch_add((_Atomic SInt32*)address, amount, memory_order_relaxed);
+}
+
+#undef OSAddAtomic64
+SInt64 OSAddAtomic64(SInt64 amount, volatile SInt64 *address)
+{
+	_Atomic SInt64*	aligned_address = (_Atomic SInt64*)(uintptr_t)address;
+
+	ALIGN_TEST(address, SInt64);
+	return __c11_atomic_fetch_add(aligned_address, amount, memory_order_relaxed);
+}
+
+#undef OSAddAtomicLong
+long
+OSAddAtomicLong(long theAmount, volatile long *address)
+{
+#ifdef __LP64__
+	return (long)OSAddAtomic64((SInt64)theAmount, (SInt64*)address);
+#else
+	return (long)OSAddAtomic((SInt32)theAmount, address);
+#endif
+}
 
 #undef OSIncrementAtomic
 SInt32	OSIncrementAtomic(volatile SInt32 * value)
@@ -72,57 +155,23 @@ SInt32	OSDecrementAtomic(volatile SInt32 * value)
 	return OSAddAtomic(-1, value);
 }
 
-static UInt32	OSBitwiseAtomic(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt32 * value)
-{
-	UInt32	oldValue;
-	UInt32	newValue;
-	
-	do {
-		oldValue = *value;
-		newValue = ((oldValue & and_mask) | or_mask) ^ xor_mask;
-	} while (! OSCompareAndSwap(oldValue, newValue, value));
-	
-	return oldValue;
-}
-
 #undef OSBitAndAtomic
 UInt32	OSBitAndAtomic(UInt32 mask, volatile UInt32 * value)
 {
-	return OSBitwiseAtomic(mask, 0, 0, value);
+	return __c11_atomic_fetch_and((_Atomic UInt32*)value, mask, memory_order_relaxed);
 }
 
 #undef OSBitOrAtomic
 UInt32	OSBitOrAtomic(UInt32 mask, volatile UInt32 * value)
 {
-	return OSBitwiseAtomic((UInt32) -1, mask, 0, value);
+	return __c11_atomic_fetch_or((_Atomic UInt32*)value, mask, memory_order_relaxed);
 }
 
 #undef OSBitXorAtomic
 UInt32	OSBitXorAtomic(UInt32 mask, volatile UInt32 * value)
 {
-	return OSBitwiseAtomic((UInt32) -1, 0, mask, value);
+	return __c11_atomic_fetch_xor((_Atomic UInt32*)value, mask, memory_order_relaxed);
 }
-
-#if defined(__i386__) || defined(__x86_64__)
-static Boolean OSCompareAndSwap8(UInt8 oldValue8, UInt8 newValue8, volatile UInt8 * value8)
-{
-	UInt32				mask		= 0x000000ff;
-	UInt32				alignment	= (UInt32)((unsigned long) value8) & (sizeof(UInt32) - 1);
-	UInt32				shiftValues = (24 << 24) | (16 << 16) | (8 << 8);
-	int					shift		= (UInt32) *(((UInt8 *) &shiftValues) + alignment);
-	volatile UInt32 *	value32		= (volatile UInt32 *) ((uintptr_t)value8 - alignment);
-	UInt32				oldValue;
-	UInt32				newValue;
-
-	mask <<= shift;
-
-	oldValue = *value32;
-	oldValue = (oldValue & ~mask) | (oldValue8 << shift);
-	newValue = (oldValue & ~mask) | (newValue8 << shift);
-
-	return OSCompareAndSwap(oldValue, newValue, value32);
-}
-#endif
 
 static Boolean	OSTestAndSetClear(UInt32 bit, Boolean wantSet, volatile UInt8 * startAddress)
 {
@@ -139,7 +188,8 @@ static Boolean	OSTestAndSetClear(UInt32 bit, Boolean wantSet, volatile UInt8 * s
 		if ((oldValue & mask) == wantValue) {
 			break;
 		}
-	} while (! OSCompareAndSwap8(oldValue, (oldValue & ~mask) | wantValue, startAddress));
+	} while (! __c11_atomic_compare_exchange_strong((_Atomic UInt8 *)startAddress,
+		&oldValue, (oldValue & ~mask) | wantValue, memory_order_relaxed, memory_order_relaxed));
 	
 	return (oldValue & mask) == wantValue;
 }
@@ -168,69 +218,20 @@ SInt8	OSDecrementAtomic8(volatile SInt8 * value)
 	return OSAddAtomic8(-1, value);
 }
 
-#if defined(__i386__) || defined(__x86_64__)
-SInt8	OSAddAtomic8(SInt32 amount, volatile SInt8 * value)
-{
-	SInt8	oldValue;
-	SInt8	newValue;
-	
-	do {
-		oldValue = *value;
-		newValue = oldValue + amount;
-	} while (! OSCompareAndSwap8((UInt8) oldValue, (UInt8) newValue, (volatile UInt8 *) value));
-	
-	return oldValue;
-}
-#endif
-
-static UInt8	OSBitwiseAtomic8(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt8 * value)
-{
-	UInt8	oldValue;
-	UInt8	newValue;
-	
-	do {
-		oldValue = *value;
-		newValue = ((oldValue & and_mask) | or_mask) ^ xor_mask;
-	} while (! OSCompareAndSwap8(oldValue, newValue, value));
-	
-	return oldValue;
-}
-
 UInt8	OSBitAndAtomic8(UInt32 mask, volatile UInt8 * value)
 {
-	return OSBitwiseAtomic8(mask, 0, 0, value);
+	return __c11_atomic_fetch_and((_Atomic UInt8 *)value, mask, memory_order_relaxed);
 }
 
 UInt8	OSBitOrAtomic8(UInt32 mask, volatile UInt8 * value)
 {
-	return OSBitwiseAtomic8((UInt32) -1, mask, 0, value);
+	return __c11_atomic_fetch_or((_Atomic UInt8 *)value, mask, memory_order_relaxed);
 }
 
 UInt8	OSBitXorAtomic8(UInt32 mask, volatile UInt8 * value)
 {
-	return OSBitwiseAtomic8((UInt32) -1, 0, mask, value);
+	return __c11_atomic_fetch_xor((_Atomic UInt8 *)value, mask, memory_order_relaxed);
 }
-
-#if defined(__i386__) || defined(__x86_64__)
-static Boolean OSCompareAndSwap16(UInt16 oldValue16, UInt16 newValue16, volatile UInt16 * value16)
-{
-	UInt32				mask		= 0x0000ffff;
-	UInt32				alignment	= (UInt32)((unsigned long) value16) & (sizeof(UInt32) - 1);
-	UInt32				shiftValues = (16 << 24) | (16 << 16);
-	UInt32				shift		= (UInt32) *(((UInt8 *) &shiftValues) + alignment);
-	volatile UInt32 *	value32		= (volatile UInt32 *) (((unsigned long) value16) - alignment);
-	UInt32				oldValue;
-	UInt32				newValue;
-
-	mask <<= shift;
-
-	oldValue = *value32;
-	oldValue = (oldValue & ~mask) | (oldValue16 << shift);
-	newValue = (oldValue & ~mask) | (newValue16 << shift);
-
-	return OSCompareAndSwap(oldValue, newValue, value32);
-}
-#endif
 
 SInt16	OSIncrementAtomic16(volatile SInt16 * value)
 {
@@ -242,46 +243,21 @@ SInt16	OSDecrementAtomic16(volatile SInt16 * value)
 	return OSAddAtomic16(-1, value);
 }
 
-#if defined(__i386__) || defined(__x86_64__)
-SInt16	OSAddAtomic16(SInt32 amount, volatile SInt16 * value)
-{
-	SInt16	oldValue;
-	SInt16	newValue;
-	
-	do {
-		oldValue = *value;
-		newValue = oldValue + amount;
-	} while (! OSCompareAndSwap16((UInt16) oldValue, (UInt16) newValue, (volatile UInt16 *) value));
-	
-	return oldValue;
-}
-#endif
-
-static UInt16	OSBitwiseAtomic16(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt16 * value)
-{
-	UInt16	oldValue;
-	UInt16	newValue;
-	
-	do {
-		oldValue = *value;
-		newValue = ((oldValue & and_mask) | or_mask) ^ xor_mask;
-	} while (! OSCompareAndSwap16(oldValue, newValue, value));
-	
-	return oldValue;
-}
-
 UInt16	OSBitAndAtomic16(UInt32 mask, volatile UInt16 * value)
 {
-	return OSBitwiseAtomic16(mask, 0, 0, value);
+	return __c11_atomic_fetch_and((_Atomic UInt16 *)value, mask, memory_order_relaxed);
 }
 
 UInt16	OSBitOrAtomic16(UInt32 mask, volatile UInt16 * value)
 {
-	return OSBitwiseAtomic16((UInt32) -1, mask, 0, value);
+	return __c11_atomic_fetch_or((_Atomic UInt16 *)value, mask, memory_order_relaxed);
 }
 
 UInt16	OSBitXorAtomic16(UInt32 mask, volatile UInt16 * value)
 {
-	return OSBitwiseAtomic16((UInt32) -1, 0, mask, value);
+	return __c11_atomic_fetch_xor((_Atomic UInt16 *)value, mask, memory_order_relaxed);
 }
+
+// 19831745 - end of big hammer!
+#pragma clang diagnostic pop
 

@@ -42,7 +42,7 @@ class IOPMPowerSourceList : public OSObject
 
   public:
     void initialize(void);
-    void free(void);
+    void free(void) APPLE_KEXT_OVERRIDE;
 
     unsigned long numberOfItems(void);
     IOReturn addToList(IOPMPowerSource *newPowerSource);

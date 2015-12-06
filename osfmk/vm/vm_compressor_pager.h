@@ -52,6 +52,7 @@ extern kern_return_t vm_compressor_pager_get(
 
 #define	C_DONT_BLOCK		0x01
 #define C_KEEP			0x02
+#define C_KDP			0x04
 
 extern unsigned int vm_compressor_pager_state_clr(
 	memory_object_t		mem_obj,
@@ -116,13 +117,19 @@ extern int vm_compressor_put(ppnum_t pn, int *slot, void **current_chead, char *
 extern int vm_compressor_get(ppnum_t pn, int *slot, int flags);
 extern int vm_compressor_free(int *slot, int flags);
 extern unsigned int vm_compressor_pager_reap_pages(memory_object_t mem_obj, int flags);
-extern unsigned int vm_compressor_pager_get_slots_occupied(memory_object_t mem_obj);
 extern unsigned int vm_compressor_pager_get_count(memory_object_t mem_obj);
 extern void vm_compressor_pager_count(memory_object_t mem_obj,
 				      int compressed_count_delta,
 				      boolean_t shared_lock,
 				      vm_object_t object);
+
 extern void vm_compressor_transfer(int *dst_slot_p, int	*src_slot_p);
+
+#if CONFIG_FREEZE
+extern kern_return_t vm_compressor_pager_relocate(memory_object_t mem_obj, memory_object_offset_t mem_offset, void **current_chead);
+extern kern_return_t vm_compressor_relocate(void **current_chead, int *src_slot_p);
+extern void vm_compressor_finished_filling(void **current_chead);
+#endif /* CONFIG_FREEZE */
 
 #endif	/* _VM_VM_COMPRESSOR_PAGER_H_ */
 

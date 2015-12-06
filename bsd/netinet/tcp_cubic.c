@@ -130,6 +130,11 @@ static void tcp_cubic_cwnd_init_or_reset(struct tcpcb *tp)
 
 	tcp_cubic_clear_state(tp);
 	tcp_cc_cwnd_init_or_reset(tp);
+	tp->t_pipeack = 0;
+	tcp_clear_pipeack_state(tp);
+
+	/* Start counting bytes for RFC 3465 again */
+	tp->t_bytes_acked = 0;
 
 	/*
 	 * slow start threshold could get initialized to a lower value
@@ -144,9 +149,6 @@ static void tcp_cubic_cwnd_init_or_reset(struct tcpcb *tp)
 
 	/* Initialize cubic last max to be same as ssthresh */
 	tp->t_ccstate->cub_last_max = tp->snd_ssthresh;
-
-	/* If stretch ack was auto-disabled, re-evaluate it */
-	tcp_cc_after_idle_stretchack(tp);
 }
 
 /*
@@ -273,6 +275,10 @@ tcp_cubic_congestion_avd(struct tcpcb *tp, struct tcphdr *th)
 {
 	u_int32_t cubic_target_win, tcp_win, rtt;
 
+	/* Do not increase congestion window in non-validated phase */
+	if (tcp_cc_is_cwnd_nonvalidated(tp) != 0)
+		return;
+
 	tp->t_bytes_acked += BYTES_ACKED(th, tp);
 
 	rtt = get_base_rtt(tp);
@@ -320,6 +326,10 @@ tcp_cubic_congestion_avd(struct tcpcb *tp, struct tcphdr *th)
 static void
 tcp_cubic_ack_rcvd(struct tcpcb *tp, struct tcphdr *th)
 {
+	/* Do not increase the congestion window in non-validated phase */
+	if (tcp_cc_is_cwnd_nonvalidated(tp) != 0)
+		return;
+
 	if (tp->snd_cwnd >= tp->snd_ssthresh) {
 		/* Congestion avoidance phase */
 		tcp_cubic_congestion_avd(tp, th);
@@ -329,6 +339,7 @@ tcp_cubic_ack_rcvd(struct tcpcb *tp, struct tcphdr *th)
 		 * by RFC 3465 section 2.3
 		 */
 		uint32_t acked, abc_lim, incr;
+
 		acked = BYTES_ACKED(th, tp);
 		abc_lim = (tcp_do_rfc3465_lim2 && 
 			tp->snd_nxt == tp->snd_max) ?
@@ -352,6 +363,12 @@ tcp_cubic_pre_fr(struct tcpcb *tp)
 	tp->t_ccstate->cub_tcp_bytes_acked = 0;
 
 	win = min(tp->snd_cwnd, tp->snd_wnd);
+	if (tp->t_flagsext & TF_CWND_NONVALIDATED) {
+		tp->t_lossflightsize = tp->snd_max - tp->snd_una;
+		win = (max(tp->t_pipeack, tp->t_lossflightsize)) >> 1;
+	} else {
+		tp->t_lossflightsize = 0;
+	}
 	/*
 	 * Note the congestion window at which packet loss occurred as
 	 * cub_last_max.
@@ -427,6 +444,27 @@ tcp_cubic_post_fr(struct tcpcb *tp, struct tcphdr *th)
 
 	if (SEQ_LEQ(th->th_ack, tp->snd_max))
 		flight_size = tp->snd_max - th->th_ack;
+
+	if (SACK_ENABLED(tp) && tp->t_lossflightsize > 0) {
+		u_int32_t total_rxt_size = 0, ncwnd;
+		/*
+		 * When SACK is enabled, the number of retransmitted bytes
+		 * can be counted more accurately.
+		 */
+		total_rxt_size = tcp_rxtseg_total_size(tp);
+		ncwnd = max(tp->t_pipeack, tp->t_lossflightsize);
+		if (total_rxt_size <= ncwnd) {
+			ncwnd = ncwnd - total_rxt_size;
+		}
+
+		/*
+		 * To avoid sending a large burst at the end of recovery
+		 * set a max limit on ncwnd
+		 */
+		ncwnd = min(ncwnd, (tp->t_maxseg << 6));
+		ncwnd = ncwnd >> 1;
+		flight_size = max(ncwnd, flight_size);
+	}
 	/*
 	 * Complete ack. The current window was inflated for fast recovery.
 	 * It has to be deflated post recovery.
@@ -450,6 +488,16 @@ static void
 tcp_cubic_after_timeout(struct tcpcb *tp)
 {
 	VERIFY(tp->t_ccstate != NULL);
+
+	/*
+	 * Avoid adjusting congestion window due to SYN retransmissions.
+	 * If more than one byte (SYN) is outstanding then it is still
+	 * needed to adjust the window.
+	 */
+	if (tp->t_state < TCPS_ESTABLISHED &&
+	    ((int)(tp->snd_max - tp->snd_una) <= 1))
+		return;
+
 	if (!IN_FASTRECOVERY(tp)) {
 		tcp_cubic_clear_state(tp);
 		tcp_cubic_pre_fr(tp);
@@ -479,8 +527,6 @@ tcp_cubic_switch_cc(struct tcpcb *tp, uint16_t old_cc_index)
 {
 #pragma unused(old_cc_index)
 	tcp_cubic_cwnd_init_or_reset(tp);
-	/* Start counting bytes for RFC 3465 again */
-	tp->t_bytes_acked = 0;
 
 	OSIncrementAtomic((volatile SInt32 *)&tcp_cc_cubic.num_sockets);
 }

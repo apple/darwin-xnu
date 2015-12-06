@@ -339,3 +339,312 @@ def WriteMsr64(cmd_args=None):
     if not DoWriteMsr64(msr_address, lcpu, write_val):
         print "writemsr64 FAILED"
 
+def GetEVFlags(debug_arg):
+    """ Return the EV Flags for the given kernel debug arg value
+        params:
+            debug_arg - value from arg member of kernel debug buffer entry
+        returns: 
+            str - string representing the EV Flag for given input arg value
+    """
+    out_str = ""
+    if debug_arg & 1:
+        out_str += "EV_RE "
+    if debug_arg & 2:
+        out_str += "EV_WR "
+    if debug_arg & 4:
+        out_str += "EV_EX "
+    if debug_arg & 8:
+        out_str += "EV_RM "
+    if debug_arg & 0x00100:
+        out_str += "EV_RBYTES "
+    if debug_arg & 0x00200:
+        out_str += "EV_WBYTES "
+    if debug_arg & 0x00400:
+        out_str += "EV_RCLOSED "
+    if debug_arg & 0x00800:
+        out_str += "EV_RCONN "
+    if debug_arg & 0x01000:
+        out_str += "EV_WCLOSED "
+    if debug_arg & 0x02000:
+        out_str += "EV_WCONN "
+    if debug_arg & 0x04000:
+        out_str += "EV_OOB "
+    if debug_arg & 0x08000:
+        out_str += "EV_FIN "
+    if debug_arg & 0x10000:
+        out_str += "EV_RESET "
+    if debug_arg & 0x20000:
+        out_str += "EV_TIMEOUT "
+    
+    return out_str
+
+def GetKernelDebugBufferEntry(kdbg_entry):
+    """ Extract the information from given kernel debug buffer entry and return the summary
+        params:
+            kdebug_entry - kd_buf - address of kernel debug buffer entry
+        returns: 
+            str - formatted output information of kd_buf entry
+    """
+    out_str = ""
+    code_info_str = ""
+    kdebug_entry = kern.GetValueFromAddress(kdbg_entry, 'kd_buf *')
+    debugid     = kdebug_entry.debugid
+    kdebug_arg1 = kdebug_entry.arg1
+    kdebug_arg2 = kdebug_entry.arg2
+    kdebug_arg3 = kdebug_entry.arg3
+    kdebug_arg4 = kdebug_entry.arg4
+    
+    if kern.arch in ('x86_64', 'arm64'):
+        kdebug_cpu   = kdebug_entry.cpuid
+        ts_hi        = (kdebug_entry.timestamp >> 32) & 0xFFFFFFFF
+        ts_lo        = kdebug_entry.timestamp & 0xFFFFFFFF
+    else:
+        kdebug_cpu   = (kdebug_entry.timestamp >> 56)
+        ts_hi        = (kdebug_entry.timestamp >> 32) & 0x00FFFFFF
+        ts_lo        = kdebug_entry.timestamp & 0xFFFFFFFF
+    
+    kdebug_class    = (debugid >> 24) & 0x000FF
+    kdebug_subclass = (debugid >> 16) & 0x000FF
+    kdebug_code     = (debugid >>  2) & 0x03FFF
+    kdebug_qual     = (debugid) & 0x00003
+    
+    if kdebug_qual == 0:
+        kdebug_qual = '-'
+    elif kdebug_qual == 1:
+        kdebug_qual = 'S'
+    elif kdebug_qual == 2:
+        kdebug_qual = 'E'
+    elif kdebug_qual == 3:
+        kdebug_qual = '?'
+
+    # preamble and qual
+    out_str += "{:<#20x} {:>6d} {:>#12x} ".format(kdebug_entry, kdebug_cpu, kdebug_entry.arg5)
+    out_str += " {:#010x}{:08x} {:>6s} ".format(ts_hi, ts_lo, kdebug_qual)
+    
+    # class
+    kdbg_class = ""
+    if kdebug_class == 1:
+        kdbg_class = "MACH"
+    elif kdebug_class == 2:
+        kdbg_class = "NET "
+    elif kdebug_class == 3:
+        kdbg_class = "FS  "
+    elif kdebug_class == 4:
+        kdbg_class = "BSD "
+    elif kdebug_class == 5:
+        kdbg_class = "IOK "
+    elif kdebug_class == 6:
+        kdbg_class = "DRVR"
+    elif kdebug_class == 7:
+        kdbg_class = "TRAC"
+    elif kdebug_class == 8:
+        kdbg_class = "DLIL"
+    elif kdebug_class == 9:
+        kdbg_class = "WQ  "
+    elif kdebug_class == 10:
+        kdbg_class = "CS  "
+    elif kdebug_class == 11:
+        kdbg_class = "CG  "
+    elif kdebug_class == 20:
+        kdbg_class = "MISC"
+    elif kdebug_class == 30:
+        kdbg_class = "SEC "
+    elif kdebug_class == 31:
+        kdbg_class = "DYLD"
+    elif kdebug_class == 32:
+        kdbg_class = "QT  "
+    elif kdebug_class == 33:
+        kdbg_class = "APPS"
+    elif kdebug_class == 34:
+        kdbg_class = "LAUN"
+    elif kdebug_class == 36:
+        kdbg_class = "PPT "
+    elif kdebug_class == 37:
+        kdbg_class = "PERF"
+    elif kdebug_class == 38:
+        kdbg_class = "IMP "
+    elif kdebug_class == 39:
+        kdbg_class = "PCTL"
+    elif kdebug_class == 40:
+        kdbg_class = "BANK"
+    elif kdebug_class == 41:
+        kdbg_class = "XPC "
+    elif kdebug_class == 42:
+        kdbg_class = "ATM "
+    elif kdebug_class == 128:
+        kdbg_class = "ANS "
+    elif kdebug_class == 129:
+        kdbg_class = "SIO "
+    elif kdebug_class == 130:
+        kdbg_class = "SEP "
+    elif kdebug_class == 131:
+        kdbg_class = "ISP "
+    elif kdebug_class == 132:
+        kdbg_class = "OSCA"
+    elif kdebug_class == 133:
+        kdbg_class = "EGFX"
+    elif kdebug_class == 255:
+        kdbg_class = "MIG "
+    else:
+        out_str += "{:^#10x} ".format(kdebug_class)
+    
+    if kdbg_class:
+        out_str += "{:^10s} ".format(kdbg_class)
+
+    # subclass and code
+    out_str += " {:>#5x} {:>8d}   ".format(kdebug_subclass, kdebug_code)
+
+    # space for debugid-specific processing
+    # EVPROC from bsd/kern/sys_generic.c
+    # MISCDBG_CODE(DBG_EVENT,DBG_WAIT)
+    if debugid == 0x14100048:
+        code_info_str += "waitevent "
+        if kdebug_arg1 == 1:
+            code_info_str += "before sleep"
+        elif kdebug_arg1 == 2:
+            code_info_str += "after  sleep"
+        else:
+            code_info_str += "????????????"
+        code_info_str += " chan={:#08x} ".format(kdebug_arg2)
+    elif debugid == 0x14100049:
+        # MISCDBG_CODE(DBG_EVENT,DBG_WAIT|DBG_FUNC_START)
+        code_info_str += "waitevent "
+    elif debugid == 0x1410004a:
+        # MISCDBG_CODE(DBG_EVENT,DBG_WAIT|DBG_FUNC_END)
+        code_info_str += "waitevent error={:d} ".format(kdebug_arg1)
+        code_info_str += "eqp={:#08x} ".format(kdebug_arg4)
+        code_info_str += GetEVFlags(kdebug_arg3)
+        code_info_str += "er_handle={:d} ".format(kdebug_arg2)
+    elif debugid == 0x14100059:
+        # MISCDBG_CODE(DBG_EVENT,DBG_DEQUEUE|DBG_FUNC_START)
+        code_info_str += "evprocdeque proc={:#08x} ".format(kdebug_arg1)
+        if kdebug_arg2 == 0:
+            code_info_str += "remove first "
+        else:
+            code_info_str += "remove {:#08x} ".format(kdebug_arg2)
+    elif debugid == 0x1410005a:
+        # MISCDBG_CODE(DBG_EVENT,DBG_DEQUEUE|DBG_FUNC_END)
+        code_info_str += "evprocdeque "
+        if kdebug_arg1 == 0:
+            code_info_str += "result=NULL "
+        else:
+            code_info_str += "result={:#08x} ".format(kdebug_arg1)
+    elif debugid == 0x14100041:
+        # MISCDBG_CODE(DBG_EVENT,DBG_POST|DBG_FUNC_START)
+        code_info_str += "postevent "
+        code_info_str += GetEVFlags(kdebug_arg1)
+    elif debugid == 0x14100040:
+        # MISCDBG_CODE(DBG_EVENT,DBG_POST)
+        code_info_str += "postevent "
+        code_info_str += "evq={:#08x} ".format(kdebug_arg1)
+        code_info_str += "er_eventbits="
+        code_info_str += GetEVFlags(kdebug_arg2)
+        code_info_str +="mask="
+        code_info_str += GetEVFlags(kdebug_arg3)
+    elif debugid == 0x14100042:
+        # MISCDBG_CODE(DBG_EVENT,DBG_POST|DBG_FUNC_END)
+        code_info_str += "postevent "
+    elif debugid == 0x14100055:
+        # MISCDBG_CODE(DBG_EVENT,DBG_ENQUEUE|DBG_FUNC_START)
+        code_info_str += "evprocenque eqp={:#08x} ".format(kdebug_arg1)
+        if kdebug_arg2 & 1:
+            code_info_str += "EV_QUEUED "
+        code_info_str += GetEVFlags(kdebug_arg3)
+    elif debugid == 0x14100050:
+        # MISCDBG_CODE(DBG_EVENT,DBG_EWAKEUP)
+        code_info_str += "evprocenque before wakeup eqp={:#08x} ".format(kdebug_arg4)
+    elif debugid == 0x14100056:
+        # MISCDBG_CODE(DBG_EVENT,DBG_ENQUEUE|DBG_FUNC_END)
+        code_info_str += "evprocenque "
+    elif debugid == 0x1410004d:
+        # MISCDBG_CODE(DBG_EVENT,DBG_MOD|DBG_FUNC_START)
+        code_info_str += "modwatch "
+    elif debugid == 0x1410004c:
+        # MISCDBG_CODE(DBG_EVENT,DBG_MOD)
+        code_info_str += "modwatch er_handle={:d} ".format(kdebug_arg1)
+        code_info_str += GetEVFlags(kdebug_arg2)
+        code_info_str += "evq={:#08x} ", kdebug_arg3
+    elif debugid == 0x1410004e:
+    # MISCDBG_CODE(DBG_EVENT,DBG_MOD|DBG_FUNC_END)
+        code_info_str += "modwatch er_handle={:d} ".format(kdebug_arg1)
+        code_info_str += "ee_eventmask="
+        code_info_str += GetEVFlags(kdebug_arg2)
+        code_info_str += "sp={:#08x} ".format(kdebug_arg3)
+        code_info_str += "flag="
+        code_info_str += GetEVFlags(kdebug_arg4)
+    else:
+        code_info_str += "arg1={:#010x} ".format(kdebug_arg1)
+        code_info_str += "arg2={:#010x} ".format(kdebug_arg2)
+        code_info_str += "arg3={:#010x} ".format(kdebug_arg3)
+        code_info_str += "arg4={:#010x} ".format(kdebug_arg4)
+    
+    # finish up
+    out_str += "{:<25s}\n".format(code_info_str)
+    return out_str
+
+@lldb_command('showkerneldebugbuffercpu')
+@header("{0: ^20s} {1: >6s} {2: >12s} {3: ^20s} {4: >6s} {5: ^10s} {6: >5s} {7: >8s} {8: ^25s}".
+    format('kd_buf', 'CPU', 'Thread', 'Timestamp', 'S/E', 'Class', 'Sub', 'Code', 'Code Specific Info'))
+def ShowKernelDebugBufferCPU(cmd_args=None):
+    """ Prints the last N entries in the kernel debug buffer for specified cpu
+        Syntax: showkerneldebugbuffercpu <cpu_num> <count>
+    """
+    if cmd_args == None or len(cmd_args) < 2:
+        raise ArgumentError("Invalid arguments passed.")
+    
+    out_str = ""
+    kdbg_str = ""
+    cpu_number = ArgumentStringToInt(cmd_args[0])
+    entry_count = ArgumentStringToInt(cmd_args[1])
+    debugentriesfound = 0
+    #  Check if KDBG_BFINIT (0x80000000) is set in kdebug_flags
+    if (kern.globals.kd_ctrl_page.kdebug_flags & 0x80000000):   
+        out_str += ShowKernelDebugBufferCPU.header + "\n"
+        if entry_count == 0:
+            out_str += "<count> is 0, dumping 50 entries\n"
+            entry_count = 50
+
+        if cpu_number >= kern.globals.kd_ctrl_page.kdebug_cpus:
+            kdbg_str += "cpu number too big\n"
+        else:
+            kdbp = addressof(kern.globals.kdbip[cpu_number])
+            kdsp = kdbp.kd_list_head
+            while ((kdsp.raw != 0 and kdsp.raw != 0x00000000ffffffff) and (entry_count > 0)):
+                kd_buffer = kern.globals.kd_bufs[kdsp.buffer_index]
+                kdsp_actual = addressof(kd_buffer.kdsb_addr[kdsp.offset])
+                if kdsp_actual.kds_readlast != kdsp_actual.kds_bufindx:
+                    kds_buf = kdsp_actual.kds_records[kdsp_actual.kds_bufindx]
+                    kds_bufptr = addressof(kds_buf)
+                    while (entry_count > 0) and \
+                        (unsigned(kds_bufptr) > unsigned(addressof(kdsp_actual.kds_records[kdsp_actual.kds_readlast]))):
+                        kds_bufptr = kds_bufptr - sizeof(kds_buf)
+                        entry_count = entry_count - 1
+                        kdbg_str += GetKernelDebugBufferEntry(kds_bufptr)
+                kdsp = kdsp_actual.kds_next
+    else:
+        kdbg_str += "Trace buffer not enabled for CPU {:d}\n".format(cpu_number)
+    
+    if kdbg_str:
+        out_str += kdbg_str
+        print out_str
+
+@lldb_command('showkerneldebugbuffer')
+def ShowKernelDebugBuffer(cmd_args=None):
+    """ Prints the last N entries in the kernel debug buffer per cpu
+        Syntax: showkerneldebugbuffer <count>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        raise ArgumentError("Invalid arguments passed.")
+    
+    #  Check if KDBG_BFINIT (0x80000000) is set in kdebug_flags
+    if (kern.globals.kd_ctrl_page.kdebug_flags & 0x80000000):
+        entrycount = ArgumentStringToInt(cmd_args[0])
+        if entrycount == 0:
+            print "<count> is 0, dumping 50 entries per cpu\n"
+            entrycount = 50
+        cpu_num = 0
+        while cpu_num < kern.globals.kd_ctrl_page.kdebug_cpus:
+            ShowKernelDebugBufferCPU([str(cpu_num), str(entrycount)])
+            cpu_num += 1
+    else:
+        print "Trace buffer not enabled\n"

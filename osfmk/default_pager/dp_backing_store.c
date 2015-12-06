@@ -757,10 +757,10 @@ ps_delete(
 		if(dp_pages_free < cluster_transfer_minimum)
 			error = KERN_FAILURE;
 		else {
-			vm_object_t	transfer_object;
-			unsigned int	count;
-			upl_t		upl;
-			int		upl_flags;
+			vm_object_t	    transfer_object;
+			unsigned int	    count;
+			upl_t		    upl;
+			upl_control_flags_t upl_flags;
 
 			transfer_object = vm_object_allocate((vm_object_size_t)VM_SUPER_CLUSTER);
 			count = 0;
@@ -1234,7 +1234,7 @@ vs_alloc_async(void)
 			alias_struct = (struct vstruct_alias *) 
 				kalloc(sizeof (struct vstruct_alias));
 			if(alias_struct != NULL) {
-				alias_struct->vs = (struct vstruct *)vsa;
+				__IGNORE_WCASTALIGN(alias_struct->vs = (struct vstruct *)vsa);
 				alias_struct->name = &default_pager_ops;
 				reply_port->ip_alias = (uintptr_t) alias_struct;
 				vsa->reply_port = reply_port;
@@ -2698,7 +2698,7 @@ ps_read_device(
 	*residualp = size - total_read;
 	if((dev_buffer != *bufferp) && (total_read != 0)) {
 		vm_offset_t temp_buffer;
-		vm_allocate(kernel_map, &temp_buffer, total_read, VM_FLAGS_ANYWHERE);
+		vm_allocate(kernel_map, &temp_buffer, total_read, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_OSFMK));
 		memcpy((void *) temp_buffer, (void *) *bufferp, total_read);
 		if(vm_map_copyin_page_list(kernel_map, temp_buffer, total_read, 
 			VM_MAP_COPYIN_OPT_SRC_DESTROY | 

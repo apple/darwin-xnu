@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -146,6 +146,7 @@ static void arp_llinfo_free(void *);
 static void arp_llinfo_purge(struct rtentry *);
 static void arp_llinfo_get_ri(struct rtentry *, struct rt_reach_info *);
 static void arp_llinfo_get_iflri(struct rtentry *, struct ifnet_llreach_info *);
+static void arp_llinfo_refresh(struct rtentry *);
 
 static __inline void arp_llreach_use(struct llinfo_arp *);
 static __inline int arp_llreach_reachable(struct llinfo_arp *);
@@ -353,6 +354,27 @@ arp_llinfo_get_iflri(struct rtentry *rt, struct ifnet_llreach_info *iflri)
 		    ifnet_llreach_up2upexp(lr, la->la_lastused);
 		IFLR_UNLOCK(lr);
 	}
+}
+
+static void
+arp_llinfo_refresh(struct rtentry *rt)
+{
+	uint64_t timenow = net_uptime();
+	/*
+	 * If route entry is permanent or if expiry is less
+	 * than timenow and extra time taken for unicast probe
+	 * we can't expedite the refresh
+	 */
+	if ((rt->rt_expire == 0) ||
+	    (rt->rt_flags & RTF_STATIC) ||
+	    !(rt->rt_flags & RTF_LLINFO)) {
+		return;
+	}
+
+	if (rt->rt_expire > timenow + arp_unicast_lim) {
+		rt->rt_expire = timenow + arp_unicast_lim;
+	}
+	return;
 }
 
 void
@@ -753,6 +775,7 @@ arp_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 		rt->rt_llinfo_get_iflri	= arp_llinfo_get_iflri;
 		rt->rt_llinfo_purge	= arp_llinfo_purge;
 		rt->rt_llinfo_free	= arp_llinfo_free;
+		rt->rt_llinfo_refresh   = arp_llinfo_refresh;
 		rt->rt_flags |= RTF_LLINFO;
 		la->la_rt = rt;
 		LIST_INSERT_HEAD(&llinfo_arp, la, la_le);
@@ -1695,7 +1718,7 @@ match:
 	    route->rt_flags & RTF_ROUTER && 
 	    llinfo->la_flags & LLINFO_RTRFAIL_EVTSENT) {
 		struct kev_msg ev_msg;
-		struct kev_in_arpfailure in_arpalive;
+		struct kev_in_arpalive in_arpalive;
 
 		llinfo->la_flags &= ~LLINFO_RTRFAIL_EVTSENT;
 		RT_UNLOCK(route);

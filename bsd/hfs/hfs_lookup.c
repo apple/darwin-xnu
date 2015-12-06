@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,7 @@
 #include <sys/file.h>
 #include <sys/mount.h>
 #include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/kdebug.h>
 #include <sys/kauth.h>
@@ -333,7 +334,8 @@ found:
 		 * Directory hard links can have multiple parents so
 		 * find the appropriate parent for the current thread.
 		 */
-		if ((retval = hfs_vget(hfsmp, hfs_currentparent(VTOC(dvp)), &tvp, 0, 0))) {
+		if ((retval = hfs_vget(hfsmp, hfs_currentparent(VTOC(dvp),
+									/* have_lock: */ false), &tvp, 0, 0))) {
 			goto exit;
 		}
 		*cnode_locked = 1;
@@ -419,12 +421,9 @@ found:
 		 * Save the origin info for file and directory hardlinks.  Directory hardlinks 
 		 * need the origin for '..' lookups, and file hardlinks need it to ensure that 
 		 * competing lookups do not cause us to vend different hardlinks than the ones requested.
-		 * We want to restrict saving the cache entries to LOOKUP namei operations, since
-		 * we're really doing this to protect getattr.
 		 */
-		if ((nameiop == LOOKUP) && (VTOC(tvp)->c_flag & C_HARDLINK)) {
+		if (ISSET(VTOC(tvp)->c_flag, C_HARDLINK))
 			hfs_savelinkorigin(VTOC(tvp), VTOC(dvp)->c_fileid);
-		}
 		*cnode_locked = 1;
 		*vpp = tvp;
 	}
@@ -473,11 +472,18 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 	int flags = cnp->cn_flags;
 	int force_casesensitive_lookup = proc_is_forcing_hfs_case_sensitivity(p);
 	int cnode_locked;
+	int fastdev_candidate = 0;
+	int auto_candidate = 0;
 
 	*vpp = NULL;
 	dcp = VTOC(dvp);
-	
 	hfsmp = VTOHFS(dvp);
+
+	if ((hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) && (vnode_isfastdevicecandidate(dvp) || (dcp->c_attr.ca_recflags & kHFSFastDevCandidateMask)) ){
+		fastdev_candidate = 1;
+		auto_candidate = (vnode_isautocandidate(dvp) || (dcp->c_attr.ca_recflags & kHFSAutoCandidateMask));
+	}
+	
 
 	/*
 	 * Lookup an entry in the cache
@@ -513,7 +519,10 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 		goto exit;
 	}
 	
-	
+	if (cp->c_attr.ca_recflags & kHFSDoNotFastDevPinMask) {
+		fastdev_candidate = 0;
+	}
+
 	/*
 	 * If this is a hard-link vnode then we need to update
 	 * the name (of the link), the parent ID, the cnid, the
@@ -603,12 +612,8 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 					 * Save the origin info for file and directory hardlinks.  Directory hardlinks 
 					 * need the origin for '..' lookups, and file hardlinks need it to ensure that 
 					 * competing lookups do not cause us to vend different hardlinks than the ones requested.
-					 * We want to restrict saving the cache entries to LOOKUP namei operations, since
-					 * we're really doing this to protect getattr.
 					 */
-					if (cnp->cn_nameiop == LOOKUP) {
-						hfs_savelinkorigin(cp, dcp->c_fileid);
-					}
+					hfs_savelinkorigin(cp, dcp->c_fileid);
 				}
 				else {
 					/* If the fileID does not match then do NOT replace the descriptor! */
@@ -650,9 +655,25 @@ lookup:
 
 	error = hfs_lookup(dvp, vpp, cnp, &cnode_locked, force_casesensitive_lookup);
 	
+	if (*vpp && (VTOC(*vpp)->c_attr.ca_recflags & kHFSDoNotFastDevPinMask)) {
+		fastdev_candidate = 0;
+	}
+
+	if (*vpp && (VTOC(*vpp)->c_attr.ca_recflags & kHFSAutoCandidateMask)) {
+		//printf("vp %s / %d is an auto-candidate\n", (*vpp)->v_name ? (*vpp)->v_name : "no-name", VTOC(*vpp)->c_fileid);
+		auto_candidate = 1;
+	}
+	
 	if (cnode_locked)
 		hfs_unlock(VTOC(*vpp));
 exit:
+	if (*vpp && fastdev_candidate && (*vpp)->v_parent == dvp && !(vnode_isfastdevicecandidate(*vpp))) {
+		vnode_setfastdevicecandidate(*vpp);
+		if (auto_candidate) {
+			vnode_setautocandidate(*vpp);
+		}
+	}
+
 	{
 	uthread_t ut = (struct uthread *)get_bsdthread_info(current_thread());
 

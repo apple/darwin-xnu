@@ -2,8 +2,9 @@
  *  ccasn1.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 8/6/10.
- *  Copyright 2010-2012 Apple Inc. All rights reserved.
+ *  Created on 11/16/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -66,10 +67,6 @@ enum {
 
     CCASN1_CONSTRUCTED_SET = CCASN1_SET | CCASN1_CONSTRUCTED,
     CCASN1_CONSTRUCTED_SEQUENCE = CCASN1_SEQUENCE | CCASN1_CONSTRUCTED,
-
-    // TODO: Remove these 2: */
-    // ASN1_INTEGER = 0x02,
-    ASN1_CONSTRUCTED_SEQUENCE = 0x30
 };
 
 typedef union {

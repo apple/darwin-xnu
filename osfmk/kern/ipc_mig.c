@@ -353,11 +353,11 @@ mach_msg_rpc_from_kernel_body(
 	for (;;) {
 		ipc_mqueue_t mqueue;
 
-		assert(reply->ip_pset_count == 0);
+		assert(reply->ip_in_pset == 0);
 		assert(ip_active(reply));
 
 		/* JMM - why this check? */
-		if (!self->active) {
+		if (!self->active && !self->inspection) {
 			ipc_port_dealloc_reply(reply);
 			self->ith_rpc_reply = IP_NULL;
 			return MACH_RCV_INTERRUPTED;
@@ -385,7 +385,7 @@ mach_msg_rpc_from_kernel_body(
 
 		assert(reply == self->ith_rpc_reply);
 
-		if (self->handlers) {
+		if (self->ast & AST_APC) {
 			ipc_port_dealloc_reply(reply);
 			self->ith_rpc_reply = IP_NULL;
 			return(mr);

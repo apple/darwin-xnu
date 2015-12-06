@@ -8,18 +8,18 @@ include $(MakeInc_def)
 
 MIG_DEFS = gssd_mach.defs
 
-DATAFILES = gssd_mach_types.h ${MIG_DEFS}
+PRIVATE_DATAFILES = gssd_mach_types.h ${MIG_DEFS}
 
 INSTALL_MI_LIST =
 
-INSTALL_MI_LCL_LIST	= ${DATAFILES} 
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES} 
 
 INSTALL_MI_GEN_LIST = 
 
 INSTALL_MI_DIR = gssd
 
 EXPORT_MI_LIST	= \
-	${DATAFILES}
+	${PRIVATE_DATAFILES}
 
 EXPORT_MI_GEN_LIST = gssd_mach.h
 

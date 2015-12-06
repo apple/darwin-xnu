@@ -52,7 +52,7 @@ extern lck_mtx_t         *sadb_stat_mutex;
 
 
 #define IPSEC_STAT_INCREMENT(x)	\
-	{lck_mtx_lock(sadb_stat_mutex); (x)++; lck_mtx_unlock(sadb_stat_mutex);}
+	OSIncrementAtomic64((SInt64 *)&x)
 
 struct secpolicyaddrrange {
 	struct sockaddr_storage start;	/* Start (low values) of address range */
@@ -204,32 +204,32 @@ struct secspacq {
 
 /* statistics for ipsec processing */
 struct ipsecstat {
-	u_quad_t in_success;  /* succeeded inbound process */
-	u_quad_t in_polvio;
+	u_quad_t in_success __attribute__ ((aligned (8))); /* succeeded inbound process */
+	u_quad_t in_polvio __attribute__ ((aligned (8)));
 			/* security policy violation for inbound process */
-	u_quad_t in_nosa;     /* inbound SA is unavailable */
-	u_quad_t in_inval;    /* inbound processing failed due to EINVAL */
-	u_quad_t in_nomem;    /* inbound processing failed due to ENOBUFS */
-	u_quad_t in_badspi;   /* failed getting a SPI */
-	u_quad_t in_ahreplay; /* AH replay check failed */
-	u_quad_t in_espreplay; /* ESP replay check failed */
-	u_quad_t in_ahauthsucc; /* AH authentication success */
-	u_quad_t in_ahauthfail; /* AH authentication failure */
-	u_quad_t in_espauthsucc; /* ESP authentication success */
-	u_quad_t in_espauthfail; /* ESP authentication failure */
-	u_quad_t in_esphist[256];
-	u_quad_t in_ahhist[256];
-	u_quad_t in_comphist[256];
-	u_quad_t out_success; /* succeeded outbound process */
-	u_quad_t out_polvio;
+	u_quad_t in_nosa __attribute__ ((aligned (8)));     /* inbound SA is unavailable */
+	u_quad_t in_inval __attribute__ ((aligned (8)));    /* inbound processing failed due to EINVAL */
+	u_quad_t in_nomem __attribute__ ((aligned (8)));    /* inbound processing failed due to ENOBUFS */
+	u_quad_t in_badspi __attribute__ ((aligned (8)));   /* failed getting a SPI */
+	u_quad_t in_ahreplay __attribute__ ((aligned (8))); /* AH replay check failed */
+	u_quad_t in_espreplay __attribute__ ((aligned (8))); /* ESP replay check failed */
+	u_quad_t in_ahauthsucc __attribute__ ((aligned (8))); /* AH authentication success */
+	u_quad_t in_ahauthfail __attribute__ ((aligned (8))); /* AH authentication failure */
+	u_quad_t in_espauthsucc __attribute__ ((aligned (8))); /* ESP authentication success */
+	u_quad_t in_espauthfail __attribute__ ((aligned (8))); /* ESP authentication failure */
+	u_quad_t in_esphist[256] __attribute__ ((aligned (8)));
+	u_quad_t in_ahhist[256] __attribute__ ((aligned (8)));
+	u_quad_t in_comphist[256] __attribute__ ((aligned (8)));
+	u_quad_t out_success __attribute__ ((aligned (8))); /* succeeded outbound process */
+	u_quad_t out_polvio __attribute__ ((aligned (8)));
 			/* security policy violation for outbound process */
-	u_quad_t out_nosa;    /* outbound SA is unavailable */
-	u_quad_t out_inval;   /* outbound process failed due to EINVAL */
-	u_quad_t out_nomem;    /* inbound processing failed due to ENOBUFS */
-	u_quad_t out_noroute; /* there is no route */
-	u_quad_t out_esphist[256];
-	u_quad_t out_ahhist[256];
-	u_quad_t out_comphist[256];
+	u_quad_t out_nosa __attribute__ ((aligned (8)));    /* outbound SA is unavailable */
+	u_quad_t out_inval __attribute__ ((aligned (8)));   /* outbound process failed due to EINVAL */
+	u_quad_t out_nomem __attribute__ ((aligned (8)));    /* inbound processing failed due to ENOBUFS */
+	u_quad_t out_noroute __attribute__ ((aligned (8))); /* there is no route */
+	u_quad_t out_esphist[256] __attribute__ ((aligned (8)));
+	u_quad_t out_ahhist[256] __attribute__ ((aligned (8)));
+	u_quad_t out_comphist[256] __attribute__ ((aligned (8)));
 };
 
 #ifdef BSD_KERNEL_PRIVATE

@@ -14,7 +14,12 @@ DATAFILES = \
 	vm_param.h vm_types.h machine_types.defs \
 	syscall_sw.h sdt.h sdt_isa.h
 
+PRIVATE_DATAFILES = \
+	syscall_sw.h
+
 INSTALL_MI_LIST = ${DATAFILES}
+
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MI_DIR = mach/machine
 

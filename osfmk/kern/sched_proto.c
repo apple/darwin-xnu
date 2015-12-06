@@ -52,7 +52,6 @@
 #include <kern/syscall_subr.h>
 #include <kern/task.h>
 #include <kern/thread.h>
-#include <kern/wait_queue.h>
 
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
@@ -85,9 +84,8 @@ sched_proto_choose_thread(processor_t		processor,
 static thread_t
 sched_proto_steal_thread(processor_set_t		pset);
 
-static void
-sched_proto_compute_priority(thread_t	thread,
-							 boolean_t			override_depress);
+static int
+sched_proto_compute_priority(thread_t thread);
 
 static processor_t
 sched_proto_choose_processor(	processor_set_t		pset,
@@ -142,9 +140,6 @@ sched_proto_lightweight_update_priority(thread_t	thread);
 static void
 sched_proto_quantum_expire(thread_t	thread);
 
-static boolean_t
-sched_proto_should_current_thread_rechoose_processor(processor_t			processor);
-
 static int
 sched_proto_processor_runq_count(processor_t   processor);
 
@@ -155,18 +150,20 @@ static int
 sched_proto_processor_bound_count(processor_t   processor);
 
 static void
-sched_proto_thread_update_scan(void);
+sched_proto_thread_update_scan(sched_update_scan_context_t scan_context);
 
 
 const struct sched_dispatch_table sched_proto_dispatch = {
+	.sched_name                                     = "proto",
 	.init                                           = sched_proto_init,
 	.timebase_init                                  = sched_proto_timebase_init,
 	.processor_init                                 = sched_proto_processor_init,
 	.pset_init                                      = sched_proto_pset_init,
 	.maintenance_continuation                       = sched_proto_maintenance_continuation,
 	.choose_thread                                  = sched_proto_choose_thread,
+	.steal_thread_enabled                           = FALSE,
 	.steal_thread                                   = sched_proto_steal_thread,
-	.compute_priority                               = sched_proto_compute_priority,
+	.compute_timeshare_priority                     = sched_proto_compute_priority,
 	.choose_processor                               = sched_proto_choose_processor,
 	.processor_enqueue                              = sched_proto_processor_enqueue,
 	.processor_queue_shutdown                       = sched_proto_processor_queue_shutdown,
@@ -181,18 +178,13 @@ const struct sched_dispatch_table sched_proto_dispatch = {
 	.update_priority                                = sched_proto_update_priority,
 	.lightweight_update_priority                    = sched_proto_lightweight_update_priority,
 	.quantum_expire                                 = sched_proto_quantum_expire,
-	.should_current_thread_rechoose_processor       = sched_proto_should_current_thread_rechoose_processor,
 	.processor_runq_count                           = sched_proto_processor_runq_count,
 	.processor_runq_stats_count_sum                 = sched_proto_processor_runq_stats_count_sum,
-	.fairshare_init                                 = sched_traditional_fairshare_init,
-	.fairshare_runq_count                           = sched_traditional_fairshare_runq_count,
-	.fairshare_runq_stats_count_sum                 = sched_traditional_fairshare_runq_stats_count_sum,
-	.fairshare_enqueue                              = sched_traditional_fairshare_enqueue,
-	.fairshare_dequeue                              = sched_traditional_fairshare_dequeue,
-	.fairshare_queue_remove                         = sched_traditional_fairshare_queue_remove,
 	.processor_bound_count                          = sched_proto_processor_bound_count,
 	.thread_update_scan                             = sched_proto_thread_update_scan,
 	.direct_dispatch_to_idle_processors             = TRUE,
+	.multiple_psets_enabled                         = TRUE,
+	.sched_groups_enabled                           = FALSE,
 };
 
 static struct run_queue	*global_runq;
@@ -365,11 +357,10 @@ sched_proto_steal_thread(processor_set_t		pset)
 	
 }
 
-static void
-sched_proto_compute_priority(thread_t	thread,
-							 boolean_t			override_depress __unused)
+static int
+sched_proto_compute_priority(thread_t thread)
 {
-	set_sched_pri(thread, thread->priority);
+	return thread->base_pri;
 }
 
 static processor_t
@@ -425,7 +416,7 @@ sched_proto_processor_queue_remove(
 {
 	void *			rqlock;
 	run_queue_t		rq;
-	
+
 	rqlock = &global_runq_lock;
 	rq = global_runq;
 	
@@ -511,7 +502,7 @@ sched_proto_priority_is_urgent(int priority)
 }
 
 static ast_t
-sched_proto_processor_csw_check(processor_t processor __unused)
+sched_proto_processor_csw_check(processor_t processor)
 {
 	run_queue_t		runq;
 	int				count, urgency;
@@ -526,7 +517,10 @@ sched_proto_processor_csw_check(processor_t processor __unused)
 		
 		return AST_PREEMPT;
 	}
-	
+
+	if (proto_processor != processor)
+		return AST_PREEMPT;
+
 	return AST_NONE;
 }
 
@@ -564,15 +558,9 @@ sched_proto_lightweight_update_priority(thread_t	thread __unused)
 }
 
 static void
-sched_proto_quantum_expire(thread_t	thread __unused)
+sched_proto_quantum_expire(thread_t    thread __unused)
 {
 	
-}
-
-static boolean_t
-sched_proto_should_current_thread_rechoose_processor(processor_t			processor)
-{
-	return (proto_processor != processor);
 }
 
 static int
@@ -602,7 +590,7 @@ sched_proto_processor_bound_count(__unused processor_t   processor)
 }
 
 static void
-sched_proto_thread_update_scan(void)
+sched_proto_thread_update_scan(__unused sched_update_scan_context_t scan_context)
 {
 	
 }

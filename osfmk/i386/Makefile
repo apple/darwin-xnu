@@ -9,6 +9,7 @@ include $(MakeInc_def)
 EXPORT_ONLY_FILES = 	\
 		    apic.h \
 		    asm.h \
+		    atomic.h \
 		    bit_routines.h \
 		    cpu_number.h \
 		    cpu_capabilities.h	\
@@ -36,6 +37,7 @@ EXPORT_ONLY_FILES = 	\
 		    rtclock_protos.h \
 		    seg.h \
 		    simple_lock.h \
+		    smp.h \
 		    tsc.h \
 		    tss.h \
 		    ucode.h \

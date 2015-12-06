@@ -111,24 +111,41 @@ IOCommandGate::commandGate(OSObject *inOwner, Action inAction)
 
 /* virtual */ void IOCommandGate::free()
 {
-    setWorkLoop(0);
+    if (workLoop) setWorkLoop(0);
     super::free();
 }
 
+enum
+{
+    kSleepersRemoved     = 0x00000001,
+    kSleepersWaitEnabled = 0x00000002,
+    kSleepersActions     = 0x00000100,
+    kSleepersActionsMask = 0xffffff00,
+};
+
 /* virtual */ void IOCommandGate::setWorkLoop(IOWorkLoop *inWorkLoop)
 {
-    uintptr_t *sleepersP = (uintptr_t *) &reserved;
-    if (!inWorkLoop && workLoop) {		// tearing down
-	closeGate();
-	*sleepersP |= 1;
-	while (*sleepersP >> 1) {
+    IOWorkLoop * wl;
+    uintptr_t  * sleepersP = (uintptr_t *) &reserved;
+    bool         defer;
+
+    if (!inWorkLoop && (wl = workLoop)) {		// tearing down
+	wl->closeGate();
+	*sleepersP |= kSleepersRemoved;
+	while (*sleepersP & kSleepersWaitEnabled) {
 	    thread_wakeup_with_result(&enabled, THREAD_INTERRUPTED);
 	    sleepGate(sleepersP, THREAD_UNINT);
 	}
-	*sleepersP = 0;
-	openGate();
+	*sleepersP &= ~kSleepersWaitEnabled;
+	defer = (0 != (kSleepersActionsMask & *sleepersP));
+	if (!defer)
+	{
+	    super::setWorkLoop(0);
+	    *sleepersP &= ~kSleepersRemoved;
+	}
+	wl->openGate();
+	return;
     }
-    else
 
     super::setWorkLoop(inWorkLoop);
 }
@@ -149,29 +166,38 @@ IOReturn IOCommandGate::runAction(Action inAction,
                                   void *arg0, void *arg1,
                                   void *arg2, void *arg3)
 {
+    IOWorkLoop * wl;
+    uintptr_t  * sleepersP;
+
     if (!inAction)
         return kIOReturnBadArgument;
+    if (!(wl = workLoop))
+        return kIOReturnNotReady;
 
     // closeGate is recursive needn't worry if we already hold the lock.
-    closeGate();
+    wl->closeGate();
+    sleepersP = (uintptr_t *) &reserved;
 
     // If the command gate is disabled and we aren't on the workloop thread
     // itself then sleep until we get enabled.
     IOReturn res;
-    if (!workLoop->onThread()) {
-	while (!enabled) {
-	    uintptr_t *sleepersP = (uintptr_t *) &reserved;
-
-	    *sleepersP += 2;
-	    IOReturn res = sleepGate(&enabled, THREAD_ABORTSAFE);
-	    *sleepersP -= 2;
-
-	    bool wakeupTearDown = (*sleepersP & 1);
-	    if (res || wakeupTearDown) {
-		openGate();
+    if (!wl->onThread())
+    {
+	while (!enabled)
+	{
+            IOReturn sleepResult = kIOReturnSuccess;
+	    if (workLoop)
+	    {
+		*sleepersP |= kSleepersWaitEnabled;
+		sleepResult = wl->sleepGate(&enabled, THREAD_ABORTSAFE);
+		*sleepersP &= ~kSleepersWaitEnabled;
+	    }
+	    bool wakeupTearDown = (!workLoop || (0 != (*sleepersP & kSleepersRemoved)));
+	    if ((kIOReturnSuccess != sleepResult) || wakeupTearDown) {
+		wl->openGate();
 
 		 if (wakeupTearDown)
-		     commandWakeup(sleepersP);	// No further resources used
+		     wl->wakeupGate(sleepersP, false);	// No further resources used
 
 		return kIOReturnAborted;
 	    }
@@ -180,20 +206,28 @@ IOReturn IOCommandGate::runAction(Action inAction,
 
     bool trace = ( gIOKitTrace & kIOTraceCommandGates ) ? true : false;
 	
-	if (trace)
-		IOTimeStampStartConstant(IODBG_CMDQ(IOCMDQ_ACTION),
+    if (trace) IOTimeStampStartConstant(IODBG_CMDQ(IOCMDQ_ACTION),
 					 VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
 	
     IOStatisticsActionCall();
 	
     // Must be gated and on the work loop or enabled
+
+    *sleepersP += kSleepersActions;
     res = (*inAction)(owner, arg0, arg1, arg2, arg3);
-	
-	if (trace)
-		IOTimeStampEndConstant(IODBG_CMDQ(IOCMDQ_ACTION),
+    *sleepersP -= kSleepersActions;
+
+    if (trace) IOTimeStampEndConstant(IODBG_CMDQ(IOCMDQ_ACTION),
 				       VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
+
+    if (kSleepersRemoved == ((kSleepersActionsMask|kSleepersRemoved) & *sleepersP))
+    {
+        // no actions outstanding
+	*sleepersP &= ~kSleepersRemoved;
+	super::setWorkLoop(0);
+    }
     
-    openGate();
+    wl->openGate();
 	
     return res;
 }
@@ -203,16 +237,19 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
                                       void *arg2, void *arg3)
 {
     IOReturn res;
+    IOWorkLoop * wl;
 
     if (!inAction)
         return kIOReturnBadArgument;
+    if (!(wl = workLoop))
+        return kIOReturnNotReady;
 
     // Try to close the gate if can't get return immediately.
-    if (!tryCloseGate())
+    if (!wl->tryCloseGate())
         return kIOReturnCannotLock;
 
     // If the command gate is disabled then sleep until we get a wakeup
-    if (!workLoop->onThread() && !enabled)
+    if (!wl->onThread() && !enabled)
         res = kIOReturnNotPermitted;
     else {
 		
@@ -231,7 +268,7 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
 				   VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
     }
 
-    openGate();
+    wl->openGate();
 
     return res;
 }

@@ -30,15 +30,15 @@
 struct kperf_sample;
 struct kperf_context;
 
-
 /* bits for defining what to do on an action */
 #define SAMPLER_TINFO      (1<<0)
 #define SAMPLER_TINFOEX    (1<<1)
 #define SAMPLER_KSTACK     (1<<2)
 #define SAMPLER_USTACK     (1<<3)
-#define SAMPLER_PMC_THREAD (1<<4) /* FIXME: not implemented */
+#define SAMPLER_PMC_THREAD (1<<4)
 #define SAMPLER_PMC_CPU    (1<<5)
 #define SAMPLER_PMC_CONFIG (1<<6)
+#define SAMPLER_MEMINFO    (1<<7)
 
 /* flags for sample calls*/
 #define SAMPLE_FLAG_PEND_USER    (1<<0)
@@ -46,10 +46,10 @@ struct kperf_context;
 #define SAMPLE_FLAG_EMPTY_CALLSTACK (1<<2)
 
 /*  Take a sample into "sbuf" using current thread "cur_thread" */
-extern kern_return_t kperf_sample( struct kperf_sample *sbuf, 
-				   struct kperf_context*, 
-                                   unsigned actionid,
-                                   unsigned sample_flags );
+extern kern_return_t kperf_sample(struct kperf_sample *sbuf,
+                                  struct kperf_context*,
+                                  unsigned actionid,
+                                  unsigned sample_flags);
 
 /* return codes from taking a sample
  * either keep trigger, or something went wrong (or we're shutting down)
@@ -68,17 +68,17 @@ extern struct kperf_sample* kperf_intr_sample_buffer(void);
 extern unsigned kperf_action_get_count(void);
 extern int kperf_action_set_count(unsigned count);
 
-extern int kperf_action_set_samplers( unsigned actionid,
-                                      uint32_t samplers );
-extern int kperf_action_get_samplers( unsigned actionid,
-                                      uint32_t *samplers_out );
+extern int kperf_action_set_samplers(unsigned actionid,
+                                     uint32_t samplers);
+extern int kperf_action_get_samplers(unsigned actionid,
+                                     uint32_t *samplers_out);
 
-extern int kperf_action_set_userdata( unsigned actionid,
-                                      uint32_t userdata );
-extern int kperf_action_get_userdata( unsigned actionid,
-                                      uint32_t *userdata_out );
+extern int kperf_action_set_userdata(unsigned actionid,
+                                     uint32_t userdata);
+extern int kperf_action_get_userdata(unsigned actionid,
+                                     uint32_t *userdata_out);
 
-extern int kperf_action_set_filter( unsigned actionid,
-				    int pid );
-extern int kperf_action_get_filter( unsigned actionid,
-				    int *pid_out );
+extern int kperf_action_set_filter(unsigned actionid,
+                                   int pid);
+extern int kperf_action_get_filter(unsigned actionid,
+                                   int *pid_out);

@@ -52,6 +52,7 @@
 #include <pexpert/pexpert.h>
 #include <sys/socketvar.h>
 #include <pexpert/pexpert.h>
+#include <netinet/tcp_var.h>
 
 extern uint32_t kern_maxvnodes;
 extern vm_map_t mb_map;
@@ -62,7 +63,6 @@ extern uint32_t   tcp_recvspace;
 #endif
 
 void            bsd_bufferinit(void);
-extern void     md_prepare_for_shutdown(int, int, char *);
 
 unsigned int	bsd_mbuf_cluster_reserve(boolean_t *);
 void bsd_scale_setup(int);
@@ -140,7 +140,7 @@ bsd_startupearly(void)
 			    &firstaddr,
 			    size,
 			    FALSE,
-			    VM_FLAGS_ANYWHERE,
+			    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_FILE),
 			    &bufferhdr_map);
 
 	if (ret != KERN_SUCCESS)
@@ -150,7 +150,8 @@ bsd_startupearly(void)
 				     &firstaddr,
 				     size,
 				     0,
-				     KMA_HERE | KMA_KOBJECT);
+				     KMA_HERE | KMA_KOBJECT,
+				     VM_KERN_MEMORY_FILE);
 
 	if (ret != KERN_SUCCESS)
 		panic("Failed to allocate bufferhdr_map");
@@ -215,10 +216,10 @@ bsd_bufferinit(void)
 
 #if SOCKETS
 	ret = kmem_suballoc(kernel_map,
-			    (vm_offset_t *) & mbutl,
+			    (vm_offset_t *) &mbutl,
 			    (vm_size_t) (nmbclusters * MCLBYTES),
 			    FALSE,
-			    VM_FLAGS_ANYWHERE,
+			    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_MBUF),
 			    &mb_map);
 
 	if (ret != KERN_SUCCESS)
@@ -291,8 +292,8 @@ bsd_mbuf_cluster_reserve(boolean_t *overridden)
 				nmbclusters = MAX_NCL;
 		}
 
-		/* Round it down to nearest multiple of 4KB clusters */
-		nmbclusters = P2ROUNDDOWN(nmbclusters, NCLPBG);
+		/* Round it down to nearest multiple of PAGE_SIZE */
+		nmbclusters = P2ROUNDDOWN(nmbclusters, NCLPG);
 	}
 	mbuf_poolsz = nmbclusters << MCLSHIFT;
 done:
@@ -327,15 +328,16 @@ bsd_scale_setup(int scale)
 		maxfilesperproc = maxfiles/2;
 		desiredvnodes = maxfiles;
 		vnodes_sized = 1;
+		tcp_tfo_backlog = 100 * scale;
 		if (scale > 4) {
 			/* clip somaxconn at 32G level */
 			somaxconn = 2048;
-			/* 
-			 * For scale > 4 (> 32G), clip 
+			/*
+			 * For scale > 4 (> 32G), clip
 			 * tcp_tcbhashsize to 32K
 			 */
 			tcp_tcbhashsize = 32 *1024;
-			
+
 			if (scale > 7) {
 				/* clip at 64G level */
 				max_cached_sock_count = 165000;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -54,7 +54,7 @@
 #define	MPO_FASTCLOSE	0x7
 
 /* MPTCP Protocol version */
-#define	MP_DRAFT_VERSION_12	0x0
+#define	MPTCP_STD_VERSION_0	0x0
 
 /*
  * MPTCP MP_CAPABLE TCP Option definitions

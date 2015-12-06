@@ -120,6 +120,7 @@ osfmk/kern/hv_support.c				optional hypervisor
 
 # Kernel performance monitoring
 osfmk/kperf/x86_64/kperf_mp.c   optional kperf
+osfmk/kperf/x86_64/kperf_meminfo.c  optional kperf
 osfmk/x86_64/kpc_x86.c              optional kpc
 
 osfmk/i386/startup64.c		standard

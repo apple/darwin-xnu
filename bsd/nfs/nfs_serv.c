@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -113,7 +113,7 @@ struct nfsd_head nfsd_head, nfsd_queue;
 
 lck_grp_t *nfsrv_slp_rwlock_group;
 lck_grp_t *nfsrv_slp_mutex_group;
-struct nfsrv_sockhead nfsrv_socklist, nfsrv_deadsocklist, nfsrv_sockwg,
+struct nfsrv_sockhead nfsrv_socklist, nfsrv_sockwg,
 			nfsrv_sockwait, nfsrv_sockwork;
 struct nfsrv_sock *nfsrv_udpsock = NULL;
 struct nfsrv_sock *nfsrv_udp6sock = NULL;
@@ -140,7 +140,7 @@ int nfsrv_fsevents_enabled = 1;
 #if CONFIG_FSE
 thread_call_t	nfsrv_fmod_timer_call;
 #endif
-thread_call_t	nfsrv_deadsock_timer_call;
+thread_call_t	nfsrv_idlesock_timer_call;
 thread_call_t	nfsrv_wg_timer_call;
 int nfsrv_wg_timer_on;
 
@@ -223,14 +223,13 @@ nfsrv_init(void)
 #if CONFIG_FSE
 	nfsrv_fmod_timer_call = thread_call_allocate(nfsrv_fmod_timer, NULL);
 #endif
-	nfsrv_deadsock_timer_call = thread_call_allocate(nfsrv_deadsock_timer, NULL);
+	nfsrv_idlesock_timer_call = thread_call_allocate(nfsrv_idlesock_timer, NULL);
 	nfsrv_wg_timer_call = thread_call_allocate(nfsrv_wg_timer, NULL);
 
 	/* Init server data structures */
 	TAILQ_INIT(&nfsrv_socklist);
 	TAILQ_INIT(&nfsrv_sockwait);
 	TAILQ_INIT(&nfsrv_sockwork);
-	TAILQ_INIT(&nfsrv_deadsocklist);
 	TAILQ_INIT(&nfsrv_sockwg);
 	TAILQ_INIT(&nfsd_head);
 	TAILQ_INIT(&nfsd_queue);

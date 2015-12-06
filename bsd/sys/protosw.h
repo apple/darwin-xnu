@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -85,6 +85,7 @@ struct sockaddr;
 struct socket;
 struct sockopt;
 struct socket_filter;
+struct uio;
 #ifdef XNU_KERNEL_PRIVATE
 struct domain_old;
 #endif /* XNU_KERNEL_PRIVATE */
@@ -256,6 +257,8 @@ struct protosw {
 #define	PR_ATTACHED	0x800	/* protocol is attached to a domain */
 #define	PR_MULTICONN	0x1000	/* supports multiple connect calls */
 #define	PR_EVCONNINFO	0x2000	/* protocol generates conninfo event */
+#define	PR_PRECONN_WRITE	0x4000	/* protocol supports preconnect write */
+#define	PR_DATA_IDEMPOTENT	0x8000  /* protocol supports idempotent data at connectx-time */
 #define	PR_OLD		0x10000000 /* added via net_add_proto */
 
 /* pseudo-public domain flags */
@@ -384,6 +387,7 @@ struct ifnet;
 struct stat;
 struct ucred;
 struct uio;
+struct recv_msg_elem;
 
 #ifdef XNU_KERNEL_PRIVATE
 /*
@@ -450,14 +454,17 @@ struct pr_usrreqs {
 	int	(*pru_connect2)(struct socket *, struct socket *);
 	int	(*pru_connectx)(struct socket *, struct sockaddr_list **,
 		    struct sockaddr_list **, struct proc *, uint32_t,
-		    associd_t, connid_t *, uint32_t, void *, uint32_t);
+		    sae_associd_t, sae_connid_t *, uint32_t, void *, uint32_t,
+		    struct uio *, user_ssize_t *);
 	int	(*pru_control)(struct socket *, u_long, caddr_t,
 		    struct ifnet *, struct proc *);
 	int	(*pru_detach)(struct socket *);
 	int	(*pru_disconnect)(struct socket *);
-	int	(*pru_disconnectx)(struct socket *, associd_t, connid_t);
+	int	(*pru_disconnectx)(struct socket *,
+		    sae_associd_t, sae_connid_t);
 	int	(*pru_listen)(struct socket *, struct proc *);
-	int	(*pru_peeloff)(struct socket *, associd_t, struct socket **);
+	int	(*pru_peeloff)(struct socket *,
+		    sae_associd_t, struct socket **);
 	int	(*pru_peeraddr)(struct socket *, struct sockaddr **);
 	int	(*pru_rcvd)(struct socket *, int);
 	int	(*pru_rcvoob)(struct socket *, struct mbuf *, int);
@@ -474,13 +481,13 @@ struct pr_usrreqs {
 	int	(*pru_sopoll)(struct socket *, int, struct ucred *, void *);
 	int	(*pru_soreceive)(struct socket *, struct sockaddr **,
 		    struct uio *, struct mbuf **, struct mbuf **, int *);
-	int	(*pru_soreceive_list)(struct socket *, struct sockaddr **,
-		    struct uio **, u_int, struct mbuf **, struct mbuf **, int *);
+	int	(*pru_soreceive_list)(struct socket *, struct recv_msg_elem *, u_int,
+		    int *);
 	int	(*pru_sosend)(struct socket *, struct sockaddr *,
 		    struct uio *, struct mbuf *, struct mbuf *, int);
-	int	(*pru_sosend_list)(struct socket *, struct sockaddr *,
-		    struct uio **, u_int, struct mbuf *, struct mbuf *, int);
+	int	(*pru_sosend_list)(struct socket *, struct uio **, u_int, int);
 	int	(*pru_socheckopt)(struct socket *, struct sockopt *);
+	int	(*pru_preconnect)(struct socket *so);
 };
 
 /* Values for pru_flags  */
@@ -499,11 +506,12 @@ extern int pru_connect_notsupp(struct socket *so, struct sockaddr *nam,
 extern int pru_connect2_notsupp(struct socket *so1, struct socket *so2);
 #ifdef XNU_KERNEL_PRIVATE
 extern int pru_connectx_notsupp(struct socket *, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, associd_t, connid_t *,
-    uint32_t, void *, uint32_t);
-extern int pru_disconnectx_notsupp(struct socket *, associd_t, connid_t);
+    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+    sae_connid_t *, uint32_t, void *, uint32_t, struct uio *, user_ssize_t *);
+extern int pru_disconnectx_notsupp(struct socket *, sae_associd_t,
+    sae_connid_t);
 extern int pru_socheckopt_null(struct socket *, struct sockopt *);
-extern int pru_peeloff_notsupp(struct socket *, associd_t, struct socket **);
+extern int pru_peeloff_notsupp(struct socket *, sae_associd_t, struct socket **);
 #endif /* XNU_KERNEL_PRIVATE */
 extern int pru_control_notsupp(struct socket *so, u_long cmd, caddr_t data,
     struct ifnet *ifp, struct proc *p);
@@ -522,14 +530,13 @@ extern int pru_shutdown_notsupp(struct socket *so);
 extern int pru_sockaddr_notsupp(struct socket *so, struct sockaddr **nam);
 extern int pru_sosend_notsupp(struct socket *so, struct sockaddr *addr,
     struct uio *uio,  struct mbuf *top, struct mbuf *control, int flags);
-extern int pru_sosend_list_notsupp(struct socket *so, struct sockaddr *addr,
-    struct uio **uio, u_int, struct mbuf *top, struct mbuf *control, int flags);
+extern int pru_sosend_list_notsupp(struct socket *so, struct uio **uio,
+    u_int, int flags);
 extern int pru_soreceive_notsupp(struct socket *so,
     struct sockaddr **paddr, struct uio *uio, struct mbuf **mp0,
     struct mbuf **controlp, int *flagsp);
-extern int pru_soreceive_list_notsupp(struct socket *so,
-    struct sockaddr **paddr, struct uio **uio, u_int, struct mbuf **mp0,
-    struct mbuf **controlp, int *flagsp);
+extern int pru_soreceive_list_notsupp(struct socket *, struct recv_msg_elem *, u_int,
+    int *);
 extern int pru_sopoll_notsupp(struct socket *so, int events,
     struct ucred *cred, void *);
 #ifdef XNU_KERNEL_PRIVATE

@@ -50,6 +50,7 @@ typedef int sync_policy_t;
  */
 
 #define SYNC_POLICY_PREPOST		0x4
+#define SYNC_POLICY_DISABLE_IRQ		0x8
 
 #endif	/* KERNEL_PRIVATE */
 

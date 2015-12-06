@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -113,13 +113,10 @@
 #include "hfs_quota.h"
 #include "hfs_btreeio.h"
 #include "hfs_kdebug.h"
+#include "hfs_cprotect.h"
 
 #include "hfscommon/headers/FileMgrInternal.h"
 #include "hfscommon/headers/BTreesInternal.h"
-
-#if CONFIG_PROTECT
-#include <sys/cprotect.h>
-#endif
 
 #define HFS_MOUNT_DEBUG 1
 
@@ -208,11 +205,6 @@ hfs_mountroot(mount_t mp, vnode_t rvp, vfs_context_t context)
 	vfsp = vfs_statfs(mp);
 	(void)hfs_statfs(mp, vfsp, NULL);
 
-	/* Invoke ioctl that asks if the underlying device is Core Storage or not */
-	error = VNOP_IOCTL(rvp, _DKIOCCORESTORAGE, NULL, 0, context);
-	if (error == 0) {
-		hfsmp->hfs_flags |= HFS_CS;
-	}
 	return (0);
 }
 
@@ -300,7 +292,7 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 
 			/* mark the volume cleanly unmounted */
 			hfsmp->vcbAtrb |= kHFSVolumeUnmountedMask;
-			retval = hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
+			retval = hfs_flushvolumeheader(hfsmp, HFS_FVH_WAIT);
 			hfsmp->hfs_flags |= HFS_READ_ONLY;
 
 			/*
@@ -412,7 +404,7 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 				 * for metadata writes.
 				 */
 				hfsmp->jnl = journal_open(hfsmp->jvp,
-						(hfsmp->jnl_start * HFSTOVCB(hfsmp)->blockSize) + (off_t)HFSTOVCB(hfsmp)->hfsPlusIOPosOffset,
+						hfs_blk_to_bytes(hfsmp->jnl_start, HFSTOVCB(hfsmp)->blockSize) + (off_t)HFSTOVCB(hfsmp)->hfsPlusIOPosOffset,
 						hfsmp->jnl_size,
 						hfsmp->hfs_devvp,
 						hfsmp->hfs_logical_block_size,
@@ -463,7 +455,7 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 			/* mark the volume dirty (clear clean unmount bit) */
 			hfsmp->vcbAtrb &= ~kHFSVolumeUnmountedMask;
 
-			retval = hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
+			retval = hfs_flushvolumeheader(hfsmp, HFS_FVH_WAIT);
 			if (retval != E_NONE) {
 				if (HFS_MOUNT_DEBUG) {
 					printf("hfs_mount: hfs_flushvolumeheader returned %d for fs %s\n", retval, hfsmp->vcbVN);
@@ -483,12 +475,24 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 				hfs_remove_orphans(hfsmp);
 
 				/*
-				 * Allow hot file clustering if conditions allow.
+				 * Since we're upgrading to a read-write mount, allow
+				 * hot file clustering if conditions allow.
+				 *
+				 * Note: this normally only would happen if you booted
+				 *       single-user and upgraded the mount to read-write
+				 *
+				 * Note: at this point we are not allowed to fail the
+				 *       mount operation because the HotFile init code
+				 *       in hfs_recording_init() will lookup vnodes with
+				 *       VNOP_LOOKUP() which hangs vnodes off the mount
+				 *       (and if we were to fail, VFS is not prepared to
+				 *       clean that up at this point.  Since HotFiles are
+				 *       optional, this is not a big deal.
 				 */
 				if ((hfsmp->hfs_flags & HFS_METADATA_ZONE) && 
-					   ((hfsmp->hfs_mp->mnt_kern_flag & MNTK_SSD) == 0))	{
+				    (((hfsmp->hfs_mp->mnt_kern_flag & MNTK_SSD) == 0) || (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN)) ) {
 					(void) hfs_recording_init(hfsmp);
-				}
+				}					
 				/* Force ACLs on HFS+ file systems. */
 				if (vfs_extendedsecurity(HFSTOVFS(hfsmp)) == 0) {
 					vfs_setextendedsecurity(HFSTOVFS(hfsmp));
@@ -520,21 +524,6 @@ hfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t conte
 		/* After hfs_mountfs succeeds, we should have valid hfsmp */
 		hfsmp = VFSTOHFS(mp);
 
-		/*
-		 * Check to see if the file system exists on CoreStorage.  
-		 *
-		 * This must be done after examining the root folder's CP EA since
-		 * hfs_vfs_root will create a vnode (which must not occur until after
-		 * we've established the CP level of the FS).
-		 */ 
-		if (retval == 0) {
-			errno_t err;
-			/* Invoke ioctl that asks if the underlying device is Core Storage or not */
-			err = VNOP_IOCTL(devvp, _DKIOCCORESTORAGE, NULL, 0, context);
-			if (err == 0) {
-				hfsmp->hfs_flags |= HFS_CS;
-			}
-		}
 	}
 
 out:
@@ -1008,10 +997,8 @@ static boolean_t hfs_has_elapsed (const struct timeval *a,
 }
 
 static void
-hfs_syncer(void *arg0, void *unused)
+hfs_syncer(void *arg0, __unused void *unused)
 {
-#pragma unused(unused)
-    
     struct hfsmount *hfsmp = arg0;
     struct timeval   now;
 
@@ -1077,9 +1064,6 @@ hfs_syncer(void *arg0, void *unused)
 
     hfsmp->hfs_syncer_thread = current_thread();
 
-    if (hfs_start_transaction(hfsmp) != 0)    // so we hold off any new writes
-        goto out;
-
     /*
      * We intentionally do a synchronous flush (of the journal or entire volume) here.
      * For journaled volumes, this means we wait until the metadata blocks are written
@@ -1098,7 +1082,7 @@ hfs_syncer(void *arg0, void *unused)
      * user data to be written.
      */
     if (hfsmp->jnl) {
-        hfs_journal_flush(hfsmp, TRUE);
+        hfs_flush(hfsmp, HFS_FLUSH_JOURNAL_META);
     } else {
         hfs_sync(hfsmp->hfs_mp, MNT_WAIT, vfs_context_kernel());
     }
@@ -1108,10 +1092,6 @@ hfs_syncer(void *arg0, void *unused)
                           tv_to_usecs(&hfsmp->hfs_mp->mnt_last_write_completed_timestamp), 
                           tv_to_usecs(&hfsmp->hfs_mp->mnt_last_write_issued_timestamp), 
                           hfsmp->hfs_mp->mnt_pending_write_size, 0);
-
-    hfs_end_transaction(hfsmp);
-
-out:
 
     hfsmp->hfs_syncer_thread = NULL;
 
@@ -1192,9 +1172,16 @@ void hfs_scan_blocks (struct hfsmount *hfsmp) {
 	 */
 	(void) ScanUnmapBlocks(hfsmp);
 
+	(void) hfs_lock_mount (hfsmp);
+	hfsmp->scan_var &= ~HFS_ALLOCATOR_SCAN_INFLIGHT;
 	hfsmp->scan_var |= HFS_ALLOCATOR_SCAN_COMPLETED;
+	wakeup((caddr_t) &hfsmp->scan_var);
+	hfs_unlock_mount (hfsmp);
 
+	buf_invalidateblks(hfsmp->hfs_allocation_vp, 0, 0, 0);
+	
 	hfs_systemfile_unlock(hfsmp, flags);
+
 }
 
 static int hfs_root_unmounted_cleanly = 0;
@@ -1409,7 +1396,10 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 		if (device_features & DK_FEATURE_UNMAP) {
 			hfsmp->hfs_flags |= HFS_UNMAP;
 		}
-	}	
+
+		if(device_features & DK_FEATURE_BARRIER)
+			hfsmp->hfs_flags |= HFS_FEATURE_BARRIER;
+	}
 
 	/* 
 	 * See if the disk is a solid state device, too.  We need this to decide what to do about 
@@ -1421,6 +1411,25 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 		}
 	}
 
+	/* See if the underlying device is Core Storage or not */
+	dk_corestorage_info_t cs_info;
+	memset(&cs_info, 0, sizeof(dk_corestorage_info_t));
+	if (VNOP_IOCTL(devvp, DKIOCCORESTORAGE, (caddr_t)&cs_info, 0, context) == 0) {
+		hfsmp->hfs_flags |= HFS_CS;
+		if (isroot && (cs_info.flags & DK_CORESTORAGE_PIN_YOUR_METADATA)) {
+			hfsmp->hfs_flags |= HFS_CS_METADATA_PIN;
+		}
+		if (isroot && (cs_info.flags & DK_CORESTORAGE_ENABLE_HOTFILES)) {
+			hfsmp->hfs_flags |= HFS_CS_HOTFILE_PIN;
+			hfsmp->hfs_cs_hotfile_size = cs_info.hotfile_size;
+		}
+		if ((cs_info.flags & DK_CORESTORAGE_PIN_YOUR_SWAPFILE)) {
+			hfsmp->hfs_flags |= HFS_CS_SWAPFILE_PIN;
+
+			mp->mnt_ioflags |= MNT_IOFLAGS_SWAPPIN_SUPPORTED;
+			mp->mnt_max_swappin_available = cs_info.swapfile_pinning;
+		}
+	}
 
 	/*
 	 *  Init the volume information structure
@@ -1489,6 +1498,10 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 		else
 			hfsmp->hfs_flags &= ~HFS_WRITEABLE_MEDIA;
 	}
+
+	// Reservations
+	rl_init(&hfsmp->hfs_reserved_ranges[0]);
+	rl_init(&hfsmp->hfs_reserved_ranges[1]);
 
 	// record the current time at which we're mounting this volume
 	struct timeval tv;
@@ -1571,6 +1584,12 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 			embeddedOffset = SWAP_BE16(mdbp->drAlBlSt) * kHFSBlockSize;
 			embeddedOffset += (u_int64_t)SWAP_BE16(mdbp->drEmbedExtent.startBlock) *
 			                  (u_int64_t)SWAP_BE32(mdbp->drAlBlkSiz);
+
+			/* 
+			 * Cooperative Fusion is not allowed on embedded HFS+ 
+			 * filesystems (HFS+ inside HFS standard wrapper)
+			 */
+			hfsmp->hfs_flags &= ~HFS_CS_METADATA_PIN;
 
 			/*
 			 * If the embedded volume doesn't start on a block
@@ -2003,7 +2022,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	hfs_generate_volume_notifications(hfsmp);
 
 	if (ronly == 0) {
-		(void) hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
+		(void) hfs_flushvolumeheader(hfsmp, HFS_FVH_WAIT);
 	}
 	FREE(mdbp, M_TEMP);
 	return (0);
@@ -2178,7 +2197,7 @@ hfs_unmount(struct mount *mp, int mntflags, vfs_context_t context)
 			}
 		}
 
-		retval = hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
+		retval = hfs_flushvolumeheader(hfsmp, HFS_FVH_WAIT);
 		if (retval) {
 			HFSTOVCB(hfsmp)->vcbAtrb &= ~kHFSVolumeUnmountedMask;
 			if (!force)
@@ -2192,7 +2211,7 @@ hfs_unmount(struct mount *mp, int mntflags, vfs_context_t context)
 	}
 
 	if (hfsmp->jnl) {
-		hfs_journal_flush(hfsmp, FALSE);
+		hfs_flush(hfsmp, HFS_FLUSH_FULL);
 	}
 	
 	/*
@@ -2246,6 +2265,11 @@ hfs_unmount(struct mount *mp, int mntflags, vfs_context_t context)
 	hfs_locks_destroy(hfsmp);
 	hfs_delete_chash(hfsmp);
 	hfs_idhash_destroy(hfsmp);
+
+	assert(TAILQ_EMPTY(&hfsmp->hfs_reserved_ranges[HFS_TENTATIVE_BLOCKS])
+		   && TAILQ_EMPTY(&hfsmp->hfs_reserved_ranges[HFS_LOCKED_BLOCKS]));
+	assert(!hfsmp->lockedBlocks);
+
 	FREE(hfsmp, M_HFSMNT);
 
 	return (0);
@@ -2481,35 +2505,49 @@ hfs_sync_metadata(void *arg)
 
 
 struct hfs_sync_cargs {
-        kauth_cred_t cred;
-        struct proc  *p;
-        int    waitfor;
-        int    error;
+	kauth_cred_t  cred;
+	struct proc	 *p;
+	int			  waitfor;
+	int			  error;
+	int			  atime_only_syncs;
+	time_t		  sync_start_time;
 };
 
 
 static int
 hfs_sync_callback(struct vnode *vp, void *cargs)
 {
-	struct cnode *cp;
+	struct cnode *cp = VTOC(vp);
 	struct hfs_sync_cargs *args;
 	int error;
 
 	args = (struct hfs_sync_cargs *)cargs;
 
-	if (hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
+	if (hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
 		return (VNODE_RETURNED);
 	}
-	cp = VTOC(vp);
 
-	if ((cp->c_flag & C_MODIFIED) ||
-	    (cp->c_touch_acctime | cp->c_touch_chgtime | cp->c_touch_modtime) ||
-	    vnode_hasdirtyblks(vp)) {
-	        error = hfs_fsync(vp, args->waitfor, 0, args->p);
+	hfs_dirty_t dirty_state = hfs_is_dirty(cp);
+
+	bool sync = dirty_state == HFS_DIRTY || vnode_hasdirtyblks(vp);
+
+	if (!sync && dirty_state == HFS_DIRTY_ATIME
+		&& args->atime_only_syncs < 256) {
+		// We only update if the atime changed more than 60s ago
+		if (args->sync_start_time - cp->c_attr.ca_atime > 60) {
+			sync = true;
+			++args->atime_only_syncs;
+		}
+	}
+
+	if (sync) {
+		error = hfs_fsync(vp, args->waitfor, 0, args->p);
 
 		if (error)
 		        args->error = error;
-	}
+	} else if (cp->c_touch_acctime)
+		hfs_touchtimes(VTOHFS(vp), cp);
+
 	hfs_unlock(cp);
 	return (VNODE_RETURNED);
 }
@@ -2557,6 +2595,13 @@ hfs_sync(struct mount *mp, int waitfor, vfs_context_t context)
 	args.waitfor = waitfor;
 	args.p = p;
 	args.error = 0;
+	args.atime_only_syncs = 0;
+
+	struct timeval tv;
+	microtime(&tv);
+
+	args.sync_start_time = tv.tv_sec;
+
 	/*
 	 * hfs_sync_callback will be called for each vnode
 	 * hung off of this mount point... the vnode will be
@@ -2586,11 +2631,7 @@ hfs_sync(struct mount *mp, int waitfor, vfs_context_t context)
 		(void) hfs_lock(VTOC(btvp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT);
 		cp = VTOC(btvp);
 
-		if (((cp->c_flag &  C_MODIFIED) == 0) &&
-		    (cp->c_touch_acctime == 0) &&
-		    (cp->c_touch_chgtime == 0) &&
-		    (cp->c_touch_modtime == 0) &&
-		    vnode_hasdirtyblks(btvp) == 0) {
+		if (!hfs_is_dirty(cp) && !vnode_hasdirtyblks(btvp)) {
 			hfs_unlock(VTOC(btvp));
 			continue;
 		}
@@ -2628,13 +2669,13 @@ hfs_sync(struct mount *mp, int waitfor, vfs_context_t context)
 	 * Write back modified superblock.
 	 */
 	if (IsVCBDirty(vcb)) {
-		error = hfs_flushvolumeheader(hfsmp, waitfor, 0);
+		error = hfs_flushvolumeheader(hfsmp, waitfor == MNT_WAIT ? HFS_FVH_WAIT : 0);
 		if (error)
 			allerror = error;
 	}
 
 	if (hfsmp->jnl) {
-	    hfs_journal_flush(hfsmp, FALSE);
+	    hfs_flush(hfsmp, HFS_FLUSH_JOURNAL);
 	}
 
 	hfs_lock_mount(hfsmp);
@@ -3018,11 +3059,10 @@ encodinghint_exit:
 		bcopy(&local_jib, buf_ptr, sizeof(local_jib));
 		if (buf_bwrite (jib_buf)) {
 			return EIO;
-		}		
+		}
 
 		/* Force a flush track cache */
-		(void) VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, context);
-
+		hfs_flush(hfsmp, HFS_FLUSH_CACHE);
 
 		/* Now proceed with full volume sync */
 		hfs_sync(hfsmp->hfs_mp, MNT_WAIT, context);
@@ -3093,7 +3133,7 @@ encodinghint_exit:
 		vfs_setflags(hfsmp->hfs_mp, (u_int64_t)((unsigned int)MNT_JOURNALED));
 
 		hfs_unlock_global (hfsmp);
-		hfs_flushvolumeheader(hfsmp, MNT_WAIT, 1);
+		hfs_flushvolumeheader(hfsmp, HFS_FVH_WAIT | HFS_FVH_WRITE_ALT);
 
 		{
 			fsid_t fsid;
@@ -3148,7 +3188,7 @@ encodinghint_exit:
 		
 		hfs_unlock_global (hfsmp);
 
-		hfs_flushvolumeheader(hfsmp, MNT_WAIT, 1);
+		hfs_flushvolumeheader(hfsmp, HFS_FVH_WAIT | HFS_FVH_WRITE_ALT);
 
 		{
 			fsid_t fsid;
@@ -3174,8 +3214,8 @@ encodinghint_exit:
 			jnl_start = 0;
 			jnl_size  = 0;
 	    } else {
-			jnl_start = (off_t)(hfsmp->jnl_start * HFSTOVCB(hfsmp)->blockSize) + (off_t)HFSTOVCB(hfsmp)->hfsPlusIOPosOffset;
-			jnl_size  = (off_t)hfsmp->jnl_size;
+			jnl_start = hfs_blk_to_bytes(hfsmp->jnl_start, HFSTOVCB(hfsmp)->blockSize) + HFSTOVCB(hfsmp)->hfsPlusIOPosOffset;
+			jnl_size  = hfsmp->jnl_size;
 	    }
 
 	    if ((error = copyout((caddr_t)&jnl_start, CAST_USER_ADDR_T(name[1]), sizeof(off_t))) != 0) {
@@ -3257,35 +3297,56 @@ hfs_vfs_vget(struct mount *mp, ino64_t ino, struct vnode **vpp, __unused vfs_con
 
 	error = hfs_vget(hfsmp, (cnid_t)ino, vpp, 1, 0);
 	if (error)
-		return (error);
+		return error;
 
 	/*
-	 * ADLs may need to have their origin state updated
-	 * since build_path needs a valid parent.  The same is true
-	 * for hardlinked files as well.  There isn't a race window here
-	 * in re-acquiring the cnode lock since we aren't pulling any data 
-	 * out of the cnode; instead, we're going to the catalog.
+	 * If the look-up was via the object ID (rather than the link ID),
+	 * then we make sure there's a parent here.  We can't leave this
+	 * until hfs_vnop_getattr because if there's a problem getting the
+	 * parent at that point, all the caller will do is call
+	 * hfs_vfs_vget again and we'll end up in an infinite loop.
 	 */
-	if ((VTOC(*vpp)->c_flag & C_HARDLINK) &&
-	    (hfs_lock(VTOC(*vpp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) == 0)) {
-		cnode_t *cp = VTOC(*vpp);
-		struct cat_desc cdesc;
-		
+
+	cnode_t *cp = VTOC(*vpp);
+
+	if (ISSET(cp->c_flag, C_HARDLINK) && ino == cp->c_fileid) {
+		hfs_lock_always(cp, HFS_SHARED_LOCK);
+
 		if (!hfs_haslinkorigin(cp)) {
-			lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
-			error = cat_findname(hfsmp, (cnid_t)ino, &cdesc);
-			hfs_systemfile_unlock(hfsmp, lockflags);
-			if (error == 0) {
-				if ((cdesc.cd_parentcnid != hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid) &&
-					(cdesc.cd_parentcnid != hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid)) {
-					hfs_savelinkorigin(cp, cdesc.cd_parentcnid);
+			if (!hfs_lock_upgrade(cp))
+				hfs_lock_always(cp, HFS_EXCLUSIVE_LOCK);
+
+			if (cp->c_cnid == cp->c_fileid) {
+				/*
+				 * Descriptor is stale, so we need to refresh it.  We
+				 * pick the first link.
+				 */
+				cnid_t link_id;
+
+				error = hfs_first_link(hfsmp, cp, &link_id);
+
+				if (!error) {
+					lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+					error = cat_findname(hfsmp, link_id, &cp->c_desc);
+					hfs_systemfile_unlock(hfsmp, lockflags);
 				}
-				cat_releasedesc(&cdesc);
+			} else {
+				// We'll use whatever link the descriptor happens to have
+				error = 0;
 			}
+			if (!error)
+				hfs_savelinkorigin(cp, cp->c_parentcnid);
 		}
+
 		hfs_unlock(cp);
+
+		if (error) {
+			vnode_put(*vpp);
+			*vpp = NULL;
+		}
 	}
-	return (0);
+
+	return error;
 }
 
 
@@ -3626,7 +3687,7 @@ hfs_volupdate(struct hfsmount *hfsmp, enum volop op, int inroot)
 	hfs_unlock_mount (hfsmp);
 
 	if (hfsmp->jnl) {
-		hfs_flushvolumeheader(hfsmp, 0, 0);
+		hfs_flushvolumeheader(hfsmp, 0);
 	}
 
 	return (0);
@@ -3737,7 +3798,8 @@ hfs_flushMDB(struct hfsmount *hfsmp, int waitfor, int altflush)
  *  are always stored in-memory as "H+".
  */
 int
-hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
+hfs_flushvolumeheader(struct hfsmount *hfsmp, 
+					  hfs_flush_volume_header_options_t options)
 {
 	ExtendedVCB *vcb = HFSTOVCB(hfsmp);
 	struct filefork *fp;
@@ -3746,20 +3808,25 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 	struct buf *bp, *alt_bp;
 	int i;
 	daddr64_t priIDSector;
-	int critical;
+	bool critical = false;
 	u_int16_t  signature;
 	u_int16_t  hfsversion;
 	daddr64_t avh_sector;
+	bool altflush = ISSET(options, HFS_FVH_WRITE_ALT);
+
+	if (ISSET(options, HFS_FVH_FLUSH_IF_DIRTY)
+		&& !hfs_header_needs_flushing(hfsmp)) {
+		return 0;
+	}
 
 	if (hfsmp->hfs_flags & HFS_READ_ONLY) {
 		return(0);
 	}
 #if CONFIG_HFS_STD
 	if (hfsmp->hfs_flags & HFS_STANDARD) {
-		return hfs_flushMDB(hfsmp, waitfor, altflush);
+		return hfs_flushMDB(hfsmp, ISSET(options, HFS_FVH_WAIT) ? MNT_WAIT : 0, altflush);
 	}
 #endif
-	critical = altflush;
 	priIDSector = (daddr64_t)((vcb->hfsPlusIOPosOffset / hfsmp->hfs_logical_block_size) +
 				  HFS_PRI_SECTOR(hfsmp->hfs_logical_block_size));
 
@@ -3939,7 +4006,7 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 	volumeHeader->fileCount		= SWAP_BE32 (vcb->vcbFilCnt);
 	volumeHeader->folderCount	= SWAP_BE32 (vcb->vcbDirCnt);
 	volumeHeader->totalBlocks	= SWAP_BE32 (vcb->totalBlocks);
-	volumeHeader->freeBlocks	= SWAP_BE32 (vcb->freeBlocks);
+	volumeHeader->freeBlocks	= SWAP_BE32 (vcb->freeBlocks + vcb->reclaimBlocks);
 	volumeHeader->nextAllocation	= SWAP_BE32 (vcb->nextAllocation);
 	volumeHeader->rsrcClumpSize	= SWAP_BE32 (vcb->vcbClpSiz);
 	volumeHeader->dataClumpSize	= SWAP_BE32 (vcb->vcbClpSiz);
@@ -3949,13 +4016,10 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 
 	if (bcmp(vcb->vcbFndrInfo, volumeHeader->finderInfo, sizeof(volumeHeader->finderInfo)) != 0) {
 		bcopy(vcb->vcbFndrInfo, volumeHeader->finderInfo, sizeof(volumeHeader->finderInfo));
-		critical = 1;
+		critical = true;
 	}
 
-	/*
-	 * System files are only dirty when altflush is set.
-	 */
-	if (altflush == 0) {
+	if (!altflush && !ISSET(options, HFS_FVH_FLUSH_IF_DIRTY)) {
 		goto done;
 	}
 
@@ -3972,6 +4036,7 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 		volumeHeader->extentsFile.totalBlocks = SWAP_BE32 (fp->ff_blocks);
 		volumeHeader->extentsFile.clumpSize   = SWAP_BE32 (fp->ff_clumpsize);
 		FTOC(fp)->c_flag &= ~C_MODIFIED;
+		altflush = true;
 	}
 
 	/* Sync Catalog file meta data */
@@ -3987,6 +4052,7 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 		volumeHeader->catalogFile.totalBlocks = SWAP_BE32 (fp->ff_blocks);
 		volumeHeader->catalogFile.clumpSize   = SWAP_BE32 (fp->ff_clumpsize);
 		FTOC(fp)->c_flag &= ~C_MODIFIED;
+		altflush = true;
 	}
 
 	/* Sync Allocation file meta data */
@@ -4002,6 +4068,7 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 		volumeHeader->allocationFile.totalBlocks = SWAP_BE32 (fp->ff_blocks);
 		volumeHeader->allocationFile.clumpSize   = SWAP_BE32 (fp->ff_clumpsize);
 		FTOC(fp)->c_flag &= ~C_MODIFIED;
+		altflush = true;
 	}
 
 	/* Sync Attribute file meta data */
@@ -4013,7 +4080,10 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 			volumeHeader->attributesFile.extents[i].blockCount =
 				SWAP_BE32 (fp->ff_extents[i].blockCount);
 		}
-		FTOC(fp)->c_flag &= ~C_MODIFIED;
+		if (ISSET(FTOC(fp)->c_flag, C_MODIFIED)) {
+			FTOC(fp)->c_flag &= ~C_MODIFIED;
+			altflush = true;
+		}
 		volumeHeader->attributesFile.logicalSize = SWAP_BE64 (fp->ff_size);
 		volumeHeader->attributesFile.totalBlocks = SWAP_BE32 (fp->ff_blocks);
 		volumeHeader->attributesFile.clumpSize   = SWAP_BE32 (fp->ff_clumpsize);
@@ -4033,9 +4103,13 @@ hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor, int altflush)
 			volumeHeader->startupFile.totalBlocks = SWAP_BE32 (fp->ff_blocks);
 			volumeHeader->startupFile.clumpSize   = SWAP_BE32 (fp->ff_clumpsize);
 			FTOC(fp)->c_flag &= ~C_MODIFIED;
+			altflush = true;
 		}
 	}
 
+	if (altflush)
+		critical = true;
+ 
 done:
 	MarkVCBClean(hfsmp);
 	hfs_unlock_mount (hfsmp);
@@ -4150,8 +4224,7 @@ done:
 					 * may now appear to be beyond the device EOF.
 					 */
 					(void) VNOP_BWRITE(alt_bp);
-					(void) VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCSYNCHRONIZECACHE,
-							NULL, FWRITE, NULL);
+					hfs_flush(hfsmp, HFS_FLUSH_CACHE);
 				}		
 			} else if (alt_bp) {
 				buf_brelse(alt_bp);
@@ -4163,14 +4236,13 @@ done:
 	if (hfsmp->jnl) {
 		journal_modify_block_end(hfsmp->jnl, bp, NULL, NULL);
 	} else {
-		if (waitfor != MNT_WAIT) {
+		if (!ISSET(options, HFS_FVH_WAIT)) {
 			buf_bawrite(bp);
 		} else {
 			retval = VNOP_BWRITE(bp);
 			/* When critical data changes, flush the device cache */
-			if (critical && (retval == 0)) { 
-				(void) VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCSYNCHRONIZECACHE, 
-						NULL, FWRITE, NULL);
+			if (critical && (retval == 0)) {
+				hfs_flush(hfsmp, HFS_FLUSH_CACHE);
 			}
 		}
 	}
@@ -4505,11 +4577,10 @@ hfs_rename_volume(struct vnode *vp, const char *name, proc_t p)
 					strlcpy((char *)vcb->vcbVN, name, sizeof(vcb->vcbVN));
 
 					volname_length = strlen ((const char*)vcb->vcbVN);
-#define DKIOCCSSETLVNAME _IOW('d', 198, char[256])
 					/* Send the volume name down to CoreStorage if necessary */	
 					error = utf8_normalizestr(vcb->vcbVN, volname_length, (u_int8_t*)converted_volname, &conv_volname_length, 256, UTF_PRECOMPOSED);
 					if (error == 0) {
-						(void) VNOP_IOCTL (hfsmp->hfs_devvp, DKIOCCSSETLVNAME, converted_volname, 0, vfs_context_current());
+						(void) VNOP_IOCTL (hfsmp->hfs_devvp, _DKIOCCSSETLVNAME, converted_volname, 0, vfs_context_current());
 					}
 					error = 0;
 				}
@@ -4519,7 +4590,7 @@ hfs_rename_volume(struct vnode *vp, const char *name, proc_t p)
 			
 				if (error)
 					MarkVCBDirty(vcb);
-				(void) hfs_flushvolumeheader(hfsmp, MNT_WAIT, 0);
+				(void) hfs_flushvolumeheader(hfsmp, HFS_FVH_WAIT);
 			}
 			hfs_end_transaction(hfsmp);
 		}			

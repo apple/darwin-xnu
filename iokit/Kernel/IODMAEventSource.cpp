@@ -149,6 +149,13 @@ IOByteCount IODMAEventSource::validFIFODepth(IOByteCount depth, IODirection dire
 }
 
 
+IOReturn IODMAEventSource::setFrameSize(UInt8 byteCount)
+{
+  if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) return kIOReturnError;
+  
+  return dmaController->setFrameSize(dmaIndex, byteCount);
+}
+
 // protected
 
 bool IODMAEventSource::checkForWork(void)

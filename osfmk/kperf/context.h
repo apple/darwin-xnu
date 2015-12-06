@@ -26,6 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <kern/thread.h>
+
 /* context of what we're looking at */
 struct kperf_context
 {

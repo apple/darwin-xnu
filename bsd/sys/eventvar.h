@@ -59,12 +59,13 @@
 #include <sys/event.h>
 #include <sys/select.h>
 #include <kern/kern_types.h>
+#include <kern/waitq.h>
 
 #define KQ_NEVENTS	16		/* minimize copy{in,out} calls */
 #define KQEXTENT	256		/* linear growth by this amount */
 
 struct kqueue {
-	wait_queue_set_t kq_wqs;	/* private wait queue set */
+	struct waitq_set *kq_wqs;	/* private waitq set */
 	decl_lck_spin_data( ,kq_lock)	/* kqueue lock */
 	int		kq_state;
 	int		kq_count;	/* number of queued events */
@@ -79,15 +80,17 @@ struct kqueue {
 #define KQ_PROCWAIT	0x04
 #define KQ_KEV32	0x08
 #define KQ_KEV64	0x10
+#define KQ_KEV_QOS	0x20
+#define KQ_WORKQ	0x40
 };
 
 extern struct kqueue *kqueue_alloc(struct proc *);
 extern void kqueue_dealloc(struct kqueue *);
 
-typedef int (*kevent_callback_t)(struct kqueue *, struct kevent64_s *, void *);
+typedef int (*kevent_callback_t)(struct kqueue *, struct kevent_internal_s *, void *);
 typedef void (*kqueue_continue_t)(struct kqueue *, void *, int);
 
-extern int kevent_register(struct kqueue *, struct kevent64_s *, struct proc *);
+extern int kevent_register(struct kqueue *, struct kevent_internal_s *, struct proc *);
 extern int kqueue_scan(struct kqueue *, kevent_callback_t, kqueue_continue_t,
 		       void *, struct timeval *, struct proc *);
 extern int kqueue_stat(struct kqueue *, void *, int, proc_t);

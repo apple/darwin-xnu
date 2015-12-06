@@ -13,17 +13,11 @@ CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O
 
 WARNFLAGS = -Wall
 
-LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -L$(HOST_SPARSE_SDKROOT)/usr/local/lib/system -lstdc++
-ifneq ($(HOST_SPARSE_SDKROOT),/)
-LDFLAGS += -lmacho
-endif
+LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -lstdc++
 
-.SparseSDK: ALWAYS
-	$(_v)echo '$(HOST_SPARSE_SDKROOT)' | cmp -s - $@ || echo '$(HOST_SPARSE_SDKROOT)' > $@
-
-kextsymboltool: $(OBJS) .SparseSDK
+kextsymboltool: $(OBJS)
 	@echo HOST_LD $@
-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $(OBJS)
+	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
 	@echo HOST_CODESIGN $@
 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,17 +22,21 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <pexpert/pexpert.h>
 #include <pexpert/device_tree.h>
 
+typedef boolean_t (*argsep_func_t) (char c);
+
 static boolean_t isargsep( char c);
+static boolean_t israngesep( char c);
 static int argstrcpy(char *from, char *to);
 static int argstrcpy2(char *from,char *to, unsigned maxlen);
-static int argnumcpy(int val, void *to, unsigned maxlen);
-static int getval(char *s, int *val);
+static int argnumcpy(long long val, void *to, unsigned maxlen);
+static int getval(char *s, long long *val, argsep_func_t issep, boolean_t skip_equal_sign);
+boolean_t get_range_bounds(char * c, int64_t * lower, int64_t * upper);
 
 extern int IODTGetDefault(const char *key, void *infoAddr, unsigned int infoSize);
 
@@ -46,7 +50,7 @@ struct i24 {
 #define	STR	1
 
 #if !defined(__LP64__) && !defined(__arm__)
-boolean_t 
+boolean_t
 PE_parse_boot_arg(
 	const char  *arg_string,
 	void		*arg_ptr)
@@ -67,7 +71,7 @@ PE_parse_boot_argn(
 	char *args;
 	char *cp, c;
 	uintptr_t i;
-	int val;
+	long long val;
 	boolean_t arg_boolean;
 	boolean_t arg_found;
 
@@ -81,7 +85,7 @@ PE_parse_boot_argn(
 
 	while (*args)
 	{
-		if (*args == '-') 
+		if (*args == '-')
 			arg_boolean = TRUE;
 		else
 			arg_boolean = FALSE;
@@ -116,7 +120,7 @@ PE_parse_boot_argn(
 				arg_found = TRUE;
 				break;
 			}
-			switch (getval(cp, &val)) 
+			switch (getval(cp, &val, isargsep, FALSE))
 			{
 				case NUM:
 					argnumcpy(val, arg_ptr, max_len);
@@ -144,18 +148,26 @@ gotit:
 }
 
 static boolean_t
-isargsep(
-	char c)
+isargsep(char c)
 {
 	if (c == ' ' || c == '\0' || c == '\t')
-		return(TRUE);
+		return (TRUE);
 	else
-		return(FALSE);
+		return (FALSE);
+}
+
+static boolean_t
+israngesep(char c)
+{
+	if (isargsep(c) || c == '_' || c == ',')
+		return (TRUE);
+	else
+		return (FALSE);
 }
 
 static int
 argstrcpy(
-	char *from, 
+	char *from,
 	char *to)
 {
 	int i = 0;
@@ -170,7 +182,7 @@ argstrcpy(
 
 static int
 argstrcpy2(
-	char *from, 
+	char *from,
 	char *to,
 	unsigned maxlen)
 {
@@ -184,7 +196,7 @@ argstrcpy2(
 	return(i);
 }
 
-static int argnumcpy(int val, void *to, unsigned maxlen)
+static int argnumcpy(long long val, void *to, unsigned maxlen)
 {
 	switch (maxlen) {
 		case 0:
@@ -201,6 +213,11 @@ static int argnumcpy(int val, void *to, unsigned maxlen)
 			((struct i24 *)to)->i24 = val;
 			break;
 		case 4:
+			*(int32_t *)to = val;
+			break;
+		case 8:
+			*(int64_t *)to = val;
+			break;
 		default:
 			*(int32_t *)to = val;
 			maxlen = 4;
@@ -212,15 +229,22 @@ static int argnumcpy(int val, void *to, unsigned maxlen)
 
 static int
 getval(
-	char *s, 
-	int *val)
+	char *s,
+	long long *val,
+	argsep_func_t issep,
+	boolean_t skip_equal_sign )
 {
-	unsigned int radix, intval;
-    unsigned char c;
+	unsigned long long radix, intval;
+	unsigned char c;
 	int sign = 1;
+	boolean_t has_value = FALSE;
 
 	if (*s == '=') {
 		s++;
+		has_value = TRUE;
+	}
+
+	if (has_value || skip_equal_sign) {
 		if (*s == '-')
 			sign = -1, s++;
 		intval = *s++-'0';
@@ -246,7 +270,7 @@ getval(
 				break;
 
 			default:
-				if (!isargsep(*s))
+				if (!issep(*s))
 					return (STR);
 			}
                 } else if (intval >= radix) {
@@ -254,7 +278,7 @@ getval(
                 }
 		for(;;) {
                         c = *s++;
-                        if (isargsep(c))
+                        if (issep(c))
                             break;
                         if ((radix <= 10) &&
                             ((c >= '0') && (c <= ('9' - (10 - radix))))) {
@@ -285,7 +309,7 @@ getval(
 			intval *= radix;
 			intval += c;
 		}
-                if (!isargsep(c) && !isargsep(*s))
+                if (!issep(c) && !issep(*s))
                     return STR;
 		*val = intval * sign;
 		return (NUM);
@@ -294,7 +318,7 @@ getval(
 	return (NUM);
 }
 
-boolean_t 
+boolean_t
 PE_imgsrc_mount_supported()
 {
 	return TRUE;
@@ -340,4 +364,39 @@ PE_get_default(
 	 * Look for the property using I/O Kit's DT support.
 	 */
 	return IODTGetDefault(property_name, property_ptr, max_property) ? FALSE : TRUE;
+}
+
+/* function: get_range_bounds
+ * Parse a range string like "1_3,5_20" and return 1,3 as lower and upper.
+ * Note: '_' is separator for bounds integer delimiter and
+ *       ',' is considered as separator for range pair.
+ * returns TRUE when both range values are found
+ */
+boolean_t
+get_range_bounds(char *c, int64_t *lower, int64_t *upper)
+{
+	if (c == NULL || lower == NULL || upper == NULL) {
+		return FALSE;
+	}
+
+	if (NUM != getval(c, lower, israngesep, TRUE)) {
+		return FALSE;
+	}
+
+	while (*c != '\0') {
+		if (*c == '_') {
+			break;
+		}
+		c++;
+	}
+
+	if (*c == '_') {
+		c++;
+		if (NUM != getval(c, upper, israngesep, TRUE)) {
+			return FALSE;
+		}
+	} else {
+		return FALSE;
+	}
+	return TRUE;
 }

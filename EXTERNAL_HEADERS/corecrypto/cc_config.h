@@ -2,8 +2,9 @@
  *  cc_config.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 10/18/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 11/16/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2013,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -44,7 +45,7 @@
 
 */
 
-#if defined(DEBUG) && (DEBUG)
+#if (defined(DEBUG) && (DEBUG))
 /* CC_DEBUG is already used in CommonCrypto */
 #define CORECRYPTO_DEBUG 1
 #else
@@ -52,15 +53,35 @@
 #endif
 
 #if defined(KERNEL) && (KERNEL)
-#define CC_KERNEL 1
+#define CC_KERNEL 1 // KEXT, XNU repo or kernel components such as AppleKeyStore
 #else
 #define CC_KERNEL 0
+#endif
+
+// LINUX_BUILD_TEST is for sanity check of the configuration
+// > xcodebuild -scheme "corecrypto_test" OTHER_CFLAGS="$(values) -DLINUX_BUILD_TEST"
+#if defined(__linux__) || defined(LINUX_BUILD_TEST)
+#define CC_LINUX 1
+#else
+#define CC_LINUX 0
 #endif
 
 #if defined(USE_L4) && (USE_L4)
 #define CC_USE_L4 1
 #else
 #define CC_USE_L4 0
+#endif
+
+#if defined(USE_SEPROM) && (USE_SEPROM)
+#define CC_USE_SEPROM 1
+#else
+#define CC_USE_SEPROM 0
+#endif
+
+#if defined(USE_S3) && (USE_S3)
+#define CC_USE_S3 1
+#else
+#define CC_USE_S3 0
 #endif
 
 #if defined(MAVERICK) && (MAVERICK)
@@ -121,10 +142,18 @@
 #define CCN_OSX				   1
 #endif 
 
+#if CC_USE_L4 || CC_USE_S3
 /* No dynamic linking allowed in L4, e.g. avoid nonlazy symbols */
-/* For corecrypto kext, CC_STATIC should be 0 */
-#if CC_USE_L4
+/* For corecrypto kext, CC_STATIC should be undefined */
 #define CC_STATIC              1
+#endif
+
+#if CC_USE_L4 || CC_IBOOT
+/* For L4, stack is too short, need to use HEAP for some computations */
+/* CC_USE_HEAP_FOR_WORKSPACE not supported for KERNEL!  */
+#define CC_USE_HEAP_FOR_WORKSPACE 1
+#else
+#define CC_USE_HEAP_FOR_WORKSPACE 0
 #endif
 
 /* L4 do not have bzero, neither does hexagon of ARMCC even with gnu compatibility mode */
@@ -134,9 +163,18 @@
 #define CC_HAS_BZERO 1
 #endif
 
-#if defined(__CC_ARM) || defined(__hexagon__)
-// ARMASM.exe does not to like the file syntax of the asm implementation
+/* memset_s is only available in few target */
+#if CC_USE_L4 || CC_KERNEL || CC_IBOOT || CC_USE_SEPROM || defined(__CC_ARM) || defined(__hexagon__)
+#define CC_HAS_MEMSET_S 0
+#else
+#define CC_HAS_MEMSET_S 1
+#endif
 
+
+#if defined(__CC_ARM) || defined(__hexagon__) || CC_LINUX || defined(__NO_ASM__)
+// ARMASM.exe does not to like the file syntax of the asm implementation
+#define CCN_DEDICATED_SQR      1
+#define CCN_MUL_KARATSUBA      1 // 4*n CCN_UNIT extra memory required.
 #define CCN_ADD_ASM            0
 #define CCN_SUB_ASM            0
 #define CCN_MUL_ASM            0
@@ -150,28 +188,40 @@
 #define CCAES_ARM              0
 #define CCAES_INTEL            0
 #define CCN_USE_BUILTIN_CLZ    0
+#if !defined(__NO_ASM__)
 #define CCSHA1_VNG_INTEL       0
 #define CCSHA2_VNG_INTEL       0
+#define CCSHA1_VNG_ARMV7NEON   0
+#define CCSHA2_VNG_ARMV7NEON   0
+#endif
+#define CCAES_MUX              0
 
 #elif defined(__x86_64__) || defined(__i386__)
-
+#define CCN_DEDICATED_SQR      1
+#define CCN_MUL_KARATSUBA      1 // 4*n CCN_UNIT extra memory required.
 /* These assembly routines only work for a single CCN_UNIT_SIZE. */
 #if (defined(__x86_64__) && CCN_UNIT_SIZE == 8) || (defined(__i386__) && CCN_UNIT_SIZE == 4)
 #define CCN_ADD_ASM            1
 #define CCN_SUB_ASM            1
-#define CCN_MUL_ASM            1
+#define CCN_MUL_ASM            0
 #else
 #define CCN_ADD_ASM            0
 #define CCN_SUB_ASM            0
 #define CCN_MUL_ASM            0
 #endif
 
+#if (defined(__x86_64__) && CCN_UNIT_SIZE == 8)
+#define CCN_CMP_ASM            1
+#define CCN_N_ASM              1
+#else
+#define CCN_CMP_ASM            0
+#define CCN_N_ASM              0
+#endif
+
 #define CCN_ADDMUL1_ASM        0
 #define CCN_MUL1_ASM           0
-#define CCN_CMP_ASM            0
 #define CCN_ADD1_ASM           0
 #define CCN_SUB1_ASM           0
-#define CCN_N_ASM              0
 #define CCN_SET_ASM            0
 #define CCAES_ARM              0
 #define CCAES_INTEL            1
@@ -183,7 +233,8 @@
 #define CCSHA2_VNG_ARMV7NEON   0
 
 #else
-
+#define CCN_DEDICATED_SQR      1
+#define CCN_MUL_KARATSUBA      1 // 4*n CCN_UNIT extra memory required.
 #define CCN_ADD_ASM            0
 #define CCN_SUB_ASM            0
 #define CCN_MUL_ASM            0
@@ -204,9 +255,6 @@
 #define CCSHA2_VNG_ARMV7NEON   0
 
 #endif /* !defined(__i386__) */
-
-#define CCN_N_INLINE           0
-#define CCN_CMP_INLINE         0
 
 #define CC_INLINE static inline
 
@@ -272,5 +320,6 @@
 /*! @parseOnly */
 #define CC_MALLOC
 #endif /* !__GNUC__ */
+
 
 #endif /* _CORECRYPTO_CC_CONFIG_H_ */

@@ -32,6 +32,7 @@
 #include <mach/mach_types.h>
 
 #include <kern/clock.h>
+#include <kern/smp.h>
 #include <kern/processor.h>
 #include <kern/timer_call.h>
 #include <kern/timer_queue.h>
@@ -73,13 +74,17 @@ lck_grp_t               timer_longterm_lck_grp;
 lck_attr_t              timer_longterm_lck_attr;
 lck_grp_attr_t          timer_longterm_lck_grp_attr;
 
-
+/* Timer queue lock must be acquired with interrupts disabled (under splclock()) */
+#if __SMP__
 #define timer_queue_lock_spin(queue)					\
 	lck_mtx_lock_spin_always(&queue->lock_data)
 
 #define timer_queue_unlock(queue)		\
 	lck_mtx_unlock_always(&queue->lock_data)
-
+#else
+#define timer_queue_lock_spin(queue)	(void)1
+#define timer_queue_unlock(queue)		(void)1
+#endif
 
 #define QUEUE(x)	((queue_t)(x))
 #define MPQUEUE(x)	((mpqueue_head_t *)(x))

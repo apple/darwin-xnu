@@ -234,8 +234,8 @@ frag6_icmp6_timeex_error(struct fq6_head *diq6)
 		MBUFQ_FOREACH_SAFE(m, diq6, m_tmp) {
 			MBUFQ_REMOVE(diq6, m);
 			MBUFQ_NEXT(m) = NULL;
-			icmp6_error(m, ICMP6_TIME_EXCEEDED,
-			    ICMP6_TIME_EXCEED_REASSEMBLY, 0);
+			icmp6_error_flag(m, ICMP6_TIME_EXCEEDED,
+			    ICMP6_TIME_EXCEED_REASSEMBLY, 0, 0);
 		}
 	}
 }

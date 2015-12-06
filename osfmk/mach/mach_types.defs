@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010, 2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -210,11 +210,12 @@ type vm_sync_t = int;
 		 * policy_timeshare_info_t (5 ints)
 		 * policy_fifo_info_t (4 ints)
 		 * policy_rr_info_t (5 ints)
+		 * thread_extended_info (12 ints + 64 chars)
 		 * if other thread_info flavors are added, this
 		 * definition may need to be changed. (See
 		 * mach/thread_info.h and mach/policy.h) */
 type thread_flavor_t		= int;
-type thread_info_t		= array[*:12] of integer_t;
+type thread_info_t		= array[*:32] of integer_t;
 
 type thread_policy_flavor_t	= natural_t;
 type thread_policy_t		= array[*:16] of integer_t;
@@ -495,7 +496,6 @@ type semaphore_consume_ref_t = mach_port_move_send_t
 #if	KERNEL_SERVER
 		intran: semaphore_t convert_port_to_semaphore(mach_port_t)
 		outtran: mach_port_t convert_semaphore_to_port(semaphore_t)
-		destructor: semaphore_dereference(semaphore_t)
 #endif	/* KERNEL_SERVER */
 		;
 
@@ -560,6 +560,9 @@ type mach_voucher_selector_t = uint32_t;
 type mach_voucher_attr_value_handle_t = uint64_t;
 type mach_voucher_attr_value_handle_array_t = array[*:4] of mach_voucher_attr_value_handle_t;
 type mach_voucher_attr_value_reference_t = uint32_t;
+
+type task_inspect_flavor_t = natural_t;
+type task_inspect_data_t = array[] of char;
 
 /* kernel module loader */
 type kmod_t = int;

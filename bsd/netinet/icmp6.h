@@ -714,6 +714,10 @@ struct	in6_multi;
 struct ip6protosw;
 void	icmp6_init(struct ip6protosw *, struct domain *);
 void	icmp6_paramerror(struct mbuf *, int);
+
+void	icmp6_error_flag(struct mbuf *, int, int, int, int);
+#define	ICMP6_ERROR_RST_MRCVIF	0x1
+
 void	icmp6_error(struct mbuf *, int, int, int);
 void	icmp6_error2(struct mbuf *, int, int, int, struct ifnet *);
 int	icmp6_input(struct mbuf **, int *, int);

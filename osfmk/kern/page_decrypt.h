@@ -53,6 +53,7 @@ struct pager_crypt_info {
         void    (*crypt_end)(void *crypt_ops);
         /* Private data for the crypter */
         void    *crypt_ops;
+	volatile int	crypt_refcnt;
 };
 typedef struct pager_crypt_info pager_crypt_info_t;
 

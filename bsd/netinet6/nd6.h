@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -69,6 +69,7 @@
 #include <net/flowadv.h>
 #include <kern/locks.h>
 #include <sys/tree.h>
+#include <netinet6/nd6_var.h>
 
 struct	llinfo_nd6 {
 	/*
@@ -135,6 +136,7 @@ struct	llinfo_nd6 {
 struct nd_ifinfo {
 #else
 /* For binary compatibility, this structure must not change */
+/* NOTE: nd_ifinfo is defined in nd6_var.h */
 struct nd_ifinfo_compat {
 #endif /* !BSD_KERNEL_PRIVATE */
 	u_int32_t linkmtu;		/* LinkMTU */
@@ -151,30 +153,6 @@ struct nd_ifinfo_compat {
 	u_int8_t randomseed1[8]; /* lower 64 bits (usually the EUI64 IFID) */
 	u_int8_t randomid[8];	/* current random ID */
 };
-
-#if defined(BSD_KERNEL_PRIVATE)
-struct nd_ifinfo {
-	decl_lck_mtx_data(, lock);
-	boolean_t initialized; /* Flag to see the entry is initialized */
-	u_int32_t linkmtu;		/* LinkMTU */
-	u_int32_t maxmtu;		/* Upper bound of LinkMTU */
-	u_int32_t basereachable;	/* BaseReachableTime */
-	u_int32_t reachable;		/* Reachable Time */
-	u_int32_t retrans;		/* Retrans Timer */
-	u_int32_t flags;		/* Flags */
-	int recalctm;			/* BaseReacable re-calculation timer */
-	u_int8_t chlim;			/* CurHopLimit */
-	u_int8_t _pad[3];
-	/* the following 3 members are for privacy extension for addrconf */
-	u_int8_t randomseed0[8]; /* upper 64 bits of SHA1 digest */
-	u_int8_t randomseed1[8]; /* lower 64 bits (usually the EUI64 IFID) */
-	u_int8_t randomid[8];	/* current random ID */
-	/* keep track of routers and prefixes on this link */
-	int32_t nprefixes;
-	int32_t ndefrouters;
-	struct in6_cga_modifier local_cga_modifier;
-};
-#endif /* BSD_KERNEL_PRIVATE */
 
 #define	ND6_IFF_PERFORMNUD		0x1
 #if defined(PRIVATE)
@@ -470,14 +448,10 @@ struct	in6_ndifreq_64 {
 #define	ND6_MAX_LIFETIME		0x7fffffff
 
 #ifdef BSD_KERNEL_PRIVATE
-/*
- * Protects nd_ifinfo[]
- */
-extern lck_rw_t *nd_if_rwlock;
-
-#define	ND_IFINFO(ifp) \
-	((ifp)->if_index < nd_ifinfo_indexlim ? &nd_ifinfo[(ifp)->if_index] : \
-	NULL)
+#define ND_IFINFO(ifp)				\
+    ((ifp == NULL) ? NULL :			\
+     ((IN6_IFEXTRA(ifp) == NULL) ? NULL :	\
+      (&IN6_IFEXTRA(ifp)->nd_ifinfo)))
 
 /*
  * In a more readable form, we derive linkmtu based on:
@@ -514,6 +488,10 @@ extern lck_rw_t *nd_if_rwlock;
 #define	ND_COMPUTE_RTIME(x) \
 		(((MIN_RANDOM_FACTOR * (x >> 10)) + (RandomULong() & \
 		((MAX_RANDOM_FACTOR - MIN_RANDOM_FACTOR) * (x >> 10)))) /1000)
+
+/* prefix expiry times */
+#define	ND6_PREFIX_EXPIRY_UNSPEC	-1
+#define ND6_PREFIX_EXPIRY_NEVER		0
 
 TAILQ_HEAD(nd_drhead, nd_defrouter);
 struct	nd_defrouter {
@@ -689,10 +667,22 @@ struct nd_prefix_list {
 #endif /* BSD_KERNEL_PRIVATE */
 
 #if defined(PRIVATE)
+struct kev_nd6_ndfailure {
+	struct net_event_data link_data;
+};
+
+struct kev_nd6_ndalive {
+	struct net_event_data link_data;
+};
+
 /* ND6 kernel event subclass value */
-#define	KEV_ND6_SUBCLASS		7
+#define	KEV_ND6_SUBCLASS                7
+
 /* ND6 kernel event action type */
-#define	KEV_ND6_RA			1
+#define	KEV_ND6_RA                      1
+#define	KEV_ND6_NDFAILURE               2 /* IPv6 neighbor cache entry expiry */
+#define	KEV_ND6_NDALIVE                 3 /* IPv6 neighbor reachable */
+
 /* ND6 RA L2 source address length */
 #define	ND6_ROUTER_LL_SIZE		64
 
@@ -738,11 +728,9 @@ extern int nd6_accept_6to4;
 extern int nd6_maxnudhint;
 extern int nd6_gctimer;
 extern struct llinfo_nd6 llinfo_nd6;
-extern struct nd_ifinfo *nd_ifinfo;
 extern struct nd_drhead nd_defrouter;
 extern struct nd_prhead nd_prefix;
 extern int nd6_debug;
-extern size_t nd_ifinfo_indexlim;
 extern int nd6_onlink_ns_rfc4861;
 extern int nd6_optimistic_dad;
 
@@ -794,8 +782,8 @@ union nd_opts {
 extern int nd6_sched_timeout_want;
 extern void nd6_sched_timeout(struct timeval *, struct timeval *);
 extern void nd6_init(void);
-extern void nd6_ifreset(struct ifnet *);
-extern int nd6_ifattach(struct ifnet *);
+extern void nd6_ifreset(struct ifnet *ifp);
+extern void nd6_ifattach(struct ifnet *);
 extern int nd6_is_addr_neighbor(struct sockaddr_in6 *, struct ifnet *, int);
 extern void nd6_option_init(void *, int, union nd_opts *);
 extern struct nd_opt_hdr *nd6_option(union nd_opts *);
@@ -811,6 +799,8 @@ extern void nd6_rtrequest(int, struct rtentry *, struct sockaddr *);
 extern int nd6_ioctl(u_long, caddr_t, struct ifnet *);
 extern void nd6_cache_lladdr(struct ifnet *, struct in6_addr *,
     char *, int, int, int);
+extern int nd6_output_list(struct ifnet *, struct ifnet *, struct mbuf *,
+    struct sockaddr_in6 *, struct rtentry *, struct flowadv *);
 extern int nd6_output(struct ifnet *, struct ifnet *, struct mbuf *,
     struct sockaddr_in6 *, struct rtentry *, struct flowadv *);
 extern int nd6_storelladdr(struct ifnet *, struct rtentry *, struct mbuf *,
@@ -865,7 +855,7 @@ extern int nd6_prefix_onlink_scoped(struct nd_prefix *, unsigned int);
 extern int nd6_prefix_offlink(struct nd_prefix *);
 extern void pfxlist_onlink_check(void);
 extern struct nd_defrouter *defrouter_lookup(struct in6_addr *, struct ifnet *);
-extern struct nd_prefix *nd6_prefix_lookup(struct nd_prefix *);
+extern struct nd_prefix *nd6_prefix_lookup(struct nd_prefix *, int);
 extern int in6_init_prefix_ltimes(struct nd_prefix *ndpr);
 extern void rt6_flush(struct in6_addr *, struct ifnet *);
 extern int nd6_setdefaultiface(int);

@@ -38,6 +38,7 @@
 #include <strings.h>
 #include <mach/port.h>
 #include <mach/exception_types.h>
+#include <mach/coalition.h> /* for COALITION_TYPE_MAX */
 
 
 /*
@@ -112,7 +113,6 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 
 		 (*psattrp)->short_padding = 0; 
 		 (*psattrp)->flags_padding = 0; 
-		 (*psattrp)->int_padding = 0;
 
 		/* Default is no new apptype requested */
 		(*psattrp)->psa_apptype = POSIX_SPAWN_PROCESS_TYPE_DEFAULT;
@@ -120,7 +120,8 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 		/* Jetsam related */
 		(*psattrp)->psa_jetsam_flags = 0;
 		(*psattrp)->psa_priority = -1;
-		(*psattrp)->psa_high_water_mark = -1;
+		(*psattrp)->psa_memlimit_active = -1;
+		(*psattrp)->psa_memlimit_inactive = -1;
 
 		/* Default is no CPU usage monitor active. */
 		(*psattrp)->psa_cpumonitor_percent = 0;
@@ -129,11 +130,26 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 		/* Default is no MAC policy extensions. */
 		(*psattrp)->psa_mac_extensions = NULL;
 
-		/* Default is to inherit parent's coalition */
-		(*psattrp)->psa_coalitionid = 0;
+		/* Default is to inherit parent's coalition(s) */
+		(*psattrp)->psa_coalition_info = NULL;
+
+		(*psattrp)->reserved = NULL;
+
+		/*
+		 * old coalition field
+		 * For backwards compatibility reasons, we set this to 1
+		 * which is the first valid coalition id. This will allow
+		 * newer user space code to properly spawn processes on
+		 * older kernels
+		 * (they will just all end up in the same coalition).
+		 */
+		(*psattrp)->psa_reserved = 1;
 
 		/* Default is no new clamp */
 		(*psattrp)->psa_qos_clamp = POSIX_SPAWN_PROC_CLAMP_NONE;
+
+		/* Default is no change to role */
+		(*psattrp)->psa_darwin_role = POSIX_SPAWN_DARWIN_ROLE_NONE;
 	}
 
 	return (err);
@@ -161,6 +177,8 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
  *		EINVAL	The value specified by attr is invalid.
  */
 static int posix_spawn_destroyportactions_np(posix_spawnattr_t *);
+static int posix_spawn_destroycoalition_info_np(posix_spawnattr_t *);
+
 
 int
 posix_spawnattr_destroy(posix_spawnattr_t *attr)
@@ -172,6 +190,7 @@ posix_spawnattr_destroy(posix_spawnattr_t *attr)
 
 	psattr = *(_posix_spawnattr_t *)attr;
 	posix_spawn_destroyportactions_np(attr);
+	posix_spawn_destroycoalition_info_np(attr);
 
 	free(psattr);
 	*attr = NULL;
@@ -733,6 +752,29 @@ posix_spawn_destroyportactions_np(posix_spawnattr_t *attr)
 		return EINVAL;
 	
 	free(acts);
+	return 0;
+}
+
+/*
+ * posix_spawn_destroycoalition_info_np
+ * Description: clean up coalition_info struct in posix_spawnattr_t attr
+ */
+static int
+posix_spawn_destroycoalition_info_np(posix_spawnattr_t *attr)
+{
+	_posix_spawnattr_t psattr;
+	struct _posix_spawn_coalition_info *coal_info;
+
+	if (attr == NULL || *attr == NULL)
+		return EINVAL;
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	coal_info = psattr->psa_coalition_info;
+	if (coal_info == NULL)
+		return EINVAL;
+
+	psattr->psa_coalition_info = NULL;
+	free(coal_info);
 	return 0;
 }
 
@@ -1390,16 +1432,31 @@ posix_spawnattr_setmacpolicyinfo_np(posix_spawnattr_t * __restrict attr,
 	return 0;
 }
 
-int posix_spawnattr_setcoalition_np(const posix_spawnattr_t * __restrict attr, uint64_t coalitionid)
+int posix_spawnattr_setcoalition_np(const posix_spawnattr_t * __restrict attr,
+				    uint64_t coalitionid, int type, int role)
 {
 	_posix_spawnattr_t psattr;
+	struct _posix_spawn_coalition_info *coal_info;
 
 	if (attr == NULL || *attr == NULL) {
 		return EINVAL;
 	}
+	if (type < 0 || type > COALITION_TYPE_MAX)
+		return EINVAL;
 
 	psattr = *(_posix_spawnattr_t *)attr;
-	psattr->psa_coalitionid = coalitionid;
+
+	coal_info = psattr->psa_coalition_info;
+	if (!coal_info) {
+		coal_info = (struct _posix_spawn_coalition_info *)malloc(sizeof(*coal_info));
+		if (!coal_info)
+			return ENOMEM;
+		memset(coal_info, 0, sizeof(*coal_info));
+		psattr->psa_coalition_info = coal_info;
+	}
+
+	coal_info->psci_info[type].psci_id   = coalitionid;
+	coal_info->psci_info[type].psci_role = role;
 
 	return 0;
 }
@@ -1437,6 +1494,34 @@ posix_spawnattr_get_qos_clamp_np(const posix_spawnattr_t * __restrict attr, uint
 	return (0);
 }
 
+int posix_spawnattr_set_darwin_role_np(const posix_spawnattr_t * __restrict attr, uint64_t darwin_role)
+{
+	_posix_spawnattr_t psattr;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	psattr->psa_darwin_role = darwin_role;
+
+	return 0;
+}
+
+int
+posix_spawnattr_get_darwin_role_np(const posix_spawnattr_t * __restrict attr, uint64_t * __restrict darwin_rolep)
+{
+	_posix_spawnattr_t psattr;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	*darwin_rolep = psattr->psa_darwin_role;
+
+	return (0);
+}
 
 /*
  * posix_spawn
@@ -1510,6 +1595,10 @@ posix_spawn(pid_t * __restrict pid, const char * __restrict path,
 				ad.mac_extensions = psattr->psa_mac_extensions;
 				ad.mac_extensions_size = PS_MAC_EXTENSIONS_SIZE(
 						ad.mac_extensions->psmx_count);
+			}
+			if (psattr->psa_coalition_info != NULL) {
+				ad.coal_info_size = sizeof(struct _posix_spawn_coalition_info);
+				ad.coal_info = psattr->psa_coalition_info;
 			}
 		}
 		if (file_actions != NULL && *file_actions != NULL) {

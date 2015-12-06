@@ -95,7 +95,7 @@ class IORegistryPlane : public OSObject {
     int			reserved[2];
 
 public:
-    virtual bool serialize(OSSerialize *s) const;
+    virtual bool serialize(OSSerialize *s) const APPLE_KEXT_OVERRIDE;
 };
 
 OSDefineMetaClassAndStructors(IORegistryPlane, OSObject)

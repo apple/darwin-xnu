@@ -121,6 +121,8 @@
 #define	IFM_10G_LR	19		/* 10GbaseLR - single-mode fiber */
 #define	IFM_10G_CX4	20		/* 10GbaseCX4 - copper */
 #define	IFM_10G_T	21		/* 10GbaseT - 4 pair cat 6 */
+#define	IFM_2500_T	22		/* 2500baseT - 4 pair cat 5 */
+#define	IFM_5000_T	23		/* 5000baseT - 4 pair cat 5 */
 
 /*
  * Token ring
@@ -254,6 +256,8 @@ struct ifmedia_description {
     { IFM_10G_LR,   "10GbaseLR"   },                \
     { IFM_10G_CX4,  "10GbaseCX4"  },                \
     { IFM_10G_T,    "10GbaseT"    },                \
+    { IFM_2500_T,   "2500baseT"   },                \
+    { IFM_5000_T,   "5000baseT"   },                \
     { 0, NULL },                                    \
 }
 

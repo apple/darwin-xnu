@@ -139,6 +139,7 @@
  * UDP protocol inplementation.
  * Per RFC 768, August, 1980.
  */
+extern int soreserveheadroom;
 
 int
 udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
@@ -306,7 +307,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	 * Calculate data length and get a mbuf
 	 * for UDP and IP6 headers.
 	 */
-	M_PREPEND(m, hlen + sizeof (struct udphdr), M_DONTWAIT);
+	M_PREPEND(m, hlen + sizeof (struct udphdr), M_DONTWAIT, 1);
 	if (m == 0) {
 		error = ENOBUFS;
 		goto release;
@@ -350,19 +351,20 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		flags = IPV6_OUTARGS;
 
 		udp6stat.udp6s_opackets++;
-			
+
 #if NECP
 		{
 			necp_kernel_policy_id policy_id;
-			if (!necp_socket_is_allowed_to_send_recv_v6(in6p, in6p->in6p_lport, fport, laddr, faddr, NULL, &policy_id)) {
+			u_int32_t route_rule_id;
+			if (!necp_socket_is_allowed_to_send_recv_v6(in6p, in6p->in6p_lport, fport, laddr, faddr, NULL, &policy_id, &route_rule_id)) {
 				error = EHOSTUNREACH;
 				goto release;
 			}
 
-			necp_mark_packet_from_socket(m, in6p, policy_id);
+			necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id);
 		}
 #endif /* NECP */
-			
+
 #if IPSEC
 		if (in6p->in6p_sp != NULL && ipsec_setsocket(m, so) != 0) {
 			error = ENOBUFS;
@@ -440,6 +442,17 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		if ( --in6p->inp_sndinprog_cnt == 0)
 			in6p->inp_flags &= ~(INP_FC_FEEDBACK);
 
+		if (ro.ro_rt != NULL) {
+			struct ifnet *outif = ro.ro_rt->rt_ifp;
+
+			so->so_pktheadroom = P2ROUNDUP(
+			    sizeof(struct udphdr) +
+			    hlen +
+			    ifnet_hdrlen(outif) +
+			    ifnet_packetpreamblelen(outif),
+			    sizeof(u_int32_t));
+		}
+
 		/* Synchronize PCB cached route */
 		in6p_route_copyin(in6p, &ro);
 
@@ -462,8 +475,16 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			 * with that of the route interface used by IP.
 			 */
 			if (rt != NULL &&
-			    (outif = rt->rt_ifp) != in6p->in6p_last_outifp)
+			    (outif = rt->rt_ifp) != in6p->in6p_last_outifp) {
 				in6p->in6p_last_outifp = outif;
+
+				so->so_pktheadroom = P2ROUNDUP(
+				    sizeof(struct udphdr) +
+				    hlen +
+				    ifnet_hdrlen(outif) +
+				    ifnet_packetpreamblelen(outif),
+				    sizeof(u_int32_t));
+			}				
 		} else {
 			ROUTE_RELEASE(&in6p->in6p_route);
 		}

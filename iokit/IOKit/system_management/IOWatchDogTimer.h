@@ -41,9 +41,9 @@ protected:
   ExpansionData *reserved;
   
 public:
-  virtual bool start(IOService *provider);
-  virtual void stop(IOService *provider);
-  virtual IOReturn setProperties(OSObject *properties);
+  virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+  virtual void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
+  virtual IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
   virtual void setWatchDogTimer(UInt32 timeOut) = 0;
   
   OSMetaClassDeclareReservedUnused(IOWatchDogTimer,  0);

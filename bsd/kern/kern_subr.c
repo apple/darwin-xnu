@@ -1004,9 +1004,6 @@ void uio_update( uio_t a_uio, user_size_t a_count )
 				a_uio->uio_iovs.uiovp->iov_base += a_count;
 				a_uio->uio_iovs.uiovp->iov_len -= a_count;
 			}
-			if (a_uio->uio_resid_64 < 0) {
-				a_uio->uio_resid_64 = 0;
-			}
 			if (a_count > (user_size_t)a_uio->uio_resid_64) {
 				a_uio->uio_offset += a_uio->uio_resid_64;
 				a_uio->uio_resid_64 = 0;
@@ -1039,9 +1036,6 @@ void uio_update( uio_t a_uio, user_size_t a_count )
 			else {
 			        a_uio->uio_iovs.kiovp->iov_base += a_count;
 				a_uio->uio_iovs.kiovp->iov_len -= a_count;
-			}
-			if (a_uio->uio_resid_64 < 0) {
-			        a_uio->uio_resid_64 = 0;
 			}
 			if (a_count > (user_size_t)a_uio->uio_resid_64) {
 				a_uio->uio_offset += a_uio->uio_resid_64;

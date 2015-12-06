@@ -57,6 +57,7 @@ class IODMAController : public IOService
   virtual IOByteCount getFIFODepth(UInt32 dmaIndex, IODirection direction) = 0;
   virtual IOReturn setFIFODepth(UInt32 dmaIndex, IOByteCount depth) = 0;
   virtual IOByteCount validFIFODepth(UInt32 dmaIndex, IOByteCount depth, IODirection direction) = 0;
+  virtual IOReturn setFrameSize(UInt32 dmaIndex, UInt8 byteCount) = 0;
   virtual IOReturn setDMAConfig(UInt32 dmaIndex, IOService *provider, UInt32 reqIndex) = 0;
   virtual bool validDMAConfig(UInt32 dmaIndex, IOService *provider, UInt32 reqIndex) = 0;
   
@@ -64,7 +65,7 @@ class IODMAController : public IOService
   static const OSSymbol *createControllerName(UInt32 phandle);
   static IODMAController *getController(IOService *provider, UInt32 dmaIndex);
   
-  virtual bool start(IOService *provider);
+  virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
 };
 
 

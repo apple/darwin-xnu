@@ -189,10 +189,7 @@ extern kern_return_t ipc_right_copyin(
 	ipc_object_t		*objectp,
 	ipc_port_t		*sorightp,
 	ipc_port_t		*releasep,
-#if IMPORTANCE_INHERITANCE
-	int			*assertcntp,
-#endif
-	queue_t			links);
+	int			*assertcntp);
 
 /* Undo the effects of an ipc_right_copyin */
 extern void ipc_right_copyin_undo(

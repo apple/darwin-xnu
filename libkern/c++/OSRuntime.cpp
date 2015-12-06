@@ -33,6 +33,7 @@
 #include <libkern/c++/OSKext.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSSymbol.h>
+#include <IOKit/IOKitDebug.h>
 
 #include <sys/cdefs.h>
 
@@ -73,7 +74,6 @@ static bool gKernelCPPInitialized = false;
         }                                                     \
     } while (0)
 
-
 #if PRAGMA_MARK
 #pragma mark kern_os Allocator Package
 #endif /* PRAGMA_MARK */
@@ -104,7 +104,7 @@ kern_os_malloc(size_t size)
         return (0);
     }
 
-    mem = (struct _mhead *)kalloc(memsize);
+    mem = (struct _mhead *)kalloc_tag_bt(memsize, VM_KERN_MEMORY_LIBKERN);
     if (!mem) {
         return (0);
     }
@@ -172,7 +172,7 @@ kern_os_realloc(
     }
 
     nmemsize = sizeof (*nmem) + nsize ;
-    nmem = (struct _mhead *) kalloc(nmemsize);
+    nmem = (struct _mhead *) kalloc_tag_bt(nmemsize, VM_KERN_MEMORY_LIBKERN);
     if (!nmem){
         kern_os_free(addr);
         return (0);
@@ -412,7 +412,7 @@ OSRuntimeInitializeCPP(
     kernel_segment_command_t * segment         = NULL;  // do not free
     kernel_segment_command_t * failure_segment = NULL;  // do not free
 
-    if (!kmodInfo || !kmodInfo->address || !kmodInfo->name) {
+    if (!kmodInfo || !kmodInfo->address) {
         result = kOSKextReturnInvalidArgument;
         goto finish;
     }
@@ -537,14 +537,11 @@ finish:
 
 /*********************************************************************
 *********************************************************************/
-extern lck_spin_t  gOSObjectTrackLock;
 extern lck_grp_t * IOLockGroup;
 extern kmod_info_t g_kernel_kmod_info;
 
 void OSlibkernInit(void)
 {
-    lck_spin_init(&gOSObjectTrackLock, IOLockGroup, LCK_ATTR_NULL);
- 
     // This must be called before calling OSRuntimeInitializeCPP.
     OSMetaClassBase::initialize();
     
@@ -568,6 +565,9 @@ __END_DECLS
 *********************************************************************/
 void *
 operator new(size_t size)
+#if __cplusplus >= 201103L
+								noexcept
+#endif
 {
     void * result;
 
@@ -577,6 +577,9 @@ operator new(size_t size)
 
 void
 operator delete(void * addr)
+#if __cplusplus >= 201103L
+								noexcept
+#endif
 {
     kern_os_free(addr);
     return;
@@ -584,6 +587,9 @@ operator delete(void * addr)
 
 void *
 operator new[](unsigned long sz)
+#if __cplusplus >= 201103L
+								noexcept
+#endif
 {
     if (sz == 0) sz = 1;
     return kern_os_malloc(sz);
@@ -591,6 +597,9 @@ operator new[](unsigned long sz)
 
 void
 operator delete[](void * ptr)
+#if __cplusplus >= 201103L
+								noexcept
+#endif
 {
     if (ptr) {
         kern_os_free(ptr);

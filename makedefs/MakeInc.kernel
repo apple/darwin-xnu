@@ -28,6 +28,11 @@ endif
 
 STATIC_KMODS =  $(SRCROOT)/kmods.a
 
+ifeq ($(BUILD_JSON_COMPILATION_DATABASE),1)
+do_build_setup::
+	$(_v)$(CAT) > $(OBJPATH)/compile_commands.json < /dev/null
+endif
+
 #
 # Rules for the highly parallel "build" phase, where each build configuration
 # writes into their own $(TARGET) independent of other build configs
@@ -81,7 +86,7 @@ $(TARGET)/$(KERNEL_FILE_NAME).dSYM: $(TARGET)/$(KERNEL_FILE_NAME).unstripped
 	$(_v)$(MV) $@/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME).unstripped $@/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME)
 	$(_v)$(TOUCH) $@
 
-$(TARGET)/$(KERNEL_FILE_NAME).unstripped: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkernelconstructor.o $(SRCROOT)/config/version.c $(SRCROOT)/config/MasterVersion .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
+$(TARGET)/$(KERNEL_FILE_NAME).unstripped: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkerneldataconst.o lastkernelconstructor.o $(SRCROOT)/config/version.c $(SRCROOT)/config/MasterVersion .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
 	$(_v)${MAKE} -f $(firstword $(MAKEFILE_LIST)) version.o
 	@echo LD $(@F)
 	$(_v)$(CAT) $(filter %.filelist,$+) < /dev/null > link.filelist
@@ -100,6 +105,21 @@ $(OBJPATH)/version.c: $(SRCROOT)/config/version.c $(NEWVERS) $(SRCROOT)/config/M
 	$(_v)$(CP) $< $@
 	$(_v)$(NEWVERS) $(OBJPATH)/version.c > /dev/null;
 
+-include lastkerneldataconst.d
+lastkerneldataconst.o: .CFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
+lastkerneldataconst.o: $(SRCROOT)/libsa/lastkerneldataconst.c
+	${C_RULE_0}
+	${C_RULE_1A}$<
+	${C_RULE_2}
+
+
+lastkernelconstructor.o_CFLAGS_RM = -fprofile-instr-generate
+# the LAST segment is mapped read-only on arm, so if we include llvm profiling
+# here it will segfault the kernel.  (see arm_vm_init.c) We don't currently have
+# a way of retrieving these counters from LAST anyway, so there's no harm in just
+# disabling them.
+
+LAST_FILES=lastkernelconstructor.o
 -include lastkernelconstructor.d
 lastkernelconstructor.o: .CFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
 lastkernelconstructor.o: $(SRCROOT)/libsa/lastkernelconstructor.c
@@ -108,8 +128,11 @@ lastkernelconstructor.o: $(SRCROOT)/libsa/lastkernelconstructor.c
 	${C_RULE_2}
 	${C_RULE_3}
 	${C_RULE_4}
-	$(_v)$(SEG_HACK) -s __DATA -n __LAST -o $@__ $@
-	$(_v)$(MV) $@__ $@
+	$(_v)for last_file in ${LAST_FILES};				\
+        do      							\
+		$(SEG_HACK) -s __DATA -n __LAST -o $${last_file}__ $${last_file} || exit 1; \
+                mv $${last_file}__ $${last_file} || exit 1;		\
+        done
 
 #
 # Install rules. Each build config is classified as "primary" (the first

@@ -59,10 +59,6 @@
 #define FS_DIR_LOCATION		"/System/Library/Filesystems"
 #define FS_DIR_SUFFIX		".fs"
 #define FS_UTIL_SUFFIX		".util"
-#define FS_OPEN_SUFFIX		".openfs.tiff"
-#define FS_CLOSED_SUFFIX	".fs.tiff"
-#define FS_NAME_SUFFIX		".name"
-#define FS_LABEL_SUFFIX		".label"
 
 /*
  * .util program commands - all sent in the form "-p" or "-m" ... as argv[1].
@@ -78,9 +74,6 @@
 
 #define FSUC_REPAIR		'r'	/* repair ('fsck') FS */ 
 	/* example usage: foo.util -r fd0 removable */
-
-#define	FSUC_INITIALIZE		'i'	/* initialize FS */
-	/* example usage: foo.util -i fd0 removable */ 
 
 #define FSUC_UNMOUNT		'u'	/* unmount FS */
 	/* example usage: foo.util -u fd0 /bar */ 
@@ -112,12 +105,5 @@
 
 #define	DEVICE_REMOVABLE	"removable"
 #define	DEVICE_FIXED		"fixed"
-
-/*
- *	Additional parameters to the mount command - used by WSM when they
- *	appear in the /etc/mtab file.
- */
-#define	MNTOPT_FS		"filesystem=" /* e.g. "filesystem=DOS" */
-#define	MNTOPT_REMOVABLE	"removable"
 
 #endif	/* _SYS_LOADABLE_FS_ */

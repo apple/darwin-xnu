@@ -5,8 +5,8 @@ import ctypes
 MBSHIFT = 20
 MSIZE = 256
 MCLBYTES = 2048
+MBIGCLBYTES = 4096
 M16KCLBYTES = 16384
-NBPG = 4096
 
 MB_SCVALID = 4
 
@@ -26,5 +26,3 @@ kgm_manual_pkt_arm    = 0xFFFF04A0
 kgm_kdp_pkt_data_len   = 128
 
 MCF_NOCPUCACHE = 0x10
-
-NSLABSPMB = 256

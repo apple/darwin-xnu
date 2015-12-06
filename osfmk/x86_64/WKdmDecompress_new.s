@@ -64,7 +64,12 @@
 			}
  
  	cclee, 11/30/12
+
+    Added zero page, single value page, sparse page, early abort optimizations
+    rsrini, 09/14/14
 */
+
+#define MZV_MAGIC           $17185      // magic value used to identify MZV page encoding
 
 	.text
 
@@ -81,27 +86,61 @@ _WKdm_decompress_new:
 
 	subq	$(64+8+16), %rsp
 
+    movl    0(%rdi), %eax               // read the 1st word from the header
+    cmpl    MZV_MAGIC, %eax             // is the alternate packer used (i.e. is MZV page)?
+    jne     L_default_decompressor      // default decompressor was used
+
+                                        // Mostly Zero Page Handling...
+                                        // {
+    movq    $0, %rax
+1:                                      // Zero out the entire page
+    movq    $0, 0(%rsi, %rax)
+    movq    $0, 8(%rsi, %rax)
+    movq    $0, 16(%rsi, %rax)
+    movq    $0, 24(%rsi, %rax)
+    movq    $0, 32(%rsi, %rax)
+    movq    $0, 40(%rsi, %rax)
+    movq    $0, 48(%rsi, %rax)
+    movq    $0, 56(%rsi, %rax)
+    addq    $64, %rax
+    cmpq    $4096, %rax
+    jne     1b
+
+    movq    $4, %r12                    // current byte position in src to read from
+2:
+    movl    0(%rdi, %r12), %eax         // get the word
+    movzwq  4(%rdi, %r12), %rdx         // get the index
+    movl    %eax, 0(%rsi, %rdx)         // store non-0 word in the destination buffer
+    addq    $6, %r12                    // 6 more bytes processed
+    cmpl    %ecx, %r12d                 // finished processing all the bytes?
+    jne     2b
+    jmp     L_done
+                                        // }
+
+L_default_decompressor:
+
 	movq	%rsi, %r12					// dest_buf
-	movq	%rdx, %r13					// scracht_buf
+	movq	%rdx, %r13					// scratch_buf
 
 	// PRELOAD_DICTONARY; dictionary starting address : starting address 0(%rsp)
+    // NOTE: ALL THE DICTIONARY VALUES MUST BE INITIALIZED TO ZERO TO MIRROR THE COMPRESSOR
 #if 1
-	movl	$1, 0(%rsp)
-	movl	$1, 4(%rsp)
-	movl	$1, 8(%rsp)
-	movl	$1, 12(%rsp)
-	movl	$1, 16(%rsp)
-	movl	$1, 20(%rsp)
-	movl	$1, 24(%rsp)
-	movl	$1, 28(%rsp)
-	movl	$1, 32(%rsp)
-	movl	$1, 36(%rsp)
-	movl	$1, 40(%rsp)
-	movl	$1, 44(%rsp)
-	movl	$1, 48(%rsp)
-	movl	$1, 52(%rsp)
-	movl	$1, 56(%rsp)
-	movl	$1, 60(%rsp)
+	movl	$0, 0(%rsp)
+	movl	$0, 4(%rsp)
+	movl	$0, 8(%rsp)
+	movl	$0, 12(%rsp)
+	movl	$0, 16(%rsp)
+	movl	$0, 20(%rsp)
+	movl	$0, 24(%rsp)
+	movl	$0, 28(%rsp)
+	movl	$0, 32(%rsp)
+	movl	$0, 36(%rsp)
+	movl	$0, 40(%rsp)
+	movl	$0, 44(%rsp)
+	movl	$0, 48(%rsp)
+	movl	$0, 52(%rsp)
+	movl	$0, 56(%rsp)
+	movl	$0, 60(%rsp)
 #else
 	mov		$0x100000001, %rax
 	mov		%rax, (%rsp)

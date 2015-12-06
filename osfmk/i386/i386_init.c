@@ -219,7 +219,7 @@ physmap_init(void)
 			    ((i * PTE_PER_PAGE + j) << PDSHIFT)
 							| INTEL_PTE_PS
 							| INTEL_PTE_VALID
-			    				| INTEL_PTE_NX
+							| INTEL_PTE_NX
 							| INTEL_PTE_WRITE;
 		}
 	}
@@ -336,7 +336,8 @@ vstart(vm_offset_t boot_args_start)
 		kernelBootArgs = (boot_args *)boot_args_start;
 		lphysfree = kernelBootArgs->kaddr + kernelBootArgs->ksize;
 		physfree = (void *)(uintptr_t)((lphysfree + PAGE_SIZE - 1) &~ (PAGE_SIZE - 1));
-#if DEBUG
+
+#if DEVELOPMENT || DEBUG
 		pal_serial_init();
 #endif
 		DBG("revision      0x%x\n", kernelBootArgs->Revision);
@@ -351,6 +352,8 @@ vstart(vm_offset_t boot_args_start)
 			kernelBootArgs, 
 			&kernelBootArgs->ksize,
 			&kernelBootArgs->kaddr);
+		DBG("SMBIOS mem sz 0x%llx\n", kernelBootArgs->PhysicalMemorySize);
+
 		/*
 		 * Setup boot args given the physical start address.
 		 * Note: PE_init_platform needs to be called before Idle_PTs_init
@@ -412,6 +415,7 @@ i386_init(void)
 	unsigned int	cpus = 0;
 	boolean_t	fidn;
 	boolean_t	IA32e = TRUE;
+	char		namep[16];
 
 	postcode(I386_INIT_ENTRY);
 
@@ -419,7 +423,7 @@ i386_init(void)
 	tsc_init();
 	rtclock_early_init();	/* mach_absolute_time() now functionsl */
 
-	kernel_debug_string("i386_init");
+	kernel_debug_string_simple("i386_init");
 	pstate_trace();
 
 #if CONFIG_MCA
@@ -436,10 +440,13 @@ i386_init(void)
 	panic_init();			/* Init this in case we need debugger */
 
 	/* setup debugging output if one has been chosen */
-	kernel_debug_string("PE_init_kprintf");
+	kernel_debug_string_simple("PE_init_kprintf");
 	PE_init_kprintf(FALSE);
 
-	kernel_debug_string("kernel_early_bootstrap");
+	if(PE_parse_boot_argn("-show_pointers", &namep, sizeof (namep)))
+		doprnt_hide_pointers = FALSE;
+
+	kernel_debug_string_simple("kernel_early_bootstrap");
 	kernel_early_bootstrap();
 
 	if (!PE_parse_boot_argn("diag", &dgWork.dgFlags, sizeof (dgWork.dgFlags)))
@@ -456,7 +463,7 @@ i386_init(void)
 	}
 
 	/* setup console output */
-	kernel_debug_string("PE_init_printf");
+	kernel_debug_string_simple("PE_init_printf");
 	PE_init_printf(FALSE);
 
 	kprintf("version_variant = %s\n", version_variant);
@@ -498,7 +505,7 @@ i386_init(void)
 	 * VM initialization, after this we're using page tables...
 	 * Thn maximum number of cpus must be set beforehand.
 	 */
-	kernel_debug_string("i386_vm_init");
+	kernel_debug_string_simple("i386_vm_init");
 	i386_vm_init(maxmemtouse, IA32e, kernelBootArgs);
 
 	/* create the console for verbose or pretty mode */
@@ -506,13 +513,13 @@ i386_init(void)
 	PE_init_platform(TRUE, kernelBootArgs);
 	PE_create_console();
 
-	kernel_debug_string("power_management_init");
+	kernel_debug_string_simple("power_management_init");
 	power_management_init();
 	processor_bootstrap();
 	thread_bootstrap();
 
 	pstate_trace();
-	kernel_debug_string("machine_startup");
+	kernel_debug_string_simple("machine_startup");
 	machine_startup();
 	pstate_trace();
 }

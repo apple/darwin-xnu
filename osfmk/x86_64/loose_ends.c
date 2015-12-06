@@ -82,6 +82,11 @@
 #include <kdp/kdp_callout.h>
 #endif /* !MACH_KDP */
 
+#include <libkern/OSDebug.h>
+#if CONFIG_DTRACE
+#include <mach/sdt.h>
+#endif
+
 #if 0
 
 #undef KERNEL_DEBUG
@@ -246,6 +251,8 @@ ovbcopy(
  *  Read data from a physical address. Memory should not be cache inhibited.
  */
 
+uint64_t reportphyreaddelayabs;
+uint32_t reportphyreadosbt;
 
 static inline unsigned int
 ml_phys_read_data(pmap_paddr_t paddr, int size)
@@ -253,9 +260,16 @@ ml_phys_read_data(pmap_paddr_t paddr, int size)
 	unsigned int result = 0;
 	unsigned char s1;
 	unsigned short s2;
+	boolean_t istate;
+	uint64_t sabs, eabs;
 
-	if (!physmap_enclosed(paddr))
+	if (__improbable(!physmap_enclosed(paddr)))
 		panic("%s: 0x%llx out of bounds\n", __FUNCTION__, paddr);
+
+	if (__improbable(reportphyreaddelayabs != 0)) {
+		istate = ml_set_interrupts_enabled(FALSE);
+		sabs = mach_absolute_time();
+	}
 
         switch (size) {
         case 1:
@@ -273,6 +287,22 @@ ml_phys_read_data(pmap_paddr_t paddr, int size)
 		panic("Invalid size %d for ml_phys_read_data\n", size);
 		break;
         }
+
+	if (__improbable(reportphyreaddelayabs != 0)) {
+		eabs = mach_absolute_time();
+		(void)ml_set_interrupts_enabled(istate);
+
+		if ((eabs - sabs) > reportphyreaddelayabs) {
+			if (reportphyreadosbt) {
+				OSReportWithBacktrace("ml_phys_read_data took %lluus\n", (eabs - sabs) / 1000);
+			}
+#if CONFIG_DTRACE
+			DTRACE_PHYSLAT3(physread, uint64_t, (eabs - sabs),
+			    pmap_paddr_t, paddr, uint32_t, size);
+#endif
+		}
+	}
+
         return result;
 }
 

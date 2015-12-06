@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,38 +22,36 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
- */
-/*
  */
 
 /*
@@ -100,6 +98,7 @@ typedef	integer_t	host_flavor_t;
 #define HOST_SEMAPHORE_TRAPS	7	/* Has semaphore traps */
 #define HOST_MACH_MSG_TRAP	8	/* Has mach_msg_trap */
 #define HOST_VM_PURGABLE	9	/* purg'e'able memory info */
+#define HOST_DEBUG_INFO_INTERNAL 10	/* Used for kernel internal development tests only */
 
 #ifdef MACH_KERNEL_PRIVATE
 struct host_basic_info_old {
@@ -114,7 +113,7 @@ typedef	struct host_basic_info_old	host_basic_info_data_old_t;
 typedef struct host_basic_info_old	*host_basic_info_old_t;
 #define HOST_BASIC_INFO_OLD_COUNT ((mach_msg_type_number_t) \
 		(sizeof(host_basic_info_data_old_t)/sizeof(integer_t)))
-#endif
+#endif /* MACH_KERNEL_PRIVATE */
 
 #pragma pack(4)
 
@@ -236,7 +235,7 @@ typedef struct vm_purgeable_info	*host_purgable_info_t;
 #define	HOST_VM_INFO_REV1_COUNT /* added "speculative_count" (1 int) */	\
 	((mach_msg_type_number_t) \
 	 (HOST_VM_INFO_REV2_COUNT - 1))
-#define	HOST_VM_INFO_REV0_COUNT /* added "purgable" info (2 ints) */ 	\
+#define	HOST_VM_INFO_REV0_COUNT /* added "purgable" info (2 ints) */	\
 	((mach_msg_type_number_t) \
 	 (HOST_VM_INFO_REV1_COUNT - 2))
 
@@ -266,12 +265,25 @@ struct _processor_statistics_np  {
 	uint32_t		ps_interrupt_count;
 	uint32_t		ps_ipi_count;
 	uint32_t		ps_timer_pop_count;
-	
+
 	uint64_t		ps_runq_count_sum __attribute((aligned(8)));
 
 	uint32_t		ps_idle_transitions;
 	uint32_t		ps_quantum_timer_expirations;
 };
+
+struct host_debug_info_internal {
+	uint64_t config_bank:1,   /* built configurations */
+		 config_atm:1,
+		 config_csr:1,
+		 config_coalitions:1,
+		 config_unused:60;
+};
+
+typedef struct host_debug_info_internal *host_debug_info_internal_t;
+typedef struct host_debug_info_internal  host_debug_info_internal_data_t;
+#define HOST_DEBUG_INFO_INTERNAL_COUNT  ((mach_msg_type_number_t)\
+	(sizeof (host_debug_info_internal_data_t) / sizeof(integer_t)))
 
 #endif /* PRIVATE */
 
@@ -280,8 +292,8 @@ struct _processor_statistics_np  {
 extern kern_return_t	set_sched_stats_active(
 					boolean_t active);
 
-extern kern_return_t	get_sched_statistics( 
-					struct _processor_statistics_np *out, 
+extern kern_return_t	get_sched_statistics(
+					struct _processor_statistics_np *out,
 					uint32_t *count);
 #endif  /* KERNEL_PRIVATE */
 

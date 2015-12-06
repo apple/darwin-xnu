@@ -50,6 +50,8 @@ struct uthread;
 typedef void (*sched_call_t)(int type, thread_t thread);
 #endif
 
+typedef struct workq_reqthreads_req_s {unsigned long priority; int count;} *workq_reqthreads_req_t;
+
 /*
  * Increment each time new reserved slots are used. When the pthread
  * kext registers this table, it will include the version of the xnu
@@ -100,8 +102,14 @@ typedef struct pthread_functions_s {
 	/* New pthreadctl system. */
 	int (*bsdthread_ctl)(struct proc *p, user_addr_t cmd, user_addr_t arg1, user_addr_t arg2, user_addr_t arg3, int *retval);
 
+    /* Request threads to deliver kevents */
+    thread_t (*workq_reqthreads)(struct proc *p, int requests_count, workq_reqthreads_req_t requests);
+
+    /* Resolve a pthread_priority_t to a QoS/relative pri */
+    integer_t (*thread_qos_from_pthread_priority)(unsigned long pthread_priority, unsigned long *flags);
+
 	/* padding for future */
-	void* _pad[97];
+	void* _pad[95];
 } *pthread_functions_t;
 
 typedef struct pthread_callbacks_s {

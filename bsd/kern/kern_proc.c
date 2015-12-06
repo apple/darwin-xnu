@@ -147,27 +147,6 @@ struct proclist allproc;
 struct proclist zombproc;
 extern struct tty cons;
 
-#if CONFIG_LCTX
-/*
- * Login Context
- */
-static pid_t	lastlcid = 1;
-static int	alllctx_cnt;
-
-#define	LCID_MAX	8192	/* Does this really need to be large? */
-static int	maxlcid = LCID_MAX;
-
-LIST_HEAD(lctxlist, lctx);
-static struct lctxlist alllctx;
-
-lck_mtx_t alllctx_lock;
-lck_grp_t * lctx_lck_grp;
-lck_grp_attr_t * lctx_lck_grp_attr;
-lck_attr_t * lctx_lck_attr;
-
-static	void	lctxinit(void);
-#endif
-
 extern int cs_debug;
 
 #if DEBUG
@@ -175,6 +154,10 @@ extern int cs_debug;
 #endif
 /* Name to give to core files */
 __XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};
+
+#if PROC_REF_DEBUG
+extern uint32_t fastbacktrace(uintptr_t* bt, uint32_t max_frames) __attribute__((noinline));
+#endif
 
 static void orphanpg(struct pgrp *pg);
 void 	proc_name_kdp(task_t t, char * buf, int size);
@@ -210,9 +193,6 @@ procinit(void)
 	pgrphashtbl = hashinit(maxproc / 4, M_PROC, &pgrphash);
 	sesshashtbl = hashinit(maxproc / 4, M_PROC, &sesshash);
 	uihashtbl = hashinit(maxproc / 16, M_PROC, &uihash);
-#if CONFIG_LCTX
-	lctxinit();
-#endif
 }
 
 /*
@@ -385,6 +365,56 @@ proc_findthread(thread_t thread)
 	return(p);
 }
 
+#if PROC_REF_DEBUG
+void
+uthread_reset_proc_refcount(void *uthread) {
+	uthread_t uth;
+
+	if (proc_ref_tracking_disabled) {
+		return;
+	}
+
+	uth = (uthread_t) uthread;
+
+	uth->uu_proc_refcount = 0;
+	uth->uu_pindex = 0;
+}
+
+int
+uthread_get_proc_refcount(void *uthread) {
+	uthread_t uth;
+
+	if (proc_ref_tracking_disabled) {
+		return 0;
+	}
+
+	uth = (uthread_t) uthread;
+
+	return uth->uu_proc_refcount;
+}
+
+static void
+record_procref(proc_t p, int count) {
+	uthread_t uth;
+
+	if (proc_ref_tracking_disabled) {
+		return;
+	}
+
+	uth = current_uthread();
+	uth->uu_proc_refcount += count;
+
+	if (count == 1) {
+		if (uth->uu_pindex < NUM_PROC_REFS_TO_TRACK) {
+			fastbacktrace((uintptr_t *) &uth->uu_proc_pcs[uth->uu_pindex], PROC_REF_STACK_DEPTH);
+
+			uth->uu_proc_ps[uth->uu_pindex] = p;
+			uth->uu_pindex++;
+		}
+	}
+}
+#endif
+
 int 
 proc_rele(proc_t p)
 {
@@ -419,8 +449,12 @@ proc_ref_locked(proc_t p)
 	if ((p == PROC_NULL) || ((p->p_listflag & P_LIST_INCREATE) != 0))
 			return (PROC_NULL);
 	/* do not return process marked for termination */
-	if ((p->p_stat != SZOMB) && ((p->p_listflag & P_LIST_EXITED) == 0) && ((p->p_listflag & (P_LIST_DRAINWAIT | P_LIST_DRAIN | P_LIST_DEAD)) == 0))
+	if ((p->p_stat != SZOMB) && ((p->p_listflag & P_LIST_EXITED) == 0) && ((p->p_listflag & (P_LIST_DRAINWAIT | P_LIST_DRAIN | P_LIST_DEAD)) == 0)) {
 		p->p_refcount++;
+#if PROC_REF_DEBUG
+		record_procref(p, 1);
+#endif
+	}
 	else 
 		p1 = PROC_NULL;
 
@@ -433,6 +467,9 @@ proc_rele_locked(proc_t p)
 
 	if (p->p_refcount > 0) {
 		p->p_refcount--;
+#if PROC_REF_DEBUG
+		record_procref(p, -1);
+#endif
 		if ((p->p_refcount == 0) && ((p->p_listflag & P_LIST_DRAINWAIT) == P_LIST_DRAINWAIT)) {
 			p->p_listflag &= ~P_LIST_DRAINWAIT;
 			wakeup(&p->p_refcount);
@@ -609,13 +646,17 @@ proc_checkdeadrefs(__unused proc_t p)
 int
 proc_pid(proc_t p)
 {
-	return (p->p_pid);
+	if (p != NULL)
+		return (p->p_pid);
+	return -1;
 }
 
-int 
+int
 proc_ppid(proc_t p)
 {
-	return (p->p_ppid);
+	if (p != NULL)
+		return (p->p_ppid);
+	return -1;
 }
 
 int
@@ -715,9 +756,13 @@ void
 proc_name_kdp(task_t t, char * buf, int size)
 {
 	proc_t p = get_bsdtask_info(t);
+	if (p == PROC_NULL)
+		return;
 
-	if (p != PROC_NULL)
-		strlcpy(buf, &p->p_comm[0], size);
+	if ((size_t)size > sizeof(p->p_comm))
+		strlcpy(buf, &p->p_name[0], MIN((int)sizeof(p->p_name), size));
+	else
+		strlcpy(buf, &p->p_comm[0], MIN((int)sizeof(p->p_comm), size));
 }
 
 
@@ -907,14 +952,15 @@ proc_puniqueid(proc_t p)
 	return(p->p_puniqueid);
 }
 
-uint64_t
-proc_coalitionid(__unused proc_t p)
+void
+proc_coalitionids(__unused proc_t p, __unused uint64_t ids[COALITION_NUM_TYPES])
 {
 #if CONFIG_COALITIONS
-	return(task_coalition_id(p->task));
+	task_coalition_ids(p->task, ids);
 #else
-	return 0;
+	memset(ids, 0, sizeof(uint64_t [COALITION_NUM_TYPES]));
 #endif
+	return;
 }
 
 uint64_t
@@ -1552,13 +1598,10 @@ out:
 	return;
 }
 
-
-
-/* XXX should be __private_extern__ */
 int
-proc_is_classic(proc_t p)
+proc_is_classic(proc_t p __unused)
 {
-    return (p->p_flag & P_TRANSLATED) ? 1 : 0;
+    return (0);
 }
 
 /* XXX Why does this function exist?  Need to kill it off... */
@@ -1640,221 +1683,6 @@ toolong:
 	    (long)pid, name, (uint32_t)uid);
 	return (1);
 }
-
-#if CONFIG_LCTX
-
-static void
-lctxinit(void)
-{
-	LIST_INIT(&alllctx);
-	alllctx_cnt = 0;
-
-	/* allocate lctx lock group attribute and group */
-	lctx_lck_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(lctx_lck_grp_attr);
-
-	lctx_lck_grp = lck_grp_alloc_init("lctx", lctx_lck_grp_attr);
-	/* Allocate lctx lock attribute */
-	lctx_lck_attr = lck_attr_alloc_init();
-
-	lck_mtx_init(&alllctx_lock, lctx_lck_grp, lctx_lck_attr);
-}
-
-/*
- * Locate login context by number.
- */
-struct lctx *
-lcfind(pid_t lcid)
-{
-	struct lctx *l;
-
-	ALLLCTX_LOCK;
-	LIST_FOREACH(l, &alllctx, lc_list) {
-		if (l->lc_id == lcid) {
-			LCTX_LOCK(l);
-			break;
-		}
-	}
-	ALLLCTX_UNLOCK;
-	return (l);
-}
-
-#define	LCID_INC				\
-	do {					\
-		lastlcid++;			\
-		if (lastlcid > maxlcid)	\
-			lastlcid = 1;		\
-	} while (0)				\
-
-struct lctx *
-lccreate(void)
-{
-	struct lctx *l;
-	pid_t newlcid;
-
-	/* Not very efficient but this isn't a common operation. */
-	while ((l = lcfind(lastlcid)) != NULL) {
-		LCTX_UNLOCK(l);
-		LCID_INC;
-	}
-	newlcid = lastlcid;
-	LCID_INC;
-
-	MALLOC(l, struct lctx *, sizeof(struct lctx), M_LCTX, M_WAITOK|M_ZERO);
-	l->lc_id = newlcid;
-	LIST_INIT(&l->lc_members);
-	lck_mtx_init(&l->lc_mtx, lctx_lck_grp, lctx_lck_attr);
-#if CONFIG_MACF
-	l->lc_label = mac_lctx_label_alloc();
-#endif
-	ALLLCTX_LOCK;
-	LIST_INSERT_HEAD(&alllctx, l, lc_list);
-	alllctx_cnt++;
-	ALLLCTX_UNLOCK;
-
-	return (l);
-}
-
-/*
- * Call with proc protected (either by being invisible
- * or by having the all-login-context lock held) and
- * the lctx locked.
- *
- * Will unlock lctx on return.
- */
-void
-enterlctx (proc_t p, struct lctx *l, __unused int create)
-{
-	if (l == NULL)
-		return;
-
-	p->p_lctx = l;
-	LIST_INSERT_HEAD(&l->lc_members, p, p_lclist);
-	l->lc_mc++;
-
-#if CONFIG_MACF
-	if (create)
-		mac_lctx_notify_create(p, l);
-	else
-		mac_lctx_notify_join(p, l);
-#endif
-	LCTX_UNLOCK(l);
-
-	return;
-}
-
-/*
- * Remove process from login context (if any). Called with p protected by
- * the alllctx lock.
- */
-void
-leavelctx (proc_t p)
-{
-	struct lctx *l;
-
-	if (p->p_lctx == NULL) {
-		return;
-	}
-
-	LCTX_LOCK(p->p_lctx);
-	l = p->p_lctx;
-	p->p_lctx = NULL;
-	LIST_REMOVE(p, p_lclist);
-	l->lc_mc--;
-#if CONFIG_MACF
-	mac_lctx_notify_leave(p, l);
-#endif
-	if (LIST_EMPTY(&l->lc_members)) {
-		LIST_REMOVE(l, lc_list);
-		alllctx_cnt--;
-		LCTX_UNLOCK(l);
-		lck_mtx_destroy(&l->lc_mtx, lctx_lck_grp);
-#if CONFIG_MACF
-		mac_lctx_label_free(l->lc_label);
-		l->lc_label = NULL;
-#endif
-		FREE(l, M_LCTX);
-	} else {
-		LCTX_UNLOCK(l);
-	}
-	return;
-}
-
-static int
-sysctl_kern_lctx SYSCTL_HANDLER_ARGS
-{
-	int *name = (int*) arg1;
-	u_int namelen = arg2;
-	struct kinfo_lctx kil;
-	struct lctx *l;
-	int error;
-
-	error = 0;
-
-	switch (oidp->oid_number) {
-	case KERN_LCTX_ALL:
-		ALLLCTX_LOCK;
-		/* Request for size. */
-		if (!req->oldptr) {
-			error = SYSCTL_OUT(req, 0,
-				sizeof(struct kinfo_lctx) * (alllctx_cnt + 1));
-			goto out;
-		}
-		break;
-
-	case KERN_LCTX_LCID:
-		/* No space */
-		if (req->oldlen < sizeof(struct kinfo_lctx))
-			return (ENOMEM);
-		/* No argument */
-		if (namelen != 1)
-			return (EINVAL);
-		/* No login context */
-		l = lcfind((pid_t)name[0]);
-		if (l == NULL)
-			return (ENOENT);
-		kil.id = l->lc_id;
-		kil.mc = l->lc_mc;
-		LCTX_UNLOCK(l);
-		return (SYSCTL_OUT(req, (caddr_t)&kil, sizeof(kil)));
-
-	default:
-		return (EINVAL);
-	}
-
-	/* Provided buffer is too small. */
-	if (req->oldlen < (sizeof(struct kinfo_lctx) * alllctx_cnt)) {
-		error = ENOMEM;
-		goto out;
-	}
-
-	LIST_FOREACH(l, &alllctx, lc_list) {
-		LCTX_LOCK(l);
-		kil.id = l->lc_id;
-		kil.mc = l->lc_mc;
-		LCTX_UNLOCK(l);
-		error = SYSCTL_OUT(req, (caddr_t)&kil, sizeof(kil));
-		if (error)
-			break;
-	}
-out:
-	ALLLCTX_UNLOCK;
-
-	return (error);
-}
-
-SYSCTL_NODE(_kern, KERN_LCTX, lctx, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Login Context");
-
-SYSCTL_PROC(_kern_lctx, KERN_LCTX_ALL, all, CTLFLAG_RD|CTLTYPE_STRUCT | CTLFLAG_LOCKED,
-	    0, 0, sysctl_kern_lctx, "S,lctx",
-	    "Return entire login context table");
-SYSCTL_NODE(_kern_lctx, KERN_LCTX_LCID, lcid, CTLFLAG_RD | CTLFLAG_LOCKED,
-	    sysctl_kern_lctx, "Login Context Table");
-SYSCTL_INT(_kern_lctx, OID_AUTO, last,  CTLFLAG_RD | CTLFLAG_LOCKED, &lastlcid, 0, ""); 
-SYSCTL_INT(_kern_lctx, OID_AUTO, count, CTLFLAG_RD | CTLFLAG_LOCKED, &alllctx_cnt, 0, "");
-SYSCTL_INT(_kern_lctx, OID_AUTO, max, CTLFLAG_RW | CTLFLAG_LOCKED, &maxlcid, 0, "");
-
-#endif	/* LCTX */
 
 /* Code Signing related routines */
 
@@ -1962,6 +1790,8 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			retflags = pt->p_csflags;
 			if (cs_enforcement(pt))
 				retflags |= CS_ENFORCEMENT;
+			if (csproc_get_platform_binary(pt))
+				retflags |= CS_PLATFORM_BINARY;
 			proc_unlock(pt);
 
 			if (uaddr != USER_ADDR_NULL)
@@ -2157,14 +1987,6 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 
 			break;
 		}
-
-		case CS_OPS_SIGPUP_INSTALL:
-			error = sigpup_install(uaddr);
-			break;
-
-		case CS_OPS_SIGPUP_DROP:
-			error = sigpup_drop();
-			break;
 
 		default:
 			error = EINVAL;
@@ -3309,3 +3131,26 @@ int proc_shadow_max(void)
 	return max;
 }
 #endif /* VM_SCAN_FOR_SHADOW_CHAIN */
+
+void proc_set_responsible_pid(proc_t target_proc, pid_t responsible_pid);
+void proc_set_responsible_pid(proc_t target_proc, pid_t responsible_pid)
+{
+	if (target_proc != NULL) {
+		target_proc->p_responsible_pid = responsible_pid;
+	}
+	return;
+}
+
+int
+proc_chrooted(proc_t p)
+{
+	int retval = 0;
+
+	if (p) {
+		proc_fdlock(p);
+		retval = (p->p_fd->fd_rdir != NULL) ? 1 : 0;
+		proc_fdunlock(p);
+	}
+
+	return retval;
+}

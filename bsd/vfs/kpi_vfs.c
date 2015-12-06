@@ -1754,6 +1754,52 @@ vnode_clearnoreadahead(vnode_t vp)
 	vnode_unlock(vp);
 }
 
+int
+vnode_isfastdevicecandidate(vnode_t vp)
+{
+	return ((vp->v_flag & VFASTDEVCANDIDATE)? 1 : 0);
+}
+
+void
+vnode_setfastdevicecandidate(vnode_t vp)
+{
+	vnode_lock_spin(vp);
+	vp->v_flag |= VFASTDEVCANDIDATE;
+	vnode_unlock(vp);
+}
+
+void
+vnode_clearfastdevicecandidate(vnode_t vp)
+{
+	vnode_lock_spin(vp);
+	vp->v_flag &= ~VFASTDEVCANDIDATE;
+	vnode_unlock(vp);
+}
+
+int
+vnode_isautocandidate(vnode_t vp)
+{
+	return ((vp->v_flag & VAUTOCANDIDATE)? 1 : 0);
+}
+
+void
+vnode_setautocandidate(vnode_t vp)
+{
+	vnode_lock_spin(vp);
+	vp->v_flag |= VAUTOCANDIDATE;
+	vnode_unlock(vp);
+}
+
+void
+vnode_clearautocandidate(vnode_t vp)
+{
+	vnode_lock_spin(vp);
+	vp->v_flag &= ~VAUTOCANDIDATE;
+	vnode_unlock(vp);
+}
+
+
+
 
 /* mark vnode_t to skip vflush() is SKIPSYSTEM */
 void 
@@ -1833,7 +1879,7 @@ vnode_setname(vnode_t vp, char * name)
 void 
 vnode_vfsname(vnode_t vp, char * buf)
 {
-        strncpy(buf, vp->v_mount->mnt_vtable->vfc_name, MFSNAMELEN);
+        strlcpy(buf, vp->v_mount->mnt_vtable->vfc_name, MFSNAMELEN);
 }
 
 /* return the FS type number */
@@ -2457,6 +2503,11 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		KAUTH_DEBUG("SETATTR - returning ENOTSUP to request to set extended security");
 		error = ENOTSUP;
 		goto out;
+	}
+
+	/* Never allow the setting of any unsupported superuser flags. */
+	if (VATTR_IS_ACTIVE(vap, va_flags)) {
+	    vap->va_flags &= (SF_SUPPORTED | UF_SETTABLE);
 	}
 
 	error = VNOP_SETATTR(vp, vap, ctx);
@@ -3326,7 +3377,7 @@ VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t ct
 	 * We have to be able to use the root filesystem's device vnode even when
 	 * devfs isn't mounted (yet/anymore), so we can't go looking at its mount
 	 * structure.  If there is no data pointer, it doesn't matter whether
-	 * the device is 64-bit ready.  Any command (like DKIOCSYNCHRONIZECACHE)
+	 * the device is 64-bit ready.  Any command (like DKIOCSYNCHRONIZE)
 	 * which passes NULL for its data pointer can therefore be used during
 	 * mount or unmount of the root filesystem.
 	 *
@@ -3826,11 +3877,6 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 	} else {
 		_err = VNOP_RENAME(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, ctx);
 	}
-#if CONFIG_MACF
-	if (_err == 0) {
-		mac_vnode_notify_rename(ctx, *fvpp, tdvp, tcnp);
-	}
-#endif
 
 	/*
 	 * If moved to a new directory that is restricted,
@@ -3849,6 +3895,12 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 			}
 		}
 	}
+
+#if CONFIG_MACF
+	if (_err == 0) {
+		mac_vnode_notify_rename(ctx, *fvpp, tdvp, tcnp);
+	}
+#endif
 
 #if CONFIG_APPLEDOUBLE
 	/* 
@@ -4891,6 +4943,9 @@ VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, 
 		if ((vp->v_flag & VLOCKLOCAL)) {
 			/* Advisory locking done at this layer */
 			_err = lf_advlock(&a);
+		} else if (flags & F_OFD_LOCK) {
+			/* Non-local locking doesn't work for OFD locks */
+			_err = err_advlock(&a);
 		} else {
 			/* Advisory locking done by underlying filesystem */
 			_err = (*vp->v_op[vnop_advlock_desc.vdesc_offset])(&a);

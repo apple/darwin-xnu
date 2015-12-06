@@ -22,8 +22,8 @@ DATAFILES = \
 	dir.h dirent.h disk.h dkstat.h dtrace.h dtrace_glue.h dtrace_impl.h \
 	errno.h ev.h event.h fasttrap.h fasttrap_isa.h fcntl.h file.h filedesc.h filio.h gmon.h \
 	ioccom.h ioctl.h \
-	ioctl_compat.h ipc.h kernel.h kernel_types.h kern_event.h loadable_fs.h lock.h lockf.h \
-	kauth.h kdebug.h kern_control.h lctx.h lockstat.h malloc.h \
+	ioctl_compat.h ipc.h kernel.h kernel_types.h kern_event.h lctx.h loadable_fs.h lock.h lockf.h \
+	kauth.h kdebug.h kern_control.h lockstat.h malloc.h \
 	mbuf.h mman.h mount.h msg.h msgbuf.h netport.h param.h paths.h pipe.h poll.h \
 	proc.h  proc_info.h ptrace.h queue.h quota.h random.h reboot.h resource.h resourcevar.h \
 	sbuf.h posix_sem.h posix_shm.h sdt.h \
@@ -39,30 +39,58 @@ DATAFILES = \
 # Installs header file for Apple internal use in user level - 
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 PRIVATE_DATAFILES = \
+	attr.h \
+	cdefs.h \
 	coalition.h \
 	codesign.h \
 	content_protection.h \
 	csr.h \
 	decmpfs.h \
+	disk.h \
 	disklabel.h \
+	domain.h \
+	event.h \
+	fcntl.h \
 	fileport.h \
 	fsctl.h \
+	fsevents.h \
 	fsgetpath.h \
 	fslog.h \
 	guarded.h \
 	imgsrc.h \
 	ipcs.h \
 	kas_info.h \
+	kdebug.h \
+	kern_control.h \
+	kern_event.h \
 	kern_memorystatus.h \
 	kern_overrides.h \
+	mbuf.h \
+	mman.h \
+	priv.h \
+	proc.h \
+	proc_info.h \
+	proc_uuid_policy.h \
+	process_policy.h \
+	resource.h \
 	sfi.h \
 	shm_internal.h \
+	socket.h \
+	socketvar.h \
+	sockio.h \
+	spawn.h \
 	spawn_internal.h \
+	stackshot.h \
+	sys_domain.h \
 	tree.h \
+	unpcb.h \
 	ux_exception.h \
+	work_interval.h \
 	process_policy.h \
 	proc_uuid_policy.h \
-	priv.h
+	priv.h \
+	pgo.h \
+	memory_maintenance.h
 
 # Installs header file for kernel extensions - 
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
@@ -73,7 +101,7 @@ KERNELFILES = \
 	dir.h dirent.h disk.h disklabel.h dkstat.h  \
 	errno.h ev.h event.h fcntl.h file.h filio.h \
 	ioccom.h ioctl.h ipc.h \
-	ioctl_compat.h  kernel.h kernel_types.h kern_event.h lctx.h lock.h lockf.h \
+	ioctl_compat.h  kernel.h kernel_types.h kern_event.h lock.h lockf.h \
 	kauth.h kdebug.h  md5.h kern_control.h imgact.h malloc.h namei.h \
 	mman.h mbuf.h mount.h netport.h param.h paths.h \
 	proc.h  queue.h random.h resource.h \
@@ -106,6 +134,7 @@ PRIVATE_KERNELFILES = \
 	fslog.h \
 	kasl.h \
 	kern_memorystatus.h \
+	kpi_private.h \
 	mach_swapon.h \
 	msgbuf.h \
 	eventvar.h \
@@ -115,16 +144,19 @@ PRIVATE_KERNELFILES = \
 	sem_internal.h \
 	shm_internal.h \
 	signalvar.h \
+	stackshot.h \
 	tty.h  ttychars.h \
 	ttydefaults.h ttydev.h \
 	user.h \
 	vfs_context.h \
 	vmmeter.h \
 	spawn_internal.h \
-	priv.h
+	priv.h \
+	pgo.h \
+	memory_maintenance.h
 
 
-# /System/Library/Frameworks/System.framework/Headers and /usr/include
+# /usr/include
 INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_GEN_LIST = syscall.h _posix_availability.h _symbol_aliasing.h
@@ -133,14 +165,14 @@ INSTALL_MI_DIR = sys
 
 EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} linker_set.h bsdtask_info.h pthread_internal.h filedesc.h pipe.h resourcevar.h semaphore.h \
 								vnode_internal.h proc_internal.h file_internal.h mount_internal.h \
-								uio_internal.h tree.h munge.h kern_tests.h
+								uio_internal.h tree.h munge.h
 
 EXPORT_MI_GEN_LIST = syscall.h sysproto.h kdebugevents.h
 
 EXPORT_MI_DIR = sys
 
 # /System/Library/Frameworks/System.framework/PrivateHeaders
-INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 # /System/Library/Frameworks/Kernel.framework/PrivateHeaders
 INSTALL_KF_MI_LCL_LIST =  ${KERNELFILES} ${PRIVATE_KERNELFILES}
@@ -169,8 +201,8 @@ sysproto.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS) $(OBJROOT)/cscop
 	$(_v)$(MAKESYSCALLS) $< proto > /dev/null
 
 kdebugevents.h:  $(SRCROOT)/bsd/kern/trace.codes $(MAKEKDEBUGEVENTS) $(OBJROOT)/cscope.genhdrs
-	@echo "Generating bsd/kern/$@ from $<";
-	@echo "$(OBJPATH)/bsd/kern/$@" > $(OBJROOT)/cscope.genhdrs/$@.path
+	@echo "Generating bsd/sys/$@ from $<";
+	@echo "$(OBJPATH)/bsd/sys/$@" > $(OBJROOT)/cscope.genhdrs/$@.path
 	$(_v)$(MAKEKDEBUGEVENTS) $< > "$(OBJPATH)/bsd/sys/$@"
 
 MAKE_POSIX_AVAILABILITY = $(SRCROOT)/bsd/sys/make_posix_availability.sh

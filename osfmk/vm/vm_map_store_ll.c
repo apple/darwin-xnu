@@ -257,6 +257,9 @@ vm_map_store_copy_reset_ll( vm_map_copy_t copy, __unused vm_map_entry_t entry, _
 void
 update_first_free_ll( vm_map_t map, vm_map_entry_t new_first_free)
 {
+	if (map->holelistenabled)
+		return;
+
 	UPDATE_FIRST_FREE_LL( map, new_first_free);
 }
 

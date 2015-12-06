@@ -26,93 +26,136 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+/*  Sample KPC data into kperf and manage a shared context-switch handler */
 
-/*  Sample KPC data into kperf */
-
-#include <mach/mach_types.h>
-#include <kern/thread.h> /* thread_* */
-#include <kern/debug.h> /* panic */
-// #include <sys/proc.h>
-
-#include <chud/chud_xnu.h>
 #include <kperf/kperf.h>
-
 #include <kperf/buffer.h>
 #include <kperf/context.h>
-
 #include <kperf/kperf_kpc.h>
+#include <kern/kpc.h> /* kpc_cswitch_context, kpc_threads_counting */
 
-/* If we have kperf enabled, but not KPC */
-#if KPC
+unsigned kperf_kpc_cswitch_set = 0;
 
 void
-kperf_kpc_cpu_sample( struct kpcdata *kpcd, int sample_config )
+kperf_kpc_switch_context(thread_t old, thread_t new)
 {
-	kpcd->running  = kpc_get_running();
-	kpcd->counterc = kpc_get_cpu_counters(0, kpcd->running,
-	                                      &kpcd->curcpu, kpcd->counterv);
-	if( !sample_config )
-		kpcd->configc = 0;
-	else
-	{
-		kpcd->configc = kpc_get_config_count(kpcd->running);
-		kpc_get_config(kpcd->running, kpcd->configv);
+	if (kpc_threads_counting) {
+		kpc_switch_context(old, new);
 	}
-	
+	if (kperf_cswitch_callback_set) {
+		kperf_switch_context(old, new);
+	}
 }
 
 void
-kperf_kpc_cpu_log( struct kpcdata *kpcd )
+kperf_kpc_cswitch_callback_update(void)
 {
-	unsigned i;
+	kperf_kpc_cswitch_set = kperf_cswitch_callback_set ||
+	                        kpc_threads_counting;
+}
 
-	/* cut a config for instruments -- what's running and
-	 * how many fixed counters there are
-	 */
+void
+kperf_kpc_thread_sample(struct kpcdata *kpcd, int sample_config)
+{
+	kpcd->running = kpc_get_running();
+	/* let kpc_get_curthread_counters set the correct count */
+	kpcd->counterc = KPC_MAX_COUNTERS;
+	if (kpc_get_curthread_counters(&kpcd->counterc,
+	                               kpcd->counterv)) {
+		/* if thread counters aren't ready, default to 0 */
+		memset(kpcd->counterv, 0,
+		       sizeof(uint64_t) * kpcd->counterc);
+	}
+	/* help out Instruments */
+	if (!sample_config) {
+		kpcd->configc = 0;
+	} else {
+		kpcd->configc = kpc_get_config_count(kpcd->running);
+		kpc_get_config(kpcd->running, kpcd->configv);
+	}
+}
+
+void
+kperf_kpc_cpu_sample(struct kpcdata *kpcd, int sample_config)
+{
+	kpcd->running  = kpc_get_running();
+	kpcd->counterc = kpc_get_cpu_counters(0, kpcd->running,
+	                                      &kpcd->curcpu,
+	                                      kpcd->counterv);
+	if (!sample_config) {
+		kpcd->configc = 0;
+	} else {
+		kpcd->configc = kpc_get_config_count(kpcd->running);
+		kpc_get_config(kpcd->running, kpcd->configv);
+	}
+}
+
+static void
+kperf_kpc_config_log(const struct kpcdata *kpcd)
+{
 	BUF_DATA(PERF_KPC_CONFIG,
 	         kpcd->running,
 	         kpcd->counterc,
 	         kpc_get_counter_count(KPC_CLASS_FIXED_MASK),
 	         kpcd->configc);
+}
+
+static void
+kperf_kpc_log(uint32_t code, uint32_t code32, const struct kpcdata *kpcd)
+{
+	unsigned i;
 
 #if __LP64__
-	/* config registers, if they were asked for */
-	for (i = 0; i < ((kpcd->configc+3) / 4); i++) {
-		BUF_DATA( PERF_KPC_CFG_REG,
-		          kpcd->configv[0 + i * 4],
-		          kpcd->configv[1 + i * 4],
-		          kpcd->configv[2 + i * 4],
-		          kpcd->configv[3 + i * 4] );
+	(void)code32;
+	/* config registers */
+	for (i = 0; i < ((kpcd->configc + 3) / 4); i++) {
+		BUF_DATA(PERF_KPC_CFG_REG,
+		         kpcd->configv[0 + i * 4],
+		         kpcd->configv[1 + i * 4],
+		         kpcd->configv[2 + i * 4],
+		         kpcd->configv[3 + i * 4]);
 	}
 
-	/* and the actual data -- 64-bit trace entries */
-	for (i = 0; i < ((kpcd->counterc+3) / 4); i++) {
-		BUF_DATA( PERF_KPC_DATA,
-		          kpcd->counterv[0 + i * 4],
-		          kpcd->counterv[1 + i * 4],
-		          kpcd->counterv[2 + i * 4],
-		          kpcd->counterv[3 + i * 4] );
+	/* and the actual counts with one 64-bit argument each */
+	for (i = 0; i < ((kpcd->counterc + 3) / 4); i++) {
+		BUF_DATA(code,
+		         kpcd->counterv[0 + i * 4],
+		         kpcd->counterv[1 + i * 4],
+		         kpcd->counterv[2 + i * 4],
+		         kpcd->counterv[3 + i * 4]);
 	}
-
 #else
-	/* config registers, if requested */
-	for (i = 0; i < ((kpcd->configc+1) / 2); i++) {
-		BUF_DATA( PERF_KPC_CFG_REG32,
-		          (kpcd->configv[0 + i * 2] >> 32ULL),
-		           kpcd->configv[0 + i * 2] & 0xffffffffULL,
-		          (kpcd->configv[1 + i * 2] >> 32ULL),
-		           kpcd->configv[1 + i * 2] & 0xffffffffULL );
+	(void)code;
+	/* config registers */
+	for (i = 0; i < ((kpcd->configc + 1) / 2); i++) {
+		BUF_DATA(PERF_KPC_CFG_REG32,
+		         (kpcd->configv[0 + i * 2] >> 32ULL),
+		         kpcd->configv[0 + i * 2] & 0xffffffffULL,
+		         (kpcd->configv[1 + i * 2] >> 32ULL),
+		         kpcd->configv[1 + i * 2] & 0xffffffffULL);
 	}
 
-	/* and the actual data -- two counters per tracepoint */
-	for (i = 0; i < ((kpcd->counterc+1) / 2); i++) {
-		BUF_DATA( PERF_KPC_DATA32,
-		          (kpcd->counterv[0 + i * 2] >> 32ULL),
-		           kpcd->counterv[0 + i * 2] & 0xffffffffULL,
-		          (kpcd->counterv[1 + i * 2] >> 32ULL),
-		           kpcd->counterv[1 + i * 2] & 0xffffffffULL );
+	/* and the actual counts with two 32-bit trace arguments each */
+	for (i = 0; i < ((kpcd->counterc + 1) / 2); i++) {
+		BUF_DATA(code32,
+		         (kpcd->counterv[0 + i * 2] >> 32ULL),
+		         kpcd->counterv[0 + i * 2] & 0xffffffffULL,
+		         (kpcd->counterv[1 + i * 2] >> 32ULL),
+		         kpcd->counterv[1 + i * 2] & 0xffffffffULL);
 	}
 #endif
 }
 
-#endif /* KPC */
+void
+kperf_kpc_cpu_log(const struct kpcdata *kpcd)
+{
+	kperf_kpc_config_log(kpcd);
+	kperf_kpc_log(PERF_KPC_DATA, PERF_KPC_DATA32, kpcd);
+}
+
+void
+kperf_kpc_thread_log(const struct kpcdata *kpcd)
+{
+	kperf_kpc_config_log(kpcd);
+	kperf_kpc_log(PERF_KPC_DATA_THREAD, PERF_KPC_DATA_THREAD32, kpcd);
+}

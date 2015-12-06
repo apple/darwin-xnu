@@ -79,6 +79,10 @@ extern task_t port_name_to_task(
 extern ipc_space_t  get_task_ipcspace(
 	task_t t);
 
+#if CONFIG_JETSAM
+extern int max_task_footprint_mb;	/* Per-task limit on physical memory consumption in megabytes */
+#endif // CONFIG_JETSAM
+
 /* Some loose-ends VM stuff */
 
 extern vm_map_t		kalloc_map;
@@ -86,13 +90,12 @@ extern vm_size_t	msg_ool_size_small;
 extern vm_map_t		zone_map;
 
 extern void consider_machine_adjust(void);
-extern pmap_t get_map_pmap(vm_map_t);
 extern vm_map_offset_t get_map_min(vm_map_t);
 extern vm_map_offset_t get_map_max(vm_map_t);
 extern vm_map_size_t get_vmmap_size(vm_map_t);
 extern int get_vmmap_entries(vm_map_t);
 
-int vm_map_page_mask(vm_map_t);
+extern vm_map_offset_t vm_map_page_mask(vm_map_t);
 
 extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);
 
@@ -129,21 +132,34 @@ extern mach_vm_offset_t mach_get_vm_start(vm_map_t);
 extern mach_vm_offset_t mach_get_vm_end(vm_map_t);
 
 #if CONFIG_CODE_DECRYPTION
+#define VM_MAP_DEBUG_APPLE_PROTECT	MACH_ASSERT
 struct pager_crypt_info;
 extern kern_return_t vm_map_apple_protected(
-					    vm_map_t	map,
-					    vm_map_offset_t	start,
-					    vm_map_offset_t	end,
-					    struct pager_crypt_info *crypt_info);
+	vm_map_t		map,
+	vm_map_offset_t		start,
+	vm_map_offset_t		end,
+	vm_object_offset_t	crypto_backing_offset,
+	struct pager_crypt_info *crypt_info);
 extern void apple_protect_pager_bootstrap(void);
-extern memory_object_t apple_protect_pager_setup(vm_object_t backing_object,
-						 struct pager_crypt_info *crypt_info);
+extern memory_object_t apple_protect_pager_setup(
+	vm_object_t		backing_object,
+	vm_object_offset_t	backing_offset,
+	vm_object_offset_t	crypto_backing_offset,
+	struct pager_crypt_info *crypt_info,
+	vm_object_offset_t	crypto_start,
+	vm_object_offset_t	crypto_end);
 #endif	/* CONFIG_CODE_DECRYPTION */
 
 struct vnode;
 extern void swapfile_pager_bootstrap(void);
 extern memory_object_t swapfile_pager_setup(struct vnode *vp);
 extern memory_object_control_t swapfile_pager_control(memory_object_t mem_obj);
+
+#if __arm64__ || ((__ARM_ARCH_7K__ >= 2) && defined(PLATFORM_WatchOS))
+#define SIXTEENK_PAGE_SIZE	0x4000
+#define SIXTEENK_PAGE_MASK	0x3FFF
+#define SIXTEENK_PAGE_SHIFT	14
+#endif /* __arm64__ || ((__ARM_ARCH_7K__ >= 2) && defined(PLATFORM_WatchOS)) */
 
 
 /*
@@ -155,6 +171,7 @@ extern void *upl_get_internal_page_list(
 	upl_t upl);
 
 extern void vnode_setswapmount(struct vnode *);
+extern int64_t vnode_getswappin_avail(struct vnode *);
 
 typedef int pager_return_t;
 extern pager_return_t	vnode_pagein(
@@ -523,6 +540,9 @@ extern void vm_compressor_pager_init(void);
 extern kern_return_t compressor_memory_object_create(
 	memory_object_size_t,
 	memory_object_t *);
+
+extern boolean_t vm_compressor_low_on_space(void);
+extern int	 vm_swap_low_on_space(void);
 
 #if CONFIG_JETSAM
 extern int proc_get_memstat_priority(struct proc*, boolean_t);

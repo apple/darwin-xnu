@@ -69,17 +69,17 @@ private:
   ExpansionData *reserved;
 
 public:
-  virtual bool start( IOService * provider );
-  virtual bool configure( IOService * provider );
-  virtual const char * deleteList( void );
-  virtual const char * excludeList( void );
+  virtual bool start( IOService * provider ) APPLE_KEXT_OVERRIDE;
+  virtual bool configure( IOService * provider ) APPLE_KEXT_OVERRIDE;
+  virtual const char * deleteList( void ) APPLE_KEXT_OVERRIDE;
+  virtual const char * excludeList( void ) APPLE_KEXT_OVERRIDE;
   
-  virtual void registerNVRAMController( IONVRAMController * nvram );
+  virtual void registerNVRAMController( IONVRAMController * nvram ) APPLE_KEXT_OVERRIDE;
   
-  virtual long getGMTTimeOfDay(void);
-  virtual void setGMTTimeOfDay(long secs);
+  virtual long getGMTTimeOfDay(void) APPLE_KEXT_OVERRIDE;
+  virtual void setGMTTimeOfDay(long secs) APPLE_KEXT_OVERRIDE;
   
-  virtual bool getMachineName(char *name, int maxLength);
+  virtual bool getMachineName(char *name, int maxLength) APPLE_KEXT_OVERRIDE;
 
   OSMetaClassDeclareReservedUnused(ApplePlatformExpert,  0);
   OSMetaClassDeclareReservedUnused(ApplePlatformExpert,  1);

@@ -39,6 +39,7 @@
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOUserClient.h>
+#include <IOKit/IOKitDiagnosticsUserClient.h>
 
 #include <IOKit/system.h>
 
@@ -819,6 +820,10 @@ int PEHaltRestart(unsigned int type)
        replies.
      */
    }
+   else if(type == kPEPanicRestartCPU || type == kPEPanicSync)
+   {
+    IOCPURunPlatformPanicActions(type);
+   }
 
   if (gIOPlatform) return gIOPlatform->haltRestart(type);
   else return -1;
@@ -901,6 +906,38 @@ err:
     return FALSE;
 }
 
+boolean_t
+PEWriteNVRAMBooleanProperty(const char *symbol, boolean_t value)
+{
+	const OSSymbol *sym = NULL;
+	OSBoolean *data = NULL;
+	bool ret = false;
+
+	if (symbol == NULL) {
+		goto exit;
+	}
+
+	if (init_gIOOptionsEntry() < 0) {
+		goto exit;
+	}
+
+	if ((sym = OSSymbol::withCStringNoCopy(symbol)) == NULL) {
+		goto exit;
+	}
+
+	data  = value ? kOSBooleanTrue : kOSBooleanFalse;
+	ret = gIOOptionsEntry->setProperty(sym, data);
+
+	sym->release();
+
+	/* success, force the NVRAM to flush writes */
+	if (ret == true) {
+		gIOOptionsEntry->sync();
+	}
+
+exit:
+	return ret;
+}
 
 boolean_t PEWriteNVRAMProperty(const char *symbol, const void *value, 
                                const unsigned int len)
@@ -1188,6 +1225,7 @@ void IODTPlatformExpert::processTopLevel( IORegistryEntry * rootEntry )
         } else {
 	  dtNVRAM->attach(this);
 	  dtNVRAM->registerService();
+	  options->release();
 	}
       }
     }
@@ -1195,7 +1233,10 @@ void IODTPlatformExpert::processTopLevel( IORegistryEntry * rootEntry )
     // Publish the cpus.
     cpus = rootEntry->childFromPath( "cpus", gIODTPlane);
     if ( cpus)
+    {
       createNubs( this, IODTFindMatchingEntries( cpus, kIODTExclusive, 0));
+      cpus->release();
+    }
 
     // publish top level, minus excludeList
     createNubs( this, IODTFindMatchingEntries( rootEntry, kIODTExclusive, excludeList()));
@@ -1476,6 +1517,40 @@ IOReturn IOPlatformExpertDevice::setProperties( OSObject * properties )
     return kIOReturnUnsupported;
 }
 
+IOReturn IOPlatformExpertDevice::newUserClient( task_t owningTask, void * securityID,
+                                    UInt32 type,  OSDictionary * properties,
+                                    IOUserClient ** handler )
+{
+    IOReturn            err = kIOReturnSuccess;
+    IOUserClient *      newConnect = 0;
+    IOUserClient *      theConnect = 0;
+
+    switch (type)
+    {
+        case kIOKitDiagnosticsClientType:
+	    newConnect = IOKitDiagnosticsClient::withTask(owningTask);
+	    if (!newConnect) err = kIOReturnNotPermitted;
+            break;
+        default:
+            err = kIOReturnBadArgument;
+    }
+
+    if (newConnect)
+    {
+        if ((false == newConnect->attach(this))
+                || (false == newConnect->start(this)))
+        {
+            newConnect->detach( this );
+            newConnect->release();
+        }
+        else
+            theConnect = newConnect;
+    }
+
+    *handler = theConnect;
+    return (err);
+}
+
 void IOPlatformExpertDevice::free()
 {
     if (workLoop)
@@ -1526,7 +1601,7 @@ class IOPanicPlatform : IOPlatformExpert {
     OSDeclareDefaultStructors(IOPanicPlatform);
 
 public:
-    bool start(IOService * provider);
+    bool start(IOService * provider) APPLE_KEXT_OVERRIDE;
 };
 
 

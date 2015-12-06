@@ -102,6 +102,14 @@ typedef struct mac	*mac_t;
 #warning "MAC policy is not KPI, see Technical Q&A QA1574"
 #endif
 
+#if DEBUG
+#define SECURITY_MAC_CTLFLAGS (CTLFLAG_RW | CTLFLAG_LOCKED)
+#define SECURITY_MAC_CHECK_ENFORCE 1
+#else
+#define SECURITY_MAC_CTLFLAGS (CTLFLAG_RD | CTLFLAG_LOCKED)
+#define SECURITY_MAC_CHECK_ENFORCE 0
+#endif
+
 struct user_mac {
 	user_size_t	m_buflen;
 	user_addr_t	m_string;
@@ -172,14 +180,11 @@ __BEGIN_DECLS
 int	 __mac_execve(char *fname, char **argv, char **envv, mac_t _label);
 int	 __mac_get_fd(int _fd, mac_t _label);
 int	 __mac_get_file(const char *_path, mac_t _label);
-int	 __mac_get_lcid(pid_t _lcid, mac_t _label);
-int	 __mac_get_lctx(mac_t _label);
 int	 __mac_get_link(const char *_path, mac_t _label);
 int	 __mac_get_pid(pid_t _pid, mac_t _label);
 int	 __mac_get_proc(mac_t _label);
 int	 __mac_set_fd(int _fildes, const mac_t _label);
 int	 __mac_set_file(const char *_path, mac_t _label);
-int	 __mac_set_lctx(mac_t _label);
 int	 __mac_set_link(const char *_path, mac_t _label);
 int	 __mac_mount(const char *type, const char *path, int flags, void *data,
     struct mac *label);

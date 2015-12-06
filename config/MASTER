@@ -53,7 +53,7 @@
 #######################################################################
 #
 
-options		INET			#				# <inet>
+options		INET		#				# <inet>
 options		HW_AST		# Hardware ast support		# <hw_ast>
 options 	HW_FOOTPRINT	# Cache footprint support	# <hw_foot>
 
@@ -75,7 +75,7 @@ options		AH_ALL_CRYPTO	# AH all crypto algs		# <ah_all_crypto>
 options		IPCOMP_ZLIB	# IP compression using zlib	# <ipcomp_zlib>
 options		PF		# Packet Filter			# <pf>
 options		PF_ALTQ		# PF ALTQ (Alternate Queueing)	# <pf_altq>
-options		PF_ECN		# PF use ECN marking	# <pf_ecn>
+options		PF_ECN		# PF use ECN marking		# <pf_ecn>
 options		PFLOG		# PF log interface		# <pflog>
 options		PKTSCHED_CBQ	# CBQ packet scheduler		# <pktsched_cbq>
 options		PKTSCHED_HFSC	# H-FSC packet scheduler	# <pktsched_hfsc>
@@ -99,10 +99,10 @@ options		ICMP_BANDLIM	# ICMP bandwidth limiting sysctl
 options		IFNET_INPUT_SANITY_CHK	# allow dlil/ifnet input sanity check # <ifnet_input_chk>
 options		MULTIPATH	# Multipath domain		# <multipath>
 options		MPTCP		# Multipath TCP			# <mptcp>
-options		SYSV_SEM	# SVID semaphores			# <sysv_sem>
-options		SYSV_MSG	# SVID messages				# <sysv_msg>
-options		SYSV_SHM	# SVID shared mem			# <sysv_shm>
-options		PSYNCH		# pthread synch				# <psynch>
+options		SYSV_SEM	# SVID semaphores		# <sysv_sem>
+options		SYSV_MSG	# SVID messages			# <sysv_msg>
+options		SYSV_SHM	# SVID shared mem		# <sysv_shm>
+options		PSYNCH		# pthread synch			# <psynch>
 options		FLOW_DIVERT								# <flow_divert>
 options		NECP									# <necp>
 options		CONTENT_FILTER	#						# <content_filter>
@@ -115,12 +115,12 @@ options     OLD_SEMWAIT_SIGNAL  # old semwait_signal handler
 #
 #	4.4 general kernel 
 #
-options		SOCKETS		# socket support			# <inet, inet6>
-options 	DIAGNOSTIC	# diagnostics				# <diagnostic>
-options		GPROF		# build profiling			# <profile>
+options		SOCKETS		# socket support		# <inet, inet6>
+options 	DIAGNOSTIC	# diagnostics			# <diagnostic>
+options		GPROF		# build profiling		# <profile>
 options		PROFILE		# kernel profiling		# <profile>
 options		SENDFILE	# sendfile					# <sendfile>
-options		NETWORKING	# networking layer			# <inet, inet6>
+options		NETWORKING	# networking layer		# <inet, inet6>
 options		CONFIG_FSE	# file system events		# <config_fse>
 options		CONFIG_IMAGEBOOT	# local image boot	# <config_imageboot>
 options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
@@ -132,18 +132,18 @@ options		CONFIG_WORKQUEUE	# <config_workqueue>
 #
 #	4.4 filesystems 
 #
-options		HFS			# HFS/HFS+ support		# <hfs>
-options		MOCKFS			# Boot from an executable	# <mockfs>
+options		HFS		# HFS/HFS+ support		# <hfs>
+options		MOCKFS		# Boot from an executable	# <mockfs>
 options		FIFO		# fifo support			# <fifo>
 options		FDESC		# fdesc_fs support		# <fdesc>
 options		DEVFS		# devfs support			# <devfs>
-options		JOURNALING	# journaling support	# <journaling>
-options		HFS_COMPRESSION	# hfs compression	# <hfs_compression>
-options		CONFIG_HFS_STD	# hfs standard support	# <config_hfs_std>
-options		CONFIG_HFS_TRIM	# hfs trims unused blocks	# <config_hfs_trim>
-options		CONFIG_HFS_MOUNT_UNMAP	#hfs trims blocks at mount	# <config_hfs_mount_unmap>
-options		CONFIG_HFS_DIRLINK		#allow directory hardlink creation # <config_hfs_dirlink>
-options		CONFIG_DEV_KMEM	# /dev/kmem device for reading KVA	# <config_dev_kmem>
+options		JOURNALING	# journaling support		# <journaling>
+options		HFS_COMPRESSION	# hfs compression	    # <hfs_compression>
+options		CONFIG_HFS_STD	# hfs standard support	    # <config_hfs_std>
+options		CONFIG_HFS_TRIM	# hfs trims unused blocks   # <config_hfs_trim>
+options		CONFIG_HFS_MOUNT_UNMAP	# hfs trims blocks at mount # <config_hfs_mount_unmap>
+options		CONFIG_HFS_DIRLINK	# allow directory hardlink creation # <config_hfs_dirlink>
+options		CONFIG_DEV_KMEM	    # /dev/kmem device for reading KVA	# <config_dev_kmem>
 
 #
 #	file system features
@@ -167,30 +167,30 @@ options		NFSSERVER	# Be an NFS server		# <nfsserver>
 #
 # Machine Independent Apple Features
 #
-profile						# build a profiling kernel	# <profile>
+profile				# build a profiling kernel	# <profile>
 
 #       
 # IPv6 Support
 #       
-options         "INET6"         		# kernel IPv6 Support           # <inet6>
-options         IPV6SEND			# Secure Neighbor Discovery	# <ipv6send>
-options         IPSEC                  		# IP security            	# <ipsec>
-options         IPSEC_ESP              		# IP security            	# <ipsec>
-options         "IPV6FIREWALL"         		# IPv6 Firewall Feature   	# <ipv6firewall>
+options         "INET6"         # kernel IPv6 Support           # <inet6>
+options         IPV6SEND	# Secure Neighbor Discovery	# <ipv6send>
+options         IPSEC           # IP security            	# <ipsec>
+options         IPSEC_ESP       # IP security            	# <ipsec>
+options         "IPV6FIREWALL"  # IPv6 Firewall Feature   	# <ipv6firewall>
 options         "IPV6FIREWALL_DEFAULT_TO_ACCEPT"	#IPv6 Firewall Feature   	# <ipv6firewall>
 #options         "IPV6FIREWALL_VERBOSE" 		#IPv6 Firewall Feature   	# <ipv6firewall>
 
-pseudo-device   gif     1		# <gif>
-pseudo-device   dummy   2		# <dummy>
-pseudo-device   stf 	1 		# <stf>
+pseudo-device   gif     1				# <gif>
+pseudo-device   dummy   2				# <dummy>
+pseudo-device   stf 	1 				# <stf>
 
-options			CRYPTO			# <ipsec,crypto>
-options			CRYPTO_SHA2		# <crypto_sha2>
-options			ENCRYPTED_SWAP		# <encrypted_swap>
+options			CRYPTO				# <ipsec,crypto>
+options			CRYPTO_SHA2			# <crypto_sha2>
+options			ENCRYPTED_SWAP			# <encrypted_swap>
 
-options		ZLIB		# inflate/deflate support	# <zlib>
+options		ZLIB	# inflate/deflate support	# <zlib>
 
-options		IF_BRIDGE			# <if_bridge>
+options		IF_BRIDGE				# <if_bridge>
 
 #
 #  configurable kernel event related resources 
@@ -215,13 +215,13 @@ options   CONFIG_KN_HASHSIZE=20		# <bsmall>
 options   CONFIG_VNODES=263168		# <large,xlarge>
 options   CONFIG_VNODES=263168		# <medium>
 options   CONFIG_VNODES=10240		# <small>
-options   CONFIG_VNODES=750			# <bsmall>
+options   CONFIG_VNODES=750		# <bsmall>
 
-options   CONFIG_VNODE_FREE_MIN=500		# <large,xlarge>
-options   CONFIG_VNODE_FREE_MIN=300		# <medium>
-options   CONFIG_VNODE_FREE_MIN=200		# <small>
-options   CONFIG_VNODE_FREE_MIN=100		# <xsmall>
-options   CONFIG_VNODE_FREE_MIN=75		# <bsmall>
+options   CONFIG_VNODE_FREE_MIN=500	# <large,xlarge>
+options   CONFIG_VNODE_FREE_MIN=300	# <medium>
+options   CONFIG_VNODE_FREE_MIN=200	# <small>
+options   CONFIG_VNODE_FREE_MIN=100	# <xsmall>
+options   CONFIG_VNODE_FREE_MIN=75	# <bsmall>
 
 options   CONFIG_NC_HASH=5120		# <large,xlarge>
 options   CONFIG_NC_HASH=4096		# <medium>
@@ -235,15 +235,6 @@ options   CONFIG_VFS_NAMES=2048		# <bsmall>
 
 options   CONFIG_MAX_CLUSTERS=8		# <xlarge,large,medium>
 options   CONFIG_MAX_CLUSTERS=4		# <small,xsmall,bsmall>
-
-#
-#  configurable kauth credential related resources 
-#
-options   KAUTH_CRED_PRIMES_COUNT=7		# <medium,large,xlarge>
-options   KAUTH_CRED_PRIMES_COUNT=3		# <bsmall,xsmall,small>
-
-options   KAUTH_CRED_PRIMES="{97, 241, 397, 743, 1499, 3989, 7499}"		# <medium,large,xlarge>
-options   KAUTH_CRED_PRIMES="{5, 17, 97}"								# <bsmall,xsmall,small>
 
 #
 #  configurable options for minumum number of buffers for kernel memory 
@@ -260,9 +251,9 @@ options   CONFIG_MIN_NIOBUF=32		# <bsmall>
 #
 # set maximum space used for packet buffers
 #
-options        CONFIG_NMBCLUSTERS="((1024 * 1024) / MCLBYTES)"		# <large,xlarge>
-options        CONFIG_NMBCLUSTERS="((1024 * 512) / MCLBYTES)"		# <medium>
-options        CONFIG_NMBCLUSTERS="((1024 * 256) / MCLBYTES)"		# <bsmall,xsmall,small>
+options        CONFIG_NMBCLUSTERS="((1024 * 1024) / MCLBYTES)"	# <large,xlarge>
+options        CONFIG_NMBCLUSTERS="((1024 * 512) / MCLBYTES)"	# <medium>
+options        CONFIG_NMBCLUSTERS="((1024 * 256) / MCLBYTES)"	# <bsmall,xsmall,small>
 
 #
 # Configure size of TCP hash table
@@ -282,8 +273,8 @@ options CONFIG_ICMP_BANDLIM=50		# <xsmall,small,bsmall>
 #  CONFIG_AIO_PROCESS_MAX - process limit of async IO requests.
 #  CONFIG_AIO_THREAD_COUNT - number of async IO worker threads created.
 #
-options   CONFIG_AIO_MAX=360		# <xlarge>
-options   CONFIG_AIO_MAX=180		# <large>
+options   CONFIG_AIO_MAX=360			# <xlarge>
+options   CONFIG_AIO_MAX=180			# <large>
 options   CONFIG_AIO_MAX=90			# <medium>
 options   CONFIG_AIO_MAX=45			# <small>
 options   CONFIG_AIO_MAX=20			# <xsmall>
@@ -296,15 +287,15 @@ options   CONFIG_AIO_PROCESS_MAX=12		# <small>
 options   CONFIG_AIO_PROCESS_MAX=8		# <xsmall>
 options   CONFIG_AIO_PROCESS_MAX=4		# <bsmall>
 
-options   CONFIG_AIO_THREAD_COUNT=16	# <xlarge>
+options   CONFIG_AIO_THREAD_COUNT=16		# <xlarge>
 options   CONFIG_AIO_THREAD_COUNT=8		# <large>
 options   CONFIG_AIO_THREAD_COUNT=4		# <medium>
 options   CONFIG_AIO_THREAD_COUNT=3		# <small>
 options   CONFIG_AIO_THREAD_COUNT=2		# <xsmall,bsmall>
 
-options   CONFIG_MAXVIFS=32				# <medium,large,xlarge>
-options   CONFIG_MAXVIFS=16				# <small,xsmall>
-options   CONFIG_MAXVIFS=2				# <bsmall>
+options   CONFIG_MAXVIFS=32			# <medium,large,xlarge>
+options   CONFIG_MAXVIFS=16			# <small,xsmall>
+options   CONFIG_MAXVIFS=2			# <bsmall>
 
 options   CONFIG_MFCTBLSIZ=256			# <medium,large,xlarge>
 options   CONFIG_MFCTBLSIZ=128			# <small,xsmall>
@@ -315,6 +306,12 @@ options   CONFIG_MFCTBLSIZ=16			# <bsmall>
 #
 options   CONFIG_MSG_BSIZE=4096			# <bsmall,small,xsmall>
 options   CONFIG_MSG_BSIZE=16384		# <medium,large,xlarge>
+
+#
+# maximum size of the per-process Mach IPC table
+#
+options   CONFIG_IPC_TABLE_ENTRIES_STEPS=64  	# 137898 entries	# <bsmall,small,xsmall>
+options   CONFIG_IPC_TABLE_ENTRIES_STEPS=256 	# 300714 entries	# <medium,large,xlarge>
 
 #
 #  configurable kernel - use these options to strip strings from panic
@@ -343,35 +340,41 @@ options		CONFIG_ENFORCE_LIBRARY_VALIDATION  # <config_library_validation>
 #
 # code decryption... used on embedded for app protection, DSMOS on desktop
 #
-options		CONFIG_CODE_DECRYPTION	# <config_code_decryption>
+options		CONFIG_CODE_DECRYPTION		# <config_code_decryption>
 
 #
 # User Content Protection, used on embedded
 #
-options		CONFIG_PROTECT	# <config_protect>
+options		CONFIG_PROTECT			# <config_protect>
 
 #
 # enable per-process memory priority tracking
 #
-options		CONFIG_MEMORYSTATUS				# <memorystatus>
+options		CONFIG_MEMORYSTATUS		# <memorystatus>
 
 #
 # enable jetsam - used on embedded
 #
-options		CONFIG_JETSAM				# <jetsam>
+options		CONFIG_JETSAM			# <jetsam>
+
+#
+# enable new wait queue implementation stats / debugging
+#
+options		CONFIG_WAITQ_STATS			# <config_waitq_stats>
+options		CONFIG_WAITQ_DEBUG			# <config_waitq_debug>
 
 #
 # enable freezing of suspended processes - used on embedded
 #
-options		CONFIG_FREEZE					# <freeze>
+options		CONFIG_FREEZE			# <freeze>
 
-options		CHECK_CS_VALIDATION_BITMAP			# <config_cs_validation_bitmap>
+options		CHECK_CS_VALIDATION_BITMAP	# <config_cs_validation_bitmap>
 
 #
 # enable detectiion of file cache thrashing - used on platforms with
 # dynamic VM compression enabled
 #
-options		CONFIG_PHANTOM_CACHE			# <phantom_cache>
+options		CONFIG_PHANTOM_CACHE		# <phantom_cache>
 
 #
 # memory pressure event support
@@ -390,28 +393,23 @@ options		CONFIG_IOSCHED			# <config_iosched>
 options		IMPORTANCE_INHERITANCE		# <importance_inheritance>
 options		IMPORTANCE_DEBUG		# <importance_inheritance>
 
-options		CONFIG_TELEMETRY			# <config_telemetry>
+options		CONFIG_TELEMETRY		# <config_telemetry>
 
 options		CONFIG_PROC_UUID_POLICY		# <config_proc_uuid_policy>
 
 #
-# In-kernel tests
-#
-options 	CONFIG_IN_KERNEL_TESTS			# <in_kernel_tests>
-
-#
 # ECC data logging
 # 
-options		CONFIG_ECC_LOGGING			# <config_ecc_logging>
+options		CONFIG_ECC_LOGGING		# <config_ecc_logging>
 
 #
 #  Ethernet (ARP)
 #
-pseudo-device	ether			# <networking,inet,inet6>
+pseudo-device	ether				# <networking,inet,inet6>
 #
 #  Network loopback device
 #
-pseudo-device	loop			# <networking,inet,inet6>
+pseudo-device	loop				# <networking,inet,inet6>
 #
 #  UCB pseudo terminal service
 #
@@ -459,12 +457,13 @@ pseudo-device	profile_prvd	1	init	profile_init	# <config_dtrace>
 #
 
 options		HIBERNATION	# system hibernation	# <hibernation>
-options		IOKITCPP	# C++ implementation		# <iokitcpp>
-options		IOKITSTATS	# IOKit statistics		# <iokitstats>
-options		CONFIG_SLEEP	#				# <config_sleep>
+options		IOKITCPP	# C++ implementation	# <iokitcpp>
+options		IOKITSTATS	# IOKit statistics	# <iokitstats>
+options		IOTRACKING	# IOKit tracking	# <iotracking>
+options		CONFIG_SLEEP	#			# <config_sleep>
 options   CONFIG_MAX_THREADS=64	# IOConfigThread threads
-options         NO_KEXTD                # <no_kextd>
-options         NO_KERNEL_HID           # <no_kernel_hid>
+options         NO_KEXTD                		# <no_kextd>
+options         NO_KERNEL_HID           		# <no_kernel_hid>
 
 #
 # Libkern configuration options
@@ -485,21 +484,19 @@ options         CONFIG_STATIC_CPPINIT   # Static library initializes kext cpp ru
 
 # CONFIG_KEXT_BASEMENT - alloc post boot loaded kexts after prelinked kexts
 #
-options		CONFIG_KEXT_BASEMENT		#		# <config_kext_basement>
+options		CONFIG_KEXT_BASEMENT		#	# <config_kext_basement>
 
 #
 # security configuration options
 #
 
-options		CONFIG_LCTX	# Login Context
-
-options		CONFIG_MACF			# Mandatory Access Control Framework	# <config_macf>
+options		CONFIG_MACF	# Mandatory Access Control Framework	# <config_macf>
 options		CONFIG_MACF_SOCKET_SUBSET	# MAC socket subest (no labels)	# <config_macf>
-#options	CONFIG_MACF_SOCKET		# MAC socket labels 	# <config_macf>
-#options	CONFIG_MACF_NET			# mbuf			# <config_macf>
-#options	CONFIG_MACF_DEBUG		# debug			# <config_macf>
+#options	CONFIG_MACF_SOCKET  # MAC socket labels	    # <config_macf>
+#options	CONFIG_MACF_NET	    # mbuf	    	    # <config_macf>
+#options	CONFIG_MACF_DEBUG   # debug	    	    # <config_macf>
 
-options		CONFIG_AUDIT			# Kernel auditing	# <config_audit>
+options		CONFIG_AUDIT	    # Kernel auditing	    # <config_audit>
 
 
 #
@@ -534,13 +531,13 @@ options		MACH_ASSERT	#		# <mach_assert>
 #
 options		MACH_DEBUG	# IPC debugging interface	# <mdebug>
 options		MACH_IPC_DEBUG	# Enable IPC debugging calls	# <ipc_debug>
-options		MACH_VM_DEBUG	#		# <debug>
+options		MACH_VM_DEBUG	#				# <debug>
 #
 # MACH_MP_DEBUG control the possible dead locks that may occur by controlling
 #	that IPL level has been raised down to SPL0 after some calls to
 #	hardclock device driver.
 #
-options		MACH_MP_DEBUG	#		# <debug>
+options		MACH_MP_DEBUG	#				# <debug>
 #
 # ZONE_DEBUG keeps track of all zalloc()ed elements to perform further
 #	operations on each element.
@@ -584,13 +581,13 @@ options		MACH_LDEBUG	#		# <debug>
 #
 options		KDEBUG			# kernel tracing	# <kdebug>
 options		IST_KDEBUG		# limited tracing	# <ist_kdebug>
-options		NO_KDEBUG       # no kernel tracing # <no_kdebug>
+options		NO_KDEBUG       	# no kernel tracing 	# <no_kdebug>
 
 #
 # CONFIG_DTRACE enables code needed to support DTrace. Currently this is
 # only used for delivery of traps/interrupts to DTrace.
 #
-options		CONFIG_DTRACE	#		# <config_dtrace>
+options		CONFIG_DTRACE		#		    # <config_dtrace>
 
 # kernel performance tracing
 options     KPERF                  # <kperf>
@@ -598,13 +595,13 @@ options     KPC                    # <kpc>
 
 # MACH_COUNTERS enables code that handles various counters in the system.
 # 
-options		MACH_COUNTERS	#		# <debug>
+options		MACH_COUNTERS	#			    # <debug>
 
 # DEVELOPMENT define for development builds
-options		DEVELOPMENT		# dev kernel		# <development>
+options		DEVELOPMENT	# dev kernel	    	    # <development>
 
 # DEBUG kernel
-options		DEBUG		# general debugging code	# <debug>
+options		DEBUG		# general debugging code    # <debug>
 
 ##########################################################
 #
@@ -655,11 +652,6 @@ options   CONFIG_ZLEAK_TRACE_MAP_NUM=4096 #<small,xsmall,bsmall>
 options	  CONFIG_VC_PROGRESS_WHITE		# <vc_progress_white>
 
 #
-# Context switched counters 
-#
-options		CONFIG_COUNTERS			# <config_counters>
-
-#
 # Timeshare scheduler implementations
 #
 options		CONFIG_SCHED_TRADITIONAL	# <config_sched_traditional>
@@ -668,41 +660,55 @@ options		CONFIG_SCHED_GRRR		# <config_sched_grrr>
 options		CONFIG_SCHED_GRRR_CORE		# <config_sched_grrr>
 options		CONFIG_SCHED_MULTIQ		# <config_sched_multiq>
 options		CONFIG_SCHED_TIMESHARE_CORE	# <config_sched_traditional,config_sched_multiq>
-options		CONFIG_SCHED_FAIRSHARE_CORE	# <config_sched_traditional,config_sched_multiq,config_sched_proto>
 
-options		CONFIG_SCHED_IDLE_IN_PLACE		# <config_sched_idle_in_place>
+options		CONFIG_SCHED_IDLE_IN_PLACE	# <config_sched_idle_in_place>
+options		CONFIG_SCHED_SFI		# <config_sched_sfi>
 options		CONFIG_GZALLOC			# <config_gzalloc>
+options		CONFIG_SCHED_DEFERRED_AST	# <config_sched_deferred_ast>
 
 # Enable allocation of contiguous physical memory through vm_map_enter_cpm()
-options		VM_CPM		# <vm_cpm>
+options		VM_CPM				# <vm_cpm>
 
-options	    CONFIG_SKIP_PRECISE_USER_KERNEL_TIME	# <config_skip_precise_user_kernel_time>
+options	    CONFIG_SKIP_PRECISE_USER_KERNEL_TIME    # <config_skip_precise_user_kernel_time>
 
 #
 # Switch to disable cpu, wakeup and high memory watermark monitors
 #
-options 	CONFIG_NOMONITORS				# <config_nomonitors>
+options 	CONFIG_NOMONITORS			# <config_nomonitors>
 
-options		MACH_KDP	# KDP				# <mach_kdp>
-options		CONFIG_SERIAL_KDP	# KDP over serial				# <config_serial_kdp>
+options		MACH_KDP	    # KDP		# <mach_kdp>
+options		CONFIG_SERIAL_KDP   # KDP over serial	# <config_serial_kdp>
 options		CONFIG_KDP_INTERACTIVE_DEBUGGING	# <kdp_interactive_debugging>
+
+#
+# Kernel Power On Self Tests
+#
+options		CONFIG_XNUPOST				# <config_xnupost>
+
+#
+# Kernel proc reference instrumentation
+#
+options PROC_REF_DEBUG					# <proc_ref_debug>
 
 #
 # Kernel Voucher Attr Manager for Activity Trace
 #
-options 	CONFIG_ATM			# <config_atm>
+options 	CONFIG_ATM				# <config_atm>
 
 #
 # Kernel Voucher Attr Manager for BANK
 #
-options 	CONFIG_BANK			# <config_bank>
+options 	CONFIG_BANK				# <config_bank>
 
 
 # Group related tasks together into coalitions
 options		CONFIG_COALITIONS			# <config_coalitions>
 
+# Enable support for sysdiagnose notifications
+options		CONFIG_SYSDIAGNOSE			# <config_sysdiagnose>
+
 # Configurable Security Restrictions
-options		CONFIG_CSR			# <config_csr>
+options		CONFIG_CSR				# <config_csr>
 
 #
 # Console options

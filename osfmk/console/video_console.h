@@ -112,6 +112,15 @@ extern int vc_progressmeter_value;
 extern void vc_progress_setdiskspeed(uint32_t speed);
 
 
+
+extern int vc_user_options;
+
+enum
+{
+    kVCDarkReboot = 0x00000001,
+};
+extern void vc_set_options(int new_value);
+
 #ifdef __cplusplus
 }
 #endif

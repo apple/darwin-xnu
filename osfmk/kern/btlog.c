@@ -122,7 +122,7 @@ btlog_create(size_t numrecords,
 					 (buffersize_needed - sizeof(btlog_t))/btrecord_size);
 
 	if (kmem_alloc_ready) {
-		ret = kmem_alloc(kernel_map, &buffer, buffersize_needed);
+		ret = kmem_alloc(kernel_map, &buffer, buffersize_needed, VM_KERN_MEMORY_DIAG);
 	} else {
 		buffer = (vm_address_t)pmap_steal_memory(buffersize_needed);
 		ret = KERN_SUCCESS;

@@ -66,6 +66,8 @@ class IODMAEventSource : public IOEventSource
   virtual IOReturn setFIFODepth(IOByteCount depth);
   virtual IOByteCount validFIFODepth(IOByteCount depth, IODirection direction);
 
+  virtual IOReturn setFrameSize(UInt8 byteCount);
+
   virtual IOReturn setDMAConfig(UInt32 dmaIndex);
   virtual bool validDMAConfig(UInt32 dmaIndex);
   
@@ -84,8 +86,8 @@ class IODMAEventSource : public IOEventSource
 		    Action completion = 0,
 		    Action notification = 0,
 		    UInt32 dmaIndex = 0);
-  virtual bool checkForWork(void);
-  virtual void free(void);
+  virtual bool checkForWork(void) APPLE_KEXT_OVERRIDE;
+  virtual void free(void) APPLE_KEXT_OVERRIDE;
 };
 
 #endif /* _IOKIT_IODMAEVENTSOURCE_H */

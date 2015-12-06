@@ -92,6 +92,8 @@ Do not interpret special files on the filesystem.
 Union with underlying filesystem instead of obscuring it.
 .It Dv MNT_SYNCHRONOUS
 All I/O to the filesystem should be done synchronously.
+.It Dv MNT_CPROTECT
+Enable data protection on the filesystem if the filesystem is configured for it.
 .El
 .Pp
 The flag
@@ -120,7 +122,7 @@ The format for these argument structures is described in the
 manual page for each filesystem.
 .Pp
 The
-.Fn umount
+.Fn unmount
 function call disassociates the filesystem from the specified
 mount point
 .Fa dir .
@@ -142,8 +144,8 @@ and the variable
 .Va errno
 is set to indicate the error.
 .Pp
-.Nm Umount
-returns the value 0 if the umount succeeded; otherwise -1 is returned
+.Nm unmount
+returns the value 0 if the unmount succeeded; otherwise -1 is returned
 and the variable
 .Va errno
 is set to indicate the error.
@@ -183,7 +185,7 @@ Another process currently holds a reference to
 points outside the process's allocated address space.
 .El
 .Pp
-.Nm Umount
+.Nm unmount
 may fail with one of the following errors:
 .Bl -tag -width [ENAMETOOLONG]
 .It Bq Er EPERM
@@ -215,12 +217,12 @@ points outside the process's allocated address space.
 .El
 .Sh SEE ALSO
 .Xr mount 8 ,
-.Xr umount 8
+.Xr unmount 8
 .Sh BUGS
 Some of the error codes need translation to more obvious messages.
 .Sh HISTORY
 .Fn Mount
 and
-.Fn umount
+.Fn unmount
 function calls appeared in
 .At v6 .

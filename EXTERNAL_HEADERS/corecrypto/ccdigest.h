@@ -2,8 +2,9 @@
  *  ccdigest.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 11/30/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 11/30/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -73,11 +74,11 @@ struct ccdigest_info {
    size_t _block_size_, named _name_.  Can be used in structs or on the
    stack. */
 #define ccdigest_ctx_decl(_state_size_, _block_size_, _name_)  cc_ctx_decl(struct ccdigest_ctx, ccdigest_ctx_size(_state_size_, _block_size_), _name_)
-#define ccdigest_ctx_clear(_state_size_, _block_size_, _name_) cc_zero(ccdigest_ctx_size(_state_size_, _block_size_), _name_)
+#define ccdigest_ctx_clear(_state_size_, _block_size_, _name_) cc_clear(ccdigest_ctx_size(_state_size_, _block_size_), _name_)
 /* Declare a ccdigest_ctx for a given size_t _state_size_ and
    size_t _block_size_, named _name_.  Can be used on the stack. */
 #define ccdigest_di_decl(_di_, _name_)  cc_ctx_decl(struct ccdigest_ctx, ccdigest_di_size(_di_), _name_)
-#define ccdigest_di_clear(_di_, _name_) cc_zero(ccdigest_di_size(_di_), _name_)
+#define ccdigest_di_clear(_di_, _name_) cc_clear(ccdigest_di_size(_di_), _name_)
 
 /* Digest context field accessors.  Consider the implementation private. */
 
@@ -136,33 +137,24 @@ int ccdigest_test_vector(const struct ccdigest_info *di, const struct ccdigest_v
 int ccdigest_test_chunk_vector(const struct ccdigest_info *di, const struct ccdigest_vector *v, unsigned long chunk);
 
 #ifdef USE_SUPER_COOL_NEW_CCOID_T
-#define OID_DEF(_NAME_, _VALUE_) _NAME_ {((unsigned char *) _VALUE_)}
-#define CC_DIGEST_OID_MD2 {((unsigned char *)"\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x02")}
-#define CC_DIGEST_OID_MD4 {((unsigned char *)"\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x04")}
-#define CC_DIGEST_OID_MD5 {((unsigned char *)"\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05")}
-#define CC_DIGEST_OID_SHA1 {((unsigned char *)"\x06\x05\x2b\x0e\x03\x02\x1a")}
-#define CC_DIGEST_OID_SHA224 {((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x04")}
-#define CC_DIGEST_OID_SHA256 {((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01")}
-#define CC_DIGEST_OID_SHA384 {((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02")}
-#define CC_DIGEST_OID_SHA512 {((unsigned char *)"\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03")}
-#define CC_DIGEST_OID_RMD128 {((unsigned char *)"\x06\x06\x28\xCF\x06\x03\x00\x32")}
-#define CC_DIGEST_OID_RMD160 {((unsigned char *)"\x06\x05\x2B\x24\x03\x02\x01")}
-#define CC_DIGEST_OID_RMD256 {((unsigned char *)"\x06\x05\x2B\x24\x03\x02\x03")}
-#define CC_DIGEST_OID_RMD320 {((unsigned char *)NULL)}
+#define OID_DEF(_VALUE_)  {((const unsigned char *) _VALUE_)}
 #else
-#define CC_DIGEST_OID_MD2    "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x02"
-#define CC_DIGEST_OID_MD4    "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x04"
-#define CC_DIGEST_OID_MD5    "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05"
-#define CC_DIGEST_OID_SHA1   "\x06\x05\x2b\x0e\x03\x02\x1a"
-#define CC_DIGEST_OID_SHA224 "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x04"
-#define CC_DIGEST_OID_SHA256 "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01"
-#define CC_DIGEST_OID_SHA384 "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02"
-#define CC_DIGEST_OID_SHA512 "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03"
-#define CC_DIGEST_OID_RMD128 "\x06\x06\x28\xCF\x06\x03\x00\x32"
-#define CC_DIGEST_OID_RMD160 "\x06\x05\x2B\x24\x03\x02\x01"
-#define CC_DIGEST_OID_RMD256 "\x06\x05\x2B\x24\x03\x02\x03"
-#define CC_DIGEST_OID_RMD320 NULL
+#define OID_DEF(_VALUE_)  _VALUE_
 #endif
+
+#define CC_DIGEST_OID_MD2       OID_DEF("\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x02")
+#define CC_DIGEST_OID_MD4       OID_DEF("\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x04")
+#define CC_DIGEST_OID_MD5       OID_DEF("\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05")
+#define CC_DIGEST_OID_SHA1      OID_DEF("\x06\x05\x2b\x0e\x03\x02\x1a")
+#define CC_DIGEST_OID_SHA224    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x04")
+#define CC_DIGEST_OID_SHA256    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01")
+#define CC_DIGEST_OID_SHA384    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02")
+#define CC_DIGEST_OID_SHA512    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03")
+#define CC_DIGEST_OID_RMD128    OID_DEF("\x06\x06\x28\xCF\x06\x03\x00\x32")
+#define CC_DIGEST_OID_RMD160    OID_DEF("\x06\x05\x2B\x24\x03\x02\x01")
+#define CC_DIGEST_OID_RMD256    OID_DEF("\x06\x05\x2B\x24\x03\x02\x03")
+#define CC_DIGEST_OID_RMD320    OID_DEF(NULL)
+
 
 #ifdef USE_SUPER_COOL_NEW_CCOID_T
 CC_INLINE CC_NONNULL_TU((1)) CC_NONNULL_TU((2))

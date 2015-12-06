@@ -96,7 +96,7 @@ console_init(void)
 
 	console_ring.len = PAGE_SIZE;
 	ret = kmem_alloc(kernel_map, (vm_offset_t *) &console_ring.buffer,
-			 console_ring.len);
+			 console_ring.len, VM_KERN_MEMORY_OSFMK);
 	if (ret != KERN_SUCCESS)
 		panic("console_ring_init() "
 		      "failed to allocate ring buffer, error %d\n", ret);
@@ -115,7 +115,7 @@ console_cpu_alloc(__unused boolean_t boot_processor)
 	console_buf_t	*cbp;
 
 	ret = kmem_alloc(kernel_map, (vm_offset_t *) &cbp,
-				sizeof(console_buf_t));
+				sizeof(console_buf_t), VM_KERN_MEMORY_OSFMK);
 	if (ret != KERN_SUCCESS) {
 		printf("console_cpu_alloc() "
 		      "failed to allocate cpu buffer, error=%d\n", ret);

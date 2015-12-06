@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 by Apple Inc.. All rights reserved.
+ * Copyright (c) 2007-2015 by Apple Inc.. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -127,29 +127,41 @@
 #define __MAC_10_8            1080
 #define __MAC_10_9            1090
 #define __MAC_10_10         101000
+#define __MAC_10_10_2       101002
+#define __MAC_10_10_3       101003
+#define __MAC_10_11         101100
 /* __MAC_NA is not defined to a value but is uses as a token by macros to indicate that the API is unavailable */
 
-#define __IPHONE_2_0         20000
-#define __IPHONE_2_1         20100
-#define __IPHONE_2_2         20200
-#define __IPHONE_3_0         30000
-#define __IPHONE_3_1         30100
-#define __IPHONE_3_2         30200
-#define __IPHONE_4_0         40000
-#define __IPHONE_4_1         40100
-#define __IPHONE_4_2         40200
-#define __IPHONE_4_3         40300
-#define __IPHONE_5_0         50000
-#define __IPHONE_5_1         50100
-#define __IPHONE_6_0         60000
-#define __IPHONE_6_1         60100
-#define __IPHONE_7_0         70000
-#define __IPHONE_7_1         70100
-#define __IPHONE_8_0         80000
+#define __IPHONE_2_0     20000
+#define __IPHONE_2_1     20100
+#define __IPHONE_2_2     20200
+#define __IPHONE_3_0     30000
+#define __IPHONE_3_1     30100
+#define __IPHONE_3_2     30200
+#define __IPHONE_4_0     40000
+#define __IPHONE_4_1     40100
+#define __IPHONE_4_2     40200
+#define __IPHONE_4_3     40300
+#define __IPHONE_5_0     50000
+#define __IPHONE_5_1     50100
+#define __IPHONE_6_0     60000
+#define __IPHONE_6_1     60100
+#define __IPHONE_7_0     70000
+#define __IPHONE_7_1     70100
+#define __IPHONE_8_0     80000
+#define __IPHONE_8_1     80100
+#define __IPHONE_8_2     80200
+#define __IPHONE_8_3     80300
+#define __IPHONE_8_4     80400
+#define __IPHONE_9_0     90000
 /* __IPHONE_NA is not defined to a value but is uses as a token by macros to indicate that the API is unavailable */
 
-#include <AvailabilityInternal.h>
+#define __TVOS_9_0       90000
 
+#define __WATCHOS_1_0    10000
+#define __WATCHOS_2_0    20000
+
+#include <AvailabilityInternal.h>
 
 #ifdef __IPHONE_OS_VERSION_MIN_REQUIRED
     #define __OSX_AVAILABLE_STARTING(_osx, _ios) __AVAILABILITY_INTERNAL##_ios
@@ -169,6 +181,141 @@
     #define __OSX_AVAILABLE_STARTING(_osx, _ios)
     #define __OSX_AVAILABLE_BUT_DEPRECATED(_osxIntro, _osxDep, _iosIntro, _iosDep)
     #define __OSX_AVAILABLE_BUT_DEPRECATED_MSG(_osxIntro, _osxDep, _iosIntro, _iosDep, _msg)
+#endif
+
+
+#if defined(__has_feature)
+  #if __has_feature(attribute_availability_with_message)
+    #define __OS_AVAILABILITY(_target, _availability)            __attribute__((availability(_target,_availability)))
+    #define __OS_AVAILABILITY_MSG(_target, _availability, _msg)  __attribute__((availability(_target,_availability,message=_msg)))
+  #else
+    #define __OS_AVAILABILITY(_target, _availability)
+    #define __OS_AVAILABILITY_MSG(_target, _availability, _msg)
+  #endif
+#else
+    #define __OS_AVAILABILITY(_target, _availability)
+    #define __OS_AVAILABILITY_MSG(_target, _availability, _msg)
+#endif
+
+
+/* for use to document app extension usage */
+#if defined(__has_feature)
+  #if __has_feature(attribute_availability_app_extension)
+    #define __OSX_EXTENSION_UNAVAILABLE(_msg)  __OS_AVAILABILITY_MSG(macosx_app_extension,unavailable,_msg)
+    #define __IOS_EXTENSION_UNAVAILABLE(_msg)  __OS_AVAILABILITY_MSG(ios_app_extension,unavailable,_msg)
+  #else
+    #define __OSX_EXTENSION_UNAVAILABLE(_msg)
+    #define __IOS_EXTENSION_UNAVAILABLE(_msg)
+  #endif
+#else
+    #define __OSX_EXTENSION_UNAVAILABLE(_msg)
+    #define __IOS_EXTENSION_UNAVAILABLE(_msg)
+#endif
+
+#define __OS_EXTENSION_UNAVAILABLE(_msg)  __OSX_EXTENSION_UNAVAILABLE(_msg) __IOS_EXTENSION_UNAVAILABLE(_msg)
+
+
+
+/* for use marking APIs available info for Mac OSX */
+#if defined(__has_feature)
+  #if __has_attribute(availability)
+    #define __OSX_UNAVAILABLE                    __OS_AVAILABILITY(macosx,unavailable)
+    #define __OSX_AVAILABLE(_vers)               __OS_AVAILABILITY(macosx,introduced=_vers)
+    #define __OSX_DEPRECATED(_start, _dep, _msg) __OSX_AVAILABLE(_start) __OS_AVAILABILITY_MSG(macosx,deprecated=_dep,_msg)
+  #endif
+#endif
+
+#ifndef __OSX_UNAVAILABLE
+  #define __OSX_UNAVAILABLE
+#endif
+
+#ifndef __OSX_AVAILABLE
+  #define __OSX_AVAILABLE(_vers)
+#endif
+
+#ifndef __OSX_DEPRECATED
+  #define __OSX_DEPRECATED(_start, _dep, _msg)
+#endif
+
+
+/* for use marking APIs available info for iOS */
+#if defined(__has_feature)
+  #if __has_attribute(availability)
+    #define __IOS_UNAVAILABLE                    __OS_AVAILABILITY(ios,unavailable)
+    #define __IOS_PROHIBITED                     __OS_AVAILABILITY(ios,unavailable)
+    #define __IOS_AVAILABLE(_vers)               __OS_AVAILABILITY(ios,introduced=_vers)
+    #define __IOS_DEPRECATED(_start, _dep, _msg) __IOS_AVAILABLE(_start) __OS_AVAILABILITY_MSG(ios,deprecated=_dep,_msg)
+  #endif
+#endif
+
+#ifndef __IOS_UNAVAILABLE
+  #define __IOS_UNAVAILABLE
+#endif
+
+#ifndef __IOS_PROHIBITED
+  #define __IOS_PROHIBITED
+#endif
+
+#ifndef __IOS_AVAILABLE
+  #define __IOS_AVAILABLE(_vers)
+#endif
+
+#ifndef __IOS_DEPRECATED
+  #define __IOS_DEPRECATED(_start, _dep, _msg)
+#endif
+
+
+/* for use marking APIs available info for tvOS */
+#if defined(__has_feature)
+  #if __has_feature(attribute_availability_tvos)
+    #define __TVOS_UNAVAILABLE                    __OS_AVAILABILITY(tvos,unavailable)
+    #define __TVOS_PROHIBITED                     __OS_AVAILABILITY(tvos,unavailable)
+    #define __TVOS_AVAILABLE(_vers)               __OS_AVAILABILITY(tvos,introduced=_vers)
+    #define __TVOS_DEPRECATED(_start, _dep, _msg) __TVOS_AVAILABLE(_start) __OS_AVAILABILITY_MSG(tvos,deprecated=_dep,_msg)
+  #endif
+#endif
+
+#ifndef __TVOS_UNAVAILABLE
+  #define __TVOS_UNAVAILABLE
+#endif
+
+#ifndef __TVOS_PROHIBITED
+  #define __TVOS_PROHIBITED
+#endif
+
+#ifndef __TVOS_AVAILABLE
+  #define __TVOS_AVAILABLE(_vers)
+#endif
+
+#ifndef __TVOS_DEPRECATED
+  #define __TVOS_DEPRECATED(_start, _dep, _msg)
+#endif
+
+
+/* for use marking APIs available info for Watch OS */
+#if defined(__has_feature)
+  #if __has_feature(attribute_availability_watchos)
+    #define __WATCHOS_UNAVAILABLE                    __OS_AVAILABILITY(watchos,unavailable)
+    #define __WATCHOS_PROHIBITED                     __OS_AVAILABILITY(watchos,unavailable)
+    #define __WATCHOS_AVAILABLE(_vers)               __OS_AVAILABILITY(watchos,introduced=_vers)
+    #define __WATCHOS_DEPRECATED(_start, _dep, _msg) __WATCHOS_AVAILABLE(_start) __OS_AVAILABILITY_MSG(watchos,deprecated=_dep,_msg)
+  #endif
+#endif
+
+#ifndef __WATCHOS_UNAVAILABLE
+  #define __WATCHOS_UNAVAILABLE
+#endif
+
+#ifndef __WATCHOS_PROHIBITED
+  #define __WATCHOS_PROHIBITED
+#endif
+
+#ifndef __WATCHOS_AVAILABLE
+  #define __WATCHOS_AVAILABLE(_vers)
+#endif
+
+#ifndef __WATCHOS_DEPRECATED
+  #define __WATCHOS_DEPRECATED(_start, _dep, _msg)
 #endif
 
 

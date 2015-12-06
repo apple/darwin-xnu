@@ -42,9 +42,13 @@ typedef uint32_t atm_action_t;
 #define ATM_ACTION_LOGFAIL	0x3
 #define ATM_FIND_MIN_SUB_AID	0x4
 #define ATM_ACTION_UNREGISTER	0x5
+#define ATM_ACTION_REGISTER     0x6
+#define ATM_ACTION_GETSUBAID    0x7
+
+typedef uint64_t atm_guard_t;
+typedef uint64_t aid_t;
 
 /* Deprecated. will be removed soon */
-typedef uint64_t aid_t;
 typedef uint64_t subaid_t;
 typedef uint64_t mailbox_offset_t;
 #define SUB_AID_MAX (UINT64_MAX)
@@ -60,5 +64,6 @@ typedef atm_memory_descriptor_t *atm_memory_descriptor_array_t;
 typedef uint64_t *atm_memory_size_array_t;
 
 #define ATM_SUBAID32_MAX 	(UINT32_MAX)
+#define ATM_TRACE_DISABLE       (0x100)
 
 #endif /* _ATM_ATM_TYPES_H_ */

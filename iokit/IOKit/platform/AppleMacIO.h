@@ -54,7 +54,7 @@ protected:
     virtual bool selfTest( void );
 
 public:
-    virtual bool start(	IOService * provider );
+    virtual bool start(	IOService * provider ) APPLE_KEXT_OVERRIDE;
 
     virtual IOService * createNub( IORegistryEntry * from );
 

@@ -49,7 +49,7 @@ struct exception_action {
 };
 
 /* Make an up-call to a thread's exception server */
-extern void exception_triage(
+extern kern_return_t exception_triage(
 	exception_type_t	exception,
 	mach_exception_data_t	code,
 	mach_msg_type_number_t	codeCnt);

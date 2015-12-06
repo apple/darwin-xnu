@@ -106,7 +106,7 @@ $(shell [ -d $(OBJROOT) ] || mkdir -p $(OBJROOT))
 $(OBJROOT)/%.o : $(OBJSRC)/%.c
 	$(CC) $(RC_CFLAGS) $(CFLAGS) $(DEFINES) $(OPTIM) $(INCLUDES) -c $< -o $@
 $(OBJROOT)/%.o : $(TESTSRC)/%.c
-	$(CC) $(RC_CFLAGS) $(CFLAGS) $(DEFINES) -O0 -DDEBUG $(INCLUDES) -I $(SRCROOT) -c $< -o $@
+	$(CC) $(RC_CFLAGS) $(CFLAGS) $(DEFINES) -O0 -DDEBUG $(INCLUDES) -I$(SRCROOT) -c $< -o $@
 
 SRCROOTESC=$(subst /,\/,$(SRCROOT))
 OBJROOTESC=$(subst /,\/,$(OBJROOT))
@@ -114,7 +114,7 @@ SEDOBJS=sed -E 's/(^[a-z_]+)\.o/$(OBJROOTESC)\/\1\.o $(OBJROOTESC)\/\1\.d/'
 SEDSRCS=sed -E 's/ ([a-z_]+\.[ch])/ $(SRCROOTESC)\/\1/g'
 $(OBJROOT)/%.d: $(OBJSRC)/%.c
 	@set -e; rm -f $@; \
-	$(CC) $(INCLUDES) -MM $< | $(SEDOBJS) | $(SEDSRCS) > $@;
+	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -MM $< | $(SEDOBJS) | $(SEDSRCS) > $@;
 
 # Rules
 release: OPTIM=-Os -dynamic
@@ -194,8 +194,8 @@ $(TESTDST)/copyrighttest: $(COPYTESTOBJS)
 	install -c -m 755 $(OBJROOT)/copyrighttest $@
 
 analyze:
-	@$(CLANG_ANALYZER) *.c
-	@$(CLANG_ANALYZER) -I. tests/*.c
+	@$(CLANG_ANALYZER) $(CFLAGS) $(INCLUDES) $(filter-out WKdm%.c,$(wildcard *.c))
+	@$(CLANG_ANALYZER) $(CFLAGS) $(INCLUDES) -I$(SRCROOT) tests/*.c
 	@rm -f *.plist
 
 clean: 

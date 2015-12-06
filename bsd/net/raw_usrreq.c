@@ -178,7 +178,7 @@ void
 raw_ctlinput(int cmd, __unused struct sockaddr *arg, __unused void *dummy)
 {
 
-	if (cmd < 0 || cmd > PRC_NCMDS)
+	if (cmd < 0 || cmd >= PRC_NCMDS)
 		return;
 	/* INCOMPLETE */
 }

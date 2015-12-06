@@ -114,6 +114,11 @@ purgeable_q_t vm_purgeable_object_remove(vm_object_t object);
 /* statistics for purgable objects in all queues */
 void vm_purgeable_stats(vm_purgeable_info_t info, task_t target_task);
 
+#if DEVELOPMENT || DEBUG
+/* statistics for purgeable object usage in all queues for a task */
+kern_return_t vm_purgeable_account(task_t task, pvm_account_info_t acnt_info);
+#endif /* DEVELOPMENT || DEBUG */
+
 int vm_purgeable_purge_task_owned(task_t task);
 void vm_purgeable_nonvolatile_enqueue(vm_object_t object, task_t task);
 void vm_purgeable_nonvolatile_dequeue(vm_object_t object);

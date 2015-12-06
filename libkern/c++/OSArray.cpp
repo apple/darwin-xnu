@@ -33,6 +33,7 @@
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSLib.h>
+#include <libkern/OSDebug.h>
 
 #define super OSCollection
 
@@ -46,14 +47,6 @@ OSMetaClassDefineReservedUnused(OSArray, 5);
 OSMetaClassDefineReservedUnused(OSArray, 6);
 OSMetaClassDefineReservedUnused(OSArray, 7);
 
-#if OSALLOCDEBUG
-extern "C" {
-    extern int debug_container_malloc_size;
-};
-#define ACCUMSIZE(s) do { debug_container_malloc_size += (s); } while(0)
-#else
-#define ACCUMSIZE(s)
-#endif
 
 #define EXT_CAST(obj) \
     reinterpret_cast<OSObject *>(const_cast<OSMetaClassBase *>(obj))
@@ -70,7 +63,7 @@ bool OSArray::initWithCapacity(unsigned int inCapacity)
         return false;
 
     size = sizeof(const OSMetaClassBase *) * inCapacity;
-    array = (const OSMetaClassBase **) kalloc(size);
+    array = (const OSMetaClassBase **) kalloc_container(size);
     if (!array)
         return false;
 
@@ -79,7 +72,7 @@ bool OSArray::initWithCapacity(unsigned int inCapacity)
     capacityIncrement = (inCapacity)? inCapacity : 16;
 
     bzero(array, size);
-    ACCUMSIZE(size);
+    OSCONTAINER_ACCUMSIZE(size);
 
     return true;
 }
@@ -171,7 +164,7 @@ void OSArray::free()
 
     if (array) {
         kfree(array, sizeof(const OSMetaClassBase *) * capacity);
-        ACCUMSIZE( -(sizeof(const OSMetaClassBase *) * capacity) );
+        OSCONTAINER_ACCUMSIZE( -(sizeof(const OSMetaClassBase *) * capacity) );
     }
 
     super::free();
@@ -207,11 +200,11 @@ unsigned int OSArray::ensureCapacity(unsigned int newCapacity)
 
     newSize = sizeof(const OSMetaClassBase *) * finalCapacity;
 
-    newArray = (const OSMetaClassBase **) kalloc(newSize);
+    newArray = (const OSMetaClassBase **) kalloc_container(newSize);
     if (newArray) {
         oldSize = sizeof(const OSMetaClassBase *) * capacity;
 
-        ACCUMSIZE(newSize - oldSize);
+        OSCONTAINER_ACCUMSIZE(((size_t)newSize) - ((size_t)oldSize));
 
         bcopy(array, newArray, oldSize);
         bzero(&newArray[capacity], newSize - oldSize);

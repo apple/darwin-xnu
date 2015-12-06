@@ -67,6 +67,7 @@
 #include <kern/clock.h>
 #include <kern/telemetry.h>
 #include <kern/ecc.h>
+#include <kern/kern_cdata.h>
 #include <vm/vm_kern.h>
 #include <vm/pmap.h>
 #include <stdarg.h>
@@ -87,6 +88,7 @@
 #include <libkern/OSAtomic.h>
 #include <libkern/kernel_mach_header.h>
 #include <uuid/uuid.h>
+#include <mach_debug/zone_info.h>
 
 #if (defined(__arm64__) || defined(NAND_PANIC_DEVICE)) && !defined(LEGACY_PANIC_LOGS)
 #include <pexpert/pexpert.h> /* For gPanicBase */
@@ -163,6 +165,7 @@ Assert(
 	int saved_return_on_panic;
 
 	if (!mach_assert) {
+		kprintf("%s:%d non-fatal Assertion: %s", file, line, expression);
 		return;
 	}
 
@@ -215,6 +218,10 @@ panic_init(void)
 	simple_lock_init(&panic_lock, 0);
 	panic_is_inited = 1;
 	panic_caller = 0;
+
+	if (!PE_parse_boot_argn("assertions", &mach_assert, sizeof(mach_assert))) {
+		mach_assert = 1;
+	}
 }
 
 void
@@ -350,6 +357,7 @@ panic(const char *str, ...)
 {
 	va_list	listp;
 	spl_t	s;
+	boolean_t	old_doprnt_hide_pointers = doprnt_hide_pointers;
 
 
 	/* panic_caller is initialized to 0.  If set, don't change it */
@@ -357,6 +365,10 @@ panic(const char *str, ...)
 		panic_caller = (unsigned long)(char *)__builtin_return_address(0);
 	
 	s = panic_prologue(str);
+
+	/* Never hide pointers from panic logs. */
+	doprnt_hide_pointers = FALSE;
+
 	kdb_printf("panic(cpu %d caller 0x%lx): ", (unsigned) paniccpu, panic_caller);
 	if (str) {
 		va_start(listp, str);
@@ -370,6 +382,9 @@ panic(const char *str, ...)
 	 */
 	panicwait = 0;
 	Debugger("panic");
+
+	doprnt_hide_pointers = old_doprnt_hide_pointers;
+
 	panic_epilogue(s);
 }
 
@@ -479,12 +494,13 @@ extern void *proc_name_address(void *p);
 
 static void
 panic_display_process_name(void) {
-	char proc_name[32] = "Unknown";
+	/* because of scoping issues len(p_comm) from proc_t is hard coded here */
+	char proc_name[17] = "Unknown";
 	task_t ctask = 0;
 	void *cbsd_info = 0;
 
 	if (ml_nofault_copy((vm_offset_t)&current_thread()->task, (vm_offset_t) &ctask, sizeof(task_t)) == sizeof(task_t))
-		if(ml_nofault_copy((vm_offset_t)&ctask->bsd_info, (vm_offset_t)&cbsd_info, sizeof(&ctask->bsd_info)) == sizeof(&ctask->bsd_info))
+		if(ml_nofault_copy((vm_offset_t)&ctask->bsd_info, (vm_offset_t)&cbsd_info, sizeof(cbsd_info)) == sizeof(cbsd_info))
 			if (cbsd_info && (ml_nofault_copy((vm_offset_t) proc_name_address(cbsd_info), (vm_offset_t) &proc_name, sizeof(proc_name)) > 0))
 				proc_name[sizeof(proc_name) - 1] = '\0';
 	kdb_printf("\nBSD process name corresponding to current thread: %s\n", proc_name);
@@ -579,6 +595,8 @@ extern long long alloc_ptepages_count;
 #endif
 
 extern boolean_t	panic_include_zprint;
+extern vm_offset_t 	panic_kext_memory_info;
+extern vm_size_t 	panic_kext_memory_size;
 
 __private_extern__ void panic_display_zprint()
 {
@@ -587,11 +605,12 @@ __private_extern__ void panic_display_zprint()
 		unsigned int	i;
 		struct zone	zone_copy;
 
+		kdb_printf("%-20s %10s %10s\n", "Zone Name", "Cur Size", "Free Size");
 		if(first_zone!=NULL) {
 			if(ml_nofault_copy((vm_offset_t)first_zone, (vm_offset_t)&zone_copy, sizeof(struct zone)) == sizeof(struct zone)) {
 				for (i = 0; i < num_zones; i++) {
 					if(zone_copy.cur_size > (1024*1024)) {
-						kdb_printf("%.20s:%lu\n",zone_copy.zone_name,(uintptr_t)zone_copy.cur_size);
+						kdb_printf("%-20s %10lu %10lu\n",zone_copy.zone_name, (uintptr_t)zone_copy.cur_size,(uintptr_t)(zone_copy.countfree * zone_copy.elem_size));
 					}	
 					
 					if(zone_copy.next_zone == NULL) {
@@ -605,13 +624,22 @@ __private_extern__ void panic_display_zprint()
 			}
 		}
 
-		kdb_printf("Kernel Stacks:%lu\n",(uintptr_t)(kernel_stack_size * stack_total));
+		kdb_printf("%-20s %10lu\n", "Kernel Stacks", (uintptr_t)(kernel_stack_size * stack_total));
 
 #if defined(__i386__) || defined (__x86_64__)
-		kdb_printf("PageTables:%lu\n",(uintptr_t)(PAGE_SIZE * inuse_ptepages_count));
+		kdb_printf("%-20s %10lu\n", "PageTables",(uintptr_t)(PAGE_SIZE * inuse_ptepages_count));
 #endif
 
-		kdb_printf("Kalloc.Large:%lu\n",(uintptr_t)kalloc_large_total);
+		kdb_printf("%-20s %10lu\n", "Kalloc.Large", (uintptr_t)kalloc_large_total);
+		if (panic_kext_memory_info) {
+			mach_memory_info_t *mem_info = (mach_memory_info_t *)panic_kext_memory_info;
+			kdb_printf("\n%-5s %10s\n", "Kmod", "Size");
+			for (i = 0; i < VM_KERN_MEMORY_COUNT + VM_KERN_COUNTER_COUNT; i++) {
+				if (((mem_info[i].flags & VM_KERN_SITE_TYPE) == VM_KERN_SITE_KMOD) && (mem_info[i].size > (1024 * 1024))) {
+					kdb_printf("%-5lld %10lld\n", mem_info[i].site, mem_info[i].size);
+				}
+			}
+		}
 	}
 }
 
@@ -676,9 +704,9 @@ void kdp_set_gateway_mac(void *);
 void kdp_set_interface(void *);
 void kdp_register_send_receive(void *, void *);
 void kdp_unregister_send_receive(void *, void *);
-void kdp_snapshot_preflight(int, void *, uint32_t, uint32_t);
+void kdp_snapshot_preflight(int, void *, uint32_t, uint32_t, kcdata_descriptor_t, boolean_t enable_faulting);
 int kdp_stack_snapshot_geterror(void);
-int kdp_stack_snapshot_bytes_traced(void);
+uint32_t kdp_stack_snapshot_bytes_traced(void);
 
 void *
 kdp_get_interface( void)

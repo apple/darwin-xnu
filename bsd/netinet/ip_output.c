@@ -95,6 +95,7 @@
 #include <net/ntstat.h>
 #include <net/net_osdep.h>
 #include <net/dlil.h>
+#include <net/net_perf.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -152,6 +153,9 @@
 
 u_short ip_id;
 
+static int sysctl_reset_ip_output_stats SYSCTL_HANDLER_ARGS;
+static int sysctl_ip_output_measure_bins SYSCTL_HANDLER_ARGS;
+static int sysctl_ip_output_getperf SYSCTL_HANDLER_ARGS;
 static void ip_out_cksum_stats(int, u_int32_t);
 static struct mbuf *ip_insertoptions(struct mbuf *, struct mbuf *, int *);
 static int ip_optcopy(struct ip *, struct ip *);
@@ -183,6 +187,24 @@ static int ip_select_srcif_debug = 0;
 SYSCTL_INT(_net_inet_ip, OID_AUTO, select_srcif_debug,
 	CTLFLAG_RW | CTLFLAG_LOCKED, &ip_select_srcif_debug, 0,
 	"log source interface selection debug info");
+
+static int ip_output_measure = 0;
+SYSCTL_PROC(_net_inet_ip, OID_AUTO, output_perf,
+	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+	&ip_output_measure, 0, sysctl_reset_ip_output_stats, "I",
+	"Do time measurement");
+
+static uint64_t ip_output_measure_bins = 0;
+SYSCTL_PROC(_net_inet_ip, OID_AUTO, output_perf_bins,
+	CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED, &ip_output_measure_bins, 0,
+	sysctl_ip_output_measure_bins, "I",
+	"bins for chaining performance data histogram");
+
+static net_perf_t net_perf;
+SYSCTL_PROC(_net_inet_ip, OID_AUTO, output_perf_data,
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
+	0, 0, sysctl_ip_output_getperf, "S,net_perf",
+	"IP output performance data (struct net_perf, net/net_perf.h)");
 
 #define	IMO_TRACE_HIST_SIZE	32	/* size of trace history */
 
@@ -259,8 +281,10 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 	ipfilter_t inject_filter_ref = NULL;
 	struct mbuf *packetlist;
 	uint32_t sw_csum, pktcnt = 0, scnt = 0, bytecnt = 0;
+	uint32_t packets_processed = 0;
 	unsigned int ifscope = IFSCOPE_NONE;
 	struct flowadv *adv = NULL;
+	struct timeval start_tv;
 #if IPSEC
 	struct socket *so = NULL;
 	struct secpolicy *sp = NULL;
@@ -326,6 +350,8 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 	 ((_ipobf).noexpensive && IFNET_IS_EXPENSIVE(_ifp)) ||		\
 	 (!(_ipobf).awdl_unrestricted && IFNET_IS_AWDL_RESTRICTED(_ifp)))
 
+	if (ip_output_measure)
+		net_perf_start_time(&net_perf, &start_tv);
 	KERNEL_DEBUG(DBG_FNC_IP_OUTPUT | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
 	VERIFY(m0->m_flags & M_PKTHDR);
@@ -495,6 +521,7 @@ ipfw_tags_done:
 #endif /* DUMMYNET */
 
 loopit:
+	packets_processed++;
 	ipobf.isbroadcast = FALSE;
 	ipobf.didfilter = FALSE;
 #if IPFIREWALL_FORWARD
@@ -1172,6 +1199,11 @@ sendit:
 		necp_mark_packet_from_ip(m, necp_matched_policy_id);
 		switch (necp_result) {
 			case NECP_KERNEL_POLICY_RESULT_PASS:
+				/* Check if the interface is allowed */
+				if (!necp_packet_is_allowed_over_interface(m, ifp)) {
+					error = EHOSTUNREACH;
+					goto bad;
+				}
 				goto skip_ipsec;
 			case NECP_KERNEL_POLICY_RESULT_DROP:
 			case NECP_KERNEL_POLICY_RESULT_SOCKET_DIVERT:
@@ -1182,9 +1214,20 @@ sendit:
 				/* Verify that the packet is being routed to the tunnel */
 				struct ifnet *policy_ifp = necp_get_ifnet_from_result_parameter(&necp_result_parameter);
 				if (policy_ifp == ifp) {
+					/* Check if the interface is allowed */
+					if (!necp_packet_is_allowed_over_interface(m, ifp)) {
+						error = EHOSTUNREACH;
+						goto bad;
+					}
 					goto skip_ipsec;
 				} else {
 					if (necp_packet_can_rebind_to_ifnet(m, policy_ifp, &necp_route, AF_INET)) {
+						/* Check if the interface is allowed */
+						if (!necp_packet_is_allowed_over_interface(m, policy_ifp)) {
+							error = EHOSTUNREACH;
+							goto bad;
+						}
+
 						/* Set ifp to the tunnel interface, since it is compatible with the packet */
 						ifp = policy_ifp;
 						ro = &necp_route;
@@ -1200,8 +1243,13 @@ sendit:
 				break;
 		}
 	}
+	/* Catch-all to check if the interface is allowed */
+	if (!necp_packet_is_allowed_over_interface(m, ifp)) {
+		error = EHOSTUNREACH;
+		goto bad;
+	}
 #endif /* NECP */
-	
+
 #if IPSEC
 	if (ipsec_bypass != 0 || (flags & IP_NOIPSEC))
 		goto skip_ipsec;
@@ -1896,6 +1944,10 @@ done:
 #endif /* IPFIREWALL_FORWARD */
 
 	KERNEL_DEBUG(DBG_FNC_IP_OUTPUT | DBG_FUNC_END, error, 0, 0, 0, 0);
+	if (ip_output_measure) {
+		net_perf_measure_time(&net_perf, &start_tv, packets_processed);
+		net_perf_histogram(&net_perf, packets_processed);
+	}
 	return (error);
 bad:
 	if (pktcnt > 0)
@@ -3466,3 +3518,58 @@ ip_gre_output(struct mbuf *m)
 
 	return (error);
 }
+
+static int
+sysctl_reset_ip_output_stats SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error, i;
+
+	i = ip_output_measure;
+	error = sysctl_handle_int(oidp, &i, 0, req);
+	if (error || req->newptr == USER_ADDR_NULL)
+		goto done;
+	/* impose bounds */
+	if (i < 0 || i > 1) {
+		error = EINVAL;
+		goto done;
+	}
+	if (ip_output_measure != i && i == 1) {
+		net_perf_initialize(&net_perf, ip_output_measure_bins);
+	}
+	ip_output_measure = i;
+done:
+	return (error);
+}
+
+static int
+sysctl_ip_output_measure_bins SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error;
+	uint64_t i;
+
+	i = ip_output_measure_bins;
+	error = sysctl_handle_quad(oidp, &i, 0, req);
+	if (error || req->newptr == USER_ADDR_NULL)
+		goto done;
+	/* validate data */
+	if (!net_perf_validate_bins(i)) {
+		error = EINVAL;
+		goto done;
+	}
+	ip_output_measure_bins = i;
+done:
+	return (error);
+}
+
+static int
+sysctl_ip_output_getperf SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	if (req->oldptr == USER_ADDR_NULL)
+		req->oldlen = (size_t)sizeof (struct ipstat);
+
+	return (SYSCTL_OUT(req, &net_perf, MIN(sizeof (net_perf), req->oldlen)));
+}
+

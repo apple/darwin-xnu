@@ -1326,6 +1326,17 @@ def RtEntryTrash(cmd_args=None):
     print out_string
 # EndMacro: rtentry_trash
 
+# Macro: show_rtentry
+@lldb_command('show_rtentry')
+def ShRtEntry(cmd_args=None):
+    """ Print rtentry.
+    """
+    out_string = ""
+    rt = kern.GetValueFromAddress(cmd_args[0], 'rtentry *')
+    out_string += GetRtEntryPrDetailsAsString(rt) + "\n"
+    print out_string
+# EndMacro: show_rtentry
+
 # Macro: inifa_trash
 @lldb_command('inifa_trash')
 def InIfaTrash(cmd_args=None):

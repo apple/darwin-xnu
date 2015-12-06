@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -237,6 +237,8 @@ static struct zone *rte_zone;			/* special zone for rtentry */
 #define	RTD_INUSE		0xFEEDFACE	/* entry is in use */
 #define	RTD_FREED		0xDEADBEEF	/* entry is freed */
 
+#define MAX_SCOPE_ADDR_STR_LEN	(MAX_IPv6_STR_LEN + 6)
+
 /* For gdb */
 __private_extern__ unsigned int ctrace_stack_size = CTRACE_STACK_SIZE;
 __private_extern__ unsigned int ctrace_hist_size = CTRACE_HIST_SIZE;
@@ -282,8 +284,8 @@ static inline struct rtentry *rte_alloc_debug(void);
 static inline void rte_free_debug(struct rtentry *);
 static inline void rte_lock_debug(struct rtentry_dbg *);
 static inline void rte_unlock_debug(struct rtentry_dbg *);
-static void rt_maskedcopy(struct sockaddr *,
-	    struct sockaddr *, struct sockaddr *);
+static void rt_maskedcopy(const struct sockaddr *,
+	    struct sockaddr *, const struct sockaddr *);
 static void rtable_init(void **);
 static inline void rtref_audit(struct rtentry_dbg *);
 static inline void rtunref_audit(struct rtentry_dbg *);
@@ -297,8 +299,6 @@ static void rtalloc_ign_common_locked(struct route *, uint32_t, unsigned int);
 static inline void sin6_set_ifscope(struct sockaddr *, unsigned int);
 static inline void sin6_set_embedded_ifscope(struct sockaddr *, unsigned int);
 static inline unsigned int sin6_get_embedded_ifscope(struct sockaddr *);
-static struct sockaddr *sa_copy(struct sockaddr *, struct sockaddr_storage *,
-    unsigned int *);
 static struct sockaddr *ma_copy(int, struct sockaddr *,
     struct sockaddr_storage *, unsigned int);
 static struct sockaddr *sa_trim(struct sockaddr *, int);
@@ -560,7 +560,7 @@ sin6_get_embedded_ifscope(struct sockaddr *sa)
  * In any case, the effective scope ID value is returned to the caller via
  * pifscope, if it is non-NULL.
  */
-static struct sockaddr *
+struct sockaddr *
 sa_copy(struct sockaddr *src, struct sockaddr_storage *dst,
     unsigned int *pifscope)
 {
@@ -589,7 +589,13 @@ sa_copy(struct sockaddr *src, struct sockaddr_storage *dst,
 			eifscope = sin6_get_embedded_ifscope(SA(dst));
 			if (eifscope != IFSCOPE_NONE && ifscope == IFSCOPE_NONE)
 				ifscope = eifscope;
-			sin6_set_ifscope(SA(dst), ifscope);
+			if (ifscope != IFSCOPE_NONE) {
+				/* Set ifscope from pifscope or eifscope */
+				sin6_set_ifscope(SA(dst), ifscope);
+			} else {
+				/* If sin6_scope_id has a value, use that one */
+				ifscope = sin6_get_ifscope(SA(dst));
+			}
 			/*
 			 * If sin6_scope_id is set but the address doesn't
 			 * contain the equivalent embedded value, set it.
@@ -952,6 +958,38 @@ rtalloc1_common_locked(struct sockaddr *dst, int report, uint32_t ignflags,
 		 * reference held during rtrequest.
 		 */
 		rtfree_locked(rt);
+
+		/*
+		 * If the newly created cloned route is a direct host route
+		 * then also check if it is to a router or not.
+		 * If it is, then set the RTF_ROUTER flag on the host route
+		 * for the gateway.
+		 *
+		 * XXX It is possible for the default route to be created post
+		 * cloned route creation of router's IP.
+		 * We can handle that corner case by special handing for RTM_ADD
+		 * of default route.
+		 */
+		if ((newrt->rt_flags & (RTF_HOST | RTF_LLINFO)) ==
+		    (RTF_HOST | RTF_LLINFO)) {
+			struct rtentry *defrt = NULL;
+			struct sockaddr_storage def_key;
+
+			bzero(&def_key, sizeof(def_key));
+			def_key.ss_len = rt_key(newrt)->sa_len;
+			def_key.ss_family = rt_key(newrt)->sa_family;
+
+			defrt = rtalloc1_scoped_locked((struct sockaddr *)&def_key,
+					0, 0, newrt->rt_ifp->if_index);
+
+			if (defrt) {
+				if (equal(rt_key(newrt), defrt->rt_gateway)) {
+					newrt->rt_flags |= RTF_ROUTER;
+				}
+				rtfree_locked(defrt);
+			}
+		}
+
 		if ((rt = newrt) && (rt->rt_flags & RTF_XRESOLVE)) {
 			/*
 			 * If the new route specifies it be
@@ -2659,23 +2697,23 @@ rt_set_gwroute(struct rtentry *rt, struct sockaddr *dst, struct rtentry *gwrt)
 }
 
 static void
-rt_maskedcopy(struct sockaddr *src, struct sockaddr *dst,
-    struct sockaddr *netmask)
+rt_maskedcopy(const struct sockaddr *src, struct sockaddr *dst,
+    const struct sockaddr *netmask)
 {
-	u_char *cp1 = (u_char *)src;
-	u_char *cp2 = (u_char *)dst;
-	u_char *cp3 = (u_char *)netmask;
-	u_char *cplim = cp2 + *cp3;
-	u_char *cplim2 = cp2 + *cp1;
+	const char *netmaskp = &netmask->sa_data[0];
+	const char *srcp = &src->sa_data[0];
+	char *dstp = &dst->sa_data[0];
+	const char *maskend = (char *)dst
+				    + MIN(netmask->sa_len, src->sa_len);
+	const char *srcend = (char *)dst + src->sa_len;
 
-	*cp2++ = *cp1++; *cp2++ = *cp1++; /* copies sa_len & sa_family */
-	cp3 += 2;
-	if (cplim > cplim2)
-		cplim = cplim2;
-	while (cp2 < cplim)
-		*cp2++ = *cp1++ & *cp3++;
-	if (cp2 < cplim2)
-		bzero((caddr_t)cp2, (unsigned)(cplim2 - cp2));
+	dst->sa_len = src->sa_len;
+	dst->sa_family = src->sa_family;
+
+	while (dstp < maskend)
+		*dstp++ = *srcp++ & *netmaskp++;
+	if (dstp < srcend)
+		memset(dstp, 0, (size_t)(srcend - dstp));
 }
 
 /*
@@ -2734,6 +2772,29 @@ node_lookup_default(int af)
 	    rnh->rnh_lookup(&sin6_def, NULL, rnh));
 }
 
+boolean_t
+rt_ifa_is_dst(struct sockaddr *dst, struct ifaddr *ifa)
+{
+	boolean_t result = FALSE;
+
+	if (ifa == NULL || ifa->ifa_addr == NULL)
+		return (result);
+
+	IFA_LOCK_SPIN(ifa);
+
+	if (dst->sa_family == ifa->ifa_addr->sa_family &&
+	    ((dst->sa_family == AF_INET &&
+	    SIN(dst)->sin_addr.s_addr ==
+	    SIN(ifa->ifa_addr)->sin_addr.s_addr) ||
+	    (dst->sa_family == AF_INET6 &&
+	    SA6_ARE_ADDR_EQUAL(SIN6(dst), SIN6(ifa->ifa_addr)))))
+		result = TRUE;
+
+	IFA_UNLOCK(ifa);
+
+	return (result);
+}
+
 /*
  * Common routine to lookup/match a route.  It invokes the lookup/matchaddr
  * callback which could be address family-specific.  The main difference
@@ -2765,6 +2826,8 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 	boolean_t dontcare;
 	int af = dst->sa_family;
 	struct sockaddr_storage dst_ss, mask_ss;
+	char s_dst[MAX_IPv6_STR_LEN], s_netmask[MAX_IPv6_STR_LEN];
+	char dbuf[MAX_SCOPE_ADDR_STR_LEN], gbuf[MAX_IPv6_STR_LEN];
 
 	VERIFY(!coarse || ifscope == IFSCOPE_NONE);
 
@@ -2818,6 +2881,26 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 		netmask = ma_copy(af, netmask, &mask_ss, ifscope);
 	dontcare = (ifscope == IFSCOPE_NONE);
 
+	if (rt_verbose) {
+		if (af == AF_INET)
+			(void) inet_ntop(af, &SIN(dst)->sin_addr.s_addr,
+			    s_dst, sizeof (s_dst));
+		else
+			(void) inet_ntop(af, &SIN6(dst)->sin6_addr,
+			    s_dst, sizeof (s_dst));
+
+		if (netmask != NULL && af == AF_INET)
+			(void) inet_ntop(af, &SIN(netmask)->sin_addr.s_addr,
+			    s_netmask, sizeof (s_netmask));
+		if (netmask != NULL && af == AF_INET6)
+			(void) inet_ntop(af, &SIN6(netmask)->sin6_addr,
+			    s_netmask, sizeof (s_netmask));
+		else
+			*s_netmask = '\0';
+		printf("%s (%d, %d, %s, %s, %u)\n",
+		    __func__, lookup_only, coarse, s_dst, s_netmask, ifscope);
+	}
+
 	/*
 	 * Scoped route lookup:
 	 *
@@ -2852,6 +2935,16 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 	 */
 	if (rn != NULL) {
 		struct rtentry *rt = RT(rn);
+
+		if (rt_verbose) {
+			rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+			printf("%s unscoped search %p to %s->%s->%s ifa_ifp %s\n",
+			    __func__, rt,
+			    dbuf, gbuf,
+			    (rt->rt_ifp != NULL) ? rt->rt_ifp->if_xname : "",
+			    (rt->rt_ifa->ifa_ifp != NULL) ?
+			    rt->rt_ifa->ifa_ifp->if_xname : "");
+		}
 		if (!(rt->rt_ifp->if_flags & IFF_LOOPBACK)) {
 			if (rt->rt_ifp->if_index != ifscope) {
 				/*
@@ -2860,11 +2953,15 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 				 * and do a more specific scoped search using
 				 * the scope of the found route.  Otherwise,
 				 * start again from scratch.
+				 *
+				 * For loopback scope we keep the unscoped
+				 * route for local addresses
 				 */
 				rn = NULL;
 				if (dontcare)
 					ifscope = rt->rt_ifp->if_index;
-				else
+				else if (ifscope != lo_ifp->if_index ||
+				    rt_ifa_is_dst(dst, rt->rt_ifa) == FALSE)
 					rn0 = NULL;
 			} else if (!(rt->rt_flags & RTF_IFSCOPE)) {
 				/*
@@ -2884,9 +2981,21 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 	 * interface scope as the one requested.  The following will result
 	 * in searching for the longest prefix scoped match.
 	 */
-	if (rn == NULL)
+	if (rn == NULL) {
 		rn = node_lookup(dst, netmask, ifscope);
 
+		if (rt_verbose && rn != NULL) {
+			struct rtentry *rt = RT(rn);
+
+			rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+			printf("%s scoped search %p to %s->%s->%s ifa %s\n",
+			    __func__, rt,
+			    dbuf, gbuf,
+			    (rt->rt_ifp != NULL) ? rt->rt_ifp->if_xname : "",
+			    (rt->rt_ifa->ifa_ifp != NULL) ?
+			    rt->rt_ifa->ifa_ifp->if_xname : "");
+		}
+	}
 	/*
 	 * Use the original result if either of the following is true:
 	 *
@@ -2909,8 +3018,9 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 	 * route as long as the interface portion satistifes the scope.
 	 */
 	if (rn == NULL && (rn = node_lookup_default(af)) != NULL &&
-	    RT(rn)->rt_ifp->if_index != ifscope)
+	    RT(rn)->rt_ifp->if_index != ifscope) {
 		rn = NULL;
+	}
 
 	if (rn != NULL) {
 		/*
@@ -2927,6 +3037,23 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 		} else {
 			RT_UNLOCK(RT(rn));
 			rn = NULL;
+		}
+	}
+
+	if (rt_verbose) {
+		if (rn == NULL)
+			printf("%s %u return NULL\n", __func__, ifscope);
+		else {
+			struct rtentry *rt = RT(rn);
+
+			rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+
+			printf("%s %u return %p to %s->%s->%s ifa_ifp %s\n",
+			    __func__, ifscope, rt,
+			    dbuf, gbuf,
+			    (rt->rt_ifp != NULL) ? rt->rt_ifp->if_xname : "",
+			    (rt->rt_ifa->ifa_ifp != NULL) ?
+			    rt->rt_ifa->ifa_ifp->if_xname : "");
 		}
 	}
 
@@ -3418,6 +3545,7 @@ rte_free(struct rtentry *p)
 		panic("rte_free: rte=%p refcnt=%d non-zero\n", p, p->rt_refcnt);
 		/* NOTREACHED */
 	}
+
 	zfree(rte_zone, p);
 }
 
@@ -3845,9 +3973,20 @@ rt_str4(struct rtentry *rt, char *ds, uint32_t dslen, char *gs, uint32_t gslen)
 {
 	VERIFY(rt_key(rt)->sa_family == AF_INET);
 
-	if (ds != NULL)
+	if (ds != NULL) {
 		(void) inet_ntop(AF_INET,
 		    &SIN(rt_key(rt))->sin_addr.s_addr, ds, dslen);
+		if (dslen >= MAX_SCOPE_ADDR_STR_LEN &&
+		    SINIFSCOPE(rt_key(rt))->sin_scope_id != IFSCOPE_NONE) {
+			char scpstr[16];
+
+			snprintf(scpstr, sizeof(scpstr), "@%u",
+			    SINIFSCOPE(rt_key(rt))->sin_scope_id);
+
+			strlcat(ds, scpstr, dslen);
+		}
+	}
+
 	if (gs != NULL) {
 		if (rt->rt_flags & RTF_GATEWAY) {
 			(void) inet_ntop(AF_INET,
@@ -3866,9 +4005,20 @@ rt_str6(struct rtentry *rt, char *ds, uint32_t dslen, char *gs, uint32_t gslen)
 {
 	VERIFY(rt_key(rt)->sa_family == AF_INET6);
 
-	if (ds != NULL)
+	if (ds != NULL) {
 		(void) inet_ntop(AF_INET6,
 		    &SIN6(rt_key(rt))->sin6_addr, ds, dslen);
+		if (dslen >= MAX_SCOPE_ADDR_STR_LEN &&
+		    SIN6IFSCOPE(rt_key(rt))->sin6_scope_id != IFSCOPE_NONE) {
+			char scpstr[16];
+
+			snprintf(scpstr, sizeof(scpstr), "@%u",
+			    SIN6IFSCOPE(rt_key(rt))->sin6_scope_id);
+
+			strlcat(ds, scpstr, dslen);
+		}
+	}
+
 	if (gs != NULL) {
 		if (rt->rt_flags & RTF_GATEWAY) {
 			(void) inet_ntop(AF_INET6,

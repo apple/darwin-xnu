@@ -268,7 +268,7 @@ static inline uintptr_t get_cr2(void)
 
 static inline uintptr_t get_cr3_raw(void)
 {
-	register uintptr_t cr3;
+	uintptr_t cr3;
 	__asm__ volatile("mov %%cr3, %0" : "=r" (cr3));
 	return(cr3);
 }
@@ -280,7 +280,7 @@ static inline void set_cr3_raw(uintptr_t value)
 
 static inline uintptr_t get_cr3_base(void)
 {
-	register uintptr_t cr3;
+	uintptr_t cr3;
 	__asm__ volatile("mov %%cr3, %0" : "=r" (cr3));
 	return(cr3 & ~(0xFFFULL));
 }
@@ -576,6 +576,7 @@ __END_DECLS
 #define MSR_IA32_VMX_VMCS_ENUM				MSR_IA32_VMX_BASE+10
 #define MSR_IA32_VMX_PROCBASED_CTLS2		MSR_IA32_VMX_BASE+11
 #define MSR_IA32_VMX_EPT_VPID_CAP			MSR_IA32_VMX_BASE+12
+#define		MSR_IA32_VMX_EPT_VPID_CAP_AD_SHIFT	21
 #define MSR_IA32_VMX_TRUE_PINBASED_CTLS		MSR_IA32_VMX_BASE+13
 #define MSR_IA32_VMX_TRUE_PROCBASED_CTLS	MSR_IA32_VMX_BASE+14
 #define MSR_IA32_VMX_TRUE_VMEXIT_CTLS		MSR_IA32_VMX_BASE+15
@@ -597,6 +598,7 @@ __END_DECLS
 
 #define MSR_IA32_PP0_ENERGY_STATUS		0x639
 #define MSR_IA32_PP1_ENERGY_STATUS		0x641
+
 #define MSR_IA32_IA_PERF_LIMIT_REASONS		0x690
 #define MSR_IA32_GT_PERF_LIMIT_REASONS		0x6B0
 

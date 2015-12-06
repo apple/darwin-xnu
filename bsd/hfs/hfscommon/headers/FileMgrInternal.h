@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -212,27 +212,84 @@ ReplaceBTreeRecord				(FileReference 				refNum,
 /*	Prototypes for exported routines in VolumeAllocation.c*/
 
 /* 
- * Flags for BlockAllocate() and BlockDeallocate()
+ * Flags for BlockAllocate(), BlockDeallocate() and hfs_block_alloc.
+ * Some of these are for internal use only.  See the comment at the
+ * top of hfs_alloc_int for more details on the semantics of these
+ * flags.
  */ 
-#define HFS_ALLOC_FORCECONTIG		0x1	//force contiguous block allocation; minblocks must be allocated
-#define HFS_ALLOC_METAZONE			0x2	//can use metazone blocks
-#define HFS_ALLOC_SKIPFREEBLKS		0x4	//skip checking/updating freeblocks during alloc/dealloc
-#define HFS_ALLOC_FLUSHTXN			0x8	//pick best fit for allocation, even if a jnl flush is req'd
+#define HFS_ALLOC_FORCECONTIG		0x001	//force contiguous block allocation; minblocks must be allocated
+#define HFS_ALLOC_METAZONE			0x002	//can use metazone blocks
+#define HFS_ALLOC_SKIPFREEBLKS		0x004	//skip checking/updating freeblocks during alloc/dealloc
+#define HFS_ALLOC_FLUSHTXN			0x008	//pick best fit for allocation, even if a jnl flush is req'd
+#define HFS_ALLOC_TENTATIVE			0x010	//reserved allocation that can be claimed back
+#define HFS_ALLOC_LOCKED			0x020	//reserved allocation that can't be claimed back
+#define HFS_ALLOC_IGNORE_TENTATIVE	0x040	//Steal tentative blocks if necessary
+#define HFS_ALLOC_IGNORE_RESERVED	0x080	//Ignore tentative/committed blocks
+#define HFS_ALLOC_USE_TENTATIVE		0x100	//Use the supplied tentative range (if possible)
+#define HFS_ALLOC_COMMIT			0x200	//Commit the supplied extent to disk
+#define HFS_ALLOC_TRY_HARD			0x400	//Search hard to try and get maxBlocks; implies HFS_ALLOC_FLUSHTXN
+#define HFS_ALLOC_ROLL_BACK			0x800	//Reallocate blocks that were just deallocated
+#define HFS_ALLOC_FAST_DEV          0x1000  //Prefer fast device for allocation
+
+typedef uint32_t hfs_block_alloc_flags_t;
+
+struct rl_entry;
+EXTERN_API_C( OSErr )
+BlockAllocate					(ExtendedVCB *			 vcb,
+								 u_int32_t 				 startingBlock,
+								 u_int32_t 				 minBlocks,
+								 u_int32_t 				 maxBlocks,
+								 hfs_block_alloc_flags_t flags,
+								 u_int32_t *			 startBlock,
+								 u_int32_t *			 actualBlocks);
+
+typedef struct hfs_alloc_extra_args {
+	// Used with HFS_ALLOC_TRY_HARD and HFS_ALLOC_FORCECONTIG
+	uint32_t				max_blocks;
+
+	// Used with with HFS_ALLOC_USE_TENTATIVE & HFS_ALLOC_COMMIT
+	struct rl_entry		  **reservation_in;
+
+	// Used with HFS_ALLOC_TENTATIVE & HFS_ALLOC_LOCKED
+	struct rl_entry		  **reservation_out;
+
+	/*
+	 * If the maximum cannot be returned, the allocation will be
+	 * trimmed to the specified alignment after taking
+	 * @alignment_offset into account.  @alignment and
+	 * @alignment_offset are both in terms of blocks, *not* bytes.
+	 * The result will be such that:
+	 *
+	 *   (block_count + @alignment_offset) % @alignment == 0
+	 *
+	 * Alignment is *not* guaranteed.
+	 *
+	 * One example where alignment might be useful is in the case
+	 * where the page size is greater than the allocation block size
+	 * and I/O is being performed in multiples of the page size.
+	 */
+	int						alignment;
+	int						alignment_offset;
+} hfs_alloc_extra_args_t;
+
+/*
+ * Same as BlockAllocate but slightly different API.
+ * @extent.startBlock is a hint for where to start searching and
+ * @extent.blockCount is the minimum number of blocks acceptable.
+ * Additional arguments can be passed in @extra_args and use will
+ * depend on @flags.  See comment at top of hfs_block_alloc_int for
+ * more information.
+ */
+errno_t hfs_block_alloc(hfsmount_t *hfsmp,
+						HFSPlusExtentDescriptor *extent,
+						hfs_block_alloc_flags_t flags,
+						hfs_alloc_extra_args_t *extra_args);
 
 EXTERN_API_C( OSErr )
-BlockAllocate					(ExtendedVCB *			vcb,
-								 u_int32_t 				startingBlock,
-								 u_int32_t 				minBlocks,
-								 u_int32_t 				maxBlocks,
-								 u_int32_t				flags,
-								 u_int32_t *			startBlock,
-								 u_int32_t *			actualBlocks);
-
-EXTERN_API_C( OSErr )
-BlockDeallocate					(ExtendedVCB *			vcb,
-								 u_int32_t 				firstBlock,
-								 u_int32_t 				numBlocks,
-								 u_int32_t				flags);
+BlockDeallocate					(ExtendedVCB *			 vcb,
+								 u_int32_t 				 firstBlock,
+								 u_int32_t 				 numBlocks,
+								 hfs_block_alloc_flags_t flags);
 
 EXTERN_API_C ( void )
 ResetVCBFreeExtCache(struct hfsmount *hfsmp);
@@ -261,6 +318,9 @@ hfs_init_summary (struct hfsmount *hfsmp);
 errno_t hfs_find_free_extents(struct hfsmount *hfsmp,
 							  void (*callback)(void *data, off_t), void *callback_arg);
 
+void hfs_free_tentative(hfsmount_t *hfsmp, struct rl_entry **reservation);
+void hfs_free_locked(hfsmount_t *hfsmp, struct rl_entry **reservation);
+
 /*	File Extent Mapping routines*/
 EXTERN_API_C( OSErr )
 FlushExtentFile					(ExtendedVCB *			vcb);
@@ -274,6 +334,15 @@ CompareExtentKeys				(const HFSExtentKey *	searchKey,
 EXTERN_API_C( int32_t )
 CompareExtentKeysPlus			(const HFSPlusExtentKey *searchKey,
 								 const HFSPlusExtentKey *trialKey);
+
+OSErr SearchExtentFile(ExtendedVCB			*vcb,
+					   const FCB	 		*fcb,
+					   int64_t 				 filePosition,
+					   HFSPlusExtentKey		*foundExtentKey,
+					   HFSPlusExtentRecord	 foundExtentData,
+					   u_int32_t			*foundExtentDataIndex,
+					   u_int32_t			*extentBTreeHint,
+					   u_int32_t			*endingFABNPlusOne );
 
 EXTERN_API_C( OSErr )
 TruncateFileC (ExtendedVCB *vcb, FCB *fcb, int64_t peof, int deleted, 
@@ -306,8 +375,6 @@ NodesAreContiguous				(ExtendedVCB *			vcb,
 								 FCB *					fcb,
 								 u_int32_t				nodeSize);
 #endif
-
-
 
 /*	Get the current time in UTC (GMT)*/
 EXTERN_API_C( u_int32_t )

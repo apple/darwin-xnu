@@ -347,8 +347,3 @@ void
 pal_preemption_assert(void)
 {
 }
-
-void
-hibernate_pal_prepare(void)
-{
-}

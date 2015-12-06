@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)udp.4	8.1 (Berkeley) 6/5/93
 .\"
-.Dd June 5, 1993
+.Dd March 18, 2015 
 .Dt UDP 4
 .Os BSD 4.2
 .Sh NAME
@@ -59,6 +59,8 @@ and
 .Xr recvfrom
 calls, though the
 .Xr connect 2
+or
+.Xr connectx 2
 call may also be used to fix the destination for future
 packets (in which case the 
 .Xr recv 2
@@ -125,6 +127,8 @@ socket with a network address for which no network interface
 exists.
 .El
 .Sh SEE ALSO
+.Xr connect 2 ,
+.Xr connectx 2 ,
 .Xr getsockopt 2 ,
 .Xr recv 2 ,
 .Xr send 2 ,

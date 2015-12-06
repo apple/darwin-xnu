@@ -168,6 +168,7 @@ early_random(void)
 	uint64_t	result;
 	uint64_t	nonce;
 	int		rc;
+	int		ps;
 	ccdrbg_state_t	*state;
 
 	if (!erandom_seed_set) {
@@ -205,23 +206,26 @@ early_random(void)
 		erandom_state[0] = state;
 
 		/*
-		 * Init our DBRG from the boot entropy and a nonce composed of
-		 * a timestamp swizzled with the first 8 bytes of this entropy.
+		 * Init our DBRG from the boot entropy and a timestamp as nonce
+		 * and the cpu number as personalization.
 		 */
 		assert(sizeof(erandom_seed) > sizeof(nonce));
-		bcopy(erandom_seed, &nonce, sizeof(nonce));
-		nonce ^= ml_get_timebase();
+		nonce = ml_get_timebase();
+		ps = 0;				/* boot cpu */
 		rc = ccdrbg_init(&erandom_info, state,
 				 sizeof(erandom_seed), erandom_seed,
 				 sizeof(nonce), &nonce,
-				 0, NULL);
-		assert(rc == CCDRBG_STATUS_OK);
+				 sizeof(ps), &ps);
+		cc_clear(sizeof(nonce), &nonce);
+		if (rc != CCDRBG_STATUS_OK)
+			panic("ccdrbg_init() returned %d", rc);
 
 		/* Generate output */
 		rc = ccdrbg_generate(&erandom_info, state,
 				     sizeof(result), &result,
 				     0, NULL);
-		assert(rc == CCDRBG_STATUS_OK);
+		if (rc != CCDRBG_STATUS_OK)
+			panic("ccdrbg_generate() returned %d", rc);
 	
 		return result;
 	};
@@ -231,7 +235,7 @@ early_random(void)
 	return result;
 }
 
-void
+static void
 read_erandom(void *buffer, u_int numBytes)
 {
 	int		cpu;
@@ -258,6 +262,7 @@ read_erandom(void *buffer, u_int numBytes)
 			rc = ccdrbg_reseed(&erandom_info, state,
 					   sizeof(erandom_seed), erandom_seed,
 					   0, NULL);
+			cc_clear(sizeof(erandom_seed), erandom_seed);
 			if (rc == CCDRBG_STATUS_OK)
 				continue;
 			panic("read_erandom reseed error %d\n", rc);
@@ -318,17 +323,17 @@ prng_cpu_init(int cpu)
 		erandom_state[cpu] = state;
 
 		/*
-		 * Init our DBRG from boot entropy, nonce as timestamp xor'ed
-		 * with the first 8 bytes of entropy, and use the cpu number
-		 * as the personalization parameter.
+		 * Init our DBRG from boot entropy, nonce as timestamp
+		 * and use the cpu number as the personalization parameter.
 		 */
-		bcopy(erandom_seed, &nonce, sizeof(nonce));
-		nonce ^= ml_get_timebase();
+		nonce = ml_get_timebase();
 		rc = ccdrbg_init(&erandom_info, state,
 				 sizeof(erandom_seed), erandom_seed,
 				 sizeof(nonce), &nonce,
 				 sizeof(cpu), &cpu);
-		assert(rc == CCDRBG_STATUS_OK);
+		cc_clear(sizeof(nonce), &nonce);
+		if (rc != CCDRBG_STATUS_OK)
+			panic("ccdrbg_init() returned %d", rc);
 	}
 
 	/* Non-boot cpus use the master cpu's global context */
@@ -404,6 +409,7 @@ prng_infop(prngContextp pp)
 			   bytesToInput, rdBuffer,
 			   0, NULL,
 			   0, NULL);
+	cc_clear(sizeof(rdBuffer), rdBuffer);
 	return pp->infop;
 }
 
@@ -419,6 +425,7 @@ Reseed(prngContextp pp)
 					 bytesToInput, rdBuffer,
 					 0, NULL)); 
 
+	cc_clear(sizeof(rdBuffer), rdBuffer);
 	pp->bytes_reseeded = pp->bytes_generated;
 }
 

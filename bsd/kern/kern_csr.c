@@ -33,37 +33,8 @@
 #include <sys/systm.h>
 #include <sys/types.h>
 
-/* allow everything by default? */
-/* XXX: set this to 0 later: <rdar://problem/16040413> */
-static int csr_allow_all = 1;
-
-/* allow everything if CSR_ALLOW_APPLE_INTERNAL is set */
-static int csr_allow_internal = 1;
-
-/* Current boot-arg policy:
- * rootless=0
- *    csr_allow_all = 1
- * rootless=1
- *    csr_allow_all = 0
- *    csr_allow_internal = 0
- *
- * After <rdar://problem/16239861>:
- * rootless=0
- *    no effect
- * rootless=1
- *    csr_allow_internal = 0
- *
- * Enforcement policy:
- * ===============================
- *            | csr_allow_internal
- *            |   0         1
- * ===============================
- *   csr_   0 | always   customer
- *  allow_    |
- *   all    1 | never    never
- * ===============================
- * NB: "customer" means enforce when
- * CSR_ALLOW_APPLE_INTERNAL not set */
+/* enable enforcement by default */
+static int csr_allow_all = 0;
 
 void
 csr_init(void)
@@ -73,62 +44,6 @@ csr_init(void)
 		/* special booter; allow everything */
 		csr_allow_all = 1;
 	}
-
-	int rootless_boot_arg;
-	if (PE_parse_boot_argn("rootless", &rootless_boot_arg, sizeof(rootless_boot_arg))) {
-		/* XXX: set csr_allow_all to boot arg value for now
-		 * (to be removed by <rdar://problem/16239861>) */
-		csr_allow_all = !rootless_boot_arg;
-		/* if rootless=1, do not allow everything when CSR_ALLOW_APPLE_INTERNAL is set */
-		csr_allow_internal &= !rootless_boot_arg;
-	}
-}
-
-int
-csrctl(__unused proc_t p, struct csrctl_args *uap, __unused int32_t *retval)
-{
-	int error = 0;
-
-	if (uap->useraddr == 0)
-		return EINVAL;
-	if (uap->usersize != sizeof(csr_config_t))
-		return EINVAL;
-
-	switch (uap->op) {
-		case CSR_OP_CHECK:
-		{
-			csr_config_t mask;
-			error = copyin(uap->useraddr, &mask, sizeof(csr_config_t));
-
-			if (error)
-				return error;
-
-			error = csr_check(mask);
-			break;
-		}
-
-		case CSR_OP_GET_ACTIVE_CONFIG:
-		case CSR_OP_GET_PENDING_CONFIG: /* fall through */
-		{
-			csr_config_t config = 0;
-			if (uap->op == CSR_OP_GET_ACTIVE_CONFIG)
-				error = csr_get_active_config(&config);
-			else
-				error = csr_get_pending_config(&config);
-
-			if (error)
-				return error;
-
-			error = copyout(&config, uap->useraddr, sizeof(csr_config_t));
-			break;
-		}
-
-		default:
-			error = EINVAL;
-			break;
-	}
-
-	return error;
 }
 
 int
@@ -138,28 +53,19 @@ csr_get_active_config(csr_config_t *config)
 	if (args->flags & kBootArgsFlagCSRActiveConfig) {
 		*config = args->csrActiveConfig & CSR_VALID_FLAGS;
 	} else {
-		/* XXX: change to 0 when <rdar://problem/16239698> is in the build */
-		*config = CSR_ALLOW_APPLE_INTERNAL;
+		*config = 0;
 	}
 
 	return 0;
 }
 
 int
-csr_get_pending_config(csr_config_t *config)
-{
-	boot_args *args = (boot_args *)PE_state.bootArgs;
-	if (args->flags & kBootArgsFlagCSRPendingConfig) {
-		*config = args->csrPendingConfig & CSR_VALID_FLAGS;
-		return 0;
-	} else {
-		return ENOENT;
-	}
-}
-
-int
 csr_check(csr_config_t mask)
 {
+	boot_args *args = (boot_args *)PE_state.bootArgs;
+	if ((mask & CSR_ALLOW_DEVICE_CONFIGURATION) && !(args->flags & kBootArgsFlagCSRConfigMode))
+		return EPERM;
+
 	if (csr_allow_all) {
 		return 0;
 	}
@@ -168,10 +74,6 @@ csr_check(csr_config_t mask)
 	int error = csr_get_active_config(&config);
 	if (error) {
 		return error;
-	}
-
-	if (csr_allow_internal && (config & CSR_ALLOW_APPLE_INTERNAL)) {
-		return 0;
 	}
 
 	if (mask == 0) {
@@ -187,4 +89,61 @@ void
 csr_set_allow_all(int value)
 {
 	csr_allow_all = !!value; // force value to 0 or 1
+}
+
+/*
+ * Syscall stubs
+ */
+
+int syscall_csr_check(struct csrctl_args *args);
+int syscall_csr_get_active_config(struct csrctl_args *args);
+
+
+int
+syscall_csr_check(struct csrctl_args *args)
+{
+	csr_config_t mask = 0;
+	int error = 0;
+
+	if (args->useraddr == 0 || args->usersize != sizeof(mask))
+		return EINVAL;
+
+	error = copyin(args->useraddr, &mask, sizeof(mask));
+	if (error)
+		return error;
+
+	return csr_check(mask);
+}
+
+int
+syscall_csr_get_active_config(struct csrctl_args *args)
+{
+	csr_config_t config = 0;
+	int error = 0;
+
+	if (args->useraddr == 0 || args->usersize != sizeof(config))
+		return EINVAL;
+
+	error = csr_get_active_config(&config);
+	if (error)
+		return error;
+
+	return copyout(&config, args->useraddr, sizeof(config));
+}
+
+/*
+ * Syscall entrypoint
+ */
+
+int
+csrctl(__unused proc_t p, struct csrctl_args *args, __unused int32_t *retval)
+{
+	switch (args->op) {
+		case CSR_SYSCALL_CHECK:
+			return syscall_csr_check(args);
+		case CSR_SYSCALL_GET_ACTIVE_CONFIG:
+			return syscall_csr_get_active_config(args);
+		default:
+			return ENOSYS;
+	}
 }

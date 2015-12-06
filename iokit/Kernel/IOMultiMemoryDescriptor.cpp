@@ -67,6 +67,8 @@ bool IOMultiMemoryDescriptor::initWithDescriptors(
                                   IODirection           withDirection,
                                   bool                  asReference )
 {
+    unsigned index;
+    IOOptionBits copyFlags;
     //
     // Initialize an IOMultiMemoryDescriptor. The "buffer" is made up of several
     // memory descriptors, that are to be chained end-to-end to make up a single
@@ -117,7 +119,7 @@ bool IOMultiMemoryDescriptor::initWithDescriptors(
                /* bytes */ withCount * sizeof(IOMemoryDescriptor *) );
     }
 
-    for ( unsigned index = 0; index < withCount; index++ ) 
+    for ( index = 0; index < withCount; index++ )
     {
         descriptors[index]->retain();
         _length += descriptors[index]->getLength();
@@ -125,6 +127,16 @@ bool IOMultiMemoryDescriptor::initWithDescriptors(
         assert(descriptors[index]->getDirection() ==
 	       (withDirection & kIOMemoryDirectionMask));
     }
+
+    enum { kCopyFlags = kIOMemoryBufferPageable };
+    copyFlags = 0;
+    for ( index = 0; index < withCount; index++ )
+    {
+	if (!index)  copyFlags =  (kCopyFlags & descriptors[index]->_flags);
+	else if     (copyFlags != (kCopyFlags & descriptors[index]->_flags)) break;
+    }
+    if (index < withCount) return (false);
+    _flags |= copyFlags;
 
     return true;
 }
@@ -174,9 +186,9 @@ IOReturn IOMultiMemoryDescriptor::prepare(IODirection forDirection)
 
     if ( status != kIOReturnSuccess )
     {
-        for ( unsigned indexUndo = 0; indexUndo <= index; indexUndo++ )
+        for ( unsigned indexUndo = 0; indexUndo < index; indexUndo++ )
         {
-            statusUndo = _descriptors[index]->complete(forDirection);
+            statusUndo = _descriptors[indexUndo]->complete(forDirection);
             assert(statusUndo == kIOReturnSuccess);
         }
     }
@@ -212,10 +224,9 @@ IOReturn IOMultiMemoryDescriptor::complete(IODirection forDirection)
     return statusFinal;
 }
 
-addr64_t IOMultiMemoryDescriptor::getPhysicalSegment(
-                                                       IOByteCount   offset,
-                                                       IOByteCount * length,
-                                                       IOOptionBits  options )
+addr64_t IOMultiMemoryDescriptor::getPhysicalSegment(IOByteCount   offset,
+                                                     IOByteCount * length,
+                                                     IOOptionBits  options)
 {
     //
     // This method returns the physical address of the byte at the given offset
@@ -237,4 +248,141 @@ addr64_t IOMultiMemoryDescriptor::getPhysicalSegment(
     if ( length )  *length = 0;
 
     return 0;
+}
+
+#include "IOKitKernelInternal.h"
+
+IOReturn IOMultiMemoryDescriptor::doMap(vm_map_t           __addressMap,
+                                        IOVirtualAddress *  __address,
+                                        IOOptionBits       options,
+                                        IOByteCount        __offset,
+                                        IOByteCount        __length)
+{
+    IOMemoryMap *     mapping = (IOMemoryMap *) *__address;
+    vm_map_t          map     = mapping->fAddressMap;
+    mach_vm_size_t    offset  = mapping->fOffset;
+    mach_vm_size_t    length  = mapping->fLength;
+    mach_vm_address_t address = mapping->fAddress;
+
+    kern_return_t     err;
+    IOOptionBits      subOptions;
+    mach_vm_size_t    mapOffset;
+    mach_vm_size_t    bytesRemaining, chunk;
+    mach_vm_address_t nextAddress;
+    IOMemoryDescriptorMapAllocRef ref;
+    vm_prot_t                     prot;
+
+    do
+    {
+        prot = VM_PROT_READ;
+        if (!(kIOMapReadOnly & options)) prot |= VM_PROT_WRITE;
+        ref.map     = map;
+	ref.tag     = IOMemoryTag(map);
+        ref.options = options;
+        ref.size    = length;
+        ref.prot    = prot;
+        if (options & kIOMapAnywhere)
+            // vm_map looks for addresses above here, even when VM_FLAGS_ANYWHERE
+            ref.mapped = 0;
+        else
+            ref.mapped = mapping->fAddress;
+
+        if ((ref.map == kernel_map) && (kIOMemoryBufferPageable & _flags))
+            err = IOIteratePageableMaps(ref.size, &IOMemoryDescriptorMapAlloc, &ref);
+        else
+            err = IOMemoryDescriptorMapAlloc(ref.map, &ref);
+
+        if (KERN_SUCCESS != err) break;
+
+        address = ref.mapped;
+        mapping->fAddress = address;
+
+        mapOffset = offset;
+        bytesRemaining = length;
+        nextAddress = address;
+        assert(mapOffset <= _length);
+        subOptions = (options & ~kIOMapAnywhere) | kIOMapOverwrite;
+
+        for (unsigned index = 0; bytesRemaining && (index < _descriptorsCount); index++) 
+        {
+            chunk = _descriptors[index]->getLength();
+            if (mapOffset >= chunk)
+            {
+                mapOffset -= chunk;
+                continue;
+            }
+            chunk -= mapOffset;
+            if (chunk > bytesRemaining) chunk = bytesRemaining;
+            IOMemoryMap * subMap;
+            subMap = _descriptors[index]->createMappingInTask(mapping->fAddressTask, nextAddress, subOptions, mapOffset, chunk );
+            if (!subMap) break;
+            subMap->release();          // kIOMapOverwrite means it will not deallocate
+
+            bytesRemaining -= chunk;
+            nextAddress += chunk;
+            mapOffset = 0;
+        }
+        if (bytesRemaining) err = kIOReturnUnderrun;
+    }
+    while (false);
+
+    if (kIOReturnSuccess == err)
+    {
+#if IOTRACKING
+        IOTrackingAdd(gIOMapTracking, &mapping->fTracking, length, false);
+#endif
+    }
+    else
+    {
+        mapping->release();
+        mapping = 0;
+    }
+
+    return (err);
+}
+
+IOReturn IOMultiMemoryDescriptor::setPurgeable( IOOptionBits newState,
+                                                IOOptionBits * oldState )
+{
+    IOReturn     err;
+    IOOptionBits totalState, state;
+
+    totalState = kIOMemoryPurgeableNonVolatile;
+    for (unsigned index = 0; index < _descriptorsCount; index++) 
+    {
+        err = _descriptors[index]->setPurgeable(newState, &state);
+        if (kIOReturnSuccess != err) break;
+
+        if (kIOMemoryPurgeableEmpty == state)              totalState = kIOMemoryPurgeableEmpty;
+        else if (kIOMemoryPurgeableEmpty == totalState)    continue;
+        else if (kIOMemoryPurgeableVolatile == totalState) continue;
+        else if (kIOMemoryPurgeableVolatile == state)      totalState = kIOMemoryPurgeableVolatile;
+        else totalState = kIOMemoryPurgeableNonVolatile;
+    }
+    if (oldState) *oldState = totalState;
+
+    return (err);
+}
+
+IOReturn IOMultiMemoryDescriptor::getPageCounts(IOByteCount * pResidentPageCount,
+                                     	        IOByteCount * pDirtyPageCount)
+{
+    IOReturn    err;
+    IOByteCount totalResidentPageCount, totalDirtyPageCount;
+    IOByteCount residentPageCount, dirtyPageCount;
+
+    err = kIOReturnSuccess;
+    totalResidentPageCount = totalDirtyPageCount = 0;
+    for (unsigned index = 0; index < _descriptorsCount; index++) 
+    {
+        err = _descriptors[index]->getPageCounts(&residentPageCount, &dirtyPageCount);
+        if (kIOReturnSuccess != err) break;
+        totalResidentPageCount += residentPageCount;
+        totalDirtyPageCount    += dirtyPageCount;
+    }
+
+    if (pResidentPageCount) *pResidentPageCount = totalResidentPageCount;
+    if (pDirtyPageCount)    *pDirtyPageCount = totalDirtyPageCount;
+
+    return (err);
 }

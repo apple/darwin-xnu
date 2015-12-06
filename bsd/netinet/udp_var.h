@@ -168,8 +168,8 @@ extern int udp_ctloutput(struct socket *, struct sockopt *);
 extern void udp_init(struct protosw *, struct domain *);
 extern void udp_input(struct mbuf *, int);
 extern int udp_connectx_common(struct socket *, int, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, associd_t, connid_t *,
-    uint32_t, void *, uint32_t);
+    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+    sae_connid_t *, uint32_t, void *, uint32_t, struct uio*, user_ssize_t *);
 extern void udp_notify(struct inpcb *inp, int errno);
 extern int udp_shutdown(struct socket *so);
 extern int udp_lock(struct socket *, int, void *);

@@ -75,6 +75,7 @@ DATAFILES = \
 	_timespec.h \
  	_timeval.h \
  	_timeval32.h \
+ 	_timeval64.h \
  	_ucontext.h \
  	_ucontext64.h \
 	_uid_t.h \
@@ -126,7 +127,7 @@ EXPORT_MI_GEN_LIST =
 EXPORT_MI_DIR = sys/_types
 
 # /System/Library/Frameworks/System.framework/PrivateHeaders
-INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 # /System/Library/Frameworks/Kernel.framework/PrivateHeaders
 INSTALL_KF_MI_LCL_LIST =  ${KERNELFILES} ${PRIVATE_KERNELFILES}

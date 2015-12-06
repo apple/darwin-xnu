@@ -675,21 +675,11 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly, 
 	u_int16_t			btRecordSize;
 	OSErr				err;
 
-    
+	MALLOC (btIterator, struct BTreeIterator*, sizeof(struct BTreeIterator),
+			M_TEMP, M_WAITOK | M_ZERO);
 
-	MALLOC (btIterator, struct BTreeIterator*, sizeof(struct BTreeIterator), M_TEMP, M_WAITOK);
-	if (btIterator == NULL) {
-		return memFullErr;  // translates to ENOMEM
-	}
-
-	MALLOC (tmpIterator, struct BTreeIterator*, sizeof(struct BTreeIterator), M_TEMP, M_WAITOK);
-	if (tmpIterator == NULL) {	
-		FREE (btIterator, M_TEMP);	
-		return memFullErr;  // translates to ENOMEM
-	}
-
-	bzero(btIterator, sizeof(*btIterator));
-	bzero (tmpIterator, sizeof(*tmpIterator));
+	MALLOC (tmpIterator, struct BTreeIterator*, sizeof(struct BTreeIterator),
+			M_TEMP, M_WAITOK | M_ZERO);
 
 	fcb = GetFileControlBlock(vcb->extentsRefNum);
 
@@ -721,7 +711,10 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly, 
 		extentKeyPtr->hfs.startBlock = 0;
 	}
 #else 
-    else return cmBadNews;
+	else {
+		err = cmBadNews;
+		goto exit;
+	}
 #endif
 
 	err = BTSearchRecord(fcb, btIterator, &btRecord, &btRecordSize, btIterator);
@@ -730,8 +723,8 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly, 
 		if (err == noErr) {		//	Did we find a bogus extent record?
 			err = cmBadNews;	//	Yes, so indicate things are messed up.
 		}
-		
-		return err;				//	Got some unexpected error, so return it
+
+		goto exit;
 	}
 
 	do
@@ -770,6 +763,8 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly, 
 		if (err != noErr)
 			break;
 	}	while ( true );
+
+exit:
 	
 	FREE (tmpIterator, M_TEMP);
 	FREE (btIterator, M_TEMP);

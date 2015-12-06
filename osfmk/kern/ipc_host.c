@@ -76,6 +76,10 @@
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
 
+#if CONFIG_MACF
+#include <security/mac_mach_internal.h>
+#endif
+
 /*
  * Forward declarations
  */
@@ -533,7 +537,7 @@ convert_port_to_host_security(
  */
 kern_return_t
 host_set_exception_ports(
-	host_priv_t				host_priv,
+	host_priv_t			host_priv,
 	exception_mask_t		exception_mask,
 	ipc_port_t			new_port,
 	exception_behavior_t		new_behavior,
@@ -545,8 +549,6 @@ host_set_exception_ports(
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
-
-	assert(host_priv == &realhost);
 
 	if (exception_mask & ~EXC_MASK_VALID) {
 		return KERN_INVALID_ARGUMENT;
@@ -570,6 +572,13 @@ host_set_exception_ports(
 	 */
 	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
 		return (KERN_INVALID_ARGUMENT);
+
+#if CONFIG_MACF
+	if (mac_task_check_set_host_exception_ports(current_task(), exception_mask) != 0)
+		return KERN_NO_ACCESS;
+#endif
+
+	assert(host_priv == &realhost);
 
 	host_lock(host_priv);
 
@@ -676,7 +685,7 @@ host_get_exception_ports(
 
 kern_return_t
 host_swap_exception_ports(
-	host_priv_t				host_priv,
+	host_priv_t			host_priv,
 	exception_mask_t		exception_mask,
 	ipc_port_t			new_port,
 	exception_behavior_t		new_behavior,
@@ -712,6 +721,11 @@ host_swap_exception_ports(
 
 	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
 		return (KERN_INVALID_ARGUMENT);
+
+#if CONFIG_MACF
+	if (mac_task_check_set_host_exception_ports(current_task(), exception_mask) != 0)
+		return KERN_NO_ACCESS;
+#endif /* CONFIG_MACF */
 
 	host_lock(host_priv);
 

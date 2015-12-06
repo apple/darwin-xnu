@@ -56,15 +56,6 @@ OSMetaClassDefineReservedUnused(OSString, 13);
 OSMetaClassDefineReservedUnused(OSString, 14);
 OSMetaClassDefineReservedUnused(OSString, 15);
 
-#if OSALLOCDEBUG
-extern "C" {
-    extern int debug_container_malloc_size;
-};
-#define ACCUMSIZE(s) do { debug_container_malloc_size += (s); } while(0)
-#else
-#define ACCUMSIZE(s)
-#endif
-
 bool OSString::initWithString(const OSString *aString)
 {
     return initWithCString(aString->string);
@@ -72,35 +63,54 @@ bool OSString::initWithString(const OSString *aString)
 
 bool OSString::initWithCString(const char *cString)
 {
-    if (!cString || !super::init())
-        return false;
+    unsigned int   newLength;
+    char         * newString;
 
-    length = strlen(cString) + 1;
-    string = (char *) kalloc(length);
-    if (!string)
-        return false;
+    if (!cString || !super::init()) return false;
 
-    bcopy(cString, string, length);
+    newLength = strlen(cString) + 1;
+    newString = (char *) kalloc_container(newLength);
+    if (!newString) return false;
 
-    ACCUMSIZE(length);
+    bcopy(cString, newString, newLength);
+
+    if ( !(flags & kOSStringNoCopy) && string) {
+        kfree(string, (vm_size_t)length);
+        OSCONTAINER_ACCUMSIZE(-((size_t)length));
+    }
+    string = newString;
+    length = newLength;
+    flags &= ~kOSStringNoCopy;
+
+    OSCONTAINER_ACCUMSIZE(length);
 
     return true;
 }
 
 bool OSString::initWithStringOfLength(const char *cString, size_t inlength)
 {
-    if (!cString || !super::init())
-        return false;
+    unsigned int   newLength;
+    char         * newString;
 
-    length = inlength + 1;
-    string = (char *) kalloc(length);
-    if (!string)
-        return false;
+    if (!cString || !super::init()) return false;
 
-    bcopy(cString, string, inlength);
-    string[inlength] = 0;
+    newLength = inlength + 1;
+    newString = (char *) kalloc_container(newLength);
+    if (!newString) return false;
 
-    ACCUMSIZE(length);
+    bcopy(cString, newString, inlength);
+    newString[inlength] = 0;
+
+    if ( !(flags & kOSStringNoCopy) && string) {
+        kfree(string, (vm_size_t)length);
+        OSCONTAINER_ACCUMSIZE(-((size_t)length));
+    }
+
+    string = newString;
+    length = newLength;
+    flags &= ~kOSStringNoCopy;
+
+    OSCONTAINER_ACCUMSIZE(length);
 
     return true;
 }
@@ -197,7 +207,7 @@ void OSString::free()
 {
     if ( !(flags & kOSStringNoCopy) && string) {
         kfree(string, (vm_size_t)length);
-        ACCUMSIZE(-length);
+        OSCONTAINER_ACCUMSIZE(-((size_t)length));
     }
 
     super::free();

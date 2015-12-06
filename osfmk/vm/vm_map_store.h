@@ -114,6 +114,11 @@ struct vm_map_store {
 	(map)->hint = (value);	       \
 	MACRO_END
 
+#define	SAVE_HINT_HOLE_WRITE(map,value) \
+	MACRO_BEGIN		       \
+	(map)->hole_hint = (value);	\
+	MACRO_END
+
 #define SKIP_RB_TREE		0xBAADC0D1
 
 #define VM_MAP_ENTRY_CREATE	1
@@ -126,7 +131,7 @@ void 	_vm_map_store_entry_link( struct vm_map_header *, struct vm_map_entry*, st
 void 	vm_map_store_entry_link( struct _vm_map*, struct vm_map_entry*, struct vm_map_entry*);
 void	_vm_map_store_entry_unlink( struct vm_map_header *, struct vm_map_entry*);
 void	vm_map_store_entry_unlink( struct _vm_map*, struct vm_map_entry*);
-void	vm_map_store_update_first_free( struct _vm_map*, struct vm_map_entry*);
+void	vm_map_store_update_first_free( struct _vm_map*, struct vm_map_entry*, boolean_t new_entry_creation);
 void	vm_map_store_copy_insert( struct _vm_map*, struct vm_map_entry*, struct vm_map_copy*);
 void	vm_map_store_copy_reset( struct vm_map_copy*, struct vm_map_entry*);
 #if MACH_ASSERT

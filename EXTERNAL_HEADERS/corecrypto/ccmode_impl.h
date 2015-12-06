@@ -2,8 +2,9 @@
  *  ccmode_impl.h
  *  corecrypto
  *
- *  Created by James Murphy on 12/9/11.
- *  Copyright (c) 2011 Apple Inc. All rights reserved.
+ *  Created on 12/07/2010
+ *
+ *  Copyright (c) 2012,2015 Apple Inc. All rights reserved.
  *
  */
 

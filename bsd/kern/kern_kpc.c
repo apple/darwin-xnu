@@ -53,6 +53,7 @@
 #define REQ_PERIOD              (10)
 #define REQ_ACTIONID            (11)
 #define REQ_SW_INC              (14)
+#define REQ_PMU_VERSION         (15)
 
 /* Type-munging casts */
 typedef int (*getint_t)(void);
@@ -69,11 +70,6 @@ static lck_mtx_t       sysctl_buffer_lock;
 static void           *sysctl_buffer = NULL;
 
 typedef int (*setget_func_t)(int);
-
-/* init our stuff */
-extern void kpc_arch_init(void);
-extern void kpc_common_init(void);
-extern void kpc_thread_init(void); /* osfmk/kern/kpc_thread.c */
 
 void
 kpc_init(void)
@@ -247,6 +243,9 @@ sysctl_kpc_get_config(uint32_t classes, void* buf)
 static int
 sysctl_kpc_set_config(uint32_t classes, void* buf)
 {
+	/* userspace cannot reconfigure the power class */
+	if (classes & KPC_CLASS_POWER_MASK)
+		return (EPERM);
 	return kpc_set_config( classes, buf);
 }
 
@@ -259,6 +258,9 @@ sysctl_kpc_get_period(uint32_t classes, void* buf)
 static int
 sysctl_kpc_set_period(uint32_t classes, void* buf)
 {
+	/* userspace cannot reconfigure the power class */
+	if (classes & KPC_CLASS_POWER_MASK)
+		return (EPERM);
 	return kpc_set_period( classes, buf);
 }
 
@@ -500,6 +502,10 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 		ret = sysctl_set_int( req, (setget_func_t)kpc_set_sw_inc );
 		break;		
 
+	case REQ_PMU_VERSION:
+		ret = sysctl_get_int(oidp, req, kpc_get_pmu_version());
+		break;
+
 	default:
 		ret = ENOENT;
 		break;
@@ -532,6 +538,11 @@ SYSCTL_PROC(_kpc, OID_AUTO, thread_counting,
             CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
             (void*)REQ_THREAD_COUNTING, 
             sizeof(int), kpc_sysctl, "I", "Thread accumulation");
+
+SYSCTL_PROC(_kpc, OID_AUTO, pmu_version,
+            CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_ANYBODY,
+            (void *)REQ_PMU_VERSION,
+            sizeof(int), kpc_sysctl, "I", "PMU version for hardware");
 
 /* faux values */
 SYSCTL_PROC(_kpc, OID_AUTO, config_count,

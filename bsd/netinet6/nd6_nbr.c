@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -263,6 +263,7 @@ nd6_ns_input(
 	struct sockaddr_dl proxydl;
 	boolean_t advrouter;
 	boolean_t is_dad_probe;
+	int oflgclr = 0;
 
 	if ((ifp->if_eflags & IFEF_IPV6_ND6ALT) != 0) {
 		nd6log((LOG_INFO, "nd6_ns_input: on ND6ALT interface!\n"));
@@ -456,7 +457,7 @@ nd6_ns_input(
 	 * src addr	how to process?
 	 * ---		---
 	 * multicast	of course, invalid (rejected in ip6_input)
-	 * unicast	somebody is doing address resolution -> ignore
+	 * unicast	somebody is doing address resolution
 	 * unspec	dup address detection
 	 *
 	 * The processing is defined in the "draft standard" RFC 4862 (and by
@@ -470,12 +471,19 @@ nd6_ns_input(
 		 * duplicate address detection.
 		 *
 		 * If not, the packet is for addess resolution;
-		 * silently ignore it.
+		 * silently ignore it when not optimistic
+		 *
+		 * Per RFC 4429 the reply for an optimistic address must
+		 * have the Override flag cleared
 		 */
-		if (is_dad_probe)
-			nd6_dad_ns_input(m, ifa, lladdr, lladdrlen);
+		if (!is_dad_probe && (dadprogress & IN6_IFF_OPTIMISTIC) != 0) {
+			oflgclr = 1;
+		} else {
+			if (is_dad_probe)
+				nd6_dad_ns_input(m, ifa, lladdr, lladdrlen);
 
-		goto freeit;
+			goto freeit;
+		}
 	}
 
 	/* Are we an advertising router on this interface? */
@@ -507,7 +515,7 @@ nd6_ns_input(
 	    ND_NEIGHBOR_SOLICIT, 0);
 
 	nd6_na_output(ifp, &saddr6, &taddr6,
-	    ((anycast || proxy || !tlladdr) ? 0 : ND_NA_FLAG_OVERRIDE) |
+	    ((anycast || proxy || !tlladdr || oflgclr) ? 0 : ND_NA_FLAG_OVERRIDE) |
 	    (advrouter ? ND_NA_FLAG_ROUTER : 0) | ND_NA_FLAG_SOLICITED,
 	    tlladdr, proxy ? (struct sockaddr *)&proxydl : NULL);
  freeit:
@@ -850,6 +858,7 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 	struct sockaddr_dl *sdl;
 	union nd_opts ndopts;
 	uint64_t timenow;
+	bool send_nc_alive_kev = false;
 
 	if ((ifp->if_eflags & IFEF_IPV6_ND6ALT) != 0) {
 		nd6log((LOG_INFO, "nd6_na_input: on ND6ALT interface!\n"));
@@ -990,17 +999,16 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		sdl->sdl_alen = ifp->if_addrlen;
 		bcopy(lladdr, LLADDR(sdl), ifp->if_addrlen);
 		if (is_solicited) {
+			send_nc_alive_kev = (rt->rt_flags & RTF_ROUTER) ? true : false;
 			ln->ln_state = ND6_LLINFO_REACHABLE;
 			if (ln->ln_expire != 0) {
-				struct nd_ifinfo *ndi;
+				struct nd_ifinfo *ndi = NULL;
 
-				lck_rw_lock_shared(nd_if_rwlock);
 				ndi = ND_IFINFO(rt->rt_ifp);
 				VERIFY(ndi != NULL && ndi->initialized);
 				lck_mtx_lock(&ndi->lock);
 				ln_setexpire(ln, timenow + ndi->reachable);
 				lck_mtx_unlock(&ndi->lock);
-				lck_rw_done(nd_if_rwlock);
 				RT_UNLOCK(rt);
 				lck_mtx_lock(rnh_lock);
 				nd6_sched_timeout(NULL, NULL);
@@ -1091,16 +1099,14 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 			if (is_solicited) {
 				ln->ln_state = ND6_LLINFO_REACHABLE;
 				if (ln->ln_expire != 0) {
-					struct nd_ifinfo *ndi;
+					struct nd_ifinfo *ndi = NULL;
 
-					lck_rw_lock_shared(nd_if_rwlock);
 					ndi = ND_IFINFO(ifp);
 					VERIFY(ndi != NULL && ndi->initialized);
 					lck_mtx_lock(&ndi->lock);
 					ln_setexpire(ln,
 					    timenow + ndi->reachable);
 					lck_mtx_unlock(&ndi->lock);
-					lck_rw_done(nd_if_rwlock);
 					RT_UNLOCK(rt);
 					lck_mtx_lock(rnh_lock);
 					nd6_sched_timeout(NULL, NULL);
@@ -1152,6 +1158,28 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		}
 		ln->ln_router = is_router;
 	}
+
+	if (send_nc_alive_kev && (ifp->if_addrlen == IF_LLREACH_MAXLEN)) {
+		struct kev_msg ev_msg;
+		struct kev_nd6_ndalive nd6_ndalive;
+		bzero(&ev_msg, sizeof(ev_msg));
+		bzero(&nd6_ndalive, sizeof(nd6_ndalive));
+		ev_msg.vendor_code      = KEV_VENDOR_APPLE;
+		ev_msg.kev_class        = KEV_NETWORK_CLASS;
+		ev_msg.kev_subclass     = KEV_ND6_SUBCLASS;
+		ev_msg.event_code       = KEV_ND6_NDALIVE;
+
+		nd6_ndalive.link_data.if_family = ifp->if_family;
+		nd6_ndalive.link_data.if_unit = ifp->if_unit;
+		strlcpy(nd6_ndalive.link_data.if_name,
+		    ifp->if_name,
+		    sizeof(nd6_ndalive.link_data.if_name));
+		ev_msg.dv[0].data_ptr = &nd6_ndalive;
+		ev_msg.dv[0].data_length =
+			sizeof(nd6_ndalive);
+		kev_post_msg(&ev_msg);
+	}
+
 	RT_LOCK_ASSERT_HELD(rt);
 	rt->rt_flags &= ~RTF_REJECT;
 
@@ -1170,8 +1198,9 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		 * prevent a ln_hold lookup in nd6_output()
 		 * (wouldn't happen, though...)
 		 */
-		for (m_hold = ln->ln_hold;
-		    m_hold; m_hold = m_hold_next) {
+		m_hold = ln->ln_hold;
+		ln->ln_hold = NULL;
+		for ( ; m_hold; m_hold = m_hold_next) {
 			m_hold_next = m_hold->m_nextpkt;
 			m_hold->m_nextpkt = NULL;
 			/*
@@ -1182,8 +1211,6 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 			nd6_output(ifp, ifp, m_hold, &sin6, rt, NULL);
 			RT_LOCK_SPIN(rt);
 		}
-		ln->ln_hold = NULL;
-
 	}
 	RT_REMREF_LOCKED(rt);
 	RT_UNLOCK(rt);
@@ -1583,16 +1610,14 @@ nd6_dad_start(
 	 */
 	if (tick_delay == NULL) {
 		u_int32_t retrans;
-		struct nd_ifinfo *ndi;
+		struct nd_ifinfo *ndi = NULL;
 
 		nd6_dad_ns_output(dp, ifa);
-		lck_rw_lock_shared(nd_if_rwlock);
 		ndi = ND_IFINFO(ifa->ifa_ifp);
 		VERIFY(ndi != NULL && ndi->initialized);
 		lck_mtx_lock(&ndi->lock);
 		retrans = ndi->retrans * hz / 1000;
 		lck_mtx_unlock(&ndi->lock);
-		lck_rw_done(nd_if_rwlock);
 		timeout((void (*)(void *))nd6_dad_timer, (void *)ifa, retrans);
 	} else {
 		int ntick;
@@ -1704,7 +1729,7 @@ nd6_dad_timer(struct ifaddr *ifa)
 {
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	struct dadq *dp = NULL;
-	struct nd_ifinfo *ndi;
+	struct nd_ifinfo *ndi = NULL;
 
 	/* Sanity check */
 	if (ia == NULL) {
@@ -1762,13 +1787,11 @@ nd6_dad_timer(struct ifaddr *ifa)
 		 * We have more NS to go.  Send NS packet for DAD.
 		 */
 		nd6_dad_ns_output(dp, ifa);
-		lck_rw_lock_shared(nd_if_rwlock);
 		ndi = ND_IFINFO(ifa->ifa_ifp);
 		VERIFY(ndi != NULL && ndi->initialized);
 		lck_mtx_lock(&ndi->lock);
 		retrans = ndi->retrans * hz / 1000;
 		lck_mtx_unlock(&ndi->lock);
-		lck_rw_done(nd_if_rwlock);
 		timeout((void (*)(void *))nd6_dad_timer, (void *)ifa, retrans);
 	} else {
 		/*
@@ -1813,13 +1836,11 @@ nd6_dad_timer(struct ifaddr *ifa)
 			ia->ia6_flags &= ~IN6_IFF_DADPROGRESS;
 			IFA_UNLOCK(&ia->ia_ifa);
 
-			lck_rw_lock_shared(nd_if_rwlock);
 			ndi = ND_IFINFO(ifa->ifa_ifp);
 			VERIFY(ndi != NULL && ndi->initialized);
 			lck_mtx_lock(&ndi->lock);
 			txunsolna = (ndi->flags & ND6_IFF_REPLICATED) != 0;
 			lck_mtx_unlock(&ndi->lock);
-			lck_rw_done(nd_if_rwlock);
 
 			if (txunsolna) {
 				nd6_unsol_na_output(ifa);
@@ -1877,12 +1898,12 @@ nd6_dad_duplicated(struct ifaddr *ifa)
 	IFA_UNLOCK(&ia->ia_ifa);
 
 	if (disable) {
+		struct nd_ifinfo *ndi =  ND_IFINFO(ifp);
 		log(LOG_ERR, "%s: possible hardware address duplication "
 		    "detected, disabling IPv6 for interface.\n", if_name(ifp));
 
-		lck_rw_lock_shared(nd_if_rwlock);
-		nd_ifinfo[ifp->if_index].flags |= ND6_IFF_IFDISABLED;
-		lck_rw_done(nd_if_rwlock);
+		VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
+		ndi->flags |= ND6_IFF_IFDISABLED;
 		/* Make sure to set IFEF_IPV6_DISABLED too */
 		nd6_if_disable(ifp, TRUE);
 	}
@@ -2013,10 +2034,10 @@ static struct mbuf *
 nd6_dad_na_input(struct mbuf *m, struct ifnet *ifp, struct in6_addr *taddr,
     caddr_t lladdr, int lladdrlen)
 {
-	struct ifaddr *ifa;
-	struct in6_ifaddr *ia;
-	struct dadq *dp;
-	struct nd_ifinfo *ndi;
+	struct ifaddr *ifa = NULL;
+	struct in6_ifaddr *ia = NULL;
+	struct dadq *dp = NULL;
+	struct nd_ifinfo *ndi = NULL;
 	boolean_t candisable, replicated;
 
 	ifa = (struct ifaddr *) in6ifa_ifpwithaddr(ifp, taddr);
@@ -2027,14 +2048,13 @@ nd6_dad_na_input(struct mbuf *m, struct ifnet *ifp, struct in6_addr *taddr,
 	replicated = FALSE;
 
 	/* Get the ND6_IFF_REPLICATED flag. */
-	lck_rw_lock_shared(nd_if_rwlock);
 	ndi = ND_IFINFO(ifp);
 	if (ndi != NULL && ndi->initialized) {
 		lck_mtx_lock(&ndi->lock);
 		replicated = !!(ndi->flags & ND6_IFF_REPLICATED);
 		lck_mtx_unlock(&ndi->lock);
 	}
-	lck_rw_done(nd_if_rwlock);
+
 	if (replicated) {
 		nd6log((LOG_INFO, "%s: ignoring duplicate NA on "
 		    "replicated interface %s\n", __func__, if_name(ifp)));

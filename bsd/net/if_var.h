@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -326,6 +326,204 @@ struct if_rxpoll_stats {
 	u_int32_t	ifi_poll_packets_limit;	/* max packets per poll call */
 	u_int64_t	ifi_poll_interval_time;	/* poll interval (nsec) */
 };
+
+/*
+ * Interface link status report -- includes statistics related to
+ * the link layer technology sent by the driver. The driver will monitor
+ * these statistics over an interval (3-4 secs) and will generate a report
+ * to the network stack. This will give first-hand information about the
+ * status of the first hop of the network path. The version and
+ * length values should be correct for the data to be processed correctly.
+ * The definitions are different for different kind of interfaces like
+ * Wifi, Cellular etc,.
+ */
+#define IF_CELLULAR_STATUS_REPORT_VERSION_1	1
+#define IF_WIFI_STATUS_REPORT_VERSION_1		1
+#define IF_CELLULAR_STATUS_REPORT_CURRENT_VERSION	\
+					IF_CELLULAR_STATUS_REPORT_VERSION_1
+#define IF_WIFI_STATUS_REPORT_CURRENT_VERSION	IF_WIFI_STATUS_REPORT_VERSION_1
+/*
+ * For cellular interface --
+ * There is no way to share common headers between the Baseband and
+ * the kernel. Any changes to this structure will need to be communicated
+ * to the Baseband team. It is better to use reserved space instead of
+ * changing the size or existing fields in the structure.
+ */
+struct if_cellular_status_v1 {
+	u_int32_t valid_bitmask; /* indicates which fields are valid */
+#define IF_CELL_LINK_QUALITY_METRIC_VALID	0x1
+#define IF_CELL_UL_EFFECTIVE_BANDWIDTH_VALID	0x2
+#define IF_CELL_UL_MAX_BANDWIDTH_VALID		0x4
+#define IF_CELL_UL_MIN_LATENCY_VALID		0x8
+#define IF_CELL_UL_EFFECTIVE_LATENCY_VALID	0x10
+#define IF_CELL_UL_MAX_LATENCY_VALID		0x20
+#define IF_CELL_UL_RETXT_LEVEL_VALID		0x40
+#define IF_CELL_UL_BYTES_LOST_VALID		0x80
+#define IF_CELL_UL_MIN_QUEUE_SIZE_VALID		0x100
+#define IF_CELL_UL_AVG_QUEUE_SIZE_VALID		0x200
+#define IF_CELL_UL_MAX_QUEUE_SIZE_VALID		0x400
+#define IF_CELL_DL_EFFECTIVE_BANDWIDTH_VALID	0x800
+#define IF_CELL_DL_MAX_BANDWIDTH_VALID		0x1000
+#define IF_CELL_CONFIG_INACTIVITY_TIME_VALID	0x2000
+#define IF_CELL_CONFIG_BACKOFF_TIME_VALID	0x4000
+	u_int32_t link_quality_metric;
+	u_int32_t ul_effective_bandwidth; /* Measured uplink bandwidth based on current activity (bps) */
+	u_int32_t ul_max_bandwidth; /* Maximum supported uplink bandwidth (bps) */
+	u_int32_t ul_min_latency; /* min expected uplink latency for first hop (ms) */
+	u_int32_t ul_effective_latency; /* current expected uplink latency for first hop (ms) */
+	u_int32_t ul_max_latency; /* max expected uplink latency first hop (ms) */
+	u_int32_t ul_retxt_level; /* Retransmission metric */
+#define IF_CELL_UL_RETXT_LEVEL_NONE	1
+#define IF_CELL_UL_RETXT_LEVEL_LOW	2
+#define IF_CELL_UL_RETXT_LEVEL_MEDIUM	3
+#define IF_CELL_UL_RETXT_LEVEL_HIGH	4
+	u_int32_t ul_bytes_lost; /* % of total bytes lost on uplink in Q10 format */
+	u_int32_t ul_min_queue_size; /* minimum bytes in queue */
+	u_int32_t ul_avg_queue_size; /* average bytes in queue */
+	u_int32_t ul_max_queue_size; /* maximum bytes in queue */
+	u_int32_t dl_effective_bandwidth; /* Measured downlink bandwidth based on current activity (bps) */
+	u_int32_t dl_max_bandwidth; /* Maximum supported downlink bandwidth (bps) */
+	u_int32_t config_inactivity_time; /* ms */
+	u_int32_t config_backoff_time; /* new connections backoff time in ms */
+	u_int64_t reserved_1;
+	u_int64_t reserved_2;
+	u_int64_t reserved_3;
+	u_int64_t reserved_4;
+	u_int64_t reserved_5;
+} __attribute__((packed));
+
+struct if_cellular_status {
+	union {
+		struct if_cellular_status_v1 if_status_v1;
+	} if_cell_u;
+};
+
+/*
+ * These statistics will be provided by the Wifi driver periodically.
+ * After sending each report, the driver should start computing again
+ * for the next report duration so that the values represent the link
+ * status for one report duration.
+ */
+
+struct if_wifi_status_v1 {
+	u_int32_t valid_bitmask;
+#define IF_WIFI_LINK_QUALITY_METRIC_VALID	0x1
+#define IF_WIFI_UL_EFFECTIVE_BANDWIDTH_VALID	0x2
+#define IF_WIFI_UL_MAX_BANDWIDTH_VALID		0x4
+#define IF_WIFI_UL_MIN_LATENCY_VALID		0x8
+#define IF_WIFI_UL_EFFECTIVE_LATENCY_VALID	0x10
+#define IF_WIFI_UL_MAX_LATENCY_VALID		0x20
+#define IF_WIFI_UL_RETXT_LEVEL_VALID		0x40
+#define IF_WIFI_UL_ERROR_RATE_VALID		0x80
+#define IF_WIFI_UL_BYTES_LOST_VALID		0x100
+#define IF_WIFI_DL_EFFECTIVE_BANDWIDTH_VALID	0x200
+#define IF_WIFI_DL_MAX_BANDWIDTH_VALID		0x400
+#define IF_WIFI_DL_MIN_LATENCY_VALID		0x800
+#define IF_WIFI_DL_EFFECTIVE_LATENCY_VALID	0x1000
+#define IF_WIFI_DL_MAX_LATENCY_VALID		0x2000
+#define IF_WIFI_DL_ERROR_RATE_VALID		0x4000
+#define IF_WIFI_CONFIG_FREQUENCY_VALID		0x8000
+#define IF_WIFI_CONFIG_MULTICAST_RATE_VALID	0x10000
+#define IF_WIFI_CONFIG_SCAN_COUNT_VALID		0x20000
+#define IF_WIFI_CONFIG_SCAN_DURATION_VALID	0x40000
+	u_int32_t link_quality_metric; /* link quality metric */
+	u_int32_t ul_effective_bandwidth; /* Measured uplink bandwidth based on current activity (bps) */
+	u_int32_t ul_max_bandwidth; /* Maximum supported uplink bandwidth (bps) */
+	u_int32_t ul_min_latency; /* min expected uplink latency for first hop (ms) */
+	u_int32_t ul_effective_latency; /* current expected uplink latency for first hop (ms) */
+	u_int32_t ul_max_latency; /* max expected uplink latency for first hop (ms) */
+	u_int32_t ul_retxt_level; /* Retransmission metric */
+#define IF_WIFI_UL_RETXT_LEVEL_NONE	1
+#define IF_WIFI_UL_RETXT_LEVEL_LOW	2
+#define IF_WIFI_UL_RETXT_LEVEL_MEDIUM	3
+#define IF_WIFI_UL_RETXT_LEVEL_HIGH	4
+	u_int32_t ul_bytes_lost; /* % of total bytes lost on uplink in Q10 format */
+	u_int32_t ul_error_rate; /* % of bytes dropped on uplink after many retransmissions in Q10 format */
+	u_int32_t dl_effective_bandwidth; /* Measured downlink bandwidth based on current activity (bps) */
+	u_int32_t dl_max_bandwidth; /* Maximum supported downlink bandwidth (bps) */
+	/*
+	 * The download latency values indicate the time AP may have to wait for the
+	 * driver to receive the packet. These values give the range of expected latency
+	 * mainly due to co-existence events and channel hopping where the interface
+	 * becomes unavailable.
+	 */
+	u_int32_t dl_min_latency; /* min expected latency for first hop in ms */
+	u_int32_t dl_effective_latency; /* current expected latency for first hop in ms */
+	u_int32_t dl_max_latency; /* max expected latency for first hop in ms */
+	u_int32_t dl_error_rate; /* % of CRC or other errors in Q10 format */
+	u_int32_t config_frequency; /* 2.4 or 5 GHz */
+#define IF_WIFI_CONFIG_FREQUENCY_2_4_GHZ	1
+#define IF_WIFI_CONFIG_FREQUENCY_5_0_GHZ	2
+	u_int32_t config_multicast_rate; /* bps */
+	u_int32_t scan_count; /* scan count during the previous period */
+	u_int32_t scan_duration; /* scan duration in ms */
+	u_int64_t reserved_1;
+	u_int64_t reserved_2;
+	u_int64_t reserved_3;
+	u_int64_t reserved_4;
+} __attribute__((packed));
+
+struct if_wifi_status {
+	union {
+		struct if_wifi_status_v1 if_status_v1;
+	} if_wifi_u;
+};
+
+struct if_link_status {
+	u_int32_t	ifsr_version;	/* version of this report */
+	u_int32_t	ifsr_len;	/* length of the following struct */
+	union {
+		struct if_cellular_status ifsr_cell;
+		struct if_wifi_status ifsr_wifi;
+	} ifsr_u;
+};
+
+struct if_interface_state {
+	/*
+	 * The bitmask tells which of the fields
+	 * to consider:
+	 * - When setting, to control which fields
+	 *   are being modified;
+	 * - When getting, it tells which fields are set.
+	 */
+	u_int8_t valid_bitmask;
+#define	IF_INTERFACE_STATE_RRC_STATE_VALID		0x1
+#define	IF_INTERFACE_STATE_LQM_STATE_VALID		0x2
+#define	IF_INTERFACE_STATE_INTERFACE_AVAILABILITY_VALID	0x4
+
+	/*
+	 * Valid only for cellular interface
+	 */
+	u_int8_t rrc_state;
+#define	IF_INTERFACE_STATE_RRC_STATE_IDLE	0x0
+#define	IF_INTERFACE_STATE_RRC_STATE_CONNECTED	0x1
+
+	/*
+	 * Values normalized to the edge of the following values
+	 * that are defined on <net/if.h>:
+	 *  IFNET_LQM_THRESH_BAD
+	 *  IFNET_LQM_THRESH_POOR
+	 *  IFNET_LQM_THRESH_GOOD
+	 */
+	int8_t lqm_state;
+
+	/*
+	 * Indicate if the underlying link is currently
+	 * available 
+	 */
+	u_int8_t interface_availability;
+#define	IF_INTERFACE_STATE_INTERFACE_AVAILABLE		0x0
+#define	IF_INTERFACE_STATE_INTERFACE_UNAVAILABLE	0x1
+};
+
+struct chain_len_stats {
+	uint64_t	cls_one;
+	uint64_t	cls_two;
+	uint64_t	cls_three;
+	uint64_t	cls_four;
+	uint64_t	cls_five_or_more;
+};
+
 #endif /* PRIVATE */
 
 #pragma pack()
@@ -362,7 +560,7 @@ struct if_data_internal {
 	u_int32_t	ifi_mtu;	/* maximum transmission unit */
 	u_int32_t	ifi_metric;	/* routing metric (external only) */
 	u_int32_t	ifi_baudrate;	/* linespeed */
-	u_int32_t	_pad;
+	u_int32_t	ifi_preamblelen;/* length of the packet preamble */
 	/* volatile statistics */
 	u_int64_t	ifi_ipackets;	/* packets received on interface */
 	u_int64_t	ifi_ierrors;	/* input errors on interface */
@@ -414,6 +612,7 @@ struct if_measured_bw {
 #define if_physical	if_data.ifi_physical
 #define	if_addrlen	if_data.ifi_addrlen
 #define	if_hdrlen	if_data.ifi_hdrlen
+#define	if_preamblelen	if_data.ifi_preamblelen
 #define	if_metric	if_data.ifi_metric
 #define	if_baudrate	if_data.ifi_baudrate
 #define	if_hwassist	if_data.ifi_hwassist
@@ -589,7 +788,13 @@ struct ifnet {
 	decl_lck_mtx_data(, if_start_lock);
 	u_int32_t		if_start_flags;	/* see IFSF flags below */
 	u_int32_t		if_start_req;
-	u_int32_t		if_start_active; /* output is active */
+	u_int16_t		if_start_active; /* output is active */
+	u_int16_t		if_start_delayed;
+	u_int16_t		if_start_delay_qlen;
+	u_int16_t		if_start_delay_idle;
+	u_int64_t		if_start_delay_swin;
+	u_int32_t		if_start_delay_cnt;
+	u_int32_t		if_start_delay_timeout;	/* nanoseconds */
 	struct timespec		if_start_cycle;	 /* restart interval */
 	struct thread		*if_start_thread;
 
@@ -664,7 +869,6 @@ struct ifnet {
 	struct mld_ifinfo	*if_mli;	/* for MLDv2 */
 #endif /* INET6 */
 
-	int			if_lqm;		/* link quality metric */
 #if MEASURE_BW
 	struct if_measured_bw	if_bw;
 #endif /* MEASURE_BW */
@@ -686,13 +890,24 @@ struct ifnet {
 		uint32_t	expensive:1;	/* delegated i/f expensive? */
 	} if_delegated;
 
+#define	IF_MAXAGENTS	8
+	uuid_t			if_agentids[IF_MAXAGENTS];
+
 	u_int64_t		if_data_threshold;
 	u_int32_t		if_fg_sendts;	/* last send on a fg socket in seconds */
+	u_int32_t		if_rt_sendts;	/* last of a real time packet */
 
+#if INET
+	decl_lck_rw_data(, if_inetdata_lock);
+	void			*if_inetdata;
+#endif /* INET */
 #if INET6
 	decl_lck_rw_data(, if_inet6data_lock);
 	void			*if_inet6data;
 #endif
+	decl_lck_rw_data(, if_link_status_lock);
+	struct if_link_status	*if_link_status;
+	struct if_interface_state	if_interface_state;
 };
 
 #define	IF_TCP_STATINC(_ifp, _s) do {					\
@@ -834,6 +1049,7 @@ struct ifaddr {
 	void (*ifa_attached)(struct ifaddr *); /* callback fn for attaching */
 	void (*ifa_detached)(struct ifaddr *); /* callback fn for detaching */
 };
+
 
 /*
  * Valid values for ifa_flags
@@ -1064,7 +1280,10 @@ extern struct if_clone *if_clone_lookup(const char *, u_int32_t *);
 extern int if_clone_attach(struct if_clone *);
 extern void if_clone_detach(struct if_clone *);
 
+extern u_int32_t if_functional_type(struct ifnet *);
+
 extern errno_t if_mcasts_update(struct ifnet *);
+extern int32_t total_snd_byte_count;
 
 typedef enum {
 	IFNET_LCK_ASSERT_EXCLUSIVE,	/* RW: held as writer */
@@ -1080,6 +1299,12 @@ __private_extern__ void ifnet_lock_assert(struct ifnet *, ifnet_lock_assert_t);
 __private_extern__ void ifnet_lock_shared(struct ifnet *ifp);
 __private_extern__ void ifnet_lock_exclusive(struct ifnet *ifp);
 __private_extern__ void ifnet_lock_done(struct ifnet *ifp);
+
+#if INET
+__private_extern__ void if_inetdata_lock_shared(struct ifnet *ifp);
+__private_extern__ void if_inetdata_lock_exclusive(struct ifnet *ifp);
+__private_extern__ void if_inetdata_lock_done(struct ifnet *ifp);
+#endif
 
 #if INET6
 __private_extern__ void if_inet6data_lock_shared(struct ifnet *ifp);
@@ -1176,7 +1401,13 @@ __private_extern__ struct rtentry *ifnet_cached_rtlookup_inet6(struct ifnet *,
     struct in6_addr *);
 #endif /* INET6 */
 
-__private_extern__ void if_lqm_update(struct ifnet *, int32_t);
+__private_extern__ errno_t if_state_update(struct ifnet *,
+    struct if_interface_state *);
+__private_extern__ void if_get_state(struct ifnet *,
+    struct if_interface_state *);
+__private_extern__ errno_t if_probe_connectivity(struct ifnet *ifp,
+    u_int32_t conn_probe);
+__private_extern__ void if_lqm_update(struct ifnet *, int32_t, int);
 __private_extern__ void ifnet_update_sndq(struct ifclassq *, cqev_t);
 __private_extern__ void ifnet_update_rcv(struct ifnet *, cqev_t);
 
@@ -1193,6 +1424,13 @@ __private_extern__ errno_t ifnet_set_input_latencies(struct ifnet *,
     struct if_latencies *);
 __private_extern__ errno_t ifnet_set_output_latencies(struct ifnet *,
     struct if_latencies *, boolean_t);
+
+__private_extern__ void ifnet_clear_netagent(uuid_t);
+
+__private_extern__ int ifnet_set_netsignature(struct ifnet *, uint8_t,
+    uint8_t, uint16_t, uint8_t *);
+__private_extern__ int ifnet_get_netsignature(struct ifnet *, uint8_t,
+    uint8_t *, uint16_t *, uint8_t *);
 
 __private_extern__ errno_t ifnet_framer_stub(struct ifnet *, struct mbuf **,
     const struct sockaddr *, const char *, const char *, u_int32_t *,

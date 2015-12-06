@@ -7,6 +7,20 @@ import sys
 ######################################
 plane = None
 
+#####################################
+# Utility functions.
+#####################################
+def CastIOKitClass(obj, target_type):
+    """ Type cast an object to another IOKIT CPP class.
+        params:
+            obj - core.value  object representing some C construct in lldb
+            target_type - str : ex 'OSString *'
+                        - lldb.SBType :
+    """
+    v = Cast(obj, target_type)
+    v.GetSBValue().SetPreferDynamicValue(lldb.eNoDynamicValues)
+    return v
+
 ######################################
 # Type Summaries
 ######################################
@@ -52,17 +66,17 @@ def GetObjectSummary(obj):
     
     ztvAddr = kern.GetLoadAddressForSymbol('_ZTV7OSArray')
     if vt == ztvAddr:
-        out_string += "(" + GetArray(Cast(obj, 'OSArray *')) + ")"
+        out_string += "(" + GetArray(CastIOKitClass(obj, 'OSArray *')) + ")"
         return out_string
     
     ztvAddr = kern.GetLoadAddressForSymbol('_ZTV5OSSet')
     if vt == ztvAddr:
-        out_string += GetSet(Cast(obj, 'OSSet *'))
+        out_string += GetSet(CastIOKitClass(obj, 'OSSet *'))
         return out_string
     
     ztvAddr = kern.GetLoadAddressForSymbol('_ZTV12OSDictionary')
     if vt == ztvAddr:
-        out_string += GetDictionary(Cast(obj, 'OSDictionary *'))
+        out_string += GetDictionary(CastIOKitClass(obj, 'OSDictionary *'))
         return out_string
     
     return out_string
@@ -85,9 +99,9 @@ def GetRegistryEntrySummary(entry):
         name = LookupKeyInOSDict(propertyTable, kern.globals.gIOClassKey)
     
     if name is not None:
-        out_string += "+-o {0:s}  ".format(GetString(Cast(name, 'OSString *')))
-    elif Cast(entry, 'IOService *').pwrMgt and Cast(entry, 'IOService *').pwrMgt.Name:
-        out_string += "+-o {0:s}  ".format(Cast(entry, 'IOService *').pwrMgt.Name)
+        out_string += "+-o {0:s}  ".format(GetString(CastIOKitClass(name, 'OSString *')))
+    elif CastIOKitClass(entry, 'IOService *').pwrMgt and CastIOKitClass(entry, 'IOService *').pwrMgt.Name:
+        out_string += "+-o {0:s}  ".format(CastIOKitClass(entry, 'IOService *').pwrMgt.Name)
     else:
         out_string += "+-o ??  "
     
@@ -102,7 +116,7 @@ def GetRegistryEntrySummary(entry):
     ztvAddr = kern.GetLoadAddressForSymbol('_ZTV15IORegistryEntry')
     if vtableAddr != ztvAddr:
         out_string += ", "
-        state = Cast(entry, 'IOService *').__state[0]
+        state = CastIOKitClass(entry, 'IOService *').__state[0]
         # kIOServiceRegisteredState
         if 0 == state & 2:
             out_string += "!"
@@ -114,11 +128,9 @@ def GetRegistryEntrySummary(entry):
         #kIOServiceInactiveState
         if 0 != state & 1:
             out_string += "in"
-        busyCount = (Cast(entry, 'IOService *').__state[1] & 0xff)
-        retCount = (Cast(entry, 'IOService *').retainCount & 0xffff)
+        busyCount = (CastIOKitClass(entry, 'IOService *').__state[1] & 0xff)
+        retCount = (CastIOKitClass(entry, 'IOService *').retainCount & 0xffff)
         out_string += "active, busy {0}, retain count {1}>".format(busyCount, retCount)
-    #else:
-    #    out_string += "\n"
     return out_string
 
 ######################################
@@ -133,7 +145,7 @@ def ShowAllClasses(cmd_args=None):
     count = unsigned(kern.globals.sAllClassesDict.count)
     
     while idx < count:
-        meta = Cast(kern.globals.sAllClassesDict.dictionary[idx].value, 'OSMetaClass *')
+        meta = CastIOKitClass(kern.globals.sAllClassesDict.dictionary[idx].value, 'OSMetaClass *')
         idx += 1
         print GetMetaClass(meta)
 
@@ -462,13 +474,13 @@ def ShowRegistryEntryRecurse(entry, prefix, printProps):
     childArray = LookupKeyInOSDict(registryTable, childKey)
     if childArray is not None:
         idx = 0
-        ca = Cast(childArray, 'OSArray *')
+        ca = CastIOKitClass(childArray, 'OSArray *')
         count = unsigned(ca.count)
         while idx < count:
             if plen != 0 and plen != 1 and (plen & (plen - 1)) == 0:
-                ShowRegistryEntryRecurse(Cast(ca.array[idx], 'IORegistryEntry *'), prefix + "| ", printProps)
+                ShowRegistryEntryRecurse(CastIOKitClass(ca.array[idx], 'IORegistryEntry *'), prefix + "| ", printProps)
             else:
-                ShowRegistryEntryRecurse(Cast(ca.array[idx], 'IORegistryEntry *'), prefix + "  ", printProps)
+                ShowRegistryEntryRecurse(CastIOKitClass(ca.array[idx], 'IORegistryEntry *'), prefix + "  ", printProps)
             idx += 1
 
 def FindRegistryEntryRecurse(entry, search_name, stopAfterFirst):
@@ -490,12 +502,12 @@ def FindRegistryEntryRecurse(entry, search_name, stopAfterFirst):
         name = LookupKeyInOSDict(propertyTable, kern.globals.gIOClassKey)
     
     if name is not None:
-        if str(Cast(name, 'OSString *').string) == search_name:
+        if str(CastIOKitClass(name, 'OSString *').string) == search_name:
             print GetRegistryEntrySummary(entry)
             if stopAfterFirst is True:
                 return True
-    elif Cast(entry, 'IOService *').pwrMgt and Cast(entry, 'IOService *').pwrMgt.Name:
-        name = Cast(entry, 'IOService *').pwrMgt.Name
+    elif CastIOKitClass(entry, 'IOService *').pwrMgt and CastIOKitClass(entry, 'IOService *').pwrMgt.Name:
+        name = CastIOKitClass(entry, 'IOService *').pwrMgt.Name
         if str(name) == search_name:
             print GetRegistryEntrySummary(entry)
             if stopAfterFirst is True:
@@ -509,10 +521,10 @@ def FindRegistryEntryRecurse(entry, search_name, stopAfterFirst):
     childArray = LookupKeyInOSDict(registryTable, childKey)
     if childArray is not None:
         idx = 0
-        ca = Cast(childArray, 'OSArray *')
+        ca = CastIOKitClass(childArray, 'OSArray *')
         count = unsigned(ca.count)
         while idx < count:
-            if FindRegistryEntryRecurse(Cast(ca.array[idx], 'IORegistryEntry *'), search_name, stopAfterFirst) is True:
+            if FindRegistryEntryRecurse(CastIOKitClass(ca.array[idx], 'IORegistryEntry *'), search_name, stopAfterFirst) is True:
                 return True
             idx += 1
     return False
@@ -537,10 +549,10 @@ def FindRegistryObjectRecurse(entry, search_name):
         name = LookupKeyInOSDict(propertyTable, kern.globals.gIOClassKey)
     
     if name is not None:
-        if str(Cast(name, 'OSString *').string) == search_name:
+        if str(CastIOKitClass(name, 'OSString *').string) == search_name:
             return entry
-    elif Cast(entry, 'IOService *').pwrMgt and Cast(entry, 'IOService *').pwrMgt.Name:
-        name = Cast(entry, 'IOService *').pwrMgt.Name
+    elif CastIOKitClass(entry, 'IOService *').pwrMgt and CastIOKitClass(entry, 'IOService *').pwrMgt.Name:
+        name = CastIOKitClass(entry, 'IOService *').pwrMgt.Name
         if str(name) == search_name:
             return entry
     
@@ -551,9 +563,9 @@ def FindRegistryObjectRecurse(entry, search_name):
         childKey = plane.keys[1]
     childArray = LookupKeyInOSDict(registryTable, childKey)
     if childArray is not None:
-        ca = Cast(childArray, 'OSArray *')
+        ca = CastIOKitClass(childArray, 'OSArray *')
         for idx in range(ca.count):
-            registry_object = FindRegistryObjectRecurse(Cast(ca.array[idx], 'IORegistryEntry *'), search_name)
+            registry_object = FindRegistryObjectRecurse(CastIOKitClass(ca.array[idx], 'IORegistryEntry *'), search_name)
             if not registry_object or int(registry_object) == int(0):
                 continue
             else:
@@ -609,11 +621,11 @@ def GetRegDictionary(osdict, prefix):
 def GetString(string):
     """ Returns the python string representation of a given OSString
     """
-    out_string = "\"{0:s}\"".format(Cast(string, 'OSString *').string)
+    out_string = "\"{0:s}\"".format(CastIOKitClass(string, 'OSString *').string)
     return out_string
 
 def GetNumber(num):
-    out_string = "{0:d}".format(Cast(num, 'OSNumber *').value)
+    out_string = "{0:d}".format(CastIOKitClass(num, 'OSNumber *').value)
     return out_string
 
 def GetBoolean(b):
@@ -784,8 +796,8 @@ def showinterruptcounts(cmd_args=None):
     print header_format.format("Name", "Index", "Count")
     
     for i in kern.interrupt_stats:
-        owner = Cast(i.owner, 'IOInterruptEventSource *')
-        nub = Cast(owner.provider, 'IORegistryEntry *') 
+        owner = CastIOKitClass(i.owner, 'IOInterruptEventSource *')
+        nub = CastIOKitClass(owner.provider, 'IORegistryEntry *') 
         name = None
 
         # To uniquely identify an interrupt, we need the nub name and the index.  The index
@@ -803,7 +815,7 @@ def showinterruptcounts(cmd_args=None):
         if name is None:
             nub_name = "Unknown"
         else:
-            nub_name = GetString(Cast(name, 'OSString *'))
+            nub_name = GetString(CastIOKitClass(name, 'OSString *'))
 
         # We now have everything we need; spew the requested data.
 
@@ -834,8 +846,8 @@ def showinterruptstats(cmd_args=None):
     print header_format.format("Name", "Index", "Interrupt Count", "Interrupt Time", "Workloop Count", "Workloop CPU Time", "Workloop Time")
     
     for i in kern.interrupt_stats:
-        owner = Cast(i.owner, 'IOInterruptEventSource *')
-        nub = Cast(owner.provider, 'IORegistryEntry *') 
+        owner = CastIOKitClass(i.owner, 'IOInterruptEventSource *')
+        nub = CastIOKitClass(owner.provider, 'IORegistryEntry *') 
         name = None
 
         # To uniquely identify an interrupt, we need the nub name and the index.  The index
@@ -853,7 +865,7 @@ def showinterruptstats(cmd_args=None):
         if name is None:
             nub_name = "Unknown"
         else:
-            nub_name = GetString(Cast(name, 'OSString *'))
+            nub_name = GetString(CastIOKitClass(name, 'OSString *'))
 
         # We now have everything we need; spew the requested data.
 

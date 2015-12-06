@@ -1722,14 +1722,22 @@ OSStatus	BTDeleteRecord		(FCB						*filePtr,
 
 	/////////////////////// Extend File If Necessary ////////////////////////////
 
-	if ((btreePtr->treeDepth + 1UL) > btreePtr->totalNodes)
+	/*
+	 * Worst case: we delete the first record in the tree and
+	 * following key is sufficiently larger to cause all parents to
+	 * require splitting and we need a new root node and a new map
+	 * node.
+	 */
+	if (index == 0 && btreePtr->treeDepth + 1 > btreePtr->freeNodes)
 	{
-		nodesNeeded = btreePtr->treeDepth + 1 + btreePtr->totalNodes;
+		nodesNeeded = btreePtr->treeDepth + btreePtr->totalNodes;
 		if (nodesNeeded > CalcMapBits (btreePtr))
 			++nodesNeeded;
 
-		err = ExtendBTree (btreePtr, nodesNeeded);
-		M_ExitOnError (err);
+		if (nodesNeeded - btreePtr->totalNodes > btreePtr->freeNodes) {
+			err = ExtendBTree (btreePtr, nodesNeeded);
+			M_ExitOnError (err);
+		}
 	}
 
 	///////////////////////////// Delete Record /////////////////////////////////

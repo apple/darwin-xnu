@@ -1,3 +1,33 @@
+/*
+ * Copyright (c) 2014 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+#ifndef HFS_KDEBUG_H_
+#define HFS_KDEBUG_H_
+
 #include <sys/kdebug.h>
 
 /*
@@ -22,9 +52,9 @@ enum {
 	HFSDBG_BLOCK_DEALLOCATE		= HFSDBG_CODE(5),	/* 0x03080014 */
 	HFSDBG_READ_BITMAP_BLOCK	= HFSDBG_CODE(6),	/* 0x03080018 */
 	HFSDBG_RELEASE_BITMAP_BLOCK	= HFSDBG_CODE(7),	/* 0x0308001C */
-	HFSDBG_ALLOC_CONTIG_BITMAP	= HFSDBG_CODE(8),	/* 0x03080020 */
+	HFSDBG_FIND_CONTIG_BITMAP	= HFSDBG_CODE(8),	/* 0x03080020 */
 	HFSDBG_ALLOC_ANY_BITMAP		= HFSDBG_CODE(9),	/* 0x03080024 */
-	HFSDBG_ALLOC_KNOWN_BITMAP	= HFSDBG_CODE(10),	/* 0x03080028 */
+	HFSDBG_ALLOC_FIND_KNOWN		= HFSDBG_CODE(10),	/* 0x03080028 */
 	HFSDBG_MARK_ALLOC_BITMAP	= HFSDBG_CODE(11),	/* 0x0308002C */
 	HFSDBG_MARK_FREE_BITMAP		= HFSDBG_CODE(12),	/* 0x03080030 */
 	HFSDBG_BLOCK_FIND_CONTIG	= HFSDBG_CODE(13),	/* 0x03080034 */
@@ -38,7 +68,7 @@ enum {
 	HFSDBG_SYNCER        		= HFSDBG_CODE(21),	/* 0x03080054 */
 	HFSDBG_SYNCER_TIMED   		= HFSDBG_CODE(22),	/* 0x03080058 */
 	HFSDBG_UNMAP_SCAN    		= HFSDBG_CODE(23),	/* 0x0308005C */	
-	HFSDBG_UNMAP_SCAN_TRIM   	= HFSDBG_CODE(24)	/* 0x03080060 */
+	HFSDBG_UNMAP_SCAN_TRIM   	= HFSDBG_CODE(24),	/* 0x03080060 */
 };
 
 /*
@@ -62,10 +92,10 @@ enum {
     5       HFSDBG_BLOCK_DEALLOCATE     startBlock, blockCount, flags, 0, 0 ... err, 0, 0, 0, 0
     6       HFSDBG_READ_BITMAP_BLOCK    startBlock, 0, 0, 0, 0 ... err, 0, 0, 0, 0
     7       HFSDBG_RELEASE_BITMAP_BLOCK dirty, 0, 0, 0, 0 ... 0, 0, 0, 0, 0
-    8       HFSDBG_ALLOC_CONTIG_BITMAP  startBlock, minBlocks, maxBlocks, useMeta, 0 ... err, actualStartBlock, actualBlockCount, 0, 0
+    8       HFSDBG_FIND_CONTIG_BITMAP	startBlock, minBlocks, maxBlocks, useMeta, 0 ... err, actualStartBlock, actualBlockCount, 0, 0
     9       HFSDBG_ALLOC_ANY_BITMAP     startBlock, endBlock,  maxBlocks, useMeta, 0 ... err, actualStartBlock, actualBlockCount, 0, 0
-    10      HFSDBG_ALLOC_KNOWN_BITMAP   0, 0, maxBlocks, 0, 0 ... err, actualStartBlock, actualBlockCount, 0, 0
-    11      HFSDBG_MARK_ALLOC_BITMAP    startBlock, blockCount, 0, 0, 0 ... err, 0, 0, 0, 0
+    10      HFSDBG_ALLOC_FIND_KNOWN		0, 0, maxBlocks, 0, 0 ... err, actualStartBlock, actualBlockCount, 0, 0
+    11      HFSDBG_MARK_ALLOC_BITMAP    startBlock, blockCount, flags, 0, 0 ... err, 0, 0, 0, 0
     12      HFSDBG_MARK_FREE_BITMAP     startBlock, blockCount, valid, 0, 0 ... err, 0, 0, 0, 0
     13      HFSDBG_BLOCK_FIND_CONTIG    startBlock, endBlock, minBlocks, maxBlocks, 0 ... err, actualStartBlock, actualBlockCount, 0, 0
     14      HFSDBG_IS_ALLOCATED         startBlock, blockCount, stop, 0, 0 ... err, 0, actualBlockCount, 0, 0
@@ -80,3 +110,5 @@ enum {
     23      HFSDBG_UNMAP_SCAN           hfs_raw_dev, 0, 0, 0, 0 ... hfs_raw_dev, error, 0, 0, 0
     24      HFSDBG_UNMAP_TRIM           hfs_raw_dev, 0, 0, 0, 0 ... hfs_raw_dev, error, 0, 0, 0  
 */
+
+#endif // HFS_KDEBUG_H_

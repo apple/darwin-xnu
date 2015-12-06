@@ -49,15 +49,6 @@ OSMetaClassDefineReservedUnused(OSDictionary, 5);
 OSMetaClassDefineReservedUnused(OSDictionary, 6);
 OSMetaClassDefineReservedUnused(OSDictionary, 7);
 
-#if OSALLOCDEBUG
-extern "C" {
-    extern int debug_container_malloc_size;
-};
-#define ACCUMSIZE(s) do { debug_container_malloc_size += (s); } while(0)
-#else
-#define ACCUMSIZE(s)
-#endif
-
 #define EXT_CAST(obj) \
     reinterpret_cast<OSObject *>(const_cast<OSMetaClassBase *>(obj))
 
@@ -72,12 +63,12 @@ bool OSDictionary::initWithCapacity(unsigned int inCapacity)
     unsigned int size = inCapacity * sizeof(dictEntry);
 //fOptions |= kSort;
 
-    dictionary = (dictEntry *) kalloc(size);
+    dictionary = (dictEntry *) kalloc_container(size);
     if (!dictionary)
         return false;
 
     bzero(dictionary, size);
-    ACCUMSIZE(size);
+    OSCONTAINER_ACCUMSIZE(size);
 
     count = 0;
     capacity = inCapacity;
@@ -254,7 +245,7 @@ void OSDictionary::free()
     flushCollection();
     if (dictionary) {
         kfree(dictionary, capacity * sizeof(dictEntry));
-        ACCUMSIZE( -(capacity * sizeof(dictEntry)) );
+        OSCONTAINER_ACCUMSIZE( -(capacity * sizeof(dictEntry)) );
     }
 
     super::free();
@@ -293,14 +284,14 @@ unsigned int OSDictionary::ensureCapacity(unsigned int newCapacity)
     
     newSize = sizeof(dictEntry) * finalCapacity;
 
-    newDict = (dictEntry *) kalloc(newSize);
+    newDict = (dictEntry *) kalloc_container(newSize);
     if (newDict) {
         oldSize = sizeof(dictEntry) * capacity;
 
         bcopy(dictionary, newDict, oldSize);
         bzero(&newDict[capacity], newSize - oldSize);
 
-        ACCUMSIZE(newSize - oldSize);
+        OSCONTAINER_ACCUMSIZE(((size_t)newSize) - ((size_t)oldSize));
         kfree(dictionary, oldSize);
 
         dictionary = newDict;

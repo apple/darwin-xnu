@@ -219,6 +219,7 @@ enum {
     kIOMap64Bit			= 0x08000000,
 #endif
     kIOMapPrefault		= 0x10000000,
+    kIOMapOverwrite     = 0x20000000
 };
 
 /*! @enum Scale Factors

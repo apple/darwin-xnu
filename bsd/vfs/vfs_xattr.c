@@ -598,7 +598,7 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	}
 
 	iosize = bufsize = MIN(datasize, NS_IOBUFSIZE);
-	if (kmem_alloc(kernel_map, (vm_offset_t *)&bufptr, bufsize)) {
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&bufptr, bufsize, VM_KERN_MEMORY_FILE)) {
 		return (ENOMEM);
 	}
 	auio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
@@ -941,7 +941,7 @@ retry:
         	size_t  iosize;
 
 		iosize = bufsize = MIN(datasize, NS_IOBUFSIZE);
-		if (kmem_alloc(kernel_map, (vm_offset_t *)&bufptr, bufsize)) {
+		if (kmem_alloc(kernel_map, (vm_offset_t *)&bufptr, bufsize, VM_KERN_MEMORY_FILE)) {
 			error = ENOMEM;
 			goto out;
 		}
@@ -3215,7 +3215,7 @@ shift_data_down(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t
 	}
 	orig_chunk = chunk;
 
-	if (kmem_alloc(kernel_map, (vm_offset_t *)&buff, chunk)) {
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&buff, chunk, VM_KERN_MEMORY_FILE)) {
 		return ENOMEM;
 	}
 
@@ -3270,7 +3270,7 @@ shift_data_up(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t c
 	orig_chunk = chunk;
 	end = start + len;
 
-	if (kmem_alloc(kernel_map, (vm_offset_t *)&buff, chunk)) {
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&buff, chunk, VM_KERN_MEMORY_FILE)) {
 		return ENOMEM;
 	}
 

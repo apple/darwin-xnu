@@ -368,7 +368,10 @@ struct vm_object {
 		io_tracking:1,
 		__object2_unused_bits:7;	/* for expansion */
 
-	uint32_t		scan_collisions;
+	uint8_t			scan_collisions;
+        vm_tag_t		wire_tag;
+	uint8_t			__object4_unused_bits[2];
+
 #if CONFIG_PHANTOM_CACHE
 	uint32_t		phantom_object_id;
 #endif
@@ -401,34 +404,6 @@ struct vm_object {
 	((object)->volatile_fault &&					\
 	 ((object)->purgable == VM_PURGABLE_VOLATILE ||			\
 	  (object)->purgable == VM_PURGABLE_EMPTY))
-
-#define VM_PAGE_REMOVE(page)						\
-	MACRO_BEGIN							\
-	vm_page_t __page = (page);					\
-	vm_object_t __object = __page->object;				\
-	if (__page == __object->memq_hint) {				\
-		vm_page_t	__new_hint;				\
-		queue_entry_t	__qe;					\
-		__qe = queue_next(&__page->listq);			\
-		if (queue_end(&__object->memq, __qe)) {			\
-			__qe = queue_prev(&__page->listq);		\
-			if (queue_end(&__object->memq, __qe)) {		\
-				__qe = NULL;				\
-			}						\
-		}							\
-		__new_hint = (vm_page_t) __qe;				\
-		__object->memq_hint = __new_hint;			\
-	}								\
-	queue_remove(&__object->memq, __page, vm_page_t, listq);	\
-	MACRO_END
-
-#define VM_PAGE_INSERT(page, object)				\
-	MACRO_BEGIN						\
-	vm_page_t __page = (page);				\
-	vm_object_t __object = (object);			\
-	queue_enter(&__object->memq, __page, vm_page_t, listq); \
-	__object->memq_hint = __page;				\
-	MACRO_END
 
 extern
 vm_object_t	kernel_object;		/* the single kernel object */
@@ -480,6 +455,29 @@ extern lck_attr_t		vm_map_lck_attr;
 #define msr_lock(msr)   lck_mtx_lock(&(msr)->msync_req_lock)
 #define msr_unlock(msr) lck_mtx_unlock(&(msr)->msync_req_lock)
 
+#define VM_OBJECT_WIRED(object)						\
+    MACRO_BEGIN								\
+    if ((object)->purgable == VM_PURGABLE_DENY)				\
+    {									\
+	lck_spin_lock(&vm_objects_wired_lock);				\
+	assert(!(object)->objq.next);					\
+	queue_enter(&vm_objects_wired, (object), vm_object_t, objq);    \
+	lck_spin_unlock(&vm_objects_wired_lock);			\
+    }									\
+    MACRO_END
+
+#define VM_OBJECT_UNWIRED(object)					 \
+    MACRO_BEGIN								 \
+    (object)->wire_tag = VM_KERN_MEMORY_NONE;				 \
+    if (((object)->purgable == VM_PURGABLE_DENY) && (object)->objq.next) \
+    {									 \
+	lck_spin_lock(&vm_objects_wired_lock);				 \
+	queue_remove(&vm_objects_wired, (object), vm_object_t, objq);    \
+	lck_spin_unlock(&vm_objects_wired_lock);			 \
+    }									 \
+    MACRO_END
+
+
 /*
  *	Declare procedures that operate on VM objects.
  */
@@ -492,8 +490,7 @@ __private_extern__ void		vm_object_init_lck_grp(void);
 
 __private_extern__ void		vm_object_reaper_init(void);
 
-__private_extern__ vm_object_t	vm_object_allocate(
-					vm_object_size_t	size);
+__private_extern__ vm_object_t	vm_object_allocate(vm_object_size_t size);
 
 __private_extern__ void    _vm_object_allocate(vm_object_size_t size,
 			    vm_object_t object);
@@ -590,7 +587,9 @@ __private_extern__ void		vm_object_deactivate_pages(
 					vm_object_offset_t	offset,
 					vm_object_size_t	size,
 					boolean_t               kill_page,
-					boolean_t		reusable_page);
+					boolean_t		reusable_page,
+					struct pmap		*pmap,
+					vm_map_offset_t		pmap_offset);
 
 __private_extern__ void	vm_object_reuse_pages(
 	vm_object_t		object,
@@ -687,7 +686,7 @@ __private_extern__ kern_return_t vm_object_upl_request(
 				upl_t			*upl,
 				upl_page_info_t		*page_info,
 				unsigned int		*count,
-				int			flags);
+				upl_control_flags_t	flags);
 
 __private_extern__ kern_return_t vm_object_transpose(
 				vm_object_t		object1,
@@ -798,13 +797,21 @@ vm_object_pack_pages(
 	struct default_freezer_handle *df_handle);
 
 __private_extern__ void
-vm_object_pageout(
+vm_object_compressed_freezer_pageout(
 	vm_object_t     object);
+
+__private_extern__ void
+vm_object_compressed_freezer_done(
+	void);
 
 __private_extern__  kern_return_t
 vm_object_pagein(
 	vm_object_t     object);
 #endif /* CONFIG_FREEZE */
+
+__private_extern__ void
+vm_object_pageout(
+	vm_object_t     object);
 
 #if CONFIG_IOSCHED
 struct io_reprioritize_req {
@@ -1046,10 +1053,13 @@ extern boolean_t	vm_object_lock_try_shared(vm_object_t);
 	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_SHARED)
 #define vm_object_lock_assert_exclusive(object) \
 	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_EXCLUSIVE)
+#define vm_object_lock_assert_notheld(object) \
+	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_NOTHELD)
 #else  /* MACH_ASSERT || DEBUG */ 
 #define vm_object_lock_assert_held(object)
 #define vm_object_lock_assert_shared(object)
 #define vm_object_lock_assert_exclusive(object)
+#define vm_object_lock_assert_notheld(object)
 #endif /* MACH_ASSERT || DEBUG */
 
 #define vm_object_round_page(x) (((vm_object_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))

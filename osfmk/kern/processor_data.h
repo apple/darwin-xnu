@@ -81,6 +81,14 @@ struct processor_data {
 		ipc_kmsg_t				entries[IKM_STASH];
 		unsigned int			avail;
 	}						ikm_cache;
+
+	/* waitq prepost cache */
+#define WQP_CACHE_MAX	50
+	struct wqp_cache {
+		uint64_t		head;
+		unsigned int		avail;
+	} wqp_cache;
+
 	int						start_color;
 	unsigned long			page_grab_count;
 	void					*free_pages;

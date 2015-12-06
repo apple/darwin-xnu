@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 2010-2012 Apple Inc. All rights reserved.
+# Copyright (C) 2010-2014 Apple Inc. All rights reserved.
 #
 # MakeInc.top is the top-level makefile for the xnu
 # build system. All the main XBS targets
@@ -34,9 +34,10 @@ include $(MakeInc_cmd)
 #
 
 # Default to current kernel architecture
-ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
+
+ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
      override DEFAULT_ARCH_CONFIG := ARM
-else ifneq ($(filter iPhoneSimulator iPhoneNanoSimulator,$(PLATFORM)),)
+else ifneq ($(filter $(SUPPORTED_SIMULATOR_PLATFORMS),$(PLATFORM)),)
      override DEFAULT_ARCH_CONFIG := X86_64
 else
      override DEFAULT_ARCH_CONFIG := X86_64
@@ -46,7 +47,7 @@ endif
 # Accept either explicit ARCH_CONFIGS or XBS-style RC_ARCHS
 ifndef ARCH_CONFIGS
 ifdef RC_ARCHS
-ARCH_CONFIGS 	:= $(shell printf "%s" "$(RC_ARCHS)" | $(TR) a-z A-Z | sed -E 's/ARMV[0-9][A-Z]?/ARM/g' | $(TR) " " "\n" | sort -u | $(TR) "\n" " ")
+ARCH_CONFIGS 	:= $(shell printf "%s" "$(RC_ARCHS)" | $(TR) a-z A-Z | $(TR) " " "\n" | sort -u | $(TR) "\n" " ")
 else
 ARCH_CONFIGS	:= DEFAULT
 endif
@@ -58,7 +59,7 @@ endif
 
 ifeq ($(RC_ProjectName),xnu_debug)
 override DEFAULT_KERNEL_CONFIG := DEBUG
-else ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
+else ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
 override DEFAULT_KERNEL_CONFIG := DEVELOPMENT
 else ifeq ($(PLATFORM),MacOSX)
 override DEFAULT_KERNEL_CONFIG := DEVELOPMENT
@@ -542,8 +543,20 @@ TAGS: cscope.files
 	@-cat cscope.files | etags -l auto -S - 2> /dev/null
 	@rm -f cscope.files 2> /dev/null
 
+#
+# Re-indent source code using xnu clang-format style
+#
+.PHONY: reindent
+
+reindent:
+	$(_v)$(SRCROOT)/tools/reindent.sh
+
+.PHONY: help
+
 help:
 	@cat README
+
+.PHONY: print_exports
 
 print_exports:
 	$(_v)printenv | sort
@@ -554,5 +567,7 @@ ifeq ($(VERBOSE_GENERATED_MAKE_FRAGMENTS),YES)
 $(warning Generate makefile fragment: $(generated_top_level_print_exports))
 endif
 $(eval $(generated_top_level_print_exports))
+
+.PHONY: print_exports_first_build_config
 
 print_exports_first_build_config: print_exports_bootstrap

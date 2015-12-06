@@ -84,9 +84,12 @@ uint64_t vm_swap_get_free_space(void);
 struct vnode;
 extern void vm_swapfile_open(const char *path, struct vnode **vp);
 extern void vm_swapfile_close(uint64_t path, struct vnode *vp);
-extern int vm_swapfile_preallocate(struct vnode *vp, uint64_t *size);
+extern int vm_swapfile_preallocate(struct vnode *vp, uint64_t *size, boolean_t *pin);
 extern uint64_t vm_swapfile_get_blksize(struct vnode *vp);
 extern uint64_t vm_swapfile_get_transfer_size(struct vnode *vp);
 extern int vm_swapfile_io(struct vnode *vp, uint64_t offset, uint64_t start, int npages, int flags);
 
+#if RECORD_THE_COMPRESSED_DATA
+extern int vm_record_file_write(struct vnode *vp, uint64_t offset, char *buf, int size);
+#endif
 

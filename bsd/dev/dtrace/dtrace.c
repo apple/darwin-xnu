@@ -20,8 +20,8 @@
  */
 
 /*
- * Portions Copyright (c) 2011, Joyent, Inc. All rights reserved.
- * Portions Copyright (c) 2012 by Delphix. All rights reserved.
+ * Portions Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Portions Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 /*
@@ -1457,7 +1457,7 @@ dtrace_priv_proc(dtrace_state_t *state)
 	if (ISSET(current_proc()->p_lflag, P_LNOATTACH))
 		goto bad;
 
-	if (dtrace_is_restricted() && !dtrace_can_attach_to_proc(current_proc()))
+	if (dtrace_is_restricted() && !dtrace_is_running_apple_internal() && !dtrace_can_attach_to_proc(current_proc()))
 		goto bad;
 
 	if (state->dts_cred.dcr_action & DTRACE_CRA_PROC)
@@ -1489,7 +1489,7 @@ dtrace_priv_proc_relaxed(dtrace_state_t *state)
 static int
 dtrace_priv_kernel(dtrace_state_t *state)
 {
-	if (dtrace_is_restricted())
+	if (dtrace_is_restricted() && !dtrace_is_running_apple_internal())
 		goto bad;
 
 	if (state->dts_cred.dcr_action & DTRACE_CRA_KERNEL)
@@ -3127,6 +3127,9 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		}
 		return (mstate->dtms_machtimestamp);
 
+	case DIF_VAR_CPU:
+		return ((uint64_t) dtrace_get_thread_last_cpu_id(current_thread()));
+
 	case DIF_VAR_IPL:
 		if (!dtrace_priv_kernel(state))
 			return (0);
@@ -3324,7 +3327,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 			return (0);
 
 		mstate->dtms_scratch_ptr += scratch_size;
-		proc_selfname( xname, MAXCOMLEN );
+		proc_selfname( xname, scratch_size );
 
 		return ((uint64_t)(uintptr_t)xname);
 	}
@@ -4707,6 +4710,15 @@ inetout:	regs[rd] = (uintptr_t)end + 1;
 		break;
 	}
 
+	case DIF_SUBR_VM_KERNEL_ADDRPERM: {
+		if (!dtrace_priv_kernel(state)) {
+			regs[rd] = 0;
+		} else {
+			regs[rd] = VM_KERNEL_ADDRPERM((vm_offset_t) tupregs[0].dttk_value);
+		}
+
+		break;
+	}
 /*
  * APPLE NOTE:
  * CoreProfile callback ('core_profile (uint64_t, [uint64_t], [uint64_t] ...)')
@@ -5870,6 +5882,63 @@ out:
 	mstate->dtms_scratch_ptr = old;
 }
 
+static void
+dtrace_store_by_ref(dtrace_difo_t *dp, caddr_t tomax, size_t size,
+    size_t *valoffsp, uint64_t *valp, uint64_t end, int intuple, int dtkind)
+{
+	volatile uint16_t *flags;
+	uint64_t val = *valp;
+	size_t valoffs = *valoffsp;
+
+	flags = (volatile uint16_t *)&cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
+	ASSERT(dtkind == DIF_TF_BYREF || dtkind == DIF_TF_BYUREF);
+
+	/*
+	 * If this is a string, we're going to only load until we find the zero
+	 * byte -- after which we'll store zero bytes.
+	 */
+	if (dp->dtdo_rtype.dtdt_kind == DIF_TYPE_STRING) {
+		char c = '\0' + 1;
+		size_t s;
+
+		for (s = 0; s < size; s++) {
+			if (c != '\0' && dtkind == DIF_TF_BYREF) {
+				c = dtrace_load8(val++);
+			} else if (c != '\0' && dtkind == DIF_TF_BYUREF) {
+				DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
+				c = dtrace_fuword8((user_addr_t)(uintptr_t)val++);
+				DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
+				if (*flags & CPU_DTRACE_FAULT)
+					break;
+			}
+
+			DTRACE_STORE(uint8_t, tomax, valoffs++, c);
+
+			if (c == '\0' && intuple)
+				break;
+		}
+	} else {
+		uint8_t c;
+		while (valoffs < end) {
+			if (dtkind == DIF_TF_BYREF) {
+				c = dtrace_load8(val++);
+			} else if (dtkind == DIF_TF_BYUREF) {
+				DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
+				c = dtrace_fuword8((user_addr_t)(uintptr_t)val++);
+				DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
+				if (*flags & CPU_DTRACE_FAULT)
+					break;
+			}
+
+			DTRACE_STORE(uint8_t, tomax,
+			    valoffs++, c);
+		}
+	}
+
+	*valp = val;
+	*valoffsp = valoffs;
+}
+
 /*
  * If you're looking for the epicenter of DTrace, you just found it.  This
  * is the function called by the provider to fire a probe -- from which all
@@ -6463,7 +6532,7 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 				ASSERT(0);
 			}
 
-			if (dp->dtdo_rtype.dtdt_flags & DIF_TF_BYREF) {
+			if (dp->dtdo_rtype.dtdt_flags & (DIF_TF_BYREF | DIF_TF_BYUREF)) {
 				uintptr_t end = valoffs + size;
 
 				if (tracememsize != 0 &&
@@ -6473,39 +6542,17 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
                                         tracememsize = 0;
                                 }
 
-				if (!dtrace_vcanload((void *)(uintptr_t)val,
-				    &dp->dtdo_rtype, &mstate, vstate))
-					continue;
-
-				/*
-				 * If this is a string, we're going to only
-				 * load until we find the zero byte -- after
-				 * which we'll store zero bytes.
-				 */
-				if (dp->dtdo_rtype.dtdt_kind ==
-				    DIF_TYPE_STRING) {
-					char c = '\0' + 1;
-					int intuple = act->dta_intuple;
-					size_t s;
-
-					for (s = 0; s < size; s++) {
-						if (c != '\0')
-							c = dtrace_load8(val++);
-
-						DTRACE_STORE(uint8_t, tomax,
-						    valoffs++, c);
-
-						if (c == '\0' && intuple)
-							break;
-					}
-
+				if (dp->dtdo_rtype.dtdt_flags & DIF_TF_BYREF &&
+				    !dtrace_vcanload((void *)(uintptr_t)val,
+				                     &dp->dtdo_rtype, &mstate, vstate))
+				{
 					continue;
 				}
 
-				while (valoffs < end) {
-					DTRACE_STORE(uint8_t, tomax, valoffs++,
-					    dtrace_load8(val++));
-				}
+				dtrace_store_by_ref(dp, tomax, size, &valoffs,
+				    &val, end, act->dta_intuple,
+				    dp->dtdo_rtype.dtdt_flags & DIF_TF_BYREF ?
+				    DIF_TF_BYREF: DIF_TF_BYUREF);
 
 				continue;
 			}
@@ -8663,7 +8710,7 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 		    "expected 'ret' as last DIF instruction\n");
 	}
 
-	if (!(dp->dtdo_rtype.dtdt_flags & DIF_TF_BYREF)) {
+	if (!(dp->dtdo_rtype.dtdt_flags & (DIF_TF_BYREF | DIF_TF_BYUREF))) {
 		/*
 		 * If we're not returning by reference, the size must be either
 		 * 0 or the size of one of the base types.
@@ -10055,12 +10102,14 @@ dtrace_ecb_action_add(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 		case DTRACEACT_PRINTA:
 		case DTRACEACT_SYSTEM:
 		case DTRACEACT_FREOPEN:
+		case DTRACEACT_DIFEXPR:
 			/*
 			 * We know that our arg is a string -- turn it into a
 			 * format.
 			 */
 			if (arg == 0) {
-				ASSERT(desc->dtad_kind == DTRACEACT_PRINTA);
+				ASSERT(desc->dtad_kind == DTRACEACT_PRINTA ||
+				       desc->dtad_kind == DTRACEACT_DIFEXPR);
 				format = 0;
 			} else {
 				ASSERT(arg != 0);
@@ -10071,7 +10120,6 @@ dtrace_ecb_action_add(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 
 			/*FALLTHROUGH*/
 		case DTRACEACT_LIBACT:
-		case DTRACEACT_DIFEXPR:
 		case DTRACEACT_TRACEMEM:
 		case DTRACEACT_TRACEMEM_DYNSIZE:
 		case DTRACEACT_APPLEBINARY:	/* __APPLE__ */
@@ -12074,15 +12122,19 @@ dtrace_dof_actdesc(dof_hdr_t *dof, dof_sec_t *sec, dtrace_vstate_t *vstate,
 		    (uintptr_t)sec->dofs_offset + offs);
 		kind = (dtrace_actkind_t)desc->dofa_kind;
 
-		if (DTRACEACT_ISPRINTFLIKE(kind) &&
-		    (kind != DTRACEACT_PRINTA ||
-		    desc->dofa_strtab != DOF_SECIDX_NONE)) {
+		if ((DTRACEACT_ISPRINTFLIKE(kind) &&
+		    (kind != DTRACEACT_PRINTA || desc->dofa_strtab != DOF_SECIDX_NONE)) ||
+		    (kind == DTRACEACT_DIFEXPR && desc->dofa_strtab != DOF_SECIDX_NONE))
+		{
 			dof_sec_t *strtab;
 			char *str, *fmt;
 			uint64_t i;
 
 			/*
-			 * printf()-like actions must have a format string.
+			 * The argument to these actions is an index into the
+			 * DOF string table.  For printf()-like actions, this
+			 * is the format string.  For print(), this is the
+			 * CTF type of the expression result.
 			 */
 			if ((strtab = dtrace_dof_sect(dof,
 			    DOF_SECT_STRTAB, desc->dofa_strtab)) == NULL)
@@ -16852,7 +16904,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 		 * Security restrictions make this operation illegal, if this is enabled DTrace
 		 * must refuse to provide any fbt probes.
 		 */
-		if (dtrace_is_restricted()) {
+		if (dtrace_fbt_probes_restricted()) {
 			cmn_err(CE_WARN, "security restrictions disallow DTRACEIOC_MODUUIDSLIST");	
 			return (EPERM);
 		}
@@ -17007,7 +17059,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 		 * Security restrictions make this operation illegal, if this is enabled DTrace
 		 * must refuse to provide any fbt probes.
 		 */
-		if (dtrace_is_restricted()) {
+		if (dtrace_fbt_probes_restricted()) {
 			cmn_err(CE_WARN, "security restrictions disallow DTRACEIOC_MODUUIDSLIST");	
 			return (EPERM);
 		}
@@ -17121,7 +17173,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 
 	case DTRACEIOC_PROCWAITFOR: {
 		dtrace_procdesc_t pdesc = {
-			.p_comm = {0},
+			.p_name = {0},
 			.p_pid  = -1
 		};
 
@@ -17604,7 +17656,6 @@ dtrace_init( void )
 		(void)dtrace_abs_to_nano(0LL); /* Force once only call to clock_timebase_info (which can take a lock) */
 
 		dtrace_isa_init();
-		
 		/*
 		 * See dtrace_impl.h for a description of dof modes.
 		 * The default is lazy dof.
@@ -17645,7 +17696,9 @@ dtrace_init( void )
 		if (!PE_parse_boot_argn("dtrace_kernel_symbol_mode", &dtrace_kernel_symbol_mode, sizeof (dtrace_kernel_symbol_mode))) {
 			dtrace_kernel_symbol_mode = DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE;
 		}
-				
+
+		dtrace_restriction_policy_load();
+
 		gDTraceInited = 1;
 
 	} else

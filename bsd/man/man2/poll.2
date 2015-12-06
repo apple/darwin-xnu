@@ -48,7 +48,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd February 27, 2005
+.Dd March 18, 2015
 .Dt POLL 2
 .Os
 .Sh NAME
@@ -63,7 +63,7 @@
 .Fa "int timeout"
 .Fc
 .Sh DESCRIPTION
-.Fn Poll
+.Fn poll
 examines a set of file descriptors
 to see if some of them are ready for I/O
 or if certain events have occurred on them.
@@ -167,7 +167,7 @@ will return without blocking. If the value of
 .Fa timeout
 is -1, the poll blocks indefinitely.
 .Sh RETURN VALUES
-.Fn Poll
+.Fn poll
 returns the number of descriptors that are ready for I/O,
 or -1 if an error occurred.
 If the time limit expires,
@@ -183,7 +183,7 @@ array will be unmodified and the global variable
 .Va errno
 will be set to indicate the error.
 .Sh ERRORS
-.Fn Poll
+.Fn poll
 will fail if:
 .Bl -tag -width Er
 .\" ===========
@@ -213,6 +213,7 @@ system call currently does not support devices.
 .Sh SEE ALSO
 .Xr accept 2 ,
 .Xr connect 2 ,
+.Xr connectx 2 ,
 .Xr kevent 2 ,
 .Xr read 2 ,
 .Xr recv 2 ,

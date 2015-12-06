@@ -144,7 +144,7 @@ void telemetry_init(void)
 	if (telemetry_buffer.size > TELEMETRY_MAX_BUFFER_SIZE)
 		telemetry_buffer.size = TELEMETRY_MAX_BUFFER_SIZE;
 
-	ret = kmem_alloc(kernel_map, &telemetry_buffer.buffer, telemetry_buffer.size);
+	ret = kmem_alloc(kernel_map, &telemetry_buffer.buffer, telemetry_buffer.size, VM_KERN_MEMORY_DIAG);
 	if (ret != KERN_SUCCESS) {
 		kprintf("Telemetry: Allocation failed: %d\n", ret);
 		return;
@@ -266,7 +266,7 @@ telemetry_enable_window(void)
 	 * but we would prefer to avoid blocking while holding the
 	 * lock.
 	 */
-	ret = kmem_alloc(kernel_map, &kern_buffer, kern_buffer_size);
+	ret = kmem_alloc(kernel_map, &kern_buffer, kern_buffer_size, VM_KERN_MEMORY_DIAG);
 
 	TELEMETRY_LOCK();
 
@@ -337,6 +337,13 @@ telemetry_disable_window(void)
 static boolean_t
 telemetry_is_active(thread_t thread)
 {
+	task_t task = thread->task;
+
+	if (task == kernel_task) {
+		/* Kernel threads never return to an AST boundary, and are ineligible */
+		return FALSE;
+	}
+
 	if (telemetry_sample_all_tasks == TRUE) {
 		return (TRUE);
 	}
@@ -782,11 +789,13 @@ copytobuffer:
 	thsnap->snapshot_magic = STACKSHOT_THREAD_SNAPSHOT_MAGIC;
 	thsnap->thread_id = thread_tid(thread);
 	thsnap->state = thread->state;
-	thsnap->priority = thread->priority;
+	thsnap->priority = thread->base_pri;
 	thsnap->sched_pri = thread->sched_pri;
 	thsnap->sched_flags = thread->sched_flags;
 	thsnap->ss_flags |= kStacksPCOnly;
 	thsnap->ts_qos = thread->effective_policy.thep_qos;
+	thsnap->ts_rqos = thread->requested_policy.thrp_qos;
+	thsnap->ts_rqos_override = thread->requested_policy.thrp_qos_override;
 
 	if (thread->effective_policy.darwinbg) {
 		thsnap->ss_flags |= kThreadDarwinBG;
@@ -1131,7 +1140,7 @@ void bootprofile_init(void)
 		return;
 	}
 
-	ret = kmem_alloc(kernel_map, &bootprofile_buffer, bootprofile_buffer_size);
+	ret = kmem_alloc(kernel_map, &bootprofile_buffer, bootprofile_buffer_size, VM_KERN_MEMORY_DIAG);
 	if (ret != KERN_SUCCESS) {
 		kprintf("Boot profile: Allocation failed: %d\n", ret);
 		return;

@@ -86,7 +86,9 @@
 #include <kern/machine.h>
 #include <kern/processor.h>
 #include <kern/sched_prim.h>
+#if CONFIG_SCHED_SFI
 #include <kern/sfi.h>
+#endif
 #include <kern/startup.h>
 #include <kern/task.h>
 #include <kern/thread.h>
@@ -94,10 +96,11 @@
 #if CONFIG_TELEMETRY
 #include <kern/telemetry.h>
 #endif
-#include <kern/wait_queue.h>
 #include <kern/xpr.h>
 #include <kern/zalloc.h>
 #include <kern/locks.h>
+#include <kern/debug.h>
+#include <corpses/task_corpse.h>
 #include <prng/random.h>
 #include <console/serial_protos.h>
 #include <vm/vm_kern.h>
@@ -113,6 +116,9 @@
 #include <sys/codesign.h>
 #include <sys/kdebug.h>
 #include <sys/random.h>
+
+#include <kern/waitq.h>
+
 
 #if CONFIG_ATM
 #include <atm/atm_internal.h>
@@ -136,10 +142,6 @@
 
 #if CONFIG_MACF
 #include <security/mac_mach_internal.h>
-#endif
-
-#if CONFIG_COUNTERS
-#include <pmc/pmc.h>
 #endif
 
 #if KPC
@@ -202,14 +204,14 @@ static inline void
 kernel_bootstrap_log(const char *message)
 {
 //	kprintf("kernel_bootstrap: %s\n", message);
-	kernel_debug_string(message);
+	kernel_debug_string_simple(message);
 }
 
 static inline void
 kernel_bootstrap_thread_log(const char *message)
 {
 //	kprintf("kernel_bootstrap_thread: %s\n", message);
-	kernel_debug_string(message);
+	kernel_debug_string_simple(message);
 }
 
 void
@@ -227,12 +229,16 @@ kernel_early_bootstrap(void)
 	 */
 	timer_call_init();
 
+#if CONFIG_SCHED_SFI
 	/*
 	 * Configure SFI classes
 	 */
 	sfi_early_init();
+#endif
 }
 
+extern boolean_t IORamDiskBSDRoot(void);
+extern kern_return_t cpm_preallocate_early(void);
 
 void
 kernel_bootstrap(void)
@@ -267,9 +273,15 @@ kernel_bootstrap(void)
 	machine_info.major_version = version_major;
 	machine_info.minor_version = version_minor;
 
+
 #if CONFIG_TELEMETRY
 	kernel_bootstrap_log("telemetry_init");
 	telemetry_init();
+#endif
+
+#if CONFIG_CSR
+	kernel_bootstrap_log("csr_init");
+	csr_init();
 #endif
 
 	kernel_bootstrap_log("stackshot_lock_init");	
@@ -278,15 +290,17 @@ kernel_bootstrap(void)
 	kernel_bootstrap_log("sched_init");
 	sched_init();
 
-	kernel_bootstrap_log("wait_queue_bootstrap");
-	wait_queue_bootstrap();
+	kernel_bootstrap_log("waitq_bootstrap");
+	waitq_bootstrap();
 
 	kernel_bootstrap_log("ipc_bootstrap");
 	ipc_bootstrap();
 
 #if CONFIG_MACF
+	kernel_bootstrap_log("mac_policy_init");
 	mac_policy_init();
 #endif
+
 	kernel_bootstrap_log("ipc_init");
 	ipc_init();
 
@@ -312,8 +326,8 @@ kernel_bootstrap(void)
 	 *	Initialize the IPC, task, and thread subsystems.
 	 */
 #if CONFIG_COALITIONS
-	kernel_bootstrap_log("coalition_init");
-	coalition_init();
+	kernel_bootstrap_log("coalitions_init");
+	coalitions_init();
 #endif
 
 	kernel_bootstrap_log("task_init");
@@ -328,17 +342,15 @@ kernel_bootstrap(void)
 	atm_init();
 #endif
 
-#if CONFIG_CSR
-	kernel_bootstrap_log("csr_init");
-	csr_init();
-#endif
-
 #if CONFIG_BANK
 	/* Initialize the BANK Manager. */
 	kernel_bootstrap_log("bank_init");
 	bank_init();
 #endif
 	
+	/* initialize the corpse config based on boot-args */
+	corpses_init();
+
 	/*
 	 *	Create a kernel thread to execute the kernel bootstrap.
 	 */
@@ -348,6 +360,7 @@ kernel_bootstrap(void)
 	if (result != KERN_SUCCESS) panic("kernel_bootstrap: result = %08X\n", result);
 
 	thread->state = TH_RUN;
+	thread->last_made_runnable_time = mach_absolute_time();
 	thread_deallocate(thread);
 
 	kernel_bootstrap_log("load_context - done");
@@ -359,6 +372,7 @@ int kth_started = 0;
 
 vm_offset_t vm_kernel_addrperm;
 vm_offset_t buf_kernel_addrperm;
+vm_offset_t vm_kernel_addrperm_ext;
 
 /*
  * Now running in a thread.  Kick off other services,
@@ -451,10 +465,6 @@ kernel_bootstrap_thread(void)
 	alternate_debugger_init();
 #endif
 
-#if CONFIG_COUNTERS
-	pmc_bootstrap();
-#endif
-
 #if KPC
 	kpc_init();
 #endif
@@ -544,14 +554,16 @@ kernel_bootstrap_thread(void)
 	mac_policy_initmach();
 #endif
 
+#if CONFIG_SCHED_SFI
 	kernel_bootstrap_log("sfi_init");
 	sfi_init();
+#endif
 
 	/*
-	 * Initialize the global used for permuting kernel
+	 * Initialize the globals used for permuting kernel
 	 * addresses that may be exported to userland as tokens
-	 * using VM_KERNEL_ADDRPERM(). Force the random number
-	 * to be odd to avoid mapping a non-zero
+	 * using VM_KERNEL_ADDRPERM()/VM_KERNEL_ADDRPERM_EXTERNAL().
+	 * Force the random number to be odd to avoid mapping a non-zero
 	 * word-aligned address to zero via addition.
 	 * Note: at this stage we can use the cryptographically secure PRNG
 	 * rather than early_random().
@@ -560,6 +572,12 @@ kernel_bootstrap_thread(void)
 	vm_kernel_addrperm |= 1;
 	read_random(&buf_kernel_addrperm, sizeof(buf_kernel_addrperm));
 	buf_kernel_addrperm |= 1;
+	read_random(&vm_kernel_addrperm_ext, sizeof(vm_kernel_addrperm_ext));
+	vm_kernel_addrperm_ext |= 1;
+
+	vm_set_restrictions();
+
+
 
 	/*
 	 *	Start the user bootstrap.
@@ -577,7 +595,7 @@ kernel_bootstrap_thread(void)
 	serial_keyboard_init();		/* Start serial keyboard if wanted */
 
 	vm_page_init_local_q();
-	
+
 	thread_bind(PROCESSOR_NULL);
 
 	/*

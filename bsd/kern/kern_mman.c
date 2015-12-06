@@ -115,6 +115,7 @@
 #include <mach/mach_vm.h>
 #include <mach/vm_map.h>
 #include <mach/host_priv.h>
+#include <mach/sdt.h>
 
 #include <machine/machine_routines.h>
 
@@ -164,6 +165,13 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	int fd = uap->fd;
 	int num_retries = 0;
 
+	/*
+	 * Note that for UNIX03 conformance, there is additional parameter checking for
+	 * mmap() system call in libsyscall prior to entering the kernel.  The sanity 
+	 * checks and argument validation done in this function are not the only places
+	 * one can get returned errnos.
+	 */
+
 	user_map = current_map();
 	user_addr = (vm_map_offset_t)uap->addr;
 	user_size = (vm_map_size_t) uap->len;
@@ -212,9 +220,26 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	user_size = vm_map_round_page(user_size,	
 				      vm_map_page_mask(user_map)); /* hi end */
 
-	if ((flags & MAP_JIT) && ((flags & MAP_FIXED) || (flags & MAP_SHARED) || !(flags & MAP_ANON))){
-		return EINVAL;
+	if (flags & MAP_JIT) {
+		if ((flags & MAP_FIXED) ||
+		    (flags & MAP_SHARED) ||
+		    !(flags & MAP_ANON) ||
+		    (flags & MAP_RESILIENT_CODESIGN)) {
+			return EINVAL;
+		}
 	}
+
+	if ((flags & MAP_RESILIENT_CODESIGN) ||
+	    (flags & MAP_RESILIENT_MEDIA)) {
+		assert(!(flags & MAP_JIT));
+		if (flags & MAP_ANON) {
+			return EINVAL;
+		}
+		if (prot & (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+			return EPERM;
+		}
+	}
+
 	/*
 	 * Check for illegal addresses.  Watch out for address wrap... Note
 	 * that VM_*_ADDRESS are not constants due to casts (argh).
@@ -404,7 +429,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			handle = (void *)vp;
 #if CONFIG_MACF
 			error = mac_file_check_mmap(vfs_context_ucred(ctx),
-			    fp->f_fglob, prot, flags, &maxprot);
+			    fp->f_fglob, prot, flags, file_pos, &maxprot);
 			if (error) {
 				(void)vnode_put(vp);
 				goto bad;
@@ -420,8 +445,6 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 				}
 			}
 #endif /* CONFIG_PROTECT */
-
-
 		}
 	}
 
@@ -475,9 +498,14 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	if (flags & MAP_NOCACHE)
 		alloc_flags |= VM_FLAGS_NO_CACHE;
 
-	if (flags & MAP_JIT){
+	if (flags & MAP_JIT) {
 		alloc_flags |= VM_FLAGS_MAP_JIT;
 	}
+
+	if (flags & MAP_RESILIENT_CODESIGN) {
+		alloc_flags |= VM_FLAGS_RESILIENT_CODESIGN;
+	}
+
 	/*
 	 * Lookup/allocate object.
 	 */
@@ -568,7 +596,19 @@ map_anon_retry:
 		if (maxprot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
 			maxprot |= VM_PROT_READ;
 #endif	/* radar 3777787 */
+
 map_file_retry:
+		if ((flags & MAP_RESILIENT_CODESIGN) ||
+		    (flags & MAP_RESILIENT_MEDIA)) {
+			if (prot & (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+				assert(!mapanon);
+				vnode_put(vp);
+				error = EPERM;
+				goto bad;
+			}
+			/* strictly limit access to "prot" */
+			maxprot &= prot;
+		}
 		result = vm_map_enter_mem_object_control(user_map,
 						 &user_addr, user_size,
 						 0, alloc_flags,
@@ -909,6 +949,13 @@ madvise(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
 		case MADV_CAN_REUSE:
 			new_behavior = VM_BEHAVIOR_CAN_REUSE;
 			break;
+		case MADV_PAGEOUT:
+#if MACH_ASSERT
+			new_behavior = VM_BEHAVIOR_PAGEOUT;
+			break;
+#else /* MACH_ASSERT */
+			return ENOTSUP;
+#endif /* MACH_ASSERT */
 		default:
 			return(EINVAL);
 	}
@@ -916,6 +963,7 @@ madvise(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
 	start = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t) uap->len;
 	
+
 	user_map = current_map();
 
 	result = mach_vm_behavior_set(user_map, start, size, new_behavior);
@@ -1060,7 +1108,7 @@ mlock(__unused proc_t p, struct mlock_args *uap, __unused int32_t *retvalval)
 	size = vm_map_round_page(size+pageoff, vm_map_page_mask(user_map));
 
 	/* have to call vm_map_wire directly to pass "I don't know" protections */
-	result = vm_map_wire(user_map, addr, addr+size, VM_PROT_NONE, TRUE);
+	result = vm_map_wire(user_map, addr, addr+size, VM_PROT_NONE | VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_MLOCK), TRUE);
 
 	if (result == KERN_RESOURCE_SHORTAGE)
 		return EAGAIN;
@@ -1114,7 +1162,7 @@ mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __u
     uint32_t	cryptid;
     cpu_type_t	cputype;
     cpu_subtype_t	cpusubtype;
-    pager_crypt_info_t crypt_info;
+    pager_crypt_info_t	crypt_info;
     const char * cryptname = 0;
     char *vpath;
     int len, ret;
@@ -1188,13 +1236,19 @@ mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __u
     kprintf("%s vpath %s cryptid 0x%08x cputype 0x%08x cpusubtype 0x%08x range 0x%016llx size 0x%016llx\n",
             __FUNCTION__, vpath, cryptid, cputype, cpusubtype, (uint64_t)user_addr, (uint64_t)user_size);
 #endif
-    
+
     /* set up decrypter first */
     crypt_file_data_t crypt_data = {
         .filename = vpath,
         .cputype = cputype,
         .cpusubtype = cpusubtype };
     result = text_crypter_create(&crypt_info, cryptname, (void*)&crypt_data);
+#if DEVELOPMENT || DEBUG
+    printf("APPLE_PROTECT: %d[%s] map %p [0x%llx:0x%llx] %s(%s) -> 0x%x\n",
+	   p->p_pid, p->p_comm,
+	   user_map, (uint64_t) user_addr, (uint64_t) (user_addr + user_size),
+	   __FUNCTION__, vpath, result);
+#endif /* DEVELOPMENT || DEBUG */
     FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
     
     if(result) {
@@ -1209,13 +1263,20 @@ mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __u
     }
     
     /* now remap using the decrypter */
-    result = vm_map_apple_protected(user_map, user_addr, user_addr+user_size, &crypt_info);
+    vm_object_offset_t crypto_backing_offset;
+    crypto_backing_offset = -1;	/* i.e. use map entry's offset */
+    result = vm_map_apple_protected(user_map,
+				    user_addr,
+				    user_addr+user_size,
+				    crypto_backing_offset,
+				    &crypt_info);
     if (result) {
         printf("%s: mapping failed with %d\n", __FUNCTION__, result);
-        crypt_info.crypt_end(crypt_info.crypt_ops);
+    }
+   
+    if (result) {
         return (EPERM);
     }
-    
     return 0;
 }
 #endif /* CONFIG_CODE_DECRYPTION */

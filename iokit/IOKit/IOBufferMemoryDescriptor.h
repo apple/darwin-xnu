@@ -120,7 +120,7 @@ public:
     OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 15);
 
 protected:
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 public:
 
@@ -270,7 +270,7 @@ public:
 
 #ifndef __LP64__
     virtual void * getVirtualSegment(IOByteCount offset,
-					IOByteCount * length) APPLE_KEXT_DEPRECATED; /* use getBytesNoCopy() instead */
+					IOByteCount * length) APPLE_KEXT_OVERRIDE APPLE_KEXT_DEPRECATED; /* use getBytesNoCopy() instead */
 #endif /* !__LP64__ */
 };
 

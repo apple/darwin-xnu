@@ -89,6 +89,7 @@ int ubc_cs_generation_check(vnode_t);
 int cs_entitlements_blob_get(proc_t, void **, size_t *);
 int cs_blob_get(proc_t, void **, size_t *);
 const char *cs_identity_get(proc_t);
+
 #endif
 
 /* cluster IO routines */
@@ -118,6 +119,9 @@ void	cluster_zero(upl_t, upl_offset_t, int, buf_t);
 int	cluster_copy_upl_data(uio_t, upl_t, int, int *);
 int	cluster_copy_ubc_data(vnode_t, uio_t, int *, int);
 
+typedef struct cl_direct_read_lock cl_direct_read_lock_t;
+cl_direct_read_lock_t *cluster_lock_direct_read(vnode_t vp, lck_rw_type_t exclusive);
+void cluster_unlock_direct_read(cl_direct_read_lock_t *lck);
 
 /* UPL routines */
 int	ubc_create_upl(vnode_t, off_t, int, upl_t *, upl_page_info_t **, int);
@@ -133,6 +137,8 @@ upl_page_info_t *ubc_upl_pageinfo(upl_t);
 upl_size_t ubc_upl_maxbufsize(void);
 
 int	is_file_clean(vnode_t, off_t);
+
+errno_t mach_to_bsd_errno(kern_return_t mach_err);
 
 __END_DECLS
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -122,7 +122,28 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack_globalholes, CTLFLAG_RD | CTLFLAG_LOCKE
     &tcp_sack_globalholes, 0,
     "Global number of TCP SACK holes currently allocated");
 
+static int tcp_detect_reordering = 1;
+static int tcp_dsack_ignore_hw_duplicates = 0;
+
+#if (DEVELOPMENT || DEBUG)
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, detect_reordering,
+    CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_detect_reordering, 0, "");
+
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, ignore_hw_duplicates,
+    CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_dsack_ignore_hw_duplicates, 0, "");
+#endif /* (DEVELOPMENT || DEBUG) */
+
 extern struct zone *sack_hole_zone;
+
+#define	TCP_VALIDATE_SACK_SEQ_NUMBERS(_tp_, _sb_, _ack_) \
+    (SEQ_GT((_sb_)->end, (_sb_)->start) && \
+    SEQ_GT((_sb_)->start, (_tp_)->snd_una) && \
+    SEQ_GT((_sb_)->start, (_ack_)) && \
+    SEQ_LT((_sb_)->start, (_tp_)->snd_max) && \
+    SEQ_GT((_sb_)->end, (_tp_)->snd_una) && \
+    SEQ_LEQ((_sb_)->end, (_tp_)->snd_max))
 
 /*
  * This function is called upon receipt of new valid data (while not in header
@@ -294,7 +315,7 @@ tcp_sackhole_insert(struct tcpcb *tp, tcp_seq start, tcp_seq end,
 	if (tp->sackhint.nexthole == NULL)
 		tp->sackhint.nexthole = hole;
 
-	return hole;
+	return(hole);
 }
 
 /*
@@ -349,7 +370,8 @@ tcp_sack_detect_reordering(struct tcpcb *tp, struct sackhole *s,
 	}
 
 	if (reordered) {
-		if (!(tp->t_flagsext & TF_PKTS_REORDERED)) {
+		if (tcp_detect_reordering == 1 &&
+		    !(tp->t_flagsext & TF_PKTS_REORDERED)) {
 			tp->t_flagsext |= TF_PKTS_REORDERED;
 			tcpstat.tcps_detect_reordering++;
 		}
@@ -415,12 +437,7 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, struct tcphdr *th,
 		    &sack, sizeof(sack));
 		sack.start = ntohl(sack.start);
 		sack.end = ntohl(sack.end);
-		if (SEQ_GT(sack.end, sack.start) &&
-		    SEQ_GT(sack.start, tp->snd_una) &&
-		    SEQ_GT(sack.start, th_ack) &&
-		    SEQ_LT(sack.start, tp->snd_max) &&
-		    SEQ_GT(sack.end, tp->snd_una) &&
-		    SEQ_LEQ(sack.end, tp->snd_max))
+		if (TCP_VALIDATE_SACK_SEQ_NUMBERS(tp, &sack, th_ack))
 			sack_blocks[num_sack_blks++] = sack;
 	}
 
@@ -651,7 +668,20 @@ tcp_sack_partialack(tp, th)
 		num_segs * tp->t_maxseg);
 	if (tp->snd_cwnd > tp->snd_ssthresh)
 		tp->snd_cwnd = tp->snd_ssthresh;
-	tp->t_flags |= TF_ACKNOW;
+	if (SEQ_LT(tp->snd_fack, tp->snd_recover) &&
+	    tp->snd_fack == th->th_ack && TAILQ_EMPTY(&tp->snd_holes)) {
+		struct sackhole *temp;
+		/*
+		 * we received a partial ack but there is no sack_hole
+		 * that will cover the remaining seq space. In this case,
+		 * create a hole from snd_fack to snd_recover so that
+		 * the sack recovery will continue.
+		 */
+		temp = tcp_sackhole_insert(tp, tp->snd_fack,
+		    tp->snd_recover, NULL);
+		if (temp != NULL)
+			tp->snd_fack = tp->snd_recover;
+	}
 	(void) tcp_output(tp);
 }
 
@@ -762,7 +792,7 @@ tcp_sack_adjust(struct tcpcb *tp)
 }
 
 /*
- * This function returns true if more than (tcprexmtthresh - 1) * SMSS
+ * This function returns TRUE if more than (tcprexmtthresh - 1) * SMSS
  * bytes with sequence numbers greater than snd_una have been SACKed. 
  */
 boolean_t
@@ -784,4 +814,132 @@ tcp_sack_byte_islost(struct tcpcb *tp)
 	VERIFY(unacked_bytes >= sndhole_bytes);
 	return ((unacked_bytes - sndhole_bytes) >
 	    ((tcprexmtthresh - 1) * tp->t_maxseg));
+}
+
+/*
+ * Process any DSACK options that might be present on an input packet
+ */
+
+boolean_t
+tcp_sack_process_dsack(struct tcpcb *tp, struct tcpopt *to,
+    struct tcphdr *th)
+{
+	struct sackblk first_sack, second_sack;
+	struct tcp_rxt_seg *rxseg;
+
+	bcopy(to->to_sacks, &first_sack, sizeof(first_sack));
+	first_sack.start = ntohl(first_sack.start);
+	first_sack.end = ntohl(first_sack.end);
+
+	if (to->to_nsacks > 1) {
+		bcopy((to->to_sacks + TCPOLEN_SACK), &second_sack,
+		    sizeof(second_sack));
+		second_sack.start = ntohl(second_sack.start);
+		second_sack.end = ntohl(second_sack.end);
+	}
+
+	if (SEQ_LT(first_sack.start, th->th_ack) &&
+	    SEQ_LEQ(first_sack.end, th->th_ack)) {
+		/*
+		 * There is a dsack option reporting a duplicate segment
+		 * also covered by cumulative acknowledgement.
+		 *
+		 * Validate the sequence numbers before looking at dsack
+		 * option. The duplicate notification can come after
+		 * snd_una moves forward. In order to set a window of valid
+		 * sequence numbers to look for, we set a maximum send
+		 * window within which the DSACK option will be processed.
+		 */
+		if (!(TCP_DSACK_SEQ_IN_WINDOW(tp, first_sack.start, th->th_ack) &&
+		    TCP_DSACK_SEQ_IN_WINDOW(tp, first_sack.end, th->th_ack))) {
+			to->to_nsacks--;
+			to->to_sacks += TCPOLEN_SACK;
+			tcpstat.tcps_dsack_recvd_old++;
+
+			/*
+			 * returning true here so that the ack will not be
+			 * treated as duplicate ack.
+			 */
+			return (TRUE);
+		}
+	} else if (to->to_nsacks > 1 &&
+	    SEQ_LEQ(second_sack.start, first_sack.start) &&
+	    SEQ_GEQ(second_sack.end, first_sack.end)) {
+		/*
+		 * there is a dsack option in the first block not
+		 * covered by the cumulative acknowledgement but covered
+		 * by the second sack block.
+		 *
+		 * verify the sequence numbes on the second sack block
+		 * before processing the DSACK option. Returning false
+		 * here will treat the ack as a duplicate ack.
+		 */
+		if (!TCP_VALIDATE_SACK_SEQ_NUMBERS(tp, &second_sack,
+		    th->th_ack)) {
+			to->to_nsacks--;
+			to->to_sacks += TCPOLEN_SACK;
+			tcpstat.tcps_dsack_recvd_old++;
+			return (TRUE);
+		}
+	} else {
+		/* no dsack options, proceed with processing the sack */
+		return (FALSE);
+	}
+
+	/* Update the tcpopt pointer to exclude dsack block */
+	to->to_nsacks--;
+	to->to_sacks += TCPOLEN_SACK;
+	tcpstat.tcps_dsack_recvd++;
+
+	/* ignore DSACK option, if DSACK is disabled */
+	if (tp->t_flagsext & TF_DISABLE_DSACK)
+		return (TRUE);
+
+	/* If the DSACK is for TLP mark it as such */
+	if ((tp->t_flagsext & TF_SENT_TLPROBE) &&
+	    first_sack.end == tp->t_tlphighrxt) {
+		if ((rxseg = tcp_rxtseg_find(tp, first_sack.start,
+		    (first_sack.end - 1))) != NULL)
+			rxseg->rx_flags |= TCP_RXT_DSACK_FOR_TLP;
+	}
+	/* Update the sender's retransmit segment state */
+	if (((tp->t_rxtshift == 1 && first_sack.start == tp->snd_una) ||
+	    ((tp->t_flagsext & TF_SENT_TLPROBE) &&
+	    first_sack.end == tp->t_tlphighrxt)) &&
+	    TAILQ_EMPTY(&tp->snd_holes) &&
+	    SEQ_GT(th->th_ack, tp->snd_una)) {
+		/*
+		 * If the dsack is for a retransmitted packet and one of
+		 * the two cases is true, it indicates ack loss:
+		 * - retransmit timeout and first_sack.start == snd_una
+		 * - TLP probe and first_sack.end == tlphighrxt
+		 *
+		 * Ignore dsack and do not update state when there is
+		 * ack loss
+		 */
+		tcpstat.tcps_dsack_ackloss++;
+
+		return (TRUE);
+	} else if ((rxseg = tcp_rxtseg_find(tp, first_sack.start,
+	    (first_sack.end - 1))) == NULL) {
+		/*
+		 * Duplicate notification was not triggered by a
+		 * retransmission. This might be due to network duplication,
+		 * disable further DSACK processing.
+		 */
+		if (!tcp_dsack_ignore_hw_duplicates) {
+			tp->t_flagsext |= TF_DISABLE_DSACK;
+			tcpstat.tcps_dsack_disable++;
+		}
+	} else {
+		/*
+		 * If the segment was retransmitted only once, mark it as
+		 * spurious. Otherwise ignore the duplicate notification.
+		 */
+		if (rxseg->rx_count == 1)
+			rxseg->rx_flags |= TCP_RXT_SPURIOUS;
+		else
+			rxseg->rx_flags &= ~TCP_RXT_SPURIOUS;
+	}
+	return (TRUE);
 }

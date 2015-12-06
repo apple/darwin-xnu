@@ -73,7 +73,7 @@ typedef	void	mach_munge_t(void *);
 typedef struct {
 	int			mach_trap_arg_count; /* Number of trap arguments (Arch independant) */
 	kern_return_t		(*mach_trap_function)(void *);
-#if CONFIG_REQUIRES_U32_MUNGING
+#if CONFIG_REQUIRES_U32_MUNGING || (__arm__ && (__BIGGEST_ALIGNMENT__ > 4))
 	mach_munge_t		*mach_trap_arg_munge32; /* system call argument munger routine for 32-bit */
 #endif
 	int			mach_trap_u32_words; /* number of 32-bit words to copyin for U32 */
@@ -88,7 +88,7 @@ typedef struct {
 extern const mach_trap_t	mach_trap_table[];
 extern int			mach_trap_count;
 
-#if CONFIG_REQUIRES_U32_MUNGING
+#if CONFIG_REQUIRES_U32_MUNGING || (__arm__ && (__BIGGEST_ALIGNMENT__ > 4))
 
 #if	!MACH_ASSERT
 #define	MACH_TRAP(name, arg_count, u32_arg_words, munge32)	\
@@ -99,7 +99,7 @@ extern int			mach_trap_count;
 #endif /* !MACH_ASSERT */
 
 
-#else /* !CONFIG_REQUIRES_U32_MUNGING */
+#else /* !CONFIG_REQUIRES_U32_MUNGING || (__arm__ && (__BIGGEST_ALIGNMENT__ > 4)) */
 
 #if	!MACH_ASSERT
 #define	MACH_TRAP(name, arg_count, u32_arg_words, munge32)	\

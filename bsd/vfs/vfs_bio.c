@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -110,7 +110,6 @@
 #include <sys/ubc_internal.h>
 
 #include <sys/sdt.h>
-#include <sys/cprotect.h>
 
 int	bcleanbuf(buf_t bp, boolean_t discard);
 static int	brecover_data(buf_t bp);
@@ -366,9 +365,14 @@ buf_markfua(buf_t bp) {
 }
 
 #if CONFIG_PROTECT
-void
-buf_setcpaddr(buf_t bp, struct cprotect *entry) {
-	bp->b_attr.ba_cpentry = entry;
+cpx_t bufattr_cpx(bufattr_t bap)
+{
+	return bap->ba_cpx;
+}
+
+void bufattr_setcpx(bufattr_t bap, cpx_t cpx)
+{
+	bap->ba_cpx = cpx;
 }
 
 void
@@ -376,31 +380,17 @@ buf_setcpoff (buf_t bp, uint64_t foffset) {
 	bp->b_attr.ba_cp_file_off = foffset;
 }
 
-void *
-bufattr_cpaddr(bufattr_t bap) {
-	return (bap->ba_cpentry);
-}
-
 uint64_t
 bufattr_cpoff(bufattr_t bap) {
-	return (bap->ba_cp_file_off);
-}
-
-void
-bufattr_setcpaddr(bufattr_t bap, void *cp_entry_addr) {
-        bap->ba_cpentry = cp_entry_addr;
+	return bap->ba_cp_file_off;
 }
 
 void
 bufattr_setcpoff(bufattr_t bap, uint64_t foffset) {
-        bap->ba_cp_file_off = foffset;
+	bap->ba_cp_file_off = foffset;
 }
 
-#else
-void *
-bufattr_cpaddr(bufattr_t bap __unused) {
-        return NULL;
-}
+#else // !CONTECT_PROTECT
 
 uint64_t
 bufattr_cpoff(bufattr_t bap __unused) {
@@ -408,14 +398,20 @@ bufattr_cpoff(bufattr_t bap __unused) {
 }
 
 void
-bufattr_setcpaddr(bufattr_t bap __unused, void *cp_entry_addr __unused) {
-}
-
-void
 bufattr_setcpoff(__unused bufattr_t bap, __unused uint64_t foffset) {
 	return;
 }
-#endif /* CONFIG_PROTECT */
+
+struct cpx *bufattr_cpx(__unused bufattr_t bap)
+{
+	return NULL;
+}
+
+void bufattr_setcpx(__unused bufattr_t bap, __unused struct cpx *cpx)
+{
+}
+
+#endif /* !CONFIG_PROTECT */
 
 bufattr_t
 bufattr_alloc() {
@@ -685,6 +681,8 @@ buf_callback(buf_t bp)
 errno_t
 buf_setcallback(buf_t bp, void (*callback)(buf_t, void *), void *transaction)
 {
+	assert(!ISSET(bp->b_flags, B_FILTER) && ISSET(bp->b_lflags, BL_BUSY));
+
 	if (callback)
 	        bp->b_flags |= (B_CALL | B_ASYNC);
 	else
@@ -920,6 +918,8 @@ void
 buf_setfilter(buf_t bp, void (*filter)(buf_t, void *), void *transaction,
 			  void (**old_iodone)(buf_t, void *), void **old_transaction)
 {
+	assert(ISSET(bp->b_lflags, BL_BUSY));
+
 	if (old_iodone)
 		*old_iodone = bp->b_iodone;
 	if (old_transaction)
@@ -1317,9 +1317,10 @@ buf_strategy(vnode_t devvp, void *ap)
 	
 #if CONFIG_PROTECT
 	/* Capture f_offset in the bufattr*/
-	if (bp->b_attr.ba_cpentry != 0) {
+	cpx_t cpx = bufattr_cpx(buf_attr(bp));
+	if (cpx) {
 		/* No need to go here for older EAs */
-		if(bp->b_attr.ba_cpentry->cp_flags & CP_OFF_IV_ENABLED) {
+		if(cpx_use_offset_for_iv(cpx)) {
 			off_t f_offset;
 			if ((error = VNOP_BLKTOOFF(bp->b_vp, bp->b_lblkno, &f_offset)))
 				return error;
@@ -1337,7 +1338,7 @@ buf_strategy(vnode_t devvp, void *ap)
 			 * each I/O to IOFlashStorage.  But from our perspective
 			 * we have only issued a single I/O.
 			 */
-			bufattr_setcpoff (&(bp->b_attr), (u_int64_t)f_offset);
+			buf_setcpoff(bp, f_offset);
 			CP_DEBUG((CPDBG_OFFSET_IO | DBG_FUNC_NONE), (uint32_t) f_offset, (uint32_t) bp->b_lblkno, (uint32_t) bp->b_blkno, (uint32_t) bp->b_bcount, 0);
 		}
 	}
@@ -2447,7 +2448,7 @@ buf_brelse_shadow(buf_t bp)
 
 	lck_mtx_lock_spin(buf_mtxp);
 
-	bp_head = (buf_t)bp->b_orig;
+	__IGNORE_WCASTALIGN(bp_head = (buf_t)bp->b_orig);
 
 	if (bp_head->b_whichq != -1)
 		panic("buf_brelse_shadow: bp_head on freelist %d\n", bp_head->b_whichq);
@@ -3104,6 +3105,25 @@ start:
 			size_t 	contig_bytes;
 			int	bmap_flags;
 
+#if DEVELOPMENT || DEBUG
+			/*
+			 * Apple implemented file systems use UBC excludively; they should
+			 * not call in here."
+			 */
+			const char* excldfs[] = {"hfs", "afpfs", "smbfs", "acfs",
+						 "exfat", "msdos", "webdav", NULL};
+
+			for (int i = 0; excldfs[i] != NULL; i++) {
+				if (vp->v_mount &&
+				    !strcmp(vp->v_mount->mnt_vfsstat.f_fstypename,
+						excldfs[i])) {
+					panic("%s %s calls buf_getblk",
+						excldfs[i],
+						operation == BLK_READ ? "BLK_READ" : "BLK_WRITE");
+				}
+			}
+#endif
+
 			if ( (bp->b_upl) )
 				panic("bp already has UPL: %p",bp);
 
@@ -3355,7 +3375,7 @@ allocbuf(buf_t bp, int size)
 						*(void **)(&bp->b_datap) = grab_memory_for_meta_buf(nsize);
 					} else {
 					        bp->b_datap = (uintptr_t)NULL;
-					        kmem_alloc_kobject(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size);
+					        kmem_alloc_kobject(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size, VM_KERN_MEMORY_FILE);
 						CLR(bp->b_flags, B_ZALLOC);
 					}
 					bcopy((void *)elem, (caddr_t)bp->b_datap, bp->b_bufsize);
@@ -3368,7 +3388,7 @@ allocbuf(buf_t bp, int size)
 				if ((vm_size_t)bp->b_bufsize < desired_size) {
 					/* reallocate to a bigger size */
 				        bp->b_datap = (uintptr_t)NULL;
-					kmem_alloc_kobject(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size);
+					kmem_alloc_kobject(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size, VM_KERN_MEMORY_FILE);
 					bcopy((const void *)elem, (caddr_t)bp->b_datap, bp->b_bufsize);
 					kmem_free(kernel_map, elem, bp->b_bufsize); 
 				} else {
@@ -3384,7 +3404,7 @@ allocbuf(buf_t bp, int size)
 				*(void **)(&bp->b_datap) = grab_memory_for_meta_buf(nsize);
 				SET(bp->b_flags, B_ZALLOC);
 			} else
-				kmem_alloc_kobject(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size);
+				kmem_alloc_kobject(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size, VM_KERN_MEMORY_FILE);
 		}
 
 		if (bp->b_datap == 0)
@@ -3660,8 +3680,6 @@ bcleanbuf(buf_t bp, boolean_t discard)
 
 	buf_release_credentials(bp);
 	
-	bp->b_redundancy_flags = 0;
-
 	/* If discarding, just move to the empty queue */
 	if (discard) {
 		lck_mtx_lock_spin(buf_mtxp);
@@ -3676,6 +3694,7 @@ bcleanbuf(buf_t bp, boolean_t discard)
 		bp->b_bufsize = 0;
 		bp->b_datap = (uintptr_t)NULL;
 		bp->b_upl = (void *)NULL;
+		bp->b_fsprivate = (void *)NULL;
 		/*
 		 * preserve the state of whether this buffer
 		 * was allocated on the fly or not...
@@ -3688,6 +3707,7 @@ bcleanbuf(buf_t bp, boolean_t discard)
 #endif
 		bp->b_lflags = BL_BUSY;
 		bp->b_flags = (bp->b_flags & B_HDRALLOC);
+		bp->b_redundancy_flags = 0;
 		bp->b_dev = NODEV;
 		bp->b_blkno = bp->b_lblkno = 0;
 		bp->b_iodone = NULL;
@@ -4160,6 +4180,7 @@ alloc_io_buf(vnode_t vp, int priv)
 	bp->b_bcount = 0;
 	bp->b_bufsize = 0;
 	bp->b_upl = NULL;
+	bp->b_fsprivate = (void *)NULL;
 	bp->b_vp = vp;
 	bzero(&bp->b_attr, sizeof(struct bufattr));
 

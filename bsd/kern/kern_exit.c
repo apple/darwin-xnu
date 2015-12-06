@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011, 2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -94,6 +94,8 @@
 #include <sys/malloc.h>
 #include <sys/resourcevar.h>
 #include <sys/ptrace.h>
+#include <sys/proc_info.h>
+#include <sys/_types/_timeval64.h>
 #include <sys/user.h>
 #include <sys/aio_kern.h>
 #include <sys/sysproto.h>
@@ -113,6 +115,7 @@
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
 #include <kern/task.h>
+#include <corpses/task_corpse.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <kern/sched_prim.h>
@@ -150,13 +153,18 @@ extern void dtrace_lazy_dofs_destroy(proc_t);
 #include <sys/sdt.h>
 
 extern boolean_t init_task_died;
-extern char init_task_failure_data[];
 void proc_prepareexit(proc_t p, int rv, boolean_t perf_notify);
 void vfork_exit(proc_t p, int rv);
 void vproc_exit(proc_t p);
 __private_extern__ void munge_user64_rusage(struct rusage *a_rusage_p, struct user64_rusage *a_user_rusage_p);
 __private_extern__ void munge_user32_rusage(struct rusage *a_rusage_p, struct user32_rusage *a_user_rusage_p);
 static int reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoinit, int locked, int droplock);
+static void populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, struct rusage_superset *rup, mach_exception_data_type_t code, mach_exception_data_type_t subcode);
+extern int proc_pidpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+
+static __attribute__((noinline)) void launchd_crashed_panic(proc_t p, int rv);
+extern void proc_piduniqidentifierinfo(proc_t p, struct proc_uniqidentifierinfo *p_uniqidinfo);
+
 
 /*
  * Things which should have prototypes in headers, but don't
@@ -220,6 +228,170 @@ copyoutsiginfo(user_siginfo_t *native, boolean_t is64, user_addr_t uaddr)
 		siginfo_user_to_user32(native, &sinfo32);
 		return (copyout(&sinfo32, uaddr, sizeof (sinfo32)));
 	}
+}
+
+static void populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, struct rusage_superset *rup, mach_exception_data_type_t code, mach_exception_data_type_t subcode)
+{
+	mach_vm_address_t uaddr = 0;
+	mach_exception_data_type_t exc_codes[EXCEPTION_CODE_MAX];
+	exc_codes[0] = code;
+	exc_codes[1] = subcode;
+	cpu_type_t cputype;
+	struct proc_uniqidentifierinfo p_uniqidinfo;
+	struct proc_workqueueinfo pwqinfo;
+	int retval = 0;
+	uint64_t crashed_threadid = thread_tid(current_thread());
+	unsigned int pflags = 0;
+
+#if CONFIG_MEMORYSTATUS
+	int memstat_dirty_flags = 0;
+#endif
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_EXCEPTION_CODES, sizeof(exc_codes), &uaddr)) {
+		copyout(exc_codes, uaddr, sizeof(exc_codes));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PID, sizeof(p->p_pid), &uaddr)) {
+		copyout(&p->p_pid, uaddr, sizeof(p->p_pid));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PPID, sizeof(p->p_ppid), &uaddr)) {
+		copyout(&p->p_ppid, uaddr, sizeof(p->p_ppid));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_CRASHED_THREADID, sizeof(uint64_t), &uaddr)) {
+		copyout(&crashed_threadid, uaddr, sizeof(uint64_t));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_RUSAGE, sizeof(struct rusage), &uaddr)) {
+		copyout(&rup->ru, uaddr, sizeof(struct rusage));
+	}
+
+	if (KERN_SUCCESS ==
+	    kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_BSDINFOWITHUNIQID, sizeof(struct proc_uniqidentifierinfo), &uaddr)) {
+		proc_piduniqidentifierinfo(p, &p_uniqidinfo);
+		copyout(&p_uniqidinfo, uaddr, sizeof(struct proc_uniqidentifierinfo));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_RUSAGE_INFO, sizeof(rusage_info_current), &uaddr)) {
+		copyout(&rup->ri, uaddr, sizeof(rusage_info_current));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_CSFLAGS, sizeof(p->p_csflags), &uaddr)) {
+		copyout(&p->p_csflags, uaddr, sizeof(p->p_csflags));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_NAME, sizeof(p->p_comm), &uaddr)) {
+		copyout(&p->p_comm, uaddr, sizeof(p->p_comm));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_STARTTIME, sizeof(p->p_start), &uaddr)) {
+		struct timeval64 t64;
+		t64.tv_sec = (int64_t)p->p_start.tv_sec;
+		t64.tv_usec = (int64_t)p->p_start.tv_usec;
+		copyout(&t64, uaddr, sizeof(t64));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_USERSTACK, sizeof(p->user_stack), &uaddr)) {
+		copyout(&p->user_stack, uaddr, sizeof(p->user_stack));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_ARGSLEN, sizeof(p->p_argslen), &uaddr)) {
+		copyout(&p->p_argslen, uaddr, sizeof(p->p_argslen));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_ARGC, sizeof(p->p_argc), &uaddr)) {
+		copyout(&p->p_argc, uaddr, sizeof(p->p_argc));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_PATH, MAXPATHLEN, &uaddr)) {
+		proc_pidpathinfo(p, 0, uaddr, MAXPATHLEN, &retval);
+	}
+
+	pflags = p->p_flag & (P_LP64 | P_SUGID);
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_FLAGS, sizeof(pflags), &uaddr)) {
+		copyout(&pflags, uaddr, sizeof(pflags));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_UID, sizeof(p->p_uid), &uaddr)) {
+		copyout(&p->p_uid, uaddr, sizeof(p->p_uid));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_GID, sizeof(p->p_gid), &uaddr)) {
+		copyout(&p->p_gid, uaddr, sizeof(p->p_gid));
+	}
+
+	cputype = cpu_type() & ~CPU_ARCH_MASK;
+	if (IS_64BIT_PROCESS(p))
+		cputype |= CPU_ARCH_ABI64;
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_CPUTYPE, sizeof(cpu_type_t), &uaddr)) {
+		copyout(&cputype, uaddr, sizeof(cpu_type_t));
+	}
+
+	bzero(&pwqinfo, sizeof(struct proc_workqueueinfo));
+	retval = fill_procworkqueue(p, &pwqinfo);
+	if (retval == 0) {
+		if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_WORKQUEUEINFO, sizeof(struct proc_workqueueinfo), &uaddr)) {
+			copyout(&pwqinfo, uaddr, sizeof(struct proc_workqueueinfo));
+		}
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_RESPONSIBLE_PID, sizeof(p->p_responsible_pid), &uaddr)) {
+		copyout(&p->p_responsible_pid, uaddr, sizeof(p->p_responsible_pid));
+	}
+
+#if CONFIG_MEMORYSTATUS
+	memstat_dirty_flags = memorystatus_dirty_get(p);
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_DIRTY_FLAGS, sizeof(memstat_dirty_flags), &uaddr)) {
+		copyout(&memstat_dirty_flags, uaddr, sizeof(memstat_dirty_flags));
+	}
+#endif
+
+}
+
+static __attribute__((noinline)) void
+launchd_crashed_panic(proc_t p, int rv)
+{
+	printf("pid 1 exited (signal %d, exit %d)\n",
+	    WTERMSIG(rv), WEXITSTATUS(rv));
+
+#if (DEVELOPMENT || DEBUG)
+	/*
+	 * For debugging purposes, generate a core file of initproc before
+	 * panicking. Leave at least 300 MB free on the root volume, and ignore
+	 * the process's corefile ulimit. fsync() the file to ensure it lands on disk
+	 * before the panic hits.
+	 */
+
+	int             err;
+	uint64_t        coredump_start = mach_absolute_time();
+	uint64_t        coredump_end;
+	clock_sec_t     tv_sec;
+	clock_usec_t    tv_usec;
+	uint32_t        tv_msec;
+
+	err = coredump(p, 300, COREDUMP_IGNORE_ULIMIT | COREDUMP_FULLFSYNC);
+
+	coredump_end = mach_absolute_time();
+
+	absolutetime_to_microtime(coredump_end - coredump_start, &tv_sec, &tv_usec);
+
+	tv_msec = tv_usec / 1000;
+
+	if (err != 0) {
+		printf("Failed to generate initproc core file: error %d, took %d.%03d seconds\n",
+		       err, (uint32_t)tv_sec, tv_msec);
+	} else {
+		printf("Generated initproc core file in %d.%03d seconds\n",
+		       (uint32_t)tv_sec, tv_msec);
+	}
+#endif
+
+	sync(p, (void *)NULL, (int *)NULL);
+
+	panic_plain("%s exited (signal %d, exit status %d %s)", (p->p_name[0] != '\0' ? p->p_name : "initproc"), WTERMSIG(rv),
+	            WEXITSTATUS(rv), ((p->p_csflags & CS_KILLED) ? "CS_KILLED" : ""));
 }
 
 /*
@@ -337,32 +509,11 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 		}
 		sig_lock_to_exit(p);
 	}
-	if (p == initproc && current_proc() == p) {
-		proc_unlock(p);
-		printf("pid 1 exited (signal %d, exit %d)",
-		    WTERMSIG(rv), WEXITSTATUS(rv));
-#if (DEVELOPMENT || DEBUG)
-		int err;
-		/*
-		 * For debugging purposes, generate a core file of initproc before
-		 * panicking. Leave at least 300 MB free on the root volume, and ignore
-		 * the process's corefile ulimit.
-		 */
-		if ((err = coredump(p, 300, 1)) != 0) {
-			printf("Failed to generate initproc core file: error %d", err);
-		} else {
-			printf("Generated initproc core file");
-			sync(p, (void *)NULL, (int *)NULL);
-		}
-#endif
-		init_task_died = TRUE;
-		panic("%s died\nState at Last Exception:\n\n%s", 
-							(p->p_comm[0] != '\0' ?
-								p->p_comm :
-								"launchd"),
-							init_task_failure_data);
-	}
 
+	if (p == initproc && current_proc() == p) {
+		init_task_died = TRUE;
+	}
+	
 	p->p_lflag |= P_LEXIT;
 	p->p_xstat = rv;
 	p->p_lflag |= jetsam_flags;
@@ -381,11 +532,19 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 void
 proc_prepareexit(proc_t p, int rv, boolean_t perf_notify) 
 {
-	mach_exception_data_type_t code, subcode;
+	mach_exception_data_type_t code = 0, subcode = 0;
+
 	struct uthread *ut;
 	thread_t self = current_thread();
 	ut = get_bsdthread_info(self);
 	struct rusage_superset *rup;
+	int kr = 0;
+	int create_corpse = FALSE;
+
+	if (p == initproc) {
+		launchd_crashed_panic(p, rv);
+		/* NOTREACHED */
+	}
 
  	/* If a core should be generated, notify crash reporter */
 	if (hassigprop(WTERMSIG(rv), SA_CORE) || ((p->p_csflags & CS_KILLED) != 0)) {
@@ -407,13 +566,38 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 			((ut->uu_exception & 0x0f) << 20) | 
 			((int)ut->uu_code & 0xfffff);
 		subcode = ut->uu_subcode;
-		(void) task_exception_notify(EXC_CRASH, code, subcode);
+
+		kr = task_exception_notify(EXC_CRASH, code, subcode);
+
+		/* Nobody handled EXC_CRASH?? remember to make corpse */
+		if (kr != 0) {
+			create_corpse = TRUE;
+		}
 	}
 
 skipcheck:
 	/* Notify the perf server? */
 	if (perf_notify) {
 		(void)sys_perf_notify(self, p->p_pid);
+	}
+
+
+	/* stash the usage into corpse data if making_corpse == true */
+	if (create_corpse == TRUE) {
+		kr = task_mark_corpse(current_task());
+		if (kr != KERN_SUCCESS) {
+			if (kr == KERN_NO_SPACE) {
+				printf("Process[%d] has no vm space for corpse info.\n", p->p_pid);
+			} else if (kr == KERN_NOT_SUPPORTED) {
+				printf("Process[%d] was destined to be corpse. But corpse is disabled by config.\n", p->p_pid);
+			} else {
+				printf("Process[%d] crashed: %s. Too many corpses being created.\n", p->p_pid, p->p_comm);
+			}
+			create_corpse = FALSE;
+		} else {
+			/* XXX: <rdar://problem/20491659> Need to sync ATM buffer before crash */
+			kr = task_send_trace_memory(current_task(), p->p_pid, p->p_uniqueid);
+		}
 	}
 
 	/*
@@ -436,7 +620,9 @@ skipcheck:
 		 */
 		p->p_ru = rup;
 	}
-
+	if (create_corpse) {
+		populate_corpse_crashinfo(p, task_get_corpseinfo(current_task()), rup, code, subcode);
+	}
 	/*
 	 * Remove proc from allproc queue and from pidhash chain.
 	 * Need to do this before we do anything that can block.
@@ -576,6 +762,8 @@ proc_exit(proc_t p)
 
 	workqueue_mark_exiting(p);
 	workqueue_exit(p);
+	kqueue_dealloc(p->p_wqkqueue);
+	p->p_wqkqueue = NULL;
 
 	_aio_exit( p );
 
@@ -1128,13 +1316,8 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 	 * and refernce is dropped after these calls down below
 	 * (locking protection is provided by list lock held in chgproccnt)
 	 */
-	(void)chgproccnt(kauth_cred_getruid(child->p_ucred), -1);
 
-#if CONFIG_LCTX
-	ALLLCTX_LOCK;
-	leavelctx(child);
-	ALLLCTX_UNLOCK;
-#endif
+	(void)chgproccnt(kauth_cred_getruid(child->p_ucred), -1);
 
 	/*
 	 * Free up credentials.

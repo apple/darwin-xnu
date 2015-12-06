@@ -280,9 +280,9 @@ static u_int64_t sfb_hinterval;
 SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, hinterval, CTLFLAG_RW|CTLFLAG_LOCKED,
     &sfb_hinterval, "SFB hash interval in nanoseconds");
 
-static u_int64_t sfb_target_qdelay;
+static u_int64_t sfb_target_qdelay = 0;
 SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, target_qdelay, CTLFLAG_RW|CTLFLAG_LOCKED,
-    &sfb_target_qdelay, "SFB target queue delay in milliseconds");
+    &sfb_target_qdelay, "SFB target queue delay in nanoseconds");
 
 static u_int64_t sfb_update_interval;
 SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, update_interval,
@@ -457,6 +457,15 @@ sfb_calc_target_qdelay(struct sfb *sp, u_int64_t out_bw)
 	 */
 	if (target_qdelay == 0)
 		target_qdelay = IFQ_TARGET_DELAY;
+
+	/*
+	 * If a delay has been added to ifnet start callback for
+	 * coalescing, we have to add that to the pre-set target delay
+	 * because the packets can be in the queue longer.
+	 */
+	if ((ifp->if_eflags & IFEF_ENQUEUE_MULTI) &&
+		ifp->if_start_delay_timeout > 0)
+		target_qdelay += ifp->if_start_delay_timeout;
 
 	sp->sfb_target_qdelay = target_qdelay;
 }
@@ -1147,8 +1156,7 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 	u_int16_t pmin;
 	int fc_adv = 0;
 	int ret = CLASSQEQ_SUCCESS;
-
-	nanouptime(&now);
+	u_int32_t maxqsize = 0;
 
 	s = sp->sfb_current;
 	VERIFY((s + (s ^ 1)) == 1);
@@ -1156,6 +1164,13 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 	/* See comments in <rdar://problem/14040693> */
 	VERIFY(!(pkt->pkt_flags & PKTF_PRIV_GUARDED));
 	pkt->pkt_flags |= PKTF_PRIV_GUARDED;
+
+	if (pkt->pkt_enqueue_ts > 0) {
+		net_nsectimer(&pkt->pkt_enqueue_ts, &now); 
+	} else {
+		nanouptime(&now);
+		net_timernsec(&now, &pkt->pkt_enqueue_ts);
+	}
 
 	/* time to swap the bins? */
 	if (net_timercmp(&now, &sp->sfb_nextreset, >=)) {
@@ -1169,6 +1184,13 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 		net_timeradd(&now, &sp->sfb_update_interval,
 		    &sp->sfb_update_time);
 	}
+
+	/*
+	 * If getq time is not set because this is the first packet
+	 * or after idle time, set it now so that we can detect a stall.
+	 */
+	if (qsize(q) == 0 && !net_timerisset(&sp->sfb_getqtime))
+		*(&sp->sfb_getqtime) = *(&now);
 
 	pkt->pkt_sfb_flags = 0;
 	pkt->pkt_sfb_hash16[s] =
@@ -1218,25 +1240,33 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 		sp->sfb_stats.drop_pbox++;
 	}
 
-	/*
-	 * if max queue size is static, make it a forced drop
-	 * when the queue length hits the queue limit
-	 */
-	if (!(SFB_QUEUE_DELAYBASED(sp)) &&
-	    droptype == DTYPE_NODROP && qlen(q) >= qlimit(q)) {
-		droptype = DTYPE_FORCED;
-		sp->sfb_stats.drop_queue++;
-	}
+	if (SFB_QUEUE_DELAYBASED(sp))
+		maxqsize = SFB_QUEUE_DELAYBASED_MAXSIZE;
+	else
+		maxqsize = qlimit(q);
 
 	/*
-	 * delay based queues have a larger maximum size to
-	 * allow for bursts
+	 * When the queue length hits the queue limit, make it a forced
+	 * drop
 	 */
-	if (SFB_QUEUE_DELAYBASED(sp) &&
-	    droptype == DTYPE_NODROP &&
-	    qlen(q) >= SFB_QUEUE_DELAYBASED_MAXSIZE) {
-		droptype = DTYPE_FORCED;
-		sp->sfb_stats.drop_queue++;
+	if (droptype == DTYPE_NODROP && qlen(q) >= maxqsize) {
+		if (pkt->pkt_proto == IPPROTO_TCP &&
+		    ((pkt->pkt_flags & PKTF_TCP_REXMT) ||
+		    (sp->sfb_flags & SFBF_LAST_PKT_DROPPED))) {
+			/*
+			 * At some level, dropping packets will make the
+			 * flows backoff and will keep memory requirements
+			 * under control. But we should not cause a tail
+			 * drop because it can take a long time for a
+			 * TCP flow to recover. We should try to drop
+			 * alternate packets instead.
+			 */
+			sp->sfb_flags &= ~SFBF_LAST_PKT_DROPPED;
+		} else {
+			droptype = DTYPE_FORCED;
+			sp->sfb_stats.drop_queue++;
+			sp->sfb_flags |= SFBF_LAST_PKT_DROPPED;
+		}
 	}
 
 	if (fc_adv == 1 && droptype != DTYPE_FORCED &&
@@ -1255,7 +1285,6 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 	}
 	/* if successful enqueue this packet, else drop it */
 	if (droptype == DTYPE_NODROP) {
-		net_timernsec(&now, &pkt->pkt_enqueue_ts);
 		_addq(q, m);
 	} else {
 		IFCQ_CONVERT_LOCK(&sp->sfb_ifp->if_snd);
@@ -1346,6 +1375,7 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 			sp->sfb_min_qdelay = 0;
 		}
 	}
+	pkt->pkt_enqueue_ts = 0;
 
 	/*
 	 * Clearpkts are the ones which were in the queue when the hash
@@ -1378,6 +1408,7 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 		sp->sfb_min_qdelay = 0;
 		sp->sfb_fc_threshold = 0;
 		net_timerclear(&sp->sfb_update_time);
+		net_timerclear(&sp->sfb_getqtime);
 	}
 
 	return (m);

@@ -2838,13 +2838,12 @@ add_rule(struct ip_fw **head, struct ip_fw *input_rule)
 	if (*head == NULL && input_rule->rulenum != IPFW_DEFAULT_RULE)
 		return (EINVAL);
 
-	rule = _MALLOC(l, M_IPFW, M_WAIT);
+	rule = _MALLOC(l, M_IPFW, M_WAIT | M_ZERO);
 	if (rule == NULL) {
 		printf("ipfw2: add_rule MALLOC failed\n");
 		return (ENOSPC);
 	}
 	
-	bzero(rule, l);
 	bcopy(input_rule, rule, l);
 
 	rule->next = NULL;
@@ -3539,14 +3538,12 @@ ipfw_ctl(struct sockopt *sopt)
 		 * how much room is needed, do not bother filling up the
 		 * buffer, just jump to the sooptcopyout.
 		 */
-		buf = _MALLOC(size, M_TEMP, M_WAITOK);
+		buf = _MALLOC(size, M_TEMP, M_WAITOK | M_ZERO);
 		if (buf == 0) {
 			lck_mtx_unlock(ipfw_mutex);
 			error = ENOBUFS;
 			break;
 		}
-		
-		bzero(buf, size);
 
 		bp = buf;
 		for (rule = layer3_chain; rule ; rule = rule->next) {
@@ -3607,7 +3604,7 @@ ipfw_ctl(struct sockopt *sopt)
 						ipfw_dyn_dst->ack_rev = p->ack_rev;
 						ipfw_dyn_dst->dyn_type = p->dyn_type;
 						ipfw_dyn_dst->count = p->count;
-						last = (char*)&ipfw_dyn_dst->next;
+						last = (char*)ipfw_dyn_dst;
 					} else {
 						ipfw_dyn_rule_32	*ipfw_dyn_dst;
 						
@@ -3633,11 +3630,16 @@ ipfw_ctl(struct sockopt *sopt)
 						ipfw_dyn_dst->ack_rev = p->ack_rev;
 						ipfw_dyn_dst->dyn_type = p->dyn_type;
 						ipfw_dyn_dst->count = p->count;
-						last = (char*)&ipfw_dyn_dst->next;
+						last = (char*)ipfw_dyn_dst;
 					}
 				}
-			if (last != NULL) /* mark last dynamic rule */
-				bzero(last, sizeof(last));
+			/* mark last dynamic rule */
+			if (last != NULL) {
+				if (is64user)
+					((ipfw_dyn_rule_64 *)last)->next = 0;
+				else
+					((ipfw_dyn_rule_32 *)last)->next = 0;
+			}
 		}
 		lck_mtx_unlock(ipfw_mutex);
 
@@ -3758,13 +3760,11 @@ ipfw_ctl(struct sockopt *sopt)
 	case IP_FW_ADD:
 	{
 		size_t savedsopt_valsize=0;
-		rule = _MALLOC(RULE_MAXSIZE, M_TEMP, M_WAITOK);
+		rule = _MALLOC(RULE_MAXSIZE, M_TEMP, M_WAITOK | M_ZERO);
 		if (rule == 0) {
 			error = ENOBUFS;
 			break;
 		}
-		
-		bzero(rule, RULE_MAXSIZE);
 
 		if (api_version != IP_FW_CURRENT_API_VERSION) {
 			error = ipfw_convert_to_latest(sopt, rule, api_version, is64user);

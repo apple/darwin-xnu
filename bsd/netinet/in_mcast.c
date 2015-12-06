@@ -1737,7 +1737,7 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 		/* we never use msfr.msfr_srcs; */
-		memcpy(&msfr, &msfr64, sizeof(msfr));
+		memcpy(&msfr, &msfr64, sizeof(msfr64));
 	} else {
 		error = sooptcopyin(sopt, &msfr32,
 		    sizeof(struct __msfilterreq32),
@@ -1745,7 +1745,7 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 		/* we never use msfr.msfr_srcs; */
-		memcpy(&msfr, &msfr32, sizeof(msfr));
+		memcpy(&msfr, &msfr32, sizeof(msfr32));
 	}
 
 	ifnet_head_lock_shared();
@@ -1809,7 +1809,6 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 			IMO_UNLOCK(imo);
 			return (ENOBUFS);
 		}
-		bzero(tss, (size_t) msfr.msfr_nsrcs * sizeof(*tss));
 	}
 
 	/*
@@ -1858,7 +1857,7 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		msfr32.msfr_ifindex = msfr.msfr_ifindex;
 		msfr32.msfr_fmode   = msfr.msfr_fmode;
 		msfr32.msfr_nsrcs   = msfr.msfr_nsrcs;
-		memcpy(&msfr64.msfr_group, &msfr.msfr_group,
+		memcpy(&msfr32.msfr_group, &msfr.msfr_group,
 		    sizeof(struct sockaddr_storage));
 		error = sooptcopyout(sopt, &msfr32,
 		    sizeof(struct __msfilterreq32));
@@ -2723,7 +2722,7 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 		/* we never use msfr.msfr_srcs; */
-		memcpy(&msfr, &msfr64, sizeof(msfr));
+		memcpy(&msfr, &msfr64, sizeof(msfr64));
 	} else {
 		error = sooptcopyin(sopt, &msfr32,
 		    sizeof(struct __msfilterreq32),
@@ -2731,7 +2730,7 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 		/* we never use msfr.msfr_srcs; */
-		memcpy(&msfr, &msfr32, sizeof(msfr));
+		memcpy(&msfr, &msfr32, sizeof(msfr32));
 	}
 
 	if ((size_t) msfr.msfr_nsrcs >

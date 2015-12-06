@@ -48,6 +48,7 @@ extern const OSSymbol *		gIODTPHandleKey;
 extern const OSSymbol *		gIODTCompatibleKey;
 extern const OSSymbol * 	gIODTTypeKey;
 extern const OSSymbol * 	gIODTModelKey;
+extern const OSSymbol * 	gIODTTargetTypeKey;
 
 extern const OSSymbol *		gIODTAAPLInterruptsKey;
 extern const OSSymbol *		gIODTDefaultInterruptController;

@@ -118,7 +118,18 @@ A. How to build XNU:
 
     $ make cscope	# this will build cscope database
 
-8) Other makefile options
+8) Reindenting files
+
+  Source files can be reindented using clang-format setup in .clang-format. XNU follow a variant of WebKit style for source code formatting. Please refer to format styles at http://www.webkit.org/coding/coding-style.html. Further options about style options is available at http://clang.llvm.org/docs/ClangFormatStyleOptions.html
+
+  Note: clang-format binary may not be part of base installation. It can be compiled from llvm clang sources and is reachable in $PATH.
+
+  From the top directory, run:
+
+   $ make reindent      # reindent all source files using clang format.
+
+
+9) Other makefile options
 
    $ make MAKEJOBS=-j8    # this will use 8 processes during the build. The default is 2x the number of active CPUS.
    $ make -j8             # the standard command-line option is also accepted
@@ -129,6 +140,8 @@ A. How to build XNU:
 
    $ make REMOTEBUILD=user@remotehost # perform build on remote host
 
+   $ make BUILD_JSON_COMPILATION_DATABASE=1 # Build Clang JSON Compilation Database
+
 =============================================
 B. How to install a new header file from XNU
 
@@ -137,9 +150,8 @@ B. How to install a new header file from XNU
 1) XNU installs header files at the following locations -
 	a. $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
 	b. $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
-	c. $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
+	c. $(DSTROOT)/usr/include/
 	d. $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
-	e. $(DSTROOT)/usr/include/
 
 	Kernel.framework is used by kernel extensions.  System.framework 
 	and /usr/include are used by user level applications.  The header 
@@ -156,9 +168,7 @@ B. How to install a new header file from XNU
    from each file list are -
 
    a. DATAFILES : To make header file available in user level -
-	  $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
-	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
-	  $(DSTROOT)/usr/include/
+	  $(DSTROOT)/usr/include
 
    b. PRIVATE_DATAFILES : To make header file available to Apple internal in 
       user level -
@@ -179,20 +189,19 @@ B. How to install a new header file from XNU
    by adding the appropriate file lists.  The default install lists, its 
    member file lists and their default location are described below - 
 
-   a. INSTALL_MI_LIST : Installs header file to location that is available to 
+   a. INSTALL_MI_LIST : Installs header file to a location that is available to
       everyone in user level. 
       Locations -
-   	  $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
-	  $(DSTROOT)/usr/include/
+	  $(DSTROOT)/usr/include
       Definition -
 	  INSTALL_MI_LIST = ${DATAFILES}
 
-   b. INSTALL_MI_LCL_LIST : Installs header file to location that is available
+   b. INSTALL_MI_LCL_LIST : Installs header file to a location that is available
       for Apple internal in user level.
       Locations -
 	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
       Definition -
-	  INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+	  INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
    c. INSTALL_KF_MI_LIST : Installs header file to location that is available
       to everyone for kernel extensions.

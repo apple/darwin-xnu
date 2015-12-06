@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2007, 2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,6 +93,7 @@
 #include <sys/acct.h>
 #include <sys/codesign.h>
 #include <sys/sysproto.h>
+
 #if CONFIG_DTRACE
 /* Do not include dtrace.h, it redefines kmem_[alloc/free] */
 extern void dtrace_fasttrap_fork(proc_t, proc_t);
@@ -149,10 +150,10 @@ void thread_set_child(thread_t child, int pid);
 void *act_thread_csave(void);
 
 
-thread_t cloneproc(task_t, coalition_t, proc_t, int, int);
+thread_t cloneproc(task_t, coalition_t *, proc_t, int, int);
 proc_t forkproc(proc_t);
 void forkproc_free(proc_t);
-thread_t fork_create_child(task_t parent_task, coalition_t parent_coalition, proc_t child, int inherit_memory, int is64bit);
+thread_t fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t child, int inherit_memory, int is64bit);
 void proc_vfork_begin(proc_t parent_proc);
 void proc_vfork_end(proc_t parent_proc);
 
@@ -286,7 +287,7 @@ vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
 	thread_t child_thread;
 	int err;
 
-	if ((err = fork1(parent_proc, &child_thread, PROC_CREATE_VFORK, COALITION_NULL)) != 0) {
+	if ((err = fork1(parent_proc, &child_thread, PROC_CREATE_VFORK, NULL)) != 0) {
 		retval[1] = 0;
 	} else {
 		uthread_t ut = get_bsdthread_info(current_thread());
@@ -323,11 +324,12 @@ vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
  *					Mach thread_t of the child process
  *					breated
  *		kind			kind of creation being requested
- *		coalition		if spawn, coalition the child process
- *					should join, or COALITION_NULL to
+ *		coalitions		if spawn, the set of coalitions the
+ *					child process should join, or NULL to
  *					inherit the parent's. On non-spawns,
  *					this param is ignored and the child
- *					always inherits the parent's coalition.
+ *					always inherits the parent's
+ *					coalitions.
  *
  * Notes:	Permissable values for 'kind':
  *
@@ -359,7 +361,7 @@ vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
  *		back to the other information.
  */
 int
-fork1(proc_t parent_proc, thread_t *child_threadp, int kind, coalition_t coalition)
+fork1(proc_t parent_proc, thread_t *child_threadp, int kind, coalition_t *coalitions)
 {
 	thread_t parent_thread = (thread_t)current_thread();
 	uthread_t parent_uthread = (uthread_t)get_bsdthread_info(parent_thread);
@@ -392,6 +394,7 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind, coalition_t coaliti
 	 * always less than what an rlim_t can hold.
 	 * (locking protection is provided by list lock held in chgproccnt)
 	 */
+
 	count = chgproccnt(uid, 1);
 	if (uid != 0 &&
 	    (rlim_t)count > parent_proc->p_rlimit[RLIMIT_NPROC].rlim_cur) {
@@ -552,7 +555,7 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind, coalition_t coaliti
 		 * differences.  Contrarily, spawned processes do not inherit.
 		 */
 		if ((child_thread = cloneproc(parent_proc->task,
-						spawn ? coalition : COALITION_NULL,
+						spawn ? coalitions : NULL,
 						parent_proc,
 						spawn ? FALSE : TRUE,
 						FALSE)) == NULL) {
@@ -758,7 +761,7 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
  *		process
  *
  * Parameters:	parent_task		parent task
- *		parent_coalition	parent_coalition
+ *		parent_coalitions	parent's set of coalitions
  *		child_proc		child process
  *		inherit_memory		TRUE, if the parents address space is
  *					to be inherited by the child
@@ -772,7 +775,7 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
  *		vfork() equivalent call, and in the system bootstrap case.
  *
  *		It creates a new task and thread (and as a side effect of the
- *		thread creation, a uthread) in the parent coalition, which is
+ *		thread creation, a uthread) in the parent coalition set, which is
  *		then associated with the process 'child'.  If the parent
  *		process address space is to be inherited, then a flag
  *		indicates that the newly created task should inherit this from
@@ -783,7 +786,7 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
  *		in this case, 'inherit_memory' MUST be FALSE.
  */
 thread_t
-fork_create_child(task_t parent_task, coalition_t parent_coalition, proc_t child_proc, int inherit_memory, int is64bit)
+fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t child_proc, int inherit_memory, int is64bit)
 {
 	thread_t	child_thread = NULL;
 	task_t		child_task;
@@ -791,7 +794,7 @@ fork_create_child(task_t parent_task, coalition_t parent_coalition, proc_t child
 
 	/* Create a new task for the child process */
 	result = task_create_internal(parent_task,
-					parent_coalition,
+					parent_coalitions,
 					inherit_memory,
 					is64bit,
 					&child_task);
@@ -825,7 +828,7 @@ fork_create_child(task_t parent_task, coalition_t parent_coalition, proc_t child
 		resetpriority(child_proc);
 
 	/* Create a new thread for the child process */
-	result = thread_create(child_task, &child_thread);
+	result = thread_create_with_continuation(child_task, &child_thread, (thread_continue_t)proc_wait_to_return);
 	if (result != KERN_SUCCESS) {
 		printf("%s: thread_create failed. Code: %d\n",
 		    __func__, result);
@@ -887,7 +890,7 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
 
 	retval[1] = 0;		/* flag parent return for user space */
 
-	if ((err = fork1(parent_proc, &child_thread, PROC_CREATE_FORK, COALITION_NULL)) == 0) {
+	if ((err = fork1(parent_proc, &child_thread, PROC_CREATE_FORK, NULL)) == 0) {
 		task_t child_task;
 		proc_t child_proc;
 
@@ -913,7 +916,7 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
 #endif
 
 		/* "Return" to the child */
-		(void)thread_resume(child_thread);
+		proc_clear_return_wait(child_proc, child_thread);
 
 		/* drop the extra references we got during the creation */
 		if ((child_task = (task_t)get_threadtask(child_thread)) != NULL) {
@@ -965,7 +968,7 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
  *		live with this being somewhat awkward.
  */
 thread_t
-cloneproc(task_t parent_task, coalition_t parent_coalition, proc_t parent_proc, int inherit_memory, int memstat_internal)
+cloneproc(task_t parent_task, coalition_t *parent_coalitions, proc_t parent_proc, int inherit_memory, int memstat_internal)
 {
 #if !CONFIG_MEMORYSTATUS
 #pragma unused(memstat_internal)
@@ -979,7 +982,7 @@ cloneproc(task_t parent_task, coalition_t parent_coalition, proc_t parent_proc, 
 		goto bad;
 	}
 
-	child_thread = fork_create_child(parent_task, parent_coalition, child_proc, inherit_memory, (parent_task == TASK_NULL) ? FALSE : (parent_proc->p_flag & P_LP64));
+	child_thread = fork_create_child(parent_task, parent_coalitions, child_proc, inherit_memory, (parent_task == TASK_NULL) ? FALSE : (parent_proc->p_flag & P_LP64));
 
 	if (child_thread == NULL) {
 		/*
@@ -1196,6 +1199,7 @@ retry:
 	}
 	nprocs++;
 	child_proc->p_pid = nextpid;
+	child_proc->p_responsible_pid = nextpid;	/* initially responsible for self */
 	child_proc->p_idversion = nextpidversion++;
 	/* kernel process is handcrafted and not from fork, so start from 1 */
 	child_proc->p_uniqueid = ++nextuniqueid;
@@ -1232,7 +1236,7 @@ retry:
 	 * Increase reference counts on shared objects.
 	 * The p_stats and p_sigacts substructs are set in vm_fork.
 	 */
-	child_proc->p_flag = (parent_proc->p_flag & (P_LP64 | P_TRANSLATED | P_AFFINITY | P_DISABLE_ASLR | P_DELAYIDLESLEEP));
+	child_proc->p_flag = (parent_proc->p_flag & (P_LP64 | P_DISABLE_ASLR | P_DELAYIDLESLEEP | P_SUGID));
 	if (parent_proc->p_flag & P_PROFIL)
 		startprofclock(child_proc);
 
@@ -1325,6 +1329,7 @@ retry:
 	 */
 	proc_signalstart(child_proc, 0);
 	proc_transstart(child_proc, 0, 0);
+	proc_set_return_wait(child_proc);
 
 	child_proc->p_pcaction = 0;
 
@@ -1359,24 +1364,12 @@ retry:
 	if ((parent_proc->p_lflag & P_LREGISTER) != 0) {
 		child_proc->p_lflag |= P_LREGISTER;
 	}
+	child_proc->p_wqkqueue = NULL;
 	child_proc->p_dispatchqueue_offset = parent_proc->p_dispatchqueue_offset;
 	child_proc->p_dispatchqueue_serialno_offset = parent_proc->p_dispatchqueue_serialno_offset;
 #if PSYNCH
 	pth_proc_hashinit(child_proc);
 #endif /* PSYNCH */
-
-#if CONFIG_LCTX
-	child_proc->p_lctx = NULL;
-	/* Add new process to login context (if any). */
-	if (parent_proc->p_lctx != NULL) {
-		/*
-		 * <rdar://6640564> This should probably be delayed in the
-		 * vfork() or posix_spawn() cases.
-		 */
-		LCTX_LOCK(parent_proc->p_lctx);
-		enterlctx(child_proc, parent_proc->p_lctx, 0);
-	}
-#endif
 
 #if CONFIG_MEMORYSTATUS
 	/* Memorystatus + jetsam init */
@@ -1518,29 +1511,52 @@ uthread_alloc(task_t task, thread_t thread, int noinherit)
 			uth->t_dtrace_scratch = dtrace_ptss_claim_entry(p);
 		}
 #endif
-#if CONFIG_MACF
-		mac_thread_label_init(uth);
-#endif
 	}
 
 	return (ut);
 }
 
+/*
+ * This routine frees the thread name field of the uthread_t structure. Split out of
+ * uthread_cleanup() so it can be called separately on the threads of a corpse after
+ * the corpse notification has been sent, and the handler has had a chance to extract
+ * the thread names.
+ */
+void
+uthread_cleanup_name(void *uthread)
+{
+	uthread_t uth = (uthread_t)uthread;
+
+	/*
+	 * <rdar://17834538>
+	 * Set pth_name to NULL before calling free().
+	 * Previously there was a race condition in the
+	 * case this code was executing during a stackshot
+	 * where the stackshot could try and copy pth_name
+	 * after it had been freed and before if was marked
+	 * as null.
+	 */
+	if (uth->pth_name != NULL) {
+		void *pth_name = uth->pth_name;
+		uth->pth_name = NULL;
+		kfree(pth_name, MAXTHREADNAMESIZE);
+	}
+	return;
+}
 
 /* 
  * This routine frees all the BSD context in uthread except the credential.
  * It does not free the uthread structure as well
  */
 void
-uthread_cleanup(task_t task, void *uthread, void * bsd_info)
+uthread_cleanup(task_t task, void *uthread, void * bsd_info, boolean_t is_corpse)
 {
 	struct _select *sel;
 	uthread_t uth = (uthread_t)uthread;
 	proc_t p = (proc_t)bsd_info;
-	void *pth_name;
 
 	if (uth->uu_lowpri_window || uth->uu_throttle_info) {
-	        /*
+		/*
 		 * task is marked as a low priority I/O type
 		 * and we've somehow managed to not dismiss the throttle
 		 * through the normal exit paths back to user space...
@@ -1573,25 +1589,20 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 		uth->uu_cdir = NULLVP;
 	}
 
-	if (uth->uu_allocsize && uth->uu_wqset){
-		kfree(uth->uu_wqset, uth->uu_allocsize);
-		uth->uu_allocsize = 0;
-		uth->uu_wqset = 0;
+	if (uth->uu_wqset) {
+		if (waitq_set_is_valid(uth->uu_wqset))
+			waitq_set_deinit(uth->uu_wqset);
+		FREE(uth->uu_wqset, M_SELECT);
+		uth->uu_wqset = NULL;
+		uth->uu_wqstate_sz = 0;
 	}
-	
-	/* 
-	 * <rdar://17834538>
-	 * Set pth_name to NULL before calling free().
-	 * Previously there was a race condition in the 
-	 * case this code was executing during a stackshot
-	 * where the stackshot could try and copy pth_name
-	 * after it had been freed and before if was marked
-	 * as null.
+
+	/*
+	 * defer the removal of the thread name on process corpses until the corpse has
+	 * been autopsied.
 	 */
-	if (uth->pth_name != NULL) {
-		pth_name = uth->pth_name;
-		uth->pth_name = NULL;
-		kfree(pth_name, MAXTHREADNAMESIZE);
+	if (!is_corpse) {
+		uthread_cleanup_name(uth);
 	}
 
 	if ((task != kernel_task) && p) {
@@ -1615,9 +1626,6 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 		if (tmpptr != NULL) {
 			dtrace_ptss_release_entry(p, tmpptr);
 		}
-#endif
-#if CONFIG_MACF
-		mac_thread_label_destroy(uth);
 #endif
 	}
 }

@@ -47,6 +47,7 @@
 
 #include <sys/proc.h>
 #include <sys/proc_internal.h>
+#include <sys/sysctl.h>
 #include <libkern/OSDebug.h>
 #include <kern/thread.h>
 
@@ -81,17 +82,31 @@ OSDefineMetaClassAndStructors(IOPMprot, OSObject)
 //******************************************************************************
 
 static bool                  gIOPMInitialized       = false;
-static uint32_t              gIOPMBusyCount         = 0;
-static uint32_t              gIOPMWorkCount         = 0;
+static uint32_t              gIOPMBusyRequestCount  = 0;
+static uint32_t              gIOPMWorkInvokeCount   = 0;
 static uint32_t              gIOPMTickleGeneration  = 0;
 static IOWorkLoop *          gIOPMWorkLoop          = 0;
 static IOPMRequestQueue *    gIOPMRequestQueue      = 0;
 static IOPMRequestQueue *    gIOPMReplyQueue        = 0;
 static IOPMWorkQueue *       gIOPMWorkQueue         = 0;
-static IOPMCompletionQueue * gIOPMFreeQueue         = 0;
+static IOPMCompletionQueue * gIOPMCompletionQueue   = 0;
 static IOPMRequest *         gIOPMRequest           = 0;
 static IOService *           gIOPMRootNode          = 0;
 static IOPlatformExpert *    gPlatform              = 0;
+
+static char                  gIOSpinDumpKextName[128];
+static char                  gIOSpinDumpDelayType[16];
+static uint32_t              gIOSpinDumpDelayDuration = 0;
+
+static SYSCTL_STRING(_debug, OID_AUTO, swd_kext_name,
+        CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
+        &gIOSpinDumpKextName, sizeof(gIOSpinDumpKextName), "");
+static SYSCTL_STRING(_debug, OID_AUTO, swd_delay_type,
+        CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
+        &gIOSpinDumpDelayType, sizeof(gIOSpinDumpDelayType), "");
+static SYSCTL_INT(_debug, OID_AUTO, swd_delay_duration,
+        CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
+        &gIOSpinDumpDelayDuration, 0, "");
 
 const OSSymbol *             gIOPMPowerClientDevice     = 0;
 const OSSymbol *             gIOPMPowerClientDriver     = 0;
@@ -102,6 +117,7 @@ const OSSymbol *             gIOPMPowerClientRootDomain = 0;
 static const OSSymbol *      gIOPMPowerClientAdvisoryTickle = 0;
 static bool                  gIOPMAdvisoryTickleEnabled = true;
 static thread_t              gIOPMWatchDogThread        = NULL;
+uint32_t                     gCanSleepTimeout           = 0;
 
 static uint32_t getPMRequestType( void )
 {
@@ -121,6 +137,8 @@ static IOPMRequestTag getPMRequestTag( void )
     }
     return tag;
 }
+
+SYSCTL_UINT(_kern, OID_AUTO, pmtimeout, CTLFLAG_RW | CTLFLAG_LOCKED, &gCanSleepTimeout, 0, "Power Management Timeout");
 
 //******************************************************************************
 // Macros
@@ -159,8 +177,12 @@ do {                                  \
 #define PM_LOCK_SLEEP(event, dl)    IOLockSleepDeadline(fPMLock, event, dl, THREAD_UNINT)
 #define PM_LOCK_WAKEUP(event)       IOLockWakeup(fPMLock, event, false)
 
+#define us_per_s                    1000000
 #define ns_per_us                   1000
-#define k30Seconds                  (30*1000000)
+#define k30Seconds                  (30*us_per_s)
+#define k5Seconds                   ( 5*us_per_s)
+#define kCanSleepMaxTimeReq         k30Seconds
+#define kMaxTimeRequested           k30Seconds
 #define kMinAckTimeoutTicks         (10*1000000)
 #define kIOPMTardyAckSPSKey         "IOPMTardyAckSetPowerState"
 #define kIOPMTardyAckPSCKey         "IOPMTardyAckPowerStateChange"
@@ -298,22 +320,21 @@ void IOService::PMinit( void )
             {
                 gIOPMRequestQueue = IOPMRequestQueue::create(
                     this, OSMemberFunctionCast(IOPMRequestQueue::Action,
-                        this, &IOService::servicePMRequestQueue));
+                        this, &IOService::actionPMRequestQueue));
 
                 gIOPMReplyQueue = IOPMRequestQueue::create(
                     this, OSMemberFunctionCast(IOPMRequestQueue::Action,
-                        this, &IOService::servicePMReplyQueue));
+                        this, &IOService::actionPMReplyQueue));
 
-                gIOPMWorkQueue = IOPMWorkQueue::create(
-                    this,
+                gIOPMWorkQueue = IOPMWorkQueue::create(this,
                     OSMemberFunctionCast(IOPMWorkQueue::Action, this,
-                        &IOService::servicePMRequest),
+                        &IOService::actionPMWorkQueueInvoke),
                     OSMemberFunctionCast(IOPMWorkQueue::Action, this,
-                        &IOService::retirePMRequest));
+                        &IOService::actionPMWorkQueueRetire));
 
-                gIOPMFreeQueue = IOPMCompletionQueue::create(
+                gIOPMCompletionQueue = IOPMCompletionQueue::create(
                     this, OSMemberFunctionCast(IOPMCompletionQueue::Action,
-                        this, &IOService::servicePMFreeQueue));
+                        this, &IOService::actionPMCompletionQueue));
 
                 if (gIOPMWorkLoop->addEventSource(gIOPMRequestQueue) !=
                     kIOReturnSuccess)
@@ -336,11 +357,13 @@ void IOService::PMinit( void )
                     gIOPMWorkQueue = 0;
                 }
 
-                if (gIOPMWorkLoop->addEventSource(gIOPMFreeQueue) !=
+                // Must be added after the work queue, which pushes request
+                // to the completion queue without signaling the work loop.
+                if (gIOPMWorkLoop->addEventSource(gIOPMCompletionQueue) !=
                     kIOReturnSuccess)
                 {
-                    gIOPMFreeQueue->release();
-                    gIOPMFreeQueue = 0;
+                    gIOPMCompletionQueue->release();
+                    gIOPMCompletionQueue = 0;
                 }
 
                 gIOPMPowerClientDevice =
@@ -360,9 +383,12 @@ void IOService::PMinit( void )
 
                 gIOPMPowerClientRootDomain =
                     OSSymbol::withCStringNoCopy( "RootDomainPower" );
+
+                gIOSpinDumpKextName[0] = '\0';
+                gIOSpinDumpDelayType[0] = '\0';
             }
 
-            if (gIOPMRequestQueue && gIOPMReplyQueue && gIOPMFreeQueue)
+            if (gIOPMRequestQueue && gIOPMReplyQueue && gIOPMCompletionQueue)
                 gIOPMInitialized = true;
         }
         if (!gIOPMInitialized)
@@ -432,6 +458,11 @@ void IOService::PMinit( void )
         fDriverCallEntry = thread_call_allocate(
             (thread_call_func_t) &IOService::pmDriverCallout, this);
         assert(fDriverCallEntry);
+        if (kIOKextSpinDump & gIOKitDebug)
+        {
+            fSpinDumpTimer = thread_call_allocate(
+                &IOService::spindump_timer_expired, (thread_call_param_t)this);
+        }
 
         // Check for powerChangeDone override.
         if (OSMemberFunctionCast(void (*)(void),
@@ -504,6 +535,11 @@ void IOService::PMfree( void )
         if ( fDriverCallEntry ) {
             thread_call_free(fDriverCallEntry);
             fDriverCallEntry = NULL;
+        }
+        if ( fSpinDumpTimer ) {
+            thread_call_cancel(fSpinDumpTimer);
+            thread_call_free(fSpinDumpTimer);
+            fSpinDumpTimer = NULL;
         }
         if ( fPMLock ) {
             IOLockFree(fPMLock);
@@ -827,7 +863,7 @@ IOReturn IOService::addPowerChild( IOService * child )
         requests[1]->fArg0 = connection;
         requests[2]->fArg0 = connection;
 
-        submitPMRequest( requests, 3 );
+        submitPMRequests( requests, 3 );
         return kIOReturnSuccess;
     }
     while (false);
@@ -1018,8 +1054,12 @@ IOReturn IOService::removePowerChild( IOPowerConnection * theNub )
             {
                 stop_ack_timer();
 
-                // Request unblocked, work queue
-                // should re-scan all busy requests.
+                // This parent may have a request in the work queue that is
+                // blocked on fHeadNotePendingAcks=0. And removePowerChild()
+                // is called while executing the child's PMstop request so they
+                // can occur simultaneously. IOPMWorkQueue::checkForWork() must
+                // restart and check all request queues again.
+
                 gIOPMWorkQueue->incrementProducerCount();
             }
         }
@@ -1308,7 +1348,6 @@ IOPMPowerFlags IOService::registerInterestedDriver( IOService * driver )
 
 IOReturn IOService::deRegisterInterestedDriver( IOService * driver )
 {
-    IOPMinformeeList *  list;
     IOPMinformee *      item;
     IOPMRequest *       request;
     bool                signal;
@@ -1319,18 +1358,25 @@ IOReturn IOService::deRegisterInterestedDriver( IOService * driver )
         return IOPMNotPowerManaged;
 
     PM_LOCK();
+    if (fInsertInterestSet)
+    {
+        fInsertInterestSet->removeObject(driver);
+    }
+
+    item = fInterestedDrivers->findItem(driver);
+    if (!item)
+    {
+        PM_UNLOCK();
+        return kIOReturnNotFound;
+    }
+
     signal = (!fRemoveInterestSet && !fInsertInterestSet);
     if (fRemoveInterestSet == NULL)
         fRemoveInterestSet = OSSet::withCapacity(4);
     if (fRemoveInterestSet)
     {
         fRemoveInterestSet->setObject(driver);
-        if (fInsertInterestSet)
-            fInsertInterestSet->removeObject(driver);
-
-        list = fInterestedDrivers;
-        item = list->findItem(driver);
-        if (item && item->active)
+        if (item->active)
         {
             item->active = false;
             waitForPMDriverCall( driver );
@@ -1740,6 +1786,13 @@ void IOService::handlePowerDomainWillChangeTo( IOPMRequest * request )
         maxPowerState = fControllingDriver->maxCapabilityForDomainState(
                             combinedPowerFlags);
 
+        if (parentChangeFlags & kIOPMDomainPowerDrop)
+        {
+            // fMaxPowerState set a limit on self-initiated power changes.
+            // Update it before a parent power drop.
+            fMaxPowerState = maxPowerState;
+        }
+
         // Use kIOPMSynchronize below instead of kIOPMRootBroadcastFlags
         // to avoid propagating the root change flags if any service must
         // change power state due to root's will-change notification.
@@ -1840,6 +1893,13 @@ void IOService::handlePowerDomainDidChangeTo( IOPMRequest * request )
     {
         maxPowerState = fControllingDriver->maxCapabilityForDomainState(
                             fParentsCurrentPowerFlags);
+
+        if ((parentChangeFlags & kIOPMDomainPowerDrop) == 0)
+        {
+            // fMaxPowerState set a limit on self-initiated power changes.
+            // Update it after a parent power rise.
+            fMaxPowerState = maxPowerState;
+        }
 
         if (fInitialPowerChange)
         {
@@ -2299,6 +2359,44 @@ IOReturn IOService::changePowerStateForRootDomain( IOPMPowerStateIndex ordinal )
 {
     OUR_PMLog(kPMLogChangeStateForRootDomain, ordinal, 0);
     return requestPowerState( gIOPMPowerClientRootDomain, ordinal );
+}
+
+//*********************************************************************************
+// [public for PMRD] quiescePowerTree
+//
+// For root domain to issue a request to quiesce the power tree.
+// Supplied callback invoked upon completion.
+//*********************************************************************************
+
+IOReturn IOService::quiescePowerTree(
+    void * target, IOPMCompletionAction action, void * param )
+{
+    IOPMRequest * request;
+
+    if (!initialized)
+        return kIOPMNotYetInitialized;
+    if (!target || !action)
+        return kIOReturnBadArgument;
+
+    OUR_PMLog(kPMLogQuiescePowerTree, 0, 0);
+
+    // Target the root node instead of root domain. This is to avoid blocking
+    // the quiesce request behind an existing root domain request in the work
+    // queue. Root parent and root domain requests in the work queue must not
+    // block the completion of the quiesce request.
+
+    request = acquirePMRequest(gIOPMRootNode, kIOPMRequestTypeQuiescePowerTree);
+    if (!request)
+        return kIOReturnNoMemory;
+
+    request->installCompletionAction(target, action, param);
+
+    // Submit through the normal request flow. This will make sure any request
+    // already in the request queue will get pushed over to the work queue for
+    // execution. Any request submitted after this request may not be serviced.
+
+    submitPMRequest( request );
+    return kIOReturnSuccess;
 }
 
 //*********************************************************************************
@@ -3847,9 +3945,11 @@ void IOService::driverSetPowerState( void )
     if (assertPMDriverCall(&callEntry))
     {
         OUR_PMLog(          kPMLogProgramHardware, (uintptr_t) this, powerState);
+        start_spindump_timer("SetState");
         clock_get_uptime(&fDriverCallStartTime);
         result = fControllingDriver->setPowerState( powerState, this );
         clock_get_uptime(&end);
+        stop_spindump_timer();
         OUR_PMLog((UInt32) -kPMLogProgramHardware, (uintptr_t) this, (UInt32) result);
 
         deassertPMDriverCall(&callEntry);
@@ -3926,17 +4026,21 @@ void IOService::driverInformPowerChange( void )
             if (fDriverCallReason == kDriverCallInformPreChange)
             {
                 OUR_PMLog(kPMLogInformDriverPreChange, (uintptr_t) this, powerState);
+                start_spindump_timer("WillChange");
                 clock_get_uptime(&informee->startTime);
                 result = driver->powerStateWillChangeTo(powerFlags, powerState, this);
                 clock_get_uptime(&end);
+                stop_spindump_timer();
                 OUR_PMLog((UInt32)-kPMLogInformDriverPreChange, (uintptr_t) this, result);
             }
             else
             {
                 OUR_PMLog(kPMLogInformDriverPostChange, (uintptr_t) this, powerState);
+                start_spindump_timer("DidChange");
                 clock_get_uptime(&informee->startTime);
                 result = driver->powerStateDidChangeTo(powerFlags, powerState, this);
                 clock_get_uptime(&end);
+                stop_spindump_timer();
                 OUR_PMLog((UInt32)-kPMLogInformDriverPostChange, (uintptr_t) this, result);
             }
 
@@ -4146,7 +4250,7 @@ void IOService::all_done( void )
     const IOPMPSEntry *     powerStatePtr;
     IOPMDriverCallEntry     callEntry;
     uint32_t                prevMachineState = fMachineState;
-    bool                    callAction = false;
+    bool                    actionCalled = false;
     uint64_t                ts;
 
     fMachineState = kIOPM_Finished;
@@ -4192,10 +4296,10 @@ void IOService::all_done( void )
     }
 
     // our power change
-    if ( fHeadNoteChangeFlags & kIOPMSelfInitiated )
+    if (fHeadNoteChangeFlags & kIOPMSelfInitiated)
     {
-        // could our driver switch to the new state?
-        if ( !( fHeadNoteChangeFlags & kIOPMNotDone) )
+        // power state changed
+        if ((fHeadNoteChangeFlags & kIOPMNotDone) == 0)
         {
             trackSystemSleepPreventers(
                 fCurrentPowerState, fHeadNotePowerState, fHeadNoteChangeFlags);
@@ -4224,7 +4328,7 @@ void IOService::all_done( void )
             OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, prevPowerState);
             PM_ACTION_2(actionPowerChangeDone,
                 fHeadNotePowerState, fHeadNoteChangeFlags);
-            callAction = true;
+            actionCalled = true;
 
             powerStatePtr = &fPowerStates[fCurrentPowerState];
             fCurrentCapabilityFlags = powerStatePtr->capabilityFlags;
@@ -4252,16 +4356,14 @@ void IOService::all_done( void )
         }
     }
 
-    // parent's power change
-    if ( fHeadNoteChangeFlags & kIOPMParentInitiated)
+    // parent-initiated power change
+    if (fHeadNoteChangeFlags & kIOPMParentInitiated)
     {
         if (fHeadNoteChangeFlags & kIOPMRootChangeDown)
             ParentChangeRootChangeDown();
 
-        if (((fHeadNoteChangeFlags & kIOPMDomainWillChange) &&
-             (StateOrder(fCurrentPowerState) >= StateOrder(fHeadNotePowerState)))   ||
-              ((fHeadNoteChangeFlags & kIOPMDomainDidChange)  &&
-             (StateOrder(fCurrentPowerState) < StateOrder(fHeadNotePowerState))))
+        // power state changed
+        if ((fHeadNoteChangeFlags & kIOPMNotDone) == 0)
         {
             trackSystemSleepPreventers(
                 fCurrentPowerState, fHeadNotePowerState, fHeadNoteChangeFlags);
@@ -4284,12 +4386,11 @@ void IOService::all_done( void )
 #if PM_VARS_SUPPORT
             fPMVars->myCurrentState = fCurrentPowerState;
 #endif
-            fMaxPowerState = fControllingDriver->maxCapabilityForDomainState(fHeadNoteDomainFlags);
 
             OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, prevPowerState);
             PM_ACTION_2(actionPowerChangeDone,
                 fHeadNotePowerState, fHeadNoteChangeFlags);
-            callAction = true;
+            actionCalled = true;
 
             powerStatePtr = &fPowerStates[fCurrentPowerState];
             fCurrentCapabilityFlags = powerStatePtr->capabilityFlags;
@@ -4314,7 +4415,7 @@ void IOService::all_done( void )
         fIdleTimerMinPowerState = kPowerStateZero;
     }
 
-    if (!callAction)
+    if (!actionCalled)
     {
         PM_ACTION_2(actionPowerChangeDone,
             fHeadNotePowerState, fHeadNoteChangeFlags);
@@ -4779,10 +4880,14 @@ IOReturn IOService::ParentChangeStart( void )
             // to our children.
             fMachineState     = kIOPM_SyncNotifyDidChange;
             fDriverCallReason = kDriverCallInformPreChange;
+            fHeadNoteChangeFlags |= kIOPMNotDone;
             notifyChildren();
             return IOPMWillAckLater;
         }
     }
+
+    // No power state change necessary
+    fHeadNoteChangeFlags |= kIOPMNotDone;
 
     all_done();
     return IOPMAckImplied;
@@ -4817,6 +4922,7 @@ void IOService::ParentChangeRootChangeDown( void )
         {
             updatePowerClient(gIOPMPowerClientDevice, kPowerStateZero);
             computeDesiredState(kPowerStateZero, true);
+            requestDomainPower( fDesiredPowerState );
             PM_LOG1("%s: tickle desire removed\n", fName);
         }
 
@@ -5237,13 +5343,20 @@ void IOService::start_watchdog_timer( void )
 {
     AbsoluteTime    deadline;
     boolean_t       pending;
+    static int      timeout = -1;
 
     if (!fWatchdogTimer || (kIOSleepWakeWdogOff & gIOKitDebug))
        return;
 
     if (thread_call_isactive(fWatchdogTimer)) return;
+    if (timeout == -1) {
+       PE_parse_boot_argn("swd_timeout", &timeout, sizeof(timeout));
+    }
+    if (timeout < 60) {
+       timeout = WATCHDOG_TIMER_PERIOD;
+    }
 
-    clock_interval_to_deadline(WATCHDOG_TIMER_PERIOD, kSecondScale, &deadline);
+    clock_interval_to_deadline(timeout, kSecondScale, &deadline);
 
     retain();
     pending = thread_call_enter_delayed(fWatchdogTimer, deadline);
@@ -5384,6 +5497,103 @@ IOService::ack_timer_expired( thread_call_param_t arg0, thread_call_param_t arg1
     if (gIOPMWorkLoop)
     {
         gIOPMWorkLoop->runAction(&actionAckTimerExpired, me);
+    }
+    me->release();
+}
+
+//*********************************************************************************
+// [private] start_spindump_timer
+//*********************************************************************************
+
+void IOService::start_spindump_timer( const char * delay_type )
+{
+    AbsoluteTime    deadline;
+    boolean_t       pending;
+
+    if (!fSpinDumpTimer || !(kIOKextSpinDump & gIOKitDebug))
+        return;
+
+    if (gIOSpinDumpKextName[0] == '\0' &&
+        !(PE_parse_boot_argn("swd_kext_name", &gIOSpinDumpKextName,
+        sizeof(gIOSpinDumpKextName))))
+    {
+        return;
+    }
+
+    if (strncmp(gIOSpinDumpKextName, fName, sizeof(gIOSpinDumpKextName)) != 0)
+        return;
+
+    if (gIOSpinDumpDelayType[0] == '\0' &&
+        !(PE_parse_boot_argn("swd_delay_type", &gIOSpinDumpDelayType,
+        sizeof(gIOSpinDumpDelayType))))
+    {
+        strncpy(gIOSpinDumpDelayType, "SetState", sizeof(gIOSpinDumpDelayType));
+    }
+
+    if (strncmp(delay_type, gIOSpinDumpDelayType, sizeof(gIOSpinDumpDelayType)) != 0)
+        return;
+
+    if (gIOSpinDumpDelayDuration == 0 &&
+        !(PE_parse_boot_argn("swd_delay_duration", &gIOSpinDumpDelayDuration,
+        sizeof(gIOSpinDumpDelayDuration))))
+    {
+        gIOSpinDumpDelayDuration = 300;
+    }
+
+    clock_interval_to_deadline(gIOSpinDumpDelayDuration, kMillisecondScale, &deadline);
+
+    retain();
+    pending = thread_call_enter_delayed(fSpinDumpTimer, deadline);
+    if (pending) release();
+}
+
+//*********************************************************************************
+// [private] stop_spindump_timer
+//*********************************************************************************
+
+void IOService::stop_spindump_timer( void )
+{
+    boolean_t   pending;
+
+    if (!fSpinDumpTimer || !(kIOKextSpinDump & gIOKitDebug))
+        return;
+
+    pending = thread_call_cancel(fSpinDumpTimer);
+    if (pending) release();
+}
+
+
+//*********************************************************************************
+// [static] actionSpinDumpTimerExpired
+//
+// Inside PM work loop's gate.
+//*********************************************************************************
+
+IOReturn
+IOService::actionSpinDumpTimerExpired(
+    OSObject * target,
+    void * arg0, void * arg1,
+    void * arg2, void * arg3 )
+{
+    getPMRootDomain()->takeStackshot(false, false, true);
+
+    return kIOReturnSuccess;
+}
+
+//*********************************************************************************
+// spindump_timer_expired
+//
+// Thread call function. Holds a retain while the callout is in flight.
+//*********************************************************************************
+
+void
+IOService::spindump_timer_expired( thread_call_param_t arg0, thread_call_param_t arg1 )
+{
+    IOService * me = (IOService *) arg0;
+
+    if (gIOPMWorkLoop)
+    {
+        gIOPMWorkLoop->runAction(&actionSpinDumpTimerExpired, me);
     }
     me->release();
 }
@@ -5589,6 +5799,7 @@ bool IOService::tellClientsWithResponse( int messageType )
 {
     IOPMInterestContext     context;
     bool                    isRootDomain = IS_ROOT_DOMAIN;
+    uint32_t                maxTimeOut = kMaxTimeRequested;
 
     PM_ASSERT_IN_GATE();
     assert( fResponseArray == NULL );
@@ -5646,8 +5857,15 @@ bool IOService::tellClientsWithResponse( int messageType )
                 context.notifyType  = fOutOfBandParameter;
                 context.messageType = messageType;
             }
-            context.maxTimeRequested = k30Seconds;
-
+	    if(context.messageType == kIOMessageCanSystemSleep)
+	    {
+		maxTimeOut = kCanSleepMaxTimeReq;
+		if(gCanSleepTimeout)
+		{
+		    maxTimeOut = (gCanSleepTimeout*us_per_s);
+		}
+	    }
+	    context.maxTimeRequested = maxTimeOut;
             applyToInterested( gIOGeneralInterest,
                 pmTellClientWithResponse, (void *) &context );
 
@@ -5673,7 +5891,15 @@ bool IOService::tellClientsWithResponse( int messageType )
             applyToInterested( gIOAppPowerStateInterest,
                 pmTellCapabilityAppWithResponse, (void *) &context );
             fNotifyClientArray = context.notifyClients;
-            context.maxTimeRequested = k30Seconds;
+	    if(context.messageType == kIOMessageCanSystemSleep)
+	    {
+		maxTimeOut = kCanSleepMaxTimeReq;
+		if(gCanSleepTimeout)
+		{
+		    maxTimeOut = (gCanSleepTimeout*us_per_s);
+		}
+	    }
+	    context.maxTimeRequested = maxTimeOut;
             break;
 
         case kNotifyCapabilityChangePriority:
@@ -6936,7 +7162,7 @@ void IOService::releasePMRequest( IOPMRequest * request )
 }
 
 //*********************************************************************************
-// [private] submitPMRequest
+// [private static] submitPMRequest
 //*********************************************************************************
 
 void IOService::submitPMRequest( IOPMRequest * request )
@@ -6957,7 +7183,7 @@ void IOService::submitPMRequest( IOPMRequest * request )
         gIOPMRequestQueue->queuePMRequest( request );
 }
 
-void IOService::submitPMRequest( IOPMRequest ** requests, IOItemCount count )
+void IOService::submitPMRequests( IOPMRequest ** requests, IOItemCount count )
 {
     assert( requests );
     assert( count > 0 );
@@ -6977,12 +7203,12 @@ void IOService::submitPMRequest( IOPMRequest ** requests, IOItemCount count )
 }
 
 //*********************************************************************************
-// [private] servicePMRequestQueue
+// [private] actionPMRequestQueue
 //
-// Called from IOPMRequestQueue::checkForWork().
+// IOPMRequestQueue::checkForWork() passing a new request to the request target.
 //*********************************************************************************
 
-bool IOService::servicePMRequestQueue(
+bool IOService::actionPMRequestQueue(
     IOPMRequest *       request,
     IOPMRequestQueue *  queue )
 {
@@ -6990,34 +7216,40 @@ bool IOService::servicePMRequestQueue(
 
     if (initialized)
     {
-        // Work queue will immediately execute the queue'd request if possible.
-        // If execution blocks, the work queue will wait for a producer signal.
-        // Only need to signal more when completing attached requests.
+        // Work queue will immediately execute the request if the per-service
+        // request queue is empty. Note pwrMgt is the target's IOServicePM.
 
         more = gIOPMWorkQueue->queuePMRequest(request, pwrMgt);
-        return more;
+    }
+    else
+    {
+        // Calling PM without PMinit() is not allowed, fail the request.
+        // Need to signal more when completing attached requests.
+
+        PM_LOG("%s: PM not initialized\n", getName());
+        PM_LOG1("[- %02x] %p [%p %s] !initialized\n",
+            request->getType(), OBFUSCATE(request),
+            OBFUSCATE(this), getName());
+
+        more = gIOPMCompletionQueue->queuePMRequest(request);
+        if (more) gIOPMWorkQueue->incrementProducerCount();
     }
 
-    // Calling PM without PMinit() is not allowed, fail the request.
-
-    PM_LOG("%s: PM not initialized\n", getName());
-    fAdjustPowerScheduled = false;
-    more = gIOPMFreeQueue->queuePMRequest(request);
-    if (more) gIOPMWorkQueue->incrementProducerCount();
     return more;
 }
 
 //*********************************************************************************
-// [private] servicePMFreeQueue
+// [private] actionPMCompletionQueue
 //
-// Called from IOPMCompletionQueue::checkForWork().
+// IOPMCompletionQueue::checkForWork() passing a completed request to the
+// request target.
 //*********************************************************************************
 
-bool IOService::servicePMFreeQueue(
+bool IOService::actionPMCompletionQueue(
     IOPMRequest *         request,
     IOPMCompletionQueue * queue )
 {
-    bool            more = request->getNextRequest();
+    bool            more = (request->getNextRequest() != 0);
     IOPMRequest *   root = request->getRootRequest();
 
     if (root && (root != request))
@@ -7030,22 +7262,21 @@ bool IOService::servicePMFreeQueue(
 }
 
 //*********************************************************************************
-// [private] retirePMRequest
+// [private] actionPMWorkQueueRetire
 //
-// Called by IOPMWorkQueue to retire a completed request.
+// IOPMWorkQueue::checkForWork() passing a retired request to the request target.
 //*********************************************************************************
 
-bool IOService::retirePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
+bool IOService::actionPMWorkQueueRetire( IOPMRequest * request, IOPMWorkQueue * queue )
 {
     assert(request && queue);
 
     PM_LOG1("[- %02x] %p [%p %s] state %d, busy %d\n",
         request->getType(), OBFUSCATE(request),
         OBFUSCATE(this), getName(),
-        fMachineState, gIOPMBusyCount);
+        fMachineState, gIOPMBusyRequestCount);
 
-    // Catch requests created by idleTimerExpired().
-
+    // Catch requests created by idleTimerExpired()
     if (request->getType() == kIOPMRequestTypeActivityTickle)
     {
         uint32_t tickleFlags = (uint32_t)(uintptr_t) request->fArg1;
@@ -7061,11 +7292,11 @@ bool IOService::retirePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
             fIdleTimerGeneration++;
         }
     }
+    
+    // When the completed request is linked, tell work queue there is
+    // more work pending.
 
-    // If the request is linked, then Work queue has already incremented its
-    // producer count.
-
-    return (gIOPMFreeQueue->queuePMRequest( request ));
+    return (gIOPMCompletionQueue->queuePMRequest( request ));
 }
 
 //*********************************************************************************
@@ -7137,12 +7368,13 @@ bool IOService::isPMBlocked( IOPMRequest * request, int count )
 }
 
 //*********************************************************************************
-// [private] servicePMRequest
+// [private] actionPMWorkQueueInvoke
 //
-// Service a request from our work queue.
+// IOPMWorkQueue::checkForWork() passing a request to the
+// request target for execution.
 //*********************************************************************************
 
-bool IOService::servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
+bool IOService::actionPMWorkQueueInvoke( IOPMRequest * request, IOPMWorkQueue * queue )
 {
     bool    done = false;
     int     loop = 0;
@@ -7156,7 +7388,7 @@ bool IOService::servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
             OBFUSCATE(this), getName(), fMachineState);
 
         gIOPMRequest = request;
-        gIOPMWorkCount++;
+        gIOPMWorkInvokeCount++;
 
         // Every PM machine states must be handled in one of the cases below.
 
@@ -7427,7 +7659,7 @@ bool IOService::servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
                 break;
 
             default:
-                panic("servicePMWorkQueue: unknown machine state %x",
+                panic("PMWorkQueueInvoke: unknown machine state %x",
                     fMachineState);
         }
 
@@ -7518,16 +7750,23 @@ void IOService::executePMRequest( IOPMRequest * request )
             fIdleTimerIgnored = request->fArg0 ? 1 : 0;
             break;
 
+        case kIOPMRequestTypeQuiescePowerTree:
+            gIOPMWorkQueue->finishQuiesceRequest(request);
+            break;
+
         default:
             panic("executePMRequest: unknown request type %x", request->getType());
     }
 }
 
 //*********************************************************************************
-// [private] servicePMReplyQueue
+// [private] actionPMReplyQueue
+//
+// IOPMRequestQueue::checkForWork() passing a reply-type request to the
+// request target.
 //*********************************************************************************
 
-bool IOService::servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue )
+bool IOService::actionPMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue )
 {
     bool more = false;
 
@@ -7639,7 +7878,8 @@ bool IOService::servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * q
                 // Stop waiting for app replys.
                 if ((fMachineState == kIOPM_OurChangeTellPriorityClientsPowerDown) ||
                     (fMachineState == kIOPM_OurChangeTellUserPMPolicyPowerDown) ||
-                    (fMachineState == kIOPM_SyncTellPriorityClientsPowerDown))
+                    (fMachineState == kIOPM_SyncTellPriorityClientsPowerDown) ||
+                    (fMachineState == kIOPM_SyncTellClientsPowerDown) )
                     cleanClientResponses(false);
                 more = true;
             }
@@ -7654,11 +7894,10 @@ bool IOService::servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * q
             break;
 
         default:
-            panic("servicePMReplyQueue: unknown reply type %x",
-                request->getType());
+            panic("PMReplyQueue: unknown reply type %x", request->getType());
     }
 
-    more |= gIOPMFreeQueue->queuePMRequest(request);
+    more |= gIOPMCompletionQueue->queuePMRequest(request);
     if (more)
         gIOPMWorkQueue->incrementProducerCount();
 
@@ -7841,14 +8080,17 @@ bool IOPMRequest::init( IOService * target, IOOptionBits type )
     if (!IOCommand::init())
         return false;
 
-    fType             = type;
-    fTarget           = target;
-#if NOT_READY
-    fCompletionStatus = kIOReturnSuccess;
-#endif
+    fRequestType = type;
+    fTarget = target;
 
     if (fTarget)
         fTarget->retain();
+
+    // Root node and root domain requests does not prevent the power tree from
+    // becoming quiescent.
+
+    fIsQuiesceBlocker = ((fTarget != gIOPMRootNode) &&
+                         (fTarget != IOService::getPMRootDomain()));
 
     return true;
 }
@@ -7861,14 +8103,14 @@ void IOPMRequest::reset( void )
     detachNextRequest();
     detachRootRequest();
 
-    fType = kIOPMRequestTypeInvalid;
-
-#if NOT_READY
-    if (fCompletionAction)
+    if (fCompletionAction && (fRequestType == kIOPMRequestTypeQuiescePowerTree))
     {
-        fCompletionAction(fCompletionTarget, fCompletionParam, fCompletionStatus);
+        // Call the completion on PM work loop context
+        fCompletionAction(fCompletionTarget, fCompletionParam);
+        fCompletionAction = 0;
     }
-#endif
+
+    fRequestType = kIOPMRequestTypeInvalid;
 
     if (fTarget)
     {
@@ -7889,8 +8131,8 @@ bool IOPMRequest::attachNextRequest( IOPMRequest * next )
         fRequestNext->fWorkWaitCount++;
 #if LOG_REQUEST_ATTACH
         PM_LOG("Attached next: %p [0x%x] -> %p [0x%x, %u] %s\n",
-            OBFUSCATE(this), (uint32_t) fType, OBFUSCATE(fRequestNext),
-            (uint32_t) fRequestNext->fType,
+            OBFUSCATE(this), fRequestType, OBFUSCATE(fRequestNext),
+            fRequestNext->fRequestType,
             (uint32_t) fRequestNext->fWorkWaitCount,
             fTarget->getName());
 #endif
@@ -7910,8 +8152,8 @@ bool IOPMRequest::detachNextRequest( void )
             fRequestNext->fWorkWaitCount--;
 #if LOG_REQUEST_ATTACH
         PM_LOG("Detached next: %p [0x%x] -> %p [0x%x, %u] %s\n",
-            OBFUSCATE(this), (uint32_t) fType, OBFUSCATE(fRequestNext),
-            (uint32_t) fRequestNext->fType,
+            OBFUSCATE(this), fRequestType, OBFUSCATE(fRequestNext),
+            fRequestNext->fRequestType,
             (uint32_t) fRequestNext->fWorkWaitCount,
             fTarget->getName());
 #endif
@@ -8011,7 +8253,7 @@ void IOPMRequestQueue::queuePMRequest( IOPMRequest * request )
 {
     assert(request);
     IOLockLock(fLock);
-    queue_enter(&fQueue, request, IOPMRequest *, fCommandChain);
+    queue_enter(&fQueue, request, typeof(request), fCommandChain);
     IOLockUnlock(fLock);
     if (workLoop) signalWorkAvailable();
 }
@@ -8027,7 +8269,7 @@ IOPMRequestQueue::queuePMRequestChain( IOPMRequest ** requests, IOItemCount coun
     {
         next = *requests;
         requests++;
-        queue_enter(&fQueue, next, IOPMRequest *, fCommandChain);
+        queue_enter(&fQueue, next, typeof(next), fCommandChain);
     }
     IOLockUnlock(fLock);
     if (workLoop) signalWorkAvailable();
@@ -8038,14 +8280,22 @@ bool IOPMRequestQueue::checkForWork( void )
     Action          dqAction = (Action) action;
     IOPMRequest *   request;
     IOService *     target;
+    int             dequeueCount = 0;
     bool            more = false;
 
     IOLockLock( fLock );
 
     while (!queue_empty(&fQueue))
     {
-        queue_remove_first( &fQueue, request, IOPMRequest *, fCommandChain );
-        IOLockUnlock( fLock );
+        if (dequeueCount++ >= kMaxDequeueCount)
+        {
+            // Allow other queues a chance to work
+            more = true;
+            break;
+        }
+    
+        queue_remove_first(&fQueue, request, typeof(request), fCommandChain);
+        IOLockUnlock(fLock);
         target = request->getTarget();
         assert(target);
         more |= (*dqAction)( target, request, this );
@@ -8062,16 +8312,17 @@ bool IOPMRequestQueue::checkForWork( void )
 //*********************************************************************************
 // IOPMWorkQueue Class
 //
-// Queue of IOServicePM objects with busy IOPMRequest(s).
+// Queue of IOServicePM objects, each with a queue of IOPMRequest sharing the
+// same target.
 //*********************************************************************************
 
 OSDefineMetaClassAndStructors( IOPMWorkQueue, IOEventSource );
 
 IOPMWorkQueue *
-IOPMWorkQueue::create( IOService * inOwner, Action work, Action retire )
+IOPMWorkQueue::create( IOService * inOwner, Action invoke, Action retire )
 {
     IOPMWorkQueue * me = OSTypeAlloc(IOPMWorkQueue);
-    if (me && !me->init(inOwner, work, retire))
+    if (me && !me->init(inOwner, invoke, retire))
     {
         me->release();
         me = 0;
@@ -8079,15 +8330,15 @@ IOPMWorkQueue::create( IOService * inOwner, Action work, Action retire )
     return me;
 }
 
-bool IOPMWorkQueue::init( IOService * inOwner, Action work, Action retire )
+bool IOPMWorkQueue::init( IOService * inOwner, Action invoke, Action retire )
 {
-    if (!work || !retire ||
+    if (!invoke || !retire ||
         !IOEventSource::init(inOwner, (IOEventSourceAction)0))
         return false;
 
     queue_init(&fWorkQueue);
 
-    fWorkAction    = work;
+    fInvokeAction  = invoke;
     fRetireAction  = retire;
     fConsumerCount = fProducerCount = 0;
 
@@ -8096,8 +8347,9 @@ bool IOPMWorkQueue::init( IOService * inOwner, Action work, Action retire )
 
 bool IOPMWorkQueue::queuePMRequest( IOPMRequest * request, IOServicePM * pwrMgt )
 {
-    bool more = false;
-    bool empty;
+    queue_head_t *  requestQueue;
+    bool            more  = false;
+    bool            empty;
 
     assert( request );
     assert( pwrMgt );
@@ -8105,24 +8357,42 @@ bool IOPMWorkQueue::queuePMRequest( IOPMRequest * request, IOServicePM * pwrMgt 
     assert( queue_next(&request->fCommandChain) ==
             queue_prev(&request->fCommandChain) );
 
-    gIOPMBusyCount++;
+    gIOPMBusyRequestCount++;
+
+    if (request->isQuiesceType())
+    {
+        if ((request->getTarget() == gIOPMRootNode) && !fQuiesceStartTime)
+        {
+            // Attach new quiesce request to all quiesce blockers in the queue
+            fQuiesceStartTime = mach_absolute_time();
+            attachQuiesceRequest(request);
+            fQuiesceRequest = request;
+        }
+    }
+    else if (fQuiesceRequest && request->isQuiesceBlocker())
+    {
+        // Attach the new quiesce blocker to the blocked quiesce request
+        request->attachNextRequest(fQuiesceRequest);
+    }
 
     // Add new request to the tail of the per-service request queue.
     // Then immediately check the request queue to minimize latency
     // if the queue was empty.
 
-    empty = queue_empty(&pwrMgt->RequestHead);
-    queue_enter(&pwrMgt->RequestHead, request, IOPMRequest *, fCommandChain);
+    requestQueue = &pwrMgt->RequestHead;
+    empty = queue_empty(requestQueue);
+    queue_enter(requestQueue, request, typeof(request), fCommandChain);
     if (empty)
     {
-        more = checkRequestQueue(&pwrMgt->RequestHead, &empty);
+        more = checkRequestQueue(requestQueue, &empty);
         if (!empty)
         {
-            // New Request is blocked, add IOServicePM to work queue.
+            // Request just added is blocked, add its target IOServicePM
+            // to the work queue.
             assert( queue_next(&pwrMgt->WorkChain) ==
                     queue_prev(&pwrMgt->WorkChain) );
 
-            queue_enter(&fWorkQueue, pwrMgt, IOServicePM *, WorkChain);
+            queue_enter(&fWorkQueue, pwrMgt, typeof(pwrMgt), WorkChain);
             fQueueLength++;
             PM_LOG3("IOPMWorkQueue: [%u] added %s@%p to queue\n",
                 fQueueLength, pwrMgt->Name, OBFUSCATE(pwrMgt));
@@ -8132,40 +8402,53 @@ bool IOPMWorkQueue::queuePMRequest( IOPMRequest * request, IOServicePM * pwrMgt 
     return more;
 }
 
-bool IOPMWorkQueue::checkRequestQueue( queue_head_t * queue, bool * empty )
+bool IOPMWorkQueue::checkRequestQueue( queue_head_t * requestQueue, bool * empty )
 {
     IOPMRequest *   request;
     IOService *     target;
     bool            more = false;
     bool            done = false;
 
-    assert(!queue_empty(queue));
+    assert(!queue_empty(requestQueue));
     do {
-        request = (IOPMRequest *) queue_first(queue);
+        request = (typeof(request)) queue_first(requestQueue);
         if (request->isWorkBlocked())
-            break;  // cannot start, blocked on attached request
+            break;  // request dispatch blocked on attached request
 
         target = request->getTarget();
-        done = (*fWorkAction)( target, request, this );
+        if (fInvokeAction)
+        {
+            done = (*fInvokeAction)( target, request, this );
+        }
+        else
+        {
+            PM_LOG("PM request 0x%x dropped\n", request->getType());
+            done = true;
+        }
         if (!done)
-            break;  // work started, blocked on PM state machine
+            break;  // PM state machine blocked
 
-        assert(gIOPMBusyCount > 0);
-        if (gIOPMBusyCount)
-            gIOPMBusyCount--;
+        assert(gIOPMBusyRequestCount > 0);
+        if (gIOPMBusyRequestCount)
+            gIOPMBusyRequestCount--;
 
-        queue_remove_first(queue, request, IOPMRequest *, fCommandChain);
+        if (request == fQuiesceRequest)
+        {
+            fQuiesceRequest = 0;
+        }
+
+        queue_remove_first(requestQueue, request, typeof(request), fCommandChain);
         more |= (*fRetireAction)( target, request, this );
-        done = queue_empty(queue);
+        done = queue_empty(requestQueue);
     } while (!done);
 
     *empty = done;
 
     if (more)
     {
-        // Retired request blocks another request, since the
-        // blocked request may reside in the work queue, we
-        // must bump the producer count to avoid work stall.
+        // Retired a request that may unblock a previously visited request
+        // that is still waiting on the work queue. Must trigger another
+        // queue check.
         fProducerCount++;
     }
 
@@ -8183,8 +8466,8 @@ bool IOPMWorkQueue::checkForWork( void )
     fStatCheckForWork++;
 #endif
 
-    // Each producer signal triggers a full iteration over
-    // all IOServicePM entries in the work queue.
+    // Iterate over all IOServicePM entries in the work queue,
+    // and check each entry's request queue.
 
     while (fConsumerCount != fProducerCount)
     {
@@ -8200,31 +8483,31 @@ bool IOPMWorkQueue::checkForWork( void )
             break;
         }
         fStatScanEntries++;
-        uint32_t cachedWorkCount = gIOPMWorkCount;
+        uint32_t cachedWorkCount = gIOPMWorkInvokeCount;
 #endif
 
-        entry = (IOServicePM *) queue_first(&fWorkQueue);
+        __IGNORE_WCASTALIGN(entry = (typeof(entry)) queue_first(&fWorkQueue));
         while (!queue_end(&fWorkQueue, (queue_entry_t) entry))
         {
             more |= checkRequestQueue(&entry->RequestHead, &empty);
 
             // Get next entry, points to head if current entry is last.
-            next = (IOServicePM *) queue_next(&entry->WorkChain);
+            __IGNORE_WCASTALIGN(next = (typeof(next)) queue_next(&entry->WorkChain));
 
-            // if request queue is empty, remove IOServicePM from queue.
+            // if request queue is empty, remove IOServicePM from work queue.
             if (empty)
             {
                 assert(fQueueLength);
                 if (fQueueLength) fQueueLength--;
                 PM_LOG3("IOPMWorkQueue: [%u] removed %s@%p from queue\n",
                     fQueueLength, entry->Name, OBFUSCATE(entry));
-                queue_remove(&fWorkQueue, entry, IOServicePM *, WorkChain);
+                queue_remove(&fWorkQueue, entry, typeof(entry), WorkChain);
             }
             entry = next;
         }
 
 #if WORK_QUEUE_STATS
-        if (cachedWorkCount == gIOPMWorkCount)
+        if (cachedWorkCount == gIOPMWorkInvokeCount)
             fStatNoWorkDone++;
 #endif
     }
@@ -8241,6 +8524,42 @@ void IOPMWorkQueue::signalWorkAvailable( void )
 void IOPMWorkQueue::incrementProducerCount( void )
 {
     fProducerCount++;
+}
+
+void IOPMWorkQueue::attachQuiesceRequest( IOPMRequest * quiesceRequest )
+{
+    IOServicePM *   entry;
+    IOPMRequest *   request;
+
+    if (queue_empty(&fWorkQueue))
+    {
+        return;
+    }
+
+    queue_iterate(&fWorkQueue, entry, typeof(entry), WorkChain)
+    {
+        queue_iterate(&entry->RequestHead, request, typeof(request), fCommandChain)
+        {
+            // Attach the quiesce request to any request in the queue that
+            // is not linked to a next request. These requests will block
+            // the quiesce request.
+            
+            if (request->isQuiesceBlocker())
+            {
+                request->attachNextRequest(quiesceRequest);
+            }
+        }
+    }
+}
+
+void IOPMWorkQueue::finishQuiesceRequest( IOPMRequest * quiesceRequest )
+{
+    if (fQuiesceRequest && (quiesceRequest == fQuiesceRequest) &&
+        (fQuiesceStartTime != 0))
+    {
+        fInvokeAction = 0;
+        fQuiesceFinishTime = mach_absolute_time();
+    }
 }
 
 // MARK: -
@@ -8280,7 +8599,7 @@ bool IOPMCompletionQueue::queuePMRequest( IOPMRequest * request )
     assert(request);
     // unblock dependent request
     more = request->detachNextRequest();
-    queue_enter(&fQueue, request, IOPMRequest *, fCommandChain);
+    queue_enter(&fQueue, request, typeof(request), fCommandChain);
     return more;
 }
 
@@ -8292,13 +8611,13 @@ bool IOPMCompletionQueue::checkForWork( void )
     IOService *     target;
     bool            more = false;
 
-    request = (IOPMRequest *) queue_first(&fQueue);
+    request = (typeof(request)) queue_first(&fQueue);
     while (!queue_end(&fQueue, (queue_entry_t) request))
     {
-        next = (IOPMRequest *) queue_next(&request->fCommandChain);
+        next = (typeof(next)) queue_next(&request->fCommandChain);
         if (!request->isFreeBlocked())
         {
-            queue_remove(&fQueue, request, IOPMRequest *, fCommandChain);
+            queue_remove(&fQueue, request, typeof(request), fCommandChain);
             target = request->getTarget();
             assert(target);
             more |= (*dqAction)( target, request, this );

@@ -114,6 +114,10 @@ kern_return_t apple_protect_pager_map(memory_object_t mem_obj,
 				      vm_prot_t prot);
 kern_return_t apple_protect_pager_last_unmap(memory_object_t mem_obj);
 
+#define CRYPT_INFO_DEBUG 0
+void crypt_info_reference(struct pager_crypt_info *crypt_info);
+void crypt_info_deallocate(struct pager_crypt_info *crypt_info);
+
 /*
  * Vector of VM operations for this EMM.
  * These routines are invoked by VM via the memory_object_*() interfaces.
@@ -131,7 +135,7 @@ const struct memory_object_pager_ops apple_protect_pager_ops = {
 	apple_protect_pager_map,
 	apple_protect_pager_last_unmap,
 	NULL, /* data_reclaim */
-	"apple protect pager"
+	"apple_protect"
 };
 
 /*
@@ -139,7 +143,7 @@ const struct memory_object_pager_ops apple_protect_pager_ops = {
  * the "apple protect" EMM.
  */
 typedef struct apple_protect_pager {
-	struct ipc_object_header	pager_header;	/* fake ip_kotype() */
+	struct ipc_object_header pager_header;	/* fake ip_kotype() */
 	memory_object_pager_ops_t pager_ops; /* == &apple_protect_pager_ops */
 	queue_chain_t		pager_queue;	/* next & prev pagers */
 	unsigned int		ref_count;	/* reference count */
@@ -147,7 +151,11 @@ typedef struct apple_protect_pager {
 	boolean_t		is_mapped;	/* is this mem_obj mapped ? */
 	memory_object_control_t pager_control;	/* mem object control handle */
 	vm_object_t		backing_object; /* VM obj w/ encrypted data */
-	struct pager_crypt_info crypt;
+	vm_object_offset_t	backing_offset;
+	vm_object_offset_t	crypto_backing_offset; /* for key... */
+	vm_object_offset_t	crypto_start;
+	vm_object_offset_t	crypto_end;
+	struct pager_crypt_info *crypt_info;
 } *apple_protect_pager_t;
 #define	APPLE_PROTECT_PAGER_NULL	((apple_protect_pager_t) NULL)
 #define pager_ikot pager_header.io_bits
@@ -181,8 +189,13 @@ lck_attr_t		apple_protect_pager_lck_attr;
 
 
 /* internal prototypes */
-apple_protect_pager_t apple_protect_pager_create(vm_object_t backing_object,
-						 struct pager_crypt_info *crypt_info);
+apple_protect_pager_t apple_protect_pager_create(
+	vm_object_t backing_object,
+	vm_object_offset_t backing_offset,
+	vm_object_offset_t crypto_backing_offset,
+	struct pager_crypt_info *crypt_info,
+	vm_object_offset_t crypto_start,
+	vm_object_offset_t crypto_end);
 apple_protect_pager_t apple_protect_pager_lookup(memory_object_t mem_obj);
 void apple_protect_pager_dequeue(apple_protect_pager_t pager);
 void apple_protect_pager_deallocate_internal(apple_protect_pager_t pager,
@@ -315,6 +328,7 @@ apple_protect_pager_data_unlock(
  *
  * Handles page-in requests from VM.
  */
+int apple_protect_pager_data_request_debug = 0;
 kern_return_t	
 apple_protect_pager_data_request(
 	memory_object_t		mem_obj,
@@ -339,7 +353,6 @@ apple_protect_pager_data_request(
 	vm_offset_t		src_vaddr, dst_vaddr;
 	vm_offset_t		cur_offset;
 	vm_offset_t		offset_in_page;
-	vm_map_entry_t		map_entry;
 	kern_return_t		error_code;
 	vm_prot_t		prot;
 	vm_page_t		src_page, top_page;
@@ -391,11 +404,18 @@ apple_protect_pager_data_request(
 	assert(dst_object != VM_OBJECT_NULL);
 
 
+#if __x86_64__ || __arm__ || __arm64__
+	/* we'll use the 1-to-1 mapping of physical memory */
+	src_vaddr = 0;
+	dst_vaddr = 0;
+#else /* __x86_64__ || __arm__ || __arm64__ */
 	/*
 	 * Reserve 2 virtual pages in the kernel address space to map each
 	 * source and destination physical pages when it's their turn to
 	 * be processed.
 	 */
+	vm_map_entry_t		map_entry;
+
 	vm_object_reference(kernel_object);	/* ref. for mapping */
 	kr = vm_map_find_space(kernel_map,
 			       &kernel_mapping,
@@ -413,6 +433,7 @@ apple_protect_pager_data_request(
 	vm_map_unlock(kernel_map);
 	src_vaddr = CAST_DOWN(vm_offset_t, kernel_mapping);
 	dst_vaddr = CAST_DOWN(vm_offset_t, kernel_mapping + PAGE_SIZE_64);
+#endif /* __x86_64__ || __arm__ || __arm64__ */
 
 	/*
 	 * We'll map the encrypted data in the kernel address space from the 
@@ -450,7 +471,7 @@ apple_protect_pager_data_request(
 		prot = VM_PROT_READ;
 		src_page = VM_PAGE_NULL;
 		kr = vm_fault_page(src_object,
-				   offset + cur_offset,
+				   pager->backing_offset + offset + cur_offset,
 				   VM_PROT_READ,
 				   FALSE,
 				   FALSE, /* src_page not looked up */
@@ -507,18 +528,24 @@ apple_protect_pager_data_request(
 			}
 			vm_page_unlock_queues();
 		}
-		
+
 		/*
 		 * Establish an explicit mapping of the source
 		 * physical page.
 		 */
+#if __x86_64__
+		src_vaddr = (vm_map_offset_t)
+			PHYSMAP_PTOV((pmap_paddr_t)src_page->phys_page
+				     << PAGE_SHIFT);
+#else
 		pmap_enter(kernel_pmap,
-			   kernel_mapping,
+			   src_vaddr,
 			   src_page->phys_page,
 			   VM_PROT_READ,
 			   VM_PROT_NONE,
 			   0,
 			   TRUE);
+#endif
 		/*
 		 * Establish an explicit pmap mapping of the destination
 		 * physical page.
@@ -528,13 +555,47 @@ apple_protect_pager_data_request(
 		dst_pnum = (ppnum_t)
 			upl_phys_page(upl_pl, (int)(cur_offset / PAGE_SIZE));
 		assert(dst_pnum != 0);
+#if __x86_64__
+		dst_vaddr = (vm_map_offset_t)
+			PHYSMAP_PTOV((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
+#else
 		pmap_enter(kernel_pmap,
-			   kernel_mapping + PAGE_SIZE_64,
+			   dst_vaddr,
 			   dst_pnum,
 			   VM_PROT_READ | VM_PROT_WRITE,
 			   VM_PROT_NONE,
 			   0,
 			   TRUE);
+#endif
+
+		/*
+		 * Validate the original page...
+		 */
+		if (src_page->object->code_signed) {
+			vm_page_validate_cs_mapped(
+				src_page,
+				(const void *) src_vaddr);
+		}
+		/*
+		 * ... and transfer the results to the destination page.
+		 */
+		UPL_SET_CS_VALIDATED(upl_pl, cur_offset / PAGE_SIZE,
+				     src_page->cs_validated);
+		UPL_SET_CS_TAINTED(upl_pl, cur_offset / PAGE_SIZE,
+				   src_page->cs_tainted);
+		UPL_SET_CS_NX(upl_pl, cur_offset / PAGE_SIZE,
+				   src_page->cs_nx);
+
+		/*
+		 * page_decrypt() might access a mapped file, so let's release
+		 * the object lock for the source page to avoid a potential
+		 * deadlock.  The source page is kept busy and we have a
+		 * "paging_in_progress" reference on its object, so it's safe
+		 * to unlock the object here.
+		 */
+		assert(src_page->busy);
+		assert(src_page->object->paging_in_progress > 0);
+		vm_object_unlock(src_page->object);
 
 		/*
 		 * Decrypt the encrypted contents of the source page
@@ -543,16 +604,87 @@ apple_protect_pager_data_request(
 		for (offset_in_page = 0;
 		     offset_in_page < PAGE_SIZE;
 		     offset_in_page += 4096) {
-			ret = pager->crypt.page_decrypt((const void *)
-							(src_vaddr +
-							 offset_in_page),
-							(void *)
-							(dst_vaddr +
-							 offset_in_page),
-							(offset +
-							 cur_offset +
-							 offset_in_page),
-							pager->crypt.crypt_ops);
+			if (offset + cur_offset + offset_in_page <
+			    pager->crypto_start ||
+			    offset + cur_offset + offset_in_page >=
+			    pager->crypto_end) {
+				/* not encrypted: just copy */
+				bcopy((const char *)(src_vaddr +
+						     offset_in_page),
+				      (char *)(dst_vaddr + offset_in_page),
+				      4096);
+				if (apple_protect_pager_data_request_debug) {
+					printf("apple_protect_data_request"
+					       "(%p,0x%llx+0x%llx+0x%04llx): "
+					       "out of crypto range "
+					       "[0x%llx:0x%llx]: "
+					       "COPY [0x%016llx 0x%016llx] "
+					       "code_signed=%d "
+					       "cs_validated=%d "
+					       "cs_tainted=%d "
+					       "cs_nx=%d\n",
+					       pager,
+					       offset,
+					       (uint64_t) cur_offset,
+					       (uint64_t) offset_in_page,
+					       pager->crypto_start,
+					       pager->crypto_end,
+					       *(uint64_t *)(dst_vaddr+
+							     offset_in_page),
+					       *(uint64_t *)(dst_vaddr+
+							     offset_in_page+8),
+					       src_page->object->code_signed,
+					       src_page->cs_validated,
+					       src_page->cs_tainted,
+					       src_page->cs_nx);
+				}
+				ret = 0;
+				continue;
+			}
+			ret = pager->crypt_info->page_decrypt(
+				(const void *)(src_vaddr + offset_in_page),
+				(void *)(dst_vaddr + offset_in_page),
+				((pager->crypto_backing_offset -
+				  pager->crypto_start) + /* XXX ? */
+				 offset +
+				 cur_offset +
+				 offset_in_page),
+				pager->crypt_info->crypt_ops);
+			if (apple_protect_pager_data_request_debug) {
+				printf("apple_protect_data_request"
+				       "(%p,0x%llx+0x%llx+0x%04llx): "
+				       "in crypto range [0x%llx:0x%llx]: "
+				       "DECRYPT offset 0x%llx="
+				       "(0x%llx-0x%llx+0x%llx+0x%llx+0x%04llx)"
+				       "[0x%016llx 0x%016llx] "
+				       "code_signed=%d "
+				       "cs_validated=%d "
+				       "cs_tainted=%d "
+				       "cs_nx=%d "
+				       "ret=0x%x\n",
+				       pager,
+				       offset,
+				       (uint64_t) cur_offset,
+				       (uint64_t) offset_in_page,
+				       pager->crypto_start, pager->crypto_end,
+				       ((pager->crypto_backing_offset -
+					 pager->crypto_start) +
+					offset +
+					cur_offset +
+					offset_in_page),
+				       pager->crypto_backing_offset,
+				       pager->crypto_start,
+				       offset,
+				       (uint64_t) cur_offset,
+				       (uint64_t) offset_in_page,
+				       *(uint64_t *)(dst_vaddr+offset_in_page),
+				       *(uint64_t *)(dst_vaddr+offset_in_page+8),
+				       src_page->object->code_signed,
+				       src_page->cs_validated,
+				       src_page->cs_tainted,
+				       src_page->cs_nx,
+				       ret);
+			}
 			if (ret) {
 				break;
 			}
@@ -562,26 +694,17 @@ apple_protect_pager_data_request(
 			 * Decryption failed.  Abort the fault.
 			 */
 			retval = KERN_ABORTED;
-		} else {
-			/*
-			 * Validate the original page...
-			 */
-			if (src_page->object->code_signed) {
-				vm_page_validate_cs_mapped(
-					src_page,
-					(const void *) src_vaddr);
-			}
-			/*
-			 * ... and transfer the results to the destination page.
-			 */
-			UPL_SET_CS_VALIDATED(upl_pl, cur_offset / PAGE_SIZE,
-					     src_page->cs_validated);
-			UPL_SET_CS_TAINTED(upl_pl, cur_offset / PAGE_SIZE,
-					   src_page->cs_tainted);
-			UPL_SET_CS_NX(upl_pl, cur_offset / PAGE_SIZE,
-					   src_page->cs_nx);
 		}
-		
+
+		assert(src_page->busy);
+		assert(src_page->object->paging_in_progress > 0);
+		vm_object_lock(src_page->object);
+
+#if __x86_64__ || __arm__ || __arm64__
+		/* we used the 1-to-1 mapping of physical memory */
+		src_vaddr = 0;
+		dst_vaddr = 0;
+#else /* __x86_64__ || __arm__ || __arm64__ */
 		/*
 		 * Remove the pmap mapping of the source and destination pages
 		 * in the kernel.
@@ -589,6 +712,7 @@ apple_protect_pager_data_request(
 		pmap_remove(kernel_pmap,
 			    (addr64_t) kernel_mapping,
 			    (addr64_t) (kernel_mapping + (2 * PAGE_SIZE_64)));
+#endif /* __x86_64__ || __arm__ || __arm64__ */
 
 		/*
 		 * Cleanup the result of vm_fault_page() of the source page.
@@ -748,10 +872,16 @@ apple_protect_pager_terminate_internal(
 		vm_object_deallocate(pager->backing_object);
 		pager->backing_object = VM_OBJECT_NULL;
 	}
-	
-	/* deallocate any crypt module data */
-	if(pager->crypt.crypt_end)
-		pager->crypt.crypt_end(pager->crypt.crypt_ops);
+
+	/* one less pager using this "pager_crypt_info" */
+#if CRYPT_INFO_DEBUG
+	printf("CRYPT_INFO %s: deallocate %p ref %d\n",
+	       __FUNCTION__,
+	       pager->crypt_info,
+	       pager->crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
+	crypt_info_deallocate(pager->crypt_info);
+	pager->crypt_info = NULL;
 
 	/* trigger the destruction of the memory object */
 	memory_object_destroy(pager->pager_control, 0);
@@ -971,12 +1101,17 @@ apple_protect_pager_lookup(
 
 apple_protect_pager_t
 apple_protect_pager_create(
-	vm_object_t	backing_object,
-	struct pager_crypt_info *crypt_info)
+	vm_object_t		backing_object,
+	vm_object_offset_t	backing_offset,
+	vm_object_offset_t	crypto_backing_offset,
+	struct pager_crypt_info *crypt_info,
+	vm_object_offset_t	crypto_start,
+	vm_object_offset_t	crypto_end)
 {
 	apple_protect_pager_t	pager, pager2;
 	memory_object_control_t	control;
 	kern_return_t		kr;
+	struct pager_crypt_info	*old_crypt_info;
 
 	pager = (apple_protect_pager_t) kalloc(sizeof (*pager));
 	if (pager == APPLE_PROTECT_PAGER_NULL) {
@@ -993,13 +1128,30 @@ apple_protect_pager_create(
 	pager->pager_ops = &apple_protect_pager_ops;
 	pager->pager_ikot = IKOT_MEMORY_OBJECT;
 	pager->is_ready = FALSE;/* not ready until it has a "name" */
-	pager->ref_count = 2;	/* existence + setup reference */
+	pager->ref_count = 1;	/* existence reference (for the cache) */
+	pager->ref_count++;	/* for the caller */
 	pager->is_mapped = FALSE;
 	pager->pager_control = MEMORY_OBJECT_CONTROL_NULL;
 	pager->backing_object = backing_object;
-	pager->crypt = *crypt_info;
+	pager->backing_offset = backing_offset;
+	pager->crypto_backing_offset = crypto_backing_offset;
+	pager->crypto_start = crypto_start;
+	pager->crypto_end = crypto_end;
+	pager->crypt_info = crypt_info; /* allocated by caller */
+
+#if CRYPT_INFO_DEBUG
+	printf("CRYPT_INFO %s: crypt_info %p [%p,%p,%p,%d]\n",
+	       __FUNCTION__,
+	       crypt_info,
+	       crypt_info->page_decrypt,
+	       crypt_info->crypt_end,
+	       crypt_info->crypt_ops,
+	       crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
 	
 	vm_object_reference(backing_object);
+
+	old_crypt_info = NULL;
 
 	lck_mtx_lock(&apple_protect_pager_lock);
 	/* see if anyone raced us to create a pager for the same object */
@@ -1007,18 +1159,57 @@ apple_protect_pager_create(
 		      pager2,
 		      apple_protect_pager_t,
 		      pager_queue) {
-		if (pager2->backing_object == backing_object) {
+		if ((pager2->crypt_info->page_decrypt !=
+		     crypt_info->page_decrypt) ||
+		    (pager2->crypt_info->crypt_end !=
+		     crypt_info->crypt_end) ||
+		    (pager2->crypt_info->crypt_ops !=
+		     crypt_info->crypt_ops)) {
+			/* crypt_info contents do not match: next pager */
+			continue;
+		}
+
+		/* found a match for crypt_info ... */
+		if (old_crypt_info) {
+			/* ... already switched to that crypt_info */
+			assert(old_crypt_info == pager2->crypt_info);
+		} else if (pager2->crypt_info != crypt_info) {
+			/* ... switch to that pager's crypt_info */
+#if CRYPT_INFO_DEBUG
+			printf("CRYPT_INFO %s: reference %p ref %d "
+			       "(create match)\n",
+			       __FUNCTION__,
+			       pager2->crypt_info,
+			       pager2->crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
+			old_crypt_info = pager2->crypt_info;
+			crypt_info_reference(old_crypt_info);
+			pager->crypt_info = old_crypt_info;
+		}
+		
+		if (pager2->backing_object == backing_object &&
+		    pager2->backing_offset == backing_offset &&
+		    pager2->crypto_backing_offset == crypto_backing_offset &&
+		    pager2->crypto_start == crypto_start &&
+		    pager2->crypto_end == crypto_end) {
+			/* full match: use that pager */
 			break;
 		}
 	}
 	if (! queue_end(&apple_protect_pager_queue,
 			(queue_entry_t) pager2)) {
-		/* while we hold the lock, transfer our setup ref to winner */
-		pager2->ref_count++;
 		/* we lost the race, down with the loser... */
 		lck_mtx_unlock(&apple_protect_pager_lock);
 		vm_object_deallocate(pager->backing_object);
 		pager->backing_object = VM_OBJECT_NULL;
+#if CRYPT_INFO_DEBUG
+		printf("CRYPT_INFO %s: %p ref %d (create pager match)\n",
+		       __FUNCTION__,
+		       pager->crypt_info,
+		       pager->crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
+		crypt_info_deallocate(pager->crypt_info);
+		pager->crypt_info = NULL;
 		kfree(pager, sizeof (*pager));
 		/* ... and go with the winner */
 		pager = pager2;
@@ -1050,6 +1241,20 @@ apple_protect_pager_create(
 	/* wakeup anyone waiting for this pager to be ready */
 	thread_wakeup(&pager->is_ready);
 
+	if (old_crypt_info != NULL &&
+	    old_crypt_info != crypt_info) {
+		/* we re-used an old crypt_info instead of using our new one */
+#if CRYPT_INFO_DEBUG
+		printf("CRYPT_INFO %s: deallocate %p ref %d "
+		       "(create used old)\n",
+		       __FUNCTION__,
+		       crypt_info,
+		       crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
+		crypt_info_deallocate(crypt_info);
+		crypt_info = NULL;
+	}
+
 	return pager;
 }
 
@@ -1062,10 +1267,27 @@ apple_protect_pager_create(
  */
 memory_object_t
 apple_protect_pager_setup(
-			  vm_object_t	backing_object,
-			  struct pager_crypt_info *crypt_info)
+	vm_object_t		backing_object,
+	vm_object_offset_t	backing_offset,
+	vm_object_offset_t	crypto_backing_offset,
+	struct pager_crypt_info *crypt_info,
+	vm_object_offset_t	crypto_start,
+	vm_object_offset_t	crypto_end)
 {
 	apple_protect_pager_t	pager;
+	struct pager_crypt_info	*old_crypt_info, *new_crypt_info;
+
+#if CRYPT_INFO_DEBUG
+	printf("CRYPT_INFO %s: crypt_info=%p [%p,%p,%p,%d]\n",
+	       __FUNCTION__,
+	       crypt_info,
+	       crypt_info->page_decrypt,
+	       crypt_info->crypt_end,
+	       crypt_info->crypt_ops,
+	       crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
+
+	old_crypt_info = NULL;
 
 	lck_mtx_lock(&apple_protect_pager_lock);
 
@@ -1073,35 +1295,146 @@ apple_protect_pager_setup(
 		      pager,
 		      apple_protect_pager_t,
 		      pager_queue) {
-		if (pager->backing_object == backing_object) {
-			/* For the same object we must always use the same protection options */
-			if (!((pager->crypt.page_decrypt == crypt_info->page_decrypt) &&
-			      (pager->crypt.crypt_ops == crypt_info->crypt_ops) )) {
-				lck_mtx_unlock(&apple_protect_pager_lock);
-				return MEMORY_OBJECT_NULL;
-			}
+		if ((pager->crypt_info->page_decrypt !=
+		     crypt_info->page_decrypt) ||
+		    (pager->crypt_info->crypt_end !=
+		     crypt_info->crypt_end) ||
+		    (pager->crypt_info->crypt_ops !=
+		     crypt_info->crypt_ops)) {
+			/* no match for "crypt_info": next pager */
+			continue;
+		}
+		/* found a match for crypt_info ... */
+		if (old_crypt_info) {
+			/* ... already switched to that crypt_info */
+			assert(old_crypt_info == pager->crypt_info);
+		} else {
+			/* ... switch to that pager's crypt_info */
+			old_crypt_info = pager->crypt_info;
+#if CRYPT_INFO_DEBUG
+			printf("CRYPT_INFO %s: "
+			       "switching crypt_info from %p [%p,%p,%p,%d] "
+			       "to %p [%p,%p,%p,%d] from pager %p\n",
+			       __FUNCTION__,
+			       crypt_info,
+			       crypt_info->page_decrypt,
+			       crypt_info->crypt_end,
+			       crypt_info->crypt_ops,
+			       crypt_info->crypt_refcnt,
+			       old_crypt_info,
+			       old_crypt_info->page_decrypt,
+			       old_crypt_info->crypt_end,
+			       old_crypt_info->crypt_ops,
+			       old_crypt_info->crypt_refcnt,
+			       pager);
+			printf("CRYPT_INFO %s: %p ref %d (setup match)\n",
+			       __FUNCTION__,
+			       pager->crypt_info,
+			       pager->crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
+			crypt_info_reference(pager->crypt_info);
+		}
+		
+		if (pager->backing_object == backing_object &&
+		    pager->backing_offset == backing_offset &&
+		    pager->crypto_backing_offset == crypto_backing_offset &&
+		    pager->crypto_start == crypto_start &&
+		    pager->crypto_end == crypto_end) {
+			/* full match: use that pager! */
+			assert(old_crypt_info == pager->crypt_info);
+			assert(old_crypt_info->crypt_refcnt > 1);
+#if CRYPT_INFO_DEBUG
+			printf("CRYPT_INFO %s: "
+			       "pager match with %p crypt_info %p\n",
+			       __FUNCTION__,
+			       pager,
+			       pager->crypt_info);
+			printf("CRYPT_INFO %s: deallocate %p ref %d "
+			       "(pager match)\n",
+			       __FUNCTION__,
+			       old_crypt_info,
+			       old_crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
+			/* release the extra ref on crypt_info we got above */
+			crypt_info_deallocate(old_crypt_info);
+			assert(old_crypt_info->crypt_refcnt > 0);
+			/* give extra reference on pager to the caller */
+			assert(pager->ref_count > 0);
+			pager->ref_count++;
 			break;
 		}
 	}
 	if (queue_end(&apple_protect_pager_queue,
 		      (queue_entry_t) pager)) {
+		lck_mtx_unlock(&apple_protect_pager_lock);
 		/* no existing pager for this backing object */
 		pager = APPLE_PROTECT_PAGER_NULL;
-	} else {
-		/* make sure pager doesn't disappear */
-		pager->ref_count++;
-	}
-
-	lck_mtx_unlock(&apple_protect_pager_lock);
-
-	if (pager == APPLE_PROTECT_PAGER_NULL) {
-		pager = apple_protect_pager_create(backing_object, crypt_info);
+		if (old_crypt_info) {
+			/* use this old crypt_info for new pager */
+			new_crypt_info = old_crypt_info;
+#if CRYPT_INFO_DEBUG
+			printf("CRYPT_INFO %s: "
+			       "will use old_crypt_info %p for new pager\n",
+			       __FUNCTION__,
+			       old_crypt_info);
+#endif /* CRYPT_INFO_DEBUG */
+		} else {
+			/* allocate a new crypt_info for new pager */
+			new_crypt_info = kalloc(sizeof (*new_crypt_info));
+			*new_crypt_info = *crypt_info;
+			new_crypt_info->crypt_refcnt = 1;
+#if CRYPT_INFO_DEBUG
+			printf("CRYPT_INFO %s: "
+			       "will use new_crypt_info %p for new pager\n",
+			       __FUNCTION__,
+			       new_crypt_info);
+#endif /* CRYPT_INFO_DEBUG */
+		}
+		if (new_crypt_info == NULL) {
+			/* can't create new pager without a crypt_info */
+		} else {
+			/* create new pager */
+			pager = apple_protect_pager_create(
+				backing_object,
+				backing_offset,
+				crypto_backing_offset,
+				new_crypt_info,
+				crypto_start,
+				crypto_end);
+		}
 		if (pager == APPLE_PROTECT_PAGER_NULL) {
+			/* could not create a new pager */
+			if (new_crypt_info == old_crypt_info) {
+				/* release extra reference on old_crypt_info */
+#if CRYPT_INFO_DEBUG
+				printf("CRYPT_INFO %s: deallocate %p ref %d "
+				       "(create fail old_crypt_info)\n",
+				       __FUNCTION__,
+				       old_crypt_info, 
+				       old_crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
+				crypt_info_deallocate(old_crypt_info);
+				old_crypt_info = NULL;
+			} else {
+				/* release unused new_crypt_info */
+				assert(new_crypt_info->crypt_refcnt == 1);
+#if CRYPT_INFO_DEBUG
+				printf("CRYPT_INFO %s: deallocate %p ref %d "
+				       "(create fail new_crypt_info)\n",
+				       __FUNCTION__,
+				       new_crypt_info,
+				       new_crypt_info->crypt_refcnt);
+#endif /* CRYPT_INFO_DEBUG */
+				crypt_info_deallocate(new_crypt_info);
+				new_crypt_info = NULL;
+			}
 			return MEMORY_OBJECT_NULL;
 		}
+		lck_mtx_lock(&apple_protect_pager_lock);
+	} else {
+		assert(old_crypt_info == pager->crypt_info);
 	}
 
-	lck_mtx_lock(&apple_protect_pager_lock);
 	while (!pager->is_ready) {
 		lck_mtx_sleep(&apple_protect_pager_lock,
 			LCK_SLEEP_DEFAULT,
@@ -1183,5 +1516,49 @@ apple_protect_pager_trim(void)
 		 */
 		pager->ref_count--;
 		apple_protect_pager_terminate_internal(pager);
+	}
+}
+
+
+void
+crypt_info_reference(
+	struct pager_crypt_info *crypt_info)
+{
+	assert(crypt_info->crypt_refcnt != 0);
+#if CRYPT_INFO_DEBUG
+	printf("CRYPT_INFO %s: %p ref %d -> %d\n",
+	       __FUNCTION__,
+	       crypt_info,
+	       crypt_info->crypt_refcnt,
+	       crypt_info->crypt_refcnt + 1);
+#endif /* CRYPT_INFO_DEBUG */
+	OSAddAtomic(+1, &crypt_info->crypt_refcnt);
+}
+
+void
+crypt_info_deallocate(
+	struct pager_crypt_info	*crypt_info)
+{
+#if CRYPT_INFO_DEBUG
+	printf("CRYPT_INFO %s: %p ref %d -> %d\n",
+	       __FUNCTION__,
+	       crypt_info,
+	       crypt_info->crypt_refcnt,
+	       crypt_info->crypt_refcnt - 1);
+#endif /* CRYPT_INFO_DEBUG */
+	OSAddAtomic(-1, &crypt_info->crypt_refcnt);
+	if (crypt_info->crypt_refcnt == 0) {
+		/* deallocate any crypt module data */
+		if (crypt_info->crypt_end) {
+			crypt_info->crypt_end(crypt_info->crypt_ops);
+			crypt_info->crypt_end = NULL;
+		}
+#if CRYPT_INFO_DEBUG
+		printf("CRYPT_INFO %s: freeing %p\n",
+		       __FUNCTION__,
+		       crypt_info);
+#endif /* CRYPT_INFO_DEBUG */
+		kfree(crypt_info, sizeof (*crypt_info));
+		crypt_info = NULL;
 	}
 }

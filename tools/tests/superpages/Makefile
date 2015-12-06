@@ -1,9 +1,4 @@
-SDKROOT ?= /
-ifeq "$(RC_TARGET_CONFIG)" "iPhone"
-Embedded?=YES
-else
-Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
-endif
+include ../Makefile.common
 
 DSTROOT?=$(shell /bin/pwd)
 TARGETS := $(addprefix $(DSTROOT)/, measure_tlbs testsp)
@@ -19,9 +14,7 @@ ifdef RC_ARCHS
   endif
 endif
 
-ifneq ($(ARCHS),)
-CFLAGS += $(patsubst %, -arch %, $(ARCHS))
-endif
+CFLAGS += $(patsubst %, -arch %, $(ARCHS)) -isysroot $(SDKROOT)
 
 all: $(TARGETS)
 

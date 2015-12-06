@@ -112,7 +112,7 @@ private:
     * Overrides OSString's implementation to prevent creation
     * of distinct OSSymbols with the same string value.
     */
-    virtual bool initWithString(const OSString * aString);
+    virtual bool initWithString(const OSString * aString) APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -130,7 +130,7 @@ private:
     * Overrides OSString's implementation to prevent creation
     * of distinct OSSymbols with the same string value.
     */
-    virtual bool initWithCString(const char * cString);
+    virtual bool initWithCString(const char * cString) APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -148,7 +148,7 @@ private:
     * Overrides OSString's implementation to prevent creation
     * of distinct OSSymbols with the same string value.
     */
-    virtual bool initWithCStringNoCopy(const char *cString);
+    virtual bool initWithCStringNoCopy(const char *cString) APPLE_KEXT_OVERRIDE;
 
 protected:
 
@@ -174,7 +174,7 @@ protected:
     */
     virtual void taggedRelease(
         const void * tag,
-        const int    freeWhen) const;
+        const int    freeWhen) const APPLE_KEXT_OVERRIDE;
 
 
 // xx-review: should we just omit this from headerdoc?
@@ -193,7 +193,7 @@ protected:
     * must synchronize access to the class-internal tables
     * used to track those instances.
     */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 public:
 
@@ -227,7 +227,7 @@ public:
     * //apple_ref/cpp/instm/OSObject/taggedRelease/virtualvoid/(constvoid*,constint)
     * OSObject::taggedRelease(const void *, const int)@/link</code>.
     */
-    virtual void taggedRelease(const void * tag) const;
+    virtual void taggedRelease(const void * tag) const  APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -345,7 +345,7 @@ public:
     * are equivalent to the C string's,
     * <code>false</code> otherwise.
     */
-    virtual bool isEqualTo(const char * cString) const;
+    virtual bool isEqualTo(const char * cString) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -363,7 +363,7 @@ public:
     * @link //apple_ref/doc/class/OSMetaClassBase OSString@/link
     * and contains the equivalent bytes of the same length.
     */
-    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const APPLE_KEXT_OVERRIDE;
 
 
 #ifdef XNU_KERNEL_PRIVATE

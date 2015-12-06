@@ -120,6 +120,8 @@ typedef unsigned IPos;
 
 typedef struct internal_state {
     z_streamp strm;      /* pointer back to this zlib stream */
+    z_input_func zinput;
+    z_output_func zoutput;
     int   status;        /* as the name implies */
     Bytef *pending_buf;  /* output still pending */
     ulg   pending_buf_size; /* size of pending_buf */

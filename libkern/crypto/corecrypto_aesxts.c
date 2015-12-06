@@ -101,5 +101,6 @@ int xts_decrypt(const uint8_t *ct, unsigned long ptlen,
 
 void xts_done(symmetric_xts *xts __unused)
 {
-
+	cc_clear(sizeof(xts->enc), xts->enc);
+	cc_clear(sizeof(xts->dec), xts->dec);
 }

@@ -97,18 +97,24 @@ extern void			slot_name(cpu_type_t,
 extern void			mig_reply_setup(mach_msg_header_t *,
 						mach_msg_header_t *);
 
+__WATCHOS_PROHIBITED __TVOS_PROHIBITED
 extern void			mach_msg_destroy(mach_msg_header_t *);
 
+__WATCHOS_PROHIBITED __TVOS_PROHIBITED
 extern mach_msg_return_t	mach_msg_receive(mach_msg_header_t *);
 
+__WATCHOS_PROHIBITED __TVOS_PROHIBITED
 extern mach_msg_return_t	mach_msg_send(mach_msg_header_t *);
 
+__WATCHOS_PROHIBITED __TVOS_PROHIBITED
 extern mach_msg_return_t	mach_msg_server_once(boolean_t (*)
 						     (mach_msg_header_t *,
 						      mach_msg_header_t *),
 						     mach_msg_size_t,
 						     mach_port_t,
 						     mach_msg_options_t);
+
+__WATCHOS_PROHIBITED __TVOS_PROHIBITED
 extern mach_msg_return_t	mach_msg_server(boolean_t (*)
 						(mach_msg_header_t *,
 						 mach_msg_header_t *),
@@ -116,6 +122,7 @@ extern mach_msg_return_t	mach_msg_server(boolean_t (*)
 						mach_port_t,
 						mach_msg_options_t);
 
+__WATCHOS_PROHIBITED __TVOS_PROHIBITED
 extern mach_msg_return_t	mach_msg_server_importance(boolean_t (*)
 						(mach_msg_header_t *,
 						 mach_msg_header_t *),

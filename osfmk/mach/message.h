@@ -79,6 +79,7 @@
 
 #include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
+#include <Availability.h>
 
 /*
  *  The timeout mechanism uses mach_msg_timeout_t values,
@@ -242,7 +243,7 @@ typedef unsigned int mach_msg_copy_options_t;
 #define MACH_MSG_PHYSICAL_COPY		0
 #define MACH_MSG_VIRTUAL_COPY   	1
 #define MACH_MSG_ALLOCATE		2
-#define MACH_MSG_OVERWRITE		3
+#define MACH_MSG_OVERWRITE		3	/* deprecated */
 #ifdef  MACH_KERNEL
 #define MACH_MSG_KALLOC_COPY_T		4
 #endif  /* MACH_KERNEL */
@@ -670,7 +671,7 @@ typedef integer_t mach_msg_option_t;
 #define MACH_RCV_NOTIFY		0x00000200	/* reserved - legacy */
 #define MACH_RCV_INTERRUPT	0x00000400	/* don't restart interrupted receive */
 #define MACH_RCV_VOUCHER	0x00000800	/* willing to receive voucher port */
-#define MACH_RCV_OVERWRITE	0x00001000	/* scatter receive */
+#define MACH_RCV_OVERWRITE	0x00001000	/* scatter receive (deprecated) */
 
 /* 
  * NOTE: a 0x00------ RCV mask implies to ask for
@@ -701,8 +702,7 @@ typedef integer_t mach_msg_option_t;
 				  MACH_SEND_TIMEOUT | MACH_SEND_NOTIFY | \
 				  MACH_SEND_TRAILER | MACH_SEND_NOIMPORTANCE )
 
-#define MACH_RCV_USER		 (MACH_RCV_MSG | \
-				  MACH_RCV_TIMEOUT | MACH_RCV_OVERWRITE | \
+#define MACH_RCV_USER		 (MACH_RCV_MSG | MACH_RCV_TIMEOUT | \
 				  MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY | \
 				  MACH_RCV_VOUCHER | MACH_RCV_TRAILER_MASK)
 
@@ -874,7 +874,7 @@ __BEGIN_DECLS
  *		already contain scatter control information to direct the
  *		receiving of the message.
  */
-
+__WATCHOS_PROHIBITED __TVOS_PROHIBITED
 extern mach_msg_return_t	mach_msg_overwrite(
 					mach_msg_header_t *msg,
 					mach_msg_option_t option,
@@ -896,6 +896,7 @@ extern mach_msg_return_t	mach_msg_overwrite(
  *		of that fact, then restart the appropriate parts of the
  *		operation silently (trap version does not restart).
  */
+__WATCHOS_PROHIBITED __TVOS_PROHIBITED
 extern mach_msg_return_t	mach_msg(
 					mach_msg_header_t *msg,
 					mach_msg_option_t option,
@@ -911,6 +912,7 @@ extern mach_msg_return_t	mach_msg(
  *		Deallocate a mach voucher created or received in a message.  Drops
  *		one (send right) reference to the voucher.
  */
+__WATCHOS_PROHIBITED __TVOS_PROHIBITED
 extern kern_return_t		mach_voucher_deallocate(
 					mach_port_name_t voucher);
 

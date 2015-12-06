@@ -206,7 +206,7 @@ struct vm_page {
 	 *
 	 * we use the 'wire_count' field to store the local
 	 * queue id if local queues are enabled...
-	 * see the comments at 'VM_PAGE_QUEUES_REMOVE' as to
+	 * see the comments at 'vm_page_queues_remove' as to
 	 * why this is safe to do
 	 */
 #define local_id wire_count
@@ -442,6 +442,12 @@ extern
 queue_head_t	vm_page_queue_throttled;	/* memory queue for throttled pageout pages */
 
 extern
+queue_head_t	vm_objects_wired;
+extern
+lck_spin_t	vm_objects_wired_lock;
+
+
+extern
 vm_offset_t	first_phys_addr;	/* physical address for first_page */
 extern
 vm_offset_t	last_phys_addr;		/* physical address for last_page */
@@ -492,6 +498,9 @@ extern
 unsigned int	vm_page_throttle_count;	/* Count of page allocations throttled */
 extern
 unsigned int	vm_page_gobble_count;
+extern
+unsigned int	vm_page_stolen_count;	/* Count of stolen pages not acccounted in zones */
+
 
 #if DEVELOPMENT || DEBUG
 extern
@@ -552,6 +561,10 @@ extern void		vm_page_create(
 					ppnum_t		start,
 					ppnum_t		end);
 
+extern vm_page_t	kdp_vm_page_lookup(
+					vm_object_t		object,
+					vm_object_offset_t	offset);
+
 extern vm_page_t	vm_page_lookup(
 					vm_object_t		object,
 					vm_object_offset_t	offset);
@@ -578,10 +591,6 @@ extern boolean_t	vm_page_wait(
 					int		interruptible );
 
 extern vm_page_t	vm_page_alloc(
-					vm_object_t		object,
-					vm_object_offset_t	offset);
-
-extern vm_page_t	vm_page_alloclo(
 					vm_object_t		object,
 					vm_object_offset_t	offset);
 
@@ -638,13 +647,22 @@ extern void		vm_page_insert(
 					vm_object_t		object,
 					vm_object_offset_t	offset);
 
+extern void		vm_page_insert_wired(
+					vm_page_t		page,
+					vm_object_t		object,
+					vm_object_offset_t	offset,
+					vm_tag_t                tag);
+
 extern void		vm_page_insert_internal(
 					vm_page_t		page,
 					vm_object_t		object,
 					vm_object_offset_t	offset,
+					vm_tag_t                tag,
 					boolean_t		queues_lock_held,
 					boolean_t		insert_in_hash,
-					boolean_t		batch_pmap_op);
+					boolean_t		batch_pmap_op,
+					boolean_t               delayed_accounting,
+					uint64_t		*delayed_ledger_update);
 
 extern void		vm_page_replace(
 					vm_page_t		mem,
@@ -675,7 +693,9 @@ extern void		vm_page_part_copy(
 					vm_size_t	len);
 
 extern void		vm_page_wire(
-					vm_page_t	page);
+					vm_page_t	page,
+					vm_tag_t        tag,
+					boolean_t	check_memorystatus);
 
 extern void		vm_page_unwire(
 	                                vm_page_t	page,
@@ -690,6 +710,12 @@ extern void		vm_page_validate_cs(vm_page_t	page);
 extern void		vm_page_validate_cs_mapped(
 	vm_page_t	page,
 	const void	*kaddr);
+extern void		vm_page_validate_cs_mapped_chunk(
+	vm_page_t	page,
+	const void	*kaddr,
+	vm_offset_t	chunk_offset,
+	boolean_t	*validated,
+	unsigned	*tainted);
 
 extern void		vm_page_free_prepare_queues(
 					vm_page_t	page);
@@ -807,170 +833,6 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 #define VM_PAGE_QUEUES_ASSERT(mem, val)
 #endif
 
-
-/*
- * 'vm_fault_enter' will place newly created pages (zero-fill and COW) onto the
- * local queues if they exist... its the only spot in the system where we add pages
- * to those queues...  once on those queues, those pages can only move to one of the
- * global page queues or the free queues... they NEVER move from local q to local q.
- * the 'local' state is stable when VM_PAGE_QUEUES_REMOVE is called since we're behind
- * the global vm_page_queue_lock at this point...  we still need to take the local lock
- * in case this operation is being run on a different CPU then the local queue's identity,
- * but we don't have to worry about the page moving to a global queue or becoming wired
- * while we're grabbing the local lock since those operations would require the global
- * vm_page_queue_lock to be held, and we already own it.
- *
- * this is why its safe to utilze the wire_count field in the vm_page_t as the local_id...
- * 'wired' and local are ALWAYS mutually exclusive conditions.
- */
-
-#define VM_PAGE_QUEUES_REMOVE(mem)				\
-	MACRO_BEGIN						\
-	boolean_t	was_pageable;				\
-								\
-	VM_PAGE_QUEUES_ASSERT(mem, 1);				\
-	assert(!mem->pageout_queue);				\
-/*								\
- *	if (mem->pageout_queue)					\
- * 		NOTE: VM_PAGE_QUEUES_REMOVE does not deal with removing pages from the pageout queue...	\
- * 		the caller is responsible for determing if the page is on that queue, and if so, must	\
- * 		either first remove it (it needs both the page queues lock and the object lock to do	\
- * 		this via vm_pageout_steal_laundry), or avoid the call to VM_PAGE_QUEUES_REMOVE		\
- */								\
-	if (mem->local) {					\
-		struct vpl	*lq;				\
-		assert(mem->object != kernel_object);		\
-		assert(mem->object != compressor_object);	\
-		assert(!mem->inactive && !mem->speculative);	\
-		assert(!mem->active && !mem->throttled);	\
-		assert(!mem->clean_queue);			\
-		assert(!mem->fictitious);			\
-		lq = &vm_page_local_q[mem->local_id].vpl_un.vpl;	\
-		VPL_LOCK(&lq->vpl_lock);			\
-		queue_remove(&lq->vpl_queue,			\
-			     mem, vm_page_t, pageq);		\
-		mem->local = FALSE;				\
-		mem->local_id = 0;				\
-		lq->vpl_count--;				\
-		if (mem->object->internal) {			\
-			lq->vpl_internal_count--;		\
-		} else {					\
-			lq->vpl_external_count--;		\
-		}						\
-		VPL_UNLOCK(&lq->vpl_lock);			\
-		was_pageable = FALSE;				\
-	}							\
-								\
-	else if (mem->active) {					\
-		assert(mem->object != kernel_object);		\
-		assert(mem->object != compressor_object);	\
-		assert(!mem->inactive && !mem->speculative);	\
-		assert(!mem->clean_queue);			\
-		assert(!mem->throttled);			\
-		assert(!mem->fictitious);			\
-		queue_remove(&vm_page_queue_active,		\
-			mem, vm_page_t, pageq);			\
-		mem->active = FALSE;				\
-		vm_page_active_count--;				\
-		was_pageable = TRUE;				\
-	}							\
-								\
-	else if (mem->inactive) {				\
-		assert(mem->object != kernel_object);		\
-		assert(mem->object != compressor_object);	\
-		assert(!mem->active && !mem->speculative);	\
-		assert(!mem->throttled);			\
-		assert(!mem->fictitious);			\
-		vm_page_inactive_count--;			\
-		if (mem->clean_queue) {				\
-			queue_remove(&vm_page_queue_cleaned,	\
-                        mem, vm_page_t, pageq);			\
-			mem->clean_queue = FALSE;		\
-			vm_page_cleaned_count--;		\
-		} else {					\
-			if (mem->object->internal) {		\
-				queue_remove(&vm_page_queue_anonymous,	\
-				mem, vm_page_t, pageq);		\
-				vm_page_anonymous_count--;	\
-			} else {				\
-				queue_remove(&vm_page_queue_inactive,	\
-				mem, vm_page_t, pageq);		\
-			}					\
-			vm_purgeable_q_advance_all();		\
-		}						\
-		mem->inactive = FALSE;				\
-		was_pageable = TRUE;				\
-	}							\
-								\
-	else if (mem->throttled) {				\
-		assert(mem->object != compressor_object);	\
-		assert(!mem->active && !mem->inactive);		\
-		assert(!mem->speculative);			\
-		assert(!mem->fictitious);			\
-		queue_remove(&vm_page_queue_throttled,		\
-			     mem, vm_page_t, pageq);		\
-		mem->throttled = FALSE;				\
-		vm_page_throttled_count--;			\
-		was_pageable = FALSE;				\
-	}							\
-								\
-	else if (mem->speculative) {				\
-		assert(mem->object != compressor_object);	\
-		assert(!mem->active && !mem->inactive);		\
-		assert(!mem->throttled);			\
-		assert(!mem->fictitious);			\
-                remque(&mem->pageq);				\
-		mem->speculative = FALSE;			\
-		vm_page_speculative_count--;			\
-		was_pageable = TRUE;				\
-	}							\
-								\
-	else if (mem->pageq.next || mem->pageq.prev) {		\
-		was_pageable = FALSE;				\
-		panic("VM_PAGE_QUEUES_REMOVE: unmarked page on Q");	\
-	} else {						\
-		was_pageable = FALSE;				\
-	}							\
-								\
-	mem->pageq.next = NULL;					\
-	mem->pageq.prev = NULL;					\
-	VM_PAGE_QUEUES_ASSERT(mem, 0);				\
-	if (was_pageable) {					\
-		if (mem->object->internal) {			\
-			vm_page_pageable_internal_count--;	\
-		} else {					\
-			vm_page_pageable_external_count--;	\
-		}						\
-	}							\
-	MACRO_END
-
-
-#define VM_PAGE_ENQUEUE_INACTIVE(mem, first)			\
-	MACRO_BEGIN						\
-	VM_PAGE_QUEUES_ASSERT(mem, 0);				\
-	assert(!mem->fictitious);				\
-	assert(!mem->laundry);					\
-	assert(!mem->pageout_queue);				\
-	if (mem->object->internal) {				\
-		if (first == TRUE)				\
-			queue_enter_first(&vm_page_queue_anonymous, mem, vm_page_t, pageq);	\
-		else						\
-			queue_enter(&vm_page_queue_anonymous, mem, vm_page_t, pageq);		\
-		vm_page_anonymous_count++;			\
-		vm_page_pageable_internal_count++;		\
-	} else {						\
-		if (first == TRUE)				\
-			queue_enter_first(&vm_page_queue_inactive, mem, vm_page_t, pageq); \
-		else						\
-			queue_enter(&vm_page_queue_inactive, mem, vm_page_t, pageq);	\
-		vm_page_pageable_external_count++;			\
-	}							\
-	mem->inactive = TRUE;					\
-	vm_page_inactive_count++;				\
-	token_new_pagecount++;					\
-	MACRO_END
-
-
 #if DEVELOPMENT || DEBUG
 #define VM_PAGE_SPECULATIVE_USED_ADD()				\
 	MACRO_BEGIN						\
@@ -1005,6 +867,12 @@ extern void vm_page_queues_assert(vm_page_t mem, int val);
 	}							\
 	MACRO_END
 
+/* adjust for stolen pages accounted elsewhere */
+#define VM_PAGE_MOVE_STOLEN(page_count)				\
+	MACRO_BEGIN						\
+	vm_page_stolen_count -=	(page_count);			\
+	vm_page_wire_count_initial -= (page_count);		\
+	MACRO_END
 	
 #define DW_vm_page_unwire		0x01
 #define DW_vm_page_wire			0x02
@@ -1028,7 +896,7 @@ struct vm_page_delayed_work {
 	int		dw_mask;
 };
 
-void vm_page_do_delayed_work(vm_object_t object, struct vm_page_delayed_work *dwp, int dw_count);
+void vm_page_do_delayed_work(vm_object_t object, vm_tag_t tag, struct vm_page_delayed_work *dwp, int dw_count);
 
 extern unsigned int vm_max_delayed_work_limit;
 
@@ -1062,5 +930,11 @@ extern vm_page_t vm_object_page_grab(vm_object_t);
 #if VM_PAGE_BUCKETS_CHECK
 extern void vm_page_buckets_check(void);
 #endif /* VM_PAGE_BUCKETS_CHECK */
+
+extern void vm_page_queues_remove(vm_page_t mem);
+extern void vm_page_remove_internal(vm_page_t page);
+extern void vm_page_enqueue_inactive(vm_page_t mem, boolean_t first);
+extern void vm_page_check_pageable_safe(vm_page_t page);
+
 
 #endif	/* _VM_VM_PAGE_H_ */

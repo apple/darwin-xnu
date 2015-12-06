@@ -220,6 +220,9 @@
 #define	DTRACE_TMR7(name, type1, arg1, type2, arg2, type3, arg3, arg4, arg5, arg6, arg7) \
 	DTRACE_PROBE7(__sdt_, name, arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 
+#define	DTRACE_PHYSLAT3(name, type1, arg1, type2, arg2, type3, arg3)		\
+	DTRACE_PROBE3(__sdt_, name, arg1, arg2, arg3);
+
 #define	DTRACE_VM(name)							\
 	DTRACE_PROBE(__vminfo_, name)
 
@@ -235,6 +238,10 @@
 #define	DTRACE_VM4(name, type1, arg1, type2, arg2, 			\
     type3, arg3, type4, arg4)						\
 	DTRACE_PROBE4(__vminfo_, name, arg1, arg2, arg3, arg4)
+
+#define	DTRACE_VM5(name, type1, arg1, type2, arg2, 			\
+    type3, arg3, type4, arg4, type5, arg5)				\
+	DTRACE_PROBE5(__vminfo_, name, arg1, arg2, arg3, arg4, arg5)
 
 #define DTRACE_IP(name)							\
 	DTRACE_PROBE(__ip_, name)
@@ -370,6 +377,7 @@
 #define DTRACE_VM2(name, type1, arg1, type2, arg2) do {} while(0)
 #define DTRACE_VM3(name, type1, arg1, type2, arg2, type3, arg3) do {} while(0)
 #define DTRACE_VM4(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4) do {} while(0)
+#define DTRACE_VM5(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5) do {} while(0)
 #define DTRACE_IP(name) do {} while(0)
 #define DTRACE_IP1(name, type1, arg1) do {} while(0)
 #define DTRACE_IP2(name, type1, arg1, type2, arg2) do {} while(0)

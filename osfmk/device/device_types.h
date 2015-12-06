@@ -72,7 +72,7 @@
 #include <mach/port.h>
 
 #if PRIVATE
-#define IOKIT_SERVER_VERSION	20140421
+#define IOKIT_SERVER_VERSION	20150715
 #endif
 
 
@@ -90,6 +90,7 @@ typedef char *	io_buf_ptr_t;
 /* must match device_types.defs */
 typedef	char			io_name_t[128];
 typedef	char			io_string_t[512];	
+typedef	char			io_string_inband_t[4096];
 typedef char 			io_struct_inband_t[4096];
 
 #if KERNEL

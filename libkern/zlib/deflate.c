@@ -383,6 +383,20 @@ int ZEXPORT deflateSetDictionary (strm, dictionary, dictLength)
 }
 
 /* ========================================================================= */
+
+ZEXTERN int ZEXPORT deflateResetWithIO(z_streamp strm, z_input_func zinput, z_output_func zoutput)
+{
+    int zerr;
+
+    zerr = deflateReset(strm);
+    if (Z_OK != zerr) return (zerr);
+    strm->state->zinput  = zinput;
+    strm->state->zoutput = zoutput;
+    return Z_OK;
+}
+
+/* ========================================================================= */
+
 int ZEXPORT deflateReset (strm)
     z_streamp strm;
 {
@@ -400,6 +414,8 @@ int ZEXPORT deflateReset (strm)
     s = (deflate_state *)strm->state;
     s->pending = 0;
     s->pending_out = s->pending_buf;
+    s->zinput = &read_buf;
+    s->zoutput = NULL;
 
     if (s->wrap < 0) {
         s->wrap = -s->wrap; /* was made negative by deflate(..., Z_FINISH); */
@@ -563,14 +579,18 @@ local void flush_pending(strm)
 {
     unsigned len = strm->state->pending;
 
-    if (len > strm->avail_out) len = strm->avail_out;
-    if (len == 0) return;
+    if (strm->state->zoutput) {
+        len = (*strm->state->zoutput)(strm, strm->state->pending_out, len);
+    } else {
+	if (len > strm->avail_out) len = strm->avail_out;
+	if (len == 0) return;
+	zmemcpy(strm->next_out, strm->state->pending_out, len);
+	strm->next_out  += len;
+	strm->avail_out  -= len;
+    }
 
-    zmemcpy(strm->next_out, strm->state->pending_out, len);
-    strm->next_out  += len;
     strm->state->pending_out  += len;
     strm->total_out += len;
-    strm->avail_out  -= len;
     strm->state->pending -= len;
     if (strm->state->pending == 0) {
         strm->state->pending_out = strm->state->pending_buf;
@@ -1368,7 +1388,7 @@ local void fill_window(s)
          */
         Assert(more >= 2, "more < 2");
 
-        n = read_buf(s->strm, s->window + s->strstart + s->lookahead, more);
+        n = (*s->zinput)(s->strm, s->window + s->strstart + s->lookahead, more);
         s->lookahead += n;
 
         /* Initialize the hash value now that we have some input: */
@@ -1763,3 +1783,12 @@ local block_state deflate_rle(s, flush)
     return flush == Z_FINISH ? finish_done : block_done;
 }
 #endif
+
+#if XNU_KERNEL_PRIVATE
+
+uLong zlib_deflate_memory_size(int wbits, int memlevel)
+{
+    return (31 + sizeof(deflate_state) + (1 << (wbits + 2)) + (1 << (memlevel + 9)));
+}
+
+#endif /* XNU_KERNEL_PRIVATE */

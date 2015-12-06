@@ -73,7 +73,7 @@
 
 #include <libkern/libkern.h>
 
-u_int32_t classq_verbose;	/* more noise if greater than 1 */
+u_int32_t classq_verbose = 0;	/* more noise if greater than 1 */
 
 SYSCTL_NODE(_net, OID_AUTO, classq, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "classq");
 

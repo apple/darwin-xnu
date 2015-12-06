@@ -2,8 +2,9 @@
  *  ccrng.h
  *  corecrypto
  *
- *  Created by Fabrice Gautier on 12/13/10.
- *  Copyright 2010 Apple, Inc. All rights reserved.
+ *  Created on 12/13/2010
+ *
+ *  Copyright (c) 2010,2011,2013,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -12,12 +13,14 @@
 
 #include <stdint.h>
 
-#define CC_ERR_DEVICE -100
-#define CC_ERR_INTERUPTS -101
-#define CC_ERR_CRYPTO_CONFIG -102
-#define CC_ERR_PERMS -103
-#define CC_ERR_PARAMETER -104
-#define CC_ERR_MEMORY -105
+#define CC_ERR_DEVICE           -100
+#define CC_ERR_INTERUPTS        -101
+#define CC_ERR_CRYPTO_CONFIG    -102
+#define CC_ERR_PERMS            -103
+#define CC_ERR_PARAMETER        -104
+#define CC_ERR_MEMORY           -105
+#define CC_ERR_FILEDESC         -106
+#define CC_ERR_OUT_OF_ENTROPY   -107
 
 #define CCRNG_STATE_COMMON                                                          \
     int (*generate)(struct ccrng_state *rng, unsigned long outlen, void *out);

@@ -186,16 +186,16 @@ cp ./apple/bin-*/posix_spawn_bin $bin_dir/$A
 newline=0
 
 #
-# Everything below the while loop is input for the while loop
-# if you have any tests which can't run in the while loop, put
+# Everything below the while loop is input for the while loop if
+# you have any tests which can't run in the while loop, put
 # them above this comment
 #
 while read A B
 do
 	# $A contains the command, $B contains the arguments
 	# we echo blank lines and comments
-	# we skip anything which fails to match *$1* (useful
-	# if we only want to test one case, but a nasty hack)
+	# we skip anything which fails to match *$1* (useful if
+	# we only want to test one case, but a nasty hack)
 
 	case $A in
 	\#*)

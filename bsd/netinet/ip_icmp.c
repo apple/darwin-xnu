@@ -148,7 +148,7 @@ SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect,
     CTLFLAG_RW | CTLFLAG_LOCKED,
     &log_redirect, 0, "");
 
-static int icmp_datalen = 8;
+const static int icmp_datalen = 8;
 
 #if ICMP_BANDLIM 
 
@@ -287,7 +287,7 @@ stdreply:	icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
 	 */
 	if (MHLEN > (sizeof(struct ip) + ICMP_MINLEN + icmplen))
 		m = m_gethdr(M_DONTWAIT, MT_HEADER);	/* MAC-OK */
-	else 
+	else
 		m = m_getcl(M_DONTWAIT, MT_DATA, M_PKTHDR);
 
 	if (m == NULL)

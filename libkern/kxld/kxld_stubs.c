@@ -44,7 +44,7 @@ kxld_create_context(KXLDContext **_context __unused,
     KXLDAllocateCallback allocate_callback __unused,
     KXLDLoggingCallback logging_callback __unused,
     KXLDFlags flags __unused, cpu_type_t cputype __unused,
-    cpu_subtype_t cpusubtype __unused)
+    cpu_subtype_t cpusubtype __unused, vm_size_t pagesize __unused)
 {
     return KERN_SUCCESS;
 }

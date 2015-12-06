@@ -36,7 +36,6 @@ endif
 
 SDKROOT ?= macosx.internal
 HOST_SDKROOT ?= macosx
-HOST_SPARSE_SDKROOT ?= /
 
 # SDKROOT may be passed as a shorthand like "iphoneos.internal". We
 # must resolve these to a full path and override SDKROOT.
@@ -59,17 +58,13 @@ ifeq ($(PLATFORM),)
 	export PLATFORM := $(shell echo $(PLATFORMPATH) | sed 's,^.*/\([^/]*\)\.platform$$,\1,')
 	ifeq ($(PLATFORM),)
 		export PLATFORM := MacOSX
+	else ifeq ($(shell echo $(PLATFORM) | tr A-Z a-z),watchos)
+		export PLATFORM := WatchOS
 	endif
 endif
 
 ifeq ($(SDKVERSION),)
      export SDKVERSION := $(shell $(XCRUN) -sdk $(SDKROOT) -show-sdk-version)
-endif
-
-ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
-	ifeq ($(HOST_SPARSE_SDKROOT),/)
-		export HOST_SPARSE_SDKROOT := $(shell $(XCRUN) -sdk iphonehost.internal -show-sdk-path)
-	endif
 endif
 
 # CC/CXX get defined by make(1) by default, so we can't check them
@@ -120,8 +115,15 @@ ifeq ($(NMEDIT),)
 	export NMEDIT := $(shell $(XCRUN) -sdk $(SDKROOT) -find nmedit)
 endif
 
+#
+# Platform options
+#
+SUPPORTED_EMBEDDED_PLATFORMS := iPhoneOS iPhoneOSNano tvOS AppleTVOS WatchOS
+SUPPORTED_SIMULATOR_PLATFORMS := iPhoneSimulator iPhoneNanoSimulator tvSimulator AppleTVSimulator WatchSimulator
+SUPPORTED_PLATFORMS := MacOSX $(SUPPORTED_SIMULATOR_PLATFORMS) $(SUPPORTED_EMBEDDED_PLATFORMS)
+
 # Platform-specific tools
-ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
+ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
 ifeq ($(EMBEDDED_DEVICE_MAP),)
 	export EMBEDDED_DEVICE_MAP := $(shell $(XCRUN) -sdk $(SDKROOT) -find embedded_device_map)
 endif
@@ -144,6 +146,7 @@ DECOMMENT = $(OBJROOT)/SETUP/decomment/decomment
 NEWVERS = $(SRCROOT)/config/newvers.pl
 INSTALL = $(OBJROOT)/SETUP/installfile/installfile
 REPLACECONTENTS = $(OBJROOT)/SETUP/replacecontents/replacecontents
+JSONCOMPILATIONDB = $(OBJROOT)/SETUP/json_compilation_db/json_compilation_db
 
 # Standard BSD tools
 RM = /bin/rm -f

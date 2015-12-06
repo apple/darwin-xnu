@@ -234,6 +234,9 @@ static const int minsize[] = {
 	sizeof(struct sadb_address),	/* SADB_X_EXT_ADDR_RANGE_SRC_END */
     sizeof(struct sadb_address),	/* SADB_X_EXT_ADDR_RANGE_DST_START */
 	sizeof(struct sadb_address),	/* SADB_X_EXT_ADDR_RANGE_DST_END */
+	sizeof(struct sadb_address),	/* SADB_EXT_MIGRATE_ADDRESS_SRC */
+	sizeof(struct sadb_address),	/* SADB_EXT_MIGRATE_ADDRESS_DST */
+	sizeof(struct sadb_x_ipsecif),  /* SADB_X_EXT_MIGRATE_IPSECIF */
 };
 static const int maxsize[] = {
 	sizeof(struct sadb_msg),	/* SADB_EXT_RESERVED */
@@ -263,6 +266,9 @@ static const int maxsize[] = {
 	0,              /* SADB_X_EXT_ADDR_RANGE_SRC_END */
     0,              /* SADB_X_EXT_ADDR_RANGE_DST_START */
 	0,              /* SADB_X_EXT_ADDR_RANGE_DST_END */
+	0,              /* SADB_EXT_MIGRATE_ADDRESS_SRC */
+	0,              /* SADB_EXT_MIGRATE_ADDRESS_DST */
+	sizeof(struct sadb_x_ipsecif), /* SADB_X_EXT_MIGRATE_IPSECIF */
 };
 
 static int ipsec_esp_keymin = 256;
@@ -565,6 +571,7 @@ static int key_validate_ext(const struct sadb_ext *, int);
 static int key_align(struct mbuf *, struct sadb_msghdr *);
 static struct mbuf *key_alloc_mbuf(int);
 static int key_getsastat (struct socket *, struct mbuf *, const struct sadb_msghdr *);
+static int key_migrate (struct socket *, struct mbuf *, const struct sadb_msghdr *);
 static int key_setsaval2(struct secasvar      *sav,
 						 u_int8_t              satype,
 						 u_int8_t              alg_auth,
@@ -585,8 +592,8 @@ static int key_setsaval2(struct secasvar      *sav,
 extern int ipsec_bypass;
 extern int esp_udp_encap_port;
 int ipsec_send_natt_keepalive(struct secasvar *sav);
-bool ipsec_fill_offload_frame(ifnet_t ifp, struct secasvar *sav, struct ipsec_offload_frame *frame, size_t frame_data_offset);
-u_int32_t key_fill_offload_frames_for_savs (ifnet_t ifp, struct ipsec_offload_frame *frames_array, u_int32_t frames_array_count, size_t frame_data_offset);
+bool ipsec_fill_offload_frame(ifnet_t ifp, struct secasvar *sav, struct ifnet_keepalive_offload_frame *frame, size_t frame_data_offset);
+u_int32_t key_fill_offload_frames_for_savs (ifnet_t ifp, struct ifnet_keepalive_offload_frame *frames_array, u_int32_t frames_array_count, size_t frame_data_offset);
 
 void key_init(struct protosw *, struct domain *);
 
@@ -850,7 +857,7 @@ struct secasvar *key_alloc_outbound_sav_for_interface(ifnet_t interface, int fam
 	
 	LIST_FOREACH(sah, &sahtree, chain) {
 		if (sah->ipsec_if == interface &&
-			(family == AF_INET6 || sah->saidx.dst.ss_family == family) && /* IPv6 can go over IPv4 */
+			(family == AF_INET6 || family == AF_INET) &&
 			sah->dir == IPSEC_DIR_OUTBOUND) {
 			/* This SAH is linked to the IPSec interface, and the right family. We found it! */
 			if (key_preferred_oldsa) {
@@ -2251,13 +2258,13 @@ key_spdadd(
     
     /* Process interfaces */
     if (ipsecifopts != NULL) {
-        if (ipsecifopts->sadb_x_ipsecif_internal_if) {
+        if (ipsecifopts->sadb_x_ipsecif_internal_if[0]) {
             ifnet_find_by_name(ipsecifopts->sadb_x_ipsecif_internal_if, &internal_if);
         }
-        if (ipsecifopts->sadb_x_ipsecif_outgoing_if) {
+        if (ipsecifopts->sadb_x_ipsecif_outgoing_if[0]) {
             outgoing_if = ipsecifopts->sadb_x_ipsecif_outgoing_if;
         }
-        if (ipsecifopts->sadb_x_ipsecif_ipsec_if) {
+        if (ipsecifopts->sadb_x_ipsecif_ipsec_if[0]) {
             ipsec_if = ipsecifopts->sadb_x_ipsecif_ipsec_if;
         }
 		init_disabled = ipsecifopts->sadb_x_ipsecif_init_disabled;
@@ -2596,7 +2603,7 @@ key_spddelete(
     
     /* Process interfaces */
     if (ipsecifopts != NULL) {
-        if (ipsecifopts->sadb_x_ipsecif_internal_if) {
+        if (ipsecifopts->sadb_x_ipsecif_internal_if[0]) {
             ifnet_find_by_name(ipsecifopts->sadb_x_ipsecif_internal_if, &internal_if);
         }
     }
@@ -3830,6 +3837,23 @@ key_newsav2(struct secashead     *sah,
 	return newsav;
 }
 
+static int
+key_migratesav(struct secasvar *sav,
+			   struct secashead *newsah)
+{
+	if (sav == NULL || newsah == NULL || sav->state != SADB_SASTATE_MATURE) {
+		return EINVAL;
+	}
+	
+	/* remove from SA header */
+	if (__LIST_CHAINED(sav))
+		LIST_REMOVE(sav, chain);
+	
+	sav->sah = newsah;
+	LIST_INSERT_TAIL(&newsah->savtree[SADB_SASTATE_MATURE], sav, secasvar, chain);
+	return 0;
+}
+
 /*
  * free() SA variable entry.
  */
@@ -4090,6 +4114,7 @@ key_setsaval(
 			}
 			sav->remote_ike_port = ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_port;
 			sav->natt_interval = ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_interval;
+			sav->natt_offload_interval = ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_offload_interval;
 		}
 		
 		/*
@@ -4856,7 +4881,7 @@ key_setdumpsa(
 		if ((!m && !p) || (m && p))
 			goto fail;
 		if (p && tres) {
-			M_PREPEND(tres, l, M_WAITOK);
+			M_PREPEND(tres, l, M_WAITOK, 1);
 			if (!tres)
 				goto fail;
 			bcopy(p, mtod(tres, caddr_t), l);
@@ -6364,14 +6389,14 @@ key_proto2satype(
 }
 
 static ifnet_t
-key_get_ipsec_if_from_message (const struct sadb_msghdr *mhp)
+key_get_ipsec_if_from_message (const struct sadb_msghdr *mhp, int message_type)
 {
 	struct sadb_x_ipsecif *ipsecifopts = NULL;
 	ifnet_t ipsec_if = NULL;
 	
-	ipsecifopts = (struct sadb_x_ipsecif *)(void *)mhp->ext[SADB_X_EXT_IPSECIF];
+	ipsecifopts = (struct sadb_x_ipsecif *)(void *)mhp->ext[message_type];
 	if (ipsecifopts != NULL) {
-		if (ipsecifopts->sadb_x_ipsecif_internal_if) {
+		if (ipsecifopts->sadb_x_ipsecif_ipsec_if[0]) {
 			ifnet_find_by_name(ipsecifopts->sadb_x_ipsecif_ipsec_if, &ipsec_if);
 		}
 	}
@@ -6380,14 +6405,14 @@ key_get_ipsec_if_from_message (const struct sadb_msghdr *mhp)
 }
 
 static u_int
-key_get_outgoing_ifindex_from_message (const struct sadb_msghdr *mhp)
+key_get_outgoing_ifindex_from_message (const struct sadb_msghdr *mhp, int message_type)
 {
 	struct sadb_x_ipsecif *ipsecifopts = NULL;
 	ifnet_t outgoing_if = NULL;
 	
-	ipsecifopts = (struct sadb_x_ipsecif *)(void *)mhp->ext[SADB_X_EXT_IPSECIF];
+	ipsecifopts = (struct sadb_x_ipsecif *)(void *)mhp->ext[message_type];
 	if (ipsecifopts != NULL) {
-		if (ipsecifopts->sadb_x_ipsecif_outgoing_if) {
+		if (ipsecifopts->sadb_x_ipsecif_outgoing_if[0]) {
 			ifnet_find_by_name(ipsecifopts->sadb_x_ipsecif_outgoing_if, &outgoing_if);
         }
     }
@@ -6454,7 +6479,7 @@ key_getspi(
 	src0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_SRC]);
 	dst0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_DST]);
 	
-	ipsec_if = key_get_ipsec_if_from_message(mhp);
+	ipsec_if = key_get_ipsec_if_from_message(mhp, SADB_X_EXT_IPSECIF);
 	
 	/* map satype to proto */
 	if ((proto = key_satype2proto(mhp->msg->sadb_msg_satype)) == 0) {
@@ -6512,7 +6537,7 @@ key_getspi(
 	/* get a SA index */
 	if ((newsah = key_getsah(&saidx)) == NULL) {
 		/* create a new SA index: key_addspi is always used for inbound spi */
-		if ((newsah = key_newsah(&saidx, ipsec_if, key_get_outgoing_ifindex_from_message(mhp), IPSEC_DIR_INBOUND)) == NULL) {
+		if ((newsah = key_newsah(&saidx, ipsec_if, key_get_outgoing_ifindex_from_message(mhp, SADB_X_EXT_IPSECIF), IPSEC_DIR_INBOUND)) == NULL) {
 			lck_mtx_unlock(sadb_mutex);
 			ipseclog((LOG_DEBUG, "key_getspi: No more memory.\n"));
 			return key_senderror(so, m, ENOBUFS);
@@ -6829,7 +6854,7 @@ key_update(
 	sa0 = (struct sadb_sa *)(void *)mhp->ext[SADB_EXT_SA];
 	src0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_SRC]);
 	dst0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_DST]);
-	ipsec_if = key_get_ipsec_if_from_message(mhp);
+	ipsec_if = key_get_ipsec_if_from_message(mhp, SADB_X_EXT_IPSECIF);
 	
 	/* XXX boundary check against sa_len */
 	KEY_SETSECASIDX(proto, mode, reqid, src0 + 1, dst0 + 1, ipsec_if ? ipsec_if->if_index : 0, &saidx);
@@ -6941,6 +6966,152 @@ key_update(
 		m_freem(m);
 		return key_sendup_mbuf(so, n, KEY_SENDUP_ALL);
     }
+}
+
+static int
+key_migrate(struct socket *so,
+			struct mbuf *m,
+			const struct sadb_msghdr *mhp)
+{
+	struct sadb_sa *sa0 = NULL;
+	struct sadb_address *src0 = NULL;
+	struct sadb_address *dst0 = NULL;
+	struct sadb_address *src1 = NULL;
+	struct sadb_address *dst1 = NULL;
+	ifnet_t ipsec_if0 = NULL;
+	ifnet_t ipsec_if1 = NULL;
+	struct secasindex saidx0;
+	struct secasindex saidx1;
+	struct secashead *sah = NULL;
+	struct secashead *newsah = NULL;
+	struct secasvar *sav = NULL;
+	u_int16_t proto;
+	
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	
+	/* sanity check */
+	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
+		panic("key_migrate: NULL pointer is passed.\n");
+	
+	/* map satype to proto */
+	if ((proto = key_satype2proto(mhp->msg->sadb_msg_satype)) == 0) {
+		ipseclog((LOG_DEBUG, "key_migrate: invalid satype is passed.\n"));
+		return key_senderror(so, m, EINVAL);
+	}
+	
+	if (mhp->ext[SADB_EXT_SA] == NULL ||
+		mhp->ext[SADB_EXT_ADDRESS_SRC] == NULL ||
+		mhp->ext[SADB_EXT_ADDRESS_DST] == NULL ||
+		mhp->ext[SADB_EXT_MIGRATE_ADDRESS_SRC] == NULL ||
+		mhp->ext[SADB_EXT_MIGRATE_ADDRESS_DST] == NULL) {
+		ipseclog((LOG_DEBUG, "key_migrate: invalid message is passed.\n"));
+		return key_senderror(so, m, EINVAL);
+	}
+	
+	if (mhp->extlen[SADB_EXT_SA] < sizeof(struct sadb_sa) ||
+		mhp->extlen[SADB_EXT_ADDRESS_SRC] < sizeof(struct sadb_address) ||
+		mhp->extlen[SADB_EXT_ADDRESS_DST] < sizeof(struct sadb_address) ||
+		mhp->extlen[SADB_EXT_MIGRATE_ADDRESS_SRC] < sizeof(struct sadb_address) ||
+		mhp->extlen[SADB_EXT_MIGRATE_ADDRESS_DST] < sizeof(struct sadb_address)) {
+		ipseclog((LOG_DEBUG, "key_migrate: invalid message is passed.\n"));
+		return key_senderror(so, m, EINVAL);
+	}
+	
+	lck_mtx_lock(sadb_mutex);
+	
+	sa0 = (struct sadb_sa *)(void *)mhp->ext[SADB_EXT_SA];
+	src0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_SRC]);
+	dst0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_DST]);
+	src1 = (struct sadb_address *)(mhp->ext[SADB_EXT_MIGRATE_ADDRESS_SRC]);
+	dst1 = (struct sadb_address *)(mhp->ext[SADB_EXT_MIGRATE_ADDRESS_DST]);
+	ipsec_if0 = key_get_ipsec_if_from_message(mhp, SADB_X_EXT_IPSECIF);
+	ipsec_if1 = key_get_ipsec_if_from_message(mhp, SADB_X_EXT_MIGRATE_IPSECIF);
+	
+	/* Find existing SAH and SAV */
+	KEY_SETSECASIDX(proto, IPSEC_MODE_ANY, 0, src0 + 1, dst0 + 1, ipsec_if0 ? ipsec_if0->if_index : 0, &saidx0);
+	
+	LIST_FOREACH(sah, &sahtree, chain) {
+		if (sah->state != SADB_SASTATE_MATURE)
+			continue;
+		if (key_cmpsaidx(&sah->saidx, &saidx0, CMP_HEAD) == 0)
+			continue;
+		
+		sav = key_getsavbyspi(sah, sa0->sadb_sa_spi);
+		if (sav && sav->state == SADB_SASTATE_MATURE)
+			break;
+	}
+	if (sah == NULL) {
+		lck_mtx_unlock(sadb_mutex);
+		ipseclog((LOG_DEBUG, "key_migrate: no mature SAH found.\n"));
+		return key_senderror(so, m, ENOENT);
+	}
+	
+	if (sav == NULL) {
+		lck_mtx_unlock(sadb_mutex);
+		ipseclog((LOG_DEBUG, "key_migrate: no SA found.\n"));
+		return key_senderror(so, m, ENOENT);
+	}
+	
+	/* Find or create new SAH */
+	KEY_SETSECASIDX(proto, sah->saidx.mode, sah->saidx.reqid, src1 + 1, dst1 + 1, ipsec_if1 ? ipsec_if1->if_index : 0, &saidx1);
+	
+	if ((newsah = key_getsah(&saidx1)) == NULL) {
+		if ((newsah = key_newsah(&saidx1, ipsec_if1, key_get_outgoing_ifindex_from_message(mhp, SADB_X_EXT_MIGRATE_IPSECIF), sah->dir)) == NULL) {
+			lck_mtx_unlock(sadb_mutex);
+			ipseclog((LOG_DEBUG, "key_migrate: No more memory.\n"));
+			return key_senderror(so, m, ENOBUFS);
+		}
+	}
+	
+	/* Migrate SAV in to new SAH */
+	if (key_migratesav(sav, newsah) != 0) {
+		lck_mtx_unlock(sadb_mutex);
+		ipseclog((LOG_DEBUG, "key_migrate: Failed to migrate SA to new SAH.\n"));
+		return key_senderror(so, m, EINVAL);
+	}
+	
+	/* Reset NAT values */
+	sav->flags = sa0->sadb_sa_flags;
+	sav->remote_ike_port = ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_port;
+	sav->natt_interval = ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_interval;
+	sav->natt_offload_interval = ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_offload_interval;
+	sav->natt_last_activity = natt_now;
+	
+	/*
+	 * Verify if SADB_X_EXT_NATT_MULTIPLEUSERS flag is set that
+	 * SADB_X_EXT_NATT is set and SADB_X_EXT_NATT_KEEPALIVE is not
+	 * set (we're not behind nat) - otherwise clear it.
+	 */
+	if ((sav->flags & SADB_X_EXT_NATT_MULTIPLEUSERS) != 0)
+		if ((sav->flags & SADB_X_EXT_NATT) == 0 ||
+			(sav->flags & SADB_X_EXT_NATT_KEEPALIVE) != 0)
+			sav->flags &= ~SADB_X_EXT_NATT_MULTIPLEUSERS;
+	
+	lck_mtx_unlock(sadb_mutex);
+	{
+		struct mbuf *n;
+		struct sadb_msg *newmsg;
+		int mbufItems[] = {SADB_EXT_RESERVED, SADB_EXT_SA,
+			SADB_EXT_ADDRESS_SRC, SADB_EXT_ADDRESS_DST, SADB_X_EXT_IPSECIF,
+			SADB_EXT_MIGRATE_ADDRESS_SRC, SADB_EXT_MIGRATE_ADDRESS_DST, SADB_X_EXT_MIGRATE_IPSECIF};
+		
+		/* create new sadb_msg to reply. */
+		n = key_gather_mbuf(m, mhp, 1, sizeof(mbufItems)/sizeof(int), mbufItems);
+		if (!n)
+			return key_senderror(so, m, ENOBUFS);
+		
+		if (n->m_len < sizeof(struct sadb_msg)) {
+			n = m_pullup(n, sizeof(struct sadb_msg));
+			if (n == NULL)
+				return key_senderror(so, m, ENOBUFS);
+		}
+		newmsg = mtod(n, struct sadb_msg *);
+		newmsg->sadb_msg_errno = 0;
+		newmsg->sadb_msg_len = PFKEY_UNIT64(n->m_pkthdr.len);
+		
+		m_freem(m);
+		return key_sendup_mbuf(so, n, KEY_SENDUP_ALL);
+	}
 }
 
 /*
@@ -7060,7 +7231,7 @@ key_add(
 	sa0 = (struct sadb_sa *)(void *)mhp->ext[SADB_EXT_SA];
 	src0 = (struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_SRC];
 	dst0 = (struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_DST];
-	ipsec_if = key_get_ipsec_if_from_message(mhp);
+	ipsec_if = key_get_ipsec_if_from_message(mhp, SADB_X_EXT_IPSECIF);
 	
 	/* XXX boundary check against sa_len */
 	KEY_SETSECASIDX(proto, mode, reqid, src0 + 1, dst0 + 1, ipsec_if ? ipsec_if->if_index : 0, &saidx);
@@ -7070,7 +7241,7 @@ key_add(
 	/* get a SA header */
 	if ((newsah = key_getsah(&saidx)) == NULL) {
 		/* create a new SA header: key_addspi is always used for outbound spi */
-		if ((newsah = key_newsah(&saidx, ipsec_if, key_get_outgoing_ifindex_from_message(mhp), IPSEC_DIR_OUTBOUND)) == NULL) {
+		if ((newsah = key_newsah(&saidx, ipsec_if, key_get_outgoing_ifindex_from_message(mhp, SADB_X_EXT_IPSECIF), IPSEC_DIR_OUTBOUND)) == NULL) {
 			lck_mtx_unlock(sadb_mutex);
 			ipseclog((LOG_DEBUG, "key_add: No more memory.\n"));
 			return key_senderror(so, m, ENOBUFS);
@@ -7328,7 +7499,7 @@ key_delete(
 	sa0 = (struct sadb_sa *)(void *)mhp->ext[SADB_EXT_SA];
 	src0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_SRC]);
 	dst0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_DST]);
-	ipsec_if = key_get_ipsec_if_from_message(mhp);
+	ipsec_if = key_get_ipsec_if_from_message(mhp, SADB_X_EXT_IPSECIF);
 	
 	/* XXX boundary check against sa_len */
 	KEY_SETSECASIDX(proto, IPSEC_MODE_ANY, 0, src0 + 1, dst0 + 1, ipsec_if ? ipsec_if->if_index : 0, &saidx);
@@ -7403,7 +7574,7 @@ key_delete_all(
 	
 	src0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_SRC]);
 	dst0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_DST]);
-	ipsec_if = key_get_ipsec_if_from_message(mhp);
+	ipsec_if = key_get_ipsec_if_from_message(mhp, SADB_X_EXT_IPSECIF);
 	
 	/* XXX boundary check against sa_len */
 	KEY_SETSECASIDX(proto, IPSEC_MODE_ANY, 0, src0 + 1, dst0 + 1, ipsec_if ? ipsec_if->if_index : 0, &saidx);
@@ -7519,7 +7690,7 @@ key_get(
 	sa0 = (struct sadb_sa *)(void *)mhp->ext[SADB_EXT_SA];
 	src0 = (struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_SRC];
 	dst0 = (struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_DST];
-	ipsec_if = key_get_ipsec_if_from_message(mhp);
+	ipsec_if = key_get_ipsec_if_from_message(mhp, SADB_X_EXT_IPSECIF);
 	
 	/* XXX boundary check against sa_len */
 	KEY_SETSECASIDX(proto, IPSEC_MODE_ANY, 0, src0 + 1, dst0 + 1, ipsec_if ? ipsec_if->if_index : 0, &saidx);
@@ -7790,7 +7961,7 @@ key_getcomb_ah(void)
 				m->m_next = NULL;
 			}
 		} else
-			M_PREPEND(m, l, M_WAITOK);
+			M_PREPEND(m, l, M_WAITOK, 1);
 		if (!m)
 			return NULL;
 		
@@ -7836,7 +8007,7 @@ key_getcomb_ipcomp(void)
 				m->m_next = NULL;
 			}
 		} else
-			M_PREPEND(m, l, M_WAITOK);
+			M_PREPEND(m, l, M_WAITOK, 1);
 		if (!m)
 			return NULL;
 		
@@ -7882,7 +8053,7 @@ key_getprop(
 	
 	if (!m)
 		return NULL;
-	M_PREPEND(m, l, M_WAITOK);
+	M_PREPEND(m, l, M_WAITOK, 1);
 	if (!m)
 		return NULL;
 	
@@ -8316,7 +8487,7 @@ key_acquire2(
 	
 	src0 = (const struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_SRC];
 	dst0 = (const struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_DST];
-	ipsec_if = key_get_ipsec_if_from_message(mhp);
+	ipsec_if = key_get_ipsec_if_from_message(mhp, SADB_X_EXT_IPSECIF);
 	
 	/* XXX boundary check against sa_len */
 	/* cast warnings */
@@ -9014,7 +9185,68 @@ static int (*key_typesw[])(struct socket *, struct mbuf *,
 	key_getsastat,   /* SADB_GETSASTAT */
 	key_spdenable,   /* SADB_X_SPDENABLE */
 	key_spddisable,   /* SADB_X_SPDDISABLE */
+	key_migrate,   /* SADB_MIGRATE */
 };
+
+static void
+bzero_mbuf(struct mbuf *m)
+{
+	struct mbuf *mptr  = m;
+	struct sadb_msg *msg = NULL;
+	int offset = 0;
+
+	if (!mptr) {
+		return;
+	}
+
+	if (mptr->m_len >= sizeof(struct sadb_msg)) {
+		msg = mtod(mptr, struct sadb_msg *);
+		if (msg->sadb_msg_type != SADB_ADD &&
+		    msg->sadb_msg_type != SADB_UPDATE) {
+			return;
+		}
+		offset = sizeof(struct sadb_msg);
+	}
+	bzero(mptr->m_data+offset, mptr->m_len-offset);
+	mptr = mptr->m_next;
+	while (mptr != NULL) {
+		bzero(mptr->m_data, mptr->m_len);
+		mptr = mptr->m_next;
+	}
+}
+
+static void
+bzero_keys(struct sadb_msghdr *mh)
+{
+	int extlen = 0;
+	int offset = 0;
+
+	if (!mh) {
+		return;
+	}
+	offset = sizeof(struct sadb_key);
+
+	if (mh->ext[SADB_EXT_KEY_ENCRYPT]) {
+		struct sadb_key *key = (struct sadb_key*)mh->ext[SADB_EXT_KEY_ENCRYPT];
+		extlen = key->sadb_key_bits >> 3;
+
+		if (mh->extlen[SADB_EXT_KEY_ENCRYPT] >= offset + extlen) {
+			bzero((uint8_t *)mh->ext[SADB_EXT_KEY_ENCRYPT]+offset, extlen);
+		} else {
+			bzero(mh->ext[SADB_EXT_KEY_ENCRYPT], mh->extlen[SADB_EXT_KEY_ENCRYPT]);
+		}
+	}
+	if (mh->ext[SADB_EXT_KEY_AUTH]) {
+		struct sadb_key *key = (struct sadb_key*)mh->ext[SADB_EXT_KEY_AUTH];
+		extlen = key->sadb_key_bits >> 3;
+
+		if (mh->extlen[SADB_EXT_KEY_AUTH] >= offset + extlen) {
+			bzero((uint8_t *)mh->ext[SADB_EXT_KEY_AUTH]+offset, extlen);
+		} else {
+			bzero(mh->ext[SADB_EXT_KEY_AUTH], mh->extlen[SADB_EXT_KEY_AUTH]);
+		}
+	}
+}
 
 /*
  * parse sadb_msg buffer to process PFKEYv2,
@@ -9037,7 +9269,8 @@ key_parse(
 	u_int orglen;
 	int error;
 	int target;
-	
+	Boolean keyAligned = FALSE;
+
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
@@ -9101,12 +9334,14 @@ key_parse(
 			}
 		}
 		if (!n) {
+			bzero_mbuf(m);
 			m_freem(m);
 			return ENOBUFS;
 		}
 		m_copydata(m, 0, m->m_pkthdr.len, mtod(n, caddr_t));
 		n->m_pkthdr.len = n->m_len = m->m_pkthdr.len;
 		n->m_next = NULL;
+		bzero_mbuf(m);
 		m_freem(m);
 		m = n;
 	}
@@ -9117,10 +9352,12 @@ key_parse(
 		return error;
 	
 	if (m->m_next) {	/*XXX*/
+		bzero_mbuf(m);
 		m_freem(m);
 		return ENOBUFS;
 	}
 	
+	keyAligned = TRUE;
 	msg = mh.msg;
 	
 	/* check SA type */
@@ -9277,9 +9514,20 @@ key_parse(
 		goto senderror;
 	}
 	
-	return (*key_typesw[msg->sadb_msg_type])(so, m, &mh);
+	error = (*key_typesw[msg->sadb_msg_type])(so, m, &mh);
+
+	// mh.ext points to the mbuf content.
+	// Zero out Encryption and Integrity keys if present.
+	bzero_keys(&mh);
 	
+	return error;
+
 senderror:
+	if (keyAligned) {
+		bzero_keys(&mh);
+	} else {
+		bzero_mbuf(m);
+	}
 	msg->sadb_msg_errno = error;
 	return key_sendup_mbuf(so, m, target);
 }
@@ -9367,6 +9615,9 @@ key_align(
 			case SADB_X_EXT_ADDR_RANGE_SRC_END:
 			case SADB_X_EXT_ADDR_RANGE_DST_START:
 			case SADB_X_EXT_ADDR_RANGE_DST_END:
+			case SADB_EXT_MIGRATE_ADDRESS_SRC:
+			case SADB_EXT_MIGRATE_ADDRESS_DST:
+			case SADB_X_EXT_MIGRATE_IPSECIF:
 				/* duplicate check */
 				/*
 				 * XXX Are there duplication payloads of either
@@ -9376,6 +9627,7 @@ key_align(
 					ipseclog((LOG_DEBUG,
 							  "key_align: duplicate ext_type %u "
 							  "is passed.\n", ext->sadb_ext_type));
+					bzero_mbuf(m);
 					m_freem(m);
 					PFKEY_STAT_INCREMENT(pfkeystat.out_dupext);
 					return EINVAL;
@@ -9385,6 +9637,7 @@ key_align(
 				ipseclog((LOG_DEBUG,
 						  "key_align: invalid ext_type %u is passed.\n",
 						  ext->sadb_ext_type));
+				bzero_mbuf(m);
 				m_freem(m);
 				PFKEY_STAT_INCREMENT(pfkeystat.out_invexttype);
 				return EINVAL;
@@ -9393,6 +9646,7 @@ key_align(
 		extlen = PFKEY_UNUNIT64(ext->sadb_ext_len);
 		
 		if (key_validate_ext(ext, extlen)) {
+			bzero_mbuf(m);
 			m_freem(m);
 			PFKEY_STAT_INCREMENT(pfkeystat.out_invlen);
 			return EINVAL;
@@ -9411,6 +9665,7 @@ key_align(
 	}
 	
 	if (off != end) {
+		bzero_mbuf(m);
 		m_freem(m);
 		PFKEY_STAT_INCREMENT(pfkeystat.out_invlen);
 		return EINVAL;
@@ -9450,6 +9705,8 @@ key_validate_ext(
 		case SADB_X_EXT_ADDR_RANGE_SRC_END:
 		case SADB_X_EXT_ADDR_RANGE_DST_START:
 		case SADB_X_EXT_ADDR_RANGE_DST_END:
+		case SADB_EXT_MIGRATE_ADDRESS_SRC:
+		case SADB_EXT_MIGRATE_ADDRESS_DST:
 			baselen = PFKEY_ALIGN8(sizeof(struct sadb_address));
 			checktype = ADDR;
 			break;
@@ -10007,13 +10264,13 @@ key_delsp_for_ipsec_if (ifnet_t ipsec_if)
 
 __private_extern__ u_int32_t
 key_fill_offload_frames_for_savs (ifnet_t ifp,
-								  struct ipsec_offload_frame *frames_array,
-								  u_int32_t frames_array_count,
-								  size_t frame_data_offset)
+    struct ifnet_keepalive_offload_frame *frames_array,
+    u_int32_t frames_array_count,
+    size_t frame_data_offset)
 {
 	struct secashead *sah = NULL;
 	struct secasvar *sav = NULL;
-	struct ipsec_offload_frame *frame = frames_array;
+	struct ifnet_keepalive_offload_frame *frame = frames_array;
 	u_int32_t frame_index = 0;
 
 	if (frame == NULL || frames_array_count == 0) {

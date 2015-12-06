@@ -84,8 +84,7 @@
 #define RB_SAFEBOOT	0x100	/* booting safe */
 #define RB_UPSDELAY 0x200   /* Delays restart by 5 minutes */
 #define RB_QUICK	0x400	/* quick and ungraceful reboot with file system caches flushed*/
-#define RB_PANIC	0	/* reboot due to panic */
-#define RB_BOOT		1	/* reboot due to boot() */
+#define RB_PANIC	0x800   /* panic the kernel */
 
 #endif /* __APPLE_API_PRIVATE */
 
@@ -131,7 +130,7 @@
 #include <machine/reboot.h>
 
 __BEGIN_DECLS
-int	boot(int, int, char *);
+int	reboot_kernel(int, char *);
 __END_DECLS
 
 #define PROC_SHUTDOWN_LOG "/var/log/kernel-shutdown.log"

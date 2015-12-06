@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -320,7 +320,7 @@ errno_t	mbuf_dup(const mbuf_t src, mbuf_how_t how, mbuf_t *new_mbuf)
 errno_t mbuf_prepend(mbuf_t *orig, size_t len, mbuf_how_t how)
 {
 	/* Must set *orig to NULL in failure case */
-	*orig = m_prepend_2(*orig, len, how);
+	*orig = m_prepend_2(*orig, len, how, 0);
 	
 	return (*orig == NULL) ? ENOMEM : 0;
 }
@@ -1367,5 +1367,18 @@ mbuf_get_driver_scratch(mbuf_t m, u_int8_t **area, size_t *area_len)
 		return (EINVAL);
 
 	*area_len = m_scratch_get(m, area);
+	return (0);
+}
+
+errno_t
+mbuf_get_unsent_data_bytes(const mbuf_t m, u_int32_t *unsent_data)
+{
+	if (m == NULL || unsent_data == NULL || !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+
+	if (!(m->m_pkthdr.pkt_flags & PKTF_VALID_UNSENT_DATA))
+		return (EINVAL);
+
+	*unsent_data = m->m_pkthdr.pkt_unsent_databytes;
 	return (0);
 }

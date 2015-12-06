@@ -157,7 +157,7 @@ void gzalloc_zone_init(zone_t z) {
 			} else {
 				kern_return_t kr;
 
-				if ((kr = kernel_memory_allocate(kernel_map, (vm_offset_t *)&z->gz.gzfc, gzfcsz, 0, KMA_KOBJECT)) != KERN_SUCCESS) {
+				if ((kr = kernel_memory_allocate(kernel_map, (vm_offset_t *)&z->gz.gzfc, gzfcsz, 0, KMA_KOBJECT, VM_KERN_MEMORY_OSFMK)) != KERN_SUCCESS) {
 					panic("zinit/gzalloc: kernel_memory_allocate failed (%d) for 0x%lx bytes", kr, (unsigned long) gzfcsz);
 				}
 			}
@@ -239,7 +239,7 @@ void gzalloc_init(vm_size_t max_zonemap_size) {
 
 	if (gzalloc_mode) {
 		retval = kmem_suballoc(kernel_map, &gzalloc_map_min, (max_zonemap_size << 2),
-		    FALSE, VM_FLAGS_ANYWHERE | VM_FLAGS_PERMANENT,
+		    FALSE, VM_FLAGS_ANYWHERE | VM_FLAGS_PERMANENT | VM_MAKE_TAG(VM_KERN_MEMORY_ZONE),
 		    &gzalloc_map);
 	
 		if (retval != KERN_SUCCESS)
@@ -287,7 +287,8 @@ gzalloc_alloc(zone_t zone, boolean_t canblock) {
 		else {
 			kern_return_t kr = kernel_memory_allocate(gzalloc_map,
 			    &gzaddr, rounded_size + (1*PAGE_SIZE),
-			    0, KMA_KOBJECT | gzalloc_guard);
+			    0, KMA_KOBJECT | gzalloc_guard,
+			    VM_KERN_MEMORY_OSFMK);
 			if (kr != KERN_SUCCESS)
 				panic("gzalloc: kernel_memory_allocate for size 0x%llx failed with %d", (uint64_t)rounded_size, kr);
 

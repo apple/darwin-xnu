@@ -55,3 +55,5 @@ _thread_policy_set
 _thread_reference
 _thread_terminate
 _thread_wakeup_prim
+_vm_kernel_addrperm_external
+_vm_kernel_unslide_or_perm_external

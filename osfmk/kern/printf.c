@@ -214,6 +214,12 @@ printnum(
 
 boolean_t	_doprnt_truncates = FALSE;
 
+#if (DEVELOPMENT || DEBUG) 
+boolean_t	doprnt_hide_pointers = FALSE;
+#else
+boolean_t	doprnt_hide_pointers = TRUE;
+#endif
+
 int
 __doprnt(
 	const char	*fmt,
@@ -221,7 +227,8 @@ __doprnt(
 						/* character output routine */
 	void			(*putc)(int, void *arg),
 	void                    *arg,
-	int			radix)		/* default radix - for '%r' */
+	int			radix,		/* default radix - for '%r' */
+	int			is_log)
 {
 	int		length;
 	int		prec;
@@ -566,6 +573,21 @@ __doprnt(
 
 		    if (truncate) u = (long long)((int)(u));
 
+		    if (doprnt_hide_pointers && is_log) {
+			const char str[] = "<ptr>";
+			const char* strp = str;
+			int strl = sizeof(str) - 1;
+
+			if (u >= VM_MIN_KERNEL_AND_KEXT_ADDRESS && u <= VM_MAX_KERNEL_ADDRESS) {
+			    while(*strp != '\0') {
+				(*putc)(*strp, arg);
+				strp++;
+			    }
+			    nprinted += strl;
+			    break;
+			}
+		    }
+
 		    if (u != 0 && altfmt) {
 			if (base == 8)
 			    prefix = "0";
@@ -653,7 +675,18 @@ _doprnt(
 	void			(*putc)(char),
 	int			radix)		/* default radix - for '%r' */
 {
-    __doprnt(fmt, *argp, dummy_putc, putc, radix);
+    __doprnt(fmt, *argp, dummy_putc, putc, radix, FALSE);
+}
+
+void 
+_doprnt_log(
+	register const char	*fmt,
+	va_list			*argp,
+						/* character output routine */
+	void			(*putc)(char),
+	int			radix)		/* default radix - for '%r' */
+{
+    __doprnt(fmt, *argp, dummy_putc, putc, radix, TRUE);
 }
 
 #if	MP_PRINTF 
@@ -770,7 +803,7 @@ printf(const char *fmt, ...)
 	if (fmt) {
 		disable_preemption();
 		va_start(listp, fmt);
-		_doprnt(fmt, &listp, conslog_putc, 16);
+		_doprnt_log(fmt, &listp, conslog_putc, 16);
 		va_end(listp);
 		enable_preemption();
 	}
@@ -815,7 +848,7 @@ kdb_printf(const char *fmt, ...)
 	va_list	listp;
 
 	va_start(listp, fmt);
-	_doprnt(fmt, &listp, consdebug_putc, 16);
+	_doprnt_log(fmt, &listp, consdebug_putc, 16);
 	va_end(listp);
 	return 0;
 }
@@ -869,7 +902,7 @@ sprintf(char *buf, const char *fmt, ...)
 
         va_start(listp, fmt);
         copybyte_str = buf;
-        __doprnt(fmt, listp, copybyte, &copybyte_str, 16);
+        __doprnt(fmt, listp, copybyte, &copybyte_str, 16, FALSE);
         va_end(listp);
 	*copybyte_str = '\0';
         return (int)strlen(buf);

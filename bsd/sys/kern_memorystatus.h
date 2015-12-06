@@ -184,17 +184,21 @@ int memorystatus_control(uint32_t command, int32_t pid, uint32_t flags, void *bu
 #define MEMORYSTATUS_CMD_SET_PRIORITY_PROPERTIES      2
 #define MEMORYSTATUS_CMD_GET_JETSAM_SNAPSHOT          3
 #define MEMORYSTATUS_CMD_GET_PRESSURE_STATUS          4
-#define MEMORYSTATUS_CMD_SET_JETSAM_HIGH_WATER_MARK   5
-#define MEMORYSTATUS_CMD_SET_JETSAM_TASK_LIMIT	      6
-
-/* Group Commands */
-#define MEMORYSTATUS_CMD_GRP_SET_PROPERTIES           7
+#define MEMORYSTATUS_CMD_SET_JETSAM_HIGH_WATER_MARK   5    /* Set active memory limit = inactive memory limit, both non-fatal	*/
+#define MEMORYSTATUS_CMD_SET_JETSAM_TASK_LIMIT	      6    /* Set active memory limit = inactive memory limit, both fatal	*/
+#define MEMORYSTATUS_CMD_SET_MEMLIMIT_PROPERTIES      7    /* Set memory limits plus attributes independently			*/
+#define MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES      8    /* Get memory limits plus attributes					*/
+#define MEMORYSTATUS_CMD_PRIVILEGED_LISTENER_ENABLE   9    /* Set the task's status as a privileged listener w.r.t memory notifications  */
+#define MEMORYSTATUS_CMD_PRIVILEGED_LISTENER_DISABLE  10   /* Reset the task's status as a privileged listener w.r.t memory notifications  */
+/* Commands that act on a group of processes */
+#define MEMORYSTATUS_CMD_GRP_SET_PROPERTIES           100
 
 #if PRIVATE
 /* Test commands */
 
 /* Trigger forced jetsam */
-#define MEMORYSTATUS_CMD_TEST_JETSAM                  1000
+#define MEMORYSTATUS_CMD_TEST_JETSAM		1000
+#define MEMORYSTATUS_CMD_TEST_JETSAM_SORT	1001
 
 /* Panic on jetsam options */
 typedef struct memorystatus_jetsam_panic_options {
@@ -202,17 +206,100 @@ typedef struct memorystatus_jetsam_panic_options {
 	uint32_t mask;
 } memorystatus_jetsam_panic_options_t;
 
-#define MEMORYSTATUS_CMD_SET_JETSAM_PANIC_BITS        1001
+#define MEMORYSTATUS_CMD_SET_JETSAM_PANIC_BITS        1002
+
+/* Select priority band sort order */
+#define JETSAM_SORT_NOSORT	0
+#define JETSAM_SORT_DEFAULT	1
+
 #endif /* PRIVATE */
 
+/*
+ * For use with memorystatus_control:
+ * MEMORYSTATUS_CMD_GET_JETSAM_SNAPSHOT
+ *
+ * A jetsam snapshot is initialized when a non-idle
+ * jetsam event occurs.  The data is held in the
+ * buffer until it is reaped. This is the default
+ * behavior.
+ *
+ * Flags change the default behavior:
+ *	Demand mode - this is an on_demand snapshot,
+ *	meaning data is populated upon request.
+ *
+ *	Boot mode - this is a snapshot of
+ *	memstats collected before loading the
+ *	init program.  Once collected, these
+ *	stats do not change.  In this mode,
+ *	the snapshot entry_count is always 0.
+ *
+ * Snapshots are inherently racey between request
+ * for buffer size and actual data compilation.
+*/
+
+/* Flags */
+#define MEMORYSTATUS_SNAPSHOT_ON_DEMAND		0x1	/* A populated snapshot buffer is returned on demand */
+#define MEMORYSTATUS_SNAPSHOT_AT_BOOT		0x2	/* Returns a snapshot with memstats collected at boot */
+
+
+/*
+ * For use with memorystatus_control:
+ * MEMORYSTATUS_CMD_SET_PRIORITY_PROPERTIES
+ */
 typedef struct memorystatus_priority_properties {
 	int32_t  priority;
 	uint64_t user_data;
 } memorystatus_priority_properties_t;
 
+/*
+ * For use with memorystatus_control:
+ * MEMORYSTATUS_CMD_SET_MEMLIMIT_PROPERTIES
+ * MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES
+ */
+typedef struct memorystatus_memlimit_properties {
+	int32_t memlimit_active;		/* jetsam memory limit (in MB) when process is active */
+	uint32_t memlimit_active_attr;
+	int32_t memlimit_inactive;		/* jetsam memory limit (in MB) when process is inactive */
+	uint32_t memlimit_inactive_attr;
+} memorystatus_memlimit_properties_t;
+
+#define MEMORYSTATUS_MEMLIMIT_ATTR_FATAL	0x1	/* if set, exceeding the memlimit is fatal */
+
+
 #ifdef XNU_KERNEL_PRIVATE
 
-/* p_memstat_state flags */
+/*
+ * A process will be killed immediately if it crosses a memory limit marked as fatal.
+ * Fatal limit types are the
+ *	- default system-wide task limit
+ *	- per-task custom memory limit
+ *
+ * A process with a non-fatal memory limit can exceed that limit, but becomes an early
+ * candidate for jetsam when the device is under memory pressure.
+ * Non-fatal limit types are the
+ *	- high-water-mark limit
+ *
+ * P_MEMSTAT_MEMLIMIT_BACKGROUND is translated in posix_spawn as
+ *	the fatal system_wide task limit when active
+ * 	non-fatal inactive limit based on limit provided.
+ *	This is necessary for backward compatibility until the
+ * 	the flag can be considered obsolete.
+ *
+ * Processes that opt into dirty tracking are evaluated
+ * based on clean vs dirty state.
+ *      dirty ==> active
+ *      clean ==> inactive
+ *
+ * Processes that do not opt into dirty tracking are
+ * evalulated based on priority level.
+ *      Foreground or above ==> active
+ *      Below Foreground    ==> inactive
+ */
+
+/*
+ * p_memstat_state flag holds
+ *	- in kernel process state and memlimit state
+ */
 
 #define P_MEMSTAT_SUSPENDED            0x00000001
 #define P_MEMSTAT_FROZEN               0x00000002
@@ -227,12 +314,21 @@ typedef struct memorystatus_priority_properties {
 #define P_MEMSTAT_PRIOR_THAW           0x00000400
 #define P_MEMSTAT_MEMLIMIT_BACKGROUND  0x00000800 /* Task has a memory limit for when it's in the background. Used for a process' "high water mark".*/
 #define P_MEMSTAT_INTERNAL             0x00001000
-#define P_MEMSTAT_FATAL_MEMLIMIT       0x00002000 /* cross this limit and the process is killed. Types: system-wide default task memory limit and per-task custom memory limit. */
+#define P_MEMSTAT_FATAL_MEMLIMIT                  0x00002000   /* current fatal state of the process's memlimit */
+#define P_MEMSTAT_MEMLIMIT_ACTIVE_FATAL           0x00004000   /* if set, exceeding limit is fatal when the process is active   */
+#define P_MEMSTAT_MEMLIMIT_ACTIVE_EXC_TRIGGERED   0x00008000   /* if set, supresses high-water-mark EXC_RESOURCE, allows one hit per active limit */
+#define P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL         0x00010000   /* if set, exceeding limit is fatal when the process is inactive */
+#define P_MEMSTAT_MEMLIMIT_INACTIVE_EXC_TRIGGERED 0x00020000   /* if set, supresses high-water-mark EXC_RESOURCE, allows one hit per inactive limit */
 
 extern void memorystatus_init(void) __attribute__((section("__TEXT, initcode")));
 
+extern void memorystatus_init_at_boot_snapshot(void);
+
 extern int memorystatus_add(proc_t p, boolean_t locked);
-extern int memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t effective, boolean_t update_memlimit, int32_t memlimit, boolean_t memlimit_background, boolean_t is_fatal_limit);
+extern int memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t effective,
+			       boolean_t update_memlimit, int32_t memlimit_active, boolean_t memlimit_active_is_fatal,
+			       int32_t memlimit_inactive, boolean_t memlimit_inactive_is_fatal, boolean_t memlimit_background);
+
 extern int memorystatus_remove(proc_t p, boolean_t locked);
 
 extern int memorystatus_dirty_track(proc_t p, uint32_t pcontrol);
@@ -257,6 +353,8 @@ void memorystatus_knote_unregister(struct knote *kn);
 
 #if CONFIG_JETSAM
 
+int memorystatus_get_pressure_status_kdp(void);
+
 typedef enum memorystatus_policy {
 	kPolicyDefault        = 0x0, 
 	kPolicyMoreFree       = 0x1,
@@ -274,6 +372,7 @@ boolean_t memorystatus_kill_on_FC_thrashing(boolean_t async);
 boolean_t memorystatus_kill_on_vnode_limit(void);
 
 void memorystatus_on_ledger_footprint_exceeded(int warning, const int max_footprint_mb);
+void proc_memstat_terminated(proc_t p, boolean_t set);
 void jetsam_on_ledger_cpulimit_exceeded(void);
 
 void memorystatus_pages_update(unsigned int pages_avail);
@@ -292,8 +391,7 @@ boolean_t memorystatus_idle_exit_from_VM(void);
 #define FREEZE_SUSPENDED_THRESHOLD_LOW     2
 #define FREEZE_SUSPENDED_THRESHOLD_DEFAULT 4
 
-#define FREEZE_DAILY_MB_MAX 	  1024
-#define FREEZE_DAILY_PAGEOUTS_MAX (FREEZE_DAILY_MB_MAX * (1024 * 1024 / PAGE_SIZE))
+#define FREEZE_DAILY_MB_MAX_DEFAULT 	  1024
 
 typedef struct throttle_interval_t {
 	uint32_t mins;
@@ -308,7 +406,7 @@ extern boolean_t memorystatus_freeze_enabled;
 extern int memorystatus_freeze_wakeup;
 
 extern void memorystatus_freeze_init(void) __attribute__((section("__TEXT, initcode")));
-
+extern int  memorystatus_freeze_process_sync(proc_t p);
 #endif /* CONFIG_FREEZE */
 
 #if VM_PRESSURE_EVENTS
@@ -316,6 +414,8 @@ extern void memorystatus_freeze_init(void) __attribute__((section("__TEXT, initc
 extern kern_return_t memorystatus_update_vm_pressure(boolean_t);
 
 #if CONFIG_MEMORYSTATUS
+/* Flags */
+extern int memorystatus_low_mem_privileged_listener(uint32_t op_flags);
 extern int memorystatus_send_pressure_note(int pid);
 extern boolean_t memorystatus_is_foreground_locked(proc_t p);
 extern boolean_t memorystatus_bg_pressure_eligible(proc_t p);

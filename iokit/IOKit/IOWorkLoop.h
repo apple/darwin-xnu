@@ -169,7 +169,7 @@ protected:
 <br><br>
 	If the client has some outstanding requests on an event they will never be informed of completion.  If an external thread is blocked on any of the event sources they will be awakened with a KERN_INTERUPTED status. 
 */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 /*! @function threadMain
     @discussion Work loop threads main function.  This function consists of 3
@@ -201,7 +201,7 @@ public:
     @discussion Initializes an instance of the workloop.  This method creates and initializes the signaling semaphore, the controller gate lock, and spawns the thread that will continue executing.
     @result Returns true if initialized successfully, false otherwise. 
 */
-    virtual bool init();
+    virtual bool init() APPLE_KEXT_OVERRIDE;
 
 /*! @function getThread
     @abstract Gets the workThread.
@@ -264,6 +264,7 @@ protected:
     // Internal APIs used by event sources to control the thread
     friend class IOEventSource;
     friend class IOTimerEventSource;
+    friend class IOCommandGate;
 #if IOKITSTATS
     friend class IOStatistics;
 #endif

@@ -84,10 +84,13 @@ struct	timezone tz = { 0, 0 };
 
 #define	NPROC (20 + 16 * 32)
 #define	NPROC_PER_UID (NPROC/2)
+
 #define HNPROC 2500	/* based on thread_max */
 int	maxproc = NPROC;
 int	maxprocperuid = NPROC_PER_UID;
-/*__private_extern__*/ int hard_maxproc = HNPROC;	/* hardcoded limit */
+
+int hard_maxproc = HNPROC;	/* hardcoded limit */
+
 int nprocs = 0; /* XXX */
 
 //#define	NTEXT (80 + NPROC / 8)			/* actually the object cache */

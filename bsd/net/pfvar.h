@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -31,6 +31,7 @@
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
+ * NAT64 - Copyright (c) 2010 Viagenie Inc. (http://www.viagenie.ca)
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -82,7 +83,7 @@ extern "C" {
 
 #include <net/radix.h>
 #include <netinet/in.h>
-
+#include <net/if_var.h>
 #ifdef KERNEL
 #include <kern/kern_types.h>
 #include <kern/zalloc.h>
@@ -155,7 +156,7 @@ struct pf_esp_hdr;
 enum	{ PF_INOUT, PF_IN, PF_OUT };
 enum	{ PF_PASS, PF_DROP, PF_SCRUB, PF_NOSCRUB, PF_NAT, PF_NONAT,
 	  PF_BINAT, PF_NOBINAT, PF_RDR, PF_NORDR, PF_SYNPROXY_DROP,
-	  PF_DUMMYNET, PF_NODUMMYNET };
+	  PF_DUMMYNET, PF_NODUMMYNET, PF_NAT64, PF_NONAT64 };
 enum	{ PF_RULESET_SCRUB, PF_RULESET_FILTER, PF_RULESET_NAT,
 	  PF_RULESET_BINAT, PF_RULESET_RDR, PF_RULESET_DUMMYNET, 
 	  PF_RULESET_MAX };
@@ -543,6 +544,7 @@ struct pf_pool {
 	u_int16_t		 proxy_port[2];
 	u_int8_t		 port_op;
 	u_int8_t		 opts;
+	sa_family_t		 af;
 };
 
 
@@ -974,8 +976,10 @@ struct pf_app_state {
 struct pf_state_key_cmp {
 	struct pf_state_host lan;
 	struct pf_state_host gwy;
-	struct pf_state_host ext;
-	sa_family_t	 af;
+	struct pf_state_host ext_lan;
+	struct pf_state_host ext_gwy;
+	sa_family_t	 af_lan;
+	sa_family_t	 af_gwy;
 	u_int8_t	 proto;
 	u_int8_t	 direction;
 	u_int8_t	 proto_variant;
@@ -987,8 +991,10 @@ TAILQ_HEAD(pf_statelist, pf_state);
 struct pf_state_key {
 	struct pf_state_host lan;
 	struct pf_state_host gwy;
-	struct pf_state_host ext;
-	sa_family_t	 af;
+	struct pf_state_host ext_lan;
+	struct pf_state_host ext_gwy;
+	sa_family_t	 af_lan;
+	sa_family_t	 af_gwy;
 	u_int8_t	 proto;
 	u_int8_t	 direction;
 	u_int8_t	 proto_variant;
@@ -1097,7 +1103,8 @@ struct pfsync_state {
 	char		 ifname[IFNAMSIZ];
 	struct pfsync_state_host lan;
 	struct pfsync_state_host gwy;
-	struct pfsync_state_host ext;
+	struct pfsync_state_host ext_lan;
+	struct pfsync_state_host ext_gwy;
 	struct pfsync_state_peer src;
 	struct pfsync_state_peer dst;
 	struct pf_addr	 rt_addr;
@@ -1114,7 +1121,8 @@ struct pfsync_state {
 	u_int32_t	 bytes[2][2];
 	u_int32_t	 creatorid;
 	u_int16_t	 tag;
-	sa_family_t	 af;
+	sa_family_t	 af_lan;
+	sa_family_t	 af_gwy;
 	u_int8_t	 proto;
 	u_int8_t	 direction;
 	u_int8_t	 log;
@@ -1412,8 +1420,12 @@ struct pf_pdesc {
 		struct pf_esp_hdr	*esp;
 		void			*any;
 	} hdr;
-	struct pf_addr	 baddr;		/* address before translation */
-	struct pf_addr	 naddr;		/* address after translation */
+
+	/* XXX TODO: Change baddr and naddr to *saddr */
+	struct pf_addr	 baddr;		/* src address before translation */
+	struct pf_addr	 bdaddr;	/* dst address before translation */
+	struct pf_addr	 naddr;		/* src address after translation */
+	struct pf_addr	 ndaddr;	/* dst address after translation */
 	struct pf_rule	*nat_rule;	/* nat/rdr rule applied to packet */
 	struct pf_addr	*src;
 	struct pf_addr	*dst;
@@ -1423,6 +1435,8 @@ struct pf_pdesc {
 	int		lmw;		/* lazy writable offset */
 	struct pf_mtag	*pf_mtag;
 	u_int16_t	*ip_sum;
+	u_int32_t	 off;		/* protocol header offset */
+	u_int32_t	 hdrlen;	/* protocol header length */
 	u_int32_t	 p_len;		/* total length of payload */
 	u_int16_t	 flags;		/* Let SCRUB trigger behavior in */
 					/* state code. Easier than tags */
@@ -1430,8 +1444,10 @@ struct pf_pdesc {
 #define PFDESC_IP_REAS	0x0002		/* IP frags would've been reassembled */
 #define PFDESC_IP_FRAG	0x0004		/* This is a fragment */
 	sa_family_t	 af;
+	sa_family_t	 naf;		/*  address family after translation */
 	u_int8_t	 proto;
 	u_int8_t	 tos;
+	u_int8_t	 ttl;
 	u_int8_t	 proto_variant;
 	mbuf_svc_class_t sc;		/* mbuf service class (MBUF_SVC) */
 	u_int32_t	 pktflags;	/* mbuf packet flags (PKTF) */
@@ -2364,6 +2380,7 @@ extern struct pf_anchor pf_main_anchor;
 #define pf_main_ruleset	pf_main_anchor.ruleset
 
 extern int pf_is_enabled;
+extern int16_t pf_nat64_configured;
 #define PF_IS_ENABLED (pf_is_enabled != 0)
 extern u_int32_t pf_hash_seed;
 

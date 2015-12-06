@@ -824,23 +824,17 @@ ivac_grow_table(ipc_voucher_attr_control_t ivac)
 	ivac->ivac_is_growing = 1;
 	if (ivac->ivac_table_size >= IVAC_ENTRIES_MAX) {
 		panic("Cannot grow ipc space beyond IVAC_ENTRIES_MAX. Some process is leaking vouchers");
+		return;
 	}
 
 	old_size = ivac->ivac_table_size;
 	ivac_unlock(ivac);
 
-	/*
-	 * if initial size is not leading to page aligned allocations,
-	 * set new_size such that new_size * sizeof(ivac_entry) is page aligned.
-	 */
-	
-	if ((old_size * sizeof(ivac_entry)) & PAGE_MASK){
-		new_size = (iv_index_t)round_page((old_size * sizeof(ivac_entry)))/(sizeof (ivac_entry));
-	} else {
-		new_size = old_size * 2;
-	}
+	new_size = old_size * 2;
 
 	assert(new_size > old_size);
+	assert(new_size < IVAC_ENTRIES_MAX);
+
 	new_table = kalloc(sizeof(ivac_entry) * new_size);
 	if (!new_table){
 		panic("Failed to grow ivac table to size %d\n", new_size);

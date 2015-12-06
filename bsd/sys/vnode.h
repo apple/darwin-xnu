@@ -170,6 +170,7 @@ enum vtagtype	{
 #define IO_SYSCALL_DISPATCH		0x100000	/* I/O was originated from a file table syscall */
 #define IO_SWAP_DISPATCH		0x200000	/* I/O was originated from the swap layer */
 #define IO_SKIP_ENCRYPTION		0x400000	/* Skips en(de)cryption on the IO. Must be initiated from kernel */
+#define IO_EVTONLY                      0x800000        /* the i/o is being done on an fd that's marked O_EVTONLY */
 
 /*
  * Component Name: this structure describes the pathname
@@ -247,6 +248,14 @@ struct vnode_fsparam {
 
 #define VNCREATE_FLAVOR	0
 #define VCREATESIZE sizeof(struct vnode_fsparam)
+#ifdef KERNEL_PRIVATE
+/*
+ * For use with SPI to create trigger vnodes.
+ */
+struct vnode_trigger_param;
+#define VNCREATE_TRIGGER	(('T' << 8) + ('V'))
+#define VNCREATE_TRIGGER_SIZE	sizeof(struct vnode_trigger_param)
+#endif /* KERNEL_PRIVATE */
 
 
 #ifdef KERNEL_PRIVATE
@@ -449,9 +458,6 @@ struct vnode_trigger_param {
 	void *					vnt_data;   /* auxiliary data (optional) */
 	uint32_t				vnt_flags;  /* optional flags (see below) */
 };
-
-#define VNCREATE_TRIGGER	(('T' << 8) + ('V'))
-#define VNCREATE_TRIGGER_SIZE	sizeof(struct vnode_trigger_param)
 
 /*
  * vnode trigger flags (vnt_flags)
@@ -683,7 +689,8 @@ struct vnode_attr {
 /* 
  * Flags for va_dataprotect_flags
  */
-#define VA_DP_RAWENCRYPTED 0x0001
+#define VA_DP_RAWENCRYPTED   0x0001
+#define VA_DP_RAWUNENCRYPTED 0x0002
 
 #endif
 
@@ -800,6 +807,37 @@ __BEGIN_DECLS
  @return 0 for success, error code otherwise.
  */
 errno_t	vnode_create(uint32_t, uint32_t, void  *, vnode_t *);
+
+#if KERNEL_PRIVATE
+/*!
+ @function vnode_create_empty
+ @abstract Create an empty, uninitialized vnode.
+ @discussion Returns with an iocount held on the vnode which must eventually be
+ dropped with vnode_put(). The next operation performed on the vnode must be
+ vnode_initialize (or vnode_put if the vnode is not needed anymore).
+ This interface is provided as a mechanism to pre-flight obtaining a vnode for
+ certain filesystem operations which may need to get a vnode without filesystem
+ locks held. It is imperative that nothing be done with the vnode till the
+ succeeding vnode_initialize (or vnode_put as the case may be) call.
+ @param vpp  Pointer to a vnode pointer, to be filled in with newly created vnode.
+ @return 0 for success, error code otherwise.
+ */
+errno_t	vnode_create_empty(vnode_t *);
+
+/*!
+ @function vnode_initialize
+ @abstract Initialize a vnode obtained by vnode_create_empty
+ @discussion Does not drop iocount held on the vnode which must eventually be
+ dropped with vnode_put().  In case of an error however, the vnode's iocount is
+ dropped and the vnode must not be referenced again by the caller.
+ @param flavor Should be VNCREATE_FLAVOR.
+ @param size  Size of the struct vnode_fsparam in "data".
+ @param data  Pointer to a struct vnode_fsparam containing initialization information.
+ @param vpp  Pointer to a vnode pointer, to be filled in with newly created vnode.
+ @return 0 for success, error code otherwise.
+ */
+errno_t	vnode_initialize(uint32_t, uint32_t, void  *, vnode_t *);
+#endif /* KERNEL_PRIVATE */
 
 /*!
  @function vnode_addfsref
@@ -1115,6 +1153,58 @@ void	vnode_setnoreadahead(vnode_t);
  @return void.
  */
 void	vnode_clearnoreadahead(vnode_t);
+
+/*!
+ @function vnode_isfastdevicecandidate
+ @abstract Check if a vnode is a candidate to store on the fast device of a composite disk system
+ @param vp The vnode which you want to test.
+ @return Nonzero if the vnode is marked as a fast-device candidate
+ @return void.
+ */
+int	vnode_isfastdevicecandidate(vnode_t);
+
+/*!
+ @function vnode_setfastdevicecandidate
+ @abstract Mark a vnode as a candidate to store on the fast device of a composite disk system
+ @abstract If the vnode is a directory, all its children will inherit this bit.
+ @param vp The vnode which you want marked.
+ @return void.
+ */
+void	vnode_setfastdevicecandidate(vnode_t);
+
+/*!
+ @function vnode_clearfastdevicecandidate
+ @abstract Clear the status of a vnode being a candidate to store on the fast device of a composite disk system.
+ @param vp The vnode whose flag to clear.
+ @return void.
+ */
+void	vnode_clearfastdevicecandidate(vnode_t);
+
+/*!
+ @function vnode_isautocandidate
+ @abstract Check if a vnode was automatically selected to be fast-dev candidate (see vnode_setfastdevicecandidate)
+ @param vp The vnode which you want to test.
+ @return Nonzero if the vnode was automatically marked as a fast-device candidate
+ @return void.
+ */
+int	vnode_isautocandidate(vnode_t);
+
+/*!
+ @function vnode_setfastdevicecandidate
+ @abstract Mark a vnode as an automatically selected candidate for storing on the fast device of a composite disk system
+ @abstract If the vnode is a directory, all its children will inherit this bit.
+ @param vp The vnode which you want marked.
+ @return void.
+ */
+void	vnode_setautocandidate(vnode_t);
+
+/*!
+ @function vnode_clearautocandidate
+ @abstract Clear the status of a vnode being an automatic candidate (see above)
+ @param vp The vnode whose flag to clear.
+ @return void.
+ */
+void	vnode_clearautocandidate(vnode_t);
 
 /* left only for compat reasons as User code depends on this from getattrlist, for ex */
 
@@ -1482,20 +1572,6 @@ int	vnode_recycle(vnode_t);
 #endif /* BSD_KERNEL_PRIVATE  */
 
 /*!
- @function vnode_notify
- @abstract Send a notification up to VFS.  
- @param vp Vnode for which to provide notification.
- @param vap Attributes for that vnode, to be passed to fsevents.
- @discussion Filesystem determines which attributes to pass up using 
- vfs_get_notify_attributes(&vap).  The most specific events possible should be passed,
- e.g. VNODE_EVENT_FILE_CREATED on a directory rather than just VNODE_EVENT_WRITE, but
- a less specific event can be passed up if more specific information is not available.
- Will not reenter the filesystem.
- @return 0 for success, else an error code.
- */ 
-int 	vnode_notify(vnode_t, uint32_t, struct vnode_attr*);
-
-/*!
  @function vnode_ismonitored
  @abstract Check whether a file has watchers that would make it useful to query a server
  for file changes.
@@ -1515,15 +1591,6 @@ int	vnode_ismonitored(vnode_t);
  */ 
 int	vnode_isdyldsharedcache(vnode_t);
 
-
-/*!
- @function vfs_get_notify_attributes
- @abstract Determine what attributes are required to send up a notification with vnode_notify().
- @param vap Structure to initialize and activate required attributes on.
- @discussion Will not reenter the filesystem.
- @return 0 for success, nonzero for error (currently always succeeds).
- */ 
-int	vfs_get_notify_attributes(struct vnode_attr *vap);
 
 /*!
  @function vn_getpath_fsenter
@@ -1637,11 +1704,35 @@ errno_t vnode_close(vnode_t, int, vfs_context_t);
  */
 int vn_getpath(struct vnode *vp, char *pathbuf, int *len);
 
+/*!
+ @function vnode_notify
+ @abstract Send a notification up to VFS.  
+ @param vp Vnode for which to provide notification.
+ @param vap Attributes for that vnode, to be passed to fsevents.
+ @discussion Filesystem determines which attributes to pass up using 
+ vfs_get_notify_attributes(&vap).  The most specific events possible should be passed,
+ e.g. VNODE_EVENT_FILE_CREATED on a directory rather than just VNODE_EVENT_WRITE, but
+ a less specific event can be passed up if more specific information is not available.
+ Will not reenter the filesystem.
+ @return 0 for success, else an error code.
+ */ 
+int 	vnode_notify(vnode_t, uint32_t, struct vnode_attr*);
+
+/*!
+ @function vfs_get_notify_attributes
+ @abstract Determine what attributes are required to send up a notification with vnode_notify().
+ @param vap Structure to initialize and activate required attributes on.
+ @discussion Will not reenter the filesystem.
+ @return 0 for success, nonzero for error (currently always succeeds).
+ */ 
+int	vfs_get_notify_attributes(struct vnode_attr *vap);
+
 /*
  * Flags for the vnode_lookup and vnode_open
  */
 #define VNODE_LOOKUP_NOFOLLOW		0x01
 #define	VNODE_LOOKUP_NOCROSSMOUNT	0x02
+#define	VNODE_LOOKUP_CROSSMOUNTNOWAIT	0x04
 /*!
  @function vnode_lookup
  @abstract Convert a path into a vnode.

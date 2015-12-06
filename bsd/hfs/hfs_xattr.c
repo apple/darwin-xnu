@@ -38,7 +38,6 @@
 #include <sys/fsctl.h>
 #include <sys/vnode_internal.h>
 #include <sys/kauth.h>
-#include <sys/cprotect.h>
 #include <sys/uio_internal.h>
 
 #include "hfs.h"
@@ -48,6 +47,7 @@
 #include "hfs_endian.h"
 #include "hfs_btreeio.h"
 #include "hfs_fsctl.h"
+#include "hfs_cprotect.h"
 
 #include "hfscommon/headers/BTreesInternal.h"
 
@@ -495,7 +495,7 @@ int hfs_getxattr_internal (struct cnode *cp, struct vnop_getxattr_args *ap,
 	btdata.bufferAddress = recp;
 	btdata.itemSize = sizeof(HFSPlusAttrRecord);
 	btdata.itemCount = 1;
-	
+
 	result = hfs_buildattrkey(target_id, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
 	if (result) {
 		goto exit;
@@ -856,7 +856,7 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 			cp->c_bsdflags &= ~UF_HIDDEN;
 		}
 
-		result = hfs_update(vp, FALSE);
+		result = hfs_update(vp, 0);
 
 		hfs_unlock(cp);
 		return (result);
@@ -1032,21 +1032,11 @@ int hfs_setxattr_internal (struct cnode *cp, const void *data_ptr, size_t attrsi
 	int exists = 0;
 	int allocatedblks = 0;
 	u_int32_t target_id;
-	int takelock = 1;
 
 	if (cp) {
 		target_id = cp->c_fileid;
 	} else {
 		target_id = fileid;
-		if (target_id != 1) {
-			/* 
-			 * If we are manipulating something other than 
-			 * the root folder (id 1), and do not have a cnode-in-hand, 
-			 * then we must already hold the requisite b-tree locks from 
-			 * earlier up the call stack. (See hfs_makenode)
-			 */
-			takelock = 0;
-		}
 	}
 	
 	/* Start a transaction for our changes. */
@@ -1079,10 +1069,7 @@ int hfs_setxattr_internal (struct cnode *cp, const void *data_ptr, size_t attrsi
 		hfsmp->hfs_max_inline_attrsize = getmaxinlineattrsize(hfsmp->hfs_attribute_vp);
 	}
 
-	if (takelock) {
-		/* Take exclusive access to the attributes b-tree. */
-		lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
-	}
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
 
 	/* Build the b-tree key. */
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
@@ -1277,9 +1264,7 @@ exit:
 	if (btfile && started_transaction) {
 		(void) BTFlushPath(btfile);
 	}
-	if (lockflags) {
-		hfs_systemfile_unlock(hfsmp, lockflags);
-	}
+	hfs_systemfile_unlock(hfsmp, lockflags);
 	if (result == 0) {
 		if (vp) {
 			cp = VTOC(vp);
@@ -1287,6 +1272,7 @@ exit:
 			 * modified time of the file.
 			 */
 			cp->c_touch_chgtime = TRUE;
+			cp->c_flag |= C_MODIFIED;
 			cp->c_attr.ca_recflags |= kHFSHasAttributesMask;
 			if ((bcmp(ap->a_name, KAUTH_FILESEC_XATTR, sizeof(KAUTH_FILESEC_XATTR)) == 0)) {
 				cp->c_attr.ca_recflags |= kHFSHasSecurityMask;
@@ -1401,7 +1387,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		if (result == 0) {
 			cp->c_touch_chgtime = TRUE;
 			cp->c_flag |= C_MODIFIED;
-			result = hfs_update(vp, FALSE);
+			result = hfs_update(vp, 0);
 		}
 
 		hfs_end_transaction(hfsmp);
@@ -1490,7 +1476,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		/* Updating finderInfo updates change time and modified time */
 		cp->c_touch_chgtime = TRUE;
 		cp->c_flag |= C_MODIFIED;
-		hfs_update(vp, FALSE);
+		hfs_update(vp, 0);
         
 		hfs_unlock(cp);
         
@@ -1540,6 +1526,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		result = file_attribute_exist(hfsmp, cp->c_fileid);
 		if (result == 0) {
 			cp->c_attr.ca_recflags &= ~kHFSHasAttributesMask;
+			cp->c_flag |= C_MODIFIED;
 		}
 		if (result == EEXIST) {
 			result = 0;
@@ -1550,6 +1537,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		/* If ACL was removed, clear security bit */
 		if ((bcmp(ap->a_name, KAUTH_FILESEC_XATTR, sizeof(KAUTH_FILESEC_XATTR)) == 0)) {
 			cp->c_attr.ca_recflags &= ~kHFSHasSecurityMask;
+			cp->c_flag |= C_MODIFIED;
 		}
 		(void) hfs_update(vp, 0);
 	}
@@ -1963,18 +1951,28 @@ listattr_callback(const HFSPlusAttrKey *key, __unused const HFSPlusAttrData *dat
  *
  * This function takes the necessary locks on the attribute
  * b-tree file and the allocation (bitmap) file.
+ *
+ * NOTE: Upon sucecss, this function will return with an open
+ * transaction.  The reason we do it this way is because when we
+ * delete the last attribute, we must make sure the flag in the
+ * catalog record that indicates there are no more records is cleared.
+ * The caller is responsible for doing this and *must* do it before
+ * ending the transaction.
  */
 int
-hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid)
+hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid, 
+				  bool *open_transaction)
 {
 	BTreeIterator *iterator = NULL;
 	HFSPlusAttrKey *key;
 	struct filefork *btfile;
-	int result, lockflags;
+	int result, lockflags = 0;
 
-	if (hfsmp->hfs_attribute_vp == NULL) {
-		return (0);
-	}
+	*open_transaction = false;
+
+	if (hfsmp->hfs_attribute_vp == NULL)
+		return 0;
+
 	btfile = VTOF(hfsmp->hfs_attribute_vp);
 
 	MALLOC(iterator, BTreeIterator *, sizeof(BTreeIterator), M_TEMP, M_WAITOK);
@@ -1985,25 +1983,32 @@ hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid)
 	key = (HFSPlusAttrKey *)&iterator->key;
 
 	/* Loop until there are no more attributes for this file id */
-	for(;;) {
+	do {
+		if (!*open_transaction)
+			lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_SHARED_LOCK);
+
+		(void) hfs_buildattrkey(fileid, NULL, key);
+		result = BTIterateRecord(btfile, kBTreeNextRecord, iterator, NULL, NULL);
+		if (result || key->fileID != fileid)
+			goto exit;
+
+		hfs_systemfile_unlock(hfsmp, lockflags);
+		lockflags = 0;
+
+		if (*open_transaction) {
+			hfs_end_transaction(hfsmp);
+			*open_transaction = false;
+		}
+
 		if (hfs_start_transaction(hfsmp) != 0) {
 			result = EINVAL;
 			goto exit;
 		}
 
-		/* Lock the attribute b-tree and the allocation (bitmap) files */
+		*open_transaction = true;
+
 		lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE | SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
 
-		/*
-		 * Go to first possible attribute key/record pair
-		 */
-		(void) hfs_buildattrkey(fileid, NULL, key);
-		result = BTIterateRecord(btfile, kBTreeNextRecord, iterator, NULL, NULL);
-		if (result || key->fileID != fileid) {
-			hfs_systemfile_unlock(hfsmp, lockflags);
-			hfs_end_transaction(hfsmp);
-			goto exit;
-		}
 		result = remove_attribute_records(hfsmp, iterator);
 
 #if HFS_XATTR_VERBOSE
@@ -2011,14 +2016,22 @@ hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid)
 			printf("hfs_removeallattr: unexpected err %d\n", result);
 		}
 #endif
-		hfs_systemfile_unlock(hfsmp, lockflags);
-		hfs_end_transaction(hfsmp);
-		if (result)
-			break;
-	}
+	} while (!result);
+
 exit:
 	FREE(iterator, M_TEMP);
-	return (result == btNotFound ? 0: MacToVFSError(result));
+
+	if (lockflags)
+		hfs_systemfile_unlock(hfsmp, lockflags);
+
+	result = result == btNotFound ? 0 : MacToVFSError(result);
+
+	if (result && *open_transaction) {
+		hfs_end_transaction(hfsmp);
+		*open_transaction = false;
+	}
+
+	return result;
 }
 
 __private_extern__

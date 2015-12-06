@@ -36,7 +36,6 @@
 
 #include <kern/thread.h>
 
-extern void astbsd_on(void);
 extern void act_set_astbsd(thread_t);
 extern void bsd_ast(thread_t);
 

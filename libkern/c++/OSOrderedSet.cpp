@@ -42,14 +42,6 @@ OSMetaClassDefineReservedUnused(OSOrderedSet, 5);
 OSMetaClassDefineReservedUnused(OSOrderedSet, 6);
 OSMetaClassDefineReservedUnused(OSOrderedSet, 7);
 
-#if OSALLOCDEBUG
-extern "C" {
-    extern int debug_container_malloc_size;
-};
-#define ACCUMSIZE(s) do { debug_container_malloc_size += (s); } while(0)
-#else
-#define ACCUMSIZE(s)
-#endif
 
 struct _Element {
     const OSMetaClassBase *		obj;
@@ -72,7 +64,7 @@ initWithCapacity(unsigned int inCapacity,
         return false;
 
     size = sizeof(_Element) * inCapacity;
-    array = (_Element *) kalloc(size);
+    array = (_Element *) kalloc_container(size);
     if (!array)
         return false;
 
@@ -83,9 +75,9 @@ initWithCapacity(unsigned int inCapacity,
     orderingRef = inOrderingRef;
 
     bzero(array, size);
-    ACCUMSIZE(size);
+    OSCONTAINER_ACCUMSIZE(size);
 
-    return this;	
+    return true;	
 }
 
 OSOrderedSet * OSOrderedSet::
@@ -109,7 +101,7 @@ void OSOrderedSet::free()
 
     if (array) {
         kfree(array, sizeof(_Element) * capacity);
-        ACCUMSIZE( -(sizeof(_Element) * capacity) );
+        OSCONTAINER_ACCUMSIZE( -(sizeof(_Element) * capacity) );
     }
 
     super::free();
@@ -142,11 +134,11 @@ unsigned int OSOrderedSet::ensureCapacity(unsigned int newCapacity)
     }
     newSize = sizeof(_Element) * finalCapacity;
 
-    newArray = (_Element *) kalloc(newSize);
+    newArray = (_Element *) kalloc_container(newSize);
     if (newArray) {
         oldSize = sizeof(_Element) * capacity;
 
-        ACCUMSIZE(newSize - oldSize);
+        OSCONTAINER_ACCUMSIZE(((size_t)newSize) - ((size_t)oldSize));
 
         bcopy(array, newArray, oldSize);
         bzero(&newArray[capacity], newSize - oldSize);

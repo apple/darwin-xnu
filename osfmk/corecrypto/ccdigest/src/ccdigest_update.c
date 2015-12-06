@@ -2,8 +2,9 @@
  *  ccdigest_update.c
  *  corecrypto
  *
- *  Created by Michael Brouwer on 11/30/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 11/30/2010
+ *
+ *  Copyright (c) 2010,2011,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -12,7 +13,7 @@
 
 void ccdigest_update(const struct ccdigest_info *di, ccdigest_ctx_t ctx,
                      unsigned long len, const void *data) {
-    char * data_ptr = (char *) data;
+    const char * data_ptr = data;
     while (len > 0) {
         if (ccdigest_num(di, ctx) == 0 && len > di->block_size) {
             unsigned long nblocks = len / di->block_size;

@@ -2,8 +2,9 @@
  *  ccder.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 2/28/12.
- *  Copyright 2012 Apple Inc. All rights reserved.
+ *  Created on 03/14/2012
+ *
+ *  Copyright (c) 2012,2013,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -246,7 +247,7 @@ CC_NO_INLINE CC_NONNULL((2, 4))
 const uint8_t *ccder_decode_uint(cc_size n, cc_unit *r,
                                  const uint8_t *der, const uint8_t *der_end);
 
-CC_NO_INLINE CC_NONNULL((1, 3))
+CC_NO_INLINE CC_NONNULL((3))
 const uint8_t *ccder_decode_uint64(uint64_t* r,
                                    const uint8_t *der, const uint8_t *der_end);
 
@@ -260,12 +261,12 @@ CC_NO_INLINE CC_NONNULL_TU((1)) CC_NONNULL((3))
 const uint8_t *ccder_decode_oid(ccoid_t *oidp,
                                 const uint8_t *der, const uint8_t *der_end);
 
-CC_NO_INLINE CC_NONNULL_ALL
+CC_NO_INLINE CC_NONNULL((1,2,4))
 const uint8_t *ccder_decode_bitstring(const uint8_t **bit_string,
                                 size_t *bit_length,
                                 const uint8_t *der, const uint8_t *der_end);
 
-CC_NO_INLINE CC_NONNULL_ALL
+CC_NO_INLINE CC_NONNULL_TU((4)) CC_NONNULL((1,2,3,5,6,8))
 const uint8_t *ccder_decode_eckey(uint64_t *version,
                                   size_t *priv_size, const uint8_t **priv_key,
                                   ccoid_t *oid,

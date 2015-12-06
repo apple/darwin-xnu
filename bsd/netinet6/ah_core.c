@@ -961,10 +961,9 @@ ah_hmac_sha2_384_init(state, sav)
 
 	state->sav = sav;
 	state->foo = (void *)_MALLOC(128 + 128 + sizeof(SHA384_CTX),
-	    M_TEMP, M_NOWAIT);
+	    M_TEMP, M_NOWAIT | M_ZERO);
 	if (!state->foo)
 		return ENOBUFS;
-	bzero(state->foo, 128 + 128 + sizeof(SHA384_CTX));
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 128);
@@ -1104,10 +1103,9 @@ ah_hmac_sha2_512_init(state, sav)
 
 	state->sav = sav;
 	state->foo = (void *)_MALLOC(128 + 128 + sizeof(SHA512_CTX),
-	    M_TEMP, M_NOWAIT);
+	    M_TEMP, M_NOWAIT | M_ZERO);
 	if (!state->foo)
 		return ENOBUFS;
-	bzero(state->foo, 128 + 128 + sizeof(SHA512_CTX));
 
 	ipad = (u_char *)state->foo;
 	opad = (u_char *)(ipad + 128);

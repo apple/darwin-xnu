@@ -1,7 +1,7 @@
-SDKROOT ?= /
-Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
+include ../Makefile.common
+
 CC:=$(shell xcrun -sdk "$(SDKROOT)" -find cc)
-CFLAGS:=-c -Wall -pedantic -Os
+CFLAGS:=-c -Wall -pedantic -Os -isysroot $(SDKROOT)
 LDFLAGS:=
 
 SRCROOT?=$(shell /bin/pwd)
@@ -24,10 +24,8 @@ endif
 
 ifeq "$(Embedded)" "YES"
 	TARGET_NAME:=PerfIndex.bundle-ios
-	XCODEBUILD=xcodebuild -sdk iphoneos.internal
 else
 	TARGET_NAME:=PerfIndex.bundle-osx
-	XCODEBUILD=xcodebuild
 endif
 
 CFLAGS += $(patsubst %, -arch %, $(ARCHS))
@@ -64,7 +62,7 @@ $(DSTROOT)/perf_index: $(OBJROOT)/perf_index.o
 	$(CC) $(LDFLAGS) $? -o $@
 
 $(DSTROOT)/PerfIndex.bundle: $(SRCROOT)/PerfIndex_COPS_Module/PerfIndex.xcodeproj
-	$(XCODEBUILD) -target $(TARGET_NAME) OBJROOT=$(OBJROOT) SYMROOT=$(SYMROOT) TARGET_TEMP_DIR=$(OBJROOT) TARGET_BUILD_DIR=$(DSTROOT) -project $? CLANG_ENABLE_MODULES=NO
+	xcodebuild -sdk $(SDKROOT) -target $(TARGET_NAME) OBJROOT=$(OBJROOT) SYMROOT=$(SYMROOT) TARGET_TEMP_DIR=$(OBJROOT) TARGET_BUILD_DIR=$(DSTROOT) -project $? CLANG_ENABLE_MODULES=NO
 
 $(DSTROOT)/%.dylib: $(OBJROOT)/%.o
 	$(CC) $(LDFLAGS) -dynamiclib $? -o $@

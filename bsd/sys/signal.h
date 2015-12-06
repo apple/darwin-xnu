@@ -71,6 +71,7 @@
 
 #include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
+#include <Availability.h>
 
 #define __DARWIN_NSIG	32	/* counting 0; could be 33 (mask is 1-32) */
 

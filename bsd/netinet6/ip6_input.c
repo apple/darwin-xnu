@@ -121,6 +121,7 @@
 #include <net/ntstat.h>
 #include <net/init.h>
 #include <net/net_osdep.h>
+#include <net/net_perf.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -204,6 +205,9 @@ static lck_grp_attr_t	*ip6_mutex_grp_attr;
 extern int loopattach_done;
 extern void addrsel_policy_init(void);
 
+static int sysctl_reset_ip6_input_stats SYSCTL_HANDLER_ARGS;
+static int sysctl_ip6_input_measure_bins SYSCTL_HANDLER_ARGS;
+static int sysctl_ip6_input_getperf SYSCTL_HANDLER_ARGS;
 static void ip6_init_delayed(void);
 static int ip6_hopopts_input(u_int32_t *, u_int32_t *, struct mbuf **, int *);
 
@@ -222,6 +226,23 @@ static uint32_t ip6_adj_clear_hwcksum = 0;
 SYSCTL_UINT(_net_inet6_ip6, OID_AUTO, adj_clear_hwcksum,
 	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_adj_clear_hwcksum, 0,
 	"Invalidate hwcksum info when adjusting length");
+
+static int ip6_input_measure = 0;
+SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, input_perf,
+	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+	&ip6_input_measure, 0, sysctl_reset_ip6_input_stats, "I", "Do time measurement");
+
+static uint64_t ip6_input_measure_bins = 0;
+SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, input_perf_bins,
+	CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_input_measure_bins, 0,
+	sysctl_ip6_input_measure_bins, "I",
+	"bins for chaining performance data histogram");
+
+static net_perf_t net_perf;
+SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, input_perf_data,
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
+	0, 0, sysctl_ip6_input_getperf, "S,net_perf",
+	"IP6 input performance data (struct net_perf, net/net_perf.h)");
 
 /*
  * On platforms which require strict alignment (currently for anything but
@@ -263,7 +284,18 @@ static void
 ip6_proto_input(protocol_family_t protocol, mbuf_t packet)
 {
 #pragma unused(protocol)
+#if INET
+	struct timeval start_tv;
+	if (ip6_input_measure)
+		net_perf_start_time(&net_perf, &start_tv);
+#endif /* INET */
 	ip6_input(packet);
+#if INET
+	if (ip6_input_measure) {
+		net_perf_measure_time(&net_perf, &start_tv, 1);
+		net_perf_histogram(&net_perf, 1);
+	}
+#endif /* INET */
 }
 
 /*
@@ -605,6 +637,7 @@ ip6_input(struct mbuf *m)
 	}
 
 	ip6stat.ip6s_nxthist[ip6->ip6_nxt]++;
+
 	/*
 	 * Check against address spoofing/corruption.
 	 */
@@ -670,20 +703,20 @@ ip6_input(struct mbuf *m)
 	}
 #endif
 #if IPFW2
-        /*
-         * Check with the firewall...
-         */
-        if (ip6_fw_enable && ip6_fw_chk_ptr) {
-                u_short port = 0;
-                /* If ipfw says divert, we have to just drop packet */
-                /* use port as a dummy argument */
-                if ((*ip6_fw_chk_ptr)(&ip6, NULL, &port, &m)) {
-                        m_freem(m);
-                        m = NULL;
-                }
-                if (!m)
-                        goto done;
-        }
+	/*
+	 * Check with the firewall...
+	 */
+	if (ip6_fw_enable && ip6_fw_chk_ptr) {
+		u_short port = 0;
+		/* If ipfw says divert, we have to just drop packet */
+		/* use port as a dummy argument */
+		if ((*ip6_fw_chk_ptr)(&ip6, NULL, &port, &m)) {
+			m_freem(m);
+			m = NULL;
+		}
+		if (!m)
+			goto done;
+	}
 #endif /* IPFW2 */
 
 	/*
@@ -1697,7 +1730,7 @@ ip6_savecontrol(struct inpcb *in6p, struct mbuf *m, struct mbuf **mp)
 				}
 				break;
 			case IPPROTO_ROUTING:
-				if (!in6p->inp_flags & IN6P_RTHDR)
+				if (!(in6p->inp_flags & IN6P_RTHDR))
 					break;
 
 				mp = sbcreatecontrol_mbuf((caddr_t)ip6e, elen,
@@ -1994,3 +2027,57 @@ u_char	inet6ctlerrmap[PRC_NCMDS] = {
 	0,		0,		0,		0,
 	ENOPROTOOPT
 };
+
+static int
+sysctl_reset_ip6_input_stats SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error, i;
+
+	i = ip6_input_measure;
+	error = sysctl_handle_int(oidp, &i, 0, req);
+	if (error || req->newptr == USER_ADDR_NULL)
+		goto done;
+	/* impose bounds */
+	if (i < 0 || i > 1) {
+		error = EINVAL;
+		goto done;
+	}
+	if (ip6_input_measure != i && i == 1) {
+		net_perf_initialize(&net_perf, ip6_input_measure_bins);
+	}
+	ip6_input_measure = i;
+done:
+	return (error);
+}
+
+static int
+sysctl_ip6_input_measure_bins SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error;
+	uint64_t i;
+
+	i = ip6_input_measure_bins;
+	error = sysctl_handle_quad(oidp, &i, 0, req);
+	if (error || req->newptr == USER_ADDR_NULL)
+		goto done;
+	/* validate data */
+	if (!net_perf_validate_bins(i)) {
+		error = EINVAL;
+		goto done;
+	}
+	ip6_input_measure_bins = i;
+done:
+	return (error);
+}
+
+static int
+sysctl_ip6_input_getperf SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	if (req->oldptr == USER_ADDR_NULL)
+		req->oldlen = (size_t)sizeof (struct ipstat);
+
+	return (SYSCTL_OUT(req, &net_perf, MIN(sizeof (net_perf), req->oldlen)));
+}

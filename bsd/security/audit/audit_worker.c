@@ -70,7 +70,6 @@
 #include <kern/zalloc.h>
 #include <kern/sched_prim.h>
 #include <kern/task.h>
-#include <kern/wait_queue.h>
 
 #include <net/route.h>
 

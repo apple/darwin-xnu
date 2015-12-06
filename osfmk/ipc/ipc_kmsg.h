@@ -391,18 +391,6 @@ extern void ipc_kmsg_copyout_to_kernel_legacy(
 	ipc_space_t		space);
 #endif
 
-/* get a scatter list and check consistency */
-extern mach_msg_body_t *ipc_kmsg_get_scatter(
-        mach_vm_address_t       msg_addr,
-        mach_msg_size_t         slist_size,
-        ipc_kmsg_t              kmsg);
-
-/* free a scatter list */
-extern void ipc_kmsg_free_scatter(
-        mach_msg_body_t 	*slist,
-        mach_msg_size_t		slist_size);
-
-
 extern mach_msg_trailer_size_t
 ipc_kmsg_add_trailer(ipc_kmsg_t kmsg, ipc_space_t space, 
 		mach_msg_option_t option, thread_t thread, 

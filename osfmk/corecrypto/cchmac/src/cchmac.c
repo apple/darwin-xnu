@@ -2,8 +2,9 @@
  *  cchmac.c
  *  corecrypto
  *
- *  Created by Michael Brouwer on 12/7/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/07/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2015 Apple Inc. All rights reserved.
  *
  */
 

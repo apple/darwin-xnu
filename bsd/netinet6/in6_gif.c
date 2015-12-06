@@ -162,7 +162,7 @@ in6_gif_output(
 	}
 
 	/* prepend new IP header */
-	M_PREPEND(m, sizeof (struct ip6_hdr), M_DONTWAIT);
+	M_PREPEND(m, sizeof (struct ip6_hdr), M_DONTWAIT, 1);
 	if (m && mbuf_len(m) < sizeof (struct ip6_hdr))
 		m = m_pullup(m, sizeof (struct ip6_hdr));
 	if (m == NULL) {
@@ -185,7 +185,7 @@ in6_gif_output(
 		m_freem(m);
 		return (ENETUNREACH);
 	}
-	ip_ecn_ingress((ifp->if_flags & IFF_LINK1) ? ECN_ALLOWED : ECN_NOCARE,
+	ip_ecn_ingress((ifp->if_flags & IFF_LINK1) ? ECN_NORMAL : ECN_NOCARE,
 	    &otos, &itos);
 	ip6->ip6_flow &= ~htonl(0xff << 20);
 	ip6->ip6_flow |= htonl((u_int32_t)otos << 20);
@@ -245,6 +245,7 @@ in6_gif_input(struct mbuf **mp, int *offp, int proto)
 	struct ip6_hdr *ip6;
 	int af = 0;
 	u_int32_t otos;
+	int egress_success = 0;
 
 	ip6 = mtod(m, struct ip6_hdr *);
 
@@ -274,9 +275,9 @@ in6_gif_input(struct mbuf **mp, int *offp, int proto)
 		}
 		ip = mtod(m, struct ip *);
 		if (gifp->if_flags & IFF_LINK1)
-			ip_ecn_egress(ECN_ALLOWED, &otos8, &ip->ip_tos);
+			egress_success = ip_ecn_egress(ECN_NORMAL, &otos8, &ip->ip_tos);
 		else
-			ip_ecn_egress(ECN_NOCARE, &otos8, &ip->ip_tos);
+			egress_success = ip_ecn_egress(ECN_NOCARE, &otos8, &ip->ip_tos);
 		break;
 	    }
 #endif /* INET */
@@ -291,13 +292,19 @@ in6_gif_input(struct mbuf **mp, int *offp, int proto)
 		}
 		ip6 = mtod(m, struct ip6_hdr *);
 		if (gifp->if_flags & IFF_LINK1)
-			ip6_ecn_egress(ECN_ALLOWED, &otos, &ip6->ip6_flow);
+			egress_success = ip6_ecn_egress(ECN_NORMAL, &otos, &ip6->ip6_flow);
 		else
-			ip6_ecn_egress(ECN_NOCARE, &otos, &ip6->ip6_flow);
+			egress_success = ip6_ecn_egress(ECN_NOCARE, &otos, &ip6->ip6_flow);
 		break;
 	    }
 #endif
 	default:
+		ip6stat.ip6s_nogif++;
+		m_freem(m);
+		return (IPPROTO_DONE);
+	}
+
+	if (egress_success == 0) {
 		ip6stat.ip6s_nogif++;
 		m_freem(m);
 		return (IPPROTO_DONE);

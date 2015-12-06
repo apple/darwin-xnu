@@ -2,8 +2,9 @@
  *  ccmode_factory.h
  *  corecrypto
  *
- *  Created by Fabrice Gautier on 1/21/11.
- *  Copyright 2011 Apple, Inc. All rights reserved.
+ *  Created on 01/21/2011
+ *
+ *  Copyright (c) 2011,2012,2013,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -12,6 +13,25 @@
 
 #include <corecrypto/ccn.h>  /* TODO: Remove dependency on this header. */
 #include <corecrypto/ccmode_impl.h>
+
+#if !defined(__NO_ASM__) 
+#if	(defined(__x86_64__) && CCAES_INTEL) || (CCAES_ARM && defined(__ARM_NEON__))
+#define	CCMODE_GCM_VNG_SPEEDUP	1
+#define	CCMODE_CCM_VNG_SPEEDUP	1
+#else
+#define	CCMODE_GCM_VNG_SPEEDUP	0
+#define	CCMODE_CCM_VNG_SPEEDUP	0
+#endif
+
+#if	(  (defined(__x86_64__) && CCAES_INTEL) \
+    || (defined(__arm64__) && CCAES_ARM) \
+    || defined(__ARM_NEON__))  // Supported even when not using the ARM AES
+
+#define	CCMODE_CTR_VNG_SPEEDUP	1
+#else
+#define	CCMODE_CTR_VNG_SPEEDUP	0
+#endif
+#endif /* !defined(__NO_ASM__) */
 
 /* For CBC, direction of underlying ecb is the same as the cbc direction */
 #define CCMODE_CBC_FACTORY(_cipher_, _dir_)                                     \
@@ -170,7 +190,6 @@ void ccmode_cfb_decrypt(cccfb_ctx *ctx, size_t nbytes,
                         const void *in, void *out);
 void ccmode_cfb_encrypt(cccfb_ctx *ctx, size_t nbytes,
                         const void *in, void *out);
-
 struct _ccmode_cfb_key {
     const struct ccmode_ecb *ecb;
     size_t pad_len;
@@ -216,7 +235,6 @@ void ccmode_factory_cfb_encrypt(struct ccmode_cfb *cfb,
     struct ccmode_cfb cfb_encrypt = CCMODE_FACTORY_CFB_ENCRYPT(ecb);
     *cfb = cfb_encrypt;
 }
-
 
 void ccmode_cfb8_init(const struct ccmode_cfb8 *cfb8, cccfb8_ctx *ctx,
                       size_t rawkey_len, const void *rawkey, const void *iv);
@@ -290,6 +308,22 @@ struct _ccmode_ctr_key {
 .custom = (ECB_ENCRYPT) \
 }
 
+#if !defined(__NO_ASM__) 
+#if CCMODE_CTR_VNG_SPEEDUP
+void ccmode_aes_ctr_crypt_vng(ccctr_ctx *ctx, size_t nbytes,
+                      const void *in, void *out);
+
+/* Use this to statically initialize a ccmode_ctr object for decryption. */
+#define CCMODE_VNG_AES_CTR_CRYPT(ECB_ENCRYPT) { \
+.size = ccn_sizeof_size(sizeof(struct _ccmode_ctr_key)) + 2 * ccn_sizeof_size((ECB_ENCRYPT)->block_size) + ccn_sizeof_size((ECB_ENCRYPT)->size), \
+.block_size = 1, \
+.init = ccmode_ctr_init, \
+.ctr = ccmode_aes_ctr_crypt_vng, \
+.custom = (ECB_ENCRYPT) \
+}
+#endif /* CCMODE_CTR_VNG_SPEEDUP */
+#endif /* defined(__NO_ASM__) */
+
 /* Use these function to runtime initialize a ccmode_ctr decrypt object (for
  example if it's part of a larger structure). Normally you would pass a
  ecb encrypt mode implementation of some underlying algorithm as the ecb
@@ -314,9 +348,6 @@ void ccmode_factory_ctr_crypt(struct ccmode_ctr *ctr,
 //#define CCMODE_GCM_TABLES_SSE2  1
 
 extern const unsigned char gcm_shift_table[256*2];
-#endif
-#if	defined(__x86_64__) || defined(__arm64__)
-#define	VNG_SPEEDUP	1
 #endif
 
 /* Create a gcm key from a gcm mode object.
@@ -358,10 +389,15 @@ struct _ccmode_gcm_key {
     ;
 #endif /* CCMODE_GCM_TABLES */
 
-#ifdef VNG_SPEEDUP
+#if !defined(__NO_ASM__) 
+#if CCMODE_GCM_VNG_SPEEDUP
+#if !defined(__arm64__) && defined(__ARM_NEON__)
+	unsigned char Htable[8*2] __attribute__((aligned(16)));
+#else
 	unsigned char Htable[16*8*2] __attribute__((aligned(16)));
 #endif
-    
+#endif /* CCMODE_GCM_VNG_SPEEDUP */
+#endif  /* !defined(__NO_ASM__)  */   
     cc_unit u[];
 
 };
@@ -430,6 +466,14 @@ void ccmode_ccm_decrypt(ccccm_ctx *ctx, ccccm_nonce *nonce_ctx, size_t nbytes, c
                         void *out);
 void ccmode_ccm_encrypt(ccccm_ctx *ctx, ccccm_nonce *nonce_ctx, size_t nbytes, const void *in,
                         void *out);
+#if !defined(__NO_ASM__) 
+#if CCMODE_CCM_VNG_SPEEDUP
+void ccmode_ccm_decrypt_vector(ccccm_ctx *ctx, ccccm_nonce *nonce_ctx, size_t nbytes, const void *in,
+                        void *out);
+void ccmode_ccm_encrypt_vector(ccccm_ctx *ctx, ccccm_nonce *nonce_ctx, size_t nbytes, const void *in,
+                        void *out);
+#endif /* CCMODE_CCM_VNG_SPEEDUP */
+#endif /* !defined(__NO_ASM__) */
 void ccmode_ccm_finalize(ccccm_ctx *key, ccccm_nonce *nonce_ctx, void *mac);
 void ccmode_ccm_reset(ccccm_ctx *key, ccccm_nonce *nonce_ctx);
 
@@ -480,6 +524,39 @@ struct _ccmode_ccm_nonce {
 .custom = (ECB_ENCRYPT) \
 }
 
+#if !defined(__NO_ASM__) 
+/* for x86_64/arm64 speedup */
+#if CCMODE_CCM_VNG_SPEEDUP
+/* Use this to statically initialize a ccmode_ccm object for decryption. */
+#define CCMODE_VNG_CCM_DECRYPT(ECB_ENCRYPT) { \
+.size = ccn_sizeof_size(sizeof(struct _ccmode_ccm_key)) + ccn_sizeof_size((ECB_ENCRYPT)->block_size) + ccn_sizeof_size((ECB_ENCRYPT)->size), \
+.nonce_size = ccn_sizeof_size(sizeof(struct _ccmode_ccm_nonce)), \
+.block_size = 1, \
+.init = ccmode_ccm_init, \
+.set_iv = ccmode_ccm_set_iv, \
+.cbcmac = ccmode_ccm_cbcmac, \
+.ccm = ccmode_ccm_decrypt_vector, \
+.finalize = ccmode_ccm_finalize, \
+.reset = ccmode_ccm_reset, \
+.custom = (ECB_ENCRYPT) \
+}
+
+/* Use this to statically initialize a ccmode_ccm object for encryption. */
+#define CCMODE_VNG_CCM_ENCRYPT(ECB_ENCRYPT) { \
+.size = ccn_sizeof_size(sizeof(struct _ccmode_ccm_key)) + ccn_sizeof_size((ECB_ENCRYPT)->block_size) + ccn_sizeof_size((ECB_ENCRYPT)->size), \
+.nonce_size = ccn_sizeof_size(sizeof(struct _ccmode_ccm_nonce)), \
+.block_size = 1, \
+.init = ccmode_ccm_init, \
+.set_iv = ccmode_ccm_set_iv, \
+.cbcmac = ccmode_ccm_cbcmac, \
+.ccm = ccmode_ccm_encrypt_vector, \
+.finalize = ccmode_ccm_finalize, \
+.reset = ccmode_ccm_reset, \
+.custom = (ECB_ENCRYPT) \
+}
+#endif /* CCMODE_CCM_VNG_SPEEDUP */
+#endif /* !defined(__NO_ASM__)  */
+
 /* Use these function to runtime initialize a ccmode_ccm decrypt object (for
  example if it's part of a larger structure). For CCM you always pass a
  ecb encrypt mode implementation of some underlying algorithm as the ecb
@@ -487,7 +564,11 @@ struct _ccmode_ccm_nonce {
 CC_INLINE
 void ccmode_factory_ccm_decrypt(struct ccmode_ccm *ccm,
                                 const struct ccmode_ecb *ecb_encrypt) {
+#if !defined(__NO_ASM__) && CCMODE_CCM_VNG_SPEEDUP
+    struct ccmode_ccm ccm_decrypt = CCMODE_VNG_CCM_DECRYPT(ecb_encrypt);
+#else
     struct ccmode_ccm ccm_decrypt = CCMODE_FACTORY_CCM_DECRYPT(ecb_encrypt);
+#endif /* CCMODE_CCM_VNG_SPEEDUP */
     *ccm = ccm_decrypt;
 }
 
@@ -498,7 +579,11 @@ void ccmode_factory_ccm_decrypt(struct ccmode_ccm *ccm,
 CC_INLINE
 void ccmode_factory_ccm_encrypt(struct ccmode_ccm *ccm,
                                 const struct ccmode_ecb *ecb_encrypt) {
+#if !defined(__NO_ASM__) && CCMODE_CCM_VNG_SPEEDUP
+    struct ccmode_ccm ccm_encrypt = CCMODE_VNG_CCM_ENCRYPT(ecb_encrypt);
+#else
     struct ccmode_ccm ccm_encrypt = CCMODE_FACTORY_CCM_ENCRYPT(ecb_encrypt);
+#endif /* CCMODE_CCM_VNG_SPEEDUP */
     *ccm = ccm_encrypt;
 }
 

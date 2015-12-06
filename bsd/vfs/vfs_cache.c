@@ -1252,11 +1252,11 @@ skiprsrcfork:
 		}
 
 		if ( (mp = vp->v_mountedhere) && ((cnp->cn_flags & NOCROSSMOUNT) == 0)) {
-
-		        if (mp->mnt_realrootvp == NULLVP || mp->mnt_generation != mount_generation ||
-				mp->mnt_realrootvp_vid != mp->mnt_realrootvp->v_id)
-			        break;
-			vp = mp->mnt_realrootvp;
+			vnode_t tmp_vp = mp->mnt_realrootvp;
+			if (tmp_vp == NULLVP || mp->mnt_generation != mount_generation ||
+				mp->mnt_realrootvp_vid != tmp_vp->v_id)
+				break;
+			vp = tmp_vp;
 		}
 
 #if CONFIG_TRIGGERS
@@ -1265,10 +1265,8 @@ skiprsrcfork:
 		 * trigger in hand, resolve it.  Note that we don't need to 
 		 * leave the fast path if the mount has already happened.
 		 */
-		if ((vp->v_resolve != NULL) && 
-				(vp->v_resolve->vr_resolve_func != NULL)) {
+		if (vp->v_resolve)
 			break;
-		} 
 #endif /* CONFIG_TRIGGERS */
 
 
@@ -1711,6 +1709,25 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 		ncp->nc_name = add_name_internal(cnp->cn_nameptr, cnp->cn_namelen, cnp->cn_hash, FALSE, 0);
 	else
 		ncp->nc_name = strname;
+
+	//
+	// If the bytes of the name associated with the vnode differ,
+	// use the name associated with the vnode since the file system
+	// may have set that explicitly in the case of a lookup on a
+	// case-insensitive file system where the case of the looked up
+	// name differs from what is on disk.  For more details, see:
+	//   <rdar://problem/8044697> FSEvents doesn't always decompose diacritical unicode chars in the paths of the changed directories
+	// 
+	const char *vn_name = vp ? vp->v_name : NULL;
+	unsigned int len = vn_name ? strlen(vn_name) : 0;
+	if (vn_name && ncp && ncp->nc_name && strncmp(ncp->nc_name, vn_name, len) != 0) {
+		unsigned int hash = hash_string(vn_name, len);
+		
+		vfs_removename(ncp->nc_name);
+		ncp->nc_name = add_name_internal(vn_name, len, hash, FALSE, 0);
+		ncp->nc_hashval = hash;
+	}
+
 	/*
 	 * make us the newest entry in the cache
 	 * i.e. we'll be the last to be stolen

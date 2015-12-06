@@ -194,20 +194,12 @@ struct sched_group {
 	queue_chain_t           sched_groups;
 };
 
-/* TODO: Turn this into an attribute in the sched dispatch struct */
-boolean_t               sched_groups_enabled = FALSE;
-
 /*
  * Keep entry on the head of the runqueue while dequeueing threads.
  * Only cycle it to the end of the runqueue when a thread in the task
  * hits its quantum.
  */
 static boolean_t        deep_drain = FALSE;
-
-/*
- * Don't favor the task when an urgent thread is present.
- */
-static boolean_t        drain_urgent_first = TRUE;
 
 /* Verify the consistency of the runq before touching it */
 static boolean_t        multiq_sanity_check = FALSE;
@@ -226,6 +218,11 @@ static integer_t        drain_band_limit;
 #define DEFAULT_DRAIN_DEPTH_LIMIT MAXPRI_THROTTLE
 static integer_t        drain_depth_limit;
 
+/*
+ * Don't favor the task when there's something above this priority in another task.
+ */
+#define DEFAULT_DRAIN_CEILING BASEPRI_FOREGROUND
+static integer_t        drain_ceiling;
 
 static struct zone      *sched_group_zone;
 
@@ -246,7 +243,7 @@ static thread_t
 sched_multiq_steal_thread(processor_set_t pset);
 
 static void
-sched_multiq_thread_update_scan(void);
+sched_multiq_thread_update_scan(sched_update_scan_context_t scan_context);
 
 static boolean_t
 sched_multiq_processor_enqueue(processor_t processor, thread_t thread, integer_t options);
@@ -290,18 +287,17 @@ sched_multiq_processor_queue_shutdown(processor_t processor);
 static sched_mode_t
 sched_multiq_initial_thread_sched_mode(task_t parent_task);
 
-static boolean_t
-sched_multiq_should_current_thread_rechoose_processor(processor_t processor);
-
 const struct sched_dispatch_table sched_multiq_dispatch = {
+	.sched_name                                     = "multiq",
 	.init                                           = sched_multiq_init,
-	.timebase_init                                  = sched_traditional_timebase_init,
+	.timebase_init                                  = sched_timeshare_timebase_init,
 	.processor_init                                 = sched_multiq_processor_init,
 	.pset_init                                      = sched_multiq_pset_init,
-	.maintenance_continuation                       = sched_traditional_maintenance_continue,
+	.maintenance_continuation                       = sched_timeshare_maintenance_continue,
 	.choose_thread                                  = sched_multiq_choose_thread,
+	.steal_thread_enabled                           = FALSE,
 	.steal_thread                                   = sched_multiq_steal_thread,
-	.compute_priority                               = compute_priority,
+	.compute_timeshare_priority                     = sched_compute_timeshare_priority,
 	.choose_processor                               = choose_processor,
 	.processor_enqueue                              = sched_multiq_processor_enqueue,
 	.processor_queue_shutdown                       = sched_multiq_processor_queue_shutdown,
@@ -310,39 +306,34 @@ const struct sched_dispatch_table sched_multiq_dispatch = {
 	.priority_is_urgent                             = priority_is_urgent,
 	.processor_csw_check                            = sched_multiq_processor_csw_check,
 	.processor_queue_has_priority                   = sched_multiq_processor_queue_has_priority,
-	.initial_quantum_size                           = sched_traditional_initial_quantum_size,
+	.initial_quantum_size                           = sched_timeshare_initial_quantum_size,
 	.initial_thread_sched_mode                      = sched_multiq_initial_thread_sched_mode,
 	.can_update_priority                            = can_update_priority,
 	.update_priority                                = update_priority,
 	.lightweight_update_priority                    = lightweight_update_priority,
 	.quantum_expire                                 = sched_multiq_quantum_expire,
-	.should_current_thread_rechoose_processor       = sched_multiq_should_current_thread_rechoose_processor,
 	.processor_runq_count                           = sched_multiq_runq_count,
 	.processor_runq_stats_count_sum                 = sched_multiq_runq_stats_count_sum,
-	.fairshare_init                                 = sched_traditional_fairshare_init,
-	.fairshare_runq_count                           = sched_traditional_fairshare_runq_count,
-	.fairshare_runq_stats_count_sum                 = sched_traditional_fairshare_runq_stats_count_sum,
-	.fairshare_enqueue                              = sched_traditional_fairshare_enqueue,
-	.fairshare_dequeue                              = sched_traditional_fairshare_dequeue,
-	.fairshare_queue_remove                         = sched_traditional_fairshare_queue_remove,
 	.processor_bound_count                          = sched_multiq_processor_bound_count,
 	.thread_update_scan                             = sched_multiq_thread_update_scan,
 	.direct_dispatch_to_idle_processors             = FALSE,
+	.multiple_psets_enabled                         = FALSE,
+	.sched_groups_enabled                           = TRUE,
 };
 
 
 static void
 sched_multiq_init(void)
 {
-	sched_groups_enabled = TRUE;
-
 #if defined(MULTIQ_SANITY_CHECK)
 	PE_parse_boot_argn("-multiq-sanity-check", &multiq_sanity_check, sizeof(multiq_sanity_check));
 #endif
 
 	PE_parse_boot_argn("-multiq-deep-drain", &deep_drain, sizeof(deep_drain));
 
-	PE_parse_boot_argn("multiq_drain_urgent_first", &drain_urgent_first, sizeof(drain_urgent_first));
+	if (!PE_parse_boot_argn("multiq_drain_ceiling", &drain_ceiling, sizeof(drain_ceiling))) {
+		drain_ceiling = DEFAULT_DRAIN_CEILING;
+	}
 
 	if (!PE_parse_boot_argn("multiq_drain_depth_limit", &drain_depth_limit, sizeof(drain_depth_limit))) {
 		drain_depth_limit = DEFAULT_DRAIN_DEPTH_LIMIT;
@@ -352,8 +343,8 @@ sched_multiq_init(void)
 		drain_band_limit = DEFAULT_DRAIN_BAND_LIMIT;
 	}
 
-	printf("multiq scheduler config: deep-drain %d, urgent first %d, depth limit %d, band limit %d, sanity check %d\n",
-	       deep_drain, drain_urgent_first, drain_depth_limit, drain_band_limit, multiq_sanity_check);
+	printf("multiq scheduler config: deep-drain %d, ceiling %d, depth limit %d, band limit %d, sanity check %d\n",
+	       deep_drain, drain_ceiling, drain_depth_limit, drain_band_limit, multiq_sanity_check);
 
 	sched_group_zone = zinit(
 	                         sizeof(struct sched_group),
@@ -371,7 +362,7 @@ sched_multiq_init(void)
 	lck_attr_setdefault(&sched_groups_lock_attr);
 	lck_mtx_init(&sched_groups_lock, &sched_groups_lock_grp, &sched_groups_lock_attr);
 
-	sched_traditional_init();
+	sched_timeshare_init();
 }
 
 static void
@@ -400,7 +391,7 @@ sched_group_create(void)
 {
 	sched_group_t       sched_group;
 
-	if (!sched_groups_enabled)
+	if (!SCHED(sched_groups_enabled))
 		return SCHED_GROUP_NULL;
 
 	sched_group = (sched_group_t)zalloc(sched_group_zone);
@@ -425,7 +416,7 @@ sched_group_create(void)
 void
 sched_group_destroy(sched_group_t sched_group)
 {
-	if (!sched_groups_enabled) {
+	if (!SCHED(sched_groups_enabled)) {
 		assert(sched_group == SCHED_GROUP_NULL);
 		return;
 	}
@@ -492,6 +483,7 @@ entry_queue_first_entry(entry_queue_t rq)
 
 #if defined(MULTIQ_SANITY_CHECK)
 
+#if MACH_ASSERT
 __attribute__((always_inline))
 static inline boolean_t
 queue_chain_linked(queue_chain_t* chain)
@@ -504,6 +496,7 @@ queue_chain_linked(queue_chain_t* chain)
 		return FALSE;
 	}
 }
+#endif /* MACH_ASSERT */
 
 static thread_t
 group_first_thread(sched_group_t group)
@@ -711,6 +704,27 @@ entry_queue_remove_entry(
 	entry->runq = 0;
 }
 
+static void
+entry_queue_change_entry(
+                          entry_queue_t rq,
+                          sched_entry_t entry,
+                          integer_t     options)
+{
+	int     sched_pri   = entry->sched_pri;
+	queue_t queue       = rq->queues + sched_pri;
+
+#if defined(MULTIQ_SANITY_CHECK)
+	if (multiq_sanity_check) {
+		entry_queue_check_entry(rq, entry, sched_pri);
+	}
+#endif
+	remqueue((queue_entry_t)entry);
+
+	if (options & SCHED_TAILQ)
+		enqueue_tail(queue, (queue_entry_t)entry);
+	else
+		enqueue_head(queue, (queue_entry_t)entry);
+}
 /*
  * The run queue must not be empty.
  *
@@ -963,6 +977,9 @@ sched_group_enqueue_thread(
 		 * What effects would it have?
 		 */
 		entry_queue_enqueue_entry(main_entryq, &group->entries[sched_pri], options);
+	} else if (options & SCHED_HEADQ) {
+		/* The thread should be at the head of the line - move its entry to the front */
+		entry_queue_change_entry(main_entryq, &group->entries[sched_pri], options);
 	}
 }
 
@@ -1033,33 +1050,44 @@ sched_multiq_choose_thread(
 	 * Should YIELD AST override drain limit?
 	 */
 	if (group->runq.count != 0 && (reason & AST_PREEMPTION) == 0) {
-		boolean_t   drain_limit_hit = FALSE;
+		boolean_t favor_group = TRUE;
 
-		if (main_entryq->highq > group->runq.highq) {
+		integer_t global_pri = main_entryq->highq;
+		integer_t group_pri  = group->runq.highq;
+
+		/*
+		 * Favor the current group if the group is still the globally highest.
+		 *
+		 * Otherwise, consider choosing a thread from the current group
+		 * even if it's lower priority than the global highest priority.
+		 */
+		if (global_pri > group_pri) {
 			/*
 			 * If there's something elsewhere above the depth limit,
 			 * don't pick a thread below the limit.
 			 */
-			if (main_entryq->highq > drain_depth_limit &&
-			    group->runq.highq <= drain_depth_limit)
-				drain_limit_hit = TRUE;
+			if (global_pri > drain_depth_limit && group_pri <= drain_depth_limit)
+				favor_group = FALSE;
+
+			/*
+			 * If there's something at or above the ceiling,
+			 * don't favor the group.
+			 */
+			if (global_pri >= drain_ceiling)
+				favor_group = FALSE;
 
 			/*
 			 * Don't go more than X steps below the global highest
 			 */
-			if ((main_entryq->highq - group->runq.highq) >= drain_band_limit)
-				drain_limit_hit = TRUE;
-
-			/* Don't favor the task when an urgent thread is present. */
-			if (drain_urgent_first && main_entryq->urgency > 0)
-				drain_limit_hit = TRUE;
+			if ((global_pri - group_pri) >= drain_band_limit)
+				favor_group = FALSE;
 		}
 
-		if (!drain_limit_hit) {
+		if (favor_group) {
 			/* Pull from local runq */
 			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 			    MACHDBG_CODE(DBG_MACH_SCHED, MACH_MULTIQ_DEQUEUE) | DBG_FUNC_NONE,
-			    MACH_MULTIQ_GROUP, main_entryq->highq, group->runq.highq, 0, 0);
+			    MACH_MULTIQ_GROUP, global_pri, group_pri, 0, 0);
 
 			return sched_group_dequeue_thread(main_entryq, group);
 		}
@@ -1133,8 +1161,7 @@ sched_multiq_quantum_expire(thread_t thread)
 		sched_entry_t entry = group_entry_for_pri(thread->sched_group, processor->current_pri);
 
 		if (entry->runq == MULTIQ_ERUNQ) {
-			entry_queue_remove_entry(entryq, entry);
-			entry_queue_enqueue_entry(entryq, entry, SCHED_TAILQ);
+			entry_queue_change_entry(entryq, entry, SCHED_TAILQ);
 		}
 
 		pset_unlock(pset);
@@ -1155,13 +1182,13 @@ sched_multiq_processor_csw_check(processor_t processor)
 	int             pri;
 
 	entry_queue_t main_entryq = multiq_main_entryq(processor);
-	run_queue_t   bound_runq  = multiq_bound_runq(processor);	
+	run_queue_t   bound_runq  = multiq_bound_runq(processor);
 
 	assert(processor->active_thread != NULL);
 
 	pri = MAX(main_entryq->highq, bound_runq->highq);
 
-	if (first_timeslice(processor)) {
+	if (processor->first_timeslice) {
 		has_higher = (pri > processor->current_pri);
 	} else {
 		has_higher = (pri >= processor->current_pri);
@@ -1172,9 +1199,6 @@ sched_multiq_processor_csw_check(processor_t processor)
 			return (AST_PREEMPT | AST_URGENT);
 
 		if (bound_runq->urgency > 0)
-			return (AST_PREEMPT | AST_URGENT);
-		
-		if (processor->active_thread && thread_eager_preemption(processor->active_thread))
 			return (AST_PREEMPT | AST_URGENT);
 
 		return AST_PREEMPT;
@@ -1195,12 +1219,6 @@ sched_multiq_processor_queue_has_priority(
 		return qpri >= priority;
 	else
 		return qpri > priority;
-}
-
-static boolean_t
-sched_multiq_should_current_thread_rechoose_processor(processor_t processor)
-{
-	return (processor->current_pri < BASEPRI_RTQUEUES && processor->processor_primary != processor);
 }
 
 static int
@@ -1286,7 +1304,6 @@ sched_multiq_processor_queue_remove(
                                     thread_t    thread)
 {
 	boolean_t removed = FALSE;
-
 	processor_set_t pset = processor->processor_set;
 
 	pset_lock(pset);
@@ -1332,7 +1349,7 @@ sched_multiq_steal_thread(processor_set_t pset)
  * Returns TRUE if retry is needed.
  */
 static boolean_t
-group_scan(entry_queue_t runq) {
+group_scan(entry_queue_t runq, sched_update_scan_context_t scan_context) {
 	int             count;
 	queue_t         q;
 	sched_group_t   group;
@@ -1344,7 +1361,7 @@ group_scan(entry_queue_t runq) {
 			queue_iterate(q, entry, sched_entry_t, links) {
 				group = group_for_entry(entry);
 				if (group->runq.count > 0) {
-					if (runq_scan(&group->runq))
+					if (runq_scan(&group->runq, scan_context))
 						return (TRUE);
 				}
 				count--;
@@ -1357,7 +1374,7 @@ group_scan(entry_queue_t runq) {
 }
 
 static void
-sched_multiq_thread_update_scan(void)
+sched_multiq_thread_update_scan(sched_update_scan_context_t scan_context)
 {
 	boolean_t               restart_needed = FALSE;
 	processor_t             processor = processor_list;
@@ -1377,7 +1394,7 @@ sched_multiq_thread_update_scan(void)
 			s = splsched();
 			pset_lock(pset);
 
-			restart_needed = runq_scan(multiq_bound_runq(processor));
+			restart_needed = runq_scan(multiq_bound_runq(processor), scan_context);
 
 			pset_unlock(pset);
 			splx(s);
@@ -1406,7 +1423,7 @@ sched_multiq_thread_update_scan(void)
 			s = splsched();
 			pset_lock(pset);
 
-			restart_needed = group_scan(&pset->pset_runq);
+			restart_needed = group_scan(&pset->pset_runq, scan_context);
 
 			pset_unlock(pset);
 			splx(s);

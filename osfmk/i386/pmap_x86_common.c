@@ -94,6 +94,9 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t
 	unsigned int	i;
 	uint64_t	num_pde;
 
+	assert(!is_ept_pmap(grand));
+	assert(!is_ept_pmap(subord));
+
 	if ((size & (pmap_nesting_size_min-1)) ||
 	    (va_start & (pmap_nesting_size_min-1)) ||
 	    (nstart & (pmap_nesting_size_min-1)) ||
@@ -230,6 +233,8 @@ kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr, uint64_t size) {
 		    grand, vaddr, size);
 	}
 
+	assert(!is_ept_pmap(grand));
+
 	/* align everything to PDE boundaries */
 	va_start = vaddr & ~(NBPDE-1);
 	va_end = (vaddr + size + NBPDE - 1) & ~(NBPDE-1);
@@ -266,6 +271,15 @@ kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr, uint64_t size) {
 	PMAP_TRACE(PMAP_CODE(PMAP__UNNEST) | DBG_FUNC_END, 0, 0, 0, 0, 0);
 
 	return KERN_SUCCESS;
+}
+
+kern_return_t
+pmap_unnest_options(
+	pmap_t grand,
+	addr64_t vaddr,
+	__unused uint64_t size,
+	__unused unsigned int options) {
+	return pmap_unnest(grand, vaddr, size);
 }
 
 /* Invoked by the Mach VM to determine the platform specific unnest region */
@@ -311,6 +325,9 @@ pmap_find_phys(pmap_t pmap, addr64_t va)
 	ppnum_t		ppn = 0;
 	pd_entry_t	pde;
 	pt_entry_t	pte;
+	boolean_t	is_ept;
+
+	is_ept = is_ept_pmap(pmap);
 
 	mp_disable_preemption();
 
@@ -324,14 +341,14 @@ pmap_find_phys(pmap_t pmap, addr64_t va)
 
 	pdep = pmap_pde(pmap, va);
 
-	if ((pdep != PD_ENTRY_NULL) && ((pde = *pdep) & INTEL_PTE_VALID)) {
-		if (pde & INTEL_PTE_PS) {
+	if ((pdep != PD_ENTRY_NULL) && ((pde = *pdep) & PTE_VALID_MASK(is_ept))) {
+		if (pde & PTE_PS) {
 			ppn = (ppnum_t) i386_btop(pte_to_pa(pde));
 			ppn += (ppnum_t) ptenum(va);
 		}
 		else {
 			ptp = pmap_pte(pmap, va);
-			if ((PT_ENTRY_NULL != ptp) && (((pte = *ptp) & INTEL_PTE_VALID) != 0)) {
+			if ((PT_ENTRY_NULL != ptp) && (((pte = *ptp) & PTE_VALID_MASK(is_ept)) != 0)) {
 				ppn = (ppnum_t) i386_btop(pte_to_pa(pte));
 			}
 		}
@@ -345,9 +362,13 @@ pfp_exit:
 /*
  * Update cache attributes for all extant managed mappings.
  * Assumes PV for this page is locked, and that the page
- * is managed.
+ * is managed. We assume that this physical page may be mapped in
+ * both EPT and normal Intel PTEs, so we convert the attributes
+ * to the corresponding format for each pmap.
+ *
+ * We assert that the passed set of attributes is a subset of the
+ * PHYS_CACHEABILITY_MASK.
  */
-
 void
 pmap_update_cache_attributes_locked(ppnum_t pn, unsigned attributes) {
 	pv_rooted_entry_t	pv_h, pv_e;
@@ -355,8 +376,17 @@ pmap_update_cache_attributes_locked(ppnum_t pn, unsigned attributes) {
 	vm_map_offset_t vaddr;
 	pmap_t	pmap;
 	pt_entry_t	*ptep;
+	boolean_t	is_ept;
+	unsigned	ept_attributes;
 	
 	assert(IS_MANAGED_PAGE(pn));
+	assert(((~PHYS_CACHEABILITY_MASK) & attributes) == 0);
+
+	/* We don't support the PTA bit for EPT PTEs */
+	if (attributes & INTEL_PTE_NCACHE)
+		ept_attributes = INTEL_EPT_NCACHE;
+	else
+		ept_attributes = INTEL_EPT_WB;
 
 	pv_h = pai_to_pvh(pn);
 	/* TODO: translate the PHYS_* bits to PTE bits, while they're
@@ -377,12 +407,18 @@ pmap_update_cache_attributes_locked(ppnum_t pn, unsigned attributes) {
 			pmap = pv_e->pmap;
 			vaddr = pv_e->va;
 			ptep = pmap_pte(pmap, vaddr);
-		
+			
 			if (0 == ptep)
 				panic("pmap_update_cache_attributes_locked: Missing PTE, pmap: %p, pn: 0x%x vaddr: 0x%llx kernel_pmap: %p", pmap, pn, vaddr, kernel_pmap);
 
+			is_ept = is_ept_pmap(pmap);
+
 			nexth = (pv_hashed_entry_t)queue_next(&pvh_e->qlink);
-			pmap_update_pte(ptep, PHYS_CACHEABILITY_MASK, attributes);
+			if (!is_ept) {
+				pmap_update_pte(ptep, PHYS_CACHEABILITY_MASK, attributes);
+			} else {
+				pmap_update_pte(ptep, INTEL_EPT_CACHE_MASK, ept_attributes);
+			}
 			PMAP_UPDATE_TLBS(pmap, vaddr, vaddr + PAGE_SIZE);
 			pvh_e = nexth;
 		} while ((pv_e = (pv_rooted_entry_t)nexth) != pv_h);
@@ -460,11 +496,14 @@ pmap_enter_options(
 	uint64_t		delpage_pde_index = 0;
 	pt_entry_t		old_pte;
 	kern_return_t		kr_expand;
+	boolean_t		is_ept;
 
 	pmap_intr_assert();
 
 	if (pmap == PMAP_NULL)
 		return KERN_INVALID_ARGUMENT;
+
+	is_ept = is_ept_pmap(pmap);
 
 	/* N.B. We can be supplied a zero page frame in the NOENTER case, it's an
 	 * unused value for that scenario.
@@ -534,7 +573,7 @@ Retry:
 		return KERN_SUCCESS;
 	}
 
-	if (superpage && *pte && !(*pte & INTEL_PTE_PS)) {
+	if (superpage && *pte && !(*pte & PTE_PS)) {
 		/*
 		 * There is still an empty page table mapped that
 		 * was used for a previous base page mapping.
@@ -551,7 +590,7 @@ Retry:
 	old_pa_locked = FALSE;
 
 	if (old_pa == 0 &&
-	    (*pte & INTEL_PTE_COMPRESSED)) {
+	    (*pte & PTE_COMPRESSED)) {
 		/* one less "compressed" */
 		OSAddAtomic64(-1, &pmap->stats.compressed);
 		/* marker will be cleared below */
@@ -578,32 +617,58 @@ Retry:
 	 */
 	if (old_pa == pa) {
 		pt_entry_t old_attributes =
-		    *pte & ~(INTEL_PTE_REF | INTEL_PTE_MOD);
+		    *pte & ~(PTE_REF(is_ept) | PTE_MOD(is_ept));
 
 		/*
 	         *	May be changing its wired attribute or protection
 	         */
 
-		template = pa_to_pte(pa) | INTEL_PTE_VALID;
-		template |= pmap_get_cache_attributes(pa_index(pa));
+		template =  pa_to_pte(pa);
 
-		if (VM_MEM_NOT_CACHEABLE ==
-		    (flags & (VM_MEM_NOT_CACHEABLE | VM_WIMG_USE_DEFAULT))) {
+		/* ?: WORTH ASSERTING THAT AT LEAST ONE RWX (implicit valid) PASSED FOR EPT? */
+		if (!is_ept) {
+			template |= INTEL_PTE_VALID;
+		} else {
+			template |= INTEL_EPT_IPTA;
+		}
+
+		template |= pmap_get_cache_attributes(pa_index(pa), is_ept);
+
+		/*
+		 * We don't support passing VM_MEM_NOT_CACHEABLE flags for EPT PTEs
+		 */
+		if (!is_ept && (VM_MEM_NOT_CACHEABLE ==
+		    (flags & (VM_MEM_NOT_CACHEABLE | VM_WIMG_USE_DEFAULT)))) {
 			if (!(flags & VM_MEM_GUARDED))
 				template |= INTEL_PTE_PTA;
 			template |= INTEL_PTE_NCACHE;
 		}
-		if (pmap != kernel_pmap)
+		if (pmap != kernel_pmap && !is_ept)
 			template |= INTEL_PTE_USER;
+
+		if (prot & VM_PROT_READ)
+			template |= PTE_READ(is_ept);
+
 		if (prot & VM_PROT_WRITE) {
-			template |= INTEL_PTE_WRITE;
+			template |= PTE_WRITE(is_ept);
+			if (is_ept && !pmap_ept_support_ad) {
+				template |= PTE_MOD(is_ept);
+				if (old_pa_locked) {
+					assert(IS_MANAGED_PAGE(pai));
+					pmap_phys_attributes[pai] |= PHYS_MODIFIED;
+				}
+			}
+		}
+		if (prot & VM_PROT_EXECUTE) {
+			assert(set_NX == 0);
+			template = pte_set_ex(template, is_ept);
 		}
 
 		if (set_NX)
-			template |= INTEL_PTE_NX;
+			template = pte_remove_ex(template, is_ept);
 
 		if (wired) {
-			template |= INTEL_PTE_WIRED;
+			template |= PTE_WIRED;
 			if (!iswired(old_attributes))  {
 				OSAddAtomic(+1, &pmap->stats.wired_count);
 				pmap_ledger_credit(pmap, task_ledgers.wired_mem, PAGE_SIZE);
@@ -615,26 +680,36 @@ Retry:
 				pmap_ledger_debit(pmap, task_ledgers.wired_mem, PAGE_SIZE);
 			}
 		}
+
 		if (superpage)		/* this path can not be used */
-			template |= INTEL_PTE_PS;	/* to change the page size! */
+			template |= PTE_PS;	/* to change the page size! */
 
 		if (old_attributes == template)
 			goto dont_update_pte;
 
 		/* Determine delta, PV locked */
 		need_tlbflush =
-		    ((old_attributes ^ template) != INTEL_PTE_WIRED);
+		    ((old_attributes ^ template) != PTE_WIRED);
 		
-		if (need_tlbflush == TRUE && !(old_attributes & INTEL_PTE_WRITE)) {
-			if ((old_attributes ^ template) == INTEL_PTE_WRITE)
+		if (need_tlbflush == TRUE && !(old_attributes & PTE_WRITE(is_ept))) {
+			if ((old_attributes ^ template) == PTE_WRITE(is_ept))
 				need_tlbflush = FALSE;
+		}
+
+		/* For hardware that doesn't have EPT AD support, we always set REFMOD for EPT PTEs */
+		if (is_ept && !pmap_ept_support_ad) {
+			template |= PTE_REF(is_ept);
+			if (old_pa_locked) {
+				assert(IS_MANAGED_PAGE(pai));
+				pmap_phys_attributes[pai] |= PHYS_REFERENCED;
+			}
 		}
 
 		/* store modified PTE and preserve RC bits */
 		pt_entry_t npte, opte;;
 		do {
 			opte = *pte;
-			npte = template | (opte & (INTEL_PTE_REF | INTEL_PTE_MOD));
+			npte = template | (opte & (PTE_REF(is_ept) | PTE_MOD(is_ept)));
 		} while (!pmap_cmpx_pte(pte, opte, npte));
 dont_update_pte:
 		if (old_pa_locked) {
@@ -666,12 +741,12 @@ dont_update_pte:
 	         */
 
 		/* invalidate the PTE */
-		pmap_update_pte(pte, INTEL_PTE_VALID, 0);
+		pmap_update_pte(pte, PTE_VALID_MASK(is_ept), 0);
 		/* propagate invalidate everywhere */
 		PMAP_UPDATE_TLBS(pmap, vaddr, vaddr + PAGE_SIZE);
 		/* remember reference and change */
 		old_pte	= *pte;
-		oattr = (char) (old_pte & (PHYS_MODIFIED | PHYS_REFERENCED));
+		oattr = (char) (old_pte & (PTE_MOD(is_ept) | PTE_REF(is_ept)));
 		/* completely invalidate the PTE */
 		pmap_store_pte(pte, 0);
 
@@ -699,7 +774,12 @@ dont_update_pte:
 				pmap_ledger_debit(pmap, task_ledgers.wired_mem,
 				    PAGE_SIZE);
 			}
-			pmap_phys_attributes[pai] |= oattr;
+
+			if (!is_ept) {
+				pmap_phys_attributes[pai] |= oattr;
+			} else {
+				pmap_phys_attributes[pai] |= ept_refmod_to_physmap(oattr);
+			}
 
 			/*
 			 *	Remove the mapping from the pvlist for
@@ -854,25 +934,49 @@ dont_update_pte:
 	 *	Build a template to speed up entering -
 	 *	only the pfn changes.
 	 */
-	template = pa_to_pte(pa) | INTEL_PTE_VALID;
+	template = pa_to_pte(pa);
+
+	if (!is_ept) {
+		template |= INTEL_PTE_VALID;
+	} else {
+		template |= INTEL_EPT_IPTA;
+	}
+
+
 	/*
 	 * DRK: It may be worth asserting on cache attribute flags that diverge
 	 * from the existing physical page attributes.
 	 */
 
-	template |= pmap_get_cache_attributes(pa_index(pa));
-	
-	if (flags & VM_MEM_NOT_CACHEABLE) {
+	template |= pmap_get_cache_attributes(pa_index(pa), is_ept);
+
+	/*
+	 * We don't support passing VM_MEM_NOT_CACHEABLE flags for EPT PTEs
+	 */
+	if (!is_ept && (flags & VM_MEM_NOT_CACHEABLE)) {
 		if (!(flags & VM_MEM_GUARDED))
 			template |= INTEL_PTE_PTA;
 		template |= INTEL_PTE_NCACHE;
 	}
-	if (pmap != kernel_pmap)
+	if (pmap != kernel_pmap && !is_ept)
 		template |= INTEL_PTE_USER;
-	if (prot & VM_PROT_WRITE)
-		template |= INTEL_PTE_WRITE;
+	if (prot & VM_PROT_READ)
+		template |= PTE_READ(is_ept);
+	if (prot & VM_PROT_WRITE) {
+		template |= PTE_WRITE(is_ept);
+		if (is_ept && !pmap_ept_support_ad) {
+			template |= PTE_MOD(is_ept);
+			if (IS_MANAGED_PAGE(pai))
+				pmap_phys_attributes[pai] |= PHYS_MODIFIED;
+		}
+	}
+	if (prot & VM_PROT_EXECUTE) {
+		assert(set_NX == 0);
+		template = pte_set_ex(template, is_ept);
+	}
+
 	if (set_NX)
-		template |= INTEL_PTE_NX;
+		template = pte_remove_ex(template, is_ept);
 	if (wired) {
 		template |= INTEL_PTE_WIRED;
 		OSAddAtomic(+1,  & pmap->stats.wired_count);
@@ -880,6 +984,14 @@ dont_update_pte:
 	}
 	if (superpage)
 		template |= INTEL_PTE_PS;
+
+	/* For hardware that doesn't have EPT AD support, we always set REFMOD for EPT PTEs */
+	if (is_ept && !pmap_ept_support_ad) {
+		template |= PTE_REF(is_ept);
+		if (IS_MANAGED_PAGE(pai))
+			pmap_phys_attributes[pai] |= PHYS_REFERENCED;
+	}
+
 	pmap_store_pte(pte, template);
 
 	/*
@@ -912,8 +1024,8 @@ Done:
 		m = vm_page_lookup(delpage_pm_obj, (delpage_pde_index * PAGE_SIZE));
 		if (m == VM_PAGE_NULL)
 		    panic("pmap_enter: pte page not in object");
-		vm_object_unlock(delpage_pm_obj);
 		VM_PAGE_FREE(m);
+		vm_object_unlock(delpage_pm_obj);
 		OSAddAtomic(-1,  &inuse_ptepages_count);
 		PMAP_ZINFO_PFREE(pmap, PAGE_SIZE);
 	}
@@ -941,7 +1053,8 @@ pmap_remove_range(
 	pt_entry_t		*spte,
 	pt_entry_t		*epte)
 {
-	pmap_remove_range_options(pmap, start_vaddr, spte, epte, 0);
+	pmap_remove_range_options(pmap, start_vaddr, spte, epte,
+				  PMAP_OPTIONS_REMOVE);
 }
 
 void
@@ -963,6 +1076,7 @@ pmap_remove_range_options(
 	ppnum_t			pai;
 	pmap_paddr_t		pa;
 	vm_map_offset_t		vaddr;
+	boolean_t		is_ept = is_ept_pmap(pmap);
 
 	num_removed = 0;
 	num_unwired = 0;
@@ -983,12 +1097,12 @@ pmap_remove_range_options(
 		if (pa == 0) {
 			if (pmap != kernel_pmap &&
 			    (options & PMAP_OPTIONS_REMOVE) &&
-			    (p & INTEL_PTE_COMPRESSED)) {
+			    (p & PTE_COMPRESSED)) {
 				/* one less "compressed" */
 				num_compressed++;
 				/* clear marker */
 				/* XXX probably does not need to be atomic! */
-				pmap_update_pte(cpte, INTEL_PTE_COMPRESSED, 0);
+				pmap_update_pte(cpte, PTE_COMPRESSED, 0);
 			}
 			continue;
 		}
@@ -1009,11 +1123,11 @@ pmap_remove_range_options(
 			continue;
 		}
 
-		if ((p & INTEL_PTE_VALID) == 0)
+		if ((p & PTE_VALID_MASK(is_ept)) == 0)
 			num_invalid++;
 
 		/* invalidate the PTE */
-		pmap_update_pte(cpte, INTEL_PTE_VALID, 0);
+		pmap_update_pte(cpte, PTE_VALID_MASK(is_ept), 0);
 	}
 
 	if (num_found == 0) {
@@ -1141,7 +1255,7 @@ pmap_remove(
 	addr64_t	s64,
 	addr64_t	e64)
 {
-	pmap_remove_options(map, s64, e64, 0);
+	pmap_remove_options(map, s64, e64, PMAP_OPTIONS_REMOVE);
 }
 
 void
@@ -1155,11 +1269,14 @@ pmap_remove_options(
 	pt_entry_t     *spte, *epte;
 	addr64_t        l64;
 	uint64_t        deadline;
+	boolean_t	is_ept;
 
 	pmap_intr_assert();
 
 	if (map == PMAP_NULL || s64 == e64)
 		return;
+
+	is_ept = is_ept_pmap(map);
 
 	PMAP_TRACE(PMAP_CODE(PMAP__REMOVE) | DBG_FUNC_START,
 		   map,
@@ -1209,8 +1326,8 @@ pmap_remove_options(
 			l64 = e64;
 		pde = pmap_pde(map, s64);
 
-		if (pde && (*pde & INTEL_PTE_VALID)) {
-			if (*pde & INTEL_PTE_PS) {
+		if (pde && (*pde & PTE_VALID_MASK(is_ept))) {
+			if (*pde & PTE_PS) {
 				/*
 				 * If we're removing a superpage, pmap_remove_range()
 				 * must work on level 2 instead of level 1; and we're
@@ -1285,6 +1402,7 @@ pmap_page_protect_options(
 	pmap_t			pmap;
 	boolean_t		remove;
 	pt_entry_t		new_pte_value;
+	boolean_t		is_ept;
 
 	pmap_intr_assert();
 	assert(pn != vm_page_fictitious_addr);
@@ -1334,7 +1452,15 @@ pmap_page_protect_options(
 	do {
 		vm_map_offset_t vaddr;
 
+		if ((options & PMAP_OPTIONS_COMPRESSOR_IFF_MODIFIED) &&
+		    (pmap_phys_attributes[pai] & PHYS_MODIFIED)) {
+			/* page was modified, so it will be compressed */
+			options &= ~PMAP_OPTIONS_COMPRESSOR_IFF_MODIFIED;
+			options |= PMAP_OPTIONS_COMPRESSOR;
+		}
+
 		pmap = pv_e->pmap;
+		is_ept = is_ept_pmap(pmap);
 		vaddr = pv_e->va;
 		pte = pmap_pte(pmap, vaddr);
 
@@ -1362,12 +1488,8 @@ pmap_page_protect_options(
 			if (pmap != kernel_pmap &&
 			    (options & PMAP_OPTIONS_COMPRESSOR) &&
 			    IS_INTERNAL_PAGE(pai)) {
-				/* adjust "reclaimed" stats */
-				OSAddAtomic64(+1, &pmap->stats.compressed);
-				PMAP_STATS_PEAK(pmap->stats.compressed);
-				pmap->stats.compressed_lifetime++;
 				/* mark this PTE as having been "reclaimed" */
-				new_pte_value = INTEL_PTE_COMPRESSED;
+				new_pte_value = PTE_COMPRESSED;
 			} else {
 				new_pte_value = 0;
 			}
@@ -1383,13 +1505,40 @@ pmap_page_protect_options(
 				/*
 				 * Remove the mapping, collecting dirty bits.
 				 */
-				pmap_update_pte(pte, INTEL_PTE_VALID, 0);
+				pmap_update_pte(pte, PTE_VALID_MASK(is_ept), 0);
 
 				PMAP_UPDATE_TLBS(pmap, vaddr, vaddr+PAGE_SIZE);
-				pmap_phys_attributes[pai] |=
-					*pte & (PHYS_MODIFIED|PHYS_REFERENCED);
+				if ((options &
+				     PMAP_OPTIONS_COMPRESSOR_IFF_MODIFIED) &&
+				    ! (pmap_phys_attributes[pai] &
+				       PHYS_MODIFIED) &&
+				    (*pte & PHYS_MODIFIED)) {
+					/*
+					 * Page is actually "modified" and
+					 * will be compressed.  Start
+					 * accounting for it as "compressed".
+					 */
+					options &= ~PMAP_OPTIONS_COMPRESSOR_IFF_MODIFIED;
+					options |= PMAP_OPTIONS_COMPRESSOR;
+					new_pte_value = PTE_COMPRESSED;
+				}
+				if (!is_ept) {
+					pmap_phys_attributes[pai] |=
+						*pte & (PHYS_MODIFIED|PHYS_REFERENCED);
+				} else {
+					pmap_phys_attributes[pai] |=
+						ept_refmod_to_physmap((*pte & (INTEL_EPT_REF | INTEL_EPT_MOD))) & (PHYS_MODIFIED | PHYS_REFERENCED);
+				}
 				pmap_store_pte(pte, new_pte_value);
 			}
+
+			if (new_pte_value == PTE_COMPRESSED) {
+				/* one more "compressed" page */
+				OSAddAtomic64(+1, &pmap->stats.compressed);
+				PMAP_STATS_PEAK(pmap->stats.compressed);
+				pmap->stats.compressed_lifetime++;
+			}
+
 #if TESTING
 			if (pmap->stats.resident_count < 1)
 				panic("pmap_page_protect: resident_count");
@@ -1445,9 +1594,14 @@ pmap_page_protect_options(
 			/*
 		         * Write-protect, after opportunistic refmod collect
 		         */
-			pmap_phys_attributes[pai] |=
-			    *pte & (PHYS_MODIFIED|PHYS_REFERENCED);
-			pmap_update_pte(pte, INTEL_PTE_WRITE, 0);
+			if (!is_ept) {
+				pmap_phys_attributes[pai] |=
+					*pte & (PHYS_MODIFIED|PHYS_REFERENCED);
+			} else {
+				pmap_phys_attributes[pai] |=
+					ept_refmod_to_physmap((*pte & (INTEL_EPT_REF | INTEL_EPT_MOD))) & (PHYS_MODIFIED | PHYS_REFERENCED);
+			}
+			pmap_update_pte(pte, PTE_WRITE(is_ept), 0);
 
 			if (options & PMAP_OPTIONS_NOFLUSH)
 				PMAP_UPDATE_TLBS_DELAYED(pmap, vaddr, vaddr + PAGE_SIZE, (pmap_flush_context *)arg);
@@ -1503,7 +1657,9 @@ phys_attribute_clear(
 	int			pai;
 	pmap_t			pmap;
 	char			attributes = 0;
-	boolean_t		is_internal, is_reusable;
+	boolean_t		is_internal, is_reusable, is_ept;
+	int			ept_bits_to_clear;
+	boolean_t		ept_keep_global_mod = FALSE;
 
 	if ((bits & PHYS_MODIFIED) &&
 	    (options & PMAP_OPTIONS_NOFLUSH) &&
@@ -1512,6 +1668,11 @@ phys_attribute_clear(
 		      "should not clear 'modified' without flushing TLBs\n",
 		      pn, bits, options, arg);
 	}
+
+	/* We only support converting MOD and REF bits for EPT PTEs in this function */
+	assert((bits & ~(PHYS_REFERENCED | PHYS_MODIFIED)) == 0);
+
+	ept_bits_to_clear = (unsigned)physmap_refmod_to_ept(bits & (PHYS_MODIFIED | PHYS_REFERENCED));
 
 	pmap_intr_assert();
 	assert(pn != vm_page_fictitious_addr);
@@ -1534,6 +1695,7 @@ phys_attribute_clear(
 
 	LOCK_PVH(pai);
 
+
 	/*
 	 * Walk down PV list, clearing all modify or reference bits.
 	 * We do not have to lock the pv_list because we have
@@ -1554,18 +1716,29 @@ phys_attribute_clear(
 			char pte_bits;
 
 			pmap = pv_e->pmap;
+			is_ept = is_ept_pmap(pmap);
 			va = pv_e->va;
 			pte_bits = 0;
 
 			if (bits) {
 				pte = pmap_pte(pmap, va);
 				/* grab ref/mod bits from this PTE */
-				pte_bits = (*pte & (PHYS_MODIFIED |
-						    PHYS_REFERENCED));
+				pte_bits = (*pte & (PTE_REF(is_ept) | PTE_MOD(is_ept)));
 				/* propagate to page's global attributes */
-				attributes |= pte_bits;
+				if (!is_ept) {
+					attributes |= pte_bits;
+				} else {
+					attributes |= ept_refmod_to_physmap(pte_bits);
+					if (!pmap_ept_support_ad && (pte_bits & INTEL_EPT_MOD)) {
+						ept_keep_global_mod = TRUE;
+					}
+				}
 				/* which bits to clear for this PTE? */
-				pte_bits &= bits;
+				if (!is_ept) {
+					pte_bits &= bits;
+				} else {
+					pte_bits &= ept_bits_to_clear;
+				}
 			}
 
 			 /*
@@ -1639,7 +1812,17 @@ phys_attribute_clear(
 	 */
 
 	pmap_phys_attributes[pai] |= attributes;
-	pmap_phys_attributes[pai] &= (~bits);
+
+	if (ept_keep_global_mod) {
+		/*
+		 * If the hardware doesn't support AD bits for EPT PTEs and someone is
+		 * requesting that we clear the modified bit for a phys page, we need
+		 * to ensure that there are no EPT mappings for the page with the
+		 * modified bit set. If there are, we cannot clear the global modified bit.
+		 */
+		bits &= ~PHYS_MODIFIED;
+	}
+	pmap_phys_attributes[pai] &= ~(bits);
 
 	/* update this page's "reusable" status */
 	if (options & PMAP_OPTIONS_CLEAR_REUSABLE) {
@@ -1668,9 +1851,11 @@ phys_attribute_test(
 	int			pai;
 	pmap_t			pmap;
 	int			attributes = 0;
+	boolean_t		is_ept;
 
 	pmap_intr_assert();
 	assert(pn != vm_page_fictitious_addr);
+	assert((bits & ~(PHYS_MODIFIED | PHYS_REFERENCED)) == 0);
 	if (pn == vm_page_guard_addr)
 		return 0;
 
@@ -1714,13 +1899,19 @@ phys_attribute_test(
 			vm_map_offset_t va;
 
 			pmap = pv_e->pmap;
+			is_ept = is_ept_pmap(pmap);
 			va = pv_e->va;
 			/*
 	 		 * pick up modify and/or reference bits from mapping
 			 */
 
 			pte = pmap_pte(pmap, va);
-			attributes |= (int)(*pte & bits);
+			if (!is_ept) {
+				attributes |= (int)(*pte & bits);
+			} else {
+				attributes |= (int)(ept_refmod_to_physmap((*pte & (INTEL_EPT_REF | INTEL_EPT_MOD))) & (PHYS_MODIFIED | PHYS_REFERENCED));
+
+			}
 
 			pv_e = (pv_hashed_entry_t)queue_next(&pv_e->qlink);
 
@@ -1759,7 +1950,7 @@ pmap_change_wiring(
 		 */
 		pmap_ledger_credit(map, task_ledgers.wired_mem, PAGE_SIZE);
 		OSAddAtomic(+1,  &map->stats.wired_count);
-		pmap_update_pte(pte, 0, INTEL_PTE_WIRED);
+		pmap_update_pte(pte, 0, PTE_WIRED);
 	}
 	else if (!wired && iswired(*pte)) {
 		/*
@@ -1768,7 +1959,7 @@ pmap_change_wiring(
 		assert(map->stats.wired_count >= 1);
 		OSAddAtomic(-1,  &map->stats.wired_count);
 		pmap_ledger_debit(map, task_ledgers.wired_mem, PAGE_SIZE);
-		pmap_update_pte(pte, INTEL_PTE_WIRED, 0);
+		pmap_update_pte(pte, PTE_WIRED, 0);
 	}
 
 	PMAP_UNLOCK(map);
@@ -1833,18 +2024,27 @@ unsigned int
 pmap_query_resident(
 	pmap_t		pmap,
 	addr64_t	s64,
-	addr64_t	e64)
+	addr64_t	e64,
+	unsigned int	*compressed_count_p)
 {
 	pt_entry_t     *pde;
 	pt_entry_t     *spte, *epte;
 	addr64_t        l64;
 	uint64_t        deadline;
 	unsigned int	result;
+	boolean_t	is_ept;
+	unsigned int	compressed_count;
 
 	pmap_intr_assert();
 
-	if (pmap == PMAP_NULL || pmap == kernel_pmap || s64 == e64)
+	if (pmap == PMAP_NULL || pmap == kernel_pmap || s64 == e64) {
+		if (compressed_count_p) {
+			*compressed_count_p = 0;
+		}
 		return 0;
+	}
+
+	is_ept = is_ept_pmap(pmap);
 
 	PMAP_TRACE(PMAP_CODE(PMAP__QUERY_RESIDENT) | DBG_FUNC_START,
 		   pmap,
@@ -1852,6 +2052,7 @@ pmap_query_resident(
 		   (uint32_t) (e64 >> 32), e64);
 
 	result = 0;
+	compressed_count = 0;
 
 	PMAP_LOCK(pmap);
 
@@ -1863,8 +2064,8 @@ pmap_query_resident(
 			l64 = e64;
 		pde = pmap_pde(pmap, s64);
 
-		if (pde && (*pde & INTEL_PTE_VALID)) {
-			if (*pde & INTEL_PTE_PS) {
+		if (pde && (*pde & PTE_VALID_MASK(is_ept))) {
+			if (*pde & PTE_PS) {
 				/* superpage: not supported */
 			} else {
 				spte = pmap_pte(pmap,
@@ -1875,6 +2076,8 @@ pmap_query_resident(
 				for (; spte < epte; spte++) {
 					if (pte_to_pa(*spte) != 0) {
 						result++;
+					} else if (*spte & PTE_COMPRESSED) {
+						compressed_count++;
 					}
 				}
 
@@ -1894,6 +2097,9 @@ pmap_query_resident(
 	PMAP_TRACE(PMAP_CODE(PMAP__QUERY_RESIDENT) | DBG_FUNC_END,
 		   pmap, 0, 0, 0, 0);
 
+	if (compressed_count_p) {
+		*compressed_count_p = compressed_count;
+	}
 	return result;
 }
 

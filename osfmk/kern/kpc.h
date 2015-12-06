@@ -32,6 +32,7 @@
 /* Kernel interfaces to KPC PMC infrastructure. */
 
 #include <machine/machine_kpc.h>
+#include <kern/thread.h> /* thread_* */
 
 /* cross-platform class constants */
 #define KPC_CLASS_FIXED         (0)
@@ -44,19 +45,69 @@
 #define KPC_CLASS_POWER_MASK         (1u << KPC_CLASS_POWER)
 #define KPC_CLASS_RAWPMU_MASK        (1u << KPC_CLASS_RAWPMU)
 
+#define KPC_PMU_ERROR     (0)
+#define KPC_PMU_INTEL_V3  (1)
+#define KPC_PMU_ARM_APPLE (2)
+#define KPC_PMU_INTEL_V2  (3)
+#define KPC_PMU_ARM_V2    (4)
+
 #define KPC_ALL_CPUS (1u << 31)
+
+/* action id setters/getters */
+#define FIXED_ACTIONID(ctr)			(kpc_actionid[(ctr)])
+#define CONFIGURABLE_ACTIONID(ctr)		(kpc_actionid[(ctr) + kpc_fixed_count()])
+
+/* reload counter setters/getters */
+#define FIXED_RELOAD(ctr)			(current_cpu_datap()->cpu_kpc_reload[(ctr)])
+#define FIXED_RELOAD_CPU(cpu, ctr)		(cpu_datap(cpu)->cpu_kpc_reload[(ctr)])
+#define CONFIGURABLE_RELOAD(ctr)		(current_cpu_datap()->cpu_kpc_reload[(ctr) + kpc_fixed_count()])
+#define CONFIGURABLE_RELOAD_CPU(cpu, ctr)	(cpu_datap(cpu)->cpu_kpc_reload[(ctr) + kpc_fixed_count()])
+
+/* shadow counter setters/getters */
+#define FIXED_SHADOW(ctr)			(current_cpu_datap()->cpu_kpc_shadow[(ctr)])
+#define FIXED_SHADOW_CPU(cpu, ctr)		(cpu_datap(cpu)->cpu_kpc_shadow[(ctr)])
+#define CONFIGURABLE_SHADOW(ctr) 		(current_cpu_datap()->cpu_kpc_shadow[(ctr) + kpc_fixed_count()])
+#define CONFIGURABLE_SHADOW_CPU(cpu, ctr) 	(cpu_datap(cpu)->cpu_kpc_shadow[(ctr) + kpc_fixed_count()])
+
+/**
+ * Callback for notification when PMCs are acquired/released by a task. The
+ * argument is equal to TRUE if the Power Manager (PM) can use its reserved PMCs.
+ * Otherwise, the argument is equal to FALSE.
+ */
+typedef void (*kpc_pm_handler_t)(boolean_t);
+
+/*
+ * Register a CPU to kpc and allocate its buffers.
+ *
+ * @param cpu_data
+ * CPU data associated to the CPU being registered.
+ *
+ * @return
+ * TRUE if buffers are correctly allocated, FALSE otherwise.
+ */
+struct cpu_data;
+extern boolean_t kpc_register_cpu(struct cpu_data *cpu_data);
 
 /* bootstrap */
 extern void kpc_init(void);
 
+/* common initialization */
+extern void kpc_common_init(void);
+
 /* Architecture specific initialisation */
 extern void kpc_arch_init(void);
+
+/* Thread counting initialization */
+extern void kpc_thread_init(void);
 
 /* Get the bitmask of available classes */
 extern uint32_t kpc_get_classes(void);
 
 /* Get the bitmask of currently running counter classes  */
 extern uint32_t kpc_get_running(void);
+
+/* Get the version of KPC that's being run */
+extern int kpc_get_pmu_version(void);
 
 /* Set the bitmask of currently running counter classes. Specify
  * classes = 0 to stop counters
@@ -107,9 +158,9 @@ extern int kpc_threads_counting;
 
 /* AST callback for KPC */
 extern void kpc_thread_ast_handler( thread_t thread );
-	
+
 /* context switch accounting between two threads */
-extern void kpc_switch_context( thread_t old, thread_t new );
+extern void kpc_switch_context( thread_t old_thread, thread_t new_thread );
 
 /* acquire/release the counters used by the Power Manager */
 extern int kpc_force_all_ctrs( task_t task, int val );
@@ -125,11 +176,47 @@ extern int kpc_get_whitelist_disabled( void );
 extern int kpc_disable_whitelist( int val );
 
 /*
- * Allow the Power Manager to register for KPC notification when the counters
- * are acquired/released by a task. The argument is equal to true if the Power
- * Manager can use the counters, otherwise it is equal to false.
+ * Register the Power Manager as a PMCs user.
+ *
+ * This is a deprecated function used by old Power Managers, new Power Managers
+ * should use the @em kpc_reserve_pm_counters() function. This function actually
+ * calls @em kpc_reserve_pm_counters() with the following arguments:
+ * 	- handler	= handler
+ * 	- pmc_mask	= 0x83
+ * 	- custom_config	= TRUE
+ *
+ * See @em kpc_reserve_pm_counters() for more details about the return value.
  */
 extern boolean_t kpc_register_pm_handler(void (*handler)(boolean_t));
+
+/*
+ * Register the Power Manager as a PMCs user.
+ *
+ * @param handler
+ * Notification callback to use when PMCs are acquired/released by a task.
+ *
+ * @param pmc_mask
+ * Bitmask of the configurable PMCs used by the Power Manager. The number of bits
+ * set must less or equal than the number of configurable counters
+ * available on the SoC.
+ *
+ * @param custom_config
+ * If custom_config=TRUE, the legacy sharing mode is enabled, otherwise the
+ * Modern Sharing mode is enabled. These modes are explained in more details in
+ * the kperf documentation.
+ *
+ * @return
+ * FALSE if a task has acquired all the PMCs, otherwise TRUE and the Power
+ * Manager can start using the reserved PMCs.
+ */
+extern boolean_t kpc_reserve_pm_counters(uint64_t pmc_mask, kpc_pm_handler_t handler,
+                                         boolean_t custom_config);
+
+/*
+ * Unregister the Power Manager as a PMCs user, and release the previously
+ * reserved counters.
+ */
+extern void kpc_release_pm_counters(void);
 
 /*
  * Is the PMU used by both the power manager and userspace?
@@ -148,36 +235,76 @@ extern boolean_t kpc_multiple_clients(void);
  */
 extern boolean_t kpc_controls_fixed_counters(void);
 
+/*
+ * Is kpc controlling a specific PMC ?
+ */
+extern boolean_t kpc_controls_counter(uint32_t ctr);
+
+
 extern void kpc_idle(void);
 extern void kpc_idle_exit(void);
 
 
-/* KPC PRIVATE */
+/*
+ * KPC PRIVATE
+ */
+
 extern uint32_t kpc_actionid[KPC_MAX_COUNTERS];
-/* mp operations */
-struct kpc_config_remote
-{
+
+/* handler for mp operations */
+struct kpc_config_remote {
 	uint32_t classes;
 	kpc_config_t *configv;
+	uint64_t pmc_mask;
 };
 
+/* handler for mp operations */
+struct kpc_running_remote {
+	uint32_t	classes;		/* classes to run */
+	uint64_t	cfg_target_mask;	/* configurable counters selected */
+	uint64_t	cfg_state_mask;		/* configurable counters new state */
+};
+
+/* handler for mp operations */
+struct kpc_get_counters_remote {
+	uint32_t classes;
+	uint32_t nb_counters;
+	uint32_t buf_stride;
+	uint64_t *buf;
+};
+
+extern int kpc_get_all_cpus_counters(uint32_t classes, int *curcpu, uint64_t *buf);
+extern int kpc_get_curcpu_counters(uint32_t classes, int *curcpu, uint64_t *buf);
 extern int kpc_get_fixed_counters(uint64_t *counterv);
-extern int kpc_get_configurable_counters(uint64_t *counterv);
+extern int kpc_get_configurable_counters(uint64_t *counterv, uint64_t pmc_mask);
 extern boolean_t kpc_is_running_fixed(void);
-extern boolean_t kpc_is_running_configurable(void);
+extern boolean_t kpc_is_running_configurable(uint64_t pmc_mask);
 extern uint32_t kpc_fixed_count(void);
 extern uint32_t kpc_configurable_count(void);
 extern uint32_t kpc_fixed_config_count(void);
-extern uint32_t kpc_configurable_config_count(void);
+extern uint32_t kpc_configurable_config_count(uint64_t pmc_mask);
 extern uint32_t kpc_rawpmu_config_count(void);
 extern int kpc_get_fixed_config(kpc_config_t *configv);
-extern int kpc_get_configurable_config(kpc_config_t *configv);
+extern int kpc_get_configurable_config(kpc_config_t *configv, uint64_t pmc_mask);
 extern int kpc_get_rawpmu_config(kpc_config_t *configv);
 extern uint64_t kpc_fixed_max(void);
 extern uint64_t kpc_configurable_max(void);
 extern int kpc_set_config_arch(struct kpc_config_remote *mp_config);
 extern int kpc_set_period_arch(struct kpc_config_remote *mp_config);
 extern void kpc_sample_kperf(uint32_t actionid);
+extern int kpc_set_running_arch(struct kpc_running_remote *mp_config);
+
+
+/*
+ * Helpers
+ */
+
+/* count the number of bits set */
+extern uint8_t kpc_popcount(uint64_t value);
+
+/* for a set of classes, retrieve the configurable PMCs mask */
+extern uint64_t kpc_get_configurable_pmc_mask(uint32_t classes);
+
 
 /* Interface for kexts to publish a kpc interface */
 struct kpc_driver

@@ -240,6 +240,8 @@ def _PT_Step(paddr, index, verbose_level = vSCRIPT):
             out_string += " invalid"
             pt_paddr = 0
             pt_valid = False
+            if entry & (0x1 << 62):
+                out_string += " compressed"
             #Stop decoding other bits
             entry = 0
         if entry & (0x1 << 1):
@@ -281,10 +283,100 @@ def _PT_Step(paddr, index, verbose_level = vSCRIPT):
     print out_string
     return (pt_paddr, pt_valid, pt_large)
 
+def _PT_StepEPT(paddr, index, verbose_level = vSCRIPT):
+    """
+     Step to lower-level page table and print attributes for EPT pmap
+       paddr: current page table entry physical address
+       index: current page table entry index (0..511)
+       verbose_level:    vHUMAN: print nothing
+                         vSCRIPT: print basic information
+                         vDETAIL: print basic information and hex table dump
+     returns: (pt_paddr, pt_valid, pt_large)
+       pt_paddr: next level page table entry physical address
+                      or null if invalid
+       pt_valid: 1 if $kgm_pt_paddr is valid, 0 if the walk
+                      should be aborted
+       pt_large: 1 if kgm_pt_paddr is a page frame address
+                      of a large page and not another page table entry
+    """
+    entry_addr = paddr + (8 * index)
+    entry = ReadPhysInt(entry_addr, 64, xnudefines.lcpu_self )
+    out_string = ''
+    if verbose_level >= vDETAIL:
+        for pte_loop in range(0, 512):
+            paddr_tmp = paddr + (8 * pte_loop)
+            out_string += "{0: <#020x}:\t {1: <#020x}\n".format(paddr_tmp, ReadPhysInt(paddr_tmp, 64, xnudefines.lcpu_self))
+    paddr_mask = ~((0xfff<<52) | 0xfff)
+    paddr_large_mask =  ~((0xfff<<52) | 0x1fffff)
+    pt_valid = False
+    pt_large = False
+    pt_paddr = 0
+    if verbose_level < vSCRIPT:
+        if entry & 0x7 :
+            pt_valid = True
+            pt_large = False
+            pt_paddr = entry & paddr_mask
+            if entry & (0x1 <<7):
+                pt_large = True
+                pt_paddr = entry & paddr_large_mask
+    else:
+        out_string+= "{0: <#020x}:\n\t{1:#020x}\n\t".format(entry_addr, entry)
+        if entry & 0x7:
+            out_string += "valid"
+            pt_paddr = entry & paddr_mask
+            pt_valid = True
+        else:
+            out_string += "invalid"
+            pt_paddr = 0
+            pt_valid = False
+            if entry & (0x1 << 62):
+                out_string += " compressed"
+            #Stop decoding other bits
+            entry = 0
+        if entry & 0x1:
+            out_string += " readable"
+        else:
+            out_string += " no read"
+        if entry & (0x1 << 1):
+            out_string += " writable"
+        else:
+            out_string += " no write"
 
+        if entry & (0x1 << 2):
+            out_string += " executable"
+        else:
+            out_string += " no exec"
 
+        ctype = entry & 0x38
+        if ctype == 0x30:
+            out_string += " cache-WB"
+        elif ctype == 0x28:
+            out_string += " cache-WP"
+        elif ctype == 0x20:
+            out_string += " cache-WT"
+        elif ctype == 0x8:
+            out_string += " cache-WC"
+        else:
+            out_string += " cache-NC"
 
-def _PmapL4Walk(pmap_addr_val,vaddr, verbose_level = vSCRIPT):
+        if (entry & 0x40) == 0x40:
+            out_string += " Ignore-PTA"
+
+        if (entry & 0x100) == 0x100:
+            out_string += " accessed"
+
+        if (entry & 0x200) == 0x200:
+            out_string += " dirty"
+
+        if entry & (0x1 << 7):
+            out_string += " large"
+            pt_large = True
+        else:
+            pt_large = False
+    print out_string
+    return (pt_paddr, pt_valid, pt_large)
+
+def _PmapL4Walk(pmap_addr_val,vaddr, ept_pmap, verbose_level = vSCRIPT):
     """ Walk the l4 pmap entry.
         params: pmap_addr_val - core.value representing kernel data of type pmap_addr_t
         vaddr : int - virtual address to walk
@@ -300,28 +392,40 @@ def _PmapL4Walk(pmap_addr_val,vaddr, verbose_level = vSCRIPT):
         pframe_offset = vaddr & 0x7fffffffff
         if verbose_level > vHUMAN :
             print "pml4 (index {0:d}):".format(pt_index)
-        (pt_paddr, pt_valid, pt_large) = _PT_Step(pt_paddr, pt_index, verbose_level)
+        if not(ept_pmap):
+            (pt_paddr, pt_valid, pt_large) = _PT_Step(pt_paddr, pt_index, verbose_level)
+        else:
+            (pt_paddr, pt_valid, pt_large) = _PT_StepEPT(pt_paddr, pt_index, verbose_level)
     if pt_valid:
         # Lookup bits 38:30 of the linear address in PDPT
         pt_index = (vaddr >> 30) & 0x1ff
         pframe_offset = vaddr & 0x3fffffff
         if verbose_level > vHUMAN:
             print "pdpt (index {0:d}):".format(pt_index)
-        (pt_paddr, pt_valid, pt_large) = _PT_Step(pt_paddr, pt_index, verbose_level)
+        if not(ept_pmap):
+            (pt_paddr, pt_valid, pt_large) = _PT_Step(pt_paddr, pt_index, verbose_level)
+        else:
+            (pt_paddr, pt_valid, pt_large) = _PT_StepEPT(pt_paddr, pt_index, verbose_level)
     if pt_valid and not pt_large:
         #Lookup bits 29:21 of the linear address in PDPT
         pt_index = (vaddr >> 21) & 0x1ff
         pframe_offset = vaddr & 0x1fffff
         if verbose_level > vHUMAN:
             print "pdt (index {0:d}):".format(pt_index)
-        (pt_paddr, pt_valid, pt_large) = _PT_Step(pt_paddr, pt_index, verbose_level)
+        if not(ept_pmap):
+            (pt_paddr, pt_valid, pt_large) = _PT_Step(pt_paddr, pt_index, verbose_level)
+        else:
+            (pt_paddr, pt_valid, pt_large) = _PT_StepEPT(pt_paddr, pt_index, verbose_level)
     if pt_valid and not pt_large:
         #Lookup bits 20:21 of linear address in PT
         pt_index = (vaddr >> 12) & 0x1ff
         pframe_offset = vaddr & 0xfff
         if verbose_level > vHUMAN:
             print "pt (index {0:d}):".format(pt_index)
-        (pt_paddr, pt_valid, pt_large) = _PT_Step(pt_paddr, pt_index, verbose_level)
+        if not(ept_pmap):
+            (pt_paddr, pt_valid, pt_large) = _PT_Step(pt_paddr, pt_index, verbose_level)
+        else:
+            (pt_paddr, pt_valid, pt_large) = _PT_StepEPT(pt_paddr, pt_index, verbose_level)
     paddr = 0
     paddr_isvalid = False
     if pt_valid:
@@ -528,12 +632,19 @@ def PmapWalkARM(pmap, vaddr, verbose_level = vHUMAN):
 
     return paddr
 
-def PmapWalkX86_64(pmapval, vaddr):
+def PmapWalkX86_64(pmapval, vaddr, verbose_level = vSCRIPT):
     """
         params: pmapval - core.value representing pmap_t in kernel
         vaddr:  int     - int representing virtual address to walk
     """
-    return _PmapL4Walk(pmapval.pm_cr3, vaddr, config['verbosity'])
+    if pmapval.pm_cr3 != 0:
+        if verbose_level > vHUMAN:
+            print "Using normal Intel PMAP from pm_cr3\n"
+        return _PmapL4Walk(pmapval.pm_cr3, vaddr, 0, config['verbosity'])
+    else:
+        if verbose_level > vHUMAN:
+            print "Using EPT pmap from pm_eptp\n"
+        return _PmapL4Walk(pmapval.pm_eptp, vaddr, 1, config['verbosity'])
 
 def assert_64bit(val):
     assert(val < 2**64)
@@ -543,24 +654,24 @@ ARM64_VMADDR_BITS = 48
 
 def PmapBlockOffsetMaskARM64(level):
     assert level >= 1 and level <= 3
-    page_size = kern.globals.page_size
+    page_size = kern.globals.arm_hardware_page_size
     ttentries = (page_size / ARM64_TTE_SIZE)
     return page_size * (ttentries ** (3 - level)) - 1
 
 def PmapBlockBaseMaskARM64(level):
     assert level >= 1 and level <= 3
-    page_size = kern.globals.page_size
+    page_size = kern.globals.arm_hardware_page_size
     return ((1 << ARM64_VMADDR_BITS) - 1) & ~PmapBlockOffsetMaskARM64(level)
 
 def PmapIndexMaskARM64(level):
     assert level >= 1 and level <= 3
-    page_size = kern.globals.page_size
+    page_size = kern.globals.arm_hardware_page_size
     ttentries = (page_size / ARM64_TTE_SIZE)
     return page_size * (ttentries ** (3 - level) * (ttentries - 1))
 
 def PmapIndexDivideARM64(level):
     assert level >= 1 and level <= 3
-    page_size = kern.globals.page_size
+    page_size = kern.globals.arm_hardware_page_size
     ttentries = (page_size / ARM64_TTE_SIZE)
     return page_size * (ttentries ** (3 - level))
 
@@ -603,7 +714,7 @@ def PmapDecodeTTEARM64(tte, level):
 def PmapWalkARM64(pmap, vaddr, verbose_level = vHUMAN):
     assert(type(pmap) == core.cvalue.value)
     assert(type(vaddr) in (long, int))
-    page_size = kern.globals.page_size
+    page_size = kern.globals.arm_hardware_page_size
     page_offset_mask = (page_size - 1)
     page_base_mask = ((1 << ARM64_VMADDR_BITS) - 1) & (~page_offset_mask)
 
@@ -699,7 +810,7 @@ def PmapWalkARM64(pmap, vaddr, verbose_level = vHUMAN):
 
 def PmapWalk(pmap, vaddr, verbose_level = vHUMAN):
     if kern.arch == 'x86_64':
-        return PmapWalkX86_64(pmap, vaddr)
+        return PmapWalkX86_64(pmap, vaddr, verbose_level)
     elif kern.arch == 'arm':
         return PmapWalkARM(pmap, vaddr, verbose_level)
     elif kern.arch == 'arm64':
@@ -710,7 +821,7 @@ def PmapWalk(pmap, vaddr, verbose_level = vHUMAN):
 @lldb_command('pmap_walk')
 def PmapWalkHelper(cmd_args=None):
     """ Perform a page-table walk in <pmap> for <virtual_address>.
-        Syntax: (lldb) pmap_walk <pmap> <virtual_address> [-v]
+        Syntax: (lldb) pmap_walk <pmap> <virtual_address> [-v] [-e]
             Multiple -v's can be specified for increased verbosity
     """
     if cmd_args == None or len(cmd_args) < 2:

@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)connect.2	8.1 (Berkeley) 6/4/93
 .\"
-.Dd June 4, 1993
+.Dd March 18, 2015
 .Dt CONNECT 2
 .Os BSD 4.2
 .Sh NAME
@@ -74,7 +74,9 @@ only once; datagram sockets may use
 .Fn connect
 multiple times to change their association.
 Datagram sockets may dissolve the association
-by connecting to an invalid address, such as a null address 
+by calling
+.Xr disconnectx 2 ,
+or by connecting to an invalid address, such as a null address
 or an address with 
 the address family set to 
 .Dv AF_UNSPEC 
@@ -220,6 +222,8 @@ The include file
 is necessary.
 .Sh SEE ALSO
 .Xr accept 2 ,
+.Xr connectx 2 ,
+.Xr disconnectx 2 ,
 .Xr getsockname 2 ,
 .Xr select 2 ,
 .Xr socket 2 ,

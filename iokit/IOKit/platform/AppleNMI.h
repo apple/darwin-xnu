@@ -60,12 +60,12 @@ private:
 
 public:
   IOService *rootDomain;
-  virtual bool start(IOService *provider);
+  virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
   virtual IOReturn initNMI(IOInterruptController *parentController, OSData *parentSource);
   virtual IOReturn handleInterrupt(void *refCon, IOService *nub, int source);
 
   // Power handling methods:
-  virtual IOReturn powerStateWillChangeTo(IOPMPowerFlags, unsigned long, IOService*);
+  virtual IOReturn powerStateWillChangeTo(IOPMPowerFlags, unsigned long, IOService*) APPLE_KEXT_OVERRIDE;
 
   OSMetaClassDeclareReservedUnused(AppleNMI,  0);
   OSMetaClassDeclareReservedUnused(AppleNMI,  1);

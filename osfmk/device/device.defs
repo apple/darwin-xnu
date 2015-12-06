@@ -92,6 +92,7 @@ type reply_port_t = MACH_MSG_TYPE_MAKE_SEND_ONCE | polymorphic
 
 type io_name_t            = c_string[*:128];
 type io_string_t          = c_string[*:512];
+type io_string_inband_t   = c_string[*:4096];
 type io_struct_inband_t   = array[*:4096] of char;
 type io_buf_ptr_t	  = ^array[] of MACH_MSG_TYPE_INTEGER_8;
 type NDR_record_t         = struct[8] of char;
@@ -786,6 +787,25 @@ routine FUNC_NAME(io_service_add_notification_bin)(
 	);
 #else
 skip;
+#endif
+
+#if !IOKITSIMD
+
+routine io_registry_entry_get_path_ool(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	out path		: io_string_inband_t;
+	out path_ool		: io_buf_ptr_t, physicalcopy
+	);
+
+routine io_registry_entry_from_path_ool(
+	    master_port		: mach_port_t;
+	in  path                : io_string_inband_t;
+	in  path_ool		: io_buf_ptr_t, physicalcopy;
+        out result		: kern_return_t;
+	out registry_entry	: io_object_t
+	);
+
 #endif
 
 #endif /* IOKIT */

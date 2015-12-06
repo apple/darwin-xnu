@@ -62,7 +62,7 @@ event_t	mapping_replenish_event, pmap_user_pv_throttle_event;
 uint64_t pmap_pv_throttle_stat, pmap_pv_throttled_waiters;
 
 unsigned int pmap_cache_attributes(ppnum_t pn) {
-	if (pmap_get_cache_attributes(pn) & INTEL_PTE_NCACHE)
+	if (pmap_get_cache_attributes(pn, FALSE) & INTEL_PTE_NCACHE)
 	        return (VM_WIMG_IO);
 	else
 		return (VM_WIMG_COPYBACK);
@@ -108,28 +108,57 @@ void	pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr) {
 	}
 }
 
-unsigned	pmap_get_cache_attributes(ppnum_t pn) {
+unsigned	pmap_get_cache_attributes(ppnum_t pn, boolean_t is_ept) {
 	if (last_managed_page == 0)
 		return 0;
 
-	if (!IS_MANAGED_PAGE(ppn_to_pai(pn))) {
-	    return INTEL_PTE_NCACHE;
-	}
+	if (!IS_MANAGED_PAGE(ppn_to_pai(pn)))
+	    return PTE_NCACHE(is_ept);
 
 	/*
 	 * The cache attributes are read locklessly for efficiency.
 	 */
 	unsigned int attr = pmap_phys_attributes[ppn_to_pai(pn)];
 	unsigned int template = 0;
-	
-	if (attr & PHYS_PTA)
+
+	/*
+	 * The PTA bit is currently unsupported for EPT PTEs.
+	 */
+	if ((attr & PHYS_PTA) && !is_ept)
 		template |= INTEL_PTE_PTA;
+
+	/*
+	 * If the page isn't marked as NCACHE, the default for EPT entries
+	 * is WB.
+	 */
 	if (attr & PHYS_NCACHE)
-		template |= INTEL_PTE_NCACHE;
+		template |= PTE_NCACHE(is_ept);
+	else if (is_ept)
+		template |= INTEL_EPT_WB;
+
 	return template;
 }
 
+boolean_t 
+pmap_has_managed_page(ppnum_t first, ppnum_t last)
+{
+	ppnum_t   pn;
+    boolean_t result;
 
+    assert(last_managed_page);
+    assert(first <= last);
+
+    for (result = FALSE, pn = first; 
+    	!result 
+    	  && (pn <= last)
+    	  && (pn <= last_managed_page); 
+    	 pn++)
+    {
+    	result = (0 != (pmap_phys_attributes[pn] & PHYS_MANAGED));
+    }
+
+	return (result);
+}
 
 boolean_t
 pmap_is_noencrypt(ppnum_t pn)

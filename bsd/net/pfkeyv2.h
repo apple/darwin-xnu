@@ -106,7 +106,8 @@ you leave this credit intact on any copies of this file.
 #define SADB_GETSASTAT    23
 #define SADB_X_SPDENABLE  24	/* by policy id */
 #define SADB_X_SPDDISABLE 25	/* by policy id */
-#define SADB_MAX          25
+#define SADB_MIGRATE      26
+#define SADB_MAX          26
 
 struct sadb_msg {
   u_int8_t sadb_msg_version;
@@ -143,7 +144,11 @@ struct sadb_sa_2 {
 		u_int16_t		sadb_reserved0;
 		u_int16_t		sadb_sa_natt_interval;
 	};
-	u_int32_t		sadb_reserved1;
+
+	union {
+		u_int32_t		sadb_reserved1;
+		u_int16_t		sadb_sa_natt_offload_interval;
+	};
 };
 #endif /* PRIVATE */
 
@@ -376,7 +381,10 @@ struct sadb_sastat {
 #define SADB_X_EXT_ADDR_RANGE_SRC_END   24
 #define SADB_X_EXT_ADDR_RANGE_DST_START 25
 #define SADB_X_EXT_ADDR_RANGE_DST_END   26
-#define SADB_EXT_MAX                  26
+#define SADB_EXT_MIGRATE_ADDRESS_SRC  27
+#define SADB_EXT_MIGRATE_ADDRESS_DST  28
+#define SADB_X_EXT_MIGRATE_IPSECIF    29
+#define SADB_EXT_MAX                  29
 
 #define SADB_SATYPE_UNSPEC	0
 #define SADB_SATYPE_AH		2
@@ -423,6 +431,7 @@ struct sadb_sastat {
 #define SADB_X_EALG_RIJNDAELCBC	12
 #define SADB_X_EALG_AESCBC      12
 #define SADB_X_EALG_AES		12
+#define SADB_X_EALG_AES_GCM     13
 /* private allocations should use 249-255 (RFC2407) */
 
 #if 1	/*nonstandard */
@@ -467,6 +476,10 @@ struct sadb_sastat {
 #define SADB_X_EXT_PUNT_RX_KEEPALIVE  0x4000
 #define SADB_X_EXT_NATT_KEEPALIVE_OFFLOAD  0x8000
 #endif /* PRIVATE */	
+
+#ifdef PRIVATE
+#define NATT_KEEPALIVE_OFFLOAD_INTERVAL	0x1
+#endif
 
 #if 1
 #define SADB_X_EXT_RAWCPI	0x0080	/* use well known CPI (IPComp) */

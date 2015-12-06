@@ -26,6 +26,7 @@
 
 #include <spawn.h>
 #include <sys/cdefs.h>
+#include <sys/types.h>
 #include <Availability.h>
 #include <TargetConditionals.h>
 
@@ -48,9 +49,12 @@ int	posix_spawnattr_set_importancewatch_port_np(posix_spawnattr_t * __restrict a
 int	posix_spawnattr_getmacpolicyinfo_np(const posix_spawnattr_t * __restrict, const char *, void **, size_t *) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 int	posix_spawnattr_setmacpolicyinfo_np(posix_spawnattr_t * __restrict, const char *, void *, size_t) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 
-int	posix_spawnattr_setcoalition_np(const posix_spawnattr_t * __restrict, uint64_t) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
+int	posix_spawnattr_setcoalition_np(const posix_spawnattr_t * __restrict, uint64_t, int, int) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
 
 int     posix_spawnattr_set_qos_clamp_np(const posix_spawnattr_t * __restrict, uint64_t) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
 int     posix_spawnattr_get_qos_clamp_np(const posix_spawnattr_t * __restrict, uint64_t * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
+
+int     posix_spawnattr_set_darwin_role_np(const posix_spawnattr_t * __restrict, uint64_t) __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
+int     posix_spawnattr_get_darwin_role_np(const posix_spawnattr_t * __restrict, uint64_t * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
 
 #endif /* !defined _SPAWN_PRIVATE_H_*/

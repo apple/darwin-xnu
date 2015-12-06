@@ -38,6 +38,8 @@
 #include <mach/mach_host.h>		/* for host_info() */
 #include <kern/ledger.h>
 
+#include <i386/misc_protos.h>
+
 #include <default_pager/default_pager_alerts.h>
 #include <default_pager/default_pager_object_server.h>
 
@@ -50,11 +52,6 @@
  * the boot-arg & device-tree code.
  */
 
-extern ipc_port_t min_pages_trigger_port;
-extern lck_mtx_t paging_segments_lock;
-#define PSL_LOCK()		lck_mtx_lock(&paging_segments_lock)
-#define PSL_UNLOCK()	lck_mtx_unlock(&paging_segments_lock)
-
 
 int		vm_compressor_mode = VM_PAGER_COMPRESSOR_WITH_SWAP;
 int		vm_scale = 16;
@@ -62,36 +59,46 @@ int		vm_scale = 16;
 
 int		vm_compressor_is_active = 0;
 int		vm_compression_limit = 0;
+int		vm_compressor_available = 0;
 
 extern boolean_t vm_swap_up;
 extern void	vm_pageout_io_throttle(void);
+extern int	not_in_kdp;
 
 #if CHECKSUM_THE_DATA || CHECKSUM_THE_SWAP || CHECKSUM_THE_COMPRESSED_DATA
 extern unsigned int hash_string(char *cp, int len);
 #endif
 
-
-struct c_slot {
-	uint64_t	c_offset:C_SEG_OFFSET_BITS,
-		        c_size:12,
-		        c_packed_ptr:36;
-#if CHECKSUM_THE_DATA
-	unsigned int	c_hash_data;
-#endif
-#if CHECKSUM_THE_COMPRESSED_DATA
-	unsigned int	c_hash_compressed_data;
-#endif
-
-};
-
 #define UNPACK_C_SIZE(cs)	((cs->c_size == (PAGE_SIZE-1)) ? PAGE_SIZE : cs->c_size)
 #define PACK_C_SIZE(cs, size)	(cs->c_size = ((size == PAGE_SIZE) ? PAGE_SIZE - 1 : size))
+
+
+struct c_sv_hash_entry {
+	union {
+		struct	{
+			uint32_t	c_sv_he_ref;
+			uint32_t	c_sv_he_data;
+		} c_sv_he;
+		uint64_t	c_sv_he_record;
+
+	} c_sv_he_un;	
+};
+
+#define	he_ref	c_sv_he_un.c_sv_he.c_sv_he_ref
+#define	he_data	c_sv_he_un.c_sv_he.c_sv_he_data
+#define	he_record c_sv_he_un.c_sv_he_record
+
+#define C_SV_HASH_MAX_MISS	32
+#define C_SV_HASH_SIZE		((1 << 10))
+#define C_SV_HASH_MASK		((1 << 10) - 1)
+#define C_SV_CSEG_ID		((1 << 22) - 1)
 
 
 struct  c_slot_mapping {
         uint32_t        s_cseg:22, 	/* segment number + 1 */
 			s_cindx:10;	/* index in the segment */
 };
+#define C_SLOT_MAX_INDEX	(1 << 10)
 
 typedef struct c_slot_mapping *c_slot_mapping_t;
 
@@ -108,6 +115,7 @@ union c_segu {
 
 
 uint32_t	c_segment_count = 0;
+uint32_t	c_segment_count_max = 0;
 
 uint64_t	c_generation_id = 0;
 uint64_t	c_generation_id_flush_barrier;
@@ -119,32 +127,59 @@ boolean_t	hibernate_no_swapspace = FALSE;
 clock_sec_t	hibernate_flushing_deadline = 0;
 
 
-#if TRACK_BAD_C_SEGMENTS
-queue_head_t	c_bad_list_head;
-uint32_t	c_bad_count = 0;
+#if RECORD_THE_COMPRESSED_DATA
+char	*c_compressed_record_sbuf;
+char	*c_compressed_record_ebuf;
+char	*c_compressed_record_cptr;
 #endif
+
 
 queue_head_t	c_age_list_head;
 queue_head_t	c_swapout_list_head;
 queue_head_t	c_swappedin_list_head;
 queue_head_t	c_swappedout_list_head;
 queue_head_t	c_swappedout_sparse_list_head;
+queue_head_t	c_major_list_head;
+queue_head_t	c_filling_list_head;
+queue_head_t	c_bad_list_head;
 
 uint32_t	c_age_count = 0;
 uint32_t	c_swapout_count = 0;
 uint32_t	c_swappedin_count = 0;
 uint32_t	c_swappedout_count = 0;
 uint32_t	c_swappedout_sparse_count = 0;
+uint32_t	c_major_count = 0;
+uint32_t	c_filling_count = 0;
+uint32_t	c_empty_count = 0;
+uint32_t	c_bad_count = 0;
+
 
 queue_head_t	c_minor_list_head;
 uint32_t	c_minor_count = 0;
 
+int		c_overage_swapped_count = 0;
+int		c_overage_swapped_limit = 0;
+
+int		c_seg_fixed_array_len;
 union  c_segu	*c_segments;
+vm_offset_t	c_buffers;
+vm_size_t       c_buffers_size;
 caddr_t		c_segments_next_page;
 boolean_t	c_segments_busy;
 uint32_t	c_segments_available;
 uint32_t	c_segments_limit;
 uint32_t	c_segments_nearing_limit;
+
+uint32_t	c_segment_svp_in_hash;
+uint32_t	c_segment_svp_hash_succeeded;
+uint32_t	c_segment_svp_hash_failed;
+uint32_t	c_segment_svp_zero_compressions;
+uint32_t	c_segment_svp_nonzero_compressions;
+uint32_t	c_segment_svp_zero_decompressions;
+uint32_t	c_segment_svp_nonzero_decompressions;
+
+uint32_t	c_segment_noncompressible_pages;
+
 uint32_t	c_segment_pages_compressed;
 uint32_t	c_segment_pages_compressed_limit;
 uint32_t	c_segment_pages_compressed_nearing_limit;
@@ -162,7 +197,6 @@ lck_grp_attr_t	vm_compressor_lck_grp_attr;
 lck_attr_t	vm_compressor_lck_attr;
 lck_grp_t	vm_compressor_lck_grp;
 
-
 #if __i386__ || __x86_64__
 lck_mtx_t	*c_list_lock;
 #else /* __i386__ || __x86_64__ */
@@ -177,7 +211,10 @@ int		c_compressor_swap_trigger = 0;
 
 uint32_t	compressor_cpus;
 char		*compressor_scratch_bufs;
-
+char		*kdp_compressor_scratch_buf;
+char		*kdp_compressor_decompressed_page;
+addr64_t	kdp_compressor_decompressed_page_paddr;
+ppnum_t		kdp_compressor_decompressed_page_ppnum;
 
 clock_sec_t	start_of_sample_period_sec = 0;
 clock_nsec_t	start_of_sample_period_nsec = 0;
@@ -189,6 +226,9 @@ uint32_t	last_eval_decompression_count = 0;
 uint32_t	last_eval_compression_count = 0;
 
 #define		DECOMPRESSION_SAMPLE_MAX_AGE		(60 * 30)
+
+boolean_t	vm_swapout_ripe_segments = FALSE;
+uint32_t	vm_ripe_target_age = (60 * 60 * 48);
 
 uint32_t	swapout_target_age = 0;
 uint32_t	age_of_decompressions_during_sample_period[DECOMPRESSION_SAMPLE_MAX_AGE];
@@ -207,14 +247,18 @@ boolean_t	hibernate_flushing = FALSE;
 int64_t		c_segment_input_bytes __attribute__((aligned(8))) = 0;
 int64_t		c_segment_compressed_bytes __attribute__((aligned(8))) = 0;
 int64_t		compressor_bytes_used __attribute__((aligned(8))) = 0;
-uint64_t	compressor_kvspace_used __attribute__((aligned(8))) = 0;
-uint64_t	compressor_kvwaste_limit = 0;
+
+
+struct c_sv_hash_entry c_segment_sv_hash_table[C_SV_HASH_SIZE]  __attribute__ ((aligned (8)));
+
 
 static boolean_t compressor_needs_to_swap(void);
 static void vm_compressor_swap_trigger_thread(void);
 static void vm_compressor_do_delayed_compactions(boolean_t);
 static void vm_compressor_compact_and_swap(boolean_t);
 static void vm_compressor_age_swapped_in_segments(boolean_t);
+
+static void vm_compressor_take_paging_space_action(void);
 
 boolean_t vm_compressor_low_on_space(void);
 
@@ -230,11 +274,6 @@ void c_seg_need_delayed_compaction(c_segment_t);
 
 void c_seg_move_to_sparse_list(c_segment_t);
 void c_seg_insert_into_q(queue_head_t *, c_segment_t);
-
-boolean_t c_seg_try_free(c_segment_t);
-void	  c_seg_free(c_segment_t);
-void	  c_seg_free_locked(c_segment_t);
-
 
 uint64_t vm_available_memory(void);
 uint64_t vm_compressor_pages_compressed(void);
@@ -298,6 +337,28 @@ vm_wants_task_throttled(task_t task)
 }
 
 
+
+static uint32_t	no_paging_space_action_in_progress = 0;
+extern void memorystatus_send_low_swap_note(void);
+
+static void
+vm_compressor_take_paging_space_action(void)
+{
+	if (no_paging_space_action_in_progress == 0) {
+
+		if (OSCompareAndSwap(0, 1, (UInt32 *)&no_paging_space_action_in_progress)) {
+
+			if (no_paging_space_action()) {
+				memorystatus_send_low_swap_note();
+			}
+
+			no_paging_space_action_in_progress = 0;
+		}
+	}
+}
+
+
+
 void
 vm_compressor_init_locks(void)
 {
@@ -339,6 +400,8 @@ vm_compressor_init(void)
 	thread_t	thread;
 	struct c_slot	cs_dummy;
 	c_slot_t cs  = &cs_dummy;
+	int		c_segment_min_size;
+	int		c_segment_padded_size;
 
 	/*
 	 * ensure that any pointer that gets created from
@@ -382,22 +445,26 @@ vm_compressor_init(void)
 	c_list_lock = lck_spin_alloc_init(&vm_compressor_lck_grp, &vm_compressor_lck_attr);
 #endif /* __i386__ || __x86_64__ */
 
-#if TRACK_BAD_C_SEGMENTS
+
 	queue_init(&c_bad_list_head);
-#endif
 	queue_init(&c_age_list_head);
 	queue_init(&c_minor_list_head);
+	queue_init(&c_major_list_head);
+	queue_init(&c_filling_list_head);
 	queue_init(&c_swapout_list_head);
 	queue_init(&c_swappedin_list_head);
 	queue_init(&c_swappedout_list_head);
 	queue_init(&c_swappedout_sparse_list_head);
 
-	compressor_segment_zone = zinit(sizeof (struct c_segment),
-				      128000 * sizeof (struct c_segment),
-				      8192, "compressor_segment");
+	c_segment_min_size = sizeof(struct c_segment) + (C_SEG_SLOT_VAR_ARRAY_MIN_LEN * sizeof(struct c_slot));
+	
+	for (c_segment_padded_size = 128; c_segment_padded_size < c_segment_min_size; c_segment_padded_size = c_segment_padded_size << 1);
+
+	compressor_segment_zone = zinit(c_segment_padded_size, 128000 * c_segment_padded_size, PAGE_SIZE, "compressor_segment");
 	zone_change(compressor_segment_zone, Z_CALLERACCT, FALSE);
 	zone_change(compressor_segment_zone, Z_NOENCRYPT, TRUE);
 
+	c_seg_fixed_array_len = (c_segment_padded_size - sizeof(struct c_segment)) / sizeof(struct c_slot);
 	
 	c_free_segno_head = -1;
 	c_segments_available = 0;
@@ -425,12 +492,13 @@ vm_compressor_init(void)
 	c_segment_pages_compressed_nearing_limit = (c_segment_pages_compressed_limit * 98) / 100;
 	c_segments_nearing_limit = (c_segments_limit * 98) / 100;
 
-	compressor_kvwaste_limit = (vm_map_max(kernel_map) - vm_map_min(kernel_map)) / 16;
-
 	c_segments_busy = FALSE;
 
-	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&c_segments), (sizeof(union c_segu) * c_segments_limit), 0, KMA_KOBJECT | KMA_VAONLY) != KERN_SUCCESS)
-		panic("vm_compressor_init: kernel_memory_allocate failed\n");
+	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&c_segments), (sizeof(union c_segu) * c_segments_limit), 0, KMA_KOBJECT | KMA_VAONLY | KMA_PERMANENT, VM_KERN_MEMORY_COMPRESSOR) != KERN_SUCCESS)
+		panic("vm_compressor_init: kernel_memory_allocate failed - c_segments\n");
+	c_buffers_size = (vm_size_t)C_SEG_ALLOCSIZE * (vm_size_t)c_segments_limit;
+	if (kernel_memory_allocate(kernel_map, &c_buffers, c_buffers_size, 0, KMA_COMPRESSOR | KMA_VAONLY | KMA_PERMANENT, VM_KERN_MEMORY_COMPRESSOR) != KERN_SUCCESS)
+		panic("vm_compressor_init: kernel_memory_allocate failed - c_buffers\n");
 
 	c_segments_next_page = (caddr_t)c_segments;
 
@@ -443,15 +511,29 @@ vm_compressor_init(void)
 
 		compressor_cpus = hinfo.max_cpus;
 
-		compressor_scratch_bufs = kalloc(compressor_cpus * WKdm_SCRATCH_BUF_SIZE);
+		compressor_scratch_bufs = kalloc_tag(compressor_cpus * WKdm_SCRATCH_BUF_SIZE, VM_KERN_MEMORY_COMPRESSOR);
+
+		kdp_compressor_scratch_buf = kalloc_tag(WKdm_SCRATCH_BUF_SIZE, VM_KERN_MEMORY_COMPRESSOR);
+		kdp_compressor_decompressed_page = kalloc_tag(PAGE_SIZE, VM_KERN_MEMORY_COMPRESSOR);
+		kdp_compressor_decompressed_page_paddr = kvtophys((vm_offset_t)kdp_compressor_decompressed_page);
+		kdp_compressor_decompressed_page_ppnum = (ppnum_t) atop(kdp_compressor_decompressed_page_paddr);
 	}
+#if CONFIG_FREEZE		
+	freezer_compressor_scratch_buf = kalloc_tag(WKdm_SCRATCH_BUF_SIZE, VM_KERN_MEMORY_COMPRESSOR);
+#endif
+
+#if RECORD_THE_COMPRESSED_DATA
+	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)&c_compressed_record_sbuf, (vm_size_t)C_SEG_ALLOCSIZE + (PAGE_SIZE * 2), 0, KMA_KOBJECT, VM_KERN_MEMORY_COMPRESSOR) != KERN_SUCCESS)
+		panic("vm_compressor_init: kernel_memory_allocate failed - c_compressed_record_sbuf\n");
+
+	c_compressed_record_cptr = c_compressed_record_sbuf;
+	c_compressed_record_ebuf = c_compressed_record_sbuf + C_SEG_ALLOCSIZE + (PAGE_SIZE * 2);
+#endif
 
 	if (kernel_thread_start_priority((thread_continue_t)vm_compressor_swap_trigger_thread, NULL,
 					 BASEPRI_PREEMPT - 1, &thread) != KERN_SUCCESS) {
 		panic("vm_compressor_swap_trigger_thread: create failed");
 	}
-	thread->options |= TH_OPT_VMPRIV;
-
 	thread_deallocate(thread);
 
 	assert(default_pager_init_flag == 0);
@@ -459,11 +541,8 @@ vm_compressor_init(void)
 	if (vm_pageout_internal_start() != KERN_SUCCESS) {
 		panic("vm_compressor_init: Failed to start the internal pageout thread.\n");
 	}
-
-	if ((vm_compressor_mode == VM_PAGER_COMPRESSOR_WITH_SWAP) ||
-	    (vm_compressor_mode == VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP)) {
+	if (COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE)
 		vm_compressor_swap_init();
-	}
 
 	if (COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPBACKED)
 		vm_compressor_is_active = 1;
@@ -473,6 +552,7 @@ vm_compressor_init(void)
 #endif /* CONFIG_FREEZE */
 
 	default_pager_init_flag = 1;
+	vm_compressor_available = 1;
 
 	vm_page_reactivate_all_throttled();
 }
@@ -550,7 +630,9 @@ c_seg_need_delayed_compaction(c_segment_t c_seg)
 
 		clear_busy = TRUE;
 	}
-	if (!c_seg->c_on_minorcompact_q && !c_seg->c_ondisk && !c_seg->c_on_swapout_q) {
+	assert(c_seg->c_state != C_IS_FILLING);
+
+	if (!c_seg->c_on_minorcompact_q && !(C_SEG_IS_ONDISK(c_seg))) {
 		queue_enter(&c_minor_list_head, c_seg, c_segment_t, c_list);
 		c_seg->c_on_minorcompact_q = 1;
 		c_minor_count++;
@@ -578,17 +660,7 @@ c_seg_move_to_sparse_list(c_segment_t c_seg)
 		
 		clear_busy = TRUE;
 	}
-	assert(c_seg->c_ondisk);
-	assert(c_seg->c_on_swappedout_q);
-	assert(!c_seg->c_on_swappedout_sparse_q);
-
-	queue_remove(&c_swappedout_list_head, c_seg, c_segment_t, c_age_list);
-	c_seg->c_on_swappedout_q = 0;
-	c_swappedout_count--;
-
-	c_seg_insert_into_q(&c_swappedout_sparse_list_head, c_seg);
-	c_seg->c_on_swappedout_sparse_q = 1;
-	c_swappedout_sparse_count++;
+	c_seg_switch_state(c_seg, C_ON_SWAPPEDOUTSPARSE_Q, FALSE);
 
 	c_seg_moved_to_sparse_list++;
 
@@ -664,6 +736,19 @@ c_seg_do_minor_compaction_and_unlock(c_segment_t c_seg, boolean_t clear_busy, bo
 
 	assert(c_seg->c_busy);
 
+	/*
+	 * check for the case that can occur when we are not swapping
+	 * and this segment has been major compacted in the past
+	 * and moved to the majorcompact q to remove it from further
+	 * consideration... if the occupancy falls too low we need
+	 * to put it back on the age_q so that it will be considered
+	 * in the next major compaction sweep... if we don't do this
+	 * we will eventually run into the c_segments_limit
+	 */
+	if (c_seg->c_state == C_ON_MAJORCOMPACT_Q && C_SEG_SHOULD_MAJORCOMPACT(c_seg)) {
+		
+		c_seg_switch_state(c_seg, C_ON_AGE_Q, FALSE);
+	}
 	if (!c_seg->c_on_minorcompact_q) {
 		if (clear_busy == TRUE)
 			C_SEG_WAKEUP_DONE(c_seg);
@@ -708,47 +793,184 @@ c_seg_wait_on_busy(c_segment_t c_seg)
 }
 
 
-
-int	try_free_succeeded = 0;
-int	try_free_failed = 0;
-
-boolean_t
-c_seg_try_free(c_segment_t c_seg)
+void
+c_seg_switch_state(c_segment_t c_seg, int new_state, boolean_t insert_head)
 {
-	/*
-	 * c_seg is currently on the delayed minor compaction
-	 * or the spapped out sparse queue and we have c_seg locked...
-	 * if we can get the c_list_lock w/o blocking (if we blocked we
-	 * could deadlock because the lock order is c_list_lock then c_seg's lock)
-	 * we'll pull it from the appropriate queue and free it
-	 */
-	if ( !lck_mtx_try_lock_spin_always(c_list_lock)) {
-		/*
-		 * c_list_lock is held, we need to bail
-		 */
-		try_free_failed++;
-		return (FALSE);
+	int	old_state = c_seg->c_state;
+
+#if DEVELOPMENT || DEBUG
+#if __i386__ || __x86_64__
+	if (new_state != C_IS_FILLING)
+		lck_mtx_assert(&c_seg->c_lock, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(c_list_lock, LCK_MTX_ASSERT_OWNED);
+#endif
+#endif
+	switch (old_state) {
+
+	        case C_IS_EMPTY:
+			assert(new_state == C_IS_FILLING || new_state == C_IS_FREE);
+
+			c_empty_count--;
+			break;
+
+	        case C_IS_FILLING:
+			assert(new_state == C_ON_AGE_Q || new_state == C_ON_SWAPOUT_Q);
+
+			queue_remove(&c_filling_list_head, c_seg, c_segment_t, c_age_list);
+			c_filling_count--;
+			break;
+
+	        case C_ON_AGE_Q:
+			assert(new_state == C_ON_SWAPOUT_Q || new_state == C_ON_MAJORCOMPACT_Q ||
+			       new_state == C_IS_FREE);
+
+			queue_remove(&c_age_list_head, c_seg, c_segment_t, c_age_list);
+			c_age_count--;
+			break;
+		
+	        case C_ON_SWAPPEDIN_Q:
+			assert(new_state == C_ON_AGE_Q || new_state == C_IS_FREE);
+
+			queue_remove(&c_swappedin_list_head, c_seg, c_segment_t, c_age_list);
+			c_swappedin_count--;
+			break;
+
+	        case C_ON_SWAPOUT_Q:
+			assert(new_state == C_ON_SWAPPEDOUT_Q || new_state == C_ON_SWAPPEDOUTSPARSE_Q ||
+			       new_state == C_ON_AGE_Q || new_state == C_IS_FREE || new_state == C_IS_EMPTY);
+
+			queue_remove(&c_swapout_list_head, c_seg, c_segment_t, c_age_list);
+			thread_wakeup((event_t)&compaction_swapper_running);
+			c_swapout_count--;
+			break;
+
+	        case C_ON_SWAPPEDOUT_Q:
+			assert(new_state == C_ON_SWAPPEDIN_Q || new_state == C_ON_SWAPPEDOUTSPARSE_Q ||
+			       new_state == C_ON_BAD_Q || new_state == C_IS_EMPTY || new_state == C_IS_FREE);
+
+			queue_remove(&c_swappedout_list_head, c_seg, c_segment_t, c_age_list);
+			c_swappedout_count--;
+			break;
+
+	        case C_ON_SWAPPEDOUTSPARSE_Q:
+			assert(new_state == C_ON_SWAPPEDIN_Q ||
+			       new_state == C_ON_BAD_Q || new_state == C_IS_EMPTY || new_state == C_IS_FREE);
+
+			queue_remove(&c_swappedout_sparse_list_head, c_seg, c_segment_t, c_age_list);
+			c_swappedout_sparse_count--;
+			break;
+
+	        case C_ON_MAJORCOMPACT_Q:
+			assert(new_state == C_ON_AGE_Q || new_state == C_IS_FREE);
+
+			queue_remove(&c_major_list_head, c_seg, c_segment_t, c_age_list);
+			c_major_count--;
+			break;
+
+	        case C_ON_BAD_Q:
+			assert(new_state == C_IS_FREE);
+
+			queue_remove(&c_bad_list_head, c_seg, c_segment_t, c_age_list);
+			c_bad_count--;
+			break;
+
+	        default:
+			panic("c_seg %p has bad c_state = %d\n", c_seg, old_state);
 	}
-	if (c_seg->c_on_minorcompact_q) {
-		queue_remove(&c_minor_list_head, c_seg, c_segment_t, c_list);
-		c_seg->c_on_minorcompact_q = 0;
-		c_minor_count--;
-	} else {
-		assert(c_seg->c_on_swappedout_sparse_q);
 
-		/*
-		 * c_seg_free_locked will remove it from the swappedout sparse list
-		 */
+	switch(new_state) {
+	        case C_IS_FREE:
+			assert(old_state != C_IS_FILLING);
+
+			break;
+
+	        case C_IS_EMPTY:
+			assert(old_state == C_ON_SWAPOUT_Q || old_state == C_ON_SWAPPEDOUT_Q || old_state == C_ON_SWAPPEDOUTSPARSE_Q);
+
+			c_empty_count++;
+			break;
+
+	        case C_IS_FILLING:
+			assert(old_state == C_IS_EMPTY);
+
+			queue_enter(&c_filling_list_head, c_seg, c_segment_t, c_age_list);
+			c_filling_count++;
+			break;
+
+	        case C_ON_AGE_Q:
+			assert(old_state == C_IS_FILLING || old_state == C_ON_SWAPPEDIN_Q ||
+			       old_state == C_ON_MAJORCOMPACT_Q || old_state == C_ON_SWAPOUT_Q);
+
+			if (old_state == C_IS_FILLING)
+				queue_enter(&c_age_list_head, c_seg, c_segment_t, c_age_list);
+			else
+				c_seg_insert_into_q(&c_age_list_head, c_seg);
+			c_age_count++;
+			break;
+		
+	        case C_ON_SWAPPEDIN_Q:
+			assert(c_seg->c_state == C_ON_SWAPPEDOUT_Q || c_seg->c_state == C_ON_SWAPPEDOUTSPARSE_Q);
+
+			if (insert_head == TRUE)
+				queue_enter_first(&c_swappedin_list_head, c_seg, c_segment_t, c_age_list);
+			else
+				queue_enter(&c_swappedin_list_head, c_seg, c_segment_t, c_age_list);
+			c_swappedin_count++;
+			break;
+
+	        case C_ON_SWAPOUT_Q:
+			assert(old_state == C_ON_AGE_Q || old_state == C_IS_FILLING);
+
+			if (insert_head == TRUE)
+				queue_enter_first(&c_swapout_list_head, c_seg, c_segment_t, c_age_list);
+			else
+				queue_enter(&c_swapout_list_head, c_seg, c_segment_t, c_age_list);
+			c_swapout_count++;
+			break;
+
+	        case C_ON_SWAPPEDOUT_Q:
+			assert(c_seg->c_state == C_ON_SWAPOUT_Q);
+
+			if (insert_head == TRUE)
+				queue_enter_first(&c_swappedout_list_head, c_seg, c_segment_t, c_age_list);
+			else
+				queue_enter(&c_swappedout_list_head, c_seg, c_segment_t, c_age_list);
+			c_swappedout_count++;
+			break;
+
+	        case C_ON_SWAPPEDOUTSPARSE_Q:
+			assert(c_seg->c_state == C_ON_SWAPOUT_Q || c_seg->c_state == C_ON_SWAPPEDOUT_Q);
+			
+			c_seg_insert_into_q(&c_swappedout_sparse_list_head, c_seg);
+			c_swappedout_sparse_count++;
+			break;
+
+	        case C_ON_MAJORCOMPACT_Q:
+			assert(c_seg->c_state == C_ON_AGE_Q);
+
+			if (insert_head == TRUE)
+				queue_enter_first(&c_major_list_head, c_seg, c_segment_t, c_age_list);
+			else
+				queue_enter(&c_major_list_head, c_seg, c_segment_t, c_age_list);
+			c_major_count++;
+			break;
+
+	        case C_ON_BAD_Q:
+			assert(c_seg->c_state == C_ON_SWAPPEDOUT_Q || c_seg->c_state == C_ON_SWAPPEDOUTSPARSE_Q);
+
+			if (insert_head == TRUE)
+				queue_enter_first(&c_bad_list_head, c_seg, c_segment_t, c_age_list);
+			else
+				queue_enter(&c_bad_list_head, c_seg, c_segment_t, c_age_list);
+			c_bad_count++;
+			break;
+
+	        default:
+		       panic("c_seg %p requesting bad c_state = %d\n", c_seg, new_state);
 	}
-	if (!c_seg->c_busy_swapping)
-		C_SEG_BUSY(c_seg);
-
-	c_seg_free_locked(c_seg);
-
-	try_free_succeeded++;
-
-	return (TRUE);
+	c_seg->c_state = new_state;
 }
+
 
 
 void
@@ -767,83 +989,66 @@ c_seg_free(c_segment_t c_seg)
 void
 c_seg_free_locked(c_segment_t c_seg)
 {
-	int		segno, i;
+	int		segno;
 	int		pages_populated = 0;
 	int32_t		*c_buffer = NULL;
 	uint64_t	c_swap_handle = 0;
 
+	assert(c_seg->c_busy);
 	assert(!c_seg->c_on_minorcompact_q);
+	assert(!c_seg->c_busy_swapping);
 
-	if (c_seg->c_on_age_q) {
-		queue_remove(&c_age_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_age_q = 0;
-		c_age_count--;
-	} else if (c_seg->c_on_swappedin_q) {
-		queue_remove(&c_swappedin_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_swappedin_q = 0;
-		c_swappedin_count--;
-	} else if (c_seg->c_on_swapout_q) {
-		queue_remove(&c_swapout_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_swapout_q = 0;
-		c_swapout_count--;
-		thread_wakeup((event_t)&compaction_swapper_running);
-	} else if (c_seg->c_on_swappedout_q) {
-		queue_remove(&c_swappedout_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_swappedout_q = 0;
-		c_swappedout_count--;
-	} else if (c_seg->c_on_swappedout_sparse_q) {
-		queue_remove(&c_swappedout_sparse_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_swappedout_sparse_q = 0;
-		c_swappedout_sparse_count--;
-	}
-#if TRACK_BAD_C_SEGMENTS
-	else if (c_seg->c_on_bad_q) {
-		queue_remove(&c_bad_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_bad_q = 0;
-		c_bad_count--;
-	}
-#endif
-	segno = c_seg->c_mysegno;
-	c_segments[segno].c_segno = c_free_segno_head;
-	c_free_segno_head = segno;
-	c_segment_count--;
+	if (c_seg->c_overage_swap == TRUE) {
+		c_overage_swapped_count--;
+		c_seg->c_overage_swap = FALSE;
+	}	
+	if ( !(C_SEG_IS_ONDISK(c_seg)))
+		c_buffer = c_seg->c_store.c_buffer;
+	else
+		c_swap_handle = c_seg->c_store.c_swap_handle;
+
+	c_seg_switch_state(c_seg, C_IS_FREE, FALSE);
 
 	lck_mtx_unlock_always(c_list_lock);
 
-	if (c_seg->c_wanted) {
-		thread_wakeup((event_t) (c_seg));
-		c_seg->c_wanted = 0;
-	}
-	if (c_seg->c_busy_swapping) {
-		c_seg->c_must_free = 1;
-
-		lck_mtx_unlock_always(&c_seg->c_lock);
-		return;
-	}
-	if (c_seg->c_ondisk == 0) {
+	if (c_buffer) {
 		pages_populated = (round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset))) / PAGE_SIZE;
-
-		c_buffer = c_seg->c_store.c_buffer;
 		c_seg->c_store.c_buffer = NULL;
-	} else {
-                /*
-                 * Free swap space on disk.
-		 */
-		c_swap_handle = c_seg->c_store.c_swap_handle;
+	} else
 		c_seg->c_store.c_swap_handle = (uint64_t)-1;
-	}
+
 	lck_mtx_unlock_always(&c_seg->c_lock);
 
 	if (c_buffer) {
 		if (pages_populated)
 			kernel_memory_depopulate(kernel_map, (vm_offset_t) c_buffer, pages_populated * PAGE_SIZE, KMA_COMPRESSOR);
 
-		kmem_free(kernel_map, (vm_offset_t) c_buffer, C_SEG_ALLOCSIZE);
-		OSAddAtomic64(-C_SEG_ALLOCSIZE, &compressor_kvspace_used);
-
-	} else if (c_swap_handle)
+	} else if (c_swap_handle) {
+                /*
+                 * Free swap space on disk.
+		 */
 		vm_swap_free(c_swap_handle);
+	}
+	lck_mtx_lock_spin_always(&c_seg->c_lock);
 
+	C_SEG_WAKEUP_DONE(c_seg);
+	lck_mtx_unlock_always(&c_seg->c_lock);
+
+	segno = c_seg->c_mysegno;
+
+	lck_mtx_lock_spin_always(c_list_lock);
+	/*
+	 * because the c_buffer is now associated with the segno,
+	 * we can't put the segno back on the free list until
+	 * after we have depopulated the c_buffer range, or 
+	 * we run the risk of depopulating a range that is 
+	 * now being used in one of the compressor heads
+	 */
+	c_segments[segno].c_segno = c_free_segno_head;
+	c_free_segno_head = segno;
+	c_segment_count--;
+
+	lck_mtx_unlock_always(c_list_lock);
 
 #if __i386__ || __x86_64__
 	lck_mtx_destroy(&c_seg->c_lock, &vm_compressor_lck_grp);
@@ -851,12 +1056,9 @@ c_seg_free_locked(c_segment_t c_seg)
 	lck_spin_destroy(&c_seg->c_lock, &vm_compressor_lck_grp);
 #endif /* __i386__ || __x86_64__ */
 
-	for (i = 0; i < C_SEG_SLOT_ARRAYS; i++) {
-		if (c_seg->c_slots[i] == 0)
-			break;
+	if (c_seg->c_slot_var_array_len)
+		kfree(c_seg->c_slot_var_array, sizeof(struct c_slot) * c_seg->c_slot_var_array_len);
 
-		kfree((char *)c_seg->c_slots[i], sizeof(struct c_slot) * C_SEG_SLOT_ARRAY_SIZE);
-	}
 	zfree(compressor_segment_zone, c_seg);
 }
 
@@ -1010,6 +1212,45 @@ done:
 }
 
 
+static void
+c_seg_alloc_nextslot(c_segment_t c_seg)
+{
+	struct c_slot	*old_slot_array = NULL;
+	struct c_slot	*new_slot_array = NULL;
+	int		newlen;
+	int		oldlen;
+
+	if (c_seg->c_nextslot < c_seg_fixed_array_len)
+		return;
+
+	if ((c_seg->c_nextslot - c_seg_fixed_array_len) >= c_seg->c_slot_var_array_len) {
+
+		oldlen = c_seg->c_slot_var_array_len;
+		old_slot_array = c_seg->c_slot_var_array;
+
+		if (oldlen == 0)
+			newlen = C_SEG_SLOT_VAR_ARRAY_MIN_LEN;
+		else
+			newlen = oldlen * 2;
+
+		new_slot_array = (struct c_slot *)kalloc(sizeof(struct c_slot) * newlen);
+
+		lck_mtx_lock_spin_always(&c_seg->c_lock);
+
+		if (old_slot_array)
+			memcpy((char *)new_slot_array, (char *)old_slot_array, sizeof(struct c_slot) * oldlen);
+
+		c_seg->c_slot_var_array_len = newlen;
+		c_seg->c_slot_var_array = new_slot_array;
+
+		lck_mtx_unlock_always(&c_seg->c_lock);
+		
+		if (old_slot_array)
+			kfree(old_slot_array, sizeof(struct c_slot) * oldlen);
+	}
+}
+
+
 
 struct {
 	uint64_t asked_permission;
@@ -1018,6 +1259,7 @@ struct {
 	uint64_t moved_bytes;
 	uint64_t wasted_space_in_swapouts;
 	uint64_t count_of_swapouts;
+	uint64_t count_of_freed_segs;
 } c_seg_major_compact_stats;
 
 
@@ -1032,17 +1274,11 @@ c_seg_major_compact_ok(
 
 	c_seg_major_compact_stats.asked_permission++;
 
-	if (c_seg_src->c_filling) {
-		/*
-		 * we're at or near the head... don't compact
-		 */
-		return (FALSE);
-	}
 	if (c_seg_src->c_bytes_used >= C_MAJOR_COMPACTION_SIZE_APPROPRIATE &&
 	    c_seg_dst->c_bytes_used >= C_MAJOR_COMPACTION_SIZE_APPROPRIATE)
 		return (FALSE);
 
-	if (c_seg_dst->c_nextoffset >= C_SEG_OFF_LIMIT || c_seg_dst->c_nextslot >= C_SLOT_MAX) {
+	if (c_seg_dst->c_nextoffset >= C_SEG_OFF_LIMIT || c_seg_dst->c_nextslot >= C_SLOT_MAX_INDEX) {
 		/*
 		 * destination segment is full... can't compact
 		 */
@@ -1065,7 +1301,6 @@ c_seg_major_compact(
 	int		i;
 	c_slot_t	c_dst;
 	c_slot_t	c_src;
-	int		slotarray;
 	boolean_t	keep_compacting = TRUE;
 	
 	/*
@@ -1096,30 +1331,30 @@ c_seg_major_compact(
 		}
 
 		if (C_SEG_OFFSET_TO_BYTES(c_seg_dst->c_populated_offset - c_seg_dst->c_nextoffset) < (unsigned) c_size) {
+			int	size_to_populate;
+
 			/* doesn't fit */
-			if ((C_SEG_OFFSET_TO_BYTES(c_seg_dst->c_populated_offset) == C_SEG_BUFSIZE)) {
+			size_to_populate = C_SEG_BUFSIZE - C_SEG_OFFSET_TO_BYTES(c_seg_dst->c_populated_offset);
+
+		    	if (size_to_populate == 0) {
 				/* can't fit */
 				keep_compacting = FALSE;
 				break;
 			}
+			if (size_to_populate > C_SEG_MAX_POPULATE_SIZE)
+				size_to_populate = C_SEG_MAX_POPULATE_SIZE;
+
 			kernel_memory_populate(kernel_map,
 					       (vm_offset_t) &c_seg_dst->c_store.c_buffer[c_seg_dst->c_populated_offset],
-					       PAGE_SIZE,
-					       KMA_COMPRESSOR);
+					       size_to_populate,
+					       KMA_COMPRESSOR, 
+					       VM_KERN_MEMORY_COMPRESSOR);
 
-			c_seg_dst->c_populated_offset += C_SEG_BYTES_TO_OFFSET(PAGE_SIZE);
+			c_seg_dst->c_populated_offset += C_SEG_BYTES_TO_OFFSET(size_to_populate);
 			assert(C_SEG_OFFSET_TO_BYTES(c_seg_dst->c_populated_offset) <= C_SEG_BUFSIZE);
 		}
+		c_seg_alloc_nextslot(c_seg_dst);
 
-		slotarray = C_SEG_SLOTARRAY_FROM_INDEX(c_seg_dst, c_seg_dst->c_nextslot);
-
-		if (c_seg_dst->c_slots[slotarray] == 0) {
-			KERNEL_DEBUG(0xe0400008 | DBG_FUNC_START, 0, 0, 0, 0, 0);
-			c_seg_dst->c_slots[slotarray] = (struct c_slot *)
-				kalloc(sizeof(struct c_slot) *
-				       C_SEG_SLOT_ARRAY_SIZE);
-			KERNEL_DEBUG(0xe0400008 | DBG_FUNC_END, 0, 0, 0, 0, 0);
-		}
 		c_dst = C_SEG_SLOT_FROM_INDEX(c_seg_dst, c_seg_dst->c_nextslot);
 
 		memcpy(&c_seg_dst->c_store.c_buffer[c_seg_dst->c_nextoffset], &c_seg_src->c_store.c_buffer[c_src->c_offset], c_size);
@@ -1151,7 +1386,7 @@ c_seg_major_compact(
 		c_seg_src->c_bytes_unused += c_rounded_size;
 		c_seg_src->c_firstemptyslot = 0;
 
-		if (c_seg_dst->c_nextoffset >= C_SEG_OFF_LIMIT || c_seg_dst->c_nextslot >= C_SLOT_MAX) {
+		if (c_seg_dst->c_nextoffset >= C_SEG_OFF_LIMIT || c_seg_dst->c_nextslot >= C_SLOT_MAX_INDEX) {
 			/* dest segment is now full */
 			keep_compacting = FALSE;
 			break;
@@ -1347,14 +1582,35 @@ compressor_needs_to_swap(void)
 {
 	boolean_t	should_swap = FALSE;
 
-	if (vm_swap_up == TRUE) {
+	if (vm_swapout_ripe_segments == TRUE && c_overage_swapped_count < c_overage_swapped_limit) {
+		c_segment_t	c_seg;
+		clock_sec_t	now;
+		clock_sec_t	age;
+		clock_nsec_t	nsec;
+		
+		clock_get_system_nanotime(&now,  &nsec);
+		age = 0;
+
+		lck_mtx_lock_spin_always(c_list_lock);
+
+		if ( !queue_empty(&c_age_list_head)) {
+			c_seg = (c_segment_t) queue_first(&c_age_list_head);
+
+			age = now - c_seg->c_creation_ts;
+		}
+		lck_mtx_unlock_always(c_list_lock);
+
+		if (age >= vm_ripe_target_age)
+			return (TRUE);
+	}
+	if ((vm_compressor_mode == VM_PAGER_COMPRESSOR_WITH_SWAP) && vm_swap_up == TRUE) {
 		if (COMPRESSOR_NEEDS_TO_SWAP()) {
 			return (TRUE);
 		}
 		if (VM_PAGE_Q_THROTTLED(&vm_pageout_queue_external) && vm_page_anonymous_count < (vm_page_inactive_count / 20)) {
 			return (TRUE);
 		}
-		if (vm_page_free_count < (vm_page_free_reserved - COMPRESSOR_FREE_RESERVED_LIMIT))
+		if (vm_page_free_count < (vm_page_free_reserved - (COMPRESSOR_FREE_RESERVED_LIMIT * 2)))
 			return (TRUE);
 	}
 	compute_swapout_target_age();
@@ -1380,33 +1636,44 @@ compressor_needs_to_swap(void)
 	if (swapout_target_age)
 		should_swap = TRUE;
 
-	if (vm_swap_up == FALSE) {
-
-		if (should_swap) {
 #if CONFIG_JETSAM
-			if (vm_compressor_thrashing_detected == FALSE) {
-				vm_compressor_thrashing_detected = TRUE;
+	if (should_swap || c_segment_pages_compressed > c_segment_pages_compressed_nearing_limit) {
+
+		if (vm_compressor_thrashing_detected == FALSE) {
+			vm_compressor_thrashing_detected = TRUE;
 				
-				if (swapout_target_age) {
-					memorystatus_kill_on_VM_thrashing(TRUE /* async */);
-					compressor_thrashing_induced_jetsam++;
-				} else {
-					memorystatus_kill_on_FC_thrashing(TRUE /* async */);
-					filecache_thrashing_induced_jetsam++;
-				}
-				/*
-				 * let the jetsam take precedence over
-				 * any major compactions we might have
-				 * been able to do... otherwise we run
-				 * the risk of doing major compactions
-				 * on segments we're about to free up
-				 * due to the jetsam activity.
-				 */
-				should_swap = FALSE;
+			if (swapout_target_age || c_segment_pages_compressed > c_segment_pages_compressed_nearing_limit) {
+				memorystatus_kill_on_VM_thrashing(TRUE /* async */);
+				compressor_thrashing_induced_jetsam++;
+			} else {
+				memorystatus_kill_on_FC_thrashing(TRUE /* async */);
+				filecache_thrashing_induced_jetsam++;
 			}
+		}
+		/*
+		 * let the jetsam take precedence over
+		 * any major compactions we might have
+		 * been able to do... otherwise we run
+		 * the risk of doing major compactions
+		 * on segments we're about to free up
+		 * due to the jetsam activity.
+		 */
+		should_swap = FALSE;
+	}
+
 #endif /* CONFIG_JETSAM */
-		} else
-			should_swap = COMPRESSOR_NEEDS_TO_MAJOR_COMPACT();
+
+	if (should_swap == FALSE) {
+		/*
+		 * COMPRESSOR_NEEDS_TO_MAJOR_COMPACT returns true only if we're
+		 * about to run out of available compressor segments... in this
+		 * case, we absolutely need to run a major compaction even if
+		 * we've just kicked off a jetsam or we don't otherwise need to
+		 * swap... terminating objects releases
+		 * pages back to the uncompressed cache, but does not guarantee
+		 * that we will free up even a single compression segment
+		 */
+		should_swap = COMPRESSOR_NEEDS_TO_MAJOR_COMPACT();
 	}
 
 	/*
@@ -1414,8 +1681,7 @@ compressor_needs_to_swap(void)
 	 * will cause the major compaction engine to
 	 * run, but will not trigger any swapping...
 	 * segments that have been major compacted
-	 * will be moved to the swapped_out_q
-	 * but will not have the c_ondisk flag set
+	 * will be moved to the majorcompact queue
 	 */
 	return (should_swap);
 }
@@ -1452,25 +1718,84 @@ uint32_t vm_wake_compactor_swapper_calls = 0;
 void
 vm_wake_compactor_swapper(void)
 {
-	boolean_t need_major_compaction = FALSE;
-
-	if (compaction_swapper_running)
+	if (compaction_swapper_running || c_segment_count == 0)
 		return;
 
-	if (c_minor_count == 0 && need_major_compaction == FALSE)
-		return;
+	if (c_minor_count || COMPRESSOR_NEEDS_TO_MAJOR_COMPACT()) {
+
+		lck_mtx_lock_spin_always(c_list_lock);
+
+		fastwake_warmup = FALSE;
+
+		if (compaction_swapper_running == 0) {
+
+			vm_wake_compactor_swapper_calls++;
+
+			thread_wakeup((event_t)&c_compressor_swap_trigger);
+			
+			compaction_swapper_running = 1;
+		}
+		lck_mtx_unlock_always(c_list_lock);
+	}
+}
+
+
+void
+vm_consider_swapping()
+{
+	c_segment_t	c_seg, c_seg_next;
+	clock_sec_t	now;
+	clock_nsec_t	nsec;
+
 
 	lck_mtx_lock_spin_always(c_list_lock);
 
-	fastwake_warmup = FALSE;
+	compaction_swapper_abort = 1;
 
-	if (compaction_swapper_running == 0) {
-		vm_wake_compactor_swapper_calls++;
+	while (compaction_swapper_running) {
+		assert_wait((event_t)&compaction_swapper_running, THREAD_UNINT);
 
-		thread_wakeup((event_t)&c_compressor_swap_trigger);
+		lck_mtx_unlock_always(c_list_lock);
 		
-		compaction_swapper_running = 1;
+		thread_block(THREAD_CONTINUE_NULL);
+
+		lck_mtx_lock_spin_always(c_list_lock);
 	}
+	compaction_swapper_abort = 0;
+	compaction_swapper_running = 1;
+
+	vm_swapout_ripe_segments = TRUE;
+
+	if (!queue_empty(&c_major_list_head)) {
+		
+		clock_get_system_nanotime(&now, &nsec);
+			
+		c_seg = (c_segment_t)queue_first(&c_major_list_head);
+
+		while (!queue_end(&c_major_list_head, (queue_entry_t)c_seg)) {
+
+			if (c_overage_swapped_count >= c_overage_swapped_limit)
+				break;
+
+			c_seg_next = (c_segment_t) queue_next(&c_seg->c_age_list);
+
+			if ((now - c_seg->c_creation_ts) >= vm_ripe_target_age) {
+			
+				lck_mtx_lock_spin_always(&c_seg->c_lock);
+				
+				c_seg_switch_state(c_seg, C_ON_AGE_Q, FALSE);
+
+				lck_mtx_unlock_always(&c_seg->c_lock);
+			}
+			c_seg = c_seg_next;
+		}
+	}
+	vm_compressor_compact_and_swap(FALSE);
+
+	compaction_swapper_running = 0;
+
+	vm_swapout_ripe_segments = FALSE;
+	
 	lck_mtx_unlock_always(c_list_lock);
 }
 
@@ -1481,6 +1806,9 @@ vm_consider_waking_compactor_swapper(void)
 	boolean_t	need_wakeup = FALSE;
 
 	if (compaction_swapper_running)
+		return;
+
+	if (c_segment_count == 0)
 		return;
 
 	if (!compaction_swapper_inited && !compaction_swapper_init_now) {
@@ -1585,13 +1913,7 @@ vm_compressor_age_swapped_in_segments(boolean_t flush_all)
 			
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
-		queue_remove(&c_swappedin_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_swappedin_q = 0;
-		c_swappedin_count--;
-
-		c_seg_insert_into_q(&c_age_list_head, c_seg);
-		c_seg->c_on_age_q = 1;
-		c_age_count++;
+		c_seg_switch_state(c_seg, C_ON_AGE_Q, FALSE);
 
 		lck_mtx_unlock_always(&c_seg->c_lock);
 	}
@@ -1677,6 +1999,8 @@ int		compaction_swap_trigger_thread_awakened = 0;
 static void
 vm_compressor_swap_trigger_thread(void)
 {
+	current_thread()->options |= TH_OPT_VMPRIV;
+
 	/*
 	 * compaction_swapper_init_now is set when the first call to
 	 * vm_consider_waking_compactor_swapper is made from 
@@ -1690,6 +2014,9 @@ vm_compressor_swap_trigger_thread(void)
 	if (compaction_swapper_init_now && !compaction_swapper_inited) {
 		if (vm_compressor_mode == VM_PAGER_COMPRESSOR_WITH_SWAP)
 			vm_swap_file_set_tuneables();
+
+		if (vm_restricted_to_single_processor == TRUE)
+			thread_vm_bind_group_add();
 
 		compaction_swapper_inited = 1;
 	}
@@ -1868,6 +2195,8 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 {
 	c_segment_t	c_seg, c_seg_next;
 	boolean_t	keep_compacting;
+	clock_sec_t	now;
+	clock_nsec_t	nsec;
 
 
 	if (fastwake_warmup == TRUE) {
@@ -1894,12 +2223,18 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 	vm_compressor_age_swapped_in_segments(flush_all);
 
+	/*
+	 * we only need to grab the timestamp once per
+	 * invocation of this function since the 
+	 * timescale we're interested in is measured
+	 * in days
+	 */
+	clock_get_system_nanotime(&now,  &nsec);
 
 	while (!queue_empty(&c_age_list_head) && compaction_swapper_abort == 0) {
 
 		if (hibernate_flushing == TRUE) {
 			clock_sec_t	sec;
-			clock_nsec_t	nsec;
 
 			if (hibernate_should_abort()) {
 				HIBLOG("vm_compressor_flush - hibernate_should_abort returned TRUE\n");
@@ -1954,6 +2289,9 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 			needs_to_swap = compressor_needs_to_swap();
 
+			if (needs_to_swap == TRUE && vm_swap_low_on_space())
+				vm_compressor_take_paging_space_action();
+
 			lck_mtx_lock_spin_always(c_list_lock);
 			
 			if (needs_to_swap == FALSE)
@@ -1963,15 +2301,11 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			break;
 		c_seg = (c_segment_t) queue_first(&c_age_list_head);
 
+		assert(c_seg->c_state == C_ON_AGE_Q);
+
 		if (flush_all == TRUE && c_seg->c_generation_id > c_generation_id_flush_barrier)
 			break;
-
-		if (c_seg->c_filling) {
-			/*
-			 * we're at or near the head... no more work to do
-			 */
-			break;
-		}
+		
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
 		if (c_seg->c_busy) {
@@ -1989,6 +2323,7 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			 * found an empty c_segment and freed it
 			 * so go grab the next guy in the queue
 			 */
+			c_seg_major_compact_stats.count_of_freed_segs++;
 			continue;
 		}
 		/*
@@ -2006,6 +2341,8 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			
 			if (queue_end(&c_age_list_head, (queue_entry_t)c_seg_next))
 				break;
+
+			assert(c_seg_next->c_state == C_ON_AGE_Q);
 
 			if (c_seg_major_compact_ok(c_seg, c_seg_next) == FALSE)
 				break;
@@ -2028,6 +2365,7 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 				 * found an empty c_segment and freed it
 				 * so we can't continue to use c_seg_next
 				 */
+				c_seg_major_compact_stats.count_of_freed_segs++;
 				continue;
 			}
 
@@ -2051,7 +2389,8 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			 * by passing TRUE, we ask for c_busy to be cleared
 			 * and c_wanted to be taken care of
 			 */
-			c_seg_minor_compaction_and_unlock(c_seg_next, TRUE);
+			if (c_seg_minor_compaction_and_unlock(c_seg_next, TRUE))
+				c_seg_major_compact_stats.count_of_freed_segs++;
 
 			PAGE_REPLACEMENT_DISALLOWED(FALSE);
 
@@ -2060,27 +2399,46 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 		} /* major compaction */
 
-		c_seg_major_compact_stats.wasted_space_in_swapouts += C_SEG_BUFSIZE - c_seg->c_bytes_used;
-		c_seg_major_compact_stats.count_of_swapouts++;
-
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
 		assert(c_seg->c_busy);
-		assert(c_seg->c_on_age_q);
 		assert(!c_seg->c_on_minorcompact_q);
 
-		queue_remove(&c_age_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_age_q = 0;
-		c_age_count--;
-
 		if (vm_swap_up == TRUE) {
-			queue_enter(&c_swapout_list_head, c_seg, c_segment_t, c_age_list);
-			c_seg->c_on_swapout_q = 1;
-			c_swapout_count++;
+			/*
+			 * This mode of putting a generic c_seg on the swapout list is
+			 * only supported when we have general swap ON i.e.
+			 * we compress pages into c_segs as we process them off
+			 * the paging queues in vm_pageout_scan().
+			 */
+			if (COMPRESSED_PAGER_IS_SWAPBACKED)
+				c_seg_switch_state(c_seg, C_ON_SWAPOUT_Q, FALSE);
+			else {
+				if ((vm_swapout_ripe_segments == TRUE && c_overage_swapped_count < c_overage_swapped_limit)) {
+					/*
+					 * we are running compressor sweeps with swap-behind
+					 * make sure the c_seg has aged enough before swapping it
+					 * out...
+					 */
+					if ((now - c_seg->c_creation_ts) >= vm_ripe_target_age) {
+						c_seg->c_overage_swap = TRUE;
+						c_overage_swapped_count++;
+						c_seg_switch_state(c_seg, C_ON_SWAPOUT_Q, FALSE);
+					}
+				}
+			}
+		}
+		if (c_seg->c_state == C_ON_AGE_Q) {
+			/*
+			 * this c_seg didn't get moved to the swapout queue
+			 * so we need to move it out of the way...
+			 * we just did a major compaction on it so put it
+			 * on that queue
+			 */ 
+			c_seg_switch_state(c_seg, C_ON_MAJORCOMPACT_Q, FALSE);
 		} else {
-			queue_enter(&c_swappedout_list_head, c_seg, c_segment_t, c_age_list);
-			c_seg->c_on_swappedout_q = 1;
-			c_swappedout_count++;
+			c_seg_major_compact_stats.wasted_space_in_swapouts += C_SEG_BUFSIZE - c_seg->c_bytes_used;
+			c_seg_major_compact_stats.count_of_swapouts++;
 		}
 		C_SEG_WAKEUP_DONE(c_seg);
 
@@ -2097,36 +2455,18 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 }
 
 
-static uint32_t	no_paging_space_action_in_progress = 0;
-extern void memorystatus_send_low_swap_note(void);
-
-
 static c_segment_t
 c_seg_allocate(c_segment_t *current_chead)
 {
-        clock_sec_t	sec;
-        clock_nsec_t	nsec;
 	c_segment_t	c_seg;
-	int		slotarray;
+	int		min_needed;
+	int		size_to_populate;
+
+	if (vm_compressor_low_on_space())
+		vm_compressor_take_paging_space_action();
 
 	if ( (c_seg = *current_chead) == NULL ) {
 		uint32_t	c_segno;
-
-		if (vm_compressor_low_on_space() || vm_swap_low_on_space()) {
-
-			if (no_paging_space_action_in_progress == 0) {
-
-				if (OSCompareAndSwap(0, 1, (UInt32 *)&no_paging_space_action_in_progress)) {
-
-					if (no_paging_space_action()) {
-						memorystatus_send_low_swap_note();
-					}
-
-					no_paging_space_action_in_progress = 0;
-				}
-			}
-		}
-		KERNEL_DEBUG(0xe0400004 | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
 		lck_mtx_lock_spin_always(c_list_lock);
 
@@ -2140,54 +2480,57 @@ c_seg_allocate(c_segment_t *current_chead)
 			lck_mtx_lock_spin_always(c_list_lock);
 		}
 		if (c_free_segno_head == (uint32_t)-1) {
+			uint32_t	c_segments_available_new;
 
 			if (c_segments_available >= c_segments_limit || c_segment_pages_compressed >= c_segment_pages_compressed_limit) {
 				lck_mtx_unlock_always(c_list_lock);
 
-				KERNEL_DEBUG(0xe0400004 | DBG_FUNC_END, 0, 0, 0, 1, 0);
 				return (NULL);
 			}
 			c_segments_busy = TRUE;
 			lck_mtx_unlock_always(c_list_lock);
 
-			kernel_memory_populate(kernel_map, (vm_offset_t)c_segments_next_page, PAGE_SIZE, KMA_KOBJECT);
+			kernel_memory_populate(kernel_map, (vm_offset_t)c_segments_next_page, 
+						PAGE_SIZE, KMA_KOBJECT, VM_KERN_MEMORY_COMPRESSOR);
 			c_segments_next_page += PAGE_SIZE;
 
-			for (c_segno = c_segments_available + 1; c_segno < (c_segments_available + C_SEGMENTS_PER_PAGE); c_segno++)
+			c_segments_available_new = c_segments_available + C_SEGMENTS_PER_PAGE;
+
+			if (c_segments_available_new > c_segments_limit)
+				c_segments_available_new = c_segments_limit;
+
+			for (c_segno = c_segments_available + 1; c_segno < c_segments_available_new; c_segno++)
 				c_segments[c_segno - 1].c_segno = c_segno;
 
 			lck_mtx_lock_spin_always(c_list_lock);
 
 			c_segments[c_segno - 1].c_segno = c_free_segno_head;
 			c_free_segno_head = c_segments_available;
-			c_segments_available += C_SEGMENTS_PER_PAGE;
+			c_segments_available = c_segments_available_new;
 
 			c_segments_busy = FALSE;
 			thread_wakeup((event_t) (&c_segments_busy));
 		}
 		c_segno = c_free_segno_head;
+		assert(c_segno >= 0 && c_segno < c_segments_limit);
+
 		c_free_segno_head = c_segments[c_segno].c_segno;
+
+		/*
+		 * do the rest of the bookkeeping now while we're still behind
+		 * the list lock and grab our generation id now into a local
+		 * so that we can install it once we have the c_seg allocated
+		 */
+		c_segment_count++;
+		if (c_segment_count > c_segment_count_max)
+			c_segment_count_max = c_segment_count;
 
 		lck_mtx_unlock_always(c_list_lock);
 
 		c_seg = (c_segment_t)zalloc(compressor_segment_zone);
 		bzero((char *)c_seg, sizeof(struct c_segment));
 
-		if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&c_seg->c_store.c_buffer), C_SEG_ALLOCSIZE, 0, KMA_COMPRESSOR | KMA_VAONLY) != KERN_SUCCESS) {
-			zfree(compressor_segment_zone, c_seg);
-
-			lck_mtx_lock_spin_always(c_list_lock);
-
-			c_segments[c_segno].c_segno = c_free_segno_head;
-			c_free_segno_head = c_segno;
-
-			lck_mtx_unlock_always(c_list_lock);
-
-			KERNEL_DEBUG(0xe0400004 | DBG_FUNC_END, 0, 0, 0, 2, 0);
-
-			return (NULL);
-		}
-		OSAddAtomic64(C_SEG_ALLOCSIZE, &compressor_kvspace_used);
+		c_seg->c_store.c_buffer = (int32_t *)C_SEG_BUFFER_ADDRESS(c_segno);
 
 #if __i386__ || __x86_64__
 		lck_mtx_init(&c_seg->c_lock, &vm_compressor_lck_grp, &vm_compressor_lck_attr);
@@ -2195,50 +2538,48 @@ c_seg_allocate(c_segment_t *current_chead)
 		lck_spin_init(&c_seg->c_lock, &vm_compressor_lck_grp, &vm_compressor_lck_attr);
 #endif /* __i386__ || __x86_64__ */
 	
-		kernel_memory_populate(kernel_map, (vm_offset_t)(c_seg->c_store.c_buffer), 3 * PAGE_SIZE, KMA_COMPRESSOR);
-
-		c_seg->c_populated_offset = C_SEG_BYTES_TO_OFFSET(3 * PAGE_SIZE);
-		c_seg->c_firstemptyslot = C_SLOT_MAX;
+		c_seg->c_state = C_IS_EMPTY;
+		c_seg->c_firstemptyslot = C_SLOT_MAX_INDEX;
 		c_seg->c_mysegno = c_segno;
-		c_seg->c_filling = 1;
 
 		lck_mtx_lock_spin_always(c_list_lock);
-
-		c_segment_count++;
+		c_empty_count++;
+		c_seg_switch_state(c_seg, C_IS_FILLING, FALSE);
 		c_segments[c_segno].c_seg = c_seg;
-
-		c_seg->c_generation_id = c_generation_id++;
-		
-		queue_enter(&c_age_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_age_q = 1;
-		c_age_count++;
-
 		lck_mtx_unlock_always(c_list_lock);
 
-		clock_get_system_nanotime(&sec, &nsec);
-		c_seg->c_creation_ts = (uint32_t)sec;
-
 		*current_chead = c_seg;
-
-		KERNEL_DEBUG(0xe0400004 | DBG_FUNC_END, c_seg, 0, 0, 3, 0);
 	}
-	slotarray = C_SEG_SLOTARRAY_FROM_INDEX(c_seg, c_seg->c_nextslot);
+	c_seg_alloc_nextslot(c_seg);
 
-	if (c_seg->c_slots[slotarray] == 0) {
-		KERNEL_DEBUG(0xe0400008 | DBG_FUNC_START, 0, 0, 0, 0, 0);
+	size_to_populate = C_SEG_ALLOCSIZE - C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset);
+	
+	if (size_to_populate) {
 
-		c_seg->c_slots[slotarray] = (struct c_slot *)kalloc(sizeof(struct c_slot) * C_SEG_SLOT_ARRAY_SIZE);
+		min_needed = PAGE_SIZE + (C_SEG_ALLOCSIZE - C_SEG_BUFSIZE);
 
-		KERNEL_DEBUG(0xe0400008 | DBG_FUNC_END, 0, 0, 0, 0, 0);
+		if (C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset - c_seg->c_nextoffset) < (unsigned) min_needed) {
+
+			if (size_to_populate > C_SEG_MAX_POPULATE_SIZE)
+				size_to_populate = C_SEG_MAX_POPULATE_SIZE;
+
+			kernel_memory_populate(kernel_map,
+					       (vm_offset_t) &c_seg->c_store.c_buffer[c_seg->c_populated_offset],
+					       size_to_populate,
+					       KMA_COMPRESSOR,
+					       VM_KERN_MEMORY_COMPRESSOR);
+		} else
+			size_to_populate = 0;
 	}
-		
 	PAGE_REPLACEMENT_DISALLOWED(TRUE);
 
 	lck_mtx_lock_spin_always(&c_seg->c_lock);
 
+	if (size_to_populate)
+		c_seg->c_populated_offset += C_SEG_BYTES_TO_OFFSET(size_to_populate);
+
 	return (c_seg);
 }
-
 
 
 static void
@@ -2246,6 +2587,9 @@ c_current_seg_filled(c_segment_t c_seg, c_segment_t *current_chead)
 {
 	uint32_t	unused_bytes;
 	uint32_t	offset_to_depopulate;
+	int		new_state = C_ON_AGE_Q;
+	clock_sec_t	sec;
+	clock_nsec_t	nsec;
 
 	unused_bytes = trunc_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset - c_seg->c_nextoffset));
 
@@ -2268,22 +2612,46 @@ c_current_seg_filled(c_segment_t c_seg, c_segment_t *current_chead)
 
 		c_seg->c_populated_offset = offset_to_depopulate;
 	}
-	c_seg->c_filling = 0;
+	assert(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset) <= C_SEG_BUFSIZE);
 
-	if (C_SEG_UNUSED_BYTES(c_seg) >= PAGE_SIZE)
+#if CONFIG_FREEZE
+	if (current_chead == (c_segment_t*)&freezer_chead && DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPBACKED &&
+	    c_freezer_swapout_count < VM_MAX_FREEZER_CSEG_SWAP_COUNT) {
+		new_state = C_ON_SWAPOUT_Q;
+	}
+#endif /* CONFIG_FREEZE */
+
+	clock_get_system_nanotime(&sec, &nsec);
+	c_seg->c_creation_ts = (uint32_t)sec;
+
+	lck_mtx_lock_spin_always(c_list_lock);
+
+#if CONFIG_FREEZE
+	if (c_seg->c_state == C_ON_SWAPOUT_Q)
+		c_freezer_swapout_count++;
+#endif /* CONFIG_FREEZE */
+
+	c_seg->c_generation_id = c_generation_id++;
+	c_seg_switch_state(c_seg, new_state, FALSE);
+
+	lck_mtx_unlock_always(c_list_lock);
+
+#if CONFIG_FREEZE
+	if (c_seg->c_state == C_ON_SWAPOUT_Q)
+		thread_wakeup((event_t)&c_swapout_list_head);
+#endif /* CONFIG_FREEZE */
+
+	if (c_seg->c_state == C_ON_AGE_Q && C_SEG_UNUSED_BYTES(c_seg) >= PAGE_SIZE)
 		c_seg_need_delayed_compaction(c_seg);
-
-	lck_mtx_unlock_always(&c_seg->c_lock);
 
 	*current_chead = NULL;
 }
-
 
 /*
  * returns with c_seg locked
  */
 void
-c_seg_swapin_requeue(c_segment_t c_seg)
+c_seg_swapin_requeue(c_segment_t c_seg, boolean_t has_data)
 {
         clock_sec_t	sec;
         clock_nsec_t	nsec;
@@ -2293,32 +2661,21 @@ c_seg_swapin_requeue(c_segment_t c_seg)
 	lck_mtx_lock_spin_always(c_list_lock);
 	lck_mtx_lock_spin_always(&c_seg->c_lock);
 
-	if (c_seg->c_on_swappedout_q) {
-		queue_remove(&c_swappedout_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_swappedout_q = 0;
-		c_swappedout_count--;
-	} else {
-		assert(c_seg->c_on_swappedout_sparse_q);
+	c_seg->c_busy_swapping = 0;
 
-		queue_remove(&c_swappedout_sparse_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_swappedout_sparse_q = 0;
-		c_swappedout_sparse_count--;
+	if (c_seg->c_overage_swap == TRUE) {
+		c_overage_swapped_count--;
+		c_seg->c_overage_swap = FALSE;
+	}	
+	if (has_data == TRUE) {
+		c_seg_switch_state(c_seg, C_ON_SWAPPEDIN_Q, FALSE);
+	} else {
+		c_seg->c_store.c_buffer = (int32_t*) NULL;
+		c_seg->c_populated_offset = C_SEG_BYTES_TO_OFFSET(0);
+
+		c_seg_switch_state(c_seg, C_ON_BAD_Q, FALSE);
 	}
-	if (c_seg->c_store.c_buffer) {
-		queue_enter(&c_swappedin_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_swappedin_q = 1;
-		c_swappedin_count++;
-	}
-#if TRACK_BAD_C_SEGMENTS
-	else {
-		queue_enter(&c_bad_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_bad_q = 1;
-		c_bad_count++;
-	}
-#endif
 	c_seg->c_swappedin_ts = (uint32_t)sec;
-	c_seg->c_ondisk = 0;
-	c_seg->c_was_swapped_in = 1;
 
 	lck_mtx_unlock_always(c_list_lock);
 }
@@ -2337,63 +2694,142 @@ c_seg_swapin(c_segment_t c_seg, boolean_t force_minor_compaction)
 	uint32_t	io_size = 0;
 	uint64_t	f_offset;
 
+	assert(C_SEG_IS_ONDISK(c_seg));
+	
 #if !CHECKSUM_THE_SWAP
-	if (c_seg->c_ondisk)
-		c_seg_trim_tail(c_seg);
+	c_seg_trim_tail(c_seg);
 #endif
 	io_size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
 	f_offset = c_seg->c_store.c_swap_handle;
 
 	C_SEG_BUSY(c_seg);
+	c_seg->c_busy_swapping = 1;
 	lck_mtx_unlock_always(&c_seg->c_lock);
-	
-	if (c_seg->c_ondisk) {
 
-		PAGE_REPLACEMENT_DISALLOWED(FALSE);
+	PAGE_REPLACEMENT_DISALLOWED(FALSE);
 
-		if (kernel_memory_allocate(kernel_map, &addr, C_SEG_ALLOCSIZE, 0, KMA_COMPRESSOR | KMA_VAONLY) != KERN_SUCCESS)
-			panic("c_seg_swapin: kernel_memory_allocate failed\n");
+	addr = (vm_offset_t)C_SEG_BUFFER_ADDRESS(c_seg->c_mysegno);
 
-		kernel_memory_populate(kernel_map, addr, io_size, KMA_COMPRESSOR);
+	kernel_memory_populate(kernel_map, addr, io_size, KMA_COMPRESSOR, VM_KERN_MEMORY_COMPRESSOR);
 
-		if (vm_swap_get(addr, f_offset, io_size) != KERN_SUCCESS) {
-			PAGE_REPLACEMENT_DISALLOWED(TRUE);
+	if (vm_swap_get(addr, f_offset, io_size) != KERN_SUCCESS) {
+		PAGE_REPLACEMENT_DISALLOWED(TRUE);
 
-			kernel_memory_depopulate(kernel_map, addr, io_size, KMA_COMPRESSOR);
-			kmem_free(kernel_map, addr, C_SEG_ALLOCSIZE);
+		kernel_memory_depopulate(kernel_map, addr, io_size, KMA_COMPRESSOR);
 
-			c_seg->c_store.c_buffer = (int32_t*) NULL;
-			c_seg->c_populated_offset = C_SEG_BYTES_TO_OFFSET(0);
-		} else {
-			c_seg->c_store.c_buffer = (int32_t*) addr;
+		c_seg_swapin_requeue(c_seg, FALSE);
+	} else {
+		c_seg->c_store.c_buffer = (int32_t*) addr;
 #if ENCRYPTED_SWAP
-			vm_swap_decrypt(c_seg);
+		vm_swap_decrypt(c_seg);
 #endif /* ENCRYPTED_SWAP */
 
 #if CHECKSUM_THE_SWAP
-			if (c_seg->cseg_swap_size != io_size)
-				panic("swapin size doesn't match swapout size");
+		if (c_seg->cseg_swap_size != io_size)
+			panic("swapin size doesn't match swapout size");
 
-			if (c_seg->cseg_hash != hash_string((char*) c_seg->c_store.c_buffer, (int)io_size)) {
-				panic("c_seg_swapin - Swap hash mismatch\n");
-			}
+		if (c_seg->cseg_hash != hash_string((char*) c_seg->c_store.c_buffer, (int)io_size)) {
+			panic("c_seg_swapin - Swap hash mismatch\n");
+		}
 #endif /* CHECKSUM_THE_SWAP */
 
-			PAGE_REPLACEMENT_DISALLOWED(TRUE);
+		PAGE_REPLACEMENT_DISALLOWED(TRUE);
 
-			if (force_minor_compaction == TRUE) {
-				lck_mtx_lock_spin_always(&c_seg->c_lock);
+		if (force_minor_compaction == TRUE) {
+			lck_mtx_lock_spin_always(&c_seg->c_lock);
 			
-				c_seg_minor_compaction_and_unlock(c_seg, FALSE);
-			}
-			OSAddAtomic64(c_seg->c_bytes_used, &compressor_bytes_used);
-			OSAddAtomic64(C_SEG_ALLOCSIZE, &compressor_kvspace_used);
+			c_seg_minor_compaction_and_unlock(c_seg, FALSE);
 		}
-	}
-	c_seg_swapin_requeue(c_seg);
+		OSAddAtomic64(c_seg->c_bytes_used, &compressor_bytes_used);
 
+		c_seg_swapin_requeue(c_seg, TRUE);
+	}
 	C_SEG_WAKEUP_DONE(c_seg);
 }
+
+
+static void
+c_segment_sv_hash_drop_ref(int hash_indx)
+{
+	struct c_sv_hash_entry o_sv_he, n_sv_he;
+
+	while (1) {
+
+		o_sv_he.he_record = c_segment_sv_hash_table[hash_indx].he_record;
+
+		n_sv_he.he_ref = o_sv_he.he_ref - 1;
+		n_sv_he.he_data = o_sv_he.he_data;
+
+		if (OSCompareAndSwap64((UInt64)o_sv_he.he_record, (UInt64)n_sv_he.he_record, (UInt64 *) &c_segment_sv_hash_table[hash_indx].he_record) == TRUE) {
+			if (n_sv_he.he_ref == 0)
+				OSAddAtomic(-1, &c_segment_svp_in_hash);
+			break;
+		}
+	}
+}
+
+
+static int
+c_segment_sv_hash_insert(uint32_t data)
+{
+	int		hash_sindx;
+	int		misses;
+	struct c_sv_hash_entry o_sv_he, n_sv_he;
+	boolean_t	got_ref = FALSE;
+
+	if (data == 0)
+		OSAddAtomic(1, &c_segment_svp_zero_compressions);
+	else
+		OSAddAtomic(1, &c_segment_svp_nonzero_compressions);
+
+	hash_sindx = data & C_SV_HASH_MASK;
+	
+	for (misses = 0; misses < C_SV_HASH_MAX_MISS; misses++)
+	{
+		o_sv_he.he_record = c_segment_sv_hash_table[hash_sindx].he_record;
+
+		while (o_sv_he.he_data == data || o_sv_he.he_ref == 0) {
+			n_sv_he.he_ref = o_sv_he.he_ref + 1;
+			n_sv_he.he_data = data;
+
+			if (OSCompareAndSwap64((UInt64)o_sv_he.he_record, (UInt64)n_sv_he.he_record, (UInt64 *) &c_segment_sv_hash_table[hash_sindx].he_record) == TRUE) {
+				if (n_sv_he.he_ref == 1)
+					OSAddAtomic(1, &c_segment_svp_in_hash);
+				got_ref = TRUE;
+				break;
+			}
+			o_sv_he.he_record = c_segment_sv_hash_table[hash_sindx].he_record;
+		}
+		if (got_ref == TRUE)
+			break;
+		hash_sindx++;
+
+		if (hash_sindx == C_SV_HASH_SIZE)
+			hash_sindx = 0;
+	}
+	if (got_ref == FALSE)
+		return(-1);
+
+	return (hash_sindx);
+}
+
+
+#if RECORD_THE_COMPRESSED_DATA
+
+static void
+c_compressed_record_data(char *src, int c_size)
+{
+	if ((c_compressed_record_cptr + c_size + 4) >= c_compressed_record_ebuf)
+		panic("c_compressed_record_cptr >= c_compressed_record_ebuf");
+
+	*(int *)((void *)c_compressed_record_cptr) = c_size;
+
+	c_compressed_record_cptr += 4;
+
+	memcpy(c_compressed_record_cptr, src, c_size);
+	c_compressed_record_cptr += c_size;
+}
+#endif
 
 
 static int
@@ -2411,8 +2847,12 @@ retry:
 		return (1);
 	/*
 	 * returns with c_seg lock held
-	 * and PAGE_REPLACEMENT_DISALLOWED(TRUE)
+	 * and PAGE_REPLACEMENT_DISALLOWED(TRUE)...
+	 * c_nextslot has been allocated and
+	 * c_store.c_buffer populated
 	 */
+	assert(c_seg->c_state == C_IS_FILLING);
+
 	cs = C_SEG_SLOT_FROM_INDEX(c_seg, c_seg->c_nextslot);
 
 	cs->c_packed_ptr = C_SLOT_PACK_PTR(slot_ptr);
@@ -2425,28 +2865,11 @@ retry:
 	if (max_csize > PAGE_SIZE)
 		max_csize = PAGE_SIZE;
 
-	if (C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset -
-				  c_seg->c_nextoffset)
-	    < (unsigned) max_csize + PAGE_SIZE &&
-	    (C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset)
-	     < C_SEG_ALLOCSIZE)) {
-		lck_mtx_unlock_always(&c_seg->c_lock);
-
-		kernel_memory_populate(kernel_map,
-				       (vm_offset_t) &c_seg->c_store.c_buffer[c_seg->c_populated_offset],
-				       PAGE_SIZE,
-				       KMA_COMPRESSOR);
-
-		lck_mtx_lock_spin_always(&c_seg->c_lock);
-
-		c_seg->c_populated_offset += C_SEG_BYTES_TO_OFFSET(PAGE_SIZE);
-	}
-
 #if CHECKSUM_THE_DATA
 	cs->c_hash_data = hash_string(src, PAGE_SIZE);
 #endif
 
-	c_size = WKdm_compress_new((WK_word *)(uintptr_t)src, (WK_word *)(uintptr_t)&c_seg->c_store.c_buffer[cs->c_offset],
+	c_size = WKdm_compress_new((const WK_word *)(uintptr_t)src, (WK_word *)(uintptr_t)&c_seg->c_store.c_buffer[cs->c_offset],
 				  (WK_word *)(uintptr_t)scratch_buf, max_csize - 4);
 	assert(c_size <= (max_csize - 4) && c_size >= -1);
 
@@ -2454,15 +2877,48 @@ retry:
 
 		if (max_csize < PAGE_SIZE) {
 			c_current_seg_filled(c_seg, current_chead);
+			assert(*current_chead == NULL);
+
+			lck_mtx_unlock_always(&c_seg->c_lock);
 
 			PAGE_REPLACEMENT_DISALLOWED(FALSE);
-
 			goto retry;
 		}
 		c_size = PAGE_SIZE;
 
 		memcpy(&c_seg->c_store.c_buffer[cs->c_offset], src, c_size);
+
+		OSAddAtomic(1, &c_segment_noncompressible_pages);
+
+	} else if (c_size == 0) {
+		int		hash_index;
+
+		/*
+		 * special case - this is a page completely full of a single 32 bit value
+		 */
+		hash_index = c_segment_sv_hash_insert(*(uint32_t *)(uintptr_t)src);
+
+		if (hash_index != -1) {
+			slot_ptr->s_cindx = hash_index;
+			slot_ptr->s_cseg = C_SV_CSEG_ID;
+
+			OSAddAtomic(1, &c_segment_svp_hash_succeeded);
+#if RECORD_THE_COMPRESSED_DATA
+			c_compressed_record_data(src, 4);
+#endif
+			goto sv_compression;
+		}
+		c_size = 4;
+		
+		memcpy(&c_seg->c_store.c_buffer[cs->c_offset], src, c_size);
+
+		OSAddAtomic(1, &c_segment_svp_hash_failed);
 	}
+
+#if RECORD_THE_COMPRESSED_DATA
+	c_compressed_record_data((char *)&c_seg->c_store.c_buffer[cs->c_offset], c_size);
+#endif
+
 #if CHECKSUM_THE_COMPRESSED_DATA
 	cs->c_hash_compressed_data = hash_string((char *)&c_seg->c_store.c_buffer[cs->c_offset], c_size);
 #endif
@@ -2476,16 +2932,26 @@ retry:
 	/* <csegno=0,indx=0> would mean "empty slot", so use csegno+1 */
 	slot_ptr->s_cseg = c_seg->c_mysegno + 1; 
 
-	if (c_seg->c_nextoffset >= C_SEG_OFF_LIMIT || c_seg->c_nextslot >= C_SLOT_MAX)
+sv_compression:
+	if (c_seg->c_nextoffset >= C_SEG_OFF_LIMIT || c_seg->c_nextslot >= C_SLOT_MAX_INDEX) {
 		c_current_seg_filled(c_seg, current_chead);
-	else
-		lck_mtx_unlock_always(&c_seg->c_lock);
+		assert(*current_chead == NULL);
+	}
+	lck_mtx_unlock_always(&c_seg->c_lock);
 
 	PAGE_REPLACEMENT_DISALLOWED(FALSE);
 
-	OSAddAtomic64(c_rounded_size, &compressor_bytes_used);
+#if RECORD_THE_COMPRESSED_DATA
+	if ((c_compressed_record_cptr - c_compressed_record_sbuf) >= C_SEG_ALLOCSIZE) {
+		c_compressed_record_write(c_compressed_record_sbuf, (int)(c_compressed_record_cptr - c_compressed_record_sbuf));
+		c_compressed_record_cptr = c_compressed_record_sbuf;
+	}
+#endif
+	if (c_size) {
+		OSAddAtomic64(c_size, &c_segment_compressed_bytes);
+		OSAddAtomic64(c_rounded_size, &compressor_bytes_used);
+	}
 	OSAddAtomic64(PAGE_SIZE, &c_segment_input_bytes);
-	OSAddAtomic64(c_size, &c_segment_compressed_bytes);
 
 	OSAddAtomic(1, &c_segment_pages_compressed);
 	OSAddAtomic(1, &sample_period_compression_count);
@@ -2505,13 +2971,33 @@ c_decompress_page(char *dst, volatile c_slot_mapping_t slot_ptr, int flags, int 
 	int		c_rounded_size;
 	uint32_t	c_size;
 	int		retval = 0;
-	boolean_t	c_seg_has_data = TRUE;
-	boolean_t	c_seg_swappedin = FALSE;
 	boolean_t	need_unlock = TRUE;
 	boolean_t	consider_defragmenting = FALSE;
+	boolean_t	kdp_mode = FALSE;
+
+	if (flags & C_KDP) {
+		if (not_in_kdp) {
+			panic("C_KDP passed to decompress page from outside of debugger context");
+		}
+
+		assert((flags & C_KEEP) ==  C_KEEP);
+		assert((flags & C_DONT_BLOCK) == C_DONT_BLOCK);
+
+		if ((flags & (C_DONT_BLOCK | C_KEEP)) != (C_DONT_BLOCK | C_KEEP)) {
+			return (-2);
+		}
+
+		kdp_mode = TRUE;
+	}
 
 ReTry:
-	PAGE_REPLACEMENT_DISALLOWED(TRUE);
+	if (!kdp_mode) {
+		PAGE_REPLACEMENT_DISALLOWED(TRUE);
+	} else {
+		if (kdp_lck_rw_lock_is_acquired_exclusive(&c_master_lock)) {
+			return (-2);
+		}
+	}
 
 #if HIBERNATION
 	/*
@@ -2526,7 +3012,9 @@ ReTry:
 	if (dst && decompressions_blocked == TRUE) {
 		if (flags & C_DONT_BLOCK) {
 
-			PAGE_REPLACEMENT_DISALLOWED(FALSE);
+			if (!kdp_mode) {
+				PAGE_REPLACEMENT_DISALLOWED(FALSE);
+			}
 
 			*zeroslot = 0;
 			return (-2);
@@ -2549,14 +3037,21 @@ ReTry:
 	/* s_cseg is actually "segno+1" */
 	c_seg = c_segments[slot_ptr->s_cseg - 1].c_seg;
 
-	lck_mtx_lock_spin_always(&c_seg->c_lock);
+	if (!kdp_mode) {
+		lck_mtx_lock_spin_always(&c_seg->c_lock);
+	} else {
+		if (kdp_lck_mtx_lock_spin_is_acquired(&c_seg->c_lock)) {
+			return (-2);
+		}
+	}
+
+	assert(c_seg->c_state != C_IS_EMPTY && c_seg->c_state != C_IS_FREE);
 
 	if (flags & C_DONT_BLOCK) {
-		if (c_seg->c_busy || (c_seg->c_ondisk && dst)) {
-
-			retval = -2;
+		if (c_seg->c_busy || (C_SEG_IS_ONDISK(c_seg) && dst)) {
 			*zeroslot = 0;
 
+			retval = -2;
 			goto done;
 		}
 	}
@@ -2581,13 +3076,16 @@ ReTry:
 		clock_sec_t	cur_ts_sec;
 		clock_nsec_t	cur_ts_nsec;
 
-		if (c_seg->c_on_swappedout_q || c_seg->c_on_swappedout_sparse_q) {
-			if (c_seg->c_ondisk)
-				c_seg_swappedin = TRUE;
+		if (C_SEG_IS_ONDISK(c_seg)) {
+			assert(kdp_mode == FALSE);
 			c_seg_swapin(c_seg, FALSE);
+
+			retval = 1;
 		}		
-		if (c_seg->c_store.c_buffer == NULL) {
-			c_seg_has_data = FALSE;
+		if (c_seg->c_state == C_ON_BAD_Q) {
+			assert(c_seg->c_store.c_buffer == NULL);
+
+			retval = -1;
 			goto c_seg_invalid_data;
 		}
 #if CHECKSUM_THE_COMPRESSED_DATA
@@ -2599,20 +3097,46 @@ ReTry:
 			 * page wasn't compressible... just copy it out
 			 */
 			memcpy(dst, &c_seg->c_store.c_buffer[cs->c_offset], PAGE_SIZE);
+		} else if (c_size == 4) {
+			int32_t		data;
+			int32_t		*dptr;
+
+			/*
+			 * page was populated with a single value
+			 * that didn't fit into our fast hash
+			 * so we packed it in as a single non-compressed value
+			 * that we need to populate the page with
+			 */
+			dptr = (int32_t *)(uintptr_t)dst;
+			data = *(int32_t *)(&c_seg->c_store.c_buffer[cs->c_offset]);
+#if __x86_64__
+			memset_word(dptr, data, PAGE_SIZE / sizeof(int32_t));
+#else
+			{
+			int		i;
+
+			for (i = 0; i < (int)(PAGE_SIZE / sizeof(int32_t)); i++)
+				*dptr++ = data;
+			}
+#endif
 		} else {
 			uint32_t	my_cpu_no;
 			char		*scratch_buf;
 
-			/*
-			 * we're behind the c_seg lock held in spin mode
-			 * which means pre-emption is disabled... therefore
-			 * the following sequence is atomic and safe
-			 */
-			my_cpu_no = cpu_number();
+			if (!kdp_mode) {
+				/*
+				 * we're behind the c_seg lock held in spin mode
+				 * which means pre-emption is disabled... therefore
+				 * the following sequence is atomic and safe
+				 */
+				my_cpu_no = cpu_number();
 
-			assert(my_cpu_no < compressor_cpus);
+				assert(my_cpu_no < compressor_cpus);
 
-			scratch_buf = &compressor_scratch_bufs[my_cpu_no * WKdm_SCRATCH_BUF_SIZE];
+				scratch_buf = &compressor_scratch_bufs[my_cpu_no * WKdm_SCRATCH_BUF_SIZE];
+			} else {
+				scratch_buf = kdp_compressor_scratch_buf;
+			}
 			WKdm_decompress_new((WK_word *)(uintptr_t)&c_seg->c_store.c_buffer[cs->c_offset],
 					    (WK_word *)(uintptr_t)dst, (WK_word *)(uintptr_t)scratch_buf, c_size);
 		}
@@ -2621,7 +3145,7 @@ ReTry:
 		if (cs->c_hash_data != hash_string(dst, PAGE_SIZE))
 			panic("decompressed data doesn't match original");
 #endif
-		if (!c_seg->c_was_swapped_in) {
+		if (c_seg->c_swappedin_ts == 0 && !kdp_mode) {
 
 			clock_get_system_nanotime(&cur_ts_sec, &cur_ts_nsec);
 
@@ -2634,24 +3158,15 @@ ReTry:
 
 			OSAddAtomic(1, &sample_period_decompression_count);
 		}
-	} else {
-		if (c_seg->c_store.c_buffer == NULL)
-			c_seg_has_data = FALSE;
 	}
 c_seg_invalid_data:
-
-	if (c_seg_has_data == TRUE) {
-		if (c_seg_swappedin == TRUE)
-			retval = 1;
-		else
-			retval = 0;
-	} else
-		retval = -1;
 
 	if (flags & C_KEEP) {
 		*zeroslot = 0;
 		goto done;
 	}
+
+	assert(kdp_mode == FALSE);
 	c_seg->c_bytes_unused += c_rounded_size;
 	c_seg->c_bytes_used -= c_rounded_size;
 	PACK_C_SIZE(cs, 0);
@@ -2661,22 +3176,24 @@ c_seg_invalid_data:
 
 	OSAddAtomic(-1, &c_segment_pages_compressed);
 
-	if (c_seg_has_data == TRUE && !c_seg->c_ondisk) {
+	if (c_seg->c_state != C_ON_BAD_Q && !(C_SEG_IS_ONDISK(c_seg))) {
 		/*
-		 * c_ondisk == TRUE can occur when we're doing a
+		 * C_SEG_IS_ONDISK == TRUE can occur when we're doing a
 		 * free of a compressed page (i.e. dst == NULL)
 		 */
 		OSAddAtomic64(-c_rounded_size, &compressor_bytes_used);
 	}
-	if (!c_seg->c_filling) {
+	if (c_seg->c_state != C_IS_FILLING) {
 		if (c_seg->c_bytes_used == 0) {
-			if (!c_seg->c_ondisk) {
+			if ( !(C_SEG_IS_ONDISK(c_seg))) {
 				int	pages_populated;
 
 				pages_populated = (round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset))) / PAGE_SIZE;
 				c_seg->c_populated_offset = C_SEG_BYTES_TO_OFFSET(0);
 
 				if (pages_populated) {
+
+					assert(c_seg->c_state != C_ON_BAD_Q);
 					assert(c_seg->c_store.c_buffer != NULL);
 
 					C_SEG_BUSY(c_seg);
@@ -2687,29 +3204,35 @@ c_seg_invalid_data:
 					lck_mtx_lock_spin_always(&c_seg->c_lock);
 					C_SEG_WAKEUP_DONE(c_seg);
 				}
-				if (!c_seg->c_on_minorcompact_q && !c_seg->c_on_swapout_q)
+				if (!c_seg->c_on_minorcompact_q)
 					c_seg_need_delayed_compaction(c_seg);
 			} else
-				assert(c_seg->c_on_swappedout_sparse_q);
+				assert(c_seg->c_state == C_ON_SWAPPEDOUTSPARSE_Q);
 
 		} else if (c_seg->c_on_minorcompact_q) {
 
-			if (C_SEG_INCORE_IS_SPARSE(c_seg)) {
+			assert(c_seg->c_state != C_ON_BAD_Q);
+
+			if (C_SEG_SHOULD_MINORCOMPACT(c_seg)) {
 				c_seg_try_minor_compaction_and_unlock(c_seg);
 				need_unlock = FALSE;
 			}
-		} else if (!c_seg->c_ondisk) {
+		} else if ( !(C_SEG_IS_ONDISK(c_seg))) {
 
-			if (c_seg_has_data == TRUE && !c_seg->c_on_swapout_q && C_SEG_UNUSED_BYTES(c_seg) >= PAGE_SIZE) {
+			if (c_seg->c_state != C_ON_BAD_Q && c_seg->c_state != C_ON_SWAPOUT_Q && C_SEG_UNUSED_BYTES(c_seg) >= PAGE_SIZE) {
 				c_seg_need_delayed_compaction(c_seg);
 			}
-		} else if (!c_seg->c_on_swappedout_sparse_q && C_SEG_ONDISK_IS_SPARSE(c_seg)) {
+		} else if (c_seg->c_state != C_ON_SWAPPEDOUTSPARSE_Q && C_SEG_ONDISK_IS_SPARSE(c_seg)) {
 
 			c_seg_move_to_sparse_list(c_seg);
 			consider_defragmenting = TRUE;
 		}
 	}
 done:
+	if (kdp_mode) {
+		return retval;
+	}
+
 	if (need_unlock == TRUE)
 		lck_mtx_unlock_always(&c_seg->c_lock);
 
@@ -2726,6 +3249,7 @@ done:
 int
 vm_compressor_get(ppnum_t pn, int *slot, int flags)
 {
+	c_slot_mapping_t  slot_ptr;
 	char	*dst;
 	int	zeroslot = 1;
 	int	retval;
@@ -2735,12 +3259,49 @@ vm_compressor_get(ppnum_t pn, int *slot, int flags)
 #else
 #error "unsupported architecture"
 #endif
+	slot_ptr = (c_slot_mapping_t)slot;
 
-	retval = c_decompress_page(dst, (c_slot_mapping_t)slot, flags, &zeroslot);
+	if (slot_ptr->s_cseg == C_SV_CSEG_ID) {
+		int32_t		data;
+		int32_t		*dptr;
+
+		/*
+		 * page was populated with a single value
+		 * that found a home in our hash table
+		 * grab that value from the hash and populate the page
+		 * that we need to populate the page with
+		 */
+		dptr = (int32_t *)(uintptr_t)dst;
+		data = c_segment_sv_hash_table[slot_ptr->s_cindx].he_data;
+#if __x86_64__
+		memset_word(dptr, data, PAGE_SIZE / sizeof(int32_t));
+#else
+		{
+		int		i;
+
+		for (i = 0; i < (int)(PAGE_SIZE / sizeof(int32_t)); i++)
+			*dptr++ = data;
+		}
+#endif
+		c_segment_sv_hash_drop_ref(slot_ptr->s_cindx);
+
+		if ( !(flags & C_KEEP)) {
+			OSAddAtomic(-1, &c_segment_pages_compressed);
+			*slot = 0;
+		}
+		if (data)
+			OSAddAtomic(1, &c_segment_svp_nonzero_decompressions);
+		else
+			OSAddAtomic(1, &c_segment_svp_zero_decompressions);
+
+		return (0);
+	}
+
+	retval = c_decompress_page(dst, slot_ptr, flags, &zeroslot);
 
 	/*
 	 * zeroslot will be set to 0 by c_decompress_page if (flags & C_KEEP)
-	 * or (flags & C_DONT_BLOCK) and we found 'c_busy' or 'c_ondisk' set
+	 * or (flags & C_DONT_BLOCK) and we found 'c_busy' or 'C_SEG_IS_ONDISK' to be TRUE
 	 */
 	if (zeroslot) {
 		*slot = 0;
@@ -2749,7 +3310,7 @@ vm_compressor_get(ppnum_t pn, int *slot, int flags)
 	 * returns 0 if we successfully decompressed a page from a segment already in memory
 	 * returns 1 if we had to first swap in the segment, before successfully decompressing the page
 	 * returns -1 if we encountered an error swapping in the segment - decompression failed
-	 * returns -2 if (flags & C_DONT_BLOCK) and we found 'c_busy' or 'c_ondisk' set
+	 * returns -2 if (flags & C_DONT_BLOCK) and we found 'c_busy' or 'C_SEG_IS_ONDISK' to be true
 	 */
 	return (retval);
 }
@@ -2758,12 +3319,23 @@ vm_compressor_get(ppnum_t pn, int *slot, int flags)
 int
 vm_compressor_free(int *slot, int flags)
 {
+	c_slot_mapping_t  slot_ptr;
 	int	zeroslot = 1;
 	int	retval;
 
 	assert(flags == 0 || flags == C_DONT_BLOCK);
 
-	retval = c_decompress_page(NULL, (c_slot_mapping_t)slot, flags, &zeroslot);
+	slot_ptr = (c_slot_mapping_t)slot;
+
+	if (slot_ptr->s_cseg == C_SV_CSEG_ID) {
+
+		c_segment_sv_hash_drop_ref(slot_ptr->s_cindx);
+		OSAddAtomic(-1, &c_segment_pages_compressed);
+
+		*slot = 0;
+		return (0);
+	}
+	retval = c_decompress_page(NULL, slot_ptr, flags, &zeroslot);
 	/*
 	 * returns 0 if we successfully freed the specified compressed page
 	 * returns -2 if (flags & C_DONT_BLOCK) and we found 'c_busy' set
@@ -2771,6 +3343,8 @@ vm_compressor_free(int *slot, int flags)
 
 	if (retval == 0)
 		*slot = 0;
+	else
+		assert(retval == -2);
 
 	return (retval);
 }
@@ -2802,9 +3376,14 @@ vm_compressor_transfer(
 	int			c_indx;
 	c_slot_t		cs;
 
-	dst_slot = (c_slot_mapping_t) dst_slot_p;
 	src_slot = (c_slot_mapping_t) src_slot_p;
 
+	if (src_slot->s_cseg == C_SV_CSEG_ID) {
+		*dst_slot_p = *src_slot_p;
+		*src_slot_p = 0;
+		return;
+	}
+	dst_slot = (c_slot_mapping_t) dst_slot_p;
 Retry:
 	PAGE_REPLACEMENT_DISALLOWED(TRUE);
 	/* get segment for src_slot */
@@ -2812,7 +3391,7 @@ Retry:
 	/* lock segment */
 	lck_mtx_lock_spin_always(&c_seg->c_lock);
 	/* wait if it's busy */
-	if (c_seg->c_busy) {
+	if (c_seg->c_busy && !c_seg->c_busy_swapping) {
 		PAGE_REPLACEMENT_DISALLOWED(FALSE);
 		c_seg_wait_on_busy(c_seg);
 		goto Retry;
@@ -2828,3 +3407,273 @@ Retry:
 	lck_mtx_unlock_always(&c_seg->c_lock);
 	PAGE_REPLACEMENT_DISALLOWED(FALSE);
 }
+
+#if CONFIG_FREEZE
+
+int	freezer_finished_filling = 0;
+
+void
+vm_compressor_finished_filling(
+	void	**current_chead)
+{
+	c_segment_t	c_seg;
+
+	if ((c_seg = *(c_segment_t *)current_chead) == NULL)
+		return;
+
+	assert(c_seg->c_state == C_IS_FILLING);
+	
+	lck_mtx_lock_spin_always(&c_seg->c_lock);
+
+	c_current_seg_filled(c_seg, (c_segment_t *)current_chead);
+
+	lck_mtx_unlock_always(&c_seg->c_lock);
+
+	freezer_finished_filling++;
+}
+
+
+/*
+ * This routine is used to transfer the compressed chunks from
+ * the c_seg/cindx pointed to by slot_p into a new c_seg headed
+ * by the current_chead and a new cindx within that c_seg.
+ *
+ * Currently, this routine is only used by the "freezer backed by
+ * compressor with swap" mode to create a series of c_segs that
+ * only contain compressed data belonging to one task. So, we 
+ * move a task's previously compressed data into a set of new
+ * c_segs which will also hold the task's yet to be compressed data.
+ */
+
+kern_return_t
+vm_compressor_relocate(
+	void		**current_chead,
+	int		*slot_p)
+{
+	c_slot_mapping_t 	slot_ptr;
+	c_slot_mapping_t	src_slot;
+	uint32_t		c_rounded_size;
+	uint32_t		c_size;
+	uint16_t		dst_slot;
+	c_slot_t		c_dst;
+	c_slot_t		c_src;
+	int			c_indx;
+	c_segment_t		c_seg_dst = NULL;
+	c_segment_t		c_seg_src = NULL;
+	kern_return_t		kr = KERN_SUCCESS;
+
+
+	src_slot = (c_slot_mapping_t) slot_p;
+
+	if (src_slot->s_cseg == C_SV_CSEG_ID) {
+		/*
+		 * no need to relocate... this is a page full of a single
+		 * value which is hashed to a single entry not contained
+		 * in a c_segment_t
+		 */
+		return (kr);
+	}
+
+Relookup_dst:
+	c_seg_dst = c_seg_allocate((c_segment_t *)current_chead);
+	/*
+	 * returns with c_seg lock held
+	 * and PAGE_REPLACEMENT_DISALLOWED(TRUE)...
+	 * c_nextslot has been allocated and
+	 * c_store.c_buffer populated
+	 */
+	if (c_seg_dst == NULL) {
+		/*
+		 * Out of compression segments?
+		 */
+		kr = KERN_RESOURCE_SHORTAGE;
+		goto out;
+	}
+
+	assert(c_seg_dst->c_busy == 0);
+
+	C_SEG_BUSY(c_seg_dst);
+
+	dst_slot = c_seg_dst->c_nextslot;
+	
+	lck_mtx_unlock_always(&c_seg_dst->c_lock);
+
+Relookup_src:
+	c_seg_src = c_segments[src_slot->s_cseg - 1].c_seg;
+
+	assert(c_seg_dst != c_seg_src);
+
+	lck_mtx_lock_spin_always(&c_seg_src->c_lock);
+
+	if (C_SEG_IS_ONDISK(c_seg_src)) {
+	
+		/*
+		 * A "thaw" can mark a process as eligible for
+		 * another freeze cycle without bringing any of
+		 * its swapped out c_segs back from disk (because
+		 * that is done on-demand).
+		 *
+		 * If the src c_seg we find for our pre-compressed
+		 * data is already on-disk, then we are dealing
+		 * with an app's data that is already packed and
+		 * swapped out. Don't do anything.
+		 */
+		
+		PAGE_REPLACEMENT_DISALLOWED(FALSE);
+
+		lck_mtx_unlock_always(&c_seg_src->c_lock);
+
+		c_seg_src = NULL;
+
+		goto out;
+	}
+
+	if (c_seg_src->c_busy) {
+
+		PAGE_REPLACEMENT_DISALLOWED(FALSE);
+		c_seg_wait_on_busy(c_seg_src);
+			
+		c_seg_src = NULL;
+
+		PAGE_REPLACEMENT_DISALLOWED(TRUE);
+
+		goto Relookup_src;
+	}
+
+	C_SEG_BUSY(c_seg_src);
+
+	lck_mtx_unlock_always(&c_seg_src->c_lock);
+	
+	PAGE_REPLACEMENT_DISALLOWED(FALSE);
+
+	/* find the c_slot */
+	c_indx = src_slot->s_cindx;
+
+	c_src = C_SEG_SLOT_FROM_INDEX(c_seg_src, c_indx);
+
+	c_size = UNPACK_C_SIZE(c_src);
+
+	assert(c_size);
+
+	if (c_size > (uint32_t)(C_SEG_BUFSIZE - C_SEG_OFFSET_TO_BYTES((int32_t)c_seg_dst->c_nextoffset))) {
+		/*
+		 * This segment is full. We need a new one.
+		 */
+
+		PAGE_REPLACEMENT_DISALLOWED(TRUE);
+	
+		lck_mtx_lock_spin_always(&c_seg_src->c_lock);
+		C_SEG_WAKEUP_DONE(c_seg_src);
+		lck_mtx_unlock_always(&c_seg_src->c_lock);
+
+		c_seg_src = NULL;
+
+		lck_mtx_lock_spin_always(&c_seg_dst->c_lock);
+
+		assert(c_seg_dst->c_busy);
+		assert(c_seg_dst->c_state == C_IS_FILLING);
+		assert(!c_seg_dst->c_on_minorcompact_q);
+
+		c_current_seg_filled(c_seg_dst, (c_segment_t *)current_chead);
+		assert(*current_chead == NULL);
+	
+		C_SEG_WAKEUP_DONE(c_seg_dst);
+	
+		lck_mtx_unlock_always(&c_seg_dst->c_lock);
+
+		c_seg_dst = NULL;
+
+		PAGE_REPLACEMENT_DISALLOWED(FALSE);
+
+		goto Relookup_dst;
+	}
+
+	c_dst = C_SEG_SLOT_FROM_INDEX(c_seg_dst, c_seg_dst->c_nextslot);
+
+	memcpy(&c_seg_dst->c_store.c_buffer[c_seg_dst->c_nextoffset], &c_seg_src->c_store.c_buffer[c_src->c_offset], c_size);
+
+	c_rounded_size = (c_size + C_SEG_OFFSET_ALIGNMENT_MASK) & ~C_SEG_OFFSET_ALIGNMENT_MASK;
+
+#if CHECKSUM_THE_DATA
+	c_dst->c_hash_data = c_src->c_hash_data;
+#endif
+#if CHECKSUM_THE_COMPRESSED_DATA
+	c_dst->c_hash_compressed_data = c_src->c_hash_compressed_data;
+#endif
+
+	c_dst->c_size = c_src->c_size;
+	c_dst->c_packed_ptr = c_src->c_packed_ptr;
+	c_dst->c_offset = c_seg_dst->c_nextoffset;
+
+	if (c_seg_dst->c_firstemptyslot == c_seg_dst->c_nextslot)
+		c_seg_dst->c_firstemptyslot++;
+
+	c_seg_dst->c_nextslot++;
+	c_seg_dst->c_bytes_used += c_rounded_size;
+	c_seg_dst->c_nextoffset += C_SEG_BYTES_TO_OFFSET(c_rounded_size);
+		
+
+	PACK_C_SIZE(c_src, 0);
+
+	c_seg_src->c_bytes_used -= c_rounded_size;
+	c_seg_src->c_bytes_unused += c_rounded_size;
+	
+	if (c_indx < c_seg_src->c_firstemptyslot) {
+		c_seg_src->c_firstemptyslot = c_indx;
+	}
+
+	c_dst = C_SEG_SLOT_FROM_INDEX(c_seg_dst, dst_slot);
+		
+	PAGE_REPLACEMENT_ALLOWED(TRUE);
+	slot_ptr = (c_slot_mapping_t)C_SLOT_UNPACK_PTR(c_dst);
+	/* <csegno=0,indx=0> would mean "empty slot", so use csegno+1 */
+	slot_ptr->s_cseg = c_seg_dst->c_mysegno + 1;
+	slot_ptr->s_cindx = dst_slot;
+
+	PAGE_REPLACEMENT_ALLOWED(FALSE);
+
+out:
+	if (c_seg_src) {
+
+		lck_mtx_lock_spin_always(&c_seg_src->c_lock);
+
+		C_SEG_WAKEUP_DONE(c_seg_src);
+
+		if (c_seg_src->c_bytes_used == 0 && c_seg_src->c_state != C_IS_FILLING) {
+			if (!c_seg_src->c_on_minorcompact_q)
+				c_seg_need_delayed_compaction(c_seg_src);
+		}
+
+		lck_mtx_unlock_always(&c_seg_src->c_lock);
+	}
+	
+	if (c_seg_dst) {
+
+		PAGE_REPLACEMENT_DISALLOWED(TRUE);
+
+		lck_mtx_lock_spin_always(&c_seg_dst->c_lock);
+
+		if (c_seg_dst->c_nextoffset >= C_SEG_OFF_LIMIT || c_seg_dst->c_nextslot >= C_SLOT_MAX_INDEX) {
+			/*
+			 * Nearing or exceeded maximum slot and offset capacity.
+			 */
+			assert(c_seg_dst->c_busy);
+			assert(c_seg_dst->c_state == C_IS_FILLING);
+			assert(!c_seg_dst->c_on_minorcompact_q);
+
+			c_current_seg_filled(c_seg_dst, (c_segment_t *)current_chead);
+			assert(*current_chead == NULL);
+		}  
+		
+		C_SEG_WAKEUP_DONE(c_seg_dst);
+
+		lck_mtx_unlock_always(&c_seg_dst->c_lock);
+
+		c_seg_dst = NULL;
+
+		PAGE_REPLACEMENT_DISALLOWED(FALSE);
+	}
+
+	return kr;
+}
+#endif /* CONFIG_FREEZE */

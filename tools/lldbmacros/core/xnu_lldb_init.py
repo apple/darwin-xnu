@@ -25,6 +25,9 @@ def __lldb_init_module(debugger, internal_dict):
     base_dir_name = self_path[:self_path.rfind("/")]
     core_os_plugin = base_dir_name + "/lldbmacros/core/operating_system.py"
     osplugin_cmd = "settings set target.process.python-os-plugin-path \"%s\"" % core_os_plugin
+    intel_whitelist = ['hndl_allintrs', 'hndl_alltraps', 'trap_from_kernel', 'hndl_double_fault', 'hndl_machine_check']
+    arm_whitelist = ['_fleh_prefabt', '_ExceptionVectorsBase', '_ExceptionVectorsTable', '_fleh_undef', '_fleh_dataabt', '_fleh_irq', '_fleh_decirq', '_fleh_fiq_generic', '_fleh_dec']
+    whitelist_trap_cmd = "settings set target.trap-handler-names %s %s" % (' '.join(intel_whitelist), ' '.join(arm_whitelist))
     xnu_debug_path = base_dir_name + "/lldbmacros/xnu.py"
     xnu_load_cmd = "command script import \"%s\"" % xnu_debug_path
     if debug_session_enabled :
@@ -37,6 +40,8 @@ def __lldb_init_module(debugger, internal_dict):
     else:
         print osplugin_cmd
         debugger.HandleCommand(osplugin_cmd)
+        print whitelist_trap_cmd
+        debugger.HandleCommand(whitelist_trap_cmd)
         print xnu_load_cmd
         debugger.HandleCommand(xnu_load_cmd)
     print "\n"

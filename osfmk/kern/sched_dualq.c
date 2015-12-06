@@ -53,7 +53,7 @@ static thread_t
 sched_dualq_steal_thread(processor_set_t pset);
 
 static void
-sched_dualq_thread_update_scan(void);
+sched_dualq_thread_update_scan(sched_update_scan_context_t scan_context);
 
 static boolean_t
 sched_dualq_processor_enqueue(processor_t processor, thread_t thread, integer_t options);
@@ -94,18 +94,17 @@ sched_dualq_processor_queue_shutdown(processor_t processor);
 static sched_mode_t
 sched_dualq_initial_thread_sched_mode(task_t parent_task);
 
-static boolean_t
-sched_dualq_should_current_thread_rechoose_processor(processor_t processor);
-
 const struct sched_dispatch_table sched_dualq_dispatch = {
+	.sched_name                                     = "dualq",
 	.init                                           = sched_dualq_init,
-	.timebase_init                                  = sched_traditional_timebase_init,
+	.timebase_init                                  = sched_timeshare_timebase_init,
 	.processor_init                                 = sched_dualq_processor_init,
 	.pset_init                                      = sched_dualq_pset_init,
-	.maintenance_continuation                       = sched_traditional_maintenance_continue,
+	.maintenance_continuation                       = sched_timeshare_maintenance_continue,
 	.choose_thread                                  = sched_dualq_choose_thread,
+	.steal_thread_enabled                           = TRUE,
 	.steal_thread                                   = sched_dualq_steal_thread,
-	.compute_priority                               = compute_priority,
+	.compute_timeshare_priority                     = sched_compute_timeshare_priority,
 	.choose_processor                               = choose_processor,
 	.processor_enqueue                              = sched_dualq_processor_enqueue,
 	.processor_queue_shutdown                       = sched_dualq_processor_queue_shutdown,
@@ -114,24 +113,19 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 	.priority_is_urgent                             = priority_is_urgent,
 	.processor_csw_check                            = sched_dualq_processor_csw_check,
 	.processor_queue_has_priority                   = sched_dualq_processor_queue_has_priority,
-	.initial_quantum_size                           = sched_traditional_initial_quantum_size,
+	.initial_quantum_size                           = sched_timeshare_initial_quantum_size,
 	.initial_thread_sched_mode                      = sched_dualq_initial_thread_sched_mode,
 	.can_update_priority                            = can_update_priority,
 	.update_priority                                = update_priority,
 	.lightweight_update_priority                    = lightweight_update_priority,
-	.quantum_expire                                 = sched_traditional_quantum_expire,
-	.should_current_thread_rechoose_processor       = sched_dualq_should_current_thread_rechoose_processor,
+	.quantum_expire                                 = sched_default_quantum_expire,
 	.processor_runq_count                           = sched_dualq_runq_count,
 	.processor_runq_stats_count_sum                 = sched_dualq_runq_stats_count_sum,
-	.fairshare_init                                 = sched_traditional_fairshare_init,
-	.fairshare_runq_count                           = sched_traditional_fairshare_runq_count,
-	.fairshare_runq_stats_count_sum                 = sched_traditional_fairshare_runq_stats_count_sum,
-	.fairshare_enqueue                              = sched_traditional_fairshare_enqueue,
-	.fairshare_dequeue                              = sched_traditional_fairshare_dequeue,
-	.fairshare_queue_remove                         = sched_traditional_fairshare_queue_remove,
 	.processor_bound_count                          = sched_dualq_processor_bound_count,
 	.thread_update_scan                             = sched_dualq_thread_update_scan,
 	.direct_dispatch_to_idle_processors             = FALSE,
+	.multiple_psets_enabled                         = TRUE,
+	.sched_groups_enabled                           = FALSE,
 };
 
 __attribute__((always_inline))
@@ -181,7 +175,7 @@ sched_dualq_pset_init(processor_set_t pset)
 static void
 sched_dualq_init(void)
 {
-	sched_traditional_init();
+	sched_timeshare_init();
 }
 
 static thread_t
@@ -250,7 +244,7 @@ sched_dualq_processor_csw_check(processor_t processor)
 
 	pri = MAX(main_runq->highq, bound_runq->highq);
 
-	if (first_timeslice(processor)) {
+	if (processor->first_timeslice) {
 		has_higher = (pri > processor->current_pri);
 	} else {
 		has_higher = (pri >= processor->current_pri);
@@ -263,9 +257,6 @@ sched_dualq_processor_csw_check(processor_t processor)
 		if (bound_runq->urgency > 0)
 			return (AST_PREEMPT | AST_URGENT);
 		
-		if (processor->active_thread && thread_eager_preemption(processor->active_thread))
-			return (AST_PREEMPT | AST_URGENT);
-
 		return AST_PREEMPT;
 	}
 
@@ -283,12 +274,6 @@ sched_dualq_processor_queue_has_priority(processor_t    processor,
 		return qpri >= priority;
 	else
 		return qpri > priority;
-}
-
-static boolean_t
-sched_dualq_should_current_thread_rechoose_processor(processor_t processor)
-{
-	return (processor->current_pri < BASEPRI_RTQUEUES && processor->processor_primary != processor);
 }
 
 static int
@@ -407,7 +392,7 @@ sched_dualq_steal_thread(processor_set_t pset)
 }
 
 static void
-sched_dualq_thread_update_scan(void)
+sched_dualq_thread_update_scan(sched_update_scan_context_t scan_context)
 {
 	boolean_t               restart_needed = FALSE;
 	processor_t             processor = processor_list;
@@ -427,7 +412,7 @@ sched_dualq_thread_update_scan(void)
 			s = splsched();
 			pset_lock(pset);
 
-			restart_needed = runq_scan(dualq_bound_runq(processor));
+			restart_needed = runq_scan(dualq_bound_runq(processor), scan_context);
 
 			pset_unlock(pset);
 			splx(s);
@@ -456,7 +441,7 @@ sched_dualq_thread_update_scan(void)
 			s = splsched();
 			pset_lock(pset);
 
-			restart_needed = runq_scan(&pset->pset_runq);
+			restart_needed = runq_scan(&pset->pset_runq, scan_context);
 
 			pset_unlock(pset);
 			splx(s);

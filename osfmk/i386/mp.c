@@ -1237,7 +1237,7 @@ mp_cpus_call_wait(boolean_t	intrs_enabled,
 			mp_cpus_call_wait_timeout = TRUE;
 			cpus_unresponsive = cpus_called & ~(*cpus_responded);
 			mp_cpus_NMIPI(cpus_unresponsive);
-			panic("mp_cpus_call_wait() timeout, cpus: 0x%lx",
+			panic("mp_cpus_call_wait() timeout, cpus: 0x%llx",
 				cpus_unresponsive);
 		}
 	}

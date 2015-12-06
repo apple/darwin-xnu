@@ -112,7 +112,7 @@ convert_cfstring(CFStringRef the_string)
 
     result = converted_string;
 finish:
-    CFRelease(the_data);
+    if (the_data) CFRelease(the_data);
     return result;
 }
 

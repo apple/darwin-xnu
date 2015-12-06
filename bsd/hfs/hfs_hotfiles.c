@@ -89,13 +89,47 @@ typedef struct hotfile_entry {
 	u_int32_t  blocks;
 } hotfile_entry_t;
 
+
+//
+// We cap the max temperature for non-system files to "MAX_NORMAL_TEMP"
+// so that they will always have a lower temperature than system (aka 
+// "auto-cached") files.  System files have MAX_NORMAL_TEMP added to
+// their temperature which produces two bands of files (all non-system
+// files will have a temp less than MAX_NORMAL_TEMP and all system
+// files will have a temp greatern than MAX_NORMAL_TEMP).
+//
+// This puts non-system files on the left side of the hotfile btree 
+// (and we start evicting from the left-side of the tree).  The idea is 
+// that we will evict non-system files more aggressively since their
+// working set changes much more dynamically than system files (which 
+// are for the most part, static).
+//
+// NOTE: these values have to fit into a 32-bit int.  We use a
+//       value of 1-billion which gives a pretty broad range
+//       and yet should not run afoul of any sign issues.
+//
+#define MAX_NORMAL_TEMP    1000000000
+#define HF_TEMP_RANGE      MAX_NORMAL_TEMP
+
+
+//
+// These used to be defines of the hard coded values.  But if
+// we're on an cooperative fusion (CF) system we need to change 
+// the values (which happens in hfs_recording_init()
+// 
+uint32_t hfc_default_file_count = 1000;
+uint32_t hfc_default_duration   = (3600 * 60);
+uint32_t hfc_max_file_count     = 5000;
+uint64_t hfc_max_file_size      = (10 * 1024 * 1024);
+
+
 /*
  * Hot File Recording Data (runtime).
  */
 typedef struct hotfile_data {
 	struct hfsmount *hfsmp;
 	long             refcount;
-	int		 activefiles;  /* active number of hot files */
+	u_int32_t	 activefiles;  /* active number of hot files */
 	u_int32_t	 threshold;
 	u_int32_t	 maxblocks;
 	hotfile_entry_t	*rootentry;
@@ -107,11 +141,15 @@ typedef struct hotfile_data {
 static int  hfs_recording_start (struct hfsmount *);
 static int  hfs_recording_stop (struct hfsmount *);
 
+/* Hotfiles pinning routines */
+static int hfs_getvnode_and_pin (struct hfsmount *hfsmp, uint32_t fileid, uint32_t *pinned);
+static int hfs_pin_extent_record (struct hfsmount *hfsmp, HFSPlusExtentRecord extents, uint32_t *pinned);
+static int hfs_pin_catalog_rec (struct hfsmount *hfsmp, HFSPlusCatalogFile *cfp, int rsrc);
 
 /*
  * Hot File Data recording functions (in-memory binary tree).
  */
-static void              hf_insert (hotfile_data_t *, hotfile_entry_t *);
+static int               hf_insert (hotfile_data_t *, hotfile_entry_t *);
 static void              hf_delete (hotfile_data_t *, u_int32_t, u_int32_t);
 static hotfile_entry_t * hf_coldest (hotfile_data_t *);
 static hotfile_entry_t * hf_getnewentry (hotfile_data_t *);
@@ -128,11 +166,12 @@ static void  hf_printtree (hotfile_entry_t *);
  */
 static int  hotfiles_collect (struct hfsmount *);
 static int  hotfiles_age (struct hfsmount *);
-static int  hotfiles_adopt (struct hfsmount *);
+static int  hotfiles_adopt (struct hfsmount *, vfs_context_t);
 static int  hotfiles_evict (struct hfsmount *, vfs_context_t);
 static int  hotfiles_refine (struct hfsmount *);
 static int  hotextents(struct hfsmount *, HFSPlusExtentDescriptor *);
 static int  hfs_addhotfile_internal(struct vnode *);
+static int  hfs_hotfile_cur_freeblks(hfsmount_t *hfsmp);
 
 
 /*
@@ -140,7 +179,10 @@ static int  hfs_addhotfile_internal(struct vnode *);
  */
 static int  hfc_btree_create (struct hfsmount *, unsigned int, unsigned int);
 static int  hfc_btree_open (struct hfsmount *, struct vnode **);
+static int  hfc_btree_open_ext(struct hfsmount *hfsmp, struct vnode **vpp, int ignore_btree_errs);
 static int  hfc_btree_close (struct hfsmount *, struct vnode *);
+static int  hfc_btree_delete_record(struct hfsmount *hfsmp, BTreeIterator *iterator, HotFileKey *key);
+static int  hfc_btree_delete(struct hfsmount *hfsmp);
 static int  hfc_comparekeys (HotFileKey *, HotFileKey *);
 
 
@@ -154,7 +196,7 @@ char hfc_tag[] = "CLUSTERED HOT FILES B-TREE     ";
  */
 
 /*
- * Start recording the hotest files on a file system.
+ * Start recording the hottest files on a file system.
  *
  * Requires that the hfc_mutex be held.
  */
@@ -206,16 +248,31 @@ hfs_recording_start(struct hfsmount *hfsmp)
 		    (SWAP_BE32 (hotfileinfo.magic) == HFC_MAGIC) &&
 		    (SWAP_BE32 (hotfileinfo.timeleft) > 0) &&
 		    (SWAP_BE32 (hotfileinfo.timebase) > 0)) {
-			hfsmp->hfc_maxfiles = SWAP_BE32 (hotfileinfo.maxfilecnt);
+			if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+				if (hfsmp->hfs_hotfile_freeblks == 0) {
+					hfsmp->hfs_hotfile_freeblks = hfsmp->hfs_hotfile_maxblks - SWAP_BE32 (hotfileinfo.usedblocks);
+				}
+				hfsmp->hfc_maxfiles = 0x7fffffff;
+				printf("hfs: %s: %s: hotfile freeblocks: %d, max: %d\n", hfsmp->vcbVN, __FUNCTION__,
+				       hfsmp->hfs_hotfile_freeblks, hfsmp->hfs_hotfile_maxblks);
+			} else {
+				hfsmp->hfc_maxfiles = SWAP_BE32 (hotfileinfo.maxfilecnt);
+			}
 			hfsmp->hfc_timebase = SWAP_BE32 (hotfileinfo.timebase);
-			hfsmp->hfc_timeout = SWAP_BE32 (hotfileinfo.timeleft) + tv.tv_sec ;
+			int timeleft = (int)SWAP_BE32(hotfileinfo.timeleft);
+			if (timeleft < 0 || timeleft > (int)(HFC_DEFAULT_DURATION*2)) {
+				// in case this field got botched, don't let it screw things up
+				// printf("hfs: hotfiles: bogus looking timeleft: %d\n", timeleft);
+				timeleft = HFC_DEFAULT_DURATION;
+			}
+			hfsmp->hfc_timeout = timeleft + tv.tv_sec ;
 			/* Fix up any bogus timebase values. */
 			if (hfsmp->hfc_timebase < HFC_MIN_BASE_TIME) {
 				hfsmp->hfc_timebase = hfsmp->hfc_timeout - HFC_DEFAULT_DURATION;
 			}
 #if HFC_VERBOSE
-			printf("hfs: Resume recording hot files on %s (%d secs left)\n",
-				hfsmp->vcbVN, SWAP_BE32 (hotfileinfo.timeleft));
+			printf("hfs: Resume recording hot files on %s (%d secs left (%d); timeout %ld)\n",
+			       hfsmp->vcbVN, SWAP_BE32 (hotfileinfo.timeleft), timeleft, hfsmp->hfc_timeout - tv.tv_sec);
 #endif
 		} else {
 			hfsmp->hfc_maxfiles = HFC_DEFAULT_FILE_COUNT;
@@ -240,7 +297,10 @@ hfs_recording_start(struct hfsmount *hfsmp)
 			return (error);
 		}
 #if HFC_VERBOSE
-		printf("hfs: begin recording hot files on %s\n", hfsmp->vcbVN);
+		printf("hfs: begin recording hot files on %s (hotfile start/end block: %d - %d; max/free: %d/%d; maxfiles: %d)\n",
+		       hfsmp->vcbVN,
+		       hfsmp->hfs_hotfile_start, hfsmp->hfs_hotfile_end,
+		       hfsmp->hfs_hotfile_maxblks, hfsmp->hfs_hotfile_freeblks, hfsmp->hfc_maxfiles);
 #endif
 		hfsmp->hfc_maxfiles = HFC_DEFAULT_FILE_COUNT;
 		hfsmp->hfc_timeout = tv.tv_sec + HFC_DEFAULT_DURATION;
@@ -391,7 +451,7 @@ hfs_recording_stop(struct hfsmount *hfsmp)
 	/*
 	 * Compute the amount of space to reclaim...
 	 */
-	if (listp->hfl_totalblocks > hfsmp->hfs_hotfile_freeblks) {
+	if (listp->hfl_totalblocks > hfs_hotfile_cur_freeblks(hfsmp)) {
 		listp->hfl_reclaimblks =
 			MIN(listp->hfl_totalblocks, hfsmp->hfs_hotfile_maxblks) -
 			hfsmp->hfs_hotfile_freeblks;
@@ -425,15 +485,40 @@ out:
 	return (error);
 }
 
+static void
+save_btree_user_info(struct hfsmount *hfsmp)
+{
+	HotFilesInfo hotfileinfo;
+	struct timeval tv;
+
+	microtime(&tv);
+	hotfileinfo.magic       = SWAP_BE32 (HFC_MAGIC);
+	hotfileinfo.version     = SWAP_BE32 (HFC_VERSION);
+	hotfileinfo.duration    = SWAP_BE32 (HFC_DEFAULT_DURATION);
+	hotfileinfo.timebase    = SWAP_BE32 (hfsmp->hfc_timebase);
+	hotfileinfo.timeleft    = SWAP_BE32 (hfsmp->hfc_timeout - tv.tv_sec);
+	hotfileinfo.threshold   = SWAP_BE32 (HFC_MINIMUM_TEMPERATURE);
+	hotfileinfo.maxfileblks = SWAP_BE32 (HFC_MAXIMUM_FILESIZE / HFSTOVCB(hfsmp)->blockSize);
+	if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+		hotfileinfo.usedblocks = SWAP_BE32 (hfsmp->hfs_hotfile_maxblks - hfs_hotfile_cur_freeblks(hfsmp));
+#if HFC_VERBOSE
+		printf("hfs: %s: saving usedblocks = %d (timeleft: %d; timeout %ld)\n", hfsmp->vcbVN, (hfsmp->hfs_hotfile_maxblks - hfsmp->hfs_hotfile_freeblks),
+		       SWAP_BE32(hotfileinfo.timeleft), hfsmp->hfc_timeout);
+#endif
+	} else {
+		hotfileinfo.maxfilecnt  = SWAP_BE32 (HFC_DEFAULT_FILE_COUNT);
+	}
+	strlcpy((char *)hotfileinfo.tag, hfc_tag, sizeof hotfileinfo.tag);
+	(void) BTSetUserData(VTOF(hfsmp->hfc_filevp), &hotfileinfo, sizeof(hotfileinfo));
+}
+
 /*
  * Suspend recording the hotest files on a file system.
  */
 int
 hfs_recording_suspend(struct hfsmount *hfsmp)
 {
-	HotFilesInfo hotfileinfo;
 	hotfile_data_t *hotdata = NULL;
-	struct timeval tv;
 	int  error;
 
 	if (hfsmp->hfc_stage == HFC_DISABLED)
@@ -465,25 +550,13 @@ hfs_recording_suspend(struct hfsmount *hfsmp)
 	}
 
 	if (hfs_start_transaction(hfsmp) != 0) {
-	    error = EINVAL;
 	    goto out;
 	}
 	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
-		error = EPERM;
 		goto end_transaction;
 	}
 
-	microtime(&tv);
-	hotfileinfo.magic       = SWAP_BE32 (HFC_MAGIC);
-	hotfileinfo.version     = SWAP_BE32 (HFC_VERSION);
-	hotfileinfo.duration    = SWAP_BE32 (HFC_DEFAULT_DURATION);
-	hotfileinfo.timebase    = SWAP_BE32 (hfsmp->hfc_timebase);
-	hotfileinfo.timeleft    = SWAP_BE32 (hfsmp->hfc_timeout - tv.tv_sec);
-	hotfileinfo.threshold   = SWAP_BE32 (hotdata->threshold);
-	hotfileinfo.maxfileblks = SWAP_BE32 (hotdata->maxblocks);
-	hotfileinfo.maxfilecnt  = SWAP_BE32 (HFC_DEFAULT_FILE_COUNT);
-	strlcpy((char *)hotfileinfo.tag, hfc_tag, sizeof hotfileinfo.tag);
-	(void) BTSetUserData(VTOF(hfsmp->hfc_filevp), &hotfileinfo, sizeof(hotfileinfo));
+	save_btree_user_info(hfsmp);
 
 	hfs_unlock(VTOC(hfsmp->hfc_filevp));
 
@@ -507,6 +580,818 @@ out:
 }
 
 
+static void
+reset_file_ids(struct hfsmount *hfsmp, uint32_t *fileid_table, int num_ids)
+{
+	int i, error;
+
+	for(i=0; i < num_ids; i++) {
+		struct vnode *vp;
+
+		error = hfs_vget(hfsmp, fileid_table[i], &vp, 0, 0);
+		if (error) {
+			if (error == ENOENT) {
+				error = 0;
+				continue;  /* stale entry, go to next */
+			}
+			continue;
+		}
+
+		// hfs_vget returns a locked cnode so no need to lock here
+
+		if ((hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) && (VTOC(vp)->c_attr.ca_recflags & kHFSFastDevPinnedMask)) {
+			error = hfs_pin_vnode(hfsmp, vp, HFS_UNPIN_IT, NULL, vfs_context_kernel());
+		}
+
+		/*
+		 * The updates to the catalog must be journaled
+		 */
+		hfs_start_transaction(hfsmp);
+
+		//
+		// turn off _all_ the hotfile related bits since we're resetting state
+		//
+		if (VTOC(vp)->c_attr.ca_recflags & kHFSFastDevCandidateMask) {
+			vnode_clearfastdevicecandidate(vp);
+		}
+
+		VTOC(vp)->c_attr.ca_recflags &= ~(kHFSFastDevPinnedMask|kHFSDoNotFastDevPinMask|kHFSFastDevCandidateMask|kHFSAutoCandidateMask);
+		VTOC(vp)->c_flag |= C_MODIFIED;
+
+		hfs_update(vp, 0);
+
+		hfs_end_transaction(hfsmp);
+		
+		hfs_unlock(VTOC(vp));
+		vnode_put(vp);
+	}
+}
+
+static int
+flag_hotfile(struct hfsmount *hfsmp, const char *filename)
+{
+	struct vnode *dvp = NULL, *fvp = NULL;
+	vfs_context_t ctx = vfs_context_kernel();
+	struct componentname cname;
+	int  error=0;
+	size_t fname_len;
+	const char *orig_fname = filename;
+	
+	if (filename == NULL) {
+		return EINVAL;
+	}
+
+	fname_len = strlen(filename);    // do NOT include the trailing '\0' so that we break out of the loop below
+	
+	error = VFS_ROOT(HFSTOVFS(hfsmp), &dvp, ctx);
+	if (error) {
+		return (error);
+	}
+
+	/* At this point, 'dvp' must be considered iocounted */
+	const char *ptr;
+	ptr = filename;
+
+	while (ptr < (orig_fname + fname_len - 1)) {
+		for(; ptr < (orig_fname + fname_len) && *ptr && *ptr != '/'; ptr++) {
+			/* just keep advancing till we reach the end of the string or a slash */
+		}
+
+		cname.cn_nameiop = LOOKUP;
+		cname.cn_flags = ISLASTCN;
+		cname.cn_context = ctx;
+		cname.cn_ndp = NULL;
+		cname.cn_pnbuf = __DECONST(char *, orig_fname);
+        cname.cn_nameptr = __DECONST(char *, filename);
+		cname.cn_pnlen = fname_len;
+		cname.cn_namelen = ptr - filename;
+		cname.cn_hash = 0;
+		cname.cn_consume = 0;
+
+		error = VNOP_LOOKUP(dvp, &fvp, &cname, ctx);
+		if (error) {
+			/*
+			 * If 'dvp' is non-NULL, then it has an iocount.  Make sure to release it
+			 * before bailing out.  VNOP_LOOKUP could legitimately return ENOENT
+			 * if the item didn't exist or if we raced with a delete.
+			 */
+			if (dvp) {
+				vnode_put(dvp);
+				dvp = NULL;
+			}
+			return error;
+		}
+
+		if (ptr < orig_fname + fname_len - 1) {
+			//
+			// we've got a multi-part pathname so drop the ref on the dir,
+			// make dvp become what we just looked up, and advance over
+			// the slash character in the pathname to get to the next part
+			// of the component
+			//
+			vnode_put(dvp);
+			dvp = fvp;
+			fvp = NULL;
+
+			filename = ++ptr;   // skip the slash character
+		}
+	}
+	
+	if (fvp == NULL) {
+		error = ENOENT;
+		goto out;
+	}
+
+	struct cnode *cp = VTOC(fvp);
+	if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT)) != 0) {
+		goto out;
+	}
+
+	hfs_start_transaction(hfsmp);
+	
+	cp->c_attr.ca_recflags |= (kHFSFastDevCandidateMask|kHFSAutoCandidateMask);
+	cp->c_flag |= C_MODIFIED;
+
+	hfs_update(fvp, 0);
+
+	hfs_end_transaction(hfsmp);
+
+	hfs_unlock(cp);
+	//printf("hfs: flagged /%s with the fast-dev-candidate|auto-candidate flags\n", filename);
+
+
+out:
+	if (fvp) {
+		vnode_put(fvp);
+		fvp = NULL;
+	}
+
+	if (dvp) {
+		vnode_put(dvp);
+		dvp = NULL;
+	}
+
+	return error;
+}
+
+
+static void
+hfs_setup_default_cf_hotfiles(struct hfsmount *hfsmp)
+{
+	const char *system_default_hotfiles[] = {
+		"usr",
+		"System",
+		"Applications",
+		"private/var/db/dyld"
+	};
+	int i;
+
+	for(i=0; i < (int)(sizeof(system_default_hotfiles)/sizeof(char *)); i++) {
+		flag_hotfile(hfsmp, system_default_hotfiles[i]);
+	}
+}
+
+
+#define NUM_FILE_RESET_IDS   4096    // so we allocate 16k to hold file-ids
+
+static void
+hfs_hotfile_reset(struct hfsmount *hfsmp)
+{
+	CatalogKey * keyp;
+	CatalogRecord * datap;
+	u_int32_t  dataSize;
+	BTScanState scanstate;
+	BTreeIterator * iterator = NULL;
+	FSBufferDescriptor  record;
+	u_int32_t  data;
+	u_int32_t  cnid;
+	int error = 0;
+	uint32_t *fileids=NULL;
+	int cur_id_index = 0;
+
+	int cleared = 0;  /* debug variables */
+	int filecount = 0;
+	int dircount = 0;
+
+#if HFC_VERBOSE
+	printf("hfs: %s: %s\n", hfsmp->vcbVN, __FUNCTION__);
+#endif
+
+	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
+	bzero(iterator, sizeof(*iterator));
+
+	MALLOC(fileids, uint32_t *, NUM_FILE_RESET_IDS * sizeof(uint32_t), M_TEMP, M_WAITOK);
+	if (fileids == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
+
+	record.bufferAddress = &data;
+	record.itemSize = sizeof(u_int32_t);
+	record.itemCount = 1;
+
+	/*
+	 * Get ready to scan the Catalog file.
+	 */
+	error = BTScanInitialize(VTOF(HFSTOVCB(hfsmp)->catalogRefNum), 0, 0, 0,
+	                       kCatSearchBufferSize, &scanstate);
+	if (error) {
+		printf("hfs_hotfile_reset: err %d BTScanInit\n", error);
+		goto out;
+	}
+
+	/*
+	 * Visit all the catalog btree leaf records, clearing any that have the
+	 * HotFileCached bit set.
+	 */
+	for (;;) {
+		error = BTScanNextRecord(&scanstate, 0, (void **)&keyp, (void **)&datap, &dataSize);
+		if (error) {
+			if (error == btNotFound)
+				error = 0;
+			else
+				printf("hfs_hotfile_reset: err %d BTScanNext\n", error);
+			break;
+		}
+
+		if (datap->recordType == kHFSPlusFolderRecord && (dataSize == sizeof(HFSPlusCatalogFolder))) {
+			HFSPlusCatalogFolder *dirp = (HFSPlusCatalogFolder *)datap;
+
+			dircount++;
+		
+			if ((dirp->flags & (kHFSFastDevPinnedMask|kHFSDoNotFastDevPinMask|kHFSFastDevCandidateMask|kHFSAutoCandidateMask)) == 0) {
+				continue;
+			}
+
+			cnid = dirp->folderID;
+		} else if ((datap->recordType == kHFSPlusFileRecord) && (dataSize == sizeof(HFSPlusCatalogFile))) {
+			HFSPlusCatalogFile *filep = (HFSPlusCatalogFile *)datap;   
+
+			filecount++;
+
+			/*
+			 * If the file doesn't have any of the HotFileCached bits set, ignore it.
+			 */
+			if ((filep->flags & (kHFSFastDevPinnedMask|kHFSDoNotFastDevPinMask|kHFSFastDevCandidateMask|kHFSAutoCandidateMask)) == 0) {
+				continue;
+			}
+
+			cnid = filep->fileID;
+		} else {
+			continue;
+		}
+
+		/* Skip over journal files. */
+		if (cnid == hfsmp->hfs_jnlfileid || cnid == hfsmp->hfs_jnlinfoblkid) {
+			continue;
+		}
+
+		//
+		// Just record the cnid of the file for now.  We will modify it separately
+		// because we can't modify the catalog while we're scanning it.
+		//
+		fileids[cur_id_index++] = cnid;
+		if (cur_id_index >= NUM_FILE_RESET_IDS) {
+			//
+			// We're over the limit of file-ids so we have to terminate this
+			// scan, go modify all the catalog records, then restart the scan.
+			// This is required because it's not permissible to modify the
+			// catalog while scanning it.
+			//
+			(void) BTScanTerminate(&scanstate, &data, &data, &data);
+
+			reset_file_ids(hfsmp, fileids, cur_id_index);
+			cleared += cur_id_index;
+			cur_id_index = 0;
+
+			// restart the scan
+			error = BTScanInitialize(VTOF(HFSTOVCB(hfsmp)->catalogRefNum), 0, 0, 0,
+						 kCatSearchBufferSize, &scanstate);
+			if (error) {
+				printf("hfs_hotfile_reset: err %d BTScanInit\n", error);
+				goto out;
+			}
+			continue;
+		}
+	}
+
+	if (cur_id_index) {
+		reset_file_ids(hfsmp, fileids, cur_id_index);
+		cleared += cur_id_index;
+		cur_id_index = 0;
+	}
+
+	printf("hfs: cleared HotFileCache related bits on %d files out of %d (dircount %d)\n", cleared, filecount, dircount);
+
+	(void) BTScanTerminate(&scanstate, &data, &data, &data);
+
+out:	
+	if (fileids)
+		FREE(fileids, M_TEMP);
+	
+	if (iterator)
+		FREE(iterator, M_TEMP);
+
+	//
+	// If the hotfile btree exists, delete it.  We need to open
+	// it to be able to delete it because we need the hfc_filevp
+	// for deletion.
+	//
+	error = hfc_btree_open_ext(hfsmp, &hfsmp->hfc_filevp, 1);
+	if (!error) {
+		printf("hfs: hotfile_reset: deleting existing hotfile btree\n");
+		hfc_btree_delete(hfsmp);
+	}
+	
+	if (hfsmp->hfc_filevp) {
+		(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
+		hfsmp->hfc_filevp = NULL;
+	}
+
+	hfsmp->hfs_hotfile_blk_adjust = 0;
+	hfsmp->hfs_hotfile_freeblks = hfsmp->hfs_hotfile_maxblks;
+}
+
+
+//
+// This should ONLY be called by hfs_recording_init() and the special fsctl.
+//
+// We assume that the hotfile btree is already opened.
+//
+static int
+hfs_hotfile_repin_files(struct hfsmount *hfsmp)
+{
+	BTreeIterator * iterator = NULL;
+	HotFileKey * key;
+	filefork_t * filefork;
+	int  error = 0;
+	int  bt_op;
+	enum hfc_stage stage;
+	uint32_t pinned_blocks;
+	uint32_t num_files=0, nrsrc=0;
+	uint32_t total_pinned=0;
+
+	if (!(hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) || !hfsmp->hfc_filevp) {
+		//
+		// this is only meaningful if we're pinning hotfiles
+		// (as opposed to the regular form of hotfiles that
+		// get relocated to the hotfile zone)
+		//
+		return 0;
+	}
+
+#if HFC_VERBOSE
+	printf("hfs: %s: %s\n", hfsmp->vcbVN, __FUNCTION__);
+#endif
+	
+	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
+		return (EPERM);
+	}
+
+
+	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		hfs_unlock(VTOC(hfsmp->hfc_filevp));
+		return (ENOMEM);
+	}
+
+	stage = hfsmp->hfc_stage;
+	hfsmp->hfc_stage = HFC_BUSY;
+
+	bt_op = kBTreeFirstRecord;
+
+	bzero(iterator, sizeof(*iterator));
+	key = (HotFileKey*) &iterator->key;
+
+	filefork = VTOF(hfsmp->hfc_filevp);
+	int lockflags;
+
+	while (1) {
+
+		lockflags = 0;
+		/*
+		 * Obtain the first record (ie the coldest one).
+		 */
+		if (BTIterateRecord(filefork, bt_op, iterator, NULL, NULL) != 0) {
+			// no more records
+			error = 0;
+			break;
+		}
+		if (key->keyLength != HFC_KEYLENGTH) {
+			// printf("hfs: hotfiles_repin_files: invalid key length %d\n", key->keyLength);
+			error = EFTYPE;
+			break;
+		}		
+		if (key->temperature == HFC_LOOKUPTAG) {
+			// ran into thread records in the hotfile btree
+			error = 0;
+			break;
+		}
+
+        //
+		// Just lookup the records in the catalog and pin the direct
+		// mapped extents.  Faster than instantiating full vnodes
+		// (and thereby thrashing the system vnode cache).
+		//
+		struct cat_desc fdesc;
+		struct cat_attr attr;
+		struct cat_fork fork;
+        uint8_t forktype = 0;
+
+		lockflags = hfs_systemfile_lock(hfsmp, (SFL_CATALOG | SFL_EXTENTS), HFS_SHARED_LOCK);
+        /*
+         * Snoop the cnode hash to find out if the item we want is in-core already.
+         *
+         * We largely expect this function to fail (the items we want are probably not in the hash).
+         * we use the special variant which bails out as soon as it finds a vnode (even if it is
+         * marked as open-unlinked or actually removed on-disk.  If we find a vnode, then we
+         * release the systemfile locks and go through the pin-vnode path instead.
+         */
+        if (hfs_chash_snoop (hfsmp, key->fileID, 1, NULL, NULL) == 0) {
+            pinned_blocks = 0;
+
+            /* unlock immediately and go through the in-core path */
+            hfs_systemfile_unlock(hfsmp, lockflags);
+			lockflags = 0;
+
+            error = hfs_getvnode_and_pin (hfsmp, key->fileID, &pinned_blocks);
+            if (error) {
+                /* if ENOENT, then it was deleted in the catalog. Remove from our hotfiles tracking */
+                if (error == ENOENT) {
+                    hfc_btree_delete_record(hfsmp, iterator, key);
+                }
+                /* other errors, just ignore and move on with life */
+            }
+            else { //!error
+                total_pinned += pinned_blocks;
+                num_files++;
+            }
+
+            goto next;
+        }
+
+        /* If we get here, we're still holding the systemfile locks */
+		error = cat_idlookup(hfsmp, key->fileID, 1, 0, &fdesc, &attr, &fork);
+		if (error) {
+			//
+			// this file system could have been mounted while booted from a
+			// different partition and thus the hotfile btree would not have
+			// been maintained.  thus a file that was hotfile cached could
+			// have been deleted while booted from a different partition which
+			// means we need to delete it from the hotfile btree.
+			//
+			// block accounting is taken care of at the end: we re-assign
+			// hfsmp->hfs_hotfile_freeblks based on how many blocks we actually
+			// pinned.
+			//
+			hfc_btree_delete_record(hfsmp, iterator, key);
+
+			goto next;
+		}
+
+		if (fork.cf_size == 0) {
+			// hmmm, the data is probably in the resource fork (aka a compressed file)
+			error = cat_idlookup(hfsmp, key->fileID, 1, 1, &fdesc, &attr, &fork);
+			if (error) {
+				hfc_btree_delete_record(hfsmp, iterator, key);
+				goto next;
+			}
+            forktype = 0xff;
+			nrsrc++;
+		}
+
+		pinned_blocks = 0;
+
+        /* Can't release the catalog /extents lock yet, we may need to go find the overflow blocks */
+        error = hfs_pin_extent_record (hfsmp, fork.cf_extents, &pinned_blocks);
+        if (error) {
+            goto next;  //skip to next
+        }
+		/* add in the blocks from the inline 8 */
+        total_pinned += pinned_blocks;
+        pinned_blocks = 0;
+
+        /* Could this file have overflow extents? */
+        if (fork.cf_extents[kHFSPlusExtentDensity-1].startBlock) {
+            /* better pin them, too */
+            error = hfs_pin_overflow_extents (hfsmp, key->fileID, forktype, &pinned_blocks);
+            if (error) {
+				/* If we fail to pin all of the overflow extents, then just skip to the next file */
+                goto next;
+            }
+        }
+
+		num_files++;
+        if (pinned_blocks) {
+            /* now add in any overflow also */
+            total_pinned += pinned_blocks;
+        }
+
+	next:
+		if (lockflags) {
+			hfs_systemfile_unlock(hfsmp, lockflags);
+			lockflags = 0;
+		}
+		bt_op = kBTreeNextRecord;
+
+	} /* end while */
+
+#if HFC_VERBOSE
+	printf("hfs: hotfiles_repin_files: re-pinned %d files (nrsrc %d, total pinned %d blks; freeblock %d, maxblocks %d, calculated free: %d)\n",
+	       num_files, nrsrc, total_pinned, hfsmp->hfs_hotfile_freeblks, hfsmp->hfs_hotfile_maxblks,
+	      hfsmp->hfs_hotfile_maxblks - total_pinned);
+#endif
+	//
+	// make sure this is accurate based on how many blocks we actually pinned
+	//
+	hfsmp->hfs_hotfile_freeblks = hfsmp->hfs_hotfile_maxblks - total_pinned;
+
+	hfs_unlock(VTOC(hfsmp->hfc_filevp));
+
+	FREE(iterator, M_TEMP);	
+	hfsmp->hfc_stage = stage;
+	wakeup((caddr_t)&hfsmp->hfc_stage);
+	return (error);
+}
+
+void
+hfs_repin_hotfiles(struct hfsmount *hfsmp)
+{
+	int error, need_close;
+	
+	lck_mtx_lock(&hfsmp->hfc_mutex);
+
+	if (hfsmp->hfc_filevp == NULL) {
+		error = hfc_btree_open(hfsmp, &hfsmp->hfc_filevp);
+		if (!error) {
+			need_close = 1;
+		} else {
+			printf("hfs: failed to open the btree err=%d.  Unable to re-pin hotfiles.\n", error);
+			lck_mtx_unlock(&hfsmp->hfc_mutex);
+			return;
+		}
+	} else {
+		need_close = 0;
+	}
+
+	hfs_pin_vnode(hfsmp, hfsmp->hfc_filevp, HFS_PIN_IT, NULL, vfs_context_kernel());
+			
+	hfs_hotfile_repin_files(hfsmp);
+
+	if (need_close) {
+		(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
+		hfsmp->hfc_filevp = NULL;
+	}
+
+	lck_mtx_unlock(&hfsmp->hfc_mutex);
+}
+
+/*
+ * For a given file ID, find and pin all of its overflow extents to the underlying CS
+ * device.  Assumes that the extents overflow b-tree is locked for the duration of this call.
+ *
+ * Emit the number of blocks pinned in output argument 'pinned'
+ *
+ * Return success or failure (errno) in return value.
+ *
+ */
+int hfs_pin_overflow_extents (struct hfsmount *hfsmp, uint32_t fileid,
+                                     uint8_t forktype, uint32_t *pinned) {
+
+    struct BTreeIterator *ext_iter = NULL;
+    ExtentKey *ext_key_ptr = NULL;
+    ExtentRecord ext_data;
+    FSBufferDescriptor btRecord;
+    uint16_t btRecordSize;
+    int error = 0;
+
+    uint32_t pinned_blocks = 0;
+
+
+    MALLOC (ext_iter, struct BTreeIterator*, sizeof (struct BTreeIterator), M_TEMP, M_WAITOK);
+    if (ext_iter == NULL) {
+        return ENOMEM;
+    }
+    bzero (ext_iter, sizeof(*ext_iter));
+
+    BTInvalidateHint (ext_iter);
+    ext_key_ptr = (ExtentKey*)&ext_iter->key;
+    btRecord.bufferAddress = &ext_data;
+    btRecord.itemCount = 1;
+
+    /*
+     * This is like when you delete a file; we don't actually need most of the search machinery because
+     * we are going to need all of the extent records that belong to this file (for a given fork type),
+     * so we might as well use a straight-up iterator.
+     *
+     * Position the B-Tree iterator at the first record with this file ID
+     */
+    btRecord.itemSize = sizeof (HFSPlusExtentRecord);
+    ext_key_ptr->hfsPlus.keyLength = kHFSPlusExtentKeyMaximumLength;
+    ext_key_ptr->hfsPlus.forkType = forktype;
+    ext_key_ptr->hfsPlus.pad = 0;
+    ext_key_ptr->hfsPlus.fileID = fileid;
+    ext_key_ptr->hfsPlus.startBlock = 0;
+
+    error = BTSearchRecord (VTOF(hfsmp->hfs_extents_vp), ext_iter, &btRecord, &btRecordSize, ext_iter);
+    if (error ==  btNotFound) {
+        /* empty b-tree, so that's ok. we'll fall out during error check below. */
+        error = 0;
+    }
+
+    while (1) {
+        uint32_t found_fileid;
+        uint32_t pblocks;
+
+        error = BTIterateRecord (VTOF(hfsmp->hfs_extents_vp), kBTreeNextRecord, ext_iter, &btRecord, &btRecordSize);
+        if (error) {
+            /* swallow it if it's btNotFound, otherwise just bail out */
+            if (error == btNotFound)
+                error = 0;
+            break;
+        }
+
+        found_fileid = ext_key_ptr->hfsPlus.fileID;
+        /*
+         * We only do one fork type at a time. So if either the fork-type doesn't
+         * match what we are looking for (resource or data), OR the file id doesn't match
+         * which indicates that there's nothing more with this file ID as the key, then bail out
+         */
+        if ((found_fileid != fileid) || (ext_key_ptr->hfsPlus.forkType != forktype))  {
+            error = 0;
+            break;
+        }
+
+        /* Otherwise, we now have an extent record. Process and pin all of the file extents. */
+        pblocks = 0;
+        error = hfs_pin_extent_record (hfsmp, ext_data.hfsPlus, &pblocks);
+
+        if (error) {
+            break;
+        }
+        pinned_blocks += pblocks;
+
+        /* if 8th extent is empty, then bail out */
+        if (ext_data.hfsPlus[kHFSPlusExtentDensity-1].startBlock == 0) {
+            error = 0;
+            break;
+        }
+
+    } // end extent-getting loop
+
+    /* dump the iterator */
+    FREE (ext_iter, M_TEMP);
+
+    if (error == 0) {
+        /*
+         * In the event that the file has no overflow extents, pinned_blocks
+         * will never be updated, so we'll properly export 0 pinned blocks to caller
+         */
+        *pinned = pinned_blocks;
+    }
+
+    return error;
+
+}
+
+
+static int
+hfs_getvnode_and_pin (struct hfsmount *hfsmp, uint32_t fileid, uint32_t *pinned) {
+    struct vnode *vp;
+    int error = 0;
+    *pinned = 0;
+    uint32_t pblocks;
+
+    /*
+     * Acquire the vnode for this file.  This returns a locked cnode on success
+     */
+    error = hfs_vget(hfsmp, fileid, &vp, 0, 0);
+    if (error) {
+        /* It's possible the file was open-unlinked. In this case, we'll get ENOENT back. */
+        return error;
+    }
+
+    /*
+     * Symlinks that may have been inserted into the hotfile zone during a previous OS are now stuck
+     * here.  We do not want to move them.
+     */
+    if (!vnode_isreg(vp)) {
+        hfs_unlock(VTOC(vp));
+        vnode_put(vp);
+        return EPERM;
+    }
+
+    if (!(VTOC(vp)->c_attr.ca_recflags & kHFSFastDevPinnedMask)) {
+        hfs_unlock(VTOC(vp));
+        vnode_put(vp);
+        return EINVAL;
+    }
+
+    error = hfs_pin_vnode(hfsmp, vp, HFS_PIN_IT, &pblocks, vfs_context_kernel());
+    if (error == 0) {
+        *pinned = pblocks;
+    }
+
+    hfs_unlock(VTOC(vp));
+    vnode_put(vp);
+
+    return error;
+
+}
+
+/*
+ * Pins an HFS Extent record to the underlying CoreStorage.  Assumes that Catalog & Extents overflow
+ * B-trees are held locked, as needed.
+ *
+ * Returns the number of blocks pinned in the output argument 'pinned'
+ *
+ * Returns error status (0 || errno) in return value.
+ */
+static int hfs_pin_extent_record (struct hfsmount *hfsmp, HFSPlusExtentRecord extents, uint32_t *pinned) {
+    uint32_t pb = 0;
+    int i;
+    int error;
+
+	if (pinned == NULL) {
+		return EINVAL;
+	}
+    *pinned = 0;
+
+
+
+	/* iterate through the extents */
+	for ( i = 0; i < kHFSPlusExtentDensity; i++) {
+		if (extents[i].startBlock == 0) {
+			break;
+		}
+
+		error = hfs_pin_block_range (hfsmp, HFS_PIN_IT, extents[i].startBlock,
+				extents[i].blockCount, vfs_context_kernel());
+
+		if (error) {
+			break;
+		}
+		pb += extents[i].blockCount;
+	}
+
+    *pinned = pb;
+
+	return error;
+}
+
+/*
+ * Consume an HFS Plus on-disk catalog record and pin its blocks
+ * to the underlying CS devnode.
+ *
+ * NOTE: This is an important distinction!
+ * This function takes in an HFSPlusCatalogFile* which is the actual
+ * 200-some-odd-byte on-disk representation in the Catalog B-Tree (not
+ * one of the run-time structs that we normally use.
+ *
+ * This assumes that the catalog and extents-overflow btrees
+ * are locked, at least in shared mode
+ */
+static int hfs_pin_catalog_rec (struct hfsmount *hfsmp, HFSPlusCatalogFile *cfp, int rsrc) {
+	uint32_t pinned_blocks = 0;
+	HFSPlusForkData *forkdata;
+	int error = 0;
+	uint8_t forktype = 0;
+
+	if (rsrc) {
+        forkdata = &cfp->resourceFork;
+		forktype = 0xff;
+	}
+	else {
+		forkdata = &cfp->dataFork;
+	}
+
+	uint32_t pblocks = 0;
+
+	/* iterate through the inline extents */
+	error = hfs_pin_extent_record (hfsmp, forkdata->extents, &pblocks);
+	if (error) {
+        return error;
+	}
+
+	pinned_blocks += pblocks;
+    pblocks = 0;
+
+	/* it may have overflow extents */
+	if (forkdata->extents[kHFSPlusExtentDensity-1].startBlock != 0) {
+        error = hfs_pin_overflow_extents (hfsmp, cfp->fileID, forktype, &pblocks);
+	}
+    pinned_blocks += pblocks;
+
+	hfsmp->hfs_hotfile_freeblks -= pinned_blocks;
+
+	return error;
+}
+
+
 /*
  *
  */
@@ -526,9 +1411,14 @@ hfs_recording_init(struct hfsmount *hfsmp)
 	struct cat_attr cattr;
 	u_int32_t  cnid;
 	int error = 0;
+	long starting_temp;
+
+	int started_tr = 0;
+	int started_scan = 0;
 
 	int inserted = 0;  /* debug variables */
 	int filecount = 0;
+	int uncacheable = 0;
 
 	/*
 	 * For now, only the boot volume is supported.
@@ -538,6 +1428,9 @@ hfs_recording_init(struct hfsmount *hfsmp)
 		return (EPERM);
 	}
 
+	/* We grab the HFC mutex even though we're not fully mounted yet, just for orderliness */
+	lck_mtx_lock (&hfsmp->hfc_mutex);
+
 	/*
 	 * Tracking of hot files requires up-to-date access times.
 	 * So if access time updates are disabled, then we disable
@@ -545,49 +1438,176 @@ hfs_recording_init(struct hfsmount *hfsmp)
 	 */
 	if (vfs_flags(HFSTOVFS(hfsmp)) & MNT_NOATIME) {
 		hfsmp->hfc_stage = HFC_DISABLED;
+		lck_mtx_unlock (&hfsmp->hfc_mutex);
 		return EPERM;
 	}
 	
+	//
+	// Check if we've been asked to suspend operation
+	//
+	cnid = GetFileInfo(HFSTOVCB(hfsmp), kRootDirID, ".hotfile-suspend", &cattr, NULL);
+	if (cnid != 0) {
+		printf("hfs: %s: %s: hotfiles explicitly disabled!  remove /.hotfiles-suspend to re-enable\n", hfsmp->vcbVN, __FUNCTION__);
+		hfsmp->hfc_stage = HFC_DISABLED;
+		lck_mtx_unlock (&hfsmp->hfc_mutex);
+		return EPERM;
+	}
+
+	//
+	// Check if we've been asked to reset our state.
+	//
+	cnid = GetFileInfo(HFSTOVCB(hfsmp), kRootDirID, ".hotfile-reset", &cattr, NULL);
+	if (cnid != 0) {
+		hfs_hotfile_reset(hfsmp);
+	}
+
+	if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+		//
+		// Cooperative Fusion (CF) systems use different constants 
+		// than traditional hotfile systems.  These were picked after a bit of
+		// experimentation - we can cache many more files on the
+		// ssd in an CF system and we can do so more rapidly
+		// so bump the limits considerably (and turn down the
+		// duration so that it doesn't take weeks to adopt all
+		// the files).
+		//
+		hfc_default_file_count = 20000;
+		hfc_default_duration   = 300;    // 5min
+		hfc_max_file_count     = 50000;
+		hfc_max_file_size      = (512ULL * 1024ULL * 1024ULL);
+	}
+
 	/*
 	 * If the Hot File btree exists then metadata zone is ready.
 	 */
 	cnid = GetFileInfo(HFSTOVCB(hfsmp), kRootDirID, HFC_FILENAME, &cattr, NULL);
 	if (cnid != 0 && S_ISREG(cattr.ca_mode)) {
+		int recreate = 0;
+		
 		if (hfsmp->hfc_stage == HFC_DISABLED)
 			hfsmp->hfc_stage = HFC_IDLE;
-		return (0);
+		hfsmp->hfs_hotfile_freeblks = 0;
+
+		if ((hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) && cattr.ca_blocks > 0) {
+			//
+			// make sure the hotfile btree is pinned
+			//
+			error = hfc_btree_open(hfsmp, &hfsmp->hfc_filevp);
+			if (!error) {
+				/* XXX: must fix hfs_pin_vnode too */
+				hfs_pin_vnode(hfsmp, hfsmp->hfc_filevp, HFS_PIN_IT, NULL, vfs_context_kernel());
+				
+			} else {
+				printf("hfs: failed to open the btree err=%d.  Recreating hotfile btree.\n", error);
+				recreate = 1;
+			}
+			
+			hfs_hotfile_repin_files(hfsmp);
+
+			if (hfsmp->hfc_filevp) {
+				(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
+				hfsmp->hfc_filevp = NULL;
+			}
+
+		} else if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+			// hmmm, the hotfile btree is zero bytes long?  how odd.  let's recreate it.
+			printf("hfs: hotfile btree is zero bytes long?!  recreating it.\n");
+			recreate = 1;
+		}
+
+		if (!recreate) {
+			/* don't forget to unlock the mutex */
+			lck_mtx_unlock (&hfsmp->hfc_mutex);
+			return (0);
+		} else {
+			//
+			// open the hotfile btree file ignoring errors because
+			// we need the vnode pointer for hfc_btree_delete() to
+			// be able to do its work
+			//
+			error = hfc_btree_open_ext(hfsmp, &hfsmp->hfc_filevp, 1);
+			if (!error) {
+				// and delete it!
+				error = hfc_btree_delete(hfsmp);
+				(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
+				hfsmp->hfc_filevp = NULL;
+			}
+		}
 	}
 
+	printf("hfs: %s: %s: creating the hotfile btree\n", hfsmp->vcbVN, __FUNCTION__);
 	if (hfs_start_transaction(hfsmp) != 0) {
+		lck_mtx_unlock (&hfsmp->hfc_mutex);
 		return EINVAL;
 	}
+
+	/* B-tree creation must be journaled */
+	started_tr = 1;
 
 	error = hfc_btree_create(hfsmp, HFSTOVCB(hfsmp)->blockSize, HFC_DEFAULT_FILE_COUNT);
 	if (error) {
 #if HFC_VERBOSE
 		printf("hfs: Error %d creating hot file b-tree on %s \n", error, hfsmp->vcbVN);
 #endif
-		goto out2;
+		goto recording_init_out;
 	}
+
+	hfs_end_transaction (hfsmp);
+	started_tr = 0;
+	/*
+	 * Do a journal flush + flush track cache. We have to ensure that the async I/Os have been issued to the media
+	 * before proceeding.
+	 */
+	hfs_flush (hfsmp, HFS_FLUSH_FULL);
+
+	/* now re-start a new transaction */
+	if (hfs_start_transaction (hfsmp) != 0) {
+		lck_mtx_unlock (&hfsmp->hfc_mutex);
+		return EINVAL;
+	}
+	started_tr = 1;
+
 	/*
 	 * Open the Hot File B-tree file for writing.
 	 */
 	if (hfsmp->hfc_filevp)
 		panic("hfs_recording_init: hfc_filevp exists (vp = %p)", hfsmp->hfc_filevp);
+
 	error = hfc_btree_open(hfsmp, &hfsmp->hfc_filevp);
 	if (error) {
 #if HFC_VERBOSE
 		printf("hfs: Error %d opening hot file b-tree on %s \n", error, hfsmp->vcbVN);
 #endif
-		goto out2;
+		goto recording_init_out;
 	}
+
+	/*
+	 * This function performs work similar to namei; we must NOT hold the catalog lock while
+	 * calling it. This will decorate catalog records as being pinning candidates. (no hotfiles work)
+	 */
+	hfs_setup_default_cf_hotfiles(hfsmp);
+
+	/*
+	 * now grab the hotfiles b-tree vnode/cnode lock first, as it is not classified as a systemfile.
+	 */
+	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
+		error = EPERM;
+		(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
+		/* zero it out to avoid pinning later on */
+		hfsmp->hfc_filevp = NULL;
+		goto recording_init_out;
+	}
+
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	if (iterator == NULL) {
 		error = ENOMEM;
+		hfs_unlock (VTOC(hfsmp->hfc_filevp));
 		(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
+		/* zero it out to avoid pinning */
 		hfsmp->hfc_filevp = NULL;
-		goto out2;
+		goto recording_init_out;
 	}
+
 	bzero(iterator, sizeof(*iterator));
 	key = (HotFileKey*) &iterator->key;
 	key->keyLength = HFC_KEYLENGTH;
@@ -595,34 +1615,52 @@ hfs_recording_init(struct hfsmount *hfsmp)
 	record.bufferAddress = &data;
 	record.itemSize = sizeof(u_int32_t);
 	record.itemCount = 1;
+
 #if HFC_VERBOSE
-	printf("hfs: Evaluating space for \"%s\" metadata zone...\n", HFSTOVCB(hfsmp)->vcbVN);
+	printf("hfs: Evaluating space for \"%s\" metadata zone... (freeblks %d)\n", HFSTOVCB(hfsmp)->vcbVN,
+	       hfsmp->hfs_hotfile_freeblks);
 #endif
+
 	/*
-	 * Get ready to scan the Catalog file.
+	 * Get ready to scan the Catalog file. We explicitly do NOT grab the catalog lock because
+	 * we're fully single-threaded at the moment (by virtue of being called during mount()),
+	 * and if we have to grow the hotfile btree, then we would need to grab the catalog lock
+	 * and if we take a shared lock here, it would deadlock (see <rdar://problem/21486585>)
+	 *
+	 * We already started a transaction so we should already be holding the journal lock at this point.
+	 * Note that we have to hold the journal lock / start a txn BEFORE the systemfile locks.
 	 */
+
 	error = BTScanInitialize(VTOF(HFSTOVCB(hfsmp)->catalogRefNum), 0, 0, 0,
 	                       kCatSearchBufferSize, &scanstate);
 	if (error) {
 		printf("hfs_recording_init: err %d BTScanInit\n", error);
-		goto out2;
+
+		/* drop the systemfile locks */
+		hfs_unlock(VTOC(hfsmp->hfc_filevp));
+
+		(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
+
+		/* zero it out to avoid pinning */
+		hfsmp->hfc_filevp = NULL;
+		goto recording_init_out;
 	}
 
-	/*
-	 * The writes to Hot File B-tree file are journaled.
-	 */
-	if (hfs_start_transaction(hfsmp) != 0) {
-	    error = EINVAL;
-	    goto out1;
-	} 
-	if (hfs_lock(VTOC(hfsmp->hfc_filevp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT) != 0) {
-		error = EPERM;
-		goto out0;
-	}
+	started_scan = 1;
+
 	filefork = VTOF(hfsmp->hfc_filevp);
 
+	starting_temp = random() % HF_TEMP_RANGE;
+
 	/*
-	 * Visit all the catalog btree leaf records.
+	 * Visit all the catalog btree leaf records. We have to hold the catalog lock to do this.
+	 *
+	 * NOTE: The B-Tree scanner reads from the media itself. Under normal circumstances it would be
+	 * fine to simply use b-tree routines to read blocks that correspond to b-tree nodes, because the
+	 * block cache is going to ensure you always get the cached copy of a block (even if a journal
+	 * txn has modified one of those blocks).  That is NOT true when
+	 * using the scanner.  In particular, it will always read whatever is on-disk. So we have to ensure
+	 * that the journal has flushed and that the async I/Os to the metadata files have been issued.
 	 */
 	for (;;) {
 		error = BTScanNextRecord(&scanstate, 0, (void **)&keyp, (void **)&datap, &dataSize);
@@ -639,16 +1677,34 @@ hfs_recording_init(struct hfsmount *hfsmp)
 		}
 		filep = (HFSPlusCatalogFile *)datap;
 		filecount++;
-		if (filep->dataFork.totalBlocks == 0) {
+
+		if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+			if (filep->flags & kHFSDoNotFastDevPinMask) {
+				uncacheable++;
+			}
+
+			//
+			// If the file does not have the FastDevPinnedMask set, we
+			// can ignore it and just go to the next record.
+			//
+			if ((filep->flags & kHFSFastDevPinnedMask) == 0) {
+				continue;
+			}
+		} else if (filep->dataFork.totalBlocks == 0) {
 			continue;
 		}
+
 		/*
-		 * Any file that has blocks inside the hot file
-		 * space is recorded for later eviction.
+		 * On a regular hdd, any file that has blocks inside
+		 * the hot file space is recorded for later eviction.
 		 *
 		 * For now, resource forks are ignored.
+		 *
+		 * We don't do this on CF systems as there is no real
+		 * hotfile area - we just pin/unpin blocks belonging to
+		 * interesting files.
 		 */
-		if (!hotextents(hfsmp, &filep->dataFork.extents[0])) {
+		if (!(hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) && !hotextents(hfsmp, &filep->dataFork.extents[0])) {
 			continue;
 		}
 		cnid = filep->fileID;
@@ -661,9 +1717,36 @@ hfs_recording_init(struct hfsmount *hfsmp)
 		 * XXX - need to skip quota files as well.
 		 */
 
+		uint32_t temp;
+
+		if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+			int rsrc = 0;
+
+			temp = (uint32_t)starting_temp++;
+			if (filep->flags & kHFSAutoCandidateMask) {
+				temp += MAX_NORMAL_TEMP;
+			}
+
+			/* use the data fork by default */
+			if (filep->dataFork.totalBlocks == 0) {
+				/*
+                 * but if empty, switch to rsrc as its likely
+                 * a compressed file
+                 */
+				rsrc = 1;
+			}
+
+			error =  hfs_pin_catalog_rec (hfsmp, filep, rsrc);
+			if (error)
+				break;
+
+		} else {
+			temp = HFC_MINIMUM_TEMPERATURE;
+		}
+
 		/* Insert a hot file entry. */
 		key->keyLength   = HFC_KEYLENGTH;
-		key->temperature = HFC_MINIMUM_TEMPERATURE;
+		key->temperature = temp;
 		key->fileID      = cnid;
 		key->forkType    = 0;
 		data = 0x3f3f3f3f;
@@ -679,7 +1762,7 @@ hfs_recording_init(struct hfsmount *hfsmp)
 		key->temperature = HFC_LOOKUPTAG;
 		key->fileID = cnid;
 		key->forkType = 0;
-		data = HFC_MINIMUM_TEMPERATURE;
+		data = temp;
 		error = BTInsertRecord(filefork, iterator, &record, record.itemSize);
 		if (error) {
 			printf("hfs_recording_init: BTInsertRecord failed %d (fileid %d)\n", error, key->fileID);
@@ -687,28 +1770,49 @@ hfs_recording_init(struct hfsmount *hfsmp)
 			break;
 		}
 		inserted++;
-	}
-	(void) BTFlushPath(filefork);
-	hfs_unlock(VTOC(hfsmp->hfc_filevp));
+	} // end catalog iteration loop
 
-out0:
-	hfs_end_transaction(hfsmp);
+	save_btree_user_info(hfsmp);
+	(void) BTFlushPath(filefork);
+
+recording_init_out:
+
+	/* Unlock first, then pin after releasing everything else */
+	if (hfsmp->hfc_filevp) {
+		hfs_unlock (VTOC(hfsmp->hfc_filevp));
+	}
+
+	if (started_scan) {
+		(void) BTScanTerminate (&scanstate, &data, &data, &data);
+	}
+
+	if (started_tr) {
+		hfs_end_transaction(hfsmp);
+	}
+
 #if HFC_VERBOSE
-	printf("hfs: %d files identified out of %d\n", inserted, filecount);
+	printf("hfs: %d files identified out of %d (freeblocks is now: %d)\n", inserted, filecount, hfsmp->hfs_hotfile_freeblks);
+	if (uncacheable) {
+		printf("hfs: %d files were marked as uncacheable\n", uncacheable);
+	}
 #endif
 	
-out1:
-	(void) BTScanTerminate(&scanstate, &data, &data, &data);
-out2:	
-	hfs_end_transaction(hfsmp);
 	if (iterator)
 		FREE(iterator, M_TEMP);
+
 	if (hfsmp->hfc_filevp) {
+		if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+			hfs_pin_vnode(hfsmp, hfsmp->hfc_filevp, HFS_PIN_IT, NULL, vfs_context_kernel());
+		}
 		(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
 		hfsmp->hfc_filevp = NULL;
 	}
+
 	if (error == 0)
 		hfsmp->hfc_stage = HFC_IDLE;
+
+	/* Finally, unlock the HFC mutex */
+	lck_mtx_unlock (&hfsmp->hfc_mutex);
 
 	return (error);
 }
@@ -740,7 +1844,7 @@ hfs_hotfilesync(struct hfsmount *hfsmp, vfs_context_t ctx)
 			break;
 	
 		case HFC_ADOPTION:
-			(void) hotfiles_adopt(hfsmp);
+			(void) hotfiles_adopt(hfsmp, ctx);
 			break;
 		default:
 			break;
@@ -779,6 +1883,20 @@ hfs_addhotfile(struct vnode *vp)
 }
 
 static int
+hf_ignore_process(const char *pname, size_t maxlen)
+{
+	if (   strncmp(pname, "mds", maxlen) == 0
+	    || strncmp(pname, "mdworker", maxlen) == 0
+	    || strncmp(pname, "mds_stores", maxlen) == 0
+	    || strncmp(pname, "makewhatis", maxlen) == 0) {
+		return 1;
+	}
+
+	return 0;
+	
+}
+
+static int
 hfs_addhotfile_internal(struct vnode *vp)
 {
 	hotfile_data_t *hotdata;
@@ -813,20 +1931,59 @@ hfs_addhotfile_internal(struct vnode *vp)
 	ffp = VTOF(vp);
 	cp = VTOC(vp);
 
-	if ((ffp->ff_bytesread == 0) ||
-	    (ffp->ff_blocks == 0) ||
-	    (ffp->ff_size == 0) ||
-	    (ffp->ff_blocks > hotdata->maxblocks) ||
-	    (cp->c_flag & (C_DELETED | C_NOEXISTS)) ||
-	    (cp->c_bsdflags & UF_NODUMP) ||
-	    (cp->c_atime < hfsmp->hfc_timebase)) {
-		return (0);
+	if (cp->c_attr.ca_recflags & (kHFSFastDevPinnedMask|kHFSDoNotFastDevPinMask)) {
+		// it's already a hotfile or can't be a hotfile...
+		return 0;
 	}
 
-	temperature = ffp->ff_bytesread / ffp->ff_size;
-	if (temperature < hotdata->threshold) {
-		return (0);
+	if (vnode_isdir(vp) || vnode_issystem(vp) || (cp->c_flag & (C_DELETED | C_NOEXISTS))) {
+		return 0;
 	}
+
+	if ((hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) && vnode_isfastdevicecandidate(vp)) {
+		//
+		// On cooperative fusion (CF) systems we have different criteria for whether something
+		// can be pinned to the ssd.
+		//
+		if (cp->c_flag & (C_DELETED|C_NOEXISTS)) {
+			//
+			// dead files are definitely not worth caching
+			//
+			return 0;
+		} else if (ffp->ff_blocks == 0 && !(cp->c_bsdflags & UF_COMPRESSED) && !(cp->c_attr.ca_recflags & kHFSFastDevCandidateMask)) {
+			//
+			// empty files aren't worth caching but compressed ones might be, as are 
+			// newly created files that live in WorthCaching directories... 
+			//
+			return 0;
+		}
+
+		char pname[256];
+		pname[0] = '\0';
+		proc_selfname(pname, sizeof(pname));
+		if (hf_ignore_process(pname, sizeof(pname))) {
+			// ignore i/o's from certain system daemons 
+			return 0;
+		}
+
+		temperature = cp->c_fileid;        // in memory we just keep it sorted by file-id
+	} else {
+		// the normal hard drive based hotfile checks
+		if ((ffp->ff_bytesread == 0) ||
+		    (ffp->ff_blocks == 0) ||
+		    (ffp->ff_size == 0) ||
+		    (ffp->ff_blocks > hotdata->maxblocks) ||
+		    (cp->c_bsdflags & (UF_NODUMP | UF_COMPRESSED)) ||
+		    (cp->c_atime < hfsmp->hfc_timebase)) {
+			return (0);
+		}
+
+		temperature = ffp->ff_bytesread / ffp->ff_size;
+		if (temperature < hotdata->threshold) {
+			return (0);
+		}
+	}
+
 	/*
 	 * If there is room or this file is hotter than
 	 * the coldest one then add it to the list.
@@ -834,13 +1991,21 @@ hfs_addhotfile_internal(struct vnode *vp)
 	 */
 	if ((hotdata->activefiles < hfsmp->hfc_maxfiles) ||
 	    (hotdata->coldest == NULL) ||
-	    (temperature > hotdata->coldest->temperature)) {
+	    (temperature >= hotdata->coldest->temperature)) {
 		++hotdata->refcount;
 		entry = hf_getnewentry(hotdata);
 		entry->temperature = temperature;
 		entry->fileid = cp->c_fileid;
-		entry->blocks = ffp->ff_blocks;
-		hf_insert(hotdata, entry);
+		//
+		// if ffp->ff_blocks is zero, it might be compressed so make sure we record
+		// that there's at least one block.
+		//
+		entry->blocks = ffp->ff_blocks ? ffp->ff_blocks : 1;   
+		if (hf_insert(hotdata, entry) == EEXIST) {
+			// entry is already present, don't need to add it again
+			entry->right = hotdata->freelist;
+			hotdata->freelist = entry;
+		}
 		--hotdata->refcount;
 	}
 
@@ -900,6 +2065,148 @@ hfs_removehotfile(struct vnode *vp)
 out:
 	lck_mtx_unlock(&hfsmp->hfc_mutex);
 	return (0);
+}
+
+int
+hfs_hotfile_deleted(__unused struct vnode *vp)
+{
+#if 1
+	return 0;
+#else	
+	//
+	// XXXdbg - this code, while it would work, would introduce a huge inefficiency
+	//          to deleting files as the way it's written would require us to open
+	//          the hotfile btree on every open, delete two records in it and then
+	//          close the hotfile btree (which involves more writes).
+	//
+	//          We actually can be lazy about deleting hotfile records for files
+	//          that get deleted.  When it's time to evict things, if we encounter
+	//          a record that references a dead file (i.e. a fileid which no
+	//          longer exists), the eviction code will remove the records.  Likewise
+	//          the code that scans the HotFile B-Tree at boot time to re-pin files
+	//          will remove dead records.
+	//
+
+	hotfile_data_t *hotdata;
+	hfsmount_t *hfsmp;
+	cnode_t *cp;
+	filefork_t *filefork;
+	u_int32_t temperature;
+	BTreeIterator * iterator = NULL;
+	FSBufferDescriptor record;
+	HotFileKey *key;
+	u_int32_t data;
+	int error=0;
+
+	cp = VTOC(vp);
+	if (cp == NULL || !(cp->c_attr.ca_recflags & kHFSFastDevPinnedMask)) {
+		return 0;
+	}
+
+	hfsmp = VTOHFS(vp);
+	if (!(hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN)) {
+		return 0;
+	}
+	
+	if (hfc_btree_open(hfsmp, &hfsmp->hfc_filevp) != 0 || hfsmp->hfc_filevp == NULL) {
+		// either there is no hotfile info or it's damaged
+		return EINVAL;
+	}
+	
+	filefork = VTOF(hfsmp->hfc_filevp);
+	if (filefork == NULL) {
+		return 0;
+	}
+
+	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		return ENOMEM;
+	}	
+	bzero(iterator, sizeof(*iterator));
+	key = (HotFileKey*) &iterator->key;
+
+	record.bufferAddress = &data;
+	record.itemSize = sizeof(u_int32_t);
+	record.itemCount = 1;
+
+	key->keyLength = HFC_KEYLENGTH;
+	key->temperature = HFC_LOOKUPTAG;
+	key->fileID = cp->c_fileid;
+	key->forkType = 0;
+
+	lck_mtx_lock(&hfsmp->hfc_mutex);
+	(void) BTInvalidateHint(iterator);
+	if (BTSearchRecord(filefork, iterator, &record, NULL, iterator) == 0) {
+		temperature = key->temperature;
+		hfc_btree_delete_record(hfsmp, iterator, key);
+	} else {
+		//printf("hfs: hotfile_deleted: did not find fileid %d\n", cp->c_fileid);
+		error = ENOENT;
+	}
+
+	if ((hotdata = (hotfile_data_t *)hfsmp->hfc_recdata) != NULL) {
+		// just in case, also make sure it's removed from the in-memory list as well
+		++hotdata->refcount;
+		hf_delete(hotdata, cp->c_fileid, cp->c_fileid);
+		--hotdata->refcount;
+	}
+
+	lck_mtx_unlock(&hfsmp->hfc_mutex);
+	FREE(iterator, M_TEMP);
+
+	hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
+	
+	return error;
+#endif
+}
+
+int
+hfs_hotfile_adjust_blocks(struct vnode *vp, int64_t num_blocks)
+{
+	hfsmount_t *hfsmp;
+	
+	if (vp == NULL) {
+		return 0;
+	}
+
+	hfsmp = VTOHFS(vp);
+
+	if (!(hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) || num_blocks == 0 || vp == NULL) {
+		return 0;
+	}
+
+	//
+	// if file is not HotFileCached or it has the CanNotHotFile cache
+	// bit set then there is nothing to do
+	//
+	if (!(VTOC(vp)->c_attr.ca_recflags & kHFSFastDevPinnedMask) || (VTOC(vp)->c_attr.ca_recflags & kHFSDoNotFastDevPinMask)) {
+		// it's not a hot file or can't be one so don't bother tracking
+		return 0;
+	}
+	
+	OSAddAtomic(num_blocks, &hfsmp->hfs_hotfile_blk_adjust);
+
+	return (0);
+}
+
+//
+// Assumes hfsmp->hfc_mutex is LOCKED
+//
+static int
+hfs_hotfile_cur_freeblks(hfsmount_t *hfsmp)
+{
+	if (hfsmp->hfc_stage < HFC_IDLE) {
+		return 0;
+	}
+	
+	int cur_blk_adjust = hfsmp->hfs_hotfile_blk_adjust;   // snap a copy of this value
+
+	if (cur_blk_adjust) {
+		OSAddAtomic(-cur_blk_adjust, &hfsmp->hfs_hotfile_blk_adjust);
+		hfsmp->hfs_hotfile_freeblks += cur_blk_adjust;
+	}
+
+	return hfsmp->hfs_hotfile_freeblks;
 }
 
 
@@ -971,9 +2278,14 @@ hotfiles_refine(struct hfsmount *hfsmp)
 	int  i;
 	int  error = 0;
 
-
 	if ((listp = (hotfilelist_t  *)hfsmp->hfc_recdata) == NULL)
 		return (0);	
+
+	if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+		// on ssd's we don't refine the temperature since the
+		// replacement algorithm is simply random
+		return 0;
+	}
 
 	mp = HFSTOVFS(hfsmp);
 
@@ -1016,12 +2328,12 @@ hotfiles_refine(struct hfsmount *hfsmp)
 		 * Update thread entry with latest temperature.
 		 */
 		error = BTUpdateRecord(filefork, iterator,
-				(IterateCallBackProcPtr)update_callback,
-				&listp->hfl_hotfile[i].hf_temperature);
+				       (IterateCallBackProcPtr)update_callback,
+				      &listp->hfl_hotfile[i].hf_temperature);
 		if (error) {
 			printf("hfs: hotfiles_refine: BTUpdateRecord failed %d (file %d)\n", error, key->fileID);
 			error = MacToVFSError(error);
-		//	break;
+			//	break;
 		}
 		/*
 		 * Re-key entry with latest temperature.
@@ -1049,7 +2361,6 @@ hotfiles_refine(struct hfsmount *hfsmp)
 			error = MacToVFSError(error);
 			break;
 		}
-
 		/*
 		 * Invalidate this entry in the list.
 		 */
@@ -1075,7 +2386,7 @@ out:
  * Requires that the hfc_mutex be held.
  */
 static int
-hotfiles_adopt(struct hfsmount *hfsmp)
+hotfiles_adopt(struct hfsmount *hfsmp, vfs_context_t ctx)
 {
 	BTreeIterator * iterator = NULL;
 	struct vnode *vp;
@@ -1091,6 +2402,14 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 	int  last;
 	int  error = 0;
 	int  startedtrans = 0;
+	//
+	// all files in a given adoption phase have a temperature
+	// that starts at a random value and then increases linearly.
+	// the idea is that during eviction, files that were adopted
+	// together will be evicted together
+	//
+	long starting_temp = random() % HF_TEMP_RANGE;
+	long temp_adjust = 0;
 
 	if ((listp = (hotfilelist_t  *)hfsmp->hfc_recdata) == NULL)
 		return (0);	
@@ -1107,6 +2426,14 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		hfs_unlock(VTOC(hfsmp->hfc_filevp));
 		return (ENOMEM);
 	}
+
+#if HFC_VERBOSE
+		printf("hfs:%s: hotfiles_adopt: (hfl_next: %d, hotfile start/end block: %d - %d; max/free: %d/%d; maxfiles: %d)\n",
+		       hfsmp->vcbVN,
+		       listp->hfl_next,
+		       hfsmp->hfs_hotfile_start, hfsmp->hfs_hotfile_end,
+		       hfsmp->hfs_hotfile_maxblks, hfsmp->hfs_hotfile_freeblks, hfsmp->hfc_maxfiles);
+#endif
 
 	stage = hfsmp->hfc_stage;
 	hfsmp->hfc_stage = HFC_BUSY;
@@ -1128,17 +2455,30 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 
 	for (i = listp->hfl_next; (i < last) && (blksmoved < HFC_BLKSPERSYNC); ++i) {
 		/*
-		 * Skip invalid entries (already in hot area).
+		 * Skip entries that aren't going to work.
 		 */
 		if (listp->hfl_hotfile[i].hf_temperature == 0) {
-				listp->hfl_next++;
-				continue;
+			//printf("hfs: zero temp on file-id %d\n", listp->hfl_hotfile[i].hf_fileid);
+			listp->hfl_next++;
+			continue;
 		}
+		if (listp->hfl_hotfile[i].hf_fileid == VTOC(hfsmp->hfc_filevp)->c_fileid) {
+			//printf("hfs: cannot adopt the hotfile b-tree itself! (file-id %d)\n", listp->hfl_hotfile[i].hf_fileid);
+			listp->hfl_next++;
+			continue;
+		}
+		if (listp->hfl_hotfile[i].hf_fileid < kHFSFirstUserCatalogNodeID) {
+			//printf("hfs: cannot adopt system files (file-id %d)\n", listp->hfl_hotfile[i].hf_fileid);
+			listp->hfl_next++;
+			continue;
+		}
+
 		/*
 		 * Acquire a vnode for this file.
 		 */
 		error = hfs_vget(hfsmp, listp->hfl_hotfile[i].hf_fileid, &vp, 0, 0);
 		if (error) {
+			//printf("failed to get fileid %d (err %d)\n", listp->hfl_hotfile[i].hf_fileid, error);
 			if (error == ENOENT) {
 				error = 0;
 				listp->hfl_next++;
@@ -1146,16 +2486,24 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 			}
 			break;
 		}
+
+		//printf("hfs: examining hotfile entry w/fileid %d, temp %d, blocks %d (HotFileCached: %s)\n",
+		//       listp->hfl_hotfile[i].hf_fileid, listp->hfl_hotfile[i].hf_temperature,
+		//       listp->hfl_hotfile[i].hf_blocks,
+		//       (VTOC(vp)->c_attr.ca_recflags & kHFSFastDevPinnedMask) ? "YES" : "NO");
+
 		if (!vnode_isreg(vp)) {
 			/* Symlinks are ineligible for adoption into the hotfile zone.  */
-			printf("hfs: hotfiles_adopt: huh, not a file %d (%d)\n", listp->hfl_hotfile[i].hf_fileid, VTOC(vp)->c_cnid);
+			//printf("hfs: hotfiles_adopt: huh, not a file %d (%d)\n", listp->hfl_hotfile[i].hf_fileid, VTOC(vp)->c_cnid);
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			listp->hfl_hotfile[i].hf_temperature = 0;
 			listp->hfl_next++;
 			continue;  /* stale entry, go to next */
 		}
-		if (hotextents(hfsmp, &VTOF(vp)->ff_extents[0])) {
+		if (   (VTOC(vp)->c_flag & (C_DELETED | C_NOEXISTS))
+		    || (!(hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) && hotextents(hfsmp, &VTOF(vp)->ff_extents[0]))
+		    || (VTOC(vp)->c_attr.ca_recflags & (kHFSFastDevPinnedMask|kHFSDoNotFastDevPinMask))) {
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			listp->hfl_hotfile[i].hf_temperature = 0;
@@ -1163,8 +2511,35 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 			listp->hfl_totalblocks -= listp->hfl_hotfile[i].hf_blocks;
 			continue;  /* stale entry, go to next */
 		}
+
 		fileblocks = VTOF(vp)->ff_blocks;
-		if (fileblocks > hfsmp->hfs_hotfile_freeblks) {
+
+		//
+		// for CF, if the file is empty (and not compressed) or it is too large,
+		// do not try to pin it.  (note: if fileblocks == 0 but the file is marked
+		// as compressed, we may still be able to cache it).
+		//
+		if ((hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) &&
+		    ((fileblocks == 0 && !(VTOC(vp)->c_bsdflags & UF_COMPRESSED)) ||
+		     (unsigned int)fileblocks > (HFC_MAXIMUM_FILESIZE / (uint64_t)HFSTOVCB(hfsmp)->blockSize))) {
+			// don't try to cache something too large or that's zero-bytes
+
+			vnode_clearfastdevicecandidate(vp);    // turn off the fast-dev-candidate flag so we don't keep trying to cache it.
+
+			hfs_unlock(VTOC(vp));
+			vnode_put(vp);
+			listp->hfl_hotfile[i].hf_temperature = 0;
+			listp->hfl_next++;
+			listp->hfl_totalblocks -= listp->hfl_hotfile[i].hf_blocks;
+			continue;  /* entry is too big, just carry on with the next guy */
+		}
+
+		if (fileblocks > hfs_hotfile_cur_freeblks(hfsmp)) {
+			//
+			// No room for this file.  Although eviction should have made space
+			// it's best that we check here as well since writes to existing
+			// hotfiles may have eaten up space since we performed eviction
+			//
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			listp->hfl_next++;
@@ -1174,6 +2549,10 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		
 		if ((blksmoved > 0) &&
 		    (blksmoved + fileblocks) > HFC_BLKSPERSYNC) {
+			//
+			// we've done enough work, let's be nice to the system and
+			// stop until the next iteration
+			//
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			break;  /* adopt this entry the next time around */
@@ -1183,10 +2562,76 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		else
 			data = 0x3f3f3f3f;
 
-		error = hfs_relocate(vp, hfsmp->hfs_hotfile_start, kauth_cred_get(), current_proc());
+
+		if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+			//
+			// For CF we pin the blocks belonging to the file
+			// to the "fast" (aka ssd) media
+			//
+			uint32_t pinned_blocks;
+
+			if (vnode_isautocandidate(vp)) {
+				VTOC(vp)->c_attr.ca_recflags |= kHFSAutoCandidateMask;
+			}
+			if (VTOC(vp)->c_attr.ca_recflags & kHFSAutoCandidateMask) {
+				//
+				// this moves auto-cached files to the higher tier 
+				// of "temperatures" which means they are less likely
+				// to get evicted (user selected hotfiles will get
+				// evicted first in the theory that they change more
+				// frequently compared to system files)
+				//
+				temp_adjust = MAX_NORMAL_TEMP;
+			} else {
+				temp_adjust = 0;
+			}
+
+			hfs_unlock(VTOC(vp));  // don't need an exclusive lock for this
+			hfs_lock(VTOC(vp), HFS_SHARED_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
+
+			error = hfs_pin_vnode(hfsmp, vp, HFS_PIN_IT, &pinned_blocks, ctx);
+
+			fileblocks = pinned_blocks;
+
+			// go back to an exclusive lock since we're going to modify the cnode again
+			hfs_unlock(VTOC(vp));
+			hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
+		} else {
+			//
+			// Old style hotfiles moves the data to the center (aka "hot")
+			// region of the disk
+			//
+			error = hfs_relocate(vp, hfsmp->hfs_hotfile_start, kauth_cred_get(), current_proc());
+		}
+
+		if (!error) {
+			VTOC(vp)->c_attr.ca_recflags |= kHFSFastDevPinnedMask;
+			VTOC(vp)->c_flag |= C_MODIFIED;
+		} else if ((hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) && error == EALREADY) {
+			//
+			// If hfs_pin_vnode() returned EALREADY then this file is not
+			// ever able to be hotfile cached the normal way.  This can
+			// happen with compressed files which have their data stored
+			// in an extended attribute.  We flag them so that we won't
+			// bother to try and hotfile cache them again the next time
+			// they're read.
+			//
+			VTOC(vp)->c_attr.ca_recflags |= kHFSDoNotFastDevPinMask;
+			VTOC(vp)->c_flag |= C_MODIFIED;
+		}
+
 		hfs_unlock(VTOC(vp));
 		vnode_put(vp);
 		if (error) {
+#if HFC_VERBOSE
+			if (error != EALREADY) {
+				printf("hfs: hotfiles_adopt: could not relocate file %d (err %d)\n", listp->hfl_hotfile[i].hf_fileid, error);
+			}
+#endif
+
+			if (last < listp->hfl_count) {
+				last++;
+			}
 			/* Move on to next item. */
 			listp->hfl_next++;
 			continue;
@@ -1197,6 +2642,22 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		
 		/* Insert hot file entry */
 		key->keyLength   = HFC_KEYLENGTH;
+
+		if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+			//
+			// The "temperature" for a CF hotfile is simply a random
+			// number that we sequentially increment for each file in
+			// the set of files we're currently adopting.  This has the
+			// nice property that all of the files we pin to the ssd
+			// in the current phase will sort together in the hotfile
+			// btree.  When eviction time comes we will evict them
+			// together as well.  This gives the eviction phase temporal
+			// locality - things written together get evicted together
+			// which is what ssd's like.
+			//
+			listp->hfl_hotfile[i].hf_temperature = (uint32_t)temp_adjust + starting_temp++;
+		}
+
 		key->temperature = listp->hfl_hotfile[i].hf_temperature;
 		key->fileID      = listp->hfl_hotfile[i].hf_fileid;
 		key->forkType    = 0;
@@ -1210,8 +2671,9 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 
 		error = BTInsertRecord(filefork, iterator, &record, record.itemSize);
 		if (error) {
-			printf("hfs: hotfiles_adopt: BTInsertRecord failed %d (fileid %d)\n", error, key->fileID);
+			int orig_error = error;
 			error = MacToVFSError(error);
+			printf("hfs: hotfiles_adopt:1: BTInsertRecord failed %d/%d (fileid %d)\n", error, orig_error, key->fileID);
 			stage = HFC_IDLE;
 			break;
 		}
@@ -1224,12 +2686,20 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		data = listp->hfl_hotfile[i].hf_temperature;
 		error = BTInsertRecord(filefork, iterator, &record, record.itemSize);
 		if (error) {
-			printf("hfs: hotfiles_adopt: BTInsertRecord failed %d (fileid %d)\n", error, key->fileID);
+			int orig_error = error;
 			error = MacToVFSError(error);
+			printf("hfs: hotfiles_adopt:2: BTInsertRecord failed %d/%d (fileid %d)\n", error, orig_error, key->fileID);
 			stage = HFC_IDLE;
 			break;
+		} else {
+			(void) BTFlushPath(filefork);
+			blksmoved += fileblocks;
 		}
-		(void) BTFlushPath(filefork);
+
+		listp->hfl_next++;
+		if (listp->hfl_next >= listp->hfl_count) {
+			break;
+		}
 
 		/* Transaction complete. */
 		if (startedtrans) {
@@ -1237,12 +2707,7 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		    startedtrans = 0;
 		}
 
-		blksmoved += fileblocks;
-		listp->hfl_next++;
-		if (listp->hfl_next >= listp->hfl_count) {
-			break;
-		}
-		if (hfsmp->hfs_hotfile_freeblks <= 0) {
+		if (hfs_hotfile_cur_freeblks(hfsmp) <= 0) {
 #if HFC_VERBOSE
 			printf("hfs: hotfiles_adopt: free space exhausted (%d)\n", hfsmp->hfs_hotfile_freeblks);
 #endif
@@ -1251,10 +2716,19 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 	} /* end for */
 
 #if HFC_VERBOSE
-	printf("hfs: hotfiles_adopt: [%d] adopted %d blocks (%d left)\n", listp->hfl_next, blksmoved, listp->hfl_totalblocks);
+	printf("hfs: hotfiles_adopt: [%d] adopted %d blocks (%d files left)\n", listp->hfl_next, blksmoved, listp->hfl_count - i);
 #endif
+	if (!startedtrans) {
+		// start a txn so we'll save the btree summary info
+		if (hfs_start_transaction(hfsmp) == 0) {
+			startedtrans = 1;
+		}
+	}		
+
 	/* Finish any outstanding transactions. */
 	if (startedtrans) {
+		save_btree_user_info(hfsmp);
+
 		(void) BTFlushPath(filefork);
 		hfs_end_transaction(hfsmp);
 		startedtrans = 0;
@@ -1312,6 +2786,13 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 		return (EPERM);
 	}
 
+#if HFC_VERBOSE
+		printf("hfs:%s: hotfiles_evict (hotfile start/end block: %d - %d; max/free: %d/%d; maxfiles: %d)\n",
+		       hfsmp->vcbVN,
+		       hfsmp->hfs_hotfile_start, hfsmp->hfs_hotfile_end,
+		       hfsmp->hfs_hotfile_maxblks, hfsmp->hfs_hotfile_freeblks, hfsmp->hfc_maxfiles);
+#endif
+
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	if (iterator == NULL) {
 		hfs_unlock(VTOC(hfsmp->hfc_filevp));
@@ -1329,6 +2810,10 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 
 	filefork = VTOF(hfsmp->hfc_filevp);
 
+#if HFC_VERBOSE
+	printf("hfs: hotfiles_evict: reclaim blks %d\n", listp->hfl_reclaimblks);
+#endif
+	
 	while (listp->hfl_reclaimblks > 0 &&
 	       blksmoved < HFC_BLKSPERSYNC &&
 	       filesmoved < HFC_FILESPERSYNC) {
@@ -1376,7 +2861,7 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 		 * here.  We do not want to move them. 
 		 */
 		if (!vnode_isreg(vp)) {
-			printf("hfs: hotfiles_evict: huh, not a file %d\n", key->fileID);
+			//printf("hfs: hotfiles_evict: huh, not a file %d\n", key->fileID);
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			goto delete;  /* invalid entry, go to next */
@@ -1392,7 +2877,7 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 		/*
 		 * Make sure file is in the hot area.
 		 */
-		if (!hotextents(hfsmp, &VTOF(vp)->ff_extents[0])) {
+		if (!hotextents(hfsmp, &VTOF(vp)->ff_extents[0]) && !(VTOC(vp)->c_attr.ca_recflags & kHFSFastDevPinnedMask)) {
 #if HFC_VERBOSE
 			printf("hfs: hotfiles_evict: file %d isn't hot!\n", key->fileID);
 #endif
@@ -1402,15 +2887,38 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 		}
 		
 		/*
-		 * Relocate file out of hot area.
+		 * Relocate file out of hot area.  On cooperative fusion (CF) that just 
+		 * means un-pinning the data from the ssd.  For traditional hotfiles that means moving
+		 * the file data out of the hot region of the disk.
 		 */
-		error = hfs_relocate(vp, HFSTOVCB(hfsmp)->nextAllocation, vfs_context_ucred(ctx), vfs_context_proc(ctx));
+		if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+			uint32_t pinned_blocks;
+			
+			hfs_unlock(VTOC(vp));  // don't need an exclusive lock for this
+			hfs_lock(VTOC(vp), HFS_SHARED_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
+
+			error = hfs_pin_vnode(hfsmp, vp, HFS_UNPIN_IT, &pinned_blocks, ctx);
+			fileblocks = pinned_blocks;
+
+			if (!error) {
+				// go back to an exclusive lock since we're going to modify the cnode again
+				hfs_unlock(VTOC(vp));
+				hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK, HFS_LOCK_ALLOW_NOEXISTS);
+			}
+		} else {
+			error = hfs_relocate(vp, HFSTOVCB(hfsmp)->nextAllocation, vfs_context_ucred(ctx), vfs_context_proc(ctx));
+		}
 		if (error) {
+#if HFC_VERBOSE
 			printf("hfs: hotfiles_evict: err %d relocating file %d\n", error, key->fileID);
+#endif
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			bt_op = kBTreeNextRecord;
 			goto next;  /* go to next */
+		} else {
+			VTOC(vp)->c_attr.ca_recflags &= ~kHFSFastDevPinnedMask;
+			VTOC(vp)->c_flag |= C_MODIFIED;
 		}
 
 		//
@@ -1466,6 +2974,8 @@ next:
 #endif
 	/* Finish any outstanding transactions. */
 	if (startedtrans) {
+		save_btree_user_info(hfsmp);
+
 		(void) BTFlushPath(filefork);
 		hfs_end_transaction(hfsmp);
 		startedtrans = 0;
@@ -1510,6 +3020,13 @@ hotfiles_age(struct hfsmount *hfsmp)
 	int  aged = 0;
 	u_int16_t  reclen;
 
+
+	if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+		//
+		// hotfiles don't age on CF
+		//
+		return 0;
+	}
 
 	MALLOC(iterator, BTreeIterator *, 2 * sizeof(*iterator), M_TEMP, M_WAITOK);
 	if (iterator == NULL) {
@@ -1691,6 +3208,12 @@ hotextents(struct hfsmount *hfsmp, HFSPlusExtentDescriptor * extents)
 static int
 hfc_btree_open(struct hfsmount *hfsmp, struct vnode **vpp)
 {
+	return hfc_btree_open_ext(hfsmp, vpp, 0);
+}
+
+static int
+hfc_btree_open_ext(struct hfsmount *hfsmp, struct vnode **vpp, int ignore_btree_errs)
+{
 	proc_t p;
 	struct vnode *vp;
 	struct cat_desc  cdesc;
@@ -1745,8 +3268,12 @@ again:
 	/* Open the B-tree file for writing... */
 	error = BTOpenPath(VTOF(vp), (KeyCompareProcPtr) hfc_comparekeys);	
 	if (error) {
-		printf("hfs: hfc_btree_open: BTOpenPath error %d\n", error);
-		error = MacToVFSError(error);
+		if (!ignore_btree_errs) {
+			printf("hfs: hfc_btree_open: BTOpenPath error %d; filesize %lld\n", error, VTOF(vp)->ff_size);
+			error = MacToVFSError(error);
+		} else {
+			error = 0;
+		}
 	}
 
 	hfs_unlock(VTOC(vp));
@@ -1759,6 +3286,18 @@ again:
 	if (!vnode_issystem(vp))
 		panic("hfs: hfc_btree_open: not a system file (vp = %p)", vp);
 
+	HotFilesInfo hotfileinfo;
+
+	if (error == 0 && (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN)) {
+		if ((BTGetUserData(VTOF(vp), &hotfileinfo, sizeof(hotfileinfo)) == 0) && (SWAP_BE32 (hotfileinfo.magic) == HFC_MAGIC)) {
+			if (hfsmp->hfs_hotfile_freeblks == 0) {
+				hfsmp->hfs_hotfile_freeblks = hfsmp->hfs_hotfile_maxblks - SWAP_BE32 (hotfileinfo.usedblocks);
+			}
+
+			hfs_hotfile_cur_freeblks(hfsmp);        // factors in any adjustments that happened at run-time
+		}
+	}
+	
 	return (error);
 }
 
@@ -1775,7 +3314,7 @@ hfc_btree_close(struct hfsmount *hfsmp, struct vnode *vp)
 
 
 	if (hfsmp->jnl) {
-	    hfs_journal_flush(hfsmp, FALSE);
+	    hfs_flush(hfsmp, HFS_FLUSH_JOURNAL);
 	}
 
 	if (vnode_get(vp) == 0) {
@@ -1792,6 +3331,106 @@ hfc_btree_close(struct hfsmount *hfsmp, struct vnode *vp)
 	
 	return (error);
 }
+
+//
+// Assumes that hfsmp->hfc_filevp points to the hotfile btree vnode
+// (i.e. you called hfc_btree_open() ahead of time)
+//
+static int
+hfc_btree_delete_record(struct hfsmount *hfsmp, BTreeIterator *iterator, HotFileKey *key)
+{
+	int error;
+	filefork_t *filefork=VTOF(hfsmp->hfc_filevp);
+
+	/* Start a new transaction before calling BTree code. */
+	if (hfs_start_transaction(hfsmp) != 0) {
+		return EINVAL;
+	}
+
+	error = BTDeleteRecord(filefork, iterator);
+	if (error) {
+		error = MacToVFSError(error);
+		printf("hfs: failed to delete record for file-id %d : err %d\n", key->fileID, error);
+		goto out;
+	}
+
+	int savedtemp;
+	savedtemp = key->temperature;
+	key->temperature = HFC_LOOKUPTAG;
+	error = BTDeleteRecord(filefork, iterator);
+	if (error) {
+		error = MacToVFSError(error);
+		printf("hfs:2: failed to delete record for file-id %d : err %d\n", key->fileID, error);
+	}
+	key->temperature = savedtemp;
+
+	(void) BTFlushPath(filefork);
+
+out:
+	/* Transaction complete. */
+	hfs_end_transaction(hfsmp);
+
+	return error;
+}
+
+//
+// You have to have already opened the hotfile btree so
+// that hfsmp->hfc_filevp is filled in.
+//
+static int
+hfc_btree_delete(struct hfsmount *hfsmp)
+{
+	struct vnode *dvp = NULL;
+	vfs_context_t ctx = vfs_context_current();
+	struct vnode_attr va;
+	struct componentname cname;
+	static char filename[] = HFC_FILENAME;
+	int  error;
+
+	error = VFS_ROOT(HFSTOVFS(hfsmp), &dvp, ctx);
+	if (error) {
+		return (error);
+	}
+	cname.cn_nameiop = DELETE;
+	cname.cn_flags = ISLASTCN;
+	cname.cn_context = ctx;
+	cname.cn_pnbuf = filename;
+	cname.cn_pnlen = sizeof(filename);
+	cname.cn_nameptr = filename;
+	cname.cn_namelen = strlen(filename);
+	cname.cn_hash = 0;
+	cname.cn_consume = 0;
+
+	VATTR_INIT(&va);
+	VATTR_SET(&va, va_type, VREG);
+	VATTR_SET(&va, va_mode, S_IFREG | S_IRUSR | S_IWUSR);
+	VATTR_SET(&va, va_uid, 0);
+	VATTR_SET(&va, va_gid, 0);
+
+	if (hfs_start_transaction(hfsmp) != 0) {
+	    error = EINVAL;
+	    goto out;
+	} 
+
+	/* call ourselves directly, ignore the higher-level VFS file creation code */
+	error = VNOP_REMOVE(dvp, hfsmp->hfc_filevp, &cname, 0, ctx);
+	if (error) {
+		printf("hfs: error %d removing HFBT on %s\n", error, HFSTOVCB(hfsmp)->vcbVN);
+	}
+
+	hfs_end_transaction(hfsmp);
+
+out:
+	if (dvp) {
+		vnode_put(dvp);
+		dvp = NULL;
+	}
+
+	return 0;
+}
+
+
+
 
 /*
  *  Create a hot files btree file.
@@ -1877,7 +3516,7 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 		((FndrFileInfo *)&cp->c_finderinfo[0])->fdFlags |=
 			SWAP_BE16 (kIsInvisible + kNameLocked);
 
-		if (kmem_alloc(kernel_map, (vm_offset_t *)&buffer, nodesize)) {
+		if (kmem_alloc(kernel_map, (vm_offset_t *)&buffer, nodesize, VM_KERN_MEMORY_FILE)) {
 			error = ENOMEM;
 			goto out;
 		}	
@@ -1918,7 +3557,14 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 		hotfileinfo->timeleft    = 0;
 		hotfileinfo->threshold   = SWAP_BE32 (HFC_MINIMUM_TEMPERATURE);
 		hotfileinfo->maxfileblks = SWAP_BE32 (HFC_MAXIMUM_FILESIZE / HFSTOVCB(hfsmp)->blockSize);
-		hotfileinfo->maxfilecnt  = SWAP_BE32 (HFC_DEFAULT_FILE_COUNT);
+		if (hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) {
+			if (hfsmp->hfs_hotfile_freeblks == 0) {
+				hfsmp->hfs_hotfile_freeblks = hfsmp->hfs_hotfile_maxblks;
+			}
+			hotfileinfo->usedblocks = SWAP_BE32 (hfsmp->hfs_hotfile_maxblks - hfsmp->hfs_hotfile_freeblks);
+		} else {
+			hotfileinfo->maxfilecnt  = SWAP_BE32 (HFC_DEFAULT_FILE_COUNT);
+		}
 		strlcpy((char *)hotfileinfo->tag, hfc_tag,
 			sizeof hotfileinfo->tag);
 		offset += kBTreeHeaderUserBytes;
@@ -2049,7 +3695,7 @@ hf_lookup(hotfile_data_t *hotdata, u_int32_t fileid, u_int32_t temperature)
 /*
  * Insert a hot file entry into the tree.
  */
-static void
+static int
 hf_insert(hotfile_data_t *hotdata, hotfile_entry_t *newentry) 
 {
 	hotfile_entry_t *entry = hotdata->rootentry;
@@ -2060,44 +3706,48 @@ hf_insert(hotfile_data_t *hotdata, hotfile_entry_t *newentry)
 		hotdata->rootentry = newentry;
 		hotdata->coldest = newentry;
 		hotdata->activefiles++;
-		return;
+		return 0;
 	}
 
 	while (entry) {
 		if (temperature > entry->temperature) {
-			if (entry->right)
+			if (entry->right) {
 				entry = entry->right;
-			else {
+			} else {
 				entry->right = newentry;
 				break;
 			}
 		} else if (temperature < entry->temperature) {
-			if (entry->left) 
+			if (entry->left) {
 				entry = entry->left;
-			else {
+			} else {
 			    	entry->left = newentry;
 				break;
 			}
 		} else if (fileid > entry->fileid) { 
-			if (entry->right)
+			if (entry->right) {
 				entry = entry->right;
-			else {
+			} else {
 	       			if (entry->fileid != fileid)
 					entry->right = newentry;
 				break;
 			}
 		} else { 
-			if (entry->left) 
+			if (entry->left) {
 				entry = entry->left;
-			else {
-	       			if (entry->fileid != fileid)
+			} else {
+	       			if (entry->fileid != fileid) {
 			    		entry->left = newentry;
+				} else {
+					return EEXIST;
+				}
 				break;
 			}
 		}
 	}
 
 	hotdata->activefiles++;
+	return 0;
 }
 
 /*
@@ -2158,7 +3808,7 @@ hf_delete(hotfile_data_t *hotdata, u_int32_t fileid, u_int32_t temperature)
 
 	if (entry) {
 		/*
-		 * Reorginize the sub-trees spanning from our entry.
+		 * Reorganize the sub-trees spanning from our entry.
 		 */
 		if ((next = entry->right)) {
 			hotfile_entry_t *pnextl, *psub;
@@ -2254,7 +3904,7 @@ hf_getsortedlist(hotfile_data_t * hotdata, hotfilelist_t *sortedlist)
 	sortedlist->hfl_count = i;
 	
 #if HFC_VERBOSE
-	printf("hfs: hf_getsortedlist returned %d entries\n", i);
+	printf("hfs: hf_getsortedlist returning %d entries w/%d total blocks\n", i, sortedlist->hfl_totalblocks);
 #endif
 }
 

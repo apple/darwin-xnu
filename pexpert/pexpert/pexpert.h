@@ -68,11 +68,33 @@ uint32_t PE_get_random_seed(
 	unsigned char * dst_random_seed,
 	uint32_t request_size);
 
+uint32_t PE_i_can_has_debugger(
+	uint32_t *);
+
+
+#if KERNEL_PRIVATE
+
+/*
+ * Kexts should consult this bitmask to change behavior, since the kernel
+ * may be configured as RELEASE but have MACH_ASSERT enabled, or boot args
+ * may have changed the kernel behavior for statistics and kexts should
+ * participate similarly
+ */
+
+#define kPEICanHasAssertions	0x00000001	/* Exceptional conditions should panic() instead of printf() */
+#define kPEICanHasStatistics	0x00000002	/* Gather expensive statistics (that don't otherwise change behavior */
+#define kPEICanHasDiagnosticAPI	0x00000004	/* Vend API to userspace or kexts that introspect kernel state */
+
+extern uint32_t PE_i_can_has_kernel_configuration(void);
+
+#endif /* KERNEL_PRIVATE */
 
 void PE_init_kprintf(
 	boolean_t vm_initialized);
 
 extern int32_t gPESerialBaud;
+
+extern uint8_t gPlatformECID[8];
 
 unsigned int PE_init_taproot(vm_offset_t *taddr);
 
@@ -292,6 +314,14 @@ extern void PE_cpu_halt(
 	cpu_id_t target);
 
 extern void PE_cpu_signal(
+	cpu_id_t source,
+	cpu_id_t target);
+
+extern void PE_cpu_signal_deferred(
+	cpu_id_t source,
+	cpu_id_t target);
+
+extern void PE_cpu_signal_cancel(
 	cpu_id_t source,
 	cpu_id_t target);
 

@@ -92,10 +92,13 @@
 #define HOST_AMFID_PORT			(11 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_GSSD_PORT			(12 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_TELEMETRY_PORT		(13 + HOST_MAX_SPECIAL_KERNEL_PORT)
-#define HOST_ATM_NOTIFICATION_PORT		(14 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_ATM_NOTIFICATION_PORT	(14 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_COALITION_PORT		(15 + HOST_MAX_SPECIAL_KERNEL_PORT)
-#define HOST_MAX_SPECIAL_PORT           (16 + HOST_MAX_SPECIAL_KERNEL_PORT)
-                                        /* room to grow here as well */
+#define HOST_SYSDIAGNOSE_PORT           (16 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_XPC_EXCEPTION_PORT		(17 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_CONTAINERD_PORT		(18 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_MAX_SPECIAL_PORT		HOST_CONTAINERD_PORT
+                                        /* See rdar://19421223 */
 
 /*
  * Special node identifier to always represent the local node.
@@ -204,5 +207,17 @@
 	HOST_LOCAL_NODE, HOST_COALITION_PORT, (port)))
 #define host_set_coalition_port(host, port)	\
 	(host_set_special_port((host), HOST_COALITION_PORT, (port)))
+
+#define host_get_sysdiagnose_port(host, port)	\
+	(host_get_special_port((host),			\
+	HOST_LOCAL_NODE, HOST_SYSDIAGNOSE_PORT, (port)))
+#define host_set_sysdiagnose_port(host, port)	\
+	(host_set_special_port((host), HOST_SYSDIAGNOSE_PORT, (port)))
+
+#define host_get_container_port(host, port)	\
+	(host_get_special_port((host),			\
+	HOST_LOCAL_NODE, HOST_CONTAINERD_PORT, (port)))
+#define host_set_container_port(host, port)	\
+	(host_set_special_port((host), HOST_CONTAINERD_PORT, (port)))
 
 #endif	/* _MACH_HOST_SPECIAL_PORTS_H_ */

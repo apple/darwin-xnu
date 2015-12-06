@@ -223,7 +223,7 @@ lo_framer(struct ifnet *ifp, struct mbuf **m, const struct sockaddr *dest,
 #pragma unused(ifp, dest, dest_linkaddr)
 	struct loopback_header  *header;
 
-	M_PREPEND(*m, sizeof (struct loopback_header), M_WAITOK);
+	M_PREPEND(*m, sizeof (struct loopback_header), M_WAITOK, 1);
 	if (*m == NULL) {
 		/* Tell caller not to try to free passed-in mbuf */
 		return (EJUSTRETURN);

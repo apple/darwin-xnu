@@ -108,17 +108,17 @@ protected:
 
 /*! @function free
     @abstract Sub-class implementation of free method, disconnects from the interrupt source. */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 /*! @function checkForWork
     @abstract Pure Virtual member function used by IOWorkLoop for issueing a client calls.
     @discussion This function called when the work-loop is ready to check for any work to do and then to call out the owner/action.
     @result Return true if this function needs to be called again before all its outstanding events have been processed. */
-    virtual bool checkForWork();
+    virtual bool checkForWork() APPLE_KEXT_OVERRIDE;
 
 /*! @function setWorkLoop
     @abstract Sub-class implementation of setWorkLoop method. */
-    virtual void setWorkLoop(IOWorkLoop *inWorkLoop);
+    virtual void setWorkLoop(IOWorkLoop *inWorkLoop) APPLE_KEXT_OVERRIDE;
 
 public:
 
@@ -153,13 +153,13 @@ successfully.  */
     @discussion A subclass implementation is expected to respect the enabled
 state when checkForWork is called.  Calling this function will cause the
 work-loop to be signalled so that a checkForWork is performed. */
-    virtual void enable();
+    virtual void enable() APPLE_KEXT_OVERRIDE;
 
 /*! @function disable
     @abstract Disable event source.
     @discussion A subclass implementation is expected to respect the enabled
 state when checkForWork is called. */
-    virtual void disable();
+    virtual void disable() APPLE_KEXT_OVERRIDE;
 
 /*! @function getProvider
     @abstract Get'ter for $link provider variable.

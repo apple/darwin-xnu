@@ -67,7 +67,6 @@
 #include <kern/assert.h>
 #include <kern/macro_help.h>
 #include <kern/spl.h>
-#include <machine/ast.h>
 
 /*
  * A processor takes an AST when it is about to return from an
@@ -111,12 +110,6 @@ typedef uint32_t		ast_t;
 #define AST_YIELD		0x10
 #define AST_APC			0x20	/* migration APC hook */
 #define AST_LEDGER		0x40
-
-/*
- * JMM - This is here temporarily. AST_BSD is used to simulate a
- * general purpose mechanism for setting asynchronous procedure calls
- * from the outside.
- */
 #define AST_BSD			0x80
 #define AST_KPERF		0x100   /* kernel profiling */
 #define	AST_MACF		0x200	/* MACF user ret pending */
@@ -126,7 +119,6 @@ typedef uint32_t		ast_t;
 #define AST_TELEMETRY_USER	0x2000	/* telemetry sample requested on interrupt from userspace */
 #define AST_TELEMETRY_KERNEL	0x4000	/* telemetry sample requested on interrupt from kernel */
 #define AST_TELEMETRY_WINDOWED	0x8000	/* telemetry sample meant for the window buffer */
-
 #define AST_SFI			0x10000	/* Evaluate if SFI wait is needed before return to userspace */
 
 #define AST_NONE		0x00
@@ -138,16 +130,8 @@ typedef uint32_t		ast_t;
 #define AST_CHUD_ALL	(AST_CHUD_URGENT|AST_CHUD)
 #define AST_TELEMETRY_ALL	(AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_WINDOWED)
 
-#ifdef  MACHINE_AST
-/*
- *      machine/ast.h is responsible for defining aston and astoff.
- */
-#else   /* MACHINE_AST */
-
-#define aston(mycpu)
-#define astoff(mycpu)
-
-#endif  /* MACHINE_AST */
+/* Per-thread ASTs follow the thread at context-switch time. */
+#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | AST_LEDGER | AST_GUARD | AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_WINDOWED)
 
 /* Initialize module */
 extern void		ast_init(void);
@@ -158,70 +142,35 @@ extern void		ast_taken(
 					boolean_t	enable);
 
 /* Check for pending ASTs */
-extern void    	ast_check(
-					processor_t		processor);
+extern void ast_check(processor_t processor);
 
 /* Pending ast mask for the current processor */
-extern ast_t 	*ast_pending(void);
+extern ast_t *ast_pending(void);
+
+/* Set AST flags on current processor */
+extern void ast_on(ast_t reasons);
+
+/* Clear AST flags on current processor */
+extern void ast_off(ast_t reasons);
+
+/* Re-set current processor's per-thread AST flags to those set on thread */
+extern void ast_context(thread_t thread);
+
+#define ast_propagate(reasons) ast_on(reasons)
 
 /*
- * Per-thread ASTs are reset at context-switch time.
+ *	Set an AST on a thread with thread_ast_set.
+ *
+ *	You can then propagate it to the current processor with ast_propagate(),
+ *	or tell another processor to act on it with cause_ast_check().
+ *
+ *	See act_set_ast() for an example.
  */
-#ifndef MACHINE_AST_PER_THREAD
-#define MACHINE_AST_PER_THREAD  0
-#endif
-
-#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | MACHINE_AST_PER_THREAD | AST_LEDGER | AST_GUARD | AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_WINDOWED)
-/*
- *	ast_pending(), ast_on(), ast_off(), ast_context(), and ast_propagate()
- *	assume splsched.
- */
-
-#define ast_on_fast(reasons)					\
-MACRO_BEGIN										\
-	ast_t	*_ast_myast = ast_pending();		\
-												\
-	if ((*_ast_myast |= (reasons)) != AST_NONE)	\
-		{ aston(_ast_myast); }					\
-MACRO_END
-
-#define ast_off_fast(reasons)					\
-MACRO_BEGIN										\
-	ast_t	*_ast_myast = ast_pending();		\
-												\
-	if ((*_ast_myast &= ~(reasons)) == AST_NONE) \
-		{ astoff(_ast_myast); }					\
-MACRO_END
-
-#define ast_propagate(reasons)		ast_on(reasons)
-
-#define ast_context(act)													\
-MACRO_BEGIN																	\
-	ast_t	*myast = ast_pending();											\
-																			\
-	if ((*myast = ((*myast &~ AST_PER_THREAD) | (act)->ast)) != AST_NONE)	\
-		{ aston(myast);	}													\
-	else																	\
-		{ astoff(myast); }													\
-MACRO_END
-
-#define ast_on(reason)			     ast_on_fast(reason)
-#define ast_off(reason)			     ast_off_fast(reason)
-
-/*
- *	NOTE: if thread is the current thread, thread_ast_set() should
- *  be followed by ast_propagate().
- */
-#define thread_ast_set(act, reason)		\
-						(hw_atomic_or_noret(&(act)->ast, (reason)))
-#define thread_ast_clear(act, reason)	\
-						(hw_atomic_and_noret(&(act)->ast, ~(reason)))
-#define thread_ast_clear_all(act)		\
-						(hw_atomic_and_noret(&(act)->ast, AST_NONE))
+#define thread_ast_set(act, reason)     (hw_atomic_or_noret(&(act)->ast, (reason)))
+#define thread_ast_clear(act, reason)   (hw_atomic_and_noret(&(act)->ast, ~(reason)))
 
 #ifdef MACH_BSD
 
-extern void astbsd_on(void);
 extern void act_set_astbsd(thread_t);
 extern void bsd_ast(thread_t);
 

@@ -910,7 +910,7 @@ utun_ctl_stop_datatraffic_crypto_dtls(struct utun_pcb   *pcb)
 		*(protocol_family_t *)mbuf_data(*pkt) = htonl(*(protocol_family_t *)mbuf_data(*pkt));           \
 		rc = ctl_enqueuembuf(pcb->utun_ctlref, pcb->utun_unit, *pkt, CTL_DATA_EOR);                     \
 		if (rc != 0) {                                                                                  \
-			printf("%s: - ctl_enqueuembuf failed (rc %d) for %s:\n", __FUNCTION__, rc, (char *)errstr); \
+			printf("%s: - ctl_enqueuembuf failed (rc %d) for %s:\n", __FUNCTION__, rc, errstr); \
 			mbuf_freem(*pkt);                                                                           \
 			ifnet_stat_increment_out(pcb->utun_ifp, 0, 0, 1);                                           \
 			lck_mtx_unlock(&dtls_ctl_mutex);                                                            \
@@ -965,7 +965,7 @@ utun_pkt_dtls_output(struct utun_pcb *pcb, mbuf_t *pkt)
 		} else if (rc == EINVAL) {
 			// unsupported proto... fall through and punt (but 1st undo the protocol strip)
 			utun_pkt_dtls_prepend_proto(pkt, proto);
-			utun_pkt_dtls_puntup(pcb, pkt, (char *)"unsupported proto", rc);
+			utun_pkt_dtls_puntup(pcb, pkt, "unsupported proto", rc);
 		} else {
 			// mbuf_prepend failure... mbuf will be already freed
 			printf("%s: failed to encrypsulate and send pkt %d\n", __FUNCTION__,rc);
@@ -974,7 +974,7 @@ utun_pkt_dtls_output(struct utun_pcb *pcb, mbuf_t *pkt)
 			return 0; // and drop packet
 		}
 	} else {
-		utun_pkt_dtls_puntup(pcb, pkt, (char *)"slowpath", rc);
+		utun_pkt_dtls_puntup(pcb, pkt, "slowpath", rc);
 	}
 
 	if (!rc)

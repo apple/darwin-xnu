@@ -61,13 +61,16 @@ typedef	kern_return_t		IOReturn;
 #define sub_iokit_powermanagement         err_sub(13)
 #define sub_iokit_hidsystem             err_sub(14)
 #define sub_iokit_scsi                    err_sub(16)
+#define sub_iokit_usbaudio                err_sub(17)
 //#define sub_iokit_pccard                err_sub(21)
 #ifdef PRIVATE
 #define sub_iokit_nvme                    err_sub(28)
 #endif
 #define sub_iokit_thunderbolt             err_sub(29)
-    
+#define sub_iokit_platform				  err_sub(0x2A)
 #define sub_iokit_audio_video             err_sub(0x45)
+#define sub_iokit_baseband                err_sub(0x80)
+#define sub_iokit_HDA                     err_sub(254)
 #define sub_iokit_hsic                    err_sub(0x147)
 #define sub_iokit_sdio                    err_sub(0x174)
 #define sub_iokit_wlan                    err_sub(0x208)

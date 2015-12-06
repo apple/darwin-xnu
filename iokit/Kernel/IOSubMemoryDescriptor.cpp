@@ -93,6 +93,8 @@ bool IOSubMemoryDescriptor::initSubRange( IOMemoryDescriptor * parent,
     _start	= offset;
     _length	= length;
     _flags	= direction;
+    _flags |= kIOMemoryThreadSafe;
+
 #ifndef __LP64__
     _direction  = (IODirection) (_flags & kIOMemoryDirectionMask);
 #endif /* !__LP64__ */
@@ -205,3 +207,9 @@ IOSubMemoryDescriptor::getPreparationID( void )
     return (super::getPreparationID());    
 }
 
+IOReturn
+IOSubMemoryDescriptor::getPageCounts(IOByteCount * residentPageCount,
+                                     IOByteCount * dirtyPageCount)
+{
+    return (_parent->getPageCounts(residentPageCount, dirtyPageCount));
+}

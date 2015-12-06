@@ -102,6 +102,7 @@
 #include <ipc/ipc_importance.h>
 #endif
 
+
 /*
  * Forward declarations
  */
@@ -162,7 +163,7 @@ mach_port_names_helper(
 
 	bits = entry->ie_bits;
 	request = entry->ie_request;
-	port = (ipc_port_t) entry->ie_object;
+	__IGNORE_WCASTALIGN(port = (ipc_port_t) entry->ie_object);
 
 	if (bits & MACH_PORT_TYPE_RECEIVE) {
 		assert(IP_VALID(port));
@@ -287,11 +288,11 @@ mach_port_names(
 		}
 		size = size_needed;
 
-		kr = vm_allocate(ipc_kernel_map, &addr1, size, VM_FLAGS_ANYWHERE);
+		kr = vm_allocate(ipc_kernel_map, &addr1, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
-		kr = vm_allocate(ipc_kernel_map, &addr2, size, VM_FLAGS_ANYWHERE);
+		kr = vm_allocate(ipc_kernel_map, &addr2, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
 			return KERN_RESOURCE_SHORTAGE;
@@ -305,7 +306,7 @@ mach_port_names(
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr1 + size,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			VM_PROT_READ|VM_PROT_WRITE,
+			VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC),
 			FALSE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
@@ -319,7 +320,7 @@ mach_port_names(
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr2 + size,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			VM_PROT_READ|VM_PROT_WRITE,
+			VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC),
 			FALSE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
@@ -1252,14 +1253,14 @@ mach_port_get_set_status(
 		ipc_object_t psobj;
 		ipc_pset_t pset;
 
-		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE);
+		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
 		/* can't fault while we hold locks */
 
 		kr = vm_map_wire(ipc_kernel_map, addr, addr + size,
-				     VM_PROT_READ|VM_PROT_WRITE, FALSE);
+				     VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC), FALSE);
 		assert(kr == KERN_SUCCESS);
 
 		kr = ipc_object_translate(space, name, MACH_PORT_RIGHT_PORT_SET, &psobj);
@@ -1269,14 +1270,14 @@ mach_port_get_set_status(
 		}
 
 		/* just use a portset reference from here on out */
-		pset = (ipc_pset_t) psobj;
+		__IGNORE_WCASTALIGN(pset = (ipc_pset_t) psobj);
 		ips_reference(pset);
 		ips_unlock(pset); 
 
 		names = (mach_port_name_t *) addr;
 		maxnames = (ipc_entry_num_t)(size / sizeof(mach_port_name_t));
 
-		ipc_mqueue_set_gather_member_names(&pset->ips_messages, maxnames, names, &actual);
+		ipc_mqueue_set_gather_member_names(space, &pset->ips_messages, maxnames, names, &actual);
 
 		/* release the portset reference */
 		ips_release(pset);
@@ -1364,9 +1365,8 @@ mach_port_move_member(
 	ipc_port_t port;
 	ipc_pset_t nset;
 	kern_return_t kr;
-	wait_queue_link_t wql;
-	queue_head_t links_data;
-	queue_t links = &links_data;
+	uint64_t wq_link_id = 0;
+	uint64_t wq_reserved_prepost = 0;
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -1374,14 +1374,25 @@ mach_port_move_member(
 	if (!MACH_PORT_VALID(member))
 		return KERN_INVALID_RIGHT;
 
-	if (after == MACH_PORT_DEAD)
+	if (after == MACH_PORT_DEAD) {
 		return KERN_INVALID_RIGHT;
-	else if (after == MACH_PORT_NULL)
-		wql = WAIT_QUEUE_LINK_NULL;
-	else
-		wql = wait_queue_link_allocate();
-
-	queue_init(links);
+	} else if (after == MACH_PORT_NULL) {
+		wq_link_id = 0;
+	} else {
+		/*
+		 * We reserve both a link, and
+		 * enough prepost objects to complete
+		 * the set move atomically - we can't block
+		 * while we're holding the space lock, and
+		 * the ipc_pset_add calls ipc_mqueue_add
+		 * which may have to prepost this port onto
+		 * this set.
+		 */
+		wq_link_id = waitq_link_reserve(NULL);
+		wq_reserved_prepost = waitq_prepost_reserve(NULL, 10,
+							    WAITQ_DONT_LOCK,
+							    NULL);
+	}
 
 	kr = ipc_right_lookup_read(space, member, &entry);
 	if (kr != KERN_SUCCESS)
@@ -1394,7 +1405,7 @@ mach_port_move_member(
 		goto done;
 	}
 
-	port = (ipc_port_t) entry->ie_object;
+	__IGNORE_WCASTALIGN(port = (ipc_port_t) entry->ie_object);
 	assert(port != IP_NULL);
 
 	if (after == MACH_PORT_NULL)
@@ -1413,27 +1424,28 @@ mach_port_move_member(
 			goto done;
 		}
 
-		nset = (ipc_pset_t) entry->ie_object;
+		__IGNORE_WCASTALIGN(nset = (ipc_pset_t) entry->ie_object);
 		assert(nset != IPS_NULL);
 	}
 	ip_lock(port);
-	ipc_pset_remove_from_all(port, links);
+	ipc_pset_remove_from_all(port);
 
 	if (nset != IPS_NULL) {
 		ips_lock(nset);
-		kr = ipc_pset_add(nset, port, wql);
+		kr = ipc_pset_add(nset, port, &wq_link_id, &wq_reserved_prepost);
 		ips_unlock(nset);
 	}
 	ip_unlock(port);
 	is_read_unlock(space);
 
  done:
-	if (kr != KERN_SUCCESS && wql != WAIT_QUEUE_LINK_NULL)
-		wait_queue_link_free(wql);
-	while(!queue_empty(links)) {
-		wql = (wait_queue_link_t) dequeue(links);
-		wait_queue_link_free(wql);
-	}
+
+	/*
+	 * on success the ipc_pset_add() will consume the wq_link_id
+	 * value (resetting it to 0), so this function is always safe to call.
+	 */
+	waitq_link_release(wq_link_id);
+	waitq_prepost_release_reserve(wq_reserved_prepost);
 
 	return kr;
 }
@@ -1702,10 +1714,11 @@ void mach_port_get_status_helper(
 	mach_port_status_t	*statusp)
 {
 	spl_t s;
-	statusp->mps_pset = port->ip_pset_count;
 
 	s = splsched();
 	imq_lock(&port->ip_messages);
+	/* don't leak set IDs, just indicate that the port is in one or not */
+	statusp->mps_pset = !!(port->ip_in_pset);
 	statusp->mps_seqno = port->ip_messages.imq_seqno;
 	statusp->mps_qlimit = port->ip_messages.imq_qlimit;
 	statusp->mps_msgcount = port->ip_messages.imq_msgcount;
@@ -2018,7 +2031,8 @@ mach_port_insert_member(
 	ipc_object_t obj;
 	ipc_object_t psobj;
 	kern_return_t kr;
-	wait_queue_link_t wql;
+	uint64_t wq_link_id;
+	uint64_t wq_reserved_prepost;
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -2026,7 +2040,9 @@ mach_port_insert_member(
 	if (!MACH_PORT_VALID(name) || !MACH_PORT_VALID(psname))
 		return KERN_INVALID_RIGHT;
 
-	wql = wait_queue_link_allocate();
+	wq_link_id = waitq_link_reserve(NULL);
+	wq_reserved_prepost = waitq_prepost_reserve(NULL, 10,
+						    WAITQ_DONT_LOCK, NULL);
 
 	kr = ipc_object_translate_two(space, 
 				      name, MACH_PORT_RIGHT_RECEIVE, &obj,
@@ -2038,13 +2054,16 @@ mach_port_insert_member(
 	assert(psobj != IO_NULL);
 	assert(obj != IO_NULL);
 
-	kr = ipc_pset_add((ipc_pset_t)psobj, (ipc_port_t)obj, wql);
+	__IGNORE_WCASTALIGN(kr = ipc_pset_add((ipc_pset_t)psobj, (ipc_port_t)obj,
+					    &wq_link_id, &wq_reserved_prepost));
+
 	io_unlock(psobj);
 	io_unlock(obj);
 
  done:
-	if (kr != KERN_SUCCESS)
-		wait_queue_link_free(wql);
+	/* on success, wq_link_id is reset to 0, so this is always safe */
+	waitq_link_release(wq_link_id);
+	waitq_prepost_release_reserve(wq_reserved_prepost);
 
 	return kr;
 }
@@ -2076,7 +2095,6 @@ mach_port_extract_member(
 	ipc_object_t psobj;
 	ipc_object_t obj;
 	kern_return_t kr;
-	wait_queue_link_t wql = WAIT_QUEUE_LINK_NULL;
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -2094,12 +2112,10 @@ mach_port_extract_member(
 	assert(psobj != IO_NULL);
 	assert(obj != IO_NULL);
 
-	kr = ipc_pset_remove((ipc_pset_t)psobj, (ipc_port_t)obj, &wql);
+	__IGNORE_WCASTALIGN(kr = ipc_pset_remove((ipc_pset_t)psobj, (ipc_port_t)obj));
+
 	io_unlock(psobj);
 	io_unlock(obj);
-
-	if (wql != WAIT_QUEUE_LINK_NULL)
-		wait_queue_link_free(wql);
 
 	return kr;
 }
@@ -2265,16 +2281,11 @@ mach_port_guard_exception(
 void
 mach_port_guard_ast(thread_t t)
 {
-	mach_exception_data_type_t	code[EXCEPTION_CODE_MAX];
-
-	code[0] = t->guard_exc_info.code;
-	code[1] = t->guard_exc_info.subcode;
-
 	/* Raise an EXC_GUARD exception */
-	exception_triage(EXC_GUARD, code, EXCEPTION_CODE_MAX);
+	task_exception_notify(EXC_GUARD, t->guard_exc_info.code, t->guard_exc_info.subcode);
 
 	/* Terminate task which caused the exception */
-	(void) task_terminate_internal(current_task());
+	task_bsdtask_kill(current_task());
 	return;
 }
 

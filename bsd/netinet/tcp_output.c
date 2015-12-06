@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -101,6 +101,7 @@
 #endif
 #include <netinet/tcp.h>
 #define	TCPOUTFLAGS
+#include <netinet/tcp_cache.h>
 #include <netinet/tcp_fsm.h>
 #include <netinet/tcp_seq.h>
 #include <netinet/tcp_timer.h>
@@ -127,6 +128,8 @@
 #include <netinet/mptcp.h>
 #include <netinet/mptcp_opt.h>
 #endif
+
+#include <corecrypto/ccaes.h>
 
 #define DBG_LAYER_BEG		NETDBG_CODE(DBG_NETTCP, 1)
 #define DBG_LAYER_END		NETDBG_CODE(DBG_NETTCP, 3)
@@ -245,6 +248,137 @@ static int tcp_ip_output(struct socket *, struct tcpcb *, struct mbuf *, int,
 static struct mbuf* tcp_send_lroacks(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th);
 static int tcp_recv_throttle(struct tcpcb *tp);
 
+static int32_t tcp_tfo_check(struct tcpcb *tp, int32_t len)
+{
+	struct socket *so = tp->t_inpcb->inp_socket;
+	unsigned int optlen = 0;
+	unsigned int cookie_len;
+
+	if (tp->t_flags & TF_NOOPT)
+		goto fallback;
+
+	if (!tcp_heuristic_do_tfo(tp))
+		goto fallback;
+
+	optlen += TCPOLEN_MAXSEG;
+
+	if (tp->t_flags & TF_REQ_SCALE)
+		optlen += 4;
+
+#if MPTCP
+	if ((so->so_flags & SOF_MP_SUBFLOW) && mptcp_enable &&
+	    tp->t_rxtshift <= mptcp_mpcap_retries)
+		optlen += sizeof(struct mptcp_mpcapable_opt_common) + sizeof(mptcp_key_t);
+#endif /* MPTCP */
+
+	if (tp->t_flags & TF_REQ_TSTMP)
+		optlen += TCPOLEN_TSTAMP_APPA;
+
+	if (SACK_ENABLED(tp))
+		optlen += TCPOLEN_SACK_PERMITTED;
+
+	/* Now, decide whether to use TFO or not */
+
+	/* Don't even bother trying if there is no space at all... */
+	if (MAX_TCPOPTLEN - optlen < TCPOLEN_FASTOPEN_REQ)
+		goto fallback;
+
+	cookie_len = tcp_cache_get_cookie_len(tp);
+	if (cookie_len == 0)
+		/* No cookie, so we request one */
+		return (0);
+
+	/* Do not send SYN+data if there is more in the queue than MSS */
+	if (so->so_snd.sb_cc > (tp->t_maxopd - MAX_TCPOPTLEN))
+		goto fallback;
+
+	/* Ok, everything looks good. We can go on and do TFO */
+	return (len);
+
+fallback:
+	tp->t_flagsext &= ~TF_FASTOPEN;
+	return (0);
+}
+
+/* Returns the number of bytes written to the TCP option-space */
+static unsigned
+tcp_tfo_write_cookie_rep(struct tcpcb *tp, unsigned optlen, u_char *opt)
+{
+	u_char out[CCAES_BLOCK_SIZE];
+	unsigned ret = 0;
+	u_char *bp;
+
+	if ((MAX_TCPOPTLEN - optlen) <
+	    (TCPOLEN_FASTOPEN_REQ + TFO_COOKIE_LEN_DEFAULT))
+		return (ret);
+
+	tcp_tfo_gen_cookie(tp->t_inpcb, out, sizeof(out));
+
+	bp = opt + optlen;
+
+	*bp++ = TCPOPT_FASTOPEN;
+	*bp++ = 2 + TFO_COOKIE_LEN_DEFAULT;
+	memcpy(bp, out, TFO_COOKIE_LEN_DEFAULT);
+	ret += 2 + TFO_COOKIE_LEN_DEFAULT;
+
+	tp->t_tfo_stats |= TFO_S_COOKIE_SENT;
+	tcpstat.tcps_tfo_cookie_sent++;
+
+	return (ret);
+}
+
+static unsigned
+tcp_tfo_write_cookie(struct tcpcb *tp, unsigned optlen, int32_t *len,
+		     u_char *opt)
+{
+	u_int8_t tfo_len = MAX_TCPOPTLEN - optlen - TCPOLEN_FASTOPEN_REQ;
+	unsigned ret = 0;
+	int res;
+	u_char *bp;
+
+	bp = opt + optlen;
+
+	/*
+	 * The cookie will be copied in the appropriate place within the
+	 * TCP-option space. That way we avoid the need for an intermediate
+	 * variable.
+	 */
+	res = tcp_cache_get_cookie(tp, bp + TCPOLEN_FASTOPEN_REQ, &tfo_len);
+	if (res == 0) {
+		*bp++ = TCPOPT_FASTOPEN;
+		*bp++ = TCPOLEN_FASTOPEN_REQ;
+		ret += TCPOLEN_FASTOPEN_REQ;
+
+		tp->t_tfo_flags |= TFO_F_COOKIE_REQ;
+
+		tp->t_tfo_stats |= TFO_S_COOKIE_REQ;
+		tcpstat.tcps_tfo_cookie_req++;
+	} else {
+		*bp++ = TCPOPT_FASTOPEN;
+		*bp++ = TCPOLEN_FASTOPEN_REQ + tfo_len;
+
+		ret += TCPOLEN_FASTOPEN_REQ + tfo_len;
+
+		tp->t_tfo_flags |= TFO_F_COOKIE_SENT;
+
+		/* If there is some data, let's track it */
+		if (*len) {
+			tp->t_tfo_stats |= TFO_S_SYN_DATA_SENT;
+			tcpstat.tcps_tfo_syn_data_sent++;
+		}
+	}
+
+	return (ret);
+}
+
+static inline bool
+tcp_send_ecn_flags_on_syn(struct tcpcb *tp, struct socket *so)
+{
+	return(!((tp->ecn_flags & TE_SETUPSENT) ||
+	    (so->so_flags & SOF_MP_SUBFLOW) ||
+	    (tp->t_flagsext & TF_FASTOPEN)));
+}
+
 /*
  * Tcp output routine: figure out what should be sent and send it.
  *
@@ -291,6 +425,7 @@ tcp_output(struct tcpcb *tp)
 	int i, sack_rxmit;
 	int tso = 0;
 	int sack_bytes_rxmt;
+	tcp_seq old_snd_nxt = 0;
 	struct sackhole *p;
 #if IPSEC
 	unsigned ipsec_optlen = 0;
@@ -319,6 +454,7 @@ tcp_output(struct tcpcb *tp)
 	boolean_t cell = FALSE;
 	boolean_t wifi = FALSE;
 	boolean_t wired = FALSE;
+	boolean_t sack_rescue_rxt = FALSE;
 
 	/*
 	 * Determine length of data that should be transmitted,
@@ -333,9 +469,22 @@ tcp_output(struct tcpcb *tp)
 	 */
 	idle_time = tcp_now - tp->t_rcvtime;
 	if (idle && idle_time >= TCP_IDLETIMEOUT(tp)) {
-		if (CC_ALGO(tp)->after_idle != NULL) 
+		if (CC_ALGO(tp)->after_idle != NULL &&
+		    (tp->tcp_cc_index != TCP_CC_ALGO_CUBIC_INDEX ||
+		    idle_time >= TCP_CC_CWND_NONVALIDATED_PERIOD)) {
 			CC_ALGO(tp)->after_idle(tp);
-		tcp_ccdbg_trace(tp, NULL, TCP_CC_IDLE_TIMEOUT);
+			tcp_ccdbg_trace(tp, NULL, TCP_CC_IDLE_TIMEOUT);
+		}
+
+		/*
+		 * Do some other tasks that need to be done after
+		 * idle time
+		 */
+		if (!SLIST_EMPTY(&tp->t_rxt_segments))
+			tcp_rxtseg_clean(tp);
+
+		/* If stretch ack was auto-disabled, re-evaluate it */
+		tcp_cc_after_idle_stretchack(tp);
 	}
 	tp->t_flags &= ~TF_LASTIDLE;
 	if (idle) {
@@ -631,11 +780,16 @@ after_sack_rexmit:
 	 * in which case len is already set.
 	 */
 	if (sack_rxmit == 0) {
-		if (sack_bytes_rxmt == 0)
+		if (sack_bytes_rxmt == 0) {
 			len = min(so->so_snd.sb_cc, sendwin) - off;
-		else {
+		} else {
 			int32_t cwin;
 
+			cwin = tp->snd_cwnd -
+			    (tp->snd_nxt - tp->sack_newdata) -
+			    sack_bytes_rxmt;
+			if (cwin < 0)
+				cwin = 0;
                         /*
 			 * We are inside of a SACK recovery episode and are
 			 * sending new data, having retransmitted all the
@@ -652,15 +806,37 @@ after_sack_rexmit:
 			 * of len is bungled by the optimizer.
 			 */
 			if (len > 0) {
-				cwin = tp->snd_cwnd - 
-					(tp->snd_nxt - tp->sack_newdata) -
-					sack_bytes_rxmt;
-				if (cwin < 0)
-					cwin = 0;
 				len = imin(len, cwin);
-			}
-			else 
+			} else {
 				len = 0;
+			}
+			/*
+			 * At this point SACK recovery can not send any
+			 * data from scoreboard or any new data. Check
+			 * if we can do a rescue retransmit towards the
+			 * tail end of recovery window.
+			 */
+			if (len == 0 && cwin > 0 &&
+			    SEQ_LT(tp->snd_fack, tp->snd_recover) &&
+			    !(tp->t_flagsext & TF_RESCUE_RXT)) {
+				len = min((tp->snd_recover - tp->snd_fack),
+				    tp->t_maxseg);
+				len = imin(len, cwin);
+				old_snd_nxt = tp->snd_nxt;
+				sack_rescue_rxt = TRUE;
+				tp->snd_nxt = tp->snd_recover - len;
+				/*
+				 * If FIN has been sent, snd_max
+				 * must have been advanced to cover it.
+				 */
+				if ((tp->t_flags & TF_SENTFIN) &&
+				    tp->snd_max == tp->snd_recover)
+					tp->snd_nxt--;
+
+				off = tp->snd_nxt - tp->snd_una;
+				sendalot = 0;
+				tp->t_flagsext |= TF_RESCUE_RXT;
+			}
 		}
 	}
 
@@ -686,7 +862,7 @@ after_sack_rexmit:
 	 * know that foreign host supports TAO, suppress sending segment.
 	 */
 	if ((flags & TH_SYN) && SEQ_GT(tp->snd_nxt, tp->snd_una)) {
-		if (tp->t_state != TCPS_SYN_RECEIVED)
+		if (tp->t_state != TCPS_SYN_RECEIVED || tfo_enabled(tp))
 			flags &= ~TH_SYN;
 		off--, len++;
 		if (len > 0 && tp->t_state == TCPS_SYN_SENT) {
@@ -731,11 +907,18 @@ after_sack_rexmit:
 	 * Be careful not to send data and/or FIN on SYN segments.
 	 * This measure is needed to prevent interoperability problems
 	 * with not fully conformant TCP implementations.
+	 *
+	 * In case of TFO, we handle the setting of the len in
+	 * tcp_tfo_check. In case TFO is not enabled, never ever send
+	 * SYN+data.
 	 */
-	if ((flags & TH_SYN) && (tp->t_flags & TF_NOOPT)) {
+	if ((flags & TH_SYN) && !tfo_enabled(tp)) {
 		len = 0;
 		flags &= ~TH_FIN;
 	}
+
+	if ((flags & TH_SYN) && tp->t_state <= TCPS_SYN_SENT && tfo_enabled(tp))
+		len = tcp_tfo_check(tp, len);
 
 	/*
 	 * The check here used to be (len < 0). Some times len is zero
@@ -872,7 +1055,8 @@ after_sack_rexmit:
 		    (tp->t_state > TCPS_CLOSED) &&
 		    ((tp->t_mpflags & TMPF_SND_MPPRIO) ||
 		    (tp->t_mpflags & TMPF_SND_REM_ADDR) ||
-		    (tp->t_mpflags & TMPF_SND_MPFAIL))) {
+		    (tp->t_mpflags & TMPF_SND_MPFAIL) ||
+		    (tp->t_mpflags & TMPF_MPCAP_RETRANSMIT))) {
 			if (len > 0) {
 				len = 0;
 			}
@@ -1125,7 +1309,7 @@ just_return:
 	return (0);
 
 send:
-	/* 
+	/*
 	 * Set TF_MAXSEGSNT flag if the segment size is greater than
 	 * the max segment size.
 	 */
@@ -1178,101 +1362,9 @@ send:
 			}
 #endif /* MPTCP */
 		}
- 	}
- 	
- 	/*
- 	 * RFC 3168 states that:
- 	 * - If you ever sent an ECN-setup SYN/SYN-ACK you must be prepared
- 	 * to handle the TCP ECE flag, even if you also later send a
- 	 * non-ECN-setup SYN/SYN-ACK.
- 	 * - If you ever send a non-ECN-setup SYN/SYN-ACK, you must not set
- 	 * the ip ECT flag.
-	 * 
- 	 * It is not clear how the ECE flag would ever be set if you never
- 	 * set the IP ECT flag on outbound packets. All the same, we use
- 	 * the TE_SETUPSENT to indicate that we have committed to handling
- 	 * the TCP ECE flag correctly. We use the TE_SENDIPECT to indicate
- 	 * whether or not we should set the IP ECT flag on outbound packet
-	 *
-	 * For a SYN-ACK, send an ECN setup SYN-ACK
-	 */
-	if ((tcp_ecn_inbound || (tp->t_flags & TF_ENABLE_ECN))
-	    && (flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
-		if ((tp->ecn_flags & TE_SETUPRECEIVED) != 0) {
-			if ((tp->ecn_flags & TE_SETUPSENT) == 0) {
-				/* Setting TH_ECE makes this an ECN-setup SYN-ACK */
-				flags |= TH_ECE;
-				
-				/*
-				 * Record that we sent the ECN-setup and
-				 * default to setting IP ECT.
-				 */
-				tp->ecn_flags |= (TE_SETUPSENT|TE_SENDIPECT);
-				tcpstat.tcps_ecn_setup++;
-			} else {
-				/*
-				 * We sent an ECN-setup SYN-ACK but it was
-				 * dropped. Fallback to non-ECN-setup
-				 * SYN-ACK and clear flag to indicate that
-				 * we should not send data with IP ECT set
-				 *
-				 * Pretend we didn't receive an 
-				 * ECN-setup SYN.
-				 */
-				tp->ecn_flags &= ~TE_SETUPRECEIVED;
-				/*
-				 * We already incremented the counter
-				 * assuming that the ECN setup will
-				 * succeed. Decrementing here to
-				 * correct it.
-				 */
-				tcpstat.tcps_ecn_setup--;
-			}
-		}
-	} else if ((tcp_ecn_outbound || (tp->t_flags & TF_ENABLE_ECN))
-	    && (flags & (TH_SYN | TH_ACK)) == TH_SYN) {
-		if ((tp->ecn_flags & TE_SETUPSENT) == 0) {
-			/* Setting TH_ECE and TH_CWR makes this an ECN-setup SYN */
-			flags |= (TH_ECE | TH_CWR);
-			
-			/*
-			 * Record that we sent the ECN-setup and default to
-			 * setting IP ECT.
-			 */
-			tp->ecn_flags |= (TE_SETUPSENT | TE_SENDIPECT);
-		} else {
-			/*
-			 * We sent an ECN-setup SYN but it was dropped.
-			 * Fall back to no ECN and clear flag indicating
-			 * we should send data with IP ECT set.
-			 */
-			tp->ecn_flags &= ~TE_SENDIPECT;
-		}
-	}
-	
-	/*
-	 * Check if we should set the TCP CWR flag.
-	 * CWR flag is sent when we reduced the congestion window because
-	 * we received a TCP ECE or we performed a fast retransmit. We
-	 * never set the CWR flag on retransmitted packets. We only set
-	 * the CWR flag on data packets. Pure acks don't have this set.
-	 */
-	if ((tp->ecn_flags & TE_SENDCWR) != 0 && len != 0 &&
-		!SEQ_LT(tp->snd_nxt, tp->snd_max) && !sack_rxmit) {
-		flags |= TH_CWR;
-		tp->ecn_flags &= ~TE_SENDCWR;
-		tcpstat.tcps_sent_cwr++;
-	}
-	
-	/*
-	 * Check if we should set the TCP ECE flag.
-	 */
-	if ((tp->ecn_flags & TE_SENDECE) != 0 && len == 0) {
-		flags |= TH_ECE;
-		tcpstat.tcps_sent_ece++;
 	}
 
- 	/*
+	/*
 	 * Send a timestamp and echo-reply if this is a SYN and our side
 	 * wants to use timestamps (TF_REQ_TSTMP is set) or both our side
 	 * and our peer have sent timestamps in our SYN's.
@@ -1339,6 +1431,15 @@ send:
 	}
 #endif /* MPTCP */
 
+	if (tfo_enabled(tp) && !(tp->t_flags & TF_NOOPT) &&
+	    (flags & (TH_SYN | TH_ACK)) == TH_SYN)
+		optlen += tcp_tfo_write_cookie(tp, optlen, &len, opt);
+
+	if (tfo_enabled(tp) &&
+	    (flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK) &&
+	    (tp->t_tfo_flags & TFO_F_OFFER_COOKIE))
+		optlen += tcp_tfo_write_cookie_rep(tp, optlen, opt);
+
 	if (SACK_ENABLED(tp) && ((tp->t_flags & TF_NOOPT) == 0)) {
 		/*
 		 * Send SACKs if necessary.  This should be the last
@@ -1354,14 +1455,16 @@ send:
 		 * 10 bytes for SACK options 40 - (12 + 18).
 		 */
 		if (TCPS_HAVEESTABLISHED(tp->t_state) &&
-		    (tp->t_flags & TF_SACK_PERMIT) && tp->rcv_numsacks > 0 &&
+		    (tp->t_flags & TF_SACK_PERMIT) &&
+		    (tp->rcv_numsacks > 0 || TCP_SEND_DSACK_OPT(tp)) &&
 		    MAX_TCPOPTLEN - optlen - 2 >= TCPOLEN_SACK) {
 			int nsack, padlen;
 			u_char *bp = (u_char *)opt + optlen;
 			u_int32_t *lp;
 
 			nsack = (MAX_TCPOPTLEN - optlen - 2) / TCPOLEN_SACK;
-			nsack = min(nsack, tp->rcv_numsacks);
+			nsack = min(nsack, (tp->rcv_numsacks +
+			    (TCP_SEND_DSACK_OPT(tp) ? 1 : 0)));
 			sackoptlen = (2 + nsack * TCPOLEN_SACK);
 
 			/*
@@ -1378,6 +1481,21 @@ send:
 			*bp++ = TCPOPT_SACK;
 			*bp++ = sackoptlen;
 			lp = (u_int32_t *)(void *)bp;
+
+			/*
+			 * First block of SACK option should represent
+			 * DSACK. Prefer to send SACK information if there
+			 * is space for only one SACK block. This will
+			 * allow for faster recovery.
+			 */
+			if (TCP_SEND_DSACK_OPT(tp) && nsack > 0 &&
+			    (tp->rcv_numsacks == 0 || nsack > 1)) {
+				*lp++ = htonl(tp->t_dsack_lseq);
+				*lp++ = htonl(tp->t_dsack_rseq);
+				tcpstat.tcps_dsack_sent++;
+				nsack--;
+			}
+			VERIFY(nsack == 0 || tp->rcv_numsacks >= nsack);
 			for (i = 0; i < nsack; i++) {
 				struct sackblk sack = tp->sackblks[i];
 				*lp++ = htonl(sack.start);
@@ -1399,7 +1517,118 @@ send:
 		}
 	}
 
+	/*
+	 * RFC 3168 states that:
+	 * - If you ever sent an ECN-setup SYN/SYN-ACK you must be prepared
+	 * to handle the TCP ECE flag, even if you also later send a
+	 * non-ECN-setup SYN/SYN-ACK.
+	 * - If you ever send a non-ECN-setup SYN/SYN-ACK, you must not set
+	 * the ip ECT flag.
+	 *
+	 * It is not clear how the ECE flag would ever be set if you never
+	 * set the IP ECT flag on outbound packets. All the same, we use
+	 * the TE_SETUPSENT to indicate that we have committed to handling
+	 * the TCP ECE flag correctly. We use the TE_SENDIPECT to indicate
+	 * whether or not we should set the IP ECT flag on outbound packet
+	 *
+	 * For a SYN-ACK, send an ECN setup SYN-ACK
+	 */
+	if ((tcp_ecn_inbound || (tp->t_flags & TF_ENABLE_ECN))
+	    && (flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
+		if (tp->ecn_flags & TE_SETUPRECEIVED) {
+			if (tcp_send_ecn_flags_on_syn(tp, so)) {
+				/*
+				 * Setting TH_ECE makes this an ECN-setup
+				 * SYN-ACK
+				 */
+				flags |= TH_ECE;
+
+				/*
+				 * Record that we sent the ECN-setup and
+				 * default to setting IP ECT.
+				 */
+				tp->ecn_flags |= (TE_SETUPSENT|TE_SENDIPECT);
+				tcpstat.tcps_ecn_server_setup++;
+				tcpstat.tcps_ecn_server_success++;
+			} else {
+				/*
+				 * We sent an ECN-setup SYN-ACK but it was
+				 * dropped. Fallback to non-ECN-setup
+				 * SYN-ACK and clear flag to indicate that
+				 * we should not send data with IP ECT set
+				 *
+				 * Pretend we didn't receive an
+				 * ECN-setup SYN.
+				 *
+				 * We already incremented the counter
+				 * assuming that the ECN setup will
+				 * succeed. Decrementing here
+				 * tcps_ecn_server_success to correct it.
+				 */
+				if (tp->ecn_flags & TE_SETUPSENT) {
+					tcpstat.tcps_ecn_lost_synack++;
+					tcpstat.tcps_ecn_server_success--;
+				}
+
+				tp->ecn_flags &=
+				    ~(TE_SETUPRECEIVED | TE_SENDIPECT |
+				    TE_SENDCWR);
+			}
+		}
+	} else if ((tcp_ecn_outbound || (tp->t_flags & TF_ENABLE_ECN))
+	    && (flags & (TH_SYN | TH_ACK)) == TH_SYN) {
+		if (tcp_send_ecn_flags_on_syn(tp, so)) {
+			/*
+			 * Setting TH_ECE and TH_CWR makes this an
+			 * ECN-setup SYN
+			 */
+			flags |= (TH_ECE | TH_CWR);
+			tcpstat.tcps_ecn_client_setup++;
+
+			/*
+			 * Record that we sent the ECN-setup and default to
+			 * setting IP ECT.
+			 */
+			tp->ecn_flags |= (TE_SETUPSENT | TE_SENDIPECT);
+		} else {
+			/*
+			 * We sent an ECN-setup SYN but it was dropped.
+			 * Fall back to non-ECN and clear flag indicating
+			 * we should send data with IP ECT set.
+			 */
+			if (tp->ecn_flags & TE_SETUPSENT)
+				tcpstat.tcps_ecn_lost_syn++;
+			tp->ecn_flags &= ~TE_SENDIPECT;
+		}
+	}
+
+	/*
+	 * Check if we should set the TCP CWR flag.
+	 * CWR flag is sent when we reduced the congestion window because
+	 * we received a TCP ECE or we performed a fast retransmit. We
+	 * never set the CWR flag on retransmitted packets. We only set
+	 * the CWR flag on data packets. Pure acks don't have this set.
+	 */
+	if ((tp->ecn_flags & TE_SENDCWR) != 0 && len != 0 &&
+	    !SEQ_LT(tp->snd_nxt, tp->snd_max) && !sack_rxmit) {
+		flags |= TH_CWR;
+		tp->ecn_flags &= ~TE_SENDCWR;
+	}
+
+	/*
+	 * Check if we should set the TCP ECE flag.
+	 */
+	if ((tp->ecn_flags & TE_SENDECE) != 0 && len == 0) {
+		flags |= TH_ECE;
+		tcpstat.tcps_ecn_sent_ece++;
+	}
+
+
 	hdrlen += optlen;
+
+	/* Reset DSACK sequence numbers */
+	tp->t_dsack_lseq = 0;
+	tp->t_dsack_rseq = 0;
 
 #if INET6
 	if (isipv6)
@@ -1501,6 +1730,7 @@ send:
 	 * the template for sends on this connection.
 	 */
 	if (len) {
+		tp->t_pmtud_lastseg_size = len + optlen + ipoptlen;
 		if ((tp->t_flagsext & TF_FORCE) && len == 1)
 			tcpstat.tcps_sndprobe++;
 		else if (SEQ_LT(tp->snd_nxt, tp->snd_max) || sack_rxmit) {
@@ -1636,8 +1866,10 @@ send:
 		 * (This will keep happy those implementations which only
 		 * give data to the user when a buffer fills or
 		 * a PUSH comes in.)
+		 *
+		 * On SYN-segments we should not add the PUSH-flag.
 		 */
-		if (off + len == so->so_snd.sb_cc)
+		if (off + len == so->so_snd.sb_cc && !(flags & TH_SYN))
 			flags |= TH_PUSH;
 	} else {
 		if (tp->t_flags & TF_ACKNOW)
@@ -1696,8 +1928,9 @@ send:
 		/* this picks up the pseudo header (w/o the length) */
 		tcp_fillheaders(tp, ip, th);
 		if ((tp->ecn_flags & TE_SENDIPECT) != 0 && len &&
-			!SEQ_LT(tp->snd_nxt, tp->snd_max) && !sack_rxmit) {
-			ip->ip_tos = IPTOS_ECN_ECT0;
+		    !SEQ_LT(tp->snd_nxt, tp->snd_max) &&
+		    !sack_rxmit && !(flags & TH_SYN)) {
+			ip->ip_tos |= IPTOS_ECN_ECT0;
 		}
 #if PF_ECN
 		m->m_pkthdr.pf_mtag.pftag_hdr = (void *)ip;
@@ -1710,7 +1943,7 @@ send:
 	 * window for use in delaying messages about window sizes.
 	 * If resending a FIN, be sure not to use a new sequence number.
 	 */
-	if (flags & TH_FIN && (tp->t_flags & TF_SENTFIN) &&
+	if ((flags & TH_FIN) && (tp->t_flags & TF_SENTFIN) &&
 	    tp->snd_nxt == tp->snd_max)
 		tp->snd_nxt--;
 	/*
@@ -1725,16 +1958,30 @@ send:
 	 * right edge of the window, so use snd_nxt in that
 	 * case, since we know we aren't doing a retransmission.
 	 * (retransmit and persist are mutually exclusive...)
+	 *
+	 * Note the state of this retransmit segment to detect spurious
+	 * retransmissions.
 	 */
 	if (sack_rxmit == 0) {
-		if (len || (flags & (TH_SYN|TH_FIN)) || tp->t_timer[TCPT_PERSIST])
+		if (len || (flags & (TH_SYN|TH_FIN)) ||
+		    tp->t_timer[TCPT_PERSIST]) {
 			th->th_seq = htonl(tp->snd_nxt);
-		else
+			if (SEQ_LT(tp->snd_nxt, tp->snd_max)) {
+				if (SACK_ENABLED(tp) && len > 1) {
+					tcp_rxtseg_insert(tp, tp->snd_nxt,
+					    (tp->snd_nxt + len - 1));
+				}
+				m->m_pkthdr.pkt_flags |= PKTF_TCP_REXMT;
+			}
+		} else {
 			th->th_seq = htonl(tp->snd_max);
+		}
 	} else {
 		th->th_seq = htonl(p->rxmit);
+		tcp_rxtseg_insert(tp, p->rxmit, (p->rxmit + len - 1));
 		p->rxmit += len;
 		tp->sackhint.sack_bytes_rexmit += len;
+		m->m_pkthdr.pkt_flags |= PKTF_TCP_REXMT;
 	}
 	th->th_ack = htonl(tp->rcv_nxt);
 	tp->last_ack_sent = tp->rcv_nxt;
@@ -1873,7 +2120,13 @@ send:
 		}
 		if (sack_rxmit)
 			goto timer;
-		tp->snd_nxt += len;
+		if (sack_rescue_rxt == TRUE) {
+			tp->snd_nxt = old_snd_nxt;
+			sack_rescue_rxt = FALSE;
+			tcpstat.tcps_pto_in_recovery++;
+		} else {
+			tp->snd_nxt += len;
+		}
 		if (SEQ_GT(tp->snd_nxt, tp->snd_max)) {
 			tp->snd_max = tp->snd_nxt;
 			/*
@@ -1884,6 +2137,9 @@ send:
 				tp->t_rtttime = tcp_now;
 				tp->t_rtseq = startseq;
 				tcpstat.tcps_segstimed++;
+
+				/* update variables related to pipe ack */
+				tp->t_pipeack_lastuna = tp->snd_una;
 			}
 		}
 
@@ -2031,20 +2287,21 @@ timer:
 #endif /* INET6 */
 		if (path_mtu_discovery && (tp->t_flags & TF_PMTUD))
 			ip->ip_off |= IP_DF;
-	
+
 #if NECP
 	{
 		necp_kernel_policy_id policy_id;
-		if (!necp_socket_is_allowed_to_send_recv(inp, &policy_id)) {
+		u_int32_t route_rule_id;
+		if (!necp_socket_is_allowed_to_send_recv(inp, &policy_id, &route_rule_id)) {
 			m_freem(m);
 			error = EHOSTUNREACH;
 			goto out;
 		}
 
-		necp_mark_packet_from_socket(m, inp, policy_id);
+		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id);
 	}
 #endif /* NECP */
-	
+
 #if IPSEC
 	if (inp->inp_sp != NULL)
 		ipsec_setsocket(m, so);

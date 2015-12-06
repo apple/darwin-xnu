@@ -15,17 +15,17 @@ def GetATMValueSummary(atm_value):
 
 
 @lldb_type_summary(['atm_task_descriptor', 'atm_task_descriptor_t'])
-@header("{0: <20s} {1: <20s} {2: <16s} {3: <16s} {4: <20s} {5: <20s} {6: <10s}".format("task_descriptor", "trace_buffer", "buffer_size", "refcount", "mailbox_addr", "mailbox_size", "flags"))
+@header("{0: <20s} {1: <20s} {2: <16s} {3: <16s} {4: <10s}".format("task_descriptor", "trace_buffer", "buffer_size", "refcount", "flags"))
 def GetATMTaskDescriptorSummary(descriptor):
     """ Summarizes atm_task_descriptor object
         params: descriptor - value object of type atm_task_descriptor_t
         returns: string - containing the description.
     """
-    format_str = "{0: <#020x} {1: <#020x} {2: <#016x} {3: <16d} {4: <#020x} {5: <#020x} {6: <10s}"
+    format_str = "{0: <#020x} {1: <#020x} {2: <#016x} {3: <16d} {4: <10s}"
     flags_str = ""
     if unsigned(descriptor.flags) & 0x1:
         flags_str = "DEAD"
-    out_string = format_str.format(descriptor, descriptor.trace_buffer, descriptor.trace_buffer_size, descriptor.reference_count, descriptor.mailbox_kernel_addr, descriptor.mailbox_array_size, flags_str)
+    out_string = format_str.format(descriptor, descriptor.trace_buffer, descriptor.trace_buffer_size, descriptor.reference_count, flags_str)
 
     #if DEVELOPMENT
     if hasattr(descriptor, 'task'):
@@ -46,13 +46,13 @@ def ShowATMValueListeners(cmd_args=None, cmd_options={}):
     atm_val = kern.GetValueFromAddress(cmd_args[0], 'atm_value_t')
     print GetATMValueSummary.header
     print GetATMValueSummary(atm_val)
-    header_str = "{0: <20s} ".format("#mailbox") + GetATMTaskDescriptorSummary.header
+    header_str = "{0: <20s} ".format("#guard") + GetATMTaskDescriptorSummary.header
     #if DEVELOPMENT
     header_str += "  " +  GetTaskSummary.header + " procname"
     #endif
     print header_str
     for listener in IterateQueue(atm_val.listeners, 'atm_link_object_t', 'listeners_element'):
-        listener_summary = "{0: <#020x}".format(listener.mailbox)
+        listener_summary = "{0: <#020x}".format(listener.guard)
         listener_summary += " " + GetATMTaskDescriptorSummary(listener.descriptor)
         print listener_summary
     return 

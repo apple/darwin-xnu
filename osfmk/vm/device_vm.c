@@ -294,10 +294,10 @@ device_pager_data_return(
 	if (device_object == DEVICE_PAGER_NULL)
 		panic("device_pager_data_return: lookup failed");
 
-	return device_data_action(device_object->device_handle,
-				  (ipc_port_t) device_object,
-				  VM_PROT_READ | VM_PROT_WRITE,
-				  offset, data_cnt);
+	__IGNORE_WCASTALIGN(return device_data_action(device_object->device_handle,
+			  (ipc_port_t) device_object,
+			  VM_PROT_READ | VM_PROT_WRITE,
+			  offset, data_cnt));
 }
 
 /*
@@ -318,9 +318,9 @@ device_pager_data_request(
 	if (device_object == DEVICE_PAGER_NULL)
 		panic("device_pager_data_request: lookup failed");
 
-	device_data_action(device_object->device_handle,
+	__IGNORE_WCASTALIGN(device_data_action(device_object->device_handle,
 			   (ipc_port_t) device_object,
-			   VM_PROT_READ, offset, length);
+			   VM_PROT_READ, offset, length));
 	return KERN_SUCCESS;
 }
 

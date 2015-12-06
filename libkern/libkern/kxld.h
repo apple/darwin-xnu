@@ -50,6 +50,7 @@
 *   flags               Flags to control the behavior of kxld
 *   cputype             The target arch's CPU type (0 for host arch)
 *   cpusubtype          The target arch's CPU subtype (0 for host subtype)
+*   pagesize            The target page size (0 for host page size)
 *******************************************************************************/
 kern_return_t kxld_create_context(
     KXLDContext **context, 
@@ -57,7 +58,8 @@ kern_return_t kxld_create_context(
     KXLDLoggingCallback log_callback,
     KXLDFlags flags,
     cpu_type_t cputype,
-    cpu_subtype_t cpusubtype)
+    cpu_subtype_t cpusubtype,
+    vm_size_t pagesize)
     __attribute__((nonnull(1,2),visibility("default")));
 
 /*******************************************************************************

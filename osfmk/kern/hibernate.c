@@ -95,14 +95,11 @@ extern int sync_internal(void);
 
 kern_return_t 
 hibernate_setup(IOHibernateImageHeader * header,
-                        uint32_t  free_page_ratio,
-                        uint32_t  free_page_time,
                         boolean_t vmflush,
-			hibernate_page_list_t * page_list,
+			hibernate_page_list_t * page_list __unused,
 			hibernate_page_list_t * page_list_wired __unused,
 			hibernate_page_list_t * page_list_pal __unused)
 {
-    uint32_t    	    gobble_count;
     kern_return_t	retval = KERN_SUCCESS;
 
     hibernate_create_paddr_map();
@@ -120,16 +117,9 @@ hibernate_setup(IOHibernateImageHeader * header,
 	    hibernate_flush_memory();
     }
 
-
-    // pages we could force out to reduce hibernate image size
-    gobble_count = (uint32_t)((((uint64_t) page_list->page_count) * ((uint64_t) free_page_ratio)) / 100);
-
     // no failures hereafter
 
     hibernate_processor_setup(header);
-
-    if (gobble_count)
-	    hibernate_gobble_pages(gobble_count, free_page_time);
 
     HIBLOG("hibernate_alloc_pages act %d, inact %d, anon %d, throt %d, spec %d, wire %d, wireinit %d\n",
     	    vm_page_active_count, vm_page_inactive_count, 

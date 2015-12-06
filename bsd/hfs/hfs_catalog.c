@@ -267,7 +267,7 @@ nextid:
 	} else {
 		hfsmp->vcbNxtCNID++;
 	}
-	MarkVCBDirty(hfsmp);
+	hfs_note_header_minor_change(hfsmp);
 
 	/* First check that there are not any entries pending in the hash table with this ID */
 	if (cat_check_idhash (hfsmp, nextCNID)) {
@@ -4359,8 +4359,9 @@ getbsdattr(struct hfsmount *hfsmp, const struct HFSPlusCatalogFile *crp, struct 
 		case S_IFBLK:
 			attrp->ca_rdev = bsd->special.rawDevice;
 			break;
-			
-		case S_IFDIR: /* fall through */
+		case S_IFIFO:
+		case S_IFSOCK:
+		case S_IFDIR:
 		case S_IFREG:
 			/* Pick up the hard link count */
 			if (bsd->special.linkCount > 0)
@@ -4812,3 +4813,11 @@ cat_update_dirlink(struct hfsmount *hfsmp, u_int8_t forktype,
 	} 
 }
 
+void hfs_fork_copy(struct cat_fork *dst, const struct cat_fork *src,
+				   HFSPlusExtentDescriptor *extents)
+{
+	/* Copy everything but the extents into the dest fork */
+	memcpy(dst, src, offsetof(struct cat_fork, cf_extents));
+	/* Then copy the supplied extents into the fork */
+	memcpy(dst->cf_extents, extents, sizeof(HFSPlusExtentRecord));
+}

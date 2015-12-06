@@ -101,17 +101,24 @@ ipc_pset_alloc(
 	ipc_pset_t pset;
 	mach_port_name_t name;
 	kern_return_t kr;
+	uint64_t reserved_link;
+
+	reserved_link = waitq_link_reserve(NULL);
 
 	kr = ipc_object_alloc(space, IOT_PORT_SET,
 			      MACH_PORT_TYPE_PORT_SET, 0,
 			      &name, (ipc_object_t *) &pset);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		waitq_link_release(reserved_link);
 		return kr;
+	}
 	/* pset and space are locked */
 
 	pset->ips_local_name = name;
-	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */);
+	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */, &reserved_link);
 	is_write_unlock(space);
+
+	waitq_link_release(reserved_link);
 
 	*namep = name;
 	*psetp = pset;
@@ -140,17 +147,24 @@ ipc_pset_alloc_name(
 {
 	ipc_pset_t pset;
 	kern_return_t kr;
+	uint64_t reserved_link;
 
+
+	reserved_link = waitq_link_reserve(NULL);
 
 	kr = ipc_object_alloc_name(space, IOT_PORT_SET,
 				   MACH_PORT_TYPE_PORT_SET, 0,
 				   name, (ipc_object_t *) &pset);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		waitq_link_release(reserved_link);
 		return kr;
+	}
 	/* pset is locked */
 
 	pset->ips_local_name = name;
-	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */);
+	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */, &reserved_link);
+
+	waitq_link_release(reserved_link);
 
 	*psetp = pset;
 	return KERN_SUCCESS;
@@ -188,17 +202,16 @@ kern_return_t
 ipc_pset_add(
 	ipc_pset_t	  pset,
 	ipc_port_t	  port,
-	wait_queue_link_t wql)
+	uint64_t	 *reserved_link,
+	uint64_t	 *reserved_prepost)
 {
 	kern_return_t kr;
 
 	assert(ips_active(pset));
 	assert(ip_active(port));
 	
-	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages, wql);
-
-	if (kr == KERN_SUCCESS)
-		port->ip_pset_count++;
+	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages,
+			    reserved_link, reserved_prepost);
 
 	return kr;
 }
@@ -218,20 +231,16 @@ ipc_pset_add(
 kern_return_t
 ipc_pset_remove(
 	ipc_pset_t	  pset,
-	ipc_port_t	  port,
-	wait_queue_link_t *wqlp)
+	ipc_port_t	  port)
 {
 	kern_return_t kr;
 
 	assert(ip_active(port));
 	
-	if (port->ip_pset_count == 0)
+	if (port->ip_in_pset == 0)
 		return KERN_NOT_IN_SET;
 
-	kr = ipc_mqueue_remove(&port->ip_messages, &pset->ips_messages, wqlp);
-
-	if (kr == KERN_SUCCESS)
-		port->ip_pset_count--;
+	kr = ipc_mqueue_remove(&port->ip_messages, &pset->ips_messages);
 
 	return kr;
 }
@@ -246,19 +255,17 @@ ipc_pset_remove(
 
 kern_return_t
 ipc_pset_remove_from_all(
-	ipc_port_t	port,
-	queue_t		links)
+	ipc_port_t	port)
 {
 	assert(ip_active(port));
 	
-	if (port->ip_pset_count == 0)
+	if (port->ip_in_pset == 0)
 		return KERN_NOT_IN_SET;
 
 	/* 
 	 * Remove the port's mqueue from all sets
 	 */
-	ipc_mqueue_remove_from_all(&port->ip_messages, links);
-	port->ip_pset_count = 0;
+	ipc_mqueue_remove_from_all(&port->ip_messages);
 	return KERN_SUCCESS;
 }
 
@@ -278,11 +285,6 @@ ipc_pset_destroy(
 	ipc_pset_t	pset)
 {
 	spl_t		s;
-	queue_head_t link_data;
-	queue_t links = &link_data;
-	wait_queue_link_t wql;
-
-	queue_init(links);
 
 	assert(ips_active(pset));
 
@@ -290,8 +292,9 @@ ipc_pset_destroy(
 
 	/*
 	 * remove all the member message queues
+	 * AND remove this message queue from any containing sets
 	 */
-	ipc_mqueue_remove_all(&pset->ips_messages, links);
+	ipc_mqueue_remove_all(&pset->ips_messages);
 	
 	/*
 	 * Set all waiters on the portset running to
@@ -303,14 +306,10 @@ ipc_pset_destroy(
 	imq_unlock(&pset->ips_messages);
 	splx(s);
 
+	ipc_mqueue_deinit(&pset->ips_messages);
+
 	ips_unlock(pset);
 	ips_release(pset);       /* consume the ref our caller gave us */
-
-	while(!queue_empty(links)) {
-		wql = (wait_queue_link_t) dequeue(links);
-		wait_queue_link_free(wql);
-	}
-
 }
 
 /* Kqueue EVFILT_MACHPORT support */
@@ -320,7 +319,7 @@ ipc_pset_destroy(
 static int      filt_machportattach(struct knote *kn);
 static void	filt_machportdetach(struct knote *kn);
 static int	filt_machport(struct knote *kn, long hint);
-static void     filt_machporttouch(struct knote *kn, struct kevent64_s *kev, long type);
+static void     filt_machporttouch(struct knote *kn, struct kevent_internal_s *kev, long type);
 static unsigned filt_machportpeek(struct knote *kn);
 struct filterops machport_filtops = {
         .f_attach = filt_machportattach,
@@ -335,7 +334,7 @@ filt_machportattach(
         struct knote *kn)
 {
         mach_port_name_t        name = (mach_port_name_t)kn->kn_kevent.ident;
-	wait_queue_link_t	wql = wait_queue_link_allocate();
+        uint64_t                wq_link_id = waitq_link_reserve(NULL);
         ipc_pset_t              pset = IPS_NULL;
         int                     result = ENOSYS;
         kern_return_t           kr;
@@ -344,7 +343,7 @@ filt_machportattach(
                                   MACH_PORT_RIGHT_PORT_SET,
                                   (ipc_object_t *)&pset);
         if (kr != KERN_SUCCESS) {
-		wait_queue_link_free(wql);
+		waitq_link_release(wq_link_id);
                 return (kr == KERN_INVALID_NAME ? ENOENT : ENOTSUP);
         }
         /* We've got a lock on pset */
@@ -355,8 +354,9 @@ filt_machportattach(
 	 * rather than having to call knote() from the Mach code on each
 	 * message.
 	 */
-	result = knote_link_wait_queue(kn, &pset->ips_messages.imq_wait_queue, wql);
+	result = knote_link_waitq(kn, &pset->ips_messages.imq_wait_queue, &wq_link_id);
 	if (result == 0) {
+		waitq_link_release(wq_link_id);
 		/* keep a reference for the knote */
 		kn->kn_ptr.p_pset = pset; 
 		ips_reference(pset);
@@ -365,7 +365,7 @@ filt_machportattach(
 	}
 
 	ips_unlock(pset);
-	wait_queue_link_free(wql);
+	waitq_link_release(wq_link_id);
 	return result;
 }
 
@@ -374,19 +374,16 @@ filt_machportdetach(
         struct knote *kn)
 {
         ipc_pset_t              pset = kn->kn_ptr.p_pset;
-	wait_queue_link_t	wql = WAIT_QUEUE_LINK_NULL;
 
 	/*
 	 * Unlink the portset wait queue from knote/kqueue,
 	 * and release our reference on the portset.
 	 */
 	ips_lock(pset);
-	(void)knote_unlink_wait_queue(kn, &pset->ips_messages.imq_wait_queue, &wql);
+	(void)knote_unlink_waitq(kn, &pset->ips_messages.imq_wait_queue);
 	kn->kn_ptr.p_pset = IPS_NULL;
 	ips_unlock(pset);
 	ips_release(pset);
-	if (wql != WAIT_QUEUE_LINK_NULL)
-		wait_queue_link_free(wql);
 }
 
 static int
@@ -451,7 +448,6 @@ filt_machport(
 	self->ith_object = (ipc_object_t)pset;
 	self->ith_msize = size;
 	self->ith_option = option;
-	self->ith_scatter_list_size = 0;
 	self->ith_receiver_name = MACH_PORT_NULL;
 	self->ith_continuation = NULL;
 	option |= MACH_RCV_TIMEOUT; // never wait
@@ -512,7 +508,7 @@ filt_machport(
 }
 
 static void
-filt_machporttouch(struct knote *kn, struct kevent64_s *kev, long type)
+filt_machporttouch(struct knote *kn, struct kevent_internal_s *kev, long type)
 {
         switch (type) {
         case EVENT_REGISTER:
@@ -537,7 +533,7 @@ filt_machporttouch(struct knote *kn, struct kevent64_s *kev, long type)
 /*
  * Peek to see if the portset associated with the knote has any
  * events. This pre-hook is called when a filter uses the stay-
- * on-queue mechanism (as the knote_link_wait_queue mechanism
+ * on-queue mechanism (as the knote_link_waitq mechanism
  * does).
  *
  * This is called with the kqueue that the knote belongs to still

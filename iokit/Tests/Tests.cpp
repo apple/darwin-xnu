@@ -29,137 +29,179 @@
  *
  */
 
-#include <IOKit/IODeviceTreeSupport.h>
+#define TEST_HEADERS	0
+
+#if TEST_HEADERS
+
+#include <libkern/OSByteOrder.h>
+#include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSBoolean.h>
+#include <libkern/c++/OSCollection.h>
+#include <libkern/c++/OSCollectionIterator.h>
 #include <libkern/c++/OSContainers.h>
+#include <libkern/c++/OSCPPDebug.h>
+#include <libkern/c++/OSData.h>
+#include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSEndianTypes.h>
+#include <libkern/c++/OSIterator.h>
+#include <libkern/c++/OSKext.h>
+#include <libkern/c++/OSLib.h>
+#include <libkern/c++/OSMetaClass.h>
+#include <libkern/c++/OSNumber.h>
+#include <libkern/c++/OSObject.h>
+#include <libkern/c++/OSOrderedSet.h>
+#include <libkern/c++/OSSerialize.h>
+#include <libkern/c++/OSSet.h>
+#include <libkern/c++/OSString.h>
+#include <libkern/c++/OSSymbol.h>
+#include <libkern/c++/OSUnserialize.h>
+#include <libkern/crypto/aes.h>
+#include <libkern/crypto/aesxts.h>
+#include <libkern/crypto/crypto_internal.h>
+#include <libkern/crypto/des.h>
+#include <libkern/crypto/md5.h>
+#include <libkern/crypto/register_crypto.h>
+#include <libkern/crypto/sha1.h>
+#include <libkern/crypto/sha2.h>
+#include <libkern/kernel_mach_header.h>
+#include <libkern/kext_request_keys.h>
+#include <libkern/kxld.h>
+#include <libkern/kxld_types.h>
+#include <libkern/locks.h>
+#include <libkern/mkext.h>
+#include <libkern/OSAtomic.h>
+#include <libkern/OSBase.h>
+#include <libkern/OSDebug.h>
+#include <libkern/OSKextLib.h>
+#include <libkern/OSKextLibPrivate.h>
+#include <libkern/OSMalloc.h>
+#include <libkern/OSReturn.h>
+#include <libkern/OSSerializeBinary.h>
+#include <libkern/OSTypes.h>
+#include <libkern/prelink.h>
+#include <libkern/stack_protector.h>
+#include <libkern/sysctl.h>
+#include <libkern/tree.h>
+#include <libkern/zconf.h>
+#include <libkern/zlib.h>
+
+#include <IOKit/AppleKeyStoreInterface.h>
+#include <IOKit/assert.h>
+#include <IOKit/IOBSD.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOCatalogue.h>
+#include <IOKit/IOCommand.h>
+#include <IOKit/IOCommandGate.h>
+#include <IOKit/IOCommandPool.h>
+#include <IOKit/IOCommandQueue.h>
+#include <IOKit/IOConditionLock.h>
+#include <IOKit/IOCPU.h>
+//#include <IOKit/IODataQueue.h>
+#include <IOKit/IODataQueueShared.h>
+#include <IOKit/IODeviceMemory.h>
+#include <IOKit/IODeviceTreeSupport.h>
+#include <IOKit/IODMACommand.h>
+#include <IOKit/IODMAController.h>
+#include <IOKit/IODMAEventSource.h>
+#include <IOKit/IOEventSource.h>
+#include <IOKit/IOFilterInterruptEventSource.h>
+#include <IOKit/IOHibernatePrivate.h>
+#include <IOKit/IOInterleavedMemoryDescriptor.h>
+#include <IOKit/IOInterruptAccounting.h>
+#include <IOKit/IOInterruptAccountingPrivate.h>
+#include <IOKit/IOInterruptController.h>
+#include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOInterrupts.h>
+#include <IOKit/IOKernelReporters.h>
+#include <IOKit/IOKernelReportStructs.h>
+#include <IOKit/IOKitDebug.h>
+#include <IOKit/IOKitDiagnosticsUserClient.h>
+#include <IOKit/IOKitKeys.h>
+#include <IOKit/IOKitKeysPrivate.h>
+#include <IOKit/IOKitServer.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOLocks.h>
+#include <IOKit/IOLocksPrivate.h>
+#include <IOKit/IOMapper.h>
+#include <IOKit/IOMemoryCursor.h>
+#include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IOMessage.h>
+#include <IOKit/IOMultiMemoryDescriptor.h>
+#include <IOKit/IONotifier.h>
+#include <IOKit/IONVRAM.h>
+#include <IOKit/IOPlatformExpert.h>
+#include <IOKit/IOPolledInterface.h>
+#include <IOKit/IORangeAllocator.h>
+#include <IOKit/IORegistryEntry.h>
+#include <IOKit/IOReportMacros.h>
+#include <IOKit/IOReportTypes.h>
+#include <IOKit/IOReturn.h>
+#include <IOKit/IOService.h>
+#include <IOKit/IOServicePM.h>
+#include <IOKit/IOSharedDataQueue.h>
+#include <IOKit/IOSharedLock.h>
+#include <IOKit/IOStatistics.h>
+#include <IOKit/IOStatisticsPrivate.h>
+#include <IOKit/IOSubMemoryDescriptor.h>
+#include <IOKit/IOSyncer.h>
+#include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOTimeStamp.h>
+#include <IOKit/IOTypes.h>
+#include <IOKit/IOUserClient.h>
+#include <IOKit/IOWorkLoop.h>
+#include <IOKit/nvram/IONVRAMController.h>
+#include <IOKit/OSMessageNotification.h>
+#include <IOKit/platform/AppleMacIO.h>
+#include <IOKit/platform/AppleMacIODevice.h>
+#include <IOKit/platform/AppleNMI.h>
+#include <IOKit/platform/ApplePlatformExpert.h>
+#include <IOKit/power/IOPwrController.h>
+#include <IOKit/pwr_mgt/IOPM.h>
+#include <IOKit/pwr_mgt/IOPMinformee.h>
+#include <IOKit/pwr_mgt/IOPMinformeeList.h>
+#include <IOKit/pwr_mgt/IOPMLibDefs.h>
+#include <IOKit/pwr_mgt/IOPMlog.h>
+#include <IOKit/pwr_mgt/IOPMPowerSource.h>
+#include <IOKit/pwr_mgt/IOPMPowerSourceList.h>
+#include <IOKit/pwr_mgt/IOPMpowerState.h>
+#include <IOKit/pwr_mgt/IOPMPrivate.h>
+#include <IOKit/pwr_mgt/IOPowerConnection.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
+#include <IOKit/rtc/IORTCController.h>
+#include <IOKit/system.h>
+#include <IOKit/system_management/IOWatchDogTimer.h>
 
-#include <assert.h>
+#endif /* TEST_HEADERS */
 
+#include <sys/sysctl.h>
+#include <libkern/c++/OSData.h>
+#include "Tests.h"
 
-extern "C" {
-extern int debug_container_malloc_size;
-extern int debug_ivars_size;
-}
-
-static void DumpTree( void )
+static int
+sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
-    IORegistryEntry *		next;
-    IORegistryEntry *		packages = 0;
-    IORegistryEntry *		deblocker = 0;
-    IORegistryEntry *		keyboard = 0;
-    IORegistryIterator * 	iter;
-    OSOrderedSet *		all;
+    int error;
+    int newValue, changed;
 
-    IOLog("ivars %08x, containers %08x\n",
-	debug_ivars_size, debug_container_malloc_size);
+    error = sysctl_io_number(req, 0, sizeof(int), &newValue, &changed);
+    if (error) return (error);
 
-    iter = IORegistryIterator::iterateOver( gIODTPlane );
-    assert( iter );
-
-    all = iter->iterateAll();
-    IOLog("\nCount %d\n", all->getCount() );
-    all->release();
-
-    iter->reset();
-    while( (next = iter->nextEntryRecursive())) {
-	if( 0 == strcmp( "packages", next->getName()))
-	    packages = next;
-	if( 0 == strcmp( "deblocker", next->getName()))
-	    deblocker = next;
-	if( 0 == strcmp( "keyboard", next->getName()))
-	    keyboard = next;
+#if DEVELOPMENT || DEBUG
+    if (changed && (999==newValue))
+    {
+    	OSData * data = OSData::withCapacity(16);
+	data->release();
+	data->release();
     }
 
-    if( deblocker && keyboard)
-	deblocker->attachToParent( keyboard, gIODTPlane);
+    if (changed && newValue) error = IOMemoryDescriptorTest(newValue);
+#endif  /* DEVELOPMENT || DEBUG */
 
-    iter->reset();
-    while( (next = iter->nextEntryRecursive())) {
-	IOLog("%s=%d,", next->getName(), next->getDepth( gIODTPlane ));
-	if( 0 == strcmp( "gc", next->getName())) {
-	    packages = next;
-	}
-    }
-
-    IOLog("ivars %08x, containers %08x\n",
-	debug_ivars_size, debug_container_malloc_size);
-
-    if( packages)
-	packages->detachAll( gIODTPlane);
-    all = iter->iterateAll();
-    IOLog("del gc/, count now %d\n", all->getCount() );
-    all->release();
-
-    iter->release();
-
-    IOLog("ivars %08x, containers %08x\n",
-	debug_ivars_size, debug_container_malloc_size);
-
+    return (error);
 }
 
-extern "C" {
-void PathTests( void )
-{
-    const char * tests[] = {
-        "IODeviceTree:/bandit",
-        "IODeviceTree:/",
-	"IODeviceTree:/xxxx",
-	"IODeviceTree:/bandit/xxx",
-        "IODeviceTree:/bandit@F2000000",
-        "IODeviceTree:/bandit/gc",
-        "IODeviceTree:/bandit/gc/mace:17.202.42.95,\\mach_kernel",
-        "IODeviceTree:/bandit/@10/mesh",
-        "IODeviceTree:enet:17.202",
-        "IODeviceTree:scsi/@0:0",
-        "IODeviceTree:scsi-int",
-        "IODeviceTree:/bandit/gc@10/mesh",
-        "IODeviceTree:/bandit/gc/53c94/disk@0:6,mach_kernel",
-        "IOService:/",
-        "IOService:/ApplePlatformExpert",
-        "IOService:/ApplePlatformExpert/hammerhead@F8000000",
-        "IOService:/ApplePlatformExpert/bandit/AppleMacRiscPCI"
-    };
+SYSCTL_PROC(_kern, OID_AUTO, iokittest,
+        CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+        0, 0, sysctl_iokittest, "I", "");
 
-    IORegistryEntry *	entry;
-    char		str[256];
-    int			len;
-
-    for( unsigned int i = 0; i < sizeof(tests)/sizeof(tests[0]); i++) {
-
-	len = sizeof( str );
-	entry = IORegistryEntry::fromPath( tests[i], 0, str, &len );
-        IOLog("\"%s\" ", tests[i] );
-	if( entry) {
-	    IOLog("found %s, tail = \"%s\"\n", entry->getName(), str );
-            len = sizeof( str );
-	    if( entry->getPath( str, &len,
-			IORegistryEntry::getPlane("IODeviceTree"))) {
-		IOLog("path = \"%s\"\n", str);
-	    }
-	    entry->release();
-	} else
-	    IOLog("not found\n");
-    }
-}
-}
-
-void TestsCpp( void * dtTop )
-{
-    IORegistryEntry * dt;
-
-    IOLog("\nivars %08x, containers %08x\n",
-	debug_ivars_size, debug_container_malloc_size);
-
-    OSMetaClass::printInstanceCounts();
-    dt = IODeviceTreeAlloc( dtTop );
-    assert( dt );
-
-//    OSMetaClass::printInstanceCounts();
-    DumpTree();
-//    OSMetaClass::printInstanceCounts();
-    dt->detachAll( gIODTPlane);
-    OSMetaClass::printInstanceCounts();
-    IOLog("ivars %08x, containers %08x\n",
-	debug_ivars_size, debug_container_malloc_size);
-}
 

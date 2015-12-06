@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005, 2015 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -81,7 +81,7 @@
 typedef	natural_t	thread_flavor_t;
 typedef	integer_t	*thread_info_t;		/* varying array of int */
 
-#define THREAD_INFO_MAX		(1024)	/* maximum array size */
+#define THREAD_INFO_MAX		(32)	/* maximum array size */
 typedef	integer_t	thread_info_data_t[THREAD_INFO_MAX];
 
 /*
@@ -93,7 +93,7 @@ struct thread_basic_info {
         time_value_t    user_time;      /* user run time */
         time_value_t    system_time;    /* system run time */
         integer_t       cpu_usage;      /* scaled cpu usage percentage */
-	policy_t	policy;		/* scheduling policy in effect */
+        policy_t        policy;         /* scheduling policy in effect */
         integer_t       run_state;      /* run state (see below) */
         integer_t       flags;          /* various flags (see below) */
         integer_t       suspend_count;  /* suspend count for thread */
@@ -142,6 +142,46 @@ typedef struct thread_identifier_info  *thread_identifier_info_t;
  */
 #define TH_FLAGS_SWAPPED	0x1	/* thread is swapped out */
 #define TH_FLAGS_IDLE		0x2	/* thread is an idle thread */
+#define TH_FLAGS_GLOBAL_FORCED_IDLE	0x4	/* thread performs global forced idle */
+
+/*
+ *  Thread extended info (returns same info as proc_pidinfo(...,PROC_PIDTHREADINFO,...)
+ */
+#define THREAD_EXTENDED_INFO 5
+#define MAXTHREADNAMESIZE 64
+struct thread_extended_info {		// same as proc_threadinfo (from proc_info.h) & proc_threadinfo_internal (from bsd_taskinfo.h)
+	uint64_t		pth_user_time;    	/* user run time */
+	uint64_t		pth_system_time;  	/* system run time */
+	int32_t			pth_cpu_usage;    	/* scaled cpu usage percentage */
+	int32_t			pth_policy;			/* scheduling policy in effect */
+	int32_t			pth_run_state;    	/* run state (see below) */
+	int32_t			pth_flags;        	/* various flags (see below) */
+	int32_t			pth_sleep_time;   	/* number of seconds that thread */
+	int32_t			pth_curpri;			/* cur priority*/
+	int32_t			pth_priority;		/*  priority*/
+	int32_t			pth_maxpriority;	/* max priority*/
+	char			pth_name[MAXTHREADNAMESIZE];	/* thread name, if any */
+};
+typedef struct thread_extended_info thread_extended_info_data_t;
+typedef struct thread_extended_info * thread_extended_info_t;
+#define THREAD_EXTENDED_INFO_COUNT  ((mach_msg_type_number_t) \
+		(sizeof(thread_extended_info_data_t) / sizeof (natural_t)))
+
+#define THREAD_DEBUG_INFO_INTERNAL 6    /* for kernel development internal info */
+
+#if PRIVATE
+struct thread_debug_info_internal{
+	uint64_t page_creation_count;
+};
+
+typedef struct thread_debug_info_internal *thread_debug_info_internal_t;
+typedef struct thread_debug_info_internal  thread_debug_info_internal_data_t;
+
+#define THREAD_DEBUG_INFO_INTERNAL_COUNT  ((mach_msg_type_number_t)		\
+			(sizeof (thread_debug_info_internal_data_t) / sizeof (natural_t)))
+
+#endif /* PRIVATE */
+
 
 /*
  * Obsolete interfaces.

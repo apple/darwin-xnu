@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2012,2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -39,5 +39,40 @@
  */
 #define NFS_IOC_DESTROY_CRED		_IO('n', 1)
 #define NFS_FSCTL_DESTROY_CRED		IOCBASECMD(NFS_IOC_DESTROY_CRED)
+/*
+ * fsclt (vnop_ioctl) to set the callers credentials associated with the vnode's mount
+ */
 
+
+struct nfs_gss_principal
+{
+	uint32_t	princlen;	/* length of data */
+	uint32_t	nametype;	/* nametype of data */
+#ifdef KERNEL
+	user32_addr_t	principal;	/* principal data in userspace */
+#else
+	uint8_t		*principal;
+#endif
+	uint32_t	flags;		/* Return flags */
+};
+
+#ifdef KERNEL
+/* LP64 version of nfs_gss_principal */
+struct user_nfs_gss_principal
+{
+	uint32_t	princlen;	/* length of data */
+	uint32_t	nametype;	/* nametype of data */
+	user_addr_t	principal;	/* principal data in userspace */
+	uint32_t	flags;          /* Returned flags */
+};
+#endif
+
+/* If no credential was found returned NFS_IOC_NO_CRED_FLAG in the flags field. */
+#define NFS_IOC_NO_CRED_FLAG		1	/* No credential was found */
+
+#define NFS_IOC_SET_CRED		_IOW('n', 2, struct nfs_gss_principal)
+#define NFS_FSCTL_SET_CRED		IOCBASECMD(NFS_IOC_SET_CRED)
+
+#define NFS_IOC_GET_CRED		_IOWR('n', 3, struct nfs_gss_principal)
+#define NFS_FSCTL_GET_CRED		IOCBASECMD(NFS_IOC_GET_CRED)
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -133,6 +133,16 @@ SYSCTL_INT(_net_inet6_ip6, OID_AUTO, select_srcif_debug,
 	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_select_srcif_debug, 0,
 	"log source interface selection debug info");
 
+static int ip6_select_srcaddr_debug = 0;
+SYSCTL_INT(_net_inet6_ip6, OID_AUTO, select_srcaddr_debug,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_select_srcaddr_debug, 0,
+	"log source address selection debug info");
+
+static int ip6_select_src_expensive_secondary_if = 0;
+SYSCTL_INT(_net_inet6_ip6, OID_AUTO, select_src_expensive_secondary_if,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_select_src_expensive_secondary_if, 0,
+	"allow source interface selection to use expensive secondaries");
+
 #define	ADDR_LABEL_NOTAPP (-1)
 struct in6_addrpolicy defaultaddrpolicy;
 
@@ -164,6 +174,18 @@ static int dump_addrsel_policyent(const struct in6_addrpolicy *, void *);
 static struct in6_addrpolicy *match_addrsel_policy(struct sockaddr_in6 *);
 void addrsel_policy_init(void);
 
+#define	SASEL_DO_DBG(inp) \
+	(ip6_select_srcaddr_debug && (inp) != NULL && \
+	    (inp)->inp_socket != NULL && \
+	    ((inp)->inp_socket->so_options & SO_DEBUG))
+
+#define SASEL_LOG(fmt, ...) \
+do { \
+	if (SASEL_DO_DBG(inp)) \
+		printf("%s:%d " fmt "\n",\
+		    __FUNCTION__, __LINE__, ##__VA_ARGS__); \
+} while (0); \
+
 /*
  * Return an IPv6 address, which is the most appropriate for a given
  * destination and user specified options.
@@ -171,21 +193,22 @@ void addrsel_policy_init(void);
  * an entry to the caller for later use.
  */
 #define	REPLACE(r) do {\
-	if ((r) < sizeof (ip6stat.ip6s_sources_rule) / \
-		sizeof (ip6stat.ip6s_sources_rule[0])) /* check for safety */ \
-		ip6stat.ip6s_sources_rule[(r)]++; \
+	SASEL_LOG("REPLACE r %d ia %s ifp1 %s\n", \
+	    (r), s_src, ifp1->if_xname); \
+	srcrule = (r); \
 	goto replace; \
 } while (0)
+
 #define	NEXTSRC(r) do {\
-	if ((r) < sizeof (ip6stat.ip6s_sources_rule) / \
-		sizeof (ip6stat.ip6s_sources_rule[0])) /* check for safety */ \
-		ip6stat.ip6s_sources_rule[(r)]++; \
+	SASEL_LOG("NEXTSRC r %d ia %s ifp1 %s\n", \
+	    (r), s_src, ifp1->if_xname); \
 	goto next;		/* XXX: we can't use 'continue' here */ \
 } while (0)
+
 #define	BREAK(r) do { \
-	if ((r) < sizeof (ip6stat.ip6s_sources_rule) / \
-		sizeof (ip6stat.ip6s_sources_rule[0])) /* check for safety */ \
-		ip6stat.ip6s_sources_rule[(r)]++; \
+	SASEL_LOG("BREAK r %d ia %s ifp1 %s\n", \
+	    (r), s_src, ifp1->if_xname); \
+	srcrule = (r); \
 	goto out;		/* XXX: we can't use 'break' here */ \
 } while (0)
 
@@ -212,6 +235,9 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	struct ip6_out_args ip6oa = { ifscope, { 0 }, IP6OAF_SELECT_SRCIF, 0 };
 	boolean_t islocal = FALSE;
 	uint64_t secs = net_uptime();
+	char s_src[MAX_IPv6_STR_LEN], s_dst[MAX_IPv6_STR_LEN];
+	const struct in6_addr *tmp;
+	int bestrule = IP6S_SRCRULE_0;
 
 	dst = dstsock->sin6_addr; /* make a copy for local operation */
 	*errorp = 0;
@@ -313,6 +339,17 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		goto done;
 	}
 
+	if (SASEL_DO_DBG(inp)) {
+		(void) inet_ntop(AF_INET6, &dst, s_dst, sizeof (s_src));
+
+		tmp = &in6addr_any;
+		(void) inet_ntop(AF_INET6, tmp, s_src, sizeof (s_src));
+
+		printf("%s out src %s dst %s ifscope %d ifp %s\n", 
+		    __func__, s_src, s_dst, ifscope,
+		    ifp ? ifp->if_xname : "NULL");
+	}
+
 	*errorp = in6_setscope(&dst, ifp, &odstzone);
 	if (*errorp != 0) {
 		src_storage = NULL;
@@ -326,6 +363,11 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		u_int32_t srczone, osrczone, dstzone;
 		struct in6_addr src;
 		struct ifnet *ifp1 = ia->ia_ifp;
+		int srcrule;
+
+		if (SASEL_DO_DBG(inp))
+			(void) inet_ntop(AF_INET6, &ia->ia_addr.sin6_addr,
+			     s_src, sizeof (s_src));
 
 		IFA_LOCK(&ia->ia_ifa);
 		/*
@@ -335,27 +377,37 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		 * XXX: we should probably use sin6_scope_id here.
 		 */
 		if (in6_setscope(&dst, ifp1, &dstzone) ||
-		    odstzone != dstzone)
+		    odstzone != dstzone) {
+			SASEL_LOG("NEXT ia %s ifp1 %s odstzone %d != dstzone %d\n",
+			    s_src, ifp1->if_xname, odstzone, dstzone);
 			goto next;
-
+		}
 		src = ia->ia_addr.sin6_addr;
 		if (in6_setscope(&src, ifp, &osrczone) ||
 		    in6_setscope(&src, ifp1, &srczone) ||
-		    osrczone != srczone)
+		    osrczone != srczone) {
+			SASEL_LOG("NEXT ia %s ifp1 %s osrczone %d != srczone %d\n",
+			    s_src, ifp1->if_xname, osrczone, srczone);
 			goto next;
-
+		}
 		/* avoid unusable addresses */
 		if ((ia->ia6_flags &
-		    (IN6_IFF_NOTREADY | IN6_IFF_ANYCAST | IN6_IFF_DETACHED)))
+		    (IN6_IFF_NOTREADY | IN6_IFF_ANYCAST | IN6_IFF_DETACHED))) {
+			SASEL_LOG("NEXT ia %s ifp1 %s ia6_flags 0x%x\n",
+			    s_src, ifp1->if_xname, ia->ia6_flags);
 			goto next;
-
-		if (!ip6_use_deprecated && IFA6_IS_DEPRECATED(ia, secs))
+		}
+		if (!ip6_use_deprecated && IFA6_IS_DEPRECATED(ia, secs)) {
+			SASEL_LOG("NEXT ia %s ifp1 %s IFA6_IS_DEPRECATED\n",
+			    s_src, ifp1->if_xname);
 			goto next;
-
+		}
 		if (!nd6_optimistic_dad &&
-		    (ia->ia6_flags & IN6_IFF_OPTIMISTIC) != 0)
+		    (ia->ia6_flags & IN6_IFF_OPTIMISTIC) != 0) {
+			SASEL_LOG("NEXT ia %s ifp1 %s IN6_IFF_OPTIMISTIC\n",
+			    s_src, ifp1->if_xname);
 			goto next;
-
+		}
 		/* Rule 1: Prefer same address */
 		if (IN6_ARE_ADDR_EQUAL(&dst, &ia->ia_addr.sin6_addr))
 			BREAK(IP6S_SRCRULE_1); /* there should be no better candidate */
@@ -530,16 +582,39 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		 * Last resort: just keep the current candidate.
 		 * Or, do we need more rules?
 		 */
+		if (ifp1 != ifp && (ifp1->if_eflags & IFEF_EXPENSIVE) &&
+		    ip6_select_src_expensive_secondary_if == 0) {
+			SASEL_LOG("NEXT ia %s ifp1 %s IFEF_EXPENSIVE\n",
+			    s_src, ifp1->if_xname);
+		   	ip6stat.ip6s_sources_skip_expensive_secondary_if++;
+			goto next;
+		}
+		SASEL_LOG("NEXT ia %s ifp1 %s last resort\n",
+		    s_src, ifp1->if_xname);
 		IFA_UNLOCK(&ia->ia_ifa);
 		continue;
 
 replace:
+		/*
+		 * Ignore addresses on secondary interfaces that are marked
+		 * expensive
+		 */
+		if (ifp1 != ifp && (ifp1->if_eflags & IFEF_EXPENSIVE) &&
+		    ip6_select_src_expensive_secondary_if == 0) {
+			SASEL_LOG("NEXT ia %s ifp1 %s IFEF_EXPENSIVE\n",
+			    s_src, ifp1->if_xname);
+		   	ip6stat.ip6s_sources_skip_expensive_secondary_if++;
+			goto next;
+		}
+		bestrule = srcrule;
 		best_scope = (new_scope >= 0 ? new_scope :
 		    in6_addrscope(&ia->ia_addr.sin6_addr));
 		best_policy = (new_policy ? new_policy :
 		    in6_addrsel_lookup_policy(&ia->ia_addr));
 		best_matchlen = (new_matchlen >= 0 ? new_matchlen :
 		    in6_matchlen(&ia->ia_addr.sin6_addr, &dst));
+		SASEL_LOG("NEXT ia %s ifp1 %s best_scope %d new_scope %d dst_scope %d\n",
+		    s_src, ifp1->if_xname, best_scope, new_scope, dst_scope);
 		IFA_ADDREF_LOCKED(&ia->ia_ifa);	/* for ia_best */
 		IFA_UNLOCK(&ia->ia_ifa);
 		if (ia_best != NULL)
@@ -577,10 +652,21 @@ out:
 	}
 
 	IFA_LOCK_SPIN(&ia->ia_ifa);
+	if (bestrule < IP6S_SRCRULE_COUNT)
+		ip6stat.ip6s_sources_rule[bestrule]++;
 	*src_storage = satosin6(&ia->ia_addr)->sin6_addr;
 	IFA_UNLOCK(&ia->ia_ifa);
 	IFA_REMREF(&ia->ia_ifa);
 done:
+	if (SASEL_DO_DBG(inp)) {
+		(void) inet_ntop(AF_INET6, &dst, s_dst, sizeof (s_src));
+
+		tmp = (src_storage != NULL) ? src_storage : &in6addr_any;
+		(void) inet_ntop(AF_INET6, tmp, s_src, sizeof (s_src));
+	    
+		printf("%s out src %s dst %s ifscope %d dst_scope %d best_scope %d\n", 
+		    __func__, s_src, s_dst, ifscope, dst_scope, best_scope);
+	}
 	if (ifpp != NULL) {
 		/* if ifp is non-NULL, refcnt held in in6_selectif() */
 		*ifpp = ifp;
@@ -668,6 +754,10 @@ selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
 	select_srcif = (ip6_doscopedroute && srcsock != NULL &&
 	    !IN6_IS_ADDR_UNSPECIFIED(&srcsock->sin6_addr));
 
+	if (ip6_select_srcif_debug) {
+		printf("%s src %s dst %s ifscope %d select_srcif %d\n", 
+		    __func__, s_src, s_dst, ifscope, select_srcif);
+	}
 	/*
 	 * If Scoped Routing is disabled, ignore the given ifscope.
 	 * Otherwise even if source selection won't be performed,
@@ -792,12 +882,15 @@ getsrcif:
 
 		if (ip6_select_srcif_debug && ifa != NULL) {
 			if (ro->ro_rt != NULL) {
-				printf("%s->%s ifscope %d->%d ifa_if %s "
-				    "ro_if %s\n", s_src, s_dst, ifscope,
+				printf("%s %s->%s ifscope %d->%d ifa_if %s "
+				    "ro_if %s\n",
+				    __func__, 
+				    s_src, s_dst, ifscope,
 				    scope, if_name(ifa->ifa_ifp),
 				    if_name(rt_ifp));
 			} else {
-				printf("%s->%s ifscope %d->%d ifa_if %s\n",
+				printf("%s %s->%s ifscope %d->%d ifa_if %s\n",
+				    __func__, 
 				    s_src, s_dst, ifscope, scope,
 				    if_name(ifa->ifa_ifp));
 			}
@@ -827,10 +920,14 @@ getsrcif:
 		ifa = (struct ifaddr *)ifa_foraddr6(&srcsock->sin6_addr);
 
 		if (ip6_select_srcif_debug && ifa != NULL) {
-			printf("%s->%s ifscope %d ifa_if %s\n",
+			printf("%s %s->%s ifscope %d ifa_if %s\n",
+			    __func__,
 			    s_src, s_dst, ifscope, if_name(ifa->ifa_ifp));
+		} else if (ip6_select_srcif_debug) {
+			printf("%s %s->%s ifscope %d ifa_if NULL\n",
+			    __func__,
+			    s_src, s_dst, ifscope);
 		}
-
 	}
 
 getroute:
@@ -1119,8 +1216,10 @@ done:
 	if (error == 0) {
 		if (retrt != NULL && route != NULL)
 			*retrt = route->ro_rt;	/* ro_rt may be NULL */
-	} else if (select_srcif && ip6_select_srcif_debug) {
-		printf("%s->%s ifscope %d ifa_if %s ro_if %s (error=%d)\n",
+	}  
+	if (ip6_select_srcif_debug) {
+		printf("%s %s->%s ifscope %d ifa_if %s ro_if %s (error=%d)\n",
+		    __func__,
 		    s_src, s_dst, ifscope,
 		    (ifa != NULL) ? if_name(ifa->ifa_ifp) : "NONE",
 		    (ifp != NULL) ? if_name(ifp) : "NONE", error);
@@ -1137,7 +1236,7 @@ done:
  * caller provides a non-NULL retifp.  The caller is responsible for checking
  * if the returned ifp is valid and release its reference at all times.
  */
-static int
+int
 in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
     struct ip6_moptions *mopts, struct route_in6 *ro,
     struct ip6_out_args *ip6oa, struct ifnet **retifp)
@@ -1235,25 +1334,19 @@ in6_selecthlim(struct in6pcb *in6p, struct ifnet *ifp)
 {
 	if (in6p && in6p->in6p_hops >= 0) {
 		return (in6p->in6p_hops);
-	} else {
-		lck_rw_lock_shared(nd_if_rwlock);
-		if (ifp && ifp->if_index < nd_ifinfo_indexlim) {
-			u_int8_t chlim;
-			struct nd_ifinfo *ndi = &nd_ifinfo[ifp->if_index];
-
-			if (ndi->initialized) {
-				/* access chlim without lock, for performance */
-				chlim = ndi->chlim;
-			} else {
-				chlim = ip6_defhlim;
-			}
-			lck_rw_done(nd_if_rwlock);
-			return (chlim);
+	} else if (NULL != ifp) {
+		u_int8_t chlim;
+		struct nd_ifinfo *ndi = ND_IFINFO(ifp);
+		if (ndi && ndi->initialized) {
+			/* access chlim without lock, for performance */
+			chlim = ndi->chlim;
 		} else {
-			lck_rw_done(nd_if_rwlock);
-			return (ip6_defhlim);
+			chlim = ip6_defhlim;
 		}
+		return (chlim);
 	}
+
+	return (ip6_defhlim);
 }
 
 /*

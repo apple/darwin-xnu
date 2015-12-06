@@ -48,7 +48,7 @@ protected:
     IOByteCount         * _descriptorLengths;
     bool                  _descriptorPrepared;
 
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 public:
 
@@ -100,7 +100,7 @@ public:
 
     virtual addr64_t getPhysicalSegment( IOByteCount   offset,
                                          IOByteCount * length,
-                                         IOOptionBits  options = 0 );
+                                         IOOptionBits  options = 0 ) APPLE_KEXT_OVERRIDE;
 
 /*! @function prepare
     @abstract Prepare the memory for an I/O transfer.
@@ -108,7 +108,7 @@ public:
     @param forDirection The direction of the I/O to be performed, or kIODirectionNone for the direction specified by the memory descriptor.
     @result An IOReturn code. */
 
-    virtual IOReturn prepare(IODirection forDirection = kIODirectionNone);
+    virtual IOReturn prepare(IODirection forDirection = kIODirectionNone) APPLE_KEXT_OVERRIDE;
 
 /*! @function complete
     @abstract Complete processing of the memory after an I/O transfer finishes.
@@ -116,7 +116,7 @@ public:
     @param forDirection The direction of the I/O just completed, or kIODirectionNone for the direction specified by the memory descriptor.
     @result An IOReturn code. */
 
-    virtual IOReturn complete(IODirection forDirection = kIODirectionNone);
+    virtual IOReturn complete(IODirection forDirection = kIODirectionNone) APPLE_KEXT_OVERRIDE;
 };
 
 #endif /* !_IOINTERLEAVEDMEMORYDESCRIPTOR_H */

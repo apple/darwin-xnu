@@ -35,7 +35,7 @@
 #include <kern/clock.h>
 #include <kern/task.h>
 #include <kern/thread.h>
-#include <kern/wait_queue.h>
+#include <kern/waitq.h>
 #include <kern/ledger.h>
 
 #include <vm/vm_pageout.h>
@@ -54,7 +54,7 @@
 #include <machine/machine_routines.h>
 
 static zone_t			thread_call_zone;
-static struct wait_queue	daemon_wqueue;
+static struct waitq		daemon_waitq;
 
 struct thread_call_group {
 	queue_head_t		pending_queue;
@@ -66,7 +66,7 @@ struct thread_call_group {
 	timer_call_data_t	delayed_timer;
 	timer_call_data_t	dealloc_timer;
 
-	struct wait_queue	idle_wqueue;
+	struct waitq		idle_waitq;
 	uint32_t		idle_count, active_count;
 
 	integer_t		pri;
@@ -253,7 +253,7 @@ thread_call_group_setup(
 	timer_call_setup(&group->delayed_timer, thread_call_delayed_timer, group);
 	timer_call_setup(&group->dealloc_timer, thread_call_dealloc_timer, group);
 
-	wait_queue_init(&group->idle_wqueue, SYNC_POLICY_FIFO);
+	waitq_init(&group->idle_waitq, SYNC_POLICY_FIFO|SYNC_POLICY_DISABLE_IRQ);
 
 	group->target_thread_count = target_thread_count;
 	group->pri = thread_call_priority_to_sched_pri(pri);
@@ -326,7 +326,7 @@ thread_call_initialize(void)
 #endif
 
 	nanotime_to_absolutetime(0, THREAD_CALL_DEALLOC_INTERVAL_NS, &thread_call_dealloc_interval_abs);
-	wait_queue_init(&daemon_wqueue, SYNC_POLICY_FIFO);
+	waitq_init(&daemon_waitq, SYNC_POLICY_FIFO);
 
 	thread_call_group_setup(&thread_call_groups[THREAD_CALL_PRIORITY_LOW], THREAD_CALL_PRIORITY_LOW, 0, TRUE);
 	thread_call_group_setup(&thread_call_groups[THREAD_CALL_PRIORITY_USER], THREAD_CALL_PRIORITY_USER, 0, TRUE);
@@ -1053,7 +1053,8 @@ thread_call_wake(
 	 * Traditional behavior: wake only if no threads running.
 	 */
 	if (group_isparallel(group) || group->active_count == 0) {
-		if (wait_queue_wakeup_one(&group->idle_wqueue, NO_EVENT, THREAD_AWAKENED, -1) == KERN_SUCCESS) {
+		if (waitq_wakeup64_one(&group->idle_waitq, NO_EVENT64,
+				       THREAD_AWAKENED, WAITQ_ALL_PRIORITIES) == KERN_SUCCESS) {
 			group->idle_count--; group->active_count++;
 
 			if (group->idle_count == 0) {
@@ -1063,7 +1064,8 @@ thread_call_wake(
 		} else {
 			if (!thread_call_daemon_awake && thread_call_group_should_add_thread(group)) {
 				thread_call_daemon_awake = TRUE;
-				wait_queue_wakeup_one(&daemon_wqueue, NO_EVENT, THREAD_AWAKENED, -1);
+				waitq_wakeup64_one(&daemon_waitq, NO_EVENT64,
+						   THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 			}
 		}
 	}
@@ -1202,9 +1204,11 @@ thread_call_thread(
 
 		enable_ints_and_unlock(s);
 
+#if DEVELOPMENT || DEBUG
 		KERNEL_DEBUG_CONSTANT(
 				MACHDBG_CODE(DBG_MACH_SCHED,MACH_CALLOUT) | DBG_FUNC_NONE,
 				VM_KERNEL_UNSLIDE(func), param0, param1, 0, 0);
+#endif /* DEVELOPMENT || DEBUG */
 
 #if CONFIG_DTRACE
 		DTRACE_TMR6(thread_callout__start, thread_call_func_t, func, int, 0, int, (call->ttd >> 32), (unsigned) (call->ttd & 0xFFFFFFFF), (call->tc_flags & THREAD_CALL_DELAYED), call);
@@ -1264,7 +1268,7 @@ thread_call_thread(
 		}   
 
 		/* Wait for more work (or termination) */
-		wres = wait_queue_assert_wait(&group->idle_wqueue, NO_EVENT, THREAD_INTERRUPTIBLE, 0); 
+		wres = waitq_assert_wait64(&group->idle_waitq, NO_EVENT64, THREAD_INTERRUPTIBLE, 0);
 		if (wres != THREAD_WAITING) {
 			panic("kcall worker unable to assert wait?");
 		}   
@@ -1276,7 +1280,7 @@ thread_call_thread(
 		if (group->idle_count < group->target_thread_count) {
 			group->idle_count++;
 
-			wait_queue_assert_wait(&group->idle_wqueue, NO_EVENT, THREAD_UNINT, 0); /* Interrupted means to exit */
+			waitq_assert_wait64(&group->idle_waitq, NO_EVENT64, THREAD_UNINT, 0); /* Interrupted means to exit */
 
 			enable_ints_and_unlock(s);
 
@@ -1331,7 +1335,7 @@ thread_call_daemon_continue(__unused void *arg)
 
 out:
 	thread_call_daemon_awake = FALSE;
-	wait_queue_assert_wait(&daemon_wqueue, NO_EVENT, THREAD_UNINT, 0);
+	waitq_assert_wait64(&daemon_waitq, NO_EVENT64, THREAD_UNINT, 0);
 
 	enable_ints_and_unlock(s);
 
@@ -1484,7 +1488,8 @@ thread_call_dealloc_timer(
 		if (now > group->idle_timestamp + thread_call_dealloc_interval_abs) {
 			terminated = TRUE;
 			group->idle_count--;
-			res = wait_queue_wakeup_one(&group->idle_wqueue, NO_EVENT, THREAD_INTERRUPTED, -1);
+			res = waitq_wakeup64_one(&group->idle_waitq, NO_EVENT64,
+						 THREAD_INTERRUPTED, WAITQ_ALL_PRIORITIES);
 			if (res != KERN_SUCCESS) {
 				panic("Unable to wake up idle thread for termination?");
 			}

@@ -396,11 +396,15 @@ ipc_task_reset(
 	ipc_kobject_set(new_kport, (ipc_kobject_t) task, IKOT_TASK);
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+		old_exc_actions[i] = IP_NULL;
+
+		if (i == EXC_CORPSE_NOTIFY && task_corpse_pending_report(task)) {
+			continue;
+		}
+
 		if (!task->exc_actions[i].privileged) {
 			old_exc_actions[i] = task->exc_actions[i].port;
 			task->exc_actions[i].port = IP_NULL;
-		} else {
-			old_exc_actions[i] = IP_NULL;
 		}
 	}/* for */
 	
@@ -565,7 +569,7 @@ ipc_thread_reset(
 
 	old_kport = thread->ith_self;
 
-	if (old_kport == IP_NULL) {
+	if (old_kport == IP_NULL && thread->inspection == FALSE) {
 		/* the  is already terminated (can this happen?) */
 		thread_mtx_unlock(thread);
 		ipc_port_dealloc_kernel(new_kport);
@@ -575,7 +579,9 @@ ipc_thread_reset(
 	thread->ith_self = new_kport;
 	old_sself = thread->ith_sself;
 	thread->ith_sself = ipc_port_make_send(new_kport);
-	ipc_kobject_set(old_kport, IKO_NULL, IKOT_NONE);
+	if (old_kport != IP_NULL) {
+		ipc_kobject_set(old_kport, IKO_NULL, IKOT_NONE);
+	}
 	ipc_kobject_set(new_kport, (ipc_kobject_t) thread, IKOT_THREAD);
 
 	/*
@@ -608,7 +614,9 @@ ipc_thread_reset(
 	}
 
 	/* destroy the kernel port */
-	ipc_port_dealloc_kernel(old_kport);
+	if (old_kport != IP_NULL) {
+		ipc_port_dealloc_kernel(old_kport);
+	}
 }
 
 /*
@@ -1403,6 +1411,9 @@ convert_port_to_thread(
  *		A name of MACH_PORT_NULL is valid for the null thread.
  *	Conditions:
  *		Nothing locked.
+ *
+ *	TODO: Could this be faster if it were ipc_port_translate_send based, like thread_switch?
+ *	      We could avoid extra lock/unlock and extra ref operations on the port.
  */
 thread_t
 port_name_to_thread(

@@ -464,6 +464,28 @@ store_symbols(char * file, vm_size_t file_size, struct symbol * symbols, uint32_
     return strtabsize;
 }
 
+static const NXArchInfo *
+lookup_arch(const char *archstring)
+{
+	/*
+	 * As new architectures are supported by xnu, add a mapping function
+	 * without relying on host libraries.
+	 */
+	static const NXArchInfo archlist[] = {
+		{ "x86_64", 0x01000007 /* CPU_TYPE_X86_64 */, 3 /* CPU_SUBTYPE_X86_64_ALL */, NX_LittleEndian, NULL },
+		{ "x86_64h", 0x01000007 /* CPU_TYPE_X86_64 */, 8 /* CPU_SUBTYPE_X86_64_H */, NX_LittleEndian, NULL },
+	};
+	unsigned long i;
+
+	for (i=0; i < sizeof(archlist)/sizeof(archlist[0]); i++) {
+		if (0 == strcmp(archstring, archlist[i].name)) {
+			return &archlist[i];
+		}
+	}
+
+	return NULL;
+}
+
 /*********************************************************************
 *********************************************************************/
 int main(int argc, char * argv[])
@@ -523,7 +545,7 @@ int main(int argc, char * argv[])
 
         if (!strcmp("-arch", argv[i]))
         {
-            target_arch = NXGetArchInfoFromName(argv[i + 1]);
+            target_arch = lookup_arch(argv[i + 1]);
 	    if (!target_arch)
 	    {
 		fprintf(stderr, "unknown architecture name: %s\n", argv[i+1]);
@@ -780,7 +802,7 @@ int main(int argc, char * argv[])
 	hdr.magic	= MH_MAGIC;
 	hdr.cputype	= target_arch->cputype;
 	hdr.cpusubtype	= target_arch->cpusubtype;
-	hdr.filetype	= (target_arch->cputype == CPU_TYPE_I386) ? MH_OBJECT : MH_KEXT_BUNDLE;
+	hdr.filetype	= MH_KEXT_BUNDLE;
 	hdr.ncmds	= 3;
 	hdr.sizeofcmds	= sizeof(segcmd) + sizeof(symcmd) + sizeof(uuidcmd);
 	hdr.flags	= MH_INCRLINK;
@@ -969,7 +991,7 @@ finish:
 
     if (kErrorNone != err)
     {
-	if (output_name)
+	if (output_name && strncmp(output_name, "/dev/", 5))
 	    unlink(output_name);
         exit(1);
     }

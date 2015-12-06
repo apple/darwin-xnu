@@ -61,6 +61,7 @@ const OSSymbol *	gIODTUnitKey;
 const OSSymbol *	gIODTCompatibleKey;
 const OSSymbol * 	gIODTTypeKey;
 const OSSymbol * 	gIODTModelKey;
+const OSSymbol * 	gIODTTargetTypeKey;
 
 const OSSymbol * 	gIODTSizeCellKey;
 const OSSymbol * 	gIODTAddressCellKey;
@@ -106,6 +107,7 @@ IODeviceTreeAlloc( void * dtTop )
     gIODTCompatibleKey 	= OSSymbol::withCStringNoCopy( "compatible" );
     gIODTTypeKey 		= OSSymbol::withCStringNoCopy( "device_type" );
     gIODTModelKey 		= OSSymbol::withCStringNoCopy( "model" );
+    gIODTTargetTypeKey		= OSSymbol::withCStringNoCopy( "target-type" );
     gIODTSizeCellKey 	= OSSymbol::withCStringNoCopy( "#size-cells" );
     gIODTAddressCellKey = OSSymbol::withCStringNoCopy( "#address-cells" );
     gIODTRangeKey 		= OSSymbol::withCStringNoCopy( "ranges" );
@@ -898,7 +900,7 @@ OSCollectionIterator * IODTFindMatchingEntries( IORegistryEntry * from,
     }
 
     cIter = OSCollectionIterator::withCollection( result);
-    result->release();
+    if (result) result->release();
 
     return( cIter);
 }

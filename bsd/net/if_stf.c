@@ -321,13 +321,11 @@ stfattach(void)
 	if (error != 0)
 		printf("proto_register_plumber failed for AF_INET6 error=%d\n", error);
 
-	sc = _MALLOC(sizeof(struct stf_softc), M_DEVBUF, M_WAITOK);
+	sc = _MALLOC(sizeof(struct stf_softc), M_DEVBUF, M_WAITOK | M_ZERO);
 	if (sc == 0) {
 		printf("stf softc attach failed\n" );
 		return;
 	}
-	
-	bzero(sc, sizeof(*sc));
 	
 	p = encap_attach_func(AF_INET, IPPROTO_IPV6, stf_encapcheck,
 	    &in_stf_protosw, sc);
@@ -579,7 +577,7 @@ stf_pre_output(
 		bpf_tap_out(ifp, 0, m, &af, sizeof(af));
 	}
 
-	M_PREPEND(m, sizeof(struct ip), M_DONTWAIT);
+	M_PREPEND(m, sizeof(struct ip), M_DONTWAIT, 1);
 	if (m && mbuf_len(m) < sizeof(struct ip))
 		m = m_pullup(m, sizeof(struct ip));
 	if (m == NULL) {
@@ -600,7 +598,7 @@ stf_pre_output(
 	ip->ip_ttl = ip_stf_ttl;
 	ip->ip_len = m->m_pkthdr.len;	/*host order*/
 	if (ifp->if_flags & IFF_LINK1)
-		ip_ecn_ingress(ECN_ALLOWED, &ip->ip_tos, &tos);
+		ip_ecn_ingress(ECN_NORMAL, &ip->ip_tos, &tos);
 	else
 		ip_ecn_ingress(ECN_NOCARE, &ip->ip_tos, &tos);
 
@@ -796,7 +794,7 @@ in_stf_input(
 
 	itos = (ntohl(ip6.ip6_flow) >> 20) & 0xff;
 	if ((ifnet_flags(ifp) & IFF_LINK1) != 0)
-		ip_ecn_egress(ECN_ALLOWED, &otos, &itos);
+		ip_ecn_egress(ECN_NORMAL, &otos, &itos);
 	else
 		ip_ecn_egress(ECN_NOCARE, &otos, &itos);
 	ip6.ip6_flow &= ~htonl(0xff << 20);

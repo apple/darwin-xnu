@@ -501,15 +501,7 @@ ipc_object_copyin(
 	ipc_port_t soright;
 	ipc_port_t release_port;
 	kern_return_t kr;
-	queue_head_t links_data;
-	queue_t links = &links_data;
-	wait_queue_link_t wql;
-
-#if IMPORTANCE_INHERITANCE
 	int assertcnt = 0;
-#endif
-
-	queue_init(links);
 
 	/*
 	 *	Could first try a read lock when doing
@@ -527,18 +519,10 @@ ipc_object_copyin(
 			      msgt_name, TRUE,
 			      objectp, &soright,
 			      &release_port,
-#if IMPORTANCE_INHERITANCE
-			      &assertcnt,
-#endif /* IMPORTANCE_INHERITANCE */
-			      links);
+			      &assertcnt);
 	if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE)
 		ipc_entry_dealloc(space, name, entry);
 	is_write_unlock(space);
-
-	while(!queue_empty(links)) {
-		wql = (wait_queue_link_t) dequeue(links);
-		wait_queue_link_free(wql);
-	}
 
 #if IMPORTANCE_INHERITANCE
 	if (0 < assertcnt && ipc_importance_task_is_any_receiver_type(current_task()->task_imp_base)) {

@@ -300,4 +300,29 @@ routine host_register_well_known_mach_voucher_attr_manager(
 		key		: mach_voucher_attr_key_t;
 	out	new_attr_control: ipc_voucher_attr_control_t);
 
+
+/*
+ * Update the global ATM diagnostic flag, readable from the commpage
+ */
+routine host_set_atm_diagnostic_flag(
+        host_priv      : host_priv_t;
+    in  diagnostic_flag : uint32_t);
+
+#if !KERNEL && LIBSYSCALL_INTERFACE
+routine host_get_atm_diagnostic_flag(
+		host		: host_t;
+	out	diagnostic_flag : uint32_t);
+#else
+skip;
+#endif
+
+routine mach_memory_info(
+		host		: host_priv_t;
+	out	names		: mach_zone_name_array_t,
+					Dealloc;
+	out	info		: mach_zone_info_array_t,
+					Dealloc;
+	out	memory_info	: mach_memory_info_array_t,
+					Dealloc);
+
 /* vim: set ft=c : */

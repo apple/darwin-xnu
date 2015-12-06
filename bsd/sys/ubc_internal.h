@@ -44,13 +44,12 @@
 #include <sys/vnode.h>
 #include <sys/ubc.h>
 #include <sys/mman.h>
+#include <sys/codesign.h>
 
 #include <sys/cdefs.h>
 
 #include <kern/locks.h>
 #include <mach/memory_object_types.h>
-
-#include <libkern/crypto/sha1.h>
 
 
 #define UBC_INFO_NULL	((struct ubc_info *) 0)
@@ -95,6 +94,7 @@ struct cl_writebehind {
 	struct cl_wextent cl_clusters[MAX_CLUSTERS];	/* packed write behind clusters */
 };
 
+struct cs_hash;
 
 struct cs_blob {
 	struct cs_blob	*csb_next;
@@ -107,10 +107,11 @@ struct cs_blob {
 	vm_size_t	csb_mem_size;
 	vm_offset_t	csb_mem_offset;
 	vm_address_t	csb_mem_kaddr;
-	unsigned char	csb_sha1[SHA1_RESULTLEN];
-	unsigned int	csb_sigpup;
+	unsigned char	csb_cdhash[CS_CDHASH_LEN];
+        struct cs_hash  *csb_hashtype;
 	const char 	*csb_teamid;
-	unsigned int	csb_platform_binary; 
+	unsigned int	csb_platform_binary:1;
+	unsigned int	csb_platform_path:1;
 };
 
 /*
@@ -195,7 +196,7 @@ int UBCINFOEXISTS(const struct vnode *);
 
 /* code signing */
 struct cs_blob;
-int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, vm_size_t, int);
+int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, vm_size_t, int, struct cs_blob **);
 int	ubc_cs_sigpup_add(vnode_t, vm_address_t, vm_size_t);
 struct cs_blob *ubc_get_cs_blobs(vnode_t);
 void	ubc_get_cs_mtime(vnode_t, struct timespec *);

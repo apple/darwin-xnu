@@ -49,32 +49,30 @@ OSMetaClassDefineReservedUnused(OSData, 7);
 
 #define EXTERNAL ((unsigned int) -1)
 
-#if OSALLOCDEBUG
-extern int debug_container_malloc_size;
-#define ACCUMSIZE(s) do { debug_container_malloc_size += (s); } while(0)
-#else
-#define ACCUMSIZE(s)
-#endif
-
 bool OSData::initWithCapacity(unsigned int inCapacity)
 {
+    if (data)
+    {
+        OSCONTAINER_ACCUMSIZE(-((size_t)capacity));
+	if (!inCapacity || (capacity < inCapacity))
+	{
+	    // clean out old data's storage if it isn't big enough
+	    kfree(data, capacity);
+	    data = 0;
+	    capacity = 0;
+	}
+    }
+
     if (!super::init())
         return false;
 
-    if (data && (!inCapacity || capacity < inCapacity) ) {
-        // clean out old data's storage if it isn't big enough
-        kfree(data, capacity);
-        data = 0;
-        ACCUMSIZE(-capacity);
-    }
-
     if (inCapacity && !data) {
-        data = (void *) kalloc(inCapacity);
+        data = (void *) kalloc_container(inCapacity);
         if (!data)
             return false;
         capacity = inCapacity;
-        ACCUMSIZE(inCapacity);
     }
+    OSCONTAINER_ACCUMSIZE(capacity);
 
     length = 0;
     if (inCapacity < 16)
@@ -189,7 +187,7 @@ void OSData::free()
 {
     if (capacity != EXTERNAL && data && capacity) {
         kfree(data, capacity);
-        ACCUMSIZE( -capacity );
+        OSCONTAINER_ACCUMSIZE( -((size_t)capacity) );
     } else if (capacity == EXTERNAL) {
 	DeallocFunction freemem = reserved ? reserved->deallocFunction : NULL;
 	if (freemem && data && length) {
@@ -230,7 +228,7 @@ unsigned int OSData::ensureCapacity(unsigned int newCapacity)
     if (finalCapacity < newCapacity)
         return capacity;
 
-    newData = (unsigned char *) kalloc(finalCapacity);
+    newData = (unsigned char *) kalloc_container(finalCapacity);
 
     if ( newData ) {
         bzero(newData + capacity, finalCapacity - capacity);
@@ -238,7 +236,7 @@ unsigned int OSData::ensureCapacity(unsigned int newCapacity)
             bcopy(data, newData, capacity);
             kfree(data, capacity);
         }
-        ACCUMSIZE( finalCapacity - capacity );
+        OSCONTAINER_ACCUMSIZE( ((size_t)finalCapacity) - ((size_t)capacity) );
         data = (void *) newData;
         capacity = finalCapacity;
     }
@@ -445,7 +443,7 @@ void OSData::setDeallocFunction(DeallocFunction func)
 {
     if (!reserved)
     {
-    	reserved = (typeof(reserved)) kalloc(sizeof(ExpansionData));
+    	reserved = (typeof(reserved)) kalloc_container(sizeof(ExpansionData));
         if (!reserved) return;
         bzero(reserved, sizeof(ExpansionData));
     }
@@ -456,7 +454,7 @@ void OSData::setSerializable(bool serializable)
 {
     if (!reserved)
     {
-    	reserved = (typeof(reserved)) kalloc(sizeof(ExpansionData));
+    	reserved = (typeof(reserved)) kalloc_container(sizeof(ExpansionData));
 	if (!reserved) return;
 	bzero(reserved, sizeof(ExpansionData));
     }

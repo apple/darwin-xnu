@@ -42,32 +42,6 @@ def MBufStat(cmd_args=None):
                                   )
 # EndMacro: mbuf_stat
 
-# Macro: mbuf_walk_mleak_traces
-@lldb_command('mbuf_walk_mleak_traces')
-def MbufWalkMleakTraces(cmd_args=None):
-    """ Print mleak_traces
-    """
-    i = 0
-    while (i<256):
-        trace = kern.globals.mleak_traces[i]
-        out_string = ""
-        if (trace.allocs != 0):
-            print "Index: " + str(i)
-            out_string += ":" + str(trace.allocs) + " outstanding allocs\n"
-            out_string += str(trace.hitcount) + " hitcount\n"
-            out_string += str(trace.collisions) + " collisions\n"
-            out_string += "Backtrace saved " + str(trace.depth) + " deep\n"
-            if (trace.depth != 0):
-                cnt = 0
-                while (cnt < trace.depth):
-                    out_string += str(cnt + 1) + ": "
-                    out_string += GetPc(trace.addr[cnt])
-                    out_string += "\n"
-                    cnt += 1
-            print out_string
-        i +=1
-# EndMacro: mbuf_walk_mleak_traces
-
 # Macro: mbuf_walkpkt
 @lldb_command('mbuf_walkpkt')
 def MbufWalkPacket(cmd_args=None):
@@ -122,10 +96,7 @@ def MbufBuf2Slab(cmd_args=None):
         raise ArgumentError("Missing argument 0 in user function.")
 
     m = kern.GetValueFromAddress(cmd_args[0], 'mbuf *')
-    gix = (m - Cast(kern.globals.mbutl, 'char *')) >> MBSHIFT
-    slabstbl = kern.globals.slabstbl
-    ix = (m - Cast(slabstbl[int(gix)].slg_slab[0].sl_base, 'char *')) >> 12
-    slab = addressof(slabstbl[int(gix)].slg_slab[int(ix)])
+    slab = GetMbufSlab(m)
     if (kern.ptrsize == 8):
         mbuf_slab_format = "0x{0:<16x}"
         print mbuf_slab_format.format(slab)
@@ -166,19 +137,17 @@ def MbufSlabs(cmd_args=None):
         out_string += "slot slab       next       obj        mca        tstamp     C  R  N   size flags\n"
         out_string += "---- ---------- ---------- ---------- ---------- ---------- -- -- -- ------ -----\n"
 
-    mbutl = cast(kern.globals.mbutl, 'union mbigcluster *')
-    while x < NSLABSPMB:
+    mbutl = cast(kern.globals.mbutl, 'unsigned char *')
+    nslabspmb = int((1 << MBSHIFT) >> unsigned(kern.globals.page_shift))
+    while x < nslabspmb:
         sl = addressof(slg.slg_slab[x])
         mca = 0
         obj = sl.sl_base
         ts = 0
 
         if (kern.globals.mclaudit != 0):
-            ix = (obj - Cast(kern.globals.mbutl, 'char *')) >> 12
-            clbase = mbutl + (sizeof(dereference(mbutl)) * ix)
-            mclidx = (obj - clbase) >> 8
-            mca = kern.globals.mclaudit[int(ix)].cl_audit[int(mclidx)]
-            trn = (mca.mca_next_trn + kern.globals.mca_trn_max - 1) % kern.globals.mca_trn_max
+            mca = GetMbufMcaPtr(obj, sl.sl_class)
+            trn = (mca.mca_next_trn + unsigned(kern.globals.mca_trn_max) - 1) % unsigned(kern.globals.mca_trn_max)
             ts = mca.mca_trns[trn].mca_tstamp
 
         out_string += slabs_string_format.format((x + 1), sl, sl.sl_next, obj, hex(mca), int(ts), int(sl.sl_class), int(sl.sl_refcnt), int(sl.sl_chunks), int(sl.sl_len), hex(sl.sl_flags))
@@ -204,11 +173,8 @@ def MbufSlabs(cmd_args=None):
                 ts = 0
 
                 if (kern.globals.mclaudit != 0):
-                    ix = (obj - Cast(kern.globals.mbutl, 'char *')) >> 12
-                    clbase = mbutl + (sizeof(dereference(mbutl)) * ix)
-                    mclidx = (obj - clbase) >> 8
-                    mca = kern.globals.mclaudit[int(ix)].cl_audit[int(mclidx)]
-                    trn = (mca.mca_next_trn + kern.globals.mca_trn_max - 1) % kern.globals.mca_trn_max
+                    mca = GetMbufMcaPtr(obj, sl.sl_class)
+                    trn = (mca.mca_next_trn + unsigned(kern.globals.mca_trn_max) - 1) % unsigned(kern.globals.mca_trn_max)
                     ts = mca.mca_trns[trn].mca_tstamp
 
                 if (kern.ptrsize == 8):
@@ -238,6 +204,7 @@ def MbufSlabsTbl(cmd_args=None):
 
     slabstbl = kern.globals.slabstbl
     slabs_table_blank_string_format = "{0:>3d}: - \n"
+    nslabspmb = int(((1 << MBSHIFT) >> unsigned(kern.globals.page_shift)))
     while (x < unsigned(kern.globals.maxslabgrp)):
         slg = slabstbl[x]
         if (slg == 0):
@@ -245,23 +212,43 @@ def MbufSlabsTbl(cmd_args=None):
         else:
             if (kern.ptrsize == 8):
                 slabs_table_string_format = "{0:>3d}: 0x{1:16x}  [ 0x{2:16x} - 0x{3:16x} ]\n"
-                out_string += slabs_table_string_format.format(x+1, slg, addressof(slg.slg_slab[0]), addressof(slg.slg_slab[NSLABSPMB-1]))
+                out_string += slabs_table_string_format.format(x+1, slg, addressof(slg.slg_slab[0]), addressof(slg.slg_slab[nslabspmb-1]))
             else:
                 slabs_table_string_format = "{0:>3d}: 0x{1:8x}  [ 0x{2:8x} - 0x{3:8x} ]\n"
-                out_string += slabs_table_string_format.format(x+1, slg, addressof(slg.slg_slab[0]), addressof(slg.slg_slab[NSLABSPMB-1]))
+                out_string += slabs_table_string_format.format(x+1, slg, addressof(slg.slg_slab[0]), addressof(slg.slg_slab[nslabspmb-1]))
 
         x += 1
     print out_string
 # EndMacro: mbuf_slabstbl
 
+def GetMbufMcaPtr(m, cl):
+    pgshift = int(kern.globals.page_shift)
+    ix = int((m - Cast(kern.globals.mbutl, 'char *')) >> pgshift)
+    page_addr = (Cast(kern.globals.mbutl, 'char *') + (ix << pgshift))
+
+    if (int(cl) == 0):
+        midx = int((m - page_addr) >> 8)
+        mca = kern.globals.mclaudit[ix].cl_audit[midx]
+    elif (int(cl) == 1):
+        midx = int((m - page_addr) >> 11)
+        mca = kern.globals.mclaudit[ix].cl_audit[midx]
+    elif (int(cl) == 2):
+        midx = int((m - page_addr) >> 12)
+        mca = kern.globals.mclaudit[ix].cl_audit[midx]
+    else:
+        mca = kern.globals.mclaudit[ix].cl_audit[0]
+    return Cast(mca, 'mcache_audit_t *')
+
+def GetMbufSlab(m):
+    pgshift = int(kern.globals.page_shift)
+    gix = int((Cast(m, 'char *') - Cast(kern.globals.mbutl, 'char *')) >> MBSHIFT)
+    slabstbl = kern.globals.slabstbl
+    ix = int((Cast(m, 'char *') - Cast(slabstbl[gix].slg_slab[0].sl_base, 'char *')) >> pgshift)
+    return addressof(slabstbl[gix].slg_slab[ix])
 
 def GetMbufBuf2Mca(m):
-    ix = (m - Cast(kern.globals.mbutl, 'char *')) >> 12
-    #mbutl = Cast(kern.globals.mbutl, 'union mbigcluster *')
-    mbutl = cast(kern.globals.mbutl, 'union mbigcluster *')
-    clbase = mbutl + (sizeof(dereference(mbutl)) * ix)
-    mclidx = (m - clbase) >> 8
-    mca = kern.globals.mclaudit[int(ix)].cl_audit[int(mclidx)]
+    sl = GetMbufSlab(m)
+    mca = GetMbufMcaPtr(m, sl.sl_class)
     return str(mca)
 
 def GetMbufWalkAllSlabs(show_a, show_f, show_tr):
@@ -288,18 +275,15 @@ def GetMbufWalkAllSlabs(show_a, show_f, show_tr):
         show_mca_string_format = "{0:4s} {1:4s} {2:8s} {3:8s} {4:8} {5:12s} {6:12s}"
         out_string += show_mca_string_format.format("slot", "idx", "slab address", "mca address", "obj address", "type", "allocation state\n")
 
+    nslabspmb = unsigned((1 << MBSHIFT) >> unsigned(kern.globals.page_shift))
     while (x < unsigned(kern.globals.slabgrp)):
         slg = kern.globals.slabstbl[x]
         y = 0
         stop = 0
-        while ((y < NSLABSPMB) and (stop == 0)):
+        while ((y < nslabspmb) and (stop == 0)):
             sl = addressof(slg.slg_slab[y])
             base = sl.sl_base
-            mbutl = cast(kern.globals.mbutl, 'union mbigcluster *')
-            ix = (base - mbutl) >> 12
-            clbase = mbutl + (sizeof(dereference(mbutl)) * ix)
-            mclidx = (base - clbase) >> 8
-            mca = kern.globals.mclaudit[int(ix)].cl_audit[int(mclidx)]
+            mca = GetMbufMcaPtr(base, sl.sl_class)
             first = 1
 
             while ((Cast(mca, 'int') != 0) and (unsigned(mca.mca_addr) != 0)):
@@ -344,7 +328,6 @@ def GetMbufWalkAllSlabs(show_a, show_f, show_tr):
                     total = total + 1
 
                     if (show_tr != 0):
-                        idx = int(show_tr)
                         trn = (mca.mca_next_trn + idx - 1) % unsigned(kern.globals.mca_trn_max)
                         out_string += "Transaction " + str(int(trn)) + " at " + str(int(mca.mca_trns[int(trn)].mca_tstamp)) + " by thread: 0x" + str(hex(mca.mca_trns[int(trn)].mca_thread)) + ":\n"
                         cnt = 0
@@ -388,7 +371,7 @@ def GetMbufMcaCtype(mca, vopt):
         else:
             out_string += "CL     "
         return out_string
-    if (csize == NBPG):
+    if (csize == MBIGCLBYTES):
         if (vopt):
             out_string += "BCL (4K cluster) "
         else:
@@ -422,7 +405,7 @@ def GetMbufMcaCtype(mca, vopt):
                     out_string += "(unpaired 2K cluster, mbuf) "
         return out_string
 
-    if (csize == (MSIZE + NBPG)):
+    if (csize == (MSIZE + MBIGCLBYTES)):
         if (mca.mca_uflags & MB_SCVALID):
             if (mca.mca_uptr):
                 out_string += "M+BCL  "
@@ -543,6 +526,7 @@ def MbufShowMca(cmd_args=None):
     """ Print the contents of an mbuf mcache audit structure
     """
     out_string = ""
+    pgshift = unsigned(kern.globals.page_shift)
     if cmd_args:
         mca = kern.GetValueFromAddress(cmd_args[0], 'mcache_audit_t *')
         cp = mca.mca_cache
@@ -550,9 +534,9 @@ def MbufShowMca(cmd_args=None):
         out_string += GetMbufMcaCtype(mca, 1)
         out_string += "\nControlling mcache :\t" + hex(mca.mca_cache) + " (" + str(cp.mc_name) + ")\n"
         if (mca.mca_uflags & MB_SCVALID):
-            mbutl = cast(kern.globals.mbutl, 'union mbigcluster *')
-            ix = (mca.mca_addr - mbutl) >> 12
-            clbase = mbutl + (sizeof(dereference(mbutl)) * ix)
+            mbutl = Cast(kern.globals.mbutl, 'unsigned char *')
+            ix = (mca.mca_addr - mbutl) >> pgshift
+            clbase = mbutl + (ix << pgshift)
             mclidx = (mca.mca_addr - clbase) >> 8
             out_string += "mbuf obj :\t\t" + hex(mca.mca_addr) + "\n"
             out_string += "mbuf index :\t\t" + str(mclidx + 1) + " (out of 16) in cluster base " + hex(clbase) + "\n"
@@ -566,7 +550,7 @@ def MbufShowMca(cmd_args=None):
                 peer_mca = cast(mca.mca_uptr, 'mcache_audit_t *')
                 out_string += "paired mbuf obj :\t" + hex(peer_mca.mca_addr) + " (mca " + hex(peer_mca) + ")\n"
 
-        for idx in range(kern.globals.mca_trn_max, 0, -1):
+        for idx in range(unsigned(kern.globals.mca_trn_max), 0, -1):
                 trn = (mca.mca_next_trn + idx - 1) % unsigned(kern.globals.mca_trn_max)
                 out_string += "transaction {:d} (tstamp {:d}, thread 0x{:x}):\n".format(trn, mca.mca_trns[trn].mca_tstamp, mca.mca_trns[trn].mca_thread)
                 cnt = 0

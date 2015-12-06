@@ -127,8 +127,11 @@ mac_posixshm_check_create(kauth_cred_t cred, const char *name)
 {
 	int error = 0;
 
-	if (!mac_posixshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_posixshm_enforce)
+        return 0;
+#endif
 
 	MAC_CHECK(posixshm_check_create, cred, name);
 
@@ -140,8 +143,11 @@ mac_posixshm_check_open(kauth_cred_t cred, struct pshminfo *shm, int fflags)
 {
 	int error = 0;
 
-	if (!mac_posixshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_posixshm_enforce)
+        return 0;
+#endif
 
 	MAC_CHECK(posixshm_check_open, cred, shm, shm->pshm_label, fflags);
 
@@ -154,8 +160,11 @@ mac_posixshm_check_mmap(kauth_cred_t cred, struct pshminfo *shm,
 {
 	int error = 0;
 
-	if (!mac_posixshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_posixshm_enforce)
+        return 0;
+#endif
 
 	MAC_CHECK(posixshm_check_mmap, cred, shm, shm->pshm_label,
             prot, flags);
@@ -168,8 +177,11 @@ mac_posixshm_check_stat(kauth_cred_t cred, struct pshminfo *shm)
 {
 	int error = 0;
 
-	if (!mac_posixshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_posixshm_enforce)
+        return 0;
+#endif
 
 	MAC_CHECK(posixshm_check_stat, cred, shm, shm->pshm_label);
 
@@ -182,8 +194,11 @@ mac_posixshm_check_truncate(kauth_cred_t cred, struct pshminfo *shm,
 {
 	int error = 0;
 
-	if (!mac_posixshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_posixshm_enforce)
+        return 0;
+#endif
 
 	MAC_CHECK(posixshm_check_truncate, cred, shm, shm->pshm_label, size);
 
@@ -196,8 +211,11 @@ mac_posixshm_check_unlink(kauth_cred_t cred, struct pshminfo *shm,
 {
 	int error = 0;
 
-	if (!mac_posixshm_enforce)
-		return 0;
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_posixshm_enforce)
+        return 0;
+#endif
 
 	MAC_CHECK(posixshm_check_unlink, cred, shm, shm->pshm_label, name);
 

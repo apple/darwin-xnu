@@ -147,8 +147,8 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 
 			case kHFSFileRecord:
 			{
-				HFSExtentDescriptor	*dataExtent;
-				HFSExtentDescriptor	*rsrcExtent;
+				const HFSExtentDescriptor	*dataExtent;
+				const HFSExtentDescriptor	*rsrcExtent;
 				
 				if ( recordSize != sizeof(HFSCatalogFile) )
 					return false;								
@@ -171,8 +171,8 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 				if ( catalogRecord->hfsFile.rsrcPhysicalSize < catalogRecord->hfsFile.rsrcLogicalSize )
 					return false;
 		
-				dataExtent = (HFSExtentDescriptor*) &catalogRecord->hfsFile.dataExtents;
-				rsrcExtent = (HFSExtentDescriptor*) &catalogRecord->hfsFile.rsrcExtents;
+				dataExtent = (const HFSExtentDescriptor*) &catalogRecord->hfsFile.dataExtents;
+				rsrcExtent = (const HFSExtentDescriptor*) &catalogRecord->hfsFile.rsrcExtents;
 	
 #if 0
 				for (i = 0; i < kHFSExtentDensity; ++i)
@@ -222,8 +222,8 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 			case kHFSPlusFileRecord:
 			{
 //				u_int16_t					i;
-				HFSPlusExtentDescriptor	*dataExtent;
-				HFSPlusExtentDescriptor	*rsrcExtent;
+				const HFSPlusExtentDescriptor	*dataExtent;
+				const HFSPlusExtentDescriptor	*rsrcExtent;
 				
 				if ( recordSize != sizeof(HFSPlusCatalogFile) )
 					return false;								
@@ -237,8 +237,8 @@ static Boolean ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 		
 				// make sure 0 ¾ LEOF ¾ PEOF for both forks
 		
-				dataExtent = (HFSPlusExtentDescriptor*) &catalogRecord->hfsPlusFile.dataFork.extents;
-				rsrcExtent = (HFSPlusExtentDescriptor*) &catalogRecord->hfsPlusFile.resourceFork.extents;
+				dataExtent = (const HFSPlusExtentDescriptor*) &catalogRecord->hfsPlusFile.dataFork.extents;
+				rsrcExtent = (const HFSPlusExtentDescriptor*) &catalogRecord->hfsPlusFile.resourceFork.extents;
 	
 #if 0
 				for (i = 0; i < kHFSPlusExtentDensity; ++i)

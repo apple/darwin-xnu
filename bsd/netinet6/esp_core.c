@@ -142,37 +142,54 @@ static int esp_cbc_decrypt(struct mbuf *, size_t,
 	struct secasvar *, const struct esp_algorithm *, int);
 static int esp_cbc_encrypt(struct mbuf *, size_t, size_t,
 	struct secasvar *, const struct esp_algorithm *, int);
+static int esp_gcm_mature(struct secasvar *);
 
 #define MAXIVLEN	16
+
+#define ESP_AESGCM_KEYLEN128 160 // 16-bytes key + 4 bytes salt
+#define ESP_AESGCM_KEYLEN192 224 // 24-bytes key + 4 bytes salt
+#define ESP_AESGCM_KEYLEN256 288 // 32-bytes key + 4 bytes salt
 
 static const struct esp_algorithm des_cbc =
 	{ 8, -1, esp_descbc_mature, 64, 64, esp_des_schedlen,
 		"des-cbc",
 		esp_descbc_ivlen, esp_cbc_decrypt,
 		esp_cbc_encrypt, esp_des_schedule,
-		esp_des_blockdecrypt, esp_des_blockencrypt, };
+		esp_des_blockdecrypt, esp_des_blockencrypt,
+	        0, 0, 0 };
 static const struct esp_algorithm des3_cbc =
 	{ 8, 8, esp_cbc_mature, 192, 192, esp_3des_schedlen,
 		"3des-cbc",
 		esp_common_ivlen, esp_cbc_decrypt,
 		esp_cbc_encrypt, esp_3des_schedule,
-		esp_3des_blockdecrypt, esp_3des_blockencrypt, };
+	        esp_3des_blockdecrypt, esp_3des_blockencrypt,
+	        0, 0, 0 };
 static const struct esp_algorithm null_esp =
 	{ 1, 0, esp_null_mature, 0, 2048, 0, "null",
 		esp_common_ivlen, esp_null_decrypt,
-		esp_null_encrypt, NULL, NULL, NULL };
+	        esp_null_encrypt, NULL, NULL, NULL,
+	        0, 0, 0 };
 static const struct esp_algorithm aes_cbc =
 	{ 16, 16, esp_cbc_mature, 128, 256, esp_aes_schedlen,
 		"aes-cbc",
 		esp_common_ivlen, esp_cbc_decrypt_aes,
 		esp_cbc_encrypt_aes, esp_aes_schedule,
-		0, 0 };
+	        0, 0,
+	        0, 0, 0 };
+static const struct esp_algorithm aes_gcm =
+	{ 4, 8, esp_gcm_mature, ESP_AESGCM_KEYLEN128, ESP_AESGCM_KEYLEN256, esp_gcm_schedlen,
+		"aes-gcm",
+		esp_common_ivlen, esp_gcm_decrypt_aes,
+		esp_gcm_encrypt_aes, esp_gcm_schedule,
+	        0, 0,
+	        16, esp_gcm_decrypt_finalize, esp_gcm_encrypt_finalize};
 
 static const struct esp_algorithm *esp_algorithms[] = {
 	&des_cbc,
 	&des3_cbc,
 	&null_esp,
-	&aes_cbc
+	&aes_cbc,
+	&aes_gcm,
 };
 
 const struct esp_algorithm *
@@ -188,6 +205,8 @@ esp_algorithm_lookup(idx)
 		return &null_esp;
 	case SADB_X_EALG_RIJNDAELCBC:
 		return &aes_cbc;
+	case SADB_X_EALG_AES_GCM:
+		return &aes_gcm;
 	default:
 		return NULL;
 	}
@@ -463,6 +482,62 @@ esp_cbc_mature(sav)
 			return 1;
 		}
 		break;
+	}
+
+	return 0;
+}
+
+static int
+esp_gcm_mature(sav)
+	struct secasvar *sav;
+{
+	int keylen;
+	const struct esp_algorithm *algo;
+
+	if (sav->flags & SADB_X_EXT_OLD) {
+		ipseclog((LOG_ERR,
+		    "esp_gcm_mature: algorithm incompatible with esp-old\n"));
+		return 1;
+	}
+	if (sav->flags & SADB_X_EXT_DERIV) {
+		ipseclog((LOG_ERR,
+		    "esp_gcm_mature: algorithm incompatible with derived\n"));
+		return 1;
+	}
+
+	if (!sav->key_enc) {
+		ipseclog((LOG_ERR, "esp_gcm_mature: no key is given.\n"));
+		return 1;
+	}
+
+	algo = esp_algorithm_lookup(sav->alg_enc);
+	if (!algo) {
+		ipseclog((LOG_ERR,
+		    "esp_gcm_mature: unsupported algorithm.\n"));
+		return 1;
+	}
+
+	keylen = sav->key_enc->sadb_key_bits;
+	if (keylen < algo->keymin || algo->keymax < keylen) {
+		ipseclog((LOG_ERR,
+		    "esp_gcm_mature %s: invalid key length %d.\n",
+		    algo->name, sav->key_enc->sadb_key_bits));
+		return 1;
+	}
+	switch (sav->alg_enc) {
+	case SADB_X_EALG_AES_GCM:
+		/* allows specific key sizes only */
+		if (!(keylen == ESP_AESGCM_KEYLEN128 || keylen == ESP_AESGCM_KEYLEN192 || keylen == ESP_AESGCM_KEYLEN256)) {
+			ipseclog((LOG_ERR,
+			    "esp_gcm_mature %s: invalid key length %d.\n",
+			    algo->name, keylen));
+			return 1;
+		}
+		break;
+	default:
+		ipseclog((LOG_ERR,
+			  "esp_gcm_mature %s: invalid algo %d.\n", sav->alg_enc));
+		return 1;
 	}
 
 	return 0;

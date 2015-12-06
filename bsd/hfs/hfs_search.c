@@ -324,7 +324,7 @@ hfs_vnop_search(ap)
 		(void) hfs_fsync(vcb->catalogRefNum, MNT_WAIT, 0, p);
 		if (hfsmp->jnl) {
 		    hfs_systemfile_unlock(hfsmp, lockflags);
-		    hfs_journal_flush(hfsmp, FALSE);
+		    hfs_flush(hfsmp, HFS_FLUSH_JOURNAL);
 		    lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 		}
 
@@ -332,6 +332,7 @@ hfs_vnop_search(ap)
 		bzero((caddr_t)myCatPositionPtr, sizeof(*myCatPositionPtr));
 		err = BTScanInitialize(catalogFCB, 0, 0, 0, kCatSearchBufferSize, &myBTScanState);
 		if (err) {
+			hfs_systemfile_unlock(hfsmp, lockflags);
 			goto ExitThisRoutine;
 		}
 	} else {

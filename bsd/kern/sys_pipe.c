@@ -317,7 +317,7 @@ pipe_touch(struct pipe *tpipe, int touch)
 	}
 }
 
-static const unsigned int pipesize_blocks[] = {128,256,1024,2048,4096, 4096 * 2, PIPE_SIZE , PIPE_SIZE * 4 };
+static const unsigned int pipesize_blocks[] = {512,1024,2048,4096, 4096 * 2, PIPE_SIZE , PIPE_SIZE * 4 };
 
 /* 
  * finds the right size from possible sizes in pipesize_blocks 
@@ -328,6 +328,12 @@ choose_pipespace(unsigned long current, unsigned long expected)
 {
 	int i = sizeof(pipesize_blocks)/sizeof(unsigned int) -1;
 	unsigned long target;
+
+	/*
+	 * assert that we always get an atomic transaction sized pipe buffer,
+	 * even if the system pipe buffer high-water mark has been crossed.
+	 */
+	assert(PIPE_BUF == pipesize_blocks[0]);
 
 	if (expected > current) 
 		target = expected;

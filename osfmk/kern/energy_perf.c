@@ -27,6 +27,7 @@
  */
 
 #include <kern/energy_perf.h>
+#include <libsa/types.h>
 #include <sys/kdebug.h>
 #include <stddef.h>
 #include <machine/machine_routines.h>
@@ -58,4 +59,28 @@ void io_rate_update_register(io_rate_update_callback_t io_rate_update_cb_new) {
 
 uint64_t io_rate_update(uint64_t io_rate_flags, uint64_t read_ops_delta, uint64_t write_ops_delta, uint64_t read_bytes_delta, uint64_t write_bytes_delta) {
 	return io_rate_update_cb(io_rate_flags, read_ops_delta, write_ops_delta, read_bytes_delta, write_bytes_delta);
+}
+
+static uint64_t gpu_set_fceiling_cb_default(__unused uint32_t gfr, __unused uint64_t gfp) {
+	return 0ULL;
+}
+
+gpu_set_fceiling_t gpu_set_fceiling_cb = gpu_set_fceiling_cb_default;
+
+void gpu_fceiling_cb_register(gpu_set_fceiling_t gnewcb) {
+	if (gnewcb != NULL) {
+		gpu_set_fceiling_cb = gnewcb;
+	} else {
+		gpu_set_fceiling_cb = gpu_set_fceiling_cb_default;
+	}
+}
+
+void gpu_submission_telemetry(
+	__unused uint64_t gpu_ncmds,
+	__unused uint64_t gpu_noutstanding_avg,
+	__unused uint64_t gpu_busy_ns_total,
+	__unused uint64_t gpu_cycles,
+	__unused uint64_t gpu_telemetry_valid_flags,
+	__unused uint64_t gpu_telemetry_misc) {
+
 }

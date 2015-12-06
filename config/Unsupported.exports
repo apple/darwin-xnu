@@ -1,3 +1,4 @@
+_PE_i_can_has_debugger
 _Debugger
 _FastUnicodeCompare
 _KUNCExecute
@@ -7,7 +8,6 @@ _KUNCUserNotificationDisplayFromBundle
 _KUNCUserNotificationDisplayNotice
 _NDR_record
 _PE_kputc
-__Z22OSFlushObjectTrackListv
 __ZN11IOMemoryMap9wireRangeEjyy
 __ZN15IOWatchDogTimer10gMetaClassE
 __ZN15IOWatchDogTimer10superClassE
@@ -50,6 +50,7 @@ __ZTV16IOPlatformDevice
 __ZTV9IODTNVRAM
 __ZTVN15IOWatchDogTimer9MetaClassE
 __doprnt
+__doprnt_log
 __dtrace_register_anon_DOF
 _aes_decrypt_cbc
 _aes_decrypt_key
@@ -60,7 +61,6 @@ _aes_encrypt_key
 _aes_encrypt_key128
 _aes_encrypt_key256
 _appleClut8
-_boot
 _cons_cinput
 _cons_ops
 _conslog_putc
@@ -72,8 +72,6 @@ _delay_for_interval
 _des_ecb_encrypt
 _des_ecb_key_sched
 _gIODTSharedInterrupts
-_gOSObjectTrackList
-_gOSObjectTrackThread
 _gPEClockFrequencyInfo
 _gPESerialBaud
 _get_bsdtask_info
@@ -88,7 +86,7 @@ _host_get_exception_ports
 _host_priv_self
 _hz
 _ipc_kernel_map
-_kalloc
+_kalloc:_kalloc_external
 _kauth_cred_issuser
 _kauth_cred_label_update
 _kauth_guid_equal
@@ -100,7 +98,7 @@ _kernel_map
 _kernel_pmap
 _kev_post_msg
 _kfree
-_kmem_alloc
+_kmem_alloc:_kmem_alloc_external
 _kmem_free
 _kmputc
 _lck_mtx_assert
@@ -174,7 +172,7 @@ _vm_deallocate
 _vm_map
 _vm_map_deallocate
 _vm_map_unwire
-_vm_map_wire
+_vm_map_wire:_vm_map_wire_external
 _set_vm_privilege
 _vm_protect
 _vm_region

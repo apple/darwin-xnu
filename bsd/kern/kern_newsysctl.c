@@ -1752,7 +1752,7 @@ kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, s
 	name2mib_oid[1] = 3;
 
 	oidlen = sizeof(oid);
-	error = kernel_sysctl(current_proc(), name2mib_oid, 2, oid, &oidlen, (void *)name, strlen(name));
+	error = kernel_sysctl(current_proc(), name2mib_oid, 2, oid, &oidlen, __DECONST(void *, name), strlen(name));
 	oidlen /= sizeof(int);
 	
 	/* now use the OID */

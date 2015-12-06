@@ -32,8 +32,16 @@
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOKitKeys.h>
+#include <IOKit/IOKitKeysPrivate.h>
 #include <kern/debug.h>
 #include <pexpert/pexpert.h>
+
+#if CONFIG_MACF
+extern "C" {
+#include <security/mac.h>
+#include <security/mac_framework.h>
+};
+#endif /* MAC */
 
 #define super IOService
 
@@ -67,7 +75,7 @@ bool IODTNVRAM::init(IORegistryEntry *old, const IORegistryPlane *plane)
   // <rdar://problem/9529235> race condition possible between
   // IODTNVRAM and IONVRAMController (restore loses boot-args)
   initProxyData();
-  
+
   return true;
 }
 
@@ -109,6 +117,8 @@ void IODTNVRAM::registerNVRAMController(IONVRAMController *nvram)
   if (!_isProxied) {
     _nvramController->read(0, _nvramImage, kIODTNVRAMImageSize);
     initNVRAMImage();
+  } else {
+    syncOFVariables();
   }
 }
 
@@ -217,9 +227,10 @@ void IODTNVRAM::initNVRAMImage(void)
       // Set the partition checksum.
       _nvramImage[freePartitionOffset + 1] =
 	calculatePartitionChecksum(_nvramImage + freePartitionOffset);
-      
-      // Set the nvram image as dirty.
-      _nvramImageDirty = true;
+
+      if (_nvramController != 0) {
+        _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
+      }
     }
   } else {
     _piImage = _nvramImage + _piPartitionOffset;
@@ -231,20 +242,21 @@ void IODTNVRAM::initNVRAMImage(void)
   initOFVariables();
 }
 
-void IODTNVRAM::sync(void)
+void IODTNVRAM::syncInternal(bool rateLimit)
 {
-  if (!_nvramImageDirty && !_ofImageDirty) return;
-  
-  // Don't try to sync OF Variables if the system has already paniced.
-  if (!_systemPaniced) syncOFVariables();
-  
   // Don't try to perform controller operations if none has been registered.  
   if (_nvramController == 0) return;
+
+  // Rate limit requests to sync. Drivers that need this rate limiting will
+  // shadow the data and only write to flash when they get a sync call
+  if (rateLimit && !safeToSync()) return;
   
-  _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
   _nvramController->sync();
-  
-  _nvramImageDirty = false;
+}
+
+void IODTNVRAM::sync(void)
+{
+  syncInternal(false);
 }
 
 bool IODTNVRAM::serializeProperties(OSSerialize *s) const
@@ -280,7 +292,11 @@ bool IODTNVRAM::serializeProperties(OSSerialize *s) const
       
       variablePerm = getOFVariablePerm(key);
       if ((hasPrivilege || (variablePerm != kOFVariablePermRootOnly)) &&
-	  ( ! (variablePerm == kOFVariablePermKernelOnly && current_task() != kernel_task) )) {}
+	  ( ! (variablePerm == kOFVariablePermKernelOnly && current_task() != kernel_task) )
+#if CONFIG_MACF
+          && (current_task() == kernel_task || mac_iokit_check_nvram_get(kauth_cred_get(), key->getCStringNoCopy()) == 0)
+#endif
+         ) { }
       else dict->removeObject(key);
     }
   }
@@ -308,6 +324,12 @@ OSObject *IODTNVRAM::copyProperty(const OSSymbol *aKey) const
     if (variablePerm == kOFVariablePermRootOnly) return 0;
   }
   if (variablePerm == kOFVariablePermKernelOnly && current_task() != kernel_task) return 0;
+
+#if CONFIG_MACF
+  if (current_task() != kernel_task &&
+      mac_iokit_check_nvram_get(kauth_cred_get(), aKey->getCStringNoCopy()) != 0)
+    return 0;
+#endif
 
   IOLockLock(_ofLock);
   theObject = _ofDict->getObject(aKey);
@@ -370,6 +392,12 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
 
   // Don't allow change of 'aapl,panic-info'.
   if (aKey->isEqualTo(kIODTNVRAMPanicInfoKey)) return false;
+
+#if CONFIG_MACF
+  if (current_task() != kernel_task &&
+      mac_iokit_check_nvram_set(kauth_cred_get(), aKey->getCStringNoCopy(), anObject) != 0)
+    return false;
+#endif
   
   // Make sure the object is of the correct type.
   propType = getOFVariableType(aKey);
@@ -403,9 +431,9 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
   IOLockLock(_ofLock);
   result = _ofDict->setObject(aKey, propObject);
   IOLockUnlock(_ofLock);
-  
+
   if (result) {
-    _ofImageDirty = true;
+    syncOFVariables();
   }
   
   return result;
@@ -429,15 +457,24 @@ void IODTNVRAM::removeProperty(const OSSymbol *aKey)
   // Don't allow change of 'aapl,panic-info'.
   if (aKey->isEqualTo(kIODTNVRAMPanicInfoKey)) return;
   
+#if CONFIG_MACF
+  if (current_task() != kernel_task &&
+      mac_iokit_check_nvram_delete(kauth_cred_get(), aKey->getCStringNoCopy()) != 0)
+    return;
+#endif
+
   // If the object exists, remove it from the dictionary.
 
   IOLockLock(_ofLock);
   result = _ofDict->getObject(aKey) != 0;
   if (result) {
     _ofDict->removeObject(aKey);
-    _ofImageDirty = true;
   }
   IOLockUnlock(_ofLock);
+
+  if (result) {
+    syncOFVariables();
+  }
 }
 
 IOReturn IODTNVRAM::setProperties(OSObject *properties)
@@ -472,14 +509,15 @@ IOReturn IODTNVRAM::setProperties(OSObject *properties)
 		} else {
 			result = false;
 		}
-    } else if(key->isEqualTo(kIONVRAMSyncNowPropertyKey)) {
+    } else if(key->isEqualTo(kIONVRAMSyncNowPropertyKey) || key->isEqualTo(kIONVRAMForceSyncNowPropertyKey)) {
 		tmpStr = OSDynamicCast(OSString, object);
 		if (tmpStr != 0) {
 
-			result = true; // We are not going to gaurantee sync, this is best effort
+			result = true;
 
-			if(safeToSync())
-				sync();
+      // We still want to throttle NVRAM commit rate for SyncNow. ForceSyncNow is provided as a really big hammer.
+
+			syncInternal(key->isEqualTo(kIONVRAMSyncNowPropertyKey));
 
 		} else {
 			result = false;
@@ -587,7 +625,9 @@ IOReturn IODTNVRAM::writeNVRAMPartition(const OSSymbol *partitionID,
   
   bcopy(buffer, _nvramImage + partitionOffset + offset, length);
   
-  _nvramImageDirty = true;
+  if (_nvramController != 0) {
+    _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
+  }
   
   return kIOReturnSuccess;
 }
@@ -605,7 +645,9 @@ IOByteCount IODTNVRAM::savePanicInfo(UInt8 *buffer, IOByteCount length)
   // Save the Panic Info length.
   *(UInt32 *)_piImage = length;
   
-  _nvramImageDirty = true;
+  if (_nvramController != 0) {
+    _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
+  }
   /* 
    * This prevents OF variables from being committed if the system has panicked
    */
@@ -701,7 +743,9 @@ IOReturn IODTNVRAM::initOFVariables(void)
       
       // Clear the length from _piImage and mark dirty.
       *(UInt32 *)_piImage = 0;
-      _nvramImageDirty = true;
+      if (_nvramController != 0) {
+        _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
+      }
     }
   }
 
@@ -717,9 +761,7 @@ IOReturn IODTNVRAM::syncOFVariables(void)
   OSObject             *tmpObject;
   OSCollectionIterator *iter;
   
-  if ((_ofImage == 0) || (_ofDict == 0)) return kIOReturnNotReady;
-  
-  if (!_ofImageDirty) return kIOReturnSuccess;
+  if ((_ofImage == 0) || (_ofDict == 0) || _systemPaniced) return kIOReturnNotReady;
   
   buffer = tmpBuffer = IONew(UInt8, _ofPartitionSize);
   if (buffer == 0) return kIOReturnNoMemory;
@@ -759,8 +801,9 @@ IOReturn IODTNVRAM::syncOFVariables(void)
   
   if (!ok) return kIOReturnBadArgument;
   
-  _ofImageDirty = false;
-  _nvramImageDirty = true;
+  if (_nvramController != 0) {
+    _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
+  }
   
   return kIOReturnSuccess;
 }
@@ -1427,11 +1470,12 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
 
   if (ok) {
     ok = _ofDict->setObject(_registryPropertiesKey, data);
-    if (ok) _ofImageDirty = true;
   }
 
   IOLockUnlock(_ofLock);
   if (data) data->release();
+
+  if (ok) syncOFVariables();
 
   return ok ? kIOReturnSuccess : kIOReturnNoMemory;
 }

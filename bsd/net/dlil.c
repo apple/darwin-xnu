@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -425,6 +425,10 @@ static int sysctl_rcvq_maxlen SYSCTL_HANDLER_ARGS;
 static int sysctl_hwcksum_dbg_mode SYSCTL_HANDLER_ARGS;
 static int sysctl_hwcksum_dbg_partial_rxoff_forced SYSCTL_HANDLER_ARGS;
 static int sysctl_hwcksum_dbg_partial_rxoff_adj SYSCTL_HANDLER_ARGS;
+static int sysctl_get_ports_used SYSCTL_HANDLER_ARGS;
+
+struct chain_len_stats tx_chain_len_stats;
+static int sysctl_tx_chain_len_stats SYSCTL_HANDLER_ARGS;
 
 /* The following are protected by dlil_ifnet_lock */
 static TAILQ_HEAD(, ifnet) ifnet_detaching_head;
@@ -621,6 +625,16 @@ SYSCTL_UINT(_net_link_generic_system, OID_AUTO, hwcksum_dbg,
     CTLFLAG_RW | CTLFLAG_LOCKED, &hwcksum_dbg, 0,
     "enable hardware cksum debugging");
 
+u_int32_t ifnet_start_delayed = 0;
+SYSCTL_UINT(_net_link_generic_system, OID_AUTO, start_delayed,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &ifnet_start_delayed, 0,
+    "number of times start was delayed");
+
+u_int32_t ifnet_delay_start_disabled = 0;
+SYSCTL_UINT(_net_link_generic_system, OID_AUTO, start_delay_disabled,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &ifnet_delay_start_disabled, 0,
+    "number of times start was delayed");
+
 #define	HWCKSUM_DBG_PARTIAL_FORCED	0x1	/* forced partial checksum */
 #define	HWCKSUM_DBG_PARTIAL_RXOFF_ADJ	0x2	/* adjust start offset */
 #define	HWCKSUM_DBG_FINALIZE_FORCED	0x10	/* forced finalize */
@@ -695,6 +709,18 @@ uint32_t hwcksum_rx = 1;
 SYSCTL_UINT(_net_link_generic_system, OID_AUTO, hwcksum_rx,
     CTLFLAG_RW | CTLFLAG_LOCKED, &hwcksum_rx, 0,
     "enable receive hardware checksum offload");
+
+SYSCTL_PROC(_net_link_generic_system, OID_AUTO, tx_chain_len_stats,
+    CTLFLAG_RD | CTLFLAG_LOCKED, 0, 9,
+    sysctl_tx_chain_len_stats, "S", "");
+
+uint32_t tx_chain_len_count = 0;
+SYSCTL_UINT(_net_link_generic_system, OID_AUTO, tx_chain_len_count,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &tx_chain_len_count, 0,
+    "");
+
+SYSCTL_NODE(_net_link_generic_system, OID_AUTO, get_ports_used,
+    CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_get_ports_used, "");
 
 unsigned int net_rxpoll = 1;
 unsigned int net_affinity = 1;
@@ -891,6 +917,26 @@ ifnet_lock_done(struct ifnet *ifp)
 {
 	lck_rw_done(&ifp->if_lock);
 }
+
+#if INET
+__private_extern__ void
+if_inetdata_lock_shared(struct ifnet *ifp)
+{
+	lck_rw_lock_shared(&ifp->if_inetdata_lock);
+}
+
+__private_extern__ void
+if_inetdata_lock_exclusive(struct ifnet *ifp)
+{
+	lck_rw_lock_exclusive(&ifp->if_inetdata_lock);
+}
+
+__private_extern__ void
+if_inetdata_lock_done(struct ifnet *ifp)
+{
+	lck_rw_done(&ifp->if_inetdata_lock);
+}
+#endif
 
 #if INET6
 __private_extern__ void
@@ -2476,7 +2522,10 @@ ifnet_start_common(struct ifnet *ifp, int resetfc)
 		return;
 	}
 	ifp->if_start_req++;
-	if (!ifp->if_start_active && ifp->if_start_thread != THREAD_NULL) {
+	if (!ifp->if_start_active && ifp->if_start_thread != THREAD_NULL &&
+	    (resetfc || !(ifp->if_eflags & IFEF_ENQUEUE_MULTI) ||
+	    IFCQ_LEN(&ifp->if_snd) >= ifp->if_start_delay_qlen
+	    || ifp->if_start_delayed == 0)) {
 		wakeup_one((caddr_t)&ifp->if_start_thread);
 	}
 	lck_mtx_unlock(&ifp->if_start_lock);
@@ -2496,6 +2545,7 @@ ifnet_start_thread_fn(void *v, wait_result_t w)
 	char ifname[IFNAMSIZ + 1];
 	struct timespec *ts = NULL;
 	struct ifclassq *ifq = &ifp->if_snd;
+	struct timespec delay_start_ts;
 
 	/*
 	 * Treat the dedicated starter thread for lo0 as equivalent to
@@ -2530,8 +2580,9 @@ ifnet_start_thread_fn(void *v, wait_result_t w)
 	lck_mtx_lock_spin(&ifp->if_start_lock);
 
 	for (;;) {
-		(void) msleep(&ifp->if_start_thread, &ifp->if_start_lock,
-		    (PZERO - 1) | PSPIN, ifname, ts);
+		if (ifp->if_start_thread != NULL)
+			(void) msleep(&ifp->if_start_thread, &ifp->if_start_lock,
+			    (PZERO - 1) | PSPIN, ifname, ts);
 
 		/* interface is detached? */
 		if (ifp->if_start_thread == THREAD_NULL) {
@@ -2553,20 +2604,51 @@ ifnet_start_thread_fn(void *v, wait_result_t w)
 		}
 
 		ifp->if_start_active = 1;
+
 		for (;;) {
 			u_int32_t req = ifp->if_start_req;
-
+			if (!IFCQ_IS_EMPTY(ifq) &&
+			    (ifp->if_eflags & IFEF_ENQUEUE_MULTI) &&
+			    ifp->if_start_delayed == 0 &&
+			    IFCQ_LEN(ifq) < ifp->if_start_delay_qlen &&
+			    (ifp->if_eflags & IFEF_DELAY_START)) {
+				ifp->if_start_delayed = 1;
+				ifnet_start_delayed++;
+				break;
+			} else {
+				ifp->if_start_delayed = 0;
+			}
 			lck_mtx_unlock(&ifp->if_start_lock);
+
+			/*
+			 * If no longer attached, don't call start because ifp
+			 * is being destroyed; else hold an IO refcnt to
+			 * prevent the interface from being detached (will be
+			 * released below.)
+			 */
+			if (!ifnet_is_attached(ifp, 1)) {
+				lck_mtx_lock_spin(&ifp->if_start_lock);
+				break;
+			}
+
 			/* invoke the driver's start routine */
 			((*ifp->if_start)(ifp));
+
+			/*
+			 * Release the io ref count taken by ifnet_is_attached.
+			 */
+			ifnet_decr_iorefcnt(ifp);
+
 			lck_mtx_lock_spin(&ifp->if_start_lock);
 
 			/* if there's no pending request, we're done */
 			if (req == ifp->if_start_req)
 				break;
 		}
+
 		ifp->if_start_req = 0;
 		ifp->if_start_active = 0;
+
 		/*
 		 * Wakeup N ns from now if rate-controlled by TBR, and if
 		 * there are still packets in the send queue which haven't
@@ -2575,6 +2657,12 @@ ifnet_start_thread_fn(void *v, wait_result_t w)
 		 */
 		ts = ((IFCQ_TBR_IS_ENABLED(ifq) && !IFCQ_IS_EMPTY(ifq)) ?
 		    &ifp->if_start_cycle : NULL);
+
+		if (ts == NULL && ifp->if_start_delayed == 1) {
+			delay_start_ts.tv_sec = 0;
+			delay_start_ts.tv_nsec = ifp->if_start_delay_timeout;
+			ts = &delay_start_ts;
+		}
 
 		if (ts != NULL && ts->tv_sec == 0 && ts->tv_nsec == 0)
 			ts = NULL;
@@ -2922,6 +3010,8 @@ errno_t
 ifnet_enqueue(struct ifnet *ifp, struct mbuf *m)
 {
 	int error;
+	struct timespec now;
+	u_int64_t now_nsec;
 
 	if (ifp == NULL || m == NULL || !(m->m_flags & M_PKTHDR) ||
 	    m->m_nextpkt != NULL) {
@@ -2938,6 +3028,65 @@ ifnet_enqueue(struct ifnet *ifp, struct mbuf *m)
 		return (ENETDOWN);
 	}
 
+	nanouptime(&now);
+	net_timernsec(&now, &now_nsec);
+	m->m_pkthdr.pkt_enqueue_ts = now_nsec;
+
+	if (ifp->if_eflags & IFEF_ENQUEUE_MULTI) {
+		/*
+		 * If the driver chose to delay start callback for
+		 * coalescing multiple packets, Then use the following
+		 * heuristics to make sure that start callback will
+		 * be delayed only when bulk data transfer is detected.
+		 * 1. number of packets enqueued in (delay_win * 2) is
+		 * greater than or equal to the delay qlen.
+		 * 2. If delay_start is enabled it will stay enabled for
+		 * another 10 idle windows. This is to take into account
+		 * variable RTT and burst traffic.
+		 * 3. If the time elapsed since last enqueue is more
+		 * than 200ms we disable delaying start callback. This is
+		 * is to take idle time into account.
+		 */ 
+		u_int64_t dwin = (ifp->if_start_delay_timeout << 1);
+		if (ifp->if_start_delay_swin > 0) {
+			if ((ifp->if_start_delay_swin + dwin) > now_nsec) {
+				ifp->if_start_delay_cnt++;
+			} else if ((now_nsec - ifp->if_start_delay_swin)
+			    >= (200 * 1000 * 1000)) {
+				ifp->if_start_delay_swin = now_nsec;
+				ifp->if_start_delay_cnt = 1;
+				ifp->if_start_delay_idle = 0;
+				if (ifp->if_eflags & IFEF_DELAY_START) {
+					ifp->if_eflags &=
+					    ~(IFEF_DELAY_START);
+					ifnet_delay_start_disabled++;
+				}
+			} else {
+				if (ifp->if_start_delay_cnt >=
+				    ifp->if_start_delay_qlen) {
+					ifp->if_eflags |= IFEF_DELAY_START;
+					ifp->if_start_delay_idle = 0;
+				} else {
+					if (ifp->if_start_delay_idle >= 10) {
+						ifp->if_eflags &= ~(IFEF_DELAY_START);
+						ifnet_delay_start_disabled++;
+					} else {
+						ifp->if_start_delay_idle++;
+					}
+				} 
+				ifp->if_start_delay_swin = now_nsec;
+				ifp->if_start_delay_cnt = 1;
+			}
+		} else {
+			ifp->if_start_delay_swin = now_nsec;
+			ifp->if_start_delay_cnt = 1;
+			ifp->if_start_delay_idle = 0;
+			ifp->if_eflags &= ~(IFEF_DELAY_START);
+		}
+	} else {
+		ifp->if_eflags &= ~(IFEF_DELAY_START);
+	}
+
 	/* enqueue the packet */
 	error = ifclassq_enqueue(&ifp->if_snd, m);
 
@@ -2946,7 +3095,8 @@ ifnet_enqueue(struct ifnet *ifp, struct mbuf *m)
 	 * for the packet is suspended (EQSUSPENDED), as the driver could still
 	 * be dequeueing from other unsuspended queues.
 	 */
-	if (error == 0 || error == EQFULL || error == EQSUSPENDED)
+	if (!(ifp->if_eflags & IFEF_ENQUEUE_MULTI) &&
+	    (error == 0 || error == EQFULL || error == EQSUSPENDED))
 		ifnet_start(ifp);
 
 	return (error);
@@ -3486,10 +3636,6 @@ dlil_event_internal(struct ifnet *ifp, struct kev_msg *event)
 	int tmp_ifproto_arr_idx = 0;
 	bool tmp_malloc = false;
 
-	/* Get an io ref count if the interface is attached */
-	if (!ifnet_is_attached(ifp, 1))
-		goto done;
-
 	/*
 	 * Pass the event to the interface filters
 	 */
@@ -3509,6 +3655,10 @@ dlil_event_internal(struct ifnet *ifp, struct kev_msg *event)
 	/* we're done with the filter list */
 	if_flt_monitor_unbusy(ifp);
 	lck_mtx_unlock(&ifp->if_flt_lock);
+
+	/* Get an io ref count if the interface is attached */
+	if (!ifnet_is_attached(ifp, 1))
+		goto done;
 
 	/*
 	 * An embedded tmp_list_entry in if_proto may still get
@@ -3713,6 +3863,38 @@ ifp_inc_traffic_class_out(struct ifnet *ifp, struct mbuf *m)
 	if (mbuf_is_traffic_class_privileged(m)) {
 		ifp->if_tc.ifi_opvpackets++;
 		ifp->if_tc.ifi_opvbytes += m->m_pkthdr.len;
+	}
+}
+
+static void
+dlil_count_chain_len(mbuf_t m, struct chain_len_stats *cls)
+{
+	mbuf_t	n = m;
+	int chainlen = 0;
+
+	while (n != NULL) {
+		chainlen++;
+		n = n->m_next;
+	}
+	switch (chainlen) {
+		case 0:
+			break;
+		case 1:
+			atomic_add_64(&cls->cls_one, 1);
+			break;
+		case 2:
+			atomic_add_64(&cls->cls_two, 1);
+			break;
+		case 3:
+			atomic_add_64(&cls->cls_three, 1);
+			break;
+		case 4:
+			atomic_add_64(&cls->cls_four, 1);
+			break;
+		case 5:
+		default:
+			atomic_add_64(&cls->cls_five_or_more, 1);
+			break;
 	}
 }
 
@@ -3930,18 +4112,29 @@ preout_again:
 		 * update the timestamp to indicate recent activity
 		 * on a foreground socket.
 		 */
-		if (!(m->m_pkthdr.pkt_flags & PKTF_SO_BACKGROUND) &&
-		    (m->m_pkthdr.pkt_flags & PKTF_FLOW_ID) &&
-		    m->m_pkthdr.pkt_flowsrc == FLOWSRC_INPCB)
-			ifp->if_fg_sendts = net_uptime();
+		if ((m->m_pkthdr.pkt_flags & PKTF_FLOW_ID) &&
+		    m->m_pkthdr.pkt_flowsrc == FLOWSRC_INPCB) {
+			if (!(m->m_pkthdr.pkt_flags & PKTF_SO_BACKGROUND))
+				ifp->if_fg_sendts = net_uptime();
+
+			if (m->m_pkthdr.pkt_flags & PKTF_SO_REALTIME)
+				ifp->if_rt_sendts = net_uptime();
+		}
 
 		ifp_inc_traffic_class_out(ifp, m);
 		pktap_output(ifp, proto_family, m, pre, post);
 
 		/*
+		 * Count the number of elements in the mbuf chain
+		 */
+		if (tx_chain_len_count) {
+			dlil_count_chain_len(m, &tx_chain_len_stats);
+		}
+
+		/*
 		 * Finally, call the driver.
 		 */
-		if (ifp->if_eflags & IFEF_SENDLIST) {
+		if (ifp->if_eflags & (IFEF_SENDLIST | IFEF_ENQUEUE_MULTI)) {
 			if (m->m_pkthdr.pkt_flags & PKTF_FORWARDED) {
 				flen += (m_pktlen(m) - (pre + post));
 				m->m_pkthdr.pkt_flags &= ~PKTF_FORWARDED;
@@ -3989,24 +4182,57 @@ next:
 	} while (m != NULL);
 
 	if (send_head != NULL) {
-		VERIFY(ifp->if_eflags & IFEF_SENDLIST);
 		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START,
 		    0, 0, 0, 0, 0);
-		retval = (*ifp->if_output)(ifp, send_head);
-		if (retval == EQFULL || retval == EQSUSPENDED) {
-			if (adv != NULL) {
-				adv->code = (retval == EQFULL ?
-				    FADV_FLOW_CONTROLLED : FADV_SUSPENDED);
+		if (ifp->if_eflags & IFEF_SENDLIST) {
+			retval = (*ifp->if_output)(ifp, send_head);
+			if (retval == EQFULL || retval == EQSUSPENDED) {
+				if (adv != NULL) {
+					adv->code = (retval == EQFULL ?
+					    FADV_FLOW_CONTROLLED :
+					    FADV_SUSPENDED);
+				}
+				retval = 0;
 			}
-			retval = 0;
-		}
-		if (retval == 0 && flen > 0) {
-			fbytes += flen;
-			fpkts++;
-		}
-		if (retval != 0 && dlil_verbose) {
-			printf("%s: output error on %s retval = %d\n",
-			    __func__, if_name(ifp), retval);
+			if (retval == 0 && flen > 0) {
+				fbytes += flen;
+				fpkts++;
+			}
+			if (retval != 0 && dlil_verbose) {
+				printf("%s: output error on %s retval = %d\n",
+				    __func__, if_name(ifp), retval);
+			}
+		} else {
+			struct mbuf *send_m;
+			int enq_cnt = 0;
+			VERIFY(ifp->if_eflags & IFEF_ENQUEUE_MULTI);
+			while (send_head != NULL) {
+				send_m = send_head;
+				send_head = send_m->m_nextpkt;
+				send_m->m_nextpkt = NULL;
+				retval = (*ifp->if_output)(ifp, send_m);
+				if (retval == EQFULL || retval == EQSUSPENDED) {
+					if (adv != NULL) {
+						adv->code = (retval == EQFULL ?
+						    FADV_FLOW_CONTROLLED :
+						    FADV_SUSPENDED);
+					}
+					retval = 0;
+				}
+				if (retval == 0) {
+					enq_cnt++;
+					if (flen > 0)
+						fpkts++;
+				}
+				if (retval != 0 && dlil_verbose) {
+					printf("%s: output error on %s retval = %d\n",
+					    __func__, if_name(ifp), retval);
+				}
+			}
+			if (enq_cnt > 0) {
+				fbytes += flen;
+				ifnet_start(ifp);
+			}
 		}
 		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_END, 0, 0, 0, 0, 0);
 	}
@@ -4278,7 +4504,7 @@ __private_extern__ void
 net_thread_marks_pop(net_thread_marks_t popx)
 {
 	static const char *const base = (const void*)&net_thread_marks_base;
-	ptrdiff_t pop = (caddr_t)popx - (caddr_t)base;
+	const ptrdiff_t pop = (const char *)popx - (const char *)base;
 
 	if (pop != 0) {
 		static const ptrdiff_t ones = (ptrdiff_t)(u_int32_t)~0U;
@@ -4294,7 +4520,7 @@ __private_extern__ void
 net_thread_unmarks_pop(net_thread_marks_t unpopx)
 {
 	static const char *const base = (const void*)&net_thread_marks_base;
-	ptrdiff_t unpop = (caddr_t)unpopx - (caddr_t)base;
+	ptrdiff_t unpop = (const char *)unpopx - (const char *)base;
 
 	if (unpop != 0) {
 		static const ptrdiff_t ones = (ptrdiff_t)(u_int32_t)~0U;
@@ -5171,6 +5397,23 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	VERIFY(ifp->if_delegated.subfamily == 0);
 	VERIFY(ifp->if_delegated.expensive == 0);
 
+	bzero(&ifp->if_agentids, sizeof(ifp->if_agentids));
+
+	/* Reset interface state */
+	bzero(&ifp->if_interface_state, sizeof(ifp->if_interface_state));
+	ifp->if_interface_state.valid_bitmask |= 
+		IF_INTERFACE_STATE_INTERFACE_AVAILABILITY_VALID;
+	ifp->if_interface_state.interface_availability =
+		IF_INTERFACE_STATE_INTERFACE_AVAILABLE;
+
+	/* Initialize Link Quality Metric (loopback [lo0] is always good) */
+	if (ifp == lo_ifp) {
+		ifp->if_interface_state.lqm_state = IFNET_LQM_THRESH_GOOD;
+		ifp->if_interface_state.valid_bitmask |=
+		    IF_INTERFACE_STATE_LQM_STATE_VALID;
+	} else {
+		ifp->if_interface_state.lqm_state = IFNET_LQM_THRESH_UNKNOWN;
+	}
 	ifnet_lock_done(ifp);
 	ifnet_head_done();
 
@@ -5223,9 +5466,6 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	 */
 	lck_mtx_lock(rnh_lock);
 	ifnet_lock_exclusive(ifp);
-	/* Initialize Link Quality Metric (loopback [lo0] is always good) */
-	ifp->if_lqm = (ifp == lo_ifp) ? IFNET_LQM_THRESH_GOOD :
-	    IFNET_LQM_THRESH_UNKNOWN;
 	lck_mtx_lock_spin(&ifp->if_ref_lock);
 	ifp->if_refflags = IFRF_ATTACHED;
 	lck_mtx_unlock(&ifp->if_ref_lock);
@@ -5435,6 +5675,9 @@ ifnet_detach(ifnet_t ifp)
 	ifp->if_link.tqe_prev = NULL;
 	ifindex2ifnet[ifp->if_index] = NULL;
 
+	/* 18717626 - reset IFEF_IPV4_ROUTER and IFEF_IPV6_ROUTER */
+	ifp->if_eflags &= ~(IFEF_IPV4_ROUTER | IFEF_IPV6_ROUTER);
+
 	/* Record detach PC stacktrace */
 	ctrace_record(&((struct dlil_ifnet *)ifp)->dl_if_detach);
 
@@ -5444,6 +5687,9 @@ ifnet_detach(ifnet_t ifp)
 	/* Clear delegated interface info (reference released below) */
 	delegated_ifp = ifp->if_delegated.ifp;
 	bzero(&ifp->if_delegated, sizeof (ifp->if_delegated));
+
+	/* Reset interface state */
+	bzero(&ifp->if_interface_state, sizeof(ifp->if_interface_state));
 
 	ifnet_lock_done(ifp);
 	ifnet_head_done();
@@ -5455,7 +5701,7 @@ ifnet_detach(ifnet_t ifp)
 
 	/* Reset Link Quality Metric (unless loopback [lo0]) */
 	if (ifp != lo_ifp)
-		if_lqm_update(ifp, IFNET_LQM_THRESH_OFF);
+		if_lqm_update(ifp, IFNET_LQM_THRESH_OFF, 0);
 
 	/* Reset TCP local statistics */
 	if (ifp->if_tcp_stat != NULL)
@@ -5464,6 +5710,12 @@ ifnet_detach(ifnet_t ifp)
 	/* Reset UDP local statistics */
 	if (ifp->if_udp_stat != NULL)
 		bzero(ifp->if_udp_stat, sizeof(*ifp->if_udp_stat));
+
+	/* Release memory held for interface link status report */
+	if (ifp->if_link_status != NULL) {
+		FREE(ifp->if_link_status, M_TEMP);
+		ifp->if_link_status = NULL;
+	}
 
 	/* Let BPF know we're detaching */
 	bpfdetach(ifp);
@@ -6057,10 +6309,19 @@ int dlil_if_acquire(u_int32_t family, const void *uniqueid,
 	lck_mtx_init(&ifp1->if_addrconfig_lock, ifnet_lock_group,
 	    ifnet_lock_attr);
 	lck_rw_init(&ifp1->if_llreach_lock, ifnet_lock_group, ifnet_lock_attr);
+#if INET
+	lck_rw_init(&ifp1->if_inetdata_lock, ifnet_lock_group,
+	    ifnet_lock_attr);
+	ifp1->if_inetdata = NULL;
+#endif
 #if INET6
-	lck_rw_init(&ifp1->if_inet6data_lock, ifnet_lock_group, ifnet_lock_attr);
+	lck_rw_init(&ifp1->if_inet6data_lock, ifnet_lock_group,
+	    ifnet_lock_attr);
 	ifp1->if_inet6data = NULL;
 #endif
+	lck_rw_init(&ifp1->if_link_status_lock, ifnet_lock_group,
+	    ifnet_lock_attr);
+	ifp1->if_link_status = NULL;
 
 	/* for send data paths */
 	lck_mtx_init(&ifp1->if_start_lock, ifnet_snd_lock_group,
@@ -6280,26 +6541,43 @@ ifnet_cached_rtlookup_inet6(struct ifnet *ifp, struct in6_addr *src_ip6)
 #endif /* INET6 */
 
 void
-if_lqm_update(struct ifnet *ifp, int lqm)
+if_lqm_update(struct ifnet *ifp, int lqm, int locked)
 {
 	struct kev_dl_link_quality_metric_data ev_lqm_data;
 
 	VERIFY(lqm >= IFNET_LQM_MIN && lqm <= IFNET_LQM_MAX);
 
 	/* Normalize to edge */
-	if (lqm > IFNET_LQM_THRESH_UNKNOWN && lqm <= IFNET_LQM_THRESH_BAD)
+	if (lqm >= 0 && lqm <= IFNET_LQM_THRESH_BAD)
 		lqm = IFNET_LQM_THRESH_BAD;
 	else if (lqm > IFNET_LQM_THRESH_BAD && lqm <= IFNET_LQM_THRESH_POOR)
 		lqm = IFNET_LQM_THRESH_POOR;
 	else if (lqm > IFNET_LQM_THRESH_POOR && lqm <= IFNET_LQM_THRESH_GOOD)
 		lqm = IFNET_LQM_THRESH_GOOD;
 
-	ifnet_lock_exclusive(ifp);
-	if (lqm == ifp->if_lqm) {
-		ifnet_lock_done(ifp);
+	/*
+	 * Take the lock if needed
+	 */
+	if (!locked)
+		ifnet_lock_exclusive(ifp);
+
+	if (lqm == ifp->if_interface_state.lqm_state &&
+	    (ifp->if_interface_state.valid_bitmask & 
+	    IF_INTERFACE_STATE_LQM_STATE_VALID)) {
+		/*
+		 * Release the lock if was not held by the caller
+		 */
+		if (!locked)
+			ifnet_lock_done(ifp);
 		return;		/* nothing to update */
 	}
-	ifp->if_lqm = lqm;
+	ifp->if_interface_state.valid_bitmask |=
+		    IF_INTERFACE_STATE_LQM_STATE_VALID;
+	ifp->if_interface_state.lqm_state = lqm;
+
+	/*
+	 * Don't want to hold the lock when issuing kernel events
+	 */
 	ifnet_lock_done(ifp);
 
 	bzero(&ev_lqm_data, sizeof (ev_lqm_data));
@@ -6307,6 +6585,157 @@ if_lqm_update(struct ifnet *ifp, int lqm)
 
 	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_LINK_QUALITY_METRIC_CHANGED,
 	    (struct net_event_data *)&ev_lqm_data, sizeof (ev_lqm_data));
+
+	/*
+	 * Reacquire the lock for the caller
+	 */
+	if (locked)
+		ifnet_lock_exclusive(ifp);
+}
+
+static void
+if_rrc_state_update(struct ifnet *ifp, unsigned int rrc_state)
+{
+	struct kev_dl_rrc_state kev;
+	
+	if (rrc_state == ifp->if_interface_state.rrc_state &&
+	    (ifp->if_interface_state.valid_bitmask &
+	    IF_INTERFACE_STATE_RRC_STATE_VALID))
+		return;
+
+	ifp->if_interface_state.valid_bitmask |=
+	    IF_INTERFACE_STATE_RRC_STATE_VALID;
+
+	ifp->if_interface_state.rrc_state = rrc_state;
+
+	/*
+	 * Don't want to hold the lock when issuing kernel events
+	 */
+	ifnet_lock_done(ifp);
+
+	bzero(&kev, sizeof(struct kev_dl_rrc_state));
+	kev.rrc_state = rrc_state;
+
+	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_RRC_STATE_CHANGED,
+	    (struct net_event_data *)&kev, sizeof(struct kev_dl_rrc_state));
+
+	ifnet_lock_exclusive(ifp);
+}
+
+errno_t
+if_state_update(struct ifnet *ifp,
+   struct if_interface_state* if_interface_state)
+{
+	u_short if_index_available = 0;
+
+	ifnet_lock_exclusive(ifp);
+
+	if ((ifp->if_type != IFT_CELLULAR) &&
+	    (if_interface_state->valid_bitmask &
+	    IF_INTERFACE_STATE_RRC_STATE_VALID)) {
+		ifnet_lock_done(ifp);
+		return (ENOTSUP);
+	}
+	if ((if_interface_state->valid_bitmask &
+	    IF_INTERFACE_STATE_LQM_STATE_VALID) &&
+	    (if_interface_state->lqm_state < IFNET_LQM_MIN ||
+	    if_interface_state->lqm_state > IFNET_LQM_MAX)) {
+		ifnet_lock_done(ifp);
+		return (EINVAL);
+	}
+	if ((if_interface_state->valid_bitmask &
+	    IF_INTERFACE_STATE_RRC_STATE_VALID) &&
+	    if_interface_state->rrc_state !=
+	    IF_INTERFACE_STATE_RRC_STATE_IDLE &&
+	    if_interface_state->rrc_state !=
+	    IF_INTERFACE_STATE_RRC_STATE_CONNECTED) {
+		ifnet_lock_done(ifp);
+		return (EINVAL);
+	}
+
+	if (if_interface_state->valid_bitmask &
+	    IF_INTERFACE_STATE_LQM_STATE_VALID) {
+		if_lqm_update(ifp, if_interface_state->lqm_state, 1);
+	}
+	if (if_interface_state->valid_bitmask &
+	    IF_INTERFACE_STATE_RRC_STATE_VALID) {
+		if_rrc_state_update(ifp, if_interface_state->rrc_state);
+	}
+	if (if_interface_state->valid_bitmask &
+	    IF_INTERFACE_STATE_INTERFACE_AVAILABILITY_VALID) {
+		ifp->if_interface_state.valid_bitmask |=
+		    IF_INTERFACE_STATE_INTERFACE_AVAILABILITY_VALID;
+		ifp->if_interface_state.interface_availability =
+		    if_interface_state->interface_availability;
+
+		if (ifp->if_interface_state.interface_availability ==
+		    IF_INTERFACE_STATE_INTERFACE_AVAILABLE) {
+			if_index_available = ifp->if_index;
+		}
+	}
+	ifnet_lock_done(ifp);
+
+	/*
+	 * Check if the TCP connections going on this interface should be
+	 * forced to send probe packets instead of waiting for TCP timers
+	 * to fire. This will be done when there is an explicit
+	 * notification that the interface became available.
+	 */
+	if (if_index_available > 0)
+		tcp_interface_send_probe(if_index_available);
+
+	return (0);
+}
+
+void
+if_get_state(struct ifnet *ifp,
+   struct if_interface_state* if_interface_state)
+{
+	ifnet_lock_shared(ifp);
+
+	if_interface_state->valid_bitmask = 0;
+
+	if (ifp->if_interface_state.valid_bitmask &
+	    IF_INTERFACE_STATE_RRC_STATE_VALID) {
+		if_interface_state->valid_bitmask |=
+		    IF_INTERFACE_STATE_RRC_STATE_VALID;
+		if_interface_state->rrc_state =
+		    ifp->if_interface_state.rrc_state;
+	}
+	if (ifp->if_interface_state.valid_bitmask &
+	    IF_INTERFACE_STATE_LQM_STATE_VALID) {
+		if_interface_state->valid_bitmask |=
+		    IF_INTERFACE_STATE_LQM_STATE_VALID;
+		if_interface_state->lqm_state =
+		    ifp->if_interface_state.lqm_state;
+	}
+	if (ifp->if_interface_state.valid_bitmask &
+	    IF_INTERFACE_STATE_INTERFACE_AVAILABILITY_VALID) {
+		if_interface_state->valid_bitmask |=
+		    IF_INTERFACE_STATE_INTERFACE_AVAILABILITY_VALID;
+		if_interface_state->interface_availability =
+		    ifp->if_interface_state.interface_availability;
+	}
+
+	ifnet_lock_done(ifp);
+}
+
+errno_t
+if_probe_connectivity(struct ifnet *ifp, u_int32_t conn_probe)
+{
+	ifnet_lock_exclusive(ifp);
+	if (conn_probe > 1) {
+		ifnet_lock_done(ifp);
+		return (EINVAL);
+	}
+	if (conn_probe == 0)
+		ifp->if_eflags &= ~IFEF_PROBE_CONNECTIVITY;
+	else
+		ifp->if_eflags |= IFEF_PROBE_CONNECTIVITY;
+	ifnet_lock_done(ifp);
+
+	tcp_probe_connectivity(ifp, conn_probe);
+	return (0);
 }
 
 /* for uuid.c */
@@ -6605,7 +7034,7 @@ dlil_report_issues(struct ifnet *ifp, u_int8_t modid[DLIL_MODIDLEN],
 	_CASSERT(sizeof (kev.modid) == DLIL_MODIDLEN);
 	_CASSERT(sizeof (kev.info) == DLIL_MODARGLEN);
 
-	bzero(&kev, sizeof (&kev));
+	bzero(&kev, sizeof (kev));
 
 	microtime(&tv);
 	kev.timestamp = tv.tv_sec;
@@ -7075,6 +7504,125 @@ try_again:
 	return (flowhash);
 }
 
+int
+ifnet_set_netsignature(struct ifnet *ifp, uint8_t family, uint8_t len,
+    uint16_t flags, uint8_t *data)
+{
+#pragma unused(flags)
+	int error = 0;
+
+	switch (family) {
+	case AF_INET:
+		if_inetdata_lock_exclusive(ifp);
+		if (IN_IFEXTRA(ifp) != NULL) {
+			if (len == 0) {
+				/* Allow clearing the signature */
+				IN_IFEXTRA(ifp)->netsig_len = 0;
+				bzero(IN_IFEXTRA(ifp)->netsig,
+				    sizeof (IN_IFEXTRA(ifp)->netsig));
+				if_inetdata_lock_done(ifp);
+				break;
+			} else if (len > sizeof (IN_IFEXTRA(ifp)->netsig)) {
+				error = EINVAL;
+				if_inetdata_lock_done(ifp);
+				break;
+			}
+			IN_IFEXTRA(ifp)->netsig_len = len;
+			bcopy(data, IN_IFEXTRA(ifp)->netsig, len);
+		} else {
+			error = ENOMEM;
+		}
+		if_inetdata_lock_done(ifp);
+		break;
+
+	case AF_INET6:
+		if_inet6data_lock_exclusive(ifp);
+		if (IN6_IFEXTRA(ifp) != NULL) {
+			if (len == 0) {
+				/* Allow clearing the signature */
+				IN6_IFEXTRA(ifp)->netsig_len = 0;
+				bzero(IN6_IFEXTRA(ifp)->netsig,
+				    sizeof (IN6_IFEXTRA(ifp)->netsig));
+				if_inet6data_lock_done(ifp);
+				break;
+			} else if (len > sizeof (IN6_IFEXTRA(ifp)->netsig)) {
+				error = EINVAL;
+				if_inet6data_lock_done(ifp);
+				break;
+			}
+			IN6_IFEXTRA(ifp)->netsig_len = len;
+			bcopy(data, IN6_IFEXTRA(ifp)->netsig, len);
+		} else {
+			error = ENOMEM;
+		}
+		if_inet6data_lock_done(ifp);
+		break;
+
+	default:
+		error = EINVAL;
+		break;
+	}
+
+	return (error);
+}
+
+int
+ifnet_get_netsignature(struct ifnet *ifp, uint8_t family, uint8_t *len,
+    uint16_t *flags, uint8_t *data)
+{
+	int error = 0;
+
+	if (ifp == NULL || len == NULL || flags == NULL || data == NULL)
+		return (EINVAL);
+
+	switch (family) {
+	case AF_INET:
+		if_inetdata_lock_shared(ifp);
+		if (IN_IFEXTRA(ifp) != NULL) {
+			if (*len == 0 || *len < IN_IFEXTRA(ifp)->netsig_len) {
+				error = EINVAL;
+				if_inetdata_lock_done(ifp);
+				break;
+			}
+			if ((*len = IN_IFEXTRA(ifp)->netsig_len) > 0)
+				bcopy(IN_IFEXTRA(ifp)->netsig, data, *len);
+			else
+				error = ENOENT;
+		} else {
+			error = ENOMEM;
+		}
+		if_inetdata_lock_done(ifp);
+		break;
+
+	case AF_INET6:
+		if_inet6data_lock_shared(ifp);
+		if (IN6_IFEXTRA(ifp) != NULL) {
+			if (*len == 0 || *len < IN6_IFEXTRA(ifp)->netsig_len) {
+				error = EINVAL;
+				if_inet6data_lock_done(ifp);
+				break;
+			}
+			if ((*len = IN6_IFEXTRA(ifp)->netsig_len) > 0)
+				bcopy(IN6_IFEXTRA(ifp)->netsig, data, *len);
+			else
+				error = ENOENT;
+		} else {
+			error = ENOMEM;
+		}
+		if_inet6data_lock_done(ifp);
+		break;
+
+	default:
+		error = EINVAL;
+		break;
+	}
+
+	if (error == 0)
+		*flags = 0;
+
+	return (error);
+}
+
 static void
 dlil_output_cksum_dbg(struct ifnet *ifp, struct mbuf *m, uint32_t hoff,
     protocol_family_t pf)
@@ -7304,6 +7852,25 @@ sysctl_hwcksum_dbg_partial_rxoff_adj SYSCTL_HANDLER_ARGS
 	return (err);
 }
 
+static int
+sysctl_tx_chain_len_stats SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int err;
+	
+	if (req->oldptr == USER_ADDR_NULL) {
+			
+	}
+	if (req->newptr != USER_ADDR_NULL) {
+		return (EPERM);
+	}
+	err = SYSCTL_OUT(req, &tx_chain_len_stats,
+	    sizeof(struct chain_len_stats));
+
+	return (err);
+}
+
+
 #if DEBUG
 /* Blob for sum16 verification */
 static uint8_t sumdata[] = {
@@ -7469,3 +8036,73 @@ dlil_kev_dl_code_str(u_int32_t event_code)
 	}
 	return ("");
 }
+
+/*
+ * Mirror the arguments of ifnet_get_local_ports_extended()
+ *  ifindex
+ *  protocol
+ *  flags
+ */
+static int
+sysctl_get_ports_used SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp)
+	int *name = (int *)arg1;
+	int namelen = arg2;
+	int error = 0;
+	int idx;
+	protocol_family_t protocol;
+	u_int32_t flags;
+	ifnet_t ifp = NULL;
+	u_int8_t *bitfield = NULL;
+
+	if (req->newptr) {
+		error = EPERM;
+		goto done;
+	}
+	if (namelen != 3) {
+		error = ENOENT;
+		goto done;
+	}
+
+	if (req->oldptr == USER_ADDR_NULL) {
+		req->oldidx = bitstr_size(65536);
+		goto done;
+	}
+	if (req->oldlen < bitstr_size(65536)) {
+		error = ENOMEM;
+		goto done;
+	}
+	
+	idx = name[0];
+	protocol = name[1];
+	flags = name[2];
+	
+	
+	ifnet_head_lock_shared();
+	if (idx > if_index) {
+		ifnet_head_done();
+		error = ENOENT;
+		goto done;
+	}
+	ifp = ifindex2ifnet[idx];
+	ifnet_head_done();
+	
+	bitfield = _MALLOC(bitstr_size(65536), M_TEMP, M_WAITOK);
+	if (bitfield == NULL) {
+		error = ENOMEM;
+		goto done;
+	}
+	error = ifnet_get_local_ports_extended(ifp, protocol, flags, bitfield);
+	if (error != 0) {
+		printf("%s: ifnet_get_local_ports_extended() error %d\n",
+		    __func__, error);
+		goto done;
+	}
+	error = SYSCTL_OUT(req, bitfield, bitstr_size(65536));
+done:
+	if (bitfield != NULL)
+		_FREE(bitfield, M_TEMP);
+	return (error);
+}
+

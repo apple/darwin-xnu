@@ -222,7 +222,8 @@ stack_alloc_internal(void)
 		if (kernel_memory_allocate(kernel_map, &stack,
 					   kernel_stack_size + (2*PAGE_SIZE),
 					   stack_addr_mask,
-					   KMA_KSTACK | KMA_KOBJECT | guard_flags)
+					   KMA_KSTACK | KMA_KOBJECT | guard_flags,
+					   VM_KERN_MEMORY_STACK)
 		    != KERN_SUCCESS)
 			panic("stack_alloc: kernel_memory_allocate");
 

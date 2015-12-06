@@ -231,7 +231,6 @@ pktsched_teardown(struct ifclassq *ifq)
 		error = ENXIO;
 		break;
 	}
-
 	return (error);
 }
 

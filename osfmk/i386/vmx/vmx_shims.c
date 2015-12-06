@@ -39,7 +39,7 @@ vmx_pcalloc(void)
 {
 	char 		   *pptr;
 	kern_return_t	ret;
-	ret = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&pptr, PAGE_SIZE);
+	ret = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&pptr, PAGE_SIZE, VM_KERN_MEMORY_OSFMK);
 	if (ret != KERN_SUCCESS) return (NULL);
 	bzero(pptr, PAGE_SIZE);
 	return (pptr);

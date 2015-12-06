@@ -532,33 +532,74 @@ def ShowVersion(cmd_args=None):
     print kern.version
 
 
-@lldb_command('paniclog')
-def ShowPanicLog(cmd_args=None):
+@lldb_command('paniclog', 'S')
+def ShowPanicLog(cmd_args=None, cmd_options={}):
     """ Display the paniclog information
         usage: (lldb) paniclog
         options:
             -v : increase verbosity
+            -S : parse stackshot data (if panic stackshot available)
     """
+    binary_data_bytes_to_skip = 0
+    if hasattr(kern.globals, "kc_panic_data"):
+        binary_data_bytes_to_skip = unsigned(kern.globals.kc_panic_data.kcd_addr_end) - unsigned(kern.globals.kc_panic_data.kcd_addr_begin)
+        if binary_data_bytes_to_skip > 0:
+            binary_data_bytes_to_skip += sizeof("struct kcdata_item")
+        else:
+            binary_data_bytes_to_skip = 0
+
+    if "-S" in cmd_options:
+        if hasattr(kern.globals, "kc_panic_data"):
+            kc_data = unsigned(addressof(kern.globals.kc_panic_data))
+            ts = int(time.time())
+            ss_binfile = "/tmp/panic_%d.bin" % ts
+            ss_ipsfile = "/tmp/stacks_%d.ips" % ts
+            print "savekcdata  0x%x -O %s" % (kc_data, ss_binfile)
+            SaveKCDataToFile(["0x%x" % kc_data], {"-O":ss_binfile})
+            self_path = str(__file__)
+            base_dir_name = self_path[:self_path.rfind("/")]
+            print "python %s/kcdata.py %s -s %s" % (base_dir_name, ss_binfile, ss_ipsfile)
+            (c,so,se) = RunShellCommand("python %s/kcdata.py %s -s %s" % (base_dir_name, ss_binfile, ss_ipsfile))
+            if c == 0:
+                print "Saved ips stackshot file as %s" % ss_ipsfile
+            else:
+                print "Failed to run command: exit code: %d, SO: %s SE: %s" % (c, so, se)
+        else:
+            print "kc_panic_data is unavailable for this kernel config."
+
     panic_buf = kern.globals.debug_buf_addr
     panic_buf_start = unsigned(panic_buf)
     panic_buf_end = unsigned(kern.globals.debug_buf_ptr)
     num_bytes = panic_buf_end - panic_buf_start
     if num_bytes == 0 :
         return
-    warn_str = ""
-    if num_bytes > 4096 and config['verbosity'] == vHUMAN:
-        num_bytes = 4096
-        warn_str = "LLDBMacro Warning: The paniclog is too large. Trimming to 4096 bytes."
-        warn_str += " If you wish to see entire log please use '-v' argument."
     out_str = ""
-    for i in range(num_bytes):
-        p_char = str(panic_buf[i])
+    warn_str = ""
+    num_print_bytes = 0
+    in_binary_data_region = False
+    pos = 0
+    while pos < num_bytes:
+        p_char = str(panic_buf[pos])
         out_str += p_char
         if p_char == '\n':
-            print out_str
+            if not in_binary_data_region:
+                num_print_bytes += 1
+                print out_str
+            if (out_str.find("Data: BEGIN>>") >= 0):
+                in_binary_data_region = True
+                pos += binary_data_bytes_to_skip - 1
+            if (out_str.find("<<END") >= 0):
+                in_binary_data_region = False
             out_str = ""
+        if num_print_bytes > 4096 and config['verbosity'] == vHUMAN:
+            warn_str = "LLDBMacro Warning: The paniclog is too large. Trimming to 4096 bytes."
+            warn_str += " If you wish to see entire log please use '-v' argument."
+            break
+        pos += 1
+
     if warn_str:
         print warn_str
+
     return
 
 @lldb_command('showbootargs')
@@ -711,4 +752,6 @@ from atm import *
 from structanalyze import *
 from ipcimportancedetail import *
 from bank import *
-
+from kauth import *
+from waitq import *
+from usertaskgdbserver import *

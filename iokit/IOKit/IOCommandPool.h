@@ -108,7 +108,7 @@ protected:
      * Free all of this object's outstanding resources.
      */
 
-    virtual void free(void);
+    virtual void free(void) APPLE_KEXT_OVERRIDE;
     
     
 public:

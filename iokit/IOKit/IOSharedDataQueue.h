@@ -64,7 +64,7 @@ class IOSharedDataQueue : public IODataQueue
     ExpansionData * _reserved;
 
 protected:
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
     /*!
      * @function getQueueSize
@@ -110,7 +110,7 @@ public:
      * @param size The size of the data queue memory region.
      * @result Returns true on success and false on failure.
      */
-    virtual Boolean initWithCapacity(UInt32 size);
+    virtual Boolean initWithCapacity(UInt32 size) APPLE_KEXT_OVERRIDE;
 
     /*!
      * @function getMemoryDescriptor
@@ -118,7 +118,7 @@ public:
      * @discussion The IOMemoryDescriptor instance returned by this method is intended to be mapped into a user process.  This is the memory region that the IODataQueueClient code operates on.
      * @result Returns a newly allocated IOMemoryDescriptor for the IODataQueueMemory region.  Returns zero on failure.
      */
-    virtual IOMemoryDescriptor *getMemoryDescriptor();
+    virtual IOMemoryDescriptor *getMemoryDescriptor() APPLE_KEXT_OVERRIDE;
 
     /*!
      * @function peek
@@ -146,7 +146,7 @@ public:
      * @param dataSize Size of the data pointed to by data.
      * @result Returns true on success and false on failure.  Typically failure means that the queue is full.
      */
-    virtual Boolean enqueue(void *data, UInt32 dataSize);
+    virtual Boolean enqueue(void *data, UInt32 dataSize) APPLE_KEXT_OVERRIDE;
 
     OSMetaClassDeclareReservedUnused(IOSharedDataQueue, 0);
     OSMetaClassDeclareReservedUnused(IOSharedDataQueue, 1);

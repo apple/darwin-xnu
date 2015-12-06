@@ -48,6 +48,9 @@
 
 #include <IOKit/IOLib.h>
 
+#include <IOKit/IOKitDebug.h>
+
+
 __BEGIN_DECLS
 
 #include <sys/systm.h>
@@ -64,13 +67,6 @@ __BEGIN_DECLS
 /*********************************************************************
 * Macros
 *********************************************************************/
-#if OSALLOCDEBUG
-extern int debug_container_malloc_size;
-#define ACCUMSIZE(s) do { debug_container_malloc_size += (s); } while (0)
-#else
-#define ACCUMSIZE(s)
-#endif /* OSALLOCDEBUG */
-
 __END_DECLS
 
 #if PRAGMA_MARK
@@ -111,10 +107,12 @@ static struct StalledData {
 } * sStalled;
 IOLock * sStalledClassesLock = NULL;
 
-
 struct ExpansionData {
-    OSOrderedSet * instances;
-    OSKext *       kext;
+    OSOrderedSet    * instances;
+    OSKext          * kext;
+#if IOTRACKING
+    IOTrackingQueue * tracking;
+#endif
 };
 
 
@@ -393,6 +391,9 @@ OSMetaClass::OSMetaClass(
 
     reserved = IONew(ExpansionData, 1);
     bzero(reserved, sizeof(ExpansionData));
+#if IOTRACKING
+    reserved->tracking = IOTrackingQueueAlloc(inClassName, inClassSize, 0, true);
+#endif
 
    /* Hack alert: We are just casting inClassName and storing it in
     * an OSString * instance variable. This may be because you can't
@@ -416,7 +417,7 @@ OSMetaClass::OSMetaClass(
             int newSize = oldSize
                 + kKModCapacityIncrement * sizeof(OSMetaClass *);
 
-            sStalled->classes = (OSMetaClass **)kalloc(newSize);
+            sStalled->classes = (OSMetaClass **)kalloc_tag(newSize, VM_KERN_MEMORY_OSKEXT);
             if (!sStalled->classes) {
                 sStalled->classes = oldStalled;
                 sStalled->result = kOSMetaClassNoTempData;
@@ -426,7 +427,7 @@ OSMetaClass::OSMetaClass(
             sStalled->capacity += kKModCapacityIncrement;
             memmove(sStalled->classes, oldStalled, oldSize);
             kfree(oldStalled, oldSize);
-            ACCUMSIZE(newSize - oldSize);
+            OSMETA_ACCUMSIZE(((size_t)newSize) - ((size_t)oldSize));
         }
 
         sStalled->classes[sStalled->count++] = this;
@@ -489,6 +490,10 @@ OSMetaClass::~OSMetaClass()
             }
         }
     }
+#if IOTRACKING
+    IOTrackingQueueFree(reserved->tracking);
+#endif
+    IODelete(reserved, ExpansionData, 1);
 }
 
 /*********************************************************************
@@ -533,15 +538,15 @@ OSMetaClass::preModLoad(const char * kextIdentifier)
     IOLockLock(sStalledClassesLock);
 
     assert (sStalled == NULL);
-    sStalled = (StalledData *)kalloc(sizeof(* sStalled));
+    sStalled = (StalledData *)kalloc_tag(sizeof(* sStalled), VM_KERN_MEMORY_OSKEXT);
     if (sStalled) {
         sStalled->classes = (OSMetaClass **)
-            kalloc(kKModCapacityIncrement * sizeof(OSMetaClass *));
+            kalloc_tag(kKModCapacityIncrement * sizeof(OSMetaClass *), VM_KERN_MEMORY_OSKEXT);
         if (!sStalled->classes) {
             kfree(sStalled, sizeof(*sStalled));
             return 0;
         }
-        ACCUMSIZE((kKModCapacityIncrement * sizeof(OSMetaClass *)) +
+        OSMETA_ACCUMSIZE((kKModCapacityIncrement * sizeof(OSMetaClass *)) +
             sizeof(*sStalled));
 
         sStalled->result   = kOSReturnSuccess;
@@ -710,7 +715,7 @@ finish:
     OSSafeRelease(myKext);
 
     if (sStalled) {
-        ACCUMSIZE(-(sStalled->capacity * sizeof(OSMetaClass *) +
+        OSMETA_ACCUMSIZE(-(sStalled->capacity * sizeof(OSMetaClass *) +
             sizeof(*sStalled)));
         kfree(sStalled->classes, sStalled->capacity * sizeof(OSMetaClass *));
         kfree(sStalled, sizeof(*sStalled));
@@ -1192,3 +1197,61 @@ finish:
 
     return;
 }
+
+
+/*********************************************************************
+*********************************************************************/
+
+#if IOTRACKING
+
+void *OSMetaClass::trackedNew(size_t size)
+{
+    IOTracking * mem;
+
+    mem = (typeof(mem)) kalloc_tag_bt(size + sizeof(IOTracking), VM_KERN_MEMORY_LIBKERN);
+    assert(mem);
+    if (!mem) return (mem);
+
+    memset(mem, 0, size + sizeof(IOTracking));
+    mem++;
+
+    OSIVAR_ACCUMSIZE(size);
+
+    return (mem);
+}
+
+void OSMetaClass::trackedDelete(void * instance, size_t size)
+{
+    IOTracking * mem = (typeof(mem)) instance; mem--;
+
+    kfree(mem, size + sizeof(IOTracking));
+    OSIVAR_ACCUMSIZE(-size);
+}
+
+void OSMetaClass::trackedInstance(OSObject * instance) const
+{
+    IOTracking * mem = (typeof(mem)) instance; mem--;
+
+    return (IOTrackingAdd(reserved->tracking, mem, classSize, false));
+}
+
+void OSMetaClass::trackedFree(OSObject * instance) const
+{
+    IOTracking * mem = (typeof(mem)) instance; mem--;
+
+    return (IOTrackingRemove(reserved->tracking, mem, classSize));
+}
+
+void OSMetaClass::trackedAccumSize(OSObject * instance, size_t size) const
+{
+    IOTracking * mem = (typeof(mem)) instance; mem--;
+
+    return (IOTrackingAccumSize(reserved->tracking, mem, size));
+}
+
+IOTrackingQueue * OSMetaClass::getTracking() const
+{
+    return (reserved->tracking);
+}
+
+#endif /* IOTRACKING */

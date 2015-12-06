@@ -131,7 +131,10 @@ extern int nfsrv_wg_delay;
 extern int nfsrv_wg_delay_v3;
 
 static int nfsrv_require_resv_port = 0;
-static int nfsrv_deadsock_timer_on = 0;
+static time_t  nfsrv_idlesock_timer_on = 0;
+static int nfsrv_sock_tcp_cnt = 0;
+#define NFSD_MIN_IDLE_TIMEOUT 30
+static int nfsrv_sock_idle_timeout = 3600; /* One hour */
 
 int	nfssvc_export(user_addr_t argp);
 int	nfssvc_nfsd(void);
@@ -170,7 +173,7 @@ SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, is_mobile, CTLFLAG_RW | CTLFLAG_LO
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, squishy_flags, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_squishy_flags, 0, "");
 SYSCTL_UINT(_vfs_generic_nfs_client, OID_AUTO, debug_ctl, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_debug_ctl, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, readlink_nocache, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_readlink_nocache, 0, "");
-
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, root_steals_gss_context, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_root_steals_ctx, 0, "");
 #endif /* NFSCLIENT */
 
 #if NFSSERVER
@@ -189,11 +192,13 @@ SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, fsevents, CTLFLAG_RW | CTLFLAG_LOC
 #endif
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_max, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsd_thread_max, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_count, CTLFLAG_RD | CTLFLAG_LOCKED, &nfsd_thread_count, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_sock_idle_timeout, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_sock_idle_timeout, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_tcp_connections, CTLFLAG_RD | CTLFLAG_LOCKED, &nfsrv_sock_tcp_cnt, 0, "");
 #ifdef NFS_UC_Q_DEBUG
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, use_upcall_svc, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_uc_use_proxy, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_uc_queue_limit, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_max_seen, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_uc_queue_max_seen, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_count, CTLFLAG_RD | CTLFLAG_LOCKED, (int *)&nfsrv_uc_queue_count, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_count, CTLFLAG_RD | CTLFLAG_LOCKED, __DECONST(int *, &nfsrv_uc_queue_count), 0, "");
 #endif
 #endif /* NFSSERVER */
 
@@ -421,14 +426,19 @@ worktodo:
 		/* grab the current contents of the queue */
 		TAILQ_INIT(&iodq);
 		TAILQ_CONCAT(&iodq, &nmp->nm_iodq, r_achain);
+		/* Mark each iod request as being managed by an iod */
+		TAILQ_FOREACH(req, &iodq, r_achain) {
+			lck_mtx_lock(&req->r_mtx);
+			assert(!(req->r_flags & R_IOD));
+			req->r_flags |= R_IOD;
+			lck_mtx_unlock(&req->r_mtx);
+		}
 		lck_mtx_unlock(nfsiod_mutex);
 
 		/* process the queue */
 		TAILQ_FOREACH_SAFE(req, &iodq, r_achain, treq) {
 			TAILQ_REMOVE(&iodq, req, r_achain);
-			lck_mtx_lock(nfsiod_mutex);
-			req->r_achain.tqe_next = NFSIODCOMPLETING;
-			lck_mtx_unlock(nfsiod_mutex);
+			req->r_achain.tqe_next = NFSREQNOLIST;
 			req->r_callback.rcb_func(req);
 		}
 
@@ -831,8 +841,12 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	}
 
 	/* Set protocol options and reserve some space (for UDP). */
-	if (sotype == SOCK_STREAM)
+	if (sotype == SOCK_STREAM) {
+		error = nfsrv_check_exports_allow_address(mynam);
+		if (error)
+			return (error);
 		sock_setsockopt(so, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+	}
 	if ((sodomain == AF_INET) && (soprotocol == IPPROTO_TCP))
 		sock_setsockopt(so, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
 	if (sotype == SOCK_DGRAM) { /* set socket buffer sizes for UDP */
@@ -898,6 +912,58 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	/* add the socket to the list */
 	first = TAILQ_EMPTY(&nfsrv_socklist);
 	TAILQ_INSERT_TAIL(&nfsrv_socklist, slp, ns_chain);
+	if (soprotocol == IPPROTO_TCP) {
+		nfsrv_sock_tcp_cnt++;
+		if (nfsrv_sock_idle_timeout < 0)
+			nfsrv_sock_idle_timeout = 0;
+		if (nfsrv_sock_idle_timeout && (nfsrv_sock_idle_timeout < NFSD_MIN_IDLE_TIMEOUT))
+			nfsrv_sock_idle_timeout = NFSD_MIN_IDLE_TIMEOUT;
+		/*
+		 * Possibly start or stop the idle timer. We only start the idle timer when
+		 * we have more than 2 * nfsd_thread_max connections. If the idle timer is
+		 * on then we may need to turn it off based on the nvsrv_sock_idle_timeout or
+		 * the number of connections.
+		 */
+		if ((nfsrv_sock_tcp_cnt > 2 * nfsd_thread_max) || nfsrv_idlesock_timer_on) {
+			if (nfsrv_sock_idle_timeout == 0 || nfsrv_sock_tcp_cnt <= 2 * nfsd_thread_max) {
+				if (nfsrv_idlesock_timer_on) {
+					thread_call_cancel(nfsrv_idlesock_timer_call);
+					nfsrv_idlesock_timer_on = 0;
+				}
+			} else {
+				struct nfsrv_sock *old_slp;
+				struct timeval now;
+				time_t time_to_wait = nfsrv_sock_idle_timeout;
+				/*
+				 * Get the oldest tcp socket and calculate the
+				 * earliest time for the next idle timer to fire
+				 * based on the possibly updated nfsrv_sock_idle_timeout
+				 */
+				TAILQ_FOREACH(old_slp, &nfsrv_socklist, ns_chain) {
+					if (old_slp->ns_sotype == SOCK_STREAM) {
+						microuptime(&now);
+						time_to_wait -= now.tv_sec - old_slp->ns_timestamp;
+						if (time_to_wait < 1)
+							time_to_wait = 1;
+						break;
+					}
+				}
+				/*
+				 * If we have a timer scheduled, but if its going to fire too late,
+				 * turn it off.
+				 */
+				if (nfsrv_idlesock_timer_on > now.tv_sec + time_to_wait) {
+					thread_call_cancel(nfsrv_idlesock_timer_call);
+					nfsrv_idlesock_timer_on = 0;
+				}
+				/* Schedule the idle thread if it isn't already */
+				if (!nfsrv_idlesock_timer_on) {
+					nfs_interval_timer_start(nfsrv_idlesock_timer_call, time_to_wait * 1000);
+					nfsrv_idlesock_timer_on = now.tv_sec + time_to_wait;
+				}
+			}
+		}
+	}
 
 	sock_retain(so); /* grab a retain count on the socket */
 	slp->ns_so = so;
@@ -909,7 +975,7 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 
 	/* mark that the socket is not in the nfsrv_sockwg list */
 	slp->ns_wgq.tqe_next = SLPNOLIST;
-	
+
 	slp->ns_flag = SLP_VALID | SLP_NEEDQ;
 
 	nfsrv_wakenfsd(slp);
@@ -1057,6 +1123,11 @@ nfssvc_nfsd(void)
 			if (!nfsd->nfsd_slp && slp) {
 				/* we found a socket to work on, grab a reference */
 				slp->ns_sref++;
+				microuptime(&now);
+				slp->ns_timestamp = now.tv_sec;
+				/* We keep the socket list in least recently used order for reaping idle sockets */
+				TAILQ_REMOVE(&nfsrv_socklist, slp, ns_chain);
+				TAILQ_INSERT_TAIL(&nfsrv_socklist, slp, ns_chain);
 				nfsd->nfsd_slp = slp;
 				opcnt = 0;
 				/* and put it at the back of the work queue */
@@ -1376,15 +1447,7 @@ nfsrv_zapsock(struct nfsrv_sock *slp)
 	if (so == NULL)
 		return;
 
-	/*
-	 * Attempt to deter future up-calls, but leave the
-	 * up-call info in place to avoid a race with the
-	 * networking code.
-	 */
-	socket_lock(so, 1);
-	so->so_rcv.sb_flags &= ~SB_UPCALL;
-	socket_unlock(so, 1);
-
+	sock_setupcall(so, NULL, NULL);
 	sock_shutdown(so, SHUT_RDWR);
 
 	/*
@@ -1416,9 +1479,6 @@ nfsrv_slpfree(struct nfsrv_sock *slp)
 	slp->ns_nam = slp->ns_raw = slp->ns_rec = slp->ns_frag = NULL;
 	slp->ns_reccnt = 0;
 
-	if (slp->ns_ua)
-		FREE(slp->ns_ua, M_NFSSVC);
-
 	for (nwp = slp->ns_tq.lh_first; nwp; nwp = nnwp) {
 		nnwp = nwp->nd_tq.le_next;
 		LIST_REMOVE(nwp, nd_tq);
@@ -1444,12 +1504,9 @@ nfsrv_slpfree(struct nfsrv_sock *slp)
  * Derefence a server socket structure. If it has no more references and
  * is no longer valid, you can throw it away.
  */
-void
-nfsrv_slpderef(struct nfsrv_sock *slp)
+static void
+nfsrv_slpderef_locked(struct nfsrv_sock *slp)
 {
-	struct timeval now;
-
-	lck_mtx_lock(nfsd_mutex);
 	lck_rw_lock_exclusive(&slp->ns_rwlock);
 	slp->ns_sref--;
 
@@ -1463,7 +1520,6 @@ nfsrv_slpderef(struct nfsrv_sock *slp)
 			slp->ns_flag &= ~SLP_QUEUED;
 		}
 		lck_rw_done(&slp->ns_rwlock);
-		lck_mtx_unlock(nfsd_mutex);
 		return;
 	}
 
@@ -1476,66 +1532,88 @@ nfsrv_slpderef(struct nfsrv_sock *slp)
 			TAILQ_REMOVE(&nfsrv_sockwork, slp, ns_svcq);
 		slp->ns_flag &= ~SLP_QUEUED;
 	}
-
-	/*
-	 * Queue the socket up for deletion
-	 * and start the timer to delete it
-	 * after it has been in limbo for
-	 * a while.
-	 */
-	microuptime(&now);
-	slp->ns_timestamp = now.tv_sec;
-	TAILQ_REMOVE(&nfsrv_socklist, slp, ns_chain);
-	TAILQ_INSERT_TAIL(&nfsrv_deadsocklist, slp, ns_chain);
-	if (!nfsrv_deadsock_timer_on) {
-		nfsrv_deadsock_timer_on = 1;
-		nfs_interval_timer_start(nfsrv_deadsock_timer_call,
-				NFSRV_DEADSOCKDELAY * 1000);
-	}
-
 	lck_rw_done(&slp->ns_rwlock);
+
+	TAILQ_REMOVE(&nfsrv_socklist, slp, ns_chain);
+	if (slp->ns_sotype == SOCK_STREAM)
+		nfsrv_sock_tcp_cnt--;
+
 	/* now remove from the write gather socket list */ 
 	if (slp->ns_wgq.tqe_next != SLPNOLIST) {
 		TAILQ_REMOVE(&nfsrv_sockwg, slp, ns_wgq);
 		slp->ns_wgq.tqe_next = SLPNOLIST;
 	}
+	nfsrv_slpfree(slp);
+}
+
+void
+nfsrv_slpderef(struct nfsrv_sock *slp)
+{
+	lck_mtx_lock(nfsd_mutex);
+	nfsrv_slpderef_locked(slp);
 	lck_mtx_unlock(nfsd_mutex);
 }
 
 /*
- * Check periodically for dead sockets pending delete.
- * If a socket has been dead for more than NFSRV_DEADSOCKDELAY
- * seconds then we assume it's safe to free.
+ * Check periodically for idle sockest if needed and
+ * zap them.
  */
 void
-nfsrv_deadsock_timer(__unused void *param0, __unused void *param1)
+nfsrv_idlesock_timer(__unused void *param0, __unused void *param1)
 {
-	struct nfsrv_sock *slp;
+	struct nfsrv_sock *slp, *tslp;
 	struct timeval now;
-	time_t time_to_wait;
+	time_t time_to_wait = nfsrv_sock_idle_timeout;
 
 	microuptime(&now);
 	lck_mtx_lock(nfsd_mutex);
 
-	while ((slp = TAILQ_FIRST(&nfsrv_deadsocklist))) {
-		if ((slp->ns_timestamp + NFSRV_DEADSOCKDELAY) > now.tv_sec)
-			break;
-		TAILQ_REMOVE(&nfsrv_deadsocklist, slp, ns_chain);
-		nfsrv_slpfree(slp);
-	}
-	if (TAILQ_EMPTY(&nfsrv_deadsocklist)) {
-		nfsrv_deadsock_timer_on = 0;
+	/* Turn off the timer if we're suppose to and get out */
+	if (nfsrv_sock_idle_timeout < NFSD_MIN_IDLE_TIMEOUT)
+	    nfsrv_sock_idle_timeout = 0;
+	if ((nfsrv_sock_tcp_cnt <= 2 * nfsd_thread_max) || (nfsrv_sock_idle_timeout == 0)) {
+		nfsrv_idlesock_timer_on = 0;
 		lck_mtx_unlock(nfsd_mutex);
 		return;
 	}
-	time_to_wait = (slp->ns_timestamp + NFSRV_DEADSOCKDELAY) - now.tv_sec;
-	if (time_to_wait < 1)
-		time_to_wait = 1;
 
+	TAILQ_FOREACH_SAFE(slp, &nfsrv_socklist, ns_chain, tslp) {
+		lck_rw_lock_exclusive(&slp->ns_rwlock);
+		/* Skip udp and referenced sockets */
+		if (slp->ns_sotype == SOCK_DGRAM || slp->ns_sref) {
+			lck_rw_done(&slp->ns_rwlock);
+			continue;
+		}
+		/*
+		 * If this is the first non-referenced socket that hasn't idle out,
+		 * use its time stamp to calculate the earlist time in the future
+		 * to start the next invocation of the timer. Since the nfsrv_socklist
+		 * is sorted oldest access to newest. Once we find the first one,
+		 * we're done and break out of the loop.
+		 */
+		if (((slp->ns_timestamp + nfsrv_sock_idle_timeout)  >  now.tv_sec) ||
+			nfsrv_sock_tcp_cnt <= 2 * nfsd_thread_max) {
+			time_to_wait -= now.tv_sec - slp->ns_timestamp;
+			if (time_to_wait < 1)
+				time_to_wait = 1;
+			lck_rw_done(&slp->ns_rwlock);
+			break;
+		}
+		/*
+		 * Bump the ref count. nfsrv_slpderef below will destroy
+		 * the socket, since nfsrv_zapsock has closed it.
+		 */
+		slp->ns_sref++;
+		nfsrv_zapsock(slp);
+		lck_rw_done(&slp->ns_rwlock);
+		nfsrv_slpderef_locked(slp);
+	}
+
+	/* Start ourself back up */
+	nfs_interval_timer_start(nfsrv_idlesock_timer_call, time_to_wait * 1000);
+	/* Remember when the next timer will fire for nfssvc_addsock. */
+	nfsrv_idlesock_timer_on = now.tv_sec + time_to_wait;
 	lck_mtx_unlock(nfsd_mutex);
-
-	nfs_interval_timer_start(nfsrv_deadsock_timer_call,
-		time_to_wait * 1000);
 }
 
 /*
@@ -1554,33 +1632,14 @@ nfsrv_cleanup(void)
 	microuptime(&now);
 	for (slp = TAILQ_FIRST(&nfsrv_socklist); slp != 0; slp = nslp) {
 		nslp = TAILQ_NEXT(slp, ns_chain);
-		if (slp->ns_flag & SLP_VALID) {
-			lck_rw_lock_exclusive(&slp->ns_rwlock);
+		lck_rw_lock_exclusive(&slp->ns_rwlock);
+		slp->ns_sref++;
+		if (slp->ns_flag & SLP_VALID)
 			nfsrv_zapsock(slp);
-			lck_rw_done(&slp->ns_rwlock);
-		}
-		if (slp->ns_flag & SLP_QUEUED) {
-			if (slp->ns_flag & SLP_WAITQ)
-				TAILQ_REMOVE(&nfsrv_sockwait, slp, ns_svcq);
-			else
-				TAILQ_REMOVE(&nfsrv_sockwork, slp, ns_svcq);
-			slp->ns_flag &= ~SLP_QUEUED;
-		}
-		if (slp->ns_wgq.tqe_next != SLPNOLIST) {
-			TAILQ_REMOVE(&nfsrv_sockwg, slp, ns_wgq);
-			slp->ns_wgq.tqe_next = SLPNOLIST;
-		}
-		/* queue the socket up for deletion */
-		slp->ns_timestamp = now.tv_sec;
-		TAILQ_REMOVE(&nfsrv_socklist, slp, ns_chain);
-		TAILQ_INSERT_TAIL(&nfsrv_deadsocklist, slp, ns_chain);
-		if (!nfsrv_deadsock_timer_on) {
-			nfsrv_deadsock_timer_on = 1;
-			nfs_interval_timer_start(nfsrv_deadsock_timer_call,
-				NFSRV_DEADSOCKDELAY * 1000);
-		}
+		lck_rw_done(&slp->ns_rwlock);
+		nfsrv_slpderef_locked(slp);
 	}
-
+#
 #if CONFIG_FSE
 	/*
 	 * Flush pending file write fsevents

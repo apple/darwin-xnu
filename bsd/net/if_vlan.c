@@ -852,11 +852,10 @@ vlan_parent_create(struct ifnet * p, vlan_parent_ref * ret_vlp)
     vlan_parent_ref	vlp;
 
     *ret_vlp = NULL;
-    vlp = _MALLOC(sizeof(*vlp), M_VLAN, M_WAITOK);
+    vlp = _MALLOC(sizeof(*vlp), M_VLAN, M_WAITOK | M_ZERO);
     if (vlp == NULL) {
 	return (ENOMEM);
     }
-    bzero(vlp, sizeof(*vlp));
     error = siocgifdevmtu(p, &vlp->vlp_devmtu);
     if (error != 0) {
 	printf("vlan_parent_create (%s%d): siocgifdevmtu failed, %d\n",
@@ -978,10 +977,9 @@ vlan_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	if (error != 0) {
 		return (error);
 	}
-	ifv = _MALLOC(sizeof(struct ifvlan), M_VLAN, M_WAITOK);
+	ifv = _MALLOC(sizeof(struct ifvlan), M_VLAN, M_WAITOK | M_ZERO);
 	if (ifv == NULL)
 		return ENOBUFS;
-	bzero(ifv, sizeof(struct ifvlan));
 	ifv->ifv_retain_count = 1;
 	ifv->ifv_signature = IFV_SIGNATURE;
 	multicast_list_init(&ifv->ifv_multicast);
@@ -1173,7 +1171,7 @@ vlan_output(struct ifnet * ifp, struct mbuf * m)
 	m->m_pkthdr.csum_flags |= CSUM_VLAN_TAG_VALID;
 	m->m_pkthdr.vlan_tag = tag;
     } else {
-	M_PREPEND(m, encaplen, M_DONTWAIT);
+	M_PREPEND(m, encaplen, M_DONTWAIT, 1);
 	if (m == NULL) {
 	    printf("%s%d: unable to prepend VLAN header\n", ifnet_name(ifp),
 		   ifnet_unit(ifp));

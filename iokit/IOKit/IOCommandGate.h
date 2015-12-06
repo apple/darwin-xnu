@@ -38,14 +38,14 @@
 
 /*!
     @class IOCommandGate : public IOEventSource
-    @abstract Single-threaded work-loop client request mechanism.
-    @discussion An IOCommandGate instance is an extremely light way mechanism
-that executes an action on the driver's work-loop.  'On the work-loop' is
-actually a lie but the work-loop single threaded semantic is maintained for this
-event source.  Using the work-loop gate rather than execution by the workloop.
-The command gate tests for a potential self dead lock by checking if the
-runCommand request is made from the work-loop's thread, it doesn't check for a
-mutual dead lock though where a pair of work loop's dead lock each other.
+    @abstract Single-threaded work loop client request mechanism.
+    @discussion An IOCommandGate instance is an extremely lightweight mechanism
+that executes an action on the driver's work loop.  Although the code does not
+technically execute on the work loop itself, a single-threaded work loop semantic
+is maintained for this event source using the work loop gate.  The command gate
+tests for a potential self dead lock by checking if the runCommand request is
+made from the work loop's thread, it doesn't check for a mutual dead lock though
+where a pair of work loop's dead lock each other.
 <br><br>
 	The IOCommandGate is a lighter weight version of the IOCommandQueue and
 should be used in preference.  Generally use a command queue whenever you need a
@@ -113,17 +113,17 @@ compiler warning.  Defaults to zero, see $link IOEventSource::setAction.
     virtual bool init(OSObject *owner, Action action = 0);
 
     // Superclass overrides
-    virtual void free();
-    virtual void setWorkLoop(IOWorkLoop *inWorkLoop);
+    virtual void free() APPLE_KEXT_OVERRIDE;
+    virtual void setWorkLoop(IOWorkLoop *inWorkLoop) APPLE_KEXT_OVERRIDE;
 
 /*! @function runCommand
-    @abstract Single thread a command with the target work-loop.
+    @abstract Single thread a command with the target work loop.
     @discussion Client function that causes the current action to be called in
-a single threaded manner.  Beware the work-loop's gate is recursive and command
+a single threaded manner.  Beware the work loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
-client's thread runCommand will sleep until the work-loop's gate opens for
+client's thread runCommand will sleep until the work loop's gate opens for
 execution of client actions, the action is single threaded against all other
-work-loop event sources.  If the command is disabled the attempt to run a command will be stalled until enable is called.
+work loop event sources.  If the command is disabled the attempt to run a command will be stalled until enable is called.
     @param arg0 Parameter for action of command gate, defaults to 0.
     @param arg1 Parameter for action of command gate, defaults to 0.
     @param arg2 Parameter for action of command gate, defaults to 0.
@@ -134,28 +134,28 @@ work-loop event sources.  If the command is disabled the attempt to run a comman
 				void *arg2 = 0, void *arg3 = 0);
 
 /*! @function runAction
-    @abstract Single thread a call to an action with the target work-loop.
+    @abstract Single thread a call to an action with the target work loop.
     @discussion Client function that causes the given action to be called in
-a single threaded manner.  Beware the work-loop's gate is recursive and command
+a single threaded manner.  Beware the work loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
-client's thread runAction will sleep until the work-loop's gate opens for
+client's thread runAction will sleep until the work loop's gate opens for
 execution of client actions, the action is single threaded against all other
-work-loop event sources.  If the command is disabled the attempt to run a command will be stalled until enable is called.
-    @param action Pointer to function to be executed in work-loop context.
+work loop event sources.  If the command is disabled the attempt to run a command will be stalled until enable is called.
+    @param action Pointer to function to be executed in the context of the work loop.
     @param arg0 Parameter for action parameter, defaults to 0.
     @param arg1 Parameter for action parameter, defaults to 0.
     @param arg2 Parameter for action parameter, defaults to 0.
     @param arg3 Parameter for action parameter, defaults to 0.
-    @result kIOReturnSuccess if successful. kIOReturnBadArgument if action is not defined, kIOReturnAborted if a disabled command gate is free()ed before being reenabled.
+    @result The return value of action if it was called, kIOReturnBadArgument if action is not defined, kIOReturnAborted if a disabled command gate is free()ed before being reenabled.
 */
     virtual IOReturn runAction(Action action,
 			       void *arg0 = 0, void *arg1 = 0,
 			       void *arg2 = 0, void *arg3 = 0);
 
 /*! @function attemptCommand
-    @abstract Single thread a command with the target work-loop.
+    @abstract Single thread a command with the target work loop.
     @discussion Client function that causes the current action to be called in
-a single threaded manner.  When the executing on a client's thread attemptCommand will fail if the work-loop's gate is closed.
+a single threaded manner.  When the executing on a client's thread attemptCommand will fail if the work loop's gate is closed.
     @param arg0 Parameter for action of command gate, defaults to 0.
     @param arg1 Parameter for action of command gate, defaults to 0.
     @param arg2 Parameter for action of command gate, defaults to 0.
@@ -166,12 +166,12 @@ a single threaded manner.  When the executing on a client's thread attemptComman
                                     void *arg2 = 0, void *arg3 = 0);
 
 /*! @function attemptAction
-    @abstract Single thread a call to an action with the target work-loop.
+    @abstract Single thread a call to an action with the target work loop.
     @discussion Client function that causes the given action to be called in
-a single threaded manner.  Beware the work-loop's gate is recursive and command
+a single threaded manner.  Beware the work loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
-client's thread attemptCommand will fail if the work-loop's gate is closed.
-    @param action Pointer to function to be executed in work-loop context.
+client's thread attemptCommand will fail if the work loop's gate is closed.
+    @param action Pointer to function to be executed in context of the work loop.
     @param arg0 Parameter for action parameter, defaults to 0.
     @param arg1 Parameter for action parameter, defaults to 0.
     @param arg2 Parameter for action parameter, defaults to 0.
@@ -201,12 +201,12 @@ client's thread attemptCommand will fail if the work-loop's gate is closed.
 /*! @function disable
     @abstract Disable the command gate
     @discussion When a command gate is disabled all future calls to runAction and runCommand will stall until the gate is enable()d later.  This can be used to block client threads when a system sleep is requested.  The IOWorkLoop thread itself will never stall, even when making runAction/runCommand calls.  This call must be made from a gated context, to clear potential race conditions.  */
-    virtual void disable();
+    virtual void disable() APPLE_KEXT_OVERRIDE;
 
 /*! @function enable
     @abstract Enable command gate, this will unblock any blocked Commands and Actions.
     @discussion  Enable the command gate.  The attemptAction/attemptCommand calls will now be enabled and can succeeed.  Stalled runCommand/runAction calls will be woken up. */
-    virtual void enable();
+    virtual void enable() APPLE_KEXT_OVERRIDE;
 
 /*! @function commandSleep  
     @abstract Put a thread that is currently holding the command gate to sleep.

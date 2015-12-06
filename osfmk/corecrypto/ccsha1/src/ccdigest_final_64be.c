@@ -2,8 +2,9 @@
  *  ccdigest_final_64be.c
  *  corecrypto
  *
- *  Created by Michael Brouwer on 12/1/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/06/2010
+ *
+ *  Copyright (c) 2010,2011,2015 Apple Inc. All rights reserved.
  *
  */
 

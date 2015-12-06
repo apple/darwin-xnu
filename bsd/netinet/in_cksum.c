@@ -117,7 +117,7 @@ in_cksumdata(const void *buf, int mlen)
 {
 	uint32_t sum, partial;
 	unsigned int final_acc;
-	uint8_t *data = (void *)buf;
+	const uint8_t *data = (const uint8_t *)buf;
 	boolean_t needs_swap, started_on_odd;
 
 	VERIFY(mlen >= 0);
@@ -142,22 +142,22 @@ in_cksumdata(const void *buf, int mlen)
 	needs_swap = started_on_odd;
 	while (mlen >= 32) {
 		__builtin_prefetch(data + 32);
-		partial += *(uint16_t *)(void *)data;
-		partial += *(uint16_t *)(void *)(data + 2);
-		partial += *(uint16_t *)(void *)(data + 4);
-		partial += *(uint16_t *)(void *)(data + 6);
-		partial += *(uint16_t *)(void *)(data + 8);
-		partial += *(uint16_t *)(void *)(data + 10);
-		partial += *(uint16_t *)(void *)(data + 12);
-		partial += *(uint16_t *)(void *)(data + 14);
-		partial += *(uint16_t *)(void *)(data + 16);
-		partial += *(uint16_t *)(void *)(data + 18);
-		partial += *(uint16_t *)(void *)(data + 20);
-		partial += *(uint16_t *)(void *)(data + 22);
-		partial += *(uint16_t *)(void *)(data + 24);
-		partial += *(uint16_t *)(void *)(data + 26);
-		partial += *(uint16_t *)(void *)(data + 28);
-		partial += *(uint16_t *)(void *)(data + 30);
+		partial += *(const uint16_t *)(const void *)data;
+		partial += *(const uint16_t *)(const void *)(data + 2);
+		partial += *(const uint16_t *)(const void *)(data + 4);
+		partial += *(const uint16_t *)(const void *)(data + 6);
+		partial += *(const uint16_t *)(const void *)(data + 8);
+		partial += *(const uint16_t *)(const void *)(data + 10);
+		partial += *(const uint16_t *)(const void *)(data + 12);
+		partial += *(const uint16_t *)(const void *)(data + 14);
+		partial += *(const uint16_t *)(const void *)(data + 16);
+		partial += *(const uint16_t *)(const void *)(data + 18);
+		partial += *(const uint16_t *)(const void *)(data + 20);
+		partial += *(const uint16_t *)(const void *)(data + 22);
+		partial += *(const uint16_t *)(const void *)(data + 24);
+		partial += *(const uint16_t *)(const void *)(data + 26);
+		partial += *(const uint16_t *)(const void *)(data + 28);
+		partial += *(const uint16_t *)(const void *)(data + 30);
 		data += 32;
 		mlen -= 32;
 		if (PREDICT_FALSE(partial & 0xc0000000)) {
@@ -170,14 +170,14 @@ in_cksumdata(const void *buf, int mlen)
 		}
 	}
 	if (mlen & 16) {
-		partial += *(uint16_t *)(void *)data;
-		partial += *(uint16_t *)(void *)(data + 2);
-		partial += *(uint16_t *)(void *)(data + 4);
-		partial += *(uint16_t *)(void *)(data + 6);
-		partial += *(uint16_t *)(void *)(data + 8);
-		partial += *(uint16_t *)(void *)(data + 10);
-		partial += *(uint16_t *)(void *)(data + 12);
-		partial += *(uint16_t *)(void *)(data + 14);
+		partial += *(const uint16_t *)(const void *)data;
+		partial += *(const uint16_t *)(const void *)(data + 2);
+		partial += *(const uint16_t *)(const void *)(data + 4);
+		partial += *(const uint16_t *)(const void *)(data + 6);
+		partial += *(const uint16_t *)(const void *)(data + 8);
+		partial += *(const uint16_t *)(const void *)(data + 10);
+		partial += *(const uint16_t *)(const void *)(data + 12);
+		partial += *(const uint16_t *)(const void *)(data + 14);
 		data += 16;
 		mlen -= 16;
 	}
@@ -186,19 +186,19 @@ in_cksumdata(const void *buf, int mlen)
 	 * are using bit masks, which are not affected.
 	 */
 	if (mlen & 8) {
-		partial += *(uint16_t *)(void *)data;
-		partial += *(uint16_t *)(void *)(data + 2);
-		partial += *(uint16_t *)(void *)(data + 4);
-		partial += *(uint16_t *)(void *)(data + 6);
+		partial += *(const uint16_t *)(const void *)data;
+		partial += *(const uint16_t *)(const void *)(data + 2);
+		partial += *(const uint16_t *)(const void *)(data + 4);
+		partial += *(const uint16_t *)(const void *)(data + 6);
 		data += 8;
 	}
 	if (mlen & 4) {
-		partial += *(uint16_t *)(void *)data;
-		partial += *(uint16_t *)(void *)(data + 2);
+		partial += *(const uint16_t *)(const void *)data;
+		partial += *(const uint16_t *)(const void *)(data + 2);
 		data += 4;
 	}
 	if (mlen & 2) {
-		partial += *(uint16_t *)(void *)data;
+		partial += *(const uint16_t *)(const void *)data;
 		data += 2;
 	}
 	if (mlen & 1) {
@@ -228,7 +228,7 @@ in_cksumdata(const void *buf, int mlen)
 {
 	uint64_t sum, partial;
 	unsigned int final_acc;
-	uint8_t *data = (void *)buf;
+	const uint8_t *data = (const uint8_t *)buf;
 	boolean_t needs_swap, started_on_odd;
 
 	VERIFY(mlen >= 0);
@@ -254,29 +254,29 @@ in_cksumdata(const void *buf, int mlen)
 	if ((uintptr_t)data & 2) {
 		if (mlen < 2)
 			goto trailing_bytes;
-		partial += *(uint16_t *)(void *)data;
+		partial += *(const uint16_t *)(const void *)data;
 		data += 2;
 		mlen -= 2;
 	}
 	while (mlen >= 64) {
 		__builtin_prefetch(data + 32);
 		__builtin_prefetch(data + 64);
-		partial += *(uint32_t *)(void *)data;
-		partial += *(uint32_t *)(void *)(data + 4);
-		partial += *(uint32_t *)(void *)(data + 8);
-		partial += *(uint32_t *)(void *)(data + 12);
-		partial += *(uint32_t *)(void *)(data + 16);
-		partial += *(uint32_t *)(void *)(data + 20);
-		partial += *(uint32_t *)(void *)(data + 24);
-		partial += *(uint32_t *)(void *)(data + 28);
-		partial += *(uint32_t *)(void *)(data + 32);
-		partial += *(uint32_t *)(void *)(data + 36);
-		partial += *(uint32_t *)(void *)(data + 40);
-		partial += *(uint32_t *)(void *)(data + 44);
-		partial += *(uint32_t *)(void *)(data + 48);
-		partial += *(uint32_t *)(void *)(data + 52);
-		partial += *(uint32_t *)(void *)(data + 56);
-		partial += *(uint32_t *)(void *)(data + 60);
+		partial += *(const uint32_t *)(const void *)data;
+		partial += *(const uint32_t *)(const void *)(data + 4);
+		partial += *(const uint32_t *)(const void *)(data + 8);
+		partial += *(const uint32_t *)(const void *)(data + 12);
+		partial += *(const uint32_t *)(const void *)(data + 16);
+		partial += *(const uint32_t *)(const void *)(data + 20);
+		partial += *(const uint32_t *)(const void *)(data + 24);
+		partial += *(const uint32_t *)(const void *)(data + 28);
+		partial += *(const uint32_t *)(const void *)(data + 32);
+		partial += *(const uint32_t *)(const void *)(data + 36);
+		partial += *(const uint32_t *)(const void *)(data + 40);
+		partial += *(const uint32_t *)(const void *)(data + 44);
+		partial += *(const uint32_t *)(const void *)(data + 48);
+		partial += *(const uint32_t *)(const void *)(data + 52);
+		partial += *(const uint32_t *)(const void *)(data + 56);
+		partial += *(const uint32_t *)(const void *)(data + 60);
 		data += 64;
 		mlen -= 64;
 		if (PREDICT_FALSE(partial & (3ULL << 62))) {
@@ -293,34 +293,34 @@ in_cksumdata(const void *buf, int mlen)
 	 * are using bit masks, which are not affected.
 	 */
 	if (mlen & 32) {
-		partial += *(uint32_t *)(void *)data;
-		partial += *(uint32_t *)(void *)(data + 4);
-		partial += *(uint32_t *)(void *)(data + 8);
-		partial += *(uint32_t *)(void *)(data + 12);
-		partial += *(uint32_t *)(void *)(data + 16);
-		partial += *(uint32_t *)(void *)(data + 20);
-		partial += *(uint32_t *)(void *)(data + 24);
-		partial += *(uint32_t *)(void *)(data + 28);
+		partial += *(const uint32_t *)(const void *)data;
+		partial += *(const uint32_t *)(const void *)(data + 4);
+		partial += *(const uint32_t *)(const void *)(data + 8);
+		partial += *(const uint32_t *)(const void *)(data + 12);
+		partial += *(const uint32_t *)(const void *)(data + 16);
+		partial += *(const uint32_t *)(const void *)(data + 20);
+		partial += *(const uint32_t *)(const void *)(data + 24);
+		partial += *(const uint32_t *)(const void *)(data + 28);
 		data += 32;
 	}
 	if (mlen & 16) {
-		partial += *(uint32_t *)(void *)data;
-		partial += *(uint32_t *)(void *)(data + 4);
-		partial += *(uint32_t *)(void *)(data + 8);
-		partial += *(uint32_t *)(void *)(data + 12);
+		partial += *(const uint32_t *)(const void *)data;
+		partial += *(const uint32_t *)(const void *)(data + 4);
+		partial += *(const uint32_t *)(const void *)(data + 8);
+		partial += *(const uint32_t *)(const void *)(data + 12);
 		data += 16;
 	}
 	if (mlen & 8) {
-		partial += *(uint32_t *)(void *)data;
-		partial += *(uint32_t *)(void *)(data + 4);
+		partial += *(const uint32_t *)(const void *)data;
+		partial += *(const uint32_t *)(const void *)(data + 4);
 		data += 8;
 	}
 	if (mlen & 4) {
-		partial += *(uint32_t *)(void *)data;
+		partial += *(const uint32_t *)(const void *)data;
 		data += 4;
 	}
 	if (mlen & 2) {
-		partial += *(uint16_t *)(void *)data;
+		partial += *(const uint16_t *)(const void *)data;
 		data += 2;
 	}
 trailing_bytes:

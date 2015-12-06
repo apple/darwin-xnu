@@ -49,7 +49,7 @@
 #if CONFIG_PROTECT
 #include <sys/cprotect.h>
 #endif
-
+#include <kern/assert.h>
 
 /*
  * The filefork is used to represent an HFS file fork (data or resource).
@@ -95,9 +95,19 @@ struct cat_lookup_buffer {
 #define ff_new_size      ff_data.cf_new_size
 #define ff_clumpsize     ff_data.cf_clump
 #define ff_bytesread     ff_data.cf_bytesread
-#define ff_blocks        ff_data.cf_blocks
 #define ff_extents       ff_data.cf_extents
+
+/*
+ * Note that the blocks fields are protected by the cnode lock, *not*
+ * the truncate lock.
+ */
+#define ff_blocks        ff_data.cf_blocks
 #define ff_unallocblocks ff_data.cf_vblocks
+static inline uint32_t ff_allocblocks(filefork_t *ff)
+{
+	assert(ff->ff_blocks >= ff->ff_unallocblocks);
+	return ff->ff_blocks - ff->ff_unallocblocks;
+}
 
 #define ff_symlinkptr    ff_union.ffu_symlinkptr
 #define ff_sysfileinfo   ff_union.ffu_sysfileinfo
@@ -172,6 +182,14 @@ struct cnode {
 		uint8_t c_tflags;
 	};
 
+	/*
+	 * Where we're using a journal, we keep track of the last
+	 * transaction that we did an update in.  If a minor modification
+	 * is made, we'll still push it if we're still on the same
+	 * transaction.
+	 */
+	uint32_t c_update_txn;
+
 #if HFS_COMPRESSION
 	decmpfs_cnode  *c_decmp;
 #endif /* HFS_COMPRESSION */
@@ -229,7 +247,12 @@ typedef struct cnode cnode_t;
 #define C_DELETED           0x0000040  /* CNode has been marked to be deleted */
 #define C_HARDLINK          0x0000080  /* CNode is a hard link (file or dir) */
 
-#define C_FORCEUPDATE       0x0000100  /* force the catalog entry update */
+/*
+ * A minor modification is one where the volume would not be inconsistent if
+ * the change was not pushed to disk.  For example, changes to times.
+ */
+#define C_MINOR_MOD			0x0000100  /* CNode has a minor modification */
+
 #define C_HASXATTRS         0x0000200  /* cnode has extended attributes */
 #define C_NEG_ENTRIES       0x0000400  /* directory has negative name entries */
 /* 
@@ -336,6 +359,37 @@ int hfs_hides_xattr(vfs_context_t ctx, struct cnode *cp, const char *name, int s
 
 #define ATIME_ONDISK_ACCURACY	300
 
+static inline bool hfs_should_save_atime(cnode_t *cp)
+{
+	/*
+	 * We only write atime updates to disk if the delta is greater
+	 * than ATIME_ONDISK_ACCURACY.
+	 */
+	return (cp->c_atime < cp->c_attr.ca_atimeondisk
+			|| cp->c_atime - cp->c_attr.ca_atimeondisk > ATIME_ONDISK_ACCURACY);
+}
+
+typedef enum {
+	HFS_NOT_DIRTY   = 0,
+	HFS_DIRTY       = 1,
+	HFS_DIRTY_ATIME = 2
+} hfs_dirty_t;
+
+static inline hfs_dirty_t hfs_is_dirty(cnode_t *cp)
+{
+	if (ISSET(cp->c_flag, C_NOEXISTS))
+		return HFS_NOT_DIRTY;
+
+	if (ISSET(cp->c_flag, C_MODIFIED | C_MINOR_MOD | C_NEEDS_DATEADDED)
+		|| cp->c_touch_chgtime || cp->c_touch_modtime) {
+		return HFS_DIRTY;
+	}
+
+	if (cp->c_touch_acctime || hfs_should_save_atime(cp))
+		return HFS_DIRTY_ATIME;
+
+	return HFS_NOT_DIRTY;
+}
 
 /* This overlays the FileID portion of NFS file handles. */
 struct hfsfid {
@@ -355,12 +409,14 @@ extern int hfs_getnewvnode(struct hfsmount *hfsmp, struct vnode *dvp, struct com
 #define GNV_SKIPLOCK   0x02  /* Skip taking the cnode lock (when getting resource fork). */
 #define GNV_CREATE     0x04  /* The vnode is for a newly created item. */
 #define GNV_NOCACHE	   0x08  /* Delay entering this item in the name cache */
+#define GNV_USE_VP     0x10  /* Use the vnode provided in *vpp instead of creating a new one */  
 
 /* Output flags for hfs_getnewvnode */
 #define GNV_CHASH_RENAMED	0x01	/* The cnode was renamed in-flight */
 #define GNV_CAT_DELETED		0x02	/* The cnode was deleted from the catalog */
 #define GNV_NEW_CNODE		0x04	/* We are vending out a newly initialized cnode */
 #define GNV_CAT_ATTRCHANGED	0x08	/* Something in struct cat_attr changed in between cat_lookups */
+
 
 /* Touch cnode times based on c_touch_xxx flags */
 extern void hfs_touchtimes(struct hfsmount *, struct cnode *);
@@ -421,13 +477,17 @@ extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
  *       are issues with this (see #16620278).
  *
  *	   + If locking multiple cnodes then the truncate lock must be taken on
- *       both (in address order), before taking the cnode locks.
+ *       all (in address order), before taking the cnode locks.
  *
- *  2. cnode lock (in parent-child order if related, otherwise by address order)
+ *  2. Hot Files stage mutex (grabbed before manipulating individual vnodes/cnodes)
  *
- *  3. journal (if needed)
+ *  3. cnode locks in address order (if needed)
  *
- *  4. system files (as needed)
+ *  4. journal (if needed)
+ *
+ *  5. Hot Files B-Tree lock (not treated as a system file)
+ *
+ *  6. system files (as needed)
  *
  *       A. Catalog B-tree file
  *       B. Attributes B-tree file
@@ -435,7 +495,7 @@ extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
  *       D. Allocation Bitmap file (always exclusive, supports recursion)
  *       E. Overflow Extents B-tree file (always exclusive, supports recursion)
  *
- *  5. hfs mount point (always last)
+ *  7. hfs mount point (always last)
  *
  *
  * I. HFS cnode hash lock (must not acquire any new locks while holding this lock, always taken last)
@@ -494,11 +554,15 @@ extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
  *    pages, we will deadlock.  (See #16620278.)
  *
  *  + If you do anything that requires blocks to not be deleted or
- *    encrpytion keys to remain valid, you must take the truncate lock
+ *    encryption keys to remain valid, you must take the truncate lock
  *    shared.
  *
  *  + And it follows therefore, that if you want to delete blocks or
- *    delete keys, you must take the truncate lock exclusively.
+ *    delete keys, you must take the truncate lock exclusively.  Note 
+ *    that for asynchronous writes, the truncate lock will be dropped 
+ *    after issuing I/O but before the I/O has completed which means
+ *    that before manipulating keys, you *must* issue
+ *    vnode_wait_for_writes in addition to holding the truncate lock.
  *
  * N.B. ff_size is actually protected by the cnode lock and so you
  * must hold the cnode lock exclusively to change it and shared to
@@ -524,17 +588,22 @@ enum hfs_lockflags {
 
 void hfs_lock_always(cnode_t *cnode, enum hfs_locktype);
 int hfs_lock(struct cnode *, enum hfs_locktype, enum hfs_lockflags);
+bool hfs_lock_upgrade(cnode_t *cp);
 int hfs_lockpair(struct cnode *, struct cnode *, enum hfs_locktype);
 int hfs_lockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *,
                         enum hfs_locktype, struct cnode **);
-
 void hfs_unlock(struct cnode *);
 void hfs_unlockpair(struct cnode *, struct cnode *);
 void hfs_unlockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *);
 
 void hfs_lock_truncate(struct cnode *, enum hfs_locktype, enum hfs_lockflags);
+bool hfs_truncate_lock_upgrade(struct cnode *cp);
+void hfs_truncate_lock_downgrade(struct cnode *cp);
 void hfs_unlock_truncate(struct cnode *, enum hfs_lockflags);
 int hfs_try_trunclock(struct cnode *, enum hfs_locktype, enum hfs_lockflags);
+
+extern int  hfs_systemfile_lock(struct hfsmount *, int, enum hfs_locktype);
+extern void hfs_systemfile_unlock(struct hfsmount *, int);
 
 void hfs_clear_might_be_dirty_flag(cnode_t *cp);
 

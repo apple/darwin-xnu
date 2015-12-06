@@ -2,8 +2,9 @@
  *  ccpad.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 12/6/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/07/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -61,6 +62,9 @@ size_t ccpad_pkcs7_ecb_decrypt(const struct ccmode_ecb *ecb, ccecb_ctx *ecb_key,
 
 void ccpad_pkcs7_ecb_encrypt(const struct ccmode_ecb *ecb, ccecb_ctx *ctx,
                              size_t nbytes, const void *in, void *out);
+
+/* Function common to ccpad_pkcs7_ecb_decrypt and ccpad_pkcs7_decrypt */
+size_t ccpad_pkcs7_decode(const size_t block_size, const uint8_t* last_block);
 
 /* Contract is nbytes is at least 1 block + 1 byte.  Also in is nbytes long out is nbytes long. */
 void ccpad_xts_decrypt(const struct ccmode_xts *xts, ccxts_ctx *ctx, ccxts_tweak *tweak,

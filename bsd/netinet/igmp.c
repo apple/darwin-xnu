@@ -3902,7 +3902,7 @@ igmp_v3_encap_report(struct ifnet *ifp, struct mbuf *m)
 	if (m->m_flags & M_IGMPV3_HDR) {
 		igmpreclen -= hdrlen;
 	} else {
-		M_PREPEND(m, hdrlen, M_DONTWAIT);
+		M_PREPEND(m, hdrlen, M_DONTWAIT, 1);
 		if (m == NULL)
 			return (NULL);
 		m->m_flags |= M_IGMPV3_HDR;

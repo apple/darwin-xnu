@@ -144,7 +144,7 @@ def ShowThreadUserStack(cmd_args=None):
         ShowARM64UserStack(thread)
     return True
 
-@lldb_command('printuserdata','X')
+@lldb_command('printuserdata','XO:')
 def PrintUserspaceData(cmd_args=None, cmd_options={}):
     """ Read userspace data for given task and print based on format provided.
         Syntax: (lldb) printuserdata <task_t> <uspace_address> <format_specifier>
@@ -152,9 +152,12 @@ def PrintUserspaceData(cmd_args=None, cmd_options={}):
             <task_t> : pointer to task
             <uspace_address> : address to user space memory
             <format_specifier> : String representation for processing the data and printing it.
-                                 e.g Q -> unsigned long long, q-> long long, I-> unsigned int, i->int
+                                 e.g Q -> unsigned long long, q -> long long, I -> unsigned int, i -> int
+                                 10i -> 10 ints, 20s -> 20 character string, s -> null terminated string
+                                 See: https://docs.python.org/2/library/struct.html#format-characters
         options:
             -X : print all values in hex.
+            -O <file path>: Save data to file 
     """
 
     if not cmd_args or len(cmd_args) < 3:
@@ -163,6 +166,10 @@ def PrintUserspaceData(cmd_args=None, cmd_options={}):
     uspace_addr = ArgumentStringToInt(cmd_args[1])
     format_specifier_str = cmd_args[2]
     user_data_len = 0
+    if format_specifier_str == "s":
+        print "0x%x: " % uspace_addr + GetUserspaceString(task, uspace_addr)
+        return True
+
     try:
         user_data_len = struct.calcsize(format_specifier_str)
     except Exception, e:
@@ -172,14 +179,74 @@ def PrintUserspaceData(cmd_args=None, cmd_options={}):
     if not user_data_string:
         print "Could not read any data from userspace address."
         return False
+    if "-O" in cmd_options:
+        fh = open(cmd_options["-O"],"w")
+        fh.write(user_data_string)
+        fh.close()
+        print "Written %d bytes to %s." % (user_data_len, cmd_options['-O'])
+        return True
     upacked_data = struct.unpack(format_specifier_str, user_data_string)
+    element_size = user_data_len / len(upacked_data)
     for i in range(len(upacked_data)):
         if "-X" in cmd_options:
-            print "%d: " % i + hex(upacked_data[i])
+            print "0x%x: " % (uspace_addr + i*element_size) + hex(upacked_data[i])
         else:
-            print "%d: " % i + str(upacked_data[i])
+            print "0x%x: " % (uspace_addr + i*element_size) + str(upacked_data[i])
 
     return True
+
+
+@lldb_command('showtaskuserargs')
+def ShowTaskUserArgs(cmd_args=None, cmd_options={}):
+    """ Read the process argv, env, and apple strings from the user stack
+        Syntax: (lldb) showtaskuserargs <task_t>
+        params:
+            <task_t> : pointer to task
+    """
+    if not cmd_args or len(cmd_args) != 1:
+        raise ArgumentError("Insufficient arguments")
+
+    task = kern.GetValueFromAddress(cmd_args[0], 'task *')
+    proc = Cast(task.bsd_info, 'proc *')
+
+    format_string = "Q" if kern.ptrsize == 8 else "I"
+
+    string_area_size = proc.p_argslen
+    string_area_addr = proc.user_stack - string_area_size
+
+    string_area = GetUserDataAsString(task, string_area_addr, string_area_size)
+    if not string_area:
+        print "Could not read any data from userspace address."
+        return False
+
+    i = 0
+    pos = string_area_addr - kern.ptrsize
+
+    for name in ["apple", "env", "argv"] :
+        while True:
+            if name == "argv" :
+                if i == proc.p_argc:
+                    break
+                i += 1
+
+            pos -= kern.ptrsize
+
+            user_data_string = GetUserDataAsString(task, pos, kern.ptrsize)
+            ptr = struct.unpack(format_string, user_data_string)[0]          
+
+            if ptr == 0:
+                break
+
+            if string_area_addr <= ptr and ptr < string_area_addr+string_area_size :
+                string_offset = ptr - string_area_addr
+                string = string_area[string_offset:];
+            else:
+                string = GetUserspaceString(task, ptr)
+
+            print name + "[]: " + string
+
+    return True
+
 
 @lldb_command('showtaskuserstacks')
 def ShowTaskUserStacks(cmd_args=None):
@@ -367,35 +434,35 @@ def _ExtractDataFromString(strdata, offset, data_type, length=0):
         return 0
     return struct.unpack(unpack_str, strdata[offset:(offset + length)])[0]
 
-def GetPathForImage(task, path_address):
+def GetUserspaceString(task, string_address):
     """ Maps 32 bytes at a time and packs as string
         params:
             task: obj - referencing task to read data from
-            path_address: int - address where the image path is stored
+            string_address: int - address where the image path is stored
         returns:
             str - string path of the file. "" if failed to read.
     """
     done = False
     retval = ""
 
-    if path_address == 0:
+    if string_address == 0:
         done = True
 
     while not done:
-        path_str_data = GetUserDataAsString(task, path_address, 32)
-        if len(path_str_data) == 0:
+        str_data = GetUserDataAsString(task, string_address, 32)
+        if len(str_data) == 0:
             break
         i = 0
         while i < 32:
-            if ord(path_str_data[i]):
-                retval += path_str_data[i]
+            if ord(str_data[i]):
+                retval += str_data[i]
             else:
                 break
             i += 1
         if i < 32:
             done = True
         else:
-            path_address += 32
+            string_address += 32
     return retval
 
 def GetImageInfo(task, mh_image_address, mh_path_address, approx_end_address=None):
@@ -455,7 +522,7 @@ def GetImageInfo(task, mh_image_address, mh_path_address, approx_end_address=Non
             found_uuid_data = True
             uuid_out_string = "{a[0]:02X}{a[1]:02X}{a[2]:02X}{a[3]:02X}-{a[4]:02X}{a[5]:02X}-{a[6]:02X}{a[7]:02X}-{a[8]:02X}{a[9]:02X}-{a[10]:02X}{a[11]:02X}{a[12]:02X}{a[13]:02X}{a[14]:02X}{a[15]:02X}".format(a=uuid_data)
             #also print image path
-            path_out_string = GetPathForImage(task, mh_path_address)
+            path_out_string = GetUserspaceString(task, mh_path_address)
             path_base_name = path_out_string.split("/")[-1]
             retval = print_format.format(mh_image_address, image_end_load_address, path_base_name, uuid_out_string, path_out_string)
         elif lc_cmd == 0xe:
@@ -465,7 +532,7 @@ def GetImageInfo(task, mh_image_address, mh_path_address, approx_end_address=Non
         lc_idx += 1
 
     if not found_uuid_data:
-        path_out_string = GetPathForImage(task, mh_path_address)
+        path_out_string = GetUserspaceString(task, mh_path_address)
         path_base_name = path_out_string.split("/")[-1]
         uuid_out_string = ""
 
@@ -642,7 +709,7 @@ def ShowTaskUserDyldInfo(cmd_args=None):
     dyld_all_imfo_infos_slide = (dyld_all_image_infos_address - dyld_all_image_infos_dyldAllImageInfosAddress)
     dyld_all_image_infos_dyldVersion_postslide = (dyld_all_image_infos_dyldVersion + dyld_all_imfo_infos_slide)
 
-    path_out = GetPathForImage(task, dyld_all_image_infos_dyldVersion_postslide)
+    path_out = GetUserspaceString(task, dyld_all_image_infos_dyldVersion_postslide)
     out_str += "[dyld-{:s}]\n".format(path_out)
     out_str += "version \t\t\t\t: {:d}\n".format(dyld_all_image_infos_version)
     out_str += "infoArrayCount \t\t\t\t: {:d}\n".format(dyld_all_image_infos_infoArrayCount)
@@ -671,7 +738,7 @@ def ShowTaskUserDyldInfo(cmd_args=None):
 
     out_str += "errorMessage \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_errorMessage)
     if dyld_all_image_infos_errorMessage != 0:
-        out_str += GetPathForImage(task, dyld_all_image_infos_errorMessage)
+        out_str += GetUserspaceString(task, dyld_all_image_infos_errorMessage)
 
     out_str += "terminationFlags \t\t\t: {:#x}\n".format(dyld_all_image_infos_terminationFlags)
     out_str += "coreSymbolicationShmPage \t\t: {:#x}\n".format(dyld_all_image_infos_coreSymbolicationShmPage)
@@ -713,17 +780,17 @@ def ShowTaskUserDyldInfo(cmd_args=None):
         out_str += "errorClientOfDylibPath \t\t\t: {:#x}\n".format(dyld_all_image_infos_errorClientOfDylibPath)
         if dyld_all_image_infos_errorClientOfDylibPath != 0:
             out_str += "\t\t\t\t"
-            out_str += GetPathForImage(task, dyld_all_image_infos_errorClientOfDylibPath)
+            out_str += GetUserspaceString(task, dyld_all_image_infos_errorClientOfDylibPath)
             out_str += "\n"
         out_str += "errorTargetDylibPath \t\t\t: {:#x}\n".format(dyld_all_image_infos_errorTargetDylibPath)
         if dyld_all_image_infos_errorTargetDylibPath != 0:
             out_str += "\t\t\t\t"
-            out_str += GetPathForImage(task, dyld_all_image_infos_errorTargetDylibPath)
+            out_str += GetUserspaceString(task, dyld_all_image_infos_errorTargetDylibPath)
             out_str += "\n"
         out_str += "errorSymbol \t\t\t\t: {:#x}\n".format(dyld_all_image_infos_errorSymbol)
         if dyld_all_image_infos_errorSymbol != 0:
             out_str += "\t\t\t\t"
-            out_str += GetPathForImage(task, dyld_all_image_infos_errorSymbol)
+            out_str += GetUserspaceString(task, dyld_all_image_infos_errorSymbol)
             out_str += "\n"
 
         if dyld_all_image_infos_version >= 12:
@@ -768,6 +835,52 @@ def ShowOSMalloc(cmd_args=None):
 
 # EndMacro: showosmalloc
 
+
+@lldb_command('savekcdata', 'T:O:')
+def SaveKCDataToFile(cmd_args=None, cmd_options={}):
+    """ Save the data referred by the kcdata_descriptor structure.
+        options:
+            -T: <task_t> pointer to task if memory referenced is in userstask.
+            -O: <output file path> path to file to save data. default: /tmp/kcdata.<timestamp>.bin
+        Usage: (lldb) savekcdata <kcdata_descriptor_t> -T <task_t> -O /path/to/outputfile.bin
+    """
+    if not cmd_args:
+        raise ArgumentError('Please provide the kcdata descriptor.')
+
+    kcdata = kern.GetValueFromAddress(cmd_args[0], 'kcdata_descriptor_t')
+
+    outputfile = '/tmp/kcdata.{:s}.bin'.format(str(time.time()))
+    task = None
+    if '-O' in cmd_options:
+        outputfile = cmd_options['-O']
+    if '-T' in cmd_options:
+        task = kern.GetValueFromAddress(cmd_options['-T'], 'task_t')
+
+    memory_begin_address = unsigned(kcdata.kcd_addr_begin)
+    memory_size = 16 + unsigned(kcdata.kcd_addr_end) - memory_begin_address
+    flags_copyout = unsigned(kcdata.kcd_flags)
+    if flags_copyout:
+        if not task:
+            raise ArgumentError('Invalid task pointer provided.')
+        memory_data = GetUserDataAsString(task, memory_begin_address, memory_size)
+    else:
+        data_ptr = kern.GetValueFromAddress(memory_begin_address, 'uint8_t *')
+        memory_data = []
+        for i in range(memory_size):
+            memory_data.append(chr(data_ptr[i]))
+            if i % 50000 == 0:
+                print "%d of %d            \r" % (i, memory_size),
+        memory_data = ''.join(memory_data)
+
+    if len(memory_data) != memory_size:
+        print "Failed to read {:d} bytes from address {: <#020x}".format(memory_size, memory_begin_address)
+        return False
+
+    fh = open(outputfile, 'w')
+    fh.write(memory_data)
+    fh.close()
+    print "Saved {:d} bytes to file {:s}".format(memory_size, outputfile)
+    return True
 
 
 

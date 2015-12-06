@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1628,6 +1628,22 @@ extern errno_t mbuf_pkthdr_aux_flags(mbuf_t mbuf,
 */
 extern errno_t mbuf_get_driver_scratch(mbuf_t m, u_int8_t **area,
     size_t *area_ln);
+
+/*
+	@function mbuf_get_unsent_data_bytes
+	@discussion Returns the amount of data that is waiting to be sent
+		on this interface. This is a private SPI used by cellular
+		interface as an indication of future activity on that
+		interface.
+	@param mbuf The mbuf containingthe packet header
+	@param unsent_data A pointer to an integer where the value of
+		unsent data will be set.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_get_unsent_data_bytes(const mbuf_t m,
+    u_int32_t *unsent_data);
 #endif /* KERNEL_PRIVATE */
 
 #ifdef XNU_KERNEL_PRIVATE

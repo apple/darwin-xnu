@@ -120,6 +120,15 @@ struct ipc_port {
 	struct ipc_object ip_object;
 	struct ipc_mqueue ip_messages;
 
+	natural_t ip_sprequests:1,	/* send-possible requests outstanding */
+		  ip_spimportant:1,	/* ... at least one is importance donating */
+		  ip_impdonation:1,	/* port supports importance donation */
+		  ip_tempowner:1,	/* dont give donations to current receiver */
+		  ip_guarded:1,         /* port guarded (use context value as guard) */
+		  ip_strict_guard:1,	/* Strict guarding; Prevents user manipulation of context values directly */
+		  ip_reserved:2,
+		  ip_impcount:24;	/* number of importance donations in nested queue */
+
 	union {
 		struct ipc_space *receiver;
 		struct ipc_port *destination;
@@ -137,39 +146,29 @@ struct ipc_port {
 	struct ipc_port_request *ip_requests;
 	struct ipc_kmsg *ip_premsg;
 
+	mach_vm_address_t ip_context;
+
 	mach_port_mscount_t ip_mscount;
 	mach_port_rights_t ip_srights;
 	mach_port_rights_t ip_sorights;
 
-	natural_t ip_sprequests:1,	/* send-possible requests outstanding */
-		  ip_spimportant:1,	/* ... at least one is importance donating */
-		  ip_impdonation:1,	/* port supports importance donation */
-		  ip_tempowner:1,	/* dont give donations to current receiver */
-		  ip_guarded:1,         /* port guarded (use context value as guard) */
-		  ip_strict_guard:1,	/* Strict guarding; Prevents user manipulation of context values directly */
-		  ip_reserved:2,
-		  ip_impcount:24;	/* number of importance donations in nested queue */
-
-	mach_vm_address_t ip_context;
-
-
 #if	MACH_ASSERT
 #define	IP_NSPARES		4
 #define	IP_CALLSTACK_MAX	16
-	queue_chain_t	ip_port_links;	/* all allocated ports */
+/*	queue_chain_t	ip_port_links;*//* all allocated ports */
 	thread_t	ip_thread;	/* who made me?  thread context */
 	unsigned long	ip_timetrack;	/* give an idea of "when" created */
 	uintptr_t	ip_callstack[IP_CALLSTACK_MAX]; /* stack trace */
 	unsigned long	ip_spares[IP_NSPARES]; /* for debugging */
 #endif	/* MACH_ASSERT */
-};
+} __attribute__((__packed__));
 
 
 #define ip_references		ip_object.io_references
 #define ip_bits			ip_object.io_bits
 
 #define ip_receiver_name	ip_messages.imq_receiver_name
-#define	ip_pset_count		ip_messages.imq_pset_count
+#define	ip_in_pset		ip_messages.imq_in_pset
 
 #define	ip_receiver		data.receiver
 #define	ip_destination		data.destination
@@ -393,8 +392,7 @@ MACRO_END
 
 /* Prepare a receive right for transmission/destruction */
 extern void ipc_port_clear_receiver(
-	ipc_port_t		port,
-	queue_t			links);
+	ipc_port_t		port);
 
 /* Initialize a newly-allocated port */
 extern void ipc_port_init(

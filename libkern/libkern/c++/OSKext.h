@@ -105,6 +105,44 @@ void kmod_dump_log(vm_offset_t*, unsigned int, boolean_t);
 #if PRAGMA_MARK
 #pragma mark -
 #endif
+
+struct list_head {
+    struct list_head *prev;
+    struct list_head *next;
+};
+
+struct OSKextGrabPgoStruct {
+    bool metadata;
+    uint64_t *pSize;
+    char *pBuffer;
+    uint64_t bufferSize;
+    int err;
+    struct list_head list_head;
+};
+
+#ifndef container_of
+#define container_of(ptr,type,member) ((type*)(((uintptr_t)ptr) - offsetof(type, member)))
+#endif
+/********************************************************************/
+
+#if XNU_KERNEL_PRIVATE
+
+struct OSKextAccount
+{
+    vm_allocation_site_t site;
+    uint32_t    	 loadTag;
+};
+
+struct OSKextActiveAccount
+{
+    uintptr_t       address;
+    uintptr_t       address_end;
+    OSKextAccount * account;
+};
+typedef struct OSKextActiveAccount OSKextActiveAccount;
+
+#endif /* XNU_KERNEL_PRIVATE */
+
 /*
  * @class OSKext
  */
@@ -121,6 +159,13 @@ class OSKext : public OSObject
     friend class IOCatalogue;
     friend class KLDBootstrap;
     friend class OSMetaClass;
+
+    friend int OSKextGrabPgoData(uuid_t uuid,
+                                 uint64_t *pSize,
+                                 char *pBuffer,
+                                 uint64_t bufferSize,
+                                 int wait_for_unload,
+                                 int metadata);
 
 #ifdef XNU_KERNEL_PRIVATE
     friend void OSKextVLog(
@@ -238,6 +283,10 @@ private:
         unsigned int jettisonLinkeditSeg:1;
     } flags;
 
+    struct list_head pendingPgoHead;
+    uuid_t instance_uuid;
+    OSKextAccount * account;
+
 #if PRAGMA_MARK
 /**************************************/
 #pragma mark Private Functions
@@ -298,7 +347,7 @@ private:
         bool           externalDataIsMkext = false);
     virtual bool registerIdentifier(void);
 
-    virtual void free(void);
+    virtual void free(void) APPLE_KEXT_OVERRIDE;
 
     static OSReturn removeKext(
         OSKext * aKext,
@@ -373,6 +422,7 @@ private:
     virtual OSReturn slidePrelinkedExecutable(void);
     virtual OSReturn loadExecutable(void);
     virtual void     jettisonLinkeditSegment(void);
+    virtual void     jettisonDATASegmentPadding(void);
     static  void     considerDestroyingLinkContext(void);
     virtual OSData * getExecutable(void);
     virtual void     setLinkedExecutable(OSData * anExecutable);
@@ -386,7 +436,7 @@ private:
 
     virtual OSReturn start(bool startDependenciesFlag = true);
     virtual OSReturn stop(void);
-    virtual OSReturn setVMProtections(void);
+    virtual OSReturn setVMAttributes(bool protect, bool wire);
     virtual boolean_t segmentShouldBeWired(kernel_segment_command_t *seg);
     virtual OSReturn validateKextMapping(bool startFlag);
     virtual boolean_t verifySegmentMapping(kernel_segment_command_t *seg);
@@ -491,6 +541,7 @@ private:
     */
     static void updateLoadedKextSummaries(void);
     void updateLoadedKextSummary(OSKextLoadedKextSummary *summary);
+    void updateActiveAccount(OSKextActiveAccount *account);
 
     /* C++ Initialization.
      */
@@ -509,6 +560,9 @@ public:
     static OSKext * lookupKextWithIdentifier(OSString * kextIdentifier);
     static OSKext * lookupKextWithLoadTag(OSKextLoadTag aTag);
     static OSKext * lookupKextWithAddress(vm_address_t address);
+    static OSKext * lookupKextWithUUID(uuid_t uuid);
+
+    kernel_section_t *lookupSection(const char *segname, const char*secname);
     
     static bool isKextWithIdentifierLoaded(const char * kextIdentifier);
 

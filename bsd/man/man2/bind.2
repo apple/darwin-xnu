@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)bind.2	8.1 (Berkeley) 6/4/93
 .\"
-.Dd June 4, 1993
+.Dd March 18, 2015
 .Dt BIND 2
 .Os BSD 4.2
 .Sh NAME
@@ -48,14 +48,14 @@
 .Fa "socklen_t address_len"
 .Fc
 .Sh DESCRIPTION
-.Fn Bind
+.Fn bind
 assigns a name to an unnamed socket.
 When a socket is created 
 with
 .Xr socket 2
 it exists in a name space (address family)
 but has no name assigned.
-.Fn Bind
+.Fn bind
 requests that
 .Fa address
 be assigned to the socket.
@@ -172,6 +172,7 @@ The include file
 is necessary.
 .Sh SEE ALSO
 .Xr connect 2 ,
+.Xr connectx 2 ,
 .Xr getsockname 2 ,
 .Xr listen 2 ,
 .Xr socket 2 ,

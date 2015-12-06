@@ -41,6 +41,10 @@
 #include <kern/sched_prim.h>
 #include <kern/debug.h>
 
+#if CONFIG_CSR
+#include <sys/csr.h>
+#endif
+
 #include "boot_images.h"
 
 /* extern references */
@@ -101,12 +105,6 @@ void PE_init_iokit(void)
 {
     enum { kMaxBootVar = 128 };
         
-    typedef struct {
-        char            name[32];
-        unsigned long   length;
-        unsigned long   value[2];
-    } DriversPackageProp;
-
     boolean_t bootClutInitialized = FALSE;
     boolean_t noroot_rle_Initialized = FALSE;
 
@@ -178,7 +176,7 @@ void PE_init_iokit(void)
 			    default_progress_data3x, 
 			    (unsigned char *) appleClut8);
 
-    (void) StartIOKit( PE_state.deviceTreeHead, PE_state.bootArgs, gPEEFIRuntimeServices, NULL);
+    StartIOKit( PE_state.deviceTreeHead, PE_state.bootArgs, gPEEFIRuntimeServices, NULL);
 }
 
 void PE_init_platform(boolean_t vm_initialized, void * _args)
@@ -325,4 +323,22 @@ PE_reboot_on_panic(void)
 		return TRUE;
 	else
 		return FALSE;
+}
+
+/* rdar://problem/21244753 */
+uint32_t
+PE_i_can_has_debugger(uint32_t *debug_flags)
+{
+#if CONFIG_CSR
+	if (csr_check(CSR_ALLOW_KERNEL_DEBUGGER) != 0 &&
+	    csr_check(CSR_ALLOW_APPLE_INTERNAL) != 0) {
+		if (debug_flags)
+			*debug_flags = 0;
+		return FALSE;
+	}
+#endif
+	if (debug_flags) {
+		*debug_flags = debug_boot_arg;
+	}
+	return TRUE;
 }

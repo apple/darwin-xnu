@@ -1,5 +1,5 @@
 .\" 
-.\" Copyright (c) 2012 Apple Inc. All rights reserved.
+.\" Copyright (c) 2015 Apple Inc. All rights reserved.
 .\" 
 .\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
 .\" 
@@ -25,7 +25,7 @@
 .\" 
 .\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
 .\"
-.Dd November 14, 2012
+.Dd April 10, 2015
 .Dt DISCONNECTX 2
 .Os Darwin
 .Sh NAME
@@ -36,8 +36,8 @@
 .Ft int
 .Fo disconnectx
 .Fa "int socket"
-.Fa "associd_t associd"
-.Fa "connid_t connid"
+.Fa "sae_associd_t associd"
+.Fa "sae_connid_t connid"
 .Fc
 .Sh DESCRIPTION
 The parameter
@@ -45,43 +45,50 @@ The parameter
 is a socket.  The communication domain of the socket determines the
 availability and behavior of
 .Fn disconnectx .
-In general,
+For connection-oriented socket,
 .Fn disconnectx
 is analogous to
 .Xr shutdown 2
 .Dv with SHUT_RDWR
-issued on the connection identified by
-.Fa connid ,
-or on all connections associated with the
-.Fa associd
-association.
+issued on the socket. For connectionless socket, it disassociates any existing
+association to the peer socket.
+.\" identified by
+.\" .Fa connid ,
+.\" or on all connections associated with the
+.\" .Fa associd
+.\" association.
 .Pp
 The parameter
 .Fa associd
-specifies the association identifier.  It may be set to
-.Dv ASSOCID_ANY
-when there is only one association present;
-.Dv ASSOCID_ALL
-to specify all existing associations; or one of the identifiers returned from
-.Xr getassocids 3 .
+specifies the association identifier.  It should be set to
+.Dv SAE_ASSOCID_ANY .
+.\"when there is only one association present;
+.\".Dv SAE_ASSOCID_ALL
+.\"to specify all existing associations; or one of the identifiers returned from
+.\".Xr getassocids 3 .
 .Pp
 The parameter
 .Fa connid
-specifies the connection identifier.  It may be set to
-.Dv CONNID_ANY
-or
-.Dv CONNID_ALL ,
-in which case the association represented by
-.Fa associd
-will be dissolved; or the value returned from
-.Xr connectx 2
-or
-.Xr getconnids 3 ,
-which indicates that the disconnection occurs only on that connection
-while keeping the session association intact.  For the latter, the connection
-associated with
-.Fa connid
-will no longer be valid upon success.
+should be set to
+.\" specifies the connection identifier.  It may be set to
+.Dv SAE_CONNID_ANY .
+.\" or
+.\".Dv SAE_CONNID_ALL ,
+.\" in which case the association represented by
+.\" .Fa associd
+.\" will be dissolved; or the value returned from
+.\" .Xr connectx 2
+.\" or
+.\" .Xr getconnids 3 ,
+.\" which indicates that the disconnection occurs only on that connection
+.\" while keeping the session association intact.  For the latter, the connection
+.\" associated with
+.\" .Fa connid
+.\" will no longer be valid upon success.
+.Sh NOTES
+.Fn disconnectx
+is currently supported only on AF_INET and AF_INET6 sockets of type SOCK_DGRAM
+and SOCK_STREAM.
 .Sh RETURN VALUES
 The
 .Fn disconnectx
@@ -96,8 +103,9 @@ system call succeeds unless:
 .Bl -tag -width Er
 .\" ===========
 .It Bq Er EALREADY
-Operation already in progress for the session association represented by
-.Fa associd .
+Operation already in progress.
+.\" for the session association represented by
+.\" .Fa associd .
 .\" ===========
 .It Bq Er EBADF
 .Fa Socket
@@ -112,8 +120,11 @@ argument is invalid or the underlying protocol is no longer attached to
 .Fa socket .
 .\" ===========
 .It Bq Er ENOTCONN
-The session association repreresented by
-.Fa associd
+.\" The session association repreresented by
+.\" .Fa associd
+.\" is not connected.
+The
+.Fa socket
 is not connected.
 .\" ===========
 .It Bq Er ENOTSOCK
@@ -121,13 +132,14 @@ is not connected.
 is a file, not a socket.
 .El
 .Sh SEE ALSO
+.Xr connect 2 ,
 .Xr connectx 2 ,
 .Xr socket 2 ,
-.Xr getassocids 3 ,
-.Xr getconnids 3 ,
-.Xr getconninfo 3 ,
+.\" .Xr getassocids 3 ,
+.\" .Xr getconnids 3 ,
+.\" .Xr getconninfo 3 ,
 .Xr compat 5
 .Sh HISTORY
 The
 .Fn disconnectx
-function call appeared in Darwin 13.0.0
+function call appeared in Darwin 15.0.0

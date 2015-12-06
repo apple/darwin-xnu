@@ -148,8 +148,11 @@ mac_sysvmsq_check_enqueue(kauth_cred_t cred, struct msg *msgptr,
 {
 	int error;
 
-	if (!mac_sysvmsg_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvmsg_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvmsq_check_enqueue, cred,  msgptr, msgptr->label, msqptr,
 	    msqptr->label);
@@ -162,8 +165,11 @@ mac_sysvmsq_check_msgrcv(kauth_cred_t cred, struct msg *msgptr)
 {
 	int error;
 
-	if (!mac_sysvmsg_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvmsg_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvmsq_check_msgrcv, cred, msgptr, msgptr->label);
 
@@ -175,8 +181,11 @@ mac_sysvmsq_check_msgrmid(kauth_cred_t cred, struct msg *msgptr)
 {
 	int error;
 
-	if (!mac_sysvmsg_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvmsg_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvmsq_check_msgrmid, cred,  msgptr, msgptr->label);
 
@@ -188,8 +197,11 @@ mac_sysvmsq_check_msqget(kauth_cred_t cred, struct msqid_kernel *msqptr)
 {
 	int error;
 
-	if (!mac_sysvmsg_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvmsg_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvmsq_check_msqget, cred, msqptr, msqptr->label);
 
@@ -201,8 +213,11 @@ mac_sysvmsq_check_msqsnd(kauth_cred_t cred, struct msqid_kernel *msqptr)
 {
 	int error;
 
-	if (!mac_sysvmsg_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvmsg_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvmsq_check_msqsnd, cred, msqptr, msqptr->label);
 
@@ -214,8 +229,11 @@ mac_sysvmsq_check_msqrcv(kauth_cred_t cred, struct msqid_kernel *msqptr)
 {
 	int error;
 
-	if (!mac_sysvmsg_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvmsg_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvmsq_check_msqrcv, cred, msqptr, msqptr->label);
 
@@ -228,8 +246,11 @@ mac_sysvmsq_check_msqctl(kauth_cred_t cred, struct msqid_kernel *msqptr,
 {
 	int error;
 
-	if (!mac_sysvmsg_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvmsg_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvmsq_check_msqctl, cred, msqptr, msqptr->label, cmd);
 

@@ -49,6 +49,9 @@ __BEGIN_DECLS
 extern vm_offset_t min_valid_stack_address(void);
 extern vm_offset_t max_valid_stack_address(void);
 
+// From osfmk/kern/printf.c
+extern boolean_t doprnt_hide_pointers;
+
 // From osfmk/kmod.c
 extern void kmod_dump_log(vm_offset_t *addr, unsigned int cnt, boolean_t doUnslide);
 
@@ -106,12 +109,15 @@ OSReportWithBacktrace(const char *str, ...)
 
     lck_mtx_lock(sOSReportLock);
     {
+        boolean_t old_doprnt_hide_pointers = doprnt_hide_pointers;
+        doprnt_hide_pointers = FALSE;
         printf("%s\nBacktrace 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx\n", buf, 
             (unsigned long) VM_KERNEL_UNSLIDE(bt[2]), (unsigned long) VM_KERNEL_UNSLIDE(bt[3]), 
             (unsigned long) VM_KERNEL_UNSLIDE(bt[4]), (unsigned long) VM_KERNEL_UNSLIDE(bt[5]), 
             (unsigned long) VM_KERNEL_UNSLIDE(bt[6]), (unsigned long) VM_KERNEL_UNSLIDE(bt[7]), 
             (unsigned long) VM_KERNEL_UNSLIDE(bt[8]));
         kmod_dump_log((vm_offset_t *) &bt[2], cnt - 2, TRUE);
+        doprnt_hide_pointers = old_doprnt_hide_pointers;
     }
     lck_mtx_unlock(sOSReportLock);
 }
@@ -166,6 +172,7 @@ OSPrintBacktrace(void)
 unsigned OSBacktrace(void **bt, unsigned maxAddrs)
 {
     unsigned frame;
+    if (!current_thread()) return 0;
 
 #if   __x86_64__
 #define SANE_x86_64_FRAME_SIZE (kernel_stack_size >> 1)

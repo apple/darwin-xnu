@@ -2,7 +2,7 @@
 .\"	$NetBSD: ptrace.2,v 1.3 1996/02/23 01:39:41 jtc Exp $
 .\"
 .\" This file is in the public domain.
-.Dd November 7, 1994
+.Dd March 25, 2015
 .Dt PTRACE 2
 .Os
 .Sh NAME
@@ -94,6 +94,8 @@ had been used with
 .Dv SIGKILL
 given as the signal to be delivered.
 .It Dv PT_ATTACH
+This call has been replaced with PT_ATTACHEXC.
+.It Dv PT_ATTACHEXC
 This request allows a process to gain control of an otherwise unrelated
 process and begin tracing it.  It does not need any cooperation from
 the to-be-traced process.  In this case,
@@ -104,7 +106,10 @@ must have the same real UID as the tracing process, and that it must
 not be executing a setuid or setgid executable.  (If the tracing
 process is running as root, these restrictions do not apply.)  The
 tracing process will see the newly-traced process stop and may then
-control it as if it had been traced all along.
+control it as if it had been traced all along. Note that this call differs
+from the prior call (
+.Dv PT_ATTACH )
+in that signals from the child are delivered to the parent as Mach exceptions (see EXC_SOFT_SIGNAL).
 .It Dv PT_DETACH
 This request is like PT_CONTINUE, except that it does not allow
 specifying an alternate place to continue execution, and after it
@@ -128,7 +133,7 @@ No process having the specified process ID exists.
 .Bl -bullet -compact
 .It
 A process attempted to use
-.Dv PT_ATTACH
+.Dv PT_ATTACHEXC
 on itself.
 .It
 The
@@ -152,27 +157,27 @@ normally true only of system processes.)
 .It Bq Er EBUSY
 .Bl -bullet -compact
 .It
-.Dv PT_ATTACH
+.Dv PT_ATTACHEXC
 was attempted on a process that was already being traced.
 .It
 A request attempted to manipulate a process that was being traced by
 some process other than the one making the request.
 .It
 A request (other than
-.Dv PT_ATTACH )
+.Dv PT_ATTACHEXC )
 specified a process that wasn't stopped.
 .El
 .It Bq Er EPERM
 .Bl -bullet -compact
 .It
 A request (other than
-.Dv PT_ATTACH )
+.Dv PT_ATTACHEXC )
 attempted to manipulate a process that wasn't being traced at all.
 .It
 An attempt was made to use
-.Dv PT_ATTACH
+.Dv PT_ATTACHEXC
 on a process in violation of the requirements listed under
-.Dv PT_ATTACH
+.Dv PT_ATTACHEXC
 above.
 .El
 .El

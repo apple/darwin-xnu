@@ -222,7 +222,7 @@ ipc_bootstrap(void)
 /* 
  * XXX tunable, belongs in mach.message.h 
  */
-#define MSG_OOL_SIZE_SMALL_MAX 4096
+#define MSG_OOL_SIZE_SMALL_MAX (2*PAGE_SIZE)
 vm_size_t msg_ool_size_small;
 
 /*
@@ -238,13 +238,13 @@ ipc_init(void)
 	vm_offset_t min;
 
 	retval = kmem_suballoc(kernel_map, &min, ipc_kernel_map_size,
-			       TRUE, VM_FLAGS_ANYWHERE, &ipc_kernel_map);
+			       TRUE, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC), &ipc_kernel_map);
 
 	if (retval != KERN_SUCCESS)
 		panic("ipc_init: kmem_suballoc of ipc_kernel_map failed");
 
 	retval = kmem_suballoc(kernel_map, &min, ipc_kernel_copy_map_size,
-			       TRUE, VM_FLAGS_ANYWHERE, &ipc_kernel_copy_map);
+			       TRUE, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC), &ipc_kernel_copy_map);
 
 	if (retval != KERN_SUCCESS)
 		panic("ipc_init: kmem_suballoc of ipc_kernel_copy_map failed");
@@ -264,6 +264,8 @@ ipc_init(void)
 	else {
 		msg_ool_size_small = MSG_OOL_SIZE_SMALL_MAX;
 	}
+	/* account for overhead to avoid spilling over a page */
+	msg_ool_size_small -= cpy_kdata_hdr_sz;
 
 	ipc_host_init();
 

@@ -709,6 +709,7 @@ fairq_enqueue(struct fairq_if *fif, struct fairq_class *cl, struct mbuf *m,
 		}
 	}
 	IFCQ_INC_LEN(ifq);
+	IFCQ_INC_BYTES(ifq, len);
 
 	/* successfully queued. */
 	return (ret);
@@ -747,6 +748,7 @@ fairq_dequeue(struct fairq_if *fif, cqdq_op_t op)
 		fif->fif_poll_cache = NULL;
 		if (m != NULL) {
 			IFCQ_DEC_LEN(ifq);
+			IFCQ_DEC_BYTES(ifq, m_pktlen(m));
 			IFCQ_XMIT_ADD(ifq, 1, m_pktlen(m));
 			PKTCNTR_ADD(&best_cl->cl_xmitcnt, 1, m_pktlen(m));
 		}
@@ -797,6 +799,7 @@ fairq_dequeue(struct fairq_if *fif, cqdq_op_t op)
 			m = fairq_getq(best_cl, cur_time);
 			if (m != NULL) {
 				IFCQ_DEC_LEN(ifq);
+				IFCQ_DEC_BYTES(ifq, m_pktlen(m));
 				IFCQ_XMIT_ADD(ifq, 1, m_pktlen(m));
 				PKTCNTR_ADD(&best_cl->cl_xmitcnt, 1,
 				    m_pktlen(m));

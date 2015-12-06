@@ -71,4 +71,14 @@
 
 typedef	char	symtab_name_t[32];
 
+struct mach_core_fileheader
+{
+     uint64_t signature;
+     uint64_t log_offset;
+     uint64_t log_length;
+     uint64_t gzip_offset;
+     uint64_t gzip_length;
+};
+#define MACH_CORE_FILEHEADER_SIGNATURE	0x0063614d20646153ULL
+
 #endif	/* _MACH_DEBUG_MACH_DEBUG_TYPES_H_ */

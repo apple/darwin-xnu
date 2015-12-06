@@ -26,10 +26,12 @@
 #include <errno.h>
 #include <string.h>
 #include <strings.h>
+#include <stdlib.h>
 #include <sys/errno.h>
 #include <sys/msgbuf.h>
 #include <sys/resource.h>
 #include <sys/process_policy.h>
+#include <sys/event.h>
 #include <mach/message.h>
 
 #include "libproc_internal.h"
@@ -111,6 +113,17 @@ proc_pidoriginatorinfo(int flavor, void *buffer, int buffersize)
 		return(0);
 		
 	return(retval);
+}
+
+int
+proc_listcoalitions(int flavor, int coaltype, void *buffer, int buffersize)
+{
+	int retval;
+
+	if ((retval = __proc_info(PROC_INFO_CALL_LISTCOALITIONS, flavor, coaltype, 0, buffer, buffersize)) == -1)
+		return 0;
+
+	return retval;
 }
 
 int
@@ -517,6 +530,78 @@ proc_disable_wakemon(pid_t pid)
 	return (proc_rlimit_control(pid, RLIMIT_WAKEUPS_MONITOR, &params));
 }
 
+int
+proc_list_uptrs(int pid, uint64_t *buf, uint32_t bufsz)
+{
+	int i, j;
+	int nfds, nkns;
+	int count = 0;
+	int knote_max = 4096; /* arbitrary starting point */
+
+	/* if buffer is empty, this call simply counts the knotes */
+	if (bufsz > 0 && buf == NULL) {
+		errno = EFAULT;
+		return -1;
+	}
+
+	struct proc_fdinfo fdlist[OPEN_MAX];
+	nfds = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fdlist, OPEN_MAX*sizeof(struct proc_fdinfo));
+	if (nfds <= 0 || nfds > OPEN_MAX) {
+		return -1;
+	}
+
+	struct kevent_extinfo *kqext = malloc(knote_max * sizeof(struct kevent_extinfo));
+	if (!kqext) {
+		errno = ENOMEM;
+		return -1;
+	}
+
+	for (i = 0; i < nfds; i++) {
+		if (fdlist[i].proc_fdtype != PROX_FDTYPE_KQUEUE) {
+			continue;
+		}
+
+ again:
+		nkns = __proc_info(PROC_INFO_CALL_PIDFDINFO, pid, PROC_PIDFDKQUEUE_EXTINFO,
+				(uint64_t)fdlist[i].proc_fd, kqext, knote_max * sizeof(struct kevent_extinfo));
+		if (nkns < 0) {
+			if (errno == EBADF) {
+				/* the FD table can change after enumerating the FDs */
+				errno = EAGAIN;
+			}
+			free(kqext);
+			return -1;
+		}
+
+		if (nkns > knote_max) {
+			/* there are more knotes than we requested - try again with a
+			 * larger buffer */
+			free(kqext);
+			knote_max = nkns + 32; /* small margin in case of extra knotes */
+			kqext = malloc(knote_max * sizeof(struct kevent_extinfo));
+			if (!kqext) {
+				errno = ENOMEM;
+				return -1;
+			}
+			goto again;
+		}
+
+		for (j = 0; j < nkns; j++) {
+			if (kqext[j].kqext_kev.udata == 0) {
+				continue;
+			}
+
+			if (bufsz >= sizeof(uint64_t)) {
+				*buf++ = kqext[j].kqext_kev.udata;
+				bufsz -= sizeof(uint64_t);
+			}
+			count++;
+		}
+	}
+
+	free(kqext);
+	return count;
+}
 
 
 

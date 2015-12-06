@@ -118,7 +118,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 32)
+#if (MAC_POLICY_OPS_VERSION != 37)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -201,15 +201,15 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(ipq_label_init)
 	CHECK_SET_HOOK(ipq_label_update)
 
-	CHECK_SET_HOOK(lctx_check_label_update)
-	CHECK_SET_HOOK(lctx_label_destroy)
-	CHECK_SET_HOOK(lctx_label_externalize)
-	CHECK_SET_HOOK(lctx_label_init)
-	CHECK_SET_HOOK(lctx_label_internalize)
-	CHECK_SET_HOOK(lctx_label_update)
-	CHECK_SET_HOOK(lctx_notify_create)
-	CHECK_SET_HOOK(lctx_notify_join)
-	CHECK_SET_HOOK(lctx_notify_leave)
+	.mpo_reserved1 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved2 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved3 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved4 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved5 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved6 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved7 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved8 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved9 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(mbuf_label_associate_bpfdesc)
 	CHECK_SET_HOOK(mbuf_label_associate_ifnet)
@@ -265,13 +265,13 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(system_check_sysctlbyname)
 	CHECK_SET_HOOK(proc_check_inherit_ipc_ports)
 	CHECK_SET_HOOK(vnode_check_rename)
-	.mpo_reserved4 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved5 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved6 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved7 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved8 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved9 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved10 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(kext_check_query)
+	CHECK_SET_HOOK(iokit_check_nvram_get)
+	CHECK_SET_HOOK(iokit_check_nvram_set)
+	CHECK_SET_HOOK(iokit_check_nvram_delete)
+	CHECK_SET_HOOK(proc_check_expose_task)
+	CHECK_SET_HOOK(proc_check_set_host_special_port)
+	CHECK_SET_HOOK(proc_check_set_host_exception_port)
 	.mpo_reserved11 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved12 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved13 = (mpo_reserved_hook_t *)common_hook,
@@ -461,8 +461,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(vnode_check_uipc_bind)
 	CHECK_SET_HOOK(vnode_check_uipc_connect)
 
-	/* CHECK_SET_HOOK(proc_check_run_cs_invalid) */
-	.mpo_proc_check_run_cs_invalid = (mac_proc_check_run_cs_invalid_t *)common_hook,
+	CHECK_SET_HOOK(proc_check_run_cs_invalid)
 	CHECK_SET_HOOK(proc_check_suspend_resume)
 
 	CHECK_SET_HOOK(thread_userret)
@@ -486,8 +485,8 @@ static struct mac_policy_ops policy_ops = {
 
 	CHECK_SET_HOOK(vnode_notify_rename)
 
-	CHECK_SET_HOOK(thread_label_init)
-	CHECK_SET_HOOK(thread_label_destroy)
+	.mpo_reserved32 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved33 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(system_check_kas_info)
 

@@ -90,9 +90,9 @@ the processor is simply halted; no reboot takes place.
 This option should be used with caution.
 .It Dv RB_INITNAME
 An option allowing the specification of an init program (see
-.Xr init 8 )
+.Xr launchd 8 )
 other than
-.Pa /sbin/init
+.Pa /sbin/launchd 
 to be run when the system reboots.
 This switch is not currently available.
 .It Dv RB_KDB
@@ -124,7 +124,7 @@ prevents this, booting the system with a single-user shell
 on the console.
 .Dv RB_SINGLE
 is actually interpreted by the
-.Xr init 8
+.Xr launchd 8
 program in the newly booted system.
 .Pp
 When no options are given (i.e.,

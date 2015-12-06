@@ -1256,12 +1256,16 @@ sflt_register(const struct sflt_filter *filter, int domain, int type,
 	struct socket_filter *sock_filt = NULL;
 	struct socket_filter *match = NULL;
 	int error = 0;
-	struct protosw *pr = pffindproto(domain, protocol, type);
+	struct protosw *pr;
 	unsigned int len;
 	struct socket *so;
 	struct inpcb *inp;
 	struct solist *solisthead = NULL, *solist = NULL;
 
+	if ((domain != PF_INET) && (domain != PF_INET6))
+		return (ENOTSUP);
+
+	pr = pffindproto(domain, protocol, type);
 	if (pr == NULL)
 		return (ENOENT);
 

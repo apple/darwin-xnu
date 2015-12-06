@@ -71,7 +71,7 @@ private:
     virtual bool init(OSObject *inOwner,
 		      IOInterruptEventSource::Action inAction = 0,
 		      IOService *inProvider = 0,
-		      int inIntIndex = 0);
+		      int inIntIndex = 0) APPLE_KEXT_OVERRIDE;
 
     static IOInterruptEventSource *
 	interruptEventSource(OSObject *inOwner,
@@ -136,11 +136,11 @@ successfully.  */
 
 /*! @function normalInterruptOccurred
     @abstract Override $link IOInterruptEventSource::normalInterruptOccured to make a filter callout. */
-    virtual void normalInterruptOccurred(void *self, IOService *prov, int ind);
+    virtual void normalInterruptOccurred(void *self, IOService *prov, int ind) APPLE_KEXT_OVERRIDE;
 
 /*! @function disableInterruptOccurred
     @abstract Override $link IOInterruptEventSource::disableInterruptOccurred to make a filter callout. */
-    virtual void disableInterruptOccurred(void *self, IOService *prov, int ind);
+    virtual void disableInterruptOccurred(void *self, IOService *prov, int ind) APPLE_KEXT_OVERRIDE;
 
 private:
     OSMetaClassDeclareReservedUnused(IOFilterInterruptEventSource, 0);

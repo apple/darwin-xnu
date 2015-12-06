@@ -148,10 +148,28 @@
 		3. 3 low 10-bits are packed into a 32-bit word, this is after the dictionary indices section.
 
  	cclee, 11/30/12
+
+    Added zero page, single value page, sparse page, early abort optimizations
+    rsrini, 09/14/14
+
 */
 
 	.text
 	.align 4,0x90
+
+#define SV_RETURN           $0                      // return value when SV, ZV page is found
+#define MZV_MAGIC           $17185                  // magic value used to identify MZV page encoding
+#define CHKPT_BYTES         416                     // for early aborts: checkpoint after processing this many bytes. Must be in range [4..4096]
+#define CHKPT_TAG_BYTES     (CHKPT_BYTES/16)        // size of the tags for  CHKPT_BYTES of data
+#define CHKPT_SHRUNK_BYTES  426                     // for early aborts: max size of compressed stream to allow further processing ..
+                                                    //      .. to disable early aborts, set CHKPT_SHRUNK_BYTES to 4096
+
+#if CHKPT_BYTES > 4096
+    #error CHKPT_BYTES must be <= 4096
+#endif
+#if CHKPT_BYTES < 4
+    #error CHKPT_BYTES must be >= 4
+#endif
 
 .globl _WKdm_compress_new
 _WKdm_compress_new:
@@ -162,19 +180,25 @@ _WKdm_compress_new:
 	pushq	%r13
 	pushq	%r12
 	pushq	%rbx
-	subq	$(24+64), %rsp
+	subq	$(48+64), %rsp
 
-
-	#define	tempTagsArray	64(%rsp)
+	#define	tempTagsArray       64(%rsp)
 	#define	tempLowBitsArray	72(%rsp)
+
+    #define start_next_full_patt  80(%rsp)
+    #define start_next_input_word 88(%rsp)
+    #define byte_budget           96(%rsp)
+    #define start_next_qp         tempQPosArray
+    #define start_next_low_bits   tempLowBitsArray 
+    
 	#define	next_tag			%r8
 	#define	next_input_word		%rdi
 	#define	end_of_input		%r13
 	#define	next_full_patt		%rbx
 	#define	dict_location		%rcx
 	#define	next_qp				%r10
+    #define checkpoint          %r11
 	#define	dictionary			%rsp
-	#define	scratch				%r11
 	#define	dest_buf			%r12
 	#define	hashTable			%r14
 	#define tempQPosArray		%r15
@@ -182,7 +206,6 @@ _WKdm_compress_new:
 	#define	byte_count			%r9d
 
 	movq	%rsi, %r12						// dest_buf
-	movq	%rdx, scratch					// scratch = dictionary
 
 	movq	%rdx, tempTagsArray 			// &tempTagsArray[0]
 	movq	%rdx, next_tag					// next_tag always points to the one following the current tag 
@@ -190,6 +213,7 @@ _WKdm_compress_new:
 	leaq	1024(%rdx), tempQPosArray		// &tempQPosArray[0]
 	movq	tempQPosArray, next_qp			// next_qp
 
+    leaq    CHKPT_BYTES(%rdi), checkpoint   // checkpoint = src_buf + CHKPT_BYTES
 	leaq	4096(%rdi), end_of_input		// end_of_input = src_buf + num_input_words
 	leaq	268(%rsi), %rbx					// dest_buf + [TAGS_AREA_OFFSET + (num_input_words / 16)]*4
 
@@ -197,37 +221,46 @@ _WKdm_compress_new:
 	subl	$(12+256), byte_count			// header + tags
 	jle		L_budgetExhausted
 
+                                            // NOTE: ALL THE DICTIONARY VALUES MUST BE INITIALIZED TO ZERO
+                                            // THIS IS NEEDED TO EFFICIENTLY DETECT SINGLE VALUE PAGES
 	// PRELOAD_DICTIONARY;
-	movl	$1, 0(dictionary)
-	movl	$1, 4(dictionary)
-	movl	$1, 8(dictionary)
-	movl	$1, 12(dictionary)
-	movl	$1, 16(dictionary)
-	movl	$1, 20(dictionary)
-	movl	$1, 24(dictionary)
-	movl	$1, 28(dictionary)
-	movl	$1, 32(dictionary)
-	movl	$1, 36(dictionary)
-	movl	$1, 40(dictionary)
-	movl	$1, 44(dictionary)
-	movl	$1, 48(dictionary)
-	movl	$1, 52(dictionary)
-	movl	$1, 56(dictionary)
-	movl	$1, 60(dictionary)
+	movl	$0, 0(dictionary)
+	movl	$0, 4(dictionary)
+	movl	$0, 8(dictionary)
+	movl	$0, 12(dictionary)
+	movl	$0, 16(dictionary)
+	movl	$0, 20(dictionary)
+	movl	$0, 24(dictionary)
+	movl	$0, 28(dictionary)
+	movl	$0, 32(dictionary)
+	movl	$0, 36(dictionary)
+	movl	$0, 40(dictionary)
+	movl	$0, 44(dictionary)
+	movl	$0, 48(dictionary)
+	movl	$0, 52(dictionary)
+	movl	$0, 56(dictionary)
+	movl	$0, 60(dictionary)
 
 	leaq	2048(%rdx), %rax				// &tempLowBitsArray[0]
 	movq	%rax, tempLowBitsArray			// save for later reference
 	movq	%rax, next_low_bits				// next_low_bits	
 
 	leaq	_hashLookupTable_new(%rip), hashTable	// hash look up table
+
+    movq    next_full_patt, start_next_full_patt
+    movq    next_input_word, start_next_input_word
+    movl    %ecx, byte_budget               // save the byte budget    
+
+
 	jmp		L_scan_loop
 
 	.align 4,0x90
 L_RECORD_ZERO:
 	movb	$0, -1(next_tag)						// *next_tag = ZERO;
 	addq	$4, next_input_word 					// next_input_word++;
-	cmpq	next_input_word, end_of_input 			// end_of_input vs next_input_word
-	jbe		L_done_search
+	cmpq	next_input_word, checkpoint             // checkpoint time?
+	je		CHECKPOINT
+
 L_scan_loop:
 	movl	(next_input_word), %edx
 	incq	next_tag								// next_tag++
@@ -253,8 +286,9 @@ L_RECORD_MISS:
 	movb	$2, -1(next_tag)						// *next_tag = 2 for miss
 	subl	$4, byte_count							// fill in a new 4-bytes word
 	jle		L_budgetExhausted
-	cmpq	next_input_word, end_of_input 			// end_of_input vs next_input_word
-	ja		L_scan_loop
+	cmpq	next_input_word, checkpoint             // checkpoint time?
+	jne     L_scan_loop
+	jmp	    CHECKPOINT	
 
 L_done_search:
 
@@ -395,7 +429,7 @@ L20:
 
 L_done:
 	// restore registers and return
-	addq	$(24+64), %rsp
+	addq	$(48+64), %rsp
 	popq	%rbx
 	popq	%r12
 	popq	%r13
@@ -417,9 +451,9 @@ L_RECORD_EXACT:
 	movb	$3, -1(next_tag)					// *next_tag = 3 for exact
 	movb	%cl, (next_qp)						// *next_qp = word offset (4-bit)
 	incq	next_qp								// next_qp++
-	cmpq	next_input_word, end_of_input 			// end_of_input vs next_input_word
-	ja		L_scan_loop
-	jmp		L_done_search
+	cmpq	next_input_word, checkpoint         // checkpoint time?
+	jne     L_scan_loop
+	jmp	    CHECKPOINT	
 
 	.align 4,0x90
 L_RECORD_PARTIAL:
@@ -433,7 +467,156 @@ L_RECORD_PARTIAL:
 	incq	next_qp								// next_qp++
 	mov		%dx, (next_low_bits)				// save next_low_bits
 	addq	$2, next_low_bits					// next_low_bits++
-	cmpq	next_input_word, end_of_input 		// end_of_input vs next_input_word
-	ja		L_scan_loop
-	jmp		L_done_search
+	cmpq	next_input_word, checkpoint         // checkpoint time?
+	jne     L_scan_loop
+
+CHECKPOINT:
+
+    cmpq	end_of_input, checkpoint            // end of buffer or compression ratio check?
+    jne     L_check_compression_ratio
+
+L_check_zero_page:
+                                                // check if any dictionary misses in page
+    cmpq    start_next_full_patt, next_full_patt
+    jne     L_check_single_value_page
+
+    cmpq    start_next_qp, next_qp              // check if any partial or exact dictionary matches
+    jne     L_check_single_value_page
+
+    mov     SV_RETURN, %rax                     // Magic return value
+    jmp     L_done
+
+L_check_single_value_page:
+
+    movq    next_full_patt, %rax                // get # dictionary misses
+    subq    start_next_full_patt, %rax
+    shrq    $2, %rax
+    
+    movq    next_qp, %r11                       // get # dictionary hits (exact + partial)
+    subq    start_next_qp, %r11
+    
+    movq    next_low_bits, %r13                 // get # dictionary partial hits
+    subq    start_next_low_bits, %r13
+    shrq    $1, %r13
+
+    movq    tempTagsArray, %r14                 // get the address of the first tag
+
+    // Single value page if one of the follwoing is true:
+    //  partial == 0 AND hits == 1023 AND miss == 1 AND tag[0] == 2 (i.e. miss)
+    //  partial == 1 AND hits == 1024 AND tag[0] == 1 (i.e. partial)
+    //
+    cmpq    $0, %r13                            // were there 0 partial hits?
+    jne     1f
+
+    cmpq    $1023, %r11                         // were there 1023 dictionary hits
+    jne     1f
+
+    cmpq    $1, %rax                            // was there exacly 1 dictionary miss?
+    jne     1f 
+
+    cmpb    $2, 0(%r14)                         // was the very 1st tag a miss?
+    je      L_is_single_value_page
+
+1:
+    cmpq    $1, %r13                            // was there 1 partial hit?
+    jne     L_check_mostly_zero
+
+    cmpq    $1024, %r11                         // were there 1024 dictionary hits
+    jne     L_check_mostly_zero
+
+    cmpb    $1, 0(%r14)                         // was the very 1st tag a partial?
+    jne     L_check_mostly_zero
+     
+L_is_single_value_page:
+    
+    mov     SV_RETURN, %rax                     // Magic return value
+    jmp     L_done
+
+L_check_mostly_zero:
+                                                // how much space will the sparse packer take?
+    addq    %r11, %rax                          // rax += (next_qp - start_next_qp)
+    movq    $6, %rdx
+    mulq    %rdx                                // rax *= 6 (i.e. 4 byte word + 2 byte offset)
+    addq    $4, %rax                            // rax += 4 byte for header
+    movq    %rax, %r11 
+                                                // how much space will the defaut packer take?
+    movq    next_low_bits, %rax
+    subq    start_next_low_bits, %rax           // get bytes consumed by lower-10 bits
+    movq    $1365, %rdx
+    mulq    %rdx
+    shrq    $11, %rax                           // rax = 2/3*(next_low_bits - start_next_low_bits)
+    movq    next_full_patt, %rdx
+    subq    start_next_full_patt, %rdx          // get bytes consumed by dictionary misses
+    addq    %rdx, %rax                          // rax += (next_full_patt - start_next_full_patt)
+    movq    next_qp, %rdx
+    subq    start_next_qp, %rdx
+    shrq    $1, %rdx                            // get bytes consumed by dictionary hits
+    addq    %rdx, %rax                          // rax += (next_qp - start_next_qp)/2
+    addq    $(12+256), %rax                     // rax += bytes taken by the header + tags
+
+    cmpq    %r11, %rax                          // is default packer the better option?
+    jb      L_done_search
+
+    cmpl    byte_budget, %r11d                  // can the sparse packer fit into the given budget?
+    ja      L_budgetExhausted
+
+L_sparse_packer:
+
+    movl    MZV_MAGIC, 0(dest_buf)              // header to indicate a sparse packer
+    addq    $4, dest_buf
+
+    movq    $0, %rdx                            // rdx = byte offset in src of non-0 word
+    movq    start_next_input_word, %r8
+1:
+    movq    0(%r8, %rdx), %rax                  // rax = read dword
+	testq	%rax, %rax                          // is dword == 0
+    jne     5f
+3:
+    addq    $8, %rdx                            // 8 more bytes have been processed
+4:
+    cmpq    $4096, %rdx
+    jne     1b
+    movq    %r11, %rax                          // store the size of the compressed stream
+    jmp     L_done
+
+5:
+    testl   %eax, %eax                          // is lower word == 0
+    je      6f
+    movl    %eax, 0(dest_buf)                   // store the non-0 word in the dest buffer
+    mov     %dx, 4(dest_buf)                    // store the byte index
+    addq    $6, dest_buf
+6:
+    shrq    $32, %rax                           // get the upper word into position
+    testl   %eax, %eax                          // is upper word == 0
+    je      3b
+    addq    $4, %rdx
+    movl    %eax, 0(dest_buf)                   // store the word in the dest buffer
+    mov     %dx, 4(dest_buf)                    // store the byte index
+    addq    $6, dest_buf
+    addq    $4, %rdx
+    jmp     4b
+
+L_check_compression_ratio:
+
+    movq    end_of_input, checkpoint            // checkpoint = end of buffer
+
+    movq    next_low_bits, %rax
+    subq    start_next_low_bits, %rax           // get bytes consumed by lower-10 bits
+    movq    $1365, %rdx
+    mulq    %rdx
+    shrq    $11, %rax                           // rax = 2/3*(next_low_bits - start_next_low_bits)
+    
+    movq    next_full_patt, %rdx
+    subq    start_next_full_patt, %rdx          // get bytes consumed by dictionary misses
+    addq    %rdx, %rax                          // rax += (next_full_patt - start_next_full_patt)
+
+    movq    next_qp, %rdx
+    subq    start_next_qp, %rdx
+    shrq    $1, %rdx
+    addq    %rdx, %rax                          // rax += (next_qp - start_next_qp)/2
+
+    addq    $CHKPT_TAG_BYTES, %rax              // rax += bytes taken by the tags
+    cmpq    $CHKPT_SHRUNK_BYTES, %rax
+    ja      L_budgetExhausted                   // compressed size exceeds budget
+    jmp     L_scan_loop 
 

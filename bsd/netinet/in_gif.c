@@ -177,12 +177,12 @@ in_gif_output(
 	iphdr.ip_ttl = ip_gif_ttl;
 	iphdr.ip_len = m->m_pkthdr.len + sizeof (struct ip);
 	if (ifp->if_flags & IFF_LINK1)
-		ip_ecn_ingress(ECN_ALLOWED, &iphdr.ip_tos, &tos);
+		ip_ecn_ingress(ECN_NORMAL, &iphdr.ip_tos, &tos);
 	else
 		ip_ecn_ingress(ECN_NOCARE, &iphdr.ip_tos, &tos);
 
 	/* prepend new IP header */
-	M_PREPEND(m, sizeof (struct ip), M_DONTWAIT);
+	M_PREPEND(m, sizeof (struct ip), M_DONTWAIT, 0);
 	if (m && mbuf_len(m) < sizeof (struct ip))
 		m = m_pullup(m, sizeof (struct ip));
 	if (m == NULL) {
@@ -240,6 +240,7 @@ in_gif_input(m, off)
 	struct ip *ip;
 	int af, proto;
 	u_int8_t otos;
+	int egress_success = 0;
 
 	ip = mtod(m, struct ip *);
 	proto = ip->ip_p;
@@ -268,9 +269,9 @@ in_gif_input(m, off)
 		}
 		ip = mtod(m, struct ip *);
 		if (gifp->if_flags & IFF_LINK1)
-			ip_ecn_egress(ECN_ALLOWED, &otos, &ip->ip_tos);
+			egress_success = ip_ecn_egress(ECN_NORMAL, &otos, &ip->ip_tos);
 		else
-			ip_ecn_egress(ECN_NOCARE, &otos, &ip->ip_tos);
+			egress_success = ip_ecn_egress(ECN_NOCARE, &otos, &ip->ip_tos);
 		break;
 	    }
 #endif
@@ -288,9 +289,9 @@ in_gif_input(m, off)
 		ip6 = mtod(m, struct ip6_hdr *);
 		itos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
 		if (gifp->if_flags & IFF_LINK1)
-			ip_ecn_egress(ECN_ALLOWED, &otos, &itos);
+			egress_success = ip_ecn_egress(ECN_NORMAL, &otos, &itos);
 		else
-			ip_ecn_egress(ECN_NOCARE, &otos, &itos);
+			egress_success = ip_ecn_egress(ECN_NOCARE, &otos, &itos);
 		ip6->ip6_flow &= ~htonl(0xff << 20);
 		ip6->ip6_flow |= htonl((u_int32_t)itos << 20);
 		break;
@@ -301,6 +302,13 @@ in_gif_input(m, off)
 		m_freem(m);
 		return;
 	}
+
+	if (egress_success == 0) {
+		OSAddAtomic(1, &ipstat.ips_nogif);
+		m_freem(m);
+		return;
+	}
+
 #ifdef __APPLE__
 	/* Replace the rcvif by gifp for dlil to route it correctly */
 	if (m->m_pkthdr.rcvif)

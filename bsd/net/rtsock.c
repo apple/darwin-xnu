@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -124,7 +124,7 @@ static int rts_shutdown(struct socket *);
 static int rts_sockaddr(struct socket *, struct sockaddr **);
 
 static int route_output(struct mbuf *, struct socket *);
-static void rt_setmetrics(u_int32_t, struct rt_metrics *, struct rtentry *);
+static int rt_setmetrics(u_int32_t, struct rt_metrics *, struct rtentry *);
 static void rt_getmetrics(struct rtentry *, struct rt_metrics *);
 static void rt_setif(struct rtentry *, struct sockaddr *, struct sockaddr *,
     struct sockaddr *, unsigned int);
@@ -481,7 +481,7 @@ route_output(struct mbuf *m, struct socket *so)
 			rt_setif(saved_nrt,
 			    info.rti_info[RTAX_IFP], info.rti_info[RTAX_IFA],
 			    info.rti_info[RTAX_GATEWAY], ifscope);
-			rt_setmetrics(rtm->rtm_inits, &rtm->rtm_rmx, saved_nrt);
+			(void)rt_setmetrics(rtm->rtm_inits, &rtm->rtm_rmx, saved_nrt);
 			saved_nrt->rt_rmx.rmx_locks &= ~(rtm->rtm_inits);
 			saved_nrt->rt_rmx.rmx_locks |=
 			    (rtm->rtm_inits & rtm->rtm_rmx.rmx_locks);
@@ -613,7 +613,12 @@ report:
 			    info.rti_info[RTAX_IFP], info.rti_info[RTAX_IFA],
 			    info.rti_info[RTAX_GATEWAY], ifscope);
 
-			rt_setmetrics(rtm->rtm_inits, &rtm->rtm_rmx, rt);
+			if ((error = rt_setmetrics(rtm->rtm_inits,
+			    &rtm->rtm_rmx, rt))) {
+				 int tmp = error;
+				 RT_UNLOCK(rt);
+				 senderr(tmp);
+			}
 			if (info.rti_info[RTAX_GENMASK])
 				rt->rt_genmask = info.rti_info[RTAX_GENMASK];
 			/* FALLTHRU */
@@ -705,41 +710,54 @@ rt_setexpire(struct rtentry *rt, uint64_t expiry)
 	}
 }
 
-static void
+static int
 rt_setmetrics(u_int32_t which, struct rt_metrics *in, struct rtentry *out)
 {
-	struct timeval caltime;
-
-	getmicrotime(&caltime);
-
-#define	metric(f, e) if (which & (f)) out->rt_rmx.e = in->e;
-	metric(RTV_RPIPE, rmx_recvpipe);
-	metric(RTV_SPIPE, rmx_sendpipe);
-	metric(RTV_SSTHRESH, rmx_ssthresh);
-	metric(RTV_RTT, rmx_rtt);
-	metric(RTV_RTTVAR, rmx_rttvar);
-	metric(RTV_HOPCOUNT, rmx_hopcount);
-	metric(RTV_MTU, rmx_mtu);
-	metric(RTV_EXPIRE, rmx_expire);
-#undef metric
-
-	if (out->rt_rmx.rmx_expire > 0) {
-		/* account for system time change */
+	if (!(which & RTV_REFRESH_HOST)) {
+		struct timeval caltime;
 		getmicrotime(&caltime);
-		out->base_calendartime +=
-		    NET_CALCULATE_CLOCKSKEW(caltime,
-		    out->base_calendartime,
-		    net_uptime(), out->base_uptime);
-		rt_setexpire(out,
-		    out->rt_rmx.rmx_expire -
-		    out->base_calendartime +
-		    out->base_uptime);
-	} else {
-		rt_setexpire(out, 0);
-	}
+#define	metric(f, e) if (which & (f)) out->rt_rmx.e = in->e;
+		metric(RTV_RPIPE, rmx_recvpipe);
+		metric(RTV_SPIPE, rmx_sendpipe);
+		metric(RTV_SSTHRESH, rmx_ssthresh);
+		metric(RTV_RTT, rmx_rtt);
+		metric(RTV_RTTVAR, rmx_rttvar);
+		metric(RTV_HOPCOUNT, rmx_hopcount);
+		metric(RTV_MTU, rmx_mtu);
+		metric(RTV_EXPIRE, rmx_expire);
+#undef metric
+		if (out->rt_rmx.rmx_expire > 0) {
+			/* account for system time change */
+			getmicrotime(&caltime);
+			out->base_calendartime +=
+				NET_CALCULATE_CLOCKSKEW(caltime,
+						out->base_calendartime,
+						net_uptime(), out->base_uptime);
+			rt_setexpire(out,
+					out->rt_rmx.rmx_expire -
+					out->base_calendartime +
+					out->base_uptime);
+		} else {
+			rt_setexpire(out, 0);
+		}
 
-	VERIFY(out->rt_expire == 0 || out->rt_rmx.rmx_expire != 0);
-	VERIFY(out->rt_expire != 0 || out->rt_rmx.rmx_expire == 0);
+		VERIFY(out->rt_expire == 0 || out->rt_rmx.rmx_expire != 0);
+		VERIFY(out->rt_expire != 0 || out->rt_rmx.rmx_expire == 0);
+	} else {
+		/* Only RTV_REFRESH_HOST must be set */
+		if ((which & ~RTV_REFRESH_HOST) ||
+		    (out->rt_flags & RTF_STATIC) ||
+		    !(out->rt_flags & RTF_LLINFO)) {
+			return (EINVAL);
+		}
+
+		if (out->rt_llinfo_refresh == NULL) {
+			return (ENOTSUP);
+		}
+
+		out->rt_llinfo_refresh(out);
+	}
+	return (0);
 }
 
 static void
@@ -983,7 +1001,7 @@ rt_msg1(int type, struct rt_addrinfo *rtinfo)
 	struct rt_msghdr *rtm;
 	struct mbuf *m;
 	int i;
-	int len, dlen;
+	int len, dlen, off;
 
 	switch (type) {
 
@@ -1004,8 +1022,6 @@ rt_msg1(int type, struct rt_addrinfo *rtinfo)
 	default:
 		len = sizeof (struct rt_msghdr);
 	}
-	if (len > MCLBYTES)
-		panic("rt_msg1");
 	m = m_gethdr(M_DONTWAIT, MT_DATA);
 	if (m && len > MHLEN) {
 		MCLGET(m, M_DONTWAIT);
@@ -1020,6 +1036,7 @@ rt_msg1(int type, struct rt_addrinfo *rtinfo)
 	m->m_pkthdr.rcvif = NULL;
 	rtm = mtod(m, struct rt_msghdr *);
 	bzero((caddr_t)rtm, len);
+	off = len;
 	for (i = 0; i < RTAX_MAX; i++) {
 		struct sockaddr *sa, *hint;
 		uint8_t ssbuf[SOCK_MAXADDRLEN + 1];
@@ -1048,9 +1065,10 @@ rt_msg1(int type, struct rt_addrinfo *rtinfo)
 		}
 
 		rtinfo->rti_addrs |= (1 << i);
-		dlen = ROUNDUP32(sa->sa_len);
-		m_copyback(m, len, dlen, (caddr_t)sa);
-		len += dlen;
+		dlen = sa->sa_len;
+		m_copyback(m, off, dlen, (caddr_t)sa);
+		len = off + dlen;
+		off += ROUNDUP32(dlen);
 	}
 	if (m->m_pkthdr.len != len) {
 		m_freem(m);
@@ -1067,7 +1085,7 @@ rt_msg2(int type, struct rt_addrinfo *rtinfo, caddr_t cp, struct walkarg *w,
 	kauth_cred_t* credp)
 {
 	int i;
-	int len, dlen, second_time = 0;
+	int len, dlen, rlen, second_time = 0;
 	caddr_t cp0;
 
 	rtinfo->rti_addrs = 0;
@@ -1143,12 +1161,15 @@ again:
 		}
 
 		rtinfo->rti_addrs |= (1 << i);
-		dlen = ROUNDUP32(sa->sa_len);
+		dlen = sa->sa_len;
+		rlen = ROUNDUP32(dlen);
 		if (cp) {
-			bcopy((caddr_t)sa, cp, (unsigned)dlen);
-			cp += dlen;
+			bcopy((caddr_t)sa, cp, (size_t)dlen);
+			if (dlen != rlen)
+				bzero(cp + dlen, rlen - dlen);
+			cp += rlen;
 		}
-		len += dlen;
+		len += rlen;
 	}
 	if (cp == NULL && w != NULL && !second_time) {
 		struct walkarg *rw = w;

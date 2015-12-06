@@ -808,6 +808,7 @@ hfsc_enqueue(struct hfsc_if *hif, struct hfsc_class *cl, struct mbuf *m,
 		}
 	}
 	IFCQ_INC_LEN(ifq);
+	IFCQ_INC_BYTES(ifq, len);
 	cl->cl_hif->hif_packets++;
 
 	/* successfully queued. */
@@ -897,6 +898,7 @@ hfsc_dequeue(struct hfsc_if *hif, cqdq_op_t op)
 	len = m_pktlen(m);
 	cl->cl_hif->hif_packets--;
 	IFCQ_DEC_LEN(ifq);
+	IFCQ_DEC_BYTES(ifq, len);
 	IFCQ_XMIT_ADD(ifq, 1, len);
 	PKTCNTR_ADD(&cl->cl_stats.xmit_cnt, 1, len);
 

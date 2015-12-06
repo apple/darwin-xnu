@@ -185,148 +185,6 @@ chudxnu_is_64bit_task(task_t task)
 	return (task_has_64BitAddr(task));
 }
 
-#define THING_TASK		0
-#define THING_THREAD	1
-
-// an exact copy of processor_set_things() except no mig conversion at the end!
-static kern_return_t
-chudxnu_private_processor_set_things(
-	processor_set_t		pset,
-	mach_port_t		**thing_list,
-	mach_msg_type_number_t	*count,
-	int			type)
-{
-	unsigned int actual;	/* this many things */
-	unsigned int maxthings;
-	unsigned int i;
-
-	vm_size_t size, size_needed;
-	void  *addr;
-
-	if (pset == PROCESSOR_SET_NULL || pset != &pset0)
-		return (KERN_INVALID_ARGUMENT);
-
-	size = 0; addr = NULL;
-
-	for (;;) {
-		lck_mtx_lock(&tasks_threads_lock);
-
-		if (type == THING_TASK)
-			maxthings = tasks_count;
-		else
-			maxthings = threads_count;
-
-		/* do we have the memory we need? */
-
-		size_needed = maxthings * sizeof (mach_port_t);
-		if (size_needed <= size)
-			break;
-
-		lck_mtx_unlock(&tasks_threads_lock);
-
-		if (size != 0)
-			kfree(addr, size);
-
-		assert(size_needed > 0);
-		size = size_needed;
-
-		addr = kalloc(size);
-		if (addr == 0)
-			return (KERN_RESOURCE_SHORTAGE);
-	}
-
-	/* OK, have memory and the processor_set is locked & active */
-
-	actual = 0;
-	switch (type) {
-
-	case THING_TASK:
-	{
-		task_t		task, *task_list = (task_t *)addr;
-
-		for (task = (task_t)queue_first(&tasks);
-				!queue_end(&tasks, (queue_entry_t)task);
-					task = (task_t)queue_next(&task->tasks)) {
-			task_reference_internal(task);
-			task_list[actual++] = task;
-		}
-
-		break;
-	}
-
-	case THING_THREAD:
-	{
-		thread_t	thread, *thread_list = (thread_t *)addr;
-
-		for (i = 0, thread = (thread_t)queue_first(&threads);
-				!queue_end(&threads, (queue_entry_t)thread);
-					thread = (thread_t)queue_next(&thread->threads)) {
-			thread_reference_internal(thread);
-			thread_list[actual++] = thread;
-		}
-
-		break;
-	}
-	}
-		
-	lck_mtx_unlock(&tasks_threads_lock);
-
-	if (actual < maxthings)
-		size_needed = actual * sizeof (mach_port_t);
-
-	if (actual == 0) {
-		/* no things, so return null pointer and deallocate memory */
-		*thing_list = NULL;
-		*count = 0;
-
-		if (size != 0)
-			kfree(addr, size);
-	}
-	else {
-		/* if we allocated too much, must copy */
-
-		if (size_needed < size) {
-			void *newaddr;
-
-			newaddr = kalloc(size_needed);
-			if (newaddr == 0) {
-				switch (type) {
-
-				case THING_TASK:
-				{
-					task_t		*task_list = (task_t *)addr;
-
-					for (i = 0; i < actual; i++)
-						task_deallocate(task_list[i]);
-					break;
-				}
-
-				case THING_THREAD:
-				{
-					thread_t	*thread_list = (thread_t *)addr;
-
-					for (i = 0; i < actual; i++)
-						thread_deallocate(thread_list[i]);
-					break;
-				}
-				}
-
-				kfree(addr, size);
-				return (KERN_RESOURCE_SHORTAGE);
-			}
-
-			bcopy((void *) addr, (void *) newaddr, size_needed);
-			kfree(addr, size);
-			addr = newaddr;
-		}
-
-		*thing_list = (mach_port_t *)addr;
-		*count = actual;
-	}
-
-	return (KERN_SUCCESS);
-}
-
 // an exact copy of task_threads() except no mig conversion at the end!
 static kern_return_t
 chudxnu_private_task_threads(
@@ -438,7 +296,7 @@ chudxnu_all_tasks(
 	task_array_t		*task_list,
 	mach_msg_type_number_t	*count)
 {
-	return chudxnu_private_processor_set_things(&pset0, (mach_port_t **)task_list, count, THING_TASK);	
+	return processor_set_things(&pset0, (void **)task_list, count, PSET_THING_TASK);	
 }
 
 __private_extern__ kern_return_t
@@ -467,7 +325,7 @@ chudxnu_all_threads(
 	thread_array_t		*thread_list,
 	mach_msg_type_number_t	*count)
 {
-	return chudxnu_private_processor_set_things(&pset0, (mach_port_t **)thread_list, count, THING_THREAD);
+	return processor_set_things(&pset0, (void **)thread_list, count, PSET_THING_THREAD);
 }
 
 __private_extern__ kern_return_t

@@ -108,11 +108,8 @@
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #ifdef KERNEL
-#ifdef KERNEL_PRIVATE
-#include <kern/wait_queue.h>
-#endif
 #include <sys/kernel_types.h>
-
+#include <kern/waitq.h>
 #include <sys/event.h>
 
 /*
@@ -121,8 +118,8 @@
  */
 #ifdef KERNEL_PRIVATE
 struct selinfo {
-	struct  wait_queue si_wait_queue;	/* wait_queue for wait/wakeup */
-	struct klist si_note;		/* JMM - temporary separation */
+	struct	waitq si_waitq;		/* waitq for wait/wakeup */
+	struct	klist si_note;		/* JMM - temporary separation */
 	u_int	si_flags;		/* see below */
 };
 

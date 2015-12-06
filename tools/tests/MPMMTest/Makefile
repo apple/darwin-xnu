@@ -1,15 +1,11 @@
-SDKROOT ?= /
-ifeq "$(RC_TARGET_CONFIG)" "iPhone"
-Embedded?=YES
-else
-Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
-endif
+include ../Makefile.common
 
 CC:=$(shell xcrun -sdk "$(SDKROOT)" -find cc)
 
 SYMROOT?=$(shell /bin/pwd)
 
-CFLAGS := -g -O2 -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+CFLAGS := -g -O2 -isysroot $(SDKROOT) -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+CFLAGS += -Wno-deprecated-declarations
 
 ifdef RC_ARCHS
     ARCHS:=$(RC_ARCHS)
@@ -55,7 +51,7 @@ $(DSTROOT)/KQMPMMtestD: KQMPMMtest.c
 	if [ ! -e $@ ]; then ditto $(SYMROOT)/$(notdir $@) $@; fi
 
 $(DSTROOT)/KQMPMMtest_64D: KQMPMMtest.c
-	${CC} ${CFLAG} ${ARCH_64_FLAGS} -DDIRECT_MSG_RCV=1 -o $(SYMROOT)/$(notdir $@) $?
+	${CC} ${CFLAGS} ${ARCH_64_FLAGS} -DDIRECT_MSG_RCV=1 -o $(SYMROOT)/$(notdir $@) $?
 	if [ ! -e $@ ]; then ditto $(SYMROOT)/$(notdir $@) $@; fi
 
 clean:

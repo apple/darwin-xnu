@@ -6,8 +6,8 @@ _VNOP_STRATEGY
 _VNOP_WRITE
 __FREE
 __FREE_ZONE
-__MALLOC
-__MALLOC_ZONE
+__MALLOC:__MALLOC_external
+__MALLOC_ZONE:__MALLOC_ZONE_external
 _advisory_read
 _advisory_read_ext
 _bcd2bin_data
@@ -468,6 +468,7 @@ _nop_write
 _nulldev
 _nullop
 _physio
+_proc_chrooted
 _proc_exiting
 _proc_find
 _proc_forcequota
@@ -650,6 +651,7 @@ _vfs_flags
 _vfs_fsadd
 _vfs_fsprivate
 _vfs_fsremove
+_vfs_get_notify_attributes
 _vfs_getnewfsid
 _vfs_getvfs
 _vfs_init_io_attributes
@@ -728,6 +730,7 @@ _vnode_iterate
 _vnode_lookup
 _vnode_mount
 _vnode_mountedhere
+_vnode_notify
 _vnode_open
 _vnode_put
 _vnode_putname

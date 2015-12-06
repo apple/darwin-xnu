@@ -42,7 +42,7 @@
  * ioctl                                 description
  * ------------------------------------- ---------------------------------------
  * DKIOCEJECT                            eject media
- * DKIOCSYNCHRONIZECACHE                 flush media
+ * DKIOCSYNCHRONIZE                      flush media
  *
  * DKIOCFORMAT                           format media
  * DKIOCGETFORMATCAPACITIES              get media's formattable capacities
@@ -75,8 +75,11 @@
  * DKIOCGETCOMMANDPOOLSIZE               get device's queue depth
  */
 
+#define DK_FEATURE_BARRIER                    0x00000002
 #define DK_FEATURE_PRIORITY                   0x00000004
 #define DK_FEATURE_UNMAP                      0x00000010
+
+#define DK_SYNCHRONIZE_OPTION_BARRIER         0x00000002
 
 typedef struct
 {
@@ -111,6 +114,16 @@ typedef struct
 
 typedef struct
 {
+    uint64_t               offset;
+    uint64_t               length;
+
+    uint32_t               options;
+
+    uint8_t                reserved0160[4];        /* reserved, clear to zero */
+} dk_synchronize_t;
+
+typedef struct
+{
     dk_extent_t *          extents;
     uint32_t               extentsCount;
 
@@ -120,6 +133,21 @@ typedef struct
     uint8_t                reserved0096[4];        /* reserved, clear to zero */
 #endif /* !__LP64__ */
 } dk_unmap_t;
+
+
+typedef struct
+{
+	uint64_t           flags;
+	uint64_t           hotfile_size;           /* in bytes */
+	uint64_t           hibernate_minsize;
+	uint64_t           swapfile_pinning;
+
+	uint64_t           padding[4];
+} dk_corestorage_info_t;
+
+#define DK_CORESTORAGE_PIN_YOUR_METADATA        0x00000001
+#define DK_CORESTORAGE_ENABLE_HOTFILES          0x00000002
+#define DK_CORESTORAGE_PIN_YOUR_SWAPFILE        0x00000004
 
 
 #ifdef KERNEL
@@ -132,7 +160,7 @@ typedef struct
 #endif /* KERNEL */
 
 #define DKIOCEJECT                            _IO('d', 21)
-#define DKIOCSYNCHRONIZECACHE                 _IO('d', 22)
+#define DKIOCSYNCHRONIZE                      _IOW('d', 22, dk_synchronize_t)
 
 #define DKIOCFORMAT                           _IOW('d', 26, dk_format_capacity_t)
 #define DKIOCGETFORMATCAPACITIES              _IOWR('d', 26, dk_format_capacities_t)
@@ -146,7 +174,7 @@ typedef struct
 
 #define DKIOCREQUESTIDLE                      _IO('d', 30)
 #define DKIOCUNMAP                            _IOW('d', 31, dk_unmap_t)
-#define _DKIOCCORESTORAGE		      _IO('d', 32)
+#define DKIOCCORESTORAGE                      _IOR('d', 32, dk_corestorage_info_t)
 
 #define DKIOCGETMAXBLOCKCOUNTREAD             _IOR('d', 64, uint64_t)
 #define DKIOCGETMAXBLOCKCOUNTWRITE            _IOR('d', 65, uint64_t)
@@ -164,6 +192,8 @@ typedef struct
 #define DKIOCGETFEATURES                      _IOR('d', 76, uint32_t)
 #define DKIOCGETPHYSICALBLOCKSIZE             _IOR('d', 77, uint32_t)
 #define DKIOCGETCOMMANDPOOLSIZE               _IOR('d', 78, uint32_t)
+
+#define DKIOCSYNCHRONIZECACHE                 _IO('d', 22)
 
 #ifdef KERNEL
 #define DK_FEATURE_FORCE_UNIT_ACCESS          0x00000001
@@ -202,7 +232,6 @@ typedef struct
 #endif /* !__LP64__ */
 } dk_set_tier_t;
 
-#define DKIOCGETBLOCKCOUNT32                  _IOR('d', 25, uint32_t)
 #define DKIOCSETBLOCKSIZE                     _IOW('d', 24, uint32_t)
 #define DKIOCGETBSDUNIT                       _IOR('d', 27, uint32_t)
 #define DKIOCISSOLIDSTATE                     _IOR('d', 79, uint32_t)
@@ -234,8 +263,16 @@ typedef struct _dk_cs_pin {
 	dk_extent_t	cp_extent;
 	int64_t		cp_flags;
 } _dk_cs_pin_t;
-#define _DKIOCCSPINFORHIBERNATION       (1 << 0)
-#define _DKIOCCSPINDISCARDBLACKLIST     (1 << 1)
+/* The following are modifiers to _DKIOCCSPINEXTENT/cp_flags operation */
+#define _DKIOCCSPINTOFASTMEDIA          (0)			/* Pin extent to the fast (SSD) media             */
+#define _DKIOCCSPINFORHIBERNATION       (1 << 0)	/* Pin of hibernation file, content not preserved */
+#define _DKIOCCSPINDISCARDBLACKLIST     (1 << 1)	/* Hibernation complete/error, stop blacklisting  */
+#define _DKIOCCSPINTOSLOWMEDIA          (1 << 2)	/* Pin extent to the slow (HDD) media             */
+#define _DKIOCCSTEMPORARYPIN            (1 << 3)	/* Relocate, but do not pin, to indicated media   */
+#define _DKIOCCSHIBERNATEIMGSIZE        (1 << 4)	/* Anticipate/Max size of the upcoming hibernate  */
+#define _DKIOCCSPINFORSWAPFILE          (1 << 5)	/* Pin of swap file, content not preserved        */
+
+#define _DKIOCCSSETLVNAME                     _IOW('d', 198, char[256])
 #define _DKIOCCSPINEXTENT                     _IOW('d', 199, _dk_cs_pin_t)
 #define _DKIOCCSUNPINEXTENT                   _IOW('d', 200, _dk_cs_pin_t)
 #define _DKIOCGETMIGRATIONUNITBYTESIZE        _IOR('d', 201, uint32_t)
@@ -252,8 +289,7 @@ typedef struct _dk_cs_unmap {
 } _dk_cs_unmap_t;
 
 #define _DKIOCCSMAP                           _IOWR('d', 202, _dk_cs_map_t)
-#define _DKIOCCSSETFSVNODE                    _IOW('d', 203, vnode_t)
-#define _DKIOCCSGETFREEBYTES                  _IOR('d', 204, uint64_t)
+// No longer used: _DKIOCCSSETFSVNODE (203) & _DKIOCCSGETFREEBYTES (204)
 #define	_DKIOCCSUNMAP			      _IOWR('d', 205, _dk_cs_unmap_t)
 #endif /* PRIVATE */
 #endif /* KERNEL */

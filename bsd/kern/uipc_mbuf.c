@@ -231,7 +231,7 @@
  *			|				|
  *			v				|
  *		    [freelist] ----------->>------------+
- *	 (objects never get purged to VM)
+ *	 (objects get purged to VM only on demand)
  *
  * b. Composite object:
  *
@@ -293,7 +293,7 @@
  *
  * The mclaudit[] array is allocated at initialization time, but its contents
  * get populated when the corresponding cluster is created.  Because a page
- * can be turned into NMBPBG number of mbufs, we preserve enough space for the
+ * can be turned into NMBPG number of mbufs, we preserve enough space for the
  * mbufs so that there is a 1-to-1 mapping between them.  A page that never
  * gets (or has not yet) turned into mbufs will use only cl_audit[0] with the
  * remaining entries unused.  For 16KB cluster, only one entry from the first
@@ -402,22 +402,22 @@ typedef struct mcl_slab {
  * whenever a new piece of memory mapped in from the VM crosses the 1MB
  * boundary.
  */
-#define	NSLABSPMB	((1 << MBSHIFT) >> PGSHIFT)	/* 256 slabs/grp */
+#define	NSLABSPMB	((1 << MBSHIFT) >> PAGE_SHIFT)
 
 typedef struct mcl_slabg {
-	mcl_slab_t	slg_slab[NSLABSPMB];	/* group of slabs */
+	mcl_slab_t	*slg_slab;	/* group of slabs */
 } mcl_slabg_t;
 
 /*
  * Number of slabs needed to control a 16KB cluster object.
  */
-#define	NSLABSP16KB	(M16KCLBYTES >> PGSHIFT)
+#define	NSLABSP16KB	(M16KCLBYTES >> PAGE_SHIFT)
 
 /*
  * Per-cluster audit structure.
  */
 typedef struct {
-	mcache_audit_t	*cl_audit[NMBPBG];	/* array of audits */
+	mcache_audit_t	**cl_audit;	/* array of audits */
 } mcl_audit_t;
 
 typedef struct {
@@ -476,8 +476,8 @@ static unsigned int slabgrp;	/* # of entries in slabs table */
 int nclusters;			/* # of clusters for non-jumbo (legacy) sizes */
 int njcl;			/* # of clusters for jumbo sizes */
 int njclbytes;			/* size of a jumbo cluster */
-union mbigcluster *mbutl;	/* first mapped cluster address */
-union mbigcluster *embutl;	/* ending virtual address of mclusters */
+unsigned char *mbutl;		/* first mapped cluster address */
+unsigned char *embutl;		/* ending virtual address of mclusters */
 int _max_linkhdr;		/* largest link-level header */
 int _max_protohdr;		/* largest protocol header */
 int max_hdr;			/* largest link+protocol header */
@@ -788,7 +788,8 @@ static boolean_t mbuf_report_usage(mbuf_class_t);
 }
 
 #define	MBUF_IN_MAP(addr)						\
-	((void *)(addr) >= (void *)mbutl && (void *)(addr) < (void *)embutl)
+	((unsigned char *)(addr) >= mbutl && 				\
+	(unsigned char *)(addr) < embutl)
 
 #define	MRANGE(addr) {							\
 	if (!MBUF_IN_MAP(addr))						\
@@ -801,21 +802,28 @@ static boolean_t mbuf_report_usage(mbuf_class_t);
 #define	MTOD(m, t)	((t)((m)->m_data))
 
 /*
- * Macros to obtain (4KB) cluster index and base cluster address.
+ * Macros to obtain page index given a base cluster address
  */
-
-#define	MTOBG(x)	(((char *)(x) - (char *)mbutl) >> MBIGCLSHIFT)
-#define	BGTOM(x)	((union mbigcluster *)(mbutl + (x)))
+#define	MTOPG(x)	(((unsigned char *)x - mbutl) >> PAGE_SHIFT)
+#define PGTOM(x)	(mbutl + (x << PAGE_SHIFT))
 
 /*
  * Macro to find the mbuf index relative to a base.
  */
-#define	MCLIDX(c, m)	(((char *)(m) - (char *)(c)) >> MSIZESHIFT)
+#define	MBPAGEIDX(c, m)	\
+	(((unsigned char *)(m) - (unsigned char *)(c)) >> MSIZESHIFT)
 
 /*
  * Same thing for 2KB cluster index.
  */
-#define	CLBGIDX(c, m)	(((char *)(m) - (char *)(c)) >> MCLSHIFT)
+#define	CLPAGEIDX(c, m)	\
+	(((unsigned char *)(m) - (unsigned char *)(c)) >> MCLSHIFT)
+
+/*
+ * Macro to find 4KB cluster index relative to a base
+ */
+#define BCLPAGEIDX(c, m) \
+	(((unsigned char *)(m) - (unsigned char *)(c)) >> MBIGCLSHIFT)
 
 /*
  * Macros used during mbuf and cluster initialization.
@@ -1178,7 +1186,7 @@ static void
 mbuf_table_init(void)
 {
 	unsigned int b, c, s;
-	int m;
+	int m, config_mbuf_jumbo = 0;
 
 	MALLOC(omb_stat, struct omb_stat *, OMB_STAT_SIZE(NELEM(mbuf_table)),
 	    M_TEMP, M_WAITOK | M_ZERO);
@@ -1193,38 +1201,44 @@ mbuf_table_init(void)
 		mbuf_table[m].mtbl_stats = &mb_stat->mbs_class[m];
 
 #if CONFIG_MBUF_JUMBO
-	/*
-	 * Set aside 1/3 of the mbuf cluster map for jumbo clusters; we do
-	 * this only on platforms where jumbo cluster pool is enabled.
-	 */
-	njcl = nmbclusters / 3;
-	njclbytes = M16KCLBYTES;
+	config_mbuf_jumbo = 1;
 #endif /* CONFIG_MBUF_JUMBO */
+
+	if (config_mbuf_jumbo == 1 || PAGE_SIZE == M16KCLBYTES) {
+		/*
+		 * Set aside 1/3 of the mbuf cluster map for jumbo
+		 * clusters; we do this only on platforms where jumbo
+		 * cluster pool is enabled.
+		 */
+		njcl = nmbclusters / 3;
+		njclbytes = M16KCLBYTES;
+	}
 
 	/*
 	 * nclusters holds both the 2KB and 4KB pools, so ensure it's
 	 * a multiple of 4KB clusters.
 	 */
-	nclusters = P2ROUNDDOWN(nmbclusters - njcl, NCLPBG);
+	nclusters = P2ROUNDDOWN(nmbclusters - njcl, NCLPG);
 	if (njcl > 0) {
 		/*
 		 * Each jumbo cluster takes 8 2KB clusters, so make
 		 * sure that the pool size is evenly divisible by 8;
 		 * njcl is in 2KB unit, hence treated as such.
 		 */
-		njcl = P2ROUNDDOWN(nmbclusters - nclusters, 8);
+		njcl = P2ROUNDDOWN(nmbclusters - nclusters, NCLPJCL);
 
 		/* Update nclusters with rounded down value of njcl */
-		nclusters = P2ROUNDDOWN(nmbclusters - njcl, NCLPBG);
+		nclusters = P2ROUNDDOWN(nmbclusters - njcl, NCLPG);
 	}
 
 	/*
-	 * njcl is valid only on platforms with 16KB jumbo clusters, where
-	 * it is configured to 1/3 of the pool size.  On these platforms,
-	 * the remaining is used for 2KB and 4KB clusters.  On platforms
-	 * without 16KB jumbo clusters, the entire pool is used for both
-	 * 2KB and 4KB clusters.  A 4KB cluster can either be splitted into
-	 * 16 mbufs, or into 2 2KB clusters.
+	 * njcl is valid only on platforms with 16KB jumbo clusters or
+	 * with 16KB pages, where it is configured to 1/3 of the pool
+	 * size.  On these platforms, the remaining is used for 2KB
+	 * and 4KB clusters.  On platforms without 16KB jumbo clusters,
+	 * the entire pool is used for both 2KB and 4KB clusters.  A 4KB
+	 * cluster can either be splitted into 16 mbufs, or into 2 2KB
+	 * clusters.
 	 *
 	 *  +---+---+------------ ... -----------+------- ... -------+
 	 *  | c | b |              s             |        njcl       |
@@ -1233,8 +1247,8 @@ mbuf_table_init(void)
 	 * 1/32th of the shared region is reserved for pure 2KB and 4KB
 	 * clusters (1/64th each.)
 	 */
-	c = P2ROUNDDOWN((nclusters >> 6), 2);		/* in 2KB unit */
-	b = P2ROUNDDOWN((nclusters >> (6 + NCLPBGSHIFT)), 2); /* in 4KB unit */
+	c = P2ROUNDDOWN((nclusters >> 6), NCLPG);	/* in 2KB unit */
+	b = P2ROUNDDOWN((nclusters >> (6 + NCLPBGSHIFT)), NBCLPG); /* in 4KB unit */
 	s = nclusters - (c + (b << NCLPBGSHIFT));	/* in 2KB unit */
 
 	/*
@@ -1468,7 +1482,7 @@ mbinit(void)
 	 * mcl_slab_g_t units, each one representing a MB of memory.
 	 */
 	maxslabgrp =
-	    (P2ROUNDUP(nmbclusters, (MBSIZE >> 11)) << MCLSHIFT) >> MBSHIFT;
+	    (P2ROUNDUP(nmbclusters, (MBSIZE >> MCLSHIFT)) << MCLSHIFT) >> MBSHIFT;
 	MALLOC(slabstbl, mcl_slabg_t **, maxslabgrp * sizeof (mcl_slabg_t *),
 	    M_TEMP, M_WAITOK | M_ZERO);
 	VERIFY(slabstbl != NULL);
@@ -1476,17 +1490,25 @@ mbinit(void)
 	/*
 	 * Allocate audit structures, if needed:
 	 *
-	 *	maxclaudit = (maxslabgrp * 1024 * 1024) / 4096
+	 *	maxclaudit = (maxslabgrp * 1024 * 1024) / PAGE_SIZE
 	 *
 	 * This yields mcl_audit_t units, each one representing a page.
 	 */
 	PE_parse_boot_argn("mbuf_debug", &mbuf_debug, sizeof (mbuf_debug));
 	mbuf_debug |= mcache_getflags();
 	if (mbuf_debug & MCF_DEBUG) {
-		maxclaudit = ((maxslabgrp << MBSHIFT) >> PGSHIFT);
+		int l;
+		mcl_audit_t *mclad;
+		maxclaudit = ((maxslabgrp << MBSHIFT) >> PAGE_SHIFT);
 		MALLOC(mclaudit, mcl_audit_t *, maxclaudit * sizeof (*mclaudit),
 		    M_TEMP, M_WAITOK | M_ZERO);
 		VERIFY(mclaudit != NULL);
+		for (l = 0, mclad = mclaudit; l < maxclaudit; l++) {
+			MALLOC(mclad[l].cl_audit, mcache_audit_t **,
+			    NMBPG * sizeof(mcache_audit_t *),
+			    M_TEMP, M_WAITOK | M_ZERO);
+			VERIFY(mclad[l].cl_audit != NULL);
+		}
 
 		mcl_audit_con_cache = mcache_create("mcl_audit_contents",
 		    AUDIT_CONTENTS_SIZE, sizeof (u_int64_t), 0, MCR_SLEEP);
@@ -1507,7 +1529,7 @@ mbinit(void)
 	mleak_activate();
 
 	/* Calculate the number of pages assigned to the cluster pool */
-	mcl_pages = (nmbclusters * MCLBYTES) / CLBYTES;
+	mcl_pages = (nmbclusters << MCLSHIFT) / PAGE_SIZE;
 	MALLOC(mcl_paddr, ppnum_t *, mcl_pages * sizeof (ppnum_t),
 	    M_TEMP, M_WAITOK);
 	VERIFY(mcl_paddr != NULL);
@@ -1516,9 +1538,8 @@ mbinit(void)
 	mcl_paddr_base = IOMapperIOVMAlloc(mcl_pages);
 	bzero((char *)mcl_paddr, mcl_pages * sizeof (ppnum_t));
 
-	embutl = (union mbigcluster *)
-	    ((void *)((unsigned char *)mbutl + (nmbclusters * MCLBYTES)));
-	VERIFY((((char *)embutl - (char *)mbutl) % MBIGCLBYTES) == 0);
+	embutl = (mbutl + (nmbclusters * MCLBYTES));
+	VERIFY(((embutl - mbutl) % MBIGCLBYTES) == 0);
 
 	/* Prime up the freelist */
 	PE_parse_boot_argn("initmcl", &initmcl, sizeof (initmcl));
@@ -1659,8 +1680,6 @@ slab_alloc(mbuf_class_t class, int wait)
 
 	lck_mtx_assert(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
 
-	VERIFY(class != MC_16KCL || njcl > 0);
-
 	/* This should always be NULL for us */
 	VERIFY(m_cobjlist(class) == NULL);
 
@@ -1671,7 +1690,8 @@ slab_alloc(mbuf_class_t class, int wait)
 	 * more than one buffer chunks (e.g. mbuf slabs).  For other
 	 * slabs, this probably doesn't make much of a difference.
 	 */
-	if ((class == MC_MBUF || class == MC_CL) && (wait & MCR_COMP))
+	if ((class == MC_MBUF || class == MC_CL || class == MC_BIGCL)
+	    && (wait & MCR_COMP))
 		sp = (mcl_slab_t *)TAILQ_LAST(&m_slablist(class), mcl_slhead);
 	else
 		sp = (mcl_slab_t *)TAILQ_FIRST(&m_slablist(class));
@@ -1688,25 +1708,18 @@ slab_alloc(mbuf_class_t class, int wait)
 	    (sp->sl_flags & (SLF_MAPPED | SLF_PARTIAL)) == SLF_MAPPED);
 	buf = sp->sl_head;
 	VERIFY(slab_inrange(sp, buf) && sp == slab_get(buf));
+	sp->sl_head = buf->obj_next;
+	/* Increment slab reference */
+	sp->sl_refcnt++;
 
-	if (class == MC_MBUF) {
-		sp->sl_head = buf->obj_next;
-		VERIFY(sp->sl_head != NULL || sp->sl_refcnt == (NMBPBG - 1));
-	} else if (class == MC_CL) {
-		sp->sl_head = buf->obj_next;
-		VERIFY(sp->sl_head != NULL || sp->sl_refcnt == (NCLPBG - 1));
-	} else {
-		sp->sl_head = NULL;
-	}
+	VERIFY(sp->sl_head != NULL || sp->sl_refcnt == sp->sl_chunks);
+
 	if (sp->sl_head != NULL && !slab_inrange(sp, sp->sl_head)) {
 		slab_nextptr_panic(sp, sp->sl_head);
 		/* In case sl_head is in the map but not in the slab */
 		VERIFY(slab_inrange(sp, sp->sl_head));
 		/* NOTREACHED */
 	}
-
-	/* Increment slab reference */
-	sp->sl_refcnt++;
 
 	if (mclaudit != NULL) {
 		mcache_audit_t *mca = mcl_audit_buf2mca(class, buf);
@@ -1719,20 +1732,20 @@ slab_alloc(mbuf_class_t class, int wait)
 	if (class == MC_CL) {
 		mbstat.m_clfree = (--m_infree(MC_CL)) + m_infree(MC_MBUF_CL);
 		/*
-		 * A 2K cluster slab can have at most NCLPBG references.
+		 * A 2K cluster slab can have at most NCLPG references.
 		 */
-		VERIFY(sp->sl_refcnt >= 1 && sp->sl_refcnt <= NCLPBG &&
-		    sp->sl_chunks == NCLPBG &&
-		    sp->sl_len == m_maxsize(MC_BIGCL));
-		VERIFY(sp->sl_refcnt < NCLPBG || sp->sl_head == NULL);
+		VERIFY(sp->sl_refcnt >= 1 && sp->sl_refcnt <= NCLPG &&
+		    sp->sl_chunks == NCLPG && sp->sl_len == PAGE_SIZE);
+		VERIFY(sp->sl_refcnt < NCLPG || sp->sl_head == NULL);
 	} else if (class == MC_BIGCL) {
 		mbstat.m_bigclfree = (--m_infree(MC_BIGCL)) +
 		    m_infree(MC_MBUF_BIGCL);
 		/*
-		 * A 4K cluster slab can have at most 1 reference.
+		 * A 4K cluster slab can have NBCLPG references.
 		 */
-		VERIFY(sp->sl_refcnt == 1 && sp->sl_chunks == 1 &&
-		    sp->sl_len == m_maxsize(class) && sp->sl_head == NULL);
+		VERIFY(sp->sl_refcnt >= 1 && sp->sl_chunks == NBCLPG &&
+		    sp->sl_len == PAGE_SIZE && 
+		    (sp->sl_refcnt < NBCLPG || sp->sl_head == NULL));
 	} else if (class == MC_16KCL) {
 		mcl_slab_t *nsp;
 		int k;
@@ -1770,18 +1783,19 @@ slab_alloc(mbuf_class_t class, int wait)
 		 * Since we have incremented the reference count above,
 		 * an mbuf slab (formerly a 4KB cluster slab that was cut
 		 * up into mbufs) must have a reference count between 1
-		 * and NMBPBG at this point.
+		 * and NMBPG at this point.
 		 */
-		VERIFY(sp->sl_refcnt >= 1 && sp->sl_refcnt <= NMBPBG &&
-		    sp->sl_chunks == NMBPBG &&
-		    sp->sl_len == m_maxsize(MC_BIGCL));
-		VERIFY(sp->sl_refcnt < NMBPBG || sp->sl_head == NULL);
+		VERIFY(sp->sl_refcnt >= 1 && sp->sl_refcnt <= NMBPG &&
+		    sp->sl_chunks == NMBPG &&
+		    sp->sl_len == PAGE_SIZE);
+		VERIFY(sp->sl_refcnt < NMBPG || sp->sl_head == NULL);
 	}
 
 	/* If empty, remove this slab from the class's freelist */
 	if (sp->sl_head == NULL) {
-		VERIFY(class != MC_MBUF || sp->sl_refcnt == NMBPBG);
-		VERIFY(class != MC_CL || sp->sl_refcnt == NCLPBG);
+		VERIFY(class != MC_MBUF || sp->sl_refcnt == NMBPG);
+		VERIFY(class != MC_CL || sp->sl_refcnt == NCLPG);
+		VERIFY(class != MC_BIGCL || sp->sl_refcnt == NBCLPG);
 		slab_remove(sp, class);
 	}
 
@@ -1795,11 +1809,14 @@ static void
 slab_free(mbuf_class_t class, mcache_obj_t *buf)
 {
 	mcl_slab_t *sp;
+	boolean_t reinit_supercl = false;
+	mbuf_class_t super_class;
 
 	lck_mtx_assert(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
 
 	VERIFY(class != MC_16KCL || njcl > 0);
 	VERIFY(buf->obj_next == NULL);
+
 	sp = slab_get(buf);
 	VERIFY(sp->sl_class == class && slab_inrange(sp, buf) &&
 	    (sp->sl_flags & (SLF_MAPPED | SLF_PARTIAL)) == SLF_MAPPED);
@@ -1813,20 +1830,17 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 		 * A slab that has been splitted for 2KB clusters can have
 		 * at most 1 outstanding reference at this point.
 		 */
-		VERIFY(sp->sl_refcnt >= 0 && sp->sl_refcnt <= (NCLPBG - 1) &&
-		    sp->sl_chunks == NCLPBG &&
-		    sp->sl_len == m_maxsize(MC_BIGCL));
-		VERIFY(sp->sl_refcnt < (NCLPBG - 1) ||
+		VERIFY(sp->sl_refcnt >= 0 && sp->sl_refcnt <= (NCLPG - 1) &&
+		    sp->sl_chunks == NCLPG && sp->sl_len == PAGE_SIZE);
+		VERIFY(sp->sl_refcnt < (NCLPG - 1) ||
 		    (slab_is_detached(sp) && sp->sl_head == NULL));
 	} else if (class == MC_BIGCL) {
-		VERIFY(IS_P2ALIGNED(buf, MCLBYTES));
-		/*
-		 * A 4KB cluster slab can have at most 1 reference
-		 * which must be 0 at this point.
-		 */
-		VERIFY(sp->sl_refcnt == 0 && sp->sl_chunks == 1 &&
-		    sp->sl_len == m_maxsize(class) && sp->sl_head == NULL);
-		VERIFY(slab_is_detached(sp));
+		VERIFY(IS_P2ALIGNED(buf, MBIGCLBYTES));
+
+		/* A 4KB cluster slab can have NBCLPG references at most */
+		VERIFY(sp->sl_refcnt >= 0 && sp->sl_chunks == NBCLPG);
+		VERIFY(sp->sl_refcnt < (NBCLPG - 1) ||
+		    (slab_is_detached(sp) && sp->sl_head == NULL));
 	} else if (class == MC_16KCL) {
 		mcl_slab_t *nsp;
 		int k;
@@ -1834,7 +1848,7 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 		 * A 16KB cluster takes NSLABSP16KB slabs, all must
 		 * now have 0 reference.
 		 */
-		VERIFY(IS_P2ALIGNED(buf, MBIGCLBYTES));
+		VERIFY(IS_P2ALIGNED(buf, PAGE_SIZE));
 		VERIFY(sp->sl_refcnt == 0 && sp->sl_chunks == 1 &&
 		    sp->sl_len == m_maxsize(class) && sp->sl_head == NULL);
 		VERIFY(slab_is_detached(sp));
@@ -1852,15 +1866,17 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 		}
 	} else {
 		/*
-		 * A slab that has been splitted for mbufs has at most NMBPBG
-		 * reference counts.  Since we have decremented one reference
-		 * above, it must now be between 0 and NMBPBG-1.
+		 * A slab that has been splitted for mbufs has at most
+		 * NMBPG reference counts.  Since we have decremented
+		 * one reference above, it must now be between 0 and
+		 * NMBPG-1.
 		 */
 		VERIFY(class == MC_MBUF);
-		VERIFY(sp->sl_refcnt >= 0 && sp->sl_refcnt <= (NMBPBG - 1) &&
-		    sp->sl_chunks == NMBPBG &&
-		    sp->sl_len == m_maxsize(MC_BIGCL));
-		VERIFY(sp->sl_refcnt < (NMBPBG - 1) ||
+		VERIFY(sp->sl_refcnt >= 0 &&
+		    sp->sl_refcnt <= (NMBPG - 1) &&
+		    sp->sl_chunks == NMBPG &&
+		    sp->sl_len == PAGE_SIZE);
+		VERIFY(sp->sl_refcnt < (NMBPG - 1) ||
 		    (slab_is_detached(sp) && sp->sl_head == NULL));
 	}
 
@@ -1872,7 +1888,8 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 	if (mclaudit != NULL) {
 		mcache_audit_t *mca = mcl_audit_buf2mca(class, buf);
 		if (mclverify) {
-			mcache_audit_free_verify(mca, buf, 0, m_maxsize(class));
+			mcache_audit_free_verify(mca, buf, 0,
+			    m_maxsize(class));
 		}
 		mca->mca_uflags &= ~MB_SCVALID;
 	}
@@ -1883,6 +1900,7 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 	} else if (class == MC_BIGCL) {
 		mbstat.m_bigclfree = (++m_infree(MC_BIGCL)) +
 		    m_infree(MC_MBUF_BIGCL);
+		buf->obj_next = sp->sl_head;
 	} else if (class == MC_16KCL) {
 		++m_infree(MC_16KCL);
 	} else {
@@ -1892,24 +1910,25 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 	sp->sl_head = buf;
 
 	/*
-	 * If a slab has been splitted to either one which holds 2KB clusters,
-	 * or one which holds mbufs, turn it back to one which holds a 4KB
-	 * cluster.
+	 * If a slab has been split to either one which holds 2KB clusters,
+	 * or one which holds mbufs, turn it back to one which holds a
+	 * 4 or 16 KB cluster depending on the page size.
 	 */
+	if (m_maxsize(MC_BIGCL) == PAGE_SIZE) {
+		super_class = MC_BIGCL;
+	} else {
+		VERIFY(PAGE_SIZE == m_maxsize(MC_16KCL));
+		super_class = MC_16KCL;
+	}
 	if (class == MC_MBUF && sp->sl_refcnt == 0 &&
-	    m_total(class) > m_minlimit(class) &&
-	    m_total(MC_BIGCL) < m_maxlimit(MC_BIGCL)) {
-		int i = NMBPBG;
+	    m_total(class) >= (m_minlimit(class) + NMBPG) &&
+	    m_total(super_class) < m_maxlimit(super_class)) {
+		int i = NMBPG;
 
-		m_total(MC_BIGCL)++;
-		mbstat.m_bigclusters = m_total(MC_BIGCL);
-		m_total(MC_MBUF) -= NMBPBG;
+		m_total(MC_MBUF) -= NMBPG;
 		mbstat.m_mbufs = m_total(MC_MBUF);
-		m_infree(MC_MBUF) -= NMBPBG;
-		mtype_stat_add(MT_FREE, -((unsigned)NMBPBG));
-
-		VERIFY(m_total(MC_BIGCL) <= m_maxlimit(MC_BIGCL));
-		VERIFY(m_total(MC_MBUF) >= m_minlimit(MC_MBUF));
+		m_infree(MC_MBUF) -= NMBPG;
+		mtype_stat_add(MT_FREE, -((unsigned)NMBPG));
 
 		while (i--) {
 			struct mbuf *m = sp->sl_head;
@@ -1917,37 +1936,15 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 			sp->sl_head = m->m_next;
 			m->m_next = NULL;
 		}
-		VERIFY(sp->sl_head == NULL);
-
-		/* Remove the slab from the mbuf class's slab list */
-		slab_remove(sp, class);
-
-		/* Reinitialize it as a 4KB cluster slab */
-		slab_init(sp, MC_BIGCL, sp->sl_flags, sp->sl_base, sp->sl_base,
-		    sp->sl_len, 0, 1);
-
-		if (mclverify) {
-			mcache_set_pattern(MCACHE_FREE_PATTERN,
-			    (caddr_t)sp->sl_head, m_maxsize(MC_BIGCL));
-		}
-		mbstat.m_bigclfree = (++m_infree(MC_BIGCL)) +
-		    m_infree(MC_MBUF_BIGCL);
-
-		VERIFY(slab_is_detached(sp));
-		/* And finally switch class */
-		class = MC_BIGCL;
+		reinit_supercl = true;
 	} else if (class == MC_CL && sp->sl_refcnt == 0 &&
-	    m_total(class) > m_minlimit(class) &&
-	    m_total(MC_BIGCL) < m_maxlimit(MC_BIGCL)) {
-		int i = NCLPBG;
+	    m_total(class) >=  (m_minlimit(class) + NCLPG) &&
+	    m_total(super_class) < m_maxlimit(super_class)) {
+		int i = NCLPG;
 
-		m_total(MC_BIGCL)++;
-		mbstat.m_bigclusters = m_total(MC_BIGCL);
-		m_total(MC_CL) -= NCLPBG;
+		m_total(MC_CL) -= NCLPG;
 		mbstat.m_clusters = m_total(MC_CL);
-		m_infree(MC_CL) -= NCLPBG;
-		VERIFY(m_total(MC_BIGCL) <= m_maxlimit(MC_BIGCL));
-		VERIFY(m_total(MC_CL) >= m_minlimit(MC_CL));
+		m_infree(MC_CL) -= NCLPG;
 
 		while (i--) {
 			union mcluster *c = sp->sl_head;
@@ -1955,25 +1952,56 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 			sp->sl_head = c->mcl_next;
 			c->mcl_next = NULL;
 		}
-		VERIFY(sp->sl_head == NULL);
+		reinit_supercl = true;
+	} else if (class == MC_BIGCL && super_class != MC_BIGCL &&
+	    sp->sl_refcnt == 0 &&
+	    m_total(class) >= (m_minlimit(class) + NBCLPG) &&
+	    m_total(super_class) < m_maxlimit(super_class)) {
+		int i = NBCLPG;
 
-		/* Remove the slab from the 2KB cluster class's slab list */
+		VERIFY(super_class == MC_16KCL);
+		m_total(MC_BIGCL) -= NBCLPG;
+		mbstat.m_bigclusters = m_total(MC_BIGCL);
+		m_infree(MC_BIGCL) -= NBCLPG;
+
+		while (i--) {
+			union mbigcluster *bc = sp->sl_head;
+			VERIFY(bc != NULL);
+			sp->sl_head = bc->mbc_next;
+			bc->mbc_next = NULL;
+		}
+		reinit_supercl = true;
+	}
+
+	if (reinit_supercl) {
+		VERIFY(sp->sl_head == NULL);
+		VERIFY(m_total(class) >= m_minlimit(class));
 		slab_remove(sp, class);
 
-		/* Reinitialize it as a 4KB cluster slab */
-		slab_init(sp, MC_BIGCL, sp->sl_flags, sp->sl_base, sp->sl_base,
-		    sp->sl_len, 0, 1);
+		/* Reinitialize it as a cluster for the super class */
+		m_total(super_class)++;
+		m_infree(super_class)++;
+		VERIFY(sp->sl_flags == (SLF_MAPPED | SLF_DETACHED) &&
+		    sp->sl_len == PAGE_SIZE && sp->sl_refcnt == 0);
 
-		if (mclverify) {
+		slab_init(sp, super_class, SLF_MAPPED, sp->sl_base,
+		    sp->sl_base, PAGE_SIZE, 0, 1);
+		if (mclverify)
 			mcache_set_pattern(MCACHE_FREE_PATTERN,
-			    (caddr_t)sp->sl_head, m_maxsize(MC_BIGCL));
+			    (caddr_t)sp->sl_base, sp->sl_len);
+		((mcache_obj_t *)(sp->sl_base))->obj_next = NULL;
+
+		if (super_class == MC_BIGCL) {
+			mbstat.m_bigclusters = m_total(MC_BIGCL);
+			mbstat.m_bigclfree = m_infree(MC_BIGCL) +
+			    m_infree(MC_MBUF_BIGCL);
 		}
-		mbstat.m_bigclfree = (++m_infree(MC_BIGCL)) +
-		    m_infree(MC_MBUF_BIGCL);
 
 		VERIFY(slab_is_detached(sp));
+		VERIFY(m_total(super_class) <= m_maxlimit(super_class));
+
 		/* And finally switch class */
-		class = MC_BIGCL;
+		class = super_class;
 	}
 
 	/* Reinsert the slab to the class's slab list */
@@ -2013,7 +2041,7 @@ mbuf_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num, int wait)
 				 * it later when we run out of elements.
 				 */
 				if (!mbuf_cached_above(class, wait) &&
-				    m_infree(class) < m_total(class) >> 5) {
+				    m_infree(class) < (m_total(class) >> 5)) {
 					(void) freelist_populate(class, 1,
 					    M_DONTWAIT);
 				}
@@ -2203,9 +2231,10 @@ cslab_alloc(mbuf_class_t class, mcache_obj_t ***plist, unsigned int num)
 
 		if (class == MC_MBUF_CL) {
 			VERIFY(clsp->sl_refcnt >= 1 &&
-			    clsp->sl_refcnt <= NCLPBG);
+			    clsp->sl_refcnt <= NCLPG);
 		} else {
-			VERIFY(clsp->sl_refcnt == 1);
+			VERIFY(clsp->sl_refcnt >= 1 &&
+			    clsp->sl_refcnt <= NBCLPG);
 		}
 
 		if (class == MC_MBUF_16KCL) {
@@ -2290,9 +2319,10 @@ cslab_free(mbuf_class_t class, mcache_obj_t *list, int purged)
 		VERIFY(MEXT_RFA(ms) != NULL && MBUF_IS_COMPOSITE(ms));
 		if (cl_class == MC_CL) {
 			VERIFY(clsp->sl_refcnt >= 1 &&
-			    clsp->sl_refcnt <= NCLPBG);
+			    clsp->sl_refcnt <= NCLPG);
 		} else {
-			VERIFY(clsp->sl_refcnt == 1);
+			VERIFY(clsp->sl_refcnt >= 1 && 
+			    clsp->sl_refcnt <= NBCLPG);
 		}
 		if (cl_class == MC_16KCL) {
 			int k;
@@ -2486,7 +2516,8 @@ mbuf_cslab_alloc(void *arg, mcache_obj_t ***plist, unsigned int needed,
 			lck_mtx_lock(mbuf_mlock);
 			mca = mcl_audit_buf2mca(MC_MBUF, (mcache_obj_t *)m);
 			ms = MCA_SAVED_MBUF_PTR(mca);
-			cl_mca = mcl_audit_buf2mca(MC_CL, (mcache_obj_t *)cl);
+			cl_mca = mcl_audit_buf2mca(cl_class,
+			    (mcache_obj_t *)cl);
 
 			/*
 			 * Pair them up.  Note that this is done at the time
@@ -2601,14 +2632,21 @@ mbuf_cslab_free(void *arg, mcache_obj_t *list, int purged)
 static void
 mbuf_cslab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 {
-	mbuf_class_t class = (mbuf_class_t)arg;
+	mbuf_class_t class = (mbuf_class_t)arg, cl_class;
 	mcache_audit_t *mca;
 	struct mbuf *m, *ms;
 	mcl_slab_t *clsp, *nsp;
-	size_t size;
+	size_t cl_size;
 	void *cl;
 
 	ASSERT(MBUF_CLASS_VALID(class) && MBUF_CLASS_COMPOSITE(class));
+	if (class == MC_MBUF_CL)
+		cl_class = MC_CL;
+	else if (class == MC_MBUF_BIGCL)
+		cl_class = MC_BIGCL;
+	else
+		cl_class = MC_16KCL;
+	cl_size = m_maxsize(cl_class);
 
 	while ((m = ms = (struct mbuf *)list) != NULL) {
 		lck_mtx_lock(mbuf_mlock);
@@ -2638,9 +2676,10 @@ mbuf_cslab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 		VERIFY(MEXT_RFA(ms) != NULL && MBUF_IS_COMPOSITE(ms));
 		if (class == MC_MBUF_CL)
 			VERIFY(clsp->sl_refcnt >= 1 &&
-			    clsp->sl_refcnt <= NCLPBG);
+			    clsp->sl_refcnt <= NCLPG);
 		else
-			VERIFY(clsp->sl_refcnt == 1);
+			VERIFY(clsp->sl_refcnt >= 1 &&
+			    clsp->sl_refcnt <= NBCLPG);
 
 		if (class == MC_MBUF_16KCL) {
 			int k;
@@ -2652,14 +2691,9 @@ mbuf_cslab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 			}
 		}
 
-		mca = mcl_audit_buf2mca(MC_CL, cl);
-		if (class == MC_MBUF_CL)
-			size = m_maxsize(MC_CL);
-		else if (class == MC_MBUF_BIGCL)
-			size = m_maxsize(MC_BIGCL);
-		else
-			size = m_maxsize(MC_16KCL);
-		mcl_audit_cluster(mca, cl, size, alloc, FALSE);
+
+		mca = mcl_audit_buf2mca(cl_class, cl);
+		mcl_audit_cluster(mca, cl, cl_size, alloc, FALSE);
 		if (mcltrace)
 			mcache_buffer_log(mca, cl, m_cache(class), &mb_start);
 
@@ -2679,16 +2713,28 @@ mbuf_cslab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 static int
 m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 {
-	int i;
+	int i, count = 0;
 	vm_size_t size = 0;
-	int numpages = 0, large_buffer = (bufsize == m_maxsize(MC_16KCL));
+	int numpages = 0, large_buffer;
 	vm_offset_t page = 0;
 	mcache_audit_t *mca_list = NULL;
 	mcache_obj_t *con_list = NULL;
 	mcl_slab_t *sp;
+	mbuf_class_t class;
 
+	/* Set if a buffer allocation needs allocation of multiple pages */
+	large_buffer = ((bufsize == m_maxsize(MC_16KCL)) &&
+		PAGE_SIZE < M16KCLBYTES);
 	VERIFY(bufsize == m_maxsize(MC_BIGCL) ||
 	    bufsize == m_maxsize(MC_16KCL));
+
+	VERIFY((bufsize == PAGE_SIZE) ||
+	    (bufsize > PAGE_SIZE && bufsize == m_maxsize(MC_16KCL)));
+
+	if (bufsize == m_size(MC_BIGCL))
+		class = MC_BIGCL;
+	else
+		class = MC_16KCL;
 
 	lck_mtx_assert(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
 
@@ -2733,8 +2779,8 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 
 	if (page == 0) {
 		if (bufsize == m_maxsize(MC_BIGCL)) {
-			/* Try for 1 page if failed, only 4KB request */
-			size = NBPG;
+			/* Try for 1 page if failed */
+			size = PAGE_SIZE;
 			page = kmem_mb_alloc(mb_map, size, 0);
 		}
 
@@ -2744,8 +2790,8 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 		}
 	}
 
-	VERIFY(IS_P2ALIGNED(page, NBPG));
-	numpages = size / NBPG;
+	VERIFY(IS_P2ALIGNED(page, PAGE_SIZE));
+	numpages = size / PAGE_SIZE;
 
 	/* If auditing is enabled, allocate the audit structures now */
 	if (mclaudit != NULL) {
@@ -2754,19 +2800,23 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 		/*
 		 * Yes, I realize this is a waste of memory for clusters
 		 * that never get transformed into mbufs, as we may end
-		 * up with NMBPBG-1 unused audit structures per cluster.
+		 * up with NMBPG-1 unused audit structures per cluster.
 		 * But doing so tremendously simplifies the allocation
 		 * strategy, since at this point we are not holding the
 		 * mbuf lock and the caller is okay to be blocked.
 		 */
-		if (bufsize == m_maxsize(MC_BIGCL)) {
-			needed = numpages * NMBPBG;
+		if (bufsize == PAGE_SIZE) {
+			needed = numpages * NMBPG;
 
 			i = mcache_alloc_ext(mcl_audit_con_cache,
 			    &con_list, needed, MCR_SLEEP);
 
 			VERIFY(con_list != NULL && i == needed);
 		} else {
+			/*
+			 * if multiple 4K pages are being used for a
+			 * 16K cluster 
+			 */ 
 			needed = numpages / NSLABSP16KB;
 		}
 
@@ -2778,19 +2828,19 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 
 	lck_mtx_lock(mbuf_mlock);
 
-	for (i = 0; i < numpages; i++, page += NBPG) {
-		ppnum_t offset = ((char *)page - (char *)mbutl) / NBPG;
+	for (i = 0; i < numpages; i++, page += PAGE_SIZE) {
+		ppnum_t offset =
+		    ((unsigned char *)page - mbutl) >> PAGE_SHIFT;
 		ppnum_t new_page = pmap_find_phys(kernel_pmap, page);
-		mbuf_class_t class = MC_BIGCL;
 
 		/*
-		 * If there is a mapper the appropriate I/O page is returned;
-		 * zero out the page to discard its past contents to prevent
-		 * exposing leftover kernel memory.
+		 * If there is a mapper the appropriate I/O page is
+		 * returned; zero out the page to discard its past
+		 * contents to prevent exposing leftover kernel memory.
 		 */
 		VERIFY(offset < mcl_pages);
 		if (mcl_paddr_base != 0) {
-			bzero((void *)(uintptr_t) page, page_size);
+			bzero((void *)(uintptr_t) page, PAGE_SIZE);
 			new_page = IOMapperInsertPage(mcl_paddr_base,
 			    offset, new_page);
 		}
@@ -2799,36 +2849,42 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 		/* Pattern-fill this fresh page */
 		if (mclverify) {
 			mcache_set_pattern(MCACHE_FREE_PATTERN,
-			    (caddr_t)page, NBPG);
+			    (caddr_t)page, PAGE_SIZE);
 		}
-		if (bufsize == m_maxsize(MC_BIGCL)) {
-			union mbigcluster *mbc = (union mbigcluster *)page;
-
+		if (bufsize == PAGE_SIZE) {
+			mcache_obj_t *buf;
 			/* One for the entire page */
-			sp = slab_get(mbc);
+			sp = slab_get((void *)page);
 			if (mclaudit != NULL) {
-				mcl_audit_init(mbc, &mca_list, &con_list,
-				    AUDIT_CONTENTS_SIZE, NMBPBG);
+				mcl_audit_init((void *)page,
+				    &mca_list, &con_list,
+				    AUDIT_CONTENTS_SIZE, NMBPG);
 			}
 			VERIFY(sp->sl_refcnt == 0 && sp->sl_flags == 0);
-			slab_init(sp, MC_BIGCL, SLF_MAPPED,
-			    mbc, mbc, bufsize, 0, 1);
+			slab_init(sp, class, SLF_MAPPED, (void *)page,
+			    (void *)page, PAGE_SIZE, 0, 1);
+			buf = (mcache_obj_t *)page;
+			buf->obj_next = NULL;
 
 			/* Insert this slab */
-			slab_insert(sp, MC_BIGCL);
+			slab_insert(sp, class);
 
-			/* Update stats now since slab_get() drops the lock */
-			mbstat.m_bigclfree = ++m_infree(MC_BIGCL) +
-			    m_infree(MC_MBUF_BIGCL);
-			mbstat.m_bigclusters = ++m_total(MC_BIGCL);
-			VERIFY(m_total(MC_BIGCL) <= m_maxlimit(MC_BIGCL));
-			class = MC_BIGCL;
-		} else if ((i % NSLABSP16KB) == 0) {
+			/* Update stats now since slab_get drops the lock */
+			++m_infree(class);
+			++m_total(class);
+			VERIFY(m_total(class) <= m_maxlimit(class));
+			if (class == MC_BIGCL) {
+				mbstat.m_bigclfree = m_infree(MC_BIGCL) +
+				    m_infree(MC_MBUF_BIGCL);
+				mbstat.m_bigclusters = m_total(MC_BIGCL);
+			}
+			++count;
+		} else if ((bufsize > PAGE_SIZE) &&
+		    (i % NSLABSP16KB) == 0) {
 			union m16kcluster *m16kcl = (union m16kcluster *)page;
 			mcl_slab_t *nsp;
 			int k;
-
-			VERIFY(njcl > 0);
+				
 			/* One for the entire 16KB */
 			sp = slab_get(m16kcl);
 			if (mclaudit != NULL)
@@ -2837,6 +2893,7 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 			VERIFY(sp->sl_refcnt == 0 && sp->sl_flags == 0);
 			slab_init(sp, MC_16KCL, SLF_MAPPED,
 			    m16kcl, m16kcl, bufsize, 0, 1);
+			m16kcl->m16kcl_next = NULL;
 
 			/*
 			 * 2nd-Nth page's slab is part of the first one,
@@ -2850,20 +2907,20 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 				    SLF_MAPPED | SLF_PARTIAL,
 				    m16kcl, NULL, 0, 0, 0);
 			}
-
 			/* Insert this slab */
 			slab_insert(sp, MC_16KCL);
 
-			/* Update stats now since slab_get() drops the lock */
-			m_infree(MC_16KCL)++;
-			m_total(MC_16KCL)++;
+			/* Update stats now since slab_get drops the lock */
+			++m_infree(MC_16KCL);
+			++m_total(MC_16KCL);
 			VERIFY(m_total(MC_16KCL) <= m_maxlimit(MC_16KCL));
-			class = MC_16KCL;
+			++count;
 		}
-		if (!mb_peak_newreport && mbuf_report_usage(class))
-			mb_peak_newreport = TRUE;
 	}
 	VERIFY(mca_list == NULL && con_list == NULL);
+
+	if (!mb_peak_newreport && mbuf_report_usage(class))
+		mb_peak_newreport = TRUE;
 
 	/* We're done; let others enter */
 	mb_clalloc_busy = FALSE;
@@ -2872,12 +2929,7 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 		wakeup(mb_clalloc_waitchan);
 	}
 
-	if (bufsize == m_maxsize(MC_BIGCL))
-		return (numpages);
-
-	VERIFY(bufsize == m_maxsize(MC_16KCL));
-	return (numpages / NSLABSP16KB);
-
+	return (count);
 out:
 	lck_mtx_assert(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
 
@@ -2892,7 +2944,7 @@ out:
 	 * When non-blocking we kick a thread if we have to grow the
 	 * pool or if the number of free clusters is less than requested.
 	 */
-	if (bufsize == m_maxsize(MC_BIGCL)) {
+	if (class == MC_BIGCL) {
 		if (i > 0) {
 			/*
 			 * Remember total number of 4KB clusters needed
@@ -2936,94 +2988,98 @@ freelist_populate(mbuf_class_t class, unsigned int num, int wait)
 {
 	mcache_obj_t *o = NULL;
 	int i, numpages = 0, count;
+	mbuf_class_t super_class;
 
 	VERIFY(class == MC_MBUF || class == MC_CL || class == MC_BIGCL ||
 	    class == MC_16KCL);
 
 	lck_mtx_assert(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
 
-	switch (class) {
-	case MC_MBUF:
-	case MC_CL:
-	case MC_BIGCL:
-		numpages = (num * m_size(class) + NBPG - 1) / NBPG;
-		i = m_clalloc(numpages, wait, m_maxsize(MC_BIGCL));
+	VERIFY(PAGE_SIZE == m_maxsize(MC_BIGCL) ||
+	    PAGE_SIZE == m_maxsize(MC_16KCL));
 
-		/* Respect the 4KB clusters minimum limit */
-		if (m_total(MC_BIGCL) == m_maxlimit(MC_BIGCL) &&
-		    m_infree(MC_BIGCL) <= m_minlimit(MC_BIGCL)) {
-			if (class != MC_BIGCL || (wait & MCR_COMP))
+	if (m_maxsize(class) >= PAGE_SIZE)
+		return(m_clalloc(num, wait, m_maxsize(class)) != 0);
+
+	/*
+	 * The rest of the function will allocate pages and will slice
+	 * them up into the right size
+	 */
+
+	numpages = (num * m_size(class) + PAGE_SIZE - 1) / PAGE_SIZE;
+
+	/* Currently assume that pages are 4K or 16K */
+	if (PAGE_SIZE == m_maxsize(MC_BIGCL))
+		super_class = MC_BIGCL;
+	else
+		super_class = MC_16KCL;
+
+	i = m_clalloc(numpages, wait, m_maxsize(super_class));
+
+	/* Respect the minimum limit  of super class */
+	if (m_total(super_class) == m_maxlimit(super_class) &&
+	    m_infree(super_class) <= m_minlimit(super_class))
+		if (wait & MCR_COMP)
 				return (0);
-		}
-		if (class == MC_BIGCL)
-			return (i != 0);
-		break;
-
-	case MC_16KCL:
-		return (m_clalloc(num, wait, m_maxsize(class)) != 0);
-		/* NOTREACHED */
-
-	default:
-		VERIFY(0);
-		/* NOTREACHED */
-	}
-
-	VERIFY(class == MC_MBUF || class == MC_CL);
 
 	/* how many objects will we cut the page into? */
-	int numobj = (class == MC_MBUF ? NMBPBG : NCLPBG);
+	int numobj = PAGE_SIZE / m_maxsize(class);
 
 	for (count = 0; count < numpages; count++) {
-
 		/* respect totals, minlimit, maxlimit */
-		if (m_total(MC_BIGCL) <= m_minlimit(MC_BIGCL) ||
+		if (m_total(super_class) <= m_minlimit(super_class) ||
 		    m_total(class) >= m_maxlimit(class))
 			break;
 
-		if ((o = slab_alloc(MC_BIGCL, wait)) == NULL)
+		if ((o = slab_alloc(super_class, wait)) == NULL)
 			break;
 
 		struct mbuf *m = (struct mbuf *)o;
 		union mcluster *c = (union mcluster *)o;
+		union mbigcluster *mbc = (union mbigcluster *)o;
 		mcl_slab_t *sp = slab_get(o);
 		mcache_audit_t *mca = NULL;
 
-		VERIFY(slab_is_detached(sp) &&
-		    (sp->sl_flags & (SLF_MAPPED | SLF_PARTIAL)) == SLF_MAPPED);
-
+		/*
+		 * since one full page will be converted to MC_MBUF or
+		 * MC_CL, verify that the reference count will match that
+		 * assumption
+		 */
+		VERIFY(sp->sl_refcnt == 1 && slab_is_detached(sp)); 
+		VERIFY((sp->sl_flags & (SLF_MAPPED | SLF_PARTIAL)) == SLF_MAPPED);
 		/*
 		 * Make sure that the cluster is unmolested
 		 * while in freelist
 		 */
 		if (mclverify) {
-			mca = mcl_audit_buf2mca(MC_BIGCL, o);
-			mcache_audit_free_verify(mca, o, 0,
-			    m_maxsize(MC_BIGCL));
+			mca = mcl_audit_buf2mca(super_class,
+			    (mcache_obj_t *)o);
+			mcache_audit_free_verify(mca,
+			    (mcache_obj_t *)o, 0, m_maxsize(super_class));
 		}
 
-		/* Reinitialize it as an mbuf or 2K slab */
+		/* Reinitialize it as an mbuf or 2K or 4K slab */
 		slab_init(sp, class, sp->sl_flags,
-		    sp->sl_base, NULL, sp->sl_len, 0, numobj);
+		    sp->sl_base, NULL, PAGE_SIZE, 0, numobj);
 
-		VERIFY(o == (mcache_obj_t *)sp->sl_base);
 		VERIFY(sp->sl_head == NULL);
 
-		VERIFY(m_total(MC_BIGCL) > 0);
-		m_total(MC_BIGCL)--;
-		mbstat.m_bigclusters = m_total(MC_BIGCL);
+		VERIFY(m_total(super_class) >= 1);
+		m_total(super_class)--;
+
+		if (super_class == MC_BIGCL)
+			mbstat.m_bigclusters = m_total(MC_BIGCL);
 
 		m_total(class) += numobj;
 		m_infree(class) += numobj;
 
-		VERIFY(m_total(MC_BIGCL) >= m_minlimit(MC_BIGCL));
-		VERIFY(m_total(class) <= m_maxlimit(class));
 		if (!mb_peak_newreport && mbuf_report_usage(class))
 			mb_peak_newreport = TRUE;
 
 		i = numobj;
 		if (class == MC_MBUF) {
 			mbstat.m_mbufs = m_total(MC_MBUF);
-			mtype_stat_add(MT_FREE, NMBPBG);
+			mtype_stat_add(MT_FREE, NMBPG);
 			while (i--) {
 				/*
 				 * If auditing is enabled, construct the
@@ -3045,7 +3101,7 @@ freelist_populate(mbuf_class_t class, unsigned int num, int wait)
 				m->m_next = sp->sl_head;
 				sp->sl_head = (void *)m++;
 			}
-		} else { /* MC_CL */
+		} else if (class == MC_CL) { /* MC_CL */
 			mbstat.m_clfree =
 			    m_infree(MC_CL) + m_infree(MC_MBUF_CL);
 			mbstat.m_clusters = m_total(MC_CL);
@@ -3053,9 +3109,18 @@ freelist_populate(mbuf_class_t class, unsigned int num, int wait)
 				c->mcl_next = sp->sl_head;
 				sp->sl_head = (void *)c++;
 			}
+		} else {
+			VERIFY(class == MC_BIGCL);
+			mbstat.m_bigclusters = m_total(MC_BIGCL);
+			mbstat.m_bigclfree = m_infree(MC_BIGCL) +
+			    m_infree(MC_MBUF_BIGCL);
+			while (i--) {
+				mbc->mbc_next = sp->sl_head;
+				sp->sl_head = (void *)mbc++;
+			}
 		}
 
-		/* Insert into the mbuf or 2k slab list */
+		/* Insert into the mbuf or 2k or 4k slab list */
 		slab_insert(sp, class);
 
 		if ((i = mb_waiters) > 0)
@@ -3737,6 +3802,7 @@ m_classifier_init(struct mbuf *m, uint32_t pktf_mask)
 #if MEASURE_BW
 	m->m_pkthdr.pkt_bwseq  = 0;
 #endif /* MEASURE_BW */
+	m->m_pkthdr.pkt_enqueue_ts = 0;
 }
 
 void
@@ -3935,9 +4001,9 @@ m_allocpacket_internal(unsigned int *numlist, size_t packetlen,
 		}
 	} else if (bufsize == m_maxsize(MC_16KCL)) {
 		VERIFY(njcl > 0);
-		nsegs = ((packetlen - 1) >> (PGSHIFT + 2)) + 1;
+		nsegs = ((packetlen - 1) >> M16KCLSHIFT) + 1;
 	} else if (bufsize == m_maxsize(MC_BIGCL)) {
-		nsegs = ((packetlen - 1) >> PGSHIFT) + 1;
+		nsegs = ((packetlen - 1) >> MBIGCLSHIFT) + 1;
 	} else {
 		nsegs = ((packetlen - 1) >> MCLSHIFT) + 1;
 	}
@@ -4498,8 +4564,13 @@ m_prepend(struct mbuf *m, int len, int how)
 	}
 	mn->m_next = m;
 	m = mn;
-	if (len < MHLEN)
+	if (m->m_flags & M_PKTHDR) {
+		VERIFY(len <= MHLEN);
 		MH_ALIGN(m, len);
+	} else {
+		VERIFY(len <= MLEN);
+		M_ALIGN(m, len);
+	}
 	m->m_len = len;
 	return (m);
 }
@@ -4509,9 +4580,10 @@ m_prepend(struct mbuf *m, int len, int how)
  * chain, copy junk along, and adjust length.
  */
 struct mbuf *
-m_prepend_2(struct mbuf *m, int len, int how)
+m_prepend_2(struct mbuf *m, int len, int how, int align)
 {
-	if (M_LEADINGSPACE(m) >= len) {
+	if (M_LEADINGSPACE(m) >= len &&
+	    (!align || IS_P2ALIGNED((m->m_data - len), sizeof(u_int32_t)))) {
 		m->m_data -= len;
 		m->m_len += len;
 	} else {
@@ -5279,12 +5351,6 @@ m_howmany(int num, size_t bufsize)
 
 	} else { /* 16K CL */
 		VERIFY(njcl > 0);
-		/* Under minimum */
-		if (m_16kclusters < MIN16KCL)
-			return (MIN16KCL - m_16kclusters);
-		if (m_16kclfree >= M16KCL_LOWAT)
-			return (0);
-
 		/* Ensure at least num clusters are available */
 		if (num >= m_16kclfree)
 			i = num - m_16kclfree;
@@ -5717,9 +5783,10 @@ nospace:
 
 #define	MBUF_MULTIPAGES(m)						\
 	(((m)->m_flags & M_EXT) &&					\
-	((IS_P2ALIGNED((m)->m_data, NBPG) && (m)->m_len > NBPG) ||	\
-	(!IS_P2ALIGNED((m)->m_data, NBPG) &&				\
-	P2ROUNDUP((m)->m_data, NBPG) < ((uintptr_t)(m)->m_data + (m)->m_len))))
+	((IS_P2ALIGNED((m)->m_data, PAGE_SIZE)				\
+	&& (m)->m_len > PAGE_SIZE) ||					\
+	(!IS_P2ALIGNED((m)->m_data, PAGE_SIZE) &&			\
+	P2ROUNDUP((m)->m_data, PAGE_SIZE) < ((uintptr_t)(m)->m_data + (m)->m_len))))
 
 static struct mbuf *
 m_expand(struct mbuf *m, struct mbuf **last)
@@ -5739,11 +5806,11 @@ m_expand(struct mbuf *m, struct mbuf **last)
 		struct mbuf *n;
 
 		data = data0;
-		if (IS_P2ALIGNED(data, NBPG) && len0 > NBPG)
-			len = NBPG;
-		else if (!IS_P2ALIGNED(data, NBPG) &&
-		    P2ROUNDUP(data, NBPG) < (data + len0))
-			len = P2ROUNDUP(data, NBPG) - data;
+		if (IS_P2ALIGNED(data, PAGE_SIZE) && len0 > PAGE_SIZE)
+			len = PAGE_SIZE;
+		else if (!IS_P2ALIGNED(data, PAGE_SIZE) &&
+		    P2ROUNDUP(data, PAGE_SIZE) < (data + len0))
+			len = P2ROUNDUP(data, PAGE_SIZE) - data;
 		else
 			len = len0;
 
@@ -6260,7 +6327,7 @@ slab_get(void *buf)
 	lck_mtx_assert(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
 
 	VERIFY(MBUF_IN_MAP(buf));
-	ix = ((char *)buf - (char *)mbutl) >> MBSHIFT;
+	ix = ((unsigned char *)buf - mbutl) >> MBSHIFT;
 	VERIFY(ix < maxslabgrp);
 
 	if ((slg = slabstbl[ix]) == NULL) {
@@ -6283,7 +6350,9 @@ slab_get(void *buf)
 		/* This is a new buffer; create the slabs group for it */
 		MALLOC(slg, mcl_slabg_t *, sizeof (*slg), M_TEMP,
 		    M_WAITOK | M_ZERO);
-		VERIFY(slg != NULL);
+		MALLOC(slg->slg_slab, mcl_slab_t *, sizeof(mcl_slab_t) * NSLABSPMB,
+		    M_TEMP, M_WAITOK | M_ZERO);
+		VERIFY(slg != NULL && slg->slg_slab != NULL);
 
 		lck_mtx_lock(mbuf_mlock);
 		/*
@@ -6308,7 +6377,7 @@ slab_get(void *buf)
 		}
 	}
 
-	ix = MTOBG(buf) % NSLABSPMB;
+	ix = MTOPG(buf) % NSLABSPMB;
 	VERIFY(ix < NSLABSPMB);
 
 	return (&slg->slg_slab[ix]);
@@ -6335,13 +6404,17 @@ slab_insert(mcl_slab_t *sp, mbuf_class_t class)
 	m_slab_cnt(class)++;
 	TAILQ_INSERT_TAIL(&m_slablist(class), sp, sl_link);
 	sp->sl_flags &= ~SLF_DETACHED;
+
+	/*
+	 * If a buffer spans multiple contiguous pages then mark them as
+	 * detached too
+	 */
 	if (class == MC_16KCL) {
 		int k;
 		for (k = 1; k < NSLABSP16KB; k++) {
 			sp = sp->sl_next;
 			/* Next slab must already be present */
-			VERIFY(sp != NULL);
-			VERIFY(slab_is_detached(sp));
+			VERIFY(sp != NULL && slab_is_detached(sp));
 			sp->sl_flags &= ~SLF_DETACHED;
 		}
 	}
@@ -6350,13 +6423,13 @@ slab_insert(mcl_slab_t *sp, mbuf_class_t class)
 static void
 slab_remove(mcl_slab_t *sp, mbuf_class_t class)
 {
+	int k;
 	VERIFY(!slab_is_detached(sp));
 	VERIFY(m_slab_cnt(class) > 0);
 	m_slab_cnt(class)--;
 	TAILQ_REMOVE(&m_slablist(class), sp, sl_link);
 	slab_detach(sp);
 	if (class == MC_16KCL) {
-		int k;
 		for (k = 1; k < NSLABSP16KB; k++) {
 			sp = sp->sl_next;
 			/* Next slab must already be present */
@@ -6429,14 +6502,14 @@ mcl_audit_init(void *buf, mcache_audit_t **mca_list,
 	boolean_t save_contents = (con_list != NULL);
 	unsigned int i, ix;
 
-	ASSERT(num <= NMBPBG);
+	ASSERT(num <= NMBPG);
 	ASSERT(con_list == NULL || con_size != 0);
 
-	ix = MTOBG(buf);
+	ix = MTOPG(buf);
 	VERIFY(ix < maxclaudit);
 
 	/* Make sure we haven't been here before */
-	for (i = 0; i < NMBPBG; i++)
+	for (i = 0; i < NMBPG; i++)
 		VERIFY(mclaudit[ix].cl_audit[i] == NULL);
 
 	mca = mca_tail = *mca_list;
@@ -6482,7 +6555,7 @@ mcl_audit_free(void *buf, unsigned int num)
 	unsigned int i, ix;
 	mcache_audit_t *mca, *mca_list;
 
-	ix = MTOBG(buf);
+	ix = MTOPG(buf);
 	VERIFY(ix < maxclaudit);
 	
 	if (mclaudit[ix].cl_audit[0] != NULL) {
@@ -6504,13 +6577,16 @@ mcl_audit_free(void *buf, unsigned int num)
  * the corresponding audit structure for that buffer.
  */
 static mcache_audit_t *
-mcl_audit_buf2mca(mbuf_class_t class, mcache_obj_t *o)
+mcl_audit_buf2mca(mbuf_class_t class, mcache_obj_t *mobj)
 {
 	mcache_audit_t *mca = NULL;
-	int ix = MTOBG(o);
+	int ix = MTOPG(mobj), m_idx = 0;
+	unsigned char *page_addr;
 
 	VERIFY(ix < maxclaudit);
-	VERIFY(IS_P2ALIGNED(o, MIN(m_maxsize(class), NBPG)));
+	VERIFY(IS_P2ALIGNED(mobj, MIN(m_maxsize(class), PAGE_SIZE)));
+
+	page_addr = PGTOM(ix);
 
 	switch (class) {
 	case MC_MBUF:
@@ -6521,19 +6597,25 @@ mcl_audit_buf2mca(mbuf_class_t class, mcache_obj_t *o)
 		 * mbuf index relative to the page base and use
 		 * it to locate the audit structure.
 		 */
-		VERIFY(MCLIDX(BGTOM(ix), o) < (int)NMBPBG);
-		mca = mclaudit[ix].cl_audit[MCLIDX(BGTOM(ix), o)];
+		m_idx = MBPAGEIDX(page_addr, mobj);
+		VERIFY(m_idx < (int)NMBPG);
+		mca = mclaudit[ix].cl_audit[m_idx];
 		break;
 
 	case MC_CL:
 		/*
 		 * Same thing as above, but for 2KB clusters in a page.
 		 */
-		VERIFY(CLBGIDX(BGTOM(ix), o) < (int)NCLPBG);
-		mca = mclaudit[ix].cl_audit[CLBGIDX(BGTOM(ix), o)];
+		m_idx = CLPAGEIDX(page_addr, mobj);
+		VERIFY(m_idx < (int)NCLPG);
+		mca = mclaudit[ix].cl_audit[m_idx];
 		break;
 
 	case MC_BIGCL:
+		m_idx = BCLPAGEIDX(page_addr, mobj);
+		VERIFY(m_idx < (int)NBCLPG);
+		mca = mclaudit[ix].cl_audit[m_idx];
+		break;
 	case MC_16KCL:
 		/*
 		 * Same as above, but only return the first element.
@@ -7344,6 +7426,7 @@ mbuf_report_peak_usage(void)
 	for (i = 0; i < NELEM(mbuf_table); i++) {
 		m_peak(m_class(i)) = m_total(m_class(i));
 		memreleased += m_release_cnt(i);
+		m_release_cnt(i) = 0;
 	}
 	mb_peak_newreport = FALSE;
 	lck_mtx_unlock(mbuf_mlock);
@@ -7353,6 +7436,7 @@ mbuf_report_peak_usage(void)
 	ns_data.u.mb_stats.total_256b = m_peak(MC_MBUF);
 	ns_data.u.mb_stats.total_2kb = m_peak(MC_CL);
 	ns_data.u.mb_stats.total_4kb = m_peak(MC_BIGCL);
+	ns_data.u.mb_stats.total_16kb = m_peak(MC_16KCL);
 	ns_data.u.mb_stats.sbmb_total = total_sbmb_cnt_peak;
 	ns_data.u.mb_stats.sb_atmbuflimit = sbmb_limreached;
 	ns_data.u.mb_stats.draincnt = mbstat.m_drain;
@@ -7478,23 +7562,25 @@ m_drain(void)
 			slab_remove(sp, mc);
 			switch (mc) {
 			case MC_MBUF:
-				m_infree(mc) -= NMBPBG;
-				m_total(mc) -= NMBPBG;
+				m_infree(mc) -= NMBPG;
+				m_total(mc) -= NMBPG;
 				if (mclaudit != NULL)
-					mcl_audit_free(sp->sl_base, NMBPBG);
+					mcl_audit_free(sp->sl_base, NMBPG);
 				break;
 			case MC_CL:
-				m_infree(mc) -= NCLPBG;
-				m_total(mc) -= NCLPBG;
+				m_infree(mc) -= NCLPG;
+				m_total(mc) -= NCLPG;
 				if (mclaudit != NULL)
-					mcl_audit_free(sp->sl_base, NMBPBG);
+					mcl_audit_free(sp->sl_base, NMBPG);
 				break;
 			case MC_BIGCL:
-				m_infree(mc)--;
-				m_total(mc)--;
+			{
+				m_infree(mc) -= NBCLPG;
+				m_total(mc) -= NBCLPG;
 				if (mclaudit != NULL)
-					mcl_audit_free(sp->sl_base, NMBPBG);
+					mcl_audit_free(sp->sl_base, NMBPG);
 				break;
+			}
 			case MC_16KCL:
 				m_infree(mc)--;
 				m_total(mc)--;
@@ -7520,7 +7606,9 @@ m_drain(void)
 			}
 			m_release_cnt(mc) += m_size(mc);
 			released += m_size(mc);
-			offset = ((char *)sp->sl_base - (char *)mbutl) / NBPG;
+			VERIFY(sp->sl_base != NULL &&
+			    sp->sl_len >= PAGE_SIZE);
+			offset = MTOPG(sp->sl_base);
 			/*
 			 * Make sure the IOMapper points to a valid, but
 			 * bogus, address.  This should prevent further DMA

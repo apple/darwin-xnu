@@ -103,15 +103,39 @@ enum {
 		*(nsp) += ((tvp)->tv_sec * (integer_t)NSEC_PER_SEC);		\
 } while (0)
 
+#if defined(__x86_64__) || defined(__arm64__)
 #define	net_nsectimer(nsp, tvp) do {					\
 	u_int64_t __nsp = *(nsp);					\
 	net_timerclear(tvp);						\
-	while ((__nsp) >= NSEC_PER_SEC) {				\
-		(tvp)->tv_sec++;					\
-		(__nsp) -= NSEC_PER_SEC;				\
-	}								\
-	(tvp)->tv_nsec = (__nsp);					\
+	uint64_t __sec = __nsp / NSEC_PER_SEC;				\
+	(tvp)->tv_sec = (__darwin_time_t)__sec;				\
+	(tvp)->tv_nsec = (long)(__nsp - __sec * NSEC_PER_SEC);		\
 } while (0)
+#else /* 32 bit */
+/*
+ * NSEC needs to be < 2^31*10^9 to be representable in a struct timespec
+ * because __darwin_time_t is 32 bit on 32-bit platforms. This bound
+ * is < 2^61. We get a first approximation to convert into seconds using
+ * the following values.
+ * a = floor(NSEC / 2^29)
+ * inv = floor(2^61 / 10^9)
+ *
+ * The approximation of seconds is correct or too low by 1 unit.
+ * So we fix it by computing the remainder.
+ */
+#define	net_nsectimer(nsp, tvp) do {					\
+	u_int64_t __nsp = *(nsp);					\
+	net_timerclear(tvp);						\
+	uint32_t __a = (uint32_t)(__nsp >> 29);				\
+	const uint32_t __inv = 0x89705F41;				\
+	uint32_t __sec = (uint32_t)(((uint64_t)__a * __inv) >> 32);	\
+	uint32_t __rem = (uint32_t)(__nsp - __sec * NSEC_PER_SEC);	\
+	__sec += ((__rem >= NSEC_PER_SEC) ? 1 : 0);			\
+	(tvp)->tv_sec = (__darwin_time_t)__sec;				\
+	(tvp)->tv_nsec =						\
+	    (long)((__rem >= NSEC_PER_SEC) ? (__rem - NSEC_PER_SEC) : __rem);	\
+} while(0)
+#endif /* 32 bit */
 
 struct ifnet;
 struct mbuf;

@@ -78,17 +78,19 @@ protected:
 public:
   static  void           initCPUs(void);
   
-  virtual bool           start(IOService *provider);
-  virtual OSObject       *getProperty(const OSSymbol *aKey) const;
-  virtual bool           setProperty(const OSSymbol *aKey, OSObject *anObject);
-  virtual bool           serializeProperties(OSSerialize *serialize) const;
-  virtual IOReturn       setProperties(OSObject *properties);
+  virtual bool           start(IOService *provider) APPLE_KEXT_OVERRIDE;
+  virtual OSObject       *getProperty(const OSSymbol *aKey) const APPLE_KEXT_OVERRIDE;
+  virtual bool           setProperty(const OSSymbol *aKey, OSObject *anObject) APPLE_KEXT_OVERRIDE;
+  virtual bool           serializeProperties(OSSerialize *serialize) const APPLE_KEXT_OVERRIDE;
+  virtual IOReturn       setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
   virtual void           initCPU(bool boot) = 0;
   virtual void           quiesceCPU(void) = 0;
   virtual kern_return_t  startCPU(vm_offset_t start_paddr,
 				  vm_offset_t arg_paddr) = 0;
   virtual void           haltCPU(void) = 0;
   virtual void           signalCPU(IOCPU *target);
+  virtual void           signalCPUDeferred(IOCPU * target);
+  virtual void           signalCPUCancel(IOCPU * target);
   virtual void           enableCPUTimeBase(bool enable);
   
   virtual UInt32         getCPUNumber(void);
@@ -113,6 +115,7 @@ void IOCPUSleepKernel(void);
 extern "C" kern_return_t IOCPURunPlatformQuiesceActions(void);
 extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
 extern "C" kern_return_t IOCPURunPlatformHaltRestartActions(uint32_t message);
+extern "C" kern_return_t IOCPURunPlatformPanicActions(uint32_t message);
 
 class IOCPUInterruptController : public IOInterruptController
 {
@@ -137,17 +140,17 @@ public:
   virtual IOReturn registerInterrupt(IOService *nub, int source,
 				     void *target,
 				     IOInterruptHandler handler,
-				     void *refCon);
+				     void *refCon) APPLE_KEXT_OVERRIDE;
   
   virtual IOReturn getInterruptType(IOService *nub, int source,
-				    int *interruptType);
+				    int *interruptType) APPLE_KEXT_OVERRIDE;
   
-  virtual IOReturn enableInterrupt(IOService *nub, int source);
-  virtual IOReturn disableInterrupt(IOService *nub, int source);
-  virtual IOReturn causeInterrupt(IOService *nub, int source);
+  virtual IOReturn enableInterrupt(IOService *nub, int source) APPLE_KEXT_OVERRIDE;
+  virtual IOReturn disableInterrupt(IOService *nub, int source) APPLE_KEXT_OVERRIDE;
+  virtual IOReturn causeInterrupt(IOService *nub, int source) APPLE_KEXT_OVERRIDE;
   
   virtual IOReturn handleInterrupt(void *refCon, IOService *nub,
-				   int source);
+				   int source) APPLE_KEXT_OVERRIDE;
 
   OSMetaClassDeclareReservedUnused(IOCPUInterruptController, 0);
   OSMetaClassDeclareReservedUnused(IOCPUInterruptController, 1);

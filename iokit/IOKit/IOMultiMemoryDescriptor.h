@@ -45,7 +45,7 @@ protected:
     UInt32                _descriptorsCount;
     bool                  _descriptorsIsAllocated;
 
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 public:
 
@@ -88,7 +88,7 @@ public:
 
     virtual addr64_t getPhysicalSegment( IOByteCount   offset,
                                          IOByteCount * length,
-                                         IOOptionBits  options = 0 );
+                                         IOOptionBits  options = 0 ) APPLE_KEXT_OVERRIDE;
 
 /*! @function prepare
     @abstract Prepare the memory for an I/O transfer.
@@ -96,7 +96,7 @@ public:
     @param forDirection The direction of the I/O just completed, or kIODirectionNone for the direction specified by the memory descriptor.
     @result An IOReturn code. */
 
-    virtual IOReturn prepare(IODirection forDirection = kIODirectionNone);
+    virtual IOReturn prepare(IODirection forDirection = kIODirectionNone) APPLE_KEXT_OVERRIDE;
 
 /*! @function complete
     @abstract Complete processing of the memory after an I/O transfer finishes.
@@ -104,7 +104,28 @@ public:
     @param forDirection The direction of the I/O just completed, or kIODirectionNone for the direction specified by the memory descriptor.
     @result An IOReturn code. */
 
-    virtual IOReturn complete(IODirection forDirection = kIODirectionNone);
+    virtual IOReturn complete(IODirection forDirection = kIODirectionNone) APPLE_KEXT_OVERRIDE;
+
+    virtual IOReturn setPurgeable(IOOptionBits newState, IOOptionBits * oldState) APPLE_KEXT_OVERRIDE;
+
+/*! @function getPageCounts
+    @abstract Retrieve the number of resident and/or dirty pages encompassed by an IOMemoryDescriptor.
+    @discussion This method returns the number of resident and/or dirty pages encompassed by an IOMemoryDescriptor.
+    @param residentPageCount - If non-null, a pointer to a byte count that will return the number of resident pages encompassed by this IOMemoryDescriptor.
+    @param dirtyPageCount - If non-null, a pointer to a byte count that will return the number of dirty pages encompassed by this IOMemoryDescriptor.
+    @result An IOReturn code. */
+
+    IOReturn getPageCounts(IOByteCount * residentPageCount,
+                           IOByteCount * dirtyPageCount);
+
+#define IOMULTIMEMORYDESCRIPTOR_SUPPORTS_GETPAGECOUNTS	1
+
+private:
+    virtual IOReturn doMap(vm_map_t           addressMap,
+                           IOVirtualAddress * atAddress,
+                           IOOptionBits       options,
+                           IOByteCount        sourceOffset = 0,
+                           IOByteCount        length = 0 ) APPLE_KEXT_OVERRIDE;
 };
 
 #endif /* !_IOMULTIMEMORYDESCRIPTOR_H */

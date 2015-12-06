@@ -63,6 +63,7 @@
 
 #include <mach/mach_types.h>
 #include <kern/kern_types.h>
+#include <kern/waitq.h>
 #include <kern/zalloc.h>
 #include <kern/task.h>
 #include <kern/sched_prim.h>
@@ -123,7 +124,7 @@ typedef struct aio_workq   {
 	TAILQ_HEAD(, aio_workq_entry) 	aioq_entries;
 	int				aioq_count;
 	lck_mtx_t			aioq_mtx;
-	wait_queue_t			aioq_waitq;
+	struct waitq			aioq_waitq;
 } *aio_workq_t;
 
 #define AIO_NUM_WORK_QUEUES 1
@@ -303,7 +304,7 @@ aio_workq_init(aio_workq_t wq)
 	TAILQ_INIT(&wq->aioq_entries);
 	wq->aioq_count = 0;
 	lck_mtx_init(&wq->aioq_mtx, aio_queue_lock_grp, aio_lock_attr);
-	wq->aioq_waitq = wait_queue_alloc(SYNC_POLICY_FIFO);
+	waitq_init(&wq->aioq_waitq, SYNC_POLICY_FIFO|SYNC_POLICY_DISABLE_IRQ);
 }
 
 
@@ -1393,7 +1394,8 @@ aio_enqueue_work( proc_t procp, aio_workq_entry *entryp, int proc_locked)
 	/* And work queue */
 	aio_workq_lock_spin(queue);
 	aio_workq_add_entry_locked(queue, entryp);
-	wait_queue_wakeup_one(queue->aioq_waitq, queue, THREAD_AWAKENED, -1);
+	waitq_wakeup64_one(&queue->aioq_waitq, CAST_EVENT64_T(queue),
+			   THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 	aio_workq_unlock(queue);
 	
 	if (proc_locked == 0) {
@@ -1824,7 +1826,7 @@ aio_get_some_work( void )
 
 nowork:
 	/* We will wake up when someone enqueues something */
-	wait_queue_assert_wait(queue->aioq_waitq, queue, THREAD_UNINT, 0);
+	waitq_assert_wait64(&queue->aioq_waitq, CAST_EVENT64_T(queue), THREAD_UNINT, 0);
 	aio_workq_unlock(queue);
 	thread_block( (thread_continue_t)aio_work_thread );
 

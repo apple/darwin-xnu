@@ -241,7 +241,7 @@ bool OSSerialize::binarySerialize(const OSMetaClassBase *o)
 	if (idx >= v##Capacity)														\
 	{																			\
 		uint32_t ncap = v##Capacity + 64;										\
-		typeof(v##Array) nbuf = (typeof(v##Array)) kalloc(ncap * sizeof(o));	\
+		typeof(v##Array) nbuf = (typeof(v##Array)) kalloc_container(ncap * sizeof(o));	\
 		if (!nbuf) ok = false;													\
 		if (v##Array)															\
 		{																		\
@@ -276,6 +276,7 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
     OSSet        * newSet;
     OSObject     * o;
     OSSymbol     * sym;
+    OSString     * str;
 
     size_t           bufferPos;
     const uint32_t * next;
@@ -403,6 +404,12 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 			else 
 			{
 				sym = OSDynamicCast(OSSymbol, o);
+				if (!sym && (str = OSDynamicCast(OSString, o)))
+				{
+				    sym = (OSSymbol *) OSSymbol::withString(str);
+				    o->release();
+				    o = 0;
+				}
 				ok = (sym != 0);
 			}
 		}

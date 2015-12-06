@@ -261,7 +261,7 @@ public:
     @abstract Standard free method for all IORegistryEntry subclasses.
     @discussion This method will release any resources of the entry, in particular its property table. Note that the registry entry must always be detached from the registry before free may be called, and subclasses (namely IOService) will have additional protocols for removing registry entries. free should never need be called directly. */
 
-    virtual void free( void );
+    virtual void free( void ) APPLE_KEXT_OVERRIDE;
 
 /*! @function setPropertyTable
     @abstract Replace a registry entry's property table.
@@ -854,7 +854,7 @@ private:
     const IORegistryPlane *	plane;
     IOOptionBits		options;
 
-    virtual void free( void );
+    virtual void free( void ) APPLE_KEXT_OVERRIDE;
 
 public:
 /*! @function iterateOver
@@ -884,7 +884,7 @@ public:
     @discussion This method calls either getNextObjectFlat or getNextObjectRecursive depending on the options the iterator was created with. This implements the OSIterator defined getNextObject method. The object returned is retained while the iterator is pointing at it (its the current entry), or recursing into it. The caller should not release it.
     @result The next registry entry in the iteration (the current entry), or zero if the iteration has finished at this level of recursion. The entry returned is retained while the iterator is pointing at it (its the current entry), or recursing into it. The caller should not release it. */
 
-    virtual IORegistryEntry * getNextObject( void );
+    virtual IORegistryEntry * getNextObject( void ) APPLE_KEXT_OVERRIDE;
 
 /*! @function getNextObjectFlat
     @abstract Return the next object in the registry iteration, ignoring the kIORegistryIterateRecursively option.
@@ -931,18 +931,18 @@ public:
     @abstract Exits all levels of recursion, restoring the iterator to its state at creation.
     @discussion This method exits all levels of recursion, and restores the iterator to its state at creation. */
 
-    virtual void reset( void );
+    virtual void reset( void ) APPLE_KEXT_OVERRIDE;
 
 /*! @function isValid
     @abstract Checks that no registry changes have invalidated the iteration.
     @discussion If a registry iteration is invalidated by changes to the registry, it will be made invalid, the currentEntry will be considered zero, and further calls to getNextObject et al. will return zero. The iterator should be reset to restart the iteration when this happens.
     @result false if the iterator has been invalidated by changes to the registry, true otherwise. */
 
-    virtual bool isValid( void );
+    virtual bool isValid( void ) APPLE_KEXT_OVERRIDE;
 
 /*! @function iterateAll
     @abstract Iterates all entries (with getNextObject) and returns a set of all returned entries.
-    @discussion This method will reset, then iterate all entries in the iteration (with getNextObject) until successful (ie. the iterator is valid at the end of the iteration).
+    @discussion This method will reset, then iterate all entries in the iteration (with getNextObject).
     @result A set of entries returned by the iteration. The caller should release the set when it has finished with it. Zero is returned on a resource failure. */
 
     virtual OSOrderedSet * iterateAll( void );

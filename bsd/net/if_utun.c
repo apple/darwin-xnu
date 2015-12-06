@@ -202,7 +202,6 @@ utun_ctl_connect(
 	*unitinfo = pcb;
 	pcb->utun_ctlref = kctlref;
 	pcb->utun_unit = sac->sc_unit;
-	pcb->utun_pending_packets = 0;
 	pcb->utun_max_pending_packets = 1;
 	
 	printf("utun_ctl_connect: creating interface utun%d\n", pcb->utun_unit - 1);
@@ -655,20 +654,25 @@ utun_ctl_getopt(
 static void
 utun_ctl_rcvd(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo, int flags)
 {
-#pragma unused(kctlref, unit, flags)
+#pragma unused(flags)
 	bool reenable_output = false;
 	struct utun_pcb *pcb = unitinfo;
 	if (pcb == NULL) {
 		return;
 	}
 	ifnet_lock_exclusive(pcb->utun_ifp);
-	if (pcb->utun_pending_packets > 0) {
-		pcb->utun_pending_packets--;
-		if (pcb->utun_pending_packets < pcb->utun_max_pending_packets) {
-			reenable_output = true;
-		}
+
+	u_int32_t utun_packet_cnt;
+	errno_t error_pc = ctl_getenqueuepacketcount(kctlref, unit, &utun_packet_cnt);
+	if (error_pc != 0) {
+		printf("utun_ctl_rcvd: ctl_getenqueuepacketcount returned error %d\n", error_pc);
+		utun_packet_cnt = 0;
 	}
-	
+
+	if (utun_packet_cnt < pcb->utun_max_pending_packets) {
+		reenable_output = true;
+	}
+
 	if (reenable_output) {
 		errno_t error = ifnet_enable_output(pcb->utun_ifp);
 		if (error != 0) {
@@ -687,7 +691,15 @@ utun_start(ifnet_t interface)
 	for (;;) {
 		bool can_accept_packets = true;
 		ifnet_lock_shared(pcb->utun_ifp);
-		can_accept_packets = (pcb->utun_pending_packets < pcb->utun_max_pending_packets);
+
+		u_int32_t utun_packet_cnt;
+		errno_t error_pc = ctl_getenqueuepacketcount(pcb->utun_ctlref, pcb->utun_unit, &utun_packet_cnt);
+		if (error_pc != 0) {
+			printf("utun_start: ctl_getenqueuepacketcount returned error %d\n", error_pc);
+			utun_packet_cnt = 0;
+		}
+
+		can_accept_packets = (utun_packet_cnt < pcb->utun_max_pending_packets);
 		if (!can_accept_packets && pcb->utun_ctlref) {
 			u_int32_t difference = 0;
 			if (ctl_getenqueuereadable(pcb->utun_ctlref, pcb->utun_unit, &difference) == 0) {
@@ -750,16 +762,8 @@ utun_output(
 			*(u_int32_t *)mbuf_data(data) = htonl(*(u_int32_t *)mbuf_data(data));
 
 		length = mbuf_pkthdr_len(data);
-		// Increment packet count optimistically
-		ifnet_lock_exclusive(pcb->utun_ifp);
-		pcb->utun_pending_packets++;
-		ifnet_lock_done(pcb->utun_ifp);
 		result = ctl_enqueuembuf(pcb->utun_ctlref, pcb->utun_unit, data, CTL_DATA_EOR);
 		if (result != 0) {
-			// Decrement packet count if errored
-			ifnet_lock_exclusive(pcb->utun_ifp);
-			pcb->utun_pending_packets--;
-			ifnet_lock_done(pcb->utun_ifp);
 			mbuf_freem(data);
 			printf("utun_output - ctl_enqueuembuf failed: %d\n", result);
 

@@ -71,8 +71,6 @@
 #define _ARCH_I386_ASM_HELP_H_          /* Prevent inclusion of user header */
 #include <mach/i386/syscall_sw.h>
 
-#include <i386/mp.h>
-
 /*
  * Fault recovery.
  */
@@ -176,22 +174,21 @@ LEXT(thread_exception_return)
  * Copyin/out from user/kernel address space.
  * rdi:	source address
  * rsi:	destination address
- * rdx:	byte count
+ * rdx:	byte count (in fact, always < 64MB -- see copyio)
  */
 Entry(_bcopy)
-// TODO not pop regs; movq; think about 32 bit or 64 bit byte count
-	xchgq	%rdi, %rsi		/* source %rsi, dest %rdi */
+	xchg	%rdi, %rsi		/* source %rsi, dest %rdi */
 
 	cld				/* count up */
-	movl	%edx,%ecx		/* move by longwords first */
-	shrl	$3,%ecx
+	mov	%rdx, %rcx		/* move by longwords first */
+	shr	$3, %rcx
 	RECOVERY_SECTION
 	RECOVER(_bcopy_fail)
 	rep
 	movsq				/* move longwords */
 
-	movl	%edx,%ecx		/* now move remaining bytes */
-	andl	$7,%ecx
+	movl	%edx, %ecx		/* now move remaining bytes */
+	andl	$7, %ecx
 	RECOVERY_SECTION
 	RECOVER(_bcopy_fail)
 	rep

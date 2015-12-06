@@ -89,6 +89,7 @@
 #include <sys/unpcb.h>
 #include <sys/vnode_internal.h>
 #include <sys/kdebug.h>
+#include <sys/mcache.h>
 
 #include <kern/zalloc.h>
 #include <kern/locks.h>
@@ -98,6 +99,11 @@
 #endif /* CONFIG_MACF */
 
 #include <mach/vm_param.h>
+
+/*
+ * Maximum number of FDs that can be passed in an mbuf
+ */
+#define UIPC_MAX_CMSG_FD	512
 
 #define	f_msgcount f_fglob->fg_msgcount
 #define	f_cred f_fglob->fg_cred
@@ -166,10 +172,9 @@ static void	unp_disconnect(struct unpcb *);
 static void	unp_shutdown(struct unpcb *);
 static void	unp_drop(struct unpcb *, int);
 __private_extern__ void	unp_gc(void);
-static void	unp_scan(struct mbuf *, void (*)(struct fileglob *));
-static void	unp_mark(struct fileglob *);
-static void	unp_discard(struct fileglob *);
-static void	unp_discard_fdlocked(struct fileglob *, proc_t);
+static void	unp_scan(struct mbuf *, void (*)(struct fileglob *, void *arg), void *arg);
+static void	unp_mark(struct fileglob *, __unused void *);
+static void	unp_discard(struct fileglob *, void *);
 static int	unp_internalize(struct mbuf *, proc_t);
 static int	unp_listen(struct unpcb *, proc_t);
 static void	unpcb_to_compat(struct unpcb *, struct unpcb_compat *);
@@ -1870,9 +1875,16 @@ unp_externalize(struct mbuf *rights)
 	struct fileglob **rp = (struct fileglob **)(cm + 1);
 	int *fds = (int *)(cm + 1);
 	struct fileproc *fp;
-	struct fileglob *fg;
+	struct fileglob **fgl;
 	int newfds = (cm->cmsg_len - sizeof (*cm)) / sizeof (int);
-	int f;
+	int f, error = 0;
+
+	MALLOC(fgl, struct fileglob **, newfds * sizeof (struct fileglob *),
+		M_TEMP, M_WAITOK);
+	if (fgl == NULL) {
+		error = ENOMEM;
+		goto discard;
+	}
 
 	proc_fdlock(p);
 
@@ -1880,14 +1892,9 @@ unp_externalize(struct mbuf *rights)
 	 * if the new FD's will not fit, then we free them all
 	 */
 	if (!fdavail(p, newfds)) {
-		for (i = 0; i < newfds; i++) {
-			fg = *rp;
-			unp_discard_fdlocked(fg, p);
-			*rp++ = NULL;
-		}
 		proc_fdunlock(p);
-
-		return (EMSGSIZE);
+		error = EMSGSIZE;
+		goto discard;
 	}
 	/*
 	 * now change each pointer to an fd in the global table to
@@ -1903,34 +1910,55 @@ unp_externalize(struct mbuf *rights)
 		 * If receive access is denied, don't pass along
 		 * and error message, just discard the descriptor.
 		 */
-		if (mac_file_check_receive(kauth_cred_get(), *rp)) {
-			fg = *rp;
-			*rp++ = 0;
-			unp_discard_fdlocked(fg, p);
+		if (mac_file_check_receive(kauth_cred_get(), rp[i])) {
+			proc_fdunlock(p);
+			unp_discard(rp[i], p);
+			fds[i] = 0;
+			proc_fdlock(p);
 			continue;
 		}
 #endif
 		if (fdalloc(p, 0, &f))
 			panic("unp_externalize:fdalloc");
-		fg = rp[i];
 		fp = fileproc_alloc_init(NULL);
 		if (fp == NULL)
 			panic("unp_externalize: MALLOC_ZONE");
 		fp->f_iocount = 0;
-		fp->f_fglob = fg;
-		fg_removeuipc(fg);
+		fp->f_fglob = rp[i];
+		if (fg_removeuipc_mark(rp[i]))
+			fgl[i] = rp[i];
+		else
+			fgl[i] = NULL;
 		procfdtbl_releasefd(p, f, fp);
-		(void) OSAddAtomic(-1, &unp_rights);
 		fds[i] = f;
 	}
 	proc_fdunlock(p);
 
-	return (0);
+	for (i = 0; i < newfds; i++) {
+		if (fgl[i] != NULL) {
+			VERIFY(fgl[i]->fg_lflags & FG_RMMSGQ);
+			fg_removeuipc(fgl[i]);
+		}
+		if (fds[i])
+			(void) OSAddAtomic(-1, &unp_rights);
+	}
+
+discard:
+	if (fgl)
+		FREE(fgl, M_TEMP);
+	if (error) {
+		for (i = 0; i < newfds; i++) {
+			unp_discard(*rp, p);
+			*rp++ = NULL;
+		}
+	}
+	return (error);
 }
 
 void
 unp_init(void)
 {
+	_CASSERT(UIPC_MAX_CMSG_FD >= (MCLBYTES / sizeof(int)));
 	unp_zone = zinit(sizeof (struct unpcb),
 	    (nmbclusters * sizeof (struct unpcb)), 4096, "unpzone");
 
@@ -1979,6 +2007,7 @@ unp_internalize(struct mbuf *control, proc_t p)
 	struct fileproc *fp;
 	int i, error;
 	int oldfds;
+	uint8_t fg_ins[UIPC_MAX_CMSG_FD / 8];
 
 	/* 64bit: cmsg_len is 'uint32_t', m_len is 'long' */
 	if (cm->cmsg_type != SCM_RIGHTS || cm->cmsg_level != SOL_SOCKET ||
@@ -1986,6 +2015,7 @@ unp_internalize(struct mbuf *control, proc_t p)
 		return (EINVAL);
 	}
 	oldfds = (cm->cmsg_len - sizeof (*cm)) / sizeof (int);
+	bzero(fg_ins, sizeof(fg_ins));
 
 	proc_fdlock(p);
 	fds = (int *)(cm + 1);
@@ -1995,7 +2025,7 @@ unp_internalize(struct mbuf *control, proc_t p)
 		if (((error = fdgetf_noref(p, fds[i], &tmpfp)) != 0)) {
 			proc_fdunlock(p);
 			return (error);
-		} else if (!filetype_issendable(FILEGLOB_DTYPE(tmpfp->f_fglob))) {
+		} else if (!file_issendable(p, tmpfp)) {
 			proc_fdunlock(p);
 			return (EINVAL);
 		} else if (FP_ISGUARDED(tmpfp, GUARD_SOCKET_IPC)) {
@@ -2012,11 +2042,19 @@ unp_internalize(struct mbuf *control, proc_t p)
 	 */
 	for (i = (oldfds - 1); i >= 0; i--) {
 		(void) fdgetf_noref(p, fds[i], &fp);
-		fg_insertuipc(fp->f_fglob);
+		if (fg_insertuipc_mark(fp->f_fglob))
+			fg_ins[i / 8] |= 0x80 >> (i % 8);
 		rp[i] = fp->f_fglob;
-		(void) OSAddAtomic(1, &unp_rights);
 	}
 	proc_fdunlock(p);
+
+	for (i = 0; i < oldfds; i++) {
+		if (fg_ins[i / 8] & (0x80 >> (i % 8))) {
+			VERIFY(rp[i]->fg_lflags & FG_INSMSGQ);
+			fg_insertuipc(rp[i]);
+		}
+		(void) OSAddAtomic(1, &unp_rights);
+	}
 
 	return (0);
 }
@@ -2152,7 +2190,7 @@ unp_gc(void)
 			 */
 			lck_mtx_unlock(&fg->fg_lock);
 
-			unp_scan(so->so_rcv.sb_mb, unp_mark);
+			unp_scan(so->so_rcv.sb_mb, unp_mark, 0);
 		}
 	} while (unp_defer);
 	/*
@@ -2265,7 +2303,7 @@ void
 unp_dispose(struct mbuf *m)
 {
 	if (m) {
-		unp_scan(m, unp_discard);
+		unp_scan(m, unp_discard, NULL);
 	}
 }
 
@@ -2283,7 +2321,7 @@ unp_listen(struct unpcb *unp, proc_t p)
 }
 
 static void
-unp_scan(struct mbuf *m0, void (*op)(struct fileglob *))
+unp_scan(struct mbuf *m0, void (*op)(struct fileglob *, void *arg), void *arg)
 {
 	struct mbuf *m;
 	struct fileglob **rp;
@@ -2303,7 +2341,7 @@ unp_scan(struct mbuf *m0, void (*op)(struct fileglob *))
 				    sizeof (int);
 				rp = (struct fileglob **)(cm + 1);
 				for (i = 0; i < qfds; i++)
-					(*op)(*rp++);
+					(*op)(*rp++, arg);
 				break;		/* XXX, but saves time */
 			}
 		m0 = m0->m_act;
@@ -2311,7 +2349,7 @@ unp_scan(struct mbuf *m0, void (*op)(struct fileglob *))
 }
 
 static void
-unp_mark(struct fileglob *fg)
+unp_mark(struct fileglob *fg, __unused void *arg)
 {
 	lck_mtx_lock(&fg->fg_lock);
 
@@ -2327,23 +2365,21 @@ unp_mark(struct fileglob *fg)
 }
 
 static void
-unp_discard(struct fileglob *fg)
+unp_discard(struct fileglob *fg, void *p)
 {
-	proc_t p = current_proc();		/* XXX */
+	if (p == NULL)
+		p = current_proc();		/* XXX */
 
 	(void) OSAddAtomic(1, &unp_disposed);
+	if (fg_removeuipc_mark(fg)) {
+		VERIFY(fg->fg_lflags & FG_RMMSGQ);
+		fg_removeuipc(fg);
+	}
+	(void) OSAddAtomic(-1, &unp_rights);
 
 	proc_fdlock(p);
-	unp_discard_fdlocked(fg, p);
-	proc_fdunlock(p);
-}
-static void
-unp_discard_fdlocked(struct fileglob *fg, proc_t p)
-{
-	fg_removeuipc(fg);
-
-	(void) OSAddAtomic(-1, &unp_rights);
 	(void) closef_locked((struct fileproc *)0, fg, p);
+	proc_fdunlock(p);
 }
 
 int

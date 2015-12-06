@@ -126,6 +126,9 @@ argument by
 .Em or Ns 'ing
 the following values:
 .Bl -tag -width MAP_HASSEMAPHORE
+.It Dv MAP_ANONYMOUS
+Synonym for
+.Dv MAP_ANON.
 .It Dv MAP_ANON
 Map anonymous memory not associated with any specific file.
 The
@@ -265,7 +268,9 @@ does not include either MAP_PRIVATE or MAP_SHARED.
 The
 .Fa len
 argument
-was negative.
+was negative or zero. Historically, the system call would not return an error if the argument was zero. 
+See other potential additional restrictions in the 
+COMPATIBILITY section below. 
 .It Bq Er EINVAL
 The
 .Fa offset
@@ -314,7 +319,7 @@ The
 parameter must specify either MAP_PRIVATE or MAP_SHARED.
 .It
 The
-.Fa size
+.Fa len
 parameter must not be 0.
 .It
 The

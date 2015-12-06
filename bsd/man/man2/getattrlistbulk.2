@@ -151,6 +151,9 @@ It is typical to ask for a combination of common, file, and directory
 attributes and then use the value of the 
 .Dv ATTR_CMN_OBJTYPE 
 attribute to parse the resulting attribute buffer.
+.Pp
+A directory which is a mount point for a file system, will have a value of "DIR_MNTSTATUS_MNTPOINT" set for it's the
+ATTR_DIR_MOUNTSTATUS attribute entry. However the attributes for the mount point will be those from the (underlying) file system. The only way to get the attributes of mounted root directory is to call getattrlist(2) on the mount point.
 .
 .Sh RETURN VALUES
 Upon successful completion the numbers of entries successfully read

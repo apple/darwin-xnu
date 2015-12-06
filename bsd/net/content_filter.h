@@ -26,6 +26,7 @@
 
 #include <sys/param.h>
 #include <sys/types.h>
+#include <sys/_types/_timeval64.h>
 #include <sys/socket.h>
 #include <sys/syslog.h>
 #include <netinet/in.h>
@@ -93,14 +94,6 @@ __BEGIN_DECLS
 typedef uint64_t cfil_sock_id_t;
 
 #define	CFIL_SOCK_ID_NONE UINT64_MAX
-
-/*
- * Invariant timeval structure definition across architectures
- */
-struct timeval64 {
-	int64_t tv_sec;
-	int64_t tv_usec;
-};
 
 /*
  * struct cfil_msg_hdr

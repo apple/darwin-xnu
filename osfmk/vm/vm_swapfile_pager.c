@@ -380,8 +380,8 @@ swapfile_pager_data_request(
 		retval = kr;
 		goto done;
 	}
-	map_entry->object.vm_object = kernel_object;
-	map_entry->offset = kernel_mapping - VM_MIN_KERNEL_ADDRESS;
+	VME_OBJECT_SET(map_entry, kernel_object);
+	VME_OFFSET_SET(map_entry, kernel_mapping - VM_MIN_KERNEL_ADDRESS);
 	vm_map_unlock(kernel_map);
 	dst_vaddr = CAST_DOWN(vm_offset_t, kernel_mapping);
 	dst_ptr = (char *) dst_vaddr;
@@ -728,7 +728,7 @@ swapfile_pager_lookup(
 {
 	swapfile_pager_t	pager;
 
-	pager = (swapfile_pager_t) mem_obj;
+	__IGNORE_WCASTALIGN(pager = (swapfile_pager_t) mem_obj);
 	assert(pager->pager_ops == &swapfile_pager_ops);
 	assert(pager->ref_count > 0);
 	return pager;

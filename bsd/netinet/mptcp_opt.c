@@ -30,7 +30,7 @@
 #include <netinet/in_systm.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
-
+#include <sys/syslog.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <net/if.h>
@@ -112,10 +112,6 @@ mptcp_setup_first_subflow_syn_opts(struct socket *so, int flags, u_char *opt,
 		memcpy(opt + optlen, &mptcp_opt,
 		    mptcp_opt.mmc_common.mmco_len);
 		optlen += mptcp_opt.mmc_common.mmco_len;
-		if (mptcp_dbg >= MP_VERBOSE_DEBUG_2) {
-			printf("%s: SYN_ACK localkey = %llx \n",
-			    __func__, mp_localkey);
-		}
 	} else {
 		/* Only the SYN flag is set */
 		struct mptcp_mpcapable_opt_common mptcp_opt;
@@ -205,8 +201,9 @@ mptcp_setup_join_subflow_syn_opts(struct socket *so, int flags, u_char *opt,
 		mpjoin_req.mmjo_addr_id = tp->t_local_aid;
 		mpjoin_req.mmjo_peer_token = mptcp_get_remotetoken(tp->t_mptcb);
 		if (mpjoin_req.mmjo_peer_token == 0) {
-			if (mptcp_dbg >= MP_ERR_DEBUG)
-				printf("%s: zero peer token \n", __func__);
+			mptcplog((LOG_DEBUG, "MPTCP Socket: %s: peer token 0",
+				__func__),
+				MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 		}	
 		mptcp_get_rands(tp->t_local_aid, tptomptp(tp),
 		    &mpjoin_req.mmjo_rand, NULL);
@@ -217,8 +214,6 @@ mptcp_setup_join_subflow_syn_opts(struct socket *so, int flags, u_char *opt,
 		    (so->so_flags & SOF_MPTCP_FASTJOIN)) {
 			soevent(so,
 			    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_MPFASTJ));
-			if (mptcp_dbg >= MP_ERR_DEBUG)
-				printf("%s: fast join request\n", __func__);
 		}
 	}
 	return (optlen);
@@ -306,8 +301,9 @@ mptcp_send_mpfail(struct tcpcb *tp, u_char *opt, unsigned int optlen)
 	memcpy(opt + optlen, &fail_opt, len);
 	optlen += len;
 	tp->t_mpflags &= ~TMPF_SND_MPFAIL;
-	if (mptcp_dbg >= MP_ERR_DEBUG)
-		printf("%s: %d \n", __func__, tp->t_local_aid);
+	mptcplog((LOG_DEBUG, "MPTCP Socket: %s: %d \n", __func__,
+	    tp->t_local_aid), (MPTCP_SOCKET_DBG | MPTCP_SENDER_DBG), 
+	    MPTCP_LOGLVL_LOG);
 	return (optlen);
 }
 
@@ -370,12 +366,13 @@ mptcp_send_infinite_mapping(struct tcpcb *tp, u_char *opt, unsigned int optlen)
 		optlen += csum_len;
 	}
 
-	if (mptcp_dbg == MP_VERBOSE_DEBUG_1) {
-		printf("%s: dsn = %x, seq = %x len = %x\n", __func__,
-		    ntohl(infin_opt.mdss_dsn),
-		    ntohl(infin_opt.mdss_subflow_seqn),
-		    ntohs(infin_opt.mdss_data_len));
-	}
+	mptcplog((LOG_DEBUG, "MPTCP Socket: %s: dsn = %x, seq = %x len = %x\n", 
+	    __func__,
+	    ntohl(infin_opt.mdss_dsn),
+	    ntohl(infin_opt.mdss_subflow_seqn),
+	    ntohs(infin_opt.mdss_data_len)),
+	    (MPTCP_SOCKET_DBG | MPTCP_SENDER_DBG),
+	    MPTCP_LOGLVL_LOG);
 
 	/* so->so_flags &= ~SOF_MPTCP_CLIENT; */
 	tp->t_mpflags |= TMPF_INFIN_SENT;
@@ -444,7 +441,8 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 	boolean_t send_64bit_dsn = FALSE;
 	boolean_t send_64bit_ack = FALSE;
 	u_int32_t old_mpt_flags = tp->t_mpflags &
-	       	(TMPF_SND_MPPRIO | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL);
+	    (TMPF_SND_MPPRIO | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL |
+	    TMPF_MPCAP_RETRANSMIT);
 
 	if ((mptcp_enable == 0) ||
 	    (mp_tp == NULL) ||
@@ -465,12 +463,11 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 
 	if ((MAX_TCPOPTLEN - optlen) <
 	    sizeof (struct mptcp_mpcapable_opt_common)) {
-		if (mptcp_dbg >= MP_ERR_DEBUG) {
-			printf("MPTCP ERROR %s: no space left %d flags %x "
-			    "tp->t_mpflags %x"
-			    "len %d\n", __func__, optlen, flags, tp->t_mpflags,
-			    datalen);
-		}
+		mptcplog((LOG_ERR, "MPTCP Socket:  "
+		    "%s: no space left %d flags %x "
+		    "tp->t_mpflags %x "
+		    "len %d\n", __func__, optlen, flags, tp->t_mpflags,
+		    datalen), MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 		goto ret_optlen;
 	}
 
@@ -501,9 +498,10 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 		goto fastjoin_send;
 	}
 
-	if ((tp->t_mpflags & TMPF_PREESTABLISHED) &&
+	if (((tp->t_mpflags & TMPF_PREESTABLISHED) &&
 	    (!(tp->t_mpflags & TMPF_SENT_KEYS)) &&
-	    (!(tp->t_mpflags & TMPF_JOINED_FLOW))) {
+	    (!(tp->t_mpflags & TMPF_JOINED_FLOW))) ||
+	    (tp->t_mpflags & TMPF_MPCAP_RETRANSMIT)) {
 		struct mptcp_mpcapable_opt_rsp1 mptcp_opt;
 		if ((MAX_TCPOPTLEN - optlen) <
 		    sizeof (struct mptcp_mpcapable_opt_rsp1))
@@ -513,7 +511,7 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 		mptcp_opt.mmc_common.mmco_len =
 		    sizeof (struct mptcp_mpcapable_opt_rsp1);
 		mptcp_opt.mmc_common.mmco_subtype = MPO_CAPABLE;
-		mptcp_opt.mmc_common.mmco_version = MP_DRAFT_VERSION_12;
+		mptcp_opt.mmc_common.mmco_version = mp_tp->mpt_version;
 		/* HMAC-SHA1 is the proposal */
 		mptcp_opt.mmc_common.mmco_flags |= MPCAP_PROPOSAL_SBIT;
 		MPT_LOCK(mp_tp);
@@ -524,18 +522,15 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 		MPT_UNLOCK(mp_tp);
 		memcpy(opt + optlen, &mptcp_opt, mptcp_opt.mmc_common.mmco_len);
 		optlen += mptcp_opt.mmc_common.mmco_len;
-		tp->t_mpflags |= TMPF_SENT_KEYS;
+		tp->t_mpflags |= TMPF_SENT_KEYS | TMPF_MPTCP_TRUE;
 		so->so_flags |= SOF_MPTCP_TRUE;
 		tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-		tp->t_mpflags |= TMPF_MPTCP_TRUE;
+		tp->t_mpflags &= ~TMPF_MPCAP_RETRANSMIT;
 
 		if (!tp->t_mpuna) {
 			tp->t_mpuna = tp->snd_una;
 		} else {
 			/* its a retransmission of the MP_CAPABLE ACK */
-		}
-		if (mptcp_dbg >= MP_ERR_DEBUG) {
-			printf("MPTCP SUCCESS %s: established.\n", __func__);
 		}
 		goto ret_optlen;
 	} else if (tp->t_mpflags & TMPF_MPTCP_TRUE) {
@@ -593,11 +588,9 @@ fastjoin_send:
 
 #define	CHECK_OPTLEN	{						\
 	if ((MAX_TCPOPTLEN - optlen) < len) {				\
-		if (mptcp_dbg >= MP_ERR_DEBUG) {			\
-			printf("MPTCP ERROR %s: len %d optlen %d \n",	\
-			    __func__,					\
-			    len, optlen);				\
-		}							\
+		mptcplog((LOG_ERR, "MPTCP Socket:  "			\
+		    "%s: len %d optlen %d \n", __func__, len, optlen),	\
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);		\
 		goto ret_optlen;					\
 	}								\
 }
@@ -616,10 +609,11 @@ fastjoin_send:
 #define	CHECK_DATALEN {							\
 	/* MPTCP socket does not support IP options */			\
 	if ((datalen + optlen + len) > tp->t_maxopd) {			\
-		if (mptcp_dbg >= MP_VERBOSE_DEBUG_2)			\
-			printf("%s: nosp %d len %d opt %d %d %d\n",	\
-			    __func__, datalen, len, optlen,		\
-			    tp->t_maxseg, tp->t_maxopd);		\
+		mptcplog((LOG_ERR, "MPTCP Socket:  "			\
+		    "%s: nosp %d len %d opt %d %d %d\n",		\
+		    __func__, datalen, len, optlen,			\
+		    tp->t_maxseg, tp->t_maxopd),			\
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);		\
 		/* remove option length from payload len */		\
 		datalen = tp->t_maxopd - optlen - len;			\
 	}								\
@@ -691,12 +685,13 @@ fastjoin_send:
 			    mdss_subflow_seqn));
 		}
 		optlen += len;
-		if (mptcp_dbg == MP_VERBOSE_DEBUG_2) {
-			printf("%s: long DSS = %llx ACK = %llx \n",
-			    __func__,
-			    mptcp_ntoh64(dsn_ack_opt.mdss_dsn),
-			    mptcp_ntoh64(dsn_ack_opt.mdss_ack));
-		}
+		mptcplog((LOG_DEBUG,"MPTCP Socket: "
+		    "%s: long DSS = %llx ACK = %llx \n",
+		    __func__,
+		    mptcp_ntoh64(dsn_ack_opt.mdss_dsn),
+		    mptcp_ntoh64(dsn_ack_opt.mdss_ack)),
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
+		
 		tp->t_mpflags &= ~TMPF_MPTCP_ACKNOW;
 		goto ret_optlen;
 	}
@@ -746,13 +741,6 @@ fastjoin_send:
 			    offsetof(struct mptcp_dsn_opt, mdss_subflow_seqn));
 		}
 		optlen += len;
-		if (mptcp_dbg == MP_VERBOSE_DEBUG_2) {
-			printf("%s: DSS option. dsn = %x, seq = %x len = %x\n",
-			    __func__,
-			    ntohl(dsn_opt.mdss_dsn),
-			    ntohl(dsn_opt.mdss_subflow_seqn),
-			    ntohs(dsn_opt.mdss_data_len));
-		}
 		tp->t_mpflags &= ~TMPF_MPTCP_ACKNOW;
 		goto ret_optlen;
 	}
@@ -957,10 +945,6 @@ do_ack64_only:
 		if (((mp_tp->mpt_sndnxt + 1) != mp_tp->mpt_sndmax) ||
 		    (mp_tp->mpt_snduna == mp_tp->mpt_sndmax)) {
 			MPT_UNLOCK(mp_tp);
-			if (mptcp_dbg == MP_VERBOSE_DEBUG_2)
-				printf("%s: Fin state %d %llu %llu\n", __func__,
-				    mp_tp->mpt_state, mp_tp->mpt_sndnxt,
-				    mp_tp->mpt_sndmax);
 			goto ret_optlen;
 		}
 
@@ -990,7 +974,8 @@ ret_optlen:
 	if (TRUE == *p_mptcp_acknow ) {
 		VERIFY(old_mpt_flags != 0);
 		u_int32_t new_mpt_flags = tp->t_mpflags &
-		    (TMPF_SND_MPPRIO | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL);
+		    (TMPF_SND_MPPRIO | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL |
+		    TMPF_MPCAP_RETRANSMIT);
 
 		/*
 		 * If none of the above mpflags were acted on by
@@ -1006,10 +991,18 @@ ret_optlen:
 		 * we haven't modified the logic in tcp_output to avoid
 		 * that.
 		 */
-		if (old_mpt_flags == new_mpt_flags) { 
+		if ((old_mpt_flags == new_mpt_flags) || (new_mpt_flags == 0)) {
 			tp->t_mpflags &= ~(TMPF_SND_MPPRIO
-			    | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL);
+			    | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL |
+			    TMPF_MPCAP_RETRANSMIT);
 			*p_mptcp_acknow = FALSE;
+			mptcplog((LOG_DEBUG, "MPTCP Sender: %s: no action \n",
+			    __func__), MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
+		} else {
+			mptcplog((LOG_DEBUG, "MPTCP Sender: acknow set, "
+			    "old flags %x new flags %x \n",
+			    old_mpt_flags, new_mpt_flags),
+			    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
 		}
 	}
 
@@ -1020,18 +1013,49 @@ ret_optlen:
  * MPTCP Options Input Processing
  */
 
+static int
+mptcp_sanitize_option(struct tcpcb *tp, int mptcp_subtype)
+{
+	struct mptcb *mp_tp = tptomptp(tp);
+	int ret = 1;
+
+	if (mp_tp == NULL) {
+		mptcplog((LOG_ERR, "MPTCP Socket: %s: NULL mpsocket \n",
+		    __func__), MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
+		return (0);
+	}
+
+	switch (mptcp_subtype) {
+		case MPO_CAPABLE:
+			break;
+		case MPO_JOIN:		/* fall through */
+		case MPO_DSS:		/* fall through */
+		case MPO_FASTCLOSE:	/* fall through */
+		case MPO_FAIL:		/* fall through */
+		case MPO_REMOVE_ADDR:	/* fall through */
+		case MPO_ADD_ADDR:	/* fall through */
+		case MPO_PRIO:		/* fall through */
+			if (mp_tp->mpt_state < MPTCPS_ESTABLISHED)
+				ret = 0;
+			break;
+		default:
+			ret = 0;
+			mptcplog((LOG_ERR, "MPTCP Socket: "
+			    "%s: type = %d \n", __func__,
+			    mptcp_subtype),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
+			break;
+	}
+	return (ret);
+}
 
 static int
-mptcp_valid_mpcapable_common_opt(u_char *cp, u_int32_t mptcp_version)
+mptcp_valid_mpcapable_common_opt(u_char *cp)
 {
 	struct mptcp_mpcapable_opt_common *rsp =
 	    (struct mptcp_mpcapable_opt_common *)cp;
 
 	/* mmco_kind, mmco_len and mmco_subtype are validated before */
-
-	/* In future, there can be more than one version supported */
-	if (rsp->mmco_version != mptcp_version)
-		return (0);
 
 	if (!(rsp->mmco_flags & MPCAP_PROPOSAL_SBIT))
 		return (0);
@@ -1061,15 +1085,8 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 	}								\
 }
 
-	if (mp_tp == NULL) {
-		if (mptcp_dbg == MP_ERR_DEBUG)
-			printf("MPTCP ERROR %s: NULL mpsocket \n", __func__);
-		tcpstat.tcps_invalid_mpcap++;
-		return;
-	}
-
 	/* Validate the kind, len, flags */
-	if (mptcp_valid_mpcapable_common_opt(cp, mp_tp->mpt_version) != 1) {
+	if (mptcp_valid_mpcapable_common_opt(cp) != 1) {
 		tcpstat.tcps_invalid_mpcap++;
 		return;
 	}
@@ -1080,14 +1097,24 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 		return;
 	} else if ((th->th_flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
 
+		/* Handle old duplicate SYN/ACK retransmission */
+		if (SEQ_GT(tp->rcv_nxt, (tp->irs + 1)))
+			return;
+
+		/* handle SYN/ACK retransmission by acknowledging with ACK */
+		if (mp_tp->mpt_state >= MPTCPS_ESTABLISHED) {
+			tp->t_mpflags |= TMPF_MPCAP_RETRANSMIT;
+			return;
+		}
+
 		/* A SYN/ACK contains peer's key and flags */
 		if (optlen != sizeof (struct mptcp_mpcapable_opt_rsp)) {
 			/* complain */
-			if (mptcp_dbg == MP_ERR_DEBUG) {
-				printf("%s: SYN_ACK optlen = %d, sizeof mp opt \
-				    = %lu \n", __func__, optlen,
-				    sizeof (struct mptcp_mpcapable_opt_rsp));
-			}
+			mptcplog((LOG_ERR, "MPTCP Socket: "
+			    "%s: SYN_ACK optlen = %d, sizeof mp opt = %lu \n",
+			    __func__, optlen,
+			    sizeof (struct mptcp_mpcapable_opt_rsp)),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			tcpstat.tcps_invalid_mpcap++;
 			return;
 		}
@@ -1103,15 +1130,14 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 		rsp = (struct mptcp_mpcapable_opt_rsp *)cp;
 		MPT_LOCK_SPIN(mp_tp);
 		mp_tp->mpt_remotekey = rsp->mmc_localkey;
+		/* For now just downgrade to the peer's version */
+		mp_tp->mpt_peer_version = rsp->mmc_common.mmco_version;
+		if (rsp->mmc_common.mmco_version < mp_tp->mpt_version) {
+			mp_tp->mpt_version = rsp->mmc_common.mmco_version;
+			tcpstat.tcps_mp_verdowngrade++;
+		}
 		MPT_UNLOCK(mp_tp);
 		tp->t_mpflags |= TMPF_PREESTABLISHED;
-
-		if (mptcp_dbg > MP_VERBOSE_DEBUG_1) {
-			printf("SYN_ACK pre established, optlen = %d, tp \
-			    state = %d  sport = %x dport = %x key = %llx \n",
-			    optlen, tp->t_state, th->th_sport, th->th_dport,
-			    mp_tp->mpt_remotekey);
-		}
 
 	} else if ((th->th_flags & TH_ACK) &&
 		(tp->t_mpflags & TMPF_PREESTABLISHED)) {
@@ -1123,10 +1149,9 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 		if ((mp_tp->mpt_flags & MPTCPF_CHECKSUM) &&
 		    !(((struct mptcp_mpcapable_opt_common *)cp)->mmco_flags &
 		    MPCAP_CHECKSUM_CBIT)) {
-			if (mptcp_dbg == MP_ERR_DEBUG) {
-				printf("%s: checksum negotiation failure \n",
-				    __func__);
-			}
+			mptcplog((LOG_ERR, "MPTCP Socket: "	
+			    "%s: checksum negotiation failure \n", __func__),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			MPTCP_OPT_ERROR_PATH(tp);
 			return;
 		}
@@ -1134,10 +1159,9 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 		if (!(mp_tp->mpt_flags & MPTCPF_CHECKSUM) &&
 		    (((struct mptcp_mpcapable_opt_common *)cp)->mmco_flags &
 		    MPCAP_CHECKSUM_CBIT)) {
-			if (mptcp_dbg == MP_ERR_DEBUG) {
-				printf("%s: checksum negotiation failure 2.\n",
-				    __func__);
-			}
+			mptcplog((LOG_ERR, "MPTCP Socket: "	
+			    "%s: checksum negotiation failure 2.\n", __func__),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			MPTCP_OPT_ERROR_PATH(tp);
 			return;
 		}
@@ -1148,38 +1172,33 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 		 */
 		if (optlen != sizeof (struct mptcp_mpcapable_opt_rsp1)) {
 			/* complain */
-			if (mptcp_dbg == MP_ERR_DEBUG) {
-				printf("%s: ACK optlen = %d , sizeof mp option \
-				= %lu, state = %d \n",
-				__func__,
-				optlen,
+			mptcplog((LOG_ERR, "MPTCP Socket: "	
+			    "%s: ACK optlen = %d , sizeof mp option = %lu, "
+			    " state = %d \n", __func__,	optlen,
 				sizeof (struct mptcp_mpcapable_opt_rsp1),
-				tp->t_state);
-			}
+				tp->t_state), MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			MPTCP_OPT_ERROR_PATH(tp);
 			return;
 		}
 
 		rsp1 = (struct mptcp_mpcapable_opt_rsp1 *)cp;
+
 		/* Skipping MPT_LOCK for invariant key */
 		if (rsp1->mmc_remotekey != *mp_tp->mpt_localkey) {
-			if (mptcp_dbg == MP_ERR_DEBUG) {
-				printf("MPTCP ERROR %s: key mismatch locally "
-				    "stored key. rsp = %llx local = %llx \n",
-				    __func__, rsp1->mmc_remotekey,
-				    *mp_tp->mpt_localkey);
-			}
-			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
+			mptcplog((LOG_ERR, "MPTCP Socket: "	
+			    "%s: key mismatch locally stored key. "
+			    "rsp = %llx local = %llx \n", __func__, 
+			    rsp1->mmc_remotekey, *mp_tp->mpt_localkey),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			MPTCP_OPT_ERROR_PATH(tp);
 			return;
 		} else {
 			/* We received both keys. Almost an MPTCP connection */
 			/* Skipping MPT_LOCK for invariant key */
 			if (mp_tp->mpt_remotekey != rsp1->mmc_localkey) {
-				if (mptcp_dbg == MP_ERR_DEBUG) {
-					printf("MPTCP ERROR %s: keys don't"
-					    " match\n", __func__);
-				}
+				mptcplog((LOG_ERR, "MPTCP Socket: "
+				    "%s: keys don't match\n", __func__),
+				    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 				tp->t_mpflags &= ~TMPF_PREESTABLISHED;
 				MPTCP_OPT_ERROR_PATH(tp);
 				return;
@@ -1191,14 +1210,12 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 			MPT_LOCK(mp_tp);
 			DTRACE_MPTCP2(state__change, struct mptcb *, mp_tp, 
 			    uint32_t, 0 /* event */);
+			mptcplog((LOG_DEBUG, "MPTCP State: "
+				    "MPTCPS_ESTABLISHED \n"),
+				    MPTCP_STATE_DBG, MPTCP_LOGLVL_LOG);
+
 			mp_tp->mpt_state = MPTCPS_ESTABLISHED;
 			MPT_UNLOCK(mp_tp);
-			if (mptcp_dbg >= MP_VERBOSE_DEBUG_2) {
-				printf("MPTCP SUCCESS %s: rem key = %llx local \
-				key = %llx \n",
-				__func__, mp_tp->mpt_remotekey,
-				*mp_tp->mpt_localkey);
-			}
 		}
 		if (tp->t_mpuna) {
 			tp->t_mpuna = 0;
@@ -1219,7 +1236,6 @@ mptcp_do_mpjoin_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 	}								\
 }
 	int error = 0;
-	struct mptcb *mp_tp = tptomptp(tp);
 
 	if ((th->th_flags & (TH_SYN | TH_ACK)) == TH_SYN) {
 		/* We won't accept join requests as an active opener */
@@ -1229,12 +1245,11 @@ mptcp_do_mpjoin_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		}
 
 		if (optlen != sizeof (struct mptcp_mpjoin_opt_req)) {
-			if (mptcp_dbg == MP_ERR_DEBUG) {
-				printf("SYN: unexpected optlen = %d, mp option"
-				    "= %lu\n",
-				    optlen,
-				    sizeof (struct mptcp_mpjoin_opt_req));
-			}
+			mptcplog((LOG_ERR, "MPTCP Socket: "	
+			    "%s: SYN: unexpected optlen = %d, mp option"
+			    "= %lu\n", __func__, optlen,
+			    sizeof (struct mptcp_mpjoin_opt_req)),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			/* send RST and close */
 			MPTCP_JOPT_ERROR_PATH(tp);
 			return;
@@ -1246,9 +1261,10 @@ mptcp_do_mpjoin_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		    (struct mptcp_mpjoin_opt_req *)cp;
 		mp_so = mptcp_find_mpso(join_req->mmjo_peer_token);
 		if (!mp_so) {
-			if (mptcp_dbg >= MP_ERR_DEBUG)
-				printf("%s: cannot find mp_so token = %x\n",
-				    __func__, join_req->mmjo_peer_token);
+			mptcplog((LOG_ERR, "MPTCP Socket: "	
+			    "%s: cannot find mp_so token = %x\n",
+			    __func__, join_req->mmjo_peer_token),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			/* send RST */
 			MPTCP_JOPT_ERROR_PATH(tp);
 			return;
@@ -1270,21 +1286,11 @@ mptcp_do_mpjoin_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		    (struct mptcp_mpjoin_opt_rsp *)cp;
 
 		if (optlen != sizeof (struct mptcp_mpjoin_opt_rsp)) {
-			if (mptcp_dbg >= MP_ERR_DEBUG) {
-				printf("SYN_ACK: unexpected optlen = %d mp "
-				    "option = %lu\n", optlen,
-				    sizeof (struct mptcp_mpjoin_opt_rsp));
-			}
-			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-			/* send RST and close */
-			MPTCP_JOPT_ERROR_PATH(tp);
-			return;
-		}
-
-		if (mp_tp == NULL) {
-			if (mptcp_dbg >= MP_ERR_DEBUG)
-				printf("%s: cannot find mp_tp in SYN_ACK\n",
-				    __func__);
+			mptcplog((LOG_ERR, "MPTCP Socket: "	
+			    "SYN_ACK: unexpected optlen = %d mp "
+			    "option = %lu\n", optlen,
+			    sizeof (struct mptcp_mpjoin_opt_rsp)),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
 			/* send RST and close */
 			MPTCP_JOPT_ERROR_PATH(tp);
@@ -1297,10 +1303,9 @@ mptcp_do_mpjoin_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		error = mptcp_validate_join_hmac(tp,
 		    (u_char*)&join_rsp->mmjo_mac, SHA1_TRUNCATED);
 		if (error) {
-			if (mptcp_dbg >= MP_ERR_DEBUG) {
-				printf("%s: SYN_ACK error = %d \n", __func__,
-				    error);
-			}
+			mptcplog((LOG_ERR, "MPTCP Socket: %s: "
+			    "SYN_ACK error = %d \n", __func__, error),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
 			/* send RST and close */
 			MPTCP_JOPT_ERROR_PATH(tp);
@@ -1313,19 +1318,14 @@ mptcp_do_mpjoin_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		    (struct mptcp_mpjoin_opt_rsp2 *)cp;
 		
 		if (optlen != sizeof (struct mptcp_mpjoin_opt_rsp2)) {
-			if (mptcp_dbg >= MP_ERR_DEBUG) {
-				printf("ACK: unexpected optlen = %d mp option "
-				    "= %lu \n",	optlen,
-				    sizeof (struct mptcp_mpjoin_opt_rsp2));
-			}
+			mptcplog((LOG_ERR, "MPTCP Socket: "
+			    "ACK: unexpected optlen = %d mp option "
+			    "= %lu \n",	optlen,
+			    sizeof (struct mptcp_mpjoin_opt_rsp2)),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
+
 			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
 			/* send RST and close */
-			MPTCP_JOPT_ERROR_PATH(tp);
-			return;
-		}
-
-		if (mp_tp == NULL) {
-			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
 			MPTCP_JOPT_ERROR_PATH(tp);
 			return;
 		}
@@ -1333,10 +1333,9 @@ mptcp_do_mpjoin_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		error = mptcp_validate_join_hmac(tp, join_rsp2->mmjo_mac,
 		    SHA1_RESULTLEN);
 		if (error) {
-			if (mptcp_dbg >= MP_ERR_DEBUG) {
-				printf("%s: ACK error = %d\n", __func__,
-				    error);
-			}
+			mptcplog((LOG_ERR, "MPTCP Socket: "
+			    "%s: ACK error = %d\n", __func__, error),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
 			MPTCP_JOPT_ERROR_PATH(tp);
 			return;
@@ -1346,9 +1345,6 @@ mptcp_do_mpjoin_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		tp->t_flags |= TF_ACKNOW;
 		tp->t_mpflags |= TMPF_MPTCP_ACKNOW;
 		tp->t_inpcb->inp_socket->so_flags |= SOF_MPTCP_TRUE;
-		if (mptcp_dbg >= MP_ERR_DEBUG) {
-			printf("MPTCP SUCCESS %s: join \n", __func__);
-		}
 	}
 }
 
@@ -1361,8 +1357,6 @@ mptcp_validate_join_hmac(struct tcpcb *tp, u_char* hmac, int mac_len)
 	u_int32_t rem_rand, loc_rand;
 
 	mp_tp = tp->t_mptcb;
-	if (mp_tp == NULL)
-		return (-1);
 
 	rem_rand = loc_rand = 0;
 
@@ -1394,9 +1388,6 @@ mptcp_do_dss_opt_ack_meat(u_int64_t full_dack, struct tcpcb *tp)
 	struct mptcb *mp_tp = tptomptp(tp);
 	int close_notify = 0;
 
-	if (mp_tp == NULL)
-		return;
-
 	MPT_LOCK(mp_tp);
 	if (MPTCP_SEQ_LEQ(full_dack, mp_tp->mpt_sndmax) &&
 	    MPTCP_SEQ_GEQ(full_dack, mp_tp->mpt_snduna)) {
@@ -1413,15 +1404,12 @@ mptcp_do_dss_opt_ack_meat(u_int64_t full_dack, struct tcpcb *tp)
 		}
 	} else {
 		MPT_UNLOCK(mp_tp);
-		if (mptcp_dbg == MP_VERBOSE_DEBUG_2) {
-			printf("%s: unexpected dack %llx snduna %llx "
-			    "sndmax %llx\n", __func__, full_dack,
-			    mp_tp->mpt_snduna, mp_tp->mpt_sndmax);
-		}
-	}
-
-	if (mptcp_dbg == MP_VERBOSE_DEBUG_2) {
-		printf("%s: full_dack = %llu \n", __func__, full_dack);
+		mptcplog((LOG_ERR,"MPTCP Socket: "
+		    "%s: unexpected dack %llx snduna %llx "
+		    "sndmax %llx\n", __func__, full_dack,
+		    mp_tp->mpt_snduna, mp_tp->mpt_sndmax),
+		    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
+		    MPTCP_LOGLVL_LOG);
 	}
 }
 
@@ -1435,17 +1423,14 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp)
 
 #define	MPTCP_DSS_OPT_SZ_CHK(len, expected_len) {		\
 	if (len != expected_len) {				\
-		if (mptcp_dbg >= MP_ERR_DEBUG) {		\
-			printf("MPTCP ERROR %s: bad len = %d"	\
-			    "dss: %x \n", __func__,		\
-			    len,				\
-			    dss_rsp->mdss_flags);		\
-		}						\
+		mptcplog((LOG_ERR, "MPTCP Socket: "		\
+		    "%s: bad len = %d dss: %x \n", __func__,	\
+		    len, dss_rsp->mdss_flags),			\
+		    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),	\
+		    MPTCP_LOGLVL_LOG);				\
 		return;						\
 	}							\
 }
-	if (mp_tp == NULL)
-		return;
 
 	if (mp_tp->mpt_flags & MPTCPF_CHECKSUM)
 		csum_len = 2;
@@ -1519,9 +1504,10 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp)
 			MPTCP_DSS_OPT_SZ_CHK(dsn64->mdss_copt.mdss_len,
 			    sizeof (struct mptcp_dsn64_opt) + csum_len);
 
-			if (mptcp_dbg == MP_VERBOSE_DEBUG_4) {
-				printf("%s: 64-bit M present.\n", __func__);
-			}
+			mptcplog((LOG_DEBUG,"MPTCP Socket: "
+			    "%s: 64-bit M present.\n", __func__),
+			    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
+			    MPTCP_LOGLVL_LOG);
 
 			MPT_LOCK_SPIN(mp_tp);
 			mp_tp->mpt_flags |= MPTCPF_SND_64BITACK;
@@ -1552,10 +1538,10 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp)
 			MPTCP_DSS_OPT_SZ_CHK(dack64->mdss_copt.mdss_len,
 			    sizeof (struct mptcp_data_ack64_opt));
 
-
-			if (mptcp_dbg == MP_VERBOSE_DEBUG_4) {
-				printf("%s: 64-bit A present. \n", __func__);
-			}
+			mptcplog((LOG_DEBUG,"MPTCP Socket: "
+			    "%s: 64-bit A present. \n", __func__),
+			    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
+			    MPTCP_LOGLVL_LOG);
 
 			MPT_LOCK_SPIN(mp_tp);
 			mp_tp->mpt_flags |= MPTCPF_RCVD_64BITACK;
@@ -1574,10 +1560,10 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp)
 			MPTCP_DSS_OPT_SZ_CHK(dss_ack_rsp->mdss_copt.mdss_len,
 			    sizeof (struct mptcp_dss64_ack32_opt) + csum_len);
 
-			if (mptcp_dbg == MP_VERBOSE_DEBUG_4) {
-				printf("%s: 64-bit M and 32-bit A present.\n",
-					__func__);
-			}
+			mptcplog((LOG_DEBUG,"MPTCP Socket: "
+			    "%s: 64-bit M and 32-bit A present.\n", __func__),
+			    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
+			    MPTCP_LOGLVL_LOG);
 
 			u_int32_t dack = dss_ack_rsp->mdss_ack;
 			NTOHL(dack);
@@ -1606,10 +1592,11 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp)
 			    dss32_ack64_opt->mdss_copt.mdss_len,
 			    sizeof (struct mptcp_dss32_ack64_opt) + csum_len);
 
-			if (mptcp_dbg == MP_VERBOSE_DEBUG_4) {
-				printf("%s: 32-bit M and 64-bit A present.\n",
-					__func__);
-			}
+			mptcplog((LOG_DEBUG,"MPTCP Socket: "
+			    "%s: 32-bit M and 64-bit A present.\n", __func__),
+			    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
+			    MPTCP_LOGLVL_LOG);
+			
 			full_dack = mptcp_ntoh64(dss32_ack64_opt->mdss_ack);
 			mptcp_do_dss_opt_ack_meat(full_dack, tp);
 			NTOHL(dss32_ack64_opt->mdss_dsn);
@@ -1643,10 +1630,11 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp)
 			MPTCP_DSS_OPT_SZ_CHK(dss64_ack64->mdss_copt.mdss_len,
 			    sizeof (struct mptcp_dss64_ack64_opt) + csum_len);
 
-			if (mptcp_dbg == MP_VERBOSE_DEBUG_4) {
-				printf("%s: 64-bit M and 64-bit A present.\n",
-					__func__);
-			}
+			mptcplog((LOG_DEBUG,"MPTCP Socket: "
+			    "%s: 64-bit M and 64-bit A present.\n", __func__),
+			    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
+			    MPTCP_LOGLVL_LOG);
+
 			MPT_LOCK_SPIN(mp_tp);
 			mp_tp->mpt_flags |= MPTCPF_RCVD_64BITACK;
 			mp_tp->mpt_flags |= MPTCPF_SND_64BITACK;
@@ -1670,10 +1658,11 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp)
 			break;
 		}
 		default:
-			if (mptcp_dbg >= MP_ERR_DEBUG) {
-				printf("MPTCP ERROR %s: File bug, DSS flags = %x\n",
-					__func__, dss_rsp->mdss_flags);
-			}
+			mptcplog((LOG_DEBUG,"MPTCP Socket: "
+			    "%s: File bug, DSS flags = %x\n", __func__,
+			    dss_rsp->mdss_flags),
+			    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
+			    MPTCP_LOGLVL_LOG);
 			break;
 	}
 }
@@ -1683,6 +1672,10 @@ static void
 mptcp_do_fin_opt(struct tcpcb *tp)
 {
 	struct mptcb *mp_tp = (struct mptcb *)tp->t_mptcb;
+
+	mptcplog((LOG_DEBUG,"MPTCP Socket: %s \n", __func__),
+	    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
+	    MPTCP_LOGLVL_LOG);
 
 	if (!(tp->t_mpflags & TMPF_RECV_DFIN)) {
 		if (mp_tp != NULL) {
@@ -1723,13 +1716,7 @@ mptcp_do_dss_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 		struct mptcp_dss_copt *dss_rsp = (struct mptcp_dss_copt *)cp;
 
 		if (dss_rsp->mdss_subtype == MPO_DSS) {
-			if (mptcp_dbg > MP_VERBOSE_DEBUG_4) {
-				printf("%s: DSS option received: %d ",
-				    __func__, dss_rsp->mdss_flags);
-			}
 			if (dss_rsp->mdss_flags & MDSS_F) {
-				if (mptcp_dbg >= MP_VERBOSE_DEBUG_1)
-					printf("%s: received FIN\n", __func__);
 				mptcp_do_fin_opt(tp);
 			}
 
@@ -1747,8 +1734,9 @@ mptcp_do_fastclose_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th)
 	if (th->th_flags != TH_ACK)
 		return;
 
-	if (mptcp_dbg > MP_VERBOSE_DEBUG_2)
-		printf("%s: received \n", __func__);
+	mptcplog((LOG_DEBUG,"MPTCP Socket: %s: \n", __func__),
+	    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
+	    MPTCP_LOGLVL_LOG);
 
 	if (fc_opt->mfast_len != sizeof (struct mptcp_fastclose_opt)) {
 		tcpstat.tcps_invalid_opt++;
@@ -1772,15 +1760,6 @@ mptcp_do_fastclose_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th)
 		tcpstat.tcps_invalid_opt++;
 		return;
 	}
-
-	MPT_LOCK(mp_tp);
-	if (mp_tp->mpt_state != MPTCPS_FASTCLOSE_WAIT) {
-		mp_tp->mpt_state = MPTCPS_FASTCLOSE_WAIT;
-		DTRACE_MPTCP2(state__change, struct mptcb *, mp_tp, 
-		    uint32_t, 0 /* event */);
-		mptcp_start_timer(mp_tp, MPTT_FASTCLOSE);
-	}
-	MPT_UNLOCK(mp_tp);
 
 	/* Reset this flow */
 	tp->t_mpflags |= TMPF_RESET;
@@ -1813,12 +1792,13 @@ mptcp_do_mpfail_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th)
 	if ((th->th_flags != TH_ACK) && (th->th_flags != TH_RST))
 		return;
 
+	mptcplog((LOG_DEBUG, "MPTCP Socket: %s: \n", __func__),
+	    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG), MPTCP_LOGLVL_LOG);
+
 	if (fail_opt->mfail_len != sizeof (struct mptcp_mpfail_opt))
 		return;
 
 	mp_tp = (struct mptcb *)tp->t_mptcb;
-	if (mp_tp == NULL)
-		return;
 	MPT_LOCK(mp_tp);
 	mp_tp->mpt_flags |= MPTCPF_RECVD_MPFAIL;
 	mp_tp->mpt_dsn_at_csum_fail = mptcp_hton64(fail_opt->mfail_dsn);
@@ -1832,7 +1812,7 @@ mptcp_do_mpfail_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th)
 	mptcp_notify_mpfail(tp->t_inpcb->inp_socket);
 }
 
-int
+void
 tcp_do_mptcp_options(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
     struct tcpopt *to, int optlen)
 {
@@ -1840,9 +1820,12 @@ tcp_do_mptcp_options(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 
 	/* All MPTCP options have atleast 4 bytes */
 	if (optlen < 4)
-		return (0);
+		return;
 
 	mptcp_subtype = (cp[2] >> 4);
+
+	if (mptcp_sanitize_option(tp, mptcp_subtype) == 0)
+		return;
 
 	switch (mptcp_subtype) {
 		case MPO_CAPABLE:
@@ -1866,10 +1849,9 @@ tcp_do_mptcp_options(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 			to->to_flags |= TOF_MPTCP;
 			break;
 		default:
-			printf("%s: type = %d\n", __func__, mptcp_subtype);
 			break;
 	}
-	return (0);
+	return;
 }
 
 /*
@@ -1914,9 +1896,9 @@ mptcp_send_addaddr_opt(struct tcpcb *tp, struct mptcp_addaddr_opt *opt)
 void
 mptcp_send_remaddr_opt(struct tcpcb *tp, struct mptcp_remaddr_opt *opt)
 {
-	if (mptcp_dbg >= MP_ERR_DEBUG)
-		printf("%s: local id %d remove id %d \n", __func__,
-		    tp->t_local_aid, tp->t_rem_aid);
+	mptcplog((LOG_DEBUG,"MPTCP Socket: %s: local id %d remove id %d \n",
+	    __func__, tp->t_local_aid, tp->t_rem_aid),
+	    (MPTCP_SOCKET_DBG|MPTCP_SENDER_DBG), MPTCP_LOGLVL_LOG);
 
 	bzero(opt, sizeof (*opt));
 	opt->mr_kind = TCPOPT_MULTIPATH;
@@ -1983,7 +1965,8 @@ mptcp_snd_mpprio(struct tcpcb *tp, u_char *cp, int optlen)
 	memcpy(cp + optlen, &mpprio, sizeof (mpprio));
 	optlen += sizeof (mpprio);
 	tp->t_mpflags &= ~TMPF_SND_MPPRIO;
-	if (mptcp_dbg >= MP_ERR_DEBUG)
-		printf("%s: aid = %d \n", __func__, tp->t_local_aid);
+	mptcplog((LOG_DEBUG, "MPTCP Socket: %s: aid = %d \n", __func__,
+	    tp->t_local_aid), 
+	    (MPTCP_SOCKET_DBG|MPTCP_SENDER_DBG), MPTCP_LOGLVL_LOG);
 	return (optlen);
 }

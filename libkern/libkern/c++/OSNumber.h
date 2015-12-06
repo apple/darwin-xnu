@@ -215,7 +215,7 @@ public:
     * release@/link</code>
     * instead.
     */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -397,7 +397,7 @@ public:
     * An OSNumber is considered equal to another object if that object is
     * derived from OSNumber and represents the same C integer value.
     */
-    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -412,7 +412,7 @@ public:
     * @result
     * <code>true</code> if serialization succeeds, <code>false</code> if not.
     */
-    virtual bool serialize(OSSerialize * serializer) const;
+    virtual bool serialize(OSSerialize * serializer) const APPLE_KEXT_OVERRIDE;
 
 
     OSMetaClassDeclareReservedUnused(OSNumber, 0);

@@ -134,9 +134,6 @@ int tcp_newreno_cleanup(struct tcpcb *tp) {
 void
 tcp_newreno_cwnd_init_or_reset(struct tcpcb *tp) {
 	tcp_cc_cwnd_init_or_reset(tp);
-
-	/* If stretch ack was auto disabled, re-evaluate the situation */
-	tcp_cc_after_idle_stretchack(tp);
 }
 
 

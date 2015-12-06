@@ -14,8 +14,10 @@ do_config_all:: lldbmacros_install
 LLDBMACROS_SOURCE:=$(SRCROOT)/tools/lldbmacros/
 LLDBMACROS_BOOTSTRAP_DEST:=$(OBJPATH)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)
 LLDBMACROS_DEST:=$(LLDBMACROS_BOOTSTRAP_DEST)/lldbmacros/
+LLDBMACROS_USERDEBUG_FILES=
 
-LLDBMACROS_PYTHON_FILES = \
+
+LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	core/standard.py \
 	core/cvalue.py \
 	core/__init__.py \
@@ -36,6 +38,7 @@ LLDBMACROS_PYTHON_FILES = \
 	routedefines.py \
 	ipc.py \
 	ipcimportancedetail.py \
+	kcdata.py \
 	scheduler.py \
 	structanalyze.py \
 	pmap.py \
@@ -49,7 +52,10 @@ LLDBMACROS_PYTHON_FILES = \
 	userspace.py \
 	pci.py \
 	misc.py \
-	apic.py
+	apic.py \
+	kauth.py \
+	usertaskgdbserver.py \
+	waitq.py
 
 ifneq ($(PLATFORM),MacOSX)
 	LLDBMACROS_PYTHON_FILES+= \

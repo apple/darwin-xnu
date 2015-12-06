@@ -54,9 +54,9 @@ extern int guarded_kqueue_np(const guardid_t *guard, u_int guardflags);
 extern int guarded_close_np(int fd, const guardid_t *guard);
 extern int change_fdguard_np(int fd, const guardid_t *guard, u_int guardflags,
 	const guardid_t *nguard, u_int nguardflags, int *fdflagsp);
-extern user_ssize_t guarded_write_np(int fd, const guardid_t *guard, user_addr_t cbuf, user_size_t nbyte);
-extern user_ssize_t guarded_pwrite_np(int fd, const guardid_t *guard, user_addr_t buf, user_size_t nbyte, off_t offset);
-extern user_ssize_t guarded_writev_np(int fd, const guardid_t *guard, struct iovec *iovp, u_int iovcnt);
+extern ssize_t guarded_write_np(int fd, const guardid_t *guard, const void *buf, size_t nbyte);
+extern ssize_t guarded_pwrite_np(int fd, const guardid_t *guard, const void *buf, size_t nbyte, off_t offset);
+extern ssize_t guarded_writev_np(int fd, const guardid_t *guard, const struct iovec *iovp, int iovcnt);
 #endif /* KERNEL */
 
 /*
@@ -70,7 +70,8 @@ extern user_ssize_t guarded_writev_np(int fd, const guardid_t *guard, struct iov
  * File descriptor guard flavors.
  */
 
-/* Forbid close(2), and the implicit close() that a dup2(2) may do.
+/*
+ * Forbid close(2), and the implicit close() that a dup2(2) may do.
  * Forces close-on-fork to be set immutably too.
  */
 #define GUARD_CLOSE		(1u << 0)

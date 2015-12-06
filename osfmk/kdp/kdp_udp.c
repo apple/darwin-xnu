@@ -47,6 +47,7 @@
 #include <kdp/kdp_en_debugger.h>
 #include <kdp/kdp_callout.h>
 #include <kdp/kdp_udp.h>
+#include <kdp/kdp_core.h>
 #if CONFIG_SERIAL_KDP
 #include <kdp/kdp_serial.h>
 #endif
@@ -310,7 +311,6 @@ extern unsigned int disableConsoleOutput;
 
 extern void 		kdp_call(void);
 extern boolean_t 	kdp_call_kdb(void);
-extern int 		kern_dump(void);
 
 void *	kdp_get_interface(void);
 void    kdp_set_gateway_mac(void *gatewaymac);
@@ -448,6 +448,7 @@ kdp_register_send_receive(
 		corename_specified = TRUE;
 
 	kdp_flag |= KDP_READY;
+
 	if (current_debugger == NO_CUR_DB)
 		current_debugger = KDP_CUR_DB;
 	if ((kdp_current_ip_address != 0) && halt_in_debugger) {
@@ -1337,7 +1338,7 @@ kdp_debugger_loop(
     if (pkt.input)
 	kdp_panic("kdp_raise_exception");
 
-    if (((kdp_flag & KDP_PANIC_DUMP_ENABLED) || (kdp_flag & PANIC_LOG_DUMP))
+    if (((kdp_flag & KDP_PANIC_DUMP_ENABLED) || (kdp_flag & PANIC_LOG_DUMP) || kdp_has_polled_corefile())
 	&& (panicstr != (char *) 0)) {
 	    kdp_panic_dump();
 	    if (kdp_flag & REBOOT_POST_CORE)
@@ -1537,15 +1538,15 @@ static int kdp_send_crashdump_seek(char *corename, uint64_t seek_off)
 		return panic_error;
 	}
 
-	return 0;
+	return KERN_SUCCESS;
 }
 
 int kdp_send_crashdump_data(unsigned int request, char *corename,
-    int64_t length, caddr_t txstart)
+    			    uint64_t length, void * txstart)
 {
 	int panic_error = 0;
 
-	while (length > 0) {
+	while ((length > 0) || !txstart) {
 		uint64_t chunk = MIN(kdp_crashdump_pkt_size, length);
 
 		panic_error = kdp_send_crashdump_pkt(request, corename, chunk,
@@ -1554,11 +1555,11 @@ int kdp_send_crashdump_data(unsigned int request, char *corename,
 			printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
 			return panic_error;
 		}
-
-		txstart += chunk;
+		if (!txstart) break;
+		txstart = (void *)(((uintptr_t) txstart) + chunk);
 		length  -= chunk;
 	}
-	return 0;
+	return KERN_SUCCESS;
 }
 
 uint32_t kdp_crashdump_short_pkt;
@@ -1708,7 +1709,7 @@ RECEIVE_RETRY:
 		printf("Minimum superblock transfer abstime: 0x%llx\n", kdp_min_superblock_dump_time);
 		printf("Maximum superblock transfer abstime: 0x%llx\n", kdp_max_superblock_dump_time);
 	}
-	return 1;
+	return KERN_SUCCESS;
 }
 
 static int 
@@ -1874,6 +1875,7 @@ void
 kdp_panic_dump(void)
 {
 	char coreprefix[10];
+	char coresuffix[4];
 	int panic_error;
 
 	uint64_t        abstime;
@@ -1886,13 +1888,26 @@ kdp_panic_dump(void)
 		
 	printf("Entering system dump routine\n");
 
+	/* try a local disk dump */
+	if (kdp_has_polled_corefile()) {
+	    flag_panic_dump_in_progress = TRUE;
+	    kern_dump(TRUE);
+	    abort_panic_transfer();
+	}
+
+	if (!strcmp("local", panicd_ip_str)) return;	/* disk only request */
+
 	if (!kdp_en_recv_pkt || !kdp_en_send_pkt) {
-			kdb_printf("Error: No transport device registered for kernel crashdump\n");
-			return;
+		if (!kdp_has_polled_corefile()) {
+		    kdb_printf("Error: No transport device registered for kernel crashdump\n");
+		}
+		return;
 	}
 
 	if (!panicd_specified) {
-		kdb_printf("A dump server was not specified in the boot-args, terminating kernel core dump.\n");
+		if (!kdp_has_polled_corefile()) {
+		    kdb_printf("A dump server was not specified in the boot-args, terminating kernel core dump.\n");
+                }
 		goto panic_dump_exit;
 	}
 
@@ -1904,23 +1919,27 @@ kdp_panic_dump(void)
 	kdp_get_xnu_version((char *) &pkt.data[0]);
 
         if (!corename_specified) {
+            coresuffix[0] = 0;
             /* Panic log bit takes precedence over core dump bit */
             if ((panicstr != (char *) 0) && (kdp_flag & PANIC_LOG_DUMP))
 		strlcpy(coreprefix, "paniclog", sizeof(coreprefix));
             else if (kdp_flag & SYSTEM_LOG_DUMP) 
 		strlcpy(coreprefix, "systemlog", sizeof(coreprefix));
-	    else
+	    else {
 		strlcpy(coreprefix, "core", sizeof(coreprefix));
+		strlcpy(coresuffix, ".gz", sizeof(coresuffix));
+	    }
   
             abstime = mach_absolute_time();
 	    pkt.data[20] = '\0';
-	    snprintf (corename_str, sizeof(corename_str), "%s-%s-%d.%d.%d.%d-%x", 
+	    snprintf (corename_str, sizeof(corename_str), "%s-%s-%d.%d.%d.%d-%x%s", 
 		      coreprefix, &pkt.data[0],
 		      (current_ip & 0xff000000) >> 24,
 		      (current_ip & 0xff0000) >> 16,
 		      (current_ip & 0xff00) >> 8,
 		      (current_ip & 0xff),
-		      (unsigned int) (abstime & 0xffffffff));
+		      (unsigned int) (abstime & 0xffffffff),
+		      coresuffix);
         }
 
 	if (0 == inet_aton(panicd_ip_str, (struct kdp_in_addr *) &panic_server_ip)) {
@@ -2005,7 +2024,7 @@ kdp_panic_dump(void)
         }
 
 	/* We want a core dump if we're here */
-	kern_dump();
+	kern_dump(FALSE);
 
 panic_dump_exit:
 	abort_panic_transfer();
@@ -2133,6 +2152,7 @@ kdp_init(void)
 
 	kdp_timer_callout_init();
 	kdp_crashdump_feature_mask = htonl(kdp_crashdump_feature_mask);
+	kdp_core_init();
 
 #if CONFIG_SERIAL_KDP
 	char kdpname[80];
@@ -2200,12 +2220,29 @@ kdp_raise_exception(
 
 #if CONFIG_KDP_INTERACTIVE_DEBUGGING
 
+    disable_preemption();
+    /*
+     * On ARM64, KDP debugging is disabled by default.
+     * It is compiled into the kernel for DEVELOPMENT and DEBUG,
+     * but still hidden behind a boot arg (thus PE_i_can_has_kdp()).
+     * For RELEASE, it is not compiled.
+     */
+    if (
+	(current_debugger != KDP_CUR_DB)
+    )
+    {
+	    /* try a local disk dump */
+	    if (kdp_has_polled_corefile()) {
+		flag_panic_dump_in_progress = TRUE;
+		kern_dump(TRUE);
+		abort_panic_transfer();
+	    }
+    }
+
     if (current_debugger != KDP_CUR_DB) {
         kdb_printf("\nDebugger not configured. Hanging.\n");
         for (;;) { }
     }
-
-    disable_preemption();
 
     kdp_debugger_loop(exception, code, subcode, saved_state);
     not_in_kdp = initial_not_in_kdp;

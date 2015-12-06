@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2013, 2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,5 +66,9 @@
 
 #ifdef BSD_KERNEL_PRIVATE
 extern void ip6_ecn_ingress(int, u_int32_t *, const u_int32_t *);
-extern void ip6_ecn_egress(int, const u_int32_t *, u_int32_t *);
+extern int ip6_ecn_egress(int, const u_int32_t *, u_int32_t *);
+extern void ip46_ecn_ingress(int, u_int32_t *, const u_int8_t *);
+extern int ip46_ecn_egress(int, const u_int32_t *, u_int8_t *);
+extern void ip64_ecn_ingress(int, u_int8_t *, const u_int32_t *);
+extern int ip64_ecn_egress(int, const u_int8_t *, u_int32_t *);
 #endif /* BSD_KERNEL_PRIVATE */

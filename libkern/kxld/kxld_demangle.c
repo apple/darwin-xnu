@@ -53,8 +53,6 @@ kxld_demangle(const char *str, char **buffer __unused, size_t *length __unused)
     char *demangled = NULL;
     int status;
 
-    if (!str) goto finish;
-
     rval = str;
 
     if (!buffer || !length) goto finish;

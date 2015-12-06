@@ -42,7 +42,7 @@
 /* Globals */
 void (*PE_kputc)(char c);
 
-#if DEBUG
+#if DEVELOPMENT || DEBUG 
 /* DEBUG kernel starts with true serial, but
  * may later disable or switch to video
  * console */
@@ -115,7 +115,7 @@ void kprintf(const char *fmt, ...)
 		 * take any locks, just dump to serial */
 		if (!PE_kputc || early) {
 			va_start(listp, fmt);
-			_doprnt(fmt, &listp, pal_serial_putc, 16);
+			_doprnt_log(fmt, &listp, pal_serial_putc, 16);
 			va_end(listp);
 			return;
 		}

@@ -29,10 +29,13 @@
 #ifndef __KPERF_H__
 #define __KPERF_H__
 
+#include <kern/thread.h>
+
 /* The various trigger types supported by kperf */
-#define TRIGGER_TYPE_TIMER (0)
-#define TRIGGER_TYPE_PMI   (1)
-#define TRIGGER_TYPE_TRACE (2)
+#define TRIGGER_TYPE_TIMER   (0)
+#define TRIGGER_TYPE_PMI     (1)
+#define TRIGGER_TYPE_TRACE   (2)
+#define TRIGGER_TYPE_CSWITCH (3)
 
 /* Helpers to get and set AST bits on a thread */
 extern uint32_t kperf_get_thread_bits( thread_t thread );
@@ -66,6 +69,20 @@ extern void kperf_kdebug_callback(uint32_t debugid);
 extern int kperf_kdbg_get_stacks(void);
 extern int kperf_kdbg_set_stacks(int);
 
+/* get and set whether to trigger an action on signposts */
+extern int kperf_signpost_action_get(void);
+extern int kperf_signpost_action_set(int newval);
+
+extern int kperf_cswitch_callback_set;
+
+/* get and set whether to output tracepoints on context-switch */
+extern int kperf_kdbg_cswitch_get(void);
+extern int kperf_kdbg_cswitch_set(int newval);
+
+/* get and set whether to trigger an action on context-switch */
+extern int kperf_cswitch_action_get(void);
+extern int kperf_cswitch_action_set(int newval);
+
 /* given a task port, find out its pid */
 int kperf_port_to_pid(mach_port_name_t portname);
 
@@ -77,10 +94,9 @@ extern int kperf_access_check(void);
 /* track recursion on kdebug tracepoint tracking */
 extern int kperf_kdbg_recurse(int step);
 #define KPERF_RECURSE_IN  (1)
-#define KPERF_RECURSE_out (-1)
+#define KPERF_RECURSE_OUT (-1)
 
 /* context switch tracking */
-extern int  kperf_cswitch_hook;
 extern void kperf_switch_context( thread_t old, thread_t new );
 
 /* bootstrap */

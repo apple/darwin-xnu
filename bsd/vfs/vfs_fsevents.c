@@ -172,14 +172,14 @@ is_ignored_directory(const char *path) {
       return 0;
     }
 
-#define IS_TLD(x) strnstr((char *) path, x, MAXPATHLEN) 
+#define IS_TLD(x) strnstr(__DECONST(char *, path), x, MAXPATHLEN)
     if (IS_TLD("/.Spotlight-V100/") ||
         IS_TLD("/.MobileBackups/") || 
         IS_TLD("/Backups.backupdb/")) {
         return 1;
     }
 #undef IS_TLD
-    
+	
     return 0;
 }
 
@@ -782,7 +782,8 @@ done_with_args:
 	    continue;
 	}
 	
-	if (   watcher->event_list[type] == FSE_REPORT
+	if (   type < watcher->num_events
+	    && watcher->event_list[type] == FSE_REPORT
 	    && watcher_cares_about_dev(watcher, dev)) {
 	    
 	    if (watcher_add_event(watcher, kfse) != 0) {
@@ -1534,7 +1535,7 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	// its type or which device it is for)
 	//
 	kfse = watcher->event_queue[watcher->rd];
-	if (!kfse || kfse->type == FSE_INVALID || kfse->refcount < 1) {
+	if (!kfse || kfse->type == FSE_INVALID || kfse->type >= watcher->num_events || kfse->refcount < 1) {
 	  break;
 	}
 
@@ -1641,62 +1642,25 @@ fseventsf_write(__unused struct fileproc *fp, __unused struct uio *uio,
 }
 
 #pragma pack(push, 4)
-typedef struct ext_fsevent_dev_filter_args {
-    uint32_t    num_devices;
-    user_addr_t devices;
-} ext_fsevent_dev_filter_args;
+typedef struct fsevent_dev_filter_args32 {
+    uint32_t            num_devices;
+    user32_addr_t       devices;
+} fsevent_dev_filter_args32;
+typedef struct fsevent_dev_filter_args64 {
+    uint32_t            num_devices;
+    user64_addr_t       devices;
+} fsevent_dev_filter_args64;
 #pragma pack(pop)
 
-#define NEW_FSEVENTS_DEVICE_FILTER      _IOW('s', 100, ext_fsevent_dev_filter_args)
-
-typedef struct old_fsevent_dev_filter_args {
-    uint32_t  num_devices;
-    int32_t   devices;
-} old_fsevent_dev_filter_args;
-
-#define	OLD_FSEVENTS_DEVICE_FILTER	_IOW('s', 100, old_fsevent_dev_filter_args)
-
-#if __LP64__
-/* need this in spite of the padding due to alignment of devices */
-typedef struct fsevent_dev_filter_args32 {
-    uint32_t  num_devices;
-    uint32_t  devices;
-    int32_t   pad1;
-} fsevent_dev_filter_args32;
-#endif
+#define	FSEVENTS_DEVICE_FILTER_32	_IOW('s', 100, fsevent_dev_filter_args32)
+#define	FSEVENTS_DEVICE_FILTER_64	_IOW('s', 100, fsevent_dev_filter_args64)
 
 static int
 fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx)
 {
     fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
     int ret = 0;
-    ext_fsevent_dev_filter_args *devfilt_args, _devfilt_args;
-
-    if (proc_is64bit(vfs_context_proc(ctx))) {
-	devfilt_args = (ext_fsevent_dev_filter_args *)data;
-    }
-    else if (cmd == OLD_FSEVENTS_DEVICE_FILTER) {
-	old_fsevent_dev_filter_args *udev_filt_args = (old_fsevent_dev_filter_args *)data;
-	
-	devfilt_args = &_devfilt_args;
-	memset(devfilt_args, 0, sizeof(ext_fsevent_dev_filter_args));
-
-	devfilt_args->num_devices = udev_filt_args->num_devices;
-	devfilt_args->devices     = CAST_USER_ADDR_T(udev_filt_args->devices);
-    }
-    else {
-#if __LP64__
-	fsevent_dev_filter_args32 *udev_filt_args = (fsevent_dev_filter_args32 *)data;
-#else
-	fsevent_dev_filter_args *udev_filt_args = (fsevent_dev_filter_args *)data;
-#endif
-	
-	devfilt_args = &_devfilt_args;
-	memset(devfilt_args, 0, sizeof(ext_fsevent_dev_filter_args));
-
-	devfilt_args->num_devices = udev_filt_args->num_devices;
-	devfilt_args->devices     = CAST_USER_ADDR_T(udev_filt_args->devices);
-    }
+    fsevent_dev_filter_args64 *devfilt_args, _devfilt_args;
 
     OSAddAtomic(1, &fseh->active);
     if (fseh->flags & FSEH_CLOSING) {
@@ -1725,8 +1689,29 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 		break;
 	}
 
-	case OLD_FSEVENTS_DEVICE_FILTER:
-	case NEW_FSEVENTS_DEVICE_FILTER: {
+	case FSEVENTS_DEVICE_FILTER_32: {
+	    if (proc_is64bit(vfs_context_proc(ctx))) {
+		    ret = EINVAL;
+		    break;
+	    }
+	    fsevent_dev_filter_args32 *devfilt_args32 = (fsevent_dev_filter_args32 *)data;
+
+	    devfilt_args = &_devfilt_args;
+	    memset(devfilt_args, 0, sizeof(fsevent_dev_filter_args64));
+	    devfilt_args->num_devices = devfilt_args32->num_devices;
+	    devfilt_args->devices     = CAST_USER_ADDR_T(devfilt_args32->devices);
+	    goto handle_dev_filter;
+	}
+
+	case FSEVENTS_DEVICE_FILTER_64:
+	    if (!proc_is64bit(vfs_context_proc(ctx))) {
+		    ret = EINVAL;
+		    break;
+	    }
+	    devfilt_args = (fsevent_dev_filter_args64 *)data;
+
+	handle_dev_filter:
+	{
 	    int new_num_devices;
 	    dev_t *devices_not_to_watch, *tmp=NULL;
 	    
@@ -2107,7 +2092,7 @@ fseventswrite(__unused dev_t dev, struct uio *uio, __unused int ioflag)
     lck_mtx_lock(&event_writer_lock);
 
     if (write_buffer == NULL) {
-	if (kmem_alloc(kernel_map, (vm_offset_t *)&write_buffer, WRITE_BUFFER_SIZE)) {
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&write_buffer, WRITE_BUFFER_SIZE, VM_KERN_MEMORY_FILE)) {
 	    lck_mtx_unlock(&event_writer_lock);
 	    return ENOMEM;
 	}
@@ -2172,21 +2157,22 @@ static const struct fileops fsevents_fops = {
     fseventsf_drain
 };
 
-typedef struct ext_fsevent_clone_args {
-    user_addr_t  event_list;
-    int32_t      num_events;
-    int32_t      event_queue_depth;
-    user_addr_t  fd;
-} ext_fsevent_clone_args;
+typedef struct fsevent_clone_args32 {
+    user32_addr_t       event_list;
+    int32_t             num_events;
+    int32_t             event_queue_depth;
+    user32_addr_t       fd;
+} fsevent_clone_args32;
 
-typedef struct old_fsevent_clone_args {
-    uint32_t  event_list;
-    int32_t  num_events;
-    int32_t  event_queue_depth;
-    uint32_t  fd;
-} old_fsevent_clone_args;
+typedef struct fsevent_clone_args64 {
+    user64_addr_t       event_list;
+    int32_t             num_events;
+    int32_t             event_queue_depth;
+    user64_addr_t       fd;
+} fsevent_clone_args64;
 
-#define	OLD_FSEVENTS_CLONE	_IOW('s', 1, old_fsevent_clone_args)
+#define	FSEVENTS_CLONE_32	_IOW('s', 1, fsevent_clone_args32)
+#define	FSEVENTS_CLONE_64	_IOW('s', 1, fsevent_clone_args64)
 
 static int
 fseventsioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag, struct proc *p)
@@ -2194,38 +2180,32 @@ fseventsioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag, s
     struct fileproc *f;
     int fd, error;
     fsevent_handle *fseh = NULL;
-    ext_fsevent_clone_args *fse_clone_args, _fse_clone;
+    fsevent_clone_args64 *fse_clone_args, _fse_clone;
     int8_t *event_list;
     int is64bit = proc_is64bit(p);
 
     switch (cmd) {
-	case OLD_FSEVENTS_CLONE: {
-	    old_fsevent_clone_args *old_args = (old_fsevent_clone_args *)data;
+	case FSEVENTS_CLONE_32: {
+	    if (is64bit) {
+		    return EINVAL;
+	    }
+	    fsevent_clone_args32 *args32 = (fsevent_clone_args32 *)data;
 
 	    fse_clone_args = &_fse_clone;
-	    memset(fse_clone_args, 0, sizeof(ext_fsevent_clone_args));
+	    memset(fse_clone_args, 0, sizeof(fsevent_clone_args64));
 
-	    fse_clone_args->event_list        = CAST_USER_ADDR_T(old_args->event_list);
-	    fse_clone_args->num_events        = old_args->num_events;
-	    fse_clone_args->event_queue_depth = old_args->event_queue_depth;
-	    fse_clone_args->fd                = CAST_USER_ADDR_T(old_args->fd);
+	    fse_clone_args->event_list        = CAST_USER_ADDR_T(args32->event_list);
+	    fse_clone_args->num_events        = args32->num_events;
+	    fse_clone_args->event_queue_depth = args32->event_queue_depth;
+	    fse_clone_args->fd                = CAST_USER_ADDR_T(args32->fd);
 	    goto handle_clone;
 	}
-	    
-	case FSEVENTS_CLONE:
-	    if (is64bit) {
-		fse_clone_args = (ext_fsevent_clone_args *)data;
-	    } else {
-		fsevent_clone_args *ufse_clone = (fsevent_clone_args *)data;
-		
-		fse_clone_args = &_fse_clone;
-		memset(fse_clone_args, 0, sizeof(ext_fsevent_clone_args));
 
-		fse_clone_args->event_list        = CAST_USER_ADDR_T(ufse_clone->event_list);
-		fse_clone_args->num_events        = ufse_clone->num_events;
-		fse_clone_args->event_queue_depth = ufse_clone->event_queue_depth;
-		fse_clone_args->fd                = CAST_USER_ADDR_T(ufse_clone->fd);
+	case FSEVENTS_CLONE_64:
+	    if (!is64bit) {
+		    return EINVAL;
 	    }
+	    fse_clone_args = (fsevent_clone_args64 *)data;
 
 	handle_clone:
 	    if (fse_clone_args->num_events < 0 || fse_clone_args->num_events > 4096) {

@@ -358,9 +358,6 @@ tcp_ledbat_after_idle(struct tcpcb *tp) {
 	
 	/* Reset the congestion window */
 	tp->snd_cwnd = tp->t_maxseg * bg_ss_fltsz;
-
-	/* If stretch ack was auto disabled, re-evaluate the situation */
-	tcp_cc_after_idle_stretchack(tp);
 }
 
 /* Function to change the congestion window when the retransmit 

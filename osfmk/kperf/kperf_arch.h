@@ -38,5 +38,6 @@
 /* common definitions */
 extern int kperf_mp_broadcast( void (*func)(void*), void *arg );
 extern int kperf_mp_signal(void);
+extern kern_return_t kperf_get_phys_footprint(task_t, uint64_t *);
 
 #endif /* _KPERF_ARCH_H */

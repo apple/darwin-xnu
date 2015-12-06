@@ -76,6 +76,8 @@
 
 #ifdef	MACH_KERNEL_PRIVATE
 
+#include <mach/branch_predicates.h>
+
 /* Initialization */
 extern void		sched_init(void);
 
@@ -153,14 +155,16 @@ extern void             sched_thread_mode_demote(thread_t thread,
 extern void             sched_thread_mode_undemote(thread_t thread,
                                                    uint32_t reason);
 
+/* Re-evaluate base priority of thread (thread locked) */
+void thread_recompute_priority(thread_t thread);
+
+/* Re-evaluate base priority of thread (thread unlocked) */
+void thread_recompute_qos(thread_t thread);
+
 /* Reset scheduled priority of thread */
-extern void		compute_priority(
+extern void		thread_recompute_sched_pri(
 					thread_t		thread,
 					boolean_t		override_depress);
-
-/* Adjust scheduled priority of thread during execution */
-extern void		compute_my_priority(
-					thread_t		thread);
 
 /* Periodic scheduler activity */
 extern void		sched_init_thread(void (*)(void));
@@ -175,7 +179,7 @@ extern void		update_priority(
 extern void		lightweight_update_priority(
 								thread_t		thread);
 
-extern void		sched_traditional_quantum_expire(thread_t	thread);
+extern void             sched_default_quantum_expire(thread_t thread);
 
 /* Idle processor thread */
 extern void		idle_thread(void);
@@ -202,6 +206,9 @@ extern void		thread_setrun(
 #define SCHED_HEADQ		2
 #define SCHED_PREEMPT	4
 
+extern uintptr_t sched_thread_on_rt_queue;
+#define THREAD_ON_RT_RUNQ  ((processor_t)(uintptr_t)&sched_thread_on_rt_queue)
+
 extern processor_set_t	task_choose_pset(
 							task_t			task);
 
@@ -214,12 +221,6 @@ extern processor_t	choose_processor(
 									 processor_set_t		pset,
 									 processor_t			processor,
 									 thread_t			thread);
-
-/* Choose a thread from a processor's priority-based runq */
-extern thread_t choose_thread_from_runq(
-							  processor_t		processor,
-							  run_queue_t		runq,
-							  int				priority);
 
 
 extern void thread_quantum_init(
@@ -241,28 +242,39 @@ extern void	run_queue_remove(
 									 run_queue_t		runq,
 									 thread_t			thread);
 									  
+struct sched_update_scan_context
+{
+	uint64_t	earliest_bg_make_runnable_time;
+	uint64_t	earliest_normal_make_runnable_time;
+	uint64_t	earliest_rt_make_runnable_time;
+};
+typedef struct sched_update_scan_context *sched_update_scan_context_t;
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
-extern boolean_t        thread_update_add_thread(
-                                                 thread_t thread);
+extern boolean_t        thread_update_add_thread(thread_t thread);
 extern void             thread_update_process_threads(void);
-extern boolean_t        runq_scan(
-                                  run_queue_t runq);
+extern boolean_t        runq_scan(run_queue_t runq, sched_update_scan_context_t scan_context);
 
-void sched_traditional_timebase_init(void);
-void sched_traditional_maintenance_continue(void);
-boolean_t priority_is_urgent(
-                             int priority);
-uint32_t sched_traditional_initial_quantum_size(
-                                                thread_t thread);
-void sched_traditional_init(void);
+extern void sched_timeshare_init(void);
+extern void sched_timeshare_timebase_init(void);
+extern void sched_timeshare_maintenance_continue(void);
+
+extern boolean_t priority_is_urgent(int priority);
+extern uint32_t sched_timeshare_initial_quantum_size(thread_t thread);
+
+extern int sched_compute_timeshare_priority(thread_t thread);
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
+extern void        rt_runq_scan(sched_update_scan_context_t scan_context);
+
 /* Remove thread from its run queue */
-extern boolean_t	thread_run_queue_remove(
-						thread_t	thread);
+extern boolean_t	thread_run_queue_remove(thread_t thread);
+thread_t thread_run_queue_remove_for_handoff(thread_t thread);
+
+/* Put a thread back in the run queue after being yanked */
+extern void thread_run_queue_reinsert(thread_t thread, integer_t options);
 
 extern void		thread_timer_expire(
 					void			*thread,
@@ -270,35 +282,6 @@ extern void		thread_timer_expire(
 
 extern boolean_t	thread_eager_preemption(
 						thread_t thread);
-
-/* Fair Share routines */
-#if defined(CONFIG_SCHED_FAIRSHARE_CORE)
-void		sched_traditional_fairshare_init(void);
-
-int			sched_traditional_fairshare_runq_count(void);
-
-uint64_t	sched_traditional_fairshare_runq_stats_count_sum(void);
-
-void		sched_traditional_fairshare_enqueue(thread_t thread);
-
-thread_t	sched_traditional_fairshare_dequeue(void);
-
-boolean_t	sched_traditional_fairshare_queue_remove(thread_t thread);
-#endif /* CONFIG_SCHED_FAIRSHARE_CORE */
-
-#if defined(CONFIG_SCHED_GRRR)
-void		sched_grrr_fairshare_init(void);
-
-int			sched_grrr_fairshare_runq_count(void);
-
-uint64_t	sched_grrr_fairshare_runq_stats_count_sum(void);
-
-void		sched_grrr_fairshare_enqueue(thread_t thread);
-
-thread_t	sched_grrr_fairshare_dequeue(void);
-
-boolean_t	sched_grrr_fairshare_queue_remove(thread_t thread);
-#endif
 
 extern boolean_t sched_generic_direct_dispatch_to_idle_processors;
 
@@ -344,6 +327,22 @@ do { 								\
 	}							\
 } while (0) 
 
+extern uint32_t sched_debug_flags;
+#define SCHED_DEBUG_FLAG_PLATFORM_TRACEPOINTS	0x00000001
+#define SCHED_DEBUG_FLAG_CHOOSE_PROCESSOR_TRACEPOINTS	0x00000002
+
+#define SCHED_DEBUG_PLATFORM_KERNEL_DEBUG_CONSTANT(...) do {						\
+		if (__improbable(sched_debug_flags & SCHED_DEBUG_FLAG_PLATFORM_TRACEPOINTS)) { \
+			KERNEL_DEBUG_CONSTANT(__VA_ARGS__);							\
+		}																\
+	} while(0)
+
+#define SCHED_DEBUG_CHOOSE_PROCESSOR_KERNEL_DEBUG_CONSTANT(...) do {						\
+		if (__improbable(sched_debug_flags & SCHED_DEBUG_FLAG_CHOOSE_PROCESSOR_TRACEPOINTS)) { \
+			KERNEL_DEBUG_CONSTANT(__VA_ARGS__);							\
+		}																\
+	} while(0)
+
 #define THREAD_URGENCY_NONE		0	/* indicates that there is no currently runnable */
 #define THREAD_URGENCY_BACKGROUND	1	/* indicates that the thread is marked as a "background" thread */
 #define THREAD_URGENCY_NORMAL		2	/* indicates that the thread is marked as a "normal" thread */
@@ -360,6 +359,7 @@ extern void	thread_tell_urgency(
     					int		urgency,
 					uint64_t	rt_period,
 					uint64_t	rt_deadline,
+					uint64_t	sched_latency,
 				    thread_t nthread);
 
 /* Tells if there are "active" RT threads in the system (provided by CPU PM) */
@@ -383,6 +383,8 @@ extern void	sys_override_cpu_throttle(int flag);
  ****************** Only exported until BSD stops using ********************
  */
 
+extern void			thread_vm_bind_group_add(void);
+
 /* Wake up thread directly, passing result */
 extern kern_return_t clear_wait(
 						thread_t		thread,
@@ -393,6 +395,12 @@ extern void		thread_bootstrap_return(void);
 
 /* Return from exception (BSD-visible interface) */
 extern void		thread_exception_return(void) __dead2;
+
+#define SCHED_STRING_MAX_LENGTH (48)
+/* String declaring the name of the current scheduler */
+extern char sched_string[SCHED_STRING_MAX_LENGTH];
+
+extern kern_return_t sched_work_interval_notify(thread_t thread, uint64_t work_interval_id, uint64_t start, uint64_t finish, uint64_t deadline, uint64_t next_start, uint32_t flags);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 
@@ -481,13 +489,14 @@ extern boolean_t		preemption_enabled(void);
 #define SCHED(f) (sched_current_dispatch->f)
 
 struct sched_dispatch_table {
+	const char *sched_name;
 	void	(*init)(void);				/* Init global state */
 	void	(*timebase_init)(void);		/* Timebase-dependent initialization */
 	void	(*processor_init)(processor_t processor);	/* Per-processor scheduler init */
 	void	(*pset_init)(processor_set_t pset);	/* Per-processor set scheduler init */
-	
+
 	void	(*maintenance_continuation)(void);	/* Function called regularly */
-	
+
 	/*
 	 * Choose a thread of greater or equal priority from the per-processor
 	 * runqueue for timeshare/fixed threads
@@ -496,22 +505,22 @@ struct sched_dispatch_table {
 								  processor_t		processor,
 								  int				priority,
 								  ast_t reason);
-	
+
+	/* True if scheduler supports stealing threads */
+	boolean_t   steal_thread_enabled;
+
 	/*
 	 * Steal a thread from another processor in the pset so that it can run
 	 * immediately
 	 */
 	thread_t	(*steal_thread)(
 								processor_set_t		pset);
-	
+
 	/*
-	 * Recalculate sched_pri based on base priority, past running time,
-	 * and scheduling class.
+	 * Compute priority for a timeshare thread based on base priority.
 	 */
-	void		(*compute_priority)(
-					 thread_t	thread,
-					 boolean_t			override_depress);
-	
+	int (*compute_timeshare_priority)(thread_t thread);
+
 	/*
 	 * Pick the best processor for a thread (any kind of thread) to run on.
 	 */
@@ -527,35 +536,35 @@ struct sched_dispatch_table {
 								 processor_t			processor,
 								 thread_t			thread,
 								 integer_t			options);
-	
+
 	/* Migrate threads away in preparation for processor shutdown */
 	void (*processor_queue_shutdown)(
 									 processor_t			processor);
-	
+
 	/* Remove the specific thread from the per-processor runqueue */
 	boolean_t	(*processor_queue_remove)(
 									processor_t		processor,
 									thread_t		thread);
-	
+
 	/*
 	 * Does the per-processor runqueue have any timeshare or fixed priority
 	 * threads on it? Called without pset lock held, so should
 	 * not assume immutability while executing.
 	 */
 	boolean_t	(*processor_queue_empty)(processor_t		processor);
-	
+
 	/*
 	 * Would this priority trigger an urgent preemption if it's sitting
 	 * on the per-processor runqueue?
 	 */
 	boolean_t	(*priority_is_urgent)(int priority);
-	
+
 	/*
 	 * Does the per-processor runqueue contain runnable threads that
 	 * should cause the currently-running thread to be preempted?
 	 */
 	ast_t		(*processor_csw_check)(processor_t processor);
-	
+
 	/*
 	 * Does the per-processor runqueue contain a runnable thread
 	 * of > or >= priority, as a preflight for choose_thread() or other
@@ -564,13 +573,13 @@ struct sched_dispatch_table {
 	boolean_t	(*processor_queue_has_priority)(processor_t		processor,
 												int				priority,
 												boolean_t		gte);
-	
+
 	/* Quantum size for the specified non-realtime thread. */
 	uint32_t	(*initial_quantum_size)(thread_t thread);
 	
 	/* Scheduler mode for a new thread */
 	sched_mode_t	(*initial_thread_sched_mode)(task_t parent_task);
-	
+
 	/*
 	 * Is it safe to call update_priority, which may change a thread's
 	 * runqueue or other state. This can be used to throttle changes
@@ -583,47 +592,25 @@ struct sched_dispatch_table {
 	 * Side effects may including migration to another processor's runqueue.
 	 */
 	void		(*update_priority)(thread_t thread);
-	
+
 	/* Lower overhead update to scheduled priority and state. */
 	void		(*lightweight_update_priority)(thread_t thread);
-	
+
 	/* Callback for non-realtime threads when the quantum timer fires */
 	void		(*quantum_expire)(thread_t thread);
-	
-	/*
-	 * Even though we could continue executing on this processor, does the
-	 * topology (SMT, for instance) indicate that a better processor could be
-	 * chosen
-	 */
-	boolean_t	(*should_current_thread_rechoose_processor)(processor_t			processor);
-    
+
 	/*
 	 * Runnable threads on per-processor runqueue. Should only
 	 * be used for relative comparisons of load between processors.
 	 */
 	int			(*processor_runq_count)(processor_t	processor);
-	
-	/* Aggregate runcount statistics for per-processor runqueue */
-    uint64_t    (*processor_runq_stats_count_sum)(processor_t   processor);
-	
-	/* Initialize structures to track demoted fairshare threads */
-	void		(*fairshare_init)(void);
-	
-	/* Number of runnable fairshare threads */
-	int			(*fairshare_runq_count)(void);
-	
-	/* Aggregate runcount statistics for fairshare runqueue */
-	uint64_t	(*fairshare_runq_stats_count_sum)(void);
-	
-	void		(*fairshare_enqueue)(thread_t thread);
-	
-	thread_t	(*fairshare_dequeue)(void);
 
-	boolean_t	(*fairshare_queue_remove)(thread_t thread);
+	/* Aggregate runcount statistics for per-processor runqueue */
+	uint64_t    (*processor_runq_stats_count_sum)(processor_t   processor);
 
 	boolean_t	(*processor_bound_count)(processor_t processor);
 
-	void		(*thread_update_scan)(void);
+	void		(*thread_update_scan)(sched_update_scan_context_t scan_context);
 
 	/*
 	* Use processor->next_thread to pin a thread to an idle
@@ -631,29 +618,28 @@ struct sched_dispatch_table {
 	* be stolen by other processors.
 	*/
 	boolean_t   direct_dispatch_to_idle_processors;
+
+	/* Supports more than one pset */
+	boolean_t   multiple_psets_enabled;
+	/* Supports scheduler groups */
+	boolean_t   sched_groups_enabled;
 };
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
-#define kSchedTraditionalString "traditional"
-#define kSchedTraditionalWithPsetRunqueueString "traditional_with_pset_runqueue"
 extern const struct sched_dispatch_table sched_traditional_dispatch;
 extern const struct sched_dispatch_table sched_traditional_with_pset_runqueue_dispatch;
 #endif
 
 #if defined(CONFIG_SCHED_MULTIQ)
 extern const struct sched_dispatch_table sched_multiq_dispatch;
-#define kSchedMultiQString "multiq"
 extern const struct sched_dispatch_table sched_dualq_dispatch;
-#define kSchedDualQString "dualq"
 #endif
 
 #if defined(CONFIG_SCHED_PROTO)
-#define kSchedProtoString "proto"
 extern const struct sched_dispatch_table sched_proto_dispatch;
 #endif
 
 #if defined(CONFIG_SCHED_GRRR)
-#define kSchedGRRRString "grrr"
 extern const struct sched_dispatch_table sched_grrr_dispatch;
 #endif
 
@@ -661,25 +647,6 @@ extern const struct sched_dispatch_table sched_grrr_dispatch;
  * It is an error to invoke any scheduler-related code
  * before this is set up
  */
-enum sched_enum {
-	sched_enum_unknown = 0,
-#if defined(CONFIG_SCHED_TRADITIONAL)
-	sched_enum_traditional = 1,
-	sched_enum_traditional_with_pset_runqueue = 2,
-#endif
-#if defined(CONFIG_SCHED_PROTO)
-	sched_enum_proto = 3,
-#endif
-#if defined(CONFIG_SCHED_GRRR)
-	sched_enum_grrr = 4,
-#endif
-#if defined(CONFIG_SCHED_MULTIQ)
-	sched_enum_multiq = 5,
-	sched_enum_dualq = 6,
-#endif
-	sched_enum_max = 7,
-};
-
 extern const struct sched_dispatch_table *sched_current_dispatch;
 
 #endif	/* MACH_KERNEL_PRIVATE */

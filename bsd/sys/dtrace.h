@@ -20,7 +20,8 @@
  */
 
 /*
- * Portions copyright (c) 2011, Joyent, Inc. All rights reserved.
+ * Portions copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Portions Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 /*
@@ -340,6 +341,7 @@ typedef enum dtrace_probespec {
 #define DIF_VAR_PTHREAD_SELF	0x0200	/* Apple specific PTHREAD_SELF (Not currently supported!) */
 #define DIF_VAR_DISPATCHQADDR	0x0201	/* Apple specific dispatch queue addr */
 #define DIF_VAR_MACHTIMESTAMP	0x0202	/* mach_absolute_timestamp() */
+#define DIF_VAR_CPU		0x0203	/* cpu number */
 #endif /* __APPLE __ */
 
 #define	DIF_SUBR_RAND			0
@@ -388,13 +390,14 @@ typedef enum dtrace_probespec {
 #define	DIF_SUBR_INET_NTOA6		43
 #define	DIF_SUBR_TOUPPER		44
 #define	DIF_SUBR_TOLOWER		45
+#define	DIF_SUBR_VM_KERNEL_ADDRPERM	46
 #if !defined(__APPLE__)
 
-#define DIF_SUBR_MAX			45      /* max subroutine value */
-#else
-#define DIF_SUBR_COREPROFILE		46
-
 #define DIF_SUBR_MAX			46      /* max subroutine value */
+#else
+#define DIF_SUBR_COREPROFILE		47
+
+#define DIF_SUBR_MAX			47      /* max subroutine value */
 #endif /* __APPLE__ */
 
 typedef uint32_t dif_instr_t;
@@ -457,6 +460,7 @@ typedef struct dtrace_diftype {
 #define DIF_TYPE_STRING         1       /* type is a D string */
 
 #define DIF_TF_BYREF            0x1     /* type is passed by reference */
+#define DIF_TF_BYUREF           0x2     /* user type is passed by reference */
 
 /*
  * A DTrace Intermediate Format variable record is used to describe each of the
@@ -1447,7 +1451,10 @@ typedef struct dtrace_module_uuids_list {
 #define DTRACE_MODULE_UUIDS_LIST_SIZE(count) (sizeof(dtrace_module_uuids_list_t) + ((count - 1) * sizeof(UUID)))
 
 typedef struct dtrace_procdesc {
-	char		p_comm[MAXCOMLEN+1];
+	/* Must be specified by user-space */
+	char		p_name[128];
+	/* Set or modified by the Kernel */
+	int		p_name_length;
 	pid_t		p_pid;
 } dtrace_procdesc_t;
 

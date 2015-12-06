@@ -330,14 +330,13 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 		goto done;
 	}
 
-	sc = _MALLOC(sizeof (struct gif_softc), M_DEVBUF, M_WAITOK);
+	sc = _MALLOC(sizeof (struct gif_softc), M_DEVBUF, M_WAITOK | M_ZERO);
 	if (sc == NULL) {
 		log(LOG_ERR, "gif_clone_create: failed to allocate gif%d\n",
 		    unit);
 		error = ENOBUFS;
 		goto done;
 	}
-	bzero(sc, sizeof (struct gif_softc));
 
 	/* use the interface name as the unique id for ifp recycle */
 	snprintf(sc->gif_ifname, sizeof (sc->gif_ifname), "%s%d",

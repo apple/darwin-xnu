@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,5 +73,6 @@ errno_t		flow_divert_token_set(struct socket *so, struct sockopt *sopt);
 errno_t		flow_divert_token_get(struct socket *so, struct sockopt *sopt);
 errno_t		flow_divert_pcb_init(struct socket *so, uint32_t ctl_unit);
 errno_t		flow_divert_connect_out(struct socket *so, struct sockaddr *to, proc_t p);
+errno_t		flow_divert_implicit_data_out(struct socket *so, int flags, mbuf_t data, struct sockaddr *to, mbuf_t control, struct proc *p);
 
 #endif /* __FLOW_DIVERT_H__ */

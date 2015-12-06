@@ -118,12 +118,12 @@ void panic_dump_mem(const void *addr, int len)
 {
 	void *scratch = panic_dump_buf + 4096;
 
-	for (; len > 0; addr = (uint8_t *)addr + PAGE_SIZE, len -= PAGE_SIZE) {
+	for (; len > 0; addr = (const uint8_t *)addr + PAGE_SIZE, len -= PAGE_SIZE) {
 		if (!kvtophys((vm_offset_t)addr))
 			continue;
 
 		// 4095 is multiple of 3 -- see below
-		int n = WKdm_compress_new((WK_word *)addr, (WK_word *)(void *)panic_dump_buf, 
+		int n = WKdm_compress_new((const WK_word *)addr, (WK_word *)(void *)panic_dump_buf,
 								  scratch, 4095);
 
 		if (n == -1)
@@ -184,7 +184,7 @@ boolean_t panic_phys_range_before(const void *addr, uint64_t *pphys,
 	if (count > 1024)	// Sanity check
 		return FALSE;
 
-	for (uint32_t i = 0; i < count; ++i, r = (EfiMemoryRange *)(void *)((uint8_t *)r + size)) {
+	for (uint32_t i = 0; i < count; ++i, r = (const EfiMemoryRange *)(const void *)((const uint8_t *)r + size)) {
 		if (r->PhysicalStart + r->NumberOfPages * PAGE_SIZE > *pphys)
 			continue;
 

@@ -103,7 +103,7 @@ kext_alloc_init(void)
     /* Allocate the sub block of the kernel map */
     rval = kmem_suballoc(kernel_map, (vm_offset_t *) &kext_alloc_base, 
 			 kext_alloc_size, /* pageable */ TRUE,
-			 VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE,
+			 VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE | VM_MAKE_TAG(VM_KERN_MEMORY_KEXT),
 			 &g_kext_map);
     if (rval != KERN_SUCCESS) {
 	    panic("kext_alloc_init: kmem_suballoc failed 0x%x\n", rval);
@@ -141,6 +141,8 @@ kext_alloc(vm_offset_t *_addr, vm_size_t size, boolean_t fixed)
 #endif
     int flags = (fixed) ? VM_FLAGS_FIXED : VM_FLAGS_ANYWHERE;
  
+    flags |= VM_MAKE_TAG(VM_KERN_MEMORY_KEXT);
+     
 #if CONFIG_KEXT_BASEMENT
     /* Allocate the kext virtual memory
      * 10608884 - use mach_vm_map since we want VM_FLAGS_ANYWHERE allocated past

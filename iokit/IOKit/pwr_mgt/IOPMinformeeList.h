@@ -31,6 +31,7 @@
 
 class IOPMinformee;
 class IOService;
+extern uint32_t gCanSleepTimeout;
 
 class IOPMinformeeList : public OSObject
 {
@@ -45,7 +46,7 @@ private:
 
 public:
     void initialize ( void );
-    void free ( void );
+    void free ( void ) APPLE_KEXT_OVERRIDE;
 
     unsigned long numberOfItems ( void );
 

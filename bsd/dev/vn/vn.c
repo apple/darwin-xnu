@@ -908,7 +908,6 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data,
 	case DKIOCGETMAXSEGMENTBYTECOUNTREAD:
 	case DKIOCGETMAXSEGMENTBYTECOUNTWRITE:
 	case DKIOCGETBLOCKCOUNT:
-	case DKIOCGETBLOCKCOUNT32:
 		if ((vn->sc_flags & VNF_INITED) == 0) {
 			error = ENXIO;
 			goto done;
@@ -978,9 +977,6 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data,
 		break;
 	case DKIOCISWRITABLE:
 		*f = 1;
-		break;
-	case DKIOCGETBLOCKCOUNT32:
-		*f = vn->sc_size;
 		break;
 	case DKIOCGETBLOCKCOUNT:
 		*o = vn->sc_size;

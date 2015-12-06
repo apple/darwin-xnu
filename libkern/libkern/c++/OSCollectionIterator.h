@@ -149,7 +149,7 @@ public:
     * release@/link</code>
     * instead.
     */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -159,7 +159,7 @@ public:
     * Resets the iterator to the beginning of the collection,
     * as if it had just been created.
     */
-    virtual void reset();
+    virtual void reset() APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -173,7 +173,7 @@ public:
     * <code>false</code> otherwise
     * (typically because the iteration context has been modified).
     */
-    virtual bool isValid();
+    virtual bool isValid() APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -202,7 +202,7 @@ public:
     * and then to advance the iteration context to the next object (if any)
     * and return that next object, or <code>NULL</code> if there is none.
     */
-    virtual OSObject * getNextObject();
+    virtual OSObject * getNextObject() APPLE_KEXT_OVERRIDE;
 };
 
 #endif /* !_OS_OSCOLLECTIONITERATOR_H */

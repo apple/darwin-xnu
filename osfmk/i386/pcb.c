@@ -94,16 +94,9 @@
 #include <i386/machine_routines.h>
 #include <i386/lapic.h> /* LAPIC_PMC_SWI_VECTOR */
 
-#if CONFIG_COUNTERS
-#include <pmc/pmc.h>
-#endif /* CONFIG_COUNTERS */
-
-#if KPC
-#include <kern/kpc.h>
-#endif
-
 #if KPERF
 #include <kperf/kperf.h>
+#include <kperf/kperf_kpc.h>
 #endif
 
 #if HYPERVISOR
@@ -114,23 +107,21 @@
  * Maps state flavor to number of words in the state:
  */
 unsigned int _MachineStateCount[] = {
-	/* FLAVOR_LIST */
-        0,
-	x86_THREAD_STATE32_COUNT,
-	x86_FLOAT_STATE32_COUNT,
-	x86_EXCEPTION_STATE32_COUNT,
-	x86_THREAD_STATE64_COUNT,
-	x86_FLOAT_STATE64_COUNT,
-	x86_EXCEPTION_STATE64_COUNT,
-	x86_THREAD_STATE_COUNT,
-	x86_FLOAT_STATE_COUNT,
-	x86_EXCEPTION_STATE_COUNT,
-	0,
-	x86_SAVED_STATE32_COUNT,
-	x86_SAVED_STATE64_COUNT,
-	x86_DEBUG_STATE32_COUNT,
-	x86_DEBUG_STATE64_COUNT,
-	x86_DEBUG_STATE_COUNT
+	[x86_THREAD_STATE32]	= x86_THREAD_STATE32_COUNT,
+	[x86_THREAD_STATE64]	= x86_THREAD_STATE64_COUNT,
+	[x86_THREAD_STATE]	= x86_THREAD_STATE_COUNT,
+	[x86_FLOAT_STATE32]	= x86_FLOAT_STATE32_COUNT,
+	[x86_FLOAT_STATE64]	= x86_FLOAT_STATE64_COUNT,
+	[x86_FLOAT_STATE]	= x86_FLOAT_STATE_COUNT,
+	[x86_EXCEPTION_STATE32]	= x86_EXCEPTION_STATE32_COUNT,
+	[x86_EXCEPTION_STATE64]	= x86_EXCEPTION_STATE64_COUNT,
+	[x86_EXCEPTION_STATE]	= x86_EXCEPTION_STATE_COUNT,
+	[x86_DEBUG_STATE32]	= x86_DEBUG_STATE32_COUNT,
+	[x86_DEBUG_STATE64]	= x86_DEBUG_STATE64_COUNT,
+	[x86_DEBUG_STATE]	= x86_DEBUG_STATE_COUNT,
+	[x86_AVX_STATE32]	= x86_AVX_STATE32_COUNT,
+	[x86_AVX_STATE64]	= x86_AVX_STATE64_COUNT,
+	[x86_AVX_STATE]		= x86_AVX_STATE_COUNT,
 };
 
 zone_t		iss_zone;		/* zone for saved_state area */
@@ -160,58 +151,6 @@ set_thread_state32(thread_t thread, x86_thread_state32_t *ts);
 static int
 set_thread_state64(thread_t thread, x86_thread_state64_t *ts);
 
-#if CONFIG_COUNTERS
-static inline void
-machine_pmc_cswitch(thread_t /* old */, thread_t /* new */);
-
-static inline void
-pmc_swi(thread_t /* old */, thread_t /*new */);
-
-static inline void
-pmc_swi(thread_t old, thread_t new) {
-	current_cpu_datap()->csw_old_thread = old;
-	current_cpu_datap()->csw_new_thread = new;
-	pal_pmc_swi();
-}
-
-static inline void
-machine_pmc_cswitch(thread_t old, thread_t new) {
-	if (pmc_thread_eligible(old) || pmc_thread_eligible(new)) {
-		pmc_swi(old, new);
-	}
-}
-
-void ml_get_csw_threads(thread_t *old, thread_t *new) {
-	*old = current_cpu_datap()->csw_old_thread;
-	*new = current_cpu_datap()->csw_new_thread;
-}
-
-#endif /* CONFIG_COUNTERS */
-
-#if KPC
-static inline void
-ml_kpc_cswitch(thread_t old, thread_t new)
-{
-	if(!kpc_threads_counting)
-		return;
-	
-	/* call the kpc function */
-	kpc_switch_context( old, new );
-}
-#endif
-
-#if KPERF
-static inline void
-ml_kperf_cswitch(thread_t old, thread_t new)
-{
-	if(!kperf_cswitch_hook)
-		return;
-	
-	/* call the kpc function */
-	kperf_switch_context( old, new );
-}
-#endif
-
 #if HYPERVISOR
 static inline void
 ml_hv_cswitch(thread_t old, thread_t new)
@@ -225,13 +164,13 @@ ml_hv_cswitch(thread_t old, thread_t new)
 #endif
 
 /*
- * Don't let an illegal value for dr7 get set.	Specifically,
- * check for undefined settings.  Setting these bit patterns
+ * Don't let an illegal value for the lower 32-bits of dr7 get set.
+ * Specifically, check for undefined settings.  Setting these bit patterns
  * result in undefined behaviour and can lead to an unexpected
  * TRCTRAP.
  */
 static boolean_t
-dr7_is_valid(uint32_t *dr7)
+dr7d_is_valid(uint32_t *dr7d)
 {
 	int i;
 	uint32_t mask1, mask2;
@@ -243,7 +182,7 @@ dr7_is_valid(uint32_t *dr7)
 	if (!(get_cr4() & CR4_DE))
 		for (i = 0, mask1 = 0x3<<16, mask2 = 0x2<<16; i < 4; 
 				i++, mask1 <<= 4, mask2 <<= 4)
-			if ((*dr7 & mask1) == mask2)
+			if ((*dr7d & mask1) == mask2)
 				return (FALSE);
 
 	/*
@@ -252,33 +191,33 @@ dr7_is_valid(uint32_t *dr7)
 	 * to "00B"
 	 */
 	for (i = 0; i < 4; i++)
-		if (((((*dr7 >> (16 + i*4))) & 0x3) == 0) &&
-				((((*dr7 >> (18 + i*4))) & 0x3) != 0))
+		if (((((*dr7d >> (16 + i*4))) & 0x3) == 0) &&
+				((((*dr7d >> (18 + i*4))) & 0x3) != 0))
 			return (FALSE);
 
 	/*
 	 * Intel docs have these bits fixed.
 	 */
-	*dr7 |= 0x1 << 10; /* set bit 10 to 1 */
-	*dr7 &= ~(0x1 << 11); /* set bit 11 to 0 */
-	*dr7 &= ~(0x1 << 12); /* set bit 12 to 0 */
-	*dr7 &= ~(0x1 << 14); /* set bit 14 to 0 */
-	*dr7 &= ~(0x1 << 15); /* set bit 15 to 0 */
+	*dr7d |= 0x1 << 10; /* set bit 10 to 1 */
+	*dr7d &= ~(0x1 << 11); /* set bit 11 to 0 */
+	*dr7d &= ~(0x1 << 12); /* set bit 12 to 0 */
+	*dr7d &= ~(0x1 << 14); /* set bit 14 to 0 */
+	*dr7d &= ~(0x1 << 15); /* set bit 15 to 0 */
 
 	/*
 	 * We don't allow anything to set the global breakpoints.
 	 */
 
-	if (*dr7 & 0x2)
+	if (*dr7d & 0x2)
 		return (FALSE);
 
-	if (*dr7 & (0x2<<2))
+	if (*dr7d & (0x2<<2))
 		return (FALSE);
 
-	if (*dr7 & (0x2<<4))
+	if (*dr7d & (0x2<<4))
 		return (FALSE);
 
-	if (*dr7 & (0x2<<6))
+	if (*dr7d & (0x2<<6))
 		return (FALSE);
 
 	return (TRUE);
@@ -289,9 +228,8 @@ extern void set_64bit_debug_regs(x86_debug_state64_t *ds);
 boolean_t
 debug_state_is_valid32(x86_debug_state32_t *ds) 
 {
-	if (!dr7_is_valid(&ds->dr7))
+	if (!dr7d_is_valid(&ds->dr7))
 		return FALSE;
-
 
 	return TRUE;
 }
@@ -299,7 +237,7 @@ debug_state_is_valid32(x86_debug_state32_t *ds)
 boolean_t
 debug_state_is_valid64(x86_debug_state64_t *ds)
 {
-	if (!dr7_is_valid((uint32_t *)&ds->dr7))
+	if (!dr7d_is_valid((uint32_t *)&ds->dr7))
 		return FALSE;
 
 	/*
@@ -321,6 +259,9 @@ debug_state_is_valid64(x86_debug_state64_t *ds)
 	if (ds->dr7 & (0x1<<6))
 		if (ds->dr3 >= VM_MAX_PAGE_ADDRESS)
 			return FALSE;
+
+	/* For x86-64, we must ensure the upper 32-bits of DR7 are clear */
+	ds->dr7 &= 0xffffffffULL;
 
 	return TRUE;
 }
@@ -448,9 +389,6 @@ void
 machine_load_context(
 	thread_t		new)
 {
-#if CONFIG_COUNTERS
-	machine_pmc_cswitch(NULL, new);
-#endif
 	new->machine.specFlags |= OnProc;
 	act_machine_switch_pcb(NULL, new);
 	Load_context(new);
@@ -470,14 +408,8 @@ machine_switch_context(
 #if MACH_RT
         assert(current_cpu_datap()->cpu_active_stack == old->kernel_stack);
 #endif
-#if CONFIG_COUNTERS
-	machine_pmc_cswitch(old, new);
-#endif
-#if KPC
-	ml_kpc_cswitch(old, new);
-#endif
 #if KPERF
-	ml_kperf_cswitch(old, new);
+	kperf_kpc_cswitch(old, new);
 #endif
 	/*
 	 *	Save FP registers if in use.
@@ -1835,14 +1767,8 @@ machine_stack_handoff(thread_t old,
 	assert(new);
 	assert(old);
 
-#if CONFIG_COUNTERS
-	machine_pmc_cswitch(old, new);
-#endif
-#if KPC
-	ml_kpc_cswitch(old, new);
-#endif
 #if KPERF
-	ml_kperf_cswitch(old, new);
+	kperf_kpc_cswitch(old, new);
 #endif
 
 	stack = old->kernel_stack;

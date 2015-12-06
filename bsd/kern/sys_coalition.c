@@ -30,14 +30,15 @@ coalition_create_syscall(user_addr_t cidp, uint32_t flags)
 	kern_return_t kr;
 	uint64_t cid;
 	coalition_t coal;
+	int type = COALITION_CREATE_FLAGS_GET_TYPE(flags);
+	boolean_t privileged = !!(flags & COALITION_CREATE_FLAGS_PRIVILEGED);
 
-	if ((flags & (~COALITION_CREATE_FLAG_MASK)) != 0) {
+	if ((flags & (~COALITION_CREATE_FLAGS_MASK)) != 0)
 		return EINVAL;
-	}
+	if (type < 0 || type > COALITION_TYPE_MAX)
+		return EINVAL;
 
-	boolean_t privileged = flags & COALITION_CREATE_FLAG_PRIVILEGED;
-
-	kr = coalition_create_internal(&coal, privileged);
+	kr = coalition_create_internal(type, privileged, &coal);
 	if (kr != KERN_SUCCESS) {
 		/* for now, the only kr is KERN_RESOURCE_SHORTAGE */
 		error = ENOMEM;
@@ -46,9 +47,7 @@ coalition_create_syscall(user_addr_t cidp, uint32_t flags)
 
 	cid = coalition_id(coal);
 
-#if COALITION_DEBUG
-	printf("%s(addr, %u) -> %llu\n", __func__, flags, cid);
-#endif
+	coal_dbg("(addr, %u) -> %llu", flags, cid);
 	error = copyout(&cid, cidp, sizeof(cid));
 out:
 	return error;
@@ -98,17 +97,19 @@ coalition_request_terminate_syscall(user_addr_t cidp, uint32_t flags)
 		break;
 	case KERN_DEFAULT_SET:
 		error = EPERM;
+		break;
 	case KERN_TERMINATED:
 		error = EALREADY;
+		break;
 	case KERN_INVALID_NAME:
 		error = ESRCH;
+		break;
 	default:
 		error = EIO;
+		break;
 	}
 
-#if COALITION_DEBUG
-	printf("%s(%llu, %u) -> %d\n", __func__, cid, flags, error);
-#endif
+	coal_dbg("(%llu, %u) -> %d", cid, flags, error);
 
 	return error;
 }
@@ -160,17 +161,19 @@ coalition_reap_syscall(user_addr_t cidp, uint32_t flags)
 		break;
 	case KERN_DEFAULT_SET:
 		error = EPERM;
+		break;
 	case KERN_TERMINATED:
 		error = ESRCH;
+		break;
 	case KERN_FAILURE:
 		error = EBUSY;
+		break;
 	default:
 		error = EIO;
+		break;
 	}
 
-#if COALITION_DEBUG
-	printf("%s(%llu, %u) -> %d\n", __func__, cid, flags, error);
-#endif
+	coal_dbg("(%llu, %u) -> %d", cid, flags, error);
 
 	return error;
 }
@@ -184,8 +187,9 @@ int coalition(proc_t p, struct coalition_args *cap, __unused int32_t *retval)
 	user_addr_t cidp = cap->cid;
 	uint32_t flags = cap->flags;
 	int error = 0;
+	int type = COALITION_CREATE_FLAGS_GET_TYPE(flags);
 
-	if (!task_is_in_privileged_coalition(p->task)) {
+	if (!task_is_in_privileged_coalition(p->task, type)) {
 		return EPERM;
 	}
 
@@ -279,3 +283,235 @@ bad:
 	coalition_release(coal);
 	return error;
 }
+
+#if defined(DEVELOPMENT) || defined(DEBUG)
+static int sysctl_coalition_get_ids SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error, pid;
+	proc_t tproc;
+	uint64_t value;
+	uint64_t ids[COALITION_NUM_TYPES];
+
+
+	error = SYSCTL_IN(req, &value, sizeof(value));
+	if (error)
+		return error;
+	if (!req->newptr)
+		pid = req->p->p_pid;
+	else
+		pid = (int)value;
+
+	coal_dbg("looking up coalitions for pid:%d", pid);
+	tproc = proc_find(pid);
+	if (tproc == NULL) {
+		coal_dbg("ERROR: Couldn't find pid:%d", pid);
+		return ESRCH;
+	}
+
+	task_coalition_ids(tproc->task, ids);
+	proc_rele(tproc);
+
+	return SYSCTL_OUT(req, ids, sizeof(ids));
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, coalitions, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
+	    0, 0, sysctl_coalition_get_ids, "Q", "coalition ids of a given process");
+
+
+static int sysctl_coalition_get_roles SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error, pid;
+	proc_t tproc;
+	int value;
+	int roles[COALITION_NUM_TYPES];
+
+
+	error = SYSCTL_IN(req, &value, sizeof(value));
+	if (error)
+		return error;
+	if (!req->newptr)
+		pid = req->p->p_pid;
+	else
+		pid = (int)value;
+
+	coal_dbg("looking up coalitions for pid:%d", pid);
+	tproc = proc_find(pid);
+	if (tproc == NULL) {
+		coal_dbg("ERROR: Couldn't find pid:%d", pid);
+		return ESRCH;
+	}
+
+	task_coalition_roles(tproc->task, roles);
+	proc_rele(tproc);
+
+	return SYSCTL_OUT(req, roles, sizeof(roles));
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, coalition_roles, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+	    0, 0, sysctl_coalition_get_roles, "I", "coalition roles of a given process");
+
+
+static int sysctl_coalition_get_page_count SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error, pid;
+	proc_t tproc;
+	coalition_t coal;
+	uint64_t value;
+	uint64_t pgcount[COALITION_NUM_TYPES];
+
+
+	error = SYSCTL_IN(req, &value, sizeof(value));
+	if (error)
+		return error;
+	if (!req->newptr)
+		pid = req->p->p_pid;
+	else
+		pid = (int)value;
+
+	coal_dbg("looking up coalitions for pid:%d", pid);
+	tproc = proc_find(pid);
+	if (tproc == NULL) {
+		coal_dbg("ERROR: Couldn't find pid:%d", pid);
+		return ESRCH;
+	}
+
+	memset(pgcount, 0, sizeof(pgcount));
+
+	for (int t = 0; t < COALITION_NUM_TYPES; t++) {
+		coal = COALITION_NULL;
+		coalition_is_leader(tproc->task, t, &coal);
+		if (coal != COALITION_NULL) {
+			int ntasks = 0;
+			pgcount[t] = coalition_get_page_count(coal, &ntasks);
+			coal_dbg("PID:%d, Coalition:%lld, type:%d, pgcount:%lld",
+				 pid, coalition_id(coal), t, pgcount[t]);
+		}
+	}
+
+	proc_rele(tproc);
+
+	return SYSCTL_OUT(req, pgcount, sizeof(pgcount));
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, coalition_page_count, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
+	    0, 0, sysctl_coalition_get_page_count, "Q", "coalition page count of a specified process");
+
+
+static int sysctl_coalition_get_pid_list SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error, type, sort_order, pid;
+	int value[3];
+	int has_pid = 1;
+
+	coalition_t coal = COALITION_NULL;
+	proc_t tproc = PROC_NULL;
+	int npids = 0;
+	int pidlist[100] = { 0, };
+
+
+	error = SYSCTL_IN(req, &value, sizeof(value));
+	if (error) {
+		has_pid = 0;
+		error = SYSCTL_IN(req, &value, sizeof(value) - sizeof(value[0]));
+	}
+	if (error)
+		return error;
+	if (!req->newptr) {
+		type = COALITION_TYPE_RESOURCE;
+		sort_order = COALITION_SORT_DEFAULT;
+		pid = req->p->p_pid;
+	} else {
+		type = value[0];
+		sort_order = value[1];
+		if (has_pid)
+			pid = value[2];
+		else
+			pid = req->p->p_pid;
+	}
+
+	if (type < 0 || type >= COALITION_NUM_TYPES)
+		return EINVAL;
+
+	coal_dbg("getting constituent PIDS for coalition of type %d "
+		 "containing pid:%d (sort:%d)", type, pid, sort_order);
+	tproc = proc_find(pid);
+	if (tproc == NULL) {
+		coal_dbg("ERROR: Couldn't find pid:%d", pid);
+		return ESRCH;
+	}
+
+	(void)coalition_is_leader(tproc->task, type, &coal);
+	if (coal == COALITION_NULL) {
+		goto out;
+	}
+
+	npids = coalition_get_pid_list(coal, COALITION_ROLEMASK_ALLROLES, sort_order,
+				       pidlist, sizeof(pidlist) / sizeof(pidlist[0]));
+	if (npids > (int)(sizeof(pidlist) / sizeof(pidlist[0]))) {
+		coal_dbg("Too many members in coalition %llu (from pid:%d): %d!",
+			 coalition_id(coal), pid, npids);
+		npids = sizeof(pidlist) / sizeof(pidlist[0]);
+	}
+
+out:
+	proc_rele(tproc);
+
+	if (npids == 0)
+		return ENOENT;
+
+	return SYSCTL_OUT(req, pidlist, sizeof(pidlist[0]) * npids);
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, coalition_pid_list, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+	    0, 0, sysctl_coalition_get_pid_list, "I", "list of PIDS which are members of the coalition of the current process");
+
+#if DEVELOPMENT
+static int sysctl_coalition_notify SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error, should_set;
+	coalition_t coal;
+	uint64_t value[2];
+
+	should_set = 1;
+	error = SYSCTL_IN(req, value, sizeof(value));
+	if (error) {
+		error = SYSCTL_IN(req, value, sizeof(value) - sizeof(value[0]));
+		if (error)
+			return error;
+		should_set = 0;
+	}
+	if (!req->newptr)
+		return error;
+
+	coal = coalition_find_by_id(value[0]);
+	if (coal == COALITION_NULL) {
+		coal_dbg("Can't find coalition with ID:%lld", value[0]);
+		return ESRCH;
+	}
+
+	if (should_set)
+		coalition_set_notify(coal, (int)value[1]);
+
+	value[0] = (uint64_t)coalition_should_notify(coal);
+
+	coalition_release(coal);
+
+	return SYSCTL_OUT(req, value, sizeof(value[0]));
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, coalition_notify, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
+	    0, 0, sysctl_coalition_notify, "Q", "get/set coalition notification flag");
+
+extern int unrestrict_coalition_syscalls;
+SYSCTL_INT(_kern, OID_AUTO, unrestrict_coalitions,
+	   CTLFLAG_RW, &unrestrict_coalition_syscalls, 0,
+	   "unrestrict the coalition interface");
+
+#endif /* DEVELOPMENT */
+
+#endif /* DEVELOPMENT || DEBUG */

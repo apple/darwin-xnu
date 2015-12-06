@@ -80,7 +80,7 @@ protected:
     */
     virtual void taggedRelease(
         const void * tag,
-        const int    when) const;
+        const int    when) const APPLE_KEXT_OVERRIDE;
 
 public:
     static void initialize();
@@ -113,7 +113,7 @@ public:
     * @discussion
     * This function should never be called.
     */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -124,7 +124,7 @@ public:
     *
     * @param tag  Unused. 
     */
-    virtual void taggedRetain(const void * tag) const;
+    virtual void taggedRetain(const void * tag) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -210,7 +210,7 @@ public:
     * if that object is derived from OSBoolean
     * and represents the same C++ <code>bool</code> value.
     */
-    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -225,7 +225,7 @@ public:
     * @result
     * <code>true</code> if serialization succeeds, <code>false</code> if not.
     */
-    virtual bool serialize(OSSerialize * serializer) const;
+    virtual bool serialize(OSSerialize * serializer) const APPLE_KEXT_OVERRIDE;
 
     OSMetaClassDeclareReservedUnused(OSBoolean, 0);
     OSMetaClassDeclareReservedUnused(OSBoolean, 1);

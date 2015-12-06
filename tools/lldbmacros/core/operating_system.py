@@ -20,14 +20,14 @@ class Armv8_RegisterSet(object):
     """ register info set for armv8 64 bit architecture"""
     register_info = { 'sets' : ['GPR'],
                   'registers': [
-    {'name': 'x0'  , 'bitsize':64, 'offset':  0, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 0, 'dwarf': 0},
-    {'name': 'x1'  , 'bitsize':64, 'offset':  8, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 1, 'dwarf': 1},
-    {'name': 'x2'  , 'bitsize':64, 'offset': 16, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 2, 'dwarf': 2},
-    {'name': 'x3'  , 'bitsize':64, 'offset': 24, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 3, 'dwarf': 3},
-    {'name': 'x4'  , 'bitsize':64, 'offset': 32, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 4, 'dwarf': 4},
-    {'name': 'x5'  , 'bitsize':64, 'offset': 40, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 5, 'dwarf': 5},
-    {'name': 'x6'  , 'bitsize':64, 'offset': 48, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 6, 'dwarf': 6},
-    {'name': 'x7'  , 'bitsize':64, 'offset': 56, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 7, 'dwarf': 7},
+    {'name': 'x0'  , 'bitsize':64, 'offset':  0, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 0, 'dwarf': 0, 'alt-name':'arg1', 'generic':'arg1'},
+    {'name': 'x1'  , 'bitsize':64, 'offset':  8, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 1, 'dwarf': 1, 'alt-name':'arg2', 'generic':'arg2'},
+    {'name': 'x2'  , 'bitsize':64, 'offset': 16, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 2, 'dwarf': 2, 'alt-name':'arg3', 'generic':'arg3'},
+    {'name': 'x3'  , 'bitsize':64, 'offset': 24, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 3, 'dwarf': 3, 'alt-name':'arg4', 'generic':'arg4'},
+    {'name': 'x4'  , 'bitsize':64, 'offset': 32, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 4, 'dwarf': 4, 'alt-name':'arg5', 'generic':'arg5'},
+    {'name': 'x5'  , 'bitsize':64, 'offset': 40, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 5, 'dwarf': 5, 'alt-name':'arg6', 'generic':'arg6'},
+    {'name': 'x6'  , 'bitsize':64, 'offset': 48, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 6, 'dwarf': 6, 'alt-name':'arg7', 'generic':'arg7'},
+    {'name': 'x7'  , 'bitsize':64, 'offset': 56, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 7, 'dwarf': 7, 'alt-name':'arg8', 'generic':'arg8'},
     {'name': 'x8'  , 'bitsize':64, 'offset': 64, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 8, 'dwarf': 8},
     {'name': 'x9'  , 'bitsize':64, 'offset': 72, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc': 9, 'dwarf': 9},
     {'name': 'x10' , 'bitsize':64, 'offset': 80, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':10, 'dwarf':10},
@@ -53,9 +53,9 @@ class Armv8_RegisterSet(object):
     {'name': 'lr'  , 'bitsize':64, 'offset':240, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':30, 'dwarf':30, 'alt-name': 'lr', 'generic':'lr'},
     {'name': 'sp'  , 'bitsize':64, 'offset':248, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':31, 'dwarf':31, 'alt-name': 'sp', 'generic':'sp'},
     {'name': 'pc'  , 'bitsize':64, 'offset':256, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':32, 'dwarf':32, 'alt-name': 'pc', 'generic':'pc'},
-    {'name': 'far' , 'bitsize':64, 'offset':264, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':34, 'dwarf':34, 'alt-name': 'far', 'generic':'far'},
-    {'name': 'cpsr', 'bitsize':32, 'offset':272, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':33, 'dwarf':33, 'alt-name': 'cpsr', 'generic':'cpsr'},
-    {'name': 'esr' , 'bitsize':32, 'offset':276, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':35, 'dwarf':35, 'alt-name': 'esr', 'generic':'esr'},
+    {'name': 'far' , 'bitsize':64, 'offset':264, 'encoding':'uint', 'format':'hex', 'set':0},
+    {'name': 'cpsr', 'bitsize':32, 'offset':272, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':33, 'dwarf':33, 'generic':'flags'},
+    {'name': 'esr' , 'bitsize':32, 'offset':276, 'encoding':'uint', 'format':'hex', 'set':0},
     ]
     }
 
@@ -113,7 +113,7 @@ class Armv8_RegisterSet(object):
     def ReadRegisterDataFromKDPSavedState(self, kdp_state, kernel_version):
         """ Setup register values from KDP saved information.
         """
-        saved_state = kernel_version.CreateValueFromExpression(None, '(arm_saved_state64_t *) ' + str(kdp_state.GetValueAsUnsigned()))
+        saved_state = kernel_version.CreateValueFromExpression(None, '(struct arm_saved_state64 *) ' + str(kdp_state.GetValueAsUnsigned()))
         saved_state = saved_state.Dereference()
         saved_state = PluginValue(saved_state)
         self.ResetRegisterValues()
@@ -237,12 +237,12 @@ class Armv7_RegisterSet(object):
         { 'name':'r10'  , 'bitsize' : 32, 'offset' : 40, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':10, 'dwarf' :10},
         { 'name':'r11'  , 'bitsize' : 32, 'offset' : 44, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':11, 'dwarf' :11, 'alt-name': 'fp', 'generic': 'fp'},
         { 'name':'r12'  , 'bitsize' : 32, 'offset' : 48, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':12, 'dwarf' :12},
-        { 'name':'sp'   , 'bitsize' : 32, 'offset' : 52, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':13, 'dwarf' :13, 'alt-name': 'sp', 'generic': 'sp'},
-        { 'name':'lr'   , 'bitsize' : 32, 'offset' : 56, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':14, 'dwarf' :14, 'alt-name': 'lr', 'generic': 'lr'},
-        { 'name':'pc'   , 'bitsize' : 32, 'offset' : 60, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':15, 'dwarf' :15, 'alt-name': 'pc', 'generic': 'pc'},
-        { 'name':'cpsr' , 'bitsize' : 32, 'offset' : 64, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':25, 'dwarf' :16, 'alt-name':'cpsr','generic':'cpsr'},
-        { 'name':'fsr'  , 'bitsize' : 32, 'offset' : 68, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':17, 'dwarf' :17, 'alt-name':'fsr', 'generic': 'fsr'},
-        { 'name':'far'  , 'bitsize' : 32, 'offset' : 72, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':18, 'dwarf' :18, 'alt-name': 'far', 'generic': 'far'}
+        { 'name':'sp'   , 'bitsize' : 32, 'offset' : 52, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':13, 'dwarf' :13, 'generic': 'sp'},
+        { 'name':'lr'   , 'bitsize' : 32, 'offset' : 56, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':14, 'dwarf' :14, 'generic': 'lr'},
+        { 'name':'pc'   , 'bitsize' : 32, 'offset' : 60, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':15, 'dwarf' :15, 'generic': 'pc'},
+        { 'name':'cpsr' , 'bitsize' : 32, 'offset' : 64, 'encoding':'uint', 'format':'hex', 'set':0, 'gcc':16, 'dwarf' :16, 'generic':'flags'},
+        { 'name':'fsr'  , 'bitsize' : 32, 'offset' : 68, 'encoding':'uint', 'format':'hex', 'set':0},
+        { 'name':'far'  , 'bitsize' : 32, 'offset' : 72, 'encoding':'uint', 'format':'hex', 'set':0}
         ]
         }
 
@@ -380,21 +380,21 @@ class I386_RegisterSet(object):
     register_info = { 'sets' : ['GPR'],
                   'registers': [
         { 'name': 'eax'   , 'bitsize': 32, 'offset' : 0, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 0, 'dwarf': 0},
-        { 'name': 'ebx'   , 'bitsize': 32, 'offset' : 4, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 1, 'dwarf': 1},
-        { 'name': 'ecx'   , 'bitsize': 32, 'offset' : 8, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 2, 'dwarf': 2},
-        { 'name': 'edx'   , 'bitsize': 32, 'offset' :12, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 3, 'dwarf': 3},
-        { 'name': 'edi'   , 'bitsize': 32, 'offset' :16, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 4, 'dwarf': 4},
-        { 'name': 'esi'   , 'bitsize': 32, 'offset' :20, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 5, 'dwarf': 5},
-        { 'name': 'ebp'   , 'bitsize': 32, 'offset' :24, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 6, 'dwarf': 6},
-        { 'name': 'esp'   , 'bitsize': 32, 'offset' :28, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 7, 'dwarf': 7},
-        { 'name': 'ss'    , 'bitsize': 32, 'offset' :32, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 8, 'dwarf': 8},
-        { 'name': 'eflags', 'bitsize': 32, 'offset' :36, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 9, 'dwarf': 9},
-        { 'name': 'eip'   , 'bitsize': 32, 'offset' :40, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' :10, 'dwarf':10},
-        { 'name': 'cs'    , 'bitsize': 32, 'offset' :44, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' :11, 'dwarf':11},
-        { 'name': 'ds'    , 'bitsize': 32, 'offset' :48, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' :12, 'dwarf':12},
-        { 'name': 'es'    , 'bitsize': 32, 'offset' :52, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' :13, 'dwarf':13},
-        { 'name': 'fs'    , 'bitsize': 32, 'offset' :56, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' :14, 'dwarf':14},
-        { 'name': 'gs'    , 'bitsize': 32, 'offset' :60, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' :15, 'dwarf':15},
+        { 'name': 'ebx'   , 'bitsize': 32, 'offset' : 4, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 3, 'dwarf': 3},
+        { 'name': 'ecx'   , 'bitsize': 32, 'offset' : 8, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 1, 'dwarf': 1},
+        { 'name': 'edx'   , 'bitsize': 32, 'offset' :12, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 2, 'dwarf': 2},
+        { 'name': 'edi'   , 'bitsize': 32, 'offset' :16, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 7, 'dwarf': 7},
+        { 'name': 'esi'   , 'bitsize': 32, 'offset' :20, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 6, 'dwarf': 6},
+        { 'name': 'ebp'   , 'bitsize': 32, 'offset' :24, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 4, 'dwarf': 5, 'generic': 'fp', 'alt-name': 'fp'},
+        { 'name': 'esp'   , 'bitsize': 32, 'offset' :28, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 5, 'dwarf': 4, 'generic': 'sp', 'alt-name': 'sp'},
+        { 'name': 'ss'    , 'bitsize': 32, 'offset' :32, 'encoding': 'uint' , 'format':'hex' , 'set': 0},
+        { 'name': 'eflags', 'bitsize': 32, 'offset' :36, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' : 9, 'dwarf': 9, 'generic': 'flags'},
+        { 'name': 'eip'   , 'bitsize': 32, 'offset' :40, 'encoding': 'uint' , 'format':'hex' , 'set': 0, 'gcc' :8, 'dwarf':8, 'generic': 'pc', 'alt-name': 'pc'},
+        { 'name': 'cs'    , 'bitsize': 32, 'offset' :44, 'encoding': 'uint' , 'format':'hex' , 'set': 0},
+        { 'name': 'ds'    , 'bitsize': 32, 'offset' :48, 'encoding': 'uint' , 'format':'hex' , 'set': 0},
+        { 'name': 'es'    , 'bitsize': 32, 'offset' :52, 'encoding': 'uint' , 'format':'hex' , 'set': 0},
+        { 'name': 'fs'    , 'bitsize': 32, 'offset' :56, 'encoding': 'uint' , 'format':'hex' , 'set': 0},
+        { 'name': 'gs'    , 'bitsize': 32, 'offset' :60, 'encoding': 'uint' , 'format':'hex' , 'set': 0},
         ]
         }
 
@@ -689,8 +689,8 @@ class OperatingSystemPlugIn(object):
             self._target = process.target
             osplugin_target_obj = self._target
             self.current_session_id = GetUniqueSessionID(self.process)
-            self.version = self._target.FindGlobalVariables('version', 0).GetValueAtIndex(0)
-            self.kernel_stack_size = self._target.FindGlobalVariables('kernel_stack_size', 0).GetValueAtIndex(0).GetValueAsUnsigned()
+            self.version = self._target.FindGlobalVariables('version', 1).GetValueAtIndex(0)
+            self.kernel_stack_size = self._target.FindGlobalVariables('kernel_stack_size', 1).GetValueAtIndex(0).GetValueAsUnsigned()
             self.kernel_context_size = 0
             self.connected_over_kdp = False
             # connected_to_debugserver signifies if we are connected to astris or other gdbserver instance
@@ -734,6 +734,21 @@ class OperatingSystemPlugIn(object):
                 print "Instantiating threads completely from saved state in memory."
 
     def create_thread(self, tid, context):
+        # if tid is deadbeef means its a custom thread which kernel does not know of.
+        if tid == 0xdeadbeef :
+            # tid manipulation should be the same as in "switchtoregs" code in lldbmacros/process.py .
+            tid = 0xdead0000 | (context & ~0xffff0000)
+            tid = tid & 0xdeadffff
+            thread_obj = { 'tid'   : tid,
+                           'ptr'   : context,
+                           'name'  : 'switchtoregs' + hex(context),
+                           'queue' : 'None',
+                           'state' : 'stopped',
+                           'stop_reason' : 'none'
+                         }
+            self.thread_cache[tid] = thread_obj
+            return thread_obj
+        
         th_ptr = context
         th = self.version.CreateValueFromExpression(str(th_ptr),'(struct thread *)' + str(th_ptr))
         thread_id = th.GetChildMemberWithName('thread_id').GetValueAsUnsigned()
@@ -807,7 +822,7 @@ class OperatingSystemPlugIn(object):
 
         # FIXME remove legacy code
         try:
-            thread_q_head = self._target.FindGlobalVariables('threads', 0).GetValueAtIndex(0)
+            thread_q_head = self._target.FindGlobalVariables('threads', 1).GetValueAtIndex(0)
             thread_type = self._target.FindFirstType('thread')
             thread_ptr_type = thread_type.GetPointerType()
             for th in IterateQueue(thread_q_head, thread_ptr_type, 'threads'):
@@ -830,16 +845,22 @@ class OperatingSystemPlugIn(object):
         return self.register_set.register_info
 
     def get_register_data(self, tid):
-        #print "searching for tid", tid
         thobj = None
         try:
+            regs = self.register_set
             if self.current_session_id != GetUniqueSessionID(self.process):
                 self.thread_cache = {}
                 self.current_session_id = GetUniqueSessionID(self.process)
-
             if tid in self.thread_cache.keys():
+                
+                #Check if the thread is a fake one. Then create and return registers directly
+                if self.thread_cache[tid]['name'].find('switchtoregs') == 0:
+                    savedstateobj = self.version.CreateValueFromExpression(None, '(uintptr_t *) ' + str(self.thread_cache[tid]['ptr']))
+                    regs.ReadRegisterDataFromKDPSavedState(savedstateobj, self.version)
+                    return regs.GetPackedRegisterState()
+
                 thobj = self.version.CreateValueFromExpression(self.thread_cache[tid]['name'], '(struct thread *)' + str(self.thread_cache[tid]['ptr']))
-            regs = self.register_set
+            
             if thobj == None :
                 print "FATAL ERROR: Could not find thread with id %d" % tid
                 regs.ResetRegisterValues()

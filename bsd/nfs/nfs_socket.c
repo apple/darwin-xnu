@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -389,14 +389,23 @@ nfs_connect_upcall(socket_t so, void *arg, __unused int waitflag)
 							nso->nso_version = RPCBVERS3;
 					}
 				} else if (nso->nso_protocol == NFS_PROG) {
-					if ((minvers > NFS_VER4) || (maxvers < NFS_VER2))
-						error = EPROGMISMATCH;
-					else if ((NFS_VER3 >= minvers) && (NFS_VER3 <= maxvers))
-						nso->nso_version = NFS_VER3;
-					else if ((NFS_VER2 >= minvers) && (NFS_VER2 <= maxvers))
-						nso->nso_version = NFS_VER2;
-					else if ((NFS_VER4 >= minvers) && (NFS_VER4 <= maxvers))
-						nso->nso_version = NFS_VER4;
+					int vers;
+
+					/*
+					 * N.B. Both portmapper and rpcbind V3 are happy to return
+					 * addresses for other versions than the one you ask (getport or
+					 * getaddr) and thus we may have fallen to this code path. So if
+					 * we get a version that we support, use highest supported
+					 * version.  This assumes that the server supports all versions
+					 * between minvers and maxvers.  Note for IPv6 we will try and
+					 * use rpcbind V4 which has getversaddr and we should not get
+					 * here if that was successful.
+					 */
+					for (vers = nso->nso_nfs_max_vers; vers >= (int)nso->nso_nfs_min_vers; vers--) {
+						if (vers >= (int)minvers && vers <= (int)maxvers)
+								break;
+					}
+					nso->nso_version = (vers < (int)nso->nso_nfs_min_vers) ? 0 : vers;
 				}
 				if (!error && nso->nso_version)
 					accepted_status = RPC_SUCCESS;
@@ -456,7 +465,7 @@ nfsmout:
  */
 int
 nfs_socket_create(
-	__unused struct nfsmount *nmp,
+	struct nfsmount *nmp,
 	struct sockaddr *sa,
 	int sotype,
 	in_port_t port,
@@ -506,6 +515,8 @@ nfs_socket_create(
 		((struct sockaddr_in6*)nso->nso_saddr)->sin6_port = htons(port);
 	nso->nso_protocol = protocol;
 	nso->nso_version = vers;
+	nso->nso_nfs_min_vers = PVER2MAJOR(nmp->nm_min_vers);
+	nso->nso_nfs_max_vers = PVER2MAJOR(nmp->nm_max_vers);
 
 	error = sock_socket(sa->sa_family, nso->nso_sotype, 0, NULL, NULL, &nso->nso_so);
 
@@ -844,7 +855,7 @@ nfs_connect_search_ping(struct nfsmount *nmp, struct nfs_socket *nso, struct tim
 		if (nso->nso_protocol == PMAPPROG)
 			vers = (nso->nso_saddr->sa_family == AF_INET) ? PMAPVERS : RPCBVERS4;
 		else if (nso->nso_protocol == NFS_PROG)
-			vers = NFS_VER3;
+			vers = PVER2MAJOR(nmp->nm_max_vers);
 	}
 	lck_mtx_unlock(&nso->nso_lock);
 	error = nfsm_rpchead2(nmp, nso->nso_sotype, nso->nso_protocol, vers, 0, RPCAUTH_SYS,
@@ -883,7 +894,7 @@ nfs_connect_search_ping(struct nfsmount *nmp, struct nfs_socket *nso, struct tim
  *					Set the nfs socket protocol and version if needed. 
  */
 void
-nfs_connect_search_socket_found(struct nfsmount *nmp __unused, struct nfs_socket_search *nss, struct nfs_socket *nso)
+nfs_connect_search_socket_found(struct nfsmount *nmp, struct nfs_socket_search *nss, struct nfs_socket *nso)
 {
 	NFS_SOCK_DBG("nfs connect %s socket %p verified\n",
 		      vfs_statfs(nmp->nm_mountp)->f_mntfromname, nso);
@@ -892,7 +903,7 @@ nfs_connect_search_socket_found(struct nfsmount *nmp __unused, struct nfs_socket
 		if (nso->nso_protocol == PMAPPROG)
 			nso->nso_version = (nso->nso_saddr->sa_family == AF_INET) ? PMAPVERS : RPCBVERS4;
 		if (nso->nso_protocol == NFS_PROG)
-			nso->nso_version = NFS_VER3;
+			nso->nso_version = PVER2MAJOR(nmp->nm_max_vers);
 	}
 	TAILQ_REMOVE(&nss->nss_socklist, nso, nso_link);
 	nss->nss_sockcnt--;
@@ -1046,6 +1057,7 @@ loop:
  * A mount's initial connection may require negotiating some parameters such
  * as socket type and NFS version.
  */
+
 int
 nfs_connect(struct nfsmount *nmp, int verbose, int timeo)
 {
@@ -1056,6 +1068,7 @@ nfs_connect(struct nfsmount *nmp, int verbose, int timeo)
 	sock_upcall upcall;
 	struct timeval now, start;
 	int error, savederror, nfsvers;
+	int tryv4 = 1;
 	uint8_t	sotype = nmp->nm_sotype ? nmp->nm_sotype : SOCK_STREAM;
 	fhandle_t *fh = NULL;
 	char *path = NULL;
@@ -1107,10 +1120,17 @@ tryagain:
 		if (!nmp->nm_vers) {
 			/* No NFS version specified... */
 			if (!nmp->nm_nfsport || (!NM_OMATTR_GIVEN(nmp, FH) && !nmp->nm_mountport)) {
-				/* ...connect to portmapper first if we (may) need any ports. */
-				nss.nss_port = PMAPPORT;
-				nss.nss_protocol = PMAPPROG;
-				nss.nss_version = 0;
+				if (PVER2MAJOR(nmp->nm_max_vers) >= NFS_VER4 && tryv4) {
+					nss.nss_port = NFS_PORT;
+					nss.nss_protocol = NFS_PROG;
+					nss.nss_version = 4;
+					nss.nss_flags |= NSS_FALLBACK2PMAP;
+				} else {
+					/* ...connect to portmapper first if we (may) need any ports. */
+					nss.nss_port = PMAPPORT;
+					nss.nss_protocol = PMAPPROG;
+					nss.nss_version = 0;
+				}
 			} else {
 				/* ...connect to NFS port first. */
 				nss.nss_port = nmp->nm_nfsport;
@@ -1118,10 +1138,23 @@ tryagain:
 				nss.nss_version = 0;
 			}
 		} else if (nmp->nm_vers >= NFS_VER4) {
-			/* For NFSv4, we use the given (or default) port. */
-			nss.nss_port = nmp->nm_nfsport ? nmp->nm_nfsport : NFS_PORT;
-			nss.nss_protocol = NFS_PROG;
-			nss.nss_version = 4;
+			if (tryv4) {
+				/* For NFSv4, we use the given (or default) port. */
+				nss.nss_port = nmp->nm_nfsport ? nmp->nm_nfsport : NFS_PORT;
+				nss.nss_protocol = NFS_PROG;
+				nss.nss_version = 4;
+				/*
+				 * set NSS_FALLBACK2PMAP here to pick up any non standard port
+				 * if no port is specified on the mount;
+				 * Note nm_vers is set so we will only try NFS_VER4.
+				 */
+				if (!nmp->nm_nfsport)
+					nss.nss_flags |= NSS_FALLBACK2PMAP;
+			} else {
+				nss.nss_port = PMAPPORT;
+				nss.nss_protocol = PMAPPROG;
+				nss.nss_version = 0;
+			}
 		} else {
 			/* For NFSv3/v2... */
 			if (!nmp->nm_nfsport || (!NM_OMATTR_GIVEN(nmp, FH) && !nmp->nm_mountport)) {
@@ -1176,6 +1209,13 @@ keepsearching:
 	if (error || !nss.nss_sock) {
 		/* search failed */
 		nfs_socket_search_cleanup(&nss);
+		if (nss.nss_flags & NSS_FALLBACK2PMAP) {
+			tryv4 = 0;
+			NFS_SOCK_DBG("nfs connect %s TCP failed for V4 %d %d, trying PORTMAP\n",
+				vfs_statfs(nmp->nm_mountp)->f_mntfromname, error, nss.nss_error);
+			goto tryagain;
+		}
+
 		if (!error && (nss.nss_sotype == SOCK_STREAM) && !nmp->nm_sotype && (nmp->nm_vers < NFS_VER4)) {
 			/* Try using UDP */
 			sotype = SOCK_DGRAM;
@@ -1222,30 +1262,21 @@ keepsearching:
 		/* Set up socket address and port for NFS socket. */
 		bcopy(nso->nso_saddr, &ss, nso->nso_saddr->sa_len);
 
-		/* If NFS version not set, try NFSv3 then NFSv2. */
-		nfsvers = nmp->nm_vers ? nmp->nm_vers : NFS_VER3;
-
+		/* If NFS version not set, try nm_max_vers down to nm_min_vers */
+		nfsvers = nmp->nm_vers ? nmp->nm_vers : PVER2MAJOR(nmp->nm_max_vers);
 		if (!(port = nmp->nm_nfsport)) {
 			if (ss.ss_family == AF_INET)
 				((struct sockaddr_in*)&ss)->sin_port = htons(0);
 			else if (ss.ss_family == AF_INET6)
 				((struct sockaddr_in6*)&ss)->sin6_port = htons(0);
-			error = nfs_portmap_lookup(nmp, vfs_context_current(), (struct sockaddr*)&ss,
-					nso->nso_so, NFS_PROG, nfsvers,
-					(nso->nso_sotype == SOCK_DGRAM) ? IPPROTO_UDP : IPPROTO_TCP, timeo);
-			if (!error) {
-				if (ss.ss_family == AF_INET)
-					port = ntohs(((struct sockaddr_in*)&ss)->sin_port);
-				else if (ss.ss_family == AF_INET6)
-					port = ntohs(((struct sockaddr_in6*)&ss)->sin6_port);
-				if (!port)
-					error = EPROGUNAVAIL;
-			}
-			if (error && !nmp->nm_vers) {
-				nfsvers = NFS_VER2;
+			for (; nfsvers >= (int)PVER2MAJOR(nmp->nm_min_vers); nfsvers--) {
+				if (nmp->nm_vers && nmp->nm_vers != nfsvers)
+					continue; /* Wrong version */
+				if (nfsvers == NFS_VER4 && nso->nso_sotype == SOCK_DGRAM)
+					continue; /* NFSv4 does not do UDP */
 				error = nfs_portmap_lookup(nmp, vfs_context_current(), (struct sockaddr*)&ss,
-						nso->nso_so, NFS_PROG, nfsvers,
-						(nso->nso_sotype == SOCK_DGRAM) ? IPPROTO_UDP : IPPROTO_TCP, timeo);
+							   nso->nso_so, NFS_PROG, nfsvers,
+							   (nso->nso_sotype == SOCK_DGRAM) ? IPPROTO_UDP : IPPROTO_TCP, timeo);
 				if (!error) {
 					if (ss.ss_family == AF_INET)
 						port = ntohs(((struct sockaddr_in*)&ss)->sin_port);
@@ -1253,8 +1284,14 @@ keepsearching:
 						port = ntohs(((struct sockaddr_in6*)&ss)->sin6_port);
 					if (!port)
 						error = EPROGUNAVAIL;
+					if (port == NFS_PORT && nfsvers == NFS_VER4 && tryv4 == 0)
+						continue; /* We already tried this */
 				}
+				if (!error)
+					break;
 			}
+			if (nfsvers < (int)PVER2MAJOR(nmp->nm_min_vers) && error == 0)
+				error = EPROGUNAVAIL;
 			if (error) {
 				nfs_socket_search_update_error(&nss, error);
 				nfs_socket_destroy(nso);
@@ -1262,6 +1299,7 @@ keepsearching:
 			}
 		}
 		/* Create NFS protocol socket and add it to the list of sockets. */
+		/* N.B. If nfsvers is NFS_VER4 at this point then we're on a non standard port */
 		error = nfs_socket_create(nmp, (struct sockaddr*)&ss, nso->nso_sotype, port,
 				NFS_PROG, nfsvers, NMFLAG(nmp, RESVPORT), &nsonfs);
 		if (error) {
@@ -1680,7 +1718,7 @@ nfs_reconnect(struct nfsmount *nmp)
 				rq->r_flags |= R_MUSTRESEND;
 				rq->r_rtt = -1;
 				wakeup(rq);
-				if ((rq->r_flags & (R_ASYNC|R_ASYNCWAIT|R_SENDING)) == R_ASYNC)
+				if ((rq->r_flags & (R_IOD|R_ASYNC|R_ASYNCWAIT|R_SENDING)) == R_ASYNC)
 					nfs_asyncio_resend(rq);
 			}
 			lck_mtx_unlock(&rq->r_mtx);
@@ -1751,7 +1789,7 @@ nfs_need_reconnect(struct nfsmount *nmp)
 				rq->r_flags |= R_MUSTRESEND;
 				rq->r_rtt = -1;
 				wakeup(rq);
-				if ((rq->r_flags & (R_ASYNC|R_ASYNCWAIT|R_SENDING)) == R_ASYNC)
+				if ((rq->r_flags & (R_IOD|R_ASYNC|R_ASYNCWAIT|R_SENDING)) == R_ASYNC)
 					nfs_asyncio_resend(rq);
 			}
 			lck_mtx_unlock(&rq->r_mtx);
@@ -1846,6 +1884,7 @@ nfs_mount_sock_thread(void *arg, __unused wait_result_t wr)
 			req->r_rchain.tqe_next = NFSREQNOLIST;
 			lck_mtx_unlock(&nmp->nm_lock);
 			lck_mtx_lock(&req->r_mtx);
+			/* Note that we have a reference on the request that was taken nfs_asyncio_resend */
 			if (req->r_error || req->r_nmrep.nmc_mhead) {
 				dofinish = req->r_callback.rcb_func && !(req->r_flags & R_WAITSENT);
 				req->r_flags &= ~R_RESENDQ;
@@ -1853,6 +1892,7 @@ nfs_mount_sock_thread(void *arg, __unused wait_result_t wr)
 				lck_mtx_unlock(&req->r_mtx);
 				if (dofinish)
 					nfs_asyncio_finish(req);
+				nfs_request_rele(req);
 				lck_mtx_lock(&nmp->nm_lock);
 				continue;
 			}
@@ -1886,6 +1926,7 @@ nfs_mount_sock_thread(void *arg, __unused wait_result_t wr)
 				lck_mtx_unlock(&req->r_mtx);
 				if (dofinish)
 					nfs_asyncio_finish(req);
+				nfs_request_rele(req);
 				lck_mtx_lock(&nmp->nm_lock);
 				error = 0;
 				continue;
@@ -1903,6 +1944,7 @@ nfs_mount_sock_thread(void *arg, __unused wait_result_t wr)
 						req->r_flags &= ~R_RESENDQ;
 					wakeup(req);
 					lck_mtx_unlock(&req->r_mtx);
+					nfs_request_rele(req);
 					lck_mtx_lock(&nmp->nm_lock);
 					continue;
 				}
@@ -1915,6 +1957,7 @@ nfs_mount_sock_thread(void *arg, __unused wait_result_t wr)
 			lck_mtx_unlock(&req->r_mtx);
 			if (dofinish)
 				nfs_asyncio_finish(req);
+			nfs_request_rele(req);
 			lck_mtx_lock(&nmp->nm_lock);
 		}
 		if (nfs_mount_check_dead_timeout(nmp)) {
@@ -3214,6 +3257,9 @@ again:
 
 	nfs_sndunlock(req);
 
+	if (nfs_is_dead(error, nmp))
+		error = EIO;
+
 	/*
 	 * Don't log some errors:
 	 * EPIPE errors may be common with servers that drop idle connections.
@@ -3226,9 +3272,6 @@ again:
 		log(LOG_INFO, "nfs send error %d for server %s\n", error,
 			!req->r_nmp ? "<unmounted>" :
 			vfs_statfs(req->r_nmp->nm_mountp)->f_mntfromname);
-
-	if (nfs_is_dead(error, nmp))
-		error = EIO;
 
 	/* prefer request termination error over other errors */
 	error2 = nfs_sigintr(req->r_nmp, req, req->r_thread, 0);
@@ -3678,26 +3721,24 @@ nfs_request_create(
 void
 nfs_request_destroy(struct nfsreq *req)
 {
-	struct nfsmount *nmp = req->r_np ? NFSTONMP(req->r_np) : req->r_nmp;
+	struct nfsmount *nmp;
 	struct gss_seq *gsp, *ngsp;
 	int clearjbtimeo = 0;
-	struct timespec ts = { 1, 0 };
 
 	if (!req || !(req->r_flags & R_INITTED))
 		return;
+	nmp  = req->r_np ? NFSTONMP(req->r_np) : req->r_nmp;
 	req->r_flags &= ~R_INITTED;
 	if (req->r_lflags & RL_QUEUED)
 		nfs_reqdequeue(req);
 
-	if (req->r_achain.tqe_next != NFSREQNOLIST &&
-	    req->r_achain.tqe_next != NFSIODCOMPLETING) {
+	if (req->r_achain.tqe_next != NFSREQNOLIST) {
 		/* 
 		 * Still on an async I/O queue?
 		 * %%% But which one, we may be on a local iod.
 		 */
 		lck_mtx_lock(nfsiod_mutex);
-		if (nmp && req->r_achain.tqe_next != NFSREQNOLIST &&
-		    req->r_achain.tqe_next != NFSIODCOMPLETING) {
+		if (nmp && req->r_achain.tqe_next != NFSREQNOLIST) {
 			TAILQ_REMOVE(&nmp->nm_iodq, req, r_achain);
 			req->r_achain.tqe_next = NFSREQNOLIST;
 		}
@@ -3719,6 +3760,8 @@ nfs_request_destroy(struct nfsreq *req)
 				wakeup(req2);
 			}
 		}
+		assert((req->r_flags & R_RESENDQ) == 0);
+		/* XXX should we just remove this conditional, we should have a reference if we're resending */
 		if (req->r_rchain.tqe_next != NFSREQNOLIST) {
 			TAILQ_REMOVE(&nmp->nm_resendq, req, r_rchain);
 			req->r_rchain.tqe_next = NFSREQNOLIST;
@@ -3736,9 +3779,6 @@ nfs_request_destroy(struct nfsreq *req)
 		}
 		lck_mtx_unlock(&nmp->nm_lock);
 	}
-	/* Wait for the mount_sock_thread to finish with the resend */
-	while (req->r_flags & R_RESENDQ)
-		msleep(req, &req->r_mtx, (PZERO - 1), "nfsresendqwait", &ts);
 	lck_mtx_unlock(&req->r_mtx);
 
 	if (clearjbtimeo)
@@ -4480,6 +4520,8 @@ nfs_request_async(
 						req->r_flags |= R_SENDING;
 						lck_mtx_unlock(&req->r_mtx);
 						error = nfs_send(req, 1);
+						/* Remove the R_RESENDQ reference */
+						nfs_request_rele(req);
 						lck_mtx_lock(&req->r_mtx);
 						if (error)
 							break;
@@ -4537,6 +4579,9 @@ nfs_request_async_finish(
 				req->r_rchain.tqe_next = NFSREQNOLIST;
 				if (req->r_flags & R_RESENDQ)
 					req->r_flags &= ~R_RESENDQ;
+				/* Remove the R_RESENDQ reference */
+				assert(req->r_refs > 0);
+				req->r_refs--;
 				lck_mtx_unlock(&nmp->nm_lock);
 				break;
 			}
@@ -4554,11 +4599,16 @@ nfs_request_async_finish(
 	}
 
 	while (!error && (req->r_flags & R_RESTART)) {
-		if (asyncio && req->r_resendtime) {  /* send later */
+		if (asyncio) {
+			assert(req->r_achain.tqe_next == NFSREQNOLIST);
 			lck_mtx_lock(&req->r_mtx);
-			nfs_asyncio_resend(req);
+			req->r_flags &= ~R_IOD;
+			if (req->r_resendtime) {  /* send later */
+				nfs_asyncio_resend(req);
+				lck_mtx_unlock(&req->r_mtx);
+				return (EINPROGRESS);
+			}
 			lck_mtx_unlock(&req->r_mtx);
-			return (EINPROGRESS);
 		}
 		req->r_error = 0;
 		req->r_flags &= ~R_RESTART;
@@ -4912,7 +4962,7 @@ restart:
 		req->r_flags |= R_MUSTRESEND;
 		req->r_rtt = -1;
 		wakeup(req);
-		if ((req->r_flags & (R_ASYNC|R_ASYNCWAIT|R_SENDING)) == R_ASYNC)
+		if ((req->r_flags & (R_IOD|R_ASYNC|R_ASYNCWAIT|R_SENDING)) == R_ASYNC)
 			nfs_asyncio_resend(req);
 		lck_mtx_unlock(&req->r_mtx);
 	}

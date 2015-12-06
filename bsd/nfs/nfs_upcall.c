@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc.  All rights reserved.
+ * Copyright (c) 2011-2014 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -164,6 +164,8 @@ nfsrv_uc_dequeue(struct nfsrv_sock *slp)
 		OSDecrementAtomic(&nfsrv_uc_queue_count);
 #endif		
 	}
+	FREE(slp->ns_ua, M_TEMP);
+	slp->ns_ua = NULL;
 	lck_mtx_unlock(myqueue->ucq_lock);
 }
 
@@ -315,9 +317,9 @@ nfsrv_uc_proxy(socket_t so, void *arg, int waitflag)
 	lck_mtx_lock(myqueue->ucq_lock);
 	DPRINT("nfsrv_uc_proxy called for %p (%p)\n", uap, uap->nua_slp);
 	DPRINT("\tUp-call queued on %d for wakeup of %p\n", qi, myqueue);
-	if (uap->nua_flags & NFS_UC_QUEUED) {
+	if (uap == NULL || uap->nua_flags & NFS_UC_QUEUED) {
 		lck_mtx_unlock(myqueue->ucq_lock);
-		return;  /* Already queued */
+		return;  /* Already queued or freed */
 	}
 
 	uap->nua_so = so;
@@ -366,7 +368,7 @@ nfsrv_uc_addsock(struct nfsrv_sock *slp, int start)
 	 * generate up-calls.
 	 */
 	if (nfsrv_uc_thread_count) {
-		MALLOC(arg, struct nfsrv_uc_arg *, sizeof (struct nfsrv_uc_arg), M_NFSSVC, M_WAITOK | M_ZERO);
+		MALLOC(arg, struct nfsrv_uc_arg *, sizeof (struct nfsrv_uc_arg), M_TEMP, M_WAITOK | M_ZERO);
 		if (arg == NULL)
 			goto direct;
 

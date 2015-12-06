@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -56,25 +56,25 @@ static int mptcp_usr_detach(struct socket *);
 static int mptcp_attach(struct socket *, struct proc *);
 static int mptcp_detach(struct socket *, struct mppcb *);
 static int mptcp_connectx(struct mptses *, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, associd_t, connid_t *,
-    uint32_t, void *, uint32_t);
+    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+    sae_connid_t *, uint32_t, void *, uint32_t);
 static int mptcp_usr_connectx(struct socket *, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, associd_t, connid_t *,
-    uint32_t, void *, uint32_t);
+    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+    sae_connid_t *, uint32_t, void *, uint32_t, struct uio *, user_ssize_t *);
 static int mptcp_getassocids(struct mptses *, uint32_t *, user_addr_t);
-static int mptcp_getconnids(struct mptses *, associd_t, uint32_t *,
+static int mptcp_getconnids(struct mptses *, sae_associd_t, uint32_t *,
     user_addr_t);
-static int mptcp_getconninfo(struct mptses *, connid_t *, uint32_t *,
+static int mptcp_getconninfo(struct mptses *, sae_connid_t *, uint32_t *,
     uint32_t *, int32_t *, user_addr_t, socklen_t *, user_addr_t, socklen_t *,
     uint32_t *, user_addr_t, uint32_t *);
 static int mptcp_usr_control(struct socket *, u_long, caddr_t, struct ifnet *,
     struct proc *);
-static int mptcp_disconnectx(struct mptses *, associd_t, connid_t);
+static int mptcp_disconnectx(struct mptses *, sae_associd_t, sae_connid_t);
 static int mptcp_usr_disconnect(struct socket *);
-static int mptcp_usr_disconnectx(struct socket *, associd_t, connid_t);
+static int mptcp_usr_disconnectx(struct socket *, sae_associd_t, sae_connid_t);
 static struct mptses *mptcp_usrclosed(struct mptses *);
-static int mptcp_usr_peeloff(struct socket *, associd_t, struct socket **);
-static int mptcp_peeloff(struct mptses *, associd_t, struct socket **);
+static int mptcp_usr_peeloff(struct socket *, sae_associd_t, struct socket **);
+static int mptcp_peeloff(struct mptses *, sae_associd_t, struct socket **);
 static int mptcp_usr_rcvd(struct socket *, int);
 static int mptcp_usr_send(struct socket *, int, struct mbuf *,
     struct sockaddr *, struct mbuf *, struct proc *);
@@ -154,9 +154,9 @@ static int
 mptcp_attach(struct socket *mp_so, struct proc *p)
 {
 #pragma unused(p)
-	struct mptses *mpte;
-	struct mptcb *mp_tp;
-	struct mppcb *mpp;
+	struct mptses *mpte = NULL;
+	struct mptcb *mp_tp = NULL;
+	struct mppcb *mpp = NULL;
 	int error = 0;
 
 	if (mp_so->so_snd.sb_hiwat == 0 || mp_so->so_rcv.sb_hiwat == 0) {
@@ -177,25 +177,16 @@ mptcp_attach(struct socket *mp_so, struct proc *p)
 	mp_so->so_rcv.sb_flags &= ~SB_AUTOSIZE;
 	mp_so->so_snd.sb_flags &= ~SB_AUTOSIZE;
 
-	if ((error = mp_pcballoc(mp_so, &mtcbinfo)) != 0)
+	if ((error = mp_pcballoc(mp_so, &mtcbinfo)) != 0) {
 		goto out;
+	}
 
 	mpp = sotomppcb(mp_so);
 	VERIFY(mpp != NULL);
-
-	mpte = mptcp_sescreate(mp_so, mpp);
-	if (mpte == NULL) {
-		mp_pcbdetach(mpp);
-		error = ENOBUFS;
-		goto out;
-	}
+	mpte = (struct mptses *)mpp->mpp_pcbe;
+	VERIFY(mpte != NULL);
 	mp_tp = mpte->mpte_mptcb;
 	VERIFY(mp_tp != NULL);
-
-	MPT_LOCK(mp_tp);
-	mp_tp->mpt_state = MPTCPS_CLOSED;
-	MPT_UNLOCK(mp_tp);
-
 out:
 	return (error);
 }
@@ -217,7 +208,7 @@ mptcp_detach(struct socket *mp_so, struct mppcb *mpp)
 	mppi = mpp->mpp_pcbinfo;
 	VERIFY(mppi != NULL);
 
-	mpte = &((struct mpp_mtp *)mpp)->mpp_ses;
+	__IGNORE_WCASTALIGN(mpte = &((struct mpp_mtp *)mpp)->mpp_ses);
 	VERIFY(mpte->mpte_mppcb == mpp);
 
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
@@ -230,7 +221,7 @@ mptcp_detach(struct socket *mp_so, struct mppcb *mpp)
 	 */
 	mp_pcbdetach(mpp);
 
-	(void) mptcp_disconnectx(mpte, ASSOCID_ALL, CONNID_ALL);
+	(void) mptcp_disconnectx(mpte, SAE_ASSOCID_ALL, SAE_CONNID_ALL);
 
 	/*
 	 * XXX: adi@apple.com
@@ -250,7 +241,7 @@ mptcp_detach(struct socket *mp_so, struct mppcb *mpp)
 static int
 mptcp_connectx(struct mptses *mpte, struct sockaddr_list **src_sl,
     struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
-    associd_t aid, connid_t *pcid, uint32_t flags, void *arg,
+    sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
     uint32_t arglen)
 {
 #pragma unused(p, aid, flags, arg, arglen)
@@ -264,10 +255,12 @@ mptcp_connectx(struct mptses *mpte, struct sockaddr_list **src_sl,
 	VERIFY(dst_sl != NULL && *dst_sl != NULL);
 	VERIFY(pcid != NULL);
 
-	mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx\n", __func__,
-	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)));
+	mptcplog((LOG_DEBUG, "MPTCP Socket: "
+	    "%s: mp_so 0x%llx\n", __func__,
+	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)),
+	    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
 
-	DTRACE_MPTCP3(connectx, struct mptses *, mpte, associd_t, aid,
+	DTRACE_MPTCP3(connectx, struct mptses *, mpte, sae_associd_t, aid,
 	    struct socket *, mp_so);
 
 	mpts = mptcp_subflow_alloc(M_WAITOK);
@@ -312,12 +305,14 @@ out:
 static int
 mptcp_usr_connectx(struct socket *mp_so, struct sockaddr_list **src_sl,
     struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
-    associd_t aid, connid_t *pcid, uint32_t flags, void *arg,
-    uint32_t arglen)
+    sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
+    uint32_t arglen, struct uio *uio, user_ssize_t *bytes_written)
 {
-#pragma unused(arg, arglen)
+#pragma unused(arg, arglen, uio, bytes_written)
 	struct mppcb *mpp = sotomppcb(mp_so);
-	struct mptses *mpte;
+	struct mptses *mpte = NULL;
+	struct mptcb *mp_tp = NULL;
+
 	int error = 0;
 
 	if (mpp == NULL || mpp->mpp_state == MPPCB_STATE_DEAD) {
@@ -326,6 +321,14 @@ mptcp_usr_connectx(struct socket *mp_so, struct sockaddr_list **src_sl,
 	}
 	mpte = mptompte(mpp);
 	VERIFY(mpte != NULL);
+
+	mp_tp = mpte->mpte_mptcb;
+	VERIFY(mp_tp != NULL);
+
+	if (mp_tp->mpt_flags &  MPTCPF_FALLBACK_TO_TCP) {
+		error = EINVAL;
+		goto out;
+	}
 
 	error = mptcp_connectx(mpte, src_sl, dst_sl, p, ifscope,
 	    aid, pcid, flags, arg, arglen);
@@ -342,7 +345,7 @@ mptcp_getassocids(struct mptses *mpte, uint32_t *cnt, user_addr_t aidp)
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
 
 	/* MPTCP has at most 1 association */
-	*cnt = (mpte->mpte_associd != ASSOCID_ANY) ? 1 : 0;
+	*cnt = (mpte->mpte_associd != SAE_ASSOCID_ANY) ? 1 : 0;
 
 	/* just asking how many there are? */
 	if (aidp == USER_ADDR_NULL)
@@ -356,7 +359,7 @@ mptcp_getassocids(struct mptses *mpte, uint32_t *cnt, user_addr_t aidp)
  * Handle SIOCGCONNIDS ioctl for PF_MULTIPATH domain.
  */
 static int
-mptcp_getconnids(struct mptses *mpte, associd_t aid, uint32_t *cnt,
+mptcp_getconnids(struct mptses *mpte, sae_associd_t aid, uint32_t *cnt,
     user_addr_t cidp)
 {
 	struct mptsub *mpts;
@@ -364,7 +367,7 @@ mptcp_getconnids(struct mptses *mpte, associd_t aid, uint32_t *cnt,
 
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
 
-	if (aid != ASSOCID_ANY && aid != ASSOCID_ALL &&
+	if (aid != SAE_ASSOCID_ANY && aid != SAE_ASSOCID_ALL &&
 	    aid != mpte->mpte_associd)
 		return (EINVAL);
 
@@ -389,7 +392,7 @@ mptcp_getconnids(struct mptses *mpte, associd_t aid, uint32_t *cnt,
  * Handle SIOCGCONNINFO ioctl for PF_MULTIPATH domain.
  */
 static int
-mptcp_getconninfo(struct mptses *mpte, connid_t *cid, uint32_t *flags,
+mptcp_getconninfo(struct mptses *mpte, sae_connid_t *cid, uint32_t *flags,
     uint32_t *ifindex, int32_t *soerror, user_addr_t src, socklen_t *src_len,
     user_addr_t dst, socklen_t *dst_len, uint32_t *aux_type,
     user_addr_t aux_data, uint32_t *aux_len)
@@ -402,15 +405,15 @@ mptcp_getconninfo(struct mptses *mpte, connid_t *cid, uint32_t *flags,
 
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
 
-	if (*cid == CONNID_ALL)
+	if (*cid == SAE_CONNID_ALL)
 		return (EINVAL);
 
 	TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
-		if (mpts->mpts_connid == *cid || *cid == CONNID_ANY)
+		if (mpts->mpts_connid == *cid || *cid == SAE_CONNID_ANY)
 			break;
 	}
 	if (mpts == NULL)
-		return ((*cid == CONNID_ANY) ? ENXIO : EINVAL);
+		return ((*cid == SAE_CONNID_ANY) ? ENXIO : EINVAL);
 
 	MPTS_LOCK(mpts);
 	ifp = mpts->mpts_outif;
@@ -484,8 +487,11 @@ mptcp_getconninfo(struct mptses *mpte, connid_t *cid, uint32_t *flags,
 				goto out;
 		}
 	}
-	mptcplog2((LOG_INFO, "%s: cid %d flags %x \n",
-	    __func__, mpts->mpts_connid, mpts->mpts_flags));
+	mptcplog((LOG_DEBUG, "MPTCP Socket: "
+	    "%s: cid %d flags %x \n",
+	    __func__, mpts->mpts_connid, mpts->mpts_flags),
+	    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_VERBOSE);
+
 out:
 	MPTS_UNLOCK(mpts);
 	return (error);
@@ -495,15 +501,17 @@ out:
  * Handle SIOCSCONNORDER
  */
 int
-mptcp_setconnorder(struct mptses *mpte, connid_t cid, uint32_t rank)
+mptcp_setconnorder(struct mptses *mpte, sae_connid_t cid, uint32_t rank)
 {
 	struct mptsub *mpts, *mpts1;
 	int error = 0;
 
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
-	mptcplog((LOG_DEBUG, "%s: cid %d rank %d \n", __func__, cid, rank));
+	mptcplog((LOG_DEBUG, "MPTCP Socket: "
+	    "%s: cid %d rank %d \n", __func__, cid, rank),
+	    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_VERBOSE);
 
-	if (cid == CONNID_ANY || cid == CONNID_ALL) {
+	if (cid == SAE_CONNID_ANY || cid == SAE_CONNID_ALL) {
 		error = EINVAL;
 		goto out;
 	}
@@ -588,8 +596,7 @@ mptcp_connorder_helper(struct mptsub *mpts)
 		tp->t_mpflags &= ~TMPF_BACKUP_PATH;
 	else
 		tp->t_mpflags |= TMPF_BACKUP_PATH;
-	mptcplog((LOG_DEBUG, "%s cid %d flags %x", __func__,
-	    mpts->mpts_connid, mpts->mpts_flags));	
+
 	socket_unlock(so, 0);
 
 }
@@ -598,7 +605,7 @@ mptcp_connorder_helper(struct mptsub *mpts)
  * Handle SIOCSGONNORDER
  */
 int
-mptcp_getconnorder(struct mptses *mpte, connid_t cid, uint32_t *rank)
+mptcp_getconnorder(struct mptses *mpte, sae_connid_t cid, uint32_t *rank)
 {
 	struct mptsub *mpts;
 	int error = 0;
@@ -607,7 +614,7 @@ mptcp_getconnorder(struct mptses *mpte, connid_t cid, uint32_t *rank)
 	VERIFY(rank != NULL);
 	*rank = 0;
 
-	if (cid == CONNID_ANY || cid == CONNID_ALL) {
+	if (cid == SAE_CONNID_ANY || cid == SAE_CONNID_ALL) {
 		error = EINVAL;
 		goto out;
 	}
@@ -748,7 +755,7 @@ out:
  * connection while keeping the MPTCP-level connection (association).
  */
 static int
-mptcp_disconnectx(struct mptses *mpte, associd_t aid, connid_t cid)
+mptcp_disconnectx(struct mptses *mpte, sae_associd_t aid, sae_connid_t cid)
 {
 	struct mptsub *mpts;
 	struct socket *mp_so;
@@ -760,16 +767,19 @@ mptcp_disconnectx(struct mptses *mpte, associd_t aid, connid_t cid)
 	mp_so = mpte->mpte_mppcb->mpp_socket;
 	mp_tp = mpte->mpte_mptcb;
 
-	mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx aid %d cid %d %d\n", __func__,
-	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), aid, cid, mp_so->so_error));
-	DTRACE_MPTCP5(disconnectx, struct mptses *, mpte, associd_t, aid,
-	    connid_t, cid, struct socket *, mp_so, struct mptcb *, mp_tp);
+	mptcplog((LOG_DEBUG, "MPTCP Socket: "
+	    "%s: mp_so 0x%llx aid %d cid %d %d\n", __func__,
+	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), aid, cid, mp_so->so_error),
+	    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
 
-	VERIFY(aid == ASSOCID_ANY || aid == ASSOCID_ALL ||
+	DTRACE_MPTCP5(disconnectx, struct mptses *, mpte, sae_associd_t, aid,
+	    sae_connid_t, cid, struct socket *, mp_so, struct mptcb *, mp_tp);
+
+	VERIFY(aid == SAE_ASSOCID_ANY || aid == SAE_ASSOCID_ALL ||
 	    aid == mpte->mpte_associd);
 
 	/* terminate the association? */
-	if (cid == CONNID_ANY || cid == CONNID_ALL) {
+	if (cid == SAE_CONNID_ANY || cid == SAE_CONNID_ALL) {
 		/* if we're not detached, go thru socket state checks */
 		if (!(mp_so->so_flags & SOF_PCBCLEARING)) {
 			if (!(mp_so->so_state & (SS_ISCONNECTED|
@@ -799,10 +809,26 @@ mptcp_disconnectx(struct mptses *mpte, associd_t aid, connid_t cid)
 				(void) mptcp_output(mpte);
 		}
 	} else {
+		bool disconnect_embryonic_subflows = false;
+		struct socket *so = NULL;
+		
 		TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
 			if (mpts->mpts_connid != cid)
 				continue;
+
 			MPTS_LOCK(mpts);
+			/*
+			 * Check if disconnected subflow is the one used
+			 * to initiate MPTCP connection.
+			 * If it is and the connection is not yet join ready
+			 * disconnect all other subflows.
+			 */
+			so = mpts->mpts_socket;
+			if (!(mp_tp->mpt_flags & MPTCPF_JOIN_READY) && 
+			    so && !(so->so_flags & SOF_MP_SEC_SUBFLOW)) {
+				disconnect_embryonic_subflows = true;
+			}
+
 			mpts->mpts_flags |= MPTSF_USER_DISCONNECT;
 			mptcp_subflow_disconnect(mpte, mpts, FALSE);
 			MPTS_UNLOCK(mpts);
@@ -812,6 +838,16 @@ mptcp_disconnectx(struct mptses *mpte, associd_t aid, connid_t cid)
 		if (mpts == NULL) {
 			error = EINVAL;
 			goto out;
+		}
+		
+		if (disconnect_embryonic_subflows) {
+			TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
+				if (mpts->mpts_connid == cid)
+					continue;
+				MPTS_LOCK(mpts);
+				mptcp_subflow_disconnect(mpte, mpts, TRUE);
+				MPTS_UNLOCK(mpts);
+			}
 		}
 	}
 
@@ -836,7 +872,7 @@ mptcp_usr_disconnect(struct socket *mp_so)
 {
 	int error = 0;
 
-	error = mptcp_usr_disconnectx(mp_so, ASSOCID_ALL, CONNID_ALL);
+	error = mptcp_usr_disconnectx(mp_so, SAE_ASSOCID_ALL, SAE_CONNID_ALL);
 	return (error);
 }
 
@@ -844,7 +880,7 @@ mptcp_usr_disconnect(struct socket *mp_so)
  * User-protocol pru_disconnectx callback.
  */
 static int
-mptcp_usr_disconnectx(struct socket *mp_so, associd_t aid, connid_t cid)
+mptcp_usr_disconnectx(struct socket *mp_so, sae_associd_t aid, sae_connid_t cid)
 {
 	struct mppcb *mpp = sotomppcb(mp_so);
 	struct mptses *mpte;
@@ -858,7 +894,7 @@ mptcp_usr_disconnectx(struct socket *mp_so, associd_t aid, connid_t cid)
 	VERIFY(mpte != NULL);
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
 
-	if (aid != ASSOCID_ANY && aid != ASSOCID_ALL &&
+	if (aid != SAE_ASSOCID_ANY && aid != SAE_ASSOCID_ALL &&
 	    aid != mpte->mpte_associd) {
 		error = EINVAL;
 		goto out;
@@ -915,7 +951,7 @@ mptcp_usrclosed(struct mptses *mpte)
  * User-protocol pru_peeloff callback.
  */
 static int
-mptcp_usr_peeloff(struct socket *mp_so, associd_t aid, struct socket **psop)
+mptcp_usr_peeloff(struct socket *mp_so, sae_associd_t aid, struct socket **psop)
 {
 	struct mppcb *mpp = sotomppcb(mp_so);
 	struct mptses *mpte;
@@ -942,7 +978,7 @@ out:
  * yet associated (MPTCP-level connection has not been established.)
  */
 static int
-mptcp_peeloff(struct mptses *mpte, associd_t aid, struct socket **psop)
+mptcp_peeloff(struct mptses *mpte, sae_associd_t aid, struct socket **psop)
 {
 	struct socket *so = NULL, *mp_so;
 	struct mptsub *mpts;
@@ -954,16 +990,16 @@ mptcp_peeloff(struct mptses *mpte, associd_t aid, struct socket **psop)
 	VERIFY(psop != NULL);
 	*psop = NULL;
 
-	DTRACE_MPTCP3(peeloff, struct mptses *, mpte, associd_t, aid,
+	DTRACE_MPTCP3(peeloff, struct mptses *, mpte, sae_associd_t, aid,
 	    struct socket *, mp_so);
 
 	/* peeloff cannot happen after an association is established */
-	if (mpte->mpte_associd != ASSOCID_ANY) {
+	if (mpte->mpte_associd != SAE_ASSOCID_ANY) {
 		error = EINVAL;
 		goto out;
 	}
 
-	if (aid != ASSOCID_ANY && aid != ASSOCID_ALL) {
+	if (aid != SAE_ASSOCID_ANY && aid != SAE_ASSOCID_ALL) {
 		error = EINVAL;
 		goto out;
 	}
@@ -1006,8 +1042,11 @@ mptcp_peeloff(struct mptses *mpte, associd_t aid, struct socket **psop)
 	}
 	*psop = so;
 
-	mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx\n", __func__,
-	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)));
+	mptcplog((LOG_DEBUG, "MPTCP Socket: "
+	    "%s: mp_so 0x%llx\n", __func__,
+	    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)),
+	    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
+
 out:
 	return (error);
 }
@@ -1653,13 +1692,15 @@ mptcp_setopt(struct mptses *mpte, struct sockopt *sopt)
 		if (mpo == NULL) {
 			error = ENOBUFS;
 		} else {
-			mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx sopt %s "
+			mptcplog((LOG_DEBUG, "MPTCP Socket: "
+			    "%s: mp_so 0x%llx sopt %s "
 			    "val %d %s\n", __func__,
 			    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so),
 			    mptcp_sopt2str(level, optname, buf,
 			    sizeof (buf)), optval,
 			    (mpo->mpo_flags & MPOF_ATTACHED) ?
-			    "updated" : "recorded"));
+			    "updated" : "recorded"),
+			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
 
 			/* initialize or update, as needed */
 			mpo->mpo_intval = optval;
@@ -1695,16 +1736,20 @@ mptcp_setopt(struct mptses *mpte, struct sockopt *sopt)
 	}
 out:
 	if (error == 0 && mpo != NULL) {
-		mptcplog((LOG_ERR, "%s: mp_so 0x%llx sopt %s val %d set %s\n",
+		mptcplog((LOG_ERR, "MPTCP Socket: "
+		    "%s: mp_so 0x%llx sopt %s val %d set %s\n",
 		    __func__, (u_int64_t)VM_KERNEL_ADDRPERM(mp_so),
 		    mptcp_sopt2str(level, optname, buf,
 		    sizeof (buf)), optval, (mpo->mpo_flags & MPOF_INTERIM) ?
-		    "pending" : "successful"));
+		    "pending" : "successful"),
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 	} else if (error != 0) {
-		mptcplog((LOG_ERR, "%s: mp_so 0x%llx sopt %s can't be issued "
+		mptcplog((LOG_ERR, "MPTCP Socket: "
+		    "%s: mp_so 0x%llx sopt %s can't be issued "
 		    "error %d\n", __func__,
 		    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), mptcp_sopt2str(level,
-		    optname, buf, sizeof (buf)), error));
+		    optname, buf, sizeof (buf)), error),
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 	}
 	return (error);
 }
@@ -1841,10 +1886,12 @@ mptcp_ctloutput(struct socket *mp_so, struct sockopt *sopt)
 	/* we only handle socket and TCP-level socket options for MPTCP */
 	if (sopt->sopt_level != SOL_SOCKET && sopt->sopt_level != IPPROTO_TCP) {
 		char buf[32];
-		mptcplog((LOG_DEBUG, "%s: mp_so 0x%llx sopt %s level not "
+		mptcplog((LOG_DEBUG, "MPTCP Socket: "
+		    "%s: mp_so 0x%llx sopt %s level not "
 		    "handled\n", __func__, (u_int64_t)VM_KERNEL_ADDRPERM(mp_so),
 		    mptcp_sopt2str(sopt->sopt_level,
-		    sopt->sopt_name, buf, sizeof (buf))));
+		    sopt->sopt_name, buf, sizeof (buf))),
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
 		error = EINVAL;
 		goto out;
 	}

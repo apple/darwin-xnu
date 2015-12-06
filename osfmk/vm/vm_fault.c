@@ -148,21 +148,30 @@ uint64_t vm_hard_throttle_threshold;
 boolean_t current_thread_aborted(void);
 
 /* Forward declarations of internal routines. */
-extern kern_return_t vm_fault_wire_fast(
+static kern_return_t vm_fault_wire_fast(
 				vm_map_t	map,
 				vm_map_offset_t	va,
+				vm_prot_t       prot,
 				vm_map_entry_t	entry,
 				pmap_t		pmap,
 				vm_map_offset_t	pmap_addr,
 				ppnum_t		*physpage_p);
 
-extern void vm_fault_continue(void);
+static kern_return_t vm_fault_internal(
+		vm_map_t	map,
+		vm_map_offset_t	vaddr,
+		vm_prot_t	caller_prot,
+		boolean_t	change_wiring,
+		int             interruptible,
+		pmap_t		pmap,
+		vm_map_offset_t	pmap_addr,
+		ppnum_t		*physpage_p);
 
-extern void vm_fault_copy_cleanup(
+static void vm_fault_copy_cleanup(
 				vm_page_t	page,
 				vm_page_t	top_page);
 
-extern void vm_fault_copy_dst_cleanup(
+static void vm_fault_copy_dst_cleanup(
 				vm_page_t	page);
 
 #if	VM_FAULT_CLASSIFY
@@ -183,6 +192,11 @@ unsigned long vm_cs_validated_dirtied = 0;
 unsigned long vm_cs_bitmap_validated = 0;
 
 void vm_pre_fault(vm_map_offset_t);
+
+extern int not_in_kdp;
+extern char *kdp_compressor_decompressed_page;
+extern addr64_t	kdp_compressor_decompressed_page_paddr;
+extern ppnum_t	kdp_compressor_decompressed_page_ppnum;
 
 /*
  *	Routine:	vm_fault_init
@@ -226,6 +240,19 @@ vm_fault_init(void)
 		PE_get_default("kern.vm_compressor", &vm_compressor_mode, sizeof(vm_compressor_mode));
 	}
 	PE_parse_boot_argn("vm_compressor_threads", &vm_compressor_thread_count, sizeof (vm_compressor_thread_count));
+
+	if (PE_parse_boot_argn("vm_compressor_immediate", &vm_compressor_temp, sizeof (vm_compressor_temp)))
+		vm_compressor_immediate_preferred_override = TRUE;
+	else {
+		if (PE_get_default("kern.vm_compressor_immediate", &vm_compressor_temp, sizeof(vm_compressor_temp)))
+			vm_compressor_immediate_preferred_override = TRUE;
+	}
+	if (vm_compressor_immediate_preferred_override == TRUE) {
+		if (vm_compressor_temp)
+			vm_compressor_immediate_preferred = TRUE;
+		else
+			vm_compressor_immediate_preferred = FALSE;
+	}
 	printf("\"vm_compressor_mode\" is %d\n", vm_compressor_mode);
 }
 
@@ -551,6 +578,7 @@ vm_fault_deactivate_behind(
 #if (DEVELOPMENT || DEBUG)
 uint32_t	vm_page_creation_throttled_hard = 0;
 uint32_t	vm_page_creation_throttled_soft = 0;
+uint64_t	vm_page_creation_throttle_avoided = 0;
 #endif /* DEVELOPMENT || DEBUG */
 
 static int
@@ -582,6 +610,12 @@ vm_page_throttled(boolean_t page_kept)
 	if ((vm_page_free_count < vm_page_throttle_limit || ((COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) && SWAPPER_NEEDS_TO_UNTHROTTLE())) &&
 	    thread->t_page_creation_count > (VM_PAGE_CREATION_THROTTLE_PERIOD_SECS * VM_PAGE_CREATION_THROTTLE_RATE_PER_SEC)) {
 		
+		if (vm_page_free_wanted == 0 && vm_page_free_wanted_privileged == 0) {
+#if (DEVELOPMENT || DEBUG)
+			OSAddAtomic64(1, &vm_page_creation_throttle_avoided);
+#endif
+			goto no_throttle;
+		}
 		clock_get_system_microtime(&tv_sec, &tv_usec);
 
 		elapsed_sec = tv_sec - thread->t_page_creation_time;
@@ -628,6 +662,7 @@ no_throttle:
 
 	return (0);
 }
+
 
 /*
  * check for various conditions that would
@@ -679,26 +714,28 @@ vm_fault_check(vm_object_t object, vm_page_t m, vm_page_t first_m, boolean_t int
 			return (VM_FAULT_RETRY);
 		}
 	}
-	if (page_throttle == TRUE && (throttle_delay = vm_page_throttled(FALSE))) {
-	        /*
-		 * we're throttling zero-fills...
-		 * treat this as if we couldn't grab a page
-		 */
-	        if (m != VM_PAGE_NULL)
-		        VM_PAGE_FREE(m);
-		vm_fault_cleanup(object, first_m);
+	if (page_throttle == TRUE) {
+		if ((throttle_delay = vm_page_throttled(FALSE))) {
+			/*
+			 * we're throttling zero-fills...
+			 * treat this as if we couldn't grab a page
+			 */
+			if (m != VM_PAGE_NULL)
+				VM_PAGE_FREE(m);
+			vm_fault_cleanup(object, first_m);
 
-		VM_DEBUG_EVENT(vmf_check_zfdelay, VMF_CHECK_ZFDELAY, DBG_FUNC_NONE, throttle_delay, 0, 0, 0);
+			VM_DEBUG_EVENT(vmf_check_zfdelay, VMF_CHECK_ZFDELAY, DBG_FUNC_NONE, throttle_delay, 0, 0, 0);
 
-		delay(throttle_delay);
+			delay(throttle_delay);
 
-		if (current_thread_aborted()) {
+			if (current_thread_aborted()) {
+				thread_interrupt_level(interruptible_state);
+				return VM_FAULT_INTERRUPTED;
+			}
 			thread_interrupt_level(interruptible_state);
-			return VM_FAULT_INTERRUPTED;
-		}
-		thread_interrupt_level(interruptible_state);
 
-		return (VM_FAULT_MEMORY_SHORTAGE);
+			return (VM_FAULT_MEMORY_SHORTAGE);
+		}
 	}
 	return (VM_FAULT_SUCCESS);
 }
@@ -768,8 +805,8 @@ vm_fault_zero_page(vm_page_t m, boolean_t no_zero_fill)
 			 */
 			assert(!m->pageout_queue);
 
-			VM_PAGE_QUEUES_REMOVE(m);
-
+			vm_page_queues_remove(m);
+			vm_page_check_pageable_safe(m);
 			queue_enter(&vm_page_queue_throttled, m, vm_page_t, pageq);
 			m->throttled = TRUE;
 			vm_page_throttled_count++;
@@ -1249,7 +1286,7 @@ vm_fault_page(
 						vm_page_lockspin_queues();
 
 						assert(!m->pageout_queue);
-						VM_PAGE_QUEUES_REMOVE(m);
+						vm_page_queues_remove(m);
 
 						vm_page_unlock_queues();
 					}
@@ -1346,7 +1383,7 @@ vm_fault_page(
 				 */
 			        vm_page_lockspin_queues();
 				if (m->speculative)
-					VM_PAGE_QUEUES_REMOVE(m);
+					vm_page_queues_remove(m);
 			        vm_page_unlock_queues();
 			}
 
@@ -1459,7 +1496,7 @@ vm_fault_page(
 			}
 
 			if (fault_info && fault_info->batch_pmap_op == TRUE) {
-				vm_page_insert_internal(m, object, offset, FALSE, TRUE, TRUE);
+				vm_page_insert_internal(m, object, offset, VM_KERN_MEMORY_NONE, FALSE, TRUE, TRUE, FALSE, NULL);
 			} else {
 				vm_page_insert(m, object, offset);
 			}
@@ -1572,7 +1609,7 @@ vm_fault_page(
 
 					m->absent = TRUE;
 					if (fault_info && fault_info->batch_pmap_op == TRUE) {
-						vm_page_insert_internal(m, object, offset, FALSE, TRUE, TRUE);
+						vm_page_insert_internal(m, object, offset, VM_KERN_MEMORY_NONE, FALSE, TRUE, TRUE, FALSE, NULL);
 					} else {
 						vm_page_insert(m, object, offset);
 					}
@@ -2567,7 +2604,7 @@ vm_fault_enter(vm_page_t m,
 	       pmap_t pmap,
 	       vm_map_offset_t vaddr,
 	       vm_prot_t prot,
-	       vm_prot_t fault_type,
+	       vm_prot_t caller_prot,
 	       boolean_t wired,
 	       boolean_t change_wiring,
 	       boolean_t no_cache,
@@ -2582,7 +2619,10 @@ vm_fault_enter(vm_page_t m,
 	boolean_t	must_disconnect = 0;
 	boolean_t	map_is_switched, map_is_switch_protected;
 	int		cs_enforcement_enabled;
+	vm_prot_t       fault_type;
 	
+	fault_type = change_wiring ? VM_PROT_NONE : caller_prot;
+
 	vm_object_lock_assert_held(m->object);
 #if DEBUG
 	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_NOTOWNED);
@@ -2695,11 +2735,12 @@ vm_fault_enter(vm_page_t m,
 	 *   can be changed without the kernel noticing, therefore unsigned
 	 *   code can be created
 	 */
-	if (m->cs_tainted ||
-	    ((cs_enforcement_enabled && !cs_bypass ) &&
-	     (/* The page is unsigned and wants to be executable */
-	      (!m->cs_validated && (prot & VM_PROT_EXECUTE))  ||
-	      /* The page should be immutable, but is in danger of being modified
+	if (!cs_bypass &&
+	    (m->cs_tainted ||
+	     (cs_enforcement_enabled &&
+	      (/* The page is unsigned and wants to be executable */
+	       (!m->cs_validated && (prot & VM_PROT_EXECUTE))  ||
+	       /* The page should be immutable, but is in danger of being modified
 		* This is the case where we want policy from the code directory -
 		* is the page immutable or not? For now we have to assume that 
 		* code pages will be immutable, data pages not.
@@ -2714,7 +2755,7 @@ vm_fault_enter(vm_page_t m,
 		*/
 	      (page_immutable(m, prot) && ((prot & VM_PROT_WRITE) || m->wpmapped))
 	      ))
-		) 
+		    )) 
 	{
 		/* We will have a tainted page. Have to handle the special case
 		 * of a switched map now. If the map is not switched, standard
@@ -2788,10 +2829,8 @@ vm_fault_enter(vm_page_t m,
 			pathname_len = 0;
 			filename_len = 0;
 			truncated_path = FALSE;
-			if (file_object->pager == NULL) {
-				/* no pager -> no file -> no pathname */
-				pathname = (char *) "<nil>";
-			} else {
+			/* no pager -> no file -> no pathname, use "<nil>" in that case */
+			if (file_object->pager != NULL) {
 				pathname = (char *)kalloc(__PATH_MAX * 2);
 				if (pathname) {
 					pathname[0] = '\0';
@@ -2805,6 +2844,11 @@ vm_fault_enter(vm_page_t m,
 							    filename,
 							    filename_len,
 							    &truncated_path);
+				if (pathname) {
+					/* safety first... */
+					pathname[__PATH_MAX-1] = '\0';
+					filename[__PATH_MAX-1] = '\0';
+				}
 				vnode_pager_get_object_mtime(file_object->pager,
 							     &mtime,
 							     &cs_mtime);
@@ -2817,7 +2861,7 @@ vm_fault_enter(vm_page_t m,
 			       "wpmapped:%d slid:%d)\n",
 			       pid, procname, (addr64_t) vaddr,
 			       file_offset,
-			       (pathname ? pathname : ""),
+			       (pathname ? pathname : "<nil>"),
 			       (truncated_path ? "/.../" : ""),
 			       (truncated_path ? filename : ""),
 			       cs_mtime.tv_sec, cs_mtime.tv_nsec,
@@ -2927,7 +2971,7 @@ MACRO_END
 
 		if (wired) {
 			if (kr == KERN_SUCCESS) {
-				vm_page_wire(m);
+				vm_page_wire(m, VM_PROT_MEMORY_TAG(caller_prot), TRUE);
 			}
 		} else {
 		        vm_page_unwire(m, TRUE);
@@ -2974,6 +3018,7 @@ MACRO_END
 
 				VPL_LOCK(&lq->vpl_lock);
 
+				vm_page_check_pageable_safe(m);
 				queue_enter(&lq->vpl_queue, m,
 					    vm_page_t, pageq);
 				m->local = TRUE;
@@ -3017,7 +3062,7 @@ MACRO_END
 				 */
 				if (!VM_PAGE_WIRED(m)) {
 					if (m->clean_queue) {
-						VM_PAGE_QUEUES_REMOVE(m);
+						vm_page_queues_remove(m);
 
 						vm_pageout_cleaned_reactivated++;
 						vm_pageout_cleaned_fault_reactivated++;
@@ -3282,11 +3327,12 @@ vm_fault(
 				 NULL);
 }
 
+
 kern_return_t
 vm_fault_internal(
 	vm_map_t	map,
 	vm_map_offset_t	vaddr,
-	vm_prot_t	fault_type,
+	vm_prot_t	caller_prot,
 	boolean_t	change_wiring,
 	int		interruptible,
 	pmap_t		caller_pmap,
@@ -3314,6 +3360,7 @@ vm_fault_internal(
 	boolean_t		interruptible_state;
 	vm_map_t		real_map = map;
 	vm_map_t		original_map = map;
+	vm_prot_t		fault_type;
 	vm_prot_t		original_fault_type;
 	struct vm_object_fault_info fault_info;
 	boolean_t		need_collapse = FALSE;
@@ -3348,6 +3395,8 @@ vm_fault_internal(
 	
 	interruptible_state = thread_interrupt_level(interruptible);
 
+	fault_type = (change_wiring ? VM_PROT_NONE : caller_prot);
+
 	VM_STAT_INCR(faults);
 	current_task()->faults++;
 	original_fault_type = fault_type;
@@ -3380,6 +3429,7 @@ RetryFault:
 				  &object, &offset, &prot, &wired,
 				  &fault_info,
 				  &real_map);
+
 
 	if (kr != KERN_SUCCESS) {
 		vm_map_unlock_read(map);
@@ -3841,7 +3891,7 @@ FastPmapEnter:
 							    caller_pmap,
 							    caller_pmap_addr,
 							    prot,
-							    fault_type,
+							    caller_prot,
 							    wired,
 							    change_wiring,
 							    fault_info.no_cache,
@@ -3855,7 +3905,7 @@ FastPmapEnter:
 							    pmap,
 							    vaddr,
 							    prot,
-							    fault_type,
+							    caller_prot,
 							    wired,
 							    change_wiring,
 							    fault_info.no_cache,
@@ -4658,7 +4708,7 @@ handle_copy_delay:
 					    caller_pmap,
 					    caller_pmap_addr,
 					    prot,
-					    fault_type,
+					    caller_prot,
 					    wired,
 					    change_wiring,
 					    fault_info.no_cache,
@@ -4672,7 +4722,7 @@ handle_copy_delay:
 					    pmap,
 					    vaddr,
 					    prot,
-					    fault_type,
+					    caller_prot,
 					    wired,
 					    change_wiring,
 					    fault_info.no_cache,
@@ -4754,17 +4804,17 @@ handle_copy_delay:
 				hdelta = entry->vme_end - laddr;
 			if (entry->is_sub_map) {
 				
-				laddr = (laddr - entry->vme_start) 
-							+ entry->offset;
-				vm_map_lock_read(entry->object.sub_map);
+				laddr = ((laddr - entry->vme_start) 
+					 + VME_OFFSET(entry));
+				vm_map_lock_read(VME_SUBMAP(entry));
 
 				if (map != real_map)
 					vm_map_unlock_read(map);
 				if (entry->use_pmap) {
 					vm_map_unlock_read(real_map);
-					real_map = entry->object.sub_map;
+					real_map = VME_SUBMAP(entry);
 				}
-				map = entry->object.sub_map;
+				map = VME_SUBMAP(entry);
 				
 			} else {
 				break;
@@ -4772,17 +4822,25 @@ handle_copy_delay:
 		}
 
 		if (vm_map_lookup_entry(map, laddr, &entry) && 
-		    (entry->object.vm_object != NULL) &&
-		    (entry->object.vm_object == object)) {
+		    (VME_OBJECT(entry) != NULL) &&
+		    (VME_OBJECT(entry) == object)) {
+			int superpage;
 
-			int superpage = (!object->pager_created && object->phys_contiguous)? VM_MEM_SUPERPAGE : 0;
+			if (!object->pager_created &&
+			    object->phys_contiguous) {
+				superpage = VM_MEM_SUPERPAGE;
+			} else {
+				superpage = 0;
+			}
 
 			if (superpage && physpage_p) {
 				/* for vm_map_wire_and_extract() */
-				*physpage_p = (ppnum_t) ((((vm_map_offset_t) entry->object.vm_object->vo_shadow_offset)
-							  + entry->offset
-							  + (laddr - entry->vme_start))
-							 >> PAGE_SHIFT);
+				*physpage_p = (ppnum_t)
+					((((vm_map_offset_t)
+					   object->vo_shadow_offset)
+					  + VME_OFFSET(entry)
+					  + (laddr - entry->vme_start))
+					 >> PAGE_SHIFT);
 			}
 
 			if (caller_pmap) {
@@ -4792,8 +4850,8 @@ handle_copy_delay:
 				assert((uint32_t)((ldelta + hdelta) >> PAGE_SHIFT) == ((ldelta + hdelta) >> PAGE_SHIFT));
 				pmap_map_block(caller_pmap, 
 					       (addr64_t)(caller_pmap_addr - ldelta), 
-					       (ppnum_t)((((vm_map_offset_t) (entry->object.vm_object->vo_shadow_offset)) +
-							  entry->offset + (laddr - entry->vme_start) - ldelta) >> PAGE_SHIFT),
+					       (ppnum_t)((((vm_map_offset_t) (VME_OBJECT(entry)->vo_shadow_offset)) +
+							  VME_OFFSET(entry) + (laddr - entry->vme_start) - ldelta) >> PAGE_SHIFT),
 					       (uint32_t)((ldelta + hdelta) >> PAGE_SHIFT), prot, 
 					       (VM_WIMG_MASK & (int)object->wimg_bits) | superpage, 0);
 			} else { 
@@ -4803,8 +4861,8 @@ handle_copy_delay:
 				assert((uint32_t)((ldelta + hdelta) >> PAGE_SHIFT) == ((ldelta + hdelta) >> PAGE_SHIFT));
 				pmap_map_block(real_map->pmap, 
 					       (addr64_t)(vaddr - ldelta), 
-					       (ppnum_t)((((vm_map_offset_t)(entry->object.vm_object->vo_shadow_offset)) +
-							  entry->offset + (laddr - entry->vme_start) - ldelta) >> PAGE_SHIFT),
+					       (ppnum_t)((((vm_map_offset_t)(VME_OBJECT(entry)->vo_shadow_offset)) +
+							  VME_OFFSET(entry) + (laddr - entry->vme_start) - ldelta) >> PAGE_SHIFT),
 					       (uint32_t)((ldelta + hdelta) >> PAGE_SHIFT), prot, 
 					       (VM_WIMG_MASK & (int)object->wimg_bits) | superpage, 0);
 			}
@@ -4875,6 +4933,7 @@ kern_return_t
 vm_fault_wire(
 	vm_map_t	map,
 	vm_map_entry_t	entry,
+	vm_prot_t       prot,
 	pmap_t		pmap,
 	vm_map_offset_t	pmap_addr,
 	ppnum_t		*physpage_p)
@@ -4886,9 +4945,9 @@ vm_fault_wire(
 
 	assert(entry->in_transition);
 
-	if ((entry->object.vm_object != NULL) && 
+	if ((VME_OBJECT(entry) != NULL) && 
 	    !entry->is_sub_map && 
-	    entry->object.vm_object->phys_contiguous) {
+	    VME_OBJECT(entry)->phys_contiguous) {
 		return KERN_SUCCESS;
 	}
 
@@ -4907,11 +4966,11 @@ vm_fault_wire(
 	 */
 
 	for (va = entry->vme_start; va < end_addr; va += PAGE_SIZE) {
-		rc = vm_fault_wire_fast(map, va, entry, pmap, 
+		rc = vm_fault_wire_fast(map, va, prot, entry, pmap, 
 					pmap_addr + (va - entry->vme_start),
 					physpage_p);
 		if (rc != KERN_SUCCESS) {
-			rc = vm_fault_internal(map, va, VM_PROT_NONE, TRUE, 
+			rc = vm_fault_internal(map, va, prot, TRUE, 
 					       ((pmap == kernel_pmap)
 						? THREAD_UNINT
 						: THREAD_ABORTSAFE), 
@@ -4954,8 +5013,7 @@ vm_fault_unwire(
 	vm_object_t		object;
 	struct vm_object_fault_info fault_info;
 
-	object = (entry->is_sub_map)
-			? VM_OBJECT_NULL : entry->object.vm_object;
+	object = (entry->is_sub_map) ? VM_OBJECT_NULL : VME_OBJECT(entry);
 
 	/*
 	 * If it's marked phys_contiguous, then vm_fault_wire() didn't actually
@@ -4968,14 +5026,14 @@ vm_fault_unwire(
 
 	fault_info.interruptible = THREAD_UNINT;
 	fault_info.behavior = entry->behavior;
-	fault_info.user_tag = entry->alias;
+	fault_info.user_tag = VME_ALIAS(entry);
 	fault_info.pmap_options = 0;
 	if (entry->iokit_acct ||
 	    (!entry->is_sub_map && !entry->use_pmap)) {
 		fault_info.pmap_options |= PMAP_OPTIONS_ALT_ACCT;
 	}
-	fault_info.lo_offset = entry->offset;
-	fault_info.hi_offset = (entry->vme_end - entry->vme_start) + entry->offset;
+	fault_info.lo_offset = VME_OFFSET(entry);
+	fault_info.hi_offset = (entry->vme_end - entry->vme_start) + VME_OFFSET(entry);
 	fault_info.no_cache = entry->no_cache;
 	fault_info.stealth = TRUE;
 	fault_info.io_sync = FALSE;
@@ -5023,7 +5081,8 @@ vm_fault_unwire(
 				result_page = VM_PAGE_NULL;
 			 	result = vm_fault_page(
 					object,
-					entry->offset + (va - entry->vme_start),
+					(VME_OFFSET(entry) +
+					 (va - entry->vme_start)),
 					VM_PROT_NONE, TRUE,
 					FALSE, /* page not looked up */
 					&prot, &result_page, &top_page,
@@ -5120,10 +5179,11 @@ vm_fault_unwire(
  *	other than the common case will return KERN_FAILURE, and the caller
  *	is expected to call vm_fault().
  */
-kern_return_t
+static kern_return_t
 vm_fault_wire_fast(
 	__unused vm_map_t	map,
 	vm_map_offset_t	va,
+	vm_prot_t       caller_prot,
 	vm_map_entry_t	entry,
 	pmap_t		pmap,
 	vm_map_offset_t	pmap_addr,
@@ -5188,8 +5248,8 @@ vm_fault_wire_fast(
 	 *	Find the backing store object and offset into it.
 	 */
 
-	object = entry->object.vm_object;
-	offset = (va - entry->vme_start) + entry->offset;
+	object = VME_OBJECT(entry);
+	offset = (va - entry->vme_start) + VME_OFFSET(entry);
 	prot = entry->protection;
 
    	/*
@@ -5245,7 +5305,7 @@ vm_fault_wire_fast(
 	 */
 
 	vm_page_lockspin_queues();
-	vm_page_wire(m);
+	vm_page_wire(m, VM_PROT_MEMORY_TAG(caller_prot), TRUE);
 	vm_page_unlock_queues();
 
 	/*
@@ -5276,7 +5336,7 @@ vm_fault_wire_fast(
 			    FALSE,
 			    FALSE,
 			    FALSE,
-			    entry->alias,
+			    VME_ALIAS(entry),
 			    ((entry->iokit_acct ||
 			      (!entry->is_sub_map && !entry->use_pmap))
 			     ? PMAP_OPTIONS_ALT_ACCT
@@ -5315,7 +5375,7 @@ done:
  *		Release a page used by vm_fault_copy.
  */
 
-void
+static void
 vm_fault_copy_cleanup(
 	vm_page_t	page,
 	vm_page_t	top_page)
@@ -5333,7 +5393,7 @@ vm_fault_copy_cleanup(
 	vm_fault_cleanup(object, top_page);
 }
 
-void
+static void
 vm_fault_copy_dst_cleanup(
 	vm_page_t	page)
 {
@@ -5523,7 +5583,7 @@ vm_fault_copy(
 		 */
 
 		vm_page_lockspin_queues();
-		vm_page_wire(dst_page);
+		vm_page_wire(dst_page, VM_KERN_MEMORY_OSFMK, TRUE);
 		vm_page_unlock_queues();
 		PAGE_WAKEUP_DONE(dst_page);
 		vm_object_unlock(dst_page->object);
@@ -5804,19 +5864,150 @@ vm_fault_classify_init(void)
 }
 #endif	/* VM_FAULT_CLASSIFY */
 
+vm_offset_t
+kdp_lightweight_fault(vm_map_t map, vm_offset_t cur_target_addr, uint32_t *fault_results)
+{
+#pragma unused(map, cur_target_addr, fault_results)
 
+	return 0;
+#if 0
+	vm_map_entry_t	entry;
+	vm_object_t	object;
+	vm_offset_t	object_offset;
+	vm_page_t	m;
+	int		compressor_external_state, compressed_count_delta;
+	int		compressor_flags = (C_DONT_BLOCK | C_KEEP | C_KDP);
+	int		my_fault_type = VM_PROT_READ;
+	kern_return_t	kr;
+
+
+	if (not_in_kdp) {
+		panic("kdp_lightweight_fault called from outside of debugger context");
+	}
+
+	assert(map != VM_MAP_NULL);
+
+	assert((cur_target_addr & PAGE_MASK) == 0);
+	if ((cur_target_addr & PAGE_MASK) != 0) {
+		return 0;
+	}
+
+	if (kdp_lck_rw_lock_is_acquired_exclusive(&map->lock)) {
+		return 0;
+	}
+
+	if (!vm_map_lookup_entry(map, cur_target_addr, &entry)) {
+		return 0;
+	}
+
+	if (entry->is_sub_map) {
+		return 0;
+	}
+
+	object = VME_OBJECT(entry);
+	if (object == VM_OBJECT_NULL) {
+		return 0;
+	}
+
+	object_offset = cur_target_addr - entry->vme_start + VME_OFFSET(entry);
+
+	while (TRUE) {
+		if (kdp_lck_rw_lock_is_acquired_exclusive(&object->Lock)) {
+			return 0;
+		}
+
+		if (object->pager_created && (object->paging_in_progress ||
+			object->activity_in_progress)) {
+			return 0;
+		}
+
+		m = kdp_vm_page_lookup(object, object_offset);
+
+		if (m != VM_PAGE_NULL) {
+
+			if ((object->wimg_bits & VM_WIMG_MASK) != VM_WIMG_DEFAULT) {
+				return 0;
+			}
+
+			if (m->laundry || m->busy || m->pageout || m->absent || m->error || m->cleaning ||
+				m->overwriting || m->restart || m->unusual) {
+				return 0;
+			}
+
+			assert(!m->private);
+			if (m->private) {
+				return 0;
+			}
+
+			assert(!m->fictitious);
+			if (m->fictitious) {
+				return 0;
+			}
+
+			assert(!m->encrypted);
+			if (m->encrypted) {
+				return 0;
+			}
+
+			assert(!m->encrypted_cleaning);
+			if (m->encrypted_cleaning) {
+				return 0;
+			}
+
+			assert(!m->compressor);
+			if (m->compressor) {
+				return 0;
+			}
+
+			if (fault_results) {
+				*fault_results |= kThreadFaultedBT;
+			}
+			return ptoa(m->phys_page);
+		}
+
+		compressor_external_state = VM_EXTERNAL_STATE_UNKNOWN;
+
+		if (object->pager_created && MUST_ASK_PAGER(object, object_offset, compressor_external_state)) {
+			if (compressor_external_state == VM_EXTERNAL_STATE_EXISTS) {
+				kr = vm_compressor_pager_get(object->pager, (object_offset + object->paging_offset),
+								kdp_compressor_decompressed_page_ppnum, &my_fault_type,
+								compressor_flags, &compressed_count_delta);
+				if (kr == KERN_SUCCESS) {
+					if (fault_results) {
+						*fault_results |= kThreadDecompressedBT;
+					}
+					return kdp_compressor_decompressed_page_paddr;
+				} else {
+					return 0;
+				}
+			}
+		}
+
+		if (object->shadow == VM_OBJECT_NULL) {
+			return 0;
+		}
+
+		object_offset += object->vo_shadow_offset;
+		object = object->shadow;
+	}
+#endif /* 0 */
+}
+
+
+#define CODE_SIGNING_CHUNK_SIZE 4096
 void
 vm_page_validate_cs_mapped(
 	vm_page_t	page,
 	const void 	*kaddr)
 {
 	vm_object_t		object;
-	vm_object_offset_t	offset;
+	vm_object_offset_t	offset, offset_in_page;
 	kern_return_t		kr;
 	memory_object_t		pager;
 	void			*blobs;
 	boolean_t		validated;
-	unsigned			tainted;
+	unsigned		tainted;
+	int			num_chunks, num_chunks_validated;
 
 	assert(page->busy);
 	vm_object_lock_assert_exclusive(page->object);
@@ -5844,7 +6035,7 @@ vm_page_validate_cs_mapped(
 		vm_cs_validated_dirtied++;
 	}
 
-	if (page->cs_validated) {
+	if (page->cs_validated || page->cs_tainted) {
 		return;
 	}
 
@@ -5878,17 +6069,32 @@ vm_page_validate_cs_mapped(
 	}
 
 	/* verify the SHA1 hash for this page */
-	tainted = 0;
-	validated = cs_validate_page(blobs,
-				     pager,
-				     offset + object->paging_offset,
-				     (const void *)kaddr,
-				     &tainted);
-
-	page->cs_validated = validated;
-	if (validated) {
-		page->cs_tainted = !!(tainted & CS_VALIDATE_TAINTED);
-		page->cs_nx = !!(tainted & CS_VALIDATE_NX);
+	num_chunks_validated = 0;
+	for (offset_in_page = 0, num_chunks = 0;
+	     offset_in_page < PAGE_SIZE_64;
+	     offset_in_page += CODE_SIGNING_CHUNK_SIZE, num_chunks++) {
+		tainted = 0;
+		validated = cs_validate_page(blobs,
+					     pager,
+					     (object->paging_offset +
+					      offset +
+					      offset_in_page),
+					     (const void *)((const char *)kaddr
+							    + offset_in_page),
+					     &tainted);
+		if (validated) {
+			num_chunks_validated++;
+		}
+		if (tainted & CS_VALIDATE_TAINTED) {
+			page->cs_tainted = TRUE;
+		} 
+		if (tainted & CS_VALIDATE_NX) {
+			page->cs_nx = TRUE;
+		}
+	}
+	/* page is validated only if all its chunks are */
+	if (num_chunks_validated == num_chunks) {
+		page->cs_validated = TRUE;
 	}
 }
 
@@ -5932,7 +6138,7 @@ vm_page_validate_cs(
 		vm_cs_validated_dirtied++;
 	}
 
-	if (page->cs_validated) {
+	if (page->cs_validated || page->cs_tainted) {
 		return;
 	}
 
@@ -6008,4 +6214,79 @@ vm_page_validate_cs(
 		kaddr = 0;
 	}
 	vm_object_paging_end(object);
+}
+
+void
+vm_page_validate_cs_mapped_chunk(
+	vm_page_t	page,
+	const void 	*kaddr,
+	vm_offset_t	chunk_offset,
+	boolean_t	*validated_p,
+	unsigned	*tainted_p)
+{
+	vm_object_t		object;
+	vm_object_offset_t	offset, offset_in_page;
+	kern_return_t		kr;
+	memory_object_t		pager;
+	void			*blobs;
+	boolean_t		validated;
+	unsigned		tainted;
+
+	*validated_p = FALSE;
+	*tainted_p = 0;
+
+	assert(page->busy);
+	vm_object_lock_assert_exclusive(page->object);
+
+	if (!cs_validation) {
+		return;
+	}
+
+	object = page->object;
+	assert(object->code_signed);
+	offset = page->offset;
+
+	if (!object->alive || object->terminating || object->pager == NULL) {
+		/*
+		 * The object is terminating and we don't have its pager
+		 * so we can't validate the data...
+		 */
+		return;
+	}
+	/*
+	 * Since we get here to validate a page that was brought in by
+	 * the pager, we know that this pager is all setup and ready
+	 * by now.
+	 */
+	assert(!object->internal);
+	assert(object->pager != NULL);
+	assert(object->pager_ready);
+
+	pager = object->pager;
+	assert(object->paging_in_progress);
+	kr = vnode_pager_get_object_cs_blobs(pager, &blobs);
+	if (kr != KERN_SUCCESS) {
+		blobs = NULL;
+	}
+
+	/* verify the signature for this chunk */
+	offset_in_page = chunk_offset;
+	assert(offset_in_page < PAGE_SIZE);
+	assert((offset_in_page & (CODE_SIGNING_CHUNK_SIZE-1)) == 0);
+
+	tainted = 0;
+	validated = cs_validate_page(blobs,
+				     pager,
+				     (object->paging_offset +
+				      offset +
+				      offset_in_page),
+				     (const void *)((const char *)kaddr
+						    + offset_in_page),
+				     &tainted);
+	if (validated) {
+		*validated_p = TRUE;
+	}
+	if (tainted) {
+		*tainted_p = tainted;
+	}
 }

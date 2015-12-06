@@ -23,6 +23,10 @@ arm_level2_access_strings = [ " noaccess",
                              ]
 kq_state_strings = {0:"", 1:"SEL", 2:"SLEEP", 4:"PROCWAIT", 8:"KEV32", 16:"KEV64"}
 
+kn_state_strings = {0:"", 1:"ACTIVE", 2:"QUEUED", 4:"DISABLED", 8:"DROPPING", 16:"USERWAIT", 32:"ATTACHING", 64:"STAYQUED"}
+
+mach_msg_type_descriptor_strings = {0: "PORT", 1: "OOLDESC", 2: "OOLPORTS", 3: "OOLVOLATILE"}
+
 proc_state_strings = [ "", "Idle", "Run", "Sleep", "Stop", "Zombie", "Reaping" ]
 proc_flag_explain_strings = ["!0x00000004 - process is 32 bit",  #only exception that does not follow bit settings
                              "0x00000001 - may hold advisory locks",
@@ -61,7 +65,7 @@ proc_flag_explain_strings = ["!0x00000004 - process is 32 bit",  #only exception
 #File: xnu/osfmk/kern/ipc_kobject.h
 # string representations for Kobject types
 kobject_types = ['', 'THREAD', 'TASK', 'HOST', 'HOST_PRIV', 'PROCESSOR', 'PSET', 'PSET_NAME', 'TIMER', 'PAGER_REQ', 'DEVICE', 'XMM_OBJECT', 'XMM_PAGER', 'XMM_KERNEL', 'XMM_REPLY', 
-                     'NOTDEF 15', 'NOTDEF 16', 'HOST_SEC', 'LEDGER', 'MASTER_DEV', 'ACTIVATION', 'SUBSYTEM', 'IO_DONE_QUE', 'SEMAPHORE', 'LOCK_SET', 'CLOCK', 'CLOCK_CTRL' , 'IOKIT_SPARE', 
+                     'NOTDEF 15', 'NOTDEF 16', 'HOST_SEC', 'LEDGER', 'MASTER_DEV', 'TASK_NAME', 'SUBSYTEM', 'IO_DONE_QUE', 'SEMAPHORE', 'LOCK_SET', 'CLOCK', 'CLOCK_CTRL' , 'IOKIT_SPARE', 
                       'NAMED_MEM', 'IOKIT_CON', 'IOKIT_OBJ', 'UPL', 'MEM_OBJ_CONTROL', 'AU_SESSIONPORT', 'FILEPORT', 'LABELH', 'TASK_RESUME', 'VOUCHER', 'VOUCHER_ATTR_CONTROL']
 
 def populate_kobject_types(xnu_dir_path):

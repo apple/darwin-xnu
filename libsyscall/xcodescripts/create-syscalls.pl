@@ -61,9 +61,9 @@ my $OutDir;
 # size in bytes of known types (only used for i386)
 my %TypeBytes = (
     'au_asid_t'		=> 4,
-    'associd_t'		=> 4,
+    'sae_associd_t'	=> 4,
     'caddr_t'		=> 4,
-    'connid_t'		=> 4,
+    'sae_connid_t'	=> 4,
     'gid_t'		=> 4,
     'id_t'		=> 4,
     'idtype_t'		=> 4,

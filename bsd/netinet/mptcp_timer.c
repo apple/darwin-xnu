@@ -74,8 +74,6 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 	int resched_timer = 0;
 
 	DTRACE_MPTCP2(timer, struct mptses *, mpte, struct mptcb *, mp_tp);
-	mptcplog2((LOG_DEBUG, "%s: running %d\n", __func__,
-	    mp_tp->mpt_timer_vals));
 
 	MPTE_LOCK_ASSERT_HELD(mpte);
 	MPT_LOCK(mp_tp);
@@ -98,8 +96,10 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 			} else {
 				mp_tp->mpt_sndnxt = mp_tp->mpt_rtseq;
 				MPT_UNLOCK(mp_tp);
-				mptcplog((LOG_DEBUG, "%s: REXMT %d times.\n",
-				    __func__, mp_tp->mpt_rxtshift));
+				mptcplog((LOG_DEBUG, "MPTCP Socket: "
+				   "%s: REXMT %d times.\n",
+				    __func__, mp_tp->mpt_rxtshift),
+				    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
 				mptcp_output(mpte);
 				MPT_LOCK(mp_tp);
 			}
@@ -167,27 +167,32 @@ mptcp_timer(struct mppcbinfo *mppi)
 }
 
 void
-mptcp_start_timer(struct mptcb *mp_tp, int timer_type)
+mptcp_start_timer(struct mptses *mpte, int timer_type)
 {
 	struct timeval now;
+	struct mptcb *mp_tp = mpte->mpte_mptcb;
 
 	microuptime(&now);
 
-	MPT_LOCK_ASSERT_HELD(mp_tp);
-
 	DTRACE_MPTCP2(start__timer, struct mptcb *, mp_tp, int, timer_type);
-	mptcplog((LOG_DEBUG, "%s %d\n", __func__, timer_type));
+	mptcplog((LOG_DEBUG, "MPTCP Socket: %s: %d\n", __func__, timer_type),
+	    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_VERBOSE);
 
 	switch (timer_type) {
 	case MPTT_REXMT:
+		MPT_LOCK(mp_tp);
 		mp_tp->mpt_timer_vals |= MPTT_REXMT;
 		mp_tp->mpt_rxtstart = TIMEVAL_TO_HZ(now);
 		mp_tp->mpt_rxtshift = 0;
 		mp_tp->mpt_rtseq = mp_tp->mpt_sndnxt;
+		MPT_UNLOCK(mp_tp);
 		break;
 	case MPTT_TW:
+		/* XXX: Not implemented yet */
+		MPT_LOCK(mp_tp);
 		mp_tp->mpt_timer_vals |= MPTT_TW;
 		mp_tp->mpt_timewait = TIMEVAL_TO_HZ(now);
+		MPT_UNLOCK(mp_tp);
 		break;
 	case MPTT_FASTCLOSE:
 		/* NO-OP */
@@ -203,9 +208,7 @@ void
 mptcp_cancel_timer(struct mptcb *mp_tp, int timer_type)
 {
 	MPT_LOCK_ASSERT_HELD(mp_tp);
-
 	DTRACE_MPTCP2(cancel__timer, struct mptcb *, mp_tp, int, timer_type);
-	mptcplog3((LOG_DEBUG, "%s %d\n", __func__, timer_type));
 
 	switch (timer_type) {
 	case MPTT_REXMT:

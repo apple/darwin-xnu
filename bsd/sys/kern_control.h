@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004, 2012-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2004, 2012-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -187,7 +187,7 @@ struct kctlstat {
 	u_int64_t	kcs_send_list_fail __attribute__((aligned(8)));
 	u_int64_t	kcs_enqueue_fail __attribute__((aligned(8)));
 	u_int64_t	kcs_enqueue_fullsock __attribute__((aligned(8)));
-	
+	u_int64_t	kcs_bad_kctlref __attribute__((aligned(8)));
 };
 
 #endif /* PRIVATE */
@@ -560,8 +560,20 @@ errno_t
 ctl_enqueuembuf_list(kern_ctl_ref kctlref, u_int32_t unit, mbuf_t m_list,
 	u_int32_t flags, mbuf_t *m_remain);
 
+/*!
+	@function ctl_getenqueuepacketcount
+	@discussion Retrieve the number of packets in the socket
+		receive buffer.
+	@param kctlref The control reference of the kernel control.
+	@param unit The unit number of the kernel control instance.
+	@param pcnt The address where to return the current count. 
+	@result 0 - Success; the packet count is returned to caller.
+		EINVAL - Invalid parameters.
+ */
+errno_t
+ctl_getenqueuepacketcount(kern_ctl_ref kctlref, u_int32_t unit, u_int32_t *pcnt);
 
-#endif
+#endif /* PRIVATE */
 
 /*!
 	@function ctl_getenqueuespace
@@ -601,43 +613,11 @@ ctl_getenqueuereadable(kern_ctl_ref kctlref, u_int32_t unit, u_int32_t *differen
  * internal structure maintained for each register controller
  */
 struct ctl_cb;
+struct kctl;
 struct socket;
+struct socket_info;
 
-struct kctl {
-	TAILQ_ENTRY(kctl)		next;		/* controller chain */
-
-	/* controller information provided when registering */
-	char				name[MAX_KCTL_NAME];	/* unique nke identifier, provided by DTS */
-	u_int32_t			id;
-	u_int32_t			reg_unit;
-
-	/* misc communication information */
-	u_int32_t			flags;		/* support flags */
-	u_int32_t			recvbufsize;	/* request more than the default buffer size */
-	u_int32_t			sendbufsize;	/* request more than the default buffer size */
-
-	/* Dispatch functions */
-	ctl_connect_func		connect;	/* Make contact */
-	ctl_disconnect_func		disconnect;	/* Break contact */
-	ctl_send_func			send;		/* Send data to nke */
-	ctl_send_list_func		send_list;	/* Send list of packets */
-	ctl_setopt_func			setopt;		/* set kctl configuration */
-	ctl_getopt_func			getopt;		/* get kctl configuration */
-	ctl_rcvd_func			rcvd;		/* Notify nke when client reads data */
-
-	TAILQ_HEAD(, ctl_cb)		kcb_head;
-	u_int32_t			lastunit;
-};
-
-struct ctl_cb {
-	TAILQ_ENTRY(ctl_cb)		next;		/* controller chain */
-	lck_mtx_t			*mtx;
-	struct socket			*so;		/* controlling socket */
-	struct kctl			*kctl;		/* back pointer to controller */
-	void				*userdata;
-	u_int32_t			unit;
-	u_int32_t			usecount;
-};
+void kctl_fill_socketinfo(struct socket *, struct socket_info *);
 
 u_int32_t ctl_id_by_name(const char *name);
 errno_t ctl_name_by_id(u_int32_t id, char *out_name, size_t maxsize);

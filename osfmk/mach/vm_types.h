@@ -113,6 +113,24 @@ typedef mach_port_t		vm_map_t;
 typedef uint64_t		vm_object_offset_t;
 typedef uint64_t		vm_object_size_t;
 
+
+#ifdef XNU_KERNEL_PRIVATE
+
+typedef uint8_t vm_tag_t;
+
+#define VM_TAG_BT	0x00000001
+#define VM_TAG_KMOD	0x00000002
+#define VM_TAG_UNLOAD	0x00000004
+
+struct vm_allocation_site
+{
+    vm_tag_t tag;
+    uint8_t  flags;
+};
+typedef struct vm_allocation_site vm_allocation_site_t;
+
+#endif /* XNU_KERNEL_PRIVATE */
+
 #ifdef  KERNEL_PRIVATE
 
 #ifndef	MACH_KERNEL_PRIVATE

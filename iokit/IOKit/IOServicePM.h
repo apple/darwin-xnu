@@ -47,6 +47,8 @@ class IOPMRequest;
 class IOPMRequestQueue;
 class IOPMCompletionQueue;
 
+typedef void (*IOPMCompletionAction)(void * target, void * param);
+
 // PM channels for IOReporting
 #ifndef kPMPowerStatesChID
 #define kPMPowerStatesChID  IOREPORT_MAKEID('P','M','S','t','H','i','s','t')

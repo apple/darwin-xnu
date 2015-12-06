@@ -236,7 +236,7 @@ nfs4_setclientid(struct nfsmount *nmp)
 	// SETCLIENTID
 	numops = 1;
 	nfsm_chain_build_alloc_init(error, &nmreq, 14 * NFSX_UNSIGNED + nmp->nm_longid->nci_idlen);
-	nfsm_chain_add_compound_header(error, &nmreq, "setclid", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "setclid", nmp->nm_minor_vers, numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_SETCLIENTID);
 	/* nfs_client_id4  client; */
@@ -300,7 +300,7 @@ nfs4_setclientid(struct nfsmount *nmp)
 	// SETCLIENTID_CONFIRM
 	numops = 1;
 	nfsm_chain_build_alloc_init(error, &nmreq, 15 * NFSX_UNSIGNED);
-	nfsm_chain_add_compound_header(error, &nmreq, "setclid_conf", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "setclid_conf", nmp->nm_minor_vers, numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_SETCLIENTID_CONFIRM);
 	nfsm_chain_add_64(error, &nmreq, nmp->nm_clientid);
@@ -325,7 +325,7 @@ nfs4_setclientid(struct nfsmount *nmp)
 	// PUTFH, GETATTR(FS)
 	numops = 2;
 	nfsm_chain_build_alloc_init(error, &nmreq, 23 * NFSX_UNSIGNED);
-	nfsm_chain_add_compound_header(error, &nmreq, "setclid_attr", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "setclid_attr", nmp->nm_minor_vers, numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
 	nfsm_chain_add_fh(error, &nmreq, nmp->nm_vers, nmp->nm_dnp->n_fhp, nmp->nm_dnp->n_fhsize);
@@ -377,7 +377,7 @@ nfs4_renew(struct nfsmount *nmp, int rpcflag)
 	// RENEW
 	numops = 1;
 	nfsm_chain_build_alloc_init(error, &nmreq, 8 * NFSX_UNSIGNED);
-	nfsm_chain_add_compound_header(error, &nmreq, "renew", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "renew", nmp->nm_minor_vers, numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_RENEW);
 	nfsm_chain_add_64(error, &nmreq, nmp->nm_clientid);
@@ -533,7 +533,7 @@ gotargs:
 	numops = 2;
 	nfsm_chain_build_alloc_init(error, &nmreq,
 		4 * NFSX_UNSIGNED + NFSX_FH(nfsvers) + nfsm_rndup(namelen));
-	nfsm_chain_add_compound_header(error, &nmreq, "secinfo", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "secinfo", nmp->nm_minor_vers, numops);
 	numops--;
 	if (fhp) {
 		nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
@@ -665,7 +665,7 @@ nfs4_get_fs_locations(
 	NFSREQ_SECINFO_SET(&si, NULL, fhp, fhsize, name, 0);
 	numops = 3;
 	nfsm_chain_build_alloc_init(error, &nmreq, 18 * NFSX_UNSIGNED);
-	nfsm_chain_add_compound_header(error, &nmreq, "fs_locations", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "fs_locations", nmp->nm_minor_vers, numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
 	nfsm_chain_add_fh(error, &nmreq, NFS_VER4, fhp, fhsize);

@@ -130,7 +130,8 @@ extern int  __doprnt(const char *fmt,
 					 va_list    argp,
 					 void       (*)(int, void *),
 					 void       *arg,
-					 int        radix);
+					 int        radix,
+					 int        is_log);
 
 /*
  *	Record cpu that panic'd and lock around panic data
@@ -171,7 +172,7 @@ uprintf(const char *fmt, ...)
 		if (pca.tty != NULL)
 			tty_lock(pca.tty);
 		va_start(ap, fmt);
-		__doprnt(fmt, ap, putchar, &pca, 10);
+		__doprnt(fmt, ap, putchar, &pca, 10, FALSE);
 		va_end(ap);
 		if (pca.tty != NULL)
 		tty_unlock(pca.tty);
@@ -236,7 +237,7 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 	pca.flags = flags;
 	pca.tty   = tp;
 	va_start(ap, fmt);
-	__doprnt(fmt, ap, putchar, &pca, 10);
+	__doprnt(fmt, ap, putchar, &pca, 10, FALSE);
 	va_end(ap);
 
 	if (tp != NULL)
@@ -265,7 +266,7 @@ ttyprintf(struct tty *tp, const char *fmt, ...)
 		pca.tty   = tp;
 		
 		va_start(ap, fmt);
-		__doprnt(fmt, ap, putchar, &pca, 10);
+		__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 		va_end(ap);
 	}
 }
@@ -314,7 +315,7 @@ vaddlog(const char *fmt, va_list ap)
 	}
 
 	bsd_log_lock();
-	__doprnt(fmt, ap, putchar, &pca, 10);
+	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 	bsd_log_unlock();
 	
 	logwakeup();
@@ -334,7 +335,7 @@ _printf(int flags, struct tty *ttyp, const char *format, ...)
 		tty_lock(ttyp);
 	
 		va_start(ap, format);
-		__doprnt(format, ap, putchar, &pca, 10);
+		__doprnt(format, ap, putchar, &pca, 10, TRUE);
 		va_end(ap);
 
 		tty_unlock(ttyp);
@@ -349,7 +350,7 @@ prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
 	pca.flags = flags;
 	pca.tty   = ttyp;
 
-	__doprnt(fmt, ap, putchar, &pca, 10);
+	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 
 	return 0;
 }
@@ -442,7 +443,7 @@ vprintf(const char *fmt, va_list ap)
 
 	pca.flags = TOLOG | TOCONS;
 	pca.tty   = NULL;
-	__doprnt(fmt, ap, putchar, &pca, 10);
+	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 	return 0;
 }
 
@@ -462,7 +463,7 @@ vsprintf(char *buf, const char *cfmt, va_list ap)
 	info.str = buf;
 	info.remain = 999999;
 
-	retval = __doprnt(cfmt, ap, snprintf_func, &info, 10);
+	retval = __doprnt(cfmt, ap, snprintf_func, &info, 10, FALSE);
 	if (info.remain >= 1) {
 		*info.str++ = '\0';
 	}
@@ -495,7 +496,7 @@ vsnprintf(char *str, size_t size, const char *format, va_list ap)
 
 	info.str = str;
 	info.remain = size;
-	retval = __doprnt(format, ap, snprintf_func, &info, 10);
+	retval = __doprnt(format, ap, snprintf_func, &info, 10, FALSE);
 	if (info.remain >= 1)
 		*info.str++ = '\0';
 	return retval;
@@ -515,7 +516,7 @@ snprintf_func(int ch, void *arg)
 int
 kvprintf(char const *fmt, void (*func)(int, void*), void *arg, int radix, va_list ap)
 {
-	__doprnt(fmt, ap, func, arg, radix);
+	__doprnt(fmt, ap, func, arg, radix, TRUE);
 	return 0;
 }
 

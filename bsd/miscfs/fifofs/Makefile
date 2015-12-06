@@ -7,10 +7,10 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-DATAFILES = \
+KERNELFILES = \
 	fifo.h
 
-EXPORT_MI_LIST = ${DATAFILES}
+EXPORT_MI_LIST = ${KERNELFILES}
 
 EXPORT_MI_DIR =	miscfs/fifofs
 

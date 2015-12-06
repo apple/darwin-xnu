@@ -2,10 +2,9 @@
  *  ccsha1_eay.c
  *  corecrypto
  *
- *  Created by Fabrice Gautier on 12/6/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/06/2010
  *
- *  Based on ssleay implementation.
+ *  Copyright (c) 2010,2011,2012,2015 Apple Inc. All rights reserved.
  *
  */
 

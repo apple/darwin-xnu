@@ -1981,7 +1981,7 @@ ipfw_convert_to_cmds_32(struct ip_fw *curr_rule, struct ip_fw_compat_32 *compat_
 	ipfw_insn	*action, *cmd, *src, *dst;
 	ipfw_insn	*have_state = NULL;	/* track check-state or keep-state */
 	
-	if (!compat_rule || !curr_rule || !(curr_rule->cmd)) {
+	if (!compat_rule || !curr_rule) {
 		return;
 	}
 
@@ -2525,7 +2525,7 @@ ipfw_convert_to_cmds_64(struct ip_fw *curr_rule, struct ip_fw_compat_64 *compat_
 	ipfw_insn	*action, *cmd, *src, *dst;
 	ipfw_insn	*have_state = NULL;	/* track check-state or keep-state */
 	
-	if (!compat_rule || !curr_rule || !(curr_rule->cmd)) {
+	if (!compat_rule || !curr_rule) {
 		return;
 	}
 

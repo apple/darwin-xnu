@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1060,12 +1060,20 @@ bufattr_t bufattr_dup (bufattr_t bap);
 void bufattr_free(bufattr_t bap);
 
 /*!
- @function bufattr_cpaddr
- @abstract Get the address of cp_entry on a buffer.
- @param bap Buffer Attribute whose cp_entry to get.
- @return int.
+ @function bufattr_cpx
+ @abstract Returns a pointer to a cpx_t structure.
+ @param bap Buffer Attribute whose cpx_t structure you wish to get.
+ @return Returns a cpx_t structure, or NULL if not valid
  */
-void *bufattr_cpaddr(bufattr_t);
+struct cpx *bufattr_cpx(bufattr_t);
+
+/*!
+ @function bufattr_setcpx
+ @abstract Set the cp_ctx on a buffer attribute.
+ @param bap Buffer Attribute that you wish to change
+ @return void
+ */
+void bufattr_setcpx(bufattr_t, struct cpx *cpx);
 
 /*!
  @function bufattr_cpoff
@@ -1074,15 +1082,6 @@ void *bufattr_cpaddr(bufattr_t);
  @return void.
  */
 uint64_t bufattr_cpoff(bufattr_t);
-
-
-/*!
- @function bufattr_setcpaddr
- @abstract Set the address of cp_entry on a buffer attribute.
- @param bap Buffer Attribute whose cp entry value has to be set
- @return void.
- */
-void bufattr_setcpaddr(bufattr_t, void *);
 
 /*!
  @function bufattr_setcpoff

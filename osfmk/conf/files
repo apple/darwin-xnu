@@ -59,7 +59,6 @@ OPTIONS/importance_debug	optional importance_debug
 OPTIONS/config_ecc_logging	optional config_ecc_logging
 
 OPTIONS/config_dtrace		optional config_dtrace
-OPTIONS/config_counters		optional config_counters
 
 OPTIONS/no_kextd		optional no_kextd
 
@@ -98,6 +97,7 @@ osfmk/UserNotification/KUNCUserNotifications.c	standard
 osfmk/kdp/kdp.c			optional config_kdp_interactive_debugging
 osfmk/kern/kern_stackshot.c	standard
 osfmk/kdp/kdp_udp.c			optional mach_kdp
+osfmk/kdp/kdp_core.c			optional mach_kdp
 osfmk/kdp/kdp_serial.c			optional config_serial_kdp
 osfmk/ipc/ipc_entry.c			standard
 osfmk/ipc/ipc_hash.c			standard
@@ -155,6 +155,7 @@ osfmk/kern/sched_average.c		standard
 osfmk/kern/sched_dualq.c	optional config_sched_multiq
 osfmk/kern/sched_prim.c		standard
 osfmk/kern/sched_proto.c	optional config_sched_proto
+osfmk/kern/sched_traditional.c	optional config_sched_traditional
 osfmk/kern/sched_grrr.c	optional config_sched_grrr_core
 osfmk/kern/sched_multiq.c	optional config_sched_multiq
 osfmk/kern/sfi.c			standard
@@ -165,6 +166,7 @@ osfmk/kern/sync_sema.c		standard
 osfmk/kern/syscall_emulation.c	standard
 osfmk/kern/syscall_subr.c		standard
 osfmk/kern/syscall_sw.c		standard
+osfmk/kern/sysdiagnose.c	optional config_sysdiagnose
 osfmk/kern/task.c			standard
 osfmk/kern/task_policy.c	standard
 osfmk/kern/task_swap.c		standard
@@ -174,13 +176,12 @@ osfmk/kern/thread_call.c	standard
 osfmk/kern/thread_policy.c	standard
 osfmk/kern/timer.c			standard
 osfmk/kern/timer_call.c		standard
-osfmk/kern/wait_queue.c		standard
+osfmk/kern/waitq.c			standard
 osfmk/kern/xpr.c			optional xpr_debug
 osfmk/kern/zalloc.c			standard
 osfmk/kern/gzalloc.c		optional config_gzalloc
 osfmk/kern/bsd_kern.c		optional mach_bsd
 osfmk/kern/hibernate.c		optional hibernation
-osfmk/pmc/pmc.c				standard 
 ./mach/clock_server.c			standard
 ./mach/clock_priv_server.c		standard
 ./mach/clock_reply_user.c		standard
@@ -203,11 +204,14 @@ osfmk/pmc/pmc.c				standard
 ./mach/upl_server.c			standard
 ./mach/audit_triggers_user.c		standard
 ./mach/task_access_user.c          	standard
+osfmk/corpses/corpse.c			standard
+osfmk/kern/kern_cdata.c			standard
 ./mach/telemetry_notification_user.c optional config_telemetry
 osfmk/bank/bank.c		optional config_bank
 osfmk/atm/atm.c			optional config_atm
 ./atm/atm_notification_user.c		optional config_atm
 ./mach/coalition_notification_user.c	optional config_coalitions
+./mach/sysdiagnose_notification_user.c	optional config_sysdiagnose
 #
 # For now, no external pagers
 #
@@ -279,6 +283,7 @@ osfmk/kperf/callstack.c                 optional kperf
 osfmk/kperf/pet.c                       optional kperf
 # osfmk/kperf/kperfbsd.c                    optional kperf # bsd/conf/files
 osfmk/kperf/threadinfo.c                optional kperf
+osfmk/kperf/meminfo.c                   optional kperf
 osfmk/kperf/timetrigger.c               optional kperf
 osfmk/kperf/kperf_kpc.c                 optional kperf
 osfmk/kern/kpc_thread.c                 optional kpc
@@ -289,6 +294,7 @@ osfmk/console/serial_general.c	standard
 osfmk/kern/telemetry.c			optional config_telemetry
 
 # Built-in corecrypto for early_random():
+osfmk/corecrypto/cc/src/cc_clear.c          		standard
 osfmk/corecrypto/ccdbrg/src/ccdrbg_nisthmac.c		standard
 osfmk/corecrypto/ccdigest/src/ccdigest_init.c		standard
 osfmk/corecrypto/ccdigest/src/ccdigest_update.c		standard

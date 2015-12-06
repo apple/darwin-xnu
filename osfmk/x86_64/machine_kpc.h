@@ -39,13 +39,4 @@ typedef uint64_t kpc_config_t;
 /* number of fixed config registers on x86_64 */
 #define KPC_X86_64_FIXED_CONFIGS (1)
 
-#define FIXED_ACTIONID(ctr) (kpc_actionid[(ctr)])
-#define CONFIGURABLE_ACTIONID(ctr) (kpc_actionid[(ctr) + kpc_fixed_count()])
-
-#define FIXED_RELOAD(ctr) (current_cpu_datap()->cpu_kpc_reload[(ctr)])
-#define CONFIGURABLE_RELOAD(ctr) (current_cpu_datap()->cpu_kpc_reload[(ctr) + kpc_fixed_count()])
-
-#define FIXED_SHADOW(ctr) (current_cpu_datap()->cpu_kpc_shadow[(ctr)])
-#define CONFIGURABLE_SHADOW(ctr) (current_cpu_datap()->cpu_kpc_shadow[(ctr) + kpc_fixed_count()])
-
 #endif /* _MACHINE_X86_64_KPC_H */

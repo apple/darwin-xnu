@@ -182,10 +182,6 @@ typedef struct cpu_data
 	uint64_t		cpu_dr7; /* debug control register */
 	uint64_t		cpu_int_event_time;	/* intr entry/exit time */
 	pal_rtc_nanotime_t	*cpu_nanotime;		/* Nanotime info */
-#if	CONFIG_COUNTERS
-	thread_t		csw_old_thread;
-	thread_t		csw_new_thread;
-#endif /* CONFIG COUNTERS */	
 #if KPC
 	/* double-buffered performance counter data */
 	uint64_t                *cpu_kpc_buf[2];

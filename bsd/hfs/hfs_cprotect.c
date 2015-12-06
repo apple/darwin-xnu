@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -25,8 +25,8 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#include <sys/cprotect.h>
-#include <sys/mman.h>
+#if CONFIG_PROTECT
+
 #include <sys/mount.h>
 #include <sys/random.h>
 #include <sys/xattr.h>
@@ -36,16 +36,20 @@
 #include <sys/vnode_internal.h>
 #include <sys/fcntl.h>
 #include <libkern/OSByteOrder.h>
+#include <libkern/crypto/sha1.h>
 #include <sys/proc.h>
 #include <sys/kauth.h>
 
 #include "hfs.h"
 #include "hfs_cnode.h"
 #include "hfs_fsctl.h"
+#include "hfs_cprotect.h"
 
-#if CONFIG_PROTECT
-/* 
- * The wrap function pointers and the variable to indicate if they 
+
+#define PTR_ADD(type, base, offset)		(type)((uintptr_t)(base) + (offset))
+
+/*
+ * The wrap function pointers and the variable to indicate if they
  * are initialized are system-wide, and hence are defined globally.
  */ 
 static struct cp_wrap_func g_cp_wrap_func = {};
@@ -58,26 +62,14 @@ extern int (**hfs_vnodeop_p) (void *);
  */
 static int cp_root_major_vers(mount_t mp);
 static int cp_getxattr(cnode_t *, struct hfsmount *hfsmp, struct cprotect **);
-static struct cprotect *cp_entry_alloc(size_t);
-static void cp_entry_dealloc(struct cprotect *entry);
+static void cp_entry_dealloc(hfsmount_t *hfsmp, struct cprotect *entry);
 static int cp_restore_keys(struct cprotect *, struct hfsmount *hfsmp, struct cnode *);
 static int cp_lock_vfs_callback(mount_t, void *);
 static int cp_lock_vnode_callback(vnode_t, void *);
 static int cp_vnode_is_eligible (vnode_t);
 static int cp_check_access (cnode_t *cp, struct hfsmount *hfsmp, int vnop);
-static int cp_new(int newclass, struct hfsmount *hfsmp, struct cnode *cp, mode_t cmode, 
-		uint32_t flags, struct cprotect **output_entry);
-static int cp_rewrap(struct cnode *cp, struct hfsmount *hfsmp, int newclass);
 static int cp_unwrap(struct hfsmount *, struct cprotect *, struct cnode *);
-static int cp_setup_aes_ctx(struct cprotect *entry);
 static void cp_init_access(cp_cred_t access, struct cnode *cp);
-
-static inline int cp_get_crypto_generation (uint32_t protclass) {
-	if (protclass & CP_CRYPTO_G1) {
-		return 1;
-	}	
-	else return 0;
-}
 
 
 #if DEVELOPMENT || DEBUG
@@ -88,6 +80,294 @@ static inline int cp_get_crypto_generation (uint32_t protclass) {
 #else
 #define CP_ASSERT(x)
 #endif
+
+// -- cpx_t accessors --
+
+size_t cpx_size(size_t key_size)
+{
+	size_t size = sizeof(struct cpx) + key_size;
+
+#if DEBUG
+	size += 4; // Extra for magic
+#endif
+
+	return size;
+}
+
+static size_t cpx_sizex(const struct cpx *cpx)
+{
+	return cpx_size(cpx->cpx_max_key_len);
+}
+
+cpx_t cpx_alloc(size_t key_len)
+{
+	cpx_t cpx;
+
+	MALLOC(cpx, cpx_t, cpx_size(key_len), M_TEMP, M_WAITOK);
+
+	cpx_init(cpx, key_len);
+
+	return cpx;
+}
+
+#if DEBUG
+static const uint32_t cpx_magic1 = 0x7b787063;		// cpx{
+static const uint32_t cpx_magic2 = 0x7870637d;		// }cpx
+#endif
+
+void cpx_free(cpx_t cpx)
+{
+#if DEBUG
+	assert(cpx->cpx_magic1 == cpx_magic1);
+	assert(*PTR_ADD(uint32_t *, cpx, cpx_sizex(cpx) - 4) == cpx_magic2);
+#endif
+	bzero(cpx->cpx_cached_key, cpx->cpx_max_key_len);
+	FREE(cpx, M_TEMP);
+}
+
+void cpx_init(cpx_t cpx, size_t key_len)
+{
+#if DEBUG
+	cpx->cpx_magic1 = cpx_magic1;
+	*PTR_ADD(uint32_t *, cpx, cpx_size(key_len) - 4) = cpx_magic2;
+#endif
+	cpx->cpx_flags = 0;
+	cpx->cpx_key_len = 0;
+	cpx->cpx_max_key_len = key_len;
+}
+
+bool cpx_is_sep_wrapped_key(const struct cpx *cpx)
+{
+	return ISSET(cpx->cpx_flags, CPX_SEP_WRAPPEDKEY);
+}
+
+void cpx_set_is_sep_wrapped_key(struct cpx *cpx, bool v)
+{
+	if (v)
+		SET(cpx->cpx_flags, CPX_SEP_WRAPPEDKEY);
+	else
+		CLR(cpx->cpx_flags, CPX_SEP_WRAPPEDKEY);
+}
+
+bool cpx_use_offset_for_iv(const struct cpx *cpx)
+{
+	return ISSET(cpx->cpx_flags, CPX_USE_OFFSET_FOR_IV);
+}
+
+void cpx_set_use_offset_for_iv(struct cpx *cpx, bool v)
+{
+	if (v)
+		SET(cpx->cpx_flags, CPX_USE_OFFSET_FOR_IV);
+	else
+		CLR(cpx->cpx_flags, CPX_USE_OFFSET_FOR_IV);
+}
+
+uint16_t cpx_max_key_len(const struct cpx *cpx)
+{
+	return cpx->cpx_max_key_len;
+}
+
+uint16_t cpx_key_len(const struct cpx *cpx)
+{
+	return cpx->cpx_key_len;
+}
+
+void cpx_set_key_len(struct cpx *cpx, uint16_t key_len)
+{
+	cpx->cpx_key_len = key_len;
+
+	if (ISSET(cpx->cpx_flags, CPX_IV_AES_CTX_HFS)) {
+		/*
+		 * We assume that if the key length is being modified, the key
+		 * has changed.  As a result, un-set any bits related to the
+		 * AES context, if needed. They should be re-generated
+		 * on-demand.
+		 */ 
+		CLR(cpx->cpx_flags, CPX_IV_AES_CTX_INITIALIZED | CPX_IV_AES_CTX_HFS);
+	}
+}
+
+bool cpx_has_key(const struct cpx *cpx)
+{
+	return cpx->cpx_key_len > 0;
+}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-qual"
+void *cpx_key(const struct cpx *cpx)
+{
+	return (void *)cpx->cpx_cached_key;
+}
+#pragma clang diagnostic pop
+
+static void cpx_set_aes_iv_key(struct cpx *cpx, void *iv_key)
+{
+	aes_encrypt_key128(iv_key, &cpx->cpx_iv_aes_ctx);
+	SET(cpx->cpx_flags, CPX_IV_AES_CTX_INITIALIZED | CPX_USE_OFFSET_FOR_IV);
+	CLR(cpx->cpx_flags, CPX_IV_AES_CTX_HFS);
+}
+
+aes_encrypt_ctx *cpx_iv_aes_ctx(struct cpx *cpx)
+{
+	if (ISSET(cpx->cpx_flags, CPX_IV_AES_CTX_INITIALIZED))
+		return &cpx->cpx_iv_aes_ctx;
+ 
+ 	SHA1_CTX sha1ctxt;
+	uint8_t digest[SHA_DIGEST_LENGTH]; /* Kiv */
+
+	/* First init the cp_cache_iv_key[] */
+	SHA1Init(&sha1ctxt);
+ 
+	/*
+	 * We can only use this when the keys are generated in the AP; As a result
+	 * we only use the first 32 bytes of key length in the cache key 
+	 */
+	SHA1Update(&sha1ctxt, cpx->cpx_cached_key, cpx->cpx_key_len);
+	SHA1Final(digest, &sha1ctxt);
+
+	cpx_set_aes_iv_key(cpx, digest);
+	SET(cpx->cpx_flags, CPX_IV_AES_CTX_HFS);
+
+	return &cpx->cpx_iv_aes_ctx;
+}
+
+static void cpx_flush(cpx_t cpx)
+{
+	bzero(cpx->cpx_cached_key, cpx->cpx_max_key_len);
+	bzero(&cpx->cpx_iv_aes_ctx, sizeof(cpx->cpx_iv_aes_ctx));
+	cpx->cpx_flags = 0;
+	cpx->cpx_key_len = 0;
+}
+
+static bool cpx_can_copy(const struct cpx *src, const struct cpx *dst)
+{
+	return src->cpx_key_len <= dst->cpx_max_key_len;
+}
+
+void cpx_copy(const struct cpx *src, cpx_t dst)
+{
+	uint16_t key_len = cpx_key_len(src);
+	cpx_set_key_len(dst, key_len);
+	memcpy(cpx_key(dst), cpx_key(src), key_len);
+	dst->cpx_flags = src->cpx_flags;
+	if (ISSET(dst->cpx_flags, CPX_IV_AES_CTX_INITIALIZED))
+		dst->cpx_iv_aes_ctx = src->cpx_iv_aes_ctx;
+}
+
+// -- cp_key_pair accessors --
+
+void cpkp_init(cp_key_pair_t *cpkp, uint16_t max_pers_key_len,
+			   uint16_t max_cached_key_len)
+{
+	cpkp->cpkp_max_pers_key_len = max_pers_key_len;
+	cpkp->cpkp_pers_key_len = 0;
+	cpx_init(&cpkp->cpkp_cpx, max_cached_key_len);
+
+	// Default to using offsets
+	cpx_set_use_offset_for_iv(&cpkp->cpkp_cpx, true);
+}
+
+uint16_t cpkp_max_pers_key_len(const cp_key_pair_t *cpkp)
+{
+	return cpkp->cpkp_max_pers_key_len;
+}
+
+uint16_t cpkp_pers_key_len(const cp_key_pair_t *cpkp)
+{
+	return cpkp->cpkp_pers_key_len;
+}
+
+static bool cpkp_has_pers_key(const cp_key_pair_t *cpkp)
+{
+	return cpkp->cpkp_pers_key_len > 0;
+}
+
+static void *cpkp_pers_key(const cp_key_pair_t *cpkp)
+{
+	return PTR_ADD(void *, &cpkp->cpkp_cpx, cpx_sizex(&cpkp->cpkp_cpx));
+}
+
+static void cpkp_set_pers_key_len(cp_key_pair_t *cpkp, uint16_t key_len)
+{
+	if (key_len > cpkp->cpkp_max_pers_key_len)
+		panic("hfs_cprotect: key too big!");
+	cpkp->cpkp_pers_key_len = key_len;
+}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-qual"
+cpx_t cpkp_cpx(const cp_key_pair_t *cpkp)
+{
+	// Cast to remove const qualifier
+	return (cpx_t)&cpkp->cpkp_cpx;
+}
+#pragma clang diagnostic pop
+
+size_t cpkp_size(uint16_t pers_key_len, uint16_t cached_key_len)
+{
+	return (sizeof(cp_key_pair_t) - sizeof(struct cpx)
+			+ pers_key_len + cpx_size(cached_key_len));
+}
+
+size_t cpkp_sizex(const cp_key_pair_t *cpkp)
+{
+	return cpkp_size(cpkp->cpkp_max_pers_key_len, cpkp->cpkp_cpx.cpx_max_key_len);
+}
+
+void cpkp_flush(cp_key_pair_t *cpkp)
+{
+	cpx_flush(&cpkp->cpkp_cpx);
+	cpkp->cpkp_pers_key_len = 0;
+	bzero(cpkp_pers_key(cpkp), cpkp->cpkp_max_pers_key_len);
+}
+
+bool cpkp_can_copy(const cp_key_pair_t *src, const cp_key_pair_t *dst)
+{
+	return (cpkp_pers_key_len(src) <= dst->cpkp_max_pers_key_len
+			&& cpx_can_copy(&src->cpkp_cpx, &dst->cpkp_cpx));
+}
+
+void cpkp_copy(const cp_key_pair_t *src, cp_key_pair_t *dst)
+{
+	const uint16_t key_len = cpkp_pers_key_len(src);
+	cpkp_set_pers_key_len(dst, key_len);
+	memcpy(cpkp_pers_key(dst), cpkp_pers_key(src), key_len);
+	cpx_copy(&src->cpkp_cpx, &dst->cpkp_cpx);
+}
+
+// --
+
+bool cp_is_supported_version(uint16_t vers)
+{
+	return vers == CP_VERS_4 || vers == CP_VERS_5;
+}
+
+/*
+ * Return the appropriate key and, if requested, the physical offset and
+ * maximum length for a particular I/O operation.
+ */
+void cp_io_params(__unused hfsmount_t *hfsmp, cprotect_t cpr,
+				  __unused off_rsrc_t off_rsrc,
+				  __unused int direction, cp_io_params_t *io_params)
+{
+
+	io_params->max_len = INT64_MAX;
+	io_params->phys_offset = -1;
+	io_params->cpx = cpkp_cpx(&cpr->cp_keys);
+}
+
+static void cp_flush_cached_keys(cprotect_t cpr)
+{
+	cpx_flush(cpkp_cpx(&cpr->cp_keys));
+}
+
+static bool cp_needs_pers_key(cprotect_t cpr)
+{
+	if (CP_CLASS(cpr->cp_pclass) == PROTECTION_CLASS_F)
+		return !cpx_has_key(cpkp_cpx(&cpr->cp_keys));
+	else
+		return !cpkp_has_pers_key(&cpr->cp_keys);
+}
 
 int
 cp_key_store_action(int action)
@@ -107,8 +387,7 @@ cp_key_store_action(int action)
 	 * Upcast the value in 'action' to be a pointer-width unsigned integer.
 	 * This avoids issues relating to pointer-width. 
 	 */
-	unsigned long action_arg = (unsigned long) action;
-	return vfs_iterate(0, cp_lock_vfs_callback, (void*)action_arg);
+	return vfs_iterate(0, cp_lock_vfs_callback, (void*)(uintptr_t)action);
 }
 
 
@@ -126,6 +405,19 @@ cp_register_wraps(cp_wrap_func_t key_store_func)
 	are_wraps_initialized = true;
 
 	return 0;
+}
+
+static cp_key_revision_t cp_initial_key_revision(__unused hfsmount_t *hfsmp)
+{
+	return 1;
+}
+
+cp_key_revision_t cp_next_key_revision(cp_key_revision_t rev)
+{
+	rev = (rev + 0x0100) ^ (mach_absolute_time() & 0xff);
+	if (!rev)
+		rev = 1;
+	return rev;
 }
 
 /*
@@ -171,22 +463,7 @@ cp_entry_init(struct cnode *cp, struct mount *mp)
 	CP_ASSERT (cp->c_cpentry == NULL);
 
 	error = cp_getxattr(cp, hfsmp, &entry);
-	if (error == 0) {
-		/* 
-		 * Success; attribute was found, though it may not have keys.
-		 * If the entry is not returned without keys, we will delay generating
-		 * keys until the first I/O.
-		 */
-		if (S_ISREG(cp->c_mode)) {
-			if (entry->cp_flags & CP_NEEDS_KEYS) {
-				entry->cp_flags &= ~CP_KEY_FLUSHED;
-			}
-			else {
-				entry->cp_flags |= CP_KEY_FLUSHED;
-			}
-		}
-	} 
-	else if (error == ENOATTR) {
+	if (error == ENOATTR) {
 		/*
 		 * Normally, we should always have a CP EA for a file or directory that
 		 * we are initializing here. However, there are some extenuating circumstances,
@@ -195,15 +472,21 @@ cp_entry_init(struct cnode *cp, struct mount *mp)
 		 * As a result, we leave code here to deal with an ENOATTR which will always
 		 * default to a 'D/NONE' key, though we don't expect to use it much.
 		 */
-		int target_class = PROTECTION_CLASS_D;
-		
+		cp_key_class_t target_class = PROTECTION_CLASS_D;
+
 		if (S_ISDIR(cp->c_mode)) {
 			target_class = PROTECTION_CLASS_DIR_NONE;
-		}	
+		}
+
+		cp_key_revision_t key_revision = cp_initial_key_revision(hfsmp);
+
 		/* allow keybag to override our class preferences */
-		uint32_t keyflags = CP_KEYWRAP_DIFFCLASS;
-		error = cp_new (target_class, hfsmp, cp, cp->c_mode, keyflags, &entry);
+		error = cp_new (&target_class, hfsmp, cp, cp->c_mode, CP_KEYWRAP_DIFFCLASS,
+						key_revision, (cp_new_alloc_fn)cp_entry_alloc, (void **)&entry);
 		if (error == 0) {
+			entry->cp_pclass = target_class;
+			entry->cp_key_os_version = cp_os_version();
+			entry->cp_key_revision = key_revision;
 			error = cp_setxattr (cp, entry, hfsmp, cp->c_fileid, XATTR_CREATE);
 		}
 	}
@@ -226,7 +509,7 @@ out:
 	}
 	else {
 		if (entry) {
-			cp_entry_destroy(entry);
+			cp_entry_destroy(hfsmp, entry);
 		}
 		cp->c_cpentry = NULL;
 	}
@@ -246,8 +529,9 @@ out:
  * keys for us, we could have to fail the open(2) call and back out the entry.
  */
 
-int cp_setup_newentry (struct hfsmount *hfsmp, struct cnode *dcp, int32_t suppliedclass, 
-		mode_t cmode, struct cprotect **tmpentry) 
+int cp_setup_newentry (struct hfsmount *hfsmp, struct cnode *dcp,
+					   cp_key_class_t suppliedclass, mode_t cmode,
+					   struct cprotect **tmpentry)
 {
 	int isdir = 0;
 	struct cprotect *entry = NULL;
@@ -309,7 +593,7 @@ int cp_setup_newentry (struct hfsmount *hfsmp, struct cnode *dcp, int32_t suppli
 	}
 
 	/* Generate the cprotect to vend out */
-	entry = cp_entry_alloc (0);
+	entry = cp_entry_alloc(NULL, 0, 0, NULL);
 	if (entry == NULL) {
 		*tmpentry = NULL;
 		return ENOMEM;
@@ -320,41 +604,13 @@ int cp_setup_newentry (struct hfsmount *hfsmp, struct cnode *dcp, int32_t suppli
 	 * this blob has no keys and it has no backing xattr.  We just know the
 	 * target class.
 	 */
-	entry->cp_flags = (CP_NEEDS_KEYS | CP_NO_XATTR);
+	entry->cp_flags = CP_NO_XATTR;
 	/* Note this is only the effective class */
 	entry->cp_pclass = target_class;
 	*tmpentry = entry;
 
 	return 0;
 }
-
-
-/*
- * cp_needs_tempkeys
- * 
- * Relay to caller whether or not the filesystem should generate temporary keys
- * during resize operations.
- */
-
-int cp_needs_tempkeys (struct hfsmount *hfsmp, int *needs) 
-{
-
-	if (hfsmp->hfs_running_cp_major_vers < CP_PREV_MAJOR_VERS || 
-			hfsmp->hfs_running_cp_major_vers > CP_NEW_MAJOR_VERS)  {
-		return -1;
-	}
-
-	/* CP_NEW_MAJOR_VERS implies CP_OFF_IV_ENABLED */
-	if (hfsmp->hfs_running_cp_major_vers < CP_NEW_MAJOR_VERS) {
-		*needs = 0;
-	}
-	else {
-		*needs = 1;
-	}
-
-	return 0;
-}
-
 
 /*
  * Set up an initial key/class pair for a disassociated cprotect entry.
@@ -367,41 +623,17 @@ int cp_needs_tempkeys (struct hfsmount *hfsmp, int *needs)
  * where we may rely on AES symmetry to relocate encrypted data from
  * one spot in the disk to another.
  */
-int cp_entry_gentempkeys(struct cprotect **entry_ptr, struct hfsmount *hfsmp) 
+int cpx_gentempkeys(cpx_t *pcpx, __unused struct hfsmount *hfsmp)
 {
+	cpx_t cpx = cpx_alloc(CP_MAX_KEYSIZE);
 
-	struct cprotect *entry = NULL;
+	cpx_set_key_len(cpx, CP_MAX_KEYSIZE);
+	read_random(cpx_key(cpx), CP_MAX_KEYSIZE);
+	cpx_set_use_offset_for_iv(cpx, true);
 
-	if (hfsmp->hfs_running_cp_major_vers < CP_NEW_MAJOR_VERS) {
-		return EPERM;
-	}
+	*pcpx = cpx;
 
-	/*
-	 * This should only be  used for files and won't be written out.  
-	 * We don't need a persistent key.
-	 */
-	entry = cp_entry_alloc (0);
-	if (entry == NULL) {
-		*entry_ptr = NULL;
-		return ENOMEM;
-	}
-	/* This is generated in-kernel so we leave it at the max key*/
-	entry->cp_cache_key_len = CP_MAX_KEYSIZE;
-
-	/* This pclass is only the effective class */
-	entry->cp_pclass = PROTECTION_CLASS_F;
-	entry->cp_persistent_key_len = 0;
-
-	/* Generate the class F key */
-	read_random (&entry->cp_cache_key[0], entry->cp_cache_key_len);
-
-	/* Generate the IV key */
-	cp_setup_aes_ctx(entry);
-	entry->cp_flags |= CP_OFF_IV_ENABLED;
-
-	*entry_ptr = entry;
 	return 0;
-
 }
 
 /*
@@ -409,13 +641,13 @@ int cp_entry_gentempkeys(struct cprotect **entry_ptr, struct hfsmount *hfsmp)
  * Called at hfs_reclaim_cnode: cnode is locked exclusive.
  */
 void
-cp_entry_destroy(struct cprotect *entry_ptr) 
+cp_entry_destroy(hfsmount_t *hfsmp, struct cprotect *entry_ptr)
 {
 	if (entry_ptr == NULL) {
 		/* nothing to clean up */
 		return;
 	}
-	cp_entry_dealloc(entry_ptr);
+	cp_entry_dealloc(hfsmp, entry_ptr);
 }
 
 
@@ -511,7 +743,6 @@ cp_vnode_getclass(struct vnode *vp, int *class)
 	return error;
 }
 
-
 /*
  * Sets persistent class for this file or directory.
  * If vnode cannot be protected (system file, non-regular file, non-hfs), EBADF.
@@ -592,61 +823,80 @@ cp_vnode_setclass(struct vnode *vp, uint32_t newclass)
 		 * target class (since B allows I/O but an unwrap prior to the next unlock
 		 * will not be allowed).
 		 */
-		if (entry->cp_flags & CP_KEY_FLUSHED) {
+		if (!cpx_has_key(&entry->cp_keys.cpkp_cpx)) {
 			error = cp_restore_keys (entry, hfsmp, cp);
 			if (error) {
 				goto out;
 			}
 		}
+
 		if (newclass == PROTECTION_CLASS_F) {
 			/* Verify that file is blockless if switching to class F */
 			if (cp->c_datafork->ff_size > 0) {
 				error = EINVAL;
-				goto out;	
+				goto out;
+			}
+
+			cp_key_pair_t *cpkp;
+			cprotect_t new_entry = cp_entry_alloc(NULL, 0, CP_MAX_KEYSIZE, &cpkp);
+
+			if (!new_entry) {
+				error = ENOMEM;
+				goto out;
 			}
 
 			/* newclass is only the effective class */
-			entry->cp_pclass = newclass;
+			new_entry->cp_pclass = newclass;
+			new_entry->cp_key_os_version = cp_os_version();
+			new_entry->cp_key_revision = cp_next_key_revision(entry->cp_key_revision);
+
+			cpx_t cpx = cpkp_cpx(cpkp);
 
 			/* Class F files are not wrapped, so they continue to use MAX_KEYSIZE */
-			entry->cp_cache_key_len = CP_MAX_KEYSIZE;
-			read_random (&entry->cp_cache_key[0], entry->cp_cache_key_len);
-			if (hfsmp->hfs_running_cp_major_vers == CP_NEW_MAJOR_VERS) {
-				cp_setup_aes_ctx (entry);
-				entry->cp_flags |= CP_OFF_IV_ENABLED;
-			}	
-			bzero(entry->cp_persistent_key, entry->cp_persistent_key_len);
-			entry->cp_persistent_key_len = 0;
-		} else {
-			/* Deny the setclass if file is to be moved from F to something else */
-			if (entry->cp_pclass == PROTECTION_CLASS_F) {
-				error = EPERM;
-				goto out;
-			}
-			/* We cannot call cp_rewrap unless the keys were already in existence. */
-			if (entry->cp_flags & CP_NEEDS_KEYS) {
-				struct cprotect *newentry = NULL;
-				/* 
-				 * We want to fail if we can't wrap to the target class. By not setting
-				 * CP_KEYWRAP_DIFFCLASS, we tell keygeneration that if it can't wrap 
-				 * to 'newclass' then error out.
-				 */
-				uint32_t flags = 0;
-				error = cp_generate_keys (hfsmp, cp, newclass, flags,  &newentry);
-				if (error == 0) {
-					cp_replace_entry (cp, newentry);
-				}
-				/* Bypass the setxattr code below since generate_keys does it for us */
-				goto out;
-			}
-			else {
-				error = cp_rewrap(cp, hfsmp, newclass);
-			}
+			cpx_set_key_len(cpx, CP_MAX_KEYSIZE);
+			read_random (cpx_key(cpx), CP_MAX_KEYSIZE);
+
+			cp_replace_entry(hfsmp, cp, new_entry);
+
+			error = 0;
+			goto out;
 		}
+
+		/* Deny the setclass if file is to be moved from F to something else */
+		if (entry->cp_pclass == PROTECTION_CLASS_F) {
+			error = EPERM;
+			goto out;
+		}
+
+		if (!cpkp_has_pers_key(&entry->cp_keys)) {
+			struct cprotect *new_entry = NULL;
+			/*
+			 * We want to fail if we can't wrap to the target class. By not setting
+			 * CP_KEYWRAP_DIFFCLASS, we tell keygeneration that if it can't wrap
+			 * to 'newclass' then error out.
+			 */
+			uint32_t flags = 0;
+			error = cp_generate_keys (hfsmp, cp, newclass, flags,  &new_entry);
+			if (error == 0) {
+				cp_replace_entry (hfsmp, cp, new_entry);
+			}
+			/* Bypass the setxattr code below since generate_keys does it for us */
+			goto out;
+		}
+
+		cprotect_t new_entry;
+		error = cp_rewrap(cp, hfsmp, &newclass, &entry->cp_keys, entry,
+						  (cp_new_alloc_fn)cp_entry_alloc, (void **)&new_entry);
 		if (error) {
 			/* we didn't have perms to set this class. leave file as-is and error out */
 			goto out;
 		}
+
+
+		new_entry->cp_pclass = newclass;
+
+		cp_replace_entry(hfsmp, cp, new_entry);
+		entry = new_entry;
 	}
 	else if (vnode_isdir(vp)) {
 		/* For directories, just update the pclass.  newclass is only effective class */
@@ -722,16 +972,6 @@ int cp_vnode_transcode(vnode_t vp, void *key, unsigned *len)
 		goto out;
 	}
 
-	if ((entry->cp_flags & CP_NEEDS_KEYS)) {
-		/*
-		 * If we are transcoding keys for AKB, then we should have already established
-		 * a set of keys for this vnode. IF we don't have keys yet, then something bad
-		 * happened.
-		 */
-		error = EINVAL;
-		goto out;
-	}
-
 	/* Send the per-file key in wrapped form for re-wrap with the current class information
 	 * Send NULLs in the output parameters of the wrapper() and AKS will do the rest.
 	 * Don't need to process any outputs, so just clear the locks and pass along the error. */
@@ -749,8 +989,18 @@ int cp_vnode_transcode(vnode_t vp, void *key, unsigned *len)
 
 		bzero(&wrapped_key_in, sizeof(wrapped_key_in));
 		bzero(&wrapped_key_out, sizeof(wrapped_key_out));
-		wrapped_key_in.key = entry->cp_persistent_key;
-		wrapped_key_in.key_len = entry->cp_persistent_key_len;
+
+		cp_key_pair_t *cpkp = &entry->cp_keys;
+
+
+		wrapped_key_in.key = cpkp_pers_key(cpkp);
+		wrapped_key_in.key_len = cpkp_pers_key_len(cpkp);
+
+		if (!wrapped_key_in.key_len) {
+			error = EINVAL;
+			goto out;
+		}
+
 		/* Use the actual persistent class when talking to AKS */
 		wrapped_key_in.dp_class = entry->cp_pclass;
 		wrapped_key_out.key = key;
@@ -863,7 +1113,8 @@ cp_handle_vnop(struct vnode *vp, int vnop, int ioflag)
 
 	if ((error = cp_check_access(cp, hfsmp, vnop))) {
 		/* check for raw encrypted access before bailing out */
-		if ((vnop == CP_READ_ACCESS) && (ioflag & IO_ENCRYPTED)) {
+		if ((ioflag & IO_ENCRYPTED)
+			&& (vnop == CP_READ_ACCESS)) {
 			/*
 			 * read access only + asking for the raw encrypted bytes
 			 * is legitimate, so reset the error value to 0
@@ -875,9 +1126,15 @@ cp_handle_vnop(struct vnode *vp, int vnop, int ioflag)
 		}
 	}
 
-	if (entry->cp_flags == 0) {
-		/* no more work to do */
-		goto out;
+	if (!ISSET(entry->cp_flags, CP_NO_XATTR)) {
+		if (!S_ISREG(cp->c_mode))
+			goto out;
+
+		// If we have a persistent key and the cached key, we're done
+		if (!cp_needs_pers_key(entry)
+			&& cpx_has_key(cpkp_cpx(&entry->cp_keys))) {
+			goto out;
+		}
 	}
 
 	/* upgrade to exclusive lock */
@@ -890,7 +1147,7 @@ cp_handle_vnop(struct vnode *vp, int vnop, int ioflag)
 	}
 
 	/* generate new keys if none have ever been saved */
-	if ((entry->cp_flags & CP_NEEDS_KEYS)) {
+	if (cp_needs_pers_key(entry)) {
 		struct cprotect *newentry = NULL;
 		/* 
 		 * It's ok if this ends up being wrapped in a different class than 'pclass'.
@@ -900,7 +1157,7 @@ cp_handle_vnop(struct vnode *vp, int vnop, int ioflag)
 
 		error = cp_generate_keys (hfsmp, cp, CP_CLASS(cp->c_cpentry->cp_pclass), flags, &newentry);	
 		if (error == 0) {
-			cp_replace_entry (cp, newentry);
+			cp_replace_entry (hfsmp, cp, newentry);
 			entry = newentry;
 		}
 		else {
@@ -909,7 +1166,7 @@ cp_handle_vnop(struct vnode *vp, int vnop, int ioflag)
 	}
 
 	/* unwrap keys if needed */
-	if (entry->cp_flags & CP_KEY_FLUSHED) {
+	if (!cpx_has_key(cpkp_cpx(&entry->cp_keys))) {
 		if ((vnop == CP_READ_ACCESS) && (ioflag & IO_ENCRYPTED)) {
 			/* no need to try to restore keys; they are not going to be used */
 			error = 0;
@@ -932,6 +1189,30 @@ out:
 	return error;
 }
 
+#if HFS_TMPDBG
+#if !SECURE_KERNEL
+static void cp_log_eperm (struct vnode* vp, int pclass, boolean_t create) {
+	char procname[256] = {};
+	const char *fname = "unknown";
+	const char *dbgop = "open";
+
+	int ppid = proc_selfpid();
+	/* selfname does a strlcpy so we're OK */
+	proc_selfname(procname, sizeof(procname));
+	if (vp && vp->v_name) {
+		/* steal from the namecache */
+		fname = vp->v_name;
+	}
+
+	if (create) {
+		dbgop = "create";	
+	}
+	
+	printf("proc %s (pid %d) class %d, op: %s failure @ file %s\n", procname, ppid, pclass, dbgop, fname);
+}
+#endif
+#endif
+
 
 int
 cp_handle_open(struct vnode *vp, int mode)
@@ -951,8 +1232,17 @@ cp_handle_open(struct vnode *vp, int mode)
 		return 0;
 	}
 
-	/* We know the vnode is in a valid state. Acquire cnode and validate */
 	cp = VTOC(vp);
+
+	// Allow if raw encrypted mode requested
+	if (ISSET(mode, FENCRYPTED)) {
+		return 0;
+	}
+	if (ISSET(mode, FUNENCRYPTED)) {
+		return 0;
+	}
+
+	/* We know the vnode is in a valid state. Acquire cnode and validate */
 	hfsmp = VTOHFS(vp);
 
 	if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK, HFS_LOCK_DEFAULT))) {
@@ -977,13 +1267,13 @@ cp_handle_open(struct vnode *vp, int mode)
 	/*
 	 * Does the cnode have keys yet?  If not, then generate them.
 	 */
-	if (entry->cp_flags & CP_NEEDS_KEYS) {
+	if (cp_needs_pers_key(entry)) {
 		struct cprotect *newentry = NULL;
 		/* Allow the keybag to override our class preferences */
 		uint32_t flags = CP_KEYWRAP_DIFFCLASS;
 		error = cp_generate_keys (hfsmp, cp, CP_CLASS(cp->c_cpentry->cp_pclass), flags, &newentry);
 		if (error == 0) {
-			cp_replace_entry (cp, newentry);
+			cp_replace_entry (hfsmp, cp, newentry);
 			entry = newentry;
 		}	
 		else {
@@ -1011,7 +1301,7 @@ cp_handle_open(struct vnode *vp, int mode)
 				break;
 			}
 			
-			if ((entry->cp_flags & CP_KEY_FLUSHED) == 0) {
+			if (cpx_has_key(cpkp_cpx(&entry->cp_keys)) && !ISSET(mode, FENCRYPTED)) {
 				/*
 				 * For a class B file, attempt the unwrap if we have the key in
 				 * core already. 
@@ -1024,8 +1314,8 @@ cp_handle_open(struct vnode *vp, int mode)
 
 				cp_init_access(&access_in, cp);
 				bzero(&wrapped_key_in, sizeof(wrapped_key_in));
-				wrapped_key_in.key = entry->cp_persistent_key;
-				wrapped_key_in.key_len = entry->cp_persistent_key_len;
+				wrapped_key_in.key = cpkp_pers_key(&entry->cp_keys);
+				wrapped_key_in.key_len = cpkp_pers_key_len(&entry->cp_keys);
 				/* Use the persistent class when talking to AKS */
 				wrapped_key_in.dp_class = entry->cp_pclass;
 				error = g_cp_wrap_func.unwrapper(&access_in, &wrapped_key_in, NULL);
@@ -1052,7 +1342,7 @@ cp_handle_open(struct vnode *vp, int mode)
 			 * Since this function is bypassed entirely if we're opening a raw encrypted file, 
 			 * we can always attempt the restore.
 			 */
-			if (entry->cp_flags & CP_KEY_FLUSHED) {
+			if (!cpx_has_key(cpkp_cpx(&entry->cp_keys))) {
 				error = cp_restore_keys(entry, hfsmp, cp);
 			}
 	
@@ -1068,60 +1358,19 @@ cp_handle_open(struct vnode *vp, int mode)
 	}
 
 out:
+
+#if HFS_TMPDBG
+#if !SECURE_KERNEL
+	if ((hfsmp->hfs_cp_verbose) && (error == EPERM)) {
+		cp_log_eperm (vp, CP_CLASS(entry->cp_pclass), false);
+	}
+#endif
+#endif
+
 	hfs_unlock(cp);
 	return error;
 }
 
-
-/*
- * During hfs resize operations, we have slightly different constraints than during
- * normal VNOPS that read/write data to files.  Specifically, we already have the cnode
- * locked (so nobody else can modify it), and we are doing the IO with root privileges, since
- * we are moving the data behind the user's back.  So, we skip access checks here (for unlock
- * vs. lock), and don't worry about non-existing keys.  If the file exists on-disk with valid
- * payload, then it must have keys set up already by definition.
- */
-int
-cp_handle_relocate (struct cnode *cp, struct hfsmount *hfsmp) 
-{
-	struct cprotect *entry;
-	int error = -1;
-
-	/* cp is already locked */
-	entry = cp->c_cpentry;
-	if (!entry)
-		goto out;
-
-	/*
-	 * Still need to validate whether to permit access to the file or not
-	 * based on lock status
-	 */
-	if ((error = cp_check_access(cp, hfsmp,  CP_READ_ACCESS | CP_WRITE_ACCESS))) {
-		goto out;
-	}
-
-	if (entry->cp_flags == 0) {
-		/* no more work to do */
-		error = 0;
-		goto out;
-	}
-
-	/* it must have keys since it is an existing file with actual payload */
-
-	/* unwrap keys if needed */
-	if (entry->cp_flags & CP_KEY_FLUSHED) {
-		error = cp_restore_keys(entry, hfsmp, cp);
-	}
-
-	/*
-	 * Don't need to write out the EA since if the file has actual extents,
-	 * it must have an EA
-	 */
-out:
-
-	/* return the cp still locked */
-	return error;
-}
 
 /*
  * cp_getrootxattr:
@@ -1135,7 +1384,14 @@ cp_getrootxattr(struct hfsmount* hfsmp, struct cp_root_xattr *outxattr)
 {
 	uio_t   auio;
 	char    uio_buf[UIO_SIZEOF(1)];
-	size_t attrsize = sizeof(struct cp_root_xattr);
+	void	*buf;
+
+	/*
+	 * We allow for an extra 64 bytes to cater for upgrades.  This wouldn't
+	 * be necessary if the xattr routines just returned what we asked for.
+	 */
+	size_t attrsize = roundup(sizeof(struct cp_root_xattr) + 64, 64);
+
 	int error = 0;
 	struct vnop_getxattr_args args;
 
@@ -1143,8 +1399,10 @@ cp_getrootxattr(struct hfsmount* hfsmp, struct cp_root_xattr *outxattr)
 		panic("Content Protection: cp_xattr called with xattr == NULL");
 	}
 
+	MALLOC(buf, void *, attrsize, M_TEMP, M_WAITOK);
+
 	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ, &uio_buf[0], sizeof(uio_buf));
-	uio_addiov(auio, CAST_USER_ADDR_T(outxattr), attrsize);
+	uio_addiov(auio, CAST_USER_ADDR_T(buf), attrsize);
 
 	args.a_desc = NULL; // unused
 	args.a_vp = NULL; //unused since we're writing EA to root folder.
@@ -1156,17 +1414,34 @@ cp_getrootxattr(struct hfsmount* hfsmp, struct cp_root_xattr *outxattr)
 
 	error = hfs_getxattr_internal(NULL, &args, hfsmp, 1);
 
-	/* Now convert the multi-byte fields to native endianness */
-	outxattr->major_version = OSSwapLittleToHostInt16(outxattr->major_version);
-	outxattr->minor_version = OSSwapLittleToHostInt16(outxattr->minor_version);
-	outxattr->flags = OSSwapLittleToHostInt64(outxattr->flags);
-
 	if (error != 0) {
 		goto out;
 	}
 
+	if (attrsize < CP_ROOT_XATTR_MIN_LEN) {
+		error = HFS_EINCONSISTENT;
+		goto out;
+	}
+
+	const struct cp_root_xattr *xattr = buf;
+
+	bzero(outxattr, sizeof(*outxattr));
+
+	/* Now convert the multi-byte fields to native endianness */
+	outxattr->major_version = OSSwapLittleToHostInt16(xattr->major_version);
+	outxattr->minor_version = OSSwapLittleToHostInt16(xattr->minor_version);
+	outxattr->flags = OSSwapLittleToHostInt64(xattr->flags);
+
+	if (outxattr->major_version >= CP_VERS_5) {
+		if (attrsize < sizeof(struct cp_root_xattr)) {
+			error = HFS_EINCONSISTENT;
+			goto out;
+		}
+	}
+
 out:
 	uio_free(auio);
+	FREE(buf, M_TEMP);
 	return error;
 }
 
@@ -1193,13 +1468,24 @@ cp_setrootxattr(struct hfsmount *hfsmp, struct cp_root_xattr *newxattr)
 	args.a_options = 0;
 	args.a_context = NULL; //no context needed, only done from mount.
 
+	const uint32_t flags = newxattr->flags;
+
 	/* Now convert the multi-byte fields to little endian before writing to disk. */
-	newxattr->major_version = OSSwapHostToLittleInt16(newxattr->major_version);
-	newxattr->minor_version = OSSwapHostToLittleInt16(newxattr->minor_version);
 	newxattr->flags = OSSwapHostToLittleInt64(newxattr->flags);
 
+	int xattr_size = sizeof(struct cp_root_xattr);
+
+
+	newxattr->major_version = OSSwapHostToLittleInt16(newxattr->major_version);
+	newxattr->minor_version = OSSwapHostToLittleInt16(newxattr->minor_version);
+
 	error = hfs_setxattr_internal(NULL, (caddr_t)newxattr,
-			sizeof(struct cp_root_xattr), &args, hfsmp, 1);
+			xattr_size, &args, hfsmp, 1);
+
+	if (!error) {
+		hfsmp->cproot_flags = flags;
+	}
+
 	return error;
 }
 
@@ -1210,110 +1496,69 @@ cp_setrootxattr(struct hfsmount *hfsmp, struct cp_root_xattr *newxattr)
  *
  * This function is also invoked during file creation.
  */
-int cp_setxattr(struct cnode *cp, struct cprotect *entry, struct hfsmount *hfsmp, uint32_t fileid, int options)
+int cp_setxattr(struct cnode *cp, struct cprotect *entry, struct hfsmount *hfsmp,
+				uint32_t fileid, int options)
 {
 	int error = 0;
-	size_t attrsize;
-	struct vnop_setxattr_args args;
-	uint32_t target_fileid;
-	struct cnode *arg_cp = NULL;
-	uint32_t tempflags = 0;
+	cp_key_pair_t *cpkp = &entry->cp_keys;
 
-	args.a_desc = NULL;
-	
 	if (hfsmp->hfs_flags & HFS_READ_ONLY) {
 		return EROFS;
 	}
-	
-	if (cp) {
-		args.a_vp = cp->c_vp;
-		target_fileid = 0;
-		arg_cp = cp;
+
+	if (hfsmp->hfs_running_cp_major_vers < CP_CURRENT_VERS) {
+		// Upgrade
+		printf("hfs: upgrading to cp version %u\n", CP_CURRENT_VERS);
+
+		struct cp_root_xattr root_xattr;
+
+		error = cp_getrootxattr(hfsmp, &root_xattr);
+		if (error)
+			return error;
+
+		root_xattr.major_version = CP_CURRENT_VERS;
+		root_xattr.minor_version = CP_MINOR_VERS;
+
+		error = cp_setrootxattr(hfsmp, &root_xattr);
+		if (error)
+			return error;
+
+		hfsmp->hfs_running_cp_major_vers = CP_CURRENT_VERS;
 	}
-	else {
-		/*
-		 * When we set the EA in the same txn as the file creation,
-		 * we do not have a vnode/cnode yet. Use the specified fileid.
-		 */
-		args.a_vp = NULL;
-		target_fileid = fileid;
-	}
-	args.a_name = CONTENT_PROTECTION_XATTR_NAME;
-	args.a_uio = NULL; //pass data ptr instead
-	args.a_options = options;
-	args.a_context = vfs_context_current();
 
-	/* Note that it's OK to write out an XATTR without keys. */
-	/* Disable flags that will be invalid as we're writing the EA out at this point. */
-	tempflags = entry->cp_flags;
+	struct cp_xattr_v5 *xattr;
+	MALLOC(xattr, struct cp_xattr_v5 *, sizeof(*xattr), M_TEMP, M_WAITOK);
 
-	/* we're writing the EA; CP_NO_XATTR is invalid */
-	tempflags &= ~CP_NO_XATTR;
-	
-	/* CP_SEP_WRAPPEDKEY is informational/runtime only. */
-	tempflags &= ~CP_SEP_WRAPPEDKEY;
+	xattr->xattr_major_version	= OSSwapHostToLittleConstInt16(CP_VERS_5);
+	xattr->xattr_minor_version	= OSSwapHostToLittleConstInt16(CP_MINOR_VERS);
+	xattr->flags				= 0;
+	xattr->persistent_class		= OSSwapHostToLittleInt32(entry->cp_pclass);
+	xattr->key_os_version		= OSSwapHostToLittleInt32(entry->cp_key_os_version);
+	xattr->key_revision			= OSSwapHostToLittleInt16(entry->cp_key_revision);
 
-	switch(hfsmp->hfs_running_cp_major_vers) {
-		case CP_NEW_MAJOR_VERS: {
-			struct cp_xattr_v4 *newxattr = NULL; // 70+ bytes; don't alloc on stack.
-			MALLOC (newxattr, struct cp_xattr_v4*, sizeof(struct cp_xattr_v4), M_TEMP, M_WAITOK);
-			if (newxattr == NULL) {
-				error = ENOMEM;
-				break;
-			}
-			bzero (newxattr, sizeof(struct cp_xattr_v4));
+	uint16_t key_len = cpkp_pers_key_len(cpkp);
+	xattr->key_len	= OSSwapHostToLittleInt16(key_len);
+	memcpy(xattr->persistent_key, cpkp_pers_key(cpkp), key_len);
 
-			attrsize = sizeof(*newxattr) - CP_MAX_WRAPPEDKEYSIZE + entry->cp_persistent_key_len;
+	size_t xattr_len = offsetof(struct cp_xattr_v5, persistent_key) + key_len;
 
-			/* Endian swap the multi-byte fields into L.E from host. */
-			newxattr->xattr_major_version = OSSwapHostToLittleInt16 (hfsmp->hfs_running_cp_major_vers);
-			newxattr->xattr_minor_version = OSSwapHostToLittleInt16(CP_MINOR_VERS);
-			newxattr->key_size = OSSwapHostToLittleInt32(entry->cp_persistent_key_len);
-			newxattr->flags = OSSwapHostToLittleInt32(tempflags);
-			newxattr->persistent_class = OSSwapHostToLittleInt32(entry->cp_pclass);
-			bcopy(entry->cp_persistent_key, newxattr->persistent_key, entry->cp_persistent_key_len);
 
-			error = hfs_setxattr_internal(arg_cp, (caddr_t)newxattr, attrsize, &args, hfsmp, target_fileid);
+	struct vnop_setxattr_args args = {
+		.a_vp		= cp ? cp->c_vp : NULL,
+		.a_name		= CONTENT_PROTECTION_XATTR_NAME,
+		.a_options	= options,
+		.a_context	= vfs_context_current(),
+	};
 
-			FREE(newxattr, M_TEMP);
-			break;
-		}
-		case CP_PREV_MAJOR_VERS: {
-			struct cp_xattr_v2 *newxattr = NULL;
-			MALLOC (newxattr, struct cp_xattr_v2*, sizeof(struct cp_xattr_v2), M_TEMP, M_WAITOK);
-			if (newxattr == NULL) {
-				error = ENOMEM;
-				break;
-			}
-			bzero (newxattr, sizeof(struct cp_xattr_v2));
+	error = hfs_setxattr_internal(cp, xattr, xattr_len, &args, hfsmp, fileid);
 
-			attrsize = sizeof(*newxattr);
-
-			/* Endian swap the multi-byte fields into L.E from host. */
-			newxattr->xattr_major_version = OSSwapHostToLittleInt16(hfsmp->hfs_running_cp_major_vers);
-			newxattr->xattr_minor_version = OSSwapHostToLittleInt16(CP_MINOR_VERS);
-			newxattr->key_size = OSSwapHostToLittleInt32(entry->cp_persistent_key_len);
-			newxattr->flags = OSSwapHostToLittleInt32(tempflags);
-			newxattr->persistent_class = OSSwapHostToLittleInt32(entry->cp_pclass);
-			bcopy(entry->cp_persistent_key, newxattr->persistent_key, entry->cp_persistent_key_len);
-
-			error = hfs_setxattr_internal(arg_cp, (caddr_t)newxattr, attrsize, &args, hfsmp, target_fileid);
-
-			FREE (newxattr, M_TEMP);
-			break;
-		}
-		default:
-			printf("hfs: cp_setxattr: Unknown CP version running \n");
-			break;
-	}
+	FREE(xattr, M_TEMP);
 
 	if (error == 0 ) {
 		entry->cp_flags &= ~CP_NO_XATTR;
 	}
 
 	return error;
-
-
 }
 
 /*
@@ -1420,216 +1665,244 @@ cp_is_valid_class(int isdir, int32_t protectionclass)
 	}
 }
 
+#if DEBUG
+static const uint32_t cp_magic1 = 0x7b727063;	// cpr{
+static const uint32_t cp_magic2 = 0x7270637d;	// }cpr
+#endif
 
-static struct cprotect *
-cp_entry_alloc(size_t keylen)
+struct cprotect *
+cp_entry_alloc(cprotect_t old, uint16_t pers_key_len,
+			   uint16_t cached_key_len, cp_key_pair_t **pcpkp)
 {
 	struct cprotect *cp_entry;
 
-	if (keylen > CP_MAX_WRAPPEDKEYSIZE)
+	if (pers_key_len > CP_MAX_WRAPPEDKEYSIZE)
 		return (NULL);
 
-	MALLOC(cp_entry, struct cprotect *, sizeof(struct cprotect) + keylen,
-		   M_TEMP, M_WAITOK);
-	if (cp_entry == NULL)
-		return (NULL);
+	size_t size = (sizeof(struct cprotect) - sizeof(cp_key_pair_t)
+				   + cpkp_size(pers_key_len, cached_key_len));
 
-	bzero(cp_entry, sizeof(*cp_entry) + keylen);
-	cp_entry->cp_persistent_key_len = keylen;
-	return (cp_entry);
+#if DEBUG
+	size += 4;	// Extra for magic2
+#endif
+
+	MALLOC(cp_entry, struct cprotect *, size, M_TEMP, M_WAITOK);
+
+	if (old) {
+		memcpy(cp_entry, old, offsetof(struct cprotect, cp_keys));
+
+	} else {
+		bzero(cp_entry, offsetof(struct cprotect, cp_keys));
+	}
+
+#if DEBUG
+	cp_entry->cp_magic1 = cp_magic1;
+	*PTR_ADD(uint32_t *, cp_entry, size - 4) = cp_magic2;
+#endif
+
+	cpkp_init(&cp_entry->cp_keys, pers_key_len, cached_key_len);
+
+	/*
+	 * If we've been passed the old entry, then we are in the process of
+	 * rewrapping in which case we need to copy the cached key.  This is
+	 * important for class B files when the device is locked because we
+	 * won't be able to unwrap whilst in this state, yet we still need the
+	 * unwrapped key.
+	 */
+	if (old)
+		cpx_copy(cpkp_cpx(&old->cp_keys), cpkp_cpx(&cp_entry->cp_keys));
+
+	if (pcpkp)
+		*pcpkp = &cp_entry->cp_keys;
+
+	return cp_entry;
 }
 
 static void
-cp_entry_dealloc(struct cprotect *entry)
+cp_entry_dealloc(__unused hfsmount_t *hfsmp, struct cprotect *entry)
 {
-	uint32_t keylen = entry->cp_persistent_key_len;
-	bzero(entry, (sizeof(*entry) + keylen));
+
+	cpkp_flush(&entry->cp_keys);
+
+#if DEBUG
+	assert(entry->cp_magic1 == cp_magic1);
+	assert(*PTR_ADD(uint32_t *, entry, (sizeof(struct cprotect) - sizeof(cp_key_pair_t)
+										+ cpkp_sizex(&entry->cp_keys) == cp_magic2)));
+#endif
+
 	FREE(entry, M_TEMP);
 }
 
+static int cp_read_xattr_v4(__unused hfsmount_t *hfsmp, struct cp_xattr_v4 *xattr,
+							size_t xattr_len, cprotect_t *pcpr, cp_getxattr_options_t options)
+{
+	/* Endian swap the multi-byte fields into host endianness from L.E. */
+	xattr->xattr_major_version = OSSwapLittleToHostInt16(xattr->xattr_major_version);
+	xattr->xattr_minor_version = OSSwapLittleToHostInt16(xattr->xattr_minor_version);
+	xattr->key_size = OSSwapLittleToHostInt32(xattr->key_size);
+	xattr->flags = OSSwapLittleToHostInt32(xattr->flags);
+	xattr->persistent_class = OSSwapLittleToHostInt32(xattr->persistent_class);
+	xattr->key_os_version = OSSwapLittleToHostInt32(xattr->key_os_version);
+
+	/*
+	 * Prevent a buffer overflow, and validate the key length obtained from the
+	 * EA. If it's too big, then bail out, because the EA can't be trusted at this
+	 * point.
+	 */
+	if (xattr->key_size > CP_MAX_WRAPPEDKEYSIZE)
+		return HFS_EINCONSISTENT;
+
+	size_t min_len = offsetof(struct cp_xattr_v4, persistent_key) + xattr->key_size;
+	if (xattr_len < min_len)
+		return HFS_EINCONSISTENT;
+
+	/*
+	 * Class F files have no backing key; their keylength should be 0,
+	 * though they should have the proper flags set.
+	 *
+	 * A request to instantiate a CP for a class F file should result
+	 * in a bzero'd cp that just says class F, with key_flushed set.
+	 */
+	if (CP_CLASS(xattr->persistent_class) == PROTECTION_CLASS_F
+		|| ISSET(xattr->flags, CP_XAF_NEEDS_KEYS)) {
+		xattr->key_size = 0;
+	}
+
+	/* set up entry with information from xattr */
+	cp_key_pair_t *cpkp;
+	cprotect_t entry;
+	
+	if (ISSET(options, CP_GET_XATTR_BASIC_INFO)) {
+		/* caller passed in a pre-allocated structure to get the basic info */
+		entry = *pcpr;
+		bzero(entry, offsetof(struct cprotect, cp_keys));
+	}
+	else {
+		entry = cp_entry_alloc(NULL, xattr->key_size, CP_MAX_CACHEBUFLEN, &cpkp);
+	}
+
+	entry->cp_pclass = xattr->persistent_class;
+	entry->cp_key_os_version = xattr->key_os_version;
+
+
+	if (!ISSET(options, CP_GET_XATTR_BASIC_INFO)) {
+		if (xattr->key_size) {
+			cpkp_set_pers_key_len(cpkp, xattr->key_size);
+			memcpy(cpkp_pers_key(cpkp), xattr->persistent_key, xattr->key_size);
+		}
+
+		*pcpr = entry;
+	}
+	else if (xattr->key_size) {
+		SET(entry->cp_flags, CP_HAS_A_KEY);
+	}
+
+	return 0;
+}
+
+int cp_read_xattr_v5(hfsmount_t *hfsmp, struct cp_xattr_v5 *xattr,
+					 size_t xattr_len, cprotect_t *pcpr, cp_getxattr_options_t options)
+{
+	if (xattr->xattr_major_version == OSSwapHostToLittleConstInt16(CP_VERS_4)) {
+		return cp_read_xattr_v4(hfsmp, (struct cp_xattr_v4 *)xattr, xattr_len, pcpr, options);
+	}
+
+	xattr->xattr_major_version	= OSSwapLittleToHostInt16(xattr->xattr_major_version);
+
+	if (xattr->xattr_major_version != CP_VERS_5) {
+		printf("hfs: cp_getxattr: unsupported xattr version %d\n",
+			   xattr->xattr_major_version);
+		return ENOTSUP;
+	}
+
+	size_t min_len = offsetof(struct cp_xattr_v5, persistent_key);
+
+	if (xattr_len < min_len)
+		return HFS_EINCONSISTENT;
+
+	xattr->xattr_minor_version	= OSSwapLittleToHostInt16(xattr->xattr_minor_version);
+	xattr->flags				= OSSwapLittleToHostInt32(xattr->flags);
+	xattr->persistent_class		= OSSwapLittleToHostInt32(xattr->persistent_class);
+	xattr->key_os_version		= OSSwapLittleToHostInt32(xattr->key_os_version);
+	xattr->key_revision			= OSSwapLittleToHostInt16(xattr->key_revision);
+	xattr->key_len				= OSSwapLittleToHostInt16(xattr->key_len);
+
+	uint16_t pers_key_len = xattr->key_len;
+
+	min_len += pers_key_len;
+	if (xattr_len < min_len)
+		return HFS_EINCONSISTENT;
+
+
+	cp_key_pair_t *cpkp;
+	cprotect_t entry;
+	
+	/* 
+	 * If option CP_GET_XATTR_BASIC_INFO is set, we only return basic
+	 * information about the file's protection (and not the key) and
+	 * we store the result in the structure the caller passed to us.
+	 */
+	if (ISSET(options, CP_GET_XATTR_BASIC_INFO)) {
+		entry = *pcpr;
+		bzero(entry, offsetof(struct cprotect, cp_keys));
+	} else {
+		entry = cp_entry_alloc(NULL, xattr->key_len, CP_MAX_CACHEBUFLEN, &cpkp);
+	}
+
+	entry->cp_pclass			= xattr->persistent_class;
+	entry->cp_key_os_version	= xattr->key_os_version;
+	entry->cp_key_revision		= xattr->key_revision;
+
+	if (!ISSET(options, CP_GET_XATTR_BASIC_INFO)) {
+		if (xattr->key_len) {
+			cpkp_set_pers_key_len(cpkp, xattr->key_len);
+			memcpy(cpkp_pers_key(cpkp), xattr->persistent_key, xattr->key_len);
+		}
+
+
+		*pcpr = entry;
+	}
+	else if (xattr->key_len) {
+		SET(entry->cp_flags, CP_HAS_A_KEY);
+	}
+
+	return 0;
+}
 
 /*
  * Initializes a new cprotect entry with xattr data from the cnode.
  * cnode lock held shared
  */
 static int
-cp_getxattr(struct cnode *cp, struct hfsmount *hfsmp, struct cprotect **outentry)
+cp_getxattr(struct cnode *cp, struct hfsmount *hfsmp, cprotect_t *outentry)
 {
-	int error = 0;
-	uio_t auio;
-	size_t attrsize;
-	char uio_buf[UIO_SIZEOF(1)];
-	struct vnop_getxattr_args args;
-	struct cprotect *entry = NULL;
+	size_t xattr_len = sizeof(struct cp_xattr_v5);
+	struct cp_xattr_v5 *xattr;
 
-	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ, &uio_buf[0], sizeof(uio_buf));
-	args.a_desc = NULL; // unused
-	args.a_vp = cp->c_vp;
-	args.a_name = CONTENT_PROTECTION_XATTR_NAME;
-	args.a_uio = auio;
-	args.a_options = XATTR_REPLACE;
-	args.a_context = vfs_context_current(); // unused
+	MALLOC (xattr, struct cp_xattr_v5 *, xattr_len,
+			M_TEMP, M_WAITOK);
 
-	switch (hfsmp->hfs_running_cp_major_vers) {
-		case CP_NEW_MAJOR_VERS: {
-			struct cp_xattr_v4 *xattr = NULL;
-			MALLOC (xattr, struct cp_xattr_v4*, sizeof(struct cp_xattr_v4), M_TEMP, M_WAITOK);
-			if (xattr == NULL) {
-				error = ENOMEM;
-				break;
-			}
-			bzero(xattr, sizeof (struct cp_xattr_v4));
-			attrsize = sizeof(*xattr);
+	int error = hfs_xattr_read(cp->c_vp, CONTENT_PROTECTION_XATTR_NAME,
+							   xattr, &xattr_len);
 
-			uio_addiov(auio, CAST_USER_ADDR_T(xattr), attrsize);
-			args.a_size = &attrsize;
-
-			error = hfs_getxattr_internal(cp, &args, VTOHFS(cp->c_vp), 0);
-			if (error != 0) {
-				FREE (xattr, M_TEMP);
-				goto out;
-			}
-
-			/* Endian swap the multi-byte fields into host endianness from L.E. */
-			xattr->xattr_major_version = OSSwapLittleToHostInt16(xattr->xattr_major_version);
-			xattr->xattr_minor_version = OSSwapLittleToHostInt16(xattr->xattr_minor_version);
-			xattr->key_size = OSSwapLittleToHostInt32(xattr->key_size);
-			xattr->flags = OSSwapLittleToHostInt32(xattr->flags);
-			xattr->persistent_class = OSSwapLittleToHostInt32(xattr->persistent_class);
-
-			if (xattr->xattr_major_version != hfsmp->hfs_running_cp_major_vers ) {
-				printf("hfs: cp_getxattr: bad xattr version %d expecting %d\n",
-					xattr->xattr_major_version, hfsmp->hfs_running_cp_major_vers);
-				error = EINVAL;
-				FREE (xattr, M_TEMP);
-
-				goto out;
-			}
-			/*
-			 * Prevent a buffer overflow, and validate the key length obtained from the
-			 * EA. If it's too big, then bail out, because the EA can't be trusted at this
-			 * point.
-			 */
-			if (xattr->key_size > CP_MAX_WRAPPEDKEYSIZE) {
-				error = EINVAL;
-				FREE (xattr, M_TEMP);
-
-				goto out;
-			}
-
-			/* 
-			 * Class F files have no backing key; their keylength should be 0,
-			 * though they should have the proper flags set.
-			 *
-			 * A request to instantiate a CP for a class F file should result 
-			 * in a bzero'd cp that just says class F, with key_flushed set.
-			 */
-
-			/* set up entry with information from xattr */
-			entry = cp_entry_alloc(xattr->key_size);
-			if (!entry) {
-				FREE (xattr, M_TEMP);
-
-				return ENOMEM;
-			}
-
-			entry->cp_pclass = xattr->persistent_class;
-
-			/* 
-			 * Suppress invalid flags that should not be set. 
-			 * If we have gotten this far, then CP_NO_XATTR cannot possibly
-			 * be valid; the EA exists.
-			 */
-			xattr->flags &= ~CP_NO_XATTR;
-
-			entry->cp_flags = xattr->flags;
-			if (xattr->xattr_major_version >= CP_NEW_MAJOR_VERS) {
-				entry->cp_flags |= CP_OFF_IV_ENABLED;
-			}
-
-			if (CP_CLASS(entry->cp_pclass) != PROTECTION_CLASS_F ) {
-				bcopy(xattr->persistent_key, entry->cp_persistent_key, xattr->key_size);
-			}
-
-			FREE (xattr, M_TEMP);
-
-			break;
-		}
-		case CP_PREV_MAJOR_VERS: {
-			struct cp_xattr_v2 *xattr = NULL;
-			MALLOC (xattr, struct cp_xattr_v2*, sizeof(struct cp_xattr_v2), M_TEMP, M_WAITOK);
-			if (xattr == NULL) {
-				error = ENOMEM;
-				break;
-			}
-			bzero (xattr, sizeof (struct cp_xattr_v2));
-			attrsize = sizeof(*xattr);
-
-			uio_addiov(auio, CAST_USER_ADDR_T(xattr), attrsize);
-			args.a_size = &attrsize;
-
-			error = hfs_getxattr_internal(cp, &args, VTOHFS(cp->c_vp), 0);
-			if (error != 0) {
-				FREE (xattr, M_TEMP);
-				goto out;
-			}
-
-			/* Endian swap the multi-byte fields into host endianness from L.E. */
-			xattr->xattr_major_version = OSSwapLittleToHostInt16(xattr->xattr_major_version);
-			xattr->xattr_minor_version = OSSwapLittleToHostInt16(xattr->xattr_minor_version);
-			xattr->key_size = OSSwapLittleToHostInt32(xattr->key_size);
-			xattr->flags = OSSwapLittleToHostInt32(xattr->flags);
-			xattr->persistent_class = OSSwapLittleToHostInt32(xattr->persistent_class);
-
-			if (xattr->xattr_major_version != hfsmp->hfs_running_cp_major_vers) {
-				printf("hfs: cp_getxattr: bad xattr version %d expecting %d\n",
-					xattr->xattr_major_version, hfsmp->hfs_running_cp_major_vers);
-				error = EINVAL;
-				FREE (xattr, M_TEMP);
-				goto out;
-			}
-
-			/*
-			 * Prevent a buffer overflow, and validate the key length obtained from the
-			 * EA. If it's too big, then bail out, because the EA can't be trusted at this
-			 * point.
-			 */
-			if (xattr->key_size > CP_V2_WRAPPEDKEYSIZE) {
-				error = EINVAL;
-				FREE (xattr, M_TEMP);
-				goto out;
-			}
-			/* set up entry with information from xattr */
-			entry = cp_entry_alloc(xattr->key_size);
-			if (!entry) {
-				FREE (xattr, M_TEMP);
-				return ENOMEM;
-			}
-
-			entry->cp_pclass = xattr->persistent_class;
-
-			/* 
-			 * Suppress invalid flags that should not be set. 
-			 * If we have gotten this far, then CP_NO_XATTR cannot possibly
-			 * be valid; the EA exists.
-			 */
-			xattr->flags &= ~CP_NO_XATTR;
-
-			entry->cp_flags = xattr->flags;
-
-			if (CP_CLASS(entry->cp_pclass) != PROTECTION_CLASS_F ) {
-				bcopy(xattr->persistent_key, entry->cp_persistent_key, xattr->key_size);
-			}
-
-			FREE (xattr, M_TEMP);
-			break;
-		}
+	if (!error) {
+		if (xattr_len < CP_XATTR_MIN_LEN)
+			error = HFS_EINCONSISTENT;
+		else
+			error = cp_read_xattr_v5(hfsmp, xattr, xattr_len, outentry, 0);
 	}
 
-out:
-	uio_free(auio);
+#if DEBUG
+	if (error && error != ENOATTR) {
+		printf("cp_getxattr: bad cp xattr (%d):\n", error);
+		for (size_t i = 0; i < xattr_len; ++i)
+			printf("%02x ", ((uint8_t *)xattr)[i]);
+		printf("\n");
+	}
+#endif
 
-	*outentry = entry;
+	FREE(xattr, M_TEMP);
+
 	return error;
 }
 
@@ -1645,14 +1918,8 @@ cp_restore_keys(struct cprotect *entry, struct hfsmount *hfsmp, struct cnode *cp
 
  	error = cp_unwrap(hfsmp, entry, cp);
 	if (error) {
-		entry->cp_flags |= CP_KEY_FLUSHED;
-		bzero(entry->cp_cache_key, entry->cp_cache_key_len);
+		cp_flush_cached_keys(entry);
 		error = EPERM;
-	}
-	else {
-		/* ready for business */
-		entry->cp_flags &= ~CP_KEY_FLUSHED;
-
 	}
 	return error;
 }
@@ -1819,9 +2086,7 @@ cp_lock_vnode_callback(struct vnode *vp, void *arg)
 			 * is no key leakage in that layer.
 			 */
 
-			entry->cp_flags |= CP_KEY_FLUSHED;
-			bzero(&entry->cp_cache_key, entry->cp_cache_key_len);
-			bzero(&entry->cp_cache_iv_ctx, sizeof(aes_encrypt_ctx));
+			cp_flush_cached_keys(entry);
 
 			/* some write may have arrived in the mean time. dump those pages */
 			hfs_unlock(cp);
@@ -1858,15 +2123,17 @@ out:
  * Generate a new wrapped key based on the existing cache key.
  */
 
-static int
-cp_rewrap(struct cnode *cp, struct hfsmount *hfsmp, int newclass) 
+int
+cp_rewrap(struct cnode *cp, __unused hfsmount_t *hfsmp,
+		  cp_key_class_t *newclass, cp_key_pair_t *cpkp, const void *old_holder,
+		  cp_new_alloc_fn alloc_fn, void **pholder)
 {
-
 	struct cprotect *entry = cp->c_cpentry;
+
 	uint8_t new_persistent_key[CP_MAX_WRAPPEDKEYSIZE];
 	size_t keylen = CP_MAX_WRAPPEDKEYSIZE;
 	int error = 0;
-	newclass = CP_CLASS(newclass);
+	const cp_key_class_t key_class = CP_CLASS(*newclass);
 
 	/* Structures passed between HFS and AKS */
 	cp_cred_s access_in;
@@ -1878,15 +2145,15 @@ cp_rewrap(struct cnode *cp, struct hfsmount *hfsmp, int newclass)
 	 * key that is only good as long as the file is open.  There is no
 	 * wrapped key, so there isn't anything to wrap.
 	 */
-	if (newclass == PROTECTION_CLASS_F) {
+	if (key_class == PROTECTION_CLASS_F) {
 		return EINVAL;
 	}
 
 	cp_init_access(&access_in, cp);
 
 	bzero(&wrapped_key_in, sizeof(wrapped_key_in));
-	wrapped_key_in.key = entry->cp_persistent_key;
-	wrapped_key_in.key_len = entry->cp_persistent_key_len;
+	wrapped_key_in.key = cpkp_pers_key(cpkp);
+	wrapped_key_in.key_len = cpkp_pers_key_len(cpkp);
 	/* Use the persistent class when talking to AKS */
 	wrapped_key_in.dp_class = entry->cp_pclass;
 
@@ -1902,21 +2169,20 @@ cp_rewrap(struct cnode *cp, struct hfsmount *hfsmp, int newclass)
 	 * don't lose.
 	 */
 	error = g_cp_wrap_func.rewrapper(&access_in,
-			newclass, /* new class */
+			key_class, /* new class */
 			&wrapped_key_in,
 			&wrapped_key_out);
 
 	keylen = wrapped_key_out.key_len;
 
 	if (error == 0) {
-		struct cprotect *newentry = NULL;
-		/* 
+		/*
 		 * Verify that AKS returned to us a wrapped key of the 
 		 * target class requested.   
 		 */
 		/* Get the effective class here */
-		int effective = CP_CLASS(wrapped_key_out.dp_class);
-		if (effective != newclass) {
+		cp_key_class_t effective = CP_CLASS(wrapped_key_out.dp_class);
+		if (effective != key_class) {
 			/* 
 			 * Fail the operation if defaults or some other enforcement
 			 * dictated that the class be wrapped differently. 
@@ -1926,29 +2192,16 @@ cp_rewrap(struct cnode *cp, struct hfsmount *hfsmp, int newclass)
 			return EPERM;
 		}
 
-		/* v2 EA's don't support the larger class B keys */
-		if ((keylen != CP_V2_WRAPPEDKEYSIZE) &&
-				(hfsmp->hfs_running_cp_major_vers == CP_PREV_MAJOR_VERS)) {
-			return EINVAL;
-		}
-
 		/* Allocate a new cpentry */
-		newentry = cp_entry_alloc (keylen);
-		bcopy (entry, newentry, sizeof(struct cprotect));
+		cp_key_pair_t *new_cpkp;
+		*pholder = alloc_fn(old_holder, keylen, CP_MAX_CACHEBUFLEN, &new_cpkp);
 
 		/* copy the new key into the entry */
-		bcopy (new_persistent_key, newentry->cp_persistent_key, keylen);
-		newentry->cp_persistent_key_len = keylen;
-		newentry->cp_backing_cnode = cp;
+		cpkp_set_pers_key_len(new_cpkp, keylen);
+		memcpy(cpkp_pers_key(new_cpkp), new_persistent_key, keylen);
 
 		/* Actually record/store what AKS reported back, not the effective class stored in newclass */
-		newentry->cp_pclass = wrapped_key_out.dp_class;
-
-		/* Attach the new entry to the cnode */
-		cp->c_cpentry = newentry;
-
-		/* destroy the old entry */
-		cp_entry_destroy (entry);
+		*newclass = wrapped_key_out.dp_class;
 	}
 	else {
 		error = EPERM;
@@ -1957,18 +2210,60 @@ cp_rewrap(struct cnode *cp, struct hfsmount *hfsmp, int newclass)
 	return error;
 }
 
-
-static int
-cp_unwrap(struct hfsmount *hfsmp, struct cprotect *entry, struct cnode *cp)
+static int cpkp_unwrap(cnode_t *cp, cp_key_class_t key_class, cp_key_pair_t *cpkp)
 {
 	int error = 0;
 	uint8_t iv_key[CP_IV_KEYSIZE];
+	cpx_t cpx = cpkp_cpx(cpkp);
 
 	/* Structures passed between HFS and AKS */
 	cp_cred_s access_in;
 	cp_wrapped_key_s wrapped_key_in;
 	cp_raw_key_s key_out;
 
+	cp_init_access(&access_in, cp);
+
+	bzero(&wrapped_key_in, sizeof(wrapped_key_in));
+	wrapped_key_in.key = cpkp_pers_key(cpkp);
+	wrapped_key_in.key_len = cpkp_max_pers_key_len(cpkp);
+	/* Use the persistent class when talking to AKS */
+	wrapped_key_in.dp_class = key_class;
+
+	bzero(&key_out, sizeof(key_out));
+	key_out.iv_key = iv_key;
+	key_out.key = cpx_key(cpx);
+	/*
+	 * The unwrapper should validate/set the key length for
+	 * the IV key length and the cache key length, however we need
+	 * to supply the correct buffer length so that AKS knows how
+	 * many bytes it has to work with.
+	 */
+	key_out.iv_key_len = CP_IV_KEYSIZE;
+	key_out.key_len = cpx_max_key_len(cpx);
+
+	error = g_cp_wrap_func.unwrapper(&access_in, &wrapped_key_in, &key_out);
+	if (!error) {
+		if (key_out.key_len == 0 || key_out.key_len > CP_MAX_CACHEBUFLEN) {
+			panic ("cp_unwrap: invalid key length! (%ul)\n", key_out.key_len);
+		}
+
+		if (key_out.iv_key_len != CP_IV_KEYSIZE)
+			panic ("cp_unwrap: invalid iv key length! (%ul)\n", key_out.iv_key_len);
+
+		cpx_set_key_len(cpx, key_out.key_len);
+
+		cpx_set_aes_iv_key(cpx, iv_key);
+		cpx_set_is_sep_wrapped_key(cpx, ISSET(key_out.flags, CP_RAW_KEY_WRAPPEDKEY));
+	} else {
+		error = EPERM;
+	}
+
+	return error;
+}
+
+static int
+cp_unwrap(__unused struct hfsmount *hfsmp, struct cprotect *entry, struct cnode *cp)
+{
 	/*
 	 * PROTECTION_CLASS_F is in-use by VM swapfile; it represents a transient
 	 * key that is only good as long as the file is open.  There is no
@@ -1978,77 +2273,10 @@ cp_unwrap(struct hfsmount *hfsmp, struct cprotect *entry, struct cnode *cp)
 		return EPERM;
 	}
 
-	cp_init_access(&access_in, cp);
+	int error = cpkp_unwrap(cp, entry->cp_pclass, &entry->cp_keys);
 
-	bzero(&wrapped_key_in, sizeof(wrapped_key_in));
-	wrapped_key_in.key = entry->cp_persistent_key;
-	wrapped_key_in.key_len = entry->cp_persistent_key_len;
-	/* Use the persistent class when talking to AKS */
-	wrapped_key_in.dp_class = entry->cp_pclass;
-
-	bzero(&key_out, sizeof(key_out));
-	key_out.iv_key = iv_key;
-	key_out.key = entry->cp_cache_key;
-	/* 
-	 * The unwrapper should validate/set the key length for 
-	 * the IV key length and the cache key length, however we need
-	 * to supply the correct buffer length so that AKS knows how
-	 * many bytes it has to work with.
-	 */
-	key_out.iv_key_len = CP_IV_KEYSIZE;
-	key_out.key_len = CP_MAX_CACHEBUFLEN;
-
-	error = g_cp_wrap_func.unwrapper(&access_in, &wrapped_key_in, &key_out);
-	if (!error) {
-		if (key_out.key_len == 0 || key_out.key_len > CP_MAX_CACHEBUFLEN) {
-			panic ("cp_unwrap: invalid key length! (%ul)\n", key_out.key_len);
-		}
-
-		if (key_out.iv_key_len == 0 || key_out.iv_key_len > CP_IV_KEYSIZE) {
-			panic ("cp_unwrap: invalid iv key length! (%ul)\n", key_out.iv_key_len);
-		}
-		
-		entry->cp_cache_key_len = key_out.key_len;
-
-		/* No need to go here for older EAs */
-		if (hfsmp->hfs_running_cp_major_vers == CP_NEW_MAJOR_VERS) {
-			aes_encrypt_key128(iv_key, &entry->cp_cache_iv_ctx);
-			entry->cp_flags |= CP_OFF_IV_ENABLED;
-		}
-
-		/* Is the key a raw wrapped key? */
-		if (key_out.flags & CP_RAW_KEY_WRAPPEDKEY) {
-			/* OR in the right bit for the cprotect */
-			entry->cp_flags |= CP_SEP_WRAPPEDKEY;
-		}
-
-	} else {
-		error = EPERM;
-	}
 
 	return error;
-}
-
-/* Setup AES context */
-static int
-cp_setup_aes_ctx(struct cprotect *entry)
-{
-    SHA1_CTX sha1ctxt;
-    uint8_t cp_cache_iv_key[CP_IV_KEYSIZE]; /* Kiv */
-
-    /* First init the cp_cache_iv_key[] */
-    SHA1Init(&sha1ctxt);
-	
-	/*
-	 * We can only use this when the keys are generated in the AP; As a result
-	 * we only use the first 32 bytes of key length in the cache key 
-	 */
-    SHA1Update(&sha1ctxt, &entry->cp_cache_key[0], CP_MAX_KEYSIZE);
-    SHA1Final(&cp_cache_iv_key[0], &sha1ctxt);
-
-    aes_encrypt_key128(&cp_cache_iv_key[0], &entry->cp_cache_iv_ctx);
-
-    return 0;
 }
 
 /*
@@ -2060,7 +2288,7 @@ cp_setup_aes_ctx(struct cprotect *entry)
  * on 'cp'.
  * 
  */
-int cp_generate_keys (struct hfsmount *hfsmp, struct cnode *cp, int targetclass, 
+int cp_generate_keys (struct hfsmount *hfsmp, struct cnode *cp, cp_key_class_t targetclass,
 		uint32_t keyflags, struct cprotect **newentry) 
 {
 
@@ -2085,13 +2313,16 @@ int cp_generate_keys (struct hfsmount *hfsmp, struct cnode *cp, int targetclass,
 	}
 
 	if (S_ISREG(cp->c_mode)) {
-		if ((cp->c_cpentry->cp_flags & CP_NEEDS_KEYS) == 0){
+		if (!cp_needs_pers_key(cp->c_cpentry)) {
 			error = EINVAL;
 			goto out;
 		}
 	}
 
-	error = cp_new (targetclass, hfsmp, cp, cp->c_mode, keyflags, &newcp);
+	cp_key_revision_t key_revision = cp_initial_key_revision(hfsmp);
+
+	error = cp_new (&targetclass, hfsmp, cp, cp->c_mode, keyflags, key_revision,
+					(cp_new_alloc_fn)cp_entry_alloc, (void **)&newcp);
 	if (error) {
 		/* 
 		 * Key generation failed. This is not necessarily fatal
@@ -2101,8 +2332,12 @@ int cp_generate_keys (struct hfsmount *hfsmp, struct cnode *cp, int targetclass,
 		error = EPERM;
 		goto out;
 	}
-	
-	/* 
+
+	newcp->cp_pclass			= targetclass;
+	newcp->cp_key_os_version	= cp_os_version();
+	newcp->cp_key_revision		= key_revision;
+
+	/*
 	 * If we got here, then we have a new cprotect.
 	 * Attempt to write the new one out.
 	 */
@@ -2112,7 +2347,7 @@ int cp_generate_keys (struct hfsmount *hfsmp, struct cnode *cp, int targetclass,
 		/* Tear down the new cprotect; Tell MKB that it's invalid. Bail out */
 		/* TODO: rdar://12170074 needs to be fixed before we can tell MKB */
 		if (newcp) {
-			cp_entry_destroy(newcp);
+			cp_entry_destroy(hfsmp, newcp);
 		}	
 		goto out;
 	}
@@ -2123,20 +2358,19 @@ int cp_generate_keys (struct hfsmount *hfsmp, struct cnode *cp, int targetclass,
 	 * 2) wrote the new keys to disk.
 	 * 3) cprotect is ready to go.
 	 */
-	
-	newcp->cp_flags &= ~CP_NEEDS_KEYS;
+
 	*newentry = newcp;
-	
+
 out:
 	return error;
 
 }
 
-void cp_replace_entry (struct cnode *cp, struct cprotect *newentry) 
+void cp_replace_entry (hfsmount_t *hfsmp, struct cnode *cp, struct cprotect *newentry)
 {
-	
 	if (cp->c_cpentry) {
-		cp_entry_destroy (cp->c_cpentry);	
+
+		cp_entry_destroy (hfsmp, cp->c_cpentry);
 	}
 	cp->c_cpentry = newentry;
 	newentry->cp_backing_cnode = cp;
@@ -2154,13 +2388,13 @@ void cp_replace_entry (struct cnode *cp, struct cprotect *newentry)
  * Additionally, decide if keys are even needed -- directories get cprotect data structures
  * but they do not have keys.
  *
- */ 
+ */
 
-static int
-cp_new(int newclass_eff, struct hfsmount *hfsmp, struct cnode *cp, mode_t cmode, 
-		uint32_t keyflags, struct cprotect **output_entry)
+int
+cp_new(cp_key_class_t *newclass_eff, __unused struct hfsmount *hfsmp, struct cnode *cp,
+	   mode_t cmode, int32_t keyflags, cp_key_revision_t key_revision,
+	   cp_new_alloc_fn alloc_fn, void **pholder)
 {
-	struct cprotect *entry = NULL;
 	int error = 0;
 	uint8_t new_key[CP_MAX_CACHEBUFLEN];
 	size_t new_key_len = CP_MAX_CACHEBUFLEN;  /* AKS tell us the proper key length, how much of this is used */
@@ -2169,17 +2403,12 @@ cp_new(int newclass_eff, struct hfsmount *hfsmp, struct cnode *cp, mode_t cmode,
 	uint8_t iv_key[CP_IV_KEYSIZE];
 	size_t iv_key_len = CP_IV_KEYSIZE;
 	int iswrapped = 0;
-
-	newclass_eff = CP_CLASS(newclass_eff);
+	cp_key_class_t key_class = CP_CLASS(*newclass_eff);
 
 	/* Structures passed between HFS and AKS */
 	cp_cred_s access_in;
 	cp_wrapped_key_s wrapped_key_out;
 	cp_raw_key_s key_out;
-
-	if (*output_entry != NULL) {
-		panic ("cp_new with non-null entry!");
-	}
 
 	if (are_wraps_initialized == false) {
 		printf("hfs: cp_new: wrap/gen functions not yet set\n");
@@ -2212,7 +2441,7 @@ cp_new(int newclass_eff, struct hfsmount *hfsmp, struct cnode *cp, mode_t cmode,
 	}
 	else {
 		/* Must be a file */         
-		if (newclass_eff == PROTECTION_CLASS_F) {
+		if (key_class == PROTECTION_CLASS_F) {
 			/* class F files are not wrapped; they can still use the max key size */
 			new_key_len = CP_MAX_KEYSIZE;
 			read_random (&new_key[0], new_key_len);
@@ -2245,8 +2474,10 @@ cp_new(int newclass_eff, struct hfsmount *hfsmp, struct cnode *cp, mode_t cmode,
 			wrapped_key_out.key = new_persistent_key;
 			wrapped_key_out.key_len = new_persistent_len;
 
-			error = g_cp_wrap_func.new_key(&access_in, 
-					newclass_eff, 
+			access_in.key_revision = key_revision;
+
+			error = g_cp_wrap_func.new_key(&access_in,
+					key_class,
 					&key_out,
 					&wrapped_key_out);
 
@@ -2261,7 +2492,7 @@ cp_new(int newclass_eff, struct hfsmount *hfsmp, struct cnode *cp, mode_t cmode,
 				panic ("cp_new: invalid key length! (%ul) \n", key_out.key_len);
 			}
 
-			if (key_out.iv_key_len == 0 || key_out.iv_key_len > CP_IV_KEYSIZE) {
+			if (key_out.iv_key_len != CP_IV_KEYSIZE) {
 				panic ("cp_new: invalid iv key length! (%ul) \n", key_out.iv_key_len);
 			}	
 		
@@ -2272,17 +2503,15 @@ cp_new(int newclass_eff, struct hfsmount *hfsmp, struct cnode *cp, mode_t cmode,
 			 * if that occurred.  Check that the effective class returned by 
 			 * AKS is the same as our effective new class 
 			 */
-			if ((int)(CP_CLASS(wrapped_key_out.dp_class)) != newclass_eff) {
-				if (keyflags & CP_KEYWRAP_DIFFCLASS) {
-					newclass_eff = CP_CLASS(wrapped_key_out.dp_class);
-				}
-				else {
-					error = EPERM;	
+			if (CP_CLASS(wrapped_key_out.dp_class) != key_class) {
+				if (!ISSET(keyflags, CP_KEYWRAP_DIFFCLASS)) {
+					error = EPERM;
 					/* TODO: When 12170074 fixed, release/invalidate the key! */
 					goto cpnew_fail;
 				}
 			}
 
+			*newclass_eff = wrapped_key_out.dp_class;
 			new_key_len = key_out.key_len;
 			iv_key_len = key_out.iv_key_len;
 			new_persistent_len = wrapped_key_out.key_len;
@@ -2298,67 +2527,41 @@ cp_new(int newclass_eff, struct hfsmount *hfsmp, struct cnode *cp, mode_t cmode,
 	 * Step 2: allocate cprotect and initialize it.
 	 */
 
-
-	/*
-	 * v2 EA's don't support the larger class B keys
-	 */
-	if ((new_persistent_len != CP_V2_WRAPPEDKEYSIZE) &&
-			(hfsmp->hfs_running_cp_major_vers == CP_PREV_MAJOR_VERS)) {
-		return EINVAL;
-	}
-
-	entry = cp_entry_alloc (new_persistent_len);
-	if (entry == NULL) {
+	cp_key_pair_t *cpkp;
+	*pholder = alloc_fn(NULL, new_persistent_len, new_key_len, &cpkp);
+	if (*pholder == NULL) {
 		return ENOMEM;
-	}
-
-	*output_entry = entry;
-
-	/*
-	 * For directories and class F files, just store the effective new class. 
-	 * AKS does not interact with us in generating keys for F files, and directories
-	 * don't actually have keys. 
-	 */
-	if ( S_ISDIR (cmode) || (newclass_eff == PROTECTION_CLASS_F)) {
-		entry->cp_pclass = newclass_eff;
-	}
-	else {			
-		/* 
-		 * otherwise, store what AKS actually returned back to us. 
-		 * wrapped_key_out is only valid if we have round-tripped to AKS
-		 */
-		entry->cp_pclass = wrapped_key_out.dp_class;
 	}
 
 	/* Copy the cache key & IV keys into place if needed. */
 	if (new_key_len > 0) {
-		bcopy (new_key, entry->cp_cache_key, new_key_len);
-		entry->cp_cache_key_len = new_key_len;
+		cpx_t cpx = cpkp_cpx(cpkp);
 
+		cpx_set_key_len(cpx, new_key_len);
+		memcpy(cpx_key(cpx), new_key, new_key_len);
 
 		/* Initialize the IV key */
-		if (hfsmp->hfs_running_cp_major_vers == CP_NEW_MAJOR_VERS) {
-			if (newclass_eff == PROTECTION_CLASS_F) {
-				/* class F needs a full IV initialize */
-				cp_setup_aes_ctx(entry);
-			}
-			else {
-				/* Key store gave us an iv key. Just need to wrap it.*/
-				aes_encrypt_key128(iv_key, &entry->cp_cache_iv_ctx);
-			}
-			entry->cp_flags |= CP_OFF_IV_ENABLED;
-		}
+		if (key_class != PROTECTION_CLASS_F)
+			cpx_set_aes_iv_key(cpx, iv_key);
+
+		cpx_set_is_sep_wrapped_key(cpx, iswrapped);
 	}
 	if (new_persistent_len > 0) {
-		bcopy(new_persistent_key, entry->cp_persistent_key, new_persistent_len);
-	}
-
-	/* Mark it as a wrapped key if necessary */
-	if (iswrapped) {
-		entry->cp_flags |= CP_SEP_WRAPPEDKEY;
+		cpkp_set_pers_key_len(cpkp, new_persistent_len);
+		memcpy(cpkp_pers_key(cpkp), new_persistent_key, new_persistent_len);
 	}
 
 cpnew_fail:
+
+#if HFS_TMPDBG
+#if !SECURE_KERNEL
+	if ((hfsmp->hfs_cp_verbose) && (error == EPERM)) {
+		/* Only introspect the data fork */
+		cp_log_eperm (cp->c_vp, *newclass_eff, true);
+	}
+#endif
+#endif
+
 	return error;
 }
 
@@ -2376,20 +2579,261 @@ static void cp_init_access(cp_cred_t access, struct cnode *cp)
 	access->pid = proc_pid(proc);
 	access->uid = kauth_cred_getuid(cred);
 
+	if (cp->c_cpentry)
+		access->key_revision = cp->c_cpentry->cp_key_revision;
+
 	return;
 }
 
-#else
+/*
+ * Parses versions of the form 12A316, i.e. <major><minor><revision> and
+ * returns a uint32_t in the form 0xaabbcccc where aa = <major>, 
+ * bb = <ASCII char>, cccc = <revision>.
+ */
+static cp_key_os_version_t parse_os_version(void)
+{
+	const char *p = osversion;
+
+	int a = 0;
+	while (*p >= '0' && *p <= '9') {
+		a = a * 10 + *p - '0';
+		++p;
+	}
+
+	if (!a)
+		return 0;
+
+	int b = *p++;
+	if (!b)
+		return 0;
+
+	int c = 0;
+	while (*p >= '0' && *p <= '9') {
+		c = c * 10 + *p - '0';
+		++p;
+	}
+
+	if (!c)
+		return 0;
+
+	return (a & 0xff) << 24 | b << 16 | (c & 0xffff);
+}
+
+cp_key_os_version_t cp_os_version(void)
+{
+	static cp_key_os_version_t cp_os_version;
+
+	if (cp_os_version)
+		return cp_os_version;
+
+	if (!osversion[0])
+		return 0;
+
+	cp_os_version = parse_os_version();
+	if (!cp_os_version) {
+		printf("cp_os_version: unable to parse osversion `%s'\n", osversion);
+		cp_os_version = 1;
+	}
+
+	return cp_os_version;
+}
+
+
+errno_t cp_handle_strategy(buf_t bp)
+{
+	vnode_t vp = buf_vnode(bp);
+	cnode_t *cp = NULL;
+
+	if (bufattr_rawencrypted(buf_attr(bp))
+		|| !(cp = cp_get_protected_cnode(vp))
+		|| !cp->c_cpentry) {
+		// Nothing to do
+		return 0;
+	}
+
+	/*
+	 * For filesystem resize, we may not have access to the underlying
+	 * file's cache key for whatever reason (device may be locked).
+	 * However, we do not need it since we are going to use the
+	 * temporary HFS-wide resize key which is generated once we start
+	 * relocating file content.  If this file's I/O should be done
+	 * using the resize key, it will have been supplied already, so do
+	 * not attach the file's cp blob to the buffer.
+	 */
+	if (ISSET(cp->c_cpentry->cp_flags, CP_RELOCATION_INFLIGHT))
+		return 0;
+
+	{
+		// Fast path
+		cpx_t cpx = cpkp_cpx(&cp->c_cpentry->cp_keys);
+
+		if (cpx_has_key(cpx)) {
+			bufattr_setcpx(buf_attr(bp), cpx);
+			return 0;
+		}
+	}
+
+	/*
+	 * We rely mostly (see note below) upon the truncate lock to
+	 * protect the CP cache key from getting tossed prior to our IO
+	 * finishing here.  Nearly all cluster io calls to manipulate file
+	 * payload from HFS take the truncate lock before calling into the
+	 * cluster layer to ensure the file size does not change, or that
+	 * they have exclusive right to change the EOF of the file.  That
+	 * same guarantee protects us here since the code that deals with
+	 * CP lock events must now take the truncate lock before doing
+	 * anything.
+	 *
+	 * If you want to change content protection structures, then the
+	 * truncate lock is not sufficient; you must take the truncate
+	 * lock and then wait for outstanding writes to complete.  This is
+	 * necessary because asynchronous I/O only holds the truncate lock
+	 * whilst I/O is being queued.
+	 *
+	 * One exception should be the VM swapfile IO, because HFS will
+	 * funnel the VNOP_PAGEOUT directly into a cluster_pageout call
+	 * for the swapfile code only without holding the truncate lock.
+	 * This is because individual swapfiles are maintained at
+	 * fixed-length sizes by the VM code.  In non-swapfile IO we use
+	 * PAGEOUT_V2 semantics which allow us to create our own UPL and
+	 * thus take the truncate lock before calling into the cluster
+	 * layer.  In that case, however, we are not concerned with the CP
+	 * blob being wiped out in the middle of the IO because there
+	 * isn't anything to toss; the VM swapfile key stays in-core as
+	 * long as the file is open.
+	 */
+
+	off_rsrc_t off_rsrc = off_rsrc_make(buf_lblkno(bp) * GetLogicalBlockSize(vp),
+										VNODE_IS_RSRC(vp));
+	cp_io_params_t io_params;
+
+
+	/*
+	 * We want to take the cnode lock here and because the vnode write
+	 * count is a pseudo-lock, we need to do something to preserve
+	 * lock ordering; the cnode lock comes before the write count.
+	 * Ideally, the write count would be incremented after the
+	 * strategy routine returns, but that becomes complicated if the
+	 * strategy routine where to call buf_iodone before returning.
+	 * For now, we drop the write count here and then pick it up again
+	 * later.
+	 */
+	if (!ISSET(buf_flags(bp), B_READ) && !ISSET(buf_flags(bp), B_RAW))
+		vnode_writedone(vp);
+
+	hfs_lock_always(cp, HFS_SHARED_LOCK);
+	cp_io_params(VTOHFS(vp), cp->c_cpentry, off_rsrc,
+				 ISSET(buf_flags(bp), B_READ) ? VNODE_READ : VNODE_WRITE,
+				 &io_params);
+	hfs_unlock(cp);
+
+	/*
+	 * Last chance: If this data protected I/O does not have unwrapped
+	 * keys present, then try to get them.  We already know that it
+	 * should, by this point.
+	 */
+	if (!cpx_has_key(io_params.cpx)) {
+		int io_op = ( (buf_flags(bp) & B_READ) ? CP_READ_ACCESS : CP_WRITE_ACCESS);
+		errno_t error = cp_handle_vnop(vp, io_op, 0);
+		if (error) {
+			/*
+			 * We have to be careful here.  By this point in the I/O
+			 * path, VM or the cluster engine has prepared a buf_t
+			 * with the proper file offsets and all the rest, so
+			 * simply erroring out will result in us leaking this
+			 * particular buf_t.  We need to properly decorate the
+			 * buf_t just as buf_strategy would so as to make it
+			 * appear that the I/O errored out with the particular
+			 * error code.
+			 */
+			if (!ISSET(buf_flags(bp), B_READ) && !ISSET(buf_flags(bp), B_RAW))
+				vnode_startwrite(vp);
+			buf_seterror (bp, error);
+			buf_biodone(bp);
+			return error;
+		}
+
+		hfs_lock_always(cp, HFS_SHARED_LOCK);
+		cp_io_params(VTOHFS(vp), cp->c_cpentry, off_rsrc,
+					 ISSET(buf_flags(bp), B_READ) ? VNODE_READ : VNODE_WRITE,
+					 &io_params);
+		hfs_unlock(cp);
+	}
+
+	assert(buf_count(bp) <= io_params.max_len);
+	bufattr_setcpx(buf_attr(bp), io_params.cpx);
+
+	if (!ISSET(buf_flags(bp), B_READ) && !ISSET(buf_flags(bp), B_RAW))
+		vnode_startwrite(vp);
+
+	return 0;
+}
+
+#else // !CONFIG_PROTECT
+
+#include <sys/cdefs.h>
+#include <sys/cprotect.h>
+#include <sys/errno.h>
 
 int cp_key_store_action(int action __unused)
 {
 	return ENOTSUP;
 }
 
-
 int cp_register_wraps(cp_wrap_func_t key_store_func __unused)
 {
 	return ENOTSUP;
+}
+
+size_t cpx_size(__unused size_t key_size)
+{
+	return 0;
+}
+
+cpx_t cpx_alloc(__unused size_t key_size)
+{
+	return NULL;
+}
+
+void cpx_free(__unused cpx_t cpx)
+{
+}
+
+bool cpx_is_sep_wrapped_key(__unused const struct cpx *cpx)
+{
+	return false;
+}
+
+void cpx_set_is_sep_wrapped_key(__unused struct cpx *cpx, __unused bool v)
+{
+}
+
+bool cpx_use_offset_for_iv(__unused const struct cpx *cpx)
+{
+	return false;
+}
+
+void cpx_set_use_offset_for_iv(__unused struct cpx *cpx, __unused bool v)
+{
+}
+
+uint16_t cpx_key_len(__unused const struct cpx *cpx)
+{
+	return 0;
+}
+
+void cpx_set_key_len(__unused struct cpx *cpx, __unused uint16_t key_len)
+{
+}
+
+void *cpx_key(__unused const struct cpx *cpx)
+{
+	return NULL;
+}
+
+aes_encrypt_ctx *cpx_iv_aes_ctx(__unused cpx_t cpx)
+{
+	return NULL;
 }
 
 #endif /* CONFIG_PROTECT */

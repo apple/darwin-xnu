@@ -230,11 +230,12 @@ rip_input(m, iphlen)
 			continue;
 		if (last) {
 			struct mbuf *n = m_copy(m, 0, (int)M_COPYALL);
-		
+
 			skipit = 0;
-			
+
 #if NECP
-			if (n && !necp_socket_is_allowed_to_send_recv_v4(last, 0, 0, &ip->ip_dst, &ip->ip_src, ifp, NULL)) {
+			if (n && !necp_socket_is_allowed_to_send_recv_v4(last, 0, 0,
+				&ip->ip_dst, &ip->ip_src, ifp, NULL, NULL)) {
 				m_freem(n);
 				/* do not inject data to pcb */
 				skipit = 1;
@@ -286,7 +287,8 @@ rip_input(m, iphlen)
 
 	skipit = 0;
 #if NECP
-	if (last && !necp_socket_is_allowed_to_send_recv_v4(last, 0, 0, &ip->ip_dst, &ip->ip_src, ifp, NULL)) {
+	if (last && !necp_socket_is_allowed_to_send_recv_v4(last, 0, 0,
+		&ip->ip_dst, &ip->ip_src, ifp, NULL, NULL)) {
 		m_freem(m);
 		OSAddAtomic(1, &ipstat.ips_delivered);
 		/* do not inject data to pcb */
@@ -402,7 +404,7 @@ rip_output(
 			m_freem(m);
 			return(EMSGSIZE);
 		}
-		M_PREPEND(m, sizeof(struct ip), M_WAIT);
+		M_PREPEND(m, sizeof(struct ip), M_WAIT, 1);
 		if (m == NULL)
 			return ENOBUFS;
 		ip = mtod(m, struct ip *);
@@ -437,19 +439,21 @@ rip_output(
 
 	if (inp->inp_laddr.s_addr != INADDR_ANY)
 		ipoa.ipoa_flags |= IPOAF_BOUND_SRCADDR;
-	
+
 #if NECP
 	{
 		necp_kernel_policy_id policy_id;
-		if (!necp_socket_is_allowed_to_send_recv_v4(inp, 0, 0, &ip->ip_src, &ip->ip_dst, NULL, &policy_id)) {
+		u_int32_t route_rule_id;
+		if (!necp_socket_is_allowed_to_send_recv_v4(inp, 0, 0,
+			&ip->ip_src, &ip->ip_dst, NULL, &policy_id, &route_rule_id)) {
 			m_freem(m);
 			return(EHOSTUNREACH);
 		}
 
-		necp_mark_packet_from_socket(m, inp, policy_id);
+		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id);
 	}
 #endif /* NECP */
-	
+
 #if IPSEC
 	if (inp->inp_sp != NULL && ipsec_setsocket(m, so) != 0) {
 		m_freem(m);
@@ -479,6 +483,7 @@ rip_output(
 	 * to pass the PCB cached route pointer directly to IP and
 	 * the modules beneath it.
 	 */
+	// TODO: PASS DOWN ROUTE RULE ID
 	error = ip_output(m, inp->inp_options, &inp->inp_route, flags,
 	    imo, &ipoa);
 

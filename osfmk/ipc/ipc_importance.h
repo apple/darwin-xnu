@@ -257,7 +257,7 @@ extern void task_importance_update_owner_info(task_t task);
 
 #if XNU_KERNEL_PRIVATE 
 #define TASK_IMP_LIST_DONATING_PIDS  0x1
-extern int task_importance_list_pids(task_t task, int flags, int *pid_list, unsigned int max_count);
+extern int task_importance_list_pids(task_t task, int flags, char *pid_list, unsigned int max_count);
 #endif
 
 __END_DECLS

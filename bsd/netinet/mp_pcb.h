@@ -74,6 +74,8 @@ struct mppcbinfo {
 	decl_lck_mtx_data(, mppi_lock);		/* global PCB lock */
 	uint32_t (*mppi_gc)(struct mppcbinfo *); /* garbage collector func */
 	uint32_t (*mppi_timer)(struct mppcbinfo *); /* timer func */
+	/* Extended pcb create func */
+	void *(*mppi_pcbe_create) (struct socket *mp_so, struct mppcb *mpp);
 };
 
 __BEGIN_DECLS

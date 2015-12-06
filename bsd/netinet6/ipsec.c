@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -155,7 +155,7 @@ int ip4_esp_net_deflev = IPSEC_LEVEL_USE;
 int ip4_ah_trans_deflev = IPSEC_LEVEL_USE;
 int ip4_ah_net_deflev = IPSEC_LEVEL_USE;
 struct secpolicy ip4_def_policy;
-int ip4_ipsec_ecn = 0;		/* ECN ignore(-1)/forbidden(0)/allowed(1) */
+int ip4_ipsec_ecn = ECN_COMPATIBILITY;		/* ECN ignore(-1)/compatibility(0)/normal(1) */
 int ip4_esp_randpad = -1;
 int	esp_udp_encap_port = 0;
 static int sysctl_def_policy SYSCTL_HANDLER_ARGS;
@@ -214,7 +214,7 @@ int ip6_esp_net_deflev = IPSEC_LEVEL_USE;
 int ip6_ah_trans_deflev = IPSEC_LEVEL_USE;
 int ip6_ah_net_deflev = IPSEC_LEVEL_USE;
 struct secpolicy ip6_def_policy;
-int ip6_ipsec_ecn = 0;		/* ECN ignore(-1)/forbidden(0)/allowed(1) */
+int ip6_ipsec_ecn = ECN_COMPATIBILITY;		/* ECN ignore(-1)/compatibility(0)/normal(1) */
 int ip6_esp_randpad = -1;
 
 /* net.inet6.ipsec6 */
@@ -262,12 +262,14 @@ static void vshiftl(unsigned char *, int, int);
 static int ipsec_in_reject(struct secpolicy *, struct mbuf *);
 #if INET6
 static int ipsec64_encapsulate(struct mbuf *, struct secasvar *);
+static int ipsec6_update_routecache_and_output(struct ipsec_output_state *state, struct secasvar *sav);
+static int ipsec46_encapsulate(struct ipsec_output_state *state, struct secasvar *sav);
 #endif
 static struct ipsec_tag *ipsec_addaux(struct mbuf *);
 static struct ipsec_tag *ipsec_findaux(struct mbuf *);
 static void ipsec_optaux(struct mbuf *, struct ipsec_tag *);
 int ipsec_send_natt_keepalive(struct secasvar *sav);
-bool ipsec_fill_offload_frame(ifnet_t ifp, struct secasvar *sav, struct ipsec_offload_frame *frame, size_t frame_data_offset);
+bool ipsec_fill_offload_frame(ifnet_t ifp, struct secasvar *sav, struct ifnet_keepalive_offload_frame *frame, size_t frame_data_offset);
 
 static int
 sysctl_def_policy SYSCTL_HANDLER_ARGS
@@ -1505,10 +1507,9 @@ ipsec_deepcopy_policy(struct secpolicy *src)
 	q = &newchain;
 	for (p = src->req; p; p = p->next) {
 		*q = (struct ipsecrequest *)_MALLOC(sizeof(struct ipsecrequest),
-											M_SECA, M_WAITOK);
+		    M_SECA, M_WAITOK | M_ZERO);
 		if (*q == NULL)
 			goto fail;
-		bzero(*q, sizeof(**q));
 		(*q)->next = NULL;
 		
 		(*q)->saidx.proto = p->saidx.proto;
@@ -2573,10 +2574,6 @@ ipsec64_encapsulate(m, sav)
 		m->m_pkthdr.len += sizeof(struct ip);
 		ip6i = mtod(m->m_next, struct ip6_hdr *);
 	}
-	/* construct new IPv4 header. see RFC 2401 5.1.2.1 */
-	/* ECN consideration. */
-	/* XXX To be fixed later if needed */
-	// ip_ecn_ingress(ip4_ipsec_ecn, &ip->ip_tos, &oip->ip_tos);	
 
 	bcopy(ip6, ip6i, sizeof(struct ip6_hdr));
 	ip = mtod(m, struct ip *);
@@ -2593,6 +2590,11 @@ ipsec64_encapsulate(m, sav)
 	ip->ip_off = 0;
 	ip->ip_ttl = hlim;
 	ip->ip_p = IPPROTO_IPV6;
+
+	/* construct new IPv4 header. see RFC 2401 5.1.2.1 */
+	/* ECN consideration. */
+	ip64_ecn_ingress(ip4_ipsec_ecn, &ip->ip_tos, &ip6->ip6_flow);
+
 	if (plen + sizeof(struct ip) < IP_MAXPACKET)
 		ip->ip_len = htons(plen + sizeof(struct ip));
 	else {
@@ -2671,6 +2673,281 @@ ipsec6_encapsulate_utun_esp_keepalive(m_ptr, sav)
 
 	return 0;
 }
+
+int
+ipsec6_update_routecache_and_output(state, sav)
+	struct ipsec_output_state *state;
+	struct secasvar *sav;
+{
+	struct sockaddr_in6* dst6;
+	struct route *ro6;
+	struct ip6_hdr *ip6;
+	errno_t error = 0;
+
+	int plen;
+	struct ip6_out_args ip6oa;
+	struct route_in6 ro6_new;
+	struct flowadv *adv = NULL;
+
+	if (!state->m) {
+		return EINVAL;
+	}
+	ip6 = mtod(state->m, struct ip6_hdr *);
+
+	// grab sadb_mutex, before updating sah's route cache
+	lck_mtx_lock(sadb_mutex);
+	ro6 = &sav->sah->sa_route;
+	dst6 = (struct sockaddr_in6 *)(void *)&ro6->ro_dst;
+	if (ro6->ro_rt) {
+	        RT_LOCK(ro6->ro_rt);
+	}
+	if (ROUTE_UNUSABLE(ro6) ||
+	    !IN6_ARE_ADDR_EQUAL(&dst6->sin6_addr, &ip6->ip6_dst)) {
+	        if (ro6->ro_rt != NULL)
+		        RT_UNLOCK(ro6->ro_rt);
+		ROUTE_RELEASE(ro6);
+	}
+	if (ro6->ro_rt == 0) {
+		bzero(dst6, sizeof(*dst6));
+		dst6->sin6_family = AF_INET6;
+		dst6->sin6_len = sizeof(*dst6);
+		dst6->sin6_addr = ip6->ip6_dst;
+		rtalloc(ro6);
+		if (ro6->ro_rt) {
+		        RT_LOCK(ro6->ro_rt);
+		}
+	}
+	if (ro6->ro_rt == 0) {
+		ip6stat.ip6s_noroute++;
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_noroute);
+		error = EHOSTUNREACH;
+		// release sadb_mutex, after updating sah's route cache
+		lck_mtx_unlock(sadb_mutex);
+		return error;
+	}
+
+	/*
+	 * adjust state->dst if tunnel endpoint is offlink
+	 *
+	 * XXX: caching rt_gateway value in the state is
+	 * not really good, since it may point elsewhere
+	 * when the gateway gets modified to a larger
+	 * sockaddr via rt_setgate().  This is currently
+	 * addressed by SA_SIZE roundup in that routine.
+	 */
+	if (ro6->ro_rt->rt_flags & RTF_GATEWAY)
+	        dst6 = (struct sockaddr_in6 *)(void *)ro6->ro_rt->rt_gateway;
+	RT_UNLOCK(ro6->ro_rt);
+	ROUTE_RELEASE(&state->ro);
+	route_copyout(&state->ro, ro6, sizeof(state->ro));
+	state->dst = (struct sockaddr *)dst6;
+	state->tunneled = 6;
+	// release sadb_mutex, after updating sah's route cache                                                                                                                          
+	lck_mtx_unlock(sadb_mutex);
+
+	state->m = ipsec6_splithdr(state->m);
+	if (!state->m) {
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_nomem);
+		error = ENOMEM;
+		return error;
+	}
+
+	ip6 = mtod(state->m, struct ip6_hdr *);
+	switch (sav->sah->saidx.proto) {
+	case IPPROTO_ESP:
+#if IPSEC_ESP
+		error = esp6_output(state->m, &ip6->ip6_nxt, state->m->m_next, sav);
+#else
+		m_freem(state->m);
+		error = EINVAL;
+#endif
+		break;
+	case IPPROTO_AH:
+		error = ah6_output(state->m, &ip6->ip6_nxt, state->m->m_next, sav);
+		break;
+	case IPPROTO_IPCOMP:
+		/* XXX code should be here */
+		/*FALLTHROUGH*/
+	default:
+		ipseclog((LOG_ERR, "%s: unknown ipsec protocol %d\n", __FUNCTION__, sav->sah->saidx.proto));
+		m_freem(state->m);
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
+		error = EINVAL;
+		break;
+	}
+	if (error) {
+		// If error, packet already freed by above output routines
+		state->m = NULL;
+		return error;
+	}
+
+	plen = state->m->m_pkthdr.len - sizeof(struct ip6_hdr);
+	if (plen > IPV6_MAXPACKET) {
+		ipseclog((LOG_ERR, "%s: IPsec with IPv6 jumbogram is not supported\n", __FUNCTION__));
+		IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
+		error = EINVAL;/*XXX*/
+		return error;
+	}
+	ip6 = mtod(state->m, struct ip6_hdr *);
+	ip6->ip6_plen = htons(plen);
+
+	ipsec_set_pkthdr_for_interface(sav->sah->ipsec_if, state->m, AF_INET6);
+
+	/* Increment statistics */
+	ifnet_stat_increment_out(sav->sah->ipsec_if, 1, mbuf_pkthdr_len(state->m), 0);
+
+	/* Send to ip6_output */
+	bzero(&ro6_new, sizeof(ro6_new));
+	bzero(&ip6oa, sizeof(ip6oa));
+	ip6oa.ip6oa_flowadv.code = 0;
+	ip6oa.ip6oa_flags = IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR;
+	if (state->outgoing_if) {
+		ip6oa.ip6oa_boundif = state->outgoing_if;
+		ip6oa.ip6oa_flags |= IPOAF_BOUND_IF;
+	}
+
+	adv = &ip6oa.ip6oa_flowadv;
+	(void) ip6_output(state->m, NULL, &ro6_new, IPV6_OUTARGS, NULL, NULL, &ip6oa);
+
+	if (adv->code == FADV_FLOW_CONTROLLED || adv->code == FADV_SUSPENDED) {
+		error = ENOBUFS;
+		ifnet_disable_output(sav->sah->ipsec_if);
+		return error;
+	}
+
+	return 0;
+}
+
+int
+ipsec46_encapsulate(state, sav)
+	struct secasvar *sav;
+	struct ipsec_output_state *state;
+{
+	struct mbuf *m;
+	struct ip6_hdr *ip6;
+	struct ip *oip;
+	struct ip *ip;
+	size_t hlen;
+	size_t plen;
+
+	m = state->m;
+	if (!m) {
+		return EINVAL;
+	}
+
+	/* can't tunnel between different AFs */
+	if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family
+	    != ((struct sockaddr *)&sav->sah->saidx.dst)->sa_family
+	    || ((struct sockaddr *)&sav->sah->saidx.src)->sa_family != AF_INET6) {
+		m_freem(m);
+		return EINVAL;
+	}
+#if 0
+	/* XXX if the dst is myself, perform nothing. */
+	if (key_ismyaddr((struct sockaddr *)&sav->sah->saidx.dst)) {
+	        m_freem(m);
+		return EINVAL;
+	}
+#endif
+
+	if (m->m_len < sizeof(*ip)) {
+		panic("ipsec46_encapsulate: assumption failed (first mbuf length)");
+		return EINVAL;
+	}
+
+	ip = mtod(m, struct ip *);
+#ifdef _IP_VHL
+	hlen = _IP_VHL_HL(ip->ip_vhl) << 2;
+#else
+	hlen = ip->ip_hl << 2;
+#endif
+
+	if (m->m_len != hlen) {
+		panic("ipsec46_encapsulate: assumption failed (first mbuf length)");
+		return EINVAL;
+	}
+
+	/* generate header checksum */
+	ip->ip_sum = 0;
+#ifdef _IP_VHL
+	ip->ip_sum = in_cksum(m, hlen);
+#else
+	ip->ip_sum = in_cksum(m, hlen);
+#endif
+
+	plen = m->m_pkthdr.len; // save original IPv4 packet len, this will be ipv6 payload len
+
+	/*
+	 * First move the IPv4 header to the second mbuf in the chain
+	 */
+	if (M_LEADINGSPACE(m->m_next) < hlen) {
+		struct mbuf *n;
+		MGET(n, M_DONTWAIT, MT_DATA);
+		if (!n) {
+			m_freem(m);
+			return ENOBUFS;
+		}
+		n->m_len = hlen;
+		n->m_next = m->m_next;
+		m->m_next = n;
+		m->m_pkthdr.len += sizeof(struct ip6_hdr);
+		oip = mtod(n, struct ip *);
+	} else {
+		m->m_next->m_len += hlen;
+		m->m_next->m_data -= hlen;
+		m->m_pkthdr.len += sizeof(struct ip6_hdr);
+		oip = mtod(m->m_next, struct ip *);
+	}
+	ip = mtod(m, struct ip *);
+	ovbcopy((caddr_t)ip, (caddr_t)oip, hlen);
+
+	/*
+	 * Grow the first mbuf to accomodate the new IPv6 header.
+	 */
+	if (M_LEADINGSPACE(m) < sizeof(struct ip6_hdr) - hlen) {
+		struct mbuf *n;
+		MGETHDR(n, M_DONTWAIT, MT_HEADER);
+		if (!n) {
+			m_freem(m);
+			return ENOBUFS;
+		}
+		M_COPY_PKTHDR(n, m);
+		MH_ALIGN(n, sizeof(struct ip6_hdr));
+		n->m_len = sizeof(struct ip6_hdr);
+		n->m_next = m->m_next;
+		m->m_next = NULL;
+		m_freem(m);
+		state->m = n;
+		m = state->m;
+	} else {	 
+		m->m_len += (sizeof(struct ip6_hdr) - hlen);
+		m->m_data -= (sizeof(struct ip6_hdr) - hlen);
+	}
+	ip6 = mtod(m, struct ip6_hdr *);
+	ip6->ip6_flow = 0;
+	ip6->ip6_vfc &= ~IPV6_VERSION_MASK;
+	ip6->ip6_vfc |= IPV6_VERSION;
+
+	/* construct new IPv6 header. see RFC 2401 5.1.2.2 */
+	/* ECN consideration. */
+	ip46_ecn_ingress(ip6_ipsec_ecn, &ip6->ip6_flow, &ip->ip_tos);
+	if (plen < IPV6_MAXPACKET - sizeof(struct ip6_hdr))
+		ip6->ip6_plen = htons(plen);
+	else {
+		/* ip6->ip6_plen will be updated in ip6_output() */
+	}
+
+	ip6->ip6_nxt = IPPROTO_IPV4;
+	ip6->ip6_hlim = IPV6_DEFHLIM;
+
+	bcopy(&((struct sockaddr_in6 *)&sav->sah->saidx.src)->sin6_addr,
+	      &ip6->ip6_src, sizeof(ip6->ip6_src));
+	bcopy(&((struct sockaddr_in6 *)&sav->sah->saidx.dst)->sin6_addr,
+	      &ip6->ip6_dst, sizeof(ip6->ip6_dst));
+
+	return 0;
+}
+
 #endif /*INET6*/
 
 /*
@@ -3052,73 +3329,83 @@ ipsec4_output_internal(struct ipsec_output_state *state, struct secasvar *sav)
 		/*
 		 * build IPsec tunnel.
 		 */
-		/* XXX should be processed with other familiy */
-		if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family != AF_INET) {
-			ipseclog((LOG_ERR, "ipsec4_output: "
-				"family mismatched between inner and outer spi=%u\n",
-				(u_int32_t)ntohl(sav->spi)));
-			error = EAFNOSUPPORT;
-			goto bad;
-		}
-
 		state->m = ipsec4_splithdr(state->m);
 		if (!state->m) {
 			error = ENOMEM;
 			goto bad;
 		}
-		error = ipsec4_encapsulate(state->m, sav);
-		if (error) {
-			state->m = NULL;
-			goto bad;
-		}
-		ip = mtod(state->m, struct ip *);
 
-		// grab sadb_mutex, before updating sah's route cache
-		lck_mtx_lock(sadb_mutex);
-		ro4= &sav->sah->sa_route;
-		dst4 = (struct sockaddr_in *)(void *)&ro4->ro_dst;
-		if (ro4->ro_rt != NULL) {
-			RT_LOCK(ro4->ro_rt);
-		}
-		if (ROUTE_UNUSABLE(ro4) ||
-			dst4->sin_addr.s_addr != ip->ip_dst.s_addr) {
-			if (ro4->ro_rt != NULL)
-				RT_UNLOCK(ro4->ro_rt);
-			ROUTE_RELEASE(ro4);
-		}
-		if (ro4->ro_rt == 0) {
-			dst4->sin_family = AF_INET;
-			dst4->sin_len = sizeof(*dst4);
-			dst4->sin_addr = ip->ip_dst;
-			rtalloc(ro4);
-			if (ro4->ro_rt == 0) {
-				OSAddAtomic(1, &ipstat.ips_noroute);
-				error = EHOSTUNREACH;
-				// release sadb_mutex, after updating sah's route cache
-				lck_mtx_unlock(sadb_mutex);
+		if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family == AF_INET6) {
+			error = ipsec46_encapsulate(state, sav);
+			if (error) {
+				// packet already freed by encapsulation error handling
+				state->m = NULL;
+				return error;
+			}
+
+			error = ipsec6_update_routecache_and_output(state, sav);
+			return error;
+
+		} else if (((struct sockaddr *)&sav->sah->saidx.src)->sa_family == AF_INET) {
+			error = ipsec4_encapsulate(state->m, sav);
+			if (error) {
+				state->m = NULL;
 				goto bad;
 			}
-			RT_LOCK(ro4->ro_rt);
-		}
+			ip = mtod(state->m, struct ip *);
 
-		/*
-		 * adjust state->dst if tunnel endpoint is offlink
-		 *
-		 * XXX: caching rt_gateway value in the state is
-		 * not really good, since it may point elsewhere
-		 * when the gateway gets modified to a larger
-		 * sockaddr via rt_setgate().  This is currently
-		 * addressed by SA_SIZE roundup in that routine.
-		 */
-		if (ro4->ro_rt->rt_flags & RTF_GATEWAY)
-			dst4 = (struct sockaddr_in *)(void *)ro4->ro_rt->rt_gateway;
-		RT_UNLOCK(ro4->ro_rt);
-		ROUTE_RELEASE(&state->ro);
-		route_copyout(&state->ro, ro4, sizeof(state->ro));
-		state->dst = (struct sockaddr *)dst4;
-		state->tunneled = 4;
-		// release sadb_mutex, after updating sah's route cache
-		lck_mtx_unlock(sadb_mutex);
+			// grab sadb_mutex, before updating sah's route cache
+			lck_mtx_lock(sadb_mutex);
+			ro4= &sav->sah->sa_route;
+			dst4 = (struct sockaddr_in *)(void *)&ro4->ro_dst;
+			if (ro4->ro_rt != NULL) {
+			        RT_LOCK(ro4->ro_rt);
+			}
+			if (ROUTE_UNUSABLE(ro4) ||
+			    dst4->sin_addr.s_addr != ip->ip_dst.s_addr) {
+			        if (ro4->ro_rt != NULL)
+				        RT_UNLOCK(ro4->ro_rt);
+				ROUTE_RELEASE(ro4);
+			}
+			if (ro4->ro_rt == 0) {
+				dst4->sin_family = AF_INET;
+				dst4->sin_len = sizeof(*dst4);
+				dst4->sin_addr = ip->ip_dst;
+				rtalloc(ro4);
+				if (ro4->ro_rt == 0) {
+					OSAddAtomic(1, &ipstat.ips_noroute);
+					error = EHOSTUNREACH;
+					// release sadb_mutex, after updating sah's route cache
+					lck_mtx_unlock(sadb_mutex);
+					goto bad;
+				}
+				RT_LOCK(ro4->ro_rt);
+			}
+
+			/*
+			 * adjust state->dst if tunnel endpoint is offlink
+			 *
+			 * XXX: caching rt_gateway value in the state is
+			 * not really good, since it may point elsewhere
+			 * when the gateway gets modified to a larger
+			 * sockaddr via rt_setgate().  This is currently
+			 * addressed by SA_SIZE roundup in that routine.
+			 */
+			if (ro4->ro_rt->rt_flags & RTF_GATEWAY)
+			        dst4 = (struct sockaddr_in *)(void *)ro4->ro_rt->rt_gateway;
+			RT_UNLOCK(ro4->ro_rt);
+			ROUTE_RELEASE(&state->ro);
+			route_copyout(&state->ro, ro4, sizeof(state->ro));
+			state->dst = (struct sockaddr *)dst4;
+			state->tunneled = 4;
+			// release sadb_mutex, after updating sah's route cache                                                                                                    
+			lck_mtx_unlock(sadb_mutex);
+		} else {
+			ipseclog((LOG_ERR, "%s: family mismatched between inner and outer spi=%u\n",
+				  __FUNCTION__, (u_int32_t)ntohl(sav->spi)));
+			error = EAFNOSUPPORT;
+			goto bad;
+		}
 	}
 
 	state->m = ipsec4_splithdr(state->m);
@@ -4201,11 +4488,12 @@ ipsec4_tunnel_validate(m, off, nxt0, sav, ifamily)
 #if INET6
 /* validate inbound IPsec tunnel packet. */
 int
-ipsec6_tunnel_validate(m, off, nxt0, sav)
+ipsec6_tunnel_validate(m, off, nxt0, sav, ifamily)
 	struct mbuf *m;		/* no pullup permitted, m->m_len >= ip */
 	int off;
 	u_int nxt0;
 	struct secasvar *sav;
+	sa_family_t *ifamily;
 {
 	u_int8_t nxt = nxt0 & 0xff;
 	struct sockaddr_in6 *sin6;
@@ -4219,8 +4507,9 @@ ipsec6_tunnel_validate(m, off, nxt0, sav)
 	if (m->m_len < sizeof(struct ip6_hdr))
 		panic("too short mbuf on ipsec6_tunnel_validate");
 #endif
-	if (nxt != IPPROTO_IPV6)
+	if (nxt != IPPROTO_IPV4 && nxt != IPPROTO_IPV6)
 		return 0;
+
 	if (m->m_pkthdr.len < off + sizeof(struct ip6_hdr))
 		return 0;
 	/* do not decapsulate if the SA is for transport mode only */
@@ -4235,8 +4524,16 @@ ipsec6_tunnel_validate(m, off, nxt0, sav)
 	if (!IN6_ARE_ADDR_EQUAL(&oip6->ip6_dst, &sin6->sin6_addr))
 		return 0;
 
-	if (sav->utun_in_fn) {
-		// the utun SAs don't have a policy (yet).
+	if (sav->utun_in_fn ||
+		sav->sah->ipsec_if != NULL) {
+		// the ipsec/utun interface SAs don't have a policies.
+		if (nxt == IPPROTO_IPV4) {
+			*ifamily = AF_INET;
+		} else if (nxt == IPPROTO_IPV6) {
+			*ifamily = AF_INET6;
+		} else {
+			return 0;
+		}
 		return 1;
 	}
 	
@@ -4246,7 +4543,7 @@ ipsec6_tunnel_validate(m, off, nxt0, sav)
 	bzero(&isrc, sizeof(isrc));
 	bzero(&idst, sizeof(idst));
 	osrc.sin6_family = odst.sin6_family = isrc.sin6_family =
-	    idst.sin6_family = AF_INET6;
+	    idst.sin6_family = *ifamily = AF_INET6;
 	osrc.sin6_len = odst.sin6_len = isrc.sin6_len = idst.sin6_len = 
 	    sizeof(struct sockaddr_in6);
 	osrc.sin6_addr = oip6->ip6_src;
@@ -4640,7 +4937,7 @@ ipsec_send_natt_keepalive(
 __private_extern__ bool
 ipsec_fill_offload_frame(ifnet_t ifp,
 						 struct secasvar *sav,
-						 struct ipsec_offload_frame *frame,
+						 struct ifnet_keepalive_offload_frame *frame,
 						 size_t frame_data_offset)
 {
 	u_int8_t *data = NULL;
@@ -4656,12 +4953,13 @@ ipsec_fill_offload_frame(ifnet_t ifp,
 		sav->flags & SADB_X_EXT_ESP_KEEPALIVE ||
 		(esp_udp_encap_port & 0xFFFF) == 0 ||
 		sav->remote_ike_port == 0 ||
-		(natt_keepalive_interval == 0 && sav->natt_interval == 0)) {
+		(natt_keepalive_interval == 0 && sav->natt_interval == 0 && sav->natt_offload_interval == 0)) {
 		/* SA is not eligible for keepalive offload on this interface */
 		return (FALSE);
 	}
 
-	if (frame_data_offset + sizeof(struct udpiphdr) + 1 > IPSEC_OFFLOAD_FRAME_DATA_SIZE) {
+	if (frame_data_offset + sizeof(struct udpiphdr) + 1 >
+	    IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE) {
 		/* Not enough room in this data frame */
 		return (FALSE);
 	}
@@ -4671,7 +4969,10 @@ ipsec_fill_offload_frame(ifnet_t ifp,
 	uh = (__typeof__(uh))(void *)(data + frame_data_offset + sizeof(*ip));
 
 	frame->length = frame_data_offset + sizeof(struct udpiphdr) + 1;
-	bzero(data, IPSEC_OFFLOAD_FRAME_DATA_SIZE);
+	frame->type = IFNET_KEEPALIVE_OFFLOAD_FRAME_IPSEC;
+	frame->ether_type = IFNET_KEEPALIVE_OFFLOAD_FRAME_ETHERTYPE_IPV4;
+
+	bzero(data, IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE);
 
 	ip->ip_v = IPVERSION;
 	ip->ip_hl = sizeof(struct ip) >> 2;
@@ -4706,7 +5007,9 @@ ipsec_fill_offload_frame(ifnet_t ifp,
 	uh->uh_sum = 0;
 	*(u_int8_t*)(data + frame_data_offset + sizeof(*ip) + sizeof(*uh)) = 0xFF;
 
-	if (sav->natt_interval != 0) {
+	if (sav->natt_offload_interval != 0) {
+		frame->interval = sav->natt_offload_interval;
+	} else if (sav->natt_interval != 0) {
 		frame->interval = sav->natt_interval;
 	} else {
 		frame->interval = natt_keepalive_interval;

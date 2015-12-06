@@ -153,14 +153,17 @@ ml_static_mfree(
 			}
 			pmap_remove(kernel_pmap, vaddr_cur, vaddr_cur+PAGE_SIZE);
 			assert(pmap_valid_page(ppn));
-
 			if (IS_MANAGED_PAGE(ppn)) {
 				vm_page_create(ppn,(ppn+1));
-				vm_page_wire_count--;
 				freed_pages++;
 			}
 		}
 	}
+	vm_page_lockspin_queues();
+	vm_page_wire_count -= freed_pages;
+	vm_page_wire_count_initial -= freed_pages;
+	vm_page_unlock_queues();
+
 #if	DEBUG	
 	kprintf("ml_static_mfree: Released 0x%x pages at VA %p, size:0x%llx, last ppn: 0x%x\n", freed_pages, (void *)vaddr, (uint64_t)size, ppn);
 #endif
@@ -361,6 +364,20 @@ machine_signal_idle(
 	cpu_interrupt(processor->cpu_id);
 }
 
+void
+machine_signal_idle_deferred(
+	__unused processor_t processor)
+{
+	panic("Unimplemented");
+}
+
+void
+machine_signal_idle_cancel(
+	__unused processor_t processor)
+{
+	panic("Unimplemented");
+}
+
 static kern_return_t
 register_cpu(
         uint32_t        lapic_id,
@@ -394,19 +411,7 @@ register_cpu(
 		goto failed;
 
 #if KPC
-	this_cpu_datap->cpu_kpc_buf[0] = kpc_counterbuf_alloc();
-	if(this_cpu_datap->cpu_kpc_buf[0] == NULL )
-		goto failed;
-	this_cpu_datap->cpu_kpc_buf[1] = kpc_counterbuf_alloc();
-	if(this_cpu_datap->cpu_kpc_buf[1] == NULL )
-		goto failed;
-
-	this_cpu_datap->cpu_kpc_shadow = kpc_counterbuf_alloc();
-	if(this_cpu_datap->cpu_kpc_shadow == NULL )
-		goto failed;
-
-	this_cpu_datap->cpu_kpc_reload = kpc_counterbuf_alloc();
-	if(this_cpu_datap->cpu_kpc_reload == NULL )
+	if (kpc_register_cpu(this_cpu_datap) != TRUE)
 		goto failed;
 #endif
 
@@ -645,6 +650,12 @@ ml_init_lock_timeout(void)
 		TLBTimeOut = (uint32_t) abstime;
 	} else {
 		TLBTimeOut = LockTimeOut;
+	}
+
+	if (PE_parse_boot_argn("phyreadmaxus", &slto, sizeof (slto))) {
+		default_timeout_ns = slto * NSEC_PER_USEC;
+		nanoseconds_to_absolutetime(default_timeout_ns, &abstime);
+		reportphyreaddelayabs = abstime;
 	}
 
 	if (PE_parse_boot_argn("mtxspin", &mtxspin, sizeof (mtxspin))) {

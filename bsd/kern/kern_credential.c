@@ -264,9 +264,7 @@ static void	kauth_groups_trimcache(int newsize);
 
 #endif	/* CONFIG_EXT_RESOLVER */
 
-static const int kauth_cred_primes[KAUTH_CRED_PRIMES_COUNT] = KAUTH_CRED_PRIMES;
-static int	kauth_cred_primes_index = 0;
-static int	kauth_cred_table_size = 0;
+#define KAUTH_CRED_TABLE_SIZE 97
 
 TAILQ_HEAD(kauth_cred_entry_head, ucred);
 static struct kauth_cred_entry_head * kauth_cred_table_anchor = NULL;
@@ -3364,15 +3362,14 @@ kauth_cred_init(void)
 	int		i;
 	
 	kauth_cred_hash_mtx = lck_mtx_alloc_init(kauth_lck_grp, 0/*LCK_ATTR_NULL*/);
-	kauth_cred_table_size = kauth_cred_primes[kauth_cred_primes_index];
 
 	/*allocate credential hash table */
 	MALLOC(kauth_cred_table_anchor, struct kauth_cred_entry_head *, 
-			(sizeof(struct kauth_cred_entry_head) * kauth_cred_table_size), 
+			(sizeof(struct kauth_cred_entry_head) * KAUTH_CRED_TABLE_SIZE),
 			M_KAUTH, M_WAITOK | M_ZERO);
 	if (kauth_cred_table_anchor == NULL)
 		panic("startup: kauth_cred_init");
-	for (i = 0; i < kauth_cred_table_size; i++) {
+	for (i = 0; i < KAUTH_CRED_TABLE_SIZE; i++) {
 		TAILQ_INIT(&kauth_cred_table_anchor[i]);
 	}
 }
@@ -5095,7 +5092,7 @@ kauth_cred_add(kauth_cred_t new_cred)
 	KAUTH_CRED_HASH_LOCK_ASSERT();
 
 	hash_key = kauth_cred_get_hashkey(new_cred);
-	hash_key %= kauth_cred_table_size;
+	hash_key %= KAUTH_CRED_TABLE_SIZE;
 
 	/* race fix - there is a window where another matching credential 
 	 * could have been inserted between the time this one was created and we
@@ -5140,7 +5137,7 @@ kauth_cred_remove(kauth_cred_t cred)
 	kauth_cred_t	found_cred;
 
 	hash_key = kauth_cred_get_hashkey(cred);
-	hash_key %= kauth_cred_table_size;
+	hash_key %= KAUTH_CRED_TABLE_SIZE;
 
 	/* Avoid race */
 	if (cred->cr_ref < 1)
@@ -5200,7 +5197,7 @@ kauth_cred_find(kauth_cred_t cred)
 #endif
 
 	hash_key = kauth_cred_get_hashkey(cred);
-	hash_key %= kauth_cred_table_size;
+	hash_key %= KAUTH_CRED_TABLE_SIZE;
 
 	/* Find cred in the credential hash table */
 	TAILQ_FOREACH(found_cred, &kauth_cred_table_anchor[hash_key], cr_link) {
@@ -5325,7 +5322,7 @@ kauth_cred_hash_print(void)
 		
 	printf("\n\t kauth credential hash table statistics - current cred count %d \n", kauth_cred_count);
 	/* count slot hits, misses, collisions, and max depth */
-	for (i = 0; i < kauth_cred_table_size; i++) {
+	for (i = 0; i < KAUTH_CRED_TABLE_SIZE; i++) {
 		printf("[%02d] ", i);
 		j = 0;
 		TAILQ_FOREACH(found_cred, &kauth_cred_table_anchor[i], cr_link) {
@@ -5510,7 +5507,7 @@ sysctl_dump_creds( __unused struct sysctl_oid *oidp, __unused void *arg1, __unus
 		return (EPERM);
 
 	/* calculate space needed */
-	for (i = 0; i < kauth_cred_table_size; i++) {
+	for (i = 0; i < KAUTH_CRED_TABLE_SIZE; i++) {
 		TAILQ_FOREACH(found_cred, &kauth_cred_table_anchor[i], cr_link) {
 			counter++;
 		}
@@ -5531,7 +5528,7 @@ sysctl_dump_creds( __unused struct sysctl_oid *oidp, __unused void *arg1, __unus
 	/* fill in creds to send back */
 	nextp = cred_listp;
 	space = 0;
-	for (i = 0; i < kauth_cred_table_size; i++) {
+	for (i = 0; i < KAUTH_CRED_TABLE_SIZE; i++) {
 		TAILQ_FOREACH(found_cred, &kauth_cred_table_anchor[i], cr_link) {
 			nextp->credp = found_cred;
 			nextp->cr_ref = found_cred->cr_ref;

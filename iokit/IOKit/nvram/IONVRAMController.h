@@ -36,7 +36,7 @@ class IONVRAMController: public IOService
   OSDeclareAbstractStructors(IONVRAMController);
   
 public:
-  virtual bool start(IOService *provider);
+  virtual void registerService(IOOptionBits options = 0) APPLE_KEXT_OVERRIDE;
   
   virtual void sync(void);
   

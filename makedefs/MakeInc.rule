@@ -13,22 +13,6 @@
 # Generic Install rules
 #
 
-ifndef INSTALL_MI_LCL_LIST
-    INSTALL_MI_LCL_LIST = $(INSTALL_MI_LIST)
-endif
-
-ifndef INSTALL_MI_LCL_GEN_LIST
-    INSTALL_MI_LCL_GEN_LIST = $(INSTALL_MI_GEN_LIST)
-endif
-
-ifndef INSTALL_MD_LCL_LIST
-    INSTALL_MD_LCL_LIST = $(INSTALL_MD_LIST)
-endif
-
-ifndef INSTALL_MD_LCL_GEN_LIST
-    INSTALL_MD_LCL_GEN_LIST = $(INSTALL_MD_GEN_LIST)
-endif
-
 ifndef INSTALL_KF_MI_LCL_LIST
     INSTALL_KF_MI_LCL_LIST = $(EXPORT_MI_LIST)
 endif
@@ -121,8 +105,8 @@ $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_GEN_FILES),1,kincmigendi
 # Machine-independent local (private) files
 #
 
-INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_LIST))
-INSTALL_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
+INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_MI_LCL_LIST) $(INSTALL_MI_LIST)))
+INSTALL_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_MI_LCL_GEN_LIST) $(INSTALL_MI_GEN_LIST)))
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_LCL_FILES),,pincmidir,$(SPINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_LCL_GEN_FILES),1,pincmigendir,$(SPINCFRAME_UNIFDEF)))
@@ -153,8 +137,8 @@ $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MD_GEN_FILES),1,kincgendir,
 # Machine-dependent local (private) files
 #
 
-INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_LIST))
-INSTALL_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
+INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_LIST) $(INSTALL_MD_LIST)))
+INSTALL_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_GEN_LIST) $(INSTALL_MD_GEN_LIST)))
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_LCL_FILES),,pincdir,$(SPINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_LCL_GEN_FILES),1,pincgendir,$(SPINCFRAME_UNIFDEF)))
@@ -278,6 +262,16 @@ P_CTFRULE_1A=@true
 P_CTFRULE_1B=
 P_CTFRULE_2=@true 
 
+
+#
+# This isn't the right place to put this, but we need to := override some settings
+# in Makefiles that include the generic helper fragments (like this file)
+#
+ifeq ($(BUILD_JSON_COMPILATION_DATABASE),1)
+HIB_FILES :=
+LAST_FILES :=
+KLD_FILES :=
+endif
 
 .PHONY: do_build_all
 

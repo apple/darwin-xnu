@@ -72,7 +72,7 @@ protected:
 
     void *		notifyMsg;
 
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
     /*!
      * @function sendDataAvailableNotification

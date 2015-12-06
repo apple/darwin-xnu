@@ -104,6 +104,7 @@ struct sfb_fcl {
 #define	SFBF_FLOWCTL	0x04	/* enable flow control advisories */
 #define	SFBF_DELAYBASED	0x08	/* queueing is delay based */
 #define	SFBF_DELAYHIGH	0x10	/* Estimated delay is greater than target */
+#define SFBF_LAST_PKT_DROPPED	0x20	/* Last packet dropped */
 #define	SFBF_SUSPENDED	0x1000	/* queue is suspended */
 
 #define	SFBF_USERFLAGS							\

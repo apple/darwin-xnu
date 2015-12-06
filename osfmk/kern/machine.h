@@ -92,7 +92,16 @@ extern void machine_idle(void);
 
 extern void machine_track_platform_idle(boolean_t);
 
+/* Signals a processor to bring it out of idle */
 extern void machine_signal_idle(
+					processor_t         processor);
+
+/* Signals a processor to bring it out of idle unless canceled */
+extern void machine_signal_idle_deferred(
+					processor_t         processor);
+
+/* Cancels an outstanding machine_signal_idle_deferred, if this is supported */
+extern void machine_signal_idle_cancel(
 					processor_t         processor);
 
 extern void halt_cpu(void);
@@ -113,5 +122,29 @@ extern void machine_callstack(
 					vm_size_t           callstack_max);
 
 extern void consider_machine_collect(void);
+
+/*
+ * Machine-dependent routine to inform platform layer and external
+ * CPU power management about context switches
+ */
+
+extern void	machine_thread_going_on_core(thread_t	new_thread,
+					int		urgency,
+					uint64_t	sched_latency);
+
+extern void machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating);
+
+extern void machine_max_runnable_latency(uint64_t bg_max_latency,
+										 uint64_t default_max_latency,
+										 uint64_t realtime_max_latency);
+
+extern void machine_work_interval_notify(thread_t thread,
+										 uint64_t work_id,
+										 uint64_t start_abstime,
+										 uint64_t finish_abstime,
+										 uint64_t deadline_abstime,
+										 uint64_t next_start_abstime,
+										 uint16_t urgency,
+										 uint32_t flags);
 
 #endif	/* _KERN_MACHINE_H_ */

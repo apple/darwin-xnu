@@ -65,11 +65,8 @@ keydb_newsecpolicy()
 
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
-	p = (struct secpolicy *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
-	if (!p)
-		return p;
-	bzero(p, sizeof(*p));
-	return p;
+	return (struct secpolicy *)_MALLOC(sizeof(*p), M_SECA,
+	    M_WAITOK | M_ZERO);
 }
 
 void
@@ -91,15 +88,15 @@ keydb_newsecashead()
 
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
-	p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT | M_ZERO);
 	if (!p) {
 		lck_mtx_unlock(sadb_mutex);
-		p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
+		p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA,
+		    M_WAITOK | M_ZERO);
 		lck_mtx_lock(sadb_mutex);
 	}
 	if (!p) 
 		return p;
-	bzero(p, sizeof(*p));
 	for (i = 0; i < sizeof(p->savtree)/sizeof(p->savtree[0]); i++)
 		LIST_INIT(&p->savtree[i]);
 	return p;
@@ -180,28 +177,28 @@ keydb_newsecreplay(wsize)
 	
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
-	p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT | M_ZERO);
 	if (!p) {
 		lck_mtx_unlock(sadb_mutex);
-		p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
+		p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA,
+		    M_WAITOK | M_ZERO);
 		lck_mtx_lock(sadb_mutex);
 	}
 	if (!p)
 		return p;
 
-	bzero(p, sizeof(*p));
 	if (wsize != 0) {
-		p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA, M_NOWAIT);
+		p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA, M_NOWAIT | M_ZERO);
 		if (!p->bitmap) {
 			lck_mtx_unlock(sadb_mutex);
-			p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA, M_WAITOK);
+			p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA,
+			    M_WAITOK | M_ZERO);
 			lck_mtx_lock(sadb_mutex);
 			if (!p->bitmap) {
 				_FREE(p, M_SECA);
 				return NULL;
 			}
 		}
-		bzero(p->bitmap, wsize);
 	}
 	p->wsize = wsize;
 	return p;

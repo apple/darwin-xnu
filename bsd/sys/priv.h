@@ -84,6 +84,8 @@
 #define PRIV_HW_DEBUG_DATA	    1004	/* Extract hw-specific debug data (e.g. ECC data) */
 #define PRIV_SELECTIVE_FORCED_IDLE	1005	/* Configure and control Selective Forced Idle (SFI) subsystem */
 #define PRIV_PROC_TRACE_INSPECT 1006   /* Request trace memory of arbitrary process to be inspected */
+#define PRIV_DARKBOOT		1007 	/* Manipulate the darkboot flag */
+#define PRIV_WORK_INTERVAL	1008 	/* Express details about a work interval */
 
 /*
  * Virtual memory privileges.

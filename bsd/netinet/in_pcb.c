@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -534,7 +534,7 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo, struct proc *p)
 	int mac_error;
 #endif /* CONFIG_MACF_NET */
 
-	if (!so->cached_in_sock_layer) {
+	if ((so->so_flags1 & SOF1_CACHED_IN_SOCK_LAYER) == 0) {
 		inp = (struct inpcb *)zalloc(pcbinfo->ipi_zone);
 		if (inp == NULL)
 			return (ENOBUFS);
@@ -552,7 +552,7 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo, struct proc *p)
 #if CONFIG_MACF_NET
 	mac_error = mac_inpcb_label_init(inp, M_WAITOK);
 	if (mac_error != 0) {
-		if (!so->cached_in_sock_layer)
+		if ((so->so_flags1 & SOF1_CACHED_IN_SOCK_LAYER) == 0)
 			zfree(pcbinfo->ipi_zone, inp);
 		return (mac_error);
 	}
@@ -1296,6 +1296,16 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p,
 		inp->inp_last_outifp = (outif != NULL) ? *outif : NULL;
 		inp->inp_flags |= INP_INADDR_ANY;
 	} else {
+		/*
+		 * Usage of IP_PKTINFO, without local port already
+		 * speficified will cause kernel to panic,
+		 * see rdar://problem/18508185.
+		 * For now returning error to avoid a kernel panic
+		 * This routines can be refactored and handle this better
+		 * in future.
+		 */
+		if (inp->inp_lport == 0)
+			return (EINVAL);
 		if (!lck_rw_try_lock_exclusive(inp->inp_pcbinfo->ipi_lock)) {
 			/*
 			 * Lock inversion issue, mostly with udp
@@ -1369,6 +1379,13 @@ in_pcbdetach(struct inpcb *inp)
 	if (nstat_collect && 
 	    (SOCK_PROTO(so) == IPPROTO_TCP || SOCK_PROTO(so) == IPPROTO_UDP))
 		nstat_pcb_detach(inp);
+
+	/* Free memory buffer held for generating keep alives */
+	if (inp->inp_keepalive_data != NULL) {
+		FREE(inp->inp_keepalive_data, M_TEMP);
+		inp->inp_keepalive_data = NULL;
+	}
+
 	/* mark socket state as dead */
 	if (in_pcb_checkstate(inp, WNT_STOPUSING, 1) != WNT_STOPUSING) {
 		panic("%s: so=%p proto=%d couldn't set to STOPUSING\n",
@@ -1465,7 +1482,7 @@ in_pcbdispose(struct inpcb *inp)
 		 * we deallocate the structure.
 		 */
 		ROUTE_RELEASE(&inp->inp_route);
-		if (!so->cached_in_sock_layer) {
+		if ((so->so_flags1 & SOF1_CACHED_IN_SOCK_LAYER) == 0) {
 			zfree(ipi->ipi_zone, inp);
 		}
 		sodealloc(so);
@@ -1618,18 +1635,11 @@ in_losing(struct inpcb *inp)
 {
 	boolean_t release = FALSE;
 	struct rtentry *rt;
-	struct rt_addrinfo info;
 
 	if ((rt = inp->inp_route.ro_rt) != NULL) {
 		struct in_ifaddr *ia = NULL;
 
-		bzero((caddr_t)&info, sizeof (info));
 		RT_LOCK(rt);
-		info.rti_info[RTAX_DST] =
-		    (struct sockaddr *)&inp->inp_route.ro_dst;
-		info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
-		info.rti_info[RTAX_NETMASK] = rt_mask(rt);
-		rt_missmsg(RTM_LOSING, &info, rt->rt_flags, 0);
 		if (rt->rt_flags & RTF_DYNAMIC) {
 			/*
 			 * Prevent another thread from modifying rt_key,
@@ -2822,10 +2832,11 @@ inp_get_soprocinfo(struct inpcb *inp, struct so_procinfo *soprocinfo)
 	 * When not delegated, the effective pid is the same as the real pid
 	 */
 	if (so->so_flags & SOF_DELEGATED) {
+		soprocinfo->spi_delegated = 1;
 		soprocinfo->spi_epid = so->e_pid;
-		if (so->e_pid != 0)
-			uuid_copy(soprocinfo->spi_euuid, so->e_uuid);
+		uuid_copy(soprocinfo->spi_euuid, so->e_uuid);
 	} else {
+		soprocinfo->spi_delegated = 0;
 		soprocinfo->spi_epid = so->last_pid;
 	}
 }

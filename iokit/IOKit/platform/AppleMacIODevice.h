@@ -47,9 +47,9 @@ private:
   ExpansionData *reserved;
 
 public:
-  virtual bool compareName( OSString * name, OSString ** matched = 0 ) const;
-  virtual IOService *matchLocation(IOService *client);
-  virtual IOReturn getResources( void );
+  virtual bool compareName( OSString * name, OSString ** matched = 0 ) const APPLE_KEXT_OVERRIDE;
+  virtual IOService *matchLocation(IOService *client) APPLE_KEXT_OVERRIDE;
+  virtual IOReturn getResources( void ) APPLE_KEXT_OVERRIDE;
     
   OSMetaClassDeclareReservedUnused(AppleMacIODevice,  0);
   OSMetaClassDeclareReservedUnused(AppleMacIODevice,  1);

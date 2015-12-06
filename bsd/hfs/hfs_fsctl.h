@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2015 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2014 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -273,8 +273,7 @@ enum {
 #define HFSIOC_CLRBACKINGSTOREINFO  _IO('h', 8)
 #define HFS_CLRBACKINGSTOREINFO  IOCBASECMD(HFSIOC_CLRBACKINGSTOREINFO)
 
-#define HFSIOC_BULKACCESS _IOW('h', 9, struct user32_access_t)
-#define HFS_BULKACCESS_FSCTL IOCBASECMD(HFSIOC_BULKACCESS)
+// 'h', 9 used to be HFSIOC_BULKACCESS which is now deprecated
 
 /* Unsupported - Previously used to enable/disable ACLs */
 #define HFSIOC_UNSUPPORTED  _IOW('h', 10, int32_t)
@@ -364,9 +363,27 @@ enum {
 #define HFSIOC_CS_FREESPACE_TRIM _IOWR('h', 39, u_int32_t)
 #define HFS_CS_FREESPACE_TRIM    IOCBASECMD(HFSIOC_CS_FREESPACE_TRIM)
 
+
 /* Get file system information for the given volume */
 #define HFSIOC_GET_FSINFO        _IOWR('h', 45, hfs_fsinfo)
 #define HFS_GET_FSINFO           IOCBASECMD(HFSIOC_GET_FSINFO)
+
+/* Re-pin hotfile data; argument controls what state gets repinned */
+#define HFSIOC_REPIN_HOTFILE_STATE _IOWR('h', 46, u_int32_t)
+#define HFS_REPIN_HOTFILE_STATE    IOCBASECMD(HFSIOC_REPIN_HOTFILE_STATE)
+
+#define HFS_REPIN_METADATA      0x0001
+#define HFS_REPIN_USERDATA      0x0002
+
+/* Mark a directory or file as worth caching on any underlying "fast" device */
+#define HFSIOC_SET_HOTFILE_STATE _IOWR('h', 47, u_int32_t)
+#define HFS_SET_HOTFILE_STATE    IOCBASECMD(HFSIOC_SET_HOTFILE_STATE)
+
+/* flags to pass to SET_HOTFILE_STATE */
+#define HFS_MARK_FASTDEVCANDIDATE   0x0001
+#define HFS_UNMARK_FASTDEVCANDIDATE 0x0002
+#define HFS_NEVER_FASTDEVCANDIDATE  0x0004
+
 
 #endif /* __APPLE_API_UNSTABLE */
 

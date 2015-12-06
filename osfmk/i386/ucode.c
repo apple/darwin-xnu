@@ -109,7 +109,7 @@ copyin_update(uint64_t inaddr)
 	 * It need only be aligned to 16-bytes, according to the SDM.
 	 * This also wires it down
 	 */
-	ret = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&update, size);
+	ret = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&update, size, VM_KERN_MEMORY_OSFMK);
 	if (ret != KERN_SUCCESS)
 		return ENOMEM;
 

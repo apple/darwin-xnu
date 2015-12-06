@@ -178,7 +178,7 @@ struct ip6protosw inet6sw[] = {
 	.pr_type =		SOCK_DGRAM,
 	.pr_protocol =		IPPROTO_UDP,
 	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_PROTOLOCK|PR_PCBLOCK|
-				PR_EVCONNINFO,
+				PR_EVCONNINFO|PR_PRECONN_WRITE,
 	.pr_input =		udp6_input,
 	.pr_ctlinput =		udp6_ctlinput,
 	.pr_ctloutput =		ip6_ctloutput,
@@ -194,7 +194,8 @@ struct ip6protosw inet6sw[] = {
 	.pr_type =		SOCK_STREAM,
 	.pr_protocol =		IPPROTO_TCP,
 	.pr_flags =		PR_CONNREQUIRED|PR_WANTRCVD|PR_PCBLOCK|
-				PR_PROTOLOCK|PR_DISPOSE|PR_EVCONNINFO,
+				PR_PROTOLOCK|PR_DISPOSE|PR_EVCONNINFO|
+				PR_PRECONN_WRITE|PR_DATA_IDEMPOTENT,
 	.pr_input =		tcp6_input,
 	.pr_ctlinput =		tcp6_ctlinput,
 	.pr_ctloutput =		tcp_ctloutput,

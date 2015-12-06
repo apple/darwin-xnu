@@ -480,17 +480,18 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
 /*
  * Super-user changeable flags.
  */
+#define	SF_SUPPORTED	0x001f0000	/* mask of superuser supported flags */
 #define	SF_SETTABLE	0xffff0000	/* mask of superuser changeable flags */
 #define	SF_ARCHIVED	0x00010000	/* file is archived */
 #define	SF_IMMUTABLE	0x00020000	/* file may not be changed */
 #define	SF_APPEND	0x00040000	/* writes to file may only append */
 #define SF_RESTRICTED	0x00080000	/* restricted access */
+#define SF_NOUNLINK	0x00100000	/* Item may not be removed, renamed or mounted on */
 
 /*
  * The following two bits are reserved for FreeBSD.  They are not
  * implemented in Mac OS X.
  */
-/* #define SF_NOUNLINK	0x00100000 */	/* file may not be removed or renamed */
 /* #define SF_SNAPSHOT	0x00200000 */	/* snapshot inode */
 /* NOTE: There is no SF_HIDDEN bit. */
 

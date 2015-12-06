@@ -145,6 +145,16 @@ extern int	fdavail(proc_t p, int n);
 			(&(p)->p_fd->fd_ofiles[(fd)])
 #define		fdflags(p, fd)					\
 			(&(p)->p_fd->fd_ofileflags[(fd)])
+
+/*
+ * Accesor macros for fd flags
+ */
+#define FDFLAGS_GET(p, fd) (*fdflags(p, fd) & (UF_EXCLOSE|UF_FORKCLOSE))
+#define FDFLAGS_SET(p, fd, bits) \
+	   (*fdflags(p, fd) |= ((bits) & (UF_EXCLOSE|UF_FORKCLOSE)))
+#define FDFLAGS_CLR(p, fd, bits) \
+	   (*fdflags(p, fd) &= ~((bits) & (UF_EXCLOSE|UF_FORKCLOSE)))
+
 extern int	falloc(proc_t p, struct fileproc **resultfp, int *resultfd, vfs_context_t ctx);
 
 #ifdef __APPLE_API_PRIVATE

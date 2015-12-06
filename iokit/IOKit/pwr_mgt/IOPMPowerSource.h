@@ -218,9 +218,9 @@ class IOPMPowerSource : public IOService
 */
     static IOPMPowerSource *powerSource(void);
 
-    virtual bool init(void);
+    virtual bool init(void) APPLE_KEXT_OVERRIDE;
     
-    virtual void free(void);
+    virtual void free(void) APPLE_KEXT_OVERRIDE;
 
 /*! @function updateStatus
     @abstract Must be called by physical battery controller when battery state

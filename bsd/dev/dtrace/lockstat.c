@@ -165,6 +165,7 @@ typedef struct lockstat_assembly_probe {
 		{ LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE,	(vm_offset_t *) lck_rw_try_lock_exclusive_lockstat_patch_point },
 		{ LS_LCK_MTX_LOCK_SPIN_ACQUIRE,		(vm_offset_t *) lck_mtx_lock_spin_lockstat_patch_point },
 #endif
+		/* No assembly patch points for ARM */
 #endif /* CONFIG_DTRACE */
 		{ LS_LCK_INVALID, NULL }
 };

@@ -191,7 +191,7 @@ static	int mdevopen(dev_t dev, int flags, __unused int devtype, __unused struct 
 
 	devid = minor(dev);									/* Get minor device number */
 
-	if (devid > 16) return (ENXIO);						/* Not valid */
+	if (devid >= 16) return (ENXIO);						/* Not valid */
 
 	if ((flags & FWRITE) && (mdev[devid].mdFlags & mdRO)) return (EACCES);	/* Currently mounted RO */
 
@@ -206,7 +206,7 @@ static int mdevrw(dev_t dev, struct uio *uio, __unused int ioflag) {
 
 	devid = minor(dev);									/* Get minor device number */
 
-	if (devid > 16) return (ENXIO);						/* Not valid */
+	if (devid >= 16) return (ENXIO);						/* Not valid */
 	if (!(mdev[devid].mdFlags & mdInited))  return (ENXIO);	/* Have we actually been defined yet? */
 
 	mdata = ((addr64_t)mdev[devid].mdBase << 12) + uio->uio_offset;	/* Point to the area in "file" */
@@ -358,7 +358,7 @@ static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
 
 	devid = minor(dev);									/* Get minor device number */
 
-	if (devid > 16) return (ENXIO);						/* Not valid */
+	if (devid >= 16) return (ENXIO);						/* Not valid */
 
 	error = proc_suser(p);			/* Are we superman? */
 	if (error) return (error);							/* Nope... */
@@ -401,11 +401,6 @@ static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
 			*f = 1;
 			break;
 			
-		case DKIOCGETBLOCKCOUNT32:
-			if(!(mdev[devid].mdFlags & mdInited)) return (ENXIO);
-			*f = ((mdev[devid].mdSize << 12) + mdev[devid].mdSecsize - 1) / mdev[devid].mdSecsize;
-			break;
-			
 		case DKIOCGETBLOCKCOUNT:
 			if(!(mdev[devid].mdFlags & mdInited)) return (ENXIO);
 			*o = ((mdev[devid].mdSize << 12) + mdev[devid].mdSecsize - 1) / mdev[devid].mdSecsize;
@@ -439,7 +434,7 @@ static	int mdevsize(dev_t dev) {
 	int devid;
 
 	devid = minor(dev);									/* Get minor device number */
-	if (devid > 16) return (ENXIO);						/* Not valid */
+	if (devid >= 16) return (ENXIO);						/* Not valid */
 
 	if ((mdev[devid].mdFlags & mdInited) == 0) return(-1);		/* Not inited yet */
 

@@ -64,6 +64,9 @@ static boolean_t blessed_preempt = FALSE;
 #define REQ_KDBG_CALLSTACKS (12)
 #define REQ_PET_IDLE_RATE   (13)
 #define REQ_BLESS_PREEMPT   (14)
+#define REQ_KDBG_CSWITCH    (15)
+#define REQ_CSWITCH_ACTION  (16)
+#define REQ_SIGNPOST_ACTION (17)
 
 /* simple state variables */
 int kperf_debug_level = 0;
@@ -450,6 +453,45 @@ sysctl_pet_idle_rate( struct sysctl_oid *oidp, struct sysctl_req *req )
     return error;
 }
 
+static int
+sysctl_kdbg_cswitch( struct sysctl_oid *oidp, struct sysctl_req *req )
+{
+    int value = kperf_kdbg_cswitch_get();
+    int error = sysctl_handle_int(oidp, &value, 0, req);
+
+    if (error || !req->newptr) {
+        return error;
+    }
+
+    return kperf_kdbg_cswitch_set(value);
+}
+
+static int
+sysctl_cswitch_action( struct sysctl_oid *oidp, struct sysctl_req *req )
+{
+    int value = kperf_cswitch_action_get();
+    int error = sysctl_handle_int(oidp, &value, 0, req);
+
+    if (error || !req->newptr) {
+        return error;
+    }
+
+    return kperf_cswitch_action_set(value);
+}
+
+static int
+sysctl_signpost_action( struct sysctl_oid *oidp, struct sysctl_req *req )
+{
+    int value = kperf_signpost_action_get();
+    int error = sysctl_handle_int(oidp, &value, 0, req);
+
+    if (error || !req->newptr) {
+        return error;
+    }
+
+    return kperf_signpost_action_set(value);
+}
+
 /*
  * #define SYSCTL_HANDLER_ARGS (struct sysctl_oid *oidp,         \
  *                                void *arg1, int arg2,                 \
@@ -503,6 +545,9 @@ kperf_sysctl SYSCTL_HANDLER_ARGS
 	case REQ_KDBG_CALLSTACKS:
 		ret = sysctl_kdbg_callstacks( oidp, req );
 		break;
+	case REQ_KDBG_CSWITCH:
+		ret = sysctl_kdbg_cswitch( oidp, req );
+		break;
 	case REQ_ACTION_FILTER_BY_TASK:
 		ret = sysctl_action_filter( oidp, req, 1 );
 		break;
@@ -514,6 +559,12 @@ kperf_sysctl SYSCTL_HANDLER_ARGS
 		break;
 	case REQ_BLESS_PREEMPT:
 		ret = sysctl_bless_preempt( oidp, req );
+		break;
+	case REQ_CSWITCH_ACTION:
+		ret = sysctl_cswitch_action( oidp, req );
+		break;
+	case REQ_SIGNPOST_ACTION:
+		ret = sysctl_signpost_action( oidp, req );
 		break;
 	default:
 		ret = ENOENT;
@@ -547,7 +598,6 @@ kperf_sysctl_bless_handler SYSCTL_HANDLER_ARGS
 
 	return ret;
 }
-
 
 /***************************
  *
@@ -715,20 +765,30 @@ SYSCTL_PROC(_kperf, OID_AUTO, blessed_preempt,
             (void*)REQ_BLESS_PREEMPT, 
             sizeof(int), kperf_sysctl, "I", "Blessed preemption");
 
-
 SYSCTL_PROC(_kperf, OID_AUTO, kdbg_callstacks,
             CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
             (void*)REQ_KDBG_CALLSTACKS, 
             sizeof(int), kperf_sysctl, "I", "Generate kdbg callstacks");
 
-SYSCTL_INT(_kperf, OID_AUTO, kdbg_cswitch, 
-           CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY, 
-           &kperf_cswitch_hook, 0, "Generate context switch info");
+SYSCTL_PROC(_kperf, OID_AUTO, kdbg_cswitch,
+            CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY,
+            (void *)REQ_KDBG_CSWITCH,
+            sizeof(int), kperf_sysctl, "I", "Generate context switch info");
 
 SYSCTL_PROC(_kperf, OID_AUTO, pet_idle_rate,
             CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY,
             (void*)REQ_PET_IDLE_RATE,
             sizeof(int), kperf_sysctl, "I", "Rate at which unscheduled threads are forced to be sampled in PET mode");
+
+SYSCTL_PROC(_kperf, OID_AUTO, cswitch_action,
+            CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY,
+            (void*)REQ_CSWITCH_ACTION,
+            sizeof(int), kperf_sysctl, "I", "ID of action to trigger on context-switch");
+
+SYSCTL_PROC(_kperf, OID_AUTO, signpost_action,
+            CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY,
+            (void*)REQ_SIGNPOST_ACTION,
+            sizeof(int), kperf_sysctl, "I", "ID of action to trigger on signposts");
 
 /* debug */
 SYSCTL_INT(_kperf, OID_AUTO, debug_level, CTLFLAG_RW, 

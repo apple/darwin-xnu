@@ -54,7 +54,7 @@ private:
 public:
     static IOConditionLock *withCondition(int condition, bool inIntr = true);
     virtual bool initWithCondition(int condition, bool inIntr = true);
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
     virtual bool tryLock();	// acquire lock, no waiting
     virtual int  lock();	// acquire lock (enter critical section)

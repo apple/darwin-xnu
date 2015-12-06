@@ -209,6 +209,8 @@ struct bpf_version {
 #ifdef PRIVATE
 #define	BIOCGWANTPKTAP	_IOR('B', 127, u_int)
 #define	BIOCSWANTPKTAP	_IOWR('B', 127, u_int)
+#define BIOCSHEADDROP   _IOW('B', 128, int)
+#define BIOCGHEADDROP   _IOR('B', 128, int)
 #endif /* PRIVATE */
 /*
  * Structure prepended to each packet.
@@ -605,7 +607,11 @@ struct bpf_mtag {
 /*
  * For Apple private usage
  */
+#define DLT_USER0_APPLE_INTERNAL        DLT_USER0       /* rdar://12019509 */
+#define DLT_USER1_APPLE_INTERNAL        DLT_USER1       /* rdar://12019509 */
 #define DLT_PKTAP			DLT_USER2	/* rdar://11779467 */
+#define DLT_USER3_APPLE_INTERNAL        DLT_USER3       /* rdar://19614531 */
+#define DLT_USER4_APPLE_INTERNAL	DLT_USER4	/* rdar://19614531 */
 #endif /* PRIVATE */
 
 /*

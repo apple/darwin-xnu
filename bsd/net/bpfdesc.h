@@ -97,15 +97,18 @@ struct bpf_d {
 	caddr_t		bd_fbuf;	/* free slot */
 	int 		bd_slen;	/* current length of store buffer */
 	int 		bd_hlen;	/* current length of hold buffer */
+	u_int32_t	bd_scnt;	/* number of packets in store buffer */
+	u_int32_t	bd_hcnt;	/* number of packets in hold buffer */
 
 	int		bd_bufsize;	/* absolute length of buffers */
 	int		bd_hbuf_read;	/* reading from hbuf */
+	int		bd_headdrop;	/* Keep newer packets */
 
 	struct bpf_if  *bd_bif;		/* interface descriptor */
-	u_int32_t		bd_rtout;	/* Read timeout in 'ticks' */
+	u_int32_t	bd_rtout;	/* Read timeout in 'ticks' */
 	struct bpf_insn *bd_filter; 	/* filter code */
-	u_int32_t		bd_rcount;	/* number of packets received */
-	u_int32_t		bd_dcount;	/* number of packets dropped */
+	u_int32_t	bd_rcount;	/* number of packets received */
+	u_int32_t	bd_dcount;	/* number of packets dropped */
 
 	u_char		bd_promisc;	/* true if listening promiscuously */
 	u_char		bd_state;	/* idle, waiting, or timed out */
@@ -129,12 +132,19 @@ struct bpf_d {
 	int		bd_hdrcmplt;	/* false to fill in src lladdr automatically */
 	int		bd_seesent;	/* true if bpf should see sent packets */
 	int		bd_oflags;	/* device open flags */
-	thread_call_t bd_thread_call; /* for BPF timeouts with select */
+	thread_call_t	bd_thread_call; /* for BPF timeouts with select */
 #if CONFIG_MACF_NET
 	struct label *	bd_label;	/* MAC label for descriptor */
 #endif
 	int		bd_traffic_class; /* traffic service class */
 	int		bd_flags;	/* flags */
+
+	int		bd_refcnt;
+#define	BPF_REF_HIST	4		/* how many callers to keep around */
+	void		*bd_ref_lr[BPF_REF_HIST];
+	void		*bd_unref_lr[BPF_REF_HIST];
+	int		bd_next_ref_lr;
+	int		bd_next_unref_lr;
 };
 
 /* Values for bd_state */
@@ -148,11 +158,14 @@ struct bpf_d {
 			 (((bd)->bd_immediate || (bd)->bd_state == BPF_TIMED_OUT) && \
 			  (bd)->bd_slen != 0))
 
-
 /* Values for bd_flags */
 #define	BPF_EXTENDED_HDR	0x01	/* process req. the extended header */
-#define	BPF_WANT_PKTAP		0x02	/* process knows how to keep DLT_PKTAP private */
+#define	BPF_WANT_PKTAP		0x02	/* knows how to handle DLT_PKTAP */
 #define	BPF_FINALIZE_PKTAP	0x04	/* finalize pktap header on read */
+#define	BPF_KNOTE		0x08	/* kernel note attached */
+#define	BPF_DETACHING		0x10	/* bpf_d is being detached */
+#define	BPF_DETACHED		0x20	/* bpf_d is detached */
+#define	BPF_CLOSING		0x40	/* bpf_d is being closed */
 
 /*
  * Descriptor associated with each attached hardware interface.

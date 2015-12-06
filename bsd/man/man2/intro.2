@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)intro.2	8.3 (Berkeley) 12/11/93
 .\"
-.Dd December 11, 1993
+.Dd March 18, 2015
 .Dt INTRO 2
 .Os BSD 4
 .Sh NAME
@@ -240,7 +240,8 @@ same routine may complete normally.
 .It Er 36 EINPROGRESS Em "Operation now in progress" .
 An operation that takes a long time to complete (such as
 a
-.Xr connect 2 )
+.Xr connect 2 or
+.Xr connectx 2 )
 was attempted on a non-blocking object (see
 .Xr fcntl 2 ) .
 .It Er 37 EALREADY Em "Operation already in progress" .
@@ -308,6 +309,8 @@ the system lacked sufficient buffer space or because a queue was full.
 .It Er 56 EISCONN Em "Socket is already connected" .
 A
 .Xr connect
+or
+.Xr connectx
 request was made on an already connected socket; or,
 a
 .Xr sendto
@@ -326,7 +329,8 @@ had already been shut down with a previous
 call.
 .It Er 60 ETIMEDOUT Em "Operation timed out" .
 A
-.Xr connect
+.Xr connect ,
+.Xr connectx
 or
 .Xr send
 request failed because the connected party did not
@@ -476,7 +480,7 @@ A new process is created by a currently active process; (see
 The parent process ID of a process is initially the process ID of its creator.
 If the creating process exits,
 the parent process ID of each child is set to the ID of a system process,
-.Xr init .
+.Xr launchd 8 .
 .It  Process Group
 Each active process is a member of a process group that is identified by
 a non-negative integer called the process group ID.  This is the process
@@ -523,7 +527,7 @@ as the group,
 but is in a different process group.
 Note that when a process exits, the parent process for its children
 is changed to be
-.Xr init ,
+.Xr launchd 8 ,
 which is in a separate session.
 Not all members of an orphaned process group are necessarily orphaned
 processes (those whose creating process has exited).
@@ -582,7 +586,7 @@ process and is granted special privileges if its effective user ID is 0.
 .It  Special Processes
 The processes with process IDs of 0, 1, and 2 are special.
 Process 0 is the scheduler.  Process 1 is the initialization process
-.Xr init ,
+.Xr launchd 8 ,
 and is the ancestor of every other process in the system.
 It is used to control the process structure.
 Process 2 is the paging daemon.

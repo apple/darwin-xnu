@@ -60,7 +60,7 @@
 #include <mach/mach_traps.h>
 
 #include <kern/syscall_sw.h>
-#if CONFIG_REQUIRES_U32_MUNGING
+#if CONFIG_REQUIRES_U32_MUNGING || (__arm__ && (__BIGGEST_ALIGNMENT__ > 4))
 #include <sys/munge.h>
 #endif
 

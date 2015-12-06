@@ -127,6 +127,14 @@ struct ip_fw_args {
 #define fwa_dst fwa_dst_._fwa_dst
 #define fwa_dst6 fwa_dst_._fwa_dst6
 
+/* Allocate a separate structure for inputs args to save space and bzero time */
+struct ip_fw_in_args {
+	struct sockaddr_in	*fwai_next_hop;	/* forward address            */
+	struct ip_fw		*fwai_ipfw_rule;/* matching IPFW rule         */
+	struct pf_rule		*fwai_pf_rule;	/* matching PF rule           */
+	u_int16_t		fwai_divert_rule;/* divert cookie             */
+};
+
 #endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* __IP_FLOWID_H__ */

@@ -491,6 +491,12 @@ mach_absolute_time(void)
 	return rtc_nanotime_read();
 }
 
+uint64_t
+mach_approximate_time(void)
+{
+	return rtc_nanotime_read();
+}
+
 void
 clock_interval_to_absolutetime_interval(
 	uint32_t		interval,

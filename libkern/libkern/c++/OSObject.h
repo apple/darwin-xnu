@@ -203,7 +203,7 @@ protected:
     * can be used to break certain retain cycles in object graphs.
     * In general, however, it should be avoided.
     */
-    virtual void release(int freeWhen) const;
+    virtual void release(int freeWhen) const APPLE_KEXT_OVERRIDE;
 
    /*!
     * @function taggedRelease
@@ -230,7 +230,7 @@ protected:
     * can be used to break certain retain cycles in object graphs.
     * In general, however, it should be avoided.
     */
-    virtual void taggedRelease(const void * tag, const int freeWhen) const;
+    virtual void taggedRelease(const void * tag, const int freeWhen) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -324,7 +324,7 @@ public:
     * @result
     * The reference count of the object.
     */
-    virtual int getRetainCount() const;
+    virtual int getRetainCount() const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -339,7 +339,7 @@ public:
     * outside the context in which you received it,
     * you should always retain it immediately.
     */
-    virtual void retain() const;
+    virtual void retain() const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -357,7 +357,7 @@ public:
     * //apple_ref/cpp/instm/OSObject/free/virtualvoid/()
     * free@/link</code>.
     */
-    virtual void release() const;
+    virtual void release() const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -378,7 +378,7 @@ public:
     * outside the context in which you received it,
     * you should always retain it immediately.
     */
-    virtual void taggedRetain(const void * tag = 0) const;
+    virtual void taggedRetain(const void * tag = 0) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -396,7 +396,7 @@ public:
     * It is for use by OSCollection and subclasses to track
     * inclusion in collections.
     */
-    virtual void taggedRelease(const void * tag = 0) const;
+    virtual void taggedRelease(const void * tag = 0) const APPLE_KEXT_OVERRIDE;
     // xx-review: used to say, "Remove a reference on this object with this tag, if an attempt is made to remove a reference that isn't associated with this tag the kernel will panic immediately", but I don't see that in the implementation
 
 
@@ -422,7 +422,13 @@ public:
     * @link //apple_ref/doc/class/OSSerialize OSSerialize@/link
     * for more information.
     */
-    virtual bool serialize(OSSerialize * serializer) const;
+    virtual bool serialize(OSSerialize * serializer) const APPLE_KEXT_OVERRIDE;
+
+#ifdef XNU_KERNEL_PRIVATE
+#if IOTRACKING
+    void trackingAccumSize(size_t size);
+#endif
+#endif
 
     // Unused Padding
     OSMetaClassDeclareReservedUnused(OSObject,  0);

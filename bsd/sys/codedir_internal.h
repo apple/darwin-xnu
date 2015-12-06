@@ -41,7 +41,7 @@
 const 
 CS_CodeDirectory *findCodeDirectory(
 	const CS_SuperBlob *embedded,
-	char *lower_bound,
-	char *upper_bound);
+	const char *lower_bound,
+	const char *upper_bound);
 
 #endif

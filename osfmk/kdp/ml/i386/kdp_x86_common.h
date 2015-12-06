@@ -33,25 +33,4 @@
 #include <mach/machine/vm_types.h>
 #include <i386/pmap.h>
 
-/*
- * Attempt to discover all virtually contiguous ranges in a pmap
- * that have valid mappings to DRAM (not MMIO device memory for example).
- * Results are returned via a callback. If the callback returns an error,
- * traversal is aborted.
- */
-typedef int (*pmap_traverse_callback)(vm_map_offset_t start,
-									  vm_map_offset_t end,
-									  void *context);
-
-extern int pmap_traverse_present_mappings(pmap_t pmap,
-										  vm_map_offset_t start,
-										  vm_map_offset_t end,
-										  pmap_traverse_callback callback,
-										  void *context);
-
-
-extern int kern_dump(void);
-extern size_t kern_collectth_state_size(void);
-extern void kern_collectth_state(thread_t thread, void *buffer, size_t size);
-
 #endif /* _KDP_X86_COMMON_H_ */

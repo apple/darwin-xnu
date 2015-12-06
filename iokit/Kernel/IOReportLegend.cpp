@@ -33,14 +33,14 @@
 //#define IORDEBUG_LEGEND 1
 
 #ifdef IORDEBUG_LEGEND
-#define IORLEGENDLOG(fmt, args...)      \
-do {                                    \
-IOLog("IOReportLegend | ");           \
-IOLog(fmt, ##args);                     \
-IOLog("\n");                            \
-} while(0)
+    #define IORLEGENDLOG(fmt, args...)      \
+    do {                                    \
+        IOLog("IOReportLegend | ");         \
+        IOLog(fmt, ##args);                 \
+        IOLog("\n");                        \
+    } while(0)
 #else
-#define IORLEGENDLOG(fmt, args...)
+    #define IORLEGENDLOG(fmt, args...)
 #endif
 
 
@@ -101,25 +101,33 @@ IOReportLegend::addReporterLegend(IOService *reportingService,
                                   const char *subGroupName)
 {
     IOReturn res = kIOReturnError;
-    IOReportLegend *legend;
+    IOReportLegend *legend = NULL;
+    OSObject *curLegend = NULL;
     
     // No need to check groupName and subGroupName because optional params
     if (!reportingService || !reporter) {
         goto finish;
     }
     
-    legend = IOReportLegend::with(OSDynamicCast(OSArray, reportingService->getProperty(kIOReportLegendKey)));
-    
-    if (legend)
-    {
-        legend->addReporterLegend(reporter, groupName, subGroupName);
-        reportingService->setProperty(kIOReportLegendKey, legend->getLegend());
-        reportingService->setProperty(kIOReportLegendPublicKey, true);
-        legend->free();
-        res = kIOReturnSuccess;
-    }
+    // It's fine if the legend doesn't exist (IOReportLegend::with(NULL)
+    // is how you make an empty legend).  If it's not an array, then
+    // we're just going to replace it.
+    curLegend = reportingService->copyProperty(kIOReportLegendKey);
+    legend = IOReportLegend::with(OSDynamicCast(OSArray, curLegend));
+    if (!legend)        goto finish;
+
+    // Add the reporter's entries and update the service property.
+    // The overwrite triggers a release of the old legend array.
+    legend->addReporterLegend(reporter, groupName, subGroupName);
+    reportingService->setProperty(kIOReportLegendKey, legend->getLegend());
+    reportingService->setProperty(kIOReportLegendPublicKey, true);
+
+    res = kIOReturnSuccess;
     
 finish:
+    if (legend)         legend->release();
+    if (curLegend)      curLegend->release();
+
     return res;
 }
 

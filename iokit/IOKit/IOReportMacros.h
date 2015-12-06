@@ -556,6 +556,148 @@ do {  \
             ->simple_values[(idx) % IOR_VALUES_PER_ELEMENT])
 
 
+/* ----- Histogram Reporting (HistogramReport) ----- */
+
+// Internal struct for HistogramReport
+typedef struct {
+    int             bucketWidth;
+   IOReportElement elem[]; // Array of elements
+} IOHistReportInfo;
+
+/*
+ * Determine the size required for a HistogramReport buffer.
+ *
+ * int nbuckets - number of buckets in the histogram
+ */
+#define HISTREPORT_BUFSIZE(nbuckets)  \
+    (sizeof(IOHistReportInfo) + ((nbuckets) * sizeof(IOReportElement)))
+
+/*
+ * Initialize a HistogramReport buffer. Supports only linear scale histogram.
+ *
+ *                   int nbuckets - number of buckets data is combined into
+ *           uint32_t bucketWidth - size of each bucket
+ *                  void* buffer - ptr to HISTREPORT_BUFSIZE(nbuckets) bytes
+ *                size_t bufSize - sanity check of buffer's size
+ *           uint64_t providerID - registry Entry ID of the reporting service
+ *            uint64_t channelID - ID of this channel, see IOREPORT_MAKEID()
+ * IOReportCategories categories - categories of this channel
+ *
+ * If the buffer is not of sufficient size, the macro invokes IOREPORT_ABORT.
+ * If that returns, the buffer is filled with 0xbadcafe.
+ */
+#define HISTREPORT_INIT(nbuckets, bktSize, buf, bufSize, providerID, channelID, cats) \
+do {  \
+    IOHistReportInfo   *__info = (IOHistReportInfo *)(buf);  \
+    IOReportElement         *__elem;  \
+    IOHistogramReportValues *__rep;  \
+    if ((bufSize) >= HISTREPORT_BUFSIZE(nbuckets)) {  \
+        __info->bucketWidth = (bktSize);  \
+        for (unsigned __no = 0; __no < (nbuckets); __no++) {  \
+            __elem =  &(__info->elem[__no]);  \
+            __rep = (IOHistogramReportValues *) &(__elem->values);  \
+            __elem->channel_id = (channelID);  \
+            __elem->provider_id = (providerID);  \
+            __elem->channel_type.report_format = kIOReportFormatHistogram;  \
+            __elem->channel_type.reserved = 0;  \
+            __elem->channel_type.categories = (cats);  \
+            __elem->channel_type.nelements = (nbuckets);  \
+            __elem->channel_type.element_idx = __no;  \
+            __elem->timestamp = 0;  \
+            bzero(__rep, sizeof(IOHistogramReportValues)); \
+        }  \
+    }  \
+    else {  \
+        IOREPORT_ABORT("bufSize is smaller than the required size\n");  \
+        __POLLUTE_BUF((buf), (bufSize));  \
+    }  \
+} while (0)
+
+/*
+ * Update histogram with a new value.
+ *
+ *
+ *      void* hist_buf - pointer to memory initialized by HISTREPORT_INIT()
+ *        int64_t value - new value to add to the histogram
+ */
+#define HISTREPORT_TALLYVALUE(hist_buf, value) \
+do {  \
+    IOHistReportInfo   *__info = (IOHistReportInfo *)(hist_buf);  \
+    IOReportElement         *__elem;  \
+    IOHistogramReportValues *__rep;  \
+    for (unsigned __no = 0; __no < __info->elem[0].channel_type.nelements; __no++) {  \
+        if ((value) <= __info->bucketWidth * (__no+1)) {  \
+            __elem =  &(__info->elem[__no]);  \
+            __rep = (IOHistogramReportValues *) &(__elem->values);  \
+            if (__rep->bucket_hits == 0) {  \
+                __rep->bucket_min = __rep->bucket_max = (value);  \
+            }  \
+            else if ((value) < __rep->bucket_min) {  \
+                __rep->bucket_min = (value);  \
+            }  \
+            else if ((value) > __rep->bucket_max) {  \
+                __rep->bucket_max = (value);  \
+            }  \
+            __rep->bucket_sum += (value);  \
+            __rep->bucket_hits++;  \
+            break;  \
+        }  \
+    }  \
+} while (0)
+
+/*
+ * Prepare a HistogramReport for
+ * IOService::updateReport(kIOReportCopyChannelData...)
+ *
+ *      void* array_buf - ptr to memory initialized by HISTREPORT_INIT()
+ *        void* ptr2cpy - filled in with pointer to buffer to be copied out
+ *      size_t size2cpy - filled in with the size of the buffer to copy out
+ */
+
+#define HISTREPORT_UPDATEPREP(hist_buf, ptr2cpy, size2cpy) \
+do {  \
+    IOHistReportInfo   *__info = (IOHistReportInfo *)(hist_buf);  \
+    (size2cpy) = __info->elem[0].channel_type.nelements * sizeof(IOReportElement);  \
+    (ptr2cpy) =  (void *) &__info->elem[0];  \
+} while(0)
+
+
+/*
+ * Update the result field received as a parameter for kIOReportGetDimensions &
+ * kIOReportCopyChannelData actions.
+ *
+ *                void* array_buf - memory initialized by HISTREPORT_INIT()
+ * IOReportConfigureAction action - configure/updateReport() 'action'
+ *                   void* result - configure/updateReport() 'result'
+ */
+
+#define HISTREPORT_UPDATERES(hist_buf, action, result) \
+do {  \
+    IOHistReportInfo   *__info = (IOHistReportInfo *)(hist_buf);  \
+    int *__nElements = (int *)(result);  \
+    if (((action) == kIOReportGetDimensions) || ((action) == kIOReportCopyChannelData)) {  \
+        *__nElements += __info->elem[0].channel_type.nelements;  \
+    }  \
+} while (0)
+
+/*
+ * Get the 64-bit channel ID of a HistogramReport.
+ *
+ * void* hist_buf - ptr to memory initialized by HISTREPORT_INIT()
+ */
+#define HISTREPORT_GETCHID(hist_buf)  \
+    (((IOHistReportInfo *)(hist_buf))->elem[0].channel_id)
+
+/*
+ * Get the IOReportChannelType of a HistogramReport.
+ *
+ * void* hist_buf - ptr to memory initialized by HISTREPORT_INIT()
+ */
+#define HISTREPORT_GETCHTYPE(hist_buf)  \
+    (*(uint64_t*)&(((IOHistReportInfo *)(hist_buf))->elem[0].channel_type))
+
+
+
 /* generic utilities */
 
     #define __POLLUTE_BUF(buf, bufSize)  \

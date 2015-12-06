@@ -9,6 +9,7 @@ include $(MakeInc_def)
 INSTINC_SUBDIRS = \
 	mach	\
 	atm 	\
+	corpses	\
 	bank \
 	device \
 	default_pager \
@@ -23,21 +24,32 @@ INSTINC_SUBDIRS = \
 	vm \
 	libsa \
 	kdp \
-	pmc \
 	kperf \
 	prng
+
 INSTINC_SUBDIRS_X86_64 = \
 	mach	\
 	i386	\
 	x86_64
+
 INSTINC_SUBDIRS_X86_64H = \
 	mach	\
 	i386	\
 	x86_64
 
+INSTINC_SUBDIRS_ARM = \
+	mach	\
+	arm	\
+	arm64
+INSTINC_SUBDIRS_ARM64 = \
+	mach	\
+	arm	\
+	arm64
+
 EXPINC_SUBDIRS = \
 	mach	\
 	atm 	\
+	corpses	\
 	bank \
 	device \
 	default_pager \
@@ -53,9 +65,9 @@ EXPINC_SUBDIRS = \
 	vm \
 	libsa \
 	console \
-	pmc \
 	kperf \
 	prng
+
 
 EXPINC_SUBDIRS_X86_64 = \
 	mach	\
@@ -65,6 +77,14 @@ EXPINC_SUBDIRS_X86_64H = \
 	mach	\
 	i386	\
 	x86_64
+EXPINC_SUBDIRS_ARM = \
+	mach	\
+	arm	\
+	arm64
+EXPINC_SUBDIRS_ARM64 = \
+	mach	\
+	arm	\
+	arm64
 
 COMP_SUBDIRS = 	\
 	conf

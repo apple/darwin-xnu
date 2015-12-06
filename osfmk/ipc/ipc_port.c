@@ -77,7 +77,7 @@
 #include <kern/ipc_kobject.h>
 #include <kern/thread.h>
 #include <kern/misc_protos.h>
-#include <kern/wait_queue.h>
+#include <kern/waitq.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_object.h>
@@ -547,8 +547,7 @@ ipc_port_nsrequest(
 
 void
 ipc_port_clear_receiver(
-	ipc_port_t	port,
-	queue_t		links)
+	ipc_port_t	port)
 {
 	spl_t		s;
 
@@ -557,9 +556,9 @@ ipc_port_clear_receiver(
 	/*
 	 * pull ourselves from any sets.
 	 */
-	if (port->ip_pset_count != 0) {
-		ipc_pset_remove_from_all(port, links);
-		assert(port->ip_pset_count == 0);
+	if (port->ip_in_pset != 0) {
+		ipc_pset_remove_from_all(port);
+		assert(port->ip_in_pset == 0);
 	}
 
 	/*
@@ -602,7 +601,6 @@ ipc_port_init(
 	port->ip_pdrequest = IP_NULL;
 	port->ip_requests = IPR_NULL;
 
-	port->ip_pset_count = 0;
 	port->ip_premsg = IKM_NULL;
 	port->ip_context = 0;
 
@@ -617,7 +615,8 @@ ipc_port_init(
 
 	port->ip_reserved    = 0;
 
-	ipc_mqueue_init(&port->ip_messages, FALSE /* set */);
+	ipc_mqueue_init(&port->ip_messages,
+			FALSE /* !set */, NULL /* no reserved link */);
 }
 
 /*
@@ -870,7 +869,7 @@ ipc_port_destroy(
 	assert(ip_active(port));
 	/* port->ip_receiver_name is garbage */
 	/* port->ip_receiver/port->ip_destination is garbage */
-	assert(port->ip_pset_count == 0);
+	assert(port->ip_in_pset == 0);
 	assert(port->ip_mscount == 0);
 
 	/* check for a backup port */
@@ -948,6 +947,9 @@ ipc_port_destroy(
 	/* destroy any queued messages */
 	mqueue = &port->ip_messages;
 	ipc_mqueue_destroy(mqueue);
+
+	/* cleanup waitq related resources */
+	ipc_mqueue_deinit(mqueue);
 
 	/* generate dead-name notifications */
 	ipc_port_dnnotify(port);
@@ -1497,7 +1499,7 @@ ipc_port_lookup_notify(
 	if ((entry->ie_bits & MACH_PORT_TYPE_RECEIVE) == 0)
 		return IP_NULL;
 
-	port = (ipc_port_t) entry->ie_object;
+	__IGNORE_WCASTALIGN(port = (ipc_port_t) entry->ie_object);
 	assert(port != IP_NULL);
 
 	ip_lock(port);
@@ -1791,7 +1793,7 @@ ipc_port_alloc_special(
 {
 	ipc_port_t port;
 
-	port = (ipc_port_t) io_alloc(IOT_PORT);
+	__IGNORE_WCASTALIGN(port = (ipc_port_t) io_alloc(IOT_PORT));
 	if (port == IP_NULL)
 		return IP_NULL;
 
@@ -1869,6 +1871,8 @@ ipc_port_finalize(
 		it_requests_free(its, requests);
 		port->ip_requests = IPR_NULL;
 	}
+
+	ipc_mqueue_deinit(&port->ip_messages);
 	
 #if	MACH_ASSERT
 	ipc_port_track_dealloc(port);
@@ -1883,8 +1887,10 @@ ipc_port_finalize(
  *	Allocation is intercepted via ipc_port_init;
  *	deallocation is intercepted via io_free.
  */
+#if 0
 queue_head_t	port_alloc_queue;
 lck_spin_t	port_alloc_queue_lock;
+#endif
 
 unsigned long	port_count = 0;
 unsigned long	port_count_warning = 20000;
@@ -1907,9 +1913,10 @@ int		db_port_walk(
 void
 ipc_port_debug_init(void)
 {
+#if 0
 	queue_init(&port_alloc_queue);
-
 	lck_spin_init(&port_alloc_queue_lock, &ipc_lck_grp, &ipc_lck_attr);
+#endif
 
 	if (!PE_parse_boot_argn("ipc_portbt", &ipc_portbt, sizeof (ipc_portbt)))
 		ipc_portbt = 0;

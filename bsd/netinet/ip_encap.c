@@ -390,12 +390,11 @@ encap_attach(af, proto, sp, sm, dp, dm, psw, arg)
 		goto fail;
 	}
 
-	ep = _MALLOC(sizeof(*ep), M_NETADDR, M_WAITOK);	/*XXX*/
+	ep = _MALLOC(sizeof(*ep), M_NETADDR, M_WAITOK | M_ZERO); /* XXX */
 	if (ep == NULL) {
 		error = ENOBUFS;
 		goto fail;
 	}
-	bzero(ep, sizeof(*ep));
 
 	ep->af = af;
 	ep->proto = proto;
@@ -432,12 +431,11 @@ encap_attach_func(af, proto, func, psw, arg)
 		goto fail;
 	}
 
-	ep = _MALLOC(sizeof(*ep), M_NETADDR, M_WAITOK);	/*XXX*/
+	ep = _MALLOC(sizeof(*ep), M_NETADDR, M_WAITOK | M_ZERO); /* XXX */
 	if (ep == NULL) {
 		error = ENOBUFS;
 		goto fail;
 	}
-	bzero(ep, sizeof(*ep));
 
 	ep->af = af;
 	ep->proto = proto;

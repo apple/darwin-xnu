@@ -68,6 +68,7 @@ for arg in "$@"; do
 done
 
 
+RSYNC_ARGS="-azvh"
 ARGS[$index]="REMOTEBUILD="
 REMOTEARGS[$index]="\"REMOTEBUILD=\""
 
@@ -132,9 +133,9 @@ else
     REMOTE_BUILDSCRIPTREL="./BUILD/obj"
     BUILDSCRIPTNAME="build.sh"
     if [ ! -d "${OBJROOT}/SETUP" ]; then
-	RSYNC_ARGS="--delete-excluded"
+    RSYNC_DELETE_EXCLUDED="--delete-excluded"
     else
-	RSYNC_ARGS=""
+    RSYNC_DELETE_EXCLUDED=""
     fi
     if [ ! -e "${SYMROOT}/" ]; then
 	RSYNC_DELETE_SYMROOT=1
@@ -213,19 +214,19 @@ else
     ssh $REMOTEBUILD "mkdir -p \"${REMOTEBUILDPATH}/BUILD/\"{obj,sym,dst}" || die "Could not make remote build directory"
 
     # Copy source only
-    rsync -azv --delete --exclude=\*~ --exclude=.svn --exclude=.git --exclude=/BUILD . $REMOTEBUILD:"${REMOTEBUILDPATH}" || die "Could not rsync source tree"
+    rsync $RSYNC_ARGS --delete --exclude=\*~ --exclude=.svn --exclude=.git --exclude=/BUILD . $REMOTEBUILD:"${REMOTEBUILDPATH}" || die "Could not rsync source tree"
 
     # Copy partial OBJROOT (just build tools and build script), and optionally delete everything else
-    rsync -azv --delete $RSYNC_ARGS --include=/build.sh --include=/BuildTools --include=/BuildTools/\*\* --exclude=\* "${OBJROOT}/" $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/obj/" || die "Could not rsync build tree"
+    rsync $RSYNC_ARGS --delete $RSYNC_DELETE_EXCLUDED --include=/build.sh --include=/BuildTools --include=/BuildTools/\*\* --exclude=\* "${OBJROOT}/" $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/obj/" || die "Could not rsync build tree"
 
     # Delete remote SYMROOT if it has been deleted locally
     if [ "$RSYNC_DELETE_SYMROOT" -eq 1 ]; then
-	rsync -azv --delete "${BUILDTOOLSDIR}/empty/" $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/sym/" || die "Could not rsync delete SYMROOT"
+	rsync $RSYNC_ARGS --delete "${BUILDTOOLSDIR}/empty/" $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/sym/" || die "Could not rsync delete SYMROOT"
     fi
 
     # Delete remote DSTROOT if it has been deleted locally
     if [ "$RSYNC_DELETE_DSTROOT" -eq 1 ]; then
-	rsync -azv --delete "${BUILDTOOLSDIR}/empty/" $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/dst/" || die "Could not rsync delete DSTROOT"
+	rsync $RSYNC_ARGS --delete "${BUILDTOOLSDIR}/empty/" $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/dst/" || die "Could not rsync delete DSTROOT"
     fi
 
     # Start the build
@@ -234,9 +235,9 @@ else
 
     # Copy back build results except for object files (which might be several GB)
     echo "Copying results back..."
-    rsync -azv --no-o --no-g --exclude=\*.o --exclude=\*.cpo --exclude=\*.d --exclude=\*.cpd --exclude=\*.non_lto --exclude=\*.ctf --exclude=conf $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/obj/" "${OBJROOT}/" || die "Could not rsync build results"
-    rsync -azv --no-o --no-g $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/sym/" "${SYMROOT}/" || die "Could not rsync build results"
-    rsync -azv --no-o --no-g $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/dst/" "${DSTROOT}/" || die "Could not rsync build results"
+    rsync $RSYNC_ARGS --no-o --no-g --exclude=\*.o --exclude=\*.cpo --exclude=\*.d --exclude=\*.cpd --exclude=\*.non_lto --exclude=\*.ctf $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/obj/" "${OBJROOT}/" || die "Could not rsync build results"
+    rsync $RSYNC_ARGS --no-o --no-g $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/sym/" "${SYMROOT}/" || die "Could not rsync build results"
+    rsync $RSYNC_ARGS --no-o --no-g $REMOTEBUILD:"${REMOTEBUILDPATH}/BUILD/dst/" "${DSTROOT}/" || die "Could not rsync build results"
 
 fi
 

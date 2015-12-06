@@ -45,6 +45,16 @@ static int copyio(int, user_addr_t, char *, vm_size_t, vm_size_t *, int);
 static int copyio_phys(addr64_t, addr64_t, vm_size_t, int);
 
 /*
+ * Copy sizes bigger than this value will cause a kernel panic.
+ *
+ * Yes, this is an arbitrary fixed limit, but it's almost certainly
+ * a programming error to be copying more than this amount between
+ * user and wired kernel memory in a single invocation on this
+ * platform.
+ */
+#define COPYSIZELIMIT_PANIC     (64*MB)
+
+/*
  * The copy engine has the following characteristics
  *   - copyio() handles copies to/from user or kernel space
  *   - copypv() deals with physical or virtual addresses
@@ -143,6 +153,8 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	int		debug_type = 0xeff70010;
 	debug_type += (copy_type << 2);
 #endif
+
+	assert(nbytes < COPYSIZELIMIT_PANIC);
 
 	thread = current_thread();
 

@@ -104,6 +104,19 @@ decl_lck_mtx_data(static, domain_timeout_mtx);
 
 static u_int64_t _net_uptime;
 
+#if (DEVELOPMENT || DEBUG)
+
+SYSCTL_DECL(_kern_ipc);
+
+static int sysctl_do_drain_domains SYSCTL_HANDLER_ARGS;
+
+SYSCTL_PROC(_kern_ipc, OID_AUTO, do_drain_domains,
+	CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_LOCKED,
+	0, 0,
+	sysctl_do_drain_domains, "I", "force manual drain domains");
+
+#endif /* DEVELOPMENT || DEBUG */
+
 static void
 pr_init_old(struct protosw *pp, struct domain *dp)
 {
@@ -1052,3 +1065,24 @@ domain_unguard_release(domain_unguard_t unguard)
 	else
 		lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 }
+
+#if (DEVELOPMENT || DEBUG)
+ 
+static int
+sysctl_do_drain_domains SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error;
+	int dummy = 0;
+
+	error = sysctl_handle_int(oidp, &dummy, 0, req);	
+	if (error || req->newptr == USER_ADDR_NULL)
+		return (error);
+
+	net_drain_domains();
+
+	return (0);
+}
+
+#endif /* DEVELOPMENT || DEBUG */
+ 

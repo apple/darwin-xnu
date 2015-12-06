@@ -66,10 +66,6 @@
 #include <vm/pmap.h>
 #include <vm/vm_map.h> /* All the bits we care about are guarded by MACH_KERNEL_PRIVATE :-( */
 
-/* missing prototypes, not exported by Mach */
-extern kern_return_t task_suspend_internal(task_t);
-extern kern_return_t task_resume_internal(task_t);
-
 /*
  * pid/proc
  */

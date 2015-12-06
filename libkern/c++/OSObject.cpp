@@ -45,11 +45,6 @@ __BEGIN_DECLS
 int debug_ivars_size;
 __END_DECLS
 
-#if OSALLOCDEBUG
-#define ACCUMSIZE(s) do { debug_ivars_size += (s); } while(0)
-#else
-#define ACCUMSIZE(s)
-#endif
 
 // OSDefineMetaClassAndAbstractStructors(OSObject, 0);
 /* Class global data */
@@ -58,8 +53,6 @@ const OSMetaClass * const OSObject::metaClass = &OSObject::gMetaClass;
 const OSMetaClass * const OSObject::superClass = 0;
 
 /* Class member functions - Can't use defaults */
-OSObject::OSObject()			{ retainCount = 1; }
-OSObject::OSObject(const OSMetaClass *)	{ retainCount = 1; }
 OSObject::~OSObject()			{ }
 const OSMetaClass * OSObject::getMetaClass() const
     { return &gMetaClass; }
@@ -92,18 +85,6 @@ static const char *getClassName(const OSObject *obj)
 {
     const OSMetaClass *meta = obj->getMetaClass();
     return (meta) ? meta->getClassName() : "unknown class?";
-}
-
-bool OSObject::init()
-    { return true; }
-
-void OSObject::free()
-{
-    const OSMetaClass *meta = getMetaClass();
-
-    if (meta)
-	meta->instanceDestructed();
-    delete this;
 }
 
 int OSObject::getRetainCount() const
@@ -257,91 +238,72 @@ bool OSObject::serialize(OSSerialize *s) const
     return (ok);
 }
 
-
-thread_t gOSObjectTrackThread;
-
-queue_head_t gOSObjectTrackList =
-    { (queue_t) &gOSObjectTrackList, (queue_t) &gOSObjectTrackList };
-
-lck_spin_t gOSObjectTrackLock;
-
-OSArray * OSFlushObjectTrackList(void)
-{
-    OSArray *     array;
-    queue_entry_t next;
-
-    array = OSArray::withCapacity(16);
-
-    lck_spin_lock(&gOSObjectTrackLock);
-    while (!queue_empty(&gOSObjectTrackList))
-    {
-	next = queue_first(&gOSObjectTrackList);
-	remque(next);
-	lck_spin_unlock(&gOSObjectTrackLock);
-	array->setObject((OSObject *) (next + 1));
-	lck_spin_lock(&gOSObjectTrackLock);
-    }
-    lck_spin_unlock(&gOSObjectTrackLock);
-
-    return (array);
-}
-
-struct OSObjectTracking
-{
-    queue_chain_t link;
-    void *	  bt[14];
-};
-
 void *OSObject::operator new(size_t size)
 {
-    size_t tracking        = (gIOKitDebug & kOSTraceObjectAlloc) 
-			   ? sizeof(OSObjectTracking) : 0;
-    OSObjectTracking * mem = (OSObjectTracking *) kalloc(size + tracking);
+#if IOTRACKING
+    if (kIOTracking & gIOKitDebug) return (OSMetaClass::trackedNew(size));
+#endif
 
+    void * mem = kalloc_tag_bt(size, VM_KERN_MEMORY_LIBKERN);
     assert(mem);
-
-    if (tracking)
-    {
-	if ((((thread_t) 1) == gOSObjectTrackThread) || (current_thread() == gOSObjectTrackThread))
-	{
-	    (void) OSBacktrace(&mem->bt[0], sizeof(mem->bt) / sizeof(mem->bt[0]));
-	    lck_spin_lock(&gOSObjectTrackLock);
-	    enqueue_tail(&gOSObjectTrackList, &mem->link);
-	    lck_spin_unlock(&gOSObjectTrackLock);
-	}
-	else
-	    mem->link.next = 0;
-	mem++;
-    }
-
     bzero(mem, size);
-
-    ACCUMSIZE(size);
+    OSIVAR_ACCUMSIZE(size);
 
     return (void *) mem;
 }
 
-void OSObject::operator delete(void *_mem, size_t size)
+void OSObject::operator delete(void * mem, size_t size)
 {
-    size_t             tracking = (gIOKitDebug & kOSTraceObjectAlloc)
-				? sizeof(OSObjectTracking) : 0;
-    OSObjectTracking * mem      = (OSObjectTracking *) _mem;
+    if (!mem) return;
 
-    if (!mem)
-	return;
+#if IOTRACKING
+    if (kIOTracking & gIOKitDebug) return (OSMetaClass::trackedDelete(mem, size));
+#endif
 
-    if (tracking)
+    kfree(mem, size);
+    OSIVAR_ACCUMSIZE(-size);
+}
+
+bool OSObject::init()
+{
+#if IOTRACKING
+    if (kIOTracking & gIOKitDebug) getMetaClass()->trackedInstance(this);
+#endif
+    return true;
+}
+
+void OSObject::free()
+{
+    const OSMetaClass *meta = getMetaClass();
+
+    if (meta)
     {
-	mem--;
-	if (mem->link.next)
-	{
-	    lck_spin_lock(&gOSObjectTrackLock);
-	    remque(&mem->link);
-	    lck_spin_unlock(&gOSObjectTrackLock);
-	}
+	meta->instanceDestructed();
+#if IOTRACKING
+	if (kIOTracking & gIOKitDebug) getMetaClass()->trackedFree(this);
+#endif
     }
+    delete this;
+}
 
-    kfree(mem, size + tracking);
+#if IOTRACKING
+void OSObject::trackingAccumSize(size_t size)
+{
+    if (kIOTracking & gIOKitDebug) getMetaClass()->trackedAccumSize(this, size);
+}
+#endif
 
-    ACCUMSIZE(-size);
+/* Class member functions - Can't use defaults */
+/* During constructor vtable is always OSObject's - can't call any subclass */
+
+OSObject::OSObject()
+{
+    retainCount = 1;
+//    if (kIOTracking & gIOKitDebug) getMetaClass()->trackedInstance(this);
+}
+
+OSObject::OSObject(const OSMetaClass *)
+{
+    retainCount = 1;
+//    if (kIOTracking & gIOKitDebug) getMetaClass()->trackedInstance(this);
 }

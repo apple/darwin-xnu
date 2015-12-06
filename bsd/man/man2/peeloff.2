@@ -36,7 +36,7 @@
 .Ft int
 .Fo peeloff
 .Fa "int socket"
-.Fa "associd_t associd"
+.Fa "sae_associd_t associd"
 .Fc
 .Sh DESCRIPTION
 The parameter
@@ -53,7 +53,7 @@ into its own separate socket.
 The parameter
 .Fa associd
 specifies the association identifier.  It may be set to
-.Dv ASSOCID_ANY
+.Dv SAE_ASSOCID_ANY
 when there is only one association present; or one of the identifiers
 returned from
 .Xr getassocids 3 .

@@ -105,10 +105,7 @@ returns information about the link,
 while
 .Fn stat
 returns information about the file the link references.
-Unlike other filesystem objects,
-symbolic links may not have an owner, group, access mode, times, etc.
-Instead, these attributes may be taken from the directory that
-contains the link.
+The attributes cannot be relied on in case of symbolic links.
 In this case, the only attributes returned from an
 .Fn lstat
 that refer to the symbolic link itself are the file type (S_IFLNK),
@@ -259,9 +256,7 @@ system calls.
 .It st_birthtime
 Time of file creation. Only set once when the file is created. This field is 
 only available in the 64 bit inode variants. On filesystems where birthtime is 
-not available, this field holds the
-.Fa ctime
-instead.
+not available, this field is set to 0 (i.e. epoch).
 .El
 .Pp
 The size-related fields of the structures are as follows:

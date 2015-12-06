@@ -14,11 +14,15 @@ _apply_func_phys
 _bufattr_delayidlesleep
 _cpu_to_lapic
 _cpuid_features
+_cpuid_leaf7_features
 _cpuid_info
 _csr_check
 _csr_get_active_config
-_csr_get_pending_config
 _csr_set_allow_all
+_hv_ept_pmap_create
+_hv_get*
+_hv_release*
+_hv_set*
 _lapic_end_of_interrupt
 _lapic_get_cmci_vector
 _lapic_unmask_perfcnt_interrupt
@@ -46,6 +50,4 @@ _xts_encrypt
 _xts_start
 _aes_decrypt
 _PE_reboot_on_panic
-_hv_set*
-_hv_get*
-_hv_release*
+

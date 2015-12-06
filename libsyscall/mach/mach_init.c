@@ -115,6 +115,7 @@ _mach_fork_child(void)
 	return 0;
 }
 
+
 void
 mach_init_doit(void)
 {

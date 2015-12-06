@@ -74,7 +74,6 @@
 uint32_t system_inshutdown = 0;
 
 /* XXX should be in a header file somewhere, but isn't */
-extern void md_prepare_for_shutdown(int, int, char *);
 extern void (*unmountroot_pre_hook)(void);
 
 unsigned int proc_shutdown_exitcount = 0;
@@ -83,7 +82,7 @@ static int  sd_openlog(vfs_context_t);
 static int  sd_closelog(vfs_context_t);
 static void sd_log(vfs_context_t, const char *, ...);
 static void proc_shutdown(void);
-
+static void kernel_hwm_panic_info(void);
 extern void IOSystemShutdownNotification(void);
 
 struct sd_filterargs{
@@ -109,10 +108,37 @@ static int  sd_callback1(proc_t p, void * arg);
 static int  sd_callback2(proc_t p, void * arg);
 static int  sd_callback3(proc_t p, void * arg);
 
-int
-boot(int paniced, int howto, char *command)
+extern boolean_t panic_include_zprint;
+extern vm_offset_t panic_kext_memory_info;
+extern vm_size_t panic_kext_memory_size; 
+
+static void
+kernel_hwm_panic_info(void)
 {
-	struct proc *p = current_proc();	/* XXX */
+	mach_memory_info_t      *memory_info;
+	unsigned int            num_sites;
+	kern_return_t           kr;
+
+	panic_include_zprint = TRUE;
+	panic_kext_memory_info = 0;
+	panic_kext_memory_size = 0;
+
+	num_sites = VM_KERN_MEMORY_COUNT + VM_KERN_COUNTER_COUNT;
+	panic_kext_memory_size = round_page(num_sites * sizeof(mach_zone_info_t));
+	
+	kr = kmem_alloc(kernel_map, (vm_offset_t *) &panic_kext_memory_info, panic_kext_memory_size, VM_KERN_MEMORY_OSFMK);
+	if (kr != KERN_SUCCESS) {
+		panic_kext_memory_info = 0;
+		return;
+	}
+	memory_info = (mach_memory_info_t *)panic_kext_memory_info;
+	vm_page_diagnose(memory_info, num_sites);
+	return;
+}
+
+int
+reboot_kernel(int howto, char *message)
+{
 	int hostboot_option=0;
 
 	if (!OSCompareAndSwap(0, 1, &system_inshutdown)) {
@@ -126,12 +152,10 @@ boot(int paniced, int howto, char *command)
 	 */
 	IOSystemShutdownNotification();
 
-	md_prepare_for_shutdown(paniced, howto, command);
-
 	if ((howto&RB_QUICK)==RB_QUICK) {
 		printf("Quick reboot...\n");
 		if ((howto&RB_NOSYNC)==0) {
-			sync(p, (void *)NULL, (int *)NULL);
+			sync((proc_t)NULL, (void *)NULL, (int *)NULL);
 		}
 	}
 	else if ((howto&RB_NOSYNC)==0) {
@@ -143,7 +167,7 @@ boot(int paniced, int howto, char *command)
 		 * Release vnodes held by texts before sync.
 		 */
 
-		/* handle live procs (deallocate their root and current directories). */		
+		/* handle live procs (deallocate their root and current directories), suspend initproc */
 		proc_shutdown();
 
 #if CONFIG_AUDIT
@@ -153,15 +177,7 @@ boot(int paniced, int howto, char *command)
 		if (unmountroot_pre_hook != NULL)
 			unmountroot_pre_hook();
 
-		sync(p, (void *)NULL, (int *)NULL);
-
-		/*
-		 * Now that all processes have been terminated and system is
-		 * sync'ed up, suspend init
-		 */
-			
-		if (initproc && p != initproc)
-			task_suspend(initproc->task);
+		sync((proc_t)NULL, (void *)NULL, (int *)NULL);
 
 		if (kdebug_enable)
 			kdbg_dump_trace_to_file("/var/log/shutdown/shutdown.trace");
@@ -194,11 +210,17 @@ boot(int paniced, int howto, char *command)
 #endif /* NETWORKING */
 
 force_reboot:
+
+	if (howto & RB_PANIC) {
+		if (strncmp(message, "Kernel memory has exceeded limits", 33) == 0) {
+			kernel_hwm_panic_info();
+		}
+		panic ("userspace panic: %s", message);
+	}
+
 	if (howto & RB_POWERDOWN)
 		hostboot_option = HOST_REBOOT_HALT;
 	if (howto & RB_HALT)
-		hostboot_option = HOST_REBOOT_HALT;
-	if (paniced == RB_PANIC)
 		hostboot_option = HOST_REBOOT_HALT;
 
 	if (howto & RB_UPSDELAY) {
@@ -567,6 +589,11 @@ sigterm_loop:
 	}
 
 	sd_closelog(ctx);
+
+	/*
+	 * Now that all other processes have been terminated, suspend init
+	 */
+	task_suspend_internal(initproc->task);
 
 	/* drop the ref on initproc */
 	proc_rele(initproc);

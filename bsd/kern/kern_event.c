@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -82,13 +82,15 @@
 #include <string.h>
 #include <sys/proc_info.h>
 #include <sys/codesign.h>
+#include <sys/pthread_shims.h>
 
 #include <kern/locks.h>
 #include <kern/clock.h>
 #include <kern/thread_call.h>
 #include <kern/sched_prim.h>
-#include <kern/wait_queue.h>
+#include <kern/waitq.h>
 #include <kern/zalloc.h>
+#include <kern/kalloc.h>
 #include <kern/assert.h>
 
 #include <libkern/libkern.h>
@@ -106,7 +108,7 @@
 
 MALLOC_DEFINE(M_KQUEUE, "kqueue", "memory for kqueue system");
 
-#define	KQ_EVENT	NULL
+#define	KQ_EVENT	NO_EVENT64
 
 static inline void kqlock(struct kqueue *kq);
 static inline void kqunlock(struct kqueue *kq);
@@ -123,7 +125,7 @@ static int kqueue_write(struct fileproc *fp, struct uio *uio,
     int flags, vfs_context_t ctx);
 static int kqueue_ioctl(struct fileproc *fp, u_long com, caddr_t data,
     vfs_context_t ctx);
-static int kqueue_select(struct fileproc *fp, int which, void *wql,
+static int kqueue_select(struct fileproc *fp, int which, void *wq_link_id,
     vfs_context_t ctx);
 static int kqueue_close(struct fileglob *fg, vfs_context_t ctx);
 static int kqueue_kqfilter(struct fileproc *fp, struct knote *kn,
@@ -141,28 +143,32 @@ static const struct fileops kqueueops = {
 	.fo_drain = kqueue_drain,
 };
 
-static int kevent_internal(struct proc *p, int iskev64, user_addr_t changelist,
-    int nchanges, user_addr_t eventlist, int nevents, int fd,
-    user_addr_t utimeout, unsigned int flags, int32_t *retval);
-static int kevent_copyin(user_addr_t *addrp, struct kevent64_s *kevp,
-    struct proc *p, int iskev64);
-static int kevent_copyout(struct kevent64_s *kevp, user_addr_t *addrp,
-    struct proc *p, int iskev64);
-char * kevent_description(struct kevent64_s *kevp, char *s, size_t n);
+static int kevent_internal(struct proc *p, int fd, 
+			   user_addr_t changelist, int nchanges,
+			   user_addr_t eventlist, int nevents, 
+			   user_addr_t data_out, user_size_t *data_available,
+			   unsigned int flags, user_addr_t utimeout,
+			   kqueue_continue_t continuation,
+			   int32_t *retval);
+static int kevent_copyin(user_addr_t *addrp, struct kevent_internal_s *kevp,
+			 struct proc *p, unsigned int flags);
+static int kevent_copyout(struct kevent_internal_s *kevp, user_addr_t *addrp,
+			  struct proc *p, unsigned int flags);
+char * kevent_description(struct kevent_internal_s *kevp, char *s, size_t n);
 
-static int kevent_callback(struct kqueue *kq, struct kevent64_s *kevp,
-    void *data);
+static int kevent_callback(struct kqueue *kq, struct kevent_internal_s *kevp,
+			   void *data);
 static void kevent_continue(struct kqueue *kq, void *data, int error);
 static void kqueue_scan_continue(void *contp, wait_result_t wait_result);
 static int kqueue_process(struct kqueue *kq, kevent_callback_t callback,
-    void *data, int *countp, struct proc *p);
+			  void *data, int *countp, struct proc *p);
 static int kqueue_begin_processing(struct kqueue *kq);
 static void kqueue_end_processing(struct kqueue *kq);
 static int knote_process(struct knote *kn, kevent_callback_t callback,
-    void *data, struct kqtailq *inprocessp, struct proc *p);
+			 void *data, struct kqtailq *inprocessp, struct proc *p);
 static void knote_put(struct knote *kn);
 static int knote_fdpattach(struct knote *kn, struct filedesc *fdp,
-    struct proc *p);
+			   struct proc *p);
 static void knote_drop(struct knote *kn, struct proc *p);
 static void knote_activate(struct knote *kn, int);
 static void knote_deactivate(struct knote *kn);
@@ -223,7 +229,7 @@ extern struct filterops sig_filtops;
 static int filt_timerattach(struct knote *kn);
 static void filt_timerdetach(struct knote *kn);
 static int filt_timer(struct knote *kn, long hint);
-static void filt_timertouch(struct knote *kn, struct kevent64_s *kev,
+static void filt_timertouch(struct knote *kn, struct kevent_internal_s *kev,
     long type);
 static struct filterops timer_filtops = {
 	.f_attach = filt_timerattach,
@@ -260,7 +266,7 @@ extern struct filterops machport_filtops;
 static int filt_userattach(struct knote *kn);
 static void filt_userdetach(struct knote *kn);
 static int filt_user(struct knote *kn, long hint);
-static void filt_usertouch(struct knote *kn, struct kevent64_s *kev,
+static void filt_usertouch(struct knote *kn, struct kevent_internal_s *kev,
     long type);
 static struct filterops user_filtops = {
 	.f_attach = filt_userattach,
@@ -358,8 +364,9 @@ kqlock2knoteusewait(struct kqueue *kq, struct knote *kn)
 {
 	if ((kn->kn_status & (KN_DROPPING | KN_ATTACHING)) != 0) {
 		kn->kn_status |= KN_USEWAIT;
-		wait_queue_assert_wait((wait_queue_t)kq->kq_wqs,
-		    &kn->kn_status, THREAD_UNINT, 0);
+		waitq_assert_wait64((struct waitq *)kq->kq_wqs,
+				    CAST_EVENT64_T(&kn->kn_status),
+				    THREAD_UNINT, TIMEOUT_WAIT_FOREVER);
 		kqunlock(kq);
 		thread_block(THREAD_CONTINUE_NULL);
 		return (0);
@@ -389,8 +396,10 @@ knoteuse2kqlock(struct kqueue *kq, struct knote *kn)
 		}
 		if ((kn->kn_status & KN_USEWAIT) != 0) {
 			kn->kn_status &= ~KN_USEWAIT;
-			wait_queue_wakeup_all((wait_queue_t)kq->kq_wqs,
-			    &kn->kn_status, THREAD_AWAKENED);
+			waitq_wakeup64_all((struct waitq *)kq->kq_wqs,
+					   CAST_EVENT64_T(&kn->kn_status),
+					   THREAD_AWAKENED,
+					   WAITQ_ALL_PRIORITIES);
 		}
 	}
 	return ((kn->kn_status & KN_DROPPING) == 0);
@@ -425,8 +434,9 @@ kqlock2knotedrop(struct kqueue *kq, struct knote *kn)
 		}
 	}
 	kn->kn_status |= KN_USEWAIT;
-	wait_queue_assert_wait((wait_queue_t)kq->kq_wqs, &kn->kn_status,
-	    THREAD_UNINT, 0);
+	waitq_assert_wait64((struct waitq *)kq->kq_wqs,
+			    CAST_EVENT64_T(&kn->kn_status),
+			    THREAD_UNINT, TIMEOUT_WAIT_FOREVER);
 	kqunlock(kq);
 	thread_block(THREAD_CONTINUE_NULL);
 	return (oktodrop);
@@ -444,8 +454,10 @@ knote_put(struct knote *kn)
 	if (--kn->kn_inuse == 0) {
 		if ((kn->kn_status & KN_USEWAIT) != 0) {
 			kn->kn_status &= ~KN_USEWAIT;
-			wait_queue_wakeup_all((wait_queue_t)kq->kq_wqs,
-			    &kn->kn_status, THREAD_AWAKENED);
+			waitq_wakeup64_all((struct waitq *)kq->kq_wqs,
+					   CAST_EVENT64_T(&kn->kn_status),
+					   THREAD_AWAKENED,
+					   WAITQ_ALL_PRIORITIES);
 		}
 	}
 	kqunlock(kq);
@@ -838,8 +850,10 @@ filt_timerexpire(void *knx, __unused void *spare)
 	/* if someone is waiting for timer to pop */
 	if (kn->kn_hookid & TIMER_CANCELWAIT) {
 		struct kqueue *kq = kn->kn_kq;
-		wait_queue_wakeup_all((wait_queue_t)kq->kq_wqs, &kn->kn_hook,
-		    THREAD_AWAKENED);
+		waitq_wakeup64_all((struct waitq *)kq->kq_wqs,
+				   CAST_EVENT64_T(&kn->kn_hook),
+				   THREAD_AWAKENED,
+				   WAITQ_ALL_PRIORITIES);
 	}
 
 	filt_timerunlock();
@@ -864,8 +878,9 @@ filt_timercancel(struct knote *kn)
 		} else {
 			/* we have to wait for the expire routine.  */
 			kn->kn_hookid |= TIMER_CANCELWAIT;
-			wait_queue_assert_wait((wait_queue_t)kq->kq_wqs,
-			    &kn->kn_hook, THREAD_UNINT, 0);
+			waitq_assert_wait64((struct waitq *)kq->kq_wqs,
+					    CAST_EVENT64_T(&kn->kn_hook),
+					    THREAD_UNINT, TIMEOUT_WAIT_FOREVER);
 			filt_timerunlock();
 			thread_block(THREAD_CONTINUE_NULL);
 			filt_timerlock();
@@ -1006,7 +1021,7 @@ filt_timer(struct knote *kn, long hint)
  * pops have gone off (in kn_data).
  */
 static void
-filt_timertouch(struct knote *kn, struct kevent64_s *kev, long type)
+filt_timertouch(struct knote *kn, struct kevent_internal_s *kev, long type)
 {
 	int error;
 	filt_timerlock();
@@ -1110,7 +1125,7 @@ filt_user(struct knote *kn, __unused long hint)
 }
 
 static void
-filt_usertouch(struct knote *kn, struct kevent64_s *kev, long type)
+filt_usertouch(struct knote *kn, struct kevent_internal_s *kev, long type)
 {
 	uint32_t ffctrl;
 	switch (type) {
@@ -1170,10 +1185,9 @@ kqueue_alloc(struct proc *p)
 	MALLOC_ZONE(kq, struct kqueue *, sizeof (struct kqueue), M_KQUEUE,
 	    M_WAITOK);
 	if (kq != NULL) {
-		wait_queue_set_t wqs;
+		struct waitq_set *wqs;
 
-		wqs = wait_queue_set_alloc(SYNC_POLICY_FIFO |
-		    SYNC_POLICY_PREPOST);
+		wqs = waitq_set_alloc(SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST | SYNC_POLICY_DISABLE_IRQ);
 		if (wqs != NULL) {
 			bzero(kq, sizeof (struct kqueue));
 			lck_spin_init(&kq->kq_lock, kq_lck_grp, kq_lck_attr);
@@ -1213,10 +1227,16 @@ kqueue_alloc(struct proc *p)
 void
 kqueue_dealloc(struct kqueue *kq)
 {
-	struct proc *p = kq->kq_p;
-	struct filedesc *fdp = p->p_fd;
+	struct proc *p;
+	struct filedesc *fdp;
 	struct knote *kn;
 	int i;
+
+	if (kq == NULL)
+		return;
+
+	p = kq->kq_p;
+	fdp = p->p_fd;
 
 	proc_fdlock(p);
 	for (i = 0; i < fdp->fd_knlistsize; i++) {
@@ -1262,11 +1282,11 @@ kqueue_dealloc(struct kqueue *kq)
 	proc_fdunlock(p);
 
 	/*
-	 * before freeing the wait queue set for this kqueue,
-	 * make sure it is unlinked from all its containing (select) sets.
+	 * waitq_set_free() clears all preposts and also remove the KQ's
+	 * waitq set from any select sets to which it may belong.
 	 */
-	wait_queue_unlink_all((wait_queue_t)kq->kq_wqs);
-	wait_queue_set_free(kq->kq_wqs);
+	waitq_set_free(kq->kq_wqs);
+	kq->kq_wqs = NULL;
 	lck_spin_destroy(&kq->kq_lock, kq_lck_grp);
 	FREE_ZONE(kq, sizeof (struct kqueue), M_KQUEUE);
 }
@@ -1311,43 +1331,77 @@ kqueue(struct proc *p, __unused struct kqueue_args *uap, int32_t *retval)
 }
 
 static int
-kevent_copyin(user_addr_t *addrp, struct kevent64_s *kevp, struct proc *p,
-    int iskev64)
+kevent_copyin(user_addr_t *addrp, struct kevent_internal_s *kevp, struct proc *p,
+    unsigned int flags)
 {
 	int advance;
 	int error;
 
-	if (iskev64) {
-		advance = sizeof (struct kevent64_s);
-		error = copyin(*addrp, (caddr_t)kevp, advance);
-	} else if (IS_64BIT_PROCESS(p)) {
-		struct user64_kevent kev64;
-		bzero(kevp, sizeof (struct kevent64_s));
+	if (flags & KEVENT_FLAG_LEGACY32) {
+		bzero(kevp, sizeof (*kevp));
 
-		advance = sizeof (kev64);
+		if (IS_64BIT_PROCESS(p)) {
+			struct user64_kevent kev64;
+
+			advance = sizeof (kev64);
+			error = copyin(*addrp, (caddr_t)&kev64, advance);
+			if (error)
+				return (error);
+			kevp->ident = kev64.ident;
+			kevp->filter = kev64.filter;
+			kevp->flags = kev64.flags;
+			kevp->udata = kev64.udata;
+			kevp->fflags = kev64.fflags;
+			kevp->data = kev64.data;
+		} else {
+			struct user32_kevent kev32;
+
+			advance = sizeof (kev32);
+			error = copyin(*addrp, (caddr_t)&kev32, advance);
+			if (error)
+				return (error);
+			kevp->ident = (uintptr_t)kev32.ident;
+			kevp->filter = kev32.filter;
+			kevp->flags = kev32.flags;
+			kevp->udata = CAST_USER_ADDR_T(kev32.udata);
+			kevp->fflags = kev32.fflags;
+			kevp->data = (intptr_t)kev32.data;
+		}
+	} else if (flags & KEVENT_FLAG_LEGACY64) {
+		struct kevent64_s kev64;
+
+		bzero(kevp, sizeof (*kevp));
+
+		advance = sizeof (struct kevent64_s);
 		error = copyin(*addrp, (caddr_t)&kev64, advance);
 		if (error)
-			return (error);
+			return(error);
 		kevp->ident = kev64.ident;
 		kevp->filter = kev64.filter;
 		kevp->flags = kev64.flags;
+		kevp->udata = kev64.udata;
 		kevp->fflags = kev64.fflags;
 		kevp->data = kev64.data;
-		kevp->udata = kev64.udata;
+		kevp->ext[0] = kev64.ext[0];
+		kevp->ext[1] = kev64.ext[1];
+		
 	} else {
-		struct user32_kevent kev32;
-		bzero(kevp, sizeof (struct kevent64_s));
+		struct kevent_qos_s kevqos;
 
-		advance = sizeof (kev32);
-		error = copyin(*addrp, (caddr_t)&kev32, advance);
+		bzero(kevp, sizeof (*kevp));
+
+		advance = sizeof (struct kevent_qos_s);
+		error = copyin(*addrp, (caddr_t)&kevqos, advance);
 		if (error)
-			return (error);
-		kevp->ident = (uintptr_t)kev32.ident;
-		kevp->filter = kev32.filter;
-		kevp->flags = kev32.flags;
-		kevp->fflags = kev32.fflags;
-		kevp->data = (intptr_t)kev32.data;
-		kevp->udata = CAST_USER_ADDR_T(kev32.udata);
+			return error;
+		kevp->ident = kevqos.ident;
+		kevp->filter = kevqos.filter;
+		kevp->flags = kevqos.flags;
+		kevp->udata = kevqos.udata;
+		kevp->fflags = kevqos.fflags;
+		kevp->data = kevqos.data;
+		kevp->ext[0] = kevqos.ext[0];
+		kevp->ext[1] = kevqos.ext[1];
 	}
 	if (!error)
 		*addrp += advance;
@@ -1355,46 +1409,85 @@ kevent_copyin(user_addr_t *addrp, struct kevent64_s *kevp, struct proc *p,
 }
 
 static int
-kevent_copyout(struct kevent64_s *kevp, user_addr_t *addrp, struct proc *p,
-    int iskev64)
+kevent_copyout(struct kevent_internal_s *kevp, user_addr_t *addrp, struct proc *p,
+    unsigned int flags)
 {
+	user_addr_t addr = *addrp;
 	int advance;
 	int error;
 
-	if (iskev64) {
+	if (flags & KEVENT_FLAG_LEGACY32) {
+		assert((flags & KEVENT_FLAG_STACK_EVENTS) == 0);
+
+		if (IS_64BIT_PROCESS(p)) {
+			struct user64_kevent kev64;
+
+			/*
+			 * deal with the special case of a user-supplied
+			 * value of (uintptr_t)-1.
+			 */
+			kev64.ident = (kevp->ident == (uintptr_t)-1) ?
+				(uint64_t)-1LL : (uint64_t)kevp->ident;
+
+			kev64.filter = kevp->filter;
+			kev64.flags = kevp->flags;
+			kev64.fflags = kevp->fflags;
+			kev64.data = (int64_t) kevp->data;
+			kev64.udata = kevp->udata;
+			advance = sizeof (kev64);
+			error = copyout((caddr_t)&kev64, addr, advance);
+		} else {
+			struct user32_kevent kev32;
+
+			kev32.ident = (uint32_t)kevp->ident;
+			kev32.filter = kevp->filter;
+			kev32.flags = kevp->flags;
+			kev32.fflags = kevp->fflags;
+			kev32.data = (int32_t)kevp->data;
+			kev32.udata = kevp->udata;
+			advance = sizeof (kev32);
+			error = copyout((caddr_t)&kev32, addr, advance);
+		}
+	} else if (flags & KEVENT_FLAG_LEGACY64) {
+		struct kevent64_s kev64;
+
 		advance = sizeof (struct kevent64_s);
-		error = copyout((caddr_t)kevp, *addrp, advance);
-	} else if (IS_64BIT_PROCESS(p)) {
-		struct user64_kevent kev64;
-
-		/*
-		 * deal with the special case of a user-supplied
-		 * value of (uintptr_t)-1.
-		 */
-		kev64.ident = (kevp->ident == (uintptr_t)-1) ?
-		    (uint64_t)-1LL : (uint64_t)kevp->ident;
-
+		if (flags & KEVENT_FLAG_STACK_EVENTS) {
+			addr -= advance;
+		}
+		kev64.ident = kevp->ident;
 		kev64.filter = kevp->filter;
 		kev64.flags = kevp->flags;
 		kev64.fflags = kevp->fflags;
 		kev64.data = (int64_t) kevp->data;
 		kev64.udata = kevp->udata;
-		advance = sizeof (kev64);
-		error = copyout((caddr_t)&kev64, *addrp, advance);
+		kev64.ext[0] = kevp->ext[0];
+		kev64.ext[1] = kevp->ext[1];
+		error = copyout((caddr_t)&kev64, addr, advance);
 	} else {
-		struct user32_kevent kev32;
-
-		kev32.ident = (uint32_t)kevp->ident;
-		kev32.filter = kevp->filter;
-		kev32.flags = kevp->flags;
-		kev32.fflags = kevp->fflags;
-		kev32.data = (int32_t)kevp->data;
-		kev32.udata = kevp->udata;
-		advance = sizeof (kev32);
-		error = copyout((caddr_t)&kev32, *addrp, advance);
+		struct kevent_qos_s kevqos;
+	
+		bzero(&kevqos, sizeof (struct kevent_qos_s));
+		advance = sizeof (struct kevent_qos_s);
+		if (flags & KEVENT_FLAG_STACK_EVENTS) {
+			addr -= advance;
+		}
+		kevqos.ident = kevp->ident;
+		kevqos.filter = kevp->filter;
+		kevqos.flags = kevp->flags;
+		kevqos.fflags = kevp->fflags;
+		kevqos.data = (int64_t) kevp->data;
+		kevqos.udata = kevp->udata;
+		kevqos.ext[0] = kevp->ext[0];
+		kevqos.ext[1] = kevp->ext[1];
+		error = copyout((caddr_t)&kevqos, addr, advance);
 	}
-	if (!error)
-		*addrp += advance;
+	if (!error) {
+		if (flags & KEVENT_FLAG_STACK_EVENTS)
+			*addrp = addr;
+		else
+			*addrp = addr + advance;
+	}
 	return (error);
 }
 
@@ -1420,7 +1513,8 @@ kevent_continue(__unused struct kqueue *kq, void *data, int error)
 	fd = cont_args->fd;
 	fp = cont_args->fp;
 
-	fp_drop(p, fd, fp, 0);
+	if (fp != NULL)
+		fp_drop(p, fd, fp, 0);
 
 	/* don't restart after signals... */
 	if (error == ERESTART)
@@ -1439,49 +1533,147 @@ kevent_continue(__unused struct kqueue *kq, void *data, int error)
 int
 kevent(struct proc *p, struct kevent_args *uap, int32_t *retval)
 {
-	return (kevent_internal(p,
-	    0,
-	    uap->changelist,
-	    uap->nchanges,
-	    uap->eventlist,
-	    uap->nevents,
-	    uap->fd,
-	    uap->timeout,
-	    0, /* no flags from old kevent() call */
-	    retval));
+	unsigned int flags = KEVENT_FLAG_LEGACY32;
+
+	return kevent_internal(p,
+			       uap->fd,
+			       uap->changelist, uap->nchanges,
+			       uap->eventlist, uap->nevents,
+			       0ULL, 0ULL,
+			       flags,
+			       uap->timeout,
+			       kevent_continue,
+			       retval);
 }
 
 int
 kevent64(struct proc *p, struct kevent64_args *uap, int32_t *retval)
 {
-	return (kevent_internal(p,
-	    1,
-	    uap->changelist,
-	    uap->nchanges,
-	    uap->eventlist,
-	    uap->nevents,
-	    uap->fd,
-	    uap->timeout,
-	    uap->flags,
-	    retval));
+	unsigned int flags;
+
+	/* restrict to user flags and set legacy64 */
+	flags = uap->flags & KEVENT_FLAG_USER;
+	flags |= KEVENT_FLAG_LEGACY64;
+
+	return kevent_internal(p,
+			       uap->fd,
+			       uap->changelist, uap->nchanges,
+			       uap->eventlist, uap->nevents,
+			       0ULL, 0ULL,
+			       flags,
+			       uap->timeout,
+			       kevent_continue,
+			       retval);
 }
 
+int
+kevent_qos(struct proc *p, struct kevent_qos_args *uap, int32_t *retval)
+{
+	user_size_t usize = 0;
+	user_size_t ssize;
+	int error;
+
+	/* restrict to user flags */
+	uap->flags &= KEVENT_FLAG_USER;
+
+	if (uap->data_available) {
+		if (!IS_64BIT_PROCESS(p)) {
+			uint32_t csize;
+
+			error = copyin(uap->data_available, (caddr_t)&csize, sizeof(csize));
+			if (error)
+				return error;
+			usize = csize;
+		} else {
+			uint64_t csize;
+			error = copyin(uap->data_available, (caddr_t)&csize, sizeof(csize));
+			if (error)
+				return error;
+			usize = csize;
+		}
+	}
+	ssize = usize;
+
+	error = kevent_internal(p,
+				uap->fd,
+				uap->changelist, uap->nchanges,
+				uap->eventlist,	uap->nevents,
+				uap->data_out, &usize,
+				uap->flags,
+				0ULL,
+				kevent_continue,
+				retval);
+
+	if (error == 0 && uap->data_available && usize != ssize) {
+		if (!IS_64BIT_PROCESS(p)) {
+			uint32_t csize = (uint32_t)usize;
+
+			error = copyout((caddr_t)&csize, uap->data_available, sizeof(csize));
+		} else {
+			error = copyout((caddr_t)&usize, uap->data_available, sizeof(usize));
+		}
+	}
+	return error;
+}
+
+int 
+kevent_qos_internal(struct proc *p, int fd, 
+		    user_addr_t changelist, int nchanges,
+		    user_addr_t eventlist, int nevents,
+		    user_addr_t data_out, user_size_t *data_available,
+		    unsigned int flags, 
+		    int32_t *retval) 
+{
+	return kevent_internal(p,
+			       fd,
+			       changelist, nchanges,
+			       eventlist, nevents,
+			       data_out, data_available,
+			       flags,
+			       0ULL,
+			       NULL,
+			       retval);
+}
+ 
 static int
-kevent_internal(struct proc *p, int iskev64, user_addr_t changelist,
-    int nchanges, user_addr_t ueventlist, int nevents, int fd,
-    user_addr_t utimeout, __unused unsigned int flags,
-    int32_t *retval)
+kevent_internal(struct proc *p, 
+		int fd,
+		user_addr_t changelist, int nchanges,
+		user_addr_t ueventlist, int nevents,
+		user_addr_t data_out, user_size_t *data_available,
+		unsigned int flags, 
+		user_addr_t utimeout,
+		kqueue_continue_t continuation,
+		int32_t *retval)
 {
 	struct _kevent *cont_args;
 	uthread_t ut;
 	struct kqueue *kq;
-	struct fileproc *fp;
-	struct kevent64_s kev;
+	struct fileproc *fp = NULL;
+	struct kevent_internal_s kev;
 	int error, noutputs;
 	struct timeval atv;
 
-	/* convert timeout to absolute - if we have one */
-	if (utimeout != USER_ADDR_NULL) {
+#if 1
+	/* temporarily ignore these fields */
+	(void)data_out;
+	(void)data_available;
+#endif
+
+	/* prepare to deal with stack-wise allocation of out events */
+	if (flags & KEVENT_FLAG_STACK_EVENTS) {
+		int scale = ((flags & KEVENT_FLAG_LEGACY32) ? 
+			     (IS_64BIT_PROCESS(p) ? sizeof(struct user64_kevent) :
+			                            sizeof(struct user32_kevent)) :
+			     ((flags & KEVENT_FLAG_LEGACY64) ? sizeof(struct kevent64_s) :
+			                                       sizeof(struct kevent_qos_s)));
+		ueventlist += nevents * scale;
+	}
+
+	/* convert timeout to absolute - if we have one (and not immediate) */
+	if (flags & KEVENT_FLAG_IMMEDIATE) {
+		getmicrouptime(&atv);
+	} else if (utimeout != USER_ADDR_NULL) {
 		struct timeval rtv;
 		if (IS_64BIT_PROCESS(p)) {
 			struct user64_timespec ts;
@@ -1502,32 +1694,72 @@ kevent_internal(struct proc *p, int iskev64, user_addr_t changelist,
 		getmicrouptime(&atv);
 		timevaladd(&atv, &rtv);
 	} else {
+		/* wait forever value */
 		atv.tv_sec = 0;
 		atv.tv_usec = 0;
 	}
 
-	/* get a usecount for the kq itself */
-	if ((error = fp_getfkq(p, fd, &fp, &kq)) != 0)
-		return (error);
+	if (flags & KEVENT_FLAG_WORKQ) {
+		/*
+		 * use the private kq associated with the proc workq.
+		 * Just being a thread within the process (and not
+		 * being the exit/exec thread) is enough to hold a
+		 * reference on this special kq.
+		 */
+		kq = p->p_wqkqueue;
+		if (kq == NULL) {
+			struct kqueue *alloc_kq = kqueue_alloc(p);
+			if (alloc_kq == NULL)
+				return ENOMEM;
+
+			proc_fdlock(p);
+			if (p->p_wqkqueue == NULL) {
+				/*
+				 * The kq is marked as special -
+				 * with unique interactions with
+				 * the workq for this process.
+				 */
+				alloc_kq->kq_state |= KQ_WORKQ;
+				kq = p->p_wqkqueue = alloc_kq;
+				proc_fdunlock(p);
+			} else {
+				proc_fdunlock(p);
+				kq = p->p_wqkqueue;
+				kqueue_dealloc(alloc_kq);
+			}
+		}
+	} else {
+		/* get a usecount for the kq itself */
+		if ((error = fp_getfkq(p, fd, &fp, &kq)) != 0)
+			return (error);
+	}
 
 	/* each kq should only be used for events of one type */
 	kqlock(kq);
-	if (kq->kq_state & (KQ_KEV32 | KQ_KEV64)) {
-		if (((iskev64 && (kq->kq_state & KQ_KEV32)) ||
-			(!iskev64 && (kq->kq_state & KQ_KEV64)))) {
+	if (kq->kq_state & (KQ_KEV32 | KQ_KEV64 | KQ_KEV_QOS)) {
+		if (flags & KEVENT_FLAG_LEGACY32) {
+			if ((kq->kq_state & KQ_KEV32) == 0) {
+				error = EINVAL;
+				kqunlock(kq);
+				goto errorout;
+			}
+		} else if (kq->kq_state & KQ_KEV32) {
 			error = EINVAL;
 			kqunlock(kq);
 			goto errorout;
 		}
+	} else if (flags & KEVENT_FLAG_LEGACY32) {
+		kq->kq_state |= KQ_KEV32;
 	} else {
-		kq->kq_state |= (iskev64 ? KQ_KEV64 : KQ_KEV32);
+		/* JMM - set KQ_KEVQOS when we are ready for exclusive */
+		kq->kq_state |= KQ_KEV64;
 	}
 	kqunlock(kq);
 
 	/* register all the change requests the user provided... */
 	noutputs = 0;
 	while (nchanges > 0 && error == 0) {
-		error = kevent_copyin(&changelist, &kev, p, iskev64);
+		error = kevent_copyin(&changelist, &kev, p, flags);
 		if (error)
 			break;
 
@@ -1536,7 +1768,7 @@ kevent_internal(struct proc *p, int iskev64, user_addr_t changelist,
 		if ((error || (kev.flags & EV_RECEIPT)) && nevents > 0) {
 			kev.flags = EV_ERROR;
 			kev.data = error;
-			error = kevent_copyout(&kev, &ueventlist, p, iskev64);
+			error = kevent_copyout(&kev, &ueventlist, p, flags);
 			if (error == 0) {
 				nevents--;
 				noutputs++;
@@ -1545,25 +1777,40 @@ kevent_internal(struct proc *p, int iskev64, user_addr_t changelist,
 		nchanges--;
 	}
 
-	/* store the continuation/completion data in the uthread */
-	ut = (uthread_t)get_bsdthread_info(current_thread());
-	cont_args = &ut->uu_kevent.ss_kevent;
-	cont_args->fp = fp;
-	cont_args->fd = fd;
-	cont_args->retval = retval;
-	cont_args->eventlist = ueventlist;
-	cont_args->eventcount = nevents;
-	cont_args->eventout = noutputs;
-	cont_args->eventsize = iskev64;
+	/* short-circuit the scan if we only want error events */
+	if (flags & KEVENT_FLAG_ERROR_EVENTS) 
+		nevents = 0;
 
-	if (nevents > 0 && noutputs == 0 && error == 0)
+	if (nevents > 0 && noutputs == 0 && error == 0) {
+
+		/* store the continuation/completion data in the uthread */
+		ut = (uthread_t)get_bsdthread_info(current_thread());
+		cont_args = &ut->uu_kevent.ss_kevent;
+		cont_args->fp = fp;
+		cont_args->fd = fd;
+		cont_args->retval = retval;
+		cont_args->eventlist = ueventlist;
+		cont_args->eventcount = nevents;
+		cont_args->eventout = noutputs;
+		cont_args->eventflags = flags;
+
 		error = kqueue_scan(kq, kevent_callback,
-		    kevent_continue, cont_args,
-		    &atv, p);
-	kevent_continue(kq, cont_args, error);
+		                    continuation, cont_args,
+		                    &atv, p);
 
+		noutputs = cont_args->eventout;
+	}
+
+	/* don't restart after signals... */
+	if (error == ERESTART)
+		error = EINTR;
+	else if (error == EWOULDBLOCK)
+		error = 0;
+	if (error == 0)
+		*retval = noutputs;
 errorout:
-	fp_drop(p, fd, fp, 0);
+	if (fp != NULL)
+		fp_drop(p, fd, fp, 0);
 	return (error);
 }
 
@@ -1575,23 +1822,20 @@ errorout:
  * caller holds a reference on the kqueue
  */
 static int
-kevent_callback(__unused struct kqueue *kq, struct kevent64_s *kevp,
+kevent_callback(__unused struct kqueue *kq, struct kevent_internal_s *kevp,
     void *data)
 {
 	struct _kevent *cont_args;
 	int error;
-	int iskev64;
 
 	cont_args = (struct _kevent *)data;
 	assert(cont_args->eventout < cont_args->eventcount);
-
-	iskev64 = cont_args->eventsize;
 
 	/*
 	 * Copy out the appropriate amount of event data for this user.
 	 */
 	error = kevent_copyout(kevp, &cont_args->eventlist, current_proc(),
-	    iskev64);
+			       cont_args->eventflags);
 
 	/*
 	 * If there isn't space for additional events, return
@@ -1605,23 +1849,23 @@ kevent_callback(__unused struct kqueue *kq, struct kevent64_s *kevp,
 /*
  * kevent_description - format a description of a kevent for diagnostic output
  *
- * called with a 128-byte string buffer
+ * called with a 256-byte string buffer
  */
 
 char *
-kevent_description(struct kevent64_s *kevp, char *s, size_t n)
+kevent_description(struct kevent_internal_s *kevp, char *s, size_t n)
 {
 	snprintf(s, n,
 	    "kevent="
-	    "{.ident=%#llx, .filter=%d, .flags=%#x, .fflags=%#x, .data=%#llx, .udata=%#llx, .ext[0]=%#llx, .ext[1]=%#llx}",
+	    "{.ident=%#llx, .filter=%d, .flags=%#x, .udata=%#llx, .fflags=%#x, .data=%#llx, .ext[0]=%#llx, .ext[1]=%#llx}",
 	    kevp->ident,
 	    kevp->filter,
 	    kevp->flags,
+	    kevp->udata,
 	    kevp->fflags,
 	    kevp->data,
-	    kevp->udata,
 	    kevp->ext[0],
-	    kevp->ext[1]);
+	    kevp->ext[1] );
 
 	return (s);
 }
@@ -1641,7 +1885,7 @@ kevent_description(struct kevent64_s *kevp, char *s, size_t n)
  */
 
 int
-kevent_register(struct kqueue *kq, struct kevent64_s *kev,
+kevent_register(struct kqueue *kq, struct kevent_internal_s *kev,
     __unused struct proc *ctxp)
 {
 	struct proc *p = kq->kq_p;
@@ -1649,6 +1893,7 @@ kevent_register(struct kqueue *kq, struct kevent64_s *kev,
 	struct filterops *fops;
 	struct fileproc *fp = NULL;
 	struct knote *kn = NULL;
+	struct klist *list;
 	int error = 0;
 
 	if (kev->filter < 0) {
@@ -1656,43 +1901,48 @@ kevent_register(struct kqueue *kq, struct kevent64_s *kev,
 			return (EINVAL);
 		fops = sysfilt_ops[~kev->filter];	/* to 0-base index */
 	} else {
-		/*
-		 * XXX
-		 * filter attach routine is responsible for insuring that
-		 * the identifier can be attached to it.
-		 */
-		printf("unknown filter: %d\n", kev->filter);
 		return (EINVAL);
 	}
 
 restart:
 	/* this iocount needs to be dropped if it is not registered */
+	list = NULL;
 	proc_fdlock(p);
-	if (fops->f_isfd && (error = fp_lookup(p, kev->ident, &fp, 1)) != 0) {
-		proc_fdunlock(p);
-		return (error);
-	}
 
+	/* 
+	 * determine where to look for the knote
+	 */
 	if (fops->f_isfd) {
+		if ((error = fp_lookup(p, kev->ident, &fp, 1)) != 0) {
+			proc_fdunlock(p);
+			return (error);
+		}
 		/* fd-based knotes are linked off the fd table */
 		if (kev->ident < (u_int)fdp->fd_knlistsize) {
-			SLIST_FOREACH(kn, &fdp->fd_knlist[kev->ident], kn_link)
-				if (kq == kn->kn_kq &&
-				    kev->filter == kn->kn_filter)
-					break;
+			list = &fdp->fd_knlist[kev->ident];
 		}
-	} else {
+	} else if (fdp->fd_knhashmask != 0) {
 		/* hash non-fd knotes here too */
-		if (fdp->fd_knhashmask != 0) {
-			struct klist *list;
+		list = &fdp->fd_knhash[KN_HASH((u_long)kev->ident, fdp->fd_knhashmask)];
+	}
 
-			list = &fdp->fd_knhash[
-			    KN_HASH((u_long)kev->ident, fdp->fd_knhashmask)];
-			SLIST_FOREACH(kn, list, kn_link)
-				if (kev->ident == kn->kn_id &&
-				    kq == kn->kn_kq &&
-				    kev->filter == kn->kn_filter)
-					break;
+	/*
+	 * scan the selected list looking for a match
+	 */
+	if (list != NULL) {
+		SLIST_FOREACH(kn, list, kn_link) {
+			if (kq == kn->kn_kq &&
+			    kev->ident == kn->kn_id && 
+			    kev->filter == kn->kn_filter) {
+				if (kev->flags & EV_UDATA_SPECIFIC) {
+					if ((kn->kn_flags & EV_UDATA_SPECIFIC) &&
+					    kev->udata == kn->kn_udata) {
+						break; /* matching udata-specific knote */
+					}
+				} else if ((kn->kn_flags & EV_UDATA_SPECIFIC) == 0) {
+					break; /* matching non-udata-specific knote */
+				}
+			}
 		}
 	}
 
@@ -1775,11 +2025,23 @@ restart:
 		proc_fdunlock(p);
 
 		if (kev->flags & EV_DELETE) {
-			knote_dequeue(kn);
-			kn->kn_status |= KN_DISABLED;
-			if (kqlock2knotedrop(kq, kn)) {
-				kn->kn_fop->f_detach(kn);
-				knote_drop(kn, p);
+			if ((kev->flags & EV_ENABLE) == 0 &&
+			    (kev->flags & EV_DISPATCH2) == EV_DISPATCH2 &&
+			    (kn->kn_status & KN_DISABLED) == KN_DISABLED) {
+				/* mark for deferred drop */
+				kn->kn_status |= KN_DEFERDROP;
+				kqunlock(kq);
+				error = EINPROGRESS;
+			} else {
+				knote_dequeue(kn);
+				kn->kn_status |= KN_DISABLED;
+				if (kqlock2knotedrop(kq, kn)) {
+					kn->kn_fop->f_detach(kn);
+					knote_drop(kn, p);
+				} else {
+					/* pretend we didn't find it */
+					error = ENOENT;
+				}
 			}
 			goto done;
 		}
@@ -1788,10 +2050,24 @@ restart:
 		if (kev->flags & EV_DISABLE) {
 			knote_dequeue(kn);
 			kn->kn_status |= KN_DISABLED;
-		} else if (kev->flags & EV_ENABLE) {
+
+		} else if ((kev->flags & EV_ENABLE) &&
+			   (kn->kn_status & KN_DISABLED)) {
 			kn->kn_status &= ~KN_DISABLED;
-			if (kn->kn_status & KN_ACTIVE)
-				knote_enqueue(kn);
+
+			/* handle deferred drop */
+			if (kn->kn_status & KN_DEFERDROP) {
+				kn->kn_status &= ~KN_DEFERDROP;
+				kn->kn_flags |= (EV_DELETE | EV_ONESHOT);
+				knote_activate(kn, 0);
+				kqunlock(kq);
+				goto done;
+			}
+
+			if (kn->kn_status & KN_ACTIVE) {
+				/* force re-activate if previously active */
+				knote_activate(kn, 1);
+			}
 		}
 
 		/*
@@ -1828,13 +2104,21 @@ restart:
 	/* still have use ref on knote */
 
 	/*
-	 * If the knote is not marked to always stay enqueued,
-	 * invoke the filter routine to see if it should be
-	 * enqueued now.
+	 * Invoke the filter routine to see if it should be enqueued now.
 	 */
-	if ((kn->kn_status & KN_STAYQUEUED) == 0 && kn->kn_fop->f_event(kn, 0)) {
+#if 0
+	if (kn->kn_fop->f_event(kn, 0)) {
+#else
+	/*
+	 * JMM - temporary workaround until rdar://problem/19986199 
+	 * This potentially results in extra wakeups for KN_STAYQUEUED event types,
+	 * but waking up only truly active ones (yet trying below to determine
+	 * active status, by invoking the filter routine, is having side-effects).
+	 */
+	if ((kn->kn_status & KN_STAYQUEUED) || kn->kn_fop->f_event(kn, 0)) {
+#endif
 		if (knoteuse2kqlock(kq, kn))
-			knote_activate(kn, 1);
+			knote_activate(kn, (kn->kn_status & KN_STAYQUEUED));
 		kqunlock(kq);
 	} else {
 		knote_put(kn);
@@ -1868,7 +2152,7 @@ knote_process(struct knote *kn,
     struct proc *p)
 {
 	struct kqueue *kq = kn->kn_kq;
-	struct kevent64_s kev;
+	struct kevent_internal_s kev;
 	int touch;
 	int result;
 	int error;
@@ -1916,6 +2200,9 @@ knote_process(struct knote *kn,
 					kn->kn_fop->f_touch(kn, &kev,
 					    EVENT_PROCESS);
 				}
+				if (result && (kn->kn_status & KN_TOUCH))
+					kn->kn_fop->f_touch(kn, &kev,
+					    EVENT_PROCESS);
 
 				/*
 				 * convert back to a kqlock - bail if the knote
@@ -1928,9 +2215,7 @@ knote_process(struct knote *kn,
 					 * if revalidated as alive, make sure
 					 * it's active
 					 */
-					if (!(kn->kn_status & KN_ACTIVE)) {
-						knote_activate(kn, 0);
-					}
+					knote_activate(kn, 0);
 
 					/*
 					 * capture all events that occurred
@@ -1964,7 +2249,9 @@ knote_process(struct knote *kn,
 	/*
 	 * Determine how to dispatch the knote for future event handling.
 	 * not-fired: just return (do not callout).
-	 * One-shot: deactivate it.
+	 * One-shot: If dispatch2, enter deferred-delete mode (unless this is
+	 *           is the deferred delete event delivery itself).  Otherwise,
+	 *           deactivate and drop it.
 	 * Clear: deactivate and clear the state.
 	 * Dispatch: don't clear state, just deactivate it and mark it disabled.
 	 * All others: just leave where they are.
@@ -1974,7 +2261,11 @@ knote_process(struct knote *kn,
 		return (EJUSTRETURN);
 	} else if ((kn->kn_flags & EV_ONESHOT) != 0) {
 		knote_deactivate(kn);
-		if (kqlock2knotedrop(kq, kn)) {
+		if ((kn->kn_flags & (EV_DISPATCH2|EV_DELETE)) == EV_DISPATCH2) {
+			/* defer dropping non-delete oneshot dispatch2 events */
+			kn->kn_status |= (KN_DISABLED | KN_DEFERDROP);
+			kqunlock(kq);
+		} else if (kqlock2knotedrop(kq, kn)) {
 			kn->kn_fop->f_detach(kn);
 			knote_drop(kn, p);
 		}
@@ -2027,8 +2318,9 @@ kqueue_begin_processing(struct kqueue *kq)
 
 		/* if someone else is processing the queue, wait */
 		if (kq->kq_nprocess != 0) {
-			wait_queue_assert_wait((wait_queue_t)kq->kq_wqs,
-			    &kq->kq_nprocess, THREAD_UNINT, 0);
+			waitq_assert_wait64((struct waitq *)kq->kq_wqs,
+					    CAST_EVENT64_T(&kq->kq_nprocess),
+					    THREAD_UNINT, TIMEOUT_WAIT_FOREVER);
 			kq->kq_state |= KQ_PROCWAIT;
 			kqunlock(kq);
 			thread_block(THREAD_CONTINUE_NULL);
@@ -2049,8 +2341,10 @@ kqueue_end_processing(struct kqueue *kq)
 	kq->kq_nprocess = 0;
 	if (kq->kq_state & KQ_PROCWAIT) {
 		kq->kq_state &= ~KQ_PROCWAIT;
-		wait_queue_wakeup_all((wait_queue_t)kq->kq_wqs,
-		    &kq->kq_nprocess, THREAD_AWAKENED);
+		waitq_wakeup64_all((struct waitq *)kq->kq_wqs,
+				   CAST_EVENT64_T(&kq->kq_nprocess),
+				   THREAD_AWAKENED,
+				   WAITQ_ALL_PRIORITIES);
 	}
 }
 
@@ -2093,7 +2387,7 @@ kqueue_process(struct kqueue *kq,
 	 * Clear any pre-posted status from previous runs, so we
 	 * only detect events that occur during this run.
 	 */
-	wait_queue_sub_clearrefs(kq->kq_wqs);
+	waitq_set_clear_preposts(kq->kq_wqs);
 
 	/*
 	 * loop through the enqueued knotes, processing each one and
@@ -2148,8 +2442,9 @@ kqueue_scan_continue(void *data, wait_result_t wait_result)
 		error = kqueue_process(kq, cont_args->call, cont_args, &count,
 		    current_proc());
 		if (error == 0 && count == 0) {
-			wait_queue_assert_wait((wait_queue_t)kq->kq_wqs,
-			    KQ_EVENT, THREAD_ABORTSAFE, cont_args->deadline);
+			waitq_assert_wait64((struct waitq *)kq->kq_wqs,
+					    KQ_EVENT, THREAD_ABORTSAFE,
+					    cont_args->deadline);
 			kq->kq_state |= KQ_SLEEP;
 			kqunlock(kq);
 			thread_block_parameter(kqueue_scan_continue, kq);
@@ -2253,9 +2548,10 @@ kqueue_scan(struct kqueue *kq,
 		}
 
 		/* go ahead and wait */
-		wait_queue_assert_wait_with_leeway((wait_queue_t)kq->kq_wqs,
-		    KQ_EVENT, THREAD_ABORTSAFE, TIMEOUT_URGENCY_USER_NORMAL,
-		    deadline, 0);
+		waitq_assert_wait64_leeway((struct waitq *)kq->kq_wqs,
+					   KQ_EVENT, THREAD_ABORTSAFE,
+					   TIMEOUT_URGENCY_USER_NORMAL,
+					   deadline, TIMEOUT_NO_LEEWAY);
 		kq->kq_state |= KQ_SLEEP;
 		kqunlock(kq);
 		wait_result = thread_block_parameter(cont, kq);
@@ -2315,7 +2611,7 @@ kqueue_ioctl(__unused struct fileproc *fp,
 
 /*ARGSUSED*/
 static int
-kqueue_select(struct fileproc *fp, int which, void *wql,
+kqueue_select(struct fileproc *fp, int which, void *wq_link_id,
     __unused vfs_context_t ctx)
 {
 	struct kqueue *kq = (struct kqueue *)fp->f_data;
@@ -2337,13 +2633,28 @@ kqueue_select(struct fileproc *fp, int which, void *wql,
 	 * catch events from KN_STAYQUEUED sources. So we do the linkage manually.
 	 * (The select() call will unlink them when it ends).
 	 */
-	if (wql != NULL) {
+	if (wq_link_id != NULL) {
 		thread_t cur_act = current_thread();
 		struct uthread * ut = get_bsdthread_info(cur_act);
 
 		kq->kq_state |= KQ_SEL;
-		wait_queue_link_noalloc((wait_queue_t)kq->kq_wqs, ut->uu_wqset,
-		    (wait_queue_link_t)wql);
+		waitq_link((struct waitq *)kq->kq_wqs, ut->uu_wqset,
+			   WAITQ_SHOULD_LOCK, (uint64_t *)wq_link_id);
+
+		/* always consume the reserved link object */
+		waitq_link_release(*(uint64_t *)wq_link_id);
+		*(uint64_t *)wq_link_id = 0;
+
+		/*
+		 * selprocess() is expecting that we send it back the waitq
+		 * that was just added to the thread's waitq set. In order
+		 * to not change the selrecord() API (which is exported to
+		 * kexts), we pass this value back through the
+		 * void *wq_link_id pointer we were passed. We need to use
+		 * memcpy here because the pointer may not be properly aligned
+		 * on 32-bit systems.
+		 */
+		memcpy(wq_link_id, (void *)&(kq->kq_wqs), sizeof(void *));
 	}
 
 	if (kqueue_begin_processing(kq) == -1) {
@@ -2487,20 +2798,28 @@ kqueue_stat(struct kqueue *kq, void *ub, int isstat64, proc_t p)
 
 		bzero((void *)sb64, sizeof(*sb64));
 		sb64->st_size = kq->kq_count;
-		if (kq->kq_state & KQ_KEV64)
+		if (kq->kq_state & KQ_KEV_QOS)
+			sb64->st_blksize = sizeof(struct kevent_qos_s);
+		else if (kq->kq_state & KQ_KEV64)
 			sb64->st_blksize = sizeof(struct kevent64_s);
+		else if (IS_64BIT_PROCESS(p))
+			sb64->st_blksize = sizeof(struct user64_kevent);
 		else
-			sb64->st_blksize = IS_64BIT_PROCESS(p) ? sizeof(struct user64_kevent) : sizeof(struct user32_kevent);
+			sb64->st_blksize = sizeof(struct user32_kevent);
 		sb64->st_mode = S_IFIFO;
 	} else {
 		struct stat *sb = (struct stat *)ub;
 
 		bzero((void *)sb, sizeof(*sb));
 		sb->st_size = kq->kq_count;
-		if (kq->kq_state & KQ_KEV64)
+		if (kq->kq_state & KQ_KEV_QOS)
+			sb->st_blksize = sizeof(struct kevent_qos_s);
+		else if (kq->kq_state & KQ_KEV64)
 			sb->st_blksize = sizeof(struct kevent64_s);
+		else if (IS_64BIT_PROCESS(p))
+			sb->st_blksize = sizeof(struct user64_kevent);
 		else
-			sb->st_blksize = IS_64BIT_PROCESS(p) ? sizeof(struct user64_kevent) : sizeof(struct user32_kevent);
+			sb->st_blksize = sizeof(struct user32_kevent);
 		sb->st_mode = S_IFIFO;
 	}
 	kqunlock(kq);
@@ -2513,10 +2832,31 @@ kqueue_stat(struct kqueue *kq, void *ub, int isstat64, proc_t p)
 static void
 kqueue_wakeup(struct kqueue *kq, int closed)
 {
+	wait_result_t res = THREAD_NOT_WAITING;
+
 	if ((kq->kq_state & (KQ_SLEEP | KQ_SEL)) != 0 || kq->kq_nprocess > 0) {
 		kq->kq_state &= ~(KQ_SLEEP | KQ_SEL);
-		wait_queue_wakeup_all((wait_queue_t)kq->kq_wqs, KQ_EVENT,
-		    (closed) ? THREAD_INTERRUPTED : THREAD_AWAKENED);
+		res = waitq_wakeup64_all((struct waitq *)kq->kq_wqs, KQ_EVENT,
+					 (closed) ? THREAD_INTERRUPTED : THREAD_AWAKENED,
+					 WAITQ_ALL_PRIORITIES);
+	}
+
+	/* request additional workq threads if appropriate */
+	if (res == THREAD_NOT_WAITING && (kq->kq_state & KQ_WORKQ) &&
+	    pthread_functions != NULL && pthread_functions->workq_reqthreads != NULL) {
+		/*
+		 * The special workq kq should be accumulating the counts of
+		 * queued sources on a pthread_priority_t basis and we should
+		 * be providing that here.  For now, just hard-code a single
+		 * entry request at a fixed (default) QOS.
+		 */
+		struct workq_reqthreads_req_s request = { 
+		                      .priority = 0x020004ff,  /* legacy event manager */
+							  .count = kq->kq_count };
+		thread_t wqthread;
+
+		wqthread = (*pthread_functions->workq_reqthreads)(kq->kq_p, 1, &request);
+		assert(wqthread == THREAD_NULL);
 	}
 }
 
@@ -2556,7 +2896,7 @@ knote(struct klist *list, long hint)
 
 			/* if its not going away and triggered */
 			if (knoteuse2kqlock(kq, kn) && result)
-				knote_activate(kn, 1);
+				knote_activate(kn, 0);
 			/* lock held again */
 		}
 		kqunlock(kq);
@@ -2597,12 +2937,12 @@ knote_detach(struct klist *list, struct knote *kn)
  * caller provides the wait queue link structure.
  */
 int
-knote_link_wait_queue(struct knote *kn, struct wait_queue *wq, wait_queue_link_t wql)
+knote_link_waitq(struct knote *kn, struct waitq *wq, uint64_t *reserved_link)
 {
 	struct kqueue *kq = kn->kn_kq;
 	kern_return_t kr;
 
-	kr = wait_queue_link_noalloc(wq, kq->kq_wqs, wql);
+	kr = waitq_link(wq, kq->kq_wqs, WAITQ_SHOULD_LOCK, reserved_link);
 	if (kr == KERN_SUCCESS) {
 		knote_markstayqueued(kn);
 		return (0);
@@ -2621,12 +2961,12 @@ knote_link_wait_queue(struct knote *kn, struct wait_queue *wq, wait_queue_link_t
  * On success, caller is responsible for the link structure
  */
 int
-knote_unlink_wait_queue(struct knote *kn, struct wait_queue *wq, wait_queue_link_t *wqlp)
+knote_unlink_waitq(struct knote *kn, struct waitq *wq)
 {
 	struct kqueue *kq = kn->kn_kq;
 	kern_return_t kr;
 
-	kr = wait_queue_unlink_nofree(wq, kq->kq_wqs, wqlp);
+	kr = waitq_unlink(wq, kq->kq_wqs);
 	knote_clearstayqueued(kn);
 	return ((kr != KERN_SUCCESS) ? EINVAL : 0);
 }
@@ -2753,8 +3093,10 @@ knote_drop(struct knote *kn, __unused struct proc *ctxp)
 	proc_fdunlock(p);
 
 	if (needswakeup)
-		wait_queue_wakeup_all((wait_queue_t)kq->kq_wqs, &kn->kn_status,
-		    THREAD_AWAKENED);
+		waitq_wakeup64_all((struct waitq *)kq->kq_wqs,
+				   CAST_EVENT64_T(&kn->kn_status),
+				   THREAD_AWAKENED,
+				   WAITQ_ALL_PRIORITIES);
 
 	if (kn->kn_fop->f_isfd)
 		fp_drop(p, kn->kn_id, kn->kn_fp, 0);
@@ -2764,17 +3106,19 @@ knote_drop(struct knote *kn, __unused struct proc *ctxp)
 
 /* called with kqueue lock held */
 static void
-knote_activate(struct knote *kn, int propagate)
+knote_activate(struct knote *kn, int force)
 {
 	struct kqueue *kq = kn->kn_kq;
+
+	if (!force && (kn->kn_status & KN_ACTIVE))
+		return;
 
 	kn->kn_status |= KN_ACTIVE;
 	knote_enqueue(kn);
 	kqueue_wakeup(kq, 0);
 
-	/* this is a real event: wake up the parent kq, too */
-	if (propagate)
-		KNOTE(&kq->kq_sel.si_note, 0);
+	/* wake up the parent kq, too */
+	KNOTE(&kq->kq_sel.si_note, 0);
 }
 
 /* called with kqueue lock held */
@@ -3495,15 +3839,17 @@ fill_kqueueinfo(struct kqueue *kq, struct kqueue_info * kinfo)
 	st = &kinfo->kq_stat;
 
 	st->vst_size = kq->kq_count;
-	if (kq->kq_state & KQ_KEV64)
+	if (kq->kq_state & KQ_KEV_QOS)
+		st->vst_blksize = sizeof(struct kevent_qos_s);
+	else if (kq->kq_state & KQ_KEV64)
 		st->vst_blksize = sizeof(struct kevent64_s);
 	else
 		st->vst_blksize = sizeof(struct kevent);
 	st->vst_mode = S_IFIFO;
-	if (kq->kq_state & KQ_SEL)
-		kinfo->kq_state |=  PROC_KQUEUE_SELECT;
-	if (kq->kq_state & KQ_SLEEP)
-		kinfo->kq_state |= PROC_KQUEUE_SLEEP;
+
+	/* flags exported to libproc as PROC_KQUEUE_* (sys/proc_info.h) */
+#define PROC_KQUEUE_MASK (KQ_SEL|KQ_SLEEP|KQ_KEV32|KQ_KEV64|KQ_KEV_QOS)
+	kinfo->kq_state = kq->kq_state & PROC_KQUEUE_MASK;
 
 	return (0);
 }
@@ -3525,4 +3871,96 @@ knote_clearstayqueued(struct knote *kn)
 	kn->kn_status &= ~KN_STAYQUEUED;
 	knote_dequeue(kn);
 	kqunlock(kn->kn_kq);
+}
+
+static unsigned long
+kevent_extinfo_emit(struct kqueue *kq, struct knote *kn, struct kevent_extinfo *buf,
+		unsigned long buflen, unsigned long nknotes)
+{
+	struct kevent_qos_s kevqos;
+	struct kevent_internal_s *kevp;
+	for (; kn; kn = SLIST_NEXT(kn, kn_link)) {
+		if (kq == kn->kn_kq) {
+			if (nknotes < buflen) {
+				struct kevent_extinfo *info = &buf[nknotes];
+
+				kqlock(kq);
+				bzero(&kevqos, sizeof(kevqos));
+				kevp = &(kn->kn_kevent);
+
+				kevqos.ident = kevp->ident;
+				kevqos.filter = kevp->filter;
+				kevqos.flags = kevp->flags;
+				kevqos.fflags = kevp->fflags;
+				kevqos.data = (int64_t) kevp->data;
+				kevqos.udata = kevp->udata;
+				kevqos.ext[0] = kevp->ext[0];
+				kevqos.ext[1] = kevp->ext[1];
+
+				memcpy(&info->kqext_kev, &kevqos, sizeof(info->kqext_kev));
+				info->kqext_sdata = kn->kn_sdata;
+
+				/* status flags exported to userspace/libproc */
+#define KQEXT_STATUS_MASK (KN_ACTIVE|KN_QUEUED|KN_DISABLED|KN_STAYQUEUED)
+				info->kqext_status = kn->kn_status & KQEXT_STATUS_MASK;
+				info->kqext_sfflags = kn->kn_sfflags;
+
+				kqunlock(kq);
+			}
+
+			/* we return total number of knotes, which may be more than requested */
+			nknotes++;
+		}
+	}
+
+	return nknotes;
+}
+
+int
+pid_kqueue_extinfo(proc_t p, struct kqueue *kq, user_addr_t ubuf,
+		uint32_t bufsize, int32_t *retval)
+{
+	struct knote *kn;
+	int i;
+	int err = 0;
+	struct filedesc *fdp = p->p_fd;
+	unsigned long nknotes = 0;
+	unsigned long buflen = bufsize / sizeof(struct kevent_extinfo);
+	struct kevent_extinfo *kqext = NULL;
+
+	kqext = kalloc(buflen * sizeof(struct kevent_extinfo));
+	if (kqext == NULL) {
+		err = ENOMEM;
+		goto out;
+	}
+	bzero(kqext, buflen * sizeof(struct kevent_extinfo));
+
+	proc_fdlock(p);
+
+	for (i = 0; i < fdp->fd_knlistsize; i++) {
+		kn = SLIST_FIRST(&fdp->fd_knlist[i]);
+		nknotes = kevent_extinfo_emit(kq, kn, kqext, buflen, nknotes);
+	}
+
+	if (fdp->fd_knhashmask != 0) {
+		for (i = 0; i < (int)fdp->fd_knhashmask + 1; i++) {
+			kn = SLIST_FIRST(&fdp->fd_knhash[i]);
+			nknotes = kevent_extinfo_emit(kq, kn, kqext, buflen, nknotes);
+		}
+	}
+
+	proc_fdunlock(p);
+
+	assert(bufsize >= sizeof(struct kevent_extinfo) * min(buflen, nknotes));
+	err = copyout(kqext, ubuf, sizeof(struct kevent_extinfo) * min(buflen, nknotes));
+
+ out:
+	if (kqext) {
+		kfree(kqext, buflen * sizeof(struct kevent_extinfo));
+		kqext = NULL;
+	}
+
+	if (!err)
+		*retval = nknotes;
+	return err;
 }

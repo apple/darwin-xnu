@@ -16,23 +16,24 @@ PRIVATE_DATAFILES = \
 	mac_alloc.h \
 	mac_data.h \
 	mac_framework.h \
+	mac_internal.h \
 	mac_mach_internal.h \
-	mac_internal.h
+	mac_policy.h
 
 # Installed in /usr/include/security/
 INSTALL_MI_LIST = ${DATAFILES} 
 
 INSTALL_MI_DIR = security
 
-EXPORT_MI_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+EXPORT_MI_LIST = $(sort ${DATAFILES} ${PRIVATE_DATAFILES})
 
 EXPORT_MI_DIR = security
 
 # /System/Library/Frameworks/System.framework/PrivateHeaders
-INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 # /System/Library/Frameworks/Kernel.framework/PrivateHeaders
-INSTALL_KF_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+INSTALL_KF_MI_LCL_LIST = $(sort ${DATAFILES} ${PRIVATE_DATAFILES})
 
 COMP_SUBDIRS = conf
 

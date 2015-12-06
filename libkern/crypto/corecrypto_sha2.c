@@ -83,7 +83,7 @@ void SHA384_Update(SHA384_CTX *ctx, const void *data, size_t len)
 void SHA384_Final(void *digest, SHA384_CTX *ctx)
 {
 	const struct ccdigest_info *di;
-	di=g_crypto_funcs->ccsha512_di;
+	di=g_crypto_funcs->ccsha384_di;
 
 	ccdigest_final(di, ctx->ctx, digest);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -315,7 +315,7 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
         {
                 goto ErrorExit;
         }
-        
+
         //	The child node should be at a level one less than the parent.
         --level;
 	}
@@ -1318,8 +1318,8 @@ static OSStatus	AddNewRootNode	(BTreeControlBlockPtr	 btreePtr,
 	// update BTreeInfoRec
 	
 	btreePtr->rootNode	 = rootNum;
-	btreePtr->flags		|= kBTHeaderDirty;
-	
+	M_BTreeHeaderDirty(btreePtr);
+
 	return noErr;
 
 

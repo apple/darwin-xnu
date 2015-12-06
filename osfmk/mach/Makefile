@@ -7,14 +7,16 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 INSTINC_SUBDIRS = machine
-INSTINC_SUBDIRS_ARM = arm
 INSTINC_SUBDIRS_X86_64 = i386
 INSTINC_SUBDIRS_X86_64H = i386
+INSTINC_SUBDIRS_ARM = arm arm64
+INSTINC_SUBDIRS_ARM64 = arm arm64
 
 EXPINC_SUBDIRS = machine
 EXPINC_SUBDIRS_X86_64 = i386
 EXPINC_SUBDIRS_X86_64H = i386
-EXPINC_SUBDIRS_ARM = arm
+EXPINC_SUBDIRS_ARM = arm arm64
+EXPINC_SUBDIRS_ARM64 = arm arm64
 
 MIG_TYPES = \
 	clock_types.defs \
@@ -53,6 +55,7 @@ MACH_PRIVATE_DEFS = \
 	memory_object.defs \
 	memory_object_control.defs \
 	memory_object_default.defs \
+	sysdiagnose_notification.defs \
 	upl.defs \
 	vm32_map.defs
 
@@ -70,7 +73,8 @@ MIG_USHDRS = \
 	memory_object_default_server.h \
 	notify_server.h \
 	task_access_server.h \
-	telemetry_notification_server.h
+	telemetry_notification_server.h \
+	sysdiagnose_notification_server.h
 
 MIG_UUHDRS = \
 	clock.h \
@@ -157,17 +161,34 @@ INSTALL_MI_LIST	= \
 	bootstrap.h \
 	${DATAFILES}
 
-INSTALL_MI_LCL_LIST = \
+PRIVATE_DATAFILES = \
 	bootstrap.h \
-	sfi_class.h \
+	coalition.h \
 	coalition_notification.defs \
-	${DATAFILES}
+	host_info.h \
+	mach_host.defs \
+	mach_traps.h \
+	memory_object_types.h \
+	mig.h \
+	processor_info.h \
+	semaphore.h \
+	sfi_class.h \
+	syscall_sw.h \
+	sysdiagnose_notification.defs \
+	task_info.h \
+	task_policy.h \
+	thread_policy.h \
+	thread_switch.h \
+	vm_prot.h
+
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_KF_MI_LIST = \
 	mach_interface.h \
 	$(filter-out mach_traps.h mach_syscalls.h thread_switch.h, ${DATAFILES})
 
 INSTALL_KF_MI_LCL_LIST = \
+	coalition.h \
 	mach_interface.h \
 	$(filter-out mach_traps.h mach_syscalls.h thread_switch.h, ${DATAFILES})
 
@@ -177,6 +198,7 @@ INSTALL_MI_DIR = mach
 
 EXPORT_MI_LIST	= \
 	branch_predicates.h \
+	coalition.h \
 	mach_interface.h \
 	sfi_class.h \
 	${DATAFILES}
@@ -247,7 +269,8 @@ MIG_KUSRC = \
 	task_access_user.c \
 	telemetry_notification_user.c \
 	upl_user.c \
-	vm_map_user.c
+	vm_map_user.c \
+	sysdiagnose_notification_user.c
 
 MIG_KSHDRS = \
 	clock_server.h \

@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)select.2	8.2 (Berkeley) 3/25/94
 .\"
-.Dd March 25, 1994
+.Dd March 18, 2015
 .Dt SELECT 2
 .Os BSD 4.2
 .Sh NAME
@@ -80,7 +80,7 @@
 .Fa "struct timeval *restrict timeout"
 .Fc
 .Sh DESCRIPTION
-.Fn Select
+.Fn select
 examines the I/O descriptor sets whose addresses are passed in
 .Fa readfds ,
 .Fa writefds ,
@@ -102,7 +102,7 @@ On return,
 replaces the given descriptor sets
 with subsets consisting of those descriptors that are ready
 for the requested operation.
-.Fn Select
+.Fn select
 returns the total number of ready descriptors in all the sets.
 .Pp
 The descriptor sets are stored as bit fields in arrays of integers.
@@ -160,7 +160,7 @@ and
 .Fa errorfds
 may be given as nil pointers if no descriptors are of interest.
 .Sh RETURN VALUES
-.Fn Select
+.Fn select
 returns the number of ready descriptors that are contained in
 the descriptor sets,
 or -1 if an error occurred.
@@ -242,6 +242,7 @@ or compile with -D_DARWIN_UNLIMITED_SELECT.
 .Sh SEE ALSO
 .Xr accept 2 ,
 .Xr connect 2 ,
+.Xr connectx 2 ,
 .Xr getdtablesize 2 ,
 .Xr gettimeofday 2 ,
 .Xr read 2 ,
@@ -267,7 +268,7 @@ a larger definition of
 before the inclusion of
 .Aq Pa sys/types.h .
 .Pp
-.Fn Select
+.Fn select
 should probably have been designed to return the time remaining from the
 original timeout, if any, by modifying the time value in place.
 However, it is unlikely this semantic will ever be implemented, as the

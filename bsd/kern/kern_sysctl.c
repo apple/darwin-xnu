@@ -102,6 +102,8 @@
 #include <sys/user.h>
 #include <sys/aio_kern.h>
 #include <sys/reboot.h>
+#include <sys/memory_maintenance.h>
+#include <sys/priv.h>
 
 #include <security/audit/audit.h>
 #include <kern/kalloc.h>
@@ -115,6 +117,7 @@
 #include <kern/thread.h>
 #include <kern/processor.h>
 #include <kern/debug.h>
+#include <kern/sched_prim.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <mach/host_info.h>
@@ -240,9 +243,6 @@ STATIC int sysdoproc_filt_KERN_PROC_PGRP(proc_t p, void * arg);
 STATIC int sysdoproc_filt_KERN_PROC_TTY(proc_t p, void * arg);
 STATIC int  sysdoproc_filt_KERN_PROC_UID(proc_t p, void * arg);
 STATIC int  sysdoproc_filt_KERN_PROC_RUID(proc_t p, void * arg);
-#if CONFIG_LCTX
-STATIC int  sysdoproc_filt_KERN_PROC_LCID(proc_t p, void * arg);
-#endif
 int sysdoproc_callback(proc_t p, void *arg);
 
 
@@ -294,6 +294,7 @@ STATIC int sysctl_sysctl_native(struct sysctl_oid *oidp, void *arg1, int arg2, s
 STATIC int sysctl_sysctl_cputype(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 STATIC int sysctl_safeboot(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 STATIC int sysctl_singleuser(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
+STATIC int sysctl_minimalboot(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 STATIC int sysctl_slide(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 
 
@@ -458,6 +459,14 @@ sysctl_sched_stats_enable(__unused struct sysctl_oid *oidp, __unused void *arg1,
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, sched_stats_enable, CTLFLAG_LOCKED | CTLFLAG_WR, 0, 0, sysctl_sched_stats_enable, "-", "");
+
+extern uint32_t sched_debug_flags;
+SYSCTL_INT(_debug, OID_AUTO, sched, CTLFLAG_RW | CTLFLAG_LOCKED, &sched_debug_flags, 0, "scheduler debug");
+
+#if (DEBUG || DEVELOPMENT)
+extern boolean_t doprnt_hide_pointers;
+SYSCTL_INT(_debug, OID_AUTO, hide_kernel_pointers, CTLFLAG_RW | CTLFLAG_LOCKED, &doprnt_hide_pointers, 0, "hide kernel pointers from log");
+#endif
 
 extern int get_kernel_symfile(proc_t, char **);
 
@@ -662,18 +671,6 @@ sysdoproc_filt_KERN_PROC_RUID(proc_t p, void * arg)
 		return(1);
 }
 
-#if CONFIG_LCTX
-STATIC int
-sysdoproc_filt_KERN_PROC_LCID(proc_t p, void * arg)
-{
-	if ((p->p_lctx == NULL) ||
-		(p->p_lctx->lc_id != (pid_t)*(int*)arg))
-		return(0);
-	else
-		return(1);
-}
-#endif
-
 /*
  * try over estimating by 5 procs
  */
@@ -779,11 +776,6 @@ sysctl_prochandle SYSCTL_HANDLER_ARGS
 			ruidcheck = 1;
 			break;
 
-#if CONFIG_LCTX
-		case KERN_PROC_LCID:
-			filterfn = sysdoproc_filt_KERN_PROC_LCID;
-			break;
-#endif
 		case KERN_PROC_ALL:
 			break;
 
@@ -914,10 +906,6 @@ fill_user32_eproc(proc_t p, struct user32_eproc *__restrict ep)
 		if (sessp != SESSION_NULL && sessp->s_ttyvp)
 			ep->e_flag = EPROC_CTTY;
 	}
-#if CONFIG_LCTX
-	if (p->p_lctx)
-		ep->e_lcid = p->p_lctx->lc_id;
-#endif
 	ep->e_ppid = p->p_ppid;
 	if (p->p_ucred) {
 		my_cred = kauth_cred_proc_ref(p);
@@ -974,10 +962,6 @@ fill_user64_eproc(proc_t p, struct user64_eproc *__restrict ep)
 		if (sessp != SESSION_NULL && sessp->s_ttyvp)
 			ep->e_flag = EPROC_CTTY;
 	}
-#if CONFIG_LCTX
-	if (p->p_lctx)
-		ep->e_lcid = p->p_lctx->lc_id;
-#endif
 	ep->e_ppid = p->p_ppid;
 	if (p->p_ucred) {
 		my_cred = kauth_cred_proc_ref(p);
@@ -1164,8 +1148,8 @@ sysctl_kdebug_ops SYSCTL_HANDLER_ARGS
 	case KERN_KDSETREG:
 	case KERN_KDGETREG:
 	case KERN_KDREADTR:
-        case KERN_KDWRITETR:
-        case KERN_KDWRITEMAP:
+	case KERN_KDWRITETR:
+	case KERN_KDWRITEMAP:
 	case KERN_KDPIDTR:
 	case KERN_KDTHRMAP:
 	case KERN_KDPIDEX:
@@ -1176,9 +1160,12 @@ sysctl_kdebug_ops SYSCTL_HANDLER_ARGS
 	case KERN_KDDISABLE_BG_TRACE:
 	case KERN_KDREADCURTHRMAP:
 	case KERN_KDSET_TYPEFILTER:
-        case KERN_KDBUFWAIT:
+	case KERN_KDBUFWAIT:
 	case KERN_KDCPUMAP:
-
+	case KERN_KDWAIT_BG_TRACE_RESET:
+	case KERN_KDSET_BG_TYPEFILTER:
+	case KERN_KDWRITEMAP_V3:
+	case KERN_KDWRITETR_V3:
 	        ret = kdbg_control(name, namelen, oldp, oldlenp);
 	        break;
 	default:
@@ -1386,7 +1373,7 @@ sysctl_procargsx(int *name, u_int namelen, user_addr_t where,
 		return(EINVAL);
 
 
-	ret = kmem_alloc(kernel_map, &copy_start, round_page(arg_size));
+	ret = kmem_alloc(kernel_map, &copy_start, round_page(arg_size), VM_KERN_MEMORY_BSD);
 	if (ret != KERN_SUCCESS) {
 		vm_map_deallocate(proc_map);
 		return(ENOMEM);
@@ -1422,6 +1409,20 @@ sysctl_procargsx(int *name, u_int namelen, user_addr_t where,
 	} else {
 		data = (caddr_t) (copy_end - arg_size);
 		size = arg_size;
+	}
+
+	/*
+	 * When these sysctls were introduced, the first string in the strings
+	 * section was just the bare path of the executable.  However, for security
+	 * reasons we now prefix this string with executable_path= so it can be
+	 * parsed getenv style.  To avoid binary compatability issues with exising
+	 * callers of this sysctl, we strip it off here if present.
+	 * (rdar://problem/13746466)
+	 */
+#define        EXECUTABLE_KEY "executable_path="
+	if (strncmp(EXECUTABLE_KEY, data, strlen(EXECUTABLE_KEY)) == 0){
+		data += strlen(EXECUTABLE_KEY);
+		size -= strlen(EXECUTABLE_KEY);
 	}
 
 	if (argc_yes) {
@@ -1855,6 +1856,10 @@ SYSCTL_INT(_kern, KERN_SPECULATIVE_READS, speculative_reads_disabled,
 SYSCTL_INT(_kern, OID_AUTO, ignore_is_ssd, 
 		CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
 		&ignore_is_ssd, 0, "");
+
+SYSCTL_INT(_kern, OID_AUTO, root_is_CF_drive,
+		CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
+		&root_is_CF_drive, 0, "");
 
 SYSCTL_UINT(_kern, OID_AUTO, preheat_max_bytes, 
 		CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
@@ -2597,6 +2602,16 @@ SYSCTL_PROC(_kern, OID_AUTO, singleuser,
 		CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED,
 		0, 0, sysctl_singleuser, "I", "");
 
+STATIC int sysctl_minimalboot
+(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	return sysctl_io_number(req, minimalboot, sizeof(int), NULL, NULL);
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, minimalboot,
+		CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED,
+		0, 0, sysctl_minimalboot, "I", "");
+
 /*
  * Controls for debugging affinity sets - see osfmk/kern/affinity.c
  */
@@ -2666,8 +2681,12 @@ SYSCTL_INT(_vm, OID_AUTO, vm_page_filecache_min, CTLFLAG_RW | CTLFLAG_LOCKED, &v
 
 extern int	vm_compressor_mode;
 extern int	vm_compressor_is_active;
+extern int	vm_compressor_available;
+extern uint32_t	vm_ripe_target_age;
 extern uint32_t	swapout_target_age;
 extern int64_t  compressor_bytes_used;
+extern int64_t  c_segment_input_bytes;
+extern int64_t  c_segment_compressed_bytes;
 extern uint32_t	compressor_eval_period_in_msecs;
 extern uint32_t	compressor_sample_min_in_msecs;
 extern uint32_t	compressor_sample_max_in_msecs;
@@ -2678,10 +2697,16 @@ extern uint32_t	vm_compressor_majorcompact_threshold_divisor;
 extern uint32_t	vm_compressor_unthrottle_threshold_divisor;
 extern uint32_t	vm_compressor_catchup_threshold_divisor;
 
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_input_bytes, CTLFLAG_RD | CTLFLAG_LOCKED, &c_segment_input_bytes, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_compressed_bytes, CTLFLAG_RD | CTLFLAG_LOCKED, &c_segment_compressed_bytes, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_bytes_used, CTLFLAG_RD | CTLFLAG_LOCKED, &compressor_bytes_used, "");
+
 SYSCTL_INT(_vm, OID_AUTO, compressor_mode, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_compressor_mode, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, compressor_is_active, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_compressor_is_active, 0, "");
-SYSCTL_QUAD(_vm, OID_AUTO, compressor_bytes_used, CTLFLAG_RD | CTLFLAG_LOCKED, &compressor_bytes_used, "");
 SYSCTL_INT(_vm, OID_AUTO, compressor_swapout_target_age, CTLFLAG_RD | CTLFLAG_LOCKED, &swapout_target_age, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, compressor_available, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_compressor_available, 0, "");
+
+SYSCTL_INT(_vm, OID_AUTO, vm_ripe_target_age_in_secs, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_ripe_target_age, 0, "");
 
 SYSCTL_INT(_vm, OID_AUTO, compressor_eval_period_in_msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_eval_period_in_msecs, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, compressor_sample_min_in_msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_sample_min_in_msecs, 0, "");
@@ -2709,12 +2734,12 @@ SYSCTL_INT(_vm, OID_AUTO, phantom_cache_thrashing_threshold_ssd, CTLFLAG_RW | CT
 #if (DEVELOPMENT || DEBUG)
 
 SYSCTL_UINT(_vm, OID_AUTO, vm_page_creation_throttled_hard,
-	    CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
-	    &vm_page_creation_throttled_hard, 0, "");
+		CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
+		&vm_page_creation_throttled_hard, 0, "");
 
 SYSCTL_UINT(_vm, OID_AUTO, vm_page_creation_throttled_soft,
-	    CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
-	    &vm_page_creation_throttled_soft, 0, "");
+		CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
+		&vm_page_creation_throttled_soft, 0, "");
 
 #endif /* DEVELOPMENT || DEBUG */
 
@@ -2747,13 +2772,6 @@ SYSCTL_INT(_kern, OID_AUTO, ipc_portbt,
  * Scheduler sysctls
  */
 
-/*
- * See osfmk/kern/sched_prim.c for the corresponding definition
- * in osfmk/. If either version changes, update the other.
- */
-#define SCHED_STRING_MAX_LENGTH (48)
-
-extern char sched_string[SCHED_STRING_MAX_LENGTH];
 SYSCTL_STRING(_kern, OID_AUTO, sched,
 			  CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
 			  sched_string, sizeof(sched_string),
@@ -2944,3 +2962,5 @@ SYSCTL_INT(_kern, OID_AUTO, hv_support,
 		CTLFLAG_KERN | CTLFLAG_RD | CTLFLAG_LOCKED, 
 		&hv_support_available, 0, "");
 #endif
+
+

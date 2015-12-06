@@ -85,14 +85,14 @@ __END_DECLS
 
 #define assert(ex)  \
 	(__builtin_expect(!!((long)(ex)), 1L) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
-#define	assert_static(x)	assert(x)
+#define assert_static(ex) _Static_assert((ex), #ex)
 
 #define __assert_only
 
 #else	/* MACH_ASSERT */
 
 #define assert(ex) ((void)0)
-#define assert_static(ex) do {} while (0)
+#define assert_static(ex) _Static_assert((ex), #ex)
 
 #define __assert_only __unused
 

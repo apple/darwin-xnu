@@ -22,40 +22,90 @@
  */
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <machine/cpu_capabilities.h>
 #include <sys/kdebug.h>
 #include <sys/errno.h>
 
-#define CLASS_MASK      0xff000000
-#define CLASS_OFFSET    24
-#define SUBCLASS_MASK   0x00ff0000
-#define SUBCLASS_OFFSET 16
+extern int __kdebug_trace64(uint32_t code, uint64_t arg1, uint64_t arg2,
+                            uint64_t arg3, uint64_t arg4);
+extern uint64_t __kdebug_trace_string(uint32_t debugid, uint64_t str_id,
+                                      const char *str);
 
-#define EXTRACT_CLASS(debugid)          ((uint8_t)(((debugid) & CLASS_MASK) >> CLASS_OFFSET))
-#define EXTRACT_SUBCLASS(debugid)       ( (uint8_t) ( ((debugid) & SUBCLASS_MASK) >> SUBCLASS_OFFSET ) )
-
-extern int __kdebug_trace64(uint32_t code, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4);
-
-int
-kdebug_trace(uint32_t code, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
+/* Returns non-zero if tracing is enabled. */
+static int
+kdebug_enabled(void)
 {
-	uint8_t code_class;
-	volatile uint32_t *kdebug_enable_address = (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_KDEBUG_ENABLE);
-
-	/*
-	 * This filtering is also done in the kernel, but we also do it here so that errors
-	 * are returned in all cases, not just when the system call is actually performed.
-	 */
-	code_class = EXTRACT_CLASS(code);
-	switch (code_class) {
-		case DBG_TRACE:
-			errno = EPERM;
-			return -1;
-	}
+	volatile uint32_t *kdebug_enable_address =
+	    (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_KDEBUG_ENABLE);
 
 	if (*kdebug_enable_address == 0) {
 		return 0;
 	}
-	
-	return __kdebug_trace64(code, arg1, arg2, arg3, arg4);
+
+	return 1;
+}
+
+static int
+kdebug_validate_debugid(uint32_t debugid)
+{
+	uint8_t debugid_class;
+
+	/*
+	 * This filtering is also done in the kernel, but we also do it here so
+	 * that errors are returned in all cases, not just when the system call
+	 * is actually performed.
+	 */
+	debugid_class = KDBG_EXTRACT_CLASS(debugid);
+	switch (debugid_class) {
+		case DBG_TRACE:
+			return EPERM;
+	}
+
+	return 0;
+}
+
+int
+kdebug_trace(uint32_t debugid, uint64_t arg1, uint64_t arg2, uint64_t arg3,
+             uint64_t arg4)
+{
+	int err;
+
+	if (!kdebug_enabled()) {
+		return 0;
+	}
+
+	if ((err = kdebug_validate_debugid(debugid)) != 0) {
+		errno = err;
+		return -1;
+	}
+
+	return __kdebug_trace64(debugid, arg1, arg2, arg3, arg4);
+}
+
+uint64_t
+kdebug_trace_string(uint32_t debugid, uint64_t str_id, const char *str)
+{
+	int err;
+
+	if (!kdebug_enabled()) {
+		return 0;
+	}
+
+	if ((int64_t)str_id == -1) {
+		errno = EINVAL;
+		return (uint64_t)-1;
+	}
+
+	if (str_id == 0 && str == NULL) {
+		errno = EINVAL;
+		return (uint64_t)-1;
+	}
+
+	if ((err = kdebug_validate_debugid(debugid)) != 0) {
+		errno = err;
+		return (uint64_t)-1;
+	}
+
+	return __kdebug_trace_string(debugid, str_id, str);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -42,6 +42,7 @@
 #include <sys/kernel_types.h>
 
 #ifdef KERNEL_PRIVATE
+struct if_interface_state;
 #include <sys/kpi_mbuf.h>
 #endif /* KERNEL_PRIVATE */
 
@@ -988,6 +989,14 @@ typedef errno_t (*ifnet_ctl_func)(ifnet_t interface, ifnet_ctl_cmd_t cmd,
 	@field output_lt The effective output latency (in nanosecond.)
 	@field output_lt_max The maximum theoretical output latency
 		(in nanosecond.)
+	@field start_delay_qlen The maximum length of output queue for
+		delaying start callback to the driver. This is an
+		optimization for coalescing output packets. 
+	@field start_delay_timeout The timeout in microseconds to delay
+		start callback. If start_delay_qlen number of packets are
+		not in the output queue when the timer fires, the start
+		callback will be invoked. Maximum allowed value is
+		20ms (in microseconds).
 	@field input_poll The poll function for the interface, valid only if
 		IFNET_INIT_LEGACY is not set and only if IFNET_INIT_INPUT_POLL
 		is set.
@@ -1045,12 +1054,14 @@ struct ifnet_init_eparams {
 	ifnet_start_func	start;			/* required only for new model */
 	ifnet_ctl_func		output_ctl;		/* optional, only for new model */
 	u_int32_t		output_sched_model;	/* optional, only for new model */
-	u_int32_t		output_target_qdelay;	/* optional, only for new model */
+	u_int32_t		output_target_qdelay;	/* optional, only for new model, value in ms */
 	u_int64_t		output_bw;		/* optional */
 	u_int64_t		output_bw_max;		/* optional */
 	u_int64_t		output_lt;		/* optional */
 	u_int64_t		output_lt_max;		/* optional */
-	u_int64_t		_reserved[2];		/* for future use */
+	u_int16_t		start_delay_qlen;	/* optional */
+	u_int16_t		start_delay_timeout;	/* optional */
+	u_int32_t		_reserved[3];		/* for future use */
 	ifnet_input_poll_func	input_poll;		/* optional, ignored for legacy model */
 	ifnet_ctl_func		input_ctl;		/* required for opportunistic polling */
 	u_int32_t		rcvq_maxlen;		/* optional, only for opportunistic polling */
@@ -1845,6 +1856,27 @@ extern errno_t ifnet_set_link_quality(ifnet_t interface, int quality);
 	@result IFNET_LQM as defined in net/if.h
 */
 extern int ifnet_link_quality(ifnet_t interface);
+
+/*
+	@function ifnet_set_interface_state
+	@discussion Sets the interface state for the ifnet.
+	@param interface Interface for which the interface state should
+		be set to.
+	@param if_interface_state as defined in net/if_var.h.
+	@result 0 on success otherwise the errno error.  EINVAL if quality
+		is not a valid value.  ENXIO if the interface is not attached.
+*/
+extern errno_t ifnet_set_interface_state(ifnet_t interface,
+    struct if_interface_state *if_interface_state);
+
+/*
+	@function ifnet_get_interface_state
+	@discussion Returns the interface state for the ifnet.
+	@param if_interface_state to ret.
+	@result 0 on success, errno otherwise
+*/
+extern int ifnet_get_interface_state(ifnet_t interface,
+    struct if_interface_state *if_interface_state);
 
 /*
 	@struct ifnet_llreach_info
@@ -3118,10 +3150,13 @@ extern errno_t ifnet_clone_detach(if_clone_t ifcloner);
  */
 extern errno_t ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield);
 
-#define	IFNET_GET_LOCAL_PORTS_WILDCARDOK	0x1
-#define	IFNET_GET_LOCAL_PORTS_NOWAKEUPOK	0x2
-#define	IFNET_GET_LOCAL_PORTS_TCPONLY		0x4
-#define	IFNET_GET_LOCAL_PORTS_UDPONLY		0x8
+#define	IFNET_GET_LOCAL_PORTS_WILDCARDOK	0x01
+#define	IFNET_GET_LOCAL_PORTS_NOWAKEUPOK	0x02
+#define	IFNET_GET_LOCAL_PORTS_TCPONLY		0x04
+#define	IFNET_GET_LOCAL_PORTS_UDPONLY		0x08
+#define	IFNET_GET_LOCAL_PORTS_RECVANYIFONLY	0x10
+#define	IFNET_GET_LOCAL_PORTS_EXTBGIDLEONLY	0x20
+#define	IFNET_GET_LOCAL_PORTS_ACTIVEONLY	0x40
 /*
 	@function ifnet_get_local_ports_extended
 	@discussion Returns a bitfield indicating which local ports of the
@@ -3137,10 +3172,10 @@ extern errno_t ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield);
 	@param protocol The protocol family of the sockets.  PF_UNSPEC (0)
 		means all protocols, otherwise PF_INET or PF_INET6.
 	@param flags A bitwise of the following flags:
-		IFNET_GET_LOCAL_PORTS_EXTENDED_WILDCARDOK: When bit is set,
+		IFNET_GET_LOCAL_PORTS_WILDCARDOK: When bit is set,
 		the list of local ports should include those that are 
 		used by sockets that aren't bound to any local address.
-		IFNET_GET_LOCAL_PORTS_EXTENDED_NOWAKEUPOK: When bit is
+		IFNET_GET_LOCAL_PORTS_NOWAKEUPOK: When bit is
 		set, the list of local ports should return all sockets 
 		including the ones that do not need a wakeup from sleep. 
 		Sockets that do not want to wake from sleep are marked 
@@ -3150,6 +3185,15 @@ extern errno_t ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield);
 		IFNET_GET_LOCAL_PORTS_UDPONLY: When bit is set, the list 
 		of local ports should return the ports used by UDP sockets.
 		only.
+		IFNET_GET_LOCAL_PORTS_RECVANYIFONLY: When bit is set, the
+		port is in the list only if the socket has the option
+		SO_RECV_ANYIF set
+		IFNET_GET_LOCAL_PORTS_EXTBGIDLEONLY: When bit is set, the
+		port is in the list only if the socket has the option
+		SO_EXTENDED_BK_IDLE set
+		IFNET_GET_LOCAL_PORTS_ACTIVETCPONLY: When bit is set, the
+		port is in the list only if the socket is not in a final TCP
+		state or the connection is not idle in a final TCP state
 	@param bitfield A pointer to 8192 bytes.
 	@result Returns 0 on success.
  */
@@ -3303,37 +3347,110 @@ ifnet_set_delegate(ifnet_t ifp, ifnet_t delegated_ifp);
 extern errno_t
 ifnet_get_delegate(ifnet_t ifp, ifnet_t *pdelegated_ifp);
 
-/******************************************************************************/
-/* for interface IPSec keepalive offload									  */
-/******************************************************************************/
+/*************************************************************************/
+/* for interface keep alive offload support                              */
+/*************************************************************************/
 
-#define IPSEC_OFFLOAD_FRAME_DATA_SIZE 128
-struct ipsec_offload_frame {
-	u_int8_t data[IPSEC_OFFLOAD_FRAME_DATA_SIZE]; /* Frame bytes */
-	u_int16_t length; /* Number of valid bytes in data, including offset */
-	u_int16_t interval; /* Interval in seconds */
+#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE	128
+struct ifnet_keepalive_offload_frame {
+	u_int8_t data[IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE]; /* data bytes */
+#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_IPSEC	0x0
+#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_AIRPLAY	0x1
+	u_int8_t type;	/* type of application */
+	u_int8_t length; /* Number of valid data bytes including offset */
+	u_int16_t interval; /* Keep alive interval in seconds */
+#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_ETHERTYPE_IPV4	0x0
+#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_ETHERTYPE_IPV6	0x1
+	u_int8_t ether_type; /* Ether type IPv4 or IPv6 */
+	u_int8_t __reserved[3];	/* For future */
 };
 
 /*
-	@function ifnet_get_ipsec_offload_frames
-	@discussion Fills out frames_array with IP packets to send at periodic
-		intervals on behalf of IPSec.
-	@param ifp The interface to send the frames out on. This is used to
-		select which IPSec SAs should generate the packets.
-	@param frames_array An array of ipsec_offload_frame structs. This is
-		allocated by the caller, and has frames_array_count frames of valid
-		memory.
-	@param frames_array_count The number of valid frames allocated in
-		frames_array.
-	@param frame_data_offset The offset in bytes into each frame data at
-		which IPSec should write the IP header and payload.
-	@param used_frames_count The returned number of frames that were filled
-		out with valid information.
+	@function ifnet_get_keepalive_offload_frames
+	@discussion Fills out frames_array with IP packets to send at
+		periodic intervals as Keep-alive or heartbeat messages.
+		These are UDP datagrams. This can be used to offload
+		IPSec keep alives.
+	@param ifp The interface to send frames out on. This is used to
+		select which sockets or IPSec SAs should generate the
+		packets.
+	@param frames_array An array of ifnet_keepalive_offload_frame
+		structs. This is allocated by the caller, and has
+		frames_array_count frames of valid memory.
+	@param frames_array_count The number of valid frames allocated
+		by the caller in frames_array
+	@param frame_data_offset The offset in bytes into each frame data
+		at which the IPv4/IPv6 packet and payload should be written
+	@param used_frames_count The returned number of frames that were
+		filled out with valid information.
 	@result Returns 0 on success, error number otherwise.
+*/
+extern errno_t ifnet_get_keepalive_offload_frames(ifnet_t ifp,
+    struct ifnet_keepalive_offload_frame *frames_array,
+    u_int32_t frames_array_count, size_t frame_data_offset,
+    u_int32_t *used_frames_count);
+
+/*************************************************************************/
+/* Link level notifications                                              */
+/*************************************************************************/
+/*
+	@function ifnet_link_status_report
+	@discussion A KPI to let the driver provide link specific
+		status information to the protocol stack. The KPI will
+		copy contents from the buffer based on the version and
+		length provided by the driver. The contents of the buffer
+		will be read but will not be modified.
+	@param ifp The interface that is generating the report
+	@param buffer Buffer containing the link specific information 
+		for this interface. It is the caller's responsibility
+		to free this buffer.
+	@param buffer_len Valid length of the buffer provided by the caller
+	@result Returns 0 on success, error number otherwise.
+*/
+extern errno_t ifnet_link_status_report(ifnet_t ifp, const void *buffer,
+	size_t buffer_len);
+
+/*************************************************************************/
+/* Packet preamble                                                       */
+/*************************************************************************/
+/*!
+	@function ifnet_set_packetpreamblelen
+	@discussion
+		Allows a driver to specify a leading space to be
+		reserved in front of the link layer header.
+		The preamble is logically adjoining the link layer which
+		itself is logically contiguous to the network protocol header
+		(e.g. IP).
+		There is no guarantee that packets being sent to the
+		driver has leading space reserved for the preamble.
+		There is also no guarantee the packet will be laid out in a
+		contiguous block of memory.
+		The network protocol header is 32 bit aligned and this dictates
+		the alignment of the link layer header which in turn affects
+		the alignment the packet preamble.
+		This function is intended to be called by the driver. A kext
+		must not call this function on an interface the kext does not
+		own.
+	@param interface The interface.
+	@param len The length of the packet preamble.
+	@result 0 on success otherwise the errno error.
  */
-extern errno_t ifnet_get_ipsec_offload_frames(ifnet_t ifp,
-	struct ipsec_offload_frame *frames_array, u_int32_t frames_array_count,
-	size_t frame_data_offset, u_int32_t *used_frames_count);
+extern errno_t ifnet_set_packetpreamblelen(ifnet_t interface, u_int32_t len);
+
+/*!
+	@function ifnet_packetpreamblelen
+	@param interface The interface.
+	@result The current packet preamble length.
+ */
+extern u_int32_t ifnet_packetpreamblelen(ifnet_t interface);
+
+/*!
+	@function ifnet_maxpacketpreamblelen
+	@result The maximum packet preamble length supported by the system
+ */
+extern u_int32_t ifnet_maxpacketpreamblelen(void);
+
+
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS

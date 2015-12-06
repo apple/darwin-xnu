@@ -855,17 +855,18 @@ extern uint16_t b_sum16(const void *buf, int len);
 /* exported for ApplicationFirewall */
 extern int in_localaddr(struct in_addr);
 extern int inaddr_local(struct in_addr);
+
+extern char	*inet_ntoa(struct in_addr);
+extern char	*inet_ntoa_r(struct in_addr ina, char *buf,
+    size_t buflen);
+extern int	inet_pton(int af, const char *, void *);
 #endif /* KERNEL_PRIVATE */
 
 #define MAX_IPv4_STR_LEN	16
 #define MAX_IPv6_STR_LEN	64
 
 extern int	 inet_aton(const char *, struct in_addr *); /* in libkern */
-extern char	*inet_ntoa(struct in_addr); /* in libkern */
-extern char	*inet_ntoa_r(struct in_addr ina, char *buf,
-    size_t buflen); /* in libkern */
 extern const char *inet_ntop(int, const void *, char *, socklen_t); /* in libkern*/
-extern int	inet_pton(int af, const char *, void *); /* in libkern */
 #endif /* KERNEL */
 
 #ifndef KERNEL

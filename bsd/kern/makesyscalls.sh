@@ -502,7 +502,7 @@ s/\$//g
 							 argtype[i] == "sigset_t" || argtype[i] == "gid_t" || argtype[i] == "unsigned int" ||
 							 argtype[i] == "mode_t" || argtype[i] == "key_t" ||
 							 argtype[i] == "mach_port_name_t" || argtype[i] == "au_asid_t" ||
-							 argtype[i] == "associd_t" || argtype[i] == "connid_t") {
+							 argtype[i] == "sae_associd_t" || argtype[i] == "sae_connid_t") {
 						munge32 = munge32 "w"
 						size32 += 4
 					}
@@ -582,7 +582,7 @@ s/\$//g
 			}
 		}
 
-		printf("#if CONFIG_REQUIRES_U32_MUNGING\n") > sysent
+		printf("#if CONFIG_REQUIRES_U32_MUNGING || (__arm__ && (__BIGGEST_ALIGNMENT__ > 4))\n") > sysent
 		printf("\t{ \(sy_call_t *\)%s, %s, %s, %s, %s},", 
 				tempname, munge32, munge_ret, argssize, size32) > sysent
 		linesize = length(tempname) + length(munge32) + \
@@ -673,7 +673,7 @@ s/\$//g
 		printf("};\n") > sysent
 		printf("int	nsysent = sizeof(sysent) / sizeof(sysent[0]);\n") > sysent
 		printf("/* Verify that NUM_SYSENT reflects the latest syscall count */\n") > sysent
-		printf("int	nsysent_size_check[((sizeof(sysent) / sizeof(sysent[0])) == NUM_SYSENT) ? 1 : -1] __unused;\n") > sysent
+		printf("_Static_assert(((sizeof(sysent) / sizeof(sysent[0])) == NUM_SYSENT), \"NUM_SYSENT needs to be updated to match syscall count\");\n") > sysent
 
 		printf("};\n") > syscallnamestempfile
 		printf("#define\t%sMAXSYSCALL\t%d\n", syscallprefix, syscall_num) \

@@ -80,5 +80,6 @@ enum PMLogEnum {
     kPMLogSetPinGroup,              // 52	0x050700d0 - NOT USED
     kPMLogIdleCancel,               // 53	0x050700d4 - device unidle during change
     kPMLogSleepWakeTracePoint,      // 54   0x050700d8 - kIOPMTracePoint markers
+    kPMLogQuiescePowerTree,         // 55   0x050700dc
     kIOPMlogLastEvent
 };

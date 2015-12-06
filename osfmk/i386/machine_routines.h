@@ -312,10 +312,6 @@ void bzero_phys(
 /* Bytes available on current stack */
 vm_offset_t ml_stack_remaining(void);
 
-#if CONFIG_COUNTERS
-void ml_get_csw_threads(thread_t * /*old*/, thread_t * /*new*/);
-#endif /* CONFIG_COUNTERS */
-
 __END_DECLS
 
 #ifdef	XNU_KERNEL_PRIVATE
@@ -335,5 +331,9 @@ boolean_t ml_timer_forced_evaluation(void);
 void ml_gpu_stat_update(uint64_t);
 uint64_t ml_gpu_stat(thread_t);
 boolean_t ml_recent_wake(void);
+
+extern uint64_t reportphyreaddelayabs;
+extern uint32_t reportphyreadosbt;
+
 #endif /* XNU_KERNEL_PRIVATE */
 #endif /* _I386_MACHINE_ROUTINES_H_ */

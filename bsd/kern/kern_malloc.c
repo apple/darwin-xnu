@@ -280,7 +280,7 @@ const char *memname[] = {
 	"mactemp",      /* 104 M_MACTEMP */
 	"sbuf",         /* 105 M_SBUF */
 	"extattr",      /* 106 M_EXTATTR */
-	"lctx",         /* 107 M_LCTX */
+	"select",       /* 107 M_SELECT */
 #if TRAFFIC_MGT
 	"traffic_mgt",   /* 108 M_TRAFFIC_MGT */
 #else
@@ -317,6 +317,7 @@ const char *memname[] = {
 #endif
 	"fdvnodedata"	/* 122 M_FD_VN_DATA */
 	"fddirbuf",	/* 123 M_FD_DIRBUF */
+	"netagent",	/* 124 M_NETAGENT */
 	""
 };
 
@@ -484,7 +485,7 @@ struct kmzones {
 	{ 0,		KMZ_MALLOC, FALSE },		/* 104 M_MACTEMP */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 105 M_SBUF */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 106 M_HFS_EXTATTR */
-	{ 0,		KMZ_MALLOC, FALSE },		/* 107 M_LCTX */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 107 M_SELECT */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 108 M_TRAFFIC_MGT */
 #if HFS_COMPRESSION
 	{ SOS(decmpfs_cnode),KMZ_CREATEZONE , FALSE},	/* 109 M_DECMPFS_CNODE */
@@ -514,6 +515,9 @@ struct kmzones {
 	{ 0,		KMZ_MALLOC, FALSE },		/* 120 M_NECP_SOCKET_POLICY */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 121 M_NECP_IP_POLICY */
 #endif /* NECP */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 122 M_FD_VN_DATA */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 123 M_FD_DIRBUF */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 124 M_NETAGENT */
 #undef	SOS
 #undef	SOX
 };
@@ -580,11 +584,28 @@ struct _mhead {
 	char	dat[0];
 };
 
+
 void *
-_MALLOC(
+_MALLOC_external(
+	size_t		size,
+	int		type,
+	int		flags);
+void *
+_MALLOC_external(
 	size_t		size,
 	int		type,
 	int		flags)
+{
+    static vm_allocation_site_t site = { VM_KERN_MEMORY_KALLOC, VM_TAG_BT };
+    return (__MALLOC(size, type, flags, &site));
+}
+
+void *
+__MALLOC(
+	size_t		size,
+	int		type,
+	int		flags,
+	vm_allocation_site_t *site)
 {
 	struct _mhead	*hdr = NULL;
 	size_t		memsize = sizeof (*hdr) + size;
@@ -599,7 +620,7 @@ _MALLOC(
                if (size > memsize)   /* overflow detected */
                        return (NULL);
                else
-                       hdr = (void *)kalloc_noblock(memsize); 
+                       hdr = (void *)kalloc_canblock(memsize, FALSE, site); 
 	} else {
                if (size > memsize) {
                        /*
@@ -610,7 +631,7 @@ _MALLOC(
                        panic("_MALLOC: overflow detected, size %llu ", (uint64_t) size);
                }
                else
-                       hdr = (void *)kalloc(memsize);
+                       hdr = (void *)kalloc_canblock(memsize, TRUE, site);
 
 	       if (hdr == NULL) {
 
@@ -656,11 +677,12 @@ _FREE(
 }
 
 void *
-_REALLOC(
+__REALLOC(
 	void		*addr,
 	size_t		size,
 	int		type,
-	int		flags)
+	int		flags,
+	vm_allocation_site_t *site)
 {
 	struct _mhead	*hdr;
 	void		*newaddr;
@@ -668,10 +690,10 @@ _REALLOC(
 
 	/* realloc(NULL, ...) is equivalent to malloc(...) */
 	if (addr == NULL)
-		return (_MALLOC(size, type, flags));
+		return (__MALLOC(size, type, flags, site));
 
 	/* Allocate a new, bigger (or smaller) block */
-	if ((newaddr = _MALLOC(size, type, flags)) == NULL)
+	if ((newaddr = __MALLOC(size, type, flags, site)) == NULL)
 		return (NULL);
 
 	hdr = addr;
@@ -686,10 +708,25 @@ _REALLOC(
 }
 
 void *
-_MALLOC_ZONE(
+_MALLOC_ZONE_external(
+	size_t		size,
+	int		type,
+	int		flags);
+void *
+_MALLOC_ZONE_external(
 	size_t		size,
 	int		type,
 	int		flags)
+{
+    return (__MALLOC_ZONE(size, type, flags, NULL));
+}
+
+void *
+__MALLOC_ZONE(
+	size_t		size,
+	int		type,
+	int		flags,
+	vm_allocation_site_t *site)
 {
 	struct kmzones	*kmz;
 	void		*elem;
@@ -713,9 +750,9 @@ _MALLOC_ZONE(
 		}
 	else
 		if (flags & M_NOWAIT) {
-			elem = (void *)kalloc_noblock(size);
+			elem = (void *)kalloc_canblock(size, FALSE, site);
 		} else {
-			elem = (void *)kalloc(size);
+			elem = (void *)kalloc_canblock(size, TRUE, site);
 		}
 
 	return (elem);

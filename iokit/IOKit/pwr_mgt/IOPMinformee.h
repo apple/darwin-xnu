@@ -41,7 +41,7 @@ public:
 
     void initialize( IOService * theObject );
 
-    void free( void );
+    void free( void ) APPLE_KEXT_OVERRIDE;
 
 public:
     IOService *     whatObject;     // interested driver  

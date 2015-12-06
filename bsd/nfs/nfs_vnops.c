@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -636,7 +636,10 @@ nfs_vnop_access(
 	 * Does our cached result allow us to give a definite yes to
 	 * this request?
 	 */
-	uid = kauth_cred_getuid(vfs_context_ucred(ctx));
+	if (auth_is_kerberized(np->n_auth) || auth_is_kerberized(nmp->nm_auth))
+		uid = nfs_cred_getasid2uid(vfs_context_ucred(ctx));
+	else
+		uid = kauth_cred_getuid(vfs_context_ucred(ctx));
 	slot = nfs_node_access_slot(np, uid, 0);
 	dorpc = 1;
 	if (access == 0) {
@@ -6065,6 +6068,8 @@ nfs3_lookup_rpc_async_finish(
 	struct nfsm_chain nmrep;
 
 	nmp = NFSTONMP(dnp);
+	if (nmp == NULL)
+		return (ENXIO);
 	nfsvers = nmp->nm_vers;
 
 	nfsm_chain_null(&nmrep);
@@ -6906,6 +6911,8 @@ nfs_vnop_ioctl(
 	vfs_context_t ctx = ap->a_context;
 	vnode_t vp = ap->a_vp;
 	struct nfsmount *mp = VTONMP(vp);
+	struct user_nfs_gss_principal gprinc;
+	uint32_t len;
 	int error = ENOTTY;
 
 	if (mp == NULL)
@@ -6919,8 +6926,78 @@ nfs_vnop_ioctl(
 		error = nfs_flush(VTONFS(vp), MNT_WAIT, vfs_context_thread(ctx), 0);
 		break;
 	case NFS_FSCTL_DESTROY_CRED:
+		if (!auth_is_kerberized(mp->nm_auth))
+			return (ENOTSUP);
 		error = nfs_gss_clnt_ctx_remove(mp, vfs_context_ucred(ctx));
 		break;
+	case NFS_FSCTL_SET_CRED:
+		if (!auth_is_kerberized(mp->nm_auth))
+			return (ENOTSUP);
+		NFS_DBG(NFS_FAC_GSS, 7, "Enter NFS_FSCTL_SET_CRED (proc %d) data = %p\n", vfs_context_is64bit(ctx), (void *)ap->a_data);
+		if (vfs_context_is64bit(ctx)) {
+			gprinc = *(struct user_nfs_gss_principal *)ap->a_data;
+		} else {
+			struct nfs_gss_principal *tp;
+			tp = (struct nfs_gss_principal *)ap->a_data;
+			gprinc.princlen = tp->princlen;
+			gprinc.nametype = tp->nametype;
+			gprinc.principal = CAST_USER_ADDR_T(tp->principal);
+		}
+		if (gprinc.princlen > MAXPATHLEN)
+			return (EINVAL);
+		NFS_DBG(NFS_FAC_GSS, 7, "Received principal length %d name type = %d\n", gprinc.princlen, gprinc.nametype);
+		uint8_t *p;
+		MALLOC(p, uint8_t *, gprinc.princlen+1, M_TEMP, M_WAITOK|M_ZERO);
+		if (p == NULL)
+			return (ENOMEM);
+		error = copyin(gprinc.principal, p, gprinc.princlen);
+		if (error) {
+			NFS_DBG(NFS_FAC_GSS, 7, "NFS_FSCTL_SET_CRED could not copy in princiapl data of len %d: %d\n",
+				gprinc.princlen, error);
+			FREE(p, M_TEMP);
+			return (error);
+		}
+		NFS_DBG(NFS_FAC_GSS, 7, "Seting credential to principal %s\n", p);
+		error = nfs_gss_clnt_ctx_set_principal(mp, ctx, p, gprinc.princlen, gprinc.nametype);
+		NFS_DBG(NFS_FAC_GSS, 7, "Seting credential to principal %s returned %d\n", p, error);
+		FREE(p, M_TEMP);
+		break;
+	case NFS_FSCTL_GET_CRED:
+		if (!auth_is_kerberized(mp->nm_auth))
+			return (ENOTSUP);
+		error = nfs_gss_clnt_ctx_get_principal(mp, ctx, &gprinc);
+		if (error)
+			break;
+		if (vfs_context_is64bit(ctx)) {
+			struct user_nfs_gss_principal *upp = (struct user_nfs_gss_principal *)ap->a_data;
+			len = upp->princlen;
+			if (gprinc.princlen < len)
+				len = gprinc.princlen;
+			upp->princlen = gprinc.princlen;
+			upp->nametype = gprinc.nametype;
+			upp->flags = gprinc.flags;
+			if (gprinc.principal)
+				error = copyout((void *)gprinc.principal, upp->principal, len);
+			else
+				upp->principal = USER_ADDR_NULL;
+		} else {
+			struct nfs_gss_principal *u32pp = (struct nfs_gss_principal *)ap->a_data;
+			len = u32pp->princlen;
+			if (gprinc.princlen < len)
+				len = gprinc.princlen;
+			u32pp->princlen = gprinc.princlen;
+			u32pp->nametype = gprinc.nametype;
+			u32pp->flags = gprinc.flags;
+			if (gprinc.principal)
+				error = copyout((void *)gprinc.principal, u32pp->principal, len);
+			else
+				u32pp->principal = (user32_addr_t)0;
+		}
+		if (error) {
+			NFS_DBG(NFS_FAC_GSS, 7, "NFS_FSCTL_GET_CRED could not copy out princiapl data of len %d: %d\n",
+				gprinc.princlen, error);
+		}
+		FREE(gprinc.principal, M_TEMP);
 	}
 
 	return (error);

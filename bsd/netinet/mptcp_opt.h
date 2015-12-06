@@ -41,7 +41,7 @@
 #define	MPTCP_CAPABLE_RETRIES	(2)
 
 __BEGIN_DECLS
-extern int tcp_do_mptcp_options(struct tcpcb *, u_char *, struct tcphdr *,
+extern void tcp_do_mptcp_options(struct tcpcb *, u_char *, struct tcphdr *,
     struct tcpopt *, int);
 extern unsigned mptcp_setup_syn_opts(struct socket *, int, u_char*, unsigned);
 extern unsigned mptcp_setup_join_ack_opts(struct tcpcb *, u_char*, unsigned);

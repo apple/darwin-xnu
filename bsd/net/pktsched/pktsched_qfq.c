@@ -977,6 +977,7 @@ qfq_dequeue(struct qfq_if *qif, cqdq_op_t op)
 #endif /* QFQ_DEBUG */
 
 	IFCQ_DEC_LEN(ifq);
+	IFCQ_DEC_BYTES(ifq, len);
 	if (qempty(&cl->cl_q))
 		cl->cl_period++;
 	PKTCNTR_ADD(&cl->cl_xmitcnt, 1, len);
@@ -1122,6 +1123,7 @@ qfq_enqueue(struct qfq_if *qif, struct qfq_class *cl, struct mbuf *m,
 		}
 	}
 	IFCQ_INC_LEN(ifq);
+	IFCQ_INC_BYTES(ifq, len);
 
 #if QFQ_DEBUG
 	qif->qif_queued++;

@@ -87,13 +87,13 @@ $(SOBJS): .SFLAGS
 $(COMPONENT).filelist: $(OBJS)
 	$(_v)for hib_file in ${HIB_FILES};		\
 	do	\
-                $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} ; \
-                mv $${hib_file}__ $${hib_file} ; \
+                $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
+                mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
 	@echo LDFILELIST $(COMPONENT)
-	$(_v)( for obj in ${OBJS}; do	\
+	$(_v)for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
-	done; ) > $(COMPONENT).filelist
+	done > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist
 

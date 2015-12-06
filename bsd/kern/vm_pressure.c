@@ -360,7 +360,7 @@ void vm_find_pressure_candidate(void)
 		goto exit;
 	}
 
-	VM_DEBUG_EVENT(vm_pageout_scan, VM_PRESSURE_EVENT, DBG_FUNC_NONE, target_pid, resident_max, 0, 0);
+	VM_DEBUG_CONSTANT_EVENT(vm_pressure_event, VM_PRESSURE_EVENT, DBG_FUNC_NONE, target_pid, resident_max, 0, 0);
 	VM_PRESSURE_DEBUG(1, "[vm_pressure] sending event to pid %d with %u resident\n", kn_max->kn_kq->kq_p->p_pid, resident_max);
 
 	KNOTE_DETACH(&vm_pressure_klist, kn_max);
@@ -475,6 +475,7 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 		struct task*		t = TASK_NULL;
 		int			curr_task_importance = 0;
 		boolean_t		consider_knote = FALSE;
+		boolean_t		privileged_listener = FALSE;
 
 		p = kn->kn_kq->kq_p;
 		proc_list_lock();
@@ -528,7 +529,42 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 
 		curr_task_importance = task_importance_estimate(t);
 
-                /* 
+		/*
+		 * Privileged listeners are only considered in the multi-level pressure scheme
+		 * AND only if the pressure is increasing.
+		 */
+		if (level > 0) {
+
+			if (task_has_been_notified(t, level) == FALSE) {
+
+				/*
+				 * Is this a privileged listener?
+				 */
+				if (task_low_mem_privileged_listener(t, FALSE, &privileged_listener) == 0) {
+
+					if (privileged_listener) {
+						kn_max = kn;
+						proc_rele(p);
+						goto done_scanning;
+					}
+				}
+			} else {
+				proc_rele(p);
+				continue;
+			}
+		} else if (level == 0) {
+
+			/*
+			 * Task wasn't notified when the pressure was increasing and so
+			 * no need to notify it that the pressure is decreasing.
+			 */
+			if ((task_has_been_notified(t, kVMPressureWarning) == FALSE) && (task_has_been_notified(t, kVMPressureCritical) == FALSE)) {
+				proc_rele(p);
+				continue;
+			}
+		}
+
+		/*
                  * We don't want a small process to block large processes from 
                  * being notified again. <rdar://problem/7955532>
                  */
@@ -551,9 +587,7 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 						 * b) has importance equal to that of the current selected process but is larger
 						 */
 
-						if (task_has_been_notified(t, level) == FALSE) {
-							consider_knote = TRUE;
-						}
+						consider_knote = TRUE;
 					}
 				} else {
 					if ((curr_task_importance > selected_task_importance) ||
@@ -566,9 +600,7 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 						 * b) has importance equal to that of the current selected process but is larger
 						 */
 
-						if (task_has_been_notified(t, level) == FALSE) {
-							consider_knote = TRUE;
-						}
+						consider_knote = TRUE;
 					}
 				}
 			} else if (level == 0) {
@@ -578,9 +610,7 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 				if ((curr_task_importance > selected_task_importance) ||
 				    ((curr_task_importance == selected_task_importance) && (resident_size > resident_max))) {
 
-					if ((task_has_been_notified(t, kVMPressureWarning) == TRUE) || (task_has_been_notified(t, kVMPressureCritical) == TRUE)) {
-						consider_knote = TRUE;
-					}
+					consider_knote = TRUE;
 				}
 			} else if (level == -1) {
 
@@ -606,8 +636,10 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 		proc_rele(p);
         }
 
+done_scanning:
 	if (kn_max) {
-        	VM_PRESSURE_DEBUG(1, "[vm_pressure] sending event to pid %d with %u resident\n", kn_max->kn_kq->kq_p->p_pid, resident_max);
+		VM_DEBUG_CONSTANT_EVENT(vm_pressure_event, VM_PRESSURE_EVENT, DBG_FUNC_NONE, kn_max->kn_kq->kq_p->p_pid, resident_max, 0, 0);
+		VM_PRESSURE_DEBUG(1, "[vm_pressure] sending event to pid %d with %u resident\n", kn_max->kn_kq->kq_p->p_pid, resident_max);
 	}
 
 	return kn_max;

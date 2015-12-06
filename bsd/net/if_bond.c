@@ -801,6 +801,10 @@ link_speed(int active)
     case IFM_10G_SR:
     case IFM_10G_LR:
 	return (10000);
+    case IFM_2500_T:
+	return (2500);
+    case IFM_5000_T:
+	return (5000);
     }
 }
 
@@ -866,11 +870,10 @@ bond_globals_create(lacp_system_priority sys_pri,
 {
     bond_globals_ref	b;
 
-    b = _MALLOC(sizeof(*b), M_BOND, M_WAITOK);
+    b = _MALLOC(sizeof(*b), M_BOND, M_WAITOK | M_ZERO);
     if (b == NULL) {
 	return (NULL);
     }
-    bzero(b, sizeof(*b));
     TAILQ_INIT(&b->ifbond_list);
     b->system = *sys;
     b->system_priority = sys_pri;
@@ -1089,11 +1092,10 @@ bond_clone_create(struct if_clone * ifc, u_int32_t unit, __unused void *params)
 		return (error);
 	}
 	
-	ifb = _MALLOC(sizeof(ifbond), M_BOND, M_WAITOK);
+	ifb = _MALLOC(sizeof(ifbond), M_BOND, M_WAITOK | M_ZERO);
 	if (ifb == NULL) {
 		return (ENOMEM);
 	}
-	bzero(ifb, sizeof(*ifb));
 	
 	ifbond_retain(ifb);
 	TAILQ_INIT(&ifb->ifb_port_list);
@@ -1818,12 +1820,11 @@ bondport_create(struct ifnet * port_ifp, lacp_port_priority priority,
     lacp_actor_partner_state	s;
 
     *ret_error = 0;
-    p = _MALLOC(sizeof(*p), M_BOND, M_WAITOK);
+    p = _MALLOC(sizeof(*p), M_BOND, M_WAITOK | M_ZERO);
     if (p == NULL) {
 	*ret_error = ENOMEM;
 	return (NULL);
     }
-    bzero(p, sizeof(*p));
     multicast_list_init(&p->po_multicast);
     if ((u_int32_t)snprintf(p->po_name, sizeof(p->po_name), "%s%d",
 			 ifnet_name(port_ifp), ifnet_unit(port_ifp)) 

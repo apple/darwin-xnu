@@ -198,21 +198,23 @@ mp_pcbinfo_detach(struct mppcbinfo *mppi)
 int
 mp_pcballoc(struct socket *so, struct mppcbinfo *mppi)
 {
-	struct mppcb *mpp;
+	struct mppcb *mpp = NULL;
 
 	VERIFY(sotomppcb(so) == NULL);
 
 	lck_mtx_lock(&mppi->mppi_lock);
 	if (mppi->mppi_count >= mptcp_socket_limit) {
 		lck_mtx_unlock(&mppi->mppi_lock);
-		mptcplog((LOG_ERR, "Reached MPTCP socket limit."));
+		mptcplog((LOG_ERR, "MPTCP Socket: Reached MPTCP socket limit."),
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 		return (ENOBUFS);
 	}
 	lck_mtx_unlock(&mppi->mppi_lock);
 
 	mpp = zalloc(mppi->mppi_zone);
-	if (mpp == NULL)
+	if (mpp == NULL) {
 		return (ENOBUFS);
+	}
 
 	bzero(mpp, mppi->mppi_size);
 	lck_mtx_init(&mpp->mpp_lock, mppi->mppi_lock_grp, mppi->mppi_lock_attr);
@@ -220,6 +222,12 @@ mp_pcballoc(struct socket *so, struct mppcbinfo *mppi)
 	mpp->mpp_state = MPPCB_STATE_INUSE;
 	mpp->mpp_socket = so;
 	so->so_pcb = mpp;
+
+	if (NULL == mppi->mppi_pcbe_create(so, mpp)) {
+		lck_mtx_destroy(&mpp->mpp_lock, mppi->mppi_lock_grp);
+		zfree(mppi->mppi_zone, mpp);
+		return (ENOBUFS);
+	}
 
 	lck_mtx_lock(&mppi->mppi_lock);
 	mpp->mpp_flags |= MPP_ATTACHED;

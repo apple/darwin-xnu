@@ -94,9 +94,9 @@ protected:
     /*
      * OSCollectionIterator interfaces.
      */
-    virtual unsigned int iteratorSize() const;
-    virtual bool initIterator(void * iterator) const;
-    virtual bool getNextObjectForIterator(void * iterator, OSObject ** ret) const;
+    virtual unsigned int iteratorSize() const APPLE_KEXT_OVERRIDE;
+    virtual bool initIterator(void * iterator) const APPLE_KEXT_OVERRIDE;
+    virtual bool getNextObjectForIterator(void * iterator, OSObject ** ret) const APPLE_KEXT_OVERRIDE;
 
     struct ExpansionData { };
     
@@ -390,7 +390,7 @@ public:
     * release@/link</code>
     * instead.
     */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -402,7 +402,7 @@ public:
     * @result
     * The current number of objects within the set.
     */
-    virtual unsigned int getCount() const;
+    virtual unsigned int getCount() const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -427,7 +427,7 @@ public:
     * //apple_ref/cpp/instm/OSSet/ensureCapacity/virtualunsignedint/(unsignedint)
     * ensureCapacity@/link</code>.
     */
-    virtual unsigned int getCapacity() const;
+    virtual unsigned int getCapacity() const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -443,7 +443,7 @@ public:
     * An OSSet allocates storage for objects in multiples
     * of the capacity increment.
     */
-    virtual unsigned int getCapacityIncrement() const;
+    virtual unsigned int getCapacityIncrement() const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -461,7 +461,7 @@ public:
     * of the capacity increment.
     * Calling this function does not immediately reallocate storage.
     */
-    virtual unsigned int setCapacityIncrement(unsigned increment);
+    virtual unsigned int setCapacityIncrement(unsigned increment) APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -486,7 +486,7 @@ public:
     *
     * There is no way to reduce the capacity of an OSSet.
     */
-    virtual unsigned int ensureCapacity(unsigned int newCapacity);
+    virtual unsigned int ensureCapacity(unsigned int newCapacity) APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -499,7 +499,7 @@ public:
     * The set's capacity (and therefore direct memory consumption)
     * is not reduced by this function.
     */
-    virtual void flushCollection();
+    virtual void flushCollection() APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -698,7 +698,7 @@ public:
     * An OSSet object is considered equal to another object if the other object
     * is derived from OSSet and compares equal as a set.
     */
-    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -713,7 +713,7 @@ public:
     * @result
     * <code>true</code> if serialization succeeds, <code>false</code> if not.
     */
-    virtual bool serialize(OSSerialize * serializer) const;
+    virtual bool serialize(OSSerialize * serializer) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -739,7 +739,7 @@ public:
     * Child collections' options are changed only if the receiving set's
     * options actually change.
     */
-    virtual unsigned setOptions(unsigned options, unsigned mask, void * context = 0);
+    virtual unsigned setOptions(unsigned options, unsigned mask, void * context = 0) APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -764,7 +764,7 @@ public:
     * Objects that are not derived from OSCollection are retained
     * rather than copied.
     */
-    OSCollection *copyCollection(OSDictionary *cycleDict = 0);
+    OSCollection *copyCollection(OSDictionary *cycleDict = 0) APPLE_KEXT_OVERRIDE;
 
     OSMetaClassDeclareReservedUnused(OSSet, 0);
     OSMetaClassDeclareReservedUnused(OSSet, 1);

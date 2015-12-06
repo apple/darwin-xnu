@@ -2,26 +2,25 @@
  *  ccn.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 7/25/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 11/16/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2013,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
 #ifndef _CORECRYPTO_CCN_H_
 #define _CORECRYPTO_CCN_H_
 
-#include <corecrypto/cc_config.h>
-#include <corecrypto/cc_priv.h>  /* TODO: Get rid of this include in this header. */
+#include <corecrypto/cc.h>
 #include <stdint.h>
 #include <stdarg.h>
-
 
 typedef uint8_t cc_byte;
 typedef size_t cc_size;
 
 #if  CCN_UNIT_SIZE == 8
 typedef uint64_t cc_unit;          // 64 bit unit
-//typedef uint128_t cc_dunit;         // 128 bit double width unit
+typedef unsigned cc_dunit __attribute__((mode(TI)));         // 128 bit double width unit
 #define CCN_LOG2_BITS_PER_UNIT  6  // 2^6 = 64 bits
 #define CC_UNIT_C(x) UINT64_C(x)
 #elif  CCN_UNIT_SIZE == 4
@@ -56,6 +55,10 @@ typedef const cc_unit *cc2np2_in_t;    // 2 * n + 2 unit long mp
 #define CCN_UNIT_BITS  (sizeof(cc_unit) * 8)
 #define CCN_UNIT_MASK  ((cc_unit)~0)
 
+typedef struct {
+    cc_unit *start;      // First cc_unit of the workspace
+    cc_unit *end;        // address and beyond NOT TO BE TOUCHED
+} cc_ws,*cc_ws_t;
 
 /* Conversions between n sizeof and bits */
 
@@ -84,6 +87,7 @@ typedef const cc_unit *cc2np2_in_t;    // 2 * n + 2 unit long mp
 #define ccn_bit(_ccn_, _k_) ({__typeof__ (_k_) __k = (_k_); \
     1 & ((_ccn_)[__k / CCN_UNIT_BITS] >> (__k & (CCN_UNIT_BITS - 1)));})
 
+/* Set the value of bit _k_ of _ccn_ to the value _v_  */
 #define ccn_set_bit(_ccn_, _k_, _v_) ({__typeof__ (_k_) __k = (_k_);        \
     if (_v_)                                                                \
         (_ccn_)[__k/CCN_UNIT_BITS] |= CC_UNIT_C(1) << (__k & (CCN_UNIT_BITS - 1));     \
@@ -156,12 +160,12 @@ typedef const cc_unit *cc2np2_in_t;    // 2 * n + 2 unit long mp
  64 bit units respectively. */
 #if CCN_UNIT_SIZE == 8
 
-#define ccn64_32(a1,a0) (((cc_unit)a1) << 32 | ((cc_unit)a0))
+#define ccn64_32(a1,a0) (((const cc_unit)a1) << 32 | ((const cc_unit)a0))
 #define ccn32_32(a0) a0
 #if __LITTLE_ENDIAN__
-#define ccn32_32_parse(p,i) (((uint32_t *)p)[i])
+#define ccn32_32_parse(p,i) (((const uint32_t *)p)[i])
 #else
-#define ccn32_32_parse(p,i) (((uint32_t *)p)[i^1])
+#define ccn32_32_parse(p,i) (((const uint32_t *)p)[i^1])
 #endif
 #define ccn32_32_null 0
 
@@ -255,72 +259,12 @@ typedef const cc_unit *cc2np2_in_t;    // 2 * n + 2 unit long mp
 #define CCN224_N  ccn_nof(224)
 #define CCN256_N  ccn_nof(256)
 #define CCN384_N  ccn_nof(384)
+#define CCN512_N  ccn_nof(512)
 #define CCN521_N  ccn_nof(521)
 
-#if defined(_ARM_ARCH_6) || defined(_ARM_ARCH_7)
-#if CCN_USE_BUILTIN_CLZ
-CC_INLINE CC_CONST
-cc_unit cc_clz(cc_unit data)
-{
-    return __builtin_clzl(data);
-}
-#else
-CC_INLINE CC_CONST
-cc_unit cc_clz(cc_unit data)
-{
-    __asm__ ("clz %0, %1\n" : "=l" (data) : "l" (data));
-    return data;
-}
-#endif /* CCN_USE_BUILTIN_CLZ */
-#endif /* !defined(_ARM_ARCH_6) && !defined(_ARM_ARCH_7) */
-
-
-#if CCN_N_INLINE
-/* Return the number of used units after stripping leading 0 units.  */
-CC_INLINE CC_PURE CC_NONNULL2 
-cc_size ccn_n(cc_size n, const cc_unit *s) {
-#if 1
-    while (n-- && s[n] == 0) {}
-    return n + 1;
-#elif 0
-    while (n && s[n - 1] == 0) {
-        n -= 1;
-    }
-    return n;
-#else
-    if (n & 1) {
-        if (s[n - 1])
-            return n;
-        n &= ~1;
-    }
-    if (n & 2) {
-        cc_unit a[2] = { s[n - 1], s[n - 2] };
-        if (a[0])
-            return n - 1;
-        if (a[1])
-            return n - 2;
-        n &= ~2;
-    }
-    while (n) {
-        cc_unit a[4] = { s[n - 1], s[n - 2], s[n - 3], s[n - 4] };
-        if (a[0])
-            return n - 1;
-        if (a[1])
-            return n - 2;
-        if (a[2])
-            return n - 3;
-        if (a[3])
-            return n - 4;
-        n -= 4;
-    }
-    return n;
-#endif
-}
-#else
 /* Return the number of used units after stripping leading 0 units.  */
 CC_PURE CC_NONNULL2
 cc_size ccn_n(cc_size n, const cc_unit *s);
-#endif
 
 /* s >> k -> r return bits shifted out of least significant word in bits [0, n>
  { N bit, scalar -> N bit } N = n * sizeof(cc_unit) * 8
@@ -361,24 +305,10 @@ size_t ccn_trailing_zeros(cc_size n, const cc_unit *s);
 
 #define ccn_is_zero_or_one(_n_, _s_) (((_n_)==0) || ((ccn_n(_n_, _s_) <= 1) && (_s_[0] <= 1)))
 
-#if CCN_CMP_INLINE
-CC_INLINE CC_PURE CC_NONNULL((2, 3))
-int ccn_cmp(cc_size n, const cc_unit *s, const cc_unit *t) {
-	while (n) {
-        n--;
-        cc_unit si = s[n];
-        cc_unit ti = t[n];
-        if (si != ti)
-            return si > ti ? 1 : -1;
-	}
-	return n;
-}
-#else
 /* s < t -> return - 1 | s == t -> return 0 | s > t -> return 1
  { N bit, N bit -> int } N = n * sizeof(cc_unit) * 8 */
 CC_PURE CC_NONNULL((2, 3))
 int ccn_cmp(cc_size n, const cc_unit *s, const cc_unit *t);
-#endif
 
 /* s < t -> return - 1 | s == t -> return 0 | s > t -> return 1
  { N bit, M bit -> int } N = ns * sizeof(cc_unit) * 8  M = nt * sizeof(cc_unit) * 8 */
@@ -447,6 +377,13 @@ void ccn_lcm(cc_size n, cc_unit *r2n, const cc_unit *s, const cc_unit *t);
  { N bit, N bit -> 2N bit } N = ccn_bitsof(n) */
 CC_NONNULL((2, 3, 4))
 void ccn_mul(cc_size n, cc_unit *r_2n, const cc_unit *s, const cc_unit *t);
+
+/* s * t -> r_2n                   r_2n must not overlap with s nor t
+ { n bit, n bit -> 2 * n bit } n = count * sizeof(cc_unit) * 8
+ { N bit, N bit -> 2N bit } N = ccn_bitsof(n) 
+ Provide a workspace for potential speedup */
+CC_NONNULL((2, 3, 4, 5))
+void ccn_mul_ws(cc_size count, cc_unit *r, const cc_unit *s, const cc_unit *t, cc_ws_t ws);
 
 /* s[0..n) * v -> r[0..n)+return value
  { N bit, sizeof(cc_unit) * 8 bit -> N + sizeof(cc_unit) * 8 bit } N = n * sizeof(cc_unit) * 8 */
@@ -534,6 +471,19 @@ size_t ccn_write_int_size(cc_size n, const cc_unit *s);
 CC_NONNULL((2, 4))
 void ccn_write_int(cc_size n, const cc_unit *s, size_t out_size, void *out);
 
+#if CCN_DEDICATED_SQR
+
+/* s^2 -> r
+ { n bit -> 2 * n bit } */
+CC_NONNULL((2, 3))
+void ccn_sqr(cc_size n, cc_unit *r, const cc_unit *s);
+
+/* s^2 -> r
+ { n bit -> 2 * n bit } */
+CC_NONNULL((2, 3, 4))
+void ccn_sqr_ws(cc_size n, cc_unit *r, const cc_unit *s, cc_ws_t ws);
+
+#else
 
 /* s^2 -> r
  { n bit -> 2 * n bit } */
@@ -542,6 +492,15 @@ void ccn_sqr(cc_size n, cc_unit *r, const cc_unit *s) {
     ccn_mul(n, r, s, s);
 }
 
+/* s^2 -> r
+ { n bit -> 2 * n bit } */
+CC_INLINE CC_NONNULL((2, 3, 4))
+void ccn_sqr_ws(cc_size n, cc_unit *r, const cc_unit *s, cc_ws_t ws) {
+    ccn_mul_ws(n, r, s, s, ws);
+}
+
+#endif
+
 /* s -> r
  { n bit -> n bit } */
 CC_NONNULL((2, 3))
@@ -549,14 +508,16 @@ void ccn_set(cc_size n, cc_unit *r, const cc_unit *s);
 
 CC_INLINE CC_NONNULL2
 void ccn_zero(cc_size n, cc_unit *r) {
-    CC_BZERO(r, ccn_sizeof_n(n));
+    cc_zero(ccn_sizeof_n(n),r);
+}
+
+CC_INLINE CC_NONNULL2
+void ccn_clear(cc_size n, cc_unit *r) {
+    cc_clear(ccn_sizeof_n(n),r);
 }
 
 CC_NONNULL2
 void ccn_zero_multi(cc_size n, cc_unit *r, ...);
-
-/* Burn (zero fill or otherwise overwrite) n cc_units of stack space. */
-void ccn_burn_stack(cc_size n);
 
 CC_INLINE CC_NONNULL2
 void ccn_seti(cc_size n, cc_unit *r, cc_unit v) {

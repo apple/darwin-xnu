@@ -32,6 +32,12 @@
 #define DEBUG_ASSERT_COMPONENT_NAME_STRING "kxld"
 #include <AssertMacros.h>
 
+#if KERNEL
+#define __KXLD_KERNEL_UNUSED __unused
+#else
+#define __KXLD_KERNEL_UNUSED
+#endif
+
 #if !KERNEL
     #include "kxld.h"
     #include "kxld_types.h"
@@ -104,7 +110,8 @@ static void clear_context(KXLDContext *context);
 kern_return_t
 kxld_create_context(KXLDContext **_context, 
     KXLDAllocateCallback allocate_callback, KXLDLoggingCallback logging_callback,
-    KXLDFlags flags, cpu_type_t cputype, cpu_subtype_t cpusubtype)
+    KXLDFlags flags, cpu_type_t cputype, cpu_subtype_t cpusubtype,
+    vm_size_t pagesize __KXLD_KERNEL_UNUSED)
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDContext       * context         = NULL;
@@ -126,6 +133,12 @@ kxld_create_context(KXLDContext **_context,
     context->allocate_callback = allocate_callback;
     context->cputype = cputype;
     context->cpusubtype = cpusubtype;
+
+#if !KERNEL
+    if (pagesize) {
+        kxld_set_cross_link_page_size(pagesize);
+    }
+#endif /* !KERNEL */
 
     kxld_set_logging_callback(logging_callback);
 
@@ -467,7 +480,7 @@ allocate_kext(KXLDContext *context, void *callback_data,
 
     kxld_kext_get_vmsize(context->kext, &header_size, &vmsize);
     vmaddr = context->allocate_callback(vmsize, &flags, callback_data);
-    require_action(!(vmaddr & (PAGE_SIZE-1)), finish,
+    require_action(!(vmaddr & (kxld_get_effective_page_size()-1)), finish,
         kxld_log(kKxldLogLinking, kKxldLogErr,
             "Load address %p is not page-aligned.",
             (void *) (uintptr_t) vmaddr));

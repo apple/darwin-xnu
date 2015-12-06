@@ -53,7 +53,7 @@ callstack_sample( struct callstack *cs,
 	else
 		code = PERF_CS_KSAMPLE;
 
-	BUF_INFO1( code, (uintptr_t)context->cur_thread );
+	BUF_INFO1( code, (uintptr_t)thread_tid(context->cur_thread) );
 
 	/* fill out known flags */
 	cs->flags = 0;
@@ -95,7 +95,7 @@ callstack_sample( struct callstack *cs,
 		cs->nframes = 0;
 	}
 
-	if( cs->nframes >= MAX_CALLSTACK_FRAMES )
+	if( cs->nframes > MAX_CALLSTACK_FRAMES )
 	{
 		/* necessary? */
 		BUF_INFO1(PERF_CS_ERROR, ERR_FRAMES);

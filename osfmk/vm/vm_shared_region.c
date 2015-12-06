@@ -1044,6 +1044,7 @@ vm_shared_region_map_file(
 	mach_vm_offset_t	first_mapping = (mach_vm_offset_t) -1;
 
 
+
 	kr = KERN_SUCCESS;
 
 	vm_shared_region_lock();
@@ -1111,7 +1112,7 @@ vm_shared_region_map_file(
 			map_port = MACH_PORT_NULL;
 		} else {
 			/* file-backed memory */
-			map_port = (ipc_port_t) file_object->pager;
+			__IGNORE_WCASTALIGN(map_port = (ipc_port_t) file_object->pager);
 		}
 		
 		if (mappings[i].sfm_init_prot & VM_PROT_SLIDE) {
@@ -1565,7 +1566,7 @@ vm_shared_region_slide_init(
 
 	kr = kmem_alloc(kernel_map,
 			(vm_offset_t *) &slide_info_entry,
-			(vm_size_t) slide_info_size);
+			(vm_size_t) slide_info_size, VM_KERN_MEMORY_OSFMK);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}
@@ -1595,15 +1596,16 @@ vm_shared_region_slide_init(
 			vm_object_t shadow_obj = VM_OBJECT_NULL;
 	 
 			if (entry->is_sub_map == TRUE) { 
-				map = entry->object.sub_map;
+				map = VME_SUBMAP(entry);
 				start -= entry->vme_start;
-				start += entry->offset;
+				start += VME_OFFSET(entry);
 				vm_map_lock_read(map);
 				vm_map_unlock_read(cur_map);
 				goto Retry;
 			} else {
-				object = entry->object.vm_object;
-				offset = (start - entry->vme_start) + entry->offset;
+				object = VME_OBJECT(entry);
+				offset = ((start - entry->vme_start) +
+					  VME_OFFSET(entry));
 			}
 	 
 			vm_object_lock(object);
@@ -1820,7 +1822,7 @@ _vm_commpage_init(
 	if (kr != KERN_SUCCESS) {
 		panic("_vm_commpage_init: could not allocate mem_entry");
 	}
-	new_map = vm_map_create(pmap_create(NULL, 0, FALSE), 0, size, TRUE);
+	new_map = vm_map_create(pmap_create(NULL, 0, 0), 0, size, TRUE);
 	if (new_map == VM_MAP_NULL) {
 		panic("_vm_commpage_init: could not allocate VM map");
 	}

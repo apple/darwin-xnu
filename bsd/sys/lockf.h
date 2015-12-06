@@ -102,7 +102,8 @@ struct lockf {
 	TAILQ_ENTRY(lockf) lf_block;/* A request waiting for a lock */
 #if IMPORTANCE_INHERITANCE
 	int     lf_boosted;         /* Is the owner of the lock boosted */
-#endif /* IMPORTANCE_INHERITANCE */
+#endif
+	struct proc *lf_owner;	    /* The proc that did the SETLK, if known */
 };
 
 #pragma pack()

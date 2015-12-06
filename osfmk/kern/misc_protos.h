@@ -152,13 +152,22 @@ _doprnt(
 	va_list			*argp,
 	void			(*putc)(char),
 	int			radix);
+
+void
+_doprnt_log(
+	register const char	*fmt,
+	va_list			*argp,
+	void			(*putc)(char),
+	int			radix);
+
 int
 __doprnt(
 	register const char	*fmt,
 	va_list			argp,
 	void			(*putc)(int, void *),
 	void                    *arg,
-	int			radix);
+	int			radix,
+	int			is_log);
 
 extern void safe_gets(
 	char	*str,

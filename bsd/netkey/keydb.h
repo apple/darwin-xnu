@@ -113,6 +113,7 @@ struct secasvar {
 	u_int16_t	remote_ike_port;
 	u_int16_t	natt_encapsulated_src_port;	/* network byte order */
 	u_int16_t	natt_interval; /* Interval in seconds */
+	u_int16_t	natt_offload_interval; /* Hardware Offload Interval in seconds */
 	
 	u_int8_t	always_expire; /* Send expire/delete messages even if unused */
 

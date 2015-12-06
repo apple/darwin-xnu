@@ -2,14 +2,15 @@
  *  cchmac_init.c
  *  corecrypto
  *
- *  Created by Michael Brouwer on 12/7/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/07/2010
+ *
+ *  Copyright (c) 2010,2011,2015 Apple Inc. All rights reserved.
  *
  */
 
 #include <corecrypto/cchmac.h>
 #include <corecrypto/ccn.h>
-#include <pexpert/pexpert.h>
+#include <corecrypto/cc_priv.h>
 
 /* The HMAC_<DIG> transform looks like:
    <DIG> (K XOR opad || <DIG> (K XOR ipad || text))

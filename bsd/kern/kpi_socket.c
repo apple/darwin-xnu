@@ -1038,14 +1038,14 @@ sock_set_tcp_stream_priority(socket_t sock)
  * Caller must have ensured socket is valid and won't be going away.
  */
 void
-socket_set_traffic_mgt_flags_locked(socket_t sock, u_int32_t flags)
+socket_set_traffic_mgt_flags_locked(socket_t sock, u_int8_t flags)
 {
-	(void) OSBitOrAtomic(flags, &sock->so_traffic_mgt_flags);
+	(void) OSBitOrAtomic8(flags, &sock->so_traffic_mgt_flags);
 	sock_set_tcp_stream_priority(sock);
 }
 
 void
-socket_set_traffic_mgt_flags(socket_t sock, u_int32_t flags)
+socket_set_traffic_mgt_flags(socket_t sock, u_int8_t flags)
 {
 	socket_lock(sock, 1);
 	socket_set_traffic_mgt_flags_locked(sock, flags);
@@ -1056,14 +1056,14 @@ socket_set_traffic_mgt_flags(socket_t sock, u_int32_t flags)
  * Caller must have ensured socket is valid and won't be going away.
  */
 void
-socket_clear_traffic_mgt_flags_locked(socket_t sock, u_int32_t flags)
+socket_clear_traffic_mgt_flags_locked(socket_t sock, u_int8_t flags)
 {
-	(void) OSBitAndAtomic(~flags, &sock->so_traffic_mgt_flags);
+	(void) OSBitAndAtomic8(~flags, &sock->so_traffic_mgt_flags);
 	sock_set_tcp_stream_priority(sock);
 }
 
 void
-socket_clear_traffic_mgt_flags(socket_t sock, u_int32_t flags)
+socket_clear_traffic_mgt_flags(socket_t sock, u_int8_t flags)
 {
 	socket_lock(sock, 1);
 	socket_clear_traffic_mgt_flags_locked(sock, flags);

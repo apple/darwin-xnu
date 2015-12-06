@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -439,13 +439,8 @@ nd6_ra_input(
 	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst))
 		mcast = 1;
 
-	lck_rw_lock_shared(nd_if_rwlock);
-	if (ifp->if_index >= nd_ifinfo_indexlim) {
-		lck_rw_done(nd_if_rwlock);
-		goto freeit;
-	}
-	ndi = &nd_ifinfo[ifp->if_index];
-	VERIFY(ndi->initialized);
+	ndi = ND_IFINFO(ifp);
+	VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
 	lck_mtx_lock(&ndi->lock);
 	bzero(&dr0, sizeof (dr0));
 	dr0.rtaddr = saddr6;
@@ -465,11 +460,19 @@ nd6_ra_input(
 	}
 	if (nd_ra->nd_ra_retransmit)
 		ndi->retrans = ntohl(nd_ra->nd_ra_retransmit);
-	if (nd_ra->nd_ra_curhoplimit)
-		ndi->chlim = nd_ra->nd_ra_curhoplimit;
+	if (nd_ra->nd_ra_curhoplimit) {
+		if (ndi->chlim < nd_ra->nd_ra_curhoplimit) {
+			ndi->chlim = nd_ra->nd_ra_curhoplimit;
+		} else if (ndi->chlim != nd_ra->nd_ra_curhoplimit) {
+			nd6log((LOG_ERR,
+			    "RA with a lower CurHopLimit sent from "
+			    "%s on %s (current = %d, received = %d). "
+			    "Ignored.\n", ip6_sprintf(&ip6->ip6_src),
+			    if_name(ifp), ndi->chlim,
+			    nd_ra->nd_ra_curhoplimit));
+		}
+	}
 	lck_mtx_unlock(&ndi->lock);
-	lck_rw_done(nd_if_rwlock);
-	ndi = NULL;
 	lck_mtx_lock(nd6_mutex);
 	dr = defrtrlist_update(&dr0);
 	lck_mtx_unlock(nd6_mutex);
@@ -615,13 +618,6 @@ nd6_ra_input(
 			goto skip;
 		}
 
-		lck_rw_lock_shared(nd_if_rwlock);
-		if (ifp->if_index >= nd_ifinfo_indexlim) {
-			lck_rw_done(nd_if_rwlock);
-			goto freeit;
-		}
-		ndi = &nd_ifinfo[ifp->if_index];
-		VERIFY(ndi->initialized);
 		lck_mtx_lock(&ndi->lock);
 		/* upper bound */
 		if (ndi->maxmtu) {
@@ -630,7 +626,6 @@ nd6_ra_input(
 
 				ndi->linkmtu = mtu;
 				lck_mtx_unlock(&ndi->lock);
-				lck_rw_done(nd_if_rwlock);
 				if (change) /* in6_maxmtu may change */
 					in6_setmaxmtu();
 			} else {
@@ -640,17 +635,14 @@ nd6_ra_input(
 				    mtu, ip6_sprintf(&ip6->ip6_src),
 				    ndi->maxmtu));
 				lck_mtx_unlock(&ndi->lock);
-				lck_rw_done(nd_if_rwlock);
 			}
 		} else {
 			lck_mtx_unlock(&ndi->lock);
-			lck_rw_done(nd_if_rwlock);
 			nd6log((LOG_INFO, "nd6_ra_input: mtu option "
 			    "mtu=%d sent from %s; maxmtu unknown, "
 			    "ignoring\n",
 			    mtu, ip6_sprintf(&ip6->ip6_src)));
 		}
-		ndi = NULL;
 	}
 
 skip:
@@ -1022,6 +1014,7 @@ defrtrlist_del(struct nd_defrouter *dr)
 	struct nd_defrouter *deldr = NULL;
 	struct nd_prefix *pr;
 	struct ifnet *ifp = dr->ifp;
+	struct nd_ifinfo *ndi = NULL;
 	boolean_t resetmtu;
 
 	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_OWNED);
@@ -1077,19 +1070,15 @@ defrtrlist_del(struct nd_defrouter *dr)
 		defrouter_select(ifp);
 
 	resetmtu = FALSE;
-	lck_rw_lock_shared(nd_if_rwlock);
-	if (ifp->if_index < nd_ifinfo_indexlim) {
-		struct nd_ifinfo *ndi = &nd_ifinfo[ifp->if_index];
-		VERIFY(ndi->initialized);
-		lck_mtx_lock(&ndi->lock);
-		VERIFY(ndi->ndefrouters >= 0);
-		if (ndi->ndefrouters > 0 && --ndi->ndefrouters == 0) {
-			nd6_ifreset(ifp);
-			resetmtu = TRUE;
-		}
-		lck_mtx_unlock(&ndi->lock);
+	ndi = ND_IFINFO(ifp);
+	VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
+	lck_mtx_lock(&ndi->lock);
+	VERIFY(ndi->ndefrouters >= 0);
+	if (ndi->ndefrouters > 0 && --ndi->ndefrouters == 0) {
+		nd6_ifreset(ifp);
+		resetmtu = TRUE;
 	}
-	lck_rw_done(nd_if_rwlock);
+	lck_mtx_unlock(&ndi->lock);
 
 	if (resetmtu)
 		nd6_setmtu(ifp);
@@ -1792,17 +1781,12 @@ defrtrlist_update_common(struct nd_defrouter *new, boolean_t scoped)
 		return (NULL);
 	}
 
-	lck_rw_lock_shared(nd_if_rwlock);
-	if (ifp->if_index >= nd_ifinfo_indexlim)
-		goto freeit;
-	ndi = &nd_ifinfo[ifp->if_index];
-	VERIFY(ndi->initialized);
+	ndi = ND_IFINFO(ifp);
+	VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
 	lck_mtx_lock(&ndi->lock);
 	if (ip6_maxifdefrouters >= 0 &&
 	    ndi->ndefrouters >= ip6_maxifdefrouters) {
 		lck_mtx_unlock(&ndi->lock);
-freeit:
-		lck_rw_done(nd_if_rwlock);
 		nddr_free(n);
 		return (NULL);
 	}
@@ -1814,7 +1798,6 @@ freeit:
 	ndi->ndefrouters++;
 	VERIFY(ndi->ndefrouters != 0);
 	lck_mtx_unlock(&ndi->lock);
-	lck_rw_done(nd_if_rwlock);
 
 	nd6log2((LOG_INFO, "%s: allocating defrouter %s\n", if_name(ifp),
 	    ip6_sprintf(&new->rtaddr)));
@@ -1964,8 +1947,20 @@ pfxrtr_del(struct nd_pfxrouter *pfr, struct nd_prefix *pr)
 	zfree(ndprtr_zone, pfr);
 }
 
+/*
+ * The routine has been modified to atomically refresh expiry
+ * time for nd6 prefix as the part of lookup.
+ * rdar://20339655 explains the corner case where a system going
+ * in sleep gets rid of manual addresses configured in the system
+ * and then schedules the prefix for deletion.
+ * However before the prefix gets deleted, if system comes out
+ * from sleep and configures same address before prefix deletion
+ * , the later prefix deletion will remove the prefix route and
+ * the system will not be able to communicate with other IPv6
+ * neighbor nodes in the same subnet.
+ */
 struct nd_prefix *
-nd6_prefix_lookup(struct nd_prefix *pr)
+nd6_prefix_lookup(struct nd_prefix *pr, int nd6_prefix_expiry)
 {
 	struct nd_prefix *search;
 
@@ -1976,6 +1971,9 @@ nd6_prefix_lookup(struct nd_prefix *pr)
 		    pr->ndpr_plen == search->ndpr_plen &&
 		    in6_are_prefix_equal(&pr->ndpr_prefix.sin6_addr,
 		    &search->ndpr_prefix.sin6_addr, pr->ndpr_plen)) {
+			if (nd6_prefix_expiry != ND6_PREFIX_EXPIRY_UNSPEC) {
+				search->ndpr_expire = nd6_prefix_expiry;
+			}
 			NDPR_ADDREF_LOCKED(search);
 			NDPR_UNLOCK(search);
 			break;
@@ -2075,34 +2073,19 @@ nd6_prelist_add(struct nd_prefix *pr, struct nd_defrouter *dr,
 	int i, error;
 
 	if (ip6_maxifprefixes >= 0) {
-		lck_rw_lock_shared(nd_if_rwlock);
-		if (ifp->if_index >= nd_ifinfo_indexlim) {
-			lck_rw_done(nd_if_rwlock);
-			return (EINVAL);
-		}
-		ndi = &nd_ifinfo[ifp->if_index];
-		VERIFY(ndi->initialized);
+		ndi = ND_IFINFO(ifp);
+		VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
 		lck_mtx_lock(&ndi->lock);
 		if (ndi->nprefixes >= ip6_maxifprefixes / 2) {
 			lck_mtx_unlock(&ndi->lock);
-			lck_rw_done(nd_if_rwlock);
 			purge_detached(ifp);
-			lck_rw_lock_shared(nd_if_rwlock);
-			/*
-			 * Refresh pointer since nd_ifinfo[] may have grown;
-			 * repeating the bounds check against nd_ifinfo_indexlim
-			 * isn't necessary since the array never shrinks.
-			 */
-			ndi = &nd_ifinfo[ifp->if_index];
 			lck_mtx_lock(&ndi->lock);
 		}
 		if (ndi->nprefixes >= ip6_maxifprefixes) {
 			lck_mtx_unlock(&ndi->lock);
-			lck_rw_done(nd_if_rwlock);
 			return (ENOMEM);
 		}
 		lck_mtx_unlock(&ndi->lock);
-		lck_rw_done(nd_if_rwlock);
 	}
 
 	new = ndpr_alloc(M_WAITOK);
@@ -2168,19 +2151,10 @@ nd6_prelist_add(struct nd_prefix *pr, struct nd_defrouter *dr,
 		pfxrtr_add(new, dr);
 	}
 
-	lck_rw_lock_shared(nd_if_rwlock);
-	/*
-	 * Refresh pointer since nd_ifinfo[] may have grown;
-	 * repeating the bounds check against nd_ifinfo_indexlim
-	 * isn't necessary since the array never shrinks.
-	 */
-	ndi = &nd_ifinfo[ifp->if_index];
-	VERIFY(ndi->initialized);
 	lck_mtx_lock(&ndi->lock);
 	ndi->nprefixes++;
 	VERIFY(ndi->nprefixes != 0);
 	lck_mtx_unlock(&ndi->lock);
-	lck_rw_done(nd_if_rwlock);
 
 	lck_mtx_unlock(nd6_mutex);
 
@@ -2196,6 +2170,7 @@ prelist_remove(struct nd_prefix *pr)
 	struct nd_pfxrouter *pfr, *next;
 	struct ifnet *ifp = pr->ndpr_ifp;
 	int e;
+	struct nd_ifinfo *ndi = NULL;
 
 	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_OWNED);
 	NDPR_LOCK_ASSERT_HELD(pr);
@@ -2257,16 +2232,12 @@ prelist_remove(struct nd_prefix *pr)
 		pfxrtr_del(pfr, pr);
 	}
 
-	lck_rw_lock_shared(nd_if_rwlock);
-	if (ifp->if_index < nd_ifinfo_indexlim) {
-		struct nd_ifinfo *ndi = &nd_ifinfo[ifp->if_index];
-		VERIFY(ndi->initialized);
-		lck_mtx_lock(&ndi->lock);
-		VERIFY(ndi->nprefixes > 0);
-		ndi->nprefixes--;
-		lck_mtx_unlock(&ndi->lock);
-	}
-	lck_rw_done(nd_if_rwlock);
+	ndi = ND_IFINFO(ifp);
+	VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
+	lck_mtx_lock(&ndi->lock);
+	VERIFY(ndi->nprefixes > 0);
+	ndi->nprefixes--;
+	lck_mtx_unlock(&ndi->lock);
 
 	/* This must not be the last reference to the nd_prefix */
 	if (NDPR_REMREF_LOCKED(pr) == NULL) {
@@ -2312,7 +2283,7 @@ prelist_update(
 #endif
 	}
 
-	if ((pr = nd6_prefix_lookup(new)) != NULL) {
+	if ((pr = nd6_prefix_lookup(new, ND6_PREFIX_EXPIRY_UNSPEC)) != NULL) {
 		/*
 		 * nd6_prefix_lookup() ensures that pr and new have the same
 		 * prefix on a same interface.
@@ -3596,14 +3567,13 @@ nd6_prefix_onlink_common(struct nd_prefix *pr, boolean_t force_scoped,
 	 */
 	if (!(pr->ndpr_stateflags & NDPRF_DEFUNCT) &&
 	    (rt != NULL || error == EEXIST)) {
-		struct nd_ifinfo *ndi;
+		struct nd_ifinfo *ndi = NULL;
 
 		VERIFY(pr->ndpr_prproxy_sols_cnt == 0);
 		VERIFY(RB_EMPTY(&pr->ndpr_prproxy_sols));
 
-		lck_rw_lock_shared(nd_if_rwlock);
 		ndi = ND_IFINFO(ifp);
-		VERIFY(ndi != NULL && ndi->initialized);
+		VERIFY((NULL != ndi)  && (TRUE == ndi->initialized));
 		lck_mtx_lock(&ndi->lock);
 
 		pr->ndpr_rt = rt;	/* keep reference from rtrequest */
@@ -3625,7 +3595,6 @@ nd6_prefix_onlink_common(struct nd_prefix *pr, boolean_t force_scoped,
 		}
 
 		lck_mtx_unlock(&ndi->lock);
-		lck_rw_done(nd_if_rwlock);
 	} else if (rt != NULL && pr->ndpr_stateflags & NDPRF_DEFUNCT)
 		rtfree(rt);
 
@@ -3818,9 +3787,9 @@ nd6_prefix_offlink(struct nd_prefix *pr)
 static struct in6_ifaddr *
 in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp)
 {
-	struct in6_ifaddr *ia6;
-	struct ifnet *ifp;
-	struct nd_ifinfo *ndi;
+	struct in6_ifaddr *ia6 = NULL;
+	struct ifnet *ifp = NULL;
+	struct nd_ifinfo *ndi = NULL;
 	struct in6_addr mask;
 	struct in6_aliasreq ifra;
 	int error, ifaupdate, iidlen, notcga;
@@ -3867,15 +3836,6 @@ in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp)
 		goto unlock1;
 	}
 
-	lck_rw_lock_shared(nd_if_rwlock);
-	if (ifp->if_index >= nd_ifinfo_indexlim) {
-		error = EADDRNOTAVAIL;
-		nd6log((LOG_INFO,
-		    "%s: invalid prefix length %d for %s, ignored\n",
-		    __func__, pr->ndpr_plen, if_name(ifp)));
-		goto unlock2;
-	}
-
 	bzero(&ifra, sizeof (ifra));
 	strlcpy(ifra.ifra_name, if_name(ifp), sizeof (ifra.ifra_name));
 	ifra.ifra_addr.sin6_family = AF_INET6;
@@ -3890,7 +3850,7 @@ in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp)
 	ifra.ifra_addr.sin6_addr.s6_addr32[2] &= mask.s6_addr32[2];
 	ifra.ifra_addr.sin6_addr.s6_addr32[3] &= mask.s6_addr32[3];
 
-	ndi = &nd_ifinfo[ifp->if_index];
+	ndi = ND_IFINFO(ifp);
 	VERIFY(ndi->initialized);
 	lck_mtx_lock(&ndi->lock);
 
@@ -3898,7 +3858,6 @@ in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp)
 	    (ndi->flags & ND6_IFF_INSECURE) != 0;
 
 	lck_mtx_unlock(&ndi->lock);
-	lck_rw_done(nd_if_rwlock);
 	NDPR_UNLOCK(pr);
 
 	if (notcga) {
@@ -3989,9 +3948,6 @@ in6_pfx_newpersistaddr(struct nd_prefix *pr, int mcast, int *errorp)
 	VERIFY(ia6 != NULL);
 	in6_post_msg(ifp, KEV_INET6_NEW_RTADV_ADDR, ia6, NULL);
 	goto done;
-
-unlock2:
-	lck_rw_done(nd_if_rwlock);
 
 unlock1:
 	NDPR_UNLOCK(pr);

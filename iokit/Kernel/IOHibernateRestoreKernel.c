@@ -401,8 +401,17 @@ store_one_page(uint32_t procFlags, uint32_t * src, uint32_t compressedSize,
 	if (compressedSize != PAGE_SIZE)
 	{
 		dst = pal_hib_map(DEST_COPY_AREA, dst);
-		if (compressedSize) WKdm_decompress_new((WK_word*) src, (WK_word*)(uintptr_t)dst, (WK_word*) &scratch[0], PAGE_SIZE);
-		else bzero((void *) dst, PAGE_SIZE);
+		if (compressedSize != 4) WKdm_decompress_new((WK_word*) src, (WK_word*)(uintptr_t)dst, (WK_word*) &scratch[0], compressedSize);
+		else {
+			int i;
+			uint32_t *s, *d;
+			
+			s = src;
+			d = (uint32_t *)(uintptr_t)dst;
+
+			for (i = 0; i < (int)(PAGE_SIZE / sizeof(int32_t)); i++)
+				*d++ = *s;
+		}
 	}
 	else
 	{
@@ -411,8 +420,6 @@ store_one_page(uint32_t procFlags, uint32_t * src, uint32_t compressedSize,
 
 	return hibernate_sum_page((uint8_t *)(uintptr_t)dst, ppnum);
 }
-
-#define C_ASSERT(e) typedef char    __C_ASSERT__[(e) ? 1 : -1]
 
 long 
 hibernate_kernel_entrypoint(uint32_t p1, 
@@ -449,7 +456,7 @@ hibernate_kernel_entrypoint(uint32_t p1,
     uint64_t timeStart;
     timeStart = rdtsc64();
 
-    C_ASSERT(sizeof(IOHibernateImageHeader) == 512);
+    assert_static(sizeof(IOHibernateImageHeader) == 512);
 
     headerPhys = ptoa_64(p1);
 
@@ -696,6 +703,8 @@ hibernate_kernel_entrypoint(uint32_t p1,
     gIOHibernateState = kIOHibernateStateWakingFromHibernate;
 
     gIOHibernateCurrentHeader->trampolineTime = (((rdtsc64() - timeStart)) >> 8);
+
+//  debug_code('done', 0);
 
 #if CONFIG_SLEEP
 #if defined(__i386__) || defined(__x86_64__)

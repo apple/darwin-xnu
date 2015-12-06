@@ -176,11 +176,10 @@ devtimer_create(devtimer_process_func process_func, void * arg0)
 {
     devtimer_ref	timer;
 
-    timer = _MALLOC(sizeof(*timer), M_DEVTIMER, M_WAITOK);
+    timer = _MALLOC(sizeof(*timer), M_DEVTIMER, M_WAITOK | M_ZERO);
     if (timer == NULL) {
 	return (timer);
     }
-    bzero(timer, sizeof(*timer));
     devtimer_retain(timer);
     timer->dt_callout = thread_call_allocate(devtimer_process, timer);
     if (timer->dt_callout == NULL) {

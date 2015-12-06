@@ -24,9 +24,6 @@ EXPORT_MI_LIST	= ${KERNELFILES}
 
 EXPORT_MI_DIR = uuid
 
-# /System/Library/Frameworks/System.framework/PrivateHeaders
-INSTALL_MI_LCL_LIST = ${DATAFILES}
-
 # /System/Library/Frameworks/Kernel.framework/PrivateHeaders
 
 INSTALL_KF_MI_LCL_LIST =  ${KERNELFILES}

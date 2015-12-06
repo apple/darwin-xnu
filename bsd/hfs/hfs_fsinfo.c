@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -40,9 +40,7 @@
 #include "hfscommon/headers/BTreesPrivate.h"
 #include "hfscommon/headers/FileMgrInternal.h"
 
-#if CONFIG_PROTECT
 #include <hfs/hfs_cprotect.h>
-#endif
 
 
 union HFSPlusRecord {
@@ -837,6 +835,10 @@ static int fsinfo_cprotect_count_callback(struct hfsmount *hfsmp, HFSPlusKey *ke
 {
 	struct hfs_fsinfo_cprotect *fsinfo = (struct hfs_fsinfo_cprotect *)data;
 	static const uint16_t cp_xattrname_utf16[] = CONTENT_PROTECTION_XATTR_NAME_CHARS;
+	/*
+	 * NOTE: cp_xattrname_utf16_len is the number of UTF-16 code units in
+	 * the EA name string.
+	 */
 	static const size_t cp_xattrname_utf16_len = sizeof(cp_xattrname_utf16)/2;
 	struct cp_xattr_v5 *xattr;
 	size_t xattr_len = sizeof(struct cp_xattr_v5);
@@ -850,7 +852,7 @@ static int fsinfo_cprotect_count_callback(struct hfsmount *hfsmp, HFSPlusKey *ke
 
 	/* We only look at content protection xattrs */
 	if ((key->attr_key.attrNameLen != cp_xattrname_utf16_len) ||
-		(bcmp(key->attr_key.attrName, cp_xattrname_utf16, cp_xattrname_utf16_len))) {
+		(bcmp(key->attr_key.attrName, cp_xattrname_utf16, 2 * cp_xattrname_utf16_len))) {
 		return 0;
 	}
 

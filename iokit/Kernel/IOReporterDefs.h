@@ -59,11 +59,11 @@ do {                            \
 
 #define PREFL_MEMOP_FAIL(__val, __type) do {  \
     if (__val <= 0) {  \
-        IORERROR("%s - %s <= 0!", __func__, #__val);  \
+        IORERROR("%s - %s <= 0!\n", __func__, #__val);  \
         res = kIOReturnUnderrun;  \
         goto finish;  \
     }  else if (__val > INT_MAX / (int)sizeof(__type)) {  \
-        IORERROR("%s - %s > INT_MAX / sizeof(%s)!", __func__, #__val, #__type);\
+        IORERROR("%s - %s > INT_MAX / sizeof(%s)!\n",__func__,#__val,#__type);\
         res = kIOReturnOverrun;  \
         goto finish;  \
     }  \

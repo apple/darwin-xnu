@@ -31,7 +31,7 @@
 .\"
 .\"     @(#)recv.2	8.3 (Berkeley) 2/21/94
 .\"
-.Dd May 15, 2006
+.Dd March 18, 2015
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -94,7 +94,9 @@ The
 function is normally used only on a
 .Em connected
 socket (see
-.Xr connect 2 )
+.Xr connect 2 
+or
+.Xr connectx 2 )
 and is identical to
 .Fn recvfrom
 with a
@@ -258,8 +260,9 @@ The
 field is set on return according to the message received.
 .Dv MSG_EOR
 indicates end-of-record;
-the data returned completed a record (generally used with sockets of type
-.Dv SOCK_SEQPACKET ) .
+the data returned completed a record.
+.\" (generally used with sockets of type
+.\".Dv SOCK_SEQPACKET ) .
 .Dv MSG_TRUNC
 indicates that
 the trailing portion of a datagram was discarded
@@ -311,7 +314,8 @@ An attempt to allocate a memory buffer fails.
 .It Bq Er ENOTCONN
 The socket is associated with a connection-oriented protocol
 and has not been connected (see
-.Xr connect 2
+.Xr connect 2,
+.Xr connectx 2,
 and
 .Xr accept 2 ) .
 .\" ===========

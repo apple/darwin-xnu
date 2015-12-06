@@ -148,9 +148,11 @@ mac_pipe_check_kqfilter(kauth_cred_t cred, struct knote *kn,
 {
 	int error;
 
-	if (!mac_pipe_enforce)
-		return (0);
-
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_pipe_enforce)
+        return (0);
+#endif
 	MAC_CHECK(pipe_check_kqfilter, cred, kn, cpipe, cpipe->pipe_label);
 	return (error);
 }
@@ -159,8 +161,11 @@ mac_pipe_check_ioctl(kauth_cred_t cred, struct pipe *cpipe, u_int cmd)
 {
 	int error;
 
-	if (!mac_pipe_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_pipe_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(pipe_check_ioctl, cred, cpipe, cpipe->pipe_label, cmd);
 
@@ -172,8 +177,11 @@ mac_pipe_check_read(kauth_cred_t cred, struct pipe *cpipe)
 {
 	int error;
 
-	if (!mac_pipe_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_pipe_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(pipe_check_read, cred, cpipe, cpipe->pipe_label);
 
@@ -186,8 +194,11 @@ mac_pipe_check_label_update(kauth_cred_t cred, struct pipe *cpipe,
 {
 	int error;
 
-	if (!mac_pipe_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_pipe_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(pipe_check_label_update, cred, cpipe, cpipe->pipe_label, newlabel);
 
@@ -199,8 +210,11 @@ mac_pipe_check_select(kauth_cred_t cred, struct pipe *cpipe, int which)
 {
 	int error;
 
-	if (!mac_pipe_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_pipe_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(pipe_check_select, cred, cpipe, cpipe->pipe_label, which);
 
@@ -212,8 +226,11 @@ mac_pipe_check_stat(kauth_cred_t cred, struct pipe *cpipe)
 {
 	int error;
 
-	if (!mac_pipe_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_pipe_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(pipe_check_stat, cred, cpipe, cpipe->pipe_label);
 
@@ -225,8 +242,11 @@ mac_pipe_check_write(kauth_cred_t cred, struct pipe *cpipe)
 {
 	int error;
 
-	if (!mac_pipe_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_pipe_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(pipe_check_write, cred, cpipe, cpipe->pipe_label);
 

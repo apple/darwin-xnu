@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2005-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -222,24 +222,8 @@ fill_socketinfo(struct socket *so, struct socket_info *si)
 			    ev_pcb->evp_vendor_code_filter;
 			kesi->kesi_class_filter = ev_pcb->evp_class_filter;
 			kesi->kesi_subclass_filter = ev_pcb->evp_subclass_filter;
-
 		} else if (SOCK_PROTO(so) == SYSPROTO_CONTROL) {
-			struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
-			struct kern_ctl_info *kcsi =
-			    &si->soi_proto.pri_kern_ctl;
-			struct kctl *kctl = kcb->kctl;
-
-			si->soi_kind = SOCKINFO_KERN_CTL;
-
-			if (kctl == 0)
-				break;
-			kcsi->kcsi_id = kctl->id;
-			kcsi->kcsi_reg_unit = kctl->id;
-			kcsi->kcsi_flags = kctl->flags;
-			kcsi->kcsi_recvbufsize = kctl->recvbufsize;
-			kcsi->kcsi_sendbufsize = kctl->sendbufsize;
-			kcsi->kcsi_unit = kcb->unit;
-			strlcpy(kcsi->kcsi_name, kctl->name, MAX_KCTL_NAME);
+			kctl_fill_socketinfo(so, si);
 		}
 		break;
 

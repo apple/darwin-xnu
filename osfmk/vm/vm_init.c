@@ -101,7 +101,7 @@ static inline void
 vm_mem_bootstrap_log(const char *message)
 {
 //	kprintf("vm_mem_bootstrap: %s\n", message);
-	kernel_debug_string(message);
+	kernel_debug_string_simple(message);
 }
 
 /*
@@ -153,7 +153,7 @@ vm_mem_bootstrap(void)
 
 	if (kmapoff_pgcnt > 0 &&
 	    vm_allocate(kernel_map, &kmapoff_kaddr,
-	    kmapoff_pgcnt * PAGE_SIZE_64, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+	    kmapoff_pgcnt * PAGE_SIZE_64, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_OSFMK)) != KERN_SUCCESS)
 		panic("cannot vm_allocate %u kernel_map pages", kmapoff_pgcnt);
 
 	vm_mem_bootstrap_log("pmap_init");

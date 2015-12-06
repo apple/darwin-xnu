@@ -656,8 +656,8 @@ kern_return_t chudxnu_thread_get_callstack64_internal(
 		uint64_t rsp = 0ULL;
 
 		// backtrace the 64bit side.
-		kr = do_backtrace64(task, thread, regs64, callstack, &bufferIndex, 
-			bufferMaxIndex, TRUE);
+		kr = do_backtrace64(task, thread, regs64, callstack, &bufferIndex,
+		                    bufferMaxIndex - 1, TRUE);
 
 		if(KERN_SUCCESS == chudxnu_kern_read(&rsp, (vm_offset_t) regs64->isf.rsp, sizeof(uint64_t)) && 
 			bufferIndex < bufferMaxIndex) {
@@ -668,8 +668,8 @@ kern_return_t chudxnu_thread_get_callstack64_internal(
 		uint32_t esp = 0UL;
 
 		// backtrace the 32bit side.
-		kr = do_backtrace32(task, thread, regs32, callstack, &bufferIndex, 
-			bufferMaxIndex, TRUE);
+		kr = do_backtrace32(task, thread, regs32, callstack, &bufferIndex,
+		                    bufferMaxIndex - 1, TRUE);
 		
 		if(KERN_SUCCESS == chudxnu_kern_read(&esp, (vm_offset_t) regs32->uesp, sizeof(uint32_t)) && 
 			bufferIndex < bufferMaxIndex) {
@@ -679,8 +679,8 @@ kern_return_t chudxnu_thread_get_callstack64_internal(
 		/* backtrace user land */
 		uint64_t rsp = 0ULL;
 		
-		kr = do_backtrace64(task, thread, u_regs64, callstack, &bufferIndex, 
-			bufferMaxIndex, FALSE);
+		kr = do_backtrace64(task, thread, u_regs64, callstack, &bufferIndex,
+		                    bufferMaxIndex - 1, FALSE);
 
 		if(KERN_SUCCESS == chudxnu_task_read(task, &rsp, (addr64_t) u_regs64->isf.rsp, sizeof(uint64_t)) && 
 			bufferIndex < bufferMaxIndex) {
@@ -690,8 +690,8 @@ kern_return_t chudxnu_thread_get_callstack64_internal(
 	} else if(u_regs32 && !kern_only) {
 		uint32_t esp = 0UL;
 		
-		kr = do_backtrace32(task, thread, u_regs32, callstack, &bufferIndex, 
-			bufferMaxIndex, FALSE);
+		kr = do_backtrace32(task, thread, u_regs32, callstack, &bufferIndex,
+		                    bufferMaxIndex - 1, FALSE);
 
 		if(KERN_SUCCESS == chudxnu_task_read(task, &esp, (addr64_t) u_regs32->uesp, sizeof(uint32_t)) && 
 			bufferIndex < bufferMaxIndex) {

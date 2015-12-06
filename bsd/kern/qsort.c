@@ -65,6 +65,7 @@
 
 #include <sys/types.h>
 //#include <stdlib.h>
+#include <sys/kpi_private.h>
 
 __private_extern__
 void
@@ -198,4 +199,10 @@ loop:	SWAPINIT(a, es);
 		goto loop;
 	}
 /*		qsort(pn - r, r / es, es, cmp);*/
+}
+
+/* private KPI */
+void 
+kx_qsort (void *array, size_t nm, size_t member_size, int (*cmpf)(const void *, const void *)) {
+	qsort (array, nm, member_size, cmpf);
 }

@@ -55,6 +55,7 @@ enum {
     kIOPMRequestTypeRequestPowerStateOverride   = 0x0E,
     kIOPMRequestTypeSetIdleTimerPeriod          = 0x0F,
     kIOPMRequestTypeIgnoreIdleTimer             = 0x10,
+    kIOPMRequestTypeQuiescePowerTree            = 0x11,
 
     /* Reply Types */
     kIOPMRequestTypeReplyStart                  = 0x80,
@@ -183,6 +184,7 @@ private:
     thread_call_t           SettleTimer;
     thread_call_t           IdleTimer;
     thread_call_t           WatchdogTimer;
+    thread_call_t           SpinDumpTimer;
 
     // Settle time after changing power state.
     uint32_t                SettleTimeUS;
@@ -343,7 +345,7 @@ private:
 
     // Serialize IOServicePM state for debug output.
     IOReturn gatedSerialize( OSSerialize * s ) const;
-    virtual bool serialize( OSSerialize * s ) const;
+    virtual bool serialize( OSSerialize * s ) const APPLE_KEXT_OVERRIDE;
 
     // PM log and trace
     void pmPrint( uint32_t event, uintptr_t param1, uintptr_t param2 ) const;
@@ -358,6 +360,7 @@ private:
 #define fSettleTimer                pwrMgt->SettleTimer
 #define fIdleTimer                  pwrMgt->IdleTimer
 #define fWatchdogTimer              pwrMgt->WatchdogTimer
+#define fSpinDumpTimer              pwrMgt->SpinDumpTimer
 #define fSettleTimeUS               pwrMgt->SettleTimeUS
 #define fIdleTimerGeneration        pwrMgt->IdleTimerGeneration
 #define fHeadNoteChangeFlags        pwrMgt->HeadNoteChangeFlags
@@ -552,26 +555,22 @@ extern const OSSymbol *gIOPMStatsDriverPSChangeSlow;
 // IOPMRequest
 //******************************************************************************
 
-typedef void (*IOPMCompletionAction)(void * target, void * param, IOReturn status);
-
 class IOPMRequest : public IOCommand
 {
     OSDeclareDefaultStructors( IOPMRequest )
 
 protected:
-    IOService *          fTarget;        // request target
-    IOPMRequest *        fRequestNext;   // the next request in the chain
-    IOPMRequest *        fRequestRoot;   // the root request in the issue tree
-    IOItemCount          fWorkWaitCount; // execution blocked if non-zero
-    IOItemCount          fFreeWaitCount; // completion blocked if non-zero
-    uint32_t             fType;          // request type
+    IOService *          fTarget;           // request target
+    IOPMRequest *        fRequestNext;      // the next request in the chain
+    IOPMRequest *        fRequestRoot;      // the root request in the call tree
+    IOItemCount          fWorkWaitCount;    // execution blocked if non-zero
+    IOItemCount          fFreeWaitCount;    // completion blocked if non-zero
+    uint32_t             fRequestType;      // request type
+    bool                 fIsQuiesceBlocker;
 
-#if NOT_READY
     IOPMCompletionAction fCompletionAction;
     void *               fCompletionTarget;
     void *               fCompletionParam;
-    IOReturn             fCompletionStatus;
-#endif
 
 public:
     uint32_t             fRequestTag;
@@ -605,12 +604,12 @@ public:
 
     inline uint32_t      getType( void ) const
     {
-        return fType;
+        return fRequestType;
     }
 
     inline bool          isReplyType( void ) const
     {
-        return (fType > kIOPMRequestTypeReplyStart);
+        return (fRequestType > kIOPMRequestTypeReplyStart);
     }
 
     inline IOService *   getTarget( void ) const
@@ -618,22 +617,26 @@ public:
         return fTarget;
     }
 
-#if NOT_READY
-    inline bool          isCompletionInstalled( void )
+    inline bool          isQuiesceBlocker( void ) const
     {
-        return (fCompletionAction != 0);
+        return fIsQuiesceBlocker;
+    }
+
+    inline bool          isQuiesceType( void ) const
+    {
+        return ((kIOPMRequestTypeQuiescePowerTree == fRequestType) &&
+                (fCompletionAction != 0) && (fCompletionTarget != 0));
     }
 
     inline void          installCompletionAction(
-                            IOPMCompletionAction action,
                             void *               target,
+                            IOPMCompletionAction action,
                             void *               param )
     {
-        fCompletionAction = action;
         fCompletionTarget = target;
+        fCompletionAction = action;
         fCompletionParam  = param;
     }
-#endif /* NOT_READY */
 
     static IOPMRequest * create( void );
     bool   init( IOService * owner, IOOptionBits type );
@@ -659,8 +662,10 @@ protected:
     queue_head_t    fQueue;
     IOLock *        fLock;
 
-    virtual bool checkForWork( void );
-    virtual void free( void );
+    enum { kMaxDequeueCount = 256 };
+
+    virtual bool checkForWork( void ) APPLE_KEXT_OVERRIDE;
+    virtual void free( void ) APPLE_KEXT_OVERRIDE;
     virtual bool init( IOService * inOwner, Action inAction );
 
 public:
@@ -691,21 +696,26 @@ public:
 
 protected:
     queue_head_t        fWorkQueue;
-    Action              fWorkAction;
+    Action              fInvokeAction;
     Action              fRetireAction;
     uint32_t            fQueueLength;
     uint32_t            fConsumerCount;
     volatile uint32_t   fProducerCount;
+    IOPMRequest *       fQuiesceRequest;
+    AbsoluteTime        fQuiesceStartTime;
+    AbsoluteTime        fQuiesceFinishTime;
 
-    virtual bool checkForWork( void );
-    virtual bool init( IOService * inOwner, Action work, Action retire );
+    virtual bool checkForWork( void ) APPLE_KEXT_OVERRIDE;
+    virtual bool init( IOService * inOwner, Action invoke, Action retire );
     bool    checkRequestQueue( queue_head_t * queue, bool * empty );
 
 public:
-    static  IOPMWorkQueue * create( IOService * inOwner, Action work, Action retire );
+    static  IOPMWorkQueue * create( IOService * inOwner, Action invoke, Action retire );
     bool    queuePMRequest( IOPMRequest * request, IOServicePM * pwrMgt );
     void    signalWorkAvailable( void );
     void    incrementProducerCount( void );
+    void    attachQuiesceRequest( IOPMRequest * quiesceRequest );
+    void    finishQuiesceRequest( IOPMRequest * quiesceRequest );
 };
 
 //******************************************************************************
@@ -722,7 +732,7 @@ public:
 protected:
     queue_head_t    fQueue;
 
-    virtual bool checkForWork( void );
+    virtual bool checkForWork( void ) APPLE_KEXT_OVERRIDE;
     virtual bool init( IOService * inOwner, Action inAction );
 
 public:

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -87,45 +87,20 @@ static int nstat_recvspace = 8192;
 SYSCTL_INT(_net_stats, OID_AUTO, recvspace, CTLFLAG_RW | CTLFLAG_LOCKED,
     &nstat_recvspace, 0, "");
 
-static int nstat_successmsgfailures = 0;
-SYSCTL_INT(_net_stats, OID_AUTO, successmsgfailures, CTLFLAG_RD| CTLFLAG_LOCKED,
-    &nstat_successmsgfailures, 0, "");
-
-static int nstat_sendountfailures = 0;
-SYSCTL_INT(_net_stats, OID_AUTO, sendountfailures, CTLFLAG_RD| CTLFLAG_LOCKED,
-    &nstat_sendountfailures, 0, "");
-
-static int nstat_sysinfofailures = 0;
-SYSCTL_INT(_net_stats, OID_AUTO, sysinfofalures, CTLFLAG_RD| CTLFLAG_LOCKED,
-    &nstat_sysinfofailures, 0, "");
-
-static int nstat_srccountfailures = 0;
-SYSCTL_INT(_net_stats, OID_AUTO, srccountfailures, CTLFLAG_RD| CTLFLAG_LOCKED,
-    &nstat_srccountfailures, 0, "");
-
-static int nstat_descriptionfailures = 0;
-SYSCTL_INT(_net_stats, OID_AUTO, descriptionfailures, CTLFLAG_RD| CTLFLAG_LOCKED,
-    &nstat_descriptionfailures, 0, "");
-
-static int nstat_msgremovedfailures = 0;
-SYSCTL_INT(_net_stats, OID_AUTO, msgremovedfailures , CTLFLAG_RD| CTLFLAG_LOCKED,
-    &nstat_msgremovedfailures, 0, "");
-
-static int nstat_srcaddedfailures = 0;
-SYSCTL_INT(_net_stats, OID_AUTO, srcaddedfailures , CTLFLAG_RD| CTLFLAG_LOCKED,
-    &nstat_srcaddedfailures, 0, "");
-
-static int nstat_msgerrorfailures = 0;
-SYSCTL_INT(_net_stats, OID_AUTO, msgerrorfailures , CTLFLAG_RD| CTLFLAG_LOCKED,
-    &nstat_msgerrorfailures, 0, "");
+static struct nstat_stats nstat_stats;
+SYSCTL_STRUCT(_net_stats, OID_AUTO, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &nstat_stats, nstat_stats, "");
 
 
 enum
 {
-	NSTAT_FLAG_CLEANUP	= (1 << 0),
-	NSTAT_FLAG_REQCOUNTS	= (1 << 1),
-	NSTAT_FLAG_REQDESCS	= (1 << 2)
+	NSTAT_FLAG_CLEANUP				= (1 << 0),
+	NSTAT_FLAG_REQCOUNTS			= (1 << 1),
+	NSTAT_FLAG_SUPPORTS_UPDATES		= (1 << 2),
+	NSTAT_FLAG_SYSINFO_SUBSCRIBED	= (1 << 3),
 };
+
+#define QUERY_CONTINUATION_SRC_COUNT 100
 
 typedef struct nstat_control_state
 {
@@ -136,7 +111,12 @@ typedef struct nstat_control_state
 	u_int32_t			ncs_unit;
 	nstat_src_ref_t			ncs_next_srcref;
 	struct nstat_src		*ncs_srcs;
+	mbuf_t				ncs_accumulated;
 	u_int32_t			ncs_flags;
+	u_int64_t			ncs_provider_filters[NSTAT_PROVIDER_COUNT];
+	/* state maintained for partial query requests */
+	u_int64_t			ncs_context;
+	u_int64_t			ncs_seq;
 } nstat_control_state;
 
 typedef struct nstat_provider
@@ -151,6 +131,7 @@ typedef struct nstat_provider
 	void					(*nstat_watcher_remove)(nstat_control_state *state);
 	errno_t					(*nstat_copy_descriptor)(nstat_provider_cookie_t cookie, void *data, u_int32_t len);
 	void					(*nstat_release)(nstat_provider_cookie_t cookie, boolean_t locked);
+	bool    				(*nstat_reporting_allowed)(nstat_provider_cookie_t cookie, uint64_t filter);
 } nstat_provider;
 
 
@@ -161,14 +142,19 @@ typedef struct nstat_src
 	nstat_provider			*provider;
 	nstat_provider_cookie_t		cookie;
 	uint32_t			filter;
+	uint64_t			seq;
 } nstat_src;
 
 static errno_t		nstat_control_send_counts(nstat_control_state *,
-    			    nstat_src *, unsigned long long, int *); 
-static int		nstat_control_send_description(nstat_control_state *state, nstat_src *src, u_int64_t context);
+			    nstat_src *, unsigned long long, u_int16_t, int *);
+static int		nstat_control_send_description(nstat_control_state *state, nstat_src *src, u_int64_t context, u_int16_t hdr_flags);
+static int nstat_control_send_update(nstat_control_state *state, nstat_src *src, u_int64_t context, u_int16_t hdr_flags, int *gone);
 static errno_t		nstat_control_send_removed(nstat_control_state *, nstat_src *);
-static void		nstat_control_cleanup_source(nstat_control_state *state, nstat_src *src,
-    				boolean_t);
+static errno_t		nstat_control_send_goodbye(nstat_control_state	*state, nstat_src *src);
+static void		nstat_control_cleanup_source(nstat_control_state *state, nstat_src *src, boolean_t);
+static bool		nstat_control_reporting_allowed(nstat_control_state *state, nstat_src *src);
+static boolean_t	nstat_control_begin_query(nstat_control_state *state, const nstat_msg_hdr *hdrp);
+static u_int16_t	nstat_control_end_query(nstat_control_state *state, nstat_src *last_src, boolean_t partial);
 
 static u_int32_t	nstat_udp_watchers = 0;
 static u_int32_t	nstat_tcp_watchers = 0;
@@ -250,6 +236,57 @@ nstat_ip6_to_sockaddr(
 	}
 }
 
+static u_int16_t
+nstat_inpcb_to_flags(
+	const struct inpcb *inp)
+{
+	u_int16_t flags = 0;
+
+	if ((inp != NULL ) && (inp->inp_last_outifp != NULL))
+	{
+		struct ifnet *ifp = inp->inp_last_outifp;
+
+		u_int32_t functional_type = if_functional_type(ifp);
+
+		/* Panic if someone adds a functional type without updating ntstat. */
+		VERIFY(0 <= functional_type && functional_type <= IFRTYPE_FUNCTIONAL_LAST);
+
+		switch (functional_type)
+		{
+		case IFRTYPE_FUNCTIONAL_UNKNOWN:
+			flags |= NSTAT_IFNET_IS_UNKNOWN_TYPE;
+			break;
+		case IFRTYPE_FUNCTIONAL_LOOPBACK:
+			flags |= NSTAT_IFNET_IS_LOOPBACK;
+			break;
+		case IFRTYPE_FUNCTIONAL_WIRED:
+			flags |= NSTAT_IFNET_IS_WIRED;
+			break;
+		case IFRTYPE_FUNCTIONAL_WIFI_INFRA:
+			flags |= NSTAT_IFNET_IS_WIFI;
+			break;
+		case IFRTYPE_FUNCTIONAL_WIFI_AWDL:
+			flags |= NSTAT_IFNET_IS_WIFI;
+			flags |= NSTAT_IFNET_IS_AWDL;
+			break;
+		case IFRTYPE_FUNCTIONAL_CELLULAR:
+			flags |= NSTAT_IFNET_IS_CELLULAR;
+			break;
+		}
+
+		if (IFNET_IS_EXPENSIVE(ifp))
+		{
+			flags |= NSTAT_IFNET_IS_EXPENSIVE;
+		}
+	}
+	else
+	{
+		flags = NSTAT_IFNET_IS_UNKNOWN_TYPE;
+	}
+
+	return flags;
+}
+
 #pragma mark -- Network Statistic Providers --
 
 static errno_t nstat_control_source_add(u_int64_t context, nstat_control_state *state, nstat_provider *provider, nstat_provider_cookie_t cookie);
@@ -291,7 +328,6 @@ static void nstat_init_route_provider(void);
 static void nstat_init_tcp_provider(void);
 static void nstat_init_udp_provider(void);
 static void nstat_init_ifnet_provider(void);
-static void nstat_init_sysinfo_provider(void);
 
 __private_extern__ void
 nstat_init(void)
@@ -311,7 +347,6 @@ nstat_init(void)
 		nstat_init_tcp_provider();
 		nstat_init_udp_provider();
 		nstat_init_ifnet_provider();
-		nstat_init_sysinfo_provider();
 		nstat_control_register();
 	}
 }
@@ -433,9 +468,9 @@ nstat_route_counts(
 	struct rtentry		*rt = (struct rtentry*)cookie;
 	struct nstat_counts	*rt_stats = rt->rt_stats;
 	
-	*out_gone = 0;
+	if (out_gone) *out_gone = 0;
 	
-	if ((rt->rt_flags & RTF_UP) == 0) *out_gone = 1;
+	if (out_gone && (rt->rt_flags & RTF_UP) == 0) *out_gone = 1;
 	
 	if (rt_stats)
 	{
@@ -454,7 +489,9 @@ nstat_route_counts(
 		out_counts->nstat_cell_rxbytes = out_counts->nstat_cell_txbytes = 0;
 	}
 	else
+	{
 		bzero(out_counts, sizeof(*out_counts));
+	}
 	
 	return 0;
 }
@@ -839,6 +876,7 @@ struct nstat_tucookie {
 		struct sockaddr_in6	v6;
 	} remote;
 	unsigned int	if_index;
+	uint16_t	ifnet_properties;
 };
 
 static struct nstat_tucookie *
@@ -1037,12 +1075,12 @@ nstat_tcp_counts(
 
 	bzero(out_counts, sizeof(*out_counts));
 	
-	*out_gone = 0;
+	if (out_gone) *out_gone = 0;
 	
 	// if the pcb is in the dead state, we should stop using it
 	if (nstat_tcp_gone(cookie))
 	{
-		*out_gone = 1;
+		if (out_gone) *out_gone = 1;
 		if (!(inp = tucookie->inp) || !intotcpcb(inp))
 			return EINVAL;
 	} 
@@ -1167,7 +1205,8 @@ nstat_pcb_detach(struct inpcb *inp)
 		return;
 
 	lck_mtx_lock(&nstat_mtx);
-	for (state = nstat_controls; state; state = state->ncs_next) {
+	for (state = nstat_controls; state; state = state->ncs_next)
+	{
 		lck_mtx_lock(&state->mtx);
 		for (prevsrc = NULL, src = state->ncs_srcs; src;
 		    prevsrc = src, src = src->next) 
@@ -1177,30 +1216,15 @@ nstat_pcb_detach(struct inpcb *inp)
 				break;
 		}
 
-		if (src) {
-			// send one last counts notification
-			result = nstat_control_send_counts(state, src, 0, NULL);
-			if (result != 0 && nstat_debug)
-				printf("%s - nstat_control_send_counts() %d\n",
-					__func__, result);
-
-			// send a last description
-			result = nstat_control_send_description(state, src, 0);
-			if (result != 0 && nstat_debug)
-				printf("%s - nstat_control_send_description() %d\n",
-					__func__, result);
-
-			// send the source removed notification
-			result = nstat_control_send_removed(state, src);
-			if (result != 0 && nstat_debug)
-				printf("%s - nstat_control_send_removed() %d\n",
-					__func__, result);
-
+		if (src)
+		{
+			result = nstat_control_send_goodbye(state, src);
+			
 			if (prevsrc)
 				prevsrc->next = src->next;
 			else
 				state->ncs_srcs = src->next;
-
+			
 			src->next = dead_list;
 			dead_list = src;
 		}
@@ -1260,6 +1284,8 @@ nstat_pcb_cache(struct inpcb *inp)
 				if (inp->inp_last_outifp)
 					tucookie->if_index = 
 					    inp->inp_last_outifp->if_index;
+
+				tucookie->ifnet_properties = nstat_inpcb_to_flags(inp);
 				tucookie->cached = true;
 				break;
 			}
@@ -1357,7 +1383,7 @@ nstat_tcp_copy_descriptor(
 		desc->traffic_class = so->so_traffic_class;
 		desc->traffic_mgt_flags = so->so_traffic_mgt_flags;
 		proc_name(desc->pid, desc->pname, sizeof(desc->pname));
-		if (desc->pname == NULL || desc->pname[0] == 0)
+		if (desc->pname[0] == 0)
 		{
 			strlcpy(desc->pname, tucookie->pname,
 			    sizeof(desc->pname));
@@ -1384,8 +1410,29 @@ nstat_tcp_copy_descriptor(
 		desc->rcvbufsize = so->so_rcv.sb_hiwat;
 		desc->rcvbufused = so->so_rcv.sb_cc;
 	}
-	
+
+	tcp_get_connectivity_status(tp, &desc->connstatus);
+	desc->ifnet_properties = nstat_inpcb_to_flags(inp);
 	return 0;
+}
+
+static bool
+nstat_tcpudp_reporting_allowed(nstat_provider_cookie_t cookie, uint64_t filter)
+{
+	bool retval = true;
+
+	/* Only apply interface filter if at least one is allowed. */
+	if ((filter & NSTAT_FILTER_ACCEPT_ALL) != 0)
+	{
+		struct nstat_tucookie *tucookie = (struct nstat_tucookie *)cookie;
+		struct inpcb	*inp = tucookie->inp;
+
+		uint16_t interface_properties = nstat_inpcb_to_flags(inp);
+
+		/* For now, just check on interface type. */
+		retval = ((filter & interface_properties) != 0);
+	}
+	return retval;
 }
 
 static void
@@ -1401,6 +1448,7 @@ nstat_init_tcp_provider(void)
 	nstat_tcp_provider.nstat_watcher_add = nstat_tcp_add_watcher;
 	nstat_tcp_provider.nstat_watcher_remove = nstat_tcp_remove_watcher;
 	nstat_tcp_provider.nstat_copy_descriptor = nstat_tcp_copy_descriptor;
+	nstat_tcp_provider.nstat_reporting_allowed = nstat_tcpudp_reporting_allowed;
 	nstat_tcp_provider.next = nstat_providers;
 	nstat_providers = &nstat_tcp_provider;
 }
@@ -1439,12 +1487,12 @@ nstat_udp_counts(
 	struct nstat_tucookie *tucookie =
 	    (struct nstat_tucookie *)cookie;
 	
-	*out_gone = 0;
+	if (out_gone) *out_gone = 0;
 	
 	// if the pcb is in the dead state, we should stop using it
 	if (nstat_udp_gone(cookie))
 	{
-		*out_gone = 1;
+		if (out_gone) *out_gone = 1;
 		if (!tucookie->inp)
 			return EINVAL;
 	}
@@ -1570,34 +1618,36 @@ nstat_udp_copy_descriptor(
 		if (inp->inp_vflag & INP_IPV6)
 		{
 			nstat_ip6_to_sockaddr(&inp->in6p_laddr, inp->inp_lport,
-				&desc->local.v6, sizeof(desc->local));
+				&desc->local.v6, sizeof(desc->local.v6));
 			nstat_ip6_to_sockaddr(&inp->in6p_faddr, inp->inp_fport,
-				&desc->remote.v6, sizeof(desc->remote));
+				&desc->remote.v6, sizeof(desc->remote.v6));
 		}
 		else if (inp->inp_vflag & INP_IPV4)
 		{
 			nstat_ip_to_sockaddr(&inp->inp_laddr, inp->inp_lport,
-				&desc->local.v4, sizeof(desc->local));
+				&desc->local.v4, sizeof(desc->local.v4));
 			nstat_ip_to_sockaddr(&inp->inp_faddr, inp->inp_fport,
-				&desc->remote.v4, sizeof(desc->remote));
+				&desc->remote.v4, sizeof(desc->remote.v4));
 		}
+		desc->ifnet_properties = nstat_inpcb_to_flags(inp);
 	}
 	else
 	{
 		if (inp->inp_vflag & INP_IPV6)
 		{
 			memcpy(&desc->local.v6, &tucookie->local.v6,
-			    sizeof(desc->local));
+			    sizeof(desc->local.v6));
 			memcpy(&desc->remote.v6, &tucookie->remote.v6,
-			    sizeof(desc->remote));
+			    sizeof(desc->remote.v6));
 		}
 		else if (inp->inp_vflag & INP_IPV4)
 		{
 			memcpy(&desc->local.v4, &tucookie->local.v4,
-			    sizeof(desc->local));
+			    sizeof(desc->local.v4));
 			memcpy(&desc->remote.v4, &tucookie->remote.v4,
-			    sizeof(desc->remote));
+			    sizeof(desc->remote.v4));
 		}
+		desc->ifnet_properties = tucookie->ifnet_properties;
 	}
 	
 	if (inp->inp_last_outifp)
@@ -1613,7 +1663,7 @@ nstat_udp_copy_descriptor(
 		desc->upid = so->last_upid;
 		desc->pid = so->last_pid;
 		proc_name(desc->pid, desc->pname, sizeof(desc->pname));
-		if (desc->pname == NULL || desc->pname[0] == 0)
+		if (desc->pname[0] == 0)
 		{
 			strlcpy(desc->pname, tucookie->pname,
 			    sizeof(desc->pname));
@@ -1639,7 +1689,7 @@ nstat_udp_copy_descriptor(
 		desc->rcvbufused = so->so_rcv.sb_cc;
 		desc->traffic_class = so->so_traffic_class;
 	}
-	
+
 	return 0;
 }
 
@@ -1656,6 +1706,7 @@ nstat_init_udp_provider(void)
 	nstat_udp_provider.nstat_watcher_remove = nstat_udp_remove_watcher;
 	nstat_udp_provider.nstat_copy_descriptor = nstat_udp_copy_descriptor;
 	nstat_udp_provider.nstat_release = nstat_udp_release;
+	nstat_udp_provider.nstat_reporting_allowed = nstat_tcpudp_reporting_allowed;
 	nstat_udp_provider.next = nstat_providers;
 	nstat_providers = &nstat_udp_provider;
 }
@@ -1680,7 +1731,7 @@ nstat_ifnet_lookup(
 	u_int32_t 		length,
 	nstat_provider_cookie_t	*out_cookie)
 {
-	const nstat_ifnet_add_param *param = (nstat_ifnet_add_param *)data;
+	const nstat_ifnet_add_param *param = (const nstat_ifnet_add_param *)data;
 	struct ifnet *ifp;
 	boolean_t changed = FALSE;
 	nstat_control_state *state;
@@ -1739,7 +1790,7 @@ nstat_ifnet_lookup(
 			{
 				if (src->provider != &nstat_ifnet_provider)
 					continue;
-				nstat_control_send_description(state, src, 0);
+				nstat_control_send_description(state, src, 0, 0);
 			}
 			lck_mtx_unlock(&state->mtx);
 		}
@@ -1780,12 +1831,12 @@ nstat_ifnet_counts(
 	    (struct nstat_ifnet_cookie *)cookie;
 	struct ifnet *ifp = ifcookie->ifp;
 
-	*out_gone = 0;
+	if (out_gone) *out_gone = 0;
 	
 	// if the ifnet is gone, we should stop using it
 	if (nstat_ifnet_gone(cookie))
 	{
-		*out_gone = 1;
+		if (out_gone) *out_gone = 1;
 		return EINVAL;
 	}
 
@@ -1795,7 +1846,6 @@ nstat_ifnet_counts(
 	out_counts->nstat_txpackets = ifp->if_opackets;
 	out_counts->nstat_txbytes = ifp->if_obytes;
 	out_counts->nstat_cell_rxbytes = out_counts->nstat_cell_txbytes = 0;
-
 	return 0;
 }
 
@@ -1849,6 +1899,208 @@ nstat_ifnet_release(
 	OSFree(ifcookie, sizeof(*ifcookie), nstat_malloc_tag);
 }
 
+static void
+nstat_ifnet_copy_link_status(
+	struct ifnet			*ifp,
+	struct nstat_ifnet_descriptor	*desc)
+{
+	struct if_link_status *ifsr = ifp->if_link_status;
+	nstat_ifnet_desc_link_status *link_status = &desc->link_status;
+
+	link_status->link_status_type = NSTAT_IFNET_DESC_LINK_STATUS_TYPE_NONE;
+	if (ifsr == NULL)
+		return;
+
+	lck_rw_lock_shared(&ifp->if_link_status_lock);
+
+	if (ifp->if_type == IFT_CELLULAR) {
+
+		nstat_ifnet_desc_cellular_status *cell_status = &link_status->u.cellular;
+		struct if_cellular_status_v1 *if_cell_sr =
+			&ifsr->ifsr_u.ifsr_cell.if_cell_u.if_status_v1;
+
+		if (ifsr->ifsr_version != IF_CELLULAR_STATUS_REPORT_VERSION_1)
+			goto done;
+
+		link_status->link_status_type = NSTAT_IFNET_DESC_LINK_STATUS_TYPE_CELLULAR;
+
+		if (if_cell_sr->valid_bitmask & IF_CELL_LINK_QUALITY_METRIC_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_LINK_QUALITY_METRIC_VALID;
+			cell_status->link_quality_metric = if_cell_sr->link_quality_metric;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_EFFECTIVE_BANDWIDTH_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_EFFECTIVE_BANDWIDTH_VALID;
+			cell_status->ul_effective_bandwidth = if_cell_sr->ul_effective_bandwidth;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_MAX_BANDWIDTH_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_MAX_BANDWIDTH_VALID;
+			cell_status->ul_max_bandwidth = if_cell_sr->ul_max_bandwidth;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_MIN_LATENCY_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_MIN_LATENCY_VALID;
+			cell_status->ul_min_latency = if_cell_sr->ul_min_latency;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_EFFECTIVE_LATENCY_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_EFFECTIVE_LATENCY_VALID;
+			cell_status->ul_effective_latency = if_cell_sr->ul_effective_latency;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_MAX_LATENCY_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_MAX_LATENCY_VALID;
+			cell_status->ul_max_latency = if_cell_sr->ul_max_latency;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_RETXT_LEVEL_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_RETXT_LEVEL_VALID;
+			if (if_cell_sr->ul_retxt_level == IF_CELL_UL_RETXT_LEVEL_NONE)
+				cell_status->ul_retxt_level = NSTAT_IFNET_DESC_CELL_UL_RETXT_LEVEL_NONE;
+			else if (if_cell_sr->ul_retxt_level == IF_CELL_UL_RETXT_LEVEL_LOW)
+				cell_status->ul_retxt_level = NSTAT_IFNET_DESC_CELL_UL_RETXT_LEVEL_LOW;
+			else if (if_cell_sr->ul_retxt_level == IF_CELL_UL_RETXT_LEVEL_MEDIUM)
+				cell_status->ul_retxt_level = NSTAT_IFNET_DESC_CELL_UL_RETXT_LEVEL_MEDIUM;
+			else if (if_cell_sr->ul_retxt_level == IF_CELL_UL_RETXT_LEVEL_HIGH)
+				cell_status->ul_retxt_level = NSTAT_IFNET_DESC_CELL_UL_RETXT_LEVEL_HIGH;
+			else
+				cell_status->valid_bitmask &= ~NSTAT_IFNET_DESC_CELL_UL_RETXT_LEVEL_VALID;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_BYTES_LOST_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_BYTES_LOST_VALID;
+			cell_status->ul_bytes_lost = if_cell_sr->ul_bytes_lost;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_MIN_QUEUE_SIZE_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_MIN_QUEUE_SIZE_VALID;
+			cell_status->ul_min_queue_size = if_cell_sr->ul_min_queue_size;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_AVG_QUEUE_SIZE_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_AVG_QUEUE_SIZE_VALID;
+			cell_status->ul_avg_queue_size = if_cell_sr->ul_avg_queue_size;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_MAX_QUEUE_SIZE_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_UL_MAX_QUEUE_SIZE_VALID;
+			cell_status->ul_max_queue_size = if_cell_sr->ul_max_queue_size;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_DL_EFFECTIVE_BANDWIDTH_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_DL_EFFECTIVE_BANDWIDTH_VALID;
+			cell_status->dl_effective_bandwidth = if_cell_sr->dl_effective_bandwidth;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_DL_MAX_BANDWIDTH_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_DL_MAX_BANDWIDTH_VALID;
+			cell_status->dl_max_bandwidth = if_cell_sr->dl_max_bandwidth;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_CONFIG_INACTIVITY_TIME_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_CONFIG_INACTIVITY_TIME_VALID;
+			cell_status->config_inactivity_time = if_cell_sr->config_inactivity_time;
+		}
+		if (if_cell_sr->valid_bitmask & IF_CELL_CONFIG_BACKOFF_TIME_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_CONFIG_BACKOFF_TIME_VALID;
+			cell_status->config_backoff_time = if_cell_sr->config_backoff_time;
+		}
+
+	} else if (ifp->if_subfamily == IFNET_SUBFAMILY_WIFI) {
+
+		nstat_ifnet_desc_wifi_status *wifi_status = &link_status->u.wifi;
+		struct if_wifi_status_v1 *if_wifi_sr =
+			&ifsr->ifsr_u.ifsr_wifi.if_wifi_u.if_status_v1;
+
+		if (ifsr->ifsr_version != IF_WIFI_STATUS_REPORT_VERSION_1)
+			goto done;
+
+		link_status->link_status_type = NSTAT_IFNET_DESC_LINK_STATUS_TYPE_WIFI;
+
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_LINK_QUALITY_METRIC_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_LINK_QUALITY_METRIC_VALID;
+			wifi_status->link_quality_metric = if_wifi_sr->link_quality_metric;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_UL_EFFECTIVE_BANDWIDTH_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_UL_EFFECTIVE_BANDWIDTH_VALID;
+			wifi_status->ul_effective_bandwidth = if_wifi_sr->ul_effective_bandwidth;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_UL_MAX_BANDWIDTH_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_UL_MAX_BANDWIDTH_VALID;
+			wifi_status->ul_max_bandwidth = if_wifi_sr->ul_max_bandwidth;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_UL_MIN_LATENCY_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_UL_MIN_LATENCY_VALID;
+			wifi_status->ul_min_latency = if_wifi_sr->ul_min_latency;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_UL_EFFECTIVE_LATENCY_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_UL_EFFECTIVE_LATENCY_VALID;
+			wifi_status->ul_effective_latency = if_wifi_sr->ul_effective_latency;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_UL_MAX_LATENCY_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_UL_MAX_LATENCY_VALID;
+			wifi_status->ul_max_latency = if_wifi_sr->ul_max_latency;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_UL_RETXT_LEVEL_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_UL_RETXT_LEVEL_VALID;
+			if (if_wifi_sr->ul_retxt_level == IF_WIFI_UL_RETXT_LEVEL_NONE)
+				wifi_status->ul_retxt_level = NSTAT_IFNET_DESC_WIFI_UL_RETXT_LEVEL_NONE;
+			else if (if_wifi_sr->ul_retxt_level == IF_WIFI_UL_RETXT_LEVEL_LOW)
+				wifi_status->ul_retxt_level = NSTAT_IFNET_DESC_WIFI_UL_RETXT_LEVEL_LOW;
+			else if (if_wifi_sr->ul_retxt_level == IF_WIFI_UL_RETXT_LEVEL_MEDIUM)
+				wifi_status->ul_retxt_level = NSTAT_IFNET_DESC_WIFI_UL_RETXT_LEVEL_MEDIUM;
+			else if (if_wifi_sr->ul_retxt_level == IF_WIFI_UL_RETXT_LEVEL_HIGH)
+				wifi_status->ul_retxt_level = NSTAT_IFNET_DESC_WIFI_UL_RETXT_LEVEL_HIGH;
+			else
+				wifi_status->valid_bitmask &= ~NSTAT_IFNET_DESC_WIFI_UL_RETXT_LEVEL_VALID;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_UL_BYTES_LOST_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_UL_BYTES_LOST_VALID;
+			wifi_status->ul_bytes_lost = if_wifi_sr->ul_bytes_lost;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_UL_ERROR_RATE_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_UL_ERROR_RATE_VALID;
+			wifi_status->ul_error_rate = if_wifi_sr->ul_error_rate;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_DL_EFFECTIVE_BANDWIDTH_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_DL_EFFECTIVE_BANDWIDTH_VALID;
+			wifi_status->dl_effective_bandwidth = if_wifi_sr->dl_effective_bandwidth;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_DL_MAX_BANDWIDTH_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_DL_MAX_BANDWIDTH_VALID;
+			wifi_status->dl_max_bandwidth = if_wifi_sr->dl_max_bandwidth;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_DL_MIN_LATENCY_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_DL_MIN_LATENCY_VALID;
+			wifi_status->dl_min_latency = if_wifi_sr->dl_min_latency;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_DL_EFFECTIVE_LATENCY_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_DL_EFFECTIVE_LATENCY_VALID;
+			wifi_status->dl_effective_latency = if_wifi_sr->dl_effective_latency;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_DL_MAX_LATENCY_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_DL_MAX_LATENCY_VALID;
+			wifi_status->dl_max_latency = if_wifi_sr->dl_max_latency;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_DL_ERROR_RATE_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_DL_ERROR_RATE_VALID;
+			wifi_status->dl_error_rate = if_wifi_sr->dl_error_rate;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_CONFIG_FREQUENCY_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_CONFIG_FREQUENCY_VALID;
+			if (if_wifi_sr->config_frequency == IF_WIFI_CONFIG_FREQUENCY_2_4_GHZ)
+				wifi_status->config_frequency = NSTAT_IFNET_DESC_WIFI_CONFIG_FREQUENCY_2_4_GHZ;
+			else if (if_wifi_sr->config_frequency == IF_WIFI_CONFIG_FREQUENCY_5_0_GHZ)
+				wifi_status->config_frequency = NSTAT_IFNET_DESC_WIFI_CONFIG_FREQUENCY_5_0_GHZ;
+			else
+				wifi_status->valid_bitmask &= ~NSTAT_IFNET_DESC_WIFI_CONFIG_FREQUENCY_VALID;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_CONFIG_MULTICAST_RATE_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_CONFIG_MULTICAST_RATE_VALID;
+			wifi_status->config_multicast_rate = if_wifi_sr->config_multicast_rate;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_CONFIG_SCAN_COUNT_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_CONFIG_SCAN_COUNT_VALID;
+			wifi_status->scan_count = if_wifi_sr->scan_count;
+		}
+		if (if_wifi_sr->valid_bitmask & IF_WIFI_CONFIG_SCAN_DURATION_VALID) {
+			wifi_status->valid_bitmask |= NSTAT_IFNET_DESC_WIFI_CONFIG_SCAN_DURATION_VALID;
+			wifi_status->scan_duration = if_wifi_sr->scan_duration;
+		}
+	}
+
+done:
+	lck_rw_done(&ifp->if_link_status_lock);
+}
+
 static errno_t
 nstat_ifnet_copy_descriptor(
 	nstat_provider_cookie_t	cookie,
@@ -1875,8 +2127,8 @@ nstat_ifnet_copy_descriptor(
 	if (ifp->if_desc.ifd_len < sizeof(desc->description))
 		memcpy(desc->description, ifp->if_desc.ifd_desc,
 	    	    sizeof(desc->description));
+	nstat_ifnet_copy_link_status(ifp, desc);
 	ifnet_lock_done(ifp);
-	
 	return 0;
 }
 
@@ -1917,132 +2169,32 @@ nstat_ifnet_threshold_reached(unsigned int ifindex)
 			ifp = ifcookie->ifp;
 			if (ifp->if_index != ifindex)
 				continue;
-			nstat_control_send_counts(state, src, 0, NULL);
+			nstat_control_send_counts(state, src, 0, 0, NULL);
 		}
 		lck_mtx_unlock(&state->mtx);
 	}
 	lck_mtx_unlock(&nstat_mtx);
 }
 
-#pragma mark -- Sysinfo Provider --
-
-static nstat_provider nstat_sysinfo_provider;
-
-/* We store the flags requested by the client */
-typedef struct nstat_sysinfo_cookie
-{
-	u_int32_t	flags;
-} nstat_sysinfo_cookie;
-
-static errno_t
-nstat_sysinfo_lookup(
-	const void		*data,
-	u_int32_t 		length,
-	nstat_provider_cookie_t	*out_cookie)
-{
-	const nstat_sysinfo_add_param *param = (nstat_sysinfo_add_param *)data;
-	nstat_sysinfo_cookie *cookie;
-
-	if (length < sizeof(*param))
-		return (EINVAL);
-
-	if (nstat_privcheck != 0) {
-		errno_t result = priv_check_cred(kauth_cred_get(),
-		    PRIV_NET_PRIVILEGED_NETWORK_STATISTICS, 0);
-		if (result != 0)
-			return (result);
-	}
-
-	cookie = OSMalloc(sizeof(*cookie), nstat_malloc_tag);
-	if (cookie == NULL)
-		return (ENOMEM);
-	cookie->flags = param->flags;
-	*out_cookie = cookie;
-	return (0);
-}
-
-static int
-nstat_sysinfo_gone(
-	__unused nstat_provider_cookie_t cookie)
-{
-	/* Sysinfo always exists */
-	return (0);
-}
-
-static errno_t
-nstat_sysinfo_copy_descriptor(
-	nstat_provider_cookie_t cookie,
-	void			*data,
-	u_int32_t		len)
-{
-	nstat_sysinfo_descriptor *desc = (nstat_sysinfo_descriptor *)data;
-	struct nstat_sysinfo_cookie *syscookie =
-		(struct nstat_sysinfo_cookie *)cookie;
-
-	if (len < sizeof(nstat_sysinfo_descriptor))
-		return (EINVAL);
-	desc->flags = syscookie->flags;
-	return (0);
-}
-
+#pragma mark -- Sysinfo --
 static void
-nstat_sysinfo_release(
-	nstat_provider_cookie_t	cookie,
-	__unused boolean_t locked)
+nstat_set_keyval_scalar(nstat_sysinfo_keyval *kv, int key, u_int32_t val)
 {
-	struct nstat_sysinfo_cookie *syscookie =
-		(struct nstat_sysinfo_cookie *)cookie;
-	OSFree(syscookie, sizeof(*syscookie), nstat_malloc_tag);
-}
-
-static errno_t
-nstat_enqueue_success(
-    uint64_t context,
-    nstat_control_state	*state)
-{
-	nstat_msg_hdr success;
-	errno_t result;
-
-	bzero(&success, sizeof(success));
-	success.context = context;
-	success.type = NSTAT_MSG_TYPE_SUCCESS;
-	result = ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, &success,
-	    sizeof(success), CTL_DATA_EOR | CTL_DATA_CRIT);
-	if (result != 0) {
-		printf("%s: could not enqueue success message %d\n",
-		    __func__, result);
-		nstat_successmsgfailures += 1;
-	}
-	return result;
-}
-
-static void
-nstat_init_sysinfo_provider(void)
-{
-	bzero(&nstat_sysinfo_provider, sizeof(nstat_sysinfo_provider));
-	nstat_sysinfo_provider.nstat_provider_id = NSTAT_PROVIDER_SYSINFO;
-	nstat_sysinfo_provider.nstat_descriptor_length = sizeof(nstat_sysinfo_descriptor);
-	nstat_sysinfo_provider.nstat_lookup = nstat_sysinfo_lookup;
-	nstat_sysinfo_provider.nstat_gone = nstat_sysinfo_gone;
-	nstat_sysinfo_provider.nstat_counts = NULL;
-	nstat_sysinfo_provider.nstat_watcher_add = NULL;
-	nstat_sysinfo_provider.nstat_watcher_remove = NULL;
-	nstat_sysinfo_provider.nstat_copy_descriptor = nstat_sysinfo_copy_descriptor;
-	nstat_sysinfo_provider.nstat_release = nstat_sysinfo_release;
-	nstat_sysinfo_provider.next = nstat_providers;
-	nstat_providers = &nstat_sysinfo_provider;
+	kv->nstat_sysinfo_key = key;
+	kv->nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
+	kv->u.nstat_sysinfo_scalar = val;
 }
 
 static void
 nstat_sysinfo_send_data_internal(
 	nstat_control_state *control,
-	nstat_src *src,
 	nstat_sysinfo_data *data)
 {
 	nstat_msg_sysinfo_counts *syscnt = NULL;
 	size_t allocsize = 0, countsize = 0, nkeyvals = 0;
 	nstat_sysinfo_keyval *kv;
 	errno_t result = 0;
+	size_t i = 0;
 	
 	allocsize = offsetof(nstat_msg_sysinfo_counts, counts);
 	countsize = offsetof(nstat_sysinfo_counts, nstat_sysinfo_keyvals);
@@ -2051,10 +2203,12 @@ nstat_sysinfo_send_data_internal(
 	switch (data->flags)
 	{
 		case NSTAT_SYSINFO_MBUF_STATS:
-			nkeyvals = 5;
+			nkeyvals = sizeof(struct nstat_sysinfo_mbuf_stats) /
+			    sizeof(u_int32_t);
 			break;
 		case NSTAT_SYSINFO_TCP_STATS:
-			nkeyvals = 6;
+			nkeyvals = sizeof(struct nstat_sysinfo_tcp_stats) /
+			    sizeof(u_int32_t);
 			break;
 		default:
 			return;
@@ -2068,61 +2222,150 @@ nstat_sysinfo_send_data_internal(
 	bzero(syscnt, allocsize);
 
 	syscnt->hdr.type = NSTAT_MSG_TYPE_SYSINFO_COUNTS;
+	syscnt->hdr.length = allocsize;
 	syscnt->counts.nstat_sysinfo_len = countsize;
-	syscnt->srcref = src->srcref;
-
+	
 	kv = (nstat_sysinfo_keyval *) &syscnt->counts.nstat_sysinfo_keyvals;
 	switch (data->flags)
 	{
 		case NSTAT_SYSINFO_MBUF_STATS:
 		{
-			kv[0].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_MBUF_256B_TOTAL;
-			kv[0].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[0].u.nstat_sysinfo_scalar = data->u.mb_stats.total_256b;
-
-			kv[1].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_MBUF_2KB_TOTAL;
-			kv[1].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[1].u.nstat_sysinfo_scalar = data->u.mb_stats.total_2kb;
-
-			kv[2].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_MBUF_4KB_TOTAL;
-			kv[2].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[2].u.nstat_sysinfo_scalar = data->u.mb_stats.total_4kb;
-
-			kv[3].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_SOCK_MBCNT;
-			kv[3].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[3].u.nstat_sysinfo_scalar = data->u.mb_stats.sbmb_total;
-
-
-			kv[4].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_SOCK_ATMBLIMIT;
-			kv[4].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[4].u.nstat_sysinfo_scalar = data->u.mb_stats.sb_atmbuflimit;
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_MBUF_256B_TOTAL,
+			    data->u.mb_stats.total_256b);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_MBUF_2KB_TOTAL,
+			    data->u.mb_stats.total_2kb);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_MBUF_4KB_TOTAL,
+			    data->u.mb_stats.total_4kb);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_MBUF_16KB_TOTAL,
+			    data->u.mb_stats.total_16kb);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_SOCK_MBCNT,
+			    data->u.mb_stats.sbmb_total);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_SOCK_ATMBLIMIT,
+			    data->u.mb_stats.sb_atmbuflimit);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_MBUF_DRAIN_CNT,
+			    data->u.mb_stats.draincnt);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_MBUF_MEM_RELEASED,
+			    data->u.mb_stats.memreleased);
+			VERIFY(i == nkeyvals);
 			break;
 		}
 		case NSTAT_SYSINFO_TCP_STATS:
 		{
-			kv[0].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_IPV4_AVGRTT;
-			kv[0].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[0].u.nstat_sysinfo_scalar = data->u.tcp_stats.ipv4_avgrtt;
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_IPV4_AVGRTT,
+			    data->u.tcp_stats.ipv4_avgrtt);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_IPV6_AVGRTT,
+			    data->u.tcp_stats.ipv6_avgrtt);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_SEND_PLR,
+			    data->u.tcp_stats.send_plr);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_RECV_PLR,
+			    data->u.tcp_stats.recv_plr);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_SEND_TLRTO,
+			    data->u.tcp_stats.send_tlrto_rate);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_SEND_REORDERRATE,
+			    data->u.tcp_stats.send_reorder_rate);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_CONNECTION_ATTEMPTS,
+			    data->u.tcp_stats.connection_attempts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_CONNECTION_ACCEPTS,
+			    data->u.tcp_stats.connection_accepts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_CLIENT_ENABLED,
+			    data->u.tcp_stats.ecn_client_enabled);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_SERVER_ENABLED,
+			    data->u.tcp_stats.ecn_server_enabled);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_CLIENT_SETUP,
+			    data->u.tcp_stats.ecn_client_setup);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_SERVER_SETUP,
+			    data->u.tcp_stats.ecn_server_setup);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_CLIENT_SUCCESS,
+			    data->u.tcp_stats.ecn_client_success);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_SERVER_SUCCESS,
+			    data->u.tcp_stats.ecn_server_success);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_NOT_SUPPORTED,
+			    data->u.tcp_stats.ecn_not_supported);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_LOST_SYN,
+			    data->u.tcp_stats.ecn_lost_syn);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_LOST_SYNACK,
+			    data->u.tcp_stats.ecn_lost_synack);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_RECV_CE,
+			    data->u.tcp_stats.ecn_recv_ce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_RECV_ECE,
+			    data->u.tcp_stats.ecn_recv_ece);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_SENT_ECE,
+			    data->u.tcp_stats.ecn_sent_ece);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_CONN_RECV_CE,
+			    data->u.tcp_stats.ecn_conn_recv_ce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_CONN_RECV_ECE,
+			    data->u.tcp_stats.ecn_conn_recv_ece);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_CONN_PLNOCE,
+			    data->u.tcp_stats.ecn_conn_plnoce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_CONN_PL_CE,
+			    data->u.tcp_stats.ecn_conn_pl_ce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_CONN_NOPL_CE,
+			    data->u.tcp_stats.ecn_conn_nopl_ce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_SYN_DATA_RCV,
+			    data->u.tcp_stats.tfo_syn_data_rcv);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_COOKIE_REQ_RCV,
+			    data->u.tcp_stats.tfo_cookie_req_rcv);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_COOKIE_SENT,
+			    data->u.tcp_stats.tfo_cookie_sent);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_COOKIE_INVALID,
+			    data->u.tcp_stats.tfo_cookie_invalid);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_COOKIE_REQ,
+			    data->u.tcp_stats.tfo_cookie_req);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_COOKIE_RCV,
+			    data->u.tcp_stats.tfo_cookie_rcv);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_SYN_DATA_SENT,
+			    data->u.tcp_stats.tfo_syn_data_sent);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_SYN_DATA_ACKED,
+			    data->u.tcp_stats.tfo_syn_data_acked);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_SYN_LOSS,
+			    data->u.tcp_stats.tfo_syn_loss);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_BLACKHOLE,
+			    data->u.tcp_stats.tfo_blackhole);
 
-			kv[1].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_IPV6_AVGRTT;
-			kv[1].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[1].u.nstat_sysinfo_scalar = data->u.tcp_stats.ipv6_avgrtt;
-
-			kv[2].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_SEND_PLR;
-			kv[2].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[2].u.nstat_sysinfo_scalar = data->u.tcp_stats.send_plr;
-
-			kv[3].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_RECV_PLR;
-			kv[3].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[3].u.nstat_sysinfo_scalar = data->u.tcp_stats.recv_plr;
-
-			kv[4].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_SEND_TLRTO;
-			kv[4].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[4].u.nstat_sysinfo_scalar = data->u.tcp_stats.send_tlrto_rate;
-
-			kv[5].nstat_sysinfo_key = NSTAT_SYSINFO_KEY_SEND_REORDERRATE;
-			kv[5].nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
-			kv[5].u.nstat_sysinfo_scalar = data->u.tcp_stats.send_reorder_rate;
+			VERIFY(i == nkeyvals);
 			break;
 		}
 	}
@@ -2132,7 +2375,9 @@ nstat_sysinfo_send_data_internal(
 		result = ctl_enqueuedata(control->ncs_kctl,
 		    control->ncs_unit, syscnt, allocsize, CTL_DATA_EOR);
 		if (result != 0)
-			nstat_sysinfofailures += 1;
+		{
+			nstat_stats.nstat_sysinfofailures += 1;
+		}
 		OSFree(syscnt, allocsize, nstat_malloc_tag);
 	}
 	return;
@@ -2148,25 +2393,13 @@ nstat_sysinfo_send_data(
 	for (control = nstat_controls; control; control = control->ncs_next)
 	{
 		lck_mtx_lock(&control->mtx);
-		nstat_src	*src;
-		for (src = control->ncs_srcs; src; src = src->next)
+		if ((control->ncs_flags & NSTAT_FLAG_SYSINFO_SUBSCRIBED) != 0)
 		{
-			if (src->provider->nstat_provider_id == 
-				NSTAT_PROVIDER_SYSINFO)
-			{
-				struct nstat_sysinfo_cookie *syscookie;
-				syscookie = (struct nstat_sysinfo_cookie *) src->cookie;
-				if (syscookie->flags & data->flags)
-				{
-					nstat_sysinfo_send_data_internal(control,
-						src, data);
-				}
-			}
-		}	
+			nstat_sysinfo_send_data_internal(control, data);
+		}
 		lck_mtx_unlock(&control->mtx);
 	}
 	lck_mtx_unlock(&nstat_mtx);
-
 }
 
 static void
@@ -2185,6 +2418,159 @@ static errno_t	nstat_control_connect(kern_ctl_ref kctl, struct sockaddr_ctl *sac
 static errno_t	nstat_control_disconnect(kern_ctl_ref kctl, u_int32_t unit, void *uinfo);
 static errno_t	nstat_control_send(kern_ctl_ref kctl, u_int32_t unit, void *uinfo, mbuf_t m, int flags);
 
+static errno_t
+nstat_enqueue_success(
+    uint64_t context,
+    nstat_control_state	*state,
+    u_int16_t flags)
+{
+	nstat_msg_hdr success;
+	errno_t result;
+
+	bzero(&success, sizeof(success));
+	success.context = context;
+	success.type = NSTAT_MSG_TYPE_SUCCESS;
+	success.length = sizeof(success);
+	success.flags = flags;
+	result = ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, &success,
+	    sizeof(success), CTL_DATA_EOR | CTL_DATA_CRIT);
+	if (result != 0) {
+		if (nstat_debug != 0)
+			printf("%s: could not enqueue success message %d\n",
+			    __func__, result);
+		nstat_stats.nstat_successmsgfailures += 1;
+	}
+	return result;
+}
+
+static errno_t
+nstat_control_send_goodbye(
+	nstat_control_state	*state,
+	nstat_src			*src)
+{
+	errno_t result = 0;
+	int failed = 0;
+
+	if (nstat_control_reporting_allowed(state, src))
+	{
+		if ((state->ncs_flags & NSTAT_FLAG_SUPPORTS_UPDATES) != 0)
+		{
+			result = nstat_control_send_update(state, src, 0, NSTAT_MSG_HDR_FLAG_CLOSING, NULL);
+			if (result != 0)
+			{
+				failed = 1;
+				if (nstat_debug != 0)
+					printf("%s - nstat_control_send_update() %d\n", __func__, result);
+			}
+		}
+		else
+		{
+			// send one last counts notification
+			result = nstat_control_send_counts(state, src, 0, NSTAT_MSG_HDR_FLAG_CLOSING, NULL);
+			if (result != 0)
+			{
+				failed = 1;
+				if (nstat_debug != 0)
+					printf("%s - nstat_control_send_counts() %d\n", __func__, result);
+			}
+
+			// send a last description
+			result = nstat_control_send_description(state, src, 0, NSTAT_MSG_HDR_FLAG_CLOSING);
+			if (result != 0)
+			{
+				failed = 1;
+				if (nstat_debug != 0)
+					printf("%s - nstat_control_send_description() %d\n", __func__, result);
+			}
+		}
+	}
+
+	// send the source removed notification
+	result = nstat_control_send_removed(state, src);
+	if (result != 0 && nstat_debug)
+	{
+		failed = 1;
+		if (nstat_debug != 0)
+			printf("%s - nstat_control_send_removed() %d\n", __func__, result);
+	}
+
+	if (failed != 0)
+		nstat_stats.nstat_control_send_goodbye_failures++;
+
+	
+	return result;
+}
+
+static errno_t
+nstat_flush_accumulated_msgs(
+	nstat_control_state	*state)
+{
+	errno_t result = 0;
+	if (state->ncs_accumulated && mbuf_len(state->ncs_accumulated))
+	{
+		mbuf_pkthdr_setlen(state->ncs_accumulated, mbuf_len(state->ncs_accumulated));
+		result = ctl_enqueuembuf(state->ncs_kctl, state->ncs_unit, state->ncs_accumulated, CTL_DATA_EOR);
+		if (result != 0 && nstat_debug)
+		{
+			nstat_stats.nstat_flush_accumulated_msgs_failures++;
+			if (nstat_debug != 0)
+				printf("%s - ctl_enqueuembuf failed: %d\n", __func__, result);
+			mbuf_freem(state->ncs_accumulated);
+		}
+		state->ncs_accumulated = NULL;
+	}
+	return result;
+}
+
+static errno_t
+nstat_accumulate_msg(
+	nstat_control_state	*state,
+	nstat_msg_hdr		*hdr,
+	size_t				length)
+{
+	if (state->ncs_accumulated && mbuf_trailingspace(state->ncs_accumulated) < length)
+	{
+		// Will send the current mbuf
+		nstat_flush_accumulated_msgs(state);
+	}
+	
+	errno_t result = 0;
+	
+	if (state->ncs_accumulated == NULL)
+	{
+		unsigned int one = 1;
+		if (mbuf_allocpacket(MBUF_DONTWAIT, NSTAT_MAX_MSG_SIZE, &one, &state->ncs_accumulated) != 0)
+		{
+			if (nstat_debug != 0)
+				printf("%s - mbuf_allocpacket failed\n", __func__);
+			result = ENOMEM;
+		}
+		else
+		{
+			mbuf_setlen(state->ncs_accumulated, 0);
+		}
+	}
+	
+	if (result == 0)
+	{
+		hdr->length = length;
+		result = mbuf_copyback(state->ncs_accumulated, mbuf_len(state->ncs_accumulated),
+							   length, hdr, MBUF_DONTWAIT);
+	}
+	
+	if (result != 0)
+	{
+		nstat_flush_accumulated_msgs(state);
+		if (nstat_debug != 0)
+			printf("%s - resorting to ctl_enqueuedata\n", __func__);
+		result = ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, hdr, length, CTL_DATA_EOR);
+	}
+	
+	if (result != 0)
+		nstat_stats.nstat_accumulate_msg_failures++;
+
+	return result;
+}
 
 static void*
 nstat_idle_check(
@@ -2215,24 +2601,7 @@ nstat_idle_check(
 					dead = *srcpp;
 					*srcpp = (*srcpp)->next;
 					
-					// send one last counts notification
-					result = nstat_control_send_counts(control, dead,
-					    0, NULL);
-					if (result != 0 && nstat_debug)
-						printf("%s - nstat_control_send_counts() %d\n",
-							__func__, result);
-						
-					// send a last description
-					result = nstat_control_send_description(control, dead, 0);
-					if (result != 0 && nstat_debug)
-						printf("%s - nstat_control_send_description() %d\n",
-							__func__, result);
-					
-					// send the source removed notification
-					result = nstat_control_send_removed(control, dead);
-					if (result != 0 && nstat_debug)
-						printf("%s - nstat_control_send_removed() %d\n",
-							__func__, result);
+					result = nstat_control_send_goodbye(control, dead);
 					
 					// Put this on the list to release later
 					dead->next = dead_list;
@@ -2304,16 +2673,37 @@ nstat_control_cleanup_source(
 {
 	errno_t result;
 	
-	if (state) {
+	if (state)
+	{
 		result = nstat_control_send_removed(state, src);
-		if (result != 0 && nstat_debug)
-			printf("%s - nstat_control_send_removed() %d\n",
-				__func__, result);
+		if (result != 0)
+		{
+			nstat_stats.nstat_control_cleanup_source_failures++;
+			if (nstat_debug != 0)
+				printf("%s - nstat_control_send_removed() %d\n",
+				    __func__, result);
+		}
 	}
 	// Cleanup the source if we found it.
 	src->provider->nstat_release(src->cookie, locked);
 	OSFree(src, sizeof(*src), nstat_malloc_tag);
 }
+
+
+static bool
+nstat_control_reporting_allowed(
+	nstat_control_state *state,
+	nstat_src *src)
+{
+	if (src->provider->nstat_reporting_allowed == NULL)
+		return TRUE;
+
+	return (
+	    src->provider->nstat_reporting_allowed( src->cookie,
+		state->ncs_provider_filters[src->provider->nstat_provider_id])
+	);
+}
+
 
 static errno_t
 nstat_control_connect(
@@ -2350,7 +2740,7 @@ static errno_t
 nstat_control_disconnect(
 	__unused kern_ctl_ref	kctl,
 	__unused u_int32_t		unit,
-	void			*uinfo)
+	void					*uinfo)
 {
 	u_int32_t	watching;
 	nstat_control_state	*state = (nstat_control_state*)uinfo;
@@ -2384,6 +2774,12 @@ nstat_control_disconnect(
 	
 	// set cleanup flags
 	state->ncs_flags |= NSTAT_FLAG_CLEANUP;
+	
+	if (state->ncs_accumulated)
+	{
+		mbuf_freem(state->ncs_accumulated);
+		state->ncs_accumulated = NULL;
+	}
 	
 	// Copy out the list of sources
 	nstat_src	*srcs = state->ncs_srcs;
@@ -2441,10 +2837,10 @@ nstat_control_send_counts(
 	nstat_control_state	*state,
 	nstat_src		*src,
 	unsigned long long	context,
+	u_int16_t hdr_flags,
 	int *gone)
-{ 	
+{
 	nstat_msg_src_counts counts;
-	int localgone = 0;
 	errno_t result = 0;
 
 	/* Some providers may not have any counts to send */
@@ -2453,33 +2849,68 @@ nstat_control_send_counts(
 
 	bzero(&counts, sizeof(counts));
 	counts.hdr.type = NSTAT_MSG_TYPE_SRC_COUNTS;
+	counts.hdr.length = sizeof(counts);
+	counts.hdr.flags = hdr_flags;
 	counts.hdr.context = context;
 	counts.srcref = src->srcref;
 	
-	if (src->provider->nstat_counts(src->cookie, &counts.counts,
-	    &localgone) == 0) {
+	if (src->provider->nstat_counts(src->cookie, &counts.counts, gone) == 0)
+	{
 		if ((src->filter & NSTAT_FILTER_NOZEROBYTES) &&
 		    counts.counts.nstat_rxbytes == 0 && 
-		    counts.counts.nstat_txbytes == 0) {
+		    counts.counts.nstat_txbytes == 0)
+		{
 			result = EAGAIN;
-		} else {
+		}
+		else
+		{
 			result = ctl_enqueuedata(state->ncs_kctl,
 			    state->ncs_unit, &counts, sizeof(counts),
 			    CTL_DATA_EOR);
 			if (result != 0)
-				nstat_srccountfailures += 1;
+				nstat_stats.nstat_sendcountfailures += 1;
 		}
 	}
-	if (gone)
-		*gone = localgone;
 	return result;
+}
+
+static errno_t
+nstat_control_append_counts(
+	nstat_control_state	*state,
+	nstat_src			*src,
+	int					*gone)
+{
+	/* Some providers may not have any counts to send */
+	if (!src->provider->nstat_counts) return 0;
+	
+	nstat_msg_src_counts counts;
+	bzero(&counts, sizeof(counts));
+	counts.hdr.type = NSTAT_MSG_TYPE_SRC_COUNTS;
+	counts.hdr.length = sizeof(counts);
+	counts.srcref = src->srcref;
+	
+	errno_t	result = 0;
+	result = src->provider->nstat_counts(src->cookie, &counts.counts, gone);
+	if (result != 0)
+	{
+		return result;
+	}
+	
+	if ((src->filter & NSTAT_FILTER_NOZEROBYTES) == NSTAT_FILTER_NOZEROBYTES &&
+		counts.counts.nstat_rxbytes == 0 && counts.counts.nstat_txbytes == 0)
+	{
+		return EAGAIN;
+	}
+	
+	return nstat_accumulate_msg(state, &counts.hdr, counts.hdr.length);
 }
 
 static int
 nstat_control_send_description(
 	nstat_control_state	*state,
 	nstat_src			*src,
-	u_int64_t			context)
+	u_int64_t			context,
+	u_int16_t			hdr_flags)
 {
 	// Provider doesn't support getting the descriptor? Done.
 	if (src->provider->nstat_descriptor_length == 0 ||
@@ -2513,17 +2944,192 @@ nstat_control_send_description(
 
 	desc->hdr.context = context;
 	desc->hdr.type = NSTAT_MSG_TYPE_SRC_DESC;
+	desc->hdr.length = size;
+	desc->hdr.flags = hdr_flags;
 	desc->srcref = src->srcref;
 	desc->provider = src->provider->nstat_provider_id;
 
 	result = ctl_enqueuembuf(state->ncs_kctl, state->ncs_unit, msg, CTL_DATA_EOR);
 	if (result != 0)
 	{
-		nstat_descriptionfailures += 1;
+		nstat_stats.nstat_descriptionfailures += 1;
 		mbuf_freem(msg);
 	}
 
 	return result;
+}
+
+static errno_t
+nstat_control_append_description(
+	nstat_control_state	*state,
+	nstat_src			*src)
+{
+	size_t	size = offsetof(nstat_msg_src_description, data) + src->provider->nstat_descriptor_length;
+	if (size > 512 || src->provider->nstat_descriptor_length == 0 ||
+		src->provider->nstat_copy_descriptor == NULL)
+	{
+		return EOPNOTSUPP;
+	}
+	
+	// Fill out a buffer on the stack, we will copy to the mbuf later
+	u_int64_t buffer[size/sizeof(u_int64_t)  + 1]; // u_int64_t to ensure alignment
+	bzero(buffer, size);
+	
+	nstat_msg_src_description	*desc = (nstat_msg_src_description*)buffer;
+	desc->hdr.type = NSTAT_MSG_TYPE_SRC_DESC;
+	desc->hdr.length = size;
+	desc->srcref = src->srcref;
+	desc->provider = src->provider->nstat_provider_id;
+	
+	errno_t	result = 0;
+	// Fill in the description
+	// Query the provider for the provider specific bits
+	result = src->provider->nstat_copy_descriptor(src->cookie, desc->data,
+				src->provider->nstat_descriptor_length);
+	if (result != 0)
+	{
+		return result;
+	}
+	
+	return nstat_accumulate_msg(state, &desc->hdr, size);
+}
+
+static int
+nstat_control_send_update(
+	nstat_control_state	*state,
+	nstat_src			*src,
+	u_int64_t			context,
+	u_int16_t		hdr_flags,
+	int					*gone)
+{
+	// Provider doesn't support getting the descriptor or counts? Done.
+	if ((src->provider->nstat_descriptor_length == 0 ||
+		 src->provider->nstat_copy_descriptor == NULL) &&
+		src->provider->nstat_counts == NULL)
+	{
+		return EOPNOTSUPP;
+	}
+	
+	// Allocate storage for the descriptor message
+	mbuf_t			msg;
+	unsigned int	one = 1;
+	u_int32_t		size = offsetof(nstat_msg_src_update, data) +
+						   src->provider->nstat_descriptor_length;
+	if (mbuf_allocpacket(MBUF_DONTWAIT, size, &one, &msg) != 0)
+	{
+		return ENOMEM;
+	}
+	
+	nstat_msg_src_update	*desc = (nstat_msg_src_update*)mbuf_data(msg);
+	bzero(desc, size);
+	desc->hdr.context = context;
+	desc->hdr.type = NSTAT_MSG_TYPE_SRC_UPDATE;
+	desc->hdr.length = size;
+	desc->hdr.flags = hdr_flags;
+	desc->srcref = src->srcref;
+	desc->provider = src->provider->nstat_provider_id;
+	
+	mbuf_setlen(msg, size);
+	mbuf_pkthdr_setlen(msg, mbuf_len(msg));
+	
+	errno_t	result = 0;
+	if (src->provider->nstat_descriptor_length != 0 && src->provider->nstat_copy_descriptor)
+	{
+		// Query the provider for the provider specific bits
+		result = src->provider->nstat_copy_descriptor(src->cookie, desc->data,
+							src->provider->nstat_descriptor_length);
+		if (result != 0)
+		{
+			mbuf_freem(msg);
+			return result;
+		}
+	}
+	
+	if (src->provider->nstat_counts)
+	{
+		result = src->provider->nstat_counts(src->cookie, &desc->counts, gone);
+		if (result == 0)
+		{
+			if ((src->filter & NSTAT_FILTER_NOZEROBYTES) == NSTAT_FILTER_NOZEROBYTES &&
+				desc->counts.nstat_rxbytes == 0 && desc->counts.nstat_txbytes == 0)
+			{
+				result = EAGAIN;
+			}
+			else
+			{
+				result = ctl_enqueuembuf(state->ncs_kctl, state->ncs_unit, msg, CTL_DATA_EOR);
+			}
+		}
+	}
+	
+	if (result != 0)
+	{
+		nstat_stats.nstat_srcupatefailures += 1;
+		mbuf_freem(msg);
+	}
+
+	return result;
+}
+
+static errno_t
+nstat_control_append_update(
+	nstat_control_state	*state,
+	nstat_src			*src,
+	int					*gone)
+{
+	size_t	size = offsetof(nstat_msg_src_update, data) + src->provider->nstat_descriptor_length;
+	if (size > 512 || ((src->provider->nstat_descriptor_length == 0 ||
+		src->provider->nstat_copy_descriptor == NULL) &&
+		src->provider->nstat_counts == NULL))
+	{
+		return EOPNOTSUPP;
+	}
+	
+	// Fill out a buffer on the stack, we will copy to the mbuf later
+	u_int64_t buffer[size/sizeof(u_int64_t)  + 1]; // u_int64_t to ensure alignment
+	bzero(buffer, size);
+	
+	nstat_msg_src_update	*desc = (nstat_msg_src_update*)buffer;
+	desc->hdr.type = NSTAT_MSG_TYPE_SRC_UPDATE;
+	desc->hdr.length = size;
+	desc->srcref = src->srcref;
+	desc->provider = src->provider->nstat_provider_id;
+	
+	errno_t	result = 0;
+	// Fill in the description
+	if (src->provider->nstat_descriptor_length != 0 && src->provider->nstat_copy_descriptor)
+	{
+		// Query the provider for the provider specific bits
+		result = src->provider->nstat_copy_descriptor(src->cookie, desc->data,
+					src->provider->nstat_descriptor_length);
+		if (result != 0)
+		{
+			nstat_stats.nstat_copy_descriptor_failures++;
+			if (nstat_debug != 0)
+				printf("%s: src->provider->nstat_copy_descriptor: %d\n", __func__, result);
+			return result;
+		}
+	}
+	
+	if (src->provider->nstat_counts)
+	{
+		result = src->provider->nstat_counts(src->cookie, &desc->counts, gone);
+		if (result != 0)
+		{
+			nstat_stats.nstat_provider_counts_failures++;
+			if (nstat_debug != 0)
+				printf("%s: src->provider->nstat_counts: %d\n", __func__, result);
+			return result;
+		}
+		
+		if ((src->filter & NSTAT_FILTER_NOZEROBYTES) == NSTAT_FILTER_NOZEROBYTES &&
+			desc->counts.nstat_rxbytes == 0 && desc->counts.nstat_txbytes == 0)
+		{
+			return EAGAIN;
+		}
+	}
+	
+	return nstat_accumulate_msg(state, &desc->hdr, size);
 }
 
 static errno_t
@@ -2536,12 +3142,13 @@ nstat_control_send_removed(
 
 	bzero(&removed, sizeof(removed));
 	removed.hdr.type = NSTAT_MSG_TYPE_SRC_REMOVED;
+	removed.hdr.length = sizeof(removed);
 	removed.hdr.context = 0;
 	removed.srcref = src->srcref;
 	result = ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, &removed,
 	    sizeof(removed), CTL_DATA_EOR | CTL_DATA_CRIT);
 	if (result != 0)
-		nstat_msgremovedfailures += 1;
+		nstat_stats.nstat_msgremovedfailures += 1;
 
 	return result;
 }
@@ -2610,9 +3217,13 @@ nstat_control_handle_add_all(
 		return EINVAL;
 	}
 	
+
 	nstat_msg_add_all_srcs	*req = mbuf_data(m);
+	if (req->provider > NSTAT_PROVIDER_LAST) return ENOENT;
+
 	nstat_provider			*provider = nstat_find_provider_by_id(req->provider);
-	
+	u_int64_t           	filter = req->filter;
+
 	if (!provider) return ENOENT;
 	if (provider->nstat_watcher_add == NULL) return ENOTSUP;
 	
@@ -2631,84 +3242,103 @@ nstat_control_handle_add_all(
 	lck_mtx_unlock(&state->mtx);
 	if (result != 0) return result;
 
+	state->ncs_provider_filters[req->provider] = filter;
+
 	result = provider->nstat_watcher_add(state);
 	if (result != 0)
 	{
+		state->ncs_provider_filters[req->provider] = 0;
 		lck_mtx_lock(&state->mtx);
 		state->ncs_watching &= ~(1 << provider->nstat_provider_id);
 		lck_mtx_unlock(&state->mtx);
 	}
 	if (result == 0)
-		nstat_enqueue_success(req->hdr.context, state);
+		nstat_enqueue_success(req->hdr.context, state, 0);
 	
 	return result;
 }
 
 static errno_t
 nstat_control_source_add(
-	u_int64_t				context,
+	u_int64_t			context,
 	nstat_control_state		*state,
 	nstat_provider			*provider,
-	nstat_provider_cookie_t	cookie)
+	nstat_provider_cookie_t		cookie)
 {
-	// Fill out source added message
-	mbuf_t					msg = NULL;
-	unsigned int			one = 1;
+	// Fill out source added message if appropriate
+	mbuf_t			msg = NULL;
+	nstat_src_ref_t		*srcrefp = NULL;
+
+	u_int64_t		provider_filters =
+	    state->ncs_provider_filters[provider->nstat_provider_id];
+	boolean_t		tell_user =
+	    ((provider_filters & NSTAT_FILTER_SUPPRESS_SRC_ADDED) == 0);
+	u_int32_t		src_filter =
+	    (provider_filters & NSTAT_FILTER_PROVIDER_NOZEROBYTES)
+		? NSTAT_FILTER_NOZEROBYTES : 0;
+
+	if (tell_user)
+	{
+		unsigned int one = 1;
 	
-	if (mbuf_allocpacket(MBUF_DONTWAIT, sizeof(nstat_msg_src_added), &one,
-	    &msg) != 0)
-		return ENOMEM;
+		if (mbuf_allocpacket(MBUF_DONTWAIT, sizeof(nstat_msg_src_added),
+		    &one, &msg) != 0)
+			return ENOMEM;
 	
-	mbuf_setlen(msg, sizeof(nstat_msg_src_added));
-	mbuf_pkthdr_setlen(msg, mbuf_len(msg));
-	nstat_msg_src_added	*add = mbuf_data(msg);
-	bzero(add, sizeof(*add));
-	add->hdr.type = NSTAT_MSG_TYPE_SRC_ADDED;
-	add->hdr.context = context;
-	add->provider = provider->nstat_provider_id;
+		mbuf_setlen(msg, sizeof(nstat_msg_src_added));
+		mbuf_pkthdr_setlen(msg, mbuf_len(msg));
+		nstat_msg_src_added	*add = mbuf_data(msg);
+		bzero(add, sizeof(*add));
+		add->hdr.type = NSTAT_MSG_TYPE_SRC_ADDED;
+		add->hdr.length = mbuf_len(msg);
+		add->hdr.context = context;
+		add->provider = provider->nstat_provider_id;
+		srcrefp = &add->srcref;
+	}
 	
 	// Allocate storage for the source
 	nstat_src	*src = OSMalloc(sizeof(*src), nstat_malloc_tag);
 	if (src == NULL)
 	{
-		mbuf_freem(msg);
+		if (msg) mbuf_freem(msg);
 		return ENOMEM;
 	}
 	
 	// Fill in the source, including picking an unused source ref
 	lck_mtx_lock(&state->mtx);
-	
-	add->srcref = src->srcref = nstat_control_next_src_ref(state);
+
+	src->srcref = nstat_control_next_src_ref(state);
+	if (srcrefp)
+		*srcrefp = src->srcref;
+
 	if (state->ncs_flags & NSTAT_FLAG_CLEANUP || src->srcref == NSTAT_SRC_REF_INVALID)
 	{
 		lck_mtx_unlock(&state->mtx);
 		OSFree(src, sizeof(*src), nstat_malloc_tag);
-		mbuf_freem(msg);
+		if (msg) mbuf_freem(msg);
 		return EINVAL;
 	}
 	src->provider = provider;
 	src->cookie = cookie;
-	src->filter = 0;
-	
-	// send the source added message
-	errno_t result = ctl_enqueuembuf(state->ncs_kctl, state->ncs_unit, msg,
-					CTL_DATA_EOR);
-	if (result != 0)
+	src->filter = src_filter;
+
+	if (msg)
 	{
-		nstat_srcaddedfailures += 1;
-		lck_mtx_unlock(&state->mtx);
-		OSFree(src, sizeof(*src), nstat_malloc_tag);
-		mbuf_freem(msg);
-		return result;
+		// send the source added message if appropriate
+		errno_t result = ctl_enqueuembuf(state->ncs_kctl, state->ncs_unit, msg,
+						CTL_DATA_EOR);
+		if (result != 0)
+		{
+			nstat_stats.nstat_srcaddedfailures += 1;
+			lck_mtx_unlock(&state->mtx);
+			OSFree(src, sizeof(*src), nstat_malloc_tag);
+			mbuf_freem(msg);
+			return result;
+		}
 	}
-	
-	// Put the 	source in the list
+	// Put the source in the list
 	src->next = state->ncs_srcs;
 	state->ncs_srcs = src;
-	
-	// send the description message
-	// not useful as the source is often not complete
-//	nstat_control_send_description(state, src, 0);
 	
 	lck_mtx_unlock(&state->mtx);
 	
@@ -2770,64 +3400,121 @@ nstat_control_handle_query_request(
 	{
 		return EINVAL;
 	}
+
+	const boolean_t all_srcs = (req.srcref == NSTAT_SRC_REF_ALL);
 	
 	lck_mtx_lock(&state->mtx);
-	if (req.srcref == NSTAT_SRC_REF_ALL)
-		state->ncs_flags |= NSTAT_FLAG_REQCOUNTS;
-	nstat_src	**srcpp = &state->ncs_srcs;
-	while (*srcpp != NULL)
-	{
-		int	gone;
 
+	if (all_srcs)
+	{
+		state->ncs_flags |= NSTAT_FLAG_REQCOUNTS;
+	}
+	nstat_src	**srcpp = &state->ncs_srcs;
+	u_int64_t	src_count = 0;
+	boolean_t	partial = FALSE;
+
+	/*
+	 * Error handling policy and sequence number generation is folded into
+	 * nstat_control_begin_query.
+	 */
+	partial = nstat_control_begin_query(state, &req.hdr);
+
+	while (*srcpp != NULL
+		&& (!partial || src_count < QUERY_CONTINUATION_SRC_COUNT))
+	{
+		nstat_src	*src = NULL;
+		int			gone;
+		
+		src = *srcpp;
 		gone = 0;
 		// XXX ignore IFACE types?
-		if (req.srcref == NSTAT_SRC_REF_ALL ||
-		    (*srcpp)->srcref == req.srcref)
+		if (all_srcs || src->srcref == req.srcref)
 		{
-			gone = 0;
-
-			result = nstat_control_send_counts(state, *srcpp,
-			    req.hdr.context, &gone);
-			
-			// If the counts message failed to enqueue then we should clear our flag so
-			// that a client doesn't miss anything on idle cleanup.
-			if (result != 0)
-				state->ncs_flags &= ~NSTAT_FLAG_REQCOUNTS;
-			
-			if (gone)
+			if (nstat_control_reporting_allowed(state, src)
+			    && (!partial || !all_srcs || src->seq != state->ncs_seq))
 			{
-				// send one last descriptor message so client may see last state
-				// If we can't send the notification now, it
-				// will be sent in the idle cleanup.
-				result = nstat_control_send_description(state, *srcpp, 0);
-				if (result != 0 && nstat_debug)
-					printf("%s - nstat_control_send_description() %d\n",
-						__func__, result);
-				if (result != 0) {
+				if (all_srcs &&
+					(req.hdr.flags & NSTAT_MSG_HDR_FLAG_SUPPORTS_AGGREGATE) != 0)
+				{
+					result = nstat_control_append_counts(state, src, &gone);
+				}
+				else
+				{
+					result = nstat_control_send_counts(state, src, req.hdr.context, 0, &gone);
+				}
+
+				if (ENOMEM == result || ENOBUFS == result)
+				{
+					/*
+					 * If the counts message failed to
+					 * enqueue then we should clear our flag so
+					 * that a client doesn't miss anything on
+					 * idle cleanup.  We skip the "gone"
+					 * processing in the hope that we may
+					 * catch it another time.
+					 */
 					state->ncs_flags &= ~NSTAT_FLAG_REQCOUNTS;
 					break;
-				}	
-
-				// pull src out of the list
-				nstat_src	*src = *srcpp;
-				*srcpp = src->next;
-				
-				src->next = dead_srcs;
-				dead_srcs = src;
+				}
+				if (partial)
+				{
+					/*
+					 * We skip over hard errors and
+					 * filtered sources.
+					 */
+					src->seq = state->ncs_seq;
+					src_count++;
+				}
 			}
-			
-			if (req.srcref != NSTAT_SRC_REF_ALL)
-				break;
 		}
 		
-		if (!gone)
+		if (gone)
+		{
+			// send one last descriptor message so client may see last state
+			// If we can't send the notification now, it
+			// will be sent in the idle cleanup.
+			result = nstat_control_send_description(state, *srcpp, 0, 0);
+			if (result != 0)
+			{
+				nstat_stats.nstat_control_send_description_failures++;
+				if (nstat_debug != 0)
+					printf("%s - nstat_control_send_description() %d\n", __func__, result);
+				state->ncs_flags &= ~NSTAT_FLAG_REQCOUNTS;
+				break;
+			}
+			
+			// pull src out of the list
+			*srcpp = src->next;
+			
+			src->next = dead_srcs;
+			dead_srcs = src;
+		}
+		else
+		{
 			srcpp = &(*srcpp)->next;
+		}
+		
+		if (!all_srcs && req.srcref == src->srcref)
+		{
+			break;
+		}
 	}
-	lck_mtx_unlock(&state->mtx);
-	
+	nstat_flush_accumulated_msgs(state);
+
+	u_int16_t flags = 0;
 	if (req.srcref == NSTAT_SRC_REF_ALL)
+		flags = nstat_control_end_query(state, *srcpp, partial);
+
+	lck_mtx_unlock(&state->mtx);
+
+	/*
+	 * If an error occurred enqueueing data, then allow the error to
+	 * propagate to nstat_control_send. This way, the error is sent to
+	 * user-level.
+	 */
+	if (all_srcs && ENOMEM != result && ENOBUFS != result)
 	{
-		nstat_enqueue_success(req.hdr.context, state);
+		nstat_enqueue_success(req.hdr.context, state, flags);
 		result = 0;
 	}
 	
@@ -2848,37 +3535,86 @@ nstat_control_handle_query_request(
 static errno_t
 nstat_control_handle_get_src_description(
 	nstat_control_state	*state,
-	mbuf_t			m)
+	mbuf_t				m)
 {
 	nstat_msg_get_src_description	req;
-	errno_t result = 0;
+	errno_t result = ENOENT;
 	nstat_src *src;
 
 	if (mbuf_copydata(m, 0, sizeof(req), &req) != 0)
 	{
 		return EINVAL;
 	}
-	
+
 	lck_mtx_lock(&state->mtx);
-	if (req.srcref == NSTAT_SRC_REF_ALL)
-		state->ncs_flags |= NSTAT_FLAG_REQDESCS;
-	for (src = state->ncs_srcs; src; src = src->next)
-		if (req.srcref == NSTAT_SRC_REF_ALL ||
-		    src->srcref == req.srcref)
-		{
-			result = nstat_control_send_description(state, src,
-			    req.hdr.context);
-			if (result != 0)
-				state->ncs_flags &= ~NSTAT_FLAG_REQDESCS;
-			if (req.srcref != NSTAT_SRC_REF_ALL)
-				break;
-		}
-	lck_mtx_unlock(&state->mtx);
-	if (req.srcref != NSTAT_SRC_REF_ALL && src == NULL)
-		result = ENOENT;
-	else if (req.srcref == NSTAT_SRC_REF_ALL)
+	u_int64_t src_count = 0;
+	boolean_t partial = FALSE;
+	const boolean_t all_srcs = (req.srcref == NSTAT_SRC_REF_ALL);
+
+	/*
+	 * Error handling policy and sequence number generation is folded into
+	 * nstat_control_begin_query.
+	 */
+	partial = nstat_control_begin_query(state, &req.hdr);
+
+	for (src = state->ncs_srcs;
+	     src && (!partial || src_count < QUERY_CONTINUATION_SRC_COUNT);
+	     src = src->next)
 	{
-		nstat_enqueue_success(req.hdr.context, state);
+		if (all_srcs || src->srcref == req.srcref)
+		{
+			if (nstat_control_reporting_allowed(state, src)
+			    && (!all_srcs || !partial ||  src->seq != state->ncs_seq))
+			{
+				if ((req.hdr.flags & NSTAT_MSG_HDR_FLAG_SUPPORTS_AGGREGATE) != 0 && all_srcs)
+				{
+					result = nstat_control_append_description(state, src);
+				}
+				else
+				{
+					result = nstat_control_send_description(state, src, req.hdr.context, 0);
+				}
+
+				if (ENOMEM == result || ENOBUFS == result)
+				{
+					/*
+					 * If the description message failed to
+					 * enqueue then we give up for now.
+					 */
+					break;
+				}
+				if (partial)
+				{
+					/*
+					 * Note, we skip over hard errors and
+					 * filtered sources.
+					 */
+					src->seq = state->ncs_seq;
+					src_count++;
+				}
+			}
+			
+			if (!all_srcs)
+			{
+				break;
+			}
+		}
+	}
+	nstat_flush_accumulated_msgs(state);
+
+	u_int16_t flags = 0;
+	if (req.srcref == NSTAT_SRC_REF_ALL)
+		flags = nstat_control_end_query(state, src, partial);
+
+	lck_mtx_unlock(&state->mtx);
+	/*
+	 * If an error occurred enqueueing data, then allow the error to
+	 * propagate to nstat_control_send. This way, the error is sent to
+	 * user-level.
+	 */
+	if (all_srcs && ENOMEM != result && ENOBUFS != result)
+	{
+		nstat_enqueue_success(req.hdr.context, state, flags);
 		result = 0;
 	}
 	
@@ -2911,7 +3647,231 @@ nstat_control_handle_set_filter(
 		return ENOENT;
 
 	return 0;
+}
 
+static void
+nstat_send_error(
+    nstat_control_state *state,
+    u_int64_t context,
+    u_int32_t error)
+{
+	errno_t result;
+	struct nstat_msg_error	err;
+
+	bzero(&err, sizeof(err));
+	err.hdr.type = NSTAT_MSG_TYPE_ERROR;
+	err.hdr.length = sizeof(err);
+	err.hdr.context = context;
+	err.error = error;
+
+	result = ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, &err,
+				    sizeof(err), CTL_DATA_EOR | CTL_DATA_CRIT);
+	if (result != 0)
+		nstat_stats.nstat_msgerrorfailures++;
+}
+
+static boolean_t
+nstat_control_begin_query(
+    nstat_control_state *state,
+    const nstat_msg_hdr *hdrp)
+{
+	boolean_t partial = FALSE;
+
+	if (hdrp->flags & NSTAT_MSG_HDR_FLAG_CONTINUATION)
+	{
+		/* A partial query all has been requested. */
+		partial = TRUE;
+
+		if (state->ncs_context != hdrp->context)
+		{
+			if (state->ncs_context != 0)
+				nstat_send_error(state, state->ncs_context, EAGAIN);
+
+			/* Initialize state for a partial query all. */
+			state->ncs_context = hdrp->context;
+			state->ncs_seq++;
+		}
+	}
+	else if (state->ncs_context != 0)
+	{
+		/*
+		 * A continuation of a paced-query was in progress. Send that
+		 * context an error and reset the state.  If the same context
+		 * has changed its mind, just send the full query results.
+		 */
+		if (state->ncs_context != hdrp->context)
+			nstat_send_error(state, state->ncs_context, EAGAIN);
+	}
+
+	return partial;
+}
+
+static u_int16_t
+nstat_control_end_query(
+    nstat_control_state *state,
+    nstat_src *last_src,
+    boolean_t partial)
+{
+	u_int16_t flags = 0;
+
+	if (last_src == NULL || !partial)
+	{
+		/*
+		 * We iterated through the entire srcs list or exited early
+		 * from the loop when a partial update was not requested (an
+		 * error occurred), so clear context to indicate internally
+		 * that the query is finished.
+		 */
+		state->ncs_context = 0;
+	}
+	else
+	{
+		/*
+		 * Indicate to userlevel to make another partial request as
+		 * there are still sources left to be reported.
+		 */
+		flags |= NSTAT_MSG_HDR_FLAG_CONTINUATION;
+	}
+
+	return flags;
+}
+
+static errno_t
+nstat_control_handle_get_update(
+    nstat_control_state		*state,
+    mbuf_t					m)
+{
+	nstat_msg_query_src_req	req;
+
+	if (mbuf_copydata(m, 0, sizeof(req), &req) != 0)
+	{
+		return EINVAL;
+	}
+
+	lck_mtx_lock(&state->mtx);
+	
+	state->ncs_flags |= NSTAT_FLAG_SUPPORTS_UPDATES;
+
+	errno_t		result = ENOENT;
+	nstat_src	*src;
+	nstat_src	*dead_srcs = NULL;
+	nstat_src	**srcpp = &state->ncs_srcs;
+	u_int64_t src_count = 0;
+	boolean_t partial = FALSE;
+
+	/*
+	 * Error handling policy and sequence number generation is folded into
+	 * nstat_control_begin_query.
+	 */
+	partial = nstat_control_begin_query(state, &req.hdr);
+
+	while (*srcpp != NULL
+	    && (FALSE == partial
+		|| src_count < QUERY_CONTINUATION_SRC_COUNT))
+	{
+		int			gone;
+		
+		gone = 0;
+		src = *srcpp;
+		if (nstat_control_reporting_allowed(state, src))
+		{
+			/* skip this source if it has the current state
+			 * sequence number as it's already been reported in
+			 * this query-all partial sequence. */
+			if (req.srcref == NSTAT_SRC_REF_ALL
+			    && (FALSE == partial || src->seq != state->ncs_seq))
+			{
+				result = nstat_control_append_update(state, src, &gone);
+				if (ENOMEM == result || ENOBUFS == result)
+				{
+					/*
+					 * If the update message failed to
+					 * enqueue then give up.
+					 */
+					break;
+				}
+				if (partial)
+				{
+					/*
+					 * We skip over hard errors and
+					 * filtered sources.
+					 */
+					src->seq = state->ncs_seq;
+					src_count++;
+				}
+			}
+			else if (src->srcref == req.srcref)
+			{
+				result = nstat_control_send_update(state, src, req.hdr.context, 0, &gone);
+			}
+		}
+		
+		if (gone)
+		{
+			// pull src out of the list
+			*srcpp = src->next;
+
+			src->next = dead_srcs;
+			dead_srcs = src;
+		}
+		else
+		{
+			srcpp = &(*srcpp)->next;
+		}
+		
+		if (req.srcref != NSTAT_SRC_REF_ALL && req.srcref == src->srcref)
+		{
+			break;
+		}
+	}
+
+	nstat_flush_accumulated_msgs(state);
+
+
+	u_int16_t flags = 0;
+	if (req.srcref == NSTAT_SRC_REF_ALL)
+		flags = nstat_control_end_query(state, *srcpp, partial);
+
+	lck_mtx_unlock(&state->mtx);
+	/*
+	 * If an error occurred enqueueing data, then allow the error to
+	 * propagate to nstat_control_send. This way, the error is sent to
+	 * user-level.
+	 */
+	if (req.srcref == NSTAT_SRC_REF_ALL && ENOMEM != result && ENOBUFS != result)
+	{
+		nstat_enqueue_success(req.hdr.context, state, flags);
+		result = 0;
+	}
+
+	while (dead_srcs)
+	{
+		src = dead_srcs;
+		dead_srcs = src->next;
+		
+		// release src and send notification
+		nstat_control_cleanup_source(state, src, FALSE);
+	}
+	
+	return result;
+}
+
+static errno_t
+nstat_control_handle_subscribe_sysinfo(
+    nstat_control_state		*state)
+{
+	errno_t result = priv_check_cred(kauth_cred_get(), PRIV_NET_PRIVILEGED_NETWORK_STATISTICS, 0);
+	
+	if (result != 0)
+	{
+		return result;
+	}
+	
+	lck_mtx_lock(&state->mtx);
+	state->ncs_flags |= NSTAT_FLAG_SYSINFO_SUBSCRIBED;
+	lck_mtx_unlock(&state->mtx);
+	
+	return 0;
 }
 
 static errno_t
@@ -2927,7 +3887,7 @@ nstat_control_send(
 	struct nstat_msg_hdr	storage;
 	errno_t					result = 0;
 	
-	if (mbuf_pkthdr_len(m) < sizeof(hdr))
+	if (mbuf_pkthdr_len(m) < sizeof(*hdr))
 	{
 		// Is this the right thing to do?
 		mbuf_freem(m);
@@ -2942,6 +3902,19 @@ nstat_control_send(
 	{
 		mbuf_copydata(m, 0, sizeof(storage), &storage);
 		hdr = &storage;
+	}
+	
+	// Legacy clients may not set the length
+	// Those clients are likely not setting the flags either
+	// Fix everything up so old clients continue to work
+	if (hdr->length != mbuf_pkthdr_len(m))
+	{
+		hdr->flags = 0;
+		hdr->length = mbuf_pkthdr_len(m);
+		if (hdr == &storage)
+		{
+			mbuf_copyback(m, 0, sizeof(*hdr), hdr, MBUF_DONTWAIT);
+		}
 	}
 	
 	switch (hdr->type)
@@ -2965,11 +3938,19 @@ nstat_control_send(
 		case NSTAT_MSG_TYPE_GET_SRC_DESC:
 			result = nstat_control_handle_get_src_description(state, m);
 			break;
-
+		
 		case NSTAT_MSG_TYPE_SET_FILTER:
 			result = nstat_control_handle_set_filter(state, m);
 			break;
-
+		
+		case NSTAT_MSG_TYPE_GET_UPDATE:
+			result = nstat_control_handle_get_update(state, m);
+			break;
+		
+		case NSTAT_MSG_TYPE_SUBSCRIBE_SYSINFO:
+			result = nstat_control_handle_subscribe_sysinfo(state);
+			break;
+		
 		default:
 			result = EINVAL;
 			break;
@@ -2981,16 +3962,34 @@ nstat_control_send(
 		
 		bzero(&err, sizeof(err));
 		err.hdr.type = NSTAT_MSG_TYPE_ERROR;
+		err.hdr.length = sizeof(err) + mbuf_pkthdr_len(m);
 		err.hdr.context = hdr->context;
 		err.error = result;
 		
-		result = ctl_enqueuedata(kctl, unit, &err, sizeof(err),
-					CTL_DATA_EOR | CTL_DATA_CRIT);
+		if (mbuf_prepend(&m, sizeof(err), MBUF_DONTWAIT) == 0 &&
+			mbuf_copyback(m, 0, sizeof(err), &err, MBUF_DONTWAIT) == 0)
+		{
+			result = ctl_enqueuembuf(kctl, unit, m, CTL_DATA_EOR | CTL_DATA_CRIT);
+			if (result != 0)
+			{
+				mbuf_freem(m);
+			}
+			m = NULL;
+		}
+		
 		if (result != 0)
-			nstat_descriptionfailures += 1;
+		{
+			// Unable to prepend the error to the request - just send the error
+			err.hdr.length = sizeof(err);
+			result = ctl_enqueuedata(kctl, unit, &err, sizeof(err),
+						CTL_DATA_EOR | CTL_DATA_CRIT);
+			if (result != 0)
+				nstat_stats.nstat_msgerrorfailures += 1;
+		}
+		nstat_stats.nstat_handle_msg_failures += 1;
 	}
 	
-	mbuf_freem(m);
+	if (m) mbuf_freem(m);
 	
 	return result;
 }

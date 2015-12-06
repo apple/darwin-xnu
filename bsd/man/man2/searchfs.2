@@ -580,7 +580,9 @@ The
 parameter contains an invalid flag or sizeofsearchparams1/2 is greater than
 SEARCHFS_MAX_SEARCHPARMS (see attr.h).  Additionally, filesystems that do
 not support SRCHFS_SKIPLINKS may return EINVAL if this search option
-is requested.
+is requested. EINVAL may also be returned if you request attributes for either
+searching or to be returned for matched entries if the filesystem does not support
+vending that particular attribute.
 .
 .It Bq Er EAGAIN
 The search terminated with partial results, either because 
@@ -609,16 +611,22 @@ An I/O error occurred while reading from or writing to the file system.
 .
 .Sh CAVEATS
 
-The list of attributes that are valid as search criteria currently includes the 
-following list of attributes.  Note that this list is substantially smaller than 
-what is available via 
+The list of attributes valid for searching and returning to the caller may
+be substantially smaller than that of the
 .Xr getattrlist 2
-for a particular filesystem object.  In general, a filesystem that supports 
+system call. See the following lists for the currently available search criteria.
+In general, a filesystem that supports 
 .Fn searchfs
 will typically supply per-item attributes for matched objects that are also 
 supported by the
 .Xr getdirentries 2
 system call.  This varies from filesystem to filesystem.
+
+
+.Sh SEARCH ATTRIBUTES
+
+The list of attributes that are valid as search criteria currently includes the 
+following list of attributes for a particular filesystem object.
 
 .Pp
 .
@@ -669,6 +677,97 @@ ATTR_FILE_RSRCLENGTH
 ATTR_FILE_RSRCALLOCSIZE
 .El
 .
+
+.Sh RETURN ATTRIBUTES
+
+As mentioned above, the list of attributes that are available to be returned to the caller
+vary by filesystem, but should include the following attributes, in the following order.
+The buffer should be assumed to be packed similar to the output buffer of the 
+.Xr getattrlist 2
+system call. Note that again, this list may be substantially smaller than what is available via
+.Xr getattrlist 2
+
+.Pp
+.
+.Bl -item -compact
+.It 
+ATTR_CMN_NAME
+.It
+ATTR_CMN_DEVID
+.It
+ATTR_CMN_FSID
+.It
+ATTR_CMN_OBJTYPE
+.It
+ATTR_CMN_OBJTAG
+.It
+ATTR_CMN_OBJID
+.It
+ATTR_CMN_OBJPERMANENTID
+.It
+ATTR_CMN_PAROBJID
+.It
+ATTR_CMN_SCRIPT
+.It
+ATTR_CMN_CRTIME
+.It
+ATTR_CMN_MODTIME
+.It
+ATTR_CMN_CHGTIME
+.It
+ATTR_CMN_ACCTIME
+.It
+ATTR_CMN_BKUPTIME
+.It
+ATTR_CMN_FNDRINFO
+.It
+ATTR_CMN_OWNERID
+.It
+ATTR_CMN_GRPID
+.It
+ATTR_CMN_ACCESSMASK
+.It
+ATTR_CMN_FLAGS
+.It
+ATTR_CMN_USERACCESS
+.It
+ATTR_CMN_FILEID
+.It
+ATTR_CMN_PARENTID
+.Pp
+.
+.It 
+ATTR_DIR_LINKCOUNT
+.It
+ATTR_DIR_ENTRYCOUNT
+.It
+ATTR_DIR_MOUNTSTATUS
+.Pp
+.
+.It
+ATTR_FILE_LINKCOUNT
+.It
+ATTR_FILE_TOTALSIZE
+.It
+ATTR_FILE_ALLOCSIZE
+.It
+ATTR_FILE_IOBLOCKSIZE
+.It
+ATTR_FILE_CLUMPSIZE
+.It
+ATTR_FILE_DEVTYPE
+.It
+ATTR_FILE_DATALENGTH
+.It
+ATTR_FILE_DATAALLOCSIZE
+.It
+ATTR_FILE_RSRCLENGTH
+.It
+ATTR_FILE_RSRCALLOCSIZE
+.El
+.
+
+
 .Sh EXAMPLES
 .
 The following code searches a volume for files of the specified type and creator.

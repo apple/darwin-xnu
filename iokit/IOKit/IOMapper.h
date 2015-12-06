@@ -38,16 +38,7 @@ __BEGIN_DECLS
 // These are C accessors to the system mapper for non-IOKit clients
 ppnum_t IOMapperIOVMAlloc(unsigned pages);
 void IOMapperIOVMFree(ppnum_t addr, unsigned pages);
-
 ppnum_t IOMapperInsertPage(ppnum_t addr, unsigned offset, ppnum_t page);
-void IOMapperInsertPPNPages(ppnum_t addr, unsigned offset,
-                            ppnum_t *pageList, unsigned pageCount);
-void IOMapperInsertUPLPages(ppnum_t addr, unsigned offset,
-                            upl_page_info_t *pageList, unsigned pageCount);
-
-mach_vm_address_t IOMallocPhysical(mach_vm_size_t size, mach_vm_address_t mask);
-
-void IOFreePhysical(mach_vm_address_t address, mach_vm_size_t size);
 
 __END_DECLS
 
@@ -67,6 +58,7 @@ class IOMapper : public IOService
 
     // Give the platform expert access to setMapperRequired();
     friend class IOPlatformExpert;
+    friend class IOMemoryDescriptor;
 
 private:
     enum SystemMapperState {
@@ -76,42 +68,26 @@ private:
         kWaitMask  = 3,
     };
 protected:
-    void *fTable;
-    ppnum_t fTablePhys;
-    IOItemCount fTableSize;
-    OSData *fTableHandle;
+#ifdef XNU_KERNEL_PRIVATE
+    uint64_t   __reservedA[7];
+    uint32_t   __reservedB;
+    uint32_t   fPageSize;
+#else
+    uint64_t __reserved[8];
+#endif
     bool fIsSystem;
-
 
     static void setMapperRequired(bool hasMapper);
     static void waitForSystemMapper();
 
     virtual bool initHardware(IOService *provider) = 0;
 
-    virtual bool allocTable(IOByteCount size);
-
 public:
-    virtual bool start(IOService *provider);
-    virtual void free();
-
-    // Static routines capable of allocating tables that are physically
-    // contiguous in real memory space.
-    static OSData * NewARTTable(IOByteCount size,
-                                void ** virtAddrP, ppnum_t *physAddrP);
-    static void FreeARTTable(OSData *handle, IOByteCount size);
-
+    virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
     // To get access to the system mapper IOMapper::gSystem 
     static IOMapper *gSystem;
-
-    virtual ppnum_t iovmAlloc(IOItemCount pages) = 0;
-    virtual void iovmFree(ppnum_t addr, IOItemCount pages) = 0;
-
-    virtual void iovmInsert(ppnum_t addr, IOItemCount offset, ppnum_t page) = 0;
-    virtual void iovmInsert(ppnum_t addr, IOItemCount offset,
-                            ppnum_t *pageList, IOItemCount pageCount);
-    virtual void iovmInsert(ppnum_t addr, IOItemCount offset,
-                            upl_page_info_t *pageList, IOItemCount pageCount);
 
     static void checkForSystemMapper()
         { if ((uintptr_t) gSystem & kWaitMask) waitForSystemMapper(); };
@@ -119,31 +95,40 @@ public:
     static IOMapper * copyMapperForDevice(IOService * device);
     static IOMapper * copyMapperForDeviceWithIndex(IOService * device, unsigned int index);
 
-	
-    // Function will panic if the given address is not found in a valid
-    // iovm mapping.
-    virtual addr64_t mapAddr(IOPhysicalAddress addr) = 0;
+    // { subclasses
 
-    // Get the address mask to or into an address to bypass this mapper
-    virtual bool getBypassMask(addr64_t *maskP) const;
+    virtual uint64_t getPageSize(void) const = 0;
 
-    virtual ppnum_t iovmAllocDMACommand(IODMACommand * command, IOItemCount pageCount);
-    virtual void iovmFreeDMACommand(IODMACommand * command, ppnum_t addr, IOItemCount pageCount);
-    
-    virtual ppnum_t iovmMapMemory(
-    			  OSObject                    * memory,   // dma command or iomd
-			  ppnum_t                       offsetPage,
-			  ppnum_t                       pageCount,
-			  uint32_t                      options,
-			  upl_page_info_t             * pageList,
-			  const IODMAMapSpecification * mapSpecification);
+    virtual IOReturn iovmMapMemory(IOMemoryDescriptor          * memory,
+				   uint64_t                      descriptorOffset,
+				   uint64_t                      length,
+				   uint32_t                      mapOptions,
+				   const IODMAMapSpecification * mapSpecification,
+				   IODMACommand                * dmaCommand,
+				   const IODMAMapPageList      * pageList,
+				   uint64_t                    * mapAddress,
+				   uint64_t                    * mapLength) = 0;
 
-    OSMetaClassDeclareReservedUsed(IOMapper, 0);
-    OSMetaClassDeclareReservedUsed(IOMapper, 1);
-    OSMetaClassDeclareReservedUsed(IOMapper, 2);
-    OSMetaClassDeclareReservedUsed(IOMapper, 3);
+    virtual IOReturn iovmUnmapMemory(IOMemoryDescriptor * memory, 
+				     IODMACommand       * dmaCommand, 
+				     uint64_t             mapAddress,
+				     uint64_t             mapLength) = 0;
+
+    virtual IOReturn iovmInsert(uint32_t options,
+				uint64_t mapAddress,
+				uint64_t offset, 
+				uint64_t physicalAddress, 
+				uint64_t length) = 0;
+
+    virtual uint64_t mapToPhysicalAddress(uint64_t mappedAddress) = 0;
+
+    // }
 
 private:
+    OSMetaClassDeclareReservedUnused(IOMapper, 0);
+    OSMetaClassDeclareReservedUnused(IOMapper, 1);
+    OSMetaClassDeclareReservedUnused(IOMapper, 2);
+    OSMetaClassDeclareReservedUnused(IOMapper, 3);
     OSMetaClassDeclareReservedUnused(IOMapper, 4);
     OSMetaClassDeclareReservedUnused(IOMapper, 5);
     OSMetaClassDeclareReservedUnused(IOMapper, 6);

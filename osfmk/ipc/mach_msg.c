@@ -335,22 +335,7 @@ mach_msg_receive_results(void)
 
 	trailer_size = ipc_kmsg_add_trailer(kmsg, space, option, self, seqno, FALSE, 
 			kmsg->ikm_header->msgh_remote_port->ip_context);
-	/*
-	 * If MACH_RCV_OVERWRITE was specified, try to get the scatter
-	 * list and verify it against the contents of the message.  If
-	 * there is any problem with it, we will continue without it as
-	 * normal.
-	 */
-	if (option & MACH_RCV_OVERWRITE) {
-		mach_msg_size_t slist_size = self->ith_scatter_list_size;
-		mach_msg_body_t *slist;
-
-		slist = ipc_kmsg_get_scatter(msg_addr, slist_size, kmsg);
-		mr = ipc_kmsg_copyout(kmsg, space, map, slist, option);
-		ipc_kmsg_free_scatter(slist, slist_size);
-	} else {
-		mr = ipc_kmsg_copyout(kmsg, space, map, MACH_MSG_BODY_NULL, option);
-	}
+	mr = ipc_kmsg_copyout(kmsg, space, map, MACH_MSG_BODY_NULL, option);
 
 	if (mr != MACH_MSG_SUCCESS) {
 		/* already received importance, so have to undo that here */
@@ -401,7 +386,7 @@ mach_msg_receive(
 	mach_port_name_t	rcv_name,
 	mach_msg_timeout_t	rcv_timeout,
 	void			(*continuation)(mach_msg_return_t),
-	mach_msg_size_t		slist_size)
+	__unused mach_msg_size_t slist_size)
 {
 	thread_t self = current_thread();
 	ipc_space_t space = current_space();
@@ -419,7 +404,6 @@ mach_msg_receive(
 	self->ith_object = object;
 	self->ith_msize = rcv_size;
 	self->ith_option = option;
-	self->ith_scatter_list_size = slist_size;
 	self->ith_continuation = continuation;
 
 	ipc_mqueue_receive(mqueue, option, rcv_size, rcv_timeout, THREAD_ABORTSAFE);
@@ -459,7 +443,6 @@ mach_msg_overwrite_trap(
 	mach_msg_timeout_t	msg_timeout = args->timeout;
 	__unused mach_port_name_t notify = args->notify;
 	mach_vm_address_t	rcv_msg_addr = args->rcv_msg;
-        mach_msg_size_t		scatter_list_size = 0; /* NOT INITIALIZED - but not used in pactice */
 	__unused mach_port_seqno_t temp_seqno = 0;
 
 	mach_msg_return_t  mr = MACH_MSG_SUCCESS;
@@ -506,22 +489,13 @@ mach_msg_overwrite_trap(
 		}
 		/* hold ref for object */
 
-		/*
-		 * 1. MACH_RCV_OVERWRITE is on, and rcv_msg is our scatter list
-		 *    and receive buffer
-		 * 2. MACH_RCV_OVERWRITE is off, and rcv_msg might be the
-		 *    alternate receive buffer (separate send and receive buffers).
-		 */
-		if (option & MACH_RCV_OVERWRITE) 
-			self->ith_msg_addr = rcv_msg_addr;
-		else if (rcv_msg_addr != (mach_vm_address_t)0)
+		if (rcv_msg_addr != (mach_vm_address_t)0)
 			self->ith_msg_addr = rcv_msg_addr;
 		else
 			self->ith_msg_addr = msg_addr;
 		self->ith_object = object;
 		self->ith_msize = rcv_size;
 		self->ith_option = option;
-		self->ith_scatter_list_size = scatter_list_size;
 		self->ith_receiver_name = MACH_PORT_NULL;
 		self->ith_continuation = thread_syscall_return;
 

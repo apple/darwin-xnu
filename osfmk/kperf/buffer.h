@@ -42,6 +42,9 @@
 #define PERF_AST        (5)
 #define PERF_KPC        (6)
 #define PERF_KDBG       (7)
+#define PERF_CSWITCH    (8)
+#define PERF_SIGNPOST   (9)
+#define PERF_MEMINFO    (10)
 
 /* sub-class codes */
 #define PERF_GEN_CODE(code) PERF_CODE(PERF_GENERIC, code)
@@ -84,18 +87,30 @@
 #define PERF_AST_HNDLR      PERF_AST_CODE(0)
 #define PERF_AST_ERROR      PERF_AST_CODE(1)
 
-#define PERF_KPC_CODE(code) PERF_CODE(PERF_KPC, code)
-#define PERF_KPC_HNDLR      PERF_KPC_CODE(0)
-#define PERF_KPC_FCOUNTER   PERF_KPC_CODE(1)
-#define PERF_KPC_COUNTER    PERF_KPC_CODE(2)
-#define PERF_KPC_DATA       PERF_KPC_CODE(3)
-#define PERF_KPC_CONFIG     PERF_KPC_CODE(4)
-#define PERF_KPC_CFG_REG    PERF_KPC_CODE(5)
-#define PERF_KPC_DATA32     PERF_KPC_CODE(6)
-#define PERF_KPC_CFG_REG32  PERF_KPC_CODE(7)
+#define PERF_KPC_CODE(code)    PERF_CODE(PERF_KPC, code)
+#define PERF_KPC_HNDLR         PERF_KPC_CODE(0)
+#define PERF_KPC_FCOUNTER      PERF_KPC_CODE(1)
+#define PERF_KPC_COUNTER       PERF_KPC_CODE(2)
+#define PERF_KPC_DATA          PERF_KPC_CODE(3)
+#define PERF_KPC_CONFIG        PERF_KPC_CODE(4)
+#define PERF_KPC_CFG_REG       PERF_KPC_CODE(5)
+#define PERF_KPC_DATA32        PERF_KPC_CODE(6)
+#define PERF_KPC_CFG_REG32     PERF_KPC_CODE(7)
+#define PERF_KPC_DATA_THREAD   PERF_KPC_CODE(8)
+#define PERF_KPC_DATA_THREAD32 PERF_KPC_CODE(9)
 
 #define PERF_KDBG_CODE(code) PERF_CODE(PERF_KDBG, code)
 #define PERF_KDBG_HNDLR      PERF_KDBG_CODE(0)
+
+#define PERF_CSWITCH_CODE(code) PERF_CODE(PERF_CSWITCH, code)
+#define PERF_CSWITCH_HNDLR      PERF_CSWITCH_CODE(0)
+
+#define PERF_SIGNPOST_CODE(code) PERF_CODE(PERF_SIGNPOST, code)
+#define PERF_SIGNPOST_HNDLR      PERF_SIGNPOST_CODE(0)
+
+#define PERF_MI_CODE(code) PERF_CODE(PERF_MEMINFO, code)
+#define PERF_MI_SAMPLE     PERF_MI_CODE(0)
+#define PERF_MI_DATA       PERF_MI_CODE(1)
 
 /* error sub-codes for trace data */
 enum

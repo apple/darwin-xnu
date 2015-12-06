@@ -45,11 +45,11 @@
 #ifdef MACH_KERNEL_PRIVATE
 
 #include <kern/queue.h>
-#include <kern/wait_queue.h>
+#include <kern/waitq.h>
 
 typedef struct semaphore {
 	queue_chain_t	  task_link;  /* chain of semaphores owned by a task */
-	struct wait_queue wait_queue; /* queue of blocked threads & lock     */
+	struct waitq	  waitq;      /* queue of blocked threads & lock     */
 	task_t		  owner;      /* task that owns semaphore            */
 	ipc_port_t	  port;	      /* semaphore port	 		     */
 	uint32_t	  ref_count;  /* reference count		     */
@@ -57,13 +57,14 @@ typedef struct semaphore {
 	boolean_t	  active;     /* active status			     */
 } Semaphore;
 
-#define semaphore_lock(semaphore)   wait_queue_lock(&(semaphore)->wait_queue)
-#define semaphore_unlock(semaphore) wait_queue_unlock(&(semaphore)->wait_queue)
+#define semaphore_lock(semaphore)   waitq_lock(&(semaphore)->waitq)
+#define semaphore_unlock(semaphore) waitq_unlock(&(semaphore)->waitq)
 
 extern void semaphore_init(void);
 
-extern	void		semaphore_reference	(semaphore_t semaphore);
-extern	void		semaphore_dereference	(semaphore_t semaphore);
+extern	void		semaphore_reference(semaphore_t semaphore);
+extern	void		semaphore_dereference(semaphore_t semaphore);
+extern  kern_return_t	semaphore_destroy_internal(task_t task, semaphore_t semaphore);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

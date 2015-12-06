@@ -197,11 +197,11 @@ find_available_token:
 						      (vm_offset_t) tokens,
 						      token_q_cur_size,
 						      (vm_offset_t *) &new_loc,
-						      alloc_size);
+						      alloc_size, VM_KERN_MEMORY_OSFMK);
 			} else {
 				result = kmem_alloc(kernel_map,
 						    (vm_offset_t *) &new_loc,
-						    alloc_size);
+						    alloc_size, VM_KERN_MEMORY_OSFMK);
 			}
 		}
 		
@@ -1144,7 +1144,99 @@ vm_purgeable_stats(vm_purgeable_info_t info, task_t target_task)
 	lck_mtx_unlock(&vm_purgeable_queue_lock);
 	return;
 }
-	
+
+#if DEVELOPMENT || DEBUG
+static void
+vm_purgeable_account_volatile_queue(
+	purgeable_q_t queue,
+	int group,
+	task_t task,
+	pvm_account_info_t acnt_info)
+{
+	vm_object_t object;
+	uint64_t compressed_count;
+
+	for (object = (vm_object_t) queue_first(&queue->objq[group]);
+	    !queue_end(&queue->objq[group], (queue_entry_t) object);
+	    object = (vm_object_t) queue_next(&object->objq)) {
+		if (object->vo_purgeable_owner == task) {
+			compressed_count = vm_compressor_pager_get_count(object->pager);
+			acnt_info->pvm_volatile_compressed_count += compressed_count;
+			acnt_info->pvm_volatile_count += (object->resident_page_count - object->wired_page_count);
+			acnt_info->pvm_nonvolatile_count += object->wired_page_count;
+		}
+	}
+
+}
+
+/*
+ * Walks the purgeable object queues and calculates the usage
+ * associated with the objects for the given task.
+ */
+kern_return_t
+vm_purgeable_account(
+	task_t			task,
+	pvm_account_info_t	acnt_info)
+{
+	queue_head_t	*nonvolatile_q;
+	vm_object_t	object;
+	int		group;
+	int		state;
+	uint64_t	compressed_count;
+	purgeable_q_t	volatile_q;
+
+
+	if ((task == NULL) || (acnt_info == NULL)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	acnt_info->pvm_volatile_count = 0;
+	acnt_info->pvm_volatile_compressed_count = 0;
+	acnt_info->pvm_nonvolatile_count = 0;
+	acnt_info->pvm_nonvolatile_compressed_count = 0;
+
+	lck_mtx_lock(&vm_purgeable_queue_lock);
+
+	nonvolatile_q = &purgeable_nonvolatile_queue;
+	for (object = (vm_object_t) queue_first(nonvolatile_q);
+	     !queue_end(nonvolatile_q, (queue_entry_t) object);
+	     object = (vm_object_t) queue_next(&object->objq)) {
+		if (object->vo_purgeable_owner == task) {
+			state = object->purgable;
+			compressed_count =  vm_compressor_pager_get_count(object->pager);
+			if (state == VM_PURGABLE_EMPTY) {
+				acnt_info->pvm_volatile_count += (object->resident_page_count - object->wired_page_count);
+				acnt_info->pvm_volatile_compressed_count += compressed_count;
+			} else {
+				acnt_info->pvm_nonvolatile_count += (object->resident_page_count - object->wired_page_count);
+				acnt_info->pvm_nonvolatile_compressed_count += compressed_count;
+			}
+			acnt_info->pvm_nonvolatile_count += object->wired_page_count;
+		}
+	}
+
+	volatile_q = &purgeable_queues[PURGEABLE_Q_TYPE_OBSOLETE];
+	vm_purgeable_account_volatile_queue(volatile_q, 0, task, acnt_info);
+
+	volatile_q = &purgeable_queues[PURGEABLE_Q_TYPE_FIFO];
+	for (group = 0; group < NUM_VOLATILE_GROUPS; group++) {
+		vm_purgeable_account_volatile_queue(volatile_q, group, task, acnt_info);
+	}
+
+	volatile_q = &purgeable_queues[PURGEABLE_Q_TYPE_LIFO];
+	for (group = 0; group < NUM_VOLATILE_GROUPS; group++) {
+		vm_purgeable_account_volatile_queue(volatile_q, group, task, acnt_info);
+	}
+	lck_mtx_unlock(&vm_purgeable_queue_lock);
+
+	acnt_info->pvm_volatile_count = (acnt_info->pvm_volatile_count * PAGE_SIZE);
+	acnt_info->pvm_volatile_compressed_count = (acnt_info->pvm_volatile_compressed_count * PAGE_SIZE);
+	acnt_info->pvm_nonvolatile_count = (acnt_info->pvm_nonvolatile_count * PAGE_SIZE);
+	acnt_info->pvm_nonvolatile_compressed_count = (acnt_info->pvm_nonvolatile_compressed_count * PAGE_SIZE);
+
+	return KERN_SUCCESS;
+}
+#endif /* DEVELOPMENT || DEBUG */
 
 static void
 vm_purgeable_volatile_queue_disown(

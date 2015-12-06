@@ -34,7 +34,7 @@
 .\"
 .\"     @(#)listen.2	8.2 (Berkeley) 12/11/93
 .\"
-.Dd December 11, 1993
+.Dd March 18, 2015
 .Dt LISTEN 2
 .Os BSD 4.2
 .Sh NAME
@@ -60,9 +60,9 @@ accepted with
 The
 .Fn listen
 call applies only to sockets of type
-.Dv SOCK_STREAM
-or
-.Dv SOCK_SEQPACKET.
+.Dv SOCK_STREAM.
+.\"or
+.\".Dv SOCK_SEQPACKET.
 .Pp
 The
 .Fa backlog
@@ -109,6 +109,7 @@ The socket is not of a type that supports the operation
 .Sh SEE ALSO
 .Xr accept 2 ,
 .Xr connect 2 ,
+.Xr connectx 2 ,
 .Xr socket 2
 .Sh BUGS
 The

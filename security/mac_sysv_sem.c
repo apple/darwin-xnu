@@ -130,8 +130,11 @@ mac_sysvsem_check_semctl(kauth_cred_t cred, struct semid_kernel *semakptr,
 {
 	int error;
 
-	if (!mac_sysvsem_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvsem_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvsem_check_semctl, cred, semakptr, semakptr->label, cmd);
 
@@ -143,8 +146,11 @@ mac_sysvsem_check_semget(kauth_cred_t cred, struct semid_kernel *semakptr)
 {
 	int error;
 
-	if (!mac_sysvsem_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvsem_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvsem_check_semget, cred, semakptr, semakptr->label);
 
@@ -157,8 +163,11 @@ mac_sysvsem_check_semop(kauth_cred_t cred, struct semid_kernel *semakptr,
 {
 	int error;
 
-	if (!mac_sysvsem_enforce)
-		return (0);
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_sysvsem_enforce)
+        return (0);
+#endif
 
 	MAC_CHECK(sysvsem_check_semop, cred, semakptr, semakptr->label,
 	    accesstype);

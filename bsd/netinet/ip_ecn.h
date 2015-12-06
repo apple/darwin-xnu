@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2013, 2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -61,10 +61,10 @@
 #include <sys/appleapiopts.h>
 
 #ifdef BSD_KERNEL_PRIVATE
-#define ECN_ALLOWED	1	/* ECN allowed */
-#define ECN_FORBIDDEN	0	/* ECN forbidden */
-#define ECN_NOCARE	(-1)	/* no consideration to ECN */
+#define ECN_NORMAL		1	/* ECN normal mode */
+#define ECN_COMPATIBILITY	0	/* ECN comptability mode */
+#define ECN_NOCARE		(-1)	/* Ignore ECN. Use caution with this mode. */
 
 extern void ip_ecn_ingress(int, u_int8_t *, const u_int8_t *);
-extern void ip_ecn_egress(int, const u_int8_t *, u_int8_t *);
+extern int ip_ecn_egress(int, const u_int8_t *, u_int8_t *);
 #endif /* BSD_KERNEL_PRIVATE */

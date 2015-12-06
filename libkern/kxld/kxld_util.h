@@ -205,4 +205,14 @@ const char * kxld_strstr(const char *s, const char *find)
 void kxld_print_memory_report(void) 
     __attribute__((visibility("hidden")));
 
+/*******************************************************************************
+* Cross Linking
+*******************************************************************************/
+#if !KERNEL
+boolean_t kxld_set_cross_link_page_size(kxld_size_t target_page_size);
+#endif /* !KERNEL */
+kxld_size_t kxld_get_effective_page_size(void);
+kxld_addr_t kxld_round_page_cross_safe(kxld_addr_t addr);
+
+
 #endif /* _KXLD_UTIL_H_ */

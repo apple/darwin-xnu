@@ -36,7 +36,7 @@
 
 __BEGIN_DECLS
 extern uint32_t mptcp_timer(struct mppcbinfo *);
-extern void mptcp_start_timer(struct mptcb *, int);
+extern void mptcp_start_timer(struct mptses *, int);
 extern void mptcp_cancel_timer(struct mptcb *, int);
 extern void mptcp_cancel_all_timers(struct mptcb *);
 __END_DECLS

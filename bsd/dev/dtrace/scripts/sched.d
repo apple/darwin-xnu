@@ -59,9 +59,9 @@ inline cpuinfo_t *curcpu = xlate <cpuinfo_t *> (curthread->last_processor);
 #pragma D attributes Stable/Stable/Common curcpu
 #pragma D binding "1.0" curcpu
 
-inline processorid_t cpu = curcpu->cpu_id;
-#pragma D attributes Stable/Stable/Common cpu
-#pragma D binding "1.0" cpu
+/*
+ * XXX: 'cpu' is now a built-in variable in dtrace.
+ */
 
 inline psetid_t pset = curcpu->cpu_pset;
 #pragma D attributes Stable/Stable/Common pset

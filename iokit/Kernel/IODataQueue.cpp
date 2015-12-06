@@ -37,6 +37,12 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <libkern/OSAtomic.h>
 
+struct IODataQueueInternal
+{
+    mach_msg_header_t msg;
+    UInt32            queueSize;
+};
+
 #ifdef enqueue
 #undef enqueue
 #endif
@@ -95,6 +101,14 @@ Boolean IODataQueue::initWithCapacity(UInt32 size)
         return false;
     }
 
+    assert(!notifyMsg);
+    notifyMsg = IONew(IODataQueueInternal, 1);
+	if (!notifyMsg) {
+		return false;
+	}
+    bzero(notifyMsg, sizeof(IODataQueueInternal));
+    ((IODataQueueInternal *)notifyMsg)->queueSize = size;
+
     dataQueue = (IODataQueueMemory *)IOMallocAligned(allocSize, PAGE_SIZE);
     if (dataQueue == 0) {
         return false;
@@ -104,13 +118,6 @@ Boolean IODataQueue::initWithCapacity(UInt32 size)
     dataQueue->queueSize    = size;
 //  dataQueue->head         = 0;
 //  dataQueue->tail         = 0;
-
-    if (!notifyMsg) {
-        notifyMsg = IOMalloc(sizeof(mach_msg_header_t));
-        if (!notifyMsg)
-            return false;
-    }
-    bzero(notifyMsg, sizeof(mach_msg_header_t));
 
     return true;
 }
@@ -132,14 +139,14 @@ Boolean IODataQueue::initWithEntries(UInt32 numEntries, UInt32 entrySize)
 
 void IODataQueue::free()
 {
-    if (dataQueue) {
-        IOFreeAligned(dataQueue, round_page(dataQueue->queueSize + DATA_QUEUE_MEMORY_HEADER_SIZE));
-        dataQueue = NULL;
+	if (notifyMsg) {
+		if (dataQueue) {
+			IOFreeAligned(dataQueue, round_page(((IODataQueueInternal *)notifyMsg)->queueSize + DATA_QUEUE_MEMORY_HEADER_SIZE));
+			dataQueue = NULL;
+		}
 
-        if (notifyMsg) {
-            IOFree(notifyMsg, sizeof(mach_msg_header_t));
-            notifyMsg = NULL;
-        }
+		IODelete(notifyMsg, IODataQueueInternal, 1);
+		notifyMsg = NULL;
     }
 
     super::free();
@@ -152,14 +159,17 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
     const UInt32       head      = dataQueue->head;  // volatile
     const UInt32       tail      = dataQueue->tail;
     const UInt32       entrySize = dataSize + DATA_QUEUE_ENTRY_HEADER_SIZE;
+    UInt32             queueSize;
     IODataQueueEntry * entry;
 
     // Check for overflow of entrySize
     if (dataSize > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) {
         return false;
     }
+
     // Check for underflow of (dataQueue->queueSize - tail)
-    if (dataQueue->queueSize < tail) {
+    queueSize = ((IODataQueueInternal *) notifyMsg)->queueSize;
+    if ((queueSize < tail) || (queueSize < head)) {
         return false;
     }
 
@@ -167,7 +177,7 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
     {
         // Is there enough room at the end for the entry?
         if ((entrySize <= UINT32_MAX - tail) &&
-            ((tail + entrySize) <= dataQueue->queueSize) )
+            ((tail + entrySize) <= queueSize) )
         {
             entry = (IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail);
 
@@ -191,7 +201,7 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
             // doing this. The user client checks for this and will look for the size
             // at the beginning if there isn't room for it at the end.
 
-            if ( ( dataQueue->queueSize - tail ) >= DATA_QUEUE_ENTRY_HEADER_SIZE )
+            if ( ( queueSize - tail ) >= DATA_QUEUE_ENTRY_HEADER_SIZE )
             {
                 ((IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail))->size = dataSize;
             }
@@ -236,14 +246,13 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
 
 void IODataQueue::setNotificationPort(mach_port_t port)
 {
-    mach_msg_header_t * msgh = (mach_msg_header_t *) notifyMsg;
+    mach_msg_header_t * msgh;
 
-    if (msgh) {
-        bzero(msgh, sizeof(mach_msg_header_t));
-        msgh->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
-        msgh->msgh_size = sizeof(mach_msg_header_t);
-        msgh->msgh_remote_port = port;
-    }
+    msgh = &((IODataQueueInternal *) notifyMsg)->msg;
+	bzero(msgh, sizeof(mach_msg_header_t));
+	msgh->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+	msgh->msgh_size = sizeof(mach_msg_header_t);
+	msgh->msgh_remote_port = port;
 }
 
 void IODataQueue::sendDataAvailableNotification()
@@ -251,8 +260,8 @@ void IODataQueue::sendDataAvailableNotification()
     kern_return_t       kr;
     mach_msg_header_t * msgh;
 
-    msgh = (mach_msg_header_t *) notifyMsg;
-    if (msgh && msgh->msgh_remote_port) {
+    msgh = &((IODataQueueInternal *) notifyMsg)->msg;
+    if (msgh->msgh_remote_port) {
         kr = mach_msg_send_from_kernel_with_options(msgh, msgh->msgh_size, MACH_SEND_TIMEOUT, MACH_MSG_TIMEOUT_NONE);
         switch(kr) {
             case MACH_SEND_TIMED_OUT:    // Notification already sent
@@ -269,9 +278,11 @@ void IODataQueue::sendDataAvailableNotification()
 IOMemoryDescriptor *IODataQueue::getMemoryDescriptor()
 {
     IOMemoryDescriptor *descriptor = 0;
+    UInt32              queueSize;
 
+    queueSize = ((IODataQueueInternal *) notifyMsg)->queueSize;
     if (dataQueue != 0) {
-        descriptor = IOMemoryDescriptor::withAddress(dataQueue, dataQueue->queueSize + DATA_QUEUE_MEMORY_HEADER_SIZE, kIODirectionOutIn);
+        descriptor = IOMemoryDescriptor::withAddress(dataQueue, queueSize + DATA_QUEUE_MEMORY_HEADER_SIZE, kIODirectionOutIn);
     }
 
     return descriptor;

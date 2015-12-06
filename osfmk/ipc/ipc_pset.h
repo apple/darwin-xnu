@@ -110,7 +110,8 @@ extern kern_return_t ipc_pset_alloc_name(
 extern kern_return_t ipc_pset_add(
 	ipc_pset_t	pset,
 	ipc_port_t	port,
-	wait_queue_link_t wql);
+	uint64_t	*reserved_link,
+	uint64_t	*reserved_prepost);
 
 /* determine if port is a member of set */
 extern boolean_t ipc_pset_member(
@@ -120,13 +121,11 @@ extern boolean_t ipc_pset_member(
 /* Remove a port from a port set */
 extern kern_return_t ipc_pset_remove(
 	ipc_pset_t	pset,
-	ipc_port_t	port,
-	wait_queue_link_t *wqlp);
+	ipc_port_t	port);
 
 /* Remove a port from all its current port sets */
 extern kern_return_t ipc_pset_remove_from_all(
-	ipc_port_t	port,
-	queue_t		links);
+	ipc_port_t	port);
 
 /* Destroy a port_set */
 extern void ipc_pset_destroy(

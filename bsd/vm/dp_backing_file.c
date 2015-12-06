@@ -602,7 +602,7 @@ macx_swapinfo(
 	kern_return_t		kr;
 
 	error = 0;
-	if (COMPRESSED_PAGER_IS_ACTIVE) {
+	if (COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) {
 
 		if (vm_swap_up == TRUE) {
 

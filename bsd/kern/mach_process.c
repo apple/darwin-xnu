@@ -156,20 +156,38 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 	 *	Intercept and deal with "please trace me" request.
 	 */	 
 	if (uap->req == PT_TRACE_ME) {
-		proc_lock(p);
-		SET(p->p_lflag, P_LTRACED);
-		/* Non-attached case, our tracer is our parent. */
-		p->p_oppid = p->p_ppid;
-		/* Check whether child and parent are allowed to run modified
-		 * code (they'll have to) */
-		struct proc *pproc=proc_find(p->p_oppid);
-		proc_unlock(p);
-		cs_allow_invalid(p);
-		if(pproc) {
+retry_trace_me:;
+		proc_t pproc = proc_parent(p);
+		if (pproc == NULL)
+			return (EINVAL);
+#if CONFIG_MACF
+		/*
+		 * NB: Cannot call kauth_authorize_process(..., KAUTH_PROCESS_CANTRACE, ...)
+		 *     since that assumes the process being checked is the current process
+		 *     when, in this case, it is the current process's parent.
+		 *     Most of the other checks in cantrace() don't apply either.
+		 */
+		if ((error = mac_proc_check_debug(pproc, p)) == 0) {
+#endif
+			proc_lock(p);
+			/* Make sure the process wasn't re-parented. */
+			if (p->p_ppid != pproc->p_pid) {
+				proc_unlock(p);
+				proc_rele(pproc);
+				goto retry_trace_me;
+			}
+			SET(p->p_lflag, P_LTRACED);
+			/* Non-attached case, our tracer is our parent. */
+			p->p_oppid = p->p_ppid;
+			proc_unlock(p);
+			/* Child and parent will have to be able to run modified code. */
+			cs_allow_invalid(p);
 			cs_allow_invalid(pproc);
-			proc_rele(pproc);
+#if CONFIG_MACF
 		}
-		return(0);
+#endif
+		proc_rele(pproc);
+		return (error);
 	}
 	if (uap->req == PT_SIGEXC) {
 		proc_lock(p);
@@ -200,12 +218,16 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 
 	task = t->task;
 	if (uap->req == PT_ATTACHEXC) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 		uap->req = PT_ATTACH;
 		tr_sigexc = 1;
 	}
 	if (uap->req == PT_ATTACH) {
+#pragma clang diagnostic pop
 		int		err;
-		
+
+
 		if ( kauth_authorize_process(proc_ucred(p), KAUTH_PROCESS_CANTRACE, 
 									 t, (uintptr_t)&err, 0, 0) == 0 ) {
 			/* it's OK to attach */
@@ -403,8 +425,10 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 			goto out;
 		}
 		th_act = port_name_to_thread(CAST_MACH_PORT_TO_NAME(uap->addr));
-		if (th_act == THREAD_NULL)
-			return (ESRCH);
+		if (th_act == THREAD_NULL) {
+			error = ESRCH;
+			goto out;
+		}
 		ut = (uthread_t)get_bsdthread_info(th_act);
 		if (uap->data)
 			ut->uu_siglist |= sigmask(uap->data);

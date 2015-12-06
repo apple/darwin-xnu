@@ -64,6 +64,7 @@
  * Note: memcpy does not support overlapping copies
  */
 ENTRY(memcpy)
+	movq	%rdi, %rax			/* return destination */
 	movq	%rdx,%rcx
 	shrq	$3,%rcx				/* copy by 64-bit words */
 	cld					/* copy forwards */

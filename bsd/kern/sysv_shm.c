@@ -93,6 +93,7 @@
 
 #include <vm/vm_map.h>
 #include <vm/vm_protos.h>
+#include <vm/vm_kern.h>
 
 #include <kern/locks.h>
 
@@ -169,6 +170,7 @@ static int shm_delete_mapping(struct proc *, struct shmmap_state *, int);
 #define DEFAULT_SHMMNI	32
 #define DEFAULT_SHMSEG	8
 #define DEFAULT_SHMALL	1024
+
 struct  shminfo shminfo = {
         DEFAULT_SHMMAX,
         DEFAULT_SHMMIN,
@@ -368,8 +370,8 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 	mach_vm_address_t	attach_va;	/* attach address in/out */
 	mach_vm_size_t		map_size;	/* size of map entry */
 	mach_vm_size_t		mapped_size;
-	vm_prot_t		prot;
-	size_t			size;
+	vm_prot_t           prot;
+    size_t              size;
 	kern_return_t		rv;
 	int			shmat_ret;
 	int			vm_flags;
@@ -389,6 +391,11 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 
 	if (shmmap_s == NULL) {
 		size = shminfo.shmseg * sizeof(struct shmmap_state);
+        if (size == 0 || size / shminfo.shmseg != sizeof(struct shmmap_state)) {
+            /* overflow */
+            shmat_ret = ENOMEM;
+            goto shmat_out;
+        }
 		MALLOC(shmmap_s, struct shmmap_state *, size, M_SHM, M_WAITOK);
 		if (shmmap_s == NULL) {
 			shmat_ret = ENOMEM;
@@ -910,7 +917,7 @@ int
 shmfork(struct proc *p1, struct proc *p2)
 {
 	struct shmmap_state *shmmap_s;
-	size_t size;
+    size_t size;
 	int i;
 	int shmfork_ret = 0;
 
@@ -919,8 +926,12 @@ shmfork(struct proc *p1, struct proc *p2)
 	if (!shm_inited) {
 		shminit(NULL);
 	}
-		
-	size = shminfo.shmseg * sizeof(struct shmmap_state);
+    size = shminfo.shmseg * sizeof(struct shmmap_state);
+    if (size == 0 || size / shminfo.shmseg != sizeof(struct shmmap_state)) {
+        /* overflow */
+        shmfork_ret = 1;
+        goto shmfork_out;
+    }
 	MALLOC(shmmap_s, struct shmmap_state *, size, M_SHM, M_WAITOK);
 	if (shmmap_s != NULL) {
 		bcopy((caddr_t)p1->vm_shm, (caddr_t)shmmap_s, size);
@@ -1037,6 +1048,9 @@ sysctl_shminfo(__unused struct sysctl_oid *oidp, void *arg1,
 	int error = 0;
 	int sysctl_shminfo_ret = 0;
 	uint64_t	saved_shmmax;
+    uint64_t    saved_shmseg;
+    uint64_t    saved_shmmni;
+    uint64_t    saved_shmall;
 
 	error = SYSCTL_OUT(req, arg1, sizeof(int64_t));
 	if (error || req->newptr == USER_ADDR_NULL)
@@ -1049,7 +1063,10 @@ sysctl_shminfo(__unused struct sysctl_oid *oidp, void *arg1,
 		sysctl_shminfo_ret = EPERM;
 		goto sysctl_shminfo_out;
 	}
-	saved_shmmax = shminfo.shmmax;
+    saved_shmmax = shminfo.shmmax;
+    saved_shmseg = shminfo.shmseg;
+    saved_shmmni = shminfo.shmmni;
+    saved_shmall = shminfo.shmall;
 
 	if ((error = SYSCTL_IN(req, arg1, sizeof(int64_t))) != 0) {
 		sysctl_shminfo_ret = error;
@@ -1064,6 +1081,30 @@ sysctl_shminfo(__unused struct sysctl_oid *oidp, void *arg1,
 			goto sysctl_shminfo_out;
 		}
 	}
+    else if (arg1 == &shminfo.shmseg) {
+        /* add a sanity check - 20847256 */
+        if (shminfo.shmseg > INT32_MAX || shminfo.shmseg < 0) {
+            shminfo.shmseg = saved_shmseg;
+            sysctl_shminfo_ret = EINVAL;
+            goto sysctl_shminfo_out;
+        }
+    }
+    else if (arg1 == &shminfo.shmmni) {
+        /* add a sanity check - 20847256 */
+        if (shminfo.shmmni > INT32_MAX || shminfo.shmmni < 0) {
+            shminfo.shmmni = saved_shmmni;
+            sysctl_shminfo_ret = EINVAL;
+            goto sysctl_shminfo_out;
+        }
+    }
+    else if (arg1 == &shminfo.shmall) {
+        /* add a sanity check - 20847256 */
+        if (shminfo.shmall > INT32_MAX || shminfo.shmall < 0) {
+            shminfo.shmall = saved_shmall;
+            sysctl_shminfo_ret = EINVAL;
+            goto sysctl_shminfo_out;
+        }
+    }
 	sysctl_shminfo_ret = 0;
 sysctl_shminfo_out:
 	SYSV_SHM_SUBSYS_UNLOCK();

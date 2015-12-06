@@ -35,19 +35,60 @@
 #include <kern/debug.h>
 
 static int DEBUGFlag;
+static uint32_t gPEKernelConfigurationBitmask;
 
 int32_t gPESerialBaud = -1;
 
 void pe_init_debug(void)
 {
-  if (!PE_parse_boot_argn("debug", &DEBUGFlag, sizeof (DEBUGFlag)))
-    DEBUGFlag = 0;
+	boolean_t boot_arg_value;
+
+	if (!PE_parse_boot_argn("debug", &DEBUGFlag, sizeof (DEBUGFlag)))
+		DEBUGFlag = 0;
+
+	gPEKernelConfigurationBitmask = 0;
+
+	if (!PE_parse_boot_argn("assertions", &boot_arg_value, sizeof(boot_arg_value))) {
+#if MACH_ASSERT
+		boot_arg_value = TRUE;
+#else
+		boot_arg_value = FALSE;
+#endif
+	}
+	gPEKernelConfigurationBitmask |= (boot_arg_value ? kPEICanHasAssertions : 0);
+
+	if (!PE_parse_boot_argn("statistics", &boot_arg_value, sizeof(boot_arg_value))) {
+#if DEVELOPMENT || DEBUG
+		boot_arg_value = TRUE;
+#else
+		boot_arg_value = FALSE;
+#endif
+	}
+	gPEKernelConfigurationBitmask |= (boot_arg_value ? kPEICanHasStatistics : 0);
+
+#if SECURE_KERNEL
+	boot_arg_value = FALSE;
+#else
+	if (!PE_i_can_has_debugger(NULL)) {
+		boot_arg_value = FALSE;
+	} else if (!PE_parse_boot_argn("diagnostic_api", &boot_arg_value, sizeof(boot_arg_value)))  {
+		boot_arg_value = TRUE;
+	}
+#endif
+	gPEKernelConfigurationBitmask |= (boot_arg_value ? kPEICanHasDiagnosticAPI : 0);
+
 }
 
 void PE_enter_debugger(const char *cause)
 {
   if (DEBUGFlag & DB_NMI)
     Debugger(cause);
+}
+
+uint32_t
+PE_i_can_has_kernel_configuration(void)
+{
+	return gPEKernelConfigurationBitmask;
 }
 
 /* extern references */

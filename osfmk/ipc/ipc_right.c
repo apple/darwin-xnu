@@ -659,20 +659,11 @@ ipc_right_terminate(
 		}
 
 		if (type & MACH_PORT_TYPE_RECEIVE) {
-			wait_queue_link_t wql;
-			queue_head_t links_data;
-			queue_t links = &links_data;
-
 			assert(port->ip_receiver_name == name);
 			assert(port->ip_receiver == space);
 
-			queue_init(links);
-			ipc_port_clear_receiver(port, links);
+			ipc_port_clear_receiver(port);
 			ipc_port_destroy(port); /* consumes our ref, unlocks */
-			while(!queue_empty(links)) {
-				wql = (wait_queue_link_t) dequeue(links);
-				wait_queue_link_free(wql);
-			}
 
 		} else if (type & MACH_PORT_TYPE_SEND_ONCE) {
 			assert(port->ip_sorights > 0);
@@ -813,22 +804,11 @@ ipc_right_destroy(
 		}
 
 		if (type & MACH_PORT_TYPE_RECEIVE) {
-			queue_head_t links_data;
-			queue_t links = &links_data;
-			wait_queue_link_t wql;
-
 			assert(ip_active(port));
 			assert(port->ip_receiver == space);
 
-			queue_init(links);
-
-			ipc_port_clear_receiver(port, links);
+			ipc_port_clear_receiver(port);
 			ipc_port_destroy(port); /* consumes our ref, unlocks */
-
-			while(!queue_empty(links)) {
-				wql = (wait_queue_link_t) dequeue(links);
-				wait_queue_link_free(wql);
-			}
 
 		} else if (type & MACH_PORT_TYPE_SEND_ONCE) {
 			assert(port->ip_sorights > 0);
@@ -1122,9 +1102,6 @@ ipc_right_delta(
 
 	    case MACH_PORT_RIGHT_RECEIVE: {
 		ipc_port_t request = IP_NULL;
-		queue_head_t links_data;
-		queue_t links = &links_data;
-		wait_queue_link_t wql;
 
 		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0)
 			goto invalid_right;
@@ -1211,14 +1188,8 @@ ipc_right_delta(
 		}
 		is_write_unlock(space);
 
-		queue_init(links);
-		ipc_port_clear_receiver(port, links);
+		ipc_port_clear_receiver(port);
 		ipc_port_destroy(port);	/* consumes ref, unlocks */
-
-		while(!queue_empty(links)) {
-			wql = (wait_queue_link_t) dequeue(links);
-			wait_queue_link_free(wql);
-		}
 
 		if (request != IP_NULL)
 			ipc_notify_port_deleted(request, name);
@@ -1451,10 +1422,6 @@ ipc_right_destruct(
 	ipc_port_t port = IP_NULL;
 	ipc_entry_bits_t bits;
 
-	queue_head_t links_data;
-	queue_t links = &links_data;
-	wait_queue_link_t wql;
-
 	mach_port_urefs_t urefs;
 	ipc_port_t request = IP_NULL;
 	ipc_port_t nsrequest = IP_NULL;
@@ -1585,14 +1552,8 @@ ipc_right_destruct(
 	if (nsrequest != IP_NULL)
 		ipc_notify_no_senders(nsrequest, mscount);
 
-	queue_init(links);
-	ipc_port_clear_receiver(port, links);
+	ipc_port_clear_receiver(port);
 	ipc_port_destroy(port);	/* consumes ref, unlocks */
-
-	while(!queue_empty(links)) {
-		wql = (wait_queue_link_t) dequeue(links);
-		wait_queue_link_free(wql);
-	}
 
 	if (request != IP_NULL)
 		ipc_notify_port_deleted(request, name);
@@ -1783,19 +1744,13 @@ ipc_right_copyin(
 	ipc_object_t		*objectp,
 	ipc_port_t		*sorightp,
 	ipc_port_t		*releasep,
-#if IMPORTANCE_INHERITANCE
-	int			*assertcntp,
-#endif /* IMPORTANCE_INHERITANCE */
-	queue_t			links)
+	int			*assertcntp)
 {
 	ipc_entry_bits_t bits;
 	ipc_port_t port;
 
 	*releasep = IP_NULL;
-
-#if IMPORTANCE_INHERITANCE
 	*assertcntp = 0;
-#endif
 
 	bits = entry->ie_bits;
 
@@ -1881,7 +1836,7 @@ ipc_right_copyin(
 		entry->ie_bits = bits &~ MACH_PORT_TYPE_RECEIVE;
 		ipc_entry_modified(space, name, entry);
 
-		ipc_port_clear_receiver(port, links);
+		ipc_port_clear_receiver(port);
 		port->ip_receiver_name = MACH_PORT_NULL;
 		port->ip_destination = IP_NULL;
 
@@ -2036,6 +1991,7 @@ ipc_right_copyin(
 
 		if (ipc_right_check(space, port, name, entry)) {
 			bits = entry->ie_bits;
+			*releasep = port;
 			goto move_dead;
 		}
 		/* port is locked and active */
@@ -2304,15 +2260,8 @@ ipc_right_copyin_two(
 	ipc_port_t		*sorightp,
 	ipc_port_t		*releasep)
 {
-	queue_head_t links_data;
-	queue_t links = &links_data;
 	kern_return_t kr;
-
-#if IMPORTANCE_INHERITANCE
 	int assertcnt = 0;
-#endif
-
-	queue_init(links);
 
 	assert(MACH_MSG_TYPE_PORT_ANY_SEND(msgt_one));
 	assert(MACH_MSG_TYPE_PORT_ANY_SEND(msgt_two));
@@ -2355,18 +2304,11 @@ ipc_right_copyin_two(
 		 */
 		ipc_object_t object_two;
 
-#if IMPORTANCE_INHERITANCE
 		kr = ipc_right_copyin(space, name, entry,
 				      msgt_one, FALSE,
 				      objectp, sorightp, releasep,
-				      &assertcnt, links);
+				      &assertcnt);
 		assert(assertcnt == 0);
-#else
-		kr = ipc_right_copyin(space, name, entry,
-				      msgt_one, FALSE,
-				      objectp, sorightp, releasep,
-				      links);
-#endif /* IMPORTANCE_INHERITANCE */
 		if (kr != KERN_SUCCESS) {
 			return kr;
 		}
@@ -2381,18 +2323,11 @@ ipc_right_copyin_two(
 		 *	as no valid disposition can make us lose our
 		 *	receive right.
 		 */
-#if IMPORTANCE_INHERITANCE
 		kr = ipc_right_copyin(space, name, entry,
 				      msgt_two, FALSE,
 				      &object_two, sorightp, releasep,
-				      &assertcnt, links);
+				      &assertcnt);
 		assert(assertcnt == 0);
-#else
-		kr = ipc_right_copyin(space, name, entry,
-				      msgt_two, FALSE,
-				      &object_two, sorightp, releasep,
-				      links);
-#endif /* IMPORTANCE_INHERITANCE */
 		assert(kr == KERN_SUCCESS);
 		assert(*sorightp == IP_NULL);
 		assert(*releasep == IP_NULL);
@@ -2430,18 +2365,11 @@ ipc_right_copyin_two(
 			msgt_name = MACH_MSG_TYPE_COPY_SEND;
 		}
 
-#if IMPORTANCE_INHERITANCE
 		kr = ipc_right_copyin(space, name, entry,
 				      msgt_name, FALSE,
 				      objectp, sorightp, releasep,
-				      &assertcnt, links);
+				      &assertcnt);
 		assert(assertcnt == 0);
-#else
-		kr = ipc_right_copyin(space, name, entry,
-				      msgt_name, FALSE,
-				      objectp, sorightp, releasep,
-				      links);
-#endif /* IMPORTANCE_INHERITANCE */
 		if (kr != KERN_SUCCESS) {
 			return kr;
 		}
@@ -2453,8 +2381,6 @@ ipc_right_copyin_two(
 		 */
 		(void)ipc_port_copy_send((ipc_port_t)*objectp);
 	}
-
-	assert(queue_empty(links));
 
 	return KERN_SUCCESS;
 }

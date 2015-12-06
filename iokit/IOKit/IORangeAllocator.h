@@ -98,8 +98,8 @@ public:
 					UInt32 capacity = 0,
 					IOOptionBits options = 0 );
 
-    virtual void free();
-    virtual bool serialize(OSSerialize *s) const;
+    virtual void free() APPLE_KEXT_OVERRIDE;
+    virtual bool serialize(OSSerialize *s) const APPLE_KEXT_OVERRIDE;
 
 /*! @function getFragmentCount
     @abstract Accessor to return the number of free fragments in the range.

@@ -29,6 +29,7 @@
 #include "threadinfo.h"
 #include "callstack.h"
 #include "kperf_kpc.h"
+#include "meminfo.h"
 
 #ifndef __KPERF_SAMPLE_H__
 #define __KPERF_SAMPLE_H__
@@ -40,6 +41,7 @@ struct kperf_sample
 	struct tinfo_ex   tinfo_ex;
 	struct callstack  kcallstack;
 	struct callstack  ucallstack;
+	struct meminfo    meminfo;
 
 #if KPC
 	struct kpcdata    kpcdata;

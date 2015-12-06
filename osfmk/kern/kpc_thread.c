@@ -33,11 +33,17 @@
 #include <kern/locks.h>
 #include <sys/errno.h>
 
+#include <kperf/kperf.h>
+#include <kperf/buffer.h>
+#include <kperf/context.h>
+#include <kperf/sample.h>
+#include <kperf/action.h>
+#include <kperf/kperf_kpc.h>
 #include <kern/kpc.h>
 
 
 /* global for whether to read PMCs on context switch */
-int kpc_threads_counting;
+int kpc_threads_counting = 0;
 
 /* current config and number of counters in that config */
 static uint32_t kpc_thread_classes = 0;
@@ -46,8 +52,6 @@ static uint32_t kpc_thread_classes_count = 0;
 static lck_grp_attr_t *kpc_thread_lckgrp_attr = NULL;
 static lck_grp_t      *kpc_thread_lckgrp = NULL;
 static lck_mtx_t       kpc_thread_lock;
-
-void kpc_thread_init(void);
 
 void
 kpc_thread_init(void)
@@ -112,6 +116,7 @@ kpc_set_thread_counting(uint32_t classes)
 		}	
 	}
 
+    kperf_kpc_cswitch_callback_update();
 	lck_mtx_unlock(&kpc_thread_lock);
 
 	return 0;
@@ -125,12 +130,7 @@ kpc_update_thread_counters( thread_t thread )
 	uint64_t *tmp = NULL;
 	cpu_data_t *cpu = NULL;
 
-/* TODO: Fix this...*/
-#if defined (__x86_64__)
 	cpu = current_cpu_datap();
-#else
-#error architecture not yet supported
-#endif
 
 	/* 1. stash current PMCs into latest CPU block */
 	kpc_get_cpu_counters( FALSE, kpc_thread_classes, 

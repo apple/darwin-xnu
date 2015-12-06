@@ -35,6 +35,7 @@
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
 #include <sys/proc_internal.h>
+#include <sys/vnode.h>
 #include <kern/debug.h>
 #include <kern/sched_prim.h>
 #include <kern/task.h>
@@ -119,9 +120,40 @@ LIST_HEAD(listhead, dtrace_proc_awaited_entry) dtrace_proc_awaited_head
 
 void (*dtrace_proc_waitfor_exec_ptr)(proc_t*) = NULL;
 
+static int
+dtrace_proc_get_execpath(proc_t *p, char *buffer, int *maxlen)
+{
+	int err = 0, vid = 0;
+	vnode_t tvp = NULLVP, nvp = NULLVP;
+
+	ASSERT(p);
+	ASSERT(buffer);
+	ASSERT(maxlen);
+
+	if ((tvp = p->p_textvp) == NULLVP)
+		return ESRCH;
+
+	vid = vnode_vid(tvp);
+	if ((err = vnode_getwithvid(tvp, vid)) != 0)
+		return err;
+
+	if ((err = vn_getpath_fsenter(tvp, buffer, maxlen)) != 0)
+		return err;
+	vnode_put(tvp);
+
+	if ((err = vnode_lookup(buffer, 0, &nvp, vfs_context_current())) != 0)
+		return err;
+	if (nvp != NULLVP)
+		vnode_put(nvp);
+
+	return 0;
+}
+
+
 static void
 dtrace_proc_exec_notification(proc_t *p) {
 	dtrace_proc_awaited_entry_t *entry, *tmp;
+	static char execpath[MAXPATHLEN];
 
 	ASSERT(p);
 	ASSERT(p->p_pid != -1);
@@ -129,16 +161,31 @@ dtrace_proc_exec_notification(proc_t *p) {
 
 	lck_mtx_lock(&dtrace_procwaitfor_lock);
 
-	/*
-	 * For each entry, if it has not been matched with a process yet we
-	 * try to match it with the newly created process. If they match, the
-	 * entry is initialized with the process id and the process task is
-	 * suspended. Finally, we wake up the client's waiting thread.
-	 */
 	LIST_FOREACH_SAFE(entry, &dtrace_proc_awaited_head, entries, tmp) {
-		if ((entry->pdesc->p_pid == -1)
-		    && !strncmp(entry->pdesc->p_comm, &p->p_comm[0], sizeof(p->p_comm)))
-		{
+		/* By default consider we're using p_comm. */
+		char *pname = p->p_comm;
+
+		/* Already matched with another process. */
+		if ((entry->pdesc->p_pid != -1))
+			continue;
+
+		/* p_comm is too short, use the execpath. */
+		if (entry->pdesc->p_name_length >= MAXCOMLEN) {
+			/*
+			 * Retrieve the executable path. After the call, length contains
+			 * the length of the string + 1.
+			 */
+			int length = sizeof(execpath);
+			if (dtrace_proc_get_execpath(p, execpath, &length) != 0)
+				continue;
+			/* Move the cursor to the position after the last / */
+			pname = &execpath[length - 1];
+			while (pname != execpath && *pname != '/')
+				pname--;
+			pname = (*pname == '/') ? pname + 1 : pname;
+		}
+
+		if (!strcmp(entry->pdesc->p_name, pname)) {
 			entry->pdesc->p_pid = p->p_pid;
 			task_pidsuspend(p->task);
 			wakeup(entry);
@@ -154,7 +201,15 @@ dtrace_proc_waitfor(dtrace_procdesc_t* pdesc) {
 	int res;
 
 	ASSERT(pdesc);
-	ASSERT(pdesc->p_comm);
+	ASSERT(pdesc->p_name);
+
+	/*
+	 * Never trust user input, compute the length of the process name and ensure the
+	 * string is null terminated.
+	 */
+	pdesc->p_name_length = strnlen(pdesc->p_name, sizeof(pdesc->p_name));
+	if (pdesc->p_name_length >= (int) sizeof(pdesc->p_name))
+		return -1;
 
 	lck_mtx_lock(&dtrace_procwaitfor_lock);
 
@@ -240,6 +295,14 @@ dtrace_invop_remove(int (*func)(uintptr_t, uintptr_t *, uintptr_t))
 	kmem_free(hdlr, sizeof (dtrace_invop_hdlr_t));
 }
 
+
+
+
+void
+dtrace_restriction_policy_load(void)
+{
+}
+
 /*
  * Check if DTrace has been restricted by the current security policy.
  */
@@ -248,6 +311,32 @@ dtrace_is_restricted(void)
 {
 #if CONFIG_CSR
 	if (csr_check(CSR_ALLOW_UNRESTRICTED_DTRACE) != 0)
+		return TRUE;
+#endif
+
+	return FALSE;
+}
+
+/*
+ * Check if DTrace is running on a machine currently configured for Apple Internal development
+ */
+boolean_t
+dtrace_is_running_apple_internal(void)
+{
+#if CONFIG_CSR
+	if (csr_check(CSR_ALLOW_APPLE_INTERNAL) == 0)
+		return TRUE;
+#endif
+
+	return FALSE;
+}
+
+boolean_t
+dtrace_fbt_probes_restricted(void)
+{
+
+#if CONFIG_CSR
+	if (dtrace_is_restricted() && !dtrace_is_running_apple_internal())
 		return TRUE;
 #endif
 
@@ -264,7 +353,7 @@ dtrace_can_attach_to_proc(proc_t *proc)
 	ASSERT(proc != NULL);
 
 #if CONFIG_CSR
-	if ((cs_entitlement_flags(proc) & CS_GET_TASK_ALLOW) == 0)
+	if (cs_restricted(proc))
 		return FALSE;
 #endif
 

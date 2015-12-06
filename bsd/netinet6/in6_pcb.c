@@ -857,7 +857,7 @@ in6_pcbnotify(struct inpcbinfo *pcbinfo, struct sockaddr *dst, u_int fport_arg,
 	u_int32_t flowinfo;
 	int errno;
 
-	if ((unsigned)cmd > PRC_NCMDS || dst->sa_family != AF_INET6)
+	if ((unsigned)cmd >= PRC_NCMDS || dst->sa_family != AF_INET6)
 		return;
 
 	sa6_dst = (struct sockaddr_in6 *)(void *)dst;
@@ -1041,16 +1041,9 @@ void
 in6_losing(struct inpcb *in6p)
 {
 	struct rtentry *rt;
-	struct rt_addrinfo info;
 
 	if ((rt = in6p->in6p_route.ro_rt) != NULL) {
 		RT_LOCK(rt);
-		bzero((caddr_t)&info, sizeof (info));
-		info.rti_info[RTAX_DST] =
-		    (struct sockaddr *)&in6p->in6p_route.ro_dst;
-		info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
-		info.rti_info[RTAX_NETMASK] = rt_mask(rt);
-		rt_missmsg(RTM_LOSING, &info, rt->rt_flags, 0);
 		if (rt->rt_flags & RTF_DYNAMIC) {
 			/*
 			 * Prevent another thread from modifying rt_key,

@@ -363,8 +363,23 @@ enum {
 	kHFSHasChildLinkBit	= 0x0006,	/* folder has a child that's a dir link */
 	kHFSHasChildLinkMask	= 0x0040,
 
-	kHFSHasDateAddedBit = 0x0007,	/* File/Folder has the date-added stored in the finder info. */
-	kHFSHasDateAddedMask = 0x0080 
+	kHFSHasDateAddedBit     = 0x0007,	/* File/Folder has the date-added stored in the finder info. */
+	kHFSHasDateAddedMask    = 0x0080, 
+
+	kHFSFastDevPinnedBit    = 0x0008,       /* this file has been pinned to the fast-device by the hot-file code on cooperative fusion */
+	kHFSFastDevPinnedMask   = 0x0100,
+
+	kHFSDoNotFastDevPinBit  = 0x0009,       /* this file can not be pinned to the fast-device */
+	kHFSDoNotFastDevPinMask = 0x0200,
+
+	kHFSFastDevCandidateBit  = 0x000a,      /* this item is a potential candidate for fast-dev pinning (as are any of its descendents */
+	kHFSFastDevCandidateMask = 0x0400,
+
+	kHFSAutoCandidateBit     = 0x000b,      /* this item was automatically marked as a fast-dev candidate by the kernel */
+	kHFSAutoCandidateMask    = 0x0800
+
+	// There are only 4 flag bits remaining: 0x1000, 0x2000, 0x4000, 0x8000
+
 };
 
 

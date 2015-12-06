@@ -388,7 +388,7 @@ public:
     * release@/link</code>
     * instead.
     */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -657,7 +657,7 @@ public:
     * if that object is derived from OSData
     * and contains the equivalent bytes of the same length.
     */
-    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -698,7 +698,7 @@ public:
     * @result
     * <code>true</code> if serialization succeeds, <code>false</code> if not.
     */
-    virtual bool serialize(OSSerialize * serializer) const;
+    virtual bool serialize(OSSerialize * serializer) const APPLE_KEXT_OVERRIDE;
 
 
    /*!

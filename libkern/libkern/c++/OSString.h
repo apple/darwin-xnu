@@ -180,7 +180,9 @@ public:
     */
     static OSString * withCStringNoCopy(const char * cString);
 
+#if XNU_KERNEL_PRIVATE
     static OSString * withStringOfLength(const char *cString, size_t length);
+#endif  /* XNU_KERNEL_PRIVATE */
 
    /*!
     * @function initWithString
@@ -264,7 +266,7 @@ public:
     * release@/link</code>
     * instead.
     */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -375,7 +377,7 @@ public:
     * if that object is derived from OSString
     * and contains the equivalent bytes of the same length.
     */
-    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const APPLE_KEXT_OVERRIDE;
 
 
    /*!
@@ -415,7 +417,7 @@ public:
     * @result
     * <code>true</code> if serialization succeeds, <code>false</code> if not.
     */
-    virtual bool serialize(OSSerialize * serializer) const;
+    virtual bool serialize(OSSerialize * serializer) const APPLE_KEXT_OVERRIDE;
 
     OSMetaClassDeclareReservedUnused(OSString,  0);
     OSMetaClassDeclareReservedUnused(OSString,  1);

@@ -84,7 +84,7 @@ static uintptr_t IOBMDPageProc(iopa_t * a)
     int           options = 0; // KMA_LOMEM;
 
     kr = kernel_memory_allocate(kernel_map, &vmaddr,
-				page_size, 0, options);
+				page_size, 0, options, VM_KERN_MEMORY_IOKIT);
 
     if (KERN_SUCCESS != kr) vmaddr = 0;
     else 		    bzero((void *) vmaddr, page_size);
@@ -167,6 +167,8 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 
     _alignment = alignment;
 
+    if ((capacity + alignment) < _capacity) return (false);
+
     if ((inTask != kernel_task) && !(options & kIOMemoryPageable))
 	return false;
 
@@ -232,7 +234,7 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 	    {
 		IOStatisticsAlloc(kIOStatisticsMallocAligned, capacity);
 #if IOALLOCDEBUG
-		debug_iomalloc_size += capacity;
+		OSAddAtomic(capacity, &debug_iomalloc_size);
 #endif
 	    }
 	}
@@ -259,7 +261,7 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 
 	if( options & kIOMemoryPageable) {
 #if IOALLOCDEBUG
-	    debug_iomallocpageable_size += size;
+	    OSAddAtomicLong(size, &debug_iomallocpageable_size);
 #endif
 	    mapTask = inTask;
 	    if (NULL == inTask)
@@ -492,7 +494,7 @@ void IOBufferMemoryDescriptor::free()
     if (options & kIOMemoryPageable)
     {
 #if IOALLOCDEBUG
-	debug_iomallocpageable_size -= round_page(size);
+	OSAddAtomicLong(-(round_page(size)), &debug_iomallocpageable_size);
 #endif
     }
     else if (buffer)
@@ -512,7 +514,7 @@ void IOBufferMemoryDescriptor::free()
 		kmem_free(kernel_map, page, page_size);
 	    }
 #if IOALLOCDEBUG
-	    debug_iomalloc_size -= size;
+		OSAddAtomic(-size, &debug_iomalloc_size);
 #endif
 	    IOStatisticsAlloc(kIOStatisticsFreeAligned, size);
 	}

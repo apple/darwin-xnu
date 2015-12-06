@@ -36,13 +36,14 @@
 #include <ipc/ipc_types.h>
 #include <kern/spl.h>
 
-semaphore_t convert_port_to_semaphore (ipc_port_t port);
-ipc_port_t  convert_semaphore_to_port (semaphore_t semaphore);
+extern semaphore_t convert_port_to_semaphore (ipc_port_t port);
+extern ipc_port_t convert_semaphore_to_port (semaphore_t semaphore);
+extern kern_return_t port_name_to_semaphore(
+				      mach_port_name_t	name,
+				      semaphore_t	*semaphore);
+extern void semaphore_notify(mach_msg_header_t *msg);
 
 lock_set_t  convert_port_to_lock_set  (ipc_port_t port);
 ipc_port_t  convert_lock_set_to_port  (lock_set_t lock_set);
 
-kern_return_t	port_name_to_semaphore(
-				      mach_port_name_t	name,
-				      semaphore_t	*semaphore);
 #endif /* _KERN_IPC_SYNC_H_ */

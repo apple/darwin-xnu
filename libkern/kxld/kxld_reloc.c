@@ -659,7 +659,7 @@ get_pointer_at_addr_32(const KXLDRelocator *relocator,
     
     check(relocator);
 
-    addr = *(const uint32_t *) ((void *) (data + offset));
+    addr = *(const uint32_t *) ((const void *) (data + offset));
 #if !KERNEL
     if (relocator->swap) {
         addr = OSSwapInt32(addr);
@@ -681,7 +681,7 @@ get_pointer_at_addr_64(const KXLDRelocator *relocator,
     
     check(relocator);
 
-    addr = *(const uint64_t *) ((void *) (data + offset));
+    addr = *(const uint64_t *) ((const void *) (data + offset));
 #if !KERNEL
     if (relocator->swap) {
         addr = OSSwapInt64(addr);

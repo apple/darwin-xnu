@@ -592,7 +592,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	/*
 	 * Allocate per-cpu data:
 	 */
-	ret = kmem_alloc(kernel_map, (vm_offset_t *) &cdp, sizeof(cpu_data_t));
+	ret = kmem_alloc(kernel_map, (vm_offset_t *) &cdp, sizeof(cpu_data_t), VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
 		printf("cpu_data_alloc() failed, ret=%d\n", ret);
 		goto abort;
@@ -605,7 +605,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	 */
 	ret = kmem_alloc(kernel_map, 
 			 (vm_offset_t *) &cdp->cpu_int_stack_top,
-			 INTSTACK_SIZE);
+			 INTSTACK_SIZE, VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
 		printf("cpu_data_alloc() int stack failed, ret=%d\n", ret);
 		goto abort;
@@ -618,7 +618,8 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	 */
 	ret = kmem_alloc(kernel_map, 
 			 (vm_offset_t *) &cdp->cpu_desc_tablep,
-			 sizeof(cpu_desc_table64_t));
+			 sizeof(cpu_desc_table64_t),
+			 VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
 		printf("cpu_data_alloc() desc_table failed, ret=%d\n", ret);
 		goto abort;
@@ -629,7 +630,8 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	 */
 	ret = kmem_alloc(kernel_map, 
 			 (vm_offset_t *) &cdp->cpu_ldtp,
-			 sizeof(struct real_descriptor) * LDTSZ);
+			 sizeof(struct real_descriptor) * LDTSZ,
+			 VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
 		printf("cpu_data_alloc() ldt failed, ret=%d\n", ret);
 		goto abort;
@@ -775,7 +777,7 @@ cpu_userwindow_init(int cpu)
 
 		if (vm_allocate(kernel_map, &vaddr,
 					(NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE,
-					VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+					VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU)) != KERN_SUCCESS)
 			panic("cpu_userwindow_init: "
 					"couldn't allocate user map window");
 
@@ -822,7 +824,7 @@ cpu_physwindow_init(int cpu)
 
 	if (phys_window == 0) {
 		if (vm_allocate(kernel_map, &phys_window,
-				PAGE_SIZE, VM_FLAGS_ANYWHERE)
+				PAGE_SIZE, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU))
 				!= KERN_SUCCESS)
 		        panic("cpu_physwindow_init: "
 				"couldn't allocate phys map window");
@@ -863,14 +865,14 @@ cpu_data_realloc(void)
 	cpu_data_t	*cdp;
 	boolean_t	istate;
 
-	ret = kmem_alloc(kernel_map, &istk, INTSTACK_SIZE);
+	ret = kmem_alloc(kernel_map, &istk, INTSTACK_SIZE, VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
 		panic("cpu_data_realloc() stack alloc, ret=%d\n", ret);
 	}
 	bzero((void*) istk, INTSTACK_SIZE);
 	istk += INTSTACK_SIZE;
 
-	ret = kmem_alloc(kernel_map, (vm_offset_t *) &cdp, sizeof(cpu_data_t));
+	ret = kmem_alloc(kernel_map, (vm_offset_t *) &cdp, sizeof(cpu_data_t), VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
 		panic("cpu_data_realloc() cpu data alloc, ret=%d\n", ret);
 	}
@@ -883,7 +885,7 @@ cpu_data_realloc(void)
 	timer_call_queue_init(&cdp->rtclock_timer.queue);
 
 	/* Allocate the separate fault stack */
-	ret = kmem_alloc(kernel_map, &fstk, PAGE_SIZE);
+	ret = kmem_alloc(kernel_map, &fstk, PAGE_SIZE, VM_KERN_MEMORY_CPU);
 	if (ret != KERN_SUCCESS) {
 		panic("cpu_data_realloc() fault stack alloc, ret=%d\n", ret);
 	}

@@ -7,11 +7,12 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 DATAFILES = \
-	exc_resource.h
+	exc_resource.h \
+	kern_cdata.h
 
 PRIVATE_DATAFILES = \
-	ecc.h \
-	exc_resource.h
+	debug.h \
+	ecc.h
 
 EXPORT_FILES = \
 	affinity.h \
@@ -22,7 +23,6 @@ EXPORT_FILES = \
 	coalition.h \
 	cpu_number.h \
 	cpu_data.h \
-	debug.h \
 	energy_perf.h \
 	extmod_statistics.h \
 	hv_support.h \
@@ -51,18 +51,18 @@ EXPORT_FILES = \
 	thread.h \
 	thread_call.h \
 	timer_call.h \
-	wait_queue.h \
+	waitq.h \
 	zalloc.h
 
 INSTALL_MI_LIST = ${DATAFILES}
 
-INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES} debug.h
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
-INSTALL_KF_MI_LCL_LIST = ${PRIVATE_DATAFILES} ${EXPORT_FILES} 
+INSTALL_KF_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES}
 
 INSTALL_MI_DIR = kern
 
-EXPORT_MI_LIST = ${PRIVATE_DATAFILES} ${EXPORT_FILES}
+EXPORT_MI_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES}
 
 EXPORT_MI_DIR = kern
 

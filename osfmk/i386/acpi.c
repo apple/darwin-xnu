@@ -89,12 +89,7 @@ acpi_install_wake_handler(void)
 #endif
 }
 
-#if HIBERNATION
-struct acpi_hibernate_callback_data {
-	acpi_sleep_callback func;
-	void *refcon;
-};
-typedef struct acpi_hibernate_callback_data acpi_hibernate_callback_data_t;
+#if CONFIG_SLEEP
 
 unsigned int		save_kdebug_enable = 0;
 static uint64_t		acpi_sleep_abstime;
@@ -102,7 +97,13 @@ static uint64_t		acpi_idle_abstime;
 static uint64_t		acpi_wake_abstime, acpi_wake_postrebase_abstime;
 boolean_t		deep_idle_rebase = TRUE;
 
-#if CONFIG_SLEEP
+#if HIBERNATION
+struct acpi_hibernate_callback_data {
+	acpi_sleep_callback func;
+	void *refcon;
+};
+typedef struct acpi_hibernate_callback_data acpi_hibernate_callback_data_t;
+
 static void
 acpi_hibernate(void *refcon)
 {
@@ -149,8 +150,8 @@ acpi_hibernate(void *refcon)
 
 	/* should never get here! */
 }
-#endif /* CONFIG_SLEEP */
 #endif /* HIBERNATION */
+#endif /* CONFIG_SLEEP */
 
 extern void			slave_pstart(void);
 extern void			hibernate_rebuild_vm_structs(void);
@@ -296,7 +297,9 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	if (lapic_probe())
 		lapic_configure();
 
+#if HIBERNATION
 	hibernate_rebuild_vm_structs();
+#endif
 
 	elapsed += mach_absolute_time() - start;
 	acpi_wake_abstime = mach_absolute_time();
@@ -323,6 +326,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 	IOCPURunPlatformActiveActions();
 
+#if HIBERNATION
 	if (did_hibernate) {
 		elapsed += mach_absolute_time() - start;
 		
@@ -334,6 +338,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 		KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_END, 0, 0, 0, 0, 0);
 	} else
+#endif /* HIBERNATION */
 		KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_END, 0, 0, 0, 0, 0);
 
 	/* Restore power management register state */

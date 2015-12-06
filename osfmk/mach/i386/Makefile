@@ -15,7 +15,12 @@ DATAFILES = \
 	vm_types.h rpc.h \
 	_structs.h sdt_isa.h
 
+PRIVATE_DATAFILES = \
+	syscall_sw.h
+
 INSTALL_MD_LIST = ${DATAFILES}
+
+INSTALL_MD_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MD_GEN_LIST = \
 	asm.h 

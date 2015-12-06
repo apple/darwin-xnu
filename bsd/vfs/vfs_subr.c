@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -140,8 +140,6 @@
 #include <security/mac_framework.h>
 #endif
 
-#define PANIC_PRINTS_VNODES
-
 extern lck_grp_t *vnode_lck_grp;
 extern lck_attr_t *vnode_lck_attr;
 
@@ -229,6 +227,12 @@ errno_t rmdir_remove_orphaned_appleDouble(vnode_t, vfs_context_t, int *);
 #ifdef JOE_DEBUG
 static void record_vp(vnode_t vp, int count);
 #endif
+
+#if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
+extern int bootarg_no_vnode_jetsam;    /* from bsd_init.c default value is 0 */
+#endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
+
+boolean_t root_is_CF_drive = FALSE;
 
 #if CONFIG_TRIGGERS
 static int vnode_resolver_create(mount_t, vnode_t, struct vnode_trigger_param *, boolean_t external);
@@ -651,7 +655,7 @@ static void vnode_iterate_panic_hook(panic_hook_t *hook_)
 
 	if (panic_phys_range_before(hook->vp, &phys, &range)) {
 		kdb_log("vp = %p, phys = %p, prev (%p: %p-%p)\n", 
-				hook->mp, phys, range.type, range.phys_start,
+				hook->vp, phys, range.type, range.phys_start,
 				range.phys_start + range.len);
 	} else {
 		kdb_log("vp = %p, phys = %p, prev (!)\n", hook->vp, phys);
@@ -1122,6 +1126,13 @@ vfs_mountroot(void)
 			 */
 			vfs_init_io_attributes(rootvp, mp);
 
+			if ((mp->mnt_ioflags & MNT_IOFLAGS_FUSION_DRIVE) && 
+			    (mp->mnt_ioflags & MNT_IOFLAGS_IOSCHED_SUPPORTED)) {
+				/*
+				 * only for CF
+				 */
+				root_is_CF_drive = TRUE;
+			}
 			/*
 			 * Shadow the VFC_VFSNATIVEXATTR flag to MNTK_EXTENDED_ATTRS.
 			 */
@@ -1683,11 +1694,32 @@ vnode_list_add(vnode_t vp)
 #if DIAGNOSTIC
 	lck_mtx_assert(&vp->v_lock, LCK_MTX_ASSERT_OWNED);
 #endif
+
+again:
+
 	/*
 	 * if it is already on a list or non zero references return 
 	 */
 	if (VONLIST(vp) || (vp->v_usecount != 0) || (vp->v_iocount != 0) || (vp->v_lflag & VL_TERMINATE))
 		return;
+
+	/*
+	 * In vclean, we might have deferred ditching locked buffers
+	 * because something was still referencing them (indicated by
+	 * usecount).  We can ditch them now.
+	 */
+	if (ISSET(vp->v_lflag, VL_DEAD)
+		&& (!LIST_EMPTY(&vp->v_cleanblkhd) || !LIST_EMPTY(&vp->v_dirtyblkhd))) {
+		++vp->v_iocount;	// Probably not necessary, but harmless
+#ifdef JOE_DEBUG
+		record_vp(vp, 1);
+#endif
+		vnode_unlock(vp);
+		buf_invalidateblks(vp, BUF_INVALIDATE_LOCKED, 0, 0);
+		vnode_lock(vp);
+		vnode_dropiocount(vp);
+		goto again;
+	}
 
 	vnode_list_lock();
 
@@ -2002,7 +2034,13 @@ loop:
 
 		vnode_lock_spin(vp);
 
-		if ((vp->v_id != vid) || ((vp->v_lflag & (VL_DEAD | VL_TERMINATE)))) {
+		// If vnode is already terminating, wait for it...
+		while (vp->v_id == vid && ISSET(vp->v_lflag, VL_TERMINATE)) {
+			vp->v_lflag |= VL_TERMWANT;
+			msleep(&vp->v_lflag, &vp->v_lock, PVFS, "vflush", NULL);
+		}
+
+		if ((vp->v_id != vid) || ISSET(vp->v_lflag, VL_DEAD)) {
 				vnode_unlock(vp);
 				mount_lock(mp);
 				continue;
@@ -2165,12 +2203,6 @@ vclean(vnode_t vp, int flags)
 
 	vp->v_lflag |= VL_TERMINATE;
 
-	/*
-	 * remove the vnode from any mount list
-	 * it might be on...
-	 */
-	insmntque(vp, (struct mount *)0);
-
 #if NAMEDSTREAMS
 	is_namedstream = vnode_isnamedstream(vp);
 #endif
@@ -2197,8 +2229,16 @@ vclean(vnode_t vp, int flags)
 		else
 #endif
 		{
-		        VNOP_FSYNC(vp, MNT_WAIT, ctx);
-			buf_invalidateblks(vp, BUF_WRITE_DATA | BUF_INVALIDATE_LOCKED, 0, 0);
+			VNOP_FSYNC(vp, MNT_WAIT, ctx);
+
+			/*
+			 * If the vnode is still in use (by the journal for
+			 * example) we don't want to invalidate locked buffers
+			 * here.  In that case, either the journal will tidy them
+			 * up, or we will deal with it when the usecount is
+			 * finally released in vnode_rele_internal.
+			 */
+			buf_invalidateblks(vp, BUF_WRITE_DATA | (active ? 0 : BUF_INVALIDATE_LOCKED), 0, 0);
 		}
 		if (UBCINFOEXISTS(vp))
 		        /*
@@ -2259,6 +2299,14 @@ vclean(vnode_t vp, int flags)
 	vnode_update_identity(vp, NULLVP, NULL, 0, 0, VNODE_UPDATE_PARENT | VNODE_UPDATE_NAME | VNODE_UPDATE_PURGE);
 
 	vnode_lock(vp);
+
+	/*
+	 * Remove the vnode from any mount list it might be on.  It is not
+	 * safe to do this any earlier because unmount needs to wait for
+	 * any vnodes to terminate and it cannot do that if it cannot find
+	 * them.
+	 */
+	insmntque(vp, (struct mount *)0);
 
 	vp->v_mount = dead_mountp;
 	vp->v_op = dead_vnodeop_p;
@@ -3071,6 +3119,8 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 	u_int64_t temp;
 	u_int32_t features;
 	vfs_context_t ctx = vfs_context_current();
+	dk_corestorage_info_t cs_info;
+	boolean_t cs_present = FALSE;;
 	int isssd = 0;
 	int isvirtual = 0;
 
@@ -3243,19 +3293,31 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 
 	if (features & DK_FEATURE_FORCE_UNIT_ACCESS)
 	        mp->mnt_ioflags |= MNT_IOFLAGS_FUA_SUPPORTED;
-	
+
+	if (VNOP_IOCTL(devvp, DKIOCCORESTORAGE, (caddr_t)&cs_info, 0, ctx) == 0)
+		cs_present = TRUE;
+
 	if (features & DK_FEATURE_UNMAP) {
 		mp->mnt_ioflags |= MNT_IOFLAGS_UNMAP_SUPPORTED;
 
-		if (VNOP_IOCTL(devvp, _DKIOCCORESTORAGE, NULL, 0, ctx) == 0)
+		if (cs_present == TRUE)
 			mp->mnt_ioflags |= MNT_IOFLAGS_CSUNMAP_SUPPORTED;
 	}
+	if (cs_present == TRUE) {
+		/*
+		 * for now we'll use the following test as a proxy for
+		 * the underlying drive being FUSION in nature
+		 */
+		if ((cs_info.flags & DK_CORESTORAGE_PIN_YOUR_METADATA))
+			mp->mnt_ioflags |= MNT_IOFLAGS_FUSION_DRIVE;
+	}
+
 #if CONFIG_IOSCHED
         if (iosched_enabled && (features & DK_FEATURE_PRIORITY)) {
                 mp->mnt_ioflags |= MNT_IOFLAGS_IOSCHED_SUPPORTED;
-		throttle_info_disable_throttle(mp->mnt_devbsdunit);
+		throttle_info_disable_throttle(mp->mnt_devbsdunit, (mp->mnt_ioflags & MNT_IOFLAGS_FUSION_DRIVE) != 0);
 	}
-#endif /* CONFIG_IOSCHED */	
+#endif /* CONFIG_IOSCHED */
 	return (error);
 }
 
@@ -3751,6 +3813,44 @@ SYSCTL_NODE(_vfs_generic, VFS_CONF, conf,
 		   CTLFLAG_RD | CTLFLAG_LOCKED,
 		   sysctl_vfs_generic_conf, "");
 
+/*
+ * Print vnode state.
+ */
+void
+vn_print_state(struct vnode *vp, const char *fmt, ...)
+{
+	va_list ap;
+	char perm_str[] = "(VM_KERNEL_ADDRPERM pointer)";
+	char fs_name[MFSNAMELEN];
+
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
+	printf("vp 0x%0llx %s: ", (uint64_t)VM_KERNEL_ADDRPERM(vp), perm_str);
+	printf("tag %d, type %d\n", vp->v_tag, vp->v_type);
+	/* Counts .. */
+	printf("    iocount %d, usecount %d, kusecount %d references %d\n",
+	    vp->v_iocount, vp->v_usecount, vp->v_kusecount, vp->v_references);
+	printf("    writecount %d, numoutput %d\n", vp->v_writecount,
+	    vp->v_numoutput);
+	/* Flags */
+	printf("    flag 0x%x, lflag 0x%x, listflag 0x%x\n", vp->v_flag,
+	    vp->v_lflag, vp->v_listflag);
+
+	if (vp->v_mount == NULL || vp->v_mount == dead_mountp) {
+		strlcpy(fs_name, "deadfs", MFSNAMELEN);
+	} else {
+		vfs_name(vp->v_mount, fs_name);
+	}
+
+	printf("    v_data 0x%0llx %s\n",
+	    (vp->v_data ? (uint64_t)VM_KERNEL_ADDRPERM(vp->v_data) : 0),
+	    perm_str);
+	printf("    v_mount 0x%0llx %s vfs_name %s\n",
+	    (vp->v_mount ? (uint64_t)VM_KERNEL_ADDRPERM(vp->v_mount) : 0),
+	    perm_str, fs_name);
+}
+
 long num_reusedvnodes = 0;
 
 
@@ -4050,9 +4150,15 @@ retry:
 		vnode_list_unlock();
 		tablefull("vnode");
 		log(LOG_EMERG, "%d desired, %d numvnodes, "
-			"%d free, %d dead, %d rage\n",
-		        desiredvnodes, numvnodes, freevnodes, deadvnodes, ragevnodes);
+			"%d free, %d dead, %d async, %d rage\n",
+		        desiredvnodes, numvnodes, freevnodes, deadvnodes, async_work_vnodes, ragevnodes);
 #if CONFIG_JETSAM
+
+#if DEVELOPMENT || DEBUG
+		if (bootarg_no_vnode_jetsam)
+			panic("vnode table is full\n");
+#endif /* DEVELOPMENT || DEBUG */
+
 		/*
 		 * Running out of vnodes tends to make a system unusable. Start killing
 		 * processes that jetsam knows are killable.
@@ -4265,6 +4371,17 @@ vnode_put(vnode_t vp)
 	return(retval);
 }
 
+static inline void
+vn_set_dead(vnode_t vp)
+{
+	vp->v_mount = NULL;
+	vp->v_op = dead_vnodeop_p;
+	vp->v_tag = VT_NON;
+	vp->v_data = NULL;
+	vp->v_type = VBAD;
+	vp->v_lflag |= VL_DEAD;
+}
+
 int
 vnode_put_locked(vnode_t vp)
 {
@@ -4444,6 +4561,8 @@ vnode_getiocount(vnode_t vp, unsigned int vid, int vflags)
 	int withvid = vflags & VNODE_WITHID;
 
 	for (;;) {
+		int sleepflg = 0;
+
 		/*
 		 * if it is a dead vnode with deadfs
 		 */
@@ -4476,7 +4595,8 @@ vnode_getiocount(vnode_t vp, unsigned int vid, int vflags)
 
 		/*
 		 * If this vnode is getting drained, there are some cases where
-		 * we can't block.
+		 * we can't block or, in case of tty vnodes, want to be
+		 * interruptible.
 		 */
 		if (vp->v_lflag & VL_DRAIN) {
 			/*
@@ -4498,15 +4618,24 @@ vnode_getiocount(vnode_t vp, unsigned int vid, int vflags)
 			 * failed because an unmount is in progress.
 			 */
 			if (withvid && (vp->v_mount) && vfs_isunmount(vp->v_mount))
-				return(ENODEV);
+				return (ENODEV);
+
+			if (vnode_istty(vp)) {
+				sleepflg = PCATCH;
+			}
 		}
 
 		vnode_lock_convert(vp);
 
 		if (vp->v_lflag & VL_TERMINATE) {
+			int error;
+
 			vp->v_lflag |= VL_TERMWANT;
 
-			msleep(&vp->v_lflag,   &vp->v_lock, PVFS, "vnode getiocount", NULL);
+			error = msleep(&vp->v_lflag,   &vp->v_lock,
+			   (PVFS | sleepflg), "vnode getiocount", NULL);
+			if (error)
+				return (error);
 		} else
 			msleep(&vp->v_iocount, &vp->v_lock, PVFS, "vnode_getiocount", NULL);
 	}
@@ -4637,16 +4766,13 @@ vnode_reclaim_internal(struct vnode * vp, int locked, int reuse, int flags)
 	        vnode_unlock(vp);
 }
 
-/* USAGE:
- * The following api creates a vnode and associates all the parameter specified in vnode_fsparam
- * structure and returns a vnode handle with a reference. device aliasing is handled here so checkalias
- * is obsoleted by this.
- */
-int  
-vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
+static int
+vnode_create_internal(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp,
+    int init_vnode)
 {
 	int error;
 	int insert = 1;
+	int existing_vnode;
 	vnode_t vp;
 	vnode_t nvp;
 	vnode_t dvp;
@@ -4656,34 +4782,68 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 #if CONFIG_TRIGGERS
 	struct vnode_trigger_param *tinfo = NULL;
 #endif
-	if (param == NULL)
-		return (EINVAL);
-
-	/* Do quick sanity check on the parameters. */
-	if (param->vnfs_vtype == VBAD) {
-		return EINVAL;
+	if (*vpp) {
+		vp = *vpp;
+		*vpp = NULLVP;
+		existing_vnode = 1;
+	} else {
+		existing_vnode = 0;
 	}
+
+	if (init_vnode) {
+		/* Do quick sanity check on the parameters. */
+		if ((param == NULL) || (param->vnfs_vtype == VBAD)) {
+			error = EINVAL;
+			goto error_out;
+		}
 
 #if CONFIG_TRIGGERS
-	if ((flavor == VNCREATE_TRIGGER) && (size == VNCREATE_TRIGGER_SIZE)) {
-		tinfo = (struct vnode_trigger_param *)data;
+		if ((flavor == VNCREATE_TRIGGER) && (size == VNCREATE_TRIGGER_SIZE)) {
+			tinfo = (struct vnode_trigger_param *)data;
 
-		/* Validate trigger vnode input */
-		if ((param->vnfs_vtype != VDIR) ||
-		    (tinfo->vnt_resolve_func == NULL) ||
-		    (tinfo->vnt_flags & ~VNT_VALID_MASK)) {
-			return (EINVAL);
+			/* Validate trigger vnode input */
+			if ((param->vnfs_vtype != VDIR) ||
+			    (tinfo->vnt_resolve_func == NULL) ||
+			    (tinfo->vnt_flags & ~VNT_VALID_MASK)) {
+				error = EINVAL;
+				goto error_out;
+			}
+			/* Fall through a normal create (params will be the same) */
+			flavor = VNCREATE_FLAVOR;
+			size = VCREATESIZE;
 		}
-		/* Fall through a normal create (params will be the same) */
-		flavor = VNCREATE_FLAVOR;
-		size = VCREATESIZE;
-	}
 #endif
-	if ((flavor != VNCREATE_FLAVOR) || (size != VCREATESIZE))
-		return (EINVAL);
+		if ((flavor != VNCREATE_FLAVOR) || (size != VCREATESIZE)) {
+			error = EINVAL;
+			goto error_out;
+		}
+	}
 
-	if ( (error = new_vnode(&vp)) )
-		return(error);
+	if (!existing_vnode) {
+		if ((error = new_vnode(&vp)) ) {
+			return (error);
+		}
+		if (!init_vnode) {
+			/* Make it so that it can be released by a vnode_put) */
+			vn_set_dead(vp);
+			*vpp = vp;
+			return (0);
+		}
+	} else {
+		/*
+		 * A vnode obtained by vnode_create_empty has been passed to
+		 * vnode_initialize - Unset VL_DEAD set by vn_set_dead. After
+		 * this point, it is set back on any error.
+		 *
+		 * N.B. vnode locking - We make the same assumptions as the
+		 * "unsplit" vnode_create did - i.e. it is safe to update the
+		 * vnode's fields without the vnode lock. This vnode has been
+		 * out and about with the filesystem and hopefully nothing
+		 * was done to the vnode between the vnode_create_empty and
+		 * now when it has come in through vnode_initialize.
+		 */
+		vp->v_lflag &= ~VL_DEAD;
+	}
 
 	dvp = param->vnfs_dvp;
 	cnp = param->vnfs_cnp;
@@ -4702,12 +4862,7 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 #ifdef JOE_DEBUG
 			record_vp(vp, 1);
 #endif
-			vp->v_mount = NULL;
-			vp->v_op = dead_vnodeop_p;
-			vp->v_tag = VT_NON;
-			vp->v_data = NULL;
-			vp->v_type = VBAD;
-			vp->v_lflag |= VL_DEAD;
+			vn_set_dead(vp);
 
 			vnode_put(vp);
 			return(error);
@@ -4735,12 +4890,7 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 		error = vnode_resolver_create(param->vnfs_mp, vp, tinfo, FALSE);
 		if (error) {
 			printf("vnode_create: vnode_resolver_create() err %d\n", error);
-			vp->v_mount = NULL;
-			vp->v_op = dead_vnodeop_p;
-			vp->v_tag = VT_NON;
-			vp->v_data = NULL;
-			vp->v_type = VBAD;
-			vp->v_lflag |= VL_DEAD;
+			vn_set_dead(vp);
 #ifdef JOE_DEBUG
 			record_vp(vp, 1);
 #endif
@@ -4862,6 +5012,58 @@ vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
 		vp->v_flag |= VRAGE;
 	}
 	return (0);
+
+error_out:
+	if (existing_vnode) {
+		vnode_put(vp);
+	}
+	return (error);
+}
+
+/* USAGE:
+ * The following api creates a vnode and associates all the parameter specified in vnode_fsparam
+ * structure and returns a vnode handle with a reference. device aliasing is handled here so checkalias
+ * is obsoleted by this.
+ */
+int
+vnode_create(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
+{
+	*vpp = NULLVP;
+	return (vnode_create_internal(flavor, size, data, vpp, 1));
+}
+
+int
+vnode_create_empty(vnode_t *vpp)
+{
+	*vpp = NULLVP;
+	return (vnode_create_internal(VNCREATE_FLAVOR, VCREATESIZE, NULL,
+	    vpp, 0));
+}
+
+int
+vnode_initialize(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp)
+{
+	if (*vpp == NULLVP) {
+		panic("NULL vnode passed to vnode_initialize");
+	}
+#if DEVELOPMENT || DEBUG
+	/*
+	 * We lock to check that vnode is fit for unlocked use in
+	 * vnode_create_internal.
+	 */
+	vnode_lock_spin(*vpp);
+	VNASSERT(((*vpp)->v_iocount == 1), *vpp,
+	    ("vnode_initialize : iocount not 1, is %d", (*vpp)->v_iocount));
+	VNASSERT(((*vpp)->v_usecount == 0), *vpp,
+	    ("vnode_initialize : usecount not 0, is %d", (*vpp)->v_usecount));
+	VNASSERT(((*vpp)->v_lflag & VL_DEAD), *vpp,
+	    ("vnode_initialize : v_lflag does not have VL_DEAD, is 0x%x",
+	    (*vpp)->v_lflag));
+	VNASSERT(((*vpp)->v_data == NULL), *vpp,
+	    ("vnode_initialize : v_data not NULL"));
+	vnode_unlock(*vpp);
+#endif
+	return (vnode_create_internal(flavor, size, data, vpp, 1));
 }
 
 int
@@ -5167,6 +5369,9 @@ vnode_lookup(const char *path, int flags, vnode_t *vpp, vfs_context_t ctx)
 	if (flags & VNODE_LOOKUP_NOCROSSMOUNT)
 		ndflags |= NOCROSSMOUNT;
 
+	if (flags & VNODE_LOOKUP_CROSSMOUNTNOWAIT)
+		ndflags |= CN_NBMOUNTLOOK;
+
 	/* XXX AUDITVNPATH1 needed ? */
 	NDINIT(&nd, LOOKUP, OP_LOOKUP, ndflags, UIO_SYSSPACE,
 	       CAST_USER_ADDR_T(path), ctx);
@@ -5202,6 +5407,9 @@ vnode_open(const char *path, int fmode, int cmode, int flags, vnode_t *vpp, vfs_
 	if (lflags & VNODE_LOOKUP_NOCROSSMOUNT)
 		ndflags |= NOCROSSMOUNT;
 	
+	if (lflags & VNODE_LOOKUP_CROSSMOUNTNOWAIT)
+		ndflags |= CN_NBMOUNTLOOK;
+
 	/* XXX AUDITVNPATH1 needed ? */
 	NDINIT(&nd, LOOKUP, OP_OPEN, ndflags, UIO_SYSSPACE,
 	       CAST_USER_ADDR_T(path), ctx);
@@ -8065,6 +8273,20 @@ vnode_setswapmount(vnode_t vp)
 }
 
 
+int64_t
+vnode_getswappin_avail(vnode_t vp)
+{
+	int64_t	max_swappin_avail = 0;
+
+	mount_lock(vp->v_mount);
+	if (vp->v_mount->mnt_ioflags & MNT_IOFLAGS_SWAPPIN_SUPPORTED)
+		max_swappin_avail = vp->v_mount->mnt_max_swappin_available;
+	mount_unlock(vp->v_mount);
+
+	return (max_swappin_avail);
+}
+
+
 void
 vn_setunionwait(vnode_t vp)
 {
@@ -8130,7 +8352,7 @@ errno_t rmdir_remove_orphaned_appleDouble(vnode_t vp , vfs_context_t ctx, int * 
 	if (error == EBUSY)
 		*restart_flag = 1;
 	if (error != 0)
-		goto outsc;
+		return (error);
 
 	/*
 	 * set up UIO
@@ -8298,7 +8520,8 @@ outsc:
 	if (open_flag)
 		VNOP_CLOSE(vp, FREAD, ctx);
 
-	uio_free(auio);
+	if (auio)
+		uio_free(auio);
 	FREE(rbuf, M_TEMP);
 
 	vnode_resume(vp);
@@ -8320,10 +8543,9 @@ lock_vnode_and_post(vnode_t vp, int kevent_num)
 	}
 }
 
-
-#ifdef PANIC_PRINTS_VNODES
-
 void panic_print_vnodes(void);
+/* define PANIC_PRINTS_VNODES only if investigation is required. */
+#ifdef PANIC_PRINTS_VNODES
 
 static const char *__vtype(uint16_t vtype)
 {
@@ -8360,7 +8582,8 @@ static const char *__vtype(uint16_t vtype)
 static char *__vpath(vnode_t vp, char *str, int len, int depth)
 {
 	int vnm_len;
-	char *dst, *src;
+	const char *src;
+	char *dst;
 
 	if (len <= 0)
 		return str;
@@ -8371,15 +8594,13 @@ static char *__vpath(vnode_t vp, char *str, int len, int depth)
 	/* follow mount vnodes to get the full path */
 	if ((vp->v_flag & VROOT)) {
 		if (vp->v_mount != NULL && vp->v_mount->mnt_vnodecovered) {
-			if (len < 1)
-				return str + len;
 			return __vpath(vp->v_mount->mnt_vnodecovered,
 				       str, len, depth+1);
 		}
 		return str + len;
 	}
 
-	src = (char *)vp->v_name;
+	src = vp->v_name;
 	vnm_len = strlen(src);
 	if (vnm_len > len) {
 		/* truncate the name to fit in the string */

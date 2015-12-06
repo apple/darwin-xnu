@@ -28,6 +28,7 @@
 #include <mach/mach_types.h>
 #include <kern/assert.h>
 #include <kern/clock.h>
+#include <kern/coalition.h>
 #include <kern/debug.h>
 #include <kern/host.h>
 #include <kern/kalloc.h>
@@ -39,15 +40,15 @@
 #include <kern/sched_prim.h>
 #include <kern/sfi.h>
 #include <kern/timer_call.h>
-#include <kern/wait_queue.h>
+#include <kern/waitq.h>
 #include <kern/ledger.h>
-#include <kern/coalition.h>
-
 #include <pexpert/pexpert.h>
 
 #include <libkern/kernel_mach_header.h>
 
 #include <sys/kdebug.h>
+
+#if CONFIG_SCHED_SFI
 
 #define SFI_DEBUG 0
 
@@ -93,7 +94,7 @@ extern sched_call_t workqueue_get_sched_callback(void);
  *
  * The pset lock may also be taken, but not while any other locks are held.
  *
- * splsched ---> sfi_lock ---> wait_queue ---> thread_lock
+ * splsched ---> sfi_lock ---> waitq ---> thread_lock
  *        \  \              \__ thread_lock (*)
  *         \  \__ pset_lock
  *          \
@@ -168,7 +169,7 @@ struct sfi_class_state {
 	boolean_t	class_sfi_is_enabled;
 	volatile boolean_t	class_in_on_phase;
 
-	struct wait_queue	wait_queue;	/* threads in ready state */
+	struct waitq		waitq;	/* threads in ready state */
 	thread_continue_t	continuation;
 
 	const char *	class_name;
@@ -252,7 +253,7 @@ void sfi_init(void)
 			timer_call_setup(&sfi_classes[i].on_timer, sfi_timer_per_class_on, (void *)(uintptr_t)i);
 			sfi_classes[i].on_timer_programmed = FALSE;
 			
-			kret = wait_queue_init(&sfi_classes[i].wait_queue, SYNC_POLICY_FIFO);
+			kret = waitq_init(&sfi_classes[i].waitq, SYNC_POLICY_FIFO|SYNC_POLICY_DISABLE_IRQ);
 			assert(kret == KERN_SUCCESS);
 		} else {
 			/* The only allowed gap is for SFI_CLASS_UNSPECIFIED */
@@ -428,9 +429,9 @@ static void sfi_timer_per_class_on(
 	sfi_class->class_in_on_phase = TRUE;
 	sfi_class->on_timer_programmed = FALSE;
 
-	kret = wait_queue_wakeup64_all(&sfi_class->wait_queue,
-								   CAST_EVENT64_T(sfi_class_id),
-								   THREAD_AWAKENED);
+	kret = waitq_wakeup64_all(&sfi_class->waitq,
+				  CAST_EVENT64_T(sfi_class_id),
+				  THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 	assert(kret == KERN_SUCCESS || kret == KERN_NOT_WAITING);
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SFI, SFI_ON_TIMER) | DBG_FUNC_END, 0, 0, 0, 0, 0);
@@ -775,23 +776,21 @@ sfi_class_id_t sfi_thread_classify(thread_t thread)
 	/*
 	 * Threads with unspecified, legacy, or user-initiated QOS class can be individually managed.
 	 */
-
 	switch (task_role) {
-		case TASK_CONTROL_APPLICATION:
-		case TASK_FOREGROUND_APPLICATION:
+	case TASK_CONTROL_APPLICATION:
+	case TASK_FOREGROUND_APPLICATION:
+		focal = TRUE;
+		break;
+	case TASK_BACKGROUND_APPLICATION:
+	case TASK_DEFAULT_APPLICATION:
+	case TASK_THROTTLE_APPLICATION:
+	case TASK_UNSPECIFIED:
+		/* Focal if the task is in a coalition with a FG/focal app */
+		if (task_coalition_focal_count(thread->task) > 0)
 			focal = TRUE;
-			break;
-
-		case TASK_BACKGROUND_APPLICATION:
-		case TASK_DEFAULT_APPLICATION:
-		case TASK_UNSPECIFIED:
-			/* Focal if in coalition with foreground app */
-			if (coalition_focal_task_count(thread->task->coalition) > 0)
-				focal = TRUE;
-			break;
-
-		default:
-			break;
+		break;
+	default:
+		break;
 	}
 
 	if (managed_task) {
@@ -909,7 +908,7 @@ static inline void _sfi_wait_cleanup(sched_call_t callback) {
 	self->sfi_wait_class = SFI_CLASS_UNSPECIFIED;
 	simple_unlock(&sfi_lock);
 	splx(s);
-	assert(SFI_CLASS_UNSPECIFIED < current_sfi_wait_class < MAX_SFI_CLASS_ID);
+	assert((SFI_CLASS_UNSPECIFIED < current_sfi_wait_class) && (current_sfi_wait_class < MAX_SFI_CLASS_ID));
 	ledger_credit(self->task->ledger, task_ledgers.sfi_wait_times[current_sfi_wait_class], sfi_wait_time);
 }
 
@@ -974,10 +973,10 @@ void sfi_ast(thread_t thread)
 		/* Need to block thread in wait queue */
 		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SFI, SFI_THREAD_DEFER), tid, class_id, 0, 0, 0);
 
-		waitret = wait_queue_assert_wait64(&sfi_class->wait_queue,
-						   CAST_EVENT64_T(class_id),
-						   THREAD_INTERRUPTIBLE,
-						   0);
+		waitret = waitq_assert_wait64(&sfi_class->waitq,
+					      CAST_EVENT64_T(class_id),
+					      THREAD_INTERRUPTIBLE,
+					      0);
 		if (waitret == THREAD_WAITING) {
 			thread->sfi_wait_class = class_id;
 			did_wait = TRUE;
@@ -1004,10 +1003,7 @@ void sfi_ast(thread_t thread)
 	}
 }
 
-/*
- * Thread must be unlocked
- * May be called with coalition, task, or thread mutex held
- */
+/* Thread must be unlocked */
 void sfi_reevaluate(thread_t thread)
 {
 	kern_return_t kret;
@@ -1051,7 +1047,7 @@ void sfi_reevaluate(thread_t thread)
 
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SFI, SFI_WAIT_CANCELED), thread_tid(thread), current_class_id, class_id, 0, 0);
 
-			kret = wait_queue_wakeup64_thread(&sfi_class->wait_queue,
+			kret = waitq_wakeup64_thread(&sfi_class->waitq,
 											  CAST_EVENT64_T(current_class_id),
 											  thread,
 											  THREAD_AWAKENED);
@@ -1091,3 +1087,56 @@ void sfi_reevaluate(thread_t thread)
 	simple_unlock(&sfi_lock);
 	splx(s);
 }
+
+#else /* !CONFIG_SCHED_SFI */
+
+kern_return_t sfi_set_window(uint64_t window_usecs __unused)
+{
+	return (KERN_NOT_SUPPORTED);
+}
+
+kern_return_t sfi_window_cancel(void)
+{
+	return (KERN_NOT_SUPPORTED);
+}
+
+
+kern_return_t sfi_get_window(uint64_t *window_usecs __unused)
+{
+	return (KERN_NOT_SUPPORTED);
+}
+
+
+kern_return_t sfi_set_class_offtime(sfi_class_id_t class_id __unused, uint64_t offtime_usecs __unused)
+{
+	return (KERN_NOT_SUPPORTED);
+}
+
+kern_return_t sfi_class_offtime_cancel(sfi_class_id_t class_id __unused)
+{
+	return (KERN_NOT_SUPPORTED);
+}
+
+kern_return_t sfi_get_class_offtime(sfi_class_id_t class_id __unused, uint64_t *offtime_usecs __unused)
+{
+	return (KERN_NOT_SUPPORTED);
+}
+
+void sfi_reevaluate(thread_t thread __unused)
+{
+	return;
+}
+
+sfi_class_id_t sfi_thread_classify(thread_t thread)
+{
+	task_t task = thread->task;
+	boolean_t is_kernel_thread = (task == kernel_task);
+
+	if (is_kernel_thread) {
+		return SFI_CLASS_KERNEL;
+	}
+
+	return SFI_CLASS_OPTED_OUT;
+}
+
+#endif /* !CONFIG_SCHED_SFI */

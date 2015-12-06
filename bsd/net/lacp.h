@@ -273,7 +273,7 @@ static __inline__ uint16_t
 lacp_uint16_get(const uint8_t * field)
 {
     uint16_t tmp_field;
-    memcpy((void *)&tmp_field, (void *)field, sizeof(uint16_t));
+    memcpy((void *)&tmp_field, (const void *)field, sizeof(uint16_t));
     return (ntohs(tmp_field));
 }
 
@@ -301,7 +301,7 @@ static __inline__ uint32_t
 lacp_uint32_get(const uint8_t * field)
 {
     uint32_t tmp_field;
-    memcpy((void *)&tmp_field, (void *)field, sizeof(uint32_t));
+    memcpy((void *)&tmp_field, (const void *)field, sizeof(uint32_t));
     return (ntohl(tmp_field));
 }
 

@@ -613,6 +613,7 @@ priq_enqueue(struct priq_if *pif, struct priq_class *cl, struct mbuf *m,
 		}
 	}
 	IFCQ_INC_LEN(ifq);
+	IFCQ_INC_BYTES(ifq, len);
 
 	/* class is now active; indicate it as such */
 	if (!pktsched_bit_tst(pri, &pif->pif_bitmap))
@@ -657,6 +658,7 @@ priq_dequeue(struct priq_if *pif, cqdq_op_t op)
 	len = m_pktlen(m);
 
 	IFCQ_DEC_LEN(ifq);
+	IFCQ_DEC_BYTES(ifq, len);
 	if (qempty(&cl->cl_q)) {
 		cl->cl_period++;
 		/* class is now inactive; indicate it as such */

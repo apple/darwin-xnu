@@ -148,11 +148,13 @@ pty_init(int n_ptys)
 	int i;
 	int j;
 
+	n_ptys = min(n_ptys, NPTY); /* clamp to avoid pt_ioctl overflow */
+
 	/* create the pseudo tty device nodes */
 	for (j = 0; j < 10; j++) {
 		for (i = 0; i < HEX_BASE; i++) {
 			int m = j * HEX_BASE + i;
-			if (m == n_ptys)
+			if (m >= n_ptys)
 				goto done;
 			pt_ioctl[m].pt_devhandle = devfs_make_node(makedev(TTY_MAJOR, m),
 								   DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,

@@ -131,6 +131,7 @@
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_voucher.h>
+#include <kern/sync_sema.h>
 #include <kern/counters.h>
 
 #include <vm/vm_protos.h>
@@ -532,46 +533,49 @@ ipc_kobject_notify(
 	((mig_reply_error_t *) reply_header)->RetCode = MIG_NO_REPLY;
 	switch (request_header->msgh_id) {
 		case MACH_NOTIFY_NO_SENDERS:
-		   if (ip_kotype(port) == IKOT_VOUCHER) {
-			   ipc_voucher_notify(request_header);
-			   return TRUE;
-		   }
-		   if (ip_kotype(port) == IKOT_VOUCHER_ATTR_CONTROL) {
-			   ipc_voucher_attr_control_notify(request_header);
-			   return TRUE;
-		   }
-		   if(ip_kotype(port) == IKOT_NAMED_ENTRY) {
-			ip_lock(port);
+			switch (ip_kotype(port)) {
+			case IKOT_VOUCHER:
+				ipc_voucher_notify(request_header);
+				return TRUE;
 
-			/*
-			 * Bring the sequence number and mscount in
-			 * line with ipc_port_destroy assertion.
-			 */
-			port->ip_mscount = 0;
-			port->ip_messages.imq_seqno = 0;
-			ipc_port_destroy(port); /* releases lock */
-			return TRUE;
-		   }
-		   if (ip_kotype(port) == IKOT_UPL) {
-			   upl_no_senders(
-				request_header->msgh_remote_port, 
-				(mach_port_mscount_t) 
-				((mach_no_senders_notification_t *) 
-				 request_header)->not_count);
-			   reply_header->msgh_remote_port = MACH_PORT_NULL;
-			   return TRUE;
-		   }
+			case IKOT_VOUCHER_ATTR_CONTROL:
+				ipc_voucher_attr_control_notify(request_header);
+				return TRUE;
+
+			case IKOT_SEMAPHORE:
+				semaphore_notify(request_header);
+				return TRUE;
+				
+			case IKOT_NAMED_ENTRY:
+				ip_lock(port);
+
+				/*
+				 * Bring the sequence number and mscount in
+				 * line with ipc_port_destroy assertion.
+				 */
+				port->ip_mscount = 0;
+				port->ip_messages.imq_seqno = 0;
+				ipc_port_destroy(port); /* releases lock */
+				return TRUE;
+
+			case IKOT_UPL:
+				upl_no_senders(
+					request_header->msgh_remote_port, 
+					(mach_port_mscount_t) 
+					((mach_no_senders_notification_t *) 
+					 request_header)->not_count);
+				reply_header->msgh_remote_port = MACH_PORT_NULL;
+				return TRUE;
+
 #if	CONFIG_AUDIT
-		   if (ip_kotype(port) == IKOT_AU_SESSIONPORT) {
-			   audit_session_nosenders(request_header);
-			   return TRUE;
-		   }
+			case IKOT_AU_SESSIONPORT:
+				audit_session_nosenders(request_header);
+				return TRUE;
 #endif
-		   if (ip_kotype(port) == IKOT_FILEPORT) {
-			fileport_notify(request_header);
-			return TRUE;
-		   }
-
+			case IKOT_FILEPORT:
+				fileport_notify(request_header);
+				return TRUE;
+			}
 	  	   break;
 
 		case MACH_NOTIFY_PORT_DELETED:

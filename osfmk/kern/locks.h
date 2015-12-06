@@ -267,7 +267,7 @@ extern wait_result_t	lck_spin_sleep_deadline(
 extern boolean_t		lck_spin_try_lock(			lck_spin_t		*lck);
 
 /* NOT SAFE: To be used only by kernel debugger to avoid deadlock. */
-extern boolean_t		lck_spin_is_acquired(			lck_spin_t		*lck);
+extern boolean_t		kdp_lck_spin_is_acquired(		lck_spin_t		*lck);
 
 struct _lck_mtx_ext_;
 extern void lck_mtx_init_ext(lck_mtx_t *lck, struct _lck_mtx_ext_ *lck_ext,
@@ -339,6 +339,8 @@ extern void			lck_mtx_lock_spin(
 extern void			lck_mtx_convert_spin(
 									lck_mtx_t		*lck);
 
+extern boolean_t		kdp_lck_mtx_lock_spin_is_acquired(
+									lck_mtx_t		*lck);
 #define lck_mtx_unlock_always(l)	lck_mtx_unlock(l)
 
 #else
@@ -346,9 +348,13 @@ extern void			lck_mtx_convert_spin(
 #define	lck_mtx_lock_spin(l)		lck_mtx_lock(l)
 #define lck_mtx_try_lock_spin_always(l)	lck_spin_try_lock(l)
 #define lck_mtx_lock_spin_always(l)	lck_spin_lock(l)
+#define kdp_lck_mtx_lock_spin_is_acquired(l) kdp_lck_spin_is_acquired(l)
 #define lck_mtx_unlock_always(l)	lck_spin_unlock(l)
 #define	lck_mtx_convert_spin(l)		do {} while (0)
 #endif
+
+extern boolean_t		kdp_lck_rw_lock_is_acquired_exclusive(
+									lck_rw_t 		*lck);
 
 #endif	/* KERNEL_PRIVATE */
 
@@ -376,6 +382,9 @@ extern void				lck_mtx_unlockspin_wakeup(
 							                lck_mtx_t		*lck);
 
 extern boolean_t		lck_mtx_ilk_unlock(
+									lck_mtx_t		*lck);
+
+extern boolean_t		lck_mtx_ilk_try_lock(
 									lck_mtx_t		*lck);
 
 #endif

@@ -49,6 +49,12 @@
 #define PROTECTION_CLASS_E 5
 #define PROTECTION_CLASS_F 6
 
+/*
+ * This forces open_dprotected_np to behave as though the file were created with
+ * the traditional open(2) semantics.
+ */
+#define PROTECTION_CLASS_DEFAULT  (-1)
+
 #endif /* PRIVATE */
 
 #endif /* _SYS_CONTENT_PROTECTION_H_ */

@@ -43,7 +43,6 @@ struct ecc_event {
 
 #ifdef KERNEL_PRIVATE
 extern kern_return_t 	ecc_log_record_event(const struct ecc_event *ev);
-extern boolean_t 	ecc_log_prefer_panic(void);
 #endif 
 
 #ifdef XNU_KERNEL_PRIVATE

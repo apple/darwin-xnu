@@ -397,7 +397,7 @@ mm_copy_options_string64(
 		name = "VIRTUAL";
 		break;
 	    case MACH_MSG_OVERWRITE:
-		name = "OVERWRITE";
+		name = "OVERWRITE(DEPRECATED)";
 		break;
 	    case MACH_MSG_ALLOCATE:
 		name = "ALLOCATE";
@@ -1373,8 +1373,18 @@ ipc_kmsg_send(
 	mach_msg_timeout_t	send_timeout)
 {
 	ipc_port_t port;
+	thread_t th = current_thread();
 	mach_msg_return_t error = MACH_MSG_SUCCESS;
 	spl_t s;
+
+	/* Check if honor qlimit flag is set on thread. */
+	if ((th->options & TH_OPT_HONOR_QLIMIT) == TH_OPT_HONOR_QLIMIT) {
+		/* Remove the MACH_SEND_ALWAYS flag to honor queue limit. */
+		option &= (~MACH_SEND_ALWAYS);
+		/* Add the timeout flag since the message queue might be full. */
+		option |= MACH_SEND_TIMEOUT;
+		th->options &= (~TH_OPT_HONOR_QLIMIT);
+	}
 
 #if IMPORTANCE_INHERITANCE
 	boolean_t did_importance = FALSE;
@@ -1495,7 +1505,7 @@ retry:
 		}
 #if IMPORTANCE_DEBUG
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_MSG, IMP_MSG_SEND)) | DBG_FUNC_END,
-		                          audit_token_pid_from_task(current_task()), sender_pid, imp_msgh_id, importance_cleared, 0);
+		                          task_pid(current_task()), sender_pid, imp_msgh_id, importance_cleared, 0);
 #endif /* IMPORTANCE_DEBUG */
 	}
 #endif /* IMPORTANCE_INHERITANCE */
@@ -1670,16 +1680,10 @@ ipc_kmsg_copyin_header(
 	ipc_entry_t reply_entry = IE_NULL;
 	ipc_entry_t voucher_entry = IE_NULL;
 
-#if IMPORTANCE_INHERITANCE
 	int assertcnt = 0;
+#if IMPORTANCE_INHERITANCE
 	boolean_t needboost = FALSE;
 #endif /* IMPORTANCE_INHERITANCE */
-
-	queue_head_t links_data;
-	queue_t links = &links_data;
-	wait_queue_link_t wql;
-
-	queue_init(links);
 
 	if ((mbits != msg->msgh_bits) ||
 	    (!MACH_MSG_TYPE_PORT_ANY_SEND(dest_type)) ||
@@ -1796,21 +1800,11 @@ ipc_kmsg_copyin_header(
 		 *	Perform the delayed reply right copyin (guaranteed success).
 		 */
 		if (reply_entry != IE_NULL) {
-#if IMPORTANCE_INHERITANCE
 			kr = ipc_right_copyin(space, reply_name, reply_entry,
 					      reply_type, TRUE,
 					      &reply_port, &reply_soright,
-					      &release_port,
-					      &assertcnt,
-					      links);
+					      &release_port, &assertcnt);
 			assert(assertcnt == 0);
-#else
-			kr = ipc_right_copyin(space, reply_name, reply_entry,
-					      reply_type, TRUE,
-					      &reply_port, &reply_soright,
-					      &release_port,
-					      links);
-#endif /* IMPORTANCE_INHERITANCE */
 			assert(kr == KERN_SUCCESS);
 		}
 
@@ -1901,21 +1895,11 @@ ipc_kmsg_copyin_header(
 			/*
 			 *	copyin the destination.
 			 */
-#if IMPORTANCE_INHERITANCE
 			kr = ipc_right_copyin(space, dest_name, dest_entry,
 					      dest_type, FALSE,
 					      &dest_port, &dest_soright,
-					      &release_port,
-					      &assertcnt,
-					      links);
+					      &release_port, &assertcnt);
 			assert(assertcnt == 0);
-#else
-			kr = ipc_right_copyin(space, dest_name, dest_entry,
-					      dest_type, FALSE,
-					      &dest_port, &dest_soright,
-					      &release_port,
-					      links);
-#endif /* IMPORTANCE_INHERITANCE */
 			if (kr != KERN_SUCCESS) {
 				goto invalid_dest;
 			}
@@ -1927,21 +1911,11 @@ ipc_kmsg_copyin_header(
 			 *	It's OK if the reply right has gone dead in the meantime.
 			 */
 			if (MACH_PORT_VALID(reply_name)) {
-#if IMPORTANCE_INHERITANCE
 				kr = ipc_right_copyin(space, reply_name, reply_entry,
 						      reply_type, TRUE,
 						      &reply_port, &reply_soright,
-						      &release_port,
-						      &assertcnt,
-						      links);
+						      &release_port, &assertcnt);
 				assert(assertcnt == 0);
-#else
-				kr = ipc_right_copyin(space, reply_name, reply_entry,
-						      reply_type, TRUE,
-						      &reply_port, &reply_soright,
-						      &release_port,
-						      links);
-#endif /* IMPORTANCE_INHERITANCE */
 				assert(kr == KERN_SUCCESS);
 			} else {
 				/* convert invalid name to equivalent ipc_object type */
@@ -1954,23 +1928,13 @@ ipc_kmsg_copyin_header(
 		 * are fully copied in (guaranteed success).
 		 */
 		if (IE_NULL != voucher_entry) {
-#if IMPORTANCE_INHERITANCE
 			kr = ipc_right_copyin(space, voucher_name, voucher_entry,
 					      voucher_type, FALSE,
 					      (ipc_object_t *)&voucher_port,
 					      &voucher_soright,
 					      &voucher_release_port,
-					      &assertcnt,
-					      links);
+					      &assertcnt);
 			assert(assertcnt == 0);
-#else
-			kr = ipc_right_copyin(space, voucher_name, voucher_entry,
-					      voucher_type, FALSE,
-					      (ipc_object_t *)&voucher_port,
-					      &voucher_soright,
-					      &voucher_release_port,
-					      links);
-#endif /* IMPORTANCE_INHERITANCE */
 			assert(KERN_SUCCESS == kr);
 			assert(IP_VALID(voucher_port));
 			assert(ip_active(voucher_port));
@@ -2072,11 +2036,6 @@ ipc_kmsg_copyin_header(
 	msg->msgh_remote_port = (ipc_port_t)dest_port;
 	msg->msgh_local_port = (ipc_port_t)reply_port;
 
-	while(!queue_empty(links)) {
-		wql = (wait_queue_link_t) dequeue(links);
-		wait_queue_link_free(wql);
-	}
-
 	if (release_port != IP_NULL)
 		ip_release(release_port);
 
@@ -2088,11 +2047,6 @@ ipc_kmsg_copyin_header(
 invalid_reply:
 	is_write_unlock(space);
 
-	while(!queue_empty(links)) {
-		wql = (wait_queue_link_t) dequeue(links);
-		wait_queue_link_free(wql);
-	}
-
 	if (release_port != IP_NULL)
 		ip_release(release_port);
 
@@ -2103,11 +2057,6 @@ invalid_reply:
 
 invalid_dest:
 	is_write_unlock(space);
-
-	while(!queue_empty(links)) {
-		wql = (wait_queue_link_t) dequeue(links);
-		wait_queue_link_free(wql);
-	}
 
 	if (release_port != IP_NULL)
 		ip_release(release_port);
@@ -2573,7 +2522,7 @@ ipc_kmsg_copyin_body(
      */
     if (space_needed) {
         if (vm_allocate(ipc_kernel_copy_map, &paddr, space_needed, 
-                    VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
+                    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC)) != KERN_SUCCESS) {
             ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
             mr = MACH_MSG_VM_KERNEL;
             goto out;
@@ -3485,55 +3434,12 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
     copy_options = dsc->copy;
     assert(copy_options != MACH_MSG_KALLOC_COPY_T);
     dsc_type = dsc->type;
-    rcv_addr = 0;
 
     if (copy != VM_MAP_COPY_NULL) {
-        /*
-         * Check to see if there is an overwrite descriptor
-         * specified in the scatter list for this ool data.
-         * The descriptor has already been verified.
-         */
-#if 0
-        if (saddr != MACH_MSG_DESCRIPTOR_NULL) {
-            if (differs) {
-                OTHER_OOL_DESCRIPTOR *scatter_dsc;
+	kern_return_t kr;
 
-                scatter_dsc = (OTHER_OOL_DESCRIPTOR *)saddr;
-                if (scatter_dsc->copy == MACH_MSG_OVERWRITE) {
-                    rcv_addr = (mach_vm_offset_t) scatter_dsc->address;
-                    copy_options = MACH_MSG_OVERWRITE;
-                } else {
-                    copy_options = MACH_MSG_VIRTUAL_COPY;
-                }
-            } else {
-                mach_msg_ool_descriptor_t *scatter_dsc;
-
-                scatter_dsc = &saddr->out_of_line;
-                if (scatter_dsc->copy == MACH_MSG_OVERWRITE) {
-                    rcv_addr = CAST_USER_ADDR_T(scatter_dsc->address);
-                    copy_options = MACH_MSG_OVERWRITE;
-                } else {
-                    copy_options = MACH_MSG_VIRTUAL_COPY;
-                }
-            }
-            INCREMENT_SCATTER(saddr, sdsc_count, differs);
-        }
-#endif
-
-
-        /*
-         * Whether the data was virtually or physically
-         * copied we have a vm_map_copy_t for it.
-         * If there's an overwrite region specified
-         * overwrite it, otherwise do a virtual copy out.
-         */
-        kern_return_t kr;
-        if (copy_options == MACH_MSG_OVERWRITE && rcv_addr != 0) {
-            kr = vm_map_copy_overwrite(map, rcv_addr,
-                    copy, TRUE);
-        } else {
-            kr = vm_map_copyout(map, &rcv_addr, copy);
-        }	
+        rcv_addr = 0;
+        kr = vm_map_copyout(map, &rcv_addr, copy);
         if (kr != KERN_SUCCESS) {
             if (kr == KERN_RESOURCE_SHORTAGE)
                 *mr |= MACH_MSG_VM_KERNEL;
@@ -3656,8 +3562,9 @@ ipc_kmsg_copyout_ool_ports_descriptor(mach_msg_ool_ports_descriptor_t *dsc,
             /*
              * Dynamically allocate the region
              */
-            int anywhere = VM_MAKE_TAG(VM_MEMORY_MACH_MSG)|
-                VM_FLAGS_ANYWHERE;
+            int anywhere = VM_FLAGS_ANYWHERE;
+	    if (vm_kernel_map_is_kernel(map)) anywhere |= VM_MAKE_TAG(VM_KERN_MEMORY_IPC);
+	    else                              anywhere |= VM_MAKE_TAG(VM_MEMORY_MACH_MSG);
 
             kern_return_t kr;
             if ((kr = mach_vm_allocate(map, &rcv_addr, 
@@ -4077,163 +3984,6 @@ ipc_kmsg_copyout_dest(
 				    (mach_msg_descriptor_t *)(body + 1));
 	}
 }
-
-/*
- *      Routine:        ipc_kmsg_copyin_scatter
- *      Purpose:
- *              allocate and copyin a scatter list
- *      Algorithm:
- *              The gather (kmsg) is valid since it has been copied in.
- *              Gather list descriptors are sequentially paired with scatter
- *              list descriptors, with port descriptors in either list ignored.
- *              Descriptors are consistent if the type fileds match and size
- *              of the scatter descriptor is less than or equal to the
- *              size of the gather descriptor.  A MACH_MSG_ALLOCATE copy
- *              strategy in a scatter descriptor matches any size in the
- *              corresponding gather descriptor assuming they are the same type.
- *              Either list may be larger than the other.  During the
- *              subsequent copy out, excess scatter descriptors are ignored
- *              and excess gather descriptors default to dynamic allocation.
- *
- *              In the case of a size error, the scatter list is released.
- *      Conditions:
- *              Nothing locked.
- *      Returns:
- *              the allocated message body containing the scatter list.
- */
-
-mach_msg_body_t *
-ipc_kmsg_get_scatter(
-	mach_vm_address_t       msg_addr,
-       mach_msg_size_t         slist_size,
-	ipc_kmsg_t              kmsg)
-{
-        mach_msg_body_t         *slist;
-        mach_msg_body_t         *body;
-        mach_msg_descriptor_t   *gstart, *gend;
-        mach_msg_descriptor_t   *sstart, *send;
-
-#if defined(__LP64__)
-        panic("ipc_kmsg_get_scatter called!");
-#endif
-
-        if (slist_size < sizeof(mach_msg_base_t))
-                return MACH_MSG_BODY_NULL;
-
-        slist_size -= (mach_msg_size_t)sizeof(mach_msg_header_t);
-        slist = (mach_msg_body_t *)kalloc(slist_size);
-        if (slist == MACH_MSG_BODY_NULL)
-                return slist;
-
-        if (copyin(msg_addr + sizeof(mach_msg_header_t), (char *)slist, slist_size)) {
-                kfree(slist, slist_size);
-                return MACH_MSG_BODY_NULL;
-        }
-
-        if ((slist->msgh_descriptor_count* sizeof(mach_msg_descriptor_t)
-             + sizeof(mach_msg_size_t)) > slist_size) {
-                kfree(slist, slist_size);
-                return MACH_MSG_BODY_NULL;
-        }
-
-        body = (mach_msg_body_t *) (kmsg->ikm_header + 1);
-        gstart = (mach_msg_descriptor_t *) (body + 1);
-        gend = gstart + body->msgh_descriptor_count;
-
-        sstart = (mach_msg_descriptor_t *) (slist + 1);
-        send = sstart + slist->msgh_descriptor_count;
-
-        while (gstart < gend) {
-            mach_msg_descriptor_type_t  g_type;
-
-            /*
-             * Skip port descriptors in gather list.
-             */
-            g_type = gstart->type.type;
-
-            if (g_type != MACH_MSG_PORT_DESCRIPTOR) {
-
-	      /*
-	       * A scatter list with a 0 descriptor count is treated as an
-	       * automatic size mismatch.
-	       */
-	      if (slist->msgh_descriptor_count == 0) {
-                        kfree(slist, slist_size);
-                        return MACH_MSG_BODY_NULL;
-	      }
-
-	      /*
-	       * Skip port descriptors in  scatter list.
-	       */
-	      while (sstart < send) {
-                    if (sstart->type.type != MACH_MSG_PORT_DESCRIPTOR)
-                        break;
-                    sstart++;
-	      }
-
-	      /*
-	       * No more scatter descriptors, we're done
-	       */
-	      if (sstart >= send) {
-                    break;
-	      }
-
-	      /*
-	       * Check type, copy and size fields
-	       */
-                if (g_type == MACH_MSG_OOL_DESCRIPTOR ||
-                    g_type == MACH_MSG_OOL_VOLATILE_DESCRIPTOR) {
-                    if (sstart->type.type != MACH_MSG_OOL_DESCRIPTOR &&
-                        sstart->type.type != MACH_MSG_OOL_VOLATILE_DESCRIPTOR) {
-                        kfree(slist, slist_size);
-                        return MACH_MSG_BODY_NULL;
-                    }
-                    if (sstart->out_of_line.copy == MACH_MSG_OVERWRITE &&
-                        gstart->out_of_line.size > sstart->out_of_line.size) {
-                        kfree(slist, slist_size);
-                        return MACH_MSG_BODY_NULL;
-                    }
-                }
-                else {
-		  if (sstart->type.type != MACH_MSG_OOL_PORTS_DESCRIPTOR) {
-                        kfree(slist, slist_size);
-                        return MACH_MSG_BODY_NULL;
-		  }
-                    if (sstart->ool_ports.copy == MACH_MSG_OVERWRITE &&
-                        gstart->ool_ports.count > sstart->ool_ports.count) {
-                        kfree(slist, slist_size);
-                        return MACH_MSG_BODY_NULL;
-                    }
-                }
-                sstart++;
-            }
-            gstart++;
-        }
-        return slist;
-}
-
-
-/*
- *      Routine:        ipc_kmsg_free_scatter
- *      Purpose:
- *              Deallocate a scatter list.  Since we actually allocated
- *              a body without a header, and since the header was originally
- *              accounted for in slist_size, we have to ajust it down
- *              before freeing the scatter list.
- */
-void
-ipc_kmsg_free_scatter(
-        mach_msg_body_t *slist,
-        mach_msg_size_t slist_size)
-{
-#if defined(__LP64__)
-        panic("%s called; halting!", __func__);
-#endif
-
-        slist_size -= (mach_msg_size_t)sizeof(mach_msg_header_t);
-        kfree(slist, slist_size);
-}
-
 
 /*
  *	Routine:	ipc_kmsg_copyout_to_kernel

@@ -564,6 +564,7 @@ struct sflt_filter {
 		desciption of domain, type, and protocol.
 	@param filter A structure describing the filter.
 	@param domain The protocol domain these filters will be attached to.
+		Only PF_INET & PF_INET6 domains are supported.
 	@param type The socket type these filters will be attached to.
 	@param protocol The protocol these filters will be attached to.
 	@result 0 on success otherwise the errno error.

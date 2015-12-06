@@ -25,6 +25,10 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
+#ifndef _IOKIT_IOPMPOWERSTATE_H
+#define _IOKIT_IOPMPOWERSTATE_H
+
 #include <IOKit/pwr_mgt/IOPM.h>
 
 /*! @header IOPMpowerState.h
@@ -71,3 +75,5 @@ enum {
     kIOPMPowerStateVersion1 = 1,
     kIOPMPowerStateVersion2 = 2
 };
+
+#endif /* _IOKIT_IOPMPOWERSTATE_H */

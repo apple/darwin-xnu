@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -97,8 +97,8 @@
 #ifdef BSD_KERNEL_PRIVATE
 #include <sys/tree.h>
 #include <sys/mcache.h>
-#include <netinet6/scope6_var.h>
 #endif /* BSD_KERNEL_PRIVATE */
+#include <netinet6/scope6_var.h>
 #include <sys/kern_event.h>
 #include <net/ethernet.h>
 
@@ -311,18 +311,6 @@ struct icmp6_ifstat {
 	u_quad_t ifs6_out_mlddone;
 };
 
-#ifdef BSD_KERNEL_PRIVATE
-/*
- * Per-interface IPv6 structures.
- */
-struct in6_ifextra {
-	struct scope6_id scope6_id;
-	struct in6_ifstat in6_ifstat;
-	struct icmp6_ifstat icmp6_ifstat;
-};
-#define	IN6_IFEXTRA(_ifp)	((struct in6_ifextra *)(_ifp->if_inet6data))
-#endif /* BSD_KERNEL_PRIVATE */
-
 struct in6_ifreq {
 	char	ifr_name[IFNAMSIZ];
 	union {
@@ -336,7 +324,7 @@ struct in6_ifreq {
 		struct in6_addrlifetime ifru_lifetime;
 		struct in6_ifstat ifru_stat;
 		struct icmp6_ifstat ifru_icmp6stat;
-		u_int32_t ifru_scope_id[16];
+		u_int32_t ifru_scope_id[SCOPE6_ID_MAX];
 	} ifr_ifru;
 };
 
@@ -848,6 +836,22 @@ struct in6_multi_mship {
 	struct	in6_multi *i6mm_maddr;	/* Multicast address pointer */
 	LIST_ENTRY(in6_multi_mship) i6mm_chain;  /* multicast options chain */
 };
+
+#ifdef BSD_KERNEL_PRIVATE
+#include <netinet6/nd6_var.h>
+/*
+ *  * Per-interface IPv6 structures.
+ *   */
+struct in6_ifextra {
+	struct scope6_id        scope6_id;
+	struct in6_ifstat       in6_ifstat;
+	struct icmp6_ifstat     icmp6_ifstat;
+	struct nd_ifinfo        nd_ifinfo;
+	uint32_t                netsig_len;
+	u_int8_t                netsig[IFNET_SIGNATURELEN];
+};
+#define IN6_IFEXTRA(_ifp)       ((struct in6_ifextra *)(_ifp->if_inet6data))
+#endif /* BSD_KERNEL_PRIVATE */
 
 struct mld_ifinfo;
 

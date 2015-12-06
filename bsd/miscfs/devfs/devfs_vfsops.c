@@ -182,7 +182,7 @@ devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data,
 	/*-
 	 *  Fill out some fields
 	 */
-	mp->mnt_data = (qaddr_t)devfs_mp_p;
+	__IGNORE_WCASTALIGN(mp->mnt_data = (qaddr_t)devfs_mp_p);
 	mp->mnt_vfsstat.f_fsid.val[0] = (int32_t)(uintptr_t)devfs_mp_p;
 	mp->mnt_vfsstat.f_fsid.val[1] = vfs_typenum(mp);
 	mp->mnt_flag |= MNT_LOCAL;

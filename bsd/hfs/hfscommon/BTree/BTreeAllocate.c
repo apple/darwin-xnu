@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003, 2005-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2003, 2005-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -196,7 +196,7 @@ OSStatus	AllocateNode (BTreeControlBlockPtr		btreePtr, u_int32_t	*nodeNum)
 	M_ExitOnError (err);
 	
 	--btreePtr->freeNodes;
-	btreePtr->flags |= kBTHeaderDirty;
+	M_BTreeHeaderDirty(btreePtr);
 	
 	/* Account for allocations from node reserve */
 	BTUpdateReserve(btreePtr, 1);
@@ -273,7 +273,7 @@ OSStatus	FreeNode (BTreeControlBlockPtr		btreePtr, u_int32_t	nodeNum)
 	M_ExitOnError (err);
 	
 	++btreePtr->freeNodes;
-	btreePtr->flags |= kBTHeaderDirty;					// how about a macro for this
+	M_BTreeHeaderDirty(btreePtr);
 
 	return noErr;
 
@@ -494,7 +494,7 @@ Success:
 	btreePtr->totalNodes	 =  newTotalNodes;
 	btreePtr->freeNodes		+= (newTotalNodes - oldTotalNodes) - newMapNodes;
 
-	btreePtr->flags			|= kBTHeaderDirty;		//€€ how about a macro for this
+	M_BTreeHeaderDirty(btreePtr);
 
 	/* Force the b-tree header changes to disk */
 	(void) UpdateHeader (btreePtr, true);

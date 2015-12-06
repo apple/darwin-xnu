@@ -37,6 +37,7 @@ __END_DECLS
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/OSSerializeBinary.h>
+#include <IOKit/IOLib.h>
 
 #define super OSObject
 
@@ -50,14 +51,6 @@ OSMetaClassDefineReservedUnused(OSSerialize, 5);
 OSMetaClassDefineReservedUnused(OSSerialize, 6);
 OSMetaClassDefineReservedUnused(OSSerialize, 7);
 
-#if OSALLOCDEBUG
-extern "C" {
-    extern int debug_container_malloc_size;
-};
-#define ACCUMSIZE(s) do { debug_container_malloc_size += (s); } while(0)
-#else
-#define ACCUMSIZE(s)
-#endif
 
 char * OSSerialize::text() const
 {
@@ -184,7 +177,7 @@ bool OSSerialize::initWithCapacity(unsigned int inCapacity)
     // allocate from the kernel map so that we can safely map this data
     // into user space (the primary use of the OSSerialize object)
     
-    kern_return_t rc = kmem_alloc(kernel_map, (vm_offset_t *)&data, capacity);
+    kern_return_t rc = kmem_alloc(kernel_map, (vm_offset_t *)&data, capacity, IOMemoryTag(kernel_map));
     if (rc) {
         tags->release();
         tags = 0;
@@ -193,7 +186,7 @@ bool OSSerialize::initWithCapacity(unsigned int inCapacity)
     bzero((void *)data, capacity);
 
 
-    ACCUMSIZE(capacity);
+    OSCONTAINER_ACCUMSIZE(capacity);
 
     return true;
 }
@@ -233,13 +226,14 @@ unsigned int OSSerialize::ensureCapacity(unsigned int newCapacity)
 					(vm_offset_t)data,
 					capacity,
 					(vm_offset_t *)&newData,
-					newCapacity);
+					newCapacity,
+					VM_KERN_MEMORY_IOKIT);
 	if (!rc) {
-	    ACCUMSIZE(newCapacity);
+	    OSCONTAINER_ACCUMSIZE(newCapacity);
 
 	    // kmem realloc does not free the old address range
 	    kmem_free(kernel_map, (vm_offset_t)data, capacity); 
-	    ACCUMSIZE(-capacity);
+	    OSCONTAINER_ACCUMSIZE(-((size_t)capacity));
 	    
 	    // kmem realloc does not zero out the new memory
 	    // and this could end up going to user land
@@ -259,7 +253,7 @@ void OSSerialize::free()
 
     if (data) {
 	kmem_free(kernel_map, (vm_offset_t)data, capacity); 
-        ACCUMSIZE( -capacity );
+        OSCONTAINER_ACCUMSIZE( -((size_t)capacity) );
     }
     super::free();
 }

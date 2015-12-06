@@ -78,9 +78,14 @@ ENTRY(ml_get_timebase)
  *
  */
 ENTRY(tmrCvt)
+	cmpq	$1,%rsi				/* check for unity fastpath */
+	je	1f
 	movq	%rdi,%rax
 	mulq	%rsi				/* result is %rdx:%rax */
 	shrdq   $32,%rdx,%rax			/* %rdx:%rax >>= 32 */
+	ret
+1:
+	mov	%rdi,%rax
 	ret
 
  /*

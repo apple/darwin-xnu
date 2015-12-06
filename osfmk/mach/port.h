@@ -312,11 +312,11 @@ typedef struct mach_port_status {
 } mach_port_status_t;
 
 /* System-wide values for setting queue limits on a port */
-#define MACH_PORT_QLIMIT_ZERO		((mach_port_msgcount_t) 0)
-#define MACH_PORT_QLIMIT_BASIC		((mach_port_msgcount_t) 5)
-#define MACH_PORT_QLIMIT_SMALL		((mach_port_msgcount_t) 16)
-#define MACH_PORT_QLIMIT_LARGE		((mach_port_msgcount_t) 1024)
-#define MACH_PORT_QLIMIT_KERNEL		((mach_port_msgcount_t) 65536)
+#define MACH_PORT_QLIMIT_ZERO		(0)
+#define MACH_PORT_QLIMIT_BASIC		(5)
+#define MACH_PORT_QLIMIT_SMALL		(16)
+#define MACH_PORT_QLIMIT_LARGE		(1024)
+#define MACH_PORT_QLIMIT_KERNEL		(65534)
 #define MACH_PORT_QLIMIT_MIN		MACH_PORT_QLIMIT_ZERO
 #define MACH_PORT_QLIMIT_DEFAULT	MACH_PORT_QLIMIT_BASIC
 #define MACH_PORT_QLIMIT_MAX		MACH_PORT_QLIMIT_LARGE

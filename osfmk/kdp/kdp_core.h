@@ -33,6 +33,8 @@
 /* Various protocol definitions 
  * for the core transfer protocol, which is a variant of TFTP 
  */
+#ifndef __KDP_CORE_H
+#define __KDP_CORE_H
 
 /*
  * Packet types.
@@ -85,6 +87,7 @@ void kdp_set_dump_info(const uint32_t flags, const char *file, const char *desti
 void kdp_get_dump_info(uint32_t *flags, char *file, char *destip, char *routerip, 
                        uint32_t *port);
 
+extern int kern_dump(boolean_t local);
 
 struct corehdr *create_panic_header(unsigned int request, const char *corename, unsigned length, unsigned block);
 
@@ -92,6 +95,16 @@ int 	kdp_send_crashdump_pkt(unsigned int request, char *corename,
 				uint64_t length, void *panic_data);
 
 int	kdp_send_crashdump_data(unsigned int request, char *corename,
-				int64_t length, caddr_t txstart);
+    			    uint64_t length, void * txstart);
+
+void kern_collectth_state_size(uint32_t * tstate_count, size_t * tstate_size);
+
+void kern_collectth_state(thread_t thread, void *buffer, size_t size, void **iter);
+
+boolean_t kdp_has_polled_corefile(void);
+
+void kdp_core_init(void);
 
 #define KDP_CRASHDUMP_POLL_COUNT (2500)
+
+#endif /* __KDP_CORE_H */

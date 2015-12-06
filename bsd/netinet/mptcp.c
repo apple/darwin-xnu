@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -60,10 +60,6 @@
 int mptcp_enable = 1;
 SYSCTL_INT(_net_inet_mptcp, OID_AUTO, enable, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&mptcp_enable, 0, "Enable Multipath TCP Support");
-
-int mptcp_dbg = 0;
-SYSCTL_INT(_net_inet_mptcp, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&mptcp_dbg, 0, "Enable Multipath TCP Debugging");
 
 /* Number of times to try negotiating MPTCP on SYN retransmissions */
 int mptcp_mpcap_retries = MPTCP_CAPABLE_RETRIES;
@@ -131,6 +127,61 @@ SYSCTL_INT(_net_inet_mptcp, OID_AUTO, rwnotify, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&mptcp_rwnotify, 0, "Enable RW notify on resume");
 
 /*
+ * Using RTT history for sending new data
+ */
+int mptcp_use_rtthist = 1;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, rtthist, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_use_rtthist, 0, "Disable RTT History");
+
+#define MPTCP_RTTHIST_MINTHRESH 500
+int mptcp_rtthist_rtthresh = 600;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, rtthist_thresh, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_rtthist_rtthresh, 0, "Rtt threshold");
+
+/*
+ * Use RTO history for sending new data
+ */
+int mptcp_use_rto = 1;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, userto, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_use_rto, 0, "Disable RTO for subflow selection");
+
+#define MPTCP_RTO_MINTHRESH 1000
+int mptcp_rtothresh = 1500;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, rto_thresh, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_rtothresh, 0, "RTO threshold");
+
+/*
+ * Use server's chosen path for sending new data
+ */
+int mptcp_peerswitch = 1;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, use_peer, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_peerswitch, 0, "Use peer");
+
+#define MPTCP_PEERSWITCH_CNTMIN 3
+uint32_t mptcp_peerswitch_cnt = 3;
+SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, peerswitchno, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_peerswitch_cnt, 0, "Set threshold based on peer's data arrival");
+
+/*
+ * Probe the preferred path, when it is not in use
+ */
+#define MPTCP_PROBETO_MIN 500
+uint32_t mptcp_probeto = 1000;
+SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, probeto, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_probeto, 0, "Disable probing by setting to 0");
+
+#define MPTCP_PROBE_MX 15
+uint32_t mptcp_probecnt = 5;
+SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, probecnt, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&mptcp_probecnt, 0, "Number of probe writes");
+
+/*
+ * Static declarations
+ */
+static int mptcp_validate_csum(struct tcpcb *, struct mbuf *, int);
+static uint16_t mptcp_input_csum(struct tcpcb *, struct mbuf *, int);
+
+/*
  * MPTCP input, called when data has been read from a subflow socket.
  */
 void
@@ -184,7 +235,8 @@ fallback:
 		    struct sockbuf *, &mp_so->so_snd,
 		    struct mptses *, mpte);
 		count = mp_so->so_rcv.sb_cc - count;
-		mptcplog3((LOG_DEBUG, "%s: fread %d bytes\n", __func__, count));
+		mptcplog((LOG_DEBUG, "MPTCP Receiver: Fallback read %d bytes\n",
+		    count), MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 		return;
 	}
 
@@ -255,8 +307,9 @@ fallback:
 			} else {
 				m_adj(m, (mp_tp->mpt_rcvatmark - mb_dsn));
 			}
-			mptcplog((LOG_INFO, "%s: %llu %d 2 \n", __func__,
-			    mp_tp->mpt_rcvatmark, m->m_pkthdr.len));
+			mptcplog((LOG_INFO, "MPTCP Receiver: Left Edge %llu\n",
+			    mp_tp->mpt_rcvatmark),
+			    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 		}
 
 		MPT_UNLOCK(mp_tp);
@@ -272,7 +325,9 @@ fallback:
 		count = mp_so->so_rcv.sb_cc - count;
 		tcpstat.tcps_mp_rcvtotal++;
 		tcpstat.tcps_mp_rcvbytes += count;
-		mptcplog3((LOG_DEBUG, "%s: read %d bytes\n", __func__, count));
+		mptcplog((LOG_DEBUG, "MPTCP Receiver: Read %d bytes\n", count),
+		    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
+
 		/*
 		 * The data received at the MPTCP layer will never exceed the
 		 * receive window because anything to the right of the
@@ -299,25 +354,30 @@ mptcp_output(struct mptses *mpte)
 	struct mptsub *mpts;
 	struct mptsub *mpts_tried = NULL;
 	struct socket *mp_so;
+	struct mptsub *preferred_mpts = NULL;
 	int error = 0;
 
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
 	mp_so = mpte->mpte_mppcb->mpp_socket;
 	if (mp_so->so_state & SS_CANTSENDMORE) {
+		mptcplog((LOG_DEBUG, "MPTCP Sender: cantsendmore\n"),
+		    MPTCP_SENDER_DBG, MPTCP_LOGLVL_VERBOSE);
 		return (EPIPE);
 	}
 
 try_again:
 	/* get the "best" subflow to be used for transmission */
-	mpts = mptcp_get_subflow(mpte, NULL);
+	mpts = mptcp_get_subflow(mpte, NULL, &preferred_mpts);
 	if (mpts == NULL) {
-		mptcplog((LOG_ERR, "%s: mp_so 0x%llx has no usable subflow\n",
-		    __func__, (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)));
+		mptcplog((LOG_ERR, "MPTCP Sender: mp_so 0x%llx no subflow\n",
+		    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)),
+		    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
 		goto out;
 	}
 
-	mptcplog3((LOG_INFO, "%s: mp_so 0x%llx cid %d \n", __func__,
-	    (uint64_t)VM_KERNEL_ADDRPERM(mp_so), mpts->mpts_connid));
+	mptcplog((LOG_DEBUG, "MPTCP Sender: mp_so 0x%llx using cid %d \n",
+	    (uint64_t)VM_KERNEL_ADDRPERM(mp_so), mpts->mpts_connid),
+	    MPTCP_SENDER_DBG, MPTCP_LOGLVL_VERBOSE);
 
 	/* In case there's just one flow, we reattempt later */
 	MPTS_LOCK(mpts);
@@ -328,11 +388,10 @@ try_again:
 		mpts_tried->mpts_flags &= ~MPTSF_FAILINGOVER;
 		mpts_tried->mpts_flags |= MPTSF_ACTIVE;
 		MPTS_UNLOCK(mpts_tried);
-		MPT_LOCK(mpte->mpte_mptcb);
-		mptcp_start_timer(mpte->mpte_mptcb, MPTT_REXMT);
-		MPT_UNLOCK(mpte->mpte_mptcb);
-		mptcplog((LOG_INFO, "%s: mp_so 0x%llx retry later\n",
-		    __func__, (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)));
+		mptcp_start_timer(mpte, MPTT_REXMT);
+		mptcplog((LOG_DEBUG, "MPTCP Sender: mp_so 0x%llx retry later\n",
+		    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)),
+		    MPTCP_SENDER_DBG, MPTCP_LOGLVL_VERBOSE);
 		goto out;
 	}
 
@@ -345,19 +404,53 @@ try_again:
 		mpts->mpts_flags &= ~MPTSF_ACTIVE;
 		mpts_tried = mpts;
 		MPTS_UNLOCK(mpts);
-		mptcplog((LOG_INFO, "%s: error = %d \n", __func__, error));
+		mptcplog((LOG_INFO, "MPTCP Sender: Error = %d \n", error),
+		    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
 		goto try_again;
 	}
 	/* The model is to have only one active flow at a time */
 	mpts->mpts_flags |= MPTSF_ACTIVE;
+	mpts->mpts_probesoon = mpts->mpts_probecnt = 0;
 	MPTS_UNLOCK(mpts);
+
+	/* Allows us to update the smoothed rtt */
+	if ((mptcp_probeto) && (mptcp_probeto >= MPTCP_PROBETO_MIN) &&
+	    (mpts != preferred_mpts) && (preferred_mpts != NULL)) {
+		MPTS_LOCK(preferred_mpts);
+		if (preferred_mpts->mpts_probesoon) {
+			if ((tcp_now - preferred_mpts->mpts_probesoon) >
+			    mptcp_probeto) {
+				(void) mptcp_subflow_output(mpte, preferred_mpts);
+				if (preferred_mpts->mpts_probecnt >=
+				    MIN(mptcp_probecnt, MPTCP_PROBE_MX)) {
+					preferred_mpts->mpts_probesoon = 0;
+					preferred_mpts->mpts_probecnt = 0;
+				}
+			}
+		} else {
+			preferred_mpts->mpts_probesoon = tcp_now;
+			preferred_mpts->mpts_probecnt = 0;
+		}
+		MPTS_UNLOCK(preferred_mpts);
+	}
+
 	if (mpte->mpte_active_sub == NULL) {
 		mpte->mpte_active_sub = mpts;
 	} else if (mpte->mpte_active_sub != mpts) {
+		mptcplog((LOG_DEBUG, "MPTCP Sender: switch [cid %d, srtt %d]"
+		    "to [cid %d, srtt %d]\n",
+		    mpte->mpte_active_sub->mpts_connid,
+		    mpte->mpte_active_sub->mpts_srtt >> 5,
+		    mpts->mpts_connid,
+		    mpts->mpts_srtt >> 5),
+		    MPTCP_SENDER_DBG | MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
+
 		MPTS_LOCK(mpte->mpte_active_sub);
 		mpte->mpte_active_sub->mpts_flags &= ~MPTSF_ACTIVE;
+		mpts->mpts_peerswitch = 0;
 		MPTS_UNLOCK(mpte->mpte_active_sub);
 		mpte->mpte_active_sub = mpts;
+		tcpstat.tcps_mp_switches++;
 	}
 out:
 	/* subflow errors should not be percolated back up */
@@ -367,13 +460,17 @@ out:
 /*
  * Return the most eligible subflow to be used for sending data.
  * This function also serves to check if any alternate subflow is available
- * or not.
+ * or not. best and second_best flows are chosen by their priority. third_best
+ * could be best or second_best but is under loss at the time of evaluation.
  */
 struct mptsub *
-mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore)
+mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore, struct mptsub **preferred)
 {
 	struct mptsub *mpts;
-	struct mptsub *fallback = NULL;
+	struct mptsub *best = NULL;
+	struct mptsub *second_best = NULL;
+	struct mptsub *third_best = NULL;
+	struct mptsub *symptoms_best = NULL;
 	struct socket *so = NULL;
 
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
@@ -389,6 +486,7 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore)
 		/* There can only be one subflow in degraded state */
 		if (mpts->mpts_flags & MPTSF_MP_DEGRADED) {
 			MPTS_UNLOCK(mpts);
+			best = mpts;
 			break;
 		}
 
@@ -421,10 +519,14 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore)
 				    (mptcp_no_rto_spike(so))) {
 					mpts->mpts_flags &= ~MPTSF_FAILINGOVER;
 					so->so_flags &= ~SOF_MP_TRYFAILOVER;
-					fallback = mpts;
 					socket_unlock(so, 1);
 				} else {
-					fallback = mpts;
+					third_best = mpts;
+					mptcplog((LOG_DEBUG, "MPTCP Sender: "
+					    "%s cid %d in failover\n",
+					    __func__, third_best->mpts_connid),
+					    MPTCP_SENDER_DBG,
+					    MPTCP_LOGLVL_VERBOSE);
 					socket_unlock(so, 1);
 					MPTS_UNLOCK(mpts);
 					continue;
@@ -435,25 +537,82 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore)
 			}
 		}
 
-		if (mpts->mpts_flags & MPTSF_PREFERRED) {
-			MPTS_UNLOCK(mpts);
-			break;
-		}
-
 		/* When there are no preferred flows, use first one in list */
-		fallback = mpts;
+		if ((!second_best) && !(mpts->mpts_flags & MPTSF_PREFERRED))
+			second_best = mpts;
+
+		if (mpts->mpts_flags & MPTSF_PREFERRED) {
+			best = mpts;
+		}
 
 		MPTS_UNLOCK(mpts);
 	}
+
 	/*
 	 * If there is no preferred or backup subflow, and there is no active
 	 * subflow use the last usable subflow.
 	 */
-	if (mpts == NULL) {
-		return (fallback);
+	if (best == NULL) {
+		return (second_best ? second_best : third_best);
 	}
 
-	return (mpts);
+	if (second_best == NULL) {
+		return (best ? best : third_best);
+	}
+
+	if (preferred != NULL)
+		*preferred = best;
+
+	/* Use a hint from symptomsd if it exists */
+	symptoms_best = mptcp_use_symptoms_hints(best, second_best);
+	if (symptoms_best != NULL)
+		return (symptoms_best);
+
+	/* Compare RTTs, select second_best if best's rtt exceeds rttthresh */
+	if ((mptcp_use_rtthist) &&
+	    (best->mpts_srtt) && (second_best->mpts_srtt) &&
+	    (best->mpts_srtt > second_best->mpts_srtt) &&
+	    (best->mpts_srtt >= MAX((MPTCP_RTTHIST_MINTHRESH << 5),
+	    (mptcp_rtthist_rtthresh << 5)))) {
+		tcpstat.tcps_mp_sel_rtt++;
+		mptcplog((LOG_DEBUG, "MPTCP Sender: %s best cid %d"
+		    " at rtt %d,  second cid %d at rtt %d\n", __func__,
+		    best->mpts_connid, best->mpts_srtt >> 5,
+		    second_best->mpts_connid,
+		    second_best->mpts_srtt >> 5),
+		    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
+		return (second_best);
+	}
+
+	/* Compare RTOs, select second_best if best's rto exceeds rtothresh */
+	if ((mptcp_use_rto) &&
+	    (best->mpts_rxtcur) && (second_best->mpts_rxtcur) &&
+	    (best->mpts_rxtcur > second_best->mpts_rxtcur) &&
+	    (best->mpts_rxtcur >=
+	    MAX(MPTCP_RTO_MINTHRESH, mptcp_rtothresh))) {
+		tcpstat.tcps_mp_sel_rto++;
+		mptcplog((LOG_DEBUG, "MPTCP Sender: %s best cid %d"
+		    " at rto %d, second cid %d at rto %d\n", __func__,
+		    best->mpts_connid, best->mpts_rxtcur,
+		    second_best->mpts_connid, second_best->mpts_rxtcur),
+		    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
+
+		return (second_best);
+	}
+
+	/* If second_best received data, use second_best */
+	if (mptcp_peerswitch &&
+	    (second_best->mpts_peerswitch >
+	    MAX(MPTCP_PEERSWITCH_CNTMIN, mptcp_peerswitch_cnt))) {
+		tcpstat.tcps_mp_sel_peer++;
+		mptcplog((LOG_DEBUG, "MPTCP Sender: %s: best cid %d"
+		    " but using cid %d after receiving %d segments\n",
+		    __func__, best->mpts_connid, second_best->mpts_connid,
+		    second_best->mpts_peerswitch), MPTCP_SENDER_DBG,
+		    MPTCP_LOGLVL_LOG);
+		return (second_best);
+	}
+	return (best);
 }
 
 struct mptsub *
@@ -481,10 +640,71 @@ mptcp_get_pending_subflow(struct mptses *mpte, struct mptsub *ignore)
 	return (mpts);
 }
 
+static const char *
+mptcp_event_to_str(uint32_t event)
+{
+	const char *c = "UNDEFINED";
+	switch (event) {
+	case MPCE_CLOSE:
+		c = "MPCE_CLOSE";
+		break;
+	case MPCE_RECV_DATA_ACK:
+		c = "MPCE_RECV_DATA_ACK";
+		break;
+	case MPCE_RECV_DATA_FIN:
+		c = "MPCE_RECV_DATA_FIN";
+		break;
+	}
+	return (c);
+}
+
+static const char *
+mptcp_state_to_str(mptcp_state_t state)
+{
+        const char *c = "UNDEFINED";
+	switch (state) {
+	case MPTCPS_CLOSED:
+		c = "MPTCPS_CLOSED";
+		break;
+	case MPTCPS_LISTEN:
+		c = "MPTCPS_LISTEN";
+		break;
+	case MPTCPS_ESTABLISHED:
+		c = "MPTCPS_ESTABLISHED";
+		break;
+	case MPTCPS_CLOSE_WAIT:
+		c = "MPTCPS_CLOSE_WAIT";
+		break;
+	case MPTCPS_FIN_WAIT_1:
+		c = "MPTCPS_FIN_WAIT_1";
+		break;
+	case MPTCPS_CLOSING:
+		c = "MPTCPS_CLOSING";
+		break;
+	case MPTCPS_LAST_ACK:
+		c = "MPTCPS_LAST_ACK";
+		break;
+	case MPTCPS_FIN_WAIT_2:
+		c = "MPTCPS_FIN_WAIT_2";
+		break;
+	case MPTCPS_TIME_WAIT:
+		c = "MPTCPS_TIME_WAIT";
+		break;
+	case MPTCPS_FASTCLOSE_WAIT:
+		c = "MPTCPS_FASTCLOSE_WAIT";
+		break;
+	case MPTCPS_TERMINATE:
+		c = "MPTCPS_TERMINATE";
+		break;
+	}
+	return (c);
+}
+
 void
 mptcp_close_fsm(struct mptcb *mp_tp, uint32_t event)
 {
 	MPT_LOCK_ASSERT_HELD(mp_tp);
+	mptcp_state_t old_state = mp_tp->mpt_state;
 
 	DTRACE_MPTCP2(state__change, struct mptcb *, mp_tp, 
 	    uint32_t, event);
@@ -556,8 +776,11 @@ mptcp_close_fsm(struct mptcb *mp_tp, uint32_t event)
 	}
 	DTRACE_MPTCP2(state__change, struct mptcb *, mp_tp, 
 	    uint32_t, event);
-	mptcplog((LOG_INFO, "%s: state = %d\n",
-	    __func__, mp_tp->mpt_state));
+	mptcplog((LOG_INFO, "MPTCP State: %s to %s on event %s\n",
+	    mptcp_state_to_str(old_state),
+	    mptcp_state_to_str(mp_tp->mpt_state),
+	    mptcp_event_to_str(event)),
+	    MPTCP_STATE_DBG, MPTCP_LOGLVL_LOG);
 }
 
 /*
@@ -619,25 +842,28 @@ mptcp_update_rcv_state_meat(struct mptcb *mp_tp, struct tcpcb *tp,
     uint16_t csum)
 {
 	if (mdss_data_len == 0) {
-		mptcplog((LOG_INFO, "%s: Received infinite mapping.",
-		    __func__));
+		mptcplog((LOG_INFO, "MPTCP Receiver: Infinite Mapping.\n"),
+		    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_LOG);
+
 		if ((mp_tp->mpt_flags & MPTCPF_CHECKSUM) && (csum != 0)) {
-			mptcplog((LOG_ERR, "%s: Bad checksum value %x \n",
-			    __func__, csum));
+			mptcplog((LOG_ERR, "MPTCP Receiver: Bad checksum %x \n",
+			    csum), MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_ERR);
 		}
 		mptcp_notify_mpfail(tp->t_inpcb->inp_socket);
 		return;
 	}
 	MPT_LOCK(mp_tp);
-	if (mptcp_dbg >= MP_VERBOSE_DEBUG_1)
-		printf("%s: seqn = %x len = %x full = %llx rcvnxt = %llu \n",
-		    __func__, seqn, mdss_data_len, full_dsn,
-		    mp_tp->mpt_rcvnxt);
+		mptcplog((LOG_DEBUG,
+		    "MPTCP Receiver: seqn = %x len = %x full = %llx "
+		    "rcvnxt = %llu \n",
+		    seqn, mdss_data_len, full_dsn, mp_tp->mpt_rcvnxt),
+		    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 
 	/* Process a Data FIN packet , handled in mptcp_do_fin_opt */
 	if ((seqn == 0) && (mdss_data_len == 1)) {
-		mptcplog((LOG_INFO, "%s: Data FIN DSS opt state = %d \n",
-		    __func__, mp_tp->mpt_state));
+		mptcplog((LOG_INFO, "MPTCP Receiver: Data FIN in %s state \n",
+		    mptcp_state_to_str(mp_tp->mpt_state)),
+		    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_LOG);
 		MPT_UNLOCK(mp_tp);
 		return;
 	}
@@ -687,6 +913,52 @@ mptcp_update_rcv_state_g(struct mptcp_dss64_ack32_opt *dss_info,
 	    csum);
 }
 
+static int
+mptcp_validate_dss_map(struct socket *so, struct tcpcb *tp, struct mbuf *m,
+    int hdrlen)
+{
+	u_int32_t sseq, datalen;
+
+	if (!(m->m_pkthdr.pkt_flags & PKTF_MPTCP))
+		return 0;
+
+	sseq = m->m_pkthdr.mp_rseq + tp->irs;
+	datalen = m->m_pkthdr.mp_rlen;
+
+#if 0
+	/* enable this to test TCP fallback post connection establishment */
+	if (SEQ_GT(sseq, (tp->irs+1)))
+		datalen = m->m_pkthdr.len - hdrlen - 1;
+#endif
+
+	/* unacceptable DSS option, fallback to TCP */
+	if (m->m_pkthdr.len > ((int) datalen + hdrlen)) {
+		mptcplog((LOG_ERR, "MPTCP Receiver: "
+		    "%s: mbuf len %d, MPTCP expected %d",
+		    __func__, m->m_pkthdr.len, datalen),
+		    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_LOG);
+	} else {
+		return 0;
+	}
+	tp->t_mpflags |= TMPF_SND_MPFAIL;
+	mptcp_notify_mpfail(so);
+	m_freem(m);
+	return -1;
+}
+
+int
+mptcp_input_preproc(struct tcpcb *tp, struct mbuf *m, int drop_hdrlen)
+{
+	if (mptcp_validate_csum(tp, m, drop_hdrlen) != 0)
+		return -1;
+
+	mptcp_insert_rmap(tp, m);
+	if (mptcp_validate_dss_map(tp->t_inpcb->inp_socket, tp, m,
+	    drop_hdrlen) != 0)
+		return -1;
+	return 0;
+}
+
 /*
  * MPTCP Checksum support
  * The checksum is calculated whenever the MPTCP DSS option is included
@@ -695,7 +967,23 @@ mptcp_update_rcv_state_g(struct mptcp_dss64_ack32_opt *dss_info,
  * DSS option.
  */
 
-uint16_t
+static int
+mptcp_validate_csum(struct tcpcb *tp, struct mbuf *m, int drop_hdrlen)
+{
+	uint16_t mptcp_csum = 0;
+	mptcp_csum = mptcp_input_csum(tp, m, drop_hdrlen);
+	if (mptcp_csum) {
+		tp->t_mpflags |= TMPF_SND_MPFAIL;
+		tp->t_mpflags &= ~TMPF_EMBED_DSN;
+		mptcp_notify_mpfail(tp->t_inpcb->inp_socket);
+		m_freem(m);
+		tcpstat.tcps_mp_badcsum++;
+		return -1;
+	}
+	return 0;
+}
+
+static uint16_t
 mptcp_input_csum(struct tcpcb *tp, struct mbuf *m, int off)
 {
 	struct mptcb *mp_tp = tptomptp(tp);
@@ -735,7 +1023,8 @@ mptcp_input_csum(struct tcpcb *tp, struct mbuf *m, int off)
 	ADDCARRY(sum);
 	DTRACE_MPTCP3(checksum__result, struct tcpcb *, tp, struct mbuf *, m,
 	    uint32_t, sum);
-	mptcplog((LOG_INFO, "%s: sum = %x \n", __func__, sum));
+	mptcplog((LOG_DEBUG, "MPTCP Receiver: sum = %x \n", sum),
+	    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 	return (~sum & 0xffff);
 }
 
@@ -774,5 +1063,35 @@ mptcp_output_csum(struct tcpcb *tp, struct mbuf *m, int32_t len,
 	DTRACE_MPTCP3(checksum__result, struct tcpcb *, tp, struct mbuf *, m,
 	    uint32_t, sum);
 	*csump = sum;
-	mptcplog3((LOG_INFO, "%s: sum = %x \n", __func__, sum));
+	mptcplog((LOG_DEBUG, "MPTCP Sender: sum = %x \n", sum),
+	    MPTCP_SENDER_DBG, MPTCP_LOGLVL_VERBOSE);
+}
+
+/*
+ * When WiFi signal starts fading, there's more loss and RTT spikes.
+ * Check if there has been a large spike by comparing against
+ * a tolerable RTT spike threshold.
+ */
+boolean_t
+mptcp_no_rto_spike(struct socket *so)
+{
+	struct tcpcb *tp = intotcpcb(sotoinpcb(so));
+	int32_t spike = 0;
+
+	if (tp->t_rxtcur > MAX(mptcp_rtothresh, MPTCP_RTO_MINTHRESH)) {
+		spike = tp->t_rxtcur - mptcp_rtothresh;
+
+		mptcplog((LOG_DEBUG, "MPTCP Socket: %s: spike = %d rto = %d"
+		    "best = %d cur = %d\n", __func__, spike,
+		    tp->t_rxtcur, tp->t_rttbest >> TCP_RTT_SHIFT,
+		    tp->t_rttcur),
+		    (MPTCP_SOCKET_DBG|MPTCP_SENDER_DBG), MPTCP_LOGLVL_LOG);
+
+	}
+
+	if (spike > 0 ) {
+		return (FALSE);
+	} else {
+		return (TRUE);
+	}
 }

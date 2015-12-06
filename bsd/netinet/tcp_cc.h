@@ -132,6 +132,11 @@ extern struct tcp_cc_algo* tcp_cc_algo_list[TCP_CC_ALGO_COUNT];
 
 #define CC_ALGO(tp) (tcp_cc_algo_list[tp->tcp_cc_index])
 #define	TCP_CC_CWND_INIT_BYTES	4380
+/*
+ * The congestion window will have to be reset after a
+ * non-validated period -- currently set to 3 minutes
+ */
+#define	TCP_CC_CWND_NONVALIDATED_PERIOD	(3 * 60 * TCP_RETRANSHZ)
 
 extern void	tcp_cc_init(void);
 extern void tcp_cc_resize_sndbuf(struct tcpcb *tp);
@@ -142,6 +147,10 @@ extern void tcp_ccdbg_trace(struct tcpcb *tp, struct tcphdr *th,
 	int32_t event);
 extern void tcp_cc_allocate_state(struct tcpcb *tp);
 extern void tcp_cc_after_idle_stretchack(struct tcpcb *tp);
+extern uint32_t tcp_cc_is_cwnd_nonvalidated(struct tcpcb *tp);
+extern void tcp_cc_adjust_nonvalidated_cwnd(struct tcpcb *tp);
+extern u_int32_t tcp_get_max_pipeack(struct tcpcb *tp);
+extern void tcp_clear_pipeack_state(struct tcpcb *tp);
 
 #endif /* KERNEL */
 #endif /* _NETINET_CC_H_ */

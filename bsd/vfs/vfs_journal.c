@@ -339,6 +339,13 @@ do_journal_io(journal *jnl, off_t *offset, void *data, size_t len, int direction
 	buf_t	bp;
 	off_t 	max_iosize;
 	struct bufattr *bap;
+	boolean_t was_vm_privileged = FALSE;
+	boolean_t need_vm_privilege = FALSE;
+
+	if (jnl->fsmount) {
+		if (jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT)
+			need_vm_privilege = TRUE;
+	}
 
 	if (*offset < 0 || *offset > jnl->jhdr->size) {
 		panic("jnl: do_jnl_io: bad offset 0x%llx (max 0x%llx)\n", *offset, jnl->jhdr->size);
@@ -406,12 +413,26 @@ again:
 		buf_markfua(bp);
 	}
 
+	if (need_vm_privilege == TRUE) {
+		/*
+		 * if we block waiting for memory, and there is enough pressure to
+		 * cause us to try and create a new swap file, we may end up deadlocking
+		 * due to waiting for the journal on the swap file creation path...
+		 * by making ourselves vm_privileged, we give ourselves the best chance
+		 * of not blocking
+		 */
+		was_vm_privileged = set_vm_privilege(TRUE);
+	}
 	DTRACE_IO1(journal__start, buf_t, bp);
 	err = VNOP_STRATEGY(bp);
 	if (!err) {
 		err = (int)buf_biowait(bp);
 	}
 	DTRACE_IO1(journal__done, buf_t, bp);
+
+	if (need_vm_privilege == TRUE && was_vm_privileged == FALSE)
+		set_vm_privilege(FALSE);
+
 	free_io_buf(bp);
 
 	if (err) {
@@ -471,7 +492,21 @@ write_journal_header(journal *jnl, int updating_start, uint32_t sequence_num)
 	// writes.
 	//
 	if (!updating_start && (jnl->flags & JOURNAL_DO_FUA_WRITES) == 0) {
-		ret = VNOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, &context);
+
+		dk_synchronize_t sync_request = {
+			.options			= DK_SYNCHRONIZE_OPTION_BARRIER,
+		};
+
+		/*
+		 * If device doesn't support barrier-only flush, or
+		 * the journal is on a different device, use full flush.
+		 */
+		if (!(jnl->flags & JOURNAL_FEATURE_BARRIER) || (jnl->jdev != jnl->fsdev)) {
+			sync_request.options = 0;
+			jnl->flush_counter++;
+		}
+
+		ret = VNOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZE, (caddr_t)&sync_request, FWRITE, &context);
 	}
 	if (ret != 0) {
 		//
@@ -513,7 +548,21 @@ write_journal_header(journal *jnl, int updating_start, uint32_t sequence_num)
 	// may seem obscure, it's not.
 	//
 	if (updating_start && (jnl->flags & JOURNAL_DO_FUA_WRITES) == 0) {
-		VNOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, &context);
+
+		dk_synchronize_t sync_request = {
+			.options			= DK_SYNCHRONIZE_OPTION_BARRIER,
+		};
+
+		/*
+		 * If device doesn't support barrier-only flush, or
+		 * the journal is on a different device, use full flush.
+		 */
+		if (!(jnl->flags & JOURNAL_FEATURE_BARRIER) || (jnl->jdev != jnl->fsdev)) {
+			sync_request.options = 0;
+			jnl->flush_counter++;
+		}
+
+		VNOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZE, (caddr_t)&sync_request, FWRITE, &context);
 	}
 
 	return 0;
@@ -785,6 +834,8 @@ update_fs_block(journal *jnl, void *block_ptr, off_t fs_block, size_t bsize)
 {
 	int		ret;
 	struct buf *oblock_bp=NULL;
+	boolean_t was_vm_privileged = FALSE;
+
     
 	// first read the block we want.
 	ret = buf_meta_bread(jnl->fsdev, (daddr64_t)fs_block, bsize, NOCRED, &oblock_bp);
@@ -813,11 +864,25 @@ update_fs_block(journal *jnl, void *block_ptr, off_t fs_block, size_t bsize)
 	// copy the journal data over top of it
 	memcpy((char *)buf_dataptr(oblock_bp), block_ptr, bsize);
 
-	if ((ret = VNOP_BWRITE(oblock_bp)) != 0) {
+	if (jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) {
+		/*
+		 * if we block waiting for memory, and there is enough pressure to
+		 * cause us to try and create a new swap file, we may end up deadlocking
+		 * due to waiting for the journal on the swap file creation path...
+		 * by making ourselves vm_privileged, we give ourselves the best chance
+		 * of not blocking
+		 */
+		was_vm_privileged = set_vm_privilege(TRUE);
+	}
+	ret = VNOP_BWRITE(oblock_bp);
+
+	if ((jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) && (was_vm_privileged == FALSE))
+		set_vm_privilege(FALSE);
+
+	if (ret != 0) {
 		printf("jnl: %s: update_fs_block: failed to update block %lld (ret %d)\n", jnl->jdev_name, fs_block,ret);
 		return ret;
 	}
-
 	// and now invalidate it so that if someone else wants to read
 	// it in a different size they'll be able to do it.
 	ret = buf_meta_bread(jnl->fsdev, (daddr64_t)fs_block, bsize, NOCRED, &oblock_bp);
@@ -1138,7 +1203,7 @@ replay_journal(journal *jnl)
 	orig_jnl_start = jnl->jhdr->start;
 
 	// allocate memory for the header_block.  we'll read each blhdr into this
-	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&buff, jnl->jhdr->blhdr_size)) {
+	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&buff, jnl->jhdr->blhdr_size, VM_KERN_MEMORY_FILE)) {
 		printf("jnl: %s: replay_journal: no memory for block buffer! (%d bytes)\n",
 		       jnl->jdev_name, jnl->jhdr->blhdr_size);
 		return -1;
@@ -1273,7 +1338,7 @@ restart_replay:
 
 		if (blhdr->flags & BLHDR_CHECK_CHECKSUMS) {
 			check_block_checksums = 1;
-			if (kmem_alloc(kernel_map, (vm_offset_t *)&block_ptr, max_bsize)) {
+			if (kmem_alloc(kernel_map, (vm_offset_t *)&block_ptr, max_bsize, VM_KERN_MEMORY_FILE)) {
 				goto bad_replay;
 			}
 		} else {
@@ -1423,7 +1488,7 @@ bad_txn_handling:
 		max_bsize = (max_bsize + PAGE_SIZE) & ~(PAGE_SIZE - 1);
 	}
 
-	if (kmem_alloc(kernel_map, (vm_offset_t *)&block_ptr, max_bsize)) {
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&block_ptr, max_bsize, VM_KERN_MEMORY_FILE)) {
 		goto bad_replay;
 	}
     
@@ -1573,6 +1638,10 @@ get_io_info(struct vnode *devvp, size_t phys_blksz, journal *jnl, struct vfs_con
 		if (features & DK_FEATURE_UNMAP) {
 			jnl->flags |= JOURNAL_USE_UNMAP;
 		}
+
+		if (features & DK_FEATURE_BARRIER) {
+			jnl->flags |= JOURNAL_FEATURE_BARRIER;
+		}
 	}
 
 	//
@@ -1715,7 +1784,7 @@ journal_create(struct vnode *jvp,
 
 	get_io_info(jvp, phys_blksz, jnl, &context);
 	
-	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&jnl->header_buf, phys_blksz)) {
+	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&jnl->header_buf, phys_blksz, VM_KERN_MEMORY_FILE)) {
 		printf("jnl: %s: create: could not allocate space for header buffer (%u bytes)\n", jdev_name, phys_blksz);
 		goto bad_kmem_alloc;
 	}
@@ -1893,7 +1962,7 @@ journal_open(struct vnode *jvp,
 
 	get_io_info(jvp, phys_blksz, jnl, &context);
 
-	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&jnl->header_buf, phys_blksz)) {
+	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&jnl->header_buf, phys_blksz, VM_KERN_MEMORY_FILE)) {
 		printf("jnl: %s: create: could not allocate space for header buffer (%u bytes)\n", jdev_name, phys_blksz);
 		goto bad_kmem_alloc;
 	}
@@ -2006,8 +2075,8 @@ journal_open(struct vnode *jvp,
 
 	// take care of replaying the journal if necessary
 	if (flags & JOURNAL_RESET) {
-		printf("jnl: %s: journal start/end pointers reset! (jnl %p; s 0x%llx e 0x%llx)\n",
-		       jdev_name, jnl, jnl->jhdr->start, jnl->jhdr->end);
+		printf("jnl: %s: journal start/end pointers reset! (s 0x%llx e 0x%llx)\n",
+		       jdev_name, jnl->jhdr->start, jnl->jhdr->end);
 		jnl->jhdr->start = jnl->jhdr->end;
 	} else if (replay_journal(jnl) != 0) {
 		printf("jnl: %s: journal_open: Error replaying the journal!\n", jdev_name);
@@ -2129,7 +2198,7 @@ journal_is_clean(struct vnode *jvp,
 
 	memset(&jnl, 0, sizeof(jnl));
 
-	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&jnl.header_buf, phys_blksz)) {
+	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&jnl.header_buf, phys_blksz, VM_KERN_MEMORY_FILE)) {
 		printf("jnl: %s: is_clean: could not allocate space for header buffer (%d bytes)\n", jdev_name, phys_blksz);
 		ret = ENOMEM;
 		goto cleanup_jdev_name;
@@ -2272,8 +2341,7 @@ journal_close(journal *jnl)
 	} else {
 		// if we're here the journal isn't valid any more.
 		// so make sure we don't leave any locked blocks lying around
-		printf("jnl: %s: close: journal %p, is invalid.  aborting outstanding transactions\n", jnl->jdev_name, jnl);
-
+		printf("jnl: %s: close: journal is invalid.  aborting outstanding transactions\n", jnl->jdev_name);
 		if (jnl->active_tr || jnl->cur_tr) {
 			transaction *tr;
 
@@ -2478,7 +2546,8 @@ static errno_t
 journal_allocate_transaction(journal *jnl)
 {
 	transaction *tr;
-	boolean_t was_vm_privileged;
+	boolean_t was_vm_privileged = FALSE;
+	kern_return_t retval;
 	
 	if (jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) {
 		/*
@@ -2496,13 +2565,16 @@ journal_allocate_transaction(journal *jnl)
 
 	tr->tbuffer_size = jnl->tbuffer_size;
 
-	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&tr->tbuffer, tr->tbuffer_size)) {
+	retval = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&tr->tbuffer, tr->tbuffer_size, VM_KERN_MEMORY_FILE);
+
+	if ((jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) && (was_vm_privileged == FALSE))
+		set_vm_privilege(FALSE);
+
+	if (retval) {
 		FREE_ZONE(tr, sizeof(transaction), M_JNL_TR);
 		jnl->active_tr = NULL;
 		return ENOMEM;
 	}
-	if ((jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) && (was_vm_privileged == FALSE))
-		set_vm_privilege(FALSE);
 
 	// journal replay code checksum check depends on this.
 	memset(tr->tbuffer, 0, BLHDR_CHECKSUM_SIZE);
@@ -2601,6 +2673,7 @@ int
 journal_modify_block_start(journal *jnl, struct buf *bp)
 {
 	transaction *tr;
+	boolean_t was_vm_privileged = FALSE;
     
 	CHECK_JOURNAL(jnl);
 
@@ -2609,6 +2682,17 @@ journal_modify_block_start(journal *jnl, struct buf *bp)
 
 	if (jnl->flags & JOURNAL_INVALID) {
 		return EINVAL;
+	}
+
+	if (jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) {
+		/*
+		 * if we block waiting for memory, and there is enough pressure to
+		 * cause us to try and create a new swap file, we may end up deadlocking
+		 * due to waiting for the journal on the swap file creation path...
+		 * by making ourselves vm_privileged, we give ourselves the best chance
+		 * of not blocking
+		 */
+		was_vm_privileged = set_vm_privilege(TRUE);
 	}
 
 	// XXXdbg - for debugging I want this to be true.  later it may
@@ -2651,7 +2735,7 @@ journal_modify_block_start(journal *jnl, struct buf *bp)
 
 				printf("jnl: %s: phys blksz got bigger (was: %d/%d now %d)\n",
 				       jnl->jdev_name, jnl->header_buf_size, jnl->jhdr->jhdr_size, phys_blksz);
-				if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&new_header_buf, phys_blksz)) {
+				if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&new_header_buf, phys_blksz, VM_KERN_MEMORY_FILE)) {
 					printf("jnl: modify_block_start: %s: create: phys blksz change (was %d, now %d) but could not allocate space for new header\n",
 					       jnl->jdev_name, jnl->jhdr->jhdr_size, phys_blksz);
 					bad = 1;
@@ -2673,6 +2757,9 @@ journal_modify_block_start(journal *jnl, struct buf *bp)
 		if (bad) {
 			panic("jnl: mod block start: bufsize %d not a multiple of block size %d\n",
 			      buf_size(bp), jnl->jhdr->jhdr_size);
+
+			if ((jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) && (was_vm_privileged == FALSE))
+				set_vm_privilege(FALSE);
 			return -1;
 		}
 	}
@@ -2681,6 +2768,9 @@ journal_modify_block_start(journal *jnl, struct buf *bp)
 	if (tr->total_bytes+buf_size(bp) >= (jnl->jhdr->size - jnl->jhdr->jhdr_size)) {
 		panic("jnl: transaction too big (%d >= %lld bytes, bufsize %d, tr %p bp %p)\n",
 		      tr->total_bytes, (tr->jnl->jhdr->size - jnl->jhdr->jhdr_size), buf_size(bp), tr, bp);
+
+		if ((jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) && (was_vm_privileged == FALSE))
+			set_vm_privilege(FALSE);
 		return -1;
 	}
 
@@ -2701,6 +2791,9 @@ journal_modify_block_start(journal *jnl, struct buf *bp)
 		VNOP_BWRITE(bp);
 	}
 	buf_setflags(bp, B_LOCKED);
+
+	if ((jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) && (was_vm_privileged == FALSE))
+		set_vm_privilege(FALSE);
 
 	return 0;
 }
@@ -2844,7 +2937,7 @@ journal_modify_block_end(journal *jnl, struct buf *bp, void (*func)(buf_t bp, vo
 		// through prev->binfo[0].bnum.  that's a skanky way to do things but
 		// avoids having yet another linked list of small data structures to manage.
 
-		if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&nblhdr, tr->tbuffer_size)) {
+		if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&nblhdr, tr->tbuffer_size, VM_KERN_MEMORY_FILE)) {
 			panic("jnl: end_tr: no space for new block tr @ %p (total bytes: %d)!\n",
 			      tr, tr->total_bytes);
 		}
@@ -2883,7 +2976,16 @@ journal_modify_block_end(journal *jnl, struct buf *bp, void (*func)(buf_t bp, vo
 		vnode_t	vp;
 
 		vp = buf_vnode(bp);
-		vnode_ref(vp);
+		if (vnode_ref(vp)) {
+			// Nobody checks the return values, so...
+			jnl->flags |= JOURNAL_INVALID;
+
+			buf_brelse(bp);
+
+			// We're probably here due to a force unmount, so EIO is appropriate
+			return EIO;
+		}
+
 		bsize = buf_size(bp);
 
 		blhdr->binfo[i].bnum = (off_t)(buf_blkno(bp));
@@ -2923,7 +3025,8 @@ journal_kill_block(journal *jnl, struct buf *bp)
 	free_old_stuff(jnl);
 
 	if (jnl->flags & JOURNAL_INVALID) {
-		return EINVAL;
+		buf_brelse(bp);
+		return 0;
 	}
 
 	tr = jnl->active_tr;
@@ -2972,14 +3075,16 @@ journal_kill_block(journal *jnl, struct buf *bp)
 				buf_markinvalid(bp);
 				buf_brelse(bp);
 
-				break;
+				return 0;
 			}
 		}
-
-		if (i < blhdr->num_blocks) {
-			break;
-		}
 	}
+
+	/*
+	 * We did not find the block in any transaction buffer but we still
+	 * need to release it or else it will be left locked forever.
+	 */
+	buf_brelse(bp);
 
 	return 0;
 }
@@ -3041,7 +3146,7 @@ trim_realloc(journal *jnl, struct jnl_trim_list *trim)
 {
 	void *new_extents;
 	uint32_t new_allocated_count;
-	boolean_t was_vm_privileged;
+	boolean_t was_vm_privileged = FALSE;
 	
 	if (jnl_kdebug)
 		KERNEL_DEBUG_CONSTANT(DBG_JOURNAL_TRIM_REALLOC | DBG_FUNC_START, VM_KERNEL_ADDRPERM(trim), 0, trim->allocated_count, trim->extent_count, 0);
@@ -3590,7 +3695,7 @@ static int
 journal_trim_flush(journal *jnl, transaction *tr)
 {
 	int errno = 0;
-	boolean_t was_vm_privileged;
+	boolean_t was_vm_privileged = FALSE;
 	
 	if (jnl_kdebug)
 		KERNEL_DEBUG_CONSTANT(DBG_JOURNAL_TRIM_FLUSH | DBG_FUNC_START, VM_KERNEL_ADDRPERM(jnl), tr, 0, tr->trim.extent_count, 0);
@@ -4039,13 +4144,23 @@ finish_end_transaction(transaction *tr, errno_t (*callback)(void*), void *callba
 	size_t		tbuffer_offset;
 	int		bufs_written = 0;
 	int		ret_val = 0;
+	boolean_t	was_vm_privileged = FALSE;
 
 	KERNEL_DEBUG(0xbbbbc028|DBG_FUNC_START, jnl, tr, 0, 0, 0);
 
+	if (jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) {
+		/*
+		 * if we block waiting for memory, and there is enough pressure to
+		 * cause us to try and create a new swap file, we may end up deadlocking
+		 * due to waiting for the journal on the swap file creation path...
+		 * by making ourselves vm_privileged, we give ourselves the best chance
+		 * of not blocking
+		 */
+		was_vm_privileged = set_vm_privilege(TRUE);
+	}
 	end  = jnl->jhdr->end;
 
 	for (blhdr = tr->blhdr; blhdr; blhdr = (block_list_header *)((long)blhdr->binfo[0].bnum)) {
-		boolean_t was_vm_privileged;
 
 		amt = blhdr->bytes_used;
 
@@ -4054,22 +4169,9 @@ finish_end_transaction(transaction *tr, errno_t (*callback)(void*), void *callba
 		blhdr->checksum = 0;
 		blhdr->checksum = calc_checksum((char *)blhdr, BLHDR_CHECKSUM_SIZE);
 
-		if (jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) {
-			/*
-			 * if we block waiting for memory, and there is enough pressure to
-			 * cause us to try and create a new swap file, we may end up deadlocking
-			 * due to waiting for the journal on the swap file creation path...
-			 * by making ourselves vm_privileged, we give ourselves the best chance
-			 * of not blocking
-			 */
-			was_vm_privileged = set_vm_privilege(TRUE);
-		}
-		if (kmem_alloc(kernel_map, (vm_offset_t *)&bparray, blhdr->num_blocks * sizeof(struct buf *))) {
+		if (kmem_alloc(kernel_map, (vm_offset_t *)&bparray, blhdr->num_blocks * sizeof(struct buf *), VM_KERN_MEMORY_FILE)) {
 			panic("can't allocate %zd bytes for bparray\n", blhdr->num_blocks * sizeof(struct buf *));
 		}
-		if ((jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) && (was_vm_privileged == FALSE))
-			set_vm_privilege(FALSE);
-
 		tbuffer_offset = jnl->jhdr->blhdr_size;
 
 		for (i = 1; i < blhdr->num_blocks; i++) {
@@ -4092,8 +4194,8 @@ finish_end_transaction(transaction *tr, errno_t (*callback)(void*), void *callba
 				lblkno = buf_lblkno(bp);
 
 				if (vp == NULL && lblkno == blkno) {
-					printf("jnl: %s: end_tr: bad news! bp @ %p w/null vp and l/blkno = %qd/%qd.  aborting the transaction (tr %p jnl %p).\n",
-					       jnl->jdev_name, bp, lblkno, blkno, tr, jnl);
+					printf("jnl: %s: end_tr: bad news! buffer w/null vp and l/blkno = %qd/%qd.  aborting the transaction.\n",
+					       jnl->jdev_name, lblkno, blkno);
 					ret_val = -1;
 					goto bad_journal;
 				}
@@ -4107,17 +4209,17 @@ finish_end_transaction(transaction *tr, errno_t (*callback)(void*), void *callba
 					size_t 	contig_bytes;
 
 					if (VNOP_BLKTOOFF(vp, lblkno, &f_offset)) {
-						printf("jnl: %s: end_tr: vnop_blktooff failed @ %p, jnl %p\n", jnl->jdev_name, bp, jnl);
+						printf("jnl: %s: end_tr: vnop_blktooff failed\n", jnl->jdev_name);
 						ret_val = -1;
 						goto bad_journal;
 					}
 					if (VNOP_BLOCKMAP(vp, f_offset, buf_count(bp), &blkno, &contig_bytes, NULL, 0, NULL)) {
-						printf("jnl: %s: end_tr: can't blockmap the bp @ %p, jnl %p\n", jnl->jdev_name, bp, jnl);
+						printf("jnl: %s: end_tr: can't blockmap the buffer", jnl->jdev_name);
 						ret_val = -1;
 						goto bad_journal;
 					}
 					if ((uint32_t)contig_bytes < buf_count(bp)) {
-						printf("jnl: %s: end_tr: blk not physically contiguous on disk@ %p, jnl %p\n", jnl->jdev_name, bp, jnl);
+						printf("jnl: %s: end_tr: blk not physically contiguous on disk\n", jnl->jdev_name);
 						ret_val = -1;
 						goto bad_journal;
 					}
@@ -4287,6 +4389,8 @@ finish_end_transaction(transaction *tr, errno_t (*callback)(void*), void *callba
 
 bad_journal:
 	if (ret_val == -1) {
+		abort_transaction(jnl, tr);		// cleans up list of extents to be trimmed
+
 		/*
 		 * 'flush_aborted' is protected by the flushing condition... we need to
 		 * set it before dropping the condition so that it will be
@@ -4304,11 +4408,13 @@ bad_journal:
 
 		jnl->flags |= JOURNAL_INVALID;
 		jnl->old_start[sizeof(jnl->old_start)/sizeof(jnl->old_start[0]) - 1] &= ~0x8000000000000000LL;
-		abort_transaction(jnl, tr);		// cleans up list of extents to be trimmed
 
 		journal_unlock(jnl);
 	} else
 		unlock_condition(jnl, &jnl->flushing);
+
+	if ((jnl->fsmount->mnt_kern_flag & MNTK_SWAP_MOUNT) && (was_vm_privileged == FALSE))
+		set_vm_privilege(FALSE);
 
 	KERNEL_DEBUG(0xbbbbc028|DBG_FUNC_END, jnl, tr, bufs_written, ret_val, 0);
 
@@ -4395,12 +4501,23 @@ abort_transaction(journal *jnl, transaction *tr)
 
 			bp_vp = buf_vnode(tbp);
 
-			buf_setfilter(tbp, NULL, NULL, NULL, NULL);
-
-			if (buf_shadow(tbp))
+			if (buf_shadow(tbp)) {
 				sbp = tbp;
-			else
+				buf_setfilter(tbp, NULL, NULL, NULL, NULL);
+			} else {
+				assert(ISSET(buf_flags(tbp), B_LOCKED));
+
 				sbp = NULL;
+
+				do {
+					errno = buf_acquire(tbp, BAC_REMOVE, 0, 0);
+				} while (errno == EAGAIN);
+
+				if (!errno) {
+					buf_setfilter(tbp, NULL, NULL, NULL, NULL);
+					buf_brelse(tbp);
+				}
+			}
 
 			if (bp_vp) {
 				errno = buf_meta_bread(bp_vp,
@@ -4430,8 +4547,8 @@ abort_transaction(journal *jnl, transaction *tr)
 					 */
 					vnode_rele_ext(bp_vp, 0, 1);
 				} else {
-					printf("jnl: %s: abort_tr: could not find block %lld vp %p!\n",
-					       jnl->jdev_name, blhdr->binfo[i].bnum, tbp);
+					printf("jnl: %s: abort_tr: could not find block %lld for vnode!\n",
+					       jnl->jdev_name, blhdr->binfo[i].bnum);
 					if (bp) {
 						buf_brelse(bp);
 					}
@@ -4569,9 +4686,11 @@ journal_end_transaction(journal *jnl)
  *  	guarantees consistent journal content on the disk.
  */
 int
-journal_flush(journal *jnl, boolean_t wait_for_IO)
+journal_flush(journal *jnl, journal_flush_options_t options)
 {
 	boolean_t drop_lock = FALSE;
+	errno_t error = 0;
+	uint32_t flush_count;
     
 	CHECK_JOURNAL(jnl);
     
@@ -4588,13 +4707,16 @@ journal_flush(journal *jnl, boolean_t wait_for_IO)
 		drop_lock = TRUE;
 	}
 
+	if (ISSET(options, JOURNAL_FLUSH_FULL))
+		flush_count = jnl->flush_counter;
+
 	// if we're not active, flush any buffered transactions
 	if (jnl->active_tr == NULL && jnl->cur_tr) {
 		transaction *tr = jnl->cur_tr;
 
 		jnl->cur_tr = NULL;
 
-		if (wait_for_IO) {
+		if (ISSET(options, JOURNAL_WAIT_FOR_IO)) {
 			wait_condition(jnl, &jnl->flushing, "journal_flush");
 			wait_condition(jnl, &jnl->asyncIO, "journal_flush");
 		}
@@ -4620,8 +4742,24 @@ journal_flush(journal *jnl, boolean_t wait_for_IO)
 		 */
 		wait_condition(jnl, &jnl->flushing, "journal_flush");
 	}
-	if (wait_for_IO) {
+	if (ISSET(options, JOURNAL_WAIT_FOR_IO)) {
 		wait_condition(jnl, &jnl->asyncIO, "journal_flush");
+	}
+
+	if (ISSET(options, JOURNAL_FLUSH_FULL)) {
+
+		dk_synchronize_t sync_request = {
+			.options                        = 0,
+		};
+
+		// We need a full cache flush. If it has not been done, do it here.
+		if (flush_count == jnl->flush_counter)
+			error = VNOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZE, (caddr_t)&sync_request, FWRITE, vfs_context_kernel());
+
+		// If external journal partition is enabled, flush filesystem data partition.
+		if (jnl->jdev != jnl->fsdev)
+			error = VNOP_IOCTL(jnl->fsdev, DKIOCSYNCHRONIZE, (caddr_t)&sync_request, FWRITE, vfs_context_kernel());
+
 	}
 
 	KERNEL_DEBUG(DBG_JOURNAL_FLUSH | DBG_FUNC_END, jnl, 0, 0, 0, 0);
@@ -4752,7 +4890,7 @@ int journal_relocate(journal *jnl, off_t offset, off_t journal_size, int32_t tbu
 	tr = jnl->active_tr;
 	CHECK_TRANSACTION(tr);
 	jnl->active_tr = NULL;
-	ret = journal_flush(jnl, TRUE);
+	ret = journal_flush(jnl, JOURNAL_WAIT_FOR_IO);
 	jnl->active_tr = tr;
 
 	if (ret) {
@@ -4812,6 +4950,10 @@ bad_journal:
 	return ret;
 }
 
+uint32_t journal_current_txn(journal *jnl)
+{
+	return jnl->sequence_num + (jnl->active_tr || jnl->cur_tr ? 0 : 1);
+}
 
 #else   // !JOURNALING - so provide stub functions
 
@@ -4900,7 +5042,7 @@ journal_end_transaction(__unused journal *jnl)
 }
 
 int
-journal_flush(__unused journal *jnl, __unused boolean_t wait_for_IO)
+journal_flush(__unused journal *jnl, __unused journal_flush_options_t options)
 {
 	return EINVAL;
 }

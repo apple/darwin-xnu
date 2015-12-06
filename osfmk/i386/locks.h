@@ -152,6 +152,8 @@ typedef struct _lck_mtx_ext_ {
 #define	LCK_MTX_ATTR_STAT	0x2
 #define	LCK_MTX_ATTR_STATb	1
 
+#define LCK_MTX_EVENT(lck) ((event_t)(((unsigned int*)lck)+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)))
+
 #else /* MACH_KERNEL_PRIVATE */
 #ifdef	XNU_KERNEL_PRIVATE
 typedef struct {

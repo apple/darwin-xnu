@@ -131,7 +131,10 @@ static void task_policy_update_locked(task_t task, thread_t thread, task_pend_to
 static void task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_create, task_pend_token_t pend_token);
 static void task_policy_update_task_locked(task_t task, boolean_t update_throttle, boolean_t update_bg_throttle, boolean_t update_sfi);
 static void task_policy_update_thread_locked(thread_t thread, int update_cpu, boolean_t update_throttle, boolean_t update_sfi, boolean_t update_qos);
+
+#if CONFIG_SCHED_SFI
 static boolean_t task_policy_update_coalition_focal_tasks(task_t task, int prev_role, int next_role);
+#endif
 
 static int proc_get_effective_policy(task_t task, thread_t thread, int policy);
 
@@ -198,9 +201,9 @@ static void task_importance_update_live_donor(task_t target_task);
 
 /* Macros for making tracing simpler */
 
-#define tpriority(task, thread)  ((uintptr_t)(thread == THREAD_NULL ? (task->priority)  : (thread->priority)))
+#define tpriority(task, thread)  ((uintptr_t)(thread == THREAD_NULL ? (task->priority)  : (thread->base_pri)))
 #define tisthread(thread) (thread == THREAD_NULL ? TASK_POLICY_TASK  : TASK_POLICY_THREAD)
-#define targetid(task, thread)   ((uintptr_t)(thread == THREAD_NULL ? (audit_token_pid_from_task(task)) : (thread->thread_id)))
+#define targetid(task, thread)   ((uintptr_t)(thread == THREAD_NULL ? (task_pid(task)) : (thread->thread_id)))
 
 /*
  * Default parameters for certain policies
@@ -418,7 +421,7 @@ task_policy_set(
 
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 		                          (IMPORTANCE_CODE(IMP_TASK_SUPPRESSION, info->active)) | DBG_FUNC_START,
-		                          proc_selfpid(), audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL),
+		                          proc_selfpid(), task_pid(task), trequested_0(task, THREAD_NULL),
 		                          trequested_1(task, THREAD_NULL), 0);
 
 		task->requested_policy.t_sup_active      = (info->active)         ? 1 : 0;
@@ -439,7 +442,7 @@ task_policy_set(
 
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 		                          (IMPORTANCE_CODE(IMP_TASK_SUPPRESSION, info->active)) | DBG_FUNC_END,
-		                          proc_selfpid(), audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL),
+		                          proc_selfpid(), task_pid(task), trequested_0(task, THREAD_NULL),
 		                          trequested_1(task, THREAD_NULL), 0);
 
 		break;
@@ -657,14 +660,14 @@ task_policy_create(task_t task, int parent_boosted)
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  (IMPORTANCE_CODE(IMP_UPDATE, (IMP_UPDATE_TASK_CREATE | TASK_POLICY_TASK))) | DBG_FUNC_START,
-				  audit_token_pid_from_task(task), teffective_0(task, THREAD_NULL),
+				  task_pid(task), teffective_0(task, THREAD_NULL),
 				  teffective_1(task, THREAD_NULL), tpriority(task, THREAD_NULL), 0);
 
 	task_policy_update_internal_locked(task, THREAD_NULL, TRUE, NULL);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  (IMPORTANCE_CODE(IMP_UPDATE, (IMP_UPDATE_TASK_CREATE | TASK_POLICY_TASK))) | DBG_FUNC_END,
-				  audit_token_pid_from_task(task), teffective_0(task, THREAD_NULL),
+				  task_pid(task), teffective_0(task, THREAD_NULL),
 				  teffective_1(task, THREAD_NULL), tpriority(task, THREAD_NULL), 0);
 
 	task_importance_update_live_donor(task);
@@ -771,7 +774,7 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 				case TASK_DEFAULT_APPLICATION:
 					/* This is 'may render UI but we don't know if it's focal/nonfocal' */
 					next.t_qos_ceiling = THREAD_QOS_UNSPECIFIED;
-					break;					
+					break;
 
 				case TASK_NONUI_APPLICATION:
 					/* i.e. 'off-screen' */
@@ -782,6 +785,11 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 				case TASK_GRAPHICS_SERVER:
 					next.qos_ui_is_urgent = 1;
 					next.t_qos_ceiling = THREAD_QOS_UNSPECIFIED;
+					break;
+
+				case TASK_THROTTLE_APPLICATION:
+					/* i.e. 'TAL launch' */
+					next.t_qos_ceiling = THREAD_QOS_UTILITY;
 					break;
 
 				case TASK_UNSPECIFIED:
@@ -847,7 +855,6 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 	boolean_t wants_darwinbg        = FALSE;
 	boolean_t wants_all_sockets_bg  = FALSE; /* Do I want my existing sockets to be bg */
 	boolean_t wants_watchersbg      = FALSE; /* Do I want my pidbound threads to be bg */
-	boolean_t wants_tal             = FALSE; /* Do I want the effects of TAL mode */
 
 	/*
 	 * If DARWIN_BG has been requested at either level, it's engaged.
@@ -863,7 +870,12 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 		if (requested.t_apptype      == TASK_APPTYPE_APP_TAL &&
 		    requested.t_role         == TASK_BACKGROUND_APPLICATION &&
 		    requested.t_tal_enabled  == 1) {
-			wants_tal = TRUE;
+			next.t_tal_engaged = 1;
+		}
+
+		if ((requested.t_apptype     == TASK_APPTYPE_APP_DEFAULT ||
+		     requested.t_apptype     == TASK_APPTYPE_APP_TAL) &&
+		    requested.t_role         == TASK_THROTTLE_APPLICATION) {
 			next.t_tal_engaged = 1;
 		}
 
@@ -916,7 +928,10 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 
 	boolean_t wants_lowpri_cpu = FALSE;
 
-	if (wants_darwinbg || wants_tal)
+	if (wants_darwinbg)
+		wants_lowpri_cpu = TRUE;
+
+	if (next.t_tal_engaged)
 		wants_lowpri_cpu = TRUE;
 
 	if (on_task && requested.t_sup_lowpri_cpu && requested.t_boosted == 0)
@@ -942,7 +957,7 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 		if (requested.t_sup_disk && requested.t_boosted == 0)
 			iopol = MAX(iopol, proc_suppressed_disk_tier);
 
-		if (wants_tal)
+		if (next.t_tal_engaged)
 			iopol = MAX(iopol, proc_tal_disk_tier);
 
 		if (next.t_qos_clamp != THREAD_QOS_UNSPECIFIED)
@@ -1066,7 +1081,7 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 			/* TODO: This should only be shot down on SIGTERM, not exit */
 			next.t_suspended   = 0;
 		} else {
-			next.thep_qos = 0;
+			next.thep_qos = THREAD_QOS_UNSPECIFIED;
 		}
 	}
 
@@ -1184,11 +1199,12 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 			(prev.t_sfi_managed != next.t_sfi_managed))
 			update_sfi = TRUE;
 
-/* TODO: if CONFIG_SFI */
+#if CONFIG_SCHED_SFI
 		if (prev.t_role != next.t_role && task_policy_update_coalition_focal_tasks(task, prev.t_role, next.t_role)) {
 			update_sfi = TRUE;
 			pend_token->tpt_update_coal_sfi = 1;
 		}
+#endif /* !CONFIG_SCHED_SFI */
 
 		task_policy_update_task_locked(task, update_throttle, update_threads, update_sfi);
 	} else {
@@ -1205,7 +1221,8 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 
 		if (prev.thep_qos           != next.thep_qos          ||
 		    prev.thep_qos_relprio   != next.thep_qos_relprio  ||
-		    prev.qos_ui_is_urgent   != next.qos_ui_is_urgent) {
+		    prev.qos_ui_is_urgent   != next.qos_ui_is_urgent  ||
+		    prev.terminated         != next.terminated) {
 			update_qos = TRUE;
 		}
 
@@ -1213,6 +1230,8 @@ task_policy_update_internal_locked(task_t task, thread_t thread, boolean_t in_cr
 	}
 }
 
+
+#if CONFIG_SCHED_SFI
 /*
  * Yet another layering violation. We reach out and bang on the coalition directly.
  */
@@ -1223,24 +1242,27 @@ task_policy_update_coalition_focal_tasks(task_t     task,
 {
 	boolean_t sfi_transition = FALSE;
 
+	/* task moving into/out-of the foreground */
 	if (prev_role != TASK_FOREGROUND_APPLICATION && next_role == TASK_FOREGROUND_APPLICATION) {
-		if (coalition_adjust_focal_task_count(task->coalition, 1) == 1)
+		if (task_coalition_adjust_focal_count(task, 1) == 1)
 			sfi_transition = TRUE;
 	} else if (prev_role == TASK_FOREGROUND_APPLICATION && next_role != TASK_FOREGROUND_APPLICATION) {
-		if (coalition_adjust_focal_task_count(task->coalition, -1) == 0)
+		if (task_coalition_adjust_focal_count(task, -1) == 0)
 			sfi_transition = TRUE;
 	}
 
+	/* task moving into/out-of background */
 	if (prev_role != TASK_BACKGROUND_APPLICATION && next_role == TASK_BACKGROUND_APPLICATION) {
-		if (coalition_adjust_non_focal_task_count(task->coalition, 1) == 1)
+		if (task_coalition_adjust_nonfocal_count(task, 1) == 1)
 			sfi_transition = TRUE;
 	} else if (prev_role == TASK_BACKGROUND_APPLICATION && next_role != TASK_BACKGROUND_APPLICATION) {
-		if (coalition_adjust_non_focal_task_count(task->coalition, -1) == 0)
+		if (task_coalition_adjust_nonfocal_count(task, -1) == 0)
 			sfi_transition = TRUE;
 	}
 
 	return sfi_transition;
 }
+#endif /* CONFIG_SCHED_SFI */
 
 /* Despite the name, the thread's task is locked, the thread is not */
 void
@@ -1379,6 +1401,30 @@ task_policy_update_task_locked(task_t    task,
 	}
 }
 
+#if CONFIG_SCHED_SFI
+/* coalition object is locked */
+static void
+task_sfi_reevaluate_cb(coalition_t coal, void *ctx, task_t task)
+{
+	thread_t thread;
+
+	/* unused for now */
+	(void)coal;
+
+	/* skip the task we're re-evaluating on behalf of: it's already updated */
+	if (task == (task_t)ctx)
+		return;
+
+	task_lock(task);
+
+	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+		sfi_reevaluate(thread);
+	}
+
+	task_unlock(task);
+}
+#endif /* CONFIG_SCHED_SFI */
+
 /*
  * Called with task unlocked to do things that can't be done while holding the task lock
  */
@@ -1401,8 +1447,12 @@ task_policy_update_complete_unlocked(task_t task, thread_t thread, task_pend_tok
 		if (pend_token->tpt_update_live_donor)
 			task_importance_update_live_donor(task);
 
+#if CONFIG_SCHED_SFI
+		/* use the resource coalition for SFI re-evaluation */
 		if (pend_token->tpt_update_coal_sfi)
-			coalition_sfi_reevaluate(task->coalition, task);
+			coalition_for_each_task(task->coalition[COALITION_TYPE_RESOURCE],
+						(void *)task, task_sfi_reevaluate_cb);
+#endif /* CONFIG_SCHED_SFI */
 	}
 }
 
@@ -2059,6 +2109,60 @@ proc_tier_to_iopol(int tier, int passive)
 	}
 }
 
+int
+proc_darwin_role_to_task_role(int darwin_role, int* task_role)
+{
+	integer_t role = TASK_UNSPECIFIED;
+
+	switch (darwin_role) {
+		case PRIO_DARWIN_ROLE_DEFAULT:
+			role = TASK_UNSPECIFIED;
+			break;
+		case PRIO_DARWIN_ROLE_UI_FOCAL:
+			role = TASK_FOREGROUND_APPLICATION;
+			break;
+		case PRIO_DARWIN_ROLE_UI:
+			role = TASK_DEFAULT_APPLICATION;
+			break;
+		case PRIO_DARWIN_ROLE_NON_UI:
+			role = TASK_NONUI_APPLICATION;
+			break;
+		case PRIO_DARWIN_ROLE_UI_NON_FOCAL:
+			role = TASK_BACKGROUND_APPLICATION;
+			break;
+		case PRIO_DARWIN_ROLE_TAL_LAUNCH:
+			role = TASK_THROTTLE_APPLICATION;
+			break;
+		default:
+			return EINVAL;
+	}
+
+	*task_role = role;
+
+	return 0;
+}
+
+int
+proc_task_role_to_darwin_role(int task_role)
+{
+	switch (task_role) {
+		case TASK_FOREGROUND_APPLICATION:
+			return PRIO_DARWIN_ROLE_UI_FOCAL;
+		case TASK_BACKGROUND_APPLICATION:
+			return PRIO_DARWIN_ROLE_UI;
+		case TASK_NONUI_APPLICATION:
+			return PRIO_DARWIN_ROLE_NON_UI;
+		case TASK_DEFAULT_APPLICATION:
+			return PRIO_DARWIN_ROLE_UI_NON_FOCAL;
+		case TASK_THROTTLE_APPLICATION:
+			return PRIO_DARWIN_ROLE_TAL_LAUNCH;
+		case TASK_UNSPECIFIED:
+		default:
+			return PRIO_DARWIN_ROLE_DEFAULT;
+	}
+}
+
+
 /* apply internal backgrounding for workqueue threads */
 int
 proc_apply_workq_bgthreadpolicy(thread_t thread)
@@ -2500,14 +2604,14 @@ extern boolean_t ipc_importance_interactive_receiver;
  * TODO: Make this function more table-driven instead of ad-hoc
  */
 void
-proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp,
+proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
                           ipc_port_t * portwatch_ports, int portwatch_count)
 {
 	struct task_pend_token pend_token = {};
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  (IMPORTANCE_CODE(IMP_TASK_APPTYPE, apptype)) | DBG_FUNC_START,
-				  audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
+				  task_pid(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
 				  apptype, 0);
 
 	switch (apptype) {
@@ -2588,7 +2692,10 @@ proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp,
 
 	if (apptype != TASK_APPTYPE_NONE) {
 		task->requested_policy.t_apptype = apptype;
+	}
 
+	if (role != TASK_UNSPECIFIED) {
+		task->requested_policy.t_role = role;
 	}
 
 	if (qos_clamp != THREAD_QOS_UNSPECIFIED) {
@@ -2606,9 +2713,11 @@ proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp,
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  (IMPORTANCE_CODE(IMP_TASK_APPTYPE, apptype)) | DBG_FUNC_END,
-				  audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
+				  task_pid(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
 				  task_is_importance_receiver(task), 0);
 }
+
+extern task_t bsd_init_task;
 
 /* Set up the primordial thread's QoS */
 void
@@ -2621,12 +2730,17 @@ task_set_main_thread_qos(task_t task, thread_t main_thread) {
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	                          (IMPORTANCE_CODE(IMP_MAIN_THREAD_QOS, 0)) | DBG_FUNC_START,
-	                          audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
+	                          task_pid(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
 	                          main_thread->requested_policy.thrp_qos, 0);
 
 	int primordial_qos = THREAD_QOS_UNSPECIFIED;
 
 	int qos_clamp = task->requested_policy.t_qos_clamp;
+
+	if (task == bsd_init_task) {
+		/* PID 1 gets a special case */
+		primordial_qos = THREAD_QOS_USER_INITIATED;
+	}
 
 	switch (task->requested_policy.t_apptype) {
 		case TASK_APPTYPE_APP_TAL:
@@ -2663,7 +2777,7 @@ task_set_main_thread_qos(task_t task, thread_t main_thread) {
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	                          (IMPORTANCE_CODE(IMP_MAIN_THREAD_QOS, 0)) | DBG_FUNC_END,
-	                          audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
+	                          task_pid(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL),
 	                          primordial_qos, 0);
 }
 
@@ -2672,6 +2786,12 @@ boolean_t
 proc_task_is_tal(task_t task)
 {
 	return (task->requested_policy.t_apptype == TASK_APPTYPE_APP_TAL) ? TRUE : FALSE;
+}
+
+int
+task_get_apptype(task_t task)
+{
+	return task->requested_policy.t_apptype;
 }
 
 /* for telemetry */
@@ -2943,19 +3063,44 @@ proc_get_task_ruse_cpu(task_t task, uint32_t *policyp, uint8_t *percentagep, uin
 void
 proc_init_cpumon_params(void)
 {
+	/*
+	 * The max CPU percentage can be configured via the boot-args and
+	 * a key in the device tree. The boot-args are honored first, then the
+	 * device tree.
+	 */
 	if (!PE_parse_boot_argn("max_cpumon_percentage", &proc_max_cpumon_percentage,
-		sizeof (proc_max_cpumon_percentage))) {
-	 	proc_max_cpumon_percentage = DEFAULT_CPUMON_PERCENTAGE;
+		sizeof (proc_max_cpumon_percentage)))
+	{
+		uint64_t max_percentage = 0ULL;
+
+		if (!PE_get_default("kern.max_cpumon_percentage", &max_percentage,
+			sizeof(max_percentage)))
+		{
+			max_percentage = DEFAULT_CPUMON_PERCENTAGE;
+		}
+
+		assert(max_percentage <= UINT8_MAX);
+		proc_max_cpumon_percentage = (uint8_t) max_percentage;
 	}
 
 	if (proc_max_cpumon_percentage > 100) {
 		proc_max_cpumon_percentage = 100;
 	}
 
-	/* The interval should be specified in seconds. */ 
+	/*
+	 * The interval should be specified in seconds.
+	 *
+	 * Like the max CPU percentage, the max CPU interval can be configured
+	 * via boot-args and the device tree.
+	 */
 	if (!PE_parse_boot_argn("max_cpumon_interval", &proc_max_cpumon_interval,
-	 	sizeof (proc_max_cpumon_interval))) {
-	 	proc_max_cpumon_interval = DEFAULT_CPUMON_INTERVAL;
+		sizeof (proc_max_cpumon_interval)))
+	{
+		if (!PE_get_default("kern.max_cpumon_interval", &proc_max_cpumon_interval,
+			sizeof(proc_max_cpumon_interval)))
+		{
+			proc_max_cpumon_interval = DEFAULT_CPUMON_INTERVAL;
+		}
 	}
 
 	proc_max_cpumon_interval *= NSEC_PER_SEC;
@@ -3266,7 +3411,7 @@ task_set_cpuusage(task_t task, uint8_t percentage, uint64_t interval, uint64_t d
 
 			if (warn) {
 				int 	  pid = 0;
-				char 	  *procname = (char *)"unknown";
+				const char *procname = "unknown";
 
 #ifdef MACH_BSD
 				pid = proc_selfpid();
@@ -3495,19 +3640,19 @@ task_set_boost_locked(task_t task, boolean_t boost_active)
 {
 #if IMPORTANCE_DEBUG
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_BOOST, (boost_active ? IMP_BOOSTED : IMP_UNBOOSTED)) | DBG_FUNC_START),
-	                          proc_selfpid(), audit_token_pid_from_task(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL), 0);
+	                          proc_selfpid(), task_pid(task), trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL), 0);
 #endif
 
 	task->requested_policy.t_boosted = boost_active;
 
 #if IMPORTANCE_DEBUG
 	if (boost_active == TRUE){
-		DTRACE_BOOST2(boost, task_t, task, int, audit_token_pid_from_task(task));
+		DTRACE_BOOST2(boost, task_t, task, int, task_pid(task));
 	} else {
-		DTRACE_BOOST2(unboost, task_t, task, int, audit_token_pid_from_task(task));
+		DTRACE_BOOST2(unboost, task_t, task, int, task_pid(task));
 	}
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_BOOST, (boost_active ? IMP_BOOSTED : IMP_UNBOOSTED)) | DBG_FUNC_END),
-	                          proc_selfpid(), audit_token_pid_from_task(task),
+	                          proc_selfpid(), task_pid(task),
 	                          trequested_0(task, THREAD_NULL), trequested_1(task, THREAD_NULL), 0);
 #endif
 }
@@ -3741,7 +3886,7 @@ task_add_importance_watchport(task_t task, mach_port_t port, int *boostp)
 	int boost = 0;
 
 	__impdebug_only int released_pid = 0;
-	__impdebug_only int pid = audit_token_pid_from_task(task);
+	__impdebug_only int pid = task_pid(task);
 
 	ipc_importance_task_t release_imp_task = IIT_NULL;
 
@@ -3787,7 +3932,7 @@ task_add_importance_watchport(task_t task, mach_port_t port, int *boostp)
 			if (boost > 0)
 				ipc_importance_task_drop_internal_assertion(release_imp_task, boost);
 
-			// released_pid = audit_token_pid_from_task(release_imp_task); /* TODO: Need ref-safe way to get pid */
+			// released_pid = task_pid(release_imp_task); /* TODO: Need ref-safe way to get pid */
 			ipc_importance_task_release(release_imp_task);
 		}
 #if IMPORTANCE_DEBUG
@@ -3814,6 +3959,26 @@ task_add_importance_watchport(task_t task, mach_port_t port, int *boostp)
 #define TASK_IMPORTANCE_FOREGROUND     4
 #define TASK_IMPORTANCE_NOTDARWINBG    1
 
+
+/*
+ * (Un)Mark the task as a privileged listener for memory notifications.
+ * if marked, this task will be among the first to be notified amongst
+ * the bulk of all other tasks when the system enters a pressure level
+ * of interest to this task.
+ */
+int
+task_low_mem_privileged_listener(task_t task, boolean_t new_value, boolean_t *old_value)
+{
+	if (old_value != NULL) {
+		*old_value = (boolean_t)task->low_mem_privileged_listener;
+	} else {
+		task_lock(task);
+		task->low_mem_privileged_listener = (uint32_t)new_value;
+		task_unlock(task);
+	}
+
+	return 0;
+}
 
 /*
  * Checks if the task is already notified.

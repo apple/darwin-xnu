@@ -73,7 +73,7 @@ void
 kperf_threadinfo_sample(struct threadinfo *ti, struct kperf_context *context)
 {
 	thread_t cur_thread = context->cur_thread;
-	BUF_INFO1( PERF_TI_SAMPLE, (uintptr_t)cur_thread );
+	BUF_INFO1( PERF_TI_SAMPLE, (uintptr_t)thread_tid(cur_thread) );
 
 	// fill out the fields
 	ti->pid = context->cur_pid;
@@ -112,7 +112,7 @@ kperf_threadinfo_extra_sample(struct tinfo_ex *tex, struct kperf_context *contex
 	/* check if there's anything for us to do */
 	if( t_chud & T_AST_NAME )
 	{
-		BUF_INFO1( PERF_TI_XSAMPLE, (uintptr_t)cur_thread );
+		BUF_INFO1( PERF_TI_XSAMPLE, (uintptr_t)thread_tid(cur_thread) );
 
 		/* get the name out */
 #ifdef FIXME

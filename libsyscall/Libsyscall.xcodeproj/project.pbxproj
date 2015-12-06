@@ -45,6 +45,7 @@
 
 /* Begin PBXBuildFile section */
 		030B179B135377B400DAD1F0 /* open_dprotected_np.c in Sources */ = {isa = PBXBuildFile; fileRef = 030B179A135377B400DAD1F0 /* open_dprotected_np.c */; };
+		13B598941A142F6400DB2D5A /* stackshot.c in Sources */ = {isa = PBXBuildFile; fileRef = 13B598931A142F5900DB2D5A /* stackshot.c */; };
 		240BAC4C1214770F000A1719 /* memcpy.c in Sources */ = {isa = PBXBuildFile; fileRef = 24B028D511FF4FBB00CA64A9 /* memcpy.c */; };
 		2419382B12135FF6003CDE41 /* chmod.c in Sources */ = {isa = PBXBuildFile; fileRef = 2419382A12135FF6003CDE41 /* chmod.c */; };
 		242AB66611EBDC1200107336 /* errno.c in Sources */ = {isa = PBXBuildFile; fileRef = 242AB66511EBDC1200107336 /* errno.c */; };
@@ -104,6 +105,7 @@
 		29A59AE6183B110C00E8B896 /* unlinkat.c in Sources */ = {isa = PBXBuildFile; fileRef = 29A59AE5183B110C00E8B896 /* unlinkat.c */; };
 		2BA88DCC1810A3CE00EB63F6 /* coalition.c in Sources */ = {isa = PBXBuildFile; fileRef = 2BA88DCB1810A3CE00EB63F6 /* coalition.c */; };
 		374A36E314748F1300AAF39D /* varargs_wrappers.s in Sources */ = {isa = PBXBuildFile; fileRef = 374A36E214748EE400AAF39D /* varargs_wrappers.s */; };
+		435F3CAA1B06B7BA005ED9EF /* work_interval.c in Sources */ = {isa = PBXBuildFile; fileRef = 435F3CA91B06B7BA005ED9EF /* work_interval.c */; };
 		467DAFD4157E8AF200CE68F0 /* guarded_open_np.c in Sources */ = {isa = PBXBuildFile; fileRef = 467DAFD3157E8AF200CE68F0 /* guarded_open_np.c */; };
 		4BDD5F1D1891AB2F004BF300 /* mach_approximate_time.c in Sources */ = {isa = PBXBuildFile; fileRef = 4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */; };
 		4BDD5F1E1891AB2F004BF300 /* mach_approximate_time.s in Sources */ = {isa = PBXBuildFile; fileRef = 4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */; };
@@ -111,7 +113,6 @@
 		72B1E6ED190723DB00FB3FA2 /* guarded_open_dprotected_np.c in Sources */ = {isa = PBXBuildFile; fileRef = 72B1E6EC190723DB00FB3FA2 /* guarded_open_dprotected_np.c */; };
 		74119F46188F3B6A00C6F48F /* vm_page_size.h in Headers */ = {isa = PBXBuildFile; fileRef = 7466C923170CB99B004557CC /* vm_page_size.h */; };
 		7466C924170CBA53004557CC /* vm_page_size.h in Headers */ = {isa = PBXBuildFile; fileRef = 7466C923170CB99B004557CC /* vm_page_size.h */; };
-		746C7FEA18E48791008639D7 /* vm_page_size.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 7466C923170CB99B004557CC /* vm_page_size.h */; };
 		74F3290B18EB269400B2B70E /* vm_page_size.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 7466C923170CB99B004557CC /* vm_page_size.h */; };
 		7AE28FDF18AC41B1006A5626 /* csr.c in Sources */ = {isa = PBXBuildFile; fileRef = 7AE28FDE18AC41B1006A5626 /* csr.c */; };
 		9002401118FC9A7F00D73BFA /* rename_ext.c in Sources */ = {isa = PBXBuildFile; fileRef = 906AA2D018F74CD1001C681A /* rename_ext.c */; };
@@ -124,6 +125,7 @@
 		BA4414B518336E3600AAE813 /* mach in Copy Files */ = {isa = PBXBuildFile; fileRef = BA4414A51833697C00AAE813 /* mach */; };
 		BA4414B618336E3A00AAE813 /* servers in Copy Files */ = {isa = PBXBuildFile; fileRef = BA4414A6183369A100AAE813 /* servers */; };
 		BA4414B818336E6F00AAE813 /* mach in CopyFiles */ = {isa = PBXBuildFile; fileRef = BA4414A7183369C100AAE813 /* mach */; };
+		BABA36CB1A856C4700BBBCF7 /* host.c in Sources */ = {isa = PBXBuildFile; fileRef = BABA36CA1A856C4700BBBCF7 /* host.c */; };
 		C639F0E51741C25800A39F47 /* gethostuuid.h in Headers */ = {isa = PBXBuildFile; fileRef = C639F0E41741C09A00A39F47 /* gethostuuid.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		C6460B7C182025DF00F73CCA /* sfi.c in Sources */ = {isa = PBXBuildFile; fileRef = C6460B7B182025DF00F73CCA /* sfi.c */; };
 		C6AB38DB174202C10036DD9F /* gethostuuid.h in Headers */ = {isa = PBXBuildFile; fileRef = C639F0E41741C09A00A39F47 /* gethostuuid.h */; settings = {ATTRIBUTES = (Public, ); }; };
@@ -292,7 +294,6 @@
 			dstSubfolderSpec = 0;
 			files = (
 				BA4414AD18336A9300AAE813 /* mach in CopyFiles */,
-				746C7FEA18E48791008639D7 /* vm_page_size.h in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 1;
 		};
@@ -343,6 +344,7 @@
 
 /* Begin PBXFileReference section */
 		030B179A135377B400DAD1F0 /* open_dprotected_np.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = open_dprotected_np.c; sourceTree = "<group>"; };
+		13B598931A142F5900DB2D5A /* stackshot.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = stackshot.c; sourceTree = "<group>"; };
 		240D716711933ED300556E97 /* mach_install_mig.sh */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.sh; path = mach_install_mig.sh; sourceTree = "<group>"; };
 		2419382A12135FF6003CDE41 /* chmod.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = chmod.c; sourceTree = "<group>"; };
 		242AB66511EBDC1200107336 /* errno.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = errno.c; sourceTree = "<group>"; };
@@ -428,6 +430,7 @@
 		2BA88DCB1810A3CE00EB63F6 /* coalition.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = coalition.c; sourceTree = "<group>"; };
 		374A36E214748EE400AAF39D /* varargs_wrappers.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = varargs_wrappers.s; sourceTree = "<group>"; };
 		37DDFB7614748713009D3355 /* syscall.map */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = syscall.map; sourceTree = "<group>"; };
+		435F3CA91B06B7BA005ED9EF /* work_interval.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = work_interval.c; sourceTree = "<group>"; };
 		467DAFD3157E8AF200CE68F0 /* guarded_open_np.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = guarded_open_np.c; sourceTree = "<group>"; };
 		4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_approximate_time.c; sourceTree = "<group>"; };
 		4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = mach_approximate_time.s; sourceTree = "<group>"; };
@@ -442,6 +445,7 @@
 		BA4414A6183369A100AAE813 /* servers */ = {isa = PBXFileReference; lastKnownFileType = text; name = servers; path = mig_hdr/include/servers; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA4414A7183369C100AAE813 /* mach */ = {isa = PBXFileReference; lastKnownFileType = text; name = mach; path = mig_hdr/local/include/mach; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA5CDB4018AEBAD500E37982 /* __thread_selfusage.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = __thread_selfusage.s; sourceTree = "<group>"; };
+		BABA36CA1A856C4700BBBCF7 /* host.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = host.c; sourceTree = "<group>"; };
 		C639F0E41741C09A00A39F47 /* gethostuuid.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = gethostuuid.h; sourceTree = "<group>"; };
 		C6460B7B182025DF00F73CCA /* sfi.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = sfi.c; sourceTree = "<group>"; };
 		C6BEE9171806840200D25AAB /* posix_sem_obsolete.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = posix_sem_obsolete.c; sourceTree = "<group>"; };
@@ -606,6 +610,7 @@
 				C9D9BCD7114B00600000D8B9 /* fprintf_stderr.c */,
 				C9D9BCD8114B00600000D8B9 /* mach */,
 				C9D9BCE4114B00600000D8B9 /* host_priv.defs */,
+				BABA36CA1A856C4700BBBCF7 /* host.c */,
 				C9D9BCE5114B00600000D8B9 /* host_security.defs */,
 				C9D9BCEA114B00600000D8B9 /* lock_set.defs */,
 				C9D9BCEB114B00600000D8B9 /* mach_error_string.c */,
@@ -722,10 +727,12 @@
 				C962B16B18DBA2C80031244A /* setpriority.c */,
 				C6460B7B182025DF00F73CCA /* sfi.c */,
 				24B223B3121DFF12007DAEDE /* sigsuspend-base.c */,
+				13B598931A142F5900DB2D5A /* stackshot.c */,
 				248AA962122C7B2A0085F5B1 /* unlink.c */,
 				29A59AE5183B110C00E8B896 /* unlinkat.c */,
 				374A36E214748EE400AAF39D /* varargs_wrappers.s */,
 				BA0D9FB0199031AD007E8A73 /* kdebug_trace.c */,
+				435F3CA91B06B7BA005ED9EF /* work_interval.c */,
 			);
 			path = wrappers;
 			sourceTree = "<group>";
@@ -1223,6 +1230,7 @@
 				C9D9BD21114B00600000D8B9 /* exc_catcher.c in Sources */,
 				C9D9BD24114B00600000D8B9 /* fprintf_stderr.c in Sources */,
 				72B1E6ED190723DB00FB3FA2 /* guarded_open_dprotected_np.c in Sources */,
+				BABA36CB1A856C4700BBBCF7 /* host.c in Sources */,
 				C9D9BD36114B00600000D8B9 /* mach_error_string.c in Sources */,
 				C9D9BD37114B00600000D8B9 /* mach_error.c in Sources */,
 				C9D9BD3B114B00600000D8B9 /* mach_init.c in Sources */,
@@ -1268,6 +1276,7 @@
 				248BA01D121C56BF008C073F /* connect.c in Sources */,
 				248BA01F121C607E008C073F /* fchmod.c in Sources */,
 				E4D45C3616F86BD80002AF25 /* posix_spawn.c in Sources */,
+				13B598941A142F6400DB2D5A /* stackshot.c in Sources */,
 				C962B16C18DBA2C80031244A /* setpriority.c in Sources */,
 				248BA04F121C8F06008C073F /* fcntl.c in Sources */,
 				248BA05C121C9649008C073F /* fcntl-cancel.c in Sources */,
@@ -1297,6 +1306,7 @@
 				24B223B5121DFF29007DAEDE /* sigsuspend.c in Sources */,
 				248AA963122C7B2A0085F5B1 /* unlink.c in Sources */,
 				248AA965122C7C330085F5B1 /* rmdir.c in Sources */,
+				435F3CAA1B06B7BA005ED9EF /* work_interval.c in Sources */,
 				248AA967122C7CDA0085F5B1 /* rename.c in Sources */,
 				24B8C2621237F53900D36CC3 /* remove-counter.c in Sources */,
 				C99A4F501305B2BD0054B7B7 /* __get_cpu_capabilities.s in Sources */,
@@ -1350,7 +1360,7 @@
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
 				COPY_PHASE_STRIP = NO;
-				INSTALL_PATH_ACTUAL = /usr/local/lib/dyld;
+				INSTALL_PATH = /usr/local/lib/dyld;
 				STRIP_INSTALLED_PRODUCT = NO;
 			};
 			name = Release;
@@ -1377,9 +1387,12 @@
 				COPY_PHASE_STRIP = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				MAP_PLATFORM = "$(MAP_PLATFORM_$(PLATFORM_NAME))";
+				MAP_PLATFORM_appletvos = iPhoneOS;
 				MAP_PLATFORM_iphoneos = iPhoneOS;
 				MAP_PLATFORM_iphoneosnano = iPhoneOS;
 				MAP_PLATFORM_macosx = MacOSX;
+				MAP_PLATFORM_tvos = iPhoneOS;
+				MAP_PLATFORM_watchos = iPhoneOS;
 				PRODUCT_NAME = Syscalls;
 				STRIP_STYLE = debugging;
 			};

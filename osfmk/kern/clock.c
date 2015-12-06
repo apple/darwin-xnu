@@ -46,6 +46,8 @@
 #include <mach/mach_traps.h>
 #include <mach/mach_time.h>
 
+#include <sys/kdebug.h>
+
 uint32_t	hz_tick_interval = 1;
 
 
@@ -73,6 +75,7 @@ decl_simple_lock_data(,clock_lock)
 static struct clock_calend {
 	uint64_t	epoch;
 	uint64_t	offset;
+	uint64_t    epoch_absolute;
 
 	int32_t		adjdelta;	/* Nanosecond time delta for this adjustment period */
 	uint64_t	adjstart;	/* Absolute time value for start of this adjustment period */
@@ -121,12 +124,11 @@ static uint32_t		calend_set_adjustment(
 static void			calend_adjust_call(void);
 static uint32_t		calend_adjust(void);
 
-static thread_call_data_t	calend_wakecall;
-
-extern	void	IOKitResetTime(void);
-
 void _clock_delay_until_deadline(uint64_t		interval,
 								 uint64_t		deadline);
+void _clock_delay_until_deadline_with_leeway(uint64_t		interval,
+											 uint64_t		deadline,
+											 uint64_t		leeway);
 
 static uint64_t		clock_boottime;				/* Seconds boottime epoch */
 
@@ -159,7 +161,6 @@ clock_config(void)
 	clock_lock_init();
 
 	timer_call_setup(&calend_adjcall, (timer_call_func_t)calend_adjust_call, NULL);
-	thread_call_setup(&calend_wakecall, (thread_call_func_t)IOKitResetTime, NULL);
 
 	clock_oldconfig();
 }
@@ -438,6 +439,9 @@ clock_set_calendar_microtime(
 
 	nanoseconds_to_absolutetime((uint64_t)microsecs * NSEC_PER_USEC, &clock_calend.offset);
 
+	clock_interval_to_absolutetime_interval((uint32_t) secs, NSEC_PER_SEC, &clock_calend.epoch_absolute);
+	clock_calend.epoch_absolute += clock_calend.offset;
+
 	/*
 	 *	Cancel any adjustment in progress.
 	 */
@@ -471,11 +475,16 @@ clock_set_calendar_microtime(
  *
  *	Also sends host notifications.
  */
+
+uint64_t mach_absolutetime_asleep;
+uint64_t mach_absolutetime_last_sleep;
+
 void
 clock_initialize_calendar(void)
 {
 	clock_sec_t			sys, secs;
 	clock_usec_t 		microsys, microsecs;
+	uint64_t			new_epoch;
 	spl_t				s;
 
     PEGetUTCTimeOfDay(&secs, &microsecs);
@@ -502,9 +511,27 @@ clock_initialize_calendar(void)
 		/*
 		 *	Set the new calendar epoch.
 		 */
+
 		clock_calend.epoch = secs;
 
 		nanoseconds_to_absolutetime((uint64_t)microsecs * NSEC_PER_USEC, &clock_calend.offset);
+
+		clock_interval_to_absolutetime_interval((uint32_t) secs, NSEC_PER_SEC, &new_epoch);
+		new_epoch += clock_calend.offset;
+
+		if (clock_calend.epoch_absolute)
+		{
+			mach_absolutetime_last_sleep = new_epoch - clock_calend.epoch_absolute;
+			mach_absolutetime_asleep += mach_absolutetime_last_sleep;
+			KERNEL_DEBUG_CONSTANT(
+				  MACHDBG_CODE(DBG_MACH_CLOCK,MACH_EPOCH_CHANGE) | DBG_FUNC_NONE,
+				  (uintptr_t) mach_absolutetime_last_sleep, 
+				  (uintptr_t) mach_absolutetime_asleep, 
+				  (uintptr_t) (mach_absolutetime_last_sleep >> 32), 
+				  (uintptr_t) (mach_absolutetime_asleep >> 32), 
+				  0);
+		}
+		clock_calend.epoch_absolute = new_epoch;
 
 		/*
 		 *	 Cancel any adjustment in progress.
@@ -774,19 +801,6 @@ calend_adjust(void)
 }
 
 /*
- *	clock_wakeup_calendar:
- *
- *	Interface to power management, used
- *	to initiate the reset of the calendar
- *	on wake from sleep event.
- */
-void
-clock_wakeup_calendar(void)
-{
-	thread_call_enter(&calend_wakecall);
-}
-
-/*
  *	Wait / delay routines.
  */
 static void
@@ -843,6 +857,19 @@ _clock_delay_until_deadline(
 	uint64_t		interval,
 	uint64_t		deadline)
 {
+	_clock_delay_until_deadline_with_leeway(interval, deadline, 0);
+}
+
+/*
+ * Like _clock_delay_until_deadline, but it accepts a
+ * leeway value.
+ */
+void
+_clock_delay_until_deadline_with_leeway(
+	uint64_t		interval,
+	uint64_t		deadline,
+	uint64_t		leeway)
+{
 
 	if (interval == 0)
 		return;
@@ -852,12 +879,20 @@ _clock_delay_until_deadline(
 			ml_get_interrupts_enabled() == FALSE	) {
 		machine_delay_until(interval, deadline);
 	} else {
-		assert_wait_deadline((event_t)clock_delay_until, THREAD_UNINT, deadline);
+		/*
+		 * For now, assume a leeway request of 0 means the client does not want a leeway
+		 * value. We may want to change this interpretation in the future.
+		 */
+
+		if (leeway) {
+			assert_wait_deadline_with_leeway((event_t)clock_delay_until, THREAD_UNINT, TIMEOUT_URGENCY_LEEWAY, deadline, leeway);
+		} else {
+			assert_wait_deadline((event_t)clock_delay_until, THREAD_UNINT, deadline);
+		}
 
 		thread_block(THREAD_CONTINUE_NULL);
 	}
 }
-
 
 void
 delay_for_interval(
@@ -869,6 +904,21 @@ delay_for_interval(
 	clock_interval_to_absolutetime_interval(interval, scale_factor, &abstime);
 
 	_clock_delay_until_deadline(abstime, mach_absolute_time() + abstime);
+}
+
+void
+delay_for_interval_with_leeway(
+	uint32_t		interval,
+	uint32_t		leeway,
+	uint32_t		scale_factor)
+{
+	uint64_t		abstime_interval;
+	uint64_t		abstime_leeway;
+
+	clock_interval_to_absolutetime_interval(interval, scale_factor, &abstime_interval);
+	clock_interval_to_absolutetime_interval(leeway, scale_factor, &abstime_leeway);
+
+	_clock_delay_until_deadline_with_leeway(abstime_interval, mach_absolute_time() + abstime_interval, abstime_leeway);
 }
 
 void

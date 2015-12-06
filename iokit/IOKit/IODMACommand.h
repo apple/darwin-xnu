@@ -31,6 +31,7 @@
 #include <IOKit/IOCommand.h>
 #include <IOKit/IOMemoryDescriptor.h>
 class IOMapper;
+class IOBufferMemoryDescriptor;
 
 /**************************** class IODMACommand ***************************/
 
@@ -45,6 +46,20 @@ class IOMapper;
 <br><br>
     The IODMACommand can be used in a 'weak-linked' manner.  To do this you must avoid using any static member functions.  Use the, much slower but safe, weakWithSpecification function.  On success a dma command instance will be returned.  This instance can then be used to clone as many commands as is needed.  Remember deriving from this class can not be done weakly, that is no weak subclassing!
 */
+
+
+enum 
+{
+    kIODMAMapOptionMapped       = 0x00000000,
+    kIODMAMapOptionBypassed     = 0x00000001,
+    kIODMAMapOptionNonCoherent  = 0x00000002,
+    kIODMAMapOptionUnmapped     = 0x00000003,
+    kIODMAMapOptionTypeMask     = 0x0000000f,
+
+    kIODMAMapOptionNoCacheStore = 0x00000010,	// Memory in descriptor 
+    kIODMAMapOptionOnChip       = 0x00000020,	// Indicates DMA is on South Bridge
+    kIODMAMapOptionIterateOnly  = 0x00000040	// DMACommand will be used as a cursor only
+};
 
 class IODMACommand : public IOCommand
 {
@@ -78,14 +93,25 @@ public:
     @constant kMaxMappingOptions	Internal use only
 */
     enum MappingOptions {
-	kMapped       = 0x00000000,
-	kBypassed     = 0x00000001,
-	kNonCoherent  = 0x00000002,
-	kTypeMask     = 0x0000000f,
+	kMapped       = kIODMAMapOptionMapped,
+	kBypassed     = kIODMAMapOptionBypassed,
+	kNonCoherent  = kIODMAMapOptionNonCoherent,
+	kUnmapped     = kIODMAMapOptionUnmapped,
+	kTypeMask     = kIODMAMapOptionTypeMask,
 
-	kNoCacheStore = 0x00000010,	// Memory in descriptor 
-	kOnChip       = 0x00000020,	// Indicates DMA is on South Bridge
-	kIterateOnly  = 0x00000040	// DMACommand will be used as a cursor only
+	kNoCacheStore = kIODMAMapOptionNoCacheStore,	// Memory in descriptor 
+	kOnChip       = kIODMAMapOptionOnChip,	        // Indicates DMA is on South Bridge
+	kIterateOnly  = kIODMAMapOptionIterateOnly	// DMACommand will be used as a cursor only
+    };
+
+    struct SegmentOptions {
+	uint8_t  fStructSize;
+	uint8_t  fNumAddressBits;
+	uint64_t fMaxSegmentSize;
+	uint64_t fMaxTransferSize;
+	uint32_t fAlignment;
+	uint32_t fAlignmentLength;
+	uint32_t fAlignmentInternalSegments;
     };
 
 /*! @enum SynchronizeOptions
@@ -187,7 +213,8 @@ public:
     @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
     @param alignment Alignment restriction, in bytes, on I/O bus addresses.  Defaults to single byte alignment.
     @param mapper For mapping types kMapped & kBypassed mapper is used to define the hardware that will perform the mapping, defaults to the system mapper.
-    @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
+    @param refCon Reference Constant
+    @result Returns a new IODMACommand if successfully created and initialized, 0 otherwise.
 */
     static IODMACommand *
 	withSpecification(SegmentFunction  outSegFunc,
@@ -210,6 +237,7 @@ public:
     @param maxTransferSize Maximum size of an entire transfer.  Defaults to 0 indicating no maximum.
     @param alignment Alignment restriction, in bytes, on I/O bus addresses.  Defaults to single byte alignment.
     @param mapper For mapping types kMapped & kBypassed mapper is used to define the hardware that will perform the mapping, defaults to the system mapper.
+    @param refCon Reference Constant
     @result kIOReturnSuccess if everything is OK, otherwise kIOReturnBadArgument if newCommand is NULL, kIOReturnUnsupported if the kernel doesn't export IODMACommand or IOReturnError if the new command fails to init, q.v. initWithSpecification.
 */
     // Note that the function has the attribute always_inline.
@@ -228,11 +256,27 @@ public:
 	     IOMapper       *mapper = 0,
 	     void           *refCon = 0) __attribute__((always_inline));
 
+    static IODMACommand *
+	withSpecification(SegmentFunction        outSegFunc,
+			  const SegmentOptions * segmentOptions,
+			  uint32_t       	 mappingOptions,
+			  IOMapper             * mapper,
+			  void                 * refCon);
+
+
+/*! @function withRefCon
+    @abstract Creates and initializes an unspecified IODMACommand.
+    @discussion Factory function to create and initialize an unspecified IODMACommand. prepareWithSpecification() must be used to prepare the IODMACommand before use.
+    @param refCon Reference Constant
+    @result Returns a new IODMACommand if successfully created and initialized, 0 otherwise.
+*/
+    static IODMACommand * withRefCon(void * refCon);
+
 /*!
     @function cloneCommand
     @abstract Creates a new command based on the specification of the current one.
     @discussion Factory function to create and initialise an IODMACommand in one operation.  The current command's specification will be duplicated in the new object, but however none of its state will be duplicated.  This means that it is safe to clone a command even if it is currently active and running, however you must be certain that the command to be duplicated does have a valid reference for the duration.
-    @result Returns a new memory cursor if successfully created and initialised, 0 otherwise.
+    @result Returns a new IODMACommand if successfully created and initialised, 0 otherwise.
 */
     virtual IODMACommand *cloneCommand(void *refCon = 0);
 
@@ -245,6 +289,7 @@ public:
     @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
     @param alignment Alignment restriction, in bytes, on I/O bus addresses.  Defaults to single byte alignment.
     @param mapper For mapping types kMapped & kBypassed mapper is used to define the hardware that will perform the mapping, defaults to the system mapper.
+    @param refCon Reference Constant
     @result Can fail if the mapping type is not recognised, if one of the 3 mandatory parameters are set to 0, if a 32 bit output function is selected when more than 32 bits of address is required or, if kBypassed is requested on a machine that doesn't support bypassing.  Returns true otherwise.
 */
     virtual bool initWithSpecification( SegmentFunction  outSegFunc,
@@ -277,6 +322,11 @@ public:
     @abstract Get the current memory descriptor
 */
     virtual const IOMemoryDescriptor *getMemoryDescriptor() const;
+
+/*! @function getIOMemoryDescriptor
+    @abstract Get the memory descriptor to be used for DMA
+*/
+    IOMemoryDescriptor * getIOMemoryDescriptor() const;
 
 /*! @function prepare
     @abstract Prepare the memory for an I/O transfer.
@@ -362,15 +412,20 @@ public:
 				      UInt32    *numSegments)
     { return genIOVMSegments(offset, segments, numSegments); };
 
-	IOReturn
-	genIOVMSegments(SegmentFunction segmentFunction,
-							UInt64 *offsetP,
-							void   *segmentsP,
-							UInt32 *numSegmentsP);
-	
-    virtual void free();
+    IOReturn
+    genIOVMSegments(SegmentFunction segmentFunction,
+		    UInt64 *offsetP,
+		    void   *segmentsP,
+		    UInt32 *numSegmentsP);
+    
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
 private:
+    IOReturn setSpecification(SegmentFunction        outSegFunc,
+			      const SegmentOptions * segmentOptions,
+			      uint32_t               mappingOptions,
+			      IOMapper             * mapper);
+
     typedef IOReturn (*InternalSegmentFunction)(
 				    void         *reference,
 				    IODMACommand *target,
@@ -428,12 +483,11 @@ public:
 					      bool		flushCache = true,
 					      bool		synchronize = true);
 
-    static IOReturn transferSegment(
-			void         *reference,
-			IODMACommand *target,
-			Segment64     segment,
-			void         *segments,
-			UInt32        segmentIndex);
+    static IOReturn transferSegment(void         *reference,
+				    IODMACommand *target,
+				    Segment64     segment,
+				    void         *segments,
+				    UInt32        segmentIndex);
 
 /*! @function getPreparedOffsetAndLength
     @abstract Returns the offset and length into the target IOMemoryDescriptor of a prepared IODDMACommand.
@@ -444,17 +498,49 @@ public:
 
     virtual IOReturn getPreparedOffsetAndLength(UInt64 * offset, UInt64 * length);
 
-	UInt8	 getNumAddressBits(void);
-	UInt32	 getAlignment(void);
-	
+    UInt8    getNumAddressBits(void);
+    UInt32   getAlignment(void);
+    uint32_t getAlignmentLength(void);
+    uint32_t getAlignmentInternalSegments(void);
+
+
+/*! @function initWithRefCon
+    @abstract Secondary initializer for the IODMACommand class. 
+    @param refCon Reference Constant
+    @result Can fail if super init fails.  Returns true otherwise.
+*/
+
+    virtual
+    bool initWithRefCon(void * refCon = 0);
+
+    virtual
+    bool initWithSpecification(SegmentFunction	      outSegFunc,
+			       const SegmentOptions * segmentOptions,
+			       uint32_t  	      mappingOptions,
+			       IOMapper             * mapper,
+			       void                 * refCon);
+
+    virtual
+    IOReturn prepareWithSpecification(SegmentFunction	     outSegFunc,
+			              const SegmentOptions * segmentOptions,
+				      uint32_t	             mappingOptions,
+				      IOMapper		   * mapper,
+				      uint64_t		     offset,
+				      uint64_t		     length,
+				      bool		     flushCache = true,
+				      bool		     synchronize = true);
+
+    virtual
+    IOBufferMemoryDescriptor * createCopyBuffer(IODirection direction, UInt64 length);
+    	
 private:
     OSMetaClassDeclareReservedUsed(IODMACommand,  0);
     OSMetaClassDeclareReservedUsed(IODMACommand,  1);
     OSMetaClassDeclareReservedUsed(IODMACommand,  2);
-    OSMetaClassDeclareReservedUnused(IODMACommand,  3);
-    OSMetaClassDeclareReservedUnused(IODMACommand,  4);
-    OSMetaClassDeclareReservedUnused(IODMACommand,  5);
-    OSMetaClassDeclareReservedUnused(IODMACommand,  6);
+    OSMetaClassDeclareReservedUsed(IODMACommand,  3);
+    OSMetaClassDeclareReservedUsed(IODMACommand,  4);
+    OSMetaClassDeclareReservedUsed(IODMACommand,  5);
+    OSMetaClassDeclareReservedUsed(IODMACommand,  6);
     OSMetaClassDeclareReservedUnused(IODMACommand,  7);
     OSMetaClassDeclareReservedUnused(IODMACommand,  8);
     OSMetaClassDeclareReservedUnused(IODMACommand,  9);
@@ -478,9 +564,8 @@ protected:
     Maximum size of a transfer that this memory cursor is allowed to generate */
     UInt64  fMaxTransferSize;
 
-/*! @var fBypassMask
-    Mask to be ored into the address to bypass the given iommu's mapping. */
-    UInt64  fBypassMask;
+    UInt32  fAlignMaskLength;
+    UInt32  fAlignMaskInternalSegments;
 
 /*! @var fMapper
     Client defined mapper. */
@@ -507,7 +592,7 @@ protected:
 
 /*! @var fMappingOptions
     What type of I/O virtual address mapping is required for this command */
-    MappingOptions  fMappingOptions;
+    uint32_t  fMappingOptions;
 
 /*! @var fActive
     fActive indicates that this DMA command is currently prepared and ready to go */

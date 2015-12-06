@@ -61,15 +61,17 @@ $(SOBJS): .SFLAGS
 .SFLAGS: ALWAYS
 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
+KLD_FILES = $(OBJS)
+
 $(COMPONENT).filelist: $(OBJS)
-	$(_v)for kld_file in ${OBJS}; do      \
-		$(SEG_HACK) -n __KLD -o $${kld_file}__ $${kld_file} ; \
-		mv $${kld_file}__ $${kld_file} ; \
+	$(_v)for kld_file in ${KLD_FILES}; do      \
+		$(SEG_HACK) -n __KLD -o $${kld_file}__ $${kld_file} || exit 1; \
+		mv $${kld_file}__ $${kld_file} || exit 1; \
 	done
 	@echo LDFILELIST $(COMPONENT)
-	$(_v)( for obj in ${OBJS}; do	\
+	$(_v)for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
-	done; ) > $(COMPONENT).filelist
+	done > $(COMPONENT).filelist
 
 
 do_all: $(COMPONENT).filelist
@@ -80,3 +82,10 @@ do_build_all:: do_all
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
+
+# the KLD segment is mapped read-only on arm, so if we include llvm profiling
+# here it will segfault the kernel.  (see arm_vm_init.c) We don't currently have
+# a way of retrieving these counters from KLD anyway, so there's no harm in just
+# disabling them.
+CXXFLAGS_GEN:=$(filter-out -fprofile-instr-generate,$(CXXFLAGS_GEN))
+CFLAGS_GEN:=$(filter-out -fprofile-instr-generate,$(CFLAGS_GEN))

@@ -173,13 +173,13 @@ default_pager(void)
 		if (dpt_array[id] == NULL)
 	 		Panic("alloc pager thread");
 		kr = vm_allocate(kernel_map, &((dpt_array[id])->dpt_buffer),
-				 vm_page_size << vstruct_def_clshift, VM_FLAGS_ANYWHERE);
+				 vm_page_size << vstruct_def_clshift, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_OSFMK));
 		if (kr != KERN_SUCCESS)
 			Panic("alloc thread buffer");
 		kr = vm_map_wire(kernel_map, (dpt_array[id])->dpt_buffer, 
 			((dpt_array[id])->dpt_buffer)
 					+(vm_page_size << vstruct_def_clshift), 
-			VM_PROT_DEFAULT,
+			VM_PROT_DEFAULT | VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_OSFMK),
 			FALSE);
 		if (kr != KERN_SUCCESS)
 			Panic("wire thread buffer");

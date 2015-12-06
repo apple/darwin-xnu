@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -2312,16 +2312,20 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 	VERIFY(mli->mli_ifp == ifp);
 
 	/*
-	 * Groups joined on loopback or marked as 'not reported',
-	 * enter the MLD_SILENT_MEMBER state and
-	 * are never reported in any protocol exchanges.
+	 * Avoid MLD if group is :
+	 * 1. Joined on loopback, OR
+	 * 2. On a link that is marked MLIF_SILENT
+	 * 3. rdar://problem/19227650 Is link local scoped and
+	 *    on cellular interface
+	 * 4. Is a type that should not be reported (node local
+	 *    or all node link local multicast.
 	 * All other groups enter the appropriate state machine
 	 * for the version in use on this link.
-	 * A link marked as MLIF_SILENT causes MLD to be completely
-	 * disabled for the link.
 	 */
 	if ((ifp->if_flags & IFF_LOOPBACK) ||
 	    (mli->mli_flags & MLIF_SILENT) ||
+	    (IFNET_IS_CELLULAR(ifp) &&
+	     IN6_IS_ADDR_MC_LINKLOCAL(&inm->in6m_addr)) ||
 	    !mld_is_addr_reported(&inm->in6m_addr)) {
 		MLD_PRINTF(("%s: not kicking state machine for silent group\n",
 		    __func__));

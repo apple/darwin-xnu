@@ -57,7 +57,7 @@
 extern cpu_type_t cpuid_cputype(void);
 extern cpu_subtype_t cpuid_cpusubtype(void);
 
-extern vm_offset_t machine_trace_thread_get_kva(vm_offset_t cur_target_addr);
+extern vm_offset_t machine_trace_thread_get_kva(vm_offset_t cur_target_addr, vm_map_t map, uint32_t *thread_trace_flags);
 extern void machine_trace_thread_clear_validation_cache(void);
 
 void		print_saved_state(void *);
@@ -69,10 +69,10 @@ void		kdp_setstate(x86_thread_state64_t *);
 void		kdp_print_phys(int);
 
 int
-machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p);
+machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p, uint32_t *thread_trace_flags);
 
 int
-machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p);
+machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p, uint32_t *thread_trace_flags);
 
 unsigned
 machine_read64(addr64_t srcaddr, caddr_t dstaddr, uint32_t len);
@@ -510,7 +510,7 @@ extern pmap_t kdp_pmap;
 #define RETURN_OFFSET 4
 
 int
-machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p)
+machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p, uint32_t *thread_trace_flags)
 {
 	uint32_t *tracebuf = (uint32_t *)tracepos;
 	uint32_t fence = 0;
@@ -535,6 +535,13 @@ machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nfra
 	else
 		panic("32-bit trace attempted on 64-bit kernel");
 
+    /* bounds check before we start advancing tracebuf */
+    if ((tracebound - ((char *)tracebuf)) < (4 * framesize)) {
+        machine_trace_thread_clear_validation_cache();
+        kdp_pmap = 0;
+        return 0;
+    }
+
 	*tracebuf++ = init_eip;
 
 	for (framecount = 0; framecount < nframes; framecount++) {
@@ -545,7 +552,7 @@ machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nfra
 		}
 
 		*tracebuf++ = stackptr;
-/* Invalid frame, or hit fence */
+		/* Invalid frame, or hit fence */
 		if (!stackptr || (stackptr == fence)) {
 			break;
 		}
@@ -563,9 +570,12 @@ machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nfra
 			break;
 		}
 
-		kern_virt_addr = machine_trace_thread_get_kva(stackptr + RETURN_OFFSET);
+		kern_virt_addr = machine_trace_thread_get_kva(stackptr + RETURN_OFFSET, thread->task->map, thread_trace_flags);
 
 		if (!kern_virt_addr) {
+			if (thread_trace_flags) {
+				*thread_trace_flags |= kThreadTruncatedBT;
+			}
 			break;
 		}
 
@@ -573,16 +583,21 @@ machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nfra
 		tracebuf++;
 		
 		prevsp = stackptr;
-		kern_virt_addr = machine_trace_thread_get_kva(stackptr);
+		kern_virt_addr = machine_trace_thread_get_kva(stackptr, thread->task->map, thread_trace_flags);
 
 		if (!kern_virt_addr) {
+			if (thread_trace_flags) {
+				*thread_trace_flags |= kThreadTruncatedBT;
+			}
+
+			/* We need to fill in a complete LR/FP record, even if we couldn't find a FP */
 			*tracebuf++ = 0;
 			break;
 		}
 
 		stackptr = *(uint32_t *)kern_virt_addr;
 	}
-
+    
 	machine_trace_thread_clear_validation_cache();
 	kdp_pmap = 0;
 
@@ -599,7 +614,7 @@ machine_read64(addr64_t srcaddr, caddr_t dstaddr, uint32_t len)
 }
 
 int
-machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p)
+machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p, uint32_t *thread_trace_flags)
 {
 	uint64_t *tracebuf = (uint64_t *)tracepos;
 	uint32_t fence = 0;
@@ -621,11 +636,17 @@ machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nf
 		stackptr = STACK_IKS(thread->kernel_stack)->k_rbp;
 		init_rip = STACK_IKS(thread->kernel_stack)->k_rip;
 		init_rip = VM_KERNEL_UNSLIDE(init_rip);
-		kdp_pmap = 0;
+        kdp_pmap = NULL;
 	}
 
-	*tracebuf++ = init_rip;
-
+    /* bounds check before we start advancing tracebuf */
+    if ((uint32_t)(tracebound - ((char *)tracebuf)) < (4 * framesize)) {
+        machine_trace_thread_clear_validation_cache();
+        kdp_pmap = NULL;
+        return 0;
+    }
+    *tracebuf++ = init_rip;
+    
 	for (framecount = 0; framecount < nframes; framecount++) {
 
 		if ((uint32_t)(tracebound - ((char *)tracebuf)) < (4 * framesize)) {
@@ -647,9 +668,12 @@ machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nf
 			break;
 		}
 
-		kern_virt_addr = machine_trace_thread_get_kva(stackptr + RETURN_OFFSET64);
+		kern_virt_addr = machine_trace_thread_get_kva(stackptr + RETURN_OFFSET64, thread->task->map, thread_trace_flags);
 
 		if (!kern_virt_addr) {
+			if (thread_trace_flags) {
+				*thread_trace_flags |= kThreadTruncatedBT;
+			}
 			break;
 		}
 
@@ -660,9 +684,14 @@ machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nf
 		tracebuf++;
 
 		prevsp = stackptr;
-		kern_virt_addr = machine_trace_thread_get_kva(stackptr);
+		kern_virt_addr = machine_trace_thread_get_kva(stackptr, thread->task->map, thread_trace_flags);
 
 		if (!kern_virt_addr) {
+			if (thread_trace_flags) {
+				*thread_trace_flags |= kThreadTruncatedBT;
+			}
+
+			/* We need to fill in a complete LR/FP record, even if we couldn't find a FP */
 			*tracebuf++ = 0;
 			break;
 		}

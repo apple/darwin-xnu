@@ -74,14 +74,13 @@
 #include <mach/mach_types.h>
 #include <kern/ast.h>
 #include <kern/cpu_number.h>
+#include <kern/smp.h>
 #include <kern/simple_lock.h>
 #include <kern/locks.h>
 #include <kern/queue.h>
 #include <kern/sched.h>
 #include <mach/sfi_class.h>
 #include <kern/processor_data.h>
-
-#include <machine/ast_types.h>
 
 struct processor_set {
 	queue_head_t		active_queue;	/* active processors */
@@ -93,7 +92,9 @@ struct processor_set {
 	int					cpu_set_low, cpu_set_hi;
 	int					cpu_set_count;
 
+#if __SMP__
 	decl_simple_lock_data(,sched_lock)	/* lock for above */
+#endif
 
 #if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
 	struct run_queue	pset_runq;      /* runq for this processor set */
@@ -105,7 +106,21 @@ struct processor_set {
 #endif
 
 	/* CPUs that have been sent an unacknowledged remote AST for scheduling purposes */
-	uint32_t			pending_AST_cpu_mask;
+	uint64_t			pending_AST_cpu_mask;
+#if defined(CONFIG_SCHED_DEFERRED_AST)
+	/*
+	 * A seperate mask, for ASTs that we may be able to cancel.  This is dependent on
+	 * some level of support for requesting an AST on a processor, and then quashing
+	 * that request later.
+	 *
+	 * The purpose of this field (and the associated codepaths) is to infer when we
+	 * no longer need a processor that is DISPATCHING to come up, and to prevent it
+	 * from coming out of IDLE if possible.  This should serve to decrease the number
+	 * of spurious ASTs in the system, and let processors spend longer periods in
+	 * IDLE.
+	 */
+	uint64_t			pending_deferred_AST_cpu_mask;
+#endif
 
 	struct ipc_port	*	pset_self;		/* port for operations */
 	struct ipc_port *	pset_name_self;	/* port for information */
@@ -136,6 +151,7 @@ struct processor {
 										 * MUST remain the first element */
 	int					state;			/* See below */
 	boolean_t		is_SMT;
+	boolean_t		is_recommended;
 	struct thread
 						*active_thread,	/* thread running on processor */
 						*next_thread,	/* next thread when dispatched */
@@ -153,7 +169,7 @@ struct processor {
 	uint64_t			last_dispatch;	/* time of last dispatch */
 
 	uint64_t			deadline;		/* current deadline */
-	int					timeslice;		/* quanta before timeslice ends */
+	boolean_t               first_timeslice;                /* has the quantum expired since context switch */
 
 #if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
 	struct run_queue	runq;			/* runq for this processor */
@@ -211,7 +227,28 @@ extern boolean_t		sched_stats_active;
  *  When a processor is in DISPATCHING or RUNNING state, the current_pri,
  *  current_thmode, and deadline fields should be set, so that other
  *  processors can evaluate if it is an appropriate candidate for preemption.
-*/
+ */
+#if defined(CONFIG_SCHED_DEFERRED_AST)
+/*
+ *           -------------------- SHUTDOWN
+ *          /                     ^     ^
+ *        _/                      |      \
+ *  OFF_LINE ---> START ---> RUNNING ---> IDLE ---> DISPATCHING
+ *         \_________________^   ^ ^______/ ^_____ /  /
+ *                                \__________________/
+ *
+ *  A DISPATCHING processor may be put back into IDLE, if another
+ *  processor determines that the target processor will have nothing to do
+ *  upon reaching the RUNNING state.  This is racy, but if the target
+ *  responds and becomes RUNNING, it will not break the processor state
+ *  machine.
+ *
+ *  This change allows us to cancel an outstanding signal/AST on a processor
+ *  (if such an operation is supported through hardware or software), and
+ *  push the processor back into the IDLE state as a power optimization.
+ */
+#endif
+
 #define PROCESSOR_OFF_LINE		0	/* Not available */
 #define PROCESSOR_SHUTDOWN		1	/* Going off-line */
 #define PROCESSOR_START			2	/* Being started */
@@ -222,11 +259,17 @@ extern boolean_t		sched_stats_active;
 
 extern processor_t	current_processor(void);
 
-/* Lock macros */
+/* Lock macros, always acquired and released with interrupts disabled (splsched()) */
 
+#if __SMP__
 #define pset_lock(p)			simple_lock(&(p)->sched_lock)
 #define pset_unlock(p)			simple_unlock(&(p)->sched_lock)
 #define pset_lock_init(p)		simple_lock_init(&(p)->sched_lock, 0)
+#else
+#define pset_lock(p)			do { (void)p; } while(0)
+#define pset_unlock(p)			do { (void)p; } while(0)
+#define pset_lock_init(p)		do { (void)p; } while(0)
+#endif
 
 extern void		processor_bootstrap(void);
 
@@ -272,6 +315,15 @@ extern processor_t		machine_choose_processor(
 							processor_t			processor);
 
 #define next_pset(p)	(((p)->pset_list != PROCESSOR_SET_NULL)? (p)->pset_list: (p)->node->psets)
+
+#define PSET_THING_TASK		0
+#define PSET_THING_THREAD	1
+
+extern kern_return_t	processor_set_things(
+                    	processor_set_t pset,
+			void **thing_list,
+			mach_msg_type_number_t *count,
+			int type);
 
 #else	/* MACH_KERNEL_PRIVATE */
 

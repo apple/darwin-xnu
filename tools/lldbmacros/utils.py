@@ -362,6 +362,22 @@ def loadDSYM(uuid, load_address):
     debuglog(cmd_str)
     lldb.debugger.HandleCommand(cmd_str)
 
+def RunShellCommand(command):
+    """ Run a shell command in subprocess.
+        params: command with arguments to run
+        returns: (exit_code, stdout, stderr)
+    """
+    import shlex, subprocess
+    cmd_args = shlex.split(command)
+    output_str = ""
+    exit_code = 0
+    try:
+        output_str = subprocess.check_output(cmd_args, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError, e:
+        exit_code = e.returncode
+    finally:
+        return (exit_code, output_str, '')
+
 def dsymForUUID(uuid):
     """ Get dsym informaiton by calling dsymForUUID 
         params: uuid - str - uuid string from executable. eg. 4DD2344C0-4A81-3EAB-BDCF-FEAFED9EB73E
@@ -393,3 +409,15 @@ def debuglog(s):
     if config['debug']:
       print "DEBUG:",s
     return None
+
+def IsAppleInternal():
+    """ check if apple_internal modules are available
+        returns: True if apple_internal module is present
+    """
+    import imp
+    try:
+        imp.find_module("apple_internal")
+        retval = True
+    except ImportError:
+        retval = False
+    return retval

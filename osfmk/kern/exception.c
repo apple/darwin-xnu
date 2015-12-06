@@ -86,6 +86,8 @@
 #include <string.h>
 #include <pexpert/pexpert.h>
 
+extern int panic_on_exception_triage;
+
 unsigned long c_thr_exc_raise = 0;
 unsigned long c_thr_exc_raise_state = 0;
 unsigned long c_thr_exc_raise_state_id = 0;
@@ -103,7 +105,7 @@ kern_return_t exception_deliver(
 	lck_mtx_t			*mutex);
 
 static kern_return_t
-check_exc_receiver_dependancy(
+check_exc_receiver_dependency(
 	exception_type_t exception, 
 	struct exception_action *excp, 
 	lck_mtx_t *mutex);
@@ -147,7 +149,7 @@ exception_deliver(
 	 *  Save work if we are terminating.
 	 *  Just go back to our AST handler.
 	 */
-	if (!thread->active)
+	if (!thread->active && !thread->inspection)
 		return KERN_SUCCESS;
 
 	/*
@@ -226,7 +228,7 @@ exception_deliver(
 						state, state_cnt,
 						state, &state_cnt);
 			}
-			if (kr == MACH_MSG_SUCCESS)
+			if (kr == MACH_MSG_SUCCESS && exception != EXC_CORPSE_NOTIFY)
 				kr = thread_setstatus(thread, flavor, 
 						(thread_state_t)state,
 						state_cnt);
@@ -287,7 +289,7 @@ exception_deliver(
 						state, state_cnt,
 						state, &state_cnt);
 			}
-			if (kr == MACH_MSG_SUCCESS)
+			if (kr == MACH_MSG_SUCCESS && exception != EXC_CORPSE_NOTIFY)
 				kr = thread_setstatus(thread, flavor,
 						(thread_state_t)state,
 						state_cnt);
@@ -303,7 +305,7 @@ exception_deliver(
 }
 
 /*
- * Routine: check_exc_receiver_dependancy
+ * Routine: check_exc_receiver_dependency
  * Purpose:
  *      Verify that the port destined for receiving this exception is not
  *      on the current task. This would cause hang in kernel for
@@ -317,7 +319,7 @@ exception_deliver(
  *      KERN_SUCCESS if its ok to send exception message.
  */
 kern_return_t
-check_exc_receiver_dependancy(
+check_exc_receiver_dependency(
 	exception_type_t exception,
 	struct exception_action *excp,
 	lck_mtx_t *mutex)
@@ -339,7 +341,7 @@ check_exc_receiver_dependancy(
 }
 
 /*
- *	Routine:	exception
+ *	Routine:	exception_triage
  *	Purpose:
  *		The current thread caught an exception.
  *		We make an up-call to the thread's exception server.
@@ -349,9 +351,9 @@ check_exc_receiver_dependancy(
  *		thread_exception_return and thread_kdb_return
  *		are possible.
  *	Returns:
- *		Doesn't return.
+ *		KERN_SUCCESS if exception is handled by any of the handlers.
  */
-void
+kern_return_t
 exception_triage(
 	exception_type_t	exception,
 	mach_exception_data_t	code,
@@ -361,9 +363,21 @@ exception_triage(
 	task_t			task;
 	host_priv_t		host_priv;
 	lck_mtx_t		*mutex;
-	kern_return_t	kr;
+	kern_return_t	kr = KERN_FAILURE;
 
 	assert(exception != EXC_RPC_ALERT);
+
+	/*
+	 * If this behavior has been requested by the the kernel
+	 * (due to the boot environment), we should panic if we
+	 * enter this function.  This is intended as a debugging
+	 * aid; it should allow us to debug why we caught an
+	 * exception in environments where debugging is especially
+	 * difficult.
+	 */
+	if (panic_on_exception_triage) {
+		panic("called exception_triage when it was forbidden by the boot environment");
+	}
 
 	thread = current_thread();
 
@@ -371,7 +385,7 @@ exception_triage(
 	 * Try to raise the exception at the activation level.
 	 */
 	mutex = &thread->mutex;
-	if (KERN_SUCCESS == check_exc_receiver_dependancy(exception, thread->exc_actions, mutex))
+	if (KERN_SUCCESS == check_exc_receiver_dependency(exception, thread->exc_actions, mutex))
 	{
 		kr = exception_deliver(thread, exception, code, codeCnt, thread->exc_actions, mutex);
 		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
@@ -383,7 +397,7 @@ exception_triage(
 	 */
 	task = current_task();
 	mutex = &task->lock;
-	if (KERN_SUCCESS == check_exc_receiver_dependancy(exception, task->exc_actions, mutex))
+	if (KERN_SUCCESS == check_exc_receiver_dependency(exception, task->exc_actions, mutex))
 	{
 		kr = exception_deliver(thread, exception, code, codeCnt, task->exc_actions, mutex);
 		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
@@ -396,24 +410,18 @@ exception_triage(
 	host_priv = host_priv_self();
 	mutex = &host_priv->lock;
 	
-	if (KERN_SUCCESS == check_exc_receiver_dependancy(exception, host_priv->exc_actions, mutex))
+	if (KERN_SUCCESS == check_exc_receiver_dependency(exception, host_priv->exc_actions, mutex))
 	{
 		kr = exception_deliver(thread, exception, code, codeCnt, host_priv->exc_actions, mutex);
 		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
 			goto out;
 	}
 
-	/*
-	 * Nobody handled it, terminate the task.
-	 */
-
-	(void) task_terminate(task);
-
 out:
 	if ((exception != EXC_CRASH) && (exception != EXC_RESOURCE) &&
-	    (exception != EXC_GUARD))
+	    (exception != EXC_GUARD) && (exception != EXC_CORPSE_NOTIFY))
 		thread_exception_return();
-	return;
+	return kr;
 }
 
 kern_return_t
@@ -450,14 +458,15 @@ kern_return_t task_exception_notify(exception_type_t exception,
 {
 	mach_exception_data_type_t	code[EXCEPTION_CODE_MAX];
 	wait_interrupt_t		wsave;
+	kern_return_t kr = KERN_SUCCESS;
 
 	code[0] = exccode;
 	code[1] = excsubcode;
 
 	wsave = thread_interrupt_level(THREAD_UNINT);
-	exception_triage(exception, code, EXCEPTION_CODE_MAX);
+	kr = exception_triage(exception, code, EXCEPTION_CODE_MAX);
 	(void) thread_interrupt_level(wsave);
-	return (KERN_SUCCESS);
+	return kr;
 }
 
 

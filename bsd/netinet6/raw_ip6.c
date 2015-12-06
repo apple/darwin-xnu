@@ -195,7 +195,8 @@ rip6_input(
 			struct mbuf *n = m_copy(m, 0, (int)M_COPYALL);
 
 #if NECP
-			if (n && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0, &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL)) {
+			if (n && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
+				&ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL)) {
 				m_freem(n);
 				/* do not inject data into pcb */
 			} else
@@ -226,9 +227,10 @@ rip6_input(
 		}
 		last = in6p;
 	}
-	
+
 #if NECP
-	if (last && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0, &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL)) {
+	if (last && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
+		&ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL)) {
 		m_freem(m);
 		ip6stat.ip6s_delivered--;
 		/* do not inject data into pcb */
@@ -412,7 +414,7 @@ rip6_output(
 		    (htonl(in6p->inp_flowhash) & IPV6_FLOWLABEL_MASK);
 	}
 
-	M_PREPEND(m, sizeof(*ip6), M_WAIT);
+	M_PREPEND(m, sizeof(*ip6), M_WAIT, 1);
 	if (m == NULL) {
 		error = ENOBUFS;
 		goto bad;
@@ -547,19 +549,21 @@ rip6_output(
 		*p = 0;
 		*p = in6_cksum(m, ip6->ip6_nxt, sizeof(*ip6), plen);
 	}
-	
+
 #if NECP
 	{
 		necp_kernel_policy_id policy_id;
-		if (!necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0, &ip6->ip6_src, &ip6->ip6_dst, NULL, &policy_id)) {
+		u_int32_t route_rule_id;
+		if (!necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
+			&ip6->ip6_src, &ip6->ip6_dst, NULL, &policy_id, &route_rule_id)) {
 			error = EHOSTUNREACH;
 			goto bad;
 		}
 
-		necp_mark_packet_from_socket(m, in6p, policy_id);
+		necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id);
 	}
 #endif /* NECP */
-	
+
 #if IPSEC
 	if (in6p->in6p_sp != NULL && ipsec_setsocket(m, so) != 0) {
 		error = ENOBUFS;

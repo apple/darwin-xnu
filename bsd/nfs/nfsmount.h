@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -172,6 +172,8 @@ struct nfs_socket {
 	uint32_t		nso_protocol;		/* RPC protocol */
 	uint32_t		nso_version;		/* RPC protocol version */
 	uint32_t		nso_pingxid;		/* RPC XID of NULL ping request */
+	uint32_t		nso_nfs_min_vers;	/* minimum nfs version for connecting sockets */
+	uint32_t		nso_nfs_max_vers;	/* maximum nfs version for connecting sockets */
 	int			nso_error;		/* saved error/status */
 	struct nfs_rpc_record_state nso_rrs;		/* RPC record parsing state (TCP) */
 };
@@ -206,6 +208,7 @@ struct nfs_socket_search {
 /* nss_flags */
 #define NSS_VERBOSE		0x00000001		/* OK to log info about socket search */
 #define NSS_WARNED		0x00000002		/* logged warning about socket search taking a while */
+#define NSS_FALLBACK2PMAP	0x00000004		/* Try V4 on NFS_PORT first, if that fails fall back to portmapper */
 
 /*
  * function table for calling version-specific NFS functions
@@ -261,6 +264,9 @@ struct nfsmount {
 	int	nm_ref;			/* Reference count on this mount */
 	int	nm_state;		/* Internal state flags */
 	int	nm_vers;		/* NFS version */
+	uint32_t nm_minor_vers;		/* minor version of above */
+	uint32_t nm_min_vers;		/* minimum packed version to try */
+	uint32_t nm_max_vers;		/* maximum packed version to try */
 	struct nfs_funcs *nm_funcs;	/* version-specific functions */
 	kauth_cred_t nm_mcred;		/* credential used for the mount */
 	mount_t	nm_mountp;		/* VFS structure for this filesystem */
@@ -268,7 +274,6 @@ struct nfsmount {
 	struct nfs_fs_locations nm_locations; /* file system locations */
 	uint32_t nm_numgrps;		/* Max. size of groupslist */
 	TAILQ_HEAD(, nfs_gss_clnt_ctx) nm_gsscl;	/* GSS user contexts */
-	TAILQ_HEAD(, nfs_gss_clnt_ctx) nm_gssnccl;	/* GSS neg cache contexts */
 	uint32_t nm_ncentries;		/* GSS expired negative cache entries */
 	int	nm_timeo;		/* Init timer for NFSMNT_DUMBTIMR */
 	int	nm_retry;		/* Max retries */

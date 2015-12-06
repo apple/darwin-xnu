@@ -634,6 +634,7 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
             break;
         case LC_VERSION_MIN_MACOSX:
         case LC_VERSION_MIN_IPHONEOS:
+        case LC_VERSION_MIN_WATCHOS:
             versionmin_hdr = (struct version_min_command *) cmd_hdr;
             kxld_versionmin_init_from_macho(&object->versionmin, versionmin_hdr);
             break;
@@ -676,7 +677,7 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
         default:
             rval=KERN_FAILURE;
             kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
-                "Invalid segment type in MH_KEXT_BUNDLE kext: %u.", cmd_hdr->cmd);
+                "Invalid load command type in MH_KEXT_BUNDLE kext: %u.", cmd_hdr->cmd);
             goto finish;
         }
 
@@ -960,12 +961,13 @@ init_from_object(KXLDObject *object)
             break;
         case LC_VERSION_MIN_MACOSX:
         case LC_VERSION_MIN_IPHONEOS:
+        case LC_VERSION_MIN_WATCHOS:
         case LC_SOURCE_VERSION:
             /* Not supported for object files, fall through */
         default:
             rval = KERN_FAILURE;
             kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
-                "Invalid segment type in MH_OBJECT kext: %u.", cmd_hdr->cmd);
+                "Invalid load command type in MH_OBJECT kext: %u.", cmd_hdr->cmd);
             goto finish;
         }
     }
@@ -1141,7 +1143,7 @@ get_macho_data_size(const KXLDObject *object)
          */
         if ((symtab_size + reloc_size) > seg_vmsize) {
             u_long  overflow = (symtab_size + reloc_size) - seg_vmsize;
-            data_size += round_page(overflow);
+            data_size += kxld_round_page_cross_safe(overflow);
         }
     }
 #endif  // KXLD_PIC_KEXTS
@@ -1710,7 +1712,7 @@ kxld_object_get_vmsize(const KXLDObject *object, u_long *header_size,
     /* vmsize is the padded header page(s) + segment vmsizes */
 
     *header_size = (object->is_final_image) ?
-        0 : round_page(get_macho_header_size(object));
+        0 : (u_long)kxld_round_page_cross_safe(get_macho_header_size(object));
     *vmsize = *header_size + get_macho_data_size(object);
 
 }
@@ -1746,7 +1748,6 @@ kxld_object_export_linked_object(const KXLDObject *object,
     /* Calculate the size of the headers and data */
 
     header_size = get_macho_header_size(object);
-    data_offset = (object->is_final_image) ? header_size : round_page(header_size);
     size = object->output_buffer_size;
 
     /* Copy data to the file */

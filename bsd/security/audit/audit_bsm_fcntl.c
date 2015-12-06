@@ -217,6 +217,9 @@ static const bsm_fcntl_cmd_t bsm_fcntl_cmdtab[] = {
 #ifdef	F_MARKDEPENDENCY
 	{ BSM_F_MARKDEPENDENCY,	F_MARKDEPENDENCY },
 #endif
+#ifdef	F_BARRIERFSYNC
+	{ BSM_F_BARRIERFSYNC,	F_BARRIERFSYNC },
+#endif
 
 #ifdef	FCNTL_FS_SPECIFIC_BASE
 	{ BSM_F_FS_SPECIFIC_0,	FCNTL_FS_SPECIFIC_BASE},

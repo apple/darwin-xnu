@@ -46,6 +46,33 @@ __BEGIN_DECLS
 
 __END_DECLS
 
+
+#if XNU_KERNEL_PRIVATE
+#include <libkern/OSAtomic.h>
+
+#define kalloc_container(size)	\
+	kalloc_tag_bt(size, VM_KERN_MEMORY_LIBKERN)
+
+#if OSALLOCDEBUG
+extern "C" int debug_container_malloc_size;
+extern "C" int debug_ivars_size;
+#if IOTRACKING
+#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomic((SInt32)(s), &debug_container_malloc_size); trackingAccumSize(s); } while(0)
+#else
+#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomic((SInt32)(s), &debug_container_malloc_size); } while(0)
+#endif
+#define OSMETA_ACCUMSIZE(s)      do { OSAddAtomic((SInt32)(s), &debug_container_malloc_size); } while(0)
+#define OSIVAR_ACCUMSIZE(s)      do { OSAddAtomic((SInt32)(s), &debug_ivars_size);            } while(0)
+
+#else /* OSALLOCDEBUG */
+
+#define OSCONTAINER_ACCUMSIZE(s)
+#define OSMETA_ACCUMSIZE(s)
+#define OSIVAR_ACCUMSIZE(s)
+
+#endif  /* !OSALLOCDEBUG */
+#endif  /* XNU_KERNEL_PRIVATE */
+
 #ifndef NULL
 #if defined (__cplusplus)
 #define NULL 0

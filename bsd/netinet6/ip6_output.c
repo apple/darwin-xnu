@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -119,6 +119,7 @@
 #include <net/route.h>
 #include <net/dlil.h>
 #include <net/net_osdep.h>
+#include <net/net_perf.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -158,6 +159,9 @@ extern int ipsec_bypass;
 #include <net/pfvar.h>
 #endif /* PF */
 
+static int sysctl_reset_ip6_output_stats SYSCTL_HANDLER_ARGS;
+static int sysctl_ip6_output_measure_bins SYSCTL_HANDLER_ARGS;
+static int sysctl_ip6_output_getperf SYSCTL_HANDLER_ARGS;
 static int ip6_copyexthdr(struct mbuf **, caddr_t, int);
 static void ip6_out_cksum_stats(int, u_int32_t);
 static int ip6_insert_jumboopt(struct ip6_exthdrs *, u_int32_t);
@@ -176,6 +180,34 @@ static int ip6_setpktopt(int, u_char *, int, struct ip6_pktopts *, int,
 static int ip6_splithdr(struct mbuf *, struct ip6_exthdrs *);
 static void ip6_output_checksum(struct ifnet *, uint32_t, struct mbuf *,
     int, uint32_t, uint32_t);
+extern int udp_ctloutput(struct socket *, struct sockopt *);
+static int ip6_do_fragmentation(struct mbuf **morig,
+    uint32_t optlen, struct ifnet *ifp, uint32_t unfragpartlen,
+    struct ip6_hdr *ip6, struct ip6_exthdrs *exthdrsp, uint32_t mtu,
+    int nxt0);
+static int ip6_fragment_packet(struct mbuf **m,
+    struct ip6_pktopts *opt, struct ip6_exthdrs *exthdrsp, struct ifnet *ifp,
+    uint32_t mtu, boolean_t alwaysfrag, uint32_t unfragpartlen,
+    struct route_in6 *ro_pmtu, int nxt0, uint32_t optlen);
+
+SYSCTL_DECL(_net_inet6_ip6);
+
+static int ip6_output_measure = 0;
+SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, output_perf,
+	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+	&ip6_output_measure, 0, sysctl_reset_ip6_output_stats, "I", "Do time measurement");
+
+static uint64_t ip6_output_measure_bins = 0;
+SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, output_perf_bins,
+	CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_output_measure_bins, 0,
+	sysctl_ip6_output_measure_bins, "I",
+	"bins for chaining performance data histogram");
+
+static net_perf_t net_perf;
+SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, output_perf_data,
+	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
+	0, 0, sysctl_ip6_output_getperf, "S,net_perf",
+	"IP6 output performance data (struct net_perf, net/net_perf.h)");
 
 #define	IM6O_TRACE_HIST_SIZE	32	/* size of trace history */
 
@@ -210,47 +242,19 @@ static struct zone *im6o_zone;		/* zone for ip6_moptions */
 #define	IM6O_ZONE_MAX		64		/* maximum elements in zone */
 #define	IM6O_ZONE_NAME		"ip6_moptions"	/* zone name */
 
-SYSCTL_DECL(_net_inet6_ip6);
-
-static int ip6_maxchainsent = 0;
-SYSCTL_INT(_net_inet6_ip6, OID_AUTO, maxchainsent,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_maxchainsent, 0,
-	"use dlil_output_list");
-
 /*
- * XXX we don't handle mbuf chains yet in nd6_output() so ip6_output_list() only
- * walks through the packet chain and sends each mbuf separately.
+ * ip6_output() calls ip6_output_list() to do the work
  */
 int
-ip6_output_list(struct mbuf *m0, int packetlist, struct ip6_pktopts *opt,
+ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
     struct route_in6 *ro, int flags, struct ip6_moptions *im6o,
     struct ifnet **ifpp, struct ip6_out_args *ip6oa)
 {
-#pragma unused(packetlist)
-	struct mbuf *m = m0, *nextpkt;
-	int error = 0;
-
-	while (m != NULL) {
-		/*
-		 * Break the chain before calling ip6_output() and free the
-		 * mbufs if there was an error.
-		 */
-		nextpkt = m->m_nextpkt;
-		m->m_nextpkt = NULL;
-		error = ip6_output(m, opt, ro, flags, im6o, ifpp, ip6oa);
-		if (error != 0) {
-			if (nextpkt != NULL)
-				m_freem_list(nextpkt);
-			return (error);
-		}
-		m = nextpkt;
-	}
-
-	return (error);
+	return ip6_output_list(m0, 0, opt, ro, flags, im6o, ifpp, ip6oa);
 }
 
 /*
- * IP6 output. The packet in mbuf chain m contains a skeletal IP6
+ * IP6 output. Each packet in mbuf chain m contains a skeletal IP6
  * header (with pri, len, nxt, hlim, src, dst).
  * This function may modify ver and hlim only.
  * The mbuf chain containing the packet will be freed.
@@ -265,15 +269,18 @@ ip6_output_list(struct mbuf *m0, int packetlist, struct ip6_pktopts *opt,
  * which is rt_rmx.rmx_mtu.
  */
 int
-ip6_output(struct mbuf *m0, struct ip6_pktopts *opt, struct route_in6 *ro,
-    int flags, struct ip6_moptions *im6o, struct ifnet **ifpp,
-    struct ip6_out_args *ip6oa)
+ip6_output_list(struct mbuf *m0, int packetchain, struct ip6_pktopts *opt,
+    struct route_in6 *ro, int flags, struct ip6_moptions *im6o,
+    struct ifnet **ifpp, struct ip6_out_args *ip6oa)
 {
 	struct ip6_hdr *ip6;
 	u_char *nexthdrp;
 	struct ifnet *ifp = NULL, *origifp = NULL;	/* refcnt'd */
+	struct ifnet **ifpp_save = ifpp;
 	struct mbuf *m, *mprev;
-	int hlen, tlen, len, off, nxt0;
+	struct mbuf *sendchain = NULL, *sendchain_last = NULL;
+	struct mbuf *inputchain = NULL;
+	int nxt0;
 	struct route_in6 *ro_pmtu = NULL;
 	struct rtentry *rt = NULL;
 	struct sockaddr_in6 *dst, src_sa, dst_sa;
@@ -287,6 +294,9 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt, struct route_in6 *ro,
 	ipfilter_t inject_filter_ref;
 	struct ipf_pktopts *ippo = NULL;
 	struct flowadv *adv = NULL;
+	uint32_t pktcnt = 0;
+	uint32_t packets_processed = 0;
+	struct timeval start_tv;
 #if DUMMYNET
 	struct m_tag *tag;
 	struct ip6_out_args saved_ip6oa;
@@ -331,6 +341,7 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt, struct route_in6 *ro,
 		struct {
 			boolean_t select_srcif : 1;
 			boolean_t hdrsplit : 1;
+			boolean_t route_selected : 1;
 			boolean_t dontfrag : 1;
 #if IPSEC
 			boolean_t needipsec : 1;
@@ -339,6 +350,9 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt, struct route_in6 *ro,
 		};
 		uint32_t raw;
 	} ip6obf = { .raw = 0 };
+
+	if (ip6_output_measure)
+		net_perf_start_time(&net_perf, &start_tv);
 
 	VERIFY(m0->m_flags & M_PKTHDR);
 
@@ -353,6 +367,13 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt, struct route_in6 *ro,
 	if ((tag = m_tag_locate(m0, KERNEL_MODULE_TAG_ID,
 	    KERNEL_TAG_TYPE_DUMMYNET, NULL)) != NULL) {
 		struct dn_pkt_tag	*dn_tag;
+
+		/*
+		 * ip6_output_list() cannot handle chains of packets reinjected
+		 * by dummynet. The same restriction applies to
+		 * ip_output_list().
+		 */
+		VERIFY(0 == packetchain);
 
 		dn_tag = (struct dn_pkt_tag *)(tag+1);
 		args.fwa_pf_rule = dn_tag->dn_pf_rule;
@@ -388,7 +409,6 @@ tags_done:
 #endif /* DUMMYNET */
 
 	m = m0;
-	m->m_pkthdr.pkt_flags &= ~(PKTF_LOOP|PKTF_IFAINFO);
 
 #if IPSEC
 	if (ipsec_bypass == 0) {
@@ -412,10 +432,6 @@ tags_done:
 	}
 #endif /* IPSEC */
 	
-	ip6 = mtod(m, struct ip6_hdr *);
-	nxt0 = ip6->ip6_nxt;
-	finaldst = ip6->ip6_dst;
-	inject_filter_ref = ipf_get_inject_filter(m);
 	ippo = &ipf_pktopts;
 
 	if (ip6_doscopedroute && (flags & IPV6_OUTARGS)) {
@@ -455,6 +471,14 @@ tags_done:
 		ip6oa->ip6oa_retflags = 0;
 	}
 
+	/*
+	 * Clear out ifpp to be filled in after determining route. ifpp_save is
+	 * used to keep old value to release reference properly and dtrace
+	 * ipsec tunnel traffic properly.
+	 */
+	if (ifpp != NULL && *ifpp != NULL)
+		*ifpp = NULL;
+
 #if DUMMYNET
 	if (args.fwa_pf_rule) {
 		ip6 = mtod(m, struct ip6_hdr *);
@@ -462,6 +486,43 @@ tags_done:
 		goto check_with_pf;
 	}
 #endif /* DUMMYNET */
+
+#if NECP
+	/*
+	 * Since all packets are assumed to come from same socket, necp lookup
+	 * only needs to happen once per function entry.
+	 */
+	necp_matched_policy_id = necp_ip6_output_find_policy_match(m, flags,
+	    (flags & IPV6_OUTARGS) ? ip6oa : NULL, &necp_result,
+	    &necp_result_parameter);
+#endif /* NECP */
+
+	/*
+	 * If a chain was passed in, prepare for ther first iteration. For all
+	 * other iterations, this work will be done at evaluateloop: label.
+	 */
+	if (packetchain) {
+		/*
+		 * Remove m from the chain during processing to avoid
+		 * accidental frees on entire list.
+		 */
+		inputchain = m->m_nextpkt;
+		m->m_nextpkt = NULL;
+	}
+
+loopit:
+	packets_processed++;
+	m->m_pkthdr.pkt_flags &= ~(PKTF_LOOP|PKTF_IFAINFO);
+	ip6 = mtod(m, struct ip6_hdr *);
+	nxt0 = ip6->ip6_nxt;
+	finaldst = ip6->ip6_dst;
+	ip6obf.hdrsplit = FALSE;
+	ro_pmtu = NULL;
+
+	if (!SLIST_EMPTY(&m->m_pkthdr.tags))
+		inject_filter_ref = ipf_get_inject_filter(m);
+	else
+		inject_filter_ref = NULL;
 
 #define	MAKE_EXTHDR(hp, mp) do {					\
 	if (hp != NULL) {						\
@@ -499,46 +560,65 @@ tags_done:
 #undef MAKE_EXTHDR
 
 #if NECP
-	necp_matched_policy_id = necp_ip6_output_find_policy_match (m, flags, (flags & IPV6_OUTARGS) ? ip6oa : NULL,
-										   &necp_result, &necp_result_parameter);
 	if (necp_matched_policy_id) {
 		necp_mark_packet_from_ip(m, necp_matched_policy_id);
+
 		switch (necp_result) {
-			case NECP_KERNEL_POLICY_RESULT_PASS:
+		case NECP_KERNEL_POLICY_RESULT_PASS:
+			goto skip_ipsec;
+		case NECP_KERNEL_POLICY_RESULT_DROP:
+		case NECP_KERNEL_POLICY_RESULT_SOCKET_DIVERT:
+			/*
+			 * Flow divert packets should be blocked at the IP
+			 * layer.
+			 */
+			error = EHOSTUNREACH;
+			goto freehdrs;
+		case NECP_KERNEL_POLICY_RESULT_IP_TUNNEL: {
+			/*
+			 * Verify that the packet is being routed to the tunnel
+			 */
+			struct ifnet *policy_ifp =
+			    necp_get_ifnet_from_result_parameter(
+				&necp_result_parameter);
+
+			if (policy_ifp == ifp) {
 				goto skip_ipsec;
-			case NECP_KERNEL_POLICY_RESULT_DROP:
-			case NECP_KERNEL_POLICY_RESULT_SOCKET_DIVERT:
-				/* Flow divert packets should be blocked at the IP layer */
-				error = EHOSTUNREACH;
-				goto bad;
-			case NECP_KERNEL_POLICY_RESULT_IP_TUNNEL: {
-				/* Verify that the packet is being routed to the tunnel */
-				struct ifnet *policy_ifp = necp_get_ifnet_from_result_parameter(&necp_result_parameter);
-				if (policy_ifp == ifp) {
+			} else {
+				if (necp_packet_can_rebind_to_ifnet(m,
+				    policy_ifp, (struct route *)&necp_route,
+				    AF_INET6)) {
+					/*
+					 * Set scoped index to the tunnel
+					 * interface, since it is compatible
+					 * with the packet. This will only work
+					 * for callers who pass IPV6_OUTARGS,
+					 * but that covers all of the clients
+					 * we care about today.
+					 */
+					if (flags & IPV6_OUTARGS) {
+						ip6oa->ip6oa_boundif =
+						    policy_ifp->if_index;
+						ip6oa->ip6oa_flags |=
+						    IP6OAF_BOUND_IF;
+					}
+					if (opt != NULL
+					    && opt->ip6po_pktinfo != NULL) {
+						opt->ip6po_pktinfo->
+						    ipi6_ifindex =
+							policy_ifp->if_index;
+					}
+					ro = &necp_route;
 					goto skip_ipsec;
 				} else {
-					if (necp_packet_can_rebind_to_ifnet(m, policy_ifp, (struct route *)&necp_route, AF_INET6)) {
-						/* Set scoped index to the tunnel interface, since it is compatible with the packet */
-						/* This will only work for callers who pass IPV6_OUTARGS, but that covers all of the
-						   clients we care about today */
-						if (flags & IPV6_OUTARGS) {
-							ip6oa->ip6oa_boundif = policy_ifp->if_index;
-							ip6oa->ip6oa_flags |= IP6OAF_BOUND_IF;
-						}
-						if (opt != NULL && opt->ip6po_pktinfo != NULL) {
-							opt->ip6po_pktinfo->ipi6_ifindex = policy_ifp->if_index;
-						}
-						ro = &necp_route;
-						goto skip_ipsec;
-					} else {
-						error = ENETUNREACH;
-						goto bad;
-					}
+					error = ENETUNREACH;
+					goto freehdrs;
 				}
-				break;
 			}
-			default:
-				break;
+			break;
+		}
+		default:
+			break;
 		}
 	}
 #endif /* NECP */
@@ -715,6 +795,9 @@ skip_ipsec:
 	MAKE_CHAIN(exthdrs.ip6e_dest1, mprev, nexthdrp, IPPROTO_DSTOPTS);
 	MAKE_CHAIN(exthdrs.ip6e_rthdr, mprev, nexthdrp, IPPROTO_ROUTING);
 
+	/* It is no longer safe to free the pointers in exthdrs. */
+	exthdrs.merged = TRUE;
+
 #undef MAKE_CHAIN
 
 #if IPSEC
@@ -761,7 +844,10 @@ skip_ipsec:
 				    (mbuf_t *)&m, ippo);
 				if (result == EJUSTRETURN) {
 					ipf_unref();
-					goto done;
+					if (m != NULL)
+						m_freem(m);
+					m = NULL;
+					goto evaluateloop;
 				}
 				if (result != 0) {
 					ipf_unref();
@@ -898,7 +984,6 @@ skip_ipsec:
 		ro = &ip6route;
 		bzero((caddr_t)ro, sizeof (*ro));
 	}
-	VERIFY(ro_pmtu == NULL);	/* must not get here if dummynet */
 	ro_pmtu = ro;
 	if (opt != NULL && opt->ip6po_rthdr)
 		ro = &opt->ip6po_route;
@@ -958,7 +1043,7 @@ skip_ipsec:
 #if IPSEC
 	if (ip6obf.needipsec && needipsectun) {
 #if CONFIG_DTRACE
-		struct ifnet *trace_ifp = (ifpp != NULL) ? (*ifpp) : NULL;
+		struct ifnet *trace_ifp = (ifpp_save != NULL) ? (*ifpp_save) : NULL;
 #endif /* CONFIG_DTRACE */
 		/*
 		 * All the extension headers will become inaccessible
@@ -983,15 +1068,16 @@ skip_ipsec:
 
 		error = ipsec6_output_tunnel(&ipsec_state, sp, flags);
 		/* tunneled in IPv4? packet is gone */
-		if (ipsec_state.tunneled == 4)
-			goto done;
+		if (ipsec_state.tunneled == 4) {
+			m = NULL;
+			goto evaluateloop;
+		}
 		m = ipsec_state.m;
 		ipsec_saved_route = ro;
 		ro = (struct route_in6 *)&ipsec_state.ro;
 		dst = SIN6(ipsec_state.dst);
 		if (error) {
 			/* mbuf is already reclaimed in ipsec6_output_tunnel. */
-			m0 = m = NULL;
 			m = NULL;
 			switch (error) {
 			case EHOSTUNREACH:
@@ -1028,10 +1114,12 @@ skip_ipsec:
 	}
 #endif /* IPSEC */
 
-	/* for safety */
+	/*
+	 * ifp should only be filled in for dummy net packets which will jump
+	 * to check_with_pf label.
+	 */
 	if (ifp != NULL) {
-		ifnet_release(ifp);
-		ifp = NULL;
+		VERIFY(ip6obf.route_selected);
 	}
 
 	/* adjust pointer */
@@ -1049,24 +1137,32 @@ skip_ipsec:
 	dst_sa.sin6_addr = ip6->ip6_dst;
 
 	/*
+	 * Only call in6_selectroute() on first iteration to avoid taking
+	 * multiple references on ifp and rt.
+	 *
 	 * in6_selectroute() might return an ifp with its reference held
 	 * even in the error case, so make sure to release its reference.
 	 * ip6oa may be NULL if IPV6_OUTARGS isn't set.
 	 */
-	if ((error = in6_selectroute(ip6obf.select_srcif ? &src_sa : NULL,
-	    &dst_sa, opt, im6o, &src_ia, ro, &ifp, &rt, 0, ip6oa)) != 0) {
-		switch (error) {
-		case EHOSTUNREACH:
-			ip6stat.ip6s_noroute++;
-			break;
-		case EADDRNOTAVAIL:
-		default:
-			break; /* XXX statistics? */
+	if (!ip6obf.route_selected) {
+		error = in6_selectroute( ip6obf.select_srcif ? &src_sa : NULL,
+		    &dst_sa, opt, im6o, &src_ia, ro, &ifp, &rt, 0, ip6oa);
+
+		if (error != 0) {
+			switch (error) {
+			case EHOSTUNREACH:
+				ip6stat.ip6s_noroute++;
+				break;
+			case EADDRNOTAVAIL:
+			default:
+				break; /* XXX statistics? */
+			}
+			if (ifp != NULL)
+				in6_ifstat_inc(ifp, ifs6_out_discard);
+			/* ifp (if non-NULL) will be released at the end */
+			goto bad;
 		}
-		if (ifp != NULL)
-			in6_ifstat_inc(ifp, ifs6_out_discard);
-		/* ifp (if non-NULL) will be released at the end */
-		goto bad;
+		ip6obf.route_selected = TRUE;
 	}
 	if (rt == NULL) {
 		/*
@@ -1076,6 +1172,14 @@ skip_ipsec:
 		*dst = dst_sa;	/* XXX */
 	}
 
+#if NECP
+	/* Catch-all to check if the interface is allowed */
+	if (!necp_packet_is_allowed_over_interface(m, ifp)) {
+		error = EHOSTUNREACH;
+		goto bad;
+	}
+#endif /* NECP */
+
 	/*
 	 * then rt (for unicast) and ifp must be non-NULL valid values.
 	 */
@@ -1084,9 +1188,11 @@ skip_ipsec:
 	}
 	if (rt != NULL) {
 		RT_LOCK(rt);
-		ia = (struct in6_ifaddr *)(rt->rt_ifa);
-		if (ia != NULL)
-			IFA_ADDREF(&ia->ia_ifa);
+		if (ia == NULL) {
+			ia = (struct in6_ifaddr *)(rt->rt_ifa);
+			if (ia != NULL)
+				IFA_ADDREF(&ia->ia_ifa);
+		}
 		rt->rt_use++;
 		RT_UNLOCK(rt);
 	}
@@ -1229,8 +1335,11 @@ routefound:
 		 */
 		if (ip6->ip6_hlim == 0 || (ifp->if_flags & IFF_LOOPBACK) ||
 		    IN6_IS_ADDR_MC_INTFACELOCAL(&ip6->ip6_dst)) {
-			m_freem(m);
-			goto done;
+			/* remove m from the packetchain and continue looping */
+			if (m != NULL)
+				m_freem(m);
+			m = NULL;
+			goto evaluateloop;
 		}
 	}
 
@@ -1238,10 +1347,8 @@ routefound:
 	 * Fill the outgoing inteface to tell the upper layer
 	 * to increment per-interface statistics.
 	 */
-	if (ifpp != NULL) {
+	if (ifpp != NULL && *ifpp == NULL) {
 		ifnet_reference(ifp);	/* for caller */
-		if (*ifpp != NULL)
-			ifnet_release(*ifpp);
 		*ifpp = ifp;
 	}
 
@@ -1289,13 +1396,15 @@ routefound:
 		u_short port = 0;
 		m->m_pkthdr.rcvif = NULL;	/* XXX */
 		/* If ipfw says divert, we have to just drop packet */
-		if (ip6_fw_chk_ptr(&ip6, ifp, &port, &m)) {
-			m_freem(m);
-			goto done;
-		}
-		if (m == NULL) {
-			error = EACCES;
-			goto done;
+		if (ip6_fw_chk_ptr(&ip6, ifp, &port, &m) || m == NULL) {
+			if (m != NULL) {
+				m_freem(m);
+				m = NULL;
+				goto evaluateloop;
+			} else {
+				error = EACCES;
+				goto bad;
+			}
 		}
 	}
 #endif /* IPFW2 */
@@ -1324,9 +1433,13 @@ routefound:
 		if (ip6_process_hopopts(m, (u_int8_t *)(hbh + 1),
 		    ((hbh->ip6h_len + 1) << 3) - sizeof (struct ip6_hbh),
 		    &dummy, &oplen) < 0) {
-			/* m was already freed at this point */
+			/*
+			 * m was already freed at this point. Set to NULL so it
+ 			 * is not re-freed at end of ip6_output_list.
+			 */
+			m = NULL;
 			error = EINVAL;	/* better error? */
-			goto done;
+			goto bad;
 		}
 		m->m_flags &= ~M_LOOP; /* XXX */
 		m->m_pkthdr.rcvif = NULL;
@@ -1338,6 +1451,7 @@ check_with_pf:
 #if PF
 	if (PF_IS_ENABLED) {
 #if DUMMYNET
+
 		/*
 		 * TODO: Need to save opt->ip6po_flags for reinjection
 		 * rdar://10434993
@@ -1362,250 +1476,100 @@ check_with_pf:
 #endif /* !DUMMYNET */
 
 		if (error != 0 || m == NULL) {
-			/*
-			 * Note that if we ever handle packet chain, we will
-			 * have to restore the linkage from the previous
-			 * packet to the next like in ip_outout_list()
-			 */
 			if (m != NULL) {
 				panic("%s: unexpected packet %p\n",
 				    __func__, m);
 				/* NOTREACHED */
 			}
-			/* Already freed by callee */
-			goto done;
+			/* m was already freed by callee and is now NULL.  */
+			goto evaluateloop;
 		}
 		ip6 = mtod(m, struct ip6_hdr *);
 	}
 #endif /* PF */
 
-	/*
-	 * Send the packet to the outgoing interface.
-	 * If necessary, do IPv6 fragmentation before sending.
-	 *
-	 * the logic here is rather complex:
-	 * 1: normal case (dontfrag == 0, alwaysfrag == 0)
-	 * 1-a:	send as is if tlen <= path mtu
-	 * 1-b:	fragment if tlen > path mtu
-	 *
-	 * 2: if user asks us not to fragment (dontfrag == 1)
-	 * 2-a:	send as is if tlen <= interface mtu
-	 * 2-b:	error if tlen > interface mtu
-	 *
-	 * 3: if we always need to attach fragment header (alwaysfrag == 1)
-	 *	always fragment
-	 *
-	 * 4: if dontfrag == 1 && alwaysfrag == 1
-	 *	error, as we cannot handle this conflicting request
-	 */
-	tlen = m->m_pkthdr.len;
-
-	if (opt != NULL && (opt->ip6po_flags & IP6PO_DONTFRAG))
-		ip6obf.dontfrag = TRUE;
-	else
-		ip6obf.dontfrag = FALSE;
-	if (ip6obf.dontfrag && alwaysfrag) {	/* case 4 */
-		/* conflicting request - can't transmit */
-		error = EMSGSIZE;
-		goto bad;
-	}
-
-	lck_rw_lock_shared(nd_if_rwlock);
-	/* Access without acquiring nd_ifinfo lock for performance */
-	if (ip6obf.dontfrag && tlen > IN6_LINKMTU(ifp)) {	/* case 2-b */
-		lck_rw_done(nd_if_rwlock);
-		/*
-		 * Even if the DONTFRAG option is specified, we cannot send the
-		 * packet when the data length is larger than the MTU of the
-		 * outgoing interface.
-		 * Notify the error by sending IPV6_PATHMTU ancillary data as
-		 * well as returning an error code (the latter is not described
-		 * in the API spec.)
-		 */
-		u_int32_t mtu32;
-		struct ip6ctlparam ip6cp;
-
-		mtu32 = (u_int32_t)mtu;
-		bzero(&ip6cp, sizeof (ip6cp));
-		ip6cp.ip6c_cmdarg = (void *)&mtu32;
-		pfctlinput2(PRC_MSGSIZE, SA(&ro_pmtu->ro_dst), (void *)&ip6cp);
-		error = EMSGSIZE;
-		goto bad;
-	} else {
-		lck_rw_done(nd_if_rwlock);
-	}
-
-	/*
-	 * transmit packet without fragmentation
-	 */
-	if (ip6obf.dontfrag || (!alwaysfrag &&		/* case 1-a and 2-a */
-	    (tlen <= mtu || TSO_IPV6_OK(ifp, m) ||
-	    (ifp->if_hwassist & CSUM_FRAGMENT_IPV6)))) {
 #ifdef IPSEC
-		/* clean ipsec history once it goes out of the node */
-		ipsec_delaux(m);
+	/* clean ipsec history before fragmentation */
+	ipsec_delaux(m);
 #endif /* IPSEC */
 
-		ip6_output_checksum(ifp, mtu, m, nxt0, tlen, optlen);
+	/*
+	 * Determine whether fragmentation is necessary. If so, m is passed
+	 * back as a chain of packets and original mbuf is freed. Otherwise, m
+	 * is unchanged.
+	 */
+	error = ip6_fragment_packet(&m, opt,
+	    &exthdrs, ifp, mtu, alwaysfrag, unfragpartlen, ro_pmtu, nxt0,
+	    optlen);
 
-		if (ro->ro_rt)
-			RT_LOCK_ASSERT_NOTHELD(ro->ro_rt);
-		error = nd6_output(ifp, origifp, m, dst, ro->ro_rt, adv);
-		goto done;
-	}
+	if (error)
+		goto bad;
+
+/*
+ * The evaluateloop label is where we decide whether to continue looping over
+ * packets or call into nd code to send.
+ */
+evaluateloop:
 
 	/*
-	 * try to fragment the packet.  case 1-b and 3
+	 * m may be NULL when we jump to the evaluateloop label from PF or
+	 * other code that can drop packets.
 	 */
-	if ((m->m_pkthdr.csum_flags & CSUM_TSO_IPV6)) {
-		/* TSO and fragment aren't compatible */
-		error = EMSGSIZE;
-		in6_ifstat_inc(ifp, ifs6_out_fragfail);
-		goto bad;
-	} else if (mtu < IPV6_MMTU) {
-		/* path MTU cannot be less than IPV6_MMTU */
-		error = EMSGSIZE;
-		in6_ifstat_inc(ifp, ifs6_out_fragfail);
-		goto bad;
-	} else if (ip6->ip6_plen == 0) {
-		/* jumbo payload cannot be fragmented */
-		error = EMSGSIZE;
-		in6_ifstat_inc(ifp, ifs6_out_fragfail);
-		goto bad;
-	} else {
-		struct mbuf **mnext, *m_frgpart;
-		struct ip6_frag *ip6f;
-		u_int32_t id = htonl(ip6_randomid());
-		u_char nextproto;
-
+	if (m != NULL) {
 		/*
-		 * Too large for the destination or interface;
-		 * fragment if possible.
-		 * Must be able to put at least 8 bytes per fragment.
+		 * If we already have a chain to send, tack m onto the end.
+		 * Otherwise make m the start and end of the to-be-sent chain.
 		 */
-		hlen = unfragpartlen;
-		if (mtu > IPV6_MAXPACKET)
-			mtu = IPV6_MAXPACKET;
-
-		len = (mtu - hlen - sizeof (struct ip6_frag)) & ~7;
-		if (len < 8) {
-			error = EMSGSIZE;
-			in6_ifstat_inc(ifp, ifs6_out_fragfail);
-			goto bad;
-		}
-
-		mnext = &m->m_nextpkt;
-
-		/*
-		 * Change the next header field of the last header in the
-		 * unfragmentable part.
-		 */
-		if (exthdrs.ip6e_rthdr != NULL) {
-			nextproto = *mtod(exthdrs.ip6e_rthdr, u_char *);
-			*mtod(exthdrs.ip6e_rthdr, u_char *) = IPPROTO_FRAGMENT;
-		} else if (exthdrs.ip6e_dest1 != NULL) {
-			nextproto = *mtod(exthdrs.ip6e_dest1, u_char *);
-			*mtod(exthdrs.ip6e_dest1, u_char *) = IPPROTO_FRAGMENT;
-		} else if (exthdrs.ip6e_hbh != NULL) {
-			nextproto = *mtod(exthdrs.ip6e_hbh, u_char *);
-			*mtod(exthdrs.ip6e_hbh, u_char *) = IPPROTO_FRAGMENT;
+		if (sendchain != NULL) {
+			sendchain_last->m_nextpkt = m;
 		} else {
-			nextproto = ip6->ip6_nxt;
-			ip6->ip6_nxt = IPPROTO_FRAGMENT;
+			sendchain = m;
 		}
 
-		if (m->m_pkthdr.csum_flags & CSUM_DELAY_IPV6_DATA)
-			in6_delayed_cksum_offset(m, 0, optlen, nxt0);
-
-		/*
-		 * Loop through length of segment after first fragment,
-		 * make new header and copy data of each part and link onto
-		 * chain.
-		 */
-		m0 = m;
-		for (off = hlen; off < tlen; off += len) {
-			struct ip6_hdr *mhip6;
-
-			MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
-			if (m == NULL) {
-				error = ENOBUFS;
-				ip6stat.ip6s_odropped++;
-				goto sendorfree;
-			}
-			m->m_pkthdr.rcvif = NULL;
-			m->m_flags = m0->m_flags & M_COPYFLAGS;
-			*mnext = m;
-			mnext = &m->m_nextpkt;
-			m->m_data += max_linkhdr;
-			mhip6 = mtod(m, struct ip6_hdr *);
-			*mhip6 = *ip6;
-			m->m_len = sizeof (*mhip6);
-			error = ip6_insertfraghdr(m0, m, hlen, &ip6f);
-			if (error) {
-				ip6stat.ip6s_odropped++;
-				goto sendorfree;
-			}
-			ip6f->ip6f_offlg = htons((u_short)((off - hlen) & ~7));
-			if (off + len >= tlen)
-				len = tlen - off;
-			else
-				ip6f->ip6f_offlg |= IP6F_MORE_FRAG;
-			mhip6->ip6_plen = htons((u_short)(len + hlen +
-			    sizeof (*ip6f) - sizeof (struct ip6_hdr)));
-			if ((m_frgpart = m_copy(m0, off, len)) == NULL) {
-				error = ENOBUFS;
-				ip6stat.ip6s_odropped++;
-				goto sendorfree;
-			}
-			m_cat(m, m_frgpart);
-			m->m_pkthdr.len = len + hlen + sizeof (*ip6f);
-			m->m_pkthdr.rcvif = NULL;
-
-			M_COPY_CLASSIFIER(m, m0);
-			M_COPY_PFTAG(m, m0);
-
-#ifdef notyet
-#if CONFIG_MACF_NET
-			mac_create_fragment(m0, m);
-#endif /* CONFIG_MACF_NET */
-#endif /* notyet */
-
-			ip6f->ip6f_reserved = 0;
-			ip6f->ip6f_ident = id;
-			ip6f->ip6f_nxt = nextproto;
-			ip6stat.ip6s_ofragments++;
-			in6_ifstat_inc(ifp, ifs6_out_fragcreat);
-		}
-
-		in6_ifstat_inc(ifp, ifs6_out_fragok);
+		/* Fragmentation may mean m is a chain. Find the last packet. */
+		while (m->m_nextpkt)
+			m = m->m_nextpkt;
+		sendchain_last = m;
+		pktcnt++;
 	}
 
-	/*
-	 * Remove leading garbages.
-	 */
-sendorfree:
-	m = m0->m_nextpkt;
-	m0->m_nextpkt = NULL;
-	m_freem(m0);
-	for (m0 = m; m != NULL; m = m0) {
-		m0 = m->m_nextpkt;
+	/* Fill in next m from inputchain as appropriate. */
+	m = inputchain;
+	if (m != NULL) {
+		/* Isolate m from rest of input chain. */
+		inputchain = m->m_nextpkt;
 		m->m_nextpkt = NULL;
-		if (error == 0) {
-#if IPSEC
-			/* clean ipsec history once it goes out of the node */
-			ipsec_delaux(m);
-#endif /* IPSEC */
-			error = nd6_output(ifp, origifp, m, dst, ro->ro_rt,
-			    adv);
-		} else {
-			m_freem(m);
-		}
+
+		/*
+		 * Clear exthdrs and ipsec_state so stale contents are not
+		 * reused. Note this also clears the exthdrs.merged flag.
+		 */
+		bzero(&exthdrs, sizeof(exthdrs));
+		bzero(&ipsec_state, sizeof(ipsec_state));
+
+		/* Continue looping. */
+		goto loopit;
 	}
 
-	if (error == 0)
-		ip6stat.ip6s_fragmented++;
+	/*
+	 * If we get here, there's no more mbufs in inputchain, so send the
+	 * sendchain if there is one.
+	 */
+	if (pktcnt > 0) {
+		error = nd6_output_list(ifp, origifp, sendchain, dst,
+		    ro->ro_rt, adv);
+		/*
+		 * Fall through to done label even in error case because
+		 * nd6_output_list frees packetchain in both success and
+		 * failure cases.
+		 */
+	}
 
 done:
+	if (ifpp_save != NULL && *ifpp_save != NULL) {
+		ifnet_release(*ifpp_save);
+		*ifpp_save = NULL;
+	}
 	ROUTE_RELEASE(&ip6route);
 #if IPSEC
 	ROUTE_RELEASE(&ipsec_state.ro);
@@ -1628,21 +1592,42 @@ done:
 		ifnet_release(ifp);
 	if (origifp != NULL)
 		ifnet_release(origifp);
+	if (ip6_output_measure) {
+		net_perf_measure_time(&net_perf, &start_tv, packets_processed);
+		net_perf_histogram(&net_perf, packets_processed);
+	}
 	return (error);
 
 freehdrs:
-	if (exthdrs.ip6e_hbh != NULL)
+	if (exthdrs.ip6e_hbh != NULL) {
+		if (exthdrs.merged)
+			panic("Double free of ip6e_hbh");
 		m_freem(exthdrs.ip6e_hbh);
-	if (exthdrs.ip6e_dest1 != NULL)
+	}
+	if (exthdrs.ip6e_dest1 != NULL) {
+		if (exthdrs.merged)
+			panic("Double free of ip6e_dest1");
 		m_freem(exthdrs.ip6e_dest1);
-	if (exthdrs.ip6e_rthdr != NULL)
+	}
+	if (exthdrs.ip6e_rthdr != NULL) {
+		if (exthdrs.merged)
+			panic("Double free of ip6e_rthdr");
 		m_freem(exthdrs.ip6e_rthdr);
-	if (exthdrs.ip6e_dest2 != NULL)
+	}
+	if (exthdrs.ip6e_dest2 != NULL) {
+		if (exthdrs.merged)
+			panic("Double free of ip6e_dest2");
 		m_freem(exthdrs.ip6e_dest2);
+	}
 	/* FALLTHRU */
 bad:
+	if (inputchain != NULL)
+		m_freem_list(inputchain);
+	if (sendchain != NULL)
+		m_freem_list(sendchain);
 	if (m != NULL)
 		m_freem(m);
+
 	goto done;
 
 #undef ipf_pktopts
@@ -1652,6 +1637,256 @@ bad:
 #undef saved_route
 #undef saved_ro_pmtu
 #undef args
+}
+
+/* ip6_fragment_packet
+ *
+ * The fragmentation logic is rather complex:
+ * 1: normal case (dontfrag == 0, alwaysfrag == 0)
+ * 1-a:	send as is if tlen <= path mtu
+ * 1-b:	fragment if tlen > path mtu
+ *
+ * 2: if user asks us not to fragment (dontfrag == 1)
+ * 2-a:	send as is if tlen <= interface mtu
+ * 2-b:	error if tlen > interface mtu
+ *
+ * 3: if we always need to attach fragment header (alwaysfrag == 1)
+ *	always fragment
+ *
+ * 4: if dontfrag == 1 && alwaysfrag == 1
+ *	error, as we cannot handle this conflicting request
+ */
+
+static int
+ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
+     struct ip6_exthdrs *exthdrsp, struct ifnet *ifp, uint32_t mtu,
+     boolean_t alwaysfrag, uint32_t unfragpartlen, struct route_in6 *ro_pmtu,
+     int nxt0, uint32_t optlen)
+{
+	VERIFY(NULL != mptr);
+	struct mbuf *m = *mptr;
+	int error = 0;
+	size_t tlen = m->m_pkthdr.len;
+	boolean_t dontfrag = (opt != NULL && (opt->ip6po_flags & IP6PO_DONTFRAG));
+
+	if (dontfrag && alwaysfrag) {	/* case 4 */
+		/* conflicting request - can't transmit */
+		return EMSGSIZE;
+	}
+
+	/* Access without acquiring nd_ifinfo lock for performance */
+	if (dontfrag && tlen > IN6_LINKMTU(ifp)) {	/* case 2-b */
+		/*
+		 * Even if the DONTFRAG option is specified, we cannot send the
+		 * packet when the data length is larger than the MTU of the
+		 * outgoing interface.
+		 * Notify the error by sending IPV6_PATHMTU ancillary data as
+		 * well as returning an error code (the latter is not described
+		 * in the API spec.)
+		 */
+		u_int32_t mtu32;
+		struct ip6ctlparam ip6cp;
+
+		mtu32 = (u_int32_t)mtu;
+		bzero(&ip6cp, sizeof (ip6cp));
+		ip6cp.ip6c_cmdarg = (void *)&mtu32;
+		pfctlinput2(PRC_MSGSIZE, SA(&ro_pmtu->ro_dst), (void *)&ip6cp);
+		return EMSGSIZE;
+	}
+
+	/*
+	 * transmit packet without fragmentation
+	 */
+	if (dontfrag || (!alwaysfrag &&		/* case 1-a and 2-a */
+	    (tlen <= mtu || TSO_IPV6_OK(ifp, m) ||
+	    (ifp->if_hwassist & CSUM_FRAGMENT_IPV6)))) {
+		/*
+		 * mppn not updated in this case because no new chain is formed
+		 * and inserted
+		 */
+		ip6_output_checksum(ifp, mtu, m, nxt0, tlen, optlen);
+	} else {
+		/*
+		 * time to fragment - cases 1-b and 3 are handled inside
+		 * ip6_do_fragmentation().
+		 * mppn is passed down to be updated to point at fragment chain.
+		 */
+		error = ip6_do_fragmentation(mptr, optlen, ifp,
+		    unfragpartlen, mtod(m, struct ip6_hdr *), exthdrsp, mtu, nxt0);
+	}
+
+	return error;
+}
+
+/*
+ * ip6_do_fragmentation() is called by ip6_fragment_packet() after determining
+ * the packet needs to be fragmented. on success, morig is freed and a chain
+ * of fragments is linked into the packet chain where morig existed. Otherwise,
+ * an errno is returned.
+ */
+static int
+ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
+    uint32_t unfragpartlen, struct ip6_hdr *ip6, struct ip6_exthdrs *exthdrsp,
+    uint32_t mtu, int nxt0)
+{
+	VERIFY(NULL != mptr);
+	int error = 0;
+
+	struct mbuf *morig = *mptr;
+	struct mbuf *first_mbufp = NULL;
+	struct mbuf *last_mbufp = NULL;
+
+	size_t tlen = morig->m_pkthdr.len;
+
+	/*
+	 * try to fragment the packet.  case 1-b and 3
+	 */
+	if ((morig->m_pkthdr.csum_flags & CSUM_TSO_IPV6)) {
+		/* TSO and fragment aren't compatible */
+		in6_ifstat_inc(ifp, ifs6_out_fragfail);
+		return EMSGSIZE;
+	} else if (mtu < IPV6_MMTU) {
+		/* path MTU cannot be less than IPV6_MMTU */
+		in6_ifstat_inc(ifp, ifs6_out_fragfail);
+		return EMSGSIZE;
+	} else if (ip6->ip6_plen == 0) {
+		/* jumbo payload cannot be fragmented */
+		in6_ifstat_inc(ifp, ifs6_out_fragfail);
+		return EMSGSIZE;
+	} else {
+		size_t hlen, len, off;
+		struct mbuf **mnext = NULL;
+		struct ip6_frag *ip6f;
+		u_int32_t id = htonl(ip6_randomid());
+		u_char nextproto;
+
+		/*
+		 * Too large for the destination or interface;
+		 * fragment if possible.
+		 * Must be able to put at least 8 bytes per fragment.
+		 */
+		hlen = unfragpartlen;
+		if (mtu > IPV6_MAXPACKET)
+			mtu = IPV6_MAXPACKET;
+
+		len = (mtu - hlen - sizeof (struct ip6_frag)) & ~7;
+		if (len < 8) {
+			in6_ifstat_inc(ifp, ifs6_out_fragfail);
+			return EMSGSIZE;
+		}
+
+		/*
+		 * Change the next header field of the last header in the
+		 * unfragmentable part.
+		 */
+		if (exthdrsp->ip6e_rthdr != NULL) {
+			nextproto = *mtod(exthdrsp->ip6e_rthdr, u_char *);
+			*mtod(exthdrsp->ip6e_rthdr, u_char *) = IPPROTO_FRAGMENT;
+		} else if (exthdrsp->ip6e_dest1 != NULL) {
+			nextproto = *mtod(exthdrsp->ip6e_dest1, u_char *);
+			*mtod(exthdrsp->ip6e_dest1, u_char *) = IPPROTO_FRAGMENT;
+		} else if (exthdrsp->ip6e_hbh != NULL) {
+			nextproto = *mtod(exthdrsp->ip6e_hbh, u_char *);
+			*mtod(exthdrsp->ip6e_hbh, u_char *) = IPPROTO_FRAGMENT;
+		} else {
+			nextproto = ip6->ip6_nxt;
+			ip6->ip6_nxt = IPPROTO_FRAGMENT;
+		}
+
+		if (morig->m_pkthdr.csum_flags & CSUM_DELAY_IPV6_DATA)
+			in6_delayed_cksum_offset(morig, 0, optlen, nxt0);
+
+		/*
+		 * Loop through length of segment after first fragment,
+		 * make new header and copy data of each part and link onto
+		 * chain.
+		 */
+		for (off = hlen; off < tlen; off += len) {
+			struct ip6_hdr *new_mhip6;
+			struct mbuf *new_m;
+			struct mbuf *m_frgpart;
+
+			MGETHDR(new_m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
+			if (new_m == NULL) {
+				error = ENOBUFS;
+				ip6stat.ip6s_odropped++;
+				break;
+			}
+			new_m->m_pkthdr.rcvif = NULL;
+			new_m->m_flags = morig->m_flags & M_COPYFLAGS;
+
+			if (first_mbufp != NULL) {
+				/* Every pass through loop but first */
+				*mnext = new_m;
+				last_mbufp = new_m;
+			} else {
+				/* This is the first element of the fragment chain */
+				first_mbufp = new_m;
+				last_mbufp = new_m;
+			}
+			mnext = &new_m->m_nextpkt;
+
+			new_m->m_data += max_linkhdr;
+			new_mhip6 = mtod(new_m, struct ip6_hdr *);
+			*new_mhip6 = *ip6;
+			new_m->m_len = sizeof (*new_mhip6);
+
+			error = ip6_insertfraghdr(morig, new_m, hlen, &ip6f);
+			if (error) {
+				ip6stat.ip6s_odropped++;
+				break;
+			}
+
+			ip6f->ip6f_offlg = htons((u_short)((off - hlen) & ~7));
+			if (off + len >= tlen)
+				len = tlen - off;
+			else
+				ip6f->ip6f_offlg |= IP6F_MORE_FRAG;
+			new_mhip6->ip6_plen = htons((u_short)(len + hlen +
+			    sizeof (*ip6f) - sizeof (struct ip6_hdr)));
+
+			if ((m_frgpart = m_copy(morig, off, len)) == NULL) {
+				error = ENOBUFS;
+				ip6stat.ip6s_odropped++;
+				break;
+			}
+			m_cat(new_m, m_frgpart);
+			new_m->m_pkthdr.len = len + hlen + sizeof (*ip6f);
+			new_m->m_pkthdr.rcvif = NULL;
+
+			M_COPY_CLASSIFIER(new_m, morig);
+			M_COPY_PFTAG(new_m, morig);
+
+#ifdef notyet
+#if CONFIG_MACF_NET
+			mac_create_fragment(morig, new_m);
+#endif /* CONFIG_MACF_NET */
+#endif /* notyet */
+
+			ip6f->ip6f_reserved = 0;
+			ip6f->ip6f_ident = id;
+			ip6f->ip6f_nxt = nextproto;
+			ip6stat.ip6s_ofragments++;
+			in6_ifstat_inc(ifp, ifs6_out_fragcreat);
+		}
+
+		if (error) {
+			/* free all the fragments created */
+			if (first_mbufp != NULL) {
+				m_freem_list(first_mbufp);
+				first_mbufp = NULL;
+			}
+			last_mbufp = NULL;
+		} else {
+			/* successful fragmenting */
+			m_freem(morig);
+			*mptr = first_mbufp;
+			last_mbufp->m_nextpkt = NULL;
+			ip6stat.ip6s_fragmented++;
+			in6_ifstat_inc(ifp, ifs6_out_fragok);
+		}
+	}
+	return error;
 }
 
 static int
@@ -2010,10 +2245,8 @@ ip6_getpmtu(struct route_in6 *ro_pmtu, struct route_in6 *ro,
 
 		if (ifp == NULL)
 			ifp = ro_pmtu->ro_rt->rt_ifp;
-		lck_rw_lock_shared(nd_if_rwlock);
 		/* Access without acquiring nd_ifinfo lock for performance */
 		ifmtu = IN6_LINKMTU(ifp);
-		lck_rw_done(nd_if_rwlock);
 
 		/*
 		 * Access rmx_mtu without holding the route entry lock,
@@ -2050,10 +2283,8 @@ ip6_getpmtu(struct route_in6 *ro_pmtu, struct route_in6 *ro,
 		}
 	} else {
 		if (ifp) {
-			lck_rw_lock_shared(nd_if_rwlock);
 			/* Don't hold nd_ifinfo lock for performance */
 			mtu = IN6_LINKMTU(ifp);
-			lck_rw_done(nd_if_rwlock);
 		} else {
 			error = EHOSTUNREACH; /* XXX */
 		}
@@ -2722,6 +2953,8 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 			}
 			break;
 		}
+	} else if (level == IPPROTO_UDP) {
+		error = udp_ctloutput(so, sopt);
 	} else {
 		error = EINVAL;
 	}
@@ -3894,3 +4127,58 @@ ip6_optlen(struct in6pcb *in6p)
 	return (len);
 #undef elen
 }
+
+static int
+sysctl_reset_ip6_output_stats SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error, i;
+
+	i = ip6_output_measure;
+	error = sysctl_handle_int(oidp, &i, 0, req);
+	if (error || req->newptr == USER_ADDR_NULL)
+		goto done;
+	/* impose bounds */
+	if (i < 0 || i > 1) {
+		error = EINVAL;
+		goto done;
+	}
+	if (ip6_output_measure != i && i == 1) {
+		net_perf_initialize(&net_perf, ip6_output_measure_bins);
+	}
+	ip6_output_measure = i;
+done:
+	return (error);
+}
+
+static int
+sysctl_ip6_output_measure_bins SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error;
+	uint64_t i;
+
+	i = ip6_output_measure_bins;
+	error = sysctl_handle_quad(oidp, &i, 0, req);
+	if (error || req->newptr == USER_ADDR_NULL)
+		goto done;
+	/* validate data */
+	if (!net_perf_validate_bins(i)) {
+		error = EINVAL;
+		goto done;
+	}
+	ip6_output_measure_bins = i;
+done:
+	return (error);
+}
+
+static int
+sysctl_ip6_output_getperf SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	if (req->oldptr == USER_ADDR_NULL)
+		req->oldlen = (size_t)sizeof (struct ipstat);
+
+	return (SYSCTL_OUT(req, &net_perf, MIN(sizeof (net_perf), req->oldlen)));
+}
+

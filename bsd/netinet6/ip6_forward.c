@@ -223,8 +223,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 
 	if (ip6->ip6_hlim <= IPV6_HLIMDEC) {
 		/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard) */
-		icmp6_error(m, ICMP6_TIME_EXCEEDED,
-				ICMP6_TIME_EXCEED_TRANSIT, 0);
+		icmp6_error_flag(m, ICMP6_TIME_EXCEEDED,
+				ICMP6_TIME_EXCEED_TRANSIT, 0, 0);
 		return (NULL);
 	}
 

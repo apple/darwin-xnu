@@ -119,28 +119,6 @@ static const char * const kInterruptAccountingStatisticNameArray[IA_NUM_INTERRUP
 };
 
 /*
- * IOReporting group names.
- */
-static const char * const kInterruptAccountingGroupName = "Interrupt Statistics (by index)";
-
-/*
- * TODO: Generate the subgroup name strings?
- */
-#define IA_MAX_SUBGROUP_NAME (32)
-
-static const char * const kInterruptAccountingSubgroupNames[IA_MAX_SUBGROUP_NAME] = {
-    "0", "1", "2" , "3", "4", "5", "6", "7",
-    "8", "9", "10", "11", "12", "13", "14", "15",
-    "16", "17", "18", "19", "20", "21", "22", "23",
-    "24", "25", "26", "27", "28", "29", "30", "31"};
-
-/*
- * As long as we use a lookup table, we may be out of bounds for a valid index.  In this case, fall
- * back on a generic subgroup name that indicates we have screwed up.
- */
-static const char * const kInterruptAccountingGenericSubgroupName = "(Index > 31)";
-
-/*
  * For updating the statistics in the data structure.  We cannot guarantee all of our platforms will be
  * able to do a 64-bit store in a single transaction.  So, for new platforms, call out to the hardware
  * atomic add routine; it will either be unsupported, or do the right thing.  For architectures or

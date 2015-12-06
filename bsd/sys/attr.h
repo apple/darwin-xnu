@@ -373,6 +373,27 @@ typedef struct vol_attributes_attr {
 #define ATTR_CMN_RETURNED_ATTRS 		0x80000000	
 
 #define ATTR_CMN_VALIDMASK			0xFFFFFFFF
+/*
+ * The settable ATTR_CMN_* attributes include the following:
+ * ATTR_CMN_SCRIPT
+ * ATTR_CMN_CRTIME
+ * ATTR_CMN_MODTIME
+ * ATTR_CMN_CHGTIME
+ * 
+ * ATTR_CMN_ACCTIME
+ * ATTR_CMN_BKUPTIME
+ * ATTR_CMN_FNDRINFO
+ * ATTR_CMN_OWNERID
+ * 
+ * ATTR_CMN_GRPID
+ * ATTR_CMN_ACCESSMASK
+ * ATTR_CMN_FLAGS
+ * 
+ * ATTR_CMN_EXTENDED_SECURITY
+ * ATTR_CMN_UUID
+ * 
+ * ATTR_CMN_GRPUUID
+ */
 #define ATTR_CMN_SETMASK			0x01C7FF00
 #define ATTR_CMN_VOLSETMASK			0x00006700
 
@@ -399,6 +420,12 @@ typedef struct vol_attributes_attr {
 #define ATTR_VOL_INFO				0x80000000
 
 #define ATTR_VOL_VALIDMASK			0xC007FFFF
+
+/*
+ * The list of settable ATTR_VOL_* attributes include the following:
+ * ATTR_VOL_NAME
+ * ATTR_VOL_INFO
+ */
 #define ATTR_VOL_SETMASK			0x80002000
 
 
@@ -426,6 +453,10 @@ typedef struct vol_attributes_attr {
 #define ATTR_FILE_RSRCALLOCSIZE			0x00002000
 
 #define ATTR_FILE_VALIDMASK			0x000037FF
+/* 
+ * Settable ATTR_FILE_* attributes include:
+ * ATTR_FILE_DEVTYPE
+ */
 #define ATTR_FILE_SETMASK			0x00000020
 
 #define ATTR_FORK_TOTALSIZE			0x00000001

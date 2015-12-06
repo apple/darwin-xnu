@@ -79,6 +79,10 @@
 #include <sys/buf.h>
 #include <sys/lock.h>
 
+#if CONFIG_PROTECT
+#include <sys/cprotect.h>
+#endif
+
 #define NOLIST ((struct buf *)0x87654321)
 
 /*
@@ -86,8 +90,8 @@
  */
 struct bufattr {
 #if CONFIG_PROTECT
-	struct cprotect *ba_cpentry;	/* address of cp_entry */
-	uint64_t ba_cp_file_off;	/* rounded file offset. See buf_setcpoff() for more comments */
+	struct cpx *ba_cpx;
+	uint64_t ba_cp_file_off;
 #endif
 	uint64_t ba_flags;	/* flags. Some are only in-use on embedded devices */
 };
@@ -333,7 +337,6 @@ errno_t	buf_make_private(buf_t bp);
 #endif
 
 #ifdef CONFIG_PROTECT
-void buf_setcpaddr(buf_t, struct cprotect *);
 void buf_setcpoff (buf_t, uint64_t);
 #endif
 

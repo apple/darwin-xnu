@@ -152,16 +152,16 @@ class IOPMrootDomain: public IOService
 public:
     static IOPMrootDomain * construct( void );
 
-    virtual bool        start( IOService * provider );
-    virtual IOReturn    setAggressiveness( unsigned long, unsigned long );
-    virtual IOReturn    getAggressiveness( unsigned long, unsigned long * );
+    virtual bool        start( IOService * provider ) APPLE_KEXT_OVERRIDE;
+    virtual IOReturn    setAggressiveness( unsigned long, unsigned long ) APPLE_KEXT_OVERRIDE;
+    virtual IOReturn    getAggressiveness( unsigned long, unsigned long * ) APPLE_KEXT_OVERRIDE;
 
     virtual IOReturn    sleepSystem( void );
     IOReturn            sleepSystemOptions( OSDictionary *options );
 
-    virtual IOReturn    setProperties( OSObject * );
-    virtual bool        serializeProperties( OSSerialize * s ) const;
-    virtual OSObject *  copyProperty( const char * aKey ) const;
+    virtual IOReturn    setProperties( OSObject * ) APPLE_KEXT_OVERRIDE;
+    virtual bool        serializeProperties( OSSerialize * s ) const APPLE_KEXT_OVERRIDE;
+    virtual OSObject *  copyProperty( const char * aKey ) const APPLE_KEXT_OVERRIDE;
 
 /*! @function systemPowerEventOccurred
     @abstract Other drivers may inform IOPMrootDomain of system PM events
@@ -329,13 +329,13 @@ public:
     virtual IONotifier * registerInterest(
                                 const OSSymbol * typeOfInterest,
                                 IOServiceInterestHandler handler,
-                                void * target, void * ref = 0 );
+                                void * target, void * ref = 0 ) APPLE_KEXT_OVERRIDE;
 
     virtual IOReturn    callPlatformFunction(
                                 const OSSymbol *functionName,
                                 bool waitForFunction,
                                 void *param1, void *param2,
-                                void *param3, void *param4 );
+                                void *param3, void *param4 ) APPLE_KEXT_OVERRIDE;
 
 /*! @function createPMAssertion
     @abstract Creates an assertion to influence system power behavior.
@@ -392,22 +392,29 @@ public:
     IOReturn restartWithStackshot();
 
 private:
-    virtual IOReturn    changePowerStateTo( unsigned long ordinal );
+    virtual IOReturn    changePowerStateTo( unsigned long ordinal ) APPLE_KEXT_COMPATIBILITY_OVERRIDE;
     virtual IOReturn    changePowerStateToPriv( unsigned long ordinal );
-    virtual IOReturn    requestPowerDomainState( IOPMPowerFlags, IOPowerConnection *, unsigned long );
-    virtual void        powerChangeDone( unsigned long );
-    virtual bool        tellChangeDown( unsigned long );
-    virtual bool        askChangeDown( unsigned long );
-    virtual void        tellChangeUp( unsigned long );
-    virtual void        tellNoChangeDown( unsigned long );
+    virtual IOReturn    requestPowerDomainState( IOPMPowerFlags, IOPowerConnection *, unsigned long ) APPLE_KEXT_OVERRIDE;
+    virtual void        powerChangeDone( unsigned long ) APPLE_KEXT_OVERRIDE;
+    virtual bool        tellChangeDown( unsigned long ) APPLE_KEXT_OVERRIDE;
+    virtual bool        askChangeDown( unsigned long ) APPLE_KEXT_OVERRIDE;
+    virtual void        tellChangeUp( unsigned long ) APPLE_KEXT_OVERRIDE;
+    virtual void        tellNoChangeDown( unsigned long ) APPLE_KEXT_OVERRIDE;
     virtual IOReturn configureReport(IOReportChannelList   *channels,
                                     IOReportConfigureAction action,
                                     void                    *result,
-                                    void                    *destination);
+                                    void                    *destination) APPLE_KEXT_OVERRIDE;
     virtual IOReturn updateReport(IOReportChannelList      *channels,
                                   IOReportUpdateAction     action,
                                   void                     *result,
-                                  void                     *destination);
+                                  void                     *destination) APPLE_KEXT_OVERRIDE;
+
+    void             configureReportGated(uint64_t channel_id,
+                                          uint64_t action,
+                                          void     *result);
+    IOReturn         updateReportGated(uint64_t ch_id, 
+                                       void *result, 
+                                       IOBufferMemoryDescriptor *dest);
 
 #ifdef XNU_KERNEL_PRIVATE
     /* Root Domain internals */
@@ -479,6 +486,8 @@ public:
     void        handleQueueSleepWakeUUID(
                     OSObject *obj);
 
+    void        handleDisplayPowerOn( );
+
     void        willNotifyPowerChildren( IOPMPowerStateIndex newPowerState );
 
     IOReturn    setMaintenanceWakeCalendar(
@@ -538,11 +547,12 @@ public:
                     uint32_t *  hibernateFreeRatio,
                     uint32_t *  hibernateFreeTime );
 #endif
-    void        takeStackshot(bool restart, bool isOSXWatchdog);
+    void        takeStackshot(bool restart, bool isOSXWatchdog, bool isSpinDump);
     void        sleepWakeDebugTrig(bool restart);
     void        sleepWakeDebugEnableWdog();
     bool        sleepWakeDebugIsWdogEnabled();
     static void saveTimeoutAppStackShot(void *p0, void *p1);
+    void        sleepWakeDebugSaveSpinDumpFile();
 
 private:
     friend class PMSettingObject;
@@ -612,6 +622,16 @@ private:
     OSArray                 *pmStatsAppResponses;
     IOLock                  *pmStatsLock;   // guards pmStatsAppResponses
 
+    void                    *sleepDelaysReport;     // report to track time taken to go to sleep
+    uint32_t                sleepDelaysClientCnt;   // Number of interested clients in sleepDelaysReport
+    uint64_t                ts_sleepStart;
+    uint64_t                wake2DarkwakeDelay;      // Time taken to change from full wake -> Dark wake
+
+
+    void                    *assertOnWakeReport;    // report to track time spent without any assertions held after wake
+    uint32_t                assertOnWakeClientCnt;  // Number of clients interested in assertOnWakeReport
+    clock_sec_t             assertOnWakeSecs;       // Num of secs after wake for first assertion
+
     bool                    uuidPublished;
 
     // Pref: idle time before idle sleep
@@ -628,6 +648,7 @@ private:
     thread_call_t           diskSyncCalloutEntry;
     thread_call_t           fullWakeThreadCall;
     thread_call_t           hibDebugSetupEntry;
+    thread_call_t           updateConsoleUsersEntry;
 
     // Track system capabilities.
     uint32_t                _desiredCapability;
@@ -694,6 +715,8 @@ private:
     unsigned int            displayIdleForDemandSleep :1;
     unsigned int            darkWakeHibernateError  :1;
     unsigned int            thermalWarningState:1;
+    unsigned int            toldPowerdCapWillChange :1;
+    unsigned int            displayPowerOnRequested:1;
 
     uint32_t                hibernateMode;
     AbsoluteTime            userActivityTime;
@@ -754,6 +777,7 @@ private:
     volatile uint32_t   swd_lock;    /* Lock to access swd_buffer & and its header */
     void  *             swd_buffer;  /* Memory allocated for dumping sleep/wake logs */
     uint8_t             swd_flags;   /* Flags defined in IOPMPrivate.h */
+    void  *             swd_spindump_buffer;
 
     IOMemoryMap  *      swd_logBufMap; /* Memory with sleep/wake logs from previous boot */
 
@@ -819,12 +843,15 @@ private:
 
     void        deregisterPMSettingObject( PMSettingObject * pmso );
 
+    void        checkForValidDebugData(const char *fname, vfs_context_t *ctx, 
+                                            void *tmpBuf, struct vnode **vp);
     void        sleepWakeDebugMemAlloc( );
+    void        sleepWakeDebugSpinDumpMemAlloc( );
     void        sleepWakeDebugDumpFromMem(IOMemoryMap *logBufMap);
     void        sleepWakeDebugDumpFromFile( );
     IOMemoryMap *sleepWakeDebugRetrieve();
     errno_t     sleepWakeDebugSaveFile(const char *name, char *buf, int len);
-    errno_t sleepWakeDebugCopyFile( struct vnode *srcVp, 
+    errno_t     sleepWakeDebugCopyFile( struct vnode *srcVp,
                                vfs_context_t srcCtx,
                                char *tmpBuf, uint64_t tmpBufSize,
                                uint64_t srcOffset, 
@@ -848,6 +875,7 @@ private:
     void        systemDidNotSleep( void );
     void        preventTransitionToUserActive( bool prevent );
     void        setThermalState(OSObject *value);
+    void        copySleepPreventersList(OSArray  **idleSleepList, OSArray  **systemSleepList);
 #endif /* XNU_KERNEL_PRIVATE */
 };
 
@@ -858,8 +886,8 @@ class IORootParent: public IOService
 
 public:
     static void initialize( void );
-    virtual OSObject * copyProperty( const char * aKey ) const;
-    bool start( IOService * nub );
+    virtual OSObject * copyProperty( const char * aKey ) const APPLE_KEXT_OVERRIDE;
+    bool start( IOService * nub ) APPLE_KEXT_OVERRIDE;
     void shutDownSystem( void );
     void restartSystem( void );
     void sleepSystem( void );

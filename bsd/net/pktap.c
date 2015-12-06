@@ -531,8 +531,7 @@ pktap_setdrvspec(ifnet_t ifp, struct ifdrv64 *ifd)
 					break;
 
 				case PKTAP_FILTER_PARAM_IF_NAME:
-					if (x_filter->filter_param_if_name == 0 ||
-						strncmp(x_filter->filter_param_if_name, PKTAP_IFNAME,
+					if (strncmp(x_filter->filter_param_if_name, PKTAP_IFNAME,
 							strlen(PKTAP_IFNAME)) == 0) {
 						error = EINVAL;
 						break;
@@ -758,12 +757,11 @@ pktap_set_procinfo(struct pktap_header *hdr, struct so_procinfo *soprocinfo)
 	/*
 	 * When not delegated, the effective pid is the same as the real pid
 	 */
-	if (soprocinfo->spi_epid != soprocinfo->spi_pid) {
+	if (soprocinfo->spi_delegated != 0) {
 		hdr->pth_flags |= PTH_FLAG_PROC_DELEGATED;
 		hdr->pth_epid = soprocinfo->spi_epid;
 		proc_name(soprocinfo->spi_epid, hdr->pth_ecomm, MAXCOMLEN);
-		if (soprocinfo->spi_epid != 0)
-			uuid_copy(hdr->pth_uuid, soprocinfo->spi_euuid);
+		uuid_copy(hdr->pth_euuid, soprocinfo->spi_euuid);
 	}
 }
 
@@ -807,25 +805,19 @@ pktap_fill_proc_info(struct pktap_header *hdr, protocol_family_t proto,
 	 * For outgoing, do the lookup only if there's an
 	 * associated socket as indicated by the flowhash
 	 */
-	if (outgoing != 0 && (m->m_pkthdr.pkt_flags &
-		(PKTF_FLOW_ID|PKTF_FLOW_LOCALSRC)) == (PKTF_FLOW_ID|PKTF_FLOW_LOCALSRC) &&
-		m->m_pkthdr.pkt_flowsrc == FLOWSRC_INPCB) {
+	if (outgoing != 0 && m->m_pkthdr.pkt_flowsrc == FLOWSRC_INPCB) {
 		/*
 		 * To avoid lock ordering issues we delay the process lookup
 		 * to the BPF read as we cannot
 		 * assume the socket lock is unlocked on output
 		 */
-		if ((m->m_pkthdr.pkt_flags & PKTF_FLOW_RAWSOCK) ||
-		    m->m_pkthdr.pkt_proto == IPPROTO_TCP ||
-		    m->m_pkthdr.pkt_proto == IPPROTO_UDP) {
-			found = 0;
-			hdr->pth_flags |= PTH_FLAG_DELAY_PKTAP;
-			hdr->pth_flowid = m->m_pkthdr.pkt_flowid;
-			if (m->m_pkthdr.pkt_flags & PKTF_FLOW_RAWSOCK)
-				hdr->pth_ipproto = IPPROTO_RAW;
-			else		
-				hdr->pth_ipproto = m->m_pkthdr.pkt_proto;
-		}
+		found = 0;
+		hdr->pth_flags |= PTH_FLAG_DELAY_PKTAP;
+		hdr->pth_flowid = m->m_pkthdr.pkt_flowid;
+		if (m->m_pkthdr.pkt_flags & PKTF_FLOW_RAWSOCK)
+			hdr->pth_ipproto = IPPROTO_RAW;
+		else		
+			hdr->pth_ipproto = m->m_pkthdr.pkt_proto;
 	} else if (outgoing == 0) {
 		struct inpcb *inp = NULL;
 

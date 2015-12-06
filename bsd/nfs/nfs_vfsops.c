@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -455,7 +455,7 @@ nfs4_update_statfs(struct nfsmount *nmp, vfs_context_t ctx)
 	// PUTFH + GETATTR
 	numops = 2;
 	nfsm_chain_build_alloc_init(error, &nmreq, 15 * NFSX_UNSIGNED);
-	nfsm_chain_add_compound_header(error, &nmreq, "statfs", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "statfs", nmp->nm_minor_vers, numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
 	nfsm_chain_add_fh(error, &nmreq, nfsvers, np->n_fhp, np->n_fhsize);
@@ -1986,7 +1986,7 @@ nfs4_mount_update_path_with_symlink(struct nfsmount *nmp, struct nfs_fs_path *nf
 	// PUTFH, READLINK
 	numops = 2;
 	nfsm_chain_build_alloc_init(error, &nmreq, 12 * NFSX_UNSIGNED);
-	nfsm_chain_add_compound_header(error, &nmreq, "readlink", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "readlink", nmp->nm_minor_vers, numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
 	nfsm_chain_add_fh(error, &nmreq, NFS_VER4, fhp->fh_data, fhp->fh_len);
@@ -2180,7 +2180,7 @@ nocomponents:
 		NFSREQ_SECINFO_SET(&si, NULL, NULL, 0, NULL, 0);
 		numops = 2;
 		nfsm_chain_build_alloc_init(error, &nmreq, 9 * NFSX_UNSIGNED);
-		nfsm_chain_add_compound_header(error, &nmreq, "mount", numops);
+		nfsm_chain_add_compound_header(error, &nmreq, "mount", nmp->nm_minor_vers, numops);
 		numops--;
 		nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTROOTFH);
 		numops--;
@@ -2240,7 +2240,7 @@ nocomponents:
 			NFSREQ_SECINFO_SET(&si, NULL, dirfh.fh_data, dirfh.fh_len, isdotdot ? NULL : fspath.np_components[comp], 0);
 		numops = 4;
 		nfsm_chain_build_alloc_init(error, &nmreq, 18 * NFSX_UNSIGNED);
-		nfsm_chain_add_compound_header(error, &nmreq, "mount", numops);
+		nfsm_chain_add_compound_header(error, &nmreq, "mount", nmp->nm_minor_vers, numops);
 		numops--;
 		if (dirfh.fh_len) {
 			nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
@@ -2403,7 +2403,7 @@ gotfh:
 	/* get attrs for mount point root */
 	numops = NMFLAG(nmp, NONAMEDATTR) ? 2 : 3; // PUTFH + GETATTR + OPENATTR
 	nfsm_chain_build_alloc_init(error, &nmreq, 25 * NFSX_UNSIGNED);
-	nfsm_chain_add_compound_header(error, &nmreq, "mount", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "mount", nmp->nm_minor_vers, numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
 	nfsm_chain_add_fh(error, &nmreq, NFS_VER4, dirfh.fh_data, dirfh.fh_len);
@@ -2631,6 +2631,21 @@ nfs_mount_connect(struct nfsmount *nmp)
 	return (error);
 }
 
+/* Table of maximum minor version for a given version */
+uint32_t maxminorverstab[] = {
+	0, /* Version 0 (does not exist) */
+	0, /* Version 1 (does not exist) */
+	0, /* Version 2 */
+	0, /* Version 3 */
+	0, /* Version 4 */
+};
+
+#define NFS_MAX_SUPPORTED_VERSION  ((long)(sizeof (maxminorverstab) / sizeof (uint32_t) - 1))
+#define NFS_MAX_SUPPORTED_MINOR_VERSION(v) ((long)(maxminorverstab[(v)]))
+
+#define DEFAULT_NFS_MIN_VERS VER2PVER(2, 0)
+#define DEFAULT_NFS_MAX_VERS VER2PVER(3, 0)
+
 /*
  * Common code to mount an NFS file system.
  */
@@ -2646,7 +2661,7 @@ mountnfs(
 	int error = 0;
 	struct vfsstatfs *sbp;
 	struct xdrbuf xb;
-	uint32_t i, val, vers = 0, minorvers, maxio, iosize, len;
+	uint32_t i, val, maxio, iosize, len;
 	uint32_t *mattrs;
 	uint32_t *mflags_mask;
 	uint32_t *mflags;
@@ -2675,7 +2690,6 @@ mountnfs(
 		TAILQ_INIT(&nmp->nm_resendq);
 		TAILQ_INIT(&nmp->nm_iodq);
 		TAILQ_INIT(&nmp->nm_gsscl);
-		TAILQ_INIT(&nmp->nm_gssnccl);
 		LIST_INIT(&nmp->nm_monlist);
 		vfs_setfsprivate(mp, nmp);
 		vfs_getnewfsid(mp);
@@ -2689,6 +2703,8 @@ mountnfs(
 		/* set up defaults */
 		nmp->nm_ref = 0;
 		nmp->nm_vers = 0;
+		nmp->nm_min_vers = DEFAULT_NFS_MIN_VERS;
+		nmp->nm_max_vers = DEFAULT_NFS_MAX_VERS;
 		nmp->nm_timeo = NFS_TIMEO;
 		nmp->nm_retry = NFS_RETRANS;
 		nmp->nm_sotype = 0;
@@ -2753,35 +2769,34 @@ mountnfs(
 		}
 	}
 	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_VERSION)) {
-		xb_get_32(error, &xb, vers);
-		if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_MINOR_VERSION))
-			xb_get_32(error, &xb, minorvers);
-		else
-			minorvers = 0;
-		nfsmerr_if(error);
-		switch (vers) {
-		case 2:
-			nmp->nm_vers = NFS_VER2;
-			break;
-		case 3:
-			nmp->nm_vers = NFS_VER3;
-			break;
-		case 4:
-			switch (minorvers) {
-			case 0:
-				nmp->nm_vers = NFS_VER4;
-				break;
-			default:
-				error = EINVAL;
-			}
-			break;
-		default:
+		/* Can't specify a single version and a range */
+		if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_VERSION_RANGE))
 			error = EINVAL;
-		}
-	}
+		xb_get_32(error, &xb, nmp->nm_vers);
+		if (nmp->nm_vers > NFS_MAX_SUPPORTED_VERSION ||
+		    nmp->nm_vers < NFS_VER2)
+			error = EINVAL;
+		if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_MINOR_VERSION))
+			xb_get_32(error, &xb, nmp->nm_minor_vers);
+		else
+			nmp->nm_minor_vers = maxminorverstab[nmp->nm_vers];
+		if (nmp->nm_minor_vers > maxminorverstab[nmp->nm_vers])
+			error = EINVAL;
+		nmp->nm_max_vers = nmp->nm_min_vers = 
+			VER2PVER(nmp->nm_vers, nmp->nm_minor_vers);
+	} 
 	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_MINOR_VERSION)) {
-		/* should have also gotten NFS version (and already gotten minorvers) */
+		/* should have also gotten NFS version (and already gotten minor version) */
 		if (!NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_VERSION))
+			error = EINVAL;
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_VERSION_RANGE)) {
+		xb_get_32(error, &xb, nmp->nm_min_vers);
+		xb_get_32(error, &xb, nmp->nm_max_vers);
+		if ((nmp->nm_min_vers > nmp->nm_max_vers) ||
+		    (PVER2MAJOR(nmp->nm_max_vers) > NFS_MAX_SUPPORTED_VERSION) ||
+		    (PVER2MINOR(nmp->nm_min_vers) > maxminorverstab[PVER2MAJOR(nmp->nm_min_vers)]) ||
+		    (PVER2MINOR(nmp->nm_max_vers) > maxminorverstab[PVER2MAJOR(nmp->nm_max_vers)]))
 			error = EINVAL;
 	}
 	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READ_SIZE))
@@ -3461,6 +3476,10 @@ nfs_mirror_mount_domount(vnode_t dvp, vnode_t vp, vfs_context_t ctx)
 		xb_copy_32(error, &xb, &xbnew, val);
 	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_MINOR_VERSION))
 		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_VERSION_RANGE)) {
+		xb_copy_32(error, &xb, &xbnew, val);
+		xb_copy_32(error, &xb, &xbnew, val);
+	}
 	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READ_SIZE))
 		xb_copy_32(error, &xb, &xbnew, val);
 	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_WRITE_SIZE))
@@ -4286,7 +4305,7 @@ void
 nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 {
 	struct nfsreq *req, *treq;
-	struct nfs_reqqhead iodq;
+	struct nfs_reqqhead iodq, resendq;
 	struct timespec ts = { 1, 0 };
 	struct nfs_open_owner *noop, *nextnoop;
 	nfsnode_t np;
@@ -4366,39 +4385,83 @@ nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 	}
 
 	/*
-	 * Loop through outstanding request list and remove dangling
-	 * references to defunct nfsmount struct
+	 * Be sure all requests for this mount are completed
+	 * and removed from the resend queue.
 	 */
-	TAILQ_INIT(&iodq);
+	TAILQ_INIT(&resendq);
 	lck_mtx_lock(nfs_request_mutex);
 	TAILQ_FOREACH(req, &nfs_reqq, r_chain) {
 		if (req->r_nmp == nmp) {
-			if (req->r_callback.rcb_func && !(req->r_flags & R_WAITSENT)) {
-				/* async I/O RPC needs to be finished */
-				lck_mtx_lock(nfsiod_mutex);
-				if (req->r_achain.tqe_next == NFSREQNOLIST) {
-					TAILQ_INSERT_TAIL(&iodq, req, r_achain);
+			lck_mtx_lock(&req->r_mtx);
+			if (!req->r_error && req->r_nmrep.nmc_mhead == NULL)
+				req->r_error = EIO;
+			if (req->r_flags & R_RESENDQ) {
+				lck_mtx_lock(&nmp->nm_lock);
+				req->r_flags &= ~R_RESENDQ;
+				if (req->r_rchain.tqe_next != NFSREQNOLIST) {
+					TAILQ_REMOVE(&nmp->nm_resendq, req, r_rchain);
+					/*
+					 * Queue up the request so that we can unreference them 
+					 * with out holding nfs_request_mutex
+					 */
+					TAILQ_INSERT_TAIL(&resendq, req, r_rchain);
 				}
-				lck_mtx_unlock(nfsiod_mutex);
+				lck_mtx_unlock(&nmp->nm_lock);
 			}
 			wakeup(req);
+			lck_mtx_unlock(&req->r_mtx);
 		}
 	}
 	lck_mtx_unlock(nfs_request_mutex);
 
-	/* finish any async I/O RPCs queued up */
+	/* Since we've drop the request mutex we can now safely unreference the request */
+	TAILQ_FOREACH_SAFE(req, &resendq, r_rchain, treq) {
+		TAILQ_REMOVE(&resendq, req, r_rchain);
+		nfs_request_rele(req);
+	}
+
+	/*
+	 * Now handle and outstanding async requests. We need to walk the
+	 * request queue again this time with the nfsiod_mutex held. No
+	 * other iods can grab our requests until we've put them on our own
+	 * local iod queue for processing.
+	 */
+	TAILQ_INIT(&iodq);
+	lck_mtx_lock(nfs_request_mutex);
 	lck_mtx_lock(nfsiod_mutex);
+	TAILQ_FOREACH(req, &nfs_reqq, r_chain) {
+		if (req->r_nmp == nmp) {
+			lck_mtx_lock(&req->r_mtx);
+			if (req->r_callback.rcb_func
+			    && !(req->r_flags & R_WAITSENT) && !(req->r_flags & R_IOD)) {
+				/* 
+				 * Since R_IOD is not set then we need to handle it. If
+				 * we're not on a list add it to our iod queue. Otherwise
+				 * we must already be on nm_iodq which is added to our
+				 * local queue below.
+				 * %%% We should really keep a back pointer to our iod queue
+				 * that we're on.
+				 */
+				req->r_flags |= R_IOD;
+				if (req->r_achain.tqe_next == NFSREQNOLIST) {
+					TAILQ_INSERT_TAIL(&iodq, req, r_achain);
+				}
+			}
+			lck_mtx_unlock(&req->r_mtx);
+		}
+	}
+
+	/* finish any async I/O RPCs queued up */
 	if (nmp->nm_iodlink.tqe_next != NFSNOLIST)
 		TAILQ_REMOVE(&nfsiodmounts, nmp, nm_iodlink);
 	TAILQ_CONCAT(&iodq, &nmp->nm_iodq, r_achain);
 	lck_mtx_unlock(nfsiod_mutex);
+	lck_mtx_unlock(nfs_request_mutex);
+
 	TAILQ_FOREACH_SAFE(req, &iodq, r_achain, treq) {
 		TAILQ_REMOVE(&iodq, req, r_achain);
-		lck_mtx_lock(nfsiod_mutex);
-		req->r_achain.tqe_next = NFSIODCOMPLETING;
-		lck_mtx_unlock(nfsiod_mutex);
+		req->r_achain.tqe_next = NFSREQNOLIST;
 		lck_mtx_lock(&req->r_mtx);
-		req->r_error = ENXIO;
 		docallback = !(req->r_flags & R_WAITSENT);
 		lck_mtx_unlock(&req->r_mtx);
 		if (docallback)
@@ -4697,7 +4760,7 @@ nfs4_getquota(struct nfsmount *nmp, vfs_context_t ctx, uid_t id, int type, struc
 	// PUTFH + GETATTR
 	numops = 2;
 	nfsm_chain_build_alloc_init(error, &nmreq, 15 * NFSX_UNSIGNED);
-	nfsm_chain_add_compound_header(error, &nmreq, "quota", numops);
+	nfsm_chain_add_compound_header(error, &nmreq, "quota", nmp->nm_minor_vers, numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
 	nfsm_chain_add_fh(error, &nmreq, nfsvers, np->n_fhp, np->n_fhsize);
@@ -5069,7 +5132,7 @@ nfs_mountinfo_assemble(struct nfsmount *nmp, struct xdrbuf *xb)
 	xb_add_bitmap(error, &xbinfo, mflags, NFS_MFLAG_BITMAP_LEN);
 	xb_add_32(error, &xbinfo, nmp->nm_vers);		/* NFS_VERSION */
 	if (nmp->nm_vers >= NFS_VER4)
-		xb_add_32(error, &xbinfo, 0);			/* NFS_MINOR_VERSION */
+		xb_add_32(error, &xbinfo, nmp->nm_minor_vers);	/* NFS_MINOR_VERSION */
 	xb_add_32(error, &xbinfo, nmp->nm_rsize);		/* READ_SIZE */
 	xb_add_32(error, &xbinfo, nmp->nm_wsize);		/* WRITE_SIZE */
 	xb_add_32(error, &xbinfo, nmp->nm_readdirsize);		/* READDIR_SIZE */

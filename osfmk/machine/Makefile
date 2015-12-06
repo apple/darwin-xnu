@@ -7,8 +7,11 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
+PRIVATE_DATAFILES = \
+	cpu_capabilities.h
 
-DATAFILES = \
+KERNELFILES = \
+	atomic.h	\
 	cpu_capabilities.h	\
 	cpu_number.h	\
 	io_map_entries.h \
@@ -21,11 +24,11 @@ DATAFILES = \
 	pal_hibernate.h		\
 	simple_lock.h
 
-INSTALL_MI_LCL_LIST = cpu_capabilities.h
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MI_DIR = machine
 
-EXPORT_MI_LIST = ${DATAFILES}
+EXPORT_MI_LIST = ${KERNELFILES}
 
 EXPORT_MI_DIR = machine
 

@@ -59,9 +59,9 @@ protected:
     int producerIndex, consumerIndex;
     int size;
 
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
-    virtual bool checkForWork();
+    virtual bool checkForWork() APPLE_KEXT_OVERRIDE;
 
 public:
     static IOCommandQueue *commandQueue(OSObject *inOwner,

@@ -1,4 +1,4 @@
-#!/bin/sh -x
+#!/bin/sh -xe
 #
 # Copyright (c) 2010 Apple Inc. All rights reserved.
 #
@@ -34,6 +34,7 @@ MIG=`xcrun -sdk "$SDKROOT" -find mig`
 MIGCC=`xcrun -sdk "$SDKROOT" -find cc`
 export MIGCC
 MIG_DEFINES="-DLIBSYSCALL_INTERFACE"
+MIG_HEADER_OBJ="$OBJROOT/mig_hdr/include/mach"
 MIG_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/mach"
 MIG_PRIVATE_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/local/include/mach"
 SERVER_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/servers"
@@ -54,6 +55,7 @@ fi
 SRC="$SRCROOT/mach"
 MIG_INTERNAL_HEADER_DST="$BUILT_PRODUCTS_DIR/internal_hdr/include/mach"
 MIG_PRIVATE_DEFS_INCFLAGS="-I${SDKROOT}/System/Library/Frameworks/System.framework/PrivateHeaders"
+FILTER_MIG="$SRCROOT/xcodescripts/filter_mig.awk"
 
 MIGS="clock.defs
 	clock_priv.defs
@@ -75,7 +77,7 @@ MIGS_PRIVATE=""
 
 MIGS_DUAL_PUBLIC_PRIVATE=""
 
-if [[ "$PLATFORM_NAME" = "iphoneos" || "$PLATFORM_NAME" = "iphonesimulator"  || "$PLATFORM_NAME" = "iphoneosnano" || "$PLATFORM_NAME" = "iphonenanosimulator" ]]
+if [[ "$PLATFORM_NAME" = "iphoneos" || "$PLATFORM_NAME" = "iphonesimulator"  || "$PLATFORM_NAME" = "iphoneosnano" || "$PLATFORM_NAME" = "iphonenanosimulator" || "$PLATFORM_NAME" = "tvos" || "$PLATFOM_NAME" = "tvsimulator" || "$PLATFOM_NAME" = "appletvos" || "$PLATFOM_NAME" = "appletvsimulator" || "$PLATFOM_NAME" = "watchos" || "$PLATFOM_NAME" = "watchsimulator" ]]
 then
 	MIGS_PRIVATE="mach_vm.defs"
 else
@@ -101,6 +103,8 @@ MACH_HDRS="mach.h
 	vm_task.h
 	vm_page_size.h"
 
+MIG_FILTERS="watchos_prohibited_mig.txt"
+
 # install /usr/include/server headers 
 mkdir -p $SERVER_HEADER_DST
 for hdr in $SERVER_HDRS; do
@@ -119,10 +123,16 @@ $MIG -novouchers -arch $MACHINE_ARCH -header "$SERVER_HEADER_DST/netname.h" $SRC
 # install /usr/include/mach mig headers
 
 mkdir -p $MIG_HEADER_DST
+mkdir -p $MIG_HEADER_OBJ
 
 for mig in $MIGS $MIGS_DUAL_PUBLIC_PRIVATE; do
 	MIG_NAME=`basename $mig .defs`
-	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $SRC/$mig
+	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_HEADER_OBJ/$MIG_NAME.h" $MIG_DEFINES $SRC/$mig
+	for filter in $MIG_FILTERS; do
+		$FILTER_MIG $SRC/$filter $MIG_HEADER_OBJ/$MIG_NAME.h > $MIG_HEADER_OBJ/$MIG_NAME.tmp.h
+		mv $MIG_HEADER_OBJ/$MIG_NAME.tmp.h $MIG_HEADER_OBJ/$MIG_NAME.h
+	done
+	install -o 0 -c -m 444 $MIG_HEADER_OBJ/$MIG_NAME.h $MIG_HEADER_DST/$MIG_NAME.h
 done
 
 mkdir -p $MIG_PRIVATE_HEADER_DST

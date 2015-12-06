@@ -1357,7 +1357,10 @@ extern void dtrace_copystr(uintptr_t, uintptr_t, size_t, volatile uint16_t *);
 /*
  * DTrace restriction checks
  */
+extern void dtrace_restriction_policy_load(void);
 extern boolean_t dtrace_is_restricted(void);
+extern boolean_t dtrace_is_running_apple_internal(void);
+extern boolean_t dtrace_fbt_probes_restricted(void);
 extern boolean_t dtrace_can_attach_to_proc(proc_t);
 
 /*

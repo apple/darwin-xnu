@@ -41,8 +41,7 @@
 #include <kperf/pet.h>
 #include <kperf/timetrigger.h>
 
-extern kern_return_t task_resume_internal(task_t);
-extern kern_return_t task_suspend_internal(task_t);
+#include <kern/task.h>
 
 /* timer id to call back on */
 static unsigned pet_timerid = 0;

@@ -314,7 +314,7 @@ yarrow_init(
 		panic("Couldn't initialize Yarrow, /dev/random will not work.");
 	}
 
-	perr = prngInput(yp->PrngRef, (BYTE*) entropy, (UINT) entropyLength,
+	perr = prngInput(yp->PrngRef, __DECONST(BYTE*, entropy), (UINT) entropyLength,
 			SYSTEM_SOURCE, (UINT) entropyLength * 8);
 	if (perr != 0) {
 		/* an error, complain */
@@ -347,7 +347,9 @@ yarrow_generate(
 	int		bytes_remaining = (int) outlen;
 
 	yp->bytes_since_reseed += outlen;
-	if (yp->bytes_since_reseed > RESEED_BYTES)
+	/* Reseed needed? But allow any length immediately after reseeding. */
+	if (yp->bytes_since_reseed != outlen &&
+	    yp->bytes_since_reseed > RESEED_BYTES)
 		return CCDRBG_STATUS_NEED_RESEED;
 	
 	while (bytes_remaining > 0) {
@@ -380,7 +382,7 @@ yarrow_reseed(
 #pragma unused(in)
 	YarrowContextp	yp = (YarrowContextp) prng;
 
-	(void) prngInput(yp->PrngRef, (BYTE*) entropy, (UINT) entropylen,
+	(void) prngInput(yp->PrngRef, __DECONST(BYTE*, entropy), (UINT) entropylen,
 			 SYSTEM_SOURCE, (UINT) entropylen * 8);
 	(void) prngForceReseed(yp->PrngRef, RESEED_TICKS);
 

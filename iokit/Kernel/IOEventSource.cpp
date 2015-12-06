@@ -114,7 +114,7 @@ bool IOEventSource::tryCloseGate()
 
 int IOEventSource::sleepGate(void *event, UInt32 type)
 { 
-	bool res; 
+	int res; 
 	IOStatisticsOpenGate(); 
 	res = workLoop->sleepGate(event, type); 
 	IOStatisticsCloseGate(); 
@@ -123,7 +123,7 @@ int IOEventSource::sleepGate(void *event, UInt32 type)
 
 int IOEventSource::sleepGate(void *event, AbsoluteTime deadline, UInt32 type)
 { 
-	bool res; 
+	int res; 
 	IOStatisticsOpenGate(); 
 	res = workLoop->sleepGate(event, deadline, type);
 	IOStatisticsCloseGate(); 

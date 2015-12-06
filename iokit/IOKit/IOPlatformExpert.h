@@ -73,6 +73,7 @@ extern void PESetUTCTimeOfDay( clock_sec_t secs, clock_usec_t usecs );
 
 /* unless it's a "well-known" property, these will read/write out the value as raw data */
 
+extern boolean_t PEWriteNVRAMBooleanProperty(const char *symbol, boolean_t value);
 extern boolean_t PEWriteNVRAMProperty(const char *symbol, const void *value, const unsigned int len);
 
 extern boolean_t PEReadNVRAMProperty(const char *symbol, void *value, unsigned int *len);
@@ -92,6 +93,7 @@ extern const OSSymbol *		gIOPlatformWakeActionKey;
 extern const OSSymbol *		gIOPlatformQuiesceActionKey;
 extern const OSSymbol *		gIOPlatformActiveActionKey;
 extern const OSSymbol *		gIOPlatformHaltRestartActionKey;
+extern const OSSymbol *		gIOPlatformPanicActionKey;
 
 class IORangeAllocator;
 class IONVRAMController;
@@ -130,8 +132,8 @@ protected:
     virtual void PMInstantiatePowerDomains ( void );
 
 public:
-    virtual bool attach( IOService * provider );
-    virtual bool start( IOService * provider );
+    virtual bool attach( IOService * provider ) APPLE_KEXT_OVERRIDE;
+    virtual bool start( IOService * provider ) APPLE_KEXT_OVERRIDE;
     virtual bool configure( IOService * provider );
     virtual IOService * createNub( OSDictionary * from );
 
@@ -165,7 +167,7 @@ public:
     virtual IOReturn callPlatformFunction(const OSSymbol *functionName,
 					  bool waitForFunction,
 					  void *param1, void *param2,
-					  void *param3, void *param4);
+					  void *param3, void *param4) APPLE_KEXT_OVERRIDE;
 
     virtual IORangeAllocator * getPhysicalRangeAllocator(void);
 
@@ -217,8 +219,8 @@ private:
 
 public:
     virtual IOService * probe(	IOService * 	provider,
-				SInt32 	  *	score );
-    virtual bool configure( IOService * provider );
+				SInt32 	  *	score ) APPLE_KEXT_OVERRIDE;
+    virtual bool configure( IOService * provider ) APPLE_KEXT_OVERRIDE;
 
     virtual void processTopLevel( IORegistryEntry * root );
     virtual const char * deleteList( void ) = 0;
@@ -227,16 +229,16 @@ public:
     virtual bool createNubs( IOService * parent, OSIterator * iter );
 
     virtual bool compareNubName( const IOService * nub, OSString * name,
-				 OSString ** matched = 0 ) const;
+				 OSString ** matched = 0 ) const APPLE_KEXT_OVERRIDE;
 
-    virtual IOReturn getNubResources( IOService * nub );
+    virtual IOReturn getNubResources( IOService * nub ) APPLE_KEXT_OVERRIDE;
 
-    virtual bool getModelName( char * name, int maxLength );
-    virtual bool getMachineName( char * name, int maxLength );
+    virtual bool getModelName( char * name, int maxLength ) APPLE_KEXT_OVERRIDE;
+    virtual bool getMachineName( char * name, int maxLength ) APPLE_KEXT_OVERRIDE;
     
-    virtual void registerNVRAMController( IONVRAMController * nvram );
+    virtual void registerNVRAMController( IONVRAMController * nvram ) APPLE_KEXT_OVERRIDE;
 
-    virtual int haltRestart(unsigned int type);
+    virtual int haltRestart(unsigned int type) APPLE_KEXT_OVERRIDE;
 
     /* virtual */ IOReturn readXPRAM(IOByteCount offset, UInt8 * buffer,
 				     IOByteCount length);
@@ -265,8 +267,8 @@ public:
 					       IOByteCount offset, UInt8 * buffer,
 					       IOByteCount length);
 
-    virtual IOByteCount savePanicInfo(UInt8 *buffer, IOByteCount length);
-    virtual OSString* createSystemSerialNumberString(OSData* myProperty);
+    virtual IOByteCount savePanicInfo(UInt8 *buffer, IOByteCount length) APPLE_KEXT_OVERRIDE;
+    virtual OSString* createSystemSerialNumberString(OSData* myProperty) APPLE_KEXT_OVERRIDE;
 
     OSMetaClassDeclareReservedUnused(IODTPlatformExpert,  0);
     OSMetaClassDeclareReservedUnused(IODTPlatformExpert,  1);
@@ -295,12 +297,17 @@ private:
 public:
     virtual bool initWithArgs( void * p1, void * p2,
 					void * p3, void *p4 );
-    virtual bool compareName( OSString * name, OSString ** matched = 0 ) const;
+    virtual bool compareName( OSString * name, OSString ** matched = 0 ) const APPLE_KEXT_OVERRIDE;
 
-    virtual IOWorkLoop *getWorkLoop() const;
-    virtual IOReturn setProperties( OSObject * properties );
+    virtual IOWorkLoop *getWorkLoop() const APPLE_KEXT_OVERRIDE;
+    virtual IOReturn setProperties( OSObject * properties ) APPLE_KEXT_OVERRIDE;
 
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
+
+    virtual IOReturn newUserClient( task_t owningTask, void * securityID,
+                                    UInt32 type,  OSDictionary * properties,
+                                    IOUserClient ** handler) APPLE_KEXT_OVERRIDE;
+
 
     OSMetaClassDeclareReservedUnused(IOPlatformExpertDevice,  0);
     OSMetaClassDeclareReservedUnused(IOPlatformExpertDevice,  1);
@@ -320,9 +327,9 @@ class IOPlatformDevice : public IOService
     ExpansionData *reserved;
 
 public:
-    virtual bool compareName( OSString * name, OSString ** matched = 0 ) const;
-    virtual IOService * matchLocation( IOService * client );
-    virtual IOReturn getResources( void );
+    virtual bool compareName( OSString * name, OSString ** matched = 0 ) const APPLE_KEXT_OVERRIDE;
+    virtual IOService * matchLocation( IOService * client ) APPLE_KEXT_OVERRIDE;
+    virtual IOReturn getResources( void ) APPLE_KEXT_OVERRIDE;
 
     OSMetaClassDeclareReservedUnused(IOPlatformDevice,  0);
     OSMetaClassDeclareReservedUnused(IOPlatformDevice,  1);

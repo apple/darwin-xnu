@@ -197,8 +197,8 @@
 #define M_MACTEMP	104	/* MAC framework */
 #define M_SBUF		105	/* string buffers */
 #define M_EXTATTR	106	/* extended attribute */
-#define M_LCTX		107	/* process login context */
-/* M_TRAFFIC_MGT 108 */
+#define M_SELECT	107	/* per-thread select memory */
+/* M_TRAFFIC_MGT	108 */
 #if HFS_COMPRESSION
 #define M_DECMPFS_CNODE	109	/* decmpfs cnode structures */
 #endif /* HFS_COMPRESSION */
@@ -216,8 +216,9 @@
 #define M_NECP_IP_POLICY 121 /* NECP IP-level policies */
 #define M_FD_VN_DATA	122	/* Per fd vnode data */
 #define M_FD_DIRBUF	123	/* Directory entries' buffer */
+#define M_NETAGENT	124	/* Network Agents */
 
-#define	M_LAST		124	/* Must be last type + 1 */
+#define	M_LAST		125	/* Must be last type + 1 */
 
 #else /* BSD_KERNEL_PRIVATE */
 
@@ -259,6 +260,67 @@ extern struct kmemstats kmemstats[];
  * The malloc/free primatives used
  * by the BSD kernel code.
  */
+#if XNU_KERNEL_PRIVATE
+
+#include <mach/vm_types.h>
+
+#define	MALLOC(space, cast, size, type, flags) \
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+	(space) = (cast)__MALLOC(size, type, flags, &site); })
+#define	REALLOC(space, cast, addr, size, type, flags) \
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+	(space) = (cast)__REALLOC(addr, size, type, flags, &site); })
+
+#define	_MALLOC(size, type, flags) \
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+	__MALLOC(size, type, flags, &site); })
+#define	_REALLOC(addr, size, type, flags) \
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+	__REALLOC(addr, size, type, flags, &site); })
+
+#define	_MALLOC_ZONE(size, type, flags) \
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+	__MALLOC_ZONE(size, type, flags, &site); })
+
+#define FREE(addr, type) \
+	_FREE((void *)addr, type)
+
+#define MALLOC_ZONE(space, cast, size, type, flags) \
+	(space) = (cast)_MALLOC_ZONE(size, type, flags)
+
+#define FREE_ZONE(addr, size, type) \
+	_FREE_ZONE((void *)addr, size, type)
+
+extern void	*__MALLOC(
+			size_t		      size,
+			int		      type,
+			int		      flags,
+			vm_allocation_site_t *site);
+
+extern void	_FREE(
+			void		*addr,
+			int		type);
+
+extern void	*__REALLOC(
+			void		     *addr,
+			size_t		      size,
+			int		      type,
+			int		      flags,
+			vm_allocation_site_t *site);
+
+extern void	*__MALLOC_ZONE(
+			size_t		size,
+			int		type,
+			int		flags,
+			vm_allocation_site_t *site);
+
+extern void	_FREE_ZONE(
+			void		*elem,
+			size_t		size,
+			int		type);
+
+#else /* XNU_KERNEL_PRIVATE */
+
 #define	MALLOC(space, cast, size, type, flags) \
 	(space) = (cast)_MALLOC(size, type, flags)
 
@@ -298,6 +360,9 @@ extern void	_FREE_ZONE(
 			void		*elem,
 			size_t		size,
 			int		type);
+
+
+#endif /* !XNU_KERNEL_PRIVATE */
 
 #endif	/* KERNEL */
 

@@ -80,4 +80,36 @@ struct udphdr {
  * User-settable options (used with setsockopt).
  */
 #define	UDP_NOCKSUM	0x01	/* don't checksum outbound payloads */
-#endif
+#ifdef PRIVATE
+#define UDP_KEEPALIVE_OFFLOAD	0x02 /* Send keep-alive at a given interval */
+#endif /* PRIVATE */
+
+#ifdef PRIVATE
+/*
+ * This is a mechanism to offload keep-alive or heartbeat messages
+ * to the Wifi driver when the host processor is sleeping. The application
+ * will give a small amount of data that can be placed in the message. The
+ * application will also specify an interval at which these messages
+ * should be sent.
+ *
+ * The purpose of these messages is to detect loss of connectivity in
+ * peer-to-peer communication without keeping the host processor awake.
+ *
+ * The application will pass this data to the kernel using setsockopt. It
+ * can set the interval to 0 to disable keepalive offload. 
+ */
+#define	UDP_KEEPALIVE_OFFLOAD_DATA_SIZE	32
+
+/* Maximum keep alive interval in seconds */
+#define UDP_KEEPALIVE_INTERVAL_MAX_SECONDS	65536
+
+struct udp_keepalive_offload {
+	u_char ka_data[UDP_KEEPALIVE_OFFLOAD_DATA_SIZE];
+	u_int16_t ka_interval;		/* interval in seconds */
+	u_int8_t ka_data_len;		/* valid length of ka_data */
+	u_int8_t ka_type;		/* type of application */
+#define	UDP_KEEPALIVE_OFFLOAD_TYPE_AIRPLAY	0x1
+};
+
+#endif /* PRIVATE */
+#endif /* _NETINET_UDP_H */

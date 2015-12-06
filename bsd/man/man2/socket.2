@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)socket.2	8.1 (Berkeley) 6/4/93
 .\"
-.Dd June 4, 1993
+.Dd March 18, 2015
 .Dt SOCKET 2
 .Os 
 .Sh NAME
@@ -48,7 +48,7 @@
 .Fa "int protocol"
 .Fc
 .Sh DESCRIPTION
-.Fn Socket
+.Fn socket
 creates an endpoint for communication and returns a descriptor.
 .Pp
 The
@@ -80,8 +80,8 @@ defined types are:
 SOCK_STREAM
 SOCK_DGRAM
 SOCK_RAW
-SOCK_SEQPACKET
-SOCK_RDM
+.\"SOCK_SEQPACKET
+.\"SOCK_RDM
 .Ed
 .Pp
 A
@@ -94,23 +94,24 @@ A
 socket supports
 datagrams (connectionless, unreliable messages of
 a fixed (typically small) maximum length).
-A
-.Dv SOCK_SEQPACKET
-socket may provide a sequenced, reliable,
-two-way connection-based data transmission path for datagrams
-of fixed maximum length; a consumer may be required to read
-an entire packet with each read system call.
-This facility is protocol specific, and presently implemented
-only for
-.Dv PF_NS .
+.\"A
+.\".Dv SOCK_SEQPACKET
+.\"socket may provide a sequenced, reliable,
+.\"two-way connection-based data transmission path for datagrams
+.\"of fixed maximum length; a consumer may be required to read
+.\"an entire packet with each read system call.
+.\"This facility is protocol specific, and presently implemented
+.\"only for
+.\".Dv PF_NS .
 .Dv SOCK_RAW
 sockets provide access to internal network protocols and interfaces.
-The types
+The type
 .Dv SOCK_RAW ,
-which is available only to the super-user, and
-.Dv SOCK_RDM ,
-which is planned,
-but not yet implemented, are not described here.
+which is available only to the super-user. 
+.\" , and
+.\" .Dv SOCK_RDM ,
+.\" which is planned,
+.\" but not yet implemented, are not described here.
 .Pp
 The
 .Fa protocol
@@ -131,6 +132,8 @@ to pipes.  A stream socket must be in a
 state before any data may be sent or received
 on it.  A connection to another socket is created with a
 .Xr connect 2
+or
+.Xr connectx 2
 call.  Once connected, data may be transferred using
 .Xr read 2
 and
@@ -172,16 +175,16 @@ A
 signal is raised if a process sends
 on a broken stream; this causes naive processes,
 which do not handle the signal, to exit.
-.Pp
-.Dv SOCK_SEQPACKET
-sockets employ the same system calls
-as
-.Dv SOCK_STREAM
-sockets.  The only difference
-is that 
-.Xr read 2
-calls will return only the amount of data requested,
-and any remaining in the arriving packet will be discarded.
+.\" .Pp
+.\" .Dv SOCK_SEQPACKET
+.\" sockets employ the same system calls
+.\" as
+.\" .Dv SOCK_STREAM
+.\" sockets.  The only difference
+.\" is that 
+.\" .Xr read 2
+.\" calls will return only the amount of data requested,
+.\" and any remaining in the arriving packet will be discarded.
 .Pp
 .Dv SOCK_DGRAM
 and
@@ -266,6 +269,8 @@ is necessary.
 .Xr accept 2 ,
 .Xr bind 2 ,
 .Xr connect 2 ,
+.Xr connectx 2 ,
+.Xr disconnectx 2 ,
 .Xr getsockname 2 ,
 .Xr getsockopt 2 ,
 .Xr ioctl 2 ,

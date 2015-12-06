@@ -742,7 +742,8 @@ pshm_truncate(__unused proc_t p, struct fileproc *fp, __unused int fd,
 		pshmobj_next_p = &pshmobj->pshmo_next;
 	}
 	
-	pinfo->pshm_flags = PSHM_ALLOCATED;
+	pinfo->pshm_flags |= PSHM_ALLOCATED;
+	pinfo->pshm_flags &= ~(PSHM_ALLOCATING);
 	pinfo->pshm_length = total_size;
 	PSHM_SUBSYS_UNLOCK();
 	return(0);

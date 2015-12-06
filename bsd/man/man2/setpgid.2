@@ -65,11 +65,6 @@ If the invoker is not the super-user, then the affected process
 must have the same effective user-id as the invoker or be a descendant
 of the invoking process.
 .Pp
-If the calling process is not already a session leader,
-.Fn setpgrp
-sets the process group ID of the calling process
-to that of the calling process.
-Any new session that this creates will have no controlling terminal.
 .Sh RETURN VALUES
 .Fn Setpgid
 returns 0 when the operation was successful.

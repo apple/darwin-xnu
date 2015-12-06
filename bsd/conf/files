@@ -47,7 +47,6 @@ OPTIONS/sysv_msg			optional sysv_msg
 OPTIONS/sysv_shm			optional sysv_shm
 OPTIONS/importance_inheritance		optional importance_inheritance
 OPTIONS/importance_debug		optional importance_debug
-OPTIONS/in_kernel_tests			optional config_in_kernel_tests
 OPTIONS/config_ecc_logging		optional config_ecc_logging
 
 #
@@ -215,18 +214,20 @@ bsd/net/route.c				optional networking
 bsd/net/rtsock.c			optional networking
 bsd/net/netsrc.c			optional networking
 bsd/net/ntstat.c			optional networking
+bsd/net/net_perf.c			optional networking
 bsd/net/if_gif.c          		optional gif
 bsd/net/if_stf.c          		optional stf
 bsd/net/kpi_interface.c		optional networking
 bsd/net/kpi_protocol.c		optional networking
 bsd/net/kpi_interfacefilter.c	optional networking
 bsd/net/net_str_id.c			optional networking
-bsd/net/if_utun.c          		optional networking
+bsd/net/if_utun.c			optional networking
 bsd/net/if_utun_crypto.c		optional networking
 bsd/net/if_utun_crypto_dtls.c		optional networking
 bsd/net/if_utun_crypto_ipsec.c		optional networking
-bsd/net/if_ipsec.c          		optional ipsec
-bsd/net/necp.c          		optional necp
+bsd/net/if_ipsec.c			optional ipsec
+bsd/net/necp.c				optional necp
+bsd/net/network_agent.c			optional networking
 bsd/net/if_pflog.c			optional pflog
 bsd/net/pf.c				optional pf
 bsd/net/pf_if.c				optional pf
@@ -269,7 +270,6 @@ bsd/net/altq/altq_subr.c		optional pf_altq
 
 bsd/netinet/igmp.c			optional inet
 bsd/netinet/in.c			optional inet
-bsd/netinet/in_dhcp.c			optional inet
 bsd/netinet/dhcp_options.c		optional inet
 bsd/netinet/in_arp.c			optional inet
 bsd/netinet/in_mcast.c			optional inet
@@ -287,6 +287,7 @@ bsd/netinet/ip_id.c			optional inet
 bsd/netinet/ip_input.c			optional inet
 bsd/netinet/ip_output.c			optional inet
 bsd/netinet/raw_ip.c			optional inet
+bsd/netinet/tcp_cache.c			optional inet
 bsd/netinet/tcp_debug.c			optional tcpdebug
 bsd/netinet/tcp_input.c			optional inet
 bsd/netinet/tcp_output.c		optional inet
@@ -395,6 +396,7 @@ bsd/hfs/hfs_vfsutils.c				optional hfs
 bsd/hfs/hfs_vnops.c				optional hfs
 bsd/hfs/hfs_xattr.c				optional hfs
 bsd/hfs/MacOSStubs.c				optional hfs
+bsd/hfs/hfs_extents.c				optional hfs
 bsd/hfs/hfs_cprotect.c				standard
 bsd/hfs/rangelist.c				optional hfs
 bsd/hfs/hfscommon/BTree/BTree.c			optional hfs
@@ -481,6 +483,7 @@ bsd/kern/sys_pipe.c			standard
 bsd/kern/sys_socket.c			optional sockets
 bsd/kern/sys_domain.c			optional sockets
 bsd/kern/sys_coalition.c		optional config_coalitions
+bsd/kern/sys_work_interval.c		standard
 ./syscalls.c				standard
 bsd/kern/tty.c				standard
 bsd/kern/tty_compat.c			standard
@@ -538,6 +541,7 @@ bsd/kern/imageboot.c			optional config_imageboot
 osfmk/kperf/kperfbsd.c			optional kperf
 bsd/kern/kern_kpc.c			optional kpc
 
-bsd/kern/kern_tests.c			optional config_in_kernel_tests
-
 bsd/kern/proc_uuid_policy.c		optional config_proc_uuid_policy
+
+bsd/pgo/profile_runtime.c        	standard
+

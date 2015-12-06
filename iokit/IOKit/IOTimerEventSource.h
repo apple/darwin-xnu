@@ -93,9 +93,9 @@ protected:
 
 /*! @function free
     @abstract Sub-class implementation of free method, frees calloutEntry */
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
-    virtual void setWorkLoop(IOWorkLoop *workLoop);
+    virtual void setWorkLoop(IOWorkLoop *workLoop) APPLE_KEXT_OVERRIDE;
 
 public:
 
@@ -121,12 +121,12 @@ public:
 /*! @function enable
     @abstract Enables a call to the action.
     @discussion Allows the action function to be called.  If the timer event source was disabled while a call was outstanding and the call wasn't cancelled then it will be rescheduled.  So a disable/enable pair will disable calls from this event source. */
-    virtual void enable();
+    virtual void enable() APPLE_KEXT_OVERRIDE;
 
 /*! @function disable
     @abstract Disable a timed callout.
     @discussion When disable returns the action will not be called until the next time enable(qv) is called. */
-    virtual void disable();
+    virtual void disable() APPLE_KEXT_OVERRIDE;
 
 
 /*! @function setTimeoutTicks

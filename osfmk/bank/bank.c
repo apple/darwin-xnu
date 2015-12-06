@@ -641,7 +641,7 @@ get_bank_task_context(task_t task)
 	}
 	/* We won the race. Take a ref on the ledger and initialize bank task. */
 	bank_task->bt_creditcard = task->ledger;
-	bank_task->bt_pid = audit_token_pid_from_task(task);
+	bank_task->bt_pid = task_pid(task);
 #if DEVELOPMENT || DEBUG
 	bank_task->bt_task = task;
 #endif
@@ -763,6 +763,12 @@ bank_rollup_chit_to_tasks(
 		return;
 	}
 
+#if DEVELOPMENT || DEBUG
+	if (debit != 0) {
+		panic("bank_rollup: debit: %lld non zero\n", debit);
+	}
+#endif
+
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_CPU_TIME))) | DBG_FUNC_NONE,
 			bank_merchant->bt_pid, bank_holder->bt_pid, credit, debit, 0);
 #if CONFIG_BANK
@@ -822,6 +828,7 @@ bank_billed_time(bank_task_t bank_task)
 #ifdef CONFIG_BANK
 	bank_account_t bank_account;
 	int64_t temp = 0;
+	kern_return_t kr;
 #endif
 	if (bank_task == BANK_TASK_NULL) {
 		return balance;
@@ -830,13 +837,27 @@ bank_billed_time(bank_task_t bank_task)
 #ifdef CONFIG_BANK
 	lck_mtx_lock(&bank_task->bt_acc_to_pay_lock);
 
-	ledger_get_balance(bank_task->bt_creditcard, task_ledgers.cpu_time_billed_to_me, &temp);
-	balance +=temp;
+	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.cpu_time_billed_to_me, &temp);
+	if (kr == KERN_SUCCESS && temp >= 0) {
+		balance += temp;
+	}
+#if DEVELOPMENT || DEBUG
+	else {
+		printf("bank_bill_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
+	}
+#endif /* DEVELOPMENT || DEBUG */
 
 	queue_iterate(&bank_task->bt_accounts_to_pay, bank_account, bank_account_t, ba_next_acc_to_pay) {
 		temp = 0;
-		ledger_get_balance(bank_account->ba_bill, bank_ledgers.cpu_time, &temp);
-		balance += temp;
+		kr = ledger_get_balance(bank_account->ba_bill, bank_ledgers.cpu_time, &temp);
+		if (kr == KERN_SUCCESS && temp >= 0) {
+			balance += temp;
+		}
+#if DEVELOPMENT || DEBUG
+		else {
+			printf("bank_bill_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
+		}
+#endif /* DEVELOPMENT || DEBUG */
 	}
 	lck_mtx_unlock(&bank_task->bt_acc_to_pay_lock);
 #endif
@@ -855,6 +876,7 @@ bank_serviced_time(bank_task_t bank_task)
 #ifdef CONFIG_BANK
 	bank_account_t bank_account;
 	int64_t temp = 0;
+	kern_return_t kr;
 #endif
 	if (bank_task == BANK_TASK_NULL) {
 		return balance;
@@ -863,13 +885,27 @@ bank_serviced_time(bank_task_t bank_task)
 #ifdef CONFIG_BANK
 	lck_mtx_lock(&bank_task->bt_acc_to_charge_lock);
 
-	ledger_get_balance(bank_task->bt_creditcard, task_ledgers.cpu_time_billed_to_others, &temp);
-	balance +=temp;
+	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.cpu_time_billed_to_others, &temp);
+	if (kr == KERN_SUCCESS && temp >= 0) {
+		balance += temp;
+	}
+#if DEVELOPMENT || DEBUG
+	else {
+		printf("bank_serviced_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
+	}
+#endif /* DEVELOPMENT || DEBUG */
 
 	queue_iterate(&bank_task->bt_accounts_to_charge, bank_account, bank_account_t, ba_next_acc_to_charge) {
 		temp = 0;
-		ledger_get_balance(bank_account->ba_bill, bank_ledgers.cpu_time, &temp);
-		balance += temp;
+		kr = ledger_get_balance(bank_account->ba_bill, bank_ledgers.cpu_time, &temp);
+		if (kr == KERN_SUCCESS && temp >= 0) {
+			balance += temp;
+		}
+#if DEVELOPMENT || DEBUG
+		else {
+			printf("bank_serviced_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
+		}
+#endif /* DEVELOPMENT || DEBUG */
 	}
 	lck_mtx_unlock(&bank_task->bt_acc_to_charge_lock);
 #endif

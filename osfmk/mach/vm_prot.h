@@ -145,4 +145,10 @@ typedef int		vm_prot_t;
  */
 #define VM_PROT_IS_MASK		((vm_prot_t) 0x40)
 
+
+#define VM_PROT_MEMORY_TAG_MASK		0xFF000000
+#define VM_PROT_MEMORY_TAG_SHIFT	24
+#define VM_PROT_MEMORY_TAG(x)		(((x) >> VM_PROT_MEMORY_TAG_SHIFT) & 0xFF)
+#define VM_PROT_MEMORY_TAG_MAKE(x)	(((x) & 0xFF) << VM_PROT_MEMORY_TAG_SHIFT)
+
 #endif	/* _MACH_VM_PROT_H_ */

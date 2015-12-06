@@ -99,7 +99,6 @@ extern int freespace_mb(vnode_t vp);
 kern_return_t thread_getstatus(register thread_t act, int flavor,
 	thread_state_t tstate, mach_msg_type_number_t *count);
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
-extern kern_return_t task_suspend_internal(task_t);
 
 static cpu_type_t process_cpu_type(proc_t proc);
 static cpu_type_t process_cpu_subtype(proc_t proc);
@@ -192,7 +191,7 @@ collectth_state(thread_t th_act, void *tirp)
  * Parameters:	core_proc			Process to dump core [*]
  *				reserve_mb			If non-zero, leave filesystem with
  *									at least this much free space.
- *				ignore_ulimit		If set, ignore the process's core file ulimit.	
+ *				coredump_flags	Extra options (ignore rlimit, run fsync)
  *
  * Returns:	0				Success
  *		EFAULT				Failed
@@ -203,7 +202,7 @@ collectth_state(thread_t th_act, void *tirp)
  */
 #define	MAX_TSTATE_FLAVORS	10
 int
-coredump(proc_t core_proc, uint32_t reserve_mb, int ignore_ulimit)
+coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 {
 /* Begin assumptions that limit us to only the current process */
 	vfs_context_t ctx = vfs_context_current();
@@ -265,8 +264,10 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int ignore_ulimit)
 
 	mapsize = get_vmmap_size(map);
 
-	if ((mapsize >=  core_proc->p_rlimit[RLIMIT_CORE].rlim_cur) && (ignore_ulimit == 0))
+	if (((coredump_flags & COREDUMP_IGNORE_ULIMIT) == 0) &&
+	    (mapsize >=  core_proc->p_rlimit[RLIMIT_CORE].rlim_cur))
 		return (EFAULT);
+
 	(void) task_suspend_internal(task);
 
 	MALLOC(alloced_name, char *, MAXPATHLEN, M_TEMP, M_NOWAIT | M_ZERO);
@@ -325,7 +326,7 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int ignore_ulimit)
 
 	header_size = command_size + mach_header_sz;
 
-	if (kmem_alloc(kernel_map, &header, (vm_size_t)header_size) != KERN_SUCCESS) {
+	if (kmem_alloc(kernel_map, &header, (vm_size_t)header_size, VM_KERN_MEMORY_DIAG) != KERN_SUCCESS) {
 		error = ENOMEM;
 		goto out;
 	}
@@ -416,6 +417,7 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int ignore_ulimit)
 			sc64->maxprot = maxprot;
 			sc64->initprot = prot;
 			sc64->nsects = 0;
+			sc64->flags = 0;
 		} else  {
 			sc = (struct segment_command *) (header + hoffset);
 			sc->cmd = LC_SEGMENT;
@@ -429,6 +431,7 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int ignore_ulimit)
 			sc->maxprot = maxprot;
 			sc->initprot = prot;
 			sc->nsects = 0;
+			sc->flags = 0;
 		}
 
 		/*
@@ -488,6 +491,9 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int ignore_ulimit)
 	error = vn_rdwr(UIO_WRITE, vp, (caddr_t)header, header_size, (off_t)0,
 			UIO_SYSSPACE, IO_NOCACHE|IO_NODELOCKED|IO_UNIT, cred, (int *) 0, core_proc);
 	kmem_free(kernel_map, header, header_size);
+
+	if ((coredump_flags & COREDUMP_FULLFSYNC) && error == 0)
+		error = VNOP_IOCTL(vp, F_FULLFSYNC, (caddr_t)NULL, 0, ctx);
 out:
 	error1 = vnode_close(vp, FWRITE, ctx);
 out2:

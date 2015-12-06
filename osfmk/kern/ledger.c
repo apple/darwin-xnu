@@ -33,6 +33,7 @@
 #include <kern/ledger.h>
 #include <kern/kalloc.h>
 #include <kern/task.h>
+#include <kern/thread.h>
 
 #include <kern/processor.h>
 #include <kern/machine.h>
@@ -322,7 +323,7 @@ ledger_key_lookup(ledger_template_t template, const char *key)
 
 	template_lock(template);
 	for (idx = 0; idx < template->lt_cnt; idx++)
-		if (template->lt_entries[idx].et_key &&
+		if (template->lt_entries != NULL &&
 		    (strcmp(key, template->lt_entries[idx].et_key) == 0))
 			break;
 
@@ -651,7 +652,7 @@ ledger_refill(uint64_t now, ledger_t ledger, int entry)
  */
 #define TOCKSTAMP_IS_STALE(now, tock) ((((now) - (tock)) < NTOCKS) ? FALSE : TRUE)
 
-static void
+void
 ledger_check_new_balance(ledger_t ledger, int entry)
 {
 	struct ledger_entry *le;
@@ -1148,29 +1149,6 @@ ledger_set_action(ledger_t ledger, int entry, int action)
 
 	flag_set(&ledger->l_entries[entry].le_flags, action);
 	return (KERN_SUCCESS);
-}
-
-void
-set_astledger(thread_t thread)
-{
-	spl_t s = splsched();
-
-	if (thread == current_thread()) {
-		thread_ast_set(thread, AST_LEDGER);
-		ast_propagate(thread->ast);
-	} else {
-		processor_t p;
-
-		thread_lock(thread);
-		thread_ast_set(thread, AST_LEDGER);
-		p = thread->last_processor;
-		if ((p != PROCESSOR_NULL) && (p->state == PROCESSOR_RUNNING) &&
-		   (p->active_thread == thread))
-			cause_ast_check(p);
-		thread_unlock(thread);
-	}
-	
-	splx(s);
 }
 
 kern_return_t

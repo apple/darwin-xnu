@@ -104,7 +104,6 @@ struct image_params {
 	int		ip_interp_sugid_fd;		/* fd for sugid script */
 
 	/* Next two fields are for support of architecture translation... */
-	char		*ip_p_comm;		/* optional alt p->p_comm */
 	struct vfs_context	*ip_vfs_context;	/* VFS context */
 	struct nameidata *ip_ndp;		/* current nameidata */
 	thread_t	ip_new_thread;		/* thread for spawn/vfork */
@@ -118,6 +117,7 @@ struct image_params {
 	void		*ip_px_sfa;
 	void		*ip_px_spa;
 	void		*ip_px_smpx;		/* MAC-specific spawn attrs. */
+	void		*ip_reserved;
 };
 
 /*

@@ -38,4 +38,35 @@
 #define kIOBSDMinorKey "BSD Minor" // (an OSNumber)
 #define kIOBSDUnitKey  "BSD Unit"  // (an OSNumber)
 
+
+#ifdef XNU_KERNEL_PRIVATE
+
+#include <stdint.h>
+#include <kern/task.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct IOPolledFileIOVars;
+struct mount;
+
+enum 
+{
+    kIOMountChangeMount      = 0x00000101,
+    kIOMountChangeUnmount    = 0x00000102,
+    kIOMountChangeWillResize = 0x00000201,
+    kIOMountChangeDidResize  = 0x00000202,
+};
+extern void IOBSDMountChange(struct mount * mp, uint32_t op);
+extern boolean_t IOTaskHasEntitlement(task_t task, const char * entitlement);
+
+extern struct IOPolledFileIOVars * gIOPolledCoreFileVars;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* XNU_KERNEL_PRIVATE */
+
 #endif /* !_IOBSD_H */

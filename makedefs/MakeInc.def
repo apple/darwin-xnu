@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2013 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2014 Apple Inc. All rights reserved.
 #
 # MakeInc.def contains global definitions for building,
 # linking, and installing files.
@@ -24,10 +24,6 @@ SUPPORTED_X86_64_MACHINE_CONFIGS = NONE
 SUPPORTED_X86_64H_MACHINE_CONFIGS = NONE
 
 
-#
-# Platform options
-#
-SUPPORTED_PLATFORMS = MacOSX iPhoneOS iPhoneSimulator iPhoneOSNano iPhoneNanoSimulator
 
 #
 # Setup up *_LC variables during recursive invocations
@@ -59,13 +55,21 @@ COMPONENT_IMPORT_LIST = $(filter-out $(COMPONENT),$(COMPONENT_LIST))
 #
 ifeq ($(PLATFORM),MacOSX)
     DEPLOYMENT_TARGET_FLAGS = -mmacosx-version-min=$(SDKVERSION)
-else ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
+else ifeq ($(PLATFORM),WatchOS)
+    DEPLOYMENT_TARGET_FLAGS = -mwatchos-version-min=$(SDKVERSION)
+else ifeq ($(PLATFORM),tvOS)
+    DEPLOYMENT_TARGET_FLAGS = -mtvos-version-min=$(SDKVERSION)
+else ifeq ($(PLATFORM),AppleTVOS)
+    DEPLOYMENT_TARGET_FLAGS = -mtvos-version-min=$(SDKVERSION)
+else ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
     DEPLOYMENT_TARGET_FLAGS = -miphoneos-version-min=$(SDKVERSION)
-else ifneq ($(filter iPhoneSimulator iPhoneNanoSimulator,$(PLATFORM)),)
+else ifneq ($(filter $(SUPPORTED_SIMULATOR_PLATFORMS),$(PLATFORM)),)
     DEPLOYMENT_TARGET_FLAGS =
 else
     DEPLOYMENT_TARGET_FLAGS =
 endif
+
+DEPLOYMENT_TARGET_DEFINES = -DPLATFORM_$(PLATFORM)
 
 
 #
@@ -80,6 +84,8 @@ DEFINES = -DAPPLE -DKERNEL -DKERNEL_PRIVATE -DXNU_KERNEL_PRIVATE \
 #
 KCC  = $(CC)
 KC++ = $(CXX)
+
+GENASSYM_KCC = $(CC)
 
 #
 # Compiler warning flags
@@ -145,7 +151,7 @@ BUILD_DSYM := 1
 # probes from the kernel.
 #
 CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc \
-	-freorder-blocks -fno-builtin -fno-common \
+	-fno-builtin -fno-common \
 	-fsigned-bitfields $(OTHER_CFLAGS)
 
 CFLAGS_RELEASE 	= 
@@ -184,6 +190,7 @@ CFLAGS 	= $(CFLAGS_GEN) \
 		  $($(addsuffix $(CURRENT_KERNEL_CONFIG),CFLAGS_)) \
 		  $($(addsuffix $(CURRENT_ARCH_CONFIG), $(addsuffix $(CURRENT_KERNEL_CONFIG),CFLAGS_))) \
 		  $(DEPLOYMENT_TARGET_FLAGS) \
+		  $(DEPLOYMENT_TARGET_DEFINES) \
 		  $(DEFINES)
 
 #
@@ -228,6 +235,7 @@ SFLAGS 	= $(SFLAGS_GEN) \
 		  $($(addsuffix $(CURRENT_ARCH_CONFIG),SFLAGS_)) \
 		  $($(addsuffix $(CURRENT_KERNEL_CONFIG),SFLAGS_)) \
 		  $(DEPLOYMENT_TARGET_FLAGS) \
+		  $(DEPLOYMENT_TARGET_DEFINES) \
 		  $(DEFINES)
 
 #
@@ -293,6 +301,10 @@ LDFLAGS_KERNEL_RELEASEX86_64 = \
 	-Wl,-sectalign,__HIB,__const,0x1000 \
 	-Wl,-sectalign,__HIB,__bss,0x1000 \
 	-Wl,-sectalign,__HIB,__common,0x1000 \
+	-Wl,-sectalign,__HIB,__llvm_prf_cnts,0x1000 \
+	-Wl,-sectalign,__HIB,__llvm_prf_names,0x1000 \
+	-Wl,-sectalign,__HIB,__llvm_prf_data,0x1000 \
+	-Wl,-sectalign,__HIB,__textcoal_nt,0x1000 \
 	$(LDFLAGS_NOSTRIP_FLAG)
 
 # Define KERNEL_BASE_OFFSET so known at compile time:
@@ -356,6 +368,22 @@ INCFLAGS 	= $(INCFLAGS_LOCAL) $(INCFLAGS_GEN) $(INCFLAGS_IMPORT) $(INCFLAGS_EXTE
 MIGFLAGS	= $(DEFINES) $(INCFLAGS) -novouchers $($(addsuffix $(CURRENT_ARCH_CONFIG),CFLAGS_)) $($(addsuffix $(CURRENT_ARCH_CONFIG),ARCH_FLAGS_)) \
 		$(DEPLOYMENT_TARGET_FLAGS)
 
+
+# Support for LLVM Profile Guided Optimization (PGO)
+
+ifeq ($(BUILD_PROFILE),1)
+CFLAGS_GEN += -fprofile-instr-generate -DPROFILE
+CXXFLAGS_GEN += -fprofile-instr-generate -DPROFILE
+endif
+
+ifdef USE_PROFILE
+CFLAGS_GEN += -fprofile-instr-use=$(USE_PROFILE)
+CXXFLAGS_GEN += -fprofile-instr-use=$(USE_PROFILE)
+LDFLAGS_KERNEL_GEN += -fprofile-instr-use=$(USE_PROFILE)
+
+CFLAGS_GEN += -Wno-error=profile-instr-out-of-date
+endif
+
 #
 # Support for LLVM Link Time Optimization (LTO)
 #
@@ -381,19 +409,32 @@ else
 USE_LTO = $(LTO_ENABLED_$(CURRENT_KERNEL_CONFIG))
 endif
 
+SUPPORTS_CTFCONVERT	= 0
 ifeq ($(USE_LTO),1)
 CFLAGS_GEN	+= -flto
 CXXFLAGS_GEN	+= -flto
 LDFLAGS_KERNEL_GEN	+= -Wl,-mllvm,-inline-threshold=125 -Wl,-object_path_lto,$(TARGET)/lto.o # -Wl,-mllvm -Wl,-disable-fp-elim 
 LDFLAGS_NOSTRIP_FLAG = -rdynamic
 CFLAGS_NOLTO_FLAG = -fno-lto
-SUPPORTS_CTFCONVERT	= 0
 NEEDS_CTF_MACHOS	= 1
 else
 LDFLAGS_NOSTRIP_FLAG =
 CFLAGS_NOLTO_FLAG =
+ifneq ($(CTFCONVERT),)
 SUPPORTS_CTFCONVERT	= 1
+endif
 NEEDS_CTF_MACHOS	= 0
+endif
+
+ifeq ($(BUILD_JSON_COMPILATION_DATABASE),1)
+BUILD_DSYM	:= 0
+DO_CTFCONVERT	:= 0
+DO_CTFMERGE	:= 0
+DO_CTFMACHO	:= 0
+KCC		= $(JSONCOMPILATIONDB) $(OBJPATH)/compile_commands.json $(PWD) $< $(CC)
+KC++		= $(JSONCOMPILATIONDB) $(OBJPATH)/compile_commands.json $(PWD) $< $(CXX)
+S_KCC		= $(JSONCOMPILATIONDB) $(OBJPATH)/compile_commands.json $(PWD) $< $(CC)
+STRIP		= true
 endif
 
 #
@@ -413,14 +454,7 @@ EXEC_INSTALL_FLAGS = -c -S -m 0755
 #
 # Header file destinations
 #
-ifeq ($(RC_ProjectName),xnu_headers_Sim)
-	include $(MAKEFILEPATH)/../AppleInternal/Makefiles/Makefile.indigo_prefix
-	HEADER_INSTALL_PREFIX = $(INDIGO_PREFIX)
-else
-	HEADER_INSTALL_PREFIX = 
-endif
-
-FRAMEDIR = $(HEADER_INSTALL_PREFIX)/System/Library/Frameworks
+FRAMEDIR = /System/Library/Frameworks
 
 SINCVERS = B
 SINCFRAME = $(FRAMEDIR)/System.framework
@@ -429,7 +463,7 @@ SPINCDIR = $(SINCFRAME)/Versions/$(SINCVERS)/PrivateHeaders
 SRESDIR = $(SINCFRAME)/Versions/$(SINCVERS)/Resources
 
 ifndef INCDIR
-    INCDIR = $(HEADER_INSTALL_PREFIX)/usr/include
+    INCDIR = /usr/include
 endif
 ifndef LCLDIR
     LCLDIR = $(SPINCDIR)
@@ -544,10 +578,10 @@ INSTALL_KERNEL_DIR := $(DEVELOPER_EXTRAS_DIR)
 INSTALL_KERNEL_SYM_DIR := $(DEVELOPER_EXTRAS_DIR)
 INSTALL_KERNEL_SYM_TO_KDK = 1
 INSTALL_XNU_DEBUG_FILES = 1
-else ifneq ($(filter iPhoneOS iPhoneOSNano,$(PLATFORM)),)
+else ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
 INSTALL_KERNEL_SYM_TO_KDK = 1
 USE_BINARY_PLIST = 1
-else ifneq ($(filter iPhoneSimulator iPhoneNanoSimulator,$(PLATFORM)),)
+else ifneq ($(filter $(SUPPORTED_SIMULATOR_PLATFORMS),$(PLATFORM)),)
 USE_BINARY_PLIST = 1
 else ifeq ($(PLATFORM),MacOSX)
 INSTALL_KERNEL_DIR := $(SYSTEM_LIBRARY_KERNELS_DIR)

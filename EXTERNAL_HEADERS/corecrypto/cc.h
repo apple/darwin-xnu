@@ -2,8 +2,9 @@
  *  cc.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 12/16/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/16/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -14,11 +15,14 @@
 #include <string.h>
 #include <stdint.h>
 
+/* Manage asserts here because a few functions in header public files do use asserts */
+#define cc_assert(x) assert(x)
 #if CC_KERNEL
 #include <kern/assert.h>
+#elif CC_USE_S3
+#define assert(args)  // No assert in S3
 #else
 #include <assert.h>
-#include <stdio.h>
 #endif
 
 /* Declare a struct element with a guarenteed alignment of _alignment_.
@@ -45,25 +49,38 @@
 #define cc_zero(_size_,_data_) memset((_data_),0 ,(_size_))
 #endif
 
-#if CC_KERNEL
-#define cc_printf(x...) printf(x)
-#else
-#define cc_printf(x...) fprintf(stderr, x)
-#endif
-
-#define cc_assert(x) assert(x)
+/* cc_clear:
+ Set "len" bytes of memory to zero at address "dst".
+ cc_clear has been developed so that it won't be optimized out.
+ To be used to clear key buffers or sensitive data.
+*/
+CC_NONNULL2
+void cc_clear(size_t len, void *dst);
 
 #define cc_copy(_size_, _dst_, _src_) memcpy(_dst_, _src_, _size_)
 
 CC_INLINE CC_NONNULL2 CC_NONNULL3 CC_NONNULL4
 void cc_xor(size_t size, void *r, const void *s, const void *t) {
     uint8_t *_r=(uint8_t *)r;
-    const uint8_t *_s=(uint8_t *)s;
-    const uint8_t *_t=(uint8_t *)t;
+    const uint8_t *_s=(const uint8_t *)s;
+    const uint8_t *_t=(const uint8_t *)t;
     while (size--) {
         _r[size] = _s[size] ^ _t[size];
     }
 }
+
+/* cc_cmp_safe:
+ Compare "num" pointed by ptr1 and ptr2, array of identical size.
+ Functional behavior: Returns 0 if the "num" bytes starting at ptr1 are identical to the "num"
+    bytes starting at ptr2.
+    Return !=0 if they are different or if "num" is 0 (empty arrays)
+ Security: The execution time/cycles is *independent* of the data and therefore guarantees
+    no leak about the data.
+    However, the execution time depends on "num".
+*/
+CC_NONNULL2 CC_NONNULL3
+int cc_cmp_safe (size_t num, const void * ptr1, const void * ptr2);
+
 
 /* Exchange S and T of any type.  NOTE: Both and S and T are evaluated
    mutliple times and MUST NOT be expressions. */

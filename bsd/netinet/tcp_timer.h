@@ -262,6 +262,7 @@ struct tcptimerlist {
 	uint32_t pref_offset;	/* Preferred offset set by a connection */
 	uint32_t idleruns;	/* Number of times the list has been idle in fast mode */
 	struct tcptimerentry *next_te;	/* next timer entry pointer to process */
+	u_int16_t probe_if_index; /* Interface index that needs to send probes */
 
 };
 

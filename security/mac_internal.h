@@ -79,7 +79,6 @@
 #include <security/mac_policy.h>
 #include <security/mac_data.h>
 #include <sys/sysctl.h>
-#include <kern/wait_queue.h>
 #include <kern/locks.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
@@ -176,11 +175,16 @@ static int mac_proc_check_enforce(proc_t p, int enforce_flags);
 static __inline__ int mac_proc_check_enforce(proc_t p, int enforce_flags)
 {
 #if CONFIG_MACF
-	return ((p->p_mac_enforce & enforce_flags) != 0);
+#if SECURITY_MAC_CHECK_ENFORCE // 21167099 - only check if we allow write
+    return ((p->p_mac_enforce & enforce_flags) != 0);
+#else
+#pragma unused(p,enforce_flags)
+    return 1;
+#endif // SECURITY_MAC_CHECK_ENFORCE
 #else
 #pragma unused(p,enforce_flags)
 	return 0;
-#endif
+#endif // CONFIG_MACF
 }
 
 static int mac_context_check_enforce(vfs_context_t ctx, int enforce_flags);
@@ -234,7 +238,6 @@ int   mac_check_structmac_consistent(struct mac *mac);
 #endif
 	
 int mac_cred_label_externalize(struct label *, char *e, char *out, size_t olen, int flags);
-int mac_lctx_label_externalize(struct label *, char *e, char *out, size_t olen);
 #if CONFIG_MACF_SOCKET
 int mac_socket_label_externalize(struct label *, char *e, char *out, size_t olen);
 #endif /* CONFIG_MACF_SOCKET */
@@ -243,7 +246,6 @@ int mac_pipe_label_externalize(struct label *label, char *elements,
  char *outbuf, size_t outbuflen);
 
 int mac_cred_label_internalize(struct label *label, char *string);
-int mac_lctx_label_internalize(struct label *label, char *string);
 #if CONFIG_MACF_SOCKET
 int mac_socket_label_internalize(struct label *label, char *string);
 #endif /* CONFIG_MACF_SOCKET */
@@ -416,8 +418,6 @@ struct __mac_get_pid_args;
 struct __mac_get_proc_args;
 struct __mac_set_proc_args;
 struct __mac_get_lcid_args;
-struct __mac_get_lctx_args;
-struct __mac_set_lctx_args;
 struct __mac_get_fd_args;
 struct __mac_get_file_args;
 struct __mac_get_link_args;

@@ -43,7 +43,6 @@
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <kern/wait_queue.h>
 #include <kern/macro_help.h>
 #include <kern/queue.h>
 #include <kern/locks.h>

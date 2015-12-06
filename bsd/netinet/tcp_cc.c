@@ -51,6 +51,7 @@ struct tcp_cc_debug_state {
 	uint32_t ccd_snd_cwnd;
 	uint32_t ccd_snd_wnd;
 	uint32_t ccd_snd_ssthresh;
+	uint32_t ccd_pipeack;
 	uint32_t ccd_rttcur;
 	uint32_t ccd_rxtcur;
 	uint32_t ccd_srtt;
@@ -92,6 +93,13 @@ int tcp_use_newreno = 0;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, use_newreno,
 	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_use_newreno, 0, 
 	"Use TCP NewReno by default");
+
+static int tcp_check_cwnd_nonvalidated = 1;
+#if (DEBUG || DEVELOPMENT)
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, cwnd_nonvalidated,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_check_cwnd_nonvalidated, 0,
+    "Check if congestion window is non-validated");
+#endif /* (DEBUG || DEVELOPMENT) */
 
  #define SET_SNDSB_IDEAL_SIZE(sndsb, size) \
 	sndsb->sb_idealsize = min(max(tcp_sendspace, tp->snd_ssthresh), \
@@ -224,6 +232,7 @@ tcp_ccdbg_trace(struct tcpcb *tp, struct tcphdr *th, int32_t event)
 		dbg_state.ccd_snd_cwnd = tp->snd_cwnd;
 		dbg_state.ccd_snd_wnd = tp->snd_wnd;
 		dbg_state.ccd_snd_ssthresh = tp->snd_ssthresh;
+		dbg_state.ccd_pipeack = tp->t_pipeack;
 		dbg_state.ccd_rttcur = tp->t_rttcur;
 		dbg_state.ccd_rxtcur = tp->t_rxtcur;
 		dbg_state.ccd_srtt = tp->t_srtt >> TCP_RTT_SHIFT;
@@ -402,4 +411,63 @@ tcp_cc_after_idle_stretchack(struct tcpcb *tp)
 
 		tcp_reset_stretch_ack(tp);
 	}
+}
+
+/*
+ * Detect if the congestion window is non-vlidated according to
+ * draft-ietf-tcpm-newcwv-07
+ */
+
+inline uint32_t
+tcp_cc_is_cwnd_nonvalidated(struct tcpcb *tp)
+{
+	if (tp->t_pipeack == 0 || tcp_check_cwnd_nonvalidated == 0) {
+		tp->t_flagsext &= ~TF_CWND_NONVALIDATED;
+		return (0);
+	}
+	if (tp->t_pipeack >= (tp->snd_cwnd) >> 1)
+		tp->t_flagsext &= ~TF_CWND_NONVALIDATED;
+	else
+		tp->t_flagsext |= TF_CWND_NONVALIDATED;
+	return (tp->t_flagsext & TF_CWND_NONVALIDATED);
+}
+
+/*
+ * Adjust congestion window in response to congestion in non-validated
+ * phase.
+ */
+inline void
+tcp_cc_adjust_nonvalidated_cwnd(struct tcpcb *tp)
+{
+	tp->t_pipeack = tcp_get_max_pipeack(tp);
+	tcp_clear_pipeack_state(tp);
+	tp->snd_cwnd = (max(tp->t_pipeack, tp->t_lossflightsize) >> 1);
+	tp->snd_cwnd = max(tp->snd_cwnd, TCP_CC_CWND_INIT_BYTES);
+	tp->snd_cwnd += tp->t_maxseg * tcprexmtthresh;
+	tp->t_flagsext &= ~TF_CWND_NONVALIDATED;
+}
+
+/*
+ * Return maximum of all the pipeack samples. Since the number of samples
+ * TCP_PIPEACK_SAMPLE_COUNT is 3 at this time, it will be simpler to do
+ * a comparision. We should change ths if the number of samples increases.
+ */
+inline u_int32_t
+tcp_get_max_pipeack(struct tcpcb *tp)
+{
+	u_int32_t max_pipeack = 0;
+	max_pipeack = (tp->t_pipeack_sample[0] > tp->t_pipeack_sample[1]) ?
+	    tp->t_pipeack_sample[0] : tp->t_pipeack_sample[1];
+	max_pipeack = (tp->t_pipeack_sample[2] > max_pipeack) ?
+	    tp->t_pipeack_sample[2] : max_pipeack;
+
+	return (max_pipeack);
+}
+
+inline void
+tcp_clear_pipeack_state(struct tcpcb *tp)
+{
+	bzero(tp->t_pipeack_sample, sizeof(tp->t_pipeack_sample));
+	tp->t_pipeack_ind = 0;
+	tp->t_lossflightsize = 0;
 }

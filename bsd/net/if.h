@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -104,6 +104,7 @@
 #define	KEV_DL_IFDELEGATE_CHANGED		25
 #define	KEV_DL_AWDL_RESTRICTED			26
 #define	KEV_DL_AWDL_UNRESTRICTED		27
+#define	KEV_DL_RRC_STATE_CHANGED		28
 
 #include <net/if_var.h>
 #include <sys/types.h>
@@ -158,6 +159,9 @@ struct if_clonereq32 {
 #ifdef PRIVATE
 /* extended flags definitions:  (all bits reserved for internal/future use) */
 #define	IFEF_AUTOCONFIGURING	0x00000001	/* allow BOOTP/DHCP replies to enter */
+#define	IFEF_ENQUEUE_MULTI	0x00000002	/* enqueue multiple packets at once */
+#define	IFEF_DELAY_START	0x00000004	/* delay start callback */
+#define	IFEF_PROBE_CONNECTIVITY	0x00000008	/* Probe connections going over this interface */
 #define	IFEF_IPV6_DISABLED	0x00000020	/* coupled to ND6_IFF_IFDISABLED */
 #define	IFEF_ACCEPT_RTADV	0x00000040	/* accepts IPv6 RA on the interface */
 #define	IFEF_TXSTART		0x00000080	/* has start callback */
@@ -466,9 +470,22 @@ struct	ifreq {
 #define	IFRTYPE_SUBFAMILY_THUNDERBOLT	4
 #define	IFRTYPE_SUBFAMILY_RESERVED	5
 		} ifru_type;
+		u_int32_t ifru_functional_type;
+#define IFRTYPE_FUNCTIONAL_UNKNOWN	0
+#define IFRTYPE_FUNCTIONAL_LOOPBACK	1
+#define IFRTYPE_FUNCTIONAL_WIRED	2
+#define IFRTYPE_FUNCTIONAL_WIFI_INFRA	3
+#define IFRTYPE_FUNCTIONAL_WIFI_AWDL	4
+#define IFRTYPE_FUNCTIONAL_CELLULAR	5
+#define IFRTYPE_FUNCTIONAL_LAST		5
 		u_int32_t ifru_expensive;
-		u_int32_t ifru_awdl_restricted;
 		u_int32_t ifru_2kcl;
+		struct {
+			u_int32_t qlen;
+			u_int32_t timeout;
+		} ifru_start_delay;
+		struct if_interface_state	ifru_interface_state;
+		u_int32_t ifru_probe_connectivity;
 #endif /* PRIVATE */
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
@@ -505,8 +522,12 @@ struct	ifreq {
 #define	ifr_delegated	ifr_ifru.ifru_delegated /* delegated interface index */
 #define	ifr_expensive	ifr_ifru.ifru_expensive
 #define	ifr_type	ifr_ifru.ifru_type	/* interface type */
-#define	ifr_awdl_restricted ifr_ifru.ifru_awdl_restricted
+#define	ifr_functional_type	ifr_ifru.ifru_functional_type
 #define	ifr_2kcl	ifr_ifru.ifru_2kcl
+#define	ifr_start_delay_qlen	ifr_ifru.ifru_start_delay.qlen
+#define	ifr_start_delay_timeout	ifr_ifru.ifru_start_delay.timeout
+#define ifr_interface_state	ifr_ifru.ifru_interface_state
+#define	ifr_probe_connectivity	ifr_ifru.ifru_probe_connectivity
 #endif /* PRIVATE */
 };
 
@@ -818,6 +839,36 @@ enum {
 #endif /* XNU_KERNEL_PRIVATE */
 };
 
+/*
+ * Structure for SIOC[A/D]IFAGENTID
+ */
+struct if_agentidreq {
+	char		ifar_name[IFNAMSIZ];	/* interface name */
+	uuid_t		ifar_uuid;		/* agent UUID to add or delete */
+};
+
+/*
+ * Structure for SIOCGIFAGENTIDS
+ */
+struct if_agentidsreq {
+	char		ifar_name[IFNAMSIZ];	/* interface name */
+	u_int32_t	ifar_count;		/* number of agent UUIDs */
+	uuid_t		*ifar_uuids;		/* array of agent UUIDs */
+};
+
+#ifdef BSD_KERNEL_PRIVATE
+struct if_agentidsreq32 {
+	char		ifar_name[IFNAMSIZ];
+	u_int32_t	ifar_count;
+	user32_addr_t ifar_uuids;
+};
+struct if_agentidsreq64 {
+	char		ifar_name[IFNAMSIZ];
+	u_int32_t	ifar_count;
+	user64_addr_t ifar_uuids __attribute__((aligned(8)));
+};
+#endif /* BSD_KERNEL_PRIVATE */
+
 #define	DLIL_MODIDLEN	20	/* same as IFNET_MODIDLEN */
 #define	DLIL_MODARGLEN	12	/* same as IFNET_MODARGLEN */
 
@@ -829,6 +880,30 @@ struct kev_dl_issues {
 	u_int8_t		modid[DLIL_MODIDLEN];
 	u_int64_t		timestamp;
 	u_int8_t		info[DLIL_MODARGLEN];
+};
+
+/*
+ * DLIL KEV_DL_RRC_STATE_CHANGED structure
+ */
+struct kev_dl_rrc_state {
+	struct net_event_data	link_data;
+	u_int32_t		rrc_state;
+};
+
+/*
+ * Length of network signature/fingerprint blob.
+ */
+#define	IFNET_SIGNATURELEN	20
+
+/*
+ * Structure for SIOC[S/G]IFNETSIGNATURE
+ */
+struct if_nsreq {
+	char		ifnsr_name[IFNAMSIZ];
+	u_int8_t	ifnsr_family;	/* address family */
+	u_int8_t	ifnsr_len;	/* data length */
+	u_int16_t	ifnsr_flags;	/* for future */
+	u_int8_t	ifnsr_data[IFNET_SIGNATURELEN];
 };
 #endif /* PRIVATE */
 

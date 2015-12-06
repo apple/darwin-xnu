@@ -1600,6 +1600,31 @@ Llmu_ext:
 
 
 	
+LEAF_ENTRY(lck_mtx_ilk_try_lock)
+	mov	%rdi, %rdx		/* fetch lock pointer - no indirection here */
+
+	mov	M_STATE(%rdx), %ecx
+
+	test	$(M_ILOCKED_MSK), %ecx	/* can't have the interlock yet */
+	jnz	3f
+
+	mov	%rcx, %rax		/* eax contains snapshot for cmpxchgl */
+	or	$(M_ILOCKED_MSK), %ecx
+
+	PREEMPTION_DISABLE
+	lock
+	cmpxchg %ecx, M_STATE(%rdx)	/* atomic compare and exchange */
+	jne	2f			/* return failure after re-enabling preemption */
+
+	mov	$1, %rax		/* return success with preemption disabled */
+	LEAF_RET
+2:	
+	PREEMPTION_ENABLE		/* need to re-enable preemption */
+3:	
+	xor	%rax, %rax		/* return failure */
+	LEAF_RET
+	
+
 LEAF_ENTRY(lck_mtx_ilk_unlock)
 	mov	%rdi, %rdx		/* fetch lock pointer - no indirection here */
 
@@ -1608,7 +1633,6 @@ LEAF_ENTRY(lck_mtx_ilk_unlock)
 	PREEMPTION_ENABLE		/* need to re-enable preemption */
 
 	LEAF_RET
-	
 
 	
 LEAF_ENTRY(lck_mtx_lock_grab_mutex)

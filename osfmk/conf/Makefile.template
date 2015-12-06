@@ -23,9 +23,8 @@ OBJS_NO_CAST_ALIGN =			\
 		atm_notification_user.o \
 		model_dep.o		\
 		chud_thread.o		\
-		chud_thread_arm.o   \
+		chud_thread_arm.o	\
 		video_console.o		\
-		kern_stackshot.o			\
 		kdp_udp.o		\
 		kdp_machdep.o		\
 		host.o			\
@@ -73,7 +72,14 @@ OBJS_NO_CAST_ALIGN =			\
 		cchmac_final.o		\
 		cchmac_init.o		\
 		ccsha1.o		\
-
+		dp_memory_object.o	\
+		ipc_object.o		\
+		ipc_kmsg.o		\
+		ipc_right.o		\
+		bsd_vm.o		\
+		vm_map_store.o		\
+		vm_map_store_ll.o	\
+		vm_map_store_rb.o
 
 # Objects that don't want -Wsign-compare warning (15294427)
 OBJS_NO_SIGN_COMPARE = 		\
@@ -146,13 +152,13 @@ $(SOBJS): .SFLAGS
 $(COMPONENT).filelist: $(OBJS)
 	$(_v)for hib_file in ${HIB_FILES};		\
 	do	\
-                $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} ; \
-                mv $${hib_file}__ $${hib_file} ; \
+                $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
+                mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
 	@echo LDFILELIST $(COMPONENT)
-	$(_v)( for obj in ${OBJS}; do	\
+	$(_v)for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
-	done; ) > $(COMPONENT).filelist
+	done > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist
 
@@ -174,10 +180,10 @@ endif
 genassym.o: .CFLAGS $(firstword $(MAKEFILE_LIST))
 genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(GENASSYM_LOCATION)/genassym.c
 	@echo GENASSYM $<
-	$(_v)${KCC} ${CFLAGS} ${CFLAGS_NOLTO_FLAG} -MD -S -o ${@} ${INCFLAGS} $<
+	$(_v)${GENASSYM_KCC} ${CFLAGS} ${CFLAGS_NOLTO_FLAG} -MD -S -o ${@} ${INCFLAGS} $<
 
 assym.s: genassym.o
-	$(_v)sed -e '/#DEFINITION#/!d' -e 's/^.*#DEFINITION#//' -e 's/\$$//' -e 'p' -e 's/#//2' -e 's/[^A-Za-z0-9_]*\([A-Za-z0-9_]*\)/ \1_NUM/2' genassym.o > $@
+	$(_v)sed -e '/^[[:space:]]*DEFINITION__define__/!d;{N;s/\n//;}' -e 's/^[[:space:]]*DEFINITION__define__\([^:]*\):.*ascii.*\"[\$$]*\([-0-9\#]*\)\".*$$/#define \1 \2/' -e 'p'  -e 's/#//2' -e 's/^[[:space:]]*#define \([A-Za-z0-9_]*\)[[:space:]]*[\$$#]*\([-0-9]*\).*$$/#define \1_NUM \2/' genassym.o > $@
 
 ${SOBJS}: assym.s
 

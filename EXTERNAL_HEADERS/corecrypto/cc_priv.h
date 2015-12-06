@@ -2,8 +2,9 @@
  *  cc_priv.h
  *  corecrypto
  *
- *  Created by Michael Brouwer on 12/1/10.
- *  Copyright 2010,2011 Apple Inc. All rights reserved.
+ *  Created on 12/01/2010
+ *
+ *  Copyright (c) 2010,2011,2012,2014,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -18,7 +19,7 @@
  CC_MEMCPY  : optimized memcpy.
  CC_MEMMOVE : optimized memmove.
  CC_MEMSET  : optimized memset.
- CC_BZERO   : optimized bzero.
+ CC_BZERO   : optimized bzero, 
 
  CC_STORE32_BE : store 32 bit value in big endian in unaligned buffer.
  CC_STORE32_LE : store 32 bit value in little endian in unaligned buffer.
@@ -71,7 +72,7 @@ The following are not defined yet... define them if needed.
 #define CC_MEMCPY(D,S,L) memcpy((D),(S),(L))
 #define CC_MEMMOVE(D,S,L) memmove((D),(S),(L))
 #define CC_MEMSET(D,V,L) memset((D),(V),(L))
-#define CC_BZERO(D,L) memset((D),0,(L))
+#define CC_BZERO(D,L) memset((D),0,(L)) // Deprecated, DO NOT USE
 
 
 // MARK: - Loads and Store
@@ -88,10 +89,10 @@ The following are not defined yet... define them if needed.
 } while(0)
 
 #define	CC_LOAD32_LE(x, y) do {                                     \
-x = ((uint32_t)(((unsigned char *)(y))[3] & 255)<<24) |			    \
-    ((uint32_t)(((unsigned char *)(y))[2] & 255)<<16) |			    \
-    ((uint32_t)(((unsigned char *)(y))[1] & 255)<<8)  |			    \
-    ((uint32_t)(((unsigned char *)(y))[0] & 255));				    \
+x = ((uint32_t)(((const unsigned char *)(y))[3] & 255)<<24) |			    \
+    ((uint32_t)(((const unsigned char *)(y))[2] & 255)<<16) |			    \
+    ((uint32_t)(((const unsigned char *)(y))[1] & 255)<<8)  |			    \
+    ((uint32_t)(((const unsigned char *)(y))[0] & 255));				    \
 } while(0)
 
 // MARK: -- 64 bits - little endian
@@ -108,14 +109,14 @@ x = ((uint32_t)(((unsigned char *)(y))[3] & 255)<<24) |			    \
 } while(0)
 
 #define	CC_LOAD64_LE(x, y) do {                                     \
-x = (((uint64_t)(((unsigned char *)(y))[7] & 255))<<56) |           \
-    (((uint64_t)(((unsigned char *)(y))[6] & 255))<<48) |           \
-    (((uint64_t)(((unsigned char *)(y))[5] & 255))<<40) |           \
-    (((uint64_t)(((unsigned char *)(y))[4] & 255))<<32) |           \
-    (((uint64_t)(((unsigned char *)(y))[3] & 255))<<24) |           \
-    (((uint64_t)(((unsigned char *)(y))[2] & 255))<<16) |           \
-    (((uint64_t)(((unsigned char *)(y))[1] & 255))<<8)  |           \
-    (((uint64_t)(((unsigned char *)(y))[0] & 255)));                \
+x = (((uint64_t)(((const unsigned char *)(y))[7] & 255))<<56) |           \
+    (((uint64_t)(((const unsigned char *)(y))[6] & 255))<<48) |           \
+    (((uint64_t)(((const unsigned char *)(y))[5] & 255))<<40) |           \
+    (((uint64_t)(((const unsigned char *)(y))[4] & 255))<<32) |           \
+    (((uint64_t)(((const unsigned char *)(y))[3] & 255))<<24) |           \
+    (((uint64_t)(((const unsigned char *)(y))[2] & 255))<<16) |           \
+    (((uint64_t)(((const unsigned char *)(y))[1] & 255))<<8)  |           \
+    (((uint64_t)(((const unsigned char *)(y))[0] & 255)));                \
 } while(0)
 
 // MARK: -- 32 bits - big endian
@@ -146,10 +147,10 @@ x = (((uint64_t)(((unsigned char *)(y))[7] & 255))<<56) |           \
 } while(0)
 
 #define	CC_LOAD32_BE(x, y) do {                             \
-x = ((uint32_t)(((unsigned char *)(y))[0] & 255)<<24) |	    \
-    ((uint32_t)(((unsigned char *)(y))[1] & 255)<<16) |		\
-    ((uint32_t)(((unsigned char *)(y))[2] & 255)<<8)  |		\
-    ((uint32_t)(((unsigned char *)(y))[3] & 255));          \
+x = ((uint32_t)(((const unsigned char *)(y))[0] & 255)<<24) |	    \
+    ((uint32_t)(((const unsigned char *)(y))[1] & 255)<<16) |		\
+    ((uint32_t)(((const unsigned char *)(y))[2] & 255)<<8)  |		\
+    ((uint32_t)(((const unsigned char *)(y))[3] & 255));          \
 } while(0)
 
 #endif
@@ -189,14 +190,14 @@ __asm__ __volatile__ (        \
 } while(0)
 
 #define	CC_LOAD64_BE(x, y) do {                                     \
-x = (((uint64_t)(((unsigned char *)(y))[0] & 255))<<56) |           \
-    (((uint64_t)(((unsigned char *)(y))[1] & 255))<<48) |           \
-    (((uint64_t)(((unsigned char *)(y))[2] & 255))<<40) |           \
-    (((uint64_t)(((unsigned char *)(y))[3] & 255))<<32) |           \
-    (((uint64_t)(((unsigned char *)(y))[4] & 255))<<24) |           \
-    (((uint64_t)(((unsigned char *)(y))[5] & 255))<<16) |           \
-    (((uint64_t)(((unsigned char *)(y))[6] & 255))<<8)  |          	\
-    (((uint64_t)(((unsigned char *)(y))[7] & 255)));	            \
+x = (((uint64_t)(((const unsigned char *)(y))[0] & 255))<<56) |           \
+    (((uint64_t)(((const unsigned char *)(y))[1] & 255))<<48) |           \
+    (((uint64_t)(((const unsigned char *)(y))[2] & 255))<<40) |           \
+    (((uint64_t)(((const unsigned char *)(y))[3] & 255))<<32) |           \
+    (((uint64_t)(((const unsigned char *)(y))[4] & 255))<<24) |           \
+    (((uint64_t)(((const unsigned char *)(y))[5] & 255))<<16) |           \
+    (((uint64_t)(((const unsigned char *)(y))[6] & 255))<<8)  |          	\
+    (((uint64_t)(((const unsigned char *)(y))[7] & 255)));	            \
 } while(0)
 
 #endif
@@ -378,35 +379,26 @@ static inline uint32_t CC_BSWAP(uint32_t x)
    Run in constant time (log2(<bitsize of x>))  
    Useful to run constant time checks
 */
-#define HEAVISIDE_STEP_UINT64(x) {unsigned long t; \
-    t=(((uint64_t)x>>32) | (unsigned long)x); \
-    t=((t>>16) | t); \
-    t=((t>>8) | t); \
-    t=((t>>4) | t); \
-    t=((t>>2) | t); \
-    t=((t>>1) | t); \
-    x=t & 0x1;}
+#define HEAVISIDE_STEP_UINT64(x) {uint64_t _t; \
+    _t=(((uint64_t)x>>32) | x); \
+    _t=(0xFFFFFFFF + (_t & 0xFFFFFFFF)); \
+    x=_t >> 32;}
 
-#define HEAVISIDE_STEP_UINT32(x) {uint16_t t; \
-    t=(((unsigned long)x>>16) | (uint16_t)x); \
-    t=((t>>8) | t); \
-    t=((t>>4) | t); \
-    t=((t>>2) | t); \
-    t=((t>>1) | t); \
-    x=t & 0x1;}
+#define HEAVISIDE_STEP_UINT32(x) {uint32_t _t; \
+    _t=(((uint32_t)x>>16) | x); \
+    _t=(0xFFFF + (_t & 0xFFFF)); \
+    x=_t >> 16;}
 
-#define HEAVISIDE_STEP_UINT16(x) {uint8_t t; \
-    t=(((uint16_t)x>>8) | (uint8_t)x); \
-    t=((t>>4) | t); \
-    t=((t>>2) | t); \
-    t=((t>>1) | t); \
-    x=t & 0x1;}
+#define HEAVISIDE_STEP_UINT16(x) {uint16_t _t; \
+    _t=(((uint16_t)x>>8) | x); \
+    _t=(0xFF + (_t & 0xFF)); \
+    x=_t >> 8;}
 
-#define HEAVISIDE_STEP_UINT8(x) {uint8_t t; \
-    t=(((uint8_t)x>>4) | (uint8_t)x); \
-    t=((t>>2) | t); \
-    t=((t>>1) | t); \
-    x=t & 0x1;}
+#define HEAVISIDE_STEP_UINT8(x) {uint8_t _t; \
+    _t=(((uint8_t)x>>4) | (uint8_t)x); \
+    _t=((_t>>2) | _t); \
+    _t=((_t>>1) | _t); \
+    x=_t & 0x1;}
 
 #define CC_HEAVISIDE_STEP(x) { \
     if (sizeof(x) == 1) {HEAVISIDE_STEP_UINT8(x);}  \
@@ -416,9 +408,14 @@ static inline uint32_t CC_BSWAP(uint32_t x)
     else {x=((x==0)?0:1);} \
     }
 
+/* Return 1 if x mod 4 =1,2,3, 0 otherwise */
+#define CC_CARRY_2BITS(x) (((x>>1) | x) & 0x1)
+#define CC_CARRY_3BITS(x) (((x>>2) | (x>>1) | x) & 0x1)
 
 /* Set a variable to the biggest power of 2 which can be represented */ 
 #define MAX_POWER_OF_2(x)   ((__typeof__(x))1<<(8*sizeof(x)-1))
- 
+
+#define cc_ceiling(a,b)  (((a)+((b)-1))/(b))
+#define CC_BITLEN_TO_BYTELEN(x) cc_ceiling((x), 8)
 
 #endif /* _CORECRYPTO_CC_PRIV_H_ */

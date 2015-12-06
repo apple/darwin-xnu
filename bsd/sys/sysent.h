@@ -42,7 +42,7 @@ typedef	void	sy_munge_t(void *);
 
 struct sysent {		/* system call table */
 	sy_call_t	*sy_call;	/* implementing function */
-#if CONFIG_REQUIRES_U32_MUNGING
+#if CONFIG_REQUIRES_U32_MUNGING || (__arm__ && (__BIGGEST_ALIGNMENT__ > 4))
 	sy_munge_t	*sy_arg_munge32; /* system call arguments munger for 32-bit process */
 #endif
 	int32_t		sy_return_type; /* system call return types */
@@ -57,7 +57,7 @@ extern struct sysent sysent[];
 #endif	/* __INIT_SYSENT_C__ */
 
 extern int nsysent;
-#define NUM_SYSENT	490	/* Current number of defined syscalls */
+#define NUM_SYSENT	500	/* Current number of defined syscalls */
 
 /* 
  * Valid values for sy_cancel

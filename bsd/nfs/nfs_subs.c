@@ -2527,6 +2527,12 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 		if (error)
 			return (error);
 
+		if (nxna.nxna_addr.ss_len > sizeof(struct sockaddr_storage) ||
+		    nxna.nxna_mask.ss_len > sizeof(struct sockaddr_storage) ||
+		    nxna.nxna_addr.ss_family > AF_MAX ||
+		    nxna.nxna_mask.ss_family > AF_MAX)
+			return (EINVAL);
+
 		if (nxna.nxna_flags & (NX_MAPROOT|NX_MAPALL)) {
 			struct posix_cred temp_pcred;
 		        bzero(&temp_pcred, sizeof(temp_pcred));
@@ -3219,6 +3225,38 @@ unlock_out:
 		mount_drop(mp, 0);
 	lck_rw_done(&nfsrv_export_rwlock);
 	return (error);
+}
+
+/*
+ * Check if there is a least one export that will allow this address.
+ *
+ * Return 0, if there is an export that will allow this address,
+ * else return EACCES
+ */
+int
+nfsrv_check_exports_allow_address(mbuf_t nam)
+{
+	struct nfs_exportfs		*nxfs;
+	struct nfs_export		*nx;
+	struct nfs_export_options	*nxo;
+
+	if (nam == NULL)
+		return (EACCES);
+
+	lck_rw_lock_shared(&nfsrv_export_rwlock);
+	LIST_FOREACH(nxfs, &nfsrv_exports, nxfs_next) {
+		LIST_FOREACH(nx, &nxfs->nxfs_exports, nx_next) {
+			/* A little optimizing by checking for the default first */
+			if (nx->nx_flags & NX_DEFAULTEXPORT)
+				nxo = &nx->nx_defopt;
+			if (nxo || (nxo = nfsrv_export_lookup(nx, nam)))
+				goto found;
+		}
+	}
+found:
+	lck_rw_done(&nfsrv_export_rwlock);
+
+	return (nxo ? 0 : EACCES);
 }
 
 struct nfs_export_options *

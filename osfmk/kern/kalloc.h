@@ -60,9 +60,47 @@
 #define _KERN_KALLOC_H_
 
 #include <mach/machine/vm_types.h>
+#include <mach/boolean.h>
 #include <sys/cdefs.h>
+#include <mach/vm_types.h>
 
 __BEGIN_DECLS
+
+#if XNU_KERNEL_PRIVATE
+
+extern void *
+kalloc_canblock(
+		vm_size_t	       size,
+		boolean_t              canblock,
+		vm_allocation_site_t * site);
+
+#define kalloc(size)				\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+	kalloc_canblock((size), TRUE, &site); })
+
+#define kalloc_tag(size, tag)			\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
+		= { (tag), 0 } ; \
+	kalloc_canblock((size), TRUE, &site); })
+
+#define kalloc_tag_bt(size, tag)		\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
+		= { (tag), VM_TAG_BT }; \
+	kalloc_canblock((size), TRUE, &site); })
+
+#define kalloc_noblock(size)			\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+	kalloc_canblock((size), FALSE, &site); })
+
+#define kalloc_noblock_tag_bt(size, tag)	\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
+		= { (tag), VM_TAG_BT }; \
+	kalloc_canblock((size), FALSE, &site); })
+
+extern void kfree(void		*data,
+		  vm_size_t	size);
+
+#else /* XNU_KERNEL_PRIVATE */
 
 extern void *kalloc(vm_size_t	size);
 
@@ -70,6 +108,8 @@ extern void *kalloc_noblock(vm_size_t	size);
 
 extern void kfree(void		*data,
 		  vm_size_t	size);
+
+#endif /* !XNU_KERNEL_PRIVATE */
 
 __END_DECLS
 

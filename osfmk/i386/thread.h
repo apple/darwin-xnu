@@ -163,6 +163,7 @@ extern void *act_thread_csave(void);
 extern void act_thread_catt(void *ctx);
 extern void act_thread_cfree(void *ctx);
 
+#define FIND_PERFCONTROL_STATE(th)	(PERFCONTROL_STATE_NULL)
 
 /*
  *	On the kernel stack is:

@@ -436,6 +436,10 @@ void sdt_init( void )
 			return;
 		}
 
+		if (dtrace_fbt_probes_restricted()) {
+			return;
+		}
+
 		if (MH_MAGIC_KERNEL != _mh_execute_header.magic) {
 			g_sdt_kernctl.mod_address = (vm_address_t)NULL;
 			g_sdt_kernctl.mod_size = 0;

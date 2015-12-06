@@ -42,7 +42,6 @@ struct IOHibernateVars
     class IOBufferMemoryDescriptor *    handoffBuffer;
     class IOMemoryDescriptor *          previewBuffer;
     OSData *          			previewData;
-    OSData *		 		fileExtents;
     OSObject *				saveBootDevice;
 
     struct IOPolledFileIOVars *		fileVars;
@@ -59,37 +58,6 @@ struct IOHibernateVars
     uint8_t				volumeCryptKey[kIOHibernateAESKeySize / 8];
 };
 typedef struct IOHibernateVars IOHibernateVars;
-
-
-struct IOPolledFileIOVars
-{
-    struct kern_direct_file_io_ref_t *	fileRef;
-    IORegistryEntry *                   media;
-    class OSArray *			pollers;
-    IOByteCount				blockSize;
-    uint8_t *  				buffer;
-    IOByteCount 			bufferSize;
-    IOByteCount 			bufferLimit;
-    IOByteCount 			bufferOffset;
-    IOByteCount 			bufferHalf;
-    IOByteCount				extentRemaining;
-    IOByteCount				lastRead;
-    IOByteCount				readEnd;
-    uint32_t                            flags;
-    uint64_t				fileSize;
-    uint64_t				block0;
-    uint64_t				position;
-    uint64_t				extentPosition;
-    uint64_t				encryptStart;
-    uint64_t				encryptEnd;
-    uint64_t                            cryptBytes;
-    AbsoluteTime                        cryptTime;
-    IOPolledFileExtent * 		extentMap;
-    IOPolledFileExtent * 		currentExtent;
-    bool				io;
-    IOReturn				ioStatus;
-};
-typedef struct IOPolledFileIOVars IOPolledFileIOVars;
 
 #endif		/* __cplusplus */
 

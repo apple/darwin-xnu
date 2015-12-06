@@ -5,6 +5,7 @@ OPTIONS/kdebug						optional kdebug
 OPTIONS/gprof						optional gprof
 OPTIONS/config_dtrace					optional config_dtrace
 OPTIONS/hibernation					optional hibernation
+OPTIONS/iotracking					optional iotracking
 OPTIONS/networking					optional networking
 OPTIONS/crypto						optional crypto
 OPTIONS/zlib						optional zlib

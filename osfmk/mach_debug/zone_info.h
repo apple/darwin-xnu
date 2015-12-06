@@ -133,4 +133,16 @@ typedef struct task_zone_info_data {
 } task_zone_info_t;
 
 typedef task_zone_info_t *task_zone_info_array_t;
+
+typedef struct mach_memory_info {
+    uint64_t flags;
+    uint64_t site;
+    uint64_t size;
+    uint64_t free;
+    uint64_t largest;
+    uint64_t _resv[3];
+} mach_memory_info_t;
+
+typedef mach_memory_info_t *mach_memory_info_array_t;
+
 #endif	/* _MACH_DEBUG_ZONE_INFO_H_ */

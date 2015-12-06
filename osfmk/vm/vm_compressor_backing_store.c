@@ -51,6 +51,7 @@ int		vm_swapfile_create_thread_running = 0;
 int		vm_swapfile_gc_thread_awakened = 0;
 int		vm_swapfile_gc_thread_running = 0;
 
+int64_t		vm_swappin_avail = 0;
 unsigned int	vm_swapfile_total_segs_alloced = 0;
 unsigned int	vm_swapfile_total_segs_used = 0;
 
@@ -59,6 +60,8 @@ unsigned int	vm_swapfile_total_segs_used = 0;
 #define SWAP_RECLAIM	0x2	/* Swap file is marked to be reclaimed */
 #define SWAP_WANTED	0x4	/* Swap file has waiters */
 #define SWAP_REUSE	0x8	/* Swap file is on the Q and has a name. Reuse after init-ing.*/
+#define SWAP_PINNED	0x10	/* Swap file is pinned (FusionDrive) */
+
 
 struct swapfile{
 	queue_head_t		swp_queue;	/* list of swap files */
@@ -82,8 +85,6 @@ struct swapfile{
 queue_head_t	swf_global_queue;
 boolean_t	swp_trim_supported = FALSE;
 
-#define		VM_SWAPFILE_DELAYED_TRIM_MAX	128
-
 extern clock_sec_t	dont_trim_until_ts;
 clock_sec_t		vm_swapfile_last_failed_to_create_ts = 0;
 clock_sec_t		vm_swapfile_last_successful_create_ts = 0;
@@ -102,10 +103,14 @@ static void vm_swap_wait_on_trim_handling_in_progress(void);
 
 
 
+#define VM_MAX_SWAP_FILE_NUM		100
+#define	VM_SWAPFILE_DELAYED_TRIM_MAX	128
+
 #define	VM_SWAP_SHOULD_DEFRAGMENT()	(c_swappedout_sparse_count > (vm_swapfile_total_segs_used / 4) ? 1 : 0)
 #define VM_SWAP_SHOULD_RECLAIM()	(((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) >= SWAPFILE_RECLAIM_THRESHOLD_SEGS) ? 1 : 0)
 #define VM_SWAP_SHOULD_ABORT_RECLAIM()	(((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) <= SWAPFILE_RECLAIM_MINIMUM_SEGS) ? 1 : 0)
-#define VM_SWAP_SHOULD_CREATE(cur_ts)	(((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) < (unsigned int)VM_SWAPFILE_HIWATER_SEGS) && \
+#define VM_SWAP_SHOULD_PIN(_size)	(vm_swappin_avail > 0 && vm_swappin_avail >= (int64_t)(_size))
+#define VM_SWAP_SHOULD_CREATE(cur_ts)	((vm_num_swap_files < VM_MAX_SWAP_FILE_NUM) && ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) < (unsigned int)VM_SWAPFILE_HIWATER_SEGS) && \
 					 ((cur_ts - vm_swapfile_last_failed_to_create_ts) > VM_SWAPFILE_DELAYED_CREATE) ? 1 : 0)
 #define VM_SWAP_SHOULD_TRIM(swf)	((swf->swp_delayed_trim_count >= VM_SWAPFILE_DELAYED_TRIM_MAX) ? 1 : 0)
 
@@ -117,6 +122,15 @@ static void vm_swap_wait_on_trim_handling_in_progress(void);
 
 #if CHECKSUM_THE_SWAP
 extern unsigned int hash_string(char *cp, int len);
+#endif
+
+#if RECORD_THE_COMPRESSED_DATA
+boolean_t	c_compressed_record_init_done = FALSE;
+int		c_compressed_record_write_error = 0;
+struct vnode	*c_compressed_record_vp = NULL;
+uint64_t	c_compressed_record_file_offset = 0;
+void	c_compressed_record_init(void);
+void	c_compressed_record_write(char *, int);
 #endif
 
 #if ENCRYPTED_SWAP
@@ -189,7 +203,6 @@ vm_compressor_swap_init()
 					 BASEPRI_PREEMPT - 1, &thread) != KERN_SUCCESS) {
 		panic("vm_swapout_thread: create failed");
 	}
-	thread->options |= TH_OPT_VMPRIV;
 	vm_swapout_thread_id = thread->thread_id;
 
 	thread_deallocate(thread);
@@ -198,10 +211,8 @@ vm_compressor_swap_init()
 				 BASEPRI_PREEMPT - 1, &thread) != KERN_SUCCESS) {
 		panic("vm_swapfile_create_thread: create failed");
 	}
-	thread->options |= TH_OPT_VMPRIV;
 
 	thread_deallocate(thread);
-
 
 	if (kernel_thread_start_priority((thread_continue_t)vm_swapfile_gc_thread, NULL,
 				 BASEPRI_PREEMPT - 1, &thread) != KERN_SUCCESS) {
@@ -226,6 +237,29 @@ vm_compressor_swap_init()
 
 	printf("VM Swap Subsystem is %s\n", (vm_swap_up == TRUE) ? "ON" : "OFF"); 
 }
+
+
+#if RECORD_THE_COMPRESSED_DATA
+
+void
+c_compressed_record_init()
+{
+	if (c_compressed_record_init_done == FALSE) {
+		vm_swapfile_open("/tmp/compressed_data", &c_compressed_record_vp);
+		c_compressed_record_init_done = TRUE;
+	}
+}
+
+void
+c_compressed_record_write(char *buf, int size)
+{
+	if (c_compressed_record_write_error == 0) {
+		c_compressed_record_write_error = vm_record_file_write(c_compressed_record_vp, c_compressed_record_file_offset, buf, size);
+		c_compressed_record_file_offset += size;
+	}
+}
+#endif
+
 
 
 void
@@ -259,6 +293,7 @@ vm_swap_file_set_tuneables()
         if (vnode_pager_isSSD(vp) == FALSE)
 		vm_pageout_reinit_tuneables();
 	vnode_setswapmount(vp);
+	vm_swappin_avail = vnode_getswappin_avail(vp);
 	vm_swapfile_close((uint64_t)pathname, vp);
 done:
 	kfree(pathname, namelen);
@@ -400,7 +435,7 @@ vm_swap_defragment()
 
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
-		assert(c_seg->c_on_swappedout_sparse_q);
+		assert(c_seg->c_state == C_ON_SWAPPEDOUTSPARSE_Q);
 
 		if (c_seg->c_busy) {
 			lck_mtx_unlock_always(c_list_lock);
@@ -423,6 +458,7 @@ vm_swap_defragment()
 			 * c_seg_free_locked consumes the c_list_lock
 			 * and c_seg->c_lock
 			 */
+			C_SEG_BUSY(c_seg);
 			c_seg_free_locked(c_seg);
 
 			vm_swap_defragment_free++;
@@ -460,6 +496,8 @@ vm_swapfile_create_thread(void)
 {
 	clock_sec_t	sec;
 	clock_nsec_t	nsec;
+
+	current_thread()->options |= TH_OPT_VMPRIV;
 
 	vm_swapfile_create_thread_awakened++;
 	vm_swapfile_create_thread_running = 1;
@@ -624,6 +662,9 @@ done:
 }
 
 
+int vm_swapout_found_empty = 0;
+
+
 static void
 vm_swapout_thread(void)
 {
@@ -632,6 +673,8 @@ vm_swapout_thread(void)
 	c_segment_t 	c_seg = NULL;
 	kern_return_t	kr = KERN_SUCCESS;
 	vm_offset_t	addr = 0;
+
+	current_thread()->options |= TH_OPT_VMPRIV;
 
 	vm_swapout_thread_awakened++;
 
@@ -643,7 +686,7 @@ vm_swapout_thread(void)
 
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
-		assert(c_seg->c_on_swapout_q);
+		assert(c_seg->c_state == C_ON_SWAPOUT_Q);
 
 		if (c_seg->c_busy) {
 			lck_mtx_unlock_always(c_list_lock);
@@ -654,19 +697,20 @@ vm_swapout_thread(void)
 
 			continue;
 		}
-		queue_remove(&c_swapout_list_head, c_seg, c_segment_t, c_age_list);
-		c_seg->c_on_swapout_q = 0;
-		c_swapout_count--;
-
 		vm_swapout_thread_processed_segments++;
-
-		thread_wakeup((event_t)&compaction_swapper_running);
 
 		size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
 		
 		if (size == 0) {
-			c_seg_free_locked(c_seg);
-			goto c_seg_was_freed;
+			assert(c_seg->c_on_minorcompact_q);
+			assert(c_seg->c_bytes_used == 0);
+
+			c_seg_switch_state(c_seg, C_IS_EMPTY, FALSE);
+			lck_mtx_unlock_always(&c_seg->c_lock);
+			lck_mtx_unlock_always(c_list_lock);
+
+			vm_swapout_found_empty++;
+			goto c_seg_is_empty;
 		}
 		C_SEG_BUSY(c_seg);
 		c_seg->c_busy_swapping = 1;
@@ -692,28 +736,26 @@ vm_swapout_thread(void)
 
 		PAGE_REPLACEMENT_DISALLOWED(TRUE);
 
+		if (kr == KERN_SUCCESS) {
+			kernel_memory_depopulate(kernel_map, (vm_offset_t) addr, size, KMA_COMPRESSOR);
+		}
 		lck_mtx_lock_spin_always(c_list_lock);
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
 	       	if (kr == KERN_SUCCESS) {
+			int		new_state = C_ON_SWAPPEDOUT_Q;
+			boolean_t	insert_head = FALSE;
 
-			if (C_SEG_ONDISK_IS_SPARSE(c_seg) && hibernate_flushing == FALSE) {
+			if (hibernate_flushing == TRUE) {
+				if (c_seg->c_generation_id >= first_c_segment_to_warm_generation_id &&
+				    c_seg->c_generation_id <= last_c_segment_to_warm_generation_id)
+					insert_head = TRUE;
+			} else if (C_SEG_ONDISK_IS_SPARSE(c_seg))
+				new_state = C_ON_SWAPPEDOUTSPARSE_Q;
 
-				c_seg_insert_into_q(&c_swappedout_sparse_list_head, c_seg);
-				c_seg->c_on_swappedout_sparse_q = 1;
-				c_swappedout_sparse_count++;
+			c_seg_switch_state(c_seg, new_state, insert_head);
 
-			} else {
-				if (hibernate_flushing == TRUE && (c_seg->c_generation_id >= first_c_segment_to_warm_generation_id &&
-								   c_seg->c_generation_id <= last_c_segment_to_warm_generation_id))
-					queue_enter_first(&c_swappedout_list_head, c_seg, c_segment_t, c_age_list);
-				else
-					queue_enter(&c_swappedout_list_head, c_seg, c_segment_t, c_age_list);
-				c_seg->c_on_swappedout_q = 1;
-				c_swappedout_count++;
-			}
 			c_seg->c_store.c_swap_handle = f_offset;
-			c_seg->c_ondisk = 1;
 
 			VM_STAT_INCR_BY(swapouts, size >> PAGE_SHIFT);
 			
@@ -723,33 +765,22 @@ vm_swapout_thread(void)
 #if ENCRYPTED_SWAP
 			vm_swap_decrypt(c_seg);
 #endif /* ENCRYPTED_SWAP */
-			c_seg_insert_into_q(&c_age_list_head, c_seg);
-			c_seg->c_on_age_q = 1;
-			c_age_count++;
-
-			vm_swap_put_failures++;
+			if (c_seg->c_overage_swap == TRUE) {
+				c_seg->c_overage_swap = FALSE;
+				c_overage_swapped_count--;
+			}
+			c_seg_switch_state(c_seg, C_ON_AGE_Q, FALSE);
 		}
 		lck_mtx_unlock_always(c_list_lock);
 
-		if (c_seg->c_must_free)
-			c_seg_free(c_seg);
-		else {
-			c_seg->c_busy_swapping = 0;
-			C_SEG_WAKEUP_DONE(c_seg);
-			lck_mtx_unlock_always(&c_seg->c_lock);
-		}
-
-		if (kr == KERN_SUCCESS)
-			kernel_memory_depopulate(kernel_map, (vm_offset_t) addr, size, KMA_COMPRESSOR);
+		c_seg->c_busy_swapping = 0;
+		C_SEG_WAKEUP_DONE(c_seg);
+		lck_mtx_unlock_always(&c_seg->c_lock);
 
 		PAGE_REPLACEMENT_DISALLOWED(FALSE);
 
-		if (kr == KERN_SUCCESS) {
-			kmem_free(kernel_map, (vm_offset_t) addr, C_SEG_ALLOCSIZE);
-			OSAddAtomic64(-C_SEG_ALLOCSIZE, &compressor_kvspace_used);
-		}
 		vm_pageout_io_throttle();
-c_seg_was_freed:
+c_seg_is_empty:
 		if (c_swapout_count == 0)
 			vm_swap_consider_defragmenting();
 
@@ -772,6 +803,7 @@ vm_swap_create_file()
 	int		namelen = 0;
 	boolean_t	swap_file_created = FALSE;
 	boolean_t	swap_file_reuse = FALSE;
+	boolean_t	swap_file_pin = FALSE;
 	struct swapfile *swf = NULL;
 
 	/*
@@ -835,7 +867,9 @@ vm_swap_create_file()
 
 	while (size >= MIN_SWAP_FILE_SIZE) {
 
-		if (vm_swapfile_preallocate(swf->swp_vp, &size) == 0) {
+		swap_file_pin = VM_SWAP_SHOULD_PIN(size);
+
+		if (vm_swapfile_preallocate(swf->swp_vp, &size, &swap_file_pin) == 0) {
 
 			int num_bytes_for_bitmap = 0;
 
@@ -877,10 +911,14 @@ vm_swap_create_file()
 
 			vm_swapfile_total_segs_alloced += swf->swp_nsegs;
 
+			if (swap_file_pin == TRUE) {
+				swf->swp_flags |= SWAP_PINNED;
+				vm_swappin_avail -= swf->swp_size;
+			}
+
 			lck_mtx_unlock(&vm_swap_data_lock);
 
 			thread_wakeup((event_t) &vm_num_swap_files);
-
 			break;
 		} else {
 
@@ -1056,6 +1094,7 @@ retry:
 			goto retry;
 		}
 	}
+	vm_swap_put_failures++;
 
 	return KERN_FAILURE;
 
@@ -1080,6 +1119,8 @@ done:
 
 	if (error) {
 		vm_swap_free(*f_offset);
+
+		vm_swap_put_failures++;
 
 		return KERN_FAILURE;
 	}
@@ -1317,7 +1358,7 @@ vm_swap_reclaim(void)
 
 	c_segment_t	c_seg = NULL;
 	
-	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&addr), C_SEG_BUFSIZE, 0, KMA_KOBJECT) != KERN_SUCCESS) {
+	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&addr), C_SEG_BUFSIZE, 0, KMA_KOBJECT, VM_KERN_MEMORY_COMPRESSOR) != KERN_SUCCESS) {
 		panic("vm_swap_reclaim: kernel_memory_allocate failed\n");
 	}
 
@@ -1402,13 +1443,20 @@ ReTry_for_cseg:
 		}
 
 		c_seg = swf->swp_csegs[segidx];
+		assert(c_seg);
 
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
-		assert(c_seg->c_ondisk);
-
 		if (c_seg->c_busy) {
-
+			/*
+			 * a swapped out c_segment in the process of being freed will remain in the
+			 * busy state until after the vm_swap_free is called on it... vm_swap_free
+			 * takes the vm_swap_data_lock, so can't change the swap state until after
+			 * we drop the vm_swap_data_lock... once we do, vm_swap_free will complete
+			 * which will allow c_seg_free_locked to clear busy and wake up this thread...
+			 * at that point, we re-look up the swap state which will now indicate that
+			 * this c_segment no longer exists.
+			 */
 			c_seg->c_wanted = 1;
 			
 			assert_wait((event_t) (c_seg), THREAD_UNINT);
@@ -1425,88 +1473,83 @@ ReTry_for_cseg:
 		(swf->swp_bitmap)[byte_for_segidx] &= ~(1 << offset_within_byte);
 
 		f_offset = segidx * COMPRESSED_SWAP_CHUNK_SIZE;
-		
+
+		assert(c_seg == swf->swp_csegs[segidx]);
 		swf->swp_csegs[segidx] = NULL;
 		swf->swp_nseginuse--;
 
 		vm_swapfile_total_segs_used--;
 			
 		lck_mtx_unlock(&vm_swap_data_lock);
-	
-		if (c_seg->c_must_free) {
-			C_SEG_BUSY(c_seg);
-			c_seg_free(c_seg);
-		} else {
 
-			C_SEG_BUSY(c_seg);
-			c_seg->c_busy_swapping = 1;
+		assert(C_SEG_IS_ONDISK(c_seg));	
+
+		C_SEG_BUSY(c_seg);
+		c_seg->c_busy_swapping = 1;
 #if !CHECKSUM_THE_SWAP
-			c_seg_trim_tail(c_seg);
+		c_seg_trim_tail(c_seg);
 #endif
-			c_size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
+		c_size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
 		
-			assert(c_size <= C_SEG_BUFSIZE);
+		assert(c_size <= C_SEG_BUFSIZE && c_size);
 
-			lck_mtx_unlock_always(&c_seg->c_lock);
+		lck_mtx_unlock_always(&c_seg->c_lock);
 
-			if (vm_swapfile_io(swf->swp_vp, f_offset, addr, (int)(c_size / PAGE_SIZE_64), SWAP_READ)) {
+		if (vm_swapfile_io(swf->swp_vp, f_offset, addr, (int)(c_size / PAGE_SIZE_64), SWAP_READ)) {
 
-				/*
-				 * reading the data back in failed, so convert c_seg
-				 * to a swapped in c_segment that contains no data
-				 */
-				c_seg->c_store.c_buffer = (int32_t *)NULL;
-				c_seg_swapin_requeue(c_seg);
-
-				goto swap_io_failed;
-			}
-			VM_STAT_INCR_BY(swapins, c_size >> PAGE_SHIFT);
-
-			if (vm_swap_put(addr, &f_offset, c_size, c_seg)) {
-				vm_offset_t	c_buffer;
-
-				/*
-				 * the put failed, so convert c_seg to a fully swapped in c_segment
-				 * with valid data
-				 */
-				if (kernel_memory_allocate(kernel_map, &c_buffer, C_SEG_ALLOCSIZE, 0, KMA_COMPRESSOR | KMA_VAONLY) != KERN_SUCCESS)
-					panic("vm_swap_reclaim: kernel_memory_allocate failed\n");
-				OSAddAtomic64(C_SEG_ALLOCSIZE, &compressor_kvspace_used);
-
-				kernel_memory_populate(kernel_map, c_buffer, c_size, KMA_COMPRESSOR);
-
-				memcpy((char *)c_buffer, (char *)addr, c_size);
-
-				c_seg->c_store.c_buffer = (int32_t *)c_buffer;
-#if ENCRYPTED_SWAP
-				vm_swap_decrypt(c_seg);
-#endif /* ENCRYPTED_SWAP */
-				c_seg_swapin_requeue(c_seg);
-
-				OSAddAtomic64(c_seg->c_bytes_used, &compressor_bytes_used);
-
-				goto swap_io_failed;
-			}
-			VM_STAT_INCR_BY(swapouts, c_size >> PAGE_SHIFT);
-
-			lck_mtx_lock_spin_always(&c_seg->c_lock);
-				
-			assert(c_seg->c_ondisk);
 			/*
-			 * The c_seg will now know about the new location on disk.
+			 * reading the data back in failed, so convert c_seg
+			 * to a swapped in c_segment that contains no data
 			 */
-			c_seg->c_store.c_swap_handle = f_offset;
-swap_io_failed:
-			c_seg->c_busy_swapping = 0;
-		
-			if (c_seg->c_must_free)
-				c_seg_free(c_seg);
-			else {
-				C_SEG_WAKEUP_DONE(c_seg);
-				
-				lck_mtx_unlock_always(&c_seg->c_lock);
-			}
+			c_seg_swapin_requeue(c_seg, FALSE);
+			/*
+			 * returns with c_busy_swapping cleared
+			 */
+
+			vm_swap_get_failures++;
+			goto swap_io_failed;
 		}
+		VM_STAT_INCR_BY(swapins, c_size >> PAGE_SHIFT);
+
+		if (vm_swap_put(addr, &f_offset, c_size, c_seg)) {
+			vm_offset_t	c_buffer;
+
+			/*
+			 * the put failed, so convert c_seg to a fully swapped in c_segment
+			 * with valid data
+			 */
+			c_buffer = (vm_offset_t)C_SEG_BUFFER_ADDRESS(c_seg->c_mysegno);
+
+			kernel_memory_populate(kernel_map, c_buffer, c_size, KMA_COMPRESSOR, VM_KERN_MEMORY_COMPRESSOR);
+
+			memcpy((char *)c_buffer, (char *)addr, c_size);
+
+			c_seg->c_store.c_buffer = (int32_t *)c_buffer;
+#if ENCRYPTED_SWAP
+			vm_swap_decrypt(c_seg);
+#endif /* ENCRYPTED_SWAP */
+			c_seg_swapin_requeue(c_seg, TRUE);
+			/*
+			 * returns with c_busy_swapping cleared
+			 */
+			OSAddAtomic64(c_seg->c_bytes_used, &compressor_bytes_used);
+
+			goto swap_io_failed;
+		}
+		VM_STAT_INCR_BY(swapouts, c_size >> PAGE_SHIFT);
+
+		lck_mtx_lock_spin_always(&c_seg->c_lock);
+				
+		assert(C_SEG_IS_ONDISK(c_seg));
+		/*
+		 * The c_seg will now know about the new location on disk.
+		 */
+		c_seg->c_store.c_swap_handle = f_offset;
+		c_seg->c_busy_swapping = 0;
+swap_io_failed:
+		C_SEG_WAKEUP_DONE(c_seg);
+				
+		lck_mtx_unlock_always(&c_seg->c_lock);
 		lck_mtx_lock(&vm_swap_data_lock);
 	}
 
@@ -1537,6 +1580,10 @@ swap_io_failed:
 	kfree(swf->swp_bitmap, MAX((swf->swp_nsegs >> 3), 1));
 	
 	lck_mtx_lock(&vm_swap_data_lock);
+
+	if (swf->swp_flags & SWAP_PINNED) {
+		vm_swappin_avail += swf->swp_size;
+	}
 
 	swf->swp_vp = NULL;	
 	swf->swp_size = 0;

@@ -63,7 +63,6 @@
 #include <i386/postcode.h>
 #include <assym.s>
 
-#include <i386/mp.h>
 #include <i386/cpuid.h>
 #include <i386/acpi.h>
 

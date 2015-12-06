@@ -2,8 +2,9 @@
  *  ccdrbg_impl.h
  *  corecrypto
  *
- *  Created by James Murphy on 12/9/11.
- *  Copyright (c) 2011 Apple Inc. All rights reserved.
+ *  Created on 01/03/2012
+ *
+ *  Copyright (c) 2012,2015 Apple Inc. All rights reserved.
  *
  */
 
@@ -14,7 +15,7 @@
 struct ccdrbg_state;
 
 struct ccdrbg_info {
-    /** Size of the DRBG state in bytes **/
+    /*! Size of the DRBG state in bytes **/
     size_t size;
 
     /** Instantiate the PRNG
@@ -30,7 +31,7 @@ struct ccdrbg_info {
                 unsigned long nonceLength, const void* nonce,
                 unsigned long psLength, const void* ps);
 
-    /** Add entropy to the PRNG
+    /*! Add entropy to the PRNG
      @param prng       The PRNG state
      @param entropylen Length of entropy
      @param entropy    Entropy bytes
@@ -42,7 +43,7 @@ struct ccdrbg_info {
                   unsigned long entropylen, const void *entropy,
                   unsigned long inlen, const void *in);
 
-    /** Read from the PRNG in a FIPS Testing compliant manor
+    /*! Read from the PRNG in a FIPS Testing compliant manor
      @param prng    The PRNG state to read from
      @param out     [out] Where to store the data
      @param outlen  Length of data desired (octets)
@@ -54,7 +55,7 @@ struct ccdrbg_info {
                     unsigned long outlen, void *out,
                     unsigned long inlen, const void *in);
 
-    /** Terminate a PRNG state
+    /*! Terminate a PRNG state
      @param prng   The PRNG state to terminate
      */
     void (*done)(struct ccdrbg_state *prng);

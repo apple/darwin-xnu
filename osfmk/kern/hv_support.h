@@ -72,8 +72,6 @@ extern void hv_set_thread_target(void *target);
 extern void *hv_get_task_target(void);
 extern void *hv_get_thread_target(void);
 extern int hv_get_volatile_state(hv_volatile_state_t state);
-extern kern_return_t hv_set_mp_notify(void);
-extern void hv_release_mp_notify(void);
 extern kern_return_t hv_set_traps(hv_trap_type_t trap_type,
 	const hv_trap_t *traps, unsigned trap_count);
 extern void hv_release_traps(hv_trap_type_t trap_type);

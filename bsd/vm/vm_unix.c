@@ -104,6 +104,18 @@
 int _shared_region_map_and_slide(struct proc*, int, unsigned int, struct shared_file_mapping_np*, uint32_t, user_addr_t, user_addr_t);
 int shared_region_copyin_mappings(struct proc*, user_addr_t, unsigned int, struct shared_file_mapping_np *);
 
+#if DEVELOPMENT || DEBUG
+extern int radar_20146450;
+SYSCTL_INT(_vm, OID_AUTO, radar_20146450, CTLFLAG_RW | CTLFLAG_LOCKED, &radar_20146450, 0, "");
+
+extern int macho_printf;
+SYSCTL_INT(_vm, OID_AUTO, macho_printf, CTLFLAG_RW | CTLFLAG_LOCKED, &macho_printf, 0, "");
+
+extern int apple_protect_pager_data_request_debug;
+SYSCTL_INT(_vm, OID_AUTO, apple_protect_pager_data_request_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &apple_protect_pager_data_request_debug, 0, "");
+
+#endif /* DEVELOPMENT || DEBUG */
+
 SYSCTL_INT(_vm, OID_AUTO, vm_do_collapse_compressor, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_counters.do_collapse_compressor, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, vm_do_collapse_compressor_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_counters.do_collapse_compressor_pages, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, vm_do_collapse_terminate, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_counters.do_collapse_terminate, 0, "");
@@ -147,6 +159,7 @@ extern int allow_stack_exec, allow_data_exec;
 
 SYSCTL_INT(_vm, OID_AUTO, allow_stack_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_stack_exec, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, allow_data_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_data_exec, 0, "");
+
 #endif /* !SECURE_KERNEL */
 
 static const char *prot_values[] = {
@@ -192,9 +205,11 @@ SYSCTL_INT(_vm, OID_AUTO, enforce_shared_cache_dir, CTLFLAG_RW | CTLFLAG_LOCKED,
 static int64_t last_unnest_log_time = 0; 
 static int shared_region_unnest_log_count = 0;
 
-void log_unnest_badness(vm_map_t m, vm_map_offset_t s, vm_map_offset_t e) {
-	struct timeval tv;
-	const char *pcommstr;
+void log_unnest_badness(
+	vm_map_t	m,
+	vm_map_offset_t s,
+	vm_map_offset_t e) {
+	struct timeval	tv;
 
 	if (shared_region_unnest_logging == 0)
 		return;
@@ -211,9 +226,7 @@ void log_unnest_badness(vm_map_t m, vm_map_offset_t s, vm_map_offset_t e) {
 		}
 	}
 
-	pcommstr = current_proc()->p_comm;
-
-	printf("%s (map: %p) triggered DYLD shared region unnest for map: %p, region 0x%qx->0x%qx. While not abnormal for debuggers, this increases system memory footprint until the target exits.\n", current_proc()->p_comm, get_task_map(current_proc()->task), m, (uint64_t)s, (uint64_t)e);
+	printf("%s[%d] triggered unnest of range 0x%qx->0x%qx of DYLD shared region in VM map %p. While not abnormal for debuggers, this increases system memory footprint until the target exits.\n", current_proc()->p_comm, current_proc()->p_pid, (uint64_t)s, (uint64_t)e, (void *) VM_KERNEL_ADDRPERM(m));
 }
 
 int
@@ -248,7 +261,7 @@ vslock(
 					     vm_map_page_mask(map)),
 			   vm_map_round_page(addr+len,
 					     vm_map_page_mask(map)), 
-			   VM_PROT_READ | VM_PROT_WRITE,
+			   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_BSD),
 			   FALSE);
 
 	switch (kret) {
@@ -947,6 +960,7 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 		}
 	}
 
+
 	task_reference(target);
 
 #if CONFIG_MEMORYSTATUS
@@ -1234,8 +1248,10 @@ _shared_region_map_and_slide(
 	}
 
 #if CONFIG_MACF
+	/* pass in 0 for the offset argument because AMFI does not need the offset
+		of the shared cache */
 	error = mac_file_check_mmap(vfs_context_ucred(vfs_context_current()),
-			fp->f_fglob, VM_PROT_ALL, MAP_FILE, &maxprot);
+			fp->f_fglob, VM_PROT_ALL, MAP_FILE, 0, &maxprot);
 	if (error) {
 		goto done;
 	}
@@ -1561,6 +1577,10 @@ SYSCTL_INT(_vm, OID_AUTO, page_purgeable_count, CTLFLAG_RD | CTLFLAG_LOCKED,
 extern unsigned int	vm_page_purgeable_wired_count;
 SYSCTL_INT(_vm, OID_AUTO, page_purgeable_wired_count, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_purgeable_wired_count, 0, "Wired purgeable page count");
+
+extern unsigned int	vm_pageout_purged_objects;
+SYSCTL_INT(_vm, OID_AUTO, pageout_purged_objects, CTLFLAG_RD | CTLFLAG_LOCKED,
+	   &vm_pageout_purged_objects, 0, "System purged object count");
 
 extern int madvise_free_debug;
 SYSCTL_INT(_vm, OID_AUTO, madvise_free_debug, CTLFLAG_RW | CTLFLAG_LOCKED,

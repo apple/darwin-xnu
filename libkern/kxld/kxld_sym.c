@@ -261,7 +261,7 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
         }
 
         /* Set the C++-specific fields */
-        if ((streq_safe(CXX_PREFIX, sym->name, const_strlen(CXX_PREFIX)))) {
+        if (!strncmp(CXX_PREFIX, sym->name, const_strlen(CXX_PREFIX))) {
             sym->is_cxx = 1;
 
             if (streq_safe(sym->name, METACLASS_VTABLE_PREFIX, 

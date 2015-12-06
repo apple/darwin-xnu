@@ -441,6 +441,10 @@ gc_enable( boolean_t enable )
 					if ( buffer_colorcodes ) kfree( buffer_colorcodes, buffer_size );
 					if ( buffer_tab_stops  ) kfree( buffer_tab_stops,  buffer_columns );
 
+					buffer_attributes = NULL;
+					buffer_characters = NULL;
+					buffer_colorcodes = NULL;
+					buffer_tab_stops  = NULL;
 					buffer_columns = 0;
 					buffer_rows    = 0;
 					buffer_size    = 0;
@@ -1856,6 +1860,7 @@ static boolean_t		vc_needsave;
 static void *			vc_saveunder;
 static vm_size_t		vc_saveunder_len;
 static int8_t			vc_uiscale = 1;
+int                             vc_user_options;
 decl_simple_lock_data(,vc_progress_lock)
 
 static int           		vc_progress_withmeter = 3;
@@ -1863,12 +1868,15 @@ int                             vc_progressmeter_enable;
 static int                      vc_progressmeter_drawn;
 int            	                vc_progressmeter_value;
 static uint32_t            	vc_progressmeter_count;
+static uint32_t            	vc_progress_meter_start;
+static uint32_t            	vc_progress_meter_end;
 static uint64_t            	vc_progressmeter_interval;
 static uint64_t            	vc_progressmeter_deadline;
 static thread_call_data_t	vc_progressmeter_call;
 static void *                   vc_progressmeter_backbuffer;
 static boolean_t                vc_progressmeter_hold;
 static uint32_t                 vc_progressmeter_diskspeed = 256;
+
 
 enum {
     kSave          = 0x10,
@@ -1922,8 +1930,9 @@ static void vc_blit_rect(int x, int y, int bx,
 			    void * backBuffer,
 			    unsigned int flags)
 {
-    if(!vinfo.v_depth)
-        return;
+    if (!vinfo.v_depth)                                return;
+    if (((unsigned int)(x + width))  > vinfo.v_width)  return;
+    if (((unsigned int)(y + height)) > vinfo.v_height) return;
 
     switch( vinfo.v_depth) {
 	case 8:
@@ -2165,9 +2174,8 @@ static void vc_blit_rect_30(int x, int y, int bx,
     {
         for( col = 0; col < width; col++)
 	{
-	    if (col < sourceRow)
-		data = *dataPtr++;
-
+	    if (sourceRow) data = dataPtr[((sx + (col * a) + (line * b)) >> 16)
+				+ sourceRow * (((sy + (col * c) + (line * d)) >> 16))];
 	    if (backPtr) {
 		if (kSave & flags) {
 		    back = *(dst + col);
@@ -2535,6 +2543,17 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
 }
 
 
+static uint32_t vc_progressmeter_range(uint32_t pos)
+{
+    uint32_t ret;
+
+    if (pos > kProgressMeterEnd) pos = kProgressMeterEnd;
+    ret = vc_progress_meter_start 
+    	+ ((pos * (vc_progress_meter_end - vc_progress_meter_start)) / kProgressMeterEnd);
+
+    return (ret);
+}
+
 static void
 vc_progressmeter_task(__unused void *arg0, __unused void *arg)
 {
@@ -2546,7 +2565,7 @@ vc_progressmeter_task(__unused void *arg0, __unused void *arg)
     if (vc_progressmeter_enable)
     {
 	uint32_t pos = (vc_progressmeter_count >> 13);
-	internal_set_progressmeter(pos);
+	internal_set_progressmeter(vc_progressmeter_range(pos));
 	if (pos < kProgressMeterEnd)
 	{
             static uint16_t incr[8] = { 10000, 10000, 8192, 4096, 2048, 384, 384, 64 };
@@ -2840,7 +2859,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 
 		case kPEAcquireScreen:
 			if ( gc_acquired ) break;
-			vc_progress_set( graphics_now, vc_acquire_delay );
+			vc_progress_set( graphics_now, (kVCDarkReboot & vc_user_options) ? 120 : vc_acquire_delay );
 			gc_enable( !graphics_now );
 			gc_acquired = TRUE;
 			gc_desire_text = FALSE;
@@ -2907,7 +2926,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		    simple_lock(&vc_progress_lock);
 
 		    vc_progressmeter_drawn = 0;
-		    internal_set_progressmeter(vc_progressmeter_count >> 13);
+		    internal_set_progressmeter(vc_progressmeter_range(vc_progressmeter_count >> 13));
 
 		    simple_unlock(&vc_progress_lock);
 		    splx(s);
@@ -2958,9 +2977,22 @@ vcattach(void)
 {
 	vm_initialized = TRUE;
 
+        const boot_args * bootargs  = (typeof(bootargs)) PE_state.bootArgs;
+
 	vc_progress_white = (0 != ((kBootArgsFlagBlackBg | kBootArgsFlagLoginUI) 
-					  & ((boot_args *) PE_state.bootArgs)->flags));
+					  & bootargs->flags));
 	PE_parse_boot_argn("meter", &vc_progress_withmeter, sizeof(vc_progress_withmeter));
+
+	if (kBootArgsFlagInstallUI & bootargs->flags)
+	{
+	    vc_progress_meter_start = (bootargs->bootProgressMeterStart * kProgressMeterMax) / 65535;
+	    vc_progress_meter_end   = (bootargs->bootProgressMeterEnd   * kProgressMeterMax) / 65535;
+	}
+	else
+	{
+	    vc_progress_meter_start = 0;
+	    vc_progress_meter_end   = kProgressMeterMax;
+	}
 	simple_lock_init(&vc_progress_lock, 0);
 
 	if ( gc_graphics_boot == FALSE )
@@ -3187,6 +3219,13 @@ vc_set_progressmeter(int new_value)
 
     simple_unlock(&vc_progress_lock);
     splx(s);
+}
+
+
+void
+vc_set_options(int new_value)
+{
+     vc_user_options = new_value;
 }
 
 

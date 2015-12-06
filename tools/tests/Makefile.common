@@ -1,0 +1,48 @@
+#
+# Common definitions for test directories
+#
+
+XCRUN := /usr/bin/xcrun
+SDKROOT ?= macosx.internal
+
+# SDKROOT may be passed as a shorthand like "iphoneos.internal". We
+# must resolve these to a full path and override SDKROOT.
+
+SDKROOT_RESOLVED := $(shell xcrun -sdk $(SDKROOT) -show-sdk-path)
+ifeq ($(strip $(SDKROOT)_$(SDKROOT_RESOLVED)),/_)
+SDKROOT_RESOLVED := /
+endif
+override SDKROOT = $(SDKROOT_RESOLVED)
+
+SDKVERSION := $(shell $(XCRUN) -sdk $(SDKROOT) -show-sdk-version)
+
+PLATFORMPATH := $(shell xcrun -sdk $(SDKROOT) -show-sdk-platform-path)
+PLATFORM := $(shell echo $(PLATFORMPATH) | sed 's,^.*/\([^/]*\)\.platform$$,\1,')
+
+ifeq ($(PLATFORM),watchOS)
+    PLATFORM := WatchOS
+endif
+
+SUPPORTED_EMBEDDED_PLATFORMS := iPhoneOS iPhoneOSNano tvOS AppleTVOS WatchOS
+Embedded = $(if $(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),YES,NO)
+
+#
+# Deployment target flag
+#
+ifeq ($(PLATFORM),MacOSX)
+    DEPLOYMENT_TARGET_FLAGS = -mmacosx-version-min=$(SDKVERSION)
+else ifeq ($(PLATFORM),WatchOS)
+    DEPLOYMENT_TARGET_FLAGS = -mwatchos-version-min=$(SDKVERSION)
+else ifeq ($(PLATFORM),tvOS)
+    DEPLOYMENT_TARGET_FLAGS = -mtvos-version-min=$(SDKVERSION)
+else ifeq ($(PLATFORM),AppleTVOS)
+    DEPLOYMENT_TARGET_FLAGS = -mtvos-version-min=$(SDKVERSION)
+else ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
+    DEPLOYMENT_TARGET_FLAGS = -miphoneos-version-min=$(SDKVERSION)
+else ifneq ($(filter $(SUPPORTED_SIMULATOR_PLATFORMS),$(PLATFORM)),)
+    DEPLOYMENT_TARGET_FLAGS =
+else
+    DEPLOYMENT_TARGET_FLAGS =
+endif
+
+DEPLOYMENT_TARGET_DEFINES = -DPLATFORM_$(PLATFORM)

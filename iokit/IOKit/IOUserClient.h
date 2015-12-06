@@ -309,8 +309,8 @@ public:
     */
     static IOReturn releaseNotificationPort(mach_port_t port);
 
-    virtual bool init();
-    virtual bool init( OSDictionary * dictionary );
+    virtual bool init() APPLE_KEXT_OVERRIDE;
+    virtual bool init( OSDictionary * dictionary ) APPLE_KEXT_OVERRIDE;
     // Currently ignores the all args, just passes up to IOService::init()
     virtual bool initWithTask(
                     task_t owningTask, void * securityToken, UInt32 type,
@@ -319,7 +319,7 @@ public:
     virtual bool initWithTask(
                     task_t owningTask, void * securityToken, UInt32 type);
 
-    virtual void free();
+    virtual void free() APPLE_KEXT_OVERRIDE;
 
     virtual IOReturn clientClose( void );
     virtual IOReturn clientDied( void );

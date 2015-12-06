@@ -13,6 +13,7 @@ E. FAQ and Generel Coding Guidelines
      ii. Formatted Output printing guidelines [MUST READ]
     iii. Coding conventions.  [MUST READ]
      iv. Submitting changes in lldbmacros [MUST READ]
+      v. Common utility functions and paradigms
 F. Development and Debugging on lldb kernel debugging platform.
       i. Reading a exception backtrace
      ii. Loading custom or local lldbmacros and operating_system plugin
@@ -125,7 +126,7 @@ where:
                  -v          : increase the verbosity of the command. Each '-v' encountered will increase verbosity by 1.
                  -p <plugin> : pass the output of command to <plugin> for processing and followup with command requests by it.
   CMDOPTIONS   : These are command level options (always a CAPITAL letter option) that are defined by the macro developer. Please do
-                 help <cmdname> to know how each option operates on that particular command.
+                 help <cmdname> to know how each option operates on that particular command. For an example of how to use CMDOPTIONS, take a look at vm_object_walk_pages in memory.py
 
 ii. Writing new commands.
 --------------------------
@@ -308,7 +309,14 @@ iv. Submitting changes in lldbmacros
   * Do a clean build of kernel from xnu top level directory.
   * Verify that your changes are present in the dSYM directory of new build. 
   * Re-run all your test and verification steps with the lldbmacros from the newly packaged dSYM/Contents/Resources/Python/lldbmacros.
- 
+
+v. Common utility functions and paradigms
+-----------------------------------------
+ Please search and look around the code for common util functions and paradigm
+  * Take a peek at utils.py for common utility like sizeof_fmt() to humanize size strings in KB, MB etc. The convention is to have functions that do self contained actions and does not require intricate knowledge of kernel structures in utils.py
+  * If you need to get pagesize of the traget system, do not hard code any value. kern.globals.page_size is your friend. Similarly use config['verbosity'] for finding about configs.
+  * If you are developing a command for structure that is different based on development/release kernels please use "hasattr()" functionality to conditionalize referencing #ifdef'ed fields in structure. See example in def GetTaskSummary(task) in process.py
+
 ===============================================================
 F. Development and Debugging on lldb kernel debugging platform.
 ===============================================================

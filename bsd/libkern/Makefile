@@ -8,11 +8,11 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 
-DATAFILES = \
+KERNELFILES = \
 	libkern.h
 
 
-EXPORT_MI_LIST = ${DATAFILES}
+EXPORT_MI_LIST = ${KERNELFILES}
 
 EXPORT_MI_DIR = libkern
 

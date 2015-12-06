@@ -385,16 +385,16 @@ static inline void pmap_pv_throttle(__unused pmap_t p) {
  */
 #define	PHYS_MODIFIED	INTEL_PTE_MOD	/* page modified */
 #define	PHYS_REFERENCED	INTEL_PTE_REF	/* page referenced */
-#define PHYS_MANAGED	INTEL_PTE_VALID /* page is managed */
-#define PHYS_NOENCRYPT	INTEL_PTE_USER	/* no need to encrypt this page in the hibernation image */
+#define	PHYS_MANAGED	INTEL_PTE_VALID /* page is managed */
+#define	PHYS_NOENCRYPT	INTEL_PTE_USER	/* no need to encrypt this page in the hibernation image */
 #define	PHYS_NCACHE	INTEL_PTE_NCACHE
 #define	PHYS_PTA	INTEL_PTE_PTA
 #define	PHYS_CACHEABILITY_MASK (INTEL_PTE_PTA | INTEL_PTE_NCACHE)
-#define PHYS_INTERNAL	INTEL_PTE_WTHRU	/* page from internal object */
-#define PHYS_REUSABLE	INTEL_PTE_WRITE /* page is "reusable" */
+#define	PHYS_INTERNAL	INTEL_PTE_WTHRU	/* page from internal object */
+#define	PHYS_REUSABLE	INTEL_PTE_WRITE /* page is "reusable" */
 
-extern const boolean_t	pmap_disable_kheap_nx;
-extern const boolean_t	pmap_disable_kstack_nx;
+extern boolean_t	pmap_disable_kheap_nx;
+extern boolean_t	pmap_disable_kstack_nx;
 
 #define PMAP_EXPAND_OPTIONS_NONE (0x0)
 #define PMAP_EXPAND_OPTIONS_NOWAIT (PMAP_OPTIONS_NOWAIT)
@@ -653,6 +653,7 @@ pmap_classify_pagetable_corruption(pmap_t pmap, vm_map_offset_t vaddr, ppnum_t *
 	pmap_t pvpmap = pv_h->pmap;
 	vm_map_offset_t pvva = pv_h->va;
 	boolean_t ppcd = FALSE;
+	boolean_t is_ept;
 
 	/* Ideally, we'd consult the Mach VM here to definitively determine
 	 * the nature of the mapping for this address space and address.
@@ -664,6 +665,7 @@ pmap_classify_pagetable_corruption(pmap_t pmap, vm_map_offset_t vaddr, ppnum_t *
 
 	/* As a precautionary measure, mark A+D */
 	pmap_phys_attributes[ppn_to_pai(ppn)] |= (PHYS_MODIFIED | PHYS_REFERENCED);
+	is_ept = is_ept_pmap(pmap);
 
 	/*
 	 * Correct potential single bit errors in either (but not both) element
@@ -704,9 +706,11 @@ pmap_classify_pagetable_corruption(pmap_t pmap, vm_map_offset_t vaddr, ppnum_t *
 		goto pmap_cpc_exit;
 	}
 
-	/* Check for malformed/inconsistent entries */
-
-	if ((cpte & (INTEL_PTE_NCACHE | INTEL_PTE_WTHRU | INTEL_PTE_PTA)) ==  (INTEL_PTE_NCACHE | INTEL_PTE_WTHRU)) {
+	/*
+	 * Check for malformed/inconsistent entries.
+	 * The first check here isn't useful for EPT PTEs because INTEL_EPT_NCACHE == 0
+	 */
+	if (!is_ept && ((cpte & (INTEL_PTE_NCACHE | INTEL_PTE_WTHRU | INTEL_PTE_PTA)) ==  (INTEL_PTE_NCACHE | INTEL_PTE_WTHRU))) {
 		action = PMAP_ACTION_IGNORE;
 		suppress_reason = PTE_INVALID_CACHEABILITY;
 	}
@@ -714,7 +718,7 @@ pmap_classify_pagetable_corruption(pmap_t pmap, vm_map_offset_t vaddr, ppnum_t *
 		action = PMAP_ACTION_IGNORE;
 		suppress_reason = PTE_RSVD;
 	}
-	else if ((pmap != kernel_pmap) && ((cpte & INTEL_PTE_USER) == 0)) {
+	else if ((pmap != kernel_pmap) && (!is_ept) && ((cpte & INTEL_PTE_USER) == 0)) {
 		action = PMAP_ACTION_IGNORE;
 		suppress_reason = PTE_SUPERVISOR;
 	}
@@ -1010,9 +1014,12 @@ pmap64_pdpt(pmap_t pmap, vm_map_offset_t vaddr)
 {
 	pml4_entry_t	newpf;
 	pml4_entry_t	*pml4;
+	boolean_t	is_ept;
 
 	pml4 = pmap64_pml4(pmap, vaddr);
-	if (pml4 && ((*pml4 & INTEL_PTE_VALID))) {
+	is_ept = is_ept_pmap(pmap);
+
+	if (pml4 && (*pml4 & PTE_VALID_MASK(is_ept))) {
 		newpf = *pml4 & PG_FRAME;
 		return &((pdpt_entry_t *) PHYSMAP_PTOV(newpf))
 			[(vaddr >> PDPTSHIFT) & (NPDPTPG-1)];
@@ -1027,10 +1034,12 @@ pmap64_pde(pmap_t pmap, vm_map_offset_t vaddr)
 {
 	pdpt_entry_t	newpf;
 	pdpt_entry_t	*pdpt;
+	boolean_t	is_ept;
 
 	pdpt = pmap64_pdpt(pmap, vaddr);
+	is_ept = is_ept_pmap(pmap);
 
-	if (pdpt && ((*pdpt & INTEL_PTE_VALID))) {
+	if (pdpt && (*pdpt & PTE_VALID_MASK(is_ept))) {
 		newpf = *pdpt & PG_FRAME;
 		return &((pd_entry_t *) PHYSMAP_PTOV(newpf))
 			[(vaddr >> PDSHIFT) & (NPDPG-1)];
@@ -1060,12 +1069,15 @@ pmap_pte(pmap_t pmap, vm_map_offset_t vaddr)
 {
 	pd_entry_t	*pde;
 	pd_entry_t	newpf;
+	boolean_t	is_ept;
 
 	assert(pmap);
 	pde = pmap64_pde(pmap, vaddr);
 
-	if (pde && ((*pde & INTEL_PTE_VALID))) {
-		if (*pde & INTEL_PTE_PS) 
+	is_ept = is_ept_pmap(pmap);
+
+	if (pde && (*pde & PTE_VALID_MASK(is_ept))) {
+		if (*pde & PTE_PS)
 			return pde;
 		newpf = *pde & PG_FRAME;
 		return &((pt_entry_t *)PHYSMAP_PTOV(newpf))

@@ -1,0 +1,50 @@
+# Any level
+BUILD/
+build/
+.DS_Store
+
+# /
+/.remotebuild_credential
+/cscope.*
+/TAGS
+/tags
+
+# /libkern/c++/Tests/TestSerialization/test1/test1.xcodeproj/
+/libkern/c++/Tests/TestSerialization/test1/test1.xcodeproj/xcuserdata
+
+# /libkern/c++/Tests/TestSerialization/test2/test2.xcodeproj/
+/libkern/c++/Tests/TestSerialization/test2/test2.xcodeproj/xcuserdata
+
+# /libkern/kmod/libkmod.xcodeproj/
+/libkern/kmod/libkmod.xcodeproj/xcuserdata
+
+# /libsyscall/Libsyscall.xcodeproj/
+/libsyscall/Libsyscall.xcodeproj/xcuserdata
+/libsyscall/Libsyscall.xcodeproj/project.xcworkspace
+
+# /tools/lldbmacros/
+/tools/lldbmacros/*.pyc
+
+# /tools/lldbmacros/core/
+/tools/lldbmacros/core/*.pyc
+
+# /tools/lldbmacros/plugins/
+/tools/lldbmacros/plugins/*.pyc
+
+# /tools/tests/perf_index/PerfIndex_COPS_Module/PerfIndex.xcodeproj/
+/tools/tests/perf_index/PerfIndex_COPS_Module/PerfIndex.xcodeproj/xcuserdata
+
+# /tools/tests/testkext/testkext.xcodeproj/
+/tools/tests/testkext/testkext.xcodeproj/xcuserdata
+
+# /tools/tests/unit_tests/cpu_monitor_tests_11646922_src/cpu_hog/cpu_hog.xcodeproj/
+/tools/tests/unit_tests/cpu_monitor_tests_11646922_src/cpu_hog/cpu_hog.xcodeproj/xcuserdata
+
+# /tools/tests/unit_tests/monitor_stress_12901965_src/monitor_stress.xcodeproj/
+/tools/tests/unit_tests/monitor_stress_12901965_src/monitor_stress.xcodeproj/xcuserdata
+
+# /tools/tests/unit_tests/monitor_stress_12901965_src/monitor_stress.xcodeproj/project.xcworkspace/
+/tools/tests/unit_tests/monitor_stress_12901965_src/monitor_stress.xcodeproj/project.xcworkspace/xcuserdata
+
+# /tools/tests/zero-to-n
+/tools/tests/zero-to-n/zn*

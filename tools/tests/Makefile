@@ -1,30 +1,27 @@
+include Makefile.common
+
+ifndef SRCROOT
+export SRCROOT := $(shell /bin/pwd)
+endif
+ifndef OBJROOT
+export OBJROOT = $(SRCROOT)/BUILD/obj
+endif
+ifndef DSTROOT
+export DSTROOT = $(SRCROOT)/BUILD/dst
+endif
+ifndef SYMROOT
+export SYMROOT = $(SRCROOT)/BUILD/sym
+endif
+
 ifdef RC_ProjectName
-DSTSUBPATH = $(DSTROOT)/AppleInternal/CoreOS
+DSTSUBPATH = $(DSTROOT)/AppleInternal/CoreOS/tests/xnu
+BATS_CONFIG_PATH = $(DSTROOT)/AppleInternal/CoreOS
 else
 DSTSUBPATH = $(DSTROOT)
+BATS_CONFIG_PATH = $(DSTROOT)
 endif
 
-OBJROOT?=$(shell /bin/pwd)
-
-SDKROOT ?= macosx.internal
-
-# SDKROOT may be passed as a shorthand like "iphoneos.internal". We
-# must resolve these to a full path and override SDKROOT.
-
-SDKROOT_RESOLVED := $(shell xcrun -sdk $(SDKROOT) -show-sdk-path)
-ifeq ($(strip $(SDKROOT)_$(SDKROOT_RESOLVED)),/_)
-SDKROOT_RESOLVED := /
-endif
-override SDKROOT = $(SDKROOT_RESOLVED)
-
-
-ifeq "$(RC_TARGET_CONFIG)" "iPhone"
-Embedded?=YES
-else
-Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
-endif
-
-COMMON_TARGETS = xnu_quick_test		\
+COMMON_TARGETS = unit_tests \
 		MPMMTest		\
 		affinity		\
 		execperf		\
@@ -32,12 +29,14 @@ COMMON_TARGETS = xnu_quick_test		\
 		superpages		\
 		zero-to-n		\
 		jitter			\
-		perf_index		\
-		unit_tests
+		perf_index
 
-IPHONE_TARGETS = memorystatus
+IPHONE_TARGETS = 
 
 MAC_TARGETS = 
+
+
+BATS_TARGET = $(BATS_CONFIG_PATH)/BATS
 
 ifeq "$(Embedded)" "YES"
 TARGETS = 	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(IPHONE_TARGETS))
@@ -45,9 +44,10 @@ else
 TARGETS = 	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(MAC_TARGETS))
 endif
 
-all:	$(TARGETS)
+all:	$(BATS_TARGET) $(TARGETS)
 
-$(DSTSUBPATH)/%:
+$(BATS_TARGET) $(DSTSUBPATH)/%:
 	mkdir -p $@
 	mkdir -p $(OBJROOT)/$(notdir $@) 
+	mkdir -p $(SYMROOT)
 	$(MAKE) -C $(SRCROOT)/$(notdir $@) SRCROOT=$(SRCROOT)/$(notdir $@) DSTROOT=$@ OBJROOT=$(OBJROOT)/$(notdir $@) SDKROOT=$(SDKROOT)

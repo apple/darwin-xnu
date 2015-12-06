@@ -119,6 +119,32 @@
 #define	MAP_HASSEMAPHORE 0x0200	/* region may contain semaphores */
 #define MAP_NOCACHE	 0x0400 /* don't cache pages for this mapping */
 #define MAP_JIT		 0x0800 /* Allocate a region that will be used for JIT purposes */
+
+/*
+ * Mapping type
+ */
+#define	MAP_FILE	0x0000	/* map from file (default) */
+#define	MAP_ANON	0x1000	/* allocated from memory, swap space */
+#define	MAP_ANONYMOUS	MAP_ANON
+
+/*
+ * The MAP_RESILIENT_* flags can be used when the caller wants to map some
+ * possibly unreliable memory and be able to access it safely, possibly
+ * getting the wrong contents rather than raising any exception.
+ * For safety reasons, such mappings have to be read-only (PROT_READ access
+ * only).
+ *
+ * MAP_RESILIENT_CODESIGN:
+ * 	accessing this mapping will not generate code-signing violations,
+ *	even if the contents are tainted.
+ * MAP_RESILIENT_MEDIA:
+ *	accessing this mapping will not generate an exception if the contents
+ *	are not available (unreachable removable or remote media, access beyond
+ *	end-of-file, ...).  Missing contents will be replaced with zeroes.
+ */
+#define MAP_RESILIENT_CODESIGN	0x2000 /* no code-signing failures */
+#define MAP_RESILIENT_MEDIA	0x4000 /* no backing-store failures */
+
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
@@ -143,11 +169,6 @@
 #define MS_KILLPAGES    0x0004  /* invalidate pages, leave mapped */
 #define MS_DEACTIVATE   0x0008  /* deactivate pages, leave mapped */
 
-/*
- * Mapping type
- */
-#define	MAP_FILE	0x0000	/* map from file (default) */
-#define	MAP_ANON	0x1000	/* allocated from memory, swap space */
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 
@@ -171,6 +192,7 @@
 #define MADV_FREE_REUSABLE	7	/* pages can be reused (by anyone) */
 #define MADV_FREE_REUSE		8	/* caller wants to reuse those pages */
 #define MADV_CAN_REUSE		9
+#define MADV_PAGEOUT		10	/* page out now (internal only) */
 
 /*
  * Return bits from mincore

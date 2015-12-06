@@ -37,11 +37,16 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/kern_control.h>
+#include <sys/event.h>
 #include <net/if.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <mach/machine.h>
+
+#ifdef PRIVATE
+#include <mach/coalition.h> /* COALITION_NUM_TYPES */
+#endif
 
 __BEGIN_DECLS
 
@@ -118,10 +123,18 @@ struct proc_archinfo {
 };
 
 struct proc_pidcoalitioninfo {
-	uint64_t coalition_id;
+	uint64_t coalition_id[COALITION_NUM_TYPES];
 	uint64_t reserved1;
 	uint64_t reserved2;
 	uint64_t reserved3;
+};
+
+struct proc_originatorinfo {
+	uuid_t                  originator_uuid;        /* UUID of the originator process */
+	pid_t                   originator_pid;         /* pid of the originator process */
+	uint64_t                p_reserve2;
+	uint64_t                p_reserve3;
+	uint64_t                p_reserve4;
 };
 
 #endif
@@ -286,6 +299,7 @@ struct proc_fileinfo {
 #define PROC_FP_SHARED	1	/* shared by more than one fd */
 #define PROC_FP_CLEXEC	2	/* close on exec */
 #define PROC_FP_GUARDED	4	/* guarded fd */
+#define PROC_FP_CLFORK	8	/* close on fork */
 
 #define PROC_FI_GUARD_CLOSE		(1u << 0)
 #define PROC_FI_GUARD_DUP		(1u << 1)
@@ -605,8 +619,23 @@ struct kqueue_info {
 	uint32_t		kq_state;
 	uint32_t		rfu_1;	/* reserved */
 };
-#define PROC_KQUEUE_SELECT	1
-#define PROC_KQUEUE_SLEEP	2
+
+/* keep in sync with KQ_* in sys/eventvar.h */
+#define PROC_KQUEUE_SELECT	0x01
+#define PROC_KQUEUE_SLEEP	0x02
+#define PROC_KQUEUE_32		0x08
+#define PROC_KQUEUE_64		0x10
+#define PROC_KQUEUE_QOS		0x20
+
+#ifdef PRIVATE
+struct kevent_extinfo {
+	struct kevent_qos_s kqext_kev;
+	uint64_t kqext_sdata;
+	int kqext_status;
+	int kqext_sfflags;
+	uint64_t kqext_reserved[2];
+};
+#endif /* PRIVATE */
 
 struct kqueue_fdinfo {
 	struct proc_fileinfo	pfi;
@@ -748,6 +777,11 @@ struct proc_fileportinfo {
 #define PROC_PIDFDATALKINFO		8
 #define PROC_PIDFDATALKINFO_SIZE	(sizeof(struct appletalk_fdinfo))
 
+#ifdef PRIVATE
+#define PROC_PIDFDKQUEUE_EXTINFO	9
+#define PROC_PIDFDKQUEUE_EXTINFO_SIZE	(sizeof(struct kevent_extinfo))
+#endif /* PRIVATE */
+
 /* Flavors for proc_pidfileportinfo */
 
 #define PROC_PIDFILEPORTVNODEPATHINFO	2	/* out: vnode_fdinfowithpath */
@@ -800,6 +834,16 @@ struct proc_fileportinfo {
 #define PROC_PIDORIGINATOR_BGSTATE	0x2
 #define PROC_PIDORIGINATOR_BGSTATE_SIZE (sizeof(uint32_t))
 
+#define PROC_PIDORIGINATOR_PID_UUID     0x3
+#define PROC_PIDORIGINATOR_PID_UUID_SIZE (sizeof(struct proc_originatorinfo))
+
+/* Flavors for proc_listcoalitions */
+#define LISTCOALITIONS_ALL_COALS	1
+#define LISTCOALITIONS_ALL_COALS_SIZE   (sizeof(struct procinfo_coalinfo))
+
+#define LISTCOALITIONS_SINGLE_TYPE	2
+#define LISTCOALITIONS_SINGLE_TYPE_SIZE (sizeof(struct procinfo_coalinfo))
+
 /* __proc_info() call numbers */
 #define PROC_INFO_CALL_LISTPIDS         0x1
 #define PROC_INFO_CALL_PIDINFO          0x2
@@ -811,6 +855,7 @@ struct proc_fileportinfo {
 #define PROC_INFO_CALL_DIRTYCONTROL     0x8
 #define PROC_INFO_CALL_PIDRUSAGE        0x9
 #define PROC_INFO_CALL_PIDORIGINATORINFO 0xa
+#define PROC_INFO_CALL_LISTCOALITIONS   0xb
 
 #endif /* PRIVATE */
 
@@ -832,6 +877,7 @@ extern int fill_pshminfo(struct pshmnode * pshm, struct pshm_info * pinfo);
 extern int fill_pseminfo(struct psemnode * psem, struct psem_info * pinfo);
 extern int fill_pipeinfo(struct pipe * cpipe, struct pipe_info * pinfo);
 extern int fill_kqueueinfo(struct kqueue * kq, struct kqueue_info * kinfo);
+extern int pid_kqueue_extinfo(proc_t, struct kqueue * kq, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
 extern int fill_procworkqueue(proc_t, struct proc_workqueueinfo *);
 #endif /* XNU_KERNEL_PRIVATE */
 

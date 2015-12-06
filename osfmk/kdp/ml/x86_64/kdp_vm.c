@@ -43,8 +43,8 @@ static const x86_state_hdr_t thread_flavor_array [] = {
 	{x86_THREAD_STATE64, x86_THREAD_STATE64_COUNT}
 };
 
-size_t
-kern_collectth_state_size(void)
+void
+kern_collectth_state_size(uint32_t * tstate_count, size_t * ptstate_size)
 {
 	unsigned int i;
 	size_t tstate_size = 0;
@@ -53,16 +53,21 @@ kern_collectth_state_size(void)
 		tstate_size += sizeof(x86_state_hdr_t) +
 		    (thread_flavor_array[i].count * sizeof(int));
 
-	return tstate_size;
+	*tstate_count = 1;
+	*ptstate_size = sizeof(struct thread_command) + tstate_size;
 }
 
 void
-kern_collectth_state(thread_t thread, void *buffer, size_t size)
+kern_collectth_state(thread_t thread, void *buffer, size_t size, void ** iter)
 {
-	size_t			hoffset;
+	size_t		hoffset;
+	size_t 		tstate_size;
+        uint32_t        tstate_count;
 	unsigned int	i;
 	struct thread_command	*tc;
+	
 
+	*iter = NULL;
 	/*
 	 *	Fill in thread command structure.
 	 */
@@ -71,9 +76,10 @@ kern_collectth_state(thread_t thread, void *buffer, size_t size)
 	if (hoffset + sizeof(struct thread_command) > size)
 		return;
 
+	kern_collectth_state_size(&tstate_count, &tstate_size);
 	tc = (struct thread_command *) ((uintptr_t)buffer + hoffset);
 	tc->cmd = LC_THREAD;
-	tc->cmdsize = (uint32_t)(sizeof(struct thread_command) + kern_collectth_state_size());
+	tc->cmdsize = (uint32_t) tstate_size;
 	hoffset += sizeof(struct thread_command);
 	/*
 	 * Follow with a struct thread_state_flavor and

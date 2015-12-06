@@ -607,17 +607,17 @@ public:
 
 /*! @function init
     @abstract Initializes generic IOService data structures (expansion data, etc). */
-    virtual bool init( OSDictionary * dictionary = 0 );
+    virtual bool init( OSDictionary * dictionary = 0 ) APPLE_KEXT_OVERRIDE;
 
 /*! @function init
     @abstract Initializes generic IOService data structures (expansion data, etc). */
     virtual bool init( IORegistryEntry * from,
-                       const IORegistryPlane * inPlane );
+                       const IORegistryPlane * inPlane ) APPLE_KEXT_OVERRIDE;
 
 /*! @function free
     @abstract Frees data structures that were allocated when power management was initialized on this service. */
     
-    virtual void free( void );
+    virtual void free( void ) APPLE_KEXT_OVERRIDE;
 
 /*! @function lockForArbitration
     @abstract Locks an IOService object against changes in state or ownership.
@@ -1258,7 +1258,7 @@ public:
     IOInterruptSource *_interruptSources;
 
     /* overrides */
-    virtual bool serializeProperties( OSSerialize * s ) const;
+    virtual bool serializeProperties( OSSerialize * s ) const APPLE_KEXT_OVERRIDE;
 
 #ifdef KERNEL_PRIVATE
     /* Apple only SPI to control CPU low power modes */
@@ -1285,6 +1285,7 @@ public:
     void setTerminateDefer(IOService * provider, bool defer);
     uint64_t getAuthorizationID( void );
     IOReturn setAuthorizationID( uint64_t authorizationID );
+    void cpusRunning(void);
 
 private:
     static IOReturn waitMatchIdle( UInt32 ms );
@@ -1813,6 +1814,7 @@ public:
     IOReturn changePowerStateWithOverrideTo( IOPMPowerStateIndex ordinal, IOPMRequestTag tag );
     IOReturn changePowerStateForRootDomain( IOPMPowerStateIndex ordinal );
     IOReturn setIgnoreIdleTimer( bool ignore );
+    IOReturn quiescePowerTree( void * target, IOPMCompletionAction action, void * param );
     uint32_t getPowerStateForClient( const OSSymbol * client );
     static const char * getIOMessageString( uint32_t msg );
     static void setAdvisoryTickleEnable( bool enable );
@@ -1879,6 +1881,8 @@ private:
     void stop_ack_timer ( void );
     void start_ack_timer( UInt32 value, UInt32 scale );
     void startSettleTimer( void );
+    void start_spindump_timer( const char * delay_type );
+    void stop_spindump_timer( void );
     bool checkForDone ( void );
     bool responseValid ( uint32_t x, int pid );
     void computeDesiredState( unsigned long tempDesire, bool computeOnly );
@@ -1888,8 +1892,10 @@ private:
 
     static void ack_timer_expired( thread_call_param_t, thread_call_param_t );
     static void watchdog_timer_expired ( thread_call_param_t arg0, thread_call_param_t arg1 );
+    static void spindump_timer_expired( thread_call_param_t arg0, thread_call_param_t arg1 );
     static IOReturn actionAckTimerExpired(OSObject *, void *, void *, void *, void * );
     static IOReturn watchdog_timer_expired ( OSObject *, void *, void *, void *, void * );
+    static IOReturn actionSpinDumpTimerExpired(OSObject *, void *, void *, void *, void * );
 
     static IOReturn actionDriverCalloutDone(OSObject *, void *, void *, void *, void * );
     static IOPMRequest * acquirePMRequest( IOService * target, IOOptionBits type, IOPMRequest * active = 0 );
@@ -1899,6 +1905,8 @@ private:
     static void pmTellClientWithResponse( OSObject * object, void * context );
     static void pmTellCapabilityAppWithResponse ( OSObject * object, void * arg );
     static void pmTellCapabilityClientWithResponse( OSObject * object, void * arg );
+    static void submitPMRequest( IOPMRequest * request );
+    static void submitPMRequests( IOPMRequest ** request, IOItemCount count );
     bool ackTimerTick( void );
     void addPowerChild1( IOPMRequest * request );
     void addPowerChild2( IOPMRequest * request );
@@ -1914,14 +1922,12 @@ private:
     void handleActivityTickle( IOPMRequest * request );
     void handleInterestChanged( IOPMRequest * request );
     void handleSynchronizePowerTree( IOPMRequest * request );
-    void submitPMRequest( IOPMRequest * request );
-    void submitPMRequest( IOPMRequest ** request, IOItemCount count );
     void executePMRequest( IOPMRequest * request );
-    bool servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue  );
-    bool retirePMRequest(  IOPMRequest * request, IOPMWorkQueue * queue );
-    bool servicePMRequestQueue( IOPMRequest * request, IOPMRequestQueue * queue );
-    bool servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue );
-    bool servicePMFreeQueue( IOPMRequest * request, IOPMCompletionQueue * queue );
+    bool actionPMWorkQueueInvoke( IOPMRequest * request, IOPMWorkQueue * queue );
+    bool actionPMWorkQueueRetire( IOPMRequest * request, IOPMWorkQueue * queue );
+    bool actionPMRequestQueue( IOPMRequest * request, IOPMRequestQueue * queue );
+    bool actionPMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue );
+    bool actionPMCompletionQueue( IOPMRequest * request, IOPMCompletionQueue * queue );
     bool notifyInterestedDrivers( void );
     void notifyInterestedDriversDone( void );
     bool notifyControllingDriver( void );

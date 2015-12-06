@@ -53,7 +53,6 @@
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
 #include <netinet/dhcp_options.h>
-#include <netinet/in_dhcp.h>
 
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
@@ -603,6 +602,40 @@ find_interface(void)
     return (ifp);
 }
 
+static const struct sockaddr_in blank_sin = {
+    sizeof(struct sockaddr_in),
+    AF_INET,
+    0,
+    { 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0 }
+};
+
+static int
+inet_aifaddr(struct socket * so, const char * name,
+	     const struct in_addr * addr,
+	     const struct in_addr * mask,
+	     const struct in_addr * broadcast)
+{
+    struct ifaliasreq	ifra;
+
+    bzero(&ifra, sizeof(ifra));
+    strlcpy(ifra.ifra_name, name, sizeof(ifra.ifra_name));
+    if (addr) {
+	*((struct sockaddr_in *)(void *)&ifra.ifra_addr) = blank_sin;
+	((struct sockaddr_in *)(void *)&ifra.ifra_addr)->sin_addr = *addr;
+    }
+    if (mask) {
+	*((struct sockaddr_in *)(void *)&ifra.ifra_mask) = blank_sin;
+	((struct sockaddr_in *)(void *)&ifra.ifra_mask)->sin_addr = *mask;
+    }
+    if (broadcast) {
+	*((struct sockaddr_in *)(void *)&ifra.ifra_broadaddr) = blank_sin;
+	((struct sockaddr_in *)(void *)&ifra.ifra_broadaddr)->sin_addr = *broadcast;
+    }
+    return (ifioctl(so, SIOCAIFADDR, (caddr_t)&ifra, current_proc()));
+}
+
+
 int
 netboot_mountroot(void)
 {
@@ -642,12 +675,8 @@ netboot_mountroot(void)
 
     /* grab information from the registry */
     if (get_ip_parameters(&iaddr, &netmask, &router) == FALSE) {
-	/* use DHCP to retrieve IP address, netmask and router */
-	error = dhcp(ifp, &iaddr, 64, &netmask, &router, procp);
-	if (error) {
-	    printf("netboot: DHCP failed %d\n", error);
-	    goto failed;
-	}
+	printf("netboot: can't retrieve IP parameters\n");
+	goto failed;
     }
     printf("netboot: IP address " IP_FORMAT, IP_LIST(&iaddr));
     if (netmask.s_addr) {

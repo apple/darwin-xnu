@@ -90,6 +90,7 @@
 #define	N_STSYM	0x26	/* static symbol: name,,n_sect,type,address */
 #define	N_LCSYM	0x28	/* .lcomm symbol: name,,n_sect,type,address */
 #define N_BNSYM 0x2e	/* begin nsect sym: 0,,n_sect,0,address */
+#define N_AST	0x32	/* AST file path: name,,NO_SECT,0,0 */
 #define N_OPT	0x3c	/* emitted with gcc2_compiled and in gcc source */
 #define	N_RSYM	0x40	/* register sym: name,,NO_SECT,type,register */
 #define	N_SLINE	0x44	/* src line: 0,,n_sect,linenumber,address */

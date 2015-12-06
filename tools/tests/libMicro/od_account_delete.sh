@@ -36,7 +36,7 @@ if [ $# -ne 2 ]; then
   usage
 fi
 
-# if local node we don't need credentials
+# we don't need credentials if its a local node
 if [ $NODE != "/Local/Default" ]; then
   OD_ADMIN="diradmin"
   OD_PASS="admin"

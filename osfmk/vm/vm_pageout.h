@@ -94,7 +94,7 @@ extern unsigned int vm_pageout_cleaned_reactivated, vm_pageout_cleaned_fault_rea
 
 #if CONFIG_FREEZE
 extern boolean_t memorystatus_freeze_enabled;
-#define VM_DYNAMIC_PAGING_ENABLED(port) (COMPRESSED_PAGER_IS_ACTIVE || (memorystatus_freeze_enabled == FALSE && IP_VALID(port)))
+#define VM_DYNAMIC_PAGING_ENABLED(port) (COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPBACKED || (memorystatus_freeze_enabled == FALSE && IP_VALID(port)))
 #else
 #define VM_DYNAMIC_PAGING_ENABLED(port) (COMPRESSED_PAGER_IS_ACTIVE || IP_VALID(port))
 #endif
@@ -138,6 +138,11 @@ extern int	vm_debug_events;
 	}							\
 	MACRO_END
 
+#define VM_DEBUG_CONSTANT_EVENT(name, event, control, arg1, arg2, arg3, arg4)	\
+	MACRO_BEGIN						\
+		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, event)) | control, arg1, arg2, arg3, arg4, 0); \
+	MACRO_END
+
 extern void memoryshot(unsigned int event, unsigned int control);
 
 extern kern_return_t vm_map_create_upl(
@@ -147,13 +152,16 @@ extern kern_return_t vm_map_create_upl(
 	upl_t			*upl,
 	upl_page_info_array_t	page_list,
 	unsigned int		*count,
-	int			*flags);
+	upl_control_flags_t	*flags);
 
 extern ppnum_t upl_get_highest_page(
 	upl_t			upl);
 
 extern upl_size_t upl_get_size(
 	upl_t			upl);
+
+extern upl_t upl_associated_upl(upl_t upl);
+extern void upl_set_associated_upl(upl_t upl, upl_t associated_upl);
 
 extern void iopl_valid_data(
 	upl_t			upl_ptr);
@@ -222,18 +230,14 @@ extern kern_return_t	vm_pageout_internal_start(void);
 extern void		vm_pageout_object_terminate(
 					vm_object_t	object);
 
-extern void		vm_pageout_cluster(
+extern int		vm_pageout_cluster(
 	                                vm_page_t	m,
-					boolean_t	pageout);
+					boolean_t	pageout,
+					boolean_t	immediate_ok,
+					boolean_t	keep_object_locked);
 
 extern void		vm_pageout_initialize_page(
 					vm_page_t	m);
-
-extern void		vm_pageclean_setup(
-					vm_page_t		m,
-					vm_page_t		new_m,
-					vm_object_t		new_object,
-					vm_object_offset_t	new_offset);
 
 /* UPL exported routines and structures */
 
@@ -294,6 +298,7 @@ struct upl {
 	vm_object_t	map_object;
 	ppnum_t		highest_page;
 	void*		vector_upl;
+	upl_t		associated_upl;
 #if CONFIG_IOSCHED
 	int 		upl_priority;
 	uint64_t        *upl_reprio_info;
@@ -371,7 +376,7 @@ extern kern_return_t vm_object_iopl_request(
 	upl_t			*upl_ptr,
 	upl_page_info_array_t	user_page_list,
 	unsigned int		*page_list_count,
-	int			cntrl_flags);
+	upl_control_flags_t	cntrl_flags);
 
 extern kern_return_t vm_object_super_upl_request(
 	vm_object_t		object,
@@ -381,7 +386,7 @@ extern kern_return_t vm_object_super_upl_request(
 	upl_t			*upl,
 	upl_page_info_t		*user_page_list,
 	unsigned int		*page_list_count,
-	int			cntrl_flags);
+	upl_control_flags_t	cntrl_flags);
 
 /* should be just a regular vm_map_enter() */
 extern kern_return_t vm_map_enter_upl(
@@ -500,8 +505,16 @@ extern int hibernate_flush_memory(void);
 extern void hibernate_reset_stats(void);
 extern void hibernate_create_paddr_map(void);
 
+extern void vm_set_restrictions(void);
+
 extern int vm_compressor_mode;
 extern int vm_compressor_thread_count;
+extern boolean_t vm_restricted_to_single_processor;
+extern boolean_t vm_compressor_immediate_preferred;
+extern boolean_t vm_compressor_immediate_preferred_override;
+extern kern_return_t vm_pageout_compress_page(void **, char *, vm_page_t, boolean_t);
+extern void vm_pageout_anonymous_pages(void);
+
 
 #define VM_PAGER_DEFAULT				0x1	/* Use default pager. */
 #define VM_PAGER_COMPRESSOR_NO_SWAP			0x2	/* In-core compressor only. */
@@ -515,6 +528,8 @@ extern int vm_compressor_thread_count;
 #define DEFAULT_PAGER_IS_ACTIVE		((vm_compressor_mode & VM_PAGER_DEFAULT) == VM_PAGER_DEFAULT)
 
 #define COMPRESSED_PAGER_IS_ACTIVE	(vm_compressor_mode & (VM_PAGER_COMPRESSOR_NO_SWAP | VM_PAGER_COMPRESSOR_WITH_SWAP))
+#define COMPRESSED_PAGER_IS_SWAPLESS	((vm_compressor_mode & VM_PAGER_COMPRESSOR_NO_SWAP) == VM_PAGER_COMPRESSOR_NO_SWAP)
+#define COMPRESSED_PAGER_IS_SWAPBACKED	((vm_compressor_mode & VM_PAGER_COMPRESSOR_WITH_SWAP) == VM_PAGER_COMPRESSOR_WITH_SWAP)
 
 #define DEFAULT_FREEZER_IS_ACTIVE	((vm_compressor_mode & VM_PAGER_FREEZER_DEFAULT) == VM_PAGER_FREEZER_DEFAULT)
 

@@ -221,6 +221,13 @@ struct	ipstat {
 	u_int32_t ips_snd_swcsum_bytes;	/* ip hdr swcksum (outbound), bytes */
 	u_int32_t ips_adj;		/* total packets trimmed/adjusted */
 	u_int32_t ips_adj_hwcsum_clr;	/* hwcksum discarded during adj */
+	u_int32_t ips_rxc_collisions;	/* rx chaining collisions */
+	u_int32_t ips_rxc_chained;	/* rx chains */
+	u_int32_t ips_rxc_notchain;	/* rx bypassed chaining */
+	u_int32_t ips_rxc_chainsz_gt2;	/* rx chain size greater than 2 */
+	u_int32_t ips_rxc_chainsz_gt4;  /* rx chain size greater than 4 */
+	u_int32_t ips_rxc_notlist;	/* count of pkts through ip_input */
+
 };
 
 struct ip_linklocal_stat {

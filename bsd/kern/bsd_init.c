@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -157,13 +157,15 @@
 #include <netinet/flow_divert.h>	/* flow_divert_init() */
 #include <net/content_filter.h>		/* for cfil_init() */
 #include <net/necp.h>			/* for necp_init() */
+#include <net/network_agent.h>		/* for netagent_init() */
 #include <net/packet_mangler.h>		/* for pkt_mnglr_init() */
 #include <net/if_utun.h>		/* for utun_register_control() */
-#include <net/if_ipsec.h>       /* for ipsec_register_control() */
+#include <net/if_ipsec.h>		/* for ipsec_register_control() */
 #include <net/net_str_id.h>		/* for net_str_id_init() */
 #include <net/netsrc.h>			/* for netsrc_init() */
 #include <net/ntstat.h>			/* for nstat_init() */
 #include <netinet/tcp_cc.h>			/* for tcp_cc_init() */
+#include <netinet/mptcp_var.h>		/* for mptcp_control_register() */
 #include <kern/assert.h>		/* for assert() */
 #include <sys/kern_overrides.h>		/* for init_system_override() */
 
@@ -192,6 +194,7 @@
 #include <pexpert/pexpert.h>
 #include <machine/pal_routines.h>
 #include <console/video_console.h>
+
 
 void * get_user_regs(thread_t);		/* XXX kludge for <machine/thread.h> */
 void IOKitInitializeTime(void);		/* XXX */
@@ -243,6 +246,11 @@ struct	kmemstats kmemstats[M_LAST];
 
 struct	vnode *rootvp;
 int boothowto = RB_DEBUG;
+int minimalboot = 0;
+
+#if PROC_REF_DEBUG
+__private_extern__ int proc_ref_tracking_disabled = 0; /* disable panics on leaked proc refs across syscall boundary */
+#endif
 
 extern kern_return_t IOFindBSDRoot(char *, unsigned int, dev_t *, u_int32_t *);
 extern void IOSecureBSDRoot(const char * rootName);
@@ -271,6 +279,10 @@ void bsd_exec_setup(int);
 
 __private_extern__ int bootarg_vnode_cache_defeat = 0;
 
+#if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
+__private_extern__ int bootarg_no_vnode_jetsam = 0;
+#endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
+
 /*
  * Prevent kernel-based ASLR from being used, for testing.
  */
@@ -288,12 +300,11 @@ void bsd_utaskbootstrap(void);
 static void parse_bsd_args(void);
 extern task_t bsd_init_task;
 extern boolean_t init_task_died;
-extern char    init_task_failure_data[];
 #if CONFIG_DEV_KMEM
 extern void dev_kmem_init(void);
 #endif
 extern void time_zone_slock_init(void);
-extern void select_wait_queue_init(void);
+extern void select_waitq_init(void);
 static void process_name(const char *, proc_t);
 
 static void setconf(void);
@@ -340,11 +351,8 @@ extern int check_policy_init(int);
 static void
 process_name(const char *s, proc_t p)
 {
-	size_t length = strlen(s);
-
-	bcopy(s, p->p_comm,
-		length >= sizeof(p->p_comm) ? sizeof(p->p_comm) :
-			length + 1);
+       strlcpy(p->p_comm, s, sizeof(p->p_comm));
+       strlcpy(p->p_name, s, sizeof(p->p_name));
 }
 
 /* To allow these values to be patched, they're globals here */
@@ -500,7 +508,7 @@ bsd_init(void)
 
 	/* Initialize System Override call */
 	init_system_override();
-
+	
 	/*
 	 * Create process 0.
 	 */
@@ -533,10 +541,6 @@ bsd_init(void)
 #endif
 	LIST_INSERT_HEAD(SESSHASH(0), &session0, s_hash);
 	proc_list_unlock();
-
-#if CONFIG_LCTX
-	kernproc->p_lctx = NULL;
-#endif
 
 	kernproc->task = kernel_task;
 	
@@ -644,7 +648,7 @@ bsd_init(void)
 				&minimum,
 				(vm_size_t)bsd_pageable_map_size,
 				TRUE,
-				VM_FLAGS_ANYWHERE,
+				VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_BSD),
 				&bsd_pageable_map);
 		if (ret != KERN_SUCCESS) 
 			panic("bsd_init: Failed to allocate bsd pageable map");
@@ -750,8 +754,8 @@ bsd_init(void)
 	psem_cache_init();
 	bsd_init_kprintf("calling time_zone_slock_init\n");
 	time_zone_slock_init();
-	bsd_init_kprintf("calling select_wait_queue_init\n");
-	select_wait_queue_init();
+	bsd_init_kprintf("calling select_waitq_init\n");
+	select_waitq_init();
 
 	/*
 	 * Initialize protocols.  Block reception of incoming packets
@@ -857,7 +861,9 @@ bsd_init(void)
 	/* Initialize Network Extension Control Policies */
 	necp_init();
 #endif
-	
+
+	netagent_init();
+
 	/* register user tunnel kernel control handler */
 	utun_register_control();
 #if IPSEC
@@ -866,6 +872,9 @@ bsd_init(void)
 	netsrc_init();
 	nstat_init();
 	tcp_cc_init();
+#if MPTCP
+	mptcp_control_register();
+#endif /* MPTCP */
 #endif /* NETWORKING */
 
 	bsd_init_kprintf("calling vnode_pager_bootstrap\n");
@@ -966,7 +975,7 @@ bsd_init(void)
 	    devfs_kernel_mount(mounthere);
 	}
 #endif /* DEVFS */
-	
+
 	/* Initialize signal state for process 0. */
 	bsd_init_kprintf("calling siginit\n");
 	siginit(kernproc);
@@ -989,6 +998,7 @@ bsd_init(void)
 #if 0 /* not yet */
 	consider_zone_gc(FALSE);
 #endif
+
 
 	bsd_init_kprintf("done\n");
 }
@@ -1015,7 +1025,6 @@ bsdinit_task(void)
 
 	bsd_init_task = get_threadtask(thread);
 	init_task_died = FALSE;
-	init_task_failure_data[0] = 0;
 
 #if CONFIG_MACF
 	mac_cred_label_associate_user(p->p_ucred);
@@ -1103,7 +1112,7 @@ bsd_utaskbootstrap(void)
 	ut = (struct uthread *)get_bsdthread_info(thread);
 	ut->uu_sigmask = 0;
 	act_set_astbsd(thread);
-	(void) thread_resume(thread);
+	proc_clear_return_wait(initproc, thread);
 }
 
 static void
@@ -1120,6 +1129,15 @@ parse_bsd_args(void)
 
 	if (PE_parse_boot_argn("-x", namep, sizeof (namep))) /* safe boot */
 		boothowto |= RB_SAFEBOOT;
+
+	if (PE_parse_boot_argn("-minimalboot", namep, sizeof(namep))) {
+		/*
+		 * -minimalboot indicates that we want userspace to be bootstrapped to a
+		 * minimal environment.  What constitutes minimal is up to the bootstrap
+		 * process.
+		 */
+		minimalboot = 1;
+	}
 
 
 	/* disable vnode_cache_is_authorized() by setting vnode_cache_defeat */
@@ -1150,6 +1168,21 @@ parse_bsd_args(void)
 	if (PE_parse_boot_argn("-novfscache", namep, sizeof(namep))) {
 		nc_disabled = 1;
 	}
+
+#if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
+	if (PE_parse_boot_argn("-no_vnode_jetsam", namep, sizeof(namep)))
+		 bootarg_no_vnode_jetsam = 1;
+#endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
+
+
+
+#if PROC_REF_DEBUG
+	if (PE_parse_boot_argn("-disable_procref_tracking", namep, sizeof(namep))) {
+		proc_ref_tracking_disabled = 1;
+	}
+#endif
+
+	PE_parse_boot_argn("sigrestrict", &sigrestrict_arg, sizeof(sigrestrict_arg));
 }
 
 void

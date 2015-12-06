@@ -75,7 +75,7 @@
 uint32_t	avenrun[3] = {0, 0, 0};
 uint32_t	mach_factor[3] = {0, 0, 0};
 
-#if defined(CONFIG_SCHED_TRADITIONAL)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 /*
  * Values are scaled by LOAD_SCALE, defined in processor_info.h
  */
@@ -91,7 +91,7 @@ static uint32_t		fract[3] = {
 #undef base
 #undef frac
 
-#endif /* CONFIG_SCHED_TRADITIONAL */
+#endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
 static unsigned int		sched_nrun;
 
@@ -210,7 +210,7 @@ compute_averages(uint64_t stdelta)
 	 */
 	sched_nrun = nthreads;
 	
-#if defined(CONFIG_SCHED_TRADITIONAL)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
 	/*
 	 *	The conversion factor consists of
@@ -242,7 +242,7 @@ compute_averages(uint64_t stdelta)
 						(average_now * (LOAD_SCALE - fract[i]))) / LOAD_SCALE;
 		}
 	}
-#endif /* CONFIG_SCHED_TRADITIONAL */
+#endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
 	/*
 	 *	Compute averages in other components.

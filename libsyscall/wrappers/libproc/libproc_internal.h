@@ -95,6 +95,8 @@ int proc_trace_log(pid_t pid, uint64_t uniqueid) __OSX_AVAILABLE_STARTING(__MAC_
 /* proc_info call to get the originator information */
 int proc_pidoriginatorinfo(int flavor,  void *buffer, int buffersize) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
 
+int proc_listcoalitions(int flavor, int coaltype, void *buffer, int buffersize) __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_8_3);
+
 #if !TARGET_IPHONE_SIMULATOR
 
 #define PROC_SUPPRESS_SUCCESS                (0)

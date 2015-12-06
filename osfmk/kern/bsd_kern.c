@@ -43,6 +43,7 @@
 #include <vm/pmap.h>
 #include <vm/vm_protos.h> /* last */
 #include <sys/resource.h>
+#include <sys/signal.h>
 
 #undef thread_should_halt
 
@@ -50,7 +51,6 @@
 
 task_t	bsd_init_task = TASK_NULL;
 boolean_t init_task_died;
-char	init_task_failure_data[1024];
 extern unsigned int not_in_kdp; /* Skip acquiring locks if we're in kdp */
  
 thread_t get_firstthread(task_t);
@@ -64,6 +64,11 @@ int fill_task_rusage(task_t task, rusage_info_current *ri);
 int fill_task_io_rusage(task_t task, rusage_info_current *ri);
 int fill_task_qos_rusage(task_t task, rusage_info_current *ri);
 void fill_task_billed_usage(task_t task, rusage_info_current *ri);
+void task_bsdtask_kill(task_t);
+
+#if MACH_BSD
+extern void psignal(void *, int);
+#endif
 
 /*
  *
@@ -73,6 +78,13 @@ void  *get_bsdtask_info(task_t t)
 	return(t->bsd_info);
 }
 
+void task_bsdtask_kill(task_t t)
+{
+	void * bsd_info = get_bsdtask_info(t);
+	if (bsd_info != NULL) {
+		psignal(bsd_info, SIGKILL);
+	}
+}
 /*
  *
  */
@@ -227,9 +239,9 @@ ledger_t  get_task_ledger(task_t t)
 
 /*
  * This is only safe to call from a thread executing in
- * in the task's context or if the task is locked  Otherwise,
+ * in the task's context or if the task is locked. Otherwise,
  * the map could be switched for the task (and freed) before
- * we to return it here.
+ * we go to return it here.
  */
 vm_map_t  get_task_map(task_t t)
 {
@@ -324,6 +336,10 @@ swap_task_map(task_t task, thread_t thread, vm_map_t map, boolean_t doswitch)
 
 /*
  *
+ * This is only safe to call from a thread executing in
+ * in the task's context or if the task is locked. Otherwise,
+ * the map could be switched for the task (and freed) before
+ * we go to return it here.
  */
 pmap_t  get_task_pmap(task_t t)
 {
@@ -359,16 +375,27 @@ uint64_t get_task_resident_max(task_t task)
 
 uint64_t get_task_purgeable_size(task_t task) 
 {
-	vm_map_t map;
-    mach_vm_size_t  volatile_virtual_size;
-    mach_vm_size_t  volatile_resident_size;
-    mach_vm_size_t  volatile_pmap_size;
-	
-	map = (task == kernel_task) ? kernel_map: task->map;
-	vm_map_query_volatile(map, &volatile_virtual_size, &volatile_resident_size, &volatile_pmap_size);
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+	uint64_t volatile_size = 0;
 
-	return((uint64_t)volatile_resident_size);
+	ret = ledger_get_entries(task->ledger, task_ledgers.purgeable_volatile, &credit, &debit);
+	if (ret != KERN_SUCCESS) {
+		return 0;
+	}
+
+	volatile_size += (credit - debit);
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.purgeable_volatile_compressed, &credit, &debit);
+	if (ret != KERN_SUCCESS) {
+		return 0;
+	}
+
+	volatile_size += (credit - debit);
+
+	return volatile_size;
 }
+
 /*
  *
  */
@@ -414,13 +441,6 @@ uint64_t get_task_cpu_time(task_t task)
 	return 0;
 }
 
-/*
- *
- */
-pmap_t  get_map_pmap(vm_map_t map)
-{
-	return(map->pmap);
-}
 /*
  *
  */
@@ -474,10 +494,11 @@ get_vmsubmap_entries(
 	while((entry != vm_map_to_entry(map)) && (entry->vme_start < end)) {
 		if(entry->is_sub_map) {
 			total_entries += 	
-				get_vmsubmap_entries(entry->object.sub_map, 
-					entry->offset, 
-					entry->offset + 
-					(entry->vme_end - entry->vme_start));
+				get_vmsubmap_entries(VME_SUBMAP(entry), 
+						     VME_OFFSET(entry), 
+						     (VME_OFFSET(entry) + 
+						      entry->vme_end -
+						      entry->vme_start));
 		} else {
 			total_entries += 1;
 		}
@@ -502,10 +523,11 @@ get_vmmap_entries(
 	while(entry != vm_map_to_entry(map)) {
 		if(entry->is_sub_map) {
 			total_entries += 	
-				get_vmsubmap_entries(entry->object.sub_map, 
-					entry->offset, 
-					entry->offset + 
-					(entry->vme_end - entry->vme_start));
+				get_vmsubmap_entries(VME_SUBMAP(entry), 
+						     VME_OFFSET(entry),
+						     (VME_OFFSET(entry) + 
+						      entry->vme_end -
+						      entry->vme_start));
 		} else {
 			total_entries += 1;
 		}
@@ -621,17 +643,6 @@ task_act_iterate_wth_args(
 }
 
 
-void
-astbsd_on(void)
-{
-	boolean_t	reenable;
-
-	reenable = ml_set_interrupts_enabled(FALSE);
-	ast_on_fast(AST_BSD);
-	(void)ml_set_interrupts_enabled(reenable);
-}
-
-
 #include <sys/bsdtask_info.h>
 
 void
@@ -644,14 +655,14 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 	uint32_t syscalls_unix = 0;
 	uint32_t syscalls_mach = 0;
 
+	task_lock(task);
+
 	map = (task == kernel_task)? kernel_map: task->map;
 
 	ptinfo->pti_virtual_size  = map->size;
 	ptinfo->pti_resident_size =
 		(mach_vm_size_t)(pmap_resident_count(map->pmap))
 		* PAGE_SIZE_64;
-
-	task_lock(task);
 
 	ptinfo->pti_policy = ((task != kernel_task)?
                                           POLICY_TIMESHARE: POLICY_RR);
@@ -747,7 +758,7 @@ fill_taskthreadinfo(task_t task, uint64_t thaddr, int thuniqueid, struct proc_th
 			ptinfo->pth_flags = basic_info.flags;
 			ptinfo->pth_sleep_time = basic_info.sleep_time;
 			ptinfo->pth_curpri = thact->sched_pri;
-			ptinfo->pth_priority = thact->priority;
+			ptinfo->pth_priority = thact->base_pri;
 			ptinfo->pth_maxpriority = thact->max_priority;
 			
 			if ((vpp != NULL) && (thact->uthread != NULL)) 

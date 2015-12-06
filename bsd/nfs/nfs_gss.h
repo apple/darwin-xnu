@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -154,7 +154,7 @@ struct nfs_gss_clnt_ctx {
 	gssd_ctx		gss_clnt_context;	// Opaque context handle from gssd
 	uint8_t			*gss_clnt_token;	// GSS token exchanged via gssd & server
 	uint32_t		gss_clnt_tokenlen;	// Length of token
-	gss_key_info		gss_clnt_kinfo;		// GSS key info
+	gss_key_info		*gss_clnt_kinfo;		// GSS key info
 	uint32_t		gss_clnt_gssd_flags;	// Special flag bits to gssd
 	uint32_t		gss_clnt_major;		// GSS major result from gssd or server
 	uint32_t		gss_clnt_minor;		// GSS minor result from gssd or server
@@ -166,11 +166,10 @@ struct nfs_gss_clnt_ctx {
  */
 #define GSS_CTX_COMPLETE	0x00000001	// Context is complete
 #define GSS_CTX_INVAL		0x00000002	// Context is invalid
-#define GSS_CTX_INCOMPLETE	0x00000004	// Context needs to be inited
+#define GSS_CTX_STICKY		0x00000004	// Context has been set by user
 #define GSS_NEEDSEQ		0x00000008	// Need a sequence number
 #define GSS_NEEDCTX		0x00000010	// Need the context
-#define GSS_CTX_NC		0x00000020	// Context is in negative cache
-#define GSS_CTX_DESTROY		0x00000040	// Context is being destroyed, don't cache
+#define GSS_CTX_DESTROY		0x00000020	// Context is being destroyed, don't cache
 
 /*
  * The server's RPCSEC_GSS context information
@@ -217,9 +216,15 @@ LIST_HEAD(nfs_gss_svc_ctx_hashhead, nfs_gss_svc_ctx);
 #define GSS_TIMER_PERIOD	300		// seconds
 #define MSECS_PER_SEC		1000
 
+#define auth_is_kerberized(auth) \
+	(auth == RPCAUTH_KRB5 || \
+	 auth == RPCAUTH_KRB5I || \
+	 auth == RPCAUTH_KRB5P)
+
 __BEGIN_DECLS
 
 void	nfs_gss_init(void);
+uid_t	nfs_cred_getasid2uid(kauth_cred_t);
 int	nfs_gss_clnt_cred_put(struct nfsreq *, struct nfsm_chain *, mbuf_t);
 int	nfs_gss_clnt_verf_get(struct nfsreq *, struct nfsm_chain *,
 		uint32_t, uint32_t, uint32_t *);
@@ -229,7 +234,9 @@ int	nfs_gss_clnt_ctx_renew(struct nfsreq *);
 void	nfs_gss_clnt_ctx_ref(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 void	nfs_gss_clnt_ctx_unref(struct nfsreq *);
 void	nfs_gss_clnt_ctx_unmount(struct nfsmount *);
-int	nfs_gss_clnt_ctx_remove(struct nfsmount *, kauth_cred_t cred);
+int	nfs_gss_clnt_ctx_remove(struct nfsmount *, kauth_cred_t);
+int	nfs_gss_clnt_ctx_set_principal(struct nfsmount *, vfs_context_t, uint8_t *, uint32_t, uint32_t);
+int	nfs_gss_clnt_ctx_get_principal(struct nfsmount *, vfs_context_t, struct user_nfs_gss_principal *);
 int	nfs_gss_svc_cred_get(struct nfsrv_descript *, struct nfsm_chain *);
 int	nfs_gss_svc_verf_put(struct nfsrv_descript *, struct nfsm_chain *);
 int	nfs_gss_svc_ctx_init(struct nfsrv_descript *, struct nfsrv_sock *, mbuf_t *);

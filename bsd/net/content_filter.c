@@ -2944,7 +2944,7 @@ cfil_update_data_offsets(struct socket *so, uint32_t kcunit, int outgoing,
 	uint64_t pass_offset, uint64_t peek_offset)
 {
 	errno_t error = 0;
-	struct cfil_entry *entry;
+	struct cfil_entry *entry = NULL;
 	struct cfe_buf *entrybuf;
 	int updated = 0;
 
@@ -3006,7 +3006,7 @@ done:
 	 * or when the socket is closed and no more data is waiting
 	 * to be delivered to the filter
 	 */
-	if (so->so_cfil != NULL &&
+	if (entry != NULL &&
 	    ((entry->cfe_snd.cfe_pass_offset == CFM_MAX_OFFSET &&
 	    entry->cfe_rcv.cfe_pass_offset == CFM_MAX_OFFSET) ||
 	    ((so->so_cfil->cfi_flags & CFIF_CLOSE_WAIT) &&
@@ -3196,9 +3196,12 @@ cfil_action_drop(struct socket *so, uint32_t kcunit)
 
 	p = current_proc();
 
-	/* Force the socket to be marked defunct */
+	/*
+	 * Force the socket to be marked defunct
+	 * (forcing fixed along with rdar://19391339)
+	 */
 	error = sosetdefunct(p, so,
-		SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL, 1);
+		SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL, FALSE);
 
 	/* Flush the socket buffer and disconnect */
 	if (error == 0)

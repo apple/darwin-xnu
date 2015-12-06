@@ -277,7 +277,7 @@ public:
 
     Locking: same-instance concurrency UNSAFE
 */
-    virtual void free(void);
+    virtual void free(void) APPLE_KEXT_OVERRIDE;
     
 
 /*********************************/
@@ -1214,7 +1214,7 @@ public:
      
     Locking: same-instance concurrency UNSAFE
 */
-    virtual void free(void);
+    virtual void free(void) APPLE_KEXT_OVERRIDE;
     
 protected:
 
@@ -1240,10 +1240,10 @@ protected:
      
     [see IOReporter::handle*Swap* for more info]
 */
-    virtual IOReturn handleSwapPrepare(int newNChannels);
+    virtual IOReturn handleSwapPrepare(int newNChannels) APPLE_KEXT_OVERRIDE;
     virtual IOReturn handleAddChannelSwap(uint64_t channel_id,
-                                          const OSSymbol *symChannelName);
-    virtual void handleSwapCleanup(int swapNChannels);
+                                          const OSSymbol *symChannelName) APPLE_KEXT_OVERRIDE;
+    virtual void handleSwapCleanup(int swapNChannels) APPLE_KEXT_OVERRIDE;
     
 /*! @function   IOStateReporter::updateChannelValues
     @abstract   Update accounting of time spent in current state
@@ -1258,7 +1258,7 @@ protected:
 
     Locking: Caller must ensure that the reporter (data) lock is held.
 */
-    virtual IOReturn updateChannelValues(int channel_index);
+    virtual IOReturn updateChannelValues(int channel_index) APPLE_KEXT_OVERRIDE;
 
 /*! @function   IOStateReporter::setStateByIndices
     @abstract   update a channel state without validating channel_id
@@ -1383,7 +1383,7 @@ public:
 /*! @function   IOHistogramReporter::with
     @abstract   Initializes the IOHistogramReporter instance variables and data structures
 
-    @param  reportingService - IOService instanciator and data provider into the reporter object
+    @param  reportingService - The I/O Kit service for this reporter's channels
     @param  categories - The categories in which the report should be classified
     @param  channelID - uint64_t channel identifier
     @param  channelName - rich channel name as char*
@@ -1443,7 +1443,7 @@ FIXME: need more explanation of the config
      
     Locking: same-instance concurrency UNSAFE
 */
-    virtual void free(void);
+    virtual void free(void) APPLE_KEXT_OVERRIDE;
 
 protected:
 
@@ -1473,7 +1473,7 @@ protected:
      
     Locking: same-instance concurrency SAFE, MAY BLOCK
 */
-    IOReportLegendEntry* handleCreateLegend(void);
+    IOReportLegendEntry* handleCreateLegend(void) APPLE_KEXT_OVERRIDE;
     
     
 private:
@@ -1578,11 +1578,11 @@ public:
         temporary reporter objects for the purpose of creating their
         legend entries.  User-space legends are tracked by 12836893.
 
-        The static version of addReporterLegend adds the reporter's
-        legend directly to reportingService's kIOReportLegendKey.  This
-        will result in serialized getProperty() and setProperty() calls
-        on reportingService and should be avoided when many reporters
-        objects are in use.
+        The static version of addReporterLegend adds the reporter's legend
+        directly to reportingService's kIOReportLegendKey.  It is not
+        possible to safely update kIOReportLegendKey from multiple threads.
+
+        Locking: same-reportingService and same-IORLegend concurrency UNSAFE
 */
     IOReturn addReporterLegend(IOReporter *reporter,
                                const char *groupName,
@@ -1614,7 +1614,7 @@ public:
         in the I/O Kit registry, its ownership will now be with the
         registry.
 */
-    void free(void);
+    void free(void) APPLE_KEXT_OVERRIDE;
     
 
     

@@ -195,7 +195,7 @@ kxld_seg_finalize_object_segment(KXLDArray *segarray, KXLDArray *section_order,
 
     /* Set the initial link address at the end of the header pages */
 
-    seg->link_addr = round_page(hdrsize);
+    seg->link_addr = kxld_round_page_cross_safe(hdrsize);
 
     /* Fix up all of the section addresses */
 
@@ -209,7 +209,7 @@ kxld_seg_finalize_object_segment(KXLDArray *segarray, KXLDArray *section_order,
 
     /* Finish initializing the segment */
 
-    seg->vmsize = round_page(sect_offset) - seg->link_addr;
+    seg->vmsize = kxld_round_page_cross_safe(sect_offset) - seg->link_addr;
 
     rval = KERN_SUCCESS;
 finish:
@@ -420,7 +420,7 @@ kxld_seg_init_linkedit(KXLDArray *segs)
     le = kxld_array_get_item(segs, 1);
 
     strlcpy(le->segname, SEG_LINKEDIT, sizeof(le->segname));
-    le->link_addr = round_page(seg->link_addr + seg->vmsize);
+    le->link_addr = kxld_round_page_cross_safe(seg->link_addr + seg->vmsize);
     le->maxprot = VM_PROT_ALL;
     le->initprot = VM_PROT_DEFAULT;
 
@@ -511,7 +511,7 @@ kxld_seg_get_macho_data_size(const KXLDSeg *seg)
         size += kxld_sect_get_macho_data_size(sect);
     }
 
-    return round_page(size);
+    return kxld_round_page_cross_safe(size);
 }
 #endif
 
@@ -572,7 +572,7 @@ kxld_seg_export_macho_to_file_buffer(const KXLDSeg *seg, u_char *buf,
         hdr64->filesize = (uint64_t) (*data_offset - base_data_offset);
     }
 
-    *data_offset = round_page(*data_offset);
+    *data_offset = (u_long)kxld_round_page_cross_safe(*data_offset);
 
     rval = KERN_SUCCESS;
 
@@ -743,8 +743,15 @@ kxld_seg_finish_init(KXLDSeg *seg)
     KXLDSect *sect = NULL;
     kxld_addr_t maxaddr = 0;
     kxld_size_t maxsize = 0;
-    
-    if (seg->sects.nitems) {
+
+    /* If we already have a size for this segment (e.g. from the mach-o load
+     * command) then don't recalculate the segment size. This is safer since 
+     * when we recalculate we are making assumptions about page alignment and 
+     * padding that the kext mach-o file was built with. Better to trust the 
+     * macho-o info, if we have it. If we don't (i.e. vmsize == 0) then add up 
+     * the section sizes and take a best guess at page padding.
+     */
+    if ((seg->vmsize == 0) && (seg->sects.nitems)) {
         for (i = 0; i < seg->sects.nitems; ++i) {
             sect = get_sect_by_index(seg, i);
             require_action(sect, finish, rval=KERN_FAILURE);
@@ -754,11 +761,8 @@ kxld_seg_finish_init(KXLDSeg *seg)
             }
         }
 
-        /* XXX Cross architecture linking will fail if the page size ever differs
-         * from 4096.  (As of this writing, we're fine on i386, x86_64, arm, and
-         * arm64.)
-         */
-        seg->vmsize = round_page(maxaddr + maxsize - seg->base_addr);
+        seg->vmsize = kxld_round_page_cross_safe(maxaddr + 
+                                                 maxsize - seg->base_addr);
     }
 
     rval = KERN_SUCCESS;
@@ -772,14 +776,8 @@ finish:
 void
 kxld_seg_set_vm_protections(KXLDSeg *seg, boolean_t strict_protections)
 {
-    /* This is unnecessary except to make the clang analyzer happy.  When
-     * the analyzer no longer ignores nonnull attributes for if statements,
-     * we can remove this line.
-     */
-    if (!seg) return;
-
     if (strict_protections) {
-        if (streq_safe(seg->segname, SEG_TEXT, const_strlen(SEG_TEXT))) {
+        if (!strncmp(seg->segname, SEG_TEXT, const_strlen(SEG_TEXT))) {
             seg->initprot = TEXT_SEG_PROT;
             seg->maxprot = TEXT_SEG_PROT;
         } else {
@@ -828,6 +826,6 @@ kxld_seg_populate_linkedit(KXLDSeg *seg, const KXLDSymtab *symtab, boolean_t is_
     }
 #endif	/* KXLD_PIC_KEXTS */
 
-    seg->vmsize = round_page(size);
+    seg->vmsize = kxld_round_page_cross_safe(size);
 }
 

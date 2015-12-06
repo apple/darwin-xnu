@@ -387,6 +387,7 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 #define MAP_MEM_USE_DATA_ADDR	0x100000 /* preserve address of data, rather than base of page */
 #define MAP_MEM_VM_COPY		0x200000 /* make a copy of a VM range */
 #define MAP_MEM_VM_SHARE	0x400000 /* extract a VM range for remap */
+#define	MAP_MEM_4K_DATA_ADDR	0x800000 /* preserve 4K aligned address of data */
 
 #ifdef KERNEL
 
@@ -420,6 +421,7 @@ struct upl_page_info {
 		cs_tainted:1,	/* CODE SIGNING: page is tainted */
 		cs_nx:1,	/* CODE SIGNING: page is NX */
 		needed:1,	/* page should be left in cache on abort */
+		mark:1,		/* a mark flag for the creator to use as they wish */
 		:0;		/* force to long boundary */
 #else
 		opaque;		/* use upl_page_xxx() accessor funcs */
@@ -444,45 +446,52 @@ typedef uint32_t	upl_size_t;	/* page-aligned byte size */
 /* upl invocation flags */
 /* top nibble is used by super upl */
 
-#define UPL_FLAGS_NONE		0x00000000
-#define UPL_COPYOUT_FROM	0x00000001
-#define UPL_PRECIOUS		0x00000002
-#define UPL_NO_SYNC		0x00000004
-#define UPL_CLEAN_IN_PLACE	0x00000008
-#define UPL_NOBLOCK		0x00000010
-#define UPL_RET_ONLY_DIRTY	0x00000020
-#define UPL_SET_INTERNAL	0x00000040
-#define UPL_QUERY_OBJECT_TYPE	0x00000080
-#define UPL_RET_ONLY_ABSENT	0x00000100 /* used only for COPY_FROM = FALSE */
-#define UPL_FILE_IO             0x00000200
-#define UPL_SET_LITE		0x00000400
-#define UPL_SET_INTERRUPTIBLE	0x00000800
-#define UPL_SET_IO_WIRE		0x00001000
-#define UPL_FOR_PAGEOUT		0x00002000
-#define UPL_WILL_BE_DUMPED      0x00004000
-#define UPL_FORCE_DATA_SYNC	0x00008000
+typedef uint64_t upl_control_flags_t;
+
+#define UPL_FLAGS_NONE		0x00000000ULL
+#define UPL_COPYOUT_FROM	0x00000001ULL
+#define UPL_PRECIOUS		0x00000002ULL
+#define UPL_NO_SYNC		0x00000004ULL
+#define UPL_CLEAN_IN_PLACE	0x00000008ULL
+#define UPL_NOBLOCK		0x00000010ULL
+#define UPL_RET_ONLY_DIRTY	0x00000020ULL
+#define UPL_SET_INTERNAL	0x00000040ULL
+#define UPL_QUERY_OBJECT_TYPE	0x00000080ULL
+#define UPL_RET_ONLY_ABSENT	0x00000100ULL /* used only for COPY_FROM = FALSE */
+#define UPL_FILE_IO             0x00000200ULL
+#define UPL_SET_LITE		0x00000400ULL
+#define UPL_SET_INTERRUPTIBLE	0x00000800ULL
+#define UPL_SET_IO_WIRE		0x00001000ULL
+#define UPL_FOR_PAGEOUT		0x00002000ULL
+#define UPL_WILL_BE_DUMPED      0x00004000ULL
+#define UPL_FORCE_DATA_SYNC	0x00008000ULL
 /* continued after the ticket bits... */
 
-#define UPL_PAGE_TICKET_MASK	0x000F0000
+#define UPL_PAGE_TICKET_MASK	0x000F0000ULL
 #define UPL_PAGE_TICKET_SHIFT   16
 
 /* ... flags resume here */
-#define UPL_BLOCK_ACCESS	0x00100000
-#define UPL_ENCRYPT		0x00200000
-#define UPL_NOZEROFILL		0x00400000
-#define UPL_WILL_MODIFY		0x00800000 /* caller will modify the pages */
+#define UPL_BLOCK_ACCESS	0x00100000ULL
+#define UPL_ENCRYPT		0x00200000ULL
+#define UPL_NOZEROFILL		0x00400000ULL
+#define UPL_WILL_MODIFY		0x00800000ULL /* caller will modify the pages */
 
-#define UPL_NEED_32BIT_ADDR	0x01000000
-#define UPL_UBC_MSYNC		0x02000000
-#define UPL_UBC_PAGEOUT		0x04000000
-#define UPL_UBC_PAGEIN		0x08000000
-#define UPL_REQUEST_SET_DIRTY	0x10000000
-#define UPL_REQUEST_NO_FAULT	0x20000000 /* fail if pages not all resident */
-#define UPL_NOZEROFILLIO	0x40000000 /* allow non zerofill pages present */
-#define UPL_REQUEST_FORCE_COHERENCY	0x80000000
+#define UPL_NEED_32BIT_ADDR	0x01000000ULL
+#define UPL_UBC_MSYNC		0x02000000ULL
+#define UPL_UBC_PAGEOUT		0x04000000ULL
+#define UPL_UBC_PAGEIN		0x08000000ULL
+#define UPL_REQUEST_SET_DIRTY	0x10000000ULL
+#define UPL_REQUEST_NO_FAULT	0x20000000ULL /* fail if pages not all resident */
+#define UPL_NOZEROFILLIO	0x40000000ULL /* allow non zerofill pages present */
+#define UPL_REQUEST_FORCE_COHERENCY	0x80000000ULL
+
+#define UPL_MEMORY_TAG_MASK	0xFF00000000ULL
+#define UPL_MEMORY_TAG_SHIFT	32
+#define UPL_MEMORY_TAG(x)	(((x) >> UPL_MEMORY_TAG_SHIFT) & 0xFF)
+#define UPL_MEMORY_TAG_MAKE(x)	(((upl_control_flags_t)((x) & 0xFF)) << UPL_MEMORY_TAG_SHIFT)
 
 /* UPL flags known by this kernel */
-#define UPL_VALID_FLAGS		0xFFFFFFFF
+#define UPL_VALID_FLAGS		0xFFFFFFFFFFULL
 
 
 /* upl abort error flags */
@@ -742,6 +751,13 @@ extern boolean_t	upl_valid_page(upl_page_info_t *upl, int index);
 extern void		upl_deallocate(upl_t upl);
 extern void 		upl_mark_decmp(upl_t upl);
 extern void 		upl_unmark_decmp(upl_t upl);
+
+#ifdef KERNEL_PRIVATE
+
+void upl_page_set_mark(upl_page_info_t *upl, int index, boolean_t v);
+boolean_t upl_page_get_mark(upl_page_info_t *upl, int index);
+
+#endif // KERNEL_PRIVATE
 
 __END_DECLS
 

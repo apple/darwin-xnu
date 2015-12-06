@@ -1,9 +1,4 @@
-SDKROOT ?= /
-ifeq "$(RC_TARGET_CONFIG)" "iPhone"
-Embedded?=YES
-else
-Embedded?=$(shell echo $(SDKROOT) | grep -iq iphoneos && echo YES || echo NO)
-endif
+include ../Makefile.common
 
 OBJROOT?=$(shell /bin/pwd)
 
@@ -19,11 +14,9 @@ ifdef RC_ARCHS
   endif
 endif
 
-
-
 DSTROOT?=$(shell /bin/pwd)
 
-CFLAGS:=$(patsubst %, -arch %,$(ARCHS)) -g -Wall -Os -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+CFLAGS:=$(patsubst %, -arch %,$(ARCHS)) -g -Wall -Os -isysroot $(SDKROOT) -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 
 all: $(DSTROOT)/jitter
 

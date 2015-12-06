@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,7 +76,7 @@ struct if_llreach_info {
 #endif /* !INET6 */
 
 /*
- * Per-interface link-layer reachability.  (Currently only for ARP/Ethernet.)
+ * Per-interface link-layer reachability.  (Currently only for ARP/NDP/Ethernet.)
  */
 #define	IF_LLREACH_MAXLEN	ETHER_ADDR_LEN
 

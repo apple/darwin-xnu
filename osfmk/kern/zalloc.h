@@ -120,7 +120,8 @@ struct zone {
 	/* boolean_t */	collectable        :1,	/* (F) garbage collect empty pages */
 	/* boolean_t */	expandable         :1,	/* (T) expand zone (with message)? */
 	/* boolean_t */ allows_foreign     :1,  /* (F) allow non-zalloc space */
-	/* boolean_t */	doing_alloc        :1,	/* is zone expanding now? */
+	/* boolean_t */	doing_alloc_without_vm_priv:1,	/* is zone expanding now via a non-vm_privileged thread? */
+	/* boolean_t */ doing_alloc_with_vm_priv:1, /* is zone expanding now via a vm_privileged thread? */
 	/* boolean_t */	waiting            :1,	/* is thread waiting for expansion? */
 	/* boolean_t */	async_pending      :1,	/* asynchronous allocation pending? */
 	/* boolean_t */ zleak_on           :1,	/* Are we collecting allocation information? */
@@ -132,7 +133,7 @@ struct zone {
 	/* boolean_t */	gzalloc_exempt     :1,
 	/* boolean_t */	alignment_required :1,
 	/* boolean_t */	use_page_list 	   :1,
-	/* future    */ _reserved          :16;
+	/* future    */ _reserved          :15;
 
 	int		index;		/* index into zone_info arrays for this zone */
 	struct zone	*next_zone;	/* Link for all-zones list */

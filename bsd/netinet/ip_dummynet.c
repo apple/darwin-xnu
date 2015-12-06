@@ -1304,10 +1304,10 @@ find_queue(struct dn_flow_set *fs, struct ip_flow_id *id)
                 ((id->src_ip6.__u6_addr.__u6_addr32[2] << 1) & 0xfffff)^
                 ((id->src_ip6.__u6_addr.__u6_addr32[3] << 1) & 0xfffff)^
 
-                ((id->src_ip6.__u6_addr.__u6_addr32[0] << 16) & 0xffff)^
-                ((id->src_ip6.__u6_addr.__u6_addr32[1] << 16) & 0xffff)^
-                ((id->src_ip6.__u6_addr.__u6_addr32[2] << 16) & 0xffff)^
-                ((id->src_ip6.__u6_addr.__u6_addr32[3] << 16) & 0xffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[0] >> 16) & 0xffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[1] >> 16) & 0xffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[2] >> 16) & 0xffff)^
+                ((id->src_ip6.__u6_addr.__u6_addr32[3] >> 16) & 0xffff)^
 
                 (id->dst_port << 1) ^ (id->src_port) ^
                 (id->proto ) ^

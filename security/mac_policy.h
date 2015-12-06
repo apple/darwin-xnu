@@ -95,7 +95,6 @@ struct ifnet;
 struct inpcb;
 struct ipq;
 struct label;
-struct lctx;
 struct mac_module_data;
 struct mac_policy_conf;
 struct mbuf;
@@ -886,6 +885,7 @@ typedef int mpo_file_check_mmap_t(
 	struct label *label,
 	int prot,
 	int flags,
+	uint64_t file_pos,
 	int *maxprot
 );
 /**
@@ -1419,143 +1419,6 @@ typedef void mpo_ipq_label_update_t(
 	struct label *fragmentlabel,
 	struct ipq *ipq,
 	struct label *ipqlabel
-);
-/**
-  @brief Access control check for relabelling Login Context
-  @param l Subject credential
-  @param newlabel New label to apply to the Login Context
-  @see mpo_lctx_label_update_t
-  @see mac_set_lcid
-  @see mac_set_lctx
-
-  Determine whether the subject identified by the credential can relabel
-  itself to the supplied new label (newlabel).  This access control check
-  is called when the mac_set_lctx/lcid system call is invoked.  A user space
-  application will supply a new value, the value will be internalized
-  and provided in newlabel.
-
-  @return Return 0 if access is granted, otherwise an appropriate value for
-  errno should be returned.
-*/
-typedef int mpo_lctx_check_label_update_t(
-	struct lctx *l,
-	struct label *newlabel
-);
-/**
- @brief Destroy Login Context label
- @param label The label to be destroyed
-*/
-typedef void mpo_lctx_label_destroy_t(
-	struct label *label
-);
-/**
-  @brief Externalize a Login Context label
-  @param label Label to be externalized
-  @param element_name Name of the label namespace for which labels should be
-  externalized
-  @param sb String buffer to be filled with a text representation of the label
-
-  Produce an external representation of the label on a Login Context.
-  An externalized label consists of a text representation
-  of the label contents that can be used with user applications.
-  Policy-agnostic user space tools will display this externalized
-  version.
-
-  @return 0 on success, return non-zero if an error occurs while
-  externalizing the label data.
-
-*/
-typedef int mpo_lctx_label_externalize_t(
-	struct label *label,
-	char *element_name,
-	struct sbuf *sb
-);
-/**
-  @brief Initialize Login Context label
-  @param label New label to initialize
-*/
-typedef void mpo_lctx_label_init_t(
-	struct label *label
-);
-/**
-  @brief Internalize a Login Context label
-  @param label Label to be internalized
-  @param element_name Name of the label namespace for which the label should
-  be internalized
-  @param element_data Text data to be internalized
-
-  Produce a Login Context label from an external representation.  An
-  externalized label consists of a text representation of the label
-  contents that can be used with user applications.  Policy-agnostic
-  user space tools will forward text version to the kernel for
-  processing by individual policy modules.
-
-  The policy's internalize entry points will be called only if the
-  policy has registered interest in the label namespace.
-
-  @return 0 on success, Otherwise, return non-zero if an error occurs
-  while internalizing the label data.
-
-*/
-typedef int mpo_lctx_label_internalize_t(
-	struct label *label,
-	char *element_name,
-	char *element_data
-);
-/**
-  @brief Update a Login Context label
-  @param l
-  @param newlabel A new label to apply to the Login Context
-  @see mpo_lctx_check_label_update_t
-  @see mac_set_lcid
-  @see mac_set_lctx
-
-  Update the label on a login context, using the supplied new label.
-  This is called as a result of a login context relabel operation.  Access
-  control was already confirmed by mpo_lctx_check_label_update.
-*/
-typedef void mpo_lctx_label_update_t(
-	struct lctx *l,
-	struct label *newlabel
-);
-/**
-  @brief A process has created a login context
-  @param p Subject
-  @param l Login Context
-
-  When a process creates a login context (via setlcid()) this entrypoint
-  is called to notify the policy that the process 'p' has created login
-  context 'l'.
-*/
-typedef void mpo_lctx_notify_create_t(
-	struct proc *p,
-	struct lctx *l
-);
-/**
-  @brief A process has joined a login context
-  @param p Subject
-  @param l Login Context
-
-  When a process joins a login context, either via setlcid() or via
-  fork() this entrypoint is called to notify the policy that process
-  'p' is now a member of login context 'l'.
-*/
-typedef void mpo_lctx_notify_join_t(
-	struct proc *p,
-	struct lctx *l
-);
-/**
-  @brief A process has left a login context
-  @param p Subject
-  @param l Login Context
-
-  When a process leaves a login context either via setlcid() or as a
-  result of the process exiting this entrypoint is called to notify
-  the policy that the process 'p' is no longer a member of login context 'l'.
-*/
-typedef void mpo_lctx_notify_leave_t(
-	struct proc *p,
-	struct lctx *l
 );
 /**
  @brief Assign a label to a new mbuf
@@ -2735,6 +2598,32 @@ typedef int mpo_proc_check_debug_t(
 typedef int mpo_proc_check_fork_t(
 	kauth_cred_t cred,
 	struct proc *proc
+);
+/**
+  @brief Access control check for setting host special ports.
+  @param cred Subject credential
+  @param id The host special port to set
+  @param port The new value to set for the special port
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_proc_check_set_host_special_port_t(
+	kauth_cred_t cred,
+	int id,
+	struct ipc_port	*port
+);
+/**
+  @brief Access control check for setting host exception ports.
+  @param cred Subject credential
+  @param exceptions Exception port to set
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_proc_check_set_host_exception_port_t(
+	kauth_cred_t cred,
+	unsigned int exception
 );
 /**
   @brief Access control over pid_suspend and pid_resume
@@ -4336,6 +4225,25 @@ typedef int mpo_proc_check_get_task_t(
 );
 
 /**
+  @brief Access control check for exposing a process's task port
+  @param cred Subject credential
+  @param proc Object process
+
+  Determine whether the subject identified by the credential can expose
+  the passed process's task control port.
+  This call is used by the accessor APIs like processor_set_tasks() and
+  processor_set_threads().
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned. Suggested failure: EACCES for label mismatch,
+  EPERM for lack of privilege, or ESRCH to hide visibility of the target.
+*/
+typedef int mpo_proc_check_expose_task_t(
+	kauth_cred_t cred,
+	struct proc *p
+);
+
+/**
  @brief Check whether task's IPC may inherit across process exec
  @param proc current process instance
  @param cur_vp vnode pointer to current instance
@@ -4349,11 +4257,11 @@ typedef int mpo_proc_check_get_task_t(
 */
 typedef int mpo_proc_check_inherit_ipc_ports_t(
 	struct proc *p,
-  struct vnode *cur_vp,
-  off_t cur_offset,
-  struct vnode *img_vp,
-  off_t img_offset,
-  struct vnode *scriptvp
+	struct vnode *cur_vp,
+	off_t cur_offset,
+	struct vnode *img_vp,
+	off_t img_offset,
+	struct vnode *scriptvp
 );
 
 /**
@@ -4366,7 +4274,7 @@ typedef int mpo_proc_check_inherit_ipc_ports_t(
  @return Return 0 if access is granted, otherwise an appropriate value for
  errno should be returned.
  */
-typedef int mac_proc_check_run_cs_invalid_t(
+typedef int mpo_proc_check_run_cs_invalid_t(
 	struct proc *p
 );
 
@@ -4381,27 +4289,7 @@ typedef int mac_proc_check_run_cs_invalid_t(
 typedef void mpo_thread_userret_t(
 	struct thread *thread
 );
-/**
-  @brief Initialize per thread label
-  @param label New label to initialize
 
-  Initialize the label for a newly instantiated thread.
-  Sleeping is permitted.
-*/
-typedef void mpo_thread_label_init_t(
-	struct label *label
-);
-/**
-  @brief Destroy thread label
-  @param label The label to be destroyed
-
-  Destroy a user thread label.  Since the user thread
-  is going out of scope, policy modules should free any internal
-  storage associated with the label so that it may be destroyed.
-*/
-typedef void mpo_thread_label_destroy_t(
-	struct label *label
-);
 /**
   @brief Check vnode access
   @param cred Subject credential
@@ -5801,6 +5689,70 @@ typedef int mpo_kext_check_unload_t(
 	const char *identifier
 );
 
+/**
+  @brief Access control check for querying information about loaded kexts
+  @param cred Subject credential
+
+  Determine whether the subject identified by the credential can query
+  information about loaded kexts.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.  Suggested failure: EPERM for lack of privilege.
+*/
+typedef int mpo_kext_check_query_t(
+	kauth_cred_t cred
+);
+
+/**
+  @brief Access control check for getting NVRAM variables.
+  @param cred Subject credential
+  @param name NVRAM variable to get
+
+  Determine whether the subject identifier by the credential can get the
+  value of the named NVRAM variable.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.  Suggested failure: EPERM for lack of privilege.
+*/
+typedef int mpo_iokit_check_nvram_get_t(
+	kauth_cred_t cred,
+	const char *name
+);
+
+/**
+  @brief Access control check for setting NVRAM variables.
+  @param cred Subject credential
+  @param name NVRAM variable to set
+  @param value The new value for the NVRAM variable
+
+  Determine whether the subject identifier by the credential can set the
+  value of the named NVRAM variable.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.  Suggested failure: EPERM for lack of privilege.
+*/
+typedef int mpo_iokit_check_nvram_set_t(
+	kauth_cred_t cred,
+	const char *name,
+	io_object_t value
+);
+
+/**
+  @brief Access control check for deleting NVRAM variables.
+  @param cred Subject credential
+  @param name NVRAM variable to delete
+
+  Determine whether the subject identifier by the credential can delete the
+  named NVRAM variable.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.  Suggested failure: EPERM for lack of privilege.
+*/
+typedef int mpo_iokit_check_nvram_delete_t(
+	kauth_cred_t cred,
+	const char *name
+);
+
 /*
  * Placeholder for future events that may need mac hooks.
  */
@@ -5812,7 +5764,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 32 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 37 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -5887,15 +5839,15 @@ struct mac_policy_ops {
 	mpo_ipq_label_init_t			*mpo_ipq_label_init;
 	mpo_ipq_label_update_t			*mpo_ipq_label_update;
 
-	mpo_lctx_check_label_update_t		*mpo_lctx_check_label_update;
-	mpo_lctx_label_destroy_t		*mpo_lctx_label_destroy;
-	mpo_lctx_label_externalize_t		*mpo_lctx_label_externalize;
-	mpo_lctx_label_init_t			*mpo_lctx_label_init;
-	mpo_lctx_label_internalize_t		*mpo_lctx_label_internalize;
-	mpo_lctx_label_update_t			*mpo_lctx_label_update;
-	mpo_lctx_notify_create_t		*mpo_lctx_notify_create;
-	mpo_lctx_notify_join_t			*mpo_lctx_notify_join;
-	mpo_lctx_notify_leave_t			*mpo_lctx_notify_leave;
+	mpo_reserved_hook_t                     *mpo_reserved1;
+	mpo_reserved_hook_t                     *mpo_reserved2;
+	mpo_reserved_hook_t                     *mpo_reserved3;
+	mpo_reserved_hook_t                     *mpo_reserved4;
+	mpo_reserved_hook_t                     *mpo_reserved5;
+	mpo_reserved_hook_t                     *mpo_reserved6;
+	mpo_reserved_hook_t                     *mpo_reserved7;
+	mpo_reserved_hook_t                     *mpo_reserved8;
+	mpo_reserved_hook_t                     *mpo_reserved9;
 
 	mpo_mbuf_label_associate_bpfdesc_t	*mpo_mbuf_label_associate_bpfdesc;
 	mpo_mbuf_label_associate_ifnet_t	*mpo_mbuf_label_associate_ifnet;
@@ -5950,13 +5902,13 @@ struct mac_policy_ops {
 	mpo_system_check_sysctlbyname_t		*mpo_system_check_sysctlbyname;
 	mpo_proc_check_inherit_ipc_ports_t	*mpo_proc_check_inherit_ipc_ports;
 	mpo_vnode_check_rename_t		*mpo_vnode_check_rename;
-	mpo_reserved_hook_t			*mpo_reserved4;
-	mpo_reserved_hook_t			*mpo_reserved5;
-	mpo_reserved_hook_t			*mpo_reserved6;
-	mpo_reserved_hook_t			*mpo_reserved7;
-	mpo_reserved_hook_t			*mpo_reserved8;
-	mpo_reserved_hook_t			*mpo_reserved9;
-	mpo_reserved_hook_t			*mpo_reserved10;
+	mpo_kext_check_query_t			*mpo_kext_check_query;
+	mpo_iokit_check_nvram_get_t		*mpo_iokit_check_nvram_get;
+	mpo_iokit_check_nvram_set_t		*mpo_iokit_check_nvram_set;
+	mpo_iokit_check_nvram_delete_t		*mpo_iokit_check_nvram_delete;
+	mpo_proc_check_expose_task_t		*mpo_proc_check_expose_task;
+	mpo_proc_check_set_host_special_port_t	*mpo_proc_check_set_host_special_port;
+	mpo_proc_check_set_host_exception_port_t *mpo_proc_check_set_host_exception_port;
 	mpo_reserved_hook_t			*mpo_reserved11;
 	mpo_reserved_hook_t			*mpo_reserved12;
 	mpo_reserved_hook_t			*mpo_reserved13;
@@ -6146,7 +6098,7 @@ struct mac_policy_ops {
 	mpo_vnode_check_uipc_bind_t		*mpo_vnode_check_uipc_bind;
 	mpo_vnode_check_uipc_connect_t		*mpo_vnode_check_uipc_connect;
 
-	mac_proc_check_run_cs_invalid_t		*mpo_proc_check_run_cs_invalid;
+	mpo_proc_check_run_cs_invalid_t		*mpo_proc_check_run_cs_invalid;
 	mpo_proc_check_suspend_resume_t		*mpo_proc_check_suspend_resume;
 
 	mpo_thread_userret_t			*mpo_thread_userret;
@@ -6170,8 +6122,8 @@ struct mac_policy_ops {
 
 	mpo_vnode_notify_rename_t		*mpo_vnode_notify_rename;
 
-	mpo_thread_label_init_t			*mpo_thread_label_init;
-	mpo_thread_label_destroy_t		*mpo_thread_label_destroy;
+	mpo_reserved_hook_t			*mpo_reserved32;
+	mpo_reserved_hook_t			*mpo_reserved33;
 
 	mpo_system_check_kas_info_t		*mpo_system_check_kas_info;
 

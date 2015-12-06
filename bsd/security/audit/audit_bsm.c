@@ -1911,8 +1911,6 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 
 	case AUE_MAC_GET_PROC:
 	case AUE_MAC_SET_PROC:
-	case AUE_MAC_GET_LCTX:
-	case AUE_MAC_SET_LCTX:
 		PROCESS_MAC_TOKENS;
 		break;
 #endif

@@ -98,6 +98,7 @@
 #include <kern/task.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
+#include <vm/vm_protos.h>
 #include <mach/host_info.h>
 #include <kern/pms.h>
 
@@ -332,6 +333,15 @@ sysctl_pagesize
 }
 
 static int
+sysctl_pagesize32
+(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	long long l;
+	l = (long long) PAGE_SIZE;
+	return sysctl_io_number(req, l, sizeof(l), NULL, NULL);
+}
+
+static int
 sysctl_tbfrequency
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
@@ -356,6 +366,7 @@ SYSCTL_INT     (_hw, OID_AUTO, cpufamily, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LO
 SYSCTL_OPAQUE  (_hw, OID_AUTO, cacheconfig, CTLFLAG_RD | CTLFLAG_LOCKED, &cacheconfig, sizeof(cacheconfig), "Q", "");
 SYSCTL_OPAQUE  (_hw, OID_AUTO, cachesize, CTLFLAG_RD | CTLFLAG_LOCKED, &cachesize, sizeof(cachesize), "Q", "");
 SYSCTL_PROC	   (_hw, OID_AUTO, pagesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_pagesize, "Q", "");
+SYSCTL_PROC	   (_hw, OID_AUTO, pagesize32, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_pagesize32, "Q", "");
 SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.bus_frequency_hz, "");
 SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency_min, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.bus_frequency_min_hz, "");
 SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency_max, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.bus_frequency_max_hz, "");

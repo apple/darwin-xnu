@@ -416,6 +416,12 @@ mach_call_munger(x86_saved_state_t *state)
 	struct mach_call_args args = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	x86_saved_state32_t	*regs;
 
+#if PROC_REF_DEBUG
+	struct uthread *ut = get_bsdthread_info(current_thread());
+
+	uthread_reset_proc_refcount(ut);
+#endif
+
 	assert(is_saved_state32(state));
 	regs = saved_state32(state);
 
@@ -475,6 +481,12 @@ mach_call_munger(x86_saved_state_t *state)
 
 	throttle_lowpri_io(1);
 
+#if PROC_REF_DEBUG
+	if (__improbable(uthread_get_proc_refcount(ut) != 0)) {
+		panic("system call returned with uu_proc_refcount != 0");
+	}
+#endif
+
 	thread_exception_return();
 	/* NOTREACHED */
 }
@@ -490,6 +502,12 @@ mach_call_munger64(x86_saved_state_t *state)
 	mach_call_t mach_call;
 	struct mach_call_args args = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	x86_saved_state64_t	*regs;
+
+#if PROC_REF_DEBUG
+	struct uthread *ut = get_bsdthread_info(current_thread());
+
+	uthread_reset_proc_refcount(ut);
+#endif
 
 	assert(is_saved_state64(state));
 	regs = saved_state64(state);
@@ -548,6 +566,12 @@ mach_call_munger64(x86_saved_state_t *state)
 		regs->rax, 0, 0, 0, 0);
 
 	throttle_lowpri_io(1);
+
+#if PROC_REF_DEBUG
+	if (__improbable(uthread_get_proc_refcount(ut) != 0)) {
+		panic("system call returned with uu_proc_refcount != 0");
+	}
+#endif
 
 	thread_exception_return();
 	/* NOTREACHED */

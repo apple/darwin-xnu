@@ -74,11 +74,11 @@ private:
   IONVRAMController *_nvramController;
   const OSSymbol    *_registryPropertiesKey;
   UInt8             *_nvramImage;
-  bool              _nvramImageDirty;
+  __unused bool     _nvramImageDirty;
   UInt32            _ofPartitionOffset;
   UInt32            _ofPartitionSize;
   UInt8             *_ofImage;
-  bool              _ofImageDirty;
+  __unused bool     _ofImageDirty;
   OSDictionary      *_ofDict;
   OSDictionary      *_nvramPartitionOffsets;
   OSDictionary      *_nvramPartitionLengths;
@@ -138,20 +138,20 @@ private:
   void initProxyData(void);
   
 public:
-  virtual bool init(IORegistryEntry *old, const IORegistryPlane *plane);
+  virtual bool init(IORegistryEntry *old, const IORegistryPlane *plane) APPLE_KEXT_OVERRIDE;
   
   virtual void registerNVRAMController(IONVRAMController *nvram);
   
   virtual void sync(void);
   
-  virtual bool serializeProperties(OSSerialize *s) const;
-  virtual OSObject *copyProperty(const OSSymbol *aKey) const;
-  virtual OSObject *copyProperty(const char *aKey) const;
-  virtual OSObject *getProperty(const OSSymbol *aKey) const;
-  virtual OSObject *getProperty(const char *aKey) const;
-  virtual bool setProperty(const OSSymbol *aKey, OSObject *anObject);
-  virtual void removeProperty(const OSSymbol *aKey);
-  virtual IOReturn setProperties(OSObject *properties);
+  virtual bool serializeProperties(OSSerialize *s) const APPLE_KEXT_OVERRIDE;
+  virtual OSObject *copyProperty(const OSSymbol *aKey) const APPLE_KEXT_OVERRIDE;
+  virtual OSObject *copyProperty(const char *aKey) const APPLE_KEXT_OVERRIDE;
+  virtual OSObject *getProperty(const OSSymbol *aKey) const APPLE_KEXT_OVERRIDE;
+  virtual OSObject *getProperty(const char *aKey) const APPLE_KEXT_OVERRIDE;
+  virtual bool setProperty(const OSSymbol *aKey, OSObject *anObject) APPLE_KEXT_OVERRIDE;
+  virtual void removeProperty(const OSSymbol *aKey) APPLE_KEXT_OVERRIDE;
+  virtual IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
   
   virtual IOReturn readXPRAM(IOByteCount offset, UInt8 *buffer,
 			     IOByteCount length);
@@ -177,6 +177,7 @@ public:
   
   virtual IOByteCount savePanicInfo(UInt8 *buffer, IOByteCount length);
   virtual bool safeToSync(void);
+  void syncInternal(bool rateLimit);
 };
 
 #endif /* __cplusplus */

@@ -40,9 +40,15 @@ fcntl(int fd, int cmd, ...)
 	va_start(ap, cmd);
 	switch(cmd) {
 	 case F_GETLK:
+	 case F_GETLKPID:
 	 case F_SETLK:
 	 case F_SETLKW:
 	 case F_SETLKWTIMEOUT:
+	case F_OFD_GETLK:
+	case F_OFD_GETLKPID:
+	case F_OFD_SETLK:
+	case F_OFD_SETLKW:
+	case F_OFD_SETLKWTIMEOUT:
 	 case F_PREALLOCATE:
 	 case F_SETSIZE:
 	 case F_RDADVISE:
@@ -57,6 +63,7 @@ fcntl(int fd, int cmd, ...)
 	 case F_ADDSIGS:
 	 case F_ADDFILESIGS:
 	 case F_ADDFILESIGS_FOR_DYLD_SIM:
+	 case F_ADDFILESIGS_RETURN:
 	 case F_FINDSIGS:
 	 case F_TRANSCODEKEY:
 		arg = va_arg(ap, void *);

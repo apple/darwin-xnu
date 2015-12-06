@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -330,7 +330,11 @@ STUB(ifnet_tx_compl_status);
 STUB(ifnet_flowid);
 STUB(ifnet_enable_output);
 STUB(ifnet_disable_output);
-STUB(ifnet_get_ipsec_offload_frames);
+STUB(ifnet_get_keepalive_offload_frames);
+STUB(ifnet_link_status_report);
+STUB(ifnet_set_packetpreamblelen);
+STUB(ifnet_packetpreamblelen);
+STUB(ifnet_maxpacketpreamblelen);
 STUB(in6_localaddr);
 STUB(in_localaddr);
 STUB(in6addr_local);
@@ -348,6 +352,7 @@ STUB(m_pullup);
 STUB(m_split);
 STUB(m_trailingspace);
 STUB(mbuf_get_driver_scratch);
+STUB(mbuf_get_unsent_data_bytes);
 STUB(mbuf_get_priority);
 STUB(mbuf_get_service_class);
 STUB(mbuf_get_service_class_index);

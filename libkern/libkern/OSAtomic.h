@@ -172,6 +172,52 @@ inline static long OSDecrementAtomicLong(volatile long * address)
 #endif /* XNU_KERNEL_PRIVATE */
 
 #if XNU_KERNEL_PRIVATE
+/*!
+ * @function OSCompareAndSwap8
+ *
+ * @abstract
+ * Compare and swap operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
+ *
+ * @discussion
+ * The OSCompareAndSwap8 function compares the value at the specified address with oldVal. The value of newValue is written to the address only if oldValue and the value at the address are equal. OSCompareAndSwap returns true if newValue is written to the address; otherwise, it returns false.
+ *
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ *
+ * @param oldValue The value to compare at address.
+ * @param newValue The value to write to address if oldValue compares true.
+ * @param address The byte aligned address of the data to update atomically.
+ * @result true if newValue was written to the address.
+ */
+extern Boolean OSCompareAndSwap8(
+    UInt8            oldValue,
+    UInt8            newValue,
+    volatile UInt8 * address);
+#define OSCompareAndSwap8(a, b, c) \
+	(OSCompareAndSwap8(a, b, __SAFE_CAST_PTR(volatile UInt8*,c)))
+
+/*!
+ * @function OSCompareAndSwap16
+ *
+ * @abstract
+ * Compare and swap operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
+ *
+ * @discussion
+ * The OSCompareAndSwap16 function compares the value at the specified address with oldVal. The value of newValue is written to the address only if oldValue and the value at the address are equal. OSCompareAndSwap returns true if newValue is written to the address; otherwise, it returns false.
+ *
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ *
+ * @param oldValue The value to compare at address.
+ * @param newValue The value to write to address if oldValue compares true.
+ * @param address The 2-byte aligned address of the data to update atomically.
+ * @result true if newValue was written to the address.
+ */
+extern Boolean OSCompareAndSwap16(
+    UInt16            oldValue,
+    UInt16            newValue,
+    volatile UInt16 * address);
+#define OSCompareAndSwap16(a, b, c) \
+	(OSCompareAndSwap16(a, b, __SAFE_CAST_PTR(volatile UInt16*,c)))
+
 #endif /* XNU_KERNEL_PRIVATE */
 
 /*!
@@ -546,7 +592,7 @@ extern UInt8 OSBitXorAtomic8(
  *
  * @discussion
  * The OSTestAndSet function sets a single bit in a byte at a specified address. It returns true if the bit was already set, false otherwise.
- * @param bit The bit number in the range 0 through 7.
+ * @param bit The bit number in the range 0 through 7. Bit 0 is the most significant.
  * @param startAddress The address of the byte to update atomically.
  * @result true if the bit was already set, false otherwise.
  */
@@ -564,7 +610,7 @@ extern Boolean OSTestAndSet(
  * The OSTestAndClear function clears a single bit in a byte at a specified address. It returns true if the bit was already clear, false otherwise.
  *
  * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
- * @param bit The bit number in the range 0 through 7.
+ * @param bit The bit number in the range 0 through 7. Bit 0 is the most significant.
  * @param startAddress The address of the byte to update atomically.
  * @result true if the bit was already clear, false otherwise.
  */

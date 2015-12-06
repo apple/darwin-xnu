@@ -122,6 +122,8 @@
 #include <libkern/kernel_mach_header.h>
 #include <libkern/OSKextLibPrivate.h>
 
+#include <mach/branch_predicates.h>
+
 #if	DEBUG
 #define DPRINTF(x...)	kprintf(x)
 #else
@@ -892,13 +894,15 @@ Debugger(
 	int cn = cpu_number();
 	task_t task = current_task();
 	int	task_pid = pid_from_task(task);
-
+	boolean_t old_doprnt_hide_pointers = doprnt_hide_pointers;
 
 	hw_atomic_add(&debug_mode, 1);   
 	if (!panic_is_inited) {
 		postcode(PANIC_HLT);
 		asm("hlt");
 	}
+
+	doprnt_hide_pointers = FALSE;
 
 	printf("Debugger called: <%s>\n", message);
 	kprintf("Debugger called: <%s>\n", message);
@@ -922,7 +926,7 @@ Debugger(
 		__asm__ volatile("movq %%rbp, %0" : "=m" (stackptr));
 
 		/* Print backtrace - callee is internally synchronized */
-		if ((task_pid == 1) && (init_task_died)) {
+		if (task_pid == 1 && (init_task_died)) {
 			/* Special handling of launchd died panics */
 			print_launchd_info();
 		} else {
@@ -1009,6 +1013,7 @@ Debugger(
 		}
         }
 
+	doprnt_hide_pointers = old_doprnt_hide_pointers;
 	__asm__("int3");
 	hw_atomic_sub(&debug_mode, 1);   
 }
@@ -1148,6 +1153,7 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 	uint64_t bt_tsc_timeout;
 	boolean_t keepsyms = FALSE;
 	int cn = cpu_number();
+	boolean_t old_doprnt_hide_pointers = doprnt_hide_pointers;
 
 	if(pbtcpu != cn) {
 		hw_atomic_add(&pbtcnt, 1);
@@ -1156,6 +1162,12 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 		 */
 		hw_lock_to(&pbtlock, ~0U);
 		pbtcpu = cn;
+	}
+
+	if (__improbable(doprnt_hide_pointers == TRUE)) {
+		/* If we're called directly, the Debugger() function will not be called,
+		 * so we need to reset the value in here. */
+		doprnt_hide_pointers = FALSE;
 	}
 
 	panic_check_hook();
@@ -1252,6 +1264,8 @@ out:
 
 	panic_display_system_configuration();
 
+	doprnt_hide_pointers = old_doprnt_hide_pointers;
+
 	/* Release print backtrace lock, to permit other callers in the
 	 * event of panics on multiple processors.
 	 */
@@ -1324,13 +1338,30 @@ print_tasks_user_threads(task_t task)
 	for (j = 0, thread = (thread_t) queue_first(&task->threads); j < task->thread_count;
 			++j, thread = (thread_t) queue_next(&thread->task_threads)) {
 
-		kdb_printf("Thread  %p\n", thread);
+		kdb_printf("Thread %d: %p\n", j, thread);
 		pmap = get_task_pmap(task);
 		savestate = get_user_regs(thread);
 		rbp = savestate->ss_64.rbp;
 		print_one_backtrace(pmap, (vm_offset_t)rbp, cur_marker, TRUE, TRUE);
 		kdb_printf("\n");
 		}
+}
+
+void
+print_thread_num_that_crashed(task_t task)
+{
+	thread_t		c_thread = current_thread();
+	thread_t		thread;
+	int             j;
+	
+	for (j = 0, thread = (thread_t) queue_first(&task->threads); j < task->thread_count;
+			++j, thread = (thread_t) queue_next(&thread->task_threads)) {
+
+		if (c_thread == thread) {
+			kdb_printf("\nThread %d crashed\n", j);
+			break;
+		}
+	}
 }
 
 #define PANICLOG_UUID_BUF_SIZE 256
@@ -1425,6 +1456,7 @@ void print_launchd_info(void)
 	}
 	
 	print_uuid_info(task);
+	print_thread_num_that_crashed(task);
 	print_threads_registers(thread);
 	print_tasks_user_threads(task);
 	kdb_printf("Mac OS version: %s\n", (osversion[0] != 0) ? osversion : "Not yet set");

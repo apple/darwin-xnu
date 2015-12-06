@@ -15,6 +15,9 @@ DATAFILES = \
 	vmparam.h _types.h _limits.h _param.h \
 	_mcontext.h
 
+PRIVATE_DATAFILES = \
+	disklabel.h
+
 KERNELFILES = \
 	disklabel.h \
 	byte_order.h  endian.h \
@@ -25,7 +28,7 @@ KERNELFILES = \
 
 
 INSTALL_MI_LIST = ${DATAFILES}
-INSTALL_MI_LCL_LIST = ${DATAFILES} disklabel.h
+INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MI_DIR = machine
 

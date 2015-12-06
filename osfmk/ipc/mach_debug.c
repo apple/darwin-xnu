@@ -84,6 +84,8 @@
 #include <ipc/ipc_hash.h>
 #include <ipc/ipc_table.h>
 #include <ipc/ipc_right.h>
+
+#include <security/mac_mach_internal.h>
 #endif
 
 /*
@@ -186,6 +188,12 @@ mach_port_space_info(
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
 
+#if !(DEVELOPMENT | DEBUG)
+	const boolean_t dbg_ok = (mac_task_check_expose_task(kernel_task) == 0);
+#else
+	const boolean_t dbg_ok = TRUE;
+#endif
+
 	/* start with in-line memory */
 
 	table_size = 0;
@@ -213,7 +221,7 @@ mach_port_space_info(
 		if (table_size != table_size_needed) {
 			if (table_size != 0)
 				kmem_free(ipc_kernel_map, table_addr, table_size);
-			kr = kmem_alloc(ipc_kernel_map,	&table_addr, table_size_needed);
+			kr = kmem_alloc(ipc_kernel_map,	&table_addr, table_size_needed, VM_KERN_MEMORY_IPC);
 			if (kr != KERN_SUCCESS) {
 				return KERN_RESOURCE_SHORTAGE;
 			}
@@ -243,7 +251,7 @@ mach_port_space_info(
 		iin->iin_type = IE_BITS_TYPE(bits);
 		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_RIGHTS) != MACH_PORT_TYPE_NONE &&
 		    entry->ie_request != IE_REQ_NONE) {
-			ipc_port_t port = (ipc_port_t) entry->ie_object;
+			__IGNORE_WCASTALIGN(ipc_port_t port = (ipc_port_t) entry->ie_object);
 
 			assert(IP_VALID(port));
 			ip_lock(port);
@@ -252,7 +260,7 @@ mach_port_space_info(
 		}
 
 		iin->iin_urefs = IE_BITS_UREFS(bits);
-		iin->iin_object = (natural_t)VM_KERNEL_ADDRPERM((uintptr_t)entry->ie_object);
+		iin->iin_object = (dbg_ok) ? (natural_t)VM_KERNEL_ADDRPERM((uintptr_t)entry->ie_object) : 0;
 		iin->iin_next = entry->ie_next;
 		iin->iin_hash = entry->ie_index;
 	}
@@ -318,6 +326,7 @@ mach_port_space_basic_info(
 {
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
+
 
 	is_read_lock(space);
 	if (!is_active(space)) {
@@ -464,7 +473,7 @@ mach_port_kobject(
 		return KERN_INVALID_RIGHT;
 	}
 
-	port = (ipc_port_t) entry->ie_object;
+	__IGNORE_WCASTALIGN(port = (ipc_port_t) entry->ie_object);
 	assert(port != IP_NULL);
 
 	ip_lock(port);
@@ -479,20 +488,16 @@ mach_port_kobject(
 	kaddr = (mach_vm_address_t)port->ip_kobject;
 	ip_unlock(port);
 
-#if !(DEVELOPMENT || DEBUG)
-	/* disable this interface on release kernels */
-        *addrp = 0;
-#else
+#if (DEVELOPMENT || DEBUG)
 	if (0 != kaddr && is_ipc_kobject(*typep))
 		*addrp = VM_KERNEL_UNSLIDE_OR_PERM(kaddr);
 	else
-		*addrp = 0;
 #endif
+		*addrp = 0;
 
 	return KERN_SUCCESS;
 }
 #endif /* MACH_IPC_DEBUG */
-
 /*
  *	Routine:	mach_port_kernel_object [Legacy kernel call]
  *	Purpose:

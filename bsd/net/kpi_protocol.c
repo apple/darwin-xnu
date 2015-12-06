@@ -107,11 +107,10 @@ proto_register_input(protocol_family_t protocol, proto_input_handler input,
 	struct domain *dp;
 	domain_guard_t guard;
 
-	entry = _MALLOC(sizeof (*entry), M_IFADDR, M_WAITOK);
+	entry = _MALLOC(sizeof (*entry), M_IFADDR, M_WAITOK | M_ZERO);
 	if (entry == NULL)
 		return (ENOMEM);
 
-	bzero(entry, sizeof (*entry));
 	entry->protocol = protocol;
 	entry->input = input;
 	entry->detached = detached;
@@ -365,13 +364,13 @@ proto_register_plumber(protocol_family_t protocol_family,
 	}
 
 	proto_family = (struct proto_family_str *)
-	    _MALLOC(sizeof (struct proto_family_str), M_IFADDR, M_WAITOK);
+	    _MALLOC(sizeof (struct proto_family_str), M_IFADDR,
+	    M_WAITOK | M_ZERO);
 	if (!proto_family) {
 		lck_mtx_unlock(proto_family_mutex);
 		return (ENOMEM);
 	}
 
-	bzero(proto_family, sizeof (struct proto_family_str));
 	proto_family->proto_family	= protocol_family;
 	proto_family->if_family		= interface_family & 0xffff;
 	proto_family->attach_proto	= attach;

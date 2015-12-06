@@ -545,17 +545,17 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	/*
 	 * Update the Alternate MDB or Alternate VolumeHeader
 	 */
+	VTOC(vp)->c_flag |= C_MODIFIED;
 	if ((VTOC(vp)->c_fileid == kHFSExtentsFileID)	||
 	    (VTOC(vp)->c_fileid == kHFSCatalogFileID)	||
 	    (VTOC(vp)->c_fileid == kHFSAttributesFileID)
 	   ) {
-		VTOC(vp)->c_flag |= C_MODIFIED;
 		MarkVCBDirty( vcb );
-		ret = hfs_flushvolumeheader(VCBTOHFS(vcb), MNT_WAIT, HFS_ALTFLUSH);
+		ret = hfs_flushvolumeheader(VCBTOHFS(vcb), HFS_FVH_WAIT | HFS_FVH_WRITE_ALT);
 	} else {
 		VTOC(vp)->c_touch_chgtime = TRUE;
 		VTOC(vp)->c_touch_modtime = TRUE;
-		(void) hfs_update(vp, TRUE);
+		(void) hfs_update(vp, 0);
 	}
 
 	ret = ClearBTNodes(vp, btInfo.nodeSize, origSize, (filePtr->fcbEOF - origSize));
@@ -889,7 +889,7 @@ again:
 	hfsmp->hfs_attribute_vp = vp;
 	hfs_unlock_mount (hfsmp);
 
-	(void) hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
+	(void) hfs_flushvolumeheader(hfsmp, HFS_FVH_WAIT | HFS_FVH_WRITE_ALT);
 
 	if (intrans) {
 		hfs_end_transaction(hfsmp);

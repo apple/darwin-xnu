@@ -47,6 +47,7 @@ typedef uint32_t csr_op_t;
 #define CSR_ALLOW_DESTRUCTIVE_DTRACE	(1 << 5) /* name deprecated */
 #define CSR_ALLOW_UNRESTRICTED_DTRACE	(1 << 5)
 #define CSR_ALLOW_UNRESTRICTED_NVRAM	(1 << 6)
+#define CSR_ALLOW_DEVICE_CONFIGURATION	(1 << 7)
 
 #define CSR_VALID_FLAGS (CSR_ALLOW_UNTRUSTED_KEXTS | \
                          CSR_ALLOW_UNRESTRICTED_FS | \
@@ -54,15 +55,25 @@ typedef uint32_t csr_op_t;
                          CSR_ALLOW_KERNEL_DEBUGGER | \
                          CSR_ALLOW_APPLE_INTERNAL | \
                          CSR_ALLOW_UNRESTRICTED_DTRACE | \
-                         CSR_ALLOW_UNRESTRICTED_NVRAM)
+                         CSR_ALLOW_UNRESTRICTED_NVRAM | \
+                         CSR_ALLOW_DEVICE_CONFIGURATION)
+
+
+/* CSR capabilities that a booter can give to the system */
+#define CSR_CAPABILITY_UNLIMITED				(1 << 0)
+#define CSR_CAPABILITY_CONFIG					(1 << 1)
+#define CSR_CAPABILITY_APPLE_INTERNAL			(1 << 2)
+
+#define CSR_VALID_CAPABILITIES (CSR_CAPABILITY_UNLIMITED | CSR_CAPABILITY_CONFIG | CSR_CAPABILITY_APPLE_INTERNAL)
 
 #ifdef PRIVATE
 /* Private system call interface between Libsyscall and xnu */
 
 /* Syscall flavors */
-#define CSR_OP_CHECK 0
-#define CSR_OP_GET_ACTIVE_CONFIG 1
-#define CSR_OP_GET_PENDING_CONFIG 2
+enum csr_syscalls {
+	CSR_SYSCALL_CHECK,
+	CSR_SYSCALL_GET_ACTIVE_CONFIG,
+};
 
 #endif /* PRIVATE */
 
@@ -79,7 +90,6 @@ void csr_set_allow_all(int value);
 /* Syscalls */
 int csr_check(csr_config_t mask);
 int csr_get_active_config(csr_config_t *config);
-int csr_get_pending_config(csr_config_t *config);
 
 __END_DECLS
 

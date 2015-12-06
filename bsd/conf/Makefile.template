@@ -99,6 +99,7 @@ OBJS_NO_SIGN_COMPARE =		\
 		ip_input.o	\
 		ip_output.o	\
 		raw_ip.o	\
+		tcp_cache.o	\
 		tcp_input.o	\
 		tcp_output.o	\
 		tcp_subr.o	\
@@ -236,7 +237,9 @@ OBJS_NO_CAST_ALIGN =			\
 		munge.o			\
 		aes.o			\
 		aeskey.o		\
-		sdt_arm.o
+		sdt_arm.o		\
+		uipc_mbuf.o		\
+		kern_guarded.o
 
 $(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
 
@@ -263,9 +266,9 @@ $(SOBJS): .SFLAGS
 
 $(COMPONENT).filelist: $(OBJS) 
 	@echo LDFILELIST $(COMPONENT)
-	$(_v)( for obj in ${OBJS}; do	\
+	$(_v)for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
-	done; ) > $(COMPONENT).filelist
+	done > $(COMPONENT).filelist
 
 MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
 

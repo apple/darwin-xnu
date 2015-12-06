@@ -52,6 +52,8 @@
 
 #define CS_KILLED		0x1000000	/* was killed by kernel for invalidity */
 #define CS_DYLD_PLATFORM	0x2000000	/* dyld used to load this is a platform binary */
+#define CS_PLATFORM_BINARY	0x4000000	/* this is a platform binary */
+#define CS_PLATFORM_PATH	0x8000000	/* platform binary by the fact of path (osx only) */
 
 #define CS_ENTITLEMENT_FLAGS	(CS_GET_TASK_ALLOW | CS_INSTALLER)
 
@@ -73,18 +75,6 @@
 #define CS_OPS_SET_STATUS	9	/* set codesign flags */
 #define CS_OPS_BLOB		10	/* get codesign blob */
 #define CS_OPS_IDENTITY		11	/* get codesign identity */
-
-/* SigPUP */
-#define CS_OPS_SIGPUP_INSTALL	20
-#define CS_OPS_SIGPUP_DROP	21
-#define CS_OPS_SIGPUP_VALIDATE	22
-
-struct sigpup_install_table {
-	uint64_t data;
-	uint64_t length;
-	uint64_t path;
-};
-
 
 /*
  * Magic numbers used by Code Signing
@@ -114,11 +104,20 @@ enum {
 	CSTYPE_INDEX_REQUIREMENTS = 0x00000002,		/* compat with amfi */
 	CSTYPE_INDEX_ENTITLEMENTS = 0x00000005,		/* compat with amfi */
 
-	CS_HASHTYPE_SHA1 = 1
+	CS_HASHTYPE_SHA1 = 1,
+	CS_HASHTYPE_SHA256 = 2,
+	CS_HASHTYPE_SHA256_TRUNCATED = 3,
+
+	CS_SHA1_LEN = 20,
+	CS_SHA256_TRUNCATED_LEN = 20,
+
+	CS_CDHASH_LEN = 20,
+	CS_HASH_MAX_SIZE = 32, /* max size of the hash we'll support */
 };
 
 
 #define KERNEL_HAVE_CS_CODEDIRECTORY 1
+#define KERNEL_CS_CODEDIRECTORY_HAVE_PLATFORM 1
 
 /*
  * C form of a CodeDirectory.
@@ -135,7 +134,7 @@ typedef struct __CodeDirectory {
 	uint32_t codeLimit;				/* limit to main image signature range */
 	uint8_t hashSize;				/* size of each hash in bytes */
 	uint8_t hashType;				/* type of hash (cdHashType* constants) */
-	uint8_t spare1;					/* unused (must be zero) */
+	uint8_t platform;				/* platform identifier; zero if not platform binary */
 	uint8_t	pageSize;				/* log2(page size in bytes); 0 => infinite */
 	uint32_t spare2;				/* unused (must be zero) */
 	/* Version 0x20100 */
@@ -162,6 +161,7 @@ typedef struct __SC_SuperBlob {
 	/* followed by Blobs in no particular order as indicated by offsets in index */
 } CS_SuperBlob;
 
+#define KERNEL_HAVE_CS_GENERICBLOB 1
 typedef struct __SC_GenericBlob {
 	uint32_t magic;				/* magic number */
 	uint32_t length;			/* total length of blob */
@@ -196,49 +196,61 @@ struct vnode;
 struct cs_blob;
 struct fileglob;
 
-struct cscsr_functions  {
-	int		csr_version;
-#define CSCSR_VERSION 1
-	int		(*csr_validate_header)(const uint8_t *, size_t);
-	const void*	(*csr_find_file_codedirectory)(struct vnode *, const uint8_t *, size_t, size_t *);
-};
-
 __BEGIN_DECLS
 int	cs_enforcement(struct proc *);
 int	cs_require_lv(struct proc *);
 uint32_t cs_entitlement_flags(struct proc *p);
 int	cs_entitlements_blob_get(struct proc *, void **, size_t *);
+int	cs_restricted(struct proc *);
 uint8_t * cs_get_cdhash(struct proc *);
-void	cs_register_cscsr(struct cscsr_functions *);
 
-const 	CS_GenericBlob *
-	cs_find_blob(struct cs_blob *, uint32_t, uint32_t);
+struct cs_blob * csproc_get_blob(struct proc *);
+struct cs_blob * csvnode_get_blob(struct vnode *, off_t);
+void		 csvnode_print_debug(struct vnode *);
 
-const 	char * csblob_get_teamid(struct cs_blob *);
+const char *	csblob_get_teamid(struct cs_blob *);
+const char *	csblob_get_identity(struct cs_blob *);
+const uint8_t *	csblob_get_cdhash(struct cs_blob *);
+int		csblob_get_platform_binary(struct cs_blob *);
+unsigned int 	csblob_get_flags(struct cs_blob *blob);
+int		csblob_get_entitlements(struct cs_blob *, void **, size_t *);
+const CS_GenericBlob *
+		csblob_find_blob(struct cs_blob *, uint32_t, uint32_t);
+const CS_GenericBlob *
+		csblob_find_blob_bytes(const uint8_t *, size_t, uint32_t, uint32_t);
+
+/*
+ * Mostly convenience functions below
+ */
+
 const 	char * csproc_get_teamid(struct proc *);
 const 	char * csvnode_get_teamid(struct vnode *, off_t);
 int 	csproc_get_platform_binary(struct proc *);
 const 	char * csfg_get_teamid(struct fileglob *);
 int	csfg_get_path(struct fileglob *, char *, int *);
 int 	csfg_get_platform_binary(struct fileglob *);
+uint8_t * csfg_get_cdhash(struct fileglob *, uint64_t, size_t *);
 
-__END_DECLS
+extern int cs_debug;
 
 #ifdef XNU_KERNEL_PRIVATE
 
 void	cs_init(void);
 int	cs_allow_invalid(struct proc *);
 int	cs_invalid_page(addr64_t);
-int	sigpup_install(user_addr_t);
-int	sigpup_drop(void);
+int	csproc_get_platform_path(struct proc *);
 
-extern int cs_debug;
 extern int cs_validation;
 #if !SECURE_KERNEL
 extern int cs_enforcement_panic;
 #endif
 
 #endif /* XNU_KERNEL_PRIVATE */
+
+
+__END_DECLS
+
+
 
 #endif /* KERNEL */
 

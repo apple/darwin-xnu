@@ -33,3 +33,4 @@ security/mac_inet.c					optional config_macf_net
 security/mac_priv.c					optional config_macf
 security/mac_pty.c					optional config_macf
 security/mac_kext.c					optional config_macf
+security/mac_mach.c					optional config_macf

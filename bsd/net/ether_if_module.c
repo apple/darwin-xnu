@@ -550,7 +550,7 @@ ether_frameout_extended(struct ifnet *ifp, struct mbuf **m,
 	 * Add local net header.  If no space in first mbuf,
 	 * allocate another.
 	 */
-	M_PREPEND(*m, sizeof (struct ether_header), M_DONTWAIT);
+	M_PREPEND(*m, sizeof (struct ether_header), M_DONTWAIT, 0);
 	if (*m == NULL)
 		return (EJUSTRETURN);
 

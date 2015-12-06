@@ -64,6 +64,7 @@ MACRO_BEGIN							\
 	(entry)->param0		= (call_entry_param_t)(p0);	\
 	(entry)->queue		= NULL;				\
 	(entry)->deadline	= 0;				\
+	queue_chain_init((entry)->q_link);			\
 MACRO_END
 
 #define qe(x)		((queue_entry_t)(x))

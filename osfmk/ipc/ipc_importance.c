@@ -519,7 +519,7 @@ ipc_importance_task_check_transition(
 		return FALSE;
 
 #if IMPORTANCE_DEBUG
-	int target_pid = (TASK_NULL != target_task) ? audit_token_pid_from_task(target_task) : -1;
+	int target_pid = task_pid(target_task);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, (((boost) ? IMP_HOLD : IMP_DROP) | TASK_POLICY_INTERNAL))) | DBG_FUNC_START,
 					  proc_selfpid(), target_pid, task_imp->iit_assertcnt, IIT_EXTERN(task_imp), 0);
@@ -542,7 +542,7 @@ ipc_importance_task_check_transition(
 			if (target_task != TASK_NULL) {
 				printf("Over-release of kernel-internal importance assertions for pid %d (%s), "
 				       "dropping %d assertion(s) but task only has %d remaining (%d external).\n",
-				       audit_token_pid_from_task(target_task),
+				       task_pid(target_task),
 				       (target_task->bsd_info == NULL) ? "" : proc_name_address(target_task->bsd_info),
 				       delta,
 				       task_imp->iit_assertcnt,
@@ -1039,19 +1039,31 @@ ipc_importance_task_propagate_assertion_locked(
 		temp_task_imp->iit_updatepolicy = 0;
 		if (need_update && TASK_NULL != temp_task_imp->iit_task) {
 			if (NULL == temp_task_imp->iit_updateq) {
-				temp_task_imp->iit_updatetime = 0;
-				temp_task_imp->iit_updateq = &updates;
-				ipc_importance_task_reference_internal(temp_task_imp);
-				if (boost) {
-					queue_enter(&updates, temp_task_imp,
-						    ipc_importance_task_t, iit_updates);
+
+				/*
+				 * If a downstream task that needs an update is subjects to AppNap,
+				 * drop boosts according to the delay hysteresis.  Otherwise,
+				 * immediate update it.
+				 */
+				if (!boost && temp_task_imp != task_imp &&
+				    ipc_importance_delayed_drop_call != NULL &&
+				    ipc_importance_task_is_marked_denap_receiver(temp_task_imp)) {
+					ipc_importance_task_delayed_drop(temp_task_imp);
 				} else {
-					queue_enter_first(&updates, temp_task_imp,
-							  ipc_importance_task_t, iit_updates);
+					temp_task_imp->iit_updatetime = 0;
+					temp_task_imp->iit_updateq = &updates;
+					ipc_importance_task_reference_internal(temp_task_imp);
+					if (boost) {
+						queue_enter(&updates, temp_task_imp,
+							    ipc_importance_task_t, iit_updates);
+					} else {
+						queue_enter_first(&updates, temp_task_imp,
+								  ipc_importance_task_t, iit_updates);
+					}
 				}
 			} else {
 				/* Must already be on the AppNap hysteresis queue */
-				assert(&ipc_importance_delayed_drop_queue);
+				assert(ipc_importance_delayed_drop_call != NULL);
 				assert(ipc_importance_task_is_marked_denap_receiver(temp_task_imp));
 			}	
 		}
@@ -1242,7 +1254,7 @@ ipc_importance_task_hold_legacy_external_assertion(ipc_importance_task_t task_im
 	target_task = task_imp->iit_task;
 
 #if IMPORTANCE_DEBUG
-	int target_pid = (TASK_NULL != target_task) ? audit_token_pid_from_task(target_task) : -1;
+	int target_pid = task_pid(target_task);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, (IMP_HOLD | TASK_POLICY_EXTERNAL))) | DBG_FUNC_START,
 		proc_selfpid(), target_pid, task_imp->iit_assertcnt, IIT_LEGACY_EXTERN(task_imp), 0);
@@ -1278,7 +1290,7 @@ ipc_importance_task_hold_legacy_external_assertion(ipc_importance_task_t task_im
 		printf("BUG in process %s[%d]: "
 		       "attempt to acquire an additional legacy external boost assertion without holding an existing legacy external assertion. "
 		       "(%d total, %d external, %d legacy-external)\n",
-		       proc_name_address(target_task->bsd_info), audit_token_pid_from_task(target_task),
+		       proc_name_address(target_task->bsd_info), task_pid(target_task),
 		       target_assertcnt, target_externcnt, target_legacycnt);
 	}
 
@@ -1316,7 +1328,7 @@ ipc_importance_task_drop_legacy_external_assertion(ipc_importance_task_t task_im
 	target_task = task_imp->iit_task;
 
 #if IMPORTANCE_DEBUG
-	int target_pid = (TASK_NULL != target_task) ? audit_token_pid_from_task(target_task) : -1;
+	int target_pid = task_pid(target_task);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, (IMP_DROP | TASK_POLICY_EXTERNAL))) | DBG_FUNC_START,
 		proc_selfpid(), target_pid, task_imp->iit_assertcnt, IIT_LEGACY_EXTERN(task_imp), 0);
@@ -1370,7 +1382,7 @@ ipc_importance_task_drop_legacy_external_assertion(ipc_importance_task_t task_im
 	/* delayed printf for user-supplied data failures */
 	if (KERN_FAILURE == ret && TASK_NULL != target_task) {
 		printf("BUG in process %s[%d]: over-released legacy external boost assertions (%d total, %d external, %d legacy-external)\n",
-		       proc_name_address(target_task->bsd_info), audit_token_pid_from_task(target_task),
+		       proc_name_address(target_task->bsd_info), task_pid(target_task),
 		       target_assertcnt, target_externcnt, target_legacycnt);
 	}
 
@@ -1394,7 +1406,7 @@ ipc_importance_task_externalize_legacy_assertion(ipc_importance_task_t task_imp,
 	}
 
 #if IMPORTANCE_DEBUG
-	int target_pid = audit_token_pid_from_task(target_task);
+	int target_pid = task_pid(target_task);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_ASSERTION, IMP_EXTERN)) | DBG_FUNC_START,
 	        proc_selfpid(), target_pid, task_imp->iit_assertcnt, IIT_EXTERN(task_imp), 0);
@@ -1458,7 +1470,7 @@ ipc_importance_task_update_live_donor(ipc_importance_task_t task_imp)
 	task_live_donor = target_task->effective_policy.t_live_donor;
 
 #if IMPORTANCE_DEBUG
-	int target_pid = audit_token_pid_from_task(target_task);
+	int target_pid = task_pid(target_task);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	                          (IMPORTANCE_CODE(IMP_DONOR_CHANGE, IMP_DONOR_UPDATE_LIVE_DONOR_STATE)) | DBG_FUNC_START,
@@ -1520,7 +1532,7 @@ ipc_importance_task_mark_donor(ipc_importance_task_t task_imp, boolean_t donatin
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	                          (IMPORTANCE_CODE(IMP_DONOR_CHANGE, IMP_DONOR_INIT_DONOR_STATE)) | DBG_FUNC_NONE,
-	                          audit_token_pid_from_task(task_imp->iit_task), donating,
+	                          task_pid(task_imp->iit_task), donating,
 	                          old_donor, task_imp->iit_donor, 0);
 	
 	ipc_importance_unlock();
@@ -1901,7 +1913,7 @@ void task_importance_update_owner_info(task_t task) {
 	if (task != TASK_NULL && task->task_imp_base != IIT_NULL) {
 		ipc_importance_task_t task_elem = task->task_imp_base;
 
-		task_elem->iit_bsd_pid = audit_token_pid_from_task(task);
+		task_elem->iit_bsd_pid = task_pid(task);
 		if (task->bsd_info) {
 			strncpy(&task_elem->iit_procname[0], proc_name_address(task->bsd_info), 16);
 			task_elem->iit_procname[16] = '\0';
@@ -2174,7 +2186,7 @@ ipc_importance_send(
 		unsigned int sender_pid = dbgtrailer->msgh_audit.val[5];
 		mach_msg_id_t imp_msgh_id = kmsg->ikm_header->msgh_id;
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_MSG, IMP_MSG_SEND)) | DBG_FUNC_START,
-		                           audit_token_pid_from_task(task), sender_pid, imp_msgh_id, 0, 0);
+		                           task_pid(task), sender_pid, imp_msgh_id, 0, 0);
 	}
 #endif /* IMPORTANCE_DEBUG */
 
@@ -2526,29 +2538,36 @@ ipc_importance_receive(
 
 		assert(IIE_NULL == kmsg->ikm_importance);
 
-		/* replace the importance attribute with the handle we created */
-		/*  our made reference on the inhert is donated to the voucher */
-		recipe = (ipc_voucher_attr_recipe_t)&recipes[recipe_size];
-		recipe->key = MACH_VOUCHER_ATTR_KEY_IMPORTANCE;
-		recipe->command = MACH_VOUCHER_ATTR_SET_VALUE_HANDLE;
-		recipe->previous_voucher = IPC_VOUCHER_NULL;
-		recipe->content_size = sizeof(mach_voucher_attr_value_handle_t);
-		*(mach_voucher_attr_value_handle_t *)(void *)recipe->content = handle;
-		recipe_size += sizeof(*recipe) + sizeof(mach_voucher_attr_value_handle_t);
+		/*
+		 * Only create a new voucher if we have an inherit object
+		 * (from the ikm_importance field of the incoming message), OR
+		 * we have a valid incoming voucher. If we have neither of
+		 * these things then there is no need to create a new voucher.
+		 */
+		if (IP_VALID(kmsg->ikm_voucher) || inherit != III_NULL) {
+			/* replace the importance attribute with the handle we created */
+			/*  our made reference on the inherit is donated to the voucher */
+			recipe = (ipc_voucher_attr_recipe_t)&recipes[recipe_size];
+			recipe->key = MACH_VOUCHER_ATTR_KEY_IMPORTANCE;
+			recipe->command = MACH_VOUCHER_ATTR_SET_VALUE_HANDLE;
+			recipe->previous_voucher = IPC_VOUCHER_NULL;
+			recipe->content_size = sizeof(mach_voucher_attr_value_handle_t);
+			*(mach_voucher_attr_value_handle_t *)(void *)recipe->content = handle;
+			recipe_size += sizeof(*recipe) + sizeof(mach_voucher_attr_value_handle_t);
 
-		kr = ipc_voucher_attr_control_create_mach_voucher(ipc_importance_control,
-								  recipes,
-								  recipe_size,
-								  &recv_voucher);
-		assert(KERN_SUCCESS == kr);
+			kr = ipc_voucher_attr_control_create_mach_voucher(ipc_importance_control,
+									  recipes,
+									  recipe_size,
+									  &recv_voucher);
+			assert(KERN_SUCCESS == kr);
 
-		/* swap the voucher port (and set voucher bits in case it didn't already exist) */
-		kmsg->ikm_header->msgh_bits |= (MACH_MSG_TYPE_MOVE_SEND << 16);
-		ipc_port_release_send(kmsg->ikm_voucher);
-		kmsg->ikm_voucher = convert_voucher_to_port(recv_voucher);
-		if (III_NULL != inherit)
-			impresult = 2;
-
+			/* swap the voucher port (and set voucher bits in case it didn't already exist) */
+			kmsg->ikm_header->msgh_bits |= (MACH_MSG_TYPE_MOVE_SEND << 16);
+			ipc_port_release_send(kmsg->ikm_voucher);
+			kmsg->ikm_voucher = convert_voucher_to_port(recv_voucher);
+			if (III_NULL != inherit)
+				impresult = 2;
+		}
 	} else { /* Don't want a voucher */
 
 		/* got linked importance? have to drop */
@@ -2588,7 +2607,7 @@ ipc_importance_receive(
 #if IMPORTANCE_DEBUG
 	if (-1 < impresult)
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_MSG, IMP_MSG_DELV)) | DBG_FUNC_NONE,
-				sender_pid, audit_token_pid_from_task(task_self),
+				sender_pid, task_pid(task_self),
 				kmsg->ikm_header->msgh_id, impresult, 0);
 	if (impresult == 2){
 		/*
@@ -2596,7 +2615,7 @@ ipc_importance_receive(
 		 * will trigger the probe in ipc_importance_task_externalize_assertion() 
 		 * above and have impresult==1 here.
 		 */
-		DTRACE_BOOST5(receive_boost, task_t, task_self, int, audit_token_pid_from_task(task_self), int, sender_pid, int, 1, int, task_self->task_imp_base->iit_assertcnt);
+		DTRACE_BOOST5(receive_boost, task_t, task_self, int, task_pid(task_self), int, sender_pid, int, 1, int, task_self->task_imp_base->iit_assertcnt);
     }
 #endif /* IMPORTANCE_DEBUG */
 }
@@ -2939,22 +2958,22 @@ ipc_importance_extract_content(
 			ipc_importance_inherit_t inherit = III_NULL;
 			ipc_importance_task_t task_imp;
 			task_t task;
-			int task_pid;
+			int t_pid;
 
 			if (IIE_TYPE_TASK == IIE_TYPE(elem)) {
 				task_imp = (ipc_importance_task_t)elem;
 				task = task_imp->iit_task;
-				task_pid = (TASK_NULL != task) ?
-				           audit_token_pid_from_task(task) : -1;
-				snprintf((char *)out_content + size, *in_out_content_size - size, "%d", task_pid);
+				t_pid = (TASK_NULL != task) ?
+				           task_pid(task) : -1;
+				snprintf((char *)out_content + size, *in_out_content_size - size, "%d", t_pid);
 			} else {
 				inherit = (ipc_importance_inherit_t)elem;
 				task_imp = inherit->iii_to_task;
 				task = task_imp->iit_task;
-				task_pid = (TASK_NULL != task) ?
-				           audit_token_pid_from_task(task) : -1;
+				t_pid = (TASK_NULL != task) ?
+				           task_pid(task) : -1;
 				snprintf((char *)out_content + size, *in_out_content_size - size, 
-					 "%d (%d of %d boosts) %s from pid ", task_pid,
+					 "%d (%d of %d boosts) %s from pid ", t_pid,
 					 III_EXTERN(inherit), inherit->iii_externcnt, 
 					 (inherit->iii_donating) ? "donated" : "linked");
 			}
@@ -3037,14 +3056,20 @@ ipc_importance_command(
 		return KERN_SUCCESS;
 	}
 
+	to_task = inherit->iii_to_task;
+	assert(ipc_importance_task_is_any_receiver_type(to_task));
+
+	/* if not donating to a denap receiver, it was called incorrectly */
+	if (!ipc_importance_task_is_marked_denap_receiver(to_task)) {
+		ipc_importance_unlock();
+		return KERN_INVALID_ARGUMENT; /* keeps dispatch happy */
+	}
+
 	/* Enough external references left to drop? */
 	if (III_EXTERN(inherit) < refs) {
 		ipc_importance_unlock();
 		return KERN_FAILURE;
 	}
-
-	to_task = inherit->iii_to_task;
-	assert(ipc_importance_task_is_any_receiver_type(to_task));
 
 	/* re-base external and internal counters at the inherit and the to-task (if apropos) */
 	if (inherit->iii_donating) {
@@ -3185,9 +3210,9 @@ ipc_importance_thread_call_init(void)
  *             Will panic the system otherwise.
  */
 extern int
-task_importance_list_pids(task_t task, int flags, int *pid_list, unsigned int max_count)
+task_importance_list_pids(task_t task, int flags, char *pid_list, unsigned int max_count)
 {
-	if (lck_spin_is_acquired(&ipc_importance_lock_data) ||
+	if (kdp_lck_spin_is_acquired(&ipc_importance_lock_data) ||
 	      max_count < 1 ||
 	      task->task_imp_base == IIT_NULL ||
 	      pid_list == NULL ||
@@ -3200,12 +3225,13 @@ task_importance_list_pids(task_t task, int flags, int *pid_list, unsigned int ma
 	ipc_kmsg_t temp_kmsg;
 	ipc_importance_inherit_t temp_inherit;
 	ipc_importance_elem_t elem;
-	int target_pid;
+	int target_pid = 0, previous_pid;
 
 	queue_iterate(&task_imp->iit_inherits, temp_inherit, ipc_importance_inherit_t, iii_inheritance) {
 		/* check space in buffer */
 		if (pidcount >= max_count) 
 			break;
+		previous_pid = target_pid;
 		target_pid = -1;
 
 		if (temp_inherit->iii_donating) {
@@ -3215,20 +3241,24 @@ task_importance_list_pids(task_t task, int flags, int *pid_list, unsigned int ma
 #else
 			temp_task = temp_inherit->iii_to_task->iit_task;
 			if (temp_task != TASK_NULL) {
-				target_pid = audit_token_pid_from_task(temp_task);
+				target_pid = task_pid(temp_task);
 			}
 #endif
 		}
 
-		if (target_pid != -1) {
-			pid_list[pidcount++] = target_pid;
+		if (target_pid != -1 && previous_pid != target_pid) {
+			memcpy(pid_list, &target_pid, sizeof(target_pid));
+			pid_list += sizeof(target_pid);
+			pidcount++;
 		}
 
 	}
 
+	target_pid = 0;
 	queue_iterate(&task_imp->iit_kmsgs, temp_kmsg, ipc_kmsg_t, ikm_inheritance) {
 		if (pidcount >= max_count)
 			break;
+		previous_pid = target_pid;
 		target_pid = -1;
 		elem = temp_kmsg->ikm_importance;
 		temp_task = TASK_NULL;
@@ -3243,7 +3273,7 @@ task_importance_list_pids(task_t task, int flags, int *pid_list, unsigned int ma
 
 		if (IIE_TYPE_TASK == IIE_TYPE(elem) && 
 			(((ipc_importance_task_t)elem)->iit_task != TASK_NULL)) {
-			target_pid = audit_token_pid_from_task(((ipc_importance_task_t)elem)->iit_task);
+			target_pid = task_pid(((ipc_importance_task_t)elem)->iit_task);
 		} else {
 			temp_inherit = (ipc_importance_inherit_t)elem;
 #if DEVELOPMENT || DEBUG
@@ -3251,13 +3281,15 @@ task_importance_list_pids(task_t task, int flags, int *pid_list, unsigned int ma
 #else
 			temp_task = temp_inherit->iii_to_task->iit_task;
 			if (temp_task != TASK_NULL) {
-				target_pid = audit_token_pid_from_task(temp_task);
+				target_pid = task_pid(temp_task);
 			}
 #endif
 		}
 
-		if (target_pid != -1) {
-			pid_list[pidcount++] = target_pid;
+		if (target_pid != -1 && previous_pid != target_pid) {
+			memcpy(pid_list, &target_pid, sizeof(target_pid));
+			pid_list += sizeof(target_pid);
+			pidcount++;
 		}
 	}
 

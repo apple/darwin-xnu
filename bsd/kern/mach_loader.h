@@ -64,6 +64,7 @@ typedef struct _load_result {
 				prog_allocated_stack	:1,
 				prog_stack_size : 1,    
 				validentry	:1,
+				has_pagezero    :1,
 				using_lcmain	:1,
 						:0;
 	unsigned int		csflags;

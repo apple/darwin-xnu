@@ -92,15 +92,8 @@ const qos_policy_params_t thread_qos_policy_params = {
 	.qos_latency_qos[THREAD_QOS_MAINTENANCE]        = QOS_EXTRACT(LATENCY_QOS_TIER_3),
 };
 
-void
-thread_recompute_qos(thread_t thread);
-
 static void
-thread_recompute_priority(
-	thread_t		thread);
-
-static void
-thread_set_user_sched_mode(thread_t thread, sched_mode_t mode);
+thread_set_user_sched_mode_and_recompute_pri(thread_t thread, sched_mode_t mode);
 
 static int
 thread_qos_scaled_relative_priority(int qos, int qos_relprio);
@@ -276,13 +269,7 @@ thread_policy_set_internal(
 		s = splsched();
 		thread_lock(thread);
 
-		boolean_t removed = thread_run_queue_remove(thread);
-
-		thread_set_user_sched_mode(thread, mode);
-		thread_recompute_priority(thread);
-
-		if (removed)
-			thread_setrun(thread, SCHED_TAILQ);
+		thread_set_user_sched_mode_and_recompute_pri(thread, mode);
 
 		thread_unlock(thread);
 		splx(s);
@@ -312,23 +299,17 @@ thread_policy_set_internal(
 		s = splsched();
 		thread_lock(thread);
 
-		boolean_t removed = thread_run_queue_remove(thread);
-
 		thread->realtime.period = info->period;
 		thread->realtime.computation = info->computation;
 		thread->realtime.constraint = info->constraint;
 		thread->realtime.preemptible = info->preemptible;
 
-		thread_set_user_sched_mode(thread, TH_MODE_REALTIME);
-		thread_recompute_priority(thread);
-
-		if (removed)
-			thread_setrun(thread, SCHED_TAILQ);
+		thread_set_user_sched_mode_and_recompute_pri(thread, TH_MODE_REALTIME);
 
 		thread_unlock(thread);
 		splx(s);
 
-		sfi_reevaluate(thread);		
+		sfi_reevaluate(thread);
 
 		break;
 	}
@@ -579,14 +560,7 @@ thread_set_mode_and_absolute_pri(
 
 		thread->importance = priority - thread->task_priority;
 
-		boolean_t removed = thread_run_queue_remove(thread);
-
-		thread_set_user_sched_mode(thread, mode);
-
-		thread_recompute_priority(thread);
-
-		if (removed)
-			thread_setrun(thread, SCHED_TAILQ);
+		thread_set_user_sched_mode_and_recompute_pri(thread, mode);
 	}
 
 	thread_unlock(thread);
@@ -598,14 +572,20 @@ thread_set_mode_and_absolute_pri(
 }
 
 /*
- * Set the thread's requested mode
+ * Set the thread's requested mode and recompute priority
  * Called with thread mutex and thread locked
+ *
+ * TODO: Mitigate potential problems caused by moving thread to end of runq
+ * whenever its priority is recomputed
+ *      Only remove when it actually changes? Attempt to re-insert at appropriate location?
  */
 static void
-thread_set_user_sched_mode(thread_t thread, sched_mode_t mode)
+thread_set_user_sched_mode_and_recompute_pri(thread_t thread, sched_mode_t mode)
 {
 	if (thread->policy_reset)
 		return;
+
+	boolean_t removed = thread_run_queue_remove(thread);
 
 	/*
 	 * TODO: Instead of having saved mode, have 'user mode' and 'true mode'.
@@ -616,6 +596,11 @@ thread_set_user_sched_mode(thread_t thread, sched_mode_t mode)
 		thread->saved_mode = mode;
 	else
 		sched_set_thread_mode(thread, mode);
+
+	thread_recompute_priority(thread);
+
+	if (removed)
+		thread_run_queue_reinsert(thread, SCHED_TAILQ);
 }
 
 /* called with task lock locked */
@@ -778,7 +763,7 @@ out:
  *
  * Called with thread_lock and thread mutex held.
  */
-static void
+void
 thread_recompute_priority(
 	thread_t		thread)
 {
@@ -817,6 +802,14 @@ thread_recompute_priority(
 			priority = thread->importance;
 
 		priority += thread->task_priority;
+	}
+
+	if (thread->saved_mode == TH_MODE_REALTIME &&
+	    thread->sched_flags & TH_SFLAG_FAILSAFE)
+		priority = DEPRESSPRI;
+
+	if (thread->effective_policy.terminated == TRUE && priority < thread->task_priority) {
+		priority = thread->task_priority;
 	}
 
 	if (priority > thread->max_priority)
@@ -1175,4 +1168,43 @@ thread_policy_get(
 	thread_mtx_unlock(thread);
 
 	return (result);
+}
+
+static volatile uint64_t unique_work_interval_id = 1; /* Start at 1, 0 is not a valid work interval ID */
+
+kern_return_t
+thread_policy_create_work_interval(
+	thread_t		thread,
+	uint64_t		*work_interval_id)
+{
+	thread_mtx_lock(thread);
+	if (thread->work_interval_id) {
+		/* already assigned a work interval ID */
+		thread_mtx_unlock(thread);
+		return (KERN_INVALID_VALUE);
+	}
+
+	thread->work_interval_id = OSIncrementAtomic64((volatile int64_t *)&unique_work_interval_id);
+	*work_interval_id = thread->work_interval_id;
+
+	thread_mtx_unlock(thread);
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+thread_policy_destroy_work_interval(
+	thread_t		thread,
+	uint64_t		work_interval_id)
+{
+	thread_mtx_lock(thread);
+	if (work_interval_id == 0 || thread->work_interval_id == 0 || thread->work_interval_id != work_interval_id) {
+		/* work ID isn't valid or doesn't match previously assigned work interval ID */
+		thread_mtx_unlock(thread);
+		return (KERN_INVALID_ARGUMENT);
+	}
+
+	thread->work_interval_id = 0;
+
+	thread_mtx_unlock(thread);
+	return KERN_SUCCESS;
 }

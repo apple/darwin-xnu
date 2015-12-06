@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -59,12 +59,13 @@
 #define _NETINET6_SCOPE6_VAR_H_
 #include <sys/appleapiopts.h>
 
-#ifdef BSD_KERNEL_PRIVATE
 /*
  * 16 is correspondent to 4bit multicast scope field.
  * i.e. from node-local to global with some reserved/unassigned types.
  */
-#define	SCOPE6_ID_MAX	16
+#define	SCOPE6_ID_MAX   16
+
+#ifdef BSD_KERNEL_PRIVATE
 
 struct scope6_id {
 	u_int32_t s6id_list[SCOPE6_ID_MAX];

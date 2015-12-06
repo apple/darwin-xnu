@@ -137,6 +137,7 @@ struct mount {
 	pending_io_t	mnt_pending_read_size  __attribute__((aligned(sizeof(pending_io_t))));	/* byte count of pending reads */
 	struct timeval	mnt_last_write_issued_timestamp;
 	struct timeval	mnt_last_write_completed_timestamp;
+	int64_t		mnt_max_swappin_available;
 	
 	lck_rw_t	mnt_rwlock;		/* mutex readwrite lock */
 	lck_mtx_t	mnt_renamelock;		/* mutex that serializes renames that change shape of tree */
@@ -206,6 +207,8 @@ struct mount {
 #define MNT_IOFLAGS_UNMAP_SUPPORTED	0x00000002
 #define MNT_IOFLAGS_IOSCHED_SUPPORTED	0x00000004
 #define MNT_IOFLAGS_CSUNMAP_SUPPORTED	0x00000008
+#define MNT_IOFLAGS_SWAPPIN_SUPPORTED	0x00000010
+#define MNT_IOFLAGS_FUSION_DRIVE	0x00000020
 
 /*
  * ioqueue depth for devices that don't report one
@@ -413,6 +416,7 @@ struct user32_statfs {
 
 __BEGIN_DECLS
 
+extern boolean_t root_is_CF_drive;
 extern uint32_t mount_generation;
 extern TAILQ_HEAD(mntlist, mount) mountlist;
 void mount_list_lock(void);

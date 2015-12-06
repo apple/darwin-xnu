@@ -101,6 +101,7 @@ struct radix_node {
 	struct radix_node *rn_twin;
 	struct radix_node *rn_ybro;
 #endif
+
 };
 
 #define	rn_dupedkey	rn_u.rn_leaf.rn_Dupedkey

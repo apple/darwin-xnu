@@ -108,6 +108,7 @@
 
 #include <kern/assert.h>
 #include <sys/resource.h>
+#include <IOKit/IOBSD.h>
 
 int	donice(struct proc *curp, struct proc *chgp, int n);
 int	dosetrlimit(struct proc *p, u_int which, struct rlimit *limp);
@@ -611,23 +612,8 @@ proc_set_darwin_role(proc_t curp, proc_t targetp, int priority)
 
 	integer_t role = 0;
 
-	switch (priority) {
-		case PRIO_DARWIN_ROLE_DEFAULT:
-			role = TASK_UNSPECIFIED;
-			break;
-		case PRIO_DARWIN_ROLE_UI_FOCAL:
-			role = TASK_FOREGROUND_APPLICATION;
-			break;
-		case PRIO_DARWIN_ROLE_UI:
-			role = TASK_BACKGROUND_APPLICATION;
-			break;
-		case PRIO_DARWIN_ROLE_NON_UI:
-			role = TASK_NONUI_APPLICATION;
-			break;
-		default:
-			error = EINVAL;
-			goto out;
-	}
+	if ((error = proc_darwin_role_to_task_role(priority, &role)))
+		goto out;
 
 	proc_set_task_policy(proc_task(targetp), THREAD_NULL,
 	                     TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE, role);
@@ -665,21 +651,7 @@ proc_get_darwin_role(proc_t curp, proc_t targetp, int *priority)
 	role = proc_get_task_policy(proc_task(targetp), THREAD_NULL,
 	                            TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE);
 
-	switch (role) {
-		case TASK_FOREGROUND_APPLICATION:
-			*priority = PRIO_DARWIN_ROLE_UI_FOCAL;
-			break;
-		case TASK_BACKGROUND_APPLICATION:
-			*priority = PRIO_DARWIN_ROLE_UI;
-			break;
-		case TASK_NONUI_APPLICATION:
-			*priority = PRIO_DARWIN_ROLE_NON_UI;
-			break;
-		case TASK_UNSPECIFIED:
-		default:
-			*priority = PRIO_DARWIN_ROLE_DEFAULT;
-			break;
-	}
+	*priority = proc_task_role_to_darwin_role(role);
 
 out:
 	kauth_cred_unref(&target_cred);
@@ -1632,8 +1604,13 @@ iopolicysys_vfs(struct proc *p, int cmd, int scope, int policy, struct _iopol_pa
 	switch(cmd) {
 		case IOPOL_CMD_SET:
 			if (0 == kauth_cred_issuser(kauth_cred_get())) {
-				error = EPERM;
-				goto out;
+				/* If it's a non-root process, it needs to have the entitlement to set the policy */
+				boolean_t entitled = FALSE;
+				entitled = IOTaskHasEntitlement(current_task(), "com.apple.private.iopol.case_sensitivity");
+				if (!entitled) {
+					error = EPERM;
+					goto out;
+				}
 			}
 
 			switch (policy) {

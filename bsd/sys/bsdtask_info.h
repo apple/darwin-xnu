@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005, 2015 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -29,6 +29,8 @@
 
 #ifndef _SYS_BSDTASK_INFO_H
 #define _SYS_BSDTASK_INFO_H
+
+#include <vm/vm_map.h>
 
 struct proc_taskinfo_internal {          
         uint64_t                pti_virtual_size;   /* virtual memory size (bytes) */

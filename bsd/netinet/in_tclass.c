@@ -80,6 +80,7 @@ static int flush_pid_tclass(struct so_tcdbg *);
 static int purge_tclass_for_proc(void);
 static int flush_tclass_for_proc(void);
 int get_tclass_for_curr_proc(int *);
+static inline int so_throttle_best_effort(struct socket* ,struct ifnet *);
 
 static lck_grp_attr_t *tclass_lck_grp_attr = NULL; /* mutex group attributes */
 static lck_grp_t *tclass_lck_grp = NULL;	/* mutex group definition */
@@ -92,7 +93,7 @@ static lck_mtx_t *tclass_lock = &tclass_lock_data;
  * seconds, the background connections can switch to foreground TCP
  * congestion control.
  */ 
-#define TCP_BG_SWITCH_TIME 2
+#define TCP_BG_SWITCH_TIME 2 /* seconds */
 
 /*
  * Must be called with tclass_lock held
@@ -787,6 +788,17 @@ so_inc_recv_data_stat(struct socket *so, size_t pkts, size_t bytes, uint32_t tc)
 	so->so_tc_stats[tc].rxpackets += pkts;
 	so->so_tc_stats[tc].rxbytes +=bytes;
 }
+
+static inline int
+so_throttle_best_effort(struct socket *so, struct ifnet *ifp)
+{
+	u_int32_t uptime = net_uptime();
+	return (soissrcbesteffort(so) &&
+	    net_io_policy_throttle_best_effort == 1 &&
+	    ifp->if_rt_sendts > 0 &&
+	    (int)(uptime - ifp->if_rt_sendts) <= TCP_BG_SWITCH_TIME);
+}
+ 
 __private_extern__ void
 set_tcp_stream_priority(struct socket *so)
 {
@@ -795,7 +807,7 @@ set_tcp_stream_priority(struct socket *so)
 	struct ifnet *outifp;
 	u_char old_cc = tp->tcp_cc_index;
 	int recvbg = IS_TCP_RECV_BG(so);
-	bool is_local, fg_active = false;
+	bool is_local = false, fg_active = false;
 	u_int32_t uptime;
 
 	VERIFY((SOCK_CHECK_DOM(so, PF_INET) 
@@ -817,20 +829,42 @@ set_tcp_stream_priority(struct socket *so)
 	 * background. The variable sotcdb which can be set with sysctl
 	 * is used to disable these settings for testing.
 	 */
-	if (soissrcbackground(so)) {
-		if (outifp == NULL || (outifp->if_flags & IFF_LOOPBACK))
-			is_local = true;
-		else
-			is_local = false;
+	if (outifp == NULL || (outifp->if_flags & IFF_LOOPBACK))
+		is_local = true;
 
-		/* Check if there has been recent foreground activity */
-		if ((outifp != NULL &&
-		    outifp->if_fg_sendts > 0 &&
+	/* Check if there has been recent foreground activity */
+	if (outifp != NULL) {
+		/*
+		 * If the traffic source is background, check if
+		 * if it can be switched to foreground. This can 
+		 * happen when there is no indication of foreground
+		 * activity.
+		 */
+		if (soissrcbackground(so) && 
+		    ((outifp->if_fg_sendts > 0 &&
 		    (int)(uptime - outifp->if_fg_sendts) <= 
-		    TCP_BG_SWITCH_TIME) ||
-		    net_io_policy_throttled)
+		    TCP_BG_SWITCH_TIME) || net_io_policy_throttled))
 			fg_active = true;
 
+		/*
+		 * The traffic source is best-effort -- check if
+		 * the policy to throttle best effort is enabled
+		 * and there was realtime activity on this
+		 * interface recently. If this is true, enable
+		 * algorithms that respond to increased latency
+		 * on best-effort traffic.
+		 */ 
+		if (so_throttle_best_effort(so, outifp))
+			fg_active = true;
+	}
+
+	/*
+	 * System initiated background traffic like cloud uploads should
+	 * always use background delay sensitive algorithms. This will
+	 * make the stream more responsive to other streams on the user's
+	 * network and it will minimize latency induced.
+	 */
+	if (fg_active || IS_SO_TC_BACKGROUNDSYSTEM(so->so_traffic_class)) {
 		/*
 		 * If the interface that the connection is using is
 		 * loopback, do not use background congestion
@@ -842,18 +876,9 @@ set_tcp_stream_priority(struct socket *so)
 		 * switch the backgroung streams to use background 
 		 * congestion control algorithm. Otherwise, even background
 		 * flows can move into foreground.
-		 *
-		 * System initiated background traffic like cloud uploads
-		 * should always use background delay sensitive
-		 * algorithms. This will make the stream more resposive to
-		 * other streams on the user's network and it will
-		 * minimize the latency induced.
 		 */
-		if (IS_SO_TC_BACKGROUNDSYSTEM(so->so_traffic_class))
-			fg_active = true;
-
-		if ((sotcdb & SOTCDB_NO_SENDTCPBG) != 0 ||
-			is_local || !fg_active) {
+		if ((sotcdb & SOTCDB_NO_SENDTCPBG) != 0 || is_local ||
+		    !IS_SO_TC_BACKGROUNDSYSTEM(so->so_traffic_class)) {
 			if (old_cc == TCP_CC_ALGO_BACKGROUND_INDEX)
 				tcp_set_foreground_cc(so);
 		} else {
@@ -862,11 +887,12 @@ set_tcp_stream_priority(struct socket *so)
 		}
 
 		/* Set receive side background flags */
-		if ((sotcdb & SOTCDB_NO_RECVTCPBG) != 0 ||
-			is_local || !fg_active)
+		if ((sotcdb & SOTCDB_NO_RECVTCPBG) != 0 || is_local ||
+		    !IS_SO_TC_BACKGROUNDSYSTEM(so->so_traffic_class)) {
 			tcp_clear_recv_bg(so);
-		else
+		} else {
 			tcp_set_recv_bg(so);
+		}
 	} else {
 		tcp_clear_recv_bg(so);
 		if (old_cc == TCP_CC_ALGO_BACKGROUND_INDEX)
@@ -920,13 +946,21 @@ set_packet_service_class(struct mbuf *m, struct socket *so,
 	}
 
 	/*
-	 * If TRAFFIC_MGT_SO_BACKGROUND is set, depress the priority.
+	 * If TRAFFIC_MGT_SO_BACKGROUND is set or policy to throttle
+	 * best effort is set, depress the priority.
 	 */
-	if (soisthrottled(so) && !IS_MBUF_SC_BACKGROUND(msc))
+	if (!IS_MBUF_SC_BACKGROUND(msc) && soisthrottled(so))
+		msc = MBUF_SC_BK;
+
+	if (IS_MBUF_SC_BESTEFFORT(msc) && inp->inp_last_outifp != NULL &&
+	    so_throttle_best_effort(so, inp->inp_last_outifp))
 		msc = MBUF_SC_BK;
 
 	if (soissrcbackground(so))
 		m->m_pkthdr.pkt_flags |= PKTF_SO_BACKGROUND;
+
+	if (soissrcrealtime(so) || IS_MBUF_SC_REALTIME(msc))
+		m->m_pkthdr.pkt_flags |= PKTF_SO_REALTIME;
 	/*
 	 * Set the traffic class in the mbuf packet header svc field
 	 */

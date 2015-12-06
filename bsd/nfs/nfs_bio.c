@@ -3797,7 +3797,7 @@ again:
 		}
 	}
 
-	if (req->r_achain.tqe_next == NFSREQNOLIST || req->r_achain.tqe_next == NFSIODCOMPLETING)
+	if (req->r_achain.tqe_next == NFSREQNOLIST)
 		TAILQ_INSERT_TAIL(&nmp->nm_iodq, req, r_achain);
 
 	/* If this mount doesn't already have an nfsiod working on it... */
@@ -3835,11 +3835,17 @@ nfs_asyncio_resend(struct nfsreq *req)
 
 	if (nfs_mount_gone(nmp))
 		return;
+
 	nfs_gss_clnt_rpcdone(req);
 	lck_mtx_lock(&nmp->nm_lock);
 	if (!(req->r_flags & R_RESENDQ)) {
 		TAILQ_INSERT_TAIL(&nmp->nm_resendq, req, r_rchain);
 		req->r_flags |= R_RESENDQ;
+		/*
+		 * We take a reference on this request so that it can't be
+		 * destroyed while a resend is queued or in progress.
+		 */
+		nfs_request_ref(req, 1);
 	}
 	nfs_mount_sock_thread_wake(nmp);
 	lck_mtx_unlock(&nmp->nm_lock);

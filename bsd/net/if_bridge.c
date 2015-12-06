@@ -5414,7 +5414,7 @@ bridge_pfil(struct mbuf **mp, struct ifnet *bifp, struct ifnet *ifp, int dir)
 		if (DUMMYNET_LOADED && (i == IP_FW_DUMMYNET)) {
 
 			/* put the Ethernet header back on */
-			M_PREPEND(*mp, ETHER_HDR_LEN, M_DONTWAIT);
+			M_PREPEND(*mp, ETHER_HDR_LEN, M_DONTWAIT, 0);
 			if (*mp == NULL)
 				return (error);
 			bcopy(&eh2, mtod(*mp, caddr_t), ETHER_HDR_LEN);
@@ -5545,13 +5545,13 @@ ipfwpass:
 	 * Finally, put everything back the way it was and return
 	 */
 	if (snap) {
-		M_PREPEND(*mp, sizeof (struct llc), M_DONTWAIT);
+		M_PREPEND(*mp, sizeof (struct llc), M_DONTWAIT, 0);
 		if (*mp == NULL)
 			return (error);
 		bcopy(&llc1, mtod(*mp, caddr_t), sizeof (struct llc));
 	}
 
-	M_PREPEND(*mp, ETHER_HDR_LEN, M_DONTWAIT);
+	M_PREPEND(*mp, ETHER_HDR_LEN, M_DONTWAIT, 0);
 	if (*mp == NULL)
 		return (error);
 	bcopy(&eh2, mtod(*mp, caddr_t), ETHER_HDR_LEN);
@@ -5748,7 +5748,7 @@ bridge_fragment(struct ifnet *ifp, struct mbuf *m, struct ether_header *eh,
 	for (m0 = m; m0; m0 = m0->m_nextpkt) {
 		if (error == 0) {
 			if (snap) {
-				M_PREPEND(m0, sizeof (struct llc), M_DONTWAIT);
+				M_PREPEND(m0, sizeof (struct llc), M_DONTWAIT, 0);
 				if (m0 == NULL) {
 					error = ENOBUFS;
 					continue;
@@ -5756,7 +5756,7 @@ bridge_fragment(struct ifnet *ifp, struct mbuf *m, struct ether_header *eh,
 				bcopy(llc, mtod(m0, caddr_t),
 				    sizeof (struct llc));
 			}
-			M_PREPEND(m0, ETHER_HDR_LEN, M_DONTWAIT);
+			M_PREPEND(m0, ETHER_HDR_LEN, M_DONTWAIT, 0);
 			if (m0 == NULL) {
 				error = ENOBUFS;
 				continue;

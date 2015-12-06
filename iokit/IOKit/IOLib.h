@@ -150,9 +150,10 @@ void IOFreePageable(void * address, vm_size_t size);
  * Typed memory allocation macros. Both may block.
  */
 #define IONew(type,number) \
-( ((number) != 0 && ((vm_size_t) ((sizeof(type) * (number) / (number))) != sizeof(type)) /* overflow check 21532969 */ \
-? 0 \
-: ((type*)IOMalloc(sizeof(type) * (number)))) )
+( ((number) != 0 && ((vm_size_t) ((sizeof(type) * (number) / (number))) != sizeof(type)) /* overflow check 20847256 */ \
+  ? 0 \
+  : ((type*)IOMalloc(sizeof(type) * (number)))) )
+
 #define IODelete(ptr,type,number) IOFree( (ptr) , sizeof(type) * (number) )
 
 /////////////////////////////////////////////////////////////////////////////
@@ -270,6 +271,14 @@ void IOExitThread(void) __attribute__((deprecated));
     @param milliseconds The integer number of milliseconds to wait. */
 
 void IOSleep(unsigned milliseconds);
+
+/*! @function IOSleepWithLeeway
+    @abstract Sleep the calling thread for a number of milliseconds, with a specified leeway the kernel may use for timer coalescing.
+    @discussion This function blocks the calling thread for at least the number of specified milliseconds, giving time to other processes.  The kernel may also coalesce any timers involved in the delay, using the leeway given as a guideline.
+    @param intervalMilliseconds The integer number of milliseconds to wait.
+    @param leewayMilliseconds The integer number of milliseconds to use as a timer coalescing guideline. */
+
+void IOSleepWithLeeway(unsigned intervalMilliseconds, unsigned leewayMilliseconds);
 
 /*! @function IODelay
     @abstract Spin delay for a number of microseconds.
@@ -406,6 +415,11 @@ extern mach_timespec_t IOZeroTvalspec;
 #endif /* !defined(__LP64__) */
 
 #endif /* __APPLE_API_OBSOLETE */
+
+#if XNU_KERNEL_PRIVATE
+vm_tag_t
+IOMemoryTag(vm_map_t map);
+#endif
 
 __END_DECLS
 
