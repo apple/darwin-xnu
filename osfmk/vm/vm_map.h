@@ -1122,6 +1122,12 @@ extern kern_return_t	vm_map_copy_overwrite(
 				vm_map_copy_t           copy,
 				boolean_t               interruptible);
 
+/* returns TRUE if size of vm_map_copy == size parameter FALSE otherwise */
+extern boolean_t	vm_map_copy_validate_size(
+				vm_map_t		dst_map,
+				vm_map_copy_t		copy,
+				vm_map_size_t		size);
+
 /* Place a copy into a map */
 extern kern_return_t	vm_map_copyout(
 				vm_map_t		dst_map,

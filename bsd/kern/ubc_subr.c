@@ -2695,11 +2695,6 @@ static SInt32 cs_blob_size_peak = 0;
 static UInt32 cs_blob_size_max = 0;
 static SInt32 cs_blob_count_peak = 0;
 
-int cs_validation = 1;
-
-#ifndef SECURE_KERNEL
-SYSCTL_INT(_vm, OID_AUTO, cs_validation, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_validation, 0, "Do validate code signatures");
-#endif
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_count, CTLFLAG_RD | CTLFLAG_LOCKED, (int *)(uintptr_t)&cs_blob_count, 0, "Current number of code signature blobs");
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_size, CTLFLAG_RD | CTLFLAG_LOCKED, (int *)(uintptr_t)&cs_blob_size, 0, "Current size of all code signature blobs");
 SYSCTL_INT(_vm, OID_AUTO, cs_blob_count_peak, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_blob_count_peak, 0, "Peak number of code signature blobs");

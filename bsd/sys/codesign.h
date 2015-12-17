@@ -240,7 +240,6 @@ int	cs_allow_invalid(struct proc *);
 int	cs_invalid_page(addr64_t);
 int	csproc_get_platform_path(struct proc *);
 
-extern int cs_validation;
 #if !SECURE_KERNEL
 extern int cs_enforcement_panic;
 #endif

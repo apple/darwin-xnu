@@ -1128,9 +1128,9 @@ host_lockgroup_info(
 	lockgroup_info_t	*lockgroup_info;
 	vm_offset_t			lockgroup_info_addr;
 	vm_size_t			lockgroup_info_size;
+	vm_size_t			lockgroup_info_vmsize;
 	lck_grp_t			*lck_grp;
 	unsigned int		i;
-	vm_size_t			used;
 	vm_map_copy_t		copy;
 	kern_return_t		kr;
 
@@ -1139,9 +1139,10 @@ host_lockgroup_info(
 
 	lck_mtx_lock(&lck_grp_lock);
 
-	lockgroup_info_size = round_page(lck_grp_cnt * sizeof *lockgroup_info);
+	lockgroup_info_size = lck_grp_cnt * sizeof(*lockgroup_info);
+	lockgroup_info_vmsize = round_page(lockgroup_info_size);
 	kr = kmem_alloc_pageable(ipc_kernel_map,
-						 &lockgroup_info_addr, lockgroup_info_size, VM_KERN_MEMORY_IPC);
+						 &lockgroup_info_addr, lockgroup_info_vmsize, VM_KERN_MEMORY_IPC);
 	if (kr != KERN_SUCCESS) {
 		lck_mtx_unlock(&lck_grp_lock);
 		return(kr);
@@ -1189,10 +1190,8 @@ host_lockgroup_info(
 	*lockgroup_infoCntp = lck_grp_cnt;
 	lck_mtx_unlock(&lck_grp_lock);
 
-	used = (*lockgroup_infoCntp) * sizeof *lockgroup_info;
-
-	if (used != lockgroup_info_size)
-		bzero((char *) lockgroup_info, lockgroup_info_size - used);
+	if (lockgroup_info_size != lockgroup_info_vmsize)
+		bzero((char *)lockgroup_info, lockgroup_info_vmsize - lockgroup_info_size);
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)lockgroup_info_addr,
 			   (vm_map_size_t)lockgroup_info_size, TRUE, &copy);

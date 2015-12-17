@@ -136,6 +136,16 @@
 #define CPUID_LEAF7_FEATURE_RDSEED   _Bit(18)	/* RDSEED Instruction */
 #define CPUID_LEAF7_FEATURE_ADX      _Bit(19)	/* ADX Instructions */
 #define CPUID_LEAF7_FEATURE_SMAP     _Bit(20)	/* Supervisor Mode Access Protect */
+#define CPUID_LEAF7_FEATURE_SGX      _Bit(2)	/* Software Guard eXtensions */
+#define CPUID_LEAF7_FEATURE_PQM      _Bit(12)	/* Platform Qos Monitoring */
+#define CPUID_LEAF7_FEATURE_FPU_CSDS _Bit(13)	/* FPU CS/DS deprecation */
+#define CPUID_LEAF7_FEATURE_MPX      _Bit(14)	/* Memory Protection eXtensions */
+#define CPUID_LEAF7_FEATURE_PQE      _Bit(15)	/* Platform Qos Enforcement */
+#define CPUID_LEAF7_FEATURE_CLFSOPT  _Bit(23)	/* CLFSOPT */
+#define CPUID_LEAF7_FEATURE_IPT      _Bit(25)	/* Intel Processor Trace */
+#define CPUID_LEAF7_FEATURE_SHA      _Bit(29)	/* SHA instructions */
+
+#define CPUID_LEAF7_FEATURE_PREFETCHWT1 _HBit(0)/* Prefetch Write/T1 hint */
 
 /*
  * The CPUID_EXTFEATURE_XXX values define 64-bit values
@@ -205,6 +215,10 @@
 #define CPUID_MODEL_BROADWELL_ULX	0x3D
 #define CPUID_MODEL_BROADWELL_ULT	0x3D
 #define CPUID_MODEL_BRYSTALWELL		0x47
+#define CPUID_MODEL_SKYLAKE		0x4E
+#define CPUID_MODEL_SKYLAKE_ULT		0x4E
+#define CPUID_MODEL_SKYLAKE_ULX		0x4E
+#define CPUID_MODEL_SKYLAKE_DT		0x5E
 
 #define CPUID_VMM_FAMILY_UNKNOWN	0x0
 #define CPUID_VMM_FAMILY_VMWARE		0x1
@@ -309,6 +323,12 @@ typedef struct {
 	uint8_t		fixed_width;
 } cpuid_arch_perf_leaf_t;
 
+/* The TSC to Core Crystal (RefCLK) Clock Information leaf */
+typedef struct {
+	uint32_t	numerator;
+	uint32_t	denominator;
+} cpuid_tsc_leaf_t;
+
 /* Physical CPU info - this is exported out of the kernel (kexts), so be wary of changes */
 typedef struct {
 	char		cpuid_vendor[16];
@@ -383,6 +403,7 @@ typedef struct {
 	cpuid_arch_perf_leaf_t	*cpuid_arch_perf_leafp;
 	cpuid_xsave_leaf_t	*cpuid_xsave_leafp;
 	uint64_t		cpuid_leaf7_features;
+	cpuid_tsc_leaf_t	cpuid_tsc_leaf;
 	cpuid_xsave_leaf_t	cpuid_xsave_leaf[2];
 } i386_cpu_info_t;
 

@@ -6012,10 +6012,6 @@ vm_page_validate_cs_mapped(
 	assert(page->busy);
 	vm_object_lock_assert_exclusive(page->object);
 
-	if (!cs_validation) {
-		return;
-	}
-
 	if (page->wpmapped && !page->cs_tainted) {
 		/*
 		 * This page was mapped for "write" access sometime in the
@@ -6112,10 +6108,6 @@ vm_page_validate_cs(
 	boolean_t		need_unmap;
 
 	vm_object_lock_assert_held(page->object);
-
-	if (!cs_validation) {
-		return;
-	}
 
 	if (page->wpmapped && !page->cs_tainted) {
 		vm_object_lock_assert_exclusive(page->object);
@@ -6237,10 +6229,6 @@ vm_page_validate_cs_mapped_chunk(
 
 	assert(page->busy);
 	vm_object_lock_assert_exclusive(page->object);
-
-	if (!cs_validation) {
-		return;
-	}
 
 	object = page->object;
 	assert(object->code_signed);

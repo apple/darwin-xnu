@@ -690,6 +690,21 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, ucupdate,
 	    CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_LOCKED, 0, 0,
             cpu_ucode_update, "S", "Microcode update interface");
 
+SYSCTL_NODE(_machdep_cpu, OID_AUTO, tsc_ccc, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+	"TSC/CCC frequency information");
+
+SYSCTL_PROC(_machdep_cpu_tsc_ccc, OID_AUTO, numerator,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_tsc_leaf.numerator),
+	    sizeof(uint32_t),
+	    i386_cpu_info, "I", "Numerator of TSC/CCC ratio");
+
+SYSCTL_PROC(_machdep_cpu_tsc_ccc, OID_AUTO, denominator,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_tsc_leaf.denominator),
+	    sizeof(uint32_t),
+	    i386_cpu_info, "I", "Denominator of TSC/CCC ratio");
+
 static const uint32_t apic_timer_vector = (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_TIMER_INTERRUPT);
 static const uint32_t apic_IPI_vector = (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_INTERPROCESSOR_INTERRUPT);
 

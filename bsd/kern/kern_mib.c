@@ -459,6 +459,8 @@ SYSCTL_PROC(_hw_optional, OID_AUTO, bmi2,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KER
 SYSCTL_PROC(_hw_optional, OID_AUTO, rtm,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasRTM, 0, sysctl_cpu_capability, "I", "");
 SYSCTL_PROC(_hw_optional, OID_AUTO, hle,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasHLE, 0, sysctl_cpu_capability, "I", "");
 SYSCTL_PROC(_hw_optional, OID_AUTO, adx,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasADX, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, mpx,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasMPX, 0, sysctl_cpu_capability, "I", "");
+SYSCTL_PROC(_hw_optional, OID_AUTO, sgx,	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSGX, 0, sysctl_cpu_capability, "I", "");
 #else
 #error Unsupported arch
 #endif /* !__i386__ && !__x86_64 && !__arm__ && ! __arm64__ */

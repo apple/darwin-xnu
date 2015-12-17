@@ -2232,7 +2232,7 @@ mach_port_guard_exception(
 		"Port Name: 0x%x, "
 		"Expected Guard: 0x%x, "
 		"Received Guard: 0x%x\n",
-		(unsigned)t,
+		(unsigned)VM_KERNEL_UNSLIDE_OR_PERM(t),
 		(unsigned)name,
 		(unsigned)portguard,
 		(unsigned)inguard);

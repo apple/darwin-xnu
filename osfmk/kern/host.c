@@ -840,7 +840,7 @@ host_processor_info(host_t host,
 	result = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr, VM_MAP_PAGE_MASK(ipc_kernel_map)),
 	                       vm_map_round_page(addr + size, VM_MAP_PAGE_MASK(ipc_kernel_map)), FALSE);
 	assert(result == KERN_SUCCESS);
-	result = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr, (vm_map_size_t)size, TRUE, &copy);
+	result = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr, (vm_map_size_t)needed, TRUE, &copy);
 	assert(result == KERN_SUCCESS);
 
 	*out_pcount = pcount;

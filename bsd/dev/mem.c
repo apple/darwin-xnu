@@ -253,7 +253,8 @@ void dev_kmem_init(void)
 {
 	uint32_t kmem;
 
-	if (PE_parse_boot_argn("kmem", &kmem, sizeof (kmem))) {
+	if (PE_i_can_has_debugger(NULL) &&
+	    PE_parse_boot_argn("kmem", &kmem, sizeof (kmem))) {
 		if (kmem & 0x1) {
 			dev_kmem_enabled = TRUE;
 		}

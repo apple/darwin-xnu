@@ -1400,6 +1400,7 @@ sysctl_procargsx(int *name, u_int namelen, user_addr_t where,
 				  tmp, FALSE) != KERN_SUCCESS) {
 			kmem_free(kernel_map, copy_start,
 					round_page(arg_size));
+			vm_map_copy_discard(tmp);
 			return (EIO);
 	}
 

@@ -165,6 +165,36 @@ tsc_init(void)
 	}
 
 	switch (cpuid_cpufamily()) {
+	case CPUFAMILY_INTEL_SKYLAKE: {
+		/*
+                * SkyLake and later has an Always Running Timer (ART) providing
+		 * the reference frequency. CPUID leaf 0x15 determines the
+		 * rationship between this and the TSC frequency expressed as
+		 *   -	multiplier (numerator, N), and 
+		 *   -	divisor (denominator, M).
+		 * So that TSC = ART * N / M.
+		 */
+		cpuid_tsc_leaf_t *tsc_leafp = &cpuid_info()->cpuid_tsc_leaf;
+		uint64_t	 N = (uint64_t) tsc_leafp->numerator;
+		uint64_t	 M = (uint64_t) tsc_leafp->denominator;
+		uint64_t	 refFreq;
+
+		refFreq = EFI_get_frequency("ARTFrequency");
+		if (refFreq == 0)
+			refFreq = BASE_ART_CLOCK_SOURCE;
+
+		assert(N != 0);
+		assert(M != 1);
+		tscFreq = refFreq * N / M;
+		busFreq = tscFreq;		/* bus is APIC frequency */
+
+		kprintf(" ART: Frequency = %6d.%06dMHz, N/M = %lld/%llu\n",
+			(uint32_t)(refFreq / Mega),
+			(uint32_t)(refFreq % Mega), 
+			N, M);
+
+		break;
+	    }
 	default: {
 		uint64_t msr_flex_ratio;
 		uint64_t msr_platform_info;

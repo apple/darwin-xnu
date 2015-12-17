@@ -4010,7 +4010,7 @@ task_zone_info(
 		bzero((char *) (names_addr + used), names_size - used);
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
-			   (vm_map_size_t)names_size, TRUE, &copy);
+			   (vm_map_size_t)used, TRUE, &copy);
 	assert(kr == KERN_SUCCESS);
 
 	*namesp = (mach_zone_name_t *) copy;
@@ -4022,7 +4022,7 @@ task_zone_info(
 		bzero((char *) (info_addr + used), info_size - used);
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
-			   (vm_map_size_t)info_size, TRUE, &copy);
+			   (vm_map_size_t)used, TRUE, &copy);
 	assert(kr == KERN_SUCCESS);
 
 	*infop = (task_zone_info_t *) copy;
@@ -4078,6 +4078,7 @@ mach_memory_info(
 	mach_memory_info_t	*memory_info;
 	vm_offset_t		memory_info_addr;
 	vm_size_t		memory_info_size;
+	vm_size_t		memory_info_vmsize;
         unsigned int		num_sites;
 
 	unsigned int		max_zones, i;
@@ -4129,9 +4130,10 @@ mach_memory_info(
 	if (memoryInfop && memoryInfoCntp)
 	{
 		num_sites = VM_KERN_MEMORY_COUNT + VM_KERN_COUNTER_COUNT;
-		memory_info_size = round_page(num_sites * sizeof *info);
+		memory_info_size = num_sites * sizeof(*info);
+		memory_info_vmsize = round_page(memory_info_size);
 		kr = kmem_alloc_pageable(ipc_kernel_map,
-					 &memory_info_addr, memory_info_size, VM_KERN_MEMORY_IPC);
+					 &memory_info_addr, memory_info_vmsize, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map,
 				  names_addr, names_size);
@@ -4140,14 +4142,14 @@ mach_memory_info(
 			return kr;
 		}
 
-		kr = vm_map_wire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_size,
+		kr = vm_map_wire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_vmsize,
 				     VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC), FALSE);
 		assert(kr == KERN_SUCCESS);
 
 		memory_info = (mach_memory_info_t *) memory_info_addr;
 		vm_page_diagnose(memory_info, num_sites);
 
-		kr = vm_map_unwire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_size, FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_vmsize, FALSE);
 		assert(kr == KERN_SUCCESS);
 	}
 
@@ -4217,7 +4219,7 @@ mach_memory_info(
 		bzero((char *) (names_addr + used), names_size - used);
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
-			   (vm_map_size_t)names_size, TRUE, &copy);
+			   (vm_map_size_t)used, TRUE, &copy);
 	assert(kr == KERN_SUCCESS);
 
 	*namesp = (mach_zone_name_t *) copy;
@@ -4229,7 +4231,7 @@ mach_memory_info(
 		bzero((char *) (info_addr + used), info_size - used);
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
-			   (vm_map_size_t)info_size, TRUE, &copy);
+			   (vm_map_size_t)used, TRUE, &copy);
 	assert(kr == KERN_SUCCESS);
 
 	*infop = (mach_zone_info_t *) copy;
@@ -4374,7 +4376,7 @@ host_zone_info(
 		bzero((char *) (names_addr + used), names_size - used);
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
-			   (vm_map_size_t)names_size, TRUE, &copy);
+			   (vm_map_size_t)used, TRUE, &copy);
 	assert(kr == KERN_SUCCESS);
 
 	*namesp = (zone_name_t *) copy;
@@ -4385,7 +4387,7 @@ host_zone_info(
 		bzero((char *) (info_addr + used), info_size - used);
 
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
-			   (vm_map_size_t)info_size, TRUE, &copy);
+			   (vm_map_size_t)used, TRUE, &copy);
 	assert(kr == KERN_SUCCESS);
 
 	*infop = (zone_info_t *) copy;

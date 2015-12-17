@@ -2534,6 +2534,29 @@ hotfiles_adopt(struct hfsmount *hfsmp, vfs_context_t ctx)
 			continue;  /* entry is too big, just carry on with the next guy */
 		}
 
+		//
+		// If a file is not an autocandidate (i.e. it's a user-tagged file desirous of
+		// being hotfile cached) but it is already bigger than 4 megs, don't bother
+		// hotfile caching it.  Note that if a user tagged file starts small, gets
+		// adopted and then grows over time we will allow it to grow bigger than 4 megs
+		// which is intentional for things like the Mail or Photos database files which
+		// grow slowly over time and benefit from being on the FastDevice.
+		//
+		if ((hfsmp->hfs_flags & HFS_CS_HOTFILE_PIN) &&
+		    !(VTOC(vp)->c_attr.ca_recflags & kHFSAutoCandidateMask) && 
+		    (VTOC(vp)->c_attr.ca_recflags & kHFSFastDevCandidateMask) && 
+		    (unsigned int)fileblocks > ((4*1024*1024) / (uint64_t)HFSTOVCB(hfsmp)->blockSize)) {
+
+			vnode_clearfastdevicecandidate(vp);    // turn off the fast-dev-candidate flag so we don't keep trying to cache it.
+
+			hfs_unlock(VTOC(vp));
+			vnode_put(vp);
+			listp->hfl_hotfile[i].hf_temperature = 0;
+			listp->hfl_next++;
+			listp->hfl_totalblocks -= listp->hfl_hotfile[i].hf_blocks;
+			continue;  /* entry is too big, just carry on with the next guy */
+		}
+
 		if (fileblocks > hfs_hotfile_cur_freeblks(hfsmp)) {
 			//
 			// No room for this file.  Although eviction should have made space

@@ -8645,6 +8645,39 @@ vm_map_copy_remap(
 	}
 }
 
+
+boolean_t
+vm_map_copy_validate_size(
+	vm_map_t		dst_map,
+	vm_map_copy_t		copy,
+	vm_map_size_t		size)
+{
+	if (copy == VM_MAP_COPY_NULL)
+		return FALSE;
+	switch (copy->type) {
+	case VM_MAP_COPY_OBJECT:
+	case VM_MAP_COPY_KERNEL_BUFFER:
+		if (size == copy->size)
+			return TRUE;
+		break;
+	case VM_MAP_COPY_ENTRY_LIST:
+		/*
+		 * potential page-size rounding prevents us from exactly
+		 * validating this flavor of vm_map_copy, but we can at least
+		 * assert that it's within a range.
+		 */
+		if (copy->size >= size &&
+		    copy->size <= vm_map_round_page(size,
+						    VM_MAP_PAGE_MASK(dst_map)))
+			return TRUE;
+		break;
+	default:
+		break;
+	}
+	return FALSE;
+}
+
+
 /*
  *	Routine:	vm_map_copyout
  *
@@ -12665,6 +12698,10 @@ vm_map_entry_is_reusable(
 
 	vm_object_t object;
 
+	if (entry->is_sub_map) {
+		return FALSE;
+	}
+
 	switch (VME_ALIAS(entry)) {
 	case VM_MEMORY_MALLOC:
 	case VM_MEMORY_MALLOC_SMALL:
@@ -12795,6 +12832,7 @@ vm_map_reuse_pages(
 		start_offset += VME_OFFSET(entry);
 		end_offset += VME_OFFSET(entry);
 
+		assert(!entry->is_sub_map);
 		object = VME_OBJECT(entry);
 		if (object != VM_OBJECT_NULL) {
 			vm_object_lock(object);
@@ -12885,6 +12923,7 @@ vm_map_reusable_pages(
 		start_offset += VME_OFFSET(entry);
 		end_offset += VME_OFFSET(entry);
 
+		assert(!entry->is_sub_map);
 		object = VME_OBJECT(entry);
 		if (object == VM_OBJECT_NULL)
 			continue;

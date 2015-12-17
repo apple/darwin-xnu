@@ -145,6 +145,7 @@
 /*
  * CR4
  */
+#define CR4_SEE		0x00008000	/* Secure Enclave Enable XXX */
 #define CR4_SMAP	0x00200000	/* Supervisor-Mode Access Protect */
 #define CR4_SMEP	0x00100000	/* Supervisor-Mode Execute Protect */
 #define CR4_OSXSAVE	0x00040000	/* OS supports XSAVE */
@@ -170,9 +171,13 @@
 #define XCR0_X87 	(1ULL << 0)	/* x87, FPU/MMX (always set) */
 #define XCR0_SSE	(1ULL << 1)	/* SSE supported by XSAVE/XRESTORE */
 #define	XCR0_YMM	(1ULL << 2)	/* YMM state available */
+#define	XCR0_BNDREGS	(1ULL << 3)	/* MPX Bounds register state */
+#define	XCR0_BNDCSR	(1ULL << 4)	/* MPX Bounds configuration/state  */
 #define XFEM_X87	XCR0_X87
 #define XFEM_SSE	XCR0_SSE
 #define	XFEM_YMM	XCR0_YMM
+#define	XFEM_BNDREGS	XCR0_BNDREGS
+#define	XFEM_BNDCSR	XCR0_BNDCSR
 #define XCR0 (0)
 
 #define	PMAP_PCID_PRESERVE (1ULL << 63)
@@ -598,6 +603,9 @@ __END_DECLS
 
 #define MSR_IA32_PP0_ENERGY_STATUS		0x639
 #define MSR_IA32_PP1_ENERGY_STATUS		0x641
+#if !defined(XNU_HIDE_SKYLAKE)
+#define MSR_IA32_IA_PERF_LIMIT_REASONS_SKL	0x64F
+#endif
 
 #define MSR_IA32_IA_PERF_LIMIT_REASONS		0x690
 #define MSR_IA32_GT_PERF_LIMIT_REASONS		0x6B0

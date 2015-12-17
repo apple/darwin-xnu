@@ -3439,6 +3439,9 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
 	kern_return_t kr;
 
         rcv_addr = 0;
+	if (vm_map_copy_validate_size(map, copy, (vm_map_size_t)size) == FALSE)
+		panic("Inconsistent OOL/copyout size on %p: expected %d, got %lld @%p",
+		      dsc, size, (unsigned long long)copy->size, copy);
         kr = vm_map_copyout(map, &rcv_addr, copy);
         if (kr != KERN_SUCCESS) {
             if (kr == KERN_RESOURCE_SHORTAGE)

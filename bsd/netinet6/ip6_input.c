@@ -482,7 +482,7 @@ ip6_input(struct mbuf *m)
 	int nxt = 0, ours = 0;
 	struct ifnet *inifp, *deliverifp = NULL;
 	ipfilter_t inject_ipfref = NULL;
-	int seen;
+	int seen = 1;
 	struct in6_ifaddr *ia6 = NULL;
 	struct sockaddr_in6 *dst6;
 #if DUMMYNET

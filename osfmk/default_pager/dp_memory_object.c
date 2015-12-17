@@ -1080,7 +1080,7 @@ default_pager_objects(
 			   FALSE);
 	assert(KERN_SUCCESS == kr);
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)oaddr,
-			   (vm_map_size_t)osize, TRUE, &pcopy);
+			   (vm_map_size_t)(num_objects * sizeof(*objects)), TRUE, &pcopy);
 	assert(KERN_SUCCESS == kr);
 
 	*objectsp = (default_pager_object_array_t)objects;
@@ -1183,7 +1183,7 @@ default_pager_object_pages(
 			   FALSE);
 	assert(KERN_SUCCESS == kr);
 	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
-			   (vm_map_size_t)size, TRUE, &copy);
+			   (vm_map_size_t)(actual * sizeof(*pages)), TRUE, &copy);
 	assert(KERN_SUCCESS == kr);
 
 	

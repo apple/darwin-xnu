@@ -889,14 +889,19 @@ should_pin_blocks(hfsmount_t *hfsmp, FCB *fcb)
 	// it was an automatically added file and this function is intended
 	// to pin new blocks being added to user-generated content.
 	//
-	// If a file is marked FastDevPinned or FastDevCandidate it is an
-	// existing pinned file or a new file that should be pinned.
-	//
 	if (fcb->ff_cp->c_attr.ca_recflags & kHFSAutoCandidateMask) {
 		return 0;
 	}
 
-	if ((fcb->ff_cp->c_attr.ca_recflags & (kHFSFastDevPinnedMask|kHFSFastDevCandidateMask)) != 0) {
+	//
+	// If a file is marked FastDevPinned it is an existing pinned file 
+	// or a new file that should be pinned.
+	//
+	// If a file is marked FastDevCandidate it is a new file that is
+	// being written to for the first time so we don't want to pin it
+	// just yet as it may not meet the criteria (i.e. too large).
+	//
+	if ((fcb->ff_cp->c_attr.ca_recflags & (kHFSFastDevPinnedMask)) != 0) {
 		pin_blocks = 1;
 	} else {
 		pin_blocks = 0;

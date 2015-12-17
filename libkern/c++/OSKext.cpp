@@ -2503,14 +2503,16 @@ OSKext::readMkext2Archive(
 
 
         infoDict = OSDynamicCast(OSDictionary,
-            mkextInfoDictArray->getObject(i));
+                                 mkextInfoDictArray->getObject(i));
         
        /* Create the kext for the entry, then release it, because the
         * kext system keeps them around until explicitly removed.
         * Any creation/registration failures are already logged for us.
         */
-        OSKext * newKext = OSKext::withMkext2Info(infoDict, mkextData);
-        OSSafeRelease(newKext);
+        if (infoDict) {
+            OSKext * newKext = OSKext::withMkext2Info(infoDict, mkextData);
+            OSSafeRelease(newKext);
+        }
     }
 
    /* Even if we didn't keep any kexts from the mkext, we may have a load
@@ -2558,14 +2560,14 @@ OSKext::initWithMkext2Info(
     OSCollectionIterator * iterator            = NULL;  // must release
     OSData               * executable          = NULL;  // must release
 
-    if (!super::init()) {
+    if (anInfoDict == NULL || !super::init()) {
         goto finish;
     }
 
    /* Get the path. Don't look for an arch-specific path property.
     */
     kextPath = OSDynamicCast(OSString,
-        anInfoDict->getObject(kMKEXTBundlePathKey));
+                             anInfoDict->getObject(kMKEXTBundlePathKey));
 
     if (!setInfoDictionaryAndPath(anInfoDict, kextPath)) {
         goto finish;
