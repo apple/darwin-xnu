@@ -93,6 +93,7 @@ __END_DECLS
  * PL = Process Lock
  * PGL = Process Group Lock
  * PFDL = Process File Desc Lock
+ * PUCL = Process User Credentials Lock
  * PSL = Process Spin Lock
  * PPL = Parent Process Lock (planed for later usage)
  * LL = List Lock
@@ -221,9 +222,10 @@ struct	proc {
 	TAILQ_HEAD( ,eventqelt) p_evlist;	/* (PL) */
 
 	lck_mtx_t	p_fdmlock;		/* proc lock to protect fdesc */
+	lck_mtx_t 	p_ucred_mlock;		/* mutex lock to protect p_ucred */
 
 	/* substructures: */
-	kauth_cred_t	p_ucred;		/* Process owner's identity. (PL) */
+	kauth_cred_t	p_ucred;		/* Process owner's identity. (PUCL) */
 	struct	filedesc *p_fd;			/* Ptr to open files structure. (PFDL) */
 	struct	pstats *p_stats;		/* Accounting/statistics (PL). */
 	struct	plimit *p_limit;		/* Process limits.(PL) */
@@ -661,6 +663,7 @@ extern lck_grp_t * proc_lck_grp;
 #if CONFIG_FINE_LOCK_GROUPS
 extern lck_grp_t * proc_mlock_grp;
 extern lck_grp_t * proc_fdmlock_grp;
+extern lck_grp_t * proc_ucred_mlock_grp;
 extern lck_grp_t * proc_slock_grp;
 #endif
 extern lck_grp_attr_t * proc_lck_grp_attr;
@@ -683,6 +686,8 @@ extern void proc_fdlock(struct proc *);
 extern void proc_fdlock_spin(struct proc *);
 extern void proc_fdunlock(struct proc *);
 extern void proc_fdlock_assert(proc_t p, int assertflags);
+extern void proc_ucred_lock(struct proc *);
+extern void proc_ucred_unlock(struct proc *);
 __private_extern__ int proc_core_name(const char *name, uid_t uid, pid_t pid,
 		char *cr_name, size_t cr_name_len);
 extern int isinferior(struct proc *, struct proc *);
@@ -741,6 +746,7 @@ extern proc_t proc_parentholdref(proc_t);
 extern int proc_parentdropref(proc_t, int);
 int     itimerfix(struct timeval *tv);
 int     itimerdecr(struct proc * p, struct itimerval *itp, int usec);
+int  timespec_is_valid(const struct timespec *);
 void proc_signalstart(struct proc *, int locked);
 void proc_signalend(struct proc *, int locked);
 int  proc_transstart(struct proc *, int locked, int non_blocking);

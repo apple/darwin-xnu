@@ -518,15 +518,7 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 		lck_mtx_unlock(cp->gss_clnt_mtx);
 	}
 
-	MALLOC(ki, gss_key_info *, sizeof (gss_key_info), M_TEMP, M_WAITOK|M_ZERO);
-	if (ki == NULL) {
-		lck_mtx_unlock(&nmp->nm_lock);
-		return (ENOMEM);
-	}
-
-	if (cp) {
-		cp->gss_clnt_kinfo = ki;
-	} else if (nfs_root_steals_ctx && principal == NULL && kauth_cred_getuid(req->r_cred) == 0) {
+	if (!cp && nfs_root_steals_ctx && principal == NULL && kauth_cred_getuid(req->r_cred) == 0) {
 		/*
 		 * If superuser is trying to get access, then co-opt
 		 * the first valid context in the list.
@@ -542,6 +534,12 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 				return (0);
 			}
 		}
+	}
+
+	MALLOC(ki, gss_key_info *, sizeof (gss_key_info), M_TEMP, M_WAITOK|M_ZERO);
+	if (ki == NULL) {
+		lck_mtx_unlock(&nmp->nm_lock);
+		return (ENOMEM);
 	}
 
 	NFS_GSS_DBG("Context %s%sfound in Neg Cache @  %ld\n",
@@ -573,6 +571,7 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 			nfs_gss_clnt_mnt_ref(nmp);
 		}
 	} else {
+		cp->gss_clnt_kinfo = ki;
 		nfs_gss_clnt_ctx_clean(cp);
 		if (principal) {
 			/*

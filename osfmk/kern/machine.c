@@ -151,10 +151,12 @@ host_reboot(
 
 	assert(host_priv == &realhost);
 
+#if DEVELOPMENT || DEBUG
 	if (options & HOST_REBOOT_DEBUGGER) {
 		Debugger("Debugger");
 		return (KERN_SUCCESS);
 	}
+#endif
 
     if (options & HOST_REBOOT_UPSDELAY) {
         // UPS power cutoff path

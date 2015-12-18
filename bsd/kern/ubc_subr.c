@@ -2847,13 +2847,12 @@ ubc_cs_blob_add(
 
 	error = cs_validate_csblob((const uint8_t *)addr, size, &cd);
 	if (error) {
-		if (cs_debug)
+
+        if (cs_debug)
 			printf("CODESIGNING: csblob invalid: %d\n", error);
-		blob->csb_flags = 0;
-		blob->csb_start_offset = 0;
-		blob->csb_end_offset = 0;
-		memset(blob->csb_cdhash, 0, sizeof(blob->csb_cdhash));
-		/* let the vnode checker determine if the signature is valid or not */
+        /* The vnode checker can't make the rest of this function succeed if csblob validation failed, so bail */
+        goto out;
+
 	} else {
 		const unsigned char *md_base;
 		uint8_t hash[CS_HASH_MAX_SIZE];

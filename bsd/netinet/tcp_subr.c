@@ -1134,6 +1134,89 @@ tcp_getrt_rtt(struct tcpcb *tp, struct rtentry *rt)
 	}
 }
 
+static inline void
+tcp_update_ecn_perf_stats(struct tcpcb *tp,
+    struct if_tcp_ecn_perf_stat *stat)
+{
+	u_int64_t curval, oldval;
+	struct inpcb *inp = tp->t_inpcb;
+
+	/* Average RTT */
+	curval = (tp->t_srtt >> TCP_RTT_SHIFT);
+	if (curval > 0 && tp->t_rttupdated >= 16) {
+		if (stat->rtt_avg == 0) {
+			stat->rtt_avg = curval;
+		} else {
+			oldval = stat->rtt_avg;
+			stat->rtt_avg =
+			    ((oldval << 4) - oldval + curval) >> 4;
+		}
+	}
+
+	/* RTT variance */
+	curval = tp->t_rttvar >> TCP_RTTVAR_SHIFT;
+	if (curval > 0 && tp->t_rttupdated >= 16) {
+		if (stat->rtt_var == 0) {
+			stat->rtt_var = curval;
+		} else {
+			oldval = stat->rtt_var;
+			stat->rtt_var =
+			    ((oldval << 4) - oldval + curval) >> 4;
+		}
+	}
+
+	/* Percentage of Out-of-order packets, shift by 10 for precision */
+	curval = (tp->t_rcvoopack << 10);
+	if (inp->inp_stat != NULL && inp->inp_stat->rxpackets > 0 &&
+	    curval > 0) {
+		/* Compute percentage */
+		curval = (curval * 100)/inp->inp_stat->rxpackets;
+		if (stat->oo_percent == 0) {
+			stat->oo_percent = curval;
+		} else {
+			oldval = stat->oo_percent;
+			stat->oo_percent =
+			    ((oldval << 4) - oldval + curval) >> 4;
+		}
+	}
+
+	/* Total number of SACK recovery episodes */
+	stat->sack_episodes += tp->t_sack_recovery_episode;
+
+	/* Percentage of reordered packets, shift by 10 for precision */
+	curval = tp->t_reordered_pkts + tp->t_pawsdrop + tp->t_dsack_sent +
+	    tp->t_dsack_recvd;
+	curval = curval << 10;
+	if (inp->inp_stat != NULL && (inp->inp_stat->rxpackets > 0 ||
+	    inp->inp_stat->txpackets > 0) && curval > 0) {
+		/* Compute percentage */
+		curval = (curval * 100) /
+		    (inp->inp_stat->rxpackets + inp->inp_stat->txpackets);
+		if (stat->reorder_percent == 0) {
+			stat->reorder_percent = curval;
+		} else {
+			oldval = stat->reorder_percent;
+			stat->reorder_percent =
+			    ((oldval << 4) - oldval + curval) >> 4;
+		}
+	}
+
+	/* Percentage of retransmit bytes, shift by 10 for precision */
+	curval = tp->t_stat.txretransmitbytes << 10;
+	if (inp->inp_stat != NULL && inp->inp_stat->txbytes > 0
+	    && curval > 0) {
+		curval = (curval * 100) / inp->inp_stat->txbytes;
+		if (stat->rxmit_percent == 0) {
+			stat->rxmit_percent = curval;
+		} else {
+			oldval = stat->rxmit_percent;
+			stat->rxmit_percent =
+			    ((oldval << 4) - oldval + curval) >> 4;
+		}
+	}
+	return;
+}
+
 /*
  * Close a TCP control block:
  *	discard all space held by the tcp
@@ -1316,22 +1399,95 @@ no_valid_rt:
 
 	/* free the reassembly queue, if any */
 	(void) tcp_freeq(tp);
+
+	/* Collect ECN related statistics */
+	if (tp->ecn_flags & TE_SETUPSENT) {
+		if (tp->ecn_flags & TE_CLIENT_SETUP) {
+			INP_INC_IFNET_STAT(inp, ecn_client_setup);
+			if (TCP_ECN_ENABLED(tp)) {
+				INP_INC_IFNET_STAT(inp,
+				    ecn_client_success);
+			} else if (tp->ecn_flags & TE_LOST_SYN) {
+				INP_INC_IFNET_STAT(inp, ecn_syn_lost);
+			} else {
+				INP_INC_IFNET_STAT(inp,
+				    ecn_peer_nosupport);
+			}
+		} else {
+			INP_INC_IFNET_STAT(inp, ecn_server_setup);
+			if (TCP_ECN_ENABLED(tp)) {
+				INP_INC_IFNET_STAT(inp,
+				    ecn_server_success);
+			} else if (tp->ecn_flags & TE_LOST_SYNACK) {
+				INP_INC_IFNET_STAT(inp,
+				    ecn_synack_lost);
+			} else {
+				INP_INC_IFNET_STAT(inp,
+				    ecn_peer_nosupport);
+			}
+		}
+	}
 	if (TCP_ECN_ENABLED(tp)) {
-		if (tp->ecn_flags & TE_RECV_ECN_CE)
+		if (tp->ecn_flags & TE_RECV_ECN_CE) {
 			tcpstat.tcps_ecn_conn_recv_ce++;
-		if (tp->ecn_flags & TE_RECV_ECN_ECE)
+			INP_INC_IFNET_STAT(inp, ecn_conn_recv_ce);
+		}
+		if (tp->ecn_flags & TE_RECV_ECN_ECE) {
 			tcpstat.tcps_ecn_conn_recv_ece++;
+			INP_INC_IFNET_STAT(inp, ecn_conn_recv_ece);
+		}
 		if (tp->ecn_flags & (TE_RECV_ECN_CE | TE_RECV_ECN_ECE)) {
 			if (tp->t_stat.txretransmitbytes > 0 ||
-			    tp->t_stat.rxoutoforderbytes > 0)
+			    tp->t_stat.rxoutoforderbytes > 0) {
 				tcpstat.tcps_ecn_conn_pl_ce++;
-			else
+				INP_INC_IFNET_STAT(inp, ecn_conn_plce);
+			} else {
 				tcpstat.tcps_ecn_conn_nopl_ce++;
+				INP_INC_IFNET_STAT(inp, ecn_conn_noplce);
+			}
 		} else {
 			if (tp->t_stat.txretransmitbytes > 0 ||
-			    tp->t_stat.rxoutoforderbytes > 0)
+			    tp->t_stat.rxoutoforderbytes > 0) {
 				tcpstat.tcps_ecn_conn_plnoce++;
+				INP_INC_IFNET_STAT(inp, ecn_conn_plnoce);
+			}
 		}
+
+	}
+
+	/* Aggregate performance stats */
+	if (inp->inp_last_outifp != NULL) {
+		struct ifnet *ifp = inp->inp_last_outifp;
+		ifnet_lock_shared(ifp);
+		if ((ifp->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) ==
+		    IFRF_ATTACHED) {
+			if (inp->inp_vflag & INP_IPV6) {
+				if (TCP_ECN_ENABLED(tp)) {
+					ifp->if_ipv6_stat->timestamp
+					    = net_uptime();
+					tcp_update_ecn_perf_stats(tp,
+					    &ifp->if_ipv6_stat->ecn_on);
+				} else {
+					ifp->if_ipv6_stat->timestamp
+					    = net_uptime();
+					tcp_update_ecn_perf_stats(tp,
+					    &ifp->if_ipv6_stat->ecn_off);
+				}
+			} else {
+				if (TCP_ECN_ENABLED(tp)) {
+					ifp->if_ipv4_stat->timestamp
+					    = net_uptime();
+					tcp_update_ecn_perf_stats(tp,
+					    &ifp->if_ipv4_stat->ecn_on);
+				} else {
+					ifp->if_ipv4_stat->timestamp
+					    = net_uptime();
+					tcp_update_ecn_perf_stats(tp,
+					    &ifp->if_ipv4_stat->ecn_off);
+				}
+			}
+		}
+		ifnet_lock_done(ifp);
 	}
 
 	tcp_free_sackholes(tp);
@@ -2451,6 +2607,7 @@ tcp_rtlookup(inp, input_ifscope)
 		tcp_set_tso(tp, rt->rt_ifp);
 		soif2kcl(inp->inp_socket,
 		    (rt->rt_ifp->if_eflags & IFEF_2KCL));
+		tcp_set_ecn(tp, rt->rt_ifp);
 	}
 
 	/* Note if the peer is local */
@@ -2557,6 +2714,7 @@ tcp_rtlookup6(inp, input_ifscope)
 		tcp_set_tso(tp, rt->rt_ifp);
 		soif2kcl(inp->inp_socket,
 		    (rt->rt_ifp->if_eflags & IFEF_2KCL));
+		tcp_set_ecn(tp, rt->rt_ifp);
 	}
 
 	/* Note if the peer is local */

@@ -2405,6 +2405,7 @@ next_dwrite:
 	        goto wait_for_dwrites;
         }
 
+	task_update_logical_writes(current_task(), (io_req_size & ~PAGE_MASK), TASK_WRITE_IMMEDIATE);
 	while (io_req_size >= PAGE_SIZE && uio->uio_offset < newEOF && retval == 0) {
 		int	throttle_type;
 
@@ -6008,6 +6009,7 @@ cluster_copy_upl_data(struct uio *uio, upl_t upl, int upl_offset, int *io_resid)
 	int       retval = 0;
 	int	  xsize;
 	upl_page_info_t *pl;
+	int 	  dirty_count;
 
 	xsize = *io_resid;
 
@@ -6044,10 +6046,13 @@ cluster_copy_upl_data(struct uio *uio, upl_t upl, int upl_offset, int *io_resid)
 	pg_offset = upl_offset & PAGE_MASK;
 	csize     = min(PAGE_SIZE - pg_offset, xsize);
 
+	dirty_count = 0;
 	while (xsize && retval == 0) {
 	        addr64_t  paddr;
 
 		paddr = ((addr64_t)upl_phys_page(pl, pg_index) << PAGE_SHIFT) + pg_offset;
+		if ((uio->uio_rw == UIO_WRITE) && (upl_dirty_page(pl, pg_index) == FALSE)) 
+			dirty_count++;
 
 		retval = uiomove64(paddr, csize, uio);
 
@@ -6060,6 +6065,7 @@ cluster_copy_upl_data(struct uio *uio, upl_t upl, int upl_offset, int *io_resid)
 
 	uio->uio_segflg = segflg;
 
+	task_update_logical_writes(current_task(), (dirty_count * PAGE_SIZE), TASK_WRITE_DEFERRED);
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 34)) | DBG_FUNC_END,
 		     (int)uio->uio_offset, xsize, retval, segflg, 0);
 

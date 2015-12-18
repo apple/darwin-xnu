@@ -665,7 +665,18 @@ IOPMrootDomain * IOPMrootDomain::construct( void )
 
 static void updateConsoleUsersCallout(thread_call_param_t p0, thread_call_param_t p1)
 {
+    IOPMrootDomain * rootDomain = (IOPMrootDomain *) p0;
+    rootDomain->updateConsoleUsers();
+}
+
+void IOPMrootDomain::updateConsoleUsers(void)
+{
     IOService::updateConsoleUsers(NULL, kIOMessageSystemHasPoweredOn);
+    if (tasksSuspended)
+    {
+        tasksSuspended = FALSE;
+        tasks_system_suspend(tasksSuspended);
+    }
 }
 
 //******************************************************************************
@@ -3077,6 +3088,16 @@ void IOPMrootDomain::willNotifyPowerChildren( IOPMPowerStateIndex newPowerState 
 
     if (SLEEP_STATE == newPowerState)
     {
+        if (!tasksSuspended)
+        {
+	    AbsoluteTime deadline;
+	    tasksSuspended = TRUE;
+	    tasks_system_suspend(tasksSuspended);
+
+	    clock_interval_to_deadline(10, kSecondScale, &deadline);
+	    vm_pageout_wait(AbsoluteTime_to_scalar(&deadline));
+        }
+
 #if HIBERNATION
         IOHibernateSystemSleep();
         IOHibernateIOKitSleep();

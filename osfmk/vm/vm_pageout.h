@@ -131,6 +131,8 @@ extern int	vm_debug_events;
 #define VM_EXECVE			0x131
 #define VM_WAKEUP_COMPACTOR_SWAPPER	0x132
 
+#define VM_DATA_WRITE 			0x140
+
 #define VM_DEBUG_EVENT(name, event, control, arg1, arg2, arg3, arg4)	\
 	MACRO_BEGIN						\
 	if (vm_debug_events) {					\
@@ -185,6 +187,8 @@ extern ppnum_t            vm_page_get_phys_page(vm_page_t page);
 extern vm_page_t          vm_page_get_next(vm_page_t page);
 
 extern kern_return_t	mach_vm_pressure_level_monitor(boolean_t wait_for_pressure, unsigned int *pressure_level);
+
+extern kern_return_t 	vm_pageout_wait(uint64_t deadline);
 
 #ifdef	MACH_KERNEL_PRIVATE
 

@@ -140,6 +140,7 @@ DATAFILES = \
 	posix_madvise.2		\
 	pread.2			\
 	profil.2		\
+	pselect.2		\
 	pthread_setugid_np.2	\
 	ptrace.2		\
 	pwrite.2		\

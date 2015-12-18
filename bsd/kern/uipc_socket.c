@@ -6804,9 +6804,14 @@ sockaddrentry_dup(const struct sockaddr_entry *src_se, int how)
 	dst_se = sockaddrentry_alloc(how);
 	if (dst_se != NULL) {
 		int len = src_se->se_addr->sa_len;
+		/*
+		 * Workaround for rdar://23362120
+		 * Allways allocate a buffer that can hold an IPv6 socket address
+		 */
+		size_t alloclen = MAX(len, sizeof(struct sockaddr_in6));
 
 		MALLOC(dst_se->se_addr, struct sockaddr *,
-		    len, M_SONAME, how | M_ZERO);
+		    alloclen, M_SONAME, how | M_ZERO);
 		if (dst_se->se_addr != NULL) {
 			bcopy(src_se->se_addr, dst_se->se_addr, len);
 		} else {

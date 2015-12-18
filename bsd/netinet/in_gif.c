@@ -239,8 +239,9 @@ in_gif_input(m, off)
 	struct ifnet *gifp = NULL;
 	struct ip *ip;
 	int af, proto;
-	u_int8_t otos;
+	u_int8_t otos, old_tos;
 	int egress_success = 0;
+	int sum;
 
 	ip = mtod(m, struct ip *);
 	proto = ip->ip_p;
@@ -268,9 +269,17 @@ in_gif_input(m, off)
 				return;
 		}
 		ip = mtod(m, struct ip *);
-		if (gifp->if_flags & IFF_LINK1)
+		if (gifp->if_flags & IFF_LINK1) {
+			old_tos = ip->ip_tos;
 			egress_success = ip_ecn_egress(ECN_NORMAL, &otos, &ip->ip_tos);
-		else
+			if (old_tos != ip->ip_tos) {
+			    sum = ~ntohs(ip->ip_sum) & 0xffff;
+			    sum += (~otos & 0xffff) + ip->ip_tos;
+			    sum = (sum >> 16) + (sum & 0xffff);
+			    sum += (sum >> 16);  /* add carry */
+			    ip->ip_sum = htons(~sum & 0xffff);
+			}
+		} else
 			egress_success = ip_ecn_egress(ECN_NOCARE, &otos, &ip->ip_tos);
 		break;
 	    }

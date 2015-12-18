@@ -3598,7 +3598,7 @@ kauth_cred_get_with_ref(void)
  * Returns:	(kauth_cred_t)			Pointer to the process's
  *						newly referenced credential
  *
- * Locks:	PROC_LOCK is held before taking the reference and released
+ * Locks:	PROC_UCRED_LOCK is held before taking the reference and released
  *		after the refeence is taken to protect the p_ucred field of
  *		the process referred to by procp.
  *
@@ -3620,10 +3620,10 @@ kauth_cred_proc_ref(proc_t procp)
 {
 	kauth_cred_t 	cred;
 	
-	proc_lock(procp);
+	proc_ucred_lock(procp);
 	cred = proc_ucred(procp);
 	kauth_cred_ref(cred);
-	proc_unlock(procp);
+	proc_ucred_unlock(procp);
 	return(cred);
 }
 
@@ -4456,7 +4456,7 @@ int kauth_proc_label_update(struct proc *p, struct label *label)
 
 			DEBUG_CRED_CHANGE("kauth_proc_setlabel_unlocked CH(%d): %p/0x%08x -> %p/0x%08x\n", p->p_pid, my_cred, my_cred->cr_flags, my_new_cred, my_new_cred->cr_flags);
 
-			proc_lock(p);
+			proc_ucred_lock(p);
 			/*
 			 * We need to protect for a race where another thread
 			 * also changed the credential after we took our
@@ -4464,7 +4464,7 @@ int kauth_proc_label_update(struct proc *p, struct label *label)
 			 * restart this again with the new cred.
 			 */
 			if (p->p_ucred != my_cred) {
-				proc_unlock(p);
+				proc_ucred_unlock(p);
 				kauth_cred_unref(&my_new_cred);
 				my_cred = kauth_cred_proc_ref(p);
 				/* try again */
@@ -4475,7 +4475,7 @@ int kauth_proc_label_update(struct proc *p, struct label *label)
 			PROC_UPDATE_CREDS_ONPROC(p);
 
 			mac_proc_set_enforce(p, MAC_ALL_ENFORCE);
-			proc_unlock(p);
+			proc_ucred_unlock(p);
 		}
 		break;
 	}
@@ -4536,7 +4536,7 @@ kauth_proc_label_update_execve(struct proc *p, vfs_context_t ctx,
 
 			DEBUG_CRED_CHANGE("kauth_proc_label_update_execve_unlocked CH(%d): %p/0x%08x -> %p/0x%08x\n", p->p_pid, my_cred, my_cred->cr_flags, my_new_cred, my_new_cred->cr_flags);
 
-			proc_lock(p);
+			proc_ucred_lock(p);
 			/*
 			 * We need to protect for a race where another thread
 			 * also changed the credential after we took our
@@ -4544,7 +4544,7 @@ kauth_proc_label_update_execve(struct proc *p, vfs_context_t ctx,
 			 * restart this again with the new cred.
 			 */
 			if (p->p_ucred != my_cred) {
-				proc_unlock(p);
+				proc_ucred_unlock(p);
 				kauth_cred_unref(&my_new_cred);
 				my_cred = kauth_cred_proc_ref(p);
 				/* try again */
@@ -4554,7 +4554,7 @@ kauth_proc_label_update_execve(struct proc *p, vfs_context_t ctx,
 			/* update cred on proc */
 			PROC_UPDATE_CREDS_ONPROC(p);
 			mac_proc_set_enforce(p, MAC_ALL_ENFORCE);
-			proc_unlock(p);
+			proc_ucred_unlock(p);
 		}
 		break;
 	}

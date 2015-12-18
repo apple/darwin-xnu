@@ -71,6 +71,8 @@
 
 #include <mach/shared_region.h>
 
+#include <libkern/section_keywords.h>
+
 unsigned long cs_procs_killed = 0;
 unsigned long cs_procs_invalidated = 0;
 
@@ -84,16 +86,18 @@ const int cs_library_val_enable = 1;
 int cs_enforcement_panic=0;
 
 #if CONFIG_ENFORCE_SIGNED_CODE
-int cs_enforcement_enable = 1;
+#define DEFAULT_CS_ENFORCEMENT_ENABLE 1
 #else
-int cs_enforcement_enable = 0;
+#define DEFAULT_CS_ENFORCEMENT_ENABLE 0
 #endif
+SECURITY_READ_ONLY_LATE(int) cs_enforcement_enable = DEFAULT_CS_ENFORCEMENT_ENABLE;
 
 #if CONFIG_ENFORCE_LIBRARY_VALIDATION
-int cs_library_val_enable = 1;
+#define DEFAULT_CS_LIBRARY_VA_ENABLE 1
 #else
-int cs_library_val_enable = 0;
+#define DEFAULT_CS_LIBRARY_VA_ENABLE 0
 #endif
+SECURITY_READ_ONLY_LATE(int) cs_library_val_enable = DEFAULT_CS_LIBRARY_VA_ENABLE;
 
 #endif /* !SECURE_KERNEL */
 int cs_all_vnodes = 0;

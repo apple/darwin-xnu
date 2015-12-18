@@ -1942,7 +1942,8 @@ pmap_change_wiring(
 	PMAP_LOCK(map);
 
 	if ((pte = pmap_pte(map, vaddr)) == PT_ENTRY_NULL)
-		panic("pmap_change_wiring: pte missing");
+		panic("pmap_change_wiring(%p,0x%llx,%d): pte missing",
+		      map, vaddr, wired);
 
 	if (wired && !iswired(*pte)) {
 		/*
@@ -2020,26 +2021,26 @@ pmap_map_bd(
 	return(virt);
 }
 
-unsigned int
+mach_vm_size_t
 pmap_query_resident(
 	pmap_t		pmap,
 	addr64_t	s64,
 	addr64_t	e64,
-	unsigned int	*compressed_count_p)
+	mach_vm_size_t	*compressed_bytes_p)
 {
 	pt_entry_t     *pde;
 	pt_entry_t     *spte, *epte;
 	addr64_t        l64;
 	uint64_t        deadline;
-	unsigned int	result;
+	mach_vm_size_t	resident_bytes;
+	mach_vm_size_t	compressed_bytes;
 	boolean_t	is_ept;
-	unsigned int	compressed_count;
 
 	pmap_intr_assert();
 
 	if (pmap == PMAP_NULL || pmap == kernel_pmap || s64 == e64) {
-		if (compressed_count_p) {
-			*compressed_count_p = 0;
+		if (compressed_bytes_p) {
+			*compressed_bytes_p = 0;
 		}
 		return 0;
 	}
@@ -2051,8 +2052,8 @@ pmap_query_resident(
 		   (uint32_t) (s64 >> 32), s64,
 		   (uint32_t) (e64 >> 32), e64);
 
-	result = 0;
-	compressed_count = 0;
+	resident_bytes = 0;
+	compressed_bytes = 0;
 
 	PMAP_LOCK(pmap);
 
@@ -2075,9 +2076,9 @@ pmap_query_resident(
 
 				for (; spte < epte; spte++) {
 					if (pte_to_pa(*spte) != 0) {
-						result++;
+						resident_bytes += PAGE_SIZE;
 					} else if (*spte & PTE_COMPRESSED) {
-						compressed_count++;
+						compressed_bytes += PAGE_SIZE;
 					}
 				}
 
@@ -2097,10 +2098,10 @@ pmap_query_resident(
 	PMAP_TRACE(PMAP_CODE(PMAP__QUERY_RESIDENT) | DBG_FUNC_END,
 		   pmap, 0, 0, 0, 0);
 
-	if (compressed_count_p) {
-		*compressed_count_p = compressed_count;
+	if (compressed_bytes_p) {
+		*compressed_bytes_p = compressed_bytes;
 	}
-	return result;
+	return resident_bytes;
 }
 
 #if MACH_ASSERT

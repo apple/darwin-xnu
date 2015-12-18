@@ -322,6 +322,9 @@ static void	vm_pageout_immediate(vm_page_t, boolean_t);
 boolean_t	vm_compressor_immediate_preferred = FALSE;
 boolean_t	vm_compressor_immediate_preferred_override = FALSE;
 boolean_t	vm_restricted_to_single_processor = FALSE;
+static boolean_t vm_pageout_waiter  = FALSE;
+static boolean_t vm_pageout_running = FALSE;
+
 
 static thread_t	vm_pageout_external_iothread = THREAD_NULL;
 static thread_t	vm_pageout_internal_iothread = THREAD_NULL;
@@ -349,7 +352,6 @@ int	vm_upl_wait_for_pages = 0;
  */
 
 unsigned int vm_pageout_active = 0;		/* debugging */
-unsigned int vm_pageout_active_busy = 0;	/* debugging */
 unsigned int vm_pageout_inactive = 0;		/* debugging */
 unsigned int vm_pageout_inactive_throttled = 0;	/* debugging */
 unsigned int vm_pageout_inactive_forced = 0;	/* debugging */
@@ -3126,6 +3128,10 @@ vm_pageout_continue(void)
 	DTRACE_VM2(pgrrun, int, 1, (uint64_t *), NULL);
 	vm_pageout_scan_event_counter++;
 
+	lck_mtx_lock(&vm_page_queue_free_lock);
+	vm_pageout_running = TRUE;
+	lck_mtx_unlock(&vm_page_queue_free_lock);
+
 	vm_pageout_scan();
 	/*
 	 * we hold both the vm_page_queue_free_lock
@@ -3135,12 +3141,37 @@ vm_pageout_continue(void)
 	assert(vm_page_free_wanted_privileged == 0);
 	assert_wait((event_t) &vm_page_free_wanted, THREAD_UNINT);
 
+	vm_pageout_running = FALSE;
+	if (vm_pageout_waiter) {
+		vm_pageout_waiter = FALSE;
+		thread_wakeup((event_t)&vm_pageout_waiter);
+	}
+
 	lck_mtx_unlock(&vm_page_queue_free_lock);
 	vm_page_unlock_queues();
 
 	counter(c_vm_pageout_block++);
 	thread_block((thread_continue_t)vm_pageout_continue);
 	/*NOTREACHED*/
+}
+
+kern_return_t
+vm_pageout_wait(uint64_t deadline)
+{
+	kern_return_t kr;
+
+	lck_mtx_lock(&vm_page_queue_free_lock);
+	for (kr = KERN_SUCCESS; vm_pageout_running && (KERN_SUCCESS == kr); ) {
+		vm_pageout_waiter = TRUE;
+		if (THREAD_AWAKENED != lck_mtx_sleep_deadline(
+				&vm_page_queue_free_lock, LCK_SLEEP_DEFAULT,
+				(event_t) &vm_pageout_waiter, THREAD_UNINT, deadline)) {
+			kr = KERN_OPERATION_TIMED_OUT;
+		}
+	}
+	lck_mtx_unlock(&vm_page_queue_free_lock);
+
+	return (kr);
 }
 
 

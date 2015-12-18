@@ -323,6 +323,7 @@ extern void kernel_debug_string_simple(const char *message);
 #define DBG_MACH_SFI			0xA2	/* Selective Forced Idle (SFI) */
 #define DBG_MACH_ENERGY_PERF	0xA3 /* Energy/performance resource stats */
 #define DBG_MACH_SYSDIAGNOSE	0xA4	/* sysdiagnose keychord */
+#define DBG_MACH_ZALLOC 	0xA5 	/* Zone allocator */
 
 /* Codes for Scheduler (DBG_MACH_SCHED) */
 #define MACH_SCHED              0x0     /* Scheduler */
@@ -440,6 +441,10 @@ extern void kernel_debug_string_simple(const char *message);
 #define SFI_PID_SET_MANAGED		0x8
 #define SFI_PID_CLEAR_MANAGED		0x9
 #define SFI_GLOBAL_DEFER		0xa
+
+/* Codes for Zone Allocator (DBG_MACH_ZALLOC) */
+#define ZALLOC_ZCRAM 			0x0
+
 /* **** The Kernel Debug Sub Classes for Network (DBG_NETWORK) **** */
 #define DBG_NETIP	1	/* Internet Protocol */
 #define DBG_NETARP	2	/* Address Resolution Protocol */

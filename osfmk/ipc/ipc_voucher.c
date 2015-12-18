@@ -1984,7 +1984,9 @@ mach_voucher_extract_attr_content(
 	 * manager referenced during the callout.
 	 */
 	ivgt_lookup(key_index, FALSE, &manager, NULL);
-	assert(IVAM_NULL != manager);
+	if (IVAM_NULL == manager) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 * Get the value(s) to pass to the manager
@@ -2060,7 +2062,9 @@ mach_voucher_extract_attr_recipe(
 	 * manager referenced during the callout.
 	 */
 	ivgt_lookup(key_index, FALSE, &manager, NULL);
-	assert(IVAM_NULL != manager);
+	if (IVAM_NULL == manager) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 * Get the value(s) to pass to the manager
@@ -2126,9 +2130,6 @@ mach_voucher_extract_all_attr_recipes(
 		if (recipe_size - recipe_used < sizeof(*recipe))
 			return KERN_NO_SPACE;
 
-		recipe = (mach_voucher_attr_recipe_t)(void *)&recipes[recipe_used];
-		content_size = recipe_size - recipe_used - sizeof(*recipe);
-		
 		/*
 		 * Get the manager for this key_index.  The
 		 * existence of a non-default value for this
@@ -2137,6 +2138,12 @@ mach_voucher_extract_all_attr_recipes(
 		 */
 		ivgt_lookup(key_index, FALSE, &manager, NULL);
 		assert(IVAM_NULL != manager);
+		if (IVAM_NULL == manager) {
+			continue;
+		}
+
+		recipe = (mach_voucher_attr_recipe_t)(void *)&recipes[recipe_used];
+		content_size = recipe_size - recipe_used - sizeof(*recipe);
 
 		/*
 		 * Get the value(s) to pass to the manager
@@ -2266,7 +2273,9 @@ mach_voucher_attr_command(
 	 * execution.
 	 */
 	ivgt_lookup(key_index, TRUE, &manager, &control);
-	assert(IVAM_NULL != manager);
+	if (IVAM_NULL == manager) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 * Get the values for this <voucher, key> pair

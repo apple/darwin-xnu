@@ -270,7 +270,9 @@ machine_startup(void)
 
 	if (PE_parse_boot_argn("debug", &debug_boot_arg, sizeof (debug_boot_arg))) {
 		panicDebugging = TRUE;
+#if DEVELOPMENT || DEBUG
 		if (debug_boot_arg & DB_HALT) halt_in_debugger=1;
+#endif
 		if (debug_boot_arg & DB_PRT) disable_debug_output=FALSE; 
 		if (debug_boot_arg & DB_SLOG) systemLogDiags=TRUE; 
 		if (debug_boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE;

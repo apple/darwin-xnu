@@ -2692,11 +2692,12 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 
 	case SIOCSPFXFLUSH_IN6: {	/* struct in6_ifreq */
 		/* flush all the prefix advertised by routers */
-		struct nd_prefix *next;
+		struct nd_prefix *next = NULL;
 
 		lck_mtx_lock(nd6_mutex);
 		for (pr = nd_prefix.lh_first; pr; pr = next) {
-			struct in6_ifaddr *ia;
+			struct in6_ifaddr *ia = NULL;
+			bool iterate_pfxlist_again = false;
 
 			next = pr->ndpr_next;
 
@@ -2741,9 +2742,8 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 					 * The same applies for the prefix list.
 					 */
 					ia = in6_ifaddrs;
-					next = nd_prefix.lh_first;
+					iterate_pfxlist_again = true;
 					continue;
-
 				}
 				IFA_UNLOCK(&ia->ia_ifa);
 				ia = ia->ia_next;
@@ -2753,17 +2753,10 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 			prelist_remove(pr);
 			NDPR_UNLOCK(pr);
 			pfxlist_onlink_check();
-			/*
-			 * If we were trying to restart this loop
-			 * above by changing the value of 'next', we might
-			 * end up freeing the only element on the list
-			 * when we call NDPR_REMREF().
-			 * When this happens, we also have get out of this
-			 * loop because we have nothing else to do.
-			 */
-			if (pr == next)
-				next = NULL;
 			NDPR_REMREF(pr);
+			if (iterate_pfxlist_again) {
+				next = nd_prefix.lh_first;
+			}
 		}
 		lck_mtx_unlock(nd6_mutex);
 		break;

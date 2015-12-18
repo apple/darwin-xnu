@@ -71,14 +71,6 @@ int purgeable_nonvolatile_count;
 
 decl_lck_mtx_data(,vm_purgeable_queue_lock)
 
-#define TOKEN_ADD		0x40	/* 0x100 */
-#define TOKEN_DELETE		0x41	/* 0x104 */
-#define TOKEN_RIPEN		0x42	/* 0x108 */
-#define OBJECT_ADD		0x48	/* 0x120 */
-#define OBJECT_REMOVE		0x49	/* 0x124 */
-#define OBJECT_PURGE		0x4a	/* 0x128 */
-#define OBJECT_PURGE_ALL	0x4b	/* 0x12c */
-
 static token_idx_t vm_purgeable_token_remove_first(purgeable_q_t queue);
 
 static void vm_purgeable_stats_helper(vm_purgeable_stat_t *stat, purgeable_q_t queue, int group, task_t target_task);
@@ -688,6 +680,8 @@ vm_purgeable_object_find_and_lock(
 	int		best_object_task_importance;
 	int		best_object_skipped;
 	int		num_objects_skipped;
+	int		try_lock_failed = 0;
+	int		try_lock_succeeded = 0;
 	task_t		owner;
 
 	best_object = VM_OBJECT_NULL;
@@ -700,11 +694,28 @@ vm_purgeable_object_find_and_lock(
 	 * remaining elements in order.
 	 */
 
-	num_objects_skipped = -1;
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (MACHDBG_CODE(DBG_MACH_VM, OBJECT_PURGE_LOOP) | DBG_FUNC_START),
+			      pick_ripe,
+			      group,
+			      VM_KERNEL_UNSLIDE_OR_PERM(queue),
+			      0,
+			      0);
+
+	num_objects_skipped = 0;
 	for (object = (vm_object_t) queue_first(&queue->objq[group]);
 	     !queue_end(&queue->objq[group], (queue_entry_t) object);
 	     object = (vm_object_t) queue_next(&object->objq),
 		num_objects_skipped++) {
+
+		/*
+		 * To prevent us looping for an excessively long time, choose
+		 * the best object we've seen after looking at PURGEABLE_LOOP_MAX elements.
+		 * If we haven't seen an eligible object after PURGEABLE_LOOP_MAX elements,
+		 * we keep going until we find the first eligible object.
+		 */
+		if ((num_objects_skipped >= PURGEABLE_LOOP_MAX) && (best_object != NULL)) {
+			break;
+		}
 
 		if (pick_ripe &&
 		    ! object->purgeable_when_ripe) {
@@ -721,6 +732,7 @@ vm_purgeable_object_find_and_lock(
 
 		if (object_task_importance < best_object_task_importance) {
 			if (vm_object_lock_try(object)) {
+				try_lock_succeeded++;
 				if (best_object != VM_OBJECT_NULL) {
 					/* forget about previous best object */
 					vm_object_unlock(best_object);
@@ -732,9 +744,19 @@ vm_purgeable_object_find_and_lock(
 					/* can't get any better: stop looking */
 					break;
 				}
+			} else {
+				try_lock_failed++;
 			}
 		}
 	}
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (MACHDBG_CODE(DBG_MACH_VM, OBJECT_PURGE_LOOP) | DBG_FUNC_END),
+			      num_objects_skipped, /* considered objects */
+			      try_lock_failed,
+			      try_lock_succeeded,
+			      VM_KERNEL_UNSLIDE_OR_PERM(best_object),
+			      ((best_object == NULL) ? 0 : best_object->resident_page_count));
+
 	object = best_object;
 
 	if (object == VM_OBJECT_NULL) {

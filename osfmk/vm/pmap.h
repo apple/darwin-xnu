@@ -658,10 +658,10 @@ extern void pmap_unmap_sharedpage(pmap_t pmap);
 void pmap_pre_expand(pmap_t pmap, vm_map_offset_t vaddr);
 #endif
 
-unsigned int pmap_query_resident(pmap_t pmap,
-				 vm_map_offset_t s,
-				 vm_map_offset_t e,
-				 unsigned int *compressed_count_p);
+mach_vm_size_t pmap_query_resident(pmap_t pmap,
+				   vm_map_offset_t s,
+				   vm_map_offset_t e,
+				   mach_vm_size_t *compressed_bytes_p);
 
 #if CONFIG_PGTRACE
 int pmap_pgtrace_add_page(pmap_t pmap, vm_map_offset_t start, vm_map_offset_t end);

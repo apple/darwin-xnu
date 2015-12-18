@@ -1375,6 +1375,7 @@ ipc_kmsg_send(
 	ipc_port_t port;
 	thread_t th = current_thread();
 	mach_msg_return_t error = MACH_MSG_SUCCESS;
+	boolean_t kernel_reply = FALSE;
 	spl_t s;
 
 	/* Check if honor qlimit flag is set on thread. */
@@ -1445,6 +1446,7 @@ retry:
 		assert(IP_VALID(port));
 		ip_lock(port);
 		/* fall thru with reply - same options */
+		kernel_reply = TRUE;
 	}
 
 #if IMPORTANCE_INHERITANCE
@@ -1515,6 +1517,18 @@ retry:
 	 * as a successful delivery (like we do for an inactive port).
 	 */
 	if (error == MACH_SEND_INVALID_DEST) {
+		ip_release(port); /* JMM - Future: release right, not just ref */
+		kmsg->ikm_header->msgh_remote_port = MACH_PORT_NULL;
+		ipc_kmsg_destroy(kmsg);
+		return MACH_MSG_SUCCESS;
+	}
+
+	if (error != MACH_MSG_SUCCESS && kernel_reply) {
+		/*
+		 * Kernel reply messages that fail can't be allowed to
+		 * pseudo-receive on error conditions. We need to just treat
+		 * the message as a successful delivery.
+		 */
 		ip_release(port); /* JMM - Future: release right, not just ref */
 		kmsg->ikm_header->msgh_remote_port = MACH_PORT_NULL;
 		ipc_kmsg_destroy(kmsg);
@@ -2017,7 +2031,7 @@ ipc_kmsg_copyin_header(
 		ipc_port_t dport = (ipc_port_t)dest_port;
 
 		/* dport still locked from above */
-		if (ipc_port_importance_delta(dport, 1) == FALSE) {
+		if (ipc_port_importance_delta(dport, IPID_OPTION_SENDPOSSIBLE, 1) == FALSE) {
 			ip_unlock(dport);
 		}
 	}

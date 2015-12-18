@@ -498,6 +498,15 @@ struct	xinpgen {
 #if IPSEC
 #define	in6p_sp		inp_sp
 #endif /* IPSEC */
+#define INP_INC_IFNET_STAT(_inp_, _stat_) { \
+	if ((_inp_)->inp_last_outifp != NULL) { \
+		if ((_inp_)->inp_vflag & INP_IPV6) { \
+			(_inp_)->inp_last_outifp->if_ipv6_stat->_stat_++;\
+		} else { \
+			(_inp_)->inp_last_outifp->if_ipv4_stat->_stat_++;\
+		}\
+	}\
+}
 
 struct inpcbport {
 	LIST_ENTRY(inpcbport) phd_hash;

@@ -154,15 +154,75 @@ int	tcp_do_tso = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, tso, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&tcp_do_tso, 0, "Enable TCP Segmentation Offload");
 
+static int
+sysctl_change_ecn_setting SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int i, err = 0, changed = 0;
+	struct ifnet *ifp;
+
+	err = sysctl_io_number(req, tcp_ecn_outbound, sizeof(int32_t),
+	    &i, &changed);
+	if (err != 0 || req->newptr == USER_ADDR_NULL)
+		return(err);
+
+	if (changed) {
+		if ((tcp_ecn_outbound == 0 || tcp_ecn_outbound == 1) &&
+		    (i == 0 || i == 1)) {
+			tcp_ecn_outbound = i;
+			return(err);
+		}
+		if (tcp_ecn_outbound == 2 && (i == 0 || i == 1)) {
+			/*
+			 * Reset ECN enable flags on non-cellular
+			 * interfaces so that the system default will take
+			 * over
+			 */
+			ifnet_head_lock_shared();
+			TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
+				if (!IFNET_IS_CELLULAR(ifp)) {
+					ifnet_lock_exclusive(ifp);
+					ifp->if_eflags &= ~IFEF_ECN_DISABLE;
+					ifp->if_eflags &= ~IFEF_ECN_ENABLE;
+					ifnet_lock_done(ifp);
+				}
+			}
+			ifnet_head_done();
+		} else {
+			/*
+			 * Set ECN enable flags on non-cellular
+			 * interfaces
+			 */
+			ifnet_head_lock_shared();
+			TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
+				if (!IFNET_IS_CELLULAR(ifp)) {
+					ifnet_lock_exclusive(ifp);
+					ifp->if_eflags |= IFEF_ECN_ENABLE;
+					ifp->if_eflags &= ~IFEF_ECN_DISABLE;
+					ifnet_lock_done(ifp);
+				}
+			}
+			ifnet_head_done();
+		}
+		tcp_ecn_outbound = i;
+	}
+	/* Change the other one too as the work is done */
+	if (i == 2 || tcp_ecn_inbound == 2)
+		tcp_ecn_inbound = i;
+	return (err);
+}
+
 int     tcp_ecn_outbound = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, ecn_initiate_out,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_outbound, 0,
-	"Initiate ECN for outbound connections");
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, ecn_initiate_out,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_outbound, 0,
+    sysctl_change_ecn_setting, "IU",
+    "Initiate ECN for outbound connections");
 
 int     tcp_ecn_inbound = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, ecn_negotiate_in,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_inbound, 0,
-	"Allow ECN negotiation for inbound connections");
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, ecn_negotiate_in,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_inbound, 0,
+    sysctl_change_ecn_setting, "IU",
+    "Initiate ECN for inbound connections");
 
 int	tcp_packet_chaining = 50;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, packetchain,
@@ -377,6 +437,56 @@ tcp_send_ecn_flags_on_syn(struct tcpcb *tp, struct socket *so)
 	return(!((tp->ecn_flags & TE_SETUPSENT) ||
 	    (so->so_flags & SOF_MP_SUBFLOW) ||
 	    (tp->t_flagsext & TF_FASTOPEN)));
+}
+
+void
+tcp_set_ecn(struct tcpcb *tp, struct ifnet *ifp)
+{
+	boolean_t inbound;
+
+	/*
+	 * Socket option has precedence
+	 */
+	if (tp->ecn_flags & TE_ECN_MODE_ENABLE) {
+		tp->ecn_flags |= TE_ENABLE_ECN;
+		goto check_heuristic;
+	}
+
+	if (tp->ecn_flags & TE_ECN_MODE_DISABLE) {
+		tp->ecn_flags &= ~TE_ENABLE_ECN;
+		return;
+	}
+	/*
+	 * Per interface setting comes next
+	 */
+	if (ifp != NULL) {
+		if (ifp->if_eflags & IFEF_ECN_ENABLE) {
+			tp->ecn_flags |= TE_ENABLE_ECN;
+			goto check_heuristic;
+		}
+
+		if (ifp->if_eflags & IFEF_ECN_DISABLE) {
+			tp->ecn_flags &= ~TE_ENABLE_ECN;
+			return;
+		}
+	}
+	/*
+	 * System wide settings come last
+	 */
+	inbound = (tp->t_inpcb->inp_socket->so_head != NULL);
+	if ((inbound && tcp_ecn_inbound == 1) ||
+	    (!inbound && tcp_ecn_outbound == 1)) {
+		tp->ecn_flags |= TE_ENABLE_ECN;
+		goto check_heuristic;
+	} else {
+		tp->ecn_flags &= ~TE_ENABLE_ECN;
+	}
+
+	return;
+
+check_heuristic:
+	if (!tcp_heuristic_do_ecn(tp))
+		tp->ecn_flags &= ~TE_ENABLE_ECN;
 }
 
 /*
@@ -609,8 +719,8 @@ again:
 		if ((ifp = rt->rt_ifp) != NULL) {
 			somultipages(so, (ifp->if_hwassist & IFNET_MULTIPAGES));
 			tcp_set_tso(tp, ifp);
-			soif2kcl(so,
-			    (ifp->if_eflags & IFEF_2KCL));
+			soif2kcl(so, (ifp->if_eflags & IFEF_2KCL));
+			tcp_set_ecn(tp, ifp);
 		}
 		if (rt->rt_flags & RTF_UP)
 			RT_GENID_SYNC(rt);
@@ -1493,6 +1603,7 @@ send:
 				*lp++ = htonl(tp->t_dsack_lseq);
 				*lp++ = htonl(tp->t_dsack_rseq);
 				tcpstat.tcps_dsack_sent++;
+				tp->t_dsack_sent++;
 				nsack--;
 			}
 			VERIFY(nsack == 0 || tp->rcv_numsacks >= nsack);
@@ -1533,8 +1644,8 @@ send:
 	 *
 	 * For a SYN-ACK, send an ECN setup SYN-ACK
 	 */
-	if ((tcp_ecn_inbound || (tp->t_flags & TF_ENABLE_ECN))
-	    && (flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
+	if ((flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK) &&
+	    (tp->ecn_flags & TE_ENABLE_ECN)) {
 		if (tp->ecn_flags & TE_SETUPRECEIVED) {
 			if (tcp_send_ecn_flags_on_syn(tp, so)) {
 				/*
@@ -1568,6 +1679,7 @@ send:
 				if (tp->ecn_flags & TE_SETUPSENT) {
 					tcpstat.tcps_ecn_lost_synack++;
 					tcpstat.tcps_ecn_server_success--;
+					tp->ecn_flags |= TE_LOST_SYNACK;
 				}
 
 				tp->ecn_flags &=
@@ -1575,8 +1687,8 @@ send:
 				    TE_SENDCWR);
 			}
 		}
-	} else if ((tcp_ecn_outbound || (tp->t_flags & TF_ENABLE_ECN))
-	    && (flags & (TH_SYN | TH_ACK)) == TH_SYN) {
+	} else if ((flags & (TH_SYN | TH_ACK)) == TH_SYN &&
+	    (tp->ecn_flags & TE_ENABLE_ECN)) {
 		if (tcp_send_ecn_flags_on_syn(tp, so)) {
 			/*
 			 * Setting TH_ECE and TH_CWR makes this an
@@ -1584,6 +1696,7 @@ send:
 			 */
 			flags |= (TH_ECE | TH_CWR);
 			tcpstat.tcps_ecn_client_setup++;
+			tp->ecn_flags |= TE_CLIENT_SETUP;
 
 			/*
 			 * Record that we sent the ECN-setup and default to
@@ -1596,8 +1709,10 @@ send:
 			 * Fall back to non-ECN and clear flag indicating
 			 * we should send data with IP ECT set.
 			 */
-			if (tp->ecn_flags & TE_SETUPSENT)
+			if (tp->ecn_flags & TE_SETUPSENT) {
 				tcpstat.tcps_ecn_lost_syn++;
+				tp->ecn_flags |= TE_LOST_SYN;
+			}
 			tp->ecn_flags &= ~TE_SENDIPECT;
 		}
 	}
@@ -1971,7 +2086,9 @@ send:
 					tcp_rxtseg_insert(tp, tp->snd_nxt,
 					    (tp->snd_nxt + len - 1));
 				}
-				m->m_pkthdr.pkt_flags |= PKTF_TCP_REXMT;
+				if (len > 0)
+					m->m_pkthdr.pkt_flags |=
+					    PKTF_TCP_REXMT;
 			}
 		} else {
 			th->th_seq = htonl(tp->snd_max);
@@ -1981,7 +2098,8 @@ send:
 		tcp_rxtseg_insert(tp, p->rxmit, (p->rxmit + len - 1));
 		p->rxmit += len;
 		tp->sackhint.sack_bytes_rexmit += len;
-		m->m_pkthdr.pkt_flags |= PKTF_TCP_REXMT;
+		if (len > 0)
+			m->m_pkthdr.pkt_flags |= PKTF_TCP_REXMT;
 	}
 	th->th_ack = htonl(tp->rcv_nxt);
 	tp->last_ack_sent = tp->rcv_nxt;

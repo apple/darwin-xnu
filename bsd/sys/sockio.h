@@ -271,6 +271,9 @@
 #define	SIOCGIFFUNCTIONALTYPE	_IOWR('i', 173, struct ifreq) /* get interface functional type */
 #define	SIOCSIFNETSIGNATURE	_IOWR('i', 174, struct if_nsreq)
 #define	SIOCGIFNETSIGNATURE	_IOWR('i', 175, struct if_nsreq)
+
+#define	SIOCGECNMODE		_IOWR('i', 176, struct ifreq)
+#define	SIOCSECNMODE		_IOW('i', 177, struct ifreq)
 #endif /* PRIVATE */
 
 #endif /* !_SYS_SOCKIO_H_ */

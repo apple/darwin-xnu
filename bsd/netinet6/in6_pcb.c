@@ -200,6 +200,7 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 		return (EINVAL);
 	if (!(so->so_options & (SO_REUSEADDR|SO_REUSEPORT)))
 		wild = 1;
+
 	socket_unlock(so, 0); /* keep reference */
 	lck_rw_lock_exclusive(pcbinfo->ipi_lock);
 
@@ -367,6 +368,16 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	}
 
 	socket_lock(so, 0);
+	/*
+	 * We unlocked socket's protocol lock for a long time.
+	 * The socket might have been dropped/defuncted.
+	 * Checking if world has changed since.
+	 */
+	if (inp->inp_state == INPCB_STATE_DEAD) {
+		lck_rw_done(pcbinfo->ipi_lock);
+		return (ECONNABORTED);
+	}
+
 	/* check if the socket got bound when the lock was released */
 	if (inp->inp_lport || !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) {
 		lck_rw_done(pcbinfo->ipi_lock);

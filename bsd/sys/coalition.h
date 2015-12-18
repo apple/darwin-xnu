@@ -105,6 +105,21 @@ extern int coalitions_get_list(int type, struct procinfo_coalinfo *coal_list, in
 extern boolean_t coalition_is_leader(task_t task, int coal_type, coalition_t *coal);
 
 /*
+ * coalition_get_leader:
+ * Get a task reference on the leader of a given coalition
+ *
+ * Parameters:
+ *	coal      : The coalition to investigate
+ *
+ * Returns: A referenced task pointer of the leader of the given coalition.
+ *          This could be TASK_NULL if the coalition doesn't have a leader.
+ *          If the return value is non-null, the caller is responsible to call
+ *          task_deallocate on the returned value.
+ */
+extern task_t coalition_get_leader(coalition_t coal);
+
+
+/*
  * coalition_get_task_count:
  * Sum up the number of tasks in the given coalition
  *

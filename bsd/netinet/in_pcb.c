@@ -714,10 +714,11 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 		return (EINVAL);
 	if (!(so->so_options & (SO_REUSEADDR|SO_REUSEPORT)))
 		wild = 1;
-	socket_unlock(so, 0); /* keep reference on socket */
-	lck_rw_lock_exclusive(pcbinfo->ipi_lock);
 
 	bzero(&laddr, sizeof(laddr));
+
+	socket_unlock(so, 0); /* keep reference on socket */
+	lck_rw_lock_exclusive(pcbinfo->ipi_lock);
 
 	if (nam != NULL) {
 
@@ -944,6 +945,17 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 		}
 	}
 	socket_lock(so, 0);
+
+	/*
+	 * We unlocked socket's protocol lock for a long time.
+	 * The socket might have been dropped/defuncted.
+	 * Checking if world has changed since.
+	 */
+	if (inp->inp_state == INPCB_STATE_DEAD) {
+		lck_rw_done(pcbinfo->ipi_lock);
+		return (ECONNABORTED);
+	}
+
 	if (inp->inp_lport != 0 || inp->inp_laddr.s_addr != INADDR_ANY) {
 		lck_rw_done(pcbinfo->ipi_lock);
 		return (EINVAL);
@@ -2039,7 +2051,13 @@ in_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in_addr faddr,
 }
 
 /*
- * Insert PCB onto various hash lists.
+ * @brief	Insert PCB onto various hash lists.
+ *
+ * @param	inp Pointer to internet protocol control block
+ * @param	locked	Implies if ipi_lock (protecting pcb list)
+ * 		is already locked or not.
+ *
+ * @return	int error on failure and 0 on success
  */
 int
 in_pcbinshash(struct inpcb *inp, int locked)
@@ -2059,16 +2077,22 @@ in_pcbinshash(struct inpcb *inp, int locked)
 			socket_unlock(inp->inp_socket, 0);
 			lck_rw_lock_exclusive(pcbinfo->ipi_lock);
 			socket_lock(inp->inp_socket, 0);
-			if (inp->inp_state == INPCB_STATE_DEAD) {
-				/*
-				 * The socket got dropped when
-				 * it was unlocked
-				 */
-				lck_rw_done(pcbinfo->ipi_lock);
-				return (ECONNABORTED);
-			}
 		}
 	}
+
+	/*
+	 * This routine or its caller may have given up
+	 * socket's protocol lock briefly.
+	 * During that time the socket may have been dropped.
+	 * Safe-guarding against that.
+	 */
+	if (inp->inp_state == INPCB_STATE_DEAD) {
+		if (!locked) {
+			lck_rw_done(pcbinfo->ipi_lock);
+		}
+		return (ECONNABORTED);
+	}
+
 
 #if INET6
 	if (inp->inp_vflag & INP_IPV6)
@@ -2092,8 +2116,6 @@ in_pcbinshash(struct inpcb *inp, int locked)
 		if (phd->phd_port == inp->inp_lport)
 			break;
 	}
-
-	VERIFY(inp->inp_state != INPCB_STATE_DEAD);
 
 	/*
 	 * If none exists, malloc one and tack it on.

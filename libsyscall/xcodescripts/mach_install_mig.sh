@@ -77,7 +77,7 @@ MIGS_PRIVATE=""
 
 MIGS_DUAL_PUBLIC_PRIVATE=""
 
-if [[ "$PLATFORM_NAME" = "iphoneos" || "$PLATFORM_NAME" = "iphonesimulator"  || "$PLATFORM_NAME" = "iphoneosnano" || "$PLATFORM_NAME" = "iphonenanosimulator" || "$PLATFORM_NAME" = "tvos" || "$PLATFOM_NAME" = "tvsimulator" || "$PLATFOM_NAME" = "appletvos" || "$PLATFOM_NAME" = "appletvsimulator" || "$PLATFOM_NAME" = "watchos" || "$PLATFOM_NAME" = "watchsimulator" ]]
+if ( echo {iphone,tv,appletv,watch}{os,simulator} iphone{osnano,nanosimulator} | grep -wFq "$PLATFORM_NAME" )
 then
 	MIGS_PRIVATE="mach_vm.defs"
 else
@@ -101,9 +101,10 @@ MACH_HDRS="mach.h
 	port_obj.h
 	sync.h
 	vm_task.h
-	vm_page_size.h"
+	vm_page_size.h
+	thread_state.h"
 
-MIG_FILTERS="watchos_prohibited_mig.txt"
+MIG_FILTERS="watchos_prohibited_mig.txt tvos_prohibited_mig.txt"
 
 # install /usr/include/server headers 
 mkdir -p $SERVER_HEADER_DST

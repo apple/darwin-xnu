@@ -114,8 +114,13 @@
 		74119F46188F3B6A00C6F48F /* vm_page_size.h in Headers */ = {isa = PBXBuildFile; fileRef = 7466C923170CB99B004557CC /* vm_page_size.h */; };
 		7466C924170CBA53004557CC /* vm_page_size.h in Headers */ = {isa = PBXBuildFile; fileRef = 7466C923170CB99B004557CC /* vm_page_size.h */; };
 		74F3290B18EB269400B2B70E /* vm_page_size.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 7466C923170CB99B004557CC /* vm_page_size.h */; };
+		978228281B8678DC008385AC /* pselect-darwinext.c in Sources */ = {isa = PBXBuildFile; fileRef = 978228271B8678CB008385AC /* pselect-darwinext.c */; };
+		978228291B8678DF008385AC /* pselect-darwinext-cancel.c in Sources */ = {isa = PBXBuildFile; fileRef = 978228261B8678C2008385AC /* pselect-darwinext-cancel.c */; };
 		7AE28FDF18AC41B1006A5626 /* csr.c in Sources */ = {isa = PBXBuildFile; fileRef = 7AE28FDE18AC41B1006A5626 /* csr.c */; };
 		9002401118FC9A7F00D73BFA /* rename_ext.c in Sources */ = {isa = PBXBuildFile; fileRef = 906AA2D018F74CD1001C681A /* rename_ext.c */; };
+		928336A11B83ED9100873B90 /* thread_register_state.c in Sources */ = {isa = PBXBuildFile; fileRef = 928336A01B83ED7800873B90 /* thread_register_state.c */; };
+		9299E14A1B841E74005B7350 /* thread_state.h in Headers */ = {isa = PBXBuildFile; fileRef = 928336A21B8412C100873B90 /* thread_state.h */; };
+		9299E14B1B841F59005B7350 /* thread_state.h in Headers */ = {isa = PBXBuildFile; fileRef = 928336A21B8412C100873B90 /* thread_state.h */; };
 		A59CB95616669EFB00B064B3 /* stack_logging_internal.h in Headers */ = {isa = PBXBuildFile; fileRef = A59CB95516669DB700B064B3 /* stack_logging_internal.h */; };
 		A59CB9581666A1A200B064B3 /* munmap.c in Sources */ = {isa = PBXBuildFile; fileRef = A59CB9571666A1A200B064B3 /* munmap.c */; };
 		BA0D9FB1199031AD007E8A73 /* kdebug_trace.c in Sources */ = {isa = PBXBuildFile; fileRef = BA0D9FB0199031AD007E8A73 /* kdebug_trace.c */; };
@@ -228,7 +233,7 @@
 		E4D45C3F16FB20D30002AF25 /* spawn.h in Headers */ = {isa = PBXBuildFile; fileRef = E4D45C3D16FB20970002AF25 /* spawn.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		E4D45C4016FB20DC0002AF25 /* spawn_private.h in Headers */ = {isa = PBXBuildFile; fileRef = E4D45C3E16FB20970002AF25 /* spawn_private.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		E4D7E55C16F8776300F92D8D /* index.c in Sources */ = {isa = PBXBuildFile; fileRef = E4D7E55316F8776300F92D8D /* index.c */; };
-		E4D7E55E16F8776300F92D8D /* memset.c in Sources */ = {isa = PBXBuildFile; fileRef = E4D7E55516F8776300F92D8D /* memset.c */; };
+		E4D7E55E16F8776300F92D8D /* memset.c in Sources */ = {isa = PBXBuildFile; fileRef = E4D7E55516F8776300F92D8D /* memset.c */; settings = {COMPILER_FLAGS = "-fno-builtin"; }; };
 		E4D7E55F16F8776300F92D8D /* strcmp.c in Sources */ = {isa = PBXBuildFile; fileRef = E4D7E55616F8776300F92D8D /* strcmp.c */; };
 		E4D7E56016F8776300F92D8D /* strcpy.c in Sources */ = {isa = PBXBuildFile; fileRef = E4D7E55716F8776300F92D8D /* strcpy.c */; };
 		E4D7E56116F8776300F92D8D /* strlcpy.c in Sources */ = {isa = PBXBuildFile; fileRef = E4D7E55916F8776300F92D8D /* strlcpy.c */; };
@@ -436,8 +441,12 @@
 		4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = mach_approximate_time.s; sourceTree = "<group>"; };
 		72B1E6EC190723DB00FB3FA2 /* guarded_open_dprotected_np.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = guarded_open_dprotected_np.c; sourceTree = "<group>"; };
 		7466C923170CB99B004557CC /* vm_page_size.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = vm_page_size.h; sourceTree = "<group>"; };
+		978228261B8678C2008385AC /* pselect-darwinext-cancel.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "pselect-darwinext-cancel.c"; sourceTree = "<group>"; };
+		978228271B8678CB008385AC /* pselect-darwinext.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "pselect-darwinext.c"; sourceTree = "<group>"; };
 		7AE28FDE18AC41B1006A5626 /* csr.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = csr.c; sourceTree = "<group>"; };
 		906AA2D018F74CD1001C681A /* rename_ext.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = rename_ext.c; sourceTree = "<group>"; };
+		928336A01B83ED7800873B90 /* thread_register_state.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = thread_register_state.c; sourceTree = "<group>"; };
+		928336A21B8412C100873B90 /* thread_state.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = thread_state.h; sourceTree = "<group>"; };
 		A59CB95516669DB700B064B3 /* stack_logging_internal.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = stack_logging_internal.h; sourceTree = "<group>"; };
 		A59CB9571666A1A200B064B3 /* munmap.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = munmap.c; sourceTree = "<group>"; };
 		BA0D9FB0199031AD007E8A73 /* kdebug_trace.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = kdebug_trace.c; sourceTree = "<group>"; };
@@ -728,6 +737,7 @@
 				C6460B7B182025DF00F73CCA /* sfi.c */,
 				24B223B3121DFF12007DAEDE /* sigsuspend-base.c */,
 				13B598931A142F5900DB2D5A /* stackshot.c */,
+				928336A01B83ED7800873B90 /* thread_register_state.c */,
 				248AA962122C7B2A0085F5B1 /* unlink.c */,
 				29A59AE5183B110C00E8B896 /* unlinkat.c */,
 				374A36E214748EE400AAF39D /* varargs_wrappers.s */,
@@ -740,6 +750,8 @@
 		248BA04A121C8EE4008C073F /* cancelable */ = {
 			isa = PBXGroup;
 			children = (
+				978228271B8678CB008385AC /* pselect-darwinext.c */,
+				978228261B8678C2008385AC /* pselect-darwinext-cancel.c */,
 				248BA04B121C8EE4008C073F /* fcntl-base.c */,
 				248BA04E121C8F06008C073F /* fcntl.c */,
 				248BA051121C8FE2008C073F /* fcntl-cancel.c */,
@@ -910,6 +922,7 @@
 				C9D9BCDD114B00600000D8B9 /* mach_interface.h */,
 				C9D9BCDF114B00600000D8B9 /* port_obj.h */,
 				C9D9BCE0114B00600000D8B9 /* sync.h */,
+				928336A21B8412C100873B90 /* thread_state.h */,
 				C9D9BCE3114B00600000D8B9 /* vm_task.h */,
 				7466C923170CB99B004557CC /* vm_page_size.h */,
 			);
@@ -979,6 +992,7 @@
 				C6C401241741566D000AE69F /* gethostuuid_private.h in Headers */,
 				C6D3EFB916542C510052CF30 /* mach.h in Headers */,
 				C6D3EFBA16542C510052CF30 /* mach_error.h in Headers */,
+				9299E14B1B841F59005B7350 /* thread_state.h in Headers */,
 				C6D3EFBB16542C510052CF30 /* mach_init.h in Headers */,
 				C6D3EFBC16542C510052CF30 /* mach_interface.h in Headers */,
 				C6D3EFBD16542C510052CF30 /* port_obj.h in Headers */,
@@ -1012,6 +1026,7 @@
 				C9D9BD26114B00600000D8B9 /* mach.h in Headers */,
 				C9D9BD27114B00600000D8B9 /* mach_error.h in Headers */,
 				C9D9BD28114B00600000D8B9 /* mach_init.h in Headers */,
+				9299E14A1B841E74005B7350 /* thread_state.h in Headers */,
 				C6C40122174155E3000AE69F /* gethostuuid_private.h in Headers */,
 				C9D9BD29114B00600000D8B9 /* mach_interface.h in Headers */,
 				C9D9BD2B114B00600000D8B9 /* port_obj.h in Headers */,
@@ -1251,6 +1266,7 @@
 				C9D9BD56114B00600000D8B9 /* slot_name.c in Sources */,
 				24484A7511F6178E00E10CD2 /* string.c in Sources */,
 				E453AF351700FD3C00F2C94C /* getiopolicy_np.c in Sources */,
+				978228281B8678DC008385AC /* pselect-darwinext.c in Sources */,
 				2485235511582D8F0051B413 /* mach_legacy.c in Sources */,
 				242AB66611EBDC1200107336 /* errno.c in Sources */,
 				E4D45C2E16F868ED0002AF25 /* libproc.c in Sources */,
@@ -1271,6 +1287,7 @@
 				24A7C5C711FF8DA6007669EB /* sendto.c in Sources */,
 				24A7C5C811FF8DA6007669EB /* setattrlist.c in Sources */,
 				24A7C5C911FF8DA6007669EB /* socketpair.c in Sources */,
+				928336A11B83ED9100873B90 /* thread_register_state.c in Sources */,
 				9002401118FC9A7F00D73BFA /* rename_ext.c in Sources */,
 				2419382B12135FF6003CDE41 /* chmod.c in Sources */,
 				248BA01D121C56BF008C073F /* connect.c in Sources */,
@@ -1310,6 +1327,7 @@
 				248AA967122C7CDA0085F5B1 /* rename.c in Sources */,
 				24B8C2621237F53900D36CC3 /* remove-counter.c in Sources */,
 				C99A4F501305B2BD0054B7B7 /* __get_cpu_capabilities.s in Sources */,
+				978228291B8678DF008385AC /* pselect-darwinext-cancel.c in Sources */,
 				C99A4F531305B43F0054B7B7 /* init_cpu_capabilities.c in Sources */,
 				030B179B135377B400DAD1F0 /* open_dprotected_np.c in Sources */,
 				E4D45C3116F868ED0002AF25 /* proc_listpidspath.c in Sources */,

@@ -1165,14 +1165,14 @@ audit_session_setaia(proc_t p, auditinfo_addr_t *new_aia_p)
 		my_new_cred = kauth_cred_setauditinfo(my_cred, &tmp_as);
 
 		if (my_cred != my_new_cred) {
-			proc_lock(p);
+			proc_ucred_lock(p);
 			/* Need to protect for a race where another thread also
 			 * changed the credential after we took our reference.
 			 * If p_ucred has changed then we should restart this
 			 * again with the new cred.
 			 */
 			if (p->p_ucred != my_cred) {
-				proc_unlock(p);
+				proc_ucred_unlock(p);
 				audit_session_unref(my_new_cred);
 				kauth_cred_unref(&my_new_cred);
 				/* try again */
@@ -1182,7 +1182,7 @@ audit_session_setaia(proc_t p, auditinfo_addr_t *new_aia_p)
 			p->p_ucred = my_new_cred;
 			/* update cred on proc */
 			PROC_UPDATE_CREDS_ONPROC(p);
-			proc_unlock(p);
+			proc_ucred_unlock(p);
 		}
 		/*
 		 * Drop old proc reference or our extra reference.
@@ -1390,12 +1390,12 @@ audit_session_join_internal(proc_t p, ipc_port_t port, au_asid_t *new_asid)
 		goto done;
 	}
 
-	proc_lock(p);
+	proc_ucred_lock(p);
 	kauth_cred_ref(p->p_ucred);
 	my_cred = p->p_ucred;
 	if (!IS_VALID_CRED(my_cred)) {
 		kauth_cred_unref(&my_cred);	
-		proc_unlock(p);
+		proc_ucred_unlock(p);
 		err = ESRCH;
 		goto done;
 	}
@@ -1421,7 +1421,7 @@ audit_session_join_internal(proc_t p, ipc_port_t port, au_asid_t *new_asid)
 		/* Increment the proc count of new session */
 		audit_inc_procount(AU_SENTRY_PTR(new_aia_p));
 
-		proc_unlock(p);
+		proc_ucred_unlock(p);
 
 		/* Propagate the change from the process to the Mach task. */
 		set_security_token(p);
@@ -1429,7 +1429,7 @@ audit_session_join_internal(proc_t p, ipc_port_t port, au_asid_t *new_asid)
 		/* Decrement the process count of the former session. */
 		audit_dec_procount(AU_SENTRY_PTR(old_aia_p));
 	} else  {
-		proc_unlock(p);
+		proc_ucred_unlock(p);
 	}
 	kauth_cred_unref(&my_cred);
 

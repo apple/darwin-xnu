@@ -239,10 +239,15 @@ struct tcphdr {
  * Enable message delivery on a socket, this feature is currently unsupported and
  * is subjected to change in future.
  */
-#define	TCP_ENABLE_MSGS 0x206
+#define	TCP_ENABLE_MSGS			0x206
 #define	TCP_ADAPTIVE_WRITE_TIMEOUT	0x207	/* Write timeout used as a multiple of RTT */
-#define	TCP_NOTIMEWAIT		0x208	/* Avoid going into time-wait */
+#define	TCP_NOTIMEWAIT			0x208	/* Avoid going into time-wait */
 #define	TCP_DISABLE_BLACKHOLE_DETECTION	0x209	/* disable PMTU blackhole detection */
+#define	TCP_ECN_MODE			0x210	/* fine grain control for A/B testing */
+
+#define	ECN_MODE_DEFAULT	0x0	/* per interface or system wide default */
+#define	ECN_MODE_ENABLE		0x1	/* force enable ECN on connection */
+#define	ECN_MODE_DISABLE	0x2	/* force disable ECN on connection */
 
 /*
  * The TCP_INFO socket option is a private API and is subject to change
@@ -339,6 +344,26 @@ struct tcp_info {
 		tcpi_tfo_cookie_req_rcv:1, /* Server received cookie-request */
 		tcpi_tfo_cookie_sent:1, /* Server announced cookie */
 		tcpi_tfo_cookie_invalid:1; /* Server received an invalid cookie */
+
+	u_int16_t	tcpi_ecn_client_setup:1,	/* Attempted ECN setup from client side */
+			tcpi_ecn_server_setup:1,	/* Attempted ECN setup from server side */
+			tcpi_ecn_success:1,		/* peer negotiated ECN */
+			tcpi_ecn_lost_syn:1,		/* Lost SYN with ECN setup */
+			tcpi_ecn_lost_synack:1,		/* Lost SYN-ACK with ECN setup */
+			tcpi_local_peer:1,		/* Local to the host or the subnet */
+			tcpi_if_cell:1,			/* Interface is cellular */
+			tcpi_if_wifi:1;			/* Interface is WiFi */
+
+	u_int32_t	tcpi_ecn_recv_ce;	/* Packets received with CE */
+	u_int32_t	tcpi_ecn_recv_cwr;	/* Packets received with CWR */
+
+	u_int32_t	tcpi_rcvoopack;		/* out-of-order packets received */
+	u_int32_t	tcpi_pawsdrop;		/* segments dropped due to PAWS */
+	u_int32_t	tcpi_sack_recovery_episode; /* SACK recovery episodes */
+	u_int32_t	tcpi_reordered_pkts;	/* packets reorderd */
+	u_int32_t	tcpi_dsack_sent;	/* Sent DSACK notification */
+	u_int32_t	tcpi_dsack_recvd;	/* Received a valid DSACK option */
+	u_int32_t	tcpi_flowhash;		/* Unique id for the connection */
 };
 
 struct tcp_measure_bw_burst {

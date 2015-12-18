@@ -1026,6 +1026,21 @@ def DumpCallQueue(cmd_args=None):
 
 #EndMacro: dumpcallqueue
 
+@lldb_command('showalltasklogicalwrites')
+def ShowAllTaskIOStats(cmd_args=None):
+    """ Commad to print I/O stats for all tasks
+    """
+    print "{0: <20s} {1: <20s} {2: <20s} {3: <20s} {4: <20s} {5: <20s}".format("task", "Immediate Writes", "Deferred Writes", "Invalidated Writes", "Metadata Writes", "name")
+    for t in kern.tasks:
+        pval = Cast(t.bsd_info, 'proc *')
+        print "{0: <#18x} {1: >20d} {2: >20d} {3: >20d} {4: >20d} {5: <20s}".format(t,
+            t.task_immediate_writes, 
+            t.task_deferred_writes,
+            t.task_invalidated_writes,
+            t.task_metadata_writes,
+            str(pval.p_comm)) 
+
+
 @lldb_command('showalltasks','C')
 def ShowAllTasks(cmd_args=None, cmd_options={}):
     """  Routine to print a summary listing of all the tasks
@@ -1236,7 +1251,7 @@ def SwitchToRegs(cmd_args=None):
     fake_thread_id = 0xdead0000 | (saved_state & ~0xffff0000)
     fake_thread_id = fake_thread_id & 0xdeadffff
     lldb_process.CreateOSPluginThread(0xdeadbeef, saved_state)
-    lldbthread = lldb_process.GetThreadByID(fake_thread_id)
+    lldbthread = lldb_process.GetThreadByID(int(fake_thread_id))
     
     if not lldbthread.IsValid():
         print "Failed to create thread"

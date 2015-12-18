@@ -411,6 +411,7 @@ void IOService::initialize( void )
     gIOStopProviderList    = OSArray::withCapacity( 16 );
     gIOFinalizeList	   = OSArray::withCapacity( 16 );
     assert( gIOTerminatePhase2List && gIOStopList && gIOStopProviderList && gIOFinalizeList );
+
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -4039,6 +4040,7 @@ OSObject * IOService::copyExistingServices( OSDictionary * matching,
 	    const OSSymbol * sym = OSSymbol::withString(str);
 	    OSMetaClass::applyToInstancesOfClassName(sym, instanceMatch, &ctx);
 	    sym->release();
+
 	}
 	else
 	{
@@ -5071,7 +5073,9 @@ bool IOService::matchInternal(OSDictionary * table, uint32_t options, uint32_t *
     {
 	count = table->getCount();
 	done = 0;
+
 	str = OSDynamicCast(OSString, table->getObject(gIOProviderClassKey));
+
 	if (str) {
 	    done++;
 	    match = ((kIOServiceClassDone & options) || (0 != metaCast(str)));
@@ -5232,6 +5236,7 @@ bool IOService::matchPassive(OSDictionary * table, uint32_t options)
         do
         {
 	    count = table->getCount();
+            
 	    if (!(kIOServiceInternalDone & options))
 	    {
 		match = where->matchInternal(table, options, &done);
@@ -5244,7 +5249,7 @@ bool IOService::matchPassive(OSDictionary * table, uint32_t options)
 
             // do family specific matching
             match = where->matchPropertyTable( table, &score );
-
+            
             if( !match) {
 #if IOMATCHDEBUG
                 if( kIOLogMatch & getDebugFlags( table ))
@@ -5267,7 +5272,8 @@ bool IOService::matchPassive(OSDictionary * table, uint32_t options)
 
             nextTable = OSDynamicCast(OSDictionary,
                   table->getObject( gIOParentMatchKey ));
-            if( nextTable) {
+            if(nextTable) {
+                
 		// look for a matching entry anywhere up to root
                 match = false;
                 matchParent = true;

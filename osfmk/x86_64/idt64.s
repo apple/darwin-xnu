@@ -307,9 +307,9 @@ L_common_dispatch:
 	shr	$32, %rcx
 	testl	%ecx, %ecx
 	jz	4f
-	movl	$0, %gs:CPU_TLB_INVALID
 	testl	$(1<<16), %ecx			/* Global? */
 	jz	3f
+	movl	$0, %gs:CPU_TLB_INVALID
 	mov	%cr4, %rcx	/* RMWW CR4, for lack of an alternative*/
 	and	$(~CR4_PGE), %rcx
 	mov	%rcx, %cr4
@@ -317,6 +317,7 @@ L_common_dispatch:
 	mov	%rcx, %cr4
 	jmp	4f
 3:
+	movb	$0, %gs:CPU_TLB_INVALID_LOCAL
 	mov	%cr3, %rcx
 	mov	%rcx, %cr3
 4:

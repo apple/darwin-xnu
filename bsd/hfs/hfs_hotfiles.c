@@ -1709,8 +1709,10 @@ hfs_recording_init(struct hfsmount *hfsmp)
 		}
 		cnid = filep->fileID;
 
-		/* Skip over journal files. */
-		if (cnid == hfsmp->hfs_jnlfileid || cnid == hfsmp->hfs_jnlinfoblkid) {
+		/* Skip over journal files and the hotfiles B-Tree file. */
+		if (cnid == hfsmp->hfs_jnlfileid
+			|| cnid == hfsmp->hfs_jnlinfoblkid
+			|| cnid == VTOC(hfsmp->hfc_filevp)->c_fileid) {
 			continue;
 		}
 		/*
@@ -2865,6 +2867,15 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 			stage = HFC_ADOPTION;
 			break;
 		}
+
+		// Jump straight to delete for some files...
+		if (key->fileID == VTOC(hfsmp->hfc_filevp)->c_fileid
+			|| key->fileID == hfsmp->hfs_jnlfileid
+			|| key->fileID == hfsmp->hfs_jnlinfoblkid
+			|| key->fileID < kHFSFirstUserCatalogNodeID) {
+			goto delete;
+		}
+
 		/*
 		 * Aquire the vnode for this file.
 		 */

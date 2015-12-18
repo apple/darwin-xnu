@@ -1095,6 +1095,23 @@ dlil_alloc_local_stats(struct ifnet *ifp)
 		ret = 0;
 	}
 
+	if (ifp->if_ipv4_stat == NULL) {
+		MALLOC(ifp->if_ipv4_stat, struct if_tcp_ecn_stat *,
+		    sizeof(struct if_tcp_ecn_stat), M_TEMP, M_WAITOK|M_ZERO);
+		if (ifp->if_ipv4_stat == NULL) {
+			ret = ENOMEM;
+			goto end;
+		}
+	}
+
+	if (ifp->if_ipv6_stat == NULL) {
+		MALLOC(ifp->if_ipv6_stat, struct if_tcp_ecn_stat *,
+		    sizeof(struct if_tcp_ecn_stat), M_TEMP, M_WAITOK|M_ZERO);
+		if (ifp->if_ipv6_stat == NULL) {
+			ret = ENOMEM;
+			goto end;
+		}
+	}
 end:
 	if (ret != 0) {
 		if (ifp->if_tcp_stat != NULL) {
@@ -1108,6 +1125,14 @@ end:
 			    ((intptr_t)ifp->if_udp_stat - sizeof (void *));
 			zfree(dlif_udpstat_zone, *pbuf);
 			ifp->if_udp_stat = NULL;
+		}
+		if (ifp->if_ipv4_stat != NULL) {
+			FREE(ifp->if_ipv4_stat, M_TEMP);
+			ifp->if_ipv4_stat = NULL;
+		}
+		if (ifp->if_ipv6_stat != NULL) {
+			FREE(ifp->if_ipv6_stat, M_TEMP);
+			ifp->if_ipv6_stat = NULL;
 		}
 	}
 
@@ -5093,6 +5118,7 @@ ifproto_media_send_arp(struct ifnet *ifp, u_short arpop,
 }
 
 extern int if_next_index(void);
+extern int tcp_ecn_outbound;
 
 errno_t
 ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
@@ -5414,6 +5440,16 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	} else {
 		ifp->if_interface_state.lqm_state = IFNET_LQM_THRESH_UNKNOWN;
 	}
+
+	/*
+	 * Enable ECN capability on this interface depending on the
+	 * value of ECN global setting
+	 */
+	if (tcp_ecn_outbound == 2 && !IFNET_IS_CELLULAR(ifp)) {
+		ifp->if_eflags |= IFEF_ECN_ENABLE;
+		ifp->if_eflags &= ~IFEF_ECN_DISABLE;
+	}
+
 	ifnet_lock_done(ifp);
 	ifnet_head_done();
 
@@ -5710,6 +5746,14 @@ ifnet_detach(ifnet_t ifp)
 	/* Reset UDP local statistics */
 	if (ifp->if_udp_stat != NULL)
 		bzero(ifp->if_udp_stat, sizeof(*ifp->if_udp_stat));
+
+	/* Reset ifnet IPv4 stats */
+	if (ifp->if_ipv4_stat != NULL)
+		bzero(ifp->if_ipv4_stat, sizeof(*ifp->if_ipv4_stat));
+
+	/* Reset ifnet IPv6 stats */
+	if (ifp->if_ipv6_stat != NULL)
+		bzero(ifp->if_ipv6_stat, sizeof(*ifp->if_ipv6_stat));
 
 	/* Release memory held for interface link status report */
 	if (ifp->if_link_status != NULL) {

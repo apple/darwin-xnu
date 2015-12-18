@@ -297,7 +297,10 @@ bool IODTNVRAM::serializeProperties(OSSerialize *s) const
           && (current_task() == kernel_task || mac_iokit_check_nvram_get(kauth_cred_get(), key->getCStringNoCopy()) == 0)
 #endif
          ) { }
-      else dict->removeObject(key);
+      else {
+        dict->removeObject(key);
+        iter->reset();
+      }
     }
   }
 

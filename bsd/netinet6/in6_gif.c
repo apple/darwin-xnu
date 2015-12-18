@@ -265,7 +265,9 @@ in6_gif_input(struct mbuf **mp, int *offp, int proto)
 	case IPPROTO_IPV4:
 	    {
 		struct ip *ip;
-		u_int8_t otos8;
+		u_int8_t otos8, old_tos;
+		int sum;
+
 		af = AF_INET;
 		otos8 = (ntohl(otos) >> 20) & 0xff;
 		if (mbuf_len(m) < sizeof (*ip)) {
@@ -274,9 +276,17 @@ in6_gif_input(struct mbuf **mp, int *offp, int proto)
 				return (IPPROTO_DONE);
 		}
 		ip = mtod(m, struct ip *);
-		if (gifp->if_flags & IFF_LINK1)
+		if (gifp->if_flags & IFF_LINK1) {
+			old_tos = ip->ip_tos;
 			egress_success = ip_ecn_egress(ECN_NORMAL, &otos8, &ip->ip_tos);
-		else
+			if (old_tos != ip->ip_tos) {
+			    sum = ~ntohs(ip->ip_sum) & 0xffff;
+			    sum += (~old_tos & 0xffff) + ip->ip_tos;
+			    sum = (sum >> 16) + (sum & 0xffff);
+			    sum += (sum >> 16);  /* add carry */
+			    ip->ip_sum = htons(~sum & 0xffff);
+			}
+		} else
 			egress_success = ip_ecn_egress(ECN_NOCARE, &otos8, &ip->ip_tos);
 		break;
 	    }

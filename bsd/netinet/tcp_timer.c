@@ -327,6 +327,9 @@ struct tcp_last_report_stats {
 	u_int32_t	tcps_ecn_conn_plnoce;
 	u_int32_t	tcps_ecn_conn_pl_ce;
 	u_int32_t	tcps_ecn_conn_nopl_ce;
+	u_int32_t	tcps_ecn_fallback_synloss;
+	u_int32_t	tcps_ecn_fallback_reorder;
+	u_int32_t	tcps_ecn_fallback_ce;
 
 	/* TFO-related statistics */
 	u_int32_t	tcps_tfo_syn_data_rcv;
@@ -778,6 +781,15 @@ tcp_timers(tp, timer)
 				tcpstat.tcps_drop_after_sleep++;
 			} else {
 				tcpstat.tcps_timeoutdrop++;
+			}
+			if (tp->t_rxtshift >= TCP_MAXRXTSHIFT) {
+				if (TCP_ECN_ENABLED(tp)) {
+					INP_INC_IFNET_STAT(tp->t_inpcb,
+					    ecn_on.rxmit_drop);
+				} else {
+					INP_INC_IFNET_STAT(tp->t_inpcb,
+					    ecn_off.rxmit_drop);
+				}
 			}
 			tp->t_rxtshift = TCP_MAXRXTSHIFT;
 			postevent(so, 0, EV_TIMEOUT);			
@@ -1341,6 +1353,7 @@ fc_output:
 
 		tp->t_timer[TCPT_REXMT] = 0;
 		tcpstat.tcps_sack_recovery_episode++;
+		tp->t_sack_recovery_episode++;
 		tp->sack_newdata = tp->snd_nxt;
 		tp->snd_cwnd = tp->t_maxseg;
 		tcp_ccdbg_trace(tp, NULL, TCP_CC_ENTER_FASTRECOVERY);
@@ -2046,6 +2059,12 @@ tcp_report_stats(void)
 	    &prev.tcps_ecn_conn_pl_ce, &stat.ecn_conn_pl_ce);
 	tcp_cumulative_stat(tcpstat.tcps_ecn_conn_nopl_ce,
 	    &prev.tcps_ecn_conn_nopl_ce, &stat.ecn_conn_nopl_ce);
+	tcp_cumulative_stat(tcpstat.tcps_ecn_fallback_synloss,
+	    &prev.tcps_ecn_fallback_synloss, &stat.ecn_fallback_synloss);
+	tcp_cumulative_stat(tcpstat.tcps_ecn_fallback_reorder,
+	    &prev.tcps_ecn_fallback_reorder, &stat.ecn_fallback_reorder);
+	tcp_cumulative_stat(tcpstat.tcps_ecn_fallback_ce,
+	    &prev.tcps_ecn_fallback_ce, &stat.ecn_fallback_ce);
 	tcp_cumulative_stat(tcpstat.tcps_tfo_syn_data_rcv,
 	    &prev.tcps_tfo_syn_data_rcv, &stat.tfo_syn_data_rcv);
 	tcp_cumulative_stat(tcpstat.tcps_tfo_cookie_req_rcv,

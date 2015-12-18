@@ -1159,6 +1159,17 @@ extern kern_return_t	vm_map_copyin_common(
 				vm_map_copy_t		*copy_result,	/* OUT */
 				boolean_t		use_maxprot);
 
+#define VM_MAP_COPYIN_SRC_DESTROY	0x00000001
+#define VM_MAP_COPYIN_USE_MAXPROT	0x00000002
+#define VM_MAP_COPYIN_ENTRY_LIST	0x00000004
+#define VM_MAP_COPYIN_ALL_FLAGS		0x00000007
+extern kern_return_t	vm_map_copyin_internal(
+				vm_map_t		src_map,
+				vm_map_address_t	src_addr,
+				vm_map_size_t		len,
+				int			flags,
+				vm_map_copy_t		*copy_result); /* OUT */
+
 extern kern_return_t	vm_map_copy_extract(
 	vm_map_t		src_map,
 	vm_map_address_t	src_addr,

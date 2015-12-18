@@ -2847,6 +2847,26 @@ hfs_getmountpoint(struct vnode *vp, struct hfsmount **hfsmpp)
 // XXXdbg
 #include <sys/filedesc.h>
 
+static hfsmount_t *hfs_mount_from_cwd(vfs_context_t ctx)
+{
+	vnode_t vp = vfs_context_cwd(ctx);
+
+	if (!vp)
+		return NULL;
+
+	/*
+	 * We could use vnode_tag, but it is probably more future proof to
+	 * compare fstypename.
+	 */
+	char fstypename[MFSNAMELEN];
+	vnode_vfsname(vp, fstypename);
+
+	if (strcmp(fstypename, "hfs"))
+		return NULL;
+
+	return VTOHFS(vp);
+}
+
 /*
  * HFS filesystem related variables.
  */
@@ -2930,7 +2950,6 @@ encodinghint_exit:
 
 	} else if (name[0] == HFS_ENABLE_JOURNALING) {
 		// make the file system journaled...
-		vnode_t vp = vfs_context_cwd(context);
 		vnode_t jvp;
 		ExtendedVCB *vcb;
 		struct cat_attr jnl_attr;
@@ -2952,10 +2971,11 @@ encodinghint_exit:
 		if (!kauth_cred_issuser(kauth_cred_get())) {
 			return (EPERM);
 		}
-		if (vp == NULLVP)
-		        return EINVAL;
 
-		hfsmp = VTOHFS(vp);
+		hfsmp = hfs_mount_from_cwd(context);
+		if (!hfsmp)
+			return EINVAL;
+
 		if (hfsmp->hfs_flags & HFS_READ_ONLY) {
 			return EROFS;
 		}
@@ -2965,7 +2985,7 @@ encodinghint_exit:
 		}
 
 		if (hfsmp->jnl) {
-		    printf("hfs: volume @ mp %p is already journaled!\n", vnode_mount(vp));
+		    printf("hfs: volume %s is already journaled!\n", hfsmp->vcbVN);
 		    return EAGAIN;
 		}
 		vcb = HFSTOVCB(hfsmp);
@@ -3145,16 +3165,15 @@ encodinghint_exit:
 		return 0;
 	} else if (name[0] == HFS_DISABLE_JOURNALING) {
 		// clear the journaling bit 
-		vnode_t vp = vfs_context_cwd(context);
-		
+
 		/* Only root can disable journaling */
 		if (!kauth_cred_issuser(kauth_cred_get())) {
 			return (EPERM);
 		}
-		if (vp == NULLVP)
-		        return EINVAL;
 
-		hfsmp = VTOHFS(vp);
+		hfsmp = hfs_mount_from_cwd(context);
+		if (!hfsmp)
+			return EINVAL;
 
 		/* 
 		 * Disabling journaling is disallowed on volumes with directory hard links
@@ -3165,7 +3184,7 @@ encodinghint_exit:
 			return EPERM;
 		}
 
-		printf("hfs: disabling journaling for mount @ %p\n", vnode_mount(vp));
+		printf("hfs: disabling journaling for %s\n", hfsmp->vcbVN);
 
 		hfs_lock_global (hfsmp, HFS_EXCLUSIVE_LOCK);
 
@@ -3197,34 +3216,6 @@ encodinghint_exit:
 			fsid.val[1] = (int32_t)vfs_typenum(HFSTOVFS(hfsmp));
 			vfs_event_signal(&fsid, VQ_UPDATE, (intptr_t)NULL);
 		}
-		return 0;
-	} else if (name[0] == HFS_GET_JOURNAL_INFO) {
-		vnode_t vp = vfs_context_cwd(context);
-		off_t jnl_start, jnl_size;
-
-		if (vp == NULLVP)
-		        return EINVAL;
-
-		/* 64-bit processes won't work with this sysctl -- can't fit a pointer into an int! */
-		if (proc_is64bit(current_proc()))
-			return EINVAL;
-
-		hfsmp = VTOHFS(vp);
-	    if (hfsmp->jnl == NULL) {
-			jnl_start = 0;
-			jnl_size  = 0;
-	    } else {
-			jnl_start = hfs_blk_to_bytes(hfsmp->jnl_start, HFSTOVCB(hfsmp)->blockSize) + HFSTOVCB(hfsmp)->hfsPlusIOPosOffset;
-			jnl_size  = hfsmp->jnl_size;
-	    }
-
-	    if ((error = copyout((caddr_t)&jnl_start, CAST_USER_ADDR_T(name[1]), sizeof(off_t))) != 0) {
-			return error;
-		}
-	    if ((error = copyout((caddr_t)&jnl_size, CAST_USER_ADDR_T(name[2]), sizeof(off_t))) != 0) {
-			return error;
-		}
-
 		return 0;
 	} else if (name[0] == HFS_SET_PKG_EXTENSIONS) {
 

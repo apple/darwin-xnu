@@ -2756,6 +2756,7 @@ getsockaddr(struct socket *so, struct sockaddr **namp, user_addr_t uaddr,
 {
 	struct sockaddr *sa;
 	int error;
+	size_t alloclen;
 
 	if (len > SOCK_MAXADDRLEN)
 		return (ENAMETOOLONG);
@@ -2763,7 +2764,12 @@ getsockaddr(struct socket *so, struct sockaddr **namp, user_addr_t uaddr,
 	if (len < offsetof(struct sockaddr, sa_data[0]))
 		return (EINVAL);
 
-	MALLOC(sa, struct sockaddr *, len, M_SONAME, M_WAITOK | M_ZERO);
+	/*
+	 * Workaround for rdar://23362120
+	 * Allways allocate a buffer that can hold an IPv6 socket address
+	 */
+	alloclen = MAX(len, sizeof(struct sockaddr_in6));
+	MALLOC(sa, struct sockaddr *, alloclen, M_SONAME, M_WAITOK | M_ZERO);
 	if (sa == NULL) {
 		return (ENOMEM);
 	}

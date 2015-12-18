@@ -375,6 +375,13 @@ uint64_t zone_map_table_page_count = 0;
 vm_offset_t     zone_map_min_address = 0;  /* initialized in zone_init */
 vm_offset_t     zone_map_max_address = 0;
 
+/* Globals for random boolean generator for elements in free list */
+#define MAX_ENTROPY_PER_ZCRAM 		4
+#define RANDOM_BOOL_GEN_SEED_COUNT      4
+static unsigned int bool_gen_seed[RANDOM_BOOL_GEN_SEED_COUNT];
+static unsigned int bool_gen_global = 0;
+decl_simple_lock_data(, bool_gen_lock)
+
 /* Helpful for walking through a zone's free element list. */
 struct zone_free_element {
 	struct zone_free_element *next;
@@ -1925,6 +1932,84 @@ zone_prio_refill_configure(zone_t z, vm_size_t low_water_mark) {
 }
 
 /*
+ * Boolean Random Number Generator for generating booleans to randomize 
+ * the order of elements in newly zcram()'ed memory. The algorithm is a 
+ * modified version of the KISS RNG proposed in the paper:
+ * http://stat.fsu.edu/techreports/M802.pdf
+ * The modifications have been documented in the technical paper 
+ * paper from UCL:
+ * http://www0.cs.ucl.ac.uk/staff/d.jones/GoodPracticeRNG.pdf 
+ */
+
+static void random_bool_gen_entropy(
+		int 	*buffer,
+		int 	count)
+{
+
+	int i, t;
+	simple_lock(&bool_gen_lock);
+	for (i = 0; i < count; i++) {
+		bool_gen_seed[1] ^= (bool_gen_seed[1] << 5);
+		bool_gen_seed[1] ^= (bool_gen_seed[1] >> 7);
+		bool_gen_seed[1] ^= (bool_gen_seed[1] << 22);
+		t = bool_gen_seed[2] + bool_gen_seed[3] + bool_gen_global;
+		bool_gen_seed[2] = bool_gen_seed[3];
+		bool_gen_global = t < 0;
+		bool_gen_seed[3] = t &2147483647;
+		bool_gen_seed[0] += 1411392427;
+		buffer[i] = (bool_gen_seed[0] + bool_gen_seed[1] + bool_gen_seed[3]);
+	}
+	simple_unlock(&bool_gen_lock);
+}
+
+static boolean_t random_bool_gen(
+		int 	*buffer,
+		int 	index,
+		int 	bufsize)
+{
+	int valindex, bitpos;
+	valindex = (index / (8 * sizeof(int))) % bufsize;
+	bitpos = index % (8 * sizeof(int));
+	return (boolean_t)(buffer[valindex] & (1 << bitpos));
+} 
+
+static void 
+random_free_to_zone(
+			zone_t 		zone,
+			vm_offset_t 	newmem,
+			vm_offset_t 	first_element_offset,
+			int 		element_count,
+			boolean_t 	from_zm,
+			int 		*entropy_buffer)
+{
+	vm_offset_t 	last_element_offset;
+	vm_offset_t 	element_addr;
+	vm_size_t       elem_size;
+	int 		index;	
+
+	elem_size = zone->elem_size;
+	last_element_offset = first_element_offset + ((element_count * elem_size) - elem_size);
+	for (index = 0; index < element_count; index++) {
+		assert(first_element_offset <= last_element_offset);
+		if (random_bool_gen(entropy_buffer, index, MAX_ENTROPY_PER_ZCRAM)) {
+			element_addr = newmem + first_element_offset;
+			first_element_offset += elem_size;
+		} else {
+			element_addr = newmem + last_element_offset;
+			last_element_offset -= elem_size;
+		}
+		if (element_addr != (vm_offset_t)zone) {
+			zone->count++;  /* compensate for free_to_zone */
+			free_to_zone(zone, element_addr, FALSE);
+		}
+		if (!zone->use_page_list && from_zm) {
+			zone_page_alloc(element_addr, elem_size);
+		}
+		zone->cur_size += elem_size;
+	}
+}
+
+/*
  *	Cram the given memory into the specified zone. Update the zone page count accordingly.
  */
 void
@@ -1935,6 +2020,9 @@ zcram(
 {
 	vm_size_t	elem_size;
 	boolean_t   from_zm = FALSE;
+	vm_offset_t first_element_offset;
+	int element_count;
+	int entropy_buffer[MAX_ENTROPY_PER_ZCRAM];
 
 	/* Basic sanity checks */
 	assert(zone != ZONE_NULL && newmem != (vm_offset_t)0);
@@ -1942,6 +2030,8 @@ zcram(
 		|| (from_zone_map(newmem, size)));
 
 	elem_size = zone->elem_size;
+
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_ZALLOC, ZALLOC_ZCRAM) | DBG_FUNC_START, VM_KERNEL_ADDRPERM(zone), size, 0, 0, 0);
 
 	if (from_zone_map(newmem, size))
 		from_zm = TRUE;
@@ -1955,6 +2045,8 @@ zcram(
 
 	ZONE_PAGE_COUNT_INCR(zone, (size / PAGE_SIZE));
 
+	random_bool_gen_entropy(entropy_buffer, MAX_ENTROPY_PER_ZCRAM);
+	
 	lock_zone(zone);
 
 	if (zone->use_page_list) {
@@ -1965,7 +2057,6 @@ zcram(
 		assert((size & PAGE_MASK) == 0);
 		for (; size > 0; newmem += PAGE_SIZE, size -= PAGE_SIZE) {
 
-			vm_size_t pos_in_page;
 			page_metadata = (struct zone_page_metadata *)(newmem);
 			
 			page_metadata->pages.next = NULL;
@@ -1977,36 +2068,24 @@ zcram(
 
 			enqueue_tail(&zone->pages.all_used, (queue_entry_t)page_metadata);
 
-			vm_offset_t first_element_offset;
 			if (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT == 0){
 				first_element_offset = zone_page_metadata_size;
 			} else {
 				first_element_offset = zone_page_metadata_size + (ZONE_ELEMENT_ALIGNMENT - (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT));
 			}
-
-			for (pos_in_page = first_element_offset; (newmem + pos_in_page + elem_size) < (vm_offset_t)(newmem + PAGE_SIZE); pos_in_page += elem_size) {
-				page_metadata->alloc_count++;
-				zone->count++;	/* compensate for free_to_zone */
-				free_to_zone(zone, newmem + pos_in_page, FALSE);
-				zone->cur_size += elem_size;
-			}
+			element_count = (int)((PAGE_SIZE - first_element_offset) / elem_size);
+			page_metadata->alloc_count += element_count;
+			random_free_to_zone(zone, newmem, first_element_offset, element_count, from_zm, entropy_buffer);			
 		}
-	} else {
-		while (size >= elem_size) {
-			zone->count++;	/* compensate for free_to_zone */
-			if (newmem == (vm_offset_t)zone) {
-				/* Don't free zone_zone zone */
-			} else {
-				free_to_zone(zone, newmem, FALSE);
-			}
-			if (from_zm)
-				zone_page_alloc(newmem, elem_size);
-			size -= elem_size;
-			newmem += elem_size;
-			zone->cur_size += elem_size;
-		}
+	} else {	
+		first_element_offset = 0;
+		element_count = (int)((size - first_element_offset) / elem_size);		
+		random_free_to_zone(zone, newmem, first_element_offset, element_count, from_zm, entropy_buffer);
 	}
 	unlock_zone(zone);
+	
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_ZALLOC, ZALLOC_ZCRAM) | DBG_FUNC_END, VM_KERNEL_ADDRPERM(zone), 0, 0, 0, 0);
+
 }
 
 
@@ -2070,6 +2149,7 @@ void
 zone_bootstrap(void)
 {
 	char temp_buf[16];
+	unsigned int i;
 
 	if (PE_parse_boot_argn("-zinfop", temp_buf, sizeof(temp_buf))) {
 		zinfo_per_task = TRUE;
@@ -2080,6 +2160,12 @@ zone_bootstrap(void)
 
 	/* Set up zone element poisoning */
 	zp_init();
+
+	/* Seed the random boolean generator for elements in zone free list */
+	for (i = 0; i < RANDOM_BOOL_GEN_SEED_COUNT; i++) {
+		bool_gen_seed[i] = (unsigned int)early_random();
+	}
+	simple_lock_init(&bool_gen_lock, 0);
 
 	/* should zlog log to debug zone corruption instead of leaks? */
 	if (PE_parse_boot_argn("-zc", temp_buf, sizeof(temp_buf))) {
@@ -2139,7 +2225,6 @@ zone_bootstrap(void)
 	/* initialize fake zones and zone info if tracking by task */
 	if (zinfo_per_task) {
 		vm_size_t zisize = sizeof(zinfo_usage_store_t) * ZINFO_SLOTS;
-		unsigned int i;
 
 		for (i = 0; i < num_fake_zones; i++)
 			fake_zones[i].init(ZINFO_SLOTS - num_fake_zones + i);

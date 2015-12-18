@@ -134,7 +134,6 @@ int kdbg_readcurcpumap(user_addr_t, size_t *);
 int kdbg_readthrmap(user_addr_t, size_t *, vnode_t, vfs_context_t);
 int kdbg_readthrmap_v3(user_addr_t, size_t *, int);
 int kdbg_readcurthrmap(user_addr_t, size_t *);
-int kdbg_getreg(kd_regtype *);
 int kdbg_setreg(kd_regtype *);
 int kdbg_setrtcdec(kd_regtype *);
 int kdbg_setpidex(kd_regtype *);
@@ -2290,50 +2289,6 @@ kdbg_setreg(kd_regtype * kdr)
 	return(ret);
 }
 
-int
-kdbg_getreg(__unused kd_regtype * kdr)
-{
-#if 0	
-	int i,j, ret=0;
-	unsigned int val_1, val_2, val;
-
-	switch (kdr->type) {
-	case KDBG_CLASSTYPE :
-		val_1 = (kdr->value1 & 0xff);
-		val_2 = val_1 + 1;
-		kdlog_beg = (val_1<<24);
-		kdlog_end = (val_2<<24);
-		kd_ctrl_page.kdebug_flags &= (unsigned int)~KDBG_CKTYPES;
-		kd_ctrl_page.kdebug_flags |= (KDBG_RANGECHECK | KDBG_CLASSTYPE);
-		break;
-	case KDBG_SUBCLSTYPE :
-		val_1 = (kdr->value1 & 0xff);
-		val_2 = (kdr->value2 & 0xff);
-		val = val_2 + 1;
-		kdlog_beg = ((val_1<<24) | (val_2 << 16));
-		kdlog_end = ((val_1<<24) | (val << 16));
-		kd_ctrl_page.kdebug_flags &= (unsigned int)~KDBG_CKTYPES;
-		kd_ctrl_page.kdebug_flags |= (KDBG_RANGECHECK | KDBG_SUBCLSTYPE);
-		break;
-	case KDBG_RANGETYPE :
-		kdlog_beg = (kdr->value1);
-		kdlog_end = (kdr->value2);
-		kd_ctrl_page.kdebug_flags &= (unsigned int)~KDBG_CKTYPES;
-		kd_ctrl_page.kdebug_flags |= (KDBG_RANGECHECK | KDBG_RANGETYPE);
-		break;
-	case KDBG_TYPENONE :
-		kd_ctrl_page.kdebug_flags &= (unsigned int)~KDBG_CKTYPES;
-		kdlog_beg = 0;
-		kdlog_end = 0;
-		break;
-	default :
-		ret = EINVAL;
-		break;
-	}
-#endif /* 0 */
-	return(EINVAL);
-}
-
 static int
 kdbg_write_to_vnode(caddr_t buffer, size_t size, vnode_t vp, vfs_context_t ctx, off_t file_offset)
 {
@@ -3206,16 +3161,8 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 			ret = kdbg_setreg(&kd_Reg);
 			break;
 		case KERN_KDGETREG:
-			if (size < sizeof(kd_regtype)) {
-				ret = EINVAL;
-				break;
-			}
-			ret = kdbg_getreg(&kd_Reg);
-			if (copyout(&kd_Reg, where, sizeof(kd_regtype))) {
-				ret = EINVAL;
-			}
 			kdbg_disable_bg_trace();
-
+			ret = EINVAL;
 			break;
 		case KERN_KDREADTR:
 			ret = kdbg_read(where, sizep, NULL, NULL, RAW_VERSION1);

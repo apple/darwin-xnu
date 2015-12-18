@@ -51,6 +51,7 @@
  */
 int coalitions_get_list(int type, struct procinfo_coalinfo *coal_list, int list_sz);
 boolean_t coalition_is_leader(task_t task, int coal_type, coalition_t *coal);
+task_t coalition_get_leader(coalition_t coal);
 int coalition_get_task_count(coalition_t coal);
 uint64_t coalition_get_page_count(coalition_t coal, int *ntasks);
 int coalition_get_pid_list(coalition_t coal, uint32_t rolemask, int sort_order,
@@ -168,6 +169,10 @@ struct i_resource_coalition {
 	uint64_t bytesread;
 	uint64_t byteswritten;
 	uint64_t gpu_time;
+	uint64_t logical_immediate_writes;
+	uint64_t logical_deferred_writes;
+	uint64_t logical_invalidated_writes;
+	uint64_t logical_metadata_writes;
 
 	uint64_t task_count;      /* tasks that have started in this coalition */
 	uint64_t dead_task_count; /* tasks that have exited in this coalition;
@@ -385,6 +390,10 @@ i_coal_resource_remove_task(coalition_t coal, task_t task)
 	cr->bytesread += task->task_io_stats->disk_reads.size;
 	cr->byteswritten += task->task_io_stats->total_io.size - task->task_io_stats->disk_reads.size;
 	cr->gpu_time += task_gpu_utilisation(task);
+	cr->logical_immediate_writes += task->task_immediate_writes;	
+	cr->logical_deferred_writes += task->task_deferred_writes;
+	cr->logical_invalidated_writes += task->task_invalidated_writes;
+	cr->logical_metadata_writes += task->task_metadata_writes;
 
 	/* remove the task from the coalition's list */
 	remqueue(&task->task_coalition[COALITION_TYPE_RESOURCE]);
@@ -451,6 +460,10 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	uint64_t bytesread = coal->r.bytesread;
 	uint64_t byteswritten = coal->r.byteswritten;
 	uint64_t gpu_time = coal->r.gpu_time;
+	uint64_t logical_immediate_writes = coal->r.logical_immediate_writes;
+	uint64_t logical_deferred_writes = coal->r.logical_deferred_writes;
+	uint64_t logical_invalidated_writes = coal->r.logical_invalidated_writes;
+	uint64_t logical_metadata_writes = coal->r.logical_metadata_writes;
 	int64_t cpu_time_billed_to_me = 0;
 	int64_t cpu_time_billed_to_others = 0;
 
@@ -482,6 +495,10 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 		bytesread += task->task_io_stats->disk_reads.size;
 		byteswritten += task->task_io_stats->total_io.size - task->task_io_stats->disk_reads.size;
 		gpu_time += task_gpu_utilisation(task);
+		logical_immediate_writes += task->task_immediate_writes;
+		logical_deferred_writes += task->task_deferred_writes;
+		logical_invalidated_writes += task->task_invalidated_writes;
+		logical_metadata_writes += task->task_metadata_writes;
 		cpu_time_billed_to_me += (int64_t)bank_billed_time(task->bank_context);
 		cpu_time_billed_to_others += (int64_t)bank_serviced_time(task->bank_context);
 	}
@@ -522,6 +539,10 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	cru_out->bytesread = bytesread;
 	cru_out->byteswritten = byteswritten;
 	cru_out->gpu_time = gpu_time;
+	cru_out->logical_immediate_writes = logical_immediate_writes;
+	cru_out->logical_deferred_writes = logical_deferred_writes;
+	cru_out->logical_invalidated_writes = logical_invalidated_writes;
+	cru_out->logical_metadata_writes = logical_metadata_writes;
 
 	ledger_dereference(sum_ledger);
 	sum_ledger = LEDGER_NULL;
@@ -1568,6 +1589,27 @@ boolean_t coalition_is_leader(task_t task, int coal_type, coalition_t *coal)
 	coalition_unlock(c);
 
 	return ret;
+}
+
+
+task_t coalition_get_leader(coalition_t coal)
+{
+	task_t leader = TASK_NULL;
+
+	if (!coal)
+		return TASK_NULL;
+
+	coalition_lock(coal);
+	if (coal->type != COALITION_TYPE_JETSAM)
+		goto out_unlock;
+
+	leader = coal->j.leader;
+	if (leader != TASK_NULL)
+		task_reference(leader);
+
+out_unlock:
+	coalition_unlock(coal);
+	return leader;
 }
 
 

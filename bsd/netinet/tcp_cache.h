@@ -34,17 +34,26 @@
 #include <netinet/tcp_var.h>
 #include <netinet/in.h>
 
+/* Number of SYN-losses we accept */
+#define	TFO_MAX_COOKIE_LOSS	2
+#define	ECN_MAX_SYN_LOSS	2
+
+#define ECN_MIN_CE_PROBES	10 /* Probes are basically the number of incoming packets */
+#define ECN_MAX_CE_RATIO	7 /* Ratio is the maximum number of CE-packets we accept per incoming "probe" */
+
 extern void tcp_cache_set_cookie(struct tcpcb *tp, u_char *cookie, u_int8_t len);
 extern int tcp_cache_get_cookie(struct tcpcb *tp, u_char *cookie, u_int8_t *len);
 extern unsigned int tcp_cache_get_cookie_len(struct tcpcb *tp);
 
-extern void tcp_heuristic_tfo_inc_loss(struct tcpcb *tp);
+extern void tcp_heuristic_inc_loss(struct tcpcb *tp, int tfo, int ecn);
 extern void tcp_heuristic_tfo_snd_good(struct tcpcb *tp);
 extern void tcp_heuristic_tfo_rcv_good(struct tcpcb *tp);
 extern void tcp_heuristic_tfo_middlebox(struct tcpcb *tp);
-extern void tcp_heuristic_tfo_reset_loss(struct tcpcb *tp);
+extern void tcp_heuristic_ecn_aggressive(struct tcpcb *tp);
+extern void tcp_heuristic_reset_loss(struct tcpcb *tp, int tfo, int ecn);
 extern void tcp_heuristic_tfo_success(struct tcpcb *tp);
 extern boolean_t tcp_heuristic_do_tfo(struct tcpcb *tp);
+extern boolean_t tcp_heuristic_do_ecn(struct tcpcb *tp);
 
 extern void tcp_cache_init(void);
 

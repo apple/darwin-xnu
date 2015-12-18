@@ -1920,18 +1920,6 @@ THIS_THREAD_IS_CONSUMING_TOO_MUCH_CPU__SENDING_EXC_RESOURCE(void)
 	}
 }
 
-#define UPDATE_IO_STATS(info, size) 				\
-{ 								\
-	info.count++; 						\
-	info.size += size; 					\
-}
-
-#define UPDATE_IO_STATS_ATOMIC(info, size) 			\
-{ 								\
-	OSIncrementAtomic64((SInt64 *)&(info.count)); 		\
-	OSAddAtomic64(size, (SInt64 *)&(info.size)); 		\
-}
-
 void thread_update_io_stats(thread_t thread, int size, int io_flags)
 {
 	int io_tier;

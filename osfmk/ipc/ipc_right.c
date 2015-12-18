@@ -378,7 +378,7 @@ ipc_right_request_alloc(
 
 #if IMPORTANCE_INHERITANCE
 				if (needboost == TRUE) {
-					if (ipc_port_importance_delta(port, 1) == FALSE)
+					if (ipc_port_importance_delta(port, IPID_OPTION_SENDPOSSIBLE, 1) == FALSE)
 						ip_unlock(port);
 				} else
 #endif /* IMPORTANCE_INHERITANCE */

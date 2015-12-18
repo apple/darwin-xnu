@@ -284,6 +284,11 @@ kernel_bootstrap(void)
 	csr_init();
 #endif
 
+	if (PE_i_can_has_debugger(NULL) &&
+	    PE_parse_boot_argn("-show_pointers", &namep, sizeof (namep))) {
+		doprnt_hide_pointers = FALSE;
+	}
+
 	kernel_bootstrap_log("stackshot_lock_init");	
 	stackshot_lock_init();
 
@@ -548,11 +553,11 @@ kernel_bootstrap_thread(void)
 	vm_commpage_init();
 	vm_commpage_text_init();
 
-
 #if CONFIG_MACF
 	kernel_bootstrap_log("mac_policy_initmach");
 	mac_policy_initmach();
 #endif
+
 
 #if CONFIG_SCHED_SFI
 	kernel_bootstrap_log("sfi_init");

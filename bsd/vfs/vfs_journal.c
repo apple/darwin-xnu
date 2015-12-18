@@ -2991,6 +2991,7 @@ journal_modify_block_end(journal *jnl, struct buf *bp, void (*func)(buf_t bp, vo
 		blhdr->binfo[i].bnum = (off_t)(buf_blkno(bp));
 		blhdr->binfo[i].u.bp = bp;
 
+		task_update_logical_writes(current_task(), (2 * bsize), TASK_WRITE_METADATA);
 		KERNEL_DEBUG_CONSTANT(0x3018004, VM_KERNEL_ADDRPERM(vp), blhdr->binfo[i].bnum, bsize, 0, 0);
 
 		if (func) {

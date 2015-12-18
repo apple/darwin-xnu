@@ -2823,8 +2823,9 @@ int hfs_move_data(cnode_t *from_cp, cnode_t *to_cp,
 		// Update to_cp's resource data if it has it
 		filefork_t *to_rfork = to_cp->c_rsrcfork;
 		if (to_rfork) {
-			to_rfork->ff_invalidranges = from_rfork->ff_invalidranges;
-			to_rfork->ff_data 		   = from_rfork->ff_data;
+			TAILQ_SWAP(&to_rfork->ff_invalidranges,
+					   &from_rfork->ff_invalidranges, rl_entry, rl_link);
+			to_rfork->ff_data = from_rfork->ff_data;
 
 			// Deal with ubc_setsize
 			hfs_rsrc_setsize(to_cp);

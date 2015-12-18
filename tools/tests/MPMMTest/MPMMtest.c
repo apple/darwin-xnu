@@ -17,6 +17,8 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/signal.h>
+#include <errno.h>
+#include "../unit_tests/tests_common.h" /* for record_perf_data() */
 
 #include <libkern/OSAtomic.h>
 
@@ -72,6 +74,7 @@ static boolean_t	timeshare = FALSE;
 static boolean_t	threaded = FALSE;
 static boolean_t	oneway = FALSE;
 static boolean_t	useset = FALSE;
+static boolean_t	save_perfdata = FALSE;
 int			msg_type;
 int			num_ints;
 int			num_msgs;
@@ -114,6 +117,7 @@ void usage(const char *progname) {
 	fprintf(stderr, "    -verbose\t\tbe verbose (use multiple times to increase verbosity)\n");
 	fprintf(stderr, "    -oneway\t\tdo not request return reply\n");
 	fprintf(stderr, "    -count num\t\tnumber of messages to send\n");
+	fprintf(stderr, "    -perf   \t\tCreate perfdata files for metrics.\n");
 	fprintf(stderr, "    -type trivial|inline|complex\ttype of messages to send\n");
 	fprintf(stderr, "    -numints num\tnumber of 32-bit ints to send in messages\n");
 	fprintf(stderr, "    -servers num\tnumber of server threads to run\n");
@@ -178,6 +182,9 @@ void parse_args(int argc, char *argv[]) {
 			argc--; argv++;
 		} else if (0 == strcmp("-oneway", argv[0])) {
 			oneway = TRUE;
+			argc--; argv++;
+		} else if (0 == strcmp("-perf", argv[0])) {
+			save_perfdata = TRUE;
 			argc--; argv++;
 		} else if (0 == strcmp("-type", argv[0])) {
 			if (argc < 2) 
@@ -939,6 +946,14 @@ int main(int argc, char *argv[])
 			(double)totalmsg / dsecs);
 	printf("  average message latency (usec): %2.3g\n", 
 			dsecs * 1.0E6 / (double) totalmsg);
+
+	double time_in_sec = (double)deltatv.tv_sec + (double)deltatv.tv_usec/1000.0;
+	double throughput_msg_p_sec = (double) totalmsg/dsecs;
+	double avg_msg_latency = dsecs*1.0E6 / (double)totalmsg;
+
+	if (save_perfdata == TRUE) {
+		record_perf_data("mpmm_avg_msg_latency", "usec", avg_msg_latency, "Message latency measured in microseconds. Lower is better", stderr);
+	}
 
 	if (stress_prepost) {
 		int64_t sendns = abs_to_ns(g_client_send_time);

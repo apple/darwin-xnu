@@ -3104,14 +3104,16 @@ vm_page_unwire(
 
 	VM_PAGE_CHECK(mem);
 	assert(VM_PAGE_WIRED(mem));
+	assert(!mem->gobbled);
 	assert(mem->object != VM_OBJECT_NULL);
 #if DEBUG
 	vm_object_lock_assert_exclusive(mem->object);
 	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 #endif
 	if (--mem->wire_count == 0) {
-		assert(!mem->private && !mem->fictitious);
-		vm_page_wire_count--;
+		if (!mem->private && !mem->fictitious) {
+			vm_page_wire_count--;
+		}
 		assert(mem->object->wired_page_count > 0);
 		mem->object->wired_page_count--;
 		if (!mem->object->wired_page_count) {

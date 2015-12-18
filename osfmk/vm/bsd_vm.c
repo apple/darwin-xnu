@@ -375,6 +375,7 @@ memory_object_control_uiomove(
 	int			i;
 	int			orig_offset;
 	vm_page_t		page_run[MAX_RUN];
+	int 			dirty_count;	/* keeps track of number of pages dirtied as part of this uiomove */
 
 	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL) {
@@ -395,14 +396,15 @@ memory_object_control_uiomove(
 		return 0;
 	}
 	orig_offset = start_offset;
-	    
+
+	dirty_count = 0;	
 	while (io_requested && retval == 0) {
 
 		cur_needed = (start_offset + io_requested + (PAGE_SIZE - 1)) / PAGE_SIZE;
 
 		if (cur_needed > MAX_RUN)
 		        cur_needed = MAX_RUN;
-
+		
 		for (cur_run = 0; cur_run < cur_needed; ) {
 
 		        if ((dst_page = vm_page_lookup(object, offset)) == VM_PAGE_NULL)
@@ -435,6 +437,8 @@ memory_object_control_uiomove(
 			assert(!dst_page->encrypted);
 
 		        if (mark_dirty) {
+				if (dst_page->dirty == FALSE)
+					dirty_count++;
 				SET_PAGE_DIRTY(dst_page, FALSE);
 				if (dst_page->cs_validated && 
 				    !dst_page->cs_tainted) {
@@ -518,7 +522,7 @@ memory_object_control_uiomove(
 		orig_offset = 0;
 	}
 	vm_object_unlock(object);
-
+	task_update_logical_writes(current_task(), (dirty_count * PAGE_SIZE), TASK_WRITE_DEFERRED);
 	return (retval);
 }
 

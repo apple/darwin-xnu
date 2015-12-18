@@ -224,6 +224,8 @@ extern kern_return_t ipc_importance_task_drop_file_lock_assertion(ipc_importance
 extern kern_return_t ipc_importance_task_hold_legacy_external_assertion(ipc_importance_task_t task_imp, uint32_t count);
 extern kern_return_t ipc_importance_task_drop_legacy_external_assertion(ipc_importance_task_t task_imp, uint32_t count);
 
+extern boolean_t ipc_importance_check_circularity(ipc_port_t port, ipc_port_t dest);
+
 /* prepare importance attributes for sending */
 extern boolean_t ipc_importance_send(
 	ipc_kmsg_t		kmsg,

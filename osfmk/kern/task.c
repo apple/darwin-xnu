@@ -189,6 +189,10 @@ struct _task_ledger_indices task_ledgers __attribute__((used)) =
 #endif
 	};
 
+/* System sleep state */
+boolean_t tasks_suspend_state;
+
+
 void init_task_ledgers(void);
 void task_footprint_exceeded(int warning, __unused const void *param0, __unused const void *param1);
 void task_wakeups_rate_exceeded(int warning, __unused const void *param0, __unused const void *param1);
@@ -968,6 +972,10 @@ task_create_internal(
 	new_task->task_io_stats = (io_stat_info_t)kalloc(sizeof(struct io_stat_info));
 	assert(new_task->task_io_stats != NULL);
 	bzero(new_task->task_io_stats, sizeof(struct io_stat_info));
+	new_task->task_immediate_writes = 0;
+	new_task->task_deferred_writes = 0;	
+	new_task->task_invalidated_writes = 0;
+	new_task->task_metadata_writes = 0;
 
 	bzero(&(new_task->cpu_time_qos_stats), sizeof(struct _cpu_time_qos_stats));
 
@@ -1015,6 +1023,9 @@ task_create_internal(
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_enter(&tasks, new_task, task_t, tasks);
 	tasks_count++;
+        if (tasks_suspend_state) {
+            task_suspend_internal(new_task);
+        }
 	lck_mtx_unlock(&tasks_threads_lock);
 
 	*child_task = new_task;
@@ -1611,6 +1622,23 @@ task_terminate_internal(
 	task_deallocate(task);
 
 	return (KERN_SUCCESS);
+}
+
+void
+tasks_system_suspend(boolean_t suspend)
+{
+	task_t task;
+
+	lck_mtx_lock(&tasks_threads_lock);
+	assert(tasks_suspend_state != suspend);
+	tasks_suspend_state = suspend;
+	queue_iterate(&tasks, task, task_t, tasks) {
+		if (task == kernel_task) {
+			continue;
+		}
+		suspend ? task_suspend_internal(task) : task_resume_internal(task);
+	}
+	lck_mtx_unlock(&tasks_threads_lock);
 }
 
 /*
@@ -3831,16 +3859,10 @@ task_set_ras_pc(
 void
 task_synchronizer_destroy_all(task_t task)
 {
-	semaphore_t	semaphore;
-
 	/*
 	 *  Destroy owned semaphores
 	 */
-
-	while (!queue_empty(&task->semaphore_list)) {
-		semaphore = (semaphore_t) queue_first(&task->semaphore_list);
-		(void) semaphore_destroy_internal(task, semaphore);
-	}
+	semaphore_destroy_all(task);
 }
 
 /*
@@ -4516,4 +4538,24 @@ boolean_t task_is_gpu_denied(task_t task)
 {
 	/* We don't need the lock to read this flag */
 	return (task->t_flags & TF_GPU_DENIED) ? TRUE : FALSE;
+}
+
+void task_update_logical_writes(task_t task, uint32_t io_size, int flags)
+{
+	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_DATA_WRITE)) | DBG_FUNC_NONE, task_pid(task), io_size, flags, 0, 0);
+	switch(flags) {
+		case TASK_WRITE_IMMEDIATE:
+			OSAddAtomic64(io_size, (SInt64 *)&(task->task_immediate_writes));
+			break;
+		case TASK_WRITE_DEFERRED:
+			OSAddAtomic64(io_size, (SInt64 *)&(task->task_deferred_writes));
+			break;
+		case TASK_WRITE_INVALIDATED:
+			OSAddAtomic64(io_size, (SInt64 *)&(task->task_invalidated_writes));
+			break;
+		case TASK_WRITE_METADATA:
+			OSAddAtomic64(io_size, (SInt64 *)&(task->task_metadata_writes));
+			break;
+	}
+	return;
 }

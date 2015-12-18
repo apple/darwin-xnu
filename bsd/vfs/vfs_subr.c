@@ -7425,6 +7425,9 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 			goto out;
 		}
 		
+		/* Assume that there were DENYs so we don't wrongly cache KAUTH_VNODE_SEARCHBYANYONE */
+		found_deny = TRUE;
+		
 		KAUTH_DEBUG("%p    ALLOWED - caller is superuser", vp);
 	}
 out:
@@ -7807,10 +7810,10 @@ vnode_authattr(vnode_t vp, struct vnode_attr *vap, kauth_action_t *actionp, vfs_
 	 * If the size is being set, make sure it's not a directory.
 	 */
 	if (VATTR_IS_ACTIVE(vap, va_data_size)) {
-		/* size is meaningless on a directory, don't permit this */
-		if (vnode_isdir(vp)) {
-			KAUTH_DEBUG("ATTR - ERROR: size change requested on a directory");
-			error = EISDIR;
+		/* size is only meaningful on regular files, don't permit otherwise */
+		if (!vnode_isreg(vp)) {
+			KAUTH_DEBUG("ATTR - ERROR: size change requested on non-file");
+			error = vnode_isdir(vp) ? EISDIR : EINVAL;
 			goto out;
 		}
 	}

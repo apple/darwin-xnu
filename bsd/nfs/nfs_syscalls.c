@@ -669,6 +669,11 @@ fhopen( proc_t p,
 		goto bad;
 	}
 
+#if CONFIG_MACF
+	if ((error = mac_vnode_check_open(ctx, vp, fmode)))
+		goto bad;
+#endif
+
 	/* compute action to be authorized */
 	action = 0;
 	if (fmode & FREAD)

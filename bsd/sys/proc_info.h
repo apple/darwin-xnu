@@ -844,6 +844,19 @@ struct proc_fileportinfo {
 #define LISTCOALITIONS_SINGLE_TYPE	2
 #define LISTCOALITIONS_SINGLE_TYPE_SIZE (sizeof(struct procinfo_coalinfo))
 
+/* reasons for proc_can_use_foreground_hw */
+#define PROC_FGHW_OK                     0 /* pid may use foreground HW */
+#define PROC_FGHW_DAEMON_OK              1
+#define PROC_FGHW_DAEMON_LEADER         10 /* pid is in a daemon coalition */
+#define PROC_FGHW_LEADER_NONUI          11 /* coalition leader is in a non-focal state */
+#define PROC_FGHW_LEADER_BACKGROUND     12 /* coalition leader is in a background state */
+#define PROC_FGHW_DAEMON_NO_VOUCHER     13 /* pid is a daemon with no adopted voucher */
+#define PROC_FGHW_NO_VOUCHER_ATTR       14 /* pid has adopted a voucher with no bank/originator attribute */
+#define PROC_FGHW_NO_ORIGINATOR         15 /* pid has adopted a voucher for a process that's gone away */
+#define PROC_FGHW_ORIGINATOR_BACKGROUND 16 /* pid has adopted a voucher for an app that's in the background */
+#define PROC_FGHW_VOUCHER_ERROR         98 /* error in voucher / originator callout */
+#define PROC_FGHW_ERROR                 99 /* syscall parameter/permissions error */
+
 /* __proc_info() call numbers */
 #define PROC_INFO_CALL_LISTPIDS         0x1
 #define PROC_INFO_CALL_PIDINFO          0x2
@@ -856,6 +869,7 @@ struct proc_fileportinfo {
 #define PROC_INFO_CALL_PIDRUSAGE        0x9
 #define PROC_INFO_CALL_PIDORIGINATORINFO 0xa
 #define PROC_INFO_CALL_LISTCOALITIONS   0xb
+#define PROC_INFO_CALL_CANUSEFGHW       0xc
 
 #endif /* PRIVATE */
 

@@ -414,6 +414,14 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 
 	AUDIT_ARG(fflags, flags);
 
+#if SECURE_KERNEL
+	if (flags & MNT_UNION) {
+		/* No union mounts on release kernels */
+		error = EPERM;
+		goto out;
+	}
+#endif
+
 	if ((vp->v_flag & VROOT) &&
 			(vp->v_mount->mnt_flag & MNT_ROOTFS)) {
 		if (!(flags & MNT_UNION)) {
@@ -431,7 +439,7 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 			flags = (flags & ~(MNT_UPDATE));
 		}
 
-#ifdef SECURE_KERNEL
+#if SECURE_KERNEL
 		if ((flags & MNT_RDONLY) == 0) {
 			/* Release kernels are not allowed to mount "/" as rw */
 			error = EPERM;
@@ -6500,7 +6508,7 @@ copyfile(__unused proc_t p, struct copyfile_args *uap, __unused int32_t *retval)
 		return(EINVAL);
 	}
 
-	NDINIT(&fromnd, LOOKUP, OP_COPYFILE, SAVESTART | AUDITVNPATH1,
+	NDINIT(&fromnd, LOOKUP, OP_COPYFILE, AUDITVNPATH1,
 		UIO_USERSPACE, uap->from, ctx);
 	if ((error = namei(&fromnd)))
 		return (error);
@@ -6555,8 +6563,6 @@ out:
 out1:
 	vnode_put(fvp);
 
-	if (fromnd.ni_startdir)
-	        vnode_put(fromnd.ni_startdir);
 	nameidone(&fromnd);
 
 	if (error == -1)

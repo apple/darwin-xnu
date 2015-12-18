@@ -707,6 +707,7 @@ tcp_reass(struct tcpcb *tp, struct tcphdr *th, int *tlenp, struct mbuf *m,
 			th->th_seq += i;
 		}
 	}
+	tp->t_rcvoopack++;
 	tcpstat.tcps_rcvoopack++;
 	tcpstat.tcps_rcvoobyte += *tlenp;
 	if (nstat_collect) {
@@ -1649,7 +1650,7 @@ tcp_tfo_synack(tp, to)
 
 		/*
 		 * If this happens, things have gone terribly wrong. len should
-		 * have been check in tcp_dooptions.
+		 * have been checked in tcp_dooptions.
 		 */
 		VERIFY(len <= TFO_COOKIE_LEN_MAX);
 
@@ -1668,9 +1669,9 @@ tcp_tfo_synack(tp, to)
 		 * backing of TFO-cookie requests.
 		 */
 		if (tp->t_tfo_flags & TFO_F_SYN_LOSS)
-			tcp_heuristic_tfo_inc_loss(tp);
+			tcp_heuristic_inc_loss(tp, 1, 0);
 		else
-			tcp_heuristic_tfo_reset_loss(tp);
+			tcp_heuristic_reset_loss(tp, 1, 0);
 	}
 }
 
@@ -2546,18 +2547,21 @@ findpcb:
 	    TCP_ECN_ENABLED(tp) && tlen > 0 &&
 	    SEQ_GEQ(th->th_seq, tp->last_ack_sent) &&
 	    SEQ_LT(th->th_seq, tp->last_ack_sent + tp->rcv_wnd)) {
+		tp->t_ecn_recv_ce++;
 		tcpstat.tcps_ecn_recv_ce++;
+		INP_INC_IFNET_STAT(inp, ecn_recv_ce);
 		/* Mark this connection as it received CE from network */
 		tp->ecn_flags |= TE_RECV_ECN_CE;
 		tp->ecn_flags |= TE_SENDECE;
 	}
-	
+
 	/*
 	 * Clear TE_SENDECE if TH_CWR is set. This is harmless, so we don't
 	 * bother doing extensive checks for state and whatnot.
 	 */
 	if (thflags & TH_CWR) {
 		tp->ecn_flags &= ~TE_SENDECE;
+		tp->t_ecn_recv_cwr++;
 	}
 
 	/* 
@@ -2571,6 +2575,30 @@ findpcb:
 	    && (ip_ecn == IPTOS_ECN_CE || (thflags & TH_CWR))) {
 		tcp_reset_stretch_ack(tp);
 		CLEAR_IAJ_STATE(tp);
+	}
+
+	if (ip_ecn == IPTOS_ECN_CE && tp->t_state == TCPS_ESTABLISHED &&
+	    !TCP_ECN_ENABLED(tp) && !(tp->ecn_flags & TE_CEHEURI_SET)) {
+		tcpstat.tcps_ecn_fallback_ce++;
+		tcp_heuristic_ecn_aggressive(tp);
+		tp->ecn_flags |= TE_CEHEURI_SET;
+	}
+
+	if (tp->t_state == TCPS_ESTABLISHED && TCP_ECN_ENABLED(tp) &&
+	    ip_ecn == IPTOS_ECN_CE && !(tp->ecn_flags & TE_CEHEURI_SET)) {
+		if (inp->inp_stat->rxpackets < ECN_MIN_CE_PROBES) {
+			tp->t_ecn_recv_ce_pkt++;
+		} else if (tp->t_ecn_recv_ce_pkt > ECN_MAX_CE_RATIO) {
+			tcpstat.tcps_ecn_fallback_ce++;
+			tcp_heuristic_ecn_aggressive(tp);
+			tp->ecn_flags |= TE_CEHEURI_SET;
+			INP_INC_IFNET_STAT(inp,ecn_fallback_ce);
+		} else {
+			/* We tracked the first ECN_MIN_CE_PROBES segments, we
+			 * now know that the path is good.
+			 */
+			tp->ecn_flags |= TE_CEHEURI_SET;
+		}
 	}
 
 	/* 
@@ -2711,7 +2739,7 @@ findpcb:
 	 * be TH_NEEDSYN.
 	 */
 	if (tp->t_state == TCPS_ESTABLISHED &&
-	    (thflags & (TH_SYN|TH_FIN|TH_RST|TH_URG|TH_ACK|TH_ECE)) == TH_ACK &&
+	    (thflags & (TH_SYN|TH_FIN|TH_RST|TH_URG|TH_ACK|TH_ECE|TH_CWR)) == TH_ACK &&
 	    ((tp->t_flags & (TF_NEEDSYN|TF_NEEDFIN)) == 0) &&
 	    ((to.to_flags & TOF_TS) == 0 ||
 	     TSTMP_GEQ(to.to_tsval, tp->ts_recent)) &&
@@ -2730,11 +2758,6 @@ findpcb:
 			tp->ts_recent_age = tcp_now;
 			tp->ts_recent = to.to_tsval;
 		}
-
-		/* Force acknowledgment if we received a FIN */
-
-		if (thflags & TH_FIN)
-			tp->t_flags |= TF_ACKNOW;
 
 		if (tlen == 0) {
 			if (SEQ_GT(th->th_ack, tp->snd_una) &&
@@ -3189,12 +3212,20 @@ findpcb:
 			if ((thflags & (TH_ECE | TH_CWR)) == (TH_ECE)) {
 				/* ECN-setup SYN-ACK */
 				tp->ecn_flags |= TE_SETUPRECEIVED;
-				if (TCP_ECN_ENABLED(tp))
+				if (TCP_ECN_ENABLED(tp)) {
+					tcp_heuristic_reset_loss(tp, 0, 1);
 					tcpstat.tcps_ecn_client_success++;
+				}
 			} else {
 				if (tp->ecn_flags & TE_SETUPSENT &&
-				    tp->t_rxtshift == 0)
+				    tp->t_rxtshift == 0) {
+					tcp_heuristic_reset_loss(tp, 0, 1);
 					tcpstat.tcps_ecn_not_supported++;
+				}
+				if (tp->ecn_flags & TE_SETUPSENT &&
+				    tp->t_rxtshift > 0)
+					tcp_heuristic_inc_loss(tp, 0, 1);
+
 				/* non-ECN-setup SYN-ACK */
 				tp->ecn_flags &= ~TE_SENDIPECT;
 			}
@@ -3506,7 +3537,24 @@ trimthenstep6:
 		} else {
 			tcpstat.tcps_rcvduppack++;
 			tcpstat.tcps_rcvdupbyte += tlen;
+			tp->t_pawsdrop++;
 			tcpstat.tcps_pawsdrop++;
+
+			/*
+			 * PAWS-drop when ECN is being used? That indicates
+			 * that ECT-marked packets take a different path, with
+			 * different congestion-characteristics.
+			 *
+			 * Only fallback when we did send less than 2GB as PAWS
+			 * really has no reason to kick in earlier.
+			 */
+			if (TCP_ECN_ENABLED(tp) &&
+			    inp->inp_stat->rxbytes < 2147483648) {
+				INP_INC_IFNET_STAT(inp, ecn_fallback_reorder);
+				tcpstat.tcps_ecn_fallback_reorder++;
+				tcp_heuristic_ecn_aggressive(tp);
+			}
+
 			if (nstat_collect) {
 				nstat_route_rx(tp->t_inpcb->inp_route.ro_rt, 
 					1, tlen, NSTAT_RX_FLAG_DUPLICATE);
@@ -4139,6 +4187,7 @@ process_dupack:
 
 					if (SACK_ENABLED(tp)) {
 						tcpstat.tcps_sack_recovery_episode++;
+						tp->t_sack_recovery_episode++;
 						tp->sack_newdata = tp->snd_nxt;
 						tp->snd_cwnd = tp->t_maxseg;
 						tp->t_flagsext &=
@@ -4331,6 +4380,7 @@ process_ACK:
 				 * ECE atleast once
 				 */
 				tp->ecn_flags |= TE_RECV_ECN_ECE;
+				INP_INC_IFNET_STAT(inp, ecn_recv_ece);
 				tcpstat.tcps_ecn_recv_ece++;
 				tcp_ccdbg_trace(tp, th, TCP_CC_ECN_RCVD);
 			}
@@ -4736,8 +4786,7 @@ dodata:
 					tp->t_flags |= TF_DELACK;
 					tp->t_timer[TCPT_DELACK] = OFFSET_FROM_START(tp, tcp_delack);
 				}
-			}
-			else {
+			} else {
 				tp->t_flags |= TF_ACKNOW;
 			}
 			tp->rcv_nxt++;

@@ -317,7 +317,8 @@ restart:
 			nestedpanic +=1;
 			PANIC_UNLOCK();
 			Debugger("double panic");
-			printf("double panic:  We are hanging here...\n");
+			// a printf statement here was removed to avoid a panic-loop caused
+			// by a panic from printf
 			panic_stop();
 			/* NOTREACHED */
 		}
@@ -341,12 +342,16 @@ panic_epilogue(spl_t	s)
 	panicstr = (char *)0;
 	PANIC_UNLOCK();
 
+#if DEVELOPMENT || DEBUG
 	if (return_on_panic) {
 		panic_normal();
 		enable_preemption();
 		splx(s);
 		return;
 	}
+#else
+	(void)s;
+#endif
 	kdb_printf("panic: We are hanging here...\n");
 	panic_stop();
 	/* NOTREACHED */

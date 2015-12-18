@@ -584,9 +584,9 @@ struct wqt_elem *wq_table_alloc_elem(struct wq_table *table, int type, int nelem
 		      type, table);
 
 	assert(nelem > 0);
-	elem = NULL;
 
 try_again:
+	elem = NULL;
 	if (ntries++ > max_retries) {
 		struct wqt_elem *tmp;
 		if (table->used_elem + nelem >= table_size)
@@ -4568,7 +4568,7 @@ static inline int waitq_maybe_remove_link(struct waitq *waitq,
 			 * WQS we're unlinking, or to an invalid object:
 			 * no need to invalidate it
 			 */
-			*wq_setid = right->sl_set_id.id;
+			*wq_setid = right ? right->sl_set_id.id : 0;
 			lt_invalidate(parent);
 			wqdbg_v("S1, L");
 			return left ? WQ_ITERATE_UNLINKED : WQ_ITERATE_INVALID;
@@ -4578,7 +4578,7 @@ static inline int waitq_maybe_remove_link(struct waitq *waitq,
 			 * WQS we're unlinking, or to an invalid object:
 			 * no need to invalidate it
 			 */
-			*wq_setid = left->sl_set_id.id;
+			*wq_setid = left ? left->sl_set_id.id : 0;
 			lt_invalidate(parent);
 			wqdbg_v("S1, R");
 			return right ? WQ_ITERATE_UNLINKED : WQ_ITERATE_INVALID;

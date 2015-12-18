@@ -64,7 +64,7 @@ extern void semaphore_init(void);
 
 extern	void		semaphore_reference(semaphore_t semaphore);
 extern	void		semaphore_dereference(semaphore_t semaphore);
-extern  kern_return_t	semaphore_destroy_internal(task_t task, semaphore_t semaphore);
+extern	void		semaphore_destroy_all(task_t task);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

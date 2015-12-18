@@ -761,6 +761,7 @@ def SaveStackshotReport(j, outfile_name, dsc_uuid, dsc_libs_arr):
                  ]
 
     dsc_libs = []
+    print "Shared cache UUID found from the binary data is <%s> " % str(dsc_common[0])
     if dsc_common[0].replace('-', '').lower() == dsc_uuid:
         print "SUCCESS: Found Matching dyld shared cache uuid. Loading library load addresses from layout provided."
         _load_addr = dsc_common[1]
@@ -833,6 +834,9 @@ def SaveStackshotReport(j, outfile_name, dsc_uuid, dsc_libs_arr):
         for tid,thdata in thlist.iteritems():
             threadByID[str(tid)] = {}
             thsnap = threadByID[str(tid)]
+            if "thread_snapshot_v2" not in thdata:
+                print "Found broken thread state for thread ID: %s." % tid
+                break
             threadsnap = thdata["thread_snapshot_v2"]
             thsnap["userTime"] = GetSecondsFromMATime(threadsnap["user_time"], timebase)
             thsnap["id"] = threadsnap["thread_id"]

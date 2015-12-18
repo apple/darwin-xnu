@@ -2114,11 +2114,11 @@ mach_make_memory_entry_64(
 			offset_in_page = 0;
 		}
 
-		kr = vm_map_copyin(target_map,
-				   map_start,
-				   map_size,
-				   FALSE,
-				   &copy);
+		kr = vm_map_copyin_internal(target_map,
+					    map_start,
+					    map_size,
+					    VM_MAP_COPYIN_ENTRY_LIST,
+					    &copy);
 		if (kr != KERN_SUCCESS) {
 			return kr;
 		}

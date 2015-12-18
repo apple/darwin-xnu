@@ -844,8 +844,6 @@ skip_ipsec:
 				    (mbuf_t *)&m, ippo);
 				if (result == EJUSTRETURN) {
 					ipf_unref();
-					if (m != NULL)
-						m_freem(m);
 					m = NULL;
 					goto evaluateloop;
 				}

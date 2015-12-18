@@ -352,8 +352,12 @@ struct task {
 			low_mem_privileged_listener	:1,	/* if set, task would like to know about pressure changes before other tasks on the system */
 	                mem_notify_reserved		:27;	/* reserved for future use */
 
-	io_stat_info_t 	task_io_stats;
-	
+	io_stat_info_t 		task_io_stats;
+	uint64_t 		task_immediate_writes __attribute__((aligned(8)));
+	uint64_t 		task_deferred_writes __attribute__((aligned(8)));
+	uint64_t 		task_invalidated_writes __attribute__((aligned(8)));
+	uint64_t 		task_metadata_writes __attribute__((aligned(8)));
+
 	/* 
 	 * The cpu_time_qos_stats fields are protected by the task lock
 	 */
@@ -489,6 +493,8 @@ extern kern_return_t	task_send_trace_memory(
 							task_t		task,
 							uint32_t	pid,
 							uint64_t	uniqueid);
+
+extern void 			tasks_system_suspend(boolean_t suspend);
 
 #if CONFIG_FREEZE
 
@@ -850,6 +856,12 @@ extern kern_return_t task_purge_volatile_memory(task_t task);
 
 extern void      task_set_gpu_denied(task_t task, boolean_t denied);
 extern boolean_t task_is_gpu_denied(task_t task);
+
+#define TASK_WRITE_IMMEDIATE 		0x1
+#define TASK_WRITE_DEFERRED 		0x2
+#define TASK_WRITE_INVALIDATED		0x4
+#define TASK_WRITE_METADATA 		0x8
+extern void 	task_update_logical_writes(task_t task, uint32_t io_size, int flags);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

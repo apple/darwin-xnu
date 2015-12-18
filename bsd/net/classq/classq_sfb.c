@@ -1251,6 +1251,7 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 	 */
 	if (droptype == DTYPE_NODROP && qlen(q) >= maxqsize) {
 		if (pkt->pkt_proto == IPPROTO_TCP &&
+		    qlen(q) < (maxqsize + (maxqsize >> 1)) &&
 		    ((pkt->pkt_flags & PKTF_TCP_REXMT) ||
 		    (sp->sfb_flags & SFBF_LAST_PKT_DROPPED))) {
 			/*

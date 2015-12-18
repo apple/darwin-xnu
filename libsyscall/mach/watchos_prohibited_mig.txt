@@ -1,4 +1,4 @@
-__WATCHOS_PROHIBITED __TVOS_PROHIBITED
+__WATCHOS_PROHIBITED
 thread_terminate
 act_get_state
 act_set_state

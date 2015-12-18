@@ -412,8 +412,9 @@ ah4_input(struct mbuf *m, int off)
 		 * XXX more sanity checks
 		 * XXX relationship with gif?
 		 */
-		u_int8_t tos;
-		
+		u_int8_t tos, otos;
+		int sum;
+
 		if (ifamily == AF_INET6) {
 			ipseclog((LOG_NOTICE, "ipsec tunnel protocol mismatch "
 			    "in IPv4 AH input: %s\n", ipsec_logsastr(sav)));
@@ -429,11 +430,21 @@ ah4_input(struct mbuf *m, int off)
 			}
 		}
 		ip = mtod(m, struct ip *);
+		otos = ip->ip_tos;
 		/* ECN consideration. */
 		if (ip_ecn_egress(ip4_ipsec_ecn, &tos, &ip->ip_tos) == 0) {
 			IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 			goto fail;
 		}
+
+                if (otos != ip->ip_tos) {
+		    sum = ~ntohs(ip->ip_sum) & 0xffff;
+		    sum += (~otos & 0xffff) + ip->ip_tos;
+		    sum = (sum >> 16) + (sum & 0xffff);
+		    sum += (sum >> 16);  /* add carry */
+		    ip->ip_sum = htons(~sum & 0xffff);
+		} 
+
 		if (!key_checktunnelsanity(sav, AF_INET,
 			    (caddr_t)&ip->ip_src, (caddr_t)&ip->ip_dst)) {
 			ipseclog((LOG_NOTICE, "ipsec tunnel address mismatch "

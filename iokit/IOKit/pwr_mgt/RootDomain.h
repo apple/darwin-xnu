@@ -507,6 +507,7 @@ public:
 
     bool        activitySinceSleep(void);
     bool        abortHibernation(void);
+    void        updateConsoleUsers(void);
 
     IOReturn    joinAggressiveness( IOService * service );
     void        handleAggressivesRequests( void );
@@ -718,6 +719,7 @@ private:
     unsigned int            toldPowerdCapWillChange :1;
     unsigned int            displayPowerOnRequested:1;
 
+    uint8_t                 tasksSuspended;
     uint32_t                hibernateMode;
     AbsoluteTime            userActivityTime;
     AbsoluteTime            userActivityTime_prev;

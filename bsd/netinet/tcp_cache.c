@@ -56,18 +56,21 @@ struct tcp_heuristic {
 
 	struct tcp_heuristic_key	th_key;
 
-	/*
-	 * If tfo_cookie_loss is changed to a smaller type, it might be worth
-	 * checking for integer-overflow in tcp_cache_tfo_inc_loss
-	 */
-	u_int32_t	th_tfo_cookie_loss; /* The number of times a SYN+cookie has been lost */
+	char		th_val_start[0]; /* Marker for memsetting to 0 */
+
+	u_int8_t	th_tfo_cookie_loss; /* The number of times a SYN+cookie has been lost */
+	u_int8_t	th_ecn_loss; /* The number of times a SYN+ecn has been lost */
+	u_int8_t	th_ecn_aggressive; /* The number of times we did an aggressive fallback */
 	u_int32_t	th_tfo_fallback_trials; /* Number of times we did not try out TFO due to SYN-loss */
 	u_int32_t	th_tfo_cookie_backoff; /* Time until when we should not try out TFO */
+	u_int32_t	th_ecn_backoff; /* Time until when we should not try out ECN */
 
-	u_int8_t	th_tfo_in_backoff:1, /* Are we doing TFO due to the backoff timer? */
-			th_tfo_aggressive_fallback:1, /* Agressive fallback due to nasty middlebox */
+	u_int8_t	th_tfo_in_backoff:1, /* Are we avoiding TFO due to the backoff timer? */
+			th_tfo_aggressive_fallback:1, /* Aggressive fallback due to nasty middlebox */
 			th_tfo_snd_middlebox_supp:1, /* We are sure that the network supports TFO in upstream direction */
 			th_tfo_rcv_middlebox_supp:1; /* We are sure that the network supports TFO in downstream direction*/
+
+	char		th_val_end[0]; /* Marker for memsetting to 0 */
 };
 
 struct tcp_heuristics_head {
@@ -131,8 +134,9 @@ static lck_attr_t	*tcp_heuristic_mtx_attr;
 static lck_grp_t	*tcp_heuristic_mtx_grp;
 static lck_grp_attr_t	*tcp_heuristic_mtx_grp_attr;
 
-/* Number of SYN-losses we accept */
-#define TFO_MAX_COOKIE_LOSS	2
+int	tcp_ecn_timeout = 60;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, ecn_timeout, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_ecn_timeout, 0, "Initial minutes to wait before re-trying ECN");
 
 /*
  * Round up to next higher power-of 2.  See "Bit Twiddling Hacks".
@@ -446,13 +450,8 @@ static struct tcp_heuristic *tcp_getheuristic_with_lock(struct tcpcb *tp,
 			tpheur = oldest_heur;
 
 			/* We recycle - set everything to 0 */
-			tpheur->th_tfo_cookie_loss = 0;
-			tpheur->th_tfo_fallback_trials = 0;
-			tpheur->th_tfo_cookie_backoff = 0;
-			tpheur->th_tfo_in_backoff = 0;
-			tpheur->th_tfo_aggressive_fallback = 0;
-			tpheur->th_tfo_snd_middlebox_supp = 0;
-			tpheur->th_tfo_rcv_middlebox_supp = 0;
+			bzero(tpheur->th_val_start,
+			      tpheur->th_val_end - tpheur->th_val_start);
 		} else {
 			/* Create a new heuristic and add it to the list */
 			tpheur = _MALLOC(sizeof(struct tcp_heuristic), M_TEMP,
@@ -462,6 +461,13 @@ static struct tcp_heuristic *tcp_getheuristic_with_lock(struct tcpcb *tp,
 
 			SLIST_INSERT_HEAD(&head->tcp_heuristics, tpheur, list);
 		}
+
+		/*
+		 * Set to tcp_now, to make sure it won't be > than tcp_now in the
+		 * near future.
+		 */
+		tpheur->th_ecn_backoff = tcp_now;
+		tpheur->th_tfo_cookie_backoff = tcp_now;
 
 		memcpy(&tpheur->th_key, &key, sizeof(key));
 	}
@@ -523,7 +529,7 @@ void tcp_heuristic_tfo_snd_good(struct tcpcb *tp)
 	tp->t_tfo_flags |= TFO_F_NO_SNDPROBING;
 }
 
-void tcp_heuristic_tfo_inc_loss(struct tcpcb *tp)
+void tcp_heuristic_inc_loss(struct tcpcb *tp, int tfo, int ecn)
 {
 	struct tcp_heuristics_head *head;
 	struct tcp_heuristic *tpheur;
@@ -532,8 +538,20 @@ void tcp_heuristic_tfo_inc_loss(struct tcpcb *tp)
 	if (tpheur == NULL)
 		return;
 
-	/* Potential integer overflow, but tfo_cookie_loss is 32-bits */
-	tpheur->th_tfo_cookie_loss++;
+	/* Limit to 9 to prevent integer-overflow during exponential backoff */
+	if (tfo && tpheur->th_tfo_cookie_loss < 9)
+		tpheur->th_tfo_cookie_loss++;
+
+	if (ecn && tpheur->th_ecn_loss < 9) {
+		tpheur->th_ecn_loss++;
+		if (tpheur->th_ecn_loss >= ECN_MAX_SYN_LOSS) {
+			tcpstat.tcps_ecn_fallback_synloss++;
+			INP_INC_IFNET_STAT(tp->t_inpcb, ecn_fallback_synloss);
+			tpheur->th_ecn_backoff = tcp_now +
+			    ((tcp_ecn_timeout * 60 * TCP_RETRANSHZ)
+			    << (tpheur->th_ecn_loss - ECN_MAX_SYN_LOSS));
+		}
+	}
 
 	tcp_heuristic_unlock(head);
 }
@@ -552,7 +570,30 @@ void tcp_heuristic_tfo_middlebox(struct tcpcb *tp)
 	tcp_heuristic_unlock(head);
 }
 
-void tcp_heuristic_tfo_reset_loss(struct tcpcb *tp)
+void tcp_heuristic_ecn_aggressive(struct tcpcb *tp)
+{
+	struct tcp_heuristics_head *head;
+	struct tcp_heuristic *tpheur;
+
+	tpheur = tcp_getheuristic_with_lock(tp, 1, &head);
+	if (tpheur == NULL)
+		return;
+
+	/* Must be done before, otherwise we will start off with expo-backoff */
+	tpheur->th_ecn_backoff = tcp_now +
+	    ((tcp_ecn_timeout * 60 * TCP_RETRANSHZ) << (tpheur->th_ecn_aggressive));
+
+	/*
+	 * Ugly way to prevent integer overflow... limit to 9 to prevent in
+	 * overflow during exp. backoff.
+	 */
+	if (tpheur->th_ecn_aggressive < 9)
+		tpheur->th_ecn_aggressive++;
+
+	tcp_heuristic_unlock(head);
+}
+
+void tcp_heuristic_reset_loss(struct tcpcb *tp, int tfo, int ecn)
 {
 	struct tcp_heuristics_head *head;
 	struct tcp_heuristic *tpheur;
@@ -566,8 +607,11 @@ void tcp_heuristic_tfo_reset_loss(struct tcpcb *tp)
 	if (tpheur == NULL)
 		return;
 
-	tpheur->th_tfo_cookie_loss = 0;
-	tpheur->th_tfo_aggressive_fallback = 0;
+	if (tfo)
+		tpheur->th_tfo_cookie_loss = 0;
+
+	if (ecn)
+		tpheur->th_ecn_loss = 0;
 
 	tcp_heuristic_unlock(head);
 }
@@ -632,6 +676,25 @@ boolean_t tcp_heuristic_do_tfo(struct tcpcb *tp)
 	tcp_heuristic_unlock(head);
 
 	return (true);
+}
+
+boolean_t tcp_heuristic_do_ecn(struct tcpcb *tp)
+{
+	struct tcp_heuristics_head *head;
+	struct tcp_heuristic *tpheur;
+	boolean_t ret = true;
+
+	/* Get the tcp-heuristic. */
+	tpheur = tcp_getheuristic_with_lock(tp, 0, &head);
+	if (tpheur == NULL)
+		return ret;
+
+	if (TSTMP_GT(tpheur->th_ecn_backoff, tcp_now))
+		ret = false;
+
+	tcp_heuristic_unlock(head);
+
+	return (ret);
 }
 
 static void sysctl_cleartfocache(void)

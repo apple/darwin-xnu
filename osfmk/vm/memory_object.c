@@ -537,10 +537,12 @@ vm_object_update_extent(
 	struct vm_page_delayed_work	*dwp;
 	int		dw_count;
 	int		dw_limit;
+	int 		dirty_count;
 
         dwp = &dw_array[0];
         dw_count = 0;
 	dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
+	dirty_count = 0;
 
 	for (;
 	     offset < offset_end && object->resident_page_count;
@@ -595,6 +597,8 @@ vm_object_update_extent(
 				break;
 
 			case MEMORY_OBJECT_LOCK_RESULT_MUST_FREE:
+				if (m->dirty == TRUE)
+					dirty_count++;
 				dwp->dw_mask |= DW_vm_page_free;
 				break;
 
@@ -645,6 +649,10 @@ vm_object_update_extent(
 			}
 			break;
 		}
+	}
+	
+	if (dirty_count) {
+		task_update_logical_writes(current_task(), (dirty_count * PAGE_SIZE), TASK_WRITE_INVALIDATED);
 	}
 	/*
 	 *	We have completed the scan for applicable pages.

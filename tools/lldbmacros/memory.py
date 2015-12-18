@@ -1074,7 +1074,9 @@ def GetVMMapSummary(vmmap):
     vm_size = uint64_t(vmmap.size).value
     resident_pages = 0
     if vmmap.pmap != 0: resident_pages = int(vmmap.pmap.stats.resident_count)
-    out_string += format_string.format(vmmap, vmmap.pmap, vm_size, vmmap.hdr.nentries, resident_pages, vmmap.hint, vmmap.first_free)
+    first_free = 0
+    if int(vmmap.holelistenabled) == 0: first_free = vmmap.f_s.first_free
+    out_string += format_string.format(vmmap, vmmap.pmap, vm_size, vmmap.hdr.nentries, resident_pages, vmmap.hint, first_free)
     return out_string
 
 @lldb_type_summary(['vm_map_entry'])

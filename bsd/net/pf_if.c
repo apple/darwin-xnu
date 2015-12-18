@@ -604,24 +604,23 @@ pfi_update_status(const char *name, struct pf_status *pfs)
 	if (p == NULL)
 		return;
 
-	if (pfs) {
+	if (pfs != NULL) {
 		bzero(pfs->pcounters, sizeof (pfs->pcounters));
 		bzero(pfs->bcounters, sizeof (pfs->bcounters));
-	}
-	/* just clear statistics */
-	if (pfs == NULL) {
+		for (i = 0; i < 2; i++)
+			for (j = 0; j < 2; j++)
+				for (k = 0; k < 2; k++) {
+					pfs->pcounters[i][j][k] +=
+						p->pfik_packets[i][j][k];
+					pfs->bcounters[i][j] +=
+						p->pfik_bytes[i][j][k];
+				}
+	} else {
+		/* just clear statistics */
 		bzero(p->pfik_packets, sizeof (p->pfik_packets));
 		bzero(p->pfik_bytes, sizeof (p->pfik_bytes));
 		p->pfik_tzero = pf_calendar_time_second();
 	}
-	for (i = 0; i < 2; i++)
-		for (j = 0; j < 2; j++)
-			for (k = 0; k < 2; k++) {
-				pfs->pcounters[i][j][k] +=
-				    p->pfik_packets[i][j][k];
-				pfs->bcounters[i][j] +=
-				    p->pfik_bytes[i][j][k];
-			}
 }
 
 int

@@ -464,6 +464,13 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 		if (SOCK_PROTO(inp->inp_socket) == IPPROTO_TCP) {
 			struct  tcpcb *tp = sototcpcb(inp->inp_socket);
 
+			/*
+			 * Workaround race where inp_ppcb is NULL during
+			 * socket initialization
+			 */
+			if (tp == NULL)
+				continue;
+
 			switch (tp->t_state) {
 				case TCPS_CLOSED:
 					continue;

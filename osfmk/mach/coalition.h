@@ -88,6 +88,10 @@ struct coalition_resource_usage {
 	uint64_t gpu_time;
 	uint64_t cpu_time_billed_to_me;
 	uint64_t cpu_time_billed_to_others;
+	uint64_t logical_immediate_writes;
+	uint64_t logical_deferred_writes;
+	uint64_t logical_invalidated_writes;
+	uint64_t logical_metadata_writes;
 };
 
 #ifdef PRIVATE

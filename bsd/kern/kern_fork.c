@@ -1255,6 +1255,7 @@ retry:
 #if CONFIG_FINE_LOCK_GROUPS
 	lck_mtx_init(&child_proc->p_mlock, proc_mlock_grp, proc_lck_attr);
 	lck_mtx_init(&child_proc->p_fdmlock, proc_fdmlock_grp, proc_lck_attr);
+	lck_mtx_init(&child_proc->p_ucred_mlock, proc_ucred_mlock_grp, proc_lck_attr);
 #if CONFIG_DTRACE
 	lck_mtx_init(&child_proc->p_dtrace_sprlock, proc_lck_grp, proc_lck_attr);
 #endif
@@ -1262,6 +1263,7 @@ retry:
 #else /* !CONFIG_FINE_LOCK_GROUPS */
 	lck_mtx_init(&child_proc->p_mlock, proc_lck_grp, proc_lck_attr);
 	lck_mtx_init(&child_proc->p_fdmlock, proc_lck_grp, proc_lck_attr);
+	lck_mtx_init(&child_proc->p_ucred_mlock, proc_lck_grp, proc_lck_attr);
 #if CONFIG_DTRACE
 	lck_mtx_init(&child_proc->p_dtrace_sprlock, proc_lck_grp, proc_lck_attr);
 #endif
@@ -1391,6 +1393,7 @@ bad:
 void
 proc_lock(proc_t p)
 {
+	lck_mtx_assert(proc_list_mlock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(&p->p_mlock);
 }
 
@@ -1422,6 +1425,18 @@ void
 proc_list_unlock(void)
 {
 	lck_mtx_unlock(proc_list_mlock);
+}
+
+void 
+proc_ucred_lock(proc_t p)
+{
+	lck_mtx_lock(&p->p_ucred_mlock);
+}
+
+void 
+proc_ucred_unlock(proc_t p)
+{
+	lck_mtx_unlock(&p->p_ucred_mlock);
 }
 
 #include <kern/zalloc.h>
@@ -1554,6 +1569,12 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info, boolean_t is_corpse
 	struct _select *sel;
 	uthread_t uth = (uthread_t)uthread;
 	proc_t p = (proc_t)bsd_info;
+
+#if PROC_REF_DEBUG
+	if (__improbable(uthread_get_proc_refcount(uthread) != 0)) {
+		panic("uthread_cleanup called for uthread %p with uu_proc_refcount != 0", uthread);
+	}
+#endif
 
 	if (uth->uu_lowpri_window || uth->uu_throttle_info) {
 		/*

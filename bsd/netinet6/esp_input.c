@@ -521,7 +521,8 @@ noreplaycheck:
 		 * XXX more sanity checks
 		 * XXX relationship with gif?
 		 */
-		u_int8_t tos;
+		u_int8_t tos, otos;
+		int sum;
 
 		tos = ip->ip_tos;
 		m_adj(m, off + esplen + ivlen);
@@ -537,10 +538,21 @@ noreplaycheck:
 			}
 			ip = mtod(m, struct ip *);
 			/* ECN consideration. */
+
+			otos = ip->ip_tos;
 			if (ip_ecn_egress(ip4_ipsec_ecn, &tos, &ip->ip_tos) == 0) {
 				IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 				goto bad;
 			}
+
+			if (otos != ip->ip_tos) {
+			    sum = ~ntohs(ip->ip_sum) & 0xffff;
+			    sum += (~otos & 0xffff) + ip->ip_tos;
+			    sum = (sum >> 16) + (sum & 0xffff);
+			    sum += (sum >> 16);  /* add carry */
+			    ip->ip_sum = htons(~sum & 0xffff);
+			}
+
 			if (!key_checktunnelsanity(sav, AF_INET,
 			    (caddr_t)&ip->ip_src, (caddr_t)&ip->ip_dst)) {
 				ipseclog((LOG_ERR, "ipsec tunnel address mismatch "
@@ -1187,12 +1199,26 @@ noreplaycheck:
 					goto bad;
 				}
 			}
+
+			u_int8_t otos;
+			int sum;
+
 			ip = mtod(m, struct ip *);
+			otos = ip->ip_tos;
 			/* ECN consideration. */
 			if (ip46_ecn_egress(ip6_ipsec_ecn, &flowinfo, &ip->ip_tos) == 0) {
 				IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 				goto bad;
 			}
+
+			if (otos != ip->ip_tos) {
+			    sum = ~ntohs(ip->ip_sum) & 0xffff;
+			    sum += (~otos & 0xffff) + ip->ip_tos;
+			    sum = (sum >> 16) + (sum & 0xffff);
+			    sum += (sum >> 16);  /* add carry */
+			    ip->ip_sum = htons(~sum & 0xffff);
+			}
+
 			if (!key_checktunnelsanity(sav, AF_INET,
 			    (caddr_t)&ip->ip_src, (caddr_t)&ip->ip_dst)) {
 				ipseclog((LOG_ERR, "ipsec tunnel address mismatch "

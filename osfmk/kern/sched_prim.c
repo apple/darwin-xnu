@@ -896,7 +896,7 @@ assert_wait(
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 		MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAIT)|DBG_FUNC_NONE,
-		VM_KERNEL_UNSLIDE(event), 0, 0, 0, 0);
+		VM_KERNEL_UNSLIDE_OR_PERM(event), 0, 0, 0, 0);
 
 	struct waitq *waitq;
 	waitq = global_eventq(event);
@@ -929,7 +929,7 @@ assert_wait_timeout(
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAIT)|DBG_FUNC_NONE,
-				  VM_KERNEL_UNSLIDE(event), interruptible, deadline, 0, 0);
+				  VM_KERNEL_UNSLIDE_OR_PERM(event), interruptible, deadline, 0, 0);
 
 	wresult = waitq_assert_wait64_locked(waitq, CAST_EVENT64_T(event),
 					     interruptible,
@@ -978,7 +978,7 @@ assert_wait_timeout_with_leeway(
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAIT)|DBG_FUNC_NONE,
-				  VM_KERNEL_UNSLIDE(event), interruptible, deadline, 0, 0);
+				  VM_KERNEL_UNSLIDE_OR_PERM(event), interruptible, deadline, 0, 0);
 
 	wresult = waitq_assert_wait64_locked(waitq, CAST_EVENT64_T(event),
 					     interruptible,
@@ -1013,7 +1013,7 @@ assert_wait_deadline(
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAIT)|DBG_FUNC_NONE,
-				  VM_KERNEL_UNSLIDE(event), interruptible, deadline, 0, 0);
+				  VM_KERNEL_UNSLIDE_OR_PERM(event), interruptible, deadline, 0, 0);
 
 	wresult = waitq_assert_wait64_locked(waitq, CAST_EVENT64_T(event),
 					     interruptible,
@@ -1049,7 +1049,7 @@ assert_wait_deadline_with_leeway(
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  MACHDBG_CODE(DBG_MACH_SCHED, MACH_WAIT)|DBG_FUNC_NONE,
-				  VM_KERNEL_UNSLIDE(event), interruptible, deadline, 0, 0);
+				  VM_KERNEL_UNSLIDE_OR_PERM(event), interruptible, deadline, 0, 0);
 
 	wresult = waitq_assert_wait64_locked(waitq, CAST_EVENT64_T(event),
 					     interruptible,

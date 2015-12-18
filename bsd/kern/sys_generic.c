@@ -940,6 +940,7 @@ static int selscan(struct proc *p, struct _select * sel, struct _select_data * s
 static int selcount(struct proc *p, u_int32_t *ibits, int nfd, int *count);
 static int seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wakeup, int fromselcount);
 static int seldrop(struct proc *p, u_int32_t *ibits, int nfd);
+static int select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeout, int32_t *retval);
 
 /*
  * Select system call.
@@ -947,17 +948,126 @@ static int seldrop(struct proc *p, u_int32_t *ibits, int nfd);
  * Returns:	0			Success
  *		EINVAL			Invalid argument
  *		EAGAIN			Nonconformant error if allocation fails
- *	selprocess:???
  */
 int
 select(struct proc *p, struct select_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
-	return(select_nocancel(p, (struct select_nocancel_args *)uap, retval));
+	return select_nocancel(p, (struct select_nocancel_args *)uap, retval);
 }
 
 int
 select_nocancel(struct proc *p, struct select_nocancel_args *uap, int32_t *retval)
+{
+	uint64_t timeout = 0;
+
+	if (uap->tv) {
+		int err;
+		struct timeval atv;
+		if (IS_64BIT_PROCESS(p)) {
+			struct user64_timeval atv64;
+			err = copyin(uap->tv, (caddr_t)&atv64, sizeof(atv64));
+			/* Loses resolution - assume timeout < 68 years */
+			atv.tv_sec = atv64.tv_sec;
+			atv.tv_usec = atv64.tv_usec;
+		} else {
+			struct user32_timeval atv32;
+			err = copyin(uap->tv, (caddr_t)&atv32, sizeof(atv32));
+			atv.tv_sec = atv32.tv_sec;
+			atv.tv_usec = atv32.tv_usec;
+		}
+		if (err)
+			return err;
+
+		if (itimerfix(&atv)) {
+			err = EINVAL;
+			return err;
+		}
+
+		clock_absolutetime_interval_to_deadline(tvtoabstime(&atv), &timeout);
+	}
+
+	return select_internal(p, uap, timeout, retval);
+}
+
+int
+pselect(struct proc *p, struct pselect_args *uap, int32_t *retval)
+{
+	__pthread_testcancel(1);
+	return pselect_nocancel(p, (struct pselect_nocancel_args *)uap, retval);
+}
+
+int
+pselect_nocancel(struct proc *p, struct pselect_nocancel_args *uap, int32_t *retval)
+{
+	int err;
+	struct uthread *ut;
+	uint64_t timeout = 0;
+
+	if (uap->ts) {
+		struct timespec ts;
+
+		if (IS_64BIT_PROCESS(p)) {
+			struct user64_timespec ts64;
+			err = copyin(uap->ts, (caddr_t)&ts64, sizeof(ts64));
+			ts.tv_sec = ts64.tv_sec;
+			ts.tv_nsec = ts64.tv_nsec;
+		} else {
+			struct user32_timespec ts32;
+			err = copyin(uap->ts, (caddr_t)&ts32, sizeof(ts32));
+			ts.tv_sec = ts32.tv_sec;
+			ts.tv_nsec = ts32.tv_nsec;
+		}
+		if (err) {
+			return err;
+		}
+
+		if (!timespec_is_valid(&ts)) {
+			return EINVAL;
+		}
+		clock_absolutetime_interval_to_deadline(tstoabstime(&ts), &timeout);
+	}
+
+	ut = get_bsdthread_info(current_thread());
+
+	if (uap->mask != USER_ADDR_NULL) {
+		/* save current mask, then copyin and set new mask */
+		sigset_t newset;
+		err = copyin(uap->mask, &newset, sizeof(sigset_t));
+		if (err) {
+			return err;
+		}
+		ut->uu_oldmask = ut->uu_sigmask;
+		ut->uu_flag |= UT_SAS_OLDMASK;
+		ut->uu_sigmask = (newset & ~sigcantmask);
+	}
+
+	err = select_internal(p, (struct select_nocancel_args *)uap, timeout, retval);
+
+	if (err != EINTR && ut->uu_flag & UT_SAS_OLDMASK) {
+		/*
+		 * Restore old mask (direct return case). NOTE: EINTR can also be returned
+		 * if the thread is cancelled. In that case, we don't reset the signal
+		 * mask to its original value (which usually happens in the signal
+		 * delivery path). This behavior is permitted by POSIX.
+		 */
+		ut->uu_sigmask = ut->uu_oldmask;
+		ut->uu_oldmask = 0;
+		ut->uu_flag &= ~UT_SAS_OLDMASK;
+	}
+
+	return err;
+}
+
+/*
+ * Generic implementation of {,p}select. Care: we type-pun uap across the two
+ * syscalls, which differ slightly. The first 4 arguments (nfds and the fd sets)
+ * are identical. The 5th (timeout) argument points to different types, so we
+ * unpack in the syscall-specific code, but the generic code still does a null
+ * check on this argument to determine if a timeout was specified.
+ */
+static int
+select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeout, int32_t *retval)
 {
 	int error = 0;
 	u_int ni, nw;
@@ -1049,32 +1159,7 @@ select_nocancel(struct proc *p, struct select_nocancel_args *uap, int32_t *retva
 	getbits(ex, 2);
 #undef	getbits
 
-	if (uap->tv) {
-		struct timeval atv;
-		if (IS_64BIT_PROCESS(p)) {
-			struct user64_timeval atv64;
-			error = copyin(uap->tv, (caddr_t)&atv64, sizeof(atv64));
-			/* Loses resolution - assume timeout < 68 years */
-			atv.tv_sec = atv64.tv_sec;
-			atv.tv_usec = atv64.tv_usec;
-		} else {
-			struct user32_timeval atv32;
-			error = copyin(uap->tv, (caddr_t)&atv32, sizeof(atv32));
-			atv.tv_sec = atv32.tv_sec;
-			atv.tv_usec = atv32.tv_usec;
-		}
-		if (error)
-			goto continuation;
-		if (itimerfix(&atv)) {
-			error = EINVAL;
-			goto continuation;
-		}
-
-		clock_absolutetime_interval_to_deadline(
-										tvtoabstime(&atv), &seldata->abstime);
-	}
-	else
-		seldata->abstime = 0;
+	seldata->abstime = timeout;
 
 	if ( (error = selcount(p, sel->ibits, uap->nd, &count)) ) {
 			goto continuation;
@@ -1306,6 +1391,14 @@ done:
 		putbits(ex, 2);
 #undef putbits
 	}
+
+	if (error != EINTR && sel_pass == SEL_SECONDPASS && uth->uu_flag & UT_SAS_OLDMASK) {
+		/* restore signal mask - continuation case */
+		uth->uu_sigmask = uth->uu_oldmask;
+		uth->uu_oldmask = 0;
+		uth->uu_flag &= ~UT_SAS_OLDMASK;
+	}
+
 	return(error);
 }
 

@@ -32,6 +32,7 @@
 #include <sys/sysctl.h>
 #include <i386/cpuid.h>
 #include <i386/tsc.h>
+#include <i386/rtclock_protos.h>
 #include <i386/machine_routines.h>
 #include <i386/pal_routines.h>
 #include <i386/ucode.h>
@@ -758,7 +759,11 @@ SYSCTL_QUAD(_machdep_tsc, OID_AUTO, frequency,
 
 extern uint32_t deep_idle_rebase;
 SYSCTL_UINT(_machdep_tsc, OID_AUTO, deep_idle_rebase,
-	CTLFLAG_RW|CTLFLAG_KERN|CTLFLAG_LOCKED, &deep_idle_rebase, 0, "");
+	CTLFLAG_RD|CTLFLAG_LOCKED, &deep_idle_rebase, 0, "");
+SYSCTL_QUAD(_machdep_tsc, OID_AUTO, at_boot,
+	CTLFLAG_RD|CTLFLAG_LOCKED, &tsc_at_boot, "");
+SYSCTL_QUAD(_machdep_tsc, OID_AUTO, rebase_abs_time,
+	CTLFLAG_RD|CTLFLAG_LOCKED, &tsc_rebase_abs_time, "");
 
 SYSCTL_NODE(_machdep_tsc, OID_AUTO, nanotime,
 	CTLFLAG_RD|CTLFLAG_LOCKED, NULL, "TSC to ns conversion");

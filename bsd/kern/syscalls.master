@@ -600,8 +600,8 @@
 391	AUE_NULL	ALL	{ int enosys(void); }
 392	AUE_NULL	ALL	{ int enosys(void); }
 393	AUE_NULL	ALL	{ int enosys(void); }
-394	AUE_NULL	ALL	{ int enosys(void); }
-395	AUE_NULL	ALL	{ int enosys(void); }
+394	AUE_SELECT	ALL	{ int pselect(int nd, u_int32_t *in, u_int32_t *ou, u_int32_t *ex, const struct timespec *ts, const struct sigset_t *mask) NO_SYSCALL_STUB; }
+395	AUE_SELECT	ALL	{ int pselect_nocancel(int nd, u_int32_t *in, u_int32_t *ou, u_int32_t *ex, const struct timespec *ts, const struct sigset_t *mask) NO_SYSCALL_STUB; }
 396	AUE_NULL	ALL	{ user_ssize_t read_nocancel(int fd, user_addr_t cbuf, user_size_t nbyte) NO_SYSCALL_STUB; } 
 397	AUE_NULL	ALL	{ user_ssize_t write_nocancel(int fd, user_addr_t cbuf, user_size_t nbyte) NO_SYSCALL_STUB; } 
 398	AUE_OPEN_RWTC	ALL	{ int open_nocancel(user_addr_t path, int flags, int mode) NO_SYSCALL_STUB; } 

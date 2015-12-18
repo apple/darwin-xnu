@@ -91,7 +91,6 @@ static struct nstat_stats nstat_stats;
 SYSCTL_STRUCT(_net_stats, OID_AUTO, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
     &nstat_stats, nstat_stats, "");
 
-
 enum
 {
 	NSTAT_FLAG_CLEANUP				= (1 << 0),
@@ -155,6 +154,7 @@ static void		nstat_control_cleanup_source(nstat_control_state *state, nstat_src 
 static bool		nstat_control_reporting_allowed(nstat_control_state *state, nstat_src *src);
 static boolean_t	nstat_control_begin_query(nstat_control_state *state, const nstat_msg_hdr *hdrp);
 static u_int16_t	nstat_control_end_query(nstat_control_state *state, nstat_src *last_src, boolean_t partial);
+static void		nstat_ifnet_report_ecn_stats(void);
 
 static u_int32_t	nstat_udp_watchers = 0;
 static u_int32_t	nstat_tcp_watchers = 0;
@@ -2101,6 +2101,77 @@ done:
 	lck_rw_done(&ifp->if_link_status_lock);
 }
 
+static u_int64_t nstat_ifnet_last_report_time = 0;
+extern int tcp_report_stats_interval;
+
+void
+nstat_ifnet_report_ecn_stats(void)
+{
+	u_int64_t uptime, last_report_time;
+	struct nstat_sysinfo_data data;
+	struct nstat_sysinfo_ifnet_ecn_stats *st;
+	struct ifnet *ifp;
+
+	uptime = net_uptime();
+
+	if ((int)(uptime - nstat_ifnet_last_report_time) <
+	    tcp_report_stats_interval)
+		return;
+
+	last_report_time = nstat_ifnet_last_report_time;
+	nstat_ifnet_last_report_time = uptime;
+	data.flags = NSTAT_SYSINFO_IFNET_ECN_STATS;
+	st = &data.u.ifnet_ecn_stats;
+
+	ifnet_head_lock_shared();
+	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
+		if (ifp->if_ipv4_stat == NULL || ifp->if_ipv6_stat == NULL)
+			continue;
+
+		if ((ifp->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) !=
+		    IFRF_ATTACHED)
+			continue;
+
+		/* Limit reporting to Wifi, Ethernet and cellular. */
+		if (!(IFNET_IS_ETHERNET(ifp) || IFNET_IS_CELLULAR(ifp)))
+			continue;
+
+		bzero(st, sizeof(*st));
+		if (IFNET_IS_CELLULAR(ifp)) {
+			st->ifnet_type = NSTAT_IFNET_ECN_TYPE_CELLULAR;
+		} else if (IFNET_IS_WIFI(ifp)) {
+			st->ifnet_type = NSTAT_IFNET_ECN_TYPE_WIFI;
+		} else {
+			st->ifnet_type = NSTAT_IFNET_ECN_TYPE_ETHERNET;
+		}
+
+		/* skip if there was no update since last report */
+		if (ifp->if_ipv4_stat->timestamp <= 0 ||
+		    ifp->if_ipv4_stat->timestamp < last_report_time)
+			goto v6;
+		st->ifnet_proto = NSTAT_IFNET_ECN_PROTO_IPV4;
+		bcopy(ifp->if_ipv4_stat, &st->ecn_stat,
+		    sizeof(st->ecn_stat));
+		nstat_sysinfo_send_data(&data);
+		bzero(ifp->if_ipv4_stat, sizeof(*ifp->if_ipv4_stat));
+
+v6:
+		/* skip if there was no update since last report */
+		if (ifp->if_ipv6_stat->timestamp <= 0 ||
+		    ifp->if_ipv6_stat->timestamp < last_report_time)
+			continue;
+		st->ifnet_proto = NSTAT_IFNET_ECN_PROTO_IPV6;
+		bcopy(ifp->if_ipv6_stat, &st->ecn_stat,
+		    sizeof(st->ecn_stat));
+		nstat_sysinfo_send_data(&data);
+
+		/* Zero the stats in ifp */
+		bzero(ifp->if_ipv6_stat, sizeof(*ifp->if_ipv6_stat));
+	}
+	ifnet_head_done();
+
+}
+
 static errno_t
 nstat_ifnet_copy_descriptor(
 	nstat_provider_cookie_t	cookie,
@@ -2209,6 +2280,14 @@ nstat_sysinfo_send_data_internal(
 		case NSTAT_SYSINFO_TCP_STATS:
 			nkeyvals = sizeof(struct nstat_sysinfo_tcp_stats) /
 			    sizeof(u_int32_t);
+			break;
+		case NSTAT_SYSINFO_IFNET_ECN_STATS:
+			nkeyvals = (sizeof(struct if_tcp_ecn_stat) /
+			    sizeof(u_int64_t));
+			/* One less because we are not going to send timestamp */
+			nkeyvals -= 1;
+			/* Two more keys for ifnet type and proto */
+			nkeyvals += 2;
 			break;
 		default:
 			return;
@@ -2335,6 +2414,15 @@ nstat_sysinfo_send_data_internal(
 			    NSTAT_SYSINFO_ECN_CONN_NOPL_CE,
 			    data->u.tcp_stats.ecn_conn_nopl_ce);
 			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_FALLBACK_SYNLOSS,
+			    data->u.tcp_stats.ecn_fallback_synloss);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_FALLBACK_REORDER,
+			    data->u.tcp_stats.ecn_fallback_reorder);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_FALLBACK_CE,
+			    data->u.tcp_stats.ecn_fallback_ce);
+			nstat_set_keyval_scalar(&kv[i++],
 			    NSTAT_SYSINFO_TFO_SYN_DATA_RCV,
 			    data->u.tcp_stats.tfo_syn_data_rcv);
 			nstat_set_keyval_scalar(&kv[i++],
@@ -2365,6 +2453,110 @@ nstat_sysinfo_send_data_internal(
 			    NSTAT_SYSINFO_TFO_BLACKHOLE,
 			    data->u.tcp_stats.tfo_blackhole);
 
+			VERIFY(i == nkeyvals);
+			break;
+		}
+		case NSTAT_SYSINFO_IFNET_ECN_STATS:
+		{
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_TYPE,
+			    data->u.ifnet_ecn_stats.ifnet_type);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_PROTO,
+			    data->u.ifnet_ecn_stats.ifnet_proto);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_CLIENT_SETUP,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_client_setup);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_SERVER_SETUP,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_server_setup);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_CLIENT_SUCCESS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_client_success);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_SERVER_SUCCESS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_server_success);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_PEER_NOSUPPORT,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_peer_nosupport);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_SYN_LOST,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_syn_lost);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_SYNACK_LOST,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_synack_lost);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_RECV_CE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_recv_ce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_RECV_ECE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_recv_ece);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_CONN_RECV_CE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_recv_ce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_CONN_RECV_ECE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_recv_ece);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_CONN_PLNOCE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_plnoce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_CONN_PLCE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_plce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_CONN_NOPLCE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_noplce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_SYNLOSS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_synloss);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_REORDER,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_reorder);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_CE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_ce);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_RTT_AVG,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rtt_avg);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_RTT_VAR,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rtt_var);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_OOPERCENT,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.oo_percent);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_SACK_EPISODE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.sack_episodes);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_REORDER_PERCENT,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.reorder_percent);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_RXMIT_PERCENT,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rxmit_percent);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_RXMIT_DROP,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rxmit_drop);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_RTT_AVG,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rtt_avg);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_RTT_VAR,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rtt_var);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_OOPERCENT,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.oo_percent);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_SACK_EPISODE,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.sack_episodes);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_REORDER_PERCENT,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.reorder_percent);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_RXMIT_PERCENT,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rxmit_percent);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_RXMIT_DROP,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rxmit_drop);
 			VERIFY(i == nkeyvals);
 			break;
 		}
@@ -2407,6 +2599,7 @@ nstat_sysinfo_generate_report(void)
 {
 	mbuf_report_peak_usage();
 	tcp_report_stats();
+	nstat_ifnet_report_ecn_stats();
 }
 
 #pragma mark -- Kernel Control Socket --

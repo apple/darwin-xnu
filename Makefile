@@ -100,12 +100,25 @@ installsrc:
 	pax -rw . $(SRCROOT)
 
 else ifeq ($(RC_ProjectName),xnu_quick_test)
+# This rule should be removed once rdar://22820602 is complete.
+default: install
+
+installhdrs:
+
+install: xnu_tests
+
+clean:
+
+installsrc:
+	pax -rw . $(SRCROOT)
+
+else ifeq ($(RC_ProjectName),xnu_tests)
 
 default: install
 
 installhdrs:
 
-install: xnu_quick_test
+install: xnu_tests
 
 clean:
 
@@ -237,11 +250,11 @@ installhdrs_libkdd install_libkdd:
 			"SDKROOT=$(SDKROOT)"
 
 
-# "xnu_quick_test" and "testbots" are targets that can be invoked via a standalone
-# "make xnu_quick_test" or via buildit/XBS with the RC_ProjectName=xnu_quick_test.
+# "xnu_tests" and "testbots" are targets that can be invoked via a standalone
+# "make xnu_tests" or via buildit/XBS with the RC_ProjectName=xnu_tests.
 # Define the target here in the outermost scope of the initial Makefile
 
-xnu_quick_test:
+xnu_tests xnu_quick_test:
 	$(MAKE) -C $(SRCROOT)/tools/tests					\
 		SRCROOT=$(SRCROOT)/tools/tests
 

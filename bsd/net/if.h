@@ -182,6 +182,8 @@ struct if_clonereq32 {
 #define	IFEF_NOACKPRI		0x00200000	/* No TCP ACK prioritization */
 #define	IFEF_AWDL_RESTRICTED	0x00400000	/* Restricted AWDL mode */
 #define	IFEF_2KCL		0x00800000	/* prefers 2K cluster (socket based tunnel) */
+#define	IFEF_ECN_ENABLE		0x01000000	/* use ECN for TCP connections on the interface */
+#define	IFEF_ECN_DISABLE	0x02000000	/* do not use ECN for TCP connections on the interface */
 #define	IFEF_SENDLIST		0x10000000	/* Supports tx packet lists */
 #define	IFEF_DIRECTLINK		0x20000000	/* point-to-point topology */
 #define	_IFEF_INUSE		0x40000000	/* deprecated */
@@ -486,6 +488,10 @@ struct	ifreq {
 		} ifru_start_delay;
 		struct if_interface_state	ifru_interface_state;
 		u_int32_t ifru_probe_connectivity;
+		u_int32_t ifru_ecn_mode;
+#define	IFRTYPE_ECN_DEFAULT		0
+#define	IFRTYPE_ECN_ENABLE			1
+#define	IFRTYPE_ECN_DISABLE			2
 #endif /* PRIVATE */
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
@@ -528,6 +534,7 @@ struct	ifreq {
 #define	ifr_start_delay_timeout	ifr_ifru.ifru_start_delay.timeout
 #define ifr_interface_state	ifr_ifru.ifru_interface_state
 #define	ifr_probe_connectivity	ifr_ifru.ifru_probe_connectivity
+#define	ifr_ecn_mode	ifr_ifru.ifru_ecn_mode
 #endif /* PRIVATE */
 };
 

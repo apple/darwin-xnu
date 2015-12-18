@@ -3093,17 +3093,22 @@ memorystatus_kill_specific_process(pid_t victim_pid, uint32_t cause) {
 	proc_t p;
 
 	/* TODO - add a victim queue and push this into the main jetsam thread */
-
 	p = proc_find(victim_pid);
 	if (!p) {
 		return FALSE;
 	}
 
-	printf("memorystatus: specifically killing pid %d [%s] (%s %d) - memorystatus_available_pages: %d\n", 
-		victim_pid, (p->p_comm ? p->p_comm : "(unknown)"),
-	       jetsam_kill_cause_name[cause], p->p_memstat_effectivepriority, memorystatus_available_pages);
-
 	proc_list_lock();
+
+	if ((p->p_memstat_state & P_MEMSTAT_TERMINATED) ||
+		(p->p_listflag & P_LIST_EXITED) ||
+		(p->p_memstat_state & P_MEMSTAT_ERROR)) {
+		proc_list_unlock();
+		proc_rele(p);
+		return FALSE;
+	}
+
+	p->p_memstat_state |= P_MEMSTAT_TERMINATED;
 
 	if (memorystatus_jetsam_snapshot_count == 0) {
 		memorystatus_init_jetsam_snapshot_locked(NULL,0);
@@ -3111,6 +3116,11 @@ memorystatus_kill_specific_process(pid_t victim_pid, uint32_t cause) {
 
 	memorystatus_update_jetsam_snapshot_entry_locked(p, cause);
 	proc_list_unlock();
+
+	printf("memorystatus: specifically killing pid %d [%s] (%s %d) - memorystatus_available_pages: %d\n",
+		victim_pid, (p->p_comm ? p->p_comm : "(unknown)"),
+	       jetsam_kill_cause_name[cause], p->p_memstat_effectivepriority, memorystatus_available_pages);
+
 	
 	killed = memorystatus_do_kill(p, cause);
 	proc_rele(p);

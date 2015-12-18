@@ -432,6 +432,12 @@ ipc_port_check_circularity(
 	ipc_port_t	dest);
 
 #if IMPORTANCE_INHERITANCE
+
+enum {
+	IPID_OPTION_NORMAL       = 0, /* normal boost */
+	IPID_OPTION_SENDPOSSIBLE = 1, /* send-possible induced boost */
+};
+
 /* apply importance delta to port only */
 extern mach_port_delta_t
 ipc_port_impcount_delta(
@@ -443,13 +449,15 @@ ipc_port_impcount_delta(
 extern boolean_t
 ipc_port_importance_delta_internal(
 	ipc_port_t 		port,
-	mach_port_delta_t	*delta,
+	natural_t		options,
+	mach_port_delta_t	*deltap,
 	ipc_importance_task_t	*imp_task);
 
 /* Apply an importance delta to a port and reflect change in receiver task */
 extern boolean_t
 ipc_port_importance_delta(
 	ipc_port_t 		port,
+	natural_t		options,
 	mach_port_delta_t	delta);
 #endif /* IMPORTANCE_INHERITANCE */
 

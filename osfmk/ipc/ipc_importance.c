@@ -653,7 +653,7 @@ ipc_importance_task_propagate_helper(
 		assert(IP_VALID(port));
 		ip_lock(port);
 		temp_task_imp = IIT_NULL;
-		if (!ipc_port_importance_delta_internal(port, &delta, &temp_task_imp)) {
+		if (!ipc_port_importance_delta_internal(port, IPID_OPTION_NORMAL, &delta, &temp_task_imp)) {
 			ip_unlock(port);
 		}
 
@@ -2046,6 +2046,276 @@ ipc_importance_disconnect_task(task_t task)
 }
 
 /*
+ *	Routine:	ipc_importance_check_circularity
+ *	Purpose:
+ *		Check if queueing "port" in a message for "dest"
+ *		would create a circular group of ports and messages.
+ *
+ *		If no circularity (FALSE returned), then "port"
+ *		is changed from "in limbo" to "in transit".
+ *
+ *		That is, we want to set port->ip_destination == dest,
+ *		but guaranteeing that this doesn't create a circle
+ *		port->ip_destination->ip_destination->... == port
+ *
+ *		Additionally, if port was successfully changed to "in transit",
+ *		propagate boost assertions from the "in limbo" port to all
+ *		the ports in the chain, and, if the destination task accepts
+ *		boosts, to the destination task.
+ *
+ *	Conditions:
+ *		No ports locked.  References held for "port" and "dest".
+ */
+
+boolean_t
+ipc_importance_check_circularity(
+	ipc_port_t	port,
+	ipc_port_t	dest)
+{
+	ipc_importance_task_t imp_task = IIT_NULL;
+	ipc_importance_task_t release_imp_task = IIT_NULL;
+	boolean_t imp_lock_held = FALSE;
+	int assertcnt = 0;
+	ipc_port_t base;
+
+	assert(port != IP_NULL);
+	assert(dest != IP_NULL);
+
+	if (port == dest)
+		return TRUE;
+	base = dest;
+
+	/* port is in limbo, so donation status is safe to latch */
+	if (port->ip_impdonation != 0) {
+		imp_lock_held = TRUE;
+		ipc_importance_lock();
+	}
+
+	/*
+	 *	First try a quick check that can run in parallel.
+	 *	No circularity if dest is not in transit.
+	 */
+	ip_lock(port);
+
+	/* 
+	 * Even if port is just carrying assertions for others,
+	 * we need the importance lock.
+	 */
+	if (port->ip_impcount > 0 && !imp_lock_held) {
+		if (!ipc_importance_lock_try()) {
+			ip_unlock(port);
+			ipc_importance_lock();
+			ip_lock(port);
+		}
+		imp_lock_held = TRUE;
+	}
+
+	if (ip_lock_try(dest)) {
+		if (!ip_active(dest) ||
+		    (dest->ip_receiver_name != MACH_PORT_NULL) ||
+		    (dest->ip_destination == IP_NULL))
+			goto not_circular;
+
+		/* dest is in transit; further checking necessary */
+
+		ip_unlock(dest);
+	}
+	ip_unlock(port);
+
+	/* 
+	 * We're about to pay the cost to serialize,
+	 * just go ahead and grab importance lock.
+	 */
+	if (!imp_lock_held) {
+		ipc_importance_lock();
+		imp_lock_held = TRUE;
+	}
+
+	ipc_port_multiple_lock(); /* massive serialization */
+
+	/*
+	 *	Search for the end of the chain (a port not in transit),
+	 *	acquiring locks along the way.
+	 */
+
+	for (;;) {
+		ip_lock(base);
+
+		if (!ip_active(base) ||
+		    (base->ip_receiver_name != MACH_PORT_NULL) ||
+		    (base->ip_destination == IP_NULL))
+			break;
+
+		base = base->ip_destination;
+	}
+
+	/* all ports in chain from dest to base, inclusive, are locked */
+
+	if (port == base) {
+		/* circularity detected! */
+
+		ipc_port_multiple_unlock();
+
+		/* port (== base) is in limbo */
+
+		assert(ip_active(port));
+		assert(port->ip_receiver_name == MACH_PORT_NULL);
+		assert(port->ip_destination == IP_NULL);
+
+		while (dest != IP_NULL) {
+			ipc_port_t next;
+
+			/* dest is in transit or in limbo */
+
+			assert(ip_active(dest));
+			assert(dest->ip_receiver_name == MACH_PORT_NULL);
+
+			next = dest->ip_destination;
+			ip_unlock(dest);
+			dest = next;
+		}
+
+		if (imp_lock_held)
+			ipc_importance_unlock();
+
+		return TRUE;
+	}
+
+	/*
+	 *	The guarantee:  lock port while the entire chain is locked.
+	 *	Once port is locked, we can take a reference to dest,
+	 *	add port to the chain, and unlock everything.
+	 */
+
+	ip_lock(port);
+	ipc_port_multiple_unlock();
+
+    not_circular:
+
+	/* port is in limbo */
+
+	assert(ip_active(port));
+	assert(port->ip_receiver_name == MACH_PORT_NULL);
+	assert(port->ip_destination == IP_NULL);
+
+	ip_reference(dest);
+	port->ip_destination = dest;
+
+	/* must have been in limbo or still bound to a task */
+	assert(port->ip_tempowner != 0);
+
+	/*
+	 * We delayed dropping assertions from a specific task.
+	 * Cache that info now (we'll drop assertions and the
+	 * task reference below).
+	 */
+	release_imp_task = port->ip_imp_task;
+	if (IIT_NULL != release_imp_task) {
+		port->ip_imp_task = IIT_NULL;
+	}
+	assertcnt = port->ip_impcount;
+
+	/* take the port out of limbo w.r.t. assertions */
+	port->ip_tempowner = 0;
+
+	/* now unlock chain */
+
+	ip_unlock(port);
+
+	for (;;) {
+
+		/* every port along chain track assertions behind it */
+		ipc_port_impcount_delta(dest, assertcnt, base);
+
+		if (dest == base)
+			break;
+
+		/* port is in transit */
+
+		assert(ip_active(dest));
+		assert(dest->ip_receiver_name == MACH_PORT_NULL);
+		assert(dest->ip_destination != IP_NULL);
+		assert(dest->ip_tempowner == 0);
+
+		port = dest->ip_destination;
+		ip_unlock(dest);
+		dest = port;
+	}
+
+	/* base is not in transit */
+	assert(!ip_active(base) ||
+	       (base->ip_receiver_name != MACH_PORT_NULL) ||
+	       (base->ip_destination == IP_NULL));
+
+	/*
+	 * Find the task to boost (if any).
+	 * We will boost "through" ports that don't know
+	 * about inheritance to deliver receive rights that
+	 * do.
+	 */
+	if (ip_active(base) && (assertcnt > 0)) {
+		assert(imp_lock_held);
+		if (base->ip_tempowner != 0) {
+			if (IIT_NULL != base->ip_imp_task) {
+				/* specified tempowner task */
+				imp_task = base->ip_imp_task;
+				assert(ipc_importance_task_is_any_receiver_type(imp_task));
+			}
+			/* otherwise don't boost current task */
+
+		} else if (base->ip_receiver_name != MACH_PORT_NULL) {
+			ipc_space_t space = base->ip_receiver;
+
+			/* only spaces with boost-accepting tasks */
+			if (space->is_task != TASK_NULL &&
+			    ipc_importance_task_is_any_receiver_type(space->is_task->task_imp_base))
+				imp_task = space->is_task->task_imp_base;
+		}
+
+		/* take reference before unlocking base */
+		if (imp_task != IIT_NULL) {
+			ipc_importance_task_reference(imp_task);
+		}
+	}
+
+	ip_unlock(base);
+
+	/*
+	 * Transfer assertions now that the ports are unlocked.
+	 * Avoid extra overhead if transferring to/from the same task.
+	 *
+	 * NOTE: If a transfer is occurring, the new assertions will
+	 * be added to imp_task BEFORE the importance lock is unlocked.
+	 * This is critical - to avoid decrements coming from the kmsgs
+	 * beating the increment to the task.
+	 */
+	boolean_t transfer_assertions = (imp_task != release_imp_task);
+
+	if (imp_task != IIT_NULL) {
+		assert(imp_lock_held);
+		if (transfer_assertions)
+			ipc_importance_task_hold_internal_assertion_locked(imp_task, assertcnt);
+	}
+
+	if (release_imp_task != IIT_NULL) {
+		assert(imp_lock_held);
+		if (transfer_assertions)
+			ipc_importance_task_drop_internal_assertion_locked(release_imp_task, assertcnt);
+	}
+
+	if (imp_lock_held)
+		ipc_importance_unlock();
+
+	if (imp_task != IIT_NULL)
+		ipc_importance_task_release(imp_task);
+
+	if (release_imp_task != IIT_NULL)
+		ipc_importance_task_release(release_imp_task);
+
+	return FALSE;
+}
+
+/*
  *	Routine:	ipc_importance_send
  *	Purpose:
  *		Post the importance voucher attribute [if sent] or a static
@@ -2066,7 +2336,6 @@ ipc_importance_send(
 	task_t task;
 	ipc_importance_task_t task_imp;
 	kern_return_t kr;
-
 
 	assert(IP_VALID(port));
 
@@ -2169,13 +2438,12 @@ ipc_importance_send(
 	/*
 	 * If we need to relock the port, do it with the importance still locked.
 	 * This assures we get to add the importance boost through the port to
-	 * the task BEFORE anyone else can attempt to undo that operation because
+	 * the task BEFORE anyone else can attempt to undo that operation if
 	 * the sender lost donor status.
 	 */
 	if (TRUE == port_lock_dropped) {
 		ip_lock(port);
 	}
-	ipc_importance_unlock();
 
  portupdate:
 				
@@ -2190,11 +2458,36 @@ ipc_importance_send(
 	}
 #endif /* IMPORTANCE_DEBUG */
 
-	/* adjust port boost count (with port locked) */
-	if (TRUE == ipc_port_importance_delta(port, 1)) {
+	mach_port_delta_t delta = 1;
+	boolean_t need_port_lock;
+	task_imp = IIT_NULL;
+
+	/* adjust port boost count (with importance and port locked) */
+	need_port_lock = ipc_port_importance_delta_internal(port, IPID_OPTION_NORMAL, &delta, &task_imp);
+
+	/* if we need to adjust a task importance as a result, apply that here */
+	if (IIT_NULL != task_imp && delta != 0) {
+		assert(delta == 1);
+
+		/* if this results in a change of state, propagate the transistion */
+		if (ipc_importance_task_check_transition(task_imp, IIT_UPDATE_HOLD, delta)) {
+
+			/* can't hold the port lock during task transition(s) */
+			if (!need_port_lock) {
+				need_port_lock = TRUE;
+				ip_unlock(port);
+			}
+			ipc_importance_task_propagate_assertion_locked(task_imp, IIT_UPDATE_HOLD, TRUE);
+		}
+	}
+
+	ipc_importance_unlock();
+
+	if (need_port_lock) {
 		port_lock_dropped = TRUE;
 		ip_lock(port);
 	}
+
 	return port_lock_dropped;
 }
 	
@@ -2449,7 +2742,12 @@ ipc_importance_inherit_from(ipc_kmsg_t kmsg)
 		ipc_importance_unlock();
 	}
 
-	/* decrement port boost count */ 
+	/*
+	 * decrement port boost count
+	 * This is OK to do without the importance lock as we atomically
+	 * unlinked the kmsg and snapshot the donating state while holding
+	 * the importance lock
+	 */ 
 	if (donating) {
 		ip_lock(port);
 		if (III_NULL != inherit) {
@@ -2458,14 +2756,14 @@ ipc_importance_inherit_from(ipc_kmsg_t kmsg)
 			ip_unlock(port);
 		}  else	{
 			/* drop importance from port and destination task */
-			if (ipc_port_importance_delta(port, -1) == FALSE) {
+			if (ipc_port_importance_delta(port, IPID_OPTION_NORMAL, -1) == FALSE) {
 				ip_unlock(port);
 			}
 		}
 	} else if (cleared_self_donation) {
 		ip_lock(port);
 		/* drop cleared donation from port and destination task */
-		if (ipc_port_importance_delta(port, -1) == FALSE) {
+		if (ipc_port_importance_delta(port, IPID_OPTION_NORMAL, -1) == FALSE) {
 			ip_unlock(port);
 		}
 	}
@@ -2588,7 +2886,6 @@ ipc_importance_receive(
 			ipc_importance_task_t task_imp = task_self->task_imp_base;
 			ipc_port_t port = kmsg->ikm_header->msgh_remote_port;
 
-			/* defensive deduction for release builds lacking the assert */
 			ip_lock(port);
 			ipc_port_impcount_delta(port, -1, IP_NULL);
 			ip_unlock(port);
@@ -2688,7 +2985,7 @@ ipc_importance_clean(
 			ip_lock(port);
 			/* inactive ports already had their importance boosts dropped */
 			if (!ip_active(port) || 
-			    ipc_port_importance_delta(port, -1) == FALSE) {
+			    ipc_port_importance_delta(port, IPID_OPTION_NORMAL, -1) == FALSE) {
 				ip_unlock(port);
 			}
 		}

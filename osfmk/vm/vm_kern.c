@@ -281,9 +281,10 @@ kernel_memory_allocate(
 	 * limit the size of a single extent of wired memory
 	 * to try and limit the damage to the system if
 	 * too many pages get wired down
-	 * limit raised to 2GB with 128GB max physical limit
+	 * limit raised to 2GB with 128GB max physical limit,
+	 * but scaled by installed memory above this
 	 */
-        if ( !(flags & KMA_VAONLY) && map_size > (1ULL << 31)) {
+        if ( !(flags & KMA_VAONLY) && map_size > MAX(1ULL<<31, sane_size/64)) {
                 return KERN_RESOURCE_SHORTAGE;
         }
 

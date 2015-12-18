@@ -327,6 +327,39 @@ struct if_rxpoll_stats {
 	u_int64_t	ifi_poll_interval_time;	/* poll interval (nsec) */
 };
 
+struct if_tcp_ecn_perf_stat {
+	u_int64_t rtt_avg;
+	u_int64_t rtt_var;
+	u_int64_t oo_percent;
+	u_int64_t sack_episodes;
+	u_int64_t reorder_percent;
+	u_int64_t rxmit_percent;
+	u_int64_t rxmit_drop;
+};
+
+struct if_tcp_ecn_stat {
+	u_int64_t timestamp;
+	u_int64_t ecn_client_setup;
+	u_int64_t ecn_server_setup;
+	u_int64_t ecn_client_success;
+	u_int64_t ecn_server_success;
+	u_int64_t ecn_peer_nosupport;
+	u_int64_t ecn_syn_lost;
+	u_int64_t ecn_synack_lost;
+	u_int64_t ecn_recv_ce;
+	u_int64_t ecn_recv_ece;
+	u_int64_t ecn_conn_recv_ce;
+	u_int64_t ecn_conn_recv_ece;
+	u_int64_t ecn_conn_plnoce;
+	u_int64_t ecn_conn_plce;
+	u_int64_t ecn_conn_noplce;
+	u_int64_t ecn_fallback_synloss;
+	u_int64_t ecn_fallback_reorder;
+	u_int64_t ecn_fallback_ce;
+	struct if_tcp_ecn_perf_stat ecn_on;
+	struct if_tcp_ecn_perf_stat ecn_off;
+};
+
 /*
  * Interface link status report -- includes statistics related to
  * the link layer technology sent by the driver. The driver will monitor
@@ -908,6 +941,8 @@ struct ifnet {
 	decl_lck_rw_data(, if_link_status_lock);
 	struct if_link_status	*if_link_status;
 	struct if_interface_state	if_interface_state;
+	struct if_tcp_ecn_stat *if_ipv4_stat;
+	struct if_tcp_ecn_stat *if_ipv6_stat;
 };
 
 #define	IF_TCP_STATINC(_ifp, _s) do {					\
@@ -1189,6 +1224,13 @@ struct ifmultiaddr {
 	((_ifp)->if_type == IFT_CELLULAR ||				\
 	(_ifp)->if_delegated.type == IFT_CELLULAR)
 
+/*
+ * Indicate whether or not the immediate interface, or the interface delegated
+ * by it, is an ETHERNET interface.
+ */
+#define	IFNET_IS_ETHERNET(_ifp)						\
+	((_ifp)->if_family == IFNET_FAMILY_ETHERNET ||			\
+	(_ifp)->if_delegated.family == IFNET_FAMILY_ETHERNET)
 /*
  * Indicate whether or not the immediate interface, or the interface delegated
  * by it, is a Wi-Fi interface (IFNET_SUBFAMILY_WIFI).  Delegated interface

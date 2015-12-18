@@ -412,6 +412,7 @@ kpc_get_config(uint32_t classes, kpc_config_t *current_config)
 int
 kpc_set_config(uint32_t classes, kpc_config_t *configv)
 {
+	int ret = 0;
 	struct kpc_config_remote mp_config = {
 		.classes = classes, .configv = configv,
 		.pmc_mask = kpc_get_configurable_pmc_mask(classes)
@@ -437,11 +438,11 @@ kpc_set_config(uint32_t classes, kpc_config_t *configv)
 	if (classes & KPC_CLASS_POWER_MASK)
 		mp_config.classes |= KPC_CLASS_CONFIGURABLE_MASK;
 
-	kpc_set_config_arch( &mp_config );
+	ret = kpc_set_config_arch( &mp_config );
 
 	lck_mtx_unlock(&kpc_config_lock);
 
-	return 0;
+	return ret;
 }
 
 /* allocate a buffer large enough for all possible counters */

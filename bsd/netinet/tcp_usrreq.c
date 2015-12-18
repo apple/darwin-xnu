@@ -671,6 +671,9 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		} else {
 			error = ENETDOWN;
 		}
+
+		/* Disable PRECONNECT_DATA, as we don't need to send a SYN anymore. */
+		so->so_flags1 &= ~SOF1_PRECONNECT_DATA;
 		return error;
 	}
 #endif /* FLOW_DIVERT */
@@ -1558,7 +1561,8 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 	bzero(ti, sizeof(*ti));
 
 	ti->tcpi_state = tp->t_state;
-	
+	ti->tcpi_flowhash = inp->inp_flowhash;
+
 	if (tp->t_state > TCPS_LISTEN) {
 		if (TSTMP_SUPPORTED(tp))
 			ti->tcpi_options |= TCPI_OPT_TIMESTAMPS;
@@ -1569,6 +1573,8 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 			ti->tcpi_snd_wscale = tp->snd_scale;
 			ti->tcpi_rcv_wscale = tp->rcv_scale;
 		}
+		if (TCP_ECN_ENABLED(tp))
+			ti->tcpi_options |= TCPI_OPT_ECN;
 
 		/* Are we in retranmission episode */
 		if (IN_FASTRECOVERY(tp) || tp->t_rxtshift > 0)
@@ -1643,6 +1649,31 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 		ti->tcpi_tfo_syn_data_sent = !!(tp->t_tfo_stats & TFO_S_SYN_DATA_SENT);
 		ti->tcpi_tfo_syn_data_acked = !!(tp->t_tfo_stats & TFO_S_SYN_DATA_ACKED);
 		ti->tcpi_tfo_syn_loss = !!(tp->t_tfo_stats & TFO_S_SYN_LOSS);
+
+		ti->tcpi_ecn_client_setup = !!(tp->ecn_flags & TE_SETUPSENT);
+		ti->tcpi_ecn_server_setup = !!(tp->ecn_flags & TE_SETUPRECEIVED);
+		ti->tcpi_ecn_success = (tp->ecn_flags & TE_ECN_ON) == TE_ECN_ON ? 1 : 0;
+		ti->tcpi_ecn_lost_syn = !!(tp->ecn_flags & TE_LOST_SYN);
+		ti->tcpi_ecn_lost_synack = !!(tp->ecn_flags & TE_LOST_SYNACK);
+
+		ti->tcpi_local_peer = !!(tp->t_flags & TF_LOCAL);
+
+		if (tp->t_inpcb->inp_last_outifp != NULL) {
+			if (IFNET_IS_CELLULAR(tp->t_inpcb->inp_last_outifp))
+				ti->tcpi_if_cell = 1;
+			else if (IFNET_IS_WIFI(tp->t_inpcb->inp_last_outifp))
+				ti->tcpi_if_wifi = 1;
+		}
+
+		ti->tcpi_ecn_recv_ce = tp->t_ecn_recv_ce;
+		ti->tcpi_ecn_recv_cwr = tp->t_ecn_recv_cwr;
+
+		ti->tcpi_rcvoopack = tp->t_rcvoopack;
+		ti->tcpi_pawsdrop = tp->t_pawsdrop;
+		ti->tcpi_sack_recovery_episode = tp->t_sack_recovery_episode;
+		ti->tcpi_reordered_pkts = tp->t_reordered_pkts;
+		ti->tcpi_dsack_sent = tp->t_dsack_sent;
+		ti->tcpi_dsack_recvd = tp->t_dsack_recvd;
 	}
 }
 
@@ -1913,7 +1944,6 @@ tcp_ctloutput(so, sopt)
 		case TCP_NODELAY:
 		case TCP_NOOPT:
 		case TCP_NOPUSH:
-		case TCP_ENABLE_ECN:
 			error = sooptcopyin(sopt, &optval, sizeof optval,
 					    sizeof optval);
 			if (error)
@@ -1928,9 +1958,6 @@ tcp_ctloutput(so, sopt)
 				break;
 			case TCP_NOPUSH:
 				opt = TF_NOPUSH;
-				break;
-			case TCP_ENABLE_ECN:
-				opt = TF_ENABLE_ECN;
 				break;
 			default:
 				opt = 0; /* dead code to fool gcc */
@@ -2260,6 +2287,36 @@ tcp_ctloutput(so, sopt)
 			else
 				tcp_disable_tfo(tp);
 			break;
+		case TCP_ENABLE_ECN:
+			error = sooptcopyin(sopt, &optval, sizeof optval,
+					    sizeof optval);
+			if (error)
+				break;
+			if (optval) {
+				tp->ecn_flags |= TE_ECN_MODE_ENABLE;
+				tp->ecn_flags &= ~TE_ECN_MODE_DISABLE;
+			} else {
+				tp->ecn_flags &= ~TE_ECN_MODE_ENABLE;
+			}
+			break;
+		case TCP_ECN_MODE:
+			error = sooptcopyin(sopt, &optval, sizeof optval,
+					    sizeof optval);
+			if (error)
+				break;
+			if (optval == ECN_MODE_DEFAULT) {
+				tp->ecn_flags &= ~TE_ECN_MODE_ENABLE;
+				tp->ecn_flags &= ~TE_ECN_MODE_DISABLE;
+			} else if (optval == ECN_MODE_ENABLE) {
+				tp->ecn_flags |= TE_ECN_MODE_ENABLE;
+				tp->ecn_flags &= ~TE_ECN_MODE_DISABLE;
+			} else if (optval == ECN_MODE_DISABLE) {
+				tp->ecn_flags &= ~TE_ECN_MODE_ENABLE;
+				tp->ecn_flags |= TE_ECN_MODE_DISABLE;
+			} else {
+				error = EINVAL;
+			}
+			break;
 		case SO_FLUSH:
 			if ((error = sooptcopyin(sopt, &optval, sizeof (optval),
 			    sizeof (optval))) != 0)
@@ -2312,7 +2369,15 @@ tcp_ctloutput(so, sopt)
 			optval = tp->t_flags & TF_NOPUSH;
 			break;
 		case TCP_ENABLE_ECN:
-			optval = (tp->t_flags & TF_ENABLE_ECN) ? 1 : 0; 
+			optval = (tp->ecn_flags & TE_ECN_MODE_ENABLE) ? 1 : 0;
+			break;
+		case TCP_ECN_MODE:
+			if (tp->ecn_flags & TE_ECN_MODE_ENABLE)
+				optval = ECN_MODE_ENABLE;
+			else if (tp->ecn_flags & TE_ECN_MODE_DISABLE)
+				optval = ECN_MODE_DISABLE;
+			else
+				optval = ECN_MODE_DEFAULT;
 			break;
 		case TCP_CONNECTIONTIMEOUT:
 			optval = tp->t_keepinit / TCP_RETRANSHZ;

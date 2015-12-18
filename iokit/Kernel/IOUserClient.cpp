@@ -354,16 +354,32 @@ void IOMachPort::free( void )
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-class IOUserNotification : public OSIterator
+class IOUserIterator : public OSIterator
+{
+    OSDeclareDefaultStructors(IOUserIterator)
+public:
+    OSObject 	* 	userIteratorObject;
+    IOLock 	*	lock;
+
+    static IOUserIterator * withIterator(OSIterator * iter);
+    virtual bool init( void ) APPLE_KEXT_OVERRIDE;
+    virtual void free() APPLE_KEXT_OVERRIDE;
+
+    virtual void reset() APPLE_KEXT_OVERRIDE;
+    virtual bool isValid() APPLE_KEXT_OVERRIDE;
+    virtual OSObject * getNextObject() APPLE_KEXT_OVERRIDE;
+};
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+class IOUserNotification : public IOUserIterator
 {
     OSDeclareDefaultStructors(IOUserNotification)
 
-    IONotifier 	* 	holdNotify;
-    IOLock 	*	lock;
+#define holdNotify	userIteratorObject
 
 public:
 
-    virtual bool init( void ) APPLE_KEXT_OVERRIDE;
     virtual void free() APPLE_KEXT_OVERRIDE;
 
     virtual void setNotification( IONotifier * obj );
@@ -371,6 +387,84 @@ public:
     virtual void reset() APPLE_KEXT_OVERRIDE;
     virtual bool isValid() APPLE_KEXT_OVERRIDE;
 };
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+OSDefineMetaClassAndStructors( IOUserIterator, OSIterator )
+
+IOUserIterator *
+IOUserIterator::withIterator(OSIterator * iter)
+{
+    IOUserIterator * me;
+
+    if (!iter) return (0);
+
+    me = new IOUserIterator;
+    if (me && !me->init())
+    {
+	me->release();
+	me = 0;
+    }
+    if (!me) return me;
+    me->userIteratorObject = iter;
+
+    return (me);
+}
+
+bool
+IOUserIterator::init( void )
+{
+    if (!OSObject::init()) return (false);
+
+    lock = IOLockAlloc();
+    if( !lock)
+        return( false );
+
+    return (true);
+}
+
+void
+IOUserIterator::free()
+{
+    if (userIteratorObject) userIteratorObject->release();
+    if (lock) IOLockFree(lock);
+    OSObject::free();
+}
+
+void
+IOUserIterator::reset()
+{
+    IOLockLock(lock);
+    assert(OSDynamicCast(OSIterator, userIteratorObject));
+    ((OSIterator *)userIteratorObject)->reset();
+    IOLockUnlock(lock);
+}
+
+bool
+IOUserIterator::isValid()
+{
+    bool ret;
+
+    IOLockLock(lock);
+    assert(OSDynamicCast(OSIterator, userIteratorObject));
+    ret = ((OSIterator *)userIteratorObject)->isValid();
+    IOLockUnlock(lock);
+
+    return (ret);
+}
+
+OSObject *
+IOUserIterator::getNextObject()
+{
+    OSObject * ret;
+
+    IOLockLock(lock);
+    assert(OSDynamicCast(OSIterator, userIteratorObject));
+    ret = ((OSIterator *)userIteratorObject)->getNextObject();
+    IOLockUnlock(lock);
+
+    return (ret);
+}
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 extern "C" {
@@ -513,32 +607,21 @@ public:
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #undef super
-#define super OSIterator
-OSDefineMetaClass( IOUserNotification, OSIterator )
-OSDefineAbstractStructors( IOUserNotification, OSIterator )
+#define super IOUserIterator
+OSDefineMetaClass( IOUserNotification, IOUserIterator )
+OSDefineAbstractStructors( IOUserNotification, IOUserIterator )
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-bool IOUserNotification::init( void )
-{
-    if( !super::init())
-	return( false );
-
-    lock = IOLockAlloc();
-    if( !lock)
-        return( false );
-
-    return( true );
-}
-
 void IOUserNotification::free( void )
 {
-    if( holdNotify)
-	holdNotify->remove();
+    if (holdNotify)
+    {
+	assert(OSDynamicCast(IONotifier, holdNotify));
+	((IONotifier *)holdNotify)->remove();
+	holdNotify = 0;
+    }
     // can't be in handler now
-
-    if( lock)
-	IOLockFree( lock );
 
     super::free();
 }
@@ -546,7 +629,7 @@ void IOUserNotification::free( void )
 
 void IOUserNotification::setNotification( IONotifier * notify )
 {
-    IONotifier * previousNotify;
+    OSObject * previousNotify;
 
     IOLockLock( gIOObjectPortLock);
 
@@ -556,7 +639,10 @@ void IOUserNotification::setNotification( IONotifier * notify )
     IOLockUnlock( gIOObjectPortLock);
 
     if( previousNotify)
-	previousNotify->remove();
+    {
+	assert(OSDynamicCast(IONotifier, previousNotify));
+	((IONotifier *)previousNotify)->remove();
+    }
 }
 
 void IOUserNotification::reset()
@@ -1503,6 +1589,14 @@ extern "C" {
 	if( !(out = OSDynamicCast( cls, obj)))	\
 	    return( kIOReturnBadArgument )
 
+#define CHECKLOCKED(cls,obj,out)					\
+	IOUserIterator * oIter;						\
+	cls * out;							\
+	if( !(oIter = OSDynamicCast(IOUserIterator, obj)))		\
+	    return (kIOReturnBadArgument);				\
+	if( !(out = OSDynamicCast(cls, oIter->userIteratorObject)))	\
+	    return (kIOReturnBadArgument)
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 // Create a vm_map_copy_t or kalloc'ed data for memory
@@ -1671,6 +1765,7 @@ kern_return_t is_io_iterator_next(
 	io_object_t iterator,
 	io_object_t *object )
 {
+    IOReturn    ret;
     OSObject *	obj;
 
     CHECK( OSIterator, iterator, iter );
@@ -1679,9 +1774,11 @@ kern_return_t is_io_iterator_next(
     if( obj) {
 	obj->retain();
 	*object = obj;
-        return( kIOReturnSuccess );
+        ret = kIOReturnSuccess;
     } else
-        return( kIOReturnNoDevice );
+        ret = kIOReturnNoDevice;
+
+    return (ret);
 }
 
 /* Routine io_iterator_reset */
@@ -1723,6 +1820,7 @@ static kern_return_t internal_io_service_match_property_table(
     obj = matching_size ? OSUnserializeXML(matching, matching_size)
 			: OSUnserializeXML(matching);
     if( (dict = OSDynamicCast( OSDictionary, obj))) {
+
         *matches = service->passiveMatch( dict );
 	kr = kIOReturnSuccess;
     } else
@@ -1795,7 +1893,7 @@ static kern_return_t internal_io_service_get_matching_services(
     obj = matching_size ? OSUnserializeXML(matching, matching_size)
 			: OSUnserializeXML(matching);
     if( (dict = OSDynamicCast( OSDictionary, obj))) {
-        *existing = IOService::getMatchingServices( dict );
+        *existing = IOUserIterator::withIterator(IOService::getMatchingServices( dict ));
 	kr = kIOReturnSuccess;
     } else
 	kr = kIOReturnBadArgument;
@@ -2277,8 +2375,9 @@ kern_return_t is_io_registry_create_iterator(
     if( master_port != master_device_port)
         return( kIOReturnNotPrivileged);
 
-    *iterator = IORegistryIterator::iterateOver(
-	IORegistryEntry::getPlane( plane ), options );
+    *iterator = IOUserIterator::withIterator(
+	IORegistryIterator::iterateOver(
+		IORegistryEntry::getPlane( plane ), options ));
 
     return( *iterator ? kIOReturnSuccess : kIOReturnBadArgument );
 }
@@ -2292,8 +2391,9 @@ kern_return_t is_io_registry_entry_create_iterator(
 {
     CHECK( IORegistryEntry, registry_entry, entry );
 
-    *iterator = IORegistryIterator::iterateOver( entry,
-	IORegistryEntry::getPlane( plane ), options );
+    *iterator = IOUserIterator::withIterator(
+	IORegistryIterator::iterateOver( entry,
+		IORegistryEntry::getPlane( plane ), options ));
 
     return( *iterator ? kIOReturnSuccess : kIOReturnBadArgument );
 }
@@ -2302,9 +2402,11 @@ kern_return_t is_io_registry_entry_create_iterator(
 kern_return_t is_io_registry_iterator_enter_entry(
 	io_object_t iterator )
 {
-    CHECK( IORegistryIterator, iterator, iter );
+    CHECKLOCKED( IORegistryIterator, iterator, iter );
 
+    IOLockLock(oIter->lock);
     iter->enterEntry();
+    IOLockUnlock(oIter->lock);
 
     return( kIOReturnSuccess );
 }
@@ -2315,9 +2417,11 @@ kern_return_t is_io_registry_iterator_exit_entry(
 {
     bool	didIt;
 
-    CHECK( IORegistryIterator, iterator, iter );
+    CHECKLOCKED( IORegistryIterator, iterator, iter );
 
+    IOLockLock(oIter->lock);
     didIt = iter->exitEntry();
+    IOLockUnlock(oIter->lock);
 
     return( didIt ? kIOReturnSuccess : kIOReturnNoDevice );
 }

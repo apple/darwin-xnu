@@ -182,16 +182,19 @@ typedef struct thread_debug_info_internal  thread_debug_info_internal_data_t;
 
 #endif /* PRIVATE */
 
-
-/*
- * Obsolete interfaces.
- */
-
-#define THREAD_SCHED_TIMESHARE_INFO	10
-#define THREAD_SCHED_RR_INFO		11
-#define THREAD_SCHED_FIFO_INFO		12
-
 #define IO_NUM_PRIORITIES	4
+
+#define UPDATE_IO_STATS(info, size)				\
+{								\
+	info.count++;						\
+	info.size += size;					\
+}
+
+#define UPDATE_IO_STATS_ATOMIC(info, io_size)			\
+{								\
+	OSIncrementAtomic64((SInt64 *)&(info.count));		\
+	OSAddAtomic64(io_size, (SInt64 *)&(info.size));		\
+}
 
 struct io_stat_entry {
 	uint64_t	count;
@@ -207,5 +210,13 @@ struct io_stat_info {
 };
 
 typedef struct io_stat_info *io_stat_info_t;
+
+/* 
+ * Obsolete interfaces.
+ */
+
+#define THREAD_SCHED_TIMESHARE_INFO     10
+#define THREAD_SCHED_RR_INFO            11
+#define THREAD_SCHED_FIFO_INFO          12
 
 #endif	/* _MACH_THREAD_INFO_H_ */

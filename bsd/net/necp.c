@@ -731,6 +731,13 @@ necp_packet_get_tlv_at_offset(mbuf_t packet, int tlv_offset, u_int32_t buff_len,
 		return (error);
 	}
 
+	u_int32_t total_len = m_length2(packet, NULL);
+	if (total_len < (tlv_offset + sizeof(u_int8_t) + sizeof(length) + length)) {
+		NECPLOG(LOG_ERR, "Got a bad TLV, length (%u) + offset (%d) < total length (%u)",
+				length, (tlv_offset + sizeof(u_int8_t) + sizeof(length)), total_len);
+		return (EINVAL);
+	}
+
 	if (value_size != NULL) {
 		*value_size = length;
 	}
@@ -4857,7 +4864,10 @@ necp_match_policy(struct proc *p, struct necp_match_policy_args *uap, int32_t *r
 		goto done;
 	}
 	// Copy parameters in
-	copyin(uap->parameters, parameters, uap->parameters_size);
+	error = copyin(uap->parameters, parameters, uap->parameters_size);
+	if (error) {
+		goto done;
+	}
 
 	error = necp_application_find_policy_match_internal(parameters, uap->parameters_size, &returned_result);
 	if (error) {
@@ -4865,7 +4875,10 @@ necp_match_policy(struct proc *p, struct necp_match_policy_args *uap, int32_t *r
 	}
 
 	// Copy return value back
-	copyout(&returned_result, uap->returned_result, sizeof(struct necp_aggregate_result));
+	error = copyout(&returned_result, uap->returned_result, sizeof(struct necp_aggregate_result));
+	if (error) {
+		goto done;
+	}
 done:
 	if (parameters != NULL) {
 		FREE(parameters, M_NECP);

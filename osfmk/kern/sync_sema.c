@@ -206,36 +206,28 @@ semaphore_create(
 /*
  *	Routine:	semaphore_destroy_internal
  *
- *	This call will only succeed if the specified task is the SAME task
- *	specified at the semaphore's creation.
+ *	Disassociate a semaphore from its owning task, mark it inactive,
+ *	and set any waiting threads running with THREAD_RESTART.
  *
- *	All threads currently blocked on the semaphore are awoken.  These
- *	threads will return with the KERN_TERMINATED error.
+ *	Conditions:
+ *			task is locked
+ *			semaphore is locked
+ *			semaphore is owned by the specified task
+ *	Returns:
+ *			with semaphore unlocked
  */
-kern_return_t
+static void
 semaphore_destroy_internal(
 	task_t			task,
 	semaphore_t		semaphore)
 {
 	int			old_count;
-	spl_t			spl_level;
 
-	/*
-	 *  Disown semaphore
-	 */
-	task_lock(task);
-	if (semaphore->owner != task) {
-		task_unlock(task);
-		return KERN_INVALID_ARGUMENT;
-	}
-	spl_level = splsched();
-	semaphore_lock(semaphore);
-
+	/* unlink semaphore from owning task */
+	assert(semaphore->owner == task);
 	remqueue((queue_entry_t) semaphore);
 	semaphore->owner = TASK_NULL;
 	task->semaphores_owned--;
-
-	task_unlock(task);
 
 	/*
 	 *  Deactivate semaphore
@@ -259,9 +251,6 @@ semaphore_destroy_internal(
 	} else {
 		semaphore_unlock(semaphore);
 	}
-	splx(spl_level);
-
-	return KERN_SUCCESS;
 }
 
 /*
@@ -275,18 +264,75 @@ semaphore_destroy(
 	task_t			task,
 	semaphore_t		semaphore)
 {
-	kern_return_t kr;
+	spl_t spl_level;
 
 	if (semaphore == SEMAPHORE_NULL)
 		return KERN_INVALID_ARGUMENT;
 
 	if (task == TASK_NULL) {
-		kr = KERN_INVALID_ARGUMENT;
-	} else {
-		kr = semaphore_destroy_internal(task, semaphore);
+		semaphore_dereference(semaphore);
+		return KERN_INVALID_ARGUMENT;
 	}
+
+	task_lock(task);
+	spl_level = splsched();
+	semaphore_lock(semaphore);
+
+	if (semaphore->owner != task) {
+		semaphore_unlock(semaphore);
+		splx(spl_level);
+		task_unlock(task);
+		return KERN_INVALID_ARGUMENT;
+	}
+			
+	semaphore_destroy_internal(task, semaphore);
+	/* semaphore unlocked */
+
+	splx(spl_level);
+	task_unlock(task);
+
 	semaphore_dereference(semaphore);
-	return kr;
+	return KERN_SUCCESS;
+}
+
+/*
+ *	Routine:	semaphore_destroy_all
+ *
+ *	Destroy all the semaphores associated with a given task.
+ */
+#define SEMASPERSPL 20  /* max number of semaphores to destroy per spl hold */
+
+void
+semaphore_destroy_all(
+	task_t			task)
+{
+	uint32_t count;
+	spl_t spl_level;
+
+	count = 0;
+	task_lock(task);
+	while (!queue_empty(&task->semaphore_list)) {
+		semaphore_t semaphore;
+
+		semaphore = (semaphore_t) queue_first(&task->semaphore_list);
+
+		if (count == 0) 
+			spl_level = splsched();
+		semaphore_lock(semaphore);
+
+		semaphore_destroy_internal(task, semaphore);
+		/* semaphore unlocked */
+
+		/* throttle number of semaphores per interrupt disablement */
+		if (++count == SEMASPERSPL) {
+			count = 0;
+			splx(spl_level);
+		}
+	}
+	if (count != 0)
+		splx(spl_level);
+
+	task_unlock(task);
 }
 
 /*
@@ -1072,6 +1118,9 @@ void
 semaphore_dereference(
 	semaphore_t		semaphore)
 {
+	uint32_t collisions;
+	spl_t spl_level;
+
 	if (semaphore == NULL)
 		return;
 
@@ -1090,10 +1139,37 @@ semaphore_dereference(
 		assert(!port->ip_srights);
 		ipc_port_dealloc_kernel(port);
 	}
-	if (semaphore->active) {
-		assert(semaphore->owner != TASK_NULL);
-		semaphore_destroy_internal(semaphore->owner, semaphore);
+
+	/*
+	 * Lock the semaphore to lock in the owner task reference.
+	 * Then continue to try to lock the task (inverse order).
+	 */
+	spl_level = splsched();
+	semaphore_lock(semaphore);
+	for (collisions = 0; semaphore->active; collisions++) {
+		task_t task = semaphore->owner;
+
+		assert(task != TASK_NULL);
+		
+		if (task_lock_try(task)) {
+			semaphore_destroy_internal(task, semaphore);
+			/* semaphore unlocked */
+			splx(spl_level);
+			task_unlock(task);
+			goto out;
+		}
+		
+		/* failed to get out-of-order locks */
+		semaphore_unlock(semaphore);
+		splx(spl_level);
+		mutex_pause(collisions);
+		spl_level = splsched();
+		semaphore_lock(semaphore);
 	}
+	semaphore_unlock(semaphore);
+	splx(spl_level);
+
+ out:
 	zfree(semaphore_zone, semaphore);
 }
 

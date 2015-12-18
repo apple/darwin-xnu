@@ -280,7 +280,6 @@ struct tcpcb {
 #define	TF_WASFRECOVERY	0x400000	/* was in NewReno Fast Recovery */
 #define	TF_SIGNATURE	0x800000	/* require MD5 digests (RFC2385) */
 #define	TF_MAXSEGSNT	0x1000000	/* last segment sent was a full segment */
-#define	TF_ENABLE_ECN	0x2000000	/* Enable ECN */
 #define TF_PMTUD	0x4000000	/* Perform Path MTU Discovery for this connection */
 #define	TF_CLOSING	0x8000000	/* pending tcp close */
 #define TF_TSO		0x10000000	/* TCP Segment Offloading is enable on this connection */
@@ -382,16 +381,29 @@ struct tcpcb {
 	u_int32_t	rcv_by_unackwin; /* bytes seen during the last ack-stretching win */
 	u_int32_t	rcv_nostrack_ts; /* timestamp when stretch ack was disabled automatically */
 	u_int16_t	rcv_waitforss;	/* wait for packets during slow-start */
-	u_int16_t		ecn_flags;
-#define TE_SETUPSENT		0x01	/* Indicate we have sent ECN-SETUP SYN or SYN-ACK */
-#define TE_SETUPRECEIVED	0x02	/* Indicate we have received ECN-SETUP SYN or SYN-ACK */
-#define TE_SENDIPECT		0x04	/* Indicate we haven't sent or received non-ECN-setup SYN or SYN-ACK */
-#define TE_SENDCWR		0x08	/* Indicate that the next non-retransmit should have the TCP CWR flag set */
-#define TE_SENDECE		0x10	/* Indicate that the next packet should have the TCP ECE flag set */
-#define TE_INRECOVERY		0x20	/* connection entered recovery after receiving ECE */
-#define TE_RECV_ECN_CE		0x40	/* Received IPTOS_ECN_CE marking atleast once */
-#define TE_RECV_ECN_ECE	0x80	/* Received ECE marking atleast once */
-#define TE_ECN_ON		(TE_SETUPSENT | TE_SETUPRECEIVED) /* Indicate ECN was successfully negotiated on a connection) */
+
+/* ECN stats */
+	u_int16_t	ecn_flags;
+#define	TE_SETUPSENT		0x0001	/* Indicate we have sent ECN-SETUP SYN or SYN-ACK */
+#define	TE_SETUPRECEIVED	0x0002	/* Indicate we have received ECN-SETUP SYN or SYN-ACK */
+#define	TE_SENDIPECT		0x0004	/* Indicate we haven't sent or received non-ECN-setup SYN or SYN-ACK */
+#define	TE_SENDCWR		0x0008	/* Indicate that the next non-retransmit should have the TCP CWR flag set */
+#define	TE_SENDECE		0x0010	/* Indicate that the next packet should have the TCP ECE flag set */
+#define	TE_INRECOVERY		0x0020	/* connection entered recovery after receiving ECE */
+#define	TE_RECV_ECN_CE		0x0040	/* Received IPTOS_ECN_CE marking atleast once */
+#define	TE_RECV_ECN_ECE		0x0080	/* Received ECE marking atleast once */
+#define	TE_LOST_SYN		0x0100	/* Lost SYN with ECN setup */
+#define	TE_LOST_SYNACK		0x0200	/* Lost SYN-ACK with ECN setup */
+#define	TE_ECN_MODE_ENABLE	0x0400	/* Option ECN mode set to enable */
+#define	TE_ECN_MODE_DISABLE	0x0800	/* Option ECN mode set to disable */
+#define	TE_ENABLE_ECN		0x1000	/* Enable negotiation of ECN */
+#define	TE_ECN_ON		(TE_SETUPSENT | TE_SETUPRECEIVED) /* Indicate ECN was successfully negotiated on a connection) */
+#define	TE_CEHEURI_SET		0x2000 /* We did our CE-probing at the beginning */
+#define	TE_CLIENT_SETUP		0x4000	/* setup from client side */
+
+	u_int32_t	t_ecn_recv_ce;	/* Received CE from the network */
+	u_int32_t	t_ecn_recv_cwr;	/* Packets received with CWR */
+	u_int8_t	t_ecn_recv_ce_pkt; /* Received packet with CE-bit set (independent from last_ack_sent) */
 
 /* state for bad retransmit recovery */
 	u_int32_t	snd_cwnd_prev;	/* cwnd prior to retransmit */
@@ -445,7 +457,7 @@ struct tcpcb {
 	uint32_t	rtt_count;		/* Number of RTT samples in recent base history */
 	uint32_t	bg_ssthresh;		/* Slow start threshold until delay increases */
 	uint32_t	t_flagsext;		/* Another field to accommodate more flags */
-#define TF_RXTFINDROP	0x1			/* Drop conn after retransmitting FIN 3 times */
+#define TF_RXTFINDROP		0x1			/* Drop conn after retransmitting FIN 3 times */
 #define TF_RCVUNACK_WAITSS	0x2		/* set when the receiver should not stretch acks */
 #define TF_BWMEAS_INPROGRESS	0x4		/* Indicate BW meas is happening */
 #define TF_MEASURESNDBW		0x8		/* Measure send bw on this connection */
@@ -587,6 +599,13 @@ struct tcpcb {
 #define	TFO_PROBE_PROBING	1 /* Sending out TCP-keepalives waiting for reply */
 #define	TFO_PROBE_WAIT_DATA	2 /* Received reply, waiting for data */
 	u_int8_t		t_tfo_probe_state;
+	
+	u_int32_t	t_rcvoopack;		/* out-of-order packets received */
+	u_int32_t	t_pawsdrop;		/* segments dropped due to PAWS */
+	u_int32_t	t_sack_recovery_episode; /* SACK recovery episodes */
+	u_int32_t	t_reordered_pkts;	/* packets reorderd */
+	u_int32_t	t_dsack_sent;		/* Sent DSACK notification */
+	u_int32_t	t_dsack_recvd;		/* Received a valid DSACK option */
 };
 
 #define IN_FASTRECOVERY(tp)	(tp->t_flags & TF_FASTRECOVERY)
@@ -1107,6 +1126,9 @@ struct	tcpstat {
 	u_int32_t	tcps_ecn_conn_plnoce;	/* Number of connections that received no CE and sufferred packet loss */
 	u_int32_t	tcps_ecn_conn_pl_ce;	/* Number of connections that received CE and sufferred packet loss */
 	u_int32_t	tcps_ecn_conn_nopl_ce;	/* Number of connections that received CE and sufferred no packet loss */
+	u_int32_t	tcps_ecn_fallback_synloss; /* Number of times we did fall back due to SYN-Loss */
+	u_int32_t	tcps_ecn_fallback_reorder; /* Number of times we fallback because we detected the PAWS-issue */
+	u_int32_t	tcps_ecn_fallback_ce;	/* Number of times we fallback because we received too many CEs */
 
 	/* TFO-related statistics */
 	u_int32_t	tcps_tfo_syn_data_rcv;	/* Received a SYN+data with valid cookie */
@@ -1120,6 +1142,7 @@ struct	tcpstat {
 	u_int32_t	tcps_tfo_syn_loss;	/* SYN+TFO has been lost and we fallback */
 	u_int32_t	tcps_tfo_blackhole;	/* TFO got blackholed by a middlebox. */
 };
+
 
 struct tcpstat_local {
 	u_int64_t badformat;
@@ -1467,6 +1490,7 @@ void	 tcp_sack_partialack(struct tcpcb *, struct tcphdr *);
 void	 tcp_free_sackholes(struct tcpcb *tp);
 int32_t	 tcp_sbspace(struct tcpcb *tp);
 void	 tcp_set_tso(struct tcpcb *tp, struct ifnet *ifp);
+void     tcp_set_ecn(struct tcpcb *tp, struct ifnet *ifp);
 void	 tcp_reset_stretch_ack(struct tcpcb *tp);
 extern void tcp_get_ports_used(u_int32_t, int, u_int32_t, bitstr_t *);
 uint32_t tcp_count_opportunistic(unsigned int ifindex, u_int32_t flags);

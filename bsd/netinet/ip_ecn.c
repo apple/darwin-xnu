@@ -117,13 +117,9 @@ ip_ecn_egress(mode, outer, inner)
 	/* Process ECN for both normal and compatibility modes */
 	case ECN_NORMAL:
 	case ECN_COMPATIBILITY:
-		if ((*outer & IPTOS_ECN_MASK) == IPTOS_ECN_CE) {
-			if ((*inner & IPTOS_ECN_MASK) == IPTOS_ECN_NOTECT) {
-				/* Drop */
-				return (0);
-			} else {
-				*inner |= IPTOS_ECN_CE;
-			}
+		if (((*outer & IPTOS_ECN_MASK) == IPTOS_ECN_CE) &&
+		    ((*inner & IPTOS_ECN_MASK) != IPTOS_ECN_NOTECT)) {
+			*inner |= IPTOS_ECN_CE;
 		} else if ((*outer & IPTOS_ECN_MASK) == IPTOS_ECN_ECT1 &&
 				   (*inner & IPTOS_ECN_MASK) == IPTOS_ECN_ECT0) {
 			*inner = *outer;

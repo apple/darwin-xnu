@@ -364,6 +364,7 @@ mac_policy_init(void)
 	mac_policy_list.chunks = 1;
 
 	mac_policy_list.entries = kalloc(sizeof(struct mac_policy_list_element) * MAC_POLICY_LIST_CHUNKSIZE);
+
 	bzero(mac_policy_list.entries, sizeof(struct mac_policy_list_element) * MAC_POLICY_LIST_CHUNKSIZE); 
 
 	LIST_INIT(&mac_label_element_list);

@@ -415,7 +415,6 @@ i386_init(void)
 	unsigned int	cpus = 0;
 	boolean_t	fidn;
 	boolean_t	IA32e = TRUE;
-	char		namep[16];
 
 	postcode(I386_INIT_ENTRY);
 
@@ -442,9 +441,6 @@ i386_init(void)
 	/* setup debugging output if one has been chosen */
 	kernel_debug_string_simple("PE_init_kprintf");
 	PE_init_kprintf(FALSE);
-
-	if(PE_parse_boot_argn("-show_pointers", &namep, sizeof (namep)))
-		doprnt_hide_pointers = FALSE;
 
 	kernel_debug_string_simple("kernel_early_bootstrap");
 	kernel_early_bootstrap();

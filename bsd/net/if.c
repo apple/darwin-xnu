@@ -1992,7 +1992,9 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCGIFINTERFACESTATE:		/* struct ifreq */
 	case SIOCSIFPROBECONNECTIVITY:		/* struct ifreq */
 	case SIOCGIFPROBECONNECTIVITY:		/* struct ifreq */
-	case SIOCGSTARTDELAY: {			/* struct ifreq */
+	case SIOCGSTARTDELAY:			/* struct ifreq */
+	case SIOCGECNMODE:			/* struct ifreq */
+	case SIOCSECNMODE: {			/* struct ifreq */
 		struct ifreq ifr;
 		bcopy(data, &ifr, sizeof (ifr));
 		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
@@ -2779,6 +2781,28 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			ifr->ifr_probe_connectivity = 1;
 		else
 			ifr->ifr_probe_connectivity = 0;
+		break;
+	case SIOCGECNMODE:
+		if ((ifp->if_eflags & (IFEF_ECN_ENABLE|IFEF_ECN_DISABLE)) ==
+		    IFEF_ECN_ENABLE)
+			ifr->ifr_ecn_mode = IFRTYPE_ECN_ENABLE;
+		else if ((ifp->if_eflags & (IFEF_ECN_ENABLE|IFEF_ECN_DISABLE)) ==
+		    IFEF_ECN_DISABLE)
+			ifr->ifr_ecn_mode = IFRTYPE_ECN_DISABLE;
+		else
+			ifr->ifr_ecn_mode = IFRTYPE_ECN_DEFAULT;
+		break;
+	case SIOCSECNMODE:
+		if (ifr->ifr_ecn_mode == IFRTYPE_ECN_DEFAULT) {
+			ifp->if_eflags &= ~(IFEF_ECN_ENABLE|IFEF_ECN_DISABLE);
+		} else if (ifr->ifr_ecn_mode == IFRTYPE_ECN_ENABLE) {
+			ifp->if_eflags |= IFEF_ECN_ENABLE;
+			ifp->if_eflags &= ~IFEF_ECN_DISABLE;
+		} else if (ifr->ifr_ecn_mode == IFRTYPE_ECN_DISABLE) {
+			ifp->if_eflags |= IFEF_ECN_DISABLE;
+			ifp->if_eflags &= ~IFEF_ECN_ENABLE;
+		} else
+			error = EINVAL;
 		break;
 	default:
 		VERIFY(0);
@@ -4303,6 +4327,10 @@ ifioctl_cassert(void)
 	case SIOCGIFAGENTDATA64:
 	case SIOCSIFINTERFACESTATE:
 	case SIOCGIFINTERFACESTATE:
+	case SIOCSIFPROBECONNECTIVITY:
+	case SIOCGIFPROBECONNECTIVITY:
+	case SIOCGECNMODE:
+	case SIOCSECNMODE:
 		;
 	}
 }

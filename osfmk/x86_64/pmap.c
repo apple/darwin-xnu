@@ -2434,6 +2434,7 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 	boolean_t	pmap_is_shared = (pmap->pm_shared || (pmap == kernel_pmap));
 	boolean_t	need_global_flush = FALSE;
 	uint32_t	event_code;
+	vm_map_offset_t	event_startv, event_endv;
 	boolean_t	is_ept = is_ept_pmap(pmap);
 
 	assert((processor_avail_count < 2) ||
@@ -2441,14 +2442,20 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 
 	if (pmap == kernel_pmap) {
 		event_code = PMAP_CODE(PMAP__FLUSH_KERN_TLBS);
+		event_startv = VM_KERNEL_UNSLIDE_OR_PERM(startv);
+		event_endv = VM_KERNEL_UNSLIDE_OR_PERM(endv);
 	} else if (is_ept) {
 		event_code = PMAP_CODE(PMAP__FLUSH_EPT);
+		event_startv = startv;
+		event_endv = endv;
 	} else {
 		event_code = PMAP_CODE(PMAP__FLUSH_TLBS);
+		event_startv = startv;
+		event_endv = endv;
 	}
 
 	PMAP_TRACE_CONSTANT(event_code | DBG_FUNC_START,
-			    pmap, options, startv, endv, 0);
+				VM_KERNEL_UNSLIDE_OR_PERM(pmap), options, event_startv, event_endv, 0);
 
 	if (is_ept) {
 		mp_cpus_call(CPUMASK_ALL, ASYNC, invept, (void*)pmap->pm_eptp);
@@ -2574,7 +2581,7 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 						continue;
 					PMAP_TRACE_CONSTANT(
 						PMAP_CODE(PMAP__FLUSH_TLBS_TO),
-				    		pmap, cpus_to_signal, cpus_to_respond, 0, 0);
+						VM_KERNEL_UNSLIDE_OR_PERM(pmap), cpus_to_signal, cpus_to_respond, 0, 0);
 					is_timeout_traced = TRUE;
 					continue;
 				}
@@ -2595,7 +2602,7 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 
 out:
 	PMAP_TRACE_CONSTANT(event_code | DBG_FUNC_END,
-			    pmap, cpus_to_signal, startv, endv, 0);
+				VM_KERNEL_UNSLIDE_OR_PERM(pmap), cpus_to_signal, event_startv, event_endv, 0);
 
 }
 

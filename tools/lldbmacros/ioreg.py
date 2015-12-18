@@ -109,9 +109,10 @@ def GetRegistryEntrySummary(entry):
     vtableAddr = dereference(Cast(entry, 'uintptr_t *')) - 2 * sizeof('uintptr_t *')
     vtype = kern.SymbolicateFromAddress(vtableAddr)
     if vtype is None or len(vtype) < 1:
-        out_string += "<object 0x{0: <16x}, id 0x{1:x}, vtable 0x{2: <16x}".format(entry, entry.reserved.fRegistryEntryID, vtableAddr)
+        out_string += "<object 0x{0: <16x}, id 0x{1:x}, vtable 0x{2: <16x}".format(entry, CastIOKitClass(entry, 'IORegistryEntry *').reserved.fRegistryEntryID, vtableAddr)
     else:
-        out_string += "<object 0x{0: <16x}, id 0x{1:x}, vtable 0x{2: <16x} <{3:s}>".format(entry, entry.reserved.fRegistryEntryID, vtableAddr, vtype[0].GetName())
+        out_string += "<object 0x{0: <16x}, id 0x{1:x}, vtable 0x{2: <16x} <{3:s}>".format(entry, CastIOKitClass(entry, 'IORegistryEntry *').reserved.fRegistryEntryID,
+                                                                                           vtableAddr, vtype[0].GetName())
     
     ztvAddr = kern.GetLoadAddressForSymbol('_ZTV15IORegistryEntry')
     if vtableAddr != ztvAddr:
@@ -274,7 +275,7 @@ def ReadIOPort8(cmd_args=None):
     ReadIOPortInt(portAddr, 1, lcpu)
 
 @lldb_command('readioport16')
-def ReadIOPort8(cmd_args=None):
+def ReadIOPort16(cmd_args=None):
     """ Read value stored in the specified IO port. The CPU can be optionally
         specified as well.
         Prints 0xBAD10AD in case of a bad read
@@ -294,7 +295,7 @@ def ReadIOPort8(cmd_args=None):
     ReadIOPortInt(portAddr, 2, lcpu)
 
 @lldb_command('readioport32')
-def ReadIOPort8(cmd_args=None):
+def ReadIOPort32(cmd_args=None):
     """ Read value stored in the specified IO port. The CPU can be optionally
         specified as well.
         Prints 0xBAD10AD in case of a bad read
@@ -336,7 +337,7 @@ def WriteIOPort8(cmd_args=None):
     WriteIOPortInt(portAddr, 1, value, lcpu)
 
 @lldb_command('writeioport16')
-def WriteIOPort8(cmd_args=None):
+def WriteIOPort16(cmd_args=None):
     """ Write the value to the specified IO port. The size of the value is
         determined by the name of the command. The CPU used can be optionally
         specified as well.
@@ -358,7 +359,7 @@ def WriteIOPort8(cmd_args=None):
     WriteIOPortInt(portAddr, 2, value, lcpu)
 
 @lldb_command('writeioport32')
-def WriteIOPort8(cmd_args=None):
+def WriteIOPort32(cmd_args=None):
     """ Write the value to the specified IO port. The size of the value is
         determined by the name of the command. The CPU used can be optionally
         specified as well.
@@ -719,16 +720,14 @@ def ReadIOPortInt(addr, numbytes, lcpu):
         result_pkt = Cast(addressof(kern.globals.manual_pkt.data), 'kdp_readioport_reply_t *')
         
         if(result_pkt.error == 0):
-            print "This macro is incomplete till <rdar://problem/12868059> is fixed"
-            # FIXME: Uncomment me when <rdar://problem/12868059> is fixed
-            #if numbytes == 1:
-            #    result = dereference(Cast(result_pkt.data, 'uint8_t *'))
-            #elif numbytes == 2:
-            #    result = dereference(Cast(result_pkt.data, 'uint16_t *'))
-            #elif numbytes == 4:
-            #    result = dereference(cast(result_pkt.data, 'uint32_t *'))
-    
-    print "0x{0: <4x}: 0x{1: <1x}".format(addr, result)
+            if numbytes == 1:
+                result = dereference(Cast(addressof(result_pkt.data), 'uint8_t *'))
+            elif numbytes == 2:
+                result = dereference(Cast(addressof(result_pkt.data), 'uint16_t *'))
+            elif numbytes == 4:
+                result = dereference(Cast(addressof(result_pkt.data), 'uint32_t *'))
+
+    print "{0: <#6x}: {1:#0{2}x}".format(addr, result, (numbytes*2)+2)
 
 def WriteIOPortInt(addr, numbytes, value, lcpu):
     """ Writes 'value' into ioport specified by 'addr'. Prints errors if it encounters any
@@ -742,12 +741,12 @@ def WriteIOPortInt(addr, numbytes, value, lcpu):
     len_address = unsigned(addressof(kern.globals.manual_pkt.len))
     data_address = unsigned(addressof(kern.globals.manual_pkt.data))
     if not WriteInt32ToMemoryAddress(0, input_address):
-        print "error writing 0x{0: x} to port 0x{1: <4x}".format(value, addr)
+        print "error writing {0: #x} to port {1: <#6x}: failed to write 0 to input_address".format(value, addr)
         return
     
     kdp_pkt_size = GetType('kdp_writeioport_req_t').GetByteSize()
     if not WriteInt32ToMemoryAddress(kdp_pkt_size, len_address):
-        print "error writing 0x{0: x} to port 0x{1: <4x}".format(value, addr)
+        print "error writing {0: #x} to port {1: <#6x}: failed to write kdp_pkt_size".format(value, addr)
         return
     
     kgm_pkt = kern.GetValueFromAddress(data_address, 'kdp_writeioport_req_t *')
@@ -759,29 +758,29 @@ def WriteIOPortInt(addr, numbytes, value, lcpu):
         WriteInt32ToMemoryAddress(numbytes, int(addressof(kgm_pkt.nbytes))) and
         WriteInt16ToMemoryAddress(lcpu, int(addressof(kgm_pkt.lcpu)))
         ):
-        print "This macro is incomplete till <rdar://problem/12868059> is fixed"
-        # FIXME: Uncomment me when <rdar://problem/12868059> is fixed
-        #if numbytes == 1:
-        #    if not WriteInt8ToMemoryAddress(value, int(addressof(kgm_pkt.data))):
-        #        print "error writing 0x{0: x} to port 0x{1: <4x}".format(value, addr)
-        #elif numbytes == 2:
-        #    if not WriteInt16ToMemoryAddress(value, int(addressof(kgm_pkt.data))):
-        #        print "error writing 0x{0: x} to port 0x{1: <4x}".format(value, addr)
-        #elif numbytes == 4:
-        #    if not WriteInt32ToMemoryAddress(value, int(addressof(kgm_pkt.data))):
-        #        print "error writing 0x{0: x} to port 0x{1: <4x}".format(value, addr)
-        
+        if numbytes == 1:
+            if not WriteInt8ToMemoryAddress(value, int(addressof(kgm_pkt.data))):
+                print "error writing {0: #x} to port {1: <#6x}: failed to write 8 bit data".format(value, addr)
+                return
+        elif numbytes == 2:
+            if not WriteInt16ToMemoryAddress(value, int(addressof(kgm_pkt.data))):
+                print "error writing {0: #x} to port {1: <#6x}: failed to write 16 bit data".format(value, addr)
+                return
+        elif numbytes == 4:
+            if not WriteInt32ToMemoryAddress(value, int(addressof(kgm_pkt.data))):
+                print "error writing {0: #x} to port {1: <#6x}: failed to write 32 bit data".format(value, addr)
+                return
         if not WriteInt32ToMemoryAddress(1, input_address):
-            print "error writing 0x{0: x} to port 0x{1: <4x}".format(value, addr)
+            print "error writing {0: #x} to port {1: <#6x}: failed to write to input_address".format(value, addr)
             return
 
         result_pkt = Cast(addressof(kern.globals.manual_pkt.data), 'kdp_writeioport_reply_t *')
         
         # Done with the write
         if(result_pkt.error == 0):
-            print "Writing 0x {0: x} to port {1: <4x} was successful".format(value, addr)
+            print "Writing {0: #x} to port {1: <#6x} was successful".format(value, addr)
     else:
-        print "error writing 0x{0: x} to port 0x{1: <4x}".format(value, addr)
+        print "error writing {0: #x} to port {1: <#6x}".format(value, addr)
 
 @lldb_command('showinterruptcounts')
 def showinterruptcounts(cmd_args=None):

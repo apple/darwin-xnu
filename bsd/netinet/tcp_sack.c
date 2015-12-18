@@ -377,6 +377,7 @@ tcp_sack_detect_reordering(struct tcpcb *tp, struct sackhole *s,
 		}
 
 		tcpstat.tcps_reordered_pkts++;
+		tp->t_reordered_pkts++;
 
 		VERIFY(SEQ_GEQ(snd_fack, s->rxmit));
 
@@ -890,6 +891,7 @@ tcp_sack_process_dsack(struct tcpcb *tp, struct tcpopt *to,
 	to->to_nsacks--;
 	to->to_sacks += TCPOLEN_SACK;
 	tcpstat.tcps_dsack_recvd++;
+	tp->t_dsack_recvd++;
 
 	/* ignore DSACK option, if DSACK is disabled */
 	if (tp->t_flagsext & TF_DISABLE_DSACK)

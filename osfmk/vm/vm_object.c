@@ -6632,6 +6632,10 @@ vm_object_lock_request(
 void
 vm_object_purge(vm_object_t object, int flags)
 {
+	unsigned int	object_page_count = 0;
+	unsigned int	pgcount = 0;
+	boolean_t	skipped_object = FALSE;
+
         vm_object_lock_assert_exclusive(object);
 
 	if (object->purgable == VM_PURGABLE_DENY)
@@ -6677,11 +6681,12 @@ vm_object_purge(vm_object_t object, int flags)
 	}
 	assert(object->purgable == VM_PURGABLE_EMPTY);
 	
+	object_page_count = object->resident_page_count;
+
 	vm_object_reap_pages(object, REAP_PURGEABLE);
 
 	if (object->pager != NULL &&
 	    COMPRESSED_PAGER_IS_ACTIVE) {
-		unsigned int pgcount;
 
 		if (object->activity_in_progress == 0 &&
 		    object->paging_in_progress == 0) {
@@ -6726,10 +6731,19 @@ vm_object_purge(vm_object_t object, int flags)
 			 * pager if there's any kind of operation in
 			 * progress on the VM object.
 			 */
+			skipped_object = TRUE;
 		}
 	}
 
 	vm_object_lock_assert_exclusive(object);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (MACHDBG_CODE(DBG_MACH_VM, OBJECT_PURGE_ONE)),
+			      VM_KERNEL_UNSLIDE_OR_PERM(object), /* purged object */
+			      object_page_count,
+			      pgcount,
+			      skipped_object,
+			      0);
+
 }
 				
 

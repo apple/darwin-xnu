@@ -324,7 +324,10 @@ vm_wants_task_throttled(task_t task)
 	if (task == kernel_task)
 		return (0);
 
-	if (vm_compressor_mode == COMPRESSED_PAGER_IS_ACTIVE || vm_compressor_mode == DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) {
+	if (COMPRESSED_PAGER_IS_SWAPLESS || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPLESS)
+		return (0);
+
+	if (COMPRESSED_PAGER_IS_SWAPBACKED || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPBACKED) {
 		if ((vm_compressor_low_on_space() || HARD_THROTTLE_LIMIT_REACHED()) &&
 		    (unsigned int)pmap_compressed(task->map->pmap) > (c_segment_pages_compressed / 4))
 			return (1);
@@ -2150,6 +2153,9 @@ do_fastwake_warmup(void)
 
 		if (c_seg->c_generation_id < first_c_segment_to_warm_generation_id || 
 		    c_seg->c_generation_id > last_c_segment_to_warm_generation_id)
+			break;
+
+		if (vm_page_free_count < (AVAILABLE_MEMORY / 4))
 			break;
 
 		lck_mtx_lock_spin_always(&c_seg->c_lock);

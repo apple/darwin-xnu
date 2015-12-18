@@ -331,8 +331,15 @@ voidpf zcalloc (opaque, items, size)
     unsigned size;
 {
     if (opaque) items += size - size; /* make compiler happy */
-    return sizeof(uInt) > 2 ? (voidpf)malloc(items * size) :
-                              (voidpf)calloc(items, size);
+    if (sizeof(uInt) > 2) {
+        /*
+            to prevent use of uninitialized memory, malloc and bzero
+        */
+        voidpf  p = malloc(items * size);
+        bzero(p, items * size); 
+        return p;
+    } else
+        return (voidpf)calloc(items, size);
 }
 
 void  zcfree (opaque, ptr)

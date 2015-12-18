@@ -417,9 +417,9 @@ timer_call_enqueue_deadline_unlocked(
 #if TIMER_ASSERT
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 				DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
-				call,
+				VM_KERNEL_UNSLIDE_OR_PERM(call),
 				call->async_dequeue,
-				TCE(call)->queue,
+				VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
 				0x1c, 0);
 			timer_call_enqueue_deadline_unlocked_async1++;
 #endif
@@ -471,9 +471,9 @@ timer_call_dequeue_unlocked(
 #if TIMER_ASSERT
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 		DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
-		call,
+		VM_KERNEL_UNSLIDE_OR_PERM(call),
 		call->async_dequeue,
-		TCE(call)->queue,
+		VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
 		0, 0);
 #endif
 	if (old_queue != NULL) {
@@ -483,9 +483,9 @@ timer_call_dequeue_unlocked(
 #if TIMER_ASSERT
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 				DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
-				call,
+			    VM_KERNEL_UNSLIDE_OR_PERM(call),
 				call->async_dequeue,
-				TCE(call)->queue,
+				VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
 				0x1c, 0);
 			timer_call_dequeue_unlocked_async1++;
 #endif
@@ -570,8 +570,8 @@ timer_call_enter_internal(
 
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
         	DECR_TIMER_ENTER | DBG_FUNC_START,
-		call,
-		param1, deadline, flags, 0); 
+	    VM_KERNEL_UNSLIDE_OR_PERM(call),
+	    VM_KERNEL_UNSLIDE_OR_PERM(param1), deadline, flags, 0); 
 
 	urgency = (flags & TIMER_CALL_URGENCY_MASK);
 
@@ -634,7 +634,7 @@ timer_call_enter_internal(
 
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
         	DECR_TIMER_ENTER | DBG_FUNC_END,
-		call,
+		VM_KERNEL_UNSLIDE_OR_PERM(call),
 		(old_queue != NULL), deadline, queue->count, 0); 
 
 	splx(s);
@@ -688,7 +688,7 @@ timer_call_cancel(
 
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
         	DECR_TIMER_CANCEL | DBG_FUNC_START,
-		call,
+		VM_KERNEL_UNSLIDE_OR_PERM(call),
 		TCE(call)->deadline, call->soft_deadline, call->flags, 0);
 
 	old_queue = timer_call_dequeue_unlocked(call);
@@ -708,8 +708,8 @@ timer_call_cancel(
 	}
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
         	DECR_TIMER_CANCEL | DBG_FUNC_END,
-		call,
-		old_queue,
+		VM_KERNEL_UNSLIDE_OR_PERM(call),
+		VM_KERNEL_UNSLIDE_OR_PERM(old_queue),
 		TCE(call)->deadline - mach_absolute_time(),
 		TCE(call)->deadline - TCE(call)->entry_time, 0);
 	splx(s);
@@ -754,9 +754,9 @@ timer_queue_shutdown(
 #if TIMER_ASSERT
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 				DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
-				call,
+				VM_KERNEL_UNSLIDE_OR_PERM(call),
 				call->async_dequeue,
-				TCE(call)->queue,
+				VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
 				0x2b, 0);
 #endif
 			timer_queue_unlock(queue);
@@ -824,7 +824,7 @@ timer_queue_expire_with_options(
 			TCOAL_DEBUG(0xDDDD0000, queue->earliest_soft_deadline, call->soft_deadline, 0, 0, 0);
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 				DECR_TIMER_EXPIRE | DBG_FUNC_NONE,
-				call,
+				VM_KERNEL_UNSLIDE_OR_PERM(call),
 				call->soft_deadline,
 				TCE(call)->deadline,
 				TCE(call)->entry_time, 0);
@@ -854,7 +854,10 @@ timer_queue_expire_with_options(
 
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 				DECR_TIMER_CALLOUT | DBG_FUNC_START,
-				call, VM_KERNEL_UNSLIDE(func), param0, param1, 0);
+				VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_UNSLIDE(func),
+				VM_KERNEL_UNSLIDE_OR_PERM(param0),
+				VM_KERNEL_UNSLIDE_OR_PERM(param1),
+				0);
 
 #if CONFIG_DTRACE
 			DTRACE_TMR7(callout__start, timer_call_func_t, func,
@@ -876,7 +879,10 @@ timer_queue_expire_with_options(
 
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 				DECR_TIMER_CALLOUT | DBG_FUNC_END,
-				call, VM_KERNEL_UNSLIDE(func), param0, param1, 0);
+				VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_UNSLIDE(func),
+				VM_KERNEL_UNSLIDE_OR_PERM(param0),
+				VM_KERNEL_UNSLIDE_OR_PERM(param1),
+				0);
 			call = NULL;
 			timer_queue_lock_spin(queue);
 		} else {
@@ -1013,9 +1019,9 @@ timer_queue_migrate(mpqueue_head_t *queue_from, mpqueue_head_t *queue_to)
 #ifdef TIMER_ASSERT
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 				DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
-				call,
-				TCE(call)->queue,
-				call->lock.interlock.lock_data,
+				VM_KERNEL_UNSLIDE_OR_PERM(call),
+				VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
+				VM_KERNEL_UNSLIDE_OR_PERM(call->lock.interlock.lock_data),
 				0x2b, 0);
 #endif
 			timer_queue_migrate_lock_skips++;
@@ -1071,7 +1077,7 @@ timer_queue_trace(
 				call->soft_deadline,
 				TCE(call)->deadline,
 				TCE(call)->entry_time,
-				TCE(call)->func,
+				VM_KERNEL_UNSLIDE(TCE(call)->func),
 				0);
 			call = TIMER_CALL(queue_next(qe(call)));
 		} while (!queue_end(&queue->head, qe(call)));
@@ -1223,9 +1229,9 @@ timer_longterm_scan(timer_longterm_t	*tlp,
 #ifdef TIMER_ASSERT
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 				DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
-				call,
-				TCE(call)->queue,
-				call->lock.interlock.lock_data,
+				VM_KERNEL_UNSLIDE_OR_PERM(call),
+				VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
+				VM_KERNEL_UNSLIDE_OR_PERM(call->lock.interlock.lock_data),
 				0x2c, 0);
 #endif
 			timer_call_entry_dequeue_async(call);
@@ -1240,7 +1246,7 @@ timer_longterm_scan(timer_longterm_t	*tlp,
 			if (deadline < now)
 				TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
        		 			DECR_TIMER_OVERDUE | DBG_FUNC_NONE,
-					call,
+					VM_KERNEL_UNSLIDE_OR_PERM(call),
 					deadline,
 					now,
 					threshold,
@@ -1248,10 +1254,10 @@ timer_longterm_scan(timer_longterm_t	*tlp,
 #endif
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
        	 			DECR_TIMER_ESCALATE | DBG_FUNC_NONE,
-				call,
+				VM_KERNEL_UNSLIDE_OR_PERM(call),
 				TCE(call)->deadline,
 				TCE(call)->entry_time,
-				TCE(call)->func,
+				VM_KERNEL_UNSLIDE(TCE(call)->func),
 				0);
 			tlp->escalates++;
 			timer_call_entry_dequeue(call);
@@ -1289,7 +1295,7 @@ timer_longterm_update_locked(timer_longterm_t *tlp)
 
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 		DECR_TIMER_UPDATE | DBG_FUNC_START,
-		&tlp->queue,
+		VM_KERNEL_UNSLIDE_OR_PERM(&tlp->queue),
 		tlp->threshold.deadline,
 		tlp->threshold.preempted,
 		tlp->queue.count, 0);
@@ -1336,7 +1342,7 @@ timer_longterm_update_locked(timer_longterm_t *tlp)
 
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 		DECR_TIMER_UPDATE | DBG_FUNC_END,
-		&tlp->queue,
+		VM_KERNEL_UNSLIDE_OR_PERM(&tlp->queue),
 		tlp->threshold.deadline,
 		tlp->threshold.scans,
 		tlp->queue.count, 0);

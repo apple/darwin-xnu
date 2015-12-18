@@ -217,6 +217,7 @@ void	bsd_timeout(void (*)(void *), void *arg, struct timespec * ts);
 void	bsd_untimeout(void (*)(void *), void *arg);
 void	set_fsblocksize(struct vnode *);
 uint64_t tvtoabstime(struct timeval *);
+uint64_t tstoabstime(struct timespec *);
 void	*throttle_info_create(void);
 void	throttle_info_mount_ref(mount_t mp, void * throttle_info);
 void	throttle_info_mount_rel(mount_t mp);

@@ -136,6 +136,43 @@ enum
 	,NSTAT_SYSINFO_TFO_SYN_DATA_ACKED	= 41
 	,NSTAT_SYSINFO_TFO_SYN_LOSS		= 42
 	,NSTAT_SYSINFO_TFO_BLACKHOLE		= 43
+	,NSTAT_SYSINFO_ECN_FALLBACK_SYNLOSS	= 44
+	,NSTAT_SYSINFO_ECN_FALLBACK_REORDER	= 45
+	,NSTAT_SYSINFO_ECN_FALLBACK_CE		= 46
+	,NSTAT_SYSINFO_ECN_IFNET_TYPE		= 47
+	,NSTAT_SYSINFO_ECN_IFNET_PROTO		= 48
+	,NSTAT_SYSINFO_ECN_IFNET_CLIENT_SETUP	= 49
+	,NSTAT_SYSINFO_ECN_IFNET_SERVER_SETUP	= 50
+	,NSTAT_SYSINFO_ECN_IFNET_CLIENT_SUCCESS	= 51
+	,NSTAT_SYSINFO_ECN_IFNET_SERVER_SUCCESS	= 52
+	,NSTAT_SYSINFO_ECN_IFNET_PEER_NOSUPPORT	= 53
+	,NSTAT_SYSINFO_ECN_IFNET_SYN_LOST	= 54
+	,NSTAT_SYSINFO_ECN_IFNET_SYNACK_LOST	= 55
+	,NSTAT_SYSINFO_ECN_IFNET_RECV_CE	= 56
+	,NSTAT_SYSINFO_ECN_IFNET_RECV_ECE	= 57
+	,NSTAT_SYSINFO_ECN_IFNET_SENT_ECE	= 58
+	,NSTAT_SYSINFO_ECN_IFNET_CONN_RECV_CE	= 59
+	,NSTAT_SYSINFO_ECN_IFNET_CONN_RECV_ECE	= 60
+	,NSTAT_SYSINFO_ECN_IFNET_CONN_PLNOCE	= 61
+	,NSTAT_SYSINFO_ECN_IFNET_CONN_PLCE	= 62
+	,NSTAT_SYSINFO_ECN_IFNET_CONN_NOPLCE	= 63
+	,NSTAT_SYSINFO_ECN_IFNET_FALLBACK_SYNLOSS = 64
+	,NSTAT_SYSINFO_ECN_IFNET_FALLBACK_REORDER = 65
+	,NSTAT_SYSINFO_ECN_IFNET_FALLBACK_CE	= 66
+	,NSTAT_SYSINFO_ECN_IFNET_ON_RTT_AVG	= 67
+	,NSTAT_SYSINFO_ECN_IFNET_ON_RTT_VAR	= 68
+	,NSTAT_SYSINFO_ECN_IFNET_ON_OOPERCENT	= 69
+	,NSTAT_SYSINFO_ECN_IFNET_ON_SACK_EPISODE = 70
+	,NSTAT_SYSINFO_ECN_IFNET_ON_REORDER_PERCENT = 71
+	,NSTAT_SYSINFO_ECN_IFNET_ON_RXMIT_PERCENT = 72
+	,NSTAT_SYSINFO_ECN_IFNET_ON_RXMIT_DROP	= 73
+	,NSTAT_SYSINFO_ECN_IFNET_OFF_RTT_AVG	= 74
+	,NSTAT_SYSINFO_ECN_IFNET_OFF_RTT_VAR	= 75
+	,NSTAT_SYSINFO_ECN_IFNET_OFF_OOPERCENT	= 76
+	,NSTAT_SYSINFO_ECN_IFNET_OFF_SACK_EPISODE = 77
+	,NSTAT_SYSINFO_ECN_IFNET_OFF_REORDER_PERCENT = 78
+	,NSTAT_SYSINFO_ECN_IFNET_OFF_RXMIT_PERCENT = 79
+	,NSTAT_SYSINFO_ECN_IFNET_OFF_RXMIT_DROP = 80
 };
 
 #pragma mark -- Network Statistics Providers --
@@ -463,6 +500,7 @@ typedef struct nstat_sysinfo_add_param
 
 #define	NSTAT_SYSINFO_MBUF_STATS	0x0001
 #define	NSTAT_SYSINFO_TCP_STATS		0x0002	
+#define NSTAT_SYSINFO_IFNET_ECN_STATS	0x0003
 
 #pragma mark -- Network Statistics User Client --
 
@@ -703,6 +741,9 @@ typedef struct nstat_sysinfo_tcp_stats
 	u_int32_t		ecn_conn_plnoce; /* Number of connections using ECN seen packet loss but never received CE */
 	u_int32_t		ecn_conn_pl_ce; /* Number of connections using ECN seen packet loss and CE */
 	u_int32_t		ecn_conn_nopl_ce; /* Number of connections using ECN with no packet loss but received CE */
+	u_int32_t		ecn_fallback_synloss; /* Number of times we did fall back due to SYN-Loss */
+	u_int32_t		ecn_fallback_reorder; /* Number of times we fallback because we detected the PAWS-issue */
+	u_int32_t		ecn_fallback_ce; /* Number of times we fallback because we received too many CEs */
 	u_int32_t		tfo_syn_data_rcv;	/* Number of SYN+data received with valid cookie */
 	u_int32_t		tfo_cookie_req_rcv;/* Number of TFO cookie-requests received */
 	u_int32_t		tfo_cookie_sent;	/* Number of TFO-cookies offered to the client */
@@ -715,12 +756,30 @@ typedef struct nstat_sysinfo_tcp_stats
 	u_int32_t		tfo_blackhole;	/* Number of times SYN+TFO has been lost and we fallback */
 } nstat_sysinfo_tcp_stats;
 
+enum {
+	NSTAT_IFNET_ECN_PROTO_IPV4 = 1
+	,NSTAT_IFNET_ECN_PROTO_IPV6
+};
+
+enum {
+	NSTAT_IFNET_ECN_TYPE_CELLULAR = 1
+	,NSTAT_IFNET_ECN_TYPE_WIFI
+	,NSTAT_IFNET_ECN_TYPE_ETHERNET
+};
+
+typedef struct nstat_sysinfo_ifnet_ecn_stats {
+	u_int32_t			ifnet_proto;
+	u_int32_t			ifnet_type;
+	struct if_tcp_ecn_stat		ecn_stat;
+} nstat_sysinfo_ifnet_ecn_stats;
+
 typedef struct nstat_sysinfo_data
 {
 	u_int32_t		flags;
 	union {
 		nstat_sysinfo_mbuf_stats mb_stats;
 		nstat_sysinfo_tcp_stats tcp_stats;
+		nstat_sysinfo_ifnet_ecn_stats ifnet_ecn_stats;
 	} u;
 } nstat_sysinfo_data;
 

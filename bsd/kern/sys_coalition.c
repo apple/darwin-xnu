@@ -216,10 +216,6 @@ coalition_info_resource_usage(coalition_t coal, user_addr_t buffer, user_size_t 
 	kern_return_t kr;
 	struct coalition_resource_usage cru;
 
-	if (bufsize != sizeof(cru)) {
-		return EINVAL;
-	}
-
 	kr = coalition_resource_usage_internal(coal, &cru);
 
 	switch (kr) {
@@ -233,7 +229,7 @@ coalition_info_resource_usage(coalition_t coal, user_addr_t buffer, user_size_t 
 		return EIO; /* shrug */
 	}
 
-	return copyout(&cru, buffer, bufsize);
+	return copyout(&cru, buffer, MIN(bufsize, sizeof(cru)));
 }
 
 int coalition_info(proc_t p, struct coalition_info_args *uap, __unused int32_t *retval)

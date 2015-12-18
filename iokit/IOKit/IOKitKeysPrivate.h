@@ -110,5 +110,4 @@ enum {
     kIOClassNameOverrideNone = 0x00000001,
 };
 
-
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

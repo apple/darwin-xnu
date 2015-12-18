@@ -367,6 +367,7 @@ extern int 	(*mountroot)(void);
 lck_grp_t * proc_lck_grp;
 lck_grp_t * proc_slock_grp;
 lck_grp_t * proc_fdmlock_grp;
+lck_grp_t * proc_ucred_mlock_grp;
 lck_grp_t * proc_mlock_grp;
 lck_grp_attr_t * proc_lck_grp_attr;
 lck_attr_t * proc_lck_attr;
@@ -452,6 +453,7 @@ bsd_init(void)
 #if CONFIG_FINE_LOCK_GROUPS
 	proc_slock_grp = lck_grp_alloc_init("proc-slock",  proc_lck_grp_attr);
 	proc_fdmlock_grp = lck_grp_alloc_init("proc-fdmlock",  proc_lck_grp_attr);
+	proc_ucred_mlock_grp = lck_grp_alloc_init("proc-ucred-mlock",  proc_lck_grp_attr);
 	proc_mlock_grp = lck_grp_alloc_init("proc-mlock",  proc_lck_grp_attr);
 #endif
 	/* Allocate proc lock attribute */
@@ -467,12 +469,14 @@ bsd_init(void)
 	proc_klist_mlock = lck_mtx_alloc_init(proc_mlock_grp, proc_lck_attr);
 	lck_mtx_init(&kernproc->p_mlock, proc_mlock_grp, proc_lck_attr);
 	lck_mtx_init(&kernproc->p_fdmlock, proc_fdmlock_grp, proc_lck_attr);
+	lck_mtx_init(&kernproc->p_ucred_mlock, proc_ucred_mlock_grp, proc_lck_attr);
 	lck_spin_init(&kernproc->p_slock, proc_slock_grp, proc_lck_attr);
 #else
 	proc_list_mlock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
 	proc_klist_mlock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
 	lck_mtx_init(&kernproc->p_mlock, proc_lck_grp, proc_lck_attr);
 	lck_mtx_init(&kernproc->p_fdmlock, proc_lck_grp, proc_lck_attr);
+	lck_mtx_init(&kernproc->p_ucred_mlock, proc_lck_grp, proc_lck_attr);
 	lck_spin_init(&kernproc->p_slock, proc_lck_grp, proc_lck_attr);
 #endif
 
