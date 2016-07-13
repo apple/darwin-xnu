@@ -75,11 +75,7 @@ EXPORT_MI_LIST = \
 	kxld_types.h           \
 	stack_protector.h
 
-INSTALL_KF_MI_LCL_LIST +=          \
-	section_keywords.h
 
-EXPORT_MI_LIST +=          \
-	section_keywords.h
 
 EXPORT_MI_GEN_LIST = version.h
 

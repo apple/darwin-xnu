@@ -81,6 +81,7 @@
 #include <sys/kauth.h>
 #include <sys/file_internal.h>
 #include <sys/guarded.h>
+#include <sys/priv.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/stat.h>
@@ -2018,7 +2019,11 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		struct vnode *dst_vp = NULLVP;
 		/* We need to grab the 2nd FD out of the argments before moving on. */
 		int fd2 = CAST_DOWN_EXPLICIT(int32_t, uap->arg);
-		
+
+		error = priv_check_cred(kauth_cred_get(), PRIV_VFS_MOVE_DATA_EXTENTS, 0);
+		if (error)
+			goto out;
+
 		if (fp->f_type != DTYPE_VNODE) {
 			error = EBADF;
 			goto out;

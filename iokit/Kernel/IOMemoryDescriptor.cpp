@@ -1571,19 +1571,18 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
 
 	// Find starting address within the vector of ranges
 	Ranges vec = _ranges;
-	UInt32 length = 0;
-	UInt32 pages = 0;
-	for (unsigned ind = 0; ind < count;  ind++) {
+	mach_vm_size_t totalLength = 0;
+	unsigned int ind, pages = 0;
+	for (ind = 0; ind < count; ind++) {
 	    mach_vm_address_t addr;
 	    mach_vm_size_t len;
 
 	    // addr & len are returned by this function
 	    getAddrLenForInd(addr, len, type, vec, ind);
+	    if ((addr + len + PAGE_MASK) < addr) break;			/* overflow */
 	    pages += (atop_64(addr + len + PAGE_MASK) - atop_64(addr));
-	    len += length;
-	    assert(len >= length);	// Check for 32 bit wrap around
-	    length = len;
-
+	    totalLength += len;
+	    if (totalLength < len) break;				/* overflow */
 	    if ((kIOMemoryTypePhysical == type) || (kIOMemoryTypePhysical64 == type))
 	    {
 		ppnum_t highPage = atop_64(addr + len - 1);
@@ -1591,7 +1590,10 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
 		    _highestPage = highPage;
 	    }
 	} 
-	_length      = length;
+	if ((ind < count)
+	 || (totalLength != ((IOByteCount) totalLength))) return (false); /* overflow */
+
+	_length      = totalLength;
 	_pages       = pages;
 	_rangesCount = count;
 
@@ -1601,7 +1603,8 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
             _wireCount++;	// Physical MDs are, by definition, wired
         else { /* kIOMemoryTypeVirtual | kIOMemoryTypeVirtual64 | kIOMemoryTypeUIO */
             ioGMDData *dataP;
-            unsigned dataSize = computeDataSize(_pages, /* upls */ count * 2);
+            mach_vm_size_t dataSize = computeDataSize(_pages, /* upls */ count * 2);
+	    if (dataSize != ((unsigned) dataSize)) return false;         /* overflow */
 
             if (!initMemoryEntries(dataSize, mapper)) return false;
             dataP = getDataP(_memoryEntries);
@@ -1758,7 +1761,8 @@ IOByteCount IOMemoryDescriptor::readBytes
     // Assert that this entire I/O is withing the available range
     assert(offset <= _length);
     assert(offset + length <= _length);
-    if (offset >= _length) {
+    if ((offset >= _length)
+     || ((offset + length) > _length)) {
         return 0;
     }
 
@@ -1807,7 +1811,9 @@ IOByteCount IOMemoryDescriptor::writeBytes
 
     assert( !(kIOMemoryPreparedReadOnly & _flags) );
 
-    if ( (kIOMemoryPreparedReadOnly & _flags) || offset >= _length) {
+    if ( (kIOMemoryPreparedReadOnly & _flags)
+     || (offset >= _length)
+     || ((offset + length) > _length)) {
         return 0;
     }
 

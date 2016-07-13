@@ -113,7 +113,8 @@
 /*
  * VFS privileges
  */
-#define PRIV_VFS_OPEN_BY_ID	14000 	/*Allow calling openbyid_np()*/
+#define PRIV_VFS_OPEN_BY_ID		14000 	/* Allow calling openbyid_np() */
+#define PRIV_VFS_MOVE_DATA_EXTENTS	14001   /* Allow F_MOVEDATAEXTENTS fcntl */
 
 #ifdef KERNEL
 /*

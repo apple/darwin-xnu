@@ -207,7 +207,8 @@ private:
 #endif
     OSSet * mappings;
     UInt8   sharedInstance;
-    UInt8   __reservedA[3];
+    UInt8   closed;
+    UInt8   __reservedA[2];
     void  * __reserved[7];
 
 public:

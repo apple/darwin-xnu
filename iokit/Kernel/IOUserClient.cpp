@@ -1299,7 +1299,14 @@ void IOUserClient::free()
 
 IOReturn IOUserClient::clientDied( void )
 {
-    return( clientClose());
+    IOReturn ret = kIOReturnNotReady;
+
+    if (sharedInstance || OSCompareAndSwap8(0, 1, &closed)) 
+    {
+	ret = clientClose();
+    }
+
+    return (ret);
 }
 
 IOReturn IOUserClient::clientClose( void )
@@ -1930,6 +1937,8 @@ kern_return_t is_io_service_get_matching_services_ool(
 
     if( KERN_SUCCESS == kr) {
         // must return success after vm_map_copyout() succeeds
+        // and mig will copy out objects on success
+        *existing = 0;
 	*result = internal_io_service_get_matching_services(master_port,
 			(const char *) data, matchingCnt, existing);
 	vm_deallocate( kernel_map, data, matchingCnt );
@@ -2002,6 +2011,8 @@ kern_return_t is_io_service_get_matching_service_ool(
 
     if( KERN_SUCCESS == kr) {
         // must return success after vm_map_copyout() succeeds
+        // and mig will copy out objects on success
+        *service = 0;
 	*result = internal_io_service_get_matching_service(master_port,
 			(const char *) data, matchingCnt, service );
 	vm_deallocate( kernel_map, data, matchingCnt );
@@ -2188,6 +2199,8 @@ static kern_return_t internal_io_service_add_notification_ool(
 
     if( KERN_SUCCESS == kr) {
         // must return success after vm_map_copyout() succeeds
+        // and mig will copy out objects on success
+        *notification = 0;
 	*result = internal_io_service_add_notification( master_port, notification_type,
 			(char *) data, matchingCnt, wake_port, reference, referenceSize, client64, notification );
 	vm_deallocate( kernel_map, data, matchingCnt );
@@ -3257,6 +3270,7 @@ kern_return_t is_io_service_open_extended(
 		break;
 	    }
 	    client->sharedInstance = (0 != client->getProperty(kIOUserClientSharedInstanceKey));
+	    client->closed = false;
 	    OSString * creatorName = IOCopyLogNameForPID(proc_selfpid());
 	    if (creatorName)
 	    {
@@ -3285,7 +3299,16 @@ kern_return_t is_io_service_close(
     CHECK( IOUserClient, connection, client );
 
     IOStatisticsClientCall();
-    client->clientClose();
+
+    if (client->sharedInstance || OSCompareAndSwap8(0, 1, &client->closed)) 
+    {
+	client->clientClose();
+    }
+    else
+    {
+	IOLog("ignored is_io_service_close(0x%qx,%s)\n", 
+		client->getRegistryEntryID(), client->getName());
+    }
 
     return( kIOReturnSuccess );
 }
