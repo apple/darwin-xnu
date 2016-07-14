@@ -126,9 +126,16 @@ mach_msg_send_from_kernel(
 		return mr;
 	}		
 
-	mr = ipc_kmsg_send(kmsg, 
-			   MACH_SEND_KERNEL_DEFAULT,
-			   MACH_MSG_TIMEOUT_NONE);
+	/*
+	 * respect the thread's SEND_IMPORTANCE option to allow importance
+	 * donation from the kernel-side of user threads
+	 * (11938665 & 23925818)
+	 */
+	mach_msg_option_t option = MACH_SEND_KERNEL_DEFAULT;
+	if (current_thread()->options & TH_OPT_SEND_IMPORTANCE)
+		option &= ~MACH_SEND_NOIMPORTANCE;
+
+	mr = ipc_kmsg_send(kmsg, option, MACH_MSG_TIMEOUT_NONE);
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_destroy(kmsg);
 	}
@@ -156,9 +163,16 @@ mach_msg_send_from_kernel_proper(
 		return mr;
 	}
 
-	mr = ipc_kmsg_send(kmsg, 
-			   MACH_SEND_KERNEL_DEFAULT,
-			   MACH_MSG_TIMEOUT_NONE);
+	/*
+	 * respect the thread's SEND_IMPORTANCE option to force importance
+	 * donation from the kernel-side of user threads
+	 * (11938665 & 23925818)
+	 */
+	mach_msg_option_t option = MACH_SEND_KERNEL_DEFAULT;
+	if (current_thread()->options & TH_OPT_SEND_IMPORTANCE)
+		option &= ~MACH_SEND_NOIMPORTANCE;
+
+	mr = ipc_kmsg_send(kmsg, option, MACH_MSG_TIMEOUT_NONE);
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_destroy(kmsg);
 	}
@@ -186,16 +200,19 @@ mach_msg_send_from_kernel_with_options(
 		return mr;
 	}
 
-#if 11938665
 	/*
 	 * Until we are sure of its effects, we are disabling
 	 * importance donation from the kernel-side of user
 	 * threads in importance-donating tasks - unless the
-	 * option to force importance donation is passed in.
+	 * option to force importance donation is passed in,
+	 * or the thread's SEND_IMPORTANCE option has been set.
+	 * (11938665 & 23925818)
 	 */
-	if ((option & MACH_SEND_IMPORTANCE) == 0)
+	if (current_thread()->options & TH_OPT_SEND_IMPORTANCE)
+		option &= ~MACH_SEND_NOIMPORTANCE;
+	else if ((option & MACH_SEND_IMPORTANCE) == 0)
 		option |= MACH_SEND_NOIMPORTANCE;
-#endif
+
 	mr = ipc_kmsg_send(kmsg, option, timeout_val);
 
 	if (mr != MACH_MSG_SUCCESS) {
@@ -228,14 +245,17 @@ mach_msg_send_from_kernel_with_options_legacy(
 		return mr;
 	}
 
-#if 11938665
 	/*
 	 * Until we are sure of its effects, we are disabling
 	 * importance donation from the kernel-side of user
 	 * threads in importance-donating tasks.
+	 * (11938665 & 23925818)
 	 */
-	option |= MACH_SEND_NOIMPORTANCE;
-#endif
+	if (current_thread()->options & TH_OPT_SEND_IMPORTANCE)
+		option &= ~MACH_SEND_NOIMPORTANCE;
+	else
+		option |= MACH_SEND_NOIMPORTANCE;
+
 	mr = ipc_kmsg_send(kmsg, option, timeout_val);
 
 	if (mr != MACH_MSG_SUCCESS) {
@@ -342,9 +362,17 @@ mach_msg_rpc_from_kernel_body(
 	    ipc_kmsg_free(kmsg);
 	    return mr;
     }
-	mr = ipc_kmsg_send(kmsg, 
-			   MACH_SEND_KERNEL_DEFAULT,
-			   MACH_MSG_TIMEOUT_NONE);
+
+	/*
+	 * respect the thread's SEND_IMPORTANCE option to force importance
+	 * donation from the kernel-side of user threads
+	 * (11938665 & 23925818)
+	 */
+	mach_msg_option_t option = MACH_SEND_KERNEL_DEFAULT;
+	if (current_thread()->options & TH_OPT_SEND_IMPORTANCE)
+		option &= ~MACH_SEND_NOIMPORTANCE;
+
+	mr = ipc_kmsg_send(kmsg, option, MACH_MSG_TIMEOUT_NONE);
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_destroy(kmsg);
 		return mr;

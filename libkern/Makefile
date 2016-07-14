@@ -7,18 +7,18 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
-	libkern
-INSTINC_SUBDIRS_X86_64 = libkern
-INSTINC_SUBDIRS_X86_64H = libkern
-INSTINC_SUBDIRS_ARM = libkern
-INSTINC_SUBDIRS_ARM64 = libkern
+	libkern os
+INSTINC_SUBDIRS_X86_64 = libkern os
+INSTINC_SUBDIRS_X86_64H = libkern os
+INSTINC_SUBDIRS_ARM = libkern os
+INSTINC_SUBDIRS_ARM64 = libkern os
 
 EXPINC_SUBDIRS = \
-	libkern
-EXPINC_SUBDIRS_X86_64 = libkern
-EXPINC_SUBDIRS_X86_64H = libkern
-EXPINC_SUBDIRS_ARM = libkern
-EXPINC_SUBDIRS_ARM64 = libkern
+	libkern os
+EXPINC_SUBDIRS_X86_64 = libkern os
+EXPINC_SUBDIRS_X86_64H = libkern os
+EXPINC_SUBDIRS_ARM = libkern os
+EXPINC_SUBDIRS_ARM64 = libkern os
 
 COMP_SUBDIRS = conf
 

@@ -95,8 +95,7 @@
 #include <sys/timeb.h>
 #include <sys/times.h>
 #include <sys/malloc.h>
-
-#define chgproccnt_ok(p) 1
+#include <sys/persona.h>
 
 #include <security/audit/audit.h>
 
@@ -778,7 +777,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused int32_t *retval)
 			 * may be able to decrement the proc count of B before we can increment it. This results in a panic.
 			 * Incrementing the proc count of the target ruid, B, before setting the process credentials prevents this race.
 			 */
-			if (ruid != KAUTH_UID_NONE && chgproccnt_ok(p)) {
+			if (ruid != KAUTH_UID_NONE && !proc_has_persona(p)) {
 				(void)chgproccnt(ruid, 1);
 			}
 
@@ -797,7 +796,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused int32_t *retval)
 				 * We didn't successfully switch to the new ruid, so decrement
 				 * the procs/uid count that we incremented above.
 				 */
-				if (ruid != KAUTH_UID_NONE && chgproccnt_ok(p)) {
+				if (ruid != KAUTH_UID_NONE && !proc_has_persona(p)) {
 					(void)chgproccnt(ruid, -1);
 				}
 				kauth_cred_unref(&my_new_cred);
@@ -816,7 +815,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused int32_t *retval)
 			 * If we've updated the ruid, decrement the count of procs running
 			 * under the previous ruid
 			 */
-			if (ruid != KAUTH_UID_NONE && chgproccnt_ok(p)) {
+			if (ruid != KAUTH_UID_NONE && !proc_has_persona(p)) {
 				(void)chgproccnt(my_pcred->cr_ruid, -1);
 			}
 		}
@@ -1026,7 +1025,7 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 			 * may be able to decrement the proc count of B before we can increment it. This results in a panic.
 			 * Incrementing the proc count of the target ruid, B, before setting the process credentials prevents this race.
 			 */
-			if (ruid != KAUTH_UID_NONE && chgproccnt_ok(p)) {
+			if (ruid != KAUTH_UID_NONE && !proc_has_persona(p)) {
 				(void)chgproccnt(ruid, 1);
 			}
 
@@ -1041,7 +1040,7 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 			 */
 			if (p->p_ucred != my_cred) {
 				proc_ucred_unlock(p);
-				if (ruid != KAUTH_UID_NONE && chgproccnt_ok(p)) {
+				if (ruid != KAUTH_UID_NONE && !proc_has_persona(p)) {
 					/*
 					 * We didn't successfully switch to the new ruid, so decrement
 					 * the procs/uid count that we incremented above.
@@ -1061,7 +1060,7 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 			proc_ucred_unlock(p);
 
-			if (ruid != KAUTH_UID_NONE && chgproccnt_ok(p)) {
+			if (ruid != KAUTH_UID_NONE && !proc_has_persona(p)) {
 				/*
 				 * We switched to a new ruid, so decrement the count of procs running
 				 * under the previous ruid

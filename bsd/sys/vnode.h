@@ -2029,6 +2029,11 @@ int vnode_lookup_continue_needed(vnode_t vp, struct componentname *cnp);
  @result Non-zero to indicate that the vnode represents a tty device. Zero otherwise.
  */
 int vnode_istty(vnode_t vp);
+
+/*
+ * Get the context for the first kernel thread (private SPI)
+ */
+vfs_context_t vfs_context_kernel(void);		/* get from 1st kernel thread */
 #endif /* KERNEL_PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -2041,7 +2046,6 @@ int	vaccess(mode_t file_mode, uid_t uid, gid_t gid,
 int	check_mountedon(dev_t dev, enum vtype type, int  *errorp);
 int vn_getcdhash(struct vnode *vp, off_t offset, unsigned char *cdhash);
 void	vnode_reclaim(vnode_t);
-vfs_context_t vfs_context_kernel(void);		/* get from 1st kernel thread */
 int	vfs_context_issuser(vfs_context_t);
 vnode_t vfs_context_cwd(vfs_context_t);
 vnode_t	current_rootdir(void);

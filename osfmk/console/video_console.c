@@ -1860,7 +1860,9 @@ static boolean_t		vc_needsave;
 static void *			vc_saveunder;
 static vm_size_t		vc_saveunder_len;
 static int8_t			vc_uiscale = 1;
-int                             vc_user_options;
+vc_progress_user_options        vc_progress_options;
+vc_progress_user_options        vc_user_options;
+
 decl_simple_lock_data(,vc_progress_lock)
 
 static int           		vc_progress_withmeter = 3;
@@ -2591,14 +2593,15 @@ void vc_progress_setdiskspeed(uint32_t speed)
 static void
 vc_progress_task(__unused void *arg0, __unused void *arg)
 {
-    spl_t s;
-    int		   x, y, width, height;
+    spl_t     s;
+    int	      x, y, width, height;
+    uint64_t  x_pos, y_pos;
     const unsigned char * data;
 
     s = splhigh();
     simple_lock(&vc_progress_lock);
 
-    if( vc_progress_enable) {
+    if( vc_progress_enable) do {
     
 	vc_progress_count++;
 	if( vc_progress_count >= vc_progress->count) {
@@ -2608,32 +2611,59 @@ vc_progress_task(__unused void *arg0, __unused void *arg)
 
 	width  = (vc_progress->width * vc_uiscale);
 	height = (vc_progress->height * vc_uiscale);
-	x = (vc_progress->dx * vc_uiscale);
-	y = (vc_progress->dy * vc_uiscale);
-	data = vc_progress_data[vc_uiscale - 1];
-	if (data)
-        {
-	    data += vc_progress_count * width * height;
+	data   = vc_progress_data[vc_uiscale - 1];
+	if (!data) break;
+
+	if (kVCUsePosition & vc_progress_options.options) {
+	    /* Rotation: 0:normal, 1:right 90, 2:left 180, 3:left 90 */
+	    switch (3 & vinfo.v_rotate) {
+		case 0:
+		    x_pos = vc_progress_options.x_pos;
+		    y_pos = vc_progress_options.y_pos;
+		    break;
+		case 2:
+		    x_pos = 0xFFFFFFFF - vc_progress_options.x_pos;
+		    y_pos = 0xFFFFFFFF - vc_progress_options.y_pos;
+		    break;
+		case 1:
+		    x_pos = 0xFFFFFFFF - vc_progress_options.y_pos;
+		    y_pos = vc_progress_options.x_pos;
+		    break;
+		case 3:
+		    x_pos = vc_progress_options.y_pos;
+		    y_pos = 0xFFFFFFFF - vc_progress_options.x_pos;
+		    break;
+	    }
+	    x = (uint32_t)((x_pos * (uint64_t) vinfo.v_width) / 0xFFFFFFFFULL);
+	    y = (uint32_t)((y_pos * (uint64_t) vinfo.v_height) / 0xFFFFFFFFULL);
+	    x -= (width / 2);
+	    y -= (height / 2);
+	} else {
+	    x = (vc_progress->dx * vc_uiscale);
+	    y = (vc_progress->dy * vc_uiscale);
 	    if( 1 & vc_progress->flags) {
 		x += ((vinfo.v_width - width) / 2);
 		y += ((vinfo.v_height - height) / 2);
 	    }
-    
-	    assert(((x + width) < (int)vinfo.v_width) && 
-		       ((y + height) < (int)vinfo.v_height));
-    
-	    vc_blit_rect( x, y, 0, 
-			  width, height, width, width,
-			  data, vc_saveunder,
-			  kDataAlpha 
-			  | (vc_progress_angle & kDataRotate) 
-			  | (vc_needsave ? kSave : 0) );
-	    vc_needsave = FALSE;
-
-	    clock_deadline_for_periodic_event(vc_progress_interval, mach_absolute_time(), &vc_progress_deadline);
-	    thread_call_enter_delayed(&vc_progress_call, vc_progress_deadline);
 	}
+
+	if ((x + width)  > (int)vinfo.v_width)  break;
+	if ((y + height) > (int)vinfo.v_height) break;
+
+	data += vc_progress_count * width * height;
+
+	vc_blit_rect( x, y, 0,
+		      width, height, width, width,
+		      data, vc_saveunder,
+		      kDataAlpha
+		      | (vc_progress_angle & kDataRotate) 
+		      | (vc_needsave ? kSave : 0) );
+	vc_needsave = FALSE;
+
+	clock_deadline_for_periodic_event(vc_progress_interval, mach_absolute_time(), &vc_progress_deadline);
+	thread_call_enter_delayed(&vc_progress_call, vc_progress_deadline);
     }
+    while (FALSE);
     simple_unlock(&vc_progress_lock);
     splx(s);
 }
@@ -2652,10 +2682,10 @@ static boolean_t gc_graphics_boot = FALSE;
 static boolean_t gc_desire_text   = FALSE;
 static boolean_t gc_paused_progress;
 
-static uint64_t lastVideoPhys   = 0;
-static vm_offset_t  lastVideoVirt   = 0;
-static vm_size_t lastVideoSize   = 0;
-static boolean_t    lastVideoMapped = FALSE;
+static vm_offset_t  lastVideoVirt    = 0;
+static vm_size_t    lastVideoMapSize = 0;
+static boolean_t    lastVideoMapKmap = FALSE;
+
 static void
 gc_pause( boolean_t pause, boolean_t graphics_now )
 {
@@ -2704,28 +2734,29 @@ vc_initialize(__unused struct vc_info * vinfo_p)
 void
 initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 {
-	unsigned int fbsize = 0;
+	unsigned int newMapSize = 0;
 	vm_offset_t newVideoVirt = 0;
 	boolean_t graphics_now;
-	ppnum_t fbppage;
+	uint32_t delay;
 
 	if ( boot_vinfo )
 	{
 		struct vc_info new_vinfo = vinfo;
+		boolean_t makeMapping = FALSE;
+
 		/* 
-		 *	First, check if we are changing the size and/or location of the framebuffer
+		 *	Copy parameters
 		 */
-		new_vinfo.v_name[0]  = 0;
-		new_vinfo.v_physaddr = boot_vinfo->v_baseAddr & ~3;		/* Get the physical address */
-#ifndef __LP64__
-		new_vinfo.v_physaddr |= (((uint64_t) boot_vinfo->v_baseAddrHigh) << 32);
-#endif
 		if (kPEBaseAddressChange != op)
 		{
 		    new_vinfo.v_width    = (unsigned int)boot_vinfo->v_width;
 		    new_vinfo.v_height   = (unsigned int)boot_vinfo->v_height;
 		    new_vinfo.v_depth    = (unsigned int)boot_vinfo->v_depth;
 		    new_vinfo.v_rowbytes = (unsigned int)boot_vinfo->v_rowBytes;
+		    if (kernel_map == VM_MAP_NULL) {
+				// only booter supplies HW rotation
+				new_vinfo.v_rotate   = (unsigned int)boot_vinfo->v_rotate;
+		    }
 #if defined(__i386__) || defined(__x86_64__)
 		    new_vinfo.v_type     = (unsigned int)boot_vinfo->v_display;
 #else
@@ -2738,14 +2769,28 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
                 new_vinfo.v_scale = kPEScaleFactor2x;
             else /* Scale factor not set, default to 1x */
                 new_vinfo.v_scale = kPEScaleFactor1x;
+		}
+		new_vinfo.v_name[0]  = 0;
+		new_vinfo.v_physaddr = 0;
 
+		/*
+		 *  Check if we are have to map the framebuffer
+		 *  If VM is up, we are given a virtual address, unless b0 is set to indicate physical.
+		 */
+		newVideoVirt = boot_vinfo->v_baseAddr;
+		makeMapping = (kernel_map == VM_MAP_NULL) || (0 != (1 & newVideoVirt));
+		if (makeMapping)
+		{
+			newVideoVirt = 0;
+			new_vinfo.v_physaddr = boot_vinfo->v_baseAddr & ~3UL;		/* Get the physical address */
+#ifndef __LP64__
+			new_vinfo.v_physaddr |= (((uint64_t) boot_vinfo->v_baseAddrHigh) << 32);
+#endif
+			kprintf("initialize_screen: b=%08llX, w=%08X, h=%08X, r=%08X, d=%08X\n",                  /* (BRINGUP) */
+			    new_vinfo.v_physaddr, new_vinfo.v_width,  new_vinfo.v_height,  new_vinfo.v_rowbytes, new_vinfo.v_type);     /* (BRINGUP) */
 		}
      
-		if (!lastVideoMapped)
-		    kprintf("initialize_screen: b=%08llX, w=%08X, h=%08X, r=%08X, d=%08X\n",                  /* (BRINGUP) */
-			    new_vinfo.v_physaddr, new_vinfo.v_width,  new_vinfo.v_height,  new_vinfo.v_rowbytes, new_vinfo.v_type);     /* (BRINGUP) */
-
-		if (!new_vinfo.v_physaddr)							/* Check to see if we have a framebuffer */
+		if (!newVideoVirt && !new_vinfo.v_physaddr)							/* Check to see if we have a framebuffer */
 		{
 			kprintf("initialize_screen: No video - forcing serial mode\n");		/* (BRINGUP) */
 			new_vinfo.v_depth = 0;						/* vc routines are nop */
@@ -2756,36 +2801,17 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		}
 		else
 		{
-		    /*
-		     * If VM is up, we are given a virtual address, unless b0 is set to indicate physical.
-		     */
-			if ((kernel_map != VM_MAP_NULL) && (0 == (1 & boot_vinfo->v_baseAddr)))
-		    {
-			    fbppage = pmap_find_phys(kernel_pmap, (addr64_t)boot_vinfo->v_baseAddr);	/* Get the physical address of frame buffer */
-			    if(!fbppage)						/* Did we find it? */
-			    {
-				    panic("initialize_screen: Strange framebuffer - addr = %08X\n", (uint32_t)boot_vinfo->v_baseAddr);
-			    }
-			    new_vinfo.v_physaddr = (((uint64_t)fbppage) << PAGE_SHIFT) | (boot_vinfo->v_baseAddr & PAGE_MASK);			/* Get the physical address */
-		    }
-    
-		    if (boot_vinfo->v_length != 0)
-			    fbsize = (unsigned int) round_page(boot_vinfo->v_length);
-		    else
-			    fbsize = (unsigned int) round_page(new_vinfo.v_height * new_vinfo.v_rowbytes);			/* Remember size */
-
-    
-		    if ((lastVideoPhys != new_vinfo.v_physaddr) || (fbsize > lastVideoSize))		/* Did framebuffer change location or get bigger? */
+		    if (makeMapping)
 		    {
 			    unsigned int flags = VM_WIMG_IO;
-			    newVideoVirt = io_map_spec((vm_map_offset_t)new_vinfo.v_physaddr, fbsize, flags);	/* Allocate address space for framebuffer */
-    		    }
-		}
-
-		if (newVideoVirt != 0)
+				if (boot_vinfo->v_length != 0)
+					newMapSize = (unsigned int) round_page(boot_vinfo->v_length);
+				else
+					newMapSize = (unsigned int) round_page(new_vinfo.v_height * new_vinfo.v_rowbytes);			/* Remember size */
+			    newVideoVirt = io_map_spec((vm_map_offset_t)new_vinfo.v_physaddr, newMapSize, flags);	/* Allocate address space for framebuffer */
+			}
 		    new_vinfo.v_baseaddr = newVideoVirt + boot_vinfo->v_offset;				/* Set the new framebuffer address */
-		else
-		    new_vinfo.v_baseaddr = lastVideoVirt + boot_vinfo->v_offset;				/* Set the new framebuffer address */
+		}
 
 #if defined(__x86_64__)
 		// Adjust the video buffer pointer to point to where it is in high virtual (above the hole)
@@ -2807,24 +2833,23 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		// If we changed the virtual address, remove the old mapping
 		if (newVideoVirt != 0)
 		{
-			if (lastVideoVirt)							/* Was the framebuffer mapped before? */
+			if (lastVideoVirt && lastVideoMapSize)							/* Was the framebuffer mapped before? */
 			{
-				/* XXX why did this ever succeed? */
-				/* TODO: Consider this. */
-				if (!TEST_PAGE_SIZE_4K && lastVideoMapped)	/* Was this not a special pre-VM mapping? */
+				/* XXX why only !4K? */
+				if (!TEST_PAGE_SIZE_4K && lastVideoMapSize)
 				{
 					pmap_remove(kernel_pmap, trunc_page_64(lastVideoVirt),
-						round_page_64(lastVideoVirt + lastVideoSize));	/* Toss mappings */
+						round_page_64(lastVideoVirt + lastVideoMapSize));	/* Toss mappings */
 				}
-				if(lastVideoMapped)                            /* Was this not a special pre-VM mapping? */
+				/* Was this not a special pre-VM mapping? */
+				if (lastVideoMapKmap)
 				{
-					kmem_free(kernel_map, lastVideoVirt, lastVideoSize);	/* Toss kernel addresses */
+					kmem_free(kernel_map, lastVideoVirt, lastVideoMapSize);	/* Toss kernel addresses */
 				}
 			}
-			lastVideoPhys = new_vinfo.v_physaddr;					/* Remember the framebuffer address */
-			lastVideoSize = fbsize;							/* Remember the size */
-			lastVideoVirt = newVideoVirt;						/* Remember the virtual framebuffer address */
-			lastVideoMapped  = (NULL != kernel_map);
+			lastVideoMapKmap = (NULL != kernel_map);		/* Remember how mapped */
+			lastVideoMapSize = newMapSize;					/* Remember the size */
+			lastVideoVirt    = newVideoVirt;				/* Remember the virtual framebuffer address */
 		}
 
         if (kPEBaseAddressChange != op)
@@ -2859,7 +2884,18 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 
 		case kPEAcquireScreen:
 			if ( gc_acquired ) break;
-			vc_progress_set( graphics_now, (kVCDarkReboot & vc_user_options) ? 120 : vc_acquire_delay );
+
+			vc_progress_options = vc_user_options;
+			bzero(&vc_user_options, sizeof(vc_user_options));
+
+			if (kVCAcquireImmediate & vc_progress_options.options) delay = 0;
+			else if (kVCDarkReboot & vc_progress_options.options)  delay = 120;
+			else                                                   delay = vc_acquire_delay;
+
+			if (kVCDarkBackground & vc_progress_options.options)       vc_progress_white = TRUE;
+			else if (kVCLightBackground & vc_progress_options.options) vc_progress_white = FALSE;
+
+			vc_progress_set( graphics_now, delay );
 			gc_enable( !graphics_now );
 			gc_acquired = TRUE;
 			gc_desire_text = FALSE;
@@ -2903,8 +2939,8 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 
 			vc_progress_set( FALSE, 0 );
 			vc_acquire_delay = kProgressReacquireDelay;
-			vc_enable_progressmeter(FALSE);
 			vc_progress_white      = TRUE;
+			vc_enable_progressmeter(FALSE);
 			vc_progress_withmeter &= ~1;
 			vc_clut8 = NULL;
 			break;
@@ -3222,10 +3258,5 @@ vc_set_progressmeter(int new_value)
 }
 
 
-void
-vc_set_options(int new_value)
-{
-     vc_user_options = new_value;
-}
 
 

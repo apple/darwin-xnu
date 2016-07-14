@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <libgen.h>
 #include <string.h>
 #include <err.h>
 #include <unistd.h>
@@ -952,7 +953,9 @@ int main(int argc, char *argv[])
 	double avg_msg_latency = dsecs*1.0E6 / (double)totalmsg;
 
 	if (save_perfdata == TRUE) {
-		record_perf_data("mpmm_avg_msg_latency", "usec", avg_msg_latency, "Message latency measured in microseconds. Lower is better", stderr);
+		char name[256];
+		snprintf(name, sizeof(name), "%s_avg_msg_latency", basename(argv[0]));
+		record_perf_data(name, "usec", avg_msg_latency, "Message latency measured in microseconds. Lower is better", stderr);
 	}
 
 	if (stress_prepost) {

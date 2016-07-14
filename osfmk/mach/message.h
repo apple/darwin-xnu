@@ -711,18 +711,16 @@ typedef integer_t mach_msg_option_t;
 /* The options implemented by the library interface to mach_msg et. al. */
 #define MACH_MSG_OPTION_LIB	 (MACH_SEND_INTERRUPT | MACH_RCV_INTERRUPT)
 
-/* Default options to use when sending from the kernel */
-#if 11938665
-	/*
-	 * Until we are sure of its effects, we are disabling
-	 * importance donation from the kernel-side of user
-	 * threads in importance-donating tasks.
-	 */
+/*
+ * Default options to use when sending from the kernel.
+ *
+ * Until we are sure of its effects, we are disabling
+ * importance donation from the kernel-side of user
+ * threads in importance-donating tasks.
+ * (11938665 & 23925818)
+ */
 #define MACH_SEND_KERNEL_DEFAULT (MACH_SEND_MSG | \
 				  MACH_SEND_ALWAYS | MACH_SEND_NOIMPORTANCE)
-#else
-#define MACH_SEND_KERNEL_DEFAULT (MACH_SEND_MSG | MACH_SEND_ALWAYS)
-#endif
 
 #endif /* MACH_KERNEL_PRIVATE */
 

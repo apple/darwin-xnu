@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -992,10 +992,15 @@ unp_bind(
 	namelen = soun->sun_len - offsetof(struct sockaddr_un, sun_path);
 	if (namelen <= 0)
 		return (EINVAL);
-
+	/*
+	 * Note: sun_path is not a zero terminated "C" string
+	 */
+	ASSERT(namelen < SOCK_MAXADDRLEN);
+	bcopy(soun->sun_path, buf, namelen);
+	buf[namelen] = 0;
+	
 	socket_unlock(so, 0);
 
-	strlcpy(buf, soun->sun_path, namelen+1);
 	NDINIT(&nd, CREATE, OP_MKFIFO, FOLLOW | LOCKPARENT, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(buf), ctx);
 	/* SHOULD BE ABLE TO ADOPT EXISTING AND wakeup() ALA FIFO's */
@@ -1101,8 +1106,13 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 	len = nam->sa_len - offsetof(struct sockaddr_un, sun_path);
 	if (len <= 0)
 		return (EINVAL);
+	/*
+	 * Note: sun_path is not a zero terminated "C" string
+	 */
+	ASSERT(len < SOCK_MAXADDRLEN);
+	bcopy(soun->sun_path, buf, len);
+	buf[len] = 0;
 
-	strlcpy(buf, soun->sun_path, len+1);
 	socket_unlock(so, 0);
 
 	NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,

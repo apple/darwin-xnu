@@ -38,10 +38,4 @@
 
 #include <sys/codesign.h>
 
-const 
-CS_CodeDirectory *findCodeDirectory(
-	const CS_SuperBlob *embedded,
-	const char *lower_bound,
-	const char *upper_bound);
-
 #endif

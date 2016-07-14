@@ -68,11 +68,13 @@ typedef struct _load_result {
 				using_lcmain	:1,
 						:0;
 	unsigned int		csflags;
-	unsigned char	uuid[16];	
+	unsigned char		uuid[16];
 	mach_vm_address_t	min_vm_addr;
 	mach_vm_address_t	max_vm_addr;
 	unsigned int		platform_binary;
 	off_t			cs_end_offset;
+	void			*threadstate;
+	size_t			threadstate_sz;
 } load_result_t;
 
 struct image_params;
@@ -80,7 +82,7 @@ load_return_t load_machfile(
 	struct image_params	*imgp,
 	struct mach_header	*header,
 	thread_t		thread,
-	vm_map_t		map,
+	vm_map_t		*mapp,
 	load_result_t		*result);
 
 #define LOAD_SUCCESS		0

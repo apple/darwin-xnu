@@ -480,7 +480,7 @@ struct netfs_status {
 #define VQ_VERYLOWDISK	0x0200	/* file system has *very* little disk space left */
 #define VQ_SYNCEVENT	0x0400	/* a sync just happened (not set by kernel starting Mac OS X 10.9) */
 #define VQ_SERVEREVENT  0x0800  /* server issued notification/warning */
-#define VQ_FLAG1000	0x1000	/* placeholder */
+#define VQ_QUOTA	0x1000	/* a user quota has been hit */
 #define VQ_FLAG2000	0x2000	/* placeholder */
 #define VQ_FLAG4000	0x4000	/* placeholder */
 #define VQ_FLAG8000	0x8000	/* placeholder */

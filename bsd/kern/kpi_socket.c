@@ -950,7 +950,13 @@ sock_release(socket_t sock)
 		    __func__, sock->so_retaincnt, sock);
 		/* NOTREACHED */
 	}
-	if ((sock->so_retaincnt == 0) && (sock->so_usecount == 2)) {
+	/*
+	 * Check SS_NOFDREF in case a close happened as sock_retain()
+	 * was grabbing the lock
+	 */
+	if ((sock->so_retaincnt == 0) && (sock->so_usecount == 2) &&
+	    (!(sock->so_state & SS_NOFDREF) ||
+	    (sock->so_flags & SOF_MP_SUBFLOW))) {
 		/* close socket only if the FD is not holding it */
 		soclose_locked(sock);
 	} else {

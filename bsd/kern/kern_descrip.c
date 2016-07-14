@@ -2377,10 +2377,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			}
 		}
 
-		const CS_SuperBlob *super_blob = (void *)t_blob->csb_mem_kaddr;
-		const CS_CodeDirectory *cd = findCodeDirectory(super_blob,
-	 						 (const char *) super_blob,
-							 (const char *) super_blob + t_blob->csb_mem_size);
+		const CS_CodeDirectory *cd = t_blob->csb_cd;
 		if (cd == NULL) {
 			error = ENOENT;
 			goto outdrop;

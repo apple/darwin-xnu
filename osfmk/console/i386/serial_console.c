@@ -193,7 +193,10 @@ _cnputc(char c)
 	 * non-reentrant.
 	 */
 	mp_disable_preemption();
-	if (!hw_lock_to(&cnputc_lock, LockTimeOutTSC)) {
+	/* Use the maximum available spinlock timeout. Some configurations
+	 * exhibit non-deterministic stalls across console output.
+	 */
+	if (!hw_lock_to(&cnputc_lock, UINT32_MAX)) {
 	/* If we timed out on the lock, and we're in the debugger,
 	 * break the lock.
 	 */
@@ -255,9 +258,11 @@ console_ring_try_empty(void)
 		char	ch;
 		if (!state)
 			handle_pending_TLB_flushes();
+		ml_set_interrupts_enabled(FALSE);
    	 	SIMPLE_LOCK_NO_INTRS(&console_ring.write_lock);
 		ch = console_ring_get();
     		simple_unlock(&console_ring.write_lock);
+		ml_set_interrupts_enabled(state);
 		if (ch == 0)
 			break;
 		_cnputc(ch);

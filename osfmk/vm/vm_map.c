@@ -4376,6 +4376,7 @@ vm_map_submap(
 	return(result);
 }
 
+
 /*
  *	vm_map_protect:
  *
@@ -4548,6 +4549,7 @@ vm_map_protect(
 
 			if (override_nx(map, VME_ALIAS(current)) && prot)
 			        prot |= VM_PROT_EXECUTE;
+
 
 			if (current->is_sub_map && current->use_pmap) {
 				pmap_protect(VME_SUBMAP(current)->pmap, 

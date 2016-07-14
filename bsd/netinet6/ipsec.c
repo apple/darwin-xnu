@@ -4497,7 +4497,8 @@ ipsec6_tunnel_validate(m, off, nxt0, sav, ifamily)
 {
 	u_int8_t nxt = nxt0 & 0xff;
 	struct sockaddr_in6 *sin6;
-	struct sockaddr_in6 osrc, odst, isrc, idst;
+	struct sockaddr_in i4src, i4dst;
+	struct sockaddr_in6 osrc, odst, i6src, i6dst;
 	struct secpolicy *sp;
 	struct ip6_hdr *oip6;
 
@@ -4540,26 +4541,40 @@ ipsec6_tunnel_validate(m, off, nxt0, sav, ifamily)
 	/* XXX slow */
 	bzero(&osrc, sizeof(osrc));
 	bzero(&odst, sizeof(odst));
-	bzero(&isrc, sizeof(isrc));
-	bzero(&idst, sizeof(idst));
-	osrc.sin6_family = odst.sin6_family = isrc.sin6_family =
-	    idst.sin6_family = *ifamily = AF_INET6;
-	osrc.sin6_len = odst.sin6_len = isrc.sin6_len = idst.sin6_len = 
-	    sizeof(struct sockaddr_in6);
+	osrc.sin6_family = odst.sin6_family = AF_INET6;
+	osrc.sin6_len = odst.sin6_len = sizeof(struct sockaddr_in6);
 	osrc.sin6_addr = oip6->ip6_src;
 	odst.sin6_addr = oip6->ip6_dst;
-	m_copydata(m, off + offsetof(struct ip6_hdr, ip6_src),
-	    sizeof(isrc.sin6_addr), (caddr_t)&isrc.sin6_addr);
-	m_copydata(m, off + offsetof(struct ip6_hdr, ip6_dst),
-	    sizeof(idst.sin6_addr), (caddr_t)&idst.sin6_addr);
 
 	/*
 	 * regarding to inner source address validation, see a long comment
 	 * in ipsec4_tunnel_validate.
 	 */
 
-	sp = key_gettunnel((struct sockaddr *)&osrc, (struct sockaddr *)&odst,
-	    (struct sockaddr *)&isrc, (struct sockaddr *)&idst);
+	if (nxt == IPPROTO_IPV4) {
+		bzero(&i4src, sizeof(struct sockaddr_in));
+		bzero(&i4dst, sizeof(struct sockaddr_in));
+		i4src.sin_family = i4dst.sin_family = *ifamily = AF_INET;
+		i4src.sin_len = i4dst.sin_len = sizeof(struct sockaddr_in);
+		m_copydata(m, off + offsetof(struct ip, ip_src), sizeof(i4src.sin_addr),
+				   (caddr_t)&i4src.sin_addr);
+		m_copydata(m, off + offsetof(struct ip, ip_dst), sizeof(i4dst.sin_addr),
+				   (caddr_t)&i4dst.sin_addr);
+		sp = key_gettunnel((struct sockaddr *)&osrc, (struct sockaddr *)&odst,
+						   (struct sockaddr *)&i4src, (struct sockaddr *)&i4dst);
+	} else if (nxt == IPPROTO_IPV6) {
+		bzero(&i6src, sizeof(struct sockaddr_in6));
+		bzero(&i6dst, sizeof(struct sockaddr_in6));
+		i6src.sin6_family = i6dst.sin6_family = *ifamily = AF_INET6;
+		i6src.sin6_len = i6dst.sin6_len = sizeof(struct sockaddr_in6);
+		m_copydata(m, off + offsetof(struct ip6_hdr, ip6_src), sizeof(i6src.sin6_addr),
+				   (caddr_t)&i6src.sin6_addr);
+		m_copydata(m, off + offsetof(struct ip6_hdr, ip6_dst), sizeof(i6dst.sin6_addr),
+				   (caddr_t)&i6dst.sin6_addr);
+		sp = key_gettunnel((struct sockaddr *)&osrc, (struct sockaddr *)&odst,
+						   (struct sockaddr *)&i6src, (struct sockaddr *)&i6dst);
+	} else
+		return 0;	/* unsupported family */
 	/*
 	 * when there is no suitable inbound policy for the packet of the ipsec
 	 * tunnel mode, the kernel never decapsulate the tunneled packet

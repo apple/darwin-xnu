@@ -835,12 +835,12 @@ static int
 sysctl_consoleoptions
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
-    int error;
-    int new_value, changed;
+    int error, changed;
+    uint32_t new_value;
 
-    error = sysctl_io_number(req, vc_user_options, sizeof(int), &new_value, &changed);
+    error = sysctl_io_number(req, vc_user_options.options, sizeof(uint32_t), &new_value, &changed);
 
-    if (changed) vc_set_options(new_value);
+    if (changed) vc_user_options.options = new_value;
 
     return (error);
 }
@@ -848,6 +848,18 @@ sysctl_consoleoptions
 static SYSCTL_PROC(_kern, OID_AUTO, consoleoptions,
         CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
         0, 0, sysctl_consoleoptions, "I", "");
+
+
+static int
+sysctl_progressoptions SYSCTL_HANDLER_ARGS
+{
+    return sysctl_io_opaque(req, &vc_user_options, sizeof(vc_user_options), NULL);
+}
+
+static SYSCTL_PROC(_kern, OID_AUTO, progressoptions,
+        CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED | CTLFLAG_ANYBODY,
+        NULL, 0, sysctl_progressoptions, "S,vc_progress_user_options", "");
+
 
 static int
 sysctl_wakereason SYSCTL_HANDLER_ARGS
@@ -1161,6 +1173,7 @@ bool IOPMrootDomain::start( IOService * nub )
     sysctl_register_oid(&sysctl__kern_progressmeter);
     sysctl_register_oid(&sysctl__kern_wakereason);
     sysctl_register_oid(&sysctl__kern_consoleoptions);
+    sysctl_register_oid(&sysctl__kern_progressoptions);
 
 #if HIBERNATION
     IOHibernateSystemInit(this);

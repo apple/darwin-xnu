@@ -37,6 +37,8 @@
 
 #include <pexpert/device_tree.h>
 
+typedef UInt32  dtptr_t;
+
 #include <machine/machine_routines.h>
 
 extern "C" {
@@ -253,7 +255,7 @@ int IODTGetLoaderInfo( const char *key, void **infoAddr, int *infoSize )
 {
     IORegistryEntry		*chosen;
     OSData				*propObj;
-    unsigned int		*propPtr;
+    dtptr_t				*propPtr;
     unsigned int		propSize;
 
     chosen = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane );
@@ -263,9 +265,9 @@ int IODTGetLoaderInfo( const char *key, void **infoAddr, int *infoSize )
     if ( propObj == 0 ) return -1;
 
     propSize = propObj->getLength();
-    if ( propSize != (2 * sizeof(UInt32)) ) return -1;
+    if ( propSize != (2 * sizeof(dtptr_t)) ) return -1;
  
-    propPtr = (unsigned int *)propObj->getBytesNoCopy();
+    propPtr = (dtptr_t *)propObj->getBytesNoCopy();
     if ( propPtr == 0 ) return -1;
 
     *infoAddr = (void *)(uintptr_t) (propPtr[0]);

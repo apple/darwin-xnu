@@ -84,6 +84,9 @@ static void sd_log(vfs_context_t, const char *, ...);
 static void proc_shutdown(void);
 static void kernel_hwm_panic_info(void);
 extern void IOSystemShutdownNotification(void);
+#if DEVELOPMENT || DEBUG
+extern boolean_t kdp_has_polled_corefile(void);
+#endif /* DEVELOPMENT || DEBUG */
 
 struct sd_filterargs{
 	int delayterm;
@@ -185,7 +188,13 @@ reboot_kernel(int howto, char *message)
 		/*
 		 * Unmount filesystems
 		 */
-		vfs_unmountall();
+
+#if DEVELOPMENT || DEBUG
+		if (!(howto & RB_PANIC) || !kdp_has_polled_corefile())
+#endif /* DEVELOPMENT || DEBUG */
+		{
+			vfs_unmountall();
+		}
 
 		/* Wait for the buffer cache to clean remaining dirty buffers */
 		for (iter = 0; iter < 100; iter++) {

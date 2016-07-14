@@ -193,7 +193,7 @@ struct extern_proc {
 
 #define	P_THCWD		0x01000000	/* process has thread cwd  */
 #define	P_RESV9		0x02000000	/* (P_VFORK)process has vfork children */
-#define	P_RESV10	0x04000000	/* reserved flag */
+#define	P_ADOPTPERSONA	0x04000000	/* process adopted a persona (used to be P_NOATTACH) */
 #define	P_RESV11	0x08000000	/* (P_INVFORK) proc in vfork */
 
 #define	P_NOSHLIB	0x10000000	/* no shared libs are in use for proc */
@@ -241,6 +241,8 @@ extern void wakeup_one(caddr_t chan);
 extern int proc_selfpid(void);
 /* this routine returns the pid of the parent of the current process */
 extern int proc_selfppid(void);
+/* this routine returns the csflags of the current process */
+extern int proc_selfcsflags(void);
 /* this routine returns sends a signal signum to the process identified by the pid */
 extern void proc_signal(int pid, int signum);
 /* this routine checks whether any signal identified by the mask are pending in the  process identified by the pid. The check is  on all threads of the process. */
@@ -308,6 +310,9 @@ extern int	msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, u_int
 
 task_t proc_task(proc_t);
 extern int proc_pidversion(proc_t);
+extern uint32_t proc_persona_id(proc_t);
+extern uint32_t proc_getuid(proc_t);
+extern uint32_t proc_getgid(proc_t);
 extern int proc_getcdhash(proc_t, unsigned char *);
 
 /*! 

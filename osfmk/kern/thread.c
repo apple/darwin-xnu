@@ -239,7 +239,7 @@ thread_bootstrap(void)
 	thread_template.static_param = 0;
 	thread_template.policy_reset = 0;
 
-	thread_template.base_pri = 0;
+	thread_template.base_pri = BASEPRI_DEFAULT;
 	thread_template.sched_pri = 0;
 	thread_template.max_priority = 0;
 	thread_template.task_priority = 0;
@@ -1011,11 +1011,8 @@ thread_create_internal(
 	new_thread->importance = new_priority - new_thread->task_priority;
 	new_thread->saved_importance = new_thread->importance;
 
-	if (parent_task->max_priority <= MAXPRI_THROTTLE) {
-		sched_set_thread_throttled(new_thread, TRUE);
-	}
-
 	sched_set_thread_base_priority(new_thread, new_priority);
+
 
 	thread_policy_create(new_thread);
 
@@ -2494,6 +2491,17 @@ thread_get_current_voucher_origin_pid(
 		&buf_size);
 
 	return kr;
+}
+
+/*
+ * thread_enable_send_importance - set/clear the SEND_IMPORTANCE thread option bit.
+ */
+void thread_enable_send_importance(thread_t thread, boolean_t enable)
+{
+	if (enable == TRUE)
+		thread->options |= TH_OPT_SEND_IMPORTANCE;
+	else
+		thread->options &= ~TH_OPT_SEND_IMPORTANCE;
 }
 
 #if CONFIG_DTRACE

@@ -172,7 +172,7 @@ decl_lck_mtx_data(,apple_protect_pager_lock)
 /*
  * Maximum number of unmapped pagers we're willing to keep around.
  */
-int apple_protect_pager_cache_limit = 10;
+int apple_protect_pager_cache_limit = 20;
 
 /*
  * Statistics & counters.

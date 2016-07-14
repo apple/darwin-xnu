@@ -212,13 +212,13 @@ sysctl_change_ecn_setting SYSCTL_HANDLER_ARGS
 	return (err);
 }
 
-int     tcp_ecn_outbound = 0;
+int     tcp_ecn_outbound = 2;
 SYSCTL_PROC(_net_inet_tcp, OID_AUTO, ecn_initiate_out,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_outbound, 0,
     sysctl_change_ecn_setting, "IU",
     "Initiate ECN for outbound connections");
 
-int     tcp_ecn_inbound = 0;
+int     tcp_ecn_inbound = 2;
 SYSCTL_PROC(_net_inet_tcp, OID_AUTO, ecn_negotiate_in,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_ecn_inbound, 0,
     sysctl_change_ecn_setting, "IU",
@@ -439,6 +439,7 @@ tcp_send_ecn_flags_on_syn(struct tcpcb *tp, struct socket *so)
 	    (tp->t_flagsext & TF_FASTOPEN)));
 }
 
+#define	TCP_ECN_SETUP_PERCENTAGE_MAX	5
 void
 tcp_set_ecn(struct tcpcb *tp, struct ifnet *ifp)
 {
@@ -487,6 +488,21 @@ tcp_set_ecn(struct tcpcb *tp, struct ifnet *ifp)
 check_heuristic:
 	if (!tcp_heuristic_do_ecn(tp))
 		tp->ecn_flags &= ~TE_ENABLE_ECN;
+
+	/*
+	 * If the interface setting, system-level setting and heuristics
+	 * allow to enable ECN, randomly select 5% of connections to
+	 * enable it
+	 */
+	if ((tp->ecn_flags & (TE_ECN_MODE_ENABLE | TE_ECN_MODE_DISABLE
+	    | TE_ENABLE_ECN)) == TE_ENABLE_ECN) {
+		/*
+		 * Use the random value in iss for randomizing
+		 * this selection
+		 */
+		if ((tp->iss % 100) >= TCP_ECN_SETUP_PERCENTAGE_MAX)
+			tp->ecn_flags &= ~TE_ENABLE_ECN;
+	}
 }
 
 /*
@@ -815,16 +831,6 @@ again:
 			tcpstat.tcps_sack_rexmits++;
 			tcpstat.tcps_sack_rexmit_bytes +=
 			    min(len, tp->t_maxseg);
-			if (nstat_collect) {
-				nstat_route_tx(inp->inp_route.ro_rt, 1,
-					min(len, tp->t_maxseg),
-					NSTAT_TX_FLAG_RETRANSMIT);
-				INP_ADD_STAT(inp, cell, wifi, wired,
-				    txpackets, 1);
-				INP_ADD_STAT(inp, cell, wifi, wired,
-				    txbytes, min(len, tp->t_maxseg));
-				tp->t_stat.txretransmitbytes += min(len, tp->t_maxseg);
-			}
 		} else {
 			len = 0;
 		}
@@ -1161,8 +1167,7 @@ after_sack_rexmit:
 	if ((so->so_flags & SOF_MP_SUBFLOW) && 
 	    !(tp->t_mpflags & TMPF_TCP_FALLBACK)) {
 		int newlen = len;
-		if (!(tp->t_mpflags & TMPF_PREESTABLISHED) &&
-		    (tp->t_state > TCPS_CLOSED) &&
+		if ((tp->t_state >= TCPS_ESTABLISHED) &&
 		    ((tp->t_mpflags & TMPF_SND_MPPRIO) ||
 		    (tp->t_mpflags & TMPF_SND_REM_ADDR) ||
 		    (tp->t_mpflags & TMPF_SND_MPFAIL) ||
@@ -1859,6 +1864,7 @@ send:
 				INP_ADD_STAT(inp, cell, wifi, wired,
 				    txbytes, len);
 				tp->t_stat.txretransmitbytes += len;
+				tp->t_stat.rxmitpkts++;
 			}
 		} else {
 			tcpstat.tcps_sndpack++;

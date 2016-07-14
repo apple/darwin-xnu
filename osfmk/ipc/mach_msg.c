@@ -104,6 +104,7 @@
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_importance.h>
+#include <ipc/ipc_voucher.h>
 
 #include <machine/machine_routines.h>
 #include <security/mac_mach_internal.h>
@@ -332,6 +333,9 @@ mach_msg_receive_results(void)
 	ipc_importance_receive(kmsg, option);
 
 #endif  /* IMPORTANCE_INHERITANCE */
+
+	/* auto redeem the voucher in the message */
+	ipc_voucher_receive_postprocessing(kmsg, option);
 
 	trailer_size = ipc_kmsg_add_trailer(kmsg, space, option, self, seqno, FALSE, 
 			kmsg->ikm_header->msgh_remote_port->ip_context);

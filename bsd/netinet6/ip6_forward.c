@@ -472,6 +472,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	 */
 	src_in6 = ip6->ip6_src;
 	if (in6_setscope(&src_in6, rt->rt_ifp, &outzone)) {
+		RT_REMREF_LOCKED(rt);
+		RT_UNLOCK(rt);
 		/* XXX: this should not happen */
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
@@ -479,6 +481,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		return (NULL);
 	}
 	if (in6_setscope(&src_in6, m->m_pkthdr.rcvif, &inzone)) {
+		RT_REMREF_LOCKED(rt);
+		RT_UNLOCK(rt);
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		m_freem(m);
@@ -522,6 +526,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	if (in6_setscope(&dst_in6, m->m_pkthdr.rcvif, &inzone) != 0 ||
 	    in6_setscope(&dst_in6, rt->rt_ifp, &outzone) != 0 ||
 	    inzone != outzone) {
+		RT_REMREF_LOCKED(rt);
+		RT_UNLOCK(rt);
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		m_freem(m);

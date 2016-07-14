@@ -891,12 +891,9 @@ sflt_connectin(struct socket *so, const struct sockaddr	*remote)
 	return (error);
 }
 
-__private_extern__ int
-sflt_connectout(struct socket *so, const struct sockaddr *nam)
+static int
+sflt_connectout_common(struct socket *so, const struct sockaddr *nam)
 {
-	if (so->so_filt == NULL)
-		return (0);
-
 	struct socket_filter_entry *entry;
 	int unlocked = 0;
 	int error = 0;
@@ -941,9 +938,40 @@ sflt_connectout(struct socket *so, const struct sockaddr *nam)
 }
 
 __private_extern__ int
-sflt_connectxout(struct socket *so, struct sockaddr_list **dst_sl0)
+sflt_connectout(struct socket *so, const struct sockaddr *nam)
 {
 	char buf[SOCK_MAXADDRLEN];
+	struct sockaddr *sa;
+	int error;
+
+	if (so->so_filt == NULL)
+		return (0);
+
+	/*
+	 * Workaround for rdar://23362120
+	 * Always pass a buffer that can hold an IPv6 socket address
+	 */
+	bzero(buf, sizeof (buf));
+	bcopy(nam, buf, nam->sa_len);
+	sa = (struct sockaddr *)buf;
+
+	error = sflt_connectout_common(so, sa);
+	if (error != 0)
+		return (error);
+
+	/* 
+	 * If the address was modified, copy it back
+	 */
+	if (bcmp(sa, nam, nam->sa_len) != 0) {
+		bcopy(sa, (struct sockaddr *)(uintptr_t)nam, nam->sa_len);
+	}
+
+	return (0);
+}
+
+__private_extern__ int
+sflt_connectxout(struct socket *so, struct sockaddr_list **dst_sl0)
+{
 	struct sockaddr_list *dst_sl;
 	struct sockaddr_entry *se, *tse;
 	int modified = 0;
@@ -964,20 +992,30 @@ sflt_connectxout(struct socket *so, struct sockaddr_list **dst_sl0)
 	 * as soon as we get an error.
 	 */
 	TAILQ_FOREACH_SAFE(se, &dst_sl->sl_head, se_link, tse) {
-		int sa_len = se->se_addr->sa_len;
-
-		/* remember the original address */
-		bzero(buf, sizeof (buf));
-		bcopy(se->se_addr, buf, sa_len);
+		char buf[SOCK_MAXADDRLEN];
+		struct sockaddr *sa;
 
 		VERIFY(se->se_addr != NULL);
-		error = sflt_connectout(so, se->se_addr);
+
+		/*
+		* Workaround for rdar://23362120
+		* Always pass a buffer that can hold an IPv6 socket address
+		*/
+		bzero(buf, sizeof (buf));
+		bcopy(se->se_addr, buf, se->se_addr->sa_len);
+		sa = (struct sockaddr *)buf;
+
+		error = sflt_connectout_common(so, sa);
 		if (error != 0)
 			break;
 
-		/* see if the address was modified */
-		if (bcmp(se->se_addr, buf, sa_len) != 0)
+		/* 
+		 * If the address was modified, copy it back
+		 */
+		if (bcmp(se->se_addr, sa, se->se_addr->sa_len) != 0) {
+			bcopy(sa, se->se_addr, se->se_addr->sa_len);
 			modified = 1;
+		}
 	}
 
 	if (error != 0 || !modified) {

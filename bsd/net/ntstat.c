@@ -271,6 +271,9 @@ nstat_inpcb_to_flags(
 			break;
 		case IFRTYPE_FUNCTIONAL_CELLULAR:
 			flags |= NSTAT_IFNET_IS_CELLULAR;
+			if (inp->inp_socket != NULL &&
+			    (inp->inp_socket->so_flags1 & SOF1_CELLFALLBACK))
+				flags |= NSTAT_IFNET_VIA_CELLFALLBACK;
 			break;
 		}
 
@@ -2104,6 +2107,85 @@ done:
 static u_int64_t nstat_ifnet_last_report_time = 0;
 extern int tcp_report_stats_interval;
 
+static void
+nstat_ifnet_compute_percentages(struct if_tcp_ecn_perf_stat *ifst)
+{
+	/* Retransmit percentage */
+	if (ifst->total_rxmitpkts > 0 && ifst->total_txpkts > 0) {
+		/* shift by 10 for precision */
+		ifst->rxmit_percent =
+		    ((ifst->total_rxmitpkts << 10) * 100) / ifst->total_txpkts;
+	} else {
+		ifst->rxmit_percent = 0;
+	}
+
+	/* Out-of-order percentage */
+	if (ifst->total_oopkts > 0 && ifst->total_rxpkts > 0) {
+		/* shift by 10 for precision */
+		ifst->oo_percent =
+		    ((ifst->total_oopkts << 10) * 100) / ifst->total_rxpkts;
+	} else {
+		ifst->oo_percent = 0;
+	}
+
+	/* Reorder percentage */
+	if (ifst->total_reorderpkts > 0 &&
+	    (ifst->total_txpkts + ifst->total_rxpkts) > 0) {
+		/* shift by 10 for precision */
+		ifst->reorder_percent =
+		    ((ifst->total_reorderpkts << 10) * 100) /
+		    (ifst->total_txpkts + ifst->total_rxpkts);
+	} else {
+		ifst->reorder_percent = 0;
+	}
+}
+
+static void
+nstat_ifnet_normalize_counter(struct if_tcp_ecn_stat *if_st)
+{
+	u_int64_t ecn_on_conn, ecn_off_conn;
+
+	if (if_st == NULL)
+		return;
+	ecn_on_conn = if_st->ecn_client_success +
+	    if_st->ecn_server_success;
+	ecn_off_conn = if_st->ecn_off_conn +
+	    (if_st->ecn_client_setup - if_st->ecn_client_success) +
+	    (if_st->ecn_server_setup - if_st->ecn_server_success);
+
+	/*
+	 * report sack episodes, rst_drop and rxmit_drop
+	 *  as a ratio per connection, shift by 10 for precision
+	 */
+	if (ecn_on_conn > 0) {
+		if_st->ecn_on.sack_episodes =
+		    (if_st->ecn_on.sack_episodes << 10) / ecn_on_conn;
+		if_st->ecn_on.rst_drop =
+		    (if_st->ecn_on.rst_drop << 10) * 100 / ecn_on_conn;
+		if_st->ecn_on.rxmit_drop =
+		    (if_st->ecn_on.rxmit_drop << 10) * 100 / ecn_on_conn;
+	} else {
+		/* set to zero, just in case */
+		if_st->ecn_on.sack_episodes = 0;
+		if_st->ecn_on.rst_drop = 0;
+		if_st->ecn_on.rxmit_drop = 0;
+	}
+
+	if (ecn_off_conn > 0) {
+		if_st->ecn_off.sack_episodes =
+		    (if_st->ecn_off.sack_episodes << 10) / ecn_off_conn;
+		if_st->ecn_off.rst_drop =
+		    (if_st->ecn_off.rst_drop << 10) * 100 / ecn_off_conn;
+		if_st->ecn_off.rxmit_drop =
+		    (if_st->ecn_off.rxmit_drop << 10) * 100 / ecn_off_conn;
+	} else {
+		if_st->ecn_off.sack_episodes = 0;
+		if_st->ecn_off.rst_drop = 0;
+		if_st->ecn_off.rxmit_drop = 0;
+	}
+	if_st->ecn_total_conn = ecn_off_conn + ecn_on_conn;
+}
+
 void
 nstat_ifnet_report_ecn_stats(void)
 {
@@ -2150,6 +2232,11 @@ nstat_ifnet_report_ecn_stats(void)
 		    ifp->if_ipv4_stat->timestamp < last_report_time)
 			goto v6;
 		st->ifnet_proto = NSTAT_IFNET_ECN_PROTO_IPV4;
+		/* compute percentages using packet counts */
+		nstat_ifnet_compute_percentages(&ifp->if_ipv4_stat->ecn_on);
+		nstat_ifnet_compute_percentages(&ifp->if_ipv4_stat->ecn_off);
+		nstat_ifnet_normalize_counter(ifp->if_ipv4_stat);
+
 		bcopy(ifp->if_ipv4_stat, &st->ecn_stat,
 		    sizeof(st->ecn_stat));
 		nstat_sysinfo_send_data(&data);
@@ -2161,6 +2248,12 @@ v6:
 		    ifp->if_ipv6_stat->timestamp < last_report_time)
 			continue;
 		st->ifnet_proto = NSTAT_IFNET_ECN_PROTO_IPV6;
+
+		/* compute percentages using packet counts */
+		nstat_ifnet_compute_percentages(&ifp->if_ipv6_stat->ecn_on);
+		nstat_ifnet_compute_percentages(&ifp->if_ipv6_stat->ecn_off);
+		nstat_ifnet_normalize_counter(ifp->if_ipv6_stat);
+
 		bcopy(ifp->if_ipv6_stat, &st->ecn_stat,
 		    sizeof(st->ecn_stat));
 		nstat_sysinfo_send_data(&data);
@@ -2262,13 +2355,14 @@ nstat_sysinfo_send_data_internal(
 	nstat_sysinfo_data *data)
 {
 	nstat_msg_sysinfo_counts *syscnt = NULL;
-	size_t allocsize = 0, countsize = 0, nkeyvals = 0;
+	size_t allocsize = 0, countsize = 0, nkeyvals = 0, finalsize = 0;
 	nstat_sysinfo_keyval *kv;
 	errno_t result = 0;
 	size_t i = 0;
 	
 	allocsize = offsetof(nstat_msg_sysinfo_counts, counts);
 	countsize = offsetof(nstat_sysinfo_counts, nstat_sysinfo_keyvals);
+	finalsize = allocsize;
 
 	/* get number of key-vals for each kind of stat */
 	switch (data->flags)
@@ -2284,8 +2378,7 @@ nstat_sysinfo_send_data_internal(
 		case NSTAT_SYSINFO_IFNET_ECN_STATS:
 			nkeyvals = (sizeof(struct if_tcp_ecn_stat) /
 			    sizeof(u_int64_t));
-			/* One less because we are not going to send timestamp */
-			nkeyvals -= 1;
+
 			/* Two more keys for ifnet type and proto */
 			nkeyvals += 2;
 			break;
@@ -2299,10 +2392,6 @@ nstat_sysinfo_send_data_internal(
 	if (syscnt == NULL)
 		return;
 	bzero(syscnt, allocsize);
-
-	syscnt->hdr.type = NSTAT_MSG_TYPE_SYSINFO_COUNTS;
-	syscnt->hdr.length = allocsize;
-	syscnt->counts.nstat_sysinfo_len = countsize;
 	
 	kv = (nstat_sysinfo_keyval *) &syscnt->counts.nstat_sysinfo_keyvals;
 	switch (data->flags)
@@ -2452,7 +2541,6 @@ nstat_sysinfo_send_data_internal(
 			nstat_set_keyval_scalar(&kv[i++],
 			    NSTAT_SYSINFO_TFO_BLACKHOLE,
 			    data->u.tcp_stats.tfo_blackhole);
-
 			VERIFY(i == nkeyvals);
 			break;
 		}
@@ -2557,15 +2645,55 @@ nstat_sysinfo_send_data_internal(
 			nstat_set_keyval_scalar(&kv[i++],
 			    NSTAT_SYSINFO_ECN_IFNET_OFF_RXMIT_DROP,
 			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rxmit_drop);
-			VERIFY(i == nkeyvals);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_TOTAL_TXPKTS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.total_txpkts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_TOTAL_RXMTPKTS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.total_rxmitpkts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_TOTAL_RXPKTS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.total_rxpkts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_TOTAL_OOPKTS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.total_oopkts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_ON_DROP_RST,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rst_drop);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_TOTAL_TXPKTS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.total_txpkts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_TOTAL_RXMTPKTS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.total_rxmitpkts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_TOTAL_RXPKTS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.total_rxpkts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_TOTAL_OOPKTS,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.total_oopkts);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_OFF_DROP_RST,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rst_drop);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_TOTAL_CONN,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_total_conn);
 			break;
 		}
 	}
-	
 	if (syscnt != NULL)
 	{
+		VERIFY(i > 0 && i <= nkeyvals);
+		countsize = offsetof(nstat_sysinfo_counts,
+		    nstat_sysinfo_keyvals) +
+		    sizeof(nstat_sysinfo_keyval) * i;
+		finalsize += countsize;
+		syscnt->hdr.type = NSTAT_MSG_TYPE_SYSINFO_COUNTS;
+		syscnt->hdr.length = finalsize;
+		syscnt->counts.nstat_sysinfo_len = countsize;
+
 		result = ctl_enqueuedata(control->ncs_kctl,
-		    control->ncs_unit, syscnt, allocsize, CTL_DATA_EOR);
+		    control->ncs_unit, syscnt, finalsize, CTL_DATA_EOR);
 		if (result != 0)
 		{
 			nstat_stats.nstat_sysinfofailures += 1;
@@ -2699,11 +2827,11 @@ nstat_flush_accumulated_msgs(
 	nstat_control_state	*state)
 {
 	errno_t result = 0;
-	if (state->ncs_accumulated && mbuf_len(state->ncs_accumulated))
+	if (state->ncs_accumulated != NULL && mbuf_len(state->ncs_accumulated) > 0)
 	{
 		mbuf_pkthdr_setlen(state->ncs_accumulated, mbuf_len(state->ncs_accumulated));
 		result = ctl_enqueuembuf(state->ncs_kctl, state->ncs_unit, state->ncs_accumulated, CTL_DATA_EOR);
-		if (result != 0 && nstat_debug)
+		if (result != 0)
 		{
 			nstat_stats.nstat_flush_accumulated_msgs_failures++;
 			if (nstat_debug != 0)

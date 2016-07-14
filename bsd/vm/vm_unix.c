@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -103,6 +103,7 @@
 
 int _shared_region_map_and_slide(struct proc*, int, unsigned int, struct shared_file_mapping_np*, uint32_t, user_addr_t, user_addr_t);
 int shared_region_copyin_mappings(struct proc*, user_addr_t, unsigned int, struct shared_file_mapping_np *);
+
 
 #if DEVELOPMENT || DEBUG
 extern int radar_20146450;

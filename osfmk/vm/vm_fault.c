@@ -2886,11 +2886,12 @@ vm_fault_enter(vm_page_t m,
 		} else {
 			/* proceed with the invalid page */
 			kr = KERN_SUCCESS;
-			if (!m->cs_validated) {
+			if (!m->cs_validated &&
+			    !m->object->code_signed) {
 				/*
-				 * This page has not been validated, so it
-				 * must not belong to a code-signed object
-				 * and should not be forcefully considered
+				 * This page has not been (fully) validated but
+				 * does not belong to a code-signed object
+				 * so it should not be forcefully considered
 				 * as tainted.
 				 * We're just concerned about it here because
 				 * we've been asked to "execute" it but that
@@ -2905,7 +2906,6 @@ vm_fault_enter(vm_page_t m,
 				 * even though they're just reading it and not
 				 * executing from it.
 				 */
-				assert(!m->object->code_signed);
 			} else {
 				/*
 				 * Page might have been tainted before or not;

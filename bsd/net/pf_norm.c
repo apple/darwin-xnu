@@ -1666,7 +1666,7 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 			printf("%s: pf_find_mtag returned NULL(1)\n", __func__);
 			if ((pd->pf_mtag = pf_get_mtag(m)) == NULL) {
 				m_freem(m);
-				*m0 = NULL;
+				m = *m0 = NULL;
 				goto no_mem;
 			}
 		}
@@ -1715,7 +1715,7 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 			printf("%s: pf_find_mtag returned NULL(2)\n", __func__);
 			if ((pd->pf_mtag = pf_get_mtag(m)) == NULL) {
 				m_freem(m);
-				*m0 = NULL;
+				m = *m0 = NULL;
 				goto no_mem;
 			}
 		}

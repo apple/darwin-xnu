@@ -284,8 +284,11 @@ typedef struct package_ext_info {
 /* 14 was used for NAMESPACE_HANDLER_GETDATA which has now been
    removed as it is no longer used. */
 
+#define FSIOC_ROUTEFS_SETROUTEID			  _IO('A', 15)
+#define	FSCTL_ROUTEFS_SETROUTEID			  IOCBASECMD(FSIOC_ROUTEFS_SETROUTEID)
+
 //
-// IO commands 15, 16, and 17 are currently unused
+// IO commands 16 and 17 are currently unused
 //
 
 //

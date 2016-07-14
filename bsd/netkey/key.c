@@ -2346,15 +2346,14 @@ key_spdadd(
 	
 #if 1
 	/*
-	 * allow IPv6 over IPv4 tunnels using ESP -
+	 * allow IPv6 over IPv4 or IPv4 over IPv6 tunnels using ESP -
 	 * otherwise reject if inner and outer address families not equal
 	 */
 	if (newsp->req && newsp->req->saidx.src.ss_family) {
 		struct sockaddr *sa;
 		sa = (struct sockaddr *)(src0 + 1);
 		if (sa->sa_family != newsp->req->saidx.src.ss_family) {
-			if (newsp->req->saidx.mode != IPSEC_MODE_TUNNEL || newsp->req->saidx.proto != IPPROTO_ESP
-			    || sa->sa_family != AF_INET6 || newsp->req->saidx.src.ss_family != AF_INET) {
+			if (newsp->req->saidx.mode != IPSEC_MODE_TUNNEL || newsp->req->saidx.proto != IPPROTO_ESP) {
 				keydb_delsecpolicy(newsp);
                 if (internal_if) {
                     ifnet_release(internal_if);
@@ -2368,8 +2367,7 @@ key_spdadd(
 		struct sockaddr *sa;
 		sa = (struct sockaddr *)(dst0 + 1);
 		if (sa->sa_family != newsp->req->saidx.dst.ss_family) {
-			if (newsp->req->saidx.mode != IPSEC_MODE_TUNNEL || newsp->req->saidx.proto != IPPROTO_ESP
-			    || sa->sa_family != AF_INET6 || newsp->req->saidx.dst.ss_family != AF_INET) {
+			if (newsp->req->saidx.mode != IPSEC_MODE_TUNNEL || newsp->req->saidx.proto != IPPROTO_ESP) {
 				keydb_delsecpolicy(newsp);
                 if (internal_if) {
                     ifnet_release(internal_if);

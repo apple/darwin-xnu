@@ -1140,6 +1140,12 @@ tcp_update_ecn_perf_stats(struct tcpcb *tp,
 {
 	u_int64_t curval, oldval;
 	struct inpcb *inp = tp->t_inpcb;
+	stat->total_txpkts += inp->inp_stat->txpackets;
+	stat->total_rxpkts += inp->inp_stat->rxpackets;
+	stat->total_rxmitpkts += tp->t_stat.rxmitpkts;
+	stat->total_oopkts += tp->t_rcvoopack;
+	stat->total_reorderpkts += (tp->t_reordered_pkts + tp->t_pawsdrop +
+	    tp->t_dsack_sent + tp->t_dsack_recvd);
 
 	/* Average RTT */
 	curval = (tp->t_srtt >> TCP_RTT_SHIFT);
@@ -1165,55 +1171,11 @@ tcp_update_ecn_perf_stats(struct tcpcb *tp,
 		}
 	}
 
-	/* Percentage of Out-of-order packets, shift by 10 for precision */
-	curval = (tp->t_rcvoopack << 10);
-	if (inp->inp_stat != NULL && inp->inp_stat->rxpackets > 0 &&
-	    curval > 0) {
-		/* Compute percentage */
-		curval = (curval * 100)/inp->inp_stat->rxpackets;
-		if (stat->oo_percent == 0) {
-			stat->oo_percent = curval;
-		} else {
-			oldval = stat->oo_percent;
-			stat->oo_percent =
-			    ((oldval << 4) - oldval + curval) >> 4;
-		}
-	}
-
 	/* Total number of SACK recovery episodes */
 	stat->sack_episodes += tp->t_sack_recovery_episode;
 
-	/* Percentage of reordered packets, shift by 10 for precision */
-	curval = tp->t_reordered_pkts + tp->t_pawsdrop + tp->t_dsack_sent +
-	    tp->t_dsack_recvd;
-	curval = curval << 10;
-	if (inp->inp_stat != NULL && (inp->inp_stat->rxpackets > 0 ||
-	    inp->inp_stat->txpackets > 0) && curval > 0) {
-		/* Compute percentage */
-		curval = (curval * 100) /
-		    (inp->inp_stat->rxpackets + inp->inp_stat->txpackets);
-		if (stat->reorder_percent == 0) {
-			stat->reorder_percent = curval;
-		} else {
-			oldval = stat->reorder_percent;
-			stat->reorder_percent =
-			    ((oldval << 4) - oldval + curval) >> 4;
-		}
-	}
-
-	/* Percentage of retransmit bytes, shift by 10 for precision */
-	curval = tp->t_stat.txretransmitbytes << 10;
-	if (inp->inp_stat != NULL && inp->inp_stat->txbytes > 0
-	    && curval > 0) {
-		curval = (curval * 100) / inp->inp_stat->txbytes;
-		if (stat->rxmit_percent == 0) {
-			stat->rxmit_percent = curval;
-		} else {
-			oldval = stat->rxmit_percent;
-			stat->rxmit_percent =
-			    ((oldval << 4) - oldval + curval) >> 4;
-		}
-	}
+	if (inp->inp_socket->so_error == ECONNRESET)
+		stat->rst_drop++;
 	return;
 }
 
@@ -1426,6 +1388,8 @@ no_valid_rt:
 				    ecn_peer_nosupport);
 			}
 		}
+	} else {
+		INP_INC_IFNET_STAT(inp, ecn_off_conn);
 	}
 	if (TCP_ECN_ENABLED(tp)) {
 		if (tp->ecn_flags & TE_RECV_ECN_CE) {
@@ -1452,36 +1416,29 @@ no_valid_rt:
 				INP_INC_IFNET_STAT(inp, ecn_conn_plnoce);
 			}
 		}
-
 	}
 
 	/* Aggregate performance stats */
-	if (inp->inp_last_outifp != NULL) {
+	if (inp->inp_last_outifp != NULL && !(tp->t_flags & TF_LOCAL)) {
 		struct ifnet *ifp = inp->inp_last_outifp;
 		ifnet_lock_shared(ifp);
 		if ((ifp->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) ==
 		    IFRF_ATTACHED) {
 			if (inp->inp_vflag & INP_IPV6) {
+				ifp->if_ipv6_stat->timestamp = net_uptime();
 				if (TCP_ECN_ENABLED(tp)) {
-					ifp->if_ipv6_stat->timestamp
-					    = net_uptime();
 					tcp_update_ecn_perf_stats(tp,
 					    &ifp->if_ipv6_stat->ecn_on);
 				} else {
-					ifp->if_ipv6_stat->timestamp
-					    = net_uptime();
 					tcp_update_ecn_perf_stats(tp,
 					    &ifp->if_ipv6_stat->ecn_off);
 				}
 			} else {
+				ifp->if_ipv4_stat->timestamp = net_uptime();
 				if (TCP_ECN_ENABLED(tp)) {
-					ifp->if_ipv4_stat->timestamp
-					    = net_uptime();
 					tcp_update_ecn_perf_stats(tp,
 					    &ifp->if_ipv4_stat->ecn_on);
 				} else {
-					ifp->if_ipv4_stat->timestamp
-					    = net_uptime();
 					tcp_update_ecn_perf_stats(tp,
 					    &ifp->if_ipv4_stat->ecn_off);
 				}
@@ -1754,8 +1711,8 @@ tcpcb_to_otcpcb(struct tcpcb *tp, struct otcpcb *otp)
 	otp->ts_recent = tp->ts_recent;
 	otp->ts_recent_age = tp->ts_recent_age;
 	otp->last_ack_sent = tp->last_ack_sent;
-	otp->cc_send = tp->cc_send;
-	otp->cc_recv = tp->cc_recv;
+	otp->cc_send = 0;
+	otp->cc_recv = 0;
 	otp->snd_recover = tp->snd_recover;
 	otp->snd_cwnd_prev = tp->snd_cwnd_prev;
 	otp->snd_ssthresh_prev = tp->snd_ssthresh_prev;
@@ -1937,8 +1894,8 @@ tcpcb_to_xtcpcb64(struct tcpcb *tp, struct xtcpcb64 *otp)
         otp->ts_recent = tp->ts_recent;
         otp->ts_recent_age = tp->ts_recent_age;
         otp->last_ack_sent = tp->last_ack_sent;
-        otp->cc_send = tp->cc_send;
-        otp->cc_recv = tp->cc_recv;
+        otp->cc_send = 0;
+        otp->cc_recv = 0;
         otp->snd_recover = tp->snd_recover;
         otp->snd_cwnd_prev = tp->snd_cwnd_prev;
         otp->snd_ssthresh_prev = tp->snd_ssthresh_prev;

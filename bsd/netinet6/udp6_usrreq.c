@@ -1012,8 +1012,16 @@ udp6_input_checksum(struct mbuf *m, struct udphdr *uh, int off, int ulen)
 	struct ifnet *ifp = m->m_pkthdr.rcvif;
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 
-	if (uh->uh_sum == 0) {
+	if (!(m->m_pkthdr.csum_flags & CSUM_DATA_VALID) &&
+		uh->uh_sum == 0) {
 		/* UDP/IPv6 checksum is mandatory (RFC2460) */
+
+		/* 
+		 * If checksum was already validated, ignore this check.
+		 * This is necessary for transport-mode ESP, which may be 
+		 * getting UDP payloads without checksums when the network
+		 * has a NAT64.
+		 */
 		udpstat.udps_nosum++;
 		goto badsum;
 	}

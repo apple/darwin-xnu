@@ -682,7 +682,9 @@ if_clone_list(int count, int *ret_total, user_addr_t dst)
 
 	for (ifc = LIST_FIRST(&if_cloners); ifc != NULL && count != 0;
 	     ifc = LIST_NEXT(ifc, ifc_list), count--, dst += IFNAMSIZ) {
-		strlcpy(outbuf, ifc->ifc_name, IFNAMSIZ);
+		bzero(outbuf, sizeof(outbuf));
+		strlcpy(outbuf, ifc->ifc_name,
+		    min(strlen(ifc->ifc_name), IFNAMSIZ));
 		error = copyout(outbuf, dst, IFNAMSIZ);
 		if (error)
 			break;

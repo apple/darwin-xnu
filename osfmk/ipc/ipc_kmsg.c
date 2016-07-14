@@ -1401,6 +1401,8 @@ ipc_kmsg_send(
 		return MACH_MSG_SUCCESS;
 	}
 
+	ipc_voucher_send_preprocessing(kmsg);
+
 	port = (ipc_port_t) kmsg->ikm_header->msgh_remote_port;
 	assert(IP_VALID(port));
 	ip_lock(port);

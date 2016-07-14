@@ -221,6 +221,11 @@ struct	proc {
 	LIST_ENTRY(proc) p_hash;		/* Hash chain. (LL)*/
 	TAILQ_HEAD( ,eventqelt) p_evlist;	/* (PL) */
 
+#if CONFIG_PERSONAS
+	struct persona  *p_persona;
+	LIST_ENTRY(proc) p_persona_list;
+#endif
+
 	lck_mtx_t	p_fdmlock;		/* proc lock to protect fdesc */
 	lck_mtx_t 	p_ucred_mlock;		/* mutex lock to protect p_ucred */
 

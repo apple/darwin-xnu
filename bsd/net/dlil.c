@@ -5701,6 +5701,10 @@ ifnet_detach(ifnet_t ifp)
 	if (dlil_verbose)
 		printf("%s: detaching\n", if_name(ifp));
 
+	/* Reset ECN enable/disable flags */
+	ifp->if_eflags &= ~IFEF_ECN_DISABLE;
+	ifp->if_eflags &= ~IFEF_ECN_ENABLE;
+
 	/*
 	 * Remove ifnet from the ifnet_head, ifindex2ifnet[]; it will
 	 * no longer be visible during lookups from this point.
@@ -7286,7 +7290,7 @@ ifnet_set_log(struct ifnet *ifp, int32_t level, uint32_t flags,
 		 * silently ignore facilities other than ours.
 		 */
 		flags &= IFNET_LOGF_DLIL;
-		if (flags == 0 && (!ifp->if_log.flags & IFNET_LOGF_DLIL))
+		if (flags == 0 && (!(ifp->if_log.flags & IFNET_LOGF_DLIL)))
 			level = 0;
 	}
 

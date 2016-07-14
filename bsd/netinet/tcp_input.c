@@ -3253,7 +3253,7 @@ findpcb:
 			 * has acknowledged immediately.
 			 */
 			if (SEQ_GT(tp->snd_nxt, th->th_ack))
-				tp->snd_nxt = th->th_ack;
+				tp->snd_max = tp->snd_nxt = th->th_ack;
 
 			/*
 			 * If there's data, delay ACK; if there's also a FIN
@@ -3321,7 +3321,10 @@ findpcb:
 				    SEQ_LT(tp->snd_una, th->th_ack)) {
 					tp->t_tfo_stats |= TFO_S_SYN_DATA_ACKED;
 					tcpstat.tcps_tfo_syn_data_acked++;
-
+#if MPTCP
+					if (so->so_flags & SOF_MP_SUBFLOW)
+						so->so_flags1 |= SOF1_TFO_REWIND;
+#endif
 					if (!(tp->t_tfo_flags & TFO_F_NO_RCVPROBING))
 						tcp_tfo_rcv_probe(tp, tlen);
 				}

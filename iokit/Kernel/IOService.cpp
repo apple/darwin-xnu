@@ -643,7 +643,7 @@ void IOService::detach( IOService * provider )
         if( adjParent) provider->_adjustBusy( -1 );
         if( (provider->__state[1] & kIOServiceTermPhase3State)
          && (0 == provider->getClient())) {
-            provider->scheduleFinalize();
+            provider->scheduleFinalize(false);
         }
         provider->unlockForArbitration();
     }
@@ -2188,7 +2188,7 @@ void IOService::scheduleStop( IOService * provider )
     IOLockUnlock( gJobsLock );
 }
 
-void IOService::scheduleFinalize( void )
+void IOService::scheduleFinalize(bool now)
 {
     uint64_t regID1 = getRegistryEntryID();
 
@@ -2199,17 +2199,19 @@ void IOService::scheduleFinalize( void )
 	(uintptr_t) (regID1 >> 32),
 	0, 0);
 
-    IOLockLock( gJobsLock );
-    gIOFinalizeList->tailQ( this );
-
-    if( 0 == gIOTerminateWork++) {
-        if( !gIOTerminateThread)
-	    kernel_thread_start(&terminateThread, (void *) 0, &gIOTerminateThread);
-        else
-            IOLockWakeup(gJobsLock, (event_t) &gIOTerminateWork, /* one-thread */ false );
+    if (now || IOUserClient::finalizeUserReferences(this))
+    {
+	IOLockLock( gJobsLock );
+	gIOFinalizeList->tailQ(this);
+	if( 0 == gIOTerminateWork++)
+	{
+	    if( !gIOTerminateThread)
+		kernel_thread_start(&terminateThread, (void *) 0, &gIOTerminateThread);
+	    else
+		IOLockWakeup(gJobsLock, (event_t) &gIOTerminateWork, /* one-thread */ false );
+	}
+	IOLockUnlock( gJobsLock );
     }
-
-    IOLockUnlock( gJobsLock );
 }
 
 bool IOService::willTerminate( IOService * provider, IOOptionBits options )
@@ -2503,10 +2505,10 @@ void IOService::terminateWorker( IOOptionBits options )
 		    }
 
                     if( 0 == victim->getClient()) {
+
                         // no clients - will go to finalize
-                        IOLockLock( gJobsLock );
-                        gIOFinalizeList->tailQ( victim );
-                        IOLockUnlock( gJobsLock );
+			victim->scheduleFinalize(false);
+
                     } else {
                         _workLoopAction( (IOWorkLoop::Action) &actionWillTerminate,
                                             victim, (void *)(uintptr_t) options, (void *)(uintptr_t) doPhase2List );
@@ -4040,7 +4042,6 @@ OSObject * IOService::copyExistingServices( OSDictionary * matching,
 	    const OSSymbol * sym = OSSymbol::withString(str);
 	    OSMetaClass::applyToInstancesOfClassName(sym, instanceMatch, &ctx);
 	    sym->release();
-
 	}
 	else
 	{
@@ -5073,7 +5074,6 @@ bool IOService::matchInternal(OSDictionary * table, uint32_t options, uint32_t *
     {
 	count = table->getCount();
 	done = 0;
-
 	str = OSDynamicCast(OSString, table->getObject(gIOProviderClassKey));
 
 	if (str) {
@@ -5226,6 +5226,9 @@ bool IOService::matchPassive(OSDictionary * table, uint32_t options)
 
     assert( table );
 
+    OSArray* aliasServiceRegIds = NULL;
+    IOService* foundAlternateService = NULL;
+
 #if MATCH_DEBUG 
     OSDictionary * root = table;
 #endif
@@ -5249,7 +5252,7 @@ bool IOService::matchPassive(OSDictionary * table, uint32_t options)
 
             // do family specific matching
             match = where->matchPropertyTable( table, &score );
-            
+
             if( !match) {
 #if IOMATCHDEBUG
                 if( kIOLogMatch & getDebugFlags( table ))
@@ -5273,7 +5276,6 @@ bool IOService::matchPassive(OSDictionary * table, uint32_t options)
             nextTable = OSDynamicCast(OSDictionary,
                   table->getObject( gIOParentMatchKey ));
             if(nextTable) {
-                
 		// look for a matching entry anywhere up to root
                 match = false;
                 matchParent = true;
@@ -5292,11 +5294,56 @@ bool IOService::matchPassive(OSDictionary * table, uint32_t options)
             break;
         }
         while (true);
+
+        if(match == true) {
+            break;
+        }
+
+        if(matchParent == true) {
+            // check if service has an alias to search its other "parents" if a parent match isn't found
+            OSNumber* alternateRegistryID = OSDynamicCast(OSNumber, where->getProperty(kIOServiceLegacyMatchingRegistryIDKey));
+            if(alternateRegistryID != NULL) {
+                if(aliasServiceRegIds == NULL)
+                {
+                    aliasServiceRegIds = OSArray::withCapacity(sizeof(alternateRegistryID));
+                }
+                aliasServiceRegIds->setObject(alternateRegistryID);
+            }
+        }
+        else {
+            break;
+        }
+
+        where = where->getProvider();
+        if(where == NULL) {
+            // there were no matching parent services, check to see if there are aliased services that have a matching parent
+            if(aliasServiceRegIds != NULL) {
+                unsigned int numAliasedServices = aliasServiceRegIds->getCount();
+                if(numAliasedServices != 0) {
+                    OSNumber* alternateRegistryID = OSDynamicCast(OSNumber, aliasServiceRegIds->getObject(numAliasedServices - 1));
+                    if(alternateRegistryID != NULL) {
+                        OSDictionary* alternateMatchingDict = IOService::registryEntryIDMatching(alternateRegistryID->unsigned64BitValue());
+                        aliasServiceRegIds->removeObject(numAliasedServices - 1);
+                        if(alternateMatchingDict != NULL) {
+                            OSSafeReleaseNULL(foundAlternateService);
+                            foundAlternateService = IOService::copyMatchingService(alternateMatchingDict);
+                            alternateMatchingDict->release();
+                            if(foundAlternateService != NULL) {
+                                where = foundAlternateService;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
-    while( matchParent && (!match) && (where = where->getProvider()) );
+    while( where != NULL );
+
+    OSSafeRelease(foundAlternateService);
+    OSSafeRelease(aliasServiceRegIds);
 
 #if MATCH_DEBUG
-    if (where != this) 
+    if (where != this)
     {
 	OSSerialize * s = OSSerialize::withCapacity(128);
 	root->serialize(s);

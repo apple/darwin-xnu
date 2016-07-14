@@ -100,6 +100,7 @@
 #include <sys/ubc_internal.h>
 #include <sys/disk.h>
 #include <sys/content_protection.h>
+#include <sys/priv.h>
 #include <machine/cons.h>
 #include <machine/limits.h>
 #include <miscfs/specfs/specdev.h>
@@ -117,6 +118,10 @@
 #include <libkern/OSAtomic.h>
 #include <pexpert/pexpert.h>
 #include <IOKit/IOBSD.h>
+
+#if ROUTEFS
+#include <miscfs/routefs/routefs.h>
+#endif /* ROUTEFS */
 
 #if CONFIG_MACF
 #include <security/mac.h>
@@ -231,7 +236,7 @@ enum {
  * Virtual File System System Calls
  */
 
-#if NFSCLIENT || DEVFS
+#if NFSCLIENT || DEVFS || ROUTEFS
 /*
  * Private in-kernel mounting spi (NFS only, not exported)
  */
@@ -681,7 +686,7 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 	/* XXX 3762912 hack to support HFS filesystem 'owner' - filesystem may update later */
 	vfs_setowner(mp, KAUTH_UID_NONE, KAUTH_GID_NONE);
 
-#if NFSCLIENT || DEVFS
+#if NFSCLIENT || DEVFS || ROUTEFS
 	if (kernelmount)
 		mp->mnt_kern_flag |= MNTK_KERNEL_MOUNT;
 	if ((internal_flags & KERNEL_MOUNT_PERMIT_UNMOUNT) != 0)
@@ -3690,6 +3695,10 @@ openbyid_np(__unused proc_t p, struct openbyid_np_args *uap, int *retval)
 	int buflen = MAXPATHLEN;
 	int pathlen = 0;
 	vfs_context_t ctx = vfs_context_current();
+
+	if ((error = priv_check_cred(vfs_context_ucred(ctx), PRIV_VFS_OPEN_BY_ID, 0))) {
+		return (error);
+	}
 
 	if ((error = copyin(uap->fsid, (caddr_t)&fsid, sizeof(fsid)))) {
 		return (error);
@@ -9372,6 +9381,27 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 			}
 			/* mark the argument VP as having been released */
 			*arg_vp = NULL;
+		}
+		break;
+
+		case FSCTL_ROUTEFS_SETROUTEID: {
+#if ROUTEFS
+			char routepath[MAXPATHLEN];
+			size_t len = 0;
+			
+			if ((error = suser(kauth_cred_get(), &(current_proc()->p_acflag)))) {
+				break;
+			}
+			bzero(routepath, MAXPATHLEN);
+			error = copyinstr(udata, &routepath[0], MAXPATHLEN, &len);
+			if (error) {
+				break;
+			}
+			error = routefs_kernel_mount(routepath);
+			if (error) {
+				break;
+			}
+#endif
 		}
 		break;
 

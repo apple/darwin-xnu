@@ -75,9 +75,15 @@ port_name_to_semaphore(
 	assert(IP_VALID(kern_port));
 
 	*semaphorep = convert_port_to_semaphore(kern_port);
+	if (*semaphorep == SEMAPHORE_NULL) {
+		/* the port is valid, but doesn't denote a semaphore */
+		kr = KERN_INVALID_CAPABILITY;
+	} else {
+		kr = KERN_SUCCESS;
+	}
 	ip_unlock(kern_port);
 
-	return KERN_SUCCESS;
+	return kr;
 }
 
 /*

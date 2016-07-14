@@ -26,7 +26,7 @@ DSTROOT?=$(shell /bin/pwd)
 
 ARCH_32_TARGETS := MPMMtest KQMPMMtest KQMPMMtestD
 ARCH_64_TARGETS := MPMMtest_64 KQMPMMtest_64 KQMPMMtest_64D
-TARGETS := $(if $(ARCH_64), $(ARCH_64_TARGETS)) $(if $(ARCH_32), $(ARCH_32_TARGETS))
+TARGETS := MPMMtest_perf.sh $(if $(ARCH_64), $(ARCH_64_TARGETS)) $(if $(ARCH_32), $(ARCH_32_TARGETS))
 
 all:	$(addprefix $(DSTROOT)/, $(TARGETS))
 
@@ -53,6 +53,10 @@ $(DSTROOT)/KQMPMMtestD: KQMPMMtest.c
 $(DSTROOT)/KQMPMMtest_64D: KQMPMMtest.c
 	${CC} ${CFLAGS} ${ARCH_64_FLAGS} -DDIRECT_MSG_RCV=1 -o $(SYMROOT)/$(notdir $@) $?
 	if [ ! -e $@ ]; then ditto $(SYMROOT)/$(notdir $@) $@; fi
+
+$(DSTROOT)/MPMMtest_perf.sh: MPMMtest_run.sh
+	cp $? $@
+	chmod +x $@
 
 clean:
 	rm -rf $(addprefix $(DSTROOT)/,$(TARGETS)) $(addprefix $(SYMROOT)/,$(TARGETS)) $(SYMROOT)/*.dSYM

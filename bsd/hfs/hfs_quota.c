@@ -215,7 +215,7 @@ hfs_chkdq(cp, change, cred, flags)
 
 /*
  * Check for a valid change to a users allocation.
- * Issue an error message if appropriate.
+ * Issue an error message and vfs event if appropriate.
  */
 int
 hfs_chkdqchg(cp, change, cred, type)
@@ -227,7 +227,11 @@ hfs_chkdqchg(cp, change, cred, type)
 	register struct dquot *dq = cp->c_dquot[type];
 	u_int64_t ncurbytes;
 	struct vnode *vp = cp->c_vp ? cp->c_vp : cp->c_rsrc_vp;
-	
+
+	fsid_t fsid;
+	fsid.val[0] = VTOHFS(vp)->hfs_raw_dev;
+	fsid.val[1] = vfs_typenum(VTOVFS(vp));
+
 	dqlock(dq);
 	
 	ncurbytes = dq->dq_curbytes + change;
@@ -242,6 +246,7 @@ hfs_chkdqchg(cp, change, cred, type)
 			    quotatypes[type]);
 #endif
 			dq->dq_flags |= DQ_BLKS;
+			vfs_event_signal(&fsid, VQ_QUOTA, (intptr_t)NULL);
 		}
 		dqunlock(dq);
 
@@ -263,6 +268,7 @@ hfs_chkdqchg(cp, change, cred, type)
 				printf("\nhfs: warning, %s %s\n",
 				    quotatypes[type], "disk quota exceeded");
 #endif
+			vfs_event_signal(&fsid, VQ_QUOTA, (intptr_t)NULL);
 			dqunlock(dq);
 
 			return (0);
@@ -276,6 +282,7 @@ hfs_chkdqchg(cp, change, cred, type)
 				    "disk quota exceeded for too long");
 #endif
 				dq->dq_flags |= DQ_BLKS;
+				vfs_event_signal(&fsid, VQ_QUOTA, (intptr_t)NULL);
 			}
 			dqunlock(dq);
 
@@ -374,6 +381,10 @@ int hfs_isiqchg_allowed(dq, hfsmp, change, cred, type, uid)
 {
 	u_int32_t ncurinodes;
 
+	fsid_t fsid;
+	fsid.val[0] = hfsmp->hfs_raw_dev;
+	fsid.val[1] = vfs_typenum(HFSTOVFS(hfsmp));
+
 	dqlock(dq);
 
 	ncurinodes = dq->dq_curinodes + change;
@@ -384,6 +395,7 @@ int hfs_isiqchg_allowed(dq, hfsmp, change, cred, type, uid)
 		if ((dq->dq_flags & DQ_INODS) == 0 &&
 		    uid == kauth_cred_getuid(cred)) {
 			dq->dq_flags |= DQ_INODS;
+			vfs_event_signal(&fsid, VQ_QUOTA, (intptr_t)NULL);
 		}
 		dqunlock(dq);
 
@@ -399,6 +411,7 @@ int hfs_isiqchg_allowed(dq, hfsmp, change, cred, type, uid)
 		microuptime(&tv);
 		if (dq->dq_curinodes < dq->dq_isoftlimit) {
 			dq->dq_itime = tv.tv_sec + hfsmp->hfs_qfiles[type].qf_itime;
+			vfs_event_signal(&fsid, VQ_QUOTA, (intptr_t)NULL);
 			dqunlock(dq);
 			return (0);
 		}
@@ -406,6 +419,7 @@ int hfs_isiqchg_allowed(dq, hfsmp, change, cred, type, uid)
 			if (((dq->dq_flags & DQ_INODS) == 0) &&
 			    (uid == kauth_cred_getuid(cred))) {
 				dq->dq_flags |= DQ_INODS;
+				vfs_event_signal(&fsid, VQ_QUOTA, (intptr_t)NULL);
 			}
 			dqunlock(dq);
 

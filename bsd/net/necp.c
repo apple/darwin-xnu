@@ -2149,6 +2149,18 @@ necp_policy_unapply(struct necp_session_policy *policy)
 	return (TRUE);
 }
 
+static inline bool
+necp_address_is_valid(struct sockaddr *address)
+{
+	if (address->sa_family == AF_INET) {
+		return (address->sa_len == sizeof(struct sockaddr_in));
+	} else if (address->sa_family == AF_INET6) {
+		return (address->sa_len == sizeof(struct sockaddr_in6));
+	} else {
+		return (FALSE);
+	}
+}
+
 #define	NECP_KERNEL_POLICY_SUBORDER_ID_TUNNEL_CONDITION			0
 #define	NECP_KERNEL_POLICY_SUBORDER_NON_ID_TUNNEL_CONDITION		1
 #define	NECP_KERNEL_POLICY_SUBORDER_ID_CONDITION				2
@@ -2372,6 +2384,10 @@ necp_policy_apply(struct necp_session *session, struct necp_session_policy *poli
 			}
 			case NECP_POLICY_CONDITION_LOCAL_ADDR: {
 				struct necp_policy_condition_addr *address_struct = (struct necp_policy_condition_addr *)(void *)condition_value;
+				if (!necp_address_is_valid(&address_struct->address.sa)) {
+					break;
+				}
+
 				cond_local_prefix = address_struct->prefix;
 				memcpy(&cond_local_start, &address_struct->address, sizeof(address_struct->address));
 				master_condition_mask |= NECP_KERNEL_CONDITION_LOCAL_START;
@@ -2385,6 +2401,10 @@ necp_policy_apply(struct necp_session *session, struct necp_session_policy *poli
 			}
 			case NECP_POLICY_CONDITION_REMOTE_ADDR: {
 				struct necp_policy_condition_addr *address_struct = (struct necp_policy_condition_addr *)(void *)condition_value;
+				if (!necp_address_is_valid(&address_struct->address.sa)) {
+					break;
+				}
+
 				cond_remote_prefix = address_struct->prefix;
 				memcpy(&cond_remote_start, &address_struct->address, sizeof(address_struct->address));
 				master_condition_mask |= NECP_KERNEL_CONDITION_REMOTE_START;
@@ -2398,6 +2418,11 @@ necp_policy_apply(struct necp_session *session, struct necp_session_policy *poli
 			}
 			case NECP_POLICY_CONDITION_LOCAL_ADDR_RANGE: {
 				struct necp_policy_condition_addr_range *address_struct = (struct necp_policy_condition_addr_range *)(void *)condition_value;
+				if (!necp_address_is_valid(&address_struct->start_address.sa) ||
+					!necp_address_is_valid(&address_struct->end_address.sa)) {
+					break;
+				}
+
 				memcpy(&cond_local_start, &address_struct->start_address, sizeof(address_struct->start_address));
 				memcpy(&cond_local_end, &address_struct->end_address, sizeof(address_struct->end_address));
 				master_condition_mask |= NECP_KERNEL_CONDITION_LOCAL_START;
@@ -2411,6 +2436,11 @@ necp_policy_apply(struct necp_session *session, struct necp_session_policy *poli
 			}
 			case NECP_POLICY_CONDITION_REMOTE_ADDR_RANGE: {
 				struct necp_policy_condition_addr_range *address_struct = (struct necp_policy_condition_addr_range *)(void *)condition_value;
+				if (!necp_address_is_valid(&address_struct->start_address.sa) ||
+					!necp_address_is_valid(&address_struct->end_address.sa)) {
+					break;
+				}
+
 				memcpy(&cond_remote_start, &address_struct->start_address, sizeof(address_struct->start_address));
 				memcpy(&cond_remote_end, &address_struct->end_address, sizeof(address_struct->end_address));
 				master_condition_mask |= NECP_KERNEL_CONDITION_REMOTE_START;
@@ -5169,7 +5199,9 @@ necp_socket_fillout_info_locked(struct inpcb *inp, struct sockaddr *override_loc
 	if (necp_kernel_socket_policies_condition_mask & NECP_KERNEL_ADDRESS_TYPE_CONDITIONS) {
 		if (inp->inp_vflag & INP_IPV4) {
 			if (override_local_addr) {
-				memcpy(&info->local_addr, override_local_addr, override_local_addr->sa_len);
+				if (override_local_addr->sa_len <= sizeof(struct sockaddr_in)) {
+					memcpy(&info->local_addr, override_local_addr, override_local_addr->sa_len);
+				}
 			} else {
 				((struct sockaddr_in *)&info->local_addr)->sin_family = AF_INET;
 				((struct sockaddr_in *)&info->local_addr)->sin_len = sizeof(struct sockaddr_in);
@@ -5178,7 +5210,9 @@ necp_socket_fillout_info_locked(struct inpcb *inp, struct sockaddr *override_loc
 			}
 
 			if (override_remote_addr) {
-				memcpy(&info->remote_addr, override_remote_addr, override_remote_addr->sa_len);
+				if (override_remote_addr->sa_len <= sizeof(struct sockaddr_in)) {
+					memcpy(&info->remote_addr, override_remote_addr, override_remote_addr->sa_len);
+				}
 			} else {
 				((struct sockaddr_in *)&info->remote_addr)->sin_family = AF_INET;
 				((struct sockaddr_in *)&info->remote_addr)->sin_len = sizeof(struct sockaddr_in);
@@ -5187,7 +5221,9 @@ necp_socket_fillout_info_locked(struct inpcb *inp, struct sockaddr *override_loc
 			}
 		} else if (inp->inp_vflag & INP_IPV6) {
 			if (override_local_addr) {
-				memcpy(&info->local_addr, override_local_addr, override_local_addr->sa_len);
+				if (override_local_addr->sa_len <= sizeof(struct sockaddr_in6)) {
+					memcpy(&info->local_addr, override_local_addr, override_local_addr->sa_len);
+				}
 			} else {
 				((struct sockaddr_in6 *)&info->local_addr)->sin6_family = AF_INET6;
 				((struct sockaddr_in6 *)&info->local_addr)->sin6_len = sizeof(struct sockaddr_in6);
@@ -5196,7 +5232,9 @@ necp_socket_fillout_info_locked(struct inpcb *inp, struct sockaddr *override_loc
 			}
 
 			if (override_remote_addr) {
-				memcpy(&info->remote_addr, override_remote_addr, override_remote_addr->sa_len);
+				if (override_remote_addr->sa_len <= sizeof(struct sockaddr_in6)) {
+					memcpy(&info->remote_addr, override_remote_addr, override_remote_addr->sa_len);
+				}
 			} else {
 				((struct sockaddr_in6 *)&info->remote_addr)->sin6_family = AF_INET6;
 				((struct sockaddr_in6 *)&info->remote_addr)->sin6_len = sizeof(struct sockaddr_in6);

@@ -334,6 +334,7 @@ struct so_tcdbg {
 #ifdef PRIVATE
 #define	SO_AWDL_UNRESTRICTED 	0x1113  /* try to use AWDL in restricted mode */
 #define SO_EXTENDED_BK_IDLE	0x1114	/* extended time to keep socket idle after app is suspended (int) */
+#define	SO_MARK_CELLFALLBACK	0x1115	/* Mark as initiated by cell fallback */
 #endif /* PRIVATE */
 
 typedef __uint32_t sae_associd_t;

@@ -106,6 +106,9 @@
 #include <sys/shm_internal.h>	/* shmexit */
 #endif
 #include <sys/acct.h>		/* acct_process */
+#if CONFIG_PERSONAS
+#include <sys/persona.h>
+#endif
 
 #include <security/audit/audit.h>
 #include <bsm/audit_kevents.h>
@@ -471,7 +474,7 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 	                     TASK_POLICY_TERMINATED, TASK_POLICY_ENABLE);
 
         proc_lock(p);
-	error = proc_transstart(p, 1, ((jetsam_flags & P_JETSAM_VNODE) ? 1 : 0));
+	error = proc_transstart(p, 1, (((jetsam_flags & P_JETSAM_MASK) == P_JETSAM_VNODE) ? 1 : 0));
 	if (error == EDEADLK) {
 		/* Temp: If deadlock error, then it implies multithreaded exec is
 		 * in progress. Instread of letting exit continue and 
@@ -1316,7 +1319,13 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 	 * and refernce is dropped after these calls down below
 	 * (locking protection is provided by list lock held in chgproccnt)
 	 */
-
+#if CONFIG_PERSONAS
+	/*
+	 * persona_proc_drop calls chgproccnt(-1) on the persona uid,
+	 * and (+1) on the child->p_ucred uid
+	 */
+	persona_proc_drop(child);
+#endif
 	(void)chgproccnt(kauth_cred_getruid(child->p_ucred), -1);
 
 	/*

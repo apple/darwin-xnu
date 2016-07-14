@@ -10,12 +10,14 @@ include $(MakeInc_def)
 INSTINC_SUBDIRS = \
 	devfs \
 	fifofs \
+	routefs \
 	specfs \
 	union
 
 EXPINC_SUBDIRS = \
 	devfs \
 	fifofs \
+	routefs \
 	specfs \
 	union
 

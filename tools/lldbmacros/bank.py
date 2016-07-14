@@ -3,18 +3,18 @@ from utils import *
 
 
 @lldb_type_summary(['bank_element', 'bank_element_t'])
-@header("{0: <20s} {1: <16s} {2: <16s} {3: <16s} {4: <16s} {5: <20s} {6: <20s}".format("bank_element", "type", "ref_count", "sync", "pid", "task", "process_name"))
+@header("{0: <20s} {1: <16s} {2: <16s} {3: <16s} {4: <20s} {5: <20s}".format("bank_element", "type", "ref_count", "sync", "task", "process_name"))
 def GetBankElementSummary(bank_element):
     """ Summarizes the bank element
         params: bank_element = value of the object of type bank_element_t
         returns: String with summary of the type.
     """
-    format_str = "{0: <#020x} {1: <16s} {2: <16d} {3: <16d} {4: <16d}"
+    format_str = "{0: <#020x} {1: <16s} {2: <16d} {3: <16d}"
 
     if bank_element.be_type == 0:
-      out_string = format_str.format(bank_element, "BANK_TASK", unsigned(bank_element.be_refs), unsigned(bank_element.be_made), bank_element.be_pid)
+      out_string = format_str.format(bank_element, "BANK_TASK", unsigned(bank_element.be_refs), unsigned(bank_element.be_made))
     else:
-      out_string = format_str.format(bank_element, "BANK_ACCOUNT", unsigned(bank_element.be_refs), unsigned(bank_element.be_made), bank_element.be_pid)
+      out_string = format_str.format(bank_element, "BANK_ACCOUNT", unsigned(bank_element.be_refs), unsigned(bank_element.be_made))
 
     #if DEVELOPMENT
     format_str = "{0: <#020x} {1: <20s}"
@@ -26,15 +26,15 @@ def GetBankElementSummary(bank_element):
 
 
 @lldb_type_summary(['bank_task', 'bank_task_t'])
-@header("{0: <20s} {1: <16s} {2: <20s} {3: <16s} {4: <16s} {5: <20s} {6: <20s}".format("bank_task", "pid", "ledger", "ref_count", "sync", "task", "process_name"))
+@header("{0: <20s} {1: <16s} {2: <20s} {3: <16s} {4: <16s} {5: <16s} {6: <16s} {7: <16s} {8: <20s} {9: <20s}".format("bank_task", "pid", "ledger", "ref_count", "sync", "persona id", "uid", "gid", "task", "process_name"))
 def GetBankTaskSummary(bank_task):
     """ Summarizes the bank task
         params: bank_task = value of the object of type bank_task_t
         returns: String with summary of the type.
     """
 
-    format_str = "{0: <#020x} {1: <16d} {2: <#020x} {3: <16d} {4: <16d}"
-    out_string = format_str.format(bank_task, bank_task.bt_elem.be_pid, bank_task.bt_creditcard, unsigned(bank_task.bt_elem.be_refs), unsigned(bank_task.bt_elem.be_made))
+    format_str = "{0: <#020x} {1: <16d} {2: <#020x} {3: <16d} {4: <16d} {5: <16d} {6: <16d} {7: <16d}"
+    out_string = format_str.format(bank_task, bank_task.bt_proc_persona.pid, bank_task.bt_creditcard, unsigned(bank_task.bt_elem.be_refs), unsigned(bank_task.bt_elem.be_made), bank_task.bt_proc_persona.persona_id, bank_task.bt_proc_persona.uid, bank_task.bt_proc_persona.gid)
 
     #if DEVELOPMENT
     format_str = "{0: <#020x} {1: <20s}"
@@ -45,15 +45,15 @@ def GetBankTaskSummary(bank_task):
 
 
 @lldb_type_summary(['bank_account', 'bank_account_t'])
-@header("{0: <20s} {1: <16s} {2: <16s} {3: <20s} {4: <16s} {5: <16s} {6: <20s} {7: <20s} {8: <20s} {9: <20s}".format("bank_account", "holder_pid", "merchant_pid", "chit_ledger", "ref_count", "sync", "holder_task", "holder_process", "merchant_task", "merchant_process"))
+@header("{0: <20s} {1: <16s} {2: <16s} {3: <16s} {4: <16s} {5: <20s} {6: <16s} {7: <16s} {8: <20s} {9: <20s} {10: <20s} {11: <20s}".format("bank_account", "holder_pid", "merchant_pid", "secure_orig", "proximal_pid", "chit_ledger", "ref_count", "sync", "holder_task", "holder_process", "merchant_task", "merchant_process"))
 def GetBankAccountSummary(bank_account):
     """ Summarizes the bank account
         params: bank_task = value of the object of type bank_account_t
         returns: String with summary of the type.
     """
 
-    format_str = "{0: <#020x} {1: <16d} {2: <16d} {3: <#020x} {4: <16d} {5: <16d}"
-    out_string = format_str.format(bank_account, bank_account.ba_holder.bt_elem.be_pid, bank_account.ba_merchant.bt_elem.be_pid, bank_account.ba_bill, unsigned(bank_account.ba_elem.be_refs), unsigned(bank_account.ba_elem.be_made))
+    format_str = "{0: <#020x} {1: <16d} {2: <16d} {3: <16d} {4: <16d} {5: <#020x} {6: <16d} {7: <16d}"
+    out_string = format_str.format(bank_account, bank_account.ba_holder.bt_proc_persona.pid, bank_account.ba_merchant.bt_proc_persona.pid, bank_account.ba_secureoriginator.bt_proc_persona.pid, bank_account.ba_proximateprocess.bt_proc_persona.pid,bank_account.ba_bill, unsigned(bank_account.ba_elem.be_refs), unsigned(bank_account.ba_elem.be_made))
 
     #if DEVELOPMENT
     format_str = "{0: <#020x} {1: <20s}"

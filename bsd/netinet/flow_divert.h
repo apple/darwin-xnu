@@ -48,11 +48,14 @@ struct flow_divert_pcb {
     uint32_t						control_group_unit;
     int32_t							ref_count;
     uint32_t						bytes_written_by_app;
-	uint32_t						bytes_read_by_app;
+    uint32_t						bytes_read_by_app;
     uint32_t						bytes_sent;
     uint32_t						bytes_received;
-	uint8_t							log_level;
+    uint8_t							log_level;
     SLIST_ENTRY(flow_divert_pcb)	tmp_list_entry;
+    mbuf_t							connect_packet;
+    uint8_t							*app_data;
+    size_t							app_data_length;
 };
 
 RB_HEAD(fd_pcb_tree, flow_divert_pcb);

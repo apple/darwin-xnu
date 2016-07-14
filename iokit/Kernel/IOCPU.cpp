@@ -35,6 +35,7 @@
 extern "C" {
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
+#include <kern/cpu_number.h>
 }
 
 #include <machine/machine_routines.h>
@@ -431,17 +432,19 @@ void IOCPUSleepKernel(void)
         if (target->getCPUNumber() == kBootCPUNumber) 
         {
             bootCPU = target;
-        } else if (target->getCPUState() == kIOCPUStateRunning) 
+        } else if (target->getCPUState() == kIOCPUStateRunning)
         {
-            target->haltCPU();
+	  target->haltCPU();
         }
     }
+
+    assert(bootCPU != NULL);
+    assert(cpu_number() == 0);
 
     rootDomain->tracePoint( kIOPMTracePointSleepPlatformDriver );
 
     // Now sleep the boot CPU.
-    if (bootCPU)
-        bootCPU->haltCPU();
+    bootCPU->haltCPU();
 
     rootDomain->tracePoint( kIOPMTracePointWakePlatformActions );
 
@@ -544,31 +547,10 @@ OSObject *IOCPU::getProperty(const OSSymbol *aKey) const
 
 bool IOCPU::setProperty(const OSSymbol *aKey, OSObject *anObject)
 {
-  OSString *stateStr;
-  
   if (aKey == gIOCPUStateKey) {
-    stateStr = OSDynamicCast(OSString, anObject);
-    if (stateStr == 0) return false;
-    
-    if (_cpuNumber == 0) return false;
-    
-    if (stateStr->isEqualTo("running")) {
-      if (_cpuState == kIOCPUStateStopped) {
-	processor_start(machProcessor);
-      } else if (_cpuState != kIOCPUStateRunning) {
-	return false;
-      }
-    } else if (stateStr->isEqualTo("stopped")) {
-      if (_cpuState == kIOCPUStateRunning) {
-        haltCPU();
-      } else if (_cpuState != kIOCPUStateStopped) {
-        return false;
-      }
-    } else return false;
-    
-    return true;
+    return false;
   }
-  
+
   return super::setProperty(aKey, anObject);
 }
 

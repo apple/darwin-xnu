@@ -1839,7 +1839,7 @@ sbdrop(struct sockbuf *sb, int len)
 	    ((SOCK_CHECK_DOM(sb->sb_so, PF_MULTIPATH)) &&
 	    (SOCK_CHECK_PROTO(sb->sb_so, IPPROTO_TCP)))) &&
 	    (!(sb->sb_so->so_flags1 & SOF1_POST_FALLBACK_SYNC))) {
-		mptcp_preproc_sbdrop(m, (unsigned int)len);
+		mptcp_preproc_sbdrop(sb->sb_so, m, (unsigned int)len);
 	}
 #endif /* MPTCP */
 	KERNEL_DEBUG((DBG_FNC_SBDROP | DBG_FUNC_START), sb, len, 0, 0, 0);

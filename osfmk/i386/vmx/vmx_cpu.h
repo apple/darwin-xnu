@@ -62,7 +62,7 @@ typedef struct vmx_cpu {
 
 void vmx_init(void);
 void vmx_cpu_init(void);
-void vmx_resume(void);
+void vmx_resume(boolean_t is_wake_from_hibernate);
 void vmx_suspend(void);
 
 #define VMX_BASIC_TRUE_CTLS					(1ull << 55)

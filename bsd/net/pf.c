@@ -9439,52 +9439,56 @@ done:
 	*m0 = pd.mp;
 	PF_APPLE_UPDATE_PDESC_IPv4();
 
-	if (action == PF_PASS && h->ip_hl > 5 &&
-	    !((s && s->allow_opts) || r->allow_opts)) {
-		action = PF_DROP;
-		REASON_SET(&reason, PFRES_IPOPTIONS);
-		log = 1;
-		DPFPRINTF(PF_DEBUG_MISC,
-		    ("pf: dropping packet with ip options [hlen=%u]\n",
-		    (unsigned int) h->ip_hl));
-	}
-
-	if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid) ||
-	    (pd.pktflags & PKTF_FLOW_ID))
-		(void) pf_tag_packet(m, pd.pf_mtag, s ? s->tag : 0,
-		    r->rtableid, &pd);
-
-	if (action == PF_PASS) {
-#if PF_ALTQ
-		if (altq_allowed && r->qid) {
-			if (pqid || (pd.tos & IPTOS_LOWDELAY))
-				pd.pf_mtag->pftag_qid = r->pqid;
-			else
-				pd.pf_mtag->pftag_qid = r->qid;
+	if (action != PF_DROP) {
+		if (action == PF_PASS && h->ip_hl > 5 &&
+		    !((s && s->allow_opts) || r->allow_opts)) {
+			action = PF_DROP;
+			REASON_SET(&reason, PFRES_IPOPTIONS);
+			log = 1;
+			DPFPRINTF(PF_DEBUG_MISC,
+			    ("pf: dropping packet with ip options [hlen=%u]\n",
+			    (unsigned int) h->ip_hl));
 		}
+
+		if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid) ||
+		    (pd.pktflags & PKTF_FLOW_ID))
+			(void) pf_tag_packet(m, pd.pf_mtag, s ? s->tag : 0,
+			    r->rtableid, &pd);
+
+		if (action == PF_PASS) {
+#if PF_ALTQ
+			if (altq_allowed && r->qid) {
+				if (pqid || (pd.tos & IPTOS_LOWDELAY))
+					pd.pf_mtag->pftag_qid = r->pqid;
+				else
+					pd.pf_mtag->pftag_qid = r->qid;
+			}
 #endif /* PF_ALTQ */
 #if PF_ECN
-		/* add hints for ecn */
-		pd.pf_mtag->pftag_hdr = h;
-		/* record address family */
-		pd.pf_mtag->pftag_flags &= ~PF_TAG_HDR_INET6;
-		pd.pf_mtag->pftag_flags |= PF_TAG_HDR_INET;
+			/* add hints for ecn */
+			pd.pf_mtag->pftag_hdr = h;
+			/* record address family */
+			pd.pf_mtag->pftag_flags &= ~PF_TAG_HDR_INET6;
+			pd.pf_mtag->pftag_flags |= PF_TAG_HDR_INET;
 #endif /* PF_ECN */
-		/* record protocol */
-		m->m_pkthdr.pkt_proto = pd.proto;
-	}
+			/* record protocol */
+			m->m_pkthdr.pkt_proto = pd.proto;
 
-	/*
-	 * connections redirected to loopback should not match sockets
-	 * bound specifically to loopback due to security implications,
-	 * see tcp_input() and in_pcblookup_listen().
-	 */
-	if (dir == PF_IN && action == PF_PASS && (pd.proto == IPPROTO_TCP ||
-	    pd.proto == IPPROTO_UDP) && s != NULL && s->nat_rule.ptr != NULL &&
-	    (s->nat_rule.ptr->action == PF_RDR ||
-	    s->nat_rule.ptr->action == PF_BINAT) &&
-	    (ntohl(pd.dst->v4.s_addr) >> IN_CLASSA_NSHIFT) == IN_LOOPBACKNET)
-		pd.pf_mtag->pftag_flags |= PF_TAG_TRANSLATE_LOCALHOST;
+			/*
+			 * connections redirected to loopback should not match sockets
+			 * bound specifically to loopback due to security implications,
+			 * see tcp_input() and in_pcblookup_listen().
+			 */
+			if (dir == PF_IN && (pd.proto == IPPROTO_TCP ||
+						pd.proto == IPPROTO_UDP) && s != NULL &&
+					s->nat_rule.ptr != NULL &&
+					(s->nat_rule.ptr->action == PF_RDR ||
+					 s->nat_rule.ptr->action == PF_BINAT) &&
+					(ntohl(pd.dst->v4.s_addr) >> IN_CLASSA_NSHIFT)
+					== IN_LOOPBACKNET)
+				pd.pf_mtag->pftag_flags |= PF_TAG_TRANSLATE_LOCALHOST;
+		}
+	}
 
 	if (log) {
 		struct pf_rule *lr;
@@ -10051,46 +10055,49 @@ done:
 	}
 
 	/* handle dangerous IPv6 extension headers. */
-	if (action == PF_PASS && rh_cnt &&
-	    !((s && s->allow_opts) || r->allow_opts)) {
-		action = PF_DROP;
-		REASON_SET(&reason, PFRES_IPOPTIONS);
-		log = 1;
-		DPFPRINTF(PF_DEBUG_MISC,
-		    ("pf: dropping packet with dangerous v6 headers\n"));
-	}
-
-	if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid) ||
-	    (pd.pktflags & PKTF_FLOW_ID))
-		(void) pf_tag_packet(m, pd.pf_mtag, s ? s->tag : 0,
-		    r->rtableid, &pd);
-
-	if (action == PF_PASS) {
-#if PF_ALTQ
-		if (altq_allowed && r->qid) {
-			if (pd.tos & IPTOS_LOWDELAY)
-				pd.pf_mtag->pftag_qid = r->pqid;
-			else
-				pd.pf_mtag->pftag_qid = r->qid;
+	if (action != PF_DROP) {
+		if (action == PF_PASS && rh_cnt &&
+		    !((s && s->allow_opts) || r->allow_opts)) {
+			action = PF_DROP;
+			REASON_SET(&reason, PFRES_IPOPTIONS);
+			log = 1;
+			DPFPRINTF(PF_DEBUG_MISC,
+			    ("pf: dropping packet with dangerous v6 headers\n"));
 		}
+
+		if ((s && s->tag) || PF_RTABLEID_IS_VALID(r->rtableid) ||
+		    (pd.pktflags & PKTF_FLOW_ID))
+			(void) pf_tag_packet(m, pd.pf_mtag, s ? s->tag : 0,
+			    r->rtableid, &pd);
+
+		if (action == PF_PASS) {
+#if PF_ALTQ
+			if (altq_allowed && r->qid) {
+				if (pd.tos & IPTOS_LOWDELAY)
+					pd.pf_mtag->pftag_qid = r->pqid;
+				else
+					pd.pf_mtag->pftag_qid = r->qid;
+			}
 #endif /* PF_ALTQ */
 #if PF_ECN
-		/* add hints for ecn */
-		pd.pf_mtag->pftag_hdr = h;
-		/* record address family */
-		pd.pf_mtag->pftag_flags &= ~PF_TAG_HDR_INET;
-		pd.pf_mtag->pftag_flags |= PF_TAG_HDR_INET6;
+			/* add hints for ecn */
+			pd.pf_mtag->pftag_hdr = h;
+			/* record address family */
+			pd.pf_mtag->pftag_flags &= ~PF_TAG_HDR_INET;
+			pd.pf_mtag->pftag_flags |= PF_TAG_HDR_INET6;
 #endif /* PF_ECN */
-		/* record protocol */
-		m->m_pkthdr.pkt_proto = pd.proto;
+			/* record protocol */
+			m->m_pkthdr.pkt_proto = pd.proto;
+			if (dir == PF_IN && (pd.proto == IPPROTO_TCP ||
+			    pd.proto == IPPROTO_UDP) && s != NULL &&
+			    s->nat_rule.ptr != NULL &&
+			    (s->nat_rule.ptr->action == PF_RDR ||
+			     s->nat_rule.ptr->action == PF_BINAT) &&
+			    IN6_IS_ADDR_LOOPBACK(&pd.dst->v6))
+				pd.pf_mtag->pftag_flags |= PF_TAG_TRANSLATE_LOCALHOST;
+		}
 	}
 
-	if (dir == PF_IN && action == PF_PASS && (pd.proto == IPPROTO_TCP ||
-	    pd.proto == IPPROTO_UDP) && s != NULL && s->nat_rule.ptr != NULL &&
-	    (s->nat_rule.ptr->action == PF_RDR ||
-	    s->nat_rule.ptr->action == PF_BINAT) &&
-	    IN6_IS_ADDR_LOOPBACK(&pd.dst->v6))
-		pd.pf_mtag->pftag_flags |= PF_TAG_TRANSLATE_LOCALHOST;
 
 	if (log) {
 		struct pf_rule *lr;

@@ -1103,13 +1103,13 @@ void lck_rw_clear_promotion(thread_t thread)
 			/* Thread still has a mutex promotion */
 		} else if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_DEMOTE) | DBG_FUNC_NONE,
-							      thread->sched_pri, DEPRESSPRI, 0, 0, 0);
-			
+			                      (uintptr_t)thread_tid(thread), thread->sched_pri, DEPRESSPRI, 0, 0);
+
 			set_sched_pri(thread, DEPRESSPRI);
 		} else {
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_DEMOTE) | DBG_FUNC_NONE,
-								  thread->sched_pri, thread->base_pri, 0, 0, 0);
-			
+			                      (uintptr_t)thread_tid(thread), thread->sched_pri, thread->base_pri, 0, 0);
+
 			thread_recompute_sched_pri(thread, FALSE);
 		}
 	}

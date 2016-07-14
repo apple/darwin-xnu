@@ -82,14 +82,14 @@
 #include <vm/vm_protos.h> 
 #include <IOKit/IOReturn.h>	/* for kIOReturnNotPrivileged */
 
+#include <os/overflow.h>
+
 /*
  * XXX vm/pmap.h should not treat these prototypes as MACH_KERNEL_PRIVATE
  * when KERNEL is defined.
  */
 extern pmap_t	pmap_create(ledger_t ledger, vm_map_size_t size,
 				boolean_t is_64bit);
-
-extern kern_return_t machine_thread_neon_state_initialize(thread_t thread);
 
 /* XXX should have prototypes in a shared header file */
 extern int	get_map_nentries(vm_map_t);
@@ -118,7 +118,9 @@ static load_result_t load_result_null = {
 	.uuid = { 0 },
 	.min_vm_addr = MACH_VM_MAX_ADDRESS,
 	.max_vm_addr = MACH_VM_MIN_ADDRESS,
-	.cs_end_offset = 0
+	.cs_end_offset = 0,
+	.threadstate = NULL,
+	.threadstate_sz = 0
 };
 
 /*
@@ -201,7 +203,8 @@ static load_return_t
 load_threadstate(
 	thread_t		thread,
 	uint32_t	*ts,
-	uint32_t	total_size
+	uint32_t	total_size,
+	load_result_t *
 );
 
 static load_return_t
@@ -296,7 +299,7 @@ load_machfile(
 	struct image_params	*imgp,
 	struct mach_header	*header,
 	thread_t 		thread,
-	vm_map_t 		new_map,
+	vm_map_t 		*mapp,
 	load_result_t		*result
 )
 {
@@ -304,11 +307,9 @@ load_machfile(
 	off_t			file_offset = imgp->ip_arch_offset;
 	off_t			macho_size = imgp->ip_arch_size;
 	off_t			file_size = imgp->ip_vattr->va_data_size;
-	
+	vm_map_t		new_map = *mapp;
 	pmap_t			pmap = 0;	/* protected by create_map */
 	vm_map_t		map;
-	vm_map_t		old_map;
-	task_t			old_task = TASK_NULL; /* protected by create_map */
 	load_result_t		myresult;
 	load_return_t		lret;
 	boolean_t create_map = FALSE;
@@ -326,7 +327,6 @@ load_machfile(
 
 	if (new_map == VM_MAP_NULL) {
 		create_map = TRUE;
-		old_task = current_task();
 	}
 
 	/*
@@ -337,7 +337,6 @@ load_machfile(
 	 */
 	if (spawn) {
 		create_map = TRUE;
-		old_task = get_threadtask(thread);
 	}
 
 	if (create_map) {
@@ -431,22 +430,13 @@ load_machfile(
 		}
 	}
 
-	/*
-	 *	Commit to new map.
-	 *
-	 *	Swap the new map for the old, which  consumes our new map
-	 *	reference but each leaves us responsible for the old_map reference.
-	 *	That lets us get off the pmap associated with it, and
-	 *	then we can release it.
-	 */
-
-	 if (create_map) {
+	if (create_map) {
 		/*
 		 * If this is an exec, then we are going to destroy the old
 		 * task, and it's correct to halt it; if it's spawn, the
 		 * task is not yet running, and it makes no sense.
 		 */
-	 	if (!spawn) {
+		if (!spawn) {
 			/*
 			 * Mark the task as halting and start the other
 			 * threads towards terminating themselves.  Then
@@ -478,8 +468,7 @@ load_machfile(
 			kqueue_dealloc(p->p_wqkqueue);
 			p->p_wqkqueue = NULL;
 		}
-		old_map = swap_task_map(old_task, thread, map, !spawn);
-		vm_map_deallocate(old_map);
+		*mapp = map;
 	}
 	return(LOAD_SUCCESS);
 }
@@ -1527,13 +1516,6 @@ load_main(
 	/* kernel does *not* use entryoff from LC_MAIN.	 Dyld uses it. */
 	result->needs_dynlinker = TRUE;
 	result->using_lcmain = TRUE;
-
-	ret = thread_state_initialize( thread );
-	if (ret != KERN_SUCCESS) {
-		return(LOAD_FAILURE);
-	}
-
-
 	result->unixproc = TRUE;
 	result->thread_count++;
 
@@ -1604,12 +1586,11 @@ load_unixthread(
 	result->entry_point += slide;
 
 	ret = load_threadstate(thread,
-		       (uint32_t *)(((vm_offset_t)tcp) + 
-		       		sizeof(struct thread_command)),
-		       tcp->cmdsize - sizeof(struct thread_command));
+		       (uint32_t *)(((vm_offset_t)tcp) + sizeof(struct thread_command)),
+		       tcp->cmdsize - sizeof(struct thread_command),
+		       result);
 	if (ret != LOAD_SUCCESS)
 		return (ret);
-
 
 	result->unixproc = TRUE;
 	result->thread_count++;
@@ -1622,72 +1603,56 @@ load_return_t
 load_threadstate(
 	thread_t	thread,
 	uint32_t	*ts,
-	uint32_t	total_size
+	uint32_t	total_size,
+	load_result_t	*result
 )
 {
-	kern_return_t	ret;
 	uint32_t	size;
 	int		flavor;
 	uint32_t	thread_size;
-	uint32_t	*local_ts;
-	uint32_t	local_ts_size;
+	uint32_t        *local_ts = NULL;
+	uint32_t        local_ts_size = 0;
+	int		ret;
 
-	local_ts = NULL;
-	local_ts_size = 0;
+	(void)thread;
 
-	ret = thread_state_initialize( thread );
-	if (ret != KERN_SUCCESS) {
-		ret = LOAD_FAILURE;
-		goto done;
-	}
-    
 	if (total_size > 0) {
 		local_ts_size = total_size;
 		local_ts = kalloc(local_ts_size);
 		if (local_ts == NULL) {
-			ret = LOAD_FAILURE;
-			goto done;
+			return LOAD_FAILURE;
 		}
 		memcpy(local_ts, ts, local_ts_size);
 		ts = local_ts;
 	}
 
 	/*
-	 * Set the new thread state; iterate through the state flavors in
-	 * the mach-o file.
+	 * Validate the new thread state; iterate through the state flavors in
+	 * the Mach-O file.
+	 * XXX: we should validate the machine state here, to avoid failing at
+	 * activation time where we can't bail out cleanly.
 	 */
 	while (total_size > 0) {
 		flavor = *ts++;
 		size = *ts++;
-		if (UINT32_MAX-2 < size ||
-		    UINT32_MAX/sizeof(uint32_t) < size+2) {
+
+		if (os_add_overflow(size, UINT32_C(2), &thread_size) ||
+		    os_mul_overflow(thread_size, (uint32_t)sizeof(uint32_t), &thread_size) ||
+		    os_sub_overflow(total_size, thread_size, &total_size)) {
 			ret = LOAD_BADMACHO;
-			goto done;
+			goto bad;
 		}
-		thread_size = (size+2)*sizeof(uint32_t);
-		if (thread_size > total_size) {
-			ret = LOAD_BADMACHO;
-			goto done;
-		}
-		total_size -= thread_size;
-		/*
-		 * Third argument is a kernel space pointer; it gets cast
-		 * to the appropriate type in machine_thread_set_state()
-		 * based on the value of flavor.
-		 */
-		ret = thread_setstatus(thread, flavor, (thread_state_t)ts, size);
-		if (ret != KERN_SUCCESS) {
-			ret = LOAD_FAILURE;
-			goto done;
-		}
+
 		ts += size;	/* ts is a (uint32_t *) */
 	}
-	ret = LOAD_SUCCESS;
 
-done:
-	if (local_ts != NULL) {
+	result->threadstate = local_ts;
+	result->threadstate_sz = local_ts_size;
+	return LOAD_SUCCESS;
+
+bad:
+	if (local_ts) {
 		kfree(local_ts, local_ts_size);
-		local_ts = NULL;
 	}
 	return ret;
 }
@@ -1916,7 +1881,14 @@ load_dylinker(
 		}
 	}
 
-	if (ret == LOAD_SUCCESS) {		
+	if (ret == LOAD_SUCCESS) {
+		if (result->threadstate) {
+			/* don't use the app's threadstate if we have a dyld */
+			kfree(result->threadstate, result->threadstate_sz);
+		}
+		result->threadstate = myresult->threadstate;
+		result->threadstate_sz = myresult->threadstate_sz;
+
 		result->dynlinker = TRUE;
 		result->entry_point = myresult->entry_point;
 		result->validentry = myresult->validentry;

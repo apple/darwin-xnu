@@ -200,9 +200,10 @@ int 		sched_pri_decay_band_limit = DEFAULT_DECAY_BAND_LIMIT;
 uint64_t timer_deadline_tracking_bin_1;
 uint64_t timer_deadline_tracking_bin_2;
 
+#endif /* CONFIG_SCHED_TIMESHARE_CORE */
+
 thread_t sched_maintenance_thread;
 
-#endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
 uint64_t	sched_one_second_interval;
 
@@ -478,6 +479,7 @@ sched_timeshare_timebase_init(void)
 	assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
 	sched_telemetry_interval = (uint32_t)abstime;
 #endif
+
 }
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
@@ -2736,6 +2738,14 @@ thread_block_reason(
 	/* We're handling all scheduling AST's */
 	ast_off(AST_SCHEDULING);
 
+#if PROC_REF_DEBUG
+	if ((continuation != NULL) && (self->task != kernel_task)) {
+		if (uthread_get_proc_refcount(self->uthread) != 0) {
+			panic("thread_block_reason with continuation uthread %p with uu_proc_refcount != 0", self->uthread);
+		}
+	}
+#endif
+
 	self->continuation = continuation;
 	self->parameter = parameter;
 
@@ -3951,14 +3961,14 @@ set_sched_pri(
 		removed_from_runq = thread_run_queue_remove(thread);
 	}
 
+	thread->sched_pri = priority;
+
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHANGE_PRIORITY),
 	                      (uintptr_t)thread_tid(thread),
 	                      thread->base_pri,
 	                      thread->sched_pri,
 	                      0, /* eventually, 'reason' */
 	                      0);
-
-	thread->sched_pri = priority;
 
 	if (is_current_thread) {
 		nurgency = thread_get_urgency(thread, &urgency_param1, &urgency_param2);
@@ -4406,6 +4416,7 @@ sched_startup(void)
 
 	simple_lock_init(&sched_vm_group_list_lock, 0);
 
+
 	result = kernel_thread_start_priority((thread_continue_t)sched_init_thread,
 	    (void *)SCHED(maintenance_continuation), MAXPRI_KERNEL, &thread);
 	if (result != KERN_SUCCESS)
@@ -4515,6 +4526,7 @@ sched_timeshare_maintenance_continue(void)
 	 */
 	sched_vm_group_maintenance();
 
+
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_MAINTENANCE)|DBG_FUNC_END,
 						  sched_pri_shift,
 						  sched_background_pri_shift,
@@ -4584,7 +4596,10 @@ sched_init_thread(void (*continuation)(void))
 {
 	thread_block(THREAD_CONTINUE_NULL);
 
-	sched_maintenance_thread = current_thread();
+	thread_t thread = current_thread();
+
+	sched_maintenance_thread = thread;
+
 	continuation();
 
 	/*NOTREACHED*/

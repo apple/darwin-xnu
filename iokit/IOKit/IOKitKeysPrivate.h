@@ -110,4 +110,6 @@ enum {
     kIOClassNameOverrideNone = 0x00000001,
 };
 
+#define kIOServiceLegacyMatchingRegistryIDKey "IOServiceLegacyMatchingRegistryID"
+
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

@@ -93,7 +93,9 @@
 #include <sys/acct.h>
 #include <sys/codesign.h>
 #include <sys/sysproto.h>
-
+#if CONFIG_PERSONAS
+#include <sys/persona.h>
+#endif
 #if CONFIG_DTRACE
 /* Do not include dtrace.h, it redefines kmem_[alloc/free] */
 extern void dtrace_fasttrap_fork(proc_t, proc_t);
@@ -394,7 +396,6 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind, coalition_t *coalit
 	 * always less than what an rlim_t can hold.
 	 * (locking protection is provided by list lock held in chgproccnt)
 	 */
-
 	count = chgproccnt(uid, 1);
 	if (uid != 0 &&
 	    (rlim_t)count > parent_proc->p_rlimit[RLIMIT_NPROC].rlim_cur) {
@@ -671,6 +672,13 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind, coalition_t *coalit
 
 		}
 #endif	/* CONFIG_DTRACE */
+		if (!spawn) {
+			/*
+			 * Of note, we need to initialize the bank context behind
+			 * the protection of the proc_trans lock to prevent a race with exit.
+			 */
+			task_bank_init(get_threadtask(child_thread));
+		}
 
 		break;
 
@@ -1372,6 +1380,17 @@ retry:
 #if PSYNCH
 	pth_proc_hashinit(child_proc);
 #endif /* PSYNCH */
+
+#if CONFIG_PERSONAS
+	child_proc->p_persona = NULL;
+	error = persona_proc_inherit(child_proc, parent_proc);
+	if (error != 0) {
+		printf("forkproc: persona_proc_inherit failed (persona %d being destroyed?)\n", persona_get_uid(parent_proc->p_persona));
+		forkproc_free(child_proc);
+		child_proc = NULL;
+		goto bad;
+	}
+#endif
 
 #if CONFIG_MEMORYSTATUS
 	/* Memorystatus + jetsam init */

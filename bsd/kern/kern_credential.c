@@ -2073,14 +2073,66 @@ static int	kauth_cred_cache_lookup(int from, int to, void *src, void *dst);
 
 #if CONFIG_EXT_RESOLVER == 0
 /*
- * If there's no resolver, short-circuit the kauth_cred_x2y() lookups.
+ * If there's no resolver, only support a subset of the kauth_cred_x2y() lookups.
  */
 static __inline int
-kauth_cred_cache_lookup(__unused int from, __unused int to,
-	__unused void *src, __unused void *dst)
+kauth_cred_cache_lookup(int from, int to, void *src, void *dst)
 {
-	return (EWOULDBLOCK);
+	/* NB: These must match the definitions used by Libinfo's mbr_identifier_translate(). */
+	static const uuid_t _user_compat_prefix = {0xff, 0xff, 0xee, 0xee, 0xdd, 0xdd, 0xcc, 0xcc, 0xbb, 0xbb, 0xaa, 0xaa, 0x00, 0x00, 0x00, 0x00};
+	static const uuid_t _group_compat_prefix = {0xab, 0xcd, 0xef, 0xab, 0xcd, 0xef, 0xab, 0xcd, 0xef, 0xab, 0xcd, 0xef, 0x00, 0x00, 0x00, 0x00};
+#define COMPAT_PREFIX_LEN	(sizeof(uuid_t) - sizeof(id_t))
 
+	assert(from != to);
+
+	switch (from) {
+	case KI_VALID_UID: {
+		id_t uid = htonl(*(id_t *)src);
+
+		if (to == KI_VALID_GUID) {
+			uint8_t *uu = dst;
+			memcpy(uu, _user_compat_prefix, sizeof(_user_compat_prefix));
+			memcpy(&uu[COMPAT_PREFIX_LEN], &uid, sizeof(uid));
+			return (0);
+		}
+		break;
+	}
+	case KI_VALID_GID: {
+		id_t gid = htonl(*(id_t *)src);
+
+		if (to == KI_VALID_GUID) {
+			uint8_t *uu = dst;
+			memcpy(uu, _group_compat_prefix, sizeof(_group_compat_prefix));
+			memcpy(&uu[COMPAT_PREFIX_LEN], &gid, sizeof(gid));
+			return (0);
+		}
+		break;
+	}
+	case KI_VALID_GUID: {
+		const uint8_t *uu = src;
+
+		if (to == KI_VALID_UID) {
+			if (memcmp(uu, _user_compat_prefix, COMPAT_PREFIX_LEN) == 0) {
+				id_t uid;
+				memcpy(&uid, &uu[COMPAT_PREFIX_LEN], sizeof(uid));
+				*(id_t *)dst = ntohl(uid);
+				return (0);
+			}
+		} else if (to == KI_VALID_GID) {
+			if (memcmp(uu, _group_compat_prefix, COMPAT_PREFIX_LEN) == 0) {
+				id_t gid;
+				memcpy(&gid, &uu[COMPAT_PREFIX_LEN], sizeof(gid));
+				*(id_t *)dst = ntohl(gid);
+				return (0);
+			}
+		}
+		break;
+	}
+	default:
+		/* NOT IMPLEMENTED */
+		break;
+	}
+	return (ENOENT);
 }
 #endif
 
@@ -3159,11 +3211,11 @@ kauth_cred_ismember_guid(__unused kauth_cred_t cred, guid_t *guidp, int *resultp
 		*resultp = 1;
 		break;
 	default:
-#if CONFIG_EXT_RESOLVER
 	{
-		struct kauth_identity ki;
 		gid_t gid;
-#if 6603280
+#if CONFIG_EXT_RESOLVER
+		struct kauth_identity ki;
+
 		/*
 		 * Grovel the identity cache looking for this GUID.
 		 * If we find it, and it is for a user record, return
@@ -3190,7 +3242,7 @@ kauth_cred_ismember_guid(__unused kauth_cred_t cred, guid_t *guidp, int *resultp
 				return (0);
 			}
 		}
-#endif /* 6603280 */
+#endif /* CONFIG_EXT_RESOLVER */
 		/*
 		 * Attempt to translate the GUID to a GID.  Even if
 		 * this fails, we will have primed the cache if it is
@@ -3207,13 +3259,12 @@ kauth_cred_ismember_guid(__unused kauth_cred_t cred, guid_t *guidp, int *resultp
 				error = 0;
 			}
 		} else {
+#if CONFIG_EXT_RESOLVER
  do_check:
+#endif /* CONFIG_EXT_RESOLVER */
 			error = kauth_cred_ismember_gid(cred, gid, resultp);
 		}
 	}
-#else	/* CONFIG_EXT_RESOLVER */
-		error = ENOENT;
-#endif	/* CONFIG_EXT_RESOLVER */
 		break;
 	}
 	return(error);

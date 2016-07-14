@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <TargetConditionals.h>
 #include <machine/cpu_capabilities.h>
 #include <mach/kern_return.h>
 #include <mach/mach_host.h>
@@ -40,3 +41,18 @@ host_get_atm_diagnostic_flag(host_t host __unused,
 	return KERN_SUCCESS;
 }
 
+kern_return_t
+host_get_multiuser_config_flags(host_t host __unused,
+								uint32_t *multiuser_flags)
+{
+	(void)multiuser_flags;
+	return KERN_NOT_SUPPORTED;
+}
+
+kern_return_t
+host_check_multiuser_mode(host_t host __unused,
+						  uint32_t *multiuser_mode)
+{
+	(void)multiuser_mode;
+	return KERN_NOT_SUPPORTED;
+}

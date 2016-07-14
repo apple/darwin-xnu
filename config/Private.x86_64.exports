@@ -18,7 +18,6 @@ _cpuid_leaf7_features
 _cpuid_info
 _csr_check
 _csr_get_active_config
-_csr_set_allow_all
 _hv_ept_pmap_create
 _hv_get*
 _hv_release*

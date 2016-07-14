@@ -1334,12 +1334,14 @@ pmap_create_options(
 	if (NULL == p->pm_obj)
 		panic("pmap_create pte obj");
 
-	/* All pmaps share the kernel's pml4 */
-	pml4 = pmap64_pml4(p, 0ULL);
-	kpml4 = kernel_pmap->pm_pml4;
-	pml4[KERNEL_PML4_INDEX]    = kpml4[KERNEL_PML4_INDEX];
-	pml4[KERNEL_KEXTS_INDEX]   = kpml4[KERNEL_KEXTS_INDEX];
-	pml4[KERNEL_PHYSMAP_PML4_INDEX] = kpml4[KERNEL_PHYSMAP_PML4_INDEX];
+	if (!(flags & PMAP_CREATE_EPT)) {
+		/* All host pmaps share the kernel's pml4 */
+		pml4 = pmap64_pml4(p, 0ULL);
+		kpml4 = kernel_pmap->pm_pml4;
+		pml4[KERNEL_PML4_INDEX]    = kpml4[KERNEL_PML4_INDEX];
+		pml4[KERNEL_KEXTS_INDEX]   = kpml4[KERNEL_KEXTS_INDEX];
+		pml4[KERNEL_PHYSMAP_PML4_INDEX] = kpml4[KERNEL_PHYSMAP_PML4_INDEX];
+	}
 
 	PMAP_TRACE(PMAP_CODE(PMAP__CREATE) | DBG_FUNC_START,
 		   p, flags, 0, 0, 0);

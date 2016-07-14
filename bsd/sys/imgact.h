@@ -117,7 +117,7 @@ struct image_params {
 	void		*ip_px_sfa;
 	void		*ip_px_spa;
 	void		*ip_px_smpx;		/* MAC-specific spawn attrs. */
-	void		*ip_reserved;
+	void		*ip_px_persona;		/* persona args */
 };
 
 /*

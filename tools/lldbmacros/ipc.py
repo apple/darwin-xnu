@@ -1090,6 +1090,8 @@ def GetBankHandleSummary(handle_ptr):
         params: handle_ptr - uint64 number stored in handle of voucher.
         returns: str - summary of bank element
     """
+    if handle_ptr == 1 :
+        return "Bank task of Current task"
     elem = kern.GetValueFromAddress(handle_ptr, 'bank_element_t')
     if elem.be_type & 1 :
         ba = Cast(elem, 'struct bank_account *')

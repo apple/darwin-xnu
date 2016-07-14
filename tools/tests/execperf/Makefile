@@ -39,25 +39,25 @@ clean:
 	rm -f $(addprefix $(DSTROOT)/,$(EXECUTABLES))
 
 # DEPENDENCIES
-$(addprefix $(DSTROOT)/,$(EXECUTABLES)): DSTROOT SYMROOT
+$(addprefix $(DSTROOT)/,$(EXECUTABLES)): | DSTROOT SYMROOT
 
-$(addprefix $(OBJROOT)/,$(OBJECTS)): OBJROOT
+$(addprefix $(OBJROOT)/,$(OBJECTS)): | OBJROOT
 
 DSTROOT SYMROOT OBJROOT:
-	mkdir -p $($@)
+	$(_v)mkdir -p $($@)
 
 # OBJECTS
 
-$(OBJROOT)/exit-asm.o: exit-asm.S OBJROOT
+$(OBJROOT)/exit-asm.o: exit-asm.S | OBJROOT
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-$(OBJROOT)/exit.o: exit.c OBJROOT
+$(OBJROOT)/exit.o: exit.c | OBJROOT
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-$(OBJROOT)/printexecinfo.o: printexecinfo.c OBJROOT
+$(OBJROOT)/printexecinfo.o: printexecinfo.c | OBJROOT
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-$(OBJROOT)/run.o: run.c OBJROOT
+$(OBJROOT)/run.o: run.c | OBJROOT
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 # EXECUTABLES

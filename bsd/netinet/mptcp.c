@@ -398,13 +398,14 @@ try_again:
 	DTRACE_MPTCP3(output, struct mptses *, mpte, struct mptsub *, mpts,
 	    struct socket *, mp_so);
 	error = mptcp_subflow_output(mpte, mpts);
-	if (error) {
+	if (error && error != EWOULDBLOCK) {
 		/* can be a temporary loss of source address or other error */
 		mpts->mpts_flags |= MPTSF_FAILINGOVER;
 		mpts->mpts_flags &= ~MPTSF_ACTIVE;
 		mpts_tried = mpts;
 		MPTS_UNLOCK(mpts);
-		mptcplog((LOG_INFO, "MPTCP Sender: Error = %d \n", error),
+		mptcplog((LOG_INFO, "MPTCP Sender: %s Error = %d \n",
+		    __func__, error),
 		    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
 		goto try_again;
 	}
@@ -491,11 +492,12 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub *ignore, struct mptsub **pr
 		}
 
 		/*
-		 * Subflows with Fastjoin allow data to be written before
+		 * Subflows with TFO or Fastjoin allow data to be written before
 		 * the subflow is mp capable.
 		 */
 		if (!(mpts->mpts_flags & MPTSF_MP_CAPABLE) &&
-		    !(mpts->mpts_flags & MPTSF_FASTJ_REQD)) {
+		    !(mpts->mpts_flags & MPTSF_FASTJ_REQD) &&
+		    !(mpts->mpts_flags & MPTSF_TFO_REQD)) {
 			MPTS_UNLOCK(mpts);
 			continue;
 		}
@@ -884,6 +886,13 @@ mptcp_update_rcv_state_f(struct mptcp_dss_ack_opt *dss_info, struct tcpcb *tp,
 	u_int64_t full_dsn = 0;
 	struct mptcb *mp_tp = tptomptp(tp);
 
+	/*
+	 * May happen, because the caller of this function does an soevent.
+	 * Review after rdar://problem/24083886
+	 */
+	if (!mp_tp)
+		return;
+
 	NTOHL(dss_info->mdss_dsn);
 	NTOHL(dss_info->mdss_subflow_seqn);
 	NTOHS(dss_info->mdss_data_len);
@@ -903,6 +912,13 @@ mptcp_update_rcv_state_g(struct mptcp_dss64_ack32_opt *dss_info,
 {
 	u_int64_t dsn = mptcp_ntoh64(dss_info->mdss_dsn);
 	struct mptcb *mp_tp = tptomptp(tp);
+
+	/*
+	 * May happen, because the caller of this function does an soevent.
+	 * Review after rdar://problem/24083886
+	 */
+	if (!mp_tp)
+		return;
 
 	NTOHL(dss_info->mdss_subflow_seqn);
 	NTOHS(dss_info->mdss_data_len);

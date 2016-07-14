@@ -289,7 +289,17 @@ processor_doshutdown(
 	/* pset lock dropped */
 
 	/*
-	 *	Continue processor shutdown in shutdown context.
+	 * Continue processor shutdown in shutdown context.
+	 *
+	 * We save the current context in machine_processor_shutdown in such a way
+	 * that when this thread is next invoked it will return from here instead of
+	 * from the machine_switch_context() in thread_invoke like a normal context switch.
+	 *
+	 * As such, 'old_thread' is neither the idle thread nor the current thread - it's whatever
+	 * thread invoked back to this one. (Usually, it's another processor's idle thread.)
+	 *
+	 * TODO: Make this a real thread_run of the idle_thread, so we don't have to keep this in sync
+	 * with thread_invoke.
 	 */
 	thread_bind(prev);
 	old_thread = machine_processor_shutdown(self, processor_offline, processor);
@@ -298,25 +308,45 @@ processor_doshutdown(
 }
 
 /*
- *Complete the shutdown and place the processor offline.
+ * Complete the shutdown and place the processor offline.
  *
- *	Called at splsched in the shutdown context.
+ * Called at splsched in the shutdown context.
+ * This performs a minimal thread_invoke() to the idle thread,
+ * so it needs to be kept in sync with what thread_invoke() does.
+ *
+ * The onlining half of this is done in load_context().
  */
 void
 processor_offline(
 	processor_t			processor)
 {
-	thread_t			new_thread, old_thread = processor->active_thread;
+	assert(processor == current_processor());
+	assert(processor->active_thread == current_thread());
 
-	new_thread = processor->idle_thread;
+	thread_t old_thread = processor->active_thread;
+	thread_t new_thread = processor->idle_thread;
+
 	processor->active_thread = new_thread;
 	processor->current_pri = IDLEPRI;
 	processor->current_thmode = TH_MODE_NONE;
 	processor->deadline = UINT64_MAX;
 	new_thread->last_processor = processor;
 
-	processor->last_dispatch = mach_absolute_time();
-	timer_stop(PROCESSOR_DATA(processor, thread_timer), processor->last_dispatch);
+	uint64_t ctime = mach_absolute_time();
+
+	processor->last_dispatch = ctime;
+	old_thread->last_run_time = ctime;
+
+	/* Update processor->thread_timer and ->kernel_timer to point to the new thread */
+	thread_timer_event(ctime, &new_thread->system_timer);
+	PROCESSOR_DATA(processor, kernel_timer) = &new_thread->system_timer;
+
+	timer_stop(PROCESSOR_DATA(processor, current_state), ctime);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	                          MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED) | DBG_FUNC_NONE,
+	                          old_thread->reason, (uintptr_t)thread_tid(new_thread),
+	                          old_thread->sched_pri, new_thread->sched_pri, 0);
 
 	machine_set_current_thread(new_thread);
 

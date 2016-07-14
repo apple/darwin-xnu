@@ -91,6 +91,7 @@ OPTIONS/hfs					optional hfs
 OPTIONS/fdesc				optional fdesc
 OPTIONS/fifo				optional fifo
 OPTIONS/devfs				optional devfs
+OPTIONS/routefs				optional routefs
 OPTIONS/crypto				optional crypto
 OPTIONS/journaling			optional journaling
 OPTIONS/hfs_compression		optional hfs_compression
@@ -186,6 +187,8 @@ bsd/miscfs/devfs/devfs_vfsops.c		optional devfs
 bsd/miscfs/mockfs/mockfs_fsnode.c	optional mockfs
 bsd/miscfs/mockfs/mockfs_vfsops.c	optional mockfs
 bsd/miscfs/mockfs/mockfs_vnops.c	optional mockfs
+
+bsd/miscfs/routefs/routefs_ops.c	optional routefs
 
 bsd/kern/decmpfs.c			standard
 
@@ -453,6 +456,7 @@ bsd/kern/kern_fork.c			standard
 bsd/kern/kern_asl.c			standard
 bsd/kern/kern_malloc.c			standard
 bsd/kern/kern_mman.c			standard
+bsd/kern/kern_persona.c			standard
 bsd/kern/kern_physio.c			standard
 bsd/kern/kern_priv.c			standard
 bsd/kern/kern_proc.c			standard
@@ -483,6 +487,7 @@ bsd/kern/sys_pipe.c			standard
 bsd/kern/sys_socket.c			optional sockets
 bsd/kern/sys_domain.c			optional sockets
 bsd/kern/sys_coalition.c		optional config_coalitions
+bsd/kern/sys_persona.c			optional config_personas
 bsd/kern/sys_work_interval.c		standard
 ./syscalls.c				standard
 bsd/kern/tty.c				standard

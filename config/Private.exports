@@ -204,6 +204,14 @@ _net_add_proto:_net_add_proto_old
 _net_del_domain:_net_del_domain_old
 _net_del_proto:_net_del_proto_old
 _netboot_root
+_persona_find
+_persona_get
+_persona_get_id
+_persona_get_type
+_persona_get_cred
+_persona_lookup
+_current_persona_get
+_persona_put
 _pffinddomain:_pffinddomain_old
 _pffindproto:_pffindproto_old
 _port_name_to_task
@@ -319,6 +327,7 @@ _utun_pkt_dtls_input
 _vfs_context_bind
 _vfs_context_get_special_port
 _vfs_context_set_special_port
+_vfs_context_kernel
 _vfs_devvp
 _vfs_getattr
 _vfs_getbyid

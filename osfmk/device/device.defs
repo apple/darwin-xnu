@@ -135,7 +135,7 @@ type io_connect_t = mach_port_t
 #if	KERNEL_SERVER
 		intran: io_connect_t iokit_lookup_connect_port(mach_port_t)
 		outtran: mach_port_t iokit_make_connect_port(io_connect_t)
-		destructor: iokit_remove_reference(io_connect_t)
+		destructor: iokit_remove_connect_reference(io_connect_t)
 #endif	/* KERNEL_SERVER */
 		;
 

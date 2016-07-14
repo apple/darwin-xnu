@@ -71,7 +71,9 @@
 #if CONFIG_TELEMETRY
 #include <kern/telemetry.h>
 #endif
-	
+
+#include <sys/kdebug.h>
+
 uint32_t	avenrun[3] = {0, 0, 0};
 uint32_t	mach_factor[3] = {0, 0, 0};
 
@@ -204,6 +206,10 @@ compute_averages(uint64_t stdelta)
 		if (combined_fgbg_load_now > NRQS - 1)
 			combined_fgbg_load_now = NRQS - 1;
 	}
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_LOAD) | DBG_FUNC_NONE,
+		(nthreads - nshared), (nshared - nbackground), nbackground, 0, 0);
 
 	/*
 	 *	Sample total running threads.

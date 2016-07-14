@@ -182,6 +182,7 @@ void scale_setup(void);
 extern void bsd_scale_setup(int);
 extern unsigned int semaphore_max;
 extern void stackshot_lock_init(void);
+extern void console_init(void);
 
 /*
  *	Running in virtual memory, on the interrupt stack.
@@ -288,6 +289,9 @@ kernel_bootstrap(void)
 	    PE_parse_boot_argn("-show_pointers", &namep, sizeof (namep))) {
 		doprnt_hide_pointers = FALSE;
 	}
+
+	kernel_bootstrap_log("console_init");
+	console_init();
 
 	kernel_bootstrap_log("stackshot_lock_init");	
 	stackshot_lock_init();

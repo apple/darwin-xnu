@@ -7450,6 +7450,10 @@ out:
 		 * deny execute, we can synthesize a global right that allows anyone to 
 		 * traverse this directory during a pathname lookup without having to
 		 * match the credential associated with this cache of rights.
+		 *
+		 * Note that we can correctly cache KAUTH_VNODE_SEARCHBYANYONE
+		 * only if we actually check ACLs which we don't for root. As
+		 * a workaround, the lookup fast path checks for root.
 		 */
 	        if (!VATTR_IS_SUPPORTED(&va, va_mode) ||
 		    ((va.va_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) ==

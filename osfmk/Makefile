@@ -24,6 +24,7 @@ INSTINC_SUBDIRS = \
 	vm \
 	libsa \
 	kdp \
+	console \
 	kperf \
 	prng
 
@@ -41,6 +42,7 @@ INSTINC_SUBDIRS_ARM = \
 	mach	\
 	arm	\
 	arm64
+
 INSTINC_SUBDIRS_ARM64 = \
 	mach	\
 	arm	\

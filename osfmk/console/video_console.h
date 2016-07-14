@@ -41,6 +41,32 @@
 extern "C" {
 #endif
 
+#define kVCSysctlProgressOptions      "kern.progressoptions"
+#define kVCSysctlConsoleOptions       "kern.consoleoptions"
+#define kVCSysctlProgressMeterEnable  "kern.progressmeterenable"
+#define kVCSysctlProgressMeter        "kern.progressmeter"
+
+enum
+{
+    kVCDarkReboot       = 0x00000001,
+    kVCAcquireImmediate = 0x00000002,
+    kVCUsePosition      = 0x00000004,
+    kVCDarkBackground   = 0x00000008,
+    kVCLightBackground  = 0x00000010,
+};
+
+struct vc_progress_user_options {
+    uint32_t options;
+    // fractional position of middle of spinner 0 (0.0) - 0xFFFFFFFF (1.0)
+    uint32_t x_pos;
+    uint32_t y_pos;
+    uint32_t resv[8];
+};
+typedef struct vc_progress_user_options vc_progress_user_options;
+
+
+#if XNU_KERNEL_PRIVATE
+
 void vcputc(int, int, int);
 
 int vcgetc(	int		l,
@@ -70,7 +96,8 @@ struct vc_info
 	unsigned int	v_columns;	/* characters */
 	unsigned int	v_rowscanbytes;	/* Actualy number of bytes used for display per row*/
 	unsigned int	v_scale;	
-	unsigned int	v_reserved[4];
+	unsigned int	v_rotate;
+	unsigned int	v_reserved[3];
 };
 
 struct vc_progress_element {
@@ -87,6 +114,8 @@ struct vc_progress_element {
     unsigned int	res2[3];
 };
 typedef struct vc_progress_element vc_progress_element;
+
+extern struct vc_progress_user_options vc_user_options;
 
 void vc_progress_initialize( vc_progress_element * desc,
                                     const unsigned char * data1x,
@@ -112,14 +141,7 @@ extern int vc_progressmeter_value;
 extern void vc_progress_setdiskspeed(uint32_t speed);
 
 
-
-extern int vc_user_options;
-
-enum
-{
-    kVCDarkReboot = 0x00000001,
-};
-extern void vc_set_options(int new_value);
+#endif /* XNU_KERNEL_PRIVATE */
 
 #ifdef __cplusplus
 }

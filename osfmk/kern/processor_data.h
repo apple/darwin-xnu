@@ -60,11 +60,11 @@ struct processor_data {
 	timer_data_t			system_state;
 	timer_data_t			user_state;
 
-	timer_t					current_state;
+	timer_t					current_state; /* points to processor's idle, system, or user state timer */
 
 	/* Thread execution timers */
-	timer_t					thread_timer;
-	timer_t					kernel_timer;
+	timer_t					thread_timer; /* points to current thread's user or system timer */
+	timer_t					kernel_timer; /* points to current thread's system_timer */
 
 	/* Kernel stack cache */
 	struct stack_cache {

@@ -102,6 +102,7 @@
 #include <sys/signal.h>
 #include <sys/aio_kern.h>
 #include <sys/sysproto.h>
+#include <sys/persona.h>
 #if SYSV_SHM
 #include <sys/shm_internal.h>		/* shmexec() */
 #endif
@@ -132,6 +133,7 @@
 #include <kern/assert.h>
 #include <kern/task.h>
 #include <kern/coalition.h>
+#include <kern/kalloc.h>
 
 #if CONFIG_MACF
 #include <security/mac.h>
@@ -195,6 +197,7 @@ void task_importance_update_owner_info(task_t);
 #endif
 
 extern struct savearea *get_user_regs(thread_t);
+extern kern_return_t machine_thread_neon_state_initialize(thread_t thread);
 
 __attribute__((noinline)) int __EXEC_WAITING_ON_TASKGATED_CODE_SIGNATURE_UPCALL__(mach_port_t task_access_port, int32_t new_pid);
 
@@ -694,6 +697,40 @@ bad:
 	return (error);
 }
 
+static int
+activate_thread_state(thread_t thread, load_result_t *result)
+{
+	int ret;
+
+	ret = thread_state_initialize(thread);
+	if (ret != KERN_SUCCESS) {
+		return ret;
+	}
+
+
+	if (result->threadstate) {
+		uint32_t *ts = result->threadstate;
+		uint32_t total_size = result->threadstate_sz;
+
+		while (total_size > 0) {
+			uint32_t flavor = *ts++;
+			uint32_t size = *ts++;
+
+			ret = thread_setstatus(thread, flavor, (thread_state_t)ts, size);
+			if (ret) {
+				return ret;
+			}
+			ts += size;
+			total_size -= (size + 2) * sizeof(uint32_t);
+		}
+	}
+
+	thread_setentrypoint(thread, result->entry_point);
+
+	return KERN_SUCCESS;
+}
+
+
 /*
  * exec_mach_imgact
  *
@@ -876,7 +913,7 @@ grade:
 	/*
 	 * Actually load the image file we previously decided to load.
 	 */
-	lret = load_machfile(imgp, mach_header, thread, map, &load_result);
+	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
 
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
@@ -888,7 +925,7 @@ grade:
 	p->p_cpusubtype = imgp->ip_origcpusubtype;
 	proc_unlock(p);
 
-	vm_map_set_user_wire_limit(get_task_map(task), p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur);
+	vm_map_set_user_wire_limit(map, p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur);
 
 	/* 
 	 * Set code-signing flags if this binary is signed, or if parent has
@@ -912,15 +949,11 @@ grade:
 	if (p->p_csflags & CS_EXEC_SET_INSTALLER)
 		imgp->ip_csflags |= CS_INSTALLER;
 
-
 	/*
 	 * Set up the system reserved areas in the new address space.
 	 */
-	vm_map_exec(get_task_map(task),
-		    task,
-		    (void *) p->p_fd->fd_rdir,
-		    cpu_type());
-	
+	vm_map_exec(map, task, (void *)p->p_fd->fd_rdir, cpu_type());
+
 	/*
 	 * Close file descriptors which specify close-on-exec.
 	 */
@@ -931,8 +964,28 @@ grade:
 	 */
 	error = exec_handle_sugid(imgp);
 	if (error) {
+		if (spawn || !vfexec) {
+			vm_map_deallocate(map);
+		}
 		goto badtoolate;
-	}	
+	}
+
+	/*
+	 * Commit to new map.
+	 *
+	 * Swap the new map for the old, which consumes our new map reference but
+	 * each leaves us responsible for the old_map reference.  That lets us get
+	 * off the pmap associated with it, and then we can release it.
+	 */
+	if (!vfexec) {
+		old_map = swap_task_map(task, thread, map, !spawn);
+		vm_map_deallocate(old_map);
+	}
+
+	lret = activate_thread_state(thread, &load_result);
+	if (lret != KERN_SUCCESS) {
+		goto badtoolate;
+	}
 
 	/*
 	 * deal with voucher on exec-calling thread.
@@ -973,7 +1026,7 @@ grade:
 		/* Set the stack */
 		thread_setuserstack(thread, ap);
 	}
-	
+
 	if (load_result.dynlinker) {
 		uint64_t	ap;
 		int			new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT) ? 8 : 4;
@@ -997,8 +1050,6 @@ grade:
 	if (vfexec || spawn) {
 		vm_map_switch(old_map);
 	}
-	/* Set the entry point */
-	thread_setentrypoint(thread, load_result.entry_point);
 
 	/* Stop profiling */
 	stopprofclock(p);
@@ -1177,6 +1228,11 @@ done:
 		thread_deallocate(thread);
 	}
 
+	if (load_result.threadstate) {
+		kfree(load_result.threadstate, load_result.threadstate_sz);
+		load_result.threadstate = NULL;
+	}
+
 bad:
 	return(error);
 }
@@ -1226,6 +1282,7 @@ struct execsw {
  *	namei:???
  *	vn_rdwr:???			[anything vn_rdwr can return]
  *	<ex_imgact>:???			[anything an imgact can return]
+ *	EDEADLK				Process is being terminated
  */
 static int
 exec_activate_image(struct image_params *imgp)
@@ -1276,6 +1333,7 @@ again:
 	 */
 	proc_lock(p);
 	if (p->p_lflag & P_LEXIT) {
+		error = EDEADLK;
 		proc_unlock(p);
 		goto bad_notrans;
 	}
@@ -1375,6 +1433,17 @@ encapsulated_binary:
 					(uintptr_t)ndp->ni_vp, 0);
 	}
 
+	if (error == 0) {
+		/*
+		 * Reset atm context from task
+		 */
+		task_atm_reset(p->task);
+
+		/*
+		 * Reset old bank context from task
+		 */
+		task_bank_reset(p->task);
+	}
 bad:
 	proc_transend(p, 0);
 
@@ -1883,6 +1952,126 @@ static inline void spawn_coalitions_release_all(coalition_t coal[COALITION_NUM_T
 }
 #endif
 
+#if CONFIG_PERSONAS
+static int spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
+{
+	int error = 0;
+	struct persona *persona = NULL;
+	int verify = px_persona->pspi_flags & POSIX_SPAWN_PERSONA_FLAGS_VERIFY;
+
+	/*
+	 * TODO: rdar://problem/19981151
+	 * Add entitlement check!
+	 */
+	if (!kauth_cred_issuser(kauth_cred_get()))
+		return EPERM;
+
+	persona = persona_lookup(px_persona->pspi_id);
+	if (!persona) {
+		error = ESRCH;
+		goto out;
+	}
+
+	if (verify) {
+		if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_UID) {
+			if (px_persona->pspi_uid != persona_get_uid(persona)) {
+				error = EINVAL;
+				goto out;
+			}
+		}
+		if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_GID) {
+			if (px_persona->pspi_gid != persona_get_gid(persona)) {
+				error = EINVAL;
+				goto out;
+			}
+		}
+		if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_GROUPS) {
+			int ngroups = 0;
+			gid_t groups[NGROUPS_MAX];
+
+			if (persona_get_groups(persona, &ngroups, groups,
+					       px_persona->pspi_ngroups) != 0) {
+				error = EINVAL;
+				goto out;
+			}
+			if (ngroups != (int)px_persona->pspi_ngroups) {
+				error = EINVAL;
+				goto out;
+			}
+			while (ngroups--) {
+				if (px_persona->pspi_groups[ngroups] != groups[ngroups]) {
+					error = EINVAL;
+					goto out;
+				}
+			}
+			if (px_persona->pspi_gmuid != persona_get_gmuid(persona)) {
+				error = EINVAL;
+				goto out;
+			}
+		}
+	}
+
+out:
+	if (persona)
+		persona_put(persona);
+
+	return error;
+}
+
+static int spawn_persona_adopt(proc_t p, struct _posix_spawn_persona_info *px_persona)
+{
+	int ret;
+	kauth_cred_t cred;
+	struct persona *persona = NULL;
+	int override = !!(px_persona->pspi_flags & POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
+
+	if (!override)
+		return persona_proc_adopt_id(p, px_persona->pspi_id, NULL);
+
+	/*
+	 * we want to spawn into the given persona, but we want to override
+	 * the kauth with a different UID/GID combo
+	 */
+	persona = persona_lookup(px_persona->pspi_id);
+	if (!persona)
+		return ESRCH;
+
+	cred = persona_get_cred(persona);
+	if (!cred) {
+		ret = EINVAL;
+		goto out;
+	}
+
+	if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_UID) {
+		cred = kauth_cred_setresuid(cred,
+					    px_persona->pspi_uid,
+					    px_persona->pspi_uid,
+					    px_persona->pspi_uid,
+					    KAUTH_UID_NONE);
+	}
+
+	if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_GID) {
+		cred = kauth_cred_setresgid(cred,
+					    px_persona->pspi_gid,
+					    px_persona->pspi_gid,
+					    px_persona->pspi_gid);
+	}
+
+	if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_GROUPS) {
+		cred = kauth_cred_setgroups(cred,
+					    px_persona->pspi_groups,
+					    px_persona->pspi_ngroups,
+					    px_persona->pspi_gmuid);
+	}
+
+	ret = persona_proc_adopt(p, persona, cred);
+
+out:
+	persona_put(persona);
+	return ret;
+}
+#endif
+
 void
 proc_set_return_wait(proc_t p)
 {
@@ -1980,6 +2169,9 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	int portwatch_count = 0;
 	ipc_port_t * portwatch_ports = NULL;
 	vm_size_t px_sa_offset = offsetof(struct _posix_spawnattr, psa_ports); 
+#if CONFIG_PERSONAS
+	struct _posix_spawn_persona_info *px_persona = NULL;
+#endif
 
 	/*
 	 * Allocate a big chunk for locals instead of using stack since these  
@@ -2004,7 +2196,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	imgp->ip_flags = (is_64 ? IMGPF_WAS_64BIT : IMGPF_NONE);
 	imgp->ip_seg = (is_64 ? UIO_USERSPACE64 : UIO_USERSPACE32);
 	imgp->ip_mac_return = 0;
-	imgp->ip_reserved = NULL;
+	imgp->ip_px_persona = NULL;
 
 	if (uap->adesc != USER_ADDR_NULL) {
 		if(is_64) {
@@ -2028,8 +2220,8 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 			px_args.mac_extensions = CAST_USER_ADDR_T(px_args32.mac_extensions);
 			px_args.coal_info_size = px_args32.coal_info_size;
 			px_args.coal_info = CAST_USER_ADDR_T(px_args32.coal_info);
-			px_args.reserved = 0;
-			px_args.reserved_size = 0;
+			px_args.persona_info_size = px_args32.persona_info_size;
+			px_args.persona_info = CAST_USER_ADDR_T(px_args32.persona_info);
 		}
 		if (error)
 			goto bad;
@@ -2099,7 +2291,29 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				goto bad;
 			}
 		}
+#if CONFIG_PERSONAS
+		/* copy in the persona info */
+		if (px_args.persona_info_size != 0 && px_args.persona_info != 0) {
+			/* for now, we need the exact same struct in user space */
+			if (px_args.persona_info_size != sizeof(*px_persona)) {
+				error = ERANGE;
+				goto bad;
+			}
 
+			MALLOC(px_persona, struct _posix_spawn_persona_info *, px_args.persona_info_size, M_TEMP, M_WAITOK|M_ZERO);
+			if (px_persona == NULL) {
+				error = ENOMEM;
+				goto bad;
+			}
+			imgp->ip_px_persona = px_persona;
+
+			if ((error = copyin(px_args.persona_info, px_persona,
+					    px_args.persona_info_size)) != 0)
+				goto bad;
+			if ((error = spawn_validate_persona(px_persona)) != 0)
+				goto bad;
+		}
+#endif
 #if CONFIG_MACF
 		if (px_args.mac_extensions_size != 0) {
 			if ((error = spawn_copyin_macpolicyinfo(&px_args, (_posix_spawn_mac_policy_extensions_t *)&imgp->ip_px_smpx)) != 0)
@@ -2215,6 +2429,10 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 do_fork1:
 #endif /* CONFIG_COALITIONS */
 
+		/*
+		 * note that this will implicitly inherit the
+		 * caller's persona (if it exists)
+		 */
 		error = fork1(p, &imgp->ip_new_thread, PROC_CREATE_SPAWN, coal);
 
 #if CONFIG_COALITIONS
@@ -2234,6 +2452,30 @@ do_fork1:
 		imgp->ip_flags |= IMGPF_SPAWN;	/* spawn w/o exec */
 		spawn_no_exec = TRUE;		/* used in later tests */
 
+#if CONFIG_PERSONAS
+		/*
+		 * If the parent isn't in a persona (launchd), and
+		 * hasn't specified a new persona for the process,
+		 * then we'll put the process into the system persona
+		 *
+		 * TODO: this will have to be re-worked because as of
+		 *       now, without any launchd adoption, the resulting
+		 *       xpcproxy process will not have sufficient
+		 *       privileges to setuid/gid.
+		 */
+#if 0
+		if (!proc_has_persona(p) && imgp->ip_px_persona == NULL) {
+			MALLOC(px_persona, struct _posix_spawn_persona_info *,
+			       sizeof(*px_persona), M_TEMP, M_WAITOK|M_ZERO);
+			if (px_persona == NULL) {
+				error = ENOMEM;
+				goto bad;
+			}
+			px_persona->pspi_id = persona_get_id(g_system_persona);
+			imgp->ip_px_persona = px_persona;
+		}
+#endif /* 0 */
+#endif /* CONFIG_PERSONAS */
 	}
 
 	if (spawn_no_exec) {
@@ -2350,6 +2592,21 @@ do_fork1:
 			}
 		}
 
+#if CONFIG_PERSONAS
+		if (spawn_no_exec && imgp->ip_px_persona != NULL) {
+			/*
+			 * If we were asked to spawn a process into a new persona,
+			 * do the credential switch now (which may override the UID/GID
+			 * inherit done just above). It's important to do this switch
+			 * before image activation both for reasons stated above, and
+			 * to ensure that the new persona has access to the image/file
+			 * being executed.
+			 */
+			error = spawn_persona_adopt(p, imgp->ip_px_persona);
+			if (error != 0)
+				goto bad;
+		}
+#endif /* CONFIG_PERSONAS */
 #if !SECURE_KERNEL
 		/*
 		 * Disable ASLR for the spawned process.
@@ -2571,10 +2828,23 @@ bad:
 	} else if (error == 0) {
 		/* reset the importance attribute from our previous life */
 		task_importance_reset(p->task);
-
-		/* reset atm context from task */
-		task_atm_reset(p->task);
 	}
+
+	if (error == 0) {
+		/*
+		 * We need to initialize the bank context behind the protection of
+		 * the proc_trans lock to prevent a race with exit. We can't do this during
+		 * exec_activate_image because task_bank_init checks entitlements that
+		 * aren't loaded until subsequent calls (including exec_resettextvp).
+		 */
+		error = proc_transstart(p, 0, 0);
+
+		if (error == 0) {
+			task_bank_init(p->task);
+			proc_transend(p, 0);
+		}
+	}
+
 
 	/*
 	 * Apply the spawnattr policy, apptype (which primes the task for importance donation),
@@ -2645,6 +2915,10 @@ bad:
 			FREE(imgp->ip_px_sfa, M_TEMP);
 		if (imgp->ip_px_spa != NULL)
 			FREE(imgp->ip_px_spa, M_TEMP);
+#if CONFIG_PERSONAS
+		if (imgp->ip_px_persona != NULL)
+			FREE(imgp->ip_px_persona, M_TEMP);
+#endif
 #if CONFIG_MACF
 		if (imgp->ip_px_smpx != NULL)
 			spawn_free_macpolicyinfo(imgp->ip_px_smpx);
@@ -2894,19 +3168,32 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	if (imgp->ip_scriptlabelp)
 		mac_vnode_label_free(imgp->ip_scriptlabelp);
 #endif
+
+	if (!error) {
+		/*
+		 * We need to initialize the bank context behind the protection of
+		 * the proc_trans lock to prevent a race with exit. We can't do this during
+		 * exec_activate_image because task_bank_init checks entitlements that
+		 * aren't loaded until subsequent calls (including exec_resettextvp).
+		 */
+		error = proc_transstart(p, 0, 0);
+
+		if (!error) {
+			task_bank_init(p->task);
+			proc_transend(p, 0);
+		}
+	}
+
 	if (!error) {
 		/* Sever any extant thread affinity */
 		thread_affinity_exec(current_thread());
 
-		thread_t main_thread = (imgp->ip_new_thread != NULL) ? imgp->ip_new_thread : current_thread();		
+		thread_t main_thread = (imgp->ip_new_thread != NULL) ? imgp->ip_new_thread : current_thread();
 
 		task_set_main_thread_qos(p->task, main_thread);
 
 		/* reset task importance */
 		task_importance_reset(p->task);
-
-		/* reset atm context from task */
-		task_atm_reset(p->task);
 
 		DTRACE_PROC(exec__success);
 
@@ -3845,6 +4132,13 @@ handle_mac_transition:
 		 * modifying any others sharing it.
 		 */
 		if (mac_transition) { 
+			/*
+			 * This hook may generate upcalls that require
+			 * importance donation from the kernel.
+			 * (23925818)
+			 */
+			thread_t thread = current_thread();
+			thread_enable_send_importance(thread, TRUE);
 			kauth_proc_label_update_execve(p,
 						imgp->ip_vfs_context,
 						imgp->ip_vp, 
@@ -3856,6 +4150,7 @@ handle_mac_transition:
 						imgp->ip_px_smpx,
 						&disjoint_cred, /* will be non zero if disjoint */
 						&label_update_return);
+			thread_enable_send_importance(thread, FALSE);
 
 			if (disjoint_cred) {
 				/*

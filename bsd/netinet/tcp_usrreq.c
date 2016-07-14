@@ -457,8 +457,6 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 			error = ENETDOWN;
 		}
 
-		/* Disable PRECONNECT_DATA, as we don't need to send a SYN anymore. */
-		so->so_flags1 &= ~SOF1_PRECONNECT_DATA;
 		return error;
 	}
 #endif /* FLOW_DIVERT */
@@ -672,8 +670,6 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 			error = ENETDOWN;
 		}
 
-		/* Disable PRECONNECT_DATA, as we don't need to send a SYN anymore. */
-		so->so_flags1 &= ~SOF1_PRECONNECT_DATA;
 		return error;
 	}
 #endif /* FLOW_DIVERT */
@@ -1224,7 +1220,20 @@ tcp_usr_rcvoob(struct socket *so, struct mbuf *m, int flags)
 static int
 tcp_usr_preconnect(struct socket *so)
 {
-	int error = tcp_output(sototcpcb(so));
+	struct inpcb *inp = sotoinpcb(so);
+	int error = 0;
+
+#if NECP
+	if (necp_socket_should_use_flow_divert(inp)) {
+		/* May happen, if in tcp_usr_connect we did not had a chance
+		 * to set the usrreqs (due to some error). So, let's get out
+		 * of here.
+		 */
+		goto out;
+	}
+#endif /* NECP */
+
+	error = tcp_output(sototcpcb(so));
 
 	/* One read has been done. This was enough. Get back to "normal" behavior. */
 	so->so_flags1 &= ~SOF1_PRECONNECT_DATA;
@@ -1316,8 +1325,6 @@ tcp_connect(tp, nam, p)
 	struct tcpcb *otp;
 	struct sockaddr_in *sin = (struct sockaddr_in *)(void *)nam;
 	struct in_addr laddr;
-	struct rmxp_tao *taop;
-	struct rmxp_tao tao_noncached;
 	int error = 0;
 	struct ifnet *outif = NULL;
 
@@ -1406,24 +1413,6 @@ skip_oinp:
 	if (nstat_collect)
 		nstat_route_connect_attempt(inp->inp_route.ro_rt);
 
-	/*
-	 * Generate a CC value for this connection and
-	 * check whether CC or CCnew should be used.
-	 */
-	if ((taop = tcp_gettaocache(tp->t_inpcb)) == NULL) {
-		taop = &tao_noncached;
-		bzero(taop, sizeof(*taop));
-	}
-
-	tp->cc_send = CC_INC(tcp_ccgen);
-	if (taop->tao_ccsent != 0 &&
-	    CC_GEQ(tp->cc_send, taop->tao_ccsent)) {
-		taop->tao_ccsent = tp->cc_send;
-	} else {
-		taop->tao_ccsent = 0;
-		tp->t_flags |= TF_SENDCCNEW;
-	}
-
 done:
 	if (outif != NULL)
 		ifnet_release(outif);
@@ -1443,8 +1432,6 @@ tcp6_connect(tp, nam, p)
 	struct tcpcb *otp;
 	struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)(void *)nam;
 	struct in6_addr addr6;
-	struct rmxp_tao *taop;
-	struct rmxp_tao tao_noncached;
 	int error = 0;
 	struct ifnet *outif = NULL;
 
@@ -1523,24 +1510,6 @@ tcp6_connect(tp, nam, p)
 	tcp_sendseqinit(tp);
 	if (nstat_collect)
 		nstat_route_connect_attempt(inp->inp_route.ro_rt);
-
-	/*
-	 * Generate a CC value for this connection and
-	 * check whether CC or CCnew should be used.
-	 */
-	if ((taop = tcp_gettaocache(tp->t_inpcb)) == NULL) {
-		taop = &tao_noncached;
-		bzero(taop, sizeof(*taop));
-	}
-
-	tp->cc_send = CC_INC(tcp_ccgen);
-	if (taop->tao_ccsent != 0 &&
-	    CC_GEQ(tp->cc_send, taop->tao_ccsent)) {
-		taop->tao_ccsent = tp->cc_send;
-	} else {
-		taop->tao_ccsent = 0;
-		tp->t_flags |= TF_SENDCCNEW;
-	}
 
 done:
 	if (outif != NULL)

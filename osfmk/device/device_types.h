@@ -123,6 +123,7 @@ typedef struct IOObject * io_object_t;
 typedef io_object_t io_connect_t;
 
 extern void iokit_remove_reference( io_object_t	obj );
+extern void iokit_remove_connect_reference( io_object_t	obj );
 
 extern io_object_t iokit_lookup_object_port( ipc_port_t port );
 extern io_connect_t iokit_lookup_connect_port( ipc_port_t port );

@@ -168,7 +168,7 @@ esp6_input_strip_udp_encap (struct mbuf *m, int ip6hlen)
 	m->m_len -= stripsiz;
 	m->m_pkthdr.len -= stripsiz;
 	ip6 = mtod(m, __typeof__(ip6));
-	ip6->ip6_plen = ip6->ip6_plen - stripsiz;
+	ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) - stripsiz);
 	ip6->ip6_nxt = IPPROTO_ESP;
 	return ip6;
 }
@@ -1272,7 +1272,7 @@ noreplaycheck:
 			}
 		}
 
-		if (proto_input(PF_INET6, m) != 0)
+		if (proto_input(ifamily == AF_INET ? PF_INET : PF_INET6, m) != 0)
 			goto bad;
 		nxt = IPPROTO_DONE;
 	} else {
@@ -1369,6 +1369,17 @@ noreplaycheck:
 		if (ipsec_addhist(m, IPPROTO_ESP, spi) != 0) {
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_nomem);
 			goto bad;
+		}
+
+		/*
+		 * Set the csum valid flag, if we authenticated the
+		 * packet, the payload shouldn't be corrupt unless
+		 * it was corrupted before being signed on the other
+		 * side.
+		 */
+		if (nxt == IPPROTO_TCP || nxt == IPPROTO_UDP) {
+			m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
+			m->m_pkthdr.csum_data = 0xFFFF;
 		}
 
 		// Input via IPSec interface

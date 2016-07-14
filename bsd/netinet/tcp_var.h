@@ -270,7 +270,7 @@ struct tcpcb {
 #define	TF_NOPUSH	0x01000		/* don't push */
 #define	TF_REQ_CC	0x02000		/* have/will request CC */
 #define	TF_RCVD_CC	0x04000		/* a CC was received in SYN */
-#define	TF_SENDCCNEW	0x08000		/* send CCnew instead of CC in SYN */
+#define	TF_SENDCCNEW	0x08000		/* Unused */
 #define	TF_MORETOCOME	0x10000		/* More data to be appended to sock */
 #define	TF_LOCAL	0x20000		/* connection to a host on local link */
 #define	TF_RXWIN0SENT	0x40000		/* sent a receiver win 0 in response */
@@ -362,9 +362,6 @@ struct tcpcb {
 
 	u_int32_t	ts_recent_age;	/* when last updated */
 	tcp_seq	last_ack_sent;
-/* RFC 1644 variables */
-	tcp_cc	cc_send;		/* send connection count */
-	tcp_cc	cc_recv;		/* receive connection count */
 /* RFC 3465 variables */
 	u_int32_t	t_bytes_acked;	/* ABC "bytes_acked" parameter */
 
@@ -450,6 +447,7 @@ struct tcpcb {
 		u_int8_t	synrxtshift;
 		u_int8_t	unused;
 		u_int16_t	unused_pad_to_8;
+		u_int32_t	rxmitpkts;
 	} t_stat;
 	
 	/* Background congestion related state */
@@ -542,6 +540,7 @@ struct tcpcb {
 #define TMPF_FASTJOIN_SEND	0x00400000 /* Fast join early data send */
 #define TMPF_FASTJOINBY2_SEND	0x00800000 /* Fast join send after 3 WHS */
 #define TMPF_MPCAP_RETRANSMIT	0x01000000 /* Retransmission of 3rd ACK */
+#define TMPF_TFO_REQUEST	0x02000000 /* TFO Requested */
 
 	tcp_seq			t_mpuna;	/* unacknowledged sequence */
 	void			*t_mptcb;	/* pointer to MPTCP TCB */
@@ -850,7 +849,7 @@ struct tcpcb {
 #define	TF_NOPUSH	0x01000		/* don't push */
 #define	TF_REQ_CC	0x02000		/* have/will request CC */
 #define	TF_RCVD_CC	0x04000		/* a CC was received in SYN */
-#define	TF_SENDCCNEW	0x08000		/* send CCnew instead of CC in SYN */
+#define	TF_SENDCCNEW	0x08000		/* Not implemented */
 #define	TF_MORETOCOME	0x10000		/* More data to be appended to sock */
 #define	TF_LQ_OVERFLOW	0x20000		/* listen queue overflow */
 #define	TF_RXWIN0SENT	0x40000		/* sent a receiver win 0 in response */

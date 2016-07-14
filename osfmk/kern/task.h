@@ -812,6 +812,8 @@ extern void task_importance_mark_receiver(task_t task, boolean_t receiving);
 extern void task_importance_mark_denap_receiver(task_t task, boolean_t denap);
 extern void task_importance_reset(task_t task);
 extern void task_atm_reset(task_t task);
+extern void task_bank_reset(task_t task);
+extern void task_bank_init(task_t task);
 
 #if IMPORTANCE_INHERITANCE
 

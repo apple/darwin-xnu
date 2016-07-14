@@ -2132,6 +2132,9 @@ task_set_port_space(
 {
 	kern_return_t kr;
 	
+	if (space == IS_NULL)
+		return KERN_INVALID_TASK;
+
 	is_write_lock(space);
 
 	if (!is_active(space)) {

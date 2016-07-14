@@ -161,6 +161,7 @@ struct thread {
 #define TH_OPT_GLOBAL_FORCED_IDLE	0x0100	/* Thread performs forced idle for thermal control */
 #define TH_OPT_SCHED_VM_GROUP	0x0200		/* Thread belongs to special scheduler VM group */
 #define TH_OPT_HONOR_QLIMIT	0x0400		/* Thread will honor qlimit while sending mach_msg, regardless of MACH_SEND_ALWAYS */
+#define TH_OPT_SEND_IMPORTANCE	0x0800		/* Thread will allow importance donation from kernel rpc */
 
 	boolean_t			wake_active;	/* wake event on stop */
 	int					at_safe_point;	/* thread_abort_safely allowed */
@@ -1005,6 +1006,8 @@ extern void thread_update_io_stats(thread_t thread, int size, int io_flags);
 
 extern kern_return_t	thread_set_voucher_name(mach_port_name_t name);
 extern kern_return_t thread_get_current_voucher_origin_pid(int32_t *pid);
+
+extern void thread_enable_send_importance(thread_t thread, boolean_t enable);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

@@ -208,8 +208,14 @@ private:
     OSSet * mappings;
     UInt8   sharedInstance;
     UInt8   closed;
-    UInt8   __reservedA[2];
+    UInt8   __ipcFinal;
+    UInt8   __reservedA[1];
+    volatile SInt32 __ipc;
+#if __LP64__
     void  * __reserved[7];
+#else
+    void  * __reserved[6];
+#endif
 
 public:
    virtual IOReturn externalMethod( uint32_t selector, IOExternalMethodArguments * arguments,
@@ -246,6 +252,7 @@ private:
 public:
     static void initialize( void );
     static void destroyUserReferences( OSObject * obj );
+    static bool finalizeUserReferences( OSObject * obj );
     IOMemoryMap * mapClientMemory64( IOOptionBits type,
                                     task_t task,
                                     IOOptionBits mapFlags = kIOMapAnywhere,

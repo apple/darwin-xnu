@@ -1343,6 +1343,11 @@ sendit:
 	    struct ip *, ip, struct ip6_hdr *, NULL);
 
 	error = ipsec4_output(&ipsec_state, sp, flags);
+	if (ipsec_state.tunneled == 6) {
+		m0 = m = NULL;
+		error = 0;
+		goto bad;
+	}
 
 	m0 = m = ipsec_state.m;
 

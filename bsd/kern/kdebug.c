@@ -991,12 +991,12 @@ out1:
 				need_kds_wakeup = TRUE;
 			}
 			lck_spin_unlock(kdw_spin_lock);
-
-			ml_set_interrupts_enabled(s);
-			
-			if (need_kds_wakeup == TRUE)
-				wakeup(&kds_waiter);
 		}
+
+		ml_set_interrupts_enabled(s);
+
+		if (need_kds_wakeup == TRUE)
+			wakeup(&kds_waiter);
 	}
 }
 

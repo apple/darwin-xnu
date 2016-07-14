@@ -894,8 +894,7 @@ tcp_timers(tp, timer)
 			rexmt = TCP_REXMTVAL(tp) * tcp_backoff[tp->t_rxtshift];
 		}
 
-		TCPT_RANGESET(tp->t_rxtcur, rexmt,
-			tp->t_rttmin, TCPTV_REXMTMAX, 
+		TCPT_RANGESET(tp->t_rxtcur, rexmt, tp->t_rttmin, TCPTV_REXMTMAX,
 			TCP_ADD_REXMTSLOP(tp));
 		tp->t_timer[TCPT_REXMT] = OFFSET_FROM_START(tp, tp->t_rxtcur);
 
@@ -2220,11 +2219,11 @@ tcp_probe_connectivity(struct ifnet *ifp, u_int32_t enable)
 		tcp_lock(inp->inp_socket, 1, 0);
 
 		/* Release the want count */
-		if (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING) {
+		if (inp->inp_ppcb == NULL ||
+		    (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING)) {
 			tcp_unlock(inp->inp_socket, 1, 0);
 			continue;
 		}
-
 		tp = intotcpcb(inp);
 		if (enable)
 			tcp_enable_read_probe(tp, ifp);

@@ -136,6 +136,8 @@ typedef mach_voucher_attr_recipe_command_t *mach_voucher_attr_recipe_command_arr
 #define MACH_VOUCHER_ATTR_COPY 			((mach_voucher_attr_recipe_command_t)1)
 #define MACH_VOUCHER_ATTR_REMOVE		((mach_voucher_attr_recipe_command_t)2)
 #define MACH_VOUCHER_ATTR_SET_VALUE_HANDLE	((mach_voucher_attr_recipe_command_t)3)
+#define MACH_VOUCHER_ATTR_AUTO_REDEEM		((mach_voucher_attr_recipe_command_t)4)
+#define MACH_VOUCHER_ATTR_SEND_PREPROCESS	((mach_voucher_attr_recipe_command_t)5)
 
 /* redeem is on its way out? */
 #define MACH_VOUCHER_ATTR_REDEEM 		((mach_voucher_attr_recipe_command_t)10)
@@ -229,6 +231,9 @@ typedef mach_msg_type_number_t mach_voucher_attr_value_handle_array_size_t;
 #define MACH_VOUCHER_ATTR_VALUE_MAX_NESTED 	((mach_voucher_attr_value_handle_array_size_t)4)
 
 typedef uint32_t mach_voucher_attr_value_reference_t;
+typedef uint32_t mach_voucher_attr_value_flags_t;
+#define MACH_VOUCHER_ATTR_VALUE_FLAGS_NONE      ((mach_voucher_attr_value_flags_t)0)
+#define MACH_VOUCHER_ATTR_VALUE_FLAGS_PERSIST   ((mach_voucher_attr_value_flags_t)1)
 
 /* USE - TBD */
 typedef uint32_t mach_voucher_attr_control_flags_t;

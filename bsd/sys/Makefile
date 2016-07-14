@@ -67,6 +67,7 @@ PRIVATE_DATAFILES = \
 	kern_overrides.h \
 	mbuf.h \
 	mman.h \
+	persona.h \
 	priv.h \
 	proc.h \
 	proc_info.h \
@@ -138,6 +139,7 @@ PRIVATE_KERNELFILES = \
 	mach_swapon.h \
 	msgbuf.h \
 	eventvar.h \
+	persona.h \
 	proc_info.h \
 	pthread_shims.h \
 	quota.h \

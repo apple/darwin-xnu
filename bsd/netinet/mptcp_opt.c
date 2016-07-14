@@ -343,9 +343,24 @@ mptcp_send_infinite_mapping(struct tcpcb *tp, u_char *opt, unsigned int optlen)
 		    MPTCP_DATASEQ_LOW32(mp_tp->mpt_dsn_at_csum_fail);
 		infin_opt.mdss_subflow_seqn = mp_tp->mpt_ssn_at_csum_fail;
 	} else {
+		/*
+		 * If MPTCP fallback happens, but TFO succeeds, the data on the
+		 * SYN does not belong to the MPTCP data sequence space.
+		 */
+		if ((tp->t_tfo_stats & TFO_S_SYN_DATA_ACKED) &&
+		    ((mp_tp->mpt_local_idsn + 1) == mp_tp->mpt_snduna)) {
+			infin_opt.mdss_subflow_seqn = 1;
+
+			mptcplog((LOG_DEBUG, "MPTCP Socket: %s: idsn %llu"
+			    "snduna %llu \n", __func__, mp_tp->mpt_local_idsn,
+			    mp_tp->mpt_snduna),
+			    (MPTCP_SOCKET_DBG | MPTCP_SENDER_DBG),
+			    MPTCP_LOGLVL_LOG);
+		} else {
+			infin_opt.mdss_subflow_seqn = tp->snd_una - tp->iss;
+		}
 		infin_opt.mdss_dsn = (u_int32_t)
 		    MPTCP_DATASEQ_LOW32(mp_tp->mpt_snduna);
-		infin_opt.mdss_subflow_seqn = tp->snd_una - tp->iss;
 	}
 	MPT_UNLOCK(mp_tp);
 	if (error != 0)
@@ -1128,13 +1143,18 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 			mp_tp->mpt_flags |= MPTCPF_CHECKSUM;
 
 		rsp = (struct mptcp_mpcapable_opt_rsp *)cp;
-		MPT_LOCK_SPIN(mp_tp);
+		MPT_LOCK(mp_tp);
 		mp_tp->mpt_remotekey = rsp->mmc_localkey;
 		/* For now just downgrade to the peer's version */
 		mp_tp->mpt_peer_version = rsp->mmc_common.mmco_version;
 		if (rsp->mmc_common.mmco_version < mp_tp->mpt_version) {
 			mp_tp->mpt_version = rsp->mmc_common.mmco_version;
 			tcpstat.tcps_mp_verdowngrade++;
+		}
+		if (mptcp_init_remote_parms(mp_tp) != 0) {
+			tcpstat.tcps_invalid_mpcap++;
+			MPT_UNLOCK(mp_tp);
+			return;
 		}
 		MPT_UNLOCK(mp_tp);
 		tp->t_mpflags |= TMPF_PREESTABLISHED;
@@ -1395,13 +1415,13 @@ mptcp_do_dss_opt_ack_meat(u_int64_t full_dack, struct tcpcb *tp)
 		if (mp_tp->mpt_state > MPTCPS_FIN_WAIT_2)
 			close_notify = 1;
 		MPT_UNLOCK(mp_tp);
-		mptcp_notify_mpready(tp->t_inpcb->inp_socket);
-		if (close_notify)
-			mptcp_notify_close(tp->t_inpcb->inp_socket);
 		if (mp_tp->mpt_flags & MPTCPF_RCVD_64BITACK) {
 			mp_tp->mpt_flags &= ~MPTCPF_RCVD_64BITACK;
 			mp_tp->mpt_flags &= ~MPTCPF_SND_64BITDSN;
 		}
+		mptcp_notify_mpready(tp->t_inpcb->inp_socket);
+		if (close_notify)
+			mptcp_notify_close(tp->t_inpcb->inp_socket);
 	} else {
 		MPT_UNLOCK(mp_tp);
 		mptcplog((LOG_ERR,"MPTCP Socket: "
@@ -1431,6 +1451,13 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp)
 		return;						\
 	}							\
 }
+
+	/*
+	 * mp_tp might become NULL after the call to mptcp_do_fin_opt().
+	 * Review after rdar://problem/24083886
+	 */
+	if (!mp_tp)
+		return;
 
 	if (mp_tp->mpt_flags & MPTCPF_CHECKSUM)
 		csum_len = 2;

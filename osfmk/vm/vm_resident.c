@@ -7236,10 +7236,16 @@ process_account(mach_memory_info_t * sites, unsigned int __unused num_sites)
 	    }
 	    else
 	    {
+#if 1
+		site = NULL;
+#else
+		/* this code would free a site with no allocations but can race a new
+		 * allocation being made */
 		vm_tag_free_locked(site->tag);
 	        site->tag = VM_KERN_MEMORY_NONE;
 	        vm_allocation_sites[idx] = NULL;
 		if (!(VM_TAG_UNLOAD & site->flags)) site = NULL;
+#endif
 	    }
 	}
 	lck_spin_unlock(&vm_allocation_sites_lock);

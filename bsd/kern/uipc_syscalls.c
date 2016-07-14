@@ -2756,7 +2756,6 @@ getsockaddr(struct socket *so, struct sockaddr **namp, user_addr_t uaddr,
 {
 	struct sockaddr *sa;
 	int error;
-	size_t alloclen;
 
 	if (len > SOCK_MAXADDRLEN)
 		return (ENAMETOOLONG);
@@ -2764,12 +2763,7 @@ getsockaddr(struct socket *so, struct sockaddr **namp, user_addr_t uaddr,
 	if (len < offsetof(struct sockaddr, sa_data[0]))
 		return (EINVAL);
 
-	/*
-	 * Workaround for rdar://23362120
-	 * Allways allocate a buffer that can hold an IPv6 socket address
-	 */
-	alloclen = MAX(len, sizeof(struct sockaddr_in6));
-	MALLOC(sa, struct sockaddr *, alloclen, M_SONAME, M_WAITOK | M_ZERO);
+	MALLOC(sa, struct sockaddr *, len, M_SONAME, M_WAITOK | M_ZERO);
 	if (sa == NULL) {
 		return (ENOMEM);
 	}
@@ -2845,7 +2839,8 @@ getsockaddrlist(struct socket *so, struct sockaddr_list **slp,
 
 	*slp = NULL;
 
-	if (uaddr == USER_ADDR_NULL || uaddrlen == 0)
+	if (uaddr == USER_ADDR_NULL || uaddrlen == 0 ||
+	    uaddrlen > (sizeof(struct sockaddr_in6) * SOCKADDRLIST_MAX_ENTRIES))
 		return (EINVAL);
 
 	sl = sockaddrlist_alloc(M_WAITOK);
@@ -2876,7 +2871,7 @@ getsockaddrlist(struct socket *so, struct sockaddr_list **slp,
 		} else if (ss.ss_len > sizeof (ss)) {
 			/*
 			 * sockaddr_storage size is less than SOCK_MAXADDRLEN,
-			 * so the check here is inclusive.  We could user the
+			 * so the check here is inclusive.  We could use the
 			 * latter instead, but seems like an overkill for now.
 			 */
 			error = ENAMETOOLONG;
@@ -2884,8 +2879,10 @@ getsockaddrlist(struct socket *so, struct sockaddr_list **slp,
 		}
 
 		se = sockaddrentry_alloc(M_WAITOK);
-		if (se == NULL)
+		if (se == NULL) {
+			error = ENOBUFS;
 			break;
+		}
 
 		sockaddrlist_insert(sl, se);
 

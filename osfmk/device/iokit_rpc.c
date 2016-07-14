@@ -73,6 +73,7 @@
  */
 
 extern void iokit_add_reference( io_object_t obj );
+extern void iokit_add_connect_reference( io_object_t obj );
 
 extern ipc_port_t iokit_port_for_object( io_object_t obj,
 			ipc_kobject_type_t type );
@@ -170,7 +171,7 @@ iokit_lookup_connect_port(
 	iokit_lock_port(port);
 	if (ip_active(port) && (ip_kotype(port) == IKOT_IOKIT_CONNECT)) {
 	    obj = (io_object_t) port->ip_kobject;
-	    iokit_add_reference( obj );
+	    iokit_add_connect_reference( obj );
 	}
 	else
 	    obj = NULL;
@@ -200,7 +201,7 @@ iokit_lookup_connect_ref(io_object_t connectRef, ipc_space_t space)
 			iokit_lock_port(port);
 			if (ip_active(port) && (ip_kotype(port) == IKOT_IOKIT_CONNECT)) {
 				obj = (io_object_t) port->ip_kobject;
-				iokit_add_reference(obj);
+				iokit_add_connect_reference(obj);
 			}
 			iokit_unlock_port(port);
 

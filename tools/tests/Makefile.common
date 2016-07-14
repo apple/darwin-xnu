@@ -46,3 +46,11 @@ else
 endif
 
 DEPLOYMENT_TARGET_DEFINES = -DPLATFORM_$(PLATFORM)
+
+ifeq ($(RC_XBS),YES)
+_v =
+else ifeq ($(VERBOSE),YES)
+_v =
+else
+_v = @
+endif

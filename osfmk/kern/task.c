@@ -343,6 +343,34 @@ task_atm_reset(__unused task_t task) {
 
 }
 
+void
+task_bank_reset(__unused task_t task) {
+
+#if CONFIG_BANK
+	if (task->bank_context != NULL) {
+		 bank_task_destroy(task);
+	}
+#endif
+
+}
+
+/*
+ * NOTE: This should only be called when the P_LINTRANSIT
+ *	 flag is set (the proc_trans lock is held) on the
+ *	 proc associated with the task.
+ */
+void
+task_bank_init(__unused task_t task) {
+
+#if CONFIG_BANK
+	if (task->bank_context != NULL) {
+		panic("Task bank init called with non null bank context for task: %p and bank_context: %p", task, task->bank_context);
+	}
+	bank_task_initialize(task);
+#endif
+
+}
+
 #if TASK_REFERENCE_LEAK_DEBUG
 #include <kern/btlog.h>
 
@@ -1080,17 +1108,12 @@ task_deallocate(
 	/*
 	 * remove the reference on atm descriptor
 	 */
-	 task_atm_reset(task);
+	task_atm_reset(task);
 
-#if CONFIG_BANK
 	/*
 	 * remove the reference on bank context
 	 */
-	if (task->bank_context != NULL) {
-		bank_task_destroy(task->bank_context);
-		task->bank_context = NULL;
-	}
-#endif
+	task_bank_reset(task);
 
 	if (task->task_io_stats)
 		kfree(task->task_io_stats, sizeof(struct io_stat_info));
@@ -4355,7 +4378,7 @@ task_wakeups_monitor_ctl(task_t task, uint32_t *flags, int32_t *rate_hz)
 		 * remove the limit & callback on the wakeups ledger entry.
 		 */
 #if CONFIG_TELEMETRY
-		telemetry_task_ctl_locked(current_task(), TF_WAKEMON_WARNING, 0);
+		telemetry_task_ctl_locked(task, TF_WAKEMON_WARNING, 0);
 #endif
 		ledger_disable_refill(ledger, task_ledgers.interrupt_wakeups);
 		ledger_disable_callback(ledger, task_ledgers.interrupt_wakeups);

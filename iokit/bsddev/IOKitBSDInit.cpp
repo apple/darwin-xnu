@@ -830,7 +830,7 @@ IOOpenPolledCoreFile(const char * filename)
 static void 
 IOClosePolledCoreFile(void)
 {
-    IOPolledFilePollersClose(gIOPolledCoreFileVars, kIOPolledPostflightState);
+    IOPolledFilePollersClose(gIOPolledCoreFileVars, kIOPolledPostflightCoreDumpState);
     IOPolledFileClose(&gIOPolledCoreFileVars, NULL, NULL, 0, 0, 0);
 }
 

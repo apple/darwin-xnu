@@ -105,6 +105,7 @@
 		29A59AE6183B110C00E8B896 /* unlinkat.c in Sources */ = {isa = PBXBuildFile; fileRef = 29A59AE5183B110C00E8B896 /* unlinkat.c */; };
 		2BA88DCC1810A3CE00EB63F6 /* coalition.c in Sources */ = {isa = PBXBuildFile; fileRef = 2BA88DCB1810A3CE00EB63F6 /* coalition.c */; };
 		374A36E314748F1300AAF39D /* varargs_wrappers.s in Sources */ = {isa = PBXBuildFile; fileRef = 374A36E214748EE400AAF39D /* varargs_wrappers.s */; };
+		3F538F891A659C5600B37EFD /* persona.c in Sources */ = {isa = PBXBuildFile; fileRef = 3F538F881A659C5600B37EFD /* persona.c */; };
 		435F3CAA1B06B7BA005ED9EF /* work_interval.c in Sources */ = {isa = PBXBuildFile; fileRef = 435F3CA91B06B7BA005ED9EF /* work_interval.c */; };
 		467DAFD4157E8AF200CE68F0 /* guarded_open_np.c in Sources */ = {isa = PBXBuildFile; fileRef = 467DAFD3157E8AF200CE68F0 /* guarded_open_np.c */; };
 		4BDD5F1D1891AB2F004BF300 /* mach_approximate_time.c in Sources */ = {isa = PBXBuildFile; fileRef = 4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */; };
@@ -435,6 +436,7 @@
 		2BA88DCB1810A3CE00EB63F6 /* coalition.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = coalition.c; sourceTree = "<group>"; };
 		374A36E214748EE400AAF39D /* varargs_wrappers.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = varargs_wrappers.s; sourceTree = "<group>"; };
 		37DDFB7614748713009D3355 /* syscall.map */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = syscall.map; sourceTree = "<group>"; };
+		3F538F881A659C5600B37EFD /* persona.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = persona.c; sourceTree = "<group>"; };
 		435F3CA91B06B7BA005ED9EF /* work_interval.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = work_interval.c; sourceTree = "<group>"; };
 		467DAFD3157E8AF200CE68F0 /* guarded_open_np.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = guarded_open_np.c; sourceTree = "<group>"; };
 		4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_approximate_time.c; sourceTree = "<group>"; };
@@ -726,6 +728,7 @@
 				4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */,
 				4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */,
 				030B179A135377B400DAD1F0 /* open_dprotected_np.c */,
+				3F538F881A659C5600B37EFD /* persona.c */,
 				C6BEE9171806840200D25AAB /* posix_sem_obsolete.c */,
 				24B8C2611237F53900D36CC3 /* remove-counter.c */,
 				248AA966122C7CDA0085F5B1 /* rename.c */,
@@ -1336,6 +1339,7 @@
 				291D3C291354FDD100D46061 /* mach_vm.c in Sources */,
 				EE3F605A149A6D66003BAEBA /* getaudit.c in Sources */,
 				C9B6A5ED153795DE00749EBA /* alloc_once.c in Sources */,
+				3F538F891A659C5600B37EFD /* persona.c in Sources */,
 				467DAFD4157E8AF200CE68F0 /* guarded_open_np.c in Sources */,
 				729B7D0A15C8938C000E2501 /* carbon_delete.c in Sources */,
 				A59CB9581666A1A200B064B3 /* munmap.c in Sources */,

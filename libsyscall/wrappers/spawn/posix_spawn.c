@@ -133,7 +133,7 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 		/* Default is to inherit parent's coalition(s) */
 		(*psattrp)->psa_coalition_info = NULL;
 
-		(*psattrp)->reserved = NULL;
+		(*psattrp)->psa_persona_info = NULL;
 
 		/*
 		 * old coalition field
@@ -178,7 +178,7 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
  */
 static int posix_spawn_destroyportactions_np(posix_spawnattr_t *);
 static int posix_spawn_destroycoalition_info_np(posix_spawnattr_t *);
-
+static int posix_spawn_destroypersona_info_np(posix_spawnattr_t *);
 
 int
 posix_spawnattr_destroy(posix_spawnattr_t *attr)
@@ -191,6 +191,7 @@ posix_spawnattr_destroy(posix_spawnattr_t *attr)
 	psattr = *(_posix_spawnattr_t *)attr;
 	posix_spawn_destroyportactions_np(attr);
 	posix_spawn_destroycoalition_info_np(attr);
+	posix_spawn_destroypersona_info_np(attr);
 
 	free(psattr);
 	*attr = NULL;
@@ -775,6 +776,29 @@ posix_spawn_destroycoalition_info_np(posix_spawnattr_t *attr)
 
 	psattr->psa_coalition_info = NULL;
 	free(coal_info);
+	return 0;
+}
+
+/*
+ * posix_spawn_destroypersona_info_np
+ * Description: clean up persona_info struct in posix_spawnattr_t attr
+ */
+static int
+posix_spawn_destroypersona_info_np(posix_spawnattr_t *attr)
+{
+	_posix_spawnattr_t psattr;
+	struct _posix_spawn_persona_info *persona;
+
+	if (attr == NULL || *attr == NULL)
+		return EINVAL;
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	persona = psattr->psa_persona_info;
+	if (persona == NULL)
+		return EINVAL;
+
+	psattr->psa_persona_info = NULL;
+	free(persona);
 	return 0;
 }
 
@@ -1523,6 +1547,124 @@ posix_spawnattr_get_darwin_role_np(const posix_spawnattr_t * __restrict attr, ui
 	return (0);
 }
 
+
+int
+posix_spawnattr_set_persona_np(const posix_spawnattr_t * __restrict attr, uid_t persona_id, uint32_t flags)
+{
+	_posix_spawnattr_t psattr;
+	struct _posix_spawn_persona_info *persona;
+
+	if (attr == NULL || *attr == NULL)
+		return EINVAL;
+
+	if (flags & ~POSIX_SPAWN_PERSONA_ALL_FLAGS)
+		return EINVAL;
+
+	psattr = *(_posix_spawnattr_t *)attr;
+
+	persona = psattr->psa_persona_info;
+	if (!persona) {
+		persona = (struct _posix_spawn_persona_info *)malloc(sizeof(*persona));
+		if (!persona)
+			return ENOMEM;
+		persona->pspi_uid = 0;
+		persona->pspi_gid = 0;
+		persona->pspi_ngroups = 0;
+		persona->pspi_groups[0] = 0;
+
+		psattr->psa_persona_info = persona;
+	}
+
+	persona->pspi_id = persona_id;
+	persona->pspi_flags = flags;
+
+	return 0;
+}
+
+int
+posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t * __restrict attr, uid_t uid)
+{
+	_posix_spawnattr_t psattr;
+	struct _posix_spawn_persona_info *persona;
+
+	if (attr == NULL || *attr == NULL)
+		return EINVAL;
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	persona = psattr->psa_persona_info;
+	if (!persona)
+		return EINVAL;
+
+	if (!(persona->pspi_flags & (POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE | POSIX_SPAWN_PERSONA_FLAGS_VERIFY)))
+		return EINVAL;
+
+	persona->pspi_uid = uid;
+
+	persona->pspi_flags |= POSIX_SPAWN_PERSONA_UID;
+
+	return 0;
+}
+
+int
+posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t * __restrict attr, gid_t gid)
+{
+	_posix_spawnattr_t psattr;
+	struct _posix_spawn_persona_info *persona;
+
+	if (attr == NULL || *attr == NULL)
+		return EINVAL;
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	persona = psattr->psa_persona_info;
+	if (!persona)
+		return EINVAL;
+
+	if (!(persona->pspi_flags & (POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE | POSIX_SPAWN_PERSONA_FLAGS_VERIFY)))
+		return EINVAL;
+
+	persona->pspi_gid = gid;
+
+	persona->pspi_flags |= POSIX_SPAWN_PERSONA_GID;
+
+	return 0;
+}
+
+int
+posix_spawnattr_set_persona_groups_np(const posix_spawnattr_t * __restrict attr, int ngroups, gid_t *gidarray, uid_t gmuid)
+{
+	_posix_spawnattr_t psattr;
+	struct _posix_spawn_persona_info *persona;
+
+	if (attr == NULL || *attr == NULL)
+		return EINVAL;
+
+	if (gidarray == NULL)
+		return EINVAL;
+
+	if (ngroups > NGROUPS)
+		return EINVAL;
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	persona = psattr->psa_persona_info;
+	if (!persona)
+		return EINVAL;
+
+	if (!(persona->pspi_flags & (POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE | POSIX_SPAWN_PERSONA_FLAGS_VERIFY)))
+		return EINVAL;
+
+	persona->pspi_ngroups = ngroups;
+	for (int i = 0; i < ngroups; i++)
+		persona->pspi_groups[i] = gidarray[i];
+
+	persona->pspi_gmuid = gmuid;
+
+	persona->pspi_flags |= POSIX_SPAWN_PERSONA_GROUPS;
+
+	return 0;
+}
+
+
+
 /*
  * posix_spawn
  *
@@ -1599,6 +1741,10 @@ posix_spawn(pid_t * __restrict pid, const char * __restrict path,
 			if (psattr->psa_coalition_info != NULL) {
 				ad.coal_info_size = sizeof(struct _posix_spawn_coalition_info);
 				ad.coal_info = psattr->psa_coalition_info;
+			}
+			if (psattr->psa_persona_info != NULL) {
+				ad.persona_info_size = sizeof(struct _posix_spawn_persona_info);
+				ad.persona_info = psattr->psa_persona_info;
 			}
 		}
 		if (file_actions != NULL && *file_actions != NULL) {

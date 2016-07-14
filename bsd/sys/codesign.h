@@ -54,6 +54,7 @@
 #define CS_DYLD_PLATFORM	0x2000000	/* dyld used to load this is a platform binary */
 #define CS_PLATFORM_BINARY	0x4000000	/* this is a platform binary */
 #define CS_PLATFORM_PATH	0x8000000	/* platform binary by the fact of path (osx only) */
+#define CS_DEBUGGED     	0x10000000  /* process is currently or has previously been debugged and allowed to run with invalid pages */
 
 #define CS_ENTITLEMENT_FLAGS	(CS_GET_TASK_ALLOW | CS_INSTALLER)
 
@@ -99,6 +100,10 @@ enum {
 	CSSLOT_APPLICATION = 4,
 	CSSLOT_ENTITLEMENTS = 5,
 
+	CSSLOT_ALTERNATE_CODEDIRECTORIES = 0x1000, /* first alternate CodeDirectory, if any */
+	CSSLOT_ALTERNATE_CODEDIRECTORY_MAX = 5,		/* max number of alternate CD slots */
+	CSSLOT_ALTERNATE_CODEDIRECTORY_LIMIT = CSSLOT_ALTERNATE_CODEDIRECTORIES + CSSLOT_ALTERNATE_CODEDIRECTORY_MAX, /* one past the last */
+
 	CSSLOT_SIGNATURESLOT = 0x10000,			/* CMS Signature */
 
 	CSTYPE_INDEX_REQUIREMENTS = 0x00000002,		/* compat with amfi */
@@ -107,12 +112,13 @@ enum {
 	CS_HASHTYPE_SHA1 = 1,
 	CS_HASHTYPE_SHA256 = 2,
 	CS_HASHTYPE_SHA256_TRUNCATED = 3,
+	CS_HASHTYPE_SHA384 = 4,
 
 	CS_SHA1_LEN = 20,
 	CS_SHA256_TRUNCATED_LEN = 20,
 
-	CS_CDHASH_LEN = 20,
-	CS_HASH_MAX_SIZE = 32, /* max size of the hash we'll support */
+	CS_CDHASH_LEN = 20,						/* always - larger hashes are truncated */
+	CS_HASH_MAX_SIZE = 48, /* max size of the hash we'll support */
 };
 
 

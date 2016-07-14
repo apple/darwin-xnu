@@ -1916,7 +1916,8 @@ in_selectaddrs(int af, struct sockaddr_list **src_sl,
     struct sockaddr_entry **src_se, struct sockaddr_list **dst_sl,
     struct sockaddr_entry **dst_se)
 {
-	struct sockaddr_entry *se;
+	struct sockaddr_entry *se = NULL;
+	struct sockaddr_entry *tse = NULL;
 	int error = 0;
 
 	VERIFY(src_sl != NULL && dst_sl != NULL && *dst_sl != NULL);
@@ -1939,7 +1940,7 @@ in_selectaddrs(int af, struct sockaddr_list **src_sl,
 			}
 		}
 		/* get rid of the rest */
-		TAILQ_FOREACH(se, &(*src_sl)->sl_head, se_link) {
+		TAILQ_FOREACH_SAFE(se, &(*src_sl)->sl_head, se_link, tse) {
 			sockaddrlist_remove(*src_sl, se);
 			sockaddrentry_free(se);
 		}
@@ -1970,7 +1971,7 @@ in_selectaddrs(int af, struct sockaddr_list **src_sl,
 		}
 	}
 	/* get rid of the rest */
-	TAILQ_FOREACH(se, &(*dst_sl)->sl_head, se_link) {
+	TAILQ_FOREACH_SAFE(se, &(*dst_sl)->sl_head, se_link, tse) {
 		sockaddrlist_remove(*dst_sl, se);
 		sockaddrentry_free(se);
 	}

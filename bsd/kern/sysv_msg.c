@@ -558,11 +558,11 @@ msgctl(struct proc *p, struct msgctl_args *uap, int32_t *retval)
 
 		SYSV_MSG_SUBSYS_UNLOCK();
 		if (IS_64BIT_PROCESS(p)) {
-			struct user64_msqid_ds msqid_ds64;
+			struct user64_msqid_ds msqid_ds64 = {};
 			msqid_ds_kerneltouser64(&msqptr->u, &msqid_ds64);
 			eval = copyout(&msqid_ds64, uap->buf, sizeof(msqid_ds64));
 		} else {
-			struct user32_msqid_ds msqid_ds32;
+			struct user32_msqid_ds msqid_ds32 = {};
 			msqid_ds_kerneltouser32(&msqptr->u, &msqid_ds32);
 			eval = copyout(&msqid_ds32, uap->buf, sizeof(msqid_ds32));
 		}
@@ -1468,8 +1468,8 @@ IPCS_msg_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		struct user32_IPCS_command u32;
 		struct user_IPCS_command u64;
 	} ipcs;
-	struct user32_msqid_ds msqid_ds32;	/* post conversion, 32 bit version */
-	struct user64_msqid_ds msqid_ds64;	/* post conversion, 64 bit version */
+	struct user32_msqid_ds msqid_ds32 = {};	/* post conversion, 32 bit version */
+	struct user64_msqid_ds msqid_ds64 = {};	/* post conversion, 64 bit version */
 	void *msqid_dsp;
 	size_t ipcs_sz;
 	size_t msqid_ds_sz;

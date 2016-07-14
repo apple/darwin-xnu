@@ -1985,84 +1985,6 @@ nd6_prefix_lookup(struct nd_prefix *pr, int nd6_prefix_expiry)
 	return (search);
 }
 
-static void
-purge_detached(struct ifnet *ifp)
-{
-	struct nd_prefix *pr, *pr_next;
-	struct in6_ifaddr *ia;
-	struct ifaddr *ifa, *ifa_next;
-	boolean_t removed = FALSE;
-
-	lck_mtx_lock(nd6_mutex);
-
-	pr = nd_prefix.lh_first;
-repeat:
-	while (pr) {
-		NDPR_LOCK(pr);
-		pr_next = pr->ndpr_next;
-		if (pr->ndpr_ifp != ifp ||
-		    IN6_IS_ADDR_LINKLOCAL(&pr->ndpr_prefix.sin6_addr) ||
-		    ((pr->ndpr_stateflags & NDPRF_DETACHED) == 0 &&
-		    !LIST_EMPTY(&pr->ndpr_advrtrs))) {
-			NDPR_UNLOCK(pr);
-			pr = pr_next;
-			continue;
-		}
-		NDPR_ADDREF_LOCKED(pr);
-		NDPR_UNLOCK(pr);
-		ifnet_lock_shared(ifp);
-		for (ifa = ifp->if_addrlist.tqh_first; ifa; ifa = ifa_next) {
-			IFA_LOCK(ifa);
-			ifa_next = ifa->ifa_list.tqe_next;
-			if (ifa->ifa_addr->sa_family != AF_INET6) {
-				IFA_UNLOCK(ifa);
-				continue;
-			}
-			ia = (struct in6_ifaddr *)ifa;
-			if ((ia->ia6_flags & IN6_IFF_AUTOCONF) ==
-			    IN6_IFF_AUTOCONF && ia->ia6_ndpr == pr) {
-				IFA_ADDREF_LOCKED(ifa);	/* for us */
-				IFA_UNLOCK(ifa);
-				/*
-				 * Purging the address requires writer access
-				 * to the address list, so drop the ifnet lock
-				 * now and repeat from beginning.
-				 */
-				ifnet_lock_done(ifp);
-				lck_mtx_unlock(nd6_mutex);
-				in6_purgeaddr(ifa);
-				IFA_REMREF(ifa); /* drop ours */
-				lck_mtx_lock(nd6_mutex);
-				NDPR_REMREF(pr);
-				pr = nd_prefix.lh_first;
-				goto repeat;
-			}
-			IFA_UNLOCK(ifa);
-		}
-		ifnet_lock_done(ifp);
-		NDPR_LOCK(pr);
-		if (pr->ndpr_addrcnt == 0 &&
-		    !(pr->ndpr_stateflags & NDPRF_DEFUNCT)) {
-			prelist_remove(pr);
-			NDPR_UNLOCK(pr);
-			removed = TRUE;
-			/*
-			 * Reset the search from the beginning because
-			 * nd6_mutex may have been dropped in
-			 * prelist_remove().
-			 */
-			pr_next = nd_prefix.lh_first;
-		} else {
-			NDPR_UNLOCK(pr);
-		}
-		NDPR_REMREF(pr);
-		pr = pr_next;
-	}
-	if (removed)
-		pfxlist_onlink_check();
-	lck_mtx_unlock(nd6_mutex);
-}
-
 int
 nd6_prelist_add(struct nd_prefix *pr, struct nd_defrouter *dr,
     struct nd_prefix **newp, boolean_t force_scoped)
@@ -2076,11 +1998,6 @@ nd6_prelist_add(struct nd_prefix *pr, struct nd_defrouter *dr,
 		ndi = ND_IFINFO(ifp);
 		VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
 		lck_mtx_lock(&ndi->lock);
-		if (ndi->nprefixes >= ip6_maxifprefixes / 2) {
-			lck_mtx_unlock(&ndi->lock);
-			purge_detached(ifp);
-			lck_mtx_lock(&ndi->lock);
-		}
 		if (ndi->nprefixes >= ip6_maxifprefixes) {
 			lck_mtx_unlock(&ndi->lock);
 			return (ENOMEM);

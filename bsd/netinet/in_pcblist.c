@@ -245,8 +245,8 @@ tcpcb_to_xtcpcb_n(struct tcpcb *tp, struct xtcpcb_n *xt)
 	xt->ts_recent = tp->ts_recent;
 	xt->ts_recent_age = tp->ts_recent_age;
 	xt->last_ack_sent = tp->last_ack_sent;
-	xt->cc_send = tp->cc_send;
-	xt->cc_recv = tp->cc_recv;
+	xt->cc_send = 0;
+	xt->cc_recv = 0;
 	xt->snd_recover = tp->snd_recover;
 	xt->snd_cwnd_prev = tp->snd_cwnd_prev;
 	xt->snd_ssthresh_prev = tp->snd_ssthresh_prev;

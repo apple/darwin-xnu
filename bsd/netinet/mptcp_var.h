@@ -216,6 +216,7 @@ struct mptsub {
 #define MPTSF_FASTJ_SEND	0x100000 /* send data after SYN in MP_JOIN */
 #define MPTSF_FASTJ_REQD	0x200000 /* fastjoin required */
 #define MPTSF_USER_DISCONNECT	0x400000 /* User triggered disconnect */
+#define MPTSF_TFO_REQD		0x800000 /* TFO requested */
 
 #define	MPTSF_BITS \
 	"\020\1ATTACHED\2CONNECTING\3PENDING\4CONNECTED\5DISCONNECTING" \
@@ -589,8 +590,9 @@ extern void mptcp_get_rands(mptcp_addr_id, struct mptcb *, u_int32_t *,
 extern void mptcp_set_raddr_rand(mptcp_addr_id, struct mptcb *, mptcp_addr_id,
     u_int32_t);
 extern u_int64_t mptcp_get_trunced_hmac(mptcp_addr_id, struct mptcb *mp_tp);
-extern int mptcp_generate_token(char *, int, caddr_t, int);
-extern int mptcp_generate_idsn(char *, int, caddr_t, int);
+extern void mptcp_generate_token(char *, int, caddr_t, int);
+extern void mptcp_generate_idsn(char *, int, caddr_t, int);
+extern int mptcp_init_remote_parms(struct mptcb *);
 extern boolean_t mptcp_ok_to_keepalive(struct mptcb *);
 extern void mptcp_insert_dsn(struct mppcb *, struct mbuf *);
 extern void  mptcp_output_getm_dsnmap32(struct socket *, int, uint32_t,

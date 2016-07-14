@@ -104,6 +104,8 @@ thread_quantum_expire(
 	assert(processor == current_processor());
 	assert(thread == current_thread());
 
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_QUANTUM_EXPIRED) | DBG_FUNC_START, 0, 0, 0, 0, 0);
+
 	SCHED_STATS_QUANTUM_TIMER_EXPIRATION(processor);
 
 	/*
@@ -216,6 +218,8 @@ thread_quantum_expire(
 	sched_timeshare_consider_maintenance(ctime);
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
+
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_QUANTUM_EXPIRED) | DBG_FUNC_END, preempt, 0, 0, 0, 0);
 }
 
 /*
@@ -231,7 +235,15 @@ thread_quantum_expire(
 void
 sched_set_thread_base_priority(thread_t thread, int priority)
 {
+	int old_priority = thread->base_pri;
 	thread->base_pri = priority;
+
+	/* A thread is 'throttled' when its base priority is at or below MAXPRI_THROTTLE */
+	if ((priority > MAXPRI_THROTTLE) && (old_priority <= MAXPRI_THROTTLE)) {
+		sched_set_thread_throttled(thread, FALSE);
+	} else if ((priority <= MAXPRI_THROTTLE) && (old_priority > MAXPRI_THROTTLE)) {
+		sched_set_thread_throttled(thread, TRUE);
+	}
 
 	thread_recompute_sched_pri(thread, FALSE);
 }
@@ -720,30 +732,16 @@ sched_set_thread_throttled(thread_t thread, boolean_t wants_throttle)
 
 	assert_thread_sched_count(thread);
 
-	/*
-	 * When backgrounding a thread, iOS has the semantic that
-	 * realtime and fixed priority threads should be demoted
-	 * to timeshare background threads.
-	 *
-	 * On OSX, realtime and fixed priority threads don't lose their mode.
-	 */
-
 	if (wants_throttle) {
 		thread->sched_flags |= TH_SFLAG_THROTTLED;
 		if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN && thread->sched_mode == TH_MODE_TIMESHARE) {
 			sched_background_incr(thread);
 		}
-
-		assert_thread_sched_count(thread);
-
 	} else {
 		thread->sched_flags &= ~TH_SFLAG_THROTTLED;
 		if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN && thread->sched_mode == TH_MODE_TIMESHARE) {
 			sched_background_decr(thread);
 		}
-
-		assert_thread_sched_count(thread);
-
 	}
 
 	assert_thread_sched_count(thread);

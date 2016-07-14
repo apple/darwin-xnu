@@ -1579,6 +1579,8 @@ soconnectxlocked(struct socket *so, struct sockaddr_list **src_sl,
 		 */
 		error = sflt_connectxout(so, dst_sl);
 		if (error != 0) {
+			/* Disable PRECONNECT_DATA, as we don't need to send a SYN anymore. */
+			so->so_flags1 &= ~SOF1_PRECONNECT_DATA;
 			if (error == EJUSTRETURN)
 				error = 0;
 		} else {
@@ -5087,6 +5089,20 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 				error = so_set_extended_bk_idle(so, optval);
 			break;
 
+		case SO_MARK_CELLFALLBACK:
+			error = sooptcopyin(sopt, &optval, sizeof(optval),
+			    sizeof(optval));
+			if (error != 0)
+				goto out;
+			if (optval < 0) {
+				error = EINVAL;
+				goto out;
+			}
+			if (optval == 0)
+				so->so_flags1 &= ~SOF1_CELLFALLBACK;
+			else
+				so->so_flags1 |= SOF1_CELLFALLBACK;
+			break;
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -5499,7 +5515,10 @@ integer:
 		case SO_EXTENDED_BK_IDLE:
 			optval = (so->so_flags1 & SOF1_EXTEND_BK_IDLE_WANTED);
 			goto integer;
-
+		case SO_MARK_CELLFALLBACK:
+			optval = ((so->so_flags1 & SOF1_CELLFALLBACK) > 0)
+			    ? 1 : 0;
+			goto integer;
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -6804,14 +6823,9 @@ sockaddrentry_dup(const struct sockaddr_entry *src_se, int how)
 	dst_se = sockaddrentry_alloc(how);
 	if (dst_se != NULL) {
 		int len = src_se->se_addr->sa_len;
-		/*
-		 * Workaround for rdar://23362120
-		 * Allways allocate a buffer that can hold an IPv6 socket address
-		 */
-		size_t alloclen = MAX(len, sizeof(struct sockaddr_in6));
 
 		MALLOC(dst_se->se_addr, struct sockaddr *,
-		    alloclen, M_SONAME, how | M_ZERO);
+		    len, M_SONAME, how | M_ZERO);
 		if (dst_se->se_addr != NULL) {
 			bcopy(src_se->se_addr, dst_se->se_addr, len);
 		} else {

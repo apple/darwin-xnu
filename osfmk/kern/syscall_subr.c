@@ -415,6 +415,14 @@ thread_depress_abstime(
 		processor_t		myprocessor = self->last_processor;
 
 		self->sched_pri = DEPRESSPRI;
+
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHANGE_PRIORITY),
+		                      (uintptr_t)thread_tid(self),
+		                      self->base_pri,
+		                      self->sched_pri,
+		                      0, /* eventually, 'reason' */
+		                      0);
+
 		myprocessor->current_pri = self->sched_pri;
 		self->sched_flags |= TH_SFLAG_DEPRESS;
 
@@ -510,6 +518,14 @@ thread_poll_yield(
 			thread_lock(self);
 			if (!(self->sched_flags & TH_SFLAG_DEPRESSED_MASK)) {
 				self->sched_pri = DEPRESSPRI;
+
+				KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHANGE_PRIORITY),
+				                      (uintptr_t)thread_tid(self),
+				                      self->base_pri,
+				                      self->sched_pri,
+				                      0, /* eventually, 'reason' */
+				                      0);
+
 				myprocessor->current_pri = self->sched_pri;
 			}
 			self->computation_epoch = abstime;

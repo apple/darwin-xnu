@@ -132,6 +132,33 @@ struct _posix_spawn_coalition_info {
 };
 
 /*
+ * Persona attributes
+ */
+struct _posix_spawn_persona_info {
+	uid_t    pspi_id;       /* persona ID (unix UID) */
+	uint32_t pspi_flags;    /* spawn persona flags */
+	uid_t    pspi_uid;      /* alternate posix/unix UID  */
+	gid_t    pspi_gid;      /* alternate posix/unix GID */
+	uint32_t pspi_ngroups;  /* alternate advisory groups */
+	gid_t    pspi_groups[NGROUPS];
+	uid_t    pspi_gmuid;    /* group membership UID */
+};
+
+#define POSIX_SPAWN_PERSONA_FLAGS_NONE     0x0
+#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 0x1
+#define POSIX_SPAWN_PERSONA_FLAGS_VERIFY   0x2
+
+#define POSIX_SPAWN_PERSONA_ALL_FLAGS \
+	(POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE \
+	 | POSIX_SPAWN_PERSONA_FLAGS_VERIFY \
+	)
+
+#define POSIX_SPAWN_PERSONA_UID           0x00010000
+#define POSIX_SPAWN_PERSONA_GID           0x00020000
+#define POSIX_SPAWN_PERSONA_GROUPS        0x00040000
+
+
+/*
  * A posix_spawnattr structure contains all of the attribute elements that
  * can be set, as well as any metadata whose validity is signalled by the
  * presence of a bit in the flags field.  All fields are initialized to the
@@ -168,7 +195,7 @@ typedef struct _posix_spawnattr {
 	 _posix_spawn_port_actions_t	psa_ports; /* special/exception ports */
 	_posix_spawn_mac_policy_extensions_t psa_mac_extensions; /* MAC policy-specific extensions. */
 	struct _posix_spawn_coalition_info *psa_coalition_info;  /* coalition info */
-	void		*reserved;
+	struct _posix_spawn_persona_info   *psa_persona_info;    /* spawn new process into given persona */
 } *_posix_spawnattr_t;
 
 /*
@@ -339,8 +366,8 @@ struct _posix_spawn_args_desc {
 	__darwin_size_t coal_info_size;
 	struct _posix_spawn_coalition_info *coal_info;	/* pointer to coalition info */
 
-	__darwin_size_t reserved_size;
-	void *reserved;
+	__darwin_size_t persona_info_size;
+	struct _posix_spawn_persona_info   *persona_info;
 };
 
 #ifdef KERNEL
@@ -362,8 +389,8 @@ struct user32__posix_spawn_args_desc {
 	uint32_t	mac_extensions;
 	uint32_t	coal_info_size;
 	uint32_t	coal_info;
-	uint32_t	reserved_size;
-	uint32_t	reserved;
+	uint32_t	persona_info_size;
+	uint32_t	persona_info;
 };
 
 struct user__posix_spawn_args_desc {
@@ -377,8 +404,8 @@ struct user__posix_spawn_args_desc {
 	user_addr_t	mac_extensions;		/* pointer to block */
 	user_size_t	coal_info_size;
 	user_addr_t	coal_info;
-	user_size_t	reserved_size;
-	user_addr_t	reserved;
+	user_size_t	persona_info_size;
+	user_addr_t	persona_info;
 };
 
 

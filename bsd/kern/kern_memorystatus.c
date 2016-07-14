@@ -303,6 +303,23 @@ static uint32_t memorystatus_jld_eval_period_msecs = 0;		/* Init pass sets this 
 static int      memorystatus_jld_eval_aggressive_count = 3;	/* Raise the priority max after 'n' aggressive loops */
 static int      memorystatus_jld_eval_aggressive_priority_band_max = 15;  /* Kill aggressively up through this band */
 
+/*
+ * A FG app can request that the aggressive jetsam mechanism display some leniency in the FG band. This 'lenient' mode is described as:
+ * --- if aggressive jetsam kills an app in the FG band and gets back >=AGGRESSIVE_JETSAM_LENIENT_MODE_THRESHOLD memory, it will stop the aggressive march further into and up the jetsam bands.
+ *
+ * RESTRICTIONS:
+ * - Such a request is respected/acknowledged only once while that 'requesting' app is in the FG band i.e. if aggressive jetsam was
+ * needed and the 'lenient' mode was deployed then that's it for this special mode while the app is in the FG band. 
+ *
+ * - If the app is still in the FG band and aggressive jetsam is needed again, there will be no stop-and-check the next time around.
+ *
+ * - Also, the transition of the 'requesting' app away from the FG band will void this special behavior.
+ */
+
+#define AGGRESSIVE_JETSAM_LENIENT_MODE_THRESHOLD	25
+boolean_t 	memorystatus_aggressive_jetsam_lenient_allowed = FALSE;
+boolean_t 	memorystatus_aggressive_jetsam_lenient = FALSE;
+
 #if DEVELOPMENT || DEBUG
 /* 
  * Jetsam Loop Detection tunables.
@@ -3100,16 +3117,6 @@ memorystatus_kill_specific_process(pid_t victim_pid, uint32_t cause) {
 
 	proc_list_lock();
 
-	if ((p->p_memstat_state & P_MEMSTAT_TERMINATED) ||
-		(p->p_listflag & P_LIST_EXITED) ||
-		(p->p_memstat_state & P_MEMSTAT_ERROR)) {
-		proc_list_unlock();
-		proc_rele(p);
-		return FALSE;
-	}
-
-	p->p_memstat_state |= P_MEMSTAT_TERMINATED;
-
 	if (memorystatus_jetsam_snapshot_count == 0) {
 		memorystatus_init_jetsam_snapshot_locked(NULL,0);
 	}
@@ -3338,11 +3345,14 @@ memorystatus_kill_top_process_aggressive(boolean_t any, uint32_t cause, int aggr
 	int kill_count = 0;
 	unsigned int i = 0;
 	int32_t aPid_ep = 0;
+	unsigned int memorystatus_level_snapshot = 0;
 
 #pragma unused(any)
 
 	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_JETSAM) | DBG_FUNC_START,
 		memorystatus_available_pages, priority_max, 0, 0, 0);
+
+	memorystatus_sort_bucket(JETSAM_PRIORITY_FOREGROUND, JETSAM_SORT_DEFAULT);
 
 	proc_list_lock();
 
@@ -3456,6 +3466,8 @@ memorystatus_kill_top_process_aggressive(boolean_t any, uint32_t cause, int aggr
 			       aPid, (p->p_comm ? p->p_comm : "(unknown)"),
 			       jetsam_kill_cause_name[cause], aPid_ep, memorystatus_available_pages);
 
+			memorystatus_level_snapshot = memorystatus_level;
+
 			killed = memorystatus_do_kill(p, cause);
 				
 			/* Success? */
@@ -3472,6 +3484,17 @@ memorystatus_kill_top_process_aggressive(boolean_t any, uint32_t cause, int aggr
 				if (next_p) {
 					proc_rele_locked(next_p);
 				}
+
+				if (aPid_ep == JETSAM_PRIORITY_FOREGROUND && memorystatus_aggressive_jetsam_lenient == TRUE) {
+					if (memorystatus_level > memorystatus_level_snapshot && ((memorystatus_level - memorystatus_level_snapshot) >= AGGRESSIVE_JETSAM_LENIENT_MODE_THRESHOLD)) {
+#if DEVELOPMENT || DEBUG
+						printf("Disabling Lenient mode after one-time deployment.\n");
+#endif /* DEVELOPMENT || DEBUG */
+						memorystatus_aggressive_jetsam_lenient = FALSE;
+						break;
+					}
+				}
+
 				continue;
 			}
 					
@@ -5908,6 +5931,23 @@ memorystatus_control(struct proc *p __unused, struct memorystatus_control_args *
 		error = memorystatus_cmd_set_panic_bits(args->buffer, args->buffersize);
 		break;
 #endif /* DEVELOPMENT || DEBUG */
+	case MEMORYSTATUS_CMD_AGGRESSIVE_JETSAM_LENIENT_MODE_ENABLE:
+		if (memorystatus_aggressive_jetsam_lenient_allowed == FALSE) {
+#if DEVELOPMENT || DEBUG
+			printf("Enabling Lenient Mode\n");
+#endif /* DEVELOPMENT || DEBUG */
+
+			memorystatus_aggressive_jetsam_lenient_allowed = TRUE;
+			memorystatus_aggressive_jetsam_lenient = TRUE;
+		}
+		break;
+	case MEMORYSTATUS_CMD_AGGRESSIVE_JETSAM_LENIENT_MODE_DISABLE:
+#if DEVELOPMENT || DEBUG
+		printf("Disabling Lenient mode\n");
+#endif /* DEVELOPMENT || DEBUG */
+		memorystatus_aggressive_jetsam_lenient_allowed = FALSE;
+		memorystatus_aggressive_jetsam_lenient = FALSE;
+		break;
 #endif /* CONFIG_JETSAM */
 	case MEMORYSTATUS_CMD_PRIVILEGED_LISTENER_ENABLE:
 	case MEMORYSTATUS_CMD_PRIVILEGED_LISTENER_DISABLE:

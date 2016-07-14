@@ -702,7 +702,6 @@ vm_swapout_thread(void)
 		size = round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset));
 		
 		if (size == 0) {
-			assert(c_seg->c_on_minorcompact_q);
 			assert(c_seg->c_bytes_used == 0);
 
 			c_seg_switch_state(c_seg, C_IS_EMPTY, FALSE);

@@ -335,8 +335,10 @@ extern uint32_t		sched_fixed_shift;
 extern int8_t		sched_load_shifts[NRQS];
 extern uint32_t		sched_decay_usage_age_factor;
 extern uint32_t		sched_use_combined_fgbg_decay;
-void sched_timeshare_consider_maintenance(uint64_t);
+void sched_timeshare_consider_maintenance(uint64_t ctime);
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
+
+void sched_consider_recommended_cores(uint64_t ctime, thread_t thread);
 
 extern int32_t		sched_poll_yield_shift;
 extern uint64_t		sched_safe_duration;

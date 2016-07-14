@@ -52,7 +52,8 @@ static struct protosw mpsw[] = {
 	.pr_type =		SOCK_STREAM,
 	.pr_protocol =		IPPROTO_TCP,
 	.pr_flags =		PR_CONNREQUIRED|PR_MULTICONN|PR_EVCONNINFO|
-				PR_WANTRCVD|PR_PCBLOCK|PR_PROTOLOCK,
+				PR_WANTRCVD|PR_PCBLOCK|PR_PROTOLOCK|
+				PR_PRECONN_WRITE|PR_DATA_IDEMPOTENT,
 	.pr_ctloutput =		mptcp_ctloutput,
 	.pr_init =		mptcp_init,
 	.pr_usrreqs =		&mptcp_usrreqs,

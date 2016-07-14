@@ -795,6 +795,14 @@ special_handler_continue(void)
 			processor_t		myprocessor = thread->last_processor;
 
 			thread->sched_pri = DEPRESSPRI;
+
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHANGE_PRIORITY),
+			                      (uintptr_t)thread_tid(thread),
+			                      thread->base_pri,
+			                      thread->sched_pri,
+			                      0, /* eventually, 'reason' */
+			                      0);
+
 			myprocessor->current_pri = thread->sched_pri;
 		}
 		thread_unlock(thread);

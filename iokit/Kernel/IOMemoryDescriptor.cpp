@@ -1603,9 +1603,11 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
             _wireCount++;	// Physical MDs are, by definition, wired
         else { /* kIOMemoryTypeVirtual | kIOMemoryTypeVirtual64 | kIOMemoryTypeUIO */
             ioGMDData *dataP;
-            mach_vm_size_t dataSize = computeDataSize(_pages, /* upls */ count * 2);
-	    if (dataSize != ((unsigned) dataSize)) return false;         /* overflow */
+            unsigned dataSize;
 
+            if (_pages > atop_64(max_mem)) return false;
+
+            dataSize = computeDataSize(_pages, /* upls */ count * 2);
             if (!initMemoryEntries(dataSize, mapper)) return false;
             dataP = getDataP(_memoryEntries);
             dataP->fPageCnt = _pages;

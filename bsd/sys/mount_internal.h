@@ -461,7 +461,7 @@ void mount_set_noreaddirext (mount_t);
 /* Private NFS spi */
 #define KERNEL_MOUNT_NOAUTH		0x01 /* Don't check the UID of the directory we are mounting on */
 #define KERNEL_MOUNT_PERMIT_UNMOUNT	0x02 /* Allow (non-forced) unmounts by users other the one who mounted the volume */
-#if NFSCLIENT || DEVFS
+#if NFSCLIENT || DEVFS || ROUTEFS
 /*
  * NOTE: kernel_mount() does not force MNT_NOSUID, MNT_NOEXEC, or MNT_NODEC for non-privileged
  * mounting credentials, as the mount(2) system call does.

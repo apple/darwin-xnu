@@ -137,6 +137,9 @@ vmx_cpu_init()
 
 	vmx_enable();
 
+	VMX_KPRINTF("[%d]vmx_cpu_init() initialized: %d\n",
+		    cpu_number(), specs->initialized);
+
 	/* if we have read the data on boot, we won't read it again on wakeup */
 	if (specs->initialized)
 		return;
@@ -145,6 +148,8 @@ vmx_cpu_init()
 
 	/* See if VMX is present, return if it is not */
 	specs->vmx_present = vmx_is_available() && vmxon_is_enabled();
+	VMX_KPRINTF("[%d]vmx_cpu_init() vmx_present: %d\n",
+		    cpu_number(), specs->vmx_present);
 	if (!specs->vmx_present)
 		return;
 
@@ -171,6 +176,9 @@ vmx_on(void *arg __unused)
 	addr64_t vmxon_region_paddr;
 	int result;
 
+	VMX_KPRINTF("[%d]vmx_on() entry state: %d\n",
+		    cpu_number(), cpu->specs.vmx_on);
+
 	assert(cpu->specs.vmx_present);
 
 	if (NULL == cpu->vmxon_region)
@@ -192,6 +200,8 @@ vmx_on(void *arg __unused)
 
 		cpu->specs.vmx_on = TRUE;
 	}
+	VMX_KPRINTF("[%d]vmx_on() return state: %d\n",
+		    cpu_number(), cpu->specs.vmx_on);
 }
 
 /* -----------------------------------------------------------------------------
@@ -204,6 +214,9 @@ vmx_off(void *arg __unused)
 	vmx_cpu_t *cpu = &current_cpu_datap()->cpu_vmx;
 	int result;
 	
+	VMX_KPRINTF("[%d]vmx_off() entry state: %d\n",
+		    cpu_number(), cpu->specs.vmx_on);
+
 	if (TRUE == cpu->specs.vmx_on) {
 		/* Tell the CPU to release the VMXON region */
 		result = __vmxoff();
@@ -214,6 +227,9 @@ vmx_off(void *arg __unused)
 	
 		cpu->specs.vmx_on = FALSE;
 	}
+
+	VMX_KPRINTF("[%d]vmx_off() return state: %d\n",
+		    cpu_number(), cpu->specs.vmx_on);
 }
 
 /* -----------------------------------------------------------------------------
@@ -357,14 +373,27 @@ vmx_suspend()
 	Restore the previous VT state. Called when CPU comes back online.
    -------------------------------------------------------------------------- */
 void
-vmx_resume()
+vmx_resume(boolean_t is_wake_from_hibernate)
 {
 	VMX_KPRINTF("vmx_resume\n");
 
 	vmx_enable();
 
-	if (vmx_use_count)
-		vmx_on(NULL);
+	if (vmx_use_count == 0)
+		return;
+
+	/*
+	 * When resuming from hiberate on the boot cpu,
+	 * we must mark VMX as off since that's the state at wake-up
+	 * because the restored state in memory records otherwise.
+	 * This results in vmx_on() doing the right thing.
+	 */
+	if (is_wake_from_hibernate) {
+		vmx_cpu_t *cpu = &current_cpu_datap()->cpu_vmx;
+		cpu->specs.vmx_on = FALSE;
+	}
+
+	vmx_on(NULL);
 }
 
 /* -----------------------------------------------------------------------------

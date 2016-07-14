@@ -96,6 +96,7 @@ extern	int nfs_mountroot(void);
 extern	struct vfsops afs_vfsops;
 extern	struct vfsops null_vfsops;
 extern	struct vfsops devfs_vfsops;
+extern	struct vfsops routefs_vfsops;
 
 #if MOCKFS
 extern	struct vfsops mockfs_vfsops;
@@ -113,6 +114,7 @@ enum fs_type_num {
 	FT_HFS = 17,
 	FT_DEVFS = 19,
 	FT_SYNTHFS = 20,
+	FT_ROUTEFS = 21,
 	FT_MOCKFS  = 0x6D6F636B
 };
 
@@ -151,6 +153,10 @@ static struct vfstable vfstbllist[] = {
 	{ &mockfs_vfsops, "mockfs", FT_MOCKFS, 0, MNT_LOCAL, mockfs_mountroot, NULL, 0, 0, VFC_VFSGENERICARGS, NULL, 0, NULL},
 #endif /* MOCKFS */
 
+#if ROUTEFS
+	/* If we are configured for it, mockfs should always be the last standard entry (and thus the last FS we attempt mountroot with) */
+	{ &routefs_vfsops, "routefs", FT_ROUTEFS, 0, MNT_LOCAL, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFS64BITREADY, NULL, 0, NULL},
+#endif /* ROUTEFS */
 	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0, NULL},
 	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0, NULL},
 };

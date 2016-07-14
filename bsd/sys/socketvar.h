@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -334,7 +334,8 @@ struct socket {
 #define	SOF1_EXTEND_BK_IDLE_INPROG	0x00000080 /* socket */
 #define	SOF1_CACHED_IN_SOCK_LAYER	0x00000100 /* bundled with inpcb and
 						      tcpcb */
-
+#define SOF1_TFO_REWIND			0x00000200 /* rewind mptcp meta data */
+#define	SOF1_CELLFALLBACK	0x00000400 /* Initiated by cell fallback */
 	u_int64_t	so_extended_bk_start;
 };
 
@@ -597,8 +598,8 @@ struct kextcb {
 	"\020\1LOCKED\2CONNRESET\3CANTRCVMORE\4CANTSENDMORE\5TIMEOUT"	\
 	"\6NOSRCADDR\7IFDENIED\10SUSPEND\11RESUME\12KEEPALIVE\13AWTIMO"	\
 	"\14ARTIMO\15CONNECTED\16DISCONNECTED\17CONNINFO_UPDATED" 	\
-	"\20MPFAILOVER\21MPSTATUS\22MUSTRST\23MPFASTJ\24DELETEOK" 	\
-	"\25MPCANTRCVMORE"
+	"\20MPFAILOVER\21MPSTATUS\22MUSTRST\23MPFASTJ\25DELETEOK" 	\
+	"\26MPCANTRCVMORE"
 
 /* Mask for hints that have corresponding kqueue events */
 #define SO_FILT_HINT_EV							\
@@ -947,7 +948,7 @@ extern int soopt_mcopyin(struct sockopt *sopt, struct mbuf *m);
 extern int soopt_mcopyout(struct sockopt *sopt, struct mbuf *m);
 extern boolean_t so_cache_timer(void);
 
-extern void mptcp_preproc_sbdrop(struct mbuf *, unsigned int);
+extern void mptcp_preproc_sbdrop(struct socket *, struct mbuf *, unsigned int);
 extern void mptcp_postproc_sbdrop(struct mbuf *, u_int64_t, u_int32_t,
     u_int32_t);
 extern int mptcp_adj_rmap(struct socket *, struct mbuf *);

@@ -69,6 +69,7 @@
 #define FLOW_DIVERT_TLV_PREFIX_COUNT		28
 #define FLOW_DIVERT_TLV_FLAGS			29
 #define FLOW_DIVERT_TLV_FLOW_TYPE               30
+#define FLOW_DIVERT_TLV_APP_DATA		31
 
 #define FLOW_DIVERT_FLOW_TYPE_TCP               1
 #define FLOW_DIVERT_FLOW_TYPE_UDP               3
@@ -80,6 +81,8 @@
 #define FLOW_DIVERT_DNS_SERVICE_SIGNING_ID	"com.apple.mDNSResponder"
 
 #define FLOW_DIVERT_TOKEN_FLAG_VALIDATED	0x0000001
+#define FLOW_DIVERT_TOKEN_FLAG_TFO			0x0000002
+#define FLOW_DIVERT_TOKEN_FLAG_MPTCP		0x0000004
 
 struct flow_divert_packet_header {
     uint8_t		packet_type;

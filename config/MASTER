@@ -137,6 +137,7 @@ options		MOCKFS		# Boot from an executable	# <mockfs>
 options		FIFO		# fifo support			# <fifo>
 options		FDESC		# fdesc_fs support		# <fdesc>
 options		DEVFS		# devfs support			# <devfs>
+options		ROUTEFS		# routefs support		# <routefs>
 options		JOURNALING	# journaling support		# <journaling>
 options		HFS_COMPRESSION	# hfs compression	    # <hfs_compression>
 options		CONFIG_HFS_STD	# hfs standard support	    # <config_hfs_std>
@@ -485,6 +486,12 @@ options         CONFIG_STATIC_CPPINIT   # Static library initializes kext cpp ru
 # CONFIG_KEXT_BASEMENT - alloc post boot loaded kexts after prelinked kexts
 #
 options		CONFIG_KEXT_BASEMENT		#	# <config_kext_basement>
+
+#
+# Persona Management
+#
+options		CONFIG_PERSONAS	    # Persona management    # <config_personas>
+options		PERSONA_DEBUG	    # Persona debugging     # <persona_debug>
 
 #
 # security configuration options

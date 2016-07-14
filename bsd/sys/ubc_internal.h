@@ -108,7 +108,8 @@ struct cs_blob {
 	vm_offset_t	csb_mem_offset;
 	vm_address_t	csb_mem_kaddr;
 	unsigned char	csb_cdhash[CS_CDHASH_LEN];
-        struct cs_hash  *csb_hashtype;
+	struct cs_hash  *csb_hashtype;
+	const CS_CodeDirectory *csb_cd;
 	const char 	*csb_teamid;
 	unsigned int	csb_platform_binary:1;
 	unsigned int	csb_platform_path:1;

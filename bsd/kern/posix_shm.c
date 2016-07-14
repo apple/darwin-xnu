@@ -135,6 +135,10 @@ struct	pshmcache {
 };
 #define PSHMCACHE_NULL (struct pshmcache *)0
 
+#define PSHMCACHE_NOTFOUND (0)
+#define PSHMCACHE_FOUND    (-1)
+#define PSHMCACHE_NEGATIVE (ENOENT)
+
 struct	pshmstats {
 	long	goodhits;		/* hits that we can really use */
 	long	neghits;		/* negative hits that we can use */
@@ -184,13 +188,13 @@ static int pshm_closefile (struct fileglob *fg, vfs_context_t ctx);
 static int pshm_kqfilter(struct fileproc *fp, struct knote *kn, vfs_context_t ctx);
 
 int pshm_access(struct pshminfo *pinfo, int mode, kauth_cred_t cred, proc_t p);
+int pshm_cache_purge_all(proc_t p);
+
 static int pshm_cache_add(struct pshminfo *pshmp, struct pshmname *pnp, struct pshmcache *pcp);
 static void pshm_cache_delete(struct pshmcache *pcp);
-#if NOT_USED
-static void pshm_cache_purge(void);
-#endif	/* NOT_USED */
 static int pshm_cache_search(struct pshminfo **pshmp, struct pshmname *pnp,
 	struct pshmcache **pcache, int addref);
+static int pshm_unlink_internal(struct pshminfo *pinfo, struct pshmcache *pcache);
 
 static const struct fileops pshmops = {
 	DTYPE_PSXSHM,
@@ -210,6 +214,7 @@ static lck_mtx_t        psx_shm_subsys_mutex;
 
 #define PSHM_SUBSYS_LOCK() lck_mtx_lock(& psx_shm_subsys_mutex)
 #define PSHM_SUBSYS_UNLOCK() lck_mtx_unlock(& psx_shm_subsys_mutex)
+#define PSHM_SUBSYS_ASSERT_HELD()  lck_mtx_assert(&psx_shm_subsys_mutex, LCK_MTX_ASSERT_OWNED)
 
 
 /* Initialize the mutex governing access to the posix shm subsystem */
@@ -244,7 +249,7 @@ pshm_cache_search(struct pshminfo **pshmp, struct pshmname *pnp,
 
 	if (pnp->pshm_namelen > PSHMNAMLEN) {
 		pshmstats.longnames++;
-		return (0);
+		return PSHMCACHE_NOTFOUND;
 	}
 
 	pcpp = PSHMHASH(pnp);
@@ -257,7 +262,7 @@ pshm_cache_search(struct pshminfo **pshmp, struct pshmname *pnp,
 
 	if (pcp == 0) {
 		pshmstats.miss++;
-		return (0);
+		return PSHMCACHE_NOTFOUND;
 	}
 
 	/* We found a "positive" match, return the vnode */
@@ -268,14 +273,14 @@ pshm_cache_search(struct pshminfo **pshmp, struct pshmname *pnp,
 		*pcache = pcp;
 		if (addref)
 			pcp->pshminfo->pshm_usecount++;
-		return (-1);
+		return PSHMCACHE_FOUND;
 	}
 
 	/*
 	 * We found a "negative" match, ENOENT notifies client of this match.
 	 */
 	pshmstats.neghits++;
-	return (ENOENT);
+	return PSHMCACHE_NEGATIVE;
 }
 
 /*
@@ -296,8 +301,8 @@ pshm_cache_add(struct pshminfo *pshmp, struct pshmname *pnp, struct pshmcache *p
 
 
 	/*  if the entry has already been added by some one else return */
-	if (pshm_cache_search(&dpinfo, pnp, &dpcp, 0) == -1) {
-		return(EEXIST);
+	if (pshm_cache_search(&dpinfo, pnp, &dpcp, 0) == PSHMCACHE_FOUND) {
+		return EEXIST;
 	}
 	pshmnument++;
 
@@ -318,7 +323,7 @@ pshm_cache_add(struct pshminfo *pshmp, struct pshmname *pnp, struct pshmcache *p
 	}
 #endif
 	LIST_INSERT_HEAD(pcpp, pcp, pshm_hash);
-	return(0);
+	return 0;
 }
 
 /*
@@ -330,27 +335,44 @@ pshm_cache_init(void)
 	pshmhashtbl = hashinit(desiredvnodes / 8, M_SHM, &pshmhash);
 }
 
-#if NOT_USED
 /*
- * Invalidate a all entries to particular vnode.
- * 
+ * Invalidate all entries and delete all objects associated with it. Entire
+ * non Kernel entries are going away. Just dump'em all
+ *
  * We actually just increment the v_id, that will do it. The entries will
  * be purged by lookup as they get found. If the v_id wraps around, we
  * need to ditch the entire cache, to avoid confusion. No valid vnode will
  * ever have (v_id == 0).
  */
-static void
-pshm_cache_purge(void)
+int
+pshm_cache_purge_all(__unused proc_t p)
 {
-	struct pshmcache *pcp;
+	struct pshmcache *pcp, *tmppcp;
 	struct pshmhashhead *pcpp;
+	int error = 0;
 
+	if (kauth_cred_issuser(kauth_cred_get()) == 0)
+		return EPERM;
+
+	PSHM_SUBSYS_LOCK();
 	for (pcpp = &pshmhashtbl[pshmhash]; pcpp >= pshmhashtbl; pcpp--) {
-		while ( (pcp = pcpp->lh_first) )
-			pshm_cache_delete(pcp);
+		LIST_FOREACH_SAFE(pcp, pcpp, pshm_hash, tmppcp) {
+			assert(pcp->pshm_nlen);
+			error = pshm_unlink_internal(pcp->pshminfo, pcp);
+			if (error)
+				goto out;
+		}
 	}
+	assert(pshmnument == 0);
+
+out:
+	PSHM_SUBSYS_UNLOCK();
+
+	if (error)
+		printf("%s: Error %d removing shm cache: %ld remain!\n",
+		       __func__, error, pshmnument);
+	return error;
 }
-#endif	/* NOT_USED */
 
 static void
 pshm_cache_delete(struct pshmcache *pcp)
@@ -488,12 +510,12 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 
 	PSHM_SUBSYS_UNLOCK();
 
-	if (error == ENOENT) {
+	if (error == PSHMCACHE_NEGATIVE) {
 		error = EINVAL;
 		goto bad;
 	}
 
-	if (!error) {
+	if (error == PSHMCACHE_NOTFOUND) {
 		incache = 0;
 		if (fmode & O_CREAT) {
 			/*  create a new one (commit the allocation) */
@@ -1006,23 +1028,71 @@ out:
 
 }
 
-int
-shm_unlink(__unused proc_t p, struct shm_unlink_args *uap, 
-			__unused int32_t *retval)
+static int
+pshm_unlink_internal(struct pshminfo *pinfo, struct pshmcache *pcache)
 {
-	size_t i;
-	int error=0;
-	struct pshmname nd;
-	struct pshminfo *pinfo;
-	char * pnbuf;
-	char * nameptr;
-	char * cp;
-	size_t pathlen, plen;
-	int incache = 0;
-	struct pshmcache *pcache = PSHMCACHE_NULL;
 	struct pshmobj *pshmobj, *pshmobj_next;
 
+	PSHM_SUBSYS_ASSERT_HELD();
+
+	if (!pinfo || !pcache)
+		return EINVAL;
+
+	if ((pinfo->pshm_flags & (PSHM_DEFINED | PSHM_ALLOCATED)) == 0)
+		return EINVAL;
+
+	if (pinfo->pshm_flags & PSHM_INDELETE)
+		return 0;
+
+	pinfo->pshm_flags |= PSHM_INDELETE;
+	pinfo->pshm_usecount--;
+
+	pshm_cache_delete(pcache);
+	pinfo->pshm_flags |= PSHM_REMOVED;
+
+	/* release the existence reference */
+	if (!pinfo->pshm_usecount) {
+#if CONFIG_MACF
+		mac_posixshm_label_destroy(pinfo);
+#endif
+		/*
+		 * If this is the last reference going away on the object,
+		 * then we need to destroy the backing object.  The name
+		 * has an implied but uncounted reference on the object,
+		 * once it's created, since it's used as a rendezvous, and
+		 * therefore may be subsequently reopened.
+		 */
+		for (pshmobj = pinfo->pshm_memobjects;
+		     pshmobj != NULL;
+		     pshmobj = pshmobj_next) {
+			mach_memory_entry_port_release(pshmobj->pshmo_memobject);
+			pshmobj_next = pshmobj->pshmo_next;
+			FREE(pshmobj, M_SHM);
+		}
+		FREE(pinfo,M_SHM);
+	}
+
+	FREE(pcache, M_SHM);
+
+	return 0;
+}
+
+int
+shm_unlink(proc_t p, struct shm_unlink_args *uap, __unused int32_t *retval)
+{
+	size_t i;
+	char * pnbuf;
+	size_t pathlen;
+	int error = 0;
+
+	struct pshmname nd;
+	struct pshminfo *pinfo;
+	char * nameptr;
+	char * cp;
+	struct pshmcache *pcache = PSHMCACHE_NULL;
+
 	pinfo = PSHMINFO_NULL;
+
 
 	MALLOC_ZONE(pnbuf, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
 	if (pnbuf == NULL) {
@@ -1039,12 +1109,12 @@ shm_unlink(__unused proc_t p, struct shm_unlink_args *uap,
 		goto bad;
 	}
 
+	nameptr = pnbuf;
 
 #ifdef PSXSHM_NAME_RESTRICT
-	nameptr = pnbuf;
 	if (*nameptr == '/') {
 		while (*(nameptr++) == '/') {
-			plen--;
+			pathlen--;
 			error = EINVAL;
 			goto bad;
 		}
@@ -1054,31 +1124,24 @@ shm_unlink(__unused proc_t p, struct shm_unlink_args *uap,
 	}
 #endif /* PSXSHM_NAME_RESTRICT */
 
-	plen = pathlen;
-	nameptr = pnbuf;
 	nd.pshm_nameptr = nameptr;
-	nd.pshm_namelen = plen;
-	nd. pshm_hash =0;
+	nd.pshm_namelen = pathlen;
+	nd.pshm_hash = 0;
 
-        for (cp = nameptr, i=1; *cp != 0 && i <= plen; i++, cp++) {
+        for (cp = nameptr, i=1; *cp != 0 && i <= pathlen; i++, cp++) {
                nd.pshm_hash += (unsigned char)*cp * i;
 	}
 
 	PSHM_SUBSYS_LOCK();
 	error = pshm_cache_search(&pinfo, &nd, &pcache, 0);
 
-	if (error == ENOENT) {
-		PSHM_SUBSYS_UNLOCK();
-		goto bad;
-
-	}
 	/* During unlink lookup failure also implies ENOENT */ 
-	if (!error) {
+	if (error != PSHMCACHE_FOUND) {
 		PSHM_SUBSYS_UNLOCK();
 		error = ENOENT;
 		goto bad;
-	} else
-		incache = 1;
+
+	}
 
 	if ((pinfo->pshm_flags & (PSHM_DEFINED | PSHM_ALLOCATED))==0) {
 		PSHM_SUBSYS_UNLOCK();
@@ -1098,6 +1161,7 @@ shm_unlink(__unused proc_t p, struct shm_unlink_args *uap,
 		error = 0;
 		goto bad;
 	}
+
 #if CONFIG_MACF
 	error = mac_posixshm_check_unlink(kauth_cred_get(), pinfo, nameptr);
 	if (error) {
@@ -1110,46 +1174,20 @@ shm_unlink(__unused proc_t p, struct shm_unlink_args *uap,
 		  pinfo->pshm_mode);
 
 	/* 
-	 * following file semantics, unlink should be allowed 
-	 * for users with write permission only. 
+	 * following file semantics, unlink should be allowed
+	 * for users with write permission only.
 	 */
 	if ( (error = pshm_access(pinfo, FWRITE, kauth_cred_get(), p)) ) {
 		PSHM_SUBSYS_UNLOCK();
 		goto bad;
 	}
 
-	pinfo->pshm_flags |= PSHM_INDELETE;
-	pshm_cache_delete(pcache);
-	pinfo->pshm_flags |= PSHM_REMOVED;
-	/* release the existence reference */
- 	if (!--pinfo->pshm_usecount) {
-#if CONFIG_MACF
-		mac_posixshm_label_destroy(pinfo);
-#endif
-		PSHM_SUBSYS_UNLOCK();
-		/*
-		 * If this is the last reference going away on the object,
-		 * then we need to destroy the backing object.  The name
-		 * has an implied but uncounted reference on the object,
-		 * once it's created, since it's used as a rendezvous, and
-		 * therefore may be subsequently reopened.
-		 */
-		for (pshmobj = pinfo->pshm_memobjects;
-		     pshmobj != NULL;
-		     pshmobj = pshmobj_next) {
-			mach_memory_entry_port_release(pshmobj->pshmo_memobject);
-			pshmobj_next = pshmobj->pshmo_next;
-			FREE(pshmobj, M_SHM);
-		}
-		FREE(pinfo,M_SHM);
-	} else {
-		PSHM_SUBSYS_UNLOCK();
-	}
-	FREE(pcache, M_SHM);
-	error = 0;
+	error = pshm_unlink_internal(pinfo, pcache);
+	PSHM_SUBSYS_UNLOCK();
+
 bad:
 	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
-	return (error);
+	return error;
 }
 
 /* already called locked */

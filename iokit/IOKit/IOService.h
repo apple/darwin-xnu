@@ -1286,6 +1286,7 @@ public:
     uint64_t getAuthorizationID( void );
     IOReturn setAuthorizationID( uint64_t authorizationID );
     void cpusRunning(void);
+    void scheduleFinalize(bool now);
 
 private:
     static IOReturn waitMatchIdle( UInt32 ms );
@@ -1379,7 +1380,6 @@ private:
     bool terminatePhase1( IOOptionBits options = 0 );
     void scheduleTerminatePhase2( IOOptionBits options = 0 );
     void scheduleStop( IOService * provider );
-    void scheduleFinalize( void );
     static void terminateThread( void * arg, wait_result_t unused );
     static void terminateWorker( IOOptionBits options );
     static void actionWillTerminate( IOService * victim, IOOptionBits options, 

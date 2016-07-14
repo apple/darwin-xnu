@@ -118,7 +118,8 @@ struct ivac_entry_s {
 	iv_value_refs_t         ivace_layered:1,     /* layered effective entry */
 	                        ivace_releasing:1,   /* release in progress */
 				ivace_free:1,	     /* on freelist */
-	                        ivace_refs:29;       /* reference count */
+				ivace_persist:1,     /* Persist the entry, don't count made refs */
+	                        ivace_refs:28;       /* reference count */
 	union {
 		iv_value_refs_t ivaceu_made;         /* made count (non-layered) */
 		iv_index_t      ivaceu_layer;        /* next effective layer (layered) */
@@ -134,7 +135,7 @@ typedef ivac_entry              *ivac_entry_t;
 
 #define IVACE_NULL              ((ivac_entry_t) 0);
 
-#define IVACE_REFS_MAX          ((1 << 29) - 1)
+#define IVACE_REFS_MAX          ((1 << 28) - 1)
 
 #define IVAC_ENTRIES_MIN        512
 #define IVAC_ENTRIES_MAX        524288
@@ -155,6 +156,8 @@ typedef ipc_voucher_attr_control_t iv_attr_control_t;
 #define IVAC_NULL                  IPC_VOUCHER_ATTR_CONTROL_NULL
 
 extern ipc_voucher_attr_control_t  ivac_alloc(iv_index_t);
+extern void ipc_voucher_receive_postprocessing(ipc_kmsg_t kmsg, mach_msg_option_t option);
+extern void ipc_voucher_send_preprocessing(ipc_kmsg_t kmsg);
 
 #define ivac_lock_init(ivac) \
 	lck_spin_init(&(ivac)->ivac_lock_data, &ipc_lck_grp, &ipc_lck_attr)
@@ -263,6 +266,7 @@ typedef kern_return_t (*ipc_voucher_attr_manager_get_value_t)(ipc_voucher_attr_m
 							      mach_voucher_attr_content_t,
 							      mach_voucher_attr_content_size_t,
 							      mach_voucher_attr_value_handle_t *,
+							      mach_voucher_attr_value_flags_t *,
 							      ipc_voucher_t *);
 
 typedef kern_return_t (*ipc_voucher_attr_manager_extract_content_t)(ipc_voucher_attr_manager_t,
@@ -285,13 +289,20 @@ typedef kern_return_t (*ipc_voucher_attr_manager_command_t)(ipc_voucher_attr_man
 
 typedef void (*ipc_voucher_attr_manager_release_t)(ipc_voucher_attr_manager_t);
 
+typedef uint32_t ipc_voucher_attr_manager_flags;
+
 struct ipc_voucher_attr_manager {
 	ipc_voucher_attr_manager_release_value_t	ivam_release_value;
 	ipc_voucher_attr_manager_get_value_t		ivam_get_value;
 	ipc_voucher_attr_manager_extract_content_t	ivam_extract_content;
 	ipc_voucher_attr_manager_command_t		ivam_command;
 	ipc_voucher_attr_manager_release_t		ivam_release;
+	ipc_voucher_attr_manager_flags			ivam_flags;
 };
+
+#define IVAM_FLAGS_NONE                              0
+#define IVAM_FLAGS_SUPPORT_SEND_PREPROCESS         0x1
+#define IVAM_FLAGS_SUPPORT_RECEIVE_POSTPROCESS     0x2
 
 __BEGIN_DECLS
 

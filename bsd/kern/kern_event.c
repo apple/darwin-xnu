@@ -906,6 +906,7 @@ filt_timerattach(struct knote *kn)
 	error = filt_timervalidate(kn);
 	if (error != 0) {
 		filt_timerunlock();
+		thread_call_free(callout);
 		return (error);
 	}
 
@@ -1651,7 +1652,7 @@ kevent_internal(struct proc *p,
 	struct kqueue *kq;
 	struct fileproc *fp = NULL;
 	struct kevent_internal_s kev;
-	int error, noutputs;
+	int error = 0, noutputs;
 	struct timeval atv;
 
 #if 1

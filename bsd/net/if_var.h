@@ -328,13 +328,19 @@ struct if_rxpoll_stats {
 };
 
 struct if_tcp_ecn_perf_stat {
+	u_int64_t total_txpkts;
+	u_int64_t total_rxmitpkts;
+	u_int64_t total_rxpkts;
+	u_int64_t total_oopkts;
+	u_int64_t total_reorderpkts;
 	u_int64_t rtt_avg;
 	u_int64_t rtt_var;
-	u_int64_t oo_percent;
 	u_int64_t sack_episodes;
+	u_int64_t rxmit_drop;
+	u_int64_t rst_drop;
+	u_int64_t oo_percent;
 	u_int64_t reorder_percent;
 	u_int64_t rxmit_percent;
-	u_int64_t rxmit_drop;
 };
 
 struct if_tcp_ecn_stat {
@@ -356,6 +362,8 @@ struct if_tcp_ecn_stat {
 	u_int64_t ecn_fallback_synloss;
 	u_int64_t ecn_fallback_reorder;
 	u_int64_t ecn_fallback_ce;
+	u_int64_t ecn_off_conn;
+	u_int64_t ecn_total_conn;
 	struct if_tcp_ecn_perf_stat ecn_on;
 	struct if_tcp_ecn_perf_stat ecn_off;
 };

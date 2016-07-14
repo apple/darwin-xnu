@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -132,7 +132,6 @@ static void mptcp_key_pool_init(void);
 static void mptcp_attach_to_subf(struct socket *, struct mptcb *, uint8_t);
 static void mptcp_detach_mptcb_from_subf(struct mptcb *, struct socket *);
 static void mptcp_conn_properties(struct mptcb *);
-static void mptcp_init_statevars(struct mptcb *);
 
 static uint32_t mptcp_gc(struct mppcbinfo *);
 static int mptcp_subflow_socreate(struct mptses *, struct mptsub *,
@@ -148,6 +147,7 @@ static void mptcp_subflow_eupcall(struct socket *, void *, uint32_t);
 static void mptcp_update_last_owner(struct mptsub *, struct socket *);
 static void mptcp_output_needed(struct mptses *mpte, struct mptsub *to_mpts);
 static void mptcp_get_rtt_measurement(struct mptsub *, struct mptses *);
+static void mptcp_drop_tfo_data(struct mptses *, struct mptsub *);
 
 /*
  * Possible return values for subflow event handlers.  Note that success
@@ -185,7 +185,7 @@ static const char *mptcp_evret2str(ev_ret_t);
 
 static mptcp_key_t *mptcp_reserve_key(void);
 static int mptcp_do_sha1(mptcp_key_t *, char *, int);
-static int mptcp_init_authparms(struct mptcb *);
+static void mptcp_init_local_parms(struct mptcb *);
 
 static unsigned int mptsub_zone_size;		/* size of mptsub */
 static struct zone *mptsub_zone;		/* zone for mptsub */
@@ -256,7 +256,18 @@ typedef struct mptcp_subflow_event_entry {
 			    uint64_t *p_mpsofilt_hint);
 } mptsub_ev_entry_t;
 
+/*
+ * XXX The order of the event handlers below is really
+ * really important.
+ * SO_FILT_HINT_DELETEOK event has to be handled first,
+ * else we may end up missing on this event.
+ * Please read radar://24043716 for more details.
+ */
 static mptsub_ev_entry_t mpsub_ev_entry_tbl [] = {
+	{
+		.sofilt_hint_mask = SO_FILT_HINT_DELETEOK,
+		.sofilt_hint_ev_hdlr = mptcp_deleteok_ev,
+	},
 	{
 		.sofilt_hint_mask = SO_FILT_HINT_MPCANTRCVMORE,
 		.sofilt_hint_ev_hdlr =	mptcp_subflow_mpcantrcvmore_ev,
@@ -307,10 +318,6 @@ static mptsub_ev_entry_t mpsub_ev_entry_tbl [] = {
 	{
 		.sofilt_hint_mask = SO_FILT_HINT_MPSTATUS,
 		.sofilt_hint_ev_hdlr = mptcp_subflow_mpstatus_ev,
-	},
-	{
-		.sofilt_hint_mask = SO_FILT_HINT_DELETEOK,
-		.sofilt_hint_ev_hdlr = mptcp_deleteok_ev,
 	},
 	{
 		.sofilt_hint_mask = SO_FILT_HINT_DISCONNECTED,
@@ -719,6 +726,13 @@ mptcp_subflow_socreate(struct mptses *mpte, struct mptsub *mpts, int dom,
 	/* prevent the socket buffers from being compressed */
 	(*so)->so_rcv.sb_flags |= SB_NOCOMPRESS;
 	(*so)->so_snd.sb_flags |= SB_NOCOMPRESS;
+
+	/* Inherit preconnect and TFO data flags */
+	if (mp_so->so_flags1 & SOF1_PRECONNECT_DATA)
+		(*so)->so_flags1 |= SOF1_PRECONNECT_DATA;
+
+	if (mp_so->so_flags1 & SOF1_DATA_IDEMPOTENT)
+		(*so)->so_flags1 |= SOF1_DATA_IDEMPOTENT;
 
 	bzero(&smpo, sizeof (smpo));
 	smpo.mpo_flags |= MPOF_SUBFLOW_OK;
@@ -1268,17 +1282,6 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	if ((error = mptcp_subflow_socreate(mpte, mpts, af, p, &so)) != 0)
 		goto out;
 
-	/* If fastjoin is requested, set state in mpts */
-	if ((so->so_flags & SOF_MPTCP_FASTJOIN) &&
-	    (mp_tp->mpt_state == MPTCPS_ESTABLISHED) &&
-	    (mpte->mpte_nummpcapflows == 0)) {
-		mpts->mpts_flags |= MPTSF_FASTJ_REQD;
-		mpts->mpts_rel_seq = 1;
-		MPT_LOCK(mp_tp);
-		mpts->mpts_sndnxt = mp_tp->mpt_snduna;
-		MPT_UNLOCK(mp_tp);
-	}
-
 	/*
 	 * Increment the counter, while avoiding 0 (SAE_CONNID_ANY) and
 	 * -1 (SAE_CONNID_ALL).
@@ -1291,7 +1294,9 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	mpts->mpts_connid = mpte->mpte_connid_last;
 	VERIFY(mpts->mpts_connid != SAE_CONNID_ANY &&
 	    mpts->mpts_connid != SAE_CONNID_ALL);
-	
+
+	mpts->mpts_rel_seq = 1;
+
 	/* Allocate a unique address id per subflow */
 	mpte->mpte_addrid_last++;
 	if (mpte->mpte_addrid_last == 0)
@@ -1413,8 +1418,7 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	MPT_LOCK(mp_tp);
 	if (mp_tp->mpt_state < MPTCPS_ESTABLISHED && mpte->mpte_numflows == 1) {
 		if (mp_tp->mpt_state == MPTCPS_CLOSED) {
-			mp_tp->mpt_localkey = mptcp_reserve_key();
-			mptcp_conn_properties(mp_tp);
+			mptcp_init_local_parms(mp_tp);
 		}
 		MPT_UNLOCK(mp_tp);
 		soisconnecting(mp_so);
@@ -1430,6 +1434,27 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 		}
 		MPT_UNLOCK(mp_tp);
 		mpcr.mpcr_type = MPTSUB_CONNREQ_MP_ADD;
+	}
+
+	/* If fastjoin or fastopen is requested, set state in mpts */
+	if (mpte->mpte_nummpcapflows == 0) {
+		if (so->so_flags1 & SOF1_PRECONNECT_DATA) {
+			MPT_LOCK(mp_tp);
+			if (mp_tp->mpt_state < MPTCPS_ESTABLISHED) {
+				mpts->mpts_flags |= MPTSF_TFO_REQD;
+				mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+			}
+			MPT_UNLOCK(mp_tp);
+		}
+
+		if (so->so_flags & SOF_MPTCP_FASTJOIN) {
+			MPT_LOCK(mp_tp);
+			if (mp_tp->mpt_state == MPTCPS_ESTABLISHED) {
+				mpts->mpts_flags |= MPTSF_FASTJ_REQD;
+				mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+			}
+			MPT_UNLOCK(mp_tp);
+		}
 	}
 
 	mpts->mpts_mpcr = mpcr;
@@ -1688,6 +1713,16 @@ mptcp_subflow_input(struct mptses *mpte, struct mptsub *mpts)
 				    mpts->mpts_connid),
 				    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_ERR);
 			}
+			if (error == ENODATA) {
+				/*
+				 * Don't ignore ENODATA so as to discover
+				 * nasty middleboxes.
+				 */
+				struct socket *mp_so =
+				    mpte->mpte_mppcb->mpp_socket;
+				mp_so->so_error = ENODATA;
+				sorwakeup(mp_so);
+			}
 		}
 		MPTS_LOCK(mpts);
 	} else if (error == 0) {
@@ -1742,7 +1777,7 @@ mptcp_subflow_wupcall(struct socket *so, void *arg, int waitf)
 	struct mptses *mpte = mpts->mpts_mpte;
 
 	/*
-	 * mpte should never be NULL except in a race with 
+	 * mpte should never be NULL except in a race with
 	 * mptcp_subflow_del which doesn't hold socket lock across critical
 	 * section. This upcall is made after releasing the socket lock.
 	 * Interleaving of socket operations becomes possible therefore.
@@ -1772,6 +1807,7 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	struct mbuf *mpt_mbuf = NULL;
 	u_int64_t off = 0;
 	struct mbuf *head, *tail;
+	int tcp_zero_len_write = 0;
 
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
 	MPTS_LOCK_ASSERT_HELD(mpts);
@@ -1793,7 +1829,8 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	/* subflow socket is not MPTCP capable? */
 	if (!(mpts->mpts_flags & MPTSF_MP_CAPABLE) &&
 	    !(mpts->mpts_flags & MPTSF_MP_DEGRADED) &&
-	    !(mpts->mpts_flags & MPTSF_FASTJ_SEND)) {
+	    !(mpts->mpts_flags & MPTSF_FASTJ_SEND) &&
+	    !(mpts->mpts_flags & MPTSF_TFO_REQD)) {
 		mptcplog((LOG_ERR, "MPTCP Sender: %s mp_so 0x%llx cid %d not "
 		    "MPTCP capable\n", __func__,
 		    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), mpts->mpts_connid),
@@ -1808,6 +1845,10 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 		if (mptcp_remaddr_enable)
 			tp->t_mpflags |= TMPF_SND_REM_ADDR;
 		mpte->mpte_flags &= ~MPTE_SND_REM_ADDR;
+	}
+
+	if (mpts->mpts_flags & MPTSF_TFO_REQD) {
+		mptcp_drop_tfo_data(mpte, mpts);
 	}
 
 	/*
@@ -1834,6 +1875,16 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 
 	mpt_mbuf = sb_mb;
 	while (mpt_mbuf && mpt_mbuf->m_pkthdr.mp_rlen == 0) {
+		if (((so->so_state & SS_ISCONNECTED) == 0) &&
+		    (mpt_mbuf->m_next == NULL) &&
+		    (so->so_flags1 & SOF1_PRECONNECT_DATA)) {
+			/*
+			 * If TFO, allow connection establishment with zero
+			 * length write.
+			 */
+			tcp_zero_len_write = 1;
+			goto zero_len_write;
+		}
 		mpt_mbuf = mpt_mbuf->m_next;
 	}
 	if (mpt_mbuf && (mpt_mbuf->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
@@ -1884,12 +1935,6 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	 */
 	if (MPTCP_SEQ_LT(mpts->mpts_sndnxt, mp_tp->mpt_snduna)) {
 		mpts->mpts_sndnxt = mp_tp->mpt_snduna;
-		/*
-		 * With FastJoin, a write before the fastjoin event will use
-		 * an uninitialized relative sequence number.
-		 */
-		if (mpts->mpts_rel_seq == 0)
-			mpts->mpts_rel_seq = 1;
 	}
 
 	/*
@@ -1983,9 +2028,12 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	}
 
 	if (head != NULL) {
+		struct tcpcb *tp = intotcpcb(sotoinpcb(so));
 
-		if (mpts->mpts_flags & MPTSF_FASTJ_SEND) {
-			struct tcpcb *tp = intotcpcb(sotoinpcb(so));
+		if ((mpts->mpts_flags & MPTSF_TFO_REQD) &&
+		    (tp->t_tfo_stats == 0)) {
+			tp->t_mpflags |= TMPF_TFO_REQUEST;			
+		} else if (mpts->mpts_flags & MPTSF_FASTJ_SEND) {
 			tp->t_mpflags |= TMPF_FASTJOIN_SEND;
 		}
 
@@ -1996,9 +2044,16 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 		    struct sockbuf *, &so->so_snd,
 		    struct mptses *, mpte, struct mptsub *, mpts,
 		    size_t, tot_sent);
+	} else if (tcp_zero_len_write == 1) {
+zero_len_write:
+		socket_lock(so, 1);
+		/* Opting to call pru_send as no mbuf at subflow level */
+		error = (*so->so_proto->pr_usrreqs->pru_send)
+		    (so, 0, NULL, NULL, NULL, current_proc());
+		socket_unlock(so, 1);
 	}
 
-	if (error == 0) {
+	if ((error == 0) || (error == EWOULDBLOCK)) {
 		mpts->mpts_sndnxt += tot_sent;
 
 		if (mpts->mpts_probesoon && mpts->mpts_maxseg && tot_sent) {
@@ -2021,9 +2076,12 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 		mptcp_cancel_timer(mp_tp, MPTT_REXMT);
 		MPT_UNLOCK(mp_tp);
 
+		if (so->so_flags1 & SOF1_PRECONNECT_DATA)
+			so->so_flags1 &= ~SOF1_PRECONNECT_DATA;
+
 		/* Send once in SYN_SENT state to avoid sending SYN spam */
 		if (mpts->mpts_flags & MPTSF_FASTJ_SEND) {
-			so->so_flags &= ~SOF_MPTCP_FASTJOIN;		    
+			so->so_flags &= ~SOF_MPTCP_FASTJOIN;
 			mpts->mpts_flags &= ~MPTSF_FASTJ_SEND;
 		}
 
@@ -2112,8 +2170,13 @@ mptcp_subflow_events(struct mptses *mpte, struct mptsub *mpts,
 	 * once it is handled
 	 */
 	for (i = 0; (i < mpsub_ev_entry_count) && events; i++) {
+		/*
+		 * Always execute the DISCONNECTED event, because it will wakeup
+		 * the app.
+		 */
 		if ((events & mpsub_ev_entry_tbl[i].sofilt_hint_mask) &&
-		    (ret >= MPTS_EVRET_OK)) {
+		    (ret >= MPTS_EVRET_OK ||
+		     mpsub_ev_entry_tbl[i].sofilt_hint_mask == SO_FILT_HINT_DISCONNECTED)) {
 			ev_ret_t error =
 				mpsub_ev_entry_tbl[i].sofilt_hint_ev_hdlr(mpte, mpts, p_mpsofilt_hint);
 			events &= ~mpsub_ev_entry_tbl[i].sofilt_hint_mask;
@@ -2643,7 +2706,7 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 
 	if ((mpts->mpts_flags & MPTSF_DISCONNECTED) ||
 	    (mpts->mpts_flags & MPTSF_DISCONNECTING)) {
-        	socket_lock(so, 0);
+		socket_lock(so, 0);
 		if (!(so->so_state & (SS_ISDISCONNECTING | SS_ISDISCONNECTED)) &&
 		    (so->so_state & SS_ISCONNECTED)) {
 		    mptcplog((LOG_DEBUG, "MPTCP Events: "
@@ -2682,8 +2745,8 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 		/*
 		 * With MPTCP joins, a connection is connected at the subflow
 		 * level, but the 4th ACK from the server elevates the MPTCP
-		 * subflow to connected state. So there is a small window 
-		 * where the subflow could get disconnected before the 
+		 * subflow to connected state. So there is a small window
+		 * where the subflow could get disconnected before the
 		 * connected event is processed.
 		 */
 		socket_unlock(so, 0);
@@ -2693,8 +2756,15 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 	mpts->mpts_soerror = 0;
 	mpts->mpts_flags &= ~MPTSF_CONNECTING;
 	mpts->mpts_flags |= MPTSF_CONNECTED;
-	if (sototcpcb(so)->t_mpflags & TMPF_MPTCP_TRUE)
+
+	if (!(so->so_flags1 & SOF1_DATA_IDEMPOTENT))
+		mpts->mpts_flags &= ~MPTSF_TFO_REQD;
+
+	struct tcpcb *tp = sototcpcb(so);
+	if (tp->t_mpflags & TMPF_MPTCP_TRUE)
 		mpts->mpts_flags |= MPTSF_MP_CAPABLE;
+
+	tp->t_mpflags &= ~TMPF_TFO_REQUEST;
 
 	VERIFY(mpts->mpts_dst_sl != NULL);
 	dst_se = TAILQ_FIRST(&mpts->mpts_dst_sl->sl_head);
@@ -2845,37 +2915,28 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 			(void) mptcp_drop(mpte, mp_tp, EPROTO);
 			MPT_UNLOCK(mp_tp);
 		} else {
-			if (mptcp_init_authparms(mp_tp) != 0) {
-				mp_tp->mpt_flags |= MPTCPF_PEEL_OFF;
-				(void) mptcp_drop(mpte, mp_tp, EPROTO);
-				MPT_UNLOCK(mp_tp);
-				mpok = FALSE;
-			} else {
-				mptcplog((LOG_DEBUG, "MPTCP State: "
-				    "MPTCPS_ESTABLISHED for mp_so 0x%llx \n",
-				    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)),
-				    MPTCP_STATE_DBG, MPTCP_LOGLVL_LOG);
-				mp_tp->mpt_state = MPTCPS_ESTABLISHED;
-				mpte->mpte_associd = mpts->mpts_connid;
-				DTRACE_MPTCP2(state__change, 
-				    struct mptcb *, mp_tp, 
-				    uint32_t, 0 /* event */);
-				mptcp_init_statevars(mp_tp);
-				MPT_UNLOCK(mp_tp);
+			MPT_UNLOCK(mp_tp);
+			mptcplog((LOG_DEBUG, "MPTCP State: "
+			    "MPTCPS_ESTABLISHED for mp_so 0x%llx \n",
+			    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so)),
+			    MPTCP_STATE_DBG, MPTCP_LOGLVL_LOG);
+			mp_tp->mpt_state = MPTCPS_ESTABLISHED;
+			mpte->mpte_associd = mpts->mpts_connid;
+			DTRACE_MPTCP2(state__change, 
+			    struct mptcb *, mp_tp, 
+			    uint32_t, 0 /* event */);
 
-				(void) mptcp_setconnorder(mpte,
-				    mpts->mpts_connid, 1);
-				soisconnected(mp_so);
-			}
+			(void) mptcp_setconnorder(mpte, mpts->mpts_connid, 1);
+			soisconnected(mp_so);
 		}
 		MPTS_LOCK(mpts);
 		if (mpok) {
-			/* Initialize the relative sequence number */
-			mpts->mpts_rel_seq = 1;
 			mpts->mpts_flags |= MPTSF_MPCAP_CTRSET;
 			mpte->mpte_nummpcapflows++;
 			MPT_LOCK_SPIN(mp_tp);
-			mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+			/* With TFO, sndnxt may be initialized earlier */
+			if (mpts->mpts_sndnxt == 0)
+				mpts->mpts_sndnxt = mp_tp->mpt_snduna;
 			MPT_UNLOCK(mp_tp);
 		}
 	} else if (mpok) {
@@ -2896,13 +2957,11 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 		mpts->mpts_flags |= MPTSF_MPCAP_CTRSET;
 		mpts->mpts_flags &= ~MPTSF_FASTJ_REQD;
 		mpte->mpte_nummpcapflows++;
-		/* With Fastjoin, rel sequence will be nonzero */
-		if (mpts->mpts_rel_seq == 0)
-			mpts->mpts_rel_seq = 1;
 		MPT_LOCK_SPIN(mp_tp);
 		/* With Fastjoin, sndnxt is updated before connected_ev */
 		if (mpts->mpts_sndnxt == 0) {
 			mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+			mpts->mpts_rel_seq = 1;
 		} 
 		MPT_UNLOCK(mp_tp);
 		mptcp_output_needed(mpte, mpts);
@@ -3176,7 +3235,6 @@ mptcp_fastjoin_ev(struct mptses *mpte, struct mptsub *mpts,
 		 */
 		if (mpts->mpts_sndnxt == 0) {
 			mpts->mpts_sndnxt = mp_tp->mpt_snduna;
-			mpts->mpts_rel_seq = 1;
 		}
 		MPT_UNLOCK(mp_tp);
 	}
@@ -3635,10 +3693,10 @@ mptcp_thread_dowork(struct mptses *mpte)
 
 		MPTS_LOCK(mpts);
 		MPTS_ADDREF_LOCKED(mpts);	/* for us */
-		
+
 		/* Update process ownership based on parent mptcp socket */
 		mptcp_update_last_owner(mpts, mp_so);
-		
+
 		mptcp_subflow_input(mpte, mpts);
 
 		mptcp_get_rtt_measurement(mpts, mpte);
@@ -3715,6 +3773,10 @@ mptcp_thread_dowork(struct mptses *mpte)
 				MPTS_UNLOCK(mpts);
 				continue;
 			}
+
+			if (mpts->mpts_flags & MPTSF_TFO_REQD)
+				mptcp_drop_tfo_data(mpte, mpts);
+
 			so = mpts->mpts_socket;
 
 			/*
@@ -3732,6 +3794,7 @@ mptcp_thread_dowork(struct mptses *mpte)
 			tp->t_mpflags &=
 			    ~(TMPF_MPTCP_READY|TMPF_MPTCP_TRUE);
 			tp->t_mpflags |= TMPF_TCP_FALLBACK;
+
 			if (mpts->mpts_flags & MPTSF_ACTIVE) {
 				socket_unlock(so, 1);
 				MPTS_UNLOCK(mpts);
@@ -4326,7 +4389,7 @@ mptcp_get_trunced_hmac(mptcp_addr_id aid, struct mptcb *mp_tp)
 /*
  * Authentication data generation
  */
-int
+void
 mptcp_generate_token(char *sha_digest, int sha_digest_len, caddr_t token,
     int token_len)
 {
@@ -4335,10 +4398,10 @@ mptcp_generate_token(char *sha_digest, int sha_digest_len, caddr_t token,
 
 	/* Most significant 32 bits of the SHA1 hash */
 	bcopy(sha_digest, token, sizeof (u_int32_t));
-	return (TRUE);
+	return;
 }
 
-int
+void
 mptcp_generate_idsn(char *sha_digest, int sha_digest_len, caddr_t idsn,
     int idsn_len)
 {
@@ -4357,50 +4420,7 @@ mptcp_generate_idsn(char *sha_digest, int sha_digest_len, caddr_t idsn,
 	idsn[2] = sha_digest[17];
 	idsn[1] = sha_digest[18];
 	idsn[0] = sha_digest[19];
-	return (TRUE);
-}
-
-static int
-mptcp_init_authparms(struct mptcb *mp_tp)
-{
-	caddr_t local_digest = NULL;
-	char remote_digest[MPTCP_SHA1_RESULTLEN];
-	MPT_LOCK_ASSERT_HELD(mp_tp);
-
-	/* Only Version 0 is supported for auth purposes */
-	if (mp_tp->mpt_version != MPTCP_STD_VERSION_0)
-		return (-1);
-
-	/* Setup local and remote tokens and Initial DSNs */
-	local_digest = mptcp_get_stored_digest(mp_tp->mpt_localkey);
-	mptcp_generate_token(local_digest, SHA1_RESULTLEN,
-	    (caddr_t)&mp_tp->mpt_localtoken, sizeof (mp_tp->mpt_localtoken));
-	mptcp_generate_idsn(local_digest, SHA1_RESULTLEN,
-	    (caddr_t)&mp_tp->mpt_local_idsn, sizeof (u_int64_t));
-
-	if (!mptcp_do_sha1(&mp_tp->mpt_remotekey, remote_digest,
-	    SHA1_RESULTLEN)) {
-		mptcplog((LOG_ERR, "MPTCP Socket: %s: unexpected failure",
-		    __func__), MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
-		return (-1);
-	}
-	mptcp_generate_token(remote_digest, SHA1_RESULTLEN,
-	    (caddr_t)&mp_tp->mpt_remotetoken, sizeof (mp_tp->mpt_localtoken));
-	mptcp_generate_idsn(remote_digest, SHA1_RESULTLEN,
-	    (caddr_t)&mp_tp->mpt_remote_idsn, sizeof (u_int64_t));
-	return (0);
-}
-
-static void
-mptcp_init_statevars(struct mptcb *mp_tp)
-{
-	MPT_LOCK_ASSERT_HELD(mp_tp);
-
-	/* The subflow SYN is also first MPTCP byte */
-	mp_tp->mpt_snduna = mp_tp->mpt_sndmax = mp_tp->mpt_local_idsn + 1;
-	mp_tp->mpt_sndnxt = mp_tp->mpt_snduna;
-
-	mp_tp->mpt_rcvatmark = mp_tp->mpt_rcvnxt = mp_tp->mpt_remote_idsn + 1;
+	return;
 }
 
 static void
@@ -4418,6 +4438,52 @@ mptcp_conn_properties(struct mptcb *mp_tp)
 
 	/* Set up gc ticks */
 	mp_tp->mpt_gc_ticks = MPT_GC_TICKS;
+}
+
+static void
+mptcp_init_local_parms(struct mptcb *mp_tp)
+{
+	caddr_t local_digest = NULL;
+
+	mp_tp->mpt_localkey = mptcp_reserve_key();
+	local_digest = mptcp_get_stored_digest(mp_tp->mpt_localkey);
+	mptcp_generate_token(local_digest, SHA1_RESULTLEN,
+	    (caddr_t)&mp_tp->mpt_localtoken, sizeof (mp_tp->mpt_localtoken));
+	mptcp_generate_idsn(local_digest, SHA1_RESULTLEN,
+	    (caddr_t)&mp_tp->mpt_local_idsn, sizeof (u_int64_t));
+
+	/* The subflow SYN is also first MPTCP byte */
+	mp_tp->mpt_snduna = mp_tp->mpt_sndmax = mp_tp->mpt_local_idsn + 1;
+	mp_tp->mpt_sndnxt = mp_tp->mpt_snduna;
+
+	mptcp_conn_properties(mp_tp);
+}
+
+int
+mptcp_init_remote_parms(struct mptcb *mp_tp)
+{
+	char remote_digest[MPTCP_SHA1_RESULTLEN];
+	MPT_LOCK_ASSERT_HELD(mp_tp);
+
+	/* Only Version 0 is supported for auth purposes */
+	if (mp_tp->mpt_version != MPTCP_STD_VERSION_0)
+		return (-1);
+
+	/* Setup local and remote tokens and Initial DSNs */
+
+	if (!mptcp_do_sha1(&mp_tp->mpt_remotekey, remote_digest,
+	    SHA1_RESULTLEN)) {
+		mptcplog((LOG_ERR, "MPTCP Socket: %s: unexpected failure",
+		    __func__), MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
+		return (-1);
+	}
+	mptcp_generate_token(remote_digest, SHA1_RESULTLEN,
+	    (caddr_t)&mp_tp->mpt_remotetoken, sizeof (mp_tp->mpt_remotetoken));
+	mptcp_generate_idsn(remote_digest, SHA1_RESULTLEN,
+	    (caddr_t)&mp_tp->mpt_remote_idsn, sizeof (u_int64_t));
+	mp_tp->mpt_rcvatmark = mp_tp->mpt_rcvnxt = mp_tp->mpt_remote_idsn + 1;
+
+	return (0);
 }
 
 /*
@@ -4485,13 +4551,6 @@ mptcp_insert_dsn(struct mppcb *mpp, struct mbuf *m)
 
 	__IGNORE_WCASTALIGN(mp_tp = &((struct mpp_mtp *)mpp)->mtcb);
 	MPT_LOCK(mp_tp);
-	if (mp_tp->mpt_state < MPTCPS_ESTABLISHED) {
-		MPT_UNLOCK(mp_tp);
-		panic("%s: data write before establishment.",
-		    __func__);
-		return;
-	}
-
 	while (m) {
 		VERIFY(m->m_flags & M_PKTHDR);
 		m->m_pkthdr.pkt_flags |= (PKTF_MPTCP | PKTF_MPSO);
@@ -4504,9 +4563,18 @@ mptcp_insert_dsn(struct mppcb *mpp, struct mbuf *m)
 }
 
 void
-mptcp_preproc_sbdrop(struct mbuf *m, unsigned int len)
+mptcp_preproc_sbdrop(struct socket *so, struct mbuf *m, unsigned int len)
 {
 	u_int32_t sub_len = 0;
+	int rewinding = 0;
+
+	if (so->so_flags1 & SOF1_DATA_IDEMPOTENT) {
+		/* TFO makes things complicated. */
+		if (so->so_flags1 & SOF1_TFO_REWIND) {
+			rewinding = 1;
+			so->so_flags1 &= ~SOF1_TFO_REWIND;
+		}
+	}
 
 	while (m) {
 		VERIFY(m->m_flags & M_PKTHDR);
@@ -4523,12 +4591,14 @@ mptcp_preproc_sbdrop(struct mbuf *m, unsigned int len)
 				len -= sub_len;
 			} else {
 				/* sub_len >= len */
-				m->m_pkthdr.mp_dsn += len;
+				if (rewinding == 0)
+					m->m_pkthdr.mp_dsn += len;
 				if (!(m->m_pkthdr.pkt_flags & PKTF_MPSO)) {
-					m->m_pkthdr.mp_rseq += len;
+					if (rewinding == 0)
+						m->m_pkthdr.mp_rseq += len;
 				}
 				mptcplog((LOG_DEBUG, "MPTCP Sender: "
-				    "%s: dsn 0x%llu ssn %u len %d %d\n",
+				    "%s: dsn 0x%llx ssn %u len %d %d\n",
 				    __func__,
 				    m->m_pkthdr.mp_dsn, m->m_pkthdr.mp_rseq,
 				    m->m_pkthdr.mp_rlen, len),
@@ -4849,9 +4919,15 @@ mptcp_adj_sendlen(struct socket *so, int32_t off, int32_t len)
 	    (tp->t_mpflags & TMPF_SENT_JOIN) &&
 	    (!(tp->t_mpflags & TMPF_MPTCP_TRUE)) &&
 	    (!(tp->t_mpflags & TMPF_FASTJOINBY2_SEND))) {
-	    mdss_data_len = 0;
-	    tp->t_mpflags |= TMPF_FASTJOINBY2_SEND;
-	}    
+		mdss_data_len = 0;
+		tp->t_mpflags |= TMPF_FASTJOINBY2_SEND;
+	}
+
+	if ((tp->t_state > TCPS_SYN_SENT) &&
+	    (tp->t_mpflags & TMPF_TFO_REQUEST)) {
+		mdss_data_len = 0;
+		tp->t_mpflags &= ~TMPF_TFO_REQUEST;
+	}
 	return (mdss_data_len);
 }
 
@@ -5516,3 +5592,50 @@ mptcp_use_symptoms_hints(struct mptsub* best, struct mptsub *second_best)
 	/* little is known about the state of the network or wifi is good */
 	return (NULL); 
 }
+
+/* If TFO data is succesfully acked, it must be dropped from the mptcp so */
+static void
+mptcp_drop_tfo_data(struct mptses *mpte, struct mptsub *mpts)
+{
+	struct socket *mp_so = mpte->mpte_mppcb->mpp_socket;
+	struct socket *so = mpts->mpts_socket;
+	struct tcpcb *tp = intotcpcb(sotoinpcb(so));
+	struct mptcb *mp_tp = mpte->mpte_mptcb;
+
+	/* If data was sent with SYN, rewind state */
+	if (tp->t_tfo_stats & TFO_S_SYN_DATA_ACKED) {
+		mpts->mpts_flags &= ~MPTSF_TFO_REQD;
+		tp->t_mpflags &= ~TMPF_TFO_REQUEST;
+		MPT_LOCK(mp_tp);
+		u_int64_t mp_droplen = mpts->mpts_sndnxt - mp_tp->mpt_snduna;
+		unsigned int tcp_droplen = tp->snd_una - tp->iss - 1;
+		VERIFY(mp_droplen <= (UINT_MAX));
+		VERIFY(mp_droplen >= tcp_droplen);
+
+		if (mp_droplen > tcp_droplen) {
+			/* handle partial TCP ack */
+			mp_so->so_flags1 |= SOF1_TFO_REWIND;
+			mp_tp->mpt_sndnxt = mp_tp->mpt_snduna + (mp_droplen - tcp_droplen);
+			mpts->mpts_sndnxt = mp_tp->mpt_sndnxt;
+			mp_droplen = tcp_droplen;
+		} else {
+			/* all data on SYN was acked */
+			mpts->mpts_rel_seq = 1;
+			mp_tp->mpt_sndnxt = mp_tp->mpt_snduna;
+			mpts->mpts_sndnxt = mp_tp->mpt_snduna;
+		}
+		mp_tp->mpt_sndmax -= tcp_droplen;
+
+		MPT_UNLOCK(mp_tp);
+		if (mp_droplen != 0) {
+			VERIFY(mp_so->so_snd.sb_mb != NULL);
+			sbdrop(&mp_so->so_snd, (int)mp_droplen);
+		}
+		mptcplog((LOG_ERR, "MPTCP Sender: %s mp_so 0x%llx cid %d "
+		    "TFO tcp len %d mptcp len %d\n", __func__,
+		    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so), mpts->mpts_connid,
+		    tcp_droplen, mp_droplen),
+		    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
+	}
+}
+

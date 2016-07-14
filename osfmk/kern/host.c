@@ -77,6 +77,9 @@
 #include <mach/vm_map.h>
 #include <mach/task_info.h>
 
+#include <machine/commpage.h>
+#include <machine/cpu_capabilities.h>
+
 #include <kern/kern_types.h>
 #include <kern/assert.h>
 #include <kern/kalloc.h>
@@ -961,4 +964,12 @@ host_set_atm_diagnostic_flag(host_priv_t host_priv, uint32_t diagnostic_flag)
 	(void)diagnostic_flag;
 	return (KERN_NOT_SUPPORTED);
 #endif
+}
+
+kern_return_t
+host_set_multiuser_config_flags(host_priv_t host_priv, uint32_t multiuser_config)
+{
+	(void)host_priv;
+	(void)multiuser_config;
+	return (KERN_NOT_SUPPORTED);
 }

@@ -838,17 +838,12 @@ thread_task_priority(
 	s = splsched();
 	thread_lock(thread);
 
+	__unused
 	integer_t old_max_priority = thread->max_priority;
 
 	thread->task_priority = priority;
 	thread->max_priority = max_priority;
 
-	/* A thread is 'throttled' when its max priority is below MAXPRI_THROTTLE */
-	if ((max_priority > MAXPRI_THROTTLE) && (old_max_priority <= MAXPRI_THROTTLE)) {
-		sched_set_thread_throttled(thread, FALSE);
-	} else if ((max_priority <= MAXPRI_THROTTLE) && (old_max_priority > MAXPRI_THROTTLE)) {
-		sched_set_thread_throttled(thread, TRUE);
-	}
 
 	thread_recompute_priority(thread);
 
@@ -880,6 +875,11 @@ thread_policy_reset(
 
 	assert_thread_sched_count(thread);
 
+	if (thread->sched_flags & TH_SFLAG_THROTTLE_DEMOTED)
+		sched_thread_mode_undemote(thread, TH_SFLAG_THROTTLE_DEMOTED);
+
+	assert_thread_sched_count(thread);
+
 	if (thread->sched_flags & TH_SFLAG_THROTTLED)
 		sched_set_thread_throttled(thread, FALSE);
 
@@ -899,10 +899,10 @@ thread_policy_reset(
 
 	thread->importance = 0;
 
-	sched_set_thread_base_priority(thread, thread->task_priority);
-
 	/* Prevent further changes to thread base priority or mode */
 	thread->policy_reset = 1;
+
+	sched_set_thread_base_priority(thread, thread->task_priority);
 
 	assert(thread->BG_COUNT == 0);
 	assert_thread_sched_count(thread);

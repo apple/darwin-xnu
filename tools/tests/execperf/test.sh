@@ -24,11 +24,17 @@ if [ "${PERFDATA_DIR}" == "" ]; then
 fi
 
 case "$PRODUCT" in
+    "Watch OS")
+    COUNT=500
+    ;;
     "iPhone OS")
 	COUNT=1000
 	;;
+    "Mac OS X")
+    COUNT=6000
+    ;;
     *)
-	COUNT=10000
+	COUNT=1000
 	;;
 esac
 

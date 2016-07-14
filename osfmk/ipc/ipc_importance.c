@@ -3020,6 +3020,7 @@ ipc_importance_get_value(
 	mach_voucher_attr_content_t			content,
 	mach_voucher_attr_content_size_t		content_size,
 	mach_voucher_attr_value_handle_t		*out_value,
+	mach_voucher_attr_value_flags_t			*out_flags,
 	ipc_voucher_t					*out_value_voucher);
 
 static kern_return_t
@@ -3054,6 +3055,7 @@ struct ipc_voucher_attr_manager ipc_importance_manager = {
 	.ivam_extract_content =	ipc_importance_extract_content,
 	.ivam_command = 	ipc_importance_command,
 	.ivam_release =		ipc_importance_manager_release,
+	.ivam_flags = 		IVAM_FLAGS_NONE,
 };
 
 #define IMPORTANCE_ASSERT_KEY(key) assert(MACH_VOUCHER_ATTR_KEY_IMPORTANCE == (key))
@@ -3156,6 +3158,7 @@ ipc_importance_get_value(
 	mach_voucher_attr_content_t			__unused content,
 	mach_voucher_attr_content_size_t		content_size,
 	mach_voucher_attr_value_handle_t		*out_value,
+	mach_voucher_attr_value_flags_t			*out_flags,
 	ipc_voucher_t					*out_value_voucher)
 {
 	ipc_importance_elem_t elem;
@@ -3167,6 +3170,7 @@ ipc_importance_get_value(
 	if (0 != content_size)
 		return KERN_INVALID_ARGUMENT;
 
+	*out_flags = MACH_VOUCHER_ATTR_VALUE_FLAGS_NONE;
 	/* never an out voucher */
 
 	switch (command) {

@@ -110,6 +110,7 @@
 #include <sys/priv.h>
 #include <sys/proc_info.h>
 #include <sys/bsdtask_info.h>
+#include <sys/persona.h>
 
 #if CONFIG_MEMORYSTATUS
 #include <sys/kern_memorystatus.h>
@@ -193,6 +194,9 @@ procinit(void)
 	pgrphashtbl = hashinit(maxproc / 4, M_PROC, &pgrphash);
 	sesshashtbl = hashinit(maxproc / 4, M_PROC, &sesshash);
 	uihashtbl = hashinit(maxproc / 16, M_PROC, &uihash);
+#if CONFIG_PERSONAS
+	personas_bootstrap();
+#endif
 }
 
 /*
@@ -671,6 +675,12 @@ proc_selfppid(void)
 	return (current_proc()->p_ppid);
 }
 
+int
+proc_selfcsflags(void)
+{
+	return (current_proc()->p_csflags);
+}
+
 #if CONFIG_DTRACE
 static proc_t
 dtrace_current_proc_vforking(void)
@@ -938,6 +948,24 @@ int
 proc_pidversion(proc_t p)
 {
 	return(p->p_idversion);
+}
+
+uint32_t
+proc_persona_id(proc_t p)
+{
+	return (uint32_t)persona_id_from_proc(p);
+}
+
+uint32_t
+proc_getuid(proc_t p)
+{
+	return(p->p_uid);
+}
+
+uint32_t
+proc_getgid(proc_t p)
+{
+	return(p->p_gid);
 }
 
 uint64_t
@@ -1872,7 +1900,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 
 			proc_lock(pt);
 
-			if ((pt->p_csflags & CS_VALID) == 0) {
+			if ((pt->p_csflags & (CS_VALID | CS_DEBUGGED)) == 0) {
 				proc_unlock(pt);
 				error = EINVAL;
 				break;
@@ -1927,7 +1955,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			size_t length;
 
 			proc_lock(pt);
-			if ((pt->p_csflags & CS_VALID) == 0) {
+			if ((pt->p_csflags & (CS_VALID | CS_DEBUGGED)) == 0) {
 				proc_unlock(pt);
 				error = EINVAL;
 				break;
@@ -1959,7 +1987,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			memset(fakeheader, 0, sizeof(fakeheader));
 
 			proc_lock(pt);
-			if ((pt->p_csflags & CS_VALID) == 0) {
+			if ((pt->p_csflags & (CS_VALID | CS_DEBUGGED)) == 0) {
 				proc_unlock(pt);
 				error = EINVAL;
 				break;

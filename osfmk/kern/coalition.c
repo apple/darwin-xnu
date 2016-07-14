@@ -499,8 +499,8 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 		logical_deferred_writes += task->task_deferred_writes;
 		logical_invalidated_writes += task->task_invalidated_writes;
 		logical_metadata_writes += task->task_metadata_writes;
-		cpu_time_billed_to_me += (int64_t)bank_billed_time(task->bank_context);
-		cpu_time_billed_to_others += (int64_t)bank_serviced_time(task->bank_context);
+		cpu_time_billed_to_me += (int64_t)bank_billed_time_safe(task);
+		cpu_time_billed_to_others += (int64_t)bank_serviced_time_safe(task);
 	}
 
 	/* collect information from the coalition itself */

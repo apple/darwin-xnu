@@ -175,6 +175,10 @@ cs_allow_invalid(struct proc *p)
 			    p->p_pid);
 	proc_lock(p);
 	p->p_csflags &= ~(CS_KILL | CS_HARD);
+	if (p->p_csflags & CS_VALID)
+	{
+		p->p_csflags |= CS_DEBUGGED;
+	}
 	proc_unlock(p);
 	vm_map_switch_protect(get_task_map(p->task), FALSE);
 #endif

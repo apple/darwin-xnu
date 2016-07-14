@@ -2733,11 +2733,20 @@ ifnet_set_delegate(ifnet_t ifp, ifnet_t delegated_ifp)
 		ifp->if_delegated.subfamily = delegated_ifp->if_subfamily;
 		ifp->if_delegated.expensive =
 		    delegated_ifp->if_eflags & IFEF_EXPENSIVE ? 1 : 0;
+
+		/*
+		 * Propogate flags related to ECN from delegated interface
+		 */
+		ifp->if_eflags &= ~(IFEF_ECN_ENABLE|IFEF_ECN_DISABLE);
+		ifp->if_eflags |= (delegated_ifp->if_eflags &
+		    (IFEF_ECN_ENABLE|IFEF_ECN_DISABLE));
+
 		printf("%s: is now delegating %s (type 0x%x, family %u, "
 		    "sub-family %u)\n", ifp->if_xname, delegated_ifp->if_xname,
 		    delegated_ifp->if_type, delegated_ifp->if_family,
 		    delegated_ifp->if_subfamily);
 	}
+
 	ifnet_lock_done(ifp);
 
 	if (odifp != NULL) {

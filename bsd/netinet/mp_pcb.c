@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -207,7 +207,17 @@ mp_pcballoc(struct socket *so, struct mppcbinfo *mppi)
 		lck_mtx_unlock(&mppi->mppi_lock);
 		mptcplog((LOG_ERR, "MPTCP Socket: Reached MPTCP socket limit."),
 		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-		return (ENOBUFS);
+		/*
+		 * This limit may be reached either because of
+		 * a leak or a transient condition where
+		 * MPTCP connections are not released fast
+		 * enough.
+		 * We return EAFNOSUPPORT here to have user
+		 * space library fallback to TCP.
+		 * XXX We need to revist this when we get rid
+		 * of the current low limit imposed on MPTCP.
+		 */
+		return (EAFNOSUPPORT);
 	}
 	lck_mtx_unlock(&mppi->mppi_lock);
 

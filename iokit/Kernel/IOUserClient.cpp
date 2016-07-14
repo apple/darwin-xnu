@@ -485,6 +485,55 @@ iokit_remove_reference( io_object_t obj )
 	obj->release();
 }
 
+void
+iokit_add_connect_reference( io_object_t obj )
+{
+    IOUserClient * uc;
+
+    if (!obj) return;
+
+    if ((uc = OSDynamicCast(IOUserClient, obj))) OSIncrementAtomic(&uc->__ipc);
+
+    obj->retain();
+}
+
+void
+iokit_remove_connect_reference( io_object_t obj )
+{
+    IOUserClient * uc;
+    bool           finalize = false;
+
+    if (!obj) return;
+
+    if ((uc = OSDynamicCast(IOUserClient, obj)))
+    {
+	if (1 == OSDecrementAtomic(&uc->__ipc) && uc->isInactive())
+	{
+	    IOLockLock(gIOObjectPortLock);
+	    if ((finalize = uc->__ipcFinal)) uc->__ipcFinal = false;
+	    IOLockUnlock(gIOObjectPortLock);
+	}
+	if (finalize) uc->scheduleFinalize(true);
+    }
+
+    obj->release();
+}
+
+bool
+IOUserClient::finalizeUserReferences(OSObject * obj)
+{
+    IOUserClient * uc;
+    bool           ok = true;
+
+    if ((uc = OSDynamicCast(IOUserClient, obj)))
+    {
+	IOLockLock(gIOObjectPortLock);
+	if ((uc->__ipcFinal = (0 != uc->__ipc))) ok = false;
+	IOLockUnlock(gIOObjectPortLock);
+    }
+    return (ok);
+}
+
 ipc_port_t
 iokit_port_for_object( io_object_t obj, ipc_kobject_type_t type )
 {
@@ -1642,21 +1691,16 @@ kern_return_t is_io_object_get_class(
     io_name_t className )
 {
     const OSMetaClass* my_obj = NULL;
-    const char * my_class_name = NULL;
 	
     if( !object)
         return( kIOReturnBadArgument );
 		
-    if ( !my_class_name ) {
-        my_obj = object->getMetaClass();
-        if (!my_obj) {
-            return (kIOReturnNotFound);
-        }
-
-        my_class_name = my_obj->getClassName();
+    my_obj = object->getMetaClass();
+    if (!my_obj) {
+        return (kIOReturnNotFound);
     }
-	
-    strlcpy( className, my_class_name, sizeof(io_name_t));
+
+    strlcpy( className, my_obj->getClassName(), sizeof(io_name_t));
 
     return( kIOReturnSuccess );
 }
@@ -1827,7 +1871,6 @@ static kern_return_t internal_io_service_match_property_table(
     obj = matching_size ? OSUnserializeXML(matching, matching_size)
 			: OSUnserializeXML(matching);
     if( (dict = OSDynamicCast( OSDictionary, obj))) {
-
         *matches = service->passiveMatch( dict );
 	kr = kIOReturnSuccess;
     } else
@@ -4977,7 +5020,7 @@ kern_return_t iokit_user_client_trap(struct iokit_user_client_trap_args *args)
             }
         }
 
-        userClient->release();
+	iokit_remove_connect_reference(userClient);
     }
 
     return result;
@@ -5140,7 +5183,6 @@ IOReturn IOUserClient::externalMethod( uint32_t selector, IOExternalMethodArgume
 
     return (err);
 }
-
 
 #if __LP64__
 OSMetaClassDefineReservedUnused(IOUserClient, 0);

@@ -38,6 +38,27 @@
 #define MACH_VOUCHER_BANK_CONTENT_SIZE (500)
 
 typedef uint32_t bank_action_t;
-#define BANK_ORIGINATOR_PID	0x1
+#define BANK_ORIGINATOR_PID     0x1
+#define BANK_PERSONA_TOKEN      0x2
+
+struct proc_persona_info {
+	uint64_t unique_pid;
+	int32_t  pid;
+	uint32_t flags;
+	uint32_t pidversion;
+	uint32_t persona_id;
+	uint32_t uid;
+	uint32_t gid;
+	uint8_t  macho_uuid[16];
+};
+
+struct persona_token {
+	struct proc_persona_info originator;
+	struct proc_persona_info proximate;
+};
+
+#ifdef PRIVATE
+#define ENTITLEMENT_PERSONA_PROPAGATE "com.apple.private.personas.propagate"
+#endif /* PRIVATE */
 
 #endif /* _BANK_BANK_TYPES_H_ */

@@ -881,12 +881,14 @@ mp_rendezvous_action(void)
 	/* spin on entry rendezvous */
 	atomic_incl(&mp_rv_entry, 1);
 	tsc_spin_start = rdtsc64();
+
 	while (mp_rv_entry < mp_rv_ncpus) {
 		/* poll for pesky tlb flushes if interrupts disabled */
 		if (!intrs_enabled)
 			handle_pending_TLB_flushes();
-		if (mp_spin_timeout(tsc_spin_start))
-			panic("mp_rendezvous_action() entry");
+		if (mp_spin_timeout(tsc_spin_start)) {
+			panic("mp_rv_action() entry: %ld of %d responses, start: 0x%llx, cur: 0x%llx", mp_rv_entry, mp_rv_ncpus, tsc_spin_start, rdtsc64());
+		}
 	}
 
 	/* action function */
@@ -900,7 +902,7 @@ mp_rendezvous_action(void)
 		if (!intrs_enabled)
 			handle_pending_TLB_flushes();
 		if (mp_spin_timeout(tsc_spin_start))
-			panic("mp_rendezvous_action() exit");
+			panic("mp_rv_action() exit: %ld of %d responses, start: 0x%llx, cur: 0x%llx", mp_rv_exit, mp_rv_ncpus, tsc_spin_start, rdtsc64());
 	}
 
 	/* teardown function */
@@ -962,7 +964,7 @@ mp_rendezvous(void (*setup_func)(void *),
 	tsc_spin_start = rdtsc64();
 	while (mp_rv_complete < mp_rv_ncpus) {
 		if (mp_spin_timeout(tsc_spin_start))
-			panic("mp_rendezvous() timeout");
+			panic("mp_rendezvous() timeout: %ld of %d responses, start: 0x%llx, cur: 0x%llx", mp_rv_complete, mp_rv_ncpus, tsc_spin_start, rdtsc64());
 	}
 	
 	/* Tidy up */
@@ -1788,7 +1790,7 @@ mp_kdp_exit(void)
 #endif	/* MACH_KDP */
 
 boolean_t
-mp_recent_debugger_activity() {
+mp_recent_debugger_activity(void) {
 	uint64_t abstime = mach_absolute_time();
 	return (((abstime - debugger_entry_time) < LastDebuggerEntryAllowance) ||
 	    ((abstime - debugger_exit_time) < LastDebuggerEntryAllowance));

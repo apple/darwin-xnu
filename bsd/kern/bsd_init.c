@@ -546,6 +546,10 @@ bsd_init(void)
 	LIST_INSERT_HEAD(SESSHASH(0), &session0, s_hash);
 	proc_list_unlock();
 
+#if CONFIG_PERSONAS
+	kernproc->p_persona = NULL;
+#endif
+
 	kernproc->task = kernel_task;
 	
 	kernproc->p_stat = SRUN;

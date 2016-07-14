@@ -83,7 +83,6 @@ public:
     bool                 io;
     IOReturn		 ioStatus;
     uint32_t             openCount;
-    uint32_t             openState;
 
     static IOPolledFilePollers * copyPollers(IOService * media);
 };
@@ -222,17 +221,13 @@ IOPolledFilePollersOpen(IOPolledFileIOVars * filevars, uint32_t state, bool abor
     {
         poller = (IOPolledInterface *) vars->pollers->getObject(idx);
         err = poller->open(state, ioBuffer);
-        if ((kIOReturnSuccess != err) && (kIOPolledPreflightCoreDumpState == state))
-        {
-	    err = poller->open(kIOPolledPreflightState, ioBuffer);
-        }
         if (kIOReturnSuccess != err)
         {
             HIBLOG("IOPolledInterface::open[%d] 0x%x\n", idx, err);
             break;
         }
     }
-    if (kIOReturnSuccess == err)
+    if ((kIOReturnSuccess == err) && (kIOPolledPreflightState == state))
     {
         next = vars->media;
 	while (next)
@@ -258,15 +253,9 @@ IOPolledFilePollersClose(IOPolledFileIOVars * filevars, uint32_t state)
 
     (void) IOPolledFilePollersIODone(vars, false);
 
-    if (kIOPolledPostflightState == state)
+    if ((kIOPolledPostflightState == state) || (kIOPolledPostflightCoreDumpState == state))
     {
 	vars->openCount--;
-	if (vars->openCount) 
-	{
-	    // 21207427
-            IOPolledFilePollersOpen(filevars, vars->openState, vars->abortable);
-	    return (kIOReturnSuccess);
-	}
     }
 
     for (idx = 0, err = kIOReturnSuccess;
@@ -278,20 +267,26 @@ IOPolledFilePollersClose(IOPolledFileIOVars * filevars, uint32_t state)
     }
 
     if (kIOPolledPostflightState == state)
-    {   
+    {
 	next = vars->media;
 	while (next)
 	{
 	    next->removeProperty(kIOPolledInterfaceActiveKey);
 	    next = next->getParentEntry(gIOServicePlane);
 	}
+    }
 
+    if ((kIOPolledPostflightState == state) || (kIOPolledPostflightCoreDumpState == state)) do
+    {
+	if (vars->openCount) break;
 	if (vars->ioBuffer)
 	{
 	    vars->ioBuffer->release();
 	    vars->ioBuffer = 0;
 	}
     }
+    while (false);
+
     return (err);
 }
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -701,11 +696,13 @@ IOPolledFilePollersSetup(IOPolledFileIOVars * vars,
         {
 	    err = IOPolledFilePollersProbe(vars->pollers);
 	    if (kIOReturnSuccess != err) break;
-	    err = IOPolledFilePollersOpen(vars, openState, false);
-	    if (kIOReturnSuccess != err) break;
-	    vars->pollers->openState = openState;
 	}
-	vars->pollers->openCount++;
+	err = IOPolledFilePollersOpen(vars, openState, false);
+	if (kIOReturnSuccess != err) break;
+	if ((kIOPolledPreflightState == openState) || (kIOPolledPreflightCoreDumpState == openState))
+	{
+	    vars->pollers->openCount++;
+	}
 	vars->pollers->io  = false;
 	vars->buffer       = (uint8_t *) vars->pollers->ioBuffer->getBytesNoCopy();
 	vars->bufferHalf   = 0;

@@ -124,6 +124,10 @@ struct	psemcache {
 };
 #define PSEMCACHE_NULL (struct psemcache *)0
 
+#define PSEMCACHE_NOTFOUND (0)
+#define PSEMCACHE_FOUND    (-1)
+#define PSEMCACHE_NEGATIVE (ENOENT)
+
 struct	psemstats {
 	long	goodhits;		/* hits that we can really use */
 	long	neghits;		/* negative hits that we can use */
@@ -175,6 +179,7 @@ static int psem_ioctl (struct fileproc *fp, u_long com,
 			    caddr_t data, vfs_context_t ctx);
 static int psem_select (struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
 static int psem_closefile (struct fileglob *fp, vfs_context_t ctx);
+static int psem_unlink_internal(struct pseminfo *pinfo, struct psemcache *pcache);
 
 static int psem_kqfilter (struct fileproc *fp, struct knote *kn, vfs_context_t ctx);
 
@@ -196,9 +201,14 @@ static lck_mtx_t        psx_sem_subsys_mutex;
 
 #define PSEM_SUBSYS_LOCK() lck_mtx_lock(& psx_sem_subsys_mutex)
 #define PSEM_SUBSYS_UNLOCK() lck_mtx_unlock(& psx_sem_subsys_mutex)
+#define PSEM_SUBSYS_ASSERT_HELD() lck_mtx_assert(&psx_sem_subsys_mutex, LCK_MTX_ASSERT_OWNED)
 
 
 static int psem_cache_add(struct pseminfo *psemp, struct psemname *pnp, struct psemcache *pcp);
+static void psem_cache_delete(struct psemcache *pcp);
+int psem_cache_purge_all(proc_t);
+
+
 /* Initialize the mutex governing access to the posix sem subsystem */
 __private_extern__ void
 psem_lock_init( void )
@@ -231,7 +241,7 @@ psem_cache_search(struct pseminfo **psemp, struct psemname *pnp,
 
 	if (pnp->psem_namelen > PSEMNAMLEN) {
 		psemstats.longnames++;
-		return (0);
+		return PSEMCACHE_NOTFOUND;
 	}
 
 	pcpp = PSEMHASH(pnp);
@@ -244,7 +254,7 @@ psem_cache_search(struct pseminfo **psemp, struct psemname *pnp,
 
 	if (pcp == 0) {
 		psemstats.miss++;
-		return (0);
+		return PSEMCACHE_NOTFOUND;
 	}
 
 	/* We found a "positive" match, return the vnode */
@@ -253,7 +263,7 @@ psem_cache_search(struct pseminfo **psemp, struct psemname *pnp,
 		/* TOUCH(ncp); */
 		*psemp = pcp->pseminfo;
 		*pcache = pcp;
-		return (-1);
+		return PSEMCACHE_FOUND;
 	}
 
 	/*
@@ -261,7 +271,7 @@ psem_cache_search(struct pseminfo **psemp, struct psemname *pnp,
 	 * The nc_vpid field records whether this is a whiteout.
 	 */
 	psemstats.neghits++;
-	return (ENOENT);
+	return PSEMCACHE_NEGATIVE;
 }
 
 /*
@@ -281,11 +291,11 @@ psem_cache_add(struct pseminfo *psemp, struct psemname *pnp, struct psemcache *p
 
 
 	/*  if the entry has already been added by some one else return */
-	if (psem_cache_search(&dpinfo, pnp, &dpcp) == -1) {
-		return(EEXIST);
+	if (psem_cache_search(&dpinfo, pnp, &dpcp) == PSEMCACHE_FOUND) {
+		return EEXIST;
 	}
 	if (psemnument >= posix_sem_max)
-		return(ENOSPC);
+		return ENOSPC;
 	psemnument++;
 	/*
 	 * Fill in cache info, if vp is NULL this is a "negative" cache entry.
@@ -307,7 +317,7 @@ psem_cache_add(struct pseminfo *psemp, struct psemname *pnp, struct psemcache *p
 	}
 #endif
 	LIST_INSERT_HEAD(pcpp, pcp, psem_hash);
-	return(0);
+	return 0;
 }
 
 /*
@@ -333,27 +343,43 @@ psem_cache_delete(struct psemcache *pcp)
 	psemnument--;
 }
 
-#if NOT_USED
 /*
- * Invalidate a all entries to particular vnode.
- * 
- * We actually just increment the v_id, that will do it. The entries will
- * be purged by lookup as they get found. If the v_id wraps around, we
- * need to ditch the entire cache, to avoid confusion. No valid vnode will
- * ever have (v_id == 0).
+ * Remove all cached psem entries. Open semaphores (with a positive refcount)
+ * will continue to exist, but their cache entries tying them to a particular
+ * name/path will be removed making all future lookups on the name fail.
  */
-static void
-psem_cache_purge(void)
+int
+psem_cache_purge_all(__unused proc_t p)
 {
-	struct psemcache *pcp;
+	struct psemcache *pcp, *tmppcp;
 	struct psemhashhead *pcpp;
+	int error = 0;
 
+	if (kauth_cred_issuser(kauth_cred_get()) == 0)
+		return EPERM;
+
+	PSEM_SUBSYS_LOCK();
 	for (pcpp = &psemhashtbl[psemhash]; pcpp >= psemhashtbl; pcpp--) {
-		while ( (pcp = pcpp->lh_first) )
-			psem_cache_delete(pcp);
+		LIST_FOREACH_SAFE(pcp, pcpp, psem_hash, tmppcp) {
+			assert(pcp->psem_nlen);
+			/*
+			 * unconditionally unlink the cache entry
+			 */
+			error = psem_unlink_internal(pcp->pseminfo, pcp);
+			if (error)
+				goto out;
+		}
 	}
+	assert(psemnument == 0);
+
+out:
+	PSEM_SUBSYS_UNLOCK();
+
+	if (error)
+		printf("%s: Error %d removing all semaphores: %ld remain!\n",
+		       __func__, error, psemnument);
+	return error;
 }
-#endif	/* NOT_USED */
 
 int
 sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
@@ -498,15 +524,15 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 	PSEM_SUBSYS_LOCK();
 	error = psem_cache_search(&pinfo, &nd, &pcache);
 
-	if (error == ENOENT) {
+	if (error == PSEMCACHE_NEGATIVE) {
 		error = EINVAL;
 		goto bad_locked;
-
 	}
-	if (!error) {
-		incache = 0;
-	} else
+
+	if (error == PSEMCACHE_FOUND)
 		incache = 1;
+	else
+		incache = 0;
 
 	cmode &=  ALLPERMS;
 
@@ -661,6 +687,39 @@ psem_access(struct pseminfo *pinfo, int mode, kauth_cred_t cred)
 	return(posix_cred_access(cred, pinfo->psem_uid, pinfo->psem_gid, pinfo->psem_mode, mode_req));
 }
 
+static int
+psem_unlink_internal(struct pseminfo *pinfo, struct psemcache *pcache)
+{
+	PSEM_SUBSYS_ASSERT_HELD();
+
+	if (!pinfo || !pcache)
+		return EINVAL;
+
+	if ((pinfo->psem_flags & (PSEM_DEFINED | PSEM_ALLOCATED)) == 0)
+		return EINVAL;
+
+	if (pinfo->psem_flags & PSEM_INDELETE)
+		return 0;
+
+	AUDIT_ARG(posix_ipc_perm, pinfo->psem_uid, pinfo->psem_gid,
+		  pinfo->psem_mode);
+
+	pinfo->psem_flags |= PSEM_INDELETE;
+	pinfo->psem_usecount--;
+
+	if (!pinfo->psem_usecount) {
+		psem_delete(pinfo);
+		FREE(pinfo,M_SHM);
+	} else {
+		pinfo->psem_flags |= PSEM_REMOVED;
+	}
+
+	psem_cache_delete(pcache);
+	FREE(pcache, M_SHM);
+	return 0;
+}
+
+
 int
 sem_unlink(__unused proc_t p, struct sem_unlink_args *uap, __unused int32_t *retval)
 {
@@ -668,11 +727,10 @@ sem_unlink(__unused proc_t p, struct sem_unlink_args *uap, __unused int32_t *ret
 	int error=0;
 	struct psemname nd;
 	struct pseminfo *pinfo;
-	char * pnbuf;
 	char * nameptr;
 	char * cp;
-	size_t pathlen, plen;
-	int incache = 0;
+	char * pnbuf;
+	size_t pathlen;
 	struct psemcache *pcache = PSEMCACHE_NULL;
 
 	pinfo = PSEMINFO_NULL;
@@ -692,12 +750,12 @@ sem_unlink(__unused proc_t p, struct sem_unlink_args *uap, __unused int32_t *ret
 		goto bad;
 	}
 
+	nameptr = pnbuf;
 
 #ifdef PSXSEM_NAME_RESTRICT
-	nameptr = pnbuf;
 	if (*nameptr == '/') {
 		while (*(nameptr++) == '/') {
-			plen--;
+			pathlen--;
 			error = EINVAL;
 			goto bad;
 		}
@@ -707,31 +765,24 @@ sem_unlink(__unused proc_t p, struct sem_unlink_args *uap, __unused int32_t *ret
 	}
 #endif /* PSXSEM_NAME_RESTRICT */
 
-	plen = pathlen;
-	nameptr = pnbuf;
 	nd.psem_nameptr = nameptr;
-	nd.psem_namelen = plen;
+	nd.psem_namelen = pathlen;
 	nd. psem_hash =0;
 
-        for (cp = nameptr, i=1; *cp != 0 && i <= plen; i++, cp++) {
+        for (cp = nameptr, i=1; *cp != 0 && i <= pathlen; i++, cp++) {
                nd.psem_hash += (unsigned char)*cp * i;
 	}
 
 	PSEM_SUBSYS_LOCK();
 	error = psem_cache_search(&pinfo, &nd, &pcache);
 
-	if (error == ENOENT) {
+	if (error != PSEMCACHE_FOUND) {
 		PSEM_SUBSYS_UNLOCK();
 		error = EINVAL;
 		goto bad;
 
 	}
-	if (!error) {
-		PSEM_SUBSYS_UNLOCK();
-		error = EINVAL;
-		goto bad;
-	} else
-		incache = 1;
+
 #if CONFIG_MACF
 	error = mac_posixsem_check_unlink(kauth_cred_get(), pinfo, nameptr);
 	if (error) {
@@ -744,37 +795,12 @@ sem_unlink(__unused proc_t p, struct sem_unlink_args *uap, __unused int32_t *ret
 		goto bad;
 	}
 
-	if ((pinfo->psem_flags & (PSEM_DEFINED | PSEM_ALLOCATED))==0) {
-		PSEM_SUBSYS_UNLOCK();
-		error = EINVAL;
-		goto bad;
-	}
-
-	if ( (pinfo->psem_flags & PSEM_INDELETE) ) {
-		PSEM_SUBSYS_UNLOCK();
-		error = 0;
-		goto bad;
-	}
-
-	AUDIT_ARG(posix_ipc_perm, pinfo->psem_uid, pinfo->psem_gid,
-		  pinfo->psem_mode);
-
-	pinfo->psem_flags |= PSEM_INDELETE;
-	pinfo->psem_usecount--;
-
-	if (!pinfo->psem_usecount) {
-		psem_delete(pinfo);
-		FREE(pinfo,M_SHM);
-	} else
-		pinfo->psem_flags |= PSEM_REMOVED;
-
-	psem_cache_delete(pcache);
+	error = psem_unlink_internal(pinfo, pcache);
 	PSEM_SUBSYS_UNLOCK();
-	FREE(pcache, M_SHM);
-	error = 0;
+
 bad:
 	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
-	return (error);
+	return error;
 }
 
 int

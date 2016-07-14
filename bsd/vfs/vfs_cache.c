@@ -1173,9 +1173,15 @@ skiprsrcfork:
 
 		/*
 		 * NAME_CACHE_LOCK holds these fields stable
+		 *
+		 * We can't cache KAUTH_VNODE_SEARCHBYANYONE for root correctly
+		 * so  we make an ugly check for root here. root is always
+		 * allowed and breaking out of here only to find out that is
+		 * authorized by virtue of being root is very very expensive.
 		 */
 		if ((dp->v_cred != ucred || !(dp->v_authorized_actions & KAUTH_VNODE_SEARCH)) &&
-		    !(dp->v_authorized_actions & KAUTH_VNODE_SEARCHBYANYONE))
+		    !(dp->v_authorized_actions & KAUTH_VNODE_SEARCHBYANYONE) &&
+		    !vfs_context_issuser(ctx))
 		        break;
 
 		/*

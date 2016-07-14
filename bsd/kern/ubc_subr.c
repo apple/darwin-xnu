@@ -150,10 +150,9 @@ typedef void (*cs_md_update)(void *ctx, const void *data, size_t size);
 typedef void (*cs_md_final)(void *hash, void *ctx);
 
 struct cs_hash {
-    uint8_t		cs_type;
-    size_t		cs_cd_size;
-    size_t		cs_size;
-    size_t		cs_digest_size;
+    uint8_t		cs_type;	/* type code as per code signing */
+    size_t		cs_size;	/* size of effective hash (may be truncated) */
+    size_t		cs_digest_size;	/* size of native hash */
     cs_md_init		cs_init;
     cs_md_update 	cs_update;
     cs_md_final		cs_final;
@@ -161,7 +160,6 @@ struct cs_hash {
 
 static struct cs_hash cs_hash_sha1 = {
     .cs_type = CS_HASHTYPE_SHA1,
-    .cs_cd_size = CS_SHA1_LEN,
     .cs_size = CS_SHA1_LEN,
     .cs_digest_size = SHA_DIGEST_LENGTH,
     .cs_init = (cs_md_init)SHA1Init,
@@ -171,7 +169,6 @@ static struct cs_hash cs_hash_sha1 = {
 #if CRYPTO_SHA2
 static struct cs_hash cs_hash_sha256 = {
     .cs_type = CS_HASHTYPE_SHA256,
-    .cs_cd_size = SHA256_DIGEST_LENGTH,
     .cs_size = SHA256_DIGEST_LENGTH,
     .cs_digest_size = SHA256_DIGEST_LENGTH,
     .cs_init = (cs_md_init)SHA256_Init,
@@ -180,12 +177,19 @@ static struct cs_hash cs_hash_sha256 = {
 };
 static struct cs_hash cs_hash_sha256_truncate = {
     .cs_type = CS_HASHTYPE_SHA256_TRUNCATED,
-    .cs_cd_size = CS_SHA256_TRUNCATED_LEN,
     .cs_size = CS_SHA256_TRUNCATED_LEN,
     .cs_digest_size = SHA256_DIGEST_LENGTH,
     .cs_init = (cs_md_init)SHA256_Init,
     .cs_update = (cs_md_update)SHA256_Update,
     .cs_final = (cs_md_final)SHA256_Final,
+};
+static struct cs_hash cs_hash_sha384 = {
+    .cs_type = CS_HASHTYPE_SHA384,
+    .cs_size = SHA384_DIGEST_LENGTH,
+    .cs_digest_size = SHA384_DIGEST_LENGTH,
+    .cs_init = (cs_md_init)SHA384_Init,
+    .cs_update = (cs_md_update)SHA384_Update,
+    .cs_final = (cs_md_final)SHA384_Final,
 };
 #endif
     
@@ -199,6 +203,8 @@ cs_find_md(uint8_t type)
 		return &cs_hash_sha256;
 	} else if (type == CS_HASHTYPE_SHA256_TRUNCATED) {
 		return &cs_hash_sha256_truncate;
+	} else if (type == CS_HASHTYPE_SHA384) {
+		return &cs_hash_sha384;
 #endif
 	}
 	return NULL;
@@ -207,65 +213,31 @@ cs_find_md(uint8_t type)
 union cs_hash_union {
 	SHA1_CTX		sha1ctxt;
 	SHA256_CTX		sha256ctx;
+	SHA384_CTX		sha384ctx;
 };
 
 
 /*
- * Locate the CodeDirectory from an embedded signature blob
+ * Choose among different hash algorithms.
+ * Higher is better, 0 => don't use at all.
  */
-const 
-CS_CodeDirectory *findCodeDirectory(
-	const CS_SuperBlob *embedded,
-	const char *lower_bound,
-	const char *upper_bound)
+static uint32_t hashPriorities[] = {
+	CS_HASHTYPE_SHA1,
+	CS_HASHTYPE_SHA256_TRUNCATED,
+	CS_HASHTYPE_SHA256,
+	CS_HASHTYPE_SHA384,
+};
+
+static unsigned int
+hash_rank(const CS_CodeDirectory *cd)
 {
-	const CS_CodeDirectory *cd = NULL;
+	uint32_t type = cd->hashType;
+	unsigned int n;
 
-	if (embedded &&
-	    cs_valid_range(embedded, embedded + 1, lower_bound, upper_bound) &&
-	    ntohl(embedded->magic) == CSMAGIC_EMBEDDED_SIGNATURE) {
-		const CS_BlobIndex *limit;
-		const CS_BlobIndex *p;
-
-		limit = &embedded->index[ntohl(embedded->count)];
-		if (!cs_valid_range(&embedded->index[0], limit,
-				    lower_bound, upper_bound)) {
-			return NULL;
-		}
-		for (p = embedded->index; p < limit; ++p) {
-			if (ntohl(p->type) == CSSLOT_CODEDIRECTORY) {
-				const unsigned char *base;
-
-				base = (const unsigned char *)embedded;
-				cd = (const CS_CodeDirectory *)(base + ntohl(p->offset));
-				break;
-			}
-		}
-	} else {
-		/*
-		 * Detached signatures come as a bare CS_CodeDirectory,
-		 * without a blob.
-		 */
-		cd = (const CS_CodeDirectory *) embedded;
-	}
-
-	if (cd &&
-	    cs_valid_range(cd, cd + 1, lower_bound, upper_bound) &&
-	    cs_valid_range(cd, (const char *) cd + ntohl(cd->length),
-			   lower_bound, upper_bound) &&
-	    cs_valid_range(cd, (const char *) cd + ntohl(cd->hashOffset),
-			   lower_bound, upper_bound) &&
-	    cs_valid_range(cd, (const char *) cd +
-			   ntohl(cd->hashOffset) +
-			   (ntohl(cd->nCodeSlots) * SHA1_RESULTLEN),
-			   lower_bound, upper_bound) &&
-	    
-	    ntohl(cd->magic) == CSMAGIC_CODEDIRECTORY) {
-		return cd;
-	}
-
-	// not found or not a valid code directory
-	return NULL;
+	for (n = 0; n < sizeof(hashPriorities) / sizeof(hashPriorities[0]); ++n)
+		if (hashPriorities[n] == type)
+			return n + 1;
+	return 0;	/* not supported */
 }
 
 
@@ -394,9 +366,8 @@ cs_validate_codedirectory(const CS_CodeDirectory *cd, size_t length)
 	if (hashtype == NULL)
 		return EBADEXEC;
 
-	if (cd->hashSize != hashtype->cs_cd_size)
+	if (cd->hashSize != hashtype->cs_size)
 		return EBADEXEC;
-
 
 	if (length < ntohl(cd->hashOffset))
 		return EBADEXEC;
@@ -512,11 +483,16 @@ cs_validate_csblob(const uint8_t *addr, size_t length,
 	length = ntohl(blob->length);
 
 	if (ntohl(blob->magic) == CSMAGIC_EMBEDDED_SIGNATURE) {
-		const CS_SuperBlob *sb = (const CS_SuperBlob *)blob;
-		uint32_t n, count = ntohl(sb->count);
+		const CS_SuperBlob *sb;
+		uint32_t n, count;
+		const CS_CodeDirectory *best_cd = NULL;
+		unsigned int best_rank = 0;
 
 		if (length < sizeof(CS_SuperBlob))
 			return EBADEXEC;
+
+		sb = (const CS_SuperBlob *)blob;
+		count = ntohl(sb->count);
 
 		/* check that the array of BlobIndex fits in the rest of the data */
 		if ((length - sizeof(CS_SuperBlob)) / sizeof(CS_BlobIndex) < count)
@@ -525,25 +501,40 @@ cs_validate_csblob(const uint8_t *addr, size_t length,
 		/* now check each BlobIndex */
 		for (n = 0; n < count; n++) {
 			const CS_BlobIndex *blobIndex = &sb->index[n];
-			if (length < ntohl(blobIndex->offset))
+			uint32_t type = ntohl(blobIndex->type);
+			uint32_t offset = ntohl(blobIndex->offset);
+			if (length < offset)
 				return EBADEXEC;
 
 			const CS_GenericBlob *subBlob =
-				(const CS_GenericBlob *)(const void *)(addr + ntohl(blobIndex->offset));
+				(const CS_GenericBlob *)(const void *)(addr + offset);
 
-			size_t subLength = length - ntohl(blobIndex->offset);
+			size_t subLength = length - offset;
 
 			if ((error = cs_validate_blob(subBlob, subLength)) != 0)
 				return error;
 			subLength = ntohl(subBlob->length);
 
 			/* extra validation for CDs, that is also returned */
-			if (ntohl(blobIndex->type) == CSSLOT_CODEDIRECTORY) {
-				const CS_CodeDirectory *cd = (const CS_CodeDirectory *)subBlob;
-				if ((error = cs_validate_codedirectory(cd, subLength)) != 0)
+			if (type == CSSLOT_CODEDIRECTORY || (type >= CSSLOT_ALTERNATE_CODEDIRECTORIES && type < CSSLOT_ALTERNATE_CODEDIRECTORY_LIMIT)) {
+				const CS_CodeDirectory *candidate = (const CS_CodeDirectory *)subBlob;
+				if ((error = cs_validate_codedirectory(candidate, subLength)) != 0)
 					return error;
-				*rcd = cd;
+				unsigned int rank = hash_rank(candidate);
+				if (cs_debug > 3)
+					printf("CodeDirectory type %d rank %d at slot 0x%x index %d\n", candidate->hashType, (int)rank, (int)type, (int)n);
+				if (best_cd == NULL || rank > best_rank) {
+					best_cd = candidate;
+					best_rank = rank;
+				} else if (best_cd != NULL && rank == best_rank) {
+					/* repeat of a hash type (1:1 mapped to ranks), illegal and suspicious */
+					printf("multiple hash=%d CodeDirectories in signature; rejecting", best_cd->hashType);
+					return EBADEXEC;
+				}
 			}
+			if (best_cd && cs_debug > 2)
+				printf("using CodeDirectory type %d (rank %d)\n", (int)best_cd->hashType, best_rank);
+			*rcd = best_cd;
 		}
 
 	} else if (ntohl(blob->magic) == CSMAGIC_CODEDIRECTORY) {
@@ -643,8 +634,7 @@ csblob_get_entitlements(struct cs_blob *csblob, void **out_start, size_t *out_le
 	if (csblob->csb_hashtype == NULL || csblob->csb_hashtype->cs_digest_size > sizeof(computed_hash))
 	    return EBADEXEC;
 
-	if ((code_dir = (const CS_CodeDirectory *)csblob_find_blob(csblob, CSSLOT_CODEDIRECTORY, CSMAGIC_CODEDIRECTORY)) == NULL)
-		return 0;
+	code_dir = csblob->csb_cd;
 
 	entitlements = csblob_find_blob(csblob, CSSLOT_ENTITLEMENTS, CSMAGIC_EMBEDDED_ENTITLEMENTS);
 	embedded_hash = find_special_slot(code_dir, csblob->csb_hashtype->cs_size, CSSLOT_ENTITLEMENTS);
@@ -653,8 +643,12 @@ csblob_get_entitlements(struct cs_blob *csblob, void **out_start, size_t *out_le
 		if (entitlements)
 			return EBADEXEC;
 		return 0;
-	} else if (entitlements == NULL && memcmp(embedded_hash, cshash_zero, csblob->csb_hashtype->cs_size) != 0) {
-		return EBADEXEC;
+	} else if (entitlements == NULL) {
+		if (memcmp(embedded_hash, cshash_zero, csblob->csb_hashtype->cs_size) != 0) {
+			return EBADEXEC;
+		} else {
+			return 0;
+		}
 	}
 
 	csblob->csb_hashtype->cs_init(&context);
@@ -2718,9 +2712,7 @@ csblob_parse_teamid(struct cs_blob *csblob)
 {
 	const CS_CodeDirectory *cd;
 
-	if ((cd = (const CS_CodeDirectory *)csblob_find_blob(
-						csblob, CSSLOT_CODEDIRECTORY, CSMAGIC_CODEDIRECTORY)) == NULL)
-		return NULL;
+	cd = csblob->csb_cd;
 
 	if (ntohl(cd->version) < CS_SUPPORTSTEAMID)
 		return NULL;
@@ -2858,15 +2850,13 @@ ubc_cs_blob_add(
 		uint8_t hash[CS_HASH_MAX_SIZE];
 		int md_size;
 
+#if CS_BLOB_PAGEABLE
+#error "cd might move under CS_BLOB_PAGEABLE; reconsider this code"
+#endif
+		blob->csb_cd = cd;
 		blob->csb_hashtype = cs_find_md(cd->hashType);
 		if (blob->csb_hashtype == NULL || blob->csb_hashtype->cs_digest_size > sizeof(hash))
 			panic("validated CodeDirectory but unsupported type");
-		if (blob->csb_hashtype->cs_cd_size < CS_CDHASH_LEN) {
-			if (cs_debug) 
-				printf("cs_cd_size is too small for a cdhash\n");
-			error = EINVAL;
-			goto out;
-		}
 		    
 		blob->csb_flags = (ntohl(cd->flags) & CS_ALLOWED_MACHO) | CS_VALID;
 		blob->csb_end_offset = round_page_4K(ntohl(cd->codeLimit));
@@ -3373,11 +3363,10 @@ cs_validate_page(
 	union cs_hash_union	mdctx;
 	struct cs_hash		*hashtype = NULL;
 	unsigned char		actual_hash[CS_HASH_MAX_SIZE];
-	unsigned char		expected_hash[SHA1_RESULTLEN];
+	unsigned char		expected_hash[CS_HASH_MAX_SIZE];
 	boolean_t		found_hash;
 	struct cs_blob		*blobs, *blob;
 	const CS_CodeDirectory	*cd;
-	const CS_SuperBlob	*embedded;
 	const unsigned char	*hash;
 	boolean_t		validated;
 	off_t			offset;	/* page offset in the file */
@@ -3430,12 +3419,10 @@ cs_validate_page(
 		}
 
 		blob_addr = kaddr + blob->csb_mem_offset;
-		
 		lower_bound = CAST_DOWN(char *, blob_addr);
 		upper_bound = lower_bound + blob->csb_mem_size;
-
-		embedded = (const CS_SuperBlob *) blob_addr;
-		cd = findCodeDirectory(embedded, lower_bound, upper_bound);
+		
+		cd = blob->csb_cd;
 		if (cd != NULL) {
 			/* all CD's that have been injected is already validated */
 
@@ -3458,7 +3445,7 @@ cs_validate_page(
 				      hashtype->cs_size,
 				      lower_bound, upper_bound);
 			if (hash != NULL) {
-				bcopy(hash, expected_hash, sizeof(expected_hash));
+				bcopy(hash, expected_hash, hashtype->cs_size);
 				found_hash = TRUE;
 			}
 
@@ -3503,7 +3490,7 @@ cs_validate_page(
 		asha1 = (const uint32_t *) actual_hash;
 		esha1 = (const uint32_t *) expected_hash;
 
-		if (bcmp(expected_hash, actual_hash, hashtype->cs_cd_size) != 0) {
+		if (bcmp(expected_hash, actual_hash, hashtype->cs_size) != 0) {
 			if (cs_debug) {
 				printf("CODE SIGNING: cs_validate_page: "
 				       "mobj %p off 0x%llx size 0x%lx: "

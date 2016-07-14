@@ -560,7 +560,7 @@ do_init_slave(boolean_t fast_restart)
 
 #if CONFIG_VMX
 	/* resume VT operation */
-	vmx_resume();
+	vmx_resume(FALSE);
 #endif
 
 #if CONFIG_MTRR

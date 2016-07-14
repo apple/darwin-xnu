@@ -140,6 +140,10 @@ acpi_hibernate(void *refcon)
 		}
 
 	}
+
+#if CONFIG_VMX
+	vmx_suspend();
+#endif
 	kdebug_enable = 0;
 
 	IOCPURunPlatformQuiesceActions();
@@ -202,13 +206,6 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	hv_suspend();
 #endif
 
-#if CONFIG_VMX
-	/* 
-	 * Turn off VT, otherwise switching to legacy mode will fail
-	 */
-	vmx_suspend();
-#endif
-
 	/*
 	 * Enable FPU/SIMD unit for potential hibernate acceleration
 	 */
@@ -231,6 +228,9 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 #if HIBERNATION
 	acpi_sleep_cpu(acpi_hibernate, &data);
 #else
+#if CONFIG_VMX
+	vmx_suspend();
+#endif
 	acpi_sleep_cpu(func, refcon);
 #endif
 
@@ -274,16 +274,16 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	/* update CPU microcode */
 	ucode_update_wake();
 
+#if CONFIG_MTRR
+	/* set up PAT following boot processor power up */
+	pat_init();
+#endif
+
 #if CONFIG_VMX
 	/* 
 	 * Restore VT mode
 	 */
-	vmx_resume();
-#endif
-
-#if CONFIG_MTRR
-	/* set up PAT following boot processor power up */
-	pat_init();
+	vmx_resume(did_hibernate);
 #endif
 
 	/*
