@@ -1963,13 +1963,11 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 	MPT_UNLOCK(mp_tp);
 
 	mpt_mbuf = sb_mb;
-	mpt_dsn = mpt_mbuf->m_pkthdr.mp_dsn;
 
 	while (mpt_mbuf && ((mpt_mbuf->m_pkthdr.mp_rlen == 0) ||
 	    (mpt_mbuf->m_pkthdr.mp_rlen <= (u_int32_t)off))) {
 		off -= mpt_mbuf->m_pkthdr.mp_rlen;
 		mpt_mbuf = mpt_mbuf->m_next;
-		mpt_dsn = mpt_mbuf->m_pkthdr.mp_dsn;
 	}
 	if (mpts->mpts_flags & MPTSF_MP_DEGRADED)
 		mptcplog((LOG_DEBUG, "MPTCP Sender: %s cid = %d "
@@ -1979,7 +1977,7 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts)
 		    mpts->mpts_probecnt),
 		    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
 
-	VERIFY(mpt_mbuf && (mpt_mbuf->m_pkthdr.pkt_flags & PKTF_MPTCP));
+	VERIFY((mpt_mbuf == NULL) || (mpt_mbuf->m_pkthdr.pkt_flags & PKTF_MPTCP));
 
 	head = tail = NULL;
 

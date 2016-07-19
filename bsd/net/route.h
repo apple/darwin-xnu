@@ -168,6 +168,7 @@ struct route {
  * gateway rather than the ultimate destination.
  */
 
+#define	NRTT_HIST	10
 /*
  * Kernel routing entry structure.
  */
@@ -205,6 +206,9 @@ struct rtentry {
 	uint64_t rt_expire;		/* expiration time in uptime seconds */
 	uint64_t base_calendartime;	/* calendar time upon entry creation */
 	uint64_t base_uptime;		/* uptime upon entry creation */
+	u_int32_t rtt_hist[NRTT_HIST];	/* RTT history sample by TCP connections */
+	u_int32_t rtt_expire_ts;	/* RTT history expire timestamp */
+	u_int8_t rtt_index;		/* Index into RTT history */
 };
 
 /*

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -588,6 +588,7 @@ static int key_setsaval2(struct secasvar      *sav,
 						 u_int32_t             pid,
 						 struct sadb_lifetime *lifetime_hard,
 						 struct sadb_lifetime *lifetime_soft);
+static void bzero_keys(const struct sadb_msghdr *);
 
 extern int ipsec_bypass;
 extern int esp_udp_encap_port;
@@ -7192,6 +7193,7 @@ key_add(
 	/* map satype to proto */
 	if ((proto = key_satype2proto(mhp->msg->sadb_msg_satype)) == 0) {
 		ipseclog((LOG_DEBUG, "key_add: invalid satype is passed.\n"));
+		bzero_keys(mhp);
 		return key_senderror(so, m, EINVAL);
 	}
 	
@@ -7207,6 +7209,7 @@ key_add(
 	    (mhp->ext[SADB_EXT_LIFETIME_HARD] == NULL &&
 	     mhp->ext[SADB_EXT_LIFETIME_SOFT] != NULL)) {
 			ipseclog((LOG_DEBUG, "key_add: invalid message is passed.\n"));
+			bzero_keys(mhp);
 			return key_senderror(so, m, EINVAL);
 		}
 	if (mhp->extlen[SADB_EXT_SA] < sizeof(struct sadb_sa) ||
@@ -7214,6 +7217,7 @@ key_add(
 	    mhp->extlen[SADB_EXT_ADDRESS_DST] < sizeof(struct sadb_address)) {
 		/* XXX need more */
 		ipseclog((LOG_DEBUG, "key_add: invalid message is passed.\n"));
+		bzero_keys(mhp);
 		return key_senderror(so, m, EINVAL);
 	}
 	if (mhp->ext[SADB_X_EXT_SA2] != NULL) {
@@ -7242,6 +7246,7 @@ key_add(
 		if ((newsah = key_newsah(&saidx, ipsec_if, key_get_outgoing_ifindex_from_message(mhp, SADB_X_EXT_IPSECIF), IPSEC_DIR_OUTBOUND)) == NULL) {
 			lck_mtx_unlock(sadb_mutex);
 			ipseclog((LOG_DEBUG, "key_add: No more memory.\n"));
+			bzero_keys(mhp);
 			return key_senderror(so, m, ENOBUFS);
 		}
 	}
@@ -7251,6 +7256,7 @@ key_add(
 	error = key_setident(newsah, m, mhp);
 	if (error) {
 		lck_mtx_unlock(sadb_mutex);
+		bzero_keys(mhp);
 		return key_senderror(so, m, error);
 	}
 	
@@ -7259,11 +7265,13 @@ key_add(
 	if (key_getsavbyspi(newsah, sa0->sadb_sa_spi)) {
 		lck_mtx_unlock(sadb_mutex);
 		ipseclog((LOG_DEBUG, "key_add: SA already exists.\n"));
+		bzero_keys(mhp);
 		return key_senderror(so, m, EEXIST);
 	}
 	newsav = key_newsav(m, mhp, newsah, &error, so);
 	if (newsav == NULL) {
 		lck_mtx_unlock(sadb_mutex);
+		bzero_keys(mhp);
 		return key_senderror(so, m, error);
 	}
 	
@@ -7280,6 +7288,7 @@ key_add(
 	if ((error = key_mature(newsav)) != 0) {
 		key_freesav(newsav, KEY_SADB_LOCKED);
 		lck_mtx_unlock(sadb_mutex);
+		bzero_keys(mhp);
 		return key_senderror(so, m, error);
 	}
 	
@@ -7297,9 +7306,13 @@ key_add(
 		n = key_getmsgbuf_x1(m, mhp);
 		if (n == NULL) {
 			ipseclog((LOG_DEBUG, "key_update: No more memory.\n"));
+			bzero_keys(mhp);
 			return key_senderror(so, m, ENOBUFS);
 		}
 		
+		// mh.ext points to the mbuf content.
+		// Zero out Encryption and Integrity keys if present.
+		bzero_keys(mhp);
 		m_freem(m);
 		return key_sendup_mbuf(so, n, KEY_SENDUP_ALL);
     }
@@ -9214,7 +9227,7 @@ bzero_mbuf(struct mbuf *m)
 }
 
 static void
-bzero_keys(struct sadb_msghdr *mh)
+bzero_keys(const struct sadb_msghdr *mh)
 {
 	int extlen = 0;
 	int offset = 0;
@@ -9514,10 +9527,6 @@ key_parse(
 	
 	error = (*key_typesw[msg->sadb_msg_type])(so, m, &mh);
 
-	// mh.ext points to the mbuf content.
-	// Zero out Encryption and Integrity keys if present.
-	bzero_keys(&mh);
-	
 	return error;
 
 senderror:

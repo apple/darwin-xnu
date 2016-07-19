@@ -358,13 +358,12 @@ bank_get_value(
 			if (bank_merchant == BANK_TASK_NULL)
 				return KERN_RESOURCE_SHORTAGE;
 
-			/* Check if trying to redeem for self task, return the bank task */
+			/* Check if trying to redeem for self task, return the default bank task */
 			if (bank_holder == bank_merchant && 
 				bank_holder == bank_secureoriginator &&
 				bank_holder == bank_proximateprocess) {
-				bank_task_reference(bank_holder);
-				bank_task_made_reference(bank_holder);
-				*out_value = BANK_ELEMENT_TO_HANDLE(bank_holder);
+				*out_value = BANK_ELEMENT_TO_HANDLE(BANK_DEFAULT_TASK_VALUE);
+				*out_flags = MACH_VOUCHER_ATTR_VALUE_FLAGS_PERSIST;
 				return kr;
 			}
 

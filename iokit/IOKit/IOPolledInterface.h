@@ -38,6 +38,8 @@ enum
 
     kIOPolledPreflightCoreDumpState   = 5,
     kIOPolledPostflightCoreDumpState  = 6,
+
+    kIOPolledBeforeSleepStateAborted  = 7,
 };
 
 #if defined(__cplusplus)

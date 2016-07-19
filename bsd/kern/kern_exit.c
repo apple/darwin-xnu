@@ -1372,6 +1372,7 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 #if CONFIG_FINE_LOCK_GROUPS
 	lck_mtx_destroy(&child->p_mlock, proc_mlock_grp);
 	lck_mtx_destroy(&child->p_fdmlock, proc_fdmlock_grp);
+	lck_mtx_destroy(&child->p_ucred_mlock, proc_ucred_mlock_grp);
 #if CONFIG_DTRACE
 	lck_mtx_destroy(&child->p_dtrace_sprlock, proc_lck_grp);
 #endif
@@ -1379,6 +1380,7 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 #else /* CONFIG_FINE_LOCK_GROUPS */
 	lck_mtx_destroy(&child->p_mlock, proc_lck_grp);
 	lck_mtx_destroy(&child->p_fdmlock, proc_lck_grp);
+	lck_mtx_destroy(&child->p_ucred_mlock, proc_lck_grp);
 #if CONFIG_DTRACE
 	lck_mtx_destroy(&child->p_dtrace_sprlock, proc_lck_grp);
 #endif

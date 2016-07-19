@@ -903,6 +903,9 @@ public:
     */
     OSCollection * copyCollection(OSDictionary * cycleDict = 0) APPLE_KEXT_OVERRIDE;
 
+#if XNU_KERNEL_PRIVATE
+    bool setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject, bool onlyAdd);
+#endif /* XNU_KERNEL_PRIVATE */
 
     OSMetaClassDeclareReservedUnused(OSDictionary, 0);
     OSMetaClassDeclareReservedUnused(OSDictionary, 1);

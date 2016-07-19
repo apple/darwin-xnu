@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -45,10 +45,11 @@
 #include <sys/param.h>
 #include <netinet/in.h>
 #include <sys/malloc.h>
-#include <libkern/libkern.h>
-
 #include <netinet/dhcp.h>
 #include <netinet/dhcp_options.h>
+
+#ifndef TEST_DHCP_OPTIONS
+#include <libkern/libkern.h>
 
 #ifdef	DHCP_DEBUG
 #define	dprintf(x) printf x;
@@ -80,6 +81,19 @@ my_realloc(void * oldptr, int oldsize, int newsize)
     my_free(oldptr);
     return (data);
 }
+#else
+/*
+ * To build:
+ * xcrun -sdk macosx.internal cc -DTEST_DHCP_OPTIONS -o /tmp/dhcp_options dhcp_options.c -I .. 
+ */
+#include <stdlib.h>
+#include <unistd.h>
+#include <stdio.h>
+#define my_free	free
+#define my_malloc malloc
+#define my_realloc(ptr, old_size, new_size) realloc(ptr, new_size)
+#define	dprintf(x) printf x;
+#endif
 
 /*
  * Functions: ptrlist_*
@@ -244,7 +258,8 @@ dhcpol_parse_buffer(dhcpol_t * list, const void * buffer, int length)
 
     len = length;
     tag = dhcptag_pad_e;
-    for (scan = (const uint8_t *)buffer; tag != dhcptag_end_e && len > 0; ) {
+    for (scan = (const uint8_t *)buffer;
+	 tag != dhcptag_end_e && len > DHCP_TAG_OFFSET; ) {
 
 	tag = scan[DHCP_TAG_OFFSET];
 
@@ -259,19 +274,24 @@ dhcpol_parse_buffer(dhcpol_t * list, const void * buffer, int length)
 	      scan++;
 	      len--;
 	      break;
-	  default: {
-	      uint8_t	option_len = scan[DHCP_LEN_OFFSET];
-	    
-	      dhcpol_add(list, scan);
-	      len -= (option_len + 2);
-	      scan += (option_len + 2);
+	  default:
+	      if (len > DHCP_LEN_OFFSET) {
+		  uint8_t	option_len;
+
+		  option_len = scan[DHCP_LEN_OFFSET];
+		  dhcpol_add(list, scan);
+		  len -= (option_len + DHCP_OPTION_OFFSET);
+		  scan += (option_len + DHCP_OPTION_OFFSET);
+	      }
+	      else {
+		  len = -1;
+	      }
 	      break;
-	  }
 	}
     }
     if (len < 0) {
 	/* ran off the end */
-	dprintf(("dhcp_options: parse failed near tag %d", tag));
+	dprintf(("dhcp_options: parse failed near tag %d\n", tag));
 	dhcpol_free(list);
 	return (FALSE);
     }
@@ -314,50 +334,6 @@ dhcpol_find(dhcpol_t * list, int tag, int * len_p, int * start)
     }
     return (NULL);
 }
-
-#if 0
-/*
- * Function: dhcpol_get
- * 
- * Purpose:
- *   Accumulate all occurences of the given option into a
- *   malloc'd buffer, and return its length.  Used to get
- *   all occurrences of a particular option in a single
- *   data area.
- * Note:
- *   Use _FREE(val, M_TEMP) to free the returned data area.
- */
-void *
-dhcpol_get(dhcpol_t * list, int tag, int * len_p)
-{
-    int 	i;
-    char *	data = NULL;
-    int		data_len = 0;
-
-    if (tag == dhcptag_end_e || tag == dhcptag_pad_e)
-	return (NULL);
-
-    for (i = 0; i < dhcpol_count(list); i++) {
-	const uint8_t * 	option = dhcpol_element(list, i);
-	
-	if (option[DHCP_TAG_OFFSET] == tag) {
-	    int len = option[DHCP_LEN_OFFSET];
-
-	    if (data_len == 0) {
-		data = my_malloc(len);
-	    }
-	    else {
-		data = my_realloc(data, data_len, data_len + len);
-	    }
-		FIX ME: test data NULL
-	    bcopy(option + DHCP_OPTION_OFFSET, data + data_len, len);
-	    data_len += len;
-	}
-    }
-    *len_p = data_len;
-    return (data);
-}
-#endif
 
 /*
  * Function: dhcpol_parse_packet
@@ -420,161 +396,15 @@ dhcpol_parse_packet(dhcpol_t * options, const struct dhcp * pkt, int len)
     return (TRUE);
 }
 
-/*
- * Module: dhcpoa
- *
- * Purpose:
- *   Types and functions to create new dhcp option areas.
- */
-
-/*
- * Function: dhcpoa_{init_common, init_no_end, init}
- *
- * Purpose:
- *   Initialize an option area structure so that it can be used
- *   in calling the dhcpoa_* routines.
- */
-static void
-dhcpoa_init_common(dhcpoa_t * oa_p, void * buffer, int size, int reserve)
-{
-    bzero(oa_p, sizeof(*oa_p));
-    oa_p->oa_buffer = buffer;
-    oa_p->oa_size = size;
-    oa_p->oa_reserve = reserve;
-}
-
-void
-dhcpoa_init_no_end(dhcpoa_t * oa_p, void * buffer, int size)
-{
-    dhcpoa_init_common(oa_p, buffer, size, 0);
-    return;
-}
-
-int
-dhcpoa_size(dhcpoa_t * oa_p)
-{
-    return (oa_p->oa_size);
-}
-
-void
-dhcpoa_init(dhcpoa_t * oa_p, void * buffer, int size)
-{
-    /* initialize the area, reserve space for the end tag */
-    dhcpoa_init_common(oa_p, buffer, size, 1);
-    return;
-}
-/*
- * Function: dhcpoa_add
- *
- * Purpose:
- *   Add an option to the option area.
- */
-dhcpoa_ret_t
-dhcpoa_add(dhcpoa_t * oa_p, dhcptag_t tag, int len, const void * option)
-{
-    if (len > DHCP_OPTION_SIZE_MAX) {
-	dprintf(("tag %d option %d > %d\n", tag, len, DHCP_OPTION_SIZE_MAX));
-	return (dhcpoa_failed_e);
-    }
-
-    if (oa_p->oa_end_tag) {
-	dprintf(("attempt to add data after end tag\n"));
-	return (dhcpoa_failed_e);
-    }
-
-    switch (tag) {
-      case dhcptag_end_e:
-	if ((oa_p->oa_offset + 1) > oa_p->oa_size) {
-	    /* this can't happen since we're careful to leave space */
-	    dprintf(("can't add end tag %d > %d\n",
-		     oa_p->oa_offset + oa_p->oa_reserve, oa_p->oa_size));
-	    return (dhcpoa_failed_e);
-	}
-	((uint8_t *)oa_p->oa_buffer)[oa_p->oa_offset + DHCP_TAG_OFFSET] = tag;
-	oa_p->oa_offset++;
-	oa_p->oa_end_tag = 1;
-	break;
-
-      case dhcptag_pad_e:
-	/* 1 for pad tag */
-	if ((oa_p->oa_offset + oa_p->oa_reserve + 1) > oa_p->oa_size) {
-	    dprintf(("can't add pad tag %d > %d\n",
-		     oa_p->oa_offset + oa_p->oa_reserve + 1, oa_p->oa_size));
-	    return (dhcpoa_full_e);
-	}
-	((uint8_t *)oa_p->oa_buffer)[oa_p->oa_offset + DHCP_TAG_OFFSET] = tag;
-	oa_p->oa_offset++;
-	break;
-
-      default:
-	/* 2 for tag/len */
-	if ((oa_p->oa_offset + len + 2 + oa_p->oa_reserve) > oa_p->oa_size) {
-	    dprintf(("can't add tag %d (%d > %d)\n", tag,
-		     oa_p->oa_offset + len + 2 + oa_p->oa_reserve, 
-		     oa_p->oa_size));
-	    return (dhcpoa_full_e);
-	}
-	((uint8_t *)oa_p->oa_buffer)[oa_p->oa_offset + DHCP_TAG_OFFSET] = tag;
-	((uint8_t *)oa_p->oa_buffer)[oa_p->oa_offset + DHCP_LEN_OFFSET] = (uint8_t)len;
-	if (len) {
-	    memcpy(oa_p->oa_buffer + (DHCP_OPTION_OFFSET + oa_p->oa_offset),
-		   option, len);
-	}
-	oa_p->oa_offset += len + DHCP_OPTION_OFFSET;
-	break;
-    }
-    oa_p->oa_option_count++;
-    return (dhcpoa_success_e);
-}
-
-/*
- * Function: dhcpoa_add_dhcpmsg
- *
- * Purpose:
- *   Add a dhcp message option to the option area.
- */
-dhcpoa_ret_t
-dhcpoa_add_dhcpmsg(dhcpoa_t * oa_p, dhcp_msgtype_t msgtype)
-{
-    return (dhcpoa_add(oa_p, dhcptag_dhcp_message_type_e,
-		       sizeof(msgtype), &msgtype));
-}
-
-int
-dhcpoa_used(dhcpoa_t * oa_p)
-{
-    return (oa_p->oa_offset);
-}
-
-int
-dhcpoa_freespace(dhcpoa_t * oa_p)
-{
-    int	freespace;
-
-    freespace = oa_p->oa_size - oa_p->oa_offset - oa_p->oa_reserve;
-    if (freespace < 0) {
-	freespace = 0;
-    }
-    return (freespace);
-}
-
-int
-dhcpoa_count(dhcpoa_t * oa_p)
-{
-    return (oa_p->oa_option_count);
-}
-
-void *
-dhcpoa_buffer(dhcpoa_t * oa_p) 
-{
-    return (oa_p->oa_buffer);
-}
-
-
 #ifdef TEST_DHCP_OPTIONS
 char test_empty[] = {
     99, 130, 83, 99,
     255,
+};
+
+char test_short[] = {
+    99, 130, 83, 99,
+    1,
 };
 
 char test_simple[] = {
@@ -604,7 +434,7 @@ char test_no_end[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-char test_too_short[] = {
+char test_no_magic[] = {
     0x1 
 };
 struct test {
@@ -619,7 +449,8 @@ struct test tests[] = {
     { "simple", test_simple, sizeof(test_simple), TRUE },
     { "vendor", test_vendor, sizeof(test_vendor), TRUE },
     { "no_end", test_no_end, sizeof(test_no_end), TRUE },
-    { "too_short", test_too_short, sizeof(test_too_short), FALSE },
+    { "no magic", test_no_magic, sizeof(test_no_magic), FALSE },
+    { "short", test_short, sizeof(test_short), FALSE },
     { NULL, NULL, 0, FALSE },
 };
 

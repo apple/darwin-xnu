@@ -93,12 +93,6 @@ struct name {				\
 
 #define N_TIME_WAIT_SLOTS   128     	/* must be power of 2 */
 
-/* Base RTT is stored for N_MIN_RTT_HISTORY slots. This is used to
- * estimate expected minimum RTT for delay based congestion control
- * algorithms.
- */
-#define N_RTT_BASE	5
-
 /* Always allow at least 4 packets worth of recv window when adjusting
  * recv window using inter-packet arrival jitter.
  */
@@ -451,8 +445,6 @@ struct tcpcb {
 	} t_stat;
 	
 	/* Background congestion related state */
-	uint32_t	rtt_hist[N_RTT_BASE];	/* history of minimum RTT */
-	uint32_t	rtt_count;		/* Number of RTT samples in recent base history */
 	uint32_t	bg_ssthresh;		/* Slow start threshold until delay increases */
 	uint32_t	t_flagsext;		/* Another field to accommodate more flags */
 #define TF_RXTFINDROP		0x1			/* Drop conn after retransmitting FIN 3 times */
@@ -605,6 +597,7 @@ struct tcpcb {
 	u_int32_t	t_reordered_pkts;	/* packets reorderd */
 	u_int32_t	t_dsack_sent;		/* Sent DSACK notification */
 	u_int32_t	t_dsack_recvd;		/* Received a valid DSACK option */
+	u_int32_t	t_recv_throttle_ts;
 };
 
 #define IN_FASTRECOVERY(tp)	(tp->t_flags & TF_FASTRECOVERY)

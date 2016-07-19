@@ -36,6 +36,8 @@
 #define	LEDGER_ENTRY_INFO	1
 #define	LEDGER_TEMPLATE_INFO	2
 #define	LEDGER_LIMIT		3
+/* LEDGER_MAX_CMD always tracks the index of the last ledger command. */
+#define	LEDGER_MAX_CMD		LEDGER_LIMIT
 
 #define	LEDGER_NAME_MAX	32
 

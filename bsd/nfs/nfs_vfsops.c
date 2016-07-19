@@ -2942,7 +2942,11 @@ mountnfs(
 			error = ENOMEM;
 		xb_get_32(error, &xb, nmp->nm_fh->fh_len);
 		nfsmerr_if(error);
-		error = xb_get_bytes(&xb, (char*)&nmp->nm_fh->fh_data[0], nmp->nm_fh->fh_len, 0);
+		if (nmp->nm_fh->fh_len < 0 ||
+		    (size_t)nmp->nm_fh->fh_len > sizeof(nmp->nm_fh->fh_data))
+			error = EINVAL;
+		else
+			error = xb_get_bytes(&xb, (char*)&nmp->nm_fh->fh_data[0], nmp->nm_fh->fh_len, 0);
 	}
 	nfsmerr_if(error);
 	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_FS_LOCATIONS)) {

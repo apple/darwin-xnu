@@ -1366,16 +1366,21 @@ extern boolean_t dtrace_can_attach_to_proc(proc_t);
 /*
  * DTrace Assertions
  *
- * DTrace calls ASSERT from probe context.  To assure that a failed ASSERT
- * does not induce a markedly more catastrophic failure (e.g., one from which
- * a dump cannot be gleaned), DTrace must define its own ASSERT to be one that
- * may safely be called from probe context.  This header file must thus be
- * included by any DTrace component that calls ASSERT from probe context, and
- * _only_ by those components.  (The only exception to this is kernel
- * debugging infrastructure at user-level that doesn't depend on calling
- * ASSERT.)
+ * DTrace calls ASSERT and VERIFY from probe context.  To assure that a failed
+ * ASSERT or VERIFYdoes not induce a markedly more catastrophic failure (e.g.,
+ * one from which a dump cannot be gleaned), DTrace must define its own ASSERT
+ * and VERIFY macros to be ones that may safely be called from probe context.
+ * This header file must thus be included by any DTrace component that calls
+ * ASSERT and/or VERIFY from probe context, and _only_ by those components.
+ * (The only exception to this is kernel debugging infrastructure at user-level
+ * that doesn't depend on calling ASSERT.)
  */
 #undef ASSERT
+#undef VERIFY
+
+#define	VERIFY(EX)	((void)((EX) || \
+			dtrace_assfail(#EX, __FILE__, __LINE__)))
+
 #if DEBUG
 #define	ASSERT(EX)	((void)((EX) || \
 			dtrace_assfail(#EX, __FILE__, __LINE__)))

@@ -3057,6 +3057,7 @@ exit:
 }
 
 #define SMALL_DIRENTRY_SIZE  (int)(sizeof(struct dirent) - (MAXNAMLEN + 1) + 8)
+#define MAX_LINKINFO_ENTRIES 3000
 
 /*
  * Callback to pack directory entries.
@@ -3523,12 +3524,13 @@ cat_getdirentries(struct hfsmount *hfsmp, u_int32_t entrycnt, directoryhint_t *d
 	struct packdirentry_state state;
 	void * buffer;
 	int bufsize;
+	
 	int maxlinks;
 	int result;
 	int index;
 	int have_key;
 	int extended;
-	
+
 	extended = flags & VNODE_READDIR_EXTENDED;
 	
 	if (extended && (hfsmp->hfs_flags & HFS_STANDARD)) {
@@ -3537,10 +3539,23 @@ cat_getdirentries(struct hfsmount *hfsmp, u_int32_t entrycnt, directoryhint_t *d
 	fcb = hfsmp->hfs_catalog_cp->c_datafork;
 
 	/*
-	 * Get a buffer for link info array, btree iterator and a direntry:
+	 * Get a buffer for link info array, btree iterator and a direntry.
+	 * 
+	 * We impose an cap of 3000 link entries when trying to compute
+	 * the total number of hardlink entries that we'll allow in the  
+	 * linkinfo array. 
+	 *
+	 * Note that in the case where there are very few hardlinks,
+	 * this does not restrict or prevent us from vending out as many entries
+	 * as we can to the uio_resid, because the getdirentries callback
+	 * uiomoves the directory entries to the uio itself and does not use
+	 * this MALLOC'd array. It also limits itself to maxlinks of hardlinks.
 	 */
-	maxlinks = MIN(entrycnt, (u_int32_t)(uio_resid(uio) / SMALL_DIRENTRY_SIZE));
-	bufsize = MAXPATHLEN + (maxlinks * sizeof(linkinfo_t)) + sizeof(*iterator);
+
+	/* Now compute the maximum link array size */
+	maxlinks = MIN (entrycnt, MAX_LINKINFO_ENTRIES);
+
+	bufsize = MAXPATHLEN + (maxlinks * sizeof(linkinfo_t)) + sizeof(*iterator); 
 	if (extended) {
 		bufsize += 2*sizeof(struct direntry);
 	}

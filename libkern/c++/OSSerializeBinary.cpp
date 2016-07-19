@@ -396,7 +396,7 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 			if (sym)
 			{
 				DEBG("%s = %s\n", sym->getCStringNoCopy(), o->getMetaClass()->getClassName());
-				if (o != dict) ok = dict->setObject(sym, o);
+				if (o != dict) ok = dict->setObject(sym, o, true);
 				o->release();
 				sym->release();
 				sym = 0;

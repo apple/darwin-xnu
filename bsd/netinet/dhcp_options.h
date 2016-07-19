@@ -3,7 +3,7 @@
 #define _NETINET_DHCP_OPTIONS_H
 #include <sys/appleapiopts.h>
 /*
- * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -194,85 +194,8 @@ boolean_t		dhcpol_parse_buffer(dhcpol_t * list,
 					    int length);
 const void *		dhcpol_find(dhcpol_t * list, int tag, int * len_p, 
 				    int * start);
-#if 0
-void *			dhcpol_get(dhcpol_t * list, int tag, int * len_p);
-#endif
 boolean_t		dhcpol_parse_packet(dhcpol_t * options, 
 					    const struct dhcp * pkt, int len);
-void			dhcpol_print(dhcpol_t * list);
-/*
- * Module: dhcpoa (dhcp options area)
- *
- * Purpose:
- *   Types and functions to create new dhcp option areas.
- */
-
-/*
- * Struct: dhcpoa_s
- * Purpose:
- *   To record information about a dhcp option data area.
- */
-struct dhcpoa_s {
-    uint8_t *	oa_buffer;	/* data area to hold options */
-    int		oa_size;	/* size of buffer */
-    int		oa_offset;	/* offset of next option to write */
-    int		oa_end_tag;	/* to mark when options are terminated */
-    int		oa_option_count;/* number of options present */
-    int		oa_reserve; 	/* space to reserve, either 0 or 1 */
-};
-
-/*
- * Type: dhcpoa_t
- *
- * Purpose:
- *   To record information about a dhcp option data area.
- */
-typedef struct dhcpoa_s dhcpoa_t;
-
-/* 
- * Type:dhcpoa_ret_t
- *
- * Purpose:
- *  outine return codes 
- */
-typedef enum {
-    dhcpoa_success_e = 0,
-    dhcpoa_failed_e,
-    dhcpoa_full_e,
-} dhcpoa_ret_t;
-
-void
-dhcpoa_init(dhcpoa_t * opt, void * buffer, int size);
-
-void
-dhcpoa_init_no_end(dhcpoa_t * opt, void * buffer, int size);
-
-dhcpoa_ret_t
-dhcpoa_add(dhcpoa_t * oa_p, dhcptag_t tag, int len, const void * data);
-
-dhcpoa_ret_t
-dhcpoa_add_dhcpmsg(dhcpoa_t * oa_p, dhcp_msgtype_t msgtype);
-
-#if 0
-dhcpoa_ret_t
-dhcpoa_vendor_add(dhcpoa_t * oa_p, dhcpoa_t * vendor_oa_p,
-		  dhcptag_t tag, int len, void * option);
-#endif
-
-int
-dhcpoa_used(dhcpoa_t * oa_p);
-
-int
-dhcpoa_count(dhcpoa_t * oa_p);
-
-void *
-dhcpoa_buffer(dhcpoa_t * oa_p);
-
-int
-dhcpoa_freespace(dhcpoa_t * oa_p);
-
-int
-dhcpoa_size(dhcpoa_t * oa_p);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET_DHCP_OPTIONS_H */

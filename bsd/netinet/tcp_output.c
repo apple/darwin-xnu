@@ -3043,7 +3043,6 @@ static int
 tcp_recv_throttle (struct tcpcb *tp)
 {
 	uint32_t base_rtt, newsize;
-	int32_t qdelay;
 	struct sockbuf *sbrcv = &tp->t_inpcb->inp_socket->so_rcv;
 
 	if (tcp_use_rtt_recvbg == 1 &&
@@ -3063,14 +3062,14 @@ tcp_recv_throttle (struct tcpcb *tp)
 		base_rtt = get_base_rtt(tp);
 		
 		if (base_rtt != 0 && tp->t_rttcur != 0) {
-			qdelay = tp->t_rttcur - base_rtt;
 			/*
 			 * if latency increased on a background flow,
 			 * return 1 to start throttling.
 			 */
-			if (qdelay > target_qdelay) {
+			if (tp->t_rttcur > (base_rtt + target_qdelay)) {
 				tp->t_flagsext |= TF_RECV_THROTTLE;
-
+				if (tp->t_recv_throttle_ts == 0)
+					tp->t_recv_throttle_ts = tcp_now;
 				/*
 				 * Reduce the recv socket buffer size to
 				 * minimize latecy.

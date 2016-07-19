@@ -1728,6 +1728,22 @@ set_vm_privilege(boolean_t privileged)
 	return (was_vmpriv);
 }
 
+void
+set_thread_rwlock_boost(void)
+{
+	current_thread()->rwlock_count++;
+}
+
+void
+clear_thread_rwlock_boost(void)
+{
+	thread_t thread = current_thread();
+
+	if ((thread->rwlock_count-- == 1) && (thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
+
+		lck_rw_clear_promotion(thread);
+	}
+}
 
 /*
  * XXX assuming current thread only, for now...

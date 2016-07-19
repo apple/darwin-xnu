@@ -3844,7 +3844,7 @@ hfs_generate_document_id(struct hfsmount *hfsmp, uint32_t *docid)
 	struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)((void *)((char *)&cp->c_attr.ca_finderinfo + 16));
 	
 	int lockflags;
-	if (hfs_start_transaction(hfsmp) != 0) {
+	if ((error = hfs_start_transaction(hfsmp)) != 0) {
 		return error;
 	}
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);

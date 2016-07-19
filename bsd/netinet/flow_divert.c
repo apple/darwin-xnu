@@ -103,6 +103,7 @@
 #define GROUP_COUNT_MAX					32
 #define FLOW_DIVERT_MAX_NAME_SIZE		4096
 #define FLOW_DIVERT_MAX_KEY_SIZE		1024
+#define FLOW_DIVERT_MAX_TRIE_MEMORY		(1024 * 1024)
 
 #define DNS_SERVICE_GROUP_UNIT			(GROUP_COUNT_MAX + 1)
 
@@ -2178,6 +2179,7 @@ flow_divert_handle_app_map_create(mbuf_t packet, int offset)
 	size_t nodes_mem_size;
 	int prefix_count = 0;
 	int signing_id_count = 0;
+	size_t trie_memory_size = 0;
 
 	lck_rw_lock_exclusive(&g_flow_divert_group_lck);
 
@@ -2192,6 +2194,11 @@ flow_divert_handle_app_map_create(mbuf_t packet, int offset)
 
 	/* Get the number of shared prefixes in the new set of signing ID strings */
 	flow_divert_packet_get_tlv(packet, offset, FLOW_DIVERT_TLV_PREFIX_COUNT, sizeof(prefix_count), &prefix_count, NULL);
+
+	if (prefix_count < 0) {
+		lck_rw_done(&g_flow_divert_group_lck);
+		return;
+	}
 
 	/* Compute the number of signing IDs and the total amount of bytes needed to store them */
 	for (cursor = flow_divert_packet_find_tlv(packet, offset, FLOW_DIVERT_TLV_SIGNING_ID, &error, 0);
@@ -2219,10 +2226,18 @@ flow_divert_handle_app_map_create(mbuf_t packet, int offset)
 	child_maps_mem_size = (sizeof(*new_trie.child_maps) * CHILD_MAP_SIZE * new_trie.child_maps_count);
 	bytes_mem_size = (sizeof(*new_trie.bytes) * new_trie.bytes_count);
 
-	MALLOC(new_trie.memory, void *, nodes_mem_size + child_maps_mem_size + bytes_mem_size, M_TEMP, M_WAITOK);
+	trie_memory_size = nodes_mem_size + child_maps_mem_size + bytes_mem_size;
+	if (trie_memory_size > FLOW_DIVERT_MAX_TRIE_MEMORY) {
+		FDLOG(LOG_ERR, &nil_pcb, "Trie memory size (%u) is too big (maximum is %u)", trie_memory_size, FLOW_DIVERT_MAX_TRIE_MEMORY);
+		lck_rw_done(&g_flow_divert_group_lck);
+		return;
+	}
+
+	MALLOC(new_trie.memory, void *, trie_memory_size, M_TEMP, M_WAITOK);
 	if (new_trie.memory == NULL) {
 		FDLOG(LOG_ERR, &nil_pcb, "Failed to allocate %lu bytes of memory for the signing ID trie",
 		      nodes_mem_size + child_maps_mem_size + bytes_mem_size);
+		lck_rw_done(&g_flow_divert_group_lck);
 		return;
 	}
 

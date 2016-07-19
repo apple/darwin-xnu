@@ -1987,7 +1987,7 @@ hibernate_write_image(void)
 	   svPageCount, zvPageCount, wiredPagesEncrypted, wiredPagesClear, dirtyPagesEncrypted);
 
     if (pollerOpen)
-        IOPolledFilePollersClose(vars->fileVars, kIOPolledBeforeSleepState);
+        IOPolledFilePollersClose(vars->fileVars, (kIOReturnSuccess == err) ? kIOPolledBeforeSleepState : kIOPolledBeforeSleepStateAborted );
 
     if (vars->consoleMapping)
         ProgressUpdate(gIOHibernateGraphicsInfo, 

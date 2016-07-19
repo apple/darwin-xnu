@@ -1007,6 +1007,9 @@ extern void thread_update_io_stats(thread_t thread, int size, int io_flags);
 extern kern_return_t	thread_set_voucher_name(mach_port_name_t name);
 extern kern_return_t thread_get_current_voucher_origin_pid(int32_t *pid);
 
+extern void set_thread_rwlock_boost(void);
+extern void clear_thread_rwlock_boost(void);
+
 extern void thread_enable_send_importance(thread_t thread, boolean_t enable);
 
 #endif	/* XNU_KERNEL_PRIVATE */

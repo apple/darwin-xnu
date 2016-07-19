@@ -3163,6 +3163,9 @@ ledger(struct proc *p, struct ledger_args *args, __unused int32_t *retval)
 	else if (args->cmd == LEDGER_LIMIT)
 		error = copyin(args->arg2, (char *)&lla, sizeof (lla));
 #endif
+	else if ((args->cmd < 0) || (args->cmd > LEDGER_MAX_CMD))
+		return (EINVAL);
+
 	if (error)
 		return (error);
 	if (len < 0)
@@ -3239,6 +3242,8 @@ ledger(struct proc *p, struct ledger_args *args, __unused int32_t *retval)
 		}
 
 		default:
+			panic("ledger syscall logic error -- command type %d", args->cmd);
+			proc_rele(proc);
 			rval = EINVAL;
 	}
 

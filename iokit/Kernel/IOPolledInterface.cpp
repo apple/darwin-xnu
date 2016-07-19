@@ -263,6 +263,10 @@ IOPolledFilePollersClose(IOPolledFileIOVars * filevars, uint32_t state)
          idx++)
     {
         err = poller->close(state);
+        if ((kIOReturnSuccess != err) && (kIOPolledBeforeSleepStateAborted == state))
+        {
+            err = poller->close(kIOPolledBeforeSleepState);
+        }
         if (err) HIBLOG("IOPolledInterface::close[%d] 0x%x\n", idx, err);
     }
 

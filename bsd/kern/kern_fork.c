@@ -1047,6 +1047,15 @@ bad:
 void
 forkproc_free(proc_t p)
 {
+#if CONFIG_PERSONAS
+	persona_proc_drop(p);
+#endif /* CONFIG_PERSONAS */
+
+#if PSYNCH
+	pth_proc_hashdelete(p);
+#endif /* PSYNCH */
+
+	workqueue_destroy_lock(p);
 
 	/* We held signal and a transition locks; drop them */
 	proc_signalend(p, 0);
@@ -1091,12 +1100,34 @@ forkproc_free(proc_t p)
 	/* Update the audit session proc count */
 	AUDIT_SESSION_PROCEXIT(p);
 
+#if CONFIG_FINE_LOCK_GROUPS
+	lck_mtx_destroy(&p->p_mlock, proc_mlock_grp);
+	lck_mtx_destroy(&p->p_fdmlock, proc_fdmlock_grp);
+	lck_mtx_destroy(&p->p_ucred_mlock, proc_ucred_mlock_grp);
+#if CONFIG_DTRACE
+	lck_mtx_destroy(&p->p_dtrace_sprlock, proc_lck_grp);
+#endif
+	lck_spin_destroy(&p->p_slock, proc_slock_grp);
+#else /* CONFIG_FINE_LOCK_GROUPS */
+	lck_mtx_destroy(&p->p_mlock, proc_lck_grp);
+	lck_mtx_destroy(&p->p_fdmlock, proc_lck_grp);
+	lck_mtx_destroy(&p->p_ucred_mlock, proc_lck_grp);
+#if CONFIG_DTRACE
+	lck_mtx_destroy(&p->p_dtrace_sprlock, proc_lck_grp);
+#endif
+	lck_spin_destroy(&p->p_slock, proc_lck_grp);
+#endif /* CONFIG_FINE_LOCK_GROUPS */
+
 	/* Release the credential reference */
 	kauth_cred_unref(&p->p_ucred);
 
 	proc_list_lock();
 	/* Decrement the count of processes in the system */
 	nprocs--;
+
+	/* Take it out of process hash */
+	LIST_REMOVE(p, p_hash);
+
 	proc_list_unlock();
 
 	thread_call_free(p->p_rcall);

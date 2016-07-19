@@ -152,6 +152,9 @@ struct tcphdr tcp_savetcp;
 #define DBG_FNC_TCP_INPUT       NETDBG_CODE(DBG_NETTCP, (3 << 8))
 #define DBG_FNC_TCP_NEWCONN     NETDBG_CODE(DBG_NETTCP, (7 << 8))
 
+#define	TCP_RTT_HISTORY_EXPIRE_TIME	(60 * TCP_RETRANSHZ)
+#define	TCP_RECV_THROTTLE_WIN	(5 * TCP_RETRANSHZ)
+
 tcp_cc	tcp_ccgen;
 
 struct	tcpstat tcpstat;
@@ -5161,12 +5164,17 @@ uint32_t
 get_base_rtt(struct tcpcb *tp) 
 {
 	uint32_t base_rtt = 0, i;
-	for (i = 0; i < N_RTT_BASE; ++i) {
-		if (tp->rtt_hist[i] != 0 &&
-			(base_rtt == 0 || tp->rtt_hist[i] < base_rtt))
-			base_rtt = tp->rtt_hist[i];
+	struct rtentry *rt = tp->t_inpcb->inp_route.ro_rt;
+
+	if (rt != NULL) {
+		for (i = 0; i < NRTT_HIST; ++i) {
+			if (rt->rtt_hist[i] != 0 &&
+			    (base_rtt == 0 || rt->rtt_hist[i] < base_rtt))
+				base_rtt = rt->rtt_hist[i];
+		}
 	}
-	return base_rtt;
+
+	return (base_rtt);
 }
 
 /* Each value of RTT base represents the minimum RTT seen in a minute.
@@ -5175,31 +5183,59 @@ get_base_rtt(struct tcpcb *tp)
 void
 update_base_rtt(struct tcpcb *tp, uint32_t rtt)
 {
-	int32_t i, qdelay;
 	u_int32_t base_rtt;
+	struct rtentry *rt;
 
-	if (++tp->rtt_count >= rtt_samples_per_slot) {
+	if ((rt = tp->t_inpcb->inp_route.ro_rt) == NULL)
+		return;
+	if (rt->rtt_expire_ts == 0) {
+		RT_LOCK_SPIN(rt);
+		/* check again to avoid any race */
+		if (rt->rtt_expire_ts != 0) {
+			RT_UNLOCK(rt);
+			goto update;
+		}
+		rt->rtt_expire_ts = tcp_now;
+		rt->rtt_index = 0;
+		rt->rtt_hist[0] = rtt;
+		RT_UNLOCK(rt);
+		return;
+	}
+update:
 #if TRAFFIC_MGT
-		/*
-		 * If the recv side is being throttled, check if the 
-		 * current RTT is closer to the base RTT seen in 
-		 * first (recent) two slots. If so, unthrottle the stream.
-		 */
-		if (tp->t_flagsext & TF_RECV_THROTTLE) {
-			base_rtt = min(tp->rtt_hist[0], tp->rtt_hist[1]);
-			qdelay = tp->t_rttcur - base_rtt;
-			if (qdelay < target_qdelay)
-				tp->t_flagsext &= ~(TF_RECV_THROTTLE);
+	/*
+	 * If the recv side is being throttled, check if the
+	 * current RTT is closer to the base RTT seen in
+	 * first (recent) two slots. If so, unthrottle the stream.
+	 */
+	if ((tp->t_flagsext & TF_RECV_THROTTLE) &&
+	    (int)(tcp_now - tp->t_recv_throttle_ts) >= TCP_RECV_THROTTLE_WIN) {
+		base_rtt = get_base_rtt(tp);
+		if (tp->t_rttcur <= (base_rtt + target_qdelay)) {
+			tp->t_flagsext &= ~TF_RECV_THROTTLE;
+			tp->t_recv_throttle_ts = 0;
 		}
+	}
 #endif /* TRAFFIC_MGT */
-
-		for (i = (N_RTT_BASE-1); i > 0; --i) {
-			tp->rtt_hist[i] = tp->rtt_hist[i-1];
+	if ((int)(tcp_now - rt->rtt_expire_ts) >=
+	    TCP_RTT_HISTORY_EXPIRE_TIME) {
+		RT_LOCK_SPIN(rt);
+		/* check the condition again to avoid race */
+		if ((int)(tcp_now - rt->rtt_expire_ts) >=
+		    TCP_RTT_HISTORY_EXPIRE_TIME) {
+			rt->rtt_index++;
+			if (rt->rtt_index >= NRTT_HIST)
+				rt->rtt_index = 0;
+			rt->rtt_hist[rt->rtt_index] = rtt;
+			rt->rtt_expire_ts = tcp_now;
+		} else {
+			rt->rtt_hist[rt->rtt_index] =
+			    min(rt->rtt_hist[rt->rtt_index], rtt);
 		}
-		tp->rtt_hist[0] = rtt;
-		tp->rtt_count = 0;
+		RT_UNLOCK(rt);
 	} else {
-		tp->rtt_hist[0] = min(tp->rtt_hist[0], rtt);
+		rt->rtt_hist[rt->rtt_index] =
+		    min(rt->rtt_hist[rt->rtt_index], rtt);
 	}
 }
 
@@ -5444,9 +5480,9 @@ tcp_mss(tp, offer, input_ifscope)
 	int offer;
 	unsigned int input_ifscope;
 {
-	register struct rtentry *rt;
+	struct rtentry *rt;
 	struct ifnet *ifp;
-	register int rtt, mss;
+	int rtt, mss;
 	u_int32_t bufsize;
 	struct inpcb *inp;
 	struct socket *so;

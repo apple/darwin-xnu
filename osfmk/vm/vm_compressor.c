@@ -2710,6 +2710,15 @@ c_seg_swapin(c_segment_t c_seg, boolean_t force_minor_compaction)
 
 	C_SEG_BUSY(c_seg);
 	c_seg->c_busy_swapping = 1;
+
+	/*
+	 * This thread is likely going to block for I/O.
+	 * Make sure it is ready to run when the I/O completes because
+	 * it needs to clear the busy bit on the c_seg so that other
+	 * waiting threads can make progress too. To do that, boost
+	 * the rwlock_count so that the priority is boosted.
+	 */
+	set_thread_rwlock_boost();
 	lck_mtx_unlock_always(&c_seg->c_lock);
 
 	PAGE_REPLACEMENT_DISALLOWED(FALSE);
@@ -2751,6 +2760,12 @@ c_seg_swapin(c_segment_t c_seg, boolean_t force_minor_compaction)
 		c_seg_swapin_requeue(c_seg, TRUE);
 	}
 	C_SEG_WAKEUP_DONE(c_seg);
+
+	/*
+	 * Drop the rwlock_count so that the thread priority
+	 * is returned back to where it is supposed to be.
+	 */
+	clear_thread_rwlock_boost();
 }
 
 

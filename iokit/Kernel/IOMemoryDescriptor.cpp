@@ -672,8 +672,7 @@ IOMemoryDescriptorMapAlloc(vm_map_t map, void * _ref)
 				  (((ref->options & kIOMapAnywhere)
 				    ? VM_FLAGS_ANYWHERE
 				    : VM_FLAGS_FIXED)
-				   | VM_MAKE_TAG(ref->tag)
-				   | VM_FLAGS_IOKIT_ACCT), /* iokit accounting */
+				   | VM_MAKE_TAG(ref->tag)),
 				  IPC_PORT_NULL,
 				  (memory_object_offset_t) 0,
 				  false, /* copy */
@@ -2875,8 +2874,9 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
 	    pageInfo = getPageList(dataP);
             upl_page_list_ptr_t baseInfo = &pageInfo[pageIndex];
 
-            upl_size_t ioplSize = round_page(numBytes);
-            unsigned int numPageInfo = atop_32(ioplSize);
+            mach_vm_size_t _ioplSize    = round_page(numBytes);
+            upl_size_t 	    ioplSize    = (_ioplSize <= MAX_UPL_SIZE_BYTES) ? _ioplSize : MAX_UPL_SIZE_BYTES;
+            unsigned int    numPageInfo = atop_32(ioplSize);
 
 	    if ((theMap == kernel_map) 
 	     && (kernelStart >= io_kernel_static_start) 
@@ -2890,7 +2890,7 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
 						&highPage);
 	    }
 	    else if (_memRef) {
-		memory_object_offset_t entryOffset;
+                memory_object_offset_t entryOffset;
 
                 entryOffset = mdOffset;
                 entryOffset = (entryOffset - iopl.fPageOffset - memRefEntry->offset);
@@ -2919,9 +2919,10 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
 						&ioplFlags);
 	    }
 
-            assert(ioplSize);
             if (error != KERN_SUCCESS)
                 goto abortExit;
+
+            assert(ioplSize);
 
 	    if (iopl.fIOPL)
 		highPage = upl_get_highest_page(iopl.fIOPL);

@@ -2514,12 +2514,20 @@ StartAgain: ;
 				 */
 				new_entry->use_pmap = FALSE;
 			} else if (!is_submap &&
-				   iokit_acct) {
+				   iokit_acct &&
+				   object != VM_OBJECT_NULL &&
+				   object->internal) {
 				/* alternate accounting */
 				assert(!new_entry->iokit_acct);
 				assert(new_entry->use_pmap);
 				new_entry->iokit_acct = TRUE;
 				new_entry->use_pmap = FALSE;
+				DTRACE_VM4(
+					vm_map_iokit_mapped_region,
+					vm_map_t, map,
+					vm_map_offset_t, new_entry->vme_start,
+					vm_map_offset_t, new_entry->vme_end,
+					int, VME_ALIAS(new_entry));
 				vm_map_iokit_mapped_region(
 					map,
 					(new_entry->vme_end -
@@ -6462,6 +6470,11 @@ vm_map_delete(
 
 		if (entry->iokit_acct) {
 			/* alternate accounting */
+			DTRACE_VM4(vm_map_iokit_unmapped_region,
+				   vm_map_t, map,
+				   vm_map_offset_t, entry->vme_start,
+				   vm_map_offset_t, entry->vme_end,
+				   int, VME_ALIAS(entry));
 			vm_map_iokit_unmapped_region(map,
 						     (entry->vme_end -
 						      entry->vme_start));

@@ -313,7 +313,7 @@ void OSDictionary::flushCollection()
 }
 
 bool OSDictionary::
-setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject)
+setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject, bool onlyAdd)
 {
     unsigned int i;
     bool exists;
@@ -331,6 +331,9 @@ setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject)
     }
 
     if (exists) {
+
+	if (onlyAdd) return false;
+
 	const OSMetaClassBase *oldObject = dictionary[i].value;
     
 	haveUpdated();
@@ -357,6 +360,12 @@ setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject)
     count++;
 
     return true;
+}
+
+bool OSDictionary::
+setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject)
+{
+    return (setObject(aKey, anObject, false));
 }
 
 void OSDictionary::removeObject(const OSSymbol *aKey)

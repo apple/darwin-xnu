@@ -59,6 +59,9 @@ struct tcp_cc_debug_state {
 	uint32_t ccd_sndcc;
 	uint32_t ccd_sndhiwat;
 	uint32_t ccd_bytes_acked;
+	u_int8_t ccd_cc_index;
+	u_int8_t ccd_unused_1__;
+	u_int16_t ccd_unused_2__;
 	union {
 		struct {
 			uint32_t ccd_last_max;
@@ -67,6 +70,9 @@ struct tcp_cc_debug_state {
 			uint32_t ccd_avg_lastmax;
 			uint32_t ccd_mean_deviation;
 		} cubic_state;
+		struct {
+			u_int32_t led_base_rtt;
+		} ledbat_state;
 	} u;
 };
 
@@ -240,6 +246,7 @@ tcp_ccdbg_trace(struct tcpcb *tp, struct tcphdr *th, int32_t event)
 		dbg_state.ccd_sndcc = inp->inp_socket->so_snd.sb_cc;
 		dbg_state.ccd_sndhiwat = inp->inp_socket->so_snd.sb_hiwat;
 		dbg_state.ccd_bytes_acked = tp->t_bytes_acked;
+		dbg_state.ccd_cc_index = tp->tcp_cc_index;
 		switch (tp->tcp_cc_index) {
 		    case TCP_CC_ALGO_CUBIC_INDEX:
 			dbg_state.u.cubic_state.ccd_last_max =
@@ -252,6 +259,10 @@ tcp_ccdbg_trace(struct tcpcb *tp, struct tcphdr *th, int32_t event)
 			    tp->t_ccstate->cub_avg_lastmax;
 			dbg_state.u.cubic_state.ccd_mean_deviation =
 			    tp->t_ccstate->cub_mean_dev;
+			break;
+		    case TCP_CC_ALGO_BACKGROUND_INDEX:
+			dbg_state.u.ledbat_state.led_base_rtt =
+			    get_base_rtt(tp);
 			break;
 		    default:
 			break;
