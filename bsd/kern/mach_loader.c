@@ -985,6 +985,14 @@ unprotect_dsmos_segment(
 		       (uint64_t) map_addr, (uint64_t) (map_addr + map_size),
 		       __FUNCTION__, vp->v_name);
 #endif /* DEVELOPMENT || DEBUG */
+
+		/* The DSMOS pager can only be used by apple signed code */
+		struct cs_blob * blob = csvnode_get_blob(vp, file_off);
+		if( blob == NULL || !blob->csb_platform_binary || blob->csb_platform_path)
+		{
+			return LOAD_FAILURE;
+		}
+
 		kr = vm_map_apple_protected(map,
 					    map_addr,
 					    map_addr + map_size,

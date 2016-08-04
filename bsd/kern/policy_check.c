@@ -118,7 +118,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 37)
+#if (MAC_POLICY_OPS_VERSION != 39)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -400,8 +400,8 @@ static struct mac_policy_ops policy_ops = {
 	.mpo_reserved26 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved27 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved28 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved29 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved30 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(proc_check_get_cs_info)
+	CHECK_SET_HOOK(proc_check_set_cs_info)
 
 	CHECK_SET_HOOK(iokit_check_hid_control)
 

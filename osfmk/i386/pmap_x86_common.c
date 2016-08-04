@@ -1170,8 +1170,13 @@ pmap_remove_range_options(
 	       	 * nuke the entry in the page table
 	       	 */
 		/* remember reference and change */
-		pmap_phys_attributes[pai] |=
-			(char) (*cpte & (PHYS_MODIFIED | PHYS_REFERENCED));
+		if (!is_ept) {
+			pmap_phys_attributes[pai] |=
+				*cpte & (PHYS_MODIFIED | PHYS_REFERENCED);
+		} else {
+			pmap_phys_attributes[pai] |=
+				ept_refmod_to_physmap((*cpte & (INTEL_EPT_REF | INTEL_EPT_MOD))) & (PHYS_MODIFIED | PHYS_REFERENCED);
+		}
 
 		/*
 	      	 * Remove the mapping from the pvlist for this physical page.

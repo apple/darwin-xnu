@@ -255,6 +255,7 @@ extern boolean_t doconstro_override;
 
 extern long __stack_chk_guard[];
 
+static uint64_t pmap_eptp_flags = 0;
 boolean_t pmap_ept_support_ad = FALSE;
 
 
@@ -800,8 +801,7 @@ pmap_init(void)
 
 #if CONFIG_VMX
 	pmap_ept_support_ad = vmx_hv_support()  && (VMX_CAP(MSR_IA32_VMX_EPT_VPID_CAP, MSR_IA32_VMX_EPT_VPID_CAP_AD_SHIFT, 1) ? TRUE : FALSE);
-#else
-	pmap_ept_support_ad = FALSE;
+	pmap_eptp_flags = HV_VMX_EPTP_MEMORY_TYPE_WB | HV_VMX_EPTP_WALK_LENGTH(4) | (pmap_ept_support_ad ? HV_VMX_EPTP_ENABLE_AD_FLAGS : 0);
 #endif /* CONFIG_VMX */
 }
 
@@ -1313,7 +1313,7 @@ pmap_create_options(
 	memset((char *)p->pm_pml4, 0, PAGE_SIZE);
 
 	if (flags & PMAP_CREATE_EPT) {
-		p->pm_eptp = (pmap_paddr_t)kvtophys((vm_offset_t)p->pm_pml4);
+		p->pm_eptp = (pmap_paddr_t)kvtophys((vm_offset_t)p->pm_pml4) | pmap_eptp_flags;
 		p->pm_cr3 = 0;
 	} else {
 		p->pm_eptp = 0;

@@ -626,4 +626,9 @@ __END_DECLS
 #define MSR_IA32_KERNEL_GS_BASE			0xC0000102
 #define MSR_IA32_TSC_AUX			0xC0000103
 
+#define HV_VMX_EPTP_MEMORY_TYPE_UC  		0x0
+#define HV_VMX_EPTP_MEMORY_TYPE_WB		0x6
+#define HV_VMX_EPTP_WALK_LENGTH(wl)    		(0ULL | ((((wl) - 1) & 0x7) << 3))
+#define HV_VMX_EPTP_ENABLE_AD_FLAGS    		(1ULL << 6)
+
 #endif	/* _I386_PROC_REG_H_ */

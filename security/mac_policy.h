@@ -2739,6 +2739,40 @@ typedef int mpo_proc_check_proc_info_t(
 	int flavor
 );
 /**
+  @brief Access control check for retrieving code signing information.
+  @param cred Subject credential
+  @param target Target process
+  @param op Code signing operation being performed
+
+  Determine whether the subject identified by the credential should be
+  allowed to get code signing information about the target process.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_proc_check_get_cs_info_t(
+	kauth_cred_t cred,
+	struct proc *target,
+	unsigned int op
+);
+/**
+  @brief Access control check for setting code signing information.
+  @param cred Subject credential
+  @param target Target process
+  @param op Code signing operation being performed.
+
+  Determine whether the subject identified by the credential should be
+  allowed to set code signing information about the target process.
+
+  @return Return 0 if permission is granted, otherwise an appropriate
+  value of errno should be returned.
+*/
+typedef int mpo_proc_check_set_cs_info_t(
+	kauth_cred_t cred,
+	struct proc *target,
+	unsigned int op
+);
+/**
   @brief Access control check for mmap MAP_ANON
   @param proc User process requesting the memory
   @param cred Subject credential
@@ -5764,7 +5798,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 37 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 39 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -6037,8 +6071,8 @@ struct mac_policy_ops {
 	mpo_reserved_hook_t			*mpo_reserved26;
 	mpo_reserved_hook_t			*mpo_reserved27;
 	mpo_reserved_hook_t			*mpo_reserved28;
-	mpo_reserved_hook_t			*mpo_reserved29;
-	mpo_reserved_hook_t			*mpo_reserved30;
+	mpo_proc_check_get_cs_info_t		*mpo_proc_check_get_cs_info;
+	mpo_proc_check_set_cs_info_t		*mpo_proc_check_set_cs_info;
 
 	mpo_iokit_check_hid_control_t		*mpo_iokit_check_hid_control;
 

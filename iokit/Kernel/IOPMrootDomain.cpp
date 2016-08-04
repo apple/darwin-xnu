@@ -5471,6 +5471,8 @@ IONotifier * IOPMrootDomain::registerInterest(
     if (rc != kIOReturnSuccess) {
         notifier->release();
         notifier = 0;
+
+        return NULL;
     }
     if (pmPowerStateQueue)
     {

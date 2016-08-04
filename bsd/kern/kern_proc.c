@@ -1784,7 +1784,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		case CS_OPS_ENTITLEMENTS_BLOB:
 		case CS_OPS_IDENTITY:
 		case CS_OPS_BLOB:
-			break;	/* unrestricted */
+			break;	/* not restricted to root */
 		default:
 			if (forself == 0 && kauth_cred_issuser(kauth_cred_get()) != TRUE)
 				return(EPERM);
@@ -1808,6 +1808,22 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			goto out;
 		}
 	}
+
+#if CONFIG_MACF
+	switch (ops) {
+		case CS_OPS_MARKINVALID:
+		case CS_OPS_MARKHARD:
+		case CS_OPS_MARKKILL:
+		case CS_OPS_MARKRESTRICT:
+		case CS_OPS_SET_STATUS:
+			if ((error = mac_proc_check_set_cs_info(current_proc(), pt, ops)))
+				goto out;
+			break;
+		default:
+			if ((error = mac_proc_check_get_cs_info(current_proc(), pt, ops)))
+				goto out;
+	}
+#endif
 
 	switch (ops) {
 

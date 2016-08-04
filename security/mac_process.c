@@ -608,3 +608,46 @@ mac_proc_check_proc_info(proc_t curp, proc_t target, int callnum, int flavor)
 	return (error);
 }
 
+
+int
+mac_proc_check_get_cs_info(proc_t curp, proc_t target, unsigned int op)
+{
+	kauth_cred_t cred;
+	int error = 0;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
+#endif
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
+
+	cred = kauth_cred_proc_ref(curp);
+	MAC_CHECK(proc_check_get_cs_info, cred, target, op);
+	kauth_cred_unref(&cred);
+
+	return (error);
+}
+
+int
+mac_proc_check_set_cs_info(proc_t curp, proc_t target, unsigned int op)
+{
+	kauth_cred_t cred;
+	int error = 0;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
+#endif
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
+
+	cred = kauth_cred_proc_ref(curp);
+	MAC_CHECK(proc_check_set_cs_info, cred, target, op);
+	kauth_cred_unref(&cred);
+
+	return (error);
+}
+

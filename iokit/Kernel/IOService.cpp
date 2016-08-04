@@ -6229,23 +6229,31 @@ IOReturn IOService::configureReport(IOReportChannelList    *channelList,
         }
     }
 
-    IOLockLock(reserved->interruptStatisticsLock);
+	/* 24241819: SU fix for NULL 'reserved' field */
+	if (reserved) {
+		IOLockLock(reserved->interruptStatisticsLock);
 
-    /* The array count is signed (because the interrupt indices are signed), hence the cast */
-    for (cnt = 0; cnt < (unsigned) reserved->interruptStatisticsArrayCount; cnt++) {
-        if (reserved->interruptStatisticsArray[cnt].reporter) {
-            /*
-             * If the reporter is currently associated with the statistics
-             * for an event source, we may need to update the reporter.
-             */
-            if (reserved->interruptStatisticsArray[cnt].statistics)
-                interruptAccountingDataUpdateChannels(reserved->interruptStatisticsArray[cnt].statistics, reserved->interruptStatisticsArray[cnt].reporter);
+		/* The array count is signed (because the interrupt indices are signed), hence the cast */
+		for (cnt = 0; cnt < (unsigned) reserved->interruptStatisticsArrayCount; cnt++) {
+			if (reserved->interruptStatisticsArray[cnt].reporter) {
+				/*
+				 * If the reporter is currently associated with the statistics
+				 * for an event source, we may need to update the reporter.
+				 */
+				if (reserved->interruptStatisticsArray[cnt].statistics)
+					interruptAccountingDataUpdateChannels(reserved->interruptStatisticsArray[cnt].statistics, reserved->interruptStatisticsArray[cnt].reporter);
 
-            reserved->interruptStatisticsArray[cnt].reporter->configureReport(channelList, action, result, destination);
-        }        
-    }
+				reserved->interruptStatisticsArray[cnt].reporter->configureReport(channelList, action, result, destination);
+			}        
+		}
 
-    IOLockUnlock(reserved->interruptStatisticsLock);
+		IOLockUnlock(reserved->interruptStatisticsLock);
+	}
+	#if DEVELOPMENT || DEBUG
+	else {
+		IOLog("ALERT: why is %s's 'reserved' field NULL?!\n", getName());
+	}
+	#endif
 
     return kIOReturnSuccess;
 }

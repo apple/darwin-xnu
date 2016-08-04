@@ -7760,6 +7760,9 @@ upl_abort(
 {
 	boolean_t	empty;
 
+	if (upl == UPL_NULL)
+		return KERN_INVALID_ARGUMENT;
+
 	return upl_abort_range(upl, 0, upl->size, error, &empty);
 }
 
@@ -7772,6 +7775,9 @@ upl_commit(
 	mach_msg_type_number_t	count)
 {
 	boolean_t	empty;
+
+	if (upl == UPL_NULL)
+		return KERN_INVALID_ARGUMENT;
 
 	return upl_commit_range(upl, 0, upl->size, 0, page_list, count, &empty);
 }

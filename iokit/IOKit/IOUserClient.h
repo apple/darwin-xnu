@@ -173,7 +173,6 @@ enum {
     @abstract   Provides a basis for communication between client applications and I/O Kit objects.
 */
 
-
 class IOUserClient : public IOService
 {
     OSDeclareAbstractStructors(IOUserClient)
@@ -201,21 +200,25 @@ protected:
     bool reserve();
 
 #ifdef XNU_KERNEL_PRIVATE
+
 public:
-#else
-private:
-#endif
     OSSet * mappings;
     UInt8   sharedInstance;
     UInt8   closed;
     UInt8   __ipcFinal;
     UInt8   __reservedA[1];
     volatile SInt32 __ipc;
+    queue_head_t owners;
 #if __LP64__
-    void  * __reserved[7];
+    void  * __reserved[5];
 #else
-    void  * __reserved[6];
+    void  * __reserved[4];
 #endif
+
+#else /* XNU_KERNEL_PRIVATE */
+private:
+    void  * __reserved[9];
+#endif /* XNU_KERNEL_PRIVATE */
 
 public:
    virtual IOReturn externalMethod( uint32_t selector, IOExternalMethodArguments * arguments,
@@ -248,6 +251,7 @@ private:
     OSMetaClassDeclareReservedUnused(IOUserClient, 15);
 
 #ifdef XNU_KERNEL_PRIVATE
+
     /* Available within xnu source only */
 public:
     static void initialize( void );
@@ -257,7 +261,10 @@ public:
                                     task_t task,
                                     IOOptionBits mapFlags = kIOMapAnywhere,
 				    mach_vm_address_t atAddress = 0 );
-#endif
+    IOReturn registerOwner(task_t task);
+    void     noMoreSenders(void);
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 protected:
     static IOReturn sendAsyncResult(OSAsyncReference reference,

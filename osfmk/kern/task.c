@@ -203,6 +203,7 @@ kern_return_t task_suspend_internal(task_t);
 kern_return_t task_resume_internal(task_t);
 static kern_return_t task_start_halt_locked(task_t task, boolean_t should_mark_corpse);
 
+extern kern_return_t iokit_task_terminate(task_t task);
 
 void proc_init_cpumon_params(void);
 extern kern_return_t exception_deliver(thread_t, exception_type_t, mach_exception_data_t, mach_msg_type_number_t, struct exception_action *, lck_mtx_t *);
@@ -1046,6 +1047,8 @@ task_create_internal(
 	new_task->task_purgeable_disowning = FALSE;
 	new_task->task_purgeable_disowned = FALSE;
 
+        queue_init(&new_task->io_user_clients);
+
 	ipc_task_enable(new_task);
 
 	lck_mtx_lock(&tasks_threads_lock);
@@ -1126,6 +1129,9 @@ task_deallocate(
 	machine_task_terminate(task);
 
 	ipc_task_terminate(task);
+
+	/* let iokit know */
+	iokit_task_terminate(task);
 
 	if (task->affinity_space)
 		task_affinity_deallocate(task);
@@ -3814,12 +3820,12 @@ task_get_assignment(
 	task_t		task,
 	processor_set_t	*pset)
 {
-	if (!task->active)
-		return(KERN_FAILURE);
+	if (!task || !task->active)
+		return KERN_FAILURE;
 
 	*pset = &pset0;
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 uint64_t
@@ -4581,4 +4587,10 @@ void task_update_logical_writes(task_t task, uint32_t io_size, int flags)
 			break;
 	}
 	return;
+}
+
+queue_head_t *
+task_io_user_clients(task_t task)
+{
+	return (&task->io_user_clients);
 }

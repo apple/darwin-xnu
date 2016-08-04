@@ -119,6 +119,7 @@
 
 #include <kern/kern_cdata.h>
 #include <mach/sfi_class.h>
+#include <kern/queue.h>
 
 /* defns for task->rsu_controldata */
 #define TASK_POLICY_CPU_RESOURCE_USAGE		0
@@ -389,6 +390,8 @@ struct task {
 #if HYPERVISOR
 	void *hv_task_target; /* hypervisor virtual machine object associated with this task */
 #endif /* HYPERVISOR */
+
+	queue_head_t    io_user_clients;
 };
 
 #define task_lock(task)		 	lck_mtx_lock(&(task)->lock)
@@ -864,6 +867,8 @@ extern boolean_t task_is_gpu_denied(task_t task);
 #define TASK_WRITE_INVALIDATED		0x4
 #define TASK_WRITE_METADATA 		0x8
 extern void 	task_update_logical_writes(task_t task, uint32_t io_size, int flags);
+
+extern queue_head_t * task_io_user_clients(task_t task);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

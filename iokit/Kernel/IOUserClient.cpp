@@ -247,6 +247,7 @@ bool IOMachPort::noMoreSendersForObject( OSObject * obj,
 {
     OSDictionary *	dict;
     IOMachPort *	machPort;
+    IOUserClient *      uc;
     bool		destroyed = true;
 
     IOTakeLock( gIOObjectPortLock);
@@ -257,10 +258,15 @@ bool IOMachPort::noMoreSendersForObject( OSObject * obj,
 	machPort = (IOMachPort *) dict->getObject( (const OSSymbol *) obj );
 	if( machPort) {
 	    destroyed = (machPort->mscount <= *mscount);
-	    if( destroyed)
+	    if (!destroyed) *mscount = machPort->mscount;
+            else
+            {
+		if ((IKOT_IOKIT_CONNECT == type) && (uc = OSDynamicCast(IOUserClient, obj)))
+		{
+		    uc->noMoreSenders();
+		}
 		dict->removeObject( (const OSSymbol *) obj );
-	    else
-		*mscount = machPort->mscount;
+	    }
 	} 
 	obj->release();
     }
@@ -275,6 +281,8 @@ void IOMachPort::releasePortForObject( OSObject * obj,
 {
     OSDictionary *	dict;
     IOMachPort *	machPort;
+
+    assert(IKOT_IOKIT_CONNECT != type);
 
     IOTakeLock( gIOObjectPortLock);
 
@@ -324,14 +332,18 @@ void IOUserClient::destroyUserReferences( OSObject * obj )
 	if (port)
 	{
 	    IOUserClient * uc;
-	    if ((uc = OSDynamicCast(IOUserClient, obj)) && uc->mappings)
+	    if ((uc = OSDynamicCast(IOUserClient, obj)))
 	    {
-		dict->setObject((const OSSymbol *) uc->mappings, port);
-		iokit_switch_object_port(port->port, uc->mappings, IKOT_IOKIT_CONNECT);
+                uc->noMoreSenders();
+                if (uc->mappings)
+                {
+                    dict->setObject((const OSSymbol *) uc->mappings, port);
+                    iokit_switch_object_port(port->port, uc->mappings, IKOT_IOKIT_CONNECT);
 
-		uc->mappings->release();
-		uc->mappings = 0;
-	    }
+                    uc->mappings->release();
+                    uc->mappings = 0;
+                }
+            }
 	    dict->removeObject( (const OSSymbol *) obj );
 	}
     }
@@ -567,10 +579,11 @@ iokit_client_died( io_object_t obj, ipc_port_t /* port */,
 
     if( IKOT_IOKIT_CONNECT == type)
     {
-	if( (client = OSDynamicCast( IOUserClient, obj ))) {
-		IOStatisticsClientCall();
+	if( (client = OSDynamicCast( IOUserClient, obj )))
+	{
+	    IOStatisticsClientCall();
 	    client->clientDied();
-    }
+        }
     }
     else if( IKOT_IOKIT_OBJECT == type)
     {
@@ -1004,11 +1017,13 @@ OSObject * IOServiceMessageUserNotification::getNextObject()
 #define super IOService
 OSDefineMetaClassAndAbstractStructors( IOUserClient, IOService )
 
+IOLock       * gIOUserClientOwnersLock;
+
 void IOUserClient::initialize( void )
 {
-    gIOObjectPortLock = IOLockAlloc();
-
-    assert( gIOObjectPortLock );
+    gIOObjectPortLock       = IOLockAlloc();
+    gIOUserClientOwnersLock = IOLockAlloc();
+    assert(gIOObjectPortLock && gIOUserClientOwnersLock);
 }
 
 void IOUserClient::setAsyncReference(OSAsyncReference asyncRef,
@@ -1333,15 +1348,131 @@ bool IOUserClient::reserve()
     return true;
 }
 
+struct IOUserClientOwner
+{
+    task_t         task;
+    queue_chain_t  taskLink;
+    IOUserClient * uc;
+    queue_chain_t  ucLink;
+};
+
+IOReturn
+IOUserClient::registerOwner(task_t task)
+{
+    IOUserClientOwner * owner;
+    IOReturn            ret;
+    bool                newOwner;
+
+    IOLockLock(gIOUserClientOwnersLock);
+
+    newOwner = true;
+    ret = kIOReturnSuccess;
+
+    if (!owners.next) queue_init(&owners);
+    else
+    {
+        queue_iterate(&owners, owner, IOUserClientOwner *, ucLink)
+        {
+            if (task != owner->task) continue;
+            newOwner = false;
+            break;
+        }
+    }
+    if (newOwner)
+    {
+        owner = IONew(IOUserClientOwner, 1);
+        if (!newOwner) ret = kIOReturnNoMemory;
+        else
+        {
+            owner->task = task;
+            owner->uc   = this;
+            queue_enter_first(&owners, owner, IOUserClientOwner *, ucLink);
+            queue_enter_first(task_io_user_clients(task), owner, IOUserClientOwner *, taskLink);
+        }
+    }
+
+    IOLockUnlock(gIOUserClientOwnersLock);
+
+    return (ret);
+}
+
+void
+IOUserClient::noMoreSenders(void)
+{
+    IOUserClientOwner * owner;
+
+    IOLockLock(gIOUserClientOwnersLock);
+
+    if (owners.next)
+    {
+        while (!queue_empty(&owners))
+        {
+            owner = (IOUserClientOwner *)(void *) queue_first(&owners);
+            queue_remove(task_io_user_clients(owner->task), owner, IOUserClientOwner *, taskLink);
+            queue_remove(&owners, owner, IOUserClientOwner *, ucLink);
+            IODelete(owner, IOUserClientOwner, 1);
+        }
+        owners.next = owners.prev = NULL;
+    }
+
+    IOLockUnlock(gIOUserClientOwnersLock);
+}
+
+extern "C" kern_return_t
+iokit_task_terminate(task_t task)
+{
+    IOUserClientOwner * owner;
+    IOUserClient      * dead;
+    IOUserClient      * uc;
+    queue_head_t      * taskque;
+
+    IOLockLock(gIOUserClientOwnersLock);
+
+    taskque = task_io_user_clients(task);
+    dead = NULL;
+    while (!queue_empty(taskque))
+    {
+        owner = (IOUserClientOwner *)(void *) queue_first(taskque);
+        uc = owner->uc;
+        queue_remove(taskque, owner, IOUserClientOwner *, taskLink);
+        queue_remove(&uc->owners, owner, IOUserClientOwner *, ucLink);
+        if (queue_empty(&uc->owners))
+        {
+            uc->retain();
+            IOLog("destroying out of band connect for %s\n", uc->getName());
+            // now using the uc queue head as a singly linked queue,
+            // leaving .next as NULL to mark it empty
+            uc->owners.next = NULL;
+            uc->owners.prev = (queue_entry_t) dead;
+            dead = uc;
+        }
+        IODelete(owner, IOUserClientOwner, 1);
+    }
+
+    IOLockUnlock(gIOUserClientOwnersLock);
+
+    while (dead)
+    {
+        uc = dead;
+        dead = (IOUserClient *)(void *) dead->owners.prev;
+        uc->owners.prev = NULL;
+        if (uc->sharedInstance || !uc->closed) uc->clientDied();
+        uc->release();
+    }
+
+    return (KERN_SUCCESS);
+}
+
 void IOUserClient::free()
 {
-    if( mappings)
-        mappings->release();
+    if( mappings) mappings->release();
 		
     IOStatisticsUnregisterCounter();
 
-    if (reserved)
-        IODelete(reserved, ExpansionData, 1);
+    assert(!owners.next);
+    assert(!owners.prev);
+
+    if (reserved) IODelete(reserved, ExpansionData, 1);
 		
     super::free();
 }
@@ -3239,7 +3370,9 @@ kern_return_t is_io_service_open_extended(
 
     CHECK( IOService, _service, service );
 
-    if (!owningTask) return (kIOReturnBadArgument);
+    if (!owningTask)                  return (kIOReturnBadArgument);
+    assert(owningTask == current_task());
+    if (owningTask != current_task()) return (kIOReturnBadArgument);
 
     do
     {
@@ -3296,6 +3429,9 @@ kern_return_t is_io_service_open_extended(
 	{
 	    assert( OSDynamicCast(IOUserClient, client) );
 
+	    client->sharedInstance = (0 != client->getProperty(kIOUserClientSharedInstanceKey));
+	    client->closed = false;
+
 	    disallowAccess = (crossEndian
 		&& (kOSBooleanTrue != service->getProperty(kIOUserClientCrossEndianCompatibleKey))
 		&& (kOSBooleanTrue != client->getProperty(kIOUserClientCrossEndianCompatibleKey)));
@@ -3304,6 +3440,9 @@ kern_return_t is_io_service_open_extended(
 	    else if (0 != mac_iokit_check_open(kauth_cred_get(), client, connect_type))
 		res = kIOReturnNotPermitted;
 #endif
+
+	    if (kIOReturnSuccess == res) res = client->registerOwner(owningTask);
+
 	    if (kIOReturnSuccess != res)
 	    {
 		IOStatisticsClientCall();
@@ -3312,8 +3451,6 @@ kern_return_t is_io_service_open_extended(
 		client = 0;
 		break;
 	    }
-	    client->sharedInstance = (0 != client->getProperty(kIOUserClientSharedInstanceKey));
-	    client->closed = false;
 	    OSString * creatorName = IOCopyLogNameForPID(proc_selfpid());
 	    if (creatorName)
 	    {
