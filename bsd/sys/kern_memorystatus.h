@@ -34,14 +34,19 @@
 #include <sys/proc.h>
 #include <sys/param.h>
 
+#define MEMORYSTATUS_ENTITLEMENT "com.apple.private.memorystatus"
+
 #define JETSAM_PRIORITY_REVISION                  2
 
 #define JETSAM_PRIORITY_IDLE_HEAD                -2
 /* The value -1 is an alias to JETSAM_PRIORITY_DEFAULT */
 #define JETSAM_PRIORITY_IDLE                      0
-#define JETSAM_PRIORITY_IDLE_DEFERRED             1
+#define JETSAM_PRIORITY_IDLE_DEFERRED		  1 /* Keeping this around till all xnu_quick_tests can be moved away from it.*/
+#define JETSAM_PRIORITY_AGING_BAND1		  JETSAM_PRIORITY_IDLE_DEFERRED
 #define JETSAM_PRIORITY_BACKGROUND_OPPORTUNISTIC  2
+#define JETSAM_PRIORITY_AGING_BAND2		  JETSAM_PRIORITY_BACKGROUND_OPPORTUNISTIC
 #define JETSAM_PRIORITY_BACKGROUND                3
+#define JETSAM_PRIORITY_ELEVATED_INACTIVE	  JETSAM_PRIORITY_BACKGROUND
 #define JETSAM_PRIORITY_MAIL                      4
 #define JETSAM_PRIORITY_PHONE                     5
 #define JETSAM_PRIORITY_UI_SUPPORT                8
@@ -86,7 +91,7 @@ typedef struct memorystatus_priority_entry {
 	pid_t pid;
 	int32_t priority;
 	uint64_t user_data;
-	int32_t limit;
+	int32_t limit;	/* MB */
 	uint32_t state;
 } memorystatus_priority_entry_t;
 
@@ -113,24 +118,39 @@ typedef struct memorystatus_kernel_stats {
 
 typedef struct jetsam_snapshot_entry {
 	pid_t    pid;
-	char     name[MAXCOMLEN+1];
+	char     name[(2*MAXCOMLEN)+1];
 	int32_t  priority;
-	uint32_t pages;
-	uint32_t max_pages;
 	uint32_t state;
-	uint32_t killed;
-	uint64_t user_data;
-	uint8_t  uuid[16];
 	uint32_t fds;
-	uint32_t max_pages_lifetime;
-	uint32_t purgeable_pages;
+	uint8_t  uuid[16];
+	uint64_t user_data;
+	uint64_t killed;
+	uint64_t pages;
+	uint64_t max_pages;
+	uint64_t max_pages_lifetime;
+	uint64_t purgeable_pages;
+	uint64_t jse_internal_pages;
+	uint64_t jse_internal_compressed_pages;
+	uint64_t jse_purgeable_nonvolatile_pages;
+	uint64_t jse_purgeable_nonvolatile_compressed_pages;
+	uint64_t jse_alternate_accounting_pages;
+	uint64_t jse_alternate_accounting_compressed_pages;
+	uint64_t jse_iokit_mapped_pages;
+	uint64_t jse_page_table_pages;
+	uint64_t jse_memory_region_count;
+	uint64_t jse_gencount;			/* memorystatus_thread generation counter */
+	uint64_t jse_starttime;			/* absolute time when process starts */
+	uint64_t jse_killtime;			/* absolute time when jetsam chooses to kill a process */
+	uint64_t jse_idle_delta;		/* time spent in idle band */
+	uint64_t jse_coalition_jetsam_id;	/* we only expose coalition id for COALITION_TYPE_JETSAM */
 	struct timeval cpu_time;
 } memorystatus_jetsam_snapshot_entry_t;
 
 typedef struct jetsam_snapshot {
-	uint64_t snapshot_time;
-	uint64_t notification_time;
-	memorystatus_kernel_stats_t stats;
+	uint64_t snapshot_time;			/* absolute time snapshot was initialized */
+	uint64_t notification_time;		/* absolute time snapshot was consumed */
+	uint64_t js_gencount;			/* memorystatus_thread generation counter */
+	memorystatus_kernel_stats_t stats;	/* system stat when snapshot is initialized */
 	size_t entry_count;
 	memorystatus_jetsam_snapshot_entry_t entries[];
 } memorystatus_jetsam_snapshot_t;
@@ -165,6 +185,19 @@ enum {
 	kMemorystatusKilledIdleExit
 };
 
+/* Jetsam exit reason definitions */
+#define JETSAM_REASON_INVALID			0
+#define JETSAM_REASON_GENERIC			1
+#define JETSAM_REASON_MEMORY_HIGHWATER		2
+#define JETSAM_REASON_VNODE			3
+#define JETSAM_REASON_MEMORY_VMPAGESHORTAGE	4
+#define JETSAM_REASON_MEMORY_VMTHRASHING	5
+#define JETSAM_REASON_MEMORY_FCTHRASHING	6
+#define JETSAM_REASON_MEMORY_PERPROCESSLIMIT	7
+#define JETSAM_REASON_MEMORY_DIAGNOSTIC		8
+#define JETSAM_REASON_MEMORY_IDLE_EXIT		9
+#define JETSAM_REASON_CPULIMIT			10
+
 /* Temporary, to prevent the need for a linked submission of ReportCrash */
 /* Remove when <rdar://problem/13210532> has been integrated */
 enum {
@@ -192,6 +225,10 @@ int memorystatus_control(uint32_t command, int32_t pid, uint32_t flags, void *bu
 #define MEMORYSTATUS_CMD_PRIVILEGED_LISTENER_DISABLE  10   /* Reset the task's status as a privileged listener w.r.t memory notifications  */
 #define MEMORYSTATUS_CMD_AGGRESSIVE_JETSAM_LENIENT_MODE_ENABLE  11   /* Enable the 'lenient' mode for aggressive jetsam. See comments in kern_memorystatus.c near the top. */
 #define MEMORYSTATUS_CMD_AGGRESSIVE_JETSAM_LENIENT_MODE_DISABLE 12   /* Disable the 'lenient' mode for aggressive jetsam. */
+#define MEMORYSTATUS_CMD_GET_MEMLIMIT_EXCESS          13   /* Compute how much a process's phys_footprint exceeds inactive memory limit */
+#define MEMORYSTATUS_CMD_ELEVATED_INACTIVEJETSAMPRIORITY_ENABLE 	14
+#define MEMORYSTATUS_CMD_ELEVATED_INACTIVEJETSAMPRIORITY_DISABLE 	15
+
 /* Commands that act on a group of processes */
 #define MEMORYSTATUS_CMD_GRP_SET_PROPERTIES           100
 
@@ -267,7 +304,6 @@ typedef struct memorystatus_memlimit_properties {
 
 #define MEMORYSTATUS_MEMLIMIT_ATTR_FATAL	0x1	/* if set, exceeding the memlimit is fatal */
 
-
 #ifdef XNU_KERNEL_PRIVATE
 
 /*
@@ -321,6 +357,8 @@ typedef struct memorystatus_memlimit_properties {
 #define P_MEMSTAT_MEMLIMIT_ACTIVE_EXC_TRIGGERED   0x00008000   /* if set, supresses high-water-mark EXC_RESOURCE, allows one hit per active limit */
 #define P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL         0x00010000   /* if set, exceeding limit is fatal when the process is inactive */
 #define P_MEMSTAT_MEMLIMIT_INACTIVE_EXC_TRIGGERED 0x00020000   /* if set, supresses high-water-mark EXC_RESOURCE, allows one hit per inactive limit */
+#define P_MEMSTAT_USE_ELEVATED_INACTIVE_BAND 	  0x00040000   /* if set, the process will go into this band & stay there when in the background instead
+								  of the aging bands and/or the IDLE band. */
 
 extern void memorystatus_init(void) __attribute__((section("__TEXT, initcode")));
 
@@ -332,6 +370,9 @@ extern int memorystatus_update(proc_t p, int priority, uint64_t user_data, boole
 			       int32_t memlimit_inactive, boolean_t memlimit_inactive_is_fatal, boolean_t memlimit_background);
 
 extern int memorystatus_remove(proc_t p, boolean_t locked);
+
+int memorystatus_update_inactive_jetsam_priority_band(pid_t pid, uint32_t opflags, boolean_t effective_now);
+
 
 extern int memorystatus_dirty_track(proc_t p, uint32_t pcontrol);
 extern int memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol);
@@ -353,6 +394,13 @@ void memorystatus_kevent_init(lck_grp_t *grp, lck_attr_t *attr);
 int memorystatus_knote_register(struct knote *kn);
 void memorystatus_knote_unregister(struct knote *kn);
 
+#if CONFIG_MEMORYSTATUS
+boolean_t memorystatus_turnoff_exception_and_get_fatalness(boolean_t warning, const int max_footprint_mb);
+void memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t is_fatal);
+void proc_memstat_terminated(proc_t p, boolean_t set);
+boolean_t memorystatus_proc_is_dirty_unsafe(void *v);
+#endif /* CONFIG_MEMORYSTATUS */
+
 #if CONFIG_JETSAM
 
 int memorystatus_get_pressure_status_kdp(void);
@@ -373,8 +421,6 @@ boolean_t memorystatus_kill_on_VM_thrashing(boolean_t async);
 boolean_t memorystatus_kill_on_FC_thrashing(boolean_t async);
 boolean_t memorystatus_kill_on_vnode_limit(void);
 
-void memorystatus_on_ledger_footprint_exceeded(int warning, const int max_footprint_mb);
-void proc_memstat_terminated(proc_t p, boolean_t set);
 void jetsam_on_ledger_cpulimit_exceeded(void);
 
 void memorystatus_pages_update(unsigned int pages_avail);

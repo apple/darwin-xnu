@@ -23,6 +23,7 @@ _lck_rw_sleep_deadline
 _lck_spin_sleep
 _lck_spin_sleep_deadline
 _mach_absolute_time
+_mach_continuous_time
 _mach_msg_send_from_kernel_proper
 _mach_vm_pressure_level_monitor
 _mach_vm_pressure_monitor
@@ -54,6 +55,7 @@ _thread_deallocate
 _thread_policy_set
 _thread_reference
 _thread_terminate
+_thread_tid
 _thread_wakeup_prim
 _vm_kernel_addrperm_external
 _vm_kernel_unslide_or_perm_external

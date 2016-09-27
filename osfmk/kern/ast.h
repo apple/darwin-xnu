@@ -118,8 +118,9 @@ typedef uint32_t		ast_t;
 #define AST_GUARD		0x1000
 #define AST_TELEMETRY_USER	0x2000	/* telemetry sample requested on interrupt from userspace */
 #define AST_TELEMETRY_KERNEL	0x4000	/* telemetry sample requested on interrupt from kernel */
-#define AST_TELEMETRY_WINDOWED	0x8000	/* telemetry sample meant for the window buffer */
 #define AST_SFI			0x10000	/* Evaluate if SFI wait is needed before return to userspace */
+#define AST_DTRACE		0x20000
+#define AST_TELEMETRY_IO	0x40000 /* telemetry sample requested for I/O */
 
 #define AST_NONE		0x00
 #define AST_ALL			(~AST_NONE)
@@ -128,10 +129,10 @@ typedef uint32_t		ast_t;
 #define AST_PREEMPTION	(AST_PREEMPT | AST_QUANTUM | AST_URGENT)
 
 #define AST_CHUD_ALL	(AST_CHUD_URGENT|AST_CHUD)
-#define AST_TELEMETRY_ALL	(AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_WINDOWED)
+#define AST_TELEMETRY_ALL	(AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_IO)
 
 /* Per-thread ASTs follow the thread at context-switch time. */
-#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | AST_LEDGER | AST_GUARD | AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_WINDOWED)
+#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | AST_LEDGER | AST_GUARD | AST_TELEMETRY_ALL )
 
 /* Initialize module */
 extern void		ast_init(void);
@@ -175,5 +176,9 @@ extern void act_set_astbsd(thread_t);
 extern void bsd_ast(thread_t);
 
 #endif /* MACH_BSD */
+
+#ifdef CONFIG_DTRACE
+extern void ast_dtrace_on(void);
+#endif /* CONFIG_DTRACE */
 
 #endif  /* _KERN_AST_H_ */

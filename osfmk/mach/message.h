@@ -222,20 +222,23 @@ typedef unsigned int mach_msg_bits_t;
 typedef	natural_t mach_msg_size_t;
 typedef integer_t mach_msg_id_t;
 
-
 #define MACH_MSG_SIZE_NULL (mach_msg_size_t *) 0
+
+typedef unsigned int mach_msg_priority_t;
+
+#define MACH_MSG_PRIORITY_UNSPECIFIED (mach_msg_priority_t) 0
 
 typedef unsigned int mach_msg_type_name_t;
 
-#define MACH_MSG_TYPE_MOVE_RECEIVE	16	/* Must hold receive right */
-#define MACH_MSG_TYPE_MOVE_SEND		17	/* Must hold send right(s) */
-#define MACH_MSG_TYPE_MOVE_SEND_ONCE	18	/* Must hold sendonce right */
-#define MACH_MSG_TYPE_COPY_SEND		19	/* Must hold send right(s) */
-#define MACH_MSG_TYPE_MAKE_SEND		20	/* Must hold receive right */
-#define MACH_MSG_TYPE_MAKE_SEND_ONCE	21	/* Must hold receive right */
-#define MACH_MSG_TYPE_COPY_RECEIVE	22	/* NOT VALID */
-#define MACH_MSG_TYPE_DISPOSE_RECEIVE	24	/* must hold receive right */
-#define MACH_MSG_TYPE_DISPOSE_SEND	25	/* must hold send right(s) */
+#define MACH_MSG_TYPE_MOVE_RECEIVE      16	/* Must hold receive right */
+#define MACH_MSG_TYPE_MOVE_SEND         17	/* Must hold send right(s) */
+#define MACH_MSG_TYPE_MOVE_SEND_ONCE    18	/* Must hold sendonce right */
+#define MACH_MSG_TYPE_COPY_SEND         19	/* Must hold send right(s) */
+#define MACH_MSG_TYPE_MAKE_SEND         20	/* Must hold receive right */
+#define MACH_MSG_TYPE_MAKE_SEND_ONCE    21	/* Must hold receive right */
+#define MACH_MSG_TYPE_COPY_RECEIVE      22	/* NOT VALID */
+#define MACH_MSG_TYPE_DISPOSE_RECEIVE   24	/* must hold receive right */
+#define MACH_MSG_TYPE_DISPOSE_SEND      25	/* must hold send right(s) */
 #define MACH_MSG_TYPE_DISPOSE_SEND_ONCE 26	/* must hold sendonce right */
 
 typedef unsigned int mach_msg_copy_options_t;
@@ -658,6 +661,7 @@ typedef integer_t mach_msg_option_t;
 #define MACH_RCV_LARGE_IDENTITY	0x00000008	/* identify source of large messages */
 
 #define MACH_SEND_TIMEOUT	0x00000010	/* timeout value applies to send */
+#define MACH_SEND_OVERRIDE  0x00000020  /* priority override for send */
 #define MACH_SEND_INTERRUPT	0x00000040	/* don't restart interrupted sends */
 #define MACH_SEND_NOTIFY	0x00000080	/* arm send-possible notify */
 #define MACH_SEND_ALWAYS	0x00010000	/* ignore qlimits - kernel only */
@@ -672,6 +676,20 @@ typedef integer_t mach_msg_option_t;
 #define MACH_RCV_INTERRUPT	0x00000400	/* don't restart interrupted receive */
 #define MACH_RCV_VOUCHER	0x00000800	/* willing to receive voucher port */
 #define MACH_RCV_OVERWRITE	0x00001000	/* scatter receive (deprecated) */
+
+#ifdef XNU_KERNEL_PRIVATE
+
+#define MACH_RCV_STACK          0x00002000	/* receive into highest addr of buffer */
+
+/*
+ * NOTE:
+ * This internal-only flag is intended for use by a single thread per-port/set!
+ * If more than one thread attempts to MACH_PEEK_MSG on a port or set, one of
+ * the threads may miss messages (in fact, it may never wake up).
+ */
+#define MACH_PEEK_MSG		0x00100000	/* receive, but leave msgs queued */
+
+#endif
 
 /* 
  * NOTE: a 0x00------ RCV mask implies to ask for
@@ -698,13 +716,13 @@ typedef integer_t mach_msg_option_t;
 
 #ifdef MACH_KERNEL_PRIVATE
 /* The options that the kernel honors when passed from user space */
-#define MACH_SEND_USER		 (MACH_SEND_MSG | \
-				  MACH_SEND_TIMEOUT | MACH_SEND_NOTIFY | \
-				  MACH_SEND_TRAILER | MACH_SEND_NOIMPORTANCE )
+#define MACH_SEND_USER (MACH_SEND_MSG | MACH_SEND_TIMEOUT | \
+						MACH_SEND_NOTIFY | MACH_SEND_OVERRIDE | \
+						MACH_SEND_TRAILER | MACH_SEND_NOIMPORTANCE )
 
-#define MACH_RCV_USER		 (MACH_RCV_MSG | MACH_RCV_TIMEOUT | \
-				  MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY | \
-				  MACH_RCV_VOUCHER | MACH_RCV_TRAILER_MASK)
+#define MACH_RCV_USER (MACH_RCV_MSG | MACH_RCV_TIMEOUT | \
+					   MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY | \
+					   MACH_RCV_VOUCHER | MACH_RCV_TRAILER_MASK)
 
 #define MACH_MSG_OPTION_USER	 (MACH_SEND_USER | MACH_RCV_USER)
 
@@ -853,6 +871,13 @@ typedef kern_return_t mach_msg_return_t;
 #define MACH_RCV_IN_PROGRESS_TIMED      0x10004011
                 /* Waiting for receive with timeout. (Internal use only.) */
 
+#ifdef XNU_KERNEL_PRIVATE
+#define MACH_PEEK_IN_PROGRESS		0x10008001
+                /* Waiting for a peek. (Internal use only.) */
+#define MACH_PEEK_READY			0x10008002
+                /* Waiting for a peek. (Internal use only.) */
+#endif
+
 
 __BEGIN_DECLS
 
@@ -916,8 +941,10 @@ extern kern_return_t		mach_voucher_deallocate(
 
 #elif defined(MACH_KERNEL_PRIVATE)
 
-extern mach_msg_return_t	mach_msg_receive_results(void);
+extern mach_msg_return_t	mach_msg_receive_results(mach_msg_size_t *size);
 
+extern mach_msg_priority_t mach_msg_priority_combine(mach_msg_priority_t msg_qos,
+                                                     mach_msg_priority_t recv_qos);
 #endif	/* KERNEL */
 
 __END_DECLS

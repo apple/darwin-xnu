@@ -47,7 +47,7 @@
 .Fa "stack_t *restrict oss"
 .Fc
 .Sh DESCRIPTION
-.Fn Sigaltstack
+.Fn sigaltstack
 allows users to define an alternate stack on which signals
 are to be processed.
 If
@@ -133,7 +133,7 @@ Otherwise, a value of -1 is returned and
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Sigaltstack
+.Fn sigaltstack
 will fail and the signal stack context will remain unchanged
 if one of the following occurs.
 .Bl -tag -width [ENOMEM]

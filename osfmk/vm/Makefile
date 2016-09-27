@@ -17,6 +17,7 @@ EXPORT_ONLY_FILES = \
 	vm_pageout.h \
 	vm_protos.h \
 	vm_shared_region.h \
+	vm_compressor_algorithms.h \
 	WKdm_new.h
 
 INSTALL_MI_LIST = ${DATAFILES}
@@ -29,5 +30,3 @@ EXPORT_MI_DIR = vm
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

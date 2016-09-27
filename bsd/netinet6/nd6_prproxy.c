@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -986,7 +986,7 @@ nd6_prproxy_ns_output(struct ifnet *ifp, struct ifnet *exclifp,
 			    "on %s\n", if_name(fwd_ifp),
 			    ip6_sprintf(taddr), if_name(ifp)));
 
-			nd6_ns_output(fwd_ifp, daddr, taddr, NULL, 0);
+			nd6_ns_output(fwd_ifp, daddr, taddr, NULL, NULL);
 		} else {
 			NDPR_UNLOCK(pr);
 		}
@@ -996,7 +996,7 @@ nd6_prproxy_ns_output(struct ifnet *ifp, struct ifnet *exclifp,
 	}
 	VERIFY(SLIST_EMPTY(&ndprl_head));
 
-	nd6_ns_output(ifp, daddr, taddr, ln, 0);
+	nd6_ns_output(ifp, daddr, taddr, ln, NULL);
 }
 
 /*
@@ -1009,7 +1009,8 @@ nd6_prproxy_ns_output(struct ifnet *ifp, struct ifnet *exclifp,
  */
 void
 nd6_prproxy_ns_input(struct ifnet *ifp, struct in6_addr *saddr,
-    char *lladdr, int lladdrlen, struct in6_addr *daddr, struct in6_addr *taddr)
+    char *lladdr, int lladdrlen, struct in6_addr *daddr,
+    struct in6_addr *taddr, uint8_t *nonce)
 {
 	SLIST_HEAD(, nd6_prproxy_prelist) ndprl_head;
 	struct nd6_prproxy_prelist *ndprl, *ndprl_tmp;
@@ -1119,7 +1120,7 @@ nd6_prproxy_ns_input(struct ifnet *ifp, struct in6_addr *saddr,
 			    ip6_sprintf(taddr), if_name(ifp)));
 
 			nd6_ns_output(fwd_ifp, ndprl->ndprl_sol ? taddr : NULL,
-			    taddr, NULL, !ndprl->ndprl_sol);
+			    taddr, NULL, nonce);
 		} else {
 			NDPR_UNLOCK(pr);
 		}

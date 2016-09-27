@@ -57,12 +57,12 @@ const struct ccmode_ctr *ccdes3_ctr_crypt_mode(void);
 
 const struct ccmode_ofb *ccdes3_ofb_crypt_mode(void);
 
-int ccdes_key_is_weak( void *key, unsigned long  length);
-void ccdes_key_set_odd_parity(void *key, unsigned long length);
+int ccdes_key_is_weak( void *key, size_t  length);
+void ccdes_key_set_odd_parity(void *key, size_t length);
 
 uint32_t
-ccdes_cbc_cksum(void *in, void *out, unsigned long length,
-                void *key, unsigned long keylen, void *ivec);
+ccdes_cbc_cksum(void *in, void *out, size_t length,
+                void *key, size_t keylen, void *ivec);
 
 
 #endif /* _CORECRYPTO_CCDES_H_ */

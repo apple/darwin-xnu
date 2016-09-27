@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -68,7 +68,7 @@ public:
     @param owner Pointer to client instance.
     @param sender Pointer to generation interrupt event source.
     @param count Number of interrupts seen before delivery. */
-    typedef void (*Action)(OSObject *, IOInterruptEventSource *, int count);
+    typedef void (*Action)(OSObject *owner, IOInterruptEventSource *sender, int count);
 
 /*! @defined IOInterruptEventAction
     @discussion Backward compatibilty define for the old non-class scoped type definition.  See $link IOInterruptEventSource::Action */

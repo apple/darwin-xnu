@@ -56,7 +56,7 @@ kern_return_t kxld_object_init_from_macho(KXLDObject *object,
     u_char *file, u_long size, const char *name,
     struct kxld_array *section_order,
     cpu_type_t cputype, cpu_subtype_t cpusubtype, KXLDFlags flags)
-    __attribute__((nonnull(1,2,4) visibility("hidden")));
+    __attribute__((nonnull(1,2,4), visibility("hidden")));
 
 void kxld_object_clear(KXLDObject *object)
     __attribute__((nonnull, visibility("hidden")));
@@ -123,10 +123,25 @@ void kxld_object_get_vmsize(const KXLDObject *object, u_long *header_size,
 void kxld_object_set_linked_object_size(KXLDObject *object, u_long vmsize)
     __attribute__((nonnull, visibility("hidden")));
 
+void kxld_object_get_vmsize_for_seg_by_name(const KXLDObject *object,
+                                            const char *segname,
+                                            u_long *vmsize)
+__attribute__((nonnull, visibility("hidden")));
+
+splitKextLinkInfo * kxld_object_get_link_info(KXLDObject *object)
+__attribute__((nonnull, visibility("hidden")));
+
+void kxld_object_set_link_info(KXLDObject *object,
+                               splitKextLinkInfo *link_info)
+__attribute__((nonnull, visibility("hidden")));
+
+
 /* This will be the same size as kxld_kext_get_vmsize */
 kern_return_t kxld_object_export_linked_object(const KXLDObject *object,
-    u_char *linked_object)
+                                               void *linked_object
+                                               )
     __attribute__((nonnull, visibility("hidden")));
+
 
 /*******************************************************************************
 * Modifiers

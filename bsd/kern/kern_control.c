@@ -225,6 +225,7 @@ SYSCTL_INT(_net_systm_kctl, OID_AUTO, debug,
 
 static uintptr_t kctl_tbl_size = 0;
 static u_int32_t kctl_tbl_growing = 0;
+static u_int32_t kctl_tbl_growing_waiting = 0;
 static uintptr_t kctl_tbl_count = 0;
 static struct kctl **kctl_table = NULL;
 static uintptr_t kctl_ref_gencnt = 0;
@@ -461,9 +462,10 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 	error = soreserve(so, sendbufsize, recvbufsize);
 	if (error) {
-		printf("%s - soreserve(%llx, %u, %u) error %d\n", __func__,
-			(uint64_t)VM_KERNEL_ADDRPERM(so),
-			sendbufsize, recvbufsize, error);
+		if (ctl_debug)
+			printf("%s - soreserve(%llx, %u, %u) error %d\n",
+			    __func__, (uint64_t)VM_KERNEL_ADDRPERM(so),
+			    sendbufsize, recvbufsize, error);
 		goto done;
 	}
 	soisconnecting(so);
@@ -478,6 +480,15 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 end:
 	if (error && kctl->disconnect) {
+		/*
+		 * XXX Make sure we Don't check the return value
+		 * of disconnect here.
+		 * ipsec/utun_ctl_disconnect will return error when
+		 * disconnect gets called after connect failure.
+		 * However if we decide to check for disconnect return
+		 * value here. Please make sure to revisit
+		 * ipsec/utun_ctl_disconnect.
+		 */
 		socket_unlock(so, 0);
 		(*kctl->disconnect)(kctl->kctlref, kcb->unit, kcb->userdata);
 		socket_lock(so, 0);
@@ -857,7 +868,7 @@ ctl_enqueuembuf_list(void *kctlref, u_int32_t unit, struct mbuf *m_list,
 	for (m = m_list; m != NULL; m = nextpkt) {
 		nextpkt = m->m_nextpkt;
 
-		if (m->m_pkthdr.len == 0)
+		if (m->m_pkthdr.len == 0 && ctl_debug)
 			printf("%s: %llx m_pkthdr.len is 0",
 				__func__, (uint64_t)VM_KERNEL_ADDRPERM(m));
 
@@ -953,8 +964,10 @@ ctl_enqueuedata(void *kctlref, u_int32_t unit, void *data, size_t len,
 	num_needed = 1;
 	m = m_allocpacket_internal(&num_needed, len, NULL, M_NOWAIT, 1, 0);
 	if (m == NULL) {
-		printf("ctl_enqueuedata: m_allocpacket_internal(%lu) failed\n",
-			len);
+		kctlstat.kcs_enqdata_mb_alloc_fail++;
+		if (ctl_debug)
+			printf("%s: m_allocpacket_internal(%lu) failed\n",
+			    __func__, len);
 		error = ENOMEM;
 		goto bye;
 	}
@@ -977,6 +990,7 @@ ctl_enqueuedata(void *kctlref, u_int32_t unit, void *data, size_t len,
 		if ((flags & CTL_DATA_NOWAKEUP) == 0)
 			sorwakeup(so);
 	} else {
+		kctlstat.kcs_enqdata_sbappend_fail++;
 		error = ENOBUFS;
 		OSIncrementAtomic64((SInt64 *)&kctlstat.kcs_enqueue_fullsock);
 	}
@@ -1214,10 +1228,15 @@ kctl_tbl_grow()
 
 	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_OWNED);
 
-	while (kctl_tbl_growing) {
+	if (kctl_tbl_growing) {
 		/* Another thread is allocating */
-		(void) msleep((caddr_t) &kctl_tbl_growing, ctl_mtx,
-		    PSOCK | PCATCH, "kctl_tbl_growing", 0);
+		kctl_tbl_growing_waiting++;
+
+		do {
+			(void) msleep((caddr_t) &kctl_tbl_growing, ctl_mtx,
+				PSOCK | PCATCH, "kctl_tbl_growing", 0);
+		} while (kctl_tbl_growing);
+		kctl_tbl_growing_waiting--;
 	}
 	/* Another thread grew the table */
 	if (kctl_table != NULL && kctl_tbl_count < kctl_tbl_size)
@@ -1225,8 +1244,10 @@ kctl_tbl_grow()
 
 	/* Verify we have a sane size */
 	if (kctl_tbl_size + KCTL_TBL_INC >= UINT16_MAX) {
-		printf("%s kctl_tbl_size %lu too big\n",
-		    __func__, kctl_tbl_size);
+		kctlstat.kcs_tbl_size_too_big++;
+		if (ctl_debug)
+			printf("%s kctl_tbl_size %lu too big\n",
+			    __func__, kctl_tbl_size);
 		return;
 	}
 	kctl_tbl_growing = 1;
@@ -1250,6 +1271,10 @@ kctl_tbl_grow()
 	}
 
 	kctl_tbl_growing = 0;
+
+	if (kctl_tbl_growing_waiting) {
+		wakeup(&kctl_tbl_growing);
+	}
 }
 
 #define KCTLREF_INDEX_MASK 0x0000FFFF
@@ -1760,13 +1785,13 @@ ctl_unlock(struct socket *so, int refcount, void *lr)
 	else
 		lr_saved = lr;
 
-#ifdef MORE_KCTLLOCK_DEBUG
+#if (MORE_KCTLLOCK_DEBUG && (DEVELOPMENT || DEBUG))
 	printf("ctl_unlock: so=%llx sopcb=%x lock=%llx ref=%u lr=%llx\n",
 	    (uint64_t)VM_KERNEL_ADDRPERM(so),
 	    (uint64_t)VM_KERNEL_ADDRPERM(so->so_pcb,
 	    (uint64_t)VM_KERNEL_ADDRPERM(((struct ctl_cb *)so->so_pcb)->mtx),
 	    so->so_usecount, (uint64_t)VM_KERNEL_ADDRPERM(lr_saved));
-#endif
+#endif /* (MORE_KCTLLOCK_DEBUG && (DEVELOPMENT || DEBUG)) */
 	if (refcount)
 		so->so_usecount--;
 

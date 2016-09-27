@@ -31,18 +31,6 @@
  * for each binary image not loaded from the shared cache during stackshots.
  */
 
-/* From dyld/include/dyld_images.h */
-
-struct user32_dyld_uuid_info {
-	user32_addr_t	imageLoadAddress;	/* base address image is mapped into */
-	uuid_t			imageUUID;			/* UUID of image */
-};
-
-struct user64_dyld_uuid_info {
-	user64_addr_t	imageLoadAddress;	/* base address image is mapped into */
-	uuid_t			imageUUID;			/* UUID of image */
-};
-
 /* Re-use dyld format for kext load addresses */
 #if __LP64__
 typedef struct user64_dyld_uuid_info kernel_uuid_info;
@@ -64,15 +52,15 @@ struct user64_dyld_image_info {
 
 // FIXME: dyld is in C++, and some of the fields in dyld_all_image_infos are C++ 
 // native booleans.  There must be a better way...
-typedef uint8_t bool;
+typedef uint8_t dyld_bool;
 
 struct user32_dyld_all_image_infos {
 	uint32_t					version;
 	uint32_t					infoArrayCount;
 	user32_addr_t				infoArray;
 	user32_addr_t				notification;
-	bool						processDetachedFromSharedRegion;
-	bool						libSystemInitialized;
+	dyld_bool					processDetachedFromSharedRegion;
+	dyld_bool					libSystemInitialized;
 	user32_addr_t				dyldImageLoadAddress;
 	user32_addr_t				jitInfo;
 	user32_addr_t				dyldVersion;
@@ -80,9 +68,25 @@ struct user32_dyld_all_image_infos {
 	user32_addr_t				terminationFlags;
 	user32_addr_t				coreSymbolicationShmPage;
 	user32_addr_t				systemOrderFlag;
-	user32_size_t				uuidArrayCount; // dyld defines this as a uintptr_t despite it being a count
-	user32_addr_t				uuidArray;
-	user32_addr_t				dyldAllImageInfosAddress;
+	user32_size_t uuidArrayCount; // dyld defines this as a uintptr_t despite it being a count
+	user32_addr_t uuidArray;
+	user32_addr_t dyldAllImageInfosAddress;
+
+	/* the following field is only in version 10 (Mac OS X 10.7, iOS 4.2) and later */
+	user32_addr_t initialImageCount;
+	/* the following field is only in version 11 (Mac OS X 10.7, iOS 4.2) and later */
+	user32_addr_t errorKind;
+	user32_addr_t errorClientOfDylibPath;
+	user32_addr_t errorTargetDylibPath;
+	user32_addr_t errorSymbol;
+	/* the following field is only in version 12 (Mac OS X 10.7, iOS 4.3) and later */
+	user32_addr_t sharedCacheSlide;
+	/* the following field is only in version 13 (Mac OS X 10.9, iOS 7.0) and later */
+	uint8_t sharedCacheUUID[16];
+	/* the following field is only in version 14 (Mac OS X 10.9, iOS 7.0) and later */
+	user32_addr_t reserved[16];
+	/* the following field is only in version 15 (Mac OS X 10.12, iOS 10.0) and later */
+	uint64_t timestamp;
 };
 
 struct user64_dyld_all_image_infos {
@@ -90,8 +94,8 @@ struct user64_dyld_all_image_infos {
 	uint32_t					infoArrayCount;
 	user64_addr_t				infoArray;
 	user64_addr_t				notification;
-	bool						processDetachedFromSharedRegion;
-	bool						libSystemInitialized;
+	dyld_bool					processDetachedFromSharedRegion;
+	dyld_bool					libSystemInitialized;
 	user64_addr_t				dyldImageLoadAddress;
 	user64_addr_t				jitInfo;
 	user64_addr_t				dyldVersion;
@@ -99,7 +103,23 @@ struct user64_dyld_all_image_infos {
 	user64_addr_t				terminationFlags;
 	user64_addr_t				coreSymbolicationShmPage;
 	user64_addr_t				systemOrderFlag;
-	user64_size_t				uuidArrayCount; // dyld defines this as a uintptr_t despite it being a count
-	user64_addr_t				uuidArray;
-	user64_addr_t				dyldAllImageInfosAddress;
+	user64_size_t uuidArrayCount; // dyld defines this as a uintptr_t despite it being a count
+	user64_addr_t uuidArray;
+	user64_addr_t dyldAllImageInfosAddress;
+
+	/* the following field is only in version 10 (Mac OS X 10.7, iOS 4.2) and later */
+	user64_addr_t initialImageCount;
+	/* the following field is only in version 11 (Mac OS X 10.7, iOS 4.2) and later */
+	user64_addr_t errorKind;
+	user64_addr_t errorClientOfDylibPath;
+	user64_addr_t errorTargetDylibPath;
+	user64_addr_t errorSymbol;
+	/* the following field is only in version 12 (Mac OS X 10.7, iOS 4.3) and later */
+	user64_addr_t sharedCacheSlide;
+	/* the following field is only in version 13 (Mac OS X 10.9, iOS 7.0) and later */
+	uint8_t sharedCacheUUID[16];
+	/* the following field is only in version 14 (Mac OS X 10.9, iOS 7.0) and later */
+	user64_addr_t reserved[16];
+	/* the following field is only in version 15 (Mac OS X 10.12, iOS 10.0) and later */
+	uint64_t timestamp;
 };

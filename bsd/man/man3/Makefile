@@ -61,4 +61,3 @@ INSTALL_MAN_DIR = man3
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

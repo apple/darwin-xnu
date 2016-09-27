@@ -97,6 +97,9 @@ int file_drop(int);
 #ifdef KERNEL_PRIVATE
 int fd_rdwr(int fd, enum uio_rw, uint64_t base, int64_t len, enum uio_seg,
 	    off_t offset, int io_flg, int64_t *aresid);
+struct fileproc;
+struct vnode;
+int fp_getfvp(struct proc *p, int fd, struct fileproc **resultfp, struct vnode  **resultvp);
 #endif	/* KERNEL_PRIVATE */
 __END_DECLS
 #endif /* !_SYS_FILE_H_ */

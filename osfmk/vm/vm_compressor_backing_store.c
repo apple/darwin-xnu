@@ -31,9 +31,9 @@
 
 #include <IOKit/IOHibernatePrivate.h>
 
+#include <kern/policy_internal.h>
 
 boolean_t	compressor_store_stop_compaction = FALSE;
-boolean_t	vm_swap_up = FALSE;
 boolean_t	vm_swapfile_create_needed = FALSE;
 boolean_t	vm_swapfile_gc_needed = FALSE;
 
@@ -44,6 +44,7 @@ uint64_t	vm_swapout_thread_id;
 uint64_t	vm_swap_put_failures = 0;
 uint64_t	vm_swap_get_failures = 0;
 int		vm_num_swap_files = 0;
+int		vm_num_pinned_swap_files = 0;
 int		vm_swapout_thread_processed_segments = 0;
 int		vm_swapout_thread_awakened = 0;
 int		vm_swapfile_create_thread_awakened = 0;
@@ -52,8 +53,11 @@ int		vm_swapfile_gc_thread_awakened = 0;
 int		vm_swapfile_gc_thread_running = 0;
 
 int64_t		vm_swappin_avail = 0;
+boolean_t	vm_swappin_enabled = FALSE;
 unsigned int	vm_swapfile_total_segs_alloced = 0;
 unsigned int	vm_swapfile_total_segs_used = 0;
+
+extern vm_map_t compressor_map;
 
 
 #define SWAP_READY	0x1	/* Swap file is ready to be used */
@@ -90,6 +94,8 @@ clock_sec_t		vm_swapfile_last_failed_to_create_ts = 0;
 clock_sec_t		vm_swapfile_last_successful_create_ts = 0;
 int			vm_swapfile_can_be_created = FALSE;
 boolean_t		delayed_trim_handling_in_progress = FALSE;
+
+boolean_t		hibernate_in_progress_with_pinned_swap = FALSE;
 
 static void vm_swapout_thread_throttle_adjust(void);
 static void vm_swap_free_now(struct swapfile *swf, uint64_t f_offset);
@@ -143,16 +149,14 @@ extern unsigned long 		vm_page_decrypt_counter;
 #endif /* ENCRYPTED_SWAP */
 
 extern void			vm_pageout_io_throttle(void);
-extern void			vm_pageout_reinit_tuneables(void);
-extern void			vm_swap_file_set_tuneables(void);
 
-struct swapfile *vm_swapfile_for_handle(uint64_t);
+static struct swapfile *vm_swapfile_for_handle(uint64_t);
 
 /*
  * Called with the vm_swap_data_lock held.
  */ 
 
-struct swapfile *
+static struct swapfile *
 vm_swapfile_for_handle(uint64_t f_offset) 
 {
 	
@@ -220,11 +224,11 @@ vm_compressor_swap_init()
 	}
 	thread_deallocate(thread);
 
-	proc_set_task_policy_thread(kernel_task, thread->thread_id,
-				    TASK_POLICY_INTERNAL, TASK_POLICY_IO, THROTTLE_LEVEL_COMPRESSOR_TIER2);
-	proc_set_task_policy_thread(kernel_task, thread->thread_id,
-				    TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
-	
+	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
+	                                TASK_POLICY_INTERNAL, TASK_POLICY_IO, THROTTLE_LEVEL_COMPRESSOR_TIER2);
+	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
+	                                TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+
 #if ENCRYPTED_SWAP
 	if (swap_crypt_ctx_initialized == FALSE) {
 		swap_crypt_ctx_initialize();
@@ -233,9 +237,7 @@ vm_compressor_swap_init()
 		
 	memset(swapfilename, 0, MAX_SWAPFILENAME_LEN + 1);
 
-	vm_swap_up = TRUE;
-
-	printf("VM Swap Subsystem is %s\n", (vm_swap_up == TRUE) ? "ON" : "OFF"); 
+	printf("VM Swap Subsystem is ON\n");
 }
 
 
@@ -261,43 +263,65 @@ c_compressed_record_write(char *buf, int size)
 #endif
 
 
+int		compaction_swapper_inited = 0;
 
 void
-vm_swap_file_set_tuneables()
+vm_compaction_swapper_do_init(void)
 {
 	struct	vnode *vp;
 	char	*pathname;
 	int	namelen;
 
-	if (strlen(swapfilename) == 0) {
-		/*
-		 * If no swapfile name has been set, we'll
-		 * use the default name.
-		 *
-		 * Also, this function is only called from the vm_pageout_scan thread
-		 * via vm_consider_waking_compactor_swapper, 
-		 * so we don't need to worry about a race in checking/setting the name here.
-		 */
-		strlcpy(swapfilename, SWAP_FILE_NAME, MAX_SWAPFILENAME_LEN);
+	if (compaction_swapper_inited)
+		return;
+
+	if (vm_compressor_mode != VM_PAGER_COMPRESSOR_WITH_SWAP) {
+		compaction_swapper_inited = 1;
+		return;
 	}
-	namelen = (int)strlen(swapfilename) + SWAPFILENAME_INDEX_LEN + 1;
-	pathname = (char*)kalloc(namelen);
-	memset(pathname, 0, namelen);
-	snprintf(pathname, namelen, "%s%d", swapfilename, 0);
+	lck_mtx_lock(&vm_swap_data_lock);
 
-	vm_swapfile_open(pathname, &vp);
+	if ( !compaction_swapper_inited) {
 
-	if (vp == NULL)
-		goto done;
+		if (strlen(swapfilename) == 0) {
+			/*
+			 * If no swapfile name has been set, we'll
+			 * use the default name.
+			 *
+			 * Also, this function is only called from the vm_pageout_scan thread
+			 * via vm_consider_waking_compactor_swapper, 
+			 * so we don't need to worry about a race in checking/setting the name here.
+			 */
+			strlcpy(swapfilename, SWAP_FILE_NAME, MAX_SWAPFILENAME_LEN);
+		}
+		namelen = (int)strlen(swapfilename) + SWAPFILENAME_INDEX_LEN + 1;
+		pathname = (char*)kalloc(namelen);
+		memset(pathname, 0, namelen);
+		snprintf(pathname, namelen, "%s%d", swapfilename, 0);
 
-        if (vnode_pager_isSSD(vp) == FALSE)
-		vm_pageout_reinit_tuneables();
-	vnode_setswapmount(vp);
-	vm_swappin_avail = vnode_getswappin_avail(vp);
-	vm_swapfile_close((uint64_t)pathname, vp);
-done:
-	kfree(pathname, namelen);
+		vm_swapfile_open(pathname, &vp);
+
+		if (vp) {
+			
+			if (vnode_pager_isSSD(vp) == FALSE) {
+				vm_compressor_minorcompact_threshold_divisor = 18;
+				vm_compressor_majorcompact_threshold_divisor = 22;
+				vm_compressor_unthrottle_threshold_divisor = 32;
+			}
+			vnode_setswapmount(vp);
+			vm_swappin_avail = vnode_getswappin_avail(vp);
+
+			if (vm_swappin_avail)
+				vm_swappin_enabled = TRUE;
+			vm_swapfile_close((uint64_t)pathname, vp);
+		}
+		kfree(pathname, namelen);
+
+		compaction_swapper_inited = 1;
+	}
+	lck_mtx_unlock(&vm_swap_data_lock);
 }
+
 
 
 #if ENCRYPTED_SWAP
@@ -314,6 +338,9 @@ vm_swap_encrypt(c_segment_t c_seg)
 	
 	assert(swap_crypt_ctx_initialized);
 	
+#if DEVELOPMENT || DEBUG
+	C_SEG_MAKE_WRITEABLE(c_seg);
+#endif
 	bzero(&encrypt_iv.aes_iv[0], sizeof (encrypt_iv.aes_iv));
 
 	encrypt_iv.c_seg = (void*)c_seg;
@@ -338,6 +365,10 @@ vm_swap_encrypt(c_segment_t c_seg)
 			&swap_crypt_ctx.encrypt);
 
 	vm_page_encrypt_counter += (size/PAGE_SIZE_64);
+
+#if DEVELOPMENT || DEBUG
+	C_SEG_WRITE_PROTECT(c_seg);
+#endif
 }
 
 void
@@ -355,6 +386,9 @@ vm_swap_decrypt(c_segment_t c_seg)
 	
 	assert(swap_crypt_ctx_initialized);
 
+#if DEVELOPMENT || DEBUG
+	C_SEG_MAKE_WRITEABLE(c_seg);
+#endif
 	/*
 	 * Prepare an "initial vector" for the decryption.
 	 * It has to be the same as the "initial vector" we
@@ -384,6 +418,10 @@ vm_swap_decrypt(c_segment_t c_seg)
 			&swap_crypt_ctx.decrypt);
 
 	vm_page_decrypt_counter += (size/PAGE_SIZE_64);
+
+#if DEVELOPMENT || DEBUG
+	C_SEG_WRITE_PROTECT(c_seg);
+#endif
 }
 #endif /* ENCRYPTED_SWAP */
 
@@ -465,8 +503,8 @@ vm_swap_defragment()
 		} else {
 			lck_mtx_unlock_always(c_list_lock);
 
-			c_seg_swapin(c_seg, TRUE);
-			lck_mtx_unlock_always(&c_seg->c_lock);
+			if (c_seg_swapin(c_seg, TRUE, FALSE) == 0)
+				lck_mtx_unlock_always(&c_seg->c_lock);
 
 			vm_swap_defragment_swapin++;
 		}
@@ -513,6 +551,9 @@ vm_swapfile_create_thread(void)
 
 		lck_mtx_lock(&vm_swap_data_lock);
 
+		if (hibernate_in_progress_with_pinned_swap == TRUE)
+			break;
+
 		clock_get_system_nanotime(&sec, &nsec);
 
 		if (VM_SWAP_SHOULD_CREATE(sec) == 0)
@@ -529,6 +570,9 @@ vm_swapfile_create_thread(void)
 	}
 	vm_swapfile_create_thread_running = 0;
 
+	if (hibernate_in_progress_with_pinned_swap == TRUE)
+		thread_wakeup((event_t)&hibernate_in_progress_with_pinned_swap);
+
 	assert_wait((event_t)&vm_swapfile_create_needed, THREAD_UNINT);
 
 	lck_mtx_unlock(&vm_swap_data_lock);
@@ -539,8 +583,59 @@ vm_swapfile_create_thread(void)
 }
 
 
+#if HIBERNATION
+
+kern_return_t
+hibernate_pin_swap(boolean_t start)
+{
+	vm_compaction_swapper_do_init();
+
+	if (start == FALSE) {
+
+		lck_mtx_lock(&vm_swap_data_lock);
+		hibernate_in_progress_with_pinned_swap = FALSE;
+		lck_mtx_unlock(&vm_swap_data_lock);
+
+		return (KERN_SUCCESS);
+	}
+	if (vm_swappin_enabled == FALSE)
+		return (KERN_SUCCESS);
+
+	lck_mtx_lock(&vm_swap_data_lock);
+
+	hibernate_in_progress_with_pinned_swap = TRUE;
+		
+	while (vm_swapfile_create_thread_running || vm_swapfile_gc_thread_running) {
+
+		assert_wait((event_t)&hibernate_in_progress_with_pinned_swap, THREAD_UNINT);
+
+		lck_mtx_unlock(&vm_swap_data_lock);
+
+		thread_block(THREAD_CONTINUE_NULL);
+
+		lck_mtx_lock(&vm_swap_data_lock);
+	}
+	if (vm_num_swap_files > vm_num_pinned_swap_files) {
+		hibernate_in_progress_with_pinned_swap = FALSE;
+		lck_mtx_unlock(&vm_swap_data_lock);
+
+		HIBLOG("hibernate_pin_swap failed - vm_num_swap_files = %d, vm_num_pinned_swap_files = %d\n",
+		       vm_num_swap_files, vm_num_pinned_swap_files);
+		return (KERN_FAILURE);
+	}
+	lck_mtx_unlock(&vm_swap_data_lock);
+
+	while (VM_SWAP_SHOULD_PIN(MAX_SWAP_FILE_SIZE)) {
+		if (vm_swap_create_file() == FALSE)
+			break;
+	}
+	return (KERN_SUCCESS);
+}
+#endif
+
 static void
 vm_swapfile_gc_thread(void)
+
 {
 	boolean_t	need_defragment;
 	boolean_t	need_reclaim;
@@ -552,6 +647,9 @@ vm_swapfile_gc_thread(void)
 
 		lck_mtx_lock(&vm_swap_data_lock);
 		
+		if (hibernate_in_progress_with_pinned_swap == TRUE)
+			break;
+
 		if (VM_SWAP_BUSY() || compressor_store_stop_compaction == TRUE)
 			break;
 
@@ -576,6 +674,9 @@ vm_swapfile_gc_thread(void)
 			vm_swap_reclaim();
 	}
 	vm_swapfile_gc_thread_running = 0;
+
+	if (hibernate_in_progress_with_pinned_swap == TRUE)
+		thread_wakeup((event_t)&hibernate_in_progress_with_pinned_swap);
 
 	assert_wait((event_t)&vm_swapfile_gc_needed, THREAD_UNINT);
 
@@ -652,10 +753,10 @@ vm_swapout_thread_throttle_adjust(void)
 	}
 done:
 	if (swapper_throttle != swapper_throttle_new) {
-		proc_set_task_policy_thread(kernel_task, vm_swapout_thread_id,
-					    TASK_POLICY_INTERNAL, TASK_POLICY_IO, swapper_throttle_new);
-		proc_set_task_policy_thread(kernel_task, vm_swapout_thread_id,
-					    TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+		proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+		                                TASK_POLICY_INTERNAL, TASK_POLICY_IO, swapper_throttle_new);
+		proc_set_thread_policy_with_tid(kernel_task, vm_swapout_thread_id,
+		                                TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
 
 		swapper_throttle = swapper_throttle_new;
 	}
@@ -663,7 +764,6 @@ done:
 
 
 int vm_swapout_found_empty = 0;
-
 
 static void
 vm_swapout_thread(void)
@@ -704,6 +804,9 @@ vm_swapout_thread(void)
 		if (size == 0) {
 			assert(c_seg->c_bytes_used == 0);
 
+			if (!c_seg->c_on_minorcompact_q)
+				c_seg_need_delayed_compaction(c_seg, TRUE);
+
 			c_seg_switch_state(c_seg, C_IS_EMPTY, FALSE);
 			lck_mtx_unlock_always(&c_seg->c_lock);
 			lck_mtx_unlock_always(c_list_lock);
@@ -736,8 +839,13 @@ vm_swapout_thread(void)
 		PAGE_REPLACEMENT_DISALLOWED(TRUE);
 
 		if (kr == KERN_SUCCESS) {
-			kernel_memory_depopulate(kernel_map, (vm_offset_t) addr, size, KMA_COMPRESSOR);
+			kernel_memory_depopulate(compressor_map, (vm_offset_t) addr, size, KMA_COMPRESSOR);
 		}
+#if ENCRYPTED_SWAP
+		else {
+			vm_swap_decrypt(c_seg);
+		}
+#endif /* ENCRYPTED_SWAP */
 		lck_mtx_lock_spin_always(c_list_lock);
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
@@ -761,18 +869,21 @@ vm_swapout_thread(void)
 			if (c_seg->c_bytes_used)
 				OSAddAtomic64(-c_seg->c_bytes_used, &compressor_bytes_used);
 		} else {
-#if ENCRYPTED_SWAP
-			vm_swap_decrypt(c_seg);
-#endif /* ENCRYPTED_SWAP */
 			if (c_seg->c_overage_swap == TRUE) {
 				c_seg->c_overage_swap = FALSE;
 				c_overage_swapped_count--;
 			}
 			c_seg_switch_state(c_seg, C_ON_AGE_Q, FALSE);
+
+			if (!c_seg->c_on_minorcompact_q && C_SEG_UNUSED_BYTES(c_seg) >= PAGE_SIZE)
+				c_seg_need_delayed_compaction(c_seg, TRUE);
 		}
-		lck_mtx_unlock_always(c_list_lock);
+		assert(c_seg->c_busy_swapping);
+		assert(c_seg->c_busy);
 
 		c_seg->c_busy_swapping = 0;
+		lck_mtx_unlock_always(c_list_lock);
+
 		C_SEG_WAKEUP_DONE(c_seg);
 		lck_mtx_unlock_always(&c_seg->c_lock);
 
@@ -804,6 +915,15 @@ vm_swap_create_file()
 	boolean_t	swap_file_reuse = FALSE;
 	boolean_t	swap_file_pin = FALSE;
 	struct swapfile *swf = NULL;
+
+	/*
+	 * make sure we've got all the info we need
+	 * to potentially pin a swap file... we could
+	 * be swapping out due to hibernation w/o ever
+	 * having run vm_pageout_scan, which is normally
+	 * the trigger to do the init
+	 */
+	vm_compaction_swapper_do_init();
 
 	/*
   	 * Any swapfile structure ready for re-use?
@@ -911,6 +1031,7 @@ vm_swap_create_file()
 			vm_swapfile_total_segs_alloced += swf->swp_nsegs;
 
 			if (swap_file_pin == TRUE) {
+				vm_num_pinned_swap_files++;
 				swf->swp_flags |= SWAP_PINNED;
 				vm_swappin_avail -= swf->swp_size;
 			}
@@ -940,15 +1061,13 @@ vm_swap_create_file()
 
 
 kern_return_t
-vm_swap_get(vm_offset_t addr, uint64_t f_offset, uint64_t size)
+vm_swap_get(c_segment_t c_seg, uint64_t f_offset, uint64_t size)
 {
 	struct swapfile *swf = NULL;
 	uint64_t	file_offset = 0;
 	int		retval = 0;
 
-	if (addr == 0) {
-		return KERN_FAILURE;
-	}
+	assert(c_seg->c_store.c_buffer);
 
 	lck_mtx_lock(&vm_swap_data_lock);
 
@@ -962,9 +1081,15 @@ vm_swap_get(vm_offset_t addr, uint64_t f_offset, uint64_t size)
 
 	lck_mtx_unlock(&vm_swap_data_lock);
 
+#if DEVELOPMENT || DEBUG
+	C_SEG_MAKE_WRITEABLE(c_seg);
+#endif
 	file_offset = (f_offset & SWAP_SLOT_MASK);
-	retval = vm_swapfile_io(swf->swp_vp, file_offset, addr, (int)(size / PAGE_SIZE_64), SWAP_READ);
+	retval = vm_swapfile_io(swf->swp_vp, file_offset, c_seg->c_store.c_buffer, (int)(size / PAGE_SIZE_64), SWAP_READ);
 
+#if DEVELOPMENT || DEBUG
+	C_SEG_WRITE_PROTECT(c_seg);
+#endif
 	if (retval == 0)
 		VM_STAT_INCR_BY(swapins, size >> PAGE_SHIFT);
 	else
@@ -1357,7 +1482,7 @@ vm_swap_reclaim(void)
 
 	c_segment_t	c_seg = NULL;
 	
-	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&addr), C_SEG_BUFSIZE, 0, KMA_KOBJECT, VM_KERN_MEMORY_COMPRESSOR) != KERN_SUCCESS) {
+	if (kernel_memory_allocate(compressor_map, (vm_offset_t *)(&addr), C_SEG_BUFSIZE, 0, KMA_KOBJECT, VM_KERN_MEMORY_COMPRESSOR) != KERN_SUCCESS) {
 		panic("vm_swap_reclaim: kernel_memory_allocate failed\n");
 	}
 
@@ -1500,7 +1625,7 @@ ReTry_for_cseg:
 			 * reading the data back in failed, so convert c_seg
 			 * to a swapped in c_segment that contains no data
 			 */
-			c_seg_swapin_requeue(c_seg, FALSE);
+			c_seg_swapin_requeue(c_seg, FALSE, TRUE, FALSE);
 			/*
 			 * returns with c_busy_swapping cleared
 			 */
@@ -1519,7 +1644,7 @@ ReTry_for_cseg:
 			 */
 			c_buffer = (vm_offset_t)C_SEG_BUFFER_ADDRESS(c_seg->c_mysegno);
 
-			kernel_memory_populate(kernel_map, c_buffer, c_size, KMA_COMPRESSOR, VM_KERN_MEMORY_COMPRESSOR);
+			kernel_memory_populate(compressor_map, c_buffer, c_size, KMA_COMPRESSOR, VM_KERN_MEMORY_COMPRESSOR);
 
 			memcpy((char *)c_buffer, (char *)addr, c_size);
 
@@ -1527,7 +1652,7 @@ ReTry_for_cseg:
 #if ENCRYPTED_SWAP
 			vm_swap_decrypt(c_seg);
 #endif /* ENCRYPTED_SWAP */
-			c_seg_swapin_requeue(c_seg, TRUE);
+			c_seg_swapin_requeue(c_seg, TRUE, TRUE, FALSE);
 			/*
 			 * returns with c_busy_swapping cleared
 			 */
@@ -1544,8 +1669,11 @@ ReTry_for_cseg:
 		 * The c_seg will now know about the new location on disk.
 		 */
 		c_seg->c_store.c_swap_handle = f_offset;
+
+		assert(c_seg->c_busy_swapping);
 		c_seg->c_busy_swapping = 0;
 swap_io_failed:
+		assert(c_seg->c_busy);
 		C_SEG_WAKEUP_DONE(c_seg);
 				
 		lck_mtx_unlock_always(&c_seg->c_lock);
@@ -1581,6 +1709,7 @@ swap_io_failed:
 	lck_mtx_lock(&vm_swap_data_lock);
 
 	if (swf->swp_flags & SWAP_PINNED) {
+		vm_num_pinned_swap_files--;
 		vm_swappin_avail += swf->swp_size;
 	}
 
@@ -1594,7 +1723,7 @@ done:
 	thread_wakeup((event_t) &swf->swp_flags);
 	lck_mtx_unlock(&vm_swap_data_lock);
 
-	kmem_free(kernel_map, (vm_offset_t) addr, C_SEG_BUFSIZE);
+	kmem_free(compressor_map, (vm_offset_t) addr, C_SEG_BUFSIZE);
 }
 
 
@@ -1641,4 +1770,17 @@ vm_swap_low_on_space(void)
 			return (1);
 	}
 	return (0);
+}
+
+boolean_t
+vm_swap_files_pinned(void)
+{
+        boolean_t result;
+
+	if (vm_swappin_enabled == FALSE)
+		return(TRUE);
+
+        result = (vm_num_pinned_swap_files == vm_num_swap_files);
+
+        return (result);
 }

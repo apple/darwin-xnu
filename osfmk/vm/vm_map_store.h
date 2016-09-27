@@ -59,30 +59,34 @@ struct vm_map_store {
 #include <vm/vm_map_store_ll.h>
 #include <vm/vm_map_store_rb.h>
 
-#define UPDATE_HIGHEST_ENTRY_END(map, highest_entry)	 			\
-	MACRO_BEGIN								\
-	struct _vm_map*	UHEE_map; 						\
-	struct vm_map_entry*	UHEE_entry; 						\
-	UHEE_map = (map); 							\
-	UHEE_entry = (highest_entry);	 					\
-	if( UHEE_map->highest_entry_end < UHEE_entry->vme_end) { 		\
-		UHEE_map->highest_entry_end = UHEE_entry->vme_end;		\
+#define UPDATE_HIGHEST_ENTRY_END(map, highest_entry)			\
+	MACRO_BEGIN							\
+	struct _vm_map*	UHEE_map;					\
+	struct vm_map_entry*	UHEE_entry;				\
+	UHEE_map = (map);						\
+	assert(UHEE_map->disable_vmentry_reuse);			\
+	assert(!UHEE_map->is_nested_map);				\
+	UHEE_entry = (highest_entry);					\
+	if( UHEE_map->highest_entry_end < UHEE_entry->vme_end) {	\
+		UHEE_map->highest_entry_end = UHEE_entry->vme_end;	\
 	}								\
 	MACRO_END
 
-#define	VM_MAP_HIGHEST_ENTRY(map, entry, start)					\
-	MACRO_BEGIN								\
-	struct _vm_map* VMHE_map;							\
-	struct vm_map_entry*	tmp_entry;						\
-	vm_map_offset_t VMHE_start;						\
-	VMHE_map = (map);							\
-	VMHE_start= VMHE_map->highest_entry_end + PAGE_SIZE_64;			\
-	while(vm_map_lookup_entry(VMHE_map, VMHE_start, &tmp_entry)){		\
-		VMHE_map->highest_entry_end = tmp_entry->vme_end;		\
-		VMHE_start = VMHE_map->highest_entry_end + PAGE_SIZE_64;	\
-	}									\
-	entry = tmp_entry;							\
-	start = VMHE_start;							\
+#define	VM_MAP_HIGHEST_ENTRY(map, entry, start)				\
+	MACRO_BEGIN							\
+	struct _vm_map* VMHE_map;					\
+	struct vm_map_entry*	tmp_entry;				\
+	vm_map_offset_t VMHE_start;					\
+	VMHE_map = (map);						\
+	assert(VMHE_map->disable_vmentry_reuse);			\
+	assert(!VMHE_map->is_nested_map);				\
+	VMHE_start= VMHE_map->highest_entry_end + PAGE_SIZE_64;		\
+	while(vm_map_lookup_entry(VMHE_map, VMHE_start, &tmp_entry)){	\
+		VMHE_map->highest_entry_end = tmp_entry->vme_end;	\
+		VMHE_start = VMHE_map->highest_entry_end + PAGE_SIZE_64; \
+	}								\
+	entry = tmp_entry;						\
+	start = VMHE_start;						\
 	MACRO_END
 
 /*

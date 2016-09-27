@@ -13,5 +13,3 @@ EXPORT_MD_DIR = x86_64
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

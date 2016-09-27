@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -894,9 +894,9 @@ vlan_parent_remove_all_vlans(struct ifnet * p)
     vlan_parent_retain(vlp);
     vlan_parent_wait(vlp, "vlan_parent_remove_all_vlans");
     need_vlp_release++;
-    vlp = parent_list_lookup(p);
+
     /* check again */
-    if (vlp == NULL) {
+    if (parent_list_lookup(p) != vlp) {
 	goto signal_done;
     }
 
@@ -1272,7 +1272,6 @@ vlan_input(ifnet_t p, __unused protocol_family_t protocol,
 		   ifnet_type(p));
 	    m_freem(m);
 	    return 0;
-	    break;
 	}
     }
     if (tag != 0) {

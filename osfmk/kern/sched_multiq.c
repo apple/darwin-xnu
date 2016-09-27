@@ -119,7 +119,7 @@
  * or can we get away with putting the entry in either one or the other pset?
  *
  * Consider the right way to handle runq count - I don't want to iterate groups.
- * Perhaps keep a global counter.  sched_run_count will not work.
+ * Perhaps keep a global counter.
  * Alternate option - remove it from choose_processor. It doesn't add much value
  * now that we have global runq.
  *
@@ -175,7 +175,7 @@
 #endif
 
 typedef struct sched_entry {
-	queue_chain_t           links;
+	queue_chain_t           entry_links;
 	int16_t                 sched_pri;      /* scheduled (current) priority */
 	int16_t                 runq;
 	int32_t 		pad;
@@ -462,7 +462,10 @@ __attribute__((always_inline))
 static inline sched_group_t
 group_for_entry(sched_entry_t entry)
 {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-align"
 	sched_group_t group = (sched_group_t)(entry - entry->sched_pri);
+#pragma clang diagnostic pop
 	return group;
 }	
 
@@ -472,9 +475,9 @@ entry_queue_first_entry(entry_queue_t rq)
 {
 	assert(rq->count != 0);
 
-	queue_t queue = rq->queues + rq->highq;
+	queue_t queue = &rq->queues[rq->highq];
 
-	sched_entry_t entry = (sched_entry_t)queue_first(queue);
+	sched_entry_t entry = qe_queue_first(queue, struct sched_entry, entry_links);
 
 	assert(entry->sched_pri == rq->highq);
 
@@ -505,11 +508,12 @@ group_first_thread(sched_group_t group)
 
 	assert(rq->count != 0);
 
-	queue_t queue = rq->queues + rq->highq;
+	queue_t queue = &rq->queues[rq->highq];
 
-	thread_t thread = (thread_t)(void*)queue_first(queue);
+	thread_t thread = qe_queue_first(queue, struct thread, runq_links);
 
 	assert(thread != THREAD_NULL);
+	assert_thread_magic(thread);
 
 	assert(thread->sched_group == group);
 
@@ -526,12 +530,12 @@ entry_queue_check_entry(entry_queue_t runq, sched_entry_t entry, int expected_pr
 	queue_t q;
 	sched_entry_t elem;
 
-	assert(queue_chain_linked(&entry->links));
+	assert(queue_chain_linked(&entry->entry_links));
 	assert(entry->runq == MULTIQ_ERUNQ);
 
 	q = &runq->queues[expected_pri];
 
-	queue_iterate(q, elem, sched_entry_t, links) {
+	qe_foreach_element(elem, q, entry_links) {
 		if (elem == entry)
 			return;
 	}
@@ -551,7 +555,7 @@ sched_group_check_thread(sched_group_t group, thread_t thread)
 
 	q = &group->runq.queues[pri];
 
-	queue_iterate(q, elem, thread_t, links) {
+	qe_foreach_element(elem, q, runq_links) {
 		if (elem == thread)
 			return;
 	}
@@ -608,12 +612,12 @@ static sched_entry_t
 entry_queue_dequeue_entry(entry_queue_t rq)
 {
 	sched_entry_t   sched_entry;
-	queue_t         queue = rq->queues + rq->highq;
+	queue_t         queue = &rq->queues[rq->highq];
 
 	assert(rq->count > 0);
 	assert(!queue_empty(queue));
 
-	sched_entry = (sched_entry_t)dequeue_head(queue);
+	sched_entry = qe_dequeue_head(queue, struct sched_entry, entry_links);
 
 	SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
 	rq->count--;
@@ -621,9 +625,8 @@ entry_queue_dequeue_entry(entry_queue_t rq)
 		rq->urgency--; assert(rq->urgency >= 0);
 	}
 	if (queue_empty(queue)) {
-		if (rq->highq != IDLEPRI)
-			clrbit(MAXPRI - rq->highq, rq->bitmap);
-		rq->highq = MAXPRI - ffsbit(rq->bitmap);
+		rq_bitmap_clear(rq->bitmap, rq->highq);
+		rq->highq = bitmap_first(rq->bitmap, NRQS);
 	}
 
 	sched_entry->runq = 0;
@@ -641,24 +644,24 @@ entry_queue_enqueue_entry(
                           integer_t     options)
 {
 	int             sched_pri = entry->sched_pri;
-	queue_t         queue = rq->queues + sched_pri;
+	queue_t         queue = &rq->queues[sched_pri];
 	boolean_t       result = FALSE;
 
 	assert(entry->runq == 0);
 
 	if (queue_empty(queue)) {
-		enqueue_tail(queue, (queue_entry_t)entry);
+		enqueue_tail(queue, &entry->entry_links);
 
-		setbit(MAXPRI - sched_pri, rq->bitmap);
+		rq_bitmap_set(rq->bitmap, sched_pri);
 		if (sched_pri > rq->highq) {
 			rq->highq = sched_pri;
 			result = TRUE;
 		}
 	} else {
 		if (options & SCHED_TAILQ)
-			enqueue_tail(queue, (queue_entry_t)entry);
+			enqueue_tail(queue, &entry->entry_links);
 		else
-			enqueue_head(queue, (queue_entry_t)entry);
+			enqueue_head(queue, &entry->entry_links);
 	}
 	if (SCHED(priority_is_urgent)(sched_pri))
 		rq->urgency++;
@@ -686,7 +689,7 @@ entry_queue_remove_entry(
 	}
 #endif
 
-	remqueue((queue_entry_t)entry);
+	remqueue(&entry->entry_links);
 
 	SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
 	rq->count--;
@@ -694,11 +697,10 @@ entry_queue_remove_entry(
 		rq->urgency--; assert(rq->urgency >= 0);
 	}
 
-	if (queue_empty(rq->queues + sched_pri)) {
+	if (queue_empty(&rq->queues[sched_pri])) {
 		/* update run queue status */
-		if (sched_pri != IDLEPRI)
-			clrbit(MAXPRI - sched_pri, rq->bitmap);
-		rq->highq = MAXPRI - ffsbit(rq->bitmap);
+		rq_bitmap_clear(rq->bitmap, sched_pri);
+		rq->highq = bitmap_first(rq->bitmap, NRQS);
 	}
 
 	entry->runq = 0;
@@ -711,19 +713,18 @@ entry_queue_change_entry(
                           integer_t     options)
 {
 	int     sched_pri   = entry->sched_pri;
-	queue_t queue       = rq->queues + sched_pri;
+	queue_t queue       = &rq->queues[sched_pri];
 
 #if defined(MULTIQ_SANITY_CHECK)
 	if (multiq_sanity_check) {
 		entry_queue_check_entry(rq, entry, sched_pri);
 	}
 #endif
-	remqueue((queue_entry_t)entry);
 
 	if (options & SCHED_TAILQ)
-		enqueue_tail(queue, (queue_entry_t)entry);
+		re_queue_tail(queue, &entry->entry_links);
 	else
-		enqueue_head(queue, (queue_entry_t)entry);
+		re_queue_head(queue, &entry->entry_links);
 }
 /*
  * The run queue must not be empty.
@@ -737,14 +738,15 @@ group_run_queue_dequeue_thread(
                          boolean_t     *queue_empty)
 {
 	thread_t        thread;
-	queue_t         queue = rq->queues + rq->highq;
+	queue_t         queue = &rq->queues[rq->highq];
 
 	assert(rq->count > 0);
 	assert(!queue_empty(queue));
 
 	*thread_pri = rq->highq;
 
-	thread = (thread_t)(void*)dequeue_head(queue);
+	thread = qe_dequeue_head(queue, struct thread, runq_links);
+	assert_thread_magic(thread);
 
 	SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
 	rq->count--;
@@ -752,15 +754,14 @@ group_run_queue_dequeue_thread(
 		rq->urgency--; assert(rq->urgency >= 0);
 	}
 	if (queue_empty(queue)) {
-		if (rq->highq != IDLEPRI)
-			clrbit(MAXPRI - rq->highq, rq->bitmap);
-		rq->highq = MAXPRI - ffsbit(rq->bitmap);
+		rq_bitmap_clear(rq->bitmap, rq->highq);
+		rq->highq = bitmap_first(rq->bitmap, NRQS);
 		*queue_empty = TRUE;
 	} else {
 		*queue_empty = FALSE;
 	}
 
-	return (thread);
+	return thread;
 }
 
 /*
@@ -774,24 +775,25 @@ group_run_queue_enqueue_thread(
                          integer_t      thread_pri,
                          integer_t      options)
 {
-	queue_t         queue = rq->queues + thread_pri;
+	queue_t         queue = &rq->queues[thread_pri];
 	boolean_t       result = FALSE;
 
 	assert(thread->runq == PROCESSOR_NULL);
+	assert_thread_magic(thread);
 
 	if (queue_empty(queue)) {
-		enqueue_tail(queue, (queue_entry_t)thread);
+		enqueue_tail(queue, &thread->runq_links);
 
-		setbit(MAXPRI - thread_pri, rq->bitmap);
+		rq_bitmap_set(rq->bitmap, thread_pri);
 		if (thread_pri > rq->highq) {
 			rq->highq = thread_pri;
 		}
 		result = TRUE;
 	} else {
 		if (options & SCHED_TAILQ)
-			enqueue_tail(queue, (queue_entry_t)thread);
+			enqueue_tail(queue, &thread->runq_links);
 		else
-			enqueue_head(queue, (queue_entry_t)thread);
+			enqueue_head(queue, &thread->runq_links);
 	}
 	if (SCHED(priority_is_urgent)(thread_pri))
 		rq->urgency++;
@@ -813,9 +815,10 @@ group_run_queue_remove_thread(
 {
 	boolean_t       result = FALSE;
 
+	assert_thread_magic(thread);
 	assert(thread->runq != PROCESSOR_NULL);
 
-	remqueue((queue_entry_t)thread);
+	remqueue(&thread->runq_links);
 
 	SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
 	rq->count--;
@@ -823,11 +826,10 @@ group_run_queue_remove_thread(
 		rq->urgency--; assert(rq->urgency >= 0);
 	}
 
-	if (queue_empty(rq->queues + thread_pri)) {
+	if (queue_empty(&rq->queues[thread_pri])) {
 		/* update run queue status */
-		if (thread_pri != IDLEPRI)
-			clrbit(MAXPRI - thread_pri, rq->bitmap);
-		rq->highq = MAXPRI - ffsbit(rq->bitmap);
+		rq_bitmap_clear(rq->bitmap, thread_pri);
+		rq->highq = bitmap_first(rq->bitmap, NRQS);
 		result = TRUE;
 	}
 
@@ -1213,7 +1215,13 @@ sched_multiq_processor_queue_has_priority(
                                           int           priority,
                                           boolean_t     gte)
 {
-	int qpri = MAX(multiq_main_entryq(processor)->highq, multiq_bound_runq(processor)->highq);
+	run_queue_t main_runq  = multiq_main_entryq(processor);
+	run_queue_t bound_runq = multiq_bound_runq(processor);
+
+	if (main_runq->count == 0 && bound_runq->count == 0)
+		return FALSE;
+
+	int qpri = MAX(main_runq->highq, bound_runq->highq);
 
 	if (gte)
 		return qpri >= priority;
@@ -1278,12 +1286,15 @@ sched_multiq_processor_queue_shutdown(processor_t processor)
 
 	while (main_entryq->count > 0) {
 		thread = sched_global_dequeue_thread(main_entryq);
-		enqueue_tail(&tqueue, (queue_entry_t)thread);
+		enqueue_tail(&tqueue, &thread->runq_links);
 	}
 
 	pset_unlock(pset);
 
-	while ((thread = (thread_t)(void*)dequeue_head(&tqueue)) != THREAD_NULL) {
+	qe_foreach_element_safe(thread, &tqueue, runq_links) {
+
+		remqueue(&thread->runq_links);
+
 		thread_lock(thread);
 
 		thread_setrun(thread, SCHED_TAILQ);
@@ -1346,27 +1357,36 @@ sched_multiq_steal_thread(processor_set_t pset)
  * Scan the global queue for candidate groups, and scan those groups for
  * candidate threads.
  *
+ * TODO: This iterates every group runq in its entirety for each entry it has in the runq, which is O(N^2)
+ *       Instead, iterate only the queue in the group runq matching the priority of the entry.
+ *
  * Returns TRUE if retry is needed.
  */
 static boolean_t
 group_scan(entry_queue_t runq, sched_update_scan_context_t scan_context) {
-	int             count;
-	queue_t         q;
-	sched_group_t   group;
-	sched_entry_t   entry;
+	int count       = runq->count;
+	int queue_index;
 
-	if ((count = runq->count) > 0) {
-		q = runq->queues + runq->highq;
-		while (count > 0) {
-			queue_iterate(q, entry, sched_entry_t, links) {
-				group = group_for_entry(entry);
-				if (group->runq.count > 0) {
-					if (runq_scan(&group->runq, scan_context))
-						return (TRUE);
-				}
-				count--;
+	assert(count >= 0);
+
+	if (count == 0)
+		return FALSE;
+
+	for (queue_index = bitmap_first(runq->bitmap, NRQS);
+	     queue_index >= 0;
+	     queue_index = bitmap_next(runq->bitmap, queue_index)) {
+
+		sched_entry_t entry;
+
+		qe_foreach_element(entry, &runq->queues[queue_index], entry_links) {
+			assert(count > 0);
+
+			sched_group_t group = group_for_entry(entry);
+			if (group->runq.count > 0) {
+				if (runq_scan(&group->runq, scan_context))
+					return (TRUE);
 			}
-			q--;
+			count--;
 		}
 	}
 

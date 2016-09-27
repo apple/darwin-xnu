@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -79,7 +79,7 @@ typedef void (*sock_upcall)(socket_t so, void *cookie, int waitf);
 		when an event status is available.
 	@param so A reference to the socket that's ready.
 	@param cookie The cookie passed in when the socket was created.
-	@param int Indicates the event as defined by SO_FILT_HINT_*
+	@param event Indicates the event as defined by SO_FILT_HINT_*
 */
 typedef void (*sock_evupcall)(socket_t so, void *cookie, u_int32_t event);
 #endif /* KERNEL_PRIVATE */

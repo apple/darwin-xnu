@@ -27,6 +27,7 @@
  */
 
 #include <mach/mach_types.h>
+#include <mach/mach_traps.h>
 #include <mach/notify.h>
 #include <ipc/ipc_types.h>
 #include <ipc/ipc_port.h>
@@ -42,6 +43,7 @@
 #include <mach/mach_voucher_server.h>
 #include <mach/mach_voucher_attr_control_server.h>
 #include <mach/mach_host_server.h>
+#include <voucher/ipc_pthread_priority_types.h>
 
 /*
  * Sysctl variable; enable and disable tracing of voucher contents
@@ -96,6 +98,7 @@ static lck_spin_t ivgt_lock_data;
 
 ipc_voucher_t iv_alloc(iv_index_t entries);
 void iv_dealloc(ipc_voucher_t iv, boolean_t unhash);
+extern int thread_qos_from_pthread_priority(unsigned long, unsigned long *);
 
 static inline iv_refs_t
 iv_reference(ipc_voucher_t iv)
@@ -722,8 +725,9 @@ ipc_voucher_attr_control_notify(mach_msg_header_t *msg)
 		ip_unlock(port);
 
 		ivac_release(ivac);
+	} else {
+		ip_unlock(port);
 	}
-	ip_unlock(port);
 }
 
 /*
@@ -765,7 +769,7 @@ convert_voucher_attr_control_to_port(ipc_voucher_attr_control_t control)
 		assert(IP_NULL == port->ip_nsrequest);
 		ipc_port_nsrequest(port, port->ip_mscount, ipc_port_make_sonce_locked(port), &old_notify);
 		assert(IP_NULL == old_notify);
-		ip_unlock(port);
+		/* ipc_port_nsrequest unlocks the port */
 	} else {
 		/* piggyback on the existing port reference, so consume ours */
 		ip_unlock(port);
@@ -1081,8 +1085,6 @@ static void ivace_release(
 	 * re-drive the release.
 	 */
 	if (ivace->ivace_made != made) {
-		assert(made < ivace->ivace_made);
-
 		if (KERN_SUCCESS == kr)
 			ivace->ivace_made -= made;
 
@@ -1700,7 +1702,7 @@ iv_dedup(ipc_voucher_t new_iv)
 #define PAYLOAD_PER_TRACEPOINT (4 * sizeof(uintptr_t))
 #define PAYLOAD_SIZE 1024
 
-			_Static_assert(PAYLOAD_SIZE % PAYLOAD_PER_TRACEPOINT == 0, "size invariant violated");
+			static_assert(PAYLOAD_SIZE % PAYLOAD_PER_TRACEPOINT == 0, "size invariant violated");
 
 			mach_voucher_attr_raw_recipe_array_size_t payload_size = PAYLOAD_SIZE;
 			uintptr_t payload[PAYLOAD_SIZE / sizeof(uintptr_t)];
@@ -2609,6 +2611,49 @@ host_register_mach_voucher_attr_manager(
 }
 
 /*
+ *	Routine:	ipc_get_pthpriority_from_kmsg_voucher
+ *	Purpose:
+ *		Get the canonicalized pthread priority from the voucher attached in the kmsg.
+ */
+kern_return_t
+ipc_get_pthpriority_from_kmsg_voucher(
+	ipc_kmsg_t kmsg,
+	ipc_pthread_priority_value_t *canonicalize_priority_value)
+{
+	ipc_voucher_t pthread_priority_voucher;
+	mach_voucher_attr_raw_recipe_size_t content_size =
+			sizeof(mach_voucher_attr_recipe_data_t) + sizeof(ipc_pthread_priority_value_t);
+	uint8_t content_data[content_size];
+	mach_voucher_attr_recipe_t cur_content;
+	kern_return_t kr = KERN_SUCCESS;
+
+	if (!IP_VALID(kmsg->ikm_voucher)) {
+		return KERN_FAILURE;
+	}
+
+	pthread_priority_voucher = (ipc_voucher_t)kmsg->ikm_voucher->ip_kobject;
+	kr = mach_voucher_extract_attr_recipe(pthread_priority_voucher,
+				MACH_VOUCHER_ATTR_KEY_PTHPRIORITY,
+				content_data,
+				&content_size);
+	if (kr != KERN_SUCCESS) {
+		return kr;
+	}
+
+	/* return KERN_INVALID_VALUE for default value */
+	if (content_size < sizeof(mach_voucher_attr_recipe_t)) {
+		return KERN_INVALID_VALUE;
+	}
+
+	cur_content = (mach_voucher_attr_recipe_t) (void *) &content_data[0];
+	assert(cur_content->content_size == sizeof(ipc_pthread_priority_value_t));
+	memcpy(canonicalize_priority_value, cur_content->content, sizeof(ipc_pthread_priority_value_t));
+
+	return KERN_SUCCESS;
+}
+
+
+/*
  *	Routine:	ipc_voucher_send_preprocessing
  *	Purpose:
  *		Processing of the voucher in the kmsg before sending it.
@@ -2784,6 +2829,47 @@ ipc_voucher_prepare_processing_recipe(
 
 	*in_out_size = recipe_used;
 	return KERN_SUCCESS;
+}
+
+/*
+ * Activity id Generation
+ */
+uint64_t voucher_activity_id;
+
+#define generate_activity_id(x) \
+	((uint64_t)OSAddAtomic64((x), (int64_t *)&voucher_activity_id))
+
+/*
+ *	Routine:	mach_init_activity_id
+ *	Purpose:
+ *		Initialize voucher activity id.
+ */
+void
+mach_init_activity_id(void)
+{
+	voucher_activity_id = 1;
+}
+
+/*
+ *	Routine:	mach_generate_activity_id
+ *	Purpose:
+ *		Generate a system wide voucher activity id.
+ */
+kern_return_t
+mach_generate_activity_id(
+	struct mach_generate_activity_id_args *args)
+{
+	uint64_t activity_id;
+	kern_return_t kr = KERN_SUCCESS;
+
+	if (args->count <= 0 || args->count > MACH_ACTIVITY_ID_COUNT_MAX) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	activity_id = generate_activity_id(args->count);
+	kr = copyout(&activity_id, args->activity_id, sizeof (activity_id));
+
+	return (kr);
 }
 
 #if defined(MACH_VOUCHER_ATTR_KEY_USER_DATA) || defined(MACH_VOUCHER_ATTR_KEY_TEST)

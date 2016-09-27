@@ -45,6 +45,9 @@
 /* global for whether to read PMCs on context switch */
 int kpc_threads_counting = 0;
 
+/* whether to call into KPC when a thread goes off CPU */
+boolean_t kpc_off_cpu_active = FALSE;
+
 /* current config and number of counters in that config */
 static uint32_t kpc_thread_classes = 0;
 static uint32_t kpc_thread_classes_count = 0;
@@ -111,12 +114,12 @@ kpc_set_thread_counting(uint32_t classes)
 		/* and schedule an AST for this thread... */
 		if( !current_thread()->kpc_buf )
 		{
-			current_thread()->t_chud |= T_KPC_ALLOC;
+			current_thread()->kperf_flags |= T_KPC_ALLOC;
 			act_set_kperf(current_thread());
-		}	
+		}
 	}
 
-    kperf_kpc_cswitch_callback_update();
+    kpc_off_cpu_update();
 	lck_mtx_unlock(&kpc_thread_lock);
 
 	return 0;
@@ -141,24 +144,17 @@ kpc_update_thread_counters( thread_t thread )
 		for( i = 0; i < kpc_thread_classes_count; i++ )
 			thread->kpc_buf[i] += cpu->cpu_kpc_buf[1][i] - cpu->cpu_kpc_buf[0][i];
 
-	
 	/* schedule any necessary allocations */
 	if( !current_thread()->kpc_buf )
 	{
-		current_thread()->t_chud |= T_KPC_ALLOC;
+		current_thread()->kperf_flags |= T_KPC_ALLOC;
 		act_set_kperf(current_thread());
-	}	
+	}
 
 	/* 3. switch the PMC block pointers */
 	tmp = cpu->cpu_kpc_buf[1];
 	cpu->cpu_kpc_buf[1] = cpu->cpu_kpc_buf[0];
 	cpu->cpu_kpc_buf[0] = tmp;
-}
-
-void
-kpc_switch_context( thread_t old, thread_t new __unused )
-{
-	kpc_update_thread_counters( old );
 }
 
 /* get counter values for a thread */
@@ -191,6 +187,19 @@ kpc_get_curthread_counters(uint32_t *inoutcount, uint64_t *buf)
 	return 0;
 }
 
+void
+kpc_off_cpu_update(void)
+{
+	kpc_off_cpu_active = kpc_threads_counting;
+}
+
+void
+kpc_off_cpu_internal(thread_t thread)
+{
+	if (kpc_threads_counting) {
+		kpc_update_thread_counters(thread);
+	}
+}
 
 void
 kpc_thread_create(thread_t thread)
@@ -223,6 +232,6 @@ void
 kpc_thread_ast_handler( thread_t thread )
 {
 	/* see if we want an alloc */
-	if( thread->t_chud & T_KPC_ALLOC )
+	if( thread->kperf_flags & T_KPC_ALLOC )
 		thread->kpc_buf = kpc_counterbuf_alloc();
 }

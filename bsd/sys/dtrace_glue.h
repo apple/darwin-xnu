@@ -366,11 +366,6 @@ typedef uint_t minor_t;
 typedef struct __dev_info *dev_info_t;
 
 extern void ddi_report_dev(dev_info_t *);
-extern int ddi_soft_state_init(void **, size_t, size_t);
-extern void *ddi_get_soft_state(void *, int);
-extern int ddi_soft_state_free(void *, int);
-extern int ddi_soft_state_zalloc(void *, int);
-extern void ddi_soft_state_fini(void **);
 
 int ddi_getprop(dev_t dev, dev_info_t *dip, int flags, const char *name, int defvalue);
 
@@ -510,9 +505,9 @@ extern void vmem_free(vmem_t *vmp, void *vaddr, size_t size);
  * Atomic
  */
 
-static inline void atomic_add_32( uint32_t *theAddress, int32_t theAmount )
+static inline uint32_t atomic_add_32( uint32_t *theAddress, int32_t theAmount )
 {
-	(void)OSAddAtomic( theAmount, theAddress );
+	return OSAddAtomic( theAmount, theAddress );
 }
 
 #if defined(__i386__) || defined(__x86_64__)
@@ -521,6 +516,17 @@ static inline void atomic_add_64( uint64_t *theAddress, int64_t theAmount )
 	(void)OSAddAtomic64( theAmount, (SInt64 *)theAddress );
 }
 #endif
+
+static inline uint32_t atomic_and_32(uint32_t *addr, uint32_t mask)
+{
+	return OSBitAndAtomic(mask, addr);
+}
+
+static inline uint32_t atomic_or_32(uint32_t *addr, uint32_t mask)
+{
+	return OSBitOrAtomic(mask, addr);
+}
+
 
 /*
  * Miscellaneous
@@ -537,13 +543,13 @@ extern volatile int panicwait; /* kern/debug.c */
 
 #define	IS_P2ALIGNED(v, a) ((((uintptr_t)(v)) & ((uintptr_t)(a) - 1)) == 0)
 
-extern void delay( int ); /* kern/clock.h */
-
 extern int vuprintf(const char *, va_list);
 
 extern hrtime_t dtrace_abs_to_nano(uint64_t);
 
 __private_extern__ const char * strstr(const char *, const char *);
+
+#define DTRACE_NCLIENTS 32
 
 #undef proc_t
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -127,6 +127,7 @@
 #include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
 #include <netinet/kpi_ipfilter_var.h>
+#include <netinet/in_tclass.h>
 
 #include <netinet6/ip6protosw.h>
 #include <netinet/icmp6.h>
@@ -150,7 +151,6 @@ extern int ipsec_bypass;
 #endif /* CONFIG_MACF_NET */
 
 #if DUMMYNET
-#include <netinet6/ip6_fw.h>
 #include <netinet/ip_fw.h>
 #include <netinet/ip_dummynet.h>
 #endif /* DUMMYNET */
@@ -418,7 +418,7 @@ tags_done:
 		}
 		/* If packet is bound to an interface, check bound policies */
 		if ((flags & IPV6_OUTARGS) &&
-			(ip6oa->ip6oa_flags & IPOAF_BOUND_IF) &&
+			(ip6oa->ip6oa_flags & IP6OAF_BOUND_IF) &&
 			ip6oa->ip6oa_boundif != IFSCOPE_NONE) {
 			/* ip6obf.noipsec is a bitfield, use temp integer */
 			int noipsec = 0;
@@ -431,10 +431,10 @@ tags_done:
 		}
 	}
 #endif /* IPSEC */
-	
+
 	ippo = &ipf_pktopts;
 
-	if (ip6_doscopedroute && (flags & IPV6_OUTARGS)) {
+	if (flags & IPV6_OUTARGS) {
 		/*
 		 * In the forwarding case, only the ifscope value is used,
 		 * as source interface selection doesn't take place.
@@ -615,14 +615,13 @@ loopit:
 					goto freehdrs;
 				}
 			}
-			break;
 		}
 		default:
 			break;
 		}
 	}
 #endif /* NECP */
-	
+
 #if IPSEC
 	if (ipsec_bypass != 0 || ip6obf.noipsec)
 		goto skip_ipsec;
@@ -1319,7 +1318,7 @@ routefound:
 			 * forbid loopback, loop back a copy.
 			 */
 			ip6_mloopback(NULL, ifp, m, dst, optlen, nxt0);
-		} else if (im6o != NULL) 
+		} else if (im6o != NULL)
 			IM6O_UNLOCK(im6o);
 		if (in6m != NULL)
 			IN6M_REMREF(in6m);
@@ -1385,28 +1384,6 @@ routefound:
 	 */
 	in6_clearscope(&ip6->ip6_src);
 	in6_clearscope(&ip6->ip6_dst);
-
-#if IPFW2
-	/*
-	 * Check with the firewall...
-	 */
-	if (ip6_fw_enable && ip6_fw_chk_ptr) {
-		u_short port = 0;
-		m->m_pkthdr.rcvif = NULL;	/* XXX */
-		/* If ipfw says divert, we have to just drop packet */
-		if (ip6_fw_chk_ptr(&ip6, ifp, &port, &m) || m == NULL) {
-			if (m != NULL) {
-				m_freem(m);
-				m = NULL;
-				goto evaluateloop;
-			} else {
-				error = EACCES;
-				goto bad;
-			}
-		}
-	}
-#endif /* IPFW2 */
-
 	/*
 	 * If the outgoing packet contains a hop-by-hop options header,
 	 * it must be examined and processed even by the source node.
@@ -1491,6 +1468,22 @@ check_with_pf:
 	ipsec_delaux(m);
 #endif /* IPSEC */
 
+	if (ip6oa != NULL) {
+		u_int8_t dscp;
+		
+		dscp = (ntohl(ip6->ip6_flow) & IP6FLOW_DSCP_MASK) >> IP6FLOW_DSCP_SHIFT;
+
+		error = set_packet_qos(m, ifp,
+		    ip6oa->ip6oa_flags & IP6OAF_QOSMARKING_ALLOWED ? TRUE : FALSE,
+		    ip6oa->ip6oa_sotc, ip6oa->ip6oa_netsvctype, &dscp);
+		if (error == 0) {
+			ip6->ip6_flow &= ~htonl(IP6FLOW_DSCP_MASK);
+			ip6->ip6_flow |= htonl((u_int32_t)dscp << IP6FLOW_DSCP_SHIFT);
+		} else {
+			printf("%s if_dscp_for_mbuf() error %d\n", __func__, error);
+			error = 0;
+		}
+	}
 	/*
 	 * Determine whether fragmentation is necessary. If so, m is passed
 	 * back as a chain of packets and original mbuf is freed. Otherwise, m
@@ -1666,6 +1659,9 @@ ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
 	int error = 0;
 	size_t tlen = m->m_pkthdr.len;
 	boolean_t dontfrag = (opt != NULL && (opt->ip6po_flags & IP6PO_DONTFRAG));
+
+	if (m->m_pkthdr.pkt_flags & PKTF_FORWARDED)
+		dontfrag = TRUE;
 
 	if (dontfrag && alwaysfrag) {	/* case 4 */
 		/* conflicting request - can't transmit */
@@ -2657,12 +2653,12 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				caddr_t req = NULL;
 				size_t len = 0;
 				struct mbuf *m;
-				
+
 				if ((error = soopt_getm(sopt, &m)) != 0)
 					break;
 				if ((error = soopt_mcopyin(sopt, m)) != 0)
 					break;
-				
+
 				req = mtod(m, caddr_t);
 				len = m->m_len;
 				error = ipsec6_set_policy(in6p, optname, req,
@@ -2671,20 +2667,6 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				break;
 			}
 #endif /* IPSEC */
-#if IPFIREWALL
-			case IPV6_FW_ADD:
-			case IPV6_FW_DEL:
-			case IPV6_FW_FLUSH:
-			case IPV6_FW_ZERO: {
-				if (ip6_fw_ctl_ptr == NULL)
-					load_ip6fw();
-				if (ip6_fw_ctl_ptr != NULL)
-					error = (*ip6_fw_ctl_ptr)(sopt);
-				else
-					error = ENOPROTOOPT;
-				break;
-			}
-#endif /* IPFIREWALL */
 			/*
 			 * IPv6 variant of IP_BOUND_IF; for details see
 			 * comments on IP_BOUND_IF in ip_ctloutput().
@@ -2914,17 +2896,6 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				break;
 			}
 #endif /* IPSEC */
-#if IPFIREWALL
-			case IPV6_FW_GET: {
-				if (ip6_fw_ctl_ptr == NULL)
-					load_ip6fw();
-				if (ip6_fw_ctl_ptr != NULL)
-					error = (*ip6_fw_ctl_ptr)(sopt);
-				else
-					error = ENOPROTOOPT;
-				break;
-			}
-#endif /* IPFIREWALL */
 			case IPV6_BOUND_IF:
 				if (in6p->inp_flags & INP_BOUND_IF)
 					optval = in6p->inp_boundifp->if_index;
@@ -4179,4 +4150,3 @@ sysctl_ip6_output_getperf SYSCTL_HANDLER_ARGS
 
 	return (SYSCTL_OUT(req, &net_perf, MIN(sizeof (net_perf), req->oldlen)));
 }
-

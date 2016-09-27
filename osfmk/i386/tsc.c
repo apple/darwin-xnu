@@ -222,7 +222,6 @@ tsc_init(void)
 
 		break;
             }
-	case CPUFAMILY_INTEL_MEROM:
 	case CPUFAMILY_INTEL_PENRYN: {
 		uint64_t	prfsts;
 

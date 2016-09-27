@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -227,6 +227,7 @@ struct	ipstat {
 	u_int32_t ips_rxc_chainsz_gt2;	/* rx chain size greater than 2 */
 	u_int32_t ips_rxc_chainsz_gt4;  /* rx chain size greater than 4 */
 	u_int32_t ips_rxc_notlist;	/* count of pkts through ip_input */
+	u_int32_t ips_raw_sappend_fail;	/* sock append failed */
 
 };
 
@@ -294,8 +295,11 @@ struct ip_out_args {
 #define	IPOAF_NO_EXPENSIVE	0x00000020	/* skip IFT_EXPENSIVE */
 #define	IPOAF_AWDL_UNRESTRICTED	0x00000040	/* can send over 
 						   AWDL_RESTRICTED */
+#define	IPOAF_QOSMARKING_ALLOWED	0x00000080	/* policy allows Fastlane DSCP marking */
 	u_int32_t	ipoa_retflags;	/* IPOARF return flags (see below) */
 #define	IPOARF_IFDENIED	0x00000001	/* denied access to interface */
+	int		ipoa_sotc;	/* traffic class for Fastlane DSCP mapping */
+	int		ipoa_netsvctype; /* network service type */
 };
 
 extern struct ipstat ipstat;
@@ -305,7 +309,6 @@ extern int ip_defttl;			/* default IP ttl */
 extern int ipforwarding;		/* ip forwarding */
 extern struct protosw *ip_protox[];
 extern struct pr_usrreqs rip_usrreqs;
-extern int ip_doscopedroute;
 
 extern void ip_moptions_init(void);
 extern struct ip_moptions *ip_allocmoptions(int);

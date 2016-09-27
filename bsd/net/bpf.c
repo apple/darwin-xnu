@@ -2196,73 +2196,22 @@ bpfselect(dev_t dev, int which, void * wql, struct proc *p)
 int bpfkqfilter(dev_t dev, struct knote *kn);
 static void filt_bpfdetach(struct knote *);
 static int filt_bpfread(struct knote *, long);
+static int filt_bpftouch(struct knote *kn, struct kevent_internal_s *kev);
+static int filt_bpfprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
 
-static struct filterops bpfread_filtops = {
+struct filterops bpfread_filtops = {
 	.f_isfd = 1, 
 	.f_detach = filt_bpfdetach,
 	.f_event = filt_bpfread,
+	.f_touch = filt_bpftouch,
+	.f_process = filt_bpfprocess,
 };
 
-int
-bpfkqfilter(dev_t dev, struct knote *kn)
-{
-	struct bpf_d *d;
-
-	/*
-	 * Is this device a bpf?
-	 */
-	if (major(dev) != CDEV_MAJOR) {
-		return (EINVAL);
-	}
-
-	if (kn->kn_filter != EVFILT_READ) {
-		return (EINVAL);
-	}
-
-	lck_mtx_lock(bpf_mlock);
-
-	d = bpf_dtab[minor(dev)];
-	if (d == 0 || d == (void *)1 || (d->bd_flags & BPF_CLOSING) != 0) {
-		lck_mtx_unlock(bpf_mlock);
-		return (ENXIO);
-	}
-
-	if (d->bd_bif == NULL) {
-		lck_mtx_unlock(bpf_mlock);
-		return (ENXIO);
-	}
-
-	kn->kn_hook = d;
-	kn->kn_fop = &bpfread_filtops;
-	KNOTE_ATTACH(&d->bd_sel.si_note, kn);
-	d->bd_flags |= BPF_KNOTE;
-
-	lck_mtx_unlock(bpf_mlock);
-	return (0);
-}
-
-static void
-filt_bpfdetach(struct knote *kn)
-{
-	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
-
-	lck_mtx_lock(bpf_mlock);
-	if (d->bd_flags & BPF_KNOTE) {
-		KNOTE_DETACH(&d->bd_sel.si_note, kn);
-		d->bd_flags &= ~BPF_KNOTE;
-	}
-	lck_mtx_unlock(bpf_mlock);
-}
-
 static int
-filt_bpfread(struct knote *kn, long hint)
+filt_bpfread_common(struct knote *kn, struct bpf_d *d)
 {
-	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
 	int ready = 0;
 
-	if (hint == 0)
-		lck_mtx_lock(bpf_mlock);
-	
 	if (d->bd_immediate) {
 		/*
 		 * If there's data in the hold buffer, it's the 
@@ -2312,9 +2261,111 @@ filt_bpfread(struct knote *kn, long hint)
 	if (!ready)
 		bpf_start_timer(d);
 
-	if (hint == 0)
-		lck_mtx_unlock(bpf_mlock);
 	return (ready);
+}
+
+int
+bpfkqfilter(dev_t dev, struct knote *kn)
+{
+	struct bpf_d *d;
+	int res;
+
+	/*
+	 * Is this device a bpf?
+	 */
+	if (major(dev) != CDEV_MAJOR ||
+	    kn->kn_filter != EVFILT_READ) {
+		kn->kn_flags = EV_ERROR;
+		kn->kn_data = EINVAL;
+		return 0;
+	}
+
+	lck_mtx_lock(bpf_mlock);
+
+	d = bpf_dtab[minor(dev)];
+
+	if (d == 0 ||
+	    d == (void *)1 ||
+	    d->bd_bif == NULL ||
+	    (d->bd_flags & BPF_CLOSING) != 0) {
+		lck_mtx_unlock(bpf_mlock);
+		kn->kn_flags = EV_ERROR;
+		kn->kn_data = ENXIO;
+		return 0;
+	}
+
+	kn->kn_hook = d;
+	kn->kn_filtid = EVFILTID_BPFREAD;
+	KNOTE_ATTACH(&d->bd_sel.si_note, kn);
+	d->bd_flags |= BPF_KNOTE;
+
+	/* capture the current state */
+	res = filt_bpfread_common(kn, d);
+
+	lck_mtx_unlock(bpf_mlock);
+
+	return (res);
+}
+
+static void
+filt_bpfdetach(struct knote *kn)
+{
+	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
+
+	lck_mtx_lock(bpf_mlock);
+	if (d->bd_flags & BPF_KNOTE) {
+		KNOTE_DETACH(&d->bd_sel.si_note, kn);
+		d->bd_flags &= ~BPF_KNOTE;
+	}
+	lck_mtx_unlock(bpf_mlock);
+}
+
+static int
+filt_bpfread(struct knote *kn, long hint)
+{
+#pragma unused(hint)
+	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
+
+	return filt_bpfread_common(kn, d);
+}
+
+static int
+filt_bpftouch(struct knote *kn, struct kevent_internal_s *kev)
+{
+	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
+	int res;
+
+	lck_mtx_lock(bpf_mlock);
+
+	/* save off the lowat threshold and flag */
+	kn->kn_sdata = kev->data;
+	kn->kn_sfflags = kev->fflags;
+	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
+		kn->kn_udata = kev->udata;
+
+	/* output data will be re-generated here */
+	res = filt_bpfread_common(kn, d);
+
+	lck_mtx_unlock(bpf_mlock);
+
+	return res;
+}
+
+static int
+filt_bpfprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+{
+#pragma unused(data)
+	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
+	int res;
+
+	lck_mtx_lock(bpf_mlock);
+	res = filt_bpfread_common(kn, d);
+	if (res) {
+		*kev = kn->kn_kevent;
+	}
+	lck_mtx_unlock(bpf_mlock);
+
+	return res;
 }
 
 /*
@@ -2564,6 +2615,18 @@ catchpacket(struct bpf_d *d, u_char *pkt, struct mbuf *m, u_int pktlen,
 			}
 			ehp->bh_svc = so_svc2tc(m->m_pkthdr.pkt_svc);
 			ehp->bh_flags |= BPF_HDR_EXT_FLAGS_DIR_OUT;
+			if (m->m_pkthdr.pkt_flags & PKTF_TCP_REXMT)
+				ehp->bh_pktflags |= BPF_PKTFLAGS_TCP_REXMT;
+			if (m->m_pkthdr.pkt_flags & PKTF_START_SEQ)
+				ehp->bh_pktflags |= BPF_PKTFLAGS_START_SEQ;
+			if (m->m_pkthdr.pkt_flags & PKTF_LAST_PKT)
+				ehp->bh_pktflags |= BPF_PKTFLAGS_LAST_PKT;
+			if (m->m_pkthdr.pkt_flags & PKTF_VALID_UNSENT_DATA) {
+				ehp->bh_unsent_bytes =
+				    m->m_pkthdr.bufstatus_if;
+				ehp->bh_unsent_snd =
+				    m->m_pkthdr.bufstatus_sndbuf;
+			}
 		} else
 			ehp->bh_flags |= BPF_HDR_EXT_FLAGS_DIR_IN;
  		payload = (u_char *)ehp + hdrlen;

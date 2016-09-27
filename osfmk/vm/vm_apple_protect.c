@@ -45,12 +45,10 @@
 #include <kern/page_decrypt.h>
 #include <kern/queue.h>
 #include <kern/thread.h>
+#include <kern/ipc_kobject.h>
 
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
-
-#include <default_pager/default_pager_types.h>
-#include <default_pager/default_pager_object_server.h>
 
 #include <vm/vm_fault.h>
 #include <vm/vm_map.h>
@@ -58,6 +56,7 @@
 #include <vm/memory_object.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
+#include <vm/vm_kern.h>
 
 
 /* 
@@ -277,6 +276,12 @@ apple_protect_pager_init(
 		panic("apple_protect_pager_init: "
 		      "memory_object_change_attributes() failed");
 
+#if CONFIG_SECLUDED_MEMORY
+	if (secluded_for_filecache) {
+		memory_object_mark_eligible_for_secluded(control, TRUE);
+	}
+#endif /* CONFIG_SECLUDED_MEMORY */
+
 	return KERN_SUCCESS;
 }
 
@@ -347,7 +352,7 @@ apple_protect_pager_data_request(
 	upl_size_t		upl_size;
 	upl_page_info_t		*upl_pl;
 	unsigned int		pl_count;
-	vm_object_t		src_object, dst_object;
+	vm_object_t		src_top_object, src_page_object, dst_object;
 	kern_return_t		kr, retval;
 	vm_map_offset_t		kernel_mapping;
 	vm_offset_t		src_vaddr, dst_vaddr;
@@ -363,7 +368,8 @@ apple_protect_pager_data_request(
 	PAGER_DEBUG(PAGER_ALL, ("apple_protect_pager_data_request: %p, %llx, %x, %x\n", mem_obj, offset, length, protection_required));
 
 	retval = KERN_SUCCESS;
-	src_object = VM_OBJECT_NULL;
+	src_top_object = VM_OBJECT_NULL;
+	src_page_object = VM_OBJECT_NULL;
 	kernel_mapping = 0;
 	upl = NULL;
 	upl_pl = NULL;
@@ -440,9 +446,9 @@ apple_protect_pager_data_request(
 	 * backing VM object (itself backed by the encrypted file via
 	 * the vnode pager).
 	 */
-	src_object = pager->backing_object;
-	assert(src_object != VM_OBJECT_NULL);
-	vm_object_reference(src_object); /* to keep the source object alive */
+	src_top_object = pager->backing_object;
+	assert(src_top_object != VM_OBJECT_NULL);
+	vm_object_reference(src_top_object); /* keep the source object alive */
 
 	/*
 	 * Fill in the contents of the pages requested by VM.
@@ -462,15 +468,15 @@ apple_protect_pager_data_request(
 		/*
 		 * Map the source (encrypted) page in the kernel's
 		 * virtual address space.
-		 * We already hold a reference on the src_object.
+		 * We already hold a reference on the src_top_object.
 		 */
 	retry_src_fault:
-		vm_object_lock(src_object);
-		vm_object_paging_begin(src_object);
+		vm_object_lock(src_top_object);
+		vm_object_paging_begin(src_top_object);
 		error_code = 0;
 		prot = VM_PROT_READ;
 		src_page = VM_PAGE_NULL;
-		kr = vm_fault_page(src_object,
+		kr = vm_fault_page(src_top_object,
 				   pager->backing_offset + offset + cur_offset,
 				   VM_PROT_READ,
 				   FALSE,
@@ -498,8 +504,8 @@ apple_protect_pager_data_request(
 			goto done;
 		case VM_FAULT_SUCCESS_NO_VM_PAGE:
 			/* success but no VM page: fail */
-			vm_object_paging_end(src_object);
-			vm_object_unlock(src_object);
+			vm_object_paging_end(src_top_object);
+			vm_object_unlock(src_top_object);
 			/*FALLTHROUGH*/
 		case VM_FAULT_MEMORY_ERROR:
 			/* the page is not there ! */
@@ -517,13 +523,11 @@ apple_protect_pager_data_request(
 		assert(src_page != VM_PAGE_NULL);
 		assert(src_page->busy);
 
-		if (!src_page->active &&
-		    !src_page->inactive &&
-		    !src_page->throttled) {
+		if (( !VM_PAGE_NON_SPECULATIVE_PAGEABLE(src_page))) {
+
 			vm_page_lockspin_queues();
-			if (!src_page->active &&
-			    !src_page->inactive &&
-			    !src_page->throttled) {
+
+			if (( !VM_PAGE_NON_SPECULATIVE_PAGEABLE(src_page))) {
 				vm_page_deactivate(src_page);
 			}
 			vm_page_unlock_queues();
@@ -535,12 +539,12 @@ apple_protect_pager_data_request(
 		 */
 #if __x86_64__
 		src_vaddr = (vm_map_offset_t)
-			PHYSMAP_PTOV((pmap_paddr_t)src_page->phys_page
+			PHYSMAP_PTOV((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
 				     << PAGE_SHIFT);
 #else
 		pmap_enter(kernel_pmap,
 			   src_vaddr,
-			   src_page->phys_page,
+			   VM_PAGE_GET_PHYS_PAGE(src_page),
 			   VM_PROT_READ,
 			   VM_PROT_NONE,
 			   0,
@@ -567,11 +571,12 @@ apple_protect_pager_data_request(
 			   0,
 			   TRUE);
 #endif
+		src_page_object = VM_PAGE_OBJECT(src_page);
 
 		/*
 		 * Validate the original page...
 		 */
-		if (src_page->object->code_signed) {
+		if (src_page_object->code_signed) {
 			vm_page_validate_cs_mapped(
 				src_page,
 				(const void *) src_vaddr);
@@ -594,8 +599,8 @@ apple_protect_pager_data_request(
 		 * to unlock the object here.
 		 */
 		assert(src_page->busy);
-		assert(src_page->object->paging_in_progress > 0);
-		vm_object_unlock(src_page->object);
+		assert(src_page_object->paging_in_progress > 0);
+		vm_object_unlock(src_page_object);
 
 		/*
 		 * Decrypt the encrypted contents of the source page
@@ -633,7 +638,7 @@ apple_protect_pager_data_request(
 							     offset_in_page),
 					       *(uint64_t *)(dst_vaddr+
 							     offset_in_page+8),
-					       src_page->object->code_signed,
+					       src_page_object->code_signed,
 					       src_page->cs_validated,
 					       src_page->cs_tainted,
 					       src_page->cs_nx);
@@ -679,7 +684,7 @@ apple_protect_pager_data_request(
 				       (uint64_t) offset_in_page,
 				       *(uint64_t *)(dst_vaddr+offset_in_page),
 				       *(uint64_t *)(dst_vaddr+offset_in_page+8),
-				       src_page->object->code_signed,
+				       src_page_object->code_signed,
 				       src_page->cs_validated,
 				       src_page->cs_tainted,
 				       src_page->cs_nx,
@@ -696,9 +701,10 @@ apple_protect_pager_data_request(
 			retval = KERN_ABORTED;
 		}
 
+		assert(VM_PAGE_OBJECT(src_page) == src_page_object);
 		assert(src_page->busy);
-		assert(src_page->object->paging_in_progress > 0);
-		vm_object_lock(src_page->object);
+		assert(src_page_object->paging_in_progress > 0);
+		vm_object_lock(src_page_object);
 
 #if __x86_64__ || __arm__ || __arm64__
 		/* we used the 1-to-1 mapping of physical memory */
@@ -717,17 +723,38 @@ apple_protect_pager_data_request(
 		/*
 		 * Cleanup the result of vm_fault_page() of the source page.
 		 */
-		PAGE_WAKEUP_DONE(src_page);
-		vm_object_paging_end(src_page->object);
-		vm_object_unlock(src_page->object);
-		if (top_page != VM_PAGE_NULL) {
-			vm_object_t top_object;
+		if (retval == KERN_SUCCESS &&
+		    src_page->busy &&
+		    !VM_PAGE_WIRED(src_page) &&
+		    !src_page->dirty &&
+		    !src_page->precious &&
+		    !src_page->laundry &&
+		    !src_page->cleaning) {
+			int refmod_state;
 
-			top_object = top_page->object;
-			vm_object_lock(top_object);
+			refmod_state = pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(src_page));
+
+			if (refmod_state & VM_MEM_MODIFIED) {
+				SET_PAGE_DIRTY(src_page, FALSE);
+			}
+			if (!src_page->dirty) {
+				vm_page_free_unlocked(src_page, TRUE);
+				src_page = VM_PAGE_NULL;
+			} else {
+				PAGE_WAKEUP_DONE(src_page);
+			}
+		} else {
+			PAGE_WAKEUP_DONE(src_page);
+		}
+		src_page = VM_PAGE_NULL;
+		vm_object_paging_end(src_page_object);
+		vm_object_unlock(src_page_object);
+		if (top_page != VM_PAGE_NULL) {
+			assert(VM_PAGE_OBJECT(top_page) == src_top_object);
+			vm_object_lock(src_top_object);
 			VM_PAGE_FREE(top_page);
-			vm_object_paging_end(top_object);
-			vm_object_unlock(top_object);
+			vm_object_paging_end(src_top_object);
+			vm_object_unlock(src_top_object);
 		}
 	}
 
@@ -796,8 +823,8 @@ done:
 		src_vaddr = 0;
 		dst_vaddr = 0;
 	}
-	if (src_object != VM_OBJECT_NULL) {
-		vm_object_deallocate(src_object);
+	if (src_top_object != VM_OBJECT_NULL) {
+		vm_object_deallocate(src_top_object);
 	}
 
 	return retval;

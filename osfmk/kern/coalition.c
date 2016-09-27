@@ -80,6 +80,7 @@ static uint64_t coalition_next_id = 1;
 static queue_head_t coalitions_q;
 
 coalition_t init_coalition[COALITION_NUM_TYPES];
+coalition_t corpse_coalition[COALITION_NUM_TYPES];
 
 zone_t coalition_zone;
 
@@ -168,6 +169,7 @@ struct i_resource_coalition {
 	ledger_t ledger;
 	uint64_t bytesread;
 	uint64_t byteswritten;
+	uint64_t energy;
 	uint64_t gpu_time;
 	uint64_t logical_immediate_writes;
 	uint64_t logical_deferred_writes;
@@ -297,6 +299,7 @@ coalition_notify_user(uint64_t id, uint32_t flags)
 	}
 
 	coalition_notification(user_port, id, flags);
+	ipc_port_release_send(user_port);
 }
 
 /*
@@ -442,9 +445,17 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 {
 	kern_return_t kr;
 	ledger_amount_t credit, debit;
+	int i;
 
 	if (coal->type != COALITION_TYPE_RESOURCE)
 		return KERN_INVALID_ARGUMENT;
+
+	/* Return KERN_INVALID_ARGUMENT for Corpse coalition */
+	for (i = 0; i < COALITION_NUM_TYPES; i++) {
+		if (coal == corpse_coalition[i]) {
+			return KERN_INVALID_ARGUMENT;
+		}
+	}
 
 	ledger_t sum_ledger = ledger_instantiate(task_ledger_template, LEDGER_CREATE_ACTIVE_ENTRIES);
 	if (sum_ledger == LEDGER_NULL)
@@ -460,6 +471,7 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	uint64_t bytesread = coal->r.bytesread;
 	uint64_t byteswritten = coal->r.byteswritten;
 	uint64_t gpu_time = coal->r.gpu_time;
+	uint64_t energy = coal->r.energy;
 	uint64_t logical_immediate_writes = coal->r.logical_immediate_writes;
 	uint64_t logical_deferred_writes = coal->r.logical_deferred_writes;
 	uint64_t logical_invalidated_writes = coal->r.logical_invalidated_writes;
@@ -539,6 +551,7 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	cru_out->bytesread = bytesread;
 	cru_out->byteswritten = byteswritten;
 	cru_out->gpu_time = gpu_time;
+	cru_out->energy = energy;
 	cru_out->logical_immediate_writes = logical_immediate_writes;
 	cru_out->logical_deferred_writes = logical_deferred_writes;
 	cru_out->logical_invalidated_writes = logical_invalidated_writes;
@@ -1173,6 +1186,18 @@ coalitions_adopt_init_task(task_t task)
 	return kr;
 }
 
+/* Used for forked corpses. */
+kern_return_t
+coalitions_adopt_corpse_task(task_t task)
+{
+	kern_return_t kr;
+	kr = coalitions_adopt_task(corpse_coalition, task);
+	if (kr != KERN_SUCCESS) {
+		panic("failed to adopt task %p into corpse coalition: %d", task, kr);
+	}
+	return kr;
+}
+
 /*
  * coalition_adopt_task_internal
  * Condition: Coalition must be referenced and unlocked. Will fail if coalition
@@ -1313,8 +1338,11 @@ task_release_coalitions(task_t task)
 {
 	int i;
 	for (i = 0; i < COALITION_NUM_TYPES; i++) {
-		if (task->coalition[i])
+		if (task->coalition[i]) {
 			coalition_release(task->coalition[i]);
+		} else if (i == COALITION_TYPE_RESOURCE) {
+			panic("deallocating task %p was not a member of a resource coalition", task);
+		}
 	}
 }
 
@@ -1516,6 +1544,10 @@ coalitions_init(void)
 		kr = coalition_create_internal(ctype->type, TRUE, &init_coalition[ctype->type]);
 		if (kr != KERN_SUCCESS)
 			panic("%s: could not create init %s coalition: kr:%d",
+			      __func__, coal_type_str(i), kr);
+		kr = coalition_create_internal(ctype->type, FALSE, &corpse_coalition[ctype->type]);
+		if (kr != KERN_SUCCESS)
+			panic("%s: could not create corpse %s coalition: kr:%d",
 			      __func__, coal_type_str(i), kr);
 	}
 

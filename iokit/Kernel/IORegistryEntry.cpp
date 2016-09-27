@@ -25,13 +25,6 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
- *
- * HISTORY
- * 12 Nov 98 sdouglas created.
- *
- */
 
 #include <IOKit/IORegistryEntry.h>
 #include <libkern/c++/OSContainers.h>
@@ -62,12 +55,21 @@ OSDefineMetaClassAndStructors(IORegistryEntry, OSObject)
 
 #define KASLR_IOREG_DEBUG 0
 
+struct IORegistryEntry::ExpansionData
+{
+    IORecursiveLock * fLock;
+    uint64_t	      fRegistryEntryID;
+    SInt32            fRegistryEntryGenerationCount;
+};
+
+
 static IORegistryEntry * gRegistryRoot;
 static OSDictionary * 	 gIORegistryPlanes;
 
 const OSSymbol * 	gIONameKey;
 const OSSymbol * 	gIOLocationKey;
 const OSSymbol * 	gIORegistryEntryIDKey;
+const OSSymbol * 	gIORegistryEntryPropertyKeysKey;
 
 enum {
     kParentSetIndex	= 0,
@@ -110,8 +112,8 @@ static SInt32			gIORegistryGenerationCount;
 		gIORegistryGenerationCount++
 		// make atomic
 
-#define PUNLOCK	IORecursiveLockUnlock( gPropertiesLock )
-#define PLOCK	IORecursiveLockLock( gPropertiesLock )
+#define PUNLOCK	IORecursiveLockUnlock( reserved->fLock )
+#define PLOCK	IORecursiveLockLock( reserved->fLock )
 
 #define IOREGSPLITTABLES
 
@@ -162,6 +164,7 @@ IORegistryEntry * IORegistryEntry::initialize( void )
 	gIONameKey = OSSymbol::withCStringNoCopy( "IOName" );
 	gIOLocationKey = OSSymbol::withCStringNoCopy( "IOLocation" );
 	gIORegistryEntryIDKey = OSSymbol::withCStringNoCopy( kIORegistryEntryIDKey );
+        gIORegistryEntryPropertyKeysKey = OSSymbol::withCStringNoCopy( kIORegistryEntryPropertyKeysKey );
 
 	assert( ok && gIONameKey && gIOLocationKey );
 
@@ -182,6 +185,10 @@ SInt32 IORegistryEntry::getGenerationCount( void )
     return( gIORegistryGenerationCount );
 }
 
+SInt32 IORegistryEntry::getRegistryEntryGenerationCount(void) const
+{
+    return (reserved->fRegistryEntryGenerationCount);
+}
 
 const IORegistryPlane * IORegistryEntry::makePlane( const char * name )
 {
@@ -278,6 +285,8 @@ bool IORegistryEntry::init( OSDictionary * dict )
 	if (!reserved)
 	    return (false);
 	bzero(reserved, sizeof(ExpansionData));
+	reserved->fLock = IORecursiveLockAlloc();
+	if (!reserved->fLock) return (false);
     }
     if( dict) {
 	if (OSCollection::kImmutable & dict->setOptions(0, 0)) {
@@ -328,13 +337,20 @@ bool IORegistryEntry::init( IORegistryEntry * old,
     if( !super::init())
 	return( false);
 
+    if (!reserved)
+    {
+	reserved = IONew(ExpansionData, 1);
+	if (!reserved) return (false);
+	bzero(reserved, sizeof(ExpansionData));
+	reserved->fLock = IORecursiveLockAlloc();
+	if (!reserved->fLock) return (false);
+    }
+
     WLOCK;
 
-    reserved = old->reserved;
-    old->reserved = NULL;
+    reserved->fRegistryEntryID = old->reserved->fRegistryEntryID;
 
-    fPropertyTable = old->getPropertyTable();
-    fPropertyTable->retain();
+    fPropertyTable = old->dictionaryWithProperties();
 #ifdef IOREGSPLITTABLES
     fRegistryTable = old->fRegistryTable;
     old->fRegistryTable = (OSDictionary *) fRegistryTable->copyCollection();
@@ -384,17 +400,21 @@ void IORegistryEntry::free( void )
 #endif /* IOREGSPLITTABLES */
 
     if (reserved)
+    {
+	if (reserved->fLock) IORecursiveLockFree(reserved->fLock);
 	IODelete(reserved, ExpansionData, 1);
+    }
 
     super::free();
 }
 
 void IORegistryEntry::setPropertyTable( OSDictionary * dict )
 {
-    if( fPropertyTable)
-	fPropertyTable->release();
     if( dict)
 	dict->retain();
+    if( fPropertyTable)
+	fPropertyTable->release();
+
     fPropertyTable = dict;
 }
 
@@ -473,9 +493,20 @@ bool IORegistryEntry::serializeProperties( OSSerialize * s ) const
     OSCollection *snapshotProperties = getPropertyTable()->copyCollection();
     PUNLOCK;
 
+    if (!snapshotProperties) return (false);
+
     bool ok =  snapshotProperties->serialize( s );
     snapshotProperties->release();
     return( ok );
+}
+
+OSArray * IORegistryEntry::copyPropertyKeys(void) const
+{
+    PLOCK;
+    OSArray * keys = getPropertyTable()->copyKeys();
+    PUNLOCK;
+
+    return (keys);
 }
 
 OSDictionary * IORegistryEntry::dictionaryWithProperties( void ) const
@@ -1334,6 +1365,7 @@ bool IORegistryEntry::makeLink( IORegistryEntry * to,
             links->release();
 	}
     }
+    reserved->fRegistryEntryGenerationCount++;
 
     return( result);
 }
@@ -1354,6 +1386,7 @@ void IORegistryEntry::breakLink( IORegistryEntry * to,
                 registryTable()->removeObject( plane->keys[ relation ]);
 	    }
     }
+    reserved->fRegistryEntryGenerationCount++;
 }
 
 
@@ -1453,6 +1486,18 @@ OSIterator * IORegistryEntry::getChildIterator( const IORegistryPlane * plane ) 
     return( iter );
 }
 
+uint32_t IORegistryEntry::getChildCount( const IORegistryPlane * plane ) const
+{
+    OSArray * links;
+    uint32_t  count = 0;
+
+    RLOCK;
+    links = getChildSetReference( plane );
+    if (links) count = links->getCount();
+    UNLOCK;
+
+    return (count);
+}
 
 IORegistryEntry * IORegistryEntry::copyChildEntry(
 				const IORegistryPlane * plane ) const

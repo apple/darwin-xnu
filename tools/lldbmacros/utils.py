@@ -348,7 +348,7 @@ def addDSYM(uuid, info):
         # modify the list to show we loaded this
         _dsymlist[uuid] = True
 
-def loadDSYM(uuid, load_address):
+def loadDSYM(uuid, load_address, sections=[]):
     """ Load an already added symbols to a particular load address
         params: uuid - str - uuid string
                 load_address - int - address where to load the symbols
@@ -358,9 +358,20 @@ def loadDSYM(uuid, load_address):
     """
     if uuid not in _dsymlist:
         return False
-    cmd_str = "target modules load --uuid %s --slide %d" % ( uuid, load_address)
-    debuglog(cmd_str)
+    if not sections:
+        cmd_str = "target modules load --uuid %s --slide %d" % ( uuid, load_address)
+        debuglog(cmd_str)
+    else:
+        cmd_str = "target modules load --uuid {}   ".format(uuid)
+        sections_str = ""
+        for s in sections:
+            sections_str += " {} {:#0x} ".format(s.name, s.vmaddr)
+        cmd_str += sections_str
+        debuglog(cmd_str)
+
     lldb.debugger.HandleCommand(cmd_str)
+    return True
+
 
 def RunShellCommand(command):
     """ Run a shell command in subprocess.
@@ -421,3 +432,32 @@ def IsAppleInternal():
     except ImportError:
         retval = False
     return retval
+
+def print_hex_data(data, begin_offset=0, desc=""):
+    """ print on stdout "hexdump -C < data" like output
+        params:
+            data - bytearray or array of int where each int < 255
+            begin_offset - int offset that should be printed in left column
+            desc - str optional description to print on the first line to describe data
+    """
+    if desc:
+        print "{}:".format(desc)
+    index = 0
+    total_len = len(data)
+    hex_buf = ""
+    char_buf = ""
+    while index < total_len:
+        hex_buf += " {:02x}".format(data[index])
+        if data[index] < 0x20 or data[index] > 0x7e:
+            char_buf += "."
+        else:
+            char_buf += "{:c}".format(data[index])
+        index += 1
+        if index and index < total_len and index % 8 == 0:
+            hex_buf += " "
+        if index > 1 and index < total_len and (index % 16) == 0:
+            print "{:08x} {: <50s} |{: <16s}|".format(begin_offset + index - 16, hex_buf, char_buf)
+            hex_buf = ""
+            char_buf = ""
+    print "{:08x} {: <50s} |{: <16s}|".format(begin_offset + index - 16, hex_buf, char_buf)
+    return

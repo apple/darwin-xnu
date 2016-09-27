@@ -48,7 +48,8 @@ static zone_t			host_notify_zone;
 static queue_head_t		host_notify_queue[HOST_NOTIFY_TYPE_MAX+1];
 
 static mach_msg_id_t	host_notify_replyid[HOST_NOTIFY_TYPE_MAX+1] =
-								{ HOST_CALENDAR_CHANGED_REPLYID };
+								{ HOST_CALENDAR_CHANGED_REPLYID,
+								  HOST_CALENDAR_SET_REPLYID };
 
 struct host_notify_entry {
 	queue_chain_t		entries;
@@ -205,4 +206,12 @@ host_notify_calendar_change(void)
 	__Request__host_calendar_changed_t	msg;
 
 	host_notify_all(HOST_NOTIFY_CALENDAR_CHANGE, &msg.Head, sizeof (msg));
+}
+
+void
+host_notify_calendar_set(void)
+{
+	__Request__host_calendar_set_t	msg;
+
+	host_notify_all(HOST_NOTIFY_CALENDAR_SET, &msg.Head, sizeof (msg));
 }

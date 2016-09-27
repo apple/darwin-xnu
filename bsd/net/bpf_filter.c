@@ -102,7 +102,7 @@
 #ifdef KERNEL
 #define MINDEX(m, k) \
 { \
-	register unsigned int len = m->m_len; \
+	unsigned int len = m->m_len; \
  \
 	while (k >= len) { \
 		k -= len; \
@@ -121,9 +121,9 @@ static u_int32_t	m_xword(struct mbuf *m, bpf_u_int32 k, int *err);
 static u_int32_t
 m_xword(struct mbuf *m, bpf_u_int32 k, int *err)
 {
-	register size_t len;
-	register u_char *cp, *np;
-	register struct mbuf *m0;
+	size_t len;
+	u_char *cp, *np;
+	struct mbuf *m0;
 
 	len = m->m_len;
 	while (k >= len) {
@@ -174,9 +174,9 @@ m_xword(struct mbuf *m, bpf_u_int32 k, int *err)
 static u_int16_t
 m_xhalf(struct mbuf *m, bpf_u_int32 k, int *err)
 {
-	register size_t len;
-	register u_char *cp;
-	register struct mbuf *m0;
+	size_t len;
+	u_char *cp;
+	struct mbuf *m0;
 
 	len = m->m_len;
 	while (k >= len) {
@@ -210,8 +210,8 @@ m_xhalf(struct mbuf *m, bpf_u_int32 k, int *err)
 u_int
 bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 {
-	register u_int32_t A = 0, X = 0;
-	register bpf_u_int32 k;
+	u_int32_t A = 0, X = 0;
+	bpf_u_int32 k;
 	int32_t mem[BPF_MEMWORDS];
 
 	bzero(mem, sizeof(mem));
@@ -284,7 +284,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			k = pc->k;
 			if (k >= buflen) {
 #ifdef KERNEL
-				register struct mbuf *m;
+				struct mbuf *m;
 
 				if (buflen != 0)
 					return 0;
@@ -356,7 +356,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			k = X + pc->k;
 			if (pc->k >= buflen || X >= buflen - pc->k) {
 #ifdef KERNEL
-				register struct mbuf *m;
+				struct mbuf *m;
 
 				if (buflen != 0)
 					return 0;
@@ -375,7 +375,7 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			k = pc->k;
 			if (k >= buflen) {
 #ifdef KERNEL
-				register struct mbuf *m;
+				struct mbuf *m;
 
 				if (buflen != 0)
 					return 0;

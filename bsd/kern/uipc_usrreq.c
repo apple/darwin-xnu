@@ -1131,7 +1131,7 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 	}
 
 #if CONFIG_MACF_SOCKET_SUBSET
-	error = mac_vnode_check_uipc_connect(ctx, vp);
+	error = mac_vnode_check_uipc_connect(ctx, vp, so);
 	if (error) {
 		socket_lock(so, 0);
 		goto out;

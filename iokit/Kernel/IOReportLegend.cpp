@@ -56,7 +56,7 @@ IOReportLegend::with(OSArray *legend)
         
         if (legend != NULL) {
             if (iorLegend->initWith(legend) != kIOReturnSuccess) {
-                delete iorLegend;
+                OSSafeReleaseNULL(iorLegend);
                 return NULL;
             }
         }

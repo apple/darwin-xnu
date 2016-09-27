@@ -107,9 +107,9 @@ static off_t sd_log_offset = 0;
 
 static int sd_filt1(proc_t, void *);
 static int sd_filt2(proc_t, void *);
-static int  sd_callback1(proc_t p, void * arg);
-static int  sd_callback2(proc_t p, void * arg);
-static int  sd_callback3(proc_t p, void * arg);
+static int sd_callback1(proc_t p, void * arg);
+static int sd_callback2(proc_t p, void * arg);
+static int sd_callback3(proc_t p, void * arg);
 
 extern boolean_t panic_include_zprint;
 extern vm_offset_t panic_kext_memory_info;
@@ -135,7 +135,7 @@ kernel_hwm_panic_info(void)
 		return;
 	}
 	memory_info = (mach_memory_info_t *)panic_kext_memory_info;
-	vm_page_diagnose(memory_info, num_sites);
+	vm_page_diagnose(memory_info, num_sites, 0);
 	return;
 }
 
@@ -324,7 +324,7 @@ sd_filt1(proc_t p, void * args)
 }
 
 
-static int  
+static int
 sd_callback1(proc_t p, void * args)
 {
 	struct sd_iterargs * sd = (struct sd_iterargs *)args;
@@ -346,9 +346,11 @@ sd_callback1(proc_t p, void * args)
 		psignal(p, signo);
 		if (countproc !=  0)
 			sd->activecount++;
-	} else
+	} else {
 		proc_unlock(p);
-	return(PROC_RETURNED);
+	}
+
+	return PROC_RETURNED;
 }
 
 static int
@@ -369,7 +371,7 @@ sd_filt2(proc_t p, void * args)
                 return(1);
 }
 
-static int  
+static int
 sd_callback2(proc_t p, void * args)
 {
 	struct sd_iterargs * sd = (struct sd_iterargs *)args;
@@ -390,14 +392,14 @@ sd_callback2(proc_t p, void * args)
 		psignal(p, signo);
 		if (countproc !=  0)
 			sd->activecount++;
-	} else
+	} else {
 		proc_unlock(p);
+	}
 
-	return(PROC_RETURNED);
-
+	return PROC_RETURNED;
 }
 
-static int  
+static int
 sd_callback3(proc_t p, void * args)
 {
 	struct sd_iterargs * sd = (struct sd_iterargs *)args;
@@ -431,10 +433,11 @@ sd_callback3(proc_t p, void * args)
 			sd->activecount++;
 			exit1(p, 1, (int *)NULL);
 		}
-	} else
+	} else {
 		proc_unlock(p);
+	}
 
-	return(PROC_RETURNED);
+	return PROC_RETURNED;
 }
 
 

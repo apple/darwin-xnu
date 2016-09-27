@@ -383,7 +383,7 @@ SYSCTL_QUAD    (_hw, HW_MEMSIZE, memsize, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LO
 SYSCTL_INT     (_hw, OID_AUTO, packages, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &packages, 0, "");
 
 /*
- * Optional features can register nodes below hw.optional.
+ * Optional CPU features can register nodes below hw.optional.
  *
  * If the feature is not present, the node should either not be registered,
  * or it should return -1.  If the feature is present, the node should return
@@ -393,6 +393,11 @@ SYSCTL_INT     (_hw, OID_AUTO, packages, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOC
 SYSCTL_NODE(_hw, OID_AUTO, optional, CTLFLAG_RW|CTLFLAG_LOCKED, NULL, "optional features");
 
 SYSCTL_INT(_hw_optional, OID_AUTO, floatingpoint, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (int *)NULL, 1, "");	/* always set */
+
+/*
+ * Optional device hardware features can be registered by drivers below hw.features
+ */
+SYSCTL_NODE(_hw, OID_AUTO, features, CTLFLAG_RD | CTLFLAG_LOCKED, NULL, "hardware features");
 
 /*
  * Deprecated variables.  These are supported for backwards compatibility

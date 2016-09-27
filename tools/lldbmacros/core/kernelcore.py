@@ -109,7 +109,7 @@ def IterateLinkageChain(queue_head, element_type, field_name, field_ofst=0):
         link = link.next
 
 
-def IterateQueue(queue_head, element_ptr_type, element_field_name, backwards=False):
+def IterateQueue(queue_head, element_ptr_type, element_field_name, backwards=False, unpack_ptr_fn=None):
     """ Iterate over an Element Chain queue in kernel of type queue_head_t. (osfmk/kern/queue.h method 2)
         params:
             queue_head         - value : Value object for queue_head.
@@ -117,6 +117,7 @@ def IterateQueue(queue_head, element_ptr_type, element_field_name, backwards=Fal
                                - str         : OR a string describing the type. ex. 'task *'
             element_field_name - str : name of the field in target struct.
             backwards          - backwards : traverse the queue backwards
+            unpack_ptr_fn      - function : a function ptr of signature def unpack_ptr(long v) which returns long.
         returns:
             A generator does not return. It is used for iterating.
             value  : an object thats of type (element_type) queue_head->next. Always a pointer object
@@ -133,10 +134,19 @@ def IterateQueue(queue_head, element_ptr_type, element_field_name, backwards=Fal
         queue_head_addr = queue_head.GetValueAsUnsigned()
     else:
         queue_head_addr = queue_head.GetAddress().GetLoadAddress(LazyTarget.GetTarget())
+        
+    def unpack_ptr_and_recast(v):
+        if unpack_ptr_fn is None:
+            return v
+        v_unpacked = unpack_ptr_fn(v.GetValueAsUnsigned())
+        obj = v.CreateValueFromExpression(None,'(void *)'+str(v_unpacked))
+        obj.Cast(element_ptr_type)
+        return obj
+
     if backwards:
-        cur_elt = queue_head.GetChildMemberWithName('prev')
+        cur_elt = unpack_ptr_and_recast(queue_head.GetChildMemberWithName('prev'))
     else:
-        cur_elt = queue_head.GetChildMemberWithName('next')
+        cur_elt = unpack_ptr_and_recast(queue_head.GetChildMemberWithName('next'))
 
     while True:
 
@@ -145,9 +155,10 @@ def IterateQueue(queue_head, element_ptr_type, element_field_name, backwards=Fal
         elt = cur_elt.Cast(element_ptr_type)
         yield value(elt)
         if backwards:
-            cur_elt = elt.GetChildMemberWithName(element_field_name).GetChildMemberWithName('prev')
+            cur_elt = unpack_ptr_and_recast(elt.GetChildMemberWithName(element_field_name).GetChildMemberWithName('prev'))
         else:
-            cur_elt = elt.GetChildMemberWithName(element_field_name).GetChildMemberWithName('next')
+            cur_elt = unpack_ptr_and_recast(elt.GetChildMemberWithName(element_field_name).GetChildMemberWithName('next'))
+
 
 class KernelTarget(object):
     """ A common kernel object that provides access to kernel objects and information.
@@ -358,9 +369,9 @@ class KernelTarget(object):
         if name == 'zones' :
             self._zones_list = caching.GetDynamicCacheData("kern._zones_list", [])
             if len(self._zones_list) > 0: return self._zones_list
-            first_zone = self.GetGlobalVariable('first_zone')
-            for z in IterateLinkedList(first_zone, 'next_zone'):
-                self._zones_list.append(z)
+            zone_array = self.GetGlobalVariable('zone_array')
+            for i in range(0, self.GetGlobalVariable('num_zones')):
+                self._zones_list.append(addressof(zone_array[i]))
             caching.SaveDynamicCacheData("kern._zones_list", self._zones_list)
             return self._zones_list
 
@@ -471,4 +482,3 @@ class KernelTarget(object):
             return self._ptrsize
 
         return object.__getattribute__(self, name)
-

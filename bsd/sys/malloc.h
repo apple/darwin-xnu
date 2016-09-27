@@ -165,9 +165,9 @@
 #define	M_BUFHDR	72	/* File buffer cache headers */
 #define	M_OFILETABL	73	/* Open file descriptor table */
 #define	M_MCLUST	74	/* mbuf cluster buffers */
-#define	M_HFSMNT	75	/* HFS mount structure */
-#define	M_HFSNODE	76	/* HFS catalog node */
-#define	M_HFSFORK	77	/* HFS file fork */
+/* unused	75 */
+/* unused	76 */
+/* unused	77 */
 /* unused	78 */
 /* unused	79 */
 #define	M_TEMP		80	/* misc temporary data buffers */
@@ -181,11 +181,11 @@
 #define M_IP6MISC	88	/* IPv6 misc. memory */
 /* unused	89 */
 #define M_IGMP		90
-#define M_JNL_JNL   91  /* Journaling: "struct journal" */
-#define M_JNL_TR    92  /* Journaling: "struct transaction" */ 
+/* unused	91 */
+/* unused	92 */
 #define	M_SPECINFO	93	/* special file node */
-#define M_KQUEUE	94	/* kqueue */
-#define	M_HFSDIRHINT	95	/* HFS directory hint */
+#define M_KQUEUE	94	/* kqueue system */
+/* unused	95 */
 #define M_CLRDAHEAD	96	/* storage for cluster read-ahead state */
 #define M_CLWRBEHIND	97	/* storage for cluster write-behind state */
 #define	M_IOV64		98	/* large iov's for 64 bit process */
@@ -199,9 +199,9 @@
 #define M_EXTATTR	106	/* extended attribute */
 #define M_SELECT	107	/* per-thread select memory */
 /* M_TRAFFIC_MGT	108 */
-#if HFS_COMPRESSION
+#if FS_COMPRESSION
 #define M_DECMPFS_CNODE	109	/* decmpfs cnode structures */
-#endif /* HFS_COMPRESSION */
+#endif /* FS_COMPRESSION */
 #define M_INMFILTER	110	/* IPv4 multicast PCB-layer source filter */
 #define M_IPMSOURCE	111	/* IPv4 multicast IGMP-layer source filter */
 #define	M_IN6MFILTER	112	/* IPv6 multicast PCB-layer source filter */
@@ -226,7 +226,6 @@
 #define	M_IFADDR	9	/* interface address (IOFireWireIP)*/
 #define	M_LOCKF		40	/* Byte-range locking structures (msdos) */ 
 #define	M_TEMP		80	/* misc temporary data buffers */
-#define	M_HFSMNT	75	/* HFS mount structure (afpfs) */
 #define M_KAUTH		100	/* kauth subsystem (smb) */
 #define	M_SONAME	11	/* socket name (smb) */
 #define	M_PCB		4	/* protocol control block (smb) */

@@ -52,11 +52,11 @@ __END_DECLS
 static __inline int
 __darwin_fd_isset(int _n, const struct fd_set *_p)
 {
-	return (_p->fds_bits[(unsigned long)_n/__DARWIN_NFDBITS] & ((__int32_t)(1<<((unsigned long)_n % __DARWIN_NFDBITS))));
+	return (_p->fds_bits[(unsigned long)_n/__DARWIN_NFDBITS] & ((__int32_t)(((unsigned long)1)<<((unsigned long)_n % __DARWIN_NFDBITS))));
 }
 
-#define	__DARWIN_FD_SET(n, p)	do { int __fd = (n); ((p)->fds_bits[(unsigned long)__fd/__DARWIN_NFDBITS] |= ((__int32_t)(1<<((unsigned long)__fd % __DARWIN_NFDBITS)))); } while(0)
-#define	__DARWIN_FD_CLR(n, p)	do { int __fd = (n); ((p)->fds_bits[(unsigned long)__fd/__DARWIN_NFDBITS] &= ~((__int32_t)(1<<((unsigned long)__fd % __DARWIN_NFDBITS)))); } while(0)
+#define	__DARWIN_FD_SET(n, p)	do { int __fd = (n); ((p)->fds_bits[(unsigned long)__fd/__DARWIN_NFDBITS] |= ((__int32_t)(((unsigned long)1)<<((unsigned long)__fd % __DARWIN_NFDBITS)))); } while(0)
+#define	__DARWIN_FD_CLR(n, p)	do { int __fd = (n); ((p)->fds_bits[(unsigned long)__fd/__DARWIN_NFDBITS] &= ~((__int32_t)(((unsigned long)1)<<((unsigned long)__fd % __DARWIN_NFDBITS)))); } while(0)
 #define	__DARWIN_FD_ISSET(n, p)	__darwin_fd_isset((n), (p))
 
 #if __GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ >= 3

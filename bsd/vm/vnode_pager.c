@@ -728,11 +728,9 @@ vnode_pagein(
 					if(error == EAGAIN) {
 			        		ubc_upl_abort_range(upl, (upl_offset_t) xoff, xsize, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_RESTART);
 					}
-#if CONFIG_PROTECT
 					if(error == EPERM) {
 			        		ubc_upl_abort_range(upl, (upl_offset_t) xoff, xsize, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
 					}
-#endif
 				}
 				result = PAGER_ERROR;
 				error  = PAGER_ERROR;
@@ -746,24 +744,6 @@ out:
 
 	return (error);
 }
-
-void
-vnode_pager_shutdown(void)
-{
-	int i;
-	vnode_t vp;
-
-	for(i = 0; i < MAX_BACKING_STORE; i++) {
-		vp = (vnode_t)(bs_port_table[i]).vp;
-		if (vp) {
-			(bs_port_table[i]).vp = 0;
-
-			/* get rid of macx_swapon() reference */
-			vnode_rele(vp);
-		}
-	}
-}
-
 
 void *
 upl_get_internal_page_list(upl_t upl)

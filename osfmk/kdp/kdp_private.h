@@ -29,7 +29,6 @@
 /*
  * Private functions for kdp.c
  */
-extern char kdp_kernelversion_string[];
 
 static boolean_t
 kdp_unknown(

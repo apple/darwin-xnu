@@ -44,11 +44,8 @@ __BEGIN_DECLS
  * Obtain the full pathname of a file system object by id.
  *
  * This is a private SPI used by the File Manager.
- *
- * ssize_t fsgetpath_np(char *restrict buf, size_t bufsize, fsid_t fsid, uint64_t objid);
  */
-#define	fsgetpath(buf, bufsize, fsid, objid)  \
-	(ssize_t)syscall(SYS_fsgetpath, buf, (size_t)bufsize, fsid, (uint64_t)objid)
+ssize_t fsgetpath(char * __restrict buf, size_t bufsize, fsid_t* fsid, uint64_t objid);
 
 /*
  * openbyid_np: open a file given a file system id and a file system object id 

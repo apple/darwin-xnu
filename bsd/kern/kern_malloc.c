@@ -97,8 +97,7 @@
 #include <sys/uio_internal.h>
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
-
-#include <hfs/hfs_cnode.h>
+#include <sys/decmpfs.h>
 
 #include <miscfs/specfs/specdev.h>
 
@@ -106,8 +105,6 @@
 #include <nfs/nfsproto.h>
 #include <nfs/nfsnode.h>
 #include <nfs/nfsmount.h>
-
-#include <vfs/vfs_journal.h>
 
 #include <mach/mach_types.h>
 
@@ -120,10 +117,10 @@ void kmeminit(void);
  * Must be in synch with the #defines is sys/malloc.h 
  * NOTE - the reason we pass null strings in some cases is to reduce of foot
  * print as much as possible for systems where a tiny kernel is needed.
- * todo - We should probably redsign this and use enums for our types and only
+ * todo - We should probably redesign this and use enums for our types and only
  * include types needed for that configuration of the kernel.  This can't be
  * done without some kind of kpi since several types are hardwired and exported
- * (for example see types M_HFSMNT, M_UDFMNT, M_TEMP, etc in sys/malloc.h)
+ * (for example see types M_UDFMNT, M_TEMP, etc in sys/malloc.h)
  */
 const char *memname[] = {
 	"free",		/* 0 M_FREE */
@@ -227,17 +224,11 @@ const char *memname[] = {
 	"buf hdrs",		/* 72 M_BUFHDR */ 
 	"ofile tabl",	/* 73 M_OFILETABL */ 
 	"mbuf clust",	/* 74 M_MCLUST */ 
-#if HFS
-	"HFS mount",	/* 75 M_HFSMNT */ 
-	"HFS node",		/* 76 M_HFSNODE */ 
-	"HFS fork",		/* 77 M_HFSFORK */ 
-#else
-	"",				/* 75 M_HFSMNT */ 
-	"",				/* 76 M_HFSNODE */ 
-	"",				/* 77 M_HFSFORK */ 
-#endif
-	"", 	/* 78 unused */
-	"", 	/* 79 unused */ 
+	"",				/* 75 unused */
+	"",				/* 76 unused */
+	"",				/* 77 unused */
+	"", 			/* 78 unused */
+	"", 			/* 79 unused */
 	"temp",			/* 80 M_TEMP */ 
 	"key mgmt",		/* 81 M_SECA */ 
 	"DEVFS",		/* 82 M_DEVFS */ 
@@ -255,21 +246,12 @@ const char *memname[] = {
 #endif
 	"TCP Segment Q",/* 89 M_TSEGQ */
 	"IGMP state",	/* 90 M_IGMP */
-#if JOURNALING
-	"Journal",		/* 91 M_JNL_JNL */
-	"Transaction",	/* 92 M_JNL_TR */
-#else
-	"",    			/* 91 M_JNL_JNL */
-	"",    			/* 92 M_JNL_TR */
-#endif
+	"",    			/* 91 unused */
+	"",    			/* 92 unused */
 	"specinfo",		/* 93 M_SPECINFO */
 	"kqueue",		/* 94 M_KQUEUE */
-#if HFS
-	"HFS dirhint",	/* 95 M_HFSDIRHINT */ 
-#else
-	"",				/* 95 M_HFSDIRHINT */ 
-#endif
-	"cluster_read",	/* 96 M_CLRDAHEAD */ 
+	"",				/* 95 unused */
+	"cluster_read",	/* 96 M_CLRDAHEAD */
 	"cluster_write",/* 97 M_CLWRBEHIND */ 
 	"iov64",		/* 98 M_IOV64 */ 
 	"fileglob",		/* 99 M_FILEGLOB */ 
@@ -286,11 +268,11 @@ const char *memname[] = {
 #else
 	"", /* 108 M_TRAFFIC_MGT */
 #endif
-#if HFS_COMPRESSION
+#if FS_COMPRESSION
 	"decmpfs_cnode",/* 109 M_DECMPFS_CNODE */
 #else
 	"",             /* 109 M_DECMPFS_CNODE */
-#endif /* HFS_COMPRESSION */
+#endif /* FS_COMPRESSION */
 	"ipmfilter",	/* 110 M_INMFILTER */
 	"ipmsource",	/* 111 M_IPMSOURCE */
 	"in6mfilter", 	/* 112 M_IN6MFILTER */
@@ -438,15 +420,9 @@ struct kmzones {
 	{ (NDFILE * OFILESIZE),
 	                KMZ_CREATEZONE_ACCT, FALSE },	/* 73 M_OFILETABL */
 	{ MCLBYTES,	KMZ_CREATEZONE, FALSE },	/* 74 M_MCLUST */
-#if HFS
-	{ SOX(hfsmount),KMZ_LOOKUPZONE, FALSE },	/* 75 M_HFSMNT */
-	{ SOS(cnode),	KMZ_CREATEZONE, TRUE },		/* 76 M_HFSNODE */
-	{ SOS(filefork),KMZ_CREATEZONE, TRUE },		/* 77 M_HFSFORK */
-#else
-	{ 0,		KMZ_MALLOC, FALSE },		/* 75 M_HFSMNT */
-	{ 0,		KMZ_MALLOC, FALSE },		/* 76 M_HFSNODE */
-	{ 0,		KMZ_MALLOC, FALSE },		/* 77 M_HFSFORK */
-#endif
+	{ 0,		KMZ_MALLOC, FALSE },		/* 75 unused */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 76 unused */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 77 unused */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 78 unused */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 79 unused */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 80 M_TEMP */
@@ -460,20 +436,11 @@ struct kmzones {
 	{ 0,		KMZ_MALLOC, FALSE },		/* 88 M_IP6MISC */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 89 M_TSEGQ */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 90 M_IGMP */
-#if JOURNALING
-	{ SOS(journal), KMZ_CREATEZONE, FALSE },	/* 91 M_JNL_JNL */
-	{ SOS(transaction), KMZ_CREATEZONE, FALSE },	/* 92 M_JNL_TR */
-#else
-	{ 0,	 	KMZ_MALLOC, FALSE },		/* 91 M_JNL_JNL */
-	{ 0,	 	KMZ_MALLOC, FALSE },		/* 92 M_JNL_TR */
-#endif
+	{ 0,	 	KMZ_MALLOC, FALSE },		/* 91 unused */
+	{ 0,	 	KMZ_MALLOC, FALSE },		/* 92 unused */
 	{ SOS(specinfo),KMZ_CREATEZONE, TRUE },		/* 93 M_SPECINFO */
 	{ SOS(kqueue),	KMZ_CREATEZONE, FALSE },	/* 94 M_KQUEUE */
-#if HFS
-	{ SOS(directoryhint), KMZ_CREATEZONE, TRUE },	/* 95 M_HFSDIRHINT */
-#else
-	{ 0,		KMZ_MALLOC, FALSE },		/* 95 M_HFSDIRHINT */
-#endif
+	{ 0,		KMZ_MALLOC, FALSE },		/* 95 unused */
 	{ SOS(cl_readahead),  KMZ_CREATEZONE, TRUE },	/* 96 M_CLRDAHEAD */
 	{ SOS(cl_writebehind),KMZ_CREATEZONE, TRUE },	/* 97 M_CLWRBEHIND */
 	{ SOS(user64_iovec),	KMZ_LOOKUPZONE, FALSE },/* 98 M_IOV64 */
@@ -487,11 +454,11 @@ struct kmzones {
 	{ 0,		KMZ_MALLOC, FALSE },		/* 106 M_HFS_EXTATTR */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 107 M_SELECT */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 108 M_TRAFFIC_MGT */
-#if HFS_COMPRESSION
+#if FS_COMPRESSION
 	{ SOS(decmpfs_cnode),KMZ_CREATEZONE , FALSE},	/* 109 M_DECMPFS_CNODE */
 #else
 	{ 0,		KMZ_MALLOC, FALSE },		/* 109 M_DECMPFS_CNODE */
-#endif /* HFS_COMPRESSION */
+#endif /* FS_COMPRESSION */
  	{ 0,		KMZ_MALLOC, FALSE },		/* 110 M_INMFILTER */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 111 M_IPMSOURCE */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 112 M_IN6MFILTER */
@@ -579,12 +546,6 @@ kmeminit(void)
 	}
 }
 
-struct _mhead {
-	size_t	mlen;
-	char	dat[0];
-};
-
-
 void *
 _MALLOC_external(
 	size_t		size,
@@ -607,8 +568,8 @@ __MALLOC(
 	int		flags,
 	vm_allocation_site_t *site)
 {
-	struct _mhead	*hdr = NULL;
-	size_t		memsize = sizeof (*hdr) + size;
+	void 	*addr = NULL;
+	vm_size_t 	msize = size;
 
 	if (type >= M_LAST)
 		panic("_malloc TYPE");
@@ -616,25 +577,15 @@ __MALLOC(
 	if (size == 0)
 		return (NULL);
 
+	if (msize != size) {
+		panic("Requested size to __MALLOC is too large (%llx)!\n", (uint64_t)size);
+	}
+
 	if (flags & M_NOWAIT) {
-               if (size > memsize)   /* overflow detected */
-                       return (NULL);
-               else
-                       hdr = (void *)kalloc_canblock(memsize, FALSE, site); 
+		addr = (void *)kalloc_canblock(&msize, FALSE, site);
 	} else {
-               if (size > memsize) {
-                       /*
-                        * We get here when the caller told us to block, waiting for memory but an overflow
-                        * has been detected.  The caller isn't expecting a NULL return code so we panic
-                        * with a descriptive message.
-                        */
-                       panic("_MALLOC: overflow detected, size %llu ", (uint64_t) size);
-               }
-               else
-                       hdr = (void *)kalloc_canblock(memsize, TRUE, site);
-
-	       if (hdr == NULL) {
-
+		addr = (void *)kalloc_canblock(&msize, TRUE, site);
+		if (addr == NULL) {
 			/*
 			 * We get here when the caller told us to block waiting for memory, but
 			 * kalloc said there's no memory left to get.  Generally, this means there's a 
@@ -648,15 +599,13 @@ __MALLOC(
 			panic("_MALLOC: kalloc returned NULL (potential leak), size %llu", (uint64_t) size);
 		}
 	}
-	if (!hdr)
+	if (!addr)
 		return (0);
 
-	hdr->mlen = memsize;
-
 	if (flags & M_ZERO)
-		bzero(hdr->dat, size);
+		bzero(addr, size);
 
-	return  (hdr->dat);
+	return  (addr);
 }
 
 void
@@ -664,16 +613,13 @@ _FREE(
 	void		*addr,
 	int		type)
 {
-	struct _mhead	*hdr;
-
 	if (type >= M_LAST)
 		panic("_free TYPE");
 
 	if (!addr)
 		return; /* correct (convenient bsd kernel legacy) */
 
-	hdr = addr; hdr--;
-	kfree(hdr, hdr->mlen);
+	kfree_addr(addr);
 }
 
 void *
@@ -684,7 +630,6 @@ __REALLOC(
 	int		flags,
 	vm_allocation_site_t *site)
 {
-	struct _mhead	*hdr;
 	void		*newaddr;
 	size_t		alloc;
 
@@ -692,13 +637,18 @@ __REALLOC(
 	if (addr == NULL)
 		return (__MALLOC(size, type, flags, site));
 
+	alloc = kalloc_size(addr);
+	/* 
+	 * Find out the size of the bucket in which the new sized allocation 
+	 * would land. If it matches the bucket of the original allocation, 
+	 * simply return the address.
+	 */
+	if (kalloc_bucket_size(size) == alloc)
+		return addr;
+
 	/* Allocate a new, bigger (or smaller) block */
 	if ((newaddr = __MALLOC(size, type, flags, site)) == NULL)
 		return (NULL);
-
-	hdr = addr;
-	--hdr;
-	alloc = hdr->mlen - sizeof (*hdr);
 
 	/* Copy over original contents */
 	bcopy(addr, newaddr, MIN(size, alloc));
@@ -748,12 +698,16 @@ __MALLOC_ZONE(
 		} else {
 	  		elem = (void *)zalloc(kmz->kz_zalloczone);
 		}
-	else
-		if (flags & M_NOWAIT) {
-			elem = (void *)kalloc_canblock(size, FALSE, site);
+	else {
+		vm_size_t kalloc_size = size;
+		if (size > kalloc_size) {
+			elem = NULL;
+		} else if (flags & M_NOWAIT) {
+			elem = (void *)kalloc_canblock(&kalloc_size, FALSE, site);
 		} else {
-			elem = (void *)kalloc_canblock(size, TRUE, site);
+			elem = (void *)kalloc_canblock(&kalloc_size, TRUE, site);
 		}
+	}
 
 	return (elem);
 }

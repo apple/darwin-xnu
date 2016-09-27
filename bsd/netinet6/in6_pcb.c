@@ -657,19 +657,28 @@ in6_pcbdetach(struct inpcb *inp)
 		}
 		im6o = inp->in6p_moptions;
 		inp->in6p_moptions = NULL;
-		if (im6o != NULL)
-			IM6O_REMREF(im6o);
 
 		imo = inp->inp_moptions;
 		inp->inp_moptions = NULL;
-		if (imo != NULL)
-			IMO_REMREF(imo);
+
 		sofreelastref(so, 0);
 		inp->inp_state = INPCB_STATE_DEAD;
 		/* makes sure we're not called twice from so_close */
 		so->so_flags |= SOF_PCBCLEARING;
  
 		inpcb_gc_sched(inp->inp_pcbinfo, INPCB_TIMER_FAST);
+
+		/*
+		 * See inp_join_group() for why we need to unlock
+		 */
+		if (im6o != NULL || imo != NULL) {
+			socket_unlock(so, 0);
+			if (im6o != NULL)
+				IM6O_REMREF(im6o);
+			if (imo != NULL)
+				IMO_REMREF(imo);
+			socket_lock(so, 0);
+		}
 	}
 }
 

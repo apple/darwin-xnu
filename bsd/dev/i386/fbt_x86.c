@@ -174,8 +174,11 @@ static const char * probe_ctx_closure[] =
 	"Debugger",
 	"IS_64BIT_PROCESS",
 	"OSCompareAndSwap",
+	"_disable_preemption",
+	"_enable_preemption",
 	"absolutetime_to_microtime",
 	"act_set_astbsd",
+	"ast_dtrace_on",
 	"ast_pending",
 	"clock_get_calendar_nanotime_nowait",
 	"copyin",
@@ -235,16 +238,16 @@ static int _cmp(const void *a, const void *b)
 }
 
 static const void * bsearch(
-	register const void *key,
+	const void *key,
 	const void *base0,
 	size_t nmemb,
-	register size_t size,
-	register int (*compar)(const void *, const void *)) {
+	size_t size,
+	int (*compar)(const void *, const void *)) {
 
-	register const char *base = base0;
-	register size_t lim;
-	register int cmp;
-	register const void *p;
+	const char *base = base0;
+	size_t lim;
+	int cmp;
+	const void *p;
 
 	for (lim = nmemb; lim != 0; lim >>= 1) {
 		p = base + (lim >> 1) * size;
@@ -469,9 +472,6 @@ is_symbol_valid(const char* name)
 	 */
 	if (LIT_STRNSTART(name, "kdp_") ||
 	    LIT_STRNSTART(name, "kdb_") ||
-	    LIT_STRNSTART(name, "kdbg_") ||
-	    LIT_STRNSTART(name, "kdebug_") ||
-	    LIT_STRNSTART(name, "kernel_debug") ||
 	    LIT_STRNSTART(name, "debug_") ||
 	    LIT_STRNEQL(name, "Debugger") ||
 	    LIT_STRNEQL(name, "Call_DebuggerC") ||

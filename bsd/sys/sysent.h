@@ -56,8 +56,7 @@ struct sysent {		/* system call table */
 extern struct sysent sysent[];
 #endif	/* __INIT_SYSENT_C__ */
 
-extern int nsysent;
-#define NUM_SYSENT	500	/* Current number of defined syscalls */
+extern unsigned int nsysent;
 
 /* 
  * Valid values for sy_cancel

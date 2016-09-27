@@ -11,4 +11,4 @@ _mbuf_pkthdr_setheader
 _mbuf_setlen
 _mbuf_setnextpkt
 _mbuf_type
-_nd6_lookup_ipv6
+_sysctl_register_fixed

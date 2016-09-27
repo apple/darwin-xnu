@@ -443,7 +443,7 @@ extern UInt32 OSBitAndAtomic(
  * @discussion
  * The OSBitAndAtomic16 function logically ands the bits of the specified mask into the value at the specified address and returns the original value.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  * @param mask The mask to logically and with the value.
  * @param address The 2-byte aligned address of the value to update atomically.
  * @result The value before the bitwise operation.
@@ -461,7 +461,7 @@ extern UInt16 OSBitAndAtomic16(
  * @discussion
  * The OSBitAndAtomic8 function logically ands the bits of the specified mask into the value at the specified address and returns the original value.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  * @param mask The mask to logically and with the value.
  * @param address The address of the value to update atomically.
  * @result The value before the bitwise operation.
@@ -479,7 +479,7 @@ extern UInt8 OSBitAndAtomic8(
  * @discussion
  * The OSBitOrAtomic function logically ors the bits of the specified mask into the value at the specified address and returns the original value.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  * @param mask The mask to logically or with the value.
  * @param address The 4-byte aligned address of the value to update atomically.
  * @result The value before the bitwise operation.
@@ -499,7 +499,7 @@ extern UInt32 OSBitOrAtomic(
  * @discussion
  * The OSBitOrAtomic16 function logically ors the bits of the specified mask into the value at the specified address and returns the original value.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  * @param mask The mask to logically or with the value.
  * @param address The 2-byte aligned address of the value to update atomically.
  * @result The value before the bitwise operation.
@@ -514,7 +514,7 @@ extern UInt16 OSBitOrAtomic16(
  * @abstract
  * 8-bit logical or operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  *
  * @discussion
  * The OSBitOrAtomic8 function logically ors the bits of the specified mask into the value at the specified address and returns the original value.
@@ -532,7 +532,7 @@ extern UInt8 OSBitOrAtomic8(
  * @abstract
  * 32-bit logical xor operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  *
  * @discussion
  * The OSBitXorAtomic function logically xors the bits of the specified mask into the value at the specified address and returns the original value.
@@ -555,7 +555,7 @@ extern UInt32 OSBitXorAtomic(
  * @discussion
  * The OSBitXorAtomic16 function logically xors the bits of the specified mask into the value at the specified address and returns the original value.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  * @param mask The mask to logically or with the value.
  * @param address The 2-byte aligned address of the value to update atomically.
  * @result The value before the bitwise operation.
@@ -570,7 +570,7 @@ extern UInt16 OSBitXorAtomic16(
  * @abstract
  * 8-bit logical xor operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  *
  * @discussion
  * The OSBitXorAtomic8 function logically xors the bits of the specified mask into the value at the specified address and returns the original value.
@@ -588,7 +588,7 @@ extern UInt8 OSBitXorAtomic8(
  * @abstract
  * Bit test and set operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  *
  * @discussion
  * The OSTestAndSet function sets a single bit in a byte at a specified address. It returns true if the bit was already set, false otherwise.
@@ -609,7 +609,7 @@ extern Boolean OSTestAndSet(
  * @discussion
  * The OSTestAndClear function clears a single bit in a byte at a specified address. It returns true if the bit was already clear, false otherwise.
  *
- * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device. Additionally, this function incorporates a memory barrier on systems with weakly-ordered memory architectures.
+ * This function guarantees atomicity only with main system memory. It is specifically unsuitable for use on noncacheable memory such as that in devices; this function cannot guarantee atomicity, for example, on memory mapped from a PCI device.
  * @param bit The bit number in the range 0 through 7. Bit 0 is the most significant.
  * @param startAddress The address of the byte to update atomically.
  * @result true if the bit was already clear, false otherwise.

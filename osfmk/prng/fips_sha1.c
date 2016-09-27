@@ -87,7 +87,7 @@ typedef int Boolean;
  */
 #if (defined(__i386__) || defined(__x86_64__)) && defined(__GNUC__)
 #define	FETCH_32(p) ({							\
-	register u_int32_t l = (u_int32_t)*((const u_int32_t *)(p));	\
+	u_int32_t l = (u_int32_t)*((const u_int32_t *)(p));	\
 	__asm__ __volatile__("bswap %0" : "=r" (l) : "0" (l));		\
 	l;								\
 })
@@ -267,8 +267,8 @@ SHA1Transform(u_int32_t a, u_int32_t b, u_int32_t c, u_int32_t d,
     u_int32_t e, const u_int8_t block[64], SHA1_CTX *context)
 {
 	/* Register (instead of array) is a win in most cases */
-	register u_int32_t w0, w1, w2, w3, w4, w5, w6, w7;
-	register u_int32_t w8, w9, w10, w11, w12, w13, w14, w15;
+	u_int32_t w0, w1, w2, w3, w4, w5, w6, w7;
+	u_int32_t w8, w9, w10, w11, w12, w13, w14, w15;
 
 	w15 = FETCH_32(block + 60);
 	w14 = FETCH_32(block + 56);

@@ -73,6 +73,9 @@
  * DKIOCGETFEATURES                      get device's feature set
  * DKIOCGETPHYSICALBLOCKSIZE             get device's block size
  * DKIOCGETCOMMANDPOOLSIZE               get device's queue depth
+ *
+ * DKIOCGETPROVISIONSTATUS               get device's block provision status
+ * DKIOCGETIOMINSATURATIONBYTECOUNT      get minimum byte count to saturate storage bandwidth
  */
 
 #define DK_FEATURE_BARRIER                    0x00000002
@@ -149,6 +152,27 @@ typedef struct
 #define DK_CORESTORAGE_ENABLE_HOTFILES          0x00000002
 #define DK_CORESTORAGE_PIN_YOUR_SWAPFILE        0x00000004
 
+#define DK_PROVISION_TYPE_MAPPED                0x00
+#define DK_PROVISION_TYPE_DEALLOCATED           0x01
+#define DK_PROVISION_TYPE_ANCHORED              0x02
+
+typedef struct
+{
+	uint64_t           offset;
+	uint64_t           length;
+	uint8_t            provisionType;
+	uint8_t            reserved[7];
+} dk_provision_extent_t;
+
+typedef struct
+{
+	uint64_t                offset;         /* input:        logical byte offset */
+	uint64_t                length;         /* input:        byte length, 0 for whole length */
+	uint64_t                options;        /*               reserved, clear to zero */
+	uint32_t                reserved;       /*               not used */
+	uint32_t                extentsCount;   /* input/output: count for extents */
+	dk_provision_extent_t *	extents;        /* output:       provision extents */
+} dk_provision_status_t;
 
 #ifdef KERNEL
 #ifdef PRIVATE
@@ -192,6 +216,8 @@ typedef struct
 #define DKIOCGETFEATURES                      _IOR('d', 76, uint32_t)
 #define DKIOCGETPHYSICALBLOCKSIZE             _IOR('d', 77, uint32_t)
 #define DKIOCGETCOMMANDPOOLSIZE               _IOR('d', 78, uint32_t)
+
+#define DKIOCGETPROVISIONSTATUS               _IOWR('d', 79, dk_provision_status_t)
 
 #define DKIOCSYNCHRONIZECACHE                 _IO('d', 22)
 
@@ -244,6 +270,7 @@ typedef struct
 #define DKIOCSETTIER                          _IOW('d', 85, dk_set_tier_t)
 #define DKIOCGETENCRYPTIONTYPE                _IOR('d', 86, uint32_t)
 #define DKIOCISLOWPOWERMODE                   _IOR('d', 87, uint32_t)
+#define DKIOCGETIOMINSATURATIONBYTECOUNT      _IOR('d', 88, uint32_t)
 
 #ifdef XNU_KERNEL_PRIVATE
 typedef struct

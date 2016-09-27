@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 2012-2016 Apple Inc.  All Rights Reserved.
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -321,7 +321,7 @@ public:
     @abstract   call updateReport() on multiple IOReporter objects
 
     @param  reporters - OSSet of IOReporter objects
-    @param  channels - full list of channels to update
+    @param  channelList - full list of channels to update
     @param  action - type/style of update
     @param  result - returned details about what was updated
     @param  destination - destination for this update (action-specific)
@@ -454,8 +454,8 @@ protected:
 /*! @function   IOReporter::handleAddChannelSwap
     @abstract   update primary instance variables with new buffers
 
-    @param channelID   ID of channel being added
-    @param channelName   optional channel name, in an allocated object
+    @param channel_id   ID of channel being added
+    @param symChannelName   optional channel name, in an allocated object
     @result     IOReturn code
 
     @discussion
@@ -625,9 +625,7 @@ protected:
     @param  element_index - index of the _element in internal array
     @result     A pointer to the element values requested or NULL on failure
      
-    @discussion
- 
-    Locking: Caller must ensure that the reporter (data) lock is held.
+    @discussion Locking: Caller must ensure that the reporter (data) lock is held.
     The returned pointer is only valid until unlockReporter() is called.
 */
     virtual const IOReportElementValues* getElementValues(int element_index);
@@ -651,7 +649,7 @@ protected:
     @abstract   Returns the index of a channel from internal data structures
 
     @param  channel_id - ID of the channel
-    @param  element_index - pointer to the returned element_index
+    @param  channel_index - pointer to the returned element_index
     @result     appropriate IOReturn code
     
     @discussion
@@ -705,7 +703,6 @@ private:
     @abstract   return an an OSArray of the reporter's 
                 channel IDs
      
-    @param  none
     @result     An OSArray of the repoter's channel ID's as OSNumbers
  
     @discussion
@@ -963,13 +960,60 @@ public:
     Locking: same-instance concurrency SAFE, WILL NOT BLOCK
 */
     IOReturn setChannelState(uint64_t channel_id,
-                             uint64_t new_state_id);
-
-    IOReturn setChannelState(uint64_t channel_id,
                              uint64_t new_state_id,
                              uint64_t last_intransition,
                              uint64_t prev_state_residency) __deprecated;
 
+/*! @function   IOStateReporter::setChannelState
+    @abstract   Updates the current state of a channel to a new state
+
+    @param  channel_id - ID of the channel which is updated to a new state
+    @param  new_state_id - ID of the target state for this channel
+    @result     Appropriate IOReturn code
+
+    @discussion 
+        setChannelState() updates the amount of time spent in the previous
+        state (if any) and increments the number of transitions into the
+        new state.  It also sets the target state's last transition time to
+        the current time and enables internal time-keeping for the channel.
+        In this mode, calls like getStateResidencyTime() and updateReport()
+        automatically update a channel's time in state.
+
+        new_state_id identifies the target state as initialized
+        (0..<nstates-1>) or as configured by setStateID().
+
+        Drivers wishing to compute and report their own time in state
+        should use incrementChannelState() or overrideChannelState().  It
+        is not currently possible for a driver to synchronize with the
+        automatic time-keeping enabled by setChannelState().  The
+        4-argument version of setChannelState() is thus impossible to
+        use correctly.  In the future, there may be a setChannelState()
+        which accepts a last_intransition parameter and uses it to
+        automatically calculate time in state (ERs -> IOReporting / X).
+ 
+    Locking: same-instance concurrency SAFE, WILL NOT BLOCK
+*/
+    IOReturn setChannelState(uint64_t channel_id,
+                             uint64_t new_state_id);
+
+
+/*! @function   IOStateReporter::setState
+    @abstract   Updates state for single channel reporters
+
+    @param  new_state_id - New state for the channel
+    @result     Appropriate IOReturn code.
+
+    @discussion 
+        setState() is a convenience method for single-channel state
+        reporter instances.  An error will be returned if the reporter
+        in question has more than one channel.
+
+        See further discussion at setChannelState().
+
+    Locking: same-instance concurrency SAFE, WILL NOT BLOCK
+*/
+    IOReturn setState(uint64_t new_state_id);
+    
 /*! @function   IOStateReporter::setState
     @abstract   Updates state for single channel reporters
 
@@ -987,8 +1031,6 @@ public:
 
     Locking: same-instance concurrency SAFE, WILL NOT BLOCK
 */
-    IOReturn setState(uint64_t new_state_id);
-    
     IOReturn setState(uint64_t new_state_id,
                       uint64_t last_intransition,
                       uint64_t prev_state_residency) __deprecated;
@@ -1096,9 +1138,7 @@ public:
     @abstract   update a channel state without validating channel_id
  
     @param  channel_index - 0..<nChannels>, available from getChannelIndex()
-    @param  new_state - New state (by index) for the channel
-    @param  last_intransition - deprecated: time of most recent entry
-    @param  prev_state_residency - deprecated: time spent in previous state 
+    @param  new_state_index - New state (by index) for the channel
     @result     Appropriate IOReturn code
  
     @discussion
@@ -1129,6 +1169,40 @@ public:
     IOReturn setStateByIndices(int channel_index,
                                int new_state_index);
     
+/*! @function   IOStateReporter::setStateByIndices
+    @abstract   update a channel state without validating channel_id
+ 
+    @param  channel_index - 0..<nChannels>, available from getChannelIndex()
+    @param  new_state_index - New state (by index) for the channel
+    @param  last_intransition - deprecated: time of most recent entry
+    @param  prev_state_residency - deprecated: time spent in previous state 
+    @result     Appropriate IOReturn code
+ 
+    @discussion
+        Similar to setState(), setStateByIndices() sets a channel's state
+        without searching for the channel or state IDs.  It will perform
+        bounds checking, but relies on the caller to properly indicate
+        the indices of the channel and state.  Clients can rely on channels
+        being added to IOStateReporter in order: the first channel will
+        have index 0, the second index 1, etc.  Like ::setState(),
+        "time in state" calculations are handled automatically.
+
+        setStateByIndices() is faster than than setChannelState(), but
+        it should only be used where the latter's performance overhead
+        might be a problem.  For example, many channels in a single
+        reporter and high-frequency state changes.
+
+        Drivers wishing to compute and report their own time in state
+        should use incrementChannelState() or overrideChannelState().  It
+        is not currently possible for a driver to synchronize with the
+        automatic time-keeping enabled by setStateByIndices().  The
+        4-argument version of setChannelState() is thus impossible to
+        use correctly.  In the future, there may be a setChannelState()
+        which accepts a last_intransition parameter and uses it to
+        automatically calculate time in state (ERs -> IOReporting / X).
+ 
+    Locking: same-instance concurrency SAFE, WILL NOT BLOCK
+*/
     IOReturn setStateByIndices(int channel_index,
                                int new_state_index,
                                uint64_t last_intransition,
@@ -1138,7 +1212,7 @@ public:
     @abstract   Accessor method for count of transitions into state
      
     @param  channel_id - ID of the channel
-    @param  channel_state - State of the channel
+    @param  state_id - State of the channel
     @result     Count of transitions into the requested state.
      
     @discussion
@@ -1155,7 +1229,7 @@ public:
     @abstract   Accessor method for time spent in a given state
      
     @param  channel_id - ID of the channel
-    @param  channel_state - State of the channel
+    @param  state_id - State of the channel
     @result     Absolute time spent in specified state
      
     @discussion
@@ -1173,7 +1247,7 @@ public:
     @abstract   Accessor method for last time a transition occured
      
     @param  channel_id - ID of the channel
-    @param  channel_state - State of the channel
+    @param  state_id - State of the channel
     @result     Absolute time for when the last transition occured
      
     @discussion
@@ -1231,18 +1305,21 @@ protected:
     
 /*! @function   IOStateReporter::handleSwapPrepare
     @abstract   _swap* = <IOStateReporter-specific per-channel buffers>
-
-    @function   IOStateReporter::handleAddChannelSwap
-    @abstract   swap in IOStateReporter's variables
-
-    @function   IOStateReporter::handleSwapCleanup
-    @abstract   clean up unused buffers in _swap* 
-     
     [see IOReporter::handle*Swap* for more info]
 */
     virtual IOReturn handleSwapPrepare(int newNChannels) APPLE_KEXT_OVERRIDE;
+
+/*!
+    @function   IOStateReporter::handleAddChannelSwap
+    @abstract   swap in IOStateReporter's variables
+*/
     virtual IOReturn handleAddChannelSwap(uint64_t channel_id,
                                           const OSSymbol *symChannelName) APPLE_KEXT_OVERRIDE;
+
+/*!
+    @function   IOStateReporter::handleSwapCleanup
+    @abstract   clean up unused buffers in _swap* 
+*/
     virtual void handleSwapCleanup(int swapNChannels) APPLE_KEXT_OVERRIDE;
     
 /*! @function   IOStateReporter::updateChannelValues
@@ -1264,7 +1341,7 @@ protected:
     @abstract   update a channel state without validating channel_id
      
     @param  channel_index - 0..<nChannels>, available from getChannelIndex()
-    @param  new_state - New state for the channel
+    @param  new_state_index - New state for the channel
     @param  last_intransition - to remove: time of most recent entry
     @param  prev_state_residency - to remove: time spent in previous state 
     @result     Appropriate IOReturn code
@@ -1414,9 +1491,33 @@ FIXME: need more explanation of the config
 
     @result     kIOReturnUnsupported - doesn't support adding channels
 */
-    IOReturn addChannel(uint64_t channelID, const char *channelName = NULL) {
+    IOReturn addChannel(__unused uint64_t channelID, __unused const char *channelName = NULL) {
             return kIOReturnUnsupported;
     }
+
+/*! @function   IOHistogramReporter::overrideBucketValues
+    @abstract   Override values of a bucket at specified index
+
+    @param  index - index of bucket to override
+    @param  bucket_hits - new bucket hits count
+    @param  bucket_min - new bucket minimum value
+    @param  bucket_max - new bucket maximum value
+    @param  bucket_sum - new bucket sum
+    @result     Appropriate IOReturn code
+ 
+    @discussion 
+        Replaces data in the bucket at the specified index with the data pointed
+        to by bucket. No sanity check is performed on the data. If the index
+        is out of bounds, kIOReturnBadArgument is returned.
+
+    Locking: same-instance concurrency SAFE, WILL NOT BLOCK
+*/
+
+    IOReturn overrideBucketValues(unsigned int index,
+                                  uint64_t bucket_hits,
+                                  int64_t bucket_min,
+                                  int64_t bucket_max,
+                                  int64_t bucket_sum);
         
 /*! @function   IOHistogramReporter::tallyValue
     @abstract   Add a new value to the histogram
@@ -1558,6 +1659,34 @@ public:
 /*! @function   IOReportLegend::addReporterLegend
     @abstract   Add a legend entry from a reporter object
 
+    @param  reporter - IOReporter to use to extract and append the legend
+    @param  groupName - primary group name for this entry
+    @param  subGroupName - secondary group name for this entry
+    @result     appropriate IOReturn code
+     
+    @discussion
+        An IOReportLegendEntry will be created internally to this method from 
+        the IOReporter object passed in argument. The entry will be released
+        internally after being appended to the IOReportLegend object.
+        Legend entries are available from reporter objects.  Entries
+        represent some number of channels with similar properties (such
+        as group and sub-group).  Multiple legend entries with the same
+        group names will be aggregated in user space.
+     
+        Drivers that instantiate their reporter objects in response to
+        IOService::configureReport(kIOReportDisable) will need to create
+        temporary reporter objects for the purpose of creating their
+        legend entries.  User-space legends are tracked by 12836893.
+
+        Locking: same-reportingService and same-IORLegend concurrency UNSAFE
+*/
+    IOReturn addReporterLegend(IOReporter *reporter,
+                               const char *groupName,
+                               const char *subGroupName);
+    
+/*! @function   IOReportLegend::addReporterLegend
+    @abstract   Add a legend entry from a reporter object
+
     @param  reportingService - IOService data provider into the reporter object
     @param  reporter - IOReporter to use to extract and append the legend
     @param  groupName - primary group name for this entry
@@ -1584,10 +1713,6 @@ public:
 
         Locking: same-reportingService and same-IORLegend concurrency UNSAFE
 */
-    IOReturn addReporterLegend(IOReporter *reporter,
-                               const char *groupName,
-                               const char *subGroupName);
-    
     static  IOReturn addReporterLegend(IOService *reportingService,
                                        IOReporter *reporter,
                                        const char *groupName,
@@ -1632,8 +1757,6 @@ private:
     @param  groupName - Primary group name
     @param  subGroupName - Secondary group name
     @result     IOReturn code
-    
-    @discussion
 */
     IOReturn organizeLegend(IOReportLegendEntry *legendEntry,
                             const OSSymbol *groupName,

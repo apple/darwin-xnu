@@ -45,6 +45,7 @@
     #include <mach/mach_init.h>
     #include <mach-o/arch.h>
     #include <mach-o/swap.h>
+
 #endif /* KERNEL */
 
 #define DEBUG_ASSERT_COMPONENT_NAME_STRING "kxld"
@@ -60,6 +61,8 @@
 #include "kxld_symtab.h"
 #include "kxld_util.h"
 #include "kxld_vtable.h"
+
+extern boolean_t isSplitKext;
 
 struct symtab_command;
 
@@ -96,9 +99,9 @@ static kern_return_t resolve_symbols(KXLDKext *kext,
 
 static kern_return_t patch_vtables(KXLDKext *kext, KXLDDict *patched_vtables,
     const KXLDDict *defined_symbols);
-static const KXLDSym *get_metaclass_symbol_from_super_meta_class_pointer_symbol(
-    KXLDKext *kext, KXLDSym *super_metaclass_pointer_sym);
 static kern_return_t create_vtable_index(KXLDKext *kext);
+static const KXLDSym *get_metaclass_symbol_from_super_meta_class_pointer_symbol(
+                                                                                KXLDKext *kext, KXLDSym *super_metaclass_pointer_sym);
 
 static kern_return_t validate_symbols(KXLDKext *kext);
 
@@ -355,6 +358,16 @@ finish:
 }
 
 /*******************************************************************************
+ *******************************************************************************/
+void
+kxld_kext_get_vmsize_for_seg_by_name(const KXLDKext *kext,
+                                          const char *segname,
+                                          u_long *vmsize)
+{
+    (void) kxld_object_get_vmsize_for_seg_by_name(kext->kext, segname, vmsize);
+}
+
+/*******************************************************************************
 *******************************************************************************/
 void 
 kxld_kext_get_vmsize(const KXLDKext *kext, 
@@ -365,27 +378,28 @@ kxld_kext_get_vmsize(const KXLDKext *kext,
 
 /*******************************************************************************
  *******************************************************************************/
-void 
+void
 kxld_kext_set_linked_object_size(KXLDKext *kext, u_long vmsize)
 {
     (void) kxld_object_set_linked_object_size(kext->kext, vmsize);
 }
 
-
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t 
 kxld_kext_export_linked_object(const KXLDKext *kext, 
-    u_char *linked_object, kxld_addr_t *kmod_info)
+                               void *linked_object,
+                               kxld_addr_t *kmod_info)
 {
     kern_return_t rval = KERN_FAILURE;
     const KXLDSym *kmodsym = NULL;
 
     kmodsym = kxld_symtab_get_locally_defined_symbol_by_name(
         kxld_object_get_symtab(kext->kext), KXLD_KMOD_INFO_SYMBOL);
+
     require_action(kmodsym, finish, rval=KERN_FAILURE;
         kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogNoKmodInfo));
- 
+
     *kmod_info = kmodsym->link_addr;
 
     rval = kxld_object_export_linked_object(kext->kext, linked_object);
@@ -396,9 +410,12 @@ finish:
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t
-kxld_kext_relocate(KXLDKext *kext, kxld_addr_t link_address,
-    KXLDDict *patched_vtables, const KXLDDict *defined_symbols, 
-    const KXLDDict *obsolete_symbols, const KXLDDict *defined_cxx_symbols)
+kxld_kext_relocate(KXLDKext *kext,
+                   kxld_addr_t link_address,
+                   KXLDDict *patched_vtables,
+                   const KXLDDict *defined_symbols,
+                   const KXLDDict *obsolete_symbols,
+                   const KXLDDict *defined_cxx_symbols)
 {
     kern_return_t rval = KERN_FAILURE;
 
@@ -429,9 +446,11 @@ kxld_kext_relocate(KXLDKext *kext, kxld_addr_t link_address,
     rval = create_vtables(kext, defined_cxx_symbols, /* defined_symbols */ NULL);
     require_noerr(rval, finish);
 
-    rval = patch_vtables(kext, patched_vtables, defined_symbols);
-    require_noerr(rval, finish);
-    
+    if (isSplitKext == FALSE) {
+        rval = patch_vtables(kext, patched_vtables, defined_symbols);
+        require_noerr(rval, finish);
+    }
+ 
     rval = validate_symbols(kext);
     require_noerr(rval, finish);
 
@@ -440,7 +459,7 @@ kxld_kext_relocate(KXLDKext *kext, kxld_addr_t link_address,
 
     rval = KERN_SUCCESS;
 finish:
-    return rval;
+   return rval;
 }
 
 /*******************************************************************************
@@ -840,8 +859,8 @@ patch_vtables(KXLDKext *kext, KXLDDict *patched_vtables,
         {
             /* Get the class name from the smc pointer */
             rval = kxld_sym_get_class_name_from_super_metaclass_pointer(
-                super_metaclass_pointer, class_name, sizeof(class_name));
-            require_noerr(rval, finish);
+                    super_metaclass_pointer, class_name, sizeof(class_name));
+           require_noerr(rval, finish);
 
             /* Get the vtable name from the class name */
             rval = kxld_sym_get_vtable_name_from_class_name(class_name,
@@ -859,7 +878,7 @@ patch_vtables(KXLDKext *kext, KXLDDict *patched_vtables,
                 /* Find the SMCP's meta class symbol */
                 metaclass = get_metaclass_symbol_from_super_meta_class_pointer_symbol(
                     kext, super_metaclass_pointer);
-                require_action(metaclass, finish, rval=KERN_FAILURE);
+               require_action(metaclass, finish, rval=KERN_FAILURE);
 
                 /* Get the super class name from the super metaclass */
                 rval = kxld_sym_get_class_name_from_metaclass(metaclass,
@@ -931,7 +950,7 @@ patch_vtables(KXLDKext *kext, KXLDDict *patched_vtables,
                 /* Get the meta vtable name from the class name */
                 rval = kxld_sym_get_meta_vtable_name_from_class_name(class_name,
                     vtable_name, sizeof(vtable_name));
-                require_noerr(rval, finish);
+               require_noerr(rval, finish);
 
                 /* Get the meta vtable.  Whether or not it should exist has already
                  * been tested in create_vtables(), so if it doesn't exist and we're
@@ -956,7 +975,7 @@ patch_vtables(KXLDKext *kext, KXLDDict *patched_vtables,
                        
                 /* Get the super meta vtable */
                 super_vtable = kxld_dict_find(patched_vtables, super_vtable_name);
-                require_action(super_vtable && super_vtable->is_patched, 
+                require_action(super_vtable && super_vtable->is_patched,
                     finish, rval=KERN_FAILURE);
 
                 /* Patch the meta class's vtable */
@@ -1017,10 +1036,10 @@ finish:
 }
 
 /*******************************************************************************
-*******************************************************************************/
+ *******************************************************************************/
 static const KXLDSym *
 get_metaclass_symbol_from_super_meta_class_pointer_symbol(KXLDKext *kext,
-    KXLDSym *super_metaclass_pointer_sym)
+                                                          KXLDSym *super_metaclass_pointer_sym)
 {
     kern_return_t rval = KERN_FAILURE;
     const KXLDReloc *reloc = NULL;
@@ -1029,22 +1048,30 @@ get_metaclass_symbol_from_super_meta_class_pointer_symbol(KXLDKext *kext,
     
     check(kext);
     check(super_metaclass_pointer_sym);
-
+    
     /* Get the relocation entry that fills in the super metaclass pointer. */
     reloc = kxld_object_get_reloc_at_symbol(kext->kext,
-        super_metaclass_pointer_sym);
+                                            super_metaclass_pointer_sym);
     require_action(reloc, finish, rval=KERN_FAILURE);
-
+    
     /* Get the section of the super metaclass pointer. */
     sect = kxld_object_get_section_by_index(kext->kext,
-        super_metaclass_pointer_sym->sectnum);
+                                            super_metaclass_pointer_sym->sectnum);
     require_action(sect, finish, rval=KERN_FAILURE);
-
+    
     /* Get the symbol that will be filled into the super metaclass pointer. */
     metaclass = kxld_object_get_symbol_of_reloc(kext->kext, reloc, sect);
+    
+    
 finish:
+    if (metaclass == NULL) {
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "metaclass == NULL kxld_sym %s <%s>",
+                 super_metaclass_pointer_sym->name, __func__);
+    }
     return metaclass;
 }
+
 
 /*******************************************************************************
 *******************************************************************************/

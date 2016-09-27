@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000, 2007, 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -81,10 +81,7 @@
  * modify outer ECN (TOS) field on ingress operation (tunnel encapsulation).
  */
 void
-ip_ecn_ingress(mode, outer, inner)
-	int mode;
-	u_int8_t *outer;
-	const u_int8_t *inner;
+ip_ecn_ingress(int mode, u_int8_t *outer, const u_int8_t *inner)
 {
 	if (!outer || !inner)
 		panic("NULL pointer passed to ip_ecn_ingress");
@@ -105,10 +102,7 @@ ip_ecn_ingress(mode, outer, inner)
  * modify inner ECN (TOS) field on egress operation (tunnel decapsulation).
  */
 int
-ip_ecn_egress(mode, outer, inner)
-	int mode;
-	const u_int8_t *outer;
-	u_int8_t *inner;
+ip_ecn_egress(int mode, const u_int8_t *outer, u_int8_t *inner)
 {
 	if (!outer || !inner)
 		panic("NULL pointer passed to ip_ecn_egress");
@@ -133,10 +127,7 @@ ip_ecn_egress(mode, outer, inner)
 
 #if INET6
 void
-ip6_ecn_ingress(mode, outer, inner)
-	int mode;
-	u_int32_t *outer;
-	const u_int32_t *inner;
+ip6_ecn_ingress(int mode, u_int32_t *outer, const u_int32_t *inner)
 {
 	u_int8_t outer8, inner8;
 
@@ -150,10 +141,7 @@ ip6_ecn_ingress(mode, outer, inner)
 }
 
 int
-ip6_ecn_egress(mode, outer, inner)
-	int mode;
-	const u_int32_t *outer;
-	u_int32_t *inner;
+ip6_ecn_egress(int mode, const u_int32_t *outer, u_int32_t *inner)
 {
 	u_int8_t outer8, inner8;
 
@@ -175,10 +163,7 @@ ip6_ecn_egress(mode, outer, inner)
  * on ingress operation (tunnel encapsulation).
  */
 void
-ip46_ecn_ingress(mode, outer, tos)
-	int mode;
-	u_int32_t *outer;
-	const u_int8_t *tos;
+ip46_ecn_ingress(int mode, u_int32_t *outer, const u_int8_t *tos)
 {
 	u_int8_t outer8;
 
@@ -195,10 +180,7 @@ ip46_ecn_ingress(mode, outer, tos)
  * on egress operation (tunnel decapsulation).
  */
 int
-ip46_ecn_egress(mode, outer, tos)
-	int mode;
-	const u_int32_t *outer;
-	u_int8_t *tos;
+ip46_ecn_egress(int mode, const u_int32_t *outer, u_int8_t *tos)
 {
 	u_int8_t outer8;
 
@@ -214,10 +196,7 @@ ip46_ecn_egress(mode, outer, tos)
  * on ingress operation (tunnel encapsulation).
  */
 void
-ip64_ecn_ingress(mode, outer, inner)
-	int mode;
-	u_int8_t *outer;
-	const u_int32_t *inner;
+ip64_ecn_ingress(int mode, u_int8_t *outer, const u_int32_t *inner)
 {
 	u_int8_t inner8;
 
@@ -233,10 +212,7 @@ ip64_ecn_ingress(mode, outer, inner)
  * on egress operation (tunnel decapsulation).
  */
 int
-ip64_ecn_egress(mode, outer, inner)
-	int mode;
-	const u_int8_t *outer;
-	u_int32_t *inner;
+ip64_ecn_egress(int mode, const u_int8_t *outer, u_int32_t *inner)
 {
 	u_int8_t inner8;
 

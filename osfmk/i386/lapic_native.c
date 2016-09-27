@@ -958,7 +958,7 @@ lapic_get_cmci_vector(void)
 	return cmci_vector;
 }
 
-#if DEBUG
+#if DEVELOPMENT || DEBUG
 extern void lapic_trigger_MC(void);
 void
 lapic_trigger_MC(void)

@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -26,7 +25,8 @@ DATAFILES= \
 	kext_net.h \
 	ndrv.h \
 	pfkeyv2.h \
-	route.h
+	route.h	\
+	net_kev.h
 
 KERNELFILES= \
 	kpi_interface.h kpi_interfacefilter.h kpi_protocol.h \
@@ -48,9 +48,6 @@ PRIVATE_DATAFILES = \
 	if_pflog.h \
 	if_ppp.h \
 	if_utun.h \
-	if_utun_crypto.h \
-	if_utun_crypto_ipsec.h \
-	if_utun_crypto_dtls.h \
 	if_var.h \
 	if_vlan_var.h \
 	iptap.h \
@@ -68,7 +65,8 @@ PRIVATE_DATAFILES = \
 	radix.h \
 	raw_cb.h \
 	route.h \
-	net_perf.h
+	net_perf.h \
+	net_kev.h
 
 PRIVATE_KERNELFILES = $(filter-out radix.h,${KERNELFILES}) \
 	bpfdesc.h ppp_comp.h \

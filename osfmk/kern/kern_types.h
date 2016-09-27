@@ -182,6 +182,11 @@ typedef int wait_timeout_urgency_t;
 
 #ifdef	KERNEL_PRIVATE
 
+/*
+ * n.b. this is defined in thread_call.h, but in the TIMEOUT_URGENCY flags space:
+ * #define THREAD_CALL_CONTINUOUS	0x100
+ */
+
 #ifdef	MACH_KERNEL_PRIVATE
 
 #include <kern/misc_protos.h>

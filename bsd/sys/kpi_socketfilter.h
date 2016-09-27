@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -182,7 +182,7 @@ typedef	errno_t	(*sf_attach_func)(void	**cookie, socket_t so);
 	@param cookie Cookie value specified when the filter attach was
 		called.
 	@param so The socket the filter is attached to.
-	@result If you return a non-zero value, your filter will not be
+	@discussion If you return a non-zero value, your filter will not be
 		attached to this socket.
 */
 typedef	void (*sf_detach_func)(void *cookie, socket_t so);
@@ -285,7 +285,7 @@ typedef	errno_t	(*sf_data_in_func)(void *cookie, socket_t so,
 	@param cookie Cookie value specified when the filter attach was
 		called.
 	@param so The socket the filter is attached to.
-	@param from The address the data is from, may be NULL if the socket
+	@param to The address the data is to, may be NULL if the socket
 		is connected.
 	@param data The data being received. Control data may appear in the
 		mbuf chain, be sure to check the mbuf types to find control
@@ -591,7 +591,7 @@ extern errno_t sflt_unregister(sflt_handle handle);
 	@param handle The handle of the registered filter to be attached.
 	@result 0 on success otherwise the errno error.
  */
-extern errno_t sflt_attach(socket_t so, sflt_handle);
+extern errno_t sflt_attach(socket_t socket, sflt_handle handle);
 
 /*!
 	@function sflt_detach
@@ -600,7 +600,7 @@ extern errno_t sflt_attach(socket_t so, sflt_handle);
 	@param handle The handle of the registered filter to be detached.
 	@result 0 on success otherwise the errno error.
  */
-extern errno_t sflt_detach(socket_t so, sflt_handle);
+extern errno_t sflt_detach(socket_t socket, sflt_handle handle);
 
 /* Functions for manipulating sockets */
 /*

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -35,6 +35,8 @@
 #include <kern/thread.h>
 #include <kern/affinity.h>
 #include <kern/zalloc.h>
+#include <kern/policy_internal.h>
+
 #include <machine/machine_routines.h>
 #include <mach/task.h>
 #include <mach/thread_act.h>
@@ -45,6 +47,7 @@
 #include <sys/systm.h>
 #include <vm/vm_map.h>
 #include <vm/vm_protos.h>
+#include <kern/kcdata.h>
 
 /* version number of the in-kernel shims given to pthread.kext */
 #define PTHREAD_SHIMS_VERSION 1
@@ -53,8 +56,8 @@
 #define PTHREAD_CALLBACK_MEMBER ml_get_max_cpus
 
 /* compile time asserts to check the length of structures in pthread_shims.h */
-char pthread_functions_size_compile_assert[(sizeof(struct pthread_functions_s) - offsetof(struct pthread_functions_s, psynch_rw_yieldwrlock) - sizeof(void*)) == (sizeof(void*) * 100) ? 1 : -1];
-char pthread_callbacks_size_compile_assert[(sizeof(struct pthread_callbacks_s) - offsetof(struct pthread_callbacks_s, PTHREAD_CALLBACK_MEMBER) - sizeof(void*)) == (sizeof(void*) * 100) ? 1 : -1];
+static_assert((sizeof(struct pthread_functions_s) - offsetof(struct pthread_functions_s, psynch_rw_yieldwrlock) - sizeof(void*)) == (sizeof(void*) * 100));
+static_assert((sizeof(struct pthread_callbacks_s) - offsetof(struct pthread_callbacks_s, PTHREAD_CALLBACK_MEMBER) - sizeof(void*)) == (sizeof(void*) * 100));
 
 /* old pthread code had definitions for these as they don't exist in headers */
 extern kern_return_t mach_port_deallocate(ipc_space_t, mach_port_name_t);
@@ -69,23 +72,64 @@ extern kern_return_t semaphore_signal_internal_trap(mach_port_name_t);
 	set(structtype x, rettype y) { \
 		(x)->member = y; \
 	}
-	
+
 PTHREAD_STRUCT_ACCESSOR(proc_get_threadstart, proc_set_threadstart, user_addr_t, struct proc*, p_threadstart);
 PTHREAD_STRUCT_ACCESSOR(proc_get_pthsize, proc_set_pthsize, int, struct proc*, p_pthsize);
 PTHREAD_STRUCT_ACCESSOR(proc_get_wqthread, proc_set_wqthread, user_addr_t, struct proc*, p_wqthread);
-PTHREAD_STRUCT_ACCESSOR(proc_get_targconc, proc_set_targconc, user_addr_t, struct proc*, p_targconc);
 PTHREAD_STRUCT_ACCESSOR(proc_get_stack_addr_hint, proc_set_stack_addr_hint, user_addr_t, struct proc *, p_stack_addr_hint);
 PTHREAD_STRUCT_ACCESSOR(proc_get_dispatchqueue_offset, proc_set_dispatchqueue_offset, uint64_t, struct proc*, p_dispatchqueue_offset);
 PTHREAD_STRUCT_ACCESSOR(proc_get_dispatchqueue_serialno_offset, proc_set_dispatchqueue_serialno_offset, uint64_t, struct proc*, p_dispatchqueue_serialno_offset);
 PTHREAD_STRUCT_ACCESSOR(proc_get_pthread_tsd_offset, proc_set_pthread_tsd_offset, uint32_t, struct proc *, p_pth_tsd_offset);
-PTHREAD_STRUCT_ACCESSOR(proc_get_wqptr, proc_set_wqptr, void*, struct proc*, p_wqptr);
-PTHREAD_STRUCT_ACCESSOR(proc_get_wqsize, proc_set_wqsize, int, struct proc*, p_wqsize);
 PTHREAD_STRUCT_ACCESSOR(proc_get_pthhash, proc_set_pthhash, void*, struct proc*, p_pthhash);
 
 PTHREAD_STRUCT_ACCESSOR(uthread_get_threadlist, uthread_set_threadlist, void*, struct uthread*, uu_threadlist);
 PTHREAD_STRUCT_ACCESSOR(uthread_get_sigmask, uthread_set_sigmask, sigset_t, struct uthread*, uu_sigmask);
 PTHREAD_STRUCT_ACCESSOR(uthread_get_returnval, uthread_set_returnval, int, struct uthread*, uu_rval[0]);
 
+#define WQPTR_IS_INITING_VALUE ((void *)~(uintptr_t)0)
+
+static void *
+proc_get_wqptr(struct proc *p) {
+	void *wqptr =  p->p_wqptr;
+	return (wqptr == WQPTR_IS_INITING_VALUE) ? NULL : wqptr;
+}
+static void
+proc_set_wqptr(struct proc *p, void *y) {
+	proc_lock(p);
+
+	assert(y == NULL || p->p_wqptr == WQPTR_IS_INITING_VALUE);
+
+	p->p_wqptr = y;
+
+	if (y != NULL){
+		wakeup(&p->p_wqptr);
+	}
+
+	proc_unlock(p);
+}
+static boolean_t
+proc_init_wqptr_or_wait(struct proc *p) {
+	proc_lock(p);
+
+	if (p->p_wqptr == NULL){
+		p->p_wqptr = WQPTR_IS_INITING_VALUE;
+		proc_unlock(p);
+
+		return TRUE;
+	} else if (p->p_wqptr == WQPTR_IS_INITING_VALUE){
+		assert_wait(&p->p_wqptr, THREAD_UNINT);
+		proc_unlock(p);
+		thread_block(THREAD_CONTINUE_NULL);
+
+		return FALSE;
+	} else {
+		proc_unlock(p);
+
+		return FALSE;
+	}
+}
+
+__attribute__((noreturn))
 static void
 pthread_returning_to_userspace(void)
 {
@@ -100,16 +144,6 @@ get_task_threadmax(void) {
 static task_t
 proc_get_task(struct proc *p) {
 	return p->task;
-}
-
-static lck_spin_t*
-proc_get_wqlockptr(struct proc *p) {
-	return &(p->p_wqlock);
-}
-
-static boolean_t*
-proc_get_wqinitingptr(struct proc *p) {
-	return &(p->p_wqiniting);
 }
 
 static uint64_t
@@ -149,15 +183,15 @@ qos_main_thread_active(void)
 
 static int proc_usynch_get_requested_thread_qos(struct uthread *uth)
 {
-	task_t		task = current_task();
 	thread_t	thread = uth ? uth->uu_thread : current_thread();
 	int			requested_qos;
 
-	requested_qos = proc_get_task_policy(task, thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS);
+	requested_qos = proc_get_thread_policy(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS);
 
 	/*
-	 * For the purposes of userspace synchronization, it doesn't make sense to place an override of UNSPECIFIED
-	 * on another thread, if the current thread doesn't have any QoS set. In these cases, upgrade to
+	 * For the purposes of userspace synchronization, it doesn't make sense to
+	 * place an override of UNSPECIFIED on another thread, if the current thread
+	 * doesn't have any QoS set. In these cases, upgrade to
 	 * THREAD_QOS_USER_INTERACTIVE.
 	 */
 	if (requested_qos == THREAD_QOS_UNSPECIFIED) {
@@ -167,41 +201,51 @@ static int proc_usynch_get_requested_thread_qos(struct uthread *uth)
 	return requested_qos;
 }
 
-static boolean_t proc_usynch_thread_qos_add_override(struct uthread *uth, uint64_t tid, int override_qos, boolean_t first_override_for_resource)
+static int
+proc_usynch_thread_qos_add_override_for_resource_check_owner(thread_t thread,
+		int override_qos, boolean_t first_override_for_resource,
+		user_addr_t resource, int resource_type,
+		user_addr_t user_lock_addr, mach_port_name_t user_lock_owner)
 {
-	task_t task = current_task();
-	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
-	
-	return proc_thread_qos_add_override(task, thread, tid, override_qos, first_override_for_resource, USER_ADDR_NULL, THREAD_QOS_OVERRIDE_TYPE_UNKNOWN);
+	return proc_thread_qos_add_override_check_owner(thread, override_qos,
+			first_override_for_resource, resource, resource_type,
+			user_lock_addr, user_lock_owner);
 }
 
-static boolean_t proc_usynch_thread_qos_remove_override(struct uthread *uth, uint64_t tid)
-{
-	task_t task = current_task();
-	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
-
-	return proc_thread_qos_remove_override(task, thread, tid, USER_ADDR_NULL, THREAD_QOS_OVERRIDE_TYPE_UNKNOWN);
-}
-
-static boolean_t proc_usynch_thread_qos_add_override_for_resource(task_t task, struct uthread *uth, uint64_t tid, int override_qos, boolean_t first_override_for_resource, user_addr_t resource, int resource_type)
+static boolean_t
+proc_usynch_thread_qos_add_override_for_resource(task_t task, struct uthread *uth,
+		uint64_t tid, int override_qos, boolean_t first_override_for_resource,
+		user_addr_t resource, int resource_type)
 {
 	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
-	
-	return proc_thread_qos_add_override(task, thread, tid, override_qos, first_override_for_resource, resource, resource_type);
+
+	return proc_thread_qos_add_override(task, thread, tid, override_qos,
+			first_override_for_resource, resource, resource_type);
 }
 
-static boolean_t proc_usynch_thread_qos_remove_override_for_resource(task_t task, struct uthread *uth, uint64_t tid, user_addr_t resource, int resource_type)
+static boolean_t
+proc_usynch_thread_qos_remove_override_for_resource(task_t task,
+		struct uthread *uth, uint64_t tid, user_addr_t resource, int resource_type)
 {
 	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
 
 	return proc_thread_qos_remove_override(task, thread, tid, resource, resource_type);
 }
 
-static boolean_t proc_usynch_thread_qos_reset_override_for_resource(task_t task, struct uthread *uth, uint64_t tid, user_addr_t resource, int resource_type)
+static boolean_t
+proc_usynch_thread_qos_reset_override_for_resource(task_t task,
+		struct uthread *uth, uint64_t tid, user_addr_t resource, int resource_type)
 {
 	thread_t thread = uth ? uth->uu_thread : THREAD_NULL;
 
 	return proc_thread_qos_reset_override(task, thread, tid, resource, resource_type);
+}
+
+static boolean_t
+proc_usynch_thread_qos_squash_override_for_resource(thread_t thread,
+		user_addr_t resource, int resource_type)
+{
+	return proc_thread_qos_squash_override(thread, resource, resource_type);
 }
 
 /* kernel (core) to kext shims */
@@ -215,22 +259,54 @@ pthread_init(void)
 	pthread_functions->pthread_init();
 }
 
-int 
+int
 fill_procworkqueue(proc_t p, struct proc_workqueueinfo * pwqinfo)
 {
 	return pthread_functions->fill_procworkqueue(p, pwqinfo);
 }
 
-void
-workqueue_init_lock(proc_t p)
+/*
+ * Returns true if the workqueue flags are available, and will fill
+ * in exceeded_total and exceeded_constrained.
+ */
+boolean_t
+workqueue_get_pwq_exceeded(void *v, boolean_t *exceeded_total,
+                           boolean_t *exceeded_constrained)
 {
-	pthread_functions->workqueue_init_lock(p);
+	proc_t p = v;
+	struct proc_workqueueinfo pwqinfo;
+	int err;
+
+	assert(p != NULL);
+	assert(exceeded_total != NULL);
+	assert(exceeded_constrained != NULL);
+
+	err = fill_procworkqueue(p, &pwqinfo);
+	if (err) {
+		return FALSE;
+	}
+	if (!(pwqinfo.pwq_state & WQ_FLAGS_AVAILABLE)) {
+		return FALSE;
+	}
+
+	*exceeded_total = (pwqinfo.pwq_state & WQ_EXCEEDED_TOTAL_THREAD_LIMIT);
+	*exceeded_constrained = (pwqinfo.pwq_state & WQ_EXCEEDED_CONSTRAINED_THREAD_LIMIT);
+
+	return TRUE;
 }
 
-void
-workqueue_destroy_lock(proc_t p)
+uint32_t
+workqueue_get_pwq_state_kdp(void * v)
 {
-	pthread_functions->workqueue_destroy_lock(p);
+	static_assert((WQ_EXCEEDED_CONSTRAINED_THREAD_LIMIT << 17) == kTaskWqExceededConstrainedThreadLimit);
+	static_assert((WQ_EXCEEDED_TOTAL_THREAD_LIMIT << 17) == kTaskWqExceededTotalThreadLimit);
+	static_assert((WQ_FLAGS_AVAILABLE << 17) == kTaskWqFlagsAvailable);
+	static_assert((WQ_FLAGS_AVAILABLE | WQ_EXCEEDED_TOTAL_THREAD_LIMIT | WQ_EXCEEDED_CONSTRAINED_THREAD_LIMIT) == 0x7);
+	proc_t p = v;
+	if (pthread_functions == NULL || pthread_functions->get_pwq_state_kdp == NULL)
+		return 0;
+	else
+		return pthread_functions->get_pwq_state_kdp(p);
 }
 
 void
@@ -412,13 +488,29 @@ psynch_rw_downgrade(__unused proc_t p, __unused struct psynch_rw_downgrade_args 
 	return 0;
 }
 
+int
+thread_qos_from_pthread_priority(unsigned long priority, unsigned long *flags)
+{
+	return pthread_functions->thread_qos_from_pthread_priority(priority, flags);
+}
+
+unsigned long
+pthread_priority_canonicalize(unsigned long priority, boolean_t propagation)
+{
+	if (pthread_functions->pthread_priority_canonicalize2) {
+		return pthread_functions->pthread_priority_canonicalize2(priority, propagation);
+	} else {
+		return pthread_functions->pthread_priority_canonicalize(priority);
+	}
+}
+
 /*
  * The callbacks structure (defined in pthread_shims.h) contains a collection
  * of kernel functions that were not deemed sensible to expose as a KPI to all
  * kernel extensions. So the kext is given them in the form of a structure of
  * function pointers.
  */
-static struct pthread_callbacks_s pthread_callbacks = {
+static const struct pthread_callbacks_s pthread_callbacks = {
 	.version = PTHREAD_SHIMS_VERSION,
 	.config_thread_max = CONFIG_THREAD_MAX,
 	.get_task_threadmax = get_task_threadmax,
@@ -429,21 +521,15 @@ static struct pthread_callbacks_s pthread_callbacks = {
 	.proc_set_pthsize = proc_set_pthsize,
 	.proc_get_wqthread = proc_get_wqthread,
 	.proc_set_wqthread = proc_set_wqthread,
-	.proc_get_targconc = proc_get_targconc,
-	.proc_set_targconc = proc_set_targconc,
 	.proc_get_dispatchqueue_offset = proc_get_dispatchqueue_offset,
 	.proc_set_dispatchqueue_offset = proc_set_dispatchqueue_offset,
 	.proc_get_wqptr = proc_get_wqptr,
 	.proc_set_wqptr = proc_set_wqptr,
-	.proc_get_wqsize = proc_get_wqsize,
-	.proc_set_wqsize = proc_set_wqsize,
-	.proc_get_wqlockptr = proc_get_wqlockptr,
-	.proc_get_wqinitingptr = proc_get_wqinitingptr,
-	.proc_get_pthhash = proc_get_pthhash, 
+	.proc_get_pthhash = proc_get_pthhash,
 	.proc_set_pthhash = proc_set_pthhash,
 	.proc_get_task = proc_get_task,
 	.proc_lock = proc_lock,
-	.proc_unlock = proc_unlock,		
+	.proc_unlock = proc_unlock,
 	.proc_get_register = proc_get_register,
 	.proc_set_register = proc_set_register,
 
@@ -463,15 +549,15 @@ static struct pthread_callbacks_s pthread_callbacks = {
 	.uthread_get_returnval = uthread_get_returnval,
 	.uthread_set_returnval = uthread_set_returnval,
 	.uthread_is_cancelled = uthread_is_cancelled,
-	
+
 	.thread_exception_return = pthread_returning_to_userspace,
 	.thread_bootstrap_return = thread_bootstrap_return,
 	.unix_syscall_return = unix_syscall_return,
 
 	.absolutetime_to_microtime = absolutetime_to_microtime,
 
-	.proc_restore_workq_bgthreadpolicy = proc_restore_workq_bgthreadpolicy,
-	.proc_apply_workq_bgthreadpolicy = proc_apply_workq_bgthreadpolicy,
+	.thread_set_workq_pri = thread_set_workq_pri,
+	.thread_set_workq_qos = thread_set_workq_qos,
 
 	.get_bsdthread_info = (void*)get_bsdthread_info,
 	.thread_sched_call = thread_sched_call,
@@ -494,7 +580,7 @@ static struct pthread_callbacks_s pthread_callbacks = {
 	.current_map = _current_map,
 	.thread_create = thread_create,
 	.thread_resume = thread_resume,
-	
+
 	.convert_thread_to_port = convert_thread_to_port,
 	.ml_get_max_cpus = (void*)ml_get_max_cpus,
 
@@ -510,14 +596,22 @@ static struct pthread_callbacks_s pthread_callbacks = {
 	.thread_set_tsd_base = thread_set_tsd_base,
 
 	.proc_usynch_get_requested_thread_qos = proc_usynch_get_requested_thread_qos,
-	.proc_usynch_thread_qos_add_override = proc_usynch_thread_qos_add_override,
-	.proc_usynch_thread_qos_remove_override = proc_usynch_thread_qos_remove_override,
 
 	.qos_main_thread_active = qos_main_thread_active,
 
+	.proc_usynch_thread_qos_add_override_for_resource_check_owner = proc_usynch_thread_qos_add_override_for_resource_check_owner,
 	.proc_usynch_thread_qos_add_override_for_resource = proc_usynch_thread_qos_add_override_for_resource,
 	.proc_usynch_thread_qos_remove_override_for_resource = proc_usynch_thread_qos_remove_override_for_resource,
 	.proc_usynch_thread_qos_reset_override_for_resource = proc_usynch_thread_qos_reset_override_for_resource,
+
+	.proc_init_wqptr_or_wait = proc_init_wqptr_or_wait,
+
+	.thread_set_tag = thread_set_tag,
+	.thread_get_tag = thread_get_tag,
+
+	.proc_usynch_thread_qos_squash_override_for_resource = proc_usynch_thread_qos_squash_override_for_resource,
+	.task_get_default_manager_qos = task_get_default_manager_qos,
+	.thread_create_workq_waiting = thread_create_workq_waiting,
 };
 
 pthread_callbacks_t pthread_kern = &pthread_callbacks;
@@ -535,13 +629,13 @@ pthread_kext_register(pthread_functions_t fns, pthread_callbacks_t *callbacks)
 	if (pthread_functions != NULL) {
 		panic("Re-initialisation of pthread kext callbacks.");
 	}
-	
+
 	if (callbacks != NULL) {
 		*callbacks = &pthread_callbacks;
 	} else {
 		panic("pthread_kext_register called without callbacks pointer.");
 	}
-	
+
 	if (fns) {
 		pthread_functions = fns;
 	}

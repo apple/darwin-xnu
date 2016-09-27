@@ -1,5 +1,5 @@
 ﻿/*
- * Copyright (c) 2007-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -128,7 +128,7 @@
 #endif /* DUMMYNET */
 
 /*
- * For RandomULong(), to get a 32 bits random value 
+ * For RandomULong(), to get a 32 bits random value
  * Note that random() returns a 31 bits value, see rdar://11159750
  */
 #include <dev/random/randomdev.h>
@@ -260,8 +260,8 @@ static int		 pf_test_rule(struct pf_rule **, struct pf_state **,
 			    void *, struct pf_pdesc *, struct pf_rule **,
 			    struct pf_ruleset **, struct ifqueue *);
 #if DUMMYNET
-static int		 pf_test_dummynet(struct pf_rule **, int, 
-			    struct pfi_kif *, struct mbuf **, 
+static int		 pf_test_dummynet(struct pf_rule **, int,
+			    struct pfi_kif *, struct mbuf **,
 			    struct pf_pdesc *, struct ip_fw_args *);
 #endif /* DUMMYNET */
 static int		 pf_test_fragment(struct pf_rule **, int,
@@ -685,24 +685,7 @@ static const char *pf_pptp_ctrl_type_name(u_int16_t code)
 #endif
 
 static const size_t PF_PPTP_CTRL_MSG_MINSIZE =
-	sizeof (struct pf_pptp_hdr) +
-	sizeof (struct pf_pptp_ctrl_hdr) +
-	MIN(sizeof (struct pf_pptp_ctrl_start_req),
-	MIN(sizeof (struct pf_pptp_ctrl_start_rpy),
-	MIN(sizeof (struct pf_pptp_ctrl_stop_req),
-	MIN(sizeof (struct pf_pptp_ctrl_stop_rpy),
-	MIN(sizeof (struct pf_pptp_ctrl_echo_req),
-	MIN(sizeof (struct pf_pptp_ctrl_echo_rpy),
-	MIN(sizeof (struct pf_pptp_ctrl_call_out_req),
-	MIN(sizeof (struct pf_pptp_ctrl_call_out_rpy),
-	MIN(sizeof (struct pf_pptp_ctrl_call_in_1st),
-	MIN(sizeof (struct pf_pptp_ctrl_call_in_2nd),
-	MIN(sizeof (struct pf_pptp_ctrl_call_in_3rd),
-	MIN(sizeof (struct pf_pptp_ctrl_call_clr),
-	MIN(sizeof (struct pf_pptp_ctrl_call_disc),
-	MIN(sizeof (struct pf_pptp_ctrl_error),
-	sizeof (struct pf_pptp_ctrl_set_linkinfo)
-	))))))))))))));
+	sizeof (struct pf_pptp_hdr) + sizeof (struct pf_pptp_ctrl_hdr);
 
 union pf_pptp_ctrl_msg_union {
 	struct pf_pptp_ctrl_start_req		start_req;
@@ -3591,7 +3574,7 @@ pf_match_translation(struct pf_pdesc *pd, struct mbuf *m, int off,
 	return (rm);
 }
 
-/* 
+/*
  * Get address translation information for NAT/BINAT/RDR
  * pd		: pf packet descriptor
  * m		: mbuf holding the packet
@@ -3852,7 +3835,7 @@ pf_socket_lookup(int direction, struct pf_pdesc *pd)
 {
 	struct pf_addr		*saddr, *daddr;
 	u_int16_t		 sport, dport;
-	struct inpcbinfo	*pi; 
+	struct inpcbinfo	*pi;
 	int 			inp = 0;
 
 	if (pd == NULL)
@@ -3927,7 +3910,7 @@ pf_socket_lookup(int direction, struct pf_pdesc *pd)
 #else
 		if (inp == 0) {
 			inp = in_pcblookup_hash_exists(pi, saddr->v4, sport,
-			    daddr->v4, dport, INPLOOKUP_WILDCARD, 
+			    daddr->v4, dport, INPLOOKUP_WILDCARD,
 			    &pd->lookup.uid, &pd->lookup.gid, NULL);
 			if (inp == 0)
 				return (-1);
@@ -3948,7 +3931,7 @@ pf_socket_lookup(int direction, struct pf_pdesc *pd)
 		}
 		break;
 #endif /* INET6 */
-                            
+
 	default:
 		return (-1);
 	}
@@ -4532,7 +4515,7 @@ pf_nat64_ipv6(struct mbuf *m, int off, struct pf_pdesc *pd)
 		int moff, hlen = sizeof(*ip4);
 
 		if ((mp = m_pulldown(m, hlen, ICMP_MINLEN, &moff)) == NULL)
-			return (PF_NAT64);
+			return (PF_DROP);
 
 		icmp = (struct icmp *)(void *)(mtod(mp, char *) + moff);
 		icmp->icmp_cksum = 0;
@@ -4571,13 +4554,24 @@ pf_nat64_ipv4(struct mbuf *m, int off, struct pf_pdesc *pd)
 		int moff, hlen = sizeof(*ip6);
 
 		if ((mp = m_pulldown(m, hlen, sizeof(*icmp6), &moff)) == NULL)
-			return (PF_NAT64);
+			return (PF_DROP);
 
 		icmp6 = (struct icmp6_hdr *)(void *)(mtod(mp, char *) + moff);
 		icmp6->icmp6_cksum = 0;
 		icmp6->icmp6_cksum = inet6_cksum(m, IPPROTO_ICMPV6, hlen,
 						ntohs(ip6->ip6_plen));
+	} else if (pd->proto == IPPROTO_UDP) {
+		struct mbuf *mp;
+		struct udphdr *uh;
+		int moff, hlen = sizeof(*ip6);
+		if ((mp = m_pulldown(m, hlen, sizeof(*uh), &moff)) == NULL)
+			return (PF_DROP);
+		uh = (struct udphdr *)(void *)(mtod(mp, char *) + moff);
+		if (uh->uh_sum == 0)
+			uh->uh_sum = inet6_cksum(m, IPPROTO_UDP, hlen,
+						ntohs(ip6->ip6_plen));
 	}
+
 	ip6_input(m);
 	return (PF_NAT64);
 }
@@ -4964,14 +4958,14 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		    (r->flagset & th->th_flags) != r->flags)
 			r = TAILQ_NEXT(r, entries);
 		/* tcp/udp only. uid.op always 0 in other cases */
-		else if (r->uid.op && (pd->lookup.done || (pd->lookup.done =
-		    pf_socket_lookup(direction, pd), 1)) &&
+		else if (r->uid.op && (pd->lookup.done || ((void)(pd->lookup.done =
+		    pf_socket_lookup(direction, pd)), 1)) &&
 		    !pf_match_uid(r->uid.op, r->uid.uid[0], r->uid.uid[1],
 		    pd->lookup.uid))
 			r = TAILQ_NEXT(r, entries);
 		/* tcp/udp only. gid.op always 0 in other cases */
-		else if (r->gid.op && (pd->lookup.done || (pd->lookup.done =
-		    pf_socket_lookup(direction, pd), 1)) &&
+		else if (r->gid.op && (pd->lookup.done || ((void)(pd->lookup.done =
+		    pf_socket_lookup(direction, pd)), 1)) &&
 		    !pf_match_gid(r->gid.op, r->gid.gid[0], r->gid.gid[1],
 		    pd->lookup.gid))
 			r = TAILQ_NEXT(r, entries);
@@ -5764,14 +5758,14 @@ cleanup:
 
 #if DUMMYNET
 /*
- * When pf_test_dummynet() returns PF_PASS, the rule matching parameter "rm" 
+ * When pf_test_dummynet() returns PF_PASS, the rule matching parameter "rm"
  * remains unchanged, meaning the packet did not match a dummynet rule.
- * when the packet does match a dummynet rule, pf_test_dummynet() returns 
- * PF_PASS and zero out the mbuf rule as the packet is effectively siphoned 
+ * when the packet does match a dummynet rule, pf_test_dummynet() returns
+ * PF_PASS and zero out the mbuf rule as the packet is effectively siphoned
  * out by dummynet.
  */
 static int
-pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif, 
+pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
     struct mbuf **m0, struct pf_pdesc *pd, struct ip_fw_args *fwa)
 {
 	struct mbuf		*m = *m0;
@@ -5797,16 +5791,16 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 
 	if (!DUMMYNET_LOADED)
 		return (PF_PASS);
-	
+
 	if (TAILQ_EMPTY(pf_main_ruleset.rules[PF_RULESET_DUMMYNET].active.ptr))
 		return (PF_PASS);
-	
+
 	bzero(&dnflow, sizeof(dnflow));
 
 	hdrlen = 0;
 
 	/* Fragments don't gave protocol headers */
-	if (!(pd->flags & PFDESC_IP_FRAG))	
+	if (!(pd->flags & PFDESC_IP_FRAG))
 		switch (pd->proto) {
 		case IPPROTO_TCP:
 			dnflow.fwa_id.flags = pd->hdr.tcp->th_flags;
@@ -5862,7 +5856,7 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 		    r->src.neg, kif))
 			r = r->skip[PF_SKIP_SRC_ADDR].ptr;
 		/* tcp/udp only. port_op always 0 in other cases */
-		else if (r->proto == pd->proto && 
+		else if (r->proto == pd->proto &&
 		    (r->proto == IPPROTO_TCP || r->proto == IPPROTO_UDP) &&
 		    ((pd->flags & PFDESC_IP_FRAG) ||
 		    ((r->src.xport.range.op &&
@@ -5883,12 +5877,12 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 		    th->th_dport)))
 			r = r->skip[PF_SKIP_DST_PORT].ptr;
 		/* icmp only. type always 0 in other cases */
-		else if (r->type && 
+		else if (r->type &&
 			((pd->flags & PFDESC_IP_FRAG) ||
 			r->type != icmptype + 1))
 			r = TAILQ_NEXT(r, entries);
 		/* icmp only. type always 0 in other cases */
-		else if (r->code && 
+		else if (r->code &&
 			((pd->flags & PFDESC_IP_FRAG) ||
 			r->code != icmpcode + 1))
 			r = TAILQ_NEXT(r, entries);
@@ -5905,8 +5899,8 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 		else if (r->match_tag && !pf_match_tag(m, r, pd->pf_mtag, &tag))
 			r = TAILQ_NEXT(r, entries);
 		else {
-			/* 
-			 * Need to go past the previous dummynet matching rule	
+			/*
+			 * Need to go past the previous dummynet matching rule
 			 */
 			if (r->anchor == NULL) {
 				if (found_prev_rule) {
@@ -5949,7 +5943,7 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 
 	if (r->action == PF_NODUMMYNET) {
 		int dirndx = (direction == PF_OUT);
-		
+
 		r->packets[dirndx]++;
 		r->bytes[dirndx] += pd->tot_len;
 
@@ -5963,10 +5957,10 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 
 	if (r->dnpipe && ip_dn_io_ptr != NULL) {
 		int dirndx = (direction == PF_OUT);
-		
+
 		r->packets[dirndx]++;
 		r->bytes[dirndx] += pd->tot_len;
-		
+
 		dnflow.fwa_cookie = r->dnpipe;
 		dnflow.fwa_pf_rule = r;
 		dnflow.fwa_id.proto = pd->proto;
@@ -5988,8 +5982,8 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 			dnflow.fwa_oif = fwa->fwa_oif;
 			dnflow.fwa_oflags = fwa->fwa_oflags;
 			/*
-			 * Note that fwa_ro, fwa_dst and fwa_ipoa are 
-			 * actually in a union so the following does work  
+			 * Note that fwa_ro, fwa_dst and fwa_ipoa are
+			 * actually in a union so the following does work
 			 * for both IPv4 and IPv6
 			 */
 			dnflow.fwa_ro = fwa->fwa_ro;
@@ -6002,29 +5996,29 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 			dnflow.fwa_unfragpartlen = fwa->fwa_unfragpartlen;
 			dnflow.fwa_exthdrs = fwa->fwa_exthdrs;
 		}
-		
+
 		if (af == AF_INET) {
 			struct ip *iphdr = mtod(m, struct ip *);
 			NTOHS(iphdr->ip_len);
 			NTOHS(iphdr->ip_off);
 		}
 		/*
-		 * Don't need to unlock pf_lock as NET_THREAD_HELD_PF 
+		 * Don't need to unlock pf_lock as NET_THREAD_HELD_PF
 		 * allows for recursive behavior
 		 */
 		ip_dn_io_ptr(m,
 			dnflow.fwa_cookie,
-			af == AF_INET ? 
+			af == AF_INET ?
 				direction == PF_IN ? DN_TO_IP_IN : DN_TO_IP_OUT :
 				direction == PF_IN ? DN_TO_IP6_IN : DN_TO_IP6_OUT,
 			&dnflow, DN_CLIENT_PF);
-		
+
 		/*
-		 * The packet is siphoned out by dummynet so return a NULL 
+		 * The packet is siphoned out by dummynet so return a NULL
 		 * mbuf so the caller can still return success.
 		 */
 		*m0 = NULL;
-		 
+
 		return (PF_PASS);
 	}
 
@@ -6135,7 +6129,7 @@ pf_pptp_handler(struct pf_state *s, int direction, int off,
 	struct tcphdr *th;
 	struct pf_pptp_state *pptps;
 	struct pf_pptp_ctrl_msg cm;
-	size_t plen;
+	size_t plen, tlen;
 	struct pf_state *gs;
 	u_int16_t ct;
 	u_int16_t *pac_call_id;
@@ -6160,13 +6154,40 @@ pf_pptp_handler(struct pf_state *s, int direction, int off,
 	plen = min(sizeof (cm), m->m_pkthdr.len - off);
 	if (plen < PF_PPTP_CTRL_MSG_MINSIZE)
 		return;
-
+	tlen = plen - PF_PPTP_CTRL_MSG_MINSIZE;
 	m_copydata(m, off, plen, &cm);
 
 	if (ntohl(cm.hdr.magic) != PF_PPTP_MAGIC_NUMBER)
 		return;
 	if (ntohs(cm.hdr.type) != 1)
 		return;
+
+#define TYPE_LEN_CHECK(_type, _name)				\
+	case PF_PPTP_CTRL_TYPE_##_type:				\
+		if (tlen < sizeof(struct pf_pptp_ctrl_##_name))	\
+			return;					\
+		break;
+
+	switch (cm.ctrl.type) {
+	TYPE_LEN_CHECK(START_REQ, start_req);
+	TYPE_LEN_CHECK(START_RPY, start_rpy);
+	TYPE_LEN_CHECK(STOP_REQ, stop_req);
+	TYPE_LEN_CHECK(STOP_RPY, stop_rpy);
+	TYPE_LEN_CHECK(ECHO_REQ, echo_req);
+	TYPE_LEN_CHECK(ECHO_RPY, echo_rpy);
+	TYPE_LEN_CHECK(CALL_OUT_REQ, call_out_req);
+	TYPE_LEN_CHECK(CALL_OUT_RPY, call_out_rpy);
+	TYPE_LEN_CHECK(CALL_IN_1ST, call_in_1st);
+	TYPE_LEN_CHECK(CALL_IN_2ND, call_in_2nd);
+	TYPE_LEN_CHECK(CALL_IN_3RD, call_in_3rd);
+	TYPE_LEN_CHECK(CALL_CLR, call_clr);
+	TYPE_LEN_CHECK(CALL_DISC, call_disc);
+	TYPE_LEN_CHECK(ERROR, error);
+	TYPE_LEN_CHECK(SET_LINKINFO, set_linkinfo);
+	default:
+		return;
+	}
+#undef TYPE_LEN_CHECK
 
 	if (!gs) {
 		gs = pool_get(&pf_state_pl, PR_WAITOK);
@@ -7790,7 +7811,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			}
 
 			return (PF_PASS);
-			break;
 		}
 		case IPPROTO_UDP: {
 			struct udphdr uh;
@@ -7990,7 +8010,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			}
 
 			return (PF_PASS);
-			break;
 		}
 #if INET
 		case IPPROTO_ICMP: {
@@ -8046,7 +8065,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			}
 
 			return (PF_PASS);
-			break;
 		}
 #endif /* INET */
 #if INET6
@@ -8105,7 +8123,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			}
 
 			return (PF_PASS);
-			break;
 		}
 #endif /* INET6 */
 		default: {
@@ -8164,7 +8181,6 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 			}
 
 			return (PF_PASS);
-			break;
 		}
 		}
 	}

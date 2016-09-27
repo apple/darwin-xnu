@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -223,6 +223,58 @@
 #ifndef __null_unspecified
 #define __null_unspecified
 #endif
+#ifndef _Nullable
+#define _Nullable
+#endif
+#ifndef _Nonnull
+#define _Nonnull
+#endif
+#ifndef _Null_unspecified
+#define _Null_unspecified
+#endif
+#endif
+
+/*
+ * __disable_tail_calls causes the compiler to not perform tail call
+ * optimization inside the marked function.
+ */
+#if __has_attribute(disable_tail_calls)
+#define __disable_tail_calls	__attribute__((__disable_tail_calls__))
+#else
+#define __disable_tail_calls
+#endif
+
+/*
+ * __not_tail_called causes the compiler to prevent tail call optimization
+ * on statically bound calls to the function.  It has no effect on indirect
+ * calls.  Virtual functions, objective-c methods, and functions marked as
+ * "always_inline" cannot be marked as __not_tail_called.
+ */
+#if __has_attribute(not_tail_called)
+#define __not_tail_called	__attribute__((__not_tail_called__))
+#else
+#define __not_tail_called
+#endif
+
+/*
+ * __result_use_check warns callers of a function that not using the function
+ * return value is a bug, i.e. dismissing malloc() return value results in a
+ * memory leak.
+ */
+#if __has_attribute(warn_unused_result)
+#define __result_use_check __attribute__((__warn_unused_result__))
+#else
+#define __result_use_check
+#endif
+
+/*
+ * __swift_unavailable causes the compiler to mark a symbol as specifically
+ * unavailable in Swift, regardless of any other availability in C.
+ */
+#if __has_feature(attribute_availability_swift)
+#define __swift_unavailable(_msg)	__attribute__((__availability__(swift, unavailable, message=_msg)))
+#else
+#define __swift_unavailable(_msg)
 #endif
 
 /* Declaring inline functions within headers is error-prone due to differences
@@ -297,6 +349,8 @@
  */
 #define __printflike(fmtarg, firstvararg) \
 		__attribute__((__format__ (__printf__, fmtarg, firstvararg)))
+#define __printf0like(fmtarg, firstvararg) \
+		__attribute__((__format__ (__printf0__, fmtarg, firstvararg)))
 #define __scanflike(fmtarg, firstvararg) \
 		__attribute__((__format__ (__scanf__, fmtarg, firstvararg)))
 

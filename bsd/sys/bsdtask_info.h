@@ -117,8 +117,11 @@ void fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo);
 int fill_taskthreadinfo(task_t task, uint64_t thaddr, int thuniqueid, struct proc_threadinfo_internal * ptinfo, void *, int *);
 int fill_taskthreadlist(task_t task, void * buffer, int thcount);
 int get_numthreads(task_t);
+boolean_t bsd_hasthreadname(void *uth);
 void bsd_getthreadname(void *uth, char* buffer);
+void bsd_setthreadname(void *uth, const char* buffer);
 void bsd_threadcdir(void * uth, void *vptr, int *vidp);
+extern void bsd_copythreadname(void *dst_uth, void *src_uth);
 
 #endif /*_SYS_BSDTASK_INFO_H */
 

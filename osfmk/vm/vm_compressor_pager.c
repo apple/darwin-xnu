@@ -61,10 +61,10 @@
 
 #include <kern/host_statistics.h>
 #include <kern/kalloc.h>
+#include <kern/ipc_kobject.h>
 
 #include <mach/memory_object_control.h>
 #include <mach/memory_object_types.h>
-#include <mach/memory_object_server.h>
 #include <mach/upl.h>
 
 #include <vm/memory_object.h>
@@ -828,6 +828,8 @@ vm_compressor_pager_state_clr(
 	compressor_slot_t	*slot_p;
 	unsigned int		num_slots_freed;
 	
+	assert(VM_CONFIG_COMPRESSOR_IS_PRESENT);
+
 	compressor_pager_stats.state_clr++;
 
 	if ((uint32_t)(offset/PAGE_SIZE) != (offset/PAGE_SIZE)) {
@@ -859,6 +861,8 @@ vm_compressor_pager_state_get(
 {
 	compressor_pager_t	pager;
 	compressor_slot_t	*slot_p;
+
+	assert(VM_CONFIG_COMPRESSOR_IS_PRESENT);
 	
 	compressor_pager_stats.state_get++;
 

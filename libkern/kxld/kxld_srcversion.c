@@ -88,6 +88,6 @@ kxld_srcversion_export_macho(const KXLDsrcversion *srcversion, u_char *buf,
     rval = KERN_SUCCESS;
 
 finish:
-    return rval;
+   return rval;
 }
 

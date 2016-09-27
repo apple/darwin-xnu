@@ -36,6 +36,7 @@
 #include <kern/assert.h>
 
 #include <kern/kpc.h>
+#include <sys/ktrace.h>
 
 #include <pexpert/pexpert.h>
 #include <kperf/kperf.h>
@@ -415,6 +416,8 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 	if( !kpc_initted )
 		panic("kpc_init not called");
 
+	lck_mtx_lock(ktrace_lock);
+
 	// Most sysctls require an access check, but a few are public.
 	switch( (uintptr_t) arg1 ) {
 	case REQ_CLASSES:
@@ -426,12 +429,14 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 	default:
 		// Require kperf access to read or write anything else.
 		// This is either root or the blessed pid.
-		ret = kperf_access_check();
-		if (ret) {
+		if ((ret = ktrace_read_check())) {
+			lck_mtx_unlock(ktrace_lock);
 			return ret;
 		}
 		break;
 	}
+
+	lck_mtx_unlock(ktrace_lock);
 
 	lck_mtx_lock(&sysctl_buffer_lock);
 

@@ -1,4 +1,5 @@
 import os
+import re
 
 def GetSettingsValues(debugger, setting_variable_name):
     """ Queries the lldb internal settings
@@ -13,6 +14,52 @@ def GetSettingsValues(debugger, setting_variable_name):
     for s in settings_val_list:
         retval.append(str(s))
     return retval
+
+def GetSymbolsFilePathFromModule(m):
+    """ Get a file path from a module.
+        params: m - lldb.target.module
+        returns:
+            str : path to first file based symbol. Note this might be dir path inside sources.
+    """
+    for s in m.symbols:
+        if s.type == 8:
+            return os.path.dirname(str(s.name))
+    return ""
+
+def GetSourcePathSettings(binary_path, symbols_path):
+    """ Parse the binary path and symbols_path to find if source-map setting is applicable
+        params:
+            binary_path: str path of the kernel module
+            symbols_path: str path of the symbols stored in binary. Use
+        returns:
+            str : string command to set the source-map setting.
+    """
+    retval = ""
+    train_re = re.compile(r"dsyms/([a-zA-Z]+)/")
+    _t_arr = train_re.findall(binary_path)
+    train = ''
+    if _t_arr:
+        train = _t_arr[0]
+    if not train:
+        return retval
+    new_path = "~rc/Software/{}/Projects/".format(train)
+    new_path = os.path.expanduser(new_path)
+    new_path = os.path.normpath(new_path)
+    common_path_re = re.compile("(^.*?Sources/)(xnu.*?)/.*$")
+    _t_arr = common_path_re.findall(symbols_path)
+    srcpath = ""
+    projpath = "xnu"
+    if _t_arr:
+        srcpath = "".join(_t_arr[0])
+        projpath = _t_arr[0][-1]
+    else:
+        return retval
+
+    new_path = new_path + os.path.sep +  projpath
+    cmd = "settings append target.source-map {} {}"
+    retval =  cmd.format(srcpath, new_path)
+    return retval
+
 
 def __lldb_init_module(debugger, internal_dict):
     debug_session_enabled = False
@@ -30,6 +77,12 @@ def __lldb_init_module(debugger, internal_dict):
     whitelist_trap_cmd = "settings set target.trap-handler-names %s %s" % (' '.join(intel_whitelist), ' '.join(arm_whitelist))
     xnu_debug_path = base_dir_name + "/lldbmacros/xnu.py"
     xnu_load_cmd = "command script import \"%s\"" % xnu_debug_path
+
+    source_map_cmd = ""
+    try:
+        source_map_cmd = GetSourcePathSettings(base_dir_name, GetSymbolsFilePathFromModule(debugger.GetTargetAtIndex(0).modules[0]) )
+    except Exception as e:
+        pass
     if debug_session_enabled :
         if len(prev_os_plugin) > 0:
             print "\nDEBUG_XNU_LLDBMACROS is set. Skipping the setting of OS plugin from dSYM.\nYou can manually set the OS plugin by running\n" + osplugin_cmd
@@ -44,5 +97,8 @@ def __lldb_init_module(debugger, internal_dict):
         debugger.HandleCommand(whitelist_trap_cmd)
         print xnu_load_cmd
         debugger.HandleCommand(xnu_load_cmd)
+        if source_map_cmd:
+            print source_map_cmd
+            debugger.HandleCommand(source_map_cmd)
     print "\n"
 

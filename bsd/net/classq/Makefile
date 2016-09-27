@@ -12,7 +12,7 @@ KERNELFILES= \
 
 PRIVATE_DATAFILES = \
 	classq.h classq_blue.h classq_red.h classq_rio.h classq_sfb.h \
-	if_classq.h
+	if_classq.h classq_fq_codel.h
 
 PRIVATE_KERNELFILES = ${KERNELFILES}
 

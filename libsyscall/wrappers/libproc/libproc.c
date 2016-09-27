@@ -362,10 +362,20 @@ proc_terminate(pid_t pid, int *sig)
 	return 0;
 }
 
+/*
+ * XXX the _fatal() variant both checks for an existing monitor
+ * (with important policy effects on first party background apps)
+ * and validates inputs.
+ */
 int
 proc_set_cpumon_params(pid_t pid, int percentage, int interval)
 {
 	proc_policy_cpuusage_attr_t attr;
+
+	 /* no argument validation ...
+	  * task_set_cpuusage() ignores 0 values and squashes negative
+	  * values into uint32_t.
+	  */
 
 	attr.ppattr_cpu_attr = PROC_POLICY_RSRCACT_NOTIFY_EXC;
 	attr.ppattr_cpu_percentage = percentage;
@@ -411,6 +421,16 @@ proc_set_cpumon_defaults(pid_t pid)
 }
 
 int
+proc_resume_cpumon(pid_t pid)
+{
+	return __process_policy(PROC_POLICY_SCOPE_PROCESS,
+				PROC_POLICY_ACTION_ENABLE,
+				PROC_POLICY_RESOURCE_USAGE,
+				PROC_POLICY_RUSAGE_CPU,
+				NULL, pid, 0);
+}
+
+int
 proc_disable_cpumon(pid_t pid)
 {
 	proc_policy_cpuusage_attr_t attr;
@@ -449,6 +469,10 @@ proc_set_cpumon_params_fatal(pid_t pid, int percentage, int interval)
 	 * already active.  If either the percentage or the
 	 * interval is nonzero, then CPU monitoring is
 	 * already in use for this process.
+	 * 
+	 * XXX: need set...() and set..fatal() to behave similarly.
+	 * Currently, this check prevents 1st party apps (which get a
+	 * default non-fatal monitor) not to get a fatal monitor.
 	 */
 	(void)proc_get_cpumon_params(pid, &current_percentage, &current_interval);
 	if (current_percentage || current_interval)
@@ -544,11 +568,17 @@ proc_list_uptrs(int pid, uint64_t *buf, uint32_t bufsz)
 		return -1;
 	}
 
-	struct proc_fdinfo fdlist[OPEN_MAX];
-	nfds = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fdlist, OPEN_MAX*sizeof(struct proc_fdinfo));
-	if (nfds <= 0 || nfds > OPEN_MAX) {
+	/* get the list of FDs for this process */
+	struct proc_fdinfo fdlist[OPEN_MAX+1];
+	nfds = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fdlist[1], OPEN_MAX*sizeof(struct proc_fdinfo));
+	if (nfds < 0 || nfds > OPEN_MAX) {
 		return -1;
 	}
+
+	/* Add FD -1, the implicit workq kqueue */
+	fdlist[0].proc_fd = -1;
+	fdlist[0].proc_fdtype = PROX_FDTYPE_KQUEUE;
+	nfds++;
 
 	struct kevent_extinfo *kqext = malloc(knote_max * sizeof(struct kevent_extinfo));
 	if (!kqext) {

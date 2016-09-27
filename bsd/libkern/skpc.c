@@ -65,7 +65,7 @@
 int
 skpc(int mask0, int size, char *cp0)
 {
-	register u_char *cp, *end, mask;
+	u_char *cp, *end, mask;
 
 	mask = mask0;
 	cp = (u_char *)cp0;

@@ -44,9 +44,7 @@ typedef unsigned char des_cblock[8];
 
 /* Unholy hack: this is currently the size for the only implementation of DES in corecrypto */
 #define DES_ECB_CTX_MAX_SIZE (64*4)
-#define DES_CBC_CTX_MAX_SIZE (ccn_sizeof_size(sizeof(struct ccmode_ecb)) + ccn_sizeof_size(CCDES_BLOCK_SIZE) + ccn_sizeof_size(DES_ECB_CTX_MAX_SIZE))
 #define DES3_ECB_CTX_MAX_SIZE (64*4*3)
-#define DES3_CBC_CTX_MAX_SIZE (ccn_sizeof_size(sizeof(struct ccmode_ecb)) + ccn_sizeof_size(CCDES_BLOCK_SIZE) + ccn_sizeof_size(DES3_ECB_CTX_MAX_SIZE))
 
 
 typedef struct{
@@ -55,19 +53,9 @@ typedef struct{
 } des_ecb_key_schedule;
 
 typedef struct{
-	cccbc_ctx_decl(DES_CBC_CTX_MAX_SIZE, enc);
-	cccbc_ctx_decl(DES_CBC_CTX_MAX_SIZE, dec);
-} des_cbc_key_schedule;
-
-typedef struct{
 	ccecb_ctx_decl(DES3_ECB_CTX_MAX_SIZE, enc);
 	ccecb_ctx_decl(DES3_ECB_CTX_MAX_SIZE, dec);
 } des3_ecb_key_schedule;
-
-typedef struct{
-	cccbc_ctx_decl(DES3_CBC_CTX_MAX_SIZE, enc);
-	cccbc_ctx_decl(DES3_CBC_CTX_MAX_SIZE, dec);
-} des3_cbc_key_schedule;
 
 /* Only here for backward compatibility with smb kext */
 typedef des_ecb_key_schedule des_key_schedule[1];
@@ -85,22 +73,7 @@ void des_ecb_encrypt(des_cblock *in, des_cblock *out, des_ecb_key_schedule *ks, 
 int des3_ecb_key_sched(des_cblock *key, des3_ecb_key_schedule *ks);
 void des3_ecb_encrypt(des_cblock *block, des_cblock *, des3_ecb_key_schedule *ks, int encrypt);
 
-/* Single DES CBC */
-int des_cbc_key_sched(des_cblock *key, des_cbc_key_schedule *ks);
-void des_cbc_encrypt(des_cblock *in, des_cblock *out, int32_t len,
-					 des_cbc_key_schedule *ks, des_cblock *iv, des_cblock *retiv, int encrypt);
-
-/* Triple DES CBC */
-int des3_cbc_key_sched(des_cblock *key, des3_cbc_key_schedule *ks);
-void des3_cbc_encrypt(des_cblock *in, des_cblock *out, int32_t len,
-					  des3_cbc_key_schedule *ks, des_cblock *iv, des_cblock *retiv, int encrypt);
-
-/* Single DES CBC-MAC */
-void des_cbc_cksum(des_cblock *in, des_cblock *out, int len, des_cbc_key_schedule *ks);
-
-void des_fixup_key_parity(des_cblock *key);
 int des_is_weak_key(des_cblock *key);
-// int des_set_key(des_cblock *, des_key_schedule); // Unsupported KPI.
 
 #ifdef  __cplusplus
 }

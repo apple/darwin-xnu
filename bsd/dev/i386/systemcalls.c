@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -80,6 +80,7 @@ extern const char *syscallnames[];
  *
  * Outputs:	none
  */
+__attribute__((noreturn))
 void
 unix_syscall(x86_saved_state_t *state)
 {
@@ -115,28 +116,19 @@ unix_syscall(x86_saved_state_t *state)
 	else 
 		p = (struct proc *)get_bsdtask_info(current_task());
 
-	/* Verify that we are not being called from a task without a proc */
-	if (__improbable(p == NULL)) {
-		regs->eax = EPERM;
-		regs->efl |= EFL_CF;
-		task_terminate_internal(current_task());
-		thread_exception_return();
-		/* NOTREACHED */
-	}
-
 	code = regs->eax & I386_SYSCALL_NUMBER_MASK;
 	DEBUG_KPRINT_SYSCALL_UNIX("unix_syscall: code=%d(%s) eip=%u\n",
-							  code, syscallnames[code >= NUM_SYSENT ? 63 : code], (uint32_t)regs->eip);
+							  code, syscallnames[code >= nsysent ? SYS_invalid : code], (uint32_t)regs->eip);
 	params = (vm_offset_t) (regs->uesp + sizeof (int));
 
 	regs->efl &= ~(EFL_CF);
 
-	callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
+	callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
 
 	if (__improbable(callp == sysent)) {
 		code = fuword(params);
 		params += sizeof(int);
-		callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
+		callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
 	}
 
 	vt = (void *)uthread->uu_arg;
@@ -266,7 +258,7 @@ unix_syscall(x86_saved_state_t *state)
 	/* NOTREACHED */
 }
 
-
+__attribute__((noreturn))
 void
 unix_syscall64(x86_saved_state_t *state)
 {
@@ -312,8 +304,8 @@ unix_syscall64(x86_saved_state_t *state)
 	code = regs->rax & SYSCALL_NUMBER_MASK;
 	DEBUG_KPRINT_SYSCALL_UNIX(
 		"unix_syscall64: code=%d(%s) rip=%llx\n",
-		code, syscallnames[code >= NUM_SYSENT ? 63 : code], regs->isf.rip);
-	callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
+		code, syscallnames[code >= nsysent ? SYS_invalid : code], regs->isf.rip);
+	callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
 
 	vt = (void *)uthread->uu_arg;
 
@@ -323,7 +315,7 @@ unix_syscall64(x86_saved_state_t *state)
 		 * passed as 'arg0'
 		 */
 		code = regs->rdi;
-		callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
+		callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
 		args_start_at_rdi = FALSE;
 		args_in_regs = 5;
 	} else {
@@ -488,7 +480,7 @@ unix_syscall_return(int error)
 		regs = saved_state64(find_user_regs(thread));
 
 		code = uthread->syscall_code;
-		callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
+		callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
 
 #if CONFIG_DTRACE
 		if (callp->sy_call == dtrace_systrace_syscall)
@@ -545,7 +537,7 @@ unix_syscall_return(int error)
 		regs->efl &= ~(EFL_CF);
 
 		code = uthread->syscall_code;
-		callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
+		callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
 
 #if CONFIG_DTRACE
 		if (callp->sy_call == dtrace_systrace_syscall)
@@ -591,4 +583,3 @@ unix_syscall_return(int error)
 	thread_exception_return();
 	/* NOTREACHED */
 }
-

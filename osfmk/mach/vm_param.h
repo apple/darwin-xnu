@@ -75,6 +75,9 @@
 #include <mach/vm_types.h>
 #endif	/* ASSEMBLER */
 
+#include <os/base.h>
+#include <os/overflow.h>
+
 /*
  *	The machine independent pages are refered to as PAGES.  A page
  *	is some number of hardware pages, depending on the target machine.
@@ -118,6 +121,18 @@
  */
 #define mach_vm_round_page(x) (((mach_vm_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
 #define mach_vm_trunc_page(x) ((mach_vm_offset_t)(x) & ~((signed)PAGE_MASK))
+
+#define round_page_overflow(in, out) __os_warn_unused(({ \
+		bool __ovr = os_add_overflow(in, (__typeof__(*out))PAGE_MASK, out); \
+		*out &= ~((__typeof__(*out))PAGE_MASK); \
+		__ovr; \
+	}))
+
+static inline int OS_WARN_RESULT
+mach_vm_round_page_overflow(mach_vm_offset_t in, mach_vm_offset_t *out)
+{
+	return round_page_overflow(in, out);
+}
 
 #define memory_object_round_page(x) (((memory_object_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
 #define memory_object_trunc_page(x) ((memory_object_offset_t)(x) & ~((signed)PAGE_MASK))
@@ -240,41 +255,21 @@ extern addr64_t 	vm_last_addr;	/* Highest kernel virtual address known to the VM
 extern const vm_offset_t	vm_min_kernel_address;
 extern const vm_offset_t	vm_max_kernel_address;
 
-extern vm_offset_t		vm_kernel_stext;
-extern vm_offset_t		vm_kernel_etext;
-extern vm_offset_t		vm_kernel_base;
-extern vm_offset_t		vm_kernel_top;
+extern vm_offset_t              vm_kernel_stext;
+extern vm_offset_t              vm_kernel_etext;
+extern vm_offset_t		vm_kernel_slid_base;
+extern vm_offset_t		vm_kernel_slid_top;
 extern vm_offset_t		vm_kernel_slide;
-extern vm_offset_t		vm_hib_base;
 extern vm_offset_t		vm_kernel_addrperm;
-
 extern vm_offset_t		vm_kext_base;
 extern vm_offset_t		vm_kext_top;
-extern vm_offset_t      vm_prelink_stext;
-extern vm_offset_t      vm_prelink_etext;
-extern vm_offset_t      vm_prelink_sinfo;
-extern vm_offset_t      vm_prelink_einfo;
-extern vm_offset_t      vm_slinkedit;
-extern vm_offset_t      vm_elinkedit;
+extern vm_offset_t		vm_kernel_base;
+extern vm_offset_t		vm_kernel_top;
+extern vm_offset_t		vm_hib_base;
 
 #define VM_KERNEL_IS_SLID(_o)						       \
-		(((vm_offset_t)(_o) >= vm_kernel_base) &&		       \
-		 ((vm_offset_t)(_o) <=  vm_kernel_top))
-#define VM_KERNEL_IS_KEXT(_o)      \
-                (((vm_offset_t)(_o) >= vm_kext_base) &&   \
-                 ((vm_offset_t)(_o) <  vm_kext_top))
-
-#define VM_KERNEL_IS_PRELINKTEXT(_o)        \
-        (((vm_offset_t)(_o) >= vm_prelink_stext) &&     \
-        ((vm_offset_t)(_o) <  vm_prelink_etext))
-
-#define VM_KERNEL_IS_PRELINKINFO(_o)        \
-    (((vm_offset_t)(_o) >= vm_prelink_sinfo) &&     \
-    ((vm_offset_t)(_o) <  vm_prelink_einfo))
-
-#define VM_KERNEL_IS_KEXT_LINKEDIT(_o)        \
-    (((vm_offset_t)(_o) >= vm_slinkedit) &&     \
-    ((vm_offset_t)(_o) <  vm_elinkedit))
+		(((vm_offset_t)(_o) >= vm_kernel_slid_base) &&		       \
+		 ((vm_offset_t)(_o) <  vm_kernel_slid_top))
 
 #define VM_KERNEL_SLIDE(_u)						       \
 		((vm_offset_t)(_u) + vm_kernel_slide)
@@ -314,13 +309,9 @@ extern vm_offset_t      vm_elinkedit;
  *
  * Nesting of these macros should be considered invalid.
  */
-#define VM_KERNEL_UNSLIDE(_v)						       \
-		((VM_KERNEL_IS_SLID(_v) ||				       \
-		  VM_KERNEL_IS_KEXT(_v) ||      \
-          VM_KERNEL_IS_PRELINKTEXT(_v) ||   \
-          VM_KERNEL_IS_PRELINKINFO(_v) ||   \
-          VM_KERNEL_IS_KEXT_LINKEDIT(_v)) ?      \
-			(vm_offset_t)(_v) - vm_kernel_slide :    \
+#define VM_KERNEL_UNSLIDE(_v)                                                  \
+		((VM_KERNEL_IS_SLID(_v)) ?                                     \
+			(vm_offset_t)(_v) - vm_kernel_slide :                   \
 			(vm_offset_t)(_v))
 
 #define	VM_KERNEL_ADDRPERM(_v)						       \
@@ -329,11 +320,7 @@ extern vm_offset_t      vm_elinkedit;
 			(vm_offset_t)(_v) + vm_kernel_addrperm)
 
 #define VM_KERNEL_UNSLIDE_OR_PERM(_v)					       \
-		((VM_KERNEL_IS_SLID(_v) ||				       \
-          VM_KERNEL_IS_KEXT(_v) ||      \
-          VM_KERNEL_IS_PRELINKTEXT(_v) ||   \
-          VM_KERNEL_IS_PRELINKINFO(_v) ||   \
-          VM_KERNEL_IS_KEXT_LINKEDIT(_v)) ?         \
+		((VM_KERNEL_IS_SLID(_v)) ?                                     \
 			(vm_offset_t)(_v) - vm_kernel_slide :    \
 		 ((vm_offset_t)(_v) >= VM_MIN_KERNEL_AND_KEXT_ADDRESS ? VM_KERNEL_ADDRPERM(_v) : (vm_offset_t)(_v)))
 	

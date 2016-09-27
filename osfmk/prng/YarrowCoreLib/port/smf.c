@@ -39,11 +39,6 @@
 
 /* Shim emulating _MALLOC */
 
-struct _mhead {
-	size_t	mlen;
-	char	dat[0];
-};
-
 SMFAPI void mmInit( void )
 {
 	return;
@@ -51,25 +46,18 @@ SMFAPI void mmInit( void )
 
 SMFAPI MMPTR mmMalloc(DWORD request)
 {
-	struct _mhead	*hdr = NULL;
-	size_t		memsize = sizeof (*hdr) + request;
-    
-	hdr = (void *) kalloc(memsize);
-	if (hdr == NULL)
+	void *addr;
+
+	addr = (void *) kalloc(request);
+	if (addr == NULL)
 		return NULL;
-	hdr->mlen = memsize;
     
-	return (MMPTR) hdr->dat;
+	return (MMPTR) addr;
 }
 
 SMFAPI void mmFree(MMPTR ptrnum)
 {
-	// get the size of the pointer back
-	struct _mhead	*hdr;
-
-	hdr = ptrnum;
-	hdr--;
-	kfree(hdr, hdr->mlen);
+	kfree_addr(ptrnum);
 }
 
 SMFAPI LPVOID mmGetPtr(MMPTR ptrnum)

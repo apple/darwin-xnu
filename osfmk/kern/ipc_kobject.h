@@ -143,7 +143,8 @@ typedef natural_t	ipc_kobject_type_t;
 
 /* Dispatch a kernel server function */
 extern ipc_kmsg_t	ipc_kobject_server(
-						ipc_kmsg_t		request);
+					   ipc_kmsg_t		request,
+					   mach_msg_option_t	option);
 
 /* Make a port represent a kernel object of the given type */
 extern void		ipc_kobject_set(

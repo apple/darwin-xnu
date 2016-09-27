@@ -68,12 +68,12 @@ unsigned short	htons(unsigned short);
 static __inline__ unsigned long	ntohl(unsigned long);
 static __inline__
 unsigned long
-ntohl(register unsigned long value)
+ntohl(unsigned long value)
 {
 #if defined(__clang__)
 	return (unsigned long)__builtin_bswap32((unsigned int)value);
 #else
-	register unsigned long l = value;
+	unsigned long l = value;
 	__asm__ volatile("bswap %0" : "=r" (l) : "0" (l));
 	return l;
 #endif

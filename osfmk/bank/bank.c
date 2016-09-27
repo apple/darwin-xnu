@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -267,13 +267,20 @@ bank_release_value(
 
 	if (bank_element->be_type == BANK_TASK) {
 		bank_task = CAST_TO_BANK_TASK(bank_element);
-		
-		if (bank_task->bt_made != (int)sync) {
+
+		/* Checking of the made ref with sync and clearing of voucher ref should be done under a lock */
+		lck_mtx_lock(&bank_task->bt_acc_to_pay_lock);
+		if (bank_task->bt_made != sync) {
+			lck_mtx_unlock(&bank_task->bt_acc_to_pay_lock);
 			return KERN_FAILURE;
 		}
 
 		bank_task_made_release_num(bank_task, sync);
-		bank_task_dealloc(bank_task, sync);
+		assert(bank_task->bt_voucher_ref == 1);
+		bank_task->bt_voucher_ref = 0;
+		lck_mtx_unlock(&bank_task->bt_acc_to_pay_lock);
+
+		bank_task_dealloc(bank_task, 1);
 	} else if (bank_element->be_type == BANK_ACCOUNT) {
 		bank_account = CAST_TO_BANK_ACCOUNT(bank_element);
 		kr = bank_account_dealloc_with_sync(bank_account, sync);
@@ -425,8 +432,16 @@ bank_get_value(
 			if (bank_holder == bank_merchant && 
 				bank_holder == bank_secureoriginator &&
 				bank_holder == bank_proximateprocess) {
-				bank_task_reference(bank_holder);
+
+				lck_mtx_lock(&bank_holder->bt_acc_to_pay_lock);
 				bank_task_made_reference(bank_holder);
+				if (bank_holder->bt_voucher_ref == 0) {
+					/* Take a ref for voucher system, if voucher system does not have a ref */
+					bank_task_reference(bank_holder);
+					bank_holder->bt_voucher_ref = 1;
+				}
+				lck_mtx_unlock(&bank_holder->bt_acc_to_pay_lock);
+
 				*out_value = BANK_ELEMENT_TO_HANDLE(bank_holder);
 				return kr;
 			}
@@ -459,13 +474,8 @@ bank_get_value(
 			}
 			if (bank_element->be_type == BANK_TASK) {
 				bank_task = CAST_TO_BANK_TASK(bank_element);
-				if (bank_task != get_bank_task_context(task, FALSE)) {
-					panic("Found a bank task of another task with bank_context: %p", bank_task);
-				}
+				panic("Found a bank task in MACH_VOUCHER_ATTR_REDEEM: %p", bank_task);
 
-				bank_task_reference(bank_task);
-				bank_task_made_reference(bank_task);
-				*out_value = BANK_ELEMENT_TO_HANDLE(bank_task);
 				return kr;
 
 			} else if (bank_element->be_type == BANK_ACCOUNT) {
@@ -475,7 +485,6 @@ bank_get_value(
 					panic("Found another bank task: %p as a bank merchant\n", bank_merchant);
 				}
 
-				bank_account_reference(bank_account);
 				bank_account_made_reference(bank_account);
 				*out_value = BANK_ELEMENT_TO_HANDLE(bank_account);
 				return kr;
@@ -633,8 +642,6 @@ bank_command(
 		*out_content_size = 0;
 		return KERN_INVALID_VALUE;
 
-		break;
-
 	case BANK_PERSONA_TOKEN:
 
 		if ((sizeof(struct persona_token)) > *out_content_size) {
@@ -671,8 +678,6 @@ bank_command(
 		/* In the case of no value, return error KERN_INVALID_VALUE */
 		*out_content_size = 0;
 		return KERN_INVALID_VALUE;
-
-		break;
 
 	default:
 		return KERN_INVALID_ARGUMENT;
@@ -712,6 +717,7 @@ bank_task_alloc_init(task_t task)
 		return BANK_TASK_NULL;
 
 	new_bank_task->bt_type = BANK_TASK;
+	new_bank_task->bt_voucher_ref = 0;
 	new_bank_task->bt_refs = 1;
 	new_bank_task->bt_made = 0;
 	new_bank_task->bt_creditcard = NULL;
@@ -792,6 +798,7 @@ bank_account_alloc_init(
 	}
 
 	new_bank_account->ba_type = BANK_ACCOUNT;
+	new_bank_account->ba_voucher_ref = 0;
 	new_bank_account->ba_refs = 1;
 	new_bank_account->ba_made = 1;
 	new_bank_account->ba_bill = new_ledger;
@@ -810,7 +817,6 @@ bank_account_alloc_init(
 
 		entry_found = TRUE;
 		/* Take a made ref, since this value would be returned to voucher system. */
-		bank_account_reference(bank_account);
 		bank_account_made_reference(bank_account);
 		break;
 	}
@@ -952,15 +958,15 @@ bank_account_dealloc_with_sync(
 	/* Grab the acc to pay list lock and check the sync value */
 	lck_mtx_lock(&bank_holder->bt_acc_to_pay_lock);
 
-	if (bank_account->ba_made != (int)sync) {
+	if (bank_account->ba_made != sync) {
 		lck_mtx_unlock(&bank_holder->bt_acc_to_pay_lock);
 		return KERN_FAILURE;
 	}
 		
 	bank_account_made_release_num(bank_account, sync);
 
-	if (bank_account_release_num(bank_account, sync) > (int)sync)
-		panic("Sync and ref value did not match for bank account %p\n", bank_account);
+	if (bank_account_release_num(bank_account, 1) > 1)
+		panic("Releasing a non zero ref bank account %p\n", bank_account);
 
 
 	/* Grab both the acc to pay and acc to charge locks */

@@ -108,18 +108,6 @@ struct pr_usrreqs mptcp_usrreqs = {
 };
 
 /*
- * Sysctl for testing and tuning mptcp connectx with data api.
- * Mirrors tcp_preconnect_sbspace for now.
- */
-#define MPTCP_PRECONNECT_SBSZ_MAX 1460
-#define MPTCP_PRECONNECT_SBSZ_MIN (TCP_MSS)
-#define MPTCP_PRECONNECT_SBSZ_DEF (TCP6_MSS)
-static int mptcp_preconnect_sbspace = MPTCP_PRECONNECT_SBSZ_DEF;
-SYSCTL_INT(_net_inet_mptcp, OID_AUTO, mp_preconn_sbsz, CTLFLAG_RW | CTLFLAG_LOCKED,
-    &mptcp_preconnect_sbspace, 0, "Maximum preconnect space");
-
-
-/*
  * Attaches an MPTCP control block to a socket.
  */
 static int
@@ -180,8 +168,7 @@ mptcp_attach(struct socket *mp_so, struct proc *p)
 	}
 
 	if (mp_so->so_snd.sb_preconn_hiwat == 0) {
-		soreserve_preconnect(mp_so, imin(MPTCP_PRECONNECT_SBSZ_MAX,
-		    imax(mptcp_preconnect_sbspace, MPTCP_PRECONNECT_SBSZ_MIN)));
+		soreserve_preconnect(mp_so, 2048);
 	}
 
 	/*
@@ -635,7 +622,7 @@ mptcp_connorder_helper(struct mptsub *mpts)
 	struct tcpcb *tp = NULL;
 
 	socket_lock(so, 0);
-	
+
 	tp = intotcpcb(sotoinpcb(so));
 	tp->t_mpflags |= TMPF_SND_MPPRIO;
 	if (mpts->mpts_flags & MPTSF_PREFERRED)
@@ -857,7 +844,7 @@ mptcp_disconnectx(struct mptses *mpte, sae_associd_t aid, sae_connid_t cid)
 	} else {
 		bool disconnect_embryonic_subflows = false;
 		struct socket *so = NULL;
-		
+
 		TAILQ_FOREACH(mpts, &mpte->mpte_subflows, mpts_entry) {
 			if (mpts->mpts_connid != cid)
 				continue;
@@ -1173,14 +1160,14 @@ mptcp_usr_send(struct socket *mp_so, int prus_flags, struct mbuf *m,
 	error = mptcp_output(mpte);
 	if (error != 0)
 		goto out;
-	
+
 	if (mp_so->so_state & SS_ISCONNECTING) {
 		if (mp_so->so_state & SS_NBIO)
 			error = EWOULDBLOCK;
 		else
 			error = sbwait(&mp_so->so_snd);
 	}
-	
+
 out:
 	if (error) {
 		if (m != NULL)
@@ -1511,6 +1498,7 @@ mptcp_usr_socheckopt(struct socket *mp_so, struct sockopt *sopt)
 	case SO_FLUSH:				/* MP + subflow */
 	case SO_MPTCP_FASTJOIN:			/* MP + subflow */
 	case SO_NOWAKEFROMSLEEP:
+	case SO_NOAPNFALLBK:
 		/*
 		 * Tell the caller that these options are to be processed;
 		 * these will also be recorded later by mptcp_setopt().
@@ -1689,6 +1677,7 @@ mptcp_setopt(struct mptses *mpte, struct sockopt *sopt)
 		case SO_RESTRICTIONS:
 		case SO_NOWAKEFROMSLEEP:
 		case SO_MPTCP_FASTJOIN:
+		case SO_NOAPNFALLBK:
 			/* record it */
 			break;
 		case SO_FLUSH:
@@ -2081,6 +2070,9 @@ mptcp_sopt2str(int level, int optname, char *dst, int size)
 			break;
 		case SO_MPTCP_FASTJOIN:
 			o = "SO_MPTCP_FASTJOIN";
+			break;
+		case SO_NOAPNFALLBK:
+			o = "SO_NOAPNFALLBK";
 			break;
 		}
 		break;

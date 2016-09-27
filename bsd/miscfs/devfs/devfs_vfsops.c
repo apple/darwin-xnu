@@ -75,8 +75,9 @@
 #include <sys/kauth.h>
 #include <sys/mount_internal.h>
 #include <sys/malloc.h>
-
+#include <sys/conf.h>
 #include <libkern/OSAtomic.h>
+#include <atm/atm_internal.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -125,8 +126,27 @@ devfs_init(__unused struct vfsconf *vfsp)
 					UID_ROOT, GID_WHEEL, 0666, "null");
 	devfs_make_node(makedev(3, 3), DEVFS_CHAR, 
 					UID_ROOT, GID_WHEEL, 0666, "zero");
-	devfs_make_node(makedev(6, 0), DEVFS_CHAR, 
+	uint32_t logging_config = atm_get_diagnostic_config();
+
+	if ( logging_config & ATM_ENABLE_LEGACY_LOGGING ) {
+		devfs_make_node(makedev(6, 0), DEVFS_CHAR,
 					UID_ROOT, GID_WHEEL, 0600, "klog");
+	}
+
+	if ( !(logging_config & ATM_TRACE_DISABLE) ) {
+		devfs_make_node(makedev(7, 0), DEVFS_CHAR,
+					UID_ROOT, GID_WHEEL, 0600, "oslog");
+		if (cdevsw_setkqueueok(7, (&(cdevsw[7])), 0) == -1) {
+			return (ENOTSUP);
+		}
+
+		devfs_make_node(makedev(8, 0), DEVFS_CHAR,
+					UID_ROOT, GID_WHEEL, 0600, "oslog_stream");
+		if (cdevsw_setkqueueok(8, (&(cdevsw[8])), 0) == -1) {
+			return (ENOTSUP);
+		}
+	}
+
 
 #if  FDESC
 	devfs_fdesc_init();
@@ -484,18 +504,16 @@ devfs_kernel_mount(char * mntname)
 }
 
 struct vfsops devfs_vfsops = {
-	devfs_mount,
-	devfs_start,
-	devfs_unmount,
-	devfs_root,
-	NULL,				/* quotactl */
-	devfs_vfs_getattr,
-	devfs_sync,
-	devfs_vget,
-	devfs_fhtovp,
-	devfs_vptofh,
-	devfs_init,
-	devfs_sysctl,
-	NULL,
-	{NULL}
+	.vfs_mount   = devfs_mount,
+	.vfs_start   = devfs_start,
+	.vfs_unmount = devfs_unmount,
+	.vfs_root    = devfs_root,
+	.vfs_getattr = devfs_vfs_getattr,
+	.vfs_sync    = devfs_sync,
+	.vfs_vget    = devfs_vget,
+	.vfs_fhtovp  = devfs_fhtovp,
+	.vfs_vptofh  = devfs_vptofh,
+	.vfs_init    = devfs_init,
+	.vfs_sysctl  = devfs_sysctl,
+	// There are other VFS ops that we do not support
 };

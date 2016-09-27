@@ -139,6 +139,29 @@ getsectdatafromheader(
 }
 
 /*
+ * This routine returns the offset for the named section in the
+ * named segment if it exist in the mach header passed to it. Otherwise
+ *  it returns zero.
+ *
+ * This routine can operate against any kernel mach header.
+ */
+uint32_t
+getsectoffsetfromheader(
+    kernel_mach_header_t *mhp,
+    const char *segname,
+    const char *sectname)
+{
+	const kernel_section_t *sp;
+
+	sp = getsectbynamefromheader(mhp, segname, sectname);
+	if(sp == (kernel_section_t *)0){
+	    return(0);
+	}
+
+	return sp->offset;
+}
+
+/*
  * This routine returns the a pointer to the data for the named segment
  * if it exist in the mach header passed to it.  Also it returns
  * the size of the segment data indirectly through the pointer size.

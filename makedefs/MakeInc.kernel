@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2012 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
 #
 # MakeInc.kernel augments the single-architecture
 # recursive build system with rules specific
@@ -56,7 +56,7 @@ endif
 
 .PHONY: do_build_kernel_dSYM
 
-do_build_kernel_dSYM: $(TARGET)/$(KERNEL_FILE_NAME).dSYM 
+do_build_kernel_dSYM: $(TARGET)/$(KERNEL_FILE_NAME).dSYM
 	@:
 
 .LDFLAGS: ALWAYS
@@ -65,30 +65,30 @@ do_build_kernel_dSYM: $(TARGET)/$(KERNEL_FILE_NAME).dSYM
 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
 
 $(TARGET)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).unstripped
-	@echo STRIP $(@F)
+	@echo "$(ColorH)STRIP$(Color0)      $(ColorLF)$(@F)$(Color0)"
 	$(_v)$(STRIP) $(STRIP_FLAGS) $< -o $@
 	$(_v)$(RM) $@.ctfdata
 ifeq ($(DO_CTFMERGE),1)
-	@echo CTFMERGE $(@F)
-	$(_v)$(FIND) $(TARGET)/ -name \*.ctf -size +0 | 		\
+	@echo "$(ColorH)CTFMERGE$(Color0)   $(ColorLF)$(@F)$(Color0)"
+	$(_v)$(FIND) $(TARGET)/ -name \*.ctf -size +0 |		\
 		$(XARGS) $(CTFMERGE) -l xnu -o $@ -Z $@.ctfdata || true
 endif
 	$(_v)if [ -s $@.ctfdata ]; then								\
-		echo CTFINSERT $(@F);								\
-		$(CTFINSERT) $@	$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG)) 				\
+		echo "$(ColorH)CTFINSERT$(Color0)  $(ColorLF)$(@F)$(Color0)";					\
+		$(CTFINSERT) $@	$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))				\
 			     $@.ctfdata -o $@;							\
 	fi;
 	$(_v)$(LN) $(call function_convert_build_config_to_objdir,$(CURRENT_BUILD_CONFIG))/$(KERNEL_FILE_NAME) $(OBJROOT)/$(KERNEL_FILE_NAME)
 
 $(TARGET)/$(KERNEL_FILE_NAME).dSYM: $(TARGET)/$(KERNEL_FILE_NAME).unstripped
-	$(_v)echo DSYMUTIL $(@F)
+	$(_v)echo "$(ColorH)DSYMUTIL$(Color0)   $(ColorLF)$(@F)$(Color0)"
 	$(_v)$(DSYMUTIL) $(DSYMUTIL_FLAGS) $< -o $@
 	$(_v)$(MV) $@/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME).unstripped $@/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME)
 	$(_v)$(TOUCH) $@
 
 $(TARGET)/$(KERNEL_FILE_NAME).unstripped: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkerneldataconst.o lastkernelconstructor.o $(SRCROOT)/config/version.c $(SRCROOT)/config/MasterVersion .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
 	$(_v)${MAKE} -f $(firstword $(MAKEFILE_LIST)) version.o
-	@echo LD $(@F)
+	@echo "$(ColorL)LD$(Color0)  $(ColorLF)$(@F)$(Color0)"
 	$(_v)$(CAT) $(filter %.filelist,$+) < /dev/null > link.filelist
 	$(_v)$(LD) $(LDFLAGS_KERNEL) -filelist link.filelist version.o $(filter %.o,$+) -o $@ $(LD_KERNEL_LIBS)
 
@@ -129,7 +129,7 @@ lastkernelconstructor.o: $(SRCROOT)/libsa/lastkernelconstructor.c
 	${C_RULE_3}
 	${C_RULE_4}
 	$(_v)for last_file in ${LAST_FILES};				\
-        do      							\
+        do							\
 		$(SEG_HACK) -s __DATA -n __LAST -o $${last_file}__ $${last_file} || exit 1; \
                 mv $${last_file}__ $${last_file} || exit 1;		\
         done
@@ -184,11 +184,11 @@ do_install_xnu_debug_files:	$(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/README.DEBUG-kern
 $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME) ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
 	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then	\
-		echo INSTALL $(@F) "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"; \
+		echo "$(ColorH)INSTALL$(Color0)    $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_MACHINE_CONFIG_LC)$(Color0))\""; \
 		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;			\
 		cmdstatus=$$?;						\
 	else								\
-		echo INSTALL $(@F) "($(CURRENT_ARCH_CONFIG_LC) $(CURRENT_MACHINE_CONFIG_LC))"; \
+		echo "$(ColorH)INSTALL$(Color0)    $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_MACHINE_CONFIG_LC)$(Color0))\""; \
 		$(LIPO) -create $@ $< -output $@;			\
 		cmdstatus=$$?;						\
 	fi;								\
@@ -197,11 +197,11 @@ $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NA
 $(SYMROOT)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).unstripped ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
 	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then		\
-		echo INSTALLSYM $(@F) "($(CURRENT_ARCH_CONFIG_LC))";	\
+		echo "$(ColorH)INSTALLSYM$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\"";	\
 		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;				\
 		cmdstatus=$$?;							\
 	else									\
-		echo INSTALLSYM $(@F) "($(CURRENT_ARCH_CONFIG_LC))";	\
+		echo "$(ColorH)INSTALLSYM$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\"";	\
 		$(LIPO) -create $@ $< -output $@;				\
 		cmdstatus=$$?;							\
 	fi;									\
@@ -209,35 +209,35 @@ $(SYMROOT)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).unstripped ALWAYS
 
 $(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros: $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros
 	$(_v)$(MKDIR) $(dir $@)
-	@echo INSTALLMACROS $(@F) "($(CURRENT_ARCH_CONFIG_LC))"
+	@echo "$(ColorH)INSTALLMACROS$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
 	$(_v)$(CP) -r $< $(dir $@)
 	$(_v)$(TOUCH) $@
 
 $(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME) $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME): $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME)
 	$(_v)$(MKDIR) $(dir $@)
-	@echo INSTALLMACROS $(@F) "($(CURRENT_ARCH_CONFIG_LC))"
+	@echo "$(ColorH)INSTALLMACROS$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/README.DEBUG-kernel.txt: $(SRCROOT)/config/README.DEBUG-kernel.txt
 	$(_v)$(MKDIR) $(dir $@)
-	@echo INSTALL $(@F)
+	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist: $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist
 	$(_v)$(MKDIR) $(dir $@)
-	@echo INSTALLSYM dSYM $(@F) "($(CURRENT_ARCH_CONFIG_LC))"
+	@echo "$(ColorH)INSTALLSYM$(Color0) $(ColorL)dSYM$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME) $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME) ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
 	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then			\
-		echo INSTALLSYM dSYM $(@F).dSYM "($(CURRENT_ARCH_CONFIG_LC))";	\
-		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@; 				\
-		cmdstatus=$$?;		       	   					\
+		echo "$(ColorH)INSTALLSYM$(Color0) $(ColorL)dSYM$(Color0) $(ColorF)$(@F).dSYM$(ColorF) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\"";	\
+		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;					\
+		cmdstatus=$$?;								\
 	else										\
-		echo INSTALLSYM dSYM $(@F).dSYM "($(CURRENT_ARCH_CONFIG_LC))";	\
-		$(LIPO) -create $@ $< -output $@; 					\
-		cmdstatus=$$?;		       	   					\
+		echo "$(ColorH)INSTALLSYM$(Color0) $(ColorL)dSYM$(Color0) $(ColorF)$(@F).dSYM$(ColorF) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\"";	\
+		$(LIPO) -create $@ $< -output $@;					\
+		cmdstatus=$$?;								\
 	fi;										\
 	exit $$cmdstatus
 
@@ -289,6 +289,12 @@ $(DSTROOT)/$(KRESDIR)/Info.plist: $(SOURCE)/EXTERNAL_HEADERS/Info.plist
 ifeq ($(USE_BINARY_PLIST),1)
 	$(_v)$(PLUTIL) -convert binary1 -o $@ $@
 endif
+
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(ALIAS_FILE_NAME): ALWAYS
+	$(_v)echo "$(ColorH)ALIAS$(Color0)      $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_MACHINE_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_ALIAS_MACHINE_CONFIG_LC)$(Color0))\""
+	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME) $@
+
+install_alias: $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(ALIAS_FILE_NAME)
 
 print_exports:
 	$(_v)printenv | sort

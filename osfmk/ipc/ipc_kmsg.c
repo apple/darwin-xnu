@@ -93,6 +93,7 @@
 #include <kern/misc_protos.h>
 #include <kern/counters.h>
 #include <kern/cpu_data.h>
+#include <kern/policy_internal.h>
 
 #include <machine/machlimits.h>
 
@@ -112,8 +113,14 @@
 #include <ipc/ipc_hash.h>
 #include <ipc/ipc_table.h>
 #include <ipc/ipc_importance.h>
+#if MACH_FLIPC
+#include <kern/mach_node.h>
+#include <ipc/flipc.h>
+#endif
 
 #include <security/mac_mach_internal.h>
+
+#include <device/device_server.h>
 
 #include <string.h>
 
@@ -538,6 +545,285 @@ MACRO_BEGIN								\
 	}								\
 MACRO_END
 
+#define KMSG_TRACE_FLAG_TRACED     0x000001
+#define KMSG_TRACE_FLAG_COMPLEX    0x000002
+#define KMSG_TRACE_FLAG_OOLMEM     0x000004
+#define KMSG_TRACE_FLAG_VCPY       0x000008
+#define KMSG_TRACE_FLAG_PCPY       0x000010
+#define KMSG_TRACE_FLAG_SND64      0x000020
+#define KMSG_TRACE_FLAG_RAISEIMP   0x000040
+#define KMSG_TRACE_FLAG_APP_SRC    0x000080
+#define KMSG_TRACE_FLAG_APP_DST    0x000100
+#define KMSG_TRACE_FLAG_DAEMON_SRC 0x000200
+#define KMSG_TRACE_FLAG_DAEMON_DST 0x000400
+#define KMSG_TRACE_FLAG_DST_NDFLTQ 0x000800
+#define KMSG_TRACE_FLAG_SRC_NDFLTQ 0x001000
+#define KMSG_TRACE_FLAG_DST_SONCE  0x002000
+#define KMSG_TRACE_FLAG_SRC_SONCE  0x004000
+#define KMSG_TRACE_FLAG_CHECKIN    0x008000
+#define KMSG_TRACE_FLAG_ONEWAY     0x010000
+#define KMSG_TRACE_FLAG_IOKIT      0x020000
+#define KMSG_TRACE_FLAG_SNDRCV     0x040000
+#define KMSG_TRACE_FLAG_DSTQFULL   0x080000
+#define KMSG_TRACE_FLAG_VOUCHER    0x100000
+#define KMSG_TRACE_FLAG_TIMER      0x200000
+#define KMSG_TRACE_FLAG_SEMA       0x400000
+#define KMSG_TRACE_FLAG_DTMPOWNER  0x800000
+
+#define KMSG_TRACE_FLAGS_MASK      0xffffff
+#define KMSG_TRACE_FLAGS_SHIFT     8
+
+#define KMSG_TRACE_PORTS_MASK      0xff
+#define KMSG_TRACE_PORTS_SHIFT     0
+
+#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD)
+extern boolean_t kdebug_debugid_enabled(uint32_t debugid);
+
+void ipc_kmsg_trace_send(ipc_kmsg_t kmsg,
+			 mach_msg_option_t option)
+{
+	task_t send_task = TASK_NULL;
+	ipc_port_t dst_port, src_port;
+	boolean_t is_task_64bit;
+	mach_msg_header_t *msg;
+	mach_msg_trailer_t *trailer;
+
+	int kotype = 0;
+	uint32_t msg_size = 0;
+	uint32_t msg_flags = KMSG_TRACE_FLAG_TRACED;
+	uint32_t num_ports = 0;
+	uint32_t send_pid, dst_pid;
+
+	/*
+	 * check to see not only if ktracing is enabled, but if we will
+	 * _actually_ emit the KMSG_INFO tracepoint. This saves us a
+	 * significant amount of processing (and a port lock hold) in
+	 * the non-tracing case.
+	 */
+	if (__probable((kdebug_enable & KDEBUG_TRACE) == 0))
+		return;
+	if (!kdebug_debugid_enabled(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO)))
+		return;
+
+	msg = kmsg->ikm_header;
+
+	dst_port = (ipc_port_t)(msg->msgh_remote_port);
+	if (!IPC_PORT_VALID(dst_port))
+		return;
+
+	/*
+	 * Message properties / options
+	 */
+	if ((option & (MACH_SEND_MSG|MACH_RCV_MSG)) == (MACH_SEND_MSG|MACH_RCV_MSG))
+		msg_flags |= KMSG_TRACE_FLAG_SNDRCV;
+
+	if (msg->msgh_id >= is_iokit_subsystem.start &&
+	    msg->msgh_id < is_iokit_subsystem.end + 100)
+		msg_flags |= KMSG_TRACE_FLAG_IOKIT;
+	/* magic XPC checkin message id (XPC_MESSAGE_ID_CHECKIN) from libxpc */
+	else if (msg->msgh_id == 0x77303074u /* w00t */)
+		msg_flags |= KMSG_TRACE_FLAG_CHECKIN;
+
+	if (msg->msgh_bits & MACH_MSGH_BITS_RAISEIMP)
+		msg_flags |= KMSG_TRACE_FLAG_RAISEIMP;
+
+	if (unsafe_convert_port_to_voucher(kmsg->ikm_voucher))
+		msg_flags |= KMSG_TRACE_FLAG_VOUCHER;
+
+	/*
+	 * Sending task / port
+	 */
+	send_task = current_task();
+	send_pid = task_pid(send_task);
+
+	if (send_pid != 0) {
+		if (task_is_daemon(send_task))
+			msg_flags |= KMSG_TRACE_FLAG_DAEMON_SRC;
+		else if (task_is_app(send_task))
+			msg_flags |= KMSG_TRACE_FLAG_APP_SRC;
+	}
+
+	is_task_64bit = (send_task->map->max_offset > VM_MAX_ADDRESS);
+	if (is_task_64bit)
+		msg_flags |= KMSG_TRACE_FLAG_SND64;
+
+	src_port = (ipc_port_t)(msg->msgh_local_port);
+	if (src_port) {
+		if (src_port->ip_messages.imq_qlimit != MACH_PORT_QLIMIT_DEFAULT)
+			msg_flags |= KMSG_TRACE_FLAG_SRC_NDFLTQ;
+		switch (MACH_MSGH_BITS_LOCAL(msg->msgh_bits)) {
+		case MACH_MSG_TYPE_MOVE_SEND_ONCE:
+			msg_flags |= KMSG_TRACE_FLAG_SRC_SONCE;
+			break;
+		default:
+			break;
+		}
+	} else {
+		msg_flags |= KMSG_TRACE_FLAG_ONEWAY;
+	}
+
+
+	/*
+	 * Destination task / port
+	 */
+	ip_lock(dst_port);
+	if (!ip_active(dst_port)) {
+		/* dst port is being torn down */
+		dst_pid = (uint32_t)0xfffffff0;
+	} else if (dst_port->ip_tempowner) {
+		msg_flags |= KMSG_TRACE_FLAG_DTMPOWNER;
+		if (IIT_NULL != dst_port->ip_imp_task)
+			dst_pid = task_pid(dst_port->ip_imp_task->iit_task);
+		else
+			dst_pid = (uint32_t)0xfffffff1;
+	} else if (dst_port->ip_receiver_name == MACH_PORT_NULL) {
+		/* dst_port is otherwise in-transit */
+		dst_pid = (uint32_t)0xfffffff2;
+	} else {
+		if (dst_port->ip_receiver == ipc_space_kernel) {
+			dst_pid = 0;
+		} else {
+			ipc_space_t dst_space;
+			dst_space = dst_port->ip_receiver;
+			if (dst_space && is_active(dst_space)) {
+				dst_pid = task_pid(dst_space->is_task);
+				if (task_is_daemon(dst_space->is_task))
+					msg_flags |= KMSG_TRACE_FLAG_DAEMON_DST;
+				else if (task_is_app(dst_space->is_task))
+					msg_flags |= KMSG_TRACE_FLAG_APP_DST;
+			} else {
+				/* receiving task is being torn down */
+				dst_pid = (uint32_t)0xfffffff3;
+			}
+		}
+	}
+
+	if (dst_port->ip_messages.imq_qlimit != MACH_PORT_QLIMIT_DEFAULT)
+		msg_flags |= KMSG_TRACE_FLAG_DST_NDFLTQ;
+	if (imq_full(&dst_port->ip_messages))
+		msg_flags |= KMSG_TRACE_FLAG_DSTQFULL;
+
+	kotype = ip_kotype(dst_port);
+
+	ip_unlock(dst_port);
+
+	switch (kotype) {
+	case IKOT_SEMAPHORE:
+		msg_flags |= KMSG_TRACE_FLAG_SEMA;
+		break;
+	case IKOT_TIMER:
+	case IKOT_CLOCK:
+		msg_flags |= KMSG_TRACE_FLAG_TIMER;
+		break;
+	case IKOT_MASTER_DEVICE:
+	case IKOT_IOKIT_CONNECT:
+	case IKOT_IOKIT_OBJECT:
+	case IKOT_IOKIT_SPARE:
+		msg_flags |= KMSG_TRACE_FLAG_IOKIT;
+		break;
+	default:
+		break;
+	}
+
+	switch(MACH_MSGH_BITS_REMOTE(msg->msgh_bits)) {
+	case MACH_MSG_TYPE_PORT_SEND_ONCE:
+		msg_flags |= KMSG_TRACE_FLAG_DST_SONCE;
+		break;
+	default:
+		break;
+	}
+
+
+	/*
+	 * Message size / content
+	 */
+	msg_size = msg->msgh_size - sizeof(mach_msg_header_t);
+
+	if (msg->msgh_bits & MACH_MSGH_BITS_COMPLEX) {
+		mach_msg_body_t *msg_body;
+		mach_msg_descriptor_t *kern_dsc;
+		int dsc_count;
+
+		msg_flags |= KMSG_TRACE_FLAG_COMPLEX;
+
+		msg_body = (mach_msg_body_t *)(kmsg->ikm_header + 1);
+		dsc_count = (int)msg_body->msgh_descriptor_count;
+		kern_dsc = (mach_msg_descriptor_t *)(msg_body + 1);
+
+		/* this is gross: see ipc_kmsg_copyin_body()... */
+		if (!is_task_64bit)
+			msg_size -= (dsc_count * 12);
+
+		for (int i = 0; i < dsc_count; i++) {
+			switch (kern_dsc[i].type.type) {
+			case MACH_MSG_PORT_DESCRIPTOR:
+				num_ports++;
+				if (is_task_64bit)
+					msg_size -= 12;
+				break;
+			case MACH_MSG_OOL_VOLATILE_DESCRIPTOR:
+			case MACH_MSG_OOL_DESCRIPTOR: {
+				mach_msg_ool_descriptor_t *dsc;
+				dsc = (mach_msg_ool_descriptor_t *)&kern_dsc[i];
+				msg_flags |= KMSG_TRACE_FLAG_OOLMEM;
+				msg_size += dsc->size;
+				if ((dsc->size >= MSG_OOL_SIZE_SMALL) &&
+				    (dsc->copy == MACH_MSG_PHYSICAL_COPY) &&
+				    !dsc->deallocate)
+					msg_flags |= KMSG_TRACE_FLAG_PCPY;
+				else if (dsc->size <= MSG_OOL_SIZE_SMALL)
+					msg_flags |= KMSG_TRACE_FLAG_PCPY;
+				else
+					msg_flags |= KMSG_TRACE_FLAG_VCPY;
+				if (is_task_64bit)
+					msg_size -= 16;
+				} break;
+			case MACH_MSG_OOL_PORTS_DESCRIPTOR: {
+				mach_msg_ool_ports_descriptor_t	*dsc;
+				dsc = (mach_msg_ool_ports_descriptor_t *)&kern_dsc[i];
+				num_ports += dsc->count;
+				if (is_task_64bit)
+					msg_size -= 16;
+				} break;
+			default:
+				break;
+			}
+		}
+	}
+
+	/*
+	 * Trailer contents
+	 */
+	trailer = (mach_msg_trailer_t *)((vm_offset_t)msg +
+					 (vm_offset_t)msg->msgh_size);
+	if (trailer->msgh_trailer_size <= sizeof(mach_msg_security_trailer_t)) {
+		extern security_token_t KERNEL_SECURITY_TOKEN;
+		mach_msg_security_trailer_t *strailer;
+		strailer = (mach_msg_security_trailer_t *)trailer;
+		/*
+		 * verify the sender PID: replies from the kernel often look
+		 * like self-talk because the sending port is not reset.
+		 */
+		if (memcmp(&strailer->msgh_sender,
+			   &KERNEL_SECURITY_TOKEN,
+			   sizeof(KERNEL_SECURITY_TOKEN)) == 0) {
+			send_pid = 0;
+			msg_flags &= ~(KMSG_TRACE_FLAG_APP_SRC | KMSG_TRACE_FLAG_DAEMON_SRC);
+		}
+	}
+
+	KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END,
+		 (uintptr_t)send_pid,
+		 (uintptr_t)dst_pid,
+		 (uintptr_t)msg_size,
+		 (uintptr_t)(
+		   ((msg_flags & KMSG_TRACE_FLAGS_MASK) << KMSG_TRACE_FLAGS_SHIFT) |
+		   ((num_ports & KMSG_TRACE_PORTS_MASK) << KMSG_TRACE_PORTS_SHIFT)
+		 )
+	);
+}
+#endif
+
 /* zone for cached ipc_kmsg_t structures */
 zone_t			ipc_kmsg_zone;
 
@@ -730,7 +1016,100 @@ ipc_kmsg_enqueue(
 	ipc_kmsg_queue_t	queue,
 	ipc_kmsg_t		kmsg)
 {
-	ipc_kmsg_enqueue_macro(queue, kmsg);
+	ipc_kmsg_t first = queue->ikmq_base;
+	ipc_kmsg_t last;
+
+	if (first == IKM_NULL) {
+		queue->ikmq_base = kmsg;
+		kmsg->ikm_next = kmsg;
+		kmsg->ikm_prev = kmsg;
+	} else {
+		last = first->ikm_prev;
+		kmsg->ikm_next = first;
+		kmsg->ikm_prev = last;
+		first->ikm_prev = kmsg;
+		last->ikm_next = kmsg;
+	}
+}
+
+/*
+ *	Routine:	ipc_kmsg_enqueue_qos
+ *	Purpose:
+ *		Enqueue a kmsg, propagating qos
+ *		overrides towards the head of the queue.
+ *
+ *	Returns:
+ *		whether the head of the queue had
+ *		it's override-qos adjusted because
+ *		of this insertion.
+ */
+
+boolean_t
+ipc_kmsg_enqueue_qos(
+	ipc_kmsg_queue_t	queue,
+	ipc_kmsg_t		kmsg)
+{
+	ipc_kmsg_t first = queue->ikmq_base;
+	ipc_kmsg_t prev;
+	mach_msg_priority_t override;
+
+	if (first == IKM_NULL) {
+		/* insert a first message */
+		queue->ikmq_base = kmsg;
+		kmsg->ikm_next = kmsg;
+		kmsg->ikm_prev = kmsg;
+		return TRUE;
+	}
+
+	/* insert at the tail */
+	prev = first->ikm_prev;
+	kmsg->ikm_next = first;
+	kmsg->ikm_prev = prev;
+	first->ikm_prev = kmsg;
+	prev->ikm_next = kmsg;
+
+	/* apply QoS overrides towards the head */
+	override = kmsg->ikm_qos_override;
+	while (prev != kmsg &&
+	       override > prev->ikm_qos_override) {
+		prev->ikm_qos_override = override;
+		prev = prev->ikm_prev;
+	}
+
+	/* did we adjust everything? */
+	return (prev == kmsg);
+}
+
+/*
+ *	Routine:	ipc_kmsg_override_qos
+ *	Purpose:
+ *		Update the override for a given kmsg already
+ *		enqueued, propagating qos override adjustments
+ *		towards	the head of the queue.
+ *
+ *	Returns:
+ *		whether the head of the queue had
+ *		it's override-qos adjusted because
+ *		of this insertion.
+ */
+
+boolean_t
+ipc_kmsg_override_qos(
+	ipc_kmsg_queue_t	queue,
+	ipc_kmsg_t          kmsg,
+	mach_msg_priority_t override)
+{
+	ipc_kmsg_t first = queue->ikmq_base;
+	ipc_kmsg_t cur = kmsg;
+
+	/* apply QoS overrides towards the head */
+	while (override > cur->ikm_qos_override) {
+		cur->ikm_qos_override = override;
+		if (cur == first)
+			return TRUE;
+		 cur = cur->ikm_next;
+	}
+	return FALSE;
 }
 
 /*
@@ -748,7 +1127,7 @@ ipc_kmsg_dequeue(
 	first = ipc_kmsg_queue_first(queue);
 
 	if (first != IKM_NULL)
-		ipc_kmsg_rmqueue_first_macro(queue, first);
+		ipc_kmsg_rmqueue(queue, first);
 
 	return first;
 }
@@ -1376,7 +1755,6 @@ ipc_kmsg_send(
 	thread_t th = current_thread();
 	mach_msg_return_t error = MACH_MSG_SUCCESS;
 	boolean_t kernel_reply = FALSE;
-	spl_t s;
 
 	/* Check if honor qlimit flag is set on thread. */
 	if ((th->options & TH_OPT_HONOR_QLIMIT) == TH_OPT_HONOR_QLIMIT) {
@@ -1398,6 +1776,7 @@ ipc_kmsg_send(
 	/* don't allow the creation of a circular loop */
 	if (kmsg->ikm_header->msgh_bits & MACH_MSGH_BITS_CIRCULAR) {
 		ipc_kmsg_destroy(kmsg);
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, MACH_MSGH_BITS_CIRCULAR);
 		return MACH_MSG_SUCCESS;
 	}
 
@@ -1417,9 +1796,14 @@ retry:
 	 */
 	if (!ip_active(port)) {
 		ip_unlock(port);
+#if MACH_FLIPC
+        if (MACH_NODE_VALID(kmsg->ikm_node) && FPORT_VALID(port->ip_messages.imq_fport))
+            flipc_msg_ack(kmsg->ikm_node, &port->ip_messages, FALSE);
+#endif
 		ip_release(port);  /* JMM - Future: release right, not just ref */
 		kmsg->ikm_header->msgh_remote_port = MACH_PORT_NULL;
 		ipc_kmsg_destroy(kmsg);
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, MACH_SEND_INVALID_DEST);
 		return MACH_MSG_SUCCESS;
 	}
 
@@ -1440,15 +1824,19 @@ retry:
 		/*
 		 * Call the server routine, and get the reply message to send.
 		 */
-		kmsg = ipc_kobject_server(kmsg);
+		kmsg = ipc_kobject_server(kmsg, option);
 		if (kmsg == IKM_NULL)
 			return MACH_MSG_SUCCESS;
 
+		/* restart the KMSG_INFO tracing for the reply message */
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
 		port = (ipc_port_t) kmsg->ikm_header->msgh_remote_port;
 		assert(IP_VALID(port));
 		ip_lock(port);
 		/* fall thru with reply - same options */
 		kernel_reply = TRUE;
+		if (!ip_active(port))
+			error = MACH_SEND_INVALID_DEST;
 	}
 
 #if IMPORTANCE_INHERITANCE
@@ -1464,17 +1852,20 @@ retry:
 	}
 #endif /* IMPORTANCE_INHERITANCE */
 
-	/*
-	 * We have a valid message and a valid reference on the port.
-	 * we can unlock the port and call mqueue_send() on its message
-	 * queue. Lock message queue while port is locked.
-	 */
-	s = splsched();
-	imq_lock(&port->ip_messages);
-	ip_unlock(port);
+	if (error != MACH_MSG_SUCCESS) {
+		ip_unlock(port);
+	} else {
+		/*
+		 * We have a valid message and a valid reference on the port.
+		 * we can unlock the port and call mqueue_send() on its message
+		 * queue. Lock message queue while port is locked.
+		 */
+		imq_lock(&port->ip_messages);
+		ip_unlock(port);
 
-	error = ipc_mqueue_send(&port->ip_messages, kmsg, option, 
-			send_timeout, s);
+		error = ipc_mqueue_send(&port->ip_messages, kmsg, option,
+				send_timeout);
+	}
 
 #if IMPORTANCE_INHERITANCE
 	if (did_importance == TRUE) {
@@ -1519,9 +1910,14 @@ retry:
 	 * as a successful delivery (like we do for an inactive port).
 	 */
 	if (error == MACH_SEND_INVALID_DEST) {
+#if MACH_FLIPC
+        if (MACH_NODE_VALID(kmsg->ikm_node) && FPORT_VALID(port->ip_messages.imq_fport))
+            flipc_msg_ack(kmsg->ikm_node, &port->ip_messages, FALSE);
+#endif
 		ip_release(port); /* JMM - Future: release right, not just ref */
 		kmsg->ikm_header->msgh_remote_port = MACH_PORT_NULL;
 		ipc_kmsg_destroy(kmsg);
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, MACH_SEND_INVALID_DEST);
 		return MACH_MSG_SUCCESS;
 	}
 
@@ -1531,9 +1927,14 @@ retry:
 		 * pseudo-receive on error conditions. We need to just treat
 		 * the message as a successful delivery.
 		 */
+#if MACH_FLIPC
+        if (MACH_NODE_VALID(kmsg->ikm_node) && FPORT_VALID(port->ip_messages.imq_fport))
+            flipc_msg_ack(kmsg->ikm_node, &port->ip_messages, FALSE);
+#endif
 		ip_release(port); /* JMM - Future: release right, not just ref */
 		kmsg->ikm_header->msgh_remote_port = MACH_PORT_NULL;
 		ipc_kmsg_destroy(kmsg);
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, error);
 		return MACH_MSG_SUCCESS;
 	}
 	return error;
@@ -1555,10 +1956,14 @@ retry:
 
 mach_msg_return_t
 ipc_kmsg_put(
-	mach_vm_address_t	msg_addr,
 	ipc_kmsg_t		kmsg,
-	mach_msg_size_t		size)
+	mach_msg_option_t	option,
+	mach_vm_address_t	rcv_addr,
+	mach_msg_size_t		rcv_size,
+	mach_msg_size_t		trailer_size,
+	mach_msg_size_t		*sizep)
 {
+	mach_msg_size_t size = kmsg->ikm_header->msgh_size + trailer_size;
 	mach_msg_return_t mr;
 
 	DEBUG_IPC_KMSG_PRINT(kmsg, "ipc_kmsg_put()");
@@ -1614,12 +2019,29 @@ ipc_kmsg_put(
 		kprintf("type: %d\n", ((mach_msg_type_descriptor_t *)(((mach_msg_base_t *)kmsg->ikm_header)+1))->type);
 	}
 	__unreachable_ok_pop
-	if (copyoutmsg((const char *) kmsg->ikm_header, msg_addr, size))
+
+	 /* Re-Compute target address if using stack-style delivery */
+	if (option & MACH_RCV_STACK) {
+		rcv_addr += rcv_size - size;
+	}
+
+	if (copyoutmsg((const char *) kmsg->ikm_header, rcv_addr, size)) {
 		mr = MACH_RCV_INVALID_DATA;
-	else
+		size = 0;
+	} else
 		mr = MACH_MSG_SUCCESS;
 
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_LINK) | DBG_FUNC_NONE,
+			      (rcv_addr >= VM_MIN_KERNEL_AND_KEXT_ADDRESS ||
+			       rcv_addr + size >= VM_MIN_KERNEL_AND_KEXT_ADDRESS) ? (uintptr_t)0 : (uintptr_t)rcv_addr,
+			      VM_KERNEL_ADDRPERM((uintptr_t)kmsg),
+			      1 /* this is on the receive/copyout path */,
+			      0,
+			      0);
 	ipc_kmsg_free(kmsg);
+
+	if (sizep)
+		*sizep = size;
 	return mr;
 }
 
@@ -1642,6 +2064,33 @@ ipc_kmsg_put_to_kernel(
 	(void) memcpy((void *) msg, (const void *) kmsg->ikm_header, size);
 
 	ipc_kmsg_free(kmsg);
+}
+
+unsigned long pthread_priority_canonicalize(unsigned long priority, boolean_t propagation);
+
+static void
+ipc_kmsg_set_qos(
+	ipc_kmsg_t kmsg,
+	mach_msg_option_t options,
+	mach_msg_priority_t override)
+{
+	kern_return_t kr;
+
+	kr = ipc_get_pthpriority_from_kmsg_voucher(kmsg, &kmsg->ikm_qos);
+	if (kr != KERN_SUCCESS) {
+		kmsg->ikm_qos = MACH_MSG_PRIORITY_UNSPECIFIED;
+	}
+	kmsg->ikm_qos_override = kmsg->ikm_qos;
+
+	if (options & MACH_SEND_OVERRIDE) {
+		unsigned long canonical;
+		mach_msg_priority_t canon;
+
+		canonical = pthread_priority_canonicalize(override, TRUE);
+		canon = (mach_msg_priority_t)canonical;
+		if (canon > kmsg->ikm_qos)
+			kmsg->ikm_qos_override = canon;
+	}
 }
 
 /*
@@ -1672,6 +2121,7 @@ mach_msg_return_t
 ipc_kmsg_copyin_header(
 	ipc_kmsg_t              kmsg,
 	ipc_space_t		space,
+	mach_msg_priority_t override,
 	mach_msg_option_t	*optionp)
 {
 	mach_msg_header_t *msg = kmsg->ikm_header;
@@ -1974,16 +2424,6 @@ ipc_kmsg_copyin_header(
 		voucher_entry = IE_NULL;
 	}
 
-	/*
-	 * No room to store voucher port in in-kernel msg header,
-	 * so we store it back in the kmsg itself.
-	 */
-	if (IP_VALID(voucher_port)) {
-		assert(ip_active(voucher_port));
-		kmsg->ikm_voucher = voucher_port;
-		voucher_type = MACH_MSG_TYPE_MOVE_SEND;
-	}
-
 	dest_type = ipc_object_copyin_type(dest_type);
 	reply_type = ipc_object_copyin_type(reply_type);
 
@@ -2004,12 +2444,16 @@ ipc_kmsg_copyin_header(
 			if (ip_full(dport)) {
 #if IMPORTANCE_INHERITANCE
 				needboost = ipc_port_request_sparm(dport, dest_name, 
-							dest_entry->ie_request,
-							(*optionp & MACH_SEND_NOIMPORTANCE));
+				                                   dest_entry->ie_request,
+				                                   *optionp,
+				                                   override);
 				if (needboost == FALSE)
 					ip_unlock(dport);
 #else
-				ipc_port_request_sparm(dport, dest_name, dest_entry->ie_request);
+				ipc_port_request_sparm(dport, dest_name,
+				                       dest_entry->ie_request,
+				                       *optionp,
+									   override);
 				ip_unlock(dport);
 #endif /* IMPORTANCE_INHERITANCE */
 			} else {
@@ -2048,6 +2492,21 @@ ipc_kmsg_copyin_header(
 	if (voucher_soright != IP_NULL) {
 		ipc_notify_port_deleted(voucher_soright, voucher_name);
 	}
+
+	/*
+	 * No room to store voucher port in in-kernel msg header,
+	 * so we store it back in the kmsg itself.  Extract the
+	 * qos, and apply any override before we enqueue the kmsg.
+	 */
+	if (IP_VALID(voucher_port)) {
+
+		kmsg->ikm_voucher = voucher_port;
+		voucher_type = MACH_MSG_TYPE_MOVE_SEND;
+	}
+
+	/* capture the qos value(s) for the kmsg */
+	ipc_kmsg_set_qos(kmsg, *optionp, override);
+
 	msg->msgh_bits = MACH_MSGH_BITS_SET(dest_type, reply_type, voucher_type, mbits);
 	msg->msgh_remote_port = (ipc_port_t)dest_port;
 	msg->msgh_local_port = (ipc_port_t)reply_port;
@@ -2637,13 +3096,14 @@ ipc_kmsg_copyin(
 	ipc_kmsg_t		kmsg,
 	ipc_space_t		space,
 	vm_map_t		map,
+	mach_msg_priority_t override,
 	mach_msg_option_t	*optionp)
 {
     mach_msg_return_t 		mr;
 
     kmsg->ikm_header->msgh_bits &= MACH_MSGH_BITS_USER;
 
-    mr = ipc_kmsg_copyin_header(kmsg, space, optionp);
+    mr = ipc_kmsg_copyin_header(kmsg, space, override, optionp);
 
     if (mr != MACH_MSG_SUCCESS)
 	return mr;
@@ -3440,13 +3900,13 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
     vm_map_copy_t			copy;
     vm_map_address_t			rcv_addr;
     mach_msg_copy_options_t		copy_options;
-    mach_msg_size_t			size;
+    vm_map_size_t			size;
     mach_msg_descriptor_type_t	dsc_type;
 
     //SKIP_PORT_DESCRIPTORS(saddr, sdsc_count);
 
-    copy = (vm_map_copy_t) dsc->address;
-    size = dsc->size;
+    copy = (vm_map_copy_t)dsc->address;
+    size = (vm_map_size_t)dsc->size;
     copy_options = dsc->copy;
     assert(copy_options != MACH_MSG_KALLOC_COPY_T);
     dsc_type = dsc->type;
@@ -3455,10 +3915,10 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
 	kern_return_t kr;
 
         rcv_addr = 0;
-	if (vm_map_copy_validate_size(map, copy, (vm_map_size_t)size) == FALSE)
+	if (vm_map_copy_validate_size(map, copy, &size) == FALSE)
 		panic("Inconsistent OOL/copyout size on %p: expected %d, got %lld @%p",
-		      dsc, size, (unsigned long long)copy->size, copy);
-        kr = vm_map_copyout(map, &rcv_addr, copy);
+		      dsc, dsc->size, (unsigned long long)copy->size, copy);
+        kr = vm_map_copyout_size(map, &rcv_addr, copy, size);
         if (kr != KERN_SUCCESS) {
             if (kr == KERN_RESOURCE_SHORTAGE)
                 *mr |= MACH_MSG_VM_KERNEL;
@@ -3489,7 +3949,7 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
             TRUE : FALSE;
         user_ool_dsc->copy = copy_options;
         user_ool_dsc->type = dsc_type;
-        user_ool_dsc->size = size;
+        user_ool_dsc->size = (mach_msg_size_t)size;
 
         user_dsc = (typeof(user_dsc))user_ool_dsc;
     } else if (is_64bit) {
@@ -3501,7 +3961,7 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
             TRUE : FALSE;
         user_ool_dsc->copy = copy_options;
         user_ool_dsc->type = dsc_type;
-        user_ool_dsc->size = size;
+        user_ool_dsc->size = (mach_msg_size_t)size;
 
         user_dsc = (typeof(user_dsc))user_ool_dsc;
     } else {
@@ -3509,7 +3969,7 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
         user_ool_dsc--;
 
         user_ool_dsc->address = CAST_DOWN_EXPLICIT(uint32_t, rcv_addr);
-        user_ool_dsc->size = size;
+        user_ool_dsc->size = (mach_msg_size_t)size;
         user_ool_dsc->deallocate = (copy_options == MACH_MSG_VIRTUAL_COPY) ?
             TRUE : FALSE;
         user_ool_dsc->copy = copy_options;

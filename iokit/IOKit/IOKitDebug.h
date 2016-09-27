@@ -154,9 +154,12 @@ enum
 
 struct IOTrackingCallSiteInfo
 {
-    uint32_t      count;
-    size_t        size[2];
-    uintptr_t     bt[kIOTrackingCallSiteBTs];
+    uint32_t          count;
+    pid_t             addressPID;
+    mach_vm_address_t address;
+    mach_vm_size_t    size[2];
+    pid_t             btPID;
+    mach_vm_address_t bt[2][kIOTrackingCallSiteBTs];
 };
 
 #define kIOMallocTrackingName	"IOMalloc"
@@ -187,11 +190,35 @@ struct IOTrackingAddress
 #endif
 };
 
+struct IOTrackingUser
+{
+    queue_chain_t link;
+    pid_t         btPID;
+    uint8_t       user32;
+    uint8_t       userCount;
+    uintptr_t     bt[kIOTrackingCallSiteBTs];
+    uintptr_t     btUser[kIOTrackingCallSiteBTs];
+};
+
+enum
+{
+    kIOTrackingQueueTypeDefaultOn = 0x00000001,
+    kIOTrackingQueueTypeAlloc     = 0x00000002,
+    kIOTrackingQueueTypeMap       = 0x00000004,
+    kIOTrackingQueueTypeUser      = 0x00000008,
+};
+
+
 void              IOTrackingInit(void);
-IOTrackingQueue * IOTrackingQueueAlloc(const char * name, size_t allocSize, size_t minCaptureSize, bool isAlloc);
+IOTrackingQueue * IOTrackingQueueAlloc(const char * name, uintptr_t btEntry,
+					size_t allocSize, size_t minCaptureSize,
+					uint32_t type, uint32_t numSiteQs);
 void              IOTrackingQueueFree(IOTrackingQueue * head);
 void              IOTrackingAdd(IOTrackingQueue * head, IOTracking * mem, size_t size, bool address);
 void              IOTrackingRemove(IOTrackingQueue * head, IOTracking * mem, size_t size);
+void              IOTrackingAddUser(IOTrackingQueue * queue, IOTrackingUser * mem, vm_size_t size);
+void              IOTrackingRemoveUser(IOTrackingQueue * head, IOTrackingUser * tracking);
+
 void              IOTrackingAlloc(IOTrackingQueue * head, uintptr_t address, size_t size);
 void              IOTrackingFree(IOTrackingQueue * head, uintptr_t address, size_t size);
 void              IOTrackingReset(IOTrackingQueue * head);
@@ -214,7 +241,7 @@ enum
 enum
 {
     kIOTrackingGetTracking       = 0x00000001,
-    kIOTrackingPrintTracking     = 0x00000002,
+    kIOTrackingGetMappings       = 0x00000002,
     kIOTrackingResetTracking     = 0x00000003,
     kIOTrackingStartCapture      = 0x00000004,
     kIOTrackingStopCapture       = 0x00000005,

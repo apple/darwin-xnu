@@ -19,7 +19,6 @@
  CC_MEMCPY  : optimized memcpy.
  CC_MEMMOVE : optimized memmove.
  CC_MEMSET  : optimized memset.
- CC_BZERO   : optimized bzero, 
 
  CC_STORE32_BE : store 32 bit value in big endian in unaligned buffer.
  CC_STORE32_LE : store 32 bit value in little endian in unaligned buffer.
@@ -72,8 +71,6 @@ The following are not defined yet... define them if needed.
 #define CC_MEMCPY(D,S,L) memcpy((D),(S),(L))
 #define CC_MEMMOVE(D,S,L) memmove((D),(S),(L))
 #define CC_MEMSET(D,V,L) memset((D),(V),(L))
-#define CC_BZERO(D,L) memset((D),0,(L)) // Deprecated, DO NOT USE
-
 
 // MARK: - Loads and Store
 
@@ -122,7 +119,7 @@ x = (((uint64_t)(((const unsigned char *)(y))[7] & 255))<<56) |           \
 // MARK: -- 32 bits - big endian
 // MARK: --- intel version
 
-#if (defined(__i386__) || defined(__x86_64__))
+#if (defined(__i386__) || defined(__x86_64__)) && !defined(_MSC_VER)
 
 #define CC_STORE32_BE(x, y)     \
     __asm__ __volatile__ (      \
@@ -159,7 +156,7 @@ x = ((uint32_t)(((const unsigned char *)(y))[0] & 255)<<24) |	    \
 
 // MARK: --- intel 64 bits version
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && !defined (_MSC_VER)
 
 #define	CC_STORE64_BE(x, y)   \
 __asm__ __volatile__ (        \
@@ -208,7 +205,9 @@ x = (((uint64_t)(((const unsigned char *)(y))[0] & 255))<<56) |           \
 // MARK: -- MSVC version
 
 #include <stdlib.h>
-#pragma intrinsic(_lrotr,_lrotl)
+#if !defined(__clang__)
+ #pragma intrinsic(_lrotr,_lrotl)
+#endif
 #define	CC_ROR(x,n) _lrotr(x,n)
 #define	CC_ROL(x,n) _lrotl(x,n)
 #define	CC_RORc(x,n) _lrotr(x,n)
@@ -217,7 +216,7 @@ x = (((uint64_t)(((const unsigned char *)(y))[0] & 255))<<56) |           \
 #elif (defined(__i386__) || defined(__x86_64__))
 // MARK: -- intel asm version
 
-static inline uint32_t CC_ROL(uint32_t word, int i)
+CC_INLINE uint32_t CC_ROL(uint32_t word, int i)
 {
     __asm__ ("roll %%cl,%0"
          :"=r" (word)
@@ -225,7 +224,7 @@ static inline uint32_t CC_ROL(uint32_t word, int i)
     return word;
 }
 
-static inline uint32_t CC_ROR(uint32_t word, int i)
+CC_INLINE uint32_t CC_ROR(uint32_t word, int i)
 {
     __asm__ ("rorl %%cl,%0"
          :"=r" (word)
@@ -255,12 +254,12 @@ static inline uint32_t CC_ROR(uint32_t word, int i)
 
 // MARK: -- default version
 
-static inline uint32_t CC_ROL(uint32_t word, int i)
+CC_INLINE uint32_t CC_ROL(uint32_t word, int i)
 {
     return ( (word<<(i&31)) | (word>>(32-(i&31))) );
 }
 
-static inline uint32_t CC_ROR(uint32_t word, int i)
+CC_INLINE uint32_t CC_ROR(uint32_t word, int i)
 {
     return ( (word>>(i&31)) | (word<<(32-(i&31))) );
 }
@@ -272,10 +271,10 @@ static inline uint32_t CC_ROR(uint32_t word, int i)
 
 // MARK: - 64 bits rotates
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && !defined(_MSC_VER) //clang _MSVC doesn't support GNU-style inline assembly
 // MARK: -- intel 64 asm version
 
-static inline uint64_t CC_ROL64(uint64_t word, int i)
+CC_INLINE uint64_t CC_ROL64(uint64_t word, int i)
 {
     __asm__("rolq %%cl,%0"
         :"=r" (word)
@@ -283,7 +282,7 @@ static inline uint64_t CC_ROL64(uint64_t word, int i)
     return word;
 }
 
-static inline uint64_t CC_ROR64(uint64_t word, int i)
+CC_INLINE uint64_t CC_ROR64(uint64_t word, int i)
 {
     __asm__("rorq %%cl,%0"
         :"=r" (word)
@@ -315,12 +314,12 @@ static inline uint64_t CC_ROR64(uint64_t word, int i)
 
 // MARK: -- default C version
 
-static inline uint64_t CC_ROL64(uint64_t word, int i)
+CC_INLINE uint64_t CC_ROL64(uint64_t word, int i)
 {
     return ( (word<<(i&63)) | (word>>(64-(i&63))) );
 }
 
-static inline uint64_t CC_ROR64(uint64_t word, int i)
+CC_INLINE uint64_t CC_ROR64(uint64_t word, int i)
 {
     return ( (word>>(i&63)) | (word<<(64-(i&63))) );
 }
@@ -333,7 +332,7 @@ static inline uint64_t CC_ROR64(uint64_t word, int i)
 
 // MARK: - Byte Swaps
 
-static inline uint32_t CC_BSWAP(uint32_t x)
+CC_INLINE uint32_t CC_BSWAP(uint32_t x)
 {
     return (
         ((x>>24)&0x000000FF) |
@@ -379,33 +378,30 @@ static inline uint32_t CC_BSWAP(uint32_t x)
    Run in constant time (log2(<bitsize of x>))  
    Useful to run constant time checks
 */
-#define HEAVISIDE_STEP_UINT64(x) {uint64_t _t; \
-    _t=(((uint64_t)x>>32) | x); \
+#define HEAVISIDE_STEP_UINT64(r,s) {uint64_t _t=s; \
+    _t=(((_t)>>32) | (_t)); \
     _t=(0xFFFFFFFF + (_t & 0xFFFFFFFF)); \
-    x=_t >> 32;}
+    r=_t >> 32;}
 
-#define HEAVISIDE_STEP_UINT32(x) {uint32_t _t; \
-    _t=(((uint32_t)x>>16) | x); \
+#define HEAVISIDE_STEP_UINT32(r,s) {uint32_t _t=s; \
+    _t=(((_t)>>16) | (_t)); \
     _t=(0xFFFF + (_t & 0xFFFF)); \
-    x=_t >> 16;}
+    r=_t >> 16;}
 
-#define HEAVISIDE_STEP_UINT16(x) {uint16_t _t; \
-    _t=(((uint16_t)x>>8) | x); \
-    _t=(0xFF + (_t & 0xFF)); \
-    x=_t >> 8;}
+#define HEAVISIDE_STEP_UINT16(r,s) {uint32_t _t=s; \
+    _t=(0xFFFF + ((_t) & 0xFFFF)); \
+    r=_t >> 16;}
 
-#define HEAVISIDE_STEP_UINT8(x) {uint8_t _t; \
-    _t=(((uint8_t)x>>4) | (uint8_t)x); \
-    _t=((_t>>2) | _t); \
-    _t=((_t>>1) | _t); \
-    x=_t & 0x1;}
+#define HEAVISIDE_STEP_UINT8(r,s) {uint16_t _t=s; \
+    _t=(0xFF + ((_t) & 0xFF)); \
+    r=_t >> 8;}
 
-#define CC_HEAVISIDE_STEP(x) { \
-    if (sizeof(x) == 1) {HEAVISIDE_STEP_UINT8(x);}  \
-    else if (sizeof(x) == 2) {HEAVISIDE_STEP_UINT16(x);} \
-    else if (sizeof(x) == 4) {HEAVISIDE_STEP_UINT32(x);} \
-    else if (sizeof(x) == 8) {HEAVISIDE_STEP_UINT64(x);} \
-    else {x=((x==0)?0:1);} \
+#define CC_HEAVISIDE_STEP(r,s) { \
+    if (sizeof(s) == 1)      {HEAVISIDE_STEP_UINT8(r,s);}  \
+    else if (sizeof(s) == 2) {HEAVISIDE_STEP_UINT16(r,s);} \
+    else if (sizeof(s) == 4) {HEAVISIDE_STEP_UINT32(r,s);} \
+    else if (sizeof(s) == 8) {HEAVISIDE_STEP_UINT64(r,s);} \
+    else {r=(((s)==0)?0:1);} \
     }
 
 /* Return 1 if x mod 4 =1,2,3, 0 otherwise */
@@ -414,8 +410,46 @@ static inline uint32_t CC_BSWAP(uint32_t x)
 
 /* Set a variable to the biggest power of 2 which can be represented */ 
 #define MAX_POWER_OF_2(x)   ((__typeof__(x))1<<(8*sizeof(x)-1))
-
 #define cc_ceiling(a,b)  (((a)+((b)-1))/(b))
 #define CC_BITLEN_TO_BYTELEN(x) cc_ceiling((x), 8)
+
+//cc_abort() is implemented to comply with FIPS 140-2. See radar 19129408
+void cc_abort(const char * msg , ...);
+
+/*!
+ @brief     cc_muxp(s, a, b) is equivalent to z = s ? a : b, but it executes in constant time
+ @param a	input pointer
+ @param b	input pointer
+ @param s	The selection parameter s must be 0 or 1. if s is integer 1 a is returned. If s is integer 0, b is returned. Otherwise, the output is undefined.
+ @return    Returns a, if s is 1 and b if s is 0
+ */
+void *cc_muxp(int s, const void *a, const void *b);
+
+/*!
+ @brief     cc_mux2p
+ @param a	input pointer
+ @param b	input pointer
+ @param r_true	output pointer: if s is integer 1 r_true=a  is returned, otherwise r_true=b
+ @param r_false	output pointer: if s is integer 1 r_false=b is returned, otherwise r_false=a
+ @param s	The selection parameter s must be 0 or 1.
+ @discussion Executes in constant time
+ */
+void cc_mux2p(int s, void **r_true, void **r_false, const void *a, const void *b);
+
+/*!
+ @brief     CC_MUXU(s, a, b) is equivalent to z = s ? a : b, but it executes in constant time
+ @param a	input unsigned type
+ @param b	input unsigned type
+ @param s	The selection parameter s must be 0 or 1. if s is integer 1 a is returned. If s is integer 0, b is returned. Otherwise, the output is undefined.
+ @param r	output
+ @return    r = a, if s is 1 and b if s is 0
+ */
+#define CC_MUXU(r, s, a, b)   \
+{                       \
+    __typeof__(r) _cond = ((__typeof__(r))(s)-(__typeof__(r))1); \
+    r = (~_cond&(a))|(_cond&(b)); \
+}
+
+int cc_is_compiled_with_tu(void);
 
 #endif /* _CORECRYPTO_CC_PRIV_H_ */

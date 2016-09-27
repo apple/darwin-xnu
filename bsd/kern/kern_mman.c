@@ -95,9 +95,6 @@
 #include <sys/ubc.h>
 #include <sys/ubc_internal.h>
 #include <sys/sysproto.h>
-#if CONFIG_PROTECT
-#include <sys/cprotect.h>
-#endif
 
 #include <sys/syscall.h>
 #include <sys/kdebug.h>
@@ -143,7 +140,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	 *	Map in special device (must be SHARED) or file
 	 */
 	struct fileproc *fp;
-	register struct		vnode *vp;
+	struct			vnode *vp;
 	int			flags;
 	int			prot;
 	int			err=0;
@@ -224,15 +221,16 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		if ((flags & MAP_FIXED) ||
 		    (flags & MAP_SHARED) ||
 		    !(flags & MAP_ANON) ||
-		    (flags & MAP_RESILIENT_CODESIGN)) {
+		    (flags & MAP_RESILIENT_CODESIGN) ||
+		    (flags & MAP_RESILIENT_MEDIA)) {
 			return EINVAL;
 		}
 	}
 
 	if ((flags & MAP_RESILIENT_CODESIGN) ||
 	    (flags & MAP_RESILIENT_MEDIA)) {
-		assert(!(flags & MAP_JIT));
-		if (flags & MAP_ANON) {
+		if ((flags & MAP_ANON) ||
+		    (flags & MAP_JIT)) {
 			return EINVAL;
 		}
 		if (prot & (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
@@ -435,16 +433,6 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 				goto bad;
 			}
 #endif /* MAC */
-
-#if CONFIG_PROTECT
-			{
-				error = cp_handle_vnop(vp, CP_READ_ACCESS | CP_WRITE_ACCESS, 0);
-				if (error) {
-					(void) vnode_put(vp);
-					goto bad;
-				}
-			}
-#endif /* CONFIG_PROTECT */
 		}
 	}
 
@@ -778,7 +766,7 @@ munmap(__unused proc_t p, struct munmap_args *uap, __unused int32_t *retval)
 int
 mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 {
-	register vm_prot_t prot;
+	vm_prot_t prot;
 	mach_vm_offset_t	user_addr;
 	mach_vm_size_t	user_size;
 	kern_return_t	result;
@@ -794,7 +782,7 @@ mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 	user_map = current_map();
 	user_addr = (mach_vm_offset_t) uap->addr;
 	user_size = (mach_vm_size_t) uap->len;
-	prot = (vm_prot_t)(uap->prot & (VM_PROT_ALL | VM_PROT_TRUSTED));
+	prot = (vm_prot_t)(uap->prot & (VM_PROT_ALL | VM_PROT_TRUSTED | VM_PROT_STRIP_READ));
 
 	if (user_addr & vm_map_page_mask(user_map)) {
 		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
@@ -813,6 +801,7 @@ mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 	if (prot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
 		prot |= VM_PROT_READ;
 #endif	/* 3936456 */
+
 
 #if CONFIG_MACF
 	/*
@@ -881,7 +870,7 @@ minherit(__unused proc_t p, struct minherit_args *uap, __unused int32_t *retval)
 {
 	mach_vm_offset_t addr;
 	mach_vm_size_t size;
-	register vm_inherit_t inherit;
+	vm_inherit_t inherit;
 	vm_map_t	user_map;
 	kern_return_t	result;
 
@@ -1112,6 +1101,8 @@ mlock(__unused proc_t p, struct mlock_args *uap, __unused int32_t *retvalval)
 
 	if (result == KERN_RESOURCE_SHORTAGE)
 		return EAGAIN;
+	else if (result == KERN_PROTECTION_FAILURE)
+		return EACCES;
 	else if (result != KERN_SUCCESS)
 		return ENOMEM;
 
@@ -1243,12 +1234,16 @@ mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __u
         .cputype = cputype,
         .cpusubtype = cpusubtype };
     result = text_crypter_create(&crypt_info, cryptname, (void*)&crypt_data);
-#if DEVELOPMENT || DEBUG
-    printf("APPLE_PROTECT: %d[%s] map %p [0x%llx:0x%llx] %s(%s) -> 0x%x\n",
-	   p->p_pid, p->p_comm,
-	   user_map, (uint64_t) user_addr, (uint64_t) (user_addr + user_size),
-	   __FUNCTION__, vpath, result);
-#endif /* DEVELOPMENT || DEBUG */
+#if VM_MAP_DEBUG_APPLE_PROTECT
+    if (vm_map_debug_apple_protect) {
+	    printf("APPLE_PROTECT: %d[%s] map %p [0x%llx:0x%llx] %s(%s) -> 0x%x\n",
+		   p->p_pid, p->p_comm,
+		   user_map,
+		   (uint64_t) user_addr,
+		   (uint64_t) (user_addr + user_size),
+		   __FUNCTION__, vpath, result);
+    }
+#endif /* VM_MAP_DEBUG_APPLE_PROTECT */
     FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
     
     if(result) {

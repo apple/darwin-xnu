@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2009 Apple Inc.
+ * Copyright (c) 1999-2016 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1417,6 +1417,36 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			kau_write(rec, tok);
 		}
 		UPATH1_VNODE1_TOKENS;
+		break;
+
+	case AUE_CLONEFILEAT:
+		if (ARG_IS_VALID(kar, ARG_FD)) {
+			tok = au_to_arg32(1, "src dir fd", ar->ar_arg_fd);
+			kau_write(rec, tok);
+		}
+		UPATH1_VNODE1_TOKENS;
+		if (ARG_IS_VALID(kar, ARG_FD2)) {
+			tok = au_to_arg32(1, "dst dir fd", ar->ar_arg_fd2);
+			kau_write(rec, tok);
+		}
+		UPATH2_TOKENS;
+		if (ARG_IS_VALID(kar, ARG_VALUE32)) {
+			tok = au_to_arg32(1, "flags", ar->ar_arg_value32);
+			kau_write(rec, tok);
+		}
+		break;
+
+	case AUE_FCLONEFILEAT:
+		FD_VNODE1_TOKENS;
+		if (ARG_IS_VALID(kar, ARG_FD2)) {
+			tok = au_to_arg32(1, "dst dir fd", ar->ar_arg_fd2);
+			kau_write(rec, tok);
+		}
+		UPATH2_TOKENS;
+		if (ARG_IS_VALID(kar, ARG_VALUE32)) {
+			tok = au_to_arg32(1, "flags", ar->ar_arg_value32);
+			kau_write(rec, tok);
+		}
 		break;
 
 	case AUE_PTRACE:

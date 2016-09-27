@@ -91,12 +91,15 @@ typedef struct ipc_mqueue {
 			mach_port_name_t	receiver_name;
 			uint16_t		msgcount;
 			uint16_t		qlimit;
+#if MACH_FLIPC
+			struct flipc_port	*fport;	// Null for local port, or ptr to flipc port
+#endif
 		} __attribute__((__packed__)) port;
 		struct {
 			struct waitq_set	setq;
-			mach_port_name_t	local_name;
 		} __attribute__((__packed__)) pset;
 	} data;
+	struct klist imq_klist;
 } *ipc_mqueue_t;
 
 #define	IMQ_NULL		((ipc_mqueue_t) 0)
@@ -107,6 +110,9 @@ typedef struct ipc_mqueue {
 #define imq_qlimit		data.port.qlimit
 #define imq_seqno		data.port.seqno
 #define imq_receiver_name	data.port.receiver_name
+#if MACH_FLIPC
+#define imq_fport		data.port.fport
+#endif
 
 /*
  * we can use the 'eventmask' bits of the waitq b/c
@@ -114,21 +120,24 @@ typedef struct ipc_mqueue {
  */
 #define imq_fullwaiters		data.port.waitq.waitq_eventmask
 #define imq_in_pset		data.port.waitq.waitq_set_id
+#define imq_preposts		data.port.waitq.waitq_prepost_id
 
 #define imq_set_queue		data.pset.setq
-#define imq_local_name		data.pset.local_name
 #define imq_is_set(mq)		waitqs_is_set(&(mq)->imq_set_queue)
+#define imq_is_queue(mq)	waitq_is_queue(&(mq)->imq_wait_queue)
+#define imq_is_valid(mq)	waitq_is_valid(&(mq)->imq_wait_queue)
 
 #define	imq_lock(mq)		waitq_lock(&(mq)->imq_wait_queue)
 #define	imq_lock_try(mq)	waitq_lock_try(&(mq)->imq_wait_queue)
 #define	imq_unlock(mq)		waitq_unlock(&(mq)->imq_wait_queue)
 #define imq_held(mq)		waitq_held(&(mq)->imq_wait_queue)
+#define imq_valid(mq)		waitq_valid(&(mq)->imq_wait_queue)
 
 extern void imq_reserve_and_lock(ipc_mqueue_t mq,
-				 uint64_t *reserved_prepost, spl_t *spl);
+				 uint64_t *reserved_prepost);
 
 extern void imq_release_and_unlock(ipc_mqueue_t mq,
-				   uint64_t reserved_prepost, spl_t spl);
+				   uint64_t reserved_prepost);
 
 #define imq_full(mq)		((mq)->imq_msgcount >= (mq)->imq_qlimit)
 #define imq_full_kernel(mq)	((mq)->imq_msgcount >= MACH_PORT_QLIMIT_KERNEL)
@@ -154,7 +163,7 @@ extern void ipc_mqueue_deinit(
 	ipc_mqueue_t		mqueue);
 
 /* destroy an mqueue */
-extern void ipc_mqueue_destroy(
+extern boolean_t ipc_mqueue_destroy_locked(
 	ipc_mqueue_t		mqueue);
 
 /* Wake up receivers waiting in a message queue */
@@ -191,8 +200,7 @@ extern mach_msg_return_t ipc_mqueue_send(
 	ipc_mqueue_t		mqueue,
 	ipc_kmsg_t		kmsg,
 	mach_msg_option_t	option,
-	mach_msg_timeout_t	timeout_val,
-	spl_t			s);
+	mach_msg_timeout_t  timeout_val);
 
 /* check for queue send queue full of a port */
 extern mach_msg_return_t ipc_mqueue_preflight_send(
@@ -201,10 +209,16 @@ extern mach_msg_return_t ipc_mqueue_preflight_send(
 	mach_msg_option_t	option,
 	mach_msg_timeout_t	timeout_val);
 
+/* Set a [send-possible] override on the mqueue */
+extern void ipc_mqueue_override_send(
+	ipc_mqueue_t        mqueue,
+	mach_msg_priority_t override);
+
 /* Deliver message to message queue or waiting receiver */
 extern void ipc_mqueue_post(
 	ipc_mqueue_t		mqueue,
-	ipc_kmsg_t		kmsg);
+	ipc_kmsg_t		kmsg,
+	mach_msg_option_t	option);
 
 /* Receive a message from a message queue */
 extern void ipc_mqueue_receive(
@@ -242,10 +256,24 @@ extern unsigned ipc_mqueue_peek(
 	mach_port_seqno_t	*msg_seqnop,
 	mach_msg_size_t		*msg_sizep,
 	mach_msg_id_t		*msg_idp,
-	mach_msg_max_trailer_t	*msg_trailerp);
+	mach_msg_max_trailer_t	*msg_trailerp,
+	ipc_kmsg_t		*kmsgp);
+
+/* Peek into a locked messaqe queue to see if there are messages */
+extern unsigned ipc_mqueue_peek_locked(
+	ipc_mqueue_t		mqueue,
+	mach_port_seqno_t	*msg_seqnop,
+	mach_msg_size_t		*msg_sizep,
+	mach_msg_id_t		*msg_idp,
+	mach_msg_max_trailer_t	*msg_trailerp,
+	ipc_kmsg_t		*kmsgp);
 
 /* Peek into a messaqe queue set to see if there are queues with messages */
 extern unsigned ipc_mqueue_set_peek(
+	ipc_mqueue_t		mqueue);
+
+/* Release an mqueue/port reference that was granted by MACH_PEEK_MSG */
+extern void ipc_mqueue_release_peek_ref(
 	ipc_mqueue_t		mqueue);
 
 /* Gather the names of member port for a given set */

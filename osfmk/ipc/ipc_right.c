@@ -416,15 +416,15 @@ ipc_right_request_alloc(
 			break;
 		}
 
+		kr = (entry->ie_bits & MACH_PORT_TYPE_PORT_OR_DEAD) ?
+		    KERN_INVALID_ARGUMENT : KERN_INVALID_RIGHT;
+
 		is_write_unlock(space);
 
 		if (port != IP_NULL)
 			ip_release(port);
 
-		if (entry->ie_bits & MACH_PORT_TYPE_PORT_OR_DEAD)
-			return KERN_INVALID_ARGUMENT;
-		else
-			return KERN_INVALID_RIGHT;
+		return kr;
 	}
 
 	*previousp = previous;
@@ -662,8 +662,7 @@ ipc_right_terminate(
 			assert(port->ip_receiver_name == name);
 			assert(port->ip_receiver == space);
 
-			ipc_port_clear_receiver(port);
-			ipc_port_destroy(port); /* consumes our ref, unlocks */
+			ipc_port_destroy(port); /* clears receiver, consumes our ref, unlocks */
 
 		} else if (type & MACH_PORT_TYPE_SEND_ONCE) {
 			assert(port->ip_sorights > 0);
@@ -807,8 +806,7 @@ ipc_right_destroy(
 			assert(ip_active(port));
 			assert(port->ip_receiver == space);
 
-			ipc_port_clear_receiver(port);
-			ipc_port_destroy(port); /* consumes our ref, unlocks */
+			ipc_port_destroy(port); /* clears receiver, consumes our ref, unlocks */
 
 		} else if (type & MACH_PORT_TYPE_SEND_ONCE) {
 			assert(port->ip_sorights > 0);
@@ -1188,8 +1186,7 @@ ipc_right_delta(
 		}
 		is_write_unlock(space);
 
-		ipc_port_clear_receiver(port);
-		ipc_port_destroy(port);	/* consumes ref, unlocks */
+		ipc_port_destroy(port);	/* clears receiver, consumes ref, unlocks */
 
 		if (request != IP_NULL)
 			ipc_notify_port_deleted(request, name);
@@ -1552,8 +1549,7 @@ ipc_right_destruct(
 	if (nsrequest != IP_NULL)
 		ipc_notify_no_senders(nsrequest, mscount);
 
-	ipc_port_clear_receiver(port);
-	ipc_port_destroy(port);	/* consumes ref, unlocks */
+	ipc_port_destroy(port);	/* clears receiver, consumes ref, unlocks */
 
 	if (request != IP_NULL)
 		ipc_notify_port_deleted(request, name);
@@ -1836,7 +1832,7 @@ ipc_right_copyin(
 		entry->ie_bits = bits &~ MACH_PORT_TYPE_RECEIVE;
 		ipc_entry_modified(space, name, entry);
 
-		ipc_port_clear_receiver(port);
+		(void)ipc_port_clear_receiver(port, FALSE); /* don't destroy the port/mqueue */
 		port->ip_receiver_name = MACH_PORT_NULL;
 		port->ip_destination = IP_NULL;
 
@@ -2663,9 +2659,7 @@ ipc_right_rename(
 
 		ips_lock(pset);
 		assert(ips_active(pset));
-		assert(pset->ips_local_name == oname);
 
-		pset->ips_local_name = nname;
 		ips_unlock(pset);
 		break;
 	    }

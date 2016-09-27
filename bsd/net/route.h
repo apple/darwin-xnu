@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -207,6 +207,7 @@ struct rtentry {
 	uint64_t base_calendartime;	/* calendar time upon entry creation */
 	uint64_t base_uptime;		/* uptime upon entry creation */
 	u_int32_t rtt_hist[NRTT_HIST];	/* RTT history sample by TCP connections */
+	u_int32_t rtt_min;		/* minimum RTT computed from history */
 	u_int32_t rtt_expire_ts;	/* RTT history expire timestamp */
 	u_int8_t rtt_index;		/* Index into RTT history */
 };
@@ -312,6 +313,11 @@ struct rt_msghdr2 {
 };
 
 #ifdef PRIVATE
+struct kev_netevent_apnfallbk_data {
+	pid_t           epid;           /* effective PID */
+	uuid_t          euuid;          /* effective UUID */
+};
+
 /*
  * Route reachability info.
  */

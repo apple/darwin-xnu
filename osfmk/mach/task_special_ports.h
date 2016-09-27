@@ -88,7 +88,9 @@ typedef	int	task_special_port_t;
 
 #define TASK_ACCESS_PORT	9	/* Permission check for task_for_pid. */
 
-#define TASK_DEBUG_CONTROL_PORT 10 /* debug control port */
+#define TASK_DEBUG_CONTROL_PORT 10 	/* debug control port */
+
+#define TASK_RESOURCE_NOTIFY_PORT   11	/* overrides host special RN port */
 
 /*
  *	Definitions for ease of use

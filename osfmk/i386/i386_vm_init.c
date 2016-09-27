@@ -100,6 +100,8 @@ vm_offset_t	vm_kernel_top;
 vm_offset_t	vm_kernel_stext;
 vm_offset_t	vm_kernel_etext;
 vm_offset_t	vm_kernel_slide;
+vm_offset_t	vm_kernel_slid_base;
+vm_offset_t	vm_kernel_slid_top;
 vm_offset_t vm_hib_base;
 vm_offset_t	vm_kext_base = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
 vm_offset_t	vm_kext_top = VM_MIN_KERNEL_ADDRESS;
@@ -131,7 +133,7 @@ vm_offset_t	virtual_avail, virtual_end;
 static pmap_paddr_t	avail_remaining;
 vm_offset_t     static_memory_end = 0;
 
-vm_offset_t	sHIB, eHIB, stext, etext, sdata, edata, sconstdata, econstdata, end;
+vm_offset_t	sHIB, eHIB, stext, etext, sdata, edata, end, sconst, econst;
 
 /*
  * _mh_execute_header is the mach_header for the currently executing kernel
@@ -139,16 +141,14 @@ vm_offset_t	sHIB, eHIB, stext, etext, sdata, edata, sconstdata, econstdata, end;
 vm_offset_t segTEXTB; unsigned long segSizeTEXT;
 vm_offset_t segDATAB; unsigned long segSizeDATA;
 vm_offset_t segLINKB; unsigned long segSizeLINK;
-vm_offset_t segPRELINKB; unsigned long segSizePRELINK;
+vm_offset_t segPRELINKTEXTB; unsigned long segSizePRELINKTEXT;
 vm_offset_t segPRELINKINFOB; unsigned long segSizePRELINKINFO;
 vm_offset_t segHIBB; unsigned long segSizeHIB;
-vm_offset_t sectCONSTB; unsigned long sectSizeConst;
-
-boolean_t doconstro_override = FALSE;
+unsigned long segSizeConst;
 
 static kernel_segment_command_t *segTEXT, *segDATA;
 static kernel_section_t *cursectTEXT, *lastsectTEXT;
-static kernel_section_t *sectDCONST;
+static kernel_segment_command_t *segCONST;
 
 extern uint64_t firmware_Conventional_bytes;
 extern uint64_t firmware_RuntimeServices_bytes;
@@ -251,16 +251,16 @@ i386_vm_init(uint64_t	maxmem,
 					"__LINKEDIT", &segSizeLINK);
 	segHIBB  = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
 					"__HIB", &segSizeHIB);
-    segPRELINKB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
-                                                     "__PRELINK_TEXT", &segSizePRELINK);
-    segPRELINKINFOB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
-                                                     "__PRELINK_INFO", &segSizePRELINKINFO);
+	segPRELINKTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
+						"__PRELINK_TEXT", &segSizePRELINKTEXT);
+	segPRELINKINFOB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
+						"__PRELINK_INFO", &segSizePRELINKINFO);
 	segTEXT = getsegbynamefromheader(&_mh_execute_header,
 					"__TEXT");
 	segDATA = getsegbynamefromheader(&_mh_execute_header,
 					"__DATA");
-	sectDCONST = getsectbynamefromheader(&_mh_execute_header,
-					"__DATA", "__const");
+	segCONST = getsegbynamefromheader(&_mh_execute_header,
+					"__CONST");
 	cursectTEXT = lastsectTEXT = firstsect(segTEXT);
 	/* Discover the last TEXT section within the TEXT segment */
 	while ((cursectTEXT = nextsect(segTEXT, cursectTEXT)) != NULL) {
@@ -278,23 +278,17 @@ i386_vm_init(uint64_t	maxmem,
 	sdata = segDATAB;
 	edata = segDATAB + segSizeDATA;
 
-	sectCONSTB = (vm_offset_t) sectDCONST->addr;
-	sectSizeConst = sectDCONST->size;
-	sconstdata = sectCONSTB;
-	econstdata = sectCONSTB + sectSizeConst;
+	sconst = segCONST->vmaddr;
+	segSizeConst = segCONST->vmsize;
+	econst = sconst + segSizeConst;
 
-	if (sectSizeConst & PAGE_MASK) {
-		kernel_section_t *ns = nextsect(segDATA, sectDCONST);
-		if (ns && !(ns->addr & PAGE_MASK))
-			doconstro_override = TRUE;
-	} else
-		doconstro_override = TRUE;
-
+	assert(((sconst|econst) & PAGE_MASK) == 0);
+	
 	DBG("segTEXTB    = %p\n", (void *) segTEXTB);
 	DBG("segDATAB    = %p\n", (void *) segDATAB);
 	DBG("segLINKB    = %p\n", (void *) segLINKB);
 	DBG("segHIBB     = %p\n", (void *) segHIBB);
-	DBG("segPRELINKB = %p\n", (void *) segPRELINKB);
+	DBG("segPRELINKTEXTB = %p\n", (void *) segPRELINKTEXTB);
 	DBG("segPRELINKINFOB = %p\n", (void *) segPRELINKINFOB);
 	DBG("sHIB        = %p\n", (void *) sHIB);
 	DBG("eHIB        = %p\n", (void *) eHIB);
@@ -302,21 +296,22 @@ i386_vm_init(uint64_t	maxmem,
 	DBG("etext       = %p\n", (void *) etext);
 	DBG("sdata       = %p\n", (void *) sdata);
 	DBG("edata       = %p\n", (void *) edata);
-	DBG("sconstdata  = %p\n", (void *) sconstdata);
-	DBG("econstdata  = %p\n", (void *) econstdata);
+	DBG("sconst      = %p\n", (void *) sconst);
+	DBG("econst      = %p\n", (void *) econst);
 	DBG("kernel_top  = %p\n", (void *) &last_kernel_symbol);
 
 	vm_kernel_base  = sHIB;
 	vm_kernel_top   = (vm_offset_t) &last_kernel_symbol;
 	vm_kernel_stext = stext;
 	vm_kernel_etext = etext;
-
-    vm_prelink_stext = segPRELINKB;
-    vm_prelink_etext = segPRELINKB + segSizePRELINK;
-    vm_prelink_sinfo = segPRELINKINFOB;
-    vm_prelink_einfo = segPRELINKINFOB + segSizePRELINKINFO;
-    vm_slinkedit = segLINKB;
-    vm_elinkedit = segLINKB + segSizePRELINK;
+	vm_prelink_stext = segPRELINKTEXTB;
+	vm_prelink_etext = segPRELINKTEXTB + segSizePRELINKTEXT;
+	vm_prelink_sinfo = segPRELINKINFOB;
+	vm_prelink_einfo = segPRELINKINFOB + segSizePRELINKINFO;
+	vm_slinkedit = segLINKB;
+	vm_elinkedit = segLINKB + segSizePRELINKTEXT;
+	vm_kernel_slid_base = vm_kext_base;
+	vm_kernel_slid_top = vm_elinkedit;
 
 	vm_set_page_size();
 

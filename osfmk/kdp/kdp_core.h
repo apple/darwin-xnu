@@ -80,6 +80,43 @@ struct	corehdr {
 
 #define CORE_REMOTE_PORT 1069 /* hardwired, we can't really query the services file */
 
+#if WITH_CONSISTENT_DBG
+/*
+ * xnu shared memory hardware debugger support
+ *
+ * A hardware debugger can connect, read the consistent debug
+ * header to determine the physical location of the handshake
+ * structure and communicate using commands in the structure as
+ * defined below.
+ *
+ * Currently used for sending compressed coredumps to
+ * astris.
+ */
+struct xnu_hw_shmem_dbg_command_info {
+	volatile uint32_t xhsdci_status;
+	uint32_t xhsdci_seq_no;
+	volatile uint64_t xhsdci_buf_phys_addr;
+	volatile uint32_t xhsdci_buf_data_length;
+	/* end of version 0 structure */
+	uint64_t xhsdci_coredump_total_size_uncomp;
+	uint64_t xhsdci_coredump_total_size_sent_uncomp;
+	uint32_t xhsdci_page_size;
+} __attribute__((packed));
+
+#define CUR_XNU_HWSDCI_STRUCT_VERS 1
+
+#define XHSDCI_STATUS_NONE              0 /* default status */
+#define XHSDCI_STATUS_KERNEL_BUSY       1 /* kernel is busy with other procedure */
+#define XHSDCI_STATUS_KERNEL_READY      2 /* kernel ready to begin command */
+#define XHSDCI_COREDUMP_BEGIN           3 /* indicates hardware debugger is ready to begin consuming coredump info */
+#define XHSDCI_COREDUMP_BUF_READY       4 /* indicates the kernel has populated the buffer */
+#define XHSDCI_COREDUMP_BUF_EMPTY       5 /* indicates hardware debugger is done consuming the current data */
+#define XHSDCI_COREDUMP_STATUS_DONE     6 /* indicates last compressed data is in buffer */
+#define XHSDCI_COREDUMP_ERROR           7 /* indicates an error was encountered */
+#define XHSDCI_COREDUMP_REMOTE_DONE     8 /* indicates that hardware debugger is done */
+
+#endif /* WITH_CONSISTENT_DBG */
+
 void kdp_panic_dump (void);
 void abort_panic_transfer (void);
 void kdp_set_dump_info(const uint32_t flags, const char *file, const char *destip,
@@ -87,7 +124,15 @@ void kdp_set_dump_info(const uint32_t flags, const char *file, const char *desti
 void kdp_get_dump_info(uint32_t *flags, char *file, char *destip, char *routerip, 
                        uint32_t *port);
 
-extern int kern_dump(boolean_t local);
+enum kern_dump_type {
+	KERN_DUMP_DISK, /* local, on device core dump */
+	KERN_DUMP_NET, /* kdp network core dump */
+#if WITH_CONSISTENT_DBG
+	KERN_DUMP_HW_SHMEM_DBG, /* coordinated hardware shared memory debugger core dump */
+#endif
+};
+
+extern int kern_dump(enum kern_dump_type kd_variant);
 
 struct corehdr *create_panic_header(unsigned int request, const char *corename, unsigned length, unsigned block);
 
@@ -104,6 +149,8 @@ void kern_collectth_state(thread_t thread, void *buffer, size_t size, void **ite
 boolean_t kdp_has_polled_corefile(void);
 
 void kdp_core_init(void);
+
+extern boolean_t kdp_corezip_disabled;
 
 #define KDP_CRASHDUMP_POLL_COUNT (2500)
 

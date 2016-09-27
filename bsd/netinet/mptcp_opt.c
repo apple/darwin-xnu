@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -39,7 +39,7 @@
 #include <netinet/ip_var.h>
 #include <netinet/in_var.h>
 #include <netinet/tcp.h>
-#include <netinet/tcp_var.h>
+#include <netinet/tcp_cache.h>
 #include <netinet/tcp_seq.h>
 #include <netinet/tcpip.h>
 #include <netinet/tcp_fsm.h>
@@ -56,8 +56,8 @@
 /*
  * SYSCTL for enforcing 64 bit dsn
  */
-int32_t force_64bit_dsn = 0; 
-SYSCTL_INT(_net_inet_mptcp, OID_AUTO, force_64bit_dsn, 
+int32_t force_64bit_dsn = 0;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, force_64bit_dsn,
     CTLFLAG_RW|CTLFLAG_LOCKED, &force_64bit_dsn, 0,
     "Force MPTCP 64bit dsn");
 
@@ -77,14 +77,21 @@ mptcp_setup_first_subflow_syn_opts(struct socket *so, int flags, u_char *opt,
 	struct mptcb *mp_tp = NULL;
 	mp_tp = tptomptp(tp);
 
-	if (!(so->so_flags & SOF_MP_SUBFLOW))
-		return (optlen);
-
 	/*
 	 * Avoid retransmitting the MP_CAPABLE option.
 	 */
-	if (tp->t_rxtshift > mptcp_mpcap_retries)
+	if (tp->t_rxtshift > mptcp_mpcap_retries) {
+		if (!(mp_tp->mpt_flags & (MPTCPF_FALLBACK_HEURISTIC | MPTCPF_HEURISTIC_TRAC))) {
+			mp_tp->mpt_flags |= MPTCPF_HEURISTIC_TRAC;
+			tcp_heuristic_mptcp_loss(tp);
+		}
 		return (optlen);
+	}
+
+	if (!tcp_heuristic_do_mptcp(tp)) {
+		mp_tp->mpt_flags |= MPTCPF_FALLBACK_HEURISTIC;
+		return (optlen);
+	}
 
 	if ((flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
 		struct mptcp_mpcapable_opt_rsp mptcp_opt;
@@ -191,29 +198,28 @@ mptcp_setup_join_subflow_syn_opts(struct socket *so, int flags, u_char *opt,
 		optlen += mpjoin_rsp.mmjo_len;
 	} else {
 		struct mptcp_mpjoin_opt_req mpjoin_req;
+
 		bzero(&mpjoin_req, sizeof (mpjoin_req));
 		mpjoin_req.mmjo_kind = TCPOPT_MULTIPATH;
 		mpjoin_req.mmjo_len = sizeof (mpjoin_req);
 		mpjoin_req.mmjo_subtype_bkp = MPO_JOIN << 4;
-		/* A secondary subflow is started off as backup */
-		mpjoin_req.mmjo_subtype_bkp |= MPTCP_BACKUP;
-		tp->t_mpflags |= TMPF_BACKUP_PATH;
+		if (tp->t_mpflags & TMPF_BACKUP_PATH)
+			mpjoin_req.mmjo_subtype_bkp |= MPTCP_BACKUP;
 		mpjoin_req.mmjo_addr_id = tp->t_local_aid;
 		mpjoin_req.mmjo_peer_token = mptcp_get_remotetoken(tp->t_mptcb);
 		if (mpjoin_req.mmjo_peer_token == 0) {
 			mptcplog((LOG_DEBUG, "MPTCP Socket: %s: peer token 0",
 				__func__),
 				MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-		}	
+		}
 		mptcp_get_rands(tp->t_local_aid, tptomptp(tp),
 		    &mpjoin_req.mmjo_rand, NULL);
 		memcpy(opt + optlen, &mpjoin_req, mpjoin_req.mmjo_len);
 		optlen += mpjoin_req.mmjo_len;
 		/* send an event up, if Fast Join is requested */
-		if (mptcp_zerortt_fastjoin && 
+		if (mptcp_zerortt_fastjoin &&
 		    (so->so_flags & SOF_MPTCP_FASTJOIN)) {
-			soevent(so,
-			    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_MPFASTJ));
+			soevent(so, (SO_FILT_HINT_LOCKED | SO_FILT_HINT_MPFASTJ));
 		}
 	}
 	return (optlen);
@@ -247,11 +253,6 @@ unsigned
 mptcp_setup_syn_opts(struct socket *so, int flags, u_char *opt, unsigned optlen)
 {
 	unsigned new_optlen;
-
-	if (mptcp_enable == 0) {
-		/* do nothing */
-		return (optlen);
-	}
 
 	if (!(so->so_flags & SOF_MP_SEC_SUBFLOW)) {
 		new_optlen = mptcp_setup_first_subflow_syn_opts(so, flags, opt,
@@ -287,7 +288,7 @@ mptcp_send_mpfail(struct tcpcb *tp, u_char *opt, unsigned int optlen)
 	if ((MAX_TCPOPTLEN - optlen) < sizeof (struct mptcp_mpfail_opt)) {
 		tp->t_mpflags &= ~TMPF_SND_MPFAIL;
 		return (optlen);
-	}	
+	}
 
 	MPT_LOCK(mp_tp);
 	dsn = mp_tp->mpt_rcvnxt;
@@ -302,7 +303,7 @@ mptcp_send_mpfail(struct tcpcb *tp, u_char *opt, unsigned int optlen)
 	optlen += len;
 	tp->t_mpflags &= ~TMPF_SND_MPFAIL;
 	mptcplog((LOG_DEBUG, "MPTCP Socket: %s: %d \n", __func__,
-	    tp->t_local_aid), (MPTCP_SOCKET_DBG | MPTCP_SENDER_DBG), 
+	    tp->t_local_aid), (MPTCP_SOCKET_DBG | MPTCP_SENDER_DBG),
 	    MPTCP_LOGLVL_LOG);
 	return (optlen);
 }
@@ -381,7 +382,7 @@ mptcp_send_infinite_mapping(struct tcpcb *tp, u_char *opt, unsigned int optlen)
 		optlen += csum_len;
 	}
 
-	mptcplog((LOG_DEBUG, "MPTCP Socket: %s: dsn = %x, seq = %x len = %x\n", 
+	mptcplog((LOG_DEBUG, "MPTCP Socket: %s: dsn = %x, seq = %x len = %x\n",
 	    __func__,
 	    ntohl(infin_opt.mdss_dsn),
 	    ntohl(infin_opt.mdss_subflow_seqn),
@@ -410,37 +411,6 @@ mptcp_ok_to_fin(struct tcpcb *tp, u_int64_t dsn, u_int32_t datalen)
 	}
 	MPT_UNLOCK(mp_tp);
 	return (0);
-}
-
-
-/* Must be called from tcp_output to fill in the fast close option */
-static int
-mptcp_send_fastclose(struct tcpcb *tp, u_char *opt, unsigned int optlen,
-	int flags)
-{
-	struct mptcp_fastclose_opt fastclose_opt;
-	struct mptcb *mp_tp = tptomptp(tp);
-
-	/* Only ACK flag should be set */
-	if (flags != TH_ACK)
-		return (optlen);
-
-	if ((MAX_TCPOPTLEN - optlen) <
-		sizeof (struct mptcp_fastclose_opt)) {
-		return (optlen);
-	}
-
-	bzero(&fastclose_opt, sizeof (struct mptcp_fastclose_opt));
-	fastclose_opt.mfast_kind = TCPOPT_MULTIPATH;
-	fastclose_opt.mfast_len = sizeof (struct mptcp_fastclose_opt);
-	fastclose_opt.mfast_subtype = MPO_FASTCLOSE;
-	MPT_LOCK_SPIN(mp_tp);
-	fastclose_opt.mfast_key =  mptcp_get_remotekey(mp_tp);
-	MPT_UNLOCK(mp_tp);
-	memcpy(opt + optlen, &fastclose_opt, fastclose_opt.mfast_len);
-	optlen += fastclose_opt.mfast_len;
-
-	return (optlen);
 }
 
 unsigned int
@@ -486,22 +456,11 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 		goto ret_optlen;
 	}
 
-	if (tp->t_mpflags & TMPF_FASTCLOSE) {
-		optlen = mptcp_send_fastclose(tp, opt, optlen, flags);
-		VERIFY(datalen == 0);
-		goto ret_optlen;
-	}
-
 	if (tp->t_mpflags & TMPF_TCP_FALLBACK) {
 		if (tp->t_mpflags & TMPF_SND_MPFAIL)
 			optlen = mptcp_send_mpfail(tp, opt, optlen);
 		else if (!(tp->t_mpflags & TMPF_INFIN_SENT))
 			optlen = mptcp_send_infinite_mapping(tp, opt, optlen);
-		goto ret_optlen;
-	}
-
-	if (tp->t_mpflags & TMPF_SND_MPPRIO) {
-		optlen = mptcp_snd_mpprio(tp, opt, optlen);
 		goto ret_optlen;
 	}
 
@@ -548,18 +507,6 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 			/* its a retransmission of the MP_CAPABLE ACK */
 		}
 		goto ret_optlen;
-	} else if (tp->t_mpflags & TMPF_MPTCP_TRUE) {
-		if (tp->t_mpflags & TMPF_SND_REM_ADDR) {
-			int rem_opt_len = sizeof (struct mptcp_remaddr_opt);
-			if ((optlen + rem_opt_len) <= MAX_TCPOPTLEN) {
-				mptcp_send_remaddr_opt(tp,
-				    (struct mptcp_remaddr_opt *)(opt + optlen));
-				optlen += rem_opt_len;
-				goto ret_optlen;
-			} else {
-				tp->t_mpflags &= ~TMPF_SND_REM_ADDR;
-			}
-		}
 	}
 
 	if ((tp->t_mpflags & TMPF_JOINED_FLOW) &&
@@ -567,8 +514,8 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 	    (!(tp->t_mpflags & TMPF_RECVD_JOIN)) &&
 	    (tp->t_mpflags & TMPF_SENT_JOIN) &&
 	    (!(tp->t_mpflags & TMPF_MPTCP_TRUE))) {
-	    	MPT_LOCK(mp_tp);
-	    	if (mptcp_get_localkey(mp_tp) == 0) {
+		MPT_LOCK(mp_tp);
+		if (mptcp_get_localkey(mp_tp) == 0) {
 			MPT_UNLOCK(mp_tp);
 			goto ret_optlen;
 		}
@@ -587,18 +534,34 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 	if (!(tp->t_mpflags & TMPF_MPTCP_TRUE))
 		goto ret_optlen;
 fastjoin_send:
-	/* 
-	 * From here on, all options are sent only if MPTCP_TRUE 
+	/*
+	 * From here on, all options are sent only if MPTCP_TRUE
 	 * or when data is sent early on as in Fast Join
 	 */
+
+	if ((tp->t_mpflags & TMPF_MPTCP_TRUE) &&
+	    (tp->t_mpflags & TMPF_SND_REM_ADDR)) {
+		int rem_opt_len = sizeof (struct mptcp_remaddr_opt);
+		if ((optlen + rem_opt_len) <= MAX_TCPOPTLEN) {
+			mptcp_send_remaddr_opt(tp,
+			    (struct mptcp_remaddr_opt *)(opt + optlen));
+			optlen += rem_opt_len;
+		} else {
+			tp->t_mpflags &= ~TMPF_SND_REM_ADDR;
+		}
+	}
+
+	if (tp->t_mpflags & TMPF_SND_MPPRIO) {
+		optlen = mptcp_snd_mpprio(tp, opt, optlen);
+	}
 
 	MPT_LOCK(mp_tp);
 	if ((mp_tp->mpt_flags & MPTCPF_SND_64BITDSN) || force_64bit_dsn) {
 		send_64bit_dsn = TRUE;
 	}
-	if (mp_tp->mpt_flags & MPTCPF_SND_64BITACK) {
+	if (mp_tp->mpt_flags & MPTCPF_SND_64BITACK)
 		send_64bit_ack = TRUE;
-	}
+
 	MPT_UNLOCK(mp_tp);
 
 #define	CHECK_OPTLEN	{						\
@@ -617,7 +580,7 @@ fastjoin_send:
 		dsn_opt.mdss_copt.mdss_flags |= MDSS_F;			\
 		*finp = opt + optlen + offsetof(struct mptcp_dss_copt,	\
 		    mdss_flags);					\
-		dsn_opt.mdss_data_len += 1;    				\
+		dsn_opt.mdss_data_len += 1;				\
 	}								\
 }
 
@@ -706,7 +669,7 @@ fastjoin_send:
 		    mptcp_ntoh64(dsn_ack_opt.mdss_dsn),
 		    mptcp_ntoh64(dsn_ack_opt.mdss_ack)),
 		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
-		
+
 		tp->t_mpflags &= ~TMPF_MPTCP_ACKNOW;
 		goto ret_optlen;
 	}
@@ -996,7 +959,7 @@ ret_optlen:
 		 * If none of the above mpflags were acted on by
 		 * this routine, reset these flags and set p_mptcp_acknow
 		 * to false.
-		 * XXX The reset value of p_mptcp_acknow can be used 
+		 * XXX The reset value of p_mptcp_acknow can be used
 		 * to communicate tcp_output to NOT send a pure ack without any
 		 * MPTCP options as it will be treated as a dup ack.
 		 * Since the instances of mptcp_setup_opts not acting on
@@ -1087,18 +1050,12 @@ static void
 mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
     int optlen)
 {
-	struct mptcp_mpcapable_opt_rsp1 *rsp1 = NULL;
 	struct mptcp_mpcapable_opt_rsp *rsp = NULL;
 	struct mptcb *mp_tp = tptomptp(tp);
 
-#define	MPTCP_OPT_ERROR_PATH(tp) {					\
-	tp->t_mpflags |= TMPF_RESET;					\
-	tcpstat.tcps_invalid_mpcap++;					\
-	if (tp->t_inpcb->inp_socket != NULL) {				\
-		soevent(tp->t_inpcb->inp_socket,			\
-		    SO_FILT_HINT_LOCKED | SO_FILT_HINT_MUSTRST);	\
-	}								\
-}
+	/* Only valid on SYN/ACK */
+	if ((th->th_flags & (TH_SYN | TH_ACK)) != (TH_SYN | TH_ACK))
+		return;
 
 	/* Validate the kind, len, flags */
 	if (mptcp_valid_mpcapable_common_opt(cp) != 1) {
@@ -1106,141 +1063,53 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 		return;
 	}
 
-	/* A SYN contains only the MP_CAPABLE option */
-	if ((th->th_flags & (TH_SYN | TH_ACK)) == TH_SYN) {
-		/* XXX passive side not supported yet */
+	/* Handle old duplicate SYN/ACK retransmission */
+	if (SEQ_GT(tp->rcv_nxt, (tp->irs + 1)))
 		return;
-	} else if ((th->th_flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
 
-		/* Handle old duplicate SYN/ACK retransmission */
-		if (SEQ_GT(tp->rcv_nxt, (tp->irs + 1)))
-			return;
-
-		/* handle SYN/ACK retransmission by acknowledging with ACK */
-		if (mp_tp->mpt_state >= MPTCPS_ESTABLISHED) {
-			tp->t_mpflags |= TMPF_MPCAP_RETRANSMIT;
-			return;
-		}
-
-		/* A SYN/ACK contains peer's key and flags */
-		if (optlen != sizeof (struct mptcp_mpcapable_opt_rsp)) {
-			/* complain */
-			mptcplog((LOG_ERR, "MPTCP Socket: "
-			    "%s: SYN_ACK optlen = %d, sizeof mp opt = %lu \n",
-			    __func__, optlen,
-			    sizeof (struct mptcp_mpcapable_opt_rsp)),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			tcpstat.tcps_invalid_mpcap++;
-			return;
-		}
-
-		/*
-		 * If checksum flag is set, enable MPTCP checksum, even if
-		 * it was not negotiated on the first SYN.
-		 */
-		if (((struct mptcp_mpcapable_opt_common *)cp)->mmco_flags &
-		    MPCAP_CHECKSUM_CBIT)
-			mp_tp->mpt_flags |= MPTCPF_CHECKSUM;
-
-		rsp = (struct mptcp_mpcapable_opt_rsp *)cp;
-		MPT_LOCK(mp_tp);
-		mp_tp->mpt_remotekey = rsp->mmc_localkey;
-		/* For now just downgrade to the peer's version */
-		mp_tp->mpt_peer_version = rsp->mmc_common.mmco_version;
-		if (rsp->mmc_common.mmco_version < mp_tp->mpt_version) {
-			mp_tp->mpt_version = rsp->mmc_common.mmco_version;
-			tcpstat.tcps_mp_verdowngrade++;
-		}
-		if (mptcp_init_remote_parms(mp_tp) != 0) {
-			tcpstat.tcps_invalid_mpcap++;
-			MPT_UNLOCK(mp_tp);
-			return;
-		}
-		MPT_UNLOCK(mp_tp);
-		tp->t_mpflags |= TMPF_PREESTABLISHED;
-
-	} else if ((th->th_flags & TH_ACK) &&
-		(tp->t_mpflags & TMPF_PREESTABLISHED)) {
-
-		/*
-		 * Verify checksum flag is set, if we initially negotiated
-		 * checksum.
-		 */
-		if ((mp_tp->mpt_flags & MPTCPF_CHECKSUM) &&
-		    !(((struct mptcp_mpcapable_opt_common *)cp)->mmco_flags &
-		    MPCAP_CHECKSUM_CBIT)) {
-			mptcplog((LOG_ERR, "MPTCP Socket: "	
-			    "%s: checksum negotiation failure \n", __func__),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			MPTCP_OPT_ERROR_PATH(tp);
-			return;
-		}
-
-		if (!(mp_tp->mpt_flags & MPTCPF_CHECKSUM) &&
-		    (((struct mptcp_mpcapable_opt_common *)cp)->mmco_flags &
-		    MPCAP_CHECKSUM_CBIT)) {
-			mptcplog((LOG_ERR, "MPTCP Socket: "	
-			    "%s: checksum negotiation failure 2.\n", __func__),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			MPTCP_OPT_ERROR_PATH(tp);
-			return;
-		}
-
-		/*
-		 * The ACK of a three way handshake contains peer's key and
-		 * flags.
-		 */
-		if (optlen != sizeof (struct mptcp_mpcapable_opt_rsp1)) {
-			/* complain */
-			mptcplog((LOG_ERR, "MPTCP Socket: "	
-			    "%s: ACK optlen = %d , sizeof mp option = %lu, "
-			    " state = %d \n", __func__,	optlen,
-				sizeof (struct mptcp_mpcapable_opt_rsp1),
-				tp->t_state), MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			MPTCP_OPT_ERROR_PATH(tp);
-			return;
-		}
-
-		rsp1 = (struct mptcp_mpcapable_opt_rsp1 *)cp;
-
-		/* Skipping MPT_LOCK for invariant key */
-		if (rsp1->mmc_remotekey != *mp_tp->mpt_localkey) {
-			mptcplog((LOG_ERR, "MPTCP Socket: "	
-			    "%s: key mismatch locally stored key. "
-			    "rsp = %llx local = %llx \n", __func__, 
-			    rsp1->mmc_remotekey, *mp_tp->mpt_localkey),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			MPTCP_OPT_ERROR_PATH(tp);
-			return;
-		} else {
-			/* We received both keys. Almost an MPTCP connection */
-			/* Skipping MPT_LOCK for invariant key */
-			if (mp_tp->mpt_remotekey != rsp1->mmc_localkey) {
-				mptcplog((LOG_ERR, "MPTCP Socket: "
-				    "%s: keys don't match\n", __func__),
-				    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-				tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-				MPTCP_OPT_ERROR_PATH(tp);
-				return;
-			}
-			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-			tp->t_mpflags |= TMPF_MPTCP_RCVD_KEY;
-			tp->t_mpflags |= TMPF_MPTCP_TRUE;
-			tp->t_inpcb->inp_socket->so_flags |= SOF_MPTCP_TRUE;
-			MPT_LOCK(mp_tp);
-			DTRACE_MPTCP2(state__change, struct mptcb *, mp_tp, 
-			    uint32_t, 0 /* event */);
-			mptcplog((LOG_DEBUG, "MPTCP State: "
-				    "MPTCPS_ESTABLISHED \n"),
-				    MPTCP_STATE_DBG, MPTCP_LOGLVL_LOG);
-
-			mp_tp->mpt_state = MPTCPS_ESTABLISHED;
-			MPT_UNLOCK(mp_tp);
-		}
-		if (tp->t_mpuna) {
-			tp->t_mpuna = 0;
-		}
+	/* handle SYN/ACK retransmission by acknowledging with ACK */
+	if (mp_tp->mpt_state >= MPTCPS_ESTABLISHED) {
+		tp->t_mpflags |= TMPF_MPCAP_RETRANSMIT;
+		return;
 	}
+
+	/* A SYN/ACK contains peer's key and flags */
+	if (optlen != sizeof (struct mptcp_mpcapable_opt_rsp)) {
+		/* complain */
+		mptcplog((LOG_ERR, "MPTCP Socket: "
+		    "%s: SYN_ACK optlen = %d, sizeof mp opt = %lu \n",
+		    __func__, optlen,
+		    sizeof (struct mptcp_mpcapable_opt_rsp)),
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
+		tcpstat.tcps_invalid_mpcap++;
+		return;
+	}
+
+	/*
+	 * If checksum flag is set, enable MPTCP checksum, even if
+	 * it was not negotiated on the first SYN.
+	 */
+	if (((struct mptcp_mpcapable_opt_common *)cp)->mmco_flags &
+	    MPCAP_CHECKSUM_CBIT)
+		mp_tp->mpt_flags |= MPTCPF_CHECKSUM;
+
+	rsp = (struct mptcp_mpcapable_opt_rsp *)cp;
+	MPT_LOCK(mp_tp);
+	mp_tp->mpt_remotekey = rsp->mmc_localkey;
+	/* For now just downgrade to the peer's version */
+	mp_tp->mpt_peer_version = rsp->mmc_common.mmco_version;
+	if (rsp->mmc_common.mmco_version < mp_tp->mpt_version) {
+		mp_tp->mpt_version = rsp->mmc_common.mmco_version;
+		tcpstat.tcps_mp_verdowngrade++;
+	}
+	if (mptcp_init_remote_parms(mp_tp) != 0) {
+		tcpstat.tcps_invalid_mpcap++;
+		MPT_UNLOCK(mp_tp);
+		return;
+	}
+	MPT_UNLOCK(mp_tp);
+	tcp_heuristic_mptcp_success(tp);
+	tp->t_mpflags |= TMPF_PREESTABLISHED;
 }
 
 
@@ -1256,116 +1125,39 @@ mptcp_do_mpjoin_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th, int optlen)
 	}								\
 }
 	int error = 0;
+	struct mptcp_mpjoin_opt_rsp *join_rsp =
+	    (struct mptcp_mpjoin_opt_rsp *)cp;
 
-	if ((th->th_flags & (TH_SYN | TH_ACK)) == TH_SYN) {
-		/* We won't accept join requests as an active opener */
-		if (tp->t_inpcb->inp_socket->so_flags & SOF_MPTCP_CLIENT) {
-			MPTCP_JOPT_ERROR_PATH(tp);
-			return;
-		}
-
-		if (optlen != sizeof (struct mptcp_mpjoin_opt_req)) {
-			mptcplog((LOG_ERR, "MPTCP Socket: "	
-			    "%s: SYN: unexpected optlen = %d, mp option"
-			    "= %lu\n", __func__, optlen,
-			    sizeof (struct mptcp_mpjoin_opt_req)),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			/* send RST and close */
-			MPTCP_JOPT_ERROR_PATH(tp);
-			return;
-		}
-		/* not supported yet */
+	/* Only valid on SYN/ACK */
+	if ((th->th_flags & (TH_SYN | TH_ACK)) != (TH_SYN | TH_ACK))
 		return;
-#ifdef MPTCP_NOTYET
-		struct mptcp_mpjoin_opt_req *join_req =
-		    (struct mptcp_mpjoin_opt_req *)cp;
-		mp_so = mptcp_find_mpso(join_req->mmjo_peer_token);
-		if (!mp_so) {
-			mptcplog((LOG_ERR, "MPTCP Socket: "	
-			    "%s: cannot find mp_so token = %x\n",
-			    __func__, join_req->mmjo_peer_token),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			/* send RST */
-			MPTCP_JOPT_ERROR_PATH(tp);
-			return;
-		}
-		if (tp->t_mpflags & TMPF_PREESTABLISHED) {
-			return;
-		}
-		mp_so->ms_remote_addr_id = join_req->mmjo_addr_id;
-		mp_so->ms_remote_rand = join_req->mmjo_rand;
-		tp->t_mpflags |= TMPF_PREESTABLISHED | TMPF_JOINED_FLOW;
-		tp->t_mpflags |= TMPF_RECVD_JOIN;
-		tp->t_inpcb->inp_socket->so_flags |= SOF_MP_SEC_SUBFLOW;
-		if (join_req->mmjo_subtype & MPTCP_BACKUP) {
-			tp->t_mpflags |= TMPF_BACKUP_PATH;
-		}
-#endif
-	} else if ((th->th_flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
-		struct mptcp_mpjoin_opt_rsp *join_rsp =
-		    (struct mptcp_mpjoin_opt_rsp *)cp;
 
-		if (optlen != sizeof (struct mptcp_mpjoin_opt_rsp)) {
-			mptcplog((LOG_ERR, "MPTCP Socket: "	
-			    "SYN_ACK: unexpected optlen = %d mp "
-			    "option = %lu\n", optlen,
-			    sizeof (struct mptcp_mpjoin_opt_rsp)),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-			/* send RST and close */
-			MPTCP_JOPT_ERROR_PATH(tp);
-			return;
-		}
-
-		mptcp_set_raddr_rand(tp->t_local_aid,
-		    tptomptp(tp),
-		    join_rsp->mmjo_addr_id, join_rsp->mmjo_rand);
-		error = mptcp_validate_join_hmac(tp,
-		    (u_char*)&join_rsp->mmjo_mac, SHA1_TRUNCATED);
-		if (error) {
-			mptcplog((LOG_ERR, "MPTCP Socket: %s: "
-			    "SYN_ACK error = %d \n", __func__, error),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-			/* send RST and close */
-			MPTCP_JOPT_ERROR_PATH(tp);
-			return;
-		}
-		tp->t_mpflags |= TMPF_SENT_JOIN;
-	} else if ((th->th_flags & TH_ACK) &&
-	    (tp->t_mpflags & TMPF_PREESTABLISHED)) {
-		struct mptcp_mpjoin_opt_rsp2 *join_rsp2 =
-		    (struct mptcp_mpjoin_opt_rsp2 *)cp;
-		
-		if (optlen != sizeof (struct mptcp_mpjoin_opt_rsp2)) {
-			mptcplog((LOG_ERR, "MPTCP Socket: "
-			    "ACK: unexpected optlen = %d mp option "
-			    "= %lu \n",	optlen,
-			    sizeof (struct mptcp_mpjoin_opt_rsp2)),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-
-			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-			/* send RST and close */
-			MPTCP_JOPT_ERROR_PATH(tp);
-			return;
-		}
-
-		error = mptcp_validate_join_hmac(tp, join_rsp2->mmjo_mac,
-		    SHA1_RESULTLEN);
-		if (error) {
-			mptcplog((LOG_ERR, "MPTCP Socket: "
-			    "%s: ACK error = %d\n", __func__, error),
-			    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
-			tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-			MPTCP_JOPT_ERROR_PATH(tp);
-			return;
-		}
-		tp->t_mpflags |= TMPF_MPTCP_TRUE;
+	if (optlen != sizeof (struct mptcp_mpjoin_opt_rsp)) {
+		mptcplog((LOG_ERR, "MPTCP Socket: "
+		    "SYN_ACK: unexpected optlen = %d mp "
+		    "option = %lu\n", optlen,
+		    sizeof (struct mptcp_mpjoin_opt_rsp)),
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
 		tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-		tp->t_flags |= TF_ACKNOW;
-		tp->t_mpflags |= TMPF_MPTCP_ACKNOW;
-		tp->t_inpcb->inp_socket->so_flags |= SOF_MPTCP_TRUE;
+		/* send RST and close */
+		MPTCP_JOPT_ERROR_PATH(tp);
+		return;
 	}
+
+	mptcp_set_raddr_rand(tp->t_local_aid, tptomptp(tp),
+	    join_rsp->mmjo_addr_id, join_rsp->mmjo_rand);
+	error = mptcp_validate_join_hmac(tp,
+	    (u_char*)&join_rsp->mmjo_mac, SHA1_TRUNCATED);
+	if (error) {
+		mptcplog((LOG_ERR, "MPTCP Socket: %s: "
+		    "SYN_ACK error = %d \n", __func__, error),
+		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);
+		tp->t_mpflags &= ~TMPF_PREESTABLISHED;
+		/* send RST and close */
+		MPTCP_JOPT_ERROR_PATH(tp);
+		return;
+	}
+	tp->t_mpflags |= TMPF_SENT_JOIN;
 }
 
 static int
@@ -1382,6 +1174,17 @@ mptcp_validate_join_hmac(struct tcpcb *tp, u_char* hmac, int mac_len)
 
 	MPT_LOCK(mp_tp);
 	rem_key = mp_tp->mpt_remotekey;
+
+	/*
+	 * Can happen if the MPTCP-connection is about to be closed and we
+	 * receive an MP_JOIN in-between the events are being handled by the
+	 * worker thread.
+	 */
+	if (mp_tp->mpt_localkey == NULL) {
+		MPT_UNLOCK(mp_tp);
+		return (-1);
+	}
+
 	loc_key = *mp_tp->mpt_localkey;
 	MPT_UNLOCK(mp_tp);
 
@@ -1407,6 +1210,8 @@ mptcp_do_dss_opt_ack_meat(u_int64_t full_dack, struct tcpcb *tp)
 {
 	struct mptcb *mp_tp = tptomptp(tp);
 	int close_notify = 0;
+
+	tp->t_mpflags |= TMPF_RCVD_DACK;
 
 	MPT_LOCK(mp_tp);
 	if (MPTCP_SEQ_LEQ(full_dack, mp_tp->mpt_sndmax) &&
@@ -1623,7 +1428,7 @@ mptcp_do_dss_opt_meat(u_char *cp, struct tcpcb *tp)
 			    "%s: 32-bit M and 64-bit A present.\n", __func__),
 			    (MPTCP_SOCKET_DBG|MPTCP_RECEIVER_DBG),
 			    MPTCP_LOGLVL_LOG);
-			
+
 			full_dack = mptcp_ntoh64(dss32_ack64_opt->mdss_ack);
 			mptcp_do_dss_opt_ack_meat(full_dack, tp);
 			NTOHL(dss32_ack64_opt->mdss_dsn);
@@ -1789,7 +1594,7 @@ mptcp_do_fastclose_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th)
 	}
 
 	/* Reset this flow */
-	tp->t_mpflags |= TMPF_RESET;
+	tp->t_mpflags |= (TMPF_RESET | TMPF_FASTCLOSERCV);
 
 	if (tp->t_inpcb->inp_socket != NULL) {
 		soevent(tp->t_inpcb->inp_socket,

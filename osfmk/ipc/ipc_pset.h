@@ -84,8 +84,6 @@ struct ipc_pset {
 };
 
 #define	ips_references		ips_object.io_references
-#define ips_local_name		ips_messages.imq_local_name
-
 
 #define	ips_active(pset)	io_active(&(pset)->ips_object)
 #define	ips_lock(pset)		io_lock(&(pset)->ips_object)
@@ -105,6 +103,10 @@ extern kern_return_t ipc_pset_alloc_name(
 	ipc_space_t		space,
 	mach_port_name_t	name,
 	ipc_pset_t		*psetp);
+
+/* Allocate a port set in a special space */
+extern ipc_pset_t ipc_pset_alloc_special(
+	ipc_space_t		space);
 
 /* Add a port to a port set */
 extern kern_return_t ipc_pset_add(

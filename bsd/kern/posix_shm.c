@@ -197,14 +197,14 @@ static int pshm_cache_search(struct pshminfo **pshmp, struct pshmname *pnp,
 static int pshm_unlink_internal(struct pshminfo *pinfo, struct pshmcache *pcache);
 
 static const struct fileops pshmops = {
-	DTYPE_PSXSHM,
-	pshm_read,
-	pshm_write,
-	pshm_ioctl,
-	pshm_select,
-	pshm_closefile,
-	pshm_kqfilter,
-	0
+	.fo_type = DTYPE_PSXSHM,
+	.fo_read = pshm_read,
+	.fo_write = pshm_write,
+	.fo_ioctl = pshm_ioctl,
+	.fo_select = pshm_select,
+	.fo_close = pshm_closefile,
+	.fo_kqfilter = pshm_kqfilter,
+	.fo_drain = NULL,
 };
 
 static lck_grp_t       *psx_shm_subsys_lck_grp;
@@ -214,7 +214,7 @@ static lck_mtx_t        psx_shm_subsys_mutex;
 
 #define PSHM_SUBSYS_LOCK() lck_mtx_lock(& psx_shm_subsys_mutex)
 #define PSHM_SUBSYS_UNLOCK() lck_mtx_unlock(& psx_shm_subsys_mutex)
-#define PSHM_SUBSYS_ASSERT_HELD()  lck_mtx_assert(&psx_shm_subsys_mutex, LCK_MTX_ASSERT_OWNED)
+#define PSHM_SUBSYS_ASSERT_HELD()  LCK_MTX_ASSERT(&psx_shm_subsys_mutex, LCK_MTX_ASSERT_OWNED)
 
 
 /* Initialize the mutex governing access to the posix shm subsystem */
@@ -1283,10 +1283,12 @@ pshm_select(__unused struct fileproc *fp, __unused int which, __unused void *wql
 }
 
 static int
-pshm_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn, 
+pshm_kqfilter(__unused struct fileproc *fp, struct knote *kn, 
 				__unused vfs_context_t ctx)
 {
-	return(ENOTSUP);
+	kn->kn_flags = EV_ERROR;
+	kn->kn_data = ENOTSUP;
+	return 0;
 }
 
 int

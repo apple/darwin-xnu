@@ -60,7 +60,7 @@ kern_return_t kxld_create_context(
     cpu_type_t cputype,
     cpu_subtype_t cpusubtype,
     vm_size_t pagesize)
-    __attribute__((nonnull(1,2),visibility("default")));
+__attribute__((nonnull(1),visibility("default")));
 
 /*******************************************************************************
 * Destroys a link context and frees all associated memory.  Should be called at
@@ -92,16 +92,28 @@ void kxld_destroy_context(
 *   kmod_info_kern      Kernel address of the kmod_info_t structure.
 ******************************************************************************/
 kern_return_t kxld_link_file(
-    KXLDContext *context,
-    u_char *file,
-    u_long size,
-    const char *name,
-    void *callback_data,
-    KXLDDependency *dependencies,
-    u_int num_dependencies,
-    u_char **linked_object,
-    kxld_addr_t *kmod_info_kern)
-    __attribute__((nonnull(1,2,4,6,8,9), visibility("default")));
+                             KXLDContext *context,
+                             u_char *file,
+                             u_long size,
+                             const char *name,
+                             void *callback_data,
+                             KXLDDependency *dependencies,
+                             u_int num_dependencies,
+                             u_char **linked_object,
+                             kxld_addr_t *kmod_info_kern)
+__attribute__((nonnull(1,2,4,6,8,9), visibility("default")));
+
+
+kern_return_t kxld_link_split_file(
+                             KXLDContext *context,
+                             splitKextLinkInfo *link_info,
+                             const char *name,
+                             void *callback_data,
+                             KXLDDependency *dependencies,
+                             u_int num_dependencies,
+                             kxld_addr_t *kmod_info_kern)
+__attribute__((nonnull(1,2,3,5,7), visibility("default")));
+
 
 /*******************************************************************************
 *******************************************************************************/

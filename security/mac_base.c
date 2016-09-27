@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1402,6 +1402,8 @@ __mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, int *ret __unused)
 		case DTYPE_PIPE:
 		case DTYPE_KQUEUE:
 		case DTYPE_FSEVENTS:
+		case DTYPE_ATALK:
+		case DTYPE_NETPOLICY:
 		default:
 			error = ENOSYS;   // only sockets/vnodes so far
 			break;
@@ -1608,6 +1610,8 @@ __mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, int *ret __unused)
 		case DTYPE_PIPE:
 		case DTYPE_KQUEUE:
 		case DTYPE_FSEVENTS:
+		case DTYPE_ATALK:
+		case DTYPE_NETPOLICY:
 		default:
 			error = ENOSYS;  // only sockets/vnodes so far
 			break;
@@ -1622,7 +1626,7 @@ static int
 mac_set_filelink(proc_t p, user_addr_t mac_p, user_addr_t path_p,
 		 int follow)
 {
-	register struct vnode *vp;
+	struct vnode *vp;
 	struct vfs_context *ctx = vfs_context_current();
 	struct label *intlabel;
 	struct nameidata nd;
@@ -1957,6 +1961,28 @@ mac_vnop_removexattr(struct vnode *vp __unused, const char *name __unused)
 	return (ENOENT);
 }
 
+int
+mac_file_setxattr(struct fileglob *fg __unused, const char *name __unused, char *buf __unused, size_t len __unused)
+{
+
+	return (ENOENT);
+}
+
+int
+mac_file_getxattr(struct fileglob *fg __unused, const char *name __unused,
+	char *buf __unused, size_t len __unused, size_t *attrlen __unused)
+{
+
+	return (ENOENT);
+}
+
+int
+mac_file_removexattr(struct fileglob *fg __unused, const char *name __unused)
+{
+
+	return (ENOENT);
+}
+
 intptr_t mac_label_get(struct label *l __unused, int slot __unused)
 {
         return 0;
@@ -1977,6 +2003,25 @@ int mac_iokit_check_hid_control(kauth_cred_t cred __unused);
 int mac_iokit_check_hid_control(kauth_cred_t cred __unused)
 {
         return 0;
+}
+
+
+int mac_iokit_check_nvram_delete(kauth_cred_t cred __unused, const char *name __unused);
+int mac_iokit_check_nvram_delete(kauth_cred_t cred __unused, const char *name __unused)
+{
+	return 0;
+}
+
+int mac_iokit_check_nvram_get(kauth_cred_t cred __unused, const char *name __unused);
+int mac_iokit_check_nvram_get(kauth_cred_t cred __unused, const char *name __unused)
+{
+	return 0;
+}
+
+int mac_iokit_check_nvram_set(kauth_cred_t cred __unused, const char *name __unused, io_object_t value __unused);
+int mac_iokit_check_nvram_set(kauth_cred_t cred __unused, const char *name __unused, io_object_t value __unused)
+{
+	return 0;
 }
 
 #endif /* !MAC */

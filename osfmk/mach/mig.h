@@ -273,6 +273,7 @@ extern void mig_put_reply_port(mach_port_t reply_port);
 
 /* Bounded string copy */
 extern int mig_strncpy(char	*dest, const char *src,	int	len);
+extern int mig_strncpy_zerofill(char	*dest, const char *src,	int	len);
 
 #ifdef KERNEL_PRIVATE
 

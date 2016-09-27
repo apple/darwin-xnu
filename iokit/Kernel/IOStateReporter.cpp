@@ -58,7 +58,7 @@ IOStateReporter::with(IOService *reportingService,
     
 finish:
     if (!rval) {
-        if (reporter)       delete reporter;
+        OSSafeReleaseNULL(reporter);
     }
     
     return rval;
@@ -778,6 +778,7 @@ IOStateReporter::_getStateValue(uint64_t channel_id,
                             break;
                         case kLastTransitionTime:
                             result = values->last_intransition;
+                            break;
                         default:
                             break;
                     }

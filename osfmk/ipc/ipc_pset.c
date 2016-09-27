@@ -114,7 +114,6 @@ ipc_pset_alloc(
 	}
 	/* pset and space are locked */
 
-	pset->ips_local_name = name;
 	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */, &reserved_link);
 	is_write_unlock(space);
 
@@ -161,7 +160,6 @@ ipc_pset_alloc_name(
 	}
 	/* pset is locked */
 
-	pset->ips_local_name = name;
 	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */, &reserved_link);
 
 	waitq_link_release(reserved_link);
@@ -169,6 +167,47 @@ ipc_pset_alloc_name(
 	*psetp = pset;
 	return KERN_SUCCESS;
 }
+
+
+/*
+ *	Routine:	ipc_pset_alloc_special
+ *	Purpose:
+ *		Allocate a port set in a special space.
+ *		The new port set is returned with one ref.
+ *		If unsuccessful, IPS_NULL is returned.
+ *	Conditions:
+ *		Nothing locked.
+ */
+ipc_pset_t
+ipc_pset_alloc_special(
+	__assert_only ipc_space_t space)
+{
+	ipc_pset_t pset;
+	uint64_t reserved_link;
+
+	assert(space != IS_NULL);
+	assert(space->is_table == IE_NULL);
+	assert(!is_active(space));
+
+	reserved_link = waitq_link_reserve(NULL);
+
+	__IGNORE_WCASTALIGN(pset = (ipc_pset_t)io_alloc(IOT_PORT_SET));
+	if (pset == IPS_NULL)
+		return IPS_NULL;
+
+	bzero((char *)pset, sizeof(*pset));
+
+	io_lock_init(&pset->ips_object);
+	pset->ips_references = 1;
+	pset->ips_object.io_bits = io_makebits(TRUE, IOT_PORT_SET, 0);
+
+	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */, &reserved_link);
+
+	waitq_link_release(reserved_link);
+
+	return pset;
+}
+
 
 /*
  *	Routine:	ipc_pset_member
@@ -257,8 +296,6 @@ kern_return_t
 ipc_pset_remove_from_all(
 	ipc_port_t	port)
 {
-	assert(ip_active(port));
-	
 	if (port->ip_in_pset == 0)
 		return KERN_NOT_IN_SET;
 
@@ -314,18 +351,21 @@ ipc_pset_destroy(
 
 /* Kqueue EVFILT_MACHPORT support */
 
+#include <sys/event.h>
 #include <sys/errno.h>
 
 static int      filt_machportattach(struct knote *kn);
 static void	filt_machportdetach(struct knote *kn);
 static int	filt_machport(struct knote *kn, long hint);
-static void     filt_machporttouch(struct knote *kn, struct kevent_internal_s *kev, long type);
+static int     filt_machporttouch(struct knote *kn, struct kevent_internal_s *kev);
+static int     filt_machportprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
 static unsigned filt_machportpeek(struct knote *kn);
 struct filterops machport_filtops = {
         .f_attach = filt_machportattach,
         .f_detach = filt_machportdetach,
         .f_event = filt_machport,
         .f_touch = filt_machporttouch,
+        .f_process = filt_machportprocess,
 	.f_peek = filt_machportpeek,
 };
 
@@ -333,94 +373,252 @@ static int
 filt_machportattach(
         struct knote *kn)
 {
-        mach_port_name_t        name = (mach_port_name_t)kn->kn_kevent.ident;
-        uint64_t                wq_link_id = waitq_link_reserve(NULL);
-        ipc_pset_t              pset = IPS_NULL;
-        int                     result = ENOSYS;
-        kern_return_t           kr;
+	mach_port_name_t name = (mach_port_name_t)kn->kn_kevent.ident;
+	uint64_t wq_link_id = waitq_link_reserve(NULL);
+	ipc_space_t space = current_space();
+	ipc_kmsg_t first;
 
-        kr = ipc_object_translate(current_space(), name,
-                                  MACH_PORT_RIGHT_PORT_SET,
-                                  (ipc_object_t *)&pset);
-        if (kr != KERN_SUCCESS) {
-		waitq_link_release(wq_link_id);
-                return (kr == KERN_INVALID_NAME ? ENOENT : ENOTSUP);
-        }
-        /* We've got a lock on pset */
+	spl_t s;
+	int error;
+	int result = 0;
+	kern_return_t kr;
+	ipc_entry_t entry;
+	ipc_mqueue_t mqueue;
 
-	/* 
-	 * Bind the portset wait queue directly to knote/kqueue.
-	 * This allows us to just use wait_queue foo to effect a wakeup,
-	 * rather than having to call knote() from the Mach code on each
-	 * message.
-	 */
-	result = knote_link_waitq(kn, &pset->ips_messages.imq_wait_queue, &wq_link_id);
-	if (result == 0) {
-		waitq_link_release(wq_link_id);
-		/* keep a reference for the knote */
-		kn->kn_ptr.p_pset = pset; 
-		ips_reference(pset);
-		ips_unlock(pset);
+	kr = ipc_right_lookup_read(space, name, &entry);
+	if (kr == KERN_SUCCESS) {
+		/* space is read-locked and active */
+
+		if (entry->ie_bits & MACH_PORT_TYPE_PORT_SET) {
+			ipc_pset_t pset;
+
+			__IGNORE_WCASTALIGN(pset = (ipc_pset_t)entry->ie_object);
+			mqueue = &pset->ips_messages;
+
+			s = splsched();
+			imq_lock(mqueue);
+
+			/* 
+			 * Bind the portset wait queue directly to knote/kqueue.
+			 * This allows us to just use wait_queue foo to effect a wakeup,
+			 * rather than having to call knote() from the Mach code on each
+			 * message.  We still attach the knote to the mqueue klist for
+			 * NOTE_REVOKE purposes only.
+			 */
+			error = knote_link_waitq(kn, &mqueue->imq_wait_queue, &wq_link_id);
+			if (!error) {
+				ips_reference(pset);
+				kn->kn_ptr.p_mqueue = mqueue; 
+				KNOTE_ATTACH(&mqueue->imq_klist, kn);
+			}
+			imq_unlock(mqueue);
+			splx(s);
+			
+			is_read_unlock(space);
+
+			/*
+			 * linked knotes are marked stay-active and therefore don't
+			 * need an indication of their fired state to be returned
+			 * from the attach operation.
+			 */
+
+		} else if (entry->ie_bits & MACH_PORT_TYPE_RECEIVE) {
+			ipc_port_t port;
+
+			__IGNORE_WCASTALIGN(port = (ipc_port_t)entry->ie_object);
+			mqueue = &port->ip_messages;
+			ip_reference(port);
+		
+			/*
+			 * attach knote to port and determine result
+			 * If the filter requested direct message receipt,
+			 * we may need to adjust the qos of the knote to
+			 * reflect the requested and override qos of the
+			 * first message in the queue.
+			 */
+			s = splsched();
+			imq_lock(mqueue);
+			kn->kn_ptr.p_mqueue = mqueue; 
+			KNOTE_ATTACH(&mqueue->imq_klist, kn);
+			if ((first = ipc_kmsg_queue_first(&mqueue->imq_messages)) != IKM_NULL) {
+				if (kn->kn_sfflags & MACH_RCV_MSG)
+					knote_adjust_qos(kn, first->ikm_qos, first->ikm_qos_override);
+				result = 1;
+			}
+			imq_unlock(mqueue);
+			splx(s);
+
+			is_read_unlock(space);
+			error = 0;
+		} else {
+			is_read_unlock(space);
+			error = ENOTSUP;
+		}
+	} else  {
+		error = ENOENT;
+	}
+
+	waitq_link_release(wq_link_id);
+
+	/* bail out on errors */
+	if (error) {
+		kn->kn_flags |= EV_ERROR;
+		kn->kn_data = error;
 		return 0;
 	}
 
-	ips_unlock(pset);
-	waitq_link_release(wq_link_id);
 	return result;
 }
 
+/* NOT proud of these - we should have a stricter relationship between mqueue and ipc object */
+#define mqueue_to_pset(mq) ((ipc_pset_t)((uintptr_t)mq-offsetof(struct ipc_pset, ips_messages)))
+#define mqueue_to_port(mq) ((ipc_port_t)((uintptr_t)mq-offsetof(struct ipc_port, ip_messages)))
+#define mqueue_to_object(mq) (((ipc_object_t)(mq)) - 1)
+
+
 static void
 filt_machportdetach(
-        struct knote *kn)
+	struct knote *kn)
 {
-        ipc_pset_t              pset = kn->kn_ptr.p_pset;
+	ipc_mqueue_t mqueue = kn->kn_ptr.p_mqueue;
+	ipc_object_t object = mqueue_to_object(mqueue);
+	spl_t s;
 
-	/*
-	 * Unlink the portset wait queue from knote/kqueue,
-	 * and release our reference on the portset.
-	 */
-	ips_lock(pset);
-	(void)knote_unlink_waitq(kn, &pset->ips_messages.imq_wait_queue);
-	kn->kn_ptr.p_pset = IPS_NULL;
-	ips_unlock(pset);
-	ips_release(pset);
+	s = splsched();
+	imq_lock(mqueue);
+	KNOTE_DETACH(&mqueue->imq_klist, kn);
+	kn->kn_ptr.p_mqueue = IMQ_NULL;
+	imq_unlock(mqueue);
+	splx(s);
+
+	if (io_otype(object) == IOT_PORT_SET) {
+		/*
+		 * Unlink the portset wait queue from knote/kqueue.
+ 		 * JMM - Does this need to be atomic under the mq lock?
+		 */
+		(void)knote_unlink_waitq(kn, &mqueue->imq_wait_queue);
+	} 
+	io_release(object);
+}
+
+/*
+ * filt_machport - deliver events into the mach port filter
+ *
+ * Mach port message arrival events are currently only posted via the
+ * kqueue filter routine for ports. Port sets are marked stay-active
+ * and the wait queue code will break any kqueue waiters out to go
+ * poll the stay-queued knotes again.
+ *
+ * If there is a message at the head of the queue,
+ * we indicate that the knote should go active.  If
+ * the message is to be direct-received, we adjust the
+ * QoS of the knote according the requested and override
+ * QoS of that first message.
+ *
+ * NOTE_REVOKE events are a legacy way to indicate that the port/portset
+ * was deallocated or left the current Mach portspace (modern technique
+ * is with an EV_VANISHED protocol).  If we see NOTE_REVOKE, deliver an
+ * EV_EOF event for these changes (hopefully it will get delivered before
+ * the port name recycles to the same generation count and someone tries
+ * to re-register a kevent for it or the events are udata-specific -
+ * avoiding a conflict).
+ */
+static int
+filt_machport(
+	struct knote *kn,
+	long hint)
+{
+	ipc_mqueue_t mqueue = kn->kn_ptr.p_mqueue;
+	ipc_kmsg_t first;
+	int result = 0;
+
+	/* mqueue locked by caller */
+	assert(imq_held(mqueue));
+
+	if (hint == NOTE_REVOKE) {
+		kn->kn_flags |= EV_EOF | EV_ONESHOT;
+		result = 1;
+	} else if (imq_is_valid(mqueue)) {
+		assert(!imq_is_set(mqueue));
+		if ((first = ipc_kmsg_queue_first(&mqueue->imq_messages)) != IKM_NULL) {
+			if (kn->kn_sfflags & MACH_RCV_MSG)
+				knote_adjust_qos(kn, first->ikm_qos, first->ikm_qos_override);
+			result = 1;
+		}
+	}
+
+	return result;
 }
 
 static int
-filt_machport(
-        struct knote *kn,
-        __unused long hint)
+filt_machporttouch(
+	struct knote *kn, 
+	struct kevent_internal_s *kev)
 {
-        mach_port_name_t        name = (mach_port_name_t)kn->kn_kevent.ident;
-        ipc_pset_t              pset = IPS_NULL;
-	wait_result_t		wresult;
-	thread_t		self = current_thread();
-        kern_return_t           kr;
-	mach_msg_option_t	option;
-	mach_msg_size_t		size;
+	ipc_mqueue_t mqueue = kn->kn_ptr.p_mqueue;
+	ipc_kmsg_t first;
+	int result = 0;
+	spl_t s;
 
-	/* never called from below */
-	assert(hint == 0);
+	s = splsched();
+	imq_lock(mqueue);
+
+	/* copy in new settings and save off new input fflags */
+	kn->kn_sfflags = kev->fflags;
+	kn->kn_ext[0] = kev->ext[0];
+	kn->kn_ext[1] = kev->ext[1];
+	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
+		kn->kn_udata = kev->udata;
 
 	/*
-	 * called from user context. Have to validate the
-	 * name.  If it changed, we have an EOF situation.
+	 * If the mqueue is a valid port and there is a message
+	 * that will be direct-received from the knote, update
+	 * the knote qos based on the first message and trigger
+	 * the event. If there are no more messages, reset the
+	 * QoS to the value provided by the kevent.
 	 */
-	kr = ipc_object_translate(current_space(), name,
-				  MACH_PORT_RIGHT_PORT_SET,
-				  (ipc_object_t *)&pset);
-	if (kr != KERN_SUCCESS || pset != kn->kn_ptr.p_pset || !ips_active(pset)) {
-		kn->kn_data = 0;
-		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
-		if (pset != IPS_NULL) {
-			ips_unlock(pset);
-		}
-		return(1);
-        }
+	if (imq_is_valid(mqueue) && !imq_is_set(mqueue) &&
+	    (first = ipc_kmsg_queue_first(&mqueue->imq_messages)) != IKM_NULL) {
+		if (kn->kn_sfflags & MACH_RCV_MSG)
+			knote_adjust_qos(kn, first->ikm_qos, first->ikm_qos_override);
+		result = 1;
+	} else if (kn->kn_sfflags & MACH_RCV_MSG) {
+		knote_adjust_qos(kn,
+		                 MACH_MSG_PRIORITY_UNSPECIFIED,
+		                 MACH_MSG_PRIORITY_UNSPECIFIED);
+	}
+	imq_unlock(mqueue);
+	splx(s);
 
-	/* just use the reference from here on out */
-	ips_reference(pset);
-	ips_unlock(pset); 
+	return result;
+}
+
+static int
+filt_machportprocess(
+	struct knote *kn,
+	struct filt_process_s *process_data,
+	struct kevent_internal_s *kev)
+{
+	ipc_mqueue_t mqueue = kn->kn_ptr.p_mqueue;
+	ipc_object_t object = mqueue_to_object(mqueue);
+	thread_t self = current_thread();
+	boolean_t used_filtprocess_data = FALSE;
+
+	wait_result_t wresult;
+	mach_msg_option_t option;
+	mach_vm_address_t addr;
+	mach_msg_size_t	size;
+
+	imq_lock(mqueue);
+
+	/* Capture current state */
+	*kev = kn->kn_kevent;
+
+	/* If already deallocated/moved return one last EOF event */
+	if (kev->flags & EV_EOF) {
+		imq_unlock(mqueue);
+		return 1;
+        }
 
 	/*
 	 * Only honor supported receive options. If no options are
@@ -428,15 +626,34 @@ filt_machport(
 	 * name of the port and sizeof the waiting message.
 	 */
 	option = kn->kn_sfflags & (MACH_RCV_MSG|MACH_RCV_LARGE|MACH_RCV_LARGE_IDENTITY|
-				   MACH_RCV_TRAILER_MASK|MACH_RCV_VOUCHER);
+	                           MACH_RCV_TRAILER_MASK|MACH_RCV_VOUCHER);
+
 	if (option & MACH_RCV_MSG) {
-		self->ith_msg_addr = (mach_vm_address_t) kn->kn_ext[0];
-		size = (mach_msg_size_t)kn->kn_ext[1];
+		addr = (mach_vm_address_t) kn->kn_ext[0];
+		size = (mach_msg_size_t) kn->kn_ext[1];
+
+		/*
+		 * If the kevent didn't specify a buffer and length, carve a buffer
+		 * from the filter processing data according to the flags.
+		 */
+		if (size == 0 && process_data != NULL) {
+			used_filtprocess_data = TRUE;
+
+			addr = (mach_vm_address_t)process_data->fp_data_out;
+			size = (mach_msg_size_t)process_data->fp_data_resid;
+			option |= (MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY);
+			if (process_data->fp_flags & KEVENT_FLAG_STACK_DATA)
+				option |= MACH_RCV_STACK;
+		}
 	} else {
+		/* just detect the port name (if a set) and size of the first message */
 		option = MACH_RCV_LARGE;
-		self->ith_msg_addr = 0;
+		addr = 0;
 		size = 0;
 	}
+
+	/* just use the reference from here on out */
+	io_reference(object);
 
 	/*
 	 * Set up to receive a message or the notification of a
@@ -445,8 +662,10 @@ filt_machport(
 	 * options, pass those through here.  But we don't support
 	 * scatter lists through this interface.
 	 */
-	self->ith_object = (ipc_object_t)pset;
-	self->ith_msize = size;
+	self->ith_object = object;
+	self->ith_msg_addr = addr;
+	self->ith_rsize = size;
+	self->ith_msize = 0;
 	self->ith_option = option;
 	self->ith_receiver_name = MACH_PORT_NULL;
 	self->ith_continuation = NULL;
@@ -454,23 +673,25 @@ filt_machport(
 	self->ith_state = MACH_RCV_IN_PROGRESS;
 
 	wresult = ipc_mqueue_receive_on_thread(
-			&pset->ips_messages,
+			mqueue,
 			option,
 			size, /* max_size */
 			0, /* immediate timeout */
 			THREAD_INTERRUPTIBLE,
 			self);
-	assert(wresult == THREAD_NOT_WAITING);
-	assert(self->ith_state != MACH_RCV_IN_PROGRESS);
+	/* mqueue unlocked */
 
 	/*
-	 * If we timed out, just release the reference on the
-	 * portset and return zero.
+	 * If we timed out, or the process is exiting, just release the
+	 * reference on the ipc_object and return zero.
 	 */
-	if (self->ith_state == MACH_RCV_TIMED_OUT) {
-		ips_release(pset);
+	if (wresult == THREAD_RESTART || self->ith_state == MACH_RCV_TIMED_OUT) {
+		io_release(object);
 		return 0;
 	}
+
+	assert(wresult == THREAD_NOT_WAITING);
+	assert(self->ith_state != MACH_RCV_IN_PROGRESS);
 
 	/*
 	 * If we weren't attempting to receive a message
@@ -480,8 +701,8 @@ filt_machport(
 	if ((option & MACH_RCV_MSG) != MACH_RCV_MSG) {
 		assert(self->ith_state == MACH_RCV_TOO_LARGE);
 		assert(self->ith_kmsg == IKM_NULL);
-		kn->kn_data = self->ith_receiver_name;
-		ips_release(pset);
+		kev->data = self->ith_receiver_name;
+		io_release(object);
 		return 1;
 	}
 
@@ -489,56 +710,66 @@ filt_machport(
 	 * Attempt to receive the message directly, returning
 	 * the results in the fflags field.
 	 */
-	assert(option & MACH_RCV_MSG);
-	kn->kn_ext[1] = self->ith_msize;
-	kn->kn_data = MACH_PORT_NULL;
-	kn->kn_fflags = mach_msg_receive_results();
-	/* kmsg and pset reference consumed */
+	kev->fflags = mach_msg_receive_results(&size);
+
+	/* kmsg and object reference consumed */
 
 	/*
 	 * if the user asked for the identity of ports containing a
 	 * a too-large message, return it in the data field (as we
 	 * do for messages we didn't try to receive).
 	 */
-        if ((kn->kn_fflags == MACH_RCV_TOO_LARGE) &&
-	    (option & MACH_RCV_LARGE_IDENTITY))
-	    kn->kn_data = self->ith_receiver_name;
+	if (kev->fflags == MACH_RCV_TOO_LARGE) {
+		kev->ext[1] = self->ith_msize;
+		if (option & MACH_RCV_LARGE_IDENTITY)
+			kev->data = self->ith_receiver_name;
+		else
+			kev->data = MACH_PORT_NULL;
+	} else {
+		kev->ext[1] = size;
+		kev->data = MACH_PORT_NULL;
+	}
+
+	/*
+	 * If we used a data buffer carved out from the filt_process data,
+	 * store the address used in the knote and adjust the residual and
+	 * other parameters for future use.
+	 */
+	if (used_filtprocess_data) {
+		assert(process_data->fp_data_resid >= size);
+		process_data->fp_data_resid -= size;
+		if ((process_data->fp_flags & KEVENT_FLAG_STACK_DATA) == 0) {
+			kev->ext[0] = process_data->fp_data_out;
+			process_data->fp_data_out += size;
+		} else {
+			assert(option & MACH_RCV_STACK);
+			kev->ext[0] = process_data->fp_data_out + 
+				      process_data->fp_data_resid;
+		}
+	}
+
+	/*
+	 * Apply message-based QoS values to output kevent as prescribed.
+	 * The kev->qos field gets max(msg-qos, kn->kn_qos).
+	 * The kev->ext[2] field gets (msg-qos << 32) | (override-qos).
+	 *
+	 * The mach_msg_receive_results() call saved off the message
+	 * QoS values in the continuation save area on successful receive.
+	 */
+	if (kev->fflags == MACH_MSG_SUCCESS) {
+		kev->qos = mach_msg_priority_combine(self->ith_qos, kn->kn_qos);
+		kev->ext[2] = ((uint64_t)self->ith_qos << 32) | 
+		               (uint64_t)self->ith_qos_override;
+	}
 
 	return 1;
 }
 
-static void
-filt_machporttouch(struct knote *kn, struct kevent_internal_s *kev, long type)
-{
-        switch (type) {
-        case EVENT_REGISTER:
-                kn->kn_sfflags = kev->fflags;
-                kn->kn_sdata = kev->data;
-		kn->kn_ext[0] = kev->ext[0];
-		kn->kn_ext[1] = kev->ext[1];
-                break;
-        case EVENT_PROCESS:
-                *kev = kn->kn_kevent;
-                if (kn->kn_flags & EV_CLEAR) {
-			kn->kn_data = 0;
-			kn->kn_fflags = 0;
-		}
-                break;
-        default:
-                panic("filt_machporttouch() - invalid type (%ld)", type);
-                break;
-        }
-}
-
 /*
- * Peek to see if the portset associated with the knote has any
+ * Peek to see if the message queue associated with the knote has any
  * events. This pre-hook is called when a filter uses the stay-
- * on-queue mechanism (as the knote_link_waitq mechanism
- * does).
- *
- * This is called with the kqueue that the knote belongs to still
- * locked (thus holding a reference on the knote, but restricting
- * also restricting our ability to take other locks).
+ * on-queue mechanism (as the knote_link_waitq mechanism does for
+ * portsets) and someone calls select() against the containing kqueue.
  *
  * Just peek at the pre-post status of the portset's wait queue
  * to determine if it has anything interesting.  We can do it
@@ -550,8 +781,7 @@ filt_machporttouch(struct knote *kn, struct kevent_internal_s *kev, long type)
 static unsigned
 filt_machportpeek(struct knote *kn)
 {
-        ipc_pset_t              pset = kn->kn_ptr.p_pset;
-	ipc_mqueue_t		set_mq = &pset->ips_messages;
+	ipc_mqueue_t mqueue = kn->kn_ptr.p_mqueue;
 
-	return (ipc_mqueue_set_peek(set_mq));
+	return (ipc_mqueue_set_peek(mqueue));
 }

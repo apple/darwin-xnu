@@ -95,8 +95,7 @@ static void	lro_proto_input(struct mbuf *);
 
 static struct mbuf *lro_tcp_xsum_validate(struct mbuf*,  struct ip *,
 				struct tcphdr*);
-static struct mbuf *tcp_lro_process_pkt(struct mbuf*, struct ip*, struct tcphdr*,
-				int);
+static struct mbuf *tcp_lro_process_pkt(struct mbuf*, int);
 
 void
 tcp_lro_init(void)
@@ -401,8 +400,7 @@ kick_flow:
 }
 
 struct mbuf*
-tcp_lro_process_pkt(struct mbuf *lro_mb, struct ip *ip_hdr, 
-				struct tcphdr *tcp_hdr, int drop_hdrlen)
+tcp_lro_process_pkt(struct mbuf *lro_mb, int drop_hdrlen)
 {
 	int flow_id = TCP_LRO_FLOW_UNINIT;
 	int hash;
@@ -418,18 +416,23 @@ tcp_lro_process_pkt(struct mbuf *lro_mb, struct ip *ip_hdr,
 	int ret_response = TCP_LRO_CONSUMED;
 	int coalesced = 0, tcpflags = 0, unknown_tcpopts = 0;
 	u_int8_t ecn;
+	struct ip *ip_hdr;
+	struct tcphdr *tcp_hdr;
 	
-	if (lro_mb->m_len < (int32_t)sizeof (struct tcpiphdr)) {
-		if ((lro_mb = m_pullup(lro_mb, sizeof(struct tcpiphdr))) == 0) {
+	if (lro_mb->m_len < drop_hdrlen) {
+		if ((lro_mb = m_pullup(lro_mb, drop_hdrlen)) == NULL) {
 			tcpstat.tcps_rcvshort++;
 			m_freem(lro_mb); 
 			if (lrodebug) {
 				printf("tcp_lro_process_pkt:mbuf too short.\n");
 			}
-			return NULL;
+			return (NULL);
 		}
 	}
-
+	
+	ip_hdr = mtod(lro_mb, struct ip*);
+	tcp_hdr = (struct tcphdr *)((caddr_t)ip_hdr + sizeof(struct ip));
+	
 	/* Just in case */
 	lro_mb->m_pkthdr.pkt_flags &= ~PKTF_SW_LRO_DID_CSUM;
 
@@ -437,7 +440,7 @@ tcp_lro_process_pkt(struct mbuf *lro_mb, struct ip *ip_hdr,
 		if (lrodebug) {
 			printf("tcp_lro_process_pkt: TCP xsum failed.\n");
 		}
-		return NULL; 
+		return (NULL); 
 	}
 
 	/* Update stats */
@@ -585,7 +588,7 @@ tcp_lro_process_pkt(struct mbuf *lro_mb, struct ip *ip_hdr,
 	if (ret_response == TCP_LRO_FLOW_NOTFOUND) {
 		lro_proto_input(lro_mb);
 	}
-	return NULL;
+	return (NULL);
 }
 
 static void
@@ -674,7 +677,7 @@ tcp_lro(struct mbuf *m, unsigned int hlen)
 	unsigned int off = 0;
 
 	if (kipf_count != 0) 
-		return m;
+		return (m);
 
 	/* 
 	 * Experiments on cellular show that the RTT is much higher  
@@ -686,29 +689,30 @@ tcp_lro(struct mbuf *m, unsigned int hlen)
 	 */
 	if (IFNET_IS_CELLULAR(m->m_pkthdr.rcvif) ||
 		(m->m_pkthdr.rcvif->if_type == IFT_LOOP)) {
-		return m;
+		return (m);
 	}
 
 	ip_hdr = mtod(m, struct ip*);
 
 	/* don't deal with IP options */
-	if (hlen > sizeof (struct ip))
+	if (hlen != sizeof (struct ip))
 		return (m);
 
 	/* only TCP is coalesced */
 	if (ip_hdr->ip_p != IPPROTO_TCP) {
-		return m;
+		return (m);
 	}
 
 	if (m->m_len < (int32_t) sizeof (struct tcpiphdr)) {
 		if (lrodebug) printf("tcp_lro m_pullup \n");
-		if ((m = m_pullup(m, sizeof (struct tcpiphdr))) == 0) {
+		if ((m = m_pullup(m, sizeof (struct tcpiphdr))) == NULL) {
 			tcpstat.tcps_rcvshort++; 
 			if (lrodebug) {
 				printf("ip_lro: rcvshort.\n");
 			}
-			return NULL;
+			return (NULL);
 		}
+		ip_hdr = mtod(m, struct ip*);
 	}
 
 	tcp_hdr = (struct tcphdr *)((caddr_t)ip_hdr + hlen);
@@ -722,10 +726,10 @@ tcp_lro(struct mbuf *m, unsigned int hlen)
 		if (lrodebug) {
 			printf("ip_lro: TCP off greater than TCP header.\n");
 		}
-		return m;
+		return (m);
 	}
 
-	return (tcp_lro_process_pkt(m, ip_hdr, tcp_hdr, hlen + off));
+	return (tcp_lro_process_pkt(m, hlen + off));
 }
 
 static void

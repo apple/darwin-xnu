@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 NeXT Computer, Inc. All Rights Reserved */
@@ -347,8 +347,7 @@ failed:
 }
 
 static int
-get_file_handle(ndmntp)
-	struct nfs_dlmount *ndmntp;
+get_file_handle(struct nfs_dlmount *ndmntp)
 {
 	char *sp, *dp, *endp;
 	int error;
@@ -440,10 +439,9 @@ struct bp_inaddr {
  * know about us (don't want to broadcast a getport call).
  */
 static int
-bp_whoami(bpsin, my_ip, gw_ip)
-	struct sockaddr_in *bpsin;
-	struct in_addr *my_ip;
-	struct in_addr *gw_ip;
+bp_whoami(struct sockaddr_in *bpsin,
+	struct in_addr *my_ip,
+	struct in_addr *gw_ip)
 {
 	/* RPC structures for PMAPPROC_CALLIT */
 	struct whoami_call {
@@ -576,12 +574,11 @@ out:
  *	server pathname
  */
 static int
-bp_getfile(bpsin, key, md_sin, serv_name, pathname)
-	struct sockaddr_in *bpsin;
-	const char *key;
-	struct sockaddr_in *md_sin;
-	char *serv_name;
-	char *pathname;
+bp_getfile(struct sockaddr_in *bpsin,
+	const char *key,
+	struct sockaddr_in *md_sin,
+	char *serv_name,
+	char *pathname)
 {
 	struct rpc_string *str;
 	mbuf_t m;
@@ -691,13 +688,12 @@ out:
  * Also, sets sin->sin_port to the NFS service port.
  */
 static int
-md_mount(mdsin, path, v3, sotype, fhp, fhlenp)
-	struct sockaddr_in *mdsin;		/* mountd server address */
-	char *path;
-	int v3;
-	int sotype;
-	u_char *fhp;
-	u_int32_t *fhlenp;
+md_mount(struct sockaddr_in *mdsin,		/* mountd server address */
+	char *path,
+	int v3,
+	int sotype,
+	u_char *fhp,
+	u_int32_t *fhlenp)
 {
 	/* The RPC structures */
 	struct rpc_string *str;

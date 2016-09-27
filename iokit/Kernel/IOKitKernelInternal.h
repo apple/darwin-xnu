@@ -89,6 +89,12 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
 void
 IOKernelFreePhysical(mach_vm_address_t address, mach_vm_size_t size);
 
+#if IOTRACKING
+IOReturn
+IOMemoryMapTracking(IOTrackingUser * tracking, task_t * task,
+		    mach_vm_address_t * address, mach_vm_size_t * size);
+#endif /* IOTRACKING */
+
 extern vm_size_t debug_iomallocpageable_size;
 
 // osfmk/device/iokit_rpc.c
@@ -135,7 +141,12 @@ struct IODMACommandInternal
     UInt8  fDoubleBuffer;
     UInt8  fNewMD;
     UInt8  fLocalMapper;
-	
+
+    vm_tag_t    fTag;
+#if IOTRACKING
+    IOTracking  fWireTracking;
+#endif /* IOTRACKING */
+
     vm_page_t fCopyPageAlloc;
     vm_page_t fCopyNext;
     vm_page_t fNextRemapPage;
@@ -167,6 +178,8 @@ struct IOMemoryDescriptorReserved {
     uint64_t                      preparationID;
     // for kernel IOMD subclasses... they have no expansion
     uint64_t                      kernReserved[4];
+    vm_tag_t                      kernelTag;
+    vm_tag_t                      userTag;
 };
 
 struct iopa_t

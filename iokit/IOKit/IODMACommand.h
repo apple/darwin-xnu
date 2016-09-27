@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -33,6 +33,19 @@
 class IOMapper;
 class IOBufferMemoryDescriptor;
 
+enum 
+{
+    kIODMAMapOptionMapped       = 0x00000000,
+    kIODMAMapOptionBypassed     = 0x00000001,
+    kIODMAMapOptionNonCoherent  = 0x00000002,
+    kIODMAMapOptionUnmapped     = 0x00000003,
+    kIODMAMapOptionTypeMask     = 0x0000000f,
+
+    kIODMAMapOptionNoCacheStore = 0x00000010,	// Memory in descriptor 
+    kIODMAMapOptionOnChip       = 0x00000020,	// Indicates DMA is on South Bridge
+    kIODMAMapOptionIterateOnly  = 0x00000040	// DMACommand will be used as a cursor only
+};
+
 /**************************** class IODMACommand ***************************/
 
 /*!
@@ -46,20 +59,6 @@ class IOBufferMemoryDescriptor;
 <br><br>
     The IODMACommand can be used in a 'weak-linked' manner.  To do this you must avoid using any static member functions.  Use the, much slower but safe, weakWithSpecification function.  On success a dma command instance will be returned.  This instance can then be used to clone as many commands as is needed.  Remember deriving from this class can not be done weakly, that is no weak subclassing!
 */
-
-
-enum 
-{
-    kIODMAMapOptionMapped       = 0x00000000,
-    kIODMAMapOptionBypassed     = 0x00000001,
-    kIODMAMapOptionNonCoherent  = 0x00000002,
-    kIODMAMapOptionUnmapped     = 0x00000003,
-    kIODMAMapOptionTypeMask     = 0x0000000f,
-
-    kIODMAMapOptionNoCacheStore = 0x00000010,	// Memory in descriptor 
-    kIODMAMapOptionOnChip       = 0x00000020,	// Indicates DMA is on South Bridge
-    kIODMAMapOptionIterateOnly  = 0x00000040	// DMACommand will be used as a cursor only
-};
 
 class IODMACommand : public IOCommand
 {
@@ -342,7 +341,7 @@ public:
 /*! @function complete
     @abstract Complete processing of DMA mappings after an I/O transfer is finished.
     @discussion This method should not be called unless a prepare was previously issued; the prepare() and complete() must occur in pairs, before and after an I/O transfer
-    @param invalidCache Invalidate the caches for the memory descriptor.  Defaults to true for kNonCoherent and is ignored by the other types.
+    @param invalidateCache Invalidate the caches for the memory descriptor.  Defaults to true for kNonCoherent and is ignored by the other types.
     @param synchronize Copy any buffered data back to the target IOMemoryDescriptor.  Defaults to true, if synchronize() is being used to explicitly copy data, passing false may avoid an unneeded copy.
     @result kIOReturnNotReady if not prepared, kIOReturnSuccess otherwise. */
 
@@ -402,7 +401,7 @@ public:
     inline IOReturn gen32IOVMSegments(UInt64   *offset,
 				      Segment32 *segments,
 				      UInt32     *numSegments)
-    { return genIOVMSegments(offset, segments, numSegments); };
+    { return genIOVMSegments(offset, segments, numSegments); }
 
 /*! @function gen64IOVMSegments
     @abstract Helper function for a type checked call to genIOVMSegments(qv), for use with an IODMACommand set up with the output function kIODMACommandOutputHost64, kIODMACommandOutputBig64, or kIODMACommandOutputLittle64. If the output function of the IODMACommand is not a 64 bit function, results will be incorrect.
@@ -410,7 +409,7 @@ public:
     inline IOReturn gen64IOVMSegments(UInt64    *offset,
 				      Segment64 *segments,
 				      UInt32    *numSegments)
-    { return genIOVMSegments(offset, segments, numSegments); };
+    { return genIOVMSegments(offset, segments, numSegments); }
 
     IOReturn
     genIOVMSegments(SegmentFunction segmentFunction,

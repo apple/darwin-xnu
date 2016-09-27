@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -364,6 +364,8 @@ struct if_tcp_ecn_stat {
 	u_int64_t ecn_fallback_ce;
 	u_int64_t ecn_off_conn;
 	u_int64_t ecn_total_conn;
+	u_int64_t ecn_fallback_droprst;
+	u_int64_t ecn_fallback_droprxmt;
 	struct if_tcp_ecn_perf_stat ecn_on;
 	struct if_tcp_ecn_perf_stat ecn_off;
 };
@@ -407,6 +409,8 @@ struct if_cellular_status_v1 {
 #define IF_CELL_DL_MAX_BANDWIDTH_VALID		0x1000
 #define IF_CELL_CONFIG_INACTIVITY_TIME_VALID	0x2000
 #define IF_CELL_CONFIG_BACKOFF_TIME_VALID	0x4000
+#define	IF_CELL_UL_MSS_RECOMMENDED_VALID	0x8000
+
 	u_int32_t link_quality_metric;
 	u_int32_t ul_effective_bandwidth; /* Measured uplink bandwidth based on current activity (bps) */
 	u_int32_t ul_max_bandwidth; /* Maximum supported uplink bandwidth (bps) */
@@ -426,11 +430,16 @@ struct if_cellular_status_v1 {
 	u_int32_t dl_max_bandwidth; /* Maximum supported downlink bandwidth (bps) */
 	u_int32_t config_inactivity_time; /* ms */
 	u_int32_t config_backoff_time; /* new connections backoff time in ms */
-	u_int64_t reserved_1;
-	u_int64_t reserved_2;
+#define	IF_CELL_UL_MSS_RECOMMENDED_NONE	0x0 /* Use default */
+#define	IF_CELL_UL_MSS_RECOMMENDED_MEDIUM 0x1 /* 1200 byte MSS */
+#define	IF_CELL_UL_MSS_RECOMMENDED_LOW	0x2 /* 512 byte MSS */
+	u_int16_t mss_recommended;
+	u_int16_t reserved_1;
+	u_int32_t reserved_2;
 	u_int64_t reserved_3;
 	u_int64_t reserved_4;
 	u_int64_t reserved_5;
+	u_int64_t reserved_6;
 } __attribute__((packed));
 
 struct if_cellular_status {
@@ -550,7 +559,7 @@ struct if_interface_state {
 
 	/*
 	 * Indicate if the underlying link is currently
-	 * available 
+	 * available
 	 */
 	u_int8_t interface_availability;
 #define	IF_INTERFACE_STATE_INTERFACE_AVAILABLE		0x0
@@ -703,7 +712,6 @@ struct pfi_kif;
 /* we use TAILQs so that the order of instantiation is preserved in the list */
 TAILQ_HEAD(ifnethead, ifnet);
 TAILQ_HEAD(ifaddrhead, ifaddr);
-TAILQ_HEAD(ifprefixhead, ifprefix);
 LIST_HEAD(ifmultihead, ifmultiaddr);
 TAILQ_HEAD(tailq_head, tqdummy);
 TAILQ_HEAD(ifnet_filter_head, ifnet_filter);
@@ -776,6 +784,7 @@ struct ifnet {
 	struct if_description if_desc;	/* extended description */
 	TAILQ_ENTRY(ifnet) if_link;	/* all struct ifnets are chained */
 	TAILQ_ENTRY(ifnet) if_detaching_link; /* list of detaching ifnets */
+	TAILQ_ENTRY(ifnet) if_ordered_link;	/* list of ordered ifnets */
 
 	decl_lck_mtx_data(, if_ref_lock)
 	u_int32_t	if_refflags;	/* see IFRF flags below */
@@ -786,6 +795,8 @@ struct ifnet {
 #define	if_addrlist	if_addrhead
 	struct ifaddr	*if_lladdr;	/* link address (first/permanent) */
 
+	u_int32_t	if_qosmarking_mode;	/* generation to use with NECP clients */
+
 	int		if_pcount;	/* number of promiscuous listeners */
 	struct bpf_if	*if_bpf;	/* packet filter structure */
 	u_short		if_index;	/* numeric abbreviation for this if  */
@@ -793,6 +804,7 @@ struct ifnet {
 	short		if_timer;	/* time 'til if_watchdog called */
 	short		if_flags;	/* up/down, broadcast, etc. */
 	u_int32_t	if_eflags;	/* see <net/if.h> */
+	u_int32_t	if_xflags;	/* see <net/if.h> */
 
 	int		if_capabilities;	/* interface features & capabilities */
 	int		if_capenable;		/* enabled features & capabilities */
@@ -805,10 +817,12 @@ struct ifnet {
 	ifnet_family_t		if_family;	/* value assigned by Apple */
 	ifnet_subfamily_t	if_subfamily;	/* value assigned by Apple */
 	uintptr_t		if_family_cookie;
+	ifnet_output_handler_func if_output_handler;
 	ifnet_output_func	if_output;
 	ifnet_pre_enqueue_func	if_pre_enqueue;
 	ifnet_start_func	if_start;
 	ifnet_ctl_func		if_output_ctl;
+	ifnet_input_handler_func if_input_handler;
 	ifnet_input_poll_func	if_input_poll;
 	ifnet_ctl_func		if_input_ctl;
 	ifnet_ioctl_func	if_ioctl;
@@ -868,7 +882,6 @@ struct ifnet {
 
 	struct dlil_threading_info *if_inp;
 
-	struct	ifprefixhead	if_prefixhead;	/* list of prefixes per if */
 	struct {
 		u_int32_t	length;
 		union {
@@ -880,7 +893,6 @@ struct ifnet {
 	struct label		*if_label;	/* interface MAC label */
 #endif
 
-	u_int32_t		if_wake_properties;
 #if PF
 	struct pfi_kif		*if_pf_kif;
 #endif /* PF */
@@ -901,6 +913,7 @@ struct ifnet {
 	u_int32_t		if_idle_new_flags; /* temporary idle flags */
 	u_int32_t		if_idle_new_flags_mask; /* temporary mask */
 	u_int32_t		if_route_refcnt; /* idle: route ref count */
+	u_int32_t		if_rt_sendts;	/* last of a real time packet */
 
 	struct if_traffic_class if_tc __attribute__((aligned(8)));
 #if INET
@@ -931,12 +944,20 @@ struct ifnet {
 		uint32_t	expensive:1;	/* delegated i/f expensive? */
 	} if_delegated;
 
-#define	IF_MAXAGENTS	8
-	uuid_t			if_agentids[IF_MAXAGENTS];
+	uuid_t			*if_agentids;	/* network agents attached to interface */
+	u_int32_t		if_agentcount;
+
+	u_int32_t		if_generation;	/* generation to use with NECP clients */
+	u_int32_t		if_fg_sendts;	/* last send on a fg socket in seconds */
 
 	u_int64_t		if_data_threshold;
-	u_int32_t		if_fg_sendts;	/* last send on a fg socket in seconds */
-	u_int32_t		if_rt_sendts;	/* last of a real time packet */
+
+	/* Total bytes in send socket buffer */
+	int64_t			if_sndbyte_total __attribute__ ((aligned(8)));
+	/* Total unsent bytes in send socket buffer */
+	int64_t			if_sndbyte_unsent __attribute__ ((aligned(8)));
+	/* count of times, when there was data to send when sleep is impending */
+	uint32_t		if_unsent_data_cnt;
 
 #if INET
 	decl_lck_rw_data(, if_inetdata_lock);
@@ -1145,20 +1166,6 @@ struct ifaddr {
 	ifa_remref(_ifa, 1)
 
 /*
- * The prefix structure contains information about one prefix
- * of an interface.  They are maintained by the different address families,
- * are allocated and attached when an prefix or an address is set,
- * and are linked together so all prefixes for an interface can be located.
- */
-struct ifprefix {
-	struct	sockaddr *ifpr_prefix;	/* prefix of interface */
-	struct	ifnet *ifpr_ifp;	/* back-pointer to interface */
-	TAILQ_ENTRY(ifprefix) ifpr_list; /* queue macro glue */
-	u_char	ifpr_plen;		/* prefix length in bits */
-	u_char	ifpr_type;		/* protocol dependent prefix type */
-};
-
-/*
  * Multicast address structure.  This is analogous to the ifaddr
  * structure except that it keeps track of multicast addresses.
  * Also, the request count here is a count of requests for this
@@ -1273,9 +1280,18 @@ struct ifmultiaddr {
 	(_ifp)->if_delegated.family == IFNET_FAMILY_FIREWIRE)
 
 /*
+ * Indicate whether or not the immediate WiFi interface is on an infrastructure
+ * network
+ */
+#define	IFNET_IS_WIFI_INFRA(_ifp)				\
+	((_ifp)->if_family == IFNET_FAMILY_ETHERNET &&		\
+	(_ifp)->if_subfamily == IFNET_SUBFAMILY_WIFI &&		\
+	!((_ifp)->if_eflags & IFEF_AWDL))
+
+/*
  * Indicate whether or not the immediate interface, or the interface delegated
- * by it, is marked as expensive.  The delegated interface is set/cleared 
- * along with the delegated ifp; we cache the flag for performance to avoid 
+ * by it, is marked as expensive.  The delegated interface is set/cleared
+ * along with the delegated ifp; we cache the flag for performance to avoid
  * dereferencing delegated ifp each time.
  *
  * Note that this is meant to be used only for policy purposes.
@@ -1291,8 +1307,12 @@ struct ifmultiaddr {
 	(((_ifp)->if_eflags & (IFEF_AWDL|IFEF_AWDL_RESTRICTED)) == 	\
 	    (IFEF_AWDL|IFEF_AWDL_RESTRICTED))
 
+#define	IFNET_IS_INTCOPROC(_ifp)					\
+	((_ifp)->if_family == IFNET_FAMILY_ETHERNET &&			\
+	 (_ifp)->if_subfamily == IFNET_SUBFAMILY_INTCOPROC)
 
 extern struct ifnethead ifnet_head;
+extern struct ifnethead ifnet_ordered_head;
 extern struct ifnet **ifindex2ifnet;
 extern u_int32_t if_sndq_maxlen;
 extern u_int32_t if_rcvq_maxlen;
@@ -1321,6 +1341,8 @@ __private_extern__ void if_updown(struct ifnet *ifp, int up);
 extern int ifioctl(struct socket *, u_long, caddr_t, struct proc *);
 extern int ifioctllocked(struct socket *, u_long, caddr_t, struct proc *);
 extern struct ifnet *ifunit(const char *);
+extern struct ifnet *ifunit_ref(const char *);
+extern int ifunit_extract(const char *src, char *dst, size_t dstlen, int *unit);
 extern struct ifnet *if_withname(struct sockaddr *);
 extern void if_qflush(struct ifnet *, int);
 extern void if_qflush_sc(struct ifnet *, mbuf_svc_class_t, u_int32_t,
@@ -1330,10 +1352,9 @@ extern struct if_clone *if_clone_lookup(const char *, u_int32_t *);
 extern int if_clone_attach(struct if_clone *);
 extern void if_clone_detach(struct if_clone *);
 
-extern u_int32_t if_functional_type(struct ifnet *);
+extern u_int32_t if_functional_type(struct ifnet *, bool);
 
 extern errno_t if_mcasts_update(struct ifnet *);
-extern int32_t total_snd_byte_count;
 
 typedef enum {
 	IFNET_LCK_ASSERT_EXCLUSIVE,	/* RW: held as writer */
@@ -1365,10 +1386,12 @@ __private_extern__ void if_inet6data_lock_done(struct ifnet *ifp);
 __private_extern__ void	ifnet_head_lock_shared(void);
 __private_extern__ void	ifnet_head_lock_exclusive(void);
 __private_extern__ void	ifnet_head_done(void);
+__private_extern__ void	ifnet_head_assert_exclusive(void);
 
 __private_extern__ errno_t ifnet_set_idle_flags_locked(ifnet_t, u_int32_t,
     u_int32_t);
 __private_extern__ int ifnet_is_attached(struct ifnet *, int refio);
+__private_extern__ void ifnet_incr_iorefcnt(struct ifnet *);
 __private_extern__ void ifnet_decr_iorefcnt(struct ifnet *);
 __private_extern__ void ifnet_set_start_cycle(struct ifnet *,
     struct timespec *);
@@ -1385,7 +1408,10 @@ __private_extern__ void dlil_if_unlock(void);
 __private_extern__ void dlil_if_lock_assert(void);
 
 extern struct ifaddr *ifa_ifwithaddr(const struct sockaddr *);
+extern struct ifaddr *ifa_ifwithaddr_locked(const struct sockaddr *);
 extern struct ifaddr *ifa_ifwithaddr_scoped(const struct sockaddr *,
+    unsigned int);
+extern struct ifaddr *ifa_ifwithaddr_scoped_locked(const struct sockaddr *,
     unsigned int);
 extern struct ifaddr *ifa_ifwithdstaddr(const struct sockaddr *);
 extern struct ifaddr *ifa_ifwithnet(const struct sockaddr *);
@@ -1481,6 +1507,14 @@ __private_extern__ int ifnet_set_netsignature(struct ifnet *, uint8_t,
     uint8_t, uint16_t, uint8_t *);
 __private_extern__ int ifnet_get_netsignature(struct ifnet *, uint8_t,
     uint8_t *, uint16_t *, uint8_t *);
+
+/* Required exclusive ifnet_head lock */
+__private_extern__ void ifnet_remove_from_ordered_list(struct ifnet *);
+
+__private_extern__ void ifnet_increment_generation(struct ifnet *);
+__private_extern__ u_int32_t ifnet_get_generation(struct ifnet *);
+
+extern int if_set_qosmarking_mode(struct ifnet *, u_int32_t);
 
 __private_extern__ errno_t ifnet_framer_stub(struct ifnet *, struct mbuf **,
     const struct sockaddr *, const char *, const char *, u_int32_t *,

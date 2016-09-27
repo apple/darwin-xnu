@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2010-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -101,21 +101,30 @@ enum
 
 #define QUERY_CONTINUATION_SRC_COUNT 100
 
+typedef struct nstat_provider_filter
+{
+	u_int64_t			npf_flags;
+	u_int64_t			npf_events;
+	pid_t				npf_pid;
+	uuid_t				npf_uuid;
+} nstat_provider_filter;
+
+
 typedef struct nstat_control_state
 {
 	struct nstat_control_state	*ncs_next;
-	u_int32_t			ncs_watching;
+	u_int32_t				ncs_watching;
 	decl_lck_mtx_data(, mtx);
 	kern_ctl_ref			ncs_kctl;
-	u_int32_t			ncs_unit;
+	u_int32_t				ncs_unit;
 	nstat_src_ref_t			ncs_next_srcref;
 	struct nstat_src		*ncs_srcs;
-	mbuf_t				ncs_accumulated;
-	u_int32_t			ncs_flags;
-	u_int64_t			ncs_provider_filters[NSTAT_PROVIDER_COUNT];
+	mbuf_t					ncs_accumulated;
+	u_int32_t				ncs_flags;
+	nstat_provider_filter	ncs_provider_filters[NSTAT_PROVIDER_COUNT];
 	/* state maintained for partial query requests */
-	u_int64_t			ncs_context;
-	u_int64_t			ncs_seq;
+	u_int64_t				ncs_context;
+	u_int64_t				ncs_seq;
 } nstat_control_state;
 
 typedef struct nstat_provider
@@ -130,9 +139,14 @@ typedef struct nstat_provider
 	void					(*nstat_watcher_remove)(nstat_control_state *state);
 	errno_t					(*nstat_copy_descriptor)(nstat_provider_cookie_t cookie, void *data, u_int32_t len);
 	void					(*nstat_release)(nstat_provider_cookie_t cookie, boolean_t locked);
-	bool    				(*nstat_reporting_allowed)(nstat_provider_cookie_t cookie, uint64_t filter);
+	bool    				(*nstat_reporting_allowed)(nstat_provider_cookie_t cookie, nstat_provider_filter *filter);
 } nstat_provider;
 
+typedef STAILQ_HEAD(, nstat_src)		stailq_head_nstat_src;
+typedef STAILQ_ENTRY(nstat_src)			stailq_entry_nstat_src;
+
+typedef TAILQ_HEAD(, nstat_tu_shadow)	tailq_head_tu_shadow;
+typedef TAILQ_ENTRY(nstat_tu_shadow)	tailq_entry_tu_shadow;
 
 typedef struct nstat_src
 {
@@ -157,7 +171,9 @@ static u_int16_t	nstat_control_end_query(nstat_control_state *state, nstat_src *
 static void		nstat_ifnet_report_ecn_stats(void);
 
 static u_int32_t	nstat_udp_watchers = 0;
+static u_int32_t	nstat_userland_udp_watchers = 0;
 static u_int32_t	nstat_tcp_watchers = 0;
+static u_int32_t	nstat_userland_tcp_watchers = 0;
 
 static void nstat_control_register(void);
 
@@ -184,7 +200,7 @@ nstat_copy_sa_out(
 	int						maxlen)
 {
 	if (src->sa_len > maxlen) return;
-	
+
 	bcopy(src, dst, src->sa_len);
 	if (src->sa_family == AF_INET6 &&
 		src->sa_len >= sizeof(struct sockaddr_in6))
@@ -208,7 +224,7 @@ nstat_ip_to_sockaddr(
 {
 	if (maxlen < sizeof(struct sockaddr_in))
 		return;
-	
+
 	sin->sin_family = AF_INET;
 	sin->sin_len = sizeof(*sin);
 	sin->sin_port = port;
@@ -224,7 +240,7 @@ nstat_ip6_to_sockaddr(
 {
 	if (maxlen < sizeof(struct sockaddr_in6))
 		return;
-	
+
 	sin6->sin6_family = AF_INET6;
 	sin6->sin6_len = sizeof(*sin6);
 	sin6->sin6_port = port;
@@ -237,6 +253,47 @@ nstat_ip6_to_sockaddr(
 }
 
 static u_int16_t
+nstat_ifnet_to_flags(
+	struct ifnet *ifp)
+{
+	u_int16_t flags = 0;
+	u_int32_t functional_type = if_functional_type(ifp, FALSE);
+
+	/* Panic if someone adds a functional type without updating ntstat. */
+	VERIFY(0 <= functional_type && functional_type <= IFRTYPE_FUNCTIONAL_LAST);
+
+	switch (functional_type)
+	{
+	case IFRTYPE_FUNCTIONAL_UNKNOWN:
+		flags |= NSTAT_IFNET_IS_UNKNOWN_TYPE;
+		break;
+	case IFRTYPE_FUNCTIONAL_LOOPBACK:
+		flags |= NSTAT_IFNET_IS_LOOPBACK;
+		break;
+	case IFRTYPE_FUNCTIONAL_WIRED:
+		flags |= NSTAT_IFNET_IS_WIRED;
+		break;
+	case IFRTYPE_FUNCTIONAL_WIFI_INFRA:
+		flags |= NSTAT_IFNET_IS_WIFI;
+		break;
+	case IFRTYPE_FUNCTIONAL_WIFI_AWDL:
+		flags |= NSTAT_IFNET_IS_WIFI;
+		flags |= NSTAT_IFNET_IS_AWDL;
+		break;
+	case IFRTYPE_FUNCTIONAL_CELLULAR:
+		flags |= NSTAT_IFNET_IS_CELLULAR;
+		break;
+	}
+
+	if (IFNET_IS_EXPENSIVE(ifp))
+	{
+		flags |= NSTAT_IFNET_IS_EXPENSIVE;
+	}
+
+	return flags;
+}
+
+static u_int16_t
 nstat_inpcb_to_flags(
 	const struct inpcb *inp)
 {
@@ -245,41 +302,13 @@ nstat_inpcb_to_flags(
 	if ((inp != NULL ) && (inp->inp_last_outifp != NULL))
 	{
 		struct ifnet *ifp = inp->inp_last_outifp;
+		flags = nstat_ifnet_to_flags(ifp);
 
-		u_int32_t functional_type = if_functional_type(ifp);
-
-		/* Panic if someone adds a functional type without updating ntstat. */
-		VERIFY(0 <= functional_type && functional_type <= IFRTYPE_FUNCTIONAL_LAST);
-
-		switch (functional_type)
+		if (flags & NSTAT_IFNET_IS_CELLULAR)
 		{
-		case IFRTYPE_FUNCTIONAL_UNKNOWN:
-			flags |= NSTAT_IFNET_IS_UNKNOWN_TYPE;
-			break;
-		case IFRTYPE_FUNCTIONAL_LOOPBACK:
-			flags |= NSTAT_IFNET_IS_LOOPBACK;
-			break;
-		case IFRTYPE_FUNCTIONAL_WIRED:
-			flags |= NSTAT_IFNET_IS_WIRED;
-			break;
-		case IFRTYPE_FUNCTIONAL_WIFI_INFRA:
-			flags |= NSTAT_IFNET_IS_WIFI;
-			break;
-		case IFRTYPE_FUNCTIONAL_WIFI_AWDL:
-			flags |= NSTAT_IFNET_IS_WIFI;
-			flags |= NSTAT_IFNET_IS_AWDL;
-			break;
-		case IFRTYPE_FUNCTIONAL_CELLULAR:
-			flags |= NSTAT_IFNET_IS_CELLULAR;
 			if (inp->inp_socket != NULL &&
 			    (inp->inp_socket->so_flags1 & SOF1_CELLFALLBACK))
 				flags |= NSTAT_IFNET_VIA_CELLFALLBACK;
-			break;
-		}
-
-		if (IFNET_IS_EXPENSIVE(ifp))
-		{
-			flags |= NSTAT_IFNET_IS_EXPENSIVE;
 		}
 	}
 	else
@@ -300,13 +329,13 @@ nstat_find_provider_by_id(
 	nstat_provider_id_t	id)
 {
 	struct nstat_provider	*provider;
-	
+
 	for (provider = nstat_providers; provider != NULL; provider = provider->next)
 	{
 		if (provider->nstat_provider_id == id)
 			break;
 	}
-	
+
 	return provider;
 }
 
@@ -323,20 +352,22 @@ nstat_lookup_entry(
 	{
 		return ENOENT;
 	}
-	
+
 	return (*out_provider)->nstat_lookup(data, length, out_cookie);
 }
 
 static void nstat_init_route_provider(void);
 static void nstat_init_tcp_provider(void);
+static void nstat_init_userland_tcp_provider(void);
 static void nstat_init_udp_provider(void);
+static void nstat_init_userland_udp_provider(void);
 static void nstat_init_ifnet_provider(void);
 
 __private_extern__ void
 nstat_init(void)
 {
 	if (nstat_malloc_tag != NULL) return;
-	
+
 	OSMallocTag tag = OSMalloc_Tagalloc(NET_STAT_CONTROL_NAME, OSMT_DEFAULT);
 	if (!OSCompareAndSwapPtr(NULL, tag, &nstat_malloc_tag))
 	{
@@ -348,7 +379,9 @@ nstat_init(void)
 		// we need to initialize other things, we do it here as this code path will only be hit once;
 		nstat_init_route_provider();
 		nstat_init_tcp_provider();
+		nstat_init_userland_tcp_provider();
 		nstat_init_udp_provider();
+		nstat_init_userland_udp_provider();
 		nstat_init_ifnet_provider();
 		nstat_control_register();
 	}
@@ -370,17 +403,17 @@ nstat_malloc_aligned(
 {
 	struct align_header	*hdr = NULL;
 	u_int32_t	size = length + sizeof(*hdr) + alignment - 1;
-	
+
 	u_int8_t	*buffer = OSMalloc(size, tag);
 	if (buffer == NULL) return NULL;
-	
+
 	u_int8_t	*aligned = buffer + sizeof(*hdr);
 	aligned = (u_int8_t*)P2ROUNDUP(aligned, alignment);
-	
+
 	hdr = (struct align_header*)(void *)(aligned - sizeof(*hdr));
 	hdr->offset = aligned - buffer;
 	hdr->length = size;
-	
+
 	return aligned;
 }
 
@@ -410,22 +443,22 @@ nstat_route_lookup(
 		struct sockaddr *sa;
 		const struct sockaddr *const_sa;
 	} dst, mask;
-	
+
 	const nstat_route_add_param	*param = (const nstat_route_add_param*)data;
 	*out_cookie = NULL;
-	
+
 	if (length < sizeof(*param))
 	{
 		return EINVAL;
 	}
-	
+
 	if (param->dst.v4.sin_family == 0 ||
 		param->dst.v4.sin_family > AF_MAX ||
 		(param->mask.v4.sin_family != 0 && param->mask.v4.sin_family != param->dst.v4.sin_family))
 	{
 		return EINVAL;
 	}
-	
+
 	if (param->dst.v4.sin_len > sizeof(param->dst) ||
 		(param->mask.v4.sin_family && param->mask.v4.sin_len > sizeof(param->mask.v4.sin_len)))
 	{
@@ -438,19 +471,19 @@ nstat_route_lookup(
 	{
 		return EINVAL;
 	}
-	
+
 	dst.const_sa = (const struct sockaddr*)&param->dst;
 	mask.const_sa = param->mask.v4.sin_family ? (const struct sockaddr*)&param->mask : NULL;
-	
+
 	struct radix_node_head	*rnh = rt_tables[dst.sa->sa_family];
 	if (rnh == NULL) return EAFNOSUPPORT;
-	
+
 	lck_mtx_lock(rnh_lock);
 	struct rtentry *rt = rt_lookup(TRUE, dst.sa, mask.sa, rnh, param->ifindex);
 	lck_mtx_unlock(rnh_lock);
-	
+
 	if (rt) *out_cookie = (nstat_provider_cookie_t)rt;
-	
+
 	return rt ? 0 : ENOENT;
 }
 
@@ -470,11 +503,11 @@ nstat_route_counts(
 {
 	struct rtentry		*rt = (struct rtentry*)cookie;
 	struct nstat_counts	*rt_stats = rt->rt_stats;
-	
+
 	if (out_gone) *out_gone = 0;
-	
+
 	if (out_gone && (rt->rt_flags & RTF_UP) == 0) *out_gone = 1;
-	
+
 	if (rt_stats)
 	{
 		atomic_get_64(out_counts->nstat_rxpackets, &rt_stats->nstat_rxpackets);
@@ -495,7 +528,7 @@ nstat_route_counts(
 	{
 		bzero(out_counts, sizeof(*out_counts));
 	}
-	
+
 	return 0;
 }
 
@@ -541,7 +574,7 @@ nstat_route_walktree_add(
 		if (result != 0)
 			rtfree_locked(rt);
 	}
-	
+
 	return result;
 }
 
@@ -552,14 +585,14 @@ nstat_route_add_watcher(
 	int i;
 	errno_t result = 0;
 	OSIncrementAtomic(&nstat_route_watchers);
-	
+
 	lck_mtx_lock(rnh_lock);
 	for (i = 1; i < AF_MAX; i++)
 	{
 		struct radix_node_head *rnh;
 		rnh = rt_tables[i];
 		if (!rnh) continue;
-		
+
 		result = rnh->rnh_walktree(rnh, nstat_route_walktree_add, state);
 		if (result != 0)
 		{
@@ -567,7 +600,7 @@ nstat_route_add_watcher(
 		}
 	}
 	lck_mtx_unlock(rnh_lock);
-	
+
 	return result;
 }
 
@@ -577,7 +610,7 @@ nstat_route_new_entry(
 {
 	if (nstat_route_watchers == 0)
 		return;
-	
+
 	lck_mtx_lock(&nstat_mtx);
 	if ((rt->rt_flags & RTF_UP) != 0)
 	{
@@ -589,7 +622,7 @@ nstat_route_new_entry(
 				// this client is watching routes
 				// acquire a reference for the route
 				RT_ADDREF(rt);
-				
+
 				// add the source, if that fails, release the reference
 				if (nstat_control_source_add(0, state, &nstat_route_provider, rt) != 0)
 					RT_REMREF(rt);
@@ -618,32 +651,55 @@ nstat_route_copy_descriptor(
 		return EINVAL;
 	}
 	bzero(desc, sizeof(*desc));
-	
+
 	struct rtentry	*rt = (struct rtentry*)cookie;
 	desc->id = (uint64_t)VM_KERNEL_ADDRPERM(rt);
 	desc->parent_id = (uint64_t)VM_KERNEL_ADDRPERM(rt->rt_parent);
 	desc->gateway_id = (uint64_t)VM_KERNEL_ADDRPERM(rt->rt_gwroute);
 
-	
+
 	// key/dest
 	struct sockaddr	*sa;
 	if ((sa = rt_key(rt)))
 		nstat_copy_sa_out(sa, &desc->dst.sa, sizeof(desc->dst));
-	
+
 	// mask
 	if ((sa = rt_mask(rt)) && sa->sa_len <= sizeof(desc->mask))
 		memcpy(&desc->mask, sa, sa->sa_len);
-	
+
 	// gateway
 	if ((sa = rt->rt_gateway))
 		nstat_copy_sa_out(sa, &desc->gateway.sa, sizeof(desc->gateway));
-	
+
 	if (rt->rt_ifp)
 		desc->ifindex = rt->rt_ifp->if_index;
-	
+
 	desc->flags = rt->rt_flags;
-	
+
 	return 0;
+}
+
+static bool
+nstat_route_reporting_allowed(nstat_provider_cookie_t cookie, nstat_provider_filter *filter)
+{
+	bool retval = true;
+
+	if ((filter->npf_flags & NSTAT_FILTER_IFNET_FLAGS) != 0)
+	{
+		struct rtentry	*rt = (struct rtentry*)cookie;
+		struct ifnet *ifp = rt->rt_ifp;
+
+		if (ifp)
+		{
+			uint16_t interface_properties = nstat_ifnet_to_flags(ifp);
+
+			if ((filter->npf_flags & interface_properties) == 0)
+			{
+				retval = false;
+			}
+		}
+	}
+	return retval;
 }
 
 static void
@@ -659,6 +715,7 @@ nstat_init_route_provider(void)
 	nstat_route_provider.nstat_watcher_add = nstat_route_add_watcher;
 	nstat_route_provider.nstat_watcher_remove = nstat_route_remove_watcher;
 	nstat_route_provider.nstat_copy_descriptor = nstat_route_copy_descriptor;
+	nstat_route_provider.nstat_reporting_allowed = nstat_route_reporting_allowed;
 	nstat_route_provider.next = nstat_providers;
 	nstat_providers = &nstat_route_provider;
 }
@@ -671,20 +728,20 @@ nstat_route_attach(
 {
 	struct nstat_counts *result = rte->rt_stats;
 	if (result) return result;
-	
+
 	if (nstat_malloc_tag == NULL) nstat_init();
-	
+
 	result = nstat_malloc_aligned(sizeof(*result), sizeof(u_int64_t), nstat_malloc_tag);
 	if (!result) return result;
-	
+
 	bzero(result, sizeof(*result));
-	
+
 	if (!OSCompareAndSwapPtr(NULL, result, &rte->rt_stats))
 	{
 		nstat_free_aligned(result, nstat_malloc_tag);
 		result = rte->rt_stats;
 	}
-	
+
 	return result;
 }
 
@@ -710,7 +767,7 @@ nstat_route_connect_attempt(
 		{
 			OSIncrementAtomic(&stats->nstat_connectattempts);
 		}
-		
+
 		rte = rte->rt_parent;
 	}
 }
@@ -727,7 +784,7 @@ nstat_route_connect_success(
 		{
 			OSIncrementAtomic(&stats->nstat_connectsuccesses);
 		}
-		
+
 		rte = rte->rt_parent;
 	}
 }
@@ -754,7 +811,7 @@ nstat_route_tx(
 				OSAddAtomic64((SInt64)bytes, (SInt64*)&stats->nstat_txbytes);
 			}
 		}
-		
+
 		rte = rte->rt_parent;
 	}
 }
@@ -784,7 +841,7 @@ nstat_route_rx(
 					OSAddAtomic(bytes, &stats->nstat_rxduplicatebytes);
 			}
 		}
-		
+
 		rte = rte->rt_parent;
 	}
 }
@@ -796,7 +853,7 @@ nstat_route_rtt(
 	u_int32_t		rtt_var)
 {
 	const int32_t	factor = 8;
-	
+
 	while (rte)
 	{
 		struct nstat_counts*	stats = nstat_route_attach(rte);
@@ -804,7 +861,7 @@ nstat_route_rtt(
 		{
 			int32_t	oldrtt;
 			int32_t	newrtt;
-			
+
 			// average
 			do
 			{
@@ -819,7 +876,7 @@ nstat_route_rtt(
 				}
 				if (oldrtt == newrtt) break;
 			} while (!OSCompareAndSwap(oldrtt, newrtt, &stats->nstat_avg_rtt));
-			
+
 			// minimum
 			do
 			{
@@ -829,7 +886,7 @@ nstat_route_rtt(
 					break;
 				}
 			} while (!OSCompareAndSwap(oldrtt, rtt, &stats->nstat_min_rtt));
-			
+
 			// variance
 			do
 			{
@@ -845,13 +902,13 @@ nstat_route_rtt(
 				if (oldrtt == newrtt) break;
 			} while (!OSCompareAndSwap(oldrtt, newrtt, &stats->nstat_var_rtt));
 		}
-		
+
 		rte = rte->rt_parent;
 	}
 }
 
 
-#pragma mark -- TCP Provider --
+#pragma mark -- TCP Kernel Provider --
 
 /*
  * Due to the way the kernel deallocates a process (the process structure
@@ -978,15 +1035,15 @@ nstat_tcpudp_lookup(
 	{
 		return EINVAL;
 	}
-	
+
 	// src and dst must match
 	if (param->remote.v4.sin_family != 0 &&
 		param->remote.v4.sin_family != param->local.v4.sin_family)
 	{
 		return EINVAL;
 	}
-	
-	
+
+
 	switch (param->local.v4.sin_family)
 	{
 		case AF_INET:
@@ -997,12 +1054,12 @@ nstat_tcpudp_lookup(
 		  	{
 				return EINVAL;
 		  	}
-		  	
+
 			inp = in_pcblookup_hash(inpinfo, param->remote.v4.sin_addr, param->remote.v4.sin_port,
 						param->local.v4.sin_addr, param->local.v4.sin_port, 1, NULL);
 		}
 		break;
-		
+
 #if INET6
 		case AF_INET6:
 		{
@@ -1011,30 +1068,30 @@ nstat_tcpudp_lookup(
 				const struct in6_addr 	*in6c;
 				struct in6_addr			*in6;
 			} local, remote;
-			
+
 			if (param->local.v6.sin6_len != sizeof(param->local.v6) ||
 		  		(param->remote.v6.sin6_family != 0 &&
 				 param->remote.v6.sin6_len != sizeof(param->remote.v6)))
 			{
 				return EINVAL;
 			}
-			
+
 			local.in6c = &param->local.v6.sin6_addr;
 			remote.in6c = &param->remote.v6.sin6_addr;
-			
+
 			inp = in6_pcblookup_hash(inpinfo, remote.in6, param->remote.v6.sin6_port,
 						local.in6, param->local.v6.sin6_port, 1, NULL);
 		}
 		break;
 #endif
-		
+
 		default:
 			return EINVAL;
 	}
-	
+
 	if (inp == NULL)
 		return ENOENT;
-	
+
 	// At this point we have a ref to the inpcb
 	*out_cookie = nstat_tucookie_alloc(inp);
 	if (*out_cookie == NULL)
@@ -1060,7 +1117,7 @@ nstat_tcp_gone(
 	    (struct nstat_tucookie *)cookie;
 	struct inpcb *inp;
 	struct tcpcb *tp;
-	
+
 	return (!(inp = tucookie->inp) ||
 	    !(tp = intotcpcb(inp)) ||
 	    inp->inp_state == INPCB_STATE_DEAD) ? 1 : 0;
@@ -1077,19 +1134,19 @@ nstat_tcp_counts(
 	struct inpcb *inp;
 
 	bzero(out_counts, sizeof(*out_counts));
-	
+
 	if (out_gone) *out_gone = 0;
-	
+
 	// if the pcb is in the dead state, we should stop using it
 	if (nstat_tcp_gone(cookie))
 	{
 		if (out_gone) *out_gone = 1;
 		if (!(inp = tucookie->inp) || !intotcpcb(inp))
 			return EINVAL;
-	} 
+	}
 	inp = tucookie->inp;
 	struct tcpcb *tp = intotcpcb(inp);
-	
+
 	atomic_get_64(out_counts->nstat_rxpackets, &inp->inp_stat->rxpackets);
 	atomic_get_64(out_counts->nstat_rxbytes, &inp->inp_stat->rxbytes);
 	atomic_get_64(out_counts->nstat_txpackets, &inp->inp_stat->txpackets);
@@ -1110,7 +1167,7 @@ nstat_tcp_counts(
 	atomic_get_64(out_counts->nstat_wifi_txbytes, &inp->inp_wstat->txbytes);
 	atomic_get_64(out_counts->nstat_wired_rxbytes, &inp->inp_Wstat->rxbytes);
 	atomic_get_64(out_counts->nstat_wired_txbytes, &inp->inp_Wstat->txbytes);
-	
+
 	return 0;
 }
 
@@ -1130,9 +1187,9 @@ nstat_tcp_add_watcher(
 	nstat_control_state	*state)
 {
 	OSIncrementAtomic(&nstat_tcp_watchers);
-	
+
 	lck_rw_lock_shared(tcbinfo.ipi_lock);
-	
+
 	// Add all current tcp inpcbs. Ignore those in timewait
 	struct inpcb *inp;
 	struct nstat_tucookie *cookie;
@@ -1148,9 +1205,9 @@ nstat_tcp_add_watcher(
 			break;
 		}
 	}
-	
+
 	lck_rw_done(tcbinfo.ipi_lock);
-	
+
 	return 0;
 }
 
@@ -1175,7 +1232,7 @@ nstat_tcp_new_pcb(
 	nstat_control_state	*state;
 	for (state = nstat_controls; state; state = state->ncs_next)
 	{
-		if ((state->ncs_watching & (1 << NSTAT_PROVIDER_TCP)) != 0)
+		if ((state->ncs_watching & (1 << NSTAT_PROVIDER_TCP_KERNEL)) != 0)
 		{
 			// this client is watching tcp
 			// acquire a reference for it
@@ -1212,7 +1269,7 @@ nstat_pcb_detach(struct inpcb *inp)
 	{
 		lck_mtx_lock(&state->mtx);
 		for (prevsrc = NULL, src = state->ncs_srcs; src;
-		    prevsrc = src, src = src->next) 
+		    prevsrc = src, src = src->next)
 		{
 			tucookie = (struct nstat_tucookie *)src->cookie;
 			if (tucookie->inp == inp)
@@ -1222,12 +1279,12 @@ nstat_pcb_detach(struct inpcb *inp)
 		if (src)
 		{
 			result = nstat_control_send_goodbye(state, src);
-			
+
 			if (prevsrc)
 				prevsrc->next = src->next;
 			else
 				state->ncs_srcs = src->next;
-			
+
 			src->next = dead_list;
 			dead_list = src;
 		}
@@ -1250,14 +1307,14 @@ nstat_pcb_cache(struct inpcb *inp)
 	nstat_src *src;
 	struct nstat_tucookie *tucookie;
 
-	if (inp == NULL || nstat_udp_watchers == 0 || 
+	if (inp == NULL || nstat_udp_watchers == 0 ||
 	    inp->inp_nstat_refcnt == 0)
 		return;
 	VERIFY(SOCK_PROTO(inp->inp_socket) == IPPROTO_UDP);
 	lck_mtx_lock(&nstat_mtx);
 	for (state = nstat_controls; state; state = state->ncs_next) {
 		lck_mtx_lock(&state->mtx);
-		for (src = state->ncs_srcs; src; src = src->next) 
+		for (src = state->ncs_srcs; src; src = src->next)
 		{
 			tucookie = (struct nstat_tucookie *)src->cookie;
 			if (tucookie->inp == inp)
@@ -1265,7 +1322,7 @@ nstat_pcb_cache(struct inpcb *inp)
 				if (inp->inp_vflag & INP_IPV6)
 				{
 					nstat_ip6_to_sockaddr(&inp->in6p_laddr,
-					    inp->inp_lport, 
+					    inp->inp_lport,
 					    &tucookie->local.v6,
 					    sizeof(tucookie->local));
 					nstat_ip6_to_sockaddr(&inp->in6p_faddr,
@@ -1276,16 +1333,16 @@ nstat_pcb_cache(struct inpcb *inp)
 				else if (inp->inp_vflag & INP_IPV4)
 				{
 					nstat_ip_to_sockaddr(&inp->inp_laddr,
-					    inp->inp_lport, 
+					    inp->inp_lport,
 					    &tucookie->local.v4,
 					    sizeof(tucookie->local));
 					nstat_ip_to_sockaddr(&inp->inp_faddr,
-					    inp->inp_fport, 
+					    inp->inp_fport,
 					    &tucookie->remote.v4,
 					    sizeof(tucookie->remote));
 				}
 				if (inp->inp_last_outifp)
-					tucookie->if_index = 
+					tucookie->if_index =
 					    inp->inp_last_outifp->if_index;
 
 				tucookie->ifnet_properties = nstat_inpcb_to_flags(inp);
@@ -1312,7 +1369,7 @@ nstat_pcb_invalidate_cache(struct inpcb *inp)
 	lck_mtx_lock(&nstat_mtx);
 	for (state = nstat_controls; state; state = state->ncs_next) {
 		lck_mtx_lock(&state->mtx);
-		for (src = state->ncs_srcs; src; src = src->next) 
+		for (src = state->ncs_srcs; src; src = src->next)
 		{
 			tucookie = (struct nstat_tucookie *)src->cookie;
 			if (tucookie->inp == inp)
@@ -1339,14 +1396,14 @@ nstat_tcp_copy_descriptor(
 
 	if (nstat_tcp_gone(cookie))
 		return EINVAL;
-	
+
 	nstat_tcp_descriptor	*desc = (nstat_tcp_descriptor*)data;
 	struct nstat_tucookie *tucookie =
 	    (struct nstat_tucookie *)cookie;
 	struct inpcb		*inp = tucookie->inp;
 	struct tcpcb		*tp = intotcpcb(inp);
 	bzero(desc, sizeof(*desc));
-	
+
 	if (inp->inp_vflag & INP_IPV6)
 	{
 		nstat_ip6_to_sockaddr(&inp->in6p_laddr, inp->inp_lport,
@@ -1361,11 +1418,11 @@ nstat_tcp_copy_descriptor(
 		nstat_ip_to_sockaddr(&inp->inp_faddr, inp->inp_fport,
 			&desc->remote.v4, sizeof(desc->remote));
 	}
-	
+
 	desc->state = intotcpcb(inp)->t_state;
 	desc->ifindex = (inp->inp_last_outifp == NULL) ? 0 :
 	    inp->inp_last_outifp->if_index;
-	
+
 	// danger - not locked, values could be bogus
 	desc->txunacked = tp->snd_max - tp->snd_una;
 	desc->txwindow = tp->snd_wnd;
@@ -1375,7 +1432,7 @@ nstat_tcp_copy_descriptor(
 		strlcpy(desc->cc_algo, CC_ALGO(tp)->name,
 		    sizeof(desc->cc_algo));
 	}
-	
+
 	struct socket *so = inp->inp_socket;
 	if (so)
 	{
@@ -1384,7 +1441,10 @@ nstat_tcp_copy_descriptor(
 		desc->upid = so->last_upid;
 		desc->pid = so->last_pid;
 		desc->traffic_class = so->so_traffic_class;
-		desc->traffic_mgt_flags = so->so_traffic_mgt_flags;
+		if ((so->so_flags1 & SOF1_TRAFFIC_MGT_SO_BACKGROUND))
+			desc->traffic_mgt_flags |= TRAFFIC_MGT_SO_BACKGROUND;
+		if ((so->so_flags1 & SOF1_TRAFFIC_MGT_TCP_RECVBG))
+			desc->traffic_mgt_flags |= TRAFFIC_MGT_TCP_RECVBG;
 		proc_name(desc->pid, desc->pname, sizeof(desc->pname));
 		if (desc->pname[0] == 0)
 		{
@@ -1420,22 +1480,93 @@ nstat_tcp_copy_descriptor(
 }
 
 static bool
-nstat_tcpudp_reporting_allowed(nstat_provider_cookie_t cookie, uint64_t filter)
+nstat_tcpudp_reporting_allowed(nstat_provider_cookie_t cookie, nstat_provider_filter *filter, bool is_UDP)
 {
 	bool retval = true;
 
-	/* Only apply interface filter if at least one is allowed. */
-	if ((filter & NSTAT_FILTER_ACCEPT_ALL) != 0)
+	if ((filter->npf_flags & (NSTAT_FILTER_IFNET_FLAGS|NSTAT_FILTER_SPECIFIC_USER)) != 0)
 	{
 		struct nstat_tucookie *tucookie = (struct nstat_tucookie *)cookie;
-		struct inpcb	*inp = tucookie->inp;
+		struct inpcb *inp = tucookie->inp;
 
-		uint16_t interface_properties = nstat_inpcb_to_flags(inp);
+		/* Only apply interface filter if at least one is allowed. */
+		if ((filter->npf_flags & NSTAT_FILTER_IFNET_FLAGS) != 0)
+		{
+			uint16_t interface_properties = nstat_inpcb_to_flags(inp);
 
-		/* For now, just check on interface type. */
-		retval = ((filter & interface_properties) != 0);
+			if ((filter->npf_flags & interface_properties) == 0)
+			{
+				// For UDP, we could have an undefined interface and yet transfers may have occurred.
+				// We allow reporting if there have been transfers of the requested kind.
+				// This is imperfect as we cannot account for the expensive attribute over wifi.
+				// We also assume that cellular is expensive and we have no way to select for AWDL
+				if (is_UDP)
+				{
+					do
+					{
+						if ((filter->npf_flags & (NSTAT_FILTER_ACCEPT_CELLULAR|NSTAT_FILTER_ACCEPT_EXPENSIVE)) &&
+							(inp->inp_cstat->rxbytes || inp->inp_cstat->txbytes))
+						{
+							break;
+						}
+						if ((filter->npf_flags & NSTAT_FILTER_ACCEPT_WIFI) &&
+							(inp->inp_wstat->rxbytes || inp->inp_wstat->txbytes))
+						{
+							break;
+						}
+						if ((filter->npf_flags & NSTAT_FILTER_ACCEPT_WIRED) &&
+							(inp->inp_Wstat->rxbytes || inp->inp_Wstat->txbytes))
+						{
+							break;
+						}
+						return false;
+					} while (0);
+				}
+				else
+				{
+					return false;
+				}
+			}
+		}
+
+		if (((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER) != 0) && (retval))
+		{
+			struct socket *so = inp->inp_socket;
+			retval = false;
+
+			if (so)
+			{
+				if (((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER_BY_PID) != 0) &&
+					(filter->npf_pid == so->last_pid))
+				{
+					retval = true;
+				}
+				else if (((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER_BY_EPID) != 0) &&
+					(filter->npf_pid == (so->so_flags & SOF_DELEGATED)? so->e_upid : so->last_pid))
+				{
+					retval = true;
+				}
+				else if (((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER_BY_UUID) != 0) &&
+					(memcmp(filter->npf_uuid, so->last_uuid, sizeof(so->last_uuid)) == 0))
+				{
+					retval = true;
+				}
+				else if (((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER_BY_EUUID) != 0) &&
+					(memcmp(filter->npf_uuid, (so->so_flags & SOF_DELEGATED)? so->e_uuid : so->last_uuid,
+						sizeof(so->last_uuid)) == 0))
+				{
+					retval = true;
+				}
+			}
+		}
 	}
 	return retval;
+}
+
+static bool
+nstat_tcp_reporting_allowed(nstat_provider_cookie_t cookie, nstat_provider_filter *filter)
+{
+	return nstat_tcpudp_reporting_allowed(cookie, filter, FALSE);
 }
 
 static void
@@ -1443,7 +1574,7 @@ nstat_init_tcp_provider(void)
 {
 	bzero(&nstat_tcp_provider, sizeof(nstat_tcp_provider));
 	nstat_tcp_provider.nstat_descriptor_length = sizeof(nstat_tcp_descriptor);
-	nstat_tcp_provider.nstat_provider_id = NSTAT_PROVIDER_TCP;
+	nstat_tcp_provider.nstat_provider_id = NSTAT_PROVIDER_TCP_KERNEL;
 	nstat_tcp_provider.nstat_lookup = nstat_tcp_lookup;
 	nstat_tcp_provider.nstat_gone = nstat_tcp_gone;
 	nstat_tcp_provider.nstat_counts = nstat_tcp_counts;
@@ -1451,7 +1582,7 @@ nstat_init_tcp_provider(void)
 	nstat_tcp_provider.nstat_watcher_add = nstat_tcp_add_watcher;
 	nstat_tcp_provider.nstat_watcher_remove = nstat_tcp_remove_watcher;
 	nstat_tcp_provider.nstat_copy_descriptor = nstat_tcp_copy_descriptor;
-	nstat_tcp_provider.nstat_reporting_allowed = nstat_tcpudp_reporting_allowed;
+	nstat_tcp_provider.nstat_reporting_allowed = nstat_tcp_reporting_allowed;
 	nstat_tcp_provider.next = nstat_providers;
 	nstat_providers = &nstat_tcp_provider;
 }
@@ -1489,9 +1620,9 @@ nstat_udp_counts(
 {
 	struct nstat_tucookie *tucookie =
 	    (struct nstat_tucookie *)cookie;
-	
+
 	if (out_gone) *out_gone = 0;
-	
+
 	// if the pcb is in the dead state, we should stop using it
 	if (nstat_udp_gone(cookie))
 	{
@@ -1500,7 +1631,7 @@ nstat_udp_counts(
 			return EINVAL;
 	}
 	struct inpcb *inp = tucookie->inp;
-	
+
 	atomic_get_64(out_counts->nstat_rxpackets, &inp->inp_stat->rxpackets);
 	atomic_get_64(out_counts->nstat_rxbytes, &inp->inp_stat->rxbytes);
 	atomic_get_64(out_counts->nstat_txpackets, &inp->inp_stat->txpackets);
@@ -1511,7 +1642,7 @@ nstat_udp_counts(
 	atomic_get_64(out_counts->nstat_wifi_txbytes, &inp->inp_wstat->txbytes);
 	atomic_get_64(out_counts->nstat_wired_rxbytes, &inp->inp_Wstat->rxbytes);
 	atomic_get_64(out_counts->nstat_wired_txbytes, &inp->inp_Wstat->txbytes);
-	
+
 	return 0;
 }
 
@@ -1534,7 +1665,7 @@ nstat_udp_add_watcher(
 	struct nstat_tucookie *cookie;
 
 	OSIncrementAtomic(&nstat_udp_watchers);
-	
+
 	lck_rw_lock_shared(udbinfo.ipi_lock);
 	// Add all current UDP inpcbs.
 	LIST_FOREACH(inp, udbinfo.ipi_listhead, inp_list)
@@ -1549,9 +1680,9 @@ nstat_udp_add_watcher(
 			break;
 		}
 	}
-	
+
 	lck_rw_done(udbinfo.ipi_lock);
-	
+
 	return 0;
 }
 
@@ -1570,13 +1701,13 @@ nstat_udp_new_pcb(
 
 	if (nstat_udp_watchers == 0)
 		return;
-	
+
 	socket_lock(inp->inp_socket, 0);
 	lck_mtx_lock(&nstat_mtx);
 	nstat_control_state	*state;
 	for (state = nstat_controls; state; state = state->ncs_next)
 	{
-		if ((state->ncs_watching & (1 << NSTAT_PROVIDER_UDP)) != 0)
+		if ((state->ncs_watching & (1 << NSTAT_PROVIDER_UDP_KERNEL)) != 0)
 		{
 			// this client is watching tcp
 			// acquire a reference for it
@@ -1584,7 +1715,7 @@ nstat_udp_new_pcb(
 			if (cookie == NULL)
 				continue;
 			// add the source, if that fails, release the reference
-			if (nstat_control_source_add(0, state, 
+			if (nstat_control_source_add(0, state,
 			    &nstat_udp_provider, cookie) != 0)
 			{
 				nstat_tucookie_release_locked(cookie);
@@ -1606,7 +1737,7 @@ nstat_udp_copy_descriptor(
 	{
 		return EINVAL;
 	}
-	
+
 	if (nstat_udp_gone(cookie))
 		return EINVAL;
 
@@ -1616,7 +1747,7 @@ nstat_udp_copy_descriptor(
 	struct inpcb 			*inp = tucookie->inp;
 
 	bzero(desc, sizeof(*desc));
-	
+
 	if (tucookie->cached == false) {
 		if (inp->inp_vflag & INP_IPV6)
 		{
@@ -1652,12 +1783,12 @@ nstat_udp_copy_descriptor(
 		}
 		desc->ifnet_properties = tucookie->ifnet_properties;
 	}
-	
+
 	if (inp->inp_last_outifp)
 		desc->ifindex = inp->inp_last_outifp->if_index;
 	else
 		desc->ifindex = tucookie->if_index;
-		
+
 	struct socket *so = inp->inp_socket;
 	if (so)
 	{
@@ -1696,11 +1827,18 @@ nstat_udp_copy_descriptor(
 	return 0;
 }
 
+static bool
+nstat_udp_reporting_allowed(nstat_provider_cookie_t cookie, nstat_provider_filter *filter)
+{
+	return nstat_tcpudp_reporting_allowed(cookie, filter, TRUE);
+}
+
+
 static void
 nstat_init_udp_provider(void)
 {
 	bzero(&nstat_udp_provider, sizeof(nstat_udp_provider));
-	nstat_udp_provider.nstat_provider_id = NSTAT_PROVIDER_UDP;
+	nstat_udp_provider.nstat_provider_id = NSTAT_PROVIDER_UDP_KERNEL;
 	nstat_udp_provider.nstat_descriptor_length = sizeof(nstat_udp_descriptor);
 	nstat_udp_provider.nstat_lookup = nstat_udp_lookup;
 	nstat_udp_provider.nstat_gone = nstat_udp_gone;
@@ -1709,10 +1847,429 @@ nstat_init_udp_provider(void)
 	nstat_udp_provider.nstat_watcher_remove = nstat_udp_remove_watcher;
 	nstat_udp_provider.nstat_copy_descriptor = nstat_udp_copy_descriptor;
 	nstat_udp_provider.nstat_release = nstat_udp_release;
-	nstat_udp_provider.nstat_reporting_allowed = nstat_tcpudp_reporting_allowed;
+	nstat_udp_provider.nstat_reporting_allowed = nstat_udp_reporting_allowed;
 	nstat_udp_provider.next = nstat_providers;
 	nstat_providers = &nstat_udp_provider;
 }
+
+#pragma mark -- TCP/UDP Userland
+
+// Almost all of this infrastucture is common to both TCP and UDP
+
+static nstat_provider	nstat_userland_tcp_provider;
+static nstat_provider	nstat_userland_udp_provider;
+
+
+struct nstat_tu_shadow {
+	tailq_entry_tu_shadow			shad_link;
+	userland_stats_request_vals_fn	*shad_getvals_fn;
+	userland_stats_provider_context	*shad_provider_context;
+	u_int64_t						shad_properties;
+	int								shad_provider;
+	uint32_t						shad_magic;
+};
+
+// Magic number checking should remain in place until the userland provider has been fully proven
+#define TU_SHADOW_MAGIC			0xfeedf00d
+#define TU_SHADOW_UNMAGIC		0xdeaddeed
+
+static tailq_head_tu_shadow nstat_userprot_shad_head = TAILQ_HEAD_INITIALIZER(nstat_userprot_shad_head);
+
+static errno_t
+nstat_userland_tu_lookup(
+	__unused const void				*data,
+	__unused u_int32_t 				length,
+	__unused nstat_provider_cookie_t	*out_cookie)
+{
+	// Looking up a specific connection is not supported
+	return ENOTSUP;
+}
+
+static int
+nstat_userland_tu_gone(
+	__unused nstat_provider_cookie_t	cookie)
+{
+	// Returns non-zero if the source has gone.
+	// We don't keep a source hanging around, so the answer is always 0
+	return 0;
+}
+
+static errno_t
+nstat_userland_tu_counts(
+	nstat_provider_cookie_t	cookie,
+	struct nstat_counts		*out_counts,
+	int						*out_gone)
+ {
+	struct nstat_tu_shadow *shad = (struct nstat_tu_shadow *)cookie;
+	assert(shad->shad_magic == TU_SHADOW_MAGIC);
+
+	bool result = (*shad->shad_getvals_fn)(shad->shad_provider_context, out_counts, NULL);
+
+	if (out_gone) *out_gone = 0;
+
+	return (result)? 0 : EIO;
+}
+
+
+static errno_t
+nstat_userland_tu_copy_descriptor(
+	nstat_provider_cookie_t	cookie,
+	void					*data,
+	__unused u_int32_t		len)
+{
+	struct nstat_tu_shadow *shad = (struct nstat_tu_shadow *)cookie;
+	assert(shad->shad_magic == TU_SHADOW_MAGIC);
+
+	bool result = (*shad->shad_getvals_fn)(shad->shad_provider_context, NULL, data);
+
+	return (result)? 0 : EIO;
+}
+
+static void
+nstat_userland_tu_release(
+	__unused nstat_provider_cookie_t	cookie,
+	__unused int locked)
+{
+	// Called when a nstat_src is detached.
+	// We don't reference count or ask for delayed release so nothing to do here.
+}
+
+static bool
+check_reporting_for_user(nstat_provider_filter *filter, pid_t pid, pid_t epid, uuid_t *uuid, uuid_t *euuid)
+{
+	bool retval = true;
+
+	if ((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER) != 0)
+	{
+		retval = false;
+
+		if (((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER_BY_PID) != 0) &&
+			(filter->npf_pid == pid))
+		{
+			retval = true;
+		}
+		else if (((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER_BY_EPID) != 0) &&
+			(filter->npf_pid == epid))
+		{
+			retval = true;
+		}
+		else if (((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER_BY_UUID) != 0) &&
+			(memcmp(filter->npf_uuid, uuid, sizeof(*uuid)) == 0))
+		{
+			retval = true;
+		}
+		else if (((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER_BY_EUUID) != 0) &&
+			(memcmp(filter->npf_uuid, euuid, sizeof(*euuid)) == 0))
+		{
+			retval = true;
+		}
+	}
+	return retval;
+}
+
+static bool
+nstat_userland_tcp_reporting_allowed(nstat_provider_cookie_t cookie, nstat_provider_filter *filter)
+{
+	bool retval = true;
+
+	if ((filter->npf_flags & (NSTAT_FILTER_IFNET_FLAGS|NSTAT_FILTER_SPECIFIC_USER)) != 0)
+	{
+		nstat_tcp_descriptor tcp_desc;	// Stack allocation - OK or pushing the limits too far?
+		struct nstat_tu_shadow *shad = (struct nstat_tu_shadow *)cookie;
+
+		assert(shad->shad_magic == TU_SHADOW_MAGIC);
+
+		if ((*shad->shad_getvals_fn)(shad->shad_provider_context, NULL, &tcp_desc))
+		{
+			if ((filter->npf_flags & NSTAT_FILTER_IFNET_FLAGS) != 0)
+			{
+				if ((filter->npf_flags & tcp_desc.ifnet_properties) == 0)
+				{
+					return false;
+				}
+			}
+			if ((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER) != 0)
+			{
+				retval = check_reporting_for_user(filter, (pid_t)tcp_desc.pid, (pid_t)tcp_desc.epid,
+												  &tcp_desc.uuid, &tcp_desc.euuid);
+			}
+		}
+		else
+		{
+			retval = false;	// No further information, so might as well give up now.
+		}
+	}
+	return retval;
+}
+
+static bool
+nstat_userland_udp_reporting_allowed(nstat_provider_cookie_t cookie, nstat_provider_filter *filter)
+{
+	bool retval = true;
+
+	if ((filter->npf_flags & (NSTAT_FILTER_IFNET_FLAGS|NSTAT_FILTER_SPECIFIC_USER)) != 0)
+	{
+		nstat_udp_descriptor udp_desc;	// Stack allocation - OK or pushing the limits too far?
+		struct nstat_tu_shadow *shad = (struct nstat_tu_shadow *)cookie;
+
+		assert(shad->shad_magic == TU_SHADOW_MAGIC);
+
+		if ((*shad->shad_getvals_fn)(shad->shad_provider_context, NULL, &udp_desc))
+		{
+			if ((filter->npf_flags & NSTAT_FILTER_IFNET_FLAGS) != 0)
+			{
+				if ((filter->npf_flags & udp_desc.ifnet_properties) == 0)
+				{
+					return false;
+				}
+			}
+			if ((filter->npf_flags & NSTAT_FILTER_SPECIFIC_USER) != 0)
+			{
+				retval = check_reporting_for_user(filter, (pid_t)udp_desc.pid, (pid_t)udp_desc.epid,
+												  &udp_desc.uuid, &udp_desc.euuid);
+			}
+		}
+		else
+		{
+			retval = false;	// No further information, so might as well give up now.
+		}
+	}
+	return retval;
+}
+
+
+
+static errno_t
+nstat_userland_tcp_add_watcher(
+	nstat_control_state	*state)
+{
+	struct nstat_tu_shadow *shad;
+
+	OSIncrementAtomic(&nstat_userland_tcp_watchers);
+
+	lck_mtx_lock(&nstat_mtx);
+
+	TAILQ_FOREACH(shad, &nstat_userprot_shad_head, shad_link) {
+		assert(shad->shad_magic == TU_SHADOW_MAGIC);
+
+		if (shad->shad_provider == NSTAT_PROVIDER_TCP_USERLAND)
+		{
+			int result = nstat_control_source_add(0, state, &nstat_userland_tcp_provider, shad);
+			if (result != 0)
+			{
+				printf("%s - nstat_control_source_add returned %d\n", __func__, result);
+			}
+		}
+	}
+	lck_mtx_unlock(&nstat_mtx);
+
+	return 0;
+}
+
+static errno_t
+nstat_userland_udp_add_watcher(
+	nstat_control_state	*state)
+{
+	struct nstat_tu_shadow *shad;
+
+	OSIncrementAtomic(&nstat_userland_udp_watchers);
+
+	lck_mtx_lock(&nstat_mtx);
+
+	TAILQ_FOREACH(shad, &nstat_userprot_shad_head, shad_link) {
+		assert(shad->shad_magic == TU_SHADOW_MAGIC);
+
+		if (shad->shad_provider == NSTAT_PROVIDER_UDP_USERLAND)
+		{
+			int result = nstat_control_source_add(0, state, &nstat_userland_udp_provider, shad);
+			if (result != 0)
+			{
+				printf("%s - nstat_control_source_add returned %d\n", __func__, result);
+			}
+		}
+	}
+	lck_mtx_unlock(&nstat_mtx);
+
+	return 0;
+}
+
+
+static void
+nstat_userland_tcp_remove_watcher(
+	__unused nstat_control_state	*state)
+{
+	OSDecrementAtomic(&nstat_userland_tcp_watchers);
+}
+
+static void
+nstat_userland_udp_remove_watcher(
+	__unused nstat_control_state	*state)
+{
+	OSDecrementAtomic(&nstat_userland_udp_watchers);
+}
+
+static void
+nstat_init_userland_tcp_provider(void)
+{
+	bzero(&nstat_userland_tcp_provider, sizeof(nstat_tcp_provider));
+	nstat_userland_tcp_provider.nstat_descriptor_length = sizeof(nstat_tcp_descriptor);
+	nstat_userland_tcp_provider.nstat_provider_id = NSTAT_PROVIDER_TCP_USERLAND;
+	nstat_userland_tcp_provider.nstat_lookup = nstat_userland_tu_lookup;
+	nstat_userland_tcp_provider.nstat_gone = nstat_userland_tu_gone;
+	nstat_userland_tcp_provider.nstat_counts = nstat_userland_tu_counts;
+	nstat_userland_tcp_provider.nstat_release = nstat_userland_tu_release;
+	nstat_userland_tcp_provider.nstat_watcher_add = nstat_userland_tcp_add_watcher;
+	nstat_userland_tcp_provider.nstat_watcher_remove = nstat_userland_tcp_remove_watcher;
+	nstat_userland_tcp_provider.nstat_copy_descriptor = nstat_userland_tu_copy_descriptor;
+	nstat_userland_tcp_provider.nstat_reporting_allowed = nstat_userland_tcp_reporting_allowed;
+	nstat_userland_tcp_provider.next = nstat_providers;
+	nstat_providers = &nstat_userland_tcp_provider;
+}
+
+
+static void
+nstat_init_userland_udp_provider(void)
+{
+	bzero(&nstat_userland_udp_provider, sizeof(nstat_udp_provider));
+	nstat_userland_udp_provider.nstat_descriptor_length = sizeof(nstat_udp_descriptor);
+	nstat_userland_udp_provider.nstat_provider_id = NSTAT_PROVIDER_UDP_USERLAND;
+	nstat_userland_udp_provider.nstat_lookup = nstat_userland_tu_lookup;
+	nstat_userland_udp_provider.nstat_gone = nstat_userland_tu_gone;
+	nstat_userland_udp_provider.nstat_counts = nstat_userland_tu_counts;
+	nstat_userland_udp_provider.nstat_release = nstat_userland_tu_release;
+	nstat_userland_udp_provider.nstat_watcher_add = nstat_userland_udp_add_watcher;
+	nstat_userland_udp_provider.nstat_watcher_remove = nstat_userland_udp_remove_watcher;
+	nstat_userland_udp_provider.nstat_copy_descriptor = nstat_userland_tu_copy_descriptor;
+	nstat_userland_udp_provider.nstat_reporting_allowed = nstat_userland_udp_reporting_allowed;
+	nstat_userland_udp_provider.next = nstat_providers;
+	nstat_providers = &nstat_userland_udp_provider;
+}
+
+
+
+// Things get started with a call to netstats to say that there’s a new connection:
+__private_extern__ nstat_userland_context
+ntstat_userland_stats_open(userland_stats_provider_context *ctx,
+						   int provider_id,
+						   u_int64_t properties,
+						   userland_stats_request_vals_fn req_fn)
+{
+	struct nstat_tu_shadow *shad;
+
+	if ((provider_id != NSTAT_PROVIDER_TCP_USERLAND) && (provider_id != NSTAT_PROVIDER_UDP_USERLAND))
+	{
+		printf("%s - incorrect provider is supplied, %d\n", __func__, provider_id);
+		return NULL;
+	}
+
+	shad = OSMalloc(sizeof(*shad), nstat_malloc_tag);
+	if (shad == NULL)
+		return NULL;
+
+	shad->shad_getvals_fn		= req_fn;
+	shad->shad_provider_context	= ctx;
+	shad->shad_provider			= provider_id;
+	shad->shad_properties		= properties;
+	shad->shad_magic			= TU_SHADOW_MAGIC;
+
+	lck_mtx_lock(&nstat_mtx);
+	nstat_control_state	*state;
+
+	// Even if there are no watchers, we save the shadow structure
+	TAILQ_INSERT_HEAD(&nstat_userprot_shad_head, shad, shad_link);
+
+	for (state = nstat_controls; state; state = state->ncs_next)
+	{
+		if ((state->ncs_watching & (1 << provider_id)) != 0)
+		{
+			// this client is watching tcp/udp userland
+			// Link to it.
+			int result = nstat_control_source_add(0, state, &nstat_userland_tcp_provider, shad);
+			if (result != 0)
+			{
+				printf("%s - nstat_control_source_add returned %d\n", __func__, result);
+			}
+		}
+	}
+	lck_mtx_unlock(&nstat_mtx);
+
+	return (nstat_userland_context)shad;
+}
+
+
+__private_extern__ void
+ntstat_userland_stats_close(nstat_userland_context nstat_ctx)
+{
+	struct nstat_tu_shadow *shad = (struct nstat_tu_shadow *)nstat_ctx;
+	nstat_src *dead_list = NULL;
+
+	if (shad == NULL)
+		return;
+
+	assert(shad->shad_magic == TU_SHADOW_MAGIC);
+
+	lck_mtx_lock(&nstat_mtx);
+	if (nstat_userland_udp_watchers != 0 || nstat_userland_tcp_watchers != 0)
+	{
+		nstat_control_state	*state;
+		nstat_src *src, *prevsrc;
+		errno_t result;
+
+		for (state = nstat_controls; state; state = state->ncs_next)
+		{
+			lck_mtx_lock(&state->mtx);
+			for (prevsrc = NULL, src = state->ncs_srcs; src;
+				prevsrc = src, src = src->next)
+			{
+				if (shad == (struct nstat_tu_shadow *)src->cookie)
+					break;
+			}
+
+			if (src)
+			{
+				result = nstat_control_send_goodbye(state, src);
+
+				if (prevsrc)
+					prevsrc->next = src->next;
+				else
+					state->ncs_srcs = src->next;
+
+				src->next = dead_list;
+				dead_list = src;
+			}
+			lck_mtx_unlock(&state->mtx);
+		}
+	}
+	TAILQ_REMOVE(&nstat_userprot_shad_head, shad, shad_link);
+
+	lck_mtx_unlock(&nstat_mtx);
+
+	while (dead_list)
+	{
+		nstat_src *src;
+		src = dead_list;
+		dead_list = src->next;
+
+		nstat_control_cleanup_source(NULL, src, TRUE);
+	}
+
+	shad->shad_magic = TU_SHADOW_UNMAGIC;
+
+	OSFree(shad, sizeof(*shad), nstat_malloc_tag);
+}
+
+
+__private_extern__ void
+ntstat_userland_stats_event(
+	__unused nstat_userland_context context,
+	__unused userland_stats_event_t event)
+{
+	// This is a dummy for when we hook up event reporting to NetworkStatistics.
+	// See <rdar://problem/23022832> NetworkStatistics should provide opt-in notifications
+}
+
+
+
 
 #pragma mark -- ifnet Provider --
 
@@ -1744,7 +2301,7 @@ nstat_ifnet_lookup(
 	if (length < sizeof(*param) || param->threshold < 1024*1024)
 		return EINVAL;
 	if (nstat_privcheck != 0) {
-		errno_t result = priv_check_cred(kauth_cred_get(), 
+		errno_t result = priv_check_cred(kauth_cred_get(),
 		    PRIV_NET_PRIVILEGED_NETWORK_STATISTICS, 0);
 		if (result != 0)
 			return result;
@@ -1835,7 +2392,7 @@ nstat_ifnet_counts(
 	struct ifnet *ifp = ifcookie->ifp;
 
 	if (out_gone) *out_gone = 0;
-	
+
 	// if the ifnet is gone, we should stop using it
 	if (nstat_ifnet_gone(cookie))
 	{
@@ -1879,7 +2436,7 @@ nstat_ifnet_release(
 				continue;
 	    		ifcookie = (struct nstat_ifnet_cookie *)src->cookie;
 			if (ifcookie->threshold < minthreshold)
-				minthreshold = ifcookie->threshold; 
+				minthreshold = ifcookie->threshold;
 		}
 		lck_mtx_unlock(&state->mtx);
 	}
@@ -1896,7 +2453,7 @@ nstat_ifnet_release(
 		else
 			ifp->if_data_threshold = minthreshold;
 		ifnet_lock_done(ifp);
-		ifnet_decr_iorefcnt(ifp);                               
+		ifnet_decr_iorefcnt(ifp);
 	}
 	ifnet_release(ifp);
 	OSFree(ifcookie, sizeof(*ifcookie), nstat_malloc_tag);
@@ -1996,7 +2553,10 @@ nstat_ifnet_copy_link_status(
 			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_CONFIG_BACKOFF_TIME_VALID;
 			cell_status->config_backoff_time = if_cell_sr->config_backoff_time;
 		}
-
+		if (if_cell_sr->valid_bitmask & IF_CELL_UL_MSS_RECOMMENDED_VALID) {
+			cell_status->valid_bitmask |= NSTAT_IFNET_DESC_CELL_MSS_RECOMMENDED_VALID;
+			cell_status->mss_recommended = if_cell_sr->mss_recommended;
+		}
 	} else if (ifp->if_subfamily == IFNET_SUBFAMILY_WIFI) {
 
 		nstat_ifnet_desc_wifi_status *wifi_status = &link_status->u.wifi;
@@ -2186,7 +2746,7 @@ nstat_ifnet_normalize_counter(struct if_tcp_ecn_stat *if_st)
 	if_st->ecn_total_conn = ecn_off_conn + ecn_on_conn;
 }
 
-void
+static void
 nstat_ifnet_report_ecn_stats(void)
 {
 	u_int64_t uptime, last_report_time;
@@ -2226,7 +2786,7 @@ nstat_ifnet_report_ecn_stats(void)
 		} else {
 			st->ifnet_type = NSTAT_IFNET_ECN_TYPE_ETHERNET;
 		}
-
+		data.unsent_data_cnt = ifp->if_unsent_data_cnt;
 		/* skip if there was no update since last report */
 		if (ifp->if_ipv4_stat->timestamp <= 0 ||
 		    ifp->if_ipv4_stat->timestamp < last_report_time)
@@ -2236,7 +2796,6 @@ nstat_ifnet_report_ecn_stats(void)
 		nstat_ifnet_compute_percentages(&ifp->if_ipv4_stat->ecn_on);
 		nstat_ifnet_compute_percentages(&ifp->if_ipv4_stat->ecn_off);
 		nstat_ifnet_normalize_counter(ifp->if_ipv4_stat);
-
 		bcopy(ifp->if_ipv4_stat, &st->ecn_stat,
 		    sizeof(st->ecn_stat));
 		nstat_sysinfo_send_data(&data);
@@ -2253,7 +2812,6 @@ v6:
 		nstat_ifnet_compute_percentages(&ifp->if_ipv6_stat->ecn_on);
 		nstat_ifnet_compute_percentages(&ifp->if_ipv6_stat->ecn_off);
 		nstat_ifnet_normalize_counter(ifp->if_ipv6_stat);
-
 		bcopy(ifp->if_ipv6_stat, &st->ecn_stat,
 		    sizeof(st->ecn_stat));
 		nstat_sysinfo_send_data(&data);
@@ -2270,7 +2828,7 @@ nstat_ifnet_copy_descriptor(
 	nstat_provider_cookie_t	cookie,
 	void			*data,
 	u_int32_t		len)
-{	
+{
 	nstat_ifnet_descriptor *desc = (nstat_ifnet_descriptor *)data;
 	struct nstat_ifnet_cookie *ifcookie =
 	    (struct nstat_ifnet_cookie *)cookie;
@@ -2278,7 +2836,7 @@ nstat_ifnet_copy_descriptor(
 
 	if (len < sizeof(nstat_ifnet_descriptor))
 		return EINVAL;
-	
+
 	if (nstat_ifnet_gone(cookie))
 		return EINVAL;
 
@@ -2359,7 +2917,7 @@ nstat_sysinfo_send_data_internal(
 	nstat_sysinfo_keyval *kv;
 	errno_t result = 0;
 	size_t i = 0;
-	
+
 	allocsize = offsetof(nstat_msg_sysinfo_counts, counts);
 	countsize = offsetof(nstat_sysinfo_counts, nstat_sysinfo_keyvals);
 	finalsize = allocsize;
@@ -2381,6 +2939,9 @@ nstat_sysinfo_send_data_internal(
 
 			/* Two more keys for ifnet type and proto */
 			nkeyvals += 2;
+
+			/* One key for unsent data. */
+			nkeyvals++;
 			break;
 		default:
 			return;
@@ -2392,7 +2953,7 @@ nstat_sysinfo_send_data_internal(
 	if (syscnt == NULL)
 		return;
 	bzero(syscnt, allocsize);
-	
+
 	kv = (nstat_sysinfo_keyval *) &syscnt->counts.nstat_sysinfo_keyvals;
 	switch (data->flags)
 	{
@@ -2422,6 +2983,9 @@ nstat_sysinfo_send_data_internal(
 			nstat_set_keyval_scalar(&kv[i++],
 			    NSTAT_SYSINFO_MBUF_MEM_RELEASED,
 			    data->u.mb_stats.memreleased);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_KEY_SOCK_MBFLOOR,
+			    data->u.mb_stats.sbmb_floor);
 			VERIFY(i == nkeyvals);
 			break;
 		}
@@ -2541,6 +3105,18 @@ nstat_sysinfo_send_data_internal(
 			nstat_set_keyval_scalar(&kv[i++],
 			    NSTAT_SYSINFO_TFO_BLACKHOLE,
 			    data->u.tcp_stats.tfo_blackhole);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_COOKIE_WRONG,
+			    data->u.tcp_stats.tfo_cookie_wrong);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_NO_COOKIE_RCV,
+			    data->u.tcp_stats.tfo_no_cookie_rcv);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_HEURISTICS_DISABLE,
+			    data->u.tcp_stats.tfo_heuristics_disable);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_TFO_SEND_BLACKHOLE,
+			    data->u.tcp_stats.tfo_sndblackhole);
 			VERIFY(i == nkeyvals);
 			break;
 		}
@@ -2678,6 +3254,15 @@ nstat_sysinfo_send_data_internal(
 			nstat_set_keyval_scalar(&kv[i++],
 			    NSTAT_SYSINFO_ECN_IFNET_TOTAL_CONN,
 			    data->u.ifnet_ecn_stats.ecn_stat.ecn_total_conn);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_IFNET_UNSENT_DATA,
+			    data->unsent_data_cnt);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_DROPRST,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_droprst);
+			nstat_set_keyval_scalar(&kv[i++],
+			    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_DROPRXMT,
+			    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_droprxmt);
 			break;
 		}
 	}
@@ -2818,7 +3403,7 @@ nstat_control_send_goodbye(
 	if (failed != 0)
 		nstat_stats.nstat_control_send_goodbye_failures++;
 
-	
+
 	return result;
 }
 
@@ -2854,9 +3439,9 @@ nstat_accumulate_msg(
 		// Will send the current mbuf
 		nstat_flush_accumulated_msgs(state);
 	}
-	
+
 	errno_t result = 0;
-	
+
 	if (state->ncs_accumulated == NULL)
 	{
 		unsigned int one = 1;
@@ -2871,14 +3456,14 @@ nstat_accumulate_msg(
 			mbuf_setlen(state->ncs_accumulated, 0);
 		}
 	}
-	
+
 	if (result == 0)
 	{
 		hdr->length = length;
 		result = mbuf_copyback(state->ncs_accumulated, mbuf_len(state->ncs_accumulated),
 							   length, hdr, MBUF_DONTWAIT);
 	}
-	
+
 	if (result != 0)
 	{
 		nstat_flush_accumulated_msgs(state);
@@ -2886,7 +3471,7 @@ nstat_accumulate_msg(
 			printf("%s - resorting to ctl_enqueuedata\n", __func__);
 		result = ctl_enqueuedata(state->ncs_kctl, state->ncs_unit, hdr, length, CTL_DATA_EOR);
 	}
-	
+
 	if (result != 0)
 		nstat_stats.nstat_accumulate_msg_failures++;
 
@@ -2899,9 +3484,9 @@ nstat_idle_check(
 	__unused thread_call_param_t p1)
 {
 	lck_mtx_lock(&nstat_mtx);
-	
+
 	nstat_idle_time = 0;
-	
+
 	nstat_control_state *control;
 	nstat_src	*dead = NULL;
 	nstat_src	*dead_list = NULL;
@@ -2909,7 +3494,7 @@ nstat_idle_check(
 	{
 		lck_mtx_lock(&control->mtx);
 		nstat_src	**srcpp = &control->ncs_srcs;
-		
+
 		if (!(control->ncs_flags & NSTAT_FLAG_REQCOUNTS))
 		{
 			while(*srcpp != NULL)
@@ -2917,13 +3502,13 @@ nstat_idle_check(
 				if ((*srcpp)->provider->nstat_gone((*srcpp)->cookie))
 				{
 					errno_t result;
-					
+
 					// Pull it off the list
 					dead = *srcpp;
 					*srcpp = (*srcpp)->next;
-					
+
 					result = nstat_control_send_goodbye(control, dead);
-					
+
 					// Put this on the list to release later
 					dead->next = dead_list;
 					dead_list = dead;
@@ -2943,21 +3528,21 @@ nstat_idle_check(
 		clock_interval_to_deadline(60, NSEC_PER_SEC, &nstat_idle_time);
 		thread_call_func_delayed((thread_call_func_t)nstat_idle_check, NULL, nstat_idle_time);
 	}
-	
+
 	lck_mtx_unlock(&nstat_mtx);
-	
+
 	/* Generate any system level reports, if needed */
 	nstat_sysinfo_generate_report();
-	
+
 	// Release the sources now that we aren't holding lots of locks
 	while (dead_list)
 	{
 		dead = dead_list;
 		dead_list = dead->next;
-		
+
 		nstat_control_cleanup_source(NULL, dead, FALSE);
 	}
-	
+
 	return NULL;
 }
 
@@ -2969,12 +3554,12 @@ nstat_control_register(void)
 	lck_grp_attr_setdefault(grp_attr);
 	nstat_lck_grp = lck_grp_alloc_init("network statistics kctl", grp_attr);
 	lck_grp_attr_free(grp_attr);
-	
+
 	lck_mtx_init(&nstat_mtx, nstat_lck_grp, NULL);
-	
+
 	// Register the control
 	struct kern_ctl_reg	nstat_control;
-	bzero(&nstat_control, sizeof(nstat_control));	
+	bzero(&nstat_control, sizeof(nstat_control));
 	strlcpy(nstat_control.ctl_name, NET_STAT_CONTROL_NAME, sizeof(nstat_control.ctl_name));
 	nstat_control.ctl_flags = CTL_FLAG_REG_EXTENDED | CTL_FLAG_REG_CRIT;
 	nstat_control.ctl_sendsize = nstat_sendspace;
@@ -2982,7 +3567,7 @@ nstat_control_register(void)
 	nstat_control.ctl_connect = nstat_control_connect;
 	nstat_control.ctl_disconnect = nstat_control_disconnect;
 	nstat_control.ctl_send = nstat_control_send;
-	
+
 	ctl_register(&nstat_control, &nstat_ctlref);
 }
 
@@ -2993,7 +3578,7 @@ nstat_control_cleanup_source(
 	boolean_t 		locked)
 {
 	errno_t result;
-	
+
 	if (state)
 	{
 		result = nstat_control_send_removed(state, src);
@@ -3020,8 +3605,8 @@ nstat_control_reporting_allowed(
 		return TRUE;
 
 	return (
-	    src->provider->nstat_reporting_allowed( src->cookie,
-		state->ncs_provider_filters[src->provider->nstat_provider_id])
+	    src->provider->nstat_reporting_allowed(src->cookie,
+		&state->ncs_provider_filters[src->provider->nstat_provider_id])
 	);
 }
 
@@ -3034,26 +3619,26 @@ nstat_control_connect(
 {
 	nstat_control_state	*state = OSMalloc(sizeof(*state), nstat_malloc_tag);
 	if (state == NULL) return ENOMEM;
-	
+
 	bzero(state, sizeof(*state));
 	lck_mtx_init(&state->mtx, nstat_lck_grp, NULL);
 	state->ncs_kctl = kctl;
 	state->ncs_unit = sac->sc_unit;
 	state->ncs_flags = NSTAT_FLAG_REQCOUNTS;
 	*uinfo = state;
-	
+
 	lck_mtx_lock(&nstat_mtx);
 	state->ncs_next = nstat_controls;
 	nstat_controls = state;
-	
+
 	if (nstat_idle_time == 0)
 	{
 		clock_interval_to_deadline(60, NSEC_PER_SEC, &nstat_idle_time);
 		thread_call_func_delayed((thread_call_func_t)nstat_idle_check, NULL, nstat_idle_time);
 	}
-	
+
 	lck_mtx_unlock(&nstat_mtx);
-	
+
 	return 0;
 }
 
@@ -3065,7 +3650,7 @@ nstat_control_disconnect(
 {
 	u_int32_t	watching;
 	nstat_control_state	*state = (nstat_control_state*)uinfo;
-	
+
 	// pull it out of the global list of states
 	lck_mtx_lock(&nstat_mtx);
 	nstat_control_state	**statepp;
@@ -3078,7 +3663,7 @@ nstat_control_disconnect(
 		}
 	}
 	lck_mtx_unlock(&nstat_mtx);
-	
+
 	lck_mtx_lock(&state->mtx);
 	// Stop watching for sources
 	nstat_provider	*provider;
@@ -3092,35 +3677,35 @@ nstat_control_disconnect(
 			provider->nstat_watcher_remove(state);
 		}
 	}
-	
+
 	// set cleanup flags
 	state->ncs_flags |= NSTAT_FLAG_CLEANUP;
-	
+
 	if (state->ncs_accumulated)
 	{
 		mbuf_freem(state->ncs_accumulated);
 		state->ncs_accumulated = NULL;
 	}
-	
+
 	// Copy out the list of sources
 	nstat_src	*srcs = state->ncs_srcs;
 	state->ncs_srcs = NULL;
 	lck_mtx_unlock(&state->mtx);
-	
+
 	while (srcs)
 	{
 		nstat_src	*src;
-		
+
 		// pull it out of the list
 		src = srcs;
 		srcs = src->next;
-		
+
 		// clean it up
 		nstat_control_cleanup_source(NULL, src, FALSE);
 	}
 	lck_mtx_destroy(&state->mtx, nstat_lck_grp);
 	OSFree(state, sizeof(*state), nstat_malloc_tag);
-	
+
 	return 0;
 }
 
@@ -3128,29 +3713,7 @@ static nstat_src_ref_t
 nstat_control_next_src_ref(
 	nstat_control_state	*state)
 {
-	int i = 0;
-	nstat_src_ref_t	toReturn = NSTAT_SRC_REF_INVALID;
-	
-	for (i = 0; i < 1000 && toReturn == NSTAT_SRC_REF_INVALID; i++)
-	{
-		if (state->ncs_next_srcref == NSTAT_SRC_REF_INVALID ||
-			state->ncs_next_srcref == NSTAT_SRC_REF_ALL)
-		{
-			state->ncs_next_srcref = 1;
-		}
-		
-		nstat_src	*src;
-		for (src = state->ncs_srcs; src; src = src->next)
-		{
-			if (src->srcref == state->ncs_next_srcref)
-				break;
-		}
-		
-		if (src == NULL) toReturn = state->ncs_next_srcref;
-		state->ncs_next_srcref++;
-	}
-	
-	return toReturn;
+	return ++state->ncs_next_srcref;
 }
 
 static errno_t
@@ -3174,11 +3737,12 @@ nstat_control_send_counts(
 	counts.hdr.flags = hdr_flags;
 	counts.hdr.context = context;
 	counts.srcref = src->srcref;
-	
+	counts.event_flags = 0;
+
 	if (src->provider->nstat_counts(src->cookie, &counts.counts, gone) == 0)
 	{
 		if ((src->filter & NSTAT_FILTER_NOZEROBYTES) &&
-		    counts.counts.nstat_rxbytes == 0 && 
+		    counts.counts.nstat_rxbytes == 0 &&
 		    counts.counts.nstat_txbytes == 0)
 		{
 			result = EAGAIN;
@@ -3203,26 +3767,27 @@ nstat_control_append_counts(
 {
 	/* Some providers may not have any counts to send */
 	if (!src->provider->nstat_counts) return 0;
-	
+
 	nstat_msg_src_counts counts;
 	bzero(&counts, sizeof(counts));
 	counts.hdr.type = NSTAT_MSG_TYPE_SRC_COUNTS;
 	counts.hdr.length = sizeof(counts);
 	counts.srcref = src->srcref;
-	
+	counts.event_flags = 0;
+
 	errno_t	result = 0;
 	result = src->provider->nstat_counts(src->cookie, &counts.counts, gone);
 	if (result != 0)
 	{
 		return result;
 	}
-	
+
 	if ((src->filter & NSTAT_FILTER_NOZEROBYTES) == NSTAT_FILTER_NOZEROBYTES &&
 		counts.counts.nstat_rxbytes == 0 && counts.counts.nstat_txbytes == 0)
 	{
 		return EAGAIN;
 	}
-	
+
 	return nstat_accumulate_msg(state, &counts.hdr, counts.hdr.length);
 }
 
@@ -3268,6 +3833,7 @@ nstat_control_send_description(
 	desc->hdr.length = size;
 	desc->hdr.flags = hdr_flags;
 	desc->srcref = src->srcref;
+	desc->event_flags = 0;
 	desc->provider = src->provider->nstat_provider_id;
 
 	result = ctl_enqueuembuf(state->ncs_kctl, state->ncs_unit, msg, CTL_DATA_EOR);
@@ -3291,17 +3857,18 @@ nstat_control_append_description(
 	{
 		return EOPNOTSUPP;
 	}
-	
+
 	// Fill out a buffer on the stack, we will copy to the mbuf later
 	u_int64_t buffer[size/sizeof(u_int64_t)  + 1]; // u_int64_t to ensure alignment
 	bzero(buffer, size);
-	
+
 	nstat_msg_src_description	*desc = (nstat_msg_src_description*)buffer;
 	desc->hdr.type = NSTAT_MSG_TYPE_SRC_DESC;
 	desc->hdr.length = size;
 	desc->srcref = src->srcref;
+	desc->event_flags = 0;
 	desc->provider = src->provider->nstat_provider_id;
-	
+
 	errno_t	result = 0;
 	// Fill in the description
 	// Query the provider for the provider specific bits
@@ -3311,7 +3878,7 @@ nstat_control_append_description(
 	{
 		return result;
 	}
-	
+
 	return nstat_accumulate_msg(state, &desc->hdr, size);
 }
 
@@ -3330,7 +3897,7 @@ nstat_control_send_update(
 	{
 		return EOPNOTSUPP;
 	}
-	
+
 	// Allocate storage for the descriptor message
 	mbuf_t			msg;
 	unsigned int	one = 1;
@@ -3340,7 +3907,7 @@ nstat_control_send_update(
 	{
 		return ENOMEM;
 	}
-	
+
 	nstat_msg_src_update	*desc = (nstat_msg_src_update*)mbuf_data(msg);
 	bzero(desc, size);
 	desc->hdr.context = context;
@@ -3348,11 +3915,12 @@ nstat_control_send_update(
 	desc->hdr.length = size;
 	desc->hdr.flags = hdr_flags;
 	desc->srcref = src->srcref;
+	desc->event_flags = 0;
 	desc->provider = src->provider->nstat_provider_id;
-	
+
 	mbuf_setlen(msg, size);
 	mbuf_pkthdr_setlen(msg, mbuf_len(msg));
-	
+
 	errno_t	result = 0;
 	if (src->provider->nstat_descriptor_length != 0 && src->provider->nstat_copy_descriptor)
 	{
@@ -3365,7 +3933,7 @@ nstat_control_send_update(
 			return result;
 		}
 	}
-	
+
 	if (src->provider->nstat_counts)
 	{
 		result = src->provider->nstat_counts(src->cookie, &desc->counts, gone);
@@ -3382,7 +3950,7 @@ nstat_control_send_update(
 			}
 		}
 	}
-	
+
 	if (result != 0)
 	{
 		nstat_stats.nstat_srcupatefailures += 1;
@@ -3405,17 +3973,18 @@ nstat_control_append_update(
 	{
 		return EOPNOTSUPP;
 	}
-	
+
 	// Fill out a buffer on the stack, we will copy to the mbuf later
 	u_int64_t buffer[size/sizeof(u_int64_t)  + 1]; // u_int64_t to ensure alignment
 	bzero(buffer, size);
-	
+
 	nstat_msg_src_update	*desc = (nstat_msg_src_update*)buffer;
 	desc->hdr.type = NSTAT_MSG_TYPE_SRC_UPDATE;
 	desc->hdr.length = size;
 	desc->srcref = src->srcref;
+	desc->event_flags = 0;
 	desc->provider = src->provider->nstat_provider_id;
-	
+
 	errno_t	result = 0;
 	// Fill in the description
 	if (src->provider->nstat_descriptor_length != 0 && src->provider->nstat_copy_descriptor)
@@ -3431,7 +4000,7 @@ nstat_control_append_update(
 			return result;
 		}
 	}
-	
+
 	if (src->provider->nstat_counts)
 	{
 		result = src->provider->nstat_counts(src->cookie, &desc->counts, gone);
@@ -3442,14 +4011,14 @@ nstat_control_append_update(
 				printf("%s: src->provider->nstat_counts: %d\n", __func__, result);
 			return result;
 		}
-		
+
 		if ((src->filter & NSTAT_FILTER_NOZEROBYTES) == NSTAT_FILTER_NOZEROBYTES &&
 			desc->counts.nstat_rxbytes == 0 && desc->counts.nstat_txbytes == 0)
 		{
 			return EAGAIN;
 		}
 	}
-	
+
 	return nstat_accumulate_msg(state, &desc->hdr, size);
 }
 
@@ -3486,14 +4055,14 @@ nstat_control_handle_add_request(
 	{
 		return EINVAL;
 	}
-	
+
 	// Calculate the length of the parameter field
 	int32_t	paramlength = mbuf_pkthdr_len(m) - offsetof(nstat_msg_add_src_req, param);
 	if (paramlength < 0 || paramlength > 2 * 1024)
 	{
 		return EINVAL;
 	}
-	
+
 	nstat_provider			*provider;
 	nstat_provider_cookie_t	cookie;
 	nstat_msg_add_src_req	*req = mbuf_data(m);
@@ -3501,7 +4070,7 @@ nstat_control_handle_add_request(
 	{
 		// parameter is too large, we need to make a contiguous copy
 		void	*data = OSMalloc(paramlength, nstat_malloc_tag);
-		
+
 		if (!data) return ENOMEM;
 		result = mbuf_copydata(m, offsetof(nstat_msg_add_src_req, param), paramlength, data);
 		if (result == 0)
@@ -3512,16 +4081,16 @@ nstat_control_handle_add_request(
 	{
 		result = nstat_lookup_entry(req->provider, (void*)&req->param, paramlength, &provider, &cookie);
 	}
-	
+
 	if (result != 0)
 	{
 		return result;
 	}
-	
+
 	result = nstat_control_source_add(req->hdr.context, state, provider, cookie);
 	if (result != 0)
 		provider->nstat_release(cookie, 0);
-	
+
 	return result;
 }
 
@@ -3531,25 +4100,24 @@ nstat_control_handle_add_all(
 	mbuf_t				m)
 {
 	errno_t	result = 0;
-	
+
 	// Verify the header fits in the first mbuf
 	if (mbuf_len(m) < sizeof(nstat_msg_add_all_srcs))
 	{
 		return EINVAL;
 	}
-	
+
 
 	nstat_msg_add_all_srcs	*req = mbuf_data(m);
 	if (req->provider > NSTAT_PROVIDER_LAST) return ENOENT;
 
 	nstat_provider			*provider = nstat_find_provider_by_id(req->provider);
-	u_int64_t           	filter = req->filter;
 
 	if (!provider) return ENOENT;
 	if (provider->nstat_watcher_add == NULL) return ENOTSUP;
-	
+
 	if (nstat_privcheck != 0) {
-		result = priv_check_cred(kauth_cred_get(), 
+		result = priv_check_cred(kauth_cred_get(),
 		    PRIV_NET_PRIVILEGED_NETWORK_STATISTICS, 0);
 		if (result != 0)
 			return result;
@@ -3563,19 +4131,28 @@ nstat_control_handle_add_all(
 	lck_mtx_unlock(&state->mtx);
 	if (result != 0) return result;
 
-	state->ncs_provider_filters[req->provider] = filter;
+	state->ncs_provider_filters[req->provider].npf_flags  = req->filter;
+	state->ncs_provider_filters[req->provider].npf_events = req->events;
+	state->ncs_provider_filters[req->provider].npf_pid    = req->target_pid;
+	memcpy(state->ncs_provider_filters[req->provider].npf_uuid, req->target_uuid,
+		   sizeof(state->ncs_provider_filters[req->provider].npf_uuid));
 
 	result = provider->nstat_watcher_add(state);
 	if (result != 0)
 	{
-		state->ncs_provider_filters[req->provider] = 0;
+		state->ncs_provider_filters[req->provider].npf_flags  = 0;
+		state->ncs_provider_filters[req->provider].npf_events = 0;
+		state->ncs_provider_filters[req->provider].npf_pid    = 0;
+		bzero(state->ncs_provider_filters[req->provider].npf_uuid,
+			  sizeof(state->ncs_provider_filters[req->provider].npf_uuid));
+
 		lck_mtx_lock(&state->mtx);
 		state->ncs_watching &= ~(1 << provider->nstat_provider_id);
 		lck_mtx_unlock(&state->mtx);
 	}
 	if (result == 0)
 		nstat_enqueue_success(req->hdr.context, state, 0);
-	
+
 	return result;
 }
 
@@ -3590,22 +4167,22 @@ nstat_control_source_add(
 	mbuf_t			msg = NULL;
 	nstat_src_ref_t		*srcrefp = NULL;
 
-	u_int64_t		provider_filters =
-	    state->ncs_provider_filters[provider->nstat_provider_id];
+	u_int64_t		provider_filter_flagss =
+	    state->ncs_provider_filters[provider->nstat_provider_id].npf_flags;
 	boolean_t		tell_user =
-	    ((provider_filters & NSTAT_FILTER_SUPPRESS_SRC_ADDED) == 0);
+	    ((provider_filter_flagss & NSTAT_FILTER_SUPPRESS_SRC_ADDED) == 0);
 	u_int32_t		src_filter =
-	    (provider_filters & NSTAT_FILTER_PROVIDER_NOZEROBYTES)
+	    (provider_filter_flagss & NSTAT_FILTER_PROVIDER_NOZEROBYTES)
 		? NSTAT_FILTER_NOZEROBYTES : 0;
 
 	if (tell_user)
 	{
 		unsigned int one = 1;
-	
+
 		if (mbuf_allocpacket(MBUF_DONTWAIT, sizeof(nstat_msg_src_added),
 		    &one, &msg) != 0)
 			return ENOMEM;
-	
+
 		mbuf_setlen(msg, sizeof(nstat_msg_src_added));
 		mbuf_pkthdr_setlen(msg, mbuf_len(msg));
 		nstat_msg_src_added	*add = mbuf_data(msg);
@@ -3616,7 +4193,7 @@ nstat_control_source_add(
 		add->provider = provider->nstat_provider_id;
 		srcrefp = &add->srcref;
 	}
-	
+
 	// Allocate storage for the source
 	nstat_src	*src = OSMalloc(sizeof(*src), nstat_malloc_tag);
 	if (src == NULL)
@@ -3624,7 +4201,7 @@ nstat_control_source_add(
 		if (msg) mbuf_freem(msg);
 		return ENOMEM;
 	}
-	
+
 	// Fill in the source, including picking an unused source ref
 	lck_mtx_lock(&state->mtx);
 
@@ -3660,9 +4237,9 @@ nstat_control_source_add(
 	// Put the source in the list
 	src->next = state->ncs_srcs;
 	state->ncs_srcs = src;
-	
+
 	lck_mtx_unlock(&state->mtx);
-	
+
 	return 0;
 }
 
@@ -3672,14 +4249,14 @@ nstat_control_handle_remove_request(
 	mbuf_t				m)
 {
 	nstat_src_ref_t			srcref = NSTAT_SRC_REF_INVALID;
-	
+
 	if (mbuf_copydata(m, offsetof(nstat_msg_rem_src_req, srcref), sizeof(srcref), &srcref) != 0)
 	{
 		return EINVAL;
 	}
-	
+
 	lck_mtx_lock(&state->mtx);
-	
+
 	// Remove this source as we look for it
 	nstat_src	**nextp;
 	nstat_src	*src = NULL;
@@ -3692,11 +4269,11 @@ nstat_control_handle_remove_request(
 			break;
 		}
 	}
-	
+
 	lck_mtx_unlock(&state->mtx);
-	
+
 	if (src) nstat_control_cleanup_source(state, src, FALSE);
-	
+
 	return src ? 0 : ENOENT;
 }
 
@@ -3706,7 +4283,7 @@ nstat_control_handle_query_request(
 	mbuf_t				m)
 {
 	// TBD: handle this from another thread so we can enqueue a lot of data
-	// As written, if a client requests query all, this function will be 
+	// As written, if a client requests query all, this function will be
 	// called from their send of the request message. We will attempt to write
 	// responses and succeed until the buffer fills up. Since the clients thread
 	// is blocked on send, it won't be reading unless the client has two threads
@@ -3723,7 +4300,7 @@ nstat_control_handle_query_request(
 	}
 
 	const boolean_t all_srcs = (req.srcref == NSTAT_SRC_REF_ALL);
-	
+
 	lck_mtx_lock(&state->mtx);
 
 	if (all_srcs)
@@ -3745,7 +4322,7 @@ nstat_control_handle_query_request(
 	{
 		nstat_src	*src = NULL;
 		int			gone;
-		
+
 		src = *srcpp;
 		gone = 0;
 		// XXX ignore IFACE types?
@@ -3788,7 +4365,7 @@ nstat_control_handle_query_request(
 				}
 			}
 		}
-		
+
 		if (gone)
 		{
 			// send one last descriptor message so client may see last state
@@ -3803,10 +4380,10 @@ nstat_control_handle_query_request(
 				state->ncs_flags &= ~NSTAT_FLAG_REQCOUNTS;
 				break;
 			}
-			
+
 			// pull src out of the list
 			*srcpp = src->next;
-			
+
 			src->next = dead_srcs;
 			dead_srcs = src;
 		}
@@ -3814,7 +4391,7 @@ nstat_control_handle_query_request(
 		{
 			srcpp = &(*srcpp)->next;
 		}
-		
+
 		if (!all_srcs && req.srcref == src->srcref)
 		{
 			break;
@@ -3838,18 +4415,18 @@ nstat_control_handle_query_request(
 		nstat_enqueue_success(req.hdr.context, state, flags);
 		result = 0;
 	}
-	
+
 	while (dead_srcs)
 	{
 		nstat_src	*src;
-		
+
 		src = dead_srcs;
 		dead_srcs = src->next;
-		
+
 		// release src and send notification
 		nstat_control_cleanup_source(state, src, FALSE);
 	}
-	
+
 	return result;
 }
 
@@ -3914,7 +4491,7 @@ nstat_control_handle_get_src_description(
 					src_count++;
 				}
 			}
-			
+
 			if (!all_srcs)
 			{
 				break;
@@ -3938,7 +4515,7 @@ nstat_control_handle_get_src_description(
 		nstat_enqueue_success(req.hdr.context, state, flags);
 		result = 0;
 	}
-	
+
 	return result;
 }
 
@@ -4070,7 +4647,7 @@ nstat_control_handle_get_update(
 	}
 
 	lck_mtx_lock(&state->mtx);
-	
+
 	state->ncs_flags |= NSTAT_FLAG_SUPPORTS_UPDATES;
 
 	errno_t		result = ENOENT;
@@ -4091,7 +4668,7 @@ nstat_control_handle_get_update(
 		|| src_count < QUERY_CONTINUATION_SRC_COUNT))
 	{
 		int			gone;
-		
+
 		gone = 0;
 		src = *srcpp;
 		if (nstat_control_reporting_allowed(state, src))
@@ -4126,7 +4703,7 @@ nstat_control_handle_get_update(
 				result = nstat_control_send_update(state, src, req.hdr.context, 0, &gone);
 			}
 		}
-		
+
 		if (gone)
 		{
 			// pull src out of the list
@@ -4139,7 +4716,7 @@ nstat_control_handle_get_update(
 		{
 			srcpp = &(*srcpp)->next;
 		}
-		
+
 		if (req.srcref != NSTAT_SRC_REF_ALL && req.srcref == src->srcref)
 		{
 			break;
@@ -4169,11 +4746,11 @@ nstat_control_handle_get_update(
 	{
 		src = dead_srcs;
 		dead_srcs = src->next;
-		
+
 		// release src and send notification
 		nstat_control_cleanup_source(state, src, FALSE);
 	}
-	
+
 	return result;
 }
 
@@ -4182,16 +4759,16 @@ nstat_control_handle_subscribe_sysinfo(
     nstat_control_state		*state)
 {
 	errno_t result = priv_check_cred(kauth_cred_get(), PRIV_NET_PRIVILEGED_NETWORK_STATISTICS, 0);
-	
+
 	if (result != 0)
 	{
 		return result;
 	}
-	
+
 	lck_mtx_lock(&state->mtx);
 	state->ncs_flags |= NSTAT_FLAG_SYSINFO_SUBSCRIBED;
 	lck_mtx_unlock(&state->mtx);
-	
+
 	return 0;
 }
 
@@ -4207,14 +4784,14 @@ nstat_control_send(
 	struct nstat_msg_hdr	*hdr;
 	struct nstat_msg_hdr	storage;
 	errno_t					result = 0;
-	
+
 	if (mbuf_pkthdr_len(m) < sizeof(*hdr))
 	{
 		// Is this the right thing to do?
 		mbuf_freem(m);
 		return EINVAL;
 	}
-	
+
 	if (mbuf_len(m) >= sizeof(*hdr))
 	{
 		hdr = mbuf_data(m);
@@ -4224,7 +4801,7 @@ nstat_control_send(
 		mbuf_copydata(m, 0, sizeof(storage), &storage);
 		hdr = &storage;
 	}
-	
+
 	// Legacy clients may not set the length
 	// Those clients are likely not setting the flags either
 	// Fix everything up so old clients continue to work
@@ -4237,56 +4814,56 @@ nstat_control_send(
 			mbuf_copyback(m, 0, sizeof(*hdr), hdr, MBUF_DONTWAIT);
 		}
 	}
-	
+
 	switch (hdr->type)
 	{
 		case NSTAT_MSG_TYPE_ADD_SRC:
 			result = nstat_control_handle_add_request(state, m);
 			break;
-		
+
 		case NSTAT_MSG_TYPE_ADD_ALL_SRCS:
 			result = nstat_control_handle_add_all(state, m);
 			break;
-		
+
 		case NSTAT_MSG_TYPE_REM_SRC:
 			result = nstat_control_handle_remove_request(state, m);
 			break;
-		
+
 		case NSTAT_MSG_TYPE_QUERY_SRC:
 			result = nstat_control_handle_query_request(state, m);
 			break;
-		
+
 		case NSTAT_MSG_TYPE_GET_SRC_DESC:
 			result = nstat_control_handle_get_src_description(state, m);
 			break;
-		
+
 		case NSTAT_MSG_TYPE_SET_FILTER:
 			result = nstat_control_handle_set_filter(state, m);
 			break;
-		
+
 		case NSTAT_MSG_TYPE_GET_UPDATE:
 			result = nstat_control_handle_get_update(state, m);
 			break;
-		
+
 		case NSTAT_MSG_TYPE_SUBSCRIBE_SYSINFO:
 			result = nstat_control_handle_subscribe_sysinfo(state);
 			break;
-		
+
 		default:
 			result = EINVAL;
 			break;
 	}
-	
+
 	if (result != 0)
 	{
 		struct nstat_msg_error	err;
-		
+
 		bzero(&err, sizeof(err));
 		err.hdr.type = NSTAT_MSG_TYPE_ERROR;
 		err.hdr.length = sizeof(err) + mbuf_pkthdr_len(m);
 		err.hdr.context = hdr->context;
 		err.error = result;
-		
+
 		if (mbuf_prepend(&m, sizeof(err), MBUF_DONTWAIT) == 0 &&
 			mbuf_copyback(m, 0, sizeof(err), &err, MBUF_DONTWAIT) == 0)
 		{
@@ -4297,7 +4874,7 @@ nstat_control_send(
 			}
 			m = NULL;
 		}
-		
+
 		if (result != 0)
 		{
 			// Unable to prepend the error to the request - just send the error
@@ -4309,8 +4886,8 @@ nstat_control_send(
 		}
 		nstat_stats.nstat_handle_msg_failures += 1;
 	}
-	
+
 	if (m) mbuf_freem(m);
-	
+
 	return result;
 }

@@ -104,8 +104,9 @@ _mach_vsnprintf(char *buffer, int length, const char *fmt, va_list ap)
 			}
 		}
 	}
-	*out_ptr = '\0';
-	return max - length;
+	if (max > 0)
+		*out_ptr = '\0';
+	return max - (length + 1); /* don't include the final NULL in the return value */
 }
 
 int

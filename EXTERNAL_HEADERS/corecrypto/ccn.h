@@ -16,28 +16,48 @@
 #include <stdarg.h>
 
 typedef uint8_t cc_byte;
-typedef size_t cc_size;
+typedef size_t  cc_size;
 
 #if  CCN_UNIT_SIZE == 8
 typedef uint64_t cc_unit;          // 64 bit unit
-typedef unsigned cc_dunit __attribute__((mode(TI)));         // 128 bit double width unit
+typedef int64_t  cc_int;
 #define CCN_LOG2_BITS_PER_UNIT  6  // 2^6 = 64 bits
 #define CC_UNIT_C(x) UINT64_C(x)
+ #if  CCN_UINT128_SUPPORT_FOR_64BIT_ARCH
+   typedef unsigned cc_dunit __attribute__((mode(TI)));         // 128 bit double width unit
+   typedef   signed cc_dint  __attribute__((mode(TI)));
+ #else
+   typedef struct cc_dunit {
+    uint64_t l; //do not change the order of the variables. cc_dunit must be little endian
+    uint64_t h;
+   } cc_dunit;
+
+   typedef struct cc_dint {
+    uint64_t l;
+    uint64_t h;
+   } cc_dint;
+ #endif
+
 #elif  CCN_UNIT_SIZE == 4
 typedef uint32_t cc_unit;          // 32 bit unit
 typedef uint64_t cc_dunit;         // 64 bit double width unit
+typedef int64_t cc_dint;
+typedef int32_t cc_int;
 #define CCN_LOG2_BITS_PER_UNIT  5  // 2^5 = 32 bits
 #define CC_UNIT_C(x) UINT32_C(x)
+
 #elif CCN_UNIT_SIZE == 2
 typedef uint16_t cc_unit;          // 16 bit unit
 typedef uint32_t cc_dunit;         // 32 bit double width unit
 #define CCN_LOG2_BITS_PER_UNIT  4  // 2^4 = 16 bits
 #define CC_UNIT_C(x) UINT16_C(x)
+
 #elif CCN_UNIT_SIZE == 1
 typedef uint8_t cc_unit;           // 8 bit unit
 typedef uint16_t cc_dunit;         // 16 bit double width unit
 #define CCN_LOG2_BITS_PER_UNIT  3  // 2^3 = 8 bits
 #define CC_UNIT_C(x) UINT8_C(x)
+
 #else
 #error invalid CCN_UNIT_SIZE
 #endif
@@ -66,7 +86,7 @@ typedef struct {
 #define ccn_sizeof_n(_n_)  (sizeof(cc_unit) * (_n_))
 
 /* Returns the count (n) of a ccn vector that can represent _bits_. */
-#define ccn_nof(_bits_)  (((_bits_) + CCN_UNIT_BITS - 1) / CCN_UNIT_BITS)
+#define ccn_nof(_bits_)  (((_bits_) + CCN_UNIT_BITS - 1) >> CCN_LOG2_BITS_PER_UNIT)
 
 /* Returns the sizeof a ccn vector that can represent _bits_. */
 #define ccn_sizeof(_bits_)  (ccn_sizeof_n(ccn_nof(_bits_)))
@@ -85,14 +105,14 @@ typedef struct {
 
 /* Returns the value of bit _k_ of _ccn_, both are only evaluated once.  */
 #define ccn_bit(_ccn_, _k_) ({__typeof__ (_k_) __k = (_k_); \
-    1 & ((_ccn_)[__k / CCN_UNIT_BITS] >> (__k & (CCN_UNIT_BITS - 1)));})
+    1 & ((_ccn_)[ __k >> CCN_LOG2_BITS_PER_UNIT] >> (__k & (CCN_UNIT_BITS - 1)));})
 
 /* Set the value of bit _k_ of _ccn_ to the value _v_  */
 #define ccn_set_bit(_ccn_, _k_, _v_) ({__typeof__ (_k_) __k = (_k_);        \
     if (_v_)                                                                \
-        (_ccn_)[__k/CCN_UNIT_BITS] |= CC_UNIT_C(1) << (__k & (CCN_UNIT_BITS - 1));     \
+        (_ccn_)[ __k >> CCN_LOG2_BITS_PER_UNIT] |= CC_UNIT_C(1) << (__k & (CCN_UNIT_BITS - 1));     \
     else                                                                    \
-        (_ccn_)[__k/CCN_UNIT_BITS] &= ~(CC_UNIT_C(1) << (__k & (CCN_UNIT_BITS - 1)));  \
+        (_ccn_)[ __k >> CCN_LOG2_BITS_PER_UNIT] &= ~(CC_UNIT_C(1) << (__k & (CCN_UNIT_BITS - 1)));  \
     })
 
 /* Macros for making ccn constants.  You must use list of CCN64_C() instances
@@ -328,6 +348,9 @@ int ccn_cmpn(cc_size ns, const cc_unit *s,
 CC_NONNULL((2, 3, 4))
 cc_unit ccn_sub(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t);
 
+/* |s - t| -> r return 1 iff t > s, 0 otherwise */
+cc_unit ccn_abs(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit *t);
+
 /* s - v -> r return 1 iff v > s return 0 otherwise.
  { N bit, sizeof(cc_unit) * 8 bit -> N bit } N = n * sizeof(cc_unit) * 8 */
 CC_NONNULL((2, 3))
@@ -363,9 +386,6 @@ cc_unit ccn_addn(cc_size n, cc_unit *r, const cc_unit *s,
     assert(n >= nt);
     return ccn_add1(n - nt, r + nt, s + nt, ccn_add(nt, r, s, t));
 }
-
-CC_NONNULL((4, 5))
-void ccn_divmod(cc_size n, cc_unit *q, cc_unit *r, const cc_unit *s, const cc_unit *t);
 
 
 CC_NONNULL((2, 3, 4))
@@ -610,5 +630,39 @@ int ccn_random(cc_size n, cc_unit *r, struct ccrng_state *rng) {
 /* Make a ccn of size ccn_nof(nbits) units with up to nbits sized random value. */
 CC_NONNULL((2, 3))
 int ccn_random_bits(cc_size nbits, cc_unit *r, struct ccrng_state *rng);
+
+/*!
+ @brief ccn_make_recip(cc_size nd, cc_unit *recip, const cc_unit *d) computes the reciprocal of d: recip = 2^2b/d where b=bitlen(d)
+
+ @param nd      length of array d
+ @param recip   returned reciprocal of size nd+1
+ @param d       input number d
+*/
+CC_NONNULL((2, 3))
+void ccn_make_recip(cc_size nd, cc_unit *recip, const cc_unit *d);
+
+CC_NONNULL((6, 8))
+int ccn_div_euclid(cc_size nq, cc_unit *q, cc_size nr, cc_unit *r, cc_size na, const cc_unit *a, cc_size nd, const cc_unit *d);
+
+#define ccn_div(nq, q, na, a, nd, d) ccn_div_euclid(nq, q, 0, NULL, na, a, nd, d)
+#define ccn_mod(nr, r, na, a, nd, d) ccn_div_euclid(0 , NULL, nr, r, na, a, nd, d)
+
+/*!
+ @brief ccn_div_use_recip(nq, q, nr, r, na, a, nd, d) comutes q=a/d and r=a%d
+ @discussion q and rcan be NULL. Reads na from a and nd from d. Writes nq in q and nr in r. nq and nr must be large enough to accomodate results, otherwise error is retuned. Execution time depends on the size of a. Computation is perfomed on of fixedsize and the leadig zeros of a of q are are also used in the computation.
+ @param nq length of array q that hold the quotients. The maximum length of quotient is the actual length of dividend a
+ @param q  returned quotient. If nq is larger than needed, it is filled with leading zeros. If it is smaller, error is returned. q can be set to NULL, if not needed.
+ @param nr length of array r that hold the remainder. The maximum length of remainder is the actual length of divisor d
+ @param r  returned remainder. If nr is larger than needed, it is filled with leading zeros. Ifi is smaller error is returned. r can be set to NULL if not required.
+ @param na length of dividend. Dividend may have leading zeros.
+ @param a  input Dividend
+ @param nd length of input divisor. Divisor may have leading zeros.
+ @param d  input Divisor
+ @param recip_d The reciprocal of d, of length nd+1.
+
+ @return  returns 0 if successful, negative of error.
+ */
+CC_NONNULL((6, 8, 9))
+int ccn_div_use_recip(cc_size nq, cc_unit *q, cc_size nr, cc_unit *r, cc_size na, const cc_unit *a, cc_size nd, const cc_unit *d, const cc_unit *recip_d);
 
 #endif /* _CORECRYPTO_CCN_H_ */

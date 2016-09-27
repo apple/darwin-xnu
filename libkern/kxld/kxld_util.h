@@ -214,5 +214,8 @@ boolean_t kxld_set_cross_link_page_size(kxld_size_t target_page_size);
 kxld_size_t kxld_get_effective_page_size(void);
 kxld_addr_t kxld_round_page_cross_safe(kxld_addr_t addr);
 
+#if SPLIT_KEXTS_DEBUG
+void kxld_show_split_info(splitKextLinkInfo *info);
+#endif
 
 #endif /* _KXLD_UTIL_H_ */

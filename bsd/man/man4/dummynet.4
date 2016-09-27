@@ -17,41 +17,17 @@ management policies, and emulating delays and losses.
 The user interface for
 .Em dummynet
 is implemented by the
-.Nm ipfw
+.Nm dnctl
 program, so the reader is referred to the
-.Xr ipfw 8
+.Xr dnctl 8
 manpage for a complete description of the capabilities of
 .Nm
 and on how to use it.
-.Sh KERNEL OPTIONS
-The following options in the kernel configuration file are related to
-.Nm
-operation:
-.Bd -literal
-  IPFIREWALL               - enable ipfirewall (required for dummynet).
-  IPFIREWALL_VERBOSE       - enable firewall output.
-  IPFIREWALL_VERBOSE_LIMIT - limit firewall output.
-  DUMMYNET                 - enable dummynet operation.
-  NMBCLUSTERS              - set the amount of network packet buffers
-  HZ                       - sets the timer granularity
-.Ed
-.Pp
-Generally, the following options are required:
-.Bd -literal
-  options IPFIREWALL
-  options DUMMYNET
-  options HZ=1000	# strongly recommended
-.Ed
-.Pp
-additionally, one may want to increase the number
-of mbuf clusters (used to store network packets) according to the
-sum of the bandwidth-delay products and queue sizes of all configured
-pipes.
 .Sh SEE ALSO
+.Xr dnctl 8 ,
 .Xr setsockopt 2 ,
 .Xr bridge 4 ,
 .Xr ip 4 ,
-.Xr ipfw 8 ,
 .Xr sysctl 8
 .Sh HISTORY
 .Nm

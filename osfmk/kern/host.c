@@ -89,10 +89,12 @@
 #include <kern/misc_protos.h>
 #include <kern/sched.h>
 #include <kern/processor.h>
+#include <kern/mach_node.h>	// mach_node_port_changed()
 
 #include <vm/vm_map.h>
 #include <vm/vm_purgeable_internal.h>
 #include <vm/vm_pageout.h>
+
 
 #if CONFIG_ATM
 #include <atm/atm_internal.h>
@@ -102,6 +104,8 @@
 #include <security/mac_mach_internal.h>
 #endif
 
+#include <pexpert/pexpert.h>
+
 host_data_t realhost;
 
 vm_extmod_statistics_data_t host_extmod_statistics;
@@ -109,7 +113,7 @@ vm_extmod_statistics_data_t host_extmod_statistics;
 kern_return_t
 host_processors(host_priv_t host_priv, processor_array_t * out_array, mach_msg_type_number_t * countp)
 {
-	register processor_t processor, *tp;
+	processor_t processor, *tp;
 	void * addr;
 	unsigned int count, i;
 
@@ -156,8 +160,8 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 
 	switch (flavor) {
 	case HOST_BASIC_INFO: {
-		register host_basic_info_t basic_info;
-		register int master_id;
+		host_basic_info_t basic_info;
+		int master_id;
 
 		/*
 		 *	Basic information about this host.
@@ -191,7 +195,7 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 	}
 
 	case HOST_SCHED_INFO: {
-		register host_sched_info_t sched_info;
+		host_sched_info_t sched_info;
 		uint32_t quantum_time;
 		uint64_t quantum_ns;
 
@@ -225,7 +229,7 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 	}
 
 	case HOST_PRIORITY_INFO: {
-		register host_priority_info_t priority_info;
+		host_priority_info_t priority_info;
 
 		if (*count < HOST_PRIORITY_INFO_COUNT)
 			return (KERN_FAILURE);
@@ -253,6 +257,19 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 	case HOST_SEMAPHORE_TRAPS: {
 		*count = 0;
 		return (KERN_SUCCESS);
+	}
+
+	case HOST_CAN_HAS_DEBUGGER: {
+		host_can_has_debugger_info_t can_has_debugger_info;
+
+		if (*count < HOST_CAN_HAS_DEBUGGER_COUNT)
+			return (KERN_FAILURE);
+
+		can_has_debugger_info = (host_can_has_debugger_info_t)info;
+		can_has_debugger_info->can_has_debugger = PE_i_can_has_debugger(NULL);
+		*count = HOST_CAN_HAS_DEBUGGER_COUNT;
+
+		return KERN_SUCCESS;
 	}
 
 	case HOST_VM_PURGABLE: {
@@ -321,8 +338,8 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 	}
 
 	case HOST_VM_INFO: {
-		register processor_t processor;
-		register vm_statistics64_t stat;
+		processor_t processor;
+		vm_statistics64_t stat;
 		vm_statistics64_data_t host_vm_stat;
 		vm_statistics_t stat32;
 		mach_msg_type_number_t original_count;
@@ -404,7 +421,7 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 	}
 
 	case HOST_CPU_LOAD_INFO: {
-		register processor_t processor;
+		processor_t processor;
 		host_cpu_load_info_t cpu_load_info;
 
 		if (*count < HOST_CPU_LOAD_INFO_COUNT)
@@ -504,8 +521,8 @@ host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_ms
 	switch (flavor) {
 	case HOST_VM_INFO64: /* We were asked to get vm_statistics64 */
 	{
-		register processor_t processor;
-		register vm_statistics64_t stat;
+		processor_t processor;
+		vm_statistics64_t stat;
 		vm_statistics64_data_t host_vm_stat;
 		mach_msg_type_number_t original_count;
 		unsigned int local_q_internal_count;
@@ -861,13 +878,36 @@ kernel_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 {
 	ipc_port_t old_port;
 
+#if !MACH_FLIPC
+    if (id == HOST_NODE_PORT)
+        return (KERN_NOT_SUPPORTED);
+#endif
+
 	host_lock(host_priv);
 	old_port = host_priv->special[id];
 	host_priv->special[id] = port;
 	host_unlock(host_priv);
+
+#if MACH_FLIPC
+    if (id == HOST_NODE_PORT)
+		mach_node_port_changed();
+#endif
+
 	if (IP_VALID(old_port))
 		ipc_port_release_send(old_port);
 	return (KERN_SUCCESS);
+}
+
+/*
+ *      Kernel interface for retrieving a special port.
+ */
+kern_return_t
+kernel_get_special_port(host_priv_t host_priv, int id, ipc_port_t * portp)
+{
+        host_lock(host_priv);
+        *portp = host_priv->special[id];
+        host_unlock(host_priv);
+        return (KERN_SUCCESS);
 }
 
 /*

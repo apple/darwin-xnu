@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
@@ -86,7 +86,7 @@
 #include <mach/coalition.h>		/* COALITION_NUM_TYPES */
 #endif
 
-#if defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL) 
+#if defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL)
 
 struct session;
 struct pgrp;
@@ -216,7 +216,7 @@ struct extern_proc {
 #define P_DIRTY_TERMINATED                      0x00000020      /* process has been marked for termination */
 #define P_DIRTY_BUSY                            0x00000040      /* serialization flag */
 #define P_DIRTY_MARKED                          0x00000080      /* marked dirty previously */
-#define P_DIRTY_DEFER_IN_PROGRESS               0x00000100      /* deferral to idle-band in process */
+#define P_DIRTY_AGING_IN_PROGRESS               0x00000100      /* aging in one of the 'aging bands' */
 #define P_DIRTY_LAUNCH_IN_PROGRESS              0x00000200      /* launch is in progress */
 
 #define P_DIRTY_IS_DIRTY                        (P_DIRTY | P_DIRTY_SHUTDOWN)
@@ -249,9 +249,9 @@ extern void proc_signal(int pid, int signum);
 extern int proc_issignal(int pid, sigset_t mask);
 /* this routine returns 1 if the pid1 is inferior of pid2 */
 extern int proc_isinferior(int pid1, int pid2);
-/* this routine copies the process's name of the executable to the passed in buffer. It 
- * is always null terminated. The size of the buffer is to be passed in as well. This 
- * routine is to be used typically for debugging 
+/* this routine copies the process's name of the executable to the passed in buffer. It
+ * is always null terminated. The size of the buffer is to be passed in as well. This
+ * routine is to be used typically for debugging
  */
 void proc_name(int pid, char * buf, int size);
 /* This routine is simillar to proc_name except it returns for current process */
@@ -298,7 +298,7 @@ pid_t proc_selfpgrpid(void);
  @param p Process whose pgrpid to grab.
  @return pgrpid for "p".
  */
-pid_t proc_pgrpid(proc_t);
+pid_t proc_pgrpid(proc_t p);
 
 #ifdef KERNEL_PRIVATE
 // mark a process as being allowed to call vfs_markdependency()
@@ -315,28 +315,31 @@ extern uint32_t proc_getuid(proc_t);
 extern uint32_t proc_getgid(proc_t);
 extern int proc_getcdhash(proc_t, unsigned char *);
 
-/*! 
+/*!
  @function    proc_pidbackgrounded
  @abstract    KPI to determine if a process is currently backgrounded.
- @discussion  The process may move into or out of background state at any time, 
-              so be prepared for this value to be outdated immediately. 
+ @discussion  The process may move into or out of background state at any time,
+              so be prepared for this value to be outdated immediately.
  @param pid   PID of the process to be queried.
  @param state Pointer to a value which will be set to 1 if the process
-              is currently backgrounded, 0 otherwise. 
+              is currently backgrounded, 0 otherwise.
  @return      ESRCH if pid cannot be found or has started exiting.
 
               EINVAL if state is NULL.
  */
 extern int proc_pidbackgrounded(pid_t pid, uint32_t* state);
 
-/* 
- * This returns an unique 64bit id of a given process. 
- * Caller needs to hold proper reference on the 
+/*
+ * This returns an unique 64bit id of a given process.
+ * Caller needs to hold proper reference on the
  * passed in process strucutre.
  */
 extern uint64_t proc_uniqueid(proc_t);
 
 extern void proc_set_responsible_pid(proc_t target_proc, pid_t responsible_pid);
+
+/* return 1 if process is forcing case-sensitive HFS+ access, 0 for default */
+extern int proc_is_forcing_hfs_case_sensitivity(proc_t);
 
 #endif /* KERNEL_PRIVATE */
 
@@ -369,11 +372,14 @@ __END_DECLS
 #ifdef PRIVATE
 
 /* Values for pid_shutdown_sockets */
+#define SHUTDOWN_SOCKET_LEVEL_DISCONNECT_SVC		0x00000001
+#define SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL		0x00000002
+
 #ifdef KERNEL
-#define SHUTDOWN_SOCKET_LEVEL_DISCONNECT_INTERNAL	0x0
-#endif /* KERNEL */
-#define SHUTDOWN_SOCKET_LEVEL_DISCONNECT_SVC		0x1
-#define SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL		0x2
+#define SHUTDOWN_SOCKET_LEVEL_DISCONNECT_INTERNAL	0x10000000
+#define SHUTDOWN_SOCKET_LEVEL_NECP			0x20000000
+#define SHUTDOWN_SOCKET_LEVEL_CONTENT_FILTER		0x40000000
+#endif
 
 #ifndef KERNEL
 

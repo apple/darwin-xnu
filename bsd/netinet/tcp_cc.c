@@ -354,12 +354,6 @@ tcp_cc_cwnd_init_or_reset(struct tcpcb *tp)
 int
 tcp_cc_delay_ack(struct tcpcb *tp, struct tcphdr *th)
 {
-	/* If any flags other than TH_ACK is set, set "end-of-write" bit */
-	if ((th->th_flags & ~TH_ACK))
-		tp->t_flagsext |= TF_STREAMEOW;
-	else    
-		tp->t_flagsext &= ~(TF_STREAMEOW);
-    
 	switch (tcp_delack_enabled) {
 	    case 1:
 	    case 2:

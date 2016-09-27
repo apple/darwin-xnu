@@ -101,6 +101,8 @@ vm_phantom_cache_init()
 	unsigned int	log1;
 	unsigned int	size;
 
+	if ( !VM_CONFIG_COMPRESSOR_IS_ACTIVE)
+		return;
 	num_entries = (uint32_t)(((max_mem / PAGE_SIZE) / 4) / VM_GHOST_PAGES_PER_ENTRY);
 	vm_phantom_cache_num_entries = 1;
 
@@ -145,29 +147,30 @@ void
 vm_phantom_cache_add_ghost(vm_page_t m)
 {
 	vm_ghost_t	vpce;
+	vm_object_t	object;
 	int		ghost_index;
 	int		pg_mask;
 	boolean_t	isSSD = FALSE;
 	vm_phantom_hash_entry_t ghost_hash_index;
 
-#if MACH_ASSERT || DEBUG
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-	vm_object_lock_assert_exclusive(m->object);
-#endif
+	object = VM_PAGE_OBJECT(m);
+
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
+	vm_object_lock_assert_exclusive(object);
 
 	if (vm_phantom_cache_num_entries == 0)
 		return;
 	
 	pg_mask = pg_masks[(m->offset >> PAGE_SHIFT) & VM_GHOST_PAGE_MASK];
 
-	if (m->object->phantom_object_id == 0) {
+	if (object->phantom_object_id == 0) {
 
-		vnode_pager_get_isSSD(m->object->pager, &isSSD);
+		vnode_pager_get_isSSD(object->pager, &isSSD);
 
 		if (isSSD == TRUE)
-			m->object->phantom_isssd = TRUE;
+			object->phantom_isssd = TRUE;
 
-		m->object->phantom_object_id = vm_phantom_object_id++;
+		object->phantom_object_id = vm_phantom_object_id++;
 		
 		if (vm_phantom_object_id == 0)
 			vm_phantom_object_id = VM_PHANTOM_OBJECT_ID_AFTER_WRAP;
@@ -225,14 +228,14 @@ vm_phantom_cache_add_ghost(vm_page_t m)
 
 	vpce->g_pages_held = pg_mask;
 	vpce->g_obj_offset = (m->offset >> (PAGE_SHIFT + VM_GHOST_PAGE_SHIFT)) & VM_GHOST_OFFSET_MASK;
-	vpce->g_obj_id = m->object->phantom_object_id;
+	vpce->g_obj_id = object->phantom_object_id;
 
 	ghost_hash_index = vm_phantom_hash(vpce->g_obj_id, vpce->g_obj_offset);
 	vpce->g_next_index = vm_phantom_cache_hash[ghost_hash_index];
 	vm_phantom_cache_hash[ghost_hash_index] = ghost_index;
 
 done:
-	if (m->object->phantom_isssd)
+	if (object->phantom_isssd)
 		OSAddAtomic(1, &sample_period_ghost_added_count_ssd);
 	else
 		OSAddAtomic(1, &sample_period_ghost_added_count);
@@ -245,8 +248,11 @@ vm_phantom_cache_lookup_ghost(vm_page_t m, uint32_t pg_mask)
 	uint64_t	g_obj_offset;
 	uint32_t	g_obj_id;
 	uint32_t	ghost_index;
+	vm_object_t	object;
 
-	if ((g_obj_id = m->object->phantom_object_id) == 0) {
+	object = VM_PAGE_OBJECT(m);
+
+	if ((g_obj_id = object->phantom_object_id) == 0) {
 		/*
 		 * no entries in phantom cache for this object
 		 */
@@ -286,11 +292,12 @@ vm_phantom_cache_update(vm_page_t m)
 {
 	int		pg_mask;
 	vm_ghost_t      vpce;
+	vm_object_t	object;
 
-#if MACH_ASSERT || DEBUG
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-	vm_object_lock_assert_exclusive(m->object);
-#endif
+	object = VM_PAGE_OBJECT(m);
+
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
+	vm_object_lock_assert_exclusive(object);
 
 	if (vm_phantom_cache_num_entries == 0)
 		return;
@@ -303,7 +310,7 @@ vm_phantom_cache_update(vm_page_t m)
 
 		phantom_cache_stats.pcs_updated_phantom_state++;
 
-		if (m->object->phantom_isssd)
+		if (object->phantom_isssd)
 			OSAddAtomic(1, &sample_period_ghost_found_count_ssd);
 		else
 			OSAddAtomic(1, &sample_period_ghost_found_count);

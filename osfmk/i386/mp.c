@@ -31,6 +31,7 @@
 
 #include <mach_rt.h>
 #include <mach_kdp.h>
+#include <kdp/kdp_internal.h>
 #include <mach_ldebug.h>
 #include <gprof.h>
 
@@ -110,9 +111,8 @@ void		i386_cpu_IPI(int cpu);
 #if MACH_KDP
 static void	mp_kdp_wait(boolean_t flush, boolean_t isNMI);
 #endif /* MACH_KDP */
-static void	mp_rendezvous_action(void);
-static void 	mp_broadcast_action(void);
 
+static boolean_t	mp_safe_spin_lock(usimple_lock_t lock);
 #if MACH_KDP
 static boolean_t	cpu_signal_pending(int cpu, mp_event_t event);
 #endif /* MACH_KDP */
@@ -123,6 +123,9 @@ uint32_t 		TSC_sync_margin = 0xFFF;
 volatile boolean_t	force_immediate_debugger_NMI = FALSE;
 volatile boolean_t	pmap_tlb_flush_timeout = FALSE;
 decl_simple_lock_data(,mp_kdp_lock);
+
+decl_simple_lock_data(,debugger_callback_lock);
+struct debugger_callback *debugger_callback = NULL;
 
 decl_lck_mtx_data(static, mp_cpu_boot_lock);
 lck_mtx_ext_t	mp_cpu_boot_lock_ext;
@@ -226,6 +229,7 @@ smp_init(void)
 {
 	simple_lock_init(&mp_kdp_lock, 0);
 	simple_lock_init(&mp_rv_lock, 0);
+	simple_lock_init(&debugger_callback_lock, 0);
 	lck_grp_attr_setdefault(&smp_lck_grp_attr);
 	lck_grp_init(&smp_lck_grp, "i386_smp", &smp_lck_grp_attr);
 	lck_mtx_init_ext(&mp_cpu_boot_lock, &mp_cpu_boot_lock_ext, &smp_lck_grp, LCK_ATTR_NULL);
@@ -535,14 +539,6 @@ cpu_signal_handler(x86_saved_state_t *regs)
 			DBGLOG(cpu_handle,my_cpu,MP_TLB_FLUSH);
 			i_bit_clear(MP_TLB_FLUSH, my_word);
 			pmap_update_interrupt();
-		} else if (i_bit(MP_RENDEZVOUS, my_word)) {
-			DBGLOG(cpu_handle,my_cpu,MP_RENDEZVOUS);
-			i_bit_clear(MP_RENDEZVOUS, my_word);
-			mp_rendezvous_action();
-		} else if (i_bit(MP_BROADCAST, my_word)) {
-			DBGLOG(cpu_handle,my_cpu,MP_BROADCAST);
-			i_bit_clear(MP_BROADCAST, my_word);
-			mp_broadcast_action();
 		} else if (i_bit(MP_CHUD, my_word)) {
 			DBGLOG(cpu_handle,my_cpu,MP_CHUD);
 			i_bit_clear(MP_CHUD, my_word);
@@ -614,17 +610,24 @@ NMIInterruptHandler(x86_saved_state_t *regs)
 	    mp_cpus_call_wait_timeout ||
 	    panic_active()) {
 		mp_kdp_wait(FALSE, TRUE);
-	} else if (virtualized && (debug_boot_arg & DB_NMI)) {
+	} else if (!mp_kdp_trap &&
+		   !mp_kdp_is_NMI &&
+		   virtualized && (debug_boot_arg & DB_NMI)) {
 		/*
 		 * Under a VMM with the debug boot-arg set, drop into kdp.
 		 * Since an NMI is involved, there's a risk of contending with
 		 * a panic. And side-effects of NMIs may result in entry into, 
 		 * and continuing from, the debugger being unreliable.
 		 */
-		kprintf_break_lock();
-		kprintf("Debugger entry requested by NMI\n");
-		kdp_i386_trap(T_DEBUG, saved_state64(regs), 0, 0);
-		printf("Debugger entry requested by NMI\n");
+		if (__sync_bool_compare_and_swap(&mp_kdp_is_NMI, FALSE, TRUE)) {
+			kprintf_break_lock();
+			kprintf("Debugger entry requested by NMI\n");
+			kdp_i386_trap(T_DEBUG, saved_state64(regs), 0, 0);
+			printf("Debugger entry requested by NMI\n");
+			mp_kdp_is_NMI = FALSE;
+		} else {
+			mp_kdp_wait(FALSE, FALSE);
+		}
 	} else {
 		mp_kdp_wait(FALSE, FALSE);
 	}
@@ -761,44 +764,6 @@ i386_signal_cpu(int cpu, mp_event_t event, mp_sync_t mode)
 }
 
 /*
- * Send event to all running cpus.
- * Called with the topology locked.
- */
-void
-i386_signal_cpus(mp_event_t event, mp_sync_t mode)
-{
-	unsigned int	cpu;
-	unsigned int	my_cpu = cpu_number();
-
-	assert(hw_lock_held((hw_lock_t)&x86_topo_lock));
-
-	for (cpu = 0; cpu < real_ncpus; cpu++) {
-		if (cpu == my_cpu || !cpu_datap(cpu)->cpu_running)
-			continue;
-		i386_signal_cpu(cpu, event, mode);
-	}
-}
-
-/*
- * Return the number of running cpus.
- * Called with the topology locked.
- */
-int
-i386_active_cpus(void)
-{
-	unsigned int	cpu;
-	unsigned int	ncpus = 0;
-
-	assert(hw_lock_held((hw_lock_t)&x86_topo_lock));
-
-	for (cpu = 0; cpu < real_ncpus; cpu++) {
-		if (cpu_datap(cpu)->cpu_running)
-			ncpus++;
-	}
-	return(ncpus);
-}
-
-/*
  * Helper function called when busy-waiting: panic if too long
  * a TSC-based time has elapsed since the start of the spin.
  */
@@ -816,14 +781,15 @@ mp_spin_timeout(uint64_t tsc_start)
 	 * unless we have serial console printing (kprintf) enabled
 	 * in which case we allow an even greater margin.
 	 */
-	tsc_timeout = disable_serial_output ? (uint64_t) LockTimeOutTSC << 2
-					    : (uint64_t) LockTimeOutTSC << 4;
+	tsc_timeout = disable_serial_output ? LockTimeOutTSC << 2
+					    : LockTimeOutTSC << 4;
 	return  (rdtsc64() > tsc_start + tsc_timeout);
 }
 
 /*
  * Helper function to take a spinlock while ensuring that incoming IPIs
  * are still serviced if interrupts are masked while we spin.
+ * Returns current interrupt state.
  */
 static boolean_t
 mp_safe_spin_lock(usimple_lock_t lock)
@@ -867,7 +833,7 @@ mp_safe_spin_lock(usimple_lock_t lock)
  */
 
 static void
-mp_rendezvous_action(void)
+mp_rendezvous_action(__unused void *null)
 {
 	boolean_t	intrs_enabled;
 	uint64_t	tsc_spin_start;
@@ -948,13 +914,10 @@ mp_rendezvous(void (*setup_func)(void *),
 	 * signal other processors, which will call mp_rendezvous_action()
 	 * with interrupts disabled
 	 */
-	(void) mp_safe_spin_lock(&x86_topo_lock);
-	mp_rv_ncpus = i386_active_cpus();
-	i386_signal_cpus(MP_RENDEZVOUS, ASYNC);
-	simple_unlock(&x86_topo_lock);
+	mp_rv_ncpus = mp_cpus_call(CPUMASK_OTHERS, NOSYNC, &mp_rendezvous_action, NULL) + 1;
 
 	/* call executor function on this cpu */
-	mp_rendezvous_action();
+	mp_rendezvous_action(NULL);
 
 	/*
 	 * Spin for everyone to complete.
@@ -1212,7 +1175,6 @@ mp_cpus_call(
 			(void (*)(void *,void *))action_func,
 			arg,
 			NULL,
-			NULL,
 			NULL);
 }
 
@@ -1224,6 +1186,7 @@ mp_cpus_call_wait(boolean_t	intrs_enabled,
 	mp_call_queue_t		*cqp;
 	uint64_t		tsc_spin_start;
 
+	assert(ml_get_interrupts_enabled() == 0 || get_preemption_level() != 0);
 	cqp = &mp_cpus_call_head[cpu_number()];
 
 	tsc_spin_start = rdtsc64();
@@ -1253,14 +1216,12 @@ mp_cpus_call1(
         void		(*action_func)(void *, void *),
         void		*arg0,
         void		*arg1,
-	cpumask_t	*cpus_calledp,
-	cpumask_t	*cpus_notcalledp)
+	cpumask_t	*cpus_calledp)
 {
-	cpu_t		cpu;
+	cpu_t		cpu = 0;
 	boolean_t	intrs_enabled = FALSE;
 	boolean_t	call_self = FALSE;
 	cpumask_t	cpus_called = 0;
-	cpumask_t	cpus_notcalled = 0;
 	cpumask_t	cpus_responded = 0;
 	long 		cpus_call_count = 0;
 	uint64_t	tsc_spin_start;
@@ -1318,7 +1279,6 @@ mp_cpus_call1(
 		} else {
 			/*
 			 * Here to queue a call to cpu and IPI.
-			 * Spinning for request buffer unless NOSYNC.
 			 */
 			mp_call_t	*callp = NULL;
 			mp_call_queue_t	*cqp = &mp_cpus_call_head[cpu];
@@ -1328,34 +1288,23 @@ mp_cpus_call1(
 			if (callp == NULL)
 				callp = mp_call_alloc();
 			intrs_inner = mp_call_head_lock(cqp);
-			if (mode == NOSYNC) {
-				if (callp == NULL) {
-					cpus_notcalled |= cpu_to_cpumask(cpu);
-					mp_call_head_unlock(cqp, intrs_inner);
-					KERNEL_DEBUG_CONSTANT(
-						TRACE_MP_CPUS_CALL_NOBUF,
-						cpu, 0, 0, 0, 0);
-					continue;
+			if (callp == NULL) {
+				mp_call_head_unlock(cqp, intrs_inner);
+				KERNEL_DEBUG_CONSTANT(
+					TRACE_MP_CPUS_CALL_NOBUF,
+					cpu, 0, 0, 0, 0);
+				if (!intrs_inner) {
+					/* Sniffing w/o locking */
+					if (!queue_empty(&cqp->queue))
+						mp_cpus_call_action();
+					handle_pending_TLB_flushes();
 				}
-				callp->maskp = NULL;
-			} else {
-				if (callp == NULL) {
-					mp_call_head_unlock(cqp, intrs_inner);
-					KERNEL_DEBUG_CONSTANT(
-						TRACE_MP_CPUS_CALL_NOBUF,
-						cpu, 0, 0, 0, 0);
-					if (!intrs_inner) {
-						/* Sniffing w/o locking */
-						if (!queue_empty(&cqp->queue))
-							mp_cpus_call_action();
-						handle_pending_TLB_flushes();
-					}
-					if (mp_spin_timeout(tsc_spin_start))
-						panic("mp_cpus_call1() timeout");
-					goto queue_call;
-				}
-				callp->maskp = &cpus_responded;
+				if (mp_spin_timeout(tsc_spin_start))
+					panic("mp_cpus_call1() timeout start: 0x%llx, cur: 0x%llx",
+					      tsc_spin_start, rdtsc64());
+				goto queue_call;
 			}
+			callp->maskp = (mode == NOSYNC) ? NULL : &cpus_responded;
 			callp->func = action_func;
 			callp->arg0 = arg0;
 			callp->arg1 = arg1;
@@ -1386,12 +1335,12 @@ mp_cpus_call1(
 		}
 	}
 
-	/* Safe to allow pre-emption now */
-	mp_enable_preemption();
-
 	/* For ASYNC, now wait for all signaled cpus to complete their calls */
 	if (mode == ASYNC)
 		mp_cpus_call_wait(intrs_enabled, cpus_called, &cpus_responded);
+
+	/* Safe to allow pre-emption now */
+	mp_enable_preemption();
 
 out:
 	if (call_self){
@@ -1401,19 +1350,17 @@ out:
 
 	if (cpus_calledp)
 		*cpus_calledp = cpus_called;
-	if (cpus_notcalledp)
-		*cpus_notcalledp = cpus_notcalled;
 
 	KERNEL_DEBUG_CONSTANT(
 		TRACE_MP_CPUS_CALL | DBG_FUNC_END,
-		cpus_call_count, cpus_called, cpus_notcalled, 0, 0);
+		cpus_call_count, cpus_called, 0, 0, 0);
 
 	return (cpu_t) cpus_call_count;
 }
 
 
 static void
-mp_broadcast_action(void)
+mp_broadcast_action(__unused void *null)
 {
    /* call action function */
    if (mp_bc_action_func != NULL)
@@ -1452,16 +1399,14 @@ mp_broadcast(
    /*
     * signal other processors, which will call mp_broadcast_action()
     */
-   simple_lock(&x86_topo_lock);
-   mp_bc_ncpus = i386_active_cpus();   /* total including this cpu */
-   mp_bc_count = mp_bc_ncpus;
-   i386_signal_cpus(MP_BROADCAST, ASYNC);
+   mp_bc_count = real_ncpus;				/* assume max possible active */
+   mp_bc_ncpus = mp_cpus_call(CPUMASK_OTHERS, NOSYNC, *mp_broadcast_action, NULL) + 1;
+   atomic_decl(&mp_bc_count, real_ncpus - mp_bc_ncpus);	/* subtract inactive */
 
    /* call executor function on this cpu */
-   mp_broadcast_action();
-   simple_unlock(&x86_topo_lock);
+   mp_broadcast_action(NULL);
 
-   /* block for all cpus to have run action_func */
+   /* block for other cpus to have run action_func */
    if (mp_bc_ncpus > 1)
        thread_block(THREAD_CONTINUE_NULL);
    else
@@ -1563,6 +1508,7 @@ int	pmsafe_debug	= 1;
 
 #if	MACH_KDP
 volatile boolean_t	mp_kdp_trap = FALSE;
+volatile boolean_t	mp_kdp_is_NMI = FALSE;
 volatile unsigned long	mp_kdp_ncpus;
 boolean_t		mp_kdp_state;
 
@@ -1639,10 +1585,7 @@ mp_kdp_enter(void)
 		 * "unsafe-to-interrupt" points such as the trampolines,
 		 * but neither do we want to lose state by waiting too long.
 		 */
-		tsc_timeout = rdtsc64() + (ncpus * 1000 * 1000 * 10ULL);
-
-		if (virtualized)
-			tsc_timeout = ~0ULL;
+		tsc_timeout = rdtsc64() + (LockTimeOutTSC);
 
 		while (mp_kdp_ncpus != ncpus && rdtsc64() < tsc_timeout) {
 			/*
@@ -1658,11 +1601,21 @@ mp_kdp_enter(void)
 		 * interrupt them with an NMI via the local APIC.
 		 */
 		if (mp_kdp_ncpus != ncpus) {
+			DBG("mp_kdp_enter() timed-out on cpu %d, NMI-ing\n", my_cpu);
 			for (cpu = 0; cpu < real_ncpus; cpu++) {
 				if (cpu == my_cpu || !cpu_datap(cpu)->cpu_running)
 					continue;
 				if (cpu_signal_pending(cpu, MP_KDP))
 					cpu_NMI_interrupt(cpu);
+			}
+			/* Wait again for the same timeout */
+			tsc_timeout = rdtsc64() + (LockTimeOutTSC);
+			while (mp_kdp_ncpus != ncpus && rdtsc64() < tsc_timeout) {
+				handle_pending_TLB_flushes();
+				cpu_pause();
+			}
+			if (mp_kdp_ncpus != ncpus) {
+				panic("mp_kdp_enter() timed-out waiting after NMI");
 			}
 		}
 	}
@@ -1787,6 +1740,35 @@ mp_kdp_exit(void)
 	(void) ml_set_interrupts_enabled(mp_kdp_state);
 	postcode(0);
 }
+
+#define TRAP_DEBUGGER __asm__ volatile("int3")
+
+kern_return_t
+DebuggerWithCallback(kern_return_t (*callback) (void*),
+					 void *callback_context,
+					 boolean_t proceed_on_sync_failure)
+{
+	simple_lock(&debugger_callback_lock);
+
+	struct debugger_callback callback_buf = {
+		.callback = callback,
+		.callback_context = callback_context,
+		.proceed_on_sync_failure = proceed_on_sync_failure,
+		.error = KERN_FAILURE
+	};
+
+	assert(debugger_callback == NULL);
+	debugger_callback = &callback_buf;
+
+	TRAP_DEBUGGER;
+
+	debugger_callback = NULL;
+
+	simple_unlock(&debugger_callback_lock);
+
+	return callback_buf.error;
+}
+
 #endif	/* MACH_KDP */
 
 boolean_t
@@ -1952,3 +1934,22 @@ ml_interrupt_prewarm(
 		return cwd.cwd_result;
 	}
 }
+
+#if DEBUG || DEVELOPMENT
+void
+kernel_spin(uint64_t spin_ns)
+{
+	boolean_t	istate;
+	uint64_t	spin_abs;
+	uint64_t	deadline;
+
+	kprintf("kernel_spin(%llu) spinning uninterruptibly\n", spin_ns);
+	istate = ml_set_interrupts_enabled(FALSE);
+	nanoseconds_to_absolutetime(spin_ns, &spin_abs);
+	deadline = mach_absolute_time() + spin_ns;
+	while (mach_absolute_time() < deadline)
+		cpu_pause();
+	ml_set_interrupts_enabled(istate);
+	kprintf("kernel_spin() continuing\n");
+}
+#endif

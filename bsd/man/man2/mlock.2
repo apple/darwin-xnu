@@ -119,7 +119,7 @@ In this case, the global location
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Mlock
+.Fn mlock
 and 
 .Fn munlock
 will fail if:
@@ -133,7 +133,7 @@ Part or all of the specified address range
 is not mapped to the process.
 .El
 .Pp
-.Fn Mlock
+.Fn mlock
 will fail if:
 .Bl -tag -width Er
 .\" ===========
@@ -146,7 +146,7 @@ Some portion of the indicated address range is not allocated.
 There was an error faulting/mapping a page.
 .El
 .Pp
-.Fn Munlock
+.Fn munlock
 will fail if:
 .Bl -tag -width Er
 .\" ===========

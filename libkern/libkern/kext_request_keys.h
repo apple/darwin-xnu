@@ -88,6 +88,26 @@ extern "C" {
  */
 #define kKextRequestPredicateGetLoaded             "Get Loaded Kext Info"
 
+/* Predicate: Get Loaded Kext Info By UUID
+ * Argument:  (None)
+ * Response:  An array of information about loaded kexts (see OSKextLib.h).
+ * Op result: OSReturn indicating any errors in processing (see OSKextLib.h)
+ *
+ * Retrieves an array of dictionaries whose properties describe every kext
+ * loaded at the time of the call.
+ */
+#define kKextRequestPredicateGetLoadedByUUID       "Get Loaded Kext Info By UUID"
+
+/* Predicate: Get Loaded Kext UUID By Address
+ * Argument:  An address to lookup
+ * Response:  A UUID of the kext
+ * Op result: OSReturn indicating any errors in processing (see OSKextLib.h)
+ *
+ * Retrieves the uuid of a loaded kext in whose address range the given
+ * lookup address falls into.
+ */
+#define kKextRequestPredicateGetUUIDByAddress      "Get Kext UUID by Address"
+
 /* Predicate: Get All Load Requests
  * Argument:  None
  * Response:  A set of bundle identifiers of all requested kext loads..
@@ -292,6 +312,14 @@ extern "C" {
  * Contains the OSReturn/kern_return_t result of the request.
  */
 #define kKextRequestArgumentResultKey              "Kext Request Result Code"
+
+/* Argument:  Address
+ * Type:      Number (OSReturn)
+ * Used by:   OSKextGetUUIDByAddress
+ *
+ * Contains the address that needs to be looked up
+ */
+#define kKextRequestArgumentLookupAddressKey       "Kext Request Lookup Address"
 
 /* Argument:  Value
  * Type:      Varies with the predicate

@@ -2973,39 +2973,6 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 	}
 }
 
-void 
-dim_screen(void)
-{
-	unsigned int *p, *endp, *row;
-	int      col, rowline, rowlongs;
-	register unsigned int mask;
-
-	if(!vinfo.v_depth)
-		return;
-
-	if ( vinfo.v_depth == 32 )
-		mask = 0x007F7F7F;
-	else if ( vinfo.v_depth == 30 )
-		mask = (0x1ff<<20) | (0x1ff<<10) | 0x1ff;
-	else if ( vinfo.v_depth == 16 )
-		mask = 0x3DEF3DEF;
-	else
-		return;
-
-	rowline = (int)(vinfo.v_rowscanbytes / 4);
-	rowlongs = (int)(vinfo.v_rowbytes / 4);
-
-	p = (unsigned int*) vinfo.v_baseaddr;
-	endp = p + (rowlongs * vinfo.v_height);
-
-	for (row = p ; row < endp ; row += rowlongs) {
-		for (p = &row[0], col = 0; col < rowline; col++) {
-			*p = (*p >> 1) & mask;
-			++p;
-		}
-	}
-}
-
 void vcattach(void); /* XXX gcc 4 warning cleanup */
 
 void

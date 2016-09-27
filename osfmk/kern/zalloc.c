@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -63,7 +63,6 @@
  *	data blocks for which quick allocation/deallocation is possible.
  */
 #include <zone_debug.h>
-#include <zone_alias_addr.h>
 
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
@@ -76,6 +75,7 @@
 
 #include <kern/kern_types.h>
 #include <kern/assert.h>
+#include <kern/backtrace.h>
 #include <kern/host.h>
 #include <kern/macro_help.h>
 #include <kern/sched.h>
@@ -85,7 +85,6 @@
 #include <kern/thread_call.h>
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
-#include <kern/btlog.h>
 
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
@@ -102,51 +101,12 @@
 #include <sys/kdebug.h>
 
 /*
- *  ZONE_ALIAS_ADDR
- *
- * With this option enabled, zones with alloc_size <= PAGE_SIZE allocate
- * a virtual page from the zone_map, but before zcram-ing the allocated memory
- * into the zone, the page is translated to use the alias address of the page
- * in the static kernel region. zone_gc reverses that translation when
- * scanning the freelist to collect free pages so that it can look up the page
- * in the zone_page_table, and free it to kmem_free.
- *
- * The static kernel region is a flat 1:1 mapping of physical memory passed
- * to xnu by the booter. It is mapped to the range:
- * [gVirtBase, gVirtBase + gPhysSize]
- *
- * Accessing memory via the static kernel region is faster due to the
- * entire region being mapped via large pages, cutting down
- * on TLB misses.
- *
- * zinit favors using PAGE_SIZE backing allocations for a zone unless it would
- * waste more than 10% space to use a single page, in order to take advantage
- * of the speed benefit for as many zones as possible.
- *
- * Zones with > PAGE_SIZE allocations can't take advantage of this
- * because kernel_memory_allocate doesn't give out physically contiguous pages.
- *
- * zone_virtual_addr()
- *  - translates an address from the static kernel region to the zone_map
- *  - returns the same address if it's not from the static kernel region
- * It relies on the fact that a physical page mapped to the
- * zone_map is not mapped anywhere else (except the static kernel region).
- *
- * zone_alias_addr()
- *  - translates a virtual memory address from the zone_map to the
- *    corresponding address in the static kernel region
- *
+ *  ZONE_ALIAS_ADDR (deprecated)
  */
 
-#if     !ZONE_ALIAS_ADDR
 #define from_zone_map(addr, size) \
         ((vm_offset_t)(addr)             >= zone_map_min_address && \
         ((vm_offset_t)(addr) + size - 1) <  zone_map_max_address )
-#else
-#define from_zone_map(addr, size) \
-        ((vm_offset_t)(zone_virtual_addr((vm_map_address_t)(uintptr_t)addr))            >= zone_map_min_address && \
-        ((vm_offset_t)(zone_virtual_addr((vm_map_address_t)(uintptr_t)addr)) + size -1) <  zone_map_max_address )
-#endif
 
 /*
  * Zone Corruption Debugging
@@ -352,9 +312,6 @@ zp_init(void)
 #endif
 }
 
-/* zone_map page count for page table structure */
-uint64_t zone_map_table_page_count = 0;
-
 /*
  * These macros are used to keep track of the number
  * of pages being used by the zone currently. The
@@ -370,6 +327,8 @@ uint64_t zone_map_table_page_count = 0;
 	OSAddAtomic64(-count, &(z->page_count));	\
 }
 
+vm_map_t        zone_map = VM_MAP_NULL;
+
 /* for is_sane_zone_element and garbage collection */
 
 vm_offset_t     zone_map_min_address = 0;  /* initialized in zone_init */
@@ -382,6 +341,13 @@ static unsigned int bool_gen_seed[RANDOM_BOOL_GEN_SEED_COUNT];
 static unsigned int bool_gen_global = 0;
 decl_simple_lock_data(, bool_gen_lock)
 
+/* VM region for all metadata structures */
+vm_offset_t 	zone_metadata_region_min = 0;
+vm_offset_t 	zone_metadata_region_max = 0;
+decl_lck_mtx_data(static ,zone_metadata_region_lck)
+lck_attr_t      zone_metadata_lock_attr;
+lck_mtx_ext_t   zone_metadata_region_lck_ext; 
+
 /* Helpful for walking through a zone's free element list. */
 struct zone_free_element {
 	struct zone_free_element *next;
@@ -389,13 +355,125 @@ struct zone_free_element {
 	/* void *backup_ptr; */
 };
 
+/*
+ *      Protects num_zones, zone_array and zone_array_index
+ */
+decl_simple_lock_data(, all_zones_lock)
+unsigned int            num_zones;
+
+#define MAX_ZONES       256
+struct zone             zone_array[MAX_ZONES];
+static int              zone_array_index = 0;
+
+#define MULTIPAGE_METADATA_MAGIC 		(0xff)
+
+#define PAGE_METADATA_GET_ZINDEX(page_meta) 			\
+	(page_meta->zindex)
+
+#define PAGE_METADATA_GET_ZONE(page_meta)				\
+	(&(zone_array[page_meta->zindex]))
+
+#define PAGE_METADATA_SET_ZINDEX(page_meta, index) 		\
+	page_meta->zindex = (index);
+
 struct zone_page_metadata {
-	queue_chain_t				pages;
-	struct zone_free_element	*elements;
-	zone_t						zone;
-	uint16_t					alloc_count;
-	uint16_t					free_count;
+	queue_chain_t 		pages; /* linkage pointer for metadata lists */
+
+	/* Union for maintaining start of element free list and real metadata (for multipage allocations) */
+	union {
+		/* 
+		 * The start of the freelist can be maintained as a 32-bit offset instead of a pointer because 
+		 * the free elements would be at max ZONE_MAX_ALLOC_SIZE bytes away from the metadata. Offset 
+		 * from start of the allocation chunk to free element list head.
+		 */
+		uint32_t 		freelist_offset;
+		/* 
+		 * This field is used to lookup the real metadata for multipage allocations, where we mark the 
+		 * metadata for all pages except the first as "fake" metadata using MULTIPAGE_METADATA_MAGIC. 
+		 * Offset from this fake metadata to real metadata of allocation chunk (-ve offset).
+		 */
+		uint32_t 		real_metadata_offset;  
+	};
+
+	/* 
+	 * For the first page in the allocation chunk, this represents the total number of free elements in 
+	 * the chunk. 
+	 * For all other pages, it represents the number of free elements on that page (used 
+	 * for garbage collection of zones with large multipage allocation size)
+	 */
+	uint16_t			free_count;
+	uint8_t 			zindex;		/* Zone index within the zone_array */
+	uint8_t 			page_count; /* Count of pages within the allocation chunk */
 };
+
+/* Macro to get page index (within zone_map) of page containing element */
+#define PAGE_INDEX_FOR_ELEMENT(element) 			\
+	(((vm_offset_t)trunc_page(element) - zone_map_min_address) / PAGE_SIZE)
+
+/* Macro to get metadata structure given a page index in zone_map */
+#define PAGE_METADATA_FOR_PAGE_INDEX(index) 			\
+	(zone_metadata_region_min + ((index) * sizeof(struct zone_page_metadata)))
+
+/* Macro to get index (within zone_map) for given metadata */
+#define PAGE_INDEX_FOR_METADATA(page_meta) 			\
+	(((vm_offset_t)page_meta - zone_metadata_region_min) / sizeof(struct zone_page_metadata))
+
+/* Macro to get page for given page index in zone_map */
+#define PAGE_FOR_PAGE_INDEX(index) 				\
+	(zone_map_min_address + (PAGE_SIZE * (index))) 
+
+/* Macro to get the actual metadata for a given address */
+#define PAGE_METADATA_FOR_ELEMENT(element) 		\
+	(struct zone_page_metadata *)(PAGE_METADATA_FOR_PAGE_INDEX(PAGE_INDEX_FOR_ELEMENT(element)))
+
+/* Magic value to indicate empty element free list */
+#define PAGE_METADATA_EMPTY_FREELIST 		((uint32_t)(~0))
+
+static inline void *
+page_metadata_get_freelist(struct zone_page_metadata *page_meta)
+{
+	assert(PAGE_METADATA_GET_ZINDEX(page_meta) != MULTIPAGE_METADATA_MAGIC);
+	if (page_meta->freelist_offset == PAGE_METADATA_EMPTY_FREELIST)
+		return NULL;
+	else {
+		if (from_zone_map(page_meta, sizeof(struct zone_page_metadata)))
+			return (void *)(PAGE_FOR_PAGE_INDEX(PAGE_INDEX_FOR_METADATA(page_meta)) + page_meta->freelist_offset);
+		else
+			return (void *)((vm_offset_t)page_meta + page_meta->freelist_offset);
+	}
+}
+
+static inline void
+page_metadata_set_freelist(struct zone_page_metadata *page_meta, void *addr)
+{
+	assert(PAGE_METADATA_GET_ZINDEX(page_meta) != MULTIPAGE_METADATA_MAGIC);
+	if (addr == NULL)
+		page_meta->freelist_offset = PAGE_METADATA_EMPTY_FREELIST;
+	else {
+		if (from_zone_map(page_meta, sizeof(struct zone_page_metadata)))
+			page_meta->freelist_offset = (uint32_t)((vm_offset_t)(addr) - PAGE_FOR_PAGE_INDEX(PAGE_INDEX_FOR_METADATA(page_meta)));
+		else
+			page_meta->freelist_offset = (uint32_t)((vm_offset_t)(addr) - (vm_offset_t)page_meta);
+	}
+}
+
+static inline struct zone_page_metadata *
+page_metadata_get_realmeta(struct zone_page_metadata *page_meta)
+{
+	assert(PAGE_METADATA_GET_ZINDEX(page_meta) == MULTIPAGE_METADATA_MAGIC);
+	return (struct zone_page_metadata *)((vm_offset_t)page_meta - page_meta->real_metadata_offset);
+}
+
+static inline void 
+page_metadata_set_realmeta(struct zone_page_metadata *page_meta, struct zone_page_metadata *real_meta)
+{
+		assert(PAGE_METADATA_GET_ZINDEX(page_meta) == MULTIPAGE_METADATA_MAGIC);
+		assert(PAGE_METADATA_GET_ZINDEX(real_meta) != MULTIPAGE_METADATA_MAGIC);
+		assert((vm_offset_t)page_meta > (vm_offset_t)real_meta);
+		vm_offset_t offset = (vm_offset_t)page_meta - (vm_offset_t)real_meta;
+		assert(offset <= UINT32_MAX);
+		page_meta->real_metadata_offset = (uint32_t)offset;
+}
 
 /* The backup pointer is stored in the last pointer-sized location in an element. */
 static inline vm_offset_t *
@@ -405,10 +483,97 @@ get_backup_ptr(vm_size_t  elem_size,
 	return (vm_offset_t *) ((vm_offset_t)element + elem_size - sizeof(vm_offset_t));
 }
 
-static inline struct zone_page_metadata *
-get_zone_page_metadata(struct zone_free_element *element)
+/* 
+ * Routine to populate a page backing metadata in the zone_metadata_region.
+ * Must be called without the zone lock held as it might potentially block. 
+ */
+static inline void
+zone_populate_metadata_page(struct zone_page_metadata *page_meta) 
 {
-	return (struct zone_page_metadata *)(trunc_page((vm_offset_t)element));
+	vm_offset_t page_metadata_begin = trunc_page(page_meta);
+	vm_offset_t page_metadata_end = trunc_page((vm_offset_t)page_meta + sizeof(struct zone_page_metadata));
+	
+	for(;page_metadata_begin <= page_metadata_end; page_metadata_begin += PAGE_SIZE) {
+		if (pmap_find_phys(kernel_pmap, (vm_map_address_t)page_metadata_begin))
+			continue;
+		/* All updates to the zone_metadata_region are done under the zone_metadata_region_lck */
+		lck_mtx_lock(&zone_metadata_region_lck);
+		if (0 == pmap_find_phys(kernel_pmap, (vm_map_address_t)page_metadata_begin)) {
+			kernel_memory_populate(zone_map, 
+				       page_metadata_begin,
+				       PAGE_SIZE,
+				       KMA_KOBJECT,
+				       VM_KERN_MEMORY_OSFMK);
+		}
+		lck_mtx_unlock(&zone_metadata_region_lck);
+	}
+	return;
+}
+
+static inline uint16_t
+get_metadata_alloc_count(struct zone_page_metadata *page_meta)
+{
+		assert(PAGE_METADATA_GET_ZINDEX(page_meta) != MULTIPAGE_METADATA_MAGIC);
+		struct zone *z = PAGE_METADATA_GET_ZONE(page_meta);
+		return ((page_meta->page_count * PAGE_SIZE) / z->elem_size);
+}
+
+/* 
+ * Routine to lookup metadata for any given address. 
+ * If init is marked as TRUE, this should be called without holding the zone lock
+ * since the initialization might block.
+ */
+static inline struct zone_page_metadata *
+get_zone_page_metadata(struct zone_free_element *element, boolean_t init)
+{
+	struct zone_page_metadata *page_meta = 0;
+
+	if (from_zone_map(element, sizeof(struct zone_free_element))) {	
+		page_meta = (struct zone_page_metadata *)(PAGE_METADATA_FOR_ELEMENT(element));
+		if (init)
+			zone_populate_metadata_page(page_meta);
+	} else {
+		page_meta = (struct zone_page_metadata *)(trunc_page((vm_offset_t)element));
+	}
+	if (init)
+		bzero((char *)page_meta, sizeof(struct zone_page_metadata));
+	return ((PAGE_METADATA_GET_ZINDEX(page_meta) != MULTIPAGE_METADATA_MAGIC) ? page_meta : page_metadata_get_realmeta(page_meta));
+}
+
+/* Routine to get the page for a given metadata */
+static inline vm_offset_t
+get_zone_page(struct zone_page_metadata *page_meta)
+{
+	if (from_zone_map(page_meta, sizeof(struct zone_page_metadata)))
+		return (vm_offset_t)(PAGE_FOR_PAGE_INDEX(PAGE_INDEX_FOR_METADATA(page_meta)));
+	else
+		return (vm_offset_t)(trunc_page(page_meta));
+}
+
+/* Routine to get the size of a zone allocated address. If the address doesnt belong to the 
+ * zone_map, returns 0.
+ */
+vm_size_t
+zone_element_size(void *addr, zone_t *z)
+{
+	struct zone *src_zone;
+	if (from_zone_map(addr, sizeof(void *))) {
+		struct zone_page_metadata *page_meta = get_zone_page_metadata((struct zone_free_element *)addr, FALSE);
+		src_zone = PAGE_METADATA_GET_ZONE(page_meta);
+		if (z) {
+			*z = src_zone;
+		}
+		return (src_zone->elem_size);
+	} else {
+#if CONFIG_GZALLOC
+		vm_size_t gzsize;
+		if (gzalloc_element_size(addr, z, &gzsize)) {
+			return gzsize;
+		}
+#endif /* CONFIG_GZALLOC */
+
+		return 0;
+	}
 }
 
 /*
@@ -435,23 +600,6 @@ is_sane_zone_ptr(zone_t		zone,
 	 *  zone using foreign memory is properly tagged with allows_foreign
 	 */
 	if (zone->collectable && !zone->allows_foreign) {
-#if ZONE_ALIAS_ADDR
-		/*
-		 * If this address is in the static kernel region, it might be
-		 * the alias address of a valid zone element.
-		 * If we tried to find the zone_virtual_addr() of an invalid
-		 * address in the static kernel region, it will panic, so don't 
-		 * check addresses in this region.
-		 *
-		 * TODO: Use a safe variant of zone_virtual_addr to
-		 *  make this check more accurate
-		 *
-		 * The static kernel region is mapped at:
-		 * [gVirtBase, gVirtBase + gPhysSize]
-		 */
-		if ((addr - gVirtBase) < gPhysSize)
-			return TRUE;
-#endif
 		/*  check if addr is from zone map */
 		if (addr                 >= zone_map_min_address &&
 		   (addr + obj_size - 1) <  zone_map_max_address )
@@ -516,9 +664,11 @@ backup_ptr_mismatch_panic(zone_t        zone,
                           vm_offset_t   backup)
 {
 	vm_offset_t likely_backup;
+	vm_offset_t likely_primary;
 
+	likely_primary = primary ^ zp_nopoison_cookie;
 	boolean_t   sane_backup;
-	boolean_t   sane_primary = is_sane_zone_element(zone, primary);
+	boolean_t   sane_primary = is_sane_zone_element(zone, likely_primary);
 	boolean_t   element_was_poisoned = (backup & 0x1) ? TRUE : FALSE;
 
 #if defined(__LP64__)
@@ -539,7 +689,7 @@ backup_ptr_mismatch_panic(zone_t        zone,
 
 	/* The primary is definitely the corrupted one */
 	if (!sane_primary && sane_backup)
-		zone_element_was_modified_panic(zone, element, primary, likely_backup, 0);
+		zone_element_was_modified_panic(zone, element, primary, (likely_backup ^ zp_nopoison_cookie), 0);
 
 	/* The backup is definitely the corrupted one */
 	if (sane_primary && !sane_backup)
@@ -561,58 +711,6 @@ backup_ptr_mismatch_panic(zone_t        zone,
 }
 
 /*
- * Sets the next element of tail to elem.
- * elem can be NULL.
- * Preserves the poisoning state of the element.
- */
-static inline void
-append_zone_element(zone_t                    zone,
-                    struct zone_free_element *tail,
-                    struct zone_free_element *elem)
-{
-	vm_offset_t *backup = get_backup_ptr(zone->elem_size, (vm_offset_t *) tail);
-
-	vm_offset_t old_backup = *backup;
-
-	vm_offset_t old_next = (vm_offset_t) tail->next;
-	vm_offset_t new_next = (vm_offset_t) elem;
-
-	if      (old_next == (old_backup ^ zp_nopoison_cookie))
-		*backup = new_next ^ zp_nopoison_cookie;
-	else if (old_next == (old_backup ^ zp_poisoned_cookie))
-		*backup = new_next ^ zp_poisoned_cookie;
-	else
-		backup_ptr_mismatch_panic(zone,
-		                          (vm_offset_t) tail,
-		                          old_next,
-		                          old_backup);
-
-	tail->next = elem;
-}
-
-
-/*
- * Insert a linked list of elements (delineated by head and tail) at the head of
- * the zone free list. Every element in the list being added has already gone
- * through append_zone_element, so their backup pointers are already
- * set properly.
- * Precondition: There should be no elements after tail
- */
-static inline void
-add_list_to_zone(zone_t                    zone,
-                 struct zone_free_element *head,
-                 struct zone_free_element *tail)
-{
-	assert(tail->next == NULL);
-	assert(!zone->use_page_list);
-
-	append_zone_element(zone, tail, zone->free_elements);
-
-	zone->free_elements = head;
-}
-
-
-/*
  * Adds the element to the head of the zone's free list
  * Keeps a backup next-pointer at the end of the element
  */
@@ -627,13 +725,9 @@ free_to_zone(zone_t      zone,
 	vm_offset_t *primary  = (vm_offset_t *) element;
 	vm_offset_t *backup   = get_backup_ptr(zone->elem_size, primary);
 
-	if (zone->use_page_list) {
-		page_meta = get_zone_page_metadata((struct zone_free_element *)element);
-		assert(page_meta->zone == zone);
-		old_head = (vm_offset_t)page_meta->elements;
-	} else {
-		old_head = (vm_offset_t)zone->free_elements;
-	}
+	page_meta = get_zone_page_metadata((struct zone_free_element *)element, FALSE);
+	assert(PAGE_METADATA_GET_ZONE(page_meta) == zone);
+	old_head = (vm_offset_t)page_metadata_get_freelist(page_meta);
 
 #if MACH_ASSERT
 	if (__improbable(!is_sane_zone_element(zone, old_head)))
@@ -654,30 +748,28 @@ free_to_zone(zone_t      zone,
 
 	*backup = old_head ^ (poison ? zp_poisoned_cookie : zp_nopoison_cookie);
 
-	/* Insert this element at the head of the free list */
-	*primary             = old_head;
-	if (zone->use_page_list) {
-		page_meta->elements = (struct zone_free_element *)element;
-		page_meta->free_count++;
-		if (zone->allows_foreign && !from_zone_map(element, zone->elem_size)) {
-			if (page_meta->free_count == 1) {
-				/* first foreign element freed on page, move from all_used */
-				remqueue((queue_entry_t)page_meta);
-				enqueue_tail(&zone->pages.any_free_foreign, (queue_entry_t)page_meta);
-			} else {
-				/* no other list transitions */
-			}
-		} else if (page_meta->free_count == page_meta->alloc_count) {
-			/* whether the page was on the intermediate or all_used, queue, move it to free */
-			remqueue((queue_entry_t)page_meta);
-			enqueue_tail(&zone->pages.all_free, (queue_entry_t)page_meta);
-		} else if (page_meta->free_count == 1) {
-			/* first free element on page, move from all_used */
-			remqueue((queue_entry_t)page_meta);
-			enqueue_tail(&zone->pages.intermediate, (queue_entry_t)page_meta);
+	/* 
+	 * Insert this element at the head of the free list. We also xor the 
+	 * primary pointer with the zp_nopoison_cookie to make sure a free 
+	 * element does not provide the location of the next free element directly.
+	 */
+	*primary             = old_head ^ zp_nopoison_cookie;
+	page_metadata_set_freelist(page_meta, (struct zone_free_element *)element);
+	page_meta->free_count++;
+	if (zone->allows_foreign && !from_zone_map(element, zone->elem_size)) {
+		if (page_meta->free_count == 1) {
+			/* first foreign element freed on page, move from all_used */
+			re_queue_tail(&zone->pages.any_free_foreign, &(page_meta->pages));
+		} else {
+			/* no other list transitions */
 		}
-	} else {
-		zone->free_elements = (struct zone_free_element *)element;
+	} else if (page_meta->free_count == get_metadata_alloc_count(page_meta)) {
+		/* whether the page was on the intermediate or all_used, queue, move it to free */
+		re_queue_tail(&zone->pages.all_free, &(page_meta->pages));
+		zone->count_all_free_pages += page_meta->page_count;
+	} else if (page_meta->free_count == 1) {
+		/* first free element on page, move from all_used */
+		re_queue_tail(&zone->pages.intermediate, &(page_meta->pages));
 	}
 	zone->count--;
 	zone->countfree++;
@@ -699,40 +791,37 @@ try_alloc_from_zone(zone_t zone,
 	*check_poison = FALSE;
 
 	/* if zone is empty, bail */
-	if (zone->use_page_list) {
-		if (zone->allows_foreign && !queue_empty(&zone->pages.any_free_foreign))
-			page_meta = (struct zone_page_metadata *)queue_first(&zone->pages.any_free_foreign);
-		else if (!queue_empty(&zone->pages.intermediate))
-			page_meta = (struct zone_page_metadata *)queue_first(&zone->pages.intermediate);
-		else if (!queue_empty(&zone->pages.all_free))
-			page_meta = (struct zone_page_metadata *)queue_first(&zone->pages.all_free);
-		else {
-			return 0;
-		}
-
-		/* Check if page_meta passes is_sane_zone_element */
-		if (__improbable(!is_sane_zone_page_metadata(zone, (vm_offset_t)page_meta)))
-			panic("zalloc: invalid metadata structure %p for freelist of zone %s\n",
-				(void *) page_meta, zone->zone_name);
-		assert(page_meta->zone == zone);
-		element = (vm_offset_t)page_meta->elements;
+	if (zone->allows_foreign && !queue_empty(&zone->pages.any_free_foreign))
+		page_meta = (struct zone_page_metadata *)queue_first(&zone->pages.any_free_foreign);
+	else if (!queue_empty(&zone->pages.intermediate))
+		page_meta = (struct zone_page_metadata *)queue_first(&zone->pages.intermediate);
+	else if (!queue_empty(&zone->pages.all_free)) {
+		page_meta = (struct zone_page_metadata *)queue_first(&zone->pages.all_free);
+		assert(zone->count_all_free_pages >= page_meta->page_count);
+		zone->count_all_free_pages -= page_meta->page_count;
 	} else {
-		if (zone->free_elements == NULL)
-			return 0;
-
-		element = (vm_offset_t)zone->free_elements;
+		return 0;
 	}
+	/* Check if page_meta passes is_sane_zone_element */
+	if (__improbable(!is_sane_zone_page_metadata(zone, (vm_offset_t)page_meta)))
+		panic("zalloc: invalid metadata structure %p for freelist of zone %s\n",
+			(void *) page_meta, zone->zone_name);
+	assert(PAGE_METADATA_GET_ZONE(page_meta) == zone);
+	element = (vm_offset_t)page_metadata_get_freelist(page_meta);
 
-#if MACH_ASSERT
-	if (__improbable(!is_sane_zone_element(zone, element)))
+	if (__improbable(!is_sane_zone_ptr(zone, element, zone->elem_size)))
 		panic("zfree: invalid head pointer %p for freelist of zone %s\n",
 		      (void *) element, zone->zone_name);
-#endif
 
 	vm_offset_t *primary = (vm_offset_t *) element;
 	vm_offset_t *backup  = get_backup_ptr(zone->elem_size, primary);
 
-	vm_offset_t  next_element          = *primary;
+	/* 
+	 * Since the primary next pointer is xor'ed with zp_nopoison_cookie
+	 * for obfuscation, retrieve the original value back
+	 */
+	vm_offset_t  next_element          = *primary ^ zp_nopoison_cookie;
+	vm_offset_t  next_element_primary  = *primary;
 	vm_offset_t  next_element_backup   = *backup;
 
 	/*
@@ -740,7 +829,7 @@ try_alloc_from_zone(zone_t zone,
 	 * should have been, and print it appropriately
 	 */
 	if (__improbable(!is_sane_zone_element(zone, next_element)))
-		backup_ptr_mismatch_panic(zone, element, next_element, next_element_backup);
+		backup_ptr_mismatch_panic(zone, element, next_element_primary, next_element_backup);
 
 	/* Check the backup pointer for the regular cookie */
 	if (__improbable(next_element != (next_element_backup ^ zp_nopoison_cookie))) {
@@ -748,7 +837,7 @@ try_alloc_from_zone(zone_t zone,
 		/* Check for the poisoned cookie instead */
 		if (__improbable(next_element != (next_element_backup ^ zp_poisoned_cookie)))
 			/* Neither cookie is valid, corruption has occurred */
-			backup_ptr_mismatch_panic(zone, element, next_element, next_element_backup);
+			backup_ptr_mismatch_panic(zone, element, next_element_primary, next_element_backup);
 
 		/*
 		 * Element was marked as poisoned, so check its integrity before using it.
@@ -756,46 +845,32 @@ try_alloc_from_zone(zone_t zone,
 		*check_poison = TRUE;
 	}
 
-	if (zone->use_page_list) {
-			
-		/* Make sure the page_meta is at the correct offset from the start of page */
-		if (__improbable(page_meta != get_zone_page_metadata((struct zone_free_element *)element)))
-			panic("zalloc: metadata located at incorrect location on page of zone %s\n",
-				zone->zone_name);
+	/* Make sure the page_meta is at the correct offset from the start of page */
+	if (__improbable(page_meta != get_zone_page_metadata((struct zone_free_element *)element, FALSE)))
+		panic("zalloc: Incorrect metadata %p found in zone %s page queue. Expected metadata: %p\n",
+			page_meta, zone->zone_name, get_zone_page_metadata((struct zone_free_element *)element, FALSE));
 
-		/* Make sure next_element belongs to the same page as page_meta */
-		if (next_element) {
-			if (__improbable(page_meta != get_zone_page_metadata((struct zone_free_element *)next_element)))
-				panic("zalloc: next element pointer %p for element %p points to invalid element for zone %s\n",
-					(void *)next_element, (void *)element, zone->zone_name);
-		}
+	/* Make sure next_element belongs to the same page as page_meta */
+	if (next_element) {
+		if (__improbable(page_meta != get_zone_page_metadata((struct zone_free_element *)next_element, FALSE)))
+			panic("zalloc: next element pointer %p for element %p points to invalid element for zone %s\n",
+				(void *)next_element, (void *)element, zone->zone_name);
 	}
 
 	/* Remove this element from the free list */
-	if (zone->use_page_list) {
+	page_metadata_set_freelist(page_meta, (struct zone_free_element *)next_element);
+	page_meta->free_count--;
 
-		page_meta->elements = (struct zone_free_element *)next_element;
-		page_meta->free_count--;
-
-		if (zone->allows_foreign && !from_zone_map(element, zone->elem_size)) {
-			if (page_meta->free_count == 0) {
-				/* move to all used */
-				remqueue((queue_entry_t)page_meta);
-				enqueue_tail(&zone->pages.all_used, (queue_entry_t)page_meta);
-			} else {
-				/* no other list transitions */
-			}
-		} else if (page_meta->free_count == 0) {
-			/* remove from intermediate or free, move to all_used */
-			remqueue((queue_entry_t)page_meta);
-			enqueue_tail(&zone->pages.all_used, (queue_entry_t)page_meta);
-		} else if (page_meta->alloc_count == page_meta->free_count + 1) {
-			/* remove from free, move to intermediate */
-			remqueue((queue_entry_t)page_meta);
-			enqueue_tail(&zone->pages.intermediate, (queue_entry_t)page_meta);
-		}
+	if (page_meta->free_count == 0) {
+		/* move to all used */
+		re_queue_tail(&zone->pages.all_used, &(page_meta->pages));
 	} else {
-		zone->free_elements = (struct zone_free_element *)next_element;
+		if (!zone->allows_foreign || from_zone_map(element, zone->elem_size)) {
+			if (get_metadata_alloc_count(page_meta) == page_meta->free_count + 1) {
+				/* remove from free, move to intermediate */
+				re_queue_tail(&zone->pages.intermediate, &(page_meta->pages));
+			}
+		}
 	}
 	zone->countfree--;
 	zone->count++;
@@ -804,91 +879,14 @@ try_alloc_from_zone(zone_t zone,
 	return element;
 }
 
-
 /*
  * End of zone poisoning
  */
 
 /*
- * Fake zones for things that want to report via zprint but are not actually zones.
- */
-struct fake_zone_info {
-	const char* name;
-	void (*init)(int);
-	void (*query)(int *,
-		     vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *,
-		      uint64_t *, int *, int *, int *);
-};
-
-static const struct fake_zone_info fake_zones[] = {
-};
-static const unsigned int num_fake_zones =
-	sizeof (fake_zones) / sizeof (fake_zones[0]);
-
-/*
  * Zone info options
  */
-boolean_t zinfo_per_task = FALSE;		/* enabled by -zinfop in boot-args */
-#define ZINFO_SLOTS 200				/* for now */
-#define ZONES_MAX (ZINFO_SLOTS - num_fake_zones - 1)
-
-/*
- * Support for garbage collection of unused zone pages
- *
- * The kernel virtually allocates the "zone map" submap of the kernel
- * map. When an individual zone needs more storage, memory is allocated
- * out of the zone map, and the two-level "zone_page_table" is
- * on-demand expanded so that it has entries for those pages.
- * zone_page_init()/zone_page_alloc() initialize "alloc_count"
- * to the number of zone elements that occupy the zone page (which may
- * be a minimum of 1, including if a zone element spans multiple
- * pages).
- *
- * Asynchronously, the zone_gc() logic attempts to walk zone free
- * lists to see if all the elements on a zone page are free. If
- * "collect_count" (which it increments during the scan) matches
- * "alloc_count", the zone page is a candidate for collection and the
- * physical page is returned to the VM system. During this process, the
- * first word of the zone page is re-used to maintain a linked list of
- * to-be-collected zone pages.
- */
-typedef uint32_t zone_page_index_t;
-#define ZONE_PAGE_INDEX_INVALID ((zone_page_index_t)0xFFFFFFFFU)
-
-struct zone_page_table_entry {
-	volatile	uint16_t	alloc_count;
-	volatile	uint16_t	collect_count;
-};
-
-#define	ZONE_PAGE_USED  0
-#define ZONE_PAGE_UNUSED 0xffff
-
-/* Forwards */
-void		zone_page_init(
-				vm_offset_t	addr,
-				vm_size_t	size);
-
-void		zone_page_alloc(
-				vm_offset_t	addr,
-				vm_size_t	size);
-
-void		zone_page_free_element(
-				zone_page_index_t	*free_page_head,
-				zone_page_index_t	*free_page_tail,
-				vm_offset_t	addr,
-				vm_size_t	size);
-
-void		zone_page_collect(
-				vm_offset_t	addr,
-				vm_size_t	size);
-
-boolean_t	zone_page_collectable(
-				vm_offset_t	addr,
-				vm_size_t	size);
-
-void		zone_page_keep(
-				vm_offset_t	addr,
-				vm_size_t	size);
+#define ZINFO_SLOTS 	MAX_ZONES		/* for now */
 
 void		zone_display_zprint(void);
 
@@ -913,20 +911,6 @@ void		zalloc_async(
 
 static thread_call_data_t call_async_alloc;
 
-vm_map_t	zone_map = VM_MAP_NULL;
-
-zone_t		zone_zone = ZONE_NULL;	/* the zone containing other zones */
-
-zone_t		zinfo_zone = ZONE_NULL; /* zone of per-task zone info */
-
-/*
- *	The VM system gives us an initial chunk of memory.
- *	It has to be big enough to allocate the zone_zone
- *	all the way through the pmap zone.
- */
-
-vm_offset_t	zdata;
-vm_size_t	zdata_size;
 /*
  * Align elements that use the zone page list to 32 byte boundaries.
  */
@@ -955,22 +939,6 @@ MACRO_END
 #define lock_try_zone(zone)	lck_mtx_try_lock_spin(&zone->lock)
 
 /*
- *	Garbage collection map information
- */
-#define ZONE_PAGE_TABLE_FIRST_LEVEL_SIZE (32)
-struct zone_page_table_entry * volatile zone_page_table[ZONE_PAGE_TABLE_FIRST_LEVEL_SIZE];
-vm_size_t			zone_page_table_used_size;
-unsigned int			zone_pages;
-unsigned int                   zone_page_table_second_level_size;                      /* power of 2 */
-unsigned int                   zone_page_table_second_level_shift_amount;
-
-#define zone_page_table_first_level_slot(x)  ((x) >> zone_page_table_second_level_shift_amount)
-#define zone_page_table_second_level_slot(x) ((x) & (zone_page_table_second_level_size - 1))
-
-void   zone_page_table_expand(zone_page_index_t pindex);
-struct zone_page_table_entry *zone_page_table_lookup(zone_page_index_t pindex);
-
-/*
  *	Exclude more than one concurrent garbage collection
  */
 decl_lck_mtx_data(, zone_gc_lock)
@@ -980,19 +948,8 @@ lck_grp_t       zone_gc_lck_grp;
 lck_grp_attr_t  zone_gc_lck_grp_attr;
 lck_mtx_ext_t   zone_gc_lck_ext;
 
-/*
- *	Protects first_zone, last_zone, num_zones,
- *	and the next_zone field of zones.
- */
-decl_simple_lock_data(,	all_zones_lock)
-zone_t			first_zone;
-zone_t			*last_zone;
-unsigned int		num_zones;
-
 boolean_t zone_gc_allowed = TRUE;
-boolean_t zone_gc_forced = FALSE;
 boolean_t panic_include_zprint = FALSE;
-boolean_t zone_gc_allowed_by_time_throttle = TRUE;
 
 vm_offset_t panic_kext_memory_info = 0;
 vm_size_t panic_kext_memory_size = 0;
@@ -1031,7 +988,13 @@ uint32_t zalloc_debug = 0;
  * corrupted to examine its history.  This should lead to the source of the corruption.
  */
 
+static boolean_t log_records_init = FALSE;
 static int log_records;	/* size of the log, expressed in number of records */
+
+#define MAX_NUM_ZONES_ALLOWED_LOGGING	5 /* Maximum 5 zones can be logged at once */
+
+static int  max_num_zones_to_log = MAX_NUM_ZONES_ALLOWED_LOGGING;
+static int  num_zones_logged = 0;
 
 #define MAX_ZONE_NAME	32	/* max length of a zone name we can take from the boot-args */
 
@@ -1039,22 +1002,25 @@ static char zone_name_to_log[MAX_ZONE_NAME] = "";	/* the zone name we're logging
 
 /* Log allocations and frees to help debug a zone element corruption */
 boolean_t       corruption_debug_flag    = FALSE;    /* enabled by "-zc" boot-arg */
+/* Making pointer scanning leaks detection possible for all zones */
+
+#if DEBUG || DEVELOPMENT
+boolean_t       leak_scan_debug_flag     = FALSE;    /* enabled by "-zl" boot-arg */
+#endif /* DEBUG || DEVELOPMENT */
+
 
 /*
  * The number of records in the log is configurable via the zrecs parameter in boot-args.  Set this to 
- * the number of records you want in the log.  For example, "zrecs=1000" sets it to 1000 records.  Note
- * that the larger the size of the log, the slower the system will run due to linear searching in the log,
- * but one doesn't generally care about performance when tracking down a leak.  The log is capped at 8000
- * records since going much larger than this tends to make the system unresponsive and unbootable on small
- * memory configurations.  The default value is 4000 records.
+ * the number of records you want in the log.  For example, "zrecs=10" sets it to 10 records. Since this
+ * is the number of stacks suspected of leaking, we don't need many records.
  */
 
 #if	defined(__LP64__)
-#define ZRECORDS_MAX 		128000		/* Max records allowed in the log */
+#define ZRECORDS_MAX 		2560		/* Max records allowed in the log */
 #else
-#define ZRECORDS_MAX 		8000		/* Max records allowed in the log */
+#define ZRECORDS_MAX 		1536		/* Max records allowed in the log */
 #endif
-#define ZRECORDS_DEFAULT	4000		/* default records in log if zrecs is not specificed in boot-args */
+#define ZRECORDS_DEFAULT	1024		/* default records in log if zrecs is not specificed in boot-args */
 
 /*
  * Each record in the log contains a pointer to the zone element it refers to,
@@ -1071,12 +1037,6 @@ boolean_t       corruption_debug_flag    = FALSE;    /* enabled by "-zc" boot-ar
 
 #define ZOP_ALLOC	1
 #define ZOP_FREE	0
-
-/*
- * The allocation log and all the related variables are protected by the zone lock for the zone_of_interest
- */
-static btlog_t *zlog_btlog;		/* the log itself, dynamically allocated when logging is enabled  */
-static zone_t  zone_of_interest = NULL;		/* the zone being watched; corresponds to zone_name_to_log */
 
 /*
  * Decide if we want to log this zone by doing a string compare between a zone name and the name
@@ -1124,7 +1084,7 @@ log_this_zone(const char *zonename, const char *logname)
  * the buffer for the records has been allocated.
  */
 
-#define DO_LOGGING(z)		(zlog_btlog && (z) == zone_of_interest)
+#define DO_LOGGING(z)		(z->zone_logging == TRUE && z->zlog_btlog)
 
 extern boolean_t kmem_alloc_ready;
 
@@ -1525,65 +1485,6 @@ zleak_free(uintptr_t addr,
  *  mbuf.c for mbuf leak-detection.  This is why they lack the z_ prefix.
  */
 
-/*
- * This function captures a backtrace from the current stack and
- * returns the number of frames captured, limited by max_frames.
- * It's fast because it does no checking to make sure there isn't bad data.
- * Since it's only called from threads that we're going to keep executing,
- * if there's bad data we were going to die eventually.
- * If this function is inlined, it doesn't record the frame of the function it's inside.
- * (because there's no stack frame!)
- */
-
-uint32_t
-fastbacktrace(uintptr_t* bt, uint32_t max_frames)
-{
-	uintptr_t* frameptr = NULL, *frameptr_next = NULL;
-	uintptr_t retaddr = 0;
-	uint32_t frame_index = 0, frames = 0;
-	uintptr_t kstackb, kstackt;
-	thread_t cthread = current_thread();
-
-	if (__improbable(cthread == NULL))
-		return 0;
-
-	kstackb = cthread->kernel_stack;
-	kstackt = kstackb + kernel_stack_size;
-	/* Load stack frame pointer (EBP on x86) into frameptr */
-	frameptr = __builtin_frame_address(0);
-	if (((uintptr_t)frameptr > kstackt) || ((uintptr_t)frameptr < kstackb))
-		frameptr = NULL;
-
-	while (frameptr != NULL && frame_index < max_frames ) {
-		/* Next frame pointer is pointed to by the previous one */
-		frameptr_next = (uintptr_t*) *frameptr;
-
-		/* Bail if we see a zero in the stack frame, that means we've reached the top of the stack */
-                /* That also means the return address is worthless, so don't record it */
-		if (frameptr_next == NULL)
-			break;
-		/* Verify thread stack bounds */
-		if (((uintptr_t)frameptr_next > kstackt) || ((uintptr_t)frameptr_next < kstackb))
-			break;
-		/* Pull return address from one spot above the frame pointer */
-		retaddr = *(frameptr + 1);
-
-		/* Store it in the backtrace array */
-		bt[frame_index++] = retaddr;
-
-		frameptr = frameptr_next;
-	}
-
-	/* Save the number of frames captured for return value */
-	frames = frame_index;
-
-	/* Fill in the rest of the backtrace with zeros */
-	while (frame_index < max_frames)
-		bt[frame_index++] = 0;
-
-	return frames;
-}
-
 /* "Thomas Wang's 32/64 bit mix functions."  http://www.concentric.net/~Ttwang/tech/inthash.htm */
 uintptr_t
 hash_mix(uintptr_t x)
@@ -1646,6 +1547,9 @@ hashaddr(uintptr_t pt, uint32_t max_size)
 /* End of all leak-detection code */
 #pragma mark -
 
+#define ZONE_MAX_ALLOC_SIZE	(32 * 1024) 
+#define ZONE_ALLOC_FRAG_PERCENT(alloc_size, ele_size) (((alloc_size % ele_size) * 100) / alloc_size)
+
 /*
  *	zinit initializes a new zone.  The zone data structures themselves
  *	are stored in a zone, which is initially a static structure that
@@ -1659,17 +1563,12 @@ zinit(
 	const char	*name)		/* a name for the zone */
 {
 	zone_t		z;
-	boolean_t	use_page_list = FALSE;
 
-	if (zone_zone == ZONE_NULL) {
-
-		z = (struct zone *)zdata;
-		/* special handling in zcram() because the first element is being used */
-	} else
-		z = (zone_t) zalloc(zone_zone);
-
-	if (z == ZONE_NULL)
-		return(ZONE_NULL);
+	simple_lock(&all_zones_lock);
+	z = &(zone_array[zone_array_index]);
+	zone_array_index++;
+	assert(zone_array_index != MAX_ZONES);
+	simple_unlock(&all_zones_lock);
 
 	/* Zone elements must fit both a next pointer and a backup pointer */
 	vm_size_t  minimum_element_size = sizeof(vm_offset_t) * 2;
@@ -1689,69 +1588,16 @@ zinit(
 	alloc = round_page(alloc);
 	max   = round_page(max);
 
-	/*
-	 * we look for an allocation size with less than 1% waste
-	 * up to 5 pages in size...
-	 * otherwise, we look for an allocation size with least fragmentation
-	 * in the range of 1 - 5 pages
-	 * This size will be used unless
-	 * the user suggestion is larger AND has less fragmentation
-	 */
-#if	ZONE_ALIAS_ADDR
-	/* Favor PAGE_SIZE allocations unless we waste >10% space */
-	if ((size < PAGE_SIZE) && (PAGE_SIZE % size <= PAGE_SIZE / 10))
-		alloc = PAGE_SIZE;
-	else
-#endif
-#if	defined(__LP64__)		
-		if (((alloc % size) != 0) || (alloc > PAGE_SIZE * 8))
-#endif
-		{
-		vm_size_t best, waste; unsigned int i;
-		best  = PAGE_SIZE;
-		waste = best % size;
-
-		for (i = 1; i <= 5; i++) {
-			vm_size_t tsize, twaste;
-
-			tsize = i * PAGE_SIZE;
-
-			if ((tsize % size) < (tsize / 100)) {
-			        alloc = tsize;
-				goto use_this_allocation;
-			}
-			twaste = tsize % size;
-			if (twaste < waste)
-				best = tsize, waste = twaste;
+	vm_size_t best_alloc = PAGE_SIZE;
+	vm_size_t alloc_size;
+	for (alloc_size = (2 * PAGE_SIZE); alloc_size <= ZONE_MAX_ALLOC_SIZE; alloc_size += PAGE_SIZE) {
+		if (ZONE_ALLOC_FRAG_PERCENT(alloc_size, size) < ZONE_ALLOC_FRAG_PERCENT(best_alloc, size)) {
+			best_alloc = alloc_size;
 		}
-		if (alloc <= best || (alloc % size >= waste))
-			alloc = best;
 	}
-use_this_allocation:
+	alloc = best_alloc;
 	if (max && (max < alloc))
 		max = alloc;
-
-	/*
-	 * Opt into page list tracking if we can reliably map an allocation
-	 * to its page_metadata, and if the wastage in the tail of
-	 * the allocation is not too large
-	 */
-
-	/* zone_zone can't use page metadata since the page metadata will overwrite zone metadata */
-	if (alloc == PAGE_SIZE && zone_zone != ZONE_NULL) {
-		vm_offset_t first_element_offset;
-		size_t zone_page_metadata_size = sizeof(struct zone_page_metadata);
-
-		if (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT == 0) {
-			first_element_offset = zone_page_metadata_size;
-		} else {
-			first_element_offset = zone_page_metadata_size + (ZONE_ELEMENT_ALIGNMENT - (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT));
-		}
-
-		if (((PAGE_SIZE - first_element_offset) % size) <= PAGE_SIZE / 100) {
-			use_page_list = TRUE;
-		}
-	}
 
 	z->free_elements = NULL;
 	queue_init(&z->pages.any_free_foreign);
@@ -1766,10 +1612,10 @@ use_this_allocation:
 	z->zone_name = name;
 	z->count = 0;
 	z->countfree = 0;
+	z->count_all_free_pages = 0;
 	z->sum_count = 0LL;
 	z->doing_alloc_without_vm_priv = FALSE;
 	z->doing_alloc_with_vm_priv = FALSE;
-	z->doing_gc = FALSE;
 	z->exhaustible = FALSE;
 	z->collectable = TRUE;
 	z->allows_foreign = FALSE;
@@ -1782,63 +1628,134 @@ use_this_allocation:
 	z->async_prio_refill = FALSE;
 	z->gzalloc_exempt = FALSE;
 	z->alignment_required = FALSE;
-	z->use_page_list = use_page_list;
+	z->zone_replenishing = FALSE;
 	z->prio_refill_watermark = 0;
 	z->zone_replenish_thread = NULL;
 	z->zp_count = 0;
+
 #if CONFIG_ZLEAKS
 	z->zleak_capture = 0;
 	z->zleak_on = FALSE;
 #endif /* CONFIG_ZLEAKS */
 
-#if	ZONE_DEBUG
-	z->active_zones.next = z->active_zones.prev = NULL;	
-	zone_debug_enable(z);
-#endif	/* ZONE_DEBUG */
 	lock_zone_init(z);
 
 	/*
 	 *	Add the zone to the all-zones list.
-	 *	If we are tracking zone info per task, and we have
-	 *	already used all the available stat slots, then keep
-	 *	using the overflow zone slot.
 	 */
-	z->next_zone = ZONE_NULL;
 	simple_lock(&all_zones_lock);
-	*last_zone = z;
-	last_zone = &z->next_zone;
 	z->index = num_zones;
-	if (zinfo_per_task) {
-		if (num_zones > ZONES_MAX)
-			z->index = ZONES_MAX;
-	}
 	num_zones++;
 	simple_unlock(&all_zones_lock);
 
 	/*
-	 * Check if we should be logging this zone.  If so, remember the zone pointer.
+	 * Check for and set up zone leak detection if requested via boot-args.  We recognized two
+	 * boot-args:
+	 *
+	 *	zlog=<zone_to_log>
+	 *	zrecs=<num_records_in_log>
+	 *
+	 * The zlog arg is used to specify the zone name that should be logged, and zrecs is used to
+	 * control the size of the log.  If zrecs is not specified, a default value is used.
 	 */
-	if (log_this_zone(z->zone_name, zone_name_to_log)) {
-	 	zone_of_interest = z;
-	}
 
-	/*
-	 * If we want to log a zone, see if we need to allocate buffer space for the log.  Some vm related zones are
-	 * zinit'ed before we can do a kmem_alloc, so we have to defer allocation in that case.  kmem_alloc_ready is set to
-	 * TRUE once enough of the VM system is up and running to allow a kmem_alloc to work.  If we want to log one
-	 * of the VM related zones that's set up early on, we will skip allocation of the log until zinit is called again
-	 * later on some other zone.  So note we may be allocating a buffer to log a zone other than the one being initialized
-	 * right now.
-	 */
-	if (zone_of_interest != NULL && zlog_btlog == NULL && kmem_alloc_ready) {
-		zlog_btlog = btlog_create(log_records, MAX_ZTRACE_DEPTH, NULL, NULL, NULL);
-		if (zlog_btlog) {
-			printf("zone: logging started for zone %s\n", zone_of_interest->zone_name);
-		} else {
-			printf("zone: couldn't allocate memory for zrecords, turning off zleak logging\n");
-			zone_of_interest = NULL;
+	if (num_zones_logged < max_num_zones_to_log) {
+
+		int		i = 1; /* zlog0 isn't allowed. */
+		boolean_t	zone_logging_enabled = FALSE;
+		char 		zlog_name[MAX_ZONE_NAME] = ""; /* Temp. buffer to create the strings zlog1, zlog2 etc... */
+
+		while (i <= max_num_zones_to_log) {
+
+			snprintf(zlog_name, MAX_ZONE_NAME, "zlog%d", i);
+
+			if (PE_parse_boot_argn(zlog_name, zone_name_to_log, sizeof(zone_name_to_log)) == TRUE) {
+				if (log_this_zone(z->zone_name, zone_name_to_log)) {
+					z->zone_logging = TRUE;
+					zone_logging_enabled = TRUE;
+					num_zones_logged++;
+					break;
+				}
+			}
+			i++;
+		}
+
+		if (zone_logging_enabled == FALSE) {
+			/* 
+			 * Backwards compat. with the old boot-arg used to specify single zone logging i.e. zlog
+			 * Needs to happen after the newer zlogn checks because the prefix will match all the zlogn
+			 * boot-args.
+			 */
+			if (PE_parse_boot_argn("zlog", zone_name_to_log, sizeof(zone_name_to_log)) == TRUE) {
+				if (log_this_zone(z->zone_name, zone_name_to_log)) {
+						z->zone_logging = TRUE;
+						zone_logging_enabled = TRUE;
+						num_zones_logged++;
+				}
+			}
+		}
+
+		if (log_records_init == FALSE && zone_logging_enabled == TRUE) {
+		    if (PE_parse_boot_argn("zrecs", &log_records, sizeof(log_records)) == TRUE) {
+				/*
+				 * Don't allow more than ZRECORDS_MAX records even if the user asked for more.
+				 * This prevents accidentally hogging too much kernel memory and making the system
+				 * unusable.
+				 */
+
+				log_records = MIN(ZRECORDS_MAX, log_records);
+				log_records_init = TRUE;
+			} else {
+				log_records = ZRECORDS_DEFAULT;
+				log_records_init = TRUE;
+			}
+		}
+
+		/*
+		 * If we want to log a zone, see if we need to allocate buffer space for the log.  Some vm related zones are
+		 * zinit'ed before we can do a kmem_alloc, so we have to defer allocation in that case.  kmem_alloc_ready is set to
+		 * TRUE once enough of the VM system is up and running to allow a kmem_alloc to work.  If we want to log one
+		 * of the VM related zones that's set up early on, we will skip allocation of the log until zinit is called again
+		 * later on some other zone.  So note we may be allocating a buffer to log a zone other than the one being initialized
+		 * right now.
+		 */
+		if (kmem_alloc_ready) {
+
+			zone_t curr_zone = NULL;
+			unsigned int max_zones = 0, zone_idx = 0;
+
+			simple_lock(&all_zones_lock);
+			max_zones = num_zones;
+			simple_unlock(&all_zones_lock);
+
+			for (zone_idx = 0; zone_idx < max_zones; zone_idx++) {
+
+				curr_zone = &(zone_array[zone_idx]);
+
+				/*
+				 * We work with the zone unlocked here because we could end up needing the zone lock to
+				 * enable logging for this zone e.g. need a VM object to allocate memory to enable logging for the
+				 * VM objects zone.
+				 *
+				 * We don't expect these zones to be needed at this early a time in boot and so take this chance.
+				 */
+				if (curr_zone->zone_logging && curr_zone->zlog_btlog == NULL) {
+
+					curr_zone->zlog_btlog = btlog_create(log_records, MAX_ZTRACE_DEPTH, (corruption_debug_flag == FALSE) /* caller_will_remove_entries_for_element? */);
+
+					if (curr_zone->zlog_btlog) {
+
+						printf("zone: logging started for zone %s\n", curr_zone->zone_name);
+					} else {
+						printf("zone: couldn't allocate memory for zrecords, turning off zleak logging\n");
+						curr_zone->zone_logging = FALSE;
+					}
+				}
+
+			}
 		}
 	}
+
 #if	CONFIG_GZALLOC	
 	gzalloc_zone_init(z);
 #endif
@@ -1851,12 +1768,16 @@ static void zone_replenish_thread(zone_t);
 /* High priority VM privileged thread used to asynchronously refill a designated
  * zone, such as the reserved VM map entry zone.
  */
-static void zone_replenish_thread(zone_t z) {
+__attribute__((noreturn))
+static void
+zone_replenish_thread(zone_t z)
+{
 	vm_size_t free_size;
 	current_thread()->options |= TH_OPT_VMPRIV;
 
 	for (;;) {
 		lock_zone(z);
+		z->zone_replenishing = TRUE;
 		assert(z->prio_refill_watermark != 0);
 		while ((free_size = (z->cur_size - (z->count * z->elem_size))) < (z->prio_refill_watermark * z->elem_size)) {
 			assert(z->doing_alloc_without_vm_priv == FALSE);
@@ -1879,20 +1800,12 @@ static void zone_replenish_thread(zone_t z) {
 			kr = kernel_memory_allocate(zone_map, &space, alloc_size, 0, zflags, VM_KERN_MEMORY_ZONE);
 
 			if (kr == KERN_SUCCESS) {
-#if	ZONE_ALIAS_ADDR
-				if (alloc_size == PAGE_SIZE)
-					space = zone_alias_addr(space);
-#endif
 				zcram(z, space, alloc_size);
 			} else if (kr == KERN_RESOURCE_SHORTAGE) {
 				VM_PAGE_WAIT();
 			} else if (kr == KERN_NO_SPACE) {
 				kr = kernel_memory_allocate(kernel_map, &space, alloc_size, 0, zflags, VM_KERN_MEMORY_ZONE);
 				if (kr == KERN_SUCCESS) {
-#if	ZONE_ALIAS_ADDR
-					if (alloc_size == PAGE_SIZE)
-						space = zone_alias_addr(space);
-#endif
 					zcram(z, space, alloc_size);
 				} else {
 					assert_wait_timeout(&z->zone_replenish_thread, THREAD_UNINT, 1, 100 * NSEC_PER_USEC);
@@ -1904,13 +1817,14 @@ static void zone_replenish_thread(zone_t z) {
 			zone_replenish_loops++;
 		}
 
-		unlock_zone(z);
+		z->zone_replenishing = FALSE;
 		/* Signal any potential throttled consumers, terminating
 		 * their timer-bounded waits.
 		 */
 		thread_wakeup(z);
 
 		assert_wait(&z->zone_replenish_thread, THREAD_UNINT);
+		unlock_zone(z);
 		thread_block(THREAD_CONTINUE_NULL);
 		zone_replenish_wakeups++;
 	}
@@ -1930,6 +1844,27 @@ zone_prio_refill_configure(zone_t z, vm_size_t low_water_mark) {
 
 	thread_deallocate(z->zone_replenish_thread);
 }
+
+/* Initialize the metadata for an allocation chunk */
+static inline void
+zcram_metadata_init(vm_offset_t newmem, vm_size_t size, struct zone_page_metadata *chunk_metadata)
+{
+	struct zone_page_metadata *page_metadata;
+
+	/* The first page is the real metadata for this allocation chunk. We mark the others as fake metadata */
+	size -= PAGE_SIZE;
+	newmem += PAGE_SIZE;
+
+	for (; size > 0; newmem += PAGE_SIZE, size -= PAGE_SIZE) {
+		page_metadata = get_zone_page_metadata((struct zone_free_element *)newmem, TRUE);
+		assert(page_metadata != chunk_metadata);
+		PAGE_METADATA_SET_ZINDEX(page_metadata, MULTIPAGE_METADATA_MAGIC);
+		page_metadata_set_realmeta(page_metadata, chunk_metadata);
+		page_metadata->free_count = 0;
+	}
+	return;
+}
+
 
 /*
  * Boolean Random Number Generator for generating booleans to randomize 
@@ -1979,7 +1914,6 @@ random_free_to_zone(
 			vm_offset_t 	newmem,
 			vm_offset_t 	first_element_offset,
 			int 		element_count,
-			boolean_t 	from_zm,
 			int 		*entropy_buffer)
 {
 	vm_offset_t 	last_element_offset;
@@ -1991,7 +1925,11 @@ random_free_to_zone(
 	last_element_offset = first_element_offset + ((element_count * elem_size) - elem_size);
 	for (index = 0; index < element_count; index++) {
 		assert(first_element_offset <= last_element_offset);
-		if (random_bool_gen(entropy_buffer, index, MAX_ENTROPY_PER_ZCRAM)) {
+		if (
+#if DEBUG || DEVELOPMENT
+		leak_scan_debug_flag ||
+#endif /* DEBUG || DEVELOPMENT */
+	        random_bool_gen(entropy_buffer, index, MAX_ENTROPY_PER_ZCRAM)) {
 			element_addr = newmem + first_element_offset;
 			first_element_offset += elem_size;
 		} else {
@@ -2001,9 +1939,6 @@ random_free_to_zone(
 		if (element_addr != (vm_offset_t)zone) {
 			zone->count++;  /* compensate for free_to_zone */
 			free_to_zone(zone, element_addr, FALSE);
-		}
-		if (!zone->use_page_list && from_zm) {
-			zone_page_alloc(element_addr, elem_size);
 		}
 		zone->cur_size += elem_size;
 	}
@@ -2020,7 +1955,6 @@ zcram(
 {
 	vm_size_t	elem_size;
 	boolean_t   from_zm = FALSE;
-	vm_offset_t first_element_offset;
 	int element_count;
 	int entropy_buffer[MAX_ENTROPY_PER_ZCRAM];
 
@@ -2036,75 +1970,71 @@ zcram(
 	if (from_zone_map(newmem, size))
 		from_zm = TRUE;
 
+	if (!from_zm) {
+		/* We cannot support elements larger than page size for foreign memory because we 
+		 * put metadata on the page itself for each page of foreign memory. We need to do 
+		 * this in order to be able to reach the metadata when any element is freed 
+		 */
+		assert((zone->allows_foreign == TRUE) && (zone->elem_size <= (PAGE_SIZE - sizeof(struct zone_page_metadata))));
+	} 
+
 	if (zalloc_debug & ZALLOC_DEBUG_ZCRAM)
 		kprintf("zcram(%p[%s], 0x%lx%s, 0x%lx)\n", zone, zone->zone_name,
 				(unsigned long)newmem, from_zm ? "" : "[F]", (unsigned long)size);
-
-	if (from_zm && !zone->use_page_list)
-		zone_page_init(newmem, size);
 
 	ZONE_PAGE_COUNT_INCR(zone, (size / PAGE_SIZE));
 
 	random_bool_gen_entropy(entropy_buffer, MAX_ENTROPY_PER_ZCRAM);
 	
+	/* 
+	 * Initialize the metadata for all pages. We dont need the zone lock 
+	 * here because we are not manipulating any zone related state yet.
+	 */
+
+	struct zone_page_metadata *chunk_metadata;
+	size_t zone_page_metadata_size = sizeof(struct zone_page_metadata);
+
+	assert((newmem & PAGE_MASK) == 0);
+	assert((size & PAGE_MASK) == 0);
+
+	chunk_metadata = get_zone_page_metadata((struct zone_free_element *)newmem, TRUE);
+	chunk_metadata->pages.next = NULL;
+	chunk_metadata->pages.prev = NULL;
+	page_metadata_set_freelist(chunk_metadata, 0);
+	PAGE_METADATA_SET_ZINDEX(chunk_metadata, zone->index);
+	chunk_metadata->free_count = 0;
+	chunk_metadata->page_count = (size / PAGE_SIZE);
+
+	zcram_metadata_init(newmem, size, chunk_metadata);
+
 	lock_zone(zone);
+	enqueue_tail(&zone->pages.all_used, &(chunk_metadata->pages));
 
-	if (zone->use_page_list) {
-		struct zone_page_metadata *page_metadata;
-		size_t zone_page_metadata_size = sizeof(struct zone_page_metadata);
+	if (!from_zm) {
+		/* We cannot support elements larger than page size for foreign memory because we 
+		 * put metadata on the page itself for each page of foreign memory. We need to do 
+		 * this in order to be able to reach the metadata when any element is freed 
+		 */
 
-		assert((newmem & PAGE_MASK) == 0);
-		assert((size & PAGE_MASK) == 0);
 		for (; size > 0; newmem += PAGE_SIZE, size -= PAGE_SIZE) {
-
-			page_metadata = (struct zone_page_metadata *)(newmem);
-			
-			page_metadata->pages.next = NULL;
-			page_metadata->pages.prev = NULL;
-			page_metadata->elements = NULL;
-			page_metadata->zone = zone;
-			page_metadata->alloc_count = 0;
-			page_metadata->free_count = 0;
-
-			enqueue_tail(&zone->pages.all_used, (queue_entry_t)page_metadata);
-
+			vm_offset_t first_element_offset = 0;
 			if (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT == 0){
 				first_element_offset = zone_page_metadata_size;
 			} else {
 				first_element_offset = zone_page_metadata_size + (ZONE_ELEMENT_ALIGNMENT - (zone_page_metadata_size % ZONE_ELEMENT_ALIGNMENT));
 			}
 			element_count = (int)((PAGE_SIZE - first_element_offset) / elem_size);
-			page_metadata->alloc_count += element_count;
-			random_free_to_zone(zone, newmem, first_element_offset, element_count, from_zm, entropy_buffer);			
+			random_free_to_zone(zone, newmem, first_element_offset, element_count, entropy_buffer);				
 		}
-	} else {	
-		first_element_offset = 0;
-		element_count = (int)((size - first_element_offset) / elem_size);		
-		random_free_to_zone(zone, newmem, first_element_offset, element_count, from_zm, entropy_buffer);
+	} else {
+		element_count = (int)(size / elem_size);
+		random_free_to_zone(zone, newmem, 0, element_count, entropy_buffer);	
 	}
 	unlock_zone(zone);
 	
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_ZALLOC, ZALLOC_ZCRAM) | DBG_FUNC_END, VM_KERNEL_ADDRPERM(zone), 0, 0, 0, 0);
 
 }
-
-
-/*
- *	Steal memory for the zone package.  Called from
- *	vm_page_bootstrap().
- */
-void
-zone_steal_memory(void)
-{
-#if	CONFIG_GZALLOC
-	gzalloc_configure();
-#endif
-	/* Request enough early memory to get to the pmap zone */
-	zdata_size = 12 * sizeof(struct zone);
-	zdata_size = round_page(zdata_size);
-	zdata = (vm_offset_t)pmap_steal_memory(zdata_size);
-}
-
 
 /*
  * Fill a zone with enough memory to contain at least nelem elements.
@@ -2151,10 +2081,6 @@ zone_bootstrap(void)
 	char temp_buf[16];
 	unsigned int i;
 
-	if (PE_parse_boot_argn("-zinfop", temp_buf, sizeof(temp_buf))) {
-		zinfo_per_task = TRUE;
-	}
-
 	if (!PE_parse_boot_argn("zalloc_debug", &zalloc_debug, sizeof(zalloc_debug)))
 		zalloc_debug = 0;
 
@@ -2172,89 +2098,26 @@ zone_bootstrap(void)
 		corruption_debug_flag = TRUE;
 	}	
 
-	/*
-	 * Check for and set up zone leak detection if requested via boot-args.  We recognized two
-	 * boot-args:
-	 *
-	 *	zlog=<zone_to_log>
-	 *	zrecs=<num_records_in_log>
-	 *
-	 * The zlog arg is used to specify the zone name that should be logged, and zrecs is used to
-	 * control the size of the log.  If zrecs is not specified, a default value is used.
-	 */
-
-	if (PE_parse_boot_argn("zlog", zone_name_to_log, sizeof(zone_name_to_log)) == TRUE) {
-		if (PE_parse_boot_argn("zrecs", &log_records, sizeof(log_records)) == TRUE) {
-
-			/*
-			 * Don't allow more than ZRECORDS_MAX records even if the user asked for more.
-			 * This prevents accidentally hogging too much kernel memory and making the system
-			 * unusable.
-			 */
-
-			log_records = MIN(ZRECORDS_MAX, log_records);
-
-		} else {
-			log_records = ZRECORDS_DEFAULT;
-		}
+#if DEBUG || DEVELOPMENT
+	/* disable element location randomization in a page */
+	if (PE_parse_boot_argn("-zl", temp_buf, sizeof(temp_buf))) {
+		leak_scan_debug_flag = TRUE;
 	}
+#endif
 
 	simple_lock_init(&all_zones_lock, 0);
 
-	first_zone = ZONE_NULL;
-	last_zone = &first_zone;
 	num_zones = 0;
 	thread_call_setup(&call_async_alloc, zalloc_async, NULL);
 
-	/* assertion: nobody else called zinit before us */
-	assert(zone_zone == ZONE_NULL);
-	
 	/* initializing global lock group for zones */
 	lck_grp_attr_setdefault(&zone_locks_grp_attr);
 	lck_grp_init(&zone_locks_grp, "zone_locks", &zone_locks_grp_attr);
 
-	zone_zone = zinit(sizeof(struct zone), 128 * sizeof(struct zone),
-			  sizeof(struct zone), "zones");
-	zone_change(zone_zone, Z_COLLECT, FALSE);
-	zone_change(zone_zone, Z_CALLERACCT, FALSE);
-	zone_change(zone_zone, Z_NOENCRYPT, TRUE);
-
-	zcram(zone_zone, zdata, zdata_size);
-	VM_PAGE_MOVE_STOLEN(atop_64(zdata_size));
-
-	/* initialize fake zones and zone info if tracking by task */
-	if (zinfo_per_task) {
-		vm_size_t zisize = sizeof(zinfo_usage_store_t) * ZINFO_SLOTS;
-
-		for (i = 0; i < num_fake_zones; i++)
-			fake_zones[i].init(ZINFO_SLOTS - num_fake_zones + i);
-		zinfo_zone = zinit(zisize, zisize * CONFIG_TASK_MAX,
-				   zisize, "per task zinfo");
-		zone_change(zinfo_zone, Z_CALLERACCT, FALSE);
-	}
+	lck_attr_setdefault(&zone_metadata_lock_attr); 
+	lck_mtx_init_ext(&zone_metadata_region_lck, &zone_metadata_region_lck_ext, &zone_locks_grp, &zone_metadata_lock_attr);
 }
 
-void
-zinfo_task_init(task_t task)
-{
-	if (zinfo_per_task) {
-		task->tkm_zinfo = zalloc(zinfo_zone);
-		memset(task->tkm_zinfo, 0, sizeof(zinfo_usage_store_t) * ZINFO_SLOTS);
-	} else {
-		task->tkm_zinfo = NULL;
-	}
-}
-
-void
-zinfo_task_free(task_t task)
-{
-	assert(task != kernel_task);
-	if (task->tkm_zinfo != NULL) {
-		zfree(zinfo_zone, task->tkm_zinfo);
-		task->tkm_zinfo = NULL;
-	}
-}
-		
 /* Global initialization of Zone Allocator.
  * Runs after zone_bootstrap.
  */
@@ -2265,6 +2128,8 @@ zone_init(
 	kern_return_t	retval;
 	vm_offset_t	zone_min;
 	vm_offset_t	zone_max;
+	vm_offset_t 	zone_metadata_space;
+	unsigned int 	zone_pages;
 
 	retval = kmem_suballoc(kernel_map, &zone_min, max_zonemap_size,
 			       FALSE, VM_FLAGS_ANYWHERE | VM_FLAGS_PERMANENT | VM_MAKE_TAG(VM_KERN_MEMORY_ZONE),
@@ -2282,35 +2147,27 @@ zone_init(
 	zone_map_min_address = zone_min;
 	zone_map_max_address = zone_max;
 
+	zone_pages = (unsigned int)atop_kernel(zone_max - zone_min);
+	zone_metadata_space = round_page(zone_pages * sizeof(struct zone_page_metadata));
+	retval = kernel_memory_allocate(zone_map, &zone_metadata_region_min, zone_metadata_space,
+					0, KMA_KOBJECT | KMA_VAONLY | KMA_PERMANENT, VM_KERN_MEMORY_OSFMK);
+	if (retval != KERN_SUCCESS)
+		panic("zone_init: zone_metadata_region initialization failed!");
+	zone_metadata_region_max = zone_metadata_region_min + zone_metadata_space;
+
 #if defined(__LP64__)
 	/*
 	 * ensure that any vm_page_t that gets created from
 	 * the vm_page zone can be packed properly (see vm_page.h
 	 * for the packing requirements
 	 */
-	if (VM_PAGE_UNPACK_PTR(VM_PAGE_PACK_PTR(zone_map_min_address)) != (vm_page_t)zone_map_min_address)
-		panic("VM_PAGE_PACK_PTR failed on zone_map_min_address - %p", (void *)zone_map_min_address);
+	if ((vm_page_t)(VM_PAGE_UNPACK_PTR(VM_PAGE_PACK_PTR(zone_metadata_region_max))) != (vm_page_t)zone_metadata_region_max)
+		panic("VM_PAGE_PACK_PTR failed on zone_metadata_region_max - %p", (void *)zone_metadata_region_max);
 
-	if (VM_PAGE_UNPACK_PTR(VM_PAGE_PACK_PTR(zone_map_max_address)) != (vm_page_t)zone_map_max_address)
+	if ((vm_page_t)(VM_PAGE_UNPACK_PTR(VM_PAGE_PACK_PTR(zone_map_max_address))) != (vm_page_t)zone_map_max_address)
 		panic("VM_PAGE_PACK_PTR failed on zone_map_max_address - %p", (void *)zone_map_max_address);
 #endif
 
-	zone_pages = (unsigned int)atop_kernel(zone_max - zone_min);
-	zone_page_table_used_size = sizeof(zone_page_table);
-
-	zone_page_table_second_level_size = 1;
-	zone_page_table_second_level_shift_amount = 0;
-	
-	/*
-	 * Find the power of 2 for the second level that allows
-	 * the first level to fit in ZONE_PAGE_TABLE_FIRST_LEVEL_SIZE
-	 * slots.
-	 */
-	while ((zone_page_table_first_level_slot(zone_pages-1)) >= ZONE_PAGE_TABLE_FIRST_LEVEL_SIZE) {
-		zone_page_table_second_level_size <<= 1;
-		zone_page_table_second_level_shift_amount++;
-	}
-	
 	lck_grp_attr_setdefault(&zone_gc_lck_grp_attr);
 	lck_grp_init(&zone_gc_lck_grp, "zone_gc", &zone_gc_lck_grp_attr);
 	lck_attr_setdefault(&zone_gc_lck_attr);
@@ -2322,70 +2179,6 @@ zone_init(
 	 */
 	zleak_init(max_zonemap_size);
 #endif /* CONFIG_ZLEAKS */
-}
-
-void
-zone_page_table_expand(zone_page_index_t pindex)
-{
-	unsigned int first_index;
-	struct zone_page_table_entry * volatile * first_level_ptr;
-
-	assert(pindex < zone_pages);
-
-	first_index = zone_page_table_first_level_slot(pindex);
-	first_level_ptr = &zone_page_table[first_index];
-
-	if (*first_level_ptr == NULL) {
-		/*
-		 * We were able to verify the old first-level slot
-		 * had NULL, so attempt to populate it.
-		 */
-
-		vm_offset_t second_level_array = 0;
-		vm_size_t second_level_size = round_page(zone_page_table_second_level_size * sizeof(struct zone_page_table_entry));
-		zone_page_index_t i;
-		struct zone_page_table_entry *entry_array;
-
-		if (kmem_alloc_kobject(zone_map, &second_level_array,
-							   second_level_size, VM_KERN_MEMORY_OSFMK) != KERN_SUCCESS) {
-			panic("zone_page_table_expand");
-		}
-		zone_map_table_page_count += (second_level_size / PAGE_SIZE);
-
-		/*
-		 * zone_gc() may scan the "zone_page_table" directly,
-		 * so make sure any slots have a valid unused state.
-		 */
-		entry_array = (struct zone_page_table_entry *)second_level_array;
-		for (i=0; i < zone_page_table_second_level_size; i++) {
-			entry_array[i].alloc_count = ZONE_PAGE_UNUSED;
-			entry_array[i].collect_count = 0;
-		}
-
-		if (OSCompareAndSwapPtr(NULL, entry_array, first_level_ptr)) {
-			/* Old slot was NULL, replaced with expanded level */
-			OSAddAtomicLong(second_level_size, &zone_page_table_used_size);
-		} else {
-			/* Old slot was not NULL, someone else expanded first */
-			kmem_free(zone_map, second_level_array, second_level_size);
-			zone_map_table_page_count -= (second_level_size / PAGE_SIZE);
-		}
-	} else {
-		/* Old slot was not NULL, already been expanded */
-	}
-}
-
-struct zone_page_table_entry *
-zone_page_table_lookup(zone_page_index_t pindex)
-{
-	unsigned int first_index = zone_page_table_first_level_slot(pindex);
-	struct zone_page_table_entry *second_level = zone_page_table[first_index];
-
-	if (second_level) {
-		return &second_level[zone_page_table_second_level_slot(pindex)];
-	}
-
-	return NULL;
 }
 
 extern volatile SInt32 kfree_nop_count;
@@ -2407,7 +2200,7 @@ zalloc_internal(
 	uintptr_t	zbt[MAX_ZTRACE_DEPTH];	/* used in zone leak logging and zone leak detection */
 	int 		numsaved = 0;
 	boolean_t	zone_replenish_wakeup = FALSE, zone_alloc_throttle = FALSE;
-#if	CONFIG_GZALLOC || ZONE_DEBUG	
+#if	CONFIG_GZALLOC
 	boolean_t	did_gzalloc = FALSE;
 #endif
 	thread_t thr = current_thread();
@@ -2439,7 +2232,7 @@ zalloc_internal(
 	if (__improbable(zone->zleak_on && sample_counter(&zone->zleak_capture, zleak_sample_factor) == TRUE)) {
 		/* Avoid backtracing twice if zone logging is on */
 		if (numsaved == 0)
-			zleak_tracedepth = fastbacktrace(zbt, MAX_ZTRACE_DEPTH);
+			zleak_tracedepth = backtrace(zbt, MAX_ZTRACE_DEPTH);
 		else
 			zleak_tracedepth = numsaved;
 	}
@@ -2456,12 +2249,11 @@ zalloc_internal(
 
 			    if (zone_replenish_wakeup) {
 				    zone_replenish_wakeups_initiated++;
-				    unlock_zone(zone);
 				    /* Signal the potentially waiting
 				     * refill thread.
 				     */
 				    thread_wakeup(&zone->zone_replenish_thread);
-
+				    unlock_zone(zone);
 				    /* Scheduling latencies etc. may prevent
 				     * the refill thread from keeping up
 				     * with demand. Throttle consumers
@@ -2506,16 +2298,6 @@ zalloc_internal(
 			 */
 			zone->waiting = TRUE;
 			zone_sleep(zone);
-		} else if (zone->doing_gc) {
-			/*
-			 * zone_gc() is running. Since we need an element
-			 * from the free list that is currently being
-			 * collected, set the waiting bit and 
-			 * wait for the GC process to finish
-			 * before trying again
-			 */
-			zone->waiting = TRUE;
-			zone_sleep(zone);
 		} else {
 			vm_offset_t space;
 			vm_size_t alloc_size;
@@ -2548,6 +2330,14 @@ zalloc_internal(
 					panic("zalloc: zone \"%s\" empty.", zone->zone_name);
 				}
 			}
+			/* 
+			 * It is possible that a BG thread is refilling/expanding the zone
+			 * and gets pre-empted during that operation. That blocks all other
+			 * threads from making progress leading to a watchdog timeout. To
+			 * avoid that, boost the thread priority using the rwlock boost
+			 */
+			set_thread_rwlock_boost();
+			
 			if ((thr->options & TH_OPT_VMPRIV)) {
 			        zone->doing_alloc_with_vm_priv = TRUE;
 				set_doing_alloc_with_vm_priv = TRUE;
@@ -2570,11 +2360,6 @@ zalloc_internal(
 				
 				retval = kernel_memory_allocate(zone_map, &space, alloc_size, 0, zflags, VM_KERN_MEMORY_ZONE);
 				if (retval == KERN_SUCCESS) {
-#if	ZONE_ALIAS_ADDR
-					if (alloc_size == PAGE_SIZE)
-						space = zone_alias_addr(space);
-#endif
-					
 #if CONFIG_ZLEAKS
 					if ((zleak_state & (ZLEAK_STATE_ENABLED | ZLEAK_STATE_ACTIVE)) == ZLEAK_STATE_ENABLED) {
 						if (zone_map->size >= zleak_global_tracking_threshold) {
@@ -2600,7 +2385,7 @@ zalloc_internal(
 					retry++;
 					
 					if (retry == 2) {
-						zone_gc(TRUE);
+						zone_gc();
 						printf("zalloc did gc\n");
 						zone_display_zprint();
 					}
@@ -2635,6 +2420,8 @@ zalloc_internal(
 			        zone->waiting = FALSE;
 				zone_wakeup(zone);
 			}
+			clear_thread_rwlock_boost();
+
 			addr = try_alloc_from_zone(zone, &check_poison);
 			if (addr == 0 &&
 			    retval == KERN_RESOURCE_SHORTAGE) {
@@ -2672,27 +2459,13 @@ zalloc_internal(
 		addr = try_alloc_from_zone(zone, &check_poison);
 	}
 
-	/*
-	 * See if we should be logging allocations in this zone.  Logging is rarely done except when a leak is
-	 * suspected, so this code rarely executes.  We need to do this code while still holding the zone lock
-	 * since it protects the various log related data structures.
-	 */
-
-	if (__improbable(DO_LOGGING(zone) && addr)) {
-		btlog_add_entry(zlog_btlog, (void *)addr, ZOP_ALLOC, (void **)zbt, numsaved);
-	}
-
 	vm_offset_t     inner_size = zone->elem_size;
-	
-#if	ZONE_DEBUG
-	if (!did_gzalloc && addr && zone_debug_enabled(zone)) {
-		enqueue_tail(&zone->active_zones, (queue_entry_t)addr);
-		addr += ZONE_DEBUG_OFFSET;
-		inner_size -= ZONE_DEBUG_OFFSET;
-	}
-#endif
 
 	unlock_zone(zone);
+
+	if (__improbable(DO_LOGGING(zone) && addr)) {
+		btlog_add_entry(zone->zlog_btlog, (void *)addr, ZOP_ALLOC, (void **)zbt, numsaved);
+	}
 
 	if (__improbable(check_poison && addr)) {
 		vm_offset_t *element_cursor  = ((vm_offset_t *) addr) + 1;
@@ -2718,23 +2491,20 @@ zalloc_internal(
 
 		*primary = ZP_POISON;
 		*backup  = ZP_POISON;
+
+#if DEBUG || DEVELOPMENT
+		if (__improbable(leak_scan_debug_flag && !(zone->elem_size & (sizeof(uintptr_t) - 1)))) {
+			int count, idx;
+			/* Fill element, from tail, with backtrace in reverse order */
+			if (numsaved == 0) numsaved = backtrace(zbt, MAX_ZTRACE_DEPTH);
+			count = (int) (zone->elem_size / sizeof(uintptr_t));
+			if (count >= numsaved) count = numsaved - 1;
+			for (idx = 0; idx < count; idx++) ((uintptr_t *)addr)[count - 1 - idx] = zbt[idx + 1];
+		}
+#endif /* DEBUG || DEVELOPMENT */
 	}
 
 	TRACE_MACHLEAKS(ZALLOC_CODE, ZALLOC_CODE_2, zone->elem_size, addr);
-
-	if (addr) {
-		task_t task;
-		zinfo_usage_t zinfo;
-		vm_size_t sz = zone->elem_size;
-
-		if (zone->caller_acct)
-			ledger_credit(thr->t_ledger, task_ledgers.tkm_private, sz);
-		else
-			ledger_credit(thr->t_ledger, task_ledgers.tkm_shared, sz);
-
-		if ((task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
-			OSAddAtomic64(sz, (int64_t *)&zinfo[zone->index].alloc);
-	}
 	return((void *)addr);
 }
 
@@ -2769,17 +2539,16 @@ zalloc_async(
 	__unused thread_call_param_t          p0,
 	__unused thread_call_param_t p1)
 {
-	zone_t current_z = NULL, head_z;
+	zone_t current_z = NULL;
 	unsigned int max_zones, i;
 	void *elt = NULL;
 	boolean_t pending = FALSE;
 	
 	simple_lock(&all_zones_lock);
-	head_z = first_zone;
 	max_zones = num_zones;
 	simple_unlock(&all_zones_lock);
-	current_z = head_z;
 	for (i = 0; i < max_zones; i++) {
+		current_z = &(zone_array[i]);
 		lock_zone(current_z);
 		if (current_z->async_pending == TRUE) {
 			current_z->async_pending = FALSE;
@@ -2792,105 +2561,18 @@ zalloc_async(
 			zfree(current_z, elt);
 			pending = FALSE;
 		}
-		/*
-		 * This is based on assumption that zones never get
-		 * freed once allocated and linked. 
-		 * Hence a read outside of lock is OK.
-		 */
-		current_z = current_z->next_zone;
 	}
 }
 
 /*
  *	zget returns an element from the specified zone
  *	and immediately returns nothing if there is nothing there.
- *
- *	This form should be used when you can not block (like when
- *	processing an interrupt).
- *
- *	XXX: It seems like only vm_page_grab_fictitious_common uses this, and its
- *  friend vm_page_more_fictitious can block, so it doesn't seem like 
- *  this is used for interrupts any more....
  */
 void *
 zget(
-	register zone_t	zone)
+	zone_t	zone)
 {
-	vm_offset_t	addr;
-	boolean_t       check_poison = FALSE;
-	
-#if CONFIG_ZLEAKS
-	uintptr_t	zbt[MAX_ZTRACE_DEPTH];		/* used for zone leak detection */
-	uint32_t	zleak_tracedepth = 0;  /* log this allocation if nonzero */
-#endif /* CONFIG_ZLEAKS */
-
-	assert( zone != ZONE_NULL );
-
-#if CONFIG_ZLEAKS
-	/*
-	 * Zone leak detection: capture a backtrace
-	 */
-	if (__improbable(zone->zleak_on && sample_counter(&zone->zleak_capture, zleak_sample_factor) == TRUE)) {
-		zleak_tracedepth = fastbacktrace(zbt, MAX_ZTRACE_DEPTH);
-	}
-#endif /* CONFIG_ZLEAKS */
-
-	if (!lock_try_zone(zone))
-		return NULL;
-	
-	addr = try_alloc_from_zone(zone, &check_poison);
-
-	vm_offset_t     inner_size = zone->elem_size;
-	
-#if	ZONE_DEBUG
-	if (addr && zone_debug_enabled(zone)) {
-		enqueue_tail(&zone->active_zones, (queue_entry_t)addr);
-		addr += ZONE_DEBUG_OFFSET;
-		inner_size -= ZONE_DEBUG_OFFSET;
-	}
-#endif	/* ZONE_DEBUG */
-	
-#if CONFIG_ZLEAKS
-	/*
-	 * Zone leak detection: record the allocation 
-	 */
-	if (zone->zleak_on && zleak_tracedepth > 0 && addr) {
-		/* Sampling can fail if another sample is happening at the same time in a different zone. */
-		if (!zleak_log(zbt, addr, zleak_tracedepth, zone->elem_size)) {
-			/* If it failed, roll back the counter so we sample the next allocation instead. */
-			zone->zleak_capture = zleak_sample_factor;
-		}
-	}
-#endif /* CONFIG_ZLEAKS */
-	
-	unlock_zone(zone);
-
-	if (__improbable(check_poison && addr)) {
-		vm_offset_t *element_cursor  = ((vm_offset_t *) addr) + 1;
-		vm_offset_t *backup  = get_backup_ptr(inner_size, (vm_offset_t *) addr);
-
-		for ( ; element_cursor < backup ; element_cursor++)
-			if (__improbable(*element_cursor != ZP_POISON))
-				zone_element_was_modified_panic(zone,
-				                                addr,
-				                                *element_cursor,
-				                                ZP_POISON,
-				                                ((vm_offset_t)element_cursor) - addr);
-	}
-
-	if (addr) {
-		/*
-		 * Clear out the old next pointer and backup to avoid leaking the cookie
-		 * and so that only values on the freelist have a valid cookie
-		 */
-		vm_offset_t *primary  = (vm_offset_t *) addr;
-		vm_offset_t *backup   = get_backup_ptr(inner_size, primary);
-
-		*primary = ZP_POISON;
-		*backup  = ZP_POISON;
-	}
-
-	return((void *) addr);
+    return zalloc_internal(zone, FALSE, TRUE);
 }
 
 /* Keep this FALSE by default.  Large memory machine run orders of magnitude
@@ -2902,55 +2584,43 @@ static void zone_check_freelist(zone_t zone, vm_offset_t elem)
 	struct zone_free_element *this;
 	struct zone_page_metadata *thispage;
 
-	if (zone->use_page_list) {
-		if (zone->allows_foreign) {
-			for (thispage = (struct zone_page_metadata *)queue_first(&zone->pages.any_free_foreign);
-				 !queue_end(&zone->pages.any_free_foreign, (queue_entry_t)thispage);
-				 thispage = (struct zone_page_metadata *)queue_next((queue_chain_t *)thispage)) {
-				for (this = thispage->elements;
-					 this != NULL;
-					 this = this->next) {
-					if (!is_sane_zone_element(zone, (vm_address_t)this) || (vm_address_t)this == elem)
-						panic("zone_check_freelist");
-				}
-			}
-		}
-		for (thispage = (struct zone_page_metadata *)queue_first(&zone->pages.all_free);
-			 !queue_end(&zone->pages.all_free, (queue_entry_t)thispage);
-			 thispage = (struct zone_page_metadata *)queue_next((queue_chain_t *)thispage)) {
-			for (this = thispage->elements;
+	if (zone->allows_foreign) {
+		for (thispage = (struct zone_page_metadata *)queue_first(&zone->pages.any_free_foreign);
+			 !queue_end(&zone->pages.any_free_foreign, &(thispage->pages));
+			 thispage = (struct zone_page_metadata *)queue_next(&(thispage->pages))) {
+			for (this = page_metadata_get_freelist(thispage);
 				 this != NULL;
 				 this = this->next) {
 				if (!is_sane_zone_element(zone, (vm_address_t)this) || (vm_address_t)this == elem)
 					panic("zone_check_freelist");
 			}
 		}
-		for (thispage = (struct zone_page_metadata *)queue_first(&zone->pages.intermediate);
-			 !queue_end(&zone->pages.intermediate, (queue_entry_t)thispage);
-			 thispage = (struct zone_page_metadata *)queue_next((queue_chain_t *)thispage)) {
-			for (this = thispage->elements;
-				 this != NULL;
-				 this = this->next) {
-				if (!is_sane_zone_element(zone, (vm_address_t)this) || (vm_address_t)this == elem)
-					panic("zone_check_freelist");
-			}
+	}
+	for (thispage = (struct zone_page_metadata *)queue_first(&zone->pages.all_free);
+		!queue_end(&zone->pages.all_free, &(thispage->pages));
+		thispage = (struct zone_page_metadata *)queue_next(&(thispage->pages))) {
+		for (this = page_metadata_get_freelist(thispage);
+			this != NULL;
+			this = this->next) {
+			if (!is_sane_zone_element(zone, (vm_address_t)this) || (vm_address_t)this == elem)
+				panic("zone_check_freelist");
 		}
-	} else {
-		for (this = zone->free_elements;
-			 this != NULL;
-			 this = this->next) {
+	}
+	for (thispage = (struct zone_page_metadata *)queue_first(&zone->pages.intermediate);
+		!queue_end(&zone->pages.intermediate, &(thispage->pages));
+		thispage = (struct zone_page_metadata *)queue_next(&(thispage->pages))) {
+		for (this = page_metadata_get_freelist(thispage);
+			this != NULL;
+			this = this->next) {
 			if (!is_sane_zone_element(zone, (vm_address_t)this) || (vm_address_t)this == elem)
 				panic("zone_check_freelist");
 		}
 	}
 }
 
-static zone_t zone_last_bogus_zone = ZONE_NULL;
-static vm_offset_t zone_last_bogus_elem = 0;
-
 void
 zfree(
-	register zone_t	zone,
+	zone_t	zone,
 	void 		*addr)
 {
 	vm_offset_t	elem = (vm_offset_t) addr;
@@ -2960,42 +2630,6 @@ zfree(
 	boolean_t       poison = FALSE;
 
 	assert(zone != ZONE_NULL);
-
-#if 1
-	if (zone->use_page_list) {
-		struct zone_page_metadata *page_meta = get_zone_page_metadata((struct zone_free_element *)addr);
-		if (zone != page_meta->zone) {
-			/*
-			 * Something bad has happened. Someone tried to zfree a pointer but the metadata says it is from
-			 * a different zone (or maybe it's from a zone that doesn't use page free lists at all). We can repair
-			 * some cases of this, if:
-			 * 1) The specified zone had use_page_list, and the true zone also has use_page_list set. In that case
-			 *    we can swap the zone_t
-			 * 2) The specified zone had use_page_list, but the true zone does not. In this case page_meta is garbage,
-			 *    and dereferencing page_meta->zone might panic.
-			 * To distinguish the two, we enumerate the zone list to match it up.
-			 * We do not handle the case where an incorrect zone is passed that does not have use_page_list set,
-			 * even if the true zone did have this set.
-			 */
-			zone_t fixed_zone = NULL;
-			int fixed_i, max_zones;
-
-			simple_lock(&all_zones_lock);
-			max_zones = num_zones;
-			fixed_zone = first_zone;
-			simple_unlock(&all_zones_lock);
-
-			for (fixed_i=0; fixed_i < max_zones; fixed_i++, fixed_zone = fixed_zone->next_zone) {
-				if (fixed_zone == page_meta->zone && fixed_zone->use_page_list) {
-					/* we can fix this */
-					printf("Fixing incorrect zfree from zone %s to zone %s\n", zone->zone_name, fixed_zone->zone_name);
-					zone = fixed_zone;
-					break;
-				}
-			}
-		}
-	}
-#endif
 
 	/*
 	 * If zone logging is turned on and this is the zone we're tracking, grab a backtrace.
@@ -3008,25 +2642,24 @@ zfree(
 	/* Basic sanity checks */
 	if (zone == ZONE_NULL || elem == (vm_offset_t)0)
 		panic("zfree: NULL");
-	/* zone_gc assumes zones are never freed */
-	if (zone == zone_zone)
-		panic("zfree: freeing to zone_zone breaks zone_gc!");
 #endif
 
 #if	CONFIG_GZALLOC	
 	gzfreed = gzalloc_free(zone, addr);
 #endif
 
+	if (!gzfreed) {
+		struct zone_page_metadata *page_meta = get_zone_page_metadata((struct zone_free_element *)addr, FALSE);
+		if (zone != PAGE_METADATA_GET_ZONE(page_meta)) {
+			panic("Element %p from zone %s caught being freed to wrong zone %s\n", addr, PAGE_METADATA_GET_ZONE(page_meta)->zone_name, zone->zone_name);
+		}
+	}
+
 	TRACE_MACHLEAKS(ZFREE_CODE, ZFREE_CODE_2, zone->elem_size, (uintptr_t)addr);
 
 	if (__improbable(!gzfreed && zone->collectable && !zone->allows_foreign &&
 		!from_zone_map(elem, zone->elem_size))) {
-#if MACH_ASSERT
 		panic("zfree: non-allocated memory in collectable zone!");
-#endif
-		zone_last_bogus_zone = zone;
-		zone_last_bogus_elem = elem;
-		return;
 	}
 
 	if ((zp_factor != 0 || zp_tiny_zone_limit != 0) && !gzfreed) {
@@ -3040,11 +2673,6 @@ zfree(
 
 		vm_offset_t     inner_size = zone->elem_size;
 
-#if	ZONE_DEBUG
-		if (!gzfreed && zone_debug_enabled(zone)) {
-			inner_size -= ZONE_DEBUG_OFFSET;
-		}
-#endif
 		uint32_t sample_factor = zp_factor + (((uint32_t)inner_size) >> zp_scale);
 
 		if (inner_size <= zp_tiny_zone_limit)
@@ -3064,8 +2692,6 @@ zfree(
 		}
 	}
 
-	lock_zone(zone);
-
 	/*
 	 * See if we're doing logging on this zone.  There are two styles of logging used depending on
 	 * whether we're trying to catch a leak or corruption.  See comments above in zalloc for details.
@@ -3077,7 +2703,7 @@ zfree(
 			 * We're logging to catch a corruption.  Add a record of this zfree operation
 			 * to log.
 			 */
-			btlog_add_entry(zlog_btlog, (void *)addr, ZOP_FREE, (void **)zbt, numsaved);
+			btlog_add_entry(zone->zlog_btlog, (void *)addr, ZOP_FREE, (void **)zbt, numsaved);
 		} else {
 			/*
 			 * We're logging to catch a leak. Remove any record we might have for this
@@ -3085,29 +2711,12 @@ zfree(
 			 * overflowed and that's OK.  Since the log is of a limited size, old records
 			 * get overwritten if there are more zallocs than zfrees.
 			 */
-			btlog_remove_entries_for_element(zlog_btlog, (void *)addr);
+			btlog_remove_entries_for_element(zone->zlog_btlog, (void *)addr);
 		}
 	}
 
-#if	ZONE_DEBUG
-	if (!gzfreed && zone_debug_enabled(zone)) {
-		queue_t tmp_elem;
+	lock_zone(zone);
 
-		elem -= ZONE_DEBUG_OFFSET;
-		if (zone_check) {
-			/* check the zone's consistency */
-
-			for (tmp_elem = queue_first(&zone->active_zones);
-			     !queue_end(tmp_elem, &zone->active_zones);
-			     tmp_elem = queue_next(tmp_elem))
-				if (elem == (vm_offset_t)tmp_elem)
-					break;
-			if (elem != (vm_offset_t)tmp_elem)
-				panic("zfree()ing element from wrong zone");
-		}
-		remqueue((queue_t) elem);
-	}
-#endif	/* ZONE_DEBUG */
 	if (zone_check) {
 		zone_check_freelist(zone, elem);
 	}
@@ -3131,31 +2740,7 @@ zfree(
 	}
 #endif /* CONFIG_ZLEAKS */
 	
-	/*
-	 * If elements have one or more pages, and memory is low,
-	 * request to run the garbage collection in the zone  the next 
-	 * time the pageout thread runs.
-	 */
-	if (zone->elem_size >= PAGE_SIZE && 
-	    vm_pool_low()){
-		zone_gc_forced = TRUE;
-	}
 	unlock_zone(zone);
-
-	{
-		thread_t thr = current_thread();
-		task_t task;
-		zinfo_usage_t zinfo;
-		vm_size_t sz = zone->elem_size;
-
-		if (zone->caller_acct)
-			ledger_debit(thr->t_ledger, task_ledgers.tkm_private, sz);
-		else
-			ledger_debit(thr->t_ledger, task_ledgers.tkm_shared, sz);
-
-		if ((task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
-			OSAddAtomic64(sz, (int64_t *)&zinfo[zone->index].free);
-	}
 }
 
 
@@ -3201,16 +2786,6 @@ zone_change(
 			break;
 		case Z_ALIGNMENT_REQUIRED:
 			zone->alignment_required = value;
-			/*
-			 * Disable the page list optimization here to provide
-			 * more of an alignment guarantee. This prevents
-			 * the alignment from being modified by the metadata stored
-			 * at the beginning of the page.
-			 */
-			zone->use_page_list = FALSE;
-#if	ZONE_DEBUG			
-			zone_debug_disable(zone);
-#endif
 #if	CONFIG_GZALLOC
 			gzalloc_reconfigure(zone);
 #endif
@@ -3242,225 +2817,6 @@ zone_free_count(zone_t zone)
 	return(free_count);
 }
 
-/*
- *  Zone garbage collection subroutines
- */
-
-boolean_t
-zone_page_collectable(
-	vm_offset_t	addr,
-	vm_size_t	size)
-{
-	struct zone_page_table_entry	*zp;
-	zone_page_index_t i, j;
-
-#if	ZONE_ALIAS_ADDR
-	addr = zone_virtual_addr(addr);
-#endif
-#if MACH_ASSERT
-	if (!from_zone_map(addr, size))
-		panic("zone_page_collectable");
-#endif
-
-	i = (zone_page_index_t)atop_kernel(addr-zone_map_min_address);
-	j = (zone_page_index_t)atop_kernel((addr+size-1) - zone_map_min_address);
-
-	for (; i <= j; i++) {
-		zp = zone_page_table_lookup(i);
-		if (zp->collect_count == zp->alloc_count)
-			return (TRUE);
-	}
-
-	return (FALSE);
-}
-
-void
-zone_page_keep(
-	vm_offset_t	addr,
-	vm_size_t	size)
-{
-	struct zone_page_table_entry	*zp;
-	zone_page_index_t i, j;
-
-#if	ZONE_ALIAS_ADDR
-	addr = zone_virtual_addr(addr);
-#endif
-#if MACH_ASSERT
-	if (!from_zone_map(addr, size))
-		panic("zone_page_keep");
-#endif
-
-	i = (zone_page_index_t)atop_kernel(addr-zone_map_min_address);
-	j = (zone_page_index_t)atop_kernel((addr+size-1) - zone_map_min_address);
-
-	for (; i <= j; i++) {
-		zp = zone_page_table_lookup(i);
-		zp->collect_count = 0;
-	}
-}
-
-void
-zone_page_collect(
-	vm_offset_t	addr,
-	vm_size_t	size)
-{
-	struct zone_page_table_entry	*zp;
-	zone_page_index_t i, j;
-
-#if	ZONE_ALIAS_ADDR
-	addr = zone_virtual_addr(addr);
-#endif
-#if MACH_ASSERT
-	if (!from_zone_map(addr, size))
-		panic("zone_page_collect");
-#endif
-
-	i = (zone_page_index_t)atop_kernel(addr-zone_map_min_address);
-	j = (zone_page_index_t)atop_kernel((addr+size-1) - zone_map_min_address);
-
-	for (; i <= j; i++) {
-		zp = zone_page_table_lookup(i);
-		++zp->collect_count;
-	}
-}
-
-void
-zone_page_init(
-	vm_offset_t	addr,
-	vm_size_t	size)
-{
-	struct zone_page_table_entry	*zp;
-	zone_page_index_t i, j;
-
-#if	ZONE_ALIAS_ADDR
-	addr = zone_virtual_addr(addr);
-#endif
-#if MACH_ASSERT
-	if (!from_zone_map(addr, size))
-		panic("zone_page_init");
-#endif
-
-	i = (zone_page_index_t)atop_kernel(addr-zone_map_min_address);
-	j = (zone_page_index_t)atop_kernel((addr+size-1) - zone_map_min_address);
-
-	for (; i <= j; i++) {
-		/* make sure entry exists before marking unused */
-		zone_page_table_expand(i);
-
-		zp = zone_page_table_lookup(i);
-		assert(zp);
-		zp->alloc_count = ZONE_PAGE_UNUSED;
-		zp->collect_count = 0;
-	}
-}
-
-void
-zone_page_alloc(
-	vm_offset_t	addr,
-	vm_size_t	size)
-{
-	struct zone_page_table_entry	*zp;
-	zone_page_index_t i, j;
-
-#if	ZONE_ALIAS_ADDR
-	addr = zone_virtual_addr(addr);
-#endif
-#if MACH_ASSERT
-	if (!from_zone_map(addr, size))
-		panic("zone_page_alloc");
-#endif
-
-	i = (zone_page_index_t)atop_kernel(addr-zone_map_min_address);
-	j = (zone_page_index_t)atop_kernel((addr+size-1) - zone_map_min_address);
-
-	for (; i <= j; i++) {
-		zp = zone_page_table_lookup(i);
-		assert(zp);
-
-		/*
-		 * Set alloc_count to ZONE_PAGE_USED if
-		 * it was previously set to ZONE_PAGE_UNUSED.
-		 */
-		if (zp->alloc_count == ZONE_PAGE_UNUSED)
-			zp->alloc_count = ZONE_PAGE_USED;
-
-		++zp->alloc_count;
-	}
-}
-
-void
-zone_page_free_element(
-	zone_page_index_t	*free_page_head,
-	zone_page_index_t	*free_page_tail,
-	vm_offset_t	addr,
-	vm_size_t	size)
-{
-	struct zone_page_table_entry	*zp;
-	zone_page_index_t i, j;
-
-#if	ZONE_ALIAS_ADDR
-	addr = zone_virtual_addr(addr);
-#endif
-#if MACH_ASSERT
-	if (!from_zone_map(addr, size))
-		panic("zone_page_free_element");
-#endif
-
-	/* Clear out the old next and backup pointers */
-	vm_offset_t *primary  = (vm_offset_t *) addr;
-	vm_offset_t *backup   = get_backup_ptr(size, primary);
-
-	*primary = ZP_POISON;
-	*backup  = ZP_POISON;
-
-	i = (zone_page_index_t)atop_kernel(addr-zone_map_min_address);
-	j = (zone_page_index_t)atop_kernel((addr+size-1) - zone_map_min_address);
-
-	for (; i <= j; i++) {
-		zp = zone_page_table_lookup(i);
-
-		if (zp->collect_count > 0)
-			--zp->collect_count;
-		if (--zp->alloc_count == 0) {
-			vm_address_t        free_page_address;
-			vm_address_t        prev_free_page_address;
-
-			zp->alloc_count  = ZONE_PAGE_UNUSED;
-			zp->collect_count = 0;
-
-
-			/*
-			 * This element was the last one on this page, re-use the page's
-			 * storage for a page freelist
-			 */
-			free_page_address = zone_map_min_address + PAGE_SIZE * ((vm_size_t)i);
-			*(zone_page_index_t *)free_page_address = ZONE_PAGE_INDEX_INVALID;
-
-			if (*free_page_head == ZONE_PAGE_INDEX_INVALID) {
-				*free_page_head = i;
-				*free_page_tail = i;
-			} else {
-				prev_free_page_address = zone_map_min_address + PAGE_SIZE * ((vm_size_t)(*free_page_tail));
-				*(zone_page_index_t *)prev_free_page_address = i;
-				*free_page_tail = i;
-			}
-		}
-	}
-}
-
-
-#define ZONEGC_SMALL_ELEMENT_SIZE 	4096
-
-struct {
-	uint64_t	zgc_invoked;
-	uint64_t	zgc_bailed;
-	uint32_t	pgs_freed;
-
-	uint32_t	elems_collected,
-				elems_freed,
-				elems_kept;
-} zgc_stats;
-
 /*	Zone garbage collection
  *
  *	zone_gc will walk through all the free elements in all the
@@ -3468,443 +2824,125 @@ struct {
  *	pages.  zone_gc is called by consider_zone_gc when the system
  *	begins to run out of memory.
  */
+extern zone_t 	vm_map_entry_reserved_zone;
+uint64_t 		zone_gc_bailed = 0;
+
 void
-zone_gc(boolean_t all_zones)
+zone_gc(void)
 {
 	unsigned int	max_zones;
 	zone_t			z;
 	unsigned int	i;
-	uint32_t 	old_pgs_freed;
-	zone_page_index_t zone_free_page_head;
-	zone_page_index_t zone_free_page_tail;
-	thread_t	mythread = current_thread();
+	zone_t 			zres = vm_map_entry_reserved_zone;
 
 	lck_mtx_lock(&zone_gc_lock);
 
-	zgc_stats.zgc_invoked++;
-	old_pgs_freed = zgc_stats.pgs_freed;
-
 	simple_lock(&all_zones_lock);
 	max_zones = num_zones;
-	z = first_zone;
 	simple_unlock(&all_zones_lock);
 
 	if (zalloc_debug & ZALLOC_DEBUG_ZONEGC)
-		kprintf("zone_gc(all_zones=%s) starting...\n", all_zones ? "TRUE" : "FALSE");
+		kprintf("zone_gc() starting...\n");
 
-	/*
-	 * it's ok to allow eager kernel preemption while
-	 * while holding a zone lock since it's taken
-	 * as a spin lock (which prevents preemption)
-	 */
-	thread_set_eager_preempt(mythread);
-
-#if MACH_ASSERT
-	for (i = 0; i < zone_pages; i++) {
-		struct zone_page_table_entry	*zp;
-	
-		zp = zone_page_table_lookup(i);
-		assert(!zp || (zp->collect_count == 0));
-	}
-#endif /* MACH_ASSERT */
-
-	for (i = 0; i < max_zones; i++, z = z->next_zone) {
-		unsigned int			n, m;
-		vm_size_t			elt_size, size_freed;
-		struct zone_free_element	*elt, *base_elt, *base_prev, *prev, *scan, *keep, *tail;
-		int				kmem_frees = 0, total_freed_pages = 0;
-		struct zone_page_metadata		*page_meta;
-		queue_head_t	page_meta_head;
+	for (i = 0; i < max_zones; i++) {
+		z = &(zone_array[i]);
+		vm_size_t					elt_size, size_freed;
+		int							total_freed_pages = 0;
+		struct zone_page_metadata	*page_meta;
+		queue_head_t				page_meta_head;
 
 		assert(z != ZONE_NULL);
 
 		if (!z->collectable)
 			continue;
-
-		if (all_zones == FALSE && z->elem_size < ZONEGC_SMALL_ELEMENT_SIZE && !z->use_page_list)
-			continue;
-
-		lock_zone(z);
-
-		elt_size = z->elem_size;
-
-		/*
-		 * Do a quick feasibility check before we scan the zone: 
-		 * skip unless there is likelihood of getting pages back
-		 * (i.e we need a whole allocation block's worth of free
-		 * elements before we can garbage collect) and
-		 * the zone has more than 10 percent of it's elements free
-		 * or the element size is a multiple of the PAGE_SIZE 
-		 */
-		if ((elt_size & PAGE_MASK) && 
-		    !z->use_page_list &&
-		     (((z->cur_size - z->count * elt_size) <= (2 * z->alloc_size)) ||
-		      ((z->cur_size - z->count * elt_size) <= (z->cur_size / 10)))) {
-			unlock_zone(z);		
+		
+		if (queue_empty(&z->pages.all_free)) {
 			continue;
 		}
+		
+		/*
+		 * Since kmem_free() might use VM entries from the reserved VM entries zone, we should bail from zone_gc() if we
+		 * are below the critical threshold for that zone. Otherwise, there could be a deadlock between the zone_gc 
+		 * thread and the zone_replenish thread for the VM entries zone on the zone_map lock.
+		 */
+		if (zres->zone_replenishing) {
+			zone_gc_bailed++;
+			break;
+		}
 
-		z->doing_gc = TRUE;
+		lock_zone(z);
+		elt_size = z->elem_size;
+
+		if (queue_empty(&z->pages.all_free)) {
+			unlock_zone(z);
+			continue;
+		}
 
 		/*
 		 * Snatch all of the free elements away from the zone.
 		 */
-
-		if (z->use_page_list) {
-			queue_new_head(&z->pages.all_free, &page_meta_head, struct zone_page_metadata *, pages);
-			queue_init(&z->pages.all_free);
-		} else {
-			scan = (void *)z->free_elements;
-			z->free_elements = 0;
-		}
-
+		uint64_t old_all_free_count = z->count_all_free_pages;
+		queue_new_head(&z->pages.all_free, &page_meta_head, struct zone_page_metadata *, pages);
+		queue_init(&z->pages.all_free);
+		z->count_all_free_pages = 0;
 		unlock_zone(z);
 
-		if (z->use_page_list) {
-			/*
-			 * For zones that maintain page lists (which in turn
-			 * track free elements on those pages), zone_gc()
-			 * is incredibly easy, and we bypass all the logic
-			 * for scanning elements and mapping them to
-			 * collectable pages
-			 */
-
-			size_freed = 0;
-
-			queue_iterate(&page_meta_head, page_meta, struct zone_page_metadata *, pages) {
-				assert(from_zone_map((vm_address_t)page_meta, sizeof(*page_meta))); /* foreign elements should be in any_free_foreign */
-
-				zgc_stats.elems_freed += page_meta->free_count;
-				size_freed += elt_size * page_meta->free_count;
-				zgc_stats.elems_collected += page_meta->free_count;
-			}
-			
-			lock_zone(z);
-
-			if (size_freed > 0) {
-				z->cur_size -= size_freed;
-				z->countfree -= size_freed/elt_size;
-			}
-
-			z->doing_gc = FALSE;
-			if (z->waiting) {
-				z->waiting = FALSE;
-				zone_wakeup(z);
-			}
-
-			unlock_zone(z);
-
-			if (queue_empty(&page_meta_head))
-				continue;
-
-			thread_clear_eager_preempt(mythread);
-
-			while ((page_meta = (struct zone_page_metadata *)dequeue_head(&page_meta_head)) != NULL) {
-				vm_address_t		free_page_address;
-
-				free_page_address = trunc_page((vm_address_t)page_meta);
-#if	ZONE_ALIAS_ADDR
-				free_page_address = zone_virtual_addr(free_page_address);
-#endif
-				kmem_free(zone_map, free_page_address, PAGE_SIZE);
-				ZONE_PAGE_COUNT_DECR(z, 1);
-				total_freed_pages++;
-				zgc_stats.pgs_freed += 1;
-				
-				if (++kmem_frees == 32) {
-					thread_yield_internal(1);
-					kmem_frees = 0;
-				}
-			}
-
-			if (zalloc_debug & ZALLOC_DEBUG_ZONEGC)
-				kprintf("zone_gc() of zone %s freed %lu elements, %d pages\n", z->zone_name, (unsigned long)size_freed/elt_size, total_freed_pages);
-
-			thread_set_eager_preempt(mythread);
-			continue; /* go to next zone */
-		}
-
-		/*
-		 * Pass 1:
-		 *
-		 * Determine which elements we can attempt to collect
-		 * and count them up in the page table.  Foreign elements
-		 * are returned to the zone.
-		 */
-
-		prev = (void *)&scan;
-		elt = scan;
-		n = 0; tail = keep = NULL;
-
-		zone_free_page_head = ZONE_PAGE_INDEX_INVALID;
-		zone_free_page_tail = ZONE_PAGE_INDEX_INVALID;
-
-
-		while (elt != NULL) {
-			if (from_zone_map(elt, elt_size)) {
-				zone_page_collect((vm_offset_t)elt, elt_size);
-
-				prev = elt;
-				elt = elt->next;
-
-				++zgc_stats.elems_collected;
-			}
-			else {
-				if (keep == NULL)
-					keep = tail = elt;
-				else {
-					append_zone_element(z, tail, elt);
-					tail = elt;
-				}
-
-				append_zone_element(z, prev, elt->next);
-				elt = elt->next;
-				append_zone_element(z, tail, NULL);
-			}
-
-			/*
-			 * Dribble back the elements we are keeping.
-			 * If there are none, give some elements that we haven't looked at yet
-			 * back to the freelist so that others waiting on the zone don't get stuck
-			 * for too long.  This might prevent us from recovering some memory,
-			 * but allows us to avoid having to allocate new memory to serve requests
-			 * while zone_gc has all the free memory tied up.
-			 * <rdar://problem/3893406>
-			 */
-
-			if (++n >= 50) {
-				if (z->waiting == TRUE) {
-					/* z->waiting checked without lock held, rechecked below after locking */
-					lock_zone(z);
-
-					if (keep != NULL) {
-						add_list_to_zone(z, keep, tail);
-						tail = keep = NULL;
-					} else {
-						m =0;
-						base_elt = elt;
-						base_prev = prev;
-						while ((elt != NULL) && (++m < 50)) { 
-							prev = elt;
-							elt = elt->next;
-						}
-						if (m !=0 ) {
-							/* Extract the elements from the list and
-							 * give them back */
-							append_zone_element(z, prev, NULL);
-							add_list_to_zone(z, base_elt, prev);
-							append_zone_element(z, base_prev, elt);
-							prev = base_prev;
-						}
-					}
-
-					if (z->waiting) {
-						z->waiting = FALSE;
-						zone_wakeup(z);
-					}
-
-					unlock_zone(z);
-				}
-				n =0;
-			}
-		}
-
-		/*
-		 * Return any remaining elements.
-		 */
-
-		if (keep != NULL) {
-			lock_zone(z);
-
-			add_list_to_zone(z, keep, tail);
-
-			if (z->waiting) {
-				z->waiting = FALSE;
-				zone_wakeup(z);
-			}
-
-			unlock_zone(z);
-		}
-
-		/*
-		 * Pass 2:
-		 *
-		 * Determine which pages we can reclaim and
-		 * free those elements.
-		 */
-
+		/* Iterate through all elements to find out size and count of elements we snatched */
 		size_freed = 0;
-		elt = scan;
-		n = 0; tail = keep = NULL;
-
-		while (elt != NULL) {
-			if (zone_page_collectable((vm_offset_t)elt, elt_size)) {
-				struct zone_free_element *next_elt = elt->next;
-
-				size_freed += elt_size;
-
-				/*
-				 * If this is the last allocation on the page(s),
-				 * we may use their storage to maintain the linked
-				 * list of free-able pages. So store elt->next because
-				 * "elt" may be scribbled over.
-				 */
-				zone_page_free_element(&zone_free_page_head, &zone_free_page_tail, (vm_offset_t)elt, elt_size);
-
-				elt = next_elt;
-
-				++zgc_stats.elems_freed;
-			}
-			else {
-				zone_page_keep((vm_offset_t)elt, elt_size);
-
-				if (keep == NULL)
-					keep = tail = elt;
-				else {
-					append_zone_element(z, tail, elt);
-					tail = elt;
-				}
-
-				elt = elt->next;
-				append_zone_element(z, tail, NULL);
-
-				++zgc_stats.elems_kept;
-			}
-
-			/*
-			 * Dribble back the elements we are keeping,
-			 * and update the zone size info.
-			 */
-
-			if (++n >= 50) {
-				lock_zone(z);
-
-				z->cur_size -= size_freed;
-				z->countfree -= size_freed/elt_size;
-				size_freed = 0;
-
-				if (keep != NULL) {
-					add_list_to_zone(z, keep, tail);
-				}
-
-				if (z->waiting) {
-					z->waiting = FALSE;
-					zone_wakeup(z);
-				}
-
-				unlock_zone(z);
-
-				n = 0; tail = keep = NULL;
-			}
+		queue_iterate(&page_meta_head, page_meta, struct zone_page_metadata *, pages) {
+			assert(from_zone_map((vm_address_t)page_meta, sizeof(*page_meta))); /* foreign elements should be in any_free_foreign */
+			size_freed += elt_size * page_meta->free_count;
 		}
 
-		/*
-		 * Return any remaining elements, and update
-		 * the zone size info.
-		 */
-
+		/* Update the zone size and free element count */
 		lock_zone(z);
-
-		if (size_freed > 0 || keep != NULL) {
-
-			z->cur_size -= size_freed;
-			z->countfree -= size_freed/elt_size;
-
-			if (keep != NULL) {
-				add_list_to_zone(z, keep, tail);
-			}
-
-		}
-
-		z->doing_gc = FALSE;
-		if (z->waiting) {
-			z->waiting = FALSE;
-			zone_wakeup(z);
-		}
+		z->cur_size -= size_freed;
+		z->countfree -= size_freed/elt_size;
 		unlock_zone(z);
 
-		if (zone_free_page_head == ZONE_PAGE_INDEX_INVALID)
-			continue;
-
-		/*
-		 * we don't want to allow eager kernel preemption while holding the
-		 * various locks taken in the kmem_free path of execution
-		 */
-		thread_clear_eager_preempt(mythread);
-
-
-		/*
-		 * This loop counts the number of pages that should be freed by the
-		 * next loop that tries to coalesce the kmem_frees()
-		 */
-		uint32_t pages_to_free_count = 0;
-		vm_address_t		fpa;
-		zone_page_index_t index;
-		for (index = zone_free_page_head; index != ZONE_PAGE_INDEX_INVALID;) {
-			pages_to_free_count++;
-			fpa = zone_map_min_address + PAGE_SIZE * ((vm_size_t)index);
-			index = *(zone_page_index_t *)fpa;
+		while ((page_meta = (struct zone_page_metadata *)dequeue_head(&page_meta_head)) != NULL) {
+			vm_address_t        free_page_address;
+			if (zres->zone_replenishing)
+				break;
+			/* Free the pages for metadata and account for them */
+			free_page_address = get_zone_page(page_meta);
+			ZONE_PAGE_COUNT_DECR(z, page_meta->page_count);
+			total_freed_pages += page_meta->page_count;
+			old_all_free_count -= page_meta->page_count;
+			size_freed -= (elt_size * page_meta->free_count);
+			kmem_free(zone_map, free_page_address, (page_meta->page_count * PAGE_SIZE));
+			thread_yield_to_preemption();
 		}
+		if (page_meta != NULL) {
+		   /* 
+			* We bailed because the VM entry reserved zone is replenishing. Put the remaining 
+			* metadata objects back on the all_free list and bail.
+			*/
+			queue_entry_t qe;
+			enqueue_head(&page_meta_head, &(page_meta->pages));
+			zone_gc_bailed++;
 
-		/*
-		 * Reclaim the pages we are freeing.
-		 */
-		while (zone_free_page_head != ZONE_PAGE_INDEX_INVALID) {
-			zone_page_index_t	zind = zone_free_page_head;
-			vm_address_t		free_page_address;
-			int			page_count;
-
-			/*
-			 * Use the first word of the page about to be freed to find the next free page
-			 */
-			free_page_address = zone_map_min_address + PAGE_SIZE * ((vm_size_t)zind);
-			zone_free_page_head = *(zone_page_index_t *)free_page_address;
-
-			page_count = 1;
-			total_freed_pages++;
-
-			while (zone_free_page_head != ZONE_PAGE_INDEX_INVALID) {
-				zone_page_index_t	next_zind = zone_free_page_head;
-				vm_address_t		next_free_page_address;
-
-				next_free_page_address = zone_map_min_address + PAGE_SIZE * ((vm_size_t)next_zind);
-
-				if (next_free_page_address == (free_page_address - PAGE_SIZE)) {
-					free_page_address = next_free_page_address;
-				} else if (next_free_page_address != (free_page_address + (PAGE_SIZE * page_count)))
-					break;
-
-				zone_free_page_head = *(zone_page_index_t *)next_free_page_address;
-				page_count++;
-				total_freed_pages++;
+			lock_zone(z);
+			qe_foreach_safe(qe, &page_meta_head) {
+				re_queue_tail(&z->pages.all_free, qe);
 			}
-			kmem_free(zone_map, free_page_address, page_count * PAGE_SIZE);
-			ZONE_PAGE_COUNT_DECR(z, page_count);
-			zgc_stats.pgs_freed += page_count;
-			pages_to_free_count -= page_count;
-
-			if (++kmem_frees == 32) {
-				thread_yield_internal(1);
-				kmem_frees = 0;
-			}
+			z->count_all_free_pages += (int)old_all_free_count;
+			z->cur_size += size_freed;
+			z->countfree += size_freed/elt_size;
+			unlock_zone(z);
+			if (zalloc_debug & ZALLOC_DEBUG_ZONEGC)
+				kprintf("zone_gc() bailed due to VM entry zone replenishing (zone_gc_bailed: %lld)\n", zone_gc_bailed);
+			break;
 		}
-
-		/* Check that we actually free the exact number of pages we were supposed to */
-		assert(pages_to_free_count == 0);
+		
+		/* We freed all the pages from the all_free list for this zone */
+		assert(old_all_free_count == 0);
 
 		if (zalloc_debug & ZALLOC_DEBUG_ZONEGC)
 			kprintf("zone_gc() of zone %s freed %lu elements, %d pages\n", z->zone_name, (unsigned long)size_freed/elt_size, total_freed_pages);
-
-		thread_set_eager_preempt(mythread);
 	}
 
-	if (old_pgs_freed == zgc_stats.pgs_freed)
-		zgc_stats.zgc_bailed++;
-
-	thread_clear_eager_preempt(mythread);
-
 	lck_mtx_unlock(&zone_gc_lock);
-
 }
 
 extern vm_offset_t kmapoff_kaddr;
@@ -3917,10 +2955,8 @@ extern unsigned int kmapoff_pgcnt;
  */
 
 void
-consider_zone_gc(boolean_t force)
+consider_zone_gc(void)
 {
-	boolean_t all_zones = FALSE;
-
 	if (kmapoff_kaddr != 0) {
 		/*
 		 * One-time reclaim of kernel_map resources we allocated in
@@ -3931,205 +2967,20 @@ consider_zone_gc(boolean_t force)
 		kmapoff_kaddr = 0;
 	}
 
-	if (zone_gc_allowed &&
-	    (zone_gc_allowed_by_time_throttle ||
-	     zone_gc_forced ||
-	     force)) {
-		if (zone_gc_allowed_by_time_throttle == TRUE) {
-			zone_gc_allowed_by_time_throttle = FALSE;
-			all_zones = TRUE;
-		}
-		zone_gc_forced = FALSE;
-
-		zone_gc(all_zones);
-	}
+	if (zone_gc_allowed)
+		zone_gc();
 }
-
-/*
- *	By default, don't attempt zone GC more frequently
- *	than once / 1 minutes.
- */
-void
-compute_zone_gc_throttle(void *arg __unused)
-{
-	zone_gc_allowed_by_time_throttle = TRUE;
-}
-
-
-#if CONFIG_TASK_ZONE_INFO
 
 kern_return_t
 task_zone_info(
-	task_t			task,
-	mach_zone_name_array_t	*namesp,
-	mach_msg_type_number_t  *namesCntp,
-	task_zone_info_array_t	*infop,
-	mach_msg_type_number_t  *infoCntp)
-{
-	mach_zone_name_t	*names;
-	vm_offset_t		names_addr;
-	vm_size_t		names_size;
-	task_zone_info_t	*info;
-	vm_offset_t		info_addr;
-	vm_size_t		info_size;
-	unsigned int		max_zones, i;
-	zone_t			z;
-	mach_zone_name_t	*zn;
-	task_zone_info_t    	*zi;
-	kern_return_t		kr;
-
-	vm_size_t		used;
-	vm_map_copy_t		copy;
-
-
-	if (task == TASK_NULL)
-		return KERN_INVALID_TASK;
-
-	/*
-	 *	We assume that zones aren't freed once allocated.
-	 *	We won't pick up any zones that are allocated later.
-	 */
-
-	simple_lock(&all_zones_lock);
-	max_zones = (unsigned int)(num_zones + num_fake_zones);
-	z = first_zone;
-	simple_unlock(&all_zones_lock);
-
-	names_size = round_page(max_zones * sizeof *names);
-	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &names_addr, names_size, VM_KERN_MEMORY_IPC);
-	if (kr != KERN_SUCCESS)
-		return kr;
-	names = (mach_zone_name_t *) names_addr;
-
-	info_size = round_page(max_zones * sizeof *info);
-	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &info_addr, info_size, VM_KERN_MEMORY_IPC);
-	if (kr != KERN_SUCCESS) {
-		kmem_free(ipc_kernel_map,
-			  names_addr, names_size);
-		return kr;
-	}
-
-	info = (task_zone_info_t *) info_addr;
-
-	zn = &names[0];
-	zi = &info[0];
-
-	for (i = 0; i < max_zones - num_fake_zones; i++) {
-		struct zone zcopy;
-
-		assert(z != ZONE_NULL);
-
-		lock_zone(z);
-		zcopy = *z;
-		unlock_zone(z);
-
-		simple_lock(&all_zones_lock);
-		z = z->next_zone;
-		simple_unlock(&all_zones_lock);
-
-		/* assuming here the name data is static */
-		(void) strncpy(zn->mzn_name, zcopy.zone_name,
-			       sizeof zn->mzn_name);
-		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
-
-		zi->tzi_count = (uint64_t)zcopy.count;
-		zi->tzi_cur_size = ptoa_64(zcopy.page_count);
-		zi->tzi_max_size = (uint64_t)zcopy.max_size;
-		zi->tzi_elem_size = (uint64_t)zcopy.elem_size;
-		zi->tzi_alloc_size = (uint64_t)zcopy.alloc_size;
-		zi->tzi_sum_size = zcopy.sum_count * zcopy.elem_size;
-		zi->tzi_exhaustible = (uint64_t)zcopy.exhaustible;
-		zi->tzi_collectable = (uint64_t)zcopy.collectable;
-		zi->tzi_caller_acct = (uint64_t)zcopy.caller_acct;
-		if (task->tkm_zinfo != NULL) {
-			zi->tzi_task_alloc = task->tkm_zinfo[zcopy.index].alloc;
-			zi->tzi_task_free = task->tkm_zinfo[zcopy.index].free;
-		} else {
-			zi->tzi_task_alloc = 0;
-			zi->tzi_task_free = 0;
-		}
-		zn++;
-		zi++;
-	}
-
-	/*
-	 * loop through the fake zones and fill them using the specialized
-	 * functions
-	 */
-	for (i = 0; i < num_fake_zones; i++) {
-		int count, collectable, exhaustible, caller_acct, index;
-		vm_size_t cur_size, max_size, elem_size, alloc_size;
-		uint64_t sum_size;
-
-		strncpy(zn->mzn_name, fake_zones[i].name, sizeof zn->mzn_name);
-		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
-		fake_zones[i].query(&count, &cur_size,
-				    &max_size, &elem_size,
-				    &alloc_size, &sum_size,
-				    &collectable, &exhaustible, &caller_acct);
-		zi->tzi_count = (uint64_t)count;
-		zi->tzi_cur_size = (uint64_t)cur_size;
-		zi->tzi_max_size = (uint64_t)max_size;
-		zi->tzi_elem_size = (uint64_t)elem_size;
-		zi->tzi_alloc_size = (uint64_t)alloc_size;
-		zi->tzi_sum_size = sum_size;
-		zi->tzi_collectable = (uint64_t)collectable;
-		zi->tzi_exhaustible = (uint64_t)exhaustible;
-		zi->tzi_caller_acct = (uint64_t)caller_acct;
-		if (task->tkm_zinfo != NULL) {
-			index = ZINFO_SLOTS - num_fake_zones + i;
-			zi->tzi_task_alloc = task->tkm_zinfo[index].alloc;
-			zi->tzi_task_free = task->tkm_zinfo[index].free;
-		} else {
-			zi->tzi_task_alloc = 0;
-			zi->tzi_task_free = 0;
-		}
-		zn++;
-		zi++;
-	}
-
-	used = max_zones * sizeof *names;
-	if (used != names_size)
-		bzero((char *) (names_addr + used), names_size - used);
-
-	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
-			   (vm_map_size_t)used, TRUE, &copy);
-	assert(kr == KERN_SUCCESS);
-
-	*namesp = (mach_zone_name_t *) copy;
-	*namesCntp = max_zones;
-
-	used = max_zones * sizeof *info;
-
-	if (used != info_size)
-		bzero((char *) (info_addr + used), info_size - used);
-
-	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
-			   (vm_map_size_t)used, TRUE, &copy);
-	assert(kr == KERN_SUCCESS);
-
-	*infop = (task_zone_info_t *) copy;
-	*infoCntp = max_zones;
-
-	return KERN_SUCCESS;
-}
-
-#else	/* CONFIG_TASK_ZONE_INFO */
-
-kern_return_t
-task_zone_info(
-	__unused task_t		task,
-	__unused mach_zone_name_array_t *namesp,
+	__unused task_t					task,
+	__unused mach_zone_name_array_t	*namesp,
 	__unused mach_msg_type_number_t *namesCntp,
-	__unused task_zone_info_array_t *infop,
+	__unused task_zone_info_array_t	*infop,
 	__unused mach_msg_type_number_t *infoCntp)
 {
 	return KERN_FAILURE;
 }
-
-#endif	/* CONFIG_TASK_ZONE_INFO */
 
 kern_return_t
 mach_zone_info(
@@ -4140,6 +2991,18 @@ mach_zone_info(
 	mach_msg_type_number_t  *infoCntp)
 {
 	return (mach_memory_info(host, namesp, namesCntp, infop, infoCntp, NULL, NULL));
+}
+
+
+kern_return_t
+host_zone_info(
+	host_priv_t		host,
+	zone_name_array_t	*namesp,
+	mach_msg_type_number_t  *namesCntp,
+	zone_info_array_t	*infop,
+	mach_msg_type_number_t  *infoCntp)
+{
+	return (mach_memory_info(host, (mach_zone_name_array_t *)namesp, namesCntp, (mach_zone_info_array_t *)infop, infoCntp, NULL, NULL));
 }
 
 kern_return_t
@@ -4174,7 +3037,7 @@ mach_memory_info(
 	
 	vm_size_t		used;
 	vm_map_copy_t		copy;
-
+	uint64_t 		zones_collectable_bytes = 0;
 
 	if (host == HOST_NULL)
 		return KERN_INVALID_HOST;
@@ -4189,8 +3052,7 @@ mach_memory_info(
 	 */
 
 	simple_lock(&all_zones_lock);
-	max_zones = (unsigned int)(num_zones + num_fake_zones);
-	z = first_zone;
+	max_zones = (unsigned int)(num_zones);
 	simple_unlock(&all_zones_lock);
 
 	names_size = round_page(max_zones * sizeof *names);
@@ -4210,49 +3072,17 @@ mach_memory_info(
 	}
 	info = (mach_zone_info_t *) info_addr;
 
-	num_sites = 0;
-	memory_info_addr = 0;
-	if (memoryInfop && memoryInfoCntp)
-	{
-		num_sites = VM_KERN_MEMORY_COUNT + VM_KERN_COUNTER_COUNT;
-		memory_info_size = num_sites * sizeof(*info);
-		memory_info_vmsize = round_page(memory_info_size);
-		kr = kmem_alloc_pageable(ipc_kernel_map,
-					 &memory_info_addr, memory_info_vmsize, VM_KERN_MEMORY_IPC);
-		if (kr != KERN_SUCCESS) {
-			kmem_free(ipc_kernel_map,
-				  names_addr, names_size);
-			kmem_free(ipc_kernel_map,
-				  info_addr, info_size);
-			return kr;
-		}
-
-		kr = vm_map_wire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_vmsize,
-				     VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC), FALSE);
-		assert(kr == KERN_SUCCESS);
-
-		memory_info = (mach_memory_info_t *) memory_info_addr;
-		vm_page_diagnose(memory_info, num_sites);
-
-		kr = vm_map_unwire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_vmsize, FALSE);
-		assert(kr == KERN_SUCCESS);
-	}
-
 	zn = &names[0];
 	zi = &info[0];
 
-	for (i = 0; i < max_zones - num_fake_zones; i++) {
+	for (i = 0; i < max_zones; i++) {
 		struct zone zcopy;
-
+		z = &(zone_array[i]);
 		assert(z != ZONE_NULL);
 
 		lock_zone(z);
 		zcopy = *z;
 		unlock_zone(z);
-
-		simple_lock(&all_zones_lock);
-		z = z->next_zone;
-		simple_unlock(&all_zones_lock);
 
 		/* assuming here the name data is static */
 		(void) strncpy(zn->mzn_name, zcopy.zone_name,
@@ -4267,34 +3097,7 @@ mach_memory_info(
 		zi->mzi_sum_size = zcopy.sum_count * zcopy.elem_size;
 		zi->mzi_exhaustible = (uint64_t)zcopy.exhaustible;
 		zi->mzi_collectable = (uint64_t)zcopy.collectable;
-		zn++;
-		zi++;
-	}
-
-	/*
-	 * loop through the fake zones and fill them using the specialized
-	 * functions
-	 */
-	for (i = 0; i < num_fake_zones; i++) {
-		int count, collectable, exhaustible, caller_acct;
-		vm_size_t cur_size, max_size, elem_size, alloc_size;
-		uint64_t sum_size;
-
-		strncpy(zn->mzn_name, fake_zones[i].name, sizeof zn->mzn_name);
-		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
-		fake_zones[i].query(&count, &cur_size,
-				    &max_size, &elem_size,
-				    &alloc_size, &sum_size,
-				    &collectable, &exhaustible, &caller_acct);
-		zi->mzi_count = (uint64_t)count;
-		zi->mzi_cur_size = (uint64_t)cur_size;
-		zi->mzi_max_size = (uint64_t)max_size;
-		zi->mzi_elem_size = (uint64_t)elem_size;
-		zi->mzi_alloc_size = (uint64_t)alloc_size;
-		zi->mzi_sum_size = sum_size;
-		zi->mzi_collectable = (uint64_t)collectable;
-		zi->mzi_exhaustible = (uint64_t)exhaustible;
-
+		zones_collectable_bytes += ((uint64_t)zcopy.count_all_free_pages * PAGE_SIZE);
 		zn++;
 		zi++;
 	}
@@ -4321,9 +3124,35 @@ mach_memory_info(
 
 	*infop = (mach_zone_info_t *) copy;
 	*infoCntp = max_zones;
+	
+	num_sites = 0;
+	memory_info_addr = 0;
 
 	if (memoryInfop && memoryInfoCntp)
 	{
+		num_sites = VM_KERN_MEMORY_COUNT + VM_KERN_COUNTER_COUNT;
+		memory_info_size = num_sites * sizeof(*info);
+		memory_info_vmsize = round_page(memory_info_size);
+		kr = kmem_alloc_pageable(ipc_kernel_map,
+					 &memory_info_addr, memory_info_vmsize, VM_KERN_MEMORY_IPC);
+		if (kr != KERN_SUCCESS) {
+			kmem_free(ipc_kernel_map,
+				  names_addr, names_size);
+			kmem_free(ipc_kernel_map,
+				  info_addr, info_size);
+			return kr;
+		}
+
+		kr = vm_map_wire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_vmsize,
+				     VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC), FALSE);
+		assert(kr == KERN_SUCCESS);
+
+		memory_info = (mach_memory_info_t *) memory_info_addr;
+		vm_page_diagnose(memory_info, num_sites, zones_collectable_bytes);
+
+		kr = vm_map_unwire(ipc_kernel_map, memory_info_addr, memory_info_addr + memory_info_vmsize, FALSE);
+		assert(kr == KERN_SUCCESS);
+	
 		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)memory_info_addr,
 				   (vm_map_size_t)memory_info_size, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
@@ -4331,152 +3160,6 @@ mach_memory_info(
 		*memoryInfop = (mach_memory_info_t *) copy;
 		*memoryInfoCntp = num_sites;
 	}
-
-	return KERN_SUCCESS;
-}
-
-/*
- * host_zone_info - LEGACY user interface for Mach zone information
- * 		    Should use mach_zone_info() instead!
- */
-kern_return_t
-host_zone_info(
-	host_priv_t		host,
-	zone_name_array_t	*namesp,
-	mach_msg_type_number_t  *namesCntp,
-	zone_info_array_t	*infop,
-	mach_msg_type_number_t  *infoCntp)
-{
-	zone_name_t	*names;
-	vm_offset_t	names_addr;
-	vm_size_t	names_size;
-	zone_info_t	*info;
-	vm_offset_t	info_addr;
-	vm_size_t	info_size;
-	unsigned int	max_zones, i;
-	zone_t		z;
-	zone_name_t    *zn;
-	zone_info_t    *zi;
-	kern_return_t	kr;
-
-	vm_size_t	used;
-	vm_map_copy_t	copy;
-
-
-	if (host == HOST_NULL)
-		return KERN_INVALID_HOST;
-#if CONFIG_DEBUGGER_FOR_ZONE_INFO
-	if (!PE_i_can_has_debugger(NULL))
-		return KERN_INVALID_HOST;
-#endif
-
-#if defined(__LP64__)
-	if (!thread_is_64bit(current_thread()))
-		return KERN_NOT_SUPPORTED;
-#else
-	if (thread_is_64bit(current_thread()))
-		return KERN_NOT_SUPPORTED;
-#endif
-
-	/*
-	 *	We assume that zones aren't freed once allocated.
-	 *	We won't pick up any zones that are allocated later.
-	 */
-
-	simple_lock(&all_zones_lock);
-	max_zones = (unsigned int)(num_zones + num_fake_zones);
-	z = first_zone;
-	simple_unlock(&all_zones_lock);
-
-	names_size = round_page(max_zones * sizeof *names);
-	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &names_addr, names_size, VM_KERN_MEMORY_IPC);
-	if (kr != KERN_SUCCESS)
-		return kr;
-	names = (zone_name_t *) names_addr;
-
-	info_size = round_page(max_zones * sizeof *info);
-	kr = kmem_alloc_pageable(ipc_kernel_map,
-				 &info_addr, info_size, VM_KERN_MEMORY_IPC);
-	if (kr != KERN_SUCCESS) {
-		kmem_free(ipc_kernel_map,
-			  names_addr, names_size);
-		return kr;
-	}
-
-	info = (zone_info_t *) info_addr;
-
-	zn = &names[0];
-	zi = &info[0];
-
-	for (i = 0; i < max_zones - num_fake_zones; i++) {
-		struct zone zcopy;
-
-		assert(z != ZONE_NULL);
-
-		lock_zone(z);
-		zcopy = *z;
-		unlock_zone(z);
-
-		simple_lock(&all_zones_lock);
-		z = z->next_zone;
-		simple_unlock(&all_zones_lock);
-
-		/* assuming here the name data is static */
-		(void) strncpy(zn->zn_name, zcopy.zone_name,
-			       sizeof zn->zn_name);
-		zn->zn_name[sizeof zn->zn_name - 1] = '\0';
-
-		zi->zi_count = zcopy.count;
-		zi->zi_cur_size = ptoa(zcopy.page_count);
-		zi->zi_max_size = zcopy.max_size;
-		zi->zi_elem_size = zcopy.elem_size;
-		zi->zi_alloc_size = zcopy.alloc_size;
-		zi->zi_exhaustible = zcopy.exhaustible;
-		zi->zi_collectable = zcopy.collectable;
-
-		zn++;
-		zi++;
-	}
-
-	/*
-	 * loop through the fake zones and fill them using the specialized
-	 * functions
-	 */
-	for (i = 0; i < num_fake_zones; i++) {
-		int caller_acct;
-		uint64_t sum_space;
-		strncpy(zn->zn_name, fake_zones[i].name, sizeof zn->zn_name);
-		zn->zn_name[sizeof zn->zn_name - 1] = '\0';
-		fake_zones[i].query(&zi->zi_count, &zi->zi_cur_size,
-				    &zi->zi_max_size, &zi->zi_elem_size,
-				    &zi->zi_alloc_size, &sum_space,
-				    &zi->zi_collectable, &zi->zi_exhaustible, &caller_acct);
-		zn++;
-		zi++;
-	}
-
-	used = max_zones * sizeof *names;
-	if (used != names_size)
-		bzero((char *) (names_addr + used), names_size - used);
-
-	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
-			   (vm_map_size_t)used, TRUE, &copy);
-	assert(kr == KERN_SUCCESS);
-
-	*namesp = (zone_name_t *) copy;
-	*namesCntp = max_zones;
-
-	used = max_zones * sizeof *info;
-	if (used != info_size)
-		bzero((char *) (info_addr + used), info_size - used);
-
-	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
-			   (vm_map_size_t)used, TRUE, &copy);
-	assert(kr == KERN_SUCCESS);
-
-	*infop = (zone_info_t *) copy;
-	*infoCntp = max_zones;
 
 	return KERN_SUCCESS;
 }
@@ -4489,7 +3172,7 @@ mach_zone_force_gc(
 	if (host == HOST_NULL)
 		return KERN_INVALID_HOST;
 
-	consider_zone_gc(TRUE);
+	consider_zone_gc();
 
 	return (KERN_SUCCESS);
 }
@@ -4507,21 +3190,12 @@ void zone_display_zprint()
 	unsigned int    i;
 	zone_t		the_zone;
 
-	if(first_zone!=NULL) {
-		the_zone = first_zone;
-		for (i = 0; i < num_zones; i++) {
-			if(the_zone->cur_size > (1024*1024)) {
-				printf("%.20s:\t%lu\n",the_zone->zone_name,(uintptr_t)the_zone->cur_size);
-			}
-
-			if(the_zone->next_zone == NULL) {
-				break;
-			}
-
-			the_zone = the_zone->next_zone;
+	for (i = 0; i < num_zones; i++) {
+		the_zone = &(zone_array[i]);
+		if(the_zone->cur_size > (1024*1024)) {
+			printf("%.20s:\t%lu\n",the_zone->zone_name,(uintptr_t)the_zone->cur_size);
 		}
 	}
-
 	printf("Kernel Stacks:\t%lu\n",(uintptr_t)(kernel_stack_size * stack_total));
 
 #if defined(__i386__) || defined (__x86_64__)
@@ -4540,21 +3214,15 @@ zone_find_largest(void)
 	zone_t          zone_largest;
 
 	simple_lock(&all_zones_lock);
-	the_zone = first_zone;
 	max_zones = num_zones;
 	simple_unlock(&all_zones_lock);
 	
-	zone_largest = the_zone;
+	zone_largest = &(zone_array[0]);
 	for (i = 0; i < max_zones; i++) {
+		the_zone = &(zone_array[i]);
 		if (the_zone->cur_size > zone_largest->cur_size) {
 			zone_largest = the_zone;
 		}
-
-		if (the_zone->next_zone == NULL) {
-			break;
-		}
-
-		the_zone = the_zone->next_zone;
 	}
 	return zone_largest;
 }
@@ -4568,26 +3236,175 @@ zone_find_largest(void)
 						  || !queue_empty(&z->pages.intermediate) \
 						  || (z->allows_foreign && !queue_empty(&z->pages.any_free_foreign)))
 
-void
-zone_debug_enable(
-	zone_t		z)
-{
-	if (zone_debug_enabled(z) || zone_in_use(z) ||
-	    z->alloc_size < (z->elem_size + ZONE_DEBUG_OFFSET))
-		return;
-	queue_init(&z->active_zones);
-	z->elem_size += ZONE_DEBUG_OFFSET;
-}
-
-void
-zone_debug_disable(
-	zone_t		z)
-{
-	if (!zone_debug_enabled(z) || zone_in_use(z))
-		return;
-	z->elem_size -= ZONE_DEBUG_OFFSET;
-	z->active_zones.next = z->active_zones.prev = NULL;
-}
-
 
 #endif	/* ZONE_DEBUG */
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#if DEBUG || DEVELOPMENT
+
+static uintptr_t *
+zone_copy_all_allocations_inqueue(zone_t z, queue_head_t * queue, uintptr_t * elems)
+{
+    struct zone_page_metadata *page_meta;
+    vm_offset_t free, elements;
+    vm_offset_t idx, numElements, freeCount, bytesAvail, metaSize;
+
+    queue_iterate(queue, page_meta, struct zone_page_metadata *, pages)
+    {
+        elements = get_zone_page(page_meta);
+        bytesAvail = ptoa(page_meta->page_count);
+        freeCount = 0;
+        if (z->allows_foreign && !from_zone_map(elements, z->elem_size))
+        {
+            metaSize    = (sizeof(struct zone_page_metadata) + ZONE_ELEMENT_ALIGNMENT - 1) & ~(ZONE_ELEMENT_ALIGNMENT - 1);
+            bytesAvail -= metaSize;
+            elements   += metaSize;
+        }
+        numElements = bytesAvail / z->elem_size;
+        // construct array of all possible elements
+        for (idx = 0; idx < numElements; idx++)
+        {
+            elems[idx] = INSTANCE_PUT(elements + idx * z->elem_size);
+        }
+        // remove from the array all free elements
+        free = (vm_offset_t)page_metadata_get_freelist(page_meta);
+        while (free)
+        {
+            // find idx of free element
+            for (idx = 0; (idx < numElements) && (elems[idx] != INSTANCE_PUT(free)); idx++)  {}
+            assert(idx < numElements);
+            // remove it
+            bcopy(&elems[idx + 1], &elems[idx], (numElements - (idx + 1)) * sizeof(elems[0]));
+            numElements--;
+            freeCount++;
+            // next free element
+            vm_offset_t *primary = (vm_offset_t *) free;
+            free = *primary ^ zp_nopoison_cookie;
+        }
+        elems += numElements;
+    }
+
+    return (elems);
+}
+
+kern_return_t
+zone_leaks(const char * zoneName, uint32_t nameLen, leak_site_proc proc, void * refCon)
+{
+	uintptr_t	  zbt[MAX_ZTRACE_DEPTH];
+    zone_t        zone;
+    uintptr_t *   array;
+    uintptr_t *   next;
+    uintptr_t     element, bt;
+    uint32_t      idx, count, found;
+    uint32_t      btidx, btcount, nobtcount, btfound;
+    uint32_t      elemSize;
+    uint64_t      maxElems;
+    kern_return_t kr;
+
+    for (idx = 0; idx < num_zones; idx++)
+    {
+        if (!strncmp(zoneName, zone_array[idx].zone_name, nameLen)) break;
+    }
+    if (idx >= num_zones) return (KERN_INVALID_NAME);
+    zone = &zone_array[idx];
+
+    elemSize = (uint32_t) zone->elem_size;
+    maxElems = ptoa(zone->page_count) / elemSize;
+
+    if ((zone->alloc_size % elemSize)
+      && !leak_scan_debug_flag) return (KERN_INVALID_CAPABILITY);
+
+    kr = kmem_alloc_kobject(kernel_map, (vm_offset_t *) &array,
+                            maxElems * sizeof(uintptr_t), VM_KERN_MEMORY_DIAG);
+    if (KERN_SUCCESS != kr) return (kr);
+
+    lock_zone(zone);
+
+    next = array;
+    next = zone_copy_all_allocations_inqueue(zone, &zone->pages.any_free_foreign, next);
+    next = zone_copy_all_allocations_inqueue(zone, &zone->pages.intermediate,     next);
+    next = zone_copy_all_allocations_inqueue(zone, &zone->pages.all_used,         next);
+    count = (uint32_t)(next - array);
+
+    unlock_zone(zone);
+
+    zone_leaks_scan(array, count, (uint32_t)zone->elem_size, &found);
+    assert(found <= count);
+
+    for (idx = 0; idx < count; idx++)
+    {
+        element = array[idx];
+        if (kInstanceFlagReferenced & element) continue;
+        element = INSTANCE_PUT(element) & ~kInstanceFlags;
+    }
+
+    if (zone->zlog_btlog && !corruption_debug_flag)
+    {
+        // btlog_copy_backtraces_for_elements will set kInstanceFlagReferenced on elements it found
+        btlog_copy_backtraces_for_elements(zone->zlog_btlog, array, &count, elemSize, proc, refCon);
+    }
+
+    for (nobtcount = idx = 0; idx < count; idx++)
+    {
+        element = array[idx];
+        if (!element)                          continue;
+        if (kInstanceFlagReferenced & element) continue;
+        element = INSTANCE_PUT(element) & ~kInstanceFlags;
+
+        // see if we can find any backtrace left in the element
+        btcount = (typeof(btcount)) (zone->elem_size / sizeof(uintptr_t));
+        if (btcount >= MAX_ZTRACE_DEPTH) btcount = MAX_ZTRACE_DEPTH - 1;
+        for (btfound = btidx = 0; btidx < btcount; btidx++)
+        {
+            bt = ((uintptr_t *)element)[btcount - 1 - btidx];
+            if (!VM_KERNEL_IS_SLID(bt)) break;
+            zbt[btfound++] = bt;
+        }
+        if (btfound) (*proc)(refCon, 1, elemSize, &zbt[0], btfound);
+        else         nobtcount++;
+    }
+    if (nobtcount)
+    {
+        // fake backtrace when we found nothing
+        zbt[0] = (uintptr_t) &zalloc;
+        (*proc)(refCon, nobtcount, elemSize, &zbt[0], 1);
+    }
+
+    kmem_free(kernel_map, (vm_offset_t) array, maxElems * sizeof(uintptr_t));
+
+    return (KERN_SUCCESS);
+}
+
+void
+kern_wired_diagnose(void)
+{
+    unsigned int       count = VM_KERN_MEMORY_COUNT + VM_KERN_COUNTER_COUNT;
+    mach_memory_info_t info[count];
+    unsigned int       idx;
+    uint64_t           total_zone, total_wired, top_wired, osfmk_wired;
+
+    if (KERN_SUCCESS != vm_page_diagnose(info, count, 0)) return;
+
+    total_zone = total_wired = top_wired = osfmk_wired = 0;
+    for (idx = 0; idx < num_zones; idx++)
+    {
+        total_zone += ptoa_64(zone_array[idx].page_count);
+    }
+    total_wired = total_zone;
+
+    for (idx = 0; idx < count; idx++)
+    {
+	if (VM_KERN_COUNT_WIRED  == info[idx].site)   top_wired   = info[idx].size;
+	if (VM_KERN_MEMORY_OSFMK == info[idx].site)   osfmk_wired = info[idx].size;
+	if (VM_KERN_SITE_HIDE    &  info[idx].flags)  continue;
+	if (!(VM_KERN_SITE_WIRED &  info[idx].flags)) continue;
+	total_wired += info[idx].size;
+    }
+
+    printf("top 0x%qx, total 0x%qx, zone 0x%qx, osfmk 0x%qx\n",
+           top_wired, total_wired, total_zone, osfmk_wired);
+}
+
+#endif /* DEBUG || DEVELOPMENT */

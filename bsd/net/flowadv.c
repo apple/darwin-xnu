@@ -179,6 +179,18 @@ flowadv_add(struct flowadv_fclist *fcl)
 	lck_mtx_unlock(&fadv_lock);
 }
 
+void
+flowadv_add_entry(struct flowadv_fcentry *fce) {
+	lck_mtx_lock_spin(&fadv_lock);
+	STAILQ_INSERT_HEAD(&fadv_list, fce, fce_link);
+	VERIFY(!STAILQ_EMPTY(&fadv_list));
+
+	if (!fadv_active && fadv_thread != THREAD_NULL)
+		wakeup_one((caddr_t)&fadv_list);
+
+	lck_mtx_unlock(&fadv_lock);
+}
+
 static int
 flowadv_thread_cont(int err)
 {

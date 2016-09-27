@@ -20,11 +20,11 @@
    text is the data being protected.
  */
 void cchmac_init(const struct ccdigest_info *di, cchmac_ctx_t hc,
-                 unsigned long key_len, const void *key_data) {
+                 size_t key_len, const void *key_data) {
     const unsigned char *key = key_data;
 
     /* Set cchmac_data(di, hc) to key ^ opad. */
-    unsigned long byte = 0;
+    size_t byte = 0;
 	if (key_len <= di->block_size) {
         for (;byte < key_len; ++byte) {
             cchmac_data(di, hc)[byte] = key[byte] ^ 0x5c;

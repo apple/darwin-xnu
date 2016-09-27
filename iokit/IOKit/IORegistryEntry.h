@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,6 +43,7 @@
 extern const OSSymbol * gIONameKey;
 extern const OSSymbol * gIOLocationKey;
 extern const OSSymbol * gIORegistryEntryIDKey;
+extern const OSSymbol * gIORegistryEntryPropertyKeysKey;
 
 class IORegistryEntry;
 class IORegistryPlane;
@@ -52,8 +53,8 @@ typedef void (*IORegistryEntryApplierFunction)(IORegistryEntry * entry,
                                                void * context);
 
 enum {
-    kIORegistryIterateRecursively	= 0x00000001,
-    kIORegistryIterateParents		= 0x00000002
+    kIORegistryIterateRecursively   = 0x00000001,
+    kIORegistryIterateParents       = 0x00000002,
 };
 
 /*! @class IORegistryEntry : public OSObject
@@ -71,10 +72,7 @@ protected:
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of this class in the future.
     */    
-    struct ExpansionData
-    {
-	uint64_t	fRegistryEntryID;
-    };
+    struct ExpansionData;
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
@@ -252,7 +250,7 @@ public:
 /*! @function init
     @abstract Standard init method for all IORegistryEntry subclasses.
     @discussion A registry entry must be initialized with this method before it can be used. A property dictionary may passed and will be retained by this method for use as the registry entry's property table, or an empty one will be created.
-    @param A dictionary that will become the registry entry's property table (retaining it), or zero which will cause an empty property table to be created.
+    @param dictionary A dictionary that will become the registry entry's property table (retaining it), or zero which will cause an empty property table to be created.
     @result true on success, or false on a resource failure. */
 
     virtual bool init( OSDictionary * dictionary = 0 );
@@ -518,6 +516,11 @@ public:
     virtual OSIterator * getChildIterator( const IORegistryPlane * plane )
 									const;
 
+#if XNU_KERNEL_PRIVATE
+    uint32_t getChildCount( const IORegistryPlane * plane ) const;
+    OSArray * copyPropertyKeys(void) const;
+#endif
+
     virtual void applyToChildren( IORegistryEntryApplierFunction applier,
                                   void * context,
                                   const IORegistryPlane * plane ) const;
@@ -604,7 +607,7 @@ public:
 /*! @function detachFromChild
     @abstract Detaches a child entry from its parent in a plane.
     @discussion This method is called in the parent entry when a child detaches, to make overrides possible. It is a no-op if the entry is not a child of the parent. Detaching the entry will release both the child and parent. This method will call detachFromParent in the child entry if it is not being called from detachFromParent.
-    @param parent The registry entry to detach.
+    @param child The registry entry to detach.
     @param plane The plane object. */
 
     virtual void detachFromChild( IORegistryEntry * child,
@@ -796,6 +799,10 @@ public:
 private:
 #endif
     static IORegistryEntry * initialize( void );
+
+#ifdef XNU_KERNEL_PRIVATE
+    SInt32 getRegistryEntryGenerationCount( void ) const;
+#endif
 
 private:
     inline bool arrayMember( OSArray * set,

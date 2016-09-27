@@ -28,6 +28,9 @@
 
 #include <mach/exception_types.h>
 #include <mach/mach_types.h>
+#include <osfmk/kern/exception.h>
+#include <osfmk/kern/task.h>
+#include <sys/codesign.h>
 #include <sys/param.h>
 #include <sys/user.h>
 #include <sys/proc.h>
@@ -38,6 +41,15 @@
 #include <security/mac_framework.h>
 #include <security/mac_internal.h>
 #include <security/mac_mach_internal.h>
+
+#if CONFIG_CSR
+#include <sys/csr.h>
+// Panic on internal builds, just log otherwise.
+#define MAC_MACH_UNEXPECTED(fmt...) \
+	if (csr_check(CSR_ALLOW_APPLE_INTERNAL) == 0) { panic(fmt); } else { printf(fmt); }
+#else
+#define MAC_MACH_UNEXPECTED(fmt...) printf(fmt)
+#endif
 
 static struct proc *
 mac_task_get_proc(struct task *task)
@@ -137,3 +149,109 @@ mac_thread_userret(struct thread *td)
 	MAC_PERFORM(thread_userret, td);
 }
 
+static struct label *
+mac_exc_action_label_alloc(void)
+{
+	struct label *label = mac_labelzone_alloc(MAC_WAITOK);
+
+	MAC_PERFORM(exc_action_label_init, label);
+	return label;
+}
+
+static void
+mac_exc_action_label_free(struct label *label)
+{
+	MAC_PERFORM(exc_action_label_destroy, label);
+	mac_labelzone_free(label);
+}
+
+void
+mac_exc_action_label_init(struct exception_action *action)
+{
+	action->label = mac_exc_action_label_alloc();
+	MAC_PERFORM(exc_action_label_associate, action, action->label);
+}
+
+void
+mac_exc_action_label_inherit(struct exception_action *parent, struct exception_action *child)
+{
+	mac_exc_action_label_init(child);
+	MAC_PERFORM(exc_action_label_copy, parent->label, child->label);
+}
+
+void
+mac_exc_action_label_destroy(struct exception_action *action)
+{
+	struct label *label = action->label;
+	action->label = NULL;
+	mac_exc_action_label_free(label);
+}
+
+int mac_exc_action_label_update(struct task *task, struct exception_action *action) {
+	if (task == kernel_task) {
+		// The kernel may set exception ports without any check.
+		return 0;
+	}
+
+	struct proc *p = mac_task_get_proc(task);
+	if (p == NULL)
+		return ESRCH;
+
+	MAC_PERFORM(exc_action_label_update, p, action->label);
+	proc_rele(p);
+	return 0;
+}
+
+void mac_exc_action_label_reset(struct exception_action *action) {
+	struct label *old_label = action->label;
+	mac_exc_action_label_init(action);
+	mac_exc_action_label_free(old_label);
+}
+
+void mac_exc_action_label_task_update(struct task *task, struct proc *proc) {
+	if (get_task_crash_label(task) != NULL) {
+		MAC_MACH_UNEXPECTED("task already has a crash_label attached to it");
+		return;
+	}
+
+	struct label *label = mac_exc_action_label_alloc();
+	MAC_PERFORM(exc_action_label_update, proc, label);
+	set_task_crash_label(task, label);
+}
+
+void mac_exc_action_label_task_destroy(struct task *task) {
+	mac_exc_action_label_free(get_task_crash_label(task));
+	set_task_crash_label(task, NULL);
+}
+
+int
+mac_exc_action_check_exception_send(struct task *victim_task, struct exception_action *action)
+{
+	int error = 0;
+
+	struct proc *p = get_bsdtask_info(victim_task);
+	struct label *bsd_label = NULL;
+	struct label *label = NULL;
+
+	if (p != NULL) {
+		// Create a label from the still existing bsd process...
+		label = bsd_label = mac_exc_action_label_alloc();
+		MAC_PERFORM(exc_action_label_update, p, bsd_label);
+	} else {
+		// ... otherwise use the crash label on the task.
+		label = get_task_crash_label(victim_task);
+	}
+
+	if (label == NULL) {
+		MAC_MACH_UNEXPECTED("mac_exc_action_check_exception_send: no exc_action label for proc %p", p);
+		return EPERM;
+	}
+
+	MAC_CHECK(exc_action_check_exception_send, label, action, action->label);
+
+	if (bsd_label != NULL) {
+		mac_exc_action_label_free(bsd_label);
+	}
+
+	return (error);
+}

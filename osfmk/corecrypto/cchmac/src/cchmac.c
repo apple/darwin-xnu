@@ -11,8 +11,8 @@
 #include <corecrypto/cchmac.h>
 
 void cchmac(const struct ccdigest_info *di,
-            unsigned long key_len, const void *key,
-            unsigned long data_len, const void *data, unsigned char *mac) {
+            size_t key_len, const void *key,
+            size_t data_len, const void *data, unsigned char *mac) {
     cchmac_di_decl(di, hc);
     cchmac_init(di, hc, key_len, key);
     cchmac_update(di, hc, data_len, data);

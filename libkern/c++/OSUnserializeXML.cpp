@@ -2014,6 +2014,7 @@ getTag(parser_state_t *state,
 		if (c == '\n') state->lineNumber++;
 		if (c != '?') continue;
 		c = nextChar();
+		if (!c) return TAG_IGNORE;
 		if (c == '>') {
 		    (void)nextChar();
 		    return TAG_IGNORE;
@@ -2068,6 +2069,7 @@ getTag(parser_state_t *state,
 			values[*attributeCount][length++] = c;
 			if (length >= (TAG_MAX_LENGTH - 1)) return TAG_BAD;
 			c = nextChar();
+			if (!c) return TAG_BAD;
 		}
 		values[*attributeCount][length] = 0;
 

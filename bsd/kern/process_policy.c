@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -51,6 +51,8 @@
 #include <kern/task.h>
 #include <kern/kalloc.h>
 #include <kern/assert.h>
+#include <kern/policy_internal.h>
+
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <mach/host_info.h>
@@ -71,7 +73,7 @@
 #include <vm/vm_protos.h>
 
 static int handle_lowresource(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
-static int handle_resourceuse(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
+static int handle_cpuuse(int action, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
 static int handle_apptype(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
 static int handle_boost(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
 
@@ -155,7 +157,21 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 			error = handle_lowresource(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
 			break;
 		case PROC_POLICY_RESOURCE_USAGE:
-			error = handle_resourceuse(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
+			switch(policy_subtype) {
+				case PROC_POLICY_RUSAGE_NONE:
+				case PROC_POLICY_RUSAGE_WIREDMEM:
+				case PROC_POLICY_RUSAGE_VIRTMEM:
+				case PROC_POLICY_RUSAGE_DISK:
+				case PROC_POLICY_RUSAGE_NETWORK:
+				case PROC_POLICY_RUSAGE_POWER:
+					return(ENOTSUP);
+				default:
+					return(EINVAL);
+				case PROC_POLICY_RUSAGE_CPU:
+					break;
+			}
+
+			error = handle_cpuuse(action, attrp, target_proc, target_threadid);
 			break;
 		case PROC_POLICY_APPTYPE:
 			error = handle_apptype(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
@@ -196,45 +212,35 @@ handle_lowresource(__unused int scope, int action, __unused int policy, int poli
 
 
 static int 
-handle_resourceuse(__unused int scope, __unused int action, __unused int policy, int policy_subtype, user_addr_t attrp, proc_t proc, __unused uint64_t target_threadid)
+handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t target_threadid)
 {
 	proc_policy_cpuusage_attr_t	cpuattr;
 #if CONFIG_MACF
 	proc_t 				curp = current_proc();
 #endif
-	int				entitled = TRUE;
+	int				entitled = FALSE;
+	Boolean				canEnable = FALSE;
 	uint64_t			interval = -1ULL;	
 	int				error = 0;
 	uint8_t				percentage;
 
-	switch(policy_subtype) {
-		case PROC_POLICY_RUSAGE_NONE:
-		case PROC_POLICY_RUSAGE_WIREDMEM:
-		case PROC_POLICY_RUSAGE_VIRTMEM:
-		case PROC_POLICY_RUSAGE_DISK:
-		case PROC_POLICY_RUSAGE_NETWORK:
-		case PROC_POLICY_RUSAGE_POWER:
-			return(ENOTSUP);
-			break;
-		default:
-			return(EINVAL);	
-		case PROC_POLICY_RUSAGE_CPU:
-			break;
-	}
-
 #if CONFIG_MACF
-	if (curp != proc) {
-		/* the cpumon entitlement manages messing with CPU limits on self */
-		error = mac_proc_check_sched(curp, proc);
-		if (error)
-			return error;
-	}
-
 	/*
-	 * Allow a process to change CPU usage monitor parameters, unless a MAC policy
-	 * overrides it with an entitlement check.
+	 * iOS only allows processes to override their own CPU usage monitor
+	 * parameters if they have com.apple.private.kernel.override-cpumon.
+	 *
+	 * Until rdar://24799462 improves our scheme, we are also using the
+	 * same entitlement to indicate which processes can resume monitoring
+	 * when they otherwise wouldn't be able to.
 	 */
 	entitled = (mac_proc_check_cpumon(curp) == 0) ? TRUE : FALSE;
+	canEnable = (entitled && action == PROC_POLICY_ACTION_ENABLE);
+
+	if (!canEnable && curp != proc) {
+		/* can the current process change scheduling parameters? */
+		error = mac_proc_check_sched(curp, proc);
+		if (error) 	return error;
+	}
 #endif
 
 	switch (action) {
@@ -275,9 +281,17 @@ handle_resourceuse(__unused int scope, __unused int action, __unused int policy,
 					entitled); 
 			break;
 
+		/* restore process to prior state */
 		case PROC_POLICY_ACTION_RESTORE:
 			error = proc_clear_task_ruse_cpu(proc->task, entitled);
 			break;
+
+		/* re-enable suspended monitor */
+		case PROC_POLICY_ACTION_ENABLE:
+			error = task_resume_cpumon(proc->task);
+			break;
+
+		case PROC_POLICY_ACTION_REMOVE:
 
 		default:
 			error = EINVAL;
@@ -356,19 +370,18 @@ handle_apptype(         int scope,
 	switch (action) {
 		case PROC_POLICY_ACTION_ENABLE:
 			/* PROCESS ENABLE APPTYPE TAL */
-			proc_set_task_policy(target_proc->task, THREAD_NULL,
-                                             TASK_POLICY_ATTRIBUTE, TASK_POLICY_TAL,
-                                             TASK_POLICY_ENABLE);
+			proc_set_task_policy(target_proc->task,
+			                     TASK_POLICY_ATTRIBUTE, TASK_POLICY_TAL,
+			                     TASK_POLICY_ENABLE);
 			break;
 		case PROC_POLICY_ACTION_DISABLE:
 			/* PROCESS DISABLE APPTYPE TAL */
-			proc_set_task_policy(target_proc->task, THREAD_NULL,
-                                             TASK_POLICY_ATTRIBUTE, TASK_POLICY_TAL,
-                                             TASK_POLICY_DISABLE);
+			proc_set_task_policy(target_proc->task,
+			                     TASK_POLICY_ATTRIBUTE, TASK_POLICY_TAL,
+			                     TASK_POLICY_DISABLE);
 			break;
 		default:
 			return (EINVAL);
-			break;
 	}
 
 	return(0);

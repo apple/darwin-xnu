@@ -74,7 +74,7 @@ bool OSSerialize::addBinary(const void * bits, size_t size)
 	if (newCapacity >= capacity) 
 	{
 	   newCapacity = (((newCapacity - 1) / capacityIncrement) + 1) * capacityIncrement;
-	   if (newCapacity < ensureCapacity(newCapacity)) return (false);
+	   if (newCapacity > ensureCapacity(newCapacity)) return (false);
     }
 
 	bcopy(bits, &data[length], size);
@@ -88,21 +88,16 @@ bool OSSerialize::addBinaryObject(const OSMetaClassBase * o, uint32_t key,
 {
     unsigned int newCapacity;
     size_t       alignSize;
-	OSNumber   * tagNum;
 
-	// build a tag
-	tagNum = OSNumber::withNumber(tag, 32);
-	tag++;
-    // add to tag dictionary
-	tags->setObject((const OSSymbol *) o, tagNum);
-	tagNum->release();
+    // add to tag array
+	tags->setObject(o);
 
 	alignSize = ((size + sizeof(key) + 3) & ~3L);
 	newCapacity = length + alignSize;
 	if (newCapacity >= capacity) 
 	{
 	   newCapacity = (((newCapacity - 1) / capacityIncrement) + 1) * capacityIncrement;
-	   if (newCapacity < ensureCapacity(newCapacity)) return (false);
+	   if (newCapacity > ensureCapacity(newCapacity)) return (false);
     }
 
     if (endCollection)
@@ -126,19 +121,19 @@ bool OSSerialize::binarySerialize(const OSMetaClassBase *o)
     OSNumber     * num;
     OSSymbol     * sym;
     OSString     * str;
-    OSData       * data;
+    OSData       * ldata;
     OSBoolean    * boo;
 
-	OSNumber * tagNum;
+	unsigned int  tagIdx;
     uint32_t   i, key;
     size_t     len;
     bool       ok;
 
-	tagNum = (OSNumber *)tags->getObject((const OSSymbol *) o);
+	tagIdx = tags->getNextIndexOfObject(o, 0);
 	// does it exist?
-	if (tagNum)
+	if (-1U != tagIdx)
 	{
-		key = (kOSSerializeObject | tagNum->unsigned32BitValue());
+		key = (kOSSerializeObject | tagIdx);
 		if (endCollection)
 		{
 			 endCollection = false;
@@ -158,9 +153,9 @@ bool OSSerialize::binarySerialize(const OSMetaClassBase *o)
 			const OSMetaClassBase * dictValue;
 			const OSMetaClassBase * nvalue = 0;
 
+			dictKey = dict->dictionary[i].key;
+			dictValue = dict->dictionary[i].value;
 			i++;
-			dictKey = dict->dictionary[i-1].key;
-			dictValue = dict->dictionary[i-1].value;
 			if (editor)
 			{
 				dictValue = nvalue = (*editor)(editRef, this, dict, dictKey, dictValue);
@@ -223,12 +218,12 @@ bool OSSerialize::binarySerialize(const OSMetaClassBase *o)
 		key = (kOSSerializeString | len);
 		ok = addBinaryObject(o, key, str->getCStringNoCopy(), len);
 	}
-	else if ((data = OSDynamicCast(OSData, o)))
+	else if ((ldata = OSDynamicCast(OSData, o)))
 	{
-		len = data->getLength();
-		if (data->reserved && data->reserved->disableSerialization) len = 0;
+		len = ldata->getLength();
+		if (ldata->reserved && ldata->reserved->disableSerialization) len = 0;
 		key = (kOSSerializeData | len);
-		ok = addBinaryObject(o, key, data->getBytesNoCopy(), len);
+		ok = addBinaryObject(o, key, ldata->getBytesNoCopy(), len);
 	}
 	else return (false);
 
@@ -237,20 +232,27 @@ bool OSSerialize::binarySerialize(const OSMetaClassBase *o)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define setAtIndex(v, idx, o)													\
-	if (idx >= v##Capacity)														\
-	{																			\
-		uint32_t ncap = v##Capacity + 64;										\
-		typeof(v##Array) nbuf = (typeof(v##Array)) kalloc_container(ncap * sizeof(o));	\
-		if (!nbuf) ok = false;													\
-		if (v##Array)															\
-		{																		\
-			bcopy(v##Array, nbuf, v##Capacity * sizeof(o));						\
-			kfree(v##Array, v##Capacity * sizeof(o));							\
-		}																		\
-		v##Array    = nbuf;														\
-		v##Capacity = ncap;														\
-	}																			\
+#define setAtIndex(v, idx, o)													        \
+	if (idx >= v##Capacity)														        \
+	{																			        \
+        if (v##Capacity >= v##CapacityMax) ok = false;                                  \
+        else																			\
+        {																			    \
+            uint32_t ncap = v##Capacity + 64;										    \
+            typeof(v##Array) nbuf = (typeof(v##Array)) kalloc_container(ncap * sizeof(o)); \
+            if (!nbuf) ok = false;													    \
+            else															            \
+            {															                \
+                if (v##Array)															\
+                {																		\
+                    bcopy(v##Array, nbuf, v##Capacity * sizeof(o));						\
+                    kfree(v##Array, v##Capacity * sizeof(o));							\
+                }																		\
+                v##Array    = nbuf;														\
+                v##Capacity = ncap;														\
+            }															                \
+	    }																			    \
+	}																			        \
 	if (ok) v##Array[idx] = o;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -260,10 +262,12 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 {
 	OSObject ** objsArray;
 	uint32_t    objsCapacity;
+	enum      { objsCapacityMax = 16*1024*1024 };
 	uint32_t    objsIdx;
 
 	OSObject ** stackArray;
 	uint32_t    stackCapacity;
+	enum      { stackCapacityMax = 64*1024 };
 	uint32_t    stackIdx;
 
     OSObject     * result;
@@ -286,9 +290,9 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
     bool ok;
 
 	if (errorString) *errorString = 0;
+	if (bufferSize < sizeof(kOSSerializeBinarySignature)) return (NULL);
 	if (0 != strcmp(kOSSerializeBinarySignature, buffer)) return (NULL);
 	if (3 & ((uintptr_t) buffer)) return (NULL);
-	if (bufferSize < sizeof(kOSSerializeBinarySignature)) return (NULL);
 	bufferPos = sizeof(kOSSerializeBinarySignature);
 	next = (typeof(next)) (((uintptr_t) buffer) + bufferPos);
 
@@ -338,13 +342,13 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 		    case kOSSerializeObject:
 				if (len >= objsIdx) break;
 				o = objsArray[len];
-				o->retain();
 				isRef = true;
 				break;
 
 		    case kOSSerializeNumber:
 				bufferPos += sizeof(long long);
 				if (bufferPos > bufferSize) break;
+		        if ((len != 32) && (len != 64) && (len != 16) && (len != 8)) break;
 		    	value = next[1];
 		    	value <<= 32;
 		    	value |= next[0];
@@ -355,6 +359,7 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 		    case kOSSerializeSymbol:
 				bufferPos += (wordLen * sizeof(uint32_t));
 				if (bufferPos > bufferSize)           break;
+				if (len < 2)                          break;
 				if (0 != ((const char *)next)[len-1]) break;
 		        o = (OSObject *) OSSymbol::withCString((const char *) next);
 		        next += wordLen;
@@ -387,42 +392,36 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 		if (!isRef)
 		{
 			setAtIndex(objs, objsIdx, o);
-			if (!ok) break;
+			if (!ok)
+			{
+			    o->release();
+                break;
+            }
 			objsIdx++;
 		}
 
 		if (dict)
 		{
-			if (sym)
+			if (!sym) sym = (OSSymbol *) o;
+			else
 			{
-				DEBG("%s = %s\n", sym->getCStringNoCopy(), o->getMetaClass()->getClassName());
-				if (o != dict) ok = dict->setObject(sym, o, true);
-				o->release();
-				sym->release();
-				sym = 0;
-			}
-			else 
-			{
-				sym = OSDynamicCast(OSSymbol, o);
-				if (!sym && (str = OSDynamicCast(OSString, o)))
+                str = sym;
+				sym = OSDynamicCast(OSSymbol, sym);
+				if (!sym && (str = OSDynamicCast(OSString, str)))
 				{
 				    sym = (OSSymbol *) OSSymbol::withString(str);
-				    o->release();
-				    o = 0;
+                    ok = (sym != 0);
+                    if (!ok) break;
 				}
-				ok = (sym != 0);
+				DEBG("%s = %s\n", sym->getCStringNoCopy(), o->getMetaClass()->getClassName());
+				if (o != dict) ok = dict->setObject(sym, o);
+                if (sym && (sym != str)) sym->release();
+				sym = 0;
 			}
 		}
-		else if (array) 
-		{
-			ok = array->setObject(o);
-		    o->release();
-		}
-		else if (set)
-		{
-		   ok = set->setObject(o);
-		   o->release();
-		}
+		else if (array)  ok = array->setObject(o);
+		else if (set)    ok = set->setObject(o);
+		else if (result) ok = false;
 		else
 		{
 		    assert(!parent);
@@ -464,13 +463,14 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 	}
 	DEBG("ret %p\n", result);
 
-	if (objsCapacity)  kfree(objsArray,  objsCapacity  * sizeof(*objsArray));
+	if (!ok) result = 0;
+
+	if (objsCapacity)
+	{
+        for (len = (result != 0); len < objsIdx; len++) objsArray[len]->release();
+	    kfree(objsArray,  objsCapacity  * sizeof(*objsArray));
+    }
 	if (stackCapacity) kfree(stackArray, stackCapacity * sizeof(*stackArray));
 
-	if (!ok && result)
-	{
-		result->release();
-		result = 0;
-	}
 	return (result);
 }

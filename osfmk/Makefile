@@ -8,9 +8,10 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
 	mach	\
-	atm 	\
+	atm	\
 	corpses	\
 	bank \
+	voucher \
 	device \
 	default_pager \
 	mach_debug \
@@ -50,9 +51,10 @@ INSTINC_SUBDIRS_ARM64 = \
 
 EXPINC_SUBDIRS = \
 	mach	\
-	atm 	\
+	atm	\
 	corpses	\
 	bank \
+	voucher \
 	device \
 	default_pager \
 	mach_debug \
@@ -88,7 +90,7 @@ EXPINC_SUBDIRS_ARM64 = \
 	arm	\
 	arm64
 
-COMP_SUBDIRS = 	\
+COMP_SUBDIRS =	\
 	conf
 
 include $(MakeInc_rule)

@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -22,7 +21,6 @@ KERNELFILES = \
 	types.h vmparam.h _types.h _param.h \
 	_mcontext.h
 
-
 INSTALL_MD_LIST = ${DATAFILES}
 INSTALL_MD_LCL_LIST = ${PRIVATE_DATAFILES}
 
@@ -34,5 +32,3 @@ EXPORT_MD_DIR = i386
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

@@ -39,7 +39,7 @@
 #include <mach/port.h>
 #include <mach/exception_types.h>
 #include <mach/coalition.h> /* for COALITION_TYPE_MAX */
-
+#include <sys/kern_memorystatus.h>
 
 /*
  * posix_spawnattr_init
@@ -1331,6 +1331,43 @@ posix_spawnattr_getcpumonitor(posix_spawnattr_t * __restrict attr,
 	return (0);
 }
 
+
+/*
+ * posix_spawnattr_setjetsam_ext
+ *
+ * Description:	Set jetsam attributes for the spawn attribute object
+ *		referred to by 'attr'.
+ *
+ * Parameters:	flags			The flags value to set
+ *		priority		Relative jetsam priority
+ *		memlimit_active		Value in megabytes; memory footprint
+ *					above this level while process is
+ *					active may result in termination.
+ *		memlimit_inactive	Value in megabytes; memory footprint
+ *					above this level while process is
+ *					inactive may result in termination.
+ *
+ * Returns:	0			Success
+ */
+int
+posix_spawnattr_setjetsam_ext(posix_spawnattr_t * __restrict attr,
+	short flags, int priority, int memlimit_active, int memlimit_inactive)
+{
+	_posix_spawnattr_t psattr;
+
+	if (attr == NULL || *attr == NULL)
+		return EINVAL;
+
+	psattr = *(_posix_spawnattr_t *)attr;
+
+	psattr->psa_jetsam_flags = flags;
+	psattr->psa_jetsam_flags |= POSIX_SPAWN_JETSAM_SET;
+	psattr->psa_priority = priority;
+	psattr->psa_memlimit_active = memlimit_active;
+	psattr->psa_memlimit_inactive = memlimit_inactive;
+
+	return (0);
+}
 
 
 /*

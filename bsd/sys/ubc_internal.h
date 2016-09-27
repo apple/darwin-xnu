@@ -103,14 +103,19 @@ struct cs_blob {
 	off_t		csb_base_offset;	/* Offset of Mach-O binary in fat binary */
 	off_t		csb_start_offset;	/* Blob coverage area start, from csb_base_offset */
 	off_t		csb_end_offset;		/* Blob coverage area end, from csb_base_offset */
-	ipc_port_t	csb_mem_handle;
 	vm_size_t	csb_mem_size;
 	vm_offset_t	csb_mem_offset;
 	vm_address_t	csb_mem_kaddr;
 	unsigned char	csb_cdhash[CS_CDHASH_LEN];
 	struct cs_hash  *csb_hashtype;
+	vm_size_t	csb_hash_pagesize;	/* each hash entry represent this many bytes in the file */
+	vm_size_t	csb_hash_pagemask;
+	vm_size_t	csb_hash_pageshift;
+	vm_size_t	csb_hash_firstlevel_pagesize;	/* First hash this many bytes, then hash the hashes together */
 	const CS_CodeDirectory *csb_cd;
 	const char 	*csb_teamid;
+	const CS_GenericBlob *csb_entitlements_blob;	/* raw blob, subrange of csb_mem_kaddr */
+	void *          csb_entitlements;	/* The entitlements as an OSDictionary */
 	unsigned int	csb_platform_binary:1;
 	unsigned int	csb_platform_path:1;
 };
@@ -167,7 +172,6 @@ __private_extern__ void	ubc_destroy_named(vnode_t);
 
 /* internal only */
 __private_extern__ void	cluster_release(struct ubc_info *);
-__private_extern__ uint32_t cluster_max_io_size(mount_t, int);
 __private_extern__ uint32_t cluster_throttle_io_limit(vnode_t, uint32_t *);
 
 
@@ -188,22 +192,20 @@ int	ubc_isinuse_locked(vnode_t, int, int);
 
 int	ubc_getcdhash(vnode_t, off_t, unsigned char *);
 
-__attribute__((pure)) boolean_t ubc_is_mapped(const struct vnode *, boolean_t *writable);
-__attribute__((pure)) boolean_t ubc_is_mapped_writable(const struct vnode *);
-
 #ifdef XNU_KERNEL_PRIVATE
 int UBCINFOEXISTS(const struct vnode *);
 #endif /* XNU_KERNEL_PRIVATE */
 
 /* code signing */
 struct cs_blob;
-int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t, vm_size_t, int, struct cs_blob **);
+int	ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t *, vm_size_t, struct image_params *, int, struct cs_blob **);
 int	ubc_cs_sigpup_add(vnode_t, vm_address_t, vm_size_t);
 struct cs_blob *ubc_get_cs_blobs(vnode_t);
 void	ubc_get_cs_mtime(vnode_t, struct timespec *);
 int	ubc_cs_getcdhash(vnode_t, off_t, unsigned char *);
 kern_return_t ubc_cs_blob_allocate(vm_offset_t *, vm_size_t *);
 void ubc_cs_blob_deallocate(vm_offset_t, vm_size_t);
+boolean_t ubc_cs_is_range_codesigned(vnode_t, mach_vm_offset_t, mach_vm_size_t);
 
 kern_return_t	ubc_cs_validation_bitmap_allocate( vnode_t );
 void		ubc_cs_validation_bitmap_deallocate( vnode_t );

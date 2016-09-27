@@ -97,26 +97,6 @@ my %TypeBytes = (
 # Moving towards storing all data in this hash, then we always know
 # if data is aliased or not, or promoted or not.
 my %Symbols = (
-    "quota" => {
-        c_sym => "quota",
-        syscall => "quota",
-        asm_sym => "_quota",
-        is_private => undef,
-        is_custom => undef,
-        nargs => 4,
-        bytes => 0,
-        aliases => {},
-    },
-    "setquota" => {
-        c_sym => "setquota",
-        syscall => "setquota",
-        asm_sym => "_setquota",
-        is_private => undef,
-        is_custom => undef,
-        nargs => 2,
-        bytes => 0,
-        aliases => {},
-    },
     "syscall" => {
         c_sym => "syscall",
         syscall => "syscall",
@@ -141,7 +121,7 @@ my @Cancelable = qw/
 	link linkat lseek lstat
 	msgrcv msgsnd msync
 	open openat
-	pathconf peeloff poll posix_spawn pread pwrite
+	pathconf peeloff poll posix_spawn pread pselect pwrite
 	read readv recvfrom recvmsg rename renameat
 	rename_ext
 	__semwait_signal __sigwait

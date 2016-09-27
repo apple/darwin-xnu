@@ -89,6 +89,7 @@
 #include <vm/vm_external.h>
 
 #include <vm/vm_options.h>
+#include <vm/vm_page.h>
 
 #if VM_OBJECT_TRACKING
 #include <libkern/OSDebug.h>
@@ -96,6 +97,7 @@
 extern void vm_object_tracking_init(void);
 extern boolean_t vm_object_tracking_inited;
 extern btlog_t *vm_object_tracking_btlog;
+#define VM_OBJECT_TRACKING_NUM_RECORDS	50000
 #define VM_OBJECT_TRACKING_BTDEPTH 7
 #define VM_OBJECT_TRACKING_OP_CREATED	1
 #define VM_OBJECT_TRACKING_OP_MODIFIED	2
@@ -139,9 +141,25 @@ struct vm_object_fault_info {
 #define vo_slide_info			vo_un2.vou_slide_info
 
 struct vm_object {
-	queue_head_t		memq;		/* Resident memory */
+	/*
+	 * on 64 bit systems we pack the pointers hung off the memq.
+	 * those pointers have to be able to point back to the memq.
+	 * the packed pointers are required to be on a 64 byte boundary
+	 * which means 2 things for the vm_object...  (1) the memq
+	 * struct has to be the first element of the structure so that
+	 * we can control it's alignment... (2) the vm_object must be
+	 * aligned on a 64 byte boundary... for static vm_object's
+	 * this is accomplished via the 'aligned' attribute... for
+	 * vm_object's in the zone pool, this is accomplished by
+	 * rounding the size of the vm_object element to the nearest
+	 * 64 byte size before creating the zone.
+	 */
+	vm_page_queue_head_t	memq;		/* Resident memory - must be first */
         lck_rw_t		Lock;		/* Synchronization */
 
+#if DEVELOPMENT || DEBUG
+	thread_t		Lock_owner;
+#endif
 	union {
 		vm_object_size_t  vou_size;	/* Object size (only valid if internal) */
 		int		  vou_cache_pages_to_scan;	/* pages yet to be visited in an
@@ -151,9 +169,6 @@ struct vm_object {
 
 	struct vm_page		*memq_hint;
 	int			ref_count;	/* Number of references */
-#if	TASK_SWAPPER
-	int			res_count;	/* Residency references (swap)*/
-#endif	/* TASK_SWAPPER */
 	unsigned int		resident_page_count;
 						/* number of resident pages */
 	unsigned int		wired_page_count; /* number of wired pages */
@@ -314,8 +329,6 @@ struct vm_object {
 						 * primary caching. (for
 						 * I/O)
 						 */
-						
-
 
 	queue_chain_t		cached_list;	/* Attachment point for the
 						 * list of objects cached as a
@@ -335,10 +348,6 @@ struct vm_object {
 
         uint32_t		pages_created;
         uint32_t		pages_used;
-#if	MACH_PAGEMAP
-	vm_external_map_t	existence_map;	/* bitmap of pages written to
-						 * backing storage */
-#endif	/* MACH_PAGEMAP */
 	vm_offset_t		cow_hint;	/* last page present in     */
 						/* shadow but not in object */
 #if	MACH_ASSERT
@@ -366,7 +375,13 @@ struct vm_object {
 		purgeable_queue_type:2,
 		purgeable_queue_group:3,
 		io_tracking:1,
-		__object2_unused_bits:7;	/* for expansion */
+#if CONFIG_SECLUDED_MEMORY
+		eligible_for_secluded:1,
+		can_grab_secluded:1,
+#else /* CONFIG_SECLUDED_MEMORY */
+		__object3_unused_bits:2,
+#endif /* CONFIG_SECLUDED_MEMORY */
+		__object2_unused_bits:5;	/* for expansion */
 
 	uint8_t			scan_collisions;
         vm_tag_t		wire_tag;
@@ -461,6 +476,7 @@ extern lck_attr_t		vm_map_lck_attr;
     {									\
 	lck_spin_lock(&vm_objects_wired_lock);				\
 	assert(!(object)->objq.next);					\
+	assert(!(object)->objq.prev);					\
 	queue_enter(&vm_objects_wired, (object), vm_object_t, objq);    \
 	lck_spin_unlock(&vm_objects_wired_lock);			\
     }									\
@@ -476,6 +492,64 @@ extern lck_attr_t		vm_map_lck_attr;
 	lck_spin_unlock(&vm_objects_wired_lock);			 \
     }									 \
     MACRO_END
+
+
+#define OBJECT_LOCK_SHARED	0
+#define OBJECT_LOCK_EXCLUSIVE	1
+
+extern lck_grp_t	vm_object_lck_grp;
+extern lck_grp_attr_t	vm_object_lck_grp_attr;
+extern lck_attr_t	vm_object_lck_attr;
+extern lck_attr_t	kernel_object_lck_attr;
+extern lck_attr_t	compressor_object_lck_attr;
+
+extern vm_object_t	vm_pageout_scan_wants_object;
+
+extern void		vm_object_lock(vm_object_t);
+extern boolean_t	vm_object_lock_try(vm_object_t);
+extern boolean_t	_vm_object_lock_try(vm_object_t);
+extern boolean_t	vm_object_lock_avoid(vm_object_t);
+extern void		vm_object_lock_shared(vm_object_t);
+extern boolean_t	vm_object_lock_try_shared(vm_object_t);
+extern void		vm_object_unlock(vm_object_t);
+extern boolean_t	vm_object_lock_upgrade(vm_object_t);
+
+/*
+ *	Object locking macros
+ */
+
+#define vm_object_lock_init(object)					\
+	lck_rw_init(&(object)->Lock, &vm_object_lck_grp,		\
+		    (((object) == kernel_object ||			\
+		      (object) == vm_submap_object) ?			\
+		     &kernel_object_lck_attr :				\
+		     (((object) == compressor_object) ?			\
+		     &compressor_object_lck_attr :			\
+		      &vm_object_lck_attr)))
+#define vm_object_lock_destroy(object)	lck_rw_destroy(&(object)->Lock, &vm_object_lck_grp)
+
+#define vm_object_lock_try_scan(object)	_vm_object_lock_try(object)
+
+/*
+ * CAUTION: the following vm_object_lock_assert_held*() macros merely
+ * check if anyone is holding the lock, but the holder may not necessarily
+ * be the caller...
+ */
+#if MACH_ASSERT || DEBUG
+#define vm_object_lock_assert_held(object) \
+	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_HELD)
+#define vm_object_lock_assert_shared(object) \
+	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_SHARED)
+#define vm_object_lock_assert_exclusive(object) \
+	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_EXCLUSIVE)
+#define vm_object_lock_assert_notheld(object) \
+	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_NOTHELD)
+#else  /* MACH_ASSERT || DEBUG */ 
+#define vm_object_lock_assert_held(object)
+#define vm_object_lock_assert_shared(object)
+#define vm_object_lock_assert_exclusive(object)
+#define vm_object_lock_assert_notheld(object)
+#endif /* MACH_ASSERT || DEBUG */
 
 
 /*
@@ -774,27 +848,6 @@ __private_extern__ void		vm_object_reap_pages(
 #define REAP_DATA_FLUSH	3
 
 #if CONFIG_FREEZE
-struct default_freezer_handle;
-
-__private_extern__ kern_return_t 
-vm_object_pack(
-	unsigned int		*purgeable_count,
-	unsigned int		*wired_count,
-	unsigned int		*clean_count,
-	unsigned int		*dirty_count,
-	unsigned int		dirty_budget,
-	boolean_t		*shared,
-	vm_object_t		src_object,
-	struct default_freezer_handle *df_handle);
-
-__private_extern__ void
-vm_object_pack_pages(
-	unsigned int		*wired_count,
-	unsigned int		*clean_count,
-	unsigned int		*dirty_count,
-	unsigned int		dirty_budget,
-	vm_object_t		src_object,
-	struct default_freezer_handle *df_handle);
 
 __private_extern__ void
 vm_object_compressed_freezer_pageout(
@@ -804,9 +857,6 @@ __private_extern__ void
 vm_object_compressed_freezer_done(
 	void);
 
-__private_extern__  kern_return_t
-vm_object_pagein(
-	vm_object_t     object);
 #endif /* CONFIG_FREEZE */
 
 __private_extern__ void
@@ -841,37 +891,114 @@ extern void vm_io_reprioritize_init(void);
 #define VM_OBJECT_EVENT_UNBLOCKED		8
 #define VM_OBJECT_EVENT_PAGING_ONLY_IN_PROGRESS	9
 
-#define	vm_object_assert_wait(object, event, interruptible)		\
-	(((object)->all_wanted |= 1 << (event)),			\
-	 assert_wait((event_t)((vm_offset_t)(object)+(event)),(interruptible)))
+#define VM_OBJECT_EVENT_MAX 10 /* 11 bits in "all_wanted", so 0->10 */
 
-#define	vm_object_wait(object, event, interruptible)			\
-	(vm_object_assert_wait((object),(event),(interruptible)),	\
-	vm_object_unlock(object),					\
-	thread_block(THREAD_CONTINUE_NULL))				\
+static __inline__ wait_result_t
+vm_object_assert_wait(
+	vm_object_t		object,
+	int			event,
+	wait_interrupt_t	interruptible)
+{
+	wait_result_t wr;
 
-#define thread_sleep_vm_object(object, event, interruptible)		\
-        lck_rw_sleep(&(object)->Lock, LCK_SLEEP_PROMOTED_PRI, (event_t)(event), (interruptible))
+	vm_object_lock_assert_exclusive(object);
+	assert(event >= 0 && event <= VM_OBJECT_EVENT_MAX);
 
-#define vm_object_sleep(object, event, interruptible)			\
-	(((object)->all_wanted |= 1 << (event)),			\
-	 thread_sleep_vm_object((object), 				\
-		((vm_offset_t)(object)+(event)), (interruptible)))
+	object->all_wanted |= 1 << event;
+	wr = assert_wait((event_t)((vm_offset_t)object + event),
+			 interruptible);
+	return wr;
+}
 
-#define	vm_object_wakeup(object, event)					\
-	MACRO_BEGIN							\
-	if ((object)->all_wanted & (1 << (event)))			\
-		thread_wakeup((event_t)((vm_offset_t)(object) + (event))); \
-	(object)->all_wanted &= ~(1 << (event));			\
-	MACRO_END
+static __inline__ wait_result_t
+vm_object_wait(
+	vm_object_t		object,
+	int			event,
+	wait_interrupt_t	interruptible)
+{
+	wait_result_t wr;
 
-#define	vm_object_set_wanted(object, event)				\
-	MACRO_BEGIN							\
-	((object)->all_wanted |= (1 << (event)));			\
-	MACRO_END
+	vm_object_assert_wait(object, event, interruptible);
+	vm_object_unlock(object);
+	wr = thread_block(THREAD_CONTINUE_NULL);
+	return wr;
+}
 
-#define	vm_object_wanted(object, event)					\
-	((object)->all_wanted & (1 << (event)))
+static __inline__ wait_result_t
+thread_sleep_vm_object(
+	vm_object_t		object,
+	event_t			event,
+	wait_interrupt_t	interruptible)
+{
+	wait_result_t wr;
+
+#if DEVELOPMENT || DEBUG
+	if (object->Lock_owner != current_thread())
+		panic("thread_sleep_vm_object: now owner - %p\n", object);
+	object->Lock_owner = 0;
+#endif
+        wr = lck_rw_sleep(&object->Lock,
+			  LCK_SLEEP_PROMOTED_PRI,
+			  event,
+			  interruptible);
+#if DEVELOPMENT || DEBUG
+	object->Lock_owner = current_thread();
+#endif
+	return wr;
+}
+
+static __inline__ wait_result_t
+vm_object_sleep(
+	vm_object_t		object,
+	int			event,
+	wait_interrupt_t	interruptible)
+{
+	wait_result_t wr;
+
+	vm_object_lock_assert_exclusive(object);
+	assert(event >= 0 && event <= VM_OBJECT_EVENT_MAX);
+
+	object->all_wanted |= 1 << event;
+	wr = thread_sleep_vm_object(object,
+				    (event_t)((vm_offset_t)object + event),
+				    interruptible);
+	return wr;
+}
+
+static __inline__ void
+vm_object_wakeup(
+	vm_object_t		object,
+	int 			event)
+{
+	vm_object_lock_assert_exclusive(object);
+	assert(event >= 0 && event <= VM_OBJECT_EVENT_MAX);
+
+	if (object->all_wanted & (1 << event))
+		thread_wakeup((event_t)((vm_offset_t)object + event));
+	object->all_wanted &= ~(1 << event);
+}
+
+static __inline__ void
+vm_object_set_wanted(
+	vm_object_t		object,
+	int			event)
+{
+	vm_object_lock_assert_exclusive(object);
+	assert(event >= 0 && event <= VM_OBJECT_EVENT_MAX);
+
+	object->all_wanted |= (1 << event);
+}
+
+static __inline__ int
+vm_object_wanted(
+	vm_object_t		object,
+	int			event)
+{
+	vm_object_lock_assert_held(object);
+	assert(event >= 0 && event <= VM_OBJECT_EVENT_MAX);
+
+	return object->all_wanted & (1 << event);
+}
 
 /*
  *	Routines implemented as macros
@@ -1004,63 +1131,6 @@ extern void vm_io_reprioritize_init(void);
 	MACRO_END
 
 
-
-#define OBJECT_LOCK_SHARED	0
-#define OBJECT_LOCK_EXCLUSIVE	1
-
-extern lck_grp_t	vm_object_lck_grp;
-extern lck_grp_attr_t	vm_object_lck_grp_attr;
-extern lck_attr_t	vm_object_lck_attr;
-extern lck_attr_t	kernel_object_lck_attr;
-extern lck_attr_t	compressor_object_lck_attr;
-
-extern vm_object_t	vm_pageout_scan_wants_object;
-
-extern void		vm_object_lock(vm_object_t);
-extern boolean_t	vm_object_lock_try(vm_object_t);
-extern boolean_t	_vm_object_lock_try(vm_object_t);
-extern boolean_t	vm_object_lock_avoid(vm_object_t);
-extern void		vm_object_lock_shared(vm_object_t);
-extern boolean_t	vm_object_lock_try_shared(vm_object_t);
-
-/*
- *	Object locking macros
- */
-
-#define vm_object_lock_init(object)					\
-	lck_rw_init(&(object)->Lock, &vm_object_lck_grp,		\
-		    (((object) == kernel_object ||			\
-		      (object) == vm_submap_object) ?			\
-		     &kernel_object_lck_attr :				\
-		     (((object) == compressor_object) ?			\
-		     &compressor_object_lck_attr :			\
-		      &vm_object_lck_attr)))
-#define vm_object_lock_destroy(object)	lck_rw_destroy(&(object)->Lock, &vm_object_lck_grp)
-
-#define vm_object_unlock(object)	lck_rw_done(&(object)->Lock)
-#define vm_object_lock_upgrade(object)	lck_rw_lock_shared_to_exclusive(&(object)->Lock)
-#define vm_object_lock_try_scan(object)	_vm_object_lock_try(object)
-
-/*
- * CAUTION: the following vm_object_lock_assert_held*() macros merely
- * check if anyone is holding the lock, but the holder may not necessarily
- * be the caller...
- */
-#if MACH_ASSERT || DEBUG
-#define vm_object_lock_assert_held(object) \
-	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_HELD)
-#define vm_object_lock_assert_shared(object)	\
-	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_SHARED)
-#define vm_object_lock_assert_exclusive(object) \
-	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_EXCLUSIVE)
-#define vm_object_lock_assert_notheld(object) \
-	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_NOTHELD)
-#else  /* MACH_ASSERT || DEBUG */ 
-#define vm_object_lock_assert_held(object)
-#define vm_object_lock_assert_shared(object)
-#define vm_object_lock_assert_exclusive(object)
-#define vm_object_lock_assert_notheld(object)
-#endif /* MACH_ASSERT || DEBUG */
 
 #define vm_object_round_page(x) (((vm_object_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
 #define vm_object_trunc_page(x) ((vm_object_offset_t)(x) & ~((signed)PAGE_MASK))

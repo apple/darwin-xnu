@@ -254,9 +254,11 @@ vn_setxattr(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t 
 		error = default_setxattr(vp, name, uio, options, context);
 	}
 #if CONFIG_MACF
-	if ((error == 0) && !(options & XATTR_NOSECURITY) &&
-	    (vfs_flags(vnode_mount(vp)) & MNT_MULTILABEL))
-		mac_vnode_label_update_extattr(vnode_mount(vp), vp, name);
+	if ((error == 0) && !(options & XATTR_NOSECURITY)) {
+		mac_vnode_notify_setextattr(context, vp, name, uio);
+		if (vfs_flags(vnode_mount(vp)) & MNT_MULTILABEL)
+			mac_vnode_label_update_extattr(vnode_mount(vp), vp, name);
+	}
 #endif
 out:
 	return (error);
@@ -313,9 +315,11 @@ vn_removexattr(vnode_t vp, const char * name, int options, vfs_context_t context
 #endif /* DUAL_EAS */
 	}
 #if CONFIG_MACF
-	if ((error == 0) && !(options & XATTR_NOSECURITY) &&
-	    (vfs_flags(vnode_mount(vp)) & MNT_MULTILABEL))
-		mac_vnode_label_update_extattr(vnode_mount(vp), vp, name);
+	if ((error == 0) && !(options & XATTR_NOSECURITY)) {
+		mac_vnode_notify_deleteextattr(context, vp, name);
+		if (vfs_flags(vnode_mount(vp)) & MNT_MULTILABEL)
+			mac_vnode_label_update_extattr(vnode_mount(vp), vp, name);
+	}
 #endif
 out:
 	return (error);

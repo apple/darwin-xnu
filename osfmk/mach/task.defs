@@ -450,5 +450,47 @@ routine task_swap_mach_voucher(
 		new_voucher	: ipc_voucher_t;
 	inout	old_voucher	: ipc_voucher_t);
 
+routine task_generate_corpse(
+		task		:task_t;
+	out	corpse_task_port:mach_port_t);
+
+routine task_map_corpse_info(
+		task		:task_t;
+		corspe_task	:task_t;
+	out	kcd_addr_begin	:vm_address_t;
+	out	kcd_size	:uint32_t);
+
+routine task_register_dyld_image_infos(
+        task            :task_t;
+        dyld_images     :dyld_kernel_image_info_array_t);
+
+routine task_unregister_dyld_image_infos(
+        task            :task_t;
+        dyld_images     :dyld_kernel_image_info_array_t);
+
+routine task_get_dyld_image_infos(
+        task            :task_t;
+    out dyld_images     :dyld_kernel_image_info_array_t);
+
+routine task_register_dyld_shared_cache_image_info(
+        task                :task_t;
+        dyld_cache_image    :dyld_kernel_image_info_t;
+        no_cache            :boolean_t;
+        private_cache       :boolean_t);
+
+routine task_register_dyld_set_dyld_state(
+        task           :task_t;
+        dyld_state     :uint8_t);
+
+routine task_register_dyld_get_process_state(
+        task                :task_t;
+    out dyld_process_state  :dyld_kernel_process_info_t);
+
+routine task_map_corpse_info_64(
+		task		:task_t;
+		corspe_task	:task_t;
+	out	kcd_addr_begin	:mach_vm_address_t;
+	out	kcd_size	:mach_vm_size_t);
+
 /* vim: set ft=c : */
 

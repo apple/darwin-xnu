@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -83,6 +83,7 @@
 #include <sys/kauth.h>
 
 #include <net/if.h>
+#include <net/net_kev.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -337,9 +338,6 @@ lck_mtx_t         *ipfw_mutex = &ipfw_mutex_data;
 
 extern  void    ipfwsyslog( int level, const char *format,...);
 
-#define KEV_LOG_SUBCLASS 10
-#define IPFWLOGEVENT    0
-
 #define         ipfwstring      "ipfw:"
 static          size_t		ipfwstringlen;
 
@@ -470,7 +468,7 @@ is_icmp_query(struct ip *ip)
 #undef TT
 
 static int
-Get32static_len()
+Get32static_len(void)
 {
 	int	diff;
 	int len = static_len_32;
@@ -494,7 +492,7 @@ Get32static_len()
 }
 
 static int
-Get64static_len()
+Get64static_len(void)
 {
 	int	diff;
 	int len = static_len_64;
@@ -1104,7 +1102,7 @@ verify_rev_path(struct in_addr src, struct ifnet *ifp)
 		dst->sin_len = sizeof(*dst);
 		dst->sin_addr = src;
 
-		rtalloc_ign(&ro, RTF_CLONING|RTF_PRCLONING);
+		rtalloc_ign(&ro, RTF_CLONING|RTF_PRCLONING, false);
 	}
 	if (ro.ro_rt != NULL) {
 		RT_LOCK_SPIN(ro.ro_rt);
@@ -4089,4 +4087,3 @@ ipfw_init(void)
 }
 
 #endif /* IPFW2 */
-

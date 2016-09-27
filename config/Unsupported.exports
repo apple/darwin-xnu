@@ -1,6 +1,5 @@
 _PE_i_can_has_debugger
 _Debugger
-_FastUnicodeCompare
 _KUNCExecute
 _KUNCGetNotificationID
 _KUNCUserNotificationDisplayAlert
@@ -78,9 +77,6 @@ _get_bsdtask_info
 _get_task_map
 _get_task_pmap
 _getsectdatafromheader
-_hfs_getconverter
-_hfs_pickencoding
-_hfs_relconverter
 _host_get_special_port
 _host_get_exception_ports
 _host_priv_self
@@ -125,6 +121,7 @@ _mig_dealloc_reply_port
 _mig_get_reply_port
 _mig_put_reply_port
 _mig_strncpy
+_mig_strncpy_zerofill
 _mig_user_allocate
 _mig_user_deallocate
 _ml_io_map
@@ -162,7 +159,7 @@ _task_resume
 _task_resume2
 _task_suspend
 _task_suspend2
-_thread_tid
+_thread_wakeup_thread
 _tsleep
 _ubc_cs_blob_get
 _vfs_context_current

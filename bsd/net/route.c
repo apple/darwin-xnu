@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -68,6 +68,9 @@
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/domain.h>
+#include <sys/stat.h>
+#include <sys/ubc.h>
+#include <sys/vnode.h>
 #include <sys/syslog.h>
 #include <sys/queue.h>
 #include <sys/mcache.h>
@@ -378,11 +381,12 @@ static unsigned int primary6_ifscope = IFSCOPE_NONE;
 #define	RN(r)		((struct radix_node *)r)
 #define	RT_HOST(r)	(RT(r)->rt_flags & RTF_HOST)
 
+unsigned int rt_verbose = 0;
+#if (DEVELOPMENT || DEBUG)
 SYSCTL_DECL(_net_route);
-
-unsigned int rt_verbose;	/* verbosity level (0 to disable) */
 SYSCTL_UINT(_net_route, OID_AUTO, verbose, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&rt_verbose, 0, "");
+#endif /* (DEVELOPMENT || DEBUG) */
 
 static void
 rtable_init(void **table)
@@ -905,11 +909,7 @@ rtalloc1_scoped_locked(struct sockaddr *dst, int report, uint32_t ignflags,
 	return (rtalloc1_common_locked(dst, report, ignflags, ifscope));
 }
 
-/*
- * Look up the route that matches the address given
- * Or, at least try.. Create a cloned route if needed.
- */
-static struct rtentry *
+struct rtentry *
 rtalloc1_common_locked(struct sockaddr *dst, int report, uint32_t ignflags,
     unsigned int ifscope)
 {
@@ -1007,6 +1007,7 @@ unreachable:
 	 * Which basically means "cant get there from here"
 	 */
 	rtstat.rts_unreach++;
+
 miss:
 	if (report) {
 		/*
@@ -1358,10 +1359,9 @@ rtredirect(struct ifnet *ifp, struct sockaddr *dst, struct sockaddr *gateway,
 	 * comparison against rt_gateway below.
 	 */
 #if INET6
-	if ((af == AF_INET && ip_doscopedroute) ||
-	    (af == AF_INET6 && ip6_doscopedroute))
+	if ((af == AF_INET) || (af == AF_INET6))
 #else
-	if (af == AF_INET && ip_doscopedroute)
+	if (af == AF_INET)
 #endif /* !INET6 */
 		src = sa_copy(src, &ss, &ifscope);
 
@@ -1551,19 +1551,19 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 	 */
 #if INET6
 	if (dst != NULL &&
-	    ((dst->sa_family == AF_INET && ip_doscopedroute) ||
-	    (dst->sa_family == AF_INET6 && ip6_doscopedroute)))
+	    ((dst->sa_family == AF_INET) ||
+	    (dst->sa_family == AF_INET6)))
 #else
-	if (dst != NULL && dst->sa_family == AF_INET && ip_doscopedroute)
+	if (dst != NULL && dst->sa_family == AF_INET)
 #endif /* !INET6 */
 		dst = sa_copy(SA((uintptr_t)dst), &dst_ss, NULL);
 
 #if INET6
 	if (gw != NULL &&
-	    ((gw->sa_family == AF_INET && ip_doscopedroute) ||
-	    (gw->sa_family == AF_INET6 && ip6_doscopedroute)))
+	    ((gw->sa_family == AF_INET) ||
+	    (gw->sa_family == AF_INET6)))
 #else
-	if (gw != NULL && gw->sa_family == AF_INET && ip_doscopedroute)
+	if (gw != NULL && gw->sa_family == AF_INET)
 #endif /* !INET6 */
 		gw = sa_copy(SA((uintptr_t)gw), &gw_ss, NULL);
 
@@ -1749,11 +1749,9 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 	 * routing socket request.
 	 */
 #if INET6
-	if (req != RTM_RESOLVE &&
-	    ((af == AF_INET && ip_doscopedroute) ||
-	    (af == AF_INET6 && ip6_doscopedroute))) {
+	if (req != RTM_RESOLVE && ((af == AF_INET) || (af == AF_INET6))) {
 #else
-	if (req != RTM_RESOLVE && af == AF_INET && ip_doscopedroute) {
+	if (req != RTM_RESOLVE && af == AF_INET) {
 #endif /* !INET6 */
 		/* Transform dst into the internal routing table form */
 		dst = sa_copy(dst, &ss, &ifscope);
@@ -1764,17 +1762,9 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 
 		if (ifscope != IFSCOPE_NONE)
 			flags |= RTF_IFSCOPE;
-	} else {
-		if ((flags & RTF_IFSCOPE) && (af != AF_INET && af != AF_INET6))
-			senderr(EINVAL);
-
-#if INET6
-		if ((af == AF_INET && !ip_doscopedroute) ||
-		    (af == AF_INET6 && !ip6_doscopedroute))
-#else
-		if (af == AF_INET && !ip_doscopedroute)
-#endif /* !INET6 */
-			ifscope = IFSCOPE_NONE;
+	} else if ((flags & RTF_IFSCOPE) &&
+	    (af != AF_INET && af != AF_INET6)) {
+		senderr(EINVAL);
 	}
 
 	if (ifscope == IFSCOPE_NONE)
@@ -1912,7 +1902,7 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 			senderr(EINVAL);
 		/*
 		 * According to the UNIX conformance tests, we need to return
-		 * ENETUNREACH when the parent route is RTF_REJECT. 
+		 * ENETUNREACH when the parent route is RTF_REJECT.
 		 * However, there isn't any point in cloning RTF_REJECT
 		 * routes, so we immediately return an error.
 		 */
@@ -1943,11 +1933,9 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 			flags |= RTF_HOST;
 
 #if INET6
-		if ((af != AF_INET && af != AF_INET6) ||
-		    (af == AF_INET && !ip_doscopedroute) ||
-		    (af == AF_INET6 && !ip6_doscopedroute))
+		if (af != AF_INET && af != AF_INET6)
 #else
-		if (af != AF_INET || !ip_doscopedroute)
+		if (af != AF_INET)
 #endif /* !INET6 */
 			goto makeroute;
 
@@ -2822,13 +2810,15 @@ static struct rtentry *
 rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
     struct sockaddr *netmask, struct radix_node_head *rnh, unsigned int ifscope)
 {
-	struct radix_node *rn0, *rn;
-	boolean_t dontcare;
+	struct radix_node *rn0, *rn = NULL;
 	int af = dst->sa_family;
-	struct sockaddr_storage dst_ss, mask_ss;
-	char s_dst[MAX_IPv6_STR_LEN], s_netmask[MAX_IPv6_STR_LEN];
+	struct sockaddr_storage dst_ss;
+	struct sockaddr_storage mask_ss;
+	boolean_t dontcare;
+#if (DEVELOPMENT || DEBUG)
 	char dbuf[MAX_SCOPE_ADDR_STR_LEN], gbuf[MAX_IPv6_STR_LEN];
-
+	char s_dst[MAX_IPv6_STR_LEN], s_netmask[MAX_IPv6_STR_LEN];
+#endif
 	VERIFY(!coarse || ifscope == IFSCOPE_NONE);
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
@@ -2847,11 +2837,9 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 	 * Non-scoped route lookup.
 	 */
 #if INET6
-	if ((af != AF_INET && af != AF_INET6) ||
-	    (af == AF_INET && !ip_doscopedroute) ||
-	    (af == AF_INET6 && !ip6_doscopedroute)) {
+	if (af != AF_INET && af != AF_INET6) {
 #else
-	if (af != AF_INET || !ip_doscopedroute) {
+	if (af != AF_INET) {
 #endif /* !INET6 */
 		rn = rnh->rnh_matchaddr(dst, rnh);
 
@@ -2881,6 +2869,7 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 		netmask = ma_copy(af, netmask, &mask_ss, ifscope);
 	dontcare = (ifscope == IFSCOPE_NONE);
 
+#if (DEVELOPMENT || DEBUG)
 	if (rt_verbose) {
 		if (af == AF_INET)
 			(void) inet_ntop(af, &SIN(dst)->sin_addr.s_addr,
@@ -2900,6 +2889,7 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 		printf("%s (%d, %d, %s, %s, %u)\n",
 		    __func__, lookup_only, coarse, s_dst, s_netmask, ifscope);
 	}
+#endif
 
 	/*
 	 * Scoped route lookup:
@@ -2935,7 +2925,7 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 	 */
 	if (rn != NULL) {
 		struct rtentry *rt = RT(rn);
-
+#if (DEVELOPMENT || DEBUG)
 		if (rt_verbose) {
 			rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
 			printf("%s unscoped search %p to %s->%s->%s ifa_ifp %s\n",
@@ -2945,7 +2935,9 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 			    (rt->rt_ifa->ifa_ifp != NULL) ?
 			    rt->rt_ifa->ifa_ifp->if_xname : "");
 		}
-		if (!(rt->rt_ifp->if_flags & IFF_LOOPBACK)) {
+#endif
+		if (!(rt->rt_ifp->if_flags & IFF_LOOPBACK) ||
+		    (rt->rt_flags & RTF_GATEWAY)) {
 			if (rt->rt_ifp->if_index != ifscope) {
 				/*
 				 * Wrong interface; keep the original result
@@ -2983,7 +2975,7 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 	 */
 	if (rn == NULL) {
 		rn = node_lookup(dst, netmask, ifscope);
-
+#if (DEVELOPMENT || DEBUG)
 		if (rt_verbose && rn != NULL) {
 			struct rtentry *rt = RT(rn);
 
@@ -2995,6 +2987,7 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 			    (rt->rt_ifa->ifa_ifp != NULL) ?
 			    rt->rt_ifa->ifa_ifp->if_xname : "");
 		}
+#endif
 	}
 	/*
 	 * Use the original result if either of the following is true:
@@ -3039,7 +3032,7 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 			rn = NULL;
 		}
 	}
-
+#if (DEVELOPMENT || DEBUG)
 	if (rt_verbose) {
 		if (rn == NULL)
 			printf("%s %u return NULL\n", __func__, ifscope);
@@ -3056,7 +3049,7 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 			    rt->rt_ifa->ifa_ifp->if_xname : "");
 		}
 	}
-
+#endif
 	return (RT(rn));
 }
 
@@ -3118,8 +3111,10 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 {
 	struct radix_node_head *rnh;
 	uint8_t nbuf[128];	/* long enough for IPv6 */
+#if (DEVELOPMENT || DEBUG)
 	char dbuf[MAX_IPv6_STR_LEN], gbuf[MAX_IPv6_STR_LEN];
 	char abuf[MAX_IPv6_STR_LEN];
+#endif
 	struct rtentry *rt = NULL;
 	struct sockaddr *dst;
 	struct sockaddr *netmask;
@@ -3153,6 +3148,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 		goto done;
 	}
 
+#if (DEVELOPMENT || DEBUG)
 	if (dst->sa_family == AF_INET) {
 		(void) inet_ntop(AF_INET, &SIN(dst)->sin_addr.s_addr,
 		    abuf, sizeof (abuf));
@@ -3163,6 +3159,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 		    abuf, sizeof (abuf));
 	}
 #endif /* INET6 */
+#endif /* (DEVELOPMENT || DEBUG) */	
 
 	if ((rnh = rt_tables[dst->sa_family]) == NULL) {
 		error = EINVAL;
@@ -3194,7 +3191,9 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 		 */
 		rt = rt_lookup_coarse(TRUE, dst, NULL, rnh);
 		if (rt != NULL) {
+#if (DEVELOPMENT || DEBUG)
 			rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+#endif			
 			/*
 			 * Ok so we found the rtentry. it has an extra reference
 			 * for us at this stage. we won't need that so
@@ -3209,6 +3208,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 				 * an error.  This seems to be the only point
 				 * of this whole RTM_DELETE clause.
 				 */
+#if (DEVELOPMENT || DEBUG)
 				if (rt_verbose) {
 					log(LOG_DEBUG, "%s: not removing "
 					    "route to %s->%s->%s, flags %b, "
@@ -3221,6 +3221,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 					    rt->rt_ifa),
 					    (uint64_t)VM_KERNEL_ADDRPERM(ifa));
 				}
+#endif /* (DEVELOPMENT || DEBUG) */
 				RT_REMREF_LOCKED(rt);
 				RT_UNLOCK(rt);
 				rt = NULL;
@@ -3232,6 +3233,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 				 * Don't remove the subnet/prefix route if
 				 * this was manually added from above.
 				 */
+#if (DEVELOPMENT || DEBUG)
 				if (rt_verbose) {
 					log(LOG_DEBUG, "%s: not removing "
 					    "static route to %s->%s->%s, "
@@ -3240,12 +3242,14 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 					    rt->rt_ifp->if_xname : ""),
 					    rt->rt_flags, RTF_BITS, abuf);
 				}
+#endif /* (DEVELOPMENT || DEBUG) */
 				RT_REMREF_LOCKED(rt);
 				RT_UNLOCK(rt);
 				rt = NULL;
 				error = EBUSY;
 				goto done;
 			}
+#if (DEVELOPMENT || DEBUG)
 			if (rt_verbose) {
 				log(LOG_DEBUG, "%s: removing route to "
 				    "%s->%s->%s, flags %b, ifaddr %s\n",
@@ -3254,6 +3258,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 				    rt->rt_ifp->if_xname : ""),
 				    rt->rt_flags, RTF_BITS, abuf);
 			}
+#endif /* (DEVELOPMENT || DEBUG) */
 			RT_REMREF_LOCKED(rt);
 			RT_UNLOCK(rt);
 			rt = NULL;
@@ -3267,9 +3272,9 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 		goto done;
 
 	VERIFY(rt != NULL);
-
+#if (DEVELOPMENT || DEBUG)
 	rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
-
+#endif /* (DEVELOPMENT || DEBUG) */
 	switch (cmd) {
 	case RTM_DELETE:
 		/*
@@ -3280,12 +3285,14 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 		RT_LOCK(rt);
 		rt_newaddrmsg(cmd, ifa, error, rt);
 		RT_UNLOCK(rt);
+#if (DEVELOPMENT || DEBUG)
 		if (rt_verbose) {
 			log(LOG_DEBUG, "%s: removed route to %s->%s->%s, "
 			    "flags %b, ifaddr %s\n", __func__, dbuf, gbuf,
 			    ((rt->rt_ifp != NULL) ? rt->rt_ifp->if_xname : ""),
 			    rt->rt_flags, RTF_BITS, abuf);
 		}
+#endif /* (DEVELOPMENT || DEBUG) */
 		rtfree_locked(rt);
 		break;
 
@@ -3300,20 +3307,20 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 		if (rt->rt_ifa != ifa) {
 			void (*ifa_rtrequest)
 			    (int, struct rtentry *, struct sockaddr *);
-
-			if (!(rt->rt_ifa->ifa_ifp->if_flags &
-			    (IFF_POINTOPOINT|IFF_LOOPBACK))) {
-				log(LOG_ERR, "%s: %s route to %s->%s->%s, "
-				    "flags %b, ifaddr %s, rt_ifa 0x%llx != "
-				    "ifa 0x%llx\n", __func__, rtm2str(cmd),
-				    dbuf, gbuf, ((rt->rt_ifp != NULL) ?
-				    rt->rt_ifp->if_xname : ""), rt->rt_flags,
-				    RTF_BITS, abuf,
-				    (uint64_t)VM_KERNEL_ADDRPERM(rt->rt_ifa),
-				    (uint64_t)VM_KERNEL_ADDRPERM(ifa));
-			}
-
+#if (DEVELOPMENT || DEBUG)
 			if (rt_verbose) {
+				if (!(rt->rt_ifa->ifa_ifp->if_flags &
+				    (IFF_POINTOPOINT|IFF_LOOPBACK))) {
+					log(LOG_ERR, "%s: %s route to %s->%s->%s, "
+					    "flags %b, ifaddr %s, rt_ifa 0x%llx != "
+					    "ifa 0x%llx\n", __func__, rtm2str(cmd),
+					    dbuf, gbuf, ((rt->rt_ifp != NULL) ?
+					        rt->rt_ifp->if_xname : ""), rt->rt_flags,
+					    RTF_BITS, abuf,
+					    (uint64_t)VM_KERNEL_ADDRPERM(rt->rt_ifa),
+					    (uint64_t)VM_KERNEL_ADDRPERM(ifa));
+				}
+
 				log(LOG_DEBUG, "%s: %s route to %s->%s->%s, "
 				    "flags %b, ifaddr %s, rt_ifa was 0x%llx "
 				    "now 0x%llx\n", __func__, rtm2str(cmd),
@@ -3323,6 +3330,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 				    (uint64_t)VM_KERNEL_ADDRPERM(rt->rt_ifa),
 				    (uint64_t)VM_KERNEL_ADDRPERM(ifa));
 			}
+#endif /* (DEVELOPMENT || DEBUG) */
 
 			/*
 			 * Ask that the protocol in question
@@ -3372,6 +3380,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 			if (ifa_rtrequest != NULL)
 				ifa_rtrequest(RTM_ADD, rt, NULL);
 		} else {
+#if (DEVELOPMENT || DEBUG)
 			if (rt_verbose) {
 				log(LOG_DEBUG, "%s: added route to %s->%s->%s, "
 				    "flags %b, ifaddr %s\n", __func__, dbuf,
@@ -3379,6 +3388,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 				    rt->rt_ifp->if_xname : ""), rt->rt_flags,
 				    RTF_BITS, abuf);
 			}
+#endif /* (DEVELOPMENT || DEBUG) */
 		}
 		/*
 		 * notify any listenning routing agents of the change
@@ -3593,7 +3603,7 @@ rte_if_ref(struct ifnet *ifp, int cnt)
 		ev_msg.dv[0].data_length = sizeof (struct net_event_data);
 		ev_msg.dv[0].data_ptr	= &ev_data;
 
-		kev_post_msg(&ev_msg);
+		dlil_post_complete_msg(NULL, &ev_msg);
 	}
 }
 

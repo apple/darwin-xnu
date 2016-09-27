@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
  * Reserved.  This file contains Original Code and/or Modifications of
  * Original Code as defined in and that are subject to the Apple Public
@@ -10,7 +10,7 @@
  * except in compliance with the License.  Please obtain a copy of the
  * License at http://www.apple.com/publicsource and read it before using
  * this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -18,10 +18,10 @@
  * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
  * License for the specific language governing rights and limitations
  * under the License."
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1990 Carnegie-Mellon University
  * Copyright (c) 1989 Carnegie-Mellon University
@@ -79,7 +79,7 @@ void	put_source_file_name(FILE *fp, struct file_list *tp);
 
 
 #define next_word(fp, wd) \
-	{ register const char *word = get_word(fp); \
+	{ const char *word = get_word(fp); \
 	  if (word == (char *)EOF) \
 		return; \
 	  else \
@@ -96,7 +96,7 @@ char *allCaps(char *str);
 struct file_list *
 fl_lookup(char *file)
 {
-	register struct file_list *fp;
+	struct file_list *fp;
 
 	for (fp = ftab ; fp != 0; fp = fp->f_next) {
 		if (eq(fp->f_fn, file))
@@ -111,7 +111,7 @@ fl_lookup(char *file)
 struct file_list *
 fltail_lookup(char *file)
 {
-	register struct file_list *fp;
+	struct file_list *fp;
 
 	for (fp = ftab ; fp != 0; fp = fp->f_next) {
 		if (eq(tail(fp->f_fn), tail(file)))
@@ -126,7 +126,7 @@ fltail_lookup(char *file)
 struct file_list *
 new_fent(void)
 {
-	register struct file_list *fp;
+	struct file_list *fp;
 
 	fp = (struct file_list *) malloc(sizeof *fp);
 	fp->f_needs = 0;
@@ -152,7 +152,7 @@ get_VPATH(void)
     if ((vpath == NULL) &&
 	((vpath = getenv("VPATH")) != NULL) &&
 	(*vpath != ':')) {
-	register char *buf = malloc((unsigned)(strlen(vpath) + 2));
+	char *buf = malloc((unsigned)(strlen(vpath) + 2));
 
 	vpath = strcat(strcpy(buf, ":"), vpath);
     }
@@ -210,7 +210,7 @@ makefile(void)
 		if (*line == '%')
 			goto percent;
 		if (profiling && strncmp(line, "COPTS=", 6) == 0) {
-			register char *cp;
+			char *cp;
 			fprintf(ofp,
 				"GPROF.EX=$(SOURCE_DIR)/machdep/%s/gmon.ex\n", machinename);
 			cp = index(line, '\n');
@@ -268,9 +268,9 @@ void
 read_files(void)
 {
 	FILE *fp;
-	register struct file_list *tp, *pf;
-	register struct device *dp;
-	register struct opt *op;
+	struct file_list *tp, *pf;
+	struct device *dp;
+	struct opt *op;
 	const char *wd;
 	char *this, *needs;
 	const char *devorprof;
@@ -515,8 +515,8 @@ put_source_file_name(FILE *fp, struct file_list *tp)
 void
 do_objs(FILE *fp, const char *msg, int ext)
 {
-	register struct file_list *tp;
-	register int lpos, len;
+	struct file_list *tp;
+	int lpos, len;
 	char *cp;
 	char och;
 	const char *sp;
@@ -561,8 +561,8 @@ do_objs(FILE *fp, const char *msg, int ext)
 void
 do_files(FILE *fp, const char *msg, char ext)
 {
-	register struct file_list *tp;
-	register int lpos, len=0; /* dvw: init to 0 */
+	struct file_list *tp;
+	int lpos, len=0; /* dvw: init to 0 */
 
 	fprintf(fp, "%s", msg);
 	lpos = 8;
@@ -613,7 +613,7 @@ do_machdep(FILE *ofp)
 const char *
 tail(const char *fn)
 {
-	register const char *cp;
+	const char *cp;
 
 	cp = rindex(fn, '/');
 	if (cp == 0)
@@ -634,7 +634,7 @@ do_rules(FILE *f)
 	char *cp;
 	char *np, och;
 	const char *tp;
-	register struct file_list *ftp;
+	struct file_list *ftp;
 	const char *extras = ""; /* dvw: init to "" */
 	char *source_dir;
 	char och_upper;
@@ -713,6 +713,12 @@ do_rules(FILE *f)
 
 			fprintf(f, "\t${%c_RULE_2%s}%s\n", och_upper, extras, nl);
 			fprintf(f, "\t${%c_CTFRULE_2%s}%s\n", och_upper, extras, nl);
+			fprintf(f, "\t${%c_RULE_3%s}%s\n", och_upper, extras, nl);
+			fprintf(f, "\t${%c_RULE_4A%s}", och_upper, extras);
+			if (ftp->f_extra)
+				fprintf(f, "%s", ftp->f_extra);
+			fprintf(f, "%s%.*s${%c_RULE_4B%s}%s\n",
+					source_dir, (int)(tp-np), np, och_upper, extras, nl);
 			break;
 	
 		default:
@@ -724,10 +730,9 @@ do_rules(FILE *f)
 }
 
 char *
-allCaps(str)
-	register char *str;
+allCaps(char *str)
 {
-	register char *cp = str;
+	char *cp = str;
 
 	while (*str) {
 		if (islower(*str))
@@ -745,7 +750,7 @@ static char makbuf[LINESIZE];		/* one line buffer for makefile */
 void
 copy_dependencies(FILE *makin, FILE *makout)
 {
-	register int oldlen = (sizeof OLDSALUTATION - 1);
+	int oldlen = (sizeof OLDSALUTATION - 1);
 
 	while (fgets(makbuf, LINESIZE, makin) != NULL) {
 		if (! strncmp(makbuf, OLDSALUTATION, oldlen))

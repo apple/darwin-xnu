@@ -36,7 +36,6 @@
 #ifdef BSD_KERNEL_PRIVATE
 
 #include <netkey/key_var.h>
-#include <net/if_utun.h>
 
 /* Security Association Index */
 /* NOTE: Ensure to be same address family */
@@ -70,9 +69,6 @@ struct secashead {
 
 	struct route sa_route;		/* route cache */
 };
-
-typedef int (*utun_is_keepalive_func) __P((void *, void *, u_int16_t, u_int32_t, size_t));
-typedef int (*utun_input_func) __P((void *, void *, protocol_family_t family));
 
 /* Security Association */
 struct secasvar {
@@ -109,17 +105,13 @@ struct secasvar {
 	struct secashead *sah;		/* back pointer to the secashead */
 	
 	/* Nat Traversal related bits */
-	u_int32_t	natt_last_activity;
+	u_int64_t	natt_last_activity;
 	u_int16_t	remote_ike_port;
 	u_int16_t	natt_encapsulated_src_port;	/* network byte order */
 	u_int16_t	natt_interval; /* Interval in seconds */
 	u_int16_t	natt_offload_interval; /* Hardware Offload Interval in seconds */
 	
 	u_int8_t	always_expire; /* Send expire/delete messages even if unused */
-
-	void              *utun_pcb;
-	utun_is_keepalive_func    utun_is_keepalive_fn;
-	utun_input_func    utun_in_fn;
 };
 
 /* replay prevention */

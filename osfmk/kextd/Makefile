@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -16,7 +15,7 @@ KERNELFILES = ${MIG_DEFS}
 INSTALL_MI_LIST =
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
-INSTALL_MI_GEN_LIST = 
+INSTALL_MI_GEN_LIST =
 
 INSTALL_MI_DIR = kextd
 
@@ -28,7 +27,7 @@ EXPORT_MI_DIR = kextd
 
 #
 # Build path
-#       
+#
 INCFLAGS_MAKEFILE= -I..
 
 MIGKUFLAGS	= -DMACH_KERNEL_PRIVATE -DKERNEL_USER=1 -maxonstack 1024
@@ -42,7 +41,7 @@ COMP_FILES = ${MIG_KUSRC}
 do_build_all:: $(COMP_FILES)
 
 ${MIG_KUSRC} : kextd_mach.defs
-	@echo MIG $@
+	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}	\
 		-user    kextd_mach.c		\
 		-header  kextd_mach.h		\

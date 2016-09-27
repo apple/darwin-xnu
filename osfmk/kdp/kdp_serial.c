@@ -26,6 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include "kdp_serial.h"
+#include <libkern/zlib.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 #define SKDP_START_CHAR 0xFA
 #define SKDP_END_CHAR 0xFB
@@ -34,26 +37,47 @@
 static enum {DS_WAITSTART, DS_READING, DS_ESCAPED} dsState;
 static unsigned char dsBuffer[1518];
 static int dsPos;
+static uint32_t dsCRC;
+static bool dsHaveCRC;
+
+
+static void kdp_serial_out(unsigned char byte, void (*outFunc)(char))
+{
+	//need to escape '\n' because the kernel serial output turns it into a cr/lf
+	if(byte == SKDP_START_CHAR || byte == SKDP_END_CHAR || byte == SKDP_ESC_CHAR || byte == '\n')
+	{
+		outFunc(SKDP_ESC_CHAR);
+		byte = ~byte;
+	}
+	outFunc(byte);
+}
 
 void kdp_serialize_packet(unsigned char *packet, unsigned int len, void (*outFunc)(char))
 {
-	unsigned int index;
+	unsigned int  index;
+	unsigned char byte;
+	uint32_t      crc;
+
+	// insert the CRC between back to back STARTs which is compatible with old clients
+	crc = (uint32_t) z_crc32(0, packet, len);
+	outFunc(SKDP_START_CHAR);
+	kdp_serial_out((crc >> 0),  outFunc);
+	kdp_serial_out((crc >> 8),  outFunc);
+	kdp_serial_out((crc >> 16), outFunc);
+	kdp_serial_out((crc >> 24), outFunc);
+
 	outFunc(SKDP_START_CHAR);
 	for (index = 0; index < len; index++) {
-		unsigned char byte = *packet++;
-		//need to escape '\n' because the kernel serial output turns it into a cr/lf
-		if(byte == SKDP_START_CHAR || byte == SKDP_END_CHAR || byte == SKDP_ESC_CHAR || byte == '\n')
-		{
-			outFunc(SKDP_ESC_CHAR);
-			byte = ~byte;
-		}
-		outFunc(byte);
+		byte = *packet++;
+		kdp_serial_out(byte, outFunc);
 	}
 	outFunc(SKDP_END_CHAR);
 }
 
 unsigned char *kdp_unserialize_packet(unsigned char byte, unsigned int *len)
 {
+	uint32_t crc;
+
 	switch(dsState)
 	{
 		case DS_WAITSTART:
@@ -63,6 +87,7 @@ unsigned char *kdp_unserialize_packet(unsigned char byte, unsigned int *len)
 				dsState = DS_READING;
 				dsPos = 0;
 				*len = SERIALIZE_READING;
+				dsHaveCRC = false;
 				return 0;
 			}
 			*len = SERIALIZE_WAIT_START;
@@ -76,7 +101,12 @@ unsigned char *kdp_unserialize_packet(unsigned char byte, unsigned int *len)
 			}
 			if(byte == SKDP_START_CHAR)
 			{
-//				printf("unexpected start char, resetting\n");
+				if (dsPos >= 4) 
+				{
+					dsHaveCRC = true;
+					dsCRC = dsBuffer[0] | (dsBuffer[1] << 8) | (dsBuffer[2] << 16) | (dsBuffer[3] << 24);
+				}
+				//else				printf("unexpected start char, resetting\n");
 				dsPos = 0;
 				*len = SERIALIZE_READING;
 				return 0;
@@ -84,6 +114,17 @@ unsigned char *kdp_unserialize_packet(unsigned char byte, unsigned int *len)
 			if(byte == SKDP_END_CHAR)
 			{
 				dsState = DS_WAITSTART;
+				if (dsHaveCRC)
+				{
+					crc = (uint32_t) z_crc32(0, &dsBuffer[0], dsPos);
+					if (crc != dsCRC)
+					{
+//						printf("bad packet crc 0x%x != 0x%x\n", crc, dsCRC);
+						dsPos = 0;
+						*len = SERIALIZE_WAIT_START;
+						return 0;
+					}
+				}
 				*len = dsPos;
 				dsPos = 0;
 				return dsBuffer;

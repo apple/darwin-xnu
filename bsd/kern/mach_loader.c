@@ -50,6 +50,9 @@
 #include <sys/ubc_internal.h>
 #include <sys/imgact.h>
 #include <sys/codesign.h>
+#include <sys/proc_uuid_policy.h>
+#include <sys/reason.h>
+#include <sys/kdebug.h>
 
 #include <mach/mach_types.h>
 #include <mach/vm_map.h>	/* vm_allocate() */
@@ -98,21 +101,22 @@ extern kern_return_t	memory_object_signed(memory_object_control_t control,
 					     boolean_t is_signed);
 
 /* An empty load_result_t */
-static load_result_t load_result_null = {
+static const load_result_t load_result_null = {
 	.mach_header = MACH_VM_MIN_ADDRESS,
 	.entry_point = MACH_VM_MIN_ADDRESS,
 	.user_stack = MACH_VM_MIN_ADDRESS,
 	.user_stack_size = 0,
+	.user_stack_alloc = MACH_VM_MIN_ADDRESS,
+	.user_stack_alloc_size = 0,
 	.all_image_info_addr = MACH_VM_MIN_ADDRESS,
 	.all_image_info_size = 0,
 	.thread_count = 0,
 	.unixproc = 0,
 	.dynlinker = 0,
 	.needs_dynlinker = 0,
-	.prog_allocated_stack = 0,
-	.prog_stack_size = 0,
 	.validentry = 0,
 	.using_lcmain = 0,
+	.is64bit = 0,
 	.csflags = 0,
 	.has_pagezero = 0,
 	.uuid = { 0 },
@@ -136,8 +140,10 @@ parse_machfile(
 	off_t			macho_size,
 	int			depth,
 	int64_t			slide,
-	int64_t			dyld_slide,	
-	load_result_t		*result
+	int64_t			dyld_slide,
+	load_result_t		*result,
+	load_result_t		*binresult,
+	struct image_params	*imgp
 );
 
 static load_return_t
@@ -167,7 +173,8 @@ load_code_signature(
 	off_t				macho_offset,
 	off_t				macho_size,
 	cpu_type_t			cputype,
-	load_result_t			*result);
+	load_result_t			*result,
+	struct image_params		*imgp);
 	
 #if CONFIG_CODE_DECRYPTION
 static load_return_t
@@ -210,10 +217,11 @@ load_threadstate(
 static load_return_t
 load_threadstack(
 	thread_t		thread,
-	uint32_t	*ts,
-	uint32_t	total_size,
+	uint32_t		*ts,
+	uint32_t		total_size,
 	mach_vm_offset_t	*user_stack,
-	int				*customstack
+	int			*customstack,
+	load_result_t 		*result
 );
 
 static load_return_t
@@ -228,11 +236,12 @@ static load_return_t
 load_dylinker(
 	struct dylinker_command	*lcp,
 	integer_t		archbits,
-	vm_map_t				map,
-	thread_t			thread,
-	int						depth,
+	vm_map_t		map,
+	thread_t		thread,
+	int			depth,
 	int64_t			slide,
-	load_result_t			*result
+	load_result_t		*result,
+	struct image_params	*imgp
 );
 
 struct macho_data;
@@ -329,6 +338,8 @@ load_machfile(
 		create_map = TRUE;
 	}
 
+	result->is64bit = ((imgp->ip_flags & IMGPF_IS_64BIT) == IMGPF_IS_64BIT);
+
 	/*
 	 * If we are spawning, we have created backing objects for the process
 	 * already, which include non-lazily creating the task map.  So we
@@ -348,11 +359,10 @@ load_machfile(
 		}
 		pmap = pmap_create(get_task_ledger(ledger_task),
 				   (vm_map_size_t) 0,
-				   ((imgp->ip_flags & IMGPF_IS_64BIT) != 0));
-		pal_switch_pmap(thread, pmap, imgp->ip_flags & IMGPF_IS_64BIT);
+				   result->is64bit);
 		map = vm_map_create(pmap,
 				0,
-				vm_compute_max_offset(((imgp->ip_flags & IMGPF_IS_64BIT) == IMGPF_IS_64BIT)),
+				vm_compute_max_offset(result->is64bit),
 				TRUE);
 	} else
 		map = new_map;
@@ -399,8 +409,14 @@ load_machfile(
 
 	*result = load_result_null;
 
+	/*
+	 * re-set the bitness on the load result since we cleared the load result above.
+	 */
+	result->is64bit = ((imgp->ip_flags & IMGPF_IS_64BIT) == IMGPF_IS_64BIT);
+
 	lret = parse_machfile(vp, map, thread, header, file_offset, macho_size,
-	                      0, (int64_t)aslr_offset, (int64_t)dyld_aslr_offset, result);
+	                      0, (int64_t)aslr_offset, (int64_t)dyld_aslr_offset, result,
+			      NULL, imgp);
 
 	if (lret != LOAD_SUCCESS) {
 		if (create_map) {
@@ -413,7 +429,7 @@ load_machfile(
 	/*
 	 * On x86, for compatibility, don't enforce the hard page-zero restriction for 32-bit binaries.
 	 */
-	if ((imgp->ip_flags & IMGPF_IS_64BIT) == 0) {
+	if (!result->is64bit) {
 		enforce_hard_pagezero = FALSE;
 	}
 #endif
@@ -429,6 +445,8 @@ load_machfile(
 			return (LOAD_BADMACHO);
 		}
 	}
+
+	vm_commit_pagezero_status(map);
 
 	if (create_map) {
 		/*
@@ -504,7 +522,9 @@ parse_machfile(
 	int			depth,
 	int64_t			aslr_offset,
 	int64_t			dyld_aslr_offset,
-	load_result_t		*result
+	load_result_t		*result,
+	load_result_t		*binresult,
+	struct image_params	*imgp
 )
 {
 	uint32_t		ncmds;
@@ -525,7 +545,12 @@ parse_machfile(
 	size_t			mach_header_sz = sizeof(struct mach_header);
 	boolean_t		abi64;
 	boolean_t		got_code_signatures = FALSE;
+	boolean_t		found_header_segment = FALSE;
+	boolean_t		found_xhdr = FALSE;
 	int64_t			slide = 0;
+	boolean_t		dyld_no_load_addr = FALSE;
+	boolean_t		is_dyld = FALSE;
+	vm_map_offset_t		effective_page_mask = MAX(PAGE_MASK, vm_map_page_mask(map));
 
 	if (header->magic == MH_MAGIC_64 ||
 	    header->magic == MH_CIGAM_64) {
@@ -563,6 +588,7 @@ parse_machfile(
 		if (depth != 2) {
 			return (LOAD_FAILURE);
 		}
+		is_dyld = TRUE;
 		break;
 		
 	default:
@@ -616,11 +642,11 @@ parse_machfile(
 	/*
 	 *	For PIE and dyld, slide everything by the ASLR offset.
 	 */
-	if ((header->flags & MH_PIE) || (header->filetype == MH_DYLINKER)) {
+	if ((header->flags & MH_PIE) || is_dyld) {
 		slide = aslr_offset;
 	}
 
-	 /*
+	/*
 	 *  Scan through the commands, processing each one as necessary.
 	 *  We parse in three passes through the headers:
 	 *  0: determine if TEXT and DATA boundary can be page-aligned
@@ -628,14 +654,25 @@ parse_machfile(
 	 *  2: segments
 	 *  3: dyld, encryption, check entry point
 	 */
-	
+
+	boolean_t slide_realign = FALSE;
+
 	for (pass = 0; pass <= 3; pass++) {
 
-		if (pass == 0) {
-			/* see if we need to adjust the slide to re-align... */
-			/* no re-alignment needed on X86_64 or ARM32 kernel */
+		if (pass == 0 && !slide_realign && !is_dyld) {
+			/* if we dont need to realign the slide or determine dyld's load
+			 * address, pass 0 can be skipped */
 			continue;
 		} else if (pass == 1) {
+
+			if (dyld_no_load_addr && binresult) {
+				/*
+				 * The dyld Mach-O does not specify a load address. Try to locate
+				 * it right after the main binary. If binresult == NULL, load
+				 * directly to the given slide.
+				 */
+				slide = vm_map_round_page(slide + binresult->max_vm_addr, effective_page_mask);
+			}
 		}
 
 		/*
@@ -644,6 +681,15 @@ parse_machfile(
 		if ((pass == 3) && (!result->using_lcmain && result->validentry == 0)) {
 			thread_state_initialize(thread);
 			ret = LOAD_FAILURE;
+			break;
+		}
+
+		/*
+		 * Check that some segment maps the start of the mach-o file, which is
+		 * needed by the dynamic loader to read the mach headers, etc.
+		 */
+		if ((pass == 3) && (found_header_segment == FALSE)) {
+			ret = LOAD_BADMACHO;
 			break;
 		}
 
@@ -684,9 +730,23 @@ parse_machfile(
 			 * intervention is required.
 			 */
 			switch(lcp->cmd) {
-			case LC_SEGMENT:
+			case LC_SEGMENT: {
+				struct segment_command *scp = (struct segment_command *) lcp;
+
 				if (pass == 0) {
+					if (is_dyld && scp->vmaddr == 0 && scp->fileoff == 0) {
+						dyld_no_load_addr = TRUE;
+						if (!slide_realign) {
+							/* got what we need, bail early on pass 0 */
+							continue;
+						}
+					}
+
 					break;
+				}
+
+				if (pass == 1 && !strncmp(scp->segname, "__XHDR", sizeof(scp->segname))) {
+					found_xhdr = TRUE;
 				}
 
 				if (pass != 2)
@@ -710,8 +770,37 @@ parse_machfile(
 				                   map,
 				                   slide,
 				                   result);
+
+				if (ret == LOAD_SUCCESS && scp->fileoff == 0 && scp->filesize > 0) {
+					/* Enforce a single segment mapping offset zero, with R+X
+					 * protection. */
+					if (found_header_segment ||
+							((scp->initprot & (VM_PROT_READ|VM_PROT_EXECUTE)) != (VM_PROT_READ|VM_PROT_EXECUTE))) {
+						ret = LOAD_BADMACHO;
+						break;
+					}
+					found_header_segment = TRUE;
+				}
+
 				break;
-			case LC_SEGMENT_64:
+			}
+			case LC_SEGMENT_64: {
+				struct segment_command_64 *scp64 = (struct segment_command_64 *) lcp;
+
+				if (pass == 0) {
+					if (is_dyld && scp64->vmaddr == 0 && scp64->fileoff == 0) {
+						dyld_no_load_addr = TRUE;
+						if (!slide_realign) {
+							/* got what we need, bail early on pass 0 */
+							continue;
+						}
+					}
+				}
+
+				if (pass == 1 && !strncmp(scp64->segname, "__XHDR", sizeof(scp64->segname))) {
+					found_xhdr = TRUE;
+				}
+
 				if (pass != 2)
 					break;
 
@@ -733,7 +822,20 @@ parse_machfile(
 				                   map,
 				                   slide,
 				                   result);
+
+				if (ret == LOAD_SUCCESS && scp64->fileoff == 0 && scp64->filesize > 0) {
+					/* Enforce a single segment mapping offset zero, with R+X
+					 * protection. */
+					if (found_header_segment ||
+							((scp64->initprot & (VM_PROT_READ|VM_PROT_EXECUTE)) != (VM_PROT_READ|VM_PROT_EXECUTE))) {
+						ret = LOAD_BADMACHO;
+						break;
+					}
+					found_header_segment = TRUE;
+				}
+
 				break;
+			}
 			case LC_UNIXTHREAD:
 				if (pass != 1)
 					break;
@@ -785,7 +887,8 @@ parse_machfile(
 					file_offset,
 					macho_size,
 					header->cputype,
-					result);
+					result,
+					imgp);
 				if (ret != LOAD_SUCCESS) {
 					printf("proc %d: load code signature error %d "
 					       "for file \"%s\"\n",
@@ -803,22 +906,21 @@ parse_machfile(
 				if (got_code_signatures) {
 					unsigned tainted = CS_VALIDATE_TAINTED;
 					boolean_t valid = FALSE;
-					struct cs_blob *blobs;
 					vm_size_t off = 0;
 
 
 					if (cs_debug > 10)
 						printf("validating initial pages of %s\n", vp->v_name);
-					blobs = ubc_get_cs_blobs(vp);
 					
 					while (off < size && ret == LOAD_SUCCESS) {
 					     tainted = CS_VALIDATE_TAINTED;
 
-					     valid = cs_validate_page(blobs,
-								      NULL,
-								      file_offset + off,
-								      addr + off,
-								      &tainted);
+					     valid = cs_validate_range(vp,
+								       NULL,
+								       file_offset + off,
+								       addr + off,
+								       PAGE_SIZE,
+								       &tainted);
 					     if (!valid || (tainted & CS_VALIDATE_TAINTED)) {
 						     if (cs_debug)
 							     printf("CODE SIGNING: %s[%d]: invalid initial page at offset %lld validated:%d tainted:%d csflags:0x%x\n", 
@@ -844,6 +946,7 @@ parse_machfile(
 					addr, map, slide, vp, file_offset,
 					header->cputype, header->cpusubtype);
 				if (ret != LOAD_SUCCESS) {
+					os_reason_t load_failure_reason = OS_REASON_NULL;
 					printf("proc %d: set_code_unprotect() error %d "
 					       "for file \"%s\"\n",
 					       p->p_pid, ret, vp->v_name);
@@ -858,8 +961,19 @@ parse_machfile(
 						proc_lock(p);
 						p->p_lflag |= P_LTERM_DECRYPTFAIL;
 						proc_unlock(p);
+
+						KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
+								p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_FAIRPLAY_DECRYPT, 0, 0);
+						load_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_FAIRPLAY_DECRYPT);
+					 } else {
+
+						KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
+								p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_DECRYPT, 0, 0);
+						load_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_DECRYPT);
 					 }
-					 psignal(p, SIGKILL);
+
+					 assert(load_failure_reason != OS_REASON_NULL);
+					 psignal_with_reason(p, SIGKILL, load_failure_reason);
 				}
 				break;
 #endif
@@ -891,7 +1005,7 @@ parse_machfile(
 				if (blob != NULL) {
 					unsigned int cs_flag_data = blob->csb_flags;
 					if(0 != ubc_cs_generation_check(vp)) {
-						if (0 != ubc_cs_blob_revalidate(vp, blob, 0)) {
+						if (0 != ubc_cs_blob_revalidate(vp, blob, imgp, 0)) {
 							/* clear out the flag data if revalidation fails */
 							cs_flag_data = 0;
 							result->csflags &= ~CS_VALID;
@@ -914,18 +1028,23 @@ parse_machfile(
 			 * offset regardless of the PIE-ness of the main binary.
 			 */
 			ret = load_dylinker(dlp, dlarchbits, map, thread, depth,
-					    dyld_aslr_offset, result);
+					    dyld_aslr_offset, result, imgp);
 		}
-		
-		if((ret == LOAD_SUCCESS) && (depth == 1)) {
+
+		if ((ret == LOAD_SUCCESS) && (depth == 1)) {
 			if (result->thread_count == 0) {
 				ret = LOAD_FAILURE;
 			}
 	    }
 	}
 
-	if (kl_addr )
+	if (ret == LOAD_BADMACHO && found_xhdr) {
+		ret = LOAD_BADMACHO_UPX;
+	}
+
+	if (kl_addr) {
 		kfree(kl_addr, kl_size);
+	}
 
 	return(ret);
 }
@@ -977,14 +1096,18 @@ unprotect_dsmos_segment(
 		crypt_info.crypt_ops = (void *)0x2e69cf40;
 		vm_map_offset_t crypto_backing_offset;
 		crypto_backing_offset = -1; /* i.e. use map entry's offset */
-#if DEVELOPMENT || DEBUG
-		struct proc *p;
-		p = current_proc();
-		printf("APPLE_PROTECT: %d[%s] map %p [0x%llx:0x%llx] %s(%s)\n",
-		       p->p_pid, p->p_comm, map,
-		       (uint64_t) map_addr, (uint64_t) (map_addr + map_size),
-		       __FUNCTION__, vp->v_name);
-#endif /* DEVELOPMENT || DEBUG */
+#if VM_MAP_DEBUG_APPLE_PROTECT
+		if (vm_map_debug_apple_protect) {
+			struct proc *p;
+			p = current_proc();
+			printf("APPLE_PROTECT: %d[%s] map %p "
+			       "[0x%llx:0x%llx] %s(%s)\n",
+			       p->p_pid, p->p_comm, map,
+			       (uint64_t) map_addr,
+			       (uint64_t) (map_addr + map_size),
+			       __FUNCTION__, vp->v_name);
+		}
+#endif /* VM_MAP_DEBUG_APPLE_PROTECT */
 
 		/* The DSMOS pager can only be used by apple signed code */
 		struct cs_blob * blob = csvnode_get_blob(vp, file_off);
@@ -1497,18 +1620,30 @@ load_main(
 	if (thread == THREAD_NULL)
 		return (LOAD_SUCCESS);
 	
-	/* LC_MAIN specifies stack size but not location */
+	/*
+	 * LC_MAIN specifies stack size but not location.
+	 * Add guard page to allocation size (MAXSSIZ includes guard page).
+	 */
 	if (epc->stacksize) {
-		result->prog_stack_size = 1;
+		if (os_add_overflow(epc->stacksize, 4*PAGE_SIZE, &result->user_stack_size)) {
+			/*
+			 * We are going to immediately throw away this result, but we want
+			 * to make sure we aren't loading a dangerously close to
+			 * overflowing value, since this will have a guard page added to it
+			 * and be rounded to page boundaries
+			 */
+			return LOAD_BADMACHO;
+		}
 		result->user_stack_size = epc->stacksize;
+		if (os_add_overflow(epc->stacksize, PAGE_SIZE, &result->user_stack_alloc_size)) {
+			return LOAD_BADMACHO;
+		}
 	} else {
-		result->prog_stack_size = 0;
-		result->user_stack_size = MAXSSIZ;
+		result->user_stack_alloc_size = MAXSSIZ;
 	}
-	result->prog_allocated_stack = 0;
 
 	/* use default location for stack */
-	ret = thread_userstackdefault(thread, &addr);
+	ret = thread_userstackdefault(&addr, result->is64bit);
 	if (ret != KERN_SUCCESS)
 		return(LOAD_FAILURE);
 
@@ -1524,6 +1659,12 @@ load_main(
 	/* kernel does *not* use entryoff from LC_MAIN.	 Dyld uses it. */
 	result->needs_dynlinker = TRUE;
 	result->using_lcmain = TRUE;
+
+	ret = thread_state_initialize( thread );
+	if (ret != KERN_SUCCESS) {
+		return(LOAD_FAILURE);
+	}
+
 	result->unixproc = TRUE;
 	result->thread_count++;
 
@@ -1557,20 +1698,14 @@ load_unixthread(
 		       (uint32_t *)(((vm_offset_t)tcp) + 
 		       		sizeof(struct thread_command)),
 		       tcp->cmdsize - sizeof(struct thread_command),
-		       &addr,
-			   &customstack);
+		       &addr, &customstack, result);
 	if (ret != LOAD_SUCCESS)
 		return(ret);
 
 	/* LC_UNIXTHREAD optionally specifies stack size and location */
     
-	if (customstack) {
-		result->prog_stack_size = 0;	/* unknown */
-		result->prog_allocated_stack = 1;
-	} else {
-		result->prog_allocated_stack = 0;
-		result->prog_stack_size = 0;
-		result->user_stack_size = MAXSSIZ;
+	if (!customstack) {
+		result->user_stack_alloc_size = MAXSSIZ;
 	}
 
 	/* The stack slides down from the default location */
@@ -1644,8 +1779,7 @@ load_threadstate(
 		flavor = *ts++;
 		size = *ts++;
 
-		if (os_add_overflow(size, UINT32_C(2), &thread_size) ||
-		    os_mul_overflow(thread_size, (uint32_t)sizeof(uint32_t), &thread_size) ||
+		if (os_add_and_mul_overflow(size, 2, sizeof(uint32_t), &thread_size) ||
 		    os_sub_overflow(total_size, thread_size, &total_size)) {
 			ret = LOAD_BADMACHO;
 			goto bad;
@@ -1668,11 +1802,12 @@ bad:
 static
 load_return_t
 load_threadstack(
-	thread_t	thread,
-	uint32_t	*ts,
-	uint32_t	total_size,
+	thread_t		thread,
+	uint32_t		*ts,
+	uint32_t		total_size,
 	mach_vm_offset_t	*user_stack,
-	int *customstack
+	int			*customstack,
+	load_result_t		*result
 )
 {
 	kern_return_t	ret;
@@ -1696,7 +1831,7 @@ load_threadstack(
 		 * to the appropriate type in thread_userstack() based on
 		 * the value of flavor.
 		 */
-		ret = thread_userstack(thread, flavor, (thread_state_t)ts, size, user_stack, customstack);
+		ret = thread_userstack(thread, flavor, (thread_state_t)ts, size, user_stack, customstack, result->is64bit);
 		if (ret != KERN_SUCCESS) {
 			return(LOAD_FAILURE);
 		}
@@ -1758,6 +1893,11 @@ struct macho_data {
 
 #define DEFAULT_DYLD_PATH "/usr/lib/dyld"
 
+#if (DEVELOPMENT || DEBUG)
+extern char dyld_alt_path[];
+extern int use_alt_dyld;
+#endif
+
 static load_return_t
 load_dylinker(
 	struct dylinker_command	*lcp,
@@ -1766,7 +1906,8 @@ load_dylinker(
 	thread_t	thread,
 	int			depth,
 	int64_t			slide,
-	load_result_t		*result
+	load_result_t		*result,
+	struct image_params	*imgp
 )
 {
 	char			*name;
@@ -1788,6 +1929,7 @@ load_dylinker(
 		return (LOAD_BADMACHO);
 
 	name = (char *)lcp + lcp->name.offset;
+
 	/*
 	 *	Check for a proper null terminated string.
 	 */
@@ -1796,6 +1938,29 @@ load_dylinker(
 		if (p >= (char *)lcp + lcp->cmdsize)
 			return(LOAD_BADMACHO);
 	} while (*p++);
+
+#if (DEVELOPMENT || DEBUG)
+
+    /*
+     * rdar://23680808
+     * If an alternate dyld has been specified via boot args, check
+     * to see if PROC_UUID_ALT_DYLD_POLICY has been set on this
+     * executable and redirect the kernel to load that linker.
+     */
+
+    if (use_alt_dyld) {
+        int policy_error;
+        uint32_t policy_flags = 0;
+        int32_t policy_gencount = 0;
+        
+        policy_error = proc_uuid_policy_lookup(result->uuid, &policy_flags, &policy_gencount);
+        if (policy_error == 0) {
+            if (policy_flags & PROC_UUID_ALT_DYLD_POLICY) {
+                name = dyld_alt_path;
+            }
+        }
+    }
+#endif
 
 #if !(DEVELOPMENT || DEBUG)
 	if (0 != strcmp(name, DEFAULT_DYLD_PATH)) {
@@ -1816,78 +1981,10 @@ load_dylinker(
 		goto novp_out;
 
 	*myresult = load_result_null;
-
-	/*
-	 *	First try to map dyld in directly.  This should work most of
-	 *	the time since there shouldn't normally be something already
-	 *	mapped to its address.
-	 */
+	myresult->is64bit = result->is64bit;
 
 	ret = parse_machfile(vp, map, thread, header, file_offset,
-	                     macho_size, depth, slide, 0, myresult);
-
-	/*
-	 *	If it turned out something was in the way, then we'll take
-	 *	take this longer path to preflight dyld's vm ranges, then
-	 *	map it at a free location in the address space.
-	 */
-
-	if (ret == LOAD_NOSPACE) {
-		mach_vm_offset_t	dyl_start, map_addr;
-		mach_vm_size_t	dyl_length;
-		int64_t			slide_amount;
-
-		*myresult = load_result_null;
-
-		/*
-		 * Preflight parsing the Mach-O file with a NULL
-		 * map, which will return the ranges needed for a
-		 * subsequent map attempt (with a slide) in "myresult"
-		 */
-		ret = parse_machfile(vp, VM_MAP_NULL, THREAD_NULL, header,
-		                     file_offset, macho_size, depth,
-		                     0 /* slide */, 0, myresult);
-
-		if (ret != LOAD_SUCCESS) {
-			goto out;
-		}
-
-		dyl_start = myresult->min_vm_addr;
-		dyl_length = myresult->max_vm_addr - myresult->min_vm_addr;
-
-		dyl_length += slide;
-
-		/* To find an appropriate load address, do a quick allocation */
-		map_addr = dyl_start;
-		ret = mach_vm_allocate(map, &map_addr, dyl_length, VM_FLAGS_ANYWHERE);
-		if (ret != KERN_SUCCESS) {
-			ret = LOAD_NOSPACE;
-			goto out;
-		}
-
-		ret = mach_vm_deallocate(map, map_addr, dyl_length);
-		if (ret != KERN_SUCCESS) {
-			ret = LOAD_NOSPACE;
-			goto out;
-		}
-		
-		if (map_addr < dyl_start)
-			slide_amount = -(int64_t)(dyl_start - map_addr);
-		else
-			slide_amount = (int64_t)(map_addr - dyl_start);
-
-		slide_amount += slide;
-
-		*myresult = load_result_null;
-
-		ret = parse_machfile(vp, map, thread, header,
-		                     file_offset, macho_size, depth,
-		                     slide_amount, 0, myresult);
-
-		if (ret) {
-			goto out;
-		}
-	}
+	                     macho_size, depth, slide, 0, myresult, result, imgp);
 
 	if (ret == LOAD_SUCCESS) {
 		if (result->threadstate) {
@@ -1906,7 +2003,7 @@ load_dylinker(
 			result->csflags |= CS_DYLD_PLATFORM;
 		}
 	}
-out:
+
 	vnode_put(vp);
 novp_out:
 	FREE(dyld_data, M_TEMP);
@@ -1921,7 +2018,8 @@ load_code_signature(
 	off_t				macho_offset,
 	off_t				macho_size,
 	cpu_type_t			cputype,
-	load_result_t			*result)
+	load_result_t			*result,
+	struct image_params		*imgp)
 {
 	int		ret;
 	kern_return_t	kr;
@@ -1948,7 +2046,7 @@ load_code_signature(
 		    blob->csb_mem_size == lcp->datasize) {
 			/* it matches the blob we want here, lets verify the version */
 			if(0 != ubc_cs_generation_check(vp)) {
-				if (0 != ubc_cs_blob_revalidate(vp, blob, 0)) {
+				if (0 != ubc_cs_blob_revalidate(vp, blob, imgp, 0)) {
 					ret = LOAD_FAILURE; /* set error same as from ubc_cs_blob_add */
 					goto out;
 				}
@@ -1987,10 +2085,14 @@ load_code_signature(
 	if (ubc_cs_blob_add(vp,
 			    cputype,
 			    macho_offset,
-			    addr,
+			    &addr,
 			    lcp->datasize,
+			    imgp,
 			    0,
 			    &blob)) {
+		if (addr) {
+			ubc_cs_blob_deallocate(addr, blob_size);
+		}
 		ret = LOAD_FAILURE;
 		goto out;
 	} else {
@@ -2083,12 +2185,14 @@ set_code_unprotect(
 		.cputype = cputype,
 		.cpusubtype = cpusubtype};
 	kr=text_crypter_create(&crypt_info, cryptname, (void*)&crypt_data);
-#if DEVELOPMENT || DEBUG
-	struct proc *p;
-	p  = current_proc();
-	printf("APPLE_PROTECT: %d[%s] map %p %s(%s) -> 0x%x\n",
-	       p->p_pid, p->p_comm, map, __FUNCTION__, vpath, kr);
-#endif /* DEVELOPMENT || DEBUG */
+#if VM_MAP_DEBUG_APPLE_PROTECT
+	if (vm_map_debug_apple_protect) {
+		struct proc *p;
+		p  = current_proc();
+		printf("APPLE_PROTECT: %d[%s] map %p %s(%s) -> 0x%x\n",
+		       p->p_pid, p->p_comm, map, __FUNCTION__, vpath, kr);
+	}
+#endif /* VM_MAP_DEBUG_APPLE_PROTECT */
 	FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
 	
 	if(kr) {

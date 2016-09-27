@@ -92,11 +92,13 @@ decl_simple_lock_data(static,pset_node_lock)
 
 queue_head_t			tasks;
 queue_head_t			terminated_tasks;	/* To be used ONLY for stackshot. */
+queue_head_t			corpse_tasks;
 int						tasks_count;
 int						terminated_tasks_count;
 queue_head_t			threads;
 int						threads_count;
 decl_lck_mtx_data(,tasks_threads_lock)
+decl_lck_mtx_data(,tasks_corpse_lock)
 
 processor_t				processor_list;
 unsigned int			processor_count;
@@ -120,6 +122,7 @@ processor_bootstrap(void)
 	queue_init(&tasks);
 	queue_init(&terminated_tasks);
 	queue_init(&threads);
+	queue_init(&corpse_tasks);
 
 	simple_lock_init(&processor_list_lock, 0);
 
@@ -151,6 +154,8 @@ processor_init(
 	processor->processor_set = pset;
 	processor->current_pri = MINPRI;
 	processor->current_thmode = TH_MODE_NONE;
+	processor->current_sfi_class = SFI_CLASS_KERNEL;
+	processor->starting_pri = MINPRI;
 	processor->cpu_id = cpu_id;
 	timer_call_setup(&processor->quantum_timer, thread_quantum_expire, processor);
 	processor->quantum_end = UINT64_MAX;
@@ -159,7 +164,7 @@ processor_init(
 	processor->processor_primary = processor; /* no SMT relationship known at this point */
 	processor->processor_secondary = NULL;
 	processor->is_SMT = FALSE;
-	processor->is_recommended = TRUE;
+	processor->is_recommended = (pset->recommended_bitmask & (1ULL << cpu_id)) ? TRUE : FALSE;
 	processor->processor_self = IP_NULL;
 	processor_data_init(processor);
 	processor->processor_list = NULL;
@@ -267,6 +272,7 @@ pset_init(
 	pset->online_processor_count = 0;
 	pset->cpu_set_low = pset->cpu_set_hi = 0;
 	pset->cpu_set_count = 0;
+	pset->recommended_bitmask = ~0ULL;
 	pset->pending_AST_cpu_mask = 0;
 #if defined(CONFIG_SCHED_DEFERRED_AST)
 	pset->pending_deferred_AST_cpu_mask = 0;
@@ -303,13 +309,13 @@ processor_info_count(
 
 kern_return_t
 processor_info(
-	register processor_t	processor,
+	processor_t	processor,
 	processor_flavor_t		flavor,
 	host_t					*host,
 	processor_info_t		info,
 	mach_msg_type_number_t	*count)
 {
-	register int	cpu_id, state;
+	int	cpu_id, state;
 	kern_return_t	result;
 
 	if (processor == PROCESSOR_NULL)
@@ -321,7 +327,7 @@ processor_info(
 
 	case PROCESSOR_BASIC_INFO:
 	{
-		register processor_basic_info_t		basic_info;
+		processor_basic_info_t		basic_info;
 
 		if (*count < PROCESSOR_BASIC_INFO_COUNT)
 			return (KERN_FAILURE);
@@ -603,7 +609,7 @@ processor_set_info(
 		return(KERN_INVALID_ARGUMENT);
 
 	if (flavor == PROCESSOR_SET_BASIC_INFO) {
-		register processor_set_basic_info_t	basic_info;
+		processor_set_basic_info_t	basic_info;
 
 		if (*count < PROCESSOR_SET_BASIC_INFO_COUNT)
 			return(KERN_FAILURE);
@@ -617,7 +623,7 @@ processor_set_info(
 		return(KERN_SUCCESS);
 	}
 	else if (flavor == PROCESSOR_SET_TIMESHARE_DEFAULT) {
-		register policy_timeshare_base_t	ts_base;
+		policy_timeshare_base_t	ts_base;
 
 		if (*count < POLICY_TIMESHARE_BASE_COUNT)
 			return(KERN_FAILURE);
@@ -630,7 +636,7 @@ processor_set_info(
 		return(KERN_SUCCESS);
 	}
 	else if (flavor == PROCESSOR_SET_FIFO_DEFAULT) {
-		register policy_fifo_base_t		fifo_base;
+		policy_fifo_base_t		fifo_base;
 
 		if (*count < POLICY_FIFO_BASE_COUNT)
 			return(KERN_FAILURE);
@@ -643,7 +649,7 @@ processor_set_info(
 		return(KERN_SUCCESS);
 	}
 	else if (flavor == PROCESSOR_SET_RR_DEFAULT) {
-		register policy_rr_base_t		rr_base;
+		policy_rr_base_t		rr_base;
 
 		if (*count < POLICY_RR_BASE_COUNT)
 			return(KERN_FAILURE);
@@ -657,7 +663,7 @@ processor_set_info(
 		return(KERN_SUCCESS);
 	}
 	else if (flavor == PROCESSOR_SET_TIMESHARE_LIMITS) {
-		register policy_timeshare_limit_t	ts_limit;
+		policy_timeshare_limit_t	ts_limit;
 
 		if (*count < POLICY_TIMESHARE_LIMIT_COUNT)
 			return(KERN_FAILURE);
@@ -670,7 +676,7 @@ processor_set_info(
 		return(KERN_SUCCESS);
 	}
 	else if (flavor == PROCESSOR_SET_FIFO_LIMITS) {
-		register policy_fifo_limit_t		fifo_limit;
+		policy_fifo_limit_t		fifo_limit;
 
 		if (*count < POLICY_FIFO_LIMIT_COUNT)
 			return(KERN_FAILURE);
@@ -683,7 +689,7 @@ processor_set_info(
 		return(KERN_SUCCESS);
 	}
 	else if (flavor == PROCESSOR_SET_RR_LIMITS) {
-		register policy_rr_limit_t		rr_limit;
+		policy_rr_limit_t		rr_limit;
 
 		if (*count < POLICY_RR_LIMIT_COUNT)
 			return(KERN_FAILURE);
@@ -696,7 +702,7 @@ processor_set_info(
 		return(KERN_SUCCESS);
 	}
 	else if (flavor == PROCESSOR_SET_ENABLED_POLICIES) {
-		register int				*enabled;
+		int				*enabled;
 
 		if (*count < (sizeof(*enabled)/sizeof(int)))
 			return(KERN_FAILURE);
@@ -730,7 +736,7 @@ processor_set_statistics(
 		return (KERN_INVALID_PROCESSOR_SET);
 
 	if (flavor == PROCESSOR_SET_LOAD_INFO) {
-		register processor_set_load_info_t     load_info;
+		processor_set_load_info_t     load_info;
 
 		if (*count < PROCESSOR_SET_LOAD_INFO_COUNT)
 			return(KERN_FAILURE);
@@ -807,7 +813,7 @@ processor_set_things(
 	mach_msg_type_number_t *count,
 	int type)
 {
-	unsigned int i , j, used;
+	unsigned int i;
 	task_t task;
 	thread_t thread;
 
@@ -926,6 +932,8 @@ processor_set_things(
 	lck_mtx_unlock(&tasks_threads_lock);
 
 #if CONFIG_MACF
+	unsigned int j, used;
+
 	/* for each task, make sure we are allowed to examine it */
 	for (i = used = 0; i < actual_tasks; i++) {
 		if (mac_task_check_expose_task(task_list[i])) {

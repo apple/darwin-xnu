@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2016 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$KAME: keydb.c,v 1.61 2000/03/25 07:24:13 sumikawa Exp $	*/
 
 /*
@@ -59,7 +87,7 @@ MALLOC_DEFINE(M_SECA, "key mgmt", "security associations, key management");
  * secpolicy management
  */
 struct secpolicy *
-keydb_newsecpolicy()
+keydb_newsecpolicy(void)
 {
 	struct secpolicy *p;
 
@@ -70,10 +98,8 @@ keydb_newsecpolicy()
 }
 
 void
-keydb_delsecpolicy(p)
-	struct secpolicy *p;
+keydb_delsecpolicy(struct secpolicy *p)
 {
-
 	_FREE(p, M_SECA);
 }
 
@@ -81,7 +107,7 @@ keydb_delsecpolicy(p)
  * secashead management
  */
 struct secashead *
-keydb_newsecashead()
+keydb_newsecashead(void)
 {
 	struct secashead *p;
 	int i;
@@ -170,8 +196,7 @@ keydb_delsecasvar(p)
  * secreplay management
  */
 struct secreplay *
-keydb_newsecreplay(wsize)
-	size_t wsize;
+keydb_newsecreplay(size_t wsize)
 {
 	struct secreplay *p;
 	
@@ -205,10 +230,8 @@ keydb_newsecreplay(wsize)
 }
 
 void
-keydb_delsecreplay(p)
-	struct secreplay *p;
+keydb_delsecreplay(struct secreplay *p)
 {
-
 	if (p->bitmap)
 		_FREE(p->bitmap, M_SECA);
 	_FREE(p, M_SECA);

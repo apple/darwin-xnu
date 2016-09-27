@@ -81,5 +81,11 @@ enum PMLogEnum {
     kPMLogIdleCancel,               // 53	0x050700d4 - device unidle during change
     kPMLogSleepWakeTracePoint,      // 54   0x050700d8 - kIOPMTracePoint markers
     kPMLogQuiescePowerTree,         // 55   0x050700dc
+    kPMLogComponentWakeProgress,    // 56   0x050700e0
+    kPMLogUserActiveState,          // 57   0x050700e4
+    kPMLogAppResponseDelay,         // 58   0x050700e8
+    kPMLogDrvResponseDelay,         // 59   0x050700ec
+    kPMLogPCIDevChangeStart,        // 60   0x050700f0
+    kPMLogPCIDevChangeDone,         // 61   0x050700f4
     kIOPMlogLastEvent
 };

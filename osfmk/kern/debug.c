@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -68,6 +68,7 @@
 #include <kern/telemetry.h>
 #include <kern/ecc.h>
 #include <kern/kern_cdata.h>
+#include <kern/zalloc.h>
 #include <vm/vm_kern.h>
 #include <vm/pmap.h>
 #include <stdarg.h>
@@ -90,9 +91,12 @@
 #include <uuid/uuid.h>
 #include <mach_debug/zone_info.h>
 
+#include <os/log_private.h>
+
 #if (defined(__arm64__) || defined(NAND_PANIC_DEVICE)) && !defined(LEGACY_PANIC_LOGS)
 #include <pexpert/pexpert.h> /* For gPanicBase */
 #endif
+
 
 unsigned int	halt_in_debugger = 0;
 unsigned int	switch_debugger = 0;
@@ -104,6 +108,7 @@ unsigned int 	systemLogDiags = FALSE;
 unsigned int 	panicDebugging = FALSE;
 unsigned int	logPanicDataToScreen = FALSE;
 unsigned int	kdebug_serial = FALSE;
+boolean_t	lock_panic_mode = FALSE;
 
 int mach_assert = 1;
 
@@ -130,6 +135,9 @@ char *debug_buf_ptr = debug_buf;
 unsigned int debug_buf_size = sizeof(debug_buf);
 #endif
 
+char *debug_buf_stackshot_start;
+char *debug_buf_stackshot_end;
+
 static char model_name[64];
 unsigned char *kernel_uuid;
 /* uuid_string_t */ char kernel_uuid_string[37];
@@ -151,8 +159,15 @@ struct pasc {
 typedef struct pasc pasc_t;
 
 /* Prevent CPP from breaking the definition below */
-#if CONFIG_NO_PANIC_STRINGS
+#ifdef CONFIG_NO_PANIC_STRINGS
 #undef Assert
+#endif
+
+int kext_assertions_enable =
+#if DEBUG || DEVELOPMENT
+			TRUE;
+#else
+			FALSE;
 #endif
 
 void __attribute__((noinline))
@@ -282,6 +297,8 @@ panic_prologue(const char *str)
 
 	s = splhigh();
 	disable_preemption();
+	/* Locking code should relax some checks at panic time */
+	lock_panic_mode = TRUE;
 
 #if	defined(__i386__) || defined(__x86_64__)
 	/* Attempt to display the unparsed panic string */
@@ -316,6 +333,7 @@ restart:
 	    } else {
 			nestedpanic +=1;
 			PANIC_UNLOCK();
+			// Other cores will not be resumed on double panic
 			Debugger("double panic");
 			// a printf statement here was removed to avoid a panic-loop caused
 			// by a panic from printf
@@ -328,12 +346,21 @@ restart:
 	panicwait = 1;
 
 	PANIC_UNLOCK();
+
+	// halt other cores now in anticipation of the debugger call
 	return(s);
 }
 
-
+#if DEVELOPMENT || DEBUG
 static void
 panic_epilogue(spl_t	s)
+#else
+#if !defined(__i386__) && !defined(__x86_64__)
+__attribute__((noreturn))
+#endif
+static void
+panic_epilogue(__unused spl_t	s)
+#endif
 {
 	/*
 	 * Release panicstr so that we can handle normally other panics.
@@ -344,19 +371,21 @@ panic_epilogue(spl_t	s)
 
 #if DEVELOPMENT || DEBUG
 	if (return_on_panic) {
+		// resume other cores as we are returning
 		panic_normal();
 		enable_preemption();
 		splx(s);
 		return;
 	}
-#else
-	(void)s;
 #endif
 	kdb_printf("panic: We are hanging here...\n");
 	panic_stop();
 	/* NOTREACHED */
 }
 
+#if !DEVELOPMENT && !DEBUG && !defined(__i386__) && !defined(__x86_64__)
+__attribute__((noreturn))
+#endif
 void
 panic(const char *str, ...)
 {
@@ -364,11 +393,14 @@ panic(const char *str, ...)
 	spl_t	s;
 	boolean_t	old_doprnt_hide_pointers = doprnt_hide_pointers;
 
-
+#if defined (__x86_64__)
+	plctrace_disable();
+#endif
 	/* panic_caller is initialized to 0.  If set, don't change it */
 	if ( ! panic_caller )
 		panic_caller = (unsigned long)(char *)__builtin_return_address(0);
-	
+
+
 	s = panic_prologue(str);
 
 	/* Never hide pointers from panic logs. */
@@ -393,6 +425,44 @@ panic(const char *str, ...)
 	panic_epilogue(s);
 }
 
+/*
+ * panic_with_options: wraps the panic call in a way that allows us to pass
+ * 			a bitmask of specific debugger options.
+ */
+#if !DEVELOPMENT && !DEBUG && !defined(__i386__) && !defined(__x86_64__)
+__attribute__((noreturn))
+#endif
+void
+panic_with_options(unsigned int reason, void *ctx, uint64_t debugger_options_mask, const char *str, ...)
+{
+	va_list	listp;
+	spl_t	s;
+
+
+	/* panic_caller is initialized to 0.  If set, don't change it */
+	if ( ! panic_caller )
+		panic_caller = (unsigned long)(char *)__builtin_return_address(0);
+
+	s = panic_prologue(str);
+	kdb_printf("panic(cpu %d caller 0x%lx): ", (unsigned) paniccpu, panic_caller);
+	if (str) {
+		va_start(listp, str);
+		_doprnt(str, &listp, consdebug_putc, 0);
+		va_end(listp);
+	}
+	kdb_printf("\n");
+
+	/*
+	 * Release panicwait indicator so that other cpus may call Debugger().
+	 */
+	panicwait = 0;
+	DebuggerWithContext(reason, ctx, "panic", debugger_options_mask);
+	panic_epilogue(s);
+}
+
+#if !DEVELOPMENT && !DEBUG && !defined(__i386__) && !defined(__x86_64__)
+__attribute__((noreturn))
+#endif
 void
 panic_context(unsigned int reason, void *ctx, const char *str, ...)
 {
@@ -417,25 +487,51 @@ panic_context(unsigned int reason, void *ctx, const char *str, ...)
 	 * Release panicwait indicator so that other cpus may call Debugger().
 	 */
 	panicwait = 0;
-	DebuggerWithContext(reason, ctx, "panic");
+	DebuggerWithContext(reason, ctx, "panic", DEBUGGER_OPTION_NONE);
 	panic_epilogue(s);
 }
 
-void
-log(__unused int level, char *fmt, ...)
+__attribute__((noinline,not_tail_called))
+void log(__unused int level, char *fmt, ...)
 {
+	void *caller = __builtin_return_address(0);
 	va_list	listp;
+	va_list	listp2;
+
 
 #ifdef lint
 	level++;
 #endif /* lint */
 #ifdef	MACH_BSD
-	disable_preemption();
 	va_start(listp, fmt);
-	_doprnt(fmt, &listp, conslog_putc, 0);
-	va_end(listp);
+	va_copy(listp2, listp);
+
+	disable_preemption();
+	_doprnt(fmt, &listp, cons_putc_locked, 0);
 	enable_preemption();
+
+	va_end(listp);
+
+	os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp2, caller);
+	va_end(listp2);
 #endif
+}
+
+/*
+ * Skip appending log messages to the new logging infrastructure in contexts
+ * where safety is uncertain. These contexts include:
+ *   - When we're in the debugger
+ *   - We're in a panic
+ *   - Interrupts are disabled
+ *   - Or Pre-emption is disabled
+ * In all the above cases, it is potentially unsafe to log messages.
+ */
+
+boolean_t oslog_is_safe(void) {
+	return (debug_mode == 0 &&
+		not_in_kdp == 1 &&
+		get_preemption_level() == 0 &&
+		ml_get_interrupts_enabled() == TRUE);
 }
 
 void
@@ -590,8 +686,7 @@ __private_extern__ void panic_display_system_configuration(void) {
 	}
 }
 
-extern zone_t		first_zone;
-extern unsigned int	num_zones, stack_total;
+extern unsigned int	stack_total;
 extern unsigned long long stack_allocs;
 
 #if defined(__i386__) || defined (__x86_64__)
@@ -611,22 +706,12 @@ __private_extern__ void panic_display_zprint()
 		struct zone	zone_copy;
 
 		kdb_printf("%-20s %10s %10s\n", "Zone Name", "Cur Size", "Free Size");
-		if(first_zone!=NULL) {
-			if(ml_nofault_copy((vm_offset_t)first_zone, (vm_offset_t)&zone_copy, sizeof(struct zone)) == sizeof(struct zone)) {
-				for (i = 0; i < num_zones; i++) {
-					if(zone_copy.cur_size > (1024*1024)) {
-						kdb_printf("%-20s %10lu %10lu\n",zone_copy.zone_name, (uintptr_t)zone_copy.cur_size,(uintptr_t)(zone_copy.countfree * zone_copy.elem_size));
-					}	
-					
-					if(zone_copy.next_zone == NULL) {
-						break;
-					}
-
-					if(ml_nofault_copy((vm_offset_t)zone_copy.next_zone, (vm_offset_t)&zone_copy, sizeof(struct zone)) != sizeof(struct zone)) {
-						break;
-					}
+		for (i = 0; i < num_zones; i++) {
+			if(ml_nofault_copy((vm_offset_t)(&zone_array[i]), (vm_offset_t)&zone_copy, sizeof(struct zone)) == sizeof(struct zone)) {
+				if(zone_copy.cur_size > (1024*1024)) {
+					kdb_printf("%-20s %10lu %10lu\n",zone_copy.zone_name, (uintptr_t)zone_copy.cur_size,(uintptr_t)(zone_copy.countfree * zone_copy.elem_size));
 				}
-			}
+			}		
 		}
 
 		kdb_printf("%-20s %10lu\n", "Kernel Stacks", (uintptr_t)(kernel_stack_size * stack_total));
@@ -709,7 +794,7 @@ void kdp_set_gateway_mac(void *);
 void kdp_set_interface(void *);
 void kdp_register_send_receive(void *, void *);
 void kdp_unregister_send_receive(void *, void *);
-void kdp_snapshot_preflight(int, void *, uint32_t, uint32_t, kcdata_descriptor_t, boolean_t enable_faulting);
+
 int kdp_stack_snapshot_geterror(void);
 uint32_t kdp_stack_snapshot_bytes_traced(void);
 

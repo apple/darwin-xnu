@@ -91,13 +91,15 @@
 /* for building the dysymtab command generation into the dylib */
 #if (!KERNEL)
     #define KXLD_PIC_KEXTS 1
+//    #define SPLIT_KEXTS 1
+    #define SPLIT_KEXTS_DEBUG 0
 #endif
 
 /*******************************************************************************
 * Types
 *******************************************************************************/
 
-/* Maintains linker state across links.  One context should be allocate for
+/* Maintains linker state across links.  One context should be allocated for
  * each link thread.
  */
 typedef struct kxld_context KXLDContext;
@@ -114,6 +116,20 @@ typedef uint32_t kxld_size_t;
 typedef uint64_t kxld_addr_t;
 typedef uint64_t kxld_size_t;
 #endif /* KERNEL && !__LP64__ */
+
+typedef struct splitKextLinkInfo {
+    u_char *        kextExecutable;     // kext we will link
+    size_t          kextSize;           // size of kextExecutable
+    u_char *        linkedKext;         // linked kext
+    size_t          linkedKextSize;     // size of linkedKext
+    uint64_t        vmaddr_TEXT;        // vmaddr of kext __TEXT segment
+    uint64_t        vmaddr_TEXT_EXEC;   // vmaddr of kext __TEXT_EXEC segment
+    uint64_t        vmaddr_DATA;        // vmaddr of kext __DATA segment
+    uint64_t        vmaddr_DATA_CONST;  // vmaddr of kext __DATA_CONST segment
+    uint64_t        vmaddr_LINKEDIT;    // vmaddr of kext __LINKEDIT segment
+    uint32_t        kaslr_offsets_count; // offsets into the kext to slide
+    uint32_t *      kaslr_offsets;      // offsets into the kext to slide
+} splitKextLinkInfo;
 
 /* Flags for general linker behavior */
 enum kxld_flags {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,7 +73,7 @@ serverprefix vm32_;
 #include <mach/mach_types.defs>
 #include <mach_debug/mach_debug_types.defs>
 
-#if VM32_SUPPORT
+#ifdef VM32_SUPPORT
 
 /* See vm_map.defs for more information */
 

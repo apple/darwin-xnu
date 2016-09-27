@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -380,6 +380,7 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 			& 0xFF000000) | ((flags) & 0xFFFFFF));
 
 /* leave room for vm_prot bits */
+#define MAP_MEM_GRAB_SECLUDED	0x008000 /* can grab secluded pages */
 #define MAP_MEM_ONLY		0x010000 /* change processor caching  */
 #define MAP_MEM_NAMED_CREATE	0x020000 /* create extant object      */
 #define MAP_MEM_PURGABLE	0x040000 /* create a purgable VM object */
@@ -411,7 +412,7 @@ struct upl_page_info {
 	ppnum_t		phys_addr;	/* physical page index number */
 	unsigned int
 #ifdef  XNU_KERNEL_PRIVATE
-		pageout:1,      /* page is to be removed on commit */
+		free_when_done:1,/* page is to be freed on commit */
 		absent:1,       /* No valid data in this page */
 		dirty:1,        /* Page must be cleaned (O) */
 		precious:1,     /* must be cleaned, we have only copy */
@@ -669,15 +670,15 @@ typedef uint64_t upl_control_flags_t;
 	(((upl)[(index)].phys_addr != 0) ? (!((upl)[(index)].absent)) : FALSE)
 
 #define UPL_PAGEOUT_PAGE(upl, index) \
-	(((upl)[(index)].phys_addr != 0) ? ((upl)[(index)].pageout) : FALSE)
+	(((upl)[(index)].phys_addr != 0) ? ((upl)[(index)].free_when_done) : FALSE)
 
 #define UPL_SET_PAGE_FREE_ON_COMMIT(upl, index) \
 	(((upl)[(index)].phys_addr != 0) ?	      \
-	 ((upl)[(index)].pageout = TRUE) : FALSE)
+	 ((upl)[(index)].free_when_done = TRUE) : FALSE)
 
 #define UPL_CLR_PAGE_FREE_ON_COMMIT(upl, index) \
 	(((upl)[(index)].phys_addr != 0) ?       \
-	 ((upl)[(index)].pageout = FALSE) : FALSE)
+	 ((upl)[(index)].free_when_done = FALSE) : FALSE)
 
 #define UPL_REPRIO_INFO_BLKNO(upl, index) \
 	(((upl)->upl_reprio_info[(index)]) & UPL_REPRIO_INFO_MASK) 

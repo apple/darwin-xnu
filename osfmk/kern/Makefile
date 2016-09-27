@@ -8,7 +8,8 @@ include $(MakeInc_def)
 
 DATAFILES = \
 	exc_resource.h \
-	kern_cdata.h
+	kern_cdata.h \
+	kcdata.h
 
 PRIVATE_DATAFILES = \
 	debug.h \
@@ -18,6 +19,8 @@ EXPORT_FILES = \
 	affinity.h \
 	assert.h \
 	audit_sessionport.h \
+	backtrace.h \
+	bits.h \
 	call_entry.h \
 	clock.h \
 	coalition.h \
@@ -40,6 +43,7 @@ EXPORT_FILES = \
 	macro_help.h \
 	page_decrypt.h \
 	pms.h \
+	policy_internal.h \
 	processor.h \
 	queue.h \
 	sched_prim.h \
@@ -54,11 +58,15 @@ EXPORT_FILES = \
 	waitq.h \
 	zalloc.h
 
+PRIVATE_EXPORT_FILES = \
+	build_config.h \
+	mach_node_link.h
+
 INSTALL_MI_LIST = ${DATAFILES}
 
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
-INSTALL_KF_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES}
+INSTALL_KF_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${EXPORT_FILES} ${PRIVATE_EXPORT_FILES}
 
 INSTALL_MI_DIR = kern
 
@@ -68,5 +76,3 @@ EXPORT_MI_DIR = kern
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

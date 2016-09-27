@@ -18,7 +18,21 @@ struct ccrng_system_state {
     int fd;
 };
 
-// Setup the system RNG (open descriptor on file /dev/random)
+/*!
+ @function   ccrng_system_init - DEPRECATED
+ @abstract   Default ccrng.
+    Please transition to ccrng() which is easier to use and with provide the fastest, most secure option
+
+ @param  rng   Structure containing the state of the RNG, must remain allocated as
+ long as the rng is used.
+ @result 0 iff successful
+
+ @discussion
+        This RNG require call to "init" AND "done", otherwise it may leak a file descriptor.
+ */
+
+// Initialize ccrng
+// Deprecated, if you need a rng, just call the function ccrng()
 int ccrng_system_init(struct ccrng_system_state *rng);
 
 // Close the system RNG

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -195,7 +195,7 @@ client's thread attemptCommand will fail if the work loop's gate is closed.
 /*! @function commandWakeup
     @abstract Wakeup one or more threads that are asleep on an event.
     @param event Pointer to an address.
-    @param onlyOneThread true to only wake up at most one thread, false otherwise. */
+    @param oneThread true to only wake up at most one thread, false otherwise. */
     virtual void commandWakeup(void *event, bool oneThread = false);
 
 /*! @function disable

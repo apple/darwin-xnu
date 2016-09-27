@@ -76,7 +76,7 @@
 #include <sys/fcntl.h>
 #include <sys/lockf.h>
 #include <sys/sdt.h>
-#include <kern/task.h>
+#include <kern/policy_internal.h>
 
 #include <sys/file_internal.h>
 
@@ -1432,7 +1432,7 @@ lf_printlist(const char *tag, struct lockf *lock)
 static void 
 lf_hold_assertion(task_t block_task, struct lockf *block)
 {
-	if (task_importance_hold_file_lock_assertion(block_task, 1)) {
+	if (task_importance_hold_file_lock_assertion(block_task, 1) == 0) {
 		block->lf_boosted = LF_BOOSTED;
 		LOCKF_DEBUG(LF_DBG_IMPINH,
 		    "lf: importance hold file lock assert on pid %d lock %p\n",

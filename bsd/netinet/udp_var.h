@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -178,6 +178,10 @@ extern lck_mtx_t *udp_getlock(struct socket *, int);
 extern void udp_get_ports_used(u_int32_t, int, u_int32_t, bitstr_t *);
 extern uint32_t udp_count_opportunistic(unsigned int, u_int32_t);
 extern uint32_t udp_find_anypcb_byaddr(struct ifaddr *);
+
+extern void udp_fill_keepalive_offload_frames(struct ifnet *,
+    struct ifnet_keepalive_offload_frame *, u_int32_t, size_t, u_int32_t *);
+
 __END_DECLS
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET_UDP_VAR_H_ */

@@ -116,8 +116,12 @@
 #include <sys/codesign.h>
 #include <sys/kdebug.h>
 #include <sys/random.h>
+#include <sys/ktrace.h>
 
+#include <kern/ltable.h>
 #include <kern/waitq.h>
+#include <ipc/ipc_voucher.h>
+#include <voucher/ipc_pthread_priority_internal.h>
 
 
 #if CONFIG_ATM
@@ -146,10 +150,6 @@
 
 #if KPC
 #include <kern/kpc.h>
-#endif
-
-#if KPERF
-#include <kperf/kperf.h>
 #endif
 
 #if HYPERVISOR
@@ -181,8 +181,9 @@ extern void	OSKextRemoveKextBootstrap(void);
 void scale_setup(void);
 extern void bsd_scale_setup(int);
 extern unsigned int semaphore_max;
-extern void stackshot_lock_init(void);
-extern void console_init(void);
+extern void stackshot_init(void);
+extern void ktrace_init(void);
+extern void oslog_init(void);
 
 /*
  *	Running in virtual memory, on the interrupt stack.
@@ -194,25 +195,25 @@ extern int serverperfmode;
 unsigned int new_nkdbufs = 0;
 unsigned int wake_nkdbufs = 0;
 unsigned int write_trace_on_panic = 0;
-unsigned int trace_typefilter = 0;
-boolean_t    trace_serial = FALSE;
+static char trace_typefilter[64] = { 0 };
+boolean_t trace_serial = FALSE;
+boolean_t oslog_early_boot_complete = FALSE;
 
 /* mach leak logging */
 int log_leaks = 0;
-int turn_on_log_leaks = 0;
 
 static inline void
 kernel_bootstrap_log(const char *message)
 {
 //	kprintf("kernel_bootstrap: %s\n", message);
-	kernel_debug_string_simple(message);
+	kernel_debug_string_early(message);
 }
 
 static inline void
 kernel_bootstrap_thread_log(const char *message)
 {
 //	kprintf("kernel_bootstrap_thread: %s\n", message);
-	kernel_debug_string_simple(message);
+	kernel_debug_string_early(message);
 }
 
 void
@@ -251,12 +252,12 @@ kernel_bootstrap(void)
 	printf("%s\n", version); /* log kernel version */
 
 	if (PE_parse_boot_argn("-l", namep, sizeof (namep))) /* leaks logging */
-		turn_on_log_leaks = 1;
+		log_leaks = 1;
 
 	PE_parse_boot_argn("trace", &new_nkdbufs, sizeof (new_nkdbufs));
 	PE_parse_boot_argn("trace_wake", &wake_nkdbufs, sizeof (wake_nkdbufs));
 	PE_parse_boot_argn("trace_panic", &write_trace_on_panic, sizeof(write_trace_on_panic));
-	PE_parse_boot_argn("trace_typefilter", &trace_typefilter, sizeof(trace_typefilter));
+	PE_parse_boot_arg_str("trace_typefilter", trace_typefilter, sizeof(trace_typefilter));
 
 	scale_setup();
 
@@ -274,6 +275,7 @@ kernel_bootstrap(void)
 	machine_info.major_version = version_major;
 	machine_info.minor_version = version_minor;
 
+	oslog_init();
 
 #if CONFIG_TELEMETRY
 	kernel_bootstrap_log("telemetry_init");
@@ -293,11 +295,14 @@ kernel_bootstrap(void)
 	kernel_bootstrap_log("console_init");
 	console_init();
 
-	kernel_bootstrap_log("stackshot_lock_init");	
-	stackshot_lock_init();
+	kernel_bootstrap_log("stackshot_init");
+	stackshot_init();
 
 	kernel_bootstrap_log("sched_init");
 	sched_init();
+
+	kernel_bootstrap_log("ltable_bootstrap");
+	ltable_bootstrap();
 
 	kernel_bootstrap_log("waitq_bootstrap");
 	waitq_bootstrap();
@@ -350,13 +355,18 @@ kernel_bootstrap(void)
 	kernel_bootstrap_log("atm_init");
 	atm_init();
 #endif
+	kernel_bootstrap_log("mach_init_activity_id");
+	mach_init_activity_id();
 
 #if CONFIG_BANK
 	/* Initialize the BANK Manager. */
 	kernel_bootstrap_log("bank_init");
 	bank_init();
 #endif
-	
+
+	kernel_bootstrap_log("ipc_pthread_priority_init");
+	ipc_pthread_priority_init();
+
 	/* initialize the corpse config based on boot-args */
 	corpses_init();
 
@@ -430,6 +440,7 @@ kernel_bootstrap_thread(void)
 	kernel_bootstrap_thread_log("thread_bind");
 	thread_bind(processor);
 
+
 	/*
 	 * Initialize ipc thread call support.
 	 */
@@ -454,7 +465,7 @@ kernel_bootstrap_thread(void)
 	device_service_create();
 
 	kth_started = 1;
-		
+
 #if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
 	/*
 	 * Create and initialize the physical copy window for processor 0
@@ -482,10 +493,6 @@ kernel_bootstrap_thread(void)
 	ecc_log_init();
 #endif 
 
-#if KPERF
-	kperf_bootstrap();
-#endif
-
 #if HYPERVISOR
 	hv_support_init();
 #endif
@@ -499,33 +506,32 @@ kernel_bootstrap_thread(void)
 	vmx_init();
 #endif
 
-#if (defined(__i386__) || defined(__x86_64__))
-	if (kdebug_serial) {
-		new_nkdbufs = 1;
-		if (trace_typefilter == 0)
-			trace_typefilter = 1;
-	}
-	if (turn_on_log_leaks && !new_nkdbufs)
-		new_nkdbufs = 200000;
-	if (trace_typefilter)
-		start_kern_tracing_with_typefilter(new_nkdbufs,
-						   FALSE,
-						   trace_typefilter);
-	else
-		start_kern_tracing(new_nkdbufs, FALSE);
-	if (turn_on_log_leaks)
-		log_leaks = 1;
+	kernel_bootstrap_thread_log("ktrace_init");
+	ktrace_init();
 
-#endif
+	if (new_nkdbufs > 0 || kdebug_serial || log_leaks) {
+		kdebug_boot_trace(new_nkdbufs, trace_typefilter);
+	}
 
 	kernel_bootstrap_log("prng_init");
 	prng_cpu_init(master_cpu);
 
+#ifdef	MACH_BSD
+	kernel_bootstrap_log("bsd_early_init");
+	bsd_early_init();
+#endif
+
 #ifdef	IOKIT
+	kernel_bootstrap_log("PE_init_iokit");
 	PE_init_iokit();
 #endif
 
 	assert(ml_get_interrupts_enabled() == FALSE);
+
+	// Set this flag to indicate that it is now okay to start testing
+	// for interrupts / preemeption disabled while logging
+	oslog_early_boot_complete = TRUE;
+
 	(void) spllo();		/* Allow interruptions */
 
 #if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
@@ -537,17 +543,6 @@ kernel_bootstrap_thread(void)
 	 * discovery.
 	 */
 	cpu_userwindow_init(0);
-#endif
-
-#if (!defined(__i386__) && !defined(__x86_64__))
-	if (turn_on_log_leaks && !new_nkdbufs)
-		new_nkdbufs = 200000;
-	if (trace_typefilter)
-		start_kern_tracing_with_typefilter(new_nkdbufs, FALSE, trace_typefilter);
-	else
-		start_kern_tracing(new_nkdbufs, FALSE);
-	if (turn_on_log_leaks)
-		log_leaks = 1;
 #endif
 
 	/*
@@ -714,6 +709,9 @@ load_context(
 	processor->active_thread = thread;
 	processor->current_pri = thread->sched_pri;
 	processor->current_thmode = thread->sched_mode;
+	processor->current_sfi_class = SFI_CLASS_KERNEL;
+	processor->starting_pri = thread->sched_pri;
+
 	processor->deadline = UINT64_MAX;
 	thread->last_processor = processor;
 

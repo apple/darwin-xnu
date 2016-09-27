@@ -64,10 +64,10 @@ typedef void (*thread_call_func_t)(
  @constant THREAD_CALL_PRIORITY_LOW Very low importance.
  */
 typedef enum {
-	THREAD_CALL_PRIORITY_HIGH 	= 0,
-	THREAD_CALL_PRIORITY_KERNEL 	= 1,
-	THREAD_CALL_PRIORITY_USER 	= 2,
-	THREAD_CALL_PRIORITY_LOW 	= 3
+	THREAD_CALL_PRIORITY_HIGH   = 0,
+	THREAD_CALL_PRIORITY_KERNEL = 1,
+	THREAD_CALL_PRIORITY_USER   = 2,
+	THREAD_CALL_PRIORITY_LOW    = 3
 } thread_call_priority_t;
 
 __BEGIN_DECLS
@@ -162,6 +162,13 @@ extern boolean_t	thread_call_enter1_delayed(
  * urgency class provided.
  */
 #define THREAD_CALL_DELAY_LEEWAY		TIMEOUT_URGENCY_LEEWAY
+
+/*
+ * Indicates that the time parameters should be interpreted as
+ * mach_continuous_time values, rather than mach_absolute_time and the timer
+ * be programmed to fire based on continuous time.
+ */
+#define THREAD_CALL_CONTINUOUS  0x100
 
 /*! 
  @function thread_call_enter_delayed_with_leeway
@@ -279,7 +286,7 @@ __END_DECLS
 #include <kern/call_entry.h>
 
 struct thread_call {
-	struct call_entry 		tc_call;	/* Must be first */
+	struct call_entry 	tc_call;	/* Must be first */
 	uint64_t			tc_submit_count;
 	uint64_t			tc_finish_count;
 	uint64_t			ttd; /* Time to deadline at creation */
@@ -287,12 +294,12 @@ struct thread_call {
 	thread_call_priority_t		tc_pri;
 	uint32_t			tc_flags;
 	int32_t				tc_refs;
-}; 
+};
 
-#define THREAD_CALL_ALLOC		0x01
-#define THREAD_CALL_WAIT		0x02
-#define THREAD_CALL_DELAYED		0x04
-#define THREAD_CALL_RATELIMITED		TIMEOUT_URGENCY_RATELIMITED
+#define THREAD_CALL_ALLOC       0x01
+#define THREAD_CALL_WAIT        0x02
+#define THREAD_CALL_DELAYED     0x04
+#define THREAD_CALL_RATELIMITED TIMEOUT_URGENCY_RATELIMITED
 
 typedef struct thread_call thread_call_data_t;
 
@@ -333,6 +340,12 @@ extern boolean_t	thread_call_func_cancel(
 						thread_call_func_t	func,
 						thread_call_param_t	param,
 						boolean_t		cancel_all);
+
+/* 
+ * Called on the wake path to adjust the thread callouts running in mach_continuous_time
+ */
+void 				adjust_cont_time_thread_calls(void);
+
 __END_DECLS
 
 #endif	/* XNU_KERNEL_PRIVATE */

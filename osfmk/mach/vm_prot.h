@@ -145,6 +145,18 @@ typedef int		vm_prot_t;
  */
 #define VM_PROT_IS_MASK		((vm_prot_t) 0x40)
 
+/*
+ * Another invalid protection value to support execute-only protection.
+ * VM_PROT_STRIP_READ is a special marker that tells mprotect to not
+ * set VM_PROT_READ. We have to do it this way because existing code
+ * expects the system to set VM_PROT_READ if VM_PROT_EXECUTE is set.
+ * VM_PROT_EXECUTE_ONLY is just a convenience value to indicate that
+ * the memory should be executable and explicitly not readable. It will
+ * be ignored on platforms that do not support this type of protection.
+ */
+#define VM_PROT_STRIP_READ		((vm_prot_t) 0x80)
+#define VM_PROT_EXECUTE_ONLY	(VM_PROT_EXECUTE|VM_PROT_STRIP_READ)
+
 
 #define VM_PROT_MEMORY_TAG_MASK		0xFF000000
 #define VM_PROT_MEMORY_TAG_SHIFT	24

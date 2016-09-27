@@ -111,10 +111,6 @@ int	ubc_setcred(struct vnode *, struct proc *);
 #include <security/mac_framework.h>
 #endif
 
-#if CONFIG_PROTECT
-#include <sys/cprotect.h>
-#endif
-
 #include <IOKit/IOBSD.h>
 
 static int vn_closefile(struct fileglob *fp, vfs_context_t ctx);
@@ -130,6 +126,7 @@ static int vn_kqfilt_add(struct fileproc *fp, struct knote *kn,
 			vfs_context_t ctx);
 static void filt_vndetach(struct knote *kn);
 static int filt_vnode(struct knote *kn, long hint);
+static int filt_vnode_common(struct knote *kn, vnode_t vp, long hint);
 static int vn_open_auth_finish(vnode_t vp, int fmode, vfs_context_t ctx);
 #if 0
 static int vn_kqfilt_remove(struct vnode *vp, uintptr_t ident,
@@ -137,21 +134,26 @@ static int vn_kqfilt_remove(struct vnode *vp, uintptr_t ident,
 #endif
 
 const struct fileops vnops = {
-	DTYPE_VNODE,
-	vn_read,
-	vn_write,
-	vn_ioctl,
-	vn_select,
-	vn_closefile,
-	vn_kqfilt_add,
-	NULL
+	.fo_type = DTYPE_VNODE,
+	.fo_read = vn_read,
+	.fo_write = vn_write,
+	.fo_ioctl = vn_ioctl,
+	.fo_select = vn_select,
+	.fo_close = vn_closefile,
+	.fo_kqfilter = vn_kqfilt_add,
+	.fo_drain = NULL,
 };
+
+static int filt_vntouch(struct knote *kn, struct kevent_internal_s *kev);
+static int filt_vnprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
 
 struct  filterops vnode_filtops = { 
 	.f_isfd = 1, 
 	.f_attach = NULL, 
 	.f_detach = filt_vndetach, 
-	.f_event = filt_vnode
+	.f_event = filt_vnode,
+	.f_touch = filt_vntouch,
+	.f_process = filt_vnprocess,
 };
 
 /*
@@ -383,6 +385,12 @@ again:
 	fmode = *fmodep;
 	origcnflags = ndp->ni_cnd.cn_flags;
 
+	// If raw encrypted mode is requested, handle that here
+	if (VATTR_IS_ACTIVE (vap, va_dataprotect_flags)
+		&& ISSET(vap->va_dataprotect_flags, VA_DP_RAWENCRYPTED)) {
+		fmode |= FENCRYPTED;
+	}
+
 	/*
 	 * O_CREAT
 	 */
@@ -511,6 +519,8 @@ continue_create_lookup:
 		/* open calls are allowed for resource forks. */
 		ndp->ni_cnd.cn_flags |= CN_ALLOWRSRCFORK;
 #endif
+		if (fmode & FENCRYPTED)
+			ndp->ni_cnd.cn_flags |= CN_RAW_ENCRYPTED | CN_SKIPNAMECACHE;
 		ndp->ni_flag = NAMEI_COMPOUNDOPEN;
 
 		/* preserve NOFOLLOW from vnode_open() */
@@ -574,12 +584,6 @@ continue_create_lookup:
 			}
 		}
 
-#if CONFIG_PROTECT
-		// If raw encrypted mode is requested, handle that here
-		if (VATTR_IS_ACTIVE (vap, va_dataprotect_flags)
-			&& ISSET(vap->va_dataprotect_flags, VA_DP_RAWENCRYPTED)) {
-			fmode |= FENCRYPTED;
-		}
 		if (VATTR_IS_ACTIVE (vap, va_dataprotect_flags)
 			&& ISSET(vap->va_dataprotect_flags, VA_DP_RAWUNENCRYPTED)) {
 			/* Don't allow unencrypted io request from user space unless entitled */
@@ -593,16 +597,6 @@ continue_create_lookup:
 			}
 			fmode |= FUNENCRYPTED;
 		}
-
-		/*
-		 * Perform any content protection access checks prior to calling 
-		 * into the filesystem.
-		 */
-		error = cp_handle_open (vp, fmode);
-		if (error) {
-			goto bad;
-		}
-#endif
 
 		error = VNOP_OPEN(vp, fmode, ctx);
 		if (error) {
@@ -1636,8 +1630,9 @@ vn_pathconf(vnode_t vp, int name, int32_t *retval, vfs_context_t ctx)
 static int
 vn_kqfilt_add(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
 {
-	int error;
 	struct vnode *vp;
+	int error = 0;
+	int result = 0;
 	
 	vp = (struct vnode *)fp->f_fglob->fg_data;
 
@@ -1655,13 +1650,14 @@ vn_kqfilt_add(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
 					}
 
 				} else if (!vnode_isreg(vp)) {
-					if (vnode_ischr(vp) && 
-							(error = spec_kqfilter(vp, kn)) == 0) {
-						/* claimed by a special device */
-						vnode_put(vp);
-						return 0;
+					if (vnode_ischr(vp)) {
+						result = spec_kqfilter(vp, kn);
+						if ((kn->kn_flags & EV_ERROR) == 0) {
+							/* claimed by a special device */
+							vnode_put(vp);
+							return result;
+						}
 					}
-
 					error = EINVAL;
 				}
 				break;
@@ -1671,34 +1667,42 @@ vn_kqfilt_add(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
 				error = EINVAL;
 		}
 
-		if (error) {
-			vnode_put(vp);
-			return error;
-		}
+		if (error == 0) {
 
 #if CONFIG_MACF
-		error = mac_vnode_check_kqfilter(ctx, fp->f_fglob->fg_cred, kn, vp);
-		if (error) {
-			vnode_put(vp);
-			return error;
-		}
+			error = mac_vnode_check_kqfilter(ctx, fp->f_fglob->fg_cred, kn, vp);
+			if (error) {
+				vnode_put(vp);
+				goto out;
+			}
 #endif
 
-		kn->kn_hook = (void*)vp;
-		kn->kn_hookid = vnode_vid(vp);
-		kn->kn_fop = &vnode_filtops;
+			kn->kn_hook = (void*)vp;
+			kn->kn_hookid = vnode_vid(vp);
+			kn->kn_filtid = EVFILTID_VN;
 
-		vnode_lock(vp);
-		KNOTE_ATTACH(&vp->v_knotes, kn);
-		vnode_unlock(vp);
+			vnode_lock(vp);
+			KNOTE_ATTACH(&vp->v_knotes, kn);
+			result = filt_vnode_common(kn, vp, 0);
+			vnode_unlock(vp);
 
-		/* Ask the filesystem to provide remove notifications, but ignore failure */
-		VNOP_MONITOR(vp, 0, VNODE_MONITOR_BEGIN, (void*) kn,  ctx);
+			/*
+			 * Ask the filesystem to provide remove notifications,
+			 * but ignore failure
+			 */
+			VNOP_MONITOR(vp, 0, VNODE_MONITOR_BEGIN, (void*) kn,  ctx);
+		}
 
 		vnode_put(vp);
 	}
 
-	return (error);
+ out:
+	if (error) {
+		kn->kn_flags = EV_ERROR;
+		kn->kn_data = error;
+	}
+
+	return result;
 }
 
 static void
@@ -1803,22 +1807,11 @@ vnode_writable_space_count(vnode_t vp)
  * 	--If hint is revoke, set special flags and activate
  */
 static int
-filt_vnode(struct knote *kn, long hint)
+filt_vnode_common(struct knote *kn, vnode_t vp, long hint)
 {
-	vnode_t vp = (struct vnode *)kn->kn_hook;
 	int activate = 0;
-	long orig_hint = hint;
 
-	if (0 == hint) {
-		vnode_lock(vp);
-
-		if (vnode_getiocount(vp, kn->kn_hookid, VNODE_NODEAD | VNODE_WITHID) != 0) {
-			/* Is recycled */
-			hint = NOTE_REVOKE;
-		} 
-	} else {
-		lck_mtx_assert(&vp->v_lock, LCK_MTX_ASSERT_OWNED);
-	}
+	lck_mtx_assert(&vp->v_lock, LCK_MTX_ASSERT_OWNED);
 
 	/* Special handling for vnodes that are in recycle or already gone */
 	if (NOTE_REVOKE == hint) {
@@ -1857,16 +1850,71 @@ filt_vnode(struct knote *kn, long hint)
 				panic("Invalid knote filter on a vnode!\n");
 		}
 	}
-
-	if (orig_hint == 0) {
-		/*
-		 * Definitely need to unlock, may need to put 
-		 */
-		if (hint == 0) {
-			vnode_put_locked(vp);
-		}
-		vnode_unlock(vp);
-	}
-
 	return (activate);
 }
+
+static int
+filt_vnode(struct knote *kn, long hint)
+{
+	vnode_t vp = (struct vnode *)kn->kn_hook;
+
+	return filt_vnode_common(kn, vp, hint);
+}
+
+static int
+filt_vntouch(struct knote *kn, struct kevent_internal_s *kev)
+{
+	vnode_t vp = (struct vnode *)kn->kn_hook;
+	int activate;
+	int hint = 0;
+
+	vnode_lock(vp);
+	if (vnode_getiocount(vp, kn->kn_hookid, VNODE_NODEAD | VNODE_WITHID) != 0) {
+		/* is recycled */
+		hint = NOTE_REVOKE;
+	}
+
+	/* accept new input fflags mask */
+	kn->kn_sfflags = kev->fflags;
+	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
+		kn->kn_udata = kev->udata;
+
+	activate = filt_vnode_common(kn, vp, hint);
+
+	if (hint == 0)
+		vnode_put_locked(vp);
+	vnode_unlock(vp);
+
+	return activate;
+}
+
+static int
+filt_vnprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+{
+#pragma unused(data)
+	vnode_t vp = (struct vnode *)kn->kn_hook;
+	int activate;
+	int hint = 0;
+
+	vnode_lock(vp);
+	if (vnode_getiocount(vp, kn->kn_hookid, VNODE_NODEAD | VNODE_WITHID) != 0) {
+		/* Is recycled */
+		hint = NOTE_REVOKE;
+	} 
+	activate = filt_vnode_common(kn, vp, hint);
+	if (activate) {
+		*kev = kn->kn_kevent;
+		if (kn->kn_flags & EV_CLEAR) {
+			kn->kn_data = 0;
+			kn->kn_fflags = 0;
+		}
+	}
+
+	/* Definitely need to unlock, may need to put */
+	if (hint == 0)
+		vnode_put_locked(vp);
+	vnode_unlock(vp);
+
+	return activate;
+}
+

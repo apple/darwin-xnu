@@ -229,9 +229,9 @@ __BEGIN_DECLS
 void	closelog(void);
 void	openlog(const char *, int, int);
 int	setlogmask(int);
-void	syslog(int, const char *, ...) __printflike(2, 3);
+void	syslog(int, const char *, ...) __printflike(2, 3) __not_tail_called;
 #if __DARWIN_C_LEVEL >= __DARWIN_C_FULL
-void	vsyslog(int, const char *, __darwin_va_list) __printflike(2, 0);
+void	vsyslog(int, const char *, __darwin_va_list) __printflike(2, 0) __not_tail_called;
 #endif
 __END_DECLS
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -62,7 +62,7 @@ class OSOffset;
  * <li>Add and remove objects in the set</li>
  * <li>Test whether the set contains a particular object</li>
  * <li>Get the object stored at a particular index.</li>
- * </ol>
+ * </ul>
  *
  * Note that automated ordering is performed only upon addition of objects
  * and depends on the existing objects being properly sorted.
@@ -539,9 +539,6 @@ public:
     * @function getFirstObject
     *
     * @abstract
-    * Returns the object at index 0 in the ordered set if there is one.
-    *
-    * @abstract
     * The object at index 0 in the ordered set if there is one,
     * otherwise <code>NULL</code>.
     *
@@ -558,9 +555,6 @@ public:
 
    /*!
     * @function getLastObject
-    *
-    * @abstract
-    * Returns the last object in the ordered set if there is one.
     *
     * @abstract
     * The last object in the ordered set if there is one,

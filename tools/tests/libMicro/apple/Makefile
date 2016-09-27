@@ -28,7 +28,6 @@
 # Use is subject to license terms.
 #
 
-
 include Makefile.benchmarks
 
 ARCH=   i386
@@ -41,9 +40,7 @@ default $(ALL): $(BINS)
 clean:
 	rm -rf bin bin-*
 
-bin:	
+bin:
 	@mkdir -p ../bin-$(ARCH)
 
 $(BINS): bin
-
-

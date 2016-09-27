@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -11,7 +10,7 @@ INSTINC_SUBDIRS =
 
 EXPINC_SUBDIRS =
 
-# Installs header file for user level -  
+# Installs header file for user level -
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 #	  $(DSTROOT)/usr/include/
@@ -33,6 +32,7 @@ DATAFILES = \
 	_fsblkcnt_t.h \
 	_fsfilcnt_t.h \
 	_fsid_t.h \
+	_fsobj_id_t.h \
 	_gid_t.h \
 	_guid_t.h \
 	_id_t.h \
@@ -73,12 +73,16 @@ DATAFILES = \
 	_suseconds_t.h \
 	_time_t.h \
 	_timespec.h \
- 	_timeval.h \
- 	_timeval32.h \
- 	_timeval64.h \
- 	_ucontext.h \
- 	_ucontext64.h \
+	_timeval.h \
+	_timeval32.h \
+	_timeval64.h \
+	_ucontext.h \
+	_ucontext64.h \
 	_uid_t.h \
+	_u_int16_t.h \
+	_u_int32_t.h \
+	_u_int64_t.h \
+	_u_int8_t.h \
 	_uintptr_t.h \
 	_useconds_t.h \
 	_uuid_t.h \
@@ -86,14 +90,11 @@ DATAFILES = \
 	_wchar_t.h \
 	_wint_t.h \
 
-
-
-# Installs header file for Apple internal use in user level - 
+# Installs header file for Apple internal use in user level -
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 PRIVATE_DATAFILES = \
-	
 
-# Installs header file for kernel extensions - 
+# Installs header file for kernel extensions -
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
 KERNELFILES = ${DATAFILES} \
@@ -106,23 +107,20 @@ KERNELFILES = ${DATAFILES} \
 	_user64_itimerval.h \
 	_user32_itimerval.h \
 
-
-# Installs header file for Apple internal use for kernel extensions - 
+# Installs header file for Apple internal use for kernel extensions -
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
 PRIVATE_KERNELFILES = \
-	
-
 
 # /System/Library/Frameworks/System.framework/Headers and /usr/include
 INSTALL_MI_LIST	= ${DATAFILES}
 
-INSTALL_MI_GEN_LIST = 
+INSTALL_MI_GEN_LIST =
 
 INSTALL_MI_DIR = sys/_types
 
-EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} 
- 
-EXPORT_MI_GEN_LIST = 
+EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES}
+
+EXPORT_MI_GEN_LIST =
 
 EXPORT_MI_DIR = sys/_types
 
@@ -132,12 +130,12 @@ INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 # /System/Library/Frameworks/Kernel.framework/PrivateHeaders
 INSTALL_KF_MI_LCL_LIST =  ${KERNELFILES} ${PRIVATE_KERNELFILES}
 
-INSTALL_KF_MI_LCL_GEN_LIST = 
+INSTALL_KF_MI_LCL_GEN_LIST =
 
 # /System/Library/Frameworks/Kernel.framework/Headers
 INSTALL_KF_MI_LIST = ${KERNELFILES}
 
-INSTALL_KF_MI_GEN_LIST = 
+INSTALL_KF_MI_GEN_LIST =
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

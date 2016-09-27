@@ -36,6 +36,7 @@
 #include <mach/thread_status.h>
 #include <mach/exception_types.h>
 #include <kern/kern_types.h>
+#include <security/_label.h>
 
 /*
  * Common storage for exception actions.
@@ -46,6 +47,7 @@ struct exception_action {
 	thread_state_flavor_t	flavor;		/* state flavor to send */
 	exception_behavior_t	behavior;	/* exception type to raise */
 	boolean_t		privileged;	/* survives ipc_task_reset */
+	struct label		*label;		/* MAC label associated with action */
 };
 
 /* Make an up-call to a thread's exception server */
@@ -53,6 +55,12 @@ extern kern_return_t exception_triage(
 	exception_type_t	exception,
 	mach_exception_data_t	code,
 	mach_msg_type_number_t	codeCnt);
+
+extern kern_return_t exception_triage_thread(
+	exception_type_t	exception,
+	mach_exception_data_t	code,
+	mach_msg_type_number_t  codeCnt,
+	thread_t 		thread);
 
 /* Notify system performance monitor */
 extern kern_return_t sys_perf_notify(thread_t thread, int pid);

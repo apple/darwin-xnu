@@ -42,8 +42,6 @@
 
 extern int uuid_get_ethernet(u_int8_t *);
 
-UUID_DEFINE(UUID_NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-
 static void
 read_node(uint8_t *node)
 {

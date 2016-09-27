@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -90,7 +90,7 @@ public:
     static IOMapper *gSystem;
 
     static void checkForSystemMapper()
-        { if ((uintptr_t) gSystem & kWaitMask) waitForSystemMapper(); };
+        { if ((uintptr_t) gSystem & kWaitMask) waitForSystemMapper(); }
 
     static IOMapper * copyMapperForDevice(IOService * device);
     static IOMapper * copyMapperForDeviceWithIndex(IOService * device, unsigned int index);

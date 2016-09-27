@@ -145,7 +145,7 @@ struct	sigacts {
 #define	SA_CANTMASK	0x40		/* non-maskable, catchable */
 
 #ifdef	SIGPROP
-int sigprop[NSIG + 1] = {
+int sigprop[NSIG] = {
 	0,			/* unused */
 	SA_KILL,		/* SIGHUP */
 	SA_KILL,		/* SIGINT */
@@ -211,6 +211,7 @@ void	pt_setrunnable(struct proc *p);
 int	hassigprop(int sig, int prop);
 int setsigvec(proc_t, thread_t, int signum, struct __kern_sigaction *, boolean_t in_sigstart);
 
+struct os_reason;
 /*
  * Machine-dependent functions:
  */
@@ -218,14 +219,20 @@ void	sendsig(struct proc *, /*sig_t*/ user_addr_t  action, int sig,
 	int returnmask, uint32_t code);
 
 void	psignal(struct proc *p, int sig);
+void	psignal_with_reason(struct proc *p, int sig, struct os_reason *signal_reason);
 void	psignal_locked(struct proc *, int);
+void	psignal_try_thread(proc_t, thread_t, int signum);
+void	psignal_try_thread_with_reason(proc_t, thread_t, int, struct os_reason*);
+void	psignal_uthread(thread_t, int);
 void	pgsignal(struct pgrp *pgrp, int sig, int checkctty);
 void	tty_pgsignal(struct tty * tp, int sig, int checkctty);
 void	threadsignal(thread_t sig_actthread, int signum, 
-		mach_exception_code_t code);
+		mach_exception_code_t code, boolean_t set_exitreason);
 int	thread_issignal(proc_t p, thread_t th, sigset_t mask);
 void	psignal_vfork(struct proc *p, task_t new_task, thread_t thread,
 		int signum);
+void psignal_vfork_with_reason(proc_t p, task_t new_task, thread_t thread,
+		int signum, struct os_reason *signal_reason);
 void	signal_setast(thread_t sig_actthread);
 void	pgsigio(pid_t pgid, int signalnum);
 
@@ -243,6 +250,7 @@ int sig_try_locked(struct proc *p);
 #define COREDUMP_FULLFSYNC      0x0002 /* Run F_FULLFSYNC on the core file's vnode */
 
 int	coredump(struct proc *p, uint32_t reserve_mb, int coredump_flags);
+void set_thread_exit_reason(void *th, void *reason, boolean_t proc_locked);
 
 #endif  /* XNU_KERNEL_PRIVATE */
 

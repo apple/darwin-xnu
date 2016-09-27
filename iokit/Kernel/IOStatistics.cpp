@@ -27,6 +27,7 @@
  */
 
 #include <sys/sysctl.h>
+#include <kern/backtrace.h>
 #include <kern/host.h>
 #include <kern/zalloc.h>
 
@@ -1221,7 +1222,7 @@ KextNode *IOStatistics::getKextNodeFromBacktrace(boolean_t write) {
 	 * overhead. OSBacktrace does many safety checks that
 	 * are not needed in this situation.
 	 */
-	btCount = fastbacktrace((uintptr_t*)bt, btCount);
+	btCount = backtrace((uintptr_t*)bt, btCount);
 
 	if (write) {
 		IORWLockWrite(lock);

@@ -45,7 +45,7 @@
 .Ft int
 .Fn mkfifo "const char *path" "mode_t mode"
 .Sh DESCRIPTION
-.Fn Mkfifo
+.Fn mkfifo
 creates a new fifo file with name
 .Fa path .
 The access permissions are
@@ -63,7 +63,7 @@ A 0 return value indicates success.  A -1 return value
 indicates an error, and an error code is stored in
 .Va errno .
 .Sh ERRORS
-.Fn Mkfifo
+.Fn mkfifo
 will fail and no fifo will be created if:
 .Bl -tag -width Er
 .It Bq Er ENOTSUP

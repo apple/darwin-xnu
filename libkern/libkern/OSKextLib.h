@@ -907,6 +907,32 @@ OSKextGrabPgoData(uuid_t uuid,
                   int wait_for_unload,
                   int metadata);
 
+/*!
+ * @function OSKextResetPgoCountersLock
+ *
+ * @abstract
+ * Call this function before trapping into the debugger to call OSKextResetPgoCounters.
+ */
+void
+OSKextResetPgoCountersLock();
+
+/*!
+ * @function OSKextResetPgoCountersUnlock
+ *
+ * @abstract
+ * Call this function after trapping into the debugger to call OSKextResetPgoCounters.
+ */
+void
+OSKextResetPgoCountersUnlock();
+
+/*!
+ * @function OSKextResetPgoCounters
+ *
+ * @abstract Reset the PGO counters for all kexts.  Call only from debugger
+ * context, while holding OSKextResetPgoCountersLock().
+ */
+void
+OSKextResetPgoCounters();
 
 
 #if PRAGMA_MARK
@@ -985,7 +1011,7 @@ extern const void * gOSKextUnresolved;
 // Kernel External Components for FIPS compliance (KEC_FIPS)
 // WARNING - ath_hash is owned by the kernel, do not free
 typedef struct AppleTEXTHash {
-    const int       ath_version;    // version of this structure (value is 1)
+    int       		ath_version;    // version of this structure (value is 1 or 2)
     int             ath_length;     // length of hash data
     void *          ath_hash;       // hash extracted from AppleTextHashes dict 
 } AppleTEXTHash_t;

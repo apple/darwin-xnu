@@ -22,9 +22,10 @@
 // ========================
 #if CC_KERNEL
 #include <pexpert/pexpert.h>
-#define cc_printf(x...) printf(x)
+#define cc_printf(x...) kprintf(x)
 extern int printf(const char *format, ...) __printflike(1,2);
 #elif CC_USE_S3
+#include <stdio.h>
 #define cc_printf(x...) printf(x)
 #else
 #include <stdio.h>
@@ -60,7 +61,10 @@ extern int printf(const char *format, ...) __printflike(1,2);
 // ========================
 // Print utilities for corecrypto
 // ========================
+
+#include <corecrypto/cc.h>
+
 /* Print a byte array of arbitrary size */
-void cc_print(const char *label, unsigned long count, const uint8_t *s);
+void cc_print(const char *label, size_t count, const uint8_t *s);
 
 #endif /* _CORECRYPTO_CCN_DEBUG_H_ */

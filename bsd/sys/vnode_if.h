@@ -1,6 +1,5 @@
-
 /*
- * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -119,6 +118,7 @@ extern struct vnodeop_desc vnop_fsync_desc;
 extern struct vnodeop_desc vnop_remove_desc;
 extern struct vnodeop_desc vnop_link_desc;
 extern struct vnodeop_desc vnop_rename_desc;
+extern struct vnodeop_desc vnop_renamex_desc;
 extern struct vnodeop_desc vnop_mkdir_desc;
 extern struct vnodeop_desc vnop_rmdir_desc;
 extern struct vnodeop_desc vnop_symlink_desc;
@@ -137,6 +137,7 @@ extern struct vnodeop_desc vnop_pagein_desc;
 extern struct vnodeop_desc vnop_pageout_desc;
 extern struct vnodeop_desc vnop_searchfs_desc;
 extern struct vnodeop_desc vnop_copyfile_desc;
+extern struct vnodeop_desc vnop_clonefile_desc;
 extern struct vnodeop_desc vnop_blktooff_desc;
 extern struct vnodeop_desc vnop_offtoblk_desc;
 extern struct vnodeop_desc vnop_blockmap_desc;
@@ -437,7 +438,7 @@ struct vnop_read_args {
  @return 0 for success or a filesystem-specific error.  VNOP_READ() can return success even if less data was 
  read than originally requested; returning an error value should indicate that something actually went wrong.
  */
-extern errno_t VNOP_READ(vnode_t, struct uio *, int, vfs_context_t);
+extern errno_t VNOP_READ(vnode_t vp, struct uio *uio, int, vfs_context_t ctx);
 
 struct vnop_write_args {
 	struct vnodeop_desc *a_desc;
@@ -461,7 +462,7 @@ struct vnop_write_args {
  @return 0 for success or a filesystem-specific error.  VNOP_WRITE() can return success even if less data was 
  written than originally requested; returning an error value should indicate that something actually went wrong.
  */
-extern errno_t VNOP_WRITE(vnode_t, struct uio *, int, vfs_context_t);
+extern errno_t VNOP_WRITE(vnode_t vp, struct uio *uio, int ioflag, vfs_context_t ctx);
 
 struct vnop_ioctl_args {
 	struct vnodeop_desc *a_desc;
@@ -489,7 +490,7 @@ struct vnop_ioctl_args {
  @param ctx Context against which to authenticate ioctl request.
  @return 0 for success or a filesystem-specific error.  
  */
-extern errno_t VNOP_IOCTL(vnode_t, u_long, caddr_t, int, vfs_context_t);
+extern errno_t VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t ctx);
 
 struct vnop_select_args {
 	struct vnodeop_desc *a_desc;
@@ -620,7 +621,7 @@ struct vnop_fsync_args {
  @param ctx Context to authenticate for fsync request.
  @return 0 for success, else an error code.
  */
-extern errno_t VNOP_FSYNC(vnode_t, int, vfs_context_t);
+extern errno_t VNOP_FSYNC(vnode_t vp, int waitfor, vfs_context_t ctx);
 
 struct vnop_remove_args {
 	struct vnodeop_desc *a_desc;
@@ -716,6 +717,49 @@ struct vnop_rename_args {
  */
 #ifdef XNU_KERNEL_PRIVATE
 extern errno_t VNOP_RENAME(vnode_t, vnode_t, struct componentname *, vnode_t, vnode_t, struct componentname *, vfs_context_t);
+#endif /* XNU_KERNEL_PRIVATE */
+
+typedef unsigned int vfs_rename_flags_t;
+
+// Must match sys/stdio.h
+enum {
+	VFS_RENAME_SECLUDE	 	= 0x00000001,
+	VFS_RENAME_SWAP			= 0x00000002,
+	VFS_RENAME_EXCL			= 0x00000004,
+
+	VFS_RENAME_FLAGS_MASK	= (VFS_RENAME_SECLUDE | VFS_RENAME_SWAP
+							   | VFS_RENAME_EXCL),
+};
+
+struct vnop_renamex_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_fdvp;
+	vnode_t a_fvp;
+	struct componentname *a_fcnp;
+	vnode_t a_tdvp;
+	vnode_t a_tvp;
+	struct componentname *a_tcnp;
+	struct vnode_attr *a_vap;		// Reserved for future use
+	vfs_rename_flags_t a_flags;
+	vfs_context_t a_context;
+};
+
+/*!
+ @function VNOP_RENAMEX
+ @abstract Call down to a filesystem to rename a file.
+ @discussion VNOP_RENAMEX() will only be called with a source and target on the same volume.
+ @param fdvp Directory in which source file resides.
+ @param fvp File being renamed.
+ @param fcnp Name information for source file.
+ @param tdvp Directory file is being moved to.
+ @param tvp Existing file with same name as target, should one exist.
+ @param tcnp Name information for target path.
+ @param flags Control certain rename semantics.
+ @param ctx Context to authenticate for rename request.
+ @return 0 for success, else an error code.
+ */
+#ifdef XNU_KERNEL_PRIVATE
+extern errno_t VNOP_RENAMEX(vnode_t, vnode_t, struct componentname *, vnode_t, vnode_t, struct componentname *, vfs_rename_flags_t, vfs_context_t);
 #endif /* XNU_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
@@ -1282,6 +1326,36 @@ struct vnop_copyfile_args {
 extern errno_t VNOP_COPYFILE(vnode_t, vnode_t, vnode_t, struct componentname *, int, int, vfs_context_t);
 #endif /* XNU_KERNEL_PRIVATE */
 
+struct vnop_clonefile_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_fvp;
+	vnode_t a_dvp;
+	vnode_t *a_vpp;
+	struct componentname *a_cnp;
+	struct vnode_attr *a_vap;
+	uint32_t a_flags;
+	vfs_context_t a_context;
+	/* XXX Add recursive directory cloning authorizer */
+};
+
+/*!
+ @function VNOP_CLONEFILE
+ @abstract Call down to a filesystem to clone a filesystem object (regular file, directory or symbolic link.)
+ @discussion If file creation succeeds, "vpp" should be returned with an iocount to be dropped by the caller.
+ @param dvp Directory in which to clone object.
+ @param vpp Destination for vnode for newly cloned object.
+ @param cnp Description of name of object to clone.
+ @param vap File creation properties, as seen in vnode_getattr().  Manipulated with VATTR_ISACTIVE, VATTR_RETURN,
+ VATTR_SET_SUPPORTED, and so forth. All attributes not set here should either be copied
+ from the source object
+ or set to values which are used for creating new filesystem objects
+ @param ctx Context against which to authenticate file creation.
+ @return 0 for success or a filesystem-specific error.
+ */
+#ifdef XNU_KERNEL_PRIVATE
+extern errno_t VNOP_CLONEFILE(vnode_t, vnode_t, vnode_t *, struct componentname *, struct vnode_attr *, uint32_t, vfs_context_t);
+#endif /* XNU_KERNEL_PRIVATE */
+
 struct vnop_getxattr_args {
 	struct vnodeop_desc *a_desc;
 	vnode_t a_vp;
@@ -1304,7 +1378,7 @@ extern struct vnodeop_desc vnop_getxattr_desc;
  @param ctx Context to authenticate for getxattr request.
  @return 0 for success, or an error code.
  */
-extern errno_t VNOP_GETXATTR(vnode_t, const char *, uio_t, size_t *, int, vfs_context_t);
+extern errno_t VNOP_GETXATTR(vnode_t vp, const char *name, uio_t uio, size_t *size, int options, vfs_context_t ctx);
 
 struct vnop_setxattr_args {
 	struct vnodeop_desc *a_desc;
@@ -1327,7 +1401,7 @@ extern struct vnodeop_desc vnop_setxattr_desc;
  @param ctx Context to authenticate for setxattr request.
  @return 0 for success, or an error code.
  */
-extern errno_t VNOP_SETXATTR(vnode_t, const char *, uio_t, int, vfs_context_t);
+extern errno_t VNOP_SETXATTR(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t ctx);
 
 struct vnop_removexattr_args {
 	struct vnodeop_desc *a_desc;
@@ -1480,7 +1554,7 @@ struct vnop_bwrite_args {
  @param bp The buffer to write.
  @return 0 for success, else an error code.
  */
-extern errno_t VNOP_BWRITE(buf_t);
+extern errno_t VNOP_BWRITE(buf_t bp);
 
 struct vnop_kqfilt_add_args {
 	struct vnodeop_desc *a_desc;
@@ -1545,7 +1619,7 @@ extern struct vnodeop_desc vnop_monitor_desc;
  Each BEGIN will be matched with an END with the same handle.  Note that vnode_ismonitored() can
  be used to see if there are currently watchers for a file.
  */
-errno_t VNOP_MONITOR(vnode_t , uint32_t, uint32_t, void*, vfs_context_t);
+errno_t VNOP_MONITOR(vnode_t vp, uint32_t events, uint32_t flags, void *handle, vfs_context_t ctx);
 #endif /* XNU_KERNEL_PRIVATE */
 
 struct label;
@@ -1655,9 +1729,10 @@ struct vnop_removenamedstream_args {
 #ifdef XNU_KERNEL_PRIVATE
 extern errno_t VNOP_REMOVENAMEDSTREAM(vnode_t, vnode_t, const char *, int flags, vfs_context_t);
 #endif /* XNU_KERNEL_PRIVATE */
-#endif
 
-#endif
+#endif // NAMEDSTREAMS
+
+#endif // defined(__APPLE_API_UNSTABLE)
 
 __END_DECLS
 

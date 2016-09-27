@@ -216,6 +216,18 @@ void OSObject::retain() const
     taggedRetain(0);
 }
 
+extern "C" void
+osobject_retain(void * object)
+{
+    ((OSObject *)object)->retain();
+}
+
+extern "C" void
+osobject_release(void * object)
+{
+    ((OSObject *)object)->release();
+}
+
 void OSObject::release(int when) const
 {
     taggedRelease(0, when);

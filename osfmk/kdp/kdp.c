@@ -143,9 +143,13 @@ kdp_packet(
     size_t		plen = *len;
     kdp_req_t		req;
     boolean_t		ret;
-    
+
 #if DO_ALIGN
-    bcopy((char *)pkt, (char *)rd, sizeof(aligned_pkt));
+    if (plen > sizeof(aligned_pkt)) {
+	printf("kdp_packet bad len %lu\n", plen);
+	return FALSE;
+    }
+    bcopy((char *)pkt, (char *)rd, plen);
 #else
     rd = (kdp_pkt_t *)pkt;
 #endif

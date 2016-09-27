@@ -28,7 +28,7 @@
 
 Embedded=$(shell tconf --test TARGET_OS_EMBEDDED)
 
-ALL = 			\
+ALL =			\
 		create_file	\
 		geekbench_stdlib_write	\
 		getppid			\
@@ -64,8 +64,7 @@ ALL = 			\
 		getaddrinfo_port	\
 		getgrnam
 
-# Compile the following test on desktop platform only  
+# Compile the following test on desktop platform only
 ifeq "$(Embedded)" "NO"
 ALL += od_query_create_with_node
 endif
-

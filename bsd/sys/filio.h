@@ -81,4 +81,9 @@
 #define	FIOGETOWN	_IOR('f', 123, int)	/* get owner */
 #define	FIODTYPE	_IOR('f', 122, int)	/* get d_type */
 
+#ifdef KERNEL_PRIVATE
+#define FIODEVICELOCKED	_IO('f', 121)	/* device locked/unlocked */
+#define FIOPINSWAP		_IO('f', 120)	/* pin swap file to fast device */
+#endif
+
 #endif /* !_SYS_FILIO_H_ */

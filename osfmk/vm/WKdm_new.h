@@ -69,7 +69,7 @@ extern "C" {
 #include <mach/vm_param.h>
 
 
-#define	WKdm_SCRATCH_BUF_SIZE	PAGE_SIZE
+#define	WKdm_SCRATCH_BUF_SIZE_INTERNAL	PAGE_SIZE
 
 typedef unsigned int WK_word;
 

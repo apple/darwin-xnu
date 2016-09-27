@@ -289,6 +289,41 @@ def GetLLDBThreadForKernelThread(thread_obj):
 
     return sbthread
 
+def GetKextSymbolInfo(load_addr):
+    """ Get a string descriptiong load_addr <kextname> + offset
+        params:
+            load_addr - int address value of pc in backtrace.
+        returns: str - kext name + offset string. If no cached data available, warning message is returned.
+    """
+    symbol_name = "None"
+    symbol_offset = load_addr
+    kmod_val = kern.globals.kmod
+    if kern.arch not in ('arm64',):
+        for kval in IterateLinkedList(kmod_val, 'next'):
+            if load_addr >= unsigned(kval.address) and \
+                load_addr <= (unsigned(kval.address) + unsigned(kval.size)):
+                symbol_name = kval.name
+                symbol_offset = load_addr - unsigned(kval.address)
+                break
+        return "{:#018x} {:s} + {:#x} \n".format(load_addr, symbol_name, symbol_offset)
+
+    # only for arm64 we do lookup for split kexts.
+    cached_kext_info = caching.GetDynamicCacheData("kern.kexts.loadinformation", [])
+    if not cached_kext_info and str(GetConnectionProtocol()) == "core":
+        cached_kext_info = GetKextLoadInformation()
+
+    if not cached_kext_info:
+        return "{:#018x} ~ kext info not available. please run 'showallkexts' once ~ \n".format(load_addr)
+
+    for kval in cached_kext_info:
+        text_seg = kval[5]
+        if load_addr >= text_seg.vmaddr and \
+            load_addr <= (text_seg.vmaddr + text_seg.vmsize):
+            symbol_name = kval[2]
+            symbol_offset = load_addr - text_seg.vmaddr
+            break
+    return "{:#018x} {:s} + {:#x} \n".format(load_addr, symbol_name, symbol_offset)
+
 def GetThreadBackTrace(thread_obj, verbosity = vHUMAN, prefix = ""):
     """ Get a string to display back trace for a thread.
         params:
@@ -330,16 +365,7 @@ def GetThreadBackTrace(thread_obj, verbosity = vHUMAN, prefix = ""):
             
             symbol = frame.GetSymbol()
             if not symbol:
-                symbol_name = "None"
-                symbol_offset = load_addr
-                kmod_val = kern.globals.kmod
-                for kval in IterateLinkedList(kmod_val, 'next'):
-                    if load_addr >= unsigned(kval.address) and \
-                        load_addr <= (unsigned(kval.address) + unsigned(kval.size)):
-                        symbol_name = kval.name
-                        symbol_offset = load_addr - unsigned(kval.address)
-                        break
-                out_string += "{:#018x} {:s} + {:#x} \n".format(load_addr, symbol_name, symbol_offset)
+                out_string += GetKextSymbolInfo(load_addr)
             else:
                 file_addr = addr.GetFileAddress()
                 start_addr = symbol.GetStartAddress().GetFileAddress()
@@ -456,6 +482,9 @@ def XnuDebugCommand(cmd_args=None):
         reload:
             Reload a submodule from the xnu/tools/lldb directory. Do not include the ".py" suffix in modulename.
             usage: xnudebug reload <modulename> (eg. memory, process, stats etc)
+        flushcache:
+            remove any cached data held in static or dynamic data cache.
+            usage: xnudebug flushcache
         test:
             Start running registered test with <name> from various modules.
             usage: xnudebug test <name> (eg. test_memstats)
@@ -468,12 +497,12 @@ def XnuDebugCommand(cmd_args=None):
     command_args = cmd_args
     if len(command_args) == 0:
         raise ArgumentError("No command specified.")
-    supported_subcommands = ['debug', 'reload', 'test', 'testall']
+    supported_subcommands = ['debug', 'reload', 'test', 'testall', 'flushcache']
     subcommand = GetLongestMatchOption(command_args[0], supported_subcommands, True)
 
     if len(subcommand) == 0:
         raise ArgumentError("Subcommand (%s) is not a valid command. " % str(command_args[0]))
-    
+
     subcommand = subcommand[0].lower()
     if subcommand == 'debug':
         if command_args[-1].lower().find('dis') >=0 and config['debug']:
@@ -483,7 +512,10 @@ def XnuDebugCommand(cmd_args=None):
             config['debug'] = True
             EnableLLDBAPILogging()  # provided by utils.py
             print "Enabled debug logging. \nPlease run 'xnudebug debug disable' to disable it again. "
- 
+    if subcommand == 'flushcache':
+        print "Current size of cache: {}".format(caching.GetSizeOfCache())
+        caching.ClearAllCache()
+
     if subcommand == 'reload':
         module_name = command_args[-1]
         if module_name in sys.modules:
@@ -755,3 +787,6 @@ from bank import *
 from kauth import *
 from waitq import *
 from usertaskgdbserver import *
+from ktrace import *
+from pgtrace import *
+from xnutriage import *

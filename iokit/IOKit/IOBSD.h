@@ -32,6 +32,7 @@
  * bsd-related registry properties
  */
 
+#define kIOBSDKey      "IOBSD"     // (BSD subsystem resource)
 #define kIOBSDNameKey  "BSD Name"  // (an OSString)
 #define kIOBSDNamesKey "BSD Names" // (an OSDictionary of OSString's, for links)
 #define kIOBSDMajorKey "BSD Major" // (an OSNumber)
@@ -39,7 +40,7 @@
 #define kIOBSDUnitKey  "BSD Unit"  // (an OSNumber)
 
 
-#ifdef XNU_KERNEL_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #include <stdint.h>
 #include <kern/task.h>

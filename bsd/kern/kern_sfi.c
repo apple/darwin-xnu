@@ -41,6 +41,7 @@
 #include <sys/sfi.h>
 #include <sys/kdebug.h>
 #include <sys/priv.h>
+#include <kern/policy_internal.h>
 
 /*
  * This file provides the syscall-based configuration facility
@@ -173,10 +174,11 @@ static int proc_apply_sfi_managed(proc_t p, void * arg)
 	} else {
 		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SFI, SFI_PID_CLEAR_MANAGED) | DBG_FUNC_NONE, pid, 0, 0, 0, 0);
 	}
-	
-	proc_set_task_policy(p->task, THREAD_NULL,
-								 TASK_POLICY_ATTRIBUTE, TASK_POLICY_SFI_MANAGED,
-								 managed_enabled ? TASK_POLICY_ENABLE : TASK_POLICY_DISABLE);
+
+	proc_set_task_policy(p->task,
+	                     TASK_POLICY_ATTRIBUTE, TASK_POLICY_SFI_MANAGED,
+	                     managed_enabled ? TASK_POLICY_ENABLE : TASK_POLICY_DISABLE);
+
 	return PROC_RETURNED;
 }
 
@@ -240,7 +242,7 @@ int sfi_pidctl(struct proc *p __unused, struct sfi_pidctl_args *uap, int32_t *re
 				break;
 			}
 
-			managed_enabled = proc_get_task_policy(targetp->task, THREAD_NULL, TASK_POLICY_ATTRIBUTE, TASK_POLICY_SFI_MANAGED);
+			managed_enabled = proc_get_task_policy(targetp->task, TASK_POLICY_ATTRIBUTE, TASK_POLICY_SFI_MANAGED);
 
 			proc_rele(targetp);
 

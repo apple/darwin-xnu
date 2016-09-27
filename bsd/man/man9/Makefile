@@ -35,4 +35,3 @@ INSTALL_MAN_DIR = man9
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

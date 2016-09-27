@@ -170,6 +170,7 @@ ipc_space_create(
 	space->is_task = NULL;
 	space->is_low_mod = new_size;
 	space->is_high_mod = 0;
+	space->is_node_id = HOST_LOCAL_NODE; /* HOST_LOCAL_NODE, except proxy spaces */
 
 	*spacep = space;
 	return KERN_SUCCESS;
@@ -208,6 +209,7 @@ ipc_space_create_special(
 	space->is_table_next = 0;
 	space->is_low_mod    = 0;
 	space->is_high_mod   = 0;
+	space->is_node_id = HOST_LOCAL_NODE; /* HOST_LOCAL_NODE, except proxy spaces */
 
 	*spacep = space;
 	return KERN_SUCCESS;

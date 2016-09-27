@@ -81,6 +81,8 @@
 #include <machine/commpage.h>  /* for commpage_update_mach_approximate_time */
 #endif
 
+static void sched_update_thread_bucket(thread_t thread);
+
 /*
  *	thread_quantum_expire:
  *
@@ -114,6 +116,9 @@ thread_quantum_expire(
 	 * Because this balance adjustment could potentially attempt to wake this very
 	 * thread, we must credit the ledger before taking the thread lock. The ledger
 	 * pointers are only manipulated by the thread itself at the ast boundary.
+	 *
+	 * TODO: This fails to account for the time between when the timer was armed and when it fired.
+	 * It should be based on the system_timer and running a thread_timer_event operation here.
 	 */
 	ledger_credit(thread->t_ledger, task_ledgers.cpu_time, thread->quantum_remaining);
 	ledger_credit(thread->t_threadledger, thread_ledgers.cpu_time, thread->quantum_remaining);
@@ -235,15 +240,16 @@ thread_quantum_expire(
 void
 sched_set_thread_base_priority(thread_t thread, int priority)
 {
-	int old_priority = thread->base_pri;
+	assert(priority >= MINPRI);
+
+	if (thread->sched_mode == TH_MODE_REALTIME)
+		assert(priority <= BASEPRI_RTQUEUES);
+	else
+		assert(priority < BASEPRI_RTQUEUES);
+
 	thread->base_pri = priority;
 
-	/* A thread is 'throttled' when its base priority is at or below MAXPRI_THROTTLE */
-	if ((priority > MAXPRI_THROTTLE) && (old_priority <= MAXPRI_THROTTLE)) {
-		sched_set_thread_throttled(thread, FALSE);
-	} else if ((priority <= MAXPRI_THROTTLE) && (old_priority > MAXPRI_THROTTLE)) {
-		sched_set_thread_throttled(thread, TRUE);
-	}
+	sched_update_thread_bucket(thread);
 
 	thread_recompute_sched_pri(thread, FALSE);
 }
@@ -413,20 +419,16 @@ can_update_priority(
  */
 void
 update_priority(
-	register thread_t	thread)
+	thread_t	thread)
 {
-	register unsigned	ticks;
-	register uint32_t	delta;
+	uint32_t ticks, delta;
 
 	ticks = sched_tick - thread->sched_stamp;
 	assert(ticks != 0);
+
 	thread->sched_stamp += ticks;
-	if (sched_use_combined_fgbg_decay)
-		thread->pri_shift = sched_combined_fgbg_pri_shift;
-	else if (thread->sched_flags & TH_SFLAG_THROTTLED)
-		thread->pri_shift = sched_background_pri_shift;
-	else
-		thread->pri_shift = sched_pri_shift;
+
+	thread->pri_shift = sched_pri_shifts[thread->th_sched_bucket];
 
 	/* If requested, accelerate aging of sched_usage */
 	if (sched_decay_usage_age_factor > 1)
@@ -437,8 +439,6 @@ update_priority(
 	 */
 	thread_timer_delta(thread, delta);
 	if (ticks < SCHED_DECAY_TICKS) {
-		register struct shift_data	*shiftp;
-
 		/*
 		 *	Accumulate timesharing usage only
 		 *	during contention for processor
@@ -450,25 +450,20 @@ update_priority(
 		thread->cpu_usage += delta + thread->cpu_delta;
 		thread->cpu_delta = 0;
 
-		shiftp = &sched_decay_shifts[ticks];
+		struct shift_data *shiftp = &sched_decay_shifts[ticks];
+
 		if (shiftp->shift2 > 0) {
-		    thread->cpu_usage =
-						(thread->cpu_usage >> shiftp->shift1) +
-						(thread->cpu_usage >> shiftp->shift2);
-		    thread->sched_usage =
-						(thread->sched_usage >> shiftp->shift1) +
-						(thread->sched_usage >> shiftp->shift2);
+			thread->cpu_usage =   (thread->cpu_usage >> shiftp->shift1) +
+			                      (thread->cpu_usage >> shiftp->shift2);
+			thread->sched_usage = (thread->sched_usage >> shiftp->shift1) +
+			                      (thread->sched_usage >> shiftp->shift2);
+		} else {
+			thread->cpu_usage =   (thread->cpu_usage >>   shiftp->shift1) -
+			                      (thread->cpu_usage >> -(shiftp->shift2));
+			thread->sched_usage = (thread->sched_usage >>   shiftp->shift1) -
+			                      (thread->sched_usage >> -(shiftp->shift2));
 		}
-		else {
-		    thread->cpu_usage =
-						(thread->cpu_usage >> shiftp->shift1) -
-						(thread->cpu_usage >> -(shiftp->shift2));
-		    thread->sched_usage =
-						(thread->sched_usage >> shiftp->shift1) -
-						(thread->sched_usage >> -(shiftp->shift2));
-		}
-	}
-	else {
+	} else {
 		thread->cpu_usage = thread->cpu_delta = 0;
 		thread->sched_usage = 0;
 	}
@@ -516,86 +511,96 @@ update_priority(
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
-#if MACH_ASSERT
-/* sched_mode == TH_MODE_TIMESHARE controls whether a thread has a timeshare count when it has a run count */
 
-void sched_share_incr(thread_t thread) {
+/*
+ * TH_BUCKET_RUN is a count of *all* runnable non-idle threads.
+ * Each other bucket is a count of the runnable non-idle threads
+ * with that property.
+ */
+volatile uint32_t       sched_run_buckets[TH_BUCKET_MAX];
+
+static void
+sched_incr_bucket(sched_bucket_t bucket)
+{
+	assert(bucket >= TH_BUCKET_FIXPRI &&
+	       bucket <= TH_BUCKET_SHARE_BG);
+
+	hw_atomic_add(&sched_run_buckets[bucket], 1);
+}
+
+static void
+sched_decr_bucket(sched_bucket_t bucket)
+{
+	assert(bucket >= TH_BUCKET_FIXPRI &&
+	       bucket <= TH_BUCKET_SHARE_BG);
+
+	assert(sched_run_buckets[bucket] > 0);
+
+	hw_atomic_sub(&sched_run_buckets[bucket], 1);
+}
+
+/* TH_RUN & !TH_IDLE controls whether a thread has a run count */
+
+uint32_t
+sched_run_incr(thread_t thread)
+{
 	assert((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN);
-	assert(thread->sched_mode == TH_MODE_TIMESHARE);
-	assert(thread->SHARE_COUNT == 0);
-	thread->SHARE_COUNT++;
-	(void)hw_atomic_add(&sched_share_count, 1);
+
+	uint32_t new_count = hw_atomic_add(&sched_run_buckets[TH_BUCKET_RUN], 1);
+
+	sched_incr_bucket(thread->th_sched_bucket);
+
+	return new_count;
 }
 
-void sched_share_decr(thread_t thread) {
-	assert((thread->state & (TH_RUN|TH_IDLE)) != TH_RUN || thread->sched_mode != TH_MODE_TIMESHARE);
-	assert(thread->SHARE_COUNT == 1);
-	(void)hw_atomic_sub(&sched_share_count, 1);
-	thread->SHARE_COUNT--;
+uint32_t
+sched_run_decr(thread_t thread)
+{
+	assert((thread->state & (TH_RUN|TH_IDLE)) != TH_RUN);
+
+	sched_decr_bucket(thread->th_sched_bucket);
+
+	uint32_t new_count = hw_atomic_sub(&sched_run_buckets[TH_BUCKET_RUN], 1);
+
+	return new_count;
 }
 
-/* TH_SFLAG_THROTTLED controls whether a thread has a background count when it has a run count and a share count */
+static void
+sched_update_thread_bucket(thread_t thread)
+{
+	sched_bucket_t old_bucket = thread->th_sched_bucket;
+	sched_bucket_t new_bucket = TH_BUCKET_RUN;
 
-void sched_background_incr(thread_t thread) {
-	assert((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN);
-	assert(thread->sched_mode == TH_MODE_TIMESHARE);
-	assert((thread->sched_flags & TH_SFLAG_THROTTLED) == TH_SFLAG_THROTTLED);
+	switch (thread->sched_mode) {
+	case TH_MODE_FIXED:
+	case TH_MODE_REALTIME:
+		new_bucket = TH_BUCKET_FIXPRI;
+		break;
 
-	assert(thread->BG_COUNT == 0);
-	thread->BG_COUNT++;
-	int val = hw_atomic_add(&sched_background_count, 1);
-	assert(val >= 0);
+	case TH_MODE_TIMESHARE:
+		if (thread->base_pri > BASEPRI_UTILITY)
+			new_bucket = TH_BUCKET_SHARE_FG;
+		else if (thread->base_pri > MAXPRI_THROTTLE)
+			new_bucket = TH_BUCKET_SHARE_UT;
+		else
+			new_bucket = TH_BUCKET_SHARE_BG;
+		break;
 
-	/* Always do the background change while holding a share count */
-	assert(thread->SHARE_COUNT == 1);
+	default:
+		panic("unexpected mode: %d", thread->sched_mode);
+		break;
+	}
+
+	if (old_bucket != new_bucket) {
+		thread->th_sched_bucket = new_bucket;
+		thread->pri_shift = sched_pri_shifts[new_bucket];
+
+		if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
+			sched_decr_bucket(old_bucket);
+			sched_incr_bucket(new_bucket);
+		}
+	}
 }
-
-void sched_background_decr(thread_t thread) {
-	if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN && thread->sched_mode == TH_MODE_TIMESHARE)
-		assert((thread->sched_flags & TH_SFLAG_THROTTLED) != TH_SFLAG_THROTTLED);
-	assert(thread->BG_COUNT == 1);
-	int val = hw_atomic_sub(&sched_background_count, 1);
-	thread->BG_COUNT--;
-	assert(val >= 0);
-	assert(thread->BG_COUNT == 0);
-
-	/* Always do the background change while holding a share count */
-	assert(thread->SHARE_COUNT == 1);
-}
-
-
-void
-assert_thread_sched_count(thread_t thread) {
-	/* Only 0 or 1 are acceptable values */
-	assert(thread->BG_COUNT    == 0 || thread->BG_COUNT    == 1);
-	assert(thread->SHARE_COUNT == 0 || thread->SHARE_COUNT == 1);
-
-	/* BG is only allowed when you already have a share count */
-	if (thread->BG_COUNT == 1)
-		assert(thread->SHARE_COUNT == 1);
-	if (thread->SHARE_COUNT == 0)
-		assert(thread->BG_COUNT == 0);
-
-	if ((thread->state & (TH_RUN|TH_IDLE)) != TH_RUN ||
-	    (thread->sched_mode != TH_MODE_TIMESHARE))
-		assert(thread->SHARE_COUNT == 0);
-
-	if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN &&
-	    (thread->sched_mode == TH_MODE_TIMESHARE))
-		assert(thread->SHARE_COUNT == 1);
-
-	if ((thread->state & (TH_RUN|TH_IDLE)) != TH_RUN ||
-	    (thread->sched_mode != TH_MODE_TIMESHARE)    ||
-	    !(thread->sched_flags & TH_SFLAG_THROTTLED))
-		assert(thread->BG_COUNT == 0);
-
-	if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN &&
-	    (thread->sched_mode == TH_MODE_TIMESHARE)    &&
-	    (thread->sched_flags & TH_SFLAG_THROTTLED))
-		assert(thread->BG_COUNT == 1);
-}
-
-#endif /* MACH_ASSERT */
 
 /*
  * Set the thread's true scheduling mode
@@ -607,43 +612,22 @@ assert_thread_sched_count(thread_t thread) {
 void
 sched_set_thread_mode(thread_t thread, sched_mode_t new_mode)
 {
-	assert_thread_sched_count(thread);
 	assert(thread->runq == PROCESSOR_NULL);
 
-	sched_mode_t old_mode = thread->sched_mode;
+	switch (new_mode) {
+	case TH_MODE_FIXED:
+	case TH_MODE_REALTIME:
+	case TH_MODE_TIMESHARE:
+		break;
+
+	default:
+		panic("unexpected mode: %d", new_mode);
+		break;
+	}
 
 	thread->sched_mode = new_mode;
 
-	switch (new_mode) {
-		case TH_MODE_FIXED:
-		case TH_MODE_REALTIME:
-			if (old_mode == TH_MODE_TIMESHARE) {
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
-					if (thread->sched_flags & TH_SFLAG_THROTTLED)
-						sched_background_decr(thread);
-
-					sched_share_decr(thread);
-				}
-			}
-			break;
-
-		case TH_MODE_TIMESHARE:
-			if (old_mode != TH_MODE_TIMESHARE) {
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN) {
-					sched_share_incr(thread);
-
-					if (thread->sched_flags & TH_SFLAG_THROTTLED)
-						sched_background_incr(thread);
-				}
-			}
-			break;
-
-		default:
-			panic("unexpected mode: %d", new_mode);
-			break;
-	}
-
-	assert_thread_sched_count(thread);
+	sched_update_thread_bucket(thread);
 }
 
 /*
@@ -654,7 +638,6 @@ sched_thread_mode_demote(thread_t thread, uint32_t reason)
 {
 	assert(reason & TH_SFLAG_DEMOTED_MASK);
 	assert((thread->sched_flags & reason) != reason);
-	assert_thread_sched_count(thread);
 
 	if (thread->policy_reset)
 		return;
@@ -679,8 +662,6 @@ sched_thread_mode_demote(thread_t thread, uint32_t reason)
 
 	if (removed)
 		thread_run_queue_reinsert(thread, SCHED_TAILQ);
-
-	assert_thread_sched_count(thread);
 }
 
 /*
@@ -694,8 +675,6 @@ sched_thread_mode_undemote(thread_t thread, uint32_t reason)
 	assert(thread->saved_mode != TH_MODE_NONE);
 	assert(thread->sched_mode == TH_MODE_TIMESHARE);
 	assert(thread->policy_reset == 0);
-
-	assert_thread_sched_count(thread);
 
 	thread->sched_flags &= ~reason;
 
@@ -716,34 +695,4 @@ sched_thread_mode_undemote(thread_t thread, uint32_t reason)
 		thread_run_queue_reinsert(thread, SCHED_TAILQ);
 }
 
-/*
- * Set the thread to be categorized as 'background'
- * Called with thread mutex and thread lock held
- *
- * TODO: Eventually, 'background' should be a true sched_mode.
- */
-void
-sched_set_thread_throttled(thread_t thread, boolean_t wants_throttle)
-{
-	if (thread->policy_reset)
-		return;
-
-	assert(((thread->sched_flags & TH_SFLAG_THROTTLED) ? TRUE : FALSE) != wants_throttle);
-
-	assert_thread_sched_count(thread);
-
-	if (wants_throttle) {
-		thread->sched_flags |= TH_SFLAG_THROTTLED;
-		if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN && thread->sched_mode == TH_MODE_TIMESHARE) {
-			sched_background_incr(thread);
-		}
-	} else {
-		thread->sched_flags &= ~TH_SFLAG_THROTTLED;
-		if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN && thread->sched_mode == TH_MODE_TIMESHARE) {
-			sched_background_decr(thread);
-		}
-	}
-
-	assert_thread_sched_count(thread);
-}
 

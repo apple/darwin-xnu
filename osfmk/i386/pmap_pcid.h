@@ -36,8 +36,8 @@ void	pmap_pcid_deallocate_pcid(int, pmap_t);
 void	pmap_destroy_pcid_sync_action(void *);
 void	pmap_destroy_pcid_sync(pmap_t);
 void	pmap_pcid_lazy_flush(pmap_t);
-void	pmap_pcid_activate(pmap_t, int);
-pcid_t	pcid_for_pmap_cpu_tuple(pmap_t, int);
+void	pmap_pcid_activate(pmap_t, int, boolean_t, boolean_t);
+pcid_t	pcid_for_pmap_cpu_tuple(pmap_t, thread_t, int);
 
 #define PMAP_INVALID ((pmap_t)0xDEAD7347)
 #define PMAP_PCID_INVALID_PCID	(0xDEAD)

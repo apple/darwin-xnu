@@ -29,6 +29,7 @@ extern "C" {
 #include <mach/kmod.h>
 #include <libkern/kernel_mach_header.h>
 #include <libkern/prelink.h>
+
 }
 
 #include <libkern/version.h>
@@ -109,6 +110,25 @@ static const char * sKernelComponentNames[] = {
    "com.apple.iokit.IOSystemManagementFamily",
    "com.apple.iokit.ApplePlatformFamily",
    NULL
+};
+
+static int __whereIsAddr(vm_offset_t theAddr, unsigned long * segSizes, vm_offset_t *segAddrs, int segCount );
+
+#define PLK_SEGMENTS 11
+
+static const char * plk_segNames[] = {
+    "__TEXT",
+    "__TEXT_EXEC",
+    "__DATA",
+    "__DATA_CONST",
+    "__LINKEDIT",
+    "__PRELINK_TEXT",
+    "__PLK_TEXT_EXEC",
+    "__PRELINK_DATA",
+    "__PLK_DATA_CONST",
+    "__PLK_LINKEDIT",
+    "__PRELINK_INFO",
+    NULL
 };
 
 #if PRAGMA_MARK
@@ -206,6 +226,11 @@ KLDBootstrap::readStartupExtensions(void)
     return;
 }
 
+typedef struct kaslrPackedOffsets {
+    uint32_t 	count;              /* number of offsets */
+    uint32_t 	offsetsArray[];     /* offsets to slide */
+} kaslrPackedOffsets;
+
 /*********************************************************************
 *********************************************************************/
 void
@@ -239,6 +264,9 @@ KLDBootstrap::readPrelinkedExtensions(
     bool                        developerDevice;
     bool                        dontLoad;
 #endif
+    OSData                     * kaslrOffsets = NULL;
+    unsigned long               plk_segSizes[PLK_SEGMENTS];
+    vm_offset_t                 plk_segAddrs[PLK_SEGMENTS];
 
     OSKextLog(/* kext */ NULL,
         kOSKextLogProgressLevel |
@@ -300,6 +328,14 @@ KLDBootstrap::readPrelinkedExtensions(
     prelinkData = (void *) prelinkTextSegment->vmaddr;
     prelinkLength = prelinkTextSegment->vmsize;
 
+    /* build arrays of plk info for later use */
+    const char ** segNamePtr;
+
+    for (segNamePtr = &plk_segNames[0], i = 0; *segNamePtr && i < PLK_SEGMENTS; segNamePtr++, i++) {
+        plk_segSizes[i] = 0;
+        plk_segAddrs[i] = (vm_offset_t)getsegdatafromheader(&_mh_execute_header, *segNamePtr, &plk_segSizes[i]);
+    }
+
 
    /* Unserialize the info dictionary from the prelink info section.
     */
@@ -331,6 +367,7 @@ KLDBootstrap::readPrelinkedExtensions(
     ramDiskBoot = IORamDiskBSDRoot();
 #endif /* NO_KEXTD */
 
+
     infoDictArray = OSDynamicCast(OSArray, 
         prelinkInfoDict->getObject(kPrelinkInfoDictionaryKey));
     if (!infoDictArray) {
@@ -339,10 +376,13 @@ KLDBootstrap::readPrelinkedExtensions(
         goto finish;
     }
     
+    /* kaslrOffsets are available use them to slide local relocations */
+    kaslrOffsets = OSDynamicCast(OSData,
+                                 prelinkInfoDict->getObject(kPrelinkLinkKASLROffsetsKey));
+        
     /* Create dictionary of excluded kexts
      */
     OSKext::createExcludeListFromPrelinkInfo(infoDictArray);
-
     /* Create OSKext objects for each info dictionary. 
      */
     for (i = 0; i < infoDictArray->getCount(); ++i) {
@@ -376,7 +416,7 @@ KLDBootstrap::readPrelinkedExtensions(
             if (ramDiskOnlyBool == kOSBooleanTrue) {
                 dontLoad = true;
             }
-	}
+        }
 
         if (dontLoad == true) {
             OSString *bundleID = OSDynamicCast(OSString,
@@ -403,10 +443,47 @@ KLDBootstrap::readPrelinkedExtensions(
         * kext system keeps them around until explicitly removed.
         * Any creation/registration failures are already logged for us.
         */
-        OSKext * newKext = OSKext::withPrelinkedInfoDict(infoDict);
+        OSKext * newKext = OSKext::withPrelinkedInfoDict(infoDict, (kaslrOffsets ? TRUE : FALSE));
         OSSafeReleaseNULL(newKext);
     }
-    
+
+    /* slide kxld relocations */
+    if (kaslrOffsets && vm_kernel_slide > 0) {
+	    int slidKextAddrCount = 0;
+	    int badSlideAddr = 0;
+	    int badSlideTarget = 0;
+
+        kaslrPackedOffsets * myOffsets = NULL;
+	    myOffsets = (kaslrPackedOffsets *) kaslrOffsets->getBytesNoCopy();
+
+	    for (uint32_t j = 0; j < myOffsets->count; j++) {
+
+		    uint64_t        slideOffset = (uint64_t) myOffsets->offsetsArray[j];
+		    uintptr_t *     slideAddr = (uintptr_t *) ((uint64_t)prelinkData + slideOffset);
+		    int             slideAddrSegIndex = -1;
+		    int             addrToSlideSegIndex = -1;
+
+		    slideAddrSegIndex = __whereIsAddr( (vm_offset_t)slideAddr, &plk_segSizes[0], &plk_segAddrs[0], PLK_SEGMENTS );
+		    if (slideAddrSegIndex >= 0) {
+			    addrToSlideSegIndex = __whereIsAddr( (vm_offset_t)(*slideAddr + vm_kernel_slide), &plk_segSizes[0], &plk_segAddrs[0], PLK_SEGMENTS );
+			    if (addrToSlideSegIndex < 0) {
+				    badSlideTarget++;
+				    continue;
+			    }
+		    }
+		    else {
+			    badSlideAddr++;
+			    continue;
+		    }
+
+		    slidKextAddrCount++;
+		    *(slideAddr) += vm_kernel_slide;
+	    } // for ...
+
+	    /* All kexts are now slid, set VM protections for them */
+	    OSKext::setAllVMAttributes();
+    }
+
    /* Store the number of prelinked kexts in the registry so we can tell
     * when the system has been started from a prelinked kernel.
     */
@@ -420,7 +497,7 @@ KLDBootstrap::readPrelinkedExtensions(
     if (prelinkCountObj) {
         registryRoot->setProperty(kOSPrelinkKextCountKey, prelinkCountObj);
     }
-
+    
     OSKextLog(/* kext */ NULL,
         kOSKextLogProgressLevel |
         kOSKextLogGeneralFlag | kOSKextLogKextBookkeepingFlag |
@@ -445,12 +522,29 @@ KLDBootstrap::readPrelinkedExtensions(
     }
 
 finish:
-    OSSafeRelease(errorString);
-    OSSafeRelease(parsedXML);
-    OSSafeRelease(theKernel);
-    OSSafeRelease(prelinkCountObj);
+    OSSafeReleaseNULL(errorString);
+    OSSafeReleaseNULL(parsedXML);
+    OSSafeReleaseNULL(theKernel);
+    OSSafeReleaseNULL(prelinkCountObj);
     return;
 }
+
+static int __whereIsAddr(vm_offset_t theAddr, unsigned long * segSizes, vm_offset_t *segAddrs, int segCount)
+{
+	int i;
+
+	for (i = 0; i < segCount; i++) {
+		vm_offset_t         myAddr = *(segAddrs + i);
+		unsigned long       mySize = *(segSizes + i);
+
+		if (theAddr >= myAddr && theAddr < (myAddr + mySize)) {
+			return i;
+		}
+	}
+
+	return -1;
+}
+
 
 /*********************************************************************
 *********************************************************************/
@@ -582,7 +676,7 @@ KLDBootstrap::readBooterExtensions(void)
          * Any creation/registration failures are already logged for us.
          */
         OSKext * newKext = OSKext::withBooterData(deviceTreeName, booterData);
-        OSSafeRelease(newKext);
+        OSSafeReleaseNULL(newKext);
 
         booterMemoryMap->removeProperty(deviceTreeName);
 
@@ -590,11 +684,11 @@ KLDBootstrap::readBooterExtensions(void)
 
 finish:
 
-    OSSafeRelease(booterMemoryMap);
-    OSSafeRelease(propertyDict);
-    OSSafeRelease(keyIterator);
-    OSSafeRelease(booterData);
-    OSSafeRelease(aKext);
+    OSSafeReleaseNULL(booterMemoryMap);
+    OSSafeReleaseNULL(propertyDict);
+    OSSafeReleaseNULL(keyIterator);
+    OSSafeReleaseNULL(booterData);
+    OSSafeReleaseNULL(aKext);
     return;
 }
 
@@ -660,8 +754,8 @@ KLDBootstrap::loadSecurityExtensions(void)
     }
 
 finish:
-    OSSafeRelease(keyIterator);
-    OSSafeRelease(extensionsDict);
+    OSSafeReleaseNULL(keyIterator);
+    OSSafeReleaseNULL(extensionsDict);
 
     return;
 }
@@ -703,7 +797,7 @@ KLDBootstrap::loadKernelComponentKexts(void)
         }
     }
 
-    OSSafeRelease(theKext);
+    OSSafeReleaseNULL(theKext);
     return result;
 }
 
@@ -775,8 +869,8 @@ KLDBootstrap::loadKernelExternalComponents(void)
     }
 
 finish:
-    OSSafeRelease(keyIterator);
-    OSSafeRelease(extensionsDict);
+    OSSafeReleaseNULL(keyIterator);
+    OSSafeReleaseNULL(extensionsDict);
 
     return;
 }
@@ -895,10 +989,10 @@ KLDBootstrap::readBuiltinPersonalities(void)
     gIOCatalogue->addDrivers(allPersonalities, false);
 
 finish:
-    OSSafeRelease(parsedXML);
-    OSSafeRelease(allPersonalities);
-    OSSafeRelease(errorString);
-    OSSafeRelease(personalitiesIterator);
+    OSSafeReleaseNULL(parsedXML);
+    OSSafeReleaseNULL(allPersonalities);
+    OSSafeReleaseNULL(errorString);
+    OSSafeReleaseNULL(personalitiesIterator);
     return;
 }
 

@@ -98,6 +98,7 @@ typedef mach_voucher_attr_key_t *mach_voucher_attr_key_array_t;
 #define MACH_VOUCHER_ATTR_KEY_ATM		((mach_voucher_attr_key_t)1)
 #define MACH_VOUCHER_ATTR_KEY_IMPORTANCE	((mach_voucher_attr_key_t)2)
 #define MACH_VOUCHER_ATTR_KEY_BANK		((mach_voucher_attr_key_t)3)
+#define MACH_VOUCHER_ATTR_KEY_PTHPRIORITY	((mach_voucher_attr_key_t)4)
 
 #define MACH_VOUCHER_ATTR_KEY_USER_DATA		((mach_voucher_attr_key_t)7)
 #define MACH_VOUCHER_ATTR_KEY_BITS		MACH_VOUCHER_ATTR_KEY_USER_DATA /* deprecated */
@@ -175,6 +176,9 @@ typedef mach_voucher_attr_raw_recipe_t mach_voucher_attr_raw_recipe_array_t;
 typedef mach_msg_type_number_t mach_voucher_attr_raw_recipe_size_t;
 typedef mach_msg_type_number_t mach_voucher_attr_raw_recipe_array_size_t;
 
+#define MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE   5120
+#define MACH_VOUCHER_TRAP_STACK_LIMIT                 256
+
 #pragma pack()
 
 /*
@@ -248,5 +252,10 @@ typedef uint32_t mach_voucher_attr_control_flags_t;
 #define MACH_VOUCHER_IMPORTANCE_ATTR_ADD_EXTERNAL       1  /* Add some number of external refs (not supported) */
 #define MACH_VOUCHER_IMPORTANCE_ATTR_DROP_EXTERNAL      2  /* Drop some number of external refs */
 typedef uint32_t mach_voucher_attr_importance_refs;
+
+/*
+ * Activity id Generation defines
+ */
+#define MACH_ACTIVITY_ID_COUNT_MAX 16
 
 #endif	/* _MACH_VOUCHER_TYPES_H_ */

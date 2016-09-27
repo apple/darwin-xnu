@@ -83,29 +83,13 @@ vm_offset_t			kernel_stack_depth_max;
 static inline void
 STACK_ZINFO_PALLOC(thread_t thread)
 {
-	task_t task;
-	zinfo_usage_t zinfo;
-
 	ledger_credit(thread->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
-
-	if (stack_fake_zone_index != -1 &&
-	    (task = thread->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
-		OSAddAtomic64(kernel_stack_size,
-			      (int64_t *)&zinfo[stack_fake_zone_index].alloc);
 }
 
 static inline void
 STACK_ZINFO_PFREE(thread_t thread)
 {
-	task_t task;
-	zinfo_usage_t zinfo;
-
 	ledger_debit(thread->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
-
-	if (stack_fake_zone_index != -1 &&
-	    (task = thread->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
-		OSAddAtomic64(kernel_stack_size, 
-			      (int64_t *)&zinfo[stack_fake_zone_index].free);
 }
 
 static inline void
@@ -113,19 +97,6 @@ STACK_ZINFO_HANDOFF(thread_t from, thread_t to)
 {
 	ledger_debit(from->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
 	ledger_credit(to->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
-
-	if (stack_fake_zone_index != -1) {
-		task_t task;
-		zinfo_usage_t zinfo;
-	
-		if ((task = from->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
-			OSAddAtomic64(kernel_stack_size, 
-				      (int64_t *)&zinfo[stack_fake_zone_index].free);
-
-		if ((task = to->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
-			OSAddAtomic64(kernel_stack_size, 
-				      (int64_t *)&zinfo[stack_fake_zone_index].alloc);
-	}
 }
 
 /*
@@ -518,8 +489,8 @@ processor_set_stack_usage(
 	vm_size_t maxusage;
 	vm_offset_t maxstack;
 
-	register thread_t *thread_list;
-	register thread_t thread;
+	thread_t *thread_list;
+	thread_t thread;
 
 	unsigned int actual;	/* this many things */
 	unsigned int i;

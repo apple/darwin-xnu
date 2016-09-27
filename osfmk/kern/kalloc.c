@@ -77,6 +77,7 @@
 #include <vm/vm_object.h>
 #include <vm/vm_map.h>
 #include <libkern/OSMalloc.h>
+#include <sys/kdebug.h>
 
 #ifdef MACH_BSD
 zone_t kalloc_zone(vm_size_t);
@@ -114,28 +115,14 @@ static void
 KALLOC_ZINFO_SALLOC(vm_size_t bytes)
 {
 	thread_t thr = current_thread();
-	task_t task;
-	zinfo_usage_t zinfo;
-
 	ledger_debit(thr->t_ledger, task_ledgers.tkm_shared, bytes);
-
-	if (kalloc_fake_zone_index != -1 && 
-	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
-		zinfo[kalloc_fake_zone_index].alloc += bytes;
 }
 
 static void
 KALLOC_ZINFO_SFREE(vm_size_t bytes)
 {
 	thread_t thr = current_thread();
-	task_t task;
-	zinfo_usage_t zinfo;
-
 	ledger_credit(thr->t_ledger, task_ledgers.tkm_shared, bytes);
-
-	if (kalloc_fake_zone_index != -1 && 
-	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
-		zinfo[kalloc_fake_zone_index].free += bytes;
 }
 
 /*
@@ -165,11 +152,11 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
 	80,				\
 	96,				\
 /* 6 */	128,				\
-	160,				\
+	160, 192,				\
 	256,				\
 /* 9 */	288,				\
-	512,				\
-	1024,				\
+	512, 576,				\
+	1024, 1152,				\
 /* C */	1280,				\
 	2048,				\
 	4096
@@ -183,10 +170,13 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
 	"kalloc.96",			\
 /* 6 */	"kalloc.128",			\
 	"kalloc.160",			\
+	"kalloc.192",			\
 	"kalloc.256",			\
 /* 9 */	"kalloc.288",			\
 	"kalloc.512",			\
+	"kalloc.576",			\
 	"kalloc.1024",			\
+	"kalloc.1152", 			\
 /* C */	"kalloc.1280",			\
 	"kalloc.2048",			\
 	"kalloc.4096"
@@ -204,9 +194,9 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
 /* 6 */	64,	72,	88,	112, 	\
 	128, 	192,			\
 	256, 	288,	384,	440,	\
-/* 9 */	512,	768,			\
+/* 9 */	512,	576, 	768,		\
 	1024,	1152,	1536,		\
-	2048,	3072,			\
+	2048,	2128, 	3072,			\
 	4096,	6144
 
 #define K_ZONE_NAMES			\
@@ -216,9 +206,9 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
 /* 6 */	"kalloc.64",	"kalloc.72",	"kalloc.88",	"kalloc.112",	\
 	"kalloc.128",	"kalloc.192",	\
 	"kalloc.256",	"kalloc.288",	"kalloc.384",	"kalloc.440",	\
-/* 9 */	"kalloc.512",	"kalloc.768",	\
+/* 9 */	"kalloc.512",	"kalloc.576", 	"kalloc.768",	\
 	"kalloc.1024",	"kalloc.1152",	"kalloc.1536",	\
-	"kalloc.2048",	"kalloc.3072",	\
+	"kalloc.2048",	"kalloc.2128", 	"kalloc.3072",	\
 	"kalloc.4096",	"kalloc.6144"
 
 #else
@@ -309,7 +299,7 @@ kalloc_init(
 	kern_return_t retval;
 	vm_offset_t min;
 	vm_size_t size, kalloc_map_size;
-	register int i;
+	int i;
 
 	/* 
 	 * Scale the kalloc_map_size to physical memory size: stay below 
@@ -452,13 +442,134 @@ get_zone_search(vm_size_t size, int zindex)
 	return (k_zone[zindex]);
 }
 
+static vm_size_t
+vm_map_lookup_kalloc_entry_locked(
+		vm_map_t 	map,
+		void 		*addr)
+{
+	boolean_t       ret;
+	vm_map_entry_t  vm_entry = NULL;
+	
+	ret = vm_map_lookup_entry(map, (vm_map_offset_t)addr, &vm_entry);
+	if (!ret) {
+		panic("Attempting to lookup/free an address not allocated via kalloc! (vm_map_lookup_entry() failed map: %p, addr: %p)\n", 
+			map, addr);
+	}
+	if (vm_entry->vme_start != (vm_map_offset_t)addr) {
+		panic("Attempting to lookup/free the middle of a kalloc'ed element! (map: %p, addr: %p, entry: %p)\n",
+			map, addr, vm_entry);
+	}
+	if (!vm_entry->vme_atomic) {
+		panic("Attempting to lookup/free an address not managed by kalloc! (map: %p, addr: %p, entry: %p)\n",
+			map, addr, vm_entry); 
+	}
+	return (vm_entry->vme_end - vm_entry->vme_start);
+}
+
+vm_size_t
+kalloc_size(
+		void 		*addr)
+{
+	vm_map_t 		map;
+	vm_size_t 		size;
+
+	size = zone_element_size(addr, NULL);
+	if (size) {
+		return size;
+	}
+	if (((vm_offset_t)addr >= kalloc_map_min) && ((vm_offset_t)addr < kalloc_map_max)) {
+		map = kalloc_map;
+	} else {
+		map = kernel_map;
+	}
+	vm_map_lock_read(map);
+	size = vm_map_lookup_kalloc_entry_locked(map, addr);
+	vm_map_unlock_read(map);
+	return size;
+}
+
+vm_size_t
+kalloc_bucket_size(
+		vm_size_t 	size)
+{
+	zone_t 		z;
+	vm_map_t 	map;
+	
+	if (size < MAX_SIZE_ZDLUT) {
+		z = get_zone_dlut(size);
+		return z->elem_size;
+	} 
+	
+	if (size < kalloc_max_prerounded) {
+		z = get_zone_search(size, k_zindex_start);
+		return z->elem_size;
+	}
+
+	if (size >= kalloc_kernmap_size) 
+		map = kernel_map;
+	else
+		map = kalloc_map;
+	
+	return vm_map_round_page(size, VM_MAP_PAGE_MASK(map));
+}
+
+vm_size_t
+kfree_addr(
+	void 		*addr)
+{
+	vm_map_t        map;
+	vm_size_t       size = 0;
+	kern_return_t 	ret;
+	zone_t 			z;
+
+	size = zone_element_size(addr, &z);
+	if (size) {
+		zfree(z, addr);
+		return size;
+	}
+
+	if (((vm_offset_t)addr >= kalloc_map_min) && ((vm_offset_t)addr < kalloc_map_max)) {
+		map = kalloc_map;
+	} else {
+		map = kernel_map;
+	}
+	if ((vm_offset_t)addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS) {
+		panic("kfree on an address not in the kernel & kext address range! addr: %p\n", addr);
+	}
+
+	vm_map_lock(map);
+	size = vm_map_lookup_kalloc_entry_locked(map, addr);
+	ret = vm_map_remove_locked(map,
+							vm_map_trunc_page((vm_map_offset_t)addr,
+								VM_MAP_PAGE_MASK(map)),
+							vm_map_round_page((vm_map_offset_t)addr + size,
+								VM_MAP_PAGE_MASK(map)),
+							VM_MAP_REMOVE_KUNWIRE);
+	if (ret != KERN_SUCCESS) {
+		panic("vm_map_remove_locked() failed for kalloc vm_entry! addr: %p, map: %p ret: %d\n",
+				addr, map, ret);
+	}
+	vm_map_unlock(map);
+	
+	kalloc_spin_lock();
+	kalloc_large_total -= size;
+	kalloc_large_inuse--;
+	kalloc_unlock();
+
+	KALLOC_ZINFO_SFREE(size);
+	return size;
+}
+			
 void *
 kalloc_canblock(
-		vm_size_t	       size,
+		vm_size_t	       * psize,
 		boolean_t              canblock,
 		vm_allocation_site_t * site)
 {
 	zone_t z;
+	vm_size_t size;
+
+	size = *psize;
 
 	if (size < MAX_SIZE_ZDLUT)
 		z = get_zone_dlut(size);
@@ -486,12 +597,12 @@ kalloc_canblock(
 		vm_tag_t tag;
 		tag = (site ? tag = vm_tag_alloc(site) : VM_KERN_MEMORY_KALLOC);
 
-		if (kmem_alloc(alloc_map, (vm_offset_t *)&addr, size, tag) != KERN_SUCCESS) {
+		if (kmem_alloc_flags(alloc_map, (vm_offset_t *)&addr, size, tag, KMA_ATOMIC) != KERN_SUCCESS) {
 			if (alloc_map != kernel_map) {
 				if (kalloc_fallback_count++ == 0) {
 					printf("%s: falling back to kernel_map\n", __func__);
 				}
-				if (kmem_alloc(kernel_map, (vm_offset_t *)&addr, size, tag) != KERN_SUCCESS)
+				if (kmem_alloc_flags(kernel_map, (vm_offset_t *)&addr, size, tag, KMA_ATOMIC) != KERN_SUCCESS)
 					addr = NULL;
 			}
 			else
@@ -518,6 +629,7 @@ kalloc_canblock(
 
 			KALLOC_ZINFO_SALLOC(size);
 		}
+		*psize = round_page(size);
 		return(addr);
 	}
 #ifdef KALLOC_DEBUG
@@ -526,7 +638,9 @@ kalloc_canblock(
 		    z, z->zone_name, (unsigned long)size);
 #endif
 	assert(size <= z->elem_size);
-	return zalloc_canblock(z, canblock);
+	*psize = z->elem_size;
+	void *addr = zalloc_canblock(z, canblock);
+	return addr;
 }
 
 void *
@@ -584,7 +698,6 @@ kfree(
 			        return;
 		}
 		kmem_free(alloc_map, (vm_offset_t)data, size);
-
 		kalloc_spin_lock();
 
 		kalloc_large_total -= size;
@@ -799,3 +912,11 @@ OSFree(
 
 	OSMalloc_Tagrele(tag);
 }
+
+uint32_t
+OSMalloc_size(
+	void 				*addr)
+{
+	return (uint32_t)kalloc_size(addr);
+}
+

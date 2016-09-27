@@ -73,6 +73,7 @@
 #include <stdint.h>
 #include <stdarg.h>	/* for platform-specific va_list */
 #include <string.h>
+#include <machine/limits.h>
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <mach/vm_param.h>
@@ -168,6 +169,7 @@ int	_consume_printf_args(int, ...);
 #endif
 #endif
 
+uint16_t	crc16(uint16_t crc, const void *bufp, size_t len);
 uint32_t	crc32(uint32_t crc, const void *bufp, size_t len);
 
 int	copystr(const void *kfaddr, void *kdaddr, size_t len, size_t *done);
@@ -175,11 +177,20 @@ int	copyinstr(const user_addr_t uaddr, void *kaddr, size_t len, size_t *done);
 int	copyoutstr(const void *kaddr, user_addr_t udaddr, size_t len, size_t *done);
 int	copyin(const user_addr_t uaddr, void *kaddr, size_t len);
 int	copyout(const void *kaddr, user_addr_t udaddr, size_t len);
+#if XNU_KERNEL_PRIVATE
+extern int copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_size_t nbytes);
+#endif
 
 int vsscanf(const char *, char const *, va_list);
 
 extern int	vprintf(const char *, va_list);
 extern int	vsnprintf(char *, size_t, const char *, va_list);
+
+#if XNU_KERNEL_PRIVATE
+extern int	vprintf_log_locked(const char *, va_list);
+extern void	osobject_retain(void * object);
+extern void	osobject_release(void * object);
+#endif
 
 /* vsprintf() is being deprecated. Please use vsnprintf() instead. */
 extern int	vsprintf(char *bufp, const char *, va_list) __deprecated;
@@ -195,17 +206,12 @@ extern void invalidate_icache64(addr64_t, unsigned, int);
 extern void flush_dcache64(addr64_t, unsigned, int);
 
 
-/*
- * assembly versions of clz... ideally we would just call
- * __builtin_clz(num), unfortunately this one is ill defined
- * by gcc for num=0
- */
-static __inline__ unsigned int
+static inline int
 clz(unsigned int num)
 {
-	return num?__builtin_clz(num):__builtin_clz(0);
+	// On Intel, clz(0) is undefined
+	return num ? __builtin_clz(num) : sizeof(num) * CHAR_BIT;
 }
-
 
 __END_DECLS
 

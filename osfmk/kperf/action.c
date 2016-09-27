@@ -33,31 +33,33 @@
 
 #include <mach/mach_types.h>
 #include <machine/machine_routines.h>
-// #include <libkern/libkern.h>
 #include <kern/kalloc.h>
 #include <kern/debug.h> /* panic */
 #include <kern/thread.h>
 #include <sys/errno.h>
+#include <sys/vm.h>
 
-#include <chud/chud_xnu.h>
-#include <kperf/kperf.h>
-
-#include <kperf/buffer.h>
-#include <kperf/timetrigger.h>
-#include <kperf/threadinfo.h>
-#include <kperf/callstack.h>
-#include <kperf/sample.h>
 #include <kperf/action.h>
-#include <kperf/context.h>
 #include <kperf/ast.h>
+#include <kperf/buffer.h>
+#include <kperf/callstack.h>
+#include <kperf/context.h>
+#include <kperf/kdebug_trigger.h>
+#include <kperf/kperf.h>
 #include <kperf/kperf_kpc.h>
+#include <kperf/kperf_timer.h>
+#include <kperf/pet.h>
+#include <kperf/sample.h>
+#include <kperf/thread_samplers.h>
 
-#define ACTION_MAX 32
+#define ACTION_MAX (32)
 
 /* the list of different actions to take */
 struct action
 {
 	uint32_t sample;
+	uint32_t ucallstack_depth;
+	uint32_t kcallstack_depth;
 	uint32_t userdata;
 	int pid_filter;
 };
@@ -66,37 +68,17 @@ struct action
 static unsigned actionc = 0;
 static struct action *actionv = NULL;
 
-/* manage callbacks from system */
-
-/* callback set for kdebug */
-static int kperf_kdbg_callback_set = 0;
-/* whether to record callstacks on kdebug events */
-static int kdebug_callstacks = 0;
-/* the action ID to trigger on signposts */
-static int kperf_signpost_action = 0;
-
-/* callback set for context-switch */
-int kperf_cswitch_callback_set = 0;
 /* should emit tracepoint on context switch */
-static int kdebug_cswitch = 0;
-/* the action ID to trigger on context switches */
-static int kperf_cswitch_action = 0;
+int kperf_kdebug_cswitch = 0;
 
-/* indirect hooks to play nice with CHUD for the transition to kperf */
-kern_return_t chudxnu_kdebug_callback_enter(chudxnu_kdebug_callback_func_t fn);
-kern_return_t chudxnu_kdebug_callback_cancel(void);
-
-/* Do the real work! */
-/* this can be called in any context ... right? */
 static kern_return_t
 kperf_sample_internal(struct kperf_sample *sbuf,
                       struct kperf_context *context,
                       unsigned sample_what, unsigned sample_flags,
-                      unsigned actionid)
+                      unsigned actionid, uint32_t ucallstack_depth)
 {
-	boolean_t enabled;
-	int did_ucallstack = 0, did_tinfo_extra = 0;
-	uint32_t userdata;
+	int pended_ucallstack = 0;
+	int pended_th_dispatch = 0;
 
 	/* not much point continuing here, but what to do ? return
 	 * Shutdown? cut a tracepoint and continue?
@@ -105,11 +87,27 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 		return SAMPLE_CONTINUE;
 	}
 
-	int is_kernel = (context->cur_pid == 0);
+	/* callstacks should be explicitly ignored */
+	if (sample_flags & SAMPLE_FLAG_EMPTY_CALLSTACK) {
+		sample_what &= ~(SAMPLER_KSTACK | SAMPLER_USTACK);
+	}
 
-	sbuf->kcallstack.nframes = 0;
+	context->cur_thread->kperf_pet_gen = kperf_pet_gen;
+	boolean_t is_kernel = (context->cur_pid == 0);
+
+	if (actionid && actionid <= actionc) {
+		sbuf->kcallstack.nframes = actionv[actionid - 1].kcallstack_depth;
+	} else {
+		sbuf->kcallstack.nframes = MAX_CALLSTACK_FRAMES;
+	}
+
+	if (ucallstack_depth) {
+		sbuf->ucallstack.nframes = ucallstack_depth;
+	} else {
+		sbuf->ucallstack.nframes = MAX_CALLSTACK_FRAMES;
+	}
+
 	sbuf->kcallstack.flags = CALLSTACK_VALID;
-	sbuf->ucallstack.nframes = 0;
 	sbuf->ucallstack.flags = CALLSTACK_VALID;
 
 	/* an event occurred. Sample everything and dump it in a
@@ -117,19 +115,35 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 	 */
 
 	/* collect data from samplers */
-	if (sample_what & SAMPLER_TINFO) {
-		kperf_threadinfo_sample(&sbuf->threadinfo, context);
+	if (sample_what & SAMPLER_TH_INFO) {
+		kperf_thread_info_sample(&sbuf->th_info, context);
 
 		/* See if we should drop idle thread samples */
 		if (!(sample_flags & SAMPLE_FLAG_IDLE_THREADS)) {
-			if (sbuf->threadinfo.runmode & 0x40) {
+			if (sbuf->th_info.kpthi_runmode & 0x40) {
 				return SAMPLE_CONTINUE;
 			}
 		}
 	}
 
-	if ((sample_what & SAMPLER_KSTACK) && !(sample_flags & SAMPLE_FLAG_EMPTY_CALLSTACK)) {
-		kperf_kcallstack_sample(&(sbuf->kcallstack), context);
+	if (sample_what & SAMPLER_TH_SNAPSHOT) {
+		kperf_thread_snapshot_sample(&(sbuf->th_snapshot), context);
+	}
+	if (sample_what & SAMPLER_TH_SCHEDULING) {
+		kperf_thread_scheduling_sample(&(sbuf->th_scheduling), context);
+	}
+	if (sample_what & SAMPLER_KSTACK) {
+		if (sample_flags & SAMPLE_FLAG_CONTINUATION) {
+			kperf_continuation_sample(&(sbuf->kcallstack), context);
+		/* outside of interrupt context, backtrace the current thread */
+		} else if (sample_flags & SAMPLE_FLAG_NON_INTERRUPT) {
+			kperf_backtrace_sample(&(sbuf->kcallstack), context);
+		} else {
+			kperf_kcallstack_sample(&(sbuf->kcallstack), context);
+		}
+	}
+	if (sample_what & SAMPLER_TK_SNAPSHOT) {
+		kperf_task_snapshot_sample(&(sbuf->tk_snapshot), context);
 	}
 
 	/* sensitive ones */
@@ -139,25 +153,20 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 		}
 
 		if (sample_flags & SAMPLE_FLAG_PEND_USER) {
-			if ((sample_what & SAMPLER_USTACK)
-			    && !(sample_flags & SAMPLE_FLAG_EMPTY_CALLSTACK))
-			{
-				did_ucallstack = kperf_ucallstack_pend(context);
+			if (sample_what & SAMPLER_USTACK) {
+				pended_ucallstack = kperf_ucallstack_pend(context, sbuf->ucallstack.nframes);
 			}
 
-			if (sample_what & SAMPLER_TINFOEX) {
-				did_tinfo_extra = kperf_threadinfo_extra_pend(context);
+			if (sample_what & SAMPLER_TH_DISPATCH) {
+				pended_th_dispatch = kperf_thread_dispatch_pend(context);
 			}
 		} else {
-			if ((sample_what & SAMPLER_USTACK)
-			    && !(sample_flags & SAMPLE_FLAG_EMPTY_CALLSTACK))
-			{
+			if (sample_what & SAMPLER_USTACK) {
 				kperf_ucallstack_sample(&(sbuf->ucallstack), context);
 			}
 
-			if (sample_what & SAMPLER_TINFOEX) {
-				kperf_threadinfo_extra_sample(&(sbuf->tinfo_ex),
-				                              context);
+			if (sample_what & SAMPLER_TH_DISPATCH) {
+				kperf_thread_dispatch_sample(&(sbuf->th_dispatch), context);
 			}
 		}
 	}
@@ -169,28 +178,42 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 	}
 
 	/* lookup the user tag, if any */
+	uint32_t userdata;
 	if (actionid && (actionid <= actionc)) {
 		userdata = actionv[actionid - 1].userdata;
 	} else {
 		userdata = actionid;
 	}
 
+	/* avoid logging if this sample only pended samples */
+	if (sample_flags & SAMPLE_FLAG_PEND_USER &&
+	    !(sample_what & ~(SAMPLER_USTACK | SAMPLER_TH_DISPATCH)))
+	{
+		return SAMPLE_CONTINUE;
+	}
+
 	/* stash the data into the buffer
 	 * interrupts off to ensure we don't get split
 	 */
-	enabled = ml_set_interrupts_enabled(FALSE);
+	boolean_t enabled = ml_set_interrupts_enabled(FALSE);
 
 	BUF_DATA(PERF_GEN_EVENT | DBG_FUNC_START, sample_what,
 	         actionid, userdata, sample_flags);
 
-	/* dump threadinfo */
-	if (sample_what & SAMPLER_TINFO) {
-		kperf_threadinfo_log( &sbuf->threadinfo );
+	if (sample_what & SAMPLER_TH_INFO) {
+		kperf_thread_info_log(&sbuf->th_info);
 	}
-
-	/* dump kcallstack */
+	if (sample_what & SAMPLER_TH_SCHEDULING) {
+		kperf_thread_scheduling_log(&(sbuf->th_scheduling));
+	}
+	if (sample_what & SAMPLER_TH_SNAPSHOT) {
+		kperf_thread_snapshot_log(&(sbuf->th_snapshot));
+	}
 	if (sample_what & SAMPLER_KSTACK) {
-		kperf_kcallstack_log( &sbuf->kcallstack );
+		kperf_kcallstack_log(&sbuf->kcallstack);
+	}
+	if (sample_what & SAMPLER_TK_SNAPSHOT) {
+		kperf_task_snapshot_log(&(sbuf->tk_snapshot));
 	}
 
 	/* dump user stuff */
@@ -201,20 +224,20 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 		}
 
 		if (sample_flags & SAMPLE_FLAG_PEND_USER) {
-			if (did_ucallstack) {
-				BUF_INFO1(PERF_CS_UPEND, 0);
+			if (pended_ucallstack) {
+				BUF_INFO(PERF_CS_UPEND);
 			}
 
-			if (did_tinfo_extra) {
-				BUF_INFO1(PERF_TI_XPEND, 0);
+			if (pended_th_dispatch) {
+				BUF_INFO(PERF_TI_DISPPEND);
 			}
 		} else {
 			if (sample_what & SAMPLER_USTACK) {
 				kperf_ucallstack_log(&(sbuf->ucallstack));
 			}
 
-			if (sample_what & SAMPLER_TINFOEX) {
-				kperf_threadinfo_extra_log(&(sbuf->tinfo_ex));
+			if (sample_what & SAMPLER_TH_DISPATCH) {
+				kperf_thread_dispatch_log(&(sbuf->th_dispatch));
 			}
 		}
 	}
@@ -225,7 +248,7 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 		kperf_kpc_cpu_log(&(sbuf->kpcdata));
 	}
 
-	BUF_DATA1(PERF_GEN_EVENT | DBG_FUNC_END, sample_what);
+	BUF_DATA(PERF_GEN_EVENT | DBG_FUNC_END, sample_what);
 
 	/* intrs back on */
 	ml_set_interrupts_enabled(enabled);
@@ -239,9 +262,6 @@ kperf_sample(struct kperf_sample *sbuf,
              struct kperf_context *context,
              unsigned actionid, unsigned sample_flags)
 {
-	unsigned sample_what = 0;
-	int pid_filter;
-
 	/* work out what to sample, if anything */
 	if ((actionid > actionc) || (actionid == 0)) {
 		return SAMPLE_SHUTDOWN;
@@ -250,337 +270,147 @@ kperf_sample(struct kperf_sample *sbuf,
 	/* check the pid filter against the context's current pid.
 	 * filter pid == -1 means any pid
 	 */
-	pid_filter = actionv[actionid - 1].pid_filter;
+	int pid_filter = actionv[actionid - 1].pid_filter;
 	if ((pid_filter != -1) && (pid_filter != context->cur_pid)) {
 		return SAMPLE_CONTINUE;
 	}
 
 	/* the samplers to run */
-	sample_what = actionv[actionid - 1].sample;
+	unsigned int sample_what = actionv[actionid - 1].sample;
 
 	/* do the actual sample operation */
 	return kperf_sample_internal(sbuf, context, sample_what,
-	                             sample_flags, actionid);
+	                             sample_flags, actionid,
+	                             actionv[actionid - 1].ucallstack_depth);
 }
 
-/* ast callback on a thread */
+void
+kperf_kdebug_handler(uint32_t debugid, uintptr_t *starting_fp)
+{
+	uint32_t sample_flags = SAMPLE_FLAG_PEND_USER;
+	struct kperf_context ctx;
+	struct kperf_sample *sample = NULL;
+	kern_return_t kr = KERN_SUCCESS;
+	int s;
+
+	if (!kperf_kdebug_should_trigger(debugid)) {
+		return;
+	}
+
+	BUF_VERB(PERF_KDBG_HNDLR | DBG_FUNC_START, debugid);
+
+	ctx.cur_thread = current_thread();
+	ctx.cur_pid = task_pid(get_threadtask(ctx.cur_thread));
+	ctx.trigger_type = TRIGGER_TYPE_KDEBUG;
+	ctx.trigger_id = 0;
+
+	s = ml_set_interrupts_enabled(0);
+
+	sample = kperf_intr_sample_buffer();
+
+	if (!ml_at_interrupt_context()) {
+		sample_flags |= SAMPLE_FLAG_NON_INTERRUPT;
+		ctx.starting_fp = starting_fp;
+	}
+
+	kr = kperf_sample(sample, &ctx, kperf_kdebug_get_action(), sample_flags);
+
+	ml_set_interrupts_enabled(s);
+	BUF_VERB(PERF_KDBG_HNDLR | DBG_FUNC_END, kr);
+}
+
+/*
+ * This function allocates >2.3KB of the stack.  Prevent the compiler from
+ * inlining this function into ast_taken and ensure the stack memory is only
+ * allocated for the kperf AST.
+ */
+__attribute__((noinline))
 void
 kperf_thread_ast_handler(thread_t thread)
 {
-	int r;
-	uint32_t t_chud;
-	unsigned sample_what = 0;
-	/* we know we're on a thread, so let's do stuff */
-	task_t task = NULL;
+	BUF_INFO(PERF_AST_HNDLR | DBG_FUNC_START, thread, kperf_get_thread_flags(thread));
 
-	BUF_INFO1(PERF_AST_HNDLR | DBG_FUNC_START, thread);
-
-	/* use ~2kb of the stack for the sample, should be ok since we're in the ast */
+	/* ~2KB of the stack for the sample since this is called from AST */
 	struct kperf_sample sbuf;
 	memset(&sbuf, 0, sizeof(struct kperf_sample));
+
+	task_t task = get_threadtask(thread);
 
 	/* make a context, take a sample */
 	struct kperf_context ctx;
 	ctx.cur_thread = thread;
-	ctx.cur_pid = -1;
+	ctx.cur_pid = task_pid(task);
 
-	task = chudxnu_task_for_thread(thread);
-	if (task) {
-		ctx.cur_pid = chudxnu_pid_for_task(task);
+	/* decode the flags to determine what to sample */
+	unsigned int sample_what = 0;
+	uint32_t flags = kperf_get_thread_flags(thread);
+
+	if (flags & T_KPERF_AST_DISPATCH) {
+		sample_what |= SAMPLER_TH_DISPATCH;
 	}
-
-	/* decode the chud bits so we know what to sample */
-	t_chud = kperf_get_thread_bits(thread);
-
-	if (t_chud & T_AST_NAME) {
-		sample_what |= SAMPLER_TINFOEX;
-	}
-
-	if (t_chud & T_AST_CALLSTACK) {
+	if (flags & T_KPERF_AST_CALLSTACK) {
 		sample_what |= SAMPLER_USTACK;
-		sample_what |= SAMPLER_TINFO;
+		sample_what |= SAMPLER_TH_INFO;
 	}
 
-	/* do the sample, just of the user stuff */
-	r = kperf_sample_internal(&sbuf, &ctx, sample_what, 0, 0);
+	uint32_t ucallstack_depth = T_KPERF_GET_CALLSTACK_DEPTH(flags);
 
-	BUF_INFO1(PERF_AST_HNDLR | DBG_FUNC_END, r);
+	int r = kperf_sample_internal(&sbuf, &ctx, sample_what, 0, 0, ucallstack_depth);
+
+	BUF_INFO(PERF_AST_HNDLR | DBG_FUNC_END, r);
 }
 
 /* register AST bits */
 int
-kperf_ast_pend(thread_t cur_thread, uint32_t check_bits,
-               uint32_t set_bits)
+kperf_ast_pend(thread_t thread, uint32_t set_flags)
 {
-	/* pend on the thread */
-	uint32_t t_chud, set_done = 0;
-
 	/* can only pend on the current thread */
-	if (cur_thread != chudxnu_current_thread()) {
+	if (thread != current_thread()) {
 		panic("pending to non-current thread");
 	}
 
 	/* get our current bits */
-	t_chud = kperf_get_thread_bits(cur_thread);
+	uint32_t flags = kperf_get_thread_flags(thread);
 
 	/* see if it's already been done or pended */
-	if (!(t_chud & check_bits)) {
+	if (!(flags & set_flags)) {
 		/* set the bit on the thread */
-		t_chud |= set_bits;
-		kperf_set_thread_bits(cur_thread, t_chud);
+		flags |= set_flags;
+		kperf_set_thread_flags(thread, flags);
 
 		/* set the actual AST */
-		kperf_set_thread_ast(cur_thread);
-
-		set_done = 1;
+		act_set_kperf(thread);
+		return 1;
 	}
-
-	return set_done;
-}
-
-/*
- * kdebug callback & stack management
- */
-
-#define IS_END(debugid)           ((debugid & 3) == DBG_FUNC_END)
-#define IS_MIG(debugid)           (IS_END(debugid) && ((debugid & 0xff000000U) == KDBG_CLASS_ENCODE((unsigned)DBG_MIG, 0U)))
-#define IS_MACH_SYSCALL(debugid)  (IS_END(debugid) && (KDBG_CLASS_DECODE(debugid) == KDBG_CLASS_ENCODE(DBG_MACH, DBG_MACH_EXCP_SC)))
-#define IS_VM_FAULT(debugid)      (IS_END(debugid) && (KDBG_CLASS_DECODE(debugid) == KDBG_CLASS_ENCODE(DBG_MACH, DBG_MACH_VM)))
-#define IS_BSD_SYSCTLL(debugid)   (IS_END(debugid) && (KDBG_CLASS_DECODE(debugid) == KDBG_CLASS_ENCODE(DBG_BSD, DBG_BSD_EXCP_SC)))
-#define IS_APPS_SIGNPOST(debugid) (KDBG_CLASS_DECODE(debugid) == KDBG_CLASS_ENCODE(DBG_APPS, DBG_MACH_CHUD))
-#define IS_MACH_SIGNPOST(debugid) (KDBG_CLASS_DECODE(debugid) == KDBG_CLASS_ENCODE(DBG_MACH, DBG_MACH_CHUD))
-#define IS_ENERGYTRACE(debugid)   ((debugid & 0xff000000U) == KDBG_CLASS_ENCODE((unsigned)DBG_ENERGYTRACE, 0U))
-
-void
-kperf_kdebug_callback(uint32_t debugid)
-{
-	int cur_pid = 0;
-	task_t task = NULL;
-
-	if (!kdebug_callstacks && !kperf_signpost_action) {
-		return;
-	}
-
-	/* if we're looking at a kperf tracepoint, don't recurse */
-	if ((debugid & 0xff000000) == KDBG_CLASS_ENCODE(DBG_PERF, 0)) {
-		return;
-	}
-
-	/* ensure interrupts are already off thanks to kdebug */
-	if (ml_get_interrupts_enabled()) {
-		return;
-	}
-
-	/* make sure we're not being called recursively.  */
-#if NOTYET
-	if (kperf_kdbg_recurse(KPERF_RECURSE_IN)) {
-		return;
-	}
-#endif
-
-	/* check the happy list of trace codes */
-	if(!(IS_MIG(debugid)
-	     || IS_MACH_SYSCALL(debugid)
-	     || IS_VM_FAULT(debugid)
-	     || IS_BSD_SYSCTLL(debugid)
-	     || IS_MACH_SIGNPOST(debugid)
-	     || IS_ENERGYTRACE(debugid)
-	     || IS_APPS_SIGNPOST(debugid)))
-	{
-		return;
-	}
-
-	/* check for kernel */
-	thread_t thread = chudxnu_current_thread();
-	task = chudxnu_task_for_thread(thread);
-	if (task) {
-		cur_pid = chudxnu_pid_for_task(task);
-	}
-	if (!cur_pid) {
-		return;
-	}
-
-	if (kdebug_callstacks) {
-		/* dicing with death */
-		BUF_INFO2(PERF_KDBG_HNDLR, debugid, cur_pid);
-
-		/* pend the AST */
-		kperf_ast_pend( thread, T_AST_CALLSTACK, T_AST_CALLSTACK );
-	}
-
-	if (kperf_signpost_action && (IS_MACH_SIGNPOST(debugid)
-	    || IS_APPS_SIGNPOST(debugid)))
-	{
-#if NOTYET
-		/* make sure we're not being called recursively.  */
-		if(kperf_kdbg_recurse(KPERF_RECURSE_IN)) {
-			return;
-		}
-#endif
-
-		/* setup a context */
-		struct kperf_context ctx;
-		struct kperf_sample *intbuf = NULL;
-		BUF_INFO2(PERF_SIGNPOST_HNDLR | DBG_FUNC_START, debugid, cur_pid);
-
-		ctx.cur_thread = thread;
-		ctx.cur_pid = cur_pid;
-		ctx.trigger_type = TRIGGER_TYPE_TRACE;
-		ctx.trigger_id = 0;
-
-		/* CPU sample buffer -- only valid with interrupts off (above)
-		* Technically this isn't true -- tracepoints can, and often
-		* are, cut from interrupt handlers, but none of those tracepoints
-		* should make it this far.
-		*/
-		intbuf = kperf_intr_sample_buffer();
-
-		/* do the sample */
-		kperf_sample(intbuf, &ctx, kperf_signpost_action,
-		             SAMPLE_FLAG_PEND_USER);
-
-		BUF_INFO2(PERF_SIGNPOST_HNDLR | DBG_FUNC_END, debugid, cur_pid);
-#if NOTYET
-		/* no longer recursive */
-		kperf_kdbg_recurse(KPERF_RECURSE_OUT);
-#endif
-	}
-}
-
-static void
-kperf_kdbg_callback_update(void)
-{
-	unsigned old_callback_set = kperf_kdbg_callback_set;
-
-	/* compute new callback state */
-	kperf_kdbg_callback_set = kdebug_callstacks || kperf_signpost_action;
-
-	if (old_callback_set && !kperf_kdbg_callback_set) {
-		/* callback should no longer be set */
-		chudxnu_kdebug_callback_cancel();
-	} else if (!old_callback_set && kperf_kdbg_callback_set) {
-		/* callback must now be set */
-		chudxnu_kdebug_callback_enter(NULL);
-	}
-}
-
-int
-kperf_kdbg_get_stacks(void)
-{
-	return kdebug_callstacks;
-}
-
-int
-kperf_kdbg_set_stacks(int newval)
-{
-	kdebug_callstacks = newval;
-	kperf_kdbg_callback_update();
 
 	return 0;
 }
 
-int
-kperf_signpost_action_get(void)
-{
-	return kperf_signpost_action;
-}
-
-int
-kperf_signpost_action_set(int newval)
-{
-	kperf_signpost_action = newval;
-	kperf_kdbg_callback_update();
-
-	return 0;
-}
-
-/*
- * Thread switch
- */
-
-/* called from context switch handler */
 void
-kperf_switch_context(__unused thread_t old, thread_t new)
+kperf_ast_set_callstack_depth(thread_t thread, uint32_t depth)
 {
-	task_t task = get_threadtask(new);
-	int pid = chudxnu_pid_for_task(task);
+	uint32_t ast_flags = kperf_get_thread_flags(thread);
+	uint32_t existing_callstack_depth = T_KPERF_GET_CALLSTACK_DEPTH(ast_flags);
 
-	/* cut a tracepoint to tell us what the new thread's PID is
-	 * for Instruments
-	 */
-	BUF_DATA2(PERF_TI_CSWITCH, thread_tid(new), pid);
+	if (existing_callstack_depth != depth) {
+		ast_flags &= ~T_KPERF_SET_CALLSTACK_DEPTH(depth);
+		ast_flags |= T_KPERF_SET_CALLSTACK_DEPTH(depth);
 
-	/* trigger action after counters have been updated */
-	if (kperf_cswitch_action) {
-		struct kperf_sample sbuf;
-		struct kperf_context ctx;
-		int r;
-
-		BUF_DATA1(PERF_CSWITCH_HNDLR | DBG_FUNC_START, 0);
-
-		ctx.cur_pid = 0;
-		ctx.cur_thread = old;
-
-		/* get PID for context */
-		task_t old_task = chudxnu_task_for_thread(ctx.cur_thread);
-		if (old_task) {
-			ctx.cur_pid = chudxnu_pid_for_task(old_task);
-		}
-
-		ctx.trigger_type = TRIGGER_TYPE_CSWITCH;
-		ctx.trigger_id = 0;
-
-		r = kperf_sample(&sbuf, &ctx, kperf_cswitch_action,
-			             SAMPLE_FLAG_PEND_USER);
-
-		BUF_INFO1(PERF_CSWITCH_HNDLR | DBG_FUNC_END, r);
+		kperf_set_thread_flags(thread, ast_flags);
 	}
-}
-
-static void
-kperf_cswitch_callback_update(void)
-{
-	unsigned old_callback_set = kperf_cswitch_callback_set;
-
-	unsigned new_callback_set = kdebug_cswitch || kperf_cswitch_action;
-
-	if (old_callback_set && !new_callback_set) {
-		kperf_cswitch_callback_set = 0;
-	} else if (!old_callback_set && new_callback_set) {
-		kperf_cswitch_callback_set = 1;
-	} else {
-		return;
-	}
-
-	kperf_kpc_cswitch_callback_update();
 }
 
 int
 kperf_kdbg_cswitch_get(void)
 {
-	return kdebug_cswitch;
+	return kperf_kdebug_cswitch;
 }
 
 int
 kperf_kdbg_cswitch_set(int newval)
 {
-	kdebug_cswitch = newval;
-	kperf_cswitch_callback_update();
-
-	return 0;
-}
-
-int
-kperf_cswitch_action_get(void)
-{
-	return kperf_cswitch_action;
-}
-
-int
-kperf_cswitch_action_set(int newval)
-{
-	kperf_cswitch_action = newval;
-	kperf_cswitch_callback_update();
+	kperf_kdebug_cswitch = newval;
+	kperf_on_cpu_update();
 
 	return 0;
 }
@@ -588,7 +418,7 @@ kperf_cswitch_action_set(int newval)
 /*
  * Action configuration
  */
-unsigned
+unsigned int
 kperf_action_get_count(void)
 {
 	return actionc;
@@ -684,11 +514,23 @@ kperf_action_get_filter(unsigned actionid, int *pid_out)
 	return 0;
 }
 
+void
+kperf_action_reset(void)
+{
+	for (unsigned int i = 0; i < actionc; i++) {
+		kperf_action_set_samplers(i + 1, 0);
+		kperf_action_set_userdata(i + 1, 0);
+		kperf_action_set_filter(i + 1, -1);
+		kperf_action_set_ucallstack_depth(i + 1, MAX_CALLSTACK_FRAMES);
+		kperf_action_set_kcallstack_depth(i + 1, MAX_CALLSTACK_FRAMES);
+	}
+}
+
 int
 kperf_action_set_count(unsigned count)
 {
 	struct action *new_actionv = NULL, *old_actionv = NULL;
-	unsigned old_count, i;
+	unsigned old_count;
 
 	/* easy no-op */
 	if (count == actionc) {
@@ -710,15 +552,13 @@ kperf_action_set_count(unsigned count)
 	 */
 	if (actionc == 0) {
 		int r;
-		r = kperf_init();
-
-		if (r != 0) {
+		if ((r = kperf_init())) {
 			return r;
 		}
 	}
 
 	/* create a new array */
-	new_actionv = kalloc(count * sizeof(*new_actionv));
+	new_actionv = kalloc_tag(count * sizeof(*new_actionv), VM_KERN_MEMORY_DIAG);
 	if (new_actionv == NULL) {
 		return ENOMEM;
 	}
@@ -732,8 +572,10 @@ kperf_action_set_count(unsigned count)
 
 	memset(&(new_actionv[actionc]), 0, (count - old_count) * sizeof(*actionv));
 
-	for (i = old_count; i < count; i++) {
+	for (unsigned int i = old_count; i < count; i++) {
 		new_actionv[i].pid_filter = -1;
+		new_actionv[i].ucallstack_depth = MAX_CALLSTACK_FRAMES;
+		new_actionv[i].kcallstack_depth = MAX_CALLSTACK_FRAMES;
 	}
 
 	actionv = new_actionv;
@@ -741,6 +583,74 @@ kperf_action_set_count(unsigned count)
 
 	if (old_actionv != NULL) {
 		kfree(old_actionv, old_count * sizeof(*actionv));
+	}
+
+	return 0;
+}
+
+int
+kperf_action_set_ucallstack_depth(unsigned action_id, uint32_t depth)
+{
+	if ((action_id > actionc) || (action_id == 0)) {
+		return EINVAL;
+	}
+
+	if (depth > MAX_CALLSTACK_FRAMES) {
+		return EINVAL;
+	}
+
+	actionv[action_id - 1].ucallstack_depth = depth;
+
+	return 0;
+}
+
+int
+kperf_action_set_kcallstack_depth(unsigned action_id, uint32_t depth)
+{
+	if ((action_id > actionc) || (action_id == 0)) {
+		return EINVAL;
+	}
+
+	if (depth > MAX_CALLSTACK_FRAMES) {
+		return EINVAL;
+	}
+
+	actionv[action_id - 1].kcallstack_depth = depth;
+
+	return 0;
+}
+
+int
+kperf_action_get_ucallstack_depth(unsigned action_id, uint32_t * depth_out)
+{
+	if ((action_id > actionc)) {
+		return EINVAL;
+	}
+
+	assert(depth_out);
+
+	if (action_id == 0) {
+		*depth_out = MAX_CALLSTACK_FRAMES;
+	} else {
+		*depth_out = actionv[action_id - 1].ucallstack_depth;
+	}
+
+	return 0;
+}
+
+int
+kperf_action_get_kcallstack_depth(unsigned action_id, uint32_t * depth_out)
+{
+	if ((action_id > actionc)) {
+		return EINVAL;
+	}
+
+	assert(depth_out);
+
+	if (action_id == 0) {
+		*depth_out = MAX_CALLSTACK_FRAMES;
+	} else {
+		*depth_out = actionv[action_id - 1].kcallstack_depth;
 	}
 
 	return 0;

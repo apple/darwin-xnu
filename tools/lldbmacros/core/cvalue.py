@@ -459,6 +459,12 @@ def getfieldoffset(struct_type, field_name):
     for field in struct_type.get_fields_array():
         if str(field.GetName()) == field_name:
             return field.GetOffsetInBytes()
+        
+        # Hack for anonymous unions - the compiler does this, so cvalue should too
+        if field.GetName() is None and field.GetType().GetTypeClass() == lldb.eTypeClassUnion :
+            for union_field in field.GetType().get_fields_array():
+                if str(union_field.GetName()) == field_name:
+                    return union_field.GetOffsetInBytes() + field.GetOffsetInBytes()
     raise TypeError('Field name "%s" not found in type "%s"' % (field_name, str(struct_type)))
 
 def islong(x):

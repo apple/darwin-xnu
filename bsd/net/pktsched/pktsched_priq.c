@@ -1103,7 +1103,7 @@ priq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags)
 
 	err = ifclassq_attach(ifq, PKTSCHEDT_PRIQ, pif,
 	    priq_enqueue_ifclassq, priq_dequeue_ifclassq, NULL,
-	    priq_request_ifclassq);
+	    NULL, priq_request_ifclassq);
 
 	/* cache these for faster lookup */
 	if (err == 0) {

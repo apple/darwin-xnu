@@ -172,7 +172,7 @@ void
 clock_oldconfig(void)
 {
 	clock_t			clock;
-	register int 	i;
+	int	i;
 
 	simple_lock_init(&alarm_lock, 0);
 	thread_call_setup(&alarm_done_call, (thread_call_func_t)alarm_done, NULL);
@@ -197,7 +197,7 @@ void
 clock_oldinit(void)
 {
 	clock_t			clock;
-	register int	i;
+	int	i;
 
 	/*
 	 * Initialize basic clock structures.
@@ -216,7 +216,7 @@ void
 clock_service_create(void)
 {
 	clock_t			clock;
-	register int	i;
+	int	i;
 
 	/*
 	 * Initialize ipc clock services.
@@ -620,8 +620,8 @@ static void
 alarm_expire(void)
 {
 	clock_t				clock;
-	register alarm_t	alrm1;
-	register alarm_t	alrm2;
+	alarm_t	alrm1;
+	alarm_t	alrm2;
 	mach_timespec_t		clock_time;
 	mach_timespec_t		*alarm_time;
 	spl_t				s;
@@ -687,7 +687,7 @@ alarm_expire(void)
 static void
 alarm_done(void)
 {
-	register alarm_t	alrm;
+	alarm_t	alrm;
 	kern_return_t		code;
 	spl_t				s;
 
@@ -726,7 +726,7 @@ static void
 post_alarm(
 	alarm_t				alarm)
 {
-	register alarm_t	alrm1, alrm2;
+	alarm_t	alrm1, alrm2;
 	mach_timespec_t		*alarm_time;
 	mach_timespec_t		*queue_time;
 

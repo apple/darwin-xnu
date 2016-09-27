@@ -158,7 +158,14 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 	if (fbt->fbtp_currentval != fbt->fbtp_patchval) {
 		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint, 
 								sizeof(fbt->fbtp_patchval));
+		/*
+		 * Make the patched instruction visible via a data + instruction
+		 * cache flush for the platforms that need it
+		 */
+		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
+		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
                 fbt->fbtp_currentval = fbt->fbtp_patchval;
+
 		ctl->mod_nenabled++;
 	}
 
@@ -186,6 +193,13 @@ fbt_disable(void *arg, dtrace_id_t id, void *parg)
 	    if (fbt->fbtp_currentval != fbt->fbtp_savedval) {
 		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint, 
 								sizeof(fbt->fbtp_savedval));
+		/*
+		 * Make the patched instruction visible via a data + instruction
+		 * cache flush for the platforms that need it
+		 */
+		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
+		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_patchval), 0);
+
 		fbt->fbtp_currentval = fbt->fbtp_savedval;
 		ASSERT(ctl->mod_nenabled > 0);
 		ctl->mod_nenabled--;
@@ -212,8 +226,14 @@ fbt_suspend(void *arg, dtrace_id_t id, void *parg)
 	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint, 
 								sizeof(fbt->fbtp_savedval));
 		
+		/*
+		 * Make the patched instruction visible via a data + instruction
+		 * cache flush for the platforms that need it
+		 */
+		flush_dcache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_savedval), 0);
+		invalidate_icache((vm_offset_t)fbt->fbtp_patchpoint,(vm_size_t)sizeof(fbt->fbtp_savedval), 0);
 		
-	    fbt->fbtp_currentval = fbt->fbtp_savedval;
+		fbt->fbtp_currentval = fbt->fbtp_savedval;
 	}
 	
 	dtrace_membar_consumer();

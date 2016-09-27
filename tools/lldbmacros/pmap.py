@@ -650,6 +650,7 @@ def assert_64bit(val):
     assert(val < 2**64)
 
 ARM64_TTE_SIZE = 8
+ARM64_TTE_SHIFT = 3
 ARM64_VMADDR_BITS = 48
 
 def PmapBlockOffsetMaskARM64(level):
@@ -721,43 +722,73 @@ def PmapWalkARM64(pmap, vaddr, verbose_level = vHUMAN):
     assert_64bit(vaddr)
     paddr = -1
 
+    tt0_index = 0
     tt1_index = PmapTTnIndexARM64(vaddr, 1)
     tt2_index = PmapTTnIndexARM64(vaddr, 2)
     tt3_index = PmapTTnIndexARM64(vaddr, 3)
 
-    # L1
-    tte = long(unsigned(pmap.tte[tt1_index]))
+    # The pmap starts at a page tabel level that is defined by register
+    # values; the kernel exports the root level for LLDB
+    level = kern.globals.arm64_root_pgtable_level
+    assert(level <= 3)
+
+    if level == 0:
+        root_tt_index = tt0_index
+    elif level == 1:
+        root_tt_index = tt1_index
+    elif level == 2:
+        root_tt_index = tt2_index
+    elif level == 3:
+        root_tt_index = tt3_index
+
+    # If the root of the page table is not a full page, we need to
+    # truncate the index
+    root_tt_index = root_tt_index % unsigned(kern.globals.arm64_root_pgtable_num_ttes)
+
+    tte = long(unsigned(pmap.tte[root_tt_index]))
     assert(type(tte) == long)
     assert_64bit(tte)
 
-    if verbose_level >= vSCRIPT:
-        print "L1 entry: {:#x}".format(tte)
-    if verbose_level >= vDETAIL:
-        PmapDecodeTTEARM64(tte, 1)
+    while (True):
+        if (level == 0):
+            # L0
+            # This is unsupported at the moment, as no kernel configurations use L0
+            assert(False)
 
-    if tte & 0x1 == 0x1:
-        # Check for L1 block entry
-        if tte & 0x2 == 0x0:
-            # Handle L1 block entry
-            paddr = tte & PmapBlockBaseMaskARM64(1)
-            paddr = paddr | (vaddr & PmapBlockOffsetMaskARM64(1))
-            print "phys: {:#x}".format(paddr)
-        else:
-            # Handle L1 table entry
-            l2_phys = (tte & page_base_mask) + (ARM64_TTE_SIZE * tt2_index)
-            assert(type(l2_phys) == long)
-
-            l2_virt = kern.PhysToKernelVirt(l2_phys)
-            assert(type(l2_virt) == long)
-
+        elif (level == 1):
+            # L1
+            if verbose_level >= vSCRIPT:
+                print "L1 entry: {:#x}".format(tte)
             if verbose_level >= vDETAIL:
-                print "L2 physical address: {:#x}. L2 virtual address: {:#x}".format(l2_phys, l2_virt)
+                PmapDecodeTTEARM64(tte, 1)
 
+            if tte & 0x1 == 0x1:
+                # Check for L1 block entry
+                if tte & 0x2 == 0x0:
+                    # Handle L1 block entry
+                    paddr = tte & PmapBlockBaseMaskARM64(1)
+                    paddr = paddr | (vaddr & PmapBlockOffsetMaskARM64(1))
+                    print "phys: {:#x}".format(paddr)
+                    break
+                else:
+                    # Handle L1 table entry
+                    l2_phys = (tte & page_base_mask) + (ARM64_TTE_SIZE * tt2_index)
+                    assert(type(l2_phys) == long)
+
+                    l2_virt = kern.PhysToKernelVirt(l2_phys)
+                    assert(type(l2_virt) == long)
+
+                    if verbose_level >= vDETAIL:
+                        print "L2 physical address: {:#x}. L2 virtual address: {:#x}".format(l2_phys, l2_virt)
+
+                    ttep = kern.GetValueFromAddress(l2_virt, "tt_entry_t*")
+                    tte = long(unsigned(dereference(ttep)))
+                    assert(type(tte) == long)
+            elif verbose_level >= vHUMAN:
+                print "L1 entry invalid: {:#x}\n".format(tte)
+
+        elif (level == 2):
             # L2
-            ttep = kern.GetValueFromAddress(l2_virt, "tt_entry_t*")
-            tte = long(unsigned(dereference(ttep)))
-            assert(type(tte) == long)
-
             if verbose_level >= vSCRIPT:
                 print "L2 entry: {:#0x}".format(tte)
             if verbose_level >= vDETAIL:
@@ -769,6 +800,7 @@ def PmapWalkARM64(pmap, vaddr, verbose_level = vHUMAN):
                     # Handle L2 block entry
                     paddr = tte & PmapBlockBaseMaskARM64(2)
                     paddr = paddr | (vaddr & PmapBlockOffsetMaskARM64(2))
+                    break
                 else:
                     # Handle L2 table entry
                     l3_phys = (tte & page_base_mask) + (ARM64_TTE_SIZE * tt3_index)
@@ -780,25 +812,31 @@ def PmapWalkARM64(pmap, vaddr, verbose_level = vHUMAN):
                     if verbose_level >= vDETAIL:
                         print "L3 physical address: {:#x}. L3 virtual address: {:#x}".format(l3_phys, l3_virt)
 
-                    # L3
                     ttep = kern.GetValueFromAddress(l3_virt, "tt_entry_t*")
                     tte = long(unsigned(dereference(ttep)))
                     assert(type(tte) == long)
-
-                    if verbose_level >= vSCRIPT:
-                        print "L3 entry: {:#0x}".format(tte)
-                    if verbose_level >= vDETAIL:
-                        PmapDecodeTTEARM64(tte, 3)
-
-                    if tte & 0x3 == 0x3:
-                        paddr = tte & page_base_mask
-                        paddr = paddr | (vaddr & page_offset_mask)
-                    elif verbose_level >= vHUMAN:
-                        print "L3 entry invalid: {:#x}\n".format(tte)
             elif verbose_level >= vHUMAN: # tte & 0x1 == 0x1
                 print "L2 entry invalid: {:#x}\n".format(tte)
-    elif verbose_level >= vHUMAN:
-        print "L1 entry invalid: {:#x}\n".format(tte)
+
+        elif (level == 3):
+            # L3
+            if verbose_level >= vSCRIPT:
+                print "L3 entry: {:#0x}".format(tte)
+            if verbose_level >= vDETAIL:
+                PmapDecodeTTEARM64(tte, 3)
+
+            if tte & 0x3 == 0x3:
+                paddr = tte & page_base_mask
+                paddr = paddr | (vaddr & page_offset_mask)
+            elif verbose_level >= vHUMAN:
+                print "L3 entry invalid: {:#x}\n".format(tte)
+
+            # This was the leaf page table page for this request; we're done
+            break
+
+        # We've parsed one level, so go to the next level
+        assert(level <= 3)
+        level = level + 1
 
     if verbose_level >= vHUMAN:
         if paddr:

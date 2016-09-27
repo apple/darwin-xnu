@@ -77,6 +77,7 @@
 #include <kern/locks.h>
 #include <kern/queue.h>
 #include <kern/thread_call.h>
+#include <kern/btlog.h>
 
 #if	CONFIG_GZALLOC
 typedef struct gzalloc_data {
@@ -106,6 +107,7 @@ struct zone {
 	} pages;		/* list of zone_page_metadata structs, which maintain per-page free element lists */
 	int		count;		/* Number of elements used now */
 	int		countfree;	/* Number of free elements */
+	int 	count_all_free_pages;  /* Number of pages collectable by GC */
 	lck_attr_t      lock_attr;	/* zone lock attribute */
 	decl_lck_mtx_data(,lock)	/* zone lock */
 	lck_mtx_ext_t   lock_ext;	/* placeholder for indirect mutex */
@@ -126,21 +128,17 @@ struct zone {
 	/* boolean_t */	async_pending      :1,	/* asynchronous allocation pending? */
 	/* boolean_t */ zleak_on           :1,	/* Are we collecting allocation information? */
 	/* boolean_t */	caller_acct        :1,  /* do we account allocation/free to the caller? */  
-	/* boolean_t */	doing_gc           :1,	/* garbage collect in progress? */
 	/* boolean_t */ noencrypt          :1,
 	/* boolean_t */	no_callout         :1,
 	/* boolean_t */	async_prio_refill  :1,
 	/* boolean_t */	gzalloc_exempt     :1,
 	/* boolean_t */	alignment_required :1,
-	/* boolean_t */	use_page_list 	   :1,
+	/* boolean_t */ zone_logging	   :1,	/* Enable zone logging for this zone. */
+	/* boolean_t */ zone_replenishing  :1,
 	/* future    */ _reserved          :15;
 
 	int		index;		/* index into zone_info arrays for this zone */
-	struct zone	*next_zone;	/* Link for all-zones list */
 	const char	*zone_name;	/* a name for the zone */
-#if	ZONE_DEBUG
-	queue_head_t	active_zones;	/* active elements */
-#endif	/* ZONE_DEBUG */
 
 #if CONFIG_ZLEAKS
 	uint32_t zleak_capture;		/* per-zone counter for capturing every N allocations */
@@ -151,6 +149,8 @@ struct zone {
 #if	CONFIG_GZALLOC
 	gzalloc_data_t	gz;
 #endif /* CONFIG_GZALLOC */
+
+	btlog_t		*zlog_btlog;		/* zone logging structure to hold stacks and element references to those stacks. */
 };
 
 /*
@@ -162,13 +162,9 @@ typedef struct zinfo_usage_store_t {
 	uint64_t	alloc __attribute__((aligned(8)));		/* allocation counter */
 	uint64_t	free __attribute__((aligned(8)));		/* free counter */
 } zinfo_usage_store_t;
-typedef zinfo_usage_store_t *zinfo_usage_t;
 
-extern void		zone_gc(boolean_t);
-extern void		consider_zone_gc(boolean_t);
-
-/* Steal memory for zone module */
-extern void		zone_steal_memory(void);
+extern void		zone_gc(void);
+extern void		consider_zone_gc(void);
 
 /* Bootstrap zone module (create zone zone) */
 extern void		zone_bootstrap(void);
@@ -176,11 +172,6 @@ extern void		zone_bootstrap(void);
 /* Init zone module */
 extern void		zone_init(
 					vm_size_t	map_size);
-
-/* Handle per-task zone info */
-extern void		zinfo_task_init(task_t task);
-extern void		zinfo_task_free(task_t task);
-
 
 /* Stack use statistics */
 extern void		stack_fake_zone_init(int zone_index);
@@ -207,6 +198,9 @@ extern void		zone_debug_disable(
 #define	ROUNDUP(x,y)		((((x)+(y)-1)/(y))*(y))
 #define ZONE_DEBUG_OFFSET	ROUNDUP(sizeof(queue_chain_t),16)
 #endif	/* ZONE_DEBUG */
+
+extern unsigned int            num_zones;
+extern struct zone             zone_array[];
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
@@ -290,6 +284,10 @@ extern void		zprealloc(
 extern integer_t	zone_free_count(
 						zone_t		zone);
 
+extern vm_size_t 	zone_element_size(
+						void 		*addr,
+						zone_t 		*z);
+
 /*
  * MAX_ZTRACE_DEPTH configures how deep of a stack trace is taken on each zalloc in the zone of interest.  15
  * levels is usually enough to get past all the layers of code in kalloc and IOKit and see who the actual
@@ -327,7 +325,6 @@ extern int get_zleak_state(void);
 #endif	/* CONFIG_ZLEAKS */
 
 /* These functions used for leak detection both in zalloc.c and mbuf.c */
-extern uint32_t fastbacktrace(uintptr_t* bt, uint32_t max_frames) __attribute__((noinline));
 extern uintptr_t hash_mix(uintptr_t);
 extern uint32_t hashbacktrace(uintptr_t *, uint32_t, uint32_t);
 extern uint32_t hashaddr(uintptr_t, uint32_t);
@@ -351,7 +348,12 @@ boolean_t gzalloc_enabled(void);
 
 vm_offset_t gzalloc_alloc(zone_t, boolean_t);
 boolean_t gzalloc_free(zone_t, void *);
+boolean_t gzalloc_element_size(void *, zone_t *, vm_size_t *);
 #endif /* CONFIG_GZALLOC */
+
+/* Callbacks for btlog lock/unlock */
+void zlog_btlog_lock(__unused void *);
+void zlog_btlog_unlock(__unused void *);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

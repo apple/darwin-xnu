@@ -367,6 +367,7 @@ int proc_uuid_policy(struct proc *p __unused, struct proc_uuid_policy_args *uap,
 {
 	int error = 0;
 	uuid_t uuid;
+	memcpy(uuid, UUID_NULL, sizeof(uuid_t));
 
 	/* Need privilege for policy changes */
 	error = priv_check_cred(kauth_cred_get(), PRIV_PROC_UUID_POLICY, 0);

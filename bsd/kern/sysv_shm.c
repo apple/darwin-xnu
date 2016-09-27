@@ -96,6 +96,7 @@
 #include <vm/vm_kern.h>
 
 #include <kern/locks.h>
+#include <os/overflow.h>
 
 /* Uncomment this line to see MAC debugging output. */
 /* #define MAC_DEBUG */
@@ -106,10 +107,7 @@
 #endif
 
 #if SYSV_SHM
-static void shminit(void *);
-#if 0
-SYSINIT(sysv_shm, SI_SUB_SYSV_SHM, SI_ORDER_FIRST, shminit, NULL)
-#endif
+static int shminit(void);
 
 static lck_grp_t       *sysv_shm_subsys_lck_grp;
 static lck_grp_attr_t  *sysv_shm_subsys_lck_grp_attr;
@@ -171,13 +169,18 @@ static int shm_delete_mapping(struct proc *, struct shmmap_state *, int);
 #define DEFAULT_SHMSEG	8
 #define DEFAULT_SHMALL	1024
 
-struct  shminfo shminfo = {
-        DEFAULT_SHMMAX,
-        DEFAULT_SHMMIN,
-        DEFAULT_SHMMNI,
+struct shminfo shminfo = {
+	DEFAULT_SHMMAX,
+	DEFAULT_SHMMIN,
+	DEFAULT_SHMMNI,
 	DEFAULT_SHMSEG,
 	DEFAULT_SHMALL
 };
+
+#define SHMID_IS_VALID(x) ((x) >= 0)
+#define SHMID_UNALLOCATED (-1)
+#define SHMID_SENTINEL    (-2)
+
 #endif /* __APPLE_API_PRIVATE */
 
 void sysv_shm_lock_init(void);
@@ -299,7 +302,7 @@ shm_delete_mapping(__unused struct proc *p, struct shmmap_state *shmmap_s,
 	if (result != KERN_SUCCESS)
 		return EINVAL;
 	}
-	shmmap_s->shmid = -1;
+	shmmap_s->shmid = SHMID_UNALLOCATED;
 	shmseg->u.shm_dtime = sysv_shmtime();
 	if ((--shmseg->u.shm_nattch <= 0) &&
 	    (shmseg->u.shm_perm.mode & SHMSEG_REMOVED)) {
@@ -323,23 +326,28 @@ shmdt(struct proc *p, struct shmdt_args *uap, int32_t *retval)
 
 	SYSV_SHM_SUBSYS_LOCK();
 
-	if (!shm_inited) {
-		shminit(NULL);
+	if ((shmdtret = shminit())) {
+		goto shmdt_out;
 	}
+
 	shmmap_s = (struct shmmap_state *)p->vm_shm;
  	if (shmmap_s == NULL) {
 		shmdtret = EINVAL;
 		goto shmdt_out;
 	}
 
-	for (i = 0; i < shminfo.shmseg; i++, shmmap_s++)
-		if (shmmap_s->shmid != -1 &&
-		    shmmap_s->va == (mach_vm_offset_t)uap->shmaddr)
+	for (; shmmap_s->shmid != SHMID_SENTINEL; shmmap_s++) {
+		if (SHMID_IS_VALID(shmmap_s->shmid) &&
+		    shmmap_s->va == (mach_vm_offset_t)uap->shmaddr) {
 			break;
-	if (i == shminfo.shmseg) {
+		}
+	}
+
+	if (!SHMID_IS_VALID(shmmap_s->shmid)) {
 		shmdtret = EINVAL;
 		goto shmdt_out;
 	}
+
 #if CONFIG_MACF
 	/*
 	 * XXX: It might be useful to move this into the shm_delete_mapping
@@ -383,28 +391,41 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 
 	SYSV_SHM_SUBSYS_LOCK();
 
-	if (!shm_inited) {
-		shminit(NULL);
+	if ((shmat_ret = shminit())) {
+		goto shmat_out;
 	}
 
 	shmmap_s = (struct shmmap_state *)p->vm_shm;
-
 	if (shmmap_s == NULL) {
-		size = shminfo.shmseg * sizeof(struct shmmap_state);
-        if (size == 0 || size / shminfo.shmseg != sizeof(struct shmmap_state)) {
-            /* overflow */
+		/* lazily allocate the shm map */
+
+		int nsegs = shminfo.shmseg;
+		if (nsegs <= 0) {
+			shmat_ret = EMFILE;
+			goto shmat_out;
+		}
+
+		/* +1 for the sentinel */
+		if (os_add_and_mul_overflow(nsegs, 1, sizeof(struct shmmap_state), &size)) {
             shmat_ret = ENOMEM;
             goto shmat_out;
-        }
+		}
+
 		MALLOC(shmmap_s, struct shmmap_state *, size, M_SHM, M_WAITOK);
 		if (shmmap_s == NULL) {
 			shmat_ret = ENOMEM;
 			goto shmat_out;
 		}
-		for (i = 0; i < shminfo.shmseg; i++)
-			shmmap_s[i].shmid = -1;
+
+		/* initialize the entries */
+		for (i = 0; i < nsegs; i++) {
+			shmmap_s[i].shmid = SHMID_UNALLOCATED;
+		}
+		shmmap_s[i].shmid = SHMID_SENTINEL;
+
 		p->vm_shm = (caddr_t)shmmap_s;
 	}
+
 	shmseg = shm_find_segment_by_shmid(uap->shmid);
 	if (shmseg == NULL) {
 		shmat_ret = EINVAL;
@@ -426,12 +447,13 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 		goto shmat_out;
 	}
 #endif
-	for (i = 0; i < shminfo.shmseg; i++) {
-		if (shmmap_s->shmid == -1)
-			break;
+
+	/* find a free shmid */
+	while (SHMID_IS_VALID(shmmap_s->shmid)) {
 		shmmap_s++;
 	}
-	if (i >= shminfo.shmseg) {
+	if (shmmap_s->shmid != SHMID_UNALLOCATED) {
+		/* no free shmids */
 		shmat_ret = EMFILE;
 		goto shmat_out;
 	}
@@ -561,8 +583,8 @@ shmctl(__unused struct proc *p, struct shmctl_args *uap, int32_t *retval)
 
 	SYSV_SHM_SUBSYS_LOCK();
 
-	if (!shm_inited) {
-		shminit(NULL);
+	if ((shmctl_ret = shminit())) {
+		goto shmctl_out;
 	}
 
 	shmseg = shm_find_segment_by_shmid(uap->shmid);
@@ -726,12 +748,16 @@ shmget_allocate_segment(struct proc *p, struct shmget_args *uap, int mode,
 	void * mem_object;
 	struct shm_handle *shm_handle_next, **shm_handle_next_p;
 
-	if (uap->size < (user_size_t)shminfo.shmmin ||
-	    uap->size > (user_size_t)shminfo.shmmax)
+	if (uap->size <= 0 ||
+			uap->size < (user_size_t)shminfo.shmmin ||
+			uap->size > (user_size_t)shminfo.shmmax) {
 		return EINVAL;
+	}
 	if (shm_nused >= shminfo.shmmni) /* any shmids left? */
 		return ENOSPC;
-	total_size = mach_vm_round_page(uap->size);
+	if (mach_vm_round_page_overflow(uap->size, &total_size)) {
+		return EINVAL;
+	}
 	if ((user_ssize_t)(shm_committed + btoc(total_size)) > shminfo.shmall)
 		return ENOMEM;
 	if (shm_last_free < 0) {
@@ -845,13 +871,13 @@ shmget(struct proc *p, struct shmget_args *uap, int32_t *retval)
 {
 	int segnum, mode, error;
 	int shmget_ret = 0;
-	
+
 	/* Auditing is actually done in shmget_allocate_segment() */
 
 	SYSV_SHM_SUBSYS_LOCK();
 
-	if (!shm_inited) {
-		shminit(NULL);
+	if ((shmget_ret = shminit())) {
+		goto shmget_out;
 	}
 
 	mode = uap->shmflg & ACCESSPERMS;
@@ -874,8 +900,6 @@ shmget(struct proc *p, struct shmget_args *uap, int32_t *retval)
 shmget_out:
 	SYSV_SHM_SUBSYS_UNLOCK();
 	return shmget_ret;
-	/*NOTREACHED*/
-
 }
 
 /*
@@ -917,57 +941,75 @@ int
 shmfork(struct proc *p1, struct proc *p2)
 {
 	struct shmmap_state *shmmap_s;
-    size_t size;
-	int i;
-	int shmfork_ret = 0;
+	size_t size;
+	int nsegs = 0;
+	int ret = 0;
 
 	SYSV_SHM_SUBSYS_LOCK();
 
-	if (!shm_inited) {
-		shminit(NULL);
-	}
-    size = shminfo.shmseg * sizeof(struct shmmap_state);
-    if (size == 0 || size / shminfo.shmseg != sizeof(struct shmmap_state)) {
-        /* overflow */
-        shmfork_ret = 1;
-        goto shmfork_out;
-    }
-	MALLOC(shmmap_s, struct shmmap_state *, size, M_SHM, M_WAITOK);
-	if (shmmap_s != NULL) {
-		bcopy((caddr_t)p1->vm_shm, (caddr_t)shmmap_s, size);
-		p2->vm_shm = (caddr_t)shmmap_s;
-		for (i = 0; i < shminfo.shmseg; i++, shmmap_s++)
-			if (shmmap_s->shmid != -1)
-				shmsegs[IPCID_TO_IX(shmmap_s->shmid)].u.shm_nattch++;
-		shmfork_ret = 0;
+	if (shminit()) {
+		ret = 1;
 		goto shmfork_out;
 	}
 
-	shmfork_ret = 1;	/* failed to copy to child - ENOMEM */
+	struct shmmap_state *src = (struct shmmap_state *)p1->vm_shm;
+	assert(src);
+
+	/* count number of shmid entries in src */
+	for (struct shmmap_state *s = src; s->shmid != SHMID_SENTINEL; s++) {
+		nsegs++;
+	}
+
+	if (os_add_and_mul_overflow(nsegs, 1, sizeof(struct shmmap_state), &size)) {
+		ret = 1;
+		goto shmfork_out;
+	}
+	MALLOC(shmmap_s, struct shmmap_state *, size, M_SHM, M_WAITOK);
+	if (shmmap_s == NULL) {
+		ret = 1;
+		goto shmfork_out;
+	}
+
+	bcopy(src, (caddr_t)shmmap_s, size);
+	p2->vm_shm = (caddr_t)shmmap_s;
+	for (; shmmap_s->shmid != SHMID_SENTINEL; shmmap_s++) {
+		if (SHMID_IS_VALID(shmmap_s->shmid)) {
+			shmsegs[IPCID_TO_IX(shmmap_s->shmid)].u.shm_nattch++;
+		}
+	}
+
 shmfork_out:
 	SYSV_SHM_SUBSYS_UNLOCK();
-	return shmfork_ret;
+	return ret;
+}
+
+static void
+shmcleanup(struct proc *p, int deallocate)
+{
+	struct shmmap_state *shmmap_s;
+
+	SYSV_SHM_SUBSYS_LOCK();
+
+	shmmap_s = (struct shmmap_state *)p->vm_shm;
+	for (; shmmap_s->shmid != SHMID_SENTINEL; shmmap_s++) {
+		if (SHMID_IS_VALID(shmmap_s->shmid)) {
+			/*
+			 * XXX: Should the MAC framework enforce
+			 * check here as well.
+			 */
+			shm_delete_mapping(p, shmmap_s, deallocate);
+		}
+	}
+
+	FREE((caddr_t)p->vm_shm, M_SHM);
+	p->vm_shm = NULL;
+	SYSV_SHM_SUBSYS_UNLOCK();
 }
 
 void
 shmexit(struct proc *p)
 {
-	struct shmmap_state *shmmap_s;
-	int i;
-
-	shmmap_s = (struct shmmap_state *)p->vm_shm;
-
-	SYSV_SHM_SUBSYS_LOCK();
-	for (i = 0; i < shminfo.shmseg; i++, shmmap_s++)
-		if (shmmap_s->shmid != -1)
-			/*
-			 * XXX: Should the MAC framework enforce
-			 * check here as well.
-			 */
-			shm_delete_mapping(p, shmmap_s, 1);
-	FREE((caddr_t)p->vm_shm, M_SHM);
-	p->vm_shm = NULL;
-	SYSV_SHM_SUBSYS_UNLOCK();
+	shmcleanup(p, 1);
 }
 
 /*
@@ -979,24 +1021,14 @@ shmexit(struct proc *p)
 __private_extern__ void
 shmexec(struct proc *p)
 {
-	struct shmmap_state *shmmap_s;
-	int i;
-
-	shmmap_s = (struct shmmap_state *)p->vm_shm;
-	SYSV_SHM_SUBSYS_LOCK();
-	for (i = 0; i < shminfo.shmseg; i++, shmmap_s++)
-		if (shmmap_s->shmid != -1)
-			shm_delete_mapping(p, shmmap_s, 0);
-	FREE((caddr_t)p->vm_shm, M_SHM);
-	p->vm_shm = NULL;
-	SYSV_SHM_SUBSYS_UNLOCK();
+	shmcleanup(p, 0);
 }
 
-void
-shminit(__unused void *dummy)
+int
+shminit(void)
 {
+	size_t sz;
 	int i;
-	int s;
 
 	if (!shm_inited) {
 		/*
@@ -1006,12 +1038,13 @@ shminit(__unused void *dummy)
 		 * dictates this filed be a size_t, which is 64 bits when
 		 * running 64 bit binaries.
 		 */
-		s = sizeof(struct shmid_kernel) * shminfo.shmmni;
+		if (os_mul_overflow(shminfo.shmmni, sizeof(struct shmid_kernel), &sz)) {
+			return ENOMEM;
+		}
 
-		MALLOC(shmsegs, struct shmid_kernel *, s, M_SHM, M_WAITOK);
+		MALLOC(shmsegs, struct shmid_kernel *, sz, M_SHM, M_WAITOK);
 		if (shmsegs == NULL) {
-			/* XXX fail safely: leave shared memory uninited */
-			return;
+			return ENOMEM;
 		}
 		for (i = 0; i < shminfo.shmmni; i++) {
 			shmsegs[i].u.shm_perm.mode = SHMSEG_FREE;
@@ -1025,7 +1058,10 @@ shminit(__unused void *dummy)
 		shm_committed = 0;
 		shm_inited = 1;
 	}
+
+	return 0;
 }
+
 /* Initialize the mutex governing access to the SysV shm subsystem */
 __private_extern__ void
 sysv_shm_lock_init( void )
@@ -1047,10 +1083,11 @@ sysctl_shminfo(__unused struct sysctl_oid *oidp, void *arg1,
 {
 	int error = 0;
 	int sysctl_shminfo_ret = 0;
-	uint64_t	saved_shmmax;
-    uint64_t    saved_shmseg;
-    uint64_t    saved_shmmni;
-    uint64_t    saved_shmall;
+	int64_t	saved_shmmax;
+	int64_t	saved_shmmin;
+	int64_t saved_shmseg;
+	int64_t saved_shmmni;
+	int64_t saved_shmall;
 
 	error = SYSCTL_OUT(req, arg1, sizeof(int64_t));
 	if (error || req->newptr == USER_ADDR_NULL)
@@ -1064,6 +1101,7 @@ sysctl_shminfo(__unused struct sysctl_oid *oidp, void *arg1,
 		goto sysctl_shminfo_out;
 	}
     saved_shmmax = shminfo.shmmax;
+    saved_shmmin = shminfo.shmmin;
     saved_shmseg = shminfo.shmseg;
     saved_shmmni = shminfo.shmmni;
     saved_shmall = shminfo.shmall;
@@ -1075,8 +1113,15 @@ sysctl_shminfo(__unused struct sysctl_oid *oidp, void *arg1,
 
 	if (arg1 == &shminfo.shmmax) {
 		/* shmmax needs to be page-aligned */
-		if (shminfo.shmmax & PAGE_MASK_64) {
+		if (shminfo.shmmax & PAGE_MASK_64 || shminfo.shmmax < 0) {
 			shminfo.shmmax = saved_shmmax;
+			sysctl_shminfo_ret = EINVAL;
+			goto sysctl_shminfo_out;
+		}
+	}
+    else if (arg1 == &shminfo.shmmin) {
+		if (shminfo.shmmin < 0) {
+			shminfo.shmmin = saved_shmmin;
 			sysctl_shminfo_ret = EINVAL;
 			goto sysctl_shminfo_out;
 		}
@@ -1130,8 +1175,8 @@ IPCS_shm_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 
 	SYSV_SHM_SUBSYS_LOCK();
 
-	if (!shm_inited) {
-		shminit(NULL);
+	if ((error = shminit())) {
+		goto ipcs_shm_sysctl_out;
 	}
 
 	if (!IS_64BIT_PROCESS(p)) {

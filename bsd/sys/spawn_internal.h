@@ -204,7 +204,7 @@ typedef struct _posix_spawnattr {
 #define	POSIX_SPAWN_JETSAM_SET                      0x8000
 
 #define	POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY	0x01
-#define	POSIX_SPAWN_JETSAM_HIWATER_BACKGROUND		0x02
+#define	POSIX_SPAWN_JETSAM_HIWATER_BACKGROUND		0x02  /* to be deprecated */
 #define	POSIX_SPAWN_JETSAM_MEMLIMIT_FATAL		0x04  /* to be deprecated */
 
 /*

@@ -173,8 +173,8 @@ tcp_newreno_ack_rcvd(struct tcpcb *tp, struct tcphdr *th) {
 	 * greater than or equal to the congestion window.
 	 */
 
-	register u_int cw = tp->snd_cwnd;
-	register u_int incr = tp->t_maxseg;
+	u_int cw = tp->snd_cwnd;
+	u_int incr = tp->t_maxseg;
 	int acked = 0;
 
 	acked = BYTES_ACKED(th, tp);

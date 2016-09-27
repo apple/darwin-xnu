@@ -896,4 +896,3 @@ class OperatingSystemPlugIn(object):
         print "FATAL ERROR: Failed to get register state for thread id 0x%x " % tid
         print thobj
         return regs.GetPackedRegisterState()
-

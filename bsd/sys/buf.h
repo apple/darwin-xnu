@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,14 +106,14 @@ __BEGIN_DECLS
  @abstract Mark a buffer as "aged," i.e. as a good candidate to be discarded and reused after buf_brelse().
  @param bp Buffer to mark.
  */
-void	buf_markaged(buf_t);
+void	buf_markaged(buf_t bp);
 
 /*!
  @function buf_markinvalid
  @abstract Mark a buffer as not having valid data and being ready for immediate reuse after buf_brelse().
  @param bp Buffer to mark.
  */
-void	buf_markinvalid(buf_t);
+void	buf_markinvalid(buf_t bp);
 
 /*!
  @function buf_markdelayed
@@ -122,7 +122,7 @@ void	buf_markinvalid(buf_t);
  or pressure necessitating reuse of the buffer will cause it to be written back to disk.
  @param bp Buffer to mark.
  */
-void	buf_markdelayed(buf_t);
+void	buf_markdelayed(buf_t bp);
 
 void	buf_markclean(buf_t);
 
@@ -133,14 +133,14 @@ void	buf_markclean(buf_t);
  buf_markeintr does not itself do a wakeup.
  @param bp Buffer to mark.
  */
-void	buf_markeintr(buf_t);
+void	buf_markeintr(buf_t bp);
 
 /*!
  @function buf_markfua
  @abstract Mark a buffer for write through disk cache, if disk supports it.
  @param bp Buffer to mark.
  */
-void	buf_markfua(buf_t);
+void	buf_markfua(buf_t bp);
 
 /*!
  @function buf_fua
@@ -148,7 +148,7 @@ void	buf_markfua(buf_t);
  @param bp Buffer to test.
  @return Nonzero if buffer is marked for write-through, 0 if not.
  */
-int	buf_fua(buf_t);
+int	buf_fua(buf_t bp);
 
 /*!
  @function buf_valid
@@ -156,7 +156,7 @@ int	buf_fua(buf_t);
  @param bp Buffer to test.
  @return Nonzero if buffer has valid data, 0 if not.
  */
-int	buf_valid(buf_t);
+int	buf_valid(buf_t bp);
 
 /*!
  @function buf_fromcache
@@ -166,7 +166,7 @@ int	buf_valid(buf_t);
  @param bp Buffer to test.
  @return Nonzero if we got this buffer's data without doing I/O, 0 if not.
  */
-int	buf_fromcache(buf_t);
+int	buf_fromcache(buf_t bp);
 
 /*!
  @function buf_upl
@@ -176,7 +176,7 @@ int	buf_fromcache(buf_t);
  @param bp Buffer whose upl to grab.
  @return Buffer's upl if it has one, else NULL.
  */
-void *	buf_upl(buf_t);
+void *	buf_upl(buf_t bp);
 
 /*!
  @function buf_uploffset
@@ -185,7 +185,7 @@ void *	buf_upl(buf_t);
  @param bp Buffer whose uploffset to grab.
  @return Buffer's uploffset--does not check whether that value makes sense for this buffer.
  */
-uint32_t buf_uploffset(buf_t);
+uint32_t buf_uploffset(buf_t bp);
 
 /*!
  @function buf_rcred
@@ -195,7 +195,7 @@ uint32_t buf_uploffset(buf_t);
  @param bp Buffer whose credential to grab.
  @return Credential if it exists, else NULL.
  */
-kauth_cred_t buf_rcred(buf_t);
+kauth_cred_t buf_rcred(buf_t bp);
 
 /*!
  @function buf_wcred
@@ -205,7 +205,7 @@ kauth_cred_t buf_rcred(buf_t);
  @param bp Buffer whose credential to grab.
  @return Credential if it exists, else NULL.
  */
-kauth_cred_t buf_wcred(buf_t);
+kauth_cred_t buf_wcred(buf_t bp);
 
 /*!
  @function buf_proc
@@ -215,7 +215,7 @@ kauth_cred_t buf_wcred(buf_t);
  @param bp Buffer whose associated process to find.
  @return Associated process, possibly NULL.
  */
-proc_t	buf_proc(buf_t);
+proc_t	buf_proc(buf_t bp);
 
 /*!
  @function buf_dirtyoff
@@ -224,7 +224,7 @@ proc_t	buf_proc(buf_t);
  @param bp Buffer whose dirty offset to get.
  @return Dirty offset (0 if not explicitly changed).
  */
-uint32_t buf_dirtyoff(buf_t);
+uint32_t buf_dirtyoff(buf_t bp);
 
 /*!
  @function buf_dirtyend
@@ -234,16 +234,15 @@ uint32_t buf_dirtyoff(buf_t);
  @param bp Buffer whose dirty end to get.
  @return 0 if buffer is found clean; size of buffer if found dirty.  Can be set to any value by callers of buf_setdirtyend().
  */
-uint32_t buf_dirtyend(buf_t);
+uint32_t buf_dirtyend(buf_t bp);
 
 /*!
  @function buf_setdirtyoff
  @abstract Set the starting offset of the dirty region associated with a buffer.
  @discussion This value is zero unless someone set it explicitly.
  @param bp Buffer whose dirty end to set.
- @return void.
  */
-void	buf_setdirtyoff(buf_t, uint32_t);
+void	buf_setdirtyoff(buf_t bp, uint32_t);
 
 /*!
  @function buf_setdirtyend
@@ -251,9 +250,8 @@ void	buf_setdirtyoff(buf_t, uint32_t);
  @discussion If the buffer's data was found incore and dirty, the dirty end is the size of the block; otherwise, unless
  someone outside of xnu explicitly changes it by calling buf_setdirtyend(), it will be zero.
  @param bp Buffer whose dirty end to set.
- @return void.
  */
-void	buf_setdirtyend(buf_t, uint32_t);
+void	buf_setdirtyend(buf_t bp, uint32_t);
 
 /*!
  @function buf_error
@@ -262,15 +260,14 @@ void	buf_setdirtyend(buf_t, uint32_t);
  @param bp Buffer whose error value to retrieve.
  @return Error value, directly.
  */
-errno_t	buf_error(buf_t);
+errno_t	buf_error(buf_t bp);
 
 /*!
  @function buf_seterror
  @abstract Set an error value on a buffer.
  @param bp Buffer whose error value to set.
- @return void.
  */
-void	buf_seterror(buf_t, errno_t);
+void	buf_seterror(buf_t bp, errno_t);
 
 /*!
  @function buf_setflags
@@ -278,9 +275,8 @@ void	buf_seterror(buf_t, errno_t);
  @discussion buffer_flags |= flags
  @param bp Buffer whose flags to set.
  @param flags Flags to add to buffer's mask. B_LOCKED/B_NOCACHE/B_ASYNC/B_READ/B_WRITE/B_PAGEIO/B_FUA
- @return void.
  */
-void	buf_setflags(buf_t, int32_t);
+void	buf_setflags(buf_t bp, int32_t flags);
 
 /*!
  @function buf_clearflags
@@ -288,9 +284,8 @@ void	buf_setflags(buf_t, int32_t);
  @discussion buffer_flags &= ~flags
  @param bp Buffer whose flags to clear.
  @param flags Flags to remove from buffer's mask. B_LOCKED/B_NOCACHE/B_ASYNC/B_READ/B_WRITE/B_PAGEIO/B_FUA
- @return void.
  */
-void	buf_clearflags(buf_t, int32_t);
+void	buf_clearflags(buf_t bp, int32_t flags);
 
 /*!
  @function buf_flags
@@ -299,7 +294,7 @@ void	buf_clearflags(buf_t, int32_t);
  @param bp Buffer whose flags to grab.
  @return flags.
  */
-int32_t	buf_flags(buf_t);
+int32_t	buf_flags(buf_t bp);
 
 /*!
  @function buf_reset
@@ -308,9 +303,8 @@ int32_t	buf_flags(buf_t);
  Used perhaps to prepare an iobuf for reuse.
  @param bp Buffer whose flags to grab.  
  @param flags Flags to set on buffer: B_READ, B_WRITE, B_ASYNC, B_NOCACHE.
- @return void.
  */
-void	buf_reset(buf_t, int32_t);
+void	buf_reset(buf_t bp, int32_t flags);
 
 /*!
  @function buf_map
@@ -327,7 +321,7 @@ void	buf_reset(buf_t, int32_t);
  @param io_addr Destination for mapping address.
  @return 0 for success, ENOMEM if unable to map the buffer.
  */
-errno_t	buf_map(buf_t, caddr_t *);
+errno_t	buf_map(buf_t bp, caddr_t *io_addr);
 
 /*!
  @function buf_unmap
@@ -340,19 +334,17 @@ errno_t	buf_map(buf_t, caddr_t *);
  buf_setupl() was subsequently called; buf_map() created the mapping.  In this case, buf_unmap() will
  unmap the buffer.
  @param bp Buffer whose mapping to find or create.
- @param io_addr Destination for mapping address.
  @return 0 for success, EINVAL if unable to unmap buffer.
  */
-errno_t	buf_unmap(buf_t);
+errno_t	buf_unmap(buf_t bp);
 
 /*!
  @function buf_setdrvdata
  @abstract Set driver-specific data on a buffer.
  @param bp Buffer whose driver-data to set.
  @param drvdata Opaque driver data.
- @return void.
  */
-void 	buf_setdrvdata(buf_t, void *);
+void 	buf_setdrvdata(buf_t bp, void *drvdata);
 
 /*!
  @function buf_setdrvdata
@@ -360,16 +352,15 @@ void 	buf_setdrvdata(buf_t, void *);
  @param bp Buffer whose driver data to get.
  @return Opaque driver data.
  */
-void *	buf_drvdata(buf_t);
+void *	buf_drvdata(buf_t bp);
 
 /*!
  @function buf_setfsprivate
  @abstract Set filesystem-specific data on a buffer.
  @param bp Buffer whose filesystem data to set.
  @param fsprivate Opaque filesystem data.
- @return void.
  */
-void 	buf_setfsprivate(buf_t, void *);
+void 	buf_setfsprivate(buf_t bp, void *fsprivate);
 
 /*!
  @function buf_fsprivate
@@ -377,7 +368,7 @@ void 	buf_setfsprivate(buf_t, void *);
  @param bp Buffer whose filesystem data to get.
  @return Opaque filesystem data.
  */
-void *	buf_fsprivate(buf_t);
+void *	buf_fsprivate(buf_t bp);
 
 /*!
  @function buf_blkno
@@ -389,7 +380,7 @@ void *	buf_fsprivate(buf_t);
  @param bp Buffer whose physical block number to get.
  @return Block number.
  */
-daddr64_t buf_blkno(buf_t);
+daddr64_t buf_blkno(buf_t bp);
 
 /*!
  @function buf_lblkno
@@ -399,7 +390,7 @@ daddr64_t buf_blkno(buf_t);
  @param bp Buffer whose logical block number to get.
  @return Block number.
  */
-daddr64_t buf_lblkno(buf_t);
+daddr64_t buf_lblkno(buf_t bp);
 
 /*!
  @function buf_setblkno
@@ -407,9 +398,8 @@ daddr64_t buf_lblkno(buf_t);
  @discussion Physical block number is generally set by the cluster layer or by buf_getblk().
  @param bp Buffer whose physical block number to set.
  @param blkno Block number to set.
- @return void.
  */
-void	buf_setblkno(buf_t, daddr64_t);
+void	buf_setblkno(buf_t bp, daddr64_t blkno);
 
 /*!
  @function buf_setlblkno
@@ -418,9 +408,8 @@ void	buf_setblkno(buf_t, daddr64_t);
  for example by buf_bread().
  @param bp Buffer whose logical block number to set.
  @param lblkno Block number to set.
- @return void.
  */
-void	buf_setlblkno(buf_t, daddr64_t);
+void	buf_setlblkno(buf_t bp, daddr64_t lblkno);
 
 /*!
  @function buf_count
@@ -428,7 +417,7 @@ void	buf_setlblkno(buf_t, daddr64_t);
  @param bp Buffer whose byte count to get.
  @return Byte count.
  */
-uint32_t buf_count(buf_t);
+uint32_t buf_count(buf_t bp);
 
 /*!
  @function buf_size
@@ -437,7 +426,7 @@ uint32_t buf_count(buf_t);
  @param bp Buffer whose size to get.
  @return Size.
  */
-uint32_t buf_size(buf_t);
+uint32_t buf_size(buf_t bp);
 
 /*!
  @function buf_resid
@@ -446,16 +435,15 @@ uint32_t buf_size(buf_t);
  @param bp Buffer whose outstanding count to get.
  @return Count of unwritten/unread bytes.
  */
-uint32_t buf_resid(buf_t);
+uint32_t buf_resid(buf_t bp);
 
 /*!
  @function buf_setcount
  @abstract Set count of valid bytes in a buffer.  This may be less than the space allocated to the buffer.
  @param bp Buffer whose byte count to set.
  @param bcount Count to set.
- @return void.
  */
-void	buf_setcount(buf_t, uint32_t);
+void	buf_setcount(buf_t bp, uint32_t bcount);
 
 /*!
  @function buf_setsize
@@ -463,9 +451,8 @@ void	buf_setcount(buf_t, uint32_t);
  @discussion May be larger than amount of valid data in buffer.  Should be used by 
  code which is manually providing storage for an iobuf, one allocated with buf_alloc().
  @param bp Buffer whose size to set.
- @return void.
  */
-void	buf_setsize(buf_t, uint32_t);
+void	buf_setsize(buf_t bp, uint32_t);
 
 /*!
  @function buf_setresid
@@ -474,9 +461,8 @@ void	buf_setsize(buf_t, uint32_t);
  completes, often called on an "original" buffer when using a manipulated buffer to perform I/O 
  on behalf of the first.
  @param bp Buffer whose outstanding count to set.
- @return Count of unwritten/unread bytes.
  */
-void	buf_setresid(buf_t, uint32_t);
+void	buf_setresid(buf_t bp, uint32_t resid);
 
 /*!
  @function buf_setdataptr
@@ -485,9 +471,8 @@ void	buf_setresid(buf_t, uint32_t);
  useful with iobufs (allocated with buf_alloc()).
  @param bp Buffer whose data pointer to set.
  @param data Pointer to data region.
- @return void.
  */
-void	buf_setdataptr(buf_t, uintptr_t);
+void	buf_setdataptr(buf_t bp, uintptr_t data);
 
 /*!
  @function buf_dataptr
@@ -496,7 +481,7 @@ void	buf_setdataptr(buf_t, uintptr_t);
  @param bp Buffer whose data pointer to retrieve.
  @return Data pointer; NULL if unset.
  */
-uintptr_t buf_dataptr(buf_t);
+uintptr_t buf_dataptr(buf_t bp);
 
 /*!
  @function buf_vnode
@@ -507,7 +492,7 @@ uintptr_t buf_dataptr(buf_t);
  @param bp Buffer whose vnode to retrieve.
  @return Buffer's vnode.
  */
-vnode_t	buf_vnode(buf_t);
+vnode_t	buf_vnode(buf_t bp);
 
 /*!
  @function buf_setvnode
@@ -515,9 +500,8 @@ vnode_t	buf_vnode(buf_t);
  @discussion This call need not be used on traditional buffers; it is for use with iobufs.
  @param bp Buffer whose vnode to set.
  @param vp The vnode to attach to the buffer.
- @return void.
  */
-void	buf_setvnode(buf_t, vnode_t);
+void	buf_setvnode(buf_t bp, vnode_t vp);
 
 /*!
  @function buf_device
@@ -528,7 +512,7 @@ void	buf_setvnode(buf_t, vnode_t);
  @param bp Buffer whose device ID to retrieve.
  @return Device id.
  */
-dev_t	buf_device(buf_t);
+dev_t	buf_device(buf_t bp);
 
 /*!
  @function buf_setdevice
@@ -539,7 +523,7 @@ dev_t	buf_device(buf_t);
  @param vp Device to set on the buffer.
  @return 0 for success, EINVAL if vp is not a device file.
  */
-errno_t	buf_setdevice(buf_t, vnode_t);
+errno_t	buf_setdevice(buf_t bp, vnode_t vp);
 
 /*!
  @function buf_strategy
@@ -554,7 +538,7 @@ errno_t	buf_setdevice(buf_t, vnode_t);
  @param ap vnop_strategy_args structure (most importantly, a buffer).
  @return 0 for success, or errors from filesystem or device layers.
  */
-errno_t	buf_strategy(vnode_t, void *);
+errno_t	buf_strategy(vnode_t devvp, void *ap);
 
 /* 
  * Flags for buf_invalblkno() 
@@ -574,13 +558,13 @@ errno_t	buf_strategy(vnode_t, void *);
  obtained with a buf_getblk().  If data has been read into core without using
  traditional buffer cache routines, buf_invalblkno() will not be able to invalidate it--this
  includes the use of iobufs.
- @param bp Buffer whose block to invalidate.
+ @param vp vnode whose block to invalidate.
  @param lblkno Logical block number.
  @param flags BUF_WAIT: wait for busy buffers to become unbusy and invalidate them then.  Otherwise,
  just return EBUSY for busy blocks.
  @return 0 for success, EINVAL if vp is not a device file.
  */
-errno_t	buf_invalblkno(vnode_t, daddr64_t, int);
+errno_t	buf_invalblkno(vnode_t vp, daddr64_t lblkno, int flags);
 
 /*!
  @function buf_callback
@@ -589,7 +573,7 @@ errno_t	buf_invalblkno(vnode_t, daddr64_t, int);
  @param bp Buffer whose callback to get.
  @return 0 for success, or errors from filesystem or device layers.
  */
-void * buf_callback(buf_t);
+void * buf_callback(buf_t bp);
 
 /*!
  @function buf_setcallback
@@ -602,7 +586,7 @@ void * buf_callback(buf_t);
  @param transaction Additional argument to callback function.
  @return 0; always succeeds.
  */
-errno_t	buf_setcallback(buf_t, void (*)(buf_t, void *), void *);
+errno_t	buf_setcallback(buf_t bp, void (*callback)(buf_t, void *), void *transaction);
 
 /*!
  @function buf_setupl
@@ -615,10 +599,10 @@ errno_t	buf_setcallback(buf_t, void (*)(buf_t, void *), void *);
  buffer.
  @param bp Buffer whose upl to set.
  @param upl UPL to set in the buffer.
- @parma offset Offset within upl at which relevant data begin.
+ @param offset Offset within upl at which relevant data begin.
  @return 0 for success, EINVAL if the buffer was not allocated with buf_alloc().
  */
-errno_t	buf_setupl(buf_t, upl_t, uint32_t);
+errno_t	buf_setupl(buf_t bp, upl_t upl, uint32_t offset);
 
 /*!
  @function buf_clone
@@ -637,7 +621,7 @@ errno_t	buf_setupl(buf_t, upl_t, uint32_t);
  @param arg Argument to pass to iodone() callback.
  @return NULL if io_offset/io_size combination is invalid for the buffer to be cloned; otherwise, the new buffer.
  */
-buf_t	buf_clone(buf_t, int, int, void (*)(buf_t, void *), void *);
+buf_t	buf_clone(buf_t bp, int io_offset, int io_size, void (*iodone)(buf_t, void *), void *arg);
 
 
 /*!
@@ -674,16 +658,15 @@ int	buf_shadow(buf_t bp);
  the buffer's associated device will be set. If vp is NULL, it can be set later with buf_setvnode().
  @return New buffer.
  */
-buf_t 	buf_alloc(vnode_t);
+buf_t 	buf_alloc(vnode_t vp);
 
 /*!
  @function buf_free
  @abstract Free a buffer that was allocated with buf_alloc().
  @discussion The storage (UPL, data pointer) associated with an iobuf must be freed manually.
  @param bp The buffer to free.
- @return void.
  */
-void	buf_free(buf_t);
+void	buf_free(buf_t bp);
 
 /*
  * flags for buf_invalidateblks
@@ -699,7 +682,7 @@ void	buf_free(buf_t);
  Again, it will only be able to invalidate data which were populated with traditional buffer cache routines,
  i.e. by buf_getblk() and callers thereof. Unlike buf_invalblkno(), it can be made to write dirty data to disk
  rather than casting it aside.
- @param bp The buffer whose data to invalidate.
+ @param vp The vnode whose data to invalidate.
  @param flags BUF_WRITE_DATA: write dirty data to disk with VNOP_BWRITE() before kicking buffer cache entries out.
  BUF_SKIP_META: do not invalidate metadata blocks.
  @param slpflag Flags to pass to "msleep" while waiting to acquire busy buffers. 
@@ -707,7 +690,7 @@ void	buf_free(buf_t);
  and re-starting the scan.
  @return 0 for success, error values from msleep().
  */
-int	buf_invalidateblks(vnode_t, int, int, int);
+int	buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo);
 
 /*
  * flags for buf_flushdirtyblks and buf_iterate
@@ -732,9 +715,8 @@ int	buf_invalidateblks(vnode_t, int, int, int);
  BUF_SKIP_NONLOCKED: Skip buffers which are not busy when we encounter them.
  BUF_SKIP_LOCKED: Skip buffers which are busy when we encounter them.
  @param msg String to pass to msleep().
- @return void.
  */
-void	buf_flushdirtyblks(vnode_t, int, int, const char *);
+void	buf_flushdirtyblks(vnode_t vp, int wait, int flags, const char *msg);
 
 /*!
  @function buf_iterate
@@ -745,16 +727,15 @@ void	buf_flushdirtyblks(vnode_t, int, int, const char *);
  BUF_RETURNED_DONE: buf_iterate() should call buf_brelse() on the buffer and then stop iterating.
  BUF_CLAIMED: buf_iterate() should continue iterating (and not call buf_brelse()).
  BUF_CLAIMED_DONE: buf_iterate() should stop iterating (and not call buf_brelse()).
- @param flag
+ @param flags
  BUF_SKIP_NONLOCKED: Skip buffers which are not busy when we encounter them. BUF_SKIP_LOCKED: Skip buffers which are busy when we encounter them.
  BUF_SCAN_CLEAN: Call out on clean buffers.
  BUF_SCAN_DIRTY: Call out on dirty buffers.
  BUF_NOTIFY_BUSY: If a buffer cannot be acquired, pass a NULL buffer to callout; otherwise,
  that buffer will be silently skipped.
  @param arg Argument to pass to callout in addition to buffer.
- @return void.
  */
-void	buf_iterate(vnode_t, int (*)(buf_t, void *), int, void *);
+void	buf_iterate(vnode_t vp, int (*callout)(buf_t, void *), int flags, void *arg);
 
 /*!
  @function buf_clear
@@ -764,9 +745,8 @@ void	buf_iterate(vnode_t, int (*)(buf_t, void *), int, void *);
  UPL into memory; should only be called once during the life cycle of an iobuf (one allocated
  with buf_alloc()).  
  @param bp The buffer to zero out.
- @return void.
  */
-void	buf_clear(buf_t);
+void	buf_clear(buf_t bp);
 
 /*!
  @function buf_bawrite
@@ -775,13 +755,9 @@ void	buf_clear(buf_t);
  Callers can wait for writes to complete at their discretion using buf_biowait().  When this function is called,
  data should already have been written to the buffer's data region.
  @param bp The buffer on which to initiate I/O.
- @param throttle If "throttle" is nonzero and more than VNODE_ASYNC_THROTTLE writes are in progress on this file,
- buf_bawrite() will block until the write count drops below VNODE_ASYNC_THROTTLE.  If "throttle" is zero and the write
- count is high, it will fail with EWOULDBLOCK; the caller can decide whether to make a blocking call or pursue
- other opportunities.
  @return EWOULDBLOCK if write count is high and "throttle" is zero; otherwise, errors from VNOP_BWRITE.
  */
-errno_t	buf_bawrite(buf_t);
+errno_t	buf_bawrite(buf_t bp);
 
 /*!
  @function buf_bdwrite
@@ -793,11 +769,9 @@ errno_t	buf_bawrite(buf_t);
  requested otherwise [see return_error] , buf_bdwrite() will unilaterally launch an asynchronous I/O with buf_bawrite() to keep the pile of
  delayed writes from getting too large.
  @param bp The buffer to mark for delayed write.
- @param return_error If the number of pending delayed writes systemwide is larger than an internal limit,
- return EAGAIN rather than doing an asynchronous write.
  @return EAGAIN for return_error != 0 case, 0 for succeess, errors from buf_bawrite.
  */
-errno_t	buf_bdwrite(buf_t);
+errno_t	buf_bdwrite(buf_t bp);
 
 /*!
  @function buf_bwrite
@@ -808,7 +782,7 @@ errno_t	buf_bdwrite(buf_t);
  @param bp The buffer to write to disk.
  @return 0 for success; errors from buf_biowait().
  */
-errno_t	buf_bwrite(buf_t);
+errno_t	buf_bwrite(buf_t bp);
 
 /*!
  @function buf_biodone
@@ -821,9 +795,8 @@ errno_t	buf_bwrite(buf_t);
  considers itself justified in calling buf_brelse() to return it to free lists--no one is waiting for it.  Finally, 
  waiters on the bp (e.g. in buf_biowait()) are woken up.
  @param bp The buffer to mark as done with I/O.
- @return void.
  */
-void	buf_biodone(buf_t);
+void	buf_biodone(buf_t bp);
 
 /*!
  @function buf_biowait
@@ -832,7 +805,7 @@ void	buf_biodone(buf_t);
  @param bp The buffer to wait on.
  @return 0 for a successful wait; nonzero the buffer has been marked as EINTR or had an error set on it.
  */
-errno_t	buf_biowait(buf_t);
+errno_t	buf_biowait(buf_t bp);
 
 /*!
  @function buf_brelse
@@ -846,9 +819,8 @@ errno_t	buf_biowait(buf_t);
  B_LOCKED buffer will not be available for reuse by other files, though its data may be paged out.
  Note that buf_brelse() is intended for use with traditionally allocated buffers.
  @param bp The buffer to release.
- @retrn void.
  */
-void	buf_brelse(buf_t);
+void	buf_brelse(buf_t bp);
 
 /*!
  @function buf_bread
@@ -865,7 +837,7 @@ void	buf_brelse(buf_t);
  @param bpp Destination pointer for buffer.
  @return 0 for success, or an error from buf_biowait().
  */
-errno_t	buf_bread(vnode_t, daddr64_t, int, kauth_cred_t, buf_t *);
+errno_t	buf_bread(vnode_t vp, daddr64_t blkno, int size, kauth_cred_t cred, buf_t *bpp);
 
 /*!
  @function buf_breadn
@@ -885,7 +857,7 @@ errno_t	buf_bread(vnode_t, daddr64_t, int, kauth_cred_t, buf_t *);
  @param bpp Destination pointer for buffer.
  @return 0 for success, or an error from buf_biowait().
  */
-errno_t	buf_breadn(vnode_t, daddr64_t, int, daddr64_t *, int *, int, kauth_cred_t, buf_t *);
+errno_t	buf_breadn(vnode_t vp, daddr64_t blkno, int size, daddr64_t *rablks, int *rasizes, int nrablks, kauth_cred_t cred, buf_t *bpp);
 
 /*!
  @function buf_meta_bread
@@ -902,7 +874,7 @@ errno_t	buf_breadn(vnode_t, daddr64_t, int, daddr64_t *, int *, int, kauth_cred_
  @param bpp Destination pointer for buffer.
  @return 0 for success, or an error from buf_biowait().
  */
-errno_t	buf_meta_bread(vnode_t, daddr64_t, int, kauth_cred_t, buf_t *);
+errno_t	buf_meta_bread(vnode_t vp, daddr64_t blkno, int size, kauth_cred_t cred, buf_t *bpp);
 
 /*!
  @function buf_meta_breadn
@@ -921,7 +893,7 @@ errno_t	buf_meta_bread(vnode_t, daddr64_t, int, kauth_cred_t, buf_t *);
  @param bpp Destination pointer for buffer.
  @return 0 for success, or an error from buf_biowait().
  */
-errno_t	buf_meta_breadn(vnode_t, daddr64_t, int, daddr64_t *, int *, int, kauth_cred_t, buf_t *);
+errno_t	buf_meta_breadn(vnode_t vp, daddr64_t blkno, int size, daddr64_t *rablks, int *rasizes, int nrablks, kauth_cred_t cred, buf_t *bpp);
 
 /*!
  @function minphys
@@ -949,7 +921,7 @@ u_int	minphys(buf_t bp);
  @param blocksize Logical block size for this vnode.
  @return 0 for success; EFAULT for an invalid uio; errors from buf_biowait().
  */
-int	physio(void (*)(buf_t), buf_t, dev_t, int ,  u_int (*)(buf_t), struct uio *, int );
+int	physio(void (*f_strategy)(buf_t), buf_t bp, dev_t dev, int flags, u_int (*f_minphys)(buf_t), struct uio *uio, int blocksize);
 
 
 /*
@@ -987,7 +959,7 @@ int	physio(void (*)(buf_t), buf_t, dev_t, int ,  u_int (*)(buf_t), struct uio *,
  that if a given logical block is found in core with a different size than what is requested, the buffer size will not be modified.
  @return Buffer found in core or newly allocated, either containing valid data or ready for I/O.
  */
-buf_t	buf_getblk(vnode_t, daddr64_t, int, int, int, int);
+buf_t	buf_getblk(vnode_t vp, daddr64_t blkno, int size, int slpflag, int slptimeo, int operation);
 
 /*!
  @function buf_geteblk
@@ -997,7 +969,7 @@ buf_t	buf_getblk(vnode_t, daddr64_t, int, int, int, int);
  @param size Size of buffer.
  @return Always returns a new buffer.
  */
-buf_t	buf_geteblk(int);
+buf_t	buf_geteblk(int size);
 
 /*!
  @function buf_clear_redundancy_flags
@@ -1005,9 +977,8 @@ buf_t	buf_geteblk(int);
  @discussion buffer_redundancy_flags &= ~flags
  @param bp Buffer whose flags to clear.
  @param flags Flags to remove from buffer's mask
- @return void.
  */
-void	buf_clear_redundancy_flags(buf_t, uint32_t);
+void	buf_clear_redundancy_flags(buf_t bp, uint32_t flags);
 
 /*!
  @function buf_redundancyflags
@@ -1015,7 +986,7 @@ void	buf_clear_redundancy_flags(buf_t, uint32_t);
  @param bp Buffer whose redundancy flags to grab.
  @return flags.
  */
-uint32_t	buf_redundancy_flags(buf_t);
+uint32_t	buf_redundancy_flags(buf_t bp);
 
 /*!
  @function buf_setredundancyflags
@@ -1023,9 +994,8 @@ uint32_t	buf_redundancy_flags(buf_t);
  @discussion buffer_redundancy_flags |= flags
  @param bp Buffer whose flags to set.
  @param flags Flags to add to buffer's redundancy flags
- @return void.
  */
-void	buf_set_redundancy_flags(buf_t, uint32_t);
+void	buf_set_redundancy_flags(buf_t bp, uint32_t flags);
 
 /*!
  @function buf_attr
@@ -1033,15 +1003,14 @@ void	buf_set_redundancy_flags(buf_t, uint32_t);
  @param bp Buffer whose attributes to get.
  @return bufattr_t.
  */
-bufattr_t buf_attr(buf_t);
+bufattr_t buf_attr(buf_t bp);
 
 /*!
  @function buf_markstatic
  @abstract Mark a buffer as being likely to contain static data.
  @param bp Buffer to mark.
- @return void.
  */
- void buf_markstatic(buf_t);
+ void buf_markstatic(buf_t bp);
 
 /*!
  @function buf_static
@@ -1049,7 +1018,7 @@ bufattr_t buf_attr(buf_t);
  @param bp Buffer to test.
  @return Nonzero if buffer has static data, 0 otherwise.
  */
-int	buf_static(buf_t);
+int	buf_static(buf_t bp);
 
 #ifdef KERNEL_PRIVATE
 void	buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void (**)(buf_t, void *), void **);
@@ -1065,32 +1034,29 @@ void bufattr_free(bufattr_t bap);
  @param bap Buffer Attribute whose cpx_t structure you wish to get.
  @return Returns a cpx_t structure, or NULL if not valid
  */
-struct cpx *bufattr_cpx(bufattr_t);
+struct cpx *bufattr_cpx(bufattr_t bap);
 
 /*!
  @function bufattr_setcpx
  @abstract Set the cp_ctx on a buffer attribute.
  @param bap Buffer Attribute that you wish to change
- @return void
  */
-void bufattr_setcpx(bufattr_t, struct cpx *cpx);
+void bufattr_setcpx(bufattr_t bap, struct cpx *cpx);
 
 /*!
  @function bufattr_cpoff
  @abstract Gets the file offset on the buffer.
  @param bap Buffer Attribute whose file offset value is used
- @return void.
  */
-uint64_t bufattr_cpoff(bufattr_t);
+uint64_t bufattr_cpoff(bufattr_t bap);
 
 /*!
  @function bufattr_setcpoff
  @abstract Set the file offset for a content protected I/O on 
  a buffer attribute.
  @param bap Buffer Attribute whose cp file offset has to be set
- @return void.
  */
-void bufattr_setcpoff(bufattr_t, uint64_t);
+void bufattr_setcpoff(bufattr_t bap, uint64_t);
 
 /*!
  @function bufattr_rawencrypted
@@ -1105,7 +1071,6 @@ int bufattr_rawencrypted(bufattr_t bap);
  @abstract Mark a buffer to use the greedy mode for writing.
  @param bap Buffer attributes to mark.
  @discussion Greedy Mode: request improved write performance from the underlying device at the expense of storage efficiency
- @return void.
  */
  void bufattr_markgreedymode(bufattr_t bap);
 
@@ -1123,7 +1088,6 @@ int	bufattr_greedymode(bufattr_t bap);
  @abstract Mark a buffer to use the isochronous throughput mode for writing.
  @param bap Buffer attributes to mark.
  @discussion isochronous mode: request improved write performance from the underlying device at the expense of storage efficiency
- @return void.
  */
  void bufattr_markisochronous(bufattr_t bap);
 
@@ -1174,7 +1138,6 @@ int bufattr_meta(bufattr_t bap);
  @function bufattr_markmeta
  @abstract Set the bufattr meta attribute.
  @param bap Buffer attribute to manipulate.
- @return void
  */
 void bufattr_markmeta(bufattr_t bap);
 
@@ -1201,7 +1164,6 @@ vm_offset_t buf_kernel_addrperm_addr(void * addr);
  @discussion This flag hints the storage driver that some thread is waiting for this I/O to complete.
  It should therefore attempt to complete it as soon as possible at the cost of device efficiency.
  @param bap Buffer attributes to mark.
- @return void.
  */
 void bufattr_markquickcomplete(bufattr_t bap);
 
@@ -1214,6 +1176,22 @@ void bufattr_markquickcomplete(bufattr_t bap);
  @return Nonzero if the buffer is marked for quick completion, 0 otherwise.
  */
 int bufattr_quickcomplete(bufattr_t bap);
+
+int	count_lock_queue(void);
+
+/*
+ * Flags for buf_acquire
+ */
+#define BAC_NOWAIT		0x01	/* Don't wait if buffer is busy */
+#define BAC_REMOVE		0x02	/* Remove from free list once buffer is acquired */
+#define BAC_SKIP_NONLOCKED	0x04	/* Don't return LOCKED buffers */
+#define BAC_SKIP_LOCKED		0x08	/* Only return LOCKED buffers */
+
+errno_t	buf_acquire(buf_t, int, int, int);
+
+buf_t	buf_create_shadow_priv(buf_t bp, boolean_t force_copy, uintptr_t external_storage, void (*iodone)(buf_t, void *), void *arg);
+
+void	buf_drop(buf_t);
 
 #endif /* KERNEL_PRIVATE */
 

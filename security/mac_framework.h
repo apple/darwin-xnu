@@ -2,7 +2,7 @@
  * Copyright (c) 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -85,7 +85,9 @@ struct attrlist;
 struct auditinfo;
 struct bpf_d;
 struct componentname;
+struct cs_blob;
 struct devnode;
+struct exception_action;
 struct flock;
 struct fdescnode;
 struct fileglob;
@@ -200,6 +202,9 @@ int	mac_file_check_ioctl(kauth_cred_t cred, struct fileglob *fg,
 	    unsigned int cmd);
 int	mac_file_check_lock(kauth_cred_t cred, struct fileglob *fg, int op,
 	    struct flock *fl);
+int	mac_file_check_library_validation(struct proc *proc,
+	    struct fileglob *fg, off_t slice_offset,
+	    user_long_t error_message, size_t error_message_size);
 int	mac_file_check_mmap(kauth_cred_t cred, struct fileglob *fg,
 	    int prot, int flags, uint64_t file_pos, int *maxprot);
 void	mac_file_check_mmap_downgrade(kauth_cred_t cred, struct fileglob *fg,
@@ -264,6 +269,10 @@ int	mac_mount_check_getattr(vfs_context_t ctx, struct mount *mp,
 int	mac_mount_check_label_update(vfs_context_t ctx, struct mount *mp);
 int	mac_mount_check_mount(vfs_context_t ctx, struct vnode *vp,
 	    struct componentname *cnp, const char *vfc_name);
+int	mac_mount_check_snapshot_create(vfs_context_t ctx, struct mount *mp,
+	    const char *name);
+int	mac_mount_check_snapshot_delete(vfs_context_t ctx, struct mount *mp,
+	    const char *name);
 int	mac_mount_check_remount(vfs_context_t ctx, struct mount *mp);
 int	mac_mount_check_setattr(vfs_context_t ctx, struct mount *mp,
 	    struct vfs_attr *vfa);
@@ -374,7 +383,7 @@ int	mac_socket_check_kqfilter(kauth_cred_t cred, struct knote *kn,
 	    struct socket *so);
 int	mac_socket_check_listen(kauth_cred_t cred, struct socket *so);
 int	mac_socket_check_receive(kauth_cred_t cred, struct socket *so);
-int	mac_socket_check_received(kauth_cred_t cred, struct socket *so, 
+int	mac_socket_check_received(kauth_cred_t cred, struct socket *so,
 	    struct sockaddr *saddr);
 int     mac_socket_check_select(kauth_cred_t cred, struct socket *so,
 	    int which);
@@ -463,6 +472,8 @@ int	mac_vnode_check_access(vfs_context_t ctx, struct vnode *vp,
 int	mac_vnode_check_chdir(vfs_context_t ctx, struct vnode *dvp);
 int	mac_vnode_check_chroot(vfs_context_t ctx, struct vnode *dvp,
 	    struct componentname *cnp);
+int	mac_vnode_check_clone(vfs_context_t ctx, struct vnode *dvp,
+	    struct vnode *vp, struct componentname *cnp);
 int	mac_vnode_check_create(vfs_context_t ctx, struct vnode *dvp,
 	    struct componentname *cnp, struct vnode_attr *vap);
 int	mac_vnode_check_deleteextattr(vfs_context_t ctx, struct vnode *vp,
@@ -472,9 +483,10 @@ int	mac_vnode_check_exchangedata(vfs_context_t ctx, struct vnode *v1,
 int	mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
 	    struct image_params *imgp);
 int	mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp);
-int	mac_vnode_check_signature(struct vnode *vp, off_t macho_offset,
-	    unsigned char *sha1, const void * signature, size_t size, 
-	    int flags, int *is_platform_binary);
+int	mac_vnode_check_signature(struct vnode *vp,
+		struct cs_blob *cs_blob, struct image_params *imgp,
+		unsigned int *cs_flags,
+		int flags);
 int     mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
 	    struct attrlist *alist);
 int	mac_vnode_check_getextattr(vfs_context_t ctx, struct vnode *vp,
@@ -504,6 +516,8 @@ int	mac_vnode_check_searchfs(vfs_context_t ctx, struct vnode *vp,
 	    struct attrlist *alist);
 int     mac_vnode_check_select(vfs_context_t ctx, struct vnode *vp,
 	    int which);
+int	mac_vnode_check_setacl(vfs_context_t ctx, struct vnode *vp,
+	    struct kauth_acl *acl);
 int     mac_vnode_check_setattrlist(vfs_context_t ctxd, struct vnode *vp,
 	    struct attrlist *alist);
 int	mac_vnode_check_setextattr(vfs_context_t ctx, struct vnode *vp,
@@ -522,7 +536,7 @@ int	mac_vnode_check_truncate(vfs_context_t ctx,
 	    kauth_cred_t file_cred, struct vnode *vp);
 int	mac_vnode_check_uipc_bind(vfs_context_t ctx, struct vnode *dvp,
 	    struct componentname *cnp, struct vnode_attr *vap);
-int	mac_vnode_check_uipc_connect(vfs_context_t ctx, struct vnode *vp);
+int	mac_vnode_check_uipc_connect(vfs_context_t ctx, struct vnode *vp, struct socket *so);
 int	mac_vnode_check_unlink(vfs_context_t ctx, struct vnode *dvp,
 	    struct vnode *vp, struct componentname *cnp);
 int	mac_vnode_check_write(vfs_context_t ctx,
@@ -550,11 +564,20 @@ void	mac_vnode_label_update_extattr(struct mount *mp, struct vnode *vp,
 	    const char *name);
 int	mac_vnode_notify_create(vfs_context_t ctx, struct mount *mp,
 	    struct vnode *dvp, struct vnode *vp, struct componentname *cnp);
-void	mac_vnode_notify_rename(vfs_context_t ctx, struct vnode *vp,
+void	mac_vnode_notify_deleteextattr(vfs_context_t ctx, struct vnode *vp, const char *name);
+void	mac_vnode_notify_link(vfs_context_t ctx, struct vnode *vp,
 	    struct vnode *dvp, struct componentname *cnp);
 void	mac_vnode_notify_open(vfs_context_t ctx, struct vnode *vp, int acc_flags);
-void	mac_vnode_notify_link(vfs_context_t ctx, struct vnode *vp,
-			      struct vnode *dvp, struct componentname *cnp);
+void	mac_vnode_notify_rename(vfs_context_t ctx, struct vnode *vp,
+	    struct vnode *dvp, struct componentname *cnp);
+void	mac_vnode_notify_setacl(vfs_context_t ctx, struct vnode *vp, struct kauth_acl *acl);
+void	mac_vnode_notify_setattrlist(vfs_context_t ctx, struct vnode *vp, struct attrlist *alist);
+void	mac_vnode_notify_setextattr(vfs_context_t ctx, struct vnode *vp, const char *name, struct uio *uio);
+void	mac_vnode_notify_setflags(vfs_context_t ctx, struct vnode *vp, u_long flags);
+void	mac_vnode_notify_setmode(vfs_context_t ctx, struct vnode *vp, mode_t mode);
+void	mac_vnode_notify_setowner(vfs_context_t ctx, struct vnode *vp, uid_t uid, gid_t gid);
+void	mac_vnode_notify_setutimes(vfs_context_t ctx, struct vnode *vp, struct timespec atime, struct timespec mtime);
+void	mac_vnode_notify_truncate(vfs_context_t ctx, kauth_cred_t file_cred, struct vnode *vp);
 int	mac_vnode_find_sigs(struct proc *p, struct vnode *vp, off_t offsetInMacho);
 int	vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 	    struct componentname *cnp, int flags, vfs_context_t ctx);

@@ -1337,6 +1337,11 @@ kauth_identity_updatecache(struct kauth_identity_extlookup *elp, struct kauth_id
 			if ((kip->ki_valid & KI_VALID_UID) && (kip->ki_uid == elp->el_uid)) {
 				if (elp->el_flags & KAUTH_EXTLOOKUP_VALID_SUPGRPS) {
 					assert(elp->el_sup_grp_cnt <= NGROUPS);
+					if (elp->el_sup_grp_cnt > NGROUPS) {
+						KAUTH_DEBUG("CACHE - invalid sup_grp_cnt provided (%d), truncating to  %d",
+							   elp->el_sup_grp_cnt, NGROUPS);
+						elp->el_sup_grp_cnt = NGROUPS;
+					}
 					kip->ki_supgrpcnt = elp->el_sup_grp_cnt;
 					memcpy(kip->ki_supgrps, elp->el_sup_groups, sizeof(elp->el_sup_groups[0]) * kip->ki_supgrpcnt);
 					kip->ki_valid |= KI_VALID_GROUPS;
@@ -2313,6 +2318,45 @@ kauth_cred_guid2gid(guid_t *guidp, gid_t *gidp)
 	return(kauth_cred_cache_lookup(KI_VALID_GUID, KI_VALID_GID, guidp, gidp));
 }
 
+/*
+ * kauth_cred_nfs4domain2dsnode
+ *
+ * Description: Fetch dsnode from nfs4domain
+ *
+ * Parameters:	nfs4domain			Pointer to a string nfs4 domain
+ *		dsnode				Pointer to buffer for dsnode
+ *
+ * Returns:	0				Success
+ *		ENOENT				For now just a stub that always fails
+ *
+ * Implicit returns:
+ *		*dsnode				Modified, if successuful
+ */
+int
+kauth_cred_nfs4domain2dsnode(__unused char *nfs4domain, __unused char *dsnode)
+{
+	return(ENOENT);
+}
+
+/*
+ * kauth_cred_dsnode2nfs4domain
+ *
+ * Description: Fetch nfs4domain from dsnode
+ *
+ * Parameters:	nfs4domain			Pointer to  string dsnode
+ *		dsnode				Pointer to buffer for nfs4domain
+ *
+ * Returns:	0				Success
+ *		ENOENT				For now just a stub that always fails
+ *
+ * Implicit returns:
+ *		*nfs4domain			Modified, if successuful
+ */
+int
+kauth_cred_dsnode2nfs4domain(__unused char *dsnode, __unused char *nfs4domain)
+{
+	return(ENOENT);
+}
 
 /*
  * kauth_cred_ntsid2uid
@@ -2757,6 +2801,11 @@ kauth_cred_cache_lookup(int from, int to, void *src, void *dst)
 			 * changing access to server file system objects on each
 			 * expiration.
 			 */
+			if (ki.ki_supgrpcnt > NGROUPS) {
+				panic("kauth data structure corrupted. kauth identity 0x%p with %d groups, greater than max of %d",
+					&ki, ki.ki_supgrpcnt, NGROUPS);
+			}
+
 			el.el_sup_grp_cnt = ki.ki_supgrpcnt;
 
 			memcpy(el.el_sup_groups, ki.ki_supgrps, sizeof (el.el_sup_groups[0]) * ki.ki_supgrpcnt);

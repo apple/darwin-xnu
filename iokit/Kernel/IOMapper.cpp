@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -61,13 +61,13 @@ IOMapper * IOMapper::gSystem = (IOMapper *) IOMapper::kUnknown;
 class IOMapperLock {
     IOLock *fWaitLock;
 public:
-    IOMapperLock() { fWaitLock = IOLockAlloc(); };
-    ~IOMapperLock() { IOLockFree(fWaitLock); };
+    IOMapperLock() { fWaitLock = IOLockAlloc(); }
+    ~IOMapperLock() { IOLockFree(fWaitLock); }
 
-    void lock()   { IOLockLock(fWaitLock); };
-    void unlock() { IOLockUnlock(fWaitLock); };
-    void sleep(void *event)  { IOLockSleep(fWaitLock, event, THREAD_UNINT); };
-    void wakeup(void *event) { IOLockWakeup(fWaitLock, event, false); };
+    void lock()   { IOLockLock(fWaitLock); }
+    void unlock() { IOLockUnlock(fWaitLock); }
+    void sleep(void *event)  { IOLockSleep(fWaitLock, event, THREAD_UNINT); }
+    void wakeup(void *event) { IOLockWakeup(fWaitLock, event, false); }
 };
 
 static IOMapperLock sMapperLock;

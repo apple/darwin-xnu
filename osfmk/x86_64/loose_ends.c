@@ -536,21 +536,13 @@ memmove(void *dst, const void *src, size_t ulen)
 
 size_t
 strlen(
-	register const char *string)
+	const char *string)
 {
-	register const char *ret = string;
+	const char *ret = string;
 
 	while (*string++ != '\0')
 		continue;
 	return string - 1 - ret;
-}
-
-uint32_t
-hw_compare_and_store(uint32_t oldval, uint32_t newval, volatile uint32_t *dest)
-{
-	return OSCompareAndSwap((UInt32)oldval,
-				(UInt32)newval,
-				(volatile UInt32 *)dest);
 }
 
 #if	MACH_ASSERT

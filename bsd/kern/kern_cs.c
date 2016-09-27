@@ -150,6 +150,7 @@ cs_init(void)
 
 	lck_grp_attr_t *attr = lck_grp_attr_alloc_init();
 	cs_lockgrp = lck_grp_alloc_init("KERNCS", attr);
+	lck_grp_attr_free(attr);
 }
 
 int
@@ -186,8 +187,7 @@ cs_allow_invalid(struct proc *p)
 }
 
 int
-cs_invalid_page(
-	addr64_t vaddr)
+cs_invalid_page(addr64_t vaddr, boolean_t *cs_killed)
 {
 	struct proc	*p;
 	int		send_kill = 0, retval = 0, verbose = cs_debug;
@@ -209,25 +209,12 @@ cs_invalid_page(
 
 	/* CS_KILL triggers a kill signal, and no you can't have the page. Nothing else. */
 	if (p->p_csflags & CS_KILL) {
-		if (panic_on_cs_killed &&
-		    vaddr >= SHARED_REGION_BASE &&
-		    vaddr < SHARED_REGION_BASE + SHARED_REGION_SIZE) {
-			panic("<rdar://14393620> cs_invalid_page(va=0x%llx): killing p=%p\n", (uint64_t) vaddr, p);
-		}
 		p->p_csflags |= CS_KILLED;
 		cs_procs_killed++;
 		send_kill = 1;
 		retval = 1;
 	}
 	
-#if __x86_64__
-	if (panic_on_cs_killed &&
-	    vaddr >= SHARED_REGION_BASE &&
-	    vaddr < SHARED_REGION_BASE + SHARED_REGION_SIZE) {
-		panic("<rdar://14393620> cs_invalid_page(va=0x%llx): cs error p=%p\n", (uint64_t) vaddr, p);
-	}
-#endif /* __x86_64__ */
-
 	/* CS_HARD means fail the mapping operation so the process stays valid. */
 	if (p->p_csflags & CS_HARD) {
 		retval = 1;
@@ -248,8 +235,15 @@ cs_invalid_page(
 		       retval ? "denying" : "allowing (remove VALID)",
 		       send_kill ? " sending SIGKILL" : "");
 
-	if (send_kill)
-		threadsignal(current_thread(), SIGKILL, EXC_BAD_ACCESS);
+	if (send_kill) {
+		/* We will set the exit reason for the thread later */
+		threadsignal(current_thread(), SIGKILL, EXC_BAD_ACCESS, FALSE);
+		if (cs_killed) {
+			*cs_killed = TRUE;
+		}
+	} else if (cs_killed) {
+		*cs_killed = FALSE;
+	}
 
 
 	return retval;
@@ -276,6 +270,22 @@ cs_enforcement(struct proc *p)
 }
 
 /*
+ * Returns whether a given process is still valid.
+ */
+int
+cs_valid(struct proc *p)
+{
+
+	if (p == NULL)
+		p = current_proc();
+
+	if (p != NULL && (p->p_csflags & CS_VALID))
+		return 1;
+
+	return 0;
+}
+
+/*
  * Library validation functions 
  */
 int
@@ -292,6 +302,53 @@ cs_require_lv(struct proc *p)
 		return 1;
 	
 	return 0;
+}
+
+/*
+ * <rdar://problem/24634089> added to allow system level library
+ *  validation check at mac_cred_label_update_execve time
+ */
+int
+cs_system_require_lv(void)
+{
+	return cs_library_val_enable ? 1 : 0;
+}
+
+/*
+ * Function: csblob_get_base_offset
+ *
+ * Description: This function returns the base offset into the Mach-O binary
+ *		for a given blob.
+*/
+
+off_t
+csblob_get_base_offset(struct cs_blob *blob)
+{
+    return blob->csb_base_offset;
+}
+
+/*
+ * Function: csblob_get_size
+ *
+ * Description: This function returns the size of a given blob.
+*/
+
+vm_size_t
+csblob_get_size(struct cs_blob *blob)
+{
+    return blob->csb_mem_size;
+}
+
+/*
+ * Function: csblob_get_addr
+ *
+ * Description: This function returns the address of a given blob.
+*/
+
+vm_address_t
+csblob_get_addr(struct cs_blob *blob)
+{
+    return blob->csb_mem_kaddr;
 }
 
 /*
@@ -318,9 +375,7 @@ csblob_get_platform_binary(struct cs_blob *blob)
 unsigned int
 csblob_get_flags(struct cs_blob *blob)
 {
-	if (blob)
-		return blob->csb_flags;
-	return 0;
+    return blob->csb_flags;
 }
 
 /*
@@ -396,6 +451,22 @@ const uint8_t *
 csblob_get_cdhash(struct cs_blob *csblob)
 {
 	return csblob->csb_cdhash;
+}
+
+void *
+csblob_entitlements_dictionary_copy(struct cs_blob *csblob)
+{
+    if (!csblob->csb_entitlements) return NULL;
+    osobject_retain(csblob->csb_entitlements);
+    return csblob->csb_entitlements;
+}
+
+void
+csblob_entitlements_dictionary_set(struct cs_blob *csblob, void * entitlements)
+{
+    assert(csblob->csb_entitlements == NULL);
+    if (entitlements) osobject_retain(entitlements);
+    csblob->csb_entitlements = entitlements;
 }
 
 /*

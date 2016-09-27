@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -181,6 +181,7 @@ sflt_entry_release(struct socket_filter_entry *entry)
 	}
 }
 
+__attribute__((noreturn))
 static void
 sflt_cleanup_thread(void *blah, wait_result_t blah2)
 {

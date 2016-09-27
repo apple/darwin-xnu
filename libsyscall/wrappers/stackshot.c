@@ -50,7 +50,7 @@ stackshot_config_create(void)
 
 	s_config->sc_pid = -1;
 	s_config->sc_flags = 0;
-	s_config->sc_since_timestamp = 0;
+	s_config->sc_delta_timestamp = 0;
 	s_config->sc_buffer = 0;
 	s_config->sc_size = 0;
 
@@ -212,6 +212,30 @@ stackshot_config_set_size_hint(stackshot_config_t *stackshot_config, uint32_t su
 
 	return 0;
 }
+
+/*
+ * stackshot_config_set_delta_timestamp: set the timestamp to use as the basis for the delta stackshot
+ *
+ * This timestamp will be used along with STACKSHOT_COLLECT_DELTA_SNAPSHOT flag to collect delta stackshots
+ *
+ * Inputs:  stackshot_config - a pointer to a stackshot_config_t
+ *          delta_timestamp - timestamp in MachAbsoluteTime units to be used as the basis for a delta stackshot
+ *
+ * Outputs:  -1  if the passed stackshot config is NULL or there is existing stackshot buffer set.
+ *           0 on success
+ */
+int
+stackshot_config_set_delta_timestamp(stackshot_config_t *stackshot_config, uint64_t delta_timestamp)
+{
+	if (stackshot_config == NULL || (void *)stackshot_config->sc_buffer != NULL) {
+		return -1;
+	}
+
+	stackshot_config->sc_delta_timestamp = delta_timestamp;
+
+	return 0;
+}
+
 
 /*
  * stackshot_config_dealloc_buffer:  dealloc the stackshot buffer and reset the size so that a

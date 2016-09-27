@@ -2132,10 +2132,19 @@ fasttrap_meta_remove(void *arg, dtrace_helper_provdesc_t *dhpv, pid_t pid)
 	fasttrap_provider_retire(pid, dhpv->dthpv_provname, 1);
 }
 
+static char*
+fasttrap_meta_provider_name(void *arg)
+{
+	fasttrap_provider_t *fprovider = arg;
+	dtrace_provider_t *provider = (dtrace_provider_t*)(fprovider->ftp_provid);
+	return provider->dtpv_name;
+}
+
 static dtrace_mops_t fasttrap_mops = {
 	fasttrap_meta_create_probe,
 	fasttrap_meta_provide,
-	fasttrap_meta_remove
+	fasttrap_meta_remove,
+	fasttrap_meta_provider_name
 };
 
 /*

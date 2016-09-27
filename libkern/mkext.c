@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -82,7 +82,9 @@ mkext_adler32(uint8_t *buf, int32_t len)
 #define F         18    /* upper limit for match_length */
 #define THRESHOLD 2     /* encode string into position and length
                            if match_length is greater than this */
+#if !KERNEL
 #define NIL       N     /* index for root of binary search trees */
+#endif
 
 struct encode_state {
     /*

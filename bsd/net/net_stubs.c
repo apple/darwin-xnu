@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -30,12 +30,12 @@
 
 #if !NETWORKING
 
-#define STUB(name)							\
+#define	STUB(name)							\
 	int name(void);							\
 	int name(void) 							\
 	{								\
 		panic("stub called in a config with no networking");	\
-		return 0; 						\
+		return (0); 						\
 	}
 
 STUB(bpf_attach);
@@ -245,6 +245,18 @@ STUB(mbuf_find_drvaux);
 STUB(mbuf_del_drvaux);
 STUB(mbuf_trailingspace);
 STUB(mbuf_type);
+STUB(mbuf_get_flowid);
+STUB(mbuf_set_flowid);
+STUB(mbuf_get_timestamp);
+STUB(mbuf_set_timestamp);
+STUB(mbuf_get_tx_compl_data);
+STUB(mbuf_set_tx_compl_data);
+STUB(mbuf_get_status);
+STUB(mbuf_set_status);
+STUB(mbuf_get_timestamp_requested);
+STUB(mbuf_set_timestamp_requested);
+STUB(mbuf_register_tx_compl_callback);
+STUB(mbuf_unregister_tx_compl_callback);
 STUB(net_init_add);
 STUB(proto_inject);
 STUB(proto_input);
@@ -293,6 +305,7 @@ STUB(ifnet_clone_attach);
 STUB(ifnet_clone_detach);
 STUB(ifnet_dequeue);
 STUB(ifnet_dequeue_multi);
+STUB(ifnet_dequeue_multi_bytes);
 STUB(ifnet_dequeue_service_class);
 STUB(ifnet_dequeue_service_class_multi);
 STUB(ifnet_enqueue);
@@ -327,6 +340,7 @@ STUB(ifnet_start);
 STUB(ifnet_transmit_burst_end);
 STUB(ifnet_transmit_burst_start);
 STUB(ifnet_tx_compl_status);
+STUB(ifnet_tx_compl);
 STUB(ifnet_flowid);
 STUB(ifnet_enable_output);
 STUB(ifnet_disable_output);
@@ -335,6 +349,11 @@ STUB(ifnet_link_status_report);
 STUB(ifnet_set_packetpreamblelen);
 STUB(ifnet_packetpreamblelen);
 STUB(ifnet_maxpacketpreamblelen);
+STUB(ifnet_set_fastlane_capable);
+STUB(ifnet_get_fastlane_capable);
+STUB(ifnet_get_unsent_bytes);
+STUB(ifnet_get_buffer_status);
+STUB(ifnet_normalise_unsent_data);
 STUB(in6_localaddr);
 STUB(in_localaddr);
 STUB(in6addr_local);
@@ -353,6 +372,9 @@ STUB(m_split);
 STUB(m_trailingspace);
 STUB(mbuf_get_driver_scratch);
 STUB(mbuf_get_unsent_data_bytes);
+STUB(mbuf_get_buffer_status);
+STUB(mbuf_pkt_new_flow);
+STUB(mbuf_last_pkt);
 STUB(mbuf_get_priority);
 STUB(mbuf_get_service_class);
 STUB(mbuf_get_service_class_index);
@@ -434,13 +456,13 @@ STUB(ip_gre_register_input);
 STUB(sock_iskernel);
 #undef STUB
 
-/* 
+/*
  * Called from vm_pageout.c. Nothing to be done when there's no networking.
  */
 void m_drain(void);
 void m_drain(void)
 {
-	return; 
+	return;
 }
 
 #endif /* !NETWORKING */

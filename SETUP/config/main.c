@@ -148,8 +148,8 @@ const char *
 get_word(FILE *fp)
 {
 	static char line[80];
-	register int ch;
-	register char *cp;
+	int ch;
+	char *cp;
 
 	while ((ch = getc(fp)) != EOF)
 		if (ch != ' ' && ch != '\t')
@@ -184,8 +184,8 @@ char *
 get_rest(FILE *fp)
 {
 	static char line[80];
-	register int ch;
-	register char *cp;
+	int ch;
+	char *cp;
 
 	cp = line;
 	while ((ch = getc(fp)) != EOF) {
@@ -205,7 +205,7 @@ get_rest(FILE *fp)
 char *
 path(const char *file)
 {
-	register char *cp;
+	char *cp;
 
 	cp = malloc((unsigned)(strlen(build_directory)+
 			       strlen(file)+

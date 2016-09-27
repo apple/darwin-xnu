@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,7 @@
 #include <kern/extmod_statistics.h>
 #include <mach/mach_traps.h>
 #include <mach/port.h>
+#include <mach/sdt.h>
 #include <mach/task.h>
 #include <mach/task_access.h>
 #include <mach/task_special_ports.h>
@@ -104,6 +105,46 @@
 int _shared_region_map_and_slide(struct proc*, int, unsigned int, struct shared_file_mapping_np*, uint32_t, user_addr_t, user_addr_t);
 int shared_region_copyin_mappings(struct proc*, user_addr_t, unsigned int, struct shared_file_mapping_np *);
 
+#if VM_MAP_DEBUG_APPLE_PROTECT
+SYSCTL_INT(_vm, OID_AUTO, map_debug_apple_protect, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_map_debug_apple_protect, 0, "");
+#endif /* VM_MAP_DEBUG_APPLE_PROTECT */
+
+#if VM_MAP_DEBUG_FOURK
+SYSCTL_INT(_vm, OID_AUTO, map_debug_fourk, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_map_debug_fourk, 0, "");
+#endif /* VM_MAP_DEBUG_FOURK */
+
+#if DEVELOPMENT || DEBUG
+
+static int
+sysctl_kmem_alloc_contig SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	vm_offset_t	kaddr;
+	kern_return_t	kr;
+	int	error = 0;
+	int	size = 0;
+
+	error = sysctl_handle_int(oidp, &size, 0, req);
+	if (error || !req->newptr)
+		return (error);
+
+	kr = kmem_alloc_contig(kernel_map, &kaddr, (vm_size_t)size, 0, 0, 0, 0, VM_KERN_MEMORY_IOKIT);
+
+	if (kr == KERN_SUCCESS)
+		kmem_free(kernel_map, kaddr, size);
+
+	return error;
+}
+
+SYSCTL_PROC(_vm, OID_AUTO, kmem_alloc_contig, CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_LOCKED|CTLFLAG_MASKED,
+	    0, 0, &sysctl_kmem_alloc_contig, "I", "");
+
+extern int vm_region_footprint;
+SYSCTL_INT(_vm, OID_AUTO, region_footprint, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_region_footprint, 0, "");
+
+#endif /* DEVELOPMENT || DEBUG */
+
+
 
 #if DEVELOPMENT || DEBUG
 extern int radar_20146450;
@@ -114,6 +155,7 @@ SYSCTL_INT(_vm, OID_AUTO, macho_printf, CTLFLAG_RW | CTLFLAG_LOCKED, &macho_prin
 
 extern int apple_protect_pager_data_request_debug;
 SYSCTL_INT(_vm, OID_AUTO, apple_protect_pager_data_request_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &apple_protect_pager_data_request_debug, 0, "");
+
 
 #endif /* DEVELOPMENT || DEBUG */
 
@@ -155,13 +197,13 @@ __attribute__((noinline)) int __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL_
  * Sysctl's related to data/stack execution.  See osfmk/vm/vm_map.c
  */
 
-#ifndef SECURE_KERNEL
+#if DEVELOPMENT || DEBUG
 extern int allow_stack_exec, allow_data_exec;
 
 SYSCTL_INT(_vm, OID_AUTO, allow_stack_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_stack_exec, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, allow_data_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_data_exec, 0, "");
 
-#endif /* !SECURE_KERNEL */
+#endif /* DEVELOPMENT || DEBUG */
 
 static const char *prot_values[] = {
 	"none",
@@ -181,6 +223,13 @@ log_stack_execution_failure(addr64_t vaddr, vm_prot_t prot)
 		current_proc()->p_comm, current_proc()->p_pid, vaddr, prot_values[prot & VM_PROT_ALL]);
 }
 
+/*
+ * shared_region_unnest_logging: level of logging of unnesting events
+ * 0	- no logging
+ * 1	- throttled logging of unexpected unnesting events (default)
+ * 2	- unthrottled logging of unexpected unnesting events
+ * 3+	- unthrottled logging of all unnesting events
+ */
 int shared_region_unnest_logging = 1;
 
 SYSCTL_INT(_vm, OID_AUTO, shared_region_unnest_logging, CTLFLAG_RW | CTLFLAG_LOCKED,
@@ -206,27 +255,46 @@ SYSCTL_INT(_vm, OID_AUTO, enforce_shared_cache_dir, CTLFLAG_RW | CTLFLAG_LOCKED,
 static int64_t last_unnest_log_time = 0; 
 static int shared_region_unnest_log_count = 0;
 
-void log_unnest_badness(
+void
+log_unnest_badness(
 	vm_map_t	m,
 	vm_map_offset_t s,
-	vm_map_offset_t e) {
+	vm_map_offset_t e,
+	boolean_t	is_nested_map,
+	vm_map_offset_t	lowest_unnestable_addr)
+{
 	struct timeval	tv;
 
 	if (shared_region_unnest_logging == 0)
 		return;
 
-	if (shared_region_unnest_logging == 1) {
+	if (shared_region_unnest_logging <= 2 &&
+	    is_nested_map &&
+	    s >= lowest_unnestable_addr) {
+		/*
+		 * Unnesting of writable map entries is fine.
+		 */
+		return;
+	}
+
+	if (shared_region_unnest_logging <= 1) {
 		microtime(&tv);
-		if ((tv.tv_sec - last_unnest_log_time) < vm_shared_region_unnest_log_interval) {
-			if (shared_region_unnest_log_count++ > shared_region_unnest_log_count_threshold)
+		if ((tv.tv_sec - last_unnest_log_time) <
+		    vm_shared_region_unnest_log_interval) {
+			if (shared_region_unnest_log_count++ >
+			    shared_region_unnest_log_count_threshold)
 				return;
-		}
-		else {
+		} else {
 			last_unnest_log_time = tv.tv_sec;
 			shared_region_unnest_log_count = 0;
 		}
 	}
 
+	DTRACE_VM4(log_unnest_badness,
+		   vm_map_t, m,
+		   vm_map_offset_t, s,
+		   vm_map_offset_t, e,
+		   vm_map_offset_t, lowest_unnestable_addr);
 	printf("%s[%d] triggered unnest of range 0x%qx->0x%qx of DYLD shared region in VM map %p. While not abnormal for debuggers, this increases system memory footprint until the target exits.\n", current_proc()->p_comm, current_proc()->p_pid, (uint64_t)s, (uint64_t)e, (void *) VM_KERNEL_ADDRPERM(m));
 }
 
@@ -506,7 +574,10 @@ pid_for_task(
 		if (p) {
 			pid  = proc_pid(p);
 			err = KERN_SUCCESS;
-		} else {
+		} else if (is_corpsetask(t1)) {
+			pid = task_pid(t1);
+			err = KERN_SUCCESS;
+		}else {
 			err = KERN_FAILURE;
 		}
 	}
@@ -1178,6 +1249,7 @@ _shared_region_map_and_slide(
 #endif
 	memory_object_control_t		file_control;
 	struct vm_shared_region		*shared_region;
+	uint32_t			i;
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: %p [%d(%s)] -> map\n",
@@ -1257,16 +1329,6 @@ _shared_region_map_and_slide(
 		goto done;
 	}
 #endif /* MAC */
-
-#if CONFIG_PROTECT
-	/* check for content protection access */
-	{
-		error = cp_handle_vnop(vp, CP_READ_ACCESS | CP_WRITE_ACCESS, 0);
-		if (error) { 
-			goto done;
-		}
-	}
-#endif /* CONFIG_PROTECT */
 
 	/* make sure vnode is on the process's root volume */
 	root_vp = p->p_fd->fd_rdir;
@@ -1372,6 +1434,36 @@ _shared_region_map_and_slide(
 		goto done;
 	}
 
+	/* check that the mappings are properly covered by code signatures */
+	if (!cs_enforcement(NULL)) {
+		/* code signing is not enforced: no need to check */
+	} else for (i = 0; i < mappings_count; i++) {
+		if (mappings[i].sfm_init_prot & VM_PROT_ZF) {
+			/* zero-filled mapping: not backed by the file */
+			continue;
+		}
+		if (ubc_cs_is_range_codesigned(vp,
+					       mappings[i].sfm_file_offset,
+					       mappings[i].sfm_size)) {
+			/* this mapping is fully covered by code signatures */
+			continue;
+		}
+		SHARED_REGION_TRACE_ERROR(
+			("shared_region: %p [%d(%s)] map(%p:'%s'): "
+			 "mapping #%d/%d [0x%llx:0x%llx:0x%llx:0x%x:0x%x] "
+			 "is not code-signed\n",
+			 (void *)VM_KERNEL_ADDRPERM(current_thread()),
+			 p->p_pid, p->p_comm,
+			 (void *)VM_KERNEL_ADDRPERM(vp), vp->v_name,
+			 i, mappings_count,
+			 mappings[i].sfm_address,
+			 mappings[i].sfm_size,
+			 mappings[i].sfm_file_offset,
+			 mappings[i].sfm_max_prot,
+			 mappings[i].sfm_init_prot));
+		error = EINVAL;
+		goto done;
+	}
 
 	/* get the process's shared region (setup in vm_map_exec()) */
 	shared_region = vm_shared_region_get(current_task());
@@ -1593,7 +1685,7 @@ SYSCTL_QUAD(_vm, OID_AUTO, reusable_success, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reusable_pages_success, "");
 SYSCTL_QUAD(_vm, OID_AUTO, reusable_failure, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reusable_pages_failure, "");
-SYSCTL_QUAD(_vm, OID_AUTO, reusable_shared, CTLFLAG_RD | CTLFLAG_LOCKED,
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_pages_shared, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reusable_pages_shared, "");
 SYSCTL_QUAD(_vm, OID_AUTO, all_reusable_calls, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.all_reusable_calls, "");
@@ -1613,6 +1705,12 @@ SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_failure, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.can_reuse_failure, "");
 SYSCTL_QUAD(_vm, OID_AUTO, reusable_reclaimed, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reusable_reclaimed, "");
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_nonwritable, CTLFLAG_RD | CTLFLAG_LOCKED,
+	   &vm_page_stats_reusable.reusable_nonwritable, "");
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_shared, CTLFLAG_RD | CTLFLAG_LOCKED,
+	   &vm_page_stats_reusable.reusable_shared, "");
+SYSCTL_QUAD(_vm, OID_AUTO, free_shared, CTLFLAG_RD | CTLFLAG_LOCKED,
+	   &vm_page_stats_reusable.free_shared, "");
 
 
 extern unsigned int vm_page_free_count, vm_page_speculative_count;
@@ -1621,6 +1719,10 @@ SYSCTL_UINT(_vm, OID_AUTO, page_speculative_count, CTLFLAG_RD | CTLFLAG_LOCKED, 
 
 extern unsigned int vm_page_cleaned_count;
 SYSCTL_UINT(_vm, OID_AUTO, page_cleaned_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_cleaned_count, 0, "Cleaned queue size");
+
+extern unsigned int vm_page_pageable_internal_count, vm_page_pageable_external_count;
+SYSCTL_UINT(_vm, OID_AUTO, page_pageable_internal_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_pageable_internal_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_pageable_external_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_pageable_external_count, 0, "");
 
 /* pageout counts */
 extern unsigned int vm_pageout_inactive_dirty_internal, vm_pageout_inactive_dirty_external, vm_pageout_inactive_clean, vm_pageout_speculative_clean, vm_pageout_inactive_used;
@@ -1657,6 +1759,37 @@ SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_nolock, CTLFLAG_RD | CTLFLAG_LOCKED, 
 extern int64_t vm_prefault_nb_pages, vm_prefault_nb_bailout;
 SYSCTL_QUAD(_vm, OID_AUTO, prefault_nb_pages, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_prefault_nb_pages, "");
 SYSCTL_QUAD(_vm, OID_AUTO, prefault_nb_bailout, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_prefault_nb_bailout, "");
+
+#if CONFIG_SECLUDED_MEMORY
+
+SYSCTL_UINT(_vm, OID_AUTO, num_tasks_can_use_secluded_mem, CTLFLAG_RD | CTLFLAG_LOCKED, &num_tasks_can_use_secluded_mem, 0, "");
+extern unsigned int vm_page_secluded_target;
+extern unsigned int vm_page_secluded_count;
+extern unsigned int vm_page_secluded_count_free;
+extern unsigned int vm_page_secluded_count_inuse;
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_target, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded_target, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_count_free, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded_count_free, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_count_inuse, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded_count_inuse, 0, "");
+
+extern struct vm_page_secluded_data vm_page_secluded;
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_eligible, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.eligible_for_secluded, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_success_free, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_success_free, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_success_other, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_success_other, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_failure_locked, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_failure_locked, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_failure_state, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_failure_state, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_failure_dirty, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_failure_dirty, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_for_iokit, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_for_iokit, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_for_iokit_success, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_for_iokit_success, 0, "");
+
+extern uint64_t vm_pageout_freed_from_secluded;
+extern uint64_t vm_pageout_secluded_reactivated;
+extern uint64_t vm_pageout_secluded_burst_count;
+SYSCTL_QUAD(_vm, OID_AUTO, pageout_freed_from_secluded, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_freed_from_secluded, "");
+SYSCTL_QUAD(_vm, OID_AUTO, pageout_secluded_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_secluded_reactivated, "Secluded pages reactivated"); /* sum of all reactivated AND busy and nolock (even though those actually get reDEactivated */
+SYSCTL_QUAD(_vm, OID_AUTO, pageout_secluded_burst_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_secluded_burst_count, "");
+
+#endif /* CONFIG_SECLUDED_MEMORY */
 
 #include <kern/thread.h>
 #include <sys/user.h>

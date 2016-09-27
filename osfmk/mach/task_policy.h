@@ -185,106 +185,81 @@ typedef struct task_qos_policy *task_qos_policy_t;
 
 #ifdef PRIVATE
 
+/*
+ * Internal bitfields are privately exported for *revlocked*
+ * tools like msa to decode tracepoints and taskinfo to dump state
+ *
+ * These struct definitions *will* change in the future.
+ * When they do, we will update TASK_POLICY_INTERNAL_STRUCT_VERSION.
+ */
+
+#define TASK_POLICY_INTERNAL_STRUCT_VERSION 1
+
 struct task_requested_policy {
-	/* Task and thread policy (inherited) */
-	uint64_t        int_darwinbg        :1,     /* marked as darwinbg via setpriority */
-	                ext_darwinbg        :1,
-	                int_iotier          :2,     /* IO throttle tier */
-	                ext_iotier          :2,
-	                int_iopassive       :1,     /* should IOs cause lower tiers to be throttled */
-	                ext_iopassive       :1,
-	                bg_iotier           :2,     /* what IO throttle tier should apply to me when I'm darwinbg? (pushed to threads) */
-	                terminated          :1,     /* all throttles should be removed for quick exit or SIGTERM handling */
+	uint64_t        trp_int_darwinbg        :1,     /* marked as darwinbg via setpriority */
+	                trp_ext_darwinbg        :1,
+	                trp_int_iotier          :2,     /* IO throttle tier */
+	                trp_ext_iotier          :2,
+	                trp_int_iopassive       :1,     /* should IOs cause lower tiers to be throttled */
+	                trp_ext_iopassive       :1,
+	                trp_bg_iotier           :2,     /* what IO throttle tier should apply to me when I'm darwinbg? (pushed to threads) */
+	                trp_terminated          :1,     /* all throttles should be removed for quick exit or SIGTERM handling */
+	                trp_base_latency_qos    :3,     /* Timer latency QoS */
+	                trp_base_through_qos    :3,     /* Computation throughput QoS */
 
-	/* Thread only policy */
-	                th_pidbind_bg       :1,     /* thread only: task i'm bound to is marked 'watchbg' */
-	                th_workq_bg         :1,     /* thread only: currently running a background priority workqueue */
-	                thrp_qos            :3,     /* thread only: thread qos class */
-	                thrp_qos_relprio    :4,     /* thread only: thread qos relative priority (store as inverse, -10 -> 0xA) */
-	                thrp_qos_override   :3,     /* thread only: thread qos class override */
+	                trp_apptype             :3,     /* What apptype did launchd tell us this was (inherited) */
+	                trp_boosted             :1,     /* Has a non-zero importance assertion count */
+	                trp_role                :3,     /* task's system role */
+	                trp_tal_enabled         :1,     /* TAL mode is enabled */
+	                trp_over_latency_qos    :3,     /* Timer latency QoS override */
+	                trp_over_through_qos    :3,     /* Computation throughput QoS override */
+	                trp_sfi_managed         :1,     /* SFI Managed task */
+	                trp_qos_clamp           :3,     /* task qos clamp */
 
-	/* Task only policy */
-	                t_apptype           :3,     /* What apptype did launchd tell us this was (inherited) */
-	                t_boosted           :1,     /* Has a non-zero importance assertion count */
-	                t_int_gpu_deny      :1,     /* don't allow access to GPU */
-	                t_ext_gpu_deny      :1,
-	                t_role              :3,     /* task's system role */
-	                t_tal_enabled       :1,     /* TAL mode is enabled */
-	                t_base_latency_qos  :3,     /* Timer latency QoS */
-	                t_over_latency_qos  :3,     /* Timer latency QoS override */
-	                t_base_through_qos  :3,     /* Computation throughput QoS */
-	                t_over_through_qos  :3,     /* Computation throughput QoS override */
-	                t_sfi_managed       :1,     /* SFI Managed task */
-	                t_qos_clamp         :3,     /* task qos clamp */
+	/* suppression policies (non-embedded only) */
+	                trp_sup_active          :1,     /* Suppression is on */
+	                trp_sup_lowpri_cpu      :1,     /* Wants low priority CPU (MAXPRI_THROTTLE) */
+	                trp_sup_timer           :3,     /* Wanted timer throttling QoS tier */
+	                trp_sup_disk            :1,     /* Wants disk throttling */
+	                trp_sup_throughput      :3,     /* Wants throughput QoS tier */
+	                trp_sup_cpu             :1,     /* Wants suppressed CPU priority (MAXPRI_SUPPRESSED) */
+	                trp_sup_bg_sockets      :1,     /* Wants background sockets */
 
-	/* Task only: suppression policies (non-embedded only) */
-	                t_sup_active        :1,     /* Suppression is on */
-	                t_sup_lowpri_cpu    :1,     /* Wants low priority CPU (MAXPRI_THROTTLE) */
-	                t_sup_timer         :3,     /* Wanted timer throttling QoS tier */
-	                t_sup_disk          :1,     /* Wants disk throttling */
-	                t_sup_cpu_limit     :1,     /* Wants CPU limit (not hooked up yet)*/
-	                t_sup_suspend       :1,     /* Wants to be suspended */
-	                t_sup_throughput    :3,     /* Wants throughput QoS tier */
-	                t_sup_cpu           :1,     /* Wants suppressed CPU priority (MAXPRI_SUPPRESSED) */
-	                t_sup_bg_sockets    :1,     /* Wants background sockets */
-
-	                reserved            :2;
+	                trp_reserved            :18;
 };
 
 struct task_effective_policy {
-	/* Task and thread policy */
-	uint64_t        darwinbg            :1,     /* marked as 'background', and sockets are marked bg when created */
-	                lowpri_cpu          :1,     /* cpu priority == MAXPRI_THROTTLE */
-	                io_tier             :2,     /* effective throttle tier */
-	                io_passive          :1,     /* should IOs cause lower tiers to be throttled */
-	                all_sockets_bg      :1,     /* All existing sockets in process are marked as bg (thread: all created by thread) */
-	                new_sockets_bg      :1,     /* Newly created sockets should be marked as bg */
-	                bg_iotier           :2,     /* What throttle tier should I be in when darwinbg is set? */
-	                terminated          :1,     /* all throttles have been removed for quick exit or SIGTERM handling */
-	                qos_ui_is_urgent    :1,     /* bump UI-Interactive QoS up to the urgent preemption band */
+	uint64_t        tep_darwinbg            :1,     /* marked as 'background', and sockets are marked bg when created */
+	                tep_lowpri_cpu          :1,     /* cpu priority == MAXPRI_THROTTLE */
+	                tep_io_tier             :2,     /* effective throttle tier */
+	                tep_io_passive          :1,     /* should IOs cause lower tiers to be throttled */
+	                tep_all_sockets_bg      :1,     /* All existing sockets in process are marked as bg (thread: all created by thread) */
+	                tep_new_sockets_bg      :1,     /* Newly created sockets should be marked as bg */
+	                tep_bg_iotier           :2,     /* What throttle tier should I be in when darwinbg is set? */
+	                tep_terminated          :1,     /* all throttles have been removed for quick exit or SIGTERM handling */
+	                tep_qos_ui_is_urgent    :1,     /* bump UI-Interactive QoS up to the urgent preemption band */
+	                tep_latency_qos         :3,     /* Timer latency QoS level */
+	                tep_through_qos         :3,     /* Computation throughput QoS level */
 
-	/* Thread only policy */
-	                thep_qos            :3,     /* thread only: thread qos class */
-	                thep_qos_relprio    :4,     /* thread only: thread qos relative priority (store as inverse, -10 -> 0xA) */
+	                tep_tal_engaged         :1,     /* TAL mode is in effect */
+	                tep_watchers_bg         :1,     /* watchers are BG-ed */
+	                tep_sup_active          :1,     /* suppression behaviors are in effect */
+	                tep_role                :3,     /* task's system role */
+	                tep_suppressed_cpu      :1,     /* cpu priority == MAXPRI_SUPPRESSED (trumped by lowpri_cpu) */
+	                tep_sfi_managed         :1,     /* SFI Managed task */
+	                tep_live_donor          :1,     /* task is a live importance boost donor */
+	                tep_qos_clamp           :3,     /* task qos clamp (applies to qos-disabled threads too) */
+	                tep_qos_ceiling         :3,     /* task qos ceiling (applies to only qos-participating threads) */
 
-	/* Task only policy */
-	                t_gpu_deny          :1,     /* not allowed to access GPU */
-	                t_tal_engaged       :1,     /* TAL mode is in effect */
-	                t_suspended         :1,     /* task_suspend-ed due to suppression */
-	                t_watchers_bg       :1,     /* watchers are BG-ed */
-	                t_latency_qos       :3,     /* Timer latency QoS level */
-	                t_through_qos       :3,     /* Computation throughput QoS level */
-	                t_sup_active        :1,     /* suppression behaviors are in effect */
-	                t_role              :3,     /* task's system role */
-	                t_suppressed_cpu    :1,     /* cpu priority == MAXPRI_SUPPRESSED (trumped by lowpri_cpu) */
-	                t_sfi_managed       :1,     /* SFI Managed task */
-	                t_live_donor        :1,     /* task is a live importance boost donor */
-	                t_qos_clamp         :3,     /* task qos clamp (applies to qos-disabled threads too) */
-	                t_qos_ceiling       :3,     /* task qos ceiling (applies to only qos-participating threads) */
-
-	                reserved            :23;
+	                tep_reserved            :32;
 };
 
-struct task_pended_policy {
-	uint64_t        t_updating_policy   :1,     /* Busy bit for task to prevent concurrent 'complete' operations */
-
-	/* Task and thread policy */
-	                update_sockets      :1,
-
-	/* Task only policy */
-	                t_update_timers     :1,
-	                t_update_watchers   :1,
-
-	                reserved            :60;
-};
-
-#endif
+#endif /* PRIVATE */
 
 #ifdef MACH_KERNEL_PRIVATE
 
 extern const struct task_requested_policy default_task_requested_policy;
 extern const struct task_effective_policy default_task_effective_policy;
-extern const struct task_pended_policy    default_task_pended_policy;
 
 extern kern_return_t
 qos_latency_policy_validate(task_latency_qos_t);
@@ -333,7 +308,8 @@ struct task_policy_state {
 	uint32_t imp_externcnt;
 	uint64_t flags;
 	uint64_t imp_transitions;
-	uint64_t reserved[2];
+	uint64_t tps_requested_policy;
+	uint64_t tps_effective_policy;
 };
 
 typedef struct task_policy_state *task_policy_state_t;
@@ -382,7 +358,7 @@ typedef struct task_policy_state *task_policy_state_t;
 
 /* thread requested policy */
 #define POLICY_REQ_PIDBIND_BG                0x00000400
-#define POLICY_REQ_WORKQ_BG                  0x00000800
+#define POLICY_REQ_WORKQ_BG                  0x00000800 /* deprecated */
 #define POLICY_REQ_TH_QOS_MASK               0x07000000 /* 3 bits (overlaps with ROLE) */
 #define POLICY_REQ_TH_QOS_SHIFT              24
 #define POLICY_REQ_TH_QOS_OVER_MASK          0x70000000 /* 3 bits (overlaps with TAL and SFI) */

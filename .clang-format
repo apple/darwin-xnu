@@ -105,9 +105,10 @@ SpaceBeforeAssignmentOperators: true
 # Assignment = should be seperated by spaces on both sides.
 
 SpaceBeforeParens: ControlStatements
-# for control statements a space is required before '{'
-# Bad: for(){ statement; }
-# Good: for() { statement; }
+# for control statements a space is required before '('
+# Bad: for() { statement; }
+# Good: for () { statement; }
+# This setting distinguishes functions() from keywords like 'if' and 'for'.
 
 SpaceInEmptyParentheses: false
 # No spaces required for empty ()

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -69,6 +69,7 @@
 #ifdef INET6
 #include <netinet6/mld6_var.h>
 #endif
+#include <netkey/key.h>
 
 #include "net/net_str_id.h"
 
@@ -154,6 +155,7 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 {
 	struct ifnet_init_eparams einit;
 	struct ifnet *ifp = NULL;
+	char if_xname[IFXNAMSIZ] = {0};
 	int error;
 
 	einit = *einit0;
@@ -192,6 +194,14 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 			einit.input_poll = NULL;
 			einit.input_ctl = NULL;
 		}
+	}
+
+	if (einit.uniqueid == NULL) {
+		/* Initialize external name (name + unit) */
+		snprintf(if_xname, IFXNAMSIZ,
+				"%s%d", einit.name, einit.unit);
+		einit.uniqueid = if_xname;
+		einit.uniqueid_len = strlen(if_xname);
 	}
 
 	error = dlil_if_acquire(einit.family, einit.uniqueid,
@@ -316,6 +326,9 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 			ifp->if_eflags |= IFEF_RXPOLL;
 		else
 			ifp->if_eflags &= ~IFEF_RXPOLL;
+
+		ifp->if_output_handler = dlil_output_handler;
+		ifp->if_input_handler = dlil_input_handler;
 
 		VERIFY(!(einit.flags & IFNET_INIT_LEGACY) ||
 		    (ifp->if_pre_enqueue == NULL && ifp->if_start == NULL &&
@@ -584,7 +597,7 @@ ifnet_set_eflags(ifnet_t interface, u_int32_t new_flags, u_int32_t mask)
 		ev_msg.dv[0].data_length = sizeof(struct net_event_data);
 		ev_msg.dv[0].data_ptr = &ev_data;
 		ev_msg.dv[1].data_length = 0;
-		kev_post_msg(&ev_msg);
+		dlil_post_complete_msg(interface, &ev_msg);
 	}
 
 	return (0);
@@ -627,12 +640,8 @@ ifnet_set_idle_flags_locked(ifnet_t ifp, u_int32_t new_flags, u_int32_t mask)
 	if ((after - before) < 0 && ifp->if_idle_flags == 0 &&
 	    ifp->if_want_aggressive_drain != 0) {
 		ifp->if_want_aggressive_drain = 0;
-		if (ifnet_aggressive_drainers == 0)
-			panic("%s: ifp=%p negative aggdrain!", __func__, ifp);
 	} else if ((after - before) > 0 && ifp->if_want_aggressive_drain == 0) {
 		ifp->if_want_aggressive_drain++;
-		if (++ifnet_aggressive_drainers == 0)
-			panic("%s: ifp=%p wraparound aggdrain!", __func__, ifp);
 	}
 
 	return (0);
@@ -825,7 +834,7 @@ ifnet_set_capabilities_enabled(ifnet_t ifp, u_int32_t new_caps,
 	ev_msg.dv[0].data_length = sizeof (struct net_event_data);
 	ev_msg.dv[0].data_ptr = &ev_data;
 	ev_msg.dv[1].data_length = 0;
-	kev_post_msg(&ev_msg);
+	dlil_post_complete_msg(ifp, &ev_msg);
 
 	return (error);
 }
@@ -841,11 +850,9 @@ static const ifnet_offload_t offload_mask =
 	IFNET_IP_FRAGMENT | IFNET_CSUM_TCPIPV6 | IFNET_CSUM_UDPIPV6 |
 	IFNET_IPV6_FRAGMENT | IFNET_CSUM_PARTIAL | IFNET_VLAN_TAGGING |
 	IFNET_VLAN_MTU | IFNET_MULTIPAGES | IFNET_TSO_IPV4 | IFNET_TSO_IPV6 |
-	IFNET_TX_STATUS);
+	IFNET_TX_STATUS | IFNET_HW_TIMESTAMP | IFNET_SW_TIMESTAMP);
 
-static const ifnet_offload_t any_offload_csum =
-	(IFNET_CSUM_IP | IFNET_CSUM_TCP | IFNET_CSUM_UDP | IFNET_CSUM_FRAGMENT |
-	IFNET_CSUM_TCPIPV6 | IFNET_CSUM_UDPIPV6 | IFNET_CSUM_PARTIAL);
+static const ifnet_offload_t any_offload_csum = IFNET_CHECKSUMF;
 
 errno_t
 ifnet_set_offload(ifnet_t interface, ifnet_offload_t offload)
@@ -885,7 +892,11 @@ ifnet_set_offload(ifnet_t interface, ifnet_offload_t offload)
 	if ((offload & IFNET_VLAN_TAGGING))
 		ifcaps |= IFCAP_VLAN_HWTAGGING;
 	if ((offload & IFNET_TX_STATUS))
-		ifcaps |= IFNET_TX_STATUS;
+		ifcaps |= IFCAP_TXSTATUS;
+	if ((offload & IFNET_HW_TIMESTAMP))
+		ifcaps |= IFCAP_HW_TIMESTAMP;
+	if ((offload & IFNET_SW_TIMESTAMP))
+		ifcaps |= IFCAP_SW_TIMESTAMP;
 	if (ifcaps != 0) {
 		(void) ifnet_set_capabilities_supported(interface, ifcaps,
 		    IFCAP_VALID);
@@ -983,8 +994,12 @@ ifnet_set_wake_flags(ifnet_t interface, u_int32_t properties, u_int32_t mask)
 
 	ifnet_lock_exclusive(interface);
 
-	interface->if_wake_properties =
-	    (properties & mask) | (interface->if_wake_properties & ~mask);
+	if (mask & IF_WAKE_ON_MAGIC_PACKET) {
+		if (properties & IF_WAKE_ON_MAGIC_PACKET)
+			interface->if_xflags |= IFXF_WAKE_ON_MAGIC_PACKET;
+		else
+			interface->if_xflags &= ~IFXF_WAKE_ON_MAGIC_PACKET;
+	}
 
 	ifnet_lock_done(interface);
 
@@ -1002,7 +1017,7 @@ ifnet_set_wake_flags(ifnet_t interface, u_int32_t properties, u_int32_t mask)
 	ev_msg.dv[0].data_length = sizeof (struct net_event_data);
 	ev_msg.dv[0].data_ptr	= &ev_data;
 	ev_msg.dv[1].data_length = 0;
-	kev_post_msg(&ev_msg);
+	dlil_post_complete_msg(interface, &ev_msg);
 
 	return (0);
 }
@@ -1010,7 +1025,15 @@ ifnet_set_wake_flags(ifnet_t interface, u_int32_t properties, u_int32_t mask)
 u_int32_t
 ifnet_get_wake_flags(ifnet_t interface)
 {
-	return ((interface == NULL) ? 0 : interface->if_wake_properties);
+	u_int32_t flags = 0;
+
+	if (interface == NULL)
+		return (0);
+
+	if (interface->if_xflags & IFXF_WAKE_ON_MAGIC_PACKET)
+		flags |= IF_WAKE_ON_MAGIC_PACKET;
+
+	return (flags);
 }
 
 /*
@@ -2194,7 +2217,7 @@ ifnet_transmit_burst_start(ifnet_t ifp, mbuf_t pkt)
 
 	ifp->if_bw.start_seq = pkt->m_pkthdr.pkt_bwseq;
 	ifp->if_bw.start_ts = mach_absolute_time();
-#else /*!MEASURE_BW */
+#else /* !MEASURE_BW */
 #pragma unused(ifp, pkt)
 #endif /* !MEASURE_BW */
 }
@@ -2267,9 +2290,9 @@ done:
 #endif /* !MEASURE_BW */
 }
 
-/****************************************************************************/
-/* ifaddr_t accessors							    */
-/****************************************************************************/
+/*************************************************************************/
+/* ifaddr_t accessors						*/
+/*************************************************************************/
 
 errno_t
 ifaddr_reference(ifaddr_t ifa)
@@ -2513,9 +2536,9 @@ ifmaddr_ifnet(ifmultiaddr_t ifma)
 	return ((ifma == NULL) ? NULL : ifma->ifma_ifp);
 }
 
-/******************************************************************************/
-/* interface cloner                                                           */
-/******************************************************************************/
+/**************************************************************************/
+/* interface cloner						*/
+/**************************************************************************/
 
 errno_t
 ifnet_clone_attach(struct ifnet_clone_params *cloner_params,
@@ -2593,9 +2616,9 @@ fail:
 	return (error);
 }
 
-/******************************************************************************/
-/* misc                                                                       */
-/******************************************************************************/
+/**************************************************************************/
+/* misc							*/
+/**************************************************************************/
 
 errno_t
 ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
@@ -2645,12 +2668,12 @@ errno_t
 ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield)
 {
 	u_int32_t flags = IFNET_GET_LOCAL_PORTS_WILDCARDOK;
-	return (ifnet_get_local_ports_extended(ifp, PF_UNSPEC, flags, 
+	return (ifnet_get_local_ports_extended(ifp, PF_UNSPEC, flags,
 		bitfield));
 }
 
 errno_t
-ifnet_notice_node_presence(ifnet_t ifp, struct sockaddr* sa, int32_t rssi,
+ifnet_notice_node_presence(ifnet_t ifp, struct sockaddr *sa, int32_t rssi,
     int lqm, int npm, u_int8_t srvinfo[48])
 {
 	if (ifp == NULL || sa == NULL || srvinfo == NULL)
@@ -2665,7 +2688,7 @@ ifnet_notice_node_presence(ifnet_t ifp, struct sockaddr* sa, int32_t rssi,
 }
 
 errno_t
-ifnet_notice_node_absence(ifnet_t ifp, struct sockaddr* sa)
+ifnet_notice_node_absence(ifnet_t ifp, struct sockaddr *sa)
 {
 	if (ifp == NULL || sa == NULL)
 		return (EINVAL);
@@ -2691,8 +2714,18 @@ ifnet_notice_master_elected(ifnet_t ifp)
 errno_t
 ifnet_tx_compl_status(ifnet_t ifp, mbuf_t m, tx_compl_val_t val)
 {
-#pragma unused(ifp, m, val)
-	/* Dummy function to be implemented XXX */
+#pragma unused(val)
+
+	m_do_tx_compl_callback(m, ifp);
+
+	return (0);
+}
+
+errno_t
+ifnet_tx_compl(ifnet_t ifp, mbuf_t m)
+{
+	m_do_tx_compl_callback(m, ifp);
+
 	return (0);
 }
 
@@ -2723,6 +2756,17 @@ ifnet_set_delegate(ifnet_t ifp, ifnet_t delegated_ifp)
 		/* delegate info is unchanged; nothing more to do */
 		ifnet_lock_done(ifp);
 		goto done;
+	}
+	// Test if this delegate interface would cause a loop
+	ifnet_t delegate_check_ifp = delegated_ifp;
+	while (delegate_check_ifp != NULL) {
+		if (delegate_check_ifp == ifp) {
+			printf("%s: delegating to %s would cause a loop\n",
+			    ifp->if_xname, delegated_ifp->if_xname);
+			ifnet_lock_done(ifp);
+			goto done;
+		}
+		delegate_check_ifp = delegate_check_ifp->if_delegated.ifp;
 	}
 	bzero(&ifp->if_delegated, sizeof (ifp->if_delegated));
 	if (delegated_ifp != NULL && ifp != delegated_ifp) {
@@ -2787,34 +2831,32 @@ ifnet_get_delegate(ifnet_t ifp, ifnet_t *pdelegated_ifp)
 	return (0);
 }
 
-extern u_int32_t
-key_fill_offload_frames_for_savs(ifnet_t ifp,
-    struct ifnet_keepalive_offload_frame *frames_array,
-    u_int32_t frames_array_count, size_t frame_data_offset);
-
-extern void
-udp_fill_keepalive_offload_frames(ifnet_t ifp,
-    struct ifnet_keepalive_offload_frame *frames_array,
-    u_int32_t frames_array_count, size_t frame_data_offset,
-    u_int32_t *used_frames_count);
-
 errno_t
 ifnet_get_keepalive_offload_frames(ifnet_t ifp,
     struct ifnet_keepalive_offload_frame *frames_array,
     u_int32_t frames_array_count, size_t frame_data_offset,
     u_int32_t *used_frames_count)
 {
-	if (frames_array == NULL || used_frames_count == NULL)
+	u_int32_t i;
+
+	if (frames_array == NULL || used_frames_count == NULL ||
+	    frame_data_offset >= IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE)
 		return (EINVAL);
 
 	/* frame_data_offset should be 32-bit aligned */
-	if (P2ROUNDUP(frame_data_offset, sizeof(u_int32_t))
-	    != frame_data_offset)
+	if (P2ROUNDUP(frame_data_offset, sizeof(u_int32_t)) !=
+	    frame_data_offset)
 		return (EINVAL);
 
 	*used_frames_count = 0;
 	if (frames_array_count == 0)
 		return (0);
+
+	for (i = 0; i < frames_array_count; i++) {
+		struct ifnet_keepalive_offload_frame *frame = frames_array + i;
+
+		bzero(frame, sizeof(struct ifnet_keepalive_offload_frame));
+	}
 
 	/* First collect IPSec related keep-alive frames */
 	*used_frames_count = key_fill_offload_frames_for_savs(ifp,
@@ -2826,7 +2868,14 @@ ifnet_get_keepalive_offload_frames(ifnet_t ifp,
 		    frames_array_count, frame_data_offset,
 		    used_frames_count);
 
+	/* If there is more room, collect other TCP keep-alive frames */
+	if (*used_frames_count < frames_array_count)
+		tcp_fill_keepalive_offload_frames(ifp, frames_array,
+		    frames_array_count, frame_data_offset,
+		    used_frames_count);
+
 	VERIFY(*used_frames_count <= frames_array_count);
+
 	return (0);
 }
 
@@ -2888,10 +2937,22 @@ ifnet_link_status_report(ifnet_t ifp, const void *buffer,
 		if_cell_sr =
 		    &ifp->if_link_status->ifsr_u.ifsr_cell.if_cell_u.if_status_v1;
 		new_cell_sr = &ifsr->ifsr_u.ifsr_cell.if_cell_u.if_status_v1;
+		/* Check if we need to act on any new notifications */
+		if ((new_cell_sr->valid_bitmask &
+		    IF_CELL_UL_MSS_RECOMMENDED_VALID) &&
+		    new_cell_sr->mss_recommended !=
+		    if_cell_sr->mss_recommended) {
+			atomic_bitset_32(&tcbinfo.ipi_flags,
+			    INPCBINFO_UPDATE_MSS);
+			inpcb_timer_sched(&tcbinfo, INPCB_TIMER_FAST);
+		}
+
+		/* Finally copy the new information */
 		ifp->if_link_status->ifsr_version = ifsr->ifsr_version;
 		ifp->if_link_status->ifsr_len = ifsr->ifsr_len;
 		if_cell_sr->valid_bitmask = 0;
 		bcopy(new_cell_sr, if_cell_sr, sizeof(*if_cell_sr));
+
 	} else if (ifp->if_subfamily == IFNET_SUBFAMILY_WIFI) {
 		struct if_wifi_status_v1 *if_wifi_sr, *new_wifi_sr;
 
@@ -2961,7 +3022,7 @@ done:
 }
 
 /*************************************************************************/
-/* Packet preamble                                                       */
+/* Packet preamble						*/
 /*************************************************************************/
 
 #define	MAX_IF_PACKET_PREAMBLE_LEN 32
@@ -2990,4 +3051,103 @@ u_int32_t
 ifnet_maxpacketpreamblelen(void)
 {
 	return (MAX_IF_PACKET_PREAMBLE_LEN);
+}
+
+
+/*************************************************************************/
+/* Fastlane QoS Ca						*/
+/*************************************************************************/
+
+errno_t
+ifnet_set_fastlane_capable(ifnet_t interface, boolean_t capable)
+{
+	if (interface == NULL)
+		return (EINVAL);
+
+	if_set_qosmarking_mode(interface,
+	    capable ? IFRTYPE_QOSMARKING_FASTLANE : IFRTYPE_QOSMARKING_MODE_NONE);
+
+	return (0);
+}
+
+errno_t
+ifnet_get_fastlane_capable(ifnet_t interface, boolean_t *capable)
+{
+	if (interface == NULL || capable == NULL)
+		return (EINVAL);
+	if (interface->if_eflags & IFEF_QOSMARKING_CAPABLE)
+		*capable = true;
+	else
+		*capable = false;
+	return (0);
+}
+
+errno_t
+ifnet_get_unsent_bytes(ifnet_t interface, int64_t *unsent_bytes)
+{
+	int64_t bytes;
+
+	if (interface == NULL || unsent_bytes == NULL)
+		return (EINVAL);
+
+	bytes = *unsent_bytes = 0;
+
+	if ((interface->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) !=
+	    IFRF_ATTACHED)
+		return (ENXIO);
+
+	bytes = interface->if_sndbyte_unsent;
+
+	if (interface->if_eflags & IFEF_TXSTART)
+		bytes += IFCQ_BYTES(&interface->if_snd);
+	*unsent_bytes = bytes;
+
+	return (0);
+}
+
+errno_t
+ifnet_get_buffer_status(const ifnet_t ifp, ifnet_buffer_status_t *buf_status)
+{
+	if (ifp == NULL || buf_status == NULL)
+		return (EINVAL);
+
+	bzero(buf_status, sizeof (*buf_status));
+
+	if ((ifp->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) !=
+		IFRF_ATTACHED)
+		return (ENXIO);
+
+	buf_status->buf_sndbuf = ifp->if_sndbyte_unsent;
+
+	if (ifp->if_eflags & IFEF_TXSTART)
+		buf_status->buf_interface = IFCQ_BYTES(&ifp->if_snd);
+
+	return (0);
+}
+
+void
+ifnet_normalise_unsent_data(void)
+{
+	struct ifnet *ifp;
+
+	ifnet_head_lock_shared();
+	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
+		ifnet_lock_exclusive(ifp);
+		if ((ifp->if_refflags & (IFRF_ATTACHED|IFRF_DETACHING)) !=
+		    IFRF_ATTACHED) {
+			ifnet_lock_done(ifp);
+			continue;
+		}
+		if (!(ifp->if_eflags & IFEF_TXSTART)) {
+			ifnet_lock_done(ifp);
+			continue;
+		}
+
+		if (ifp->if_sndbyte_total > 0 ||
+		    IFCQ_BYTES(&ifp->if_snd) > 0)
+			ifp->if_unsent_data_cnt++;
+
+		ifnet_lock_done(ifp);
+	}
+	ifnet_head_done();
 }

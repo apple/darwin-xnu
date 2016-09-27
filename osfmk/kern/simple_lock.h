@@ -89,7 +89,7 @@ extern void			hw_lock_unlock(
 
 extern unsigned int		hw_lock_to(
 					hw_lock_t,
-					unsigned int);
+					uint64_t);
 
 extern unsigned int		hw_lock_try(
 					hw_lock_t);
@@ -166,6 +166,9 @@ extern void			usimple_unlock(
 extern unsigned int		usimple_lock_try(
 					usimple_lock_t);
 
+extern void		usimple_lock_try_lock_loop(
+					usimple_lock_t);
+
 __END_DECLS
 
 #define	ETAP_NO_TRACE	0
@@ -181,6 +184,7 @@ __END_DECLS
 #define	simple_lock(l)		usimple_lock(l)
 #define	simple_unlock(l)	usimple_unlock(l)
 #define simple_lock_try(l)	usimple_lock_try(l)
+#define simple_lock_try_lock_loop(l)	usimple_lock_try_lock_loop(l)
 #define simple_lock_addr(l)	(&(l))
 #endif /* !defined(simple_lock_init) */
 

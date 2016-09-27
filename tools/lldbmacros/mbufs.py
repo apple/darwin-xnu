@@ -328,7 +328,10 @@ def GetMbufWalkAllSlabs(show_a, show_f, show_tr):
                     total = total + 1
 
                     if (show_tr != 0):
-                        trn = (mca.mca_next_trn + idx - 1) % unsigned(kern.globals.mca_trn_max)
+                        if (mca.mca_next_trn == 0):
+                            trn = 1
+                        else:
+                            trn = 0
                         out_string += "Transaction " + str(int(trn)) + " at " + str(int(mca.mca_trns[int(trn)].mca_tstamp)) + " by thread: 0x" + str(hex(mca.mca_trns[int(trn)].mca_thread)) + ":\n"
                         cnt = 0
                         while (cnt < mca.mca_trns[int(trn)].mca_depth):
@@ -461,42 +464,9 @@ def GetPointerAsString(kgm_pc):
         pointer_format_string = "0x{0:<8x} "
     return pointer_format_string.format(kgm_pc)
 
-def GetKmodAddrIntAsString(kgm_pc):
-    global kgm_pkmod
-    global kgm_pkmodst
-    global kgm_pkmoden
-
-    out_string = ""
-    mh_execute_addr = int(lldb_run_command('p/x (uintptr_t *)&_mh_execute_header').split('=')[-1].strip(), 16)
-
-    out_string += GetPointerAsString(kgm_pc)
-    if ((unsigned(kgm_pc) >= unsigned(kgm_pkmodst)) and (unsigned(kgm_pc) < unsigned(kgm_pkmoden))):
-            kgm_off = kgm_pc - kgm_pkmodst
-            out_string += "<" + str(Cast(kgm_pkmod, 'kmod_info_t *').name) + " + 0x" + str(kgm_off) + ">"
-    else:
-        kgm_kmodp = kern.globals.kmod
-        if ((kern.arch == 'x86_64') and (long(kgm_pc) >= long(mh_execute_addr))):
-            kgm_kmodp = 0
-
-        while kgm_kmodp:
-            kgm_off = unsigned((kgm_pc - kgm_kmodp.address) & 0x00000000ffffffff)
-            if ((long(kgm_kmodp.address) <= long(kgm_pc)) and (kgm_off) < unsigned(kgm_kmodp.size)):
-                kgm_pkmod = kgm_kmodp
-                kgm_pkmodst = unsigned(kgm_kmodp.address)
-                kgm_pkmoden = unsigned(kgm_pkmodst + kgm_kmodp.size)
-                kgm_kmodp = 0
-            else:
-                kgm_kmodp = kgm_kmodp.next
-    return out_string
-
 def GetPc(kgm_pc):
-    out_string = ""
-    mh_execute_addr = int(lldb_run_command('p/x (uintptr_t *)&_mh_execute_header').split('=')[-1].strip(), 16)
-    if (unsigned(kgm_pc) < unsigned(mh_execute_addr) or unsigned(kgm_pc) >= unsigned(kern.globals.vm_kernel_top)):
-        out_string += GetKmodAddrIntAsString(kgm_pc)
-    else:
-        out_string += GetSourceInformationForAddress(int(kgm_pc))
-    return out_string + "\n"
+    out_string = GetSourceInformationForAddress(unsigned(kgm_pc)) + "\n"
+    return out_string
 
 
 # Macro: mbuf_showactive

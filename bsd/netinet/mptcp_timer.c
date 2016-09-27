@@ -152,7 +152,7 @@ mptcp_timer(struct mppcbinfo *mppi)
 		VERIFY(mpte != NULL);
 		MPTE_LOCK(mpte);
 		VERIFY(mpp->mpp_flags & MPP_ATTACHED);
-		
+
 		if (mpp->mpp_flags & MPP_DEFUNCT) {
 			MPTE_UNLOCK(mpte);
 			continue;

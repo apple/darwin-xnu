@@ -25,7 +25,7 @@ extern const struct ccmode_ecb ccaes_ltc_ecb_encrypt_mode;
 extern const struct ccmode_cbc ccaes_gladman_cbc_encrypt_mode;
 extern const struct ccmode_cbc ccaes_gladman_cbc_decrypt_mode;
 
-#if !defined(__NO_ASM__) && CCAES_ARM
+#if  CCAES_ARM_ASM
 extern const struct ccmode_ecb ccaes_arm_ecb_encrypt_mode;
 extern const struct ccmode_ecb ccaes_arm_ecb_decrypt_mode;
 
@@ -50,7 +50,7 @@ extern const struct ccmode_cbc *ccaes_ios_mux_cbc_encrypt_mode(void);
 extern const struct ccmode_cbc *ccaes_ios_mux_cbc_decrypt_mode(void);
 #endif
 
-#if !defined(__NO_ASM__) && CCAES_INTEL
+#if  CCAES_INTEL_ASM
 //extern const struct ccmode_ecb ccaes_intel_ecb_encrypt_mode;
 //extern const struct ccmode_ecb ccaes_intel_ecb_decrypt_mode;
 
@@ -99,5 +99,8 @@ const struct ccmode_ccm *ccaes_ccm_decrypt_mode(void);
 
 const struct ccmode_ctr *ccaes_ctr_crypt_mode(void);
 const struct ccmode_ofb *ccaes_ofb_crypt_mode(void);
+
+const struct ccmode_siv *ccaes_siv_encrypt_mode(void);
+const struct ccmode_siv *ccaes_siv_decrypt_mode(void);
 
 #endif /* _CORECRYPTO_CCAES_H_ */

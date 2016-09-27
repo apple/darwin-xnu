@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011, 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -95,6 +95,7 @@
 #include <sys/resourcevar.h>
 #include <sys/ptrace.h>
 #include <sys/proc_info.h>
+#include <sys/reason.h>
 #include <sys/_types/_timeval64.h>
 #include <sys/user.h>
 #include <sys/aio_kern.h>
@@ -114,6 +115,7 @@
 #include <bsm/audit_kevents.h>
 
 #include <mach/mach_types.h>
+#include <kern/exc_resource.h>
 
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
@@ -123,11 +125,9 @@
 #include <kern/thread_call.h>
 #include <kern/sched_prim.h>
 #include <kern/assert.h>
-#include <sys/codesign.h>
+#include <kern/policy_internal.h>
 
-#if VM_PRESSURE_EVENTS
-#include <kern/vm_pressure.h>
-#endif
+#include <sys/codesign.h>
 
 #if CONFIG_MEMORYSTATUS
 #include <sys/kern_memorystatus.h>
@@ -135,15 +135,14 @@
 
 #if CONFIG_DTRACE
 /* Do not include dtrace.h, it redefines kmem_[alloc/free] */
-extern void (*dtrace_fasttrap_exit_ptr)(proc_t);
-extern void (*dtrace_helpers_cleanup)(proc_t);
-extern void dtrace_lazy_dofs_destroy(proc_t);
+void dtrace_proc_exit(proc_t p);
 
 #include <sys/dtrace_ptss.h>
 #endif
 
 #if CONFIG_MACF
 #include <security/mac.h>
+#include <security/mac_mach_internal.h>
 #include <sys/syscall.h>
 #endif
 
@@ -155,18 +154,25 @@ extern void dtrace_lazy_dofs_destroy(proc_t);
 
 #include <sys/sdt.h>
 
-extern boolean_t init_task_died;
 void proc_prepareexit(proc_t p, int rv, boolean_t perf_notify);
+void gather_populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, mach_exception_data_type_t code, mach_exception_data_type_t subcode, uint64_t *udata_buffer, int num_udata);
+mach_exception_data_type_t proc_encode_exit_exception_code(proc_t p);
 void vfork_exit(proc_t p, int rv);
 void vproc_exit(proc_t p);
 __private_extern__ void munge_user64_rusage(struct rusage *a_rusage_p, struct user64_rusage *a_user_rusage_p);
 __private_extern__ void munge_user32_rusage(struct rusage *a_rusage_p, struct user32_rusage *a_user_rusage_p);
 static int reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoinit, int locked, int droplock);
-static void populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, struct rusage_superset *rup, mach_exception_data_type_t code, mach_exception_data_type_t subcode);
-extern int proc_pidpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static void populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, struct rusage_superset *rup, mach_exception_data_type_t code, mach_exception_data_type_t subcode, uint64_t *udata_buffer, int num_udata);
+static void proc_update_corpse_exception_codes(proc_t p, mach_exception_data_type_t *code, mach_exception_data_type_t *subcode);
+extern int proc_pidpathinfo_internal(proc_t p, uint64_t arg, char *buffer, uint32_t buffersize, int32_t *retval);
+static void abort_with_payload_internal(proc_t p, uint32_t reason_namespace, uint64_t reason_code, user_addr_t payload,
+									uint32_t payload_size, user_addr_t reason_string, uint64_t reason_flags);
 
 static __attribute__((noinline)) void launchd_crashed_panic(proc_t p, int rv);
 extern void proc_piduniqidentifierinfo(proc_t p, struct proc_uniqidentifierinfo *p_uniqidinfo);
+extern void task_coalition_ids(task_t task, uint64_t ids[COALITION_NUM_TYPES]);
+extern uint64_t	get_task_phys_footprint_limit(task_t);
+int proc_list_uptrs(void *p, uint64_t *udata_buffer, int size);
 
 
 /*
@@ -233,7 +239,59 @@ copyoutsiginfo(user_siginfo_t *native, boolean_t is64, user_addr_t uaddr)
 	}
 }
 
-static void populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, struct rusage_superset *rup, mach_exception_data_type_t code, mach_exception_data_type_t subcode)
+void gather_populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, mach_exception_data_type_t code, mach_exception_data_type_t subcode, uint64_t *udata_buffer, int num_udata)
+{
+	struct rusage_superset rup;
+
+	gather_rusage_info(p, &rup.ri, RUSAGE_INFO_CURRENT);
+	rup.ri.ri_phys_footprint = 0;
+	populate_corpse_crashinfo(p, crash_info_ptr, &rup, code, subcode, udata_buffer, num_udata);
+}
+
+static void proc_update_corpse_exception_codes(proc_t p, mach_exception_data_type_t *code, mach_exception_data_type_t *subcode)
+{
+	mach_exception_data_type_t code_update = *code;
+	mach_exception_data_type_t subcode_update = *subcode;
+	if (p->p_exit_reason == OS_REASON_NULL) {
+		return;
+	}
+
+	switch (p->p_exit_reason->osr_namespace) {
+		case OS_REASON_JETSAM:
+			if (p->p_exit_reason->osr_code == JETSAM_REASON_MEMORY_PERPROCESSLIMIT) {
+				/* Update the code with EXC_RESOURCE code for high memory watermark */
+				EXC_RESOURCE_ENCODE_TYPE(code_update, RESOURCE_TYPE_MEMORY);
+				EXC_RESOURCE_ENCODE_FLAVOR(code_update, FLAVOR_HIGH_WATERMARK);
+				EXC_RESOURCE_HWM_ENCODE_LIMIT(code_update, ((get_task_phys_footprint_limit(p->task)) >> 20));
+				subcode_update = 0;
+				break;
+			}
+
+			break;
+		default:
+			break;
+	}
+
+	*code = code_update;
+	*subcode = subcode_update;
+	return;
+}
+
+mach_exception_data_type_t proc_encode_exit_exception_code(proc_t p)
+{
+	uint64_t subcode = 0;
+
+	if (p->p_exit_reason == OS_REASON_NULL) {
+		return 0;
+	}
+
+	/* Embed first 32 bits of osr_namespace and osr_code in exception code */
+	ENCODE_OSR_NAMESPACE_TO_MACH_EXCEPTION_CODE(subcode, p->p_exit_reason->osr_namespace);
+	ENCODE_OSR_CODE_TO_MACH_EXCEPTION_CODE(subcode, p->p_exit_reason->osr_code);
+	return (mach_exception_data_type_t)subcode;
+}
+
+static void populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, struct rusage_superset *rup, mach_exception_data_type_t code, mach_exception_data_type_t subcode, uint64_t *udata_buffer, int num_udata)
 {
 	mach_vm_address_t uaddr = 0;
 	mach_exception_data_type_t exc_codes[EXCEPTION_CODE_MAX];
@@ -245,83 +303,87 @@ static void populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, struct rus
 	int retval = 0;
 	uint64_t crashed_threadid = thread_tid(current_thread());
 	unsigned int pflags = 0;
+	uint64_t max_footprint_mb;
+	uint64_t max_footprint;
 
 #if CONFIG_MEMORYSTATUS
 	int memstat_dirty_flags = 0;
 #endif
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_EXCEPTION_CODES, sizeof(exc_codes), &uaddr)) {
-		copyout(exc_codes, uaddr, sizeof(exc_codes));
+		kcdata_memcpy(crash_info_ptr, uaddr, exc_codes, sizeof(exc_codes));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PID, sizeof(p->p_pid), &uaddr)) {
-		copyout(&p->p_pid, uaddr, sizeof(p->p_pid));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_pid, sizeof(p->p_pid));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PPID, sizeof(p->p_ppid), &uaddr)) {
-		copyout(&p->p_ppid, uaddr, sizeof(p->p_ppid));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_ppid, sizeof(p->p_ppid));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_CRASHED_THREADID, sizeof(uint64_t), &uaddr)) {
-		copyout(&crashed_threadid, uaddr, sizeof(uint64_t));
-	}
-
-	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_RUSAGE, sizeof(struct rusage), &uaddr)) {
-		copyout(&rup->ru, uaddr, sizeof(struct rusage));
+		kcdata_memcpy(crash_info_ptr, uaddr, &crashed_threadid, sizeof(uint64_t));
 	}
 
 	if (KERN_SUCCESS ==
 	    kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_BSDINFOWITHUNIQID, sizeof(struct proc_uniqidentifierinfo), &uaddr)) {
 		proc_piduniqidentifierinfo(p, &p_uniqidinfo);
-		copyout(&p_uniqidinfo, uaddr, sizeof(struct proc_uniqidentifierinfo));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p_uniqidinfo, sizeof(struct proc_uniqidentifierinfo));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_RUSAGE_INFO, sizeof(rusage_info_current), &uaddr)) {
-		copyout(&rup->ri, uaddr, sizeof(rusage_info_current));
+		kcdata_memcpy(crash_info_ptr, uaddr, &rup->ri, sizeof(rusage_info_current));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_CSFLAGS, sizeof(p->p_csflags), &uaddr)) {
-		copyout(&p->p_csflags, uaddr, sizeof(p->p_csflags));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_csflags, sizeof(p->p_csflags));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_NAME, sizeof(p->p_comm), &uaddr)) {
-		copyout(&p->p_comm, uaddr, sizeof(p->p_comm));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_comm, sizeof(p->p_comm));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_STARTTIME, sizeof(p->p_start), &uaddr)) {
 		struct timeval64 t64;
 		t64.tv_sec = (int64_t)p->p_start.tv_sec;
 		t64.tv_usec = (int64_t)p->p_start.tv_usec;
-		copyout(&t64, uaddr, sizeof(t64));
+		kcdata_memcpy(crash_info_ptr, uaddr, &t64, sizeof(t64));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_USERSTACK, sizeof(p->user_stack), &uaddr)) {
-		copyout(&p->user_stack, uaddr, sizeof(p->user_stack));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->user_stack, sizeof(p->user_stack));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_ARGSLEN, sizeof(p->p_argslen), &uaddr)) {
-		copyout(&p->p_argslen, uaddr, sizeof(p->p_argslen));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_argslen, sizeof(p->p_argslen));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_ARGC, sizeof(p->p_argc), &uaddr)) {
-		copyout(&p->p_argc, uaddr, sizeof(p->p_argc));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_argc, sizeof(p->p_argc));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_PATH, MAXPATHLEN, &uaddr)) {
-		proc_pidpathinfo(p, 0, uaddr, MAXPATHLEN, &retval);
+		char *buf = (char *) kalloc(MAXPATHLEN);
+		if (buf != NULL) {
+			bzero(buf, MAXPATHLEN);
+			proc_pidpathinfo_internal(p, 0, buf, MAXPATHLEN, &retval);
+			kcdata_memcpy(crash_info_ptr, uaddr, buf, MAXPATHLEN);
+			kfree(buf, MAXPATHLEN);
+		}
 	}
 
 	pflags = p->p_flag & (P_LP64 | P_SUGID);
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_FLAGS, sizeof(pflags), &uaddr)) {
-		copyout(&pflags, uaddr, sizeof(pflags));
+		kcdata_memcpy(crash_info_ptr, uaddr, &pflags, sizeof(pflags));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_UID, sizeof(p->p_uid), &uaddr)) {
-		copyout(&p->p_uid, uaddr, sizeof(p->p_uid));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_uid, sizeof(p->p_uid));
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_GID, sizeof(p->p_gid), &uaddr)) {
-		copyout(&p->p_gid, uaddr, sizeof(p->p_gid));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_gid, sizeof(p->p_gid));
 	}
 
 	cputype = cpu_type() & ~CPU_ARCH_MASK;
@@ -329,37 +391,126 @@ static void populate_corpse_crashinfo(proc_t p, void *crash_info_ptr, struct rus
 		cputype |= CPU_ARCH_ABI64;
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_CPUTYPE, sizeof(cpu_type_t), &uaddr)) {
-		copyout(&cputype, uaddr, sizeof(cpu_type_t));
+		kcdata_memcpy(crash_info_ptr, uaddr, &cputype, sizeof(cpu_type_t));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_MEMORY_LIMIT, sizeof(max_footprint_mb), &uaddr)) {
+		max_footprint = get_task_phys_footprint_limit(p->task);
+		max_footprint_mb = max_footprint >> 20;
+		kcdata_memcpy(crash_info_ptr, uaddr, &max_footprint_mb, sizeof(max_footprint_mb));
 	}
 
 	bzero(&pwqinfo, sizeof(struct proc_workqueueinfo));
 	retval = fill_procworkqueue(p, &pwqinfo);
 	if (retval == 0) {
 		if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_WORKQUEUEINFO, sizeof(struct proc_workqueueinfo), &uaddr)) {
-			copyout(&pwqinfo, uaddr, sizeof(struct proc_workqueueinfo));
+			kcdata_memcpy(crash_info_ptr, uaddr, &pwqinfo, sizeof(struct proc_workqueueinfo));
 		}
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_RESPONSIBLE_PID, sizeof(p->p_responsible_pid), &uaddr)) {
-		copyout(&p->p_responsible_pid, uaddr, sizeof(p->p_responsible_pid));
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_responsible_pid, sizeof(p->p_responsible_pid));
 	}
+
+#if CONFIG_COALITIONS
+	if (KERN_SUCCESS == kcdata_get_memory_addr_for_array(crash_info_ptr, TASK_CRASHINFO_COALITION_ID, sizeof(uint64_t), COALITION_NUM_TYPES, &uaddr)) {
+		uint64_t coalition_ids[COALITION_NUM_TYPES];
+		task_coalition_ids(p->task, coalition_ids);
+		kcdata_memcpy(crash_info_ptr, uaddr, coalition_ids, sizeof(coalition_ids));
+	}
+#endif /* CONFIG_COALITIONS */
 
 #if CONFIG_MEMORYSTATUS
 	memstat_dirty_flags = memorystatus_dirty_get(p);
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_DIRTY_FLAGS, sizeof(memstat_dirty_flags), &uaddr)) {
-		copyout(&memstat_dirty_flags, uaddr, sizeof(memstat_dirty_flags));
+		kcdata_memcpy(crash_info_ptr, uaddr, &memstat_dirty_flags, sizeof(memstat_dirty_flags));
 	}
 #endif
 
+	if (p->p_exit_reason != OS_REASON_NULL) {
+		if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, EXIT_REASON_SNAPSHOT, sizeof(struct exit_reason_snapshot), &uaddr)) {
+			struct exit_reason_snapshot ers = {
+				.ers_namespace = p->p_exit_reason->osr_namespace,
+				.ers_code = p->p_exit_reason->osr_code,
+				.ers_flags = p->p_exit_reason->osr_flags
+			};
+
+			kcdata_memcpy(crash_info_ptr, uaddr, &ers, sizeof(ers));
+		}
+
+		if (p->p_exit_reason->osr_kcd_buf != 0) {
+			uint32_t reason_buf_size = kcdata_memory_get_used_bytes(&p->p_exit_reason->osr_kcd_descriptor);
+			assert(reason_buf_size != 0);
+
+			if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, KCDATA_TYPE_NESTED_KCDATA, reason_buf_size, &uaddr)) {
+				kcdata_memcpy(crash_info_ptr, uaddr, p->p_exit_reason->osr_kcd_buf, reason_buf_size);
+			}
+		}
+	}
+
+	if (num_udata > 0) {
+		if (KERN_SUCCESS == kcdata_get_memory_addr_for_array(crash_info_ptr, TASK_CRASHINFO_UDATA_PTRS,
+					sizeof(uint64_t), num_udata, &uaddr)) {
+			kcdata_memcpy(crash_info_ptr, uaddr, udata_buffer, sizeof(uint64_t) * num_udata);
+		}
+	}
+}
+
+/*
+ * We only parse exit reason kcdata blobs for launchd when it dies
+ * and we're going to panic.
+ *
+ * Meant to be called immediately before panicking.
+ */
+char *
+launchd_exit_reason_get_string_desc(os_reason_t exit_reason)
+{
+	kcdata_iter_t iter;
+
+	if (exit_reason == OS_REASON_NULL || exit_reason->osr_kcd_buf == NULL ||
+			exit_reason->osr_bufsize == 0) {
+		return NULL;
+	}
+
+	iter = kcdata_iter(exit_reason->osr_kcd_buf, exit_reason->osr_bufsize);
+	if (!kcdata_iter_valid(iter)) {
+#if DEBUG || DEVELOPMENT
+		printf("launchd exit reason has invalid exit reason buffer\n");
+#endif
+		return NULL;
+	}
+
+	if (kcdata_iter_type(iter) != KCDATA_BUFFER_BEGIN_OS_REASON) {
+#if DEBUG || DEVELOPMENT
+		printf("launchd exit reason buffer type mismatch, expected %d got %d\n",
+			KCDATA_BUFFER_BEGIN_OS_REASON, kcdata_iter_type(iter));
+#endif
+		return NULL;
+	}
+
+	iter = kcdata_iter_find_type(iter, EXIT_REASON_USER_DESC);
+	if (!kcdata_iter_valid(iter)) {
+		return NULL;
+	}
+
+	return (char *)kcdata_iter_payload(iter);
 }
 
 static __attribute__((noinline)) void
 launchd_crashed_panic(proc_t p, int rv)
 {
-	printf("pid 1 exited (signal %d, exit %d)\n",
-	    WTERMSIG(rv), WEXITSTATUS(rv));
+	char *launchd_exit_reason_desc = launchd_exit_reason_get_string_desc(p->p_exit_reason);
 
-#if (DEVELOPMENT || DEBUG)
+	if (p->p_exit_reason == OS_REASON_NULL) {
+		printf("pid 1 exited -- no exit reason available -- (signal %d, exit %d)\n",
+			WTERMSIG(rv), WEXITSTATUS(rv));
+	} else {
+		printf("pid 1 exited -- exit reason namespace %d subcode 0x%llx, description %s\n",
+			p->p_exit_reason->osr_namespace, p->p_exit_reason->osr_code, launchd_exit_reason_desc ?
+			launchd_exit_reason_desc : "none");
+	}
+
+#if (DEVELOPMENT || DEBUG) && CONFIG_COREDUMP
 	/*
 	 * For debugging purposes, generate a core file of initproc before
 	 * panicking. Leave at least 300 MB free on the root volume, and ignore
@@ -389,18 +540,59 @@ launchd_crashed_panic(proc_t p, int rv)
 		printf("Generated initproc core file in %d.%03d seconds\n",
 		       (uint32_t)tv_sec, tv_msec);
 	}
-#endif
+#endif /* (DEVELOPMENT || DEBUG) && CONFIG_COREDUMP */
 
 	sync(p, (void *)NULL, (int *)NULL);
 
-	panic_plain("%s exited (signal %d, exit status %d %s)", (p->p_name[0] != '\0' ? p->p_name : "initproc"), WTERMSIG(rv),
-	            WEXITSTATUS(rv), ((p->p_csflags & CS_KILLED) ? "CS_KILLED" : ""));
+	if (p->p_exit_reason == OS_REASON_NULL) {
+		panic_plain(LAUNCHD_CRASHED_PREFIX " -- no exit reason available -- (signal %d, exit status %d %s)",
+				WTERMSIG(rv), WEXITSTATUS(rv), ((p->p_csflags & CS_KILLED) ? "CS_KILLED" : ""));
+	} else {
+		panic_plain(LAUNCHD_CRASHED_PREFIX " %s -- exit reason namespace %d subcode 0x%llx description: %." LAUNCHD_PANIC_REASON_STRING_MAXLEN "s",
+				((p->p_csflags & CS_KILLED) ? "CS_KILLED" : ""),
+				p->p_exit_reason->osr_namespace, p->p_exit_reason->osr_code,
+				launchd_exit_reason_desc ? launchd_exit_reason_desc : "none");
+	}
 }
+
+static void
+abort_with_payload_internal(proc_t p, uint32_t reason_namespace, uint64_t reason_code, user_addr_t payload, uint32_t payload_size,
+				user_addr_t reason_string, uint64_t reason_flags)
+{
+	os_reason_t exit_reason = OS_REASON_NULL;
+
+	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
+					p->p_pid, reason_namespace,
+					reason_code, 0, 0);
+
+	exit_reason = build_userspace_exit_reason(reason_namespace, reason_code, payload, payload_size, reason_string,
+							reason_flags);
+
+	/*
+	 * We use SIGABRT (rather than calling exit directly from here) so that
+	 * the debugger can catch abort_with_{reason,payload} calls.
+	 */
+	psignal_try_thread_with_reason(p, current_thread(), SIGABRT, exit_reason);
+
+	return;
+}
+
+int
+abort_with_payload(struct proc *cur_proc, struct abort_with_payload_args *args,
+				__unused void *retval)
+{
+	abort_with_payload_internal(cur_proc, args->reason_namespace, args->reason_code, args->payload, args->payload_size,
+					args->reason_string, args->reason_flags);
+
+	return 0;
+}
+
 
 /*
  * exit --
  *	Death of process.
  */
+__attribute__((noreturn))
 void
 exit(proc_t p, struct exit_args *uap, int *retval)
 {
@@ -428,6 +620,16 @@ int
 exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify,
 	       int jetsam_flags)
 {
+	return exit_with_reason(p, rv, retval, thread_can_terminate, perf_notify, jetsam_flags, OS_REASON_NULL);
+}
+
+/*
+ * NOTE: exit_with_reason drops a reference on the passed exit_reason
+ */
+int
+exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify,
+		int jetsam_flags, struct os_reason *exit_reason)
+{
 	thread_t self = current_thread();
 	struct task *task = p->task;
 	struct uthread *ut;
@@ -441,6 +643,7 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 
 	 ut = get_bsdthread_info(self);
 	 if (ut->uu_flag & UT_VFORK) {
+		os_reason_free(exit_reason);
 		if (!thread_can_terminate) {
 			return EINVAL;
 		}
@@ -470,32 +673,38 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 
 	/* mark process is going to exit and pull out of DBG/disk throttle */
 	/* TODO: This should be done after becoming exit thread */
-	proc_set_task_policy(p->task, THREAD_NULL, TASK_POLICY_ATTRIBUTE,
+	proc_set_task_policy(p->task, TASK_POLICY_ATTRIBUTE,
 	                     TASK_POLICY_TERMINATED, TASK_POLICY_ENABLE);
 
         proc_lock(p);
-	error = proc_transstart(p, 1, (((jetsam_flags & P_JETSAM_MASK) == P_JETSAM_VNODE) ? 1 : 0));
+	error = proc_transstart(p, 1, (jetsam_flags ? 1 : 0));
 	if (error == EDEADLK) {
-		/* Temp: If deadlock error, then it implies multithreaded exec is
-		 * in progress. Instread of letting exit continue and 
-		 * corrupting the freed memory, let the exit thread
-		 * return. This will save corruption in remote case.
+		/*
+		 * If proc_transstart() returns EDEADLK, then another thread
+		 * is either exec'ing or exiting. Return an error and allow
+		 * the other thread to continue.
 		 */
 		proc_unlock(p);
+		os_reason_free(exit_reason);
 		if (current_proc() == p){
-			if (p->exit_thread == self)
+			if (p->exit_thread == self) {
 				printf("exit_thread failed to exit, leaving process %s[%d] in unkillable limbo\n",
 				       p->p_comm, p->p_pid);
-			thread_exception_return();
-		} else {
-			/* external termination like jetsam */
-			return(error);
+			}
+
+			if (thread_can_terminate) {
+				thread_exception_return();
+			}
 		}
+
+		return error;
 	}
 
 	while (p->exit_thread != self) {
 		if (sig_try_locked(p) <= 0) {
 			proc_transend(p, 1);
+			os_reason_free(exit_reason);
+
 			if (get_threadtask(self) != task) {
 				proc_unlock(p);
 				return(0);
@@ -513,10 +722,15 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
 		sig_lock_to_exit(p);
 	}
 
-	if (p == initproc && current_proc() == p) {
-		init_task_died = TRUE;
+	if (exit_reason != OS_REASON_NULL) {
+		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_COMMIT) | DBG_FUNC_NONE,
+							p->p_pid, exit_reason->osr_namespace,
+							exit_reason->osr_code, 0, 0);
 	}
-	
+
+	assert(p->p_exit_reason == OS_REASON_NULL);
+	p->p_exit_reason = exit_reason;
+
 	p->p_lflag |= P_LEXIT;
 	p->p_xstat = rv;
 	p->p_lflag |= jetsam_flags;
@@ -550,7 +764,9 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 	}
 
  	/* If a core should be generated, notify crash reporter */
-	if (hassigprop(WTERMSIG(rv), SA_CORE) || ((p->p_csflags & CS_KILLED) != 0)) {
+	if (hassigprop(WTERMSIG(rv), SA_CORE) || ((p->p_csflags & CS_KILLED) != 0) ||
+		(p->p_exit_reason != OS_REASON_NULL && (p->p_exit_reason->osr_flags &
+							OS_REASON_FLAG_GENERATE_CRASH_REPORT))) {
 		/* 
 		 * Workaround for processes checking up on PT_DENY_ATTACH:
 		 * should be backed out post-Leopard (details in 5431025).
@@ -597,9 +813,6 @@ skipcheck:
 				printf("Process[%d] crashed: %s. Too many corpses being created.\n", p->p_pid, p->p_comm);
 			}
 			create_corpse = FALSE;
-		} else {
-			/* XXX: <rdar://problem/20491659> Need to sync ATM buffer before crash */
-			kr = task_send_trace_memory(current_task(), p->p_pid, p->p_uniqueid);
 		}
 	}
 
@@ -624,7 +837,27 @@ skipcheck:
 		p->p_ru = rup;
 	}
 	if (create_corpse) {
-		populate_corpse_crashinfo(p, task_get_corpseinfo(current_task()), rup, code, subcode);
+		int est_knotes = 0, num_knotes = 0;
+		uint64_t *buffer = NULL;
+		int buf_size = 0;
+
+		/* Get all the udata pointers from kqueue */
+		est_knotes = proc_list_uptrs(p, NULL, 0);
+		if (est_knotes > 0) {
+			buf_size = (est_knotes + 32) * sizeof(uint64_t);
+			buffer = (uint64_t *) kalloc(buf_size);
+			num_knotes = proc_list_uptrs(p, buffer, buf_size);
+			if (num_knotes > est_knotes + 32) {
+				num_knotes = est_knotes + 32;
+			}
+		}
+
+		/* Update the code, subcode based on exit reason */
+		proc_update_corpse_exception_codes(p, &code, &subcode);
+		populate_corpse_crashinfo(p, task_get_corpseinfo(current_task()), rup, code, subcode, buffer, num_knotes);
+		if (buffer != NULL) {
+			kfree(buffer, buf_size);
+		}
 	}
 	/*
 	 * Remove proc from allproc queue and from pidhash chain.
@@ -716,42 +949,10 @@ proc_exit(proc_t p)
 		pid, exitval, 0, 0, 0);
 
 #if CONFIG_DTRACE
-	/*
-	 * Free any outstanding lazy dof entries. It is imperative we
-	 * always call dtrace_lazy_dofs_destroy, rather than null check
-	 * and call if !NULL. If we NULL test, during lazy dof faulting
-	 * we can race with the faulting code and proceed from here to
-	 * beyond the helpers cleanup. The lazy dof faulting will then
-	 * install new helpers which will never be cleaned up, and leak.
-	 */
-	dtrace_lazy_dofs_destroy(p);
-
-	/*
-	 * Clean up any DTrace helper actions or probes for the process.
-	 */
-	if (p->p_dtrace_helpers != NULL) {
-		(*dtrace_helpers_cleanup)(p);
-	}
-
-	/*
-	 * Clean up any DTrace probes associated with this process.
-	 */
-	/*
-	 * APPLE NOTE: We release ptss pages/entries in dtrace_fasttrap_exit_ptr(),
-	 * call this after dtrace_helpers_cleanup()
-	 */
-	proc_lock(p);
-	if (p->p_dtrace_probes && dtrace_fasttrap_exit_ptr) {
-		(*dtrace_fasttrap_exit_ptr)(p);
-	}
-	proc_unlock(p);
+	dtrace_proc_exit(p);
 #endif
 
 	nspace_proc_exit(p);
-
-#if VM_PRESSURE_EVENTS
-	vm_pressure_proc_cleanup(p);
-#endif
 
 	/*
 	 * need to cancel async IO requests that can be cancelled and wait for those
@@ -978,7 +1179,7 @@ proc_exit(proc_t p)
 				 	*/
 					thread_resume(thread);
 					clear_wait(thread, THREAD_INTERRUPTED);
-					threadsignal(thread, SIGKILL, 0);
+					threadsignal(thread, SIGKILL, 0, TRUE);
 				} else {
 					proc_unlock(q);
 				}
@@ -1033,21 +1234,7 @@ proc_exit(proc_t p)
 		}
 	}
 
-	proc_spinlock(p);
-	if (thread_call_cancel(p->p_rcall))
-		p->p_ractive--;
-
-	while (p->p_ractive > 0) {
-		proc_spinunlock(p);
-		
-		delay(1);
-
-		proc_spinlock(p);
-	}
-	proc_spinunlock(p);
-
-	thread_call_free(p->p_rcall);
-	p->p_rcall = NULL;
+	proc_free_realitimer(p);
 
 	/*
 	 * Other substructures are freed from wait().
@@ -1328,6 +1515,8 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 #endif
 	(void)chgproccnt(kauth_cred_getruid(child->p_ucred), -1);
 
+	os_reason_free(child->p_exit_reason);
+
 	/*
 	 * Free up credentials.
 	 */
@@ -1386,7 +1575,6 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 #endif
 	lck_spin_destroy(&child->p_slock, proc_lck_grp);
 #endif /* CONFIG_FINE_LOCK_GROUPS */
-	workqueue_destroy_lock(child);
 
 	FREE_ZONE(child, sizeof *child, M_PROC);
 	if ((locked == 1) && (droplock == 0))
@@ -1447,7 +1635,7 @@ loop1:
 	nfound = 0;
 	sibling_count = 0;
 
-	for (p = q->p_children.lh_first; p != 0; p = p->p_sibling.le_next) {
+	PCHILDREN_FOREACH(q, p) {
 		if ( p->p_sibling.le_next != 0 )
 			sibling_count++;
 		if (uap->pid != WAIT_ANY &&
@@ -1690,8 +1878,8 @@ loop:
 	proc_list_lock();
 loop1:
 	nfound = 0;
-	for (p = q->p_children.lh_first; p != 0; p = p->p_sibling.le_next) {
 
+	PCHILDREN_FOREACH(q, p) {
 		switch (uap->idtype) {
 		case P_PID:	/* child with process ID equal to... */
 			if (p->p_pid != (pid_t)uap->id)
@@ -1997,21 +2185,7 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 	p->p_sigignore = ~0;
 	proc_unlock(p);
 
-	proc_spinlock(p);
-	if (thread_call_cancel(p->p_rcall))
-		p->p_ractive--;
-
-	while (p->p_ractive > 0) {
-		proc_spinunlock(p);
-		
-		delay(1);
-
-		proc_spinlock(p);
-	}
-	proc_spinunlock(p);
-
-	thread_call_free(p->p_rcall);
-	p->p_rcall = NULL;
+	proc_free_realitimer(p);
 
 	ut->uu_siglist = 0;
 
@@ -2201,7 +2375,7 @@ vproc_exit(proc_t p)
 				 	*/
 					thread_resume(thread);
 					clear_wait(thread, THREAD_INTERRUPTED);
-					threadsignal(thread, SIGKILL, 0);
+					threadsignal(thread, SIGKILL, 0, TRUE);
 				} else {
 					proc_unlock(q);
 				}

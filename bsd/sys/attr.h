@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -54,6 +54,9 @@
 #endif
 
 #define FSOPT_ATTR_CMN_EXTENDED	0x00000020
+#ifdef PRIVATE
+#define FSOPT_LIST_SNAPSHOT	0x00000040
+#endif /* PRIVATE */
 
 /* we currently aren't anywhere near this amount for a valid
  * fssearchblock.sizeofsearchparams1 or fssearchblock.sizeofsearchparams2
@@ -72,10 +75,7 @@ typedef u_int32_t fsfile_type_t;
 
 typedef u_int32_t fsvolid_t;
 
-typedef struct fsobj_id {
-	u_int32_t		fid_objno;
-	u_int32_t		fid_generation;
-} fsobj_id_t;
+#include <sys/_types/_fsobj_id_t.h> /* file object id type */
 
 typedef u_int32_t attrgroup_t;
 
@@ -220,6 +220,15 @@ typedef struct vol_capabilities_attr {
  * only legitimate attributes for obtaining object IDs from this volume and the
  * 32-bit fid_objno fields of the fsobj_id_t returned by ATTR_CMN_OBJID,
  * ATTR_CMN_OBJPERMID, and ATTR_CMN_PAROBJID are undefined.
+ *
+ * VOL_CAP_FMT_DIR_HARDLINKS: When set, the volume supports directory
+ * hard links.
+ *
+ * VOL_CAP_FMT_DOCUMENT_ID: When set, the volume supports document IDs
+ * (an ID which persists across object ID changes) for document revisions.
+ *
+ * VOL_CAP_FMT_WRITE_GENERATION_COUNT: When set, the volume supports write
+ * generation counts (a count of how many times an object has been modified)
  */
 #define VOL_CAP_FMT_PERSISTENTOBJECTIDS		0x00000001
 #define VOL_CAP_FMT_SYMBOLICLINKS 		0x00000002
@@ -239,6 +248,9 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_FMT_NO_VOLUME_SIZES		0x00008000
 #define VOL_CAP_FMT_DECMPFS_COMPRESSION		0x00010000
 #define VOL_CAP_FMT_64BIT_OBJECT_IDS		0x00020000
+#define VOL_CAP_FMT_DIR_HARDLINKS		0x00040000
+#define VOL_CAP_FMT_DOCUMENT_ID			0x00080000
+#define VOL_CAP_FMT_WRITE_GENERATION_COUNT	0x00100000
 
 
 /*
@@ -297,6 +309,15 @@ typedef struct vol_capabilities_attr {
  *
  * VOL_CAP_INT_NAMEDSTREAMS: When set, the volume supports
  * native named streams.
+ *
+ * VOL_CAP_INT_CLONE: When set, the volume supports clones.
+ *
+ * VOL_CAP_INT_RENAME_SWAP: When set, the volume supports swapping
+ * file system objects.
+ *
+ * VOL_CAP_INT_RENAME_EXCL: When set, the volume supports an
+ * exclusive rename operation.
+ *
  */
 #define VOL_CAP_INT_SEARCHFS			0x00000001
 #define VOL_CAP_INT_ATTRLIST			0x00000002
@@ -317,6 +338,13 @@ typedef struct vol_capabilities_attr {
 /* Volume supports kqueue notifications for remote events */
 #define VOL_CAP_INT_REMOTE_EVENT		0x00008000
 #endif /* PRIVATE */
+#define VOL_CAP_INT_CLONE			0x00010000
+#ifdef PRIVATE
+/* Volume supports snapshots */
+#define VOL_CAP_INT_SNAPSHOT			0x00020000
+#endif /* PRIVATE */
+#define VOL_CAP_INT_RENAME_SWAP			0x00040000
+#define VOL_CAP_INT_RENAME_EXCL			0x00080000
 
 typedef struct vol_attributes_attr {
 	attribute_set_t validattr;

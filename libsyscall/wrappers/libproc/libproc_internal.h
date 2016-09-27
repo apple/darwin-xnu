@@ -27,6 +27,7 @@
 
 #include <sys/cdefs.h>
 #include <libproc.h>
+#include <mach/message.h>
 
 __BEGIN_DECLS
 
@@ -77,17 +78,20 @@ int proc_denap_assertion_begin_with_msg(mach_msg_header_t  *msg,
 /* drop a de-nap assertion */
 int proc_denap_assertion_complete(uint64_t assertion_handle);
 
-int proc_set_cpumon_params(pid_t pid, int percentage, int interval) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
-int proc_get_cpumon_params(pid_t pid, int *percentage, int *interval) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
+/* ongoing percent-over-time CPU monitor */
 int proc_set_cpumon_defaults(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
+int proc_set_cpumon_params(pid_t pid, int percentage, int interval) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
+int proc_set_cpumon_params_fatal(pid_t pid, int percentage, int interval) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
+
+int proc_get_cpumon_params(pid_t pid, int *percentage, int *interval) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
+int proc_resume_cpumon(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_12, __IPHONE_10_0);
 int proc_disable_cpumon(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
 
+/* ongoing wakes/second monitor */
+int proc_set_wakemon_defaults(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 int proc_set_wakemon_params(pid_t pid, int rate_hz, int flags) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 int proc_get_wakemon_params(pid_t pid, int *rate_hz, int *flags) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
-int proc_set_wakemon_defaults(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
 int proc_disable_wakemon(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0);
-
-int proc_set_cpumon_params_fatal(pid_t pid, int percentage, int interval) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
 
 /* request trace buffer collection */
 int proc_trace_log(pid_t pid, uint64_t uniqueid) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);

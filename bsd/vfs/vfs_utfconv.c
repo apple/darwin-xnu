@@ -36,6 +36,12 @@
 #include <sys/malloc.h>
 #include <libkern/OSByteOrder.h>
 
+#if defined(KERNEL) && !defined(VFS_UTF8_UNIT_TEST)
+#include <kern/assert.h>
+#else
+#include <assert.h>
+#endif
+
 /*
  * UTF-8 (Unicode Transformation Format)
  *
@@ -1099,7 +1105,7 @@ prioritysort(u_int16_t* characters, int count)
  * colon in our tables and everything will just work. 
  */
 static u_int8_t
-sfm2mac[42] = {
+sfm2mac[] = {
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,   /* 00 - 07 */
 	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,   /* 08 - 0F */
 	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,   /* 10 - 17 */
@@ -1107,9 +1113,10 @@ sfm2mac[42] = {
 	0x22, 0x2a, 0x3a, 0x3c, 0x3e, 0x3f, 0x5c, 0x7c,   /* 20 - 27 */
 	0x20, 0x2e                                        /* 28 - 29 */
 };
+#define SFM2MAC_LEN	((sizeof(sfm2mac))/sizeof(sfm2mac[0]))
 
 static u_int8_t
-mac2sfm[112] = {
+mac2sfm[] = {
 	0x20, 0x21, 0x20, 0x23, 0x24, 0x25, 0x26, 0x27,	  /* 20 - 27 */
 	0x28, 0x29, 0x21, 0x2b, 0x2c, 0x2d, 0x2e, 0x22,   /* 28 - 2f */
 	0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,   /* 30 - 37 */
@@ -1123,6 +1130,7 @@ mac2sfm[112] = {
 	0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,   /* 70 - 77 */
 	0x78, 0x79, 0x7a, 0x7b, 0x27, 0x7d, 0x7e, 0x7f    /* 78 - 7f */
 };
+#define MAC2SFM_LEN	((sizeof(mac2sfm))/sizeof(mac2sfm[0]))
 
 
 /*
@@ -1146,6 +1154,7 @@ ucs_to_sfm(u_int16_t ucs_ch, int lastchar)
 	} else /* 0x20 - 0x7f */ {
 		u_int16_t lsb;
 
+		assert((ucs_ch - 0x0020) < MAC2SFM_LEN);
 		lsb = mac2sfm[ucs_ch - 0x0020];
 		if (lsb != ucs_ch)
 			return(0xf000 | lsb); 
@@ -1161,6 +1170,7 @@ sfm_to_ucs(u_int16_t ucs_ch)
 {
 	if (((ucs_ch & 0xffC0) == SFMCODE_PREFIX_MASK) && 
 	    ((ucs_ch & 0x003f) <= MAX_SFM2MAC)) {
+		assert((ucs_ch & 0x003f) < SFM2MAC_LEN);
 		ucs_ch = sfm2mac[ucs_ch & 0x003f];
 	}
 	return (ucs_ch);

@@ -32,9 +32,8 @@
 #define kPrelinkTextSegment                "__PRELINK_TEXT"
 #define kPrelinkTextSection                "__text"
 
-#define kPrelinkLinkStateSegment           "__PRELINK_STATE"
-#define kPrelinkKernelLinkStateSection     "__kernel"
-#define kPrelinkKextsLinkStateSection      "__kexts"
+#define kPrelinkDataSegment                "__PRELINK_DATA"
+#define kPrelinkDataSection                "__data"
 
 #define kPrelinkInfoSegment                "__PRELINK_INFO"
 #define kPrelinkInfoSection                "__info"
@@ -49,6 +48,8 @@
 #define kPrelinkKmodInfoKey                "_PrelinkKmodInfo"
 #define kPrelinkLinkStateKey               "_PrelinkLinkState"
 #define kPrelinkLinkStateSizeKey           "_PrelinkLinkStateSize"
+#define kPrelinkLinkKASLROffsetsKey        "_PrelinkLinkKASLROffsets"
+#define kPrelinkInfoKCIDKey                "_PrelinkKCID"
 
 #endif /* _PRELINK_H_ */
 

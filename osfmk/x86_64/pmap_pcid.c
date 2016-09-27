@@ -242,15 +242,24 @@ void	pmap_destroy_pcid_sync(pmap_t p) {
 			pmap_pcid_deallocate_pcid(i, p);
 }
 
-pcid_t	pcid_for_pmap_cpu_tuple(pmap_t pmap, int ccpu) {
-	return pmap->pmap_pcid_cpus[ccpu];
+pcid_t	pcid_for_pmap_cpu_tuple(pmap_t cpmap, thread_t cthread, int ccpu) {
+	pmap_t active_pmap = cpmap;
+
+	if (__improbable(cpmap->pagezero_accessible)) {
+		if ((cthread->machine.specFlags & CopyIOActive) == 0) {
+			active_pmap = kernel_pmap;
+		}
+	}
+
+	return active_pmap->pmap_pcid_cpus[ccpu];
 }
+
 #if PMAP_ASSERT
 #define PCID_RECORD_SIZE 128
 uint64_t pcid_record_array[PCID_RECORD_SIZE];
 #endif
 
-void	pmap_pcid_activate(pmap_t tpmap, int ccpu) {
+void	pmap_pcid_activate(pmap_t tpmap, int ccpu, boolean_t nopagezero, boolean_t copyio) {
 	pcid_t		new_pcid = tpmap->pmap_pcid_cpus[ccpu];
 	pmap_t		last_pmap;
 	boolean_t	pcid_conflict = FALSE, pending_flush = FALSE;
@@ -259,8 +268,9 @@ void	pmap_pcid_activate(pmap_t tpmap, int ccpu) {
 	if (__improbable(new_pcid == PMAP_PCID_INVALID_PCID)) {
 		new_pcid = tpmap->pmap_pcid_cpus[ccpu] = pmap_pcid_allocate_pcid(ccpu);
 	}
+
 	pmap_assert(new_pcid != PMAP_PCID_INVALID_PCID);
-#ifdef	PCID_ASSERT	
+#ifdef	PCID_ASSERT
 	cpu_datap(ccpu)->cpu_last_pcid = cpu_datap(ccpu)->cpu_active_pcid;
 #endif
 	cpu_datap(ccpu)->cpu_active_pcid = new_pcid;
@@ -268,7 +278,7 @@ void	pmap_pcid_activate(pmap_t tpmap, int ccpu) {
 	pending_flush = (tpmap->pmap_pcid_coherency_vector[ccpu] != 0);
 	if (__probable(pending_flush == FALSE)) {
 		last_pmap = cpu_datap(ccpu)->cpu_pcid_last_pmap_dispatched[new_pcid];
-		pcid_conflict = ((last_pmap != NULL) &&(tpmap != last_pmap));
+		pcid_conflict = ((last_pmap != NULL) && (tpmap != last_pmap));
 	}
 	if (__improbable(pending_flush || pcid_conflict)) {
 		pmap_pcid_validate_cpu(tpmap, ccpu);
@@ -277,7 +287,8 @@ void	pmap_pcid_activate(pmap_t tpmap, int ccpu) {
 	cpu_datap(ccpu)->cpu_pcid_last_pmap_dispatched[new_pcid] = tpmap;
 
 	pmap_assert(new_pcid < PMAP_PCID_MAX_PCID);
-	pmap_assert(((tpmap ==  kernel_pmap) && new_pcid == 0) || ((new_pcid != PMAP_PCID_INVALID_PCID) && (new_pcid != 0)));
+	pmap_assert(((tpmap ==  kernel_pmap) && new_pcid == 0) ||
+	    ((new_pcid != PMAP_PCID_INVALID_PCID) && (new_pcid != 0)));
 #if	PMAP_ASSERT
 	pcid_record_array[ccpu % PCID_RECORD_SIZE] = tpmap->pm_cr3 | new_pcid | (((uint64_t)(!(pending_flush || pcid_conflict))) <<63);
 	pml4_entry_t *pml4 = pmap64_pml4(tpmap, 0ULL);
@@ -285,7 +296,19 @@ void	pmap_pcid_activate(pmap_t tpmap, int ccpu) {
 	if (pml4[KERNEL_PML4_INDEX] != kernel_pmap->pm_pml4[KERNEL_PML4_INDEX])
 		__asm__ volatile("int3");
 #endif	/* PMAP_ASSERT */
-	set_cr3_composed(tpmap->pm_cr3, new_pcid, !(pending_flush || pcid_conflict));
+
+	pmap_paddr_t ncr3 = tpmap->pm_cr3;
+
+	if (__improbable(nopagezero)) {
+		pending_flush = TRUE;
+		if (copyio == FALSE) {
+			new_pcid = kernel_pmap->pmap_pcid_cpus[ccpu];
+			ncr3 = kernel_pmap->pm_cr3;
+		}
+		cpu_datap(ccpu)->cpu_kernel_pcid = kernel_pmap->pmap_pcid_cpus[ccpu];
+	}
+
+	set_cr3_composed(ncr3, new_pcid, !(pending_flush || pcid_conflict));
 
 	if (!pending_flush) {
 		/* We did not previously observe a pending invalidation for this
@@ -300,7 +323,7 @@ void	pmap_pcid_activate(pmap_t tpmap, int ccpu) {
 		pending_flush = (tpmap->pmap_pcid_coherency_vector[ccpu] != 0);
 		if (__improbable(pending_flush != 0)) {
 			pmap_pcid_validate_cpu(tpmap, ccpu);
-			set_cr3_composed(tpmap->pm_cr3, new_pcid, FALSE);
+			set_cr3_composed(ncr3, new_pcid, FALSE);
 		}
 	}
 	cpu_datap(ccpu)->cpu_pmap_pcid_coherentp = &(tpmap->pmap_pcid_coherency_vector[ccpu]);

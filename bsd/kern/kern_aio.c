@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -304,7 +304,7 @@ aio_workq_init(aio_workq_t wq)
 	TAILQ_INIT(&wq->aioq_entries);
 	wq->aioq_count = 0;
 	lck_mtx_init(&wq->aioq_mtx, aio_queue_lock_grp, aio_lock_attr);
-	waitq_init(&wq->aioq_waitq, SYNC_POLICY_FIFO|SYNC_POLICY_DISABLE_IRQ);
+	waitq_init(&wq->aioq_waitq, SYNC_POLICY_FIFO);
 }
 
 
@@ -1654,8 +1654,9 @@ ExitRoutine:
  * we get a wake up call on sleep channel &aio_anchor.aio_async_workq 
  * after new work is queued up.
  */
+__attribute__((noreturn))
 static void
-aio_work_thread( void )
+aio_work_thread(void)
 {
 	aio_workq_entry		 	*entryp;
 	int 			error;

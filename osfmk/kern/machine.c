@@ -329,6 +329,8 @@ processor_offline(
 	processor->active_thread = new_thread;
 	processor->current_pri = IDLEPRI;
 	processor->current_thmode = TH_MODE_NONE;
+	processor->starting_pri = IDLEPRI;
+	processor->current_sfi_class = SFI_CLASS_KERNEL;
 	processor->deadline = UINT64_MAX;
 	new_thread->last_processor = processor;
 

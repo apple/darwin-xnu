@@ -44,6 +44,9 @@ _OSlibkernInit
 _SHA1Final
 _SHA1Init
 _SHA1Update
+_SHA384_Final
+_SHA384_Init
+_SHA384_Update
 _STRDUP
 __Z13OSUnserializePKcPP8OSString
 __Z16OSUnserializeXMLPKcPP8OSString
@@ -391,7 +394,6 @@ __ZN9OSBooleanD2Ev
 __ZNK10OSIterator12getMetaClassEv
 __ZNK10OSIterator9MetaClass5allocEv
 __ZNK11OSMetaClass12getClassNameEv
-__ZNK11OSMetaClass18getClassNameSymbolEv
 __ZNK11OSMetaClass12getClassSizeEv
 __ZNK11OSMetaClass12getMetaClassEv
 __ZNK11OSMetaClass12taggedRetainEPKv
@@ -402,6 +404,7 @@ __ZNK11OSMetaClass13taggedReleaseEPKvi
 __ZNK11OSMetaClass14getRetainCountEv
 __ZNK11OSMetaClass14reservedCalledEi
 __ZNK11OSMetaClass16getInstanceCountEv
+__ZNK11OSMetaClass18getClassNameSymbolEv
 __ZNK11OSMetaClass18instanceDestructedEv
 __ZNK11OSMetaClass19instanceConstructedEv
 __ZNK11OSMetaClass6retainEv
@@ -587,8 +590,11 @@ __Znam
 __Znwm
 ___bzero
 ___cxa_pure_virtual
+___llvm_profile_runtime
 ___stack_chk_fail
 ___stack_chk_guard
+__os_log_default
+__os_log_internal
 _adler32
 _atoi
 _bcmp
@@ -628,10 +634,11 @@ _invalidate_icache64
 _itoa
 _kOSBooleanFalse
 _kOSBooleanTrue
+_kdp_lck_spin_is_acquired
 _kern_os_free
 _kern_os_malloc
-_kern_os_malloc_size
 _kern_os_realloc
+_kext_assertions_enable
 _kprintf
 _lck_attr_alloc_init
 _lck_attr_free
@@ -644,11 +651,14 @@ _lck_grp_attr_setdefault
 _lck_grp_attr_setstat
 _lck_grp_free
 _lck_mtx_alloc_init
+_lck_mtx_convert_spin
 _lck_mtx_destroy
 _lck_mtx_free
 _lck_mtx_init
 _lck_mtx_lock
+_lck_mtx_lock_spin
 _lck_mtx_try_lock
+_lck_mtx_try_lock_spin
 _lck_mtx_unlock
 _lck_rw_alloc_init
 _lck_rw_destroy
@@ -677,6 +687,11 @@ _memset
 _ml_at_interrupt_context
 _ml_get_interrupts_enabled
 _ml_set_interrupts_enabled
+_os_log_create
+_os_log_debug_enabled
+_os_log_info_enabled
+_os_release
+_os_retain
 _osrelease
 _ostype
 _page_mask
@@ -729,4 +744,3 @@ _vsnprintf
 _vsscanf
 _zError
 _zlibVersion
-___llvm_profile_runtime

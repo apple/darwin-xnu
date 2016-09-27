@@ -145,7 +145,7 @@ _rtc_nanotime_init(pal_rtc_nanotime_t *rntp, uint64_t base)
 	_pal_rtc_nanotime_store(tsc, base, rntp->scale, rntp->shift, rntp);
 }
 
-static void
+void
 rtc_nanotime_init(uint64_t base)
 {
 	_rtc_nanotime_init(&pal_rtc_nanotime_info, base);
@@ -265,6 +265,10 @@ rtc_sleep_wakeup(
 	rtc_nanotime_init(base);
 }
 
+void
+rtc_decrementer_configure(void) {
+	rtc_timer->rtc_config();
+}
 /*
  * rtclock_early_init() is called very early at boot to
  * establish mach_absolute_time() and set it to zero.

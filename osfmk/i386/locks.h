@@ -71,47 +71,38 @@ typedef	struct __lck_spin_t__	lck_spin_t;
 typedef struct _lck_mtx_ {
 	union {
 		struct {
-			volatile uintptr_t		lck_mtxd_owner;
+			volatile uintptr_t		lck_mtx_owner;
 			union {
 				struct {
 					volatile uint32_t
-						lck_mtxd_waiters:16,
-						lck_mtxd_pri:8,
-						lck_mtxd_ilocked:1,
-						lck_mtxd_mlocked:1,
-						lck_mtxd_promoted:1,
-						lck_mtxd_spin:1,
-						lck_mtxd_is_ext:1,
-						lck_mtxd_pad3:3;
+						lck_mtx_waiters:16,
+						lck_mtx_pri:8,
+						lck_mtx_ilocked:1,
+						lck_mtx_mlocked:1,
+						lck_mtx_promoted:1,
+						lck_mtx_spin:1,
+						lck_mtx_is_ext:1,
+						lck_mtx_pad3:3;
 				};
-					uint32_t	lck_mtxd_state;
+					uint32_t	lck_mtx_state;
 			};
 			/* Pad field used as a canary, initialized to ~0 */
-			uint32_t			lck_mtxd_pad32;
-		} lck_mtxd;
+			uint32_t			lck_mtx_pad32;
+		};
 		struct {
-			struct _lck_mtx_ext_		*lck_mtxi_ptr;
-			uint32_t			lck_mtxi_tag;
-			uint32_t			lck_mtxi_pad32;
-		} lck_mtxi;
-	} lck_mtx_sw;
+			struct _lck_mtx_ext_		*lck_mtx_ptr;
+			uint32_t			lck_mtx_tag;
+			uint32_t			lck_mtx_pad32_2;
+		};
+	};
 } lck_mtx_t;
 
-#define	lck_mtx_owner	lck_mtx_sw.lck_mtxd.lck_mtxd_owner
-#define	lck_mtx_waiters	lck_mtx_sw.lck_mtxd.lck_mtxd_waiters
-#define	lck_mtx_pri	lck_mtx_sw.lck_mtxd.lck_mtxd_pri
-#define	lck_mtx_promoted lck_mtx_sw.lck_mtxd.lck_mtxd_promoted
-#define lck_mtx_is_ext  lck_mtx_sw.lck_mtxd.lck_mtxd_is_ext
-
-#define lck_mtx_tag	lck_mtx_sw.lck_mtxi.lck_mtxi_tag
-#define lck_mtx_ptr	lck_mtx_sw.lck_mtxi.lck_mtxi_ptr
-#define lck_mtx_state	lck_mtx_sw.lck_mtxd.lck_mtxd_state
 /* This pattern must subsume the interlocked, mlocked and spin bits */
 #define	LCK_MTX_TAG_INDIRECT			0x07ff1007	/* lock marked as Indirect  */
 #define	LCK_MTX_TAG_DESTROYED			0x07fe2007	/* lock marked as Destroyed */
 
 /* Adaptive spin before blocking */
-extern unsigned int	MutexSpin;
+extern uint64_t 	MutexSpin;
 extern int		lck_mtx_lock_spinwait_x86(lck_mtx_t *mutex);
 extern void		lck_mtx_lock_wait_x86(lck_mtx_t *mutex);
 extern void		lck_mtx_lock_acquire_x86(lck_mtx_t *mutex);
@@ -214,6 +205,21 @@ typedef struct _lck_rw_t_internal_ {
 #define	LCK_RW_ATTR_DIS_MYLOCKb	28
 
 #define	LCK_RW_TAG_DESTROYED		0x00002007	/* lock marked as Destroyed */
+
+#if LOCK_PRIVATE
+
+#define disable_preemption_for_thread(t) ((cpu_data_t GS_RELATIVE *)0UL)->cpu_preemption_level++
+
+#define LCK_MTX_THREAD_TO_STATE(t)	((uintptr_t)t)
+#define PLATFORM_LCK_ILOCK		0
+
+#define LOCK_SNOOP_SPINS	1000
+#define LOCK_PRETEST		1
+
+/* Spinlock panic deadline, in mach_absolute_time units (ns on i386) */
+#define LOCK_PANIC_TIMEOUT	0xf00000  /* 250 ms (huge) */
+
+#endif	// LOCK_PRIVATE
 
 #else
 #ifdef	KERNEL_PRIVATE

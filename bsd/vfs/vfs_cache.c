@@ -178,7 +178,214 @@ static unsigned int crc32tab[256];
 #define NCHHASH(dvp, hash_val) \
 	(&nchashtbl[(dvp->v_id ^ (hash_val)) & nchashmask])
 
+/*
+ * This function tries to check if a directory vp is a subdirectory of dvp
+ * only from valid v_parent pointers. It is called with the name cache lock
+ * held and does not drop the lock anytime inside the function.
+ *
+ * It returns a boolean that indicates whether or not it was able to
+ * successfully infer the parent/descendent relationship via the v_parent
+ * pointers, or if it could not infer such relationship and that the decision
+ * must be delegated to the owning filesystem.
+ *
+ * If it does not defer the decision, i.e. it was successfuly able to determine
+ * the parent/descendent relationship,  *is_subdir tells the caller if vp is a
+ * subdirectory of dvp.
+ *
+ * If the decision is deferred, *next_vp is where it stopped i.e. *next_vp
+ * is the vnode whose parent is to be determined from the filesystem.
+ * *is_subdir, in this case, is not indicative of anything and should be
+ * ignored.
+ *
+ * The return value and output args should be used as follows :
+ *
+ * defer = cache_check_vnode_issubdir(vp, dvp, is_subdir, next_vp);
+ * if (!defer) {
+ * 	if (*is_subdir)
+ * 		vp is subdirectory;
+ * 	else
+ * 		vp is not a subdirectory;
+ * } else {
+ * 	if (*next_vp)
+ * 		check this vnode's parent from the filesystem
+ * 	else
+ * 		error (likely because of forced unmount).
+ * }
+ *
+ */
+static boolean_t
+cache_check_vnode_issubdir(vnode_t vp, vnode_t dvp, boolean_t *is_subdir,
+    vnode_t *next_vp)
+{
+	vnode_t tvp = vp;
+	int defer = FALSE;
 
+	*is_subdir = FALSE;
+	*next_vp = NULLVP;
+	while (1) {
+		mount_t tmp;
+
+		if (tvp == dvp) {
+			*is_subdir = TRUE;
+			break;
+		} else if (tvp == rootvnode) {
+			/* *is_subdir = FALSE */
+			break;
+		}
+
+		tmp = tvp->v_mount;
+		while ((tvp->v_flag & VROOT) && tmp && tmp->mnt_vnodecovered &&
+		    tvp != dvp && tvp != rootvnode) {
+			tvp = tmp->mnt_vnodecovered;
+			tmp = tvp->v_mount;
+		}
+
+		/*
+		 * If dvp is not at the top of a mount "stack" then
+		 * vp is not a subdirectory of dvp either.
+		 */
+		if (tvp == dvp || tvp == rootvnode) {
+			/* *is_subdir = FALSE */
+			break;
+		}
+
+		if (!tmp) {
+			defer = TRUE;
+			*next_vp = NULLVP;
+			break;
+		}
+
+		if ((tvp->v_flag & VISHARDLINK) || !(tvp->v_parent)) {
+			defer = TRUE;
+			*next_vp = tvp;
+			break;
+		}
+
+		tvp = tvp->v_parent;
+	}
+
+	return (defer);
+}
+
+/* maximum times retry from potentially transient errors in vnode_issubdir */
+#define MAX_ERROR_RETRY 3
+
+/*
+ * This function checks if a given directory (vp) is a subdirectory of dvp.
+ * It walks backwards from vp and if it hits dvp in its parent chain,
+ * it is a subdirectory. If it encounters the root directory, it is not
+ * a subdirectory.
+ *
+ * This function returns an error if it is unsuccessful and 0 on success.
+ *
+ * On entry (and exit) vp has an iocount and if this function has to take
+ * any iocounts on other vnodes in the parent chain traversal, it releases them.
+ */
+int
+vnode_issubdir(vnode_t vp, vnode_t dvp, int *is_subdir, vfs_context_t ctx)
+{
+	vnode_t start_vp, tvp;
+	vnode_t vp_with_iocount;
+	int error = 0;
+	char dotdotbuf[] = "..";
+	int error_retry_count = 0; /* retry count for potentially transient
+	                              errors */
+
+	*is_subdir = FALSE;
+	tvp = start_vp = vp;
+	/*
+	 * Anytime we acquire an iocount in this function, we save the vnode
+	 * in this variable and release it before exiting.
+	 */
+	vp_with_iocount = NULLVP;
+
+	while (1) {
+		boolean_t defer;
+		vnode_t pvp;
+		uint32_t vid;
+		struct componentname cn;
+		boolean_t is_subdir_locked = FALSE;
+
+		if (tvp == dvp) {
+			*is_subdir = TRUE;
+			break;
+		} else if (tvp == rootvnode) {
+			/* *is_subdir = FALSE */
+			break;
+		}
+
+		NAME_CACHE_LOCK_SHARED();
+
+		defer = cache_check_vnode_issubdir(tvp, dvp, &is_subdir_locked,
+		    &tvp);
+
+		if (defer && tvp)
+			vid = vnode_vid(tvp);
+
+		NAME_CACHE_UNLOCK();
+
+		if (!defer) {
+			*is_subdir = is_subdir_locked;
+			break;
+		}
+
+		if (!tvp) {
+			if (error_retry_count++ < MAX_ERROR_RETRY) {
+				tvp = vp;
+				continue;
+			}
+			error = ENOENT;
+			break;
+		}
+
+		if (tvp != start_vp) {
+			if (vp_with_iocount) {
+				vnode_put(vp_with_iocount);
+				vp_with_iocount = NULLVP;
+			}
+
+			error = vnode_getwithvid(tvp, vid);
+			if (error) {
+				if (error_retry_count++ < MAX_ERROR_RETRY) {
+					tvp = vp;
+					error = 0;
+					continue;
+				}
+				break;
+			}
+
+			vp_with_iocount = tvp;
+		}
+
+		bzero(&cn, sizeof(cn));
+		cn.cn_nameiop = LOOKUP;
+		cn.cn_flags = ISLASTCN | ISDOTDOT;
+		cn.cn_context = ctx;
+		cn.cn_pnbuf = &dotdotbuf[0];
+		cn.cn_pnlen = sizeof(dotdotbuf);
+		cn.cn_nameptr = cn.cn_pnbuf;
+		cn.cn_namelen = 2;
+
+		pvp = NULLVP;
+		if ((error = VNOP_LOOKUP(tvp, &pvp, &cn, ctx)))
+			break;
+
+		if (!(tvp->v_flag & VISHARDLINK) && tvp->v_parent != pvp) {
+			(void)vnode_update_identity(tvp, pvp, NULL, 0, 0,
+			    VNODE_UPDATE_PARENT);
+		}
+
+		if (vp_with_iocount)
+			vnode_put(vp_with_iocount);
+
+		vp_with_iocount = tvp = pvp;
+	}
+
+	if (vp_with_iocount)
+		vnode_put(vp_with_iocount);
+
+	return (error);
+}
 
 /*
  * This function builds the path to a filename in "buff".  The
@@ -466,6 +673,26 @@ bad_news:
 				vp = vp->v_parent;
 		}
 
+		if (vp && (flags & BUILDPATH_CHECKACCESS)) {
+			vid = vp->v_id;
+
+			NAME_CACHE_UNLOCK();
+
+			if (vp != first_vp && vp != vp_with_iocount) {
+				if (vp_with_iocount) {
+					vnode_put(vp_with_iocount);
+					vp_with_iocount = NULLVP;
+				}
+				if (vnode_getwithvid(vp, vid))
+					goto again;
+				vp_with_iocount = vp;
+			}
+			if ((ret = vnode_authorize(vp, NULL, KAUTH_VNODE_SEARCH, ctx)))
+				goto out;  	/* no peeking */
+
+			NAME_CACHE_LOCK_SHARED();
+		}
+
 		/*
 		 * When a mount point is crossed switch the vp.
 		 * Continue until we find the root or we find
@@ -491,26 +718,6 @@ bad_news:
 		if (tvp == NULLVP)
 			goto out_unlock;
 		vp = tvp;
-
-		if (vp && (flags & BUILDPATH_CHECKACCESS)) {
-			vid = vp->v_id;
-
-			NAME_CACHE_UNLOCK();
-
-			if (vp != first_vp && vp != vp_with_iocount) {
-				if (vp_with_iocount) {
-					vnode_put(vp_with_iocount);
-					vp_with_iocount = NULLVP;
-				}
-				if (vnode_getwithvid(vp, vid))
-					goto again;
-				vp_with_iocount = vp;
-			}
-			if ((ret = vnode_authorize(vp, NULL, KAUTH_VNODE_SEARCH, ctx)))
-				goto out;  	/* no peeking */
-
-			NAME_CACHE_LOCK_SHARED();
-		}
 	}
 out_unlock:
 	NAME_CACHE_UNLOCK();
@@ -700,7 +907,7 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 			while ( (ncp = LIST_FIRST(&vp->v_nclinks)) )
 				cache_delete(ncp, 1);
 
-			while ( (ncp = LIST_FIRST(&vp->v_ncchildren)) )
+			while ( (ncp = TAILQ_FIRST(&vp->v_ncchildren)) )
 				cache_delete(ncp, 1);
 
 			/*
@@ -1060,6 +1267,7 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
         mount_t		mp;
 	unsigned int	hash;
 	int		error = 0;
+	boolean_t	dotdotchecked = FALSE;
 
 #if CONFIG_TRIGGERS
 	vnode_t 	trigger_vp;
@@ -1175,7 +1383,7 @@ skiprsrcfork:
 		 * NAME_CACHE_LOCK holds these fields stable
 		 *
 		 * We can't cache KAUTH_VNODE_SEARCHBYANYONE for root correctly
-		 * so  we make an ugly check for root here. root is always
+		 * so we make an ugly check for root here. root is always
 		 * allowed and breaking out of here only to find out that is
 		 * authorized by virtue of being root is very very expensive.
 		 */
@@ -1234,9 +1442,53 @@ skiprsrcfork:
 		 */
 		if (cnp->cn_namelen == 1 && cnp->cn_nameptr[0] == '.')
 			vp = dp;
-		else if ( (cnp->cn_flags & ISDOTDOT) )
-			vp = dp->v_parent;
-		else {
+		else if ( (cnp->cn_flags & ISDOTDOT) ) {
+			/*
+			 * If this is a chrooted process, we need to check if
+			 * the process is trying to break out of its chrooted
+			 * jail. We do that by trying to determine if dp is
+			 * a subdirectory of ndp->ni_rootdir. If we aren't
+			 * able to determine that by the v_parent pointers, we
+			 * will leave the fast path.
+			 *
+			 * Since this function may see dotdot components
+			 * many times and it has the name cache lock held for
+			 * the entire duration, we optimise this by doing this
+			 * check only once per cache_lookup_path call.
+			 * If dotdotchecked is set, it means we've done this
+			 * check once already and don't need to do it again.
+			 */
+			if (!dotdotchecked && (ndp->ni_rootdir != rootvnode)) {
+				vnode_t tvp = dp;
+				boolean_t defer = FALSE;
+				boolean_t is_subdir = FALSE;
+
+				defer = cache_check_vnode_issubdir(tvp,
+				    ndp->ni_rootdir, &is_subdir, &tvp);
+
+				if (defer) {
+					/* defer to Filesystem */
+					break;
+				} else if (!is_subdir) {
+					/*
+					 * This process is trying to break  out
+					 * of its chrooted jail, so all its
+					 * dotdot accesses will be translated to
+					 * its root directory.
+					 */
+					vp = ndp->ni_rootdir;
+				} else {
+					/*
+					 * All good, let this dotdot access
+					 * proceed normally
+					 */
+					vp = dp->v_parent;
+				}
+				dotdotchecked = TRUE;
+			} else {
+				vp = dp->v_parent;
+			}
+		} else {
 			if ( (vp = cache_lookup_locked(dp, cnp)) == NULLVP)
 				break;
 
@@ -1784,7 +2036,10 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 	 * add us to the list of name cache entries that
 	 * are children of dvp
 	 */
-	LIST_INSERT_HEAD(&dvp->v_ncchildren, ncp, nc_child);
+	if (vp)
+		TAILQ_INSERT_TAIL(&dvp->v_ncchildren, ncp, nc_child);
+	else
+		TAILQ_INSERT_HEAD(&dvp->v_ncchildren, ncp, nc_child);
 }
 
 
@@ -1956,7 +2211,7 @@ cache_delete(struct namecache *ncp, int age_entry)
 	        TAILQ_REMOVE(&neghead, ncp, nc_un.nc_negentry);
 	        ncs_negtotal--;
 	}
-        LIST_REMOVE(ncp, nc_child);
+        TAILQ_REMOVE(&(ncp->nc_dvp->v_ncchildren), ncp, nc_child);
 
 	LIST_REMOVE(ncp, nc_hash);
 	/*
@@ -1991,7 +2246,7 @@ cache_purge(vnode_t vp)
 	kauth_cred_t tcred = NULL;
 
 	if ((LIST_FIRST(&vp->v_nclinks) == NULL) && 
-			(LIST_FIRST(&vp->v_ncchildren) == NULL) && 
+			(TAILQ_FIRST(&vp->v_ncchildren) == NULL) &&
 			(vp->v_cred == NOCRED) &&
 			(vp->v_parent == NULLVP))
 	        return;
@@ -2004,7 +2259,7 @@ cache_purge(vnode_t vp)
 	while ( (ncp = LIST_FIRST(&vp->v_nclinks)) )
 	        cache_delete(ncp, 1);
 
-	while ( (ncp = LIST_FIRST(&vp->v_ncchildren)) )
+	while ( (ncp = TAILQ_FIRST(&vp->v_ncchildren)) )
 	        cache_delete(ncp, 1);
 
 	/*
@@ -2034,9 +2289,12 @@ cache_purge_negatives(vnode_t vp)
 
 	NAME_CACHE_LOCK();
 
-	LIST_FOREACH_SAFE(ncp, &vp->v_ncchildren, nc_child, next_ncp)
-		if (ncp->nc_vp == NULL)
-			cache_delete(ncp , 1);
+	TAILQ_FOREACH_SAFE(ncp, &vp->v_ncchildren, nc_child, next_ncp) {
+		if (ncp->nc_vp)
+			break;
+
+		cache_delete(ncp, 1);
+	}
 
 	NAME_CACHE_UNLOCK();
 }
@@ -2167,6 +2425,9 @@ add_name_internal(const char *name, uint32_t len, u_int hashval, boolean_t need_
         uint32_t	  lock_index;
 	char              *ptr;
     
+	if (len > MAXPATHLEN)
+		len = MAXPATHLEN;
+
 	/*
 	 * if the length already accounts for the null-byte, then
 	 * subtract one so later on we don't index past the end

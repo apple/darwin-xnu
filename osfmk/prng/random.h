@@ -50,7 +50,7 @@ extern entropy_data_t EntropyData;
 /*
  * Early_random implementation params: */
 #define	EARLY_RANDOM_SEED_SIZE		(16)
-#define	EARLY_RANDOM_STATE_STATIC_SIZE	(256)
+#define	EARLY_RANDOM_STATE_STATIC_SIZE	(264)
 
 #if defined (__x86_64__)
 #define current_prng_context()	(current_cpu_datap()->cpu_prng)

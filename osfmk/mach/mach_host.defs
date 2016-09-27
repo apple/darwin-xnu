@@ -275,7 +275,11 @@ skip;
  *	Create a new voucher by running a series of commands against
  *	<key, previous-voucher> pairs of resource attributes.
  */
+#if !KERNEL && !LIBSYSCALL_INTERFACE
+routine _kernelrpc_host_create_mach_voucher(
+#else
 routine host_create_mach_voucher(
+#endif
 		host		: host_t;
 		recipes		: mach_voucher_attr_raw_recipe_array_t;
 	out	voucher		: ipc_voucher_t);

@@ -64,17 +64,6 @@
 #include <mach/machine/vm_types.h>
 
 /*
- *	External page management hint technology
- *
- *	The data structure exported by this module maintains
- *	a (potentially incomplete) map of the pages written
- *	to external storage for a range of virtual memory.
- */
-
-typedef char	*vm_external_map_t;
-#define	VM_EXTERNAL_NULL	((char *) 0)
-
-/*
  *	The states that may be recorded for a page of external storage.
  */
 
@@ -82,66 +71,5 @@ typedef int	vm_external_state_t;
 #define	VM_EXTERNAL_STATE_EXISTS		1
 #define	VM_EXTERNAL_STATE_UNKNOWN		2
 #define	VM_EXTERNAL_STATE_ABSENT		3
-
-/*
- * Useful macros
- */
-#define stob(s)	((atop_64((s)) + 07) >> 3)
-
-/*
- *	Routines exported by this module.
- */
-					/* Initialize the module */
-extern void			vm_external_module_initialize(void);
-
-
-extern vm_external_map_t	vm_external_create(
-					/* Create a vm_external_map_t */
-					vm_object_size_t	size);
-
-extern void			vm_external_destroy(
-					/* Destroy one */
-					vm_external_map_t	map,
-					vm_object_size_t	size);
-
-extern vm_object_size_t		vm_external_map_size(
-					/* Return size of map in bytes */
-					vm_object_size_t	size);
-
-extern void			vm_external_copy(
-					/* Copy one into another */
-					vm_external_map_t	old_map,
-					vm_object_size_t	old_size,
-					vm_external_map_t	new_map);
-
-extern void			vm_external_state_set(	
-					/* Set state of a page to
-					 * VM_EXTERNAL_STATE_EXISTS */
-					vm_external_map_t	map,
-					vm_object_offset_t	offset);
-
-extern void			vm_external_state_clr(	
-					/* clear page state
-					 */
-					vm_external_map_t	map,
-					vm_object_offset_t	offset);
-
-#define	vm_external_state_get(map, offset)			  	\
-			(((map) != VM_EXTERNAL_NULL) ? 			\
-			  _vm_external_state_get((map), (offset)) :	\
-			  VM_EXTERNAL_STATE_UNKNOWN)
-					/* Retrieve the state for a
-					 * given page, if known.  */
-
-extern vm_external_state_t	_vm_external_state_get(
-					/* HIDDEN routine */
-					vm_external_map_t	map,
-					vm_object_offset_t	offset);
-
-boolean_t			vm_external_within(
-					/* Check if new object size
-					 * fits in current map */
-					vm_object_size_t	new_size, 
-					vm_object_size_t	old_size);
 
 #endif	/* VM_VM_EXTERNAL_H_ */

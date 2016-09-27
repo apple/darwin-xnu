@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -146,10 +146,6 @@
 extern int ipsec_bypass;
 #endif /* IPSEC */
 
-#if IPFW2
-#include <netinet6/ip6_fw.h>
-#endif /* IPFW2 */
-
 #if DUMMYNET
 #include <netinet/ip_fw.h>
 #include <netinet/ip_dummynet.h>
@@ -177,13 +173,6 @@ struct in6_ifaddr *in6_ifaddrs = NULL;
 
 #define	ICMP6_IFSTAT_REQUIRE_ALIGNED_64(f)	\
 	_CASSERT(!(offsetof(struct icmp6_ifstat, f) % sizeof (uint64_t)))
-
-#if IPFW2
-/* firewall hooks */
-ip6_fw_chk_t *ip6_fw_chk_ptr;
-ip6_fw_ctl_t *ip6_fw_ctl_ptr;
-int ip6_fw_enable = 1;
-#endif /* IPFW2 */
 
 struct ip6stat ip6stat;
 
@@ -216,11 +205,6 @@ extern void stfattach(void);
 #endif /* NSTF */
 
 SYSCTL_DECL(_net_inet6_ip6);
-
-int ip6_doscopedroute = 1;
-SYSCTL_INT(_net_inet6_ip6, OID_AUTO, scopedroute,
-	CTLFLAG_RD | CTLFLAG_LOCKED, &ip6_doscopedroute, 0,
-	"Enable IPv6 scoped routing");
 
 static uint32_t ip6_adj_clear_hwcksum = 0;
 SYSCTL_UINT(_net_inet6_ip6, OID_AUTO, adj_clear_hwcksum,
@@ -320,9 +304,6 @@ ip6_init(struct ip6protosw *pp, struct domain *dp)
 	if (ip6_initialized)
 		return;
 	ip6_initialized = 1;
-
-	PE_parse_boot_argn("net.inet6.ip6.scopedroute", &ip6_doscopedroute,
-	    sizeof (ip6_doscopedroute));
 
 	pr = pffindproto_locked(PF_INET6, IPPROTO_RAW, SOCK_RAW);
 	if (pr == NULL) {
@@ -702,22 +683,6 @@ ip6_input(struct mbuf *m)
 		goto bad;
 	}
 #endif
-#if IPFW2
-	/*
-	 * Check with the firewall...
-	 */
-	if (ip6_fw_enable && ip6_fw_chk_ptr) {
-		u_short port = 0;
-		/* If ipfw says divert, we have to just drop packet */
-		/* use port as a dummy argument */
-		if ((*ip6_fw_chk_ptr)(&ip6, NULL, &port, &m)) {
-			m_freem(m);
-			m = NULL;
-		}
-		if (!m)
-			goto done;
-	}
-#endif /* IPFW2 */
 
 	/*
 	 * Naively assume we can attribute inbound data to the route we would
@@ -1351,12 +1316,8 @@ ip6_hopopts_input(uint32_t *plenp, uint32_t *rtalertp, struct mbuf **mp,
  * opthead + hbhlen is located in continuous memory region.
  */
 int
-ip6_process_hopopts(m, opthead, hbhlen, rtalertp, plenp)
-	struct mbuf *m;
-	u_int8_t *opthead;
-	int hbhlen;
-	u_int32_t *rtalertp;
-	u_int32_t *plenp;
+ip6_process_hopopts(struct mbuf *m, u_int8_t *opthead, int hbhlen,
+		    u_int32_t *rtalertp, u_int32_t *plenp)
 {
 	struct ip6_hdr *ip6;
 	int optlen = 0;
@@ -1821,9 +1782,7 @@ ip6_notify_pmtu(struct inpcb *in6p, struct sockaddr_in6 *dst, u_int32_t *mtu)
  * we develop `neater' mechanism to process extension headers.
  */
 char *
-ip6_get_prevhdr(m, off)
-	struct mbuf *m;
-	int off;
+ip6_get_prevhdr(struct mbuf *m, int off)
 {
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 
@@ -1928,8 +1887,6 @@ ip6_nexthdr(struct mbuf *m, int off, int proto, int *nxtp)
 	default:
 		return (-1);
 	}
-
-	return (-1);
 }
 
 /*

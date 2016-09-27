@@ -73,6 +73,7 @@
 
 #include <net/if.h>
 #include <net/route.h>
+#include <net/kpi_protocol.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -301,6 +302,13 @@ in_dinit(struct domain *dp)
 	VERIFY(inetdomain == NULL);
 
 	inetdomain = dp;
+
+	/*
+	 * Verify that the maximum possible tcp/ip header will still
+	 * fit in a small mbuf because m_pullup only puls into 256
+	 * byte mbuf
+	 */
+	_CASSERT((sizeof(struct tcpiphdr) + TCP_MAXOLEN) <= _MHLEN);
 
 	/*
 	 * Attach first, then initialize; ip_init() needs raw IP handler.

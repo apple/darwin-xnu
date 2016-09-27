@@ -2126,7 +2126,7 @@ dtrace_imm_opnd(dis86_t *x, int wbit, int size, int opindex)
 {
 	int i;
 	int byte;
-	int valsize;
+	int valsize = 0;
 
 	if (x->d86_numopnds < (uint_t)opindex + 1)
 		x->d86_numopnds = (uint_t)opindex + 1;

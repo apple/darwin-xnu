@@ -612,7 +612,8 @@ ipc_object_copyin_from_kernel(
 		ip_lock(port);
 		if (ip_active(port)) {
 			assert(port->ip_receiver_name != MACH_PORT_NULL);
-			assert(port->ip_receiver == ipc_space_kernel);
+			assert((port->ip_receiver == ipc_space_kernel) ||
+                   (port->ip_receiver->is_node_id != HOST_LOCAL_NODE));
 			port->ip_mscount++;
 		}
 

@@ -1,7 +1,7 @@
 import lldb
 from xnu import *
 
-def _showStructPacking(symbol, prefix, begin_offset=0):
+def _showStructPacking(symbol, prefix, begin_offset=0, typedef=None):
   """
      recursively parse the field members of structure. 
      params : symbol (lldb.SBType) reference to symbol in binary
@@ -13,7 +13,11 @@ def _showStructPacking(symbol, prefix, begin_offset=0):
     ctype = "union"
   if symbol.GetTypeClass() == lldb.eTypeClassStruct :
     ctype = "struct"
-  outstr =  "[%4d] (%s) %s { " % (symbol.GetByteSize(), ctype, symbol.GetName()) + "\n"
+
+  if typedef:
+    outstr =  "[%4d] (%s) (%s) %s { " % (symbol.GetByteSize(), typedef, ctype, symbol.GetName()) + "\n"
+  else :
+    outstr =  "[%4d] (%s) %s { " % (symbol.GetByteSize(), ctype, symbol.GetName()) + "\n"
   numFields = symbol.GetNumberOfFields()
   _has_memory_hole = False
   _compact_size = 0    # asuming the struct is perfectly packed
@@ -33,7 +37,14 @@ def _showStructPacking(symbol, prefix, begin_offset=0):
       warningstr = "   *** Possible memory hole ***" 
       _compact_offset = m_offset
     _compact_offset += m_size
-    if m_type.GetTypeClass() == lldb.eTypeClassStruct or m_type.GetTypeClass() == lldb.eTypeClassUnion :
+
+    _type_class = m_type.GetTypeClass()
+    _canonical_type = m_type.GetCanonicalType()
+    _canonical_type_class = m_type.GetCanonicalType().GetTypeClass()
+
+    if _type_class == lldb.eTypeClassTypedef and (_canonical_type_class == lldb.eTypeClassStruct or _canonical_type_class == lldb.eTypeClassUnion) :
+      outstr += prefix + ("*%4d," % m_offset) + _showStructPacking(_canonical_type, prefix+"    ", m_offset, str(m_type)) + warningstr + debugstr + "\n"
+    elif _type_class == lldb.eTypeClassStruct or _type_class == lldb.eTypeClassUnion :
       outstr += prefix + ("*%4d," % m_offset) + _showStructPacking(m_type, prefix+"    ", m_offset) + warningstr + debugstr + "\n"
     else:
       outstr += prefix + ("+%4d,[%4d] (%s) %s" % (m_offset, m_size, m_type.GetName(), m_name)) + warningstr + debugstr + "\n"

@@ -6933,7 +6933,6 @@ nfs_vnop_ioctl(
 	case NFS_FSCTL_SET_CRED:
 		if (!auth_is_kerberized(mp->nm_auth))
 			return (ENOTSUP);
-		NFS_DBG(NFS_FAC_GSS, 7, "Enter NFS_FSCTL_SET_CRED (proc %d) data = %p\n", vfs_context_is64bit(ctx), (void *)ap->a_data);
 		if (vfs_context_is64bit(ctx)) {
 			gprinc = *(struct user_nfs_gss_principal *)ap->a_data;
 		} else {
@@ -6943,9 +6942,9 @@ nfs_vnop_ioctl(
 			gprinc.nametype = tp->nametype;
 			gprinc.principal = CAST_USER_ADDR_T(tp->principal);
 		}
+		NFS_DBG(NFS_FAC_GSS, 7, "Enter NFS_FSCTL_SET_CRED (64-bit=%d): principal length %d name type %d usr pointer 0x%llx\n", vfs_context_is64bit(ctx), gprinc.princlen, gprinc.nametype, (unsigned long long)gprinc.principal);
 		if (gprinc.princlen > MAXPATHLEN)
 			return (EINVAL);
-		NFS_DBG(NFS_FAC_GSS, 7, "Received principal length %d name type = %d\n", gprinc.princlen, gprinc.nametype);
 		uint8_t *p;
 		MALLOC(p, uint8_t *, gprinc.princlen+1, M_TEMP, M_WAITOK|M_ZERO);
 		if (p == NULL)
@@ -6997,7 +6996,8 @@ nfs_vnop_ioctl(
 			NFS_DBG(NFS_FAC_GSS, 7, "NFS_FSCTL_GET_CRED could not copy out princiapl data of len %d: %d\n",
 				gprinc.princlen, error);
 		}
-		FREE(gprinc.principal, M_TEMP);
+		if (gprinc.principal)
+			FREE(gprinc.principal, M_TEMP);
 	}
 
 	return (error);

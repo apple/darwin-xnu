@@ -59,14 +59,17 @@ typedef struct workq_reqthreads_req_s {unsigned long priority; int count;} *work
  */
 #define PTHREAD_FUNCTIONS_TABLE_VERSION 1
 
-typedef struct pthread_functions_s {
+typedef const struct pthread_functions_s {
 	int version;
 
 	/* internal calls, kernel core -> kext */
 	void (*pthread_init)(void);
 	int (*fill_procworkqueue)(proc_t p, struct proc_workqueueinfo * pwqinfo);
+
+	// UNUSED - TO BE DELETED
 	void (*workqueue_init_lock)(proc_t p);
 	void (*workqueue_destroy_lock)(proc_t p);
+
 	void (*workqueue_exit)(struct proc *p);
 	void (*workqueue_mark_exiting)(struct proc *p);
 	void (*workqueue_thread_yielded)(void);
@@ -108,11 +111,17 @@ typedef struct pthread_functions_s {
     /* Resolve a pthread_priority_t to a QoS/relative pri */
     integer_t (*thread_qos_from_pthread_priority)(unsigned long pthread_priority, unsigned long *flags);
 
-	/* padding for future */
-	void* _pad[95];
-} *pthread_functions_t;
+	/* try to get wq flags in debugger context */
+	uint32_t (*get_pwq_state_kdp)(proc_t p);
 
-typedef struct pthread_callbacks_s {
+	unsigned long (*pthread_priority_canonicalize)(unsigned long pthread_priority);
+	unsigned long (*pthread_priority_canonicalize2)(unsigned long pthread_priority, boolean_t propagation);
+
+	/* padding for future */
+	void * _pad[92];
+} * pthread_functions_t;
+
+typedef const struct pthread_callbacks_s {
 	int version;
 
 	/* config information */
@@ -129,16 +138,16 @@ typedef struct pthread_callbacks_s {
 	void (*proc_set_wqthread)(struct proc *t, user_addr_t addr);
 	int (*proc_get_pthsize)(struct proc *t);
 	void (*proc_set_pthsize)(struct proc *t, int size);
-	user_addr_t (*proc_get_targconc)(struct proc *t);
-	void (*proc_set_targconc)(struct proc *t, user_addr_t addr);
+	void *unused_was_proc_get_targconc;
+	void *unused_was_proc_set_targconc;
 	uint64_t (*proc_get_dispatchqueue_offset)(struct proc *t);
 	void (*proc_set_dispatchqueue_offset)(struct proc *t, uint64_t offset);
-	lck_spin_t* (*proc_get_wqlockptr)(struct proc *t);
-	boolean_t* (*proc_get_wqinitingptr)(struct proc *t);
+	void *unused_was_proc_get_wqlockptr;
+	void *unused_was_proc_get_wqinitingptr;
 	void* (*proc_get_wqptr)(struct proc *t);
 	void (*proc_set_wqptr)(struct proc *t, void* ptr);
-	int (*proc_get_wqsize)(struct proc *t);
-	void (*proc_set_wqsize)(struct proc *t, int sz);
+	void *unused_was_proc_get_wqsize;
+	void *unused_was_proc_set_wqsize;
 	void (*proc_lock)(struct proc *t);
 	void (*proc_unlock)(struct proc *t);
 	task_t (*proc_get_task)(struct proc *t);
@@ -174,9 +183,8 @@ typedef struct pthread_callbacks_s {
 	/* kern/clock.h */
 	void (*absolutetime_to_microtime)(uint64_t abstime, clock_sec_t *secs, clock_usec_t *microsecs);
 
-	/* osfmk/kern/task.h */
-	int (*proc_restore_workq_bgthreadpolicy)(thread_t t);
-	int (*proc_apply_workq_bgthreadpolicy)(thread_t t);
+	kern_return_t (*thread_set_workq_pri)(thread_t thread, integer_t priority, integer_t policy);
+	kern_return_t (*thread_set_workq_qos)(thread_t thread, int qos_tier, int relprio);
 
 	/* osfmk/kern/thread.h */
 	struct uthread* (*get_bsdthread_info)(thread_t th);
@@ -221,8 +229,9 @@ typedef struct pthread_callbacks_s {
 	uint64_t (*proc_get_dispatchqueue_serialno_offset)(struct proc *p);
 	void (*proc_set_dispatchqueue_serialno_offset)(struct proc *p, uint64_t offset);
 
-	user_addr_t (*proc_get_stack_addr_hint)(struct proc *p);
-	void (*proc_set_stack_addr_hint)(struct proc *p, user_addr_t stack_addr_hint);
+	int (*proc_usynch_thread_qos_add_override_for_resource_check_owner)(thread_t thread, int override_qos, boolean_t first_override_for_resource,
+			user_addr_t resource, int resource_type, user_addr_t user_lock_addr, mach_port_name_t user_lock_owner);
+	void *unused_was_proc_set_stack_addr_hint;
 
 	uint32_t (*proc_get_pthread_tsd_offset)(struct proc *p);
 	void (*proc_set_pthread_tsd_offset)(struct proc *p, uint32_t pthread_tsd_offset);
@@ -230,8 +239,8 @@ typedef struct pthread_callbacks_s {
 	kern_return_t (*thread_set_tsd_base)(thread_t thread, mach_vm_offset_t tsd_base);
 
 	int	(*proc_usynch_get_requested_thread_qos)(struct uthread *);
-	boolean_t (*proc_usynch_thread_qos_add_override)(struct uthread *, uint64_t tid, int override_qos, boolean_t first_override_for_resource);
-	boolean_t (*proc_usynch_thread_qos_remove_override)(struct uthread *, uint64_t tid);
+	void *unused_was_proc_usynch_thread_qos_add_override;
+	void *unused_was_proc_usynch_thread_qos_remove_override;
 
 	kern_return_t (*thread_policy_get)(thread_t t, thread_policy_flavor_t flavor, thread_policy_t info, mach_msg_type_number_t *count, boolean_t *get_default);
 	boolean_t (*qos_main_thread_active)(void);
@@ -242,8 +251,21 @@ typedef struct pthread_callbacks_s {
 	boolean_t (*proc_usynch_thread_qos_remove_override_for_resource)(task_t task, struct uthread *, uint64_t tid, user_addr_t resource, int resource_type);
 	boolean_t (*proc_usynch_thread_qos_reset_override_for_resource)(task_t task, struct uthread *, uint64_t tid, user_addr_t resource, int resource_type);
 
+	boolean_t (*proc_init_wqptr_or_wait)(proc_t proc);
+
+	uint16_t (*thread_set_tag)(thread_t thread, uint16_t tag);
+	uint16_t (*thread_get_tag)(thread_t thread);
+
+	int (*proc_usynch_thread_qos_squash_override_for_resource)(thread_t thread, user_addr_t resource, int resource_type);
+	int (*task_get_default_manager_qos)(task_t task);
+
+	int (*thread_create_workq_waiting)(task_t task, thread_continue_t thread_return, event_t event, thread_t *new_thread);
+
+	user_addr_t (*proc_get_stack_addr_hint)(struct proc *p);
+	void (*proc_set_stack_addr_hint)(struct proc *p, user_addr_t stack_addr_hint);
+
 	/* padding for future */
-	void* _pad[84];
+	void* _pad[76];
 
 } *pthread_callbacks_t;
 

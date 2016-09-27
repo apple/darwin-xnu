@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -108,6 +108,7 @@ extern const IORegistryPlane *  gIOPowerPlane;
 
 extern const OSSymbol *     gIOResourcesKey;
 extern const OSSymbol *     gIOResourceMatchKey;
+extern const OSSymbol *     gIOResourceMatchedKey;
 extern const OSSymbol *     gIOProviderClassKey;
 extern const OSSymbol *     gIONameMatchKey;
 extern const OSSymbol *     gIONameMatchedKey;
@@ -141,6 +142,12 @@ extern const OSSymbol *     gIOConsoleSecurityInterest;
 extern const OSSymbol *     gIODeviceMemoryKey;
 extern const OSSymbol *     gIOInterruptControllersKey;
 extern const OSSymbol *     gIOInterruptSpecifiersKey;
+
+extern const OSSymbol *     gIOBSDKey;
+extern const OSSymbol *     gIOBSDNameKey;
+extern const OSSymbol *     gIOBSDMajorKey;
+extern const OSSymbol *     gIOBSDMinorKey;
+extern const OSSymbol *     gIOBSDUnitKey;
 
 extern SInt32 IOServiceOrdering( const OSMetaClassBase * inObj1, const OSMetaClassBase * inObj2, void * ref );
 
@@ -536,6 +543,7 @@ public:
     @discussion IOService provides generic open and close semantics to track clients of a provider that have established an active datapath. The use of <code>open</code> and @link close close@/link, and rules regarding ownership are family defined, and defined by the @link handleOpen handleOpen@/link and @link handleClose handleClose@/link methods in the provider. Some families will limit access to a provider based on its open state.
     @param forClient Designates the client of the provider requesting the open.
     @param options Options for the open. The provider family may implement options for open; IOService defines only <code>kIOServiceSeize</code> to request the device be withdrawn from its current owner.
+    @param arg Family specific arguments which are ignored by IOService.
     @result <code>true</code> if the open was successful; <code>false</code> otherwise. */
 
     virtual bool open(   IOService *       forClient,
@@ -546,8 +554,7 @@ public:
     @abstract Releases active access to a provider.
     @discussion IOService provides generic open and close semantics to track clients of a provider that have established an active datapath. The use of @link open open@/link and <code>close</code>, and rules regarding ownership are family defined, and defined by the @link handleOpen handleOpen@/link and @link handleClose handleClose@/link methods in the provider.
     @param forClient Designates the client of the provider requesting the close.
-    @param options Options available for the close. The provider family may implement options for close; IOService defines none.
-    @param arg Family specific arguments which are ignored by IOService. */
+    @param options Options available for the close. The provider family may implement options for close; IOService defines none. */
     
     virtual void close(  IOService *       forClient,
                          IOOptionBits      options = 0 );
@@ -555,8 +562,8 @@ public:
 /*! @function isOpen
     @abstract Determines whether a specific, or any, client has an IOService object open.
     @discussion Returns the open state of an IOService object with respect to the specified client, or when it is open by any client.
-    @param forClient If non-zero, <codeisOpen</code returns the open state for that client. If zero is passed, <codeisOpen</code returns the open state for all clients.
-    @result <codetrue</code if the specific, or any, client has the IOService object open. */
+    @param forClient If non-zero, <code>isOpen</code> returns the open state for that client. If zero is passed, <code>isOpen</code> returns the open state for all clients.
+    @result <code>true</code> if the specific, or any, client has the IOService object open. */
 
     virtual bool isOpen( const IOService * forClient = 0 ) const;
 
@@ -697,7 +704,7 @@ public:
     @abstract Uses the resource service to publish a property.
     @discussion The resource service uses IOService's matching and notification to allow objects to be published and found by any I/O Kit client by a global name. <code>publishResource</code> makes an object available to anyone waiting for it or looking for it in the future.
     @param key An OSSymbol key that globally identifies the object.
-    @param The object to be published. */
+    @param value The object to be published. */
 
     static void publishResource( const OSSymbol * key, OSObject * value = 0 );
 
@@ -705,7 +712,7 @@ public:
     @abstract Uses the resource service to publish a property.
     @discussion The resource service uses IOService object's matching and notification to allow objects to be published and found by any I/O Kit client by a global name. <code>publishResource</code> makes an object available to anyone waiting for it or looking for it in the future.
     @param key A C string key that globally identifies the object.
-    @param The object to be published. */
+    @param value The object to be published. */
 
     static void publishResource( const char * key, OSObject * value = 0 );
     virtual bool addNeededResource( const char * key );
@@ -872,7 +879,7 @@ public:
 /*! @function registryEntryIDMatching
     @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a IORegistryEntryID match.
     @discussion <code>registryEntryIDMatching</code> creates a matching dictionary that specifies the IOService object with the assigned registry entry ID (returned by <code>IORegistryEntry::getRegistryEntryID()</code>). An existing dictionary may be passed in, in which case the matching properties will be added to that dictionary rather than creating a new one.
-    @param name The service's ID. Matching is successful on the IOService object that return that ID from the <code>IORegistryEntry::getRegistryEntryID()</code> method.
+    @param entryID The service's ID. Matching is successful on the IOService object that return that ID from the <code>IORegistryEntry::getRegistryEntryID()</code> method.
     @param table If zero, <code>registryEntryIDMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
     @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
@@ -1438,7 +1445,7 @@ public:
     @param controllingDriver A pointer to the calling driver, usually <code>this</code>.
     @param powerStates A driver-defined array of power states that the driver and device support. Power states are defined in <code>pwr_mgt/IOPMpowerState.h</code>.
     @param numberOfStates The number of power states in the array.
-    @result </code>IOPMNoErr</code>. All errors are logged via <code>kprintf</code>. */
+    @result <code>IOPMNoErr</code>. All errors are logged via <code>kprintf</code>. */
 
     virtual IOReturn registerPowerDriver(
                         IOService *      controllingDriver,
@@ -1655,7 +1662,7 @@ public:
     @param period The desired idle timer period in seconds.
     @result <code>kIOReturnSuccess</code> upon success; an I/O Kit error code otherwise. */
 
-    virtual IOReturn setIdleTimerPeriod( unsigned long );
+    virtual IOReturn setIdleTimerPeriod( unsigned long period );
 
 #ifndef __LP64__
 /*! @function getPMworkloop
@@ -1824,9 +1831,7 @@ public:
     IOReturn registerInterestForNotifer( IONotifier *notify, const OSSymbol * typeOfInterest,
                   IOServiceInterestHandler handler, void * target, void * ref );
 
-#ifdef __LP64__
-    static IOWorkLoop * getPMworkloop( void );
-#endif
+    static IOWorkLoop * getIOPMWorkloop( void );
 
 protected:
     bool tellClientsWithResponse( int messageType );
@@ -1894,7 +1899,6 @@ private:
     static void watchdog_timer_expired ( thread_call_param_t arg0, thread_call_param_t arg1 );
     static void spindump_timer_expired( thread_call_param_t arg0, thread_call_param_t arg1 );
     static IOReturn actionAckTimerExpired(OSObject *, void *, void *, void *, void * );
-    static IOReturn watchdog_timer_expired ( OSObject *, void *, void *, void *, void * );
     static IOReturn actionSpinDumpTimerExpired(OSObject *, void *, void *, void *, void * );
 
     static IOReturn actionDriverCalloutDone(OSObject *, void *, void *, void *, void * );

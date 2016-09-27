@@ -6,7 +6,7 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-EXPORT_ONLY_FILES = 	\
+EXPORT_ONLY_FILES =	\
 		    apic.h \
 		    asm.h \
 		    atomic.h \
@@ -59,5 +59,3 @@ EXPORT_MD_DIR = i386
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

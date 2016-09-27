@@ -612,6 +612,7 @@ enum {
 #define kIOPMPSAdapterDetailsAmperageKey	    "Amperage"
 #define kIOPMPSAdapterDetailsDescriptionKey	    "Description"
 #define kIOPMPSAdapterDetailsPMUConfigurationKey    "PMUConfiguration"
+#define kIOPMPSAdapterDetailsVoltage            "AdapterVoltage"
 
 // Battery's time remaining estimate is invalid this long (seconds) after a wake
 #define kIOPMPSInvalidWakeSecondsKey           "BatteryInvalidWakeSeconds"

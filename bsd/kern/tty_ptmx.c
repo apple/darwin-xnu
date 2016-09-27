@@ -414,6 +414,8 @@ ptmx_free_ioctl(int minor, int open_flag)
 	if (!(_state.pis_ioctl_list[minor]->pt_flags & (PF_OPEN_M|PF_OPEN_S))) {
 		/* Mark as free so it can be reallocated later */
 		old_ptmx_ioctl = _state.pis_ioctl_list[ minor];
+		_state.pis_ioctl_list[minor] = NULL;
+		_state.pis_free++;
 	}
 	DEVFS_UNLOCK();
 
@@ -429,12 +431,6 @@ ptmx_free_ioctl(int minor, int open_flag)
 			devfs_remove(old_ptmx_ioctl->pt_devhandle);
 		ttyfree(old_ptmx_ioctl->pt_tty);
 		FREE(old_ptmx_ioctl, M_TTYS);
-
-		/* Don't remove the entry until the devfs slot is free */
-		DEVFS_LOCK();
-		_state.pis_ioctl_list[minor] = NULL;
-		_state.pis_free++;
-		DEVFS_UNLOCK();
 	}
 
 	return (0);	/* Success */
@@ -505,11 +501,15 @@ ptmx_clone(__unused dev_t dev, int action)
 int ptsd_kqfilter(dev_t, struct knote *); 
 static void ptsd_kqops_detach(struct knote *);
 static int ptsd_kqops_event(struct knote *, long);
+static int ptsd_kqops_touch(struct knote *kn, struct kevent_internal_s *kev);
+static int ptsd_kqops_process(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
 
-static struct filterops ptsd_kqops = {
+struct filterops ptsd_kqops = {
 	.f_isfd = 1,
 	.f_detach = ptsd_kqops_detach,
 	.f_event = ptsd_kqops_event,
+	.f_touch = ptsd_kqops_touch,
+	.f_process = ptsd_kqops_process,
 };                                    
 
 #define	PTSD_KNOTE_VALID	NULL
@@ -550,14 +550,11 @@ ptsd_kqops_detach(struct knote *kn)
 }
 
 static int
-ptsd_kqops_event(struct knote *kn, long hint)
+ptsd_kqops_common(struct knote *kn, dev_t dev, long hint)
 {
 	struct ptmx_ioctl *pti;
 	struct tty *tp;
-	dev_t dev = (dev_t)kn->kn_hookid;
 	int retval = 0;
-
-	ptsd_kevent_mtx_lock(minor(dev));
 
 	do {
 		if (kn->kn_hook != PTSD_KNOTE_VALID ) {
@@ -601,12 +598,67 @@ ptsd_kqops_event(struct knote *kn, long hint)
 
 		if (hint == 0)
 			tty_unlock(tp);
-	} while (0);
 
-	ptsd_kevent_mtx_unlock(minor(dev));
+	} while (0);
 
 	return (retval);
 }                                                                                                
+
+static int
+ptsd_kqops_event(struct knote *kn, long hint)
+{
+	dev_t dev = (dev_t)kn->kn_hookid;
+	int res;
+
+	ptsd_kevent_mtx_lock(minor(dev));
+	res = ptsd_kqops_common(kn, dev, hint);
+	ptsd_kevent_mtx_unlock(minor(dev));
+	return res;
+}
+	
+
+static int
+ptsd_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
+{
+	dev_t dev = (dev_t)kn->kn_hookid;
+	int res;
+
+	ptsd_kevent_mtx_lock(minor(dev));
+
+	/* accept new kevent state */
+	kn->kn_sfflags = kev->fflags;
+	kn->kn_sdata = kev->data;
+	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
+		kn->kn_udata = kev->udata;
+
+	/* recapture fired state of knote */
+	res = ptsd_kqops_common(kn, dev, 0);
+
+	ptsd_kevent_mtx_unlock(minor(dev));
+
+	return res;
+}
+
+static int
+ptsd_kqops_process(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+{
+#pragma unused(data)
+	dev_t dev = (dev_t)kn->kn_hookid;
+	int res;
+
+	ptsd_kevent_mtx_lock(minor(dev));
+	res = ptsd_kqops_common(kn, dev, 0);
+	if (res) {
+		*kev = kn->kn_kevent;
+		if (kn->kn_flags & EV_CLEAR) {
+			kn->kn_fflags = 0;
+			kn->kn_data = 0;
+		}
+	}
+	ptsd_kevent_mtx_unlock(minor(dev));
+	return res;
+}
+
 int
 ptsd_kqfilter(dev_t dev, struct knote *kn)
 {
@@ -616,11 +668,15 @@ ptsd_kqfilter(dev_t dev, struct knote *kn)
 
 	/* make sure we're talking about the right device type */
 	if (cdevsw[major(dev)].d_open != ptsopen) {
-		return (EINVAL);
+		kn->kn_flags = EV_ERROR;
+		kn->kn_data = EINVAL;
+		return 0;
 	}
 
 	if ((pti = ptmx_get_ioctl(minor(dev), 0)) == NULL) {
-	        return (ENXIO);
+		kn->kn_flags = EV_ERROR;
+		kn->kn_data = ENXIO;
+	        return 0;
 	}
 
 	tp = pti->pt_tty;
@@ -628,7 +684,7 @@ ptsd_kqfilter(dev_t dev, struct knote *kn)
 
 	kn->kn_hookid = dev;
 	kn->kn_hook = PTSD_KNOTE_VALID;
-	kn->kn_fop = &ptsd_kqops;
+	kn->kn_filtid = EVFILTID_PTSD;
 
         switch (kn->kn_filter) {
         case EVFILT_READ:
@@ -638,11 +694,20 @@ ptsd_kqfilter(dev_t dev, struct knote *kn)
                 KNOTE_ATTACH(&tp->t_wsel.si_note, kn);
                 break;
         default:
-                retval = EINVAL;
+		kn->kn_flags = EV_ERROR;
+		kn->kn_data = EINVAL;
                 break;
         }
 
         tty_unlock(tp);
+
+	ptsd_kevent_mtx_lock(minor(dev));
+
+	/* capture current event state */
+	retval = ptsd_kqops_common(kn, dev, 0);
+
+	ptsd_kevent_mtx_unlock(minor(dev));
+
         return (retval);
 }
 

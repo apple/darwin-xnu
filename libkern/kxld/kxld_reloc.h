@@ -160,7 +160,9 @@ kern_return_t kxld_relocator_process_sect_reloc(KXLDRelocator *relocator,
     __attribute__((nonnull,visibility("hidden")));
 
 kern_return_t kxld_relocator_process_table_reloc(KXLDRelocator *relocator,
-    const KXLDReloc *reloc, const struct kxld_seg *seg, kxld_addr_t link_addr)
+                                                 const KXLDReloc *reloc,
+                                                 const struct kxld_seg *seg,
+                                                 kxld_addr_t link_addr)
     __attribute__((nonnull,visibility("hidden")));
 
 #endif /* _KXLD_RELOC_H */

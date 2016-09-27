@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -119,7 +119,7 @@ static int esp_output(struct mbuf *, u_char *, struct mbuf *,
 	int, struct secasvar *sav);
 
 extern int	esp_udp_encap_port;
-extern u_int32_t natt_now;
+extern u_int64_t natt_now;
 
 extern lck_mtx_t *sadb_mutex;
 
@@ -230,12 +230,12 @@ estimate:
  *	<-----------------> espoff
  */
 static int
-esp_output(m, nexthdrp, md, af, sav)
-	struct mbuf *m;
-	u_char *nexthdrp;
-	struct mbuf *md;
-	int af;
-	struct secasvar *sav;
+esp_output(
+	struct mbuf *m,
+	u_char *nexthdrp,
+	struct mbuf *md,
+	int af,
+	struct secasvar *sav)
 {
 	struct mbuf *n;
 	struct mbuf *mprev;
@@ -858,9 +858,9 @@ fail:
 
 #if INET
 int
-esp4_output(m, sav)
-	struct mbuf *m;
-	struct secasvar *sav;
+esp4_output(
+	struct mbuf *m,
+	struct secasvar *sav)
 {
 	struct ip *ip;
 	if (m->m_len < sizeof(struct ip)) {
@@ -876,11 +876,11 @@ esp4_output(m, sav)
 
 #if INET6
 int
-esp6_output(m, nexthdrp, md, sav)
-	struct mbuf *m;
-	u_char *nexthdrp;
-	struct mbuf *md;
-	struct secasvar *sav;
+esp6_output(
+	struct mbuf *m,
+	u_char *nexthdrp,
+	struct mbuf *md,
+	struct secasvar *sav)
 {
 	if (m->m_len < sizeof(struct ip6_hdr)) {
 		ipseclog((LOG_DEBUG, "esp6_output: first mbuf too short\n"));

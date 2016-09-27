@@ -1,0 +1,116 @@
+/*
+ * Copyright (c) 2016 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+#include <mach/mach_types.defs>         // mach_port_t
+#include <mach/clock_types.defs>        // mach_timespec_t
+
+#if KERNEL_USER
+import <mach/resource_monitors.h>;
+import <mach/clock_types.h>;
+#else
+import <System/mach/resource_monitors.h>;
+import <System/mach/clock_types.h>;
+#endif
+
+// match struct proc.p_name / proc_name_t as of January 2016
+#define MAXCOMLEN 16
+type proc_name_t = array [2*MAXCOMLEN+1] of char;
+type posix_path_t = array [512] of char;    // ?? can't compile w/1024?
+type resource_notify_flags_t = uint64_t;
+
+/* The kernel sends the message, so we compile with KernelUser when
+   building in the kernel. */
+subsystem
+#if KERNEL_USER
+    KernelUser
+#endif
+        resource_notify 827800;     /* 'R''N'00 */
+
+UserPrefix send_;
+ServerPrefix receive_;
+
+
+SimpleRoutine cpu_usage_violation(
+    receiver                : mach_port_t;
+
+    /* violator */
+    procname                : proc_name_t;
+    pid                     : int;
+    killed_proc_path        : posix_path_t; /* filled in if fatal */
+
+    /* violation */
+    timestamp               : mach_timespec_t;  /* 32b time, see 25567702 */
+    observed_cpu_nsecs      : int64_t;
+    observation_nsecs       : int64_t;      /* time it took to hit limit */
+
+    /* threshold crossed: calculated from proc_set_cpumon_params() */
+    cpu_nsecs_allowed       : int64_t;
+    limit_window_nsecs      : int64_t;      /* over this period */
+
+    flags                   : resource_notify_flags_t
+);
+
+SimpleRoutine cpu_wakes_violation(
+    receiver                : mach_port_t;
+
+    /* violator */
+    procname                : proc_name_t;
+    pid                     : int;
+    killed_proc_path        : posix_path_t; /* filled in if fatal */
+
+    /* violation */
+    timestamp               : mach_timespec_t;
+    observed_cpu_wakes      : int64_t;
+    observation_nsecs       : int64_t;      /* time it took to hit limit */
+
+    /* threshold crossed: calculated from proc_set_wakemon_params() */
+    cpu_wakes_allowed       : int64_t;
+    limit_window_nsecs      : int64_t;      /* over this period */
+
+    flags                   : resource_notify_flags_t
+);
+
+SimpleRoutine disk_writes_violation(
+    receiver                : mach_port_t;
+
+    /* violator */
+    procname                : proc_name_t;
+    pid                     : int;
+    killed_proc_path        : posix_path_t; /* filled in if fatal */
+
+    /* violation */
+    timestamp               : mach_timespec_t;
+    observed_bytes_dirtied  : int64_t;
+    observation_nsecs       : int64_t;      /* time it took to hit limit */
+
+    /* threshold */
+    bytes_dirtied_allowed   : int64_t;
+    limit_window_nsecs      : int64_t;      /* over this period */
+
+    flags                   : resource_notify_flags_t
+);

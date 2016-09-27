@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -136,15 +136,16 @@ _getq(class_queue_t *q)
 	return (m);
 }
 
-/* get a packet of a specific flow beginning from the head of the queue */
-struct mbuf *
-_getq_flow(class_queue_t *q, u_int32_t flow)
+static struct mbuf *
+_getq_flow_or_scidx(class_queue_t *q, u_int32_t val, boolean_t isflowid)
 {
 	struct mbuf *m, *m_tmp;
 
 	MBUFQ_FOREACH_SAFE(m, &q->mbufq, m_tmp) {
-		if (flow == 0 || ((m->m_flags & M_PKTHDR) &&
-		    m->m_pkthdr.pkt_flowid == flow)) {
+		if ((isflowid && (val == 0 || ((m->m_flags & M_PKTHDR) &&
+		    m->m_pkthdr.pkt_flowid == val))) ||
+		    (!isflowid &&
+		    MBUF_SCIDX(mbuf_get_service_class(m)) < val)) {
 			/* remove it from the class queue */
 			MBUFQ_REMOVE(&q->mbufq, m);
 			MBUFQ_NEXT(m) = NULL;
@@ -166,16 +167,40 @@ _getq_flow(class_queue_t *q, u_int32_t flow)
 	}
 
 	return (m);
+
+}
+
+/* get a packet of a specific flow beginning from the head of the queue */
+struct mbuf *
+_getq_flow(class_queue_t *q, u_int32_t flow)
+{
+	return (_getq_flow_or_scidx(q, flow, TRUE));
+}
+
+/* Get a packet whose MBUF_SCIDX() < scidx from head of queue */
+struct mbuf *
+_getq_scidx_lt(class_queue_t *q, u_int32_t scidx)
+{
+	return (_getq_flow_or_scidx(q, scidx, FALSE));
 }
 
 /* get all packets starting from the head of the queue */
 struct mbuf *
-_getq_all(class_queue_t *q)
+_getq_all(class_queue_t *q, struct mbuf **last, u_int32_t *qlenp,
+    u_int64_t *qsizep)
 {
 	struct mbuf *m;
 
 	m = MBUFQ_FIRST(&q->mbufq);
+	if (last != NULL)
+		*last = MBUFQ_LAST(&q->mbufq);
 	MBUFQ_INIT(&q->mbufq);
+
+	if (qlenp != NULL)
+		*qlenp = qlen(q);
+	if (qsizep != NULL)
+		*qsizep = qsize(q);
+
 	qlen(q) = 0;
 	qsize(q) = 0;
 
@@ -212,7 +237,7 @@ _getq_tail(class_queue_t *q)
 			qsize(q) = 0;
 
 		if (qempty(q)) {
-			VERIFY(MBUFQ_EMPTY(head));
+			VERIFY(m == MBUFQ_FIRST(head));
 			MBUFQ_INIT(head);
 		} else {
 			VERIFY(n != NULL);

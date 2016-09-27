@@ -168,6 +168,7 @@
 #include <sys/msgbuf.h>
 #endif
 #include <console/serial_protos.h>
+#include <os/log_private.h>
 
 #define isdigit(d) ((d) >= '0' && (d) <= '9')
 #define Ctod(c) ((c) - '0')
@@ -339,9 +340,9 @@ __doprnt(
 		case 'b':
 		case 'B':
 		{
-		    register char *p;
+		    char *p;
 		    boolean_t	  any;
-		    register int  i;
+		    int  i;
 
 		    if (long_long) {
 			u = va_arg(argp, unsigned long long);
@@ -363,7 +364,7 @@ __doprnt(
 			    /*
 			     * Bit field
 			     */
-			    register int j;
+			    int j;
 			    if (any)
 				(*putc)(',', arg);
 			    else {
@@ -414,8 +415,8 @@ __doprnt(
 
 		case 's':
 		{
-		    register const char *p;
-		    register const char *p2;
+		    const char *p;
+		    const char *p2;
 
 		    if (prec == -1)
 			prec = 0x7fffffff;	/* MAXINT */
@@ -567,7 +568,7 @@ __doprnt(
 		print_num:
 		{
 		    char	buf[MAXBUF];	/* build number here */
-		    register char *	p = &buf[MAXBUF-1];
+		    char *	p = &buf[MAXBUF-1];
 		    static char digits[] = "0123456789abcdef0123456789ABCDEF";
 		    const char *prefix = NULL;
 
@@ -669,7 +670,7 @@ dummy_putc(int ch, void *arg)
 
 void 
 _doprnt(
-	register const char	*fmt,
+	const char	*fmt,
 	va_list			*argp,
 						/* character output routine */
 	void			(*putc)(char),
@@ -680,7 +681,7 @@ _doprnt(
 
 void 
 _doprnt_log(
-	register const char	*fmt,
+	const char	*fmt,
 	va_list			*argp,
 						/* character output routine */
 	void			(*putc)(char),
@@ -693,14 +694,22 @@ _doprnt_log(
 boolean_t	new_printf_cpu_number = FALSE;
 #endif	/* MP_PRINTF */
 
-
 decl_simple_lock_data(,printf_lock)
 decl_simple_lock_data(,bsd_log_spinlock)
+
+/*
+ * Defined here to allow lock group to be statically allocated.
+ */
+static lck_grp_t oslog_stream_lock_grp;
+decl_lck_spin_data(,oslog_stream_lock)
+void oslog_lock_init(void);
+
 extern void bsd_log_init(void);
 void bsd_log_lock(void);
 void bsd_log_unlock(void);
 
 void
+
 printf_init(void)
 {
 	/*
@@ -723,14 +732,21 @@ bsd_log_unlock(void)
 	simple_unlock(&bsd_log_spinlock);
 }
 
+void
+oslog_lock_init(void)
+{
+	lck_grp_init(&oslog_stream_lock_grp, "oslog stream", LCK_GRP_ATTR_NULL);
+	lck_spin_init(&oslog_stream_lock, &oslog_stream_lock_grp, LCK_ATTR_NULL);
+}
+
 /* derived from boot_gets */
 void
 safe_gets(
 	char	*str,
 	int	maxlen)
 {
-	register char *lp;
-	register int c;
+	char *lp;
+	int c;
 	char *strmax = str + maxlen - 1; /* allow space for trailing 0 */
 
 	lp = str;
@@ -795,19 +811,45 @@ cons_putc_locked(
 		cnputc(c);
 }
 
+static int
+vprintf_internal(const char *fmt, va_list ap_in, void *caller)
+{
+	if (fmt) {
+		va_list ap;
+		va_copy(ap, ap_in);
+
+		disable_preemption();
+		_doprnt_log(fmt, &ap, cons_putc_locked, 16);
+		enable_preemption();
+
+		va_end(ap);
+
+		if (debug_mode == 0) {
+			os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap_in, caller);
+		}
+	}
+	return 0;
+}
+
+__attribute__((noinline,not_tail_called))
 int
 printf(const char *fmt, ...)
 {
-	va_list	listp;
+	int ret;
 
-	if (fmt) {
-		disable_preemption();
-		va_start(listp, fmt);
-		_doprnt_log(fmt, &listp, conslog_putc, 16);
-		va_end(listp);
-		enable_preemption();
-	}
-	return 0;
+	va_list ap;
+	va_start(ap, fmt);
+	ret = vprintf_internal(fmt, ap, __builtin_return_address(0));
+	va_end(ap);
+
+	return ret;
+}
+
+__attribute__((noinline,not_tail_called))
+int
+vprintf(const char *fmt, va_list ap)
+{
+	return vprintf_internal(fmt, ap, __builtin_return_address(0));
 }
 
 void

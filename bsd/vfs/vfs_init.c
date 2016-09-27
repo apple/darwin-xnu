@@ -83,8 +83,8 @@
 #include <sys/ucred.h>
 #include <sys/errno.h>
 #include <sys/malloc.h>
+#include <sys/decmpfs.h>
 
-#include <vfs/vfs_journal.h>	/* journal_init() */
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #include <sys/kauth.h>
@@ -402,12 +402,6 @@ vfsinit(void)
 	 */
 	nchinit();
 
-#if JOURNALING
-	/*
-	 * Initialize the journaling locks
-	 */
-	journal_init();
-#endif 
 	nspace_handler_init();
 
 	/*
@@ -501,6 +495,10 @@ vfsinit(void)
 	mac_mount_label_associate(vfs_context_kernel(), mp);
 #endif
 	dead_mountp = mp;
+
+#if FS_COMPRESSION
+	decmpfs_init();
+#endif
 }
 
 void

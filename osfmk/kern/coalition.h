@@ -43,6 +43,7 @@ void coalitions_init(void);
  */
 kern_return_t coalitions_adopt_task(coalition_t *coaltions, task_t task);
 kern_return_t coalitions_adopt_init_task(task_t task);
+kern_return_t coalitions_adopt_corpse_task(task_t task);
 
 /* Currently, no error conditions. If task is not already in a coalition,
  * KERN_SUCCESS is returned because removing it did not fail.

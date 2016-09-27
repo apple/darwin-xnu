@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,14 +73,27 @@ class OSString;
  */
 class OSData : public OSObject
 {
-    OSDeclareDefaultStructors(OSData)
     friend class OSSerialize;
+
+    OSDeclareDefaultStructors(OSData)
+
+#if APPLE_KEXT_ALIGN_CONTAINERS
+
+protected:
+    unsigned int   length;
+    unsigned int   capacity;
+    unsigned int   capacityIncrement;
+    void         * data;
+
+#else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 protected:
     void         * data;
     unsigned int   length;
     unsigned int   capacity;
     unsigned int   capacityIncrement;
+
+#endif /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 #ifdef XNU_KERNEL_PRIVATE
     /* Available within xnu source only */
@@ -92,12 +105,12 @@ protected:
 		DeallocFunction deallocFunction;
 		bool            disableSerialization;
 	};
-#else
+#else /* XNU_KERNEL_PRIVATE */
 private:
     typedef void (*DeallocFunction)(void * ptr, unsigned int length);
 protected:
 	struct ExpansionData;
-#endif
+#endif /* XNU_KERNEL_PRIVATE */
     
    /* Reserved for future use. (Internal use only)  */
     ExpansionData * reserved;
@@ -164,7 +177,7 @@ public:
     * @result
     * A instance of OSData that shares the provided byte array,
     * with a reference count of 1;
-    * <code>NULL</coe> on failure.
+    * <code>NULL</code> on failure.
     *
     * @discussion
     * An OSData object created with this function

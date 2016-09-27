@@ -33,22 +33,7 @@
 #include <kern/kpc.h> /* KPC_MAX_COUNTERS */
 #endif
 
-/* controls whether a context-switch handler is invoked */
-extern unsigned kperf_kpc_cswitch_set;
-
-void kperf_kpc_switch_context(thread_t old, thread_t new);
-void kperf_kpc_cswitch_callback_update(void);
-
-/* for osfmk/platform/pcb.c context switches */
-static inline void
-kperf_kpc_cswitch(thread_t old, thread_t new)
-{
-	if (!kperf_kpc_cswitch_set) {
-		return;
-	}
-
-	kperf_kpc_switch_context(old, new);
-}
+void kperf_kpc_thread_ast(thread_t thread);
 
 /* KPC sample data */
 struct kpcdata

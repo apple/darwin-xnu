@@ -1895,28 +1895,84 @@ filt_fsevent(struct knote *kn, long hint)
 }
 
 
+static int
+filt_fsevent_touch(struct knote *kn, struct kevent_internal_s *kev)
+{
+	int res;
+
+	lock_watch_table();
+
+	/* accept new fflags/data as saved */
+	kn->kn_sfflags = kev->fflags;
+	kn->kn_sdata = kev->data;
+	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
+		kn->kn_udata = kev->udata;
+
+	/* restrict the current results to the (smaller?) set of new interest */
+	/*
+	 * For compatibility with previous implementations, we leave kn_fflags
+	 * as they were before.
+	 */
+	//kn->kn_fflags &= kev->fflags;
+
+	/* determine if the filter is now fired */
+	res = filt_fsevent(kn, 0);
+
+	unlock_watch_table();
+
+	return res;
+}
+
+static int
+filt_fsevent_process(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+{
+#pragma unused(data)
+	int res;
+
+	lock_watch_table();
+
+	res = filt_fsevent(kn, 0);
+	if (res) {
+		*kev = kn->kn_kevent;
+		if (kev->flags & EV_CLEAR) {
+			kn->kn_data = 0;
+			kn->kn_fflags = 0;
+		}
+	}
+
+	unlock_watch_table();
+	return res;
+}
+
 struct  filterops fsevent_filtops = { 
 	.f_isfd = 1, 
 	.f_attach = NULL, 
 	.f_detach = filt_fsevent_detach, 
-	.f_event = filt_fsevent
+	.f_event = filt_fsevent,
+	.f_touch = filt_fsevent_touch,
+	.f_process = filt_fsevent_process,
 };
 
 static int
 fseventsf_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn, __unused vfs_context_t ctx)
 {
     fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
+    int res;
 
     kn->kn_hook = (void*)fseh;
     kn->kn_hookid = 1;
-    kn->kn_fop = &fsevent_filtops;
-    
+   	kn->kn_filtid = EVFILTID_FSEVENT;
+
     lock_watch_table();
 
     KNOTE_ATTACH(&fseh->knotes, kn);
 
+    /* check to see if it is fired already */
+    res = filt_fsevent(kn, 0);
+
     unlock_watch_table();
-    return 0;
+
+    return res;
 }
 
 
@@ -2147,14 +2203,14 @@ fseventswrite(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 
 
 static const struct fileops fsevents_fops = {
-    DTYPE_FSEVENTS,
-    fseventsf_read,
-    fseventsf_write,
-    fseventsf_ioctl,
-    fseventsf_select,
-    fseventsf_close,
-    fseventsf_kqfilter,
-    fseventsf_drain
+    .fo_type = DTYPE_FSEVENTS,
+    .fo_read = fseventsf_read,
+    .fo_write = fseventsf_write,
+    .fo_ioctl = fseventsf_ioctl,
+    .fo_select = fseventsf_select,
+    .fo_close = fseventsf_close,
+    .fo_kqfilter = fseventsf_kqfilter,
+    .fo_drain = fseventsf_drain,
 };
 
 typedef struct fsevent_clone_args32 {
@@ -2461,6 +2517,9 @@ create_fsevent_from_kevent(vnode_t vp, uint32_t kevents, struct vnode_attr *vap)
 }
 
 #else /* CONFIG_FSE */
+
+#include <sys/fsevents.h>
+
 /*
  * The get_pathbuff and release_pathbuff routines are used in places not
  * related to fsevents, and it's a handy abstraction, so define trivial
@@ -2481,4 +2540,16 @@ release_pathbuff(char *path)
 {
 	FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
 }
+
+int
+add_fsevent(__unused int type, __unused vfs_context_t ctx, ...)
+{
+	return 0;
+}
+
+int need_fsevent(__unused int type, __unused vnode_t vp)
+{
+	return 0;
+}
+
 #endif /* CONFIG_FSE */

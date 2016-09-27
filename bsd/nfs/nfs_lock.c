@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -399,9 +399,7 @@ nfs_lockd_send_request(LOCKD_MSG *msg, int interruptable)
 		 */
 		return (EAGAIN);
 	}
-	return (kr);
 }
-				
 
 /*
  * NFS advisory byte-level locks (client)

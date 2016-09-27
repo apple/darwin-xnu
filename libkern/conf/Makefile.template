@@ -22,22 +22,22 @@ CFLAGS+= -include meta_features.h -DLIBKERN_KERNEL_PRIVATE -DOSALLOCDEBUG=1
 OSKextLib.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align
 OSKext.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align
 OSMetaClass.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align
-OSUnserialize.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align
+OSRuntime.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
+OSUnserialize.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align -Wno-unreachable-code-break
 corecrypto_md5.o_CWARNFLAGS_ADD = -Wno-cast-align
 corecrypto_sha1.o_CWARNFLAGS_ADD = -Wno-cast-align
 
 # zlib is 3rd party source
-compress.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-deflate.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-infback.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-inffast.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-inflate.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-trees.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-uncompr.o_CWARNFLAGS_ADD = -Wno-cast-qual 
+compress.o_CWARNFLAGS_ADD = -Wno-cast-qual
+deflate.o_CWARNFLAGS_ADD = -Wno-cast-qual
+infback.o_CWARNFLAGS_ADD = -Wno-cast-qual
+inffast.o_CWARNFLAGS_ADD = -Wno-cast-qual
+inflate.o_CWARNFLAGS_ADD = -Wno-cast-qual
+trees.o_CWARNFLAGS_ADD = -Wno-cast-qual
+uncompr.o_CWARNFLAGS_ADD = -Wno-cast-qual
 
 # warnings in bison-generated code
-OSUnserializeXML.cpo_CXXWARNFLAGS_ADD = -Wno-uninitialized
-OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-uninitialized -Wno-unreachable-code -Wno-unreachable-code-break
 OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
 
 # Runtime support functions don't interact well with LTO (9294679)
@@ -46,7 +46,7 @@ stack_protector.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
 #
 # Directories for mig generated files
 #
-COMP_SUBDIRS = 
+COMP_SUBDIRS =
 
 #
 #  Make sure we don't remove this by accident if interrupted at the wrong
@@ -72,24 +72,6 @@ COMP_SUBDIRS =
 
 %MACHDEP
 
-#
-# Machine-independent per-file flags
-#
-
-# zlib is 3rd party source
-compress.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-deflate.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-infback.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-inffast.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-inflate.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-trees.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-uncompr.o_CWARNFLAGS_ADD = -Wno-cast-qual 
-
-# warnings in bison-generated code
-OSUnserializeXML.cpo_CXXWARNFLAGS_ADD = -Wno-uninitialized
-OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
-OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
-
 # Rebuild if per-file overrides change
 ${OBJS}: $(firstword $(MAKEFILE_LIST))
 
@@ -110,7 +92,7 @@ $(COMPONENT).filelist: $(OBJS)
 		$(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
 		mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
-	@echo LDFILELIST $(COMPONENT)
+	@echo "$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0)"
 	$(_v)for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist

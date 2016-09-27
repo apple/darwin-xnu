@@ -1542,6 +1542,7 @@ IOReturn IOPlatformExpertDevice::newUserClient( task_t owningTask, void * securi
         {
             newConnect->detach( this );
             newConnect->release();
+            err = kIOReturnNotPermitted;
         }
         else
             theConnect = newConnect;

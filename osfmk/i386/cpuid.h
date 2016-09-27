@@ -193,8 +193,6 @@
 #define CPUID_MWAIT_EXTENSION	_Bit(0)	/* enumeration of WMAIT extensions */
 #define CPUID_MWAIT_BREAK	_Bit(1)	/* interrupts are break events	   */
 
-#define CPUID_MODEL_YONAH		0x0E
-#define CPUID_MODEL_MEROM		0x0F
 #define CPUID_MODEL_PENRYN		0x17
 #define CPUID_MODEL_NEHALEM		0x1A
 #define CPUID_MODEL_FIELDS		0x1E	/* Lynnfield, Clarksfield */

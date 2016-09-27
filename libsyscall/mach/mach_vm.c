@@ -317,3 +317,33 @@ vm_read(
 
 	return (rv);
 }
+
+kern_return_t
+mach_vm_purgable_control(
+	mach_port_name_t	target,
+	mach_vm_offset_t	address,
+	vm_purgable_t		control,
+	int			*state)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_vm_purgable_control_trap(target, address, control, state);
+
+	if (rv == MACH_SEND_INVALID_DEST)
+		rv = _kernelrpc_mach_vm_purgable_control(target, address, control, state);
+
+	return (rv);
+}
+
+kern_return_t
+vm_purgable_control(
+	mach_port_name_t	task,
+	vm_offset_t		address,
+	vm_purgable_t		control,
+	int			*state)
+{
+	return mach_vm_purgable_control(task,
+					(mach_vm_offset_t) address,
+					control,
+					state);
+}

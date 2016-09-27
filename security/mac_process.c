@@ -291,13 +291,12 @@ mac_cred_check_visible(kauth_cred_t u1, kauth_cred_t u2)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
 
 	MAC_CHECK(cred_check_visible, u1, u2);
-
 
 	return (error);
 }
@@ -317,13 +316,12 @@ mac_proc_check_debug(proc_t curp, struct proc *proc)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
-    
-    if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-        return 0;
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_debug, cred, proc);
@@ -339,13 +337,12 @@ mac_proc_check_fork(proc_t curp)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
-    
-    if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-        return 0;
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_fork, cred, curp);
@@ -407,9 +404,9 @@ mac_proc_check_map_anon(proc_t proc, user_addr_t u_addr,
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_vm_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_vm_enforce)
+		return 0;
 #endif
 	if (!mac_proc_check_enforce(proc, MAC_VM_ENFORCE))
 		return (0);
@@ -429,12 +426,12 @@ mac_proc_check_mprotect(proc_t proc,
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_vm_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_vm_enforce)
+		return 0;
 #endif
-    if (!mac_proc_check_enforce(proc, MAC_VM_ENFORCE))
-        return (0);
+	if (!mac_proc_check_enforce(proc, MAC_VM_ENFORCE))
+		return (0);
 
 	cred = kauth_cred_proc_ref(proc);
 	MAC_CHECK(proc_check_mprotect, cred, proc, addr, size, prot);
@@ -466,13 +463,12 @@ mac_proc_check_sched(proc_t curp, struct proc *proc)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
-    
-    if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-        return 0;
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_sched, cred, proc);
@@ -488,13 +484,12 @@ mac_proc_check_signal(proc_t curp, struct proc *proc, int signum)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
-    
-    if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-        return 0;
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_signal, cred, proc, signum);
@@ -510,12 +505,12 @@ mac_proc_check_wait(proc_t curp, struct proc *proc)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
-    if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-        return 0;
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_wait, cred, proc);
@@ -531,12 +526,12 @@ mac_proc_check_suspend_resume(proc_t curp, int sr)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
-    if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-        return 0;
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_suspend_resume, cred, curp, sr);
@@ -552,12 +547,12 @@ mac_proc_check_ledger(proc_t curp, proc_t proc, int ledger_op)
 	int error = 0;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
-    if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-        return 0;
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_ledger, cred, proc, ledger_op);
@@ -573,12 +568,12 @@ mac_proc_check_cpumon(proc_t curp)
 	int error = 0;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
-    if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-        return 0;
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_cpumon, cred);
@@ -594,12 +589,12 @@ mac_proc_check_proc_info(proc_t curp, proc_t target, int callnum, int flavor)
 	int error = 0;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_proc_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce)
+		return 0;
 #endif
-    if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-        return 0;
+	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_proc_info, cred, target, callnum, flavor);
@@ -607,7 +602,6 @@ mac_proc_check_proc_info(proc_t curp, proc_t target, int callnum, int flavor)
 
 	return (error);
 }
-
 
 int
 mac_proc_check_get_cs_info(proc_t curp, proc_t target, unsigned int op)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -120,6 +120,30 @@ in6_cga_is_prepare_valid(const struct in6_cga_prepare *prepare,
 	return (TRUE);
 }
 
+/*
+ * @brief Generate interface identifier for CGA
+ * 	XXX You may notice that following does not really
+ * 	mirror what is decribed in:
+ * 	https://tools.ietf.org/html/rfc3972#section-4
+ * 	By design kernel here will assume that that
+ * 	modifier has been converged on by userspace
+ * 	for first part of the algorithm for the given
+ * 	security level.
+ * 	We are not doing that yet but that's how the code
+ * 	below is written. So really we are starting
+ * 	from bullet 4 of the algorithm.
+ *
+ * @param prepare Pointer to object containing modifier,
+ * 	security level & externsion to be used.
+ * @param pubkey Public key used for IID generation
+ * @param collisions Collission count on DAD failure
+ * 	XXX We are not really re-generating IID on DAD
+ * 	failures for now.
+ * @param in6 Pointer to the address containing
+ * 	the prefix.
+ *
+ * @return void
+ */
 static void
 in6_cga_generate_iid(const struct in6_cga_prepare *prepare,
     const struct iovec *pubkey, u_int8_t collisions, struct in6_addr *in6)
@@ -297,7 +321,7 @@ in6_cga_parameters_prepare(void *output, size_t max,
 }
 
 int
-in6_cga_generate(const struct in6_cga_prepare *prepare, u_int8_t collisions,
+in6_cga_generate(struct in6_cga_prepare *prepare, u_int8_t collisions,
     struct in6_addr *in6)
 {
 	int error;
@@ -308,6 +332,9 @@ in6_cga_generate(const struct in6_cga_prepare *prepare, u_int8_t collisions,
 
 	if (prepare == NULL)
 		prepare = &in6_cga.cga_prepare;
+	else
+		prepare->cga_security_level =
+		    in6_cga.cga_prepare.cga_security_level;
 
 	pubkey = &in6_cga.cga_pubkey;
 

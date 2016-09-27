@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -36,8 +36,6 @@
 #include <net/if_types.h>
 #include <net/bpf.h>
 #include <net/if_ipsec.h>
-#include <libkern/OSMalloc.h>
-#include <libkern/OSAtomic.h>
 #include <sys/mbuf.h>
 #include <sys/sockio.h>
 #include <netinet/in.h>
@@ -50,6 +48,11 @@
 #include <netinet/ip.h>
 #include <net/flowadv.h>
 #include <net/necp.h>
+#include <netkey/key.h>
+#include <net/pktap.h>
+
+extern int net_qos_policy_restricted;
+extern int net_qos_policy_restrict_avapps;
 
 /* Kernel Control functions */
 static errno_t	ipsec_ctl_connect(kern_ctl_ref kctlref, struct sockaddr_ctl *sac,
@@ -85,41 +88,14 @@ static errno_t ipsec_proto_pre_output(ifnet_t interface, protocol_family_t proto
 
 static kern_ctl_ref	ipsec_kctlref;
 static u_int32_t	ipsec_family;
-static OSMallocTag	ipsec_malloc_tag;
-static SInt32		ipsec_ifcount = 0;
 
 #define IPSECQ_MAXLEN 256
-
-/* Prepend length */
-static void*
-ipsec_alloc(size_t size)
-{
-	size_t	*mem = OSMalloc(size + sizeof(size_t), ipsec_malloc_tag);
-	
-	if (mem) {
-		*mem = size + sizeof(size_t);
-		mem++;
-	}
-	
-	return (void*)mem;
-}
-
-static void
-ipsec_free(void *ptr)
-{
-	size_t	*size = ptr;
-	size--;
-	OSFree(size, *size, ipsec_malloc_tag);
-}
 
 errno_t
 ipsec_register_control(void)
 {
 	struct kern_ctl_reg	kern_ctl;
 	errno_t				result = 0;
-	
-	/* Create a tag to allocate memory */
-	ipsec_malloc_tag = OSMalloc_Tagalloc(IPSEC_CONTROL_NAME, OSMT_DEFAULT);
 	
 	/* Find a unique value for our interface family */
 	result = mbuf_tag_id_find(IPSEC_CONTROL_NAME, &ipsec_family);
@@ -202,12 +178,9 @@ ipsec_ctl_connect(kern_ctl_ref		kctlref,
 	struct ifnet_stats_param 	stats;
 	
 	/* kernel control allocates, interface frees */
-	pcb = ipsec_alloc(sizeof(*pcb));
-	if (pcb == NULL)
-		return ENOMEM;
-	
+	MALLOC(pcb, struct ipsec_pcb *, sizeof(*pcb), M_DEVBUF, M_WAITOK | M_ZERO);
+
 	/* Setup the protocol control block */
-	bzero(pcb, sizeof(*pcb));
 	*unitinfo = pcb;
 	pcb->ipsec_ctlref = kctlref;
 	pcb->ipsec_unit = sac->sc_unit;
@@ -234,10 +207,10 @@ ipsec_ctl_connect(kern_ctl_ref		kctlref,
 	result = ifnet_allocate_extended(&ipsec_init, &pcb->ipsec_ifp);
 	if (result != 0) {
 		printf("ipsec_ctl_connect - ifnet_allocate failed: %d\n", result);
-		ipsec_free(pcb);
+		*unitinfo = NULL;
+		FREE(pcb, M_DEVBUF);
 		return result;
 	}
-	OSIncrementAtomic(&ipsec_ifcount);
 	
 	/* Set flags and additional information. */
 	ifnet_set_mtu(pcb->ipsec_ifp, 1500);
@@ -257,16 +230,15 @@ ipsec_ctl_connect(kern_ctl_ref		kctlref,
 	if (result != 0) {
 		printf("ipsec_ctl_connect - ifnet_allocate failed: %d\n", result);
 		ifnet_release(pcb->ipsec_ifp);
-		ipsec_free(pcb);
-	}
-	
-	/* Attach to bpf */
-	if (result == 0)
+		*unitinfo = NULL;
+		FREE(pcb, M_DEVBUF);
+	} else {
+		/* Attach to bpf */
 		bpfattach(pcb->ipsec_ifp, DLT_NULL, 4);
 	
-	/* The interfaces resoures allocated, mark it as running */
-	if (result == 0)
+		/* The interfaces resoures allocated, mark it as running */
 		ifnet_set_flags(pcb->ipsec_ifp, IFF_RUNNING, IFF_RUNNING);
+	}
 	
 	return result;
 }
@@ -426,9 +398,14 @@ ipsec_ctl_disconnect(__unused kern_ctl_ref	kctlref,
 					 void					*unitinfo)
 {
 	struct ipsec_pcb	*pcb = unitinfo;
-	ifnet_t			ifp = pcb->ipsec_ifp;
+	ifnet_t			ifp = NULL;
 	errno_t			result = 0;
-	
+
+	if (pcb == NULL)
+		return EINVAL;
+
+	ifp = pcb->ipsec_ifp;
+	VERIFY(ifp != NULL);
 	pcb->ipsec_ctlref = NULL;
 	pcb->ipsec_unit = 0;
 	
@@ -438,7 +415,7 @@ ipsec_ctl_disconnect(__unused kern_ctl_ref	kctlref,
 	 * addresses and detach the protocols. Finally, we can remove and
 	 * release the interface.
 	 */
-    key_delsp_for_ipsec_if(ifp);
+	key_delsp_for_ipsec_if(ifp);
     
 	ipsec_cleanup_family(ifp, AF_INET);
 	ipsec_cleanup_family(ifp, AF_INET6);
@@ -536,6 +513,10 @@ ipsec_ctl_setopt(__unused kern_ctl_ref	kctlref,
 				result = ifnet_find_by_name(name, &del_ifp);
 			}
 			if (result == 0) {
+				printf("%s IPSEC_OPT_SET_DELEGATE_INTERFACE %s to %s\n",
+					__func__, pcb->ipsec_ifp->if_xname, 
+					del_ifp->if_xname);
+
 				result = ifnet_set_delegate(pcb->ipsec_ifp, del_ifp);
 				if (del_ifp)
 					ifnet_release(del_ifp);
@@ -554,6 +535,9 @@ ipsec_ctl_setopt(__unused kern_ctl_ref	kctlref,
 			} else {
 				pcb->ipsec_output_service_class = output_service_class;
 			}
+			printf("%s IPSEC_OPT_OUTPUT_TRAFFIC_CLASS %s svc %d\n",
+				__func__, pcb->ipsec_ifp->if_xname, 
+				pcb->ipsec_output_service_class);
 			break;
 		}
 			
@@ -696,6 +680,7 @@ ipsec_output(ifnet_t	interface,
                 ipoa.ipoa_boundif = ipsec_state.outgoing_if;
                 ipoa.ipoa_flags |= IPOAF_BOUND_IF;
             }
+            ipsec_set_ipoa_for_interface(pcb->ipsec_ifp, &ipoa);
             
             adv = &ipoa.ipoa_flowadv;
             
@@ -752,11 +737,12 @@ ipsec_output(ifnet_t	interface,
             
             bzero(&ip6oa, sizeof(ip6oa));
             ip6oa.ip6oa_flowadv.code = 0;
-            ip6oa.ip6oa_flags = IPOAF_SELECT_SRCIF | IPOAF_BOUND_SRCADDR;
+            ip6oa.ip6oa_flags = IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR;
             if (ipsec_state.outgoing_if) {
                 ip6oa.ip6oa_boundif = ipsec_state.outgoing_if;
-                ip6oa.ip6oa_flags |= IPOAF_BOUND_IF;
+                ip6oa.ip6oa_flags |= IP6OAF_BOUND_IF;
             }
+            ipsec_set_ip6oa_for_interface(pcb->ipsec_ifp, &ip6oa);
             
             adv = &ip6oa.ip6oa_flowadv;
             
@@ -886,9 +872,6 @@ ipsec_detached(
 	struct ipsec_pcb	*pcb = ifnet_softc(interface);
     
 	ifnet_release(pcb->ipsec_ifp);
-	ipsec_free(pcb);
-    
-	OSDecrementAtomic(&ipsec_ifcount);
 }
 
 /* Protocol Handlers */
@@ -909,7 +892,8 @@ ipsec_proto_input(ifnet_t interface,
 	
 	mbuf_pkthdr_setrcvif(m, interface);
 	bpf_tap_in(interface, DLT_NULL, m, &af, sizeof(af));
-	
+	pktap_input(interface, protocol, m, NULL);
+
 	if (proto_input(protocol, m) != 0) {
 		ifnet_stat_increment_in(interface, 0, 0, 1);
 		m_freem(m);
@@ -986,5 +970,47 @@ ipsec_set_pkthdr_for_interface(ifnet_t interface, mbuf_t packet, int family)
 			}
 			packet->m_pkthdr.pkt_flags = (PKTF_FLOW_ID | PKTF_FLOW_ADV | PKTF_FLOW_LOCALSRC);
 		}
+	}
+}
+
+void
+ipsec_set_ipoa_for_interface(ifnet_t interface, struct ip_out_args *ipoa)
+{
+	struct ipsec_pcb *pcb;
+	
+	if (interface == NULL || ipoa == NULL)
+		return;
+	pcb = ifnet_softc(interface);
+	
+	if (net_qos_policy_restricted == 0) {
+		ipoa->ipoa_flags |= IPOAF_QOSMARKING_ALLOWED;
+		ipoa->ipoa_sotc = so_svc2tc(pcb->ipsec_output_service_class);
+	} else if (pcb->ipsec_output_service_class != MBUF_SC_VO ||
+	   net_qos_policy_restrict_avapps != 0) {
+		ipoa->ipoa_flags &= ~IPOAF_QOSMARKING_ALLOWED;
+	} else {
+		ipoa->ipoa_flags |= IP6OAF_QOSMARKING_ALLOWED;
+		ipoa->ipoa_sotc = SO_TC_VO;
+	}
+}
+
+void
+ipsec_set_ip6oa_for_interface(ifnet_t interface, struct ip6_out_args *ip6oa)
+{
+	struct ipsec_pcb *pcb;
+	
+	if (interface == NULL || ip6oa == NULL)
+		return;
+	pcb = ifnet_softc(interface);
+	
+	if (net_qos_policy_restricted == 0) {
+		ip6oa->ip6oa_flags |= IPOAF_QOSMARKING_ALLOWED;
+		ip6oa->ip6oa_sotc = so_svc2tc(pcb->ipsec_output_service_class);
+	} else if (pcb->ipsec_output_service_class != MBUF_SC_VO ||
+	   net_qos_policy_restrict_avapps != 0) {
+		ip6oa->ip6oa_flags &= ~IPOAF_QOSMARKING_ALLOWED;
+	} else {
+		ip6oa->ip6oa_flags |= IP6OAF_QOSMARKING_ALLOWED;
+		ip6oa->ip6oa_sotc = SO_TC_VO;
 	}
 }

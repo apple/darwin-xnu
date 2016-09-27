@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2014-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -35,6 +35,7 @@
 #include <IOKit/IOMapper.h>
 #include <IOKit/IODMACommand.h>
 #include <IOKit/IOKitKeysPrivate.h>
+#include "Tests.h"
 
 #ifndef __LP64__
 #include <IOKit/IOSubMemoryDescriptor.h>
@@ -107,13 +108,72 @@ static int IOMultMemoryDescriptorTest(int newValue)
     return (0);
 }
 
+// <rdar://problem/26375234>
+static IOReturn
+ZeroLengthTest(int newValue)
+{
+    IOMemoryDescriptor * md;
+
+    md = IOMemoryDescriptor::withAddressRange(
+				0, 0, kIODirectionNone, current_task());
+    assert(md);
+    md->prepare();
+    md->complete();
+    md->release();
+    return (0);
+}
+
+// <rdar://problem/26466423>
+static IOReturn
+IODirectionPrepareNoZeroFillTest(int newValue)
+{
+    IOBufferMemoryDescriptor * bmd;
+
+    bmd = IOBufferMemoryDescriptor::inTaskWithOptions(NULL,
+                        kIODirectionIn | kIOMemoryPageable, ptoa(24));
+    assert(bmd);
+    bmd->prepare((IODirection)(kIODirectionIn | kIODirectionPrepareNoZeroFill));
+    bmd->prepare(kIODirectionIn);
+    bmd->complete((IODirection)(kIODirectionIn | kIODirectionCompleteWithDataValid));
+    bmd->complete(kIODirectionIn);
+    bmd->release();
+    return (0);
+}
 
 int IOMemoryDescriptorTest(int newValue)
 {
     int result;
 
 #if 0
-    if (5 == newValue)
+    if (6 == newValue)
+    {
+	IOMemoryDescriptor * sbmds[3];
+	IOMultiMemoryDescriptor * smmd;
+	IOMemoryDescriptor * mds[2];
+	IOMultiMemoryDescriptor * mmd;
+	IOMemoryMap * map;
+
+	sbmds[0] = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionOutIn | kIOMemoryKernelUserShared, ptoa(1));
+	sbmds[1] = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionOutIn | kIOMemoryKernelUserShared, ptoa(2));
+	sbmds[2] = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionOutIn | kIOMemoryKernelUserShared, ptoa(3));
+	smmd = IOMultiMemoryDescriptor::withDescriptors(&sbmds[0], sizeof(sbmds)/sizeof(sbmds[0]), kIODirectionOutIn, false);
+
+	mds[0] = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionOutIn | kIOMemoryKernelUserShared, ptoa(1));
+	mds[1] = smmd;
+	mmd = IOMultiMemoryDescriptor::withDescriptors(&mds[0], sizeof(mds)/sizeof(mds[0]), kIODirectionOutIn, false);
+	map = mmd->createMappingInTask(kernel_task, 0, kIOMapAnywhere);
+	assert(map);
+	map->release();
+	mmd->release();
+	mds[0]->release();
+	mds[1]->release();
+	sbmds[0]->release();
+	sbmds[1]->release();
+	sbmds[2]->release();
+
+	return (0);
+    }
+    else if (5 == newValue)
     {
 	IOReturn             ret;
 	IOMemoryDescriptor * md;
@@ -309,6 +369,12 @@ int IOMemoryDescriptorTest(int newValue)
 #endif
 
     result = IOMultMemoryDescriptorTest(newValue);
+    if (result) return (result);
+
+    result = ZeroLengthTest(newValue);
+    if (result) return (result);
+
+    result = IODirectionPrepareNoZeroFillTest(newValue);
     if (result) return (result);
 
     IOGeneralMemoryDescriptor * md;

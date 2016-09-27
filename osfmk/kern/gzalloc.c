@@ -62,7 +62,6 @@
  */
 
 #include <zone_debug.h>
-#include <zone_alias_addr.h>
 
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
@@ -172,33 +171,21 @@ void gzalloc_configure(void) {
 	if (PE_parse_boot_argn("-gzalloc_mode", temp_buf, sizeof (temp_buf))) {
 		gzalloc_mode = TRUE;
 		gzalloc_min = GZALLOC_MIN_DEFAULT;
-#if	ZONE_DEBUG		
-		gzalloc_min += (typeof(gzalloc_min))ZONE_DEBUG_OFFSET;
-#endif
 		gzalloc_max = ~0U;
 	}
 
 	if (PE_parse_boot_argn("gzalloc_min", &gzalloc_min, sizeof(gzalloc_min))) {
-#if	ZONE_DEBUG		
-		gzalloc_min += (typeof(gzalloc_min))ZONE_DEBUG_OFFSET;
-#endif
 		gzalloc_mode = TRUE;
 		gzalloc_max = ~0U;
 	}
 
 	if (PE_parse_boot_argn("gzalloc_max", &gzalloc_max, sizeof(gzalloc_max))) {
-#if	ZONE_DEBUG		
-		gzalloc_max += (typeof(gzalloc_min))ZONE_DEBUG_OFFSET;
-#endif
 		gzalloc_mode = TRUE;
 		if (gzalloc_min == ~0U)
 			gzalloc_min = 0;
 	}
 
 	if (PE_parse_boot_argn("gzalloc_size", &gzalloc_size, sizeof(gzalloc_size))) {
-#if	ZONE_DEBUG		
-		gzalloc_size += (typeof(gzalloc_min))ZONE_DEBUG_OFFSET;
-#endif
 		gzalloc_min = gzalloc_max = gzalloc_size;
 		gzalloc_mode = TRUE;
 	}
@@ -268,7 +255,7 @@ gzalloc_alloc(zone_t zone, boolean_t canblock) {
 		vm_offset_t rounded_size = round_page(zone->elem_size + GZHEADER_SIZE);
 		vm_offset_t residue = rounded_size - zone->elem_size;
 		vm_offset_t gzaddr = 0;
-		gzhdr_t *gzh;
+		gzhdr_t *gzh, *gzhcopy = NULL;
 
 		if (!kmem_ready || (vm_page_zone == ZONE_NULL)) {
 			/* Early allocations are supplied directly from the
@@ -287,7 +274,7 @@ gzalloc_alloc(zone_t zone, boolean_t canblock) {
 		else {
 			kern_return_t kr = kernel_memory_allocate(gzalloc_map,
 			    &gzaddr, rounded_size + (1*PAGE_SIZE),
-			    0, KMA_KOBJECT | gzalloc_guard,
+			    0, KMA_KOBJECT | KMA_ATOMIC | gzalloc_guard,
 			    VM_KERN_MEMORY_OSFMK);
 			if (kr != KERN_SUCCESS)
 				panic("gzalloc: kernel_memory_allocate for size 0x%llx failed with %d", (uint64_t)rounded_size, kr);
@@ -301,6 +288,7 @@ gzalloc_alloc(zone_t zone, boolean_t canblock) {
 			 */
 			gzh = (gzhdr_t *) (gzaddr + zone->elem_size);
 			addr = gzaddr;
+			gzhcopy = (gzhdr_t *) (gzaddr + rounded_size - sizeof(gzhdr_t));
 		} else {
 			gzh = (gzhdr_t *) (gzaddr + residue - GZHEADER_SIZE);
 			addr = (gzaddr + residue);
@@ -321,6 +309,14 @@ gzalloc_alloc(zone_t zone, boolean_t canblock) {
 		gzh->gzone = (kmem_ready && vm_page_zone) ? zone : GZDEADZONE;
 		gzh->gzsize = (uint32_t) zone->elem_size;
 		gzh->gzsig = GZALLOC_SIGNATURE;
+
+		/* In underflow detection mode, stash away a copy of the
+		 * metadata at the edge of the allocated range, for
+		 * retrieval by gzalloc_element_size()
+		 */
+		if (gzhcopy) {
+			*gzhcopy = *gzh;
+		}
 
 		lock_zone(zone);
 		zone->count++;
@@ -437,4 +433,48 @@ boolean_t gzalloc_free(zone_t zone, void *addr) {
 		gzfreed = TRUE;
 	}
 	return gzfreed;
+}
+
+boolean_t gzalloc_element_size(void *gzaddr, zone_t *z, vm_size_t *gzsz) {
+	uintptr_t a = (uintptr_t)gzaddr;
+	if (__improbable(gzalloc_mode && (a >= gzalloc_map_min) && (a <= gzalloc_map_max))) {
+		gzhdr_t *gzh;
+
+		/* Locate the gzalloc metadata adjoining the element */
+		if (gzalloc_uf_mode == TRUE) {
+			boolean_t       vmef;
+			vm_map_entry_t  gzvme = NULL;
+
+			/* In underflow detection mode, locate the map entry describing
+			 * the element, and then locate the copy of the gzalloc
+			 * header at the trailing edge of the range.
+			 */
+			vm_map_lock_read(gzalloc_map);
+			vmef = vm_map_lookup_entry(gzalloc_map, (vm_map_offset_t)a, &gzvme);
+			vm_map_unlock(gzalloc_map);
+			if (vmef == FALSE) {
+				panic("GZALLOC: unable to locate map entry for %p\n", (void *)a);
+			}
+			assertf(gzvme->vme_atomic != 0, "GZALLOC: VM map entry inconsistency, vme: %p, start: %llu end: %llu", gzvme, gzvme->vme_start, gzvme->vme_end);
+			gzh = (gzhdr_t *)(gzvme->vme_end - GZHEADER_SIZE);
+		} else {
+			gzh = (gzhdr_t *)(a - GZHEADER_SIZE);
+		}
+
+		if (gzh->gzsig != GZALLOC_SIGNATURE) {
+			panic("GZALLOC signature mismatch for element %p, expected 0x%x, found 0x%x", (void *)a, GZALLOC_SIGNATURE, gzh->gzsig);
+		}
+
+		*gzsz = gzh->gzone->elem_size;
+		if ((*gzsz < gzalloc_min) || (*gzsz > gzalloc_max)) {
+			panic("GZALLOC: invalid element size %lu\n", *gzsz);
+		}
+
+		if (z) {
+			*z = gzh->gzone;
+		}
+		return TRUE;
+	} else {
+		return FALSE;
+	}
 }

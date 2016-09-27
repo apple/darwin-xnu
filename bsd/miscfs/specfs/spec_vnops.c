@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -81,10 +81,16 @@
 #include <sys/disk.h>
 #include <sys/uio_internal.h>
 #include <sys/resource.h>
+#include <machine/machine_routines.h>
 #include <miscfs/specfs/specdev.h>
 #include <vfs/vfs_support.h>
+
 #include <kern/assert.h>
 #include <kern/task.h>
+#include <kern/sched_prim.h>
+#include <kern/thread.h>
+#include <kern/policy_internal.h>
+
 #include <pexpert/pexpert.h>
 
 #include <sys/kdebug.h>
@@ -160,8 +166,8 @@ static void set_blocksize(vnode_t, dev_t);
 #define LOWPRI_TIER2_WINDOW_MSECS	  100
 #define LOWPRI_TIER3_WINDOW_MSECS	  500
 
-#define LOWPRI_TIER1_IO_PERIOD_MSECS	  15
-#define LOWPRI_TIER2_IO_PERIOD_MSECS	  50
+#define LOWPRI_TIER1_IO_PERIOD_MSECS	  40
+#define LOWPRI_TIER2_IO_PERIOD_MSECS	  85
 #define LOWPRI_TIER3_IO_PERIOD_MSECS	  200
 
 #define LOWPRI_TIER1_IO_PERIOD_SSD_MSECS  5
@@ -198,10 +204,11 @@ struct _throttle_io_info_t {
 
 	struct timeval	throttle_last_write_timestamp;
 	struct timeval	throttle_min_timer_deadline;
-	struct timeval	throttle_window_start_timestamp[THROTTLE_LEVEL_END + 1];
+	struct timeval	throttle_window_start_timestamp[THROTTLE_LEVEL_END + 1]; /* window starts at both the beginning and completion of an I/O */
 	struct timeval	throttle_last_IO_timestamp[THROTTLE_LEVEL_END + 1];
 	pid_t 		throttle_last_IO_pid[THROTTLE_LEVEL_END + 1];
 	struct timeval	throttle_start_IO_period_timestamp[THROTTLE_LEVEL_END + 1];
+	int32_t throttle_inflight_count[THROTTLE_LEVEL_END + 1];
 
 	TAILQ_HEAD( , uthread) throttle_uthlist[THROTTLE_LEVEL_END + 1]; 	/* Lists of throttled uthreads */
 	int		throttle_next_wake_level;
@@ -227,8 +234,8 @@ struct _throttle_io_info_t _throttle_io_info[LOWPRI_MAX_NUM_DEV];
 int	lowpri_throttle_enabled = 1;
 
 
-
-static void throttle_info_update_internal(struct _throttle_io_info_t *info, uthread_t ut, int flags, boolean_t isssd);
+static void throttle_info_end_io_internal(struct _throttle_io_info_t *info, int throttle_level);
+static int throttle_info_update_internal(struct _throttle_io_info_t *info, uthread_t ut, int flags, boolean_t isssd, boolean_t inflight, struct bufattr *bap);
 static int throttle_get_thread_throttle_level(uthread_t ut);
 
 /*
@@ -463,16 +470,22 @@ spec_read(struct vnop_read_args *ap)
 	switch (vp->v_type) {
 
 	case VCHR:
+		{
+			struct _throttle_io_info_t *throttle_info = NULL;
+			int thread_throttle_level;
                 if (cdevsw[major(vp->v_rdev)].d_type == D_DISK && vp->v_un.vu_specinfo->si_throttleable) {
-			struct _throttle_io_info_t *throttle_info;
-
 			throttle_info = &_throttle_io_info[vp->v_un.vu_specinfo->si_devbsdunit];
-			throttle_info_update_internal(throttle_info, NULL, 0, vp->v_un.vu_specinfo->si_isssd);
+				thread_throttle_level = throttle_info_update_internal(throttle_info, NULL, 0, vp->v_un.vu_specinfo->si_isssd, TRUE, NULL);
                 }
 		error = (*cdevsw[major(vp->v_rdev)].d_read)
 			(vp->v_rdev, uio, ap->a_ioflag);
 
+			if (throttle_info) {
+				throttle_info_end_io_internal(throttle_info, thread_throttle_level);
+			}
+
 		return (error);
+		}
 
 	case VBLK:
 		if (uio->uio_offset < 0)
@@ -555,19 +568,25 @@ spec_write(struct vnop_write_args *ap)
 	switch (vp->v_type) {
 
 	case VCHR:
+		{
+			struct _throttle_io_info_t *throttle_info = NULL;
+			int thread_throttle_level;
                 if (cdevsw[major(vp->v_rdev)].d_type == D_DISK && vp->v_un.vu_specinfo->si_throttleable) {
-			struct _throttle_io_info_t *throttle_info;
-
 			throttle_info = &_throttle_io_info[vp->v_un.vu_specinfo->si_devbsdunit];
 
-			throttle_info_update_internal(throttle_info, NULL, 0, vp->v_un.vu_specinfo->si_isssd);
+				thread_throttle_level = throttle_info_update_internal(throttle_info, NULL, 0, vp->v_un.vu_specinfo->si_isssd, TRUE, NULL);
 
 			microuptime(&throttle_info->throttle_last_write_timestamp);
                 }
 		error = (*cdevsw[major(vp->v_rdev)].d_write)
 			(vp->v_rdev, uio, ap->a_ioflag);
 
+			if (throttle_info) {
+				throttle_info_end_io_internal(throttle_info, thread_throttle_level);
+			}
+
 		return (error);
+		}
 
 	case VBLK:
 		if (uio_resid(uio) == 0)
@@ -672,27 +691,9 @@ spec_ioctl(struct vnop_ioctl_args *ap)
 		break;
 
 	case VBLK:
-		if (kdebug_enable) {
-			if (ap->a_command == DKIOCUNMAP) {
-				dk_unmap_t	*unmap;
-				dk_extent_t	*extent;
-				uint32_t	i;
-
-				unmap = (dk_unmap_t *)ap->a_data;
-				extent = unmap->extents;
-
-				for (i = 0; i < unmap->extentsCount; i++, extent++) {
-					KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_IOCTL, 1) | DBG_FUNC_NONE, dev, 	
-						extent->offset/ap->a_vp->v_specsize, extent->length, 0, 0);
-				}
-			} else if (ap->a_command == DKIOCSYNCHRONIZE) {
-				dk_synchronize_t *synch;
-				synch = (dk_synchronize_t *)ap->a_data;
-				KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_IOCTL, 1) | DBG_FUNC_NONE, dev, ap->a_command, 				
-					synch->options, 0, 0);
-			}
-		}
 		retval = (*bdevsw[major(dev)].d_ioctl)(dev, ap->a_command, ap->a_data, ap->a_fflag, p);
+		if (!retval && ap->a_command == DKIOCSETBLOCKSIZE)
+			ap->a_vp->v_specsize = *(uint32_t *)ap->a_data;
 		break;
 
 	default:
@@ -728,22 +729,32 @@ int
 spec_kqfilter(vnode_t vp, struct knote *kn)
 {
 	dev_t dev;
-	int err;
 
 	assert(vnode_ischr(vp));
 
 	dev = vnode_specrdev(vp);
 
 #if NETWORKING
-	/* Try a bpf device, as defined in bsd/net/bpf.c */
-	if ((err = bpfkqfilter(dev, kn)) == 0) {
-		return err;
-	}
-#endif
-	/* Try to attach to other char special devices */
-	err = filt_specattach(kn);
+	/*
+	 * Try a bpf device, as defined in bsd/net/bpf.c
+	 * If it doesn't error out the attach, then it
+	 * claimed it. Otherwise, fall through and try
+	 * a regular spec attach.
+	 */
+	int32_t tmp_flags = kn->kn_flags;
+	int64_t tmp_data = kn->kn_data;
+	int res;
 
-	return err;
+	res = bpfkqfilter(dev, kn);
+	if ((kn->kn_flags & EV_ERROR) == 0) {
+		return res;
+	}
+	kn->kn_flags = tmp_flags;
+	kn->kn_data = tmp_data;
+#endif
+
+	/* Try to attach to other char special devices */
+	return filt_specattach(kn);
 }
 
 /*
@@ -802,9 +813,9 @@ SYSCTL_INT(_debug, OID_AUTO, lowpri_throttle_tier3_io_period_ssd_msecs, CTLFLAG_
 SYSCTL_INT(_debug, OID_AUTO, lowpri_throttle_enabled, CTLFLAG_RW | CTLFLAG_LOCKED, &lowpri_throttle_enabled, 0, "");
 
 
-static lck_grp_t        *throttle_mtx_grp;
-static lck_attr_t       *throttle_mtx_attr;
-static lck_grp_attr_t   *throttle_mtx_grp_attr;
+static lck_grp_t        *throttle_lock_grp;
+static lck_attr_t       *throttle_lock_attr;
+static lck_grp_attr_t   *throttle_lock_grp_attr;
 
 
 /*
@@ -854,7 +865,7 @@ throttle_info_rel(struct _throttle_io_info_t *info)
 	if ((info->throttle_refcnt == 0) && (info->throttle_alloc)) {
 		DEBUG_ALLOC_THROTTLE_INFO("Freeing info = %p\n", info);
 		
-		lck_mtx_destroy(&info->throttle_lock, throttle_mtx_grp);
+		lck_mtx_destroy(&info->throttle_lock, throttle_lock_grp);
 		FREE(info, M_TEMP); 
 	}
 	return oldValue;
@@ -930,7 +941,7 @@ throttle_timer_start(struct _throttle_io_info_t *info, boolean_t update_io_count
 
 			if (!TAILQ_EMPTY(&info->throttle_uthlist[level])) {
 
-				if (elapsed_msecs < (uint64_t)throttle_windows_msecs[level]) {
+				if (elapsed_msecs < (uint64_t)throttle_windows_msecs[level] || info->throttle_inflight_count[level]) {
 					/*
 					 * we had an I/O occur at a higher priority tier within
 					 * this tier's throttle window
@@ -1098,6 +1109,7 @@ throttle_timer(struct _throttle_io_info_t *info)
 			ut = (uthread_t)TAILQ_FIRST(&info->throttle_uthlist[wake_level]);
 			TAILQ_REMOVE(&info->throttle_uthlist[wake_level], ut, uu_throttlelist);
 			ut->uu_on_throttlelist = THROTTLE_LEVEL_NONE;
+			ut->uu_is_throttled = FALSE;
 
 			wake_address = (caddr_t)&ut->uu_on_throttlelist;
 		}
@@ -1115,6 +1127,7 @@ throttle_timer(struct _throttle_io_info_t *info)
 
 			TAILQ_REMOVE(&info->throttle_uthlist[level], ut, uu_throttlelist);
 			ut->uu_on_throttlelist = THROTTLE_LEVEL_NONE;
+			ut->uu_is_throttled = FALSE;
 
 			wakeup(&ut->uu_on_throttlelist);
 		}
@@ -1255,8 +1268,8 @@ throttle_init(void)
 	/*                                                                                                                                    
          * allocate lock group attribute and group                                                                                            
          */
-        throttle_mtx_grp_attr = lck_grp_attr_alloc_init();
-        throttle_mtx_grp = lck_grp_alloc_init("throttle I/O", throttle_mtx_grp_attr);
+        throttle_lock_grp_attr = lck_grp_attr_alloc_init();
+        throttle_lock_grp = lck_grp_alloc_init("throttle I/O", throttle_lock_grp_attr);
 
 	/* Update throttle parameters based on device tree configuration */
 	throttle_init_throttle_window();
@@ -1264,17 +1277,18 @@ throttle_init(void)
         /*                                                                                                                                    
          * allocate the lock attribute                                                                                                        
          */
-        throttle_mtx_attr = lck_attr_alloc_init();
+        throttle_lock_attr = lck_attr_alloc_init();
 
 	for (i = 0; i < LOWPRI_MAX_NUM_DEV; i++) {
 	        info = &_throttle_io_info[i];
 	  
-	        lck_mtx_init(&info->throttle_lock, throttle_mtx_grp, throttle_mtx_attr);
+	        lck_mtx_init(&info->throttle_lock, throttle_lock_grp, throttle_lock_attr);
 		info->throttle_timer_call = thread_call_allocate((thread_call_func_t)throttle_timer, (thread_call_param_t)info);
 
 		for (level = 0; level <= THROTTLE_LEVEL_END; level++) {
 			TAILQ_INIT(&info->throttle_uthlist[level]);
 			info->throttle_last_IO_pid[level] = 0;
+			info->throttle_inflight_count[level] = 0;
 		}
 		info->throttle_next_wake_level = THROTTLE_LEVEL_END;
 		info->throttle_disabled = 0;
@@ -1301,55 +1315,65 @@ sys_override_io_throttle(int flag)
 		lowpri_throttle_enabled = 0;
 }
 
-int rethrottle_removed_from_list = 0;
-int rethrottle_moved_to_new_list = 0;
+int rethrottle_wakeups = 0;
 
 /*
- * move a throttled thread to the appropriate state based
- * on it's new throttle level... throttle_add_to_list will
- * reset the timer deadline if necessary... it may also
- * leave the thread off of the queue if we're already outside
- * the throttle window for the new level
- * takes a valid uthread (which may or may not be on the
- * throttle queue) as input
+ * the uu_rethrottle_lock is used to synchronize this function
+ * with "throttle_lowpri_io" which is where a throttled thread
+ * will block... that function will grab this lock before beginning
+ * it's decision making process concerning the need to block, and
+ * hold it through the assert_wait.  When that thread is awakened
+ * for any reason (timer or rethrottle), it will reacquire the
+ * uu_rethrottle_lock before determining if it really is ok for
+ * it to now run.  This is the point at which the thread could
+ * enter a different throttling queue and reblock or return from
+ * the throttle w/o having waited out it's entire throttle if
+ * the rethrottle has now moved it out of any currently
+ * active throttle window.
  *
- * NOTE: This is called with the task lock held.
+ *
+ * NOTES:
+ * 1 - This may be called with the task lock held.
+ * 2 - This may be called with preemption and interrupts disabled
+ *     in the kqueue wakeup path so we can't take the throttle_lock which is a mutex
+ * 3 - This cannot safely dereference uu_throttle_info, as it may
+ *     get deallocated out from under us
  */
 
 void
 rethrottle_thread(uthread_t ut)
 {
-	struct _throttle_io_info_t *info;
-	int my_new_level;
-
-	if ((info = ut->uu_throttle_info) == NULL)
+	/*
+	 * If uthread doesn't have throttle state, then there's no chance
+	 * of it needing a rethrottle.
+	 */
+	if (ut->uu_throttle_info == NULL)
 		return;
 
-	lck_mtx_lock(&info->throttle_lock);
+	boolean_t s = ml_set_interrupts_enabled(FALSE);
+	lck_spin_lock(&ut->uu_rethrottle_lock);
 
-	if (ut->uu_on_throttlelist >= THROTTLE_LEVEL_THROTTLED) {
-
-		my_new_level = throttle_get_thread_throttle_level(ut);
+	if (ut->uu_is_throttled == FALSE)
+		ut->uu_was_rethrottled = TRUE;
+	else {
+		int my_new_level = throttle_get_thread_throttle_level(ut);
 
 		if (my_new_level != ut->uu_on_throttlelist) {
+			/*
+			 * ut is currently blocked (as indicated by
+			 * ut->uu_is_throttled == TRUE)
+			 * and we're changing it's throttle level, so
+			 * we need to wake it up.
+			 */
+			ut->uu_is_throttled = FALSE;
+			wakeup(&ut->uu_on_throttlelist);
 
-			TAILQ_REMOVE(&info->throttle_uthlist[ut->uu_on_throttlelist], ut, uu_throttlelist);
-			ut->uu_on_throttlelist = THROTTLE_LEVEL_NONE;
-
-			if (my_new_level >= THROTTLE_LEVEL_THROTTLED) {
-				throttle_add_to_list(info, ut, my_new_level, TRUE);
-				rethrottle_moved_to_new_list++;
-			}
-
-			/* Thread no longer in window, need to wake it up */
-			if (ut->uu_on_throttlelist == THROTTLE_LEVEL_NONE) {
-				wakeup(&ut->uu_on_throttlelist);
-				rethrottle_removed_from_list++;
-			}
+			rethrottle_wakeups++;
+			KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW, 102)), thread_tid(ut->uu_thread), ut->uu_on_throttlelist, my_new_level, 0, 0);
 		}
 	}
-
-	lck_mtx_unlock(&info->throttle_lock);
+	lck_spin_unlock(&ut->uu_rethrottle_lock);
+	ml_set_interrupts_enabled(s);
 }
 
 
@@ -1374,7 +1398,7 @@ throttle_info_create(void)
 	DEBUG_ALLOC_THROTTLE_INFO("Creating info = %p\n", info, info );
 	info->throttle_alloc = TRUE;
 
-	lck_mtx_init(&info->throttle_lock, throttle_mtx_grp, throttle_mtx_attr);
+	lck_mtx_init(&info->throttle_lock, throttle_lock_grp, throttle_lock_attr);
 	info->throttle_timer_call = thread_call_allocate((thread_call_func_t)throttle_timer, (thread_call_param_t)info);
 
 	for (level = 0; level <= THROTTLE_LEVEL_END; level++) {
@@ -1546,12 +1570,19 @@ throttle_get_thread_throttle_level(uthread_t ut)
 	return (thread_throttle_level);
 }
 
-
+/*
+ * I/O will be throttled if either of the following are true:
+ *   - Higher tiers have in-flight I/O
+ *   - The time delta since the last start/completion of a higher tier is within the throttle window interval
+ *
+ * In-flight I/O is bookended by throttle_info_update_internal/throttle_info_end_io_internal
+ */
 static int
 throttle_io_will_be_throttled_internal(void * throttle_info, int * mylevel, int * throttling_level)
 {
     	struct _throttle_io_info_t *info = throttle_info;
 	struct timeval elapsed;
+	struct timeval now;
 	uint64_t elapsed_msecs;
 	int	thread_throttle_level;
 	int	throttle_level;
@@ -1559,9 +1590,13 @@ throttle_io_will_be_throttled_internal(void * throttle_info, int * mylevel, int 
 	if ((thread_throttle_level = throttle_get_thread_throttle_level(NULL)) < THROTTLE_LEVEL_THROTTLED)
 		return (THROTTLE_DISENGAGED);
 
-	for (throttle_level = THROTTLE_LEVEL_START; throttle_level < thread_throttle_level; throttle_level++) {
+	microuptime(&now);
 
-		microuptime(&elapsed);
+	for (throttle_level = THROTTLE_LEVEL_START; throttle_level < thread_throttle_level; throttle_level++) {
+		if (info->throttle_inflight_count[throttle_level]) {
+			break;
+		}
+		elapsed = now;
 		timevalsub(&elapsed, &info->throttle_window_start_timestamp[throttle_level]);
 		elapsed_msecs = (uint64_t)elapsed.tv_sec * (uint64_t)1000 + (elapsed.tv_usec / 1000);
 
@@ -1664,6 +1699,7 @@ throttle_lowpri_io(int sleep_amount)
 	int	sleep_cnt = 0;
 	uint32_t  throttle_io_period_num = 0;
 	boolean_t insert_tail = TRUE;
+	boolean_t s;
 
 	ut = get_bsdthread_info(current_thread());
 
@@ -1677,8 +1713,8 @@ throttle_lowpri_io(int sleep_amount)
 		ut->uu_lowpri_window = 0;
 		return (0);
 	}
-
 	lck_mtx_lock(&info->throttle_lock);
+	assert(ut->uu_on_throttlelist < THROTTLE_LEVEL_THROTTLED);
 
 	if (sleep_amount == 0)
 		goto done;
@@ -1687,6 +1723,8 @@ throttle_lowpri_io(int sleep_amount)
 		sleep_amount = 0;
 
 	throttle_io_period_num = info->throttle_io_period_num;
+
+	ut->uu_was_rethrottled = FALSE;
 
 	while ( (throttle_type = throttle_io_will_be_throttled_internal(info, &mylevel, &throttling_level)) ) {
 
@@ -1698,21 +1736,71 @@ throttle_lowpri_io(int sleep_amount)
 			if ((info->throttle_io_period_num - throttle_io_period_num) >= (uint32_t)sleep_amount)
 				break;
 		}
+		/*
+		 * keep the same position in the list if "rethrottle_thread" changes our throttle level  and
+		 * then puts us back to the original level before we get a chance to run
+		 */
+		if (ut->uu_on_throttlelist >= THROTTLE_LEVEL_THROTTLED && ut->uu_on_throttlelist != mylevel) {
+			/*
+			 * must have been awakened via "rethrottle_thread" (the timer pulls us off the list)
+			 * and we've changed our throttling level, so pull ourselves off of the appropriate list
+			 * and make sure we get put on the tail of the new list since we're starting anew w/r to
+			 * the throttling engine
+			 */
+			TAILQ_REMOVE(&info->throttle_uthlist[ut->uu_on_throttlelist], ut, uu_throttlelist);
+			ut->uu_on_throttlelist = THROTTLE_LEVEL_NONE;
+			insert_tail = TRUE;
+		}
 		if (ut->uu_on_throttlelist < THROTTLE_LEVEL_THROTTLED) {
 			if (throttle_add_to_list(info, ut, mylevel, insert_tail) == THROTTLE_LEVEL_END)
 				goto done;
 		}
 		assert(throttling_level >= THROTTLE_LEVEL_START && throttling_level <= THROTTLE_LEVEL_END);
+
+		s = ml_set_interrupts_enabled(FALSE);
+		lck_spin_lock(&ut->uu_rethrottle_lock);
+
+		/*
+		 * this is the critical section w/r to our interaction
+		 * with "rethrottle_thread"
+		 */
+		if (ut->uu_was_rethrottled == TRUE) {
+
+			lck_spin_unlock(&ut->uu_rethrottle_lock);
+			ml_set_interrupts_enabled(s);
+			lck_mtx_yield(&info->throttle_lock);
+
+			KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW, 103)), thread_tid(ut->uu_thread), ut->uu_on_throttlelist, 0, 0, 0);
+
+			ut->uu_was_rethrottled = FALSE;
+			continue;
+		}
 		KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_THROTTLE, PROCESS_THROTTLED)) | DBG_FUNC_NONE,
 				info->throttle_last_IO_pid[throttling_level], throttling_level, proc_selfpid(), mylevel, 0);
-
 		
 		if (sleep_cnt == 0) {
 			KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW, 97)) | DBG_FUNC_START,
 					      throttle_windows_msecs[mylevel], info->throttle_io_periods[mylevel], info->throttle_io_count, 0, 0);
 			throttled_count[mylevel]++;
 		}
-		msleep((caddr_t)&ut->uu_on_throttlelist, &info->throttle_lock, PRIBIO + 1, "throttle_lowpri_io", NULL);
+		ut->uu_wmesg = "throttle_lowpri_io";
+
+		assert_wait((caddr_t)&ut->uu_on_throttlelist, THREAD_UNINT);
+
+		ut->uu_is_throttled = TRUE;
+		lck_spin_unlock(&ut->uu_rethrottle_lock);
+		ml_set_interrupts_enabled(s);
+
+		lck_mtx_unlock(&info->throttle_lock);
+
+		thread_block(THREAD_CONTINUE_NULL);
+
+		ut->uu_wmesg = NULL;
+
+		ut->uu_is_throttled = FALSE;
+		ut->uu_was_rethrottled = FALSE;
+
+		lck_mtx_lock(&info->throttle_lock);
 
 		sleep_cnt++;
 		
@@ -1729,7 +1817,6 @@ done:
 		TAILQ_REMOVE(&info->throttle_uthlist[ut->uu_on_throttlelist], ut, uu_throttlelist);
 		ut->uu_on_throttlelist = THROTTLE_LEVEL_NONE;
 	}
-
 	lck_mtx_unlock(&info->throttle_lock);
 
 	if (sleep_cnt) {
@@ -1744,11 +1831,11 @@ done:
 		throttle_update_proc_stats(info->throttle_last_IO_pid[throttling_level], sleep_cnt);
 	}
 
-	throttle_info_rel(info);
-
 	ut->uu_throttle_info = NULL;
 	ut->uu_throttle_bc = FALSE;
 	ut->uu_lowpri_window = 0;
+
+	throttle_info_rel(info);
 
 	return (sleep_cnt);
 }
@@ -1763,11 +1850,8 @@ done:
  */
 void throttle_set_thread_io_policy(int policy)
 {
-	proc_set_task_policy(current_task(), current_thread(),
-	                     TASK_POLICY_INTERNAL, TASK_POLICY_IOPOL,
-	                     policy);
+	proc_set_thread_policy(current_thread(), TASK_POLICY_INTERNAL, TASK_POLICY_IOPOL, policy);
 }
-
 
 void throttle_info_reset_window(uthread_t ut)
 {
@@ -1805,24 +1889,79 @@ void throttle_info_set_initial_window(uthread_t ut, struct _throttle_io_info_t *
 	}
 }
 
+/*
+ * Update inflight IO count and throttling window
+ * Should be called when an IO is done
+ *
+ * Only affects IO that was sent through spec_strategy
+ */
+void throttle_info_end_io(buf_t bp) {
+	mount_t mp;
+	struct bufattr *bap;
+	struct _throttle_io_info_t *info;
 
+	bap = &bp->b_attr;
+	if (!ISSET(bap->ba_flags, BA_STRATEGY_TRACKED_IO)) {
+		return;
+	}
+	CLR(bap->ba_flags, BA_STRATEGY_TRACKED_IO);
+
+	mp = buf_vnode(bp)->v_mount;
+	if (mp != NULL) {
+		info = &_throttle_io_info[mp->mnt_devbsdunit];
+	} else {
+		info = &_throttle_io_info[LOWPRI_MAX_NUM_DEV - 1];
+	}
+
+	throttle_info_end_io_internal(info, GET_BUFATTR_IO_TIER(bap));
+}
+
+/*
+ * Decrement inflight count initially incremented by throttle_info_update_internal
+ */
 static
-void throttle_info_update_internal(struct _throttle_io_info_t *info, uthread_t ut, int flags, boolean_t isssd)
+void throttle_info_end_io_internal(struct _throttle_io_info_t *info, int throttle_level) {
+	if (throttle_level == THROTTLE_LEVEL_NONE) {
+		return;
+	}
+
+	microuptime(&info->throttle_window_start_timestamp[throttle_level]);
+	OSDecrementAtomic(&info->throttle_inflight_count[throttle_level]);
+	assert(info->throttle_inflight_count[throttle_level] >= 0);
+}
+
+/*
+ * If inflight is TRUE and bap is NULL then the caller is responsible for calling
+ * throttle_info_end_io_internal to avoid leaking in-flight I/O.
+ */
+static
+int throttle_info_update_internal(struct _throttle_io_info_t *info, uthread_t ut, int flags, boolean_t isssd, boolean_t inflight, struct bufattr *bap)
 {
 	int	thread_throttle_level;
 
 	if (lowpri_throttle_enabled == 0 || info->throttle_disabled)
-		return;
+		return THROTTLE_LEVEL_NONE;
 
 	if (ut == NULL)
 		ut = get_bsdthread_info(current_thread());
 
-	thread_throttle_level = throttle_get_thread_throttle_level(ut);
+	if (bap && inflight && !ut->uu_throttle_bc) {
+		thread_throttle_level = GET_BUFATTR_IO_TIER(bap);
+	} else {
+		thread_throttle_level = throttle_get_thread_throttle_level(ut);
+	}
 
 	if (thread_throttle_level != THROTTLE_LEVEL_NONE) {
-		if(!ISSET(flags, B_PASSIVE)) {
-			microuptime(&info->throttle_window_start_timestamp[thread_throttle_level]);
+        if(!ISSET(flags, B_PASSIVE)) {
 			info->throttle_last_IO_pid[thread_throttle_level] = proc_selfpid();
+			if (inflight && !ut->uu_throttle_bc) {
+				if (NULL != bap) {
+					SET(bap->ba_flags, BA_STRATEGY_TRACKED_IO);
+				}
+				OSIncrementAtomic(&info->throttle_inflight_count[thread_throttle_level]);
+			} else {
+				microuptime(&info->throttle_window_start_timestamp[thread_throttle_level]);
+			}
 			KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_THROTTLE, OPEN_THROTTLE_WINDOW)) | DBG_FUNC_NONE,
 					current_proc()->p_pid, thread_throttle_level, 0, 0, 0);
 		}
@@ -1845,6 +1984,8 @@ void throttle_info_update_internal(struct _throttle_io_info_t *info, uthread_t u
 
 		throttle_info_set_initial_window(ut, info, FALSE, isssd);
 	}
+
+	return thread_throttle_level;
 }
 
 void *throttle_info_update_by_mount(mount_t mp)
@@ -1878,7 +2019,7 @@ void *throttle_info_update_by_mount(mount_t mp)
 void throttle_info_update(void *throttle_info, int flags)
 {
         if (throttle_info)
-		throttle_info_update_internal(throttle_info, NULL, flags, FALSE);
+		throttle_info_update_internal(throttle_info, NULL, flags, FALSE, FALSE, NULL);
 }
 
 /*
@@ -1953,6 +2094,9 @@ int throttle_info_io_will_be_throttled(void * throttle_info, int policy)
 		break;
 	}
 	for (throttle_level = THROTTLE_LEVEL_START; throttle_level < thread_throttle_level; throttle_level++) {
+		if (info->throttle_inflight_count[throttle_level]) {
+			break;
+		}
 
 		microuptime(&elapsed);
 		timevalsub(&elapsed, &info->throttle_window_start_timestamp[throttle_level]);
@@ -1974,6 +2118,12 @@ int throttle_info_io_will_be_throttled(void * throttle_info, int policy)
 	return (THROTTLE_ENGAGED);
 }
 
+int throttle_lowpri_window(void)
+{
+	struct uthread *ut = get_bsdthread_info(current_thread());
+	return ut->uu_lowpri_window;
+}
+
 int
 spec_strategy(struct vnop_strategy_args *ap)
 {
@@ -1988,6 +2138,7 @@ spec_strategy(struct vnop_strategy_args *ap)
 	int	strategy_ret;
 	struct _throttle_io_info_t *throttle_info;
 	boolean_t isssd = FALSE;
+	boolean_t inflight = FALSE;
 	int code = 0;
 
 	proc_t curproc = current_proc();
@@ -2044,7 +2195,8 @@ spec_strategy(struct vnop_strategy_args *ap)
 	        code |= DKIO_READ;
 	if (bflags & B_ASYNC)
 	        code |= DKIO_ASYNC;
-	if (bflags & B_META)
+
+	if (bap->ba_flags & BA_META)
 	        code |= DKIO_META;
 	else if (bflags & B_PAGEIO)
 	        code |= DKIO_PAGING;
@@ -2070,11 +2222,20 @@ spec_strategy(struct vnop_strategy_args *ap)
 	if (mp != NULL) {
 		if ((mp->mnt_kern_flag & MNTK_SSD) && !ignore_is_ssd)
 			isssd = TRUE;
+		/*
+		 * Partially initialized mounts don't have a final devbsdunit and should not be tracked.
+		 * Verify that devbsdunit is initialized (non-zero) or that 0 is the correct initialized value
+		 * (mnt_throttle_mask is initialized and num_trailing_0 would be 0)
+		 */
+		if (mp->mnt_devbsdunit || (mp->mnt_throttle_mask != LOWPRI_MAX_NUM_DEV - 1 && mp->mnt_throttle_mask & 0x1)) {
+			inflight = TRUE;
+		}
 		throttle_info = &_throttle_io_info[mp->mnt_devbsdunit];
-	} else 
+
+	} else
 		throttle_info = &_throttle_io_info[LOWPRI_MAX_NUM_DEV - 1];
 
-	throttle_info_update_internal(throttle_info, ut, bflags, isssd);
+	throttle_info_update_internal(throttle_info, ut, bflags, isssd, inflight, bap);
 
 	if ((bflags & B_READ) == 0) {
 		microuptime(&throttle_info->throttle_last_write_timestamp);
@@ -2347,6 +2508,8 @@ spec_offtoblk(struct vnop_offtoblk_args *ap)
 
 static void filt_specdetach(struct knote *kn);
 static int filt_spec(struct knote *kn, long hint);
+static int filt_spectouch(struct knote *kn, struct kevent_internal_s *kev);
+static int filt_specprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
 static unsigned filt_specpeek(struct knote *kn);
 
 struct filterops spec_filtops = {
@@ -2354,6 +2517,8 @@ struct filterops spec_filtops = {
         .f_attach 	= filt_specattach,
         .f_detach 	= filt_specdetach,
         .f_event 	= filt_spec,
+	.f_touch	= filt_spectouch,
+	.f_process	= filt_specprocess,
 	.f_peek 	= filt_specpeek
 };
 
@@ -2365,7 +2530,6 @@ filter_to_seltype(int16_t filter)
 		return FREAD;
 	case EVFILT_WRITE:
 		return FWRITE;
-		break;
 	default:
 		panic("filt_to_seltype(): invalid filter %d\n", filter);
 		return 0;
@@ -2385,7 +2549,9 @@ filt_specattach(struct knote *kn)
 	dev = vnode_specrdev(vp);
 
 	if (major(dev) > nchrdev) {
-		return ENXIO;
+		kn->kn_flags |= EV_ERROR;
+		kn->kn_data = ENXIO;
+		return 0;
 	}
 
 	/*
@@ -2398,15 +2564,17 @@ filt_specattach(struct knote *kn)
 
 	if ((cdevsw_flags[major(dev)] & CDEVSW_SELECT_KQUEUE) == 0 &&
 	    ((kn->kn_sfflags & NOTE_LOWAT) == 0 || kn->kn_sdata != 1)) {
-		return EINVAL;
+		kn->kn_flags |= EV_ERROR;
+		kn->kn_data = EINVAL;
+		return 0;
 	}
 
 	kn->kn_hook_data = 0;
 
-	kn->kn_fop = &spec_filtops;
+	kn->kn_filtid = EVFILTID_SPEC;
 	kn->kn_hookid = vnode_vid(vp);
 
-	knote_markstayqueued(kn);
+	knote_markstayactive(kn);
 
 	return 0;
 }
@@ -2414,7 +2582,7 @@ filt_specattach(struct knote *kn)
 static void 
 filt_specdetach(struct knote *kn)
 {
-	knote_clearstayqueued(kn);
+	knote_clearstayactive(kn);
 
 	/*
 	 * This is potentially tricky: the device's selinfo waitq that was
@@ -2429,18 +2597,41 @@ filt_specdetach(struct knote *kn)
 	 * waitq API invoked here.
 	 */
 	if (kn->kn_hook_data) {
-		waitq_unlink_by_prepost_id(kn->kn_hook_data, kn->kn_kq->kq_wqs);
+		waitq_unlink_by_prepost_id(kn->kn_hook_data, &(knote_get_kq(kn)->kq_wqs));
 		kn->kn_hook_data = 0;
 	}
 }
 
 static int 
-filt_spec(struct knote *kn, long hint)
+filt_spec(__unused struct knote *kn, __unused long hint)
 {
+	panic("filt_spec()");
+	return 0;
+}
+
+
+
+static int
+filt_spectouch(struct knote *kn, struct kevent_internal_s *kev)
+{
+	kn->kn_sdata = kev->data;
+	kn->kn_sfflags = kev->fflags;
+	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
+		kn->kn_udata = kev->udata;
+
+	/* stayqueued knotes don't need hints from touch */
+	return 0;
+}
+
+static int
+filt_specprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+{
+#pragma unused(data)
 	vnode_t vp;
 	uthread_t uth;
 	struct waitq_set *old_wqs;
 	vfs_context_t ctx;
+	int res;
 	int selres;
 	int error;
 	int use_offset;
@@ -2449,17 +2640,16 @@ filt_spec(struct knote *kn, long hint)
 	uint64_t rsvd, rsvd_arg;
 	uint64_t *rlptr = NULL;
 
-	if (hint != 0) {
-		panic("filt_spec(): nonzero hint?");
-	}
-
 	uth = get_bsdthread_info(current_thread());
 	ctx = vfs_context_current();
 	vp = (vnode_t)kn->kn_fp->f_fglob->fg_data;
 
+	/* JMM - locking against touches? */
+
 	error = vnode_getwithvid(vp, kn->kn_hookid);
 	if (error != 0) {
 		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
+		*kev = kn->kn_kevent;  
 		return 1;
 	}
 	
@@ -2490,7 +2680,7 @@ filt_spec(struct knote *kn, long hint)
 	 * set into device's selinfo wait queue
 	 */
 	old_wqs = uth->uu_wqset;
-	uth->uu_wqset = kn->kn_kq->kq_wqs;
+	uth->uu_wqset = &(knote_get_kq(kn)->kq_wqs);
 	selres = VNOP_SELECT(vp, filter_to_seltype(kn->kn_filter),
 			     0, rlptr, ctx);
 	uth->uu_wqset = old_wqs;
@@ -2532,10 +2722,18 @@ filt_spec(struct knote *kn, long hint)
 
 	vnode_put(vp);
 
-	if ((kn->kn_sfflags & NOTE_LOWAT) != 0)
-		return (kn->kn_data >= kn->kn_sdata);
+	res = ((kn->kn_sfflags & NOTE_LOWAT) != 0) ?
+		(kn->kn_data >= kn->kn_sdata) : kn->kn_data;
 
-	return (kn->kn_data != 0);
+	if (res) {
+		*kev = kn->kn_kevent;
+		if (kn->kn_flags & EV_CLEAR) {
+			kn->kn_fflags = 0;
+			kn->kn_data = 0;
+		}
+	}
+
+	return res;
 }
 
 static unsigned
@@ -2568,7 +2766,7 @@ filt_specpeek(struct knote *kn)
 	rlptr = (void *)&rsvd_arg;
 
 	old_wqs = uth->uu_wqset;
-	uth->uu_wqset = kn->kn_kq->kq_wqs;
+	uth->uu_wqset = &(knote_get_kq(kn)->kq_wqs);
 	selres = VNOP_SELECT(vp, filter_to_seltype(kn->kn_filter),
 			     0, (void *)rlptr, ctx);
 	uth->uu_wqset = old_wqs;

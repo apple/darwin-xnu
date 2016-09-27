@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -272,6 +272,7 @@ struct	ip6stat {
 	u_quad_t ip6s_localout;		/* total ip packets generated here */
 	u_quad_t ip6s_odropped;		/* lost packets due to nobufs, etc. */
 	u_quad_t ip6s_reassembled;	/* total packets reassembled ok */
+	u_quad_t ip6s_atmfrag_rcvd;	/* atomic fragments received */
 	u_quad_t ip6s_fragmented;	/* datagrams successfully fragmented */
 	u_quad_t ip6s_ofragments;	/* output fragments created */
 	u_quad_t ip6s_cantfrag;		/* don't fragment flag was set, etc. */
@@ -332,6 +333,9 @@ struct	ip6stat {
 
 	/* duplicate address detection collisions */
 	u_quad_t ip6s_dad_collide;
+
+	/* DAD NS looped back */
+	u_quad_t ip6s_dad_loopcount;
 };
 
 enum ip6s_sources_rule_index {
@@ -412,8 +416,12 @@ struct ip6_out_args {
 #define	IP6OAF_NO_CELLULAR	0x00000010	/* skip IFT_CELLULAR */
 #define	IP6OAF_NO_EXPENSIVE	0x00000020	/* skip IFEF_EXPENSIVE */
 #define	IP6OAF_AWDL_UNRESTRICTED 0x00000040	/* privileged AWDL */
+#define	IP6OAF_QOSMARKING_ALLOWED 0x00000080	/* policy allows Fastlane DSCP marking */
+#define IP6OAF_INTCOPROC_ALLOWED 0x00000100	/* access to internal coproc interfaces */
 	u_int32_t	ip6oa_retflags;	/* IP6OARF return flags (see below) */
 #define	IP6OARF_IFDENIED	0x00000001	/* denied access to interface */
+	int		ip6oa_sotc;		/* traffic class for Fastlane DSCP mapping */
+	int		ip6oa_netsvctype;
 };
 
 extern struct ip6stat ip6stat;	/* statistics */
@@ -460,8 +468,6 @@ extern int ip6_use_defzone;
 
 extern struct pr_usrreqs rip6_usrreqs;
 extern struct pr_usrreqs icmp6_dgram_usrreqs;
-
-extern int ip6_doscopedroute;
 
 struct sockopt;
 struct inpcb;

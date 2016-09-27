@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -295,10 +295,12 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_PURGABLE	0x0002
 #ifdef KERNEL_PRIVATE
 #endif /* KERNEL_PRIVATE */
+#define VM_FLAGS_RANDOM_ADDR	0x0008
 #define VM_FLAGS_NO_CACHE	0x0010
 #define VM_FLAGS_RESILIENT_CODESIGN	0x0020
 #define VM_FLAGS_RESILIENT_MEDIA	0x0040
 #ifdef KERNEL_PRIVATE
+#define VM_FLAGS_ATOMIC_ENTRY 	0x0080
 #define VM_FLAGS_PERMANENT	0x0100	/* mapping can NEVER be unmapped */
 #define VM_FLAGS_GUARD_AFTER	0x0200	/* guard page after the mapping */
 #define VM_FLAGS_GUARD_BEFORE	0x0400	/* guard page before the mapping */
@@ -336,6 +338,7 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_USER_ALLOCATE	(VM_FLAGS_FIXED |		\
 				 VM_FLAGS_ANYWHERE |		\
 				 VM_FLAGS_PURGABLE |		\
+				 VM_FLAGS_RANDOM_ADDR |		\
 				 VM_FLAGS_NO_CACHE |		\
 				 VM_FLAGS_OVERWRITE |		\
 				 VM_FLAGS_SUPERPAGE_MASK |	\
@@ -345,6 +348,7 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 				 VM_FLAGS_RETURN_DATA_ADDR)
 #define VM_FLAGS_USER_REMAP	(VM_FLAGS_FIXED |    \
 				 VM_FLAGS_ANYWHERE | \
+				 VM_FLAGS_RANDOM_ADDR | \
 				 VM_FLAGS_OVERWRITE| \
 				 VM_FLAGS_RETURN_DATA_ADDR |\
 				 VM_FLAGS_RESILIENT_CODESIGN)
@@ -413,6 +417,9 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 /* Window backing stores, custom shadow data, and compressed backing stores */
 #define VM_MEMORY_COREGRAPHICS_BACKINGSTORES	57
 
+/* x-alloc'd memory */
+#define VM_MEMORY_COREGRAPHICS_XALLOC 58
+
 /* catch-all for other uses, such as the read-only shared data page */
 #define VM_MEMORY_COREGRAPHICS_MISC VM_MEMORY_COREGRAPHICS
 
@@ -478,6 +485,21 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 /* Apple System Logger (ASL) messages */
 #define VM_MEMORY_ASL 81
 
+/* Swift runtime */
+#define VM_MEMORY_SWIFT_RUNTIME 82
+
+/* Swift metadata */
+#define VM_MEMORY_SWIFT_METADATA 83
+
+/* DHMM data */
+#define VM_MEMORY_DHMM 84
+
+/* memory allocated by SceneKit.framework */
+#define VM_MEMORY_SCENEKIT 86
+
+/* memory allocated by skywalk networking */
+#define VM_MEMORY_SKYWALK 87
+
 /* Reserve 240-255 for application */
 #define VM_MEMORY_APPLICATION_SPECIFIC_1 240
 #define VM_MEMORY_APPLICATION_SPECIFIC_16 255
@@ -489,6 +511,7 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #if KERNEL_PRIVATE
 
 /* kernel map tags */
+/* please add new definition strings to zprint */
 
 #define VM_KERN_MEMORY_NONE		0
 
@@ -516,8 +539,11 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_KERN_MEMORY_UBC		22
 #define VM_KERN_MEMORY_SECURITY		23
 #define VM_KERN_MEMORY_MLOCK		24
-//
-#define VM_KERN_MEMORY_FIRST_DYNAMIC	25
+#define VM_KERN_MEMORY_REASON		25
+#define VM_KERN_MEMORY_SKYWALK		26
+#define VM_KERN_MEMORY_LTABLE		27
+
+#define VM_KERN_MEMORY_FIRST_DYNAMIC	28
 /* out of tags: */
 #define VM_KERN_MEMORY_ANY		255
 #define VM_KERN_MEMORY_COUNT		256

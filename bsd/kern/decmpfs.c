@@ -25,11 +25,36 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#if !HFS_COMPRESSION
-/* we need these symbols even though compression is turned off */
-char register_decmpfs_decompressor;
-char unregister_decmpfs_decompressor;
-#else /* HFS_COMPRESSION */
+#if !FS_COMPRESSION
+
+/* We need these symbols even though compression is turned off */
+
+#define UNUSED_SYMBOL(x)	asm(".global _" #x "\n.set _" #x ", 0\n");
+
+UNUSED_SYMBOL(register_decmpfs_decompressor)
+UNUSED_SYMBOL(unregister_decmpfs_decompressor)
+UNUSED_SYMBOL(decmpfs_init)
+UNUSED_SYMBOL(decmpfs_read_compressed)
+UNUSED_SYMBOL(decmpfs_cnode_cmp_type)
+UNUSED_SYMBOL(decmpfs_cnode_get_vnode_state)
+UNUSED_SYMBOL(decmpfs_cnode_get_vnode_cached_size)
+UNUSED_SYMBOL(decmpfs_lock_compressed_data)
+UNUSED_SYMBOL(decmpfs_cnode_free)
+UNUSED_SYMBOL(decmpfs_cnode_alloc)
+UNUSED_SYMBOL(decmpfs_cnode_destroy)
+UNUSED_SYMBOL(decmpfs_decompress_file)
+UNUSED_SYMBOL(decmpfs_unlock_compressed_data)
+UNUSED_SYMBOL(decmpfs_cnode_init)
+UNUSED_SYMBOL(decmpfs_cnode_set_vnode_state)
+UNUSED_SYMBOL(decmpfs_hides_xattr)
+UNUSED_SYMBOL(decmpfs_ctx)
+UNUSED_SYMBOL(decmpfs_file_is_compressed)
+UNUSED_SYMBOL(decmpfs_update_attributes)
+UNUSED_SYMBOL(decmpfs_hides_rsrc)
+UNUSED_SYMBOL(decmpfs_pagein_compressed)
+UNUSED_SYMBOL(decmpfs_validate_compressed_file)
+
+#else /* FS_COMPRESSION */
 #include <sys/kernel.h>
 #include <sys/vnode_internal.h>
 #include <sys/file_internal.h>
@@ -289,6 +314,18 @@ vnsize(vnode_t vp, uint64_t *size)
 
 #pragma mark --- cnode routines ---
 
+decmpfs_cnode *decmpfs_cnode_alloc(void)
+{
+	decmpfs_cnode *dp;
+	MALLOC_ZONE(dp, decmpfs_cnode *, sizeof(decmpfs_cnode), M_DECMPFS_CNODE, M_WAITOK);
+	return dp;
+}
+
+void decmpfs_cnode_free(decmpfs_cnode *dp)
+{
+	FREE_ZONE(dp, sizeof(*dp), M_DECMPFS_CNODE);
+}
+
 void
 decmpfs_cnode_init(decmpfs_cnode *cp)
 {
@@ -302,16 +339,16 @@ decmpfs_cnode_destroy(decmpfs_cnode *cp)
 	lck_rw_destroy(&cp->compressed_data_lock, decmpfs_lockgrp);
 }
 
-boolean_t
+bool
 decmpfs_trylock_compressed_data(decmpfs_cnode *cp, int exclusive)
 {
 	void *thread = current_thread();
-	boolean_t retval = FALSE;
+	bool retval = false;
 
 	if (cp->lockowner == thread) {
 		/* this thread is already holding an exclusive lock, so bump the count */
 		cp->lockcount++;
-		retval = TRUE;
+		retval = true;
 	} else if (exclusive) {
 		if ((retval = lck_rw_try_lock_exclusive(&cp->compressed_data_lock))) {
 			cp->lockowner = thread;
@@ -430,6 +467,11 @@ decmpfs_cnode_set_decompression_flags(decmpfs_cnode *cp, uint64_t flags)
             /* failed to write our value, so loop */
         }
     }
+}
+
+uint32_t decmpfs_cnode_cmp_type(decmpfs_cnode *cp)
+{
+	return cp->cmp_type;
 }
 
 #pragma mark --- decmpfs state routines ---
@@ -1082,7 +1124,6 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
     user_ssize_t uplSize         = 0;
 	void *data                   = NULL;
     decmpfs_header *hdr = NULL;
-    int abort_pagein             = 0;
     uint64_t cachedSize          = 0;
 	int cmpdata_locked           = 0;
 	
@@ -1118,6 +1159,7 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
 	kern_return_t kr = ubc_upl_map(pl, (vm_offset_t*)&data);
 	if ((kr != KERN_SUCCESS) || (data == NULL)) {
 		err = ENOSPC;
+		data = NULL;
 #if CONFIG_IOSCHED
 		upl_unmark_decmp(pl);
 #endif /* CONFIG_IOSCHED */		
@@ -1168,7 +1210,6 @@ decompress:
         if (cmp_state == FILE_IS_NOT_COMPRESSED) {
             DebugLogWithPath("cmp_state == FILE_IS_NOT_COMPRESSED\n");
             /* the file was decompressed after we started reading it */
-            abort_pagein = 1;   /* we're not going to commit our data */
             *is_compressed = 0; /* instruct caller to fall back to its normal path */
         }
     }
@@ -1187,7 +1228,7 @@ decompress:
     if (kr != KERN_SUCCESS)
         ErrorLogWithPath("ubc_upl_unmap error %d\n", (int)kr);
     else {
-        if (!abort_pagein) {
+        if (!err) {
             /* commit our pages */
 			kr = commit_upl(pl, pl_offset, total_size, UPL_COMMIT_FREE_ON_EMPTY, 0);
         }
@@ -1198,14 +1239,15 @@ out:
     if (hdr) FREE(hdr, M_TEMP);
 	if (cmpdata_locked) decmpfs_unlock_compressed_data(cp, 0);
     if (err) {
-#if DEVELOPMENT || DEBUG
-        char *path;
-        MALLOC(path, char *, PATH_MAX, M_TEMP, M_WAITOK);
-        panic("%s: decmpfs_pagein_compressed: err %d", vnpath(vp, path, PATH_MAX), err);
-        FREE(path, M_TEMP);
-#else
+#if 0
+        if (err != ENXIO && err != ENOSPC) {
+            char *path;
+            MALLOC(path, char *, PATH_MAX, M_TEMP, M_WAITOK);
+            panic("%s: decmpfs_pagein_compressed: err %d", vnpath(vp, path, PATH_MAX), err);
+            FREE(path, M_TEMP);
+        }
+#endif /* 0 */
         ErrorLogWithPath("err %d\n", err);
-#endif
     }
 	return err;
 }
@@ -1351,14 +1393,14 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
         if (kr != KERN_SUCCESS) {
 
 	    commit_upl(upl, 0, curUplSize, UPL_ABORT_FREE_ON_EMPTY, 1);
-#if DEVELOPMENT || DEBUG
+#if 0
             char *path;
             MALLOC(path, char *, PATH_MAX, M_TEMP, M_WAITOK);
             panic("%s: decmpfs_read_compressed: ubc_upl_map error %d", vnpath(vp, path, PATH_MAX), (int)kr);
             FREE(path, M_TEMP);
-#else
-            ErrorLogWithPath("ubc_upl_map error %d\n", (int)kr);
-#endif
+#else /* 0 */
+            ErrorLogWithPath("ubc_upl_map kr=0x%x\n", (int)kr);
+#endif /* 0 */
             err = EINVAL;
             goto out;
         }
@@ -1821,6 +1863,7 @@ void decmpfs_init()
 	
     lck_grp_attr_t *attr = lck_grp_attr_alloc_init();
     decmpfs_lockgrp = lck_grp_alloc_init("VFSCOMP",  attr);
+    lck_grp_attr_free(attr);
     decompressorsLock = lck_rw_alloc_init(decmpfs_lockgrp, NULL);
     decompress_channel_mtx = lck_mtx_alloc_init(decmpfs_lockgrp, NULL);
     
@@ -1828,4 +1871,4 @@ void decmpfs_init()
     
     done = 1;
 }
-#endif /* HFS_COMPRESSION */
+#endif /* FS_COMPRESSION */

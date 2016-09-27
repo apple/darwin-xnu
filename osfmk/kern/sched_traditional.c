@@ -317,9 +317,8 @@ sched_traditional_choose_thread_from_runq(
 					rq->urgency--; assert(rq->urgency >= 0);
 				}
 				if (queue_empty(queue)) {
-					if (pri != IDLEPRI)
-						clrbit(MAXPRI - pri, rq->bitmap);
-					rq->highq = MAXPRI - ffsbit(rq->bitmap);
+					bitmap_clear(rq->bitmap, pri);
+					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
 
 				return (thread);
@@ -432,7 +431,11 @@ sched_traditional_processor_queue_has_priority(processor_t      processor,
                                                int              priority,
                                                boolean_t        gte)
 {
-	if (gte)
+	run_queue_t runq = runq_for_processor(processor);
+
+	if (runq->count == 0)
+		return FALSE;
+	else if (gte)
 		return runq_for_processor(processor)->highq >= priority;
 	else
 		return runq_for_processor(processor)->highq > priority;
@@ -503,9 +506,8 @@ sched_traditional_processor_queue_shutdown(processor_t processor)
 					rq->urgency--; assert(rq->urgency >= 0);
 				}
 				if (queue_empty(queue)) {
-					if (pri != IDLEPRI)
-						clrbit(MAXPRI - pri, rq->bitmap);
-					rq->highq = MAXPRI - ffsbit(rq->bitmap);
+					bitmap_clear(rq->bitmap, pri);
+					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
 
 				enqueue_tail(&tqueue, (queue_entry_t)thread);
@@ -628,9 +630,8 @@ sched_traditional_steal_processor_thread(processor_t processor)
 					rq->urgency--; assert(rq->urgency >= 0);
 				}
 				if (queue_empty(queue)) {
-					if (pri != IDLEPRI)
-						clrbit(MAXPRI - pri, rq->bitmap);
-					rq->highq = MAXPRI - ffsbit(rq->bitmap);
+					bitmap_clear(rq->bitmap, pri);
+					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
 
 				return (thread);

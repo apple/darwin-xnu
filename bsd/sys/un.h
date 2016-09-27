@@ -85,7 +85,7 @@ struct	sockaddr_un {
 #define SOL_LOCAL		0
 
 /* Socket options. */
-#define LOCAL_PEERCRED		0x001		/* retrieve peer credentails */
+#define LOCAL_PEERCRED		0x001		/* retrieve peer credentials */
 #define LOCAL_PEERPID		0x002		/* retrieve peer pid */
 #define LOCAL_PEEREPID		0x003		/* retrieve eff. peer pid */
 #define LOCAL_PEERUUID		0x004		/* retrieve peer UUID */

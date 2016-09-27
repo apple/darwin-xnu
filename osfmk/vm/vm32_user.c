@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -90,7 +90,7 @@
 #include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
 
-#if VM32_SUPPORT
+#ifdef VM32_SUPPORT
 
 /*
  * See vm_user.c for the real implementation of all of these functions.

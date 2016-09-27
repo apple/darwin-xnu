@@ -133,6 +133,7 @@ struct mount {
 	uint32_t	mnt_ioqueue_depth;	/* the maxiumum number of commands a device can accept */
         uint32_t	mnt_ioscale;		/* scale the various throttles/limits imposed on the amount of I/O in flight */
 	uint32_t	mnt_ioflags;		/* flags for  underlying device */
+	uint32_t	mnt_minsaturationbytecount;	/* if non-zero, mininum amount of writes (in bytes) needed to max out throughput */
 	pending_io_t	mnt_pending_write_size __attribute__((aligned(sizeof(pending_io_t))));	/* byte count of pending writes */
 	pending_io_t	mnt_pending_read_size  __attribute__((aligned(sizeof(pending_io_t))));	/* byte count of pending reads */
 	struct timeval	mnt_last_write_issued_timestamp;
@@ -192,6 +193,8 @@ struct mount {
 	 */
 	int		mnt_authcache_ttl;
 	char		fstypename_override[MFSTYPENAMELEN];
+
+	uint32_t	mnt_iobufinuse;
 };
 
 /*
@@ -214,11 +217,6 @@ struct mount {
  * ioqueue depth for devices that don't report one
  */
 #define MNT_DEFAULT_IOQUEUE_DEPTH	32
-
-  
-/* XXX 3762912 hack to support HFS filesystem 'owner' */
-#define vfs_setowner(_mp, _uid, _gid)	do {(_mp)->mnt_fsowner = (_uid); (_mp)->mnt_fsgroup = (_gid); } while (0)
-
 
 /* mount point to which dead vps point to */
 extern struct mount * dead_mountp;
@@ -258,10 +256,11 @@ extern struct mount * dead_mountp;
 #define	MNTK_MWAIT		0x02000000	/* waiting for unmount to finish */
 #define MNTK_WANTRDWR		0x04000000	/* upgrade to read/write requested */
 #if REV_ENDIAN_FS
-#define MNT_REVEND		0x08000000	/* Reverse endian FS */
+#define MNT_REVEND				0x08000000	/* Reverse endian FS */
 #endif /* REV_ENDIAN_FS */
-#define MNTK_AUTH_OPAQUE        0x20000000      /* authorisation decisions are not made locally */
-#define MNTK_AUTH_OPAQUE_ACCESS 0x40000000      /* VNOP_ACCESS is reliable for remote auth */
+#define MNTK_DIR_HARDLINKS		0x10000000	/* mounted file system supports directory hard links */
+#define MNTK_AUTH_OPAQUE        0x20000000  /* authorisation decisions are not made locally */
+#define MNTK_AUTH_OPAQUE_ACCESS 0x40000000  /* VNOP_ACCESS is reliable for remote auth */
 #define MNTK_EXTENDED_SECURITY	0x80000000	/* extended security supported */
 
 #define	MNT_LNOTRESP		0x00000001	/* mount not responding */
@@ -316,7 +315,7 @@ struct vfstable {
 #define VFC_VFSLOCALARGS	0x002
 #define	VFC_VFSGENERICARGS	0x004
 #define	VFC_VFSNATIVEXATTR	0x010
-#define	VFC_VFSDIRLINKS		0x020
+#define VFC_VFSCANMOUNTROOT 0x020
 #define	VFC_VFSPREFLIGHT	0x040
 #define	VFC_VFSREADDIR_EXTENDED	0x080
 #define	VFC_VFS64BITREADY	0x100
@@ -324,10 +323,7 @@ struct vfstable {
 #define	VFC_VFSVNOP_PAGEINV2	0x2000
 #define	VFC_VFSVNOP_PAGEOUTV2	0x4000
 #define	VFC_VFSVNOP_NOUPDATEID_RENAME	0x8000
-#if CONFIG_SECLUDED_RENAME
 #define VFC_VFSVNOP_SECLUDE_RENAME 	0x10000
-#endif
-
 
 extern int maxvfstypenum;		/* highest defined filesystem type */
 extern struct vfstable  *vfsconf;	/* head of list of filesystem types */
@@ -416,7 +412,6 @@ struct user32_statfs {
 
 __BEGIN_DECLS
 
-extern boolean_t root_is_CF_drive;
 extern uint32_t mount_generation;
 extern TAILQ_HEAD(mntlist, mount) mountlist;
 void mount_list_lock(void);
@@ -453,14 +448,11 @@ void mount_iterdrop(mount_t);
 void mount_iterdrain(mount_t);
 void mount_iterreset(mount_t);
 
-/* tags a volume as not supporting extended readdir for NFS exports */
-#ifdef BSD_KERNEL_PRIVATE
-void mount_set_noreaddirext (mount_t);
-#endif
-
 /* Private NFS spi */
 #define KERNEL_MOUNT_NOAUTH		0x01 /* Don't check the UID of the directory we are mounting on */
 #define KERNEL_MOUNT_PERMIT_UNMOUNT	0x02 /* Allow (non-forced) unmounts by users other the one who mounted the volume */
+/* used by snapshot mounting SPI */
+#define KERNEL_MOUNT_SNAPSHOT		0x04 /* Mounting a snapshot */
 #if NFSCLIENT || DEVFS || ROUTEFS
 /*
  * NOTE: kernel_mount() does not force MNT_NOSUID, MNT_NOEXEC, or MNT_NODEC for non-privileged
@@ -470,19 +462,12 @@ int kernel_mount(char *, vnode_t, vnode_t, const char *, void *, size_t, int, ui
 boolean_t vfs_iskernelmount(mount_t);
 #endif
 
-/* throttled I/O api */
-
-/* returned by throttle_io_will_be_throttled */
-#define THROTTLE_DISENGAGED	0
-#define THROTTLE_ENGAGED	1
-#define THROTTLE_NOW		2
+/* Throttled I/O API.  KPI/SPI is in systm.h. */
 
 int  throttle_get_io_policy(struct uthread **ut);
 int  throttle_get_passive_io_policy(struct uthread **ut);
-int  throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
 void *throttle_info_update_by_mount(mount_t mp);
 void rethrottle_thread(uthread_t ut);
-void throttle_info_reset_window(uthread_t ut);
 
 
 /* throttled I/O helper function */

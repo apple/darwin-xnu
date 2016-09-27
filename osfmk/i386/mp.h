@@ -103,6 +103,7 @@ extern	int	kdb_debug;
 extern	int	kdb_active[];
 
 extern	volatile boolean_t mp_kdp_trap;
+extern	volatile boolean_t mp_kdp_is_NMI;
 extern 	volatile boolean_t force_immediate_debugger_NMI;
 extern  volatile boolean_t pmap_tlb_flush_timeout;
 extern  volatile usimple_lock_t spinlock_timed_out;
@@ -115,6 +116,7 @@ extern	void	mp_kdp_enter(void);
 extern	void	mp_kdp_exit(void);
 
 extern	boolean_t	mp_recent_debugger_activity(void);
+extern	void	kernel_spin(uint64_t spin_ns);
 
 /*
  * All cpu rendezvous:
@@ -183,8 +185,7 @@ extern cpu_t mp_cpus_call1(
 		void		(*action_func)(void *, void*),
 		void		*arg0,
 		void		*arg1,
-		cpumask_t	*cpus_calledp,
-		cpumask_t	*cpus_notcalledp);
+		cpumask_t	*cpus_calledp);
 
 extern void mp_cpus_NMIPI(cpumask_t cpus);
 
@@ -271,42 +272,6 @@ i_bit_impl(long word, long bit) {
 #define i_bit(bit, word)	i_bit_impl((long)(*(word)), bit)
 #endif
 
-#if	MACH_RT
-
-#if   defined(__x86_64__)
-
-#define _DISABLE_PREEMPTION 					\
-	incl	%gs:CPU_PREEMPTION_LEVEL
-
-#define _ENABLE_PREEMPTION 					\
-	decl	%gs:CPU_PREEMPTION_LEVEL		;	\
-	jne	9f					;	\
-	call	EXT(kernel_preempt_check)		;	\
-9:	
-
-#define _ENABLE_PREEMPTION_NO_CHECK				\
-	decl	%gs:CPU_PREEMPTION_LEVEL
-
-#else
-#error Unsupported architecture
-#endif
-
-/* x86_64 just calls through to the other macro directly */
-#define DISABLE_PREEMPTION		_DISABLE_PREEMPTION
-#define ENABLE_PREEMPTION		_ENABLE_PREEMPTION
-#define ENABLE_PREEMPTION_NO_CHECK	_ENABLE_PREEMPTION_NO_CHECK
-#define MP_DISABLE_PREEMPTION		_DISABLE_PREEMPTION
-#define MP_ENABLE_PREEMPTION		_ENABLE_PREEMPTION
-#define MP_ENABLE_PREEMPTION_NO_CHECK 	_ENABLE_PREEMPTION_NO_CHECK
-
-#else	/* MACH_RT */
-#define DISABLE_PREEMPTION
-#define ENABLE_PREEMPTION
-#define ENABLE_PREEMPTION_NO_CHECK
-#define MP_DISABLE_PREEMPTION
-#define MP_ENABLE_PREEMPTION
-#define MP_ENABLE_PREEMPTION_NO_CHECK
-#endif	/* MACH_RT */
 
 #endif /* _I386_MP_H_ */
 

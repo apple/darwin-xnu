@@ -1,0 +1,272 @@
+.\" Copyright (c) 2015 Apple Computer, Inc. All rights reserved.
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\"     @(#)clonefile.2
+.
+.Dd December 04, 2015
+.Dt CLONEFILE 2
+.Os Darwin
+.Sh NAME
+.Nm clonefile
+.Nd create copy on write clones of files
+.Sh SYNOPSIS
+.Fd #include <sys/attr.h>
+.Fd #include <sys/clonefile.h>
+.Pp
+.Ft int
+.Fn clonefile  "const char * src" "const char * dst" "int flags"
+.
+.Fn clonefileat  "int src_dirfd" "const char * src" "int dst_dirfd" "const char * dst" "int flags"
+.
+.Fn fclonefileat "int srcfd" "int dst_dirfd" "const char * dst" "int flags"
+.
+.Sh DESCRIPTION
+The
+.Fn clonefile
+function causes the named file
+.Fa src
+to be cloned to the named file
+.Fa dst .
+The cloned file
+.Fa dst
+shares its data blocks with the
+.Fa src
+file but has its own copy of attributes, extended attributes and ACL's which are identical to
+those of the named file
+.Fa src
+with the exceptions listed below
+.Pp
+.
+.Bl -enum
+.
+.It
+ownership information and timestamps are set as they would be if
+.Fa dst
+was created by
+.Xr openat 2
+.
+.It
+setuid and setgid bits are turned off in the mode bits for regular files.
+.El
+.Pp
+Subsequent writes to either the original or cloned file are private to the file being modified (copy-on-write).
+The named file
+.Fa dst
+must not exist for the call to be successful. Since the clonefile() system call might not 
+allocate new storage for data blocks, it is possible for a subsequent overwrite of an existing data block to
+return ENOSPC.  If
+.Fa src
+names a directory, the directory hierarchy is cloned as if each item was cloned individually.  However, the use of
+.Xr copyfile 3
+is more appropriate for copying large directory hierarchies instead of
+.Xr clonefile 2
+.Pp
+The
+.Fn clonefileat
+function is equivalent to
+.Fn clonefile
+except in the case where either
+.Fa src
+or
+.Fa dst
+specifies a relative path. If src is a relative path, the file to be cloned is located relative to the directory associated
+with the file descriptor
+.Fa src_dirfd
+instead of the current working directory. If
+.Fa dst
+is a relative path, the same happens only relative to the directory associated with
+.Fa dst_dirfd .
+If
+.Fn clonefileat
+is passed the special value
+.Dv AT_FDCWD
+in either the
+.Fa src_dirfd
+or
+.Fa dst_dirfd
+parameters, the current working directory is used in the determination of the file for
+the respective path parameter.
+.Pp
+The
+.Fn fclonefileat
+function is similar to
+.Fn clonefileat
+except that the source is identified by file descriptor
+.Fa srcfd 
+rather than a path (as in
+.Fn clonefile
+or
+.Fn clonefileat )
+.Pp
+The
+.Fa flags
+parameter specifies the options that can be passed. Options are specified in the
+.Fa flags
+argument by or'ing the following values:
+.
+.Bl -tag -width CLONE_NOFOLLOW 
+.
+.It CLONE_NOFOLLOW 
+Don't follow the src file if it is a symbolic link (applicable only if the source is not a directory).
+The symbolic link is itself cloned if
+.Fa src
+names a symbolic link.
+.
+.El
+.Pp
+The
+.Fn clonefile ,
+.Fn clonefileat
+and
+.Fn fclonefileat
+functions are expected to be atomic i.e. the system call will result all new objects being created
+successfully or no new objects will be created. POSIX conforming applications cannot use
+.Fn clonefile .
+.
+.Sh RETURN VALUES
+Upon successful completion,
+.Fn clonefile
+returns 0. Otherwise, a value of -1 is returned and errno is set to indicate the error.
+.Pp
+.Sh COMPATIBILITY 
+Not all volumes support
+.Fn clonefile .
+A volume can be tested for
+.Fn clonefile
+support by using
+.Xr getattrlist 2
+to get the volume capabilities attribute ATTR_VOL_CAPABILITIES, and then testing the VOL_CAP_INT_CLONE flag.
+.Pp
+.Sh ERRORS
+The
+.Fn clonefile
+function will fail if:
+.Bl -tag -width Er
+.
+.It Bq Er EACCES 
+Read permissions are denied on the source or write permissions are on the destination parent.
+.
+.It Bq Er ENOTSUP
+The underlying filesystem does not support this call.
+.
+.It Bq Er EEXIST 
+The named file
+.Fa dst
+exists.
+.
+.It Bq Er EXDEV
+.Fa src
+and
+.Fa dst 
+are not on the same filesystem.
+.
+.It Bq Er EINVAL
+The value of the 
+.Fa flags
+parameter is invalid.
+.
+.It Bq Er ENOSPC
+There is no free space remaining on the file system containing the file. 
+.
+.It Bq Er EIO
+An I/O error occurred while reading from or writing to the file system.
+.
+.It Bq Er EPERM
+The calling process does not have appropriate privileges.
+.
+.It Bq Er EPERM 
+.Fa src
+is the root of the Filesystem.
+.
+.It Bq Er ELOOP
+A loop exists in symbolic links encountered during in resolution
+of the
+.Fa src
+or
+.Fa dst
+path arguments.
+.
+.It Bq Er EROFS
+The requested operation requires writing in a directory on a read-only file system.
+.
+.It Bq Er ENAMETOOLONG
+The length of a component of a pathname is longer than {NAME_MAX}.
+.
+.It Bq Er ENOENT
+A component of path
+.Fa src
+or the path
+.Fa dst
+does not name an existing file or path is an empty string.
+.
+.It Bq Er ENOTDIR
+A component of path prefix of either
+.Fa src
+or
+.Fa dst
+names an  existing file that is  neither a directory nor a symbolic link to a directory,
+or the path argument contains at least one non <slash> character and ends with one or
+more trailing <slash> characters and the last pathname component names an existing file that
+is neither a directory nor a symbolic link to a directory.
+.El
+.Pp
+In addition, the
+.Fn clonefileat
+or
+.Fn fclonefileat
+functions may fail with the following errors
+.Bl -tag -width Er                                                                 
+.It Bq Er EBADF                                                                    
+The                                                                                
+.Fa src                                                                           
+or
+.Fa dst
+argument does not specify an absolute path and the                                 
+.Fa src_dirfd                                                                             
+or
+.Fa dst_dirfd
+argument is neither                                                                
+.Dv AT_FDCWD                                                                       
+nor a valid file descriptor open for searching.                                    
+.
+.It Bq Er ENOTDIR                                                                  
+The                                                                                
+.Fa src                                                                           
+or
+.Fa dst
+argument is not an absolute path and                                               
+.Fa src_dirfd                                                                             
+or
+.Fa dst_dirfd
+is neither                                                                         
+.Dv AT_FDCWD                                                                       
+nor a file descriptor associated with a directory.                              
+.El  
+.
+.Pp
+.
+.Sh SEE ALSO
+.
+.Xr copyfile 3
+.
+.Sh HISTORY
+The 
+.Fn clonefile , 
+.Fn clonefileat 
+and
+.Fn fclonefileat
+function calls appeared in OS X version 10.12
+.

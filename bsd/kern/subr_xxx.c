@@ -63,6 +63,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/kernel.h>
 #include <sys/conf.h>
 #include <sys/proc_internal.h>
 #include <sys/vnode.h>
@@ -76,6 +77,11 @@
 #include <sys/gmon.h>
 #endif
 
+#if DEVELOPMENT || DEBUG
+bool send_sigsys = true;
+#else
+#define send_sigsys true
+#endif
 
 /*
  * Unsupported device function (e.g. writing to read-only device).
@@ -178,9 +184,11 @@ nullsys(void)
  */
 /* ARGSUSED */
 int
-nosys(struct proc *p, __unused struct nosys_args *args, __unused int32_t *retval)
+nosys(__unused struct proc *p, __unused struct nosys_args *args, __unused int32_t *retval)
 {
-	psignal(p, SIGSYS);
+	if (send_sigsys) {
+		psignal_uthread(current_thread(), SIGSYS);
+	}
 	return (ENOSYS);
 }
 

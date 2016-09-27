@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,7 +76,6 @@
  * External virtual filesystem routines
  */
 
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc_internal.h>
@@ -112,7 +111,7 @@
 
 #include <string.h>
 #include <machine/spl.h>
-
+#include <machine/machine_routines.h>
 
 #include <kern/assert.h>
 #include <mach/kern_return.h>
@@ -1091,13 +1090,20 @@ vfs_mountroot(void)
 	bdevvp_rootvp = rootvp;
 
 	for (vfsp = vfsconf; vfsp; vfsp = vfsp->vfc_next) {
-		if (vfsp->vfc_mountroot == NULL)
+		if (vfsp->vfc_mountroot == NULL
+			&& !ISSET(vfsp->vfc_vfsflags, VFC_VFSCANMOUNTROOT)) {
 			continue;
+		}
 
 		mp = vfs_rootmountalloc_internal(vfsp, "root_device");
 		mp->mnt_devvp = rootvp;
 
-		if ((error = (*vfsp->vfc_mountroot)(mp, rootvp, ctx)) == 0) {
+		if (vfsp->vfc_mountroot)
+			error = (*vfsp->vfc_mountroot)(mp, rootvp, ctx);
+		else
+			error = VFS_MOUNT(mp, rootvp, 0, ctx);
+
+		if (!error) {
 			if ( bdevvp_rootvp != rootvp ) {
 				/*
 				 * rootvp changed...
@@ -1126,13 +1132,10 @@ vfs_mountroot(void)
 			 */
 			vfs_init_io_attributes(rootvp, mp);
 
-			if ((mp->mnt_ioflags & MNT_IOFLAGS_FUSION_DRIVE) && 
-			    (mp->mnt_ioflags & MNT_IOFLAGS_IOSCHED_SUPPORTED)) {
-				/*
-				 * only for CF
-				 */
+			if (mp->mnt_ioflags & MNT_IOFLAGS_FUSION_DRIVE) {
 				root_is_CF_drive = TRUE;
 			}
+
 			/*
 			 * Shadow the VFC_VFSNATIVEXATTR flag to MNTK_EXTENDED_ATTRS.
 			 */
@@ -1171,6 +1174,11 @@ vfs_mountroot(void)
 				if ((vfsattr.f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_PATH_FROM_ID) &&
 				    (vfsattr.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_PATH_FROM_ID)) {
 					mp->mnt_kern_flag |= MNTK_PATH_FROM_ID;
+				}
+
+				if ((vfsattr.f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_DIR_HARDLINKS) &&
+					(vfsattr.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_DIR_HARDLINKS)) {
+					mp->mnt_kern_flag |= MNTK_DIR_HARDLINKS;
 				}
 			}
 
@@ -1267,7 +1275,6 @@ vfs_getnewfsid(struct mount *mp)
 
 	fsid_t tfsid;
 	int mtype;
-	mount_t nmp;
 
 	mount_list_lock();
 
@@ -1278,13 +1285,12 @@ vfs_getnewfsid(struct mount *mp)
 	tfsid.val[0] = makedev(nblkdev + mtype, mntid_gen);
 	tfsid.val[1] = mtype;
 
-	TAILQ_FOREACH(nmp, &mountlist, mnt_list) {
-		while (vfs_getvfs_locked(&tfsid)) {
-			if (++mntid_gen == 0)
-				mntid_gen++;
-			tfsid.val[0] = makedev(nblkdev + mtype, mntid_gen);
-		}
+	while (vfs_getvfs_locked(&tfsid)) {
+		if (++mntid_gen == 0)
+			mntid_gen++;
+		tfsid.val[0] = makedev(nblkdev + mtype, mntid_gen);
 	}
+
 	mp->mnt_vfsstat.f_fsid.val[0] = tfsid.val[0];
 	mp->mnt_vfsstat.f_fsid.val[1] = tfsid.val[1];
 	mount_list_unlock();
@@ -2535,6 +2541,10 @@ vcount(vnode_t vp)
 	int count;
 	int vid;
 
+	if (!vnode_isspec(vp)) {
+		return (vp->v_usecount - vp->v_kusecount);		
+	}
+
 loop:
 	if (!vnode_isaliased(vp))
 	        return (vp->v_specinfo->si_opencount);
@@ -2714,8 +2724,7 @@ set_package_extensions_table(user_addr_t data, int nentries, int maxwidth)
 }
 
 
-__private_extern__ int
-is_package_name(const char *name, int len)
+int is_package_name(const char *name, int len)
 {
     int i, extlen;
     const char *ptr, *name_ext;
@@ -2888,7 +2897,6 @@ is_bad_sysctl_name(struct vfstable *vfsp, int selector_name)
 		case VFS_CTL_DISC:
 		case VFS_CTL_SERVERINFO:
 			return 1;
-			break;
 
 		default:
 			break;
@@ -2908,7 +2916,6 @@ is_bad_sysctl_name(struct vfstable *vfsp, int selector_name)
 			case AFPFS_VFS_CTL_NETCHANGE:
 			case AFPFS_VFS_CTL_VOLCHANGE:
 				return 1;
-				break;
 		}
 	}
 
@@ -3114,6 +3121,7 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 	off_t	readsegsize = 0;
 	off_t	writesegsize = 0;
 	off_t	alignment = 0;
+	u_int32_t minsaturationbytecount = 0;
 	u_int32_t ioqueue_depth = 0;
 	u_int32_t blksize;
 	u_int64_t temp;
@@ -3293,6 +3301,12 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 
 	if (features & DK_FEATURE_FORCE_UNIT_ACCESS)
 	        mp->mnt_ioflags |= MNT_IOFLAGS_FUA_SUPPORTED;
+	
+	if (VNOP_IOCTL(devvp, DKIOCGETIOMINSATURATIONBYTECOUNT, (caddr_t)&minsaturationbytecount, 0, ctx) == 0) {
+		mp->mnt_minsaturationbytecount = minsaturationbytecount;
+	} else {
+		mp->mnt_minsaturationbytecount = 0;
+	}
 
 	if (VNOP_IOCTL(devvp, DKIOCCORESTORAGE, (caddr_t)&cs_info, 0, ctx) == 0)
 		cs_present = TRUE;
@@ -3586,10 +3600,12 @@ sysctl_vfs_ctlbyfsid(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 			sfs.f_ffree = (user64_long_t)sp->f_ffree;
 			sfs.f_fsid = sp->f_fsid;
 			sfs.f_owner = sp->f_owner;
-    
+#ifdef NFSCLIENT
 			if (mp->mnt_kern_flag & MNTK_TYPENAME_OVERRIDE) {
 				strlcpy(&sfs.f_fstypename[0], &mp->fstypename_override[0], MFSTYPENAMELEN);
-			} else {
+			} else
+#endif
+			{
 				strlcpy(sfs.f_fstypename, sp->f_fstypename, MFSNAMELEN);
 			}
 			strlcpy(sfs.f_mntonname, sp->f_mntonname, MNAMELEN);
@@ -3644,10 +3660,13 @@ sysctl_vfs_ctlbyfsid(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 			sfs.f_ffree = (user32_long_t)sp->f_ffree;
 			sfs.f_fsid = sp->f_fsid;
 			sfs.f_owner = sp->f_owner;
-    
+
+#ifdef NFS_CLIENT
 			if (mp->mnt_kern_flag & MNTK_TYPENAME_OVERRIDE) {
 				strlcpy(&sfs.f_fstypename[0], &mp->fstypename_override[0], MFSTYPENAMELEN);
-			} else {
+			} else
+#endif
+			{
 				strlcpy(sfs.f_fstypename, sp->f_fstypename, MFSNAMELEN);
 			}
 			strlcpy(sfs.f_mntonname, sp->f_mntonname, MNAMELEN);
@@ -3669,20 +3688,27 @@ out:
 static int	filt_fsattach(struct knote *kn);
 static void	filt_fsdetach(struct knote *kn);
 static int	filt_fsevent(struct knote *kn, long hint);
+static int	filt_fstouch(struct knote *kn, struct kevent_internal_s *kev);
+static int	filt_fsprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
 struct filterops fs_filtops = {
         .f_attach = filt_fsattach,
         .f_detach = filt_fsdetach,
         .f_event = filt_fsevent,
+	.f_touch = filt_fstouch,
+	.f_process = filt_fsprocess,
 };
 
 static int
 filt_fsattach(struct knote *kn)
 {
-
 	lck_mtx_lock(fs_klist_lock);
-	kn->kn_flags |= EV_CLEAR;
 	KNOTE_ATTACH(&fs_klist, kn);
 	lck_mtx_unlock(fs_klist_lock);
+
+	/* 
+	 * filter only sees future events, 
+	 * so it can't be fired already.
+	 */
 	return (0);
 }
 
@@ -3708,6 +3734,52 @@ filt_fsevent(struct knote *kn, long hint)
 
 	return (kn->kn_fflags != 0);
 }
+
+static int
+filt_fstouch(struct knote *kn, struct kevent_internal_s *kev)
+{
+	int res;
+
+	lck_mtx_lock(fs_klist_lock);
+
+	kn->kn_sfflags = kev->fflags;
+	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
+		kn->kn_udata = kev->udata;
+
+	/*
+	 * the above filter function sets bits even if nobody is looking for them.
+	 * Just preserve those bits even in the new mask is more selective
+	 * than before.
+	 *
+	 * For compatibility with previous implementations, we leave kn_fflags
+	 * as they were before.
+	 */
+	//if (kn->kn_sfflags)
+	//	kn->kn_fflags &= kn->kn_sfflags;
+	res = (kn->kn_fflags != 0);
+
+	lck_mtx_unlock(fs_klist_lock);
+
+	return res;
+}
+
+static int
+filt_fsprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+{
+#pragma unused(data)
+	int res;
+
+	lck_mtx_lock(fs_klist_lock);
+	res = (kn->kn_fflags != 0);
+	if (res) {
+		*kev = kn->kn_kevent;
+		kn->kn_flags |= EV_CLEAR; /* automatic */
+		kn->kn_fflags = 0;
+		kn->kn_data = 0;
+	}
+	lck_mtx_unlock(fs_klist_lock);
+	return res;
+}	
 
 static int
 sysctl_vfs_noremotehang(__unused struct sysctl_oid *oidp,
@@ -3936,7 +4008,7 @@ process_vp(vnode_t vp, int want_vp, int *deferred)
 				panic("new_vnode(%p): free vnode still referenced", vp);
 			if ((vp->v_mntvnodes.tqe_prev != 0) && (vp->v_mntvnodes.tqe_next != 0))
 				panic("new_vnode(%p): vnode seems to be on mount list", vp);
-			if ( !LIST_EMPTY(&vp->v_nclinks) || !LIST_EMPTY(&vp->v_ncchildren))
+			if ( !LIST_EMPTY(&vp->v_nclinks) || !TAILQ_EMPTY(&vp->v_ncchildren))
 				panic("new_vnode(%p): vnode still hooked into the name cache", vp);
 		} else {
 			vnode_unlock(vp);
@@ -3946,8 +4018,7 @@ process_vp(vnode_t vp, int want_vp, int *deferred)
 	return (vp);
 }
 
-
-
+__attribute__((noreturn))
 static void
 async_work_continue(void)
 {
@@ -4024,6 +4095,8 @@ retry:
 		bzero((char *)vp, sizeof(*vp));
 		VLISTNONE(vp);		/* avoid double queue removal */
 		lck_mtx_init(&vp->v_lock, vnode_lck_grp, vnode_lck_attr);
+
+		TAILQ_INIT(&vp->v_ncchildren);
 
 		klist_init(&vp->v_knotes);
 		nanouptime(&ts);
@@ -4436,6 +4509,15 @@ vnode_isinuse(vnode_t vp, int refcnt)
 	return(vnode_isinuse_locked(vp, refcnt, 0));
 }
 
+int vnode_usecount(vnode_t vp)
+{
+	return vp->v_usecount;
+}
+
+int vnode_iocount(vnode_t vp)
+{
+	return vp->v_iocount;
+}
 
 static int 
 vnode_isinuse_locked(vnode_t vp, int refcnt, int locked)
@@ -5011,6 +5093,51 @@ vnode_create_internal(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp,
 		 */
 		vp->v_flag |= VRAGE;
 	}
+
+#if CONFIG_SECLUDED_MEMORY
+	switch (secluded_for_filecache) {
+	case 0:
+		/*
+		 * secluded_for_filecache == 0:
+		 * + no file contents in secluded pool
+		 */
+		break;
+	case 1:
+		/*
+		 * secluded_for_filecache == 1:
+		 * + no files from /
+		 * + files from /Applications/ are OK
+		 * + files from /Applications/Camera are not OK
+		 * + no files that are open for write
+		 */
+		if (vnode_vtype(vp) == VREG &&
+		    vnode_mount(vp) != NULL &&
+		    (! (vfs_flags(vnode_mount(vp)) & MNT_ROOTFS))) {
+			/* not from root filesystem: eligible for secluded pages */
+			memory_object_mark_eligible_for_secluded(
+				ubc_getobject(vp, UBC_FLAGS_NONE),
+				TRUE);
+		}
+		break;
+	case 2:
+		/*
+		 * secluded_for_filecache == 2:
+		 * + all read-only files OK, except:
+		 * 	+ dyld_shared_cache_arm64*
+		 * 	+ Camera
+		 *	+ mediaserverd
+		 */
+		if (vnode_vtype(vp) == VREG) {
+			memory_object_mark_eligible_for_secluded(
+				ubc_getobject(vp, UBC_FLAGS_NONE),
+				TRUE);
+		}
+		break;
+	default:
+		break;
+	}
+#endif /* CONFIG_SECLUDED_MEMORY */
+
 	return (0);
 
 error_out:
@@ -5584,7 +5711,6 @@ vn_create(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, struct vnode_attr *v
 	boolean_t batched;
 	struct componentname *cnp;
 	uint32_t defaulted;
-	uint32_t dfflags;	// Directory file flags
 
 	cnp = &ndp->ni_cnd;
 	error = 0;
@@ -5611,14 +5737,6 @@ vn_create(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, struct vnode_attr *v
 		panic("Mode for open, but not trying to open...");
 	}
 
-	/*
-	 * Handle inheritance of restricted flag
-	 */
-	error = vnode_flags(dvp, &dfflags, ctx);
-	if (error)
-		return error;
-	if (dfflags & SF_RESTRICTED)
-		VATTR_SET(vap, va_flags, SF_RESTRICTED);
 
 	/*
 	 * Create the requested node.
@@ -5813,7 +5931,7 @@ vn_authorize_unlink(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_cont
 	 * However, some file systems may have limited support.
 	 */
 	if ((vp->v_type == VDIR) &&
-			!(vp->v_mount->mnt_vtable->vfc_vfsflags & VFC_VFSDIRLINKS)) {
+			!(vp->v_mount->mnt_kern_flag & MNTK_DIR_HARDLINKS)) {
 		return (EPERM);	/* POSIX */
 	}
 
@@ -5955,13 +6073,22 @@ vn_authorize_create(vnode_t dvp, struct componentname *cnp, struct vnode_attr *v
 	return (vnode_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx));
 }
 
-int 
+int
 vn_authorize_rename(struct vnode *fdvp,  struct vnode *fvp,  struct componentname *fcnp,
-             struct vnode *tdvp,  struct vnode *tvp,  struct componentname *tcnp,
-             vfs_context_t ctx, void *reserved)
+					struct vnode *tdvp,  struct vnode *tvp,  struct componentname *tcnp,
+					vfs_context_t ctx, void *reserved)
+{
+	return vn_authorize_renamex(fdvp, fvp, fcnp, tdvp, tvp, tcnp, ctx, 0, reserved);
+}
+
+int
+vn_authorize_renamex(struct vnode *fdvp,  struct vnode *fvp,  struct componentname *fcnp,
+					 struct vnode *tdvp,  struct vnode *tvp,  struct componentname *tcnp,
+					 vfs_context_t ctx, vfs_rename_flags_t flags, void *reserved)
 {
 	int error = 0;
 	int moving = 0;
+	bool swap = flags & VFS_RENAME_SWAP;
 
 	if (reserved != NULL) {
 		panic("Passed something other than NULL as reserved field!");
@@ -5992,18 +6119,34 @@ vn_authorize_rename(struct vnode *fdvp,  struct vnode *fvp,  struct componentnam
 	error = mac_vnode_check_rename(ctx, fdvp, fvp, fcnp, tdvp, tvp, tcnp);
 	if (error)
 		goto out;
+	if (swap) {
+		error = mac_vnode_check_rename(ctx, tdvp, tvp, tcnp, fdvp, fvp, fcnp);
+		if (error)
+			goto out;
+	}
 #endif
 	/***** </MACF> *****/
 
 	/***** <MiscChecks> *****/
 	if (tvp != NULL) {
-		if (fvp->v_type == VDIR && tvp->v_type != VDIR) {
-			error = ENOTDIR;
-			goto out;
-		} else if (fvp->v_type != VDIR && tvp->v_type == VDIR) {
-			error = EISDIR;
-			goto out;
+		if (!swap) {
+			if (fvp->v_type == VDIR && tvp->v_type != VDIR) {
+				error = ENOTDIR;
+				goto out;
+			} else if (fvp->v_type != VDIR && tvp->v_type == VDIR) {
+				error = EISDIR;
+				goto out;
+			}
 		}
+	} else if (swap) {
+		/*
+		 * Caller should have already checked this and returned
+		 * ENOENT.  If we send back ENOENT here, caller will retry
+		 * which isn't what we want so we send back EINVAL here
+		 * instead.
+		 */
+		error = EINVAL;
+		goto out;
 	}
 
 	if (fvp == tdvp) {
@@ -6030,51 +6173,88 @@ vn_authorize_rename(struct vnode *fdvp,  struct vnode *fvp,  struct componentnam
 		error = EINVAL;
 		goto out;
 	}
+
+	if (swap && fdvp->v_parent == tvp) {
+		error = EINVAL;
+		goto out;
+	}
 	/***** </MiscChecks> *****/
 
 	/***** <Kauth> *****/
 
-	error = 0;
-	if ((tvp != NULL) && vnode_isdir(tvp)) {
-		if (tvp != fdvp)
-			moving = 1;
-	} else if (tdvp != fdvp) {
-		moving = 1;
-	}
+	if (swap) {
+		kauth_action_t f = 0, t = 0;
 
-
-	/*
-	 * must have delete rights to remove the old name even in
-	 * the simple case of fdvp == tdvp.
-	 *
-	 * If fvp is a directory, and we are changing it's parent,
-	 * then we also need rights to rewrite its ".." entry as well.
-	 */
-	if (vnode_isdir(fvp)) {
-		if ((error = vnode_authorize(fvp, fdvp, KAUTH_VNODE_DELETE | KAUTH_VNODE_ADD_SUBDIRECTORY, ctx)) != 0)
+		/*
+		 * Directories changing parents need ...ADD_SUBDIR...  to
+		 * permit changing ".."
+		 */
+		if (fdvp != tdvp) {
+			if (vnode_isdir(fvp))
+				f = KAUTH_VNODE_ADD_SUBDIRECTORY;
+			if (vnode_isdir(tvp))
+				t = KAUTH_VNODE_ADD_SUBDIRECTORY;
+		}
+		error = vnode_authorize(fvp, fdvp, KAUTH_VNODE_DELETE | f, ctx);
+		if (error)
+			goto out;
+		error = vnode_authorize(tvp, tdvp, KAUTH_VNODE_DELETE | t, ctx);
+		if (error)
+			goto out;
+		f = vnode_isdir(fvp) ? KAUTH_VNODE_ADD_SUBDIRECTORY : KAUTH_VNODE_ADD_FILE;
+		t = vnode_isdir(tvp) ? KAUTH_VNODE_ADD_SUBDIRECTORY : KAUTH_VNODE_ADD_FILE;
+		if (fdvp == tdvp)
+			error = vnode_authorize(fdvp, NULL, f | t, ctx);
+		else {
+			error = vnode_authorize(fdvp, NULL, t, ctx);
+			if (error)
+				goto out;
+			error = vnode_authorize(tdvp, NULL, f, ctx);
+		}
+		if (error)
 			goto out;
 	} else {
-		if ((error = vnode_authorize(fvp, fdvp, KAUTH_VNODE_DELETE, ctx)) != 0)
-			goto out;
-	}
-	if (moving) {
-		/* moving into tdvp or tvp, must have rights to add */
-		if ((error = vnode_authorize(((tvp != NULL) && vnode_isdir(tvp)) ? tvp : tdvp,
-						NULL, 
-						vnode_isdir(fvp) ? KAUTH_VNODE_ADD_SUBDIRECTORY : KAUTH_VNODE_ADD_FILE,
-						ctx)) != 0) {
+		error = 0;
+		if ((tvp != NULL) && vnode_isdir(tvp)) {
+			if (tvp != fdvp)
+				moving = 1;
+		} else if (tdvp != fdvp) {
+			moving = 1;
+		}
+
+		/*
+		 * must have delete rights to remove the old name even in
+		 * the simple case of fdvp == tdvp.
+		 *
+		 * If fvp is a directory, and we are changing it's parent,
+		 * then we also need rights to rewrite its ".." entry as well.
+		 */
+		if (vnode_isdir(fvp)) {
+			if ((error = vnode_authorize(fvp, fdvp, KAUTH_VNODE_DELETE | KAUTH_VNODE_ADD_SUBDIRECTORY, ctx)) != 0)
+				goto out;
+		} else {
+			if ((error = vnode_authorize(fvp, fdvp, KAUTH_VNODE_DELETE, ctx)) != 0)
+				goto out;
+		}
+		if (moving) {
+			/* moving into tdvp or tvp, must have rights to add */
+			if ((error = vnode_authorize(((tvp != NULL) && vnode_isdir(tvp)) ? tvp : tdvp,
+							NULL, 
+							vnode_isdir(fvp) ? KAUTH_VNODE_ADD_SUBDIRECTORY : KAUTH_VNODE_ADD_FILE,
+							ctx)) != 0) {
+				goto out;
+			}
+		} else {
+			/* node staying in same directory, must be allowed to add new name */
+			if ((error = vnode_authorize(fdvp, NULL,
+							vnode_isdir(fvp) ? KAUTH_VNODE_ADD_SUBDIRECTORY : KAUTH_VNODE_ADD_FILE, ctx)) != 0)
+				goto out;
+		}
+		/* overwriting tvp */
+		if ((tvp != NULL) && !vnode_isdir(tvp) &&
+				((error = vnode_authorize(tvp, tdvp, KAUTH_VNODE_DELETE, ctx)) != 0)) {
 			goto out;
 		}
-	} else {
-		/* node staying in same directory, must be allowed to add new name */
-		if ((error = vnode_authorize(fdvp, NULL,
-						vnode_isdir(fvp) ? KAUTH_VNODE_ADD_SUBDIRECTORY : KAUTH_VNODE_ADD_FILE, ctx)) != 0)
-			goto out;
-	}
-	/* overwriting tvp */
-	if ((tvp != NULL) && !vnode_isdir(tvp) &&
-			((error = vnode_authorize(tvp, tdvp, KAUTH_VNODE_DELETE, ctx)) != 0)) {
-		goto out;
 	}
 
 	/***** </Kauth> *****/
@@ -6615,31 +6795,102 @@ out:
  * - Neither the node nor the directory are immutable.
  * - The user is not the superuser.
  *
- * Deletion is not permitted if the directory is sticky and the caller is
- * not owner of the node or directory.
+ * The precedence of factors for authorizing or denying delete for a credential
  *
- * If either the node grants DELETE, or the directory grants DELETE_CHILD,
- * the node may be deleted.  If neither denies the permission, and the
- * caller has Posix write access to the directory, then the node may be
- * deleted.
+ * 1) Explicit ACE on the node. (allow or deny DELETE)
+ * 2) Explicit ACE on the directory (allow or deny DELETE_CHILD).
+ *
+ *    If there are conflicting ACEs on the node and the directory, the node
+ *    ACE wins.
+ *
+ * 3) Sticky bit on the directory.
+ *    Deletion is not permitted if the directory is sticky and the caller is
+ *    not owner of the node or directory. The sticky bit rules are like a deny
+ *    delete ACE except lower in priority than ACL's either allowing or denying
+ *    delete.
+ *
+ * 4) POSIX permisions on the directory.
  *
  * As an optimization, we cache whether or not delete child is permitted
- * on directories without the sticky bit set.
+ * on directories. This enables us to skip directory ACL and POSIX checks
+ * as we already have the result from those checks. However, we always check the
+ * node ACL and, if the directory has the sticky bit set, we always check its
+ * ACL (even for a directory with an authorized delete child). Furthermore,
+ * caching the delete child authorization is independent of the sticky bit
+ * being set as it is only applicable in determining whether the node can be
+ * deleted or not.
  */
-int
-vnode_authorize_delete(vauth_ctx vcp, boolean_t cached_delete_child);
-/*static*/ int
+static int
 vnode_authorize_delete(vauth_ctx vcp, boolean_t cached_delete_child)
 {
 	struct vnode_attr	*vap = vcp->vap;
 	struct vnode_attr	*dvap = vcp->dvap;
 	kauth_cred_t		cred = vcp->ctx->vc_ucred;
 	struct kauth_acl_eval	eval;
-	int			error, delete_denied, delete_child_denied, ismember;
+	int			error, ismember;
+
+	/* Check the ACL on the node first */
+	if (VATTR_IS_NOT(vap, va_acl, NULL)) {
+		eval.ae_requested = KAUTH_VNODE_DELETE;
+		eval.ae_acl = &vap->va_acl->acl_ace[0];
+		eval.ae_count = vap->va_acl->acl_entrycount;
+		eval.ae_options = 0;
+		if (vauth_file_owner(vcp))
+			eval.ae_options |= KAUTH_AEVAL_IS_OWNER;
+		/*
+		 * We use ENOENT as a marker to indicate we could not get
+		 * information in order to delay evaluation until after we
+		 * have the ACL evaluation answer.  Previously, we would
+		 * always deny the operation at this point.
+		 */
+		if ((error = vauth_file_ingroup(vcp, &ismember, ENOENT)) != 0 && error != ENOENT)
+			return (error);
+		if (error == ENOENT)
+			eval.ae_options |= KAUTH_AEVAL_IN_GROUP_UNKNOWN;
+		else if (ismember)
+			eval.ae_options |= KAUTH_AEVAL_IN_GROUP;
+		eval.ae_exp_gall = KAUTH_VNODE_GENERIC_ALL_BITS;
+		eval.ae_exp_gread = KAUTH_VNODE_GENERIC_READ_BITS;
+		eval.ae_exp_gwrite = KAUTH_VNODE_GENERIC_WRITE_BITS;
+		eval.ae_exp_gexec = KAUTH_VNODE_GENERIC_EXECUTE_BITS;
+
+		if ((error = kauth_acl_evaluate(cred, &eval)) != 0) {
+			KAUTH_DEBUG("%p    ERROR during ACL processing - %d", vcp->vp, error);
+			return (error);
+		}
+
+		switch(eval.ae_result) {
+		case KAUTH_RESULT_DENY:
+			KAUTH_DEBUG("%p    DENIED - denied by ACL", vcp->vp);
+			return (EACCES);
+		case KAUTH_RESULT_ALLOW:
+			KAUTH_DEBUG("%p    ALLOWED - granted by ACL", vcp->vp);
+			return (0);
+		case KAUTH_RESULT_DEFER:
+		default:
+			/* Defer to directory */
+			KAUTH_DEBUG("%p    DEFERRED - by file ACL", vcp->vp);
+			break;
+		}
+	}
+
+	/*
+	 * Without a sticky bit, a previously authorized delete child is
+	 * sufficient to authorize this delete.
+	 *
+	 * If the sticky bit is set, a directory ACL which allows delete child
+	 * overrides a (potential) sticky bit deny. The authorized delete child
+	 * cannot tell us if it was authorized because of an explicit delete
+	 * child allow ACE or because of POSIX permisions so we have to check
+	 * the directory ACL everytime if the directory has a sticky bit.
+	 */
+	if (!(dvap->va_mode & S_ISTXT) && cached_delete_child) {
+		KAUTH_DEBUG("%p    ALLOWED - granted by directory ACL or POSIX permissions and no sticky bit on directory", vcp->vp);
+		return (0);
+	}
 
 	/* check the ACL on the directory */
-	delete_child_denied = 0;
-	if (!cached_delete_child && VATTR_IS_NOT(dvap, va_acl, NULL)) {
+	if (VATTR_IS_NOT(dvap, va_acl, NULL)) {
 		eval.ae_requested = KAUTH_VNODE_DELETE_CHILD;
 		eval.ae_acl = &dvap->va_acl->acl_ace[0];
 		eval.ae_count = dvap->va_acl->acl_entrycount;
@@ -6671,91 +6922,56 @@ vnode_authorize_delete(vauth_ctx vcp, boolean_t cached_delete_child)
 
 		if (error != 0) {
 			KAUTH_DEBUG("%p    ERROR during ACL processing - %d", vcp->vp, error);
-			return(error);
+			return (error);
 		}
 		switch(eval.ae_result) {
 		case KAUTH_RESULT_DENY:
-			delete_child_denied = 1;
-			break;
-			/* FALLSTHROUGH */
-                case KAUTH_RESULT_ALLOW:
-                        KAUTH_DEBUG("%p    ALLOWED - granted by directory ACL", vcp->vp);
-                        return(0);
+			KAUTH_DEBUG("%p    DENIED - denied by directory ACL", vcp->vp);
+			return (EACCES);
+		case KAUTH_RESULT_ALLOW:
+			KAUTH_DEBUG("%p    ALLOWED - granted by directory ACL", vcp->vp);
+			if (!cached_delete_child && vcp->dvp) {
+				vnode_cache_authorized_action(vcp->dvp,
+				    vcp->ctx, KAUTH_VNODE_DELETE_CHILD);
+			}
+			return (0);
 		case KAUTH_RESULT_DEFER:
 		default:
-			/* Effectively the same as !delete_child_denied */
+			/* Deferred by directory ACL */
 			KAUTH_DEBUG("%p    DEFERRED - directory ACL", vcp->vp);
 			break;
 		}
 	}
 
-	/* check the ACL on the node */
-	delete_denied = 0;
-	if (VATTR_IS_NOT(vap, va_acl, NULL)) {
-		eval.ae_requested = KAUTH_VNODE_DELETE;
-		eval.ae_acl = &vap->va_acl->acl_ace[0];
-		eval.ae_count = vap->va_acl->acl_entrycount;
-		eval.ae_options = 0;
-		if (vauth_file_owner(vcp))
-			eval.ae_options |= KAUTH_AEVAL_IS_OWNER;
+	/*
+	 * From this point, we can't explicitly allow and if we reach the end
+	 * of the function without a denial, then the delete is authorized.
+	 */
+	if (!cached_delete_child) {
+		if (vnode_authorize_posix(vcp, VWRITE, 1 /* on_dir */) != 0) {
+			KAUTH_DEBUG("%p    DENIED - denied by posix permisssions", vcp->vp);
+			return (EACCES);
+		}
 		/*
-		 * We use ENOENT as a marker to indicate we could not get
-		 * information in order to delay evaluation until after we
-		 * have the ACL evaluation answer.  Previously, we would
-		 * always deny the operation at this point.
+		 * Cache the authorized action on the vnode if allowed by the
+		 * directory ACL or POSIX permissions. It is correct to cache
+		 * this action even if sticky bit would deny deleting the node.
 		 */
-		if ((error = vauth_file_ingroup(vcp, &ismember, ENOENT)) != 0 && error != ENOENT)
-			return(error);
-		if (error == ENOENT)
-			eval.ae_options |= KAUTH_AEVAL_IN_GROUP_UNKNOWN;
-		else if (ismember)
-			eval.ae_options |= KAUTH_AEVAL_IN_GROUP;
-		eval.ae_exp_gall = KAUTH_VNODE_GENERIC_ALL_BITS;
-		eval.ae_exp_gread = KAUTH_VNODE_GENERIC_READ_BITS;
-		eval.ae_exp_gwrite = KAUTH_VNODE_GENERIC_WRITE_BITS;
-		eval.ae_exp_gexec = KAUTH_VNODE_GENERIC_EXECUTE_BITS;
-
-		if ((error = kauth_acl_evaluate(cred, &eval)) != 0) {
-			KAUTH_DEBUG("%p    ERROR during ACL processing - %d", vcp->vp, error);
-			return(error);
+		if (vcp->dvp) {
+			vnode_cache_authorized_action(vcp->dvp, vcp->ctx,
+			    KAUTH_VNODE_DELETE_CHILD);
 		}
-
-		switch(eval.ae_result) {
-		case KAUTH_RESULT_DENY:
-			delete_denied = 1;
-			break;
-		case KAUTH_RESULT_ALLOW:
-			KAUTH_DEBUG("%p    ALLOWED - granted by file ACL", vcp->vp);
-			return(0);
-		case KAUTH_RESULT_DEFER:
-		default:
-			/* Effectively the same as !delete_child_denied */
-			KAUTH_DEBUG("%p    DEFERRED%s - by file ACL", vcp->vp, delete_denied ? "(DENY)" : "");
-			break;
-		}
-	}
-
-	/* if denied by ACL on directory or node, return denial */
-	if (delete_denied || delete_child_denied) {
-		KAUTH_DEBUG("%p    DENIED - denied by ACL", vcp->vp);
-		return(EACCES);
 	}
 
 	/* enforce sticky bit behaviour */
 	if ((dvap->va_mode & S_ISTXT) && !vauth_file_owner(vcp) && !vauth_dir_owner(vcp)) {
 		KAUTH_DEBUG("%p    DENIED - sticky bit rules (user %d  file %d  dir %d)",
 		    vcp->vp, cred->cr_posix.cr_uid, vap->va_uid, dvap->va_uid);
-		return(EACCES);
-	}
-
-	/* check the directory */
-	if (!cached_delete_child && (error = vnode_authorize_posix(vcp, VWRITE, 1 /* on_dir */)) != 0) {
-		KAUTH_DEBUG("%p    DENIED - denied by posix permisssions", vcp->vp);
-		return(error);
+		return (EACCES);
 	}
 
 	/* not denied, must be OK */
-	return(0);
+	return (0);
 }
 	
 
@@ -7217,6 +7433,7 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 	boolean_t		parent_authorized_for_delete_child = FALSE;
 	boolean_t		found_deny = FALSE;
 	boolean_t		parent_ref= FALSE;
+	boolean_t		is_suser = FALSE;
 
 	vcp = &auth_context;
 	ctx = vcp->ctx = (vfs_context_t)arg0;
@@ -7315,33 +7532,8 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 		goto out;
 
 	/*
-	 * Get vnode attributes and extended security information for the vnode
-	 * and directory if required.
-	 */
-	VATTR_WANTED(&va, va_mode);
-	VATTR_WANTED(&va, va_uid);
-	VATTR_WANTED(&va, va_gid);
-	VATTR_WANTED(&va, va_flags);
-	VATTR_WANTED(&va, va_acl);
-	if ((result = vnode_getattr(vp, &va, ctx)) != 0) {
-		KAUTH_DEBUG("%p    ERROR - failed to get vnode attributes - %d", vp, result);
-		goto out;
-	}
-	if (dvp) {
-		VATTR_WANTED(&dva, va_mode);
-		VATTR_WANTED(&dva, va_uid);
-		VATTR_WANTED(&dva, va_gid);
-		VATTR_WANTED(&dva, va_flags);
-		VATTR_WANTED(&dva, va_acl);
-		if ((result = vnode_getattr(dvp, &dva, ctx)) != 0) {
-			KAUTH_DEBUG("%p    ERROR - failed to get directory vnode attributes - %d", vp, result);
-			goto out;
-		}
-	}
-
-	/*
-	 * If the vnode is an extended attribute data vnode (eg. a resource fork), *_DATA becomes
-	 * *_EXTATTRIBUTES.
+	 * If the vnode is a namedstream (extended attribute) data vnode (eg.
+	 * a resource fork), *_DATA becomes *_EXTATTRIBUTES.
 	 */
 	if (vnode_isnamedstream(vp)) {
 		if (rights & KAUTH_VNODE_READ_DATA) {
@@ -7352,26 +7544,58 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 			rights &= ~KAUTH_VNODE_WRITE_DATA;
 			rights |= KAUTH_VNODE_WRITE_EXTATTRIBUTES;
 		}
+
+		/*
+		 * Point 'vp' to the namedstream's parent for ACL checking
+		 */
+		if ((vp->v_parent != NULL) &&
+		    (vget_internal(vp->v_parent, 0, VNODE_NODEAD | VNODE_DRAINO) == 0)) {
+			parent_ref = TRUE;
+			vcp->vp = vp = vp->v_parent;
+		}
+	}
+
+	if (vfs_context_issuser(ctx)) {
+		/*
+		 * if we're not asking for execute permissions or modifications,
+		 * then we're done, this action is authorized.
+		 */
+		if (!(rights & (KAUTH_VNODE_EXECUTE | KAUTH_VNODE_WRITE_RIGHTS)))
+			goto success;
+
+		is_suser = TRUE;
 	}
 
 	/*
-	 * Point 'vp' to the resource fork's parent for ACL checking
+	 * Get vnode attributes and extended security information for the vnode
+	 * and directory if required.
+	 *
+	 * If we're root we only want mode bits and flags for checking
+	 * execute and immutability.
 	 */
-	if (vnode_isnamedstream(vp) &&
-	    (vp->v_parent != NULL) &&
-	    (vget_internal(vp->v_parent, 0, VNODE_NODEAD | VNODE_DRAINO) == 0)) {
-		parent_ref = TRUE;
-		vcp->vp = vp = vp->v_parent;
-		if (VATTR_IS_SUPPORTED(&va, va_acl) && (va.va_acl != NULL))
-			kauth_acl_free(va.va_acl);
-		VATTR_INIT(&va);
-		VATTR_WANTED(&va, va_mode);
+	VATTR_WANTED(&va, va_mode);
+	VATTR_WANTED(&va, va_flags);
+	if (!is_suser) {
 		VATTR_WANTED(&va, va_uid);
 		VATTR_WANTED(&va, va_gid);
-		VATTR_WANTED(&va, va_flags);
 		VATTR_WANTED(&va, va_acl);
-		if ((result = vnode_getattr(vp, &va, ctx)) != 0)
+	}
+	if ((result = vnode_getattr(vp, &va, ctx)) != 0) {
+		KAUTH_DEBUG("%p    ERROR - failed to get vnode attributes - %d", vp, result);
+		goto out;
+	}
+	if (dvp) {
+		VATTR_WANTED(&dva, va_mode);
+		VATTR_WANTED(&dva, va_flags);
+		if (!is_suser) {
+			VATTR_WANTED(&dva, va_uid);
+			VATTR_WANTED(&dva, va_gid);
+			VATTR_WANTED(&dva, va_acl);
+		}
+		if ((result = vnode_getattr(dvp, &dva, ctx)) != 0) {
+			KAUTH_DEBUG("%p    ERROR - failed to get directory vnode attributes - %d", vp, result);
 			goto out;
+		}
 	}
 
 	/*
@@ -7400,7 +7624,7 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 	 * note that even if parent_authorized_for_delete_child is TRUE, we
 	 * need to check on the node itself.
 	 */
-	if (!vfs_context_issuser(ctx)) {
+	if (!is_suser) {
 		/* process delete rights */
 		if ((rights & KAUTH_VNODE_DELETE) &&
 		    ((result = vnode_authorize_delete(vcp, parent_authorized_for_delete_child)) != 0))
@@ -7461,24 +7685,10 @@ out:
 		        vnode_cache_authorized_action(vp, ctx, KAUTH_VNODE_SEARCHBYANYONE);
 		}
 	}
-	if ((rights & KAUTH_VNODE_DELETE) && parent_authorized_for_delete_child == FALSE) {
-	        /*
-		 * parent was successfully and newly authorized for content deletions
-		 * add it to the cache, but only if it doesn't have the sticky
-		 * bit set on it.  This same  check is done earlier guarding
-		 * fetching of dva, and if we jumped to out without having done
-		 * this, we will have returned already because of a non-zero
-		 * 'result' value.
-		 */
-		if (VATTR_IS_SUPPORTED(&dva, va_mode) &&
-		    !(dva.va_mode & (S_ISVTX))) {
-		    	/* OK to cache delete rights */
-			KAUTH_DEBUG("%p - caching DELETE_CHILD rights", dvp);
-			vnode_cache_authorized_action(dvp, ctx, KAUTH_VNODE_DELETE_CHILD);
-		}
-	}
+success:
 	if (parent_ref)
 		vnode_put(vp);
+
 	/*
 	 * Note that this implies that we will allow requests for no rights, as well as
 	 * for rights that we do not recognise.  There should be none of these.
@@ -7501,10 +7711,11 @@ static int
 vnode_authattr_new_internal(vnode_t dvp, struct vnode_attr *vap, int noauth, uint32_t *defaulted_fieldsp, vfs_context_t ctx)
 {
 	int		error;
-	int		has_priv_suser, ismember, defaulted_owner, defaulted_group, defaulted_mode;
+	int		has_priv_suser, ismember, defaulted_owner, defaulted_group, defaulted_mode, inherit_restricted;
 	kauth_cred_t	cred;
 	guid_t		changer;
 	mount_t		dmp;
+	struct vnode_attr dva;
 
 	error = 0;
 
@@ -7513,6 +7724,8 @@ vnode_authattr_new_internal(vnode_t dvp, struct vnode_attr *vap, int noauth, uin
 	}
 
 	defaulted_owner = defaulted_group = defaulted_mode = 0;
+
+	inherit_restricted = 0;
 
 	/*
 	 * Require that the filesystem support extended security to apply any.
@@ -7544,6 +7757,16 @@ vnode_authattr_new_internal(vnode_t dvp, struct vnode_attr *vap, int noauth, uin
 	}
 
 	/*
+	 * We need the dvp's va_flags and *may* need the gid of the directory,
+	 * we ask for both here.
+	 */
+	VATTR_INIT(&dva);
+	VATTR_WANTED(&dva, va_gid);
+	VATTR_WANTED(&dva, va_flags);
+	if ((error = vnode_getattr(dvp, &dva, ctx)) != 0)
+		goto out;
+
+	/*
 	 * If the filesystem is mounted IGNORE_OWNERSHIP and an explicit grouo is set, that
 	 * group takes ownership of all new files.
 	 */
@@ -7553,11 +7776,6 @@ vnode_authattr_new_internal(vnode_t dvp, struct vnode_attr *vap, int noauth, uin
 	} else {
 		if (!VATTR_IS_ACTIVE(vap, va_gid)) {
 			/* default group comes from parent object, fallback to current user */
-			struct vnode_attr dva;
-			VATTR_INIT(&dva);
-			VATTR_WANTED(&dva, va_gid);
-			if ((error = vnode_getattr(dvp, &dva, ctx)) != 0)
-				goto out;
 			if (VATTR_IS_SUPPORTED(&dva, va_gid)) {
 				VATTR_SET(vap, va_gid, dva.va_gid);
 			} else {
@@ -7569,7 +7787,14 @@ vnode_authattr_new_internal(vnode_t dvp, struct vnode_attr *vap, int noauth, uin
 
 	if (!VATTR_IS_ACTIVE(vap, va_flags))
 		VATTR_SET(vap, va_flags, 0);
-	
+
+	/* Determine if SF_RESTRICTED should be inherited from the parent
+	 * directory. */
+	if (VATTR_IS_SUPPORTED(&dva, va_flags) &&
+	    (dva.va_flags & SF_RESTRICTED)) {
+		inherit_restricted = 1;
+	}
+
 	/* default mode is everything, masked with current umask */
 	if (!VATTR_IS_ACTIVE(vap, va_mode)) {
 		VATTR_SET(vap, va_mode, ACCESSPERMS & ~vfs_context_proc(ctx)->p_fd->fd_cmask);
@@ -7694,6 +7919,12 @@ vnode_authattr_new_internal(vnode_t dvp, struct vnode_attr *vap, int noauth, uin
 		}
 	}
 out:	
+	if (inherit_restricted) {
+		/* Apply SF_RESTRICTED to the file if its parent directory was
+		 * restricted.  This is done at the end so that root is not
+		 * required if this flag is only set due to inheritance. */
+		VATTR_SET(vap, va_flags, (vap->va_flags | SF_RESTRICTED));
+	}
 	if (defaulted_fieldsp) {
 		if (defaulted_mode) {
 			*defaulted_fieldsp |= VATTR_PREPARE_DEFAULTED_MODE;
@@ -8172,19 +8403,33 @@ no_guuid_change:
 				required_action |= KAUTH_VNODE_WRITE_SECURITY;
 			}
 			
-			/* clear set-uid and set-gid bits as required by Posix */
-			if (VATTR_IS_ACTIVE(vap, va_mode)) {
-				newmode = vap->va_mode;
-			} else if (VATTR_IS_SUPPORTED(&ova, va_mode)) {
-				newmode = ova.va_mode;
-			} else {
-				KAUTH_DEBUG("CHOWN - trying to change owner but cannot get mode from filesystem to mask setugid bits");
-				newmode = 0;
+		}
+			
+		/*
+		 * clear set-uid and set-gid bits. POSIX only requires this for
+		 * non-privileged processes but we do it even for root.
+		 */
+		if (VATTR_IS_ACTIVE(vap, va_mode)) {
+			newmode = vap->va_mode;
+		} else if (VATTR_IS_SUPPORTED(&ova, va_mode)) {
+			newmode = ova.va_mode;
+		} else {
+			KAUTH_DEBUG("CHOWN - trying to change owner but cannot get mode from filesystem to mask setugid bits");
+			newmode = 0;
+		}
+
+		/* chown always clears setuid/gid bits. An exception is made for
+		 * setattrlist executed by a root process to set <uid, gid, mode> on a file:
+		 * setattrlist is allowed to set the new mode on the file and change (chown)
+		 * uid/gid.
+		 */
+		if (newmode & (S_ISUID | S_ISGID)) {
+			if (!VATTR_IS_ACTIVE(vap, va_mode) || !has_priv_suser) {
+				KAUTH_DEBUG("CHOWN - masking setugid bits from mode %o to %o",
+					newmode, newmode & ~(S_ISUID | S_ISGID));
+				newmode &= ~(S_ISUID | S_ISGID);
 			}
-			if (newmode & (S_ISUID | S_ISGID)) {
-				VATTR_SET(vap, va_mode, newmode & ~(S_ISUID | S_ISGID));
-				KAUTH_DEBUG("CHOWN - masking setugid bits from mode %o to %o", newmode, vap->va_mode);
-			}
+			VATTR_SET(vap, va_mode, newmode);
 		}
 	}
 
@@ -8551,6 +8796,7 @@ lock_vnode_and_post(vnode_t vp, int kevent_num)
 }
 
 void panic_print_vnodes(void);
+
 /* define PANIC_PRINTS_VNODES only if investigation is required. */
 #ifdef PANIC_PRINTS_VNODES
 
@@ -8658,7 +8904,21 @@ void panic_print_vnodes(void)
 	 * iterate all vnodelist items in all mounts (mntlist) -> mnt_vnodelist
 	 */
 	TAILQ_FOREACH(mnt, &mountlist, mnt_list) {
+
+		if (!ml_validate_nofault((vm_offset_t)mnt, sizeof(mount_t))) {
+			kdb_printf("Unable to iterate the mount list %p - encountered an invalid mount pointer %p \n",
+				&mountlist, mnt);
+			break;
+		}
+
 		TAILQ_FOREACH(vp, &mnt->mnt_vnodelist, v_mntvnodes) {
+
+			if (!ml_validate_nofault((vm_offset_t)vp, sizeof(vnode_t))) {
+				kdb_printf("Unable to iterate the vnode list %p - encountered an invalid vnode pointer %p \n",
+					&mnt->mnt_vnodelist, vp);
+				break;
+			}
+				
 			if (++nvnodes > SANE_VNODE_PRINT_LIMIT)
 				return;
 			type = __vtype(vp->v_type);
@@ -9302,3 +9562,81 @@ out:
 }
 
 #endif /* CONFIG_TRIGGERS */
+
+vm_offset_t kdebug_vnode(vnode_t vp)
+{
+	return VM_KERNEL_ADDRPERM(vp);
+}
+
+static int flush_cache_on_write = 0;
+SYSCTL_INT (_kern, OID_AUTO, flush_cache_on_write,
+			CTLFLAG_RW | CTLFLAG_LOCKED, &flush_cache_on_write, 0,
+			"always flush the drive cache on writes to uncached files");
+
+int vnode_should_flush_after_write(vnode_t vp, int ioflag)
+{
+	return (flush_cache_on_write
+			&& (ISSET(ioflag, IO_NOCACHE) || vnode_isnocache(vp)));
+}
+
+/*
+ * sysctl for use by disk I/O tracing tools to get the list of existing
+ * vnodes' paths
+ */
+
+struct vnode_trace_paths_context {
+	uint64_t count;
+	long path[MAXPATHLEN / sizeof (long) + 1]; /* + 1 in case sizeof (long) does not divide MAXPATHLEN */
+};
+
+static int vnode_trace_path_callback(struct vnode *vp, void *arg) {
+	int len, rv;
+	struct vnode_trace_paths_context *ctx;
+
+	ctx = arg;
+
+	len = sizeof (ctx->path);
+	rv = vn_getpath(vp, (char *)ctx->path, &len);
+	/* vn_getpath() NUL-terminates, and len includes the NUL */
+
+	if (!rv) {
+		kdebug_lookup_gen_events(ctx->path, len, vp, TRUE);
+
+		if (++(ctx->count) == 1000) {
+			thread_yield_to_preemption();
+			ctx->count = 0;
+		}
+	}
+
+	return VNODE_RETURNED;
+}
+
+static int vfs_trace_paths_callback(mount_t mp, void *arg) {
+	if (mp->mnt_flag & MNT_LOCAL)
+		vnode_iterate(mp, VNODE_ITERATE_ALL, vnode_trace_path_callback, arg);
+
+	return VFS_RETURNED;
+}
+
+static int sysctl_vfs_trace_paths SYSCTL_HANDLER_ARGS {
+	struct vnode_trace_paths_context ctx;
+
+	(void)oidp;
+	(void)arg1;
+	(void)arg2;
+	(void)req;
+
+	if (!kauth_cred_issuser(kauth_cred_get()))
+		return EPERM;
+
+	if (!kdebug_enable || !kdebug_debugid_enabled(VFS_LOOKUP))
+		return EINVAL;
+
+	bzero(&ctx, sizeof (struct vnode_trace_paths_context));
+
+	vfs_iterate(0, vfs_trace_paths_callback, &ctx);
+
+	return 0;
+}
+
+SYSCTL_PROC(_vfs_generic, OID_AUTO, trace_paths, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_MASKED, NULL, 0, &sysctl_vfs_trace_paths, "-", "trace_paths");

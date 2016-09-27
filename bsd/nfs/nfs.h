@@ -186,6 +186,7 @@ extern int nfs_ticks;
 #define NFS_MATTR_PRINCIPAL		25	/* GSS principal to authenticate with */
 #define NFS_MATTR_SVCPRINCIPAL		26	/* GSS principal to authenticate to, the server principal */
 #define NFS_MATTR_NFS_VERSION_RANGE	27	/* Packed version range to try */
+#define NFS_MATTR_KERB_ETYPE		28	/* Enctype to use for kerberos mounts */
 
 /* NFS mount flags */
 #define NFS_MFLAG_SOFT			0	/* soft mount (requests fail if unresponsive) */
@@ -216,6 +217,22 @@ extern int nfs_ticks;
 #define NFS_LOCK_MODE_ENABLED		0	/* advisory file locking enabled */
 #define NFS_LOCK_MODE_DISABLED		1	/* do not support advisory file locking */
 #define NFS_LOCK_MODE_LOCAL		2	/* perform advisory file locking locally */
+
+
+/* Supported encryption types for kerberos session keys */
+typedef enum  nfs_supported_kerberos_etypes {
+	NFS_DES3_CBC_SHA1_KD = 16,
+	NFS_AES128_CTS_HMAC_SHA1_96 = 17,
+	NFS_AES256_CTS_HMAC_SHA1_96 = 18
+} nfs_supported_kerberos_etypes;
+
+/* Structure to hold an array of kerberos enctypes to allow on a mount */
+#define NFS_MAX_ETYPES 3
+struct nfs_etype {
+	uint32_t count;
+	uint32_t selected;  /* index in etypes that is being used. Set to count if nothing has been selected */
+	nfs_supported_kerberos_etypes etypes[NFS_MAX_ETYPES];
+};
 
 /*
  * Old-style arguments to mount NFS
@@ -970,7 +987,7 @@ extern lck_grp_t *nfs_request_grp;
 extern u_int32_t nfs_xid, nfs_xidwrap;
 extern int nfs_iosize, nfs_allow_async, nfs_statfs_rate_limit;
 extern int nfs_access_cache_timeout, nfs_access_delete, nfs_access_dotzfs, nfs_access_for_getattr;
-extern int nfs_lockd_mounts, nfs_lockd_request_sent, nfs_single_des;
+extern int nfs_lockd_mounts, nfs_lockd_request_sent;
 extern int nfs_tprintf_initial_delay, nfs_tprintf_delay;
 extern int nfsiod_thread_count, nfsiod_thread_max, nfs_max_async_writes;
 extern int nfs_idmap_ctrl, nfs_callback_port;
@@ -1131,6 +1148,9 @@ extern thread_call_t	nfsrv_idlesock_timer_call;
 #if CONFIG_FSE
 extern thread_call_t	nfsrv_fmod_timer_call;
 #endif
+
+/* nfs 4 default domain for user mapping */
+extern char nfs4_domain[MAXPATHLEN];
 
 __BEGIN_DECLS
 

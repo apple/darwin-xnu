@@ -35,12 +35,12 @@ ARCH = i386
 
 BINS=		$(ALL:%=bin-$(ARCH)/%) bin-$(ARCH)/tattle
 
-# TARBALL_CONTENTS = 	\
+# TARBALL_CONTENTS =	\
 	Makefile.benchmarks \
-	Makefile.SunOS 	\
-	Makefile.Linux 	\
-	Makefile.Aix 	\
-	Makefile.com 	\
+	Makefile.SunOS	\
+	Makefile.Linux	\
+	Makefile.Aix	\
+	Makefile.com	\
 	Makefile	\
 	$(ALL:%=%.c)	\
 	elided.c	\
@@ -49,7 +49,7 @@ BINS=		$(ALL:%=bin-$(ARCH)/%) bin-$(ARCH)/tattle
 	libmicro_main.c	\
 	libmicro.h	\
 	recurse2.c	\
-	benchmark_finibatch.c 	\
+	benchmark_finibatch.c	\
 	benchmark_initbatch.c	\
 	benchmark_optswitch.c	\
 	benchmark_fini.c	\
@@ -73,7 +73,7 @@ BINS=		$(ALL:%=bin-$(ARCH)/%) bin-$(ARCH)/tattle
 	README
 
 ifeq "$(Embedded)" "YES"
-SEMOP_FLAG= 
+SEMOP_FLAG=
 endif
 
 default $(ALL) run cstyle lint tattle: $(BINS)
@@ -95,7 +95,7 @@ default $(ALL) run cstyle lint tattle: $(BINS)
 		fi;     \
 	done;
 	@echo "done"
-	
+
 .PHONY: clean clean_subdirs clean_$(SUBDIRS)
 
 clean: clean_subdirs
@@ -104,7 +104,7 @@ clean: clean_subdirs
 clean_subdirs:
 	for dir in $(SUBDIRS); do $(MAKE) -C $$dir clean; done
 
-bin:	
+bin:
 	@mkdir -p bin-$(ARCH)
 
 $(BINS): bin
@@ -115,7 +115,6 @@ $(BINS): bin
 # commenting the lbMicro.tar as it is not being used.
 # libMicro.tar:	FORCE
 #	@chmod +x ./mk_tarball wrapper
-#	@./mk_tarball $(TARBALL_CONTENTS) 
- 
-# FORCE:
+#	@./mk_tarball $(TARBALL_CONTENTS)
 
+# FORCE:

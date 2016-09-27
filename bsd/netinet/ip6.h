@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -138,6 +138,12 @@ struct ip6_hdr {
 #define IP6TOS_CE		0x01	/* congestion experienced */
 #define IP6TOS_ECT		0x02	/* ECN-capable transport */
 #endif
+
+/*
+ * To access the 6 bits of the DSCP value in the 32 bits ip6_flow field
+ */
+#define	IP6FLOW_DSCP_MASK	0x0fc00000
+#define	IP6FLOW_DSCP_SHIFT	22
 
 /*
  * Extension Headers

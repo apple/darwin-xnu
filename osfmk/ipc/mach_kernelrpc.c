@@ -30,9 +30,12 @@
 #include <mach/mach_traps.h>
 #include <mach/mach_vm_server.h>
 #include <mach/mach_port_server.h>
+#include <mach/mach_host_server.h>
+#include <mach/mach_voucher_server.h>
 #include <mach/vm_map.h>
 #include <kern/task.h>
 #include <kern/ipc_tt.h>
+#include <kern/kalloc.h>
 #include <vm/vm_protos.h>
 
 int
@@ -112,6 +115,33 @@ _kernelrpc_mach_vm_map_trap(struct _kernelrpc_mach_vm_map_trap_args *args)
 	if (rv == KERN_SUCCESS)
 		rv = copyout(&addr, args->addr, sizeof (addr));
 
+done:
+	if (task)
+		task_deallocate(task);
+	return (rv);
+}
+
+int
+_kernelrpc_mach_vm_purgable_control_trap(
+	struct _kernelrpc_mach_vm_purgable_control_trap_args *args)
+{
+	int state;
+	task_t task = port_name_to_task(args->target);
+	int rv = MACH_SEND_INVALID_DEST;
+
+	if (task != current_task())
+		goto done;
+
+	if (copyin(args->state, (char *)&state, sizeof (state)))
+		goto done;
+
+	rv = mach_vm_purgable_control(task->map,
+				      args->address,
+				      args->control,
+				      &state);
+	if (rv == KERN_SUCCESS)
+		rv = copyout(&state, args->state, sizeof (state));
+	
 done:
 	if (task)
 		task_deallocate(task);
@@ -345,3 +375,116 @@ done:
 	return (rv);
 }
 
+kern_return_t
+host_create_mach_voucher_trap(struct host_create_mach_voucher_args *args)
+{
+	host_t host = port_name_to_host(args->host);
+	ipc_voucher_t new_voucher = IV_NULL;
+	ipc_port_t voucher_port = IPC_PORT_NULL;
+	mach_port_name_t voucher_name = 0;
+	kern_return_t kr = 0;
+
+	if (host == HOST_NULL)
+		return MACH_SEND_INVALID_DEST;
+
+	if (args->recipes_size < 0)
+		return KERN_INVALID_ARGUMENT;
+	else if (args->recipes_size > MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE)
+		return MIG_ARRAY_TOO_LARGE;
+
+	if (args->recipes_size < MACH_VOUCHER_TRAP_STACK_LIMIT) {
+		/* keep small recipes on the stack for speed */
+		uint8_t krecipes[args->recipes_size];
+		if (copyin(args->recipes, (void *)krecipes, args->recipes_size)) {
+			kr = KERN_MEMORY_ERROR;
+			goto done;
+		}
+		kr = host_create_mach_voucher(host, krecipes, args->recipes_size, &new_voucher);
+	} else {
+		uint8_t *krecipes = kalloc((vm_size_t)args->recipes_size);
+		if (!krecipes) {
+			kr = KERN_RESOURCE_SHORTAGE;
+			goto done;
+		}
+
+		if (copyin(args->recipes, (void *)krecipes, args->recipes_size)) {
+			kfree(krecipes, (vm_size_t)args->recipes_size);
+			kr = KERN_MEMORY_ERROR;
+			goto done;
+		}
+
+		kr = host_create_mach_voucher(host, krecipes, args->recipes_size, &new_voucher);
+		kfree(krecipes, (vm_size_t)args->recipes_size);
+	}
+
+	if (kr == 0) {
+		voucher_port = convert_voucher_to_port(new_voucher);
+		voucher_name = ipc_port_copyout_send(voucher_port, current_space());
+
+		kr = copyout(&voucher_name, args->voucher, sizeof(voucher_name));
+	}
+
+done:
+	return kr;
+}
+
+kern_return_t
+mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_args *args)
+{
+	ipc_voucher_t voucher = IV_NULL;
+	kern_return_t kr = KERN_SUCCESS;
+	mach_msg_type_number_t sz = 0;
+
+	if (copyin(args->recipe_size, (void *)&sz, sizeof(sz)))
+		return KERN_MEMORY_ERROR;
+
+	if (sz > MACH_VOUCHER_ATTR_MAX_RAW_RECIPE_ARRAY_SIZE)
+		return MIG_ARRAY_TOO_LARGE;
+
+	voucher = convert_port_name_to_voucher(args->voucher_name);
+	if (voucher == IV_NULL)
+		return MACH_SEND_INVALID_DEST;
+
+	mach_msg_type_number_t __assert_only max_sz = sz;
+
+	if (sz < MACH_VOUCHER_TRAP_STACK_LIMIT) {
+		/* keep small recipes on the stack for speed */
+		uint8_t krecipe[sz];
+		if (copyin(args->recipe, (void *)krecipe, sz)) {
+			kr = KERN_MEMORY_ERROR;
+			goto done;
+		}
+		kr = mach_voucher_extract_attr_recipe(voucher, args->key,
+		                                      (mach_voucher_attr_raw_recipe_t)krecipe, &sz);
+		assert(sz <= max_sz);
+
+		if (kr == KERN_SUCCESS && sz > 0)
+			kr = copyout(krecipe, (void *)args->recipe, sz);
+	} else {
+		uint8_t *krecipe = kalloc((vm_size_t)sz);
+		if (!krecipe) {
+			kr = KERN_RESOURCE_SHORTAGE;
+			goto done;
+		}
+
+		if (copyin(args->recipe, (void *)krecipe, args->recipe_size)) {
+			kfree(krecipe, (vm_size_t)sz);
+			kr = KERN_MEMORY_ERROR;
+			goto done;
+		}
+
+		kr = mach_voucher_extract_attr_recipe(voucher, args->key,
+		                                      (mach_voucher_attr_raw_recipe_t)krecipe, &sz);
+		assert(sz <= max_sz);
+
+		if (kr == KERN_SUCCESS && sz > 0)
+			kr = copyout(krecipe, (void *)args->recipe, sz);
+		kfree(krecipe, (vm_size_t)sz);
+	}
+
+	kr = copyout(&sz, args->recipe_size, sizeof(sz));
+
+done:
+	ipc_voucher_release(voucher);
+	return kr;
+}

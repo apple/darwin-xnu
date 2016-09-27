@@ -7,20 +7,20 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 MIG_TYPES = \
-	atm_types.defs 
+	atm_types.defs
 
 MIG_DEFS = \
 	atm_notification.defs
 
-MACH_PRIVATE_DEFS = 
+MACH_PRIVATE_DEFS =
 
 #
 # MIG-generated headers that are traditionally used by user
 # level code.
 #
-MIG_USHDRS = 
+MIG_USHDRS =
 
-MIG_UUHDRS = 
+MIG_UUHDRS =
 
 MIGINCLUDES = ${MIG_UUHDRS} ${MIG_USHDRS}
 
@@ -43,7 +43,7 @@ INSTALL_MI_GEN_LIST =
 INSTALL_MI_DIR = atm
 
 EXPORT_MI_LIST	= \
-	${DATAFILES}
+	${DATAFILES} atm_internal.h
 
 EXPORT_MI_GEN_LIST = \
 	${MIGINCLUDES}
@@ -54,21 +54,21 @@ ${MIGINCLUDES} : ${MIG_TYPES}
 
 ${MIG_UUHDRS} : \
 	%.h : %.defs
-	@echo MIG $@
+	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
-		-header $@ 		\
+		-header $@		\
 		$<
 
 ${MIG_USHDRS} : \
 	%_server.h : %.defs
-	@echo MIG $@
+	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
 		-header /dev/null	\
-		-sheader $@ 		\
+		-sheader $@		\
 		$<
 
 #
@@ -87,11 +87,11 @@ MIG_KUHDRS = \
 	atm_notification.h
 
 MIG_KUSRC = \
-	atm_notification_user.c 
+	atm_notification_user.c
 
-MIG_KSHDRS = 
+MIG_KSHDRS =
 
-MIG_KSSRC = 
+MIG_KSSRC =
 
 COMP_FILES = ${MIG_KUSRC} ${MIG_KSSRC}
 
@@ -101,7 +101,7 @@ ${COMP_FILES} : ${MIG_TYPES}
 
 ${MIG_KUSRC} : \
 	%_user.c : %.defs
-	@echo MIG $@
+	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
 		-user    $*_user.c              \
 		-header  $*.h              \
@@ -110,8 +110,8 @@ ${MIG_KUSRC} : \
 		$<
 
 ${MIG_KSSRC}: \
-	%_server.c : %.defs 
-	@echo MIG $@
+	%_server.c : %.defs
+	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
 		-user    /dev/null              \
 		-header  /dev/null              \

@@ -33,6 +33,7 @@
 #include <sys/user.h>
 #include <sys/dtrace_ptss.h>
 
+#include <mach/vm_map.h>
 #include <mach/vm_param.h>
 #include <mach/mach_vm.h>
 
@@ -164,16 +165,15 @@ dtrace_ptss_allocate_page(struct proc* p)
 	if (map == NULL)
 	  goto err;
 
+	mach_vm_size_t size = PAGE_MAX_SIZE;
+	mach_vm_offset_t addr = 0;
 	vm_prot_t cur_protection = VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE;
 	vm_prot_t max_protection = VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE;
 
-	mach_vm_offset_t addr = 0;
-	mach_vm_size_t size = PAGE_SIZE; // We need some way to assert that this matches vm_map_round_page() !!!
 	kern_return_t kr = mach_vm_map(map, &addr, size, 0, VM_FLAGS_ANYWHERE, IPC_PORT_NULL, 0, FALSE, cur_protection, max_protection, VM_INHERIT_DEFAULT);
 	if (kr != KERN_SUCCESS) {
 		goto err;
 	}
-
 	// Chain the page entries.
 	int i;
 	for (i=0; i<DTRACE_PTSS_ENTRIES_PER_PAGE; i++) {
@@ -216,6 +216,7 @@ dtrace_ptss_free_page(struct proc* p, struct dtrace_ptss_page* ptss_page)
 
 	// Silent failures, no point in checking return code.
 	mach_vm_deallocate(map, addr, size);
+
 
 	vm_map_deallocate(map);
 }

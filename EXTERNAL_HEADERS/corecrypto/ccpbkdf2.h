@@ -34,9 +34,9 @@ SHA-1 is a good hash to use for the core of the HMAC PRF.
  
  */
 int ccpbkdf2_hmac(const struct ccdigest_info *di,
-                   unsigned long passwordLen, const void *password,
-                   unsigned long saltLen, const void *salt,
-                   unsigned long iterations,
-                   unsigned long dkLen, void *dk);
+                   size_t passwordLen, const void *password,
+                   size_t saltLen, const void *salt,
+                   size_t iterations,
+                   size_t dkLen, void *dk);
 
 #endif /* _CORECRYPTO_CCPBKDF2_H_ */

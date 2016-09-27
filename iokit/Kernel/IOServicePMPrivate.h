@@ -458,7 +458,11 @@ the ack timer is ticking every tenth of a second.
 */
 #define ACK_TIMER_PERIOD            100000000
 
+#if defined(__i386__) || defined(__x86_64__)
 #define WATCHDOG_TIMER_PERIOD       (300)   // 300 secs
+#else
+#define WATCHDOG_TIMER_PERIOD       (180)   // 180 secs
+#endif
 
 // Max wait time in microseconds for kernel priority and capability clients
 // with async message handlers to acknowledge.

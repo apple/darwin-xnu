@@ -20,7 +20,7 @@
  */
 
 /*
- * Portions Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Portions Copyright (c) 2013, 2016, Joyent, Inc. All rights reserved.
  * Portions Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
@@ -61,6 +61,7 @@
  *   - Enabling functions
  *   - DOF functions
  *   - Anonymous enabling functions
+ *   - Process functions
  *   - Consumer state functions
  *   - Helper functions
  *   - Hook functions
@@ -93,8 +94,11 @@
 #include <mach/task.h>
 #include <kern/zalloc.h>
 #include <kern/ast.h>
+#include <kern/sched_prim.h>
 #include <kern/task.h>
 #include <netinet/in.h>
+#include <libkern/sysctl.h>
+#include <sys/kdebug.h>
 
 #include <kern/cpu_data.h>
 extern uint32_t pmap_find_phys(void *, uint64_t);
@@ -112,19 +116,14 @@ extern void dtrace_resume(void);
 extern void dtrace_init(void);
 extern void helper_init(void);
 extern void fasttrap_init(void);
-extern void dtrace_lazy_dofs_duplicate(proc_t *, proc_t *);
+
+static int  dtrace_lazy_dofs_duplicate(proc_t *, proc_t *);
 extern void dtrace_lazy_dofs_destroy(proc_t *);
 extern void dtrace_postinit(void);
 
-#include "../../../osfmk/chud/chud_dtrace.h"
-
-extern kern_return_t chudxnu_dtrace_callback
-	(uint64_t selector, uint64_t *args, uint32_t count);
-
-/* Import this function to retrieve the physical memory. */
-extern int kernel_sysctlbyname(const char *name, void *oldp,
-	size_t *oldlenp, void *newp, size_t newlen);
-
+extern void dtrace_proc_fork(proc_t*, proc_t*, int);
+extern void dtrace_proc_exec(proc_t*);
+extern void dtrace_proc_exit(proc_t*);
 /*
  * DTrace Tunable Variables
  *
@@ -155,6 +154,8 @@ dtrace_optval_t	dtrace_helper_actions_max = 32;
 dtrace_optval_t	dtrace_helper_providers_max = 64;
 dtrace_optval_t	dtrace_dstate_defsize = (1 * 1024 * 1024);
 size_t		dtrace_strsize_default = 256;
+dtrace_optval_t	dtrace_strsize_min = 8;
+dtrace_optval_t	dtrace_strsize_max = 65536;
 dtrace_optval_t	dtrace_cleanrate_default = 990099000;		/* 1.1 hz */
 dtrace_optval_t	dtrace_cleanrate_min = 20000000;			/* 50 hz */
 dtrace_optval_t	dtrace_cleanrate_max = (uint64_t)60 * NANOSEC;	/* 1/minute */
@@ -168,6 +169,9 @@ dtrace_optval_t dtrace_stackframes_default = 20;
 dtrace_optval_t dtrace_ustackframes_default = 20;
 dtrace_optval_t dtrace_jstackframes_default = 50;
 dtrace_optval_t dtrace_jstackstrsize_default = 512;
+dtrace_optval_t dtrace_buflimit_default = 75;
+dtrace_optval_t dtrace_buflimit_min = 1;
+dtrace_optval_t dtrace_buflimit_max = 99;
 int		dtrace_msgdsize_max = 128;
 hrtime_t	dtrace_chill_max = 500 * (NANOSEC / MILLISEC);	/* 500 ms */
 hrtime_t	dtrace_chill_interval = NANOSEC;		/* 1000 ms */
@@ -194,7 +198,6 @@ unsigned int	dtrace_max_cpus = 0;		/* number of enabled cpus */
  */
 static dev_info_t	*dtrace_devi;		/* device info */
 static vmem_t		*dtrace_arena;		/* probe ID arena */
-static vmem_t		*dtrace_minor;		/* minor number arena */
 static taskq_t		*dtrace_taskq;		/* task queue */
 static dtrace_probe_t	**dtrace_probes;	/* array of all probes */
 static int		dtrace_nprobes;		/* number of probes */
@@ -202,7 +205,6 @@ static dtrace_provider_t *dtrace_provider;	/* provider list */
 static dtrace_meta_t	*dtrace_meta_pid;	/* user-land meta provider */
 static int		dtrace_opens;		/* number of opens */
 static int		dtrace_helpers;		/* number of helpers */
-static void		*dtrace_softstate;	/* softstate pointer */
 static dtrace_hash_t	*dtrace_bymod;		/* probes hashed by module */
 static dtrace_hash_t	*dtrace_byfunc;		/* probes hashed by function */
 static dtrace_hash_t	*dtrace_byname;		/* probes hashed by name */
@@ -227,6 +229,7 @@ static int		dtrace_dof_mode;	/* See dtrace_impl.h for a description of Darwin's 
 			 * fbt_provide and sdt_provide. Its clearly not a dtrace tunable variable either...
 			 */
 int			dtrace_kernel_symbol_mode;	/* See dtrace_impl.h for a description of Darwin's kernel symbol modes. */
+static uint32_t		dtrace_wake_clients;
 
 
 /*
@@ -437,6 +440,14 @@ static lck_mtx_t dtrace_errlock;
 		return (0);						\
 	}
 
+#define	DTRACE_RANGE_REMAIN(remp, addr, baseaddr, basesz)		\
+do {									\
+	if ((remp) != NULL) {						\
+		*(remp) = (uintptr_t)(baseaddr) + (basesz) - (addr);	\
+	}								\
+} while (0)
+
+
 /*
  * Test whether a range of memory starting at testaddr of size testsz falls
  * within the range of memory described by addr, sz.  We take care to avoid
@@ -461,7 +472,7 @@ static lck_mtx_t dtrace_errlock;
 
 #define RECOVER_LABEL(bits) dtraceLoadRecover##bits:
 
-#if defined (__x86_64__)
+#if defined (__x86_64__) || (defined (__arm__) || defined (__arm64__))
 #define	DTRACE_LOADFUNC(bits)						\
 /*CSTYLED*/								\
 uint##bits##_t dtrace_load##bits(uintptr_t addr);			\
@@ -504,6 +515,12 @@ dtrace_load##bits(uintptr_t addr)					\
 	*/								\
         if (pmap_valid_page(pmap_find_phys(kernel_pmap, addr)))		\
 	    rval = *((volatile uint##bits##_t *)addr);			\
+	else {								\
+		*flags |= CPU_DTRACE_BADADDR;				\
+		cpu_core[CPU->cpu_id].cpuc_dtrace_illval = addr;	\
+		return (0);						\
+	}								\
+									\
 	RECOVER_LABEL(bits);						\
 	(void)dtrace_set_thread_recover(current_thread(), recover);	\
 	*flags &= ~CPU_DTRACE_NOFAULT;					\
@@ -551,7 +568,8 @@ dtrace_load##bits(uintptr_t addr)					\
 static size_t dtrace_strlen(const char *, size_t);
 static dtrace_probe_t *dtrace_probe_lookup_id(dtrace_id_t id);
 static void dtrace_enabling_provide(dtrace_provider_t *);
-static int dtrace_enabling_match(dtrace_enabling_t *, int *);
+static int dtrace_enabling_match(dtrace_enabling_t *, int *, dtrace_match_cond_t *cond);
+static void dtrace_enabling_matchall_with_cond(dtrace_match_cond_t *cond);
 static void dtrace_enabling_matchall(void);
 static dtrace_state_t *dtrace_anon_grab(void);
 static uint64_t dtrace_helper(int, dtrace_mstate_t *,
@@ -564,6 +582,10 @@ static int dtrace_state_option(dtrace_state_t *, dtrace_optid_t,
     dtrace_optval_t);
 static int dtrace_ecb_create_enable(dtrace_probe_t *, void *);
 static void dtrace_helper_provider_destroy(dtrace_helper_provider_t *);
+static int dtrace_canload_remains(uint64_t, size_t, size_t *,
+	dtrace_mstate_t *, dtrace_vstate_t *);
+static int dtrace_canstore_remains(uint64_t, size_t, size_t *,
+	dtrace_mstate_t *, dtrace_vstate_t *);
 
 
 /*
@@ -880,15 +902,15 @@ dtrace_inscratch(uintptr_t dest, size_t size, dtrace_mstate_t *mstate)
 }
 
 static int
-dtrace_canstore_statvar(uint64_t addr, size_t sz,
+dtrace_canstore_statvar(uint64_t addr, size_t sz, size_t *remain,
     dtrace_statvar_t **svars, int nsvars)
 {
 	int i;
 
 	size_t maxglobalsize, maxlocalsize;
 
-	maxglobalsize = dtrace_statvar_maxsize;
-	maxlocalsize = (maxglobalsize + sizeof (uint64_t)) * NCPU;
+	maxglobalsize = dtrace_statvar_maxsize + sizeof (uint64_t);
+	maxlocalsize = (maxglobalsize) * NCPU;
 
 	if (nsvars == 0)
 		return (0);
@@ -909,11 +931,14 @@ dtrace_canstore_statvar(uint64_t addr, size_t sz,
 		 * DTrace to escalate an orthogonal kernel heap corruption bug
 		 * into the ability to store to arbitrary locations in memory.
 		 */
-		VERIFY((scope == DIFV_SCOPE_GLOBAL && size < maxglobalsize) ||
-			(scope == DIFV_SCOPE_LOCAL && size < maxlocalsize));
+		VERIFY((scope == DIFV_SCOPE_GLOBAL && size <= maxglobalsize) ||
+			(scope == DIFV_SCOPE_LOCAL && size <= maxlocalsize));
 
-		if (DTRACE_INRANGE(addr, sz, svar->dtsv_data, svar->dtsv_size))
+		if (DTRACE_INRANGE(addr, sz, svar->dtsv_data, svar->dtsv_size)) {
+			DTRACE_RANGE_REMAIN(remain, addr, svar->dtsv_data,
+				svar->dtsv_size);
 			return (1);
+		}
 	}
 
 	return (0);
@@ -929,13 +954,25 @@ static int
 dtrace_canstore(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
     dtrace_vstate_t *vstate)
 {
+	return (dtrace_canstore_remains(addr, sz, NULL, mstate, vstate));
+}
+/*
+ * Implementation of dtrace_canstore which communicates the upper bound of the
+ * allowed memory region.
+ */
+static int
+dtrace_canstore_remains(uint64_t addr, size_t sz, size_t *remain,
+	dtrace_mstate_t *mstate, dtrace_vstate_t *vstate)
+{
 	/*
 	 * First, check to see if the address is in scratch space...
 	 */
 	if (DTRACE_INRANGE(addr, sz, mstate->dtms_scratch_base,
-	    mstate->dtms_scratch_size))
+	    mstate->dtms_scratch_size)) {
+		DTRACE_RANGE_REMAIN(remain, addr, mstate->dtms_scratch_base,
+			mstate->dtms_scratch_size);
 		return (1);
-
+	}
 	/*
 	 * Now check to see if it's a dynamic variable.  This check will pick
 	 * up both thread-local variables and any global dynamically-allocated
@@ -947,6 +984,7 @@ dtrace_canstore(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
 		uintptr_t base = (uintptr_t)dstate->dtds_base +
 		    (dstate->dtds_hashsize * sizeof (dtrace_dynhash_t));
 		uintptr_t chunkoffs;
+		dtrace_dynvar_t *dvar;
 
 		/*
 		 * Before we assume that we can store here, we need to make
@@ -963,6 +1001,8 @@ dtrace_canstore(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
 		 *
 		 *	(3) Not span a chunk boundary
 		 *
+		 *	(4) Not be in the tuple space of a dynamic variable
+		 *
 		 */
 		if (addr < base)
 			return (0);
@@ -975,6 +1015,15 @@ dtrace_canstore(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
 		if (chunkoffs + sz > dstate->dtds_chunksize)
 			return (0);
 
+		dvar = (dtrace_dynvar_t *)((uintptr_t)addr - chunkoffs);
+
+		if (dvar->dtdv_hashval == DTRACE_DYNHASH_FREE)
+			return (0);
+
+		if (chunkoffs < sizeof (dtrace_dynvar_t) +
+			((dvar->dtdv_tuple.dtt_nkeys - 1) * sizeof (dtrace_key_t)))
+			return (0);
+
 		return (1);
 	}
 
@@ -982,11 +1031,11 @@ dtrace_canstore(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
 	 * Finally, check the static local and global variables.  These checks
 	 * take the longest, so we perform them last.
 	 */
-	if (dtrace_canstore_statvar(addr, sz,
+	if (dtrace_canstore_statvar(addr, sz, remain,
 	    vstate->dtvs_locals, vstate->dtvs_nlocals))
 		return (1);
 
-	if (dtrace_canstore_statvar(addr, sz,
+	if (dtrace_canstore_statvar(addr, sz, remain,
 	    vstate->dtvs_globals, vstate->dtvs_nglobals))
 		return (1);
 
@@ -1007,27 +1056,44 @@ static int
 dtrace_canload(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
     dtrace_vstate_t *vstate)
 {
+	return (dtrace_canload_remains(addr, sz, NULL, mstate, vstate));
+}
+
+/*
+ * Implementation of dtrace_canload which communicates the upper bound of the
+ * allowed memory region.
+ */
+static int
+dtrace_canload_remains(uint64_t addr, size_t sz, size_t *remain,
+	dtrace_mstate_t *mstate, dtrace_vstate_t *vstate)
+{
 	volatile uint64_t *illval = &cpu_core[CPU->cpu_id].cpuc_dtrace_illval;
 
 	/*
 	 * If we hold the privilege to read from kernel memory, then
 	 * everything is readable.
 	 */
-	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0)
+	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0) {
+		DTRACE_RANGE_REMAIN(remain, addr, addr, sz);
 		return (1);
+	}
 
 	/*
 	 * You can obviously read that which you can store.
 	 */
-	if (dtrace_canstore(addr, sz, mstate, vstate))
+	if (dtrace_canstore_remains(addr, sz, remain, mstate, vstate))
 		return (1);
 
 	/*
 	 * We're allowed to read from our own string table.
 	 */
 	if (DTRACE_INRANGE(addr, sz, (uintptr_t)mstate->dtms_difo->dtdo_strtab,
-	    mstate->dtms_difo->dtdo_strlen))
+	    mstate->dtms_difo->dtdo_strlen)) {
+		DTRACE_RANGE_REMAIN(remain, addr,
+			mstate->dtms_difo->dtdo_strtab,
+			mstate->dtms_difo->dtdo_strlen);
 		return (1);
+	}
 
 	DTRACE_CPUFLAG_SET(CPU_DTRACE_KPRIV);
 	*illval = addr;
@@ -1041,21 +1107,41 @@ dtrace_canload(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
  * calls in the event that the user has all privileges.
  */
 static int
-dtrace_strcanload(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
-    dtrace_vstate_t *vstate)
+dtrace_strcanload(uint64_t addr, size_t sz, size_t *remain,
+	dtrace_mstate_t *mstate, dtrace_vstate_t *vstate)
 {
-	size_t strsz;
+	size_t rsize;
 
 	/*
 	 * If we hold the privilege to read from kernel memory, then
 	 * everything is readable.
 	 */
-	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0)
+	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0) {
+		DTRACE_RANGE_REMAIN(remain, addr, addr, sz);
 		return (1);
+	}
 
-	strsz = 1 + dtrace_strlen((char *)(uintptr_t)addr, sz);
-	if (dtrace_canload(addr, strsz, mstate, vstate))
-		return (1);
+	/*
+	 * Even if the caller is uninterested in querying the remaining valid
+	 * range, it is required to ensure that the access is allowed.
+	 */
+	if (remain == NULL) {
+		remain = &rsize;
+	}
+	if (dtrace_canload_remains(addr, 0, remain, mstate, vstate)) {
+		size_t strsz;
+		/*
+		 * Perform the strlen after determining the length of the
+		 * memory region which is accessible.  This prevents timing
+		 * information from being used to find NULs in memory which is
+		 * not accessible to the caller.
+		 */
+		strsz = 1 + dtrace_strlen((char *)(uintptr_t)addr,
+			MIN(sz, *remain));
+		if (strsz <= *remain) {
+			return (1);
+		}
+	}
 
 	return (0);
 }
@@ -1065,26 +1151,49 @@ dtrace_strcanload(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
  * region in which a load may be issued given the user's privilege level.
  */
 static int
-dtrace_vcanload(void *src, dtrace_diftype_t *type, dtrace_mstate_t *mstate,
-    dtrace_vstate_t *vstate)
+dtrace_vcanload(void *src, dtrace_diftype_t *type, size_t *remain,
+	dtrace_mstate_t *mstate, dtrace_vstate_t *vstate)
 {
 	size_t sz;
 	ASSERT(type->dtdt_flags & DIF_TF_BYREF);
 
 	/*
+	 * Calculate the max size before performing any checks since even
+	 * DTRACE_ACCESS_KERNEL-credentialed callers expect that this function
+	 * return the max length via 'remain'.
+	 */
+	if (type->dtdt_kind == DIF_TYPE_STRING) {
+		dtrace_state_t *state = vstate->dtvs_state;
+
+		if (state != NULL) {
+			sz = state->dts_options[DTRACEOPT_STRSIZE];
+		} else {
+			/*
+			 * In helper context, we have a NULL state; fall back
+			 * to using the system-wide default for the string size
+			 * in this case.
+			 */
+			sz = dtrace_strsize_default;
+		}
+	} else {
+		sz = type->dtdt_size;
+	}
+
+	/*
 	 * If we hold the privilege to read from kernel memory, then
 	 * everything is readable.
 	 */
-	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0)
+	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0) {
+		DTRACE_RANGE_REMAIN(remain, (uintptr_t)src, src, sz);
 		return (1);
+	}
 
-	if (type->dtdt_kind == DIF_TYPE_STRING)
-		sz = dtrace_strlen(src,
-		    vstate->dtvs_state->dts_options[DTRACEOPT_STRSIZE]) + 1;
-	else
-		sz = type->dtdt_size;
-
-	return (dtrace_canload((uintptr_t)src, sz, mstate, vstate));
+	if (type->dtdt_kind == DIF_TYPE_STRING) {
+		return (dtrace_strcanload((uintptr_t)src, sz, remain, mstate,
+			vstate));
+	}
+	return (dtrace_canload_remains((uintptr_t)src, sz, remain, mstate,
+		vstate));
 }
 
 /*
@@ -1222,15 +1331,15 @@ dtrace_strcpy(const void *src, void *dst, size_t len)
  * specified type; we assume that we can store to directly.
  */
 static void
-dtrace_vcopy(void *src, void *dst, dtrace_diftype_t *type)
+dtrace_vcopy(void *src, void *dst, dtrace_diftype_t *type, size_t limit)
 {
 	ASSERT(type->dtdt_flags & DIF_TF_BYREF);
 
 	if (type->dtdt_kind == DIF_TYPE_STRING) {
-		dtrace_strcpy(src, dst, type->dtdt_size);
+		dtrace_strcpy(src, dst, MIN(type->dtdt_size, limit));
 	} else {
-		dtrace_bcopy(src, dst, type->dtdt_size);
-}
+		dtrace_bcopy(src, dst, MIN(type->dtdt_size, limit));
+	}
 }
 
 /*
@@ -1481,7 +1590,7 @@ dtrace_priv_proc(dtrace_state_t *state)
 	if (ISSET(current_proc()->p_lflag, P_LNOATTACH))
 		goto bad;
 
-	if (dtrace_is_restricted() && !dtrace_is_running_apple_internal() && !dtrace_can_attach_to_proc(current_proc()))
+	if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed() && !dtrace_can_attach_to_proc(current_proc()))
 		goto bad;
 
 	if (state->dts_cred.dcr_action & DTRACE_CRA_PROC)
@@ -1513,7 +1622,7 @@ dtrace_priv_proc_relaxed(dtrace_state_t *state)
 static int
 dtrace_priv_kernel(dtrace_state_t *state)
 {
-	if (dtrace_is_restricted() && !dtrace_is_running_apple_internal())
+	if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed())
 		goto bad;
 
 	if (state->dts_cred.dcr_action & DTRACE_CRA_KERNEL)
@@ -3594,6 +3703,14 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		size_t scratch_size = (dest - mstate->dtms_scratch_ptr) + size;
 
 		/*
+		 * Check whether the user can access kernel memory
+		 */
+		if (dtrace_priv_kernel(state) == 0) {
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_KPRIV);
+			regs[rd] = 0;
+			break;
+		}
+		/*
 		 * This action doesn't require any credential checks since
 		 * probes will not activate in user contexts to which the
 		 * enabling user does not have permissions.
@@ -3735,30 +3852,30 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		uintptr_t kaddr = tupregs[0].dttk_value;
 		user_addr_t uaddr = tupregs[1].dttk_value;
 		uint64_t size = tupregs[2].dttk_value;
+		size_t lim;
 
 		if (!dtrace_destructive_disallow &&
 		    dtrace_priv_proc_control(state) &&
 		    !dtrace_istoxic(kaddr, size) &&
-		    dtrace_strcanload(kaddr, size, mstate, vstate)) {
+		    dtrace_strcanload(kaddr, size, &lim, mstate, vstate)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
-			dtrace_copyoutstr(kaddr, uaddr, size, flags);
+			dtrace_copyoutstr(kaddr, uaddr, lim, flags);
 			DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 		}
 		break;
 	}
 
 	case DIF_SUBR_STRLEN: {
-		size_t sz;
+		size_t size = state->dts_options[DTRACEOPT_STRSIZE];
 		uintptr_t addr = (uintptr_t)tupregs[0].dttk_value;
-		sz = dtrace_strlen((char *)addr,
-		    state->dts_options[DTRACEOPT_STRSIZE]);
+		size_t lim;
 
-		if (!dtrace_canload(addr, sz + 1, mstate, vstate)) {
+		if (!dtrace_strcanload(addr, size, &lim, mstate, vstate)) {
 			regs[rd] = 0;
 			break;
 		}
 
-		regs[rd] = sz;
+		regs[rd] = dtrace_strlen((char *)addr, lim);
 
 		break;
 	}
@@ -3772,12 +3889,19 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		 * is DIF_SUBR_STRRCHR, we will look for the last occurrence
 		 * of the specified character instead of the first.
 		 */
-		uintptr_t saddr = tupregs[0].dttk_value;
 		uintptr_t addr = tupregs[0].dttk_value;
-		uintptr_t limit = addr + state->dts_options[DTRACEOPT_STRSIZE];
+		uintptr_t addr_limit;
+		uint64_t size = state->dts_options[DTRACEOPT_STRSIZE];
+		size_t lim;
 		char c, target = (char)tupregs[1].dttk_value;
 
-		for (regs[rd] = 0; addr < limit; addr++) {
+		if (!dtrace_strcanload(addr, size, &lim, mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+		addr_limit = addr + lim;
+
+		for (regs[rd] = 0; addr < addr_limit; addr++) {
 			if ((c = dtrace_load8(addr)) == target) {
 				regs[rd] = addr;
 
@@ -3787,11 +3911,6 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 			if (c == '\0')
 				break;
-		}
-
-		if (!dtrace_canload(saddr, addr - saddr, mstate, vstate)) {
-			regs[rd] = 0;
-			break;
 		}
 
 		break;
@@ -3951,7 +4070,8 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		uintptr_t addr = tupregs[0].dttk_value;
 		uintptr_t tokaddr = tupregs[1].dttk_value;
 		uint64_t size = state->dts_options[DTRACEOPT_STRSIZE];
-		uintptr_t limit, toklimit = tokaddr + size;
+		uintptr_t limit, toklimit;
+		size_t clim;
 		char *dest = (char *)mstate->dtms_scratch_ptr;
 		uint8_t c='\0', tokmap[32];	 /* 256 / 8 */
 		uint64_t i = 0;
@@ -3960,10 +4080,11 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		 * Check both the token buffer and (later) the input buffer,
 		 * since both could be non-scratch addresses.
 		 */
-		if (!dtrace_strcanload(tokaddr, size, mstate, vstate)) {
+		if (!dtrace_strcanload(tokaddr, size, &clim, mstate, vstate)) {
 			regs[rd] = 0;
 			break;
 		}
+		toklimit = tokaddr + clim;
 
 		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
@@ -3980,6 +4101,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			 * it behaves like an implicit clause-local variable.
 			 */
 			addr = mstate->dtms_strtok;
+			limit = mstate->dtms_strtok_limit;
 		} else {
 			/*
 			 * If the user-specified address is non-NULL we must
@@ -3989,10 +4111,12 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			 * (when we fetch addr from mstate->dtms_strtok)
 			 * would fail this access check.
 			 */
-			if (!dtrace_strcanload(addr, size, mstate, vstate)) {
+			if (!dtrace_strcanload(addr, size, &clim, mstate,
+				vstate)) {
 				regs[rd] = 0;
 				break;
 			}
+			limit = addr + clim;
 		}
 
 		/*
@@ -4011,10 +4135,10 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			tokmap[c >> 3] |= (1 << (c & 0x7));
 		}
 
-		for (limit = addr + size; addr < limit; addr++) {
+		for (; addr < limit; addr++) {
 			/*
-			 * We're looking for a character that is _not_ contained
-			 * in the token string.
+			 * We're looking for a character that is _not_
+			 * contained in the token string.
 			 */
 			if ((c = dtrace_load8(addr)) == '\0')
 				break;
@@ -4032,6 +4156,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			 */
 			regs[rd] = 0;
 			mstate->dtms_strtok = 0;
+			mstate->dtms_strtok_limit = NULL;
 			break;
 		}
 
@@ -4054,6 +4179,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		regs[rd] = (uintptr_t)dest;
 		mstate->dtms_scratch_ptr += size;
 		mstate->dtms_strtok = addr;
+		mstate->dtms_strtok_limit = limit;
 		break;
 	}
 
@@ -4129,10 +4255,12 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		uint64_t size = state->dts_options[DTRACEOPT_STRSIZE];
 		uintptr_t s1 = tupregs[0].dttk_value;
 		uintptr_t s2 = tupregs[1].dttk_value;
-		uint64_t i = 0;
+		uint64_t i = 0, j = 0;
+		size_t lim1, lim2;
+		char c;
 
-		if (!dtrace_strcanload(s1, size, mstate, vstate) ||
-		    !dtrace_strcanload(s2, size, mstate, vstate)) {
+		if (!dtrace_strcanload(s1, size, &lim1, mstate, vstate) ||
+		    !dtrace_strcanload(s2, size, &lim2, mstate, vstate)) {
 			regs[rd] = 0;
 			break;
 		}
@@ -4149,8 +4277,8 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 				regs[rd] = 0;
 				break;
 			}
-
-			if ((d[i++] = dtrace_load8(s1++)) == '\0') {
+			c = (i >= lim1) ? '\0' : dtrace_load8(s1++);
+			if ((d[i++] = c) == '\0') {
 				i--;
 				break;
 			}
@@ -4162,8 +4290,8 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 				regs[rd] = 0;
 				break;
 			}
-
-			if ((d[i++] = dtrace_load8(s2++)) == '\0')
+			c = (j++ >= lim2) ? '\0' : dtrace_load8(s2++);
+			if ((d[i++] = c) == '\0')
 				break;
 		}
 
@@ -4366,9 +4494,10 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		char *dest = (char *)mstate->dtms_scratch_ptr, c;
 		uint64_t size = state->dts_options[DTRACEOPT_STRSIZE];
 		uintptr_t src = tupregs[0].dttk_value;
-		int i = 0, j = 0;
+		size_t lim;
+		size_t i = 0, j = 0;
 
-		if (!dtrace_strcanload(src, size, mstate, vstate)) {
+		if (!dtrace_strcanload(src, size, &lim, mstate, vstate)) {
 			regs[rd] = 0;
 			break;
 		}
@@ -4383,7 +4512,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		 * Move forward, loading each character.
 		 */
 		do {
-			c = dtrace_load8(src + i++);
+			c = (i >= lim) ? '\0' : dtrace_load8(src + i++);
 next:
 			if ((uint64_t)(j + 5) >= size)	/* 5 = strlen("/..c\0") */
 				break;
@@ -4393,7 +4522,7 @@ next:
 				continue;
 			}
 
-			c = dtrace_load8(src + i++);
+			c = (i >= lim) ? '\0' : dtrace_load8(src + i++);
 
 			if (c == '/') {
 				/*
@@ -4414,7 +4543,7 @@ next:
 				continue;
 			}
 
-			c = dtrace_load8(src + i++);
+			c = (i >= lim) ? '\0' : dtrace_load8(src + i++);
 
 			if (c == '/') {
 				/*
@@ -4437,7 +4566,7 @@ next:
 				continue;
 			}
 
-			c = dtrace_load8(src + i++);
+			c = (i >= lim) ? '\0' : dtrace_load8(src + i++);
 
 			if (c != '/' && c != '\0') {
 				/*
@@ -4499,6 +4628,12 @@ next:
 #if !defined(__APPLE__)			
 			ip4 = dtrace_load32(tupregs[argi].dttk_value);
 #else
+			if (!dtrace_canload(tupregs[argi].dttk_value, sizeof(ip4),
+				mstate, vstate)) {
+				regs[rd] = 0;
+				break;
+			}
+
 			dtrace_bcopy(
 			    (void *)(uintptr_t)tupregs[argi].dttk_value,
 			    (void *)(uintptr_t)&ip4, sizeof (ip4));
@@ -4558,6 +4693,12 @@ next:
 			 * The IPv4 embedded form is returned for inet_ntop,
 			 * just the IPv4 string is returned for inet_ntoa6.
 			 */
+
+			if (!dtrace_canload(tupregs[argi].dttk_value,
+				sizeof(struct in6_addr), mstate, vstate)) {
+				regs[rd] = 0;
+				break;
+			}
 
 			/*
 			 * Safely load the IPv6 address.
@@ -4736,6 +4877,7 @@ inetout:	regs[rd] = (uintptr_t)end + 1;
 		break;
 	}
 
+#if defined(__APPLE__)
 	case DIF_SUBR_VM_KERNEL_ADDRPERM: {
 		if (!dtrace_priv_kernel(state)) {
 			regs[rd] = 0;
@@ -4745,38 +4887,60 @@ inetout:	regs[rd] = (uintptr_t)end + 1;
 
 		break;
 	}
-/*
- * APPLE NOTE:
- * CoreProfile callback ('core_profile (uint64_t, [uint64_t], [uint64_t] ...)')
- */
-	case DIF_SUBR_COREPROFILE: {
-		uint64_t selector = tupregs[0].dttk_value;
-		uint64_t args[DIF_DTR_NREGS-1] = {0ULL};
-		uint32_t ii;
-		uint32_t count = (uint32_t)nargs;
 
-		if (count < 1) {
-		    regs[rd] = KERN_FAILURE;
-		    break;
-		}
-		
-		if(count > DIF_DTR_NREGS)
-		    count = DIF_DTR_NREGS;
+	case DIF_SUBR_KDEBUG_TRACE: {
+		uint32_t debugid;
+		uintptr_t args[4] = {0};
+		int i;
 
-		/* copy in any variadic argument list, bounded by DIF_DTR_NREGS */
-		for(ii = 0; ii < count-1; ii++) {
-			args[ii] = tupregs[ii+1].dttk_value;
+		if (nargs < 2 || nargs > 5) {
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+			break;
 		}
 
-		kern_return_t ret = 
-			chudxnu_dtrace_callback(selector, args, count-1);
-		if(KERN_SUCCESS != ret) {
-			/* error */
-		}
+		if (dtrace_destructive_disallow)
+			return;
 
-		regs[rd] = ret;
+		debugid = tupregs[0].dttk_value;
+		for (i = 0; i < nargs - 1; i++)
+			args[i] = tupregs[i + 1].dttk_value;
+
+		kernel_debug(debugid, args[0], args[1], args[2], args[3], 0);
+
 		break;
 	}
+
+	case DIF_SUBR_KDEBUG_TRACE_STRING: {
+		if (nargs != 3) {
+			break;
+		}
+
+		if (dtrace_destructive_disallow)
+			return;
+
+		uint64_t size = state->dts_options[DTRACEOPT_STRSIZE];
+		uint32_t debugid = tupregs[0].dttk_value;
+		uint64_t str_id = tupregs[1].dttk_value;
+		uintptr_t src = tupregs[2].dttk_value;
+		size_t lim;
+		char buf[size];
+		char* str = NULL;
+
+		if (src != (uintptr_t)0) {
+			str = buf;
+			if (!dtrace_strcanload(src, size, &lim, mstate, vstate)) {
+				break;
+			}
+			dtrace_strcpy((void*)src, buf, size);
+		}
+
+		(void)kernel_debug_string(debugid, &str_id, str);
+		regs[rd] = str_id;
+
+		break;
+	}
+#endif
+
 	}
 }
 
@@ -5072,15 +5236,17 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			size_t sz = state->dts_options[DTRACEOPT_STRSIZE];
 			uintptr_t s1 = regs[r1];
 			uintptr_t s2 = regs[r2];
+			size_t lim1 = sz, lim2 = sz;
 
 			if (s1 != 0 &&
-			    !dtrace_strcanload(s1, sz, mstate, vstate))
+			    !dtrace_strcanload(s1, sz, &lim1, mstate, vstate))
 				break;
 			if (s2 != 0 &&
-			    !dtrace_strcanload(s2, sz, mstate, vstate))
+			    !dtrace_strcanload(s2, sz, &lim2, mstate, vstate))
 				break;
 
-			cc_r = dtrace_strncmp((char *)s1, (char *)s2, sz);
+			cc_r = dtrace_strncmp((char *)s1, (char *)s2,
+				MIN(lim1, lim2));
 
 			cc_n = cc_r < 0;
 			cc_z = cc_r == 0;
@@ -5132,12 +5298,14 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			ASSERT(id >= DIF_VAR_OTHER_UBASE);
 			id -= DIF_VAR_OTHER_UBASE;
 
+			VERIFY(id < (uint_t)vstate->dtvs_nglobals);
 			svar = vstate->dtvs_globals[id];
 			ASSERT(svar != NULL);
 			v = &svar->dtsv_var;
 
 			if (v->dtdv_type.dtdt_flags & DIF_TF_BYREF) {
 				uintptr_t a = (uintptr_t)svar->dtsv_data;
+				size_t lim;
 
 				ASSERT(a != 0);
 				ASSERT(svar->dtsv_size != 0);
@@ -5151,11 +5319,11 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				}
 				if (!dtrace_vcanload(
 				    (void *)(uintptr_t)regs[rd], &v->dtdv_type,
-				    mstate, vstate))
+					&lim, mstate, vstate))
 					break;
 
 				dtrace_vcopy((void *)(uintptr_t)regs[rd],
-				    (void *)a, &v->dtdv_type);
+				    (void *)a, &v->dtdv_type, lim);
 				break;
 			}
 
@@ -5222,7 +5390,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 
 			ASSERT(id >= DIF_VAR_OTHER_UBASE);
 			id -= DIF_VAR_OTHER_UBASE;
-			ASSERT(id < (uint_t)vstate->dtvs_nlocals);
+			VERIFY(id < (uint_t)vstate->dtvs_nlocals);
 			ASSERT(vstate->dtvs_locals != NULL);
 			svar = vstate->dtvs_locals[id];
 			ASSERT(svar != NULL);
@@ -5231,6 +5399,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			if (v->dtdv_type.dtdt_flags & DIF_TF_BYREF) {
 				uintptr_t a = (uintptr_t)svar->dtsv_data;
 				size_t sz = v->dtdv_type.dtdt_size;
+				size_t lim;
 
 				sz += sizeof (uint64_t);
 				ASSERT(svar->dtsv_size == (int)NCPU * sz);
@@ -5246,11 +5415,11 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 
 				if (!dtrace_vcanload(
 				    (void *)(uintptr_t)regs[rd], &v->dtdv_type,
-				    mstate, vstate))
+				    &lim, mstate, vstate))
 					break;
 
 				dtrace_vcopy((void *)(uintptr_t)regs[rd],
-				    (void *)a, &v->dtdv_type);
+				    (void *)a, &v->dtdv_type, lim);
 				break;
 			}
 
@@ -5299,6 +5468,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			id = DIF_INSTR_VAR(instr);
 			ASSERT(id >= DIF_VAR_OTHER_UBASE);
 			id -= DIF_VAR_OTHER_UBASE;
+			VERIFY(id < (uint_t)vstate->dtvs_ntlocals);
 
 			key = &tupregs[DIF_DTR_NREGS];
 			key[0].dttk_value = (uint64_t)id;
@@ -5323,13 +5493,15 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				break;
 
 			if (v->dtdv_type.dtdt_flags & DIF_TF_BYREF) {
+				size_t lim;
+
 				if (!dtrace_vcanload(
 				    (void *)(uintptr_t)regs[rd],
-				    &v->dtdv_type, mstate, vstate))
+				    &v->dtdv_type, &lim, mstate, vstate))
 					break;
 
 				dtrace_vcopy((void *)(uintptr_t)regs[rd],
-				    dvar->dtdv_data, &v->dtdv_type);
+				    dvar->dtdv_data, &v->dtdv_type, lim);
 			} else {
 				*((uint64_t *)dvar->dtdv_data) = regs[rd];
 			}
@@ -5411,8 +5583,10 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			if (DIF_INSTR_OP(instr) == DIF_OP_LDTAA) {
 				DTRACE_TLS_THRKEY(key[nkeys].dttk_value);
 				key[nkeys++].dttk_size = 0;
+				VERIFY(id < (uint_t)vstate->dtvs_ntlocals);
 				v = &vstate->dtvs_tlocals[id];
 			} else {
+				VERIFY(id < (uint_t)vstate->dtvs_nglobals);
 				v = &vstate->dtvs_globals[id]->dtsv_var;
 			}
 
@@ -5451,8 +5625,10 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			if (DIF_INSTR_OP(instr) == DIF_OP_STTAA) {
 				DTRACE_TLS_THRKEY(key[nkeys].dttk_value);
 				key[nkeys++].dttk_size = 0;
+				VERIFY(id < (uint_t)vstate->dtvs_ntlocals);
 				v = &vstate->dtvs_tlocals[id];
 			} else {
+				VERIFY(id < (uint_t)vstate->dtvs_nglobals);
 				v = &vstate->dtvs_globals[id]->dtsv_var;
 			}
 
@@ -5466,13 +5642,15 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				break;
 
 			if (v->dtdv_type.dtdt_flags & DIF_TF_BYREF) {
+				size_t lim;
+
 				if (!dtrace_vcanload(
 				    (void *)(uintptr_t)regs[rd], &v->dtdv_type,
-				    mstate, vstate))
+				    &lim, mstate, vstate))
 					break;
 
 				dtrace_vcopy((void *)(uintptr_t)regs[rd],
-				    dvar->dtdv_data, &v->dtdv_type);
+				    dvar->dtdv_data, &v->dtdv_type, lim);
 			} else {
 				*((uint64_t *)dvar->dtdv_data) = regs[rd];
 			}
@@ -6156,6 +6334,7 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 			 * not the case.
 			 */
 			if ((ecb->dte_cond & DTRACE_COND_USERMODE) &&
+			    prov->dtpv_pops.dtps_usermode &&
 			    prov->dtpv_pops.dtps_usermode(prov->dtpv_arg,
 			    probe->dtpr_id, probe->dtpr_arg) == 0)
 				continue;
@@ -6439,7 +6618,7 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 				tomax = buf->dtb_tomax;
 				ASSERT(tomax != NULL);
 
-				if (ecb->dte_size != 0)
+				if (ecb->dte_size == 0)
 					continue;
 
 				ASSERT(ecb->dte_size >= sizeof(dtrace_rechdr_t));
@@ -6574,7 +6753,7 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 
 				if (dp->dtdo_rtype.dtdt_flags & DIF_TF_BYREF &&
 				    !dtrace_vcanload((void *)(uintptr_t)val,
-				                     &dp->dtdo_rtype, &mstate, vstate))
+				    &dp->dtdo_rtype, NULL, &mstate, vstate))
 				{
 					continue;
 				}
@@ -6999,10 +7178,12 @@ dtrace_cred2priv(cred_t *cr, uint32_t *privp, uid_t *uidp, zoneid_t *zoneidp)
 	uint32_t priv;
 
 	if (cr == NULL || PRIV_POLICY_ONLY(cr, PRIV_ALL, B_FALSE)) {
-		/*
-		 * For DTRACE_PRIV_ALL, the uid and zoneid don't matter.
-		 */
-		priv = DTRACE_PRIV_ALL;
+		if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed()) {
+			priv = DTRACE_PRIV_USER | DTRACE_PRIV_PROC;
+		}
+		else {
+			priv = DTRACE_PRIV_ALL;
+		}
 	} else {
 		*uidp = crgetuid(cr);
 		*zoneidp = crgetzoneid(cr);
@@ -7433,6 +7614,17 @@ dtrace_probekey(const dtrace_probedesc_t *pdp, dtrace_probekey_t *pkp)
 		pkp->dtpk_fmatch = &dtrace_match_nonzero;
 }
 
+static int
+dtrace_cond_provider_match(dtrace_probedesc_t *desc, void *data)
+{
+	if (desc == NULL)
+		return 1;
+
+	dtrace_probekey_f *func = dtrace_probekey_func(desc->dtpd_provider);
+
+	return func(desc->dtpd_provider, (char*)data, 0);
+}
+
 /*
  * DTrace Provider-to-Framework API Functions
  *
@@ -7569,13 +7761,16 @@ dtrace_register(const char *name, const dtrace_pattr_t *pap, uint32_t priv,
 		dtrace_enabling_provide(provider);
 
 		/*
-		 * Now we need to call dtrace_enabling_matchall() -- which
-		 * will acquire cpu_lock and dtrace_lock.  We therefore need
+		 * Now we need to call dtrace_enabling_matchall_with_cond() --
+		 * with a condition matching the provider name we just added,
+		 * which will acquire cpu_lock and dtrace_lock.  We therefore need
 		 * to drop all of our locks before calling into it...
 		 */
 		lck_mtx_unlock(&dtrace_lock);
 		lck_mtx_unlock(&dtrace_provider_lock);
-		dtrace_enabling_matchall();
+
+		dtrace_match_cond_t cond = {dtrace_cond_provider_match, provider->dtpv_name};
+		dtrace_enabling_matchall_with_cond(&cond);
 
 		return (0);
 	}
@@ -8235,6 +8430,17 @@ dtrace_helper_provide_one(dof_helper_t *dhp, dof_sec_t *sec, pid_t pid)
 
 		mops->dtms_create_probe(meta->dtm_arg, parg, &dhpb);
 	}
+
+	/*
+	 * Since we just created probes, we need to match our enablings
+	 * against those, with a precondition knowing that we have only
+	 * added probes from this provider
+	 */
+	char *prov_name = mops->dtms_provider_name(parg);
+	ASSERT(prov_name != NULL);
+	dtrace_match_cond_t cond = {dtrace_cond_provider_match, (void*)prov_name};
+
+	dtrace_enabling_matchall_with_cond(&cond);
 }
 
 static void
@@ -8255,15 +8461,6 @@ dtrace_helper_provide(dof_helper_t *dhp, pid_t pid)
 
 		dtrace_helper_provide_one(dhp, sec, pid);
 	}
-
-	/*
-	 * We may have just created probes, so we must now rematch against
-	 * any retained enablings.  Note that this call will acquire both
-	 * cpu_lock and dtrace_lock; the fact that we are holding
-	 * dtrace_meta_lock now is what defines the ordering with respect to
-	 * these three locks.
-	 */
-	dtrace_enabling_matchall();
 }
 
 static void
@@ -8480,6 +8677,7 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 	int (*efunc)(uint_t pc, const char *, ...) = dtrace_difo_err;
 	int kcheckload;
 	uint_t pc;
+	int maxglobal = -1, maxlocal = -1, maxtlocal = -1;
 
 	kcheckload = cr == NULL ||
 	    (vstate->dtvs_state->dts_cred.dcr_visible & DTRACE_CRV_KERNEL) == 0;
@@ -8700,7 +8898,8 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 				err += efunc(pc, "invalid register %u\n", rd);
 			break;
 		case DIF_OP_CALL:
-			if (subr > DIF_SUBR_MAX)
+			if (subr > DIF_SUBR_MAX &&
+			   !(subr >= DIF_SUBR_APPLE_MIN && subr <= DIF_SUBR_APPLE_MAX))
 				err += efunc(pc, "invalid subr %u\n", subr);
 			if (rd >= nregs)
 				err += efunc(pc, "invalid register %u\n", rd);
@@ -8708,7 +8907,9 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 				err += efunc(pc, "cannot write to %r0\n");
 
 			if (subr == DIF_SUBR_COPYOUT ||
-			    subr == DIF_SUBR_COPYOUTSTR) {
+			    subr == DIF_SUBR_COPYOUTSTR ||
+			    subr == DIF_SUBR_KDEBUG_TRACE ||
+			    subr == DIF_SUBR_KDEBUG_TRACE_STRING) {
 				dp->dtdo_destructive = 1;
 			}
 			break;
@@ -8796,6 +8997,9 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 
 		switch (v->dtdv_scope) {
 		case DIFV_SCOPE_GLOBAL:
+			if (maxglobal == -1 || ndx > maxglobal)
+				maxglobal = ndx;
+
 			if (ndx < vstate->dtvs_nglobals) {
 				dtrace_statvar_t *svar;
 
@@ -8806,11 +9010,16 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 			break;
 
 		case DIFV_SCOPE_THREAD:
+			if (maxtlocal == -1 || ndx > maxtlocal)
+				maxtlocal = ndx;
+
 			if (ndx < vstate->dtvs_ntlocals)
 				existing = &vstate->dtvs_tlocals[ndx];
 			break;
 
 		case DIFV_SCOPE_LOCAL:
+			if (maxlocal == -1 || ndx > maxlocal)
+				maxlocal = ndx;
 			if (ndx < vstate->dtvs_nlocals) {
 				dtrace_statvar_t *svar;
 
@@ -8855,6 +9064,37 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 
 		if (vt->dtdt_size != 0 && vt->dtdt_size != et->dtdt_size) {
 			err += efunc(i, "%d changed variable type size\n", id);
+			break;
+		}
+	}
+
+	for (pc = 0; pc < dp->dtdo_len && err == 0; pc++) {
+		dif_instr_t instr = dp->dtdo_buf[pc];
+
+		uint_t v = DIF_INSTR_VAR(instr);
+		uint_t op = DIF_INSTR_OP(instr);
+
+		switch (op) {
+		case DIF_OP_LDGS:
+		case DIF_OP_LDGAA:
+		case DIF_OP_STGS:
+		case DIF_OP_STGAA:
+			if (v > (uint_t)(DIF_VAR_OTHER_UBASE + maxglobal))
+				err += efunc(pc, "invalid variable %u\n", v);
+			break;
+		case DIF_OP_LDTS:
+		case DIF_OP_LDTAA:
+		case DIF_OP_STTS:
+		case DIF_OP_STTAA:
+			if (v > (uint_t)(DIF_VAR_OTHER_UBASE + maxtlocal))
+				err += efunc(pc, "invalid variable %u\n", v);
+			break;
+		case DIF_OP_LDLS:
+		case DIF_OP_STLS:
+			if (v > (uint_t)(DIF_VAR_OTHER_UBASE + maxlocal))
+				err += efunc(pc, "invalid variable %u\n", v);
+			break;
+		default:
 			break;
 		}
 	}
@@ -8997,7 +9237,8 @@ dtrace_difo_validate_helper(dtrace_difo_t *dp)
 			    subr == DIF_SUBR_STRJOIN ||
 			    subr == DIF_SUBR_STRRCHR ||
 			    subr == DIF_SUBR_STRSTR ||
-			    subr == DIF_SUBR_COREPROFILE ||
+			    subr == DIF_SUBR_KDEBUG_TRACE ||
+			    subr == DIF_SUBR_KDEBUG_TRACE_STRING ||
 			    subr == DIF_SUBR_HTONS ||
 			    subr == DIF_SUBR_HTONL ||
 			    subr == DIF_SUBR_HTONLL ||
@@ -9816,7 +10057,7 @@ dtrace_ecb_enable(dtrace_ecb_t *ecb)
 	}
 }
 
-static void
+static int
 dtrace_ecb_resize(dtrace_ecb_t *ecb)
 {
 	dtrace_action_t *act;
@@ -9846,9 +10087,10 @@ dtrace_ecb_resize(dtrace_ecb_t *ecb)
 			ASSERT(curneeded != UINT32_MAX);
 
 			agg->dtag_base = aggbase;
-
 			curneeded = P2ROUNDUP(curneeded, rec->dtrd_alignment);
 			rec->dtrd_offset = curneeded;
+			if (curneeded + rec->dtrd_size < curneeded)
+				return (EINVAL);
 			curneeded += rec->dtrd_size;
 			ecb->dte_needed = MAX(ecb->dte_needed, curneeded);
 
@@ -9875,11 +10117,15 @@ dtrace_ecb_resize(dtrace_ecb_t *ecb)
 			curneeded = P2ROUNDUP(curneeded, rec->dtrd_alignment);
 			rec->dtrd_offset = curneeded;
 			curneeded += rec->dtrd_size;
+			if (curneeded + rec->dtrd_size < curneeded)
+				return (EINVAL);
 		} else {
 			/* tuples must be followed by an aggregation */
 			ASSERT(act->dta_prev == NULL || !act->dta_prev->dta_intuple);
 			ecb->dte_size = P2ROUNDUP(ecb->dte_size, rec->dtrd_alignment);
 			rec->dtrd_offset = ecb->dte_size;
+			if (ecb->dte_size + rec->dtrd_size < ecb->dte_size)
+				return (EINVAL);
 			ecb->dte_size += rec->dtrd_size;
 			ecb->dte_needed = MAX(ecb->dte_needed, ecb->dte_size);
 		}
@@ -9898,6 +10144,7 @@ dtrace_ecb_resize(dtrace_ecb_t *ecb)
 	ecb->dte_size = P2ROUNDUP(ecb->dte_size, sizeof (dtrace_epid_t));
 	ecb->dte_needed = P2ROUNDUP(ecb->dte_needed, (sizeof (dtrace_epid_t)));
 	ecb->dte_state->dts_needed = MAX(ecb->dte_state->dts_needed, ecb->dte_needed);
+	return (0);
 }
 
 static dtrace_action_t *
@@ -10568,7 +10815,10 @@ dtrace_ecb_create(dtrace_state_t *state, dtrace_probe_t *probe,
 		}
 	}
 
-	dtrace_ecb_resize(ecb);
+	if ((enab->dten_error = dtrace_ecb_resize(ecb)) != 0) {
+		dtrace_ecb_destroy(ecb);
+		return (NULL);
+	}
 
 	return (dtrace_ecb_create_cache = ecb);
 }
@@ -10675,6 +10925,8 @@ dtrace_buffer_switch(dtrace_buffer_t *buf)
 	buf->dtb_flags &= ~(DTRACEBUF_ERROR | DTRACEBUF_DROPPED);
 	buf->dtb_interval = now - buf->dtb_switched;
 	buf->dtb_switched = now;
+	buf->dtb_cur_limit = buf->dtb_limit;
+
 	dtrace_interrupt_enable(cookie);
 }
 
@@ -10717,7 +10969,7 @@ dtrace_buffer_canalloc(size_t size)
 }
 
 static int
-dtrace_buffer_alloc(dtrace_buffer_t *bufs, size_t size, int flags,
+dtrace_buffer_alloc(dtrace_buffer_t *bufs, size_t limit, size_t size, int flags,
     processorid_t cpu)
 {
 	dtrace_cpu_t *cp;
@@ -10751,6 +11003,7 @@ dtrace_buffer_alloc(dtrace_buffer_t *bufs, size_t size, int flags,
 
 		ASSERT(buf->dtb_xamot == NULL);
 
+
 		/* DTrace, please do not eat all the memory. */
 		if (dtrace_buffer_canalloc(size) == B_FALSE)
 			goto err;
@@ -10758,6 +11011,10 @@ dtrace_buffer_alloc(dtrace_buffer_t *bufs, size_t size, int flags,
 			goto err;
 		dtrace_buffer_memory_inuse += size;
 
+		/* Unsure that limit is always lower than size */
+		limit = limit == size ? limit - 1 : limit;
+		buf->dtb_cur_limit = limit;
+		buf->dtb_limit = limit;
 		buf->dtb_size = size;
 		buf->dtb_flags = flags;
 		buf->dtb_offset = 0;
@@ -10857,9 +11114,27 @@ dtrace_buffer_reserve(dtrace_buffer_t *buf, size_t needed, size_t align,
 			offs += sizeof (uint32_t);
 		}
 
-		if ((uint64_t)(soffs = offs + needed) > buf->dtb_size) {
-			dtrace_buffer_drop(buf);
-			return (-1);
+		if ((uint64_t)(soffs = offs + needed) > buf->dtb_cur_limit) {
+			if (buf->dtb_cur_limit == buf->dtb_limit) {
+				buf->dtb_cur_limit = buf->dtb_size;
+
+				atomic_add_32(&state->dts_buf_over_limit, 1);
+				/**
+				 * Set an AST on the current processor
+				 * so that we can wake up the process
+				 * outside of probe context, when we know
+				 * it is safe to do so
+				 */
+				minor_t minor = getminor(state->dts_dev);
+				ASSERT(minor < 32);
+
+				atomic_or_32(&dtrace_wake_clients, 1 << minor);
+				ast_dtrace_on();
+			}
+			if ((uint64_t)soffs > buf->dtb_size) {
+				dtrace_buffer_drop(buf);
+				return (-1);
+			}
 		}
 
 		if (mstate == NULL)
@@ -11429,7 +11704,7 @@ dtrace_enabling_retract(dtrace_state_t *state)
 }
 
 static int
-dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched)
+dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched, dtrace_match_cond_t *cond)
 {
 	int i = 0;
 	int total_matched = 0, matched = 0;
@@ -11443,6 +11718,14 @@ dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched)
 		enab->dten_current = ep;
 		enab->dten_error = 0;
 
+		/**
+		 * Before doing a dtrace_probe_enable, which is really
+		 * expensive, check that this enabling matches the matching precondition
+		 * if we have one
+		 */
+		if (cond && (cond->dmc_func(&ep->dted_probe, cond->dmc_data) == 0)) {
+			continue;
+		}
 		/*
 		 * If a provider failed to enable a probe then get out and
 		 * let the consumer know we failed.
@@ -11484,7 +11767,7 @@ dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched)
 }
 
 static void
-dtrace_enabling_matchall(void)
+dtrace_enabling_matchall_with_cond(dtrace_match_cond_t *cond)
 {
 	dtrace_enabling_t *enab;
 
@@ -11507,12 +11790,21 @@ dtrace_enabling_matchall(void)
 	 * Behave as if always in "global" zone."
 	 */
 	for (enab = dtrace_retained; enab != NULL; enab = enab->dten_next) {
-		(void) dtrace_enabling_match(enab, NULL);
+		(void) dtrace_enabling_match(enab, NULL, cond);
 	}
 
 	lck_mtx_unlock(&dtrace_lock);
 	lck_mtx_unlock(&cpu_lock);
+
 }
+
+static void
+dtrace_enabling_matchall(void)
+{
+	dtrace_enabling_matchall_with_cond(NULL);
+}
+
+
 
 /*
  * If an enabling is to be enabled without having matched probes (that is, if
@@ -12768,36 +13060,14 @@ dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
 	/* Cause restart */
 	*new_state = NULL;
 	
-	/*
-	 * Darwin's DEVFS layer acquired the minor number for this "device" when it called
-	 * dtrace_devfs_clone_func(). At that time, dtrace_devfs_clone_func() proposed a minor number
-	 * (next unused according to vmem_alloc()) and then immediately put the number back in play
-	 * (by calling vmem_free()). Now that minor number is being used for an open, so committing it
-	 * to use. The following vmem_alloc() must deliver that same minor number. FIXME.
-	 */
+	minor = getminor(*devp);
 
-	minor = (minor_t)(uintptr_t)vmem_alloc(dtrace_minor, 1,
-	    VM_BESTFIT | VM_SLEEP);
-
-	if (NULL != devp) {
-    	ASSERT(getminor(*devp) == minor);
-		if (getminor(*devp) != minor) {
-			printf("dtrace_open: couldn't re-acquire vended minor number %d. Instead got %d\n", 
-					getminor(*devp), minor);
-			vmem_free(dtrace_minor, (void *)(uintptr_t)minor, 1);
-			return (ERESTART);	/* can't reacquire */
-		}
-	} else {
-        /* NULL==devp iff "Anonymous state" (see dtrace_anon_property),
-		 * so just vend the minor device number here de novo since no "open" has occurred. */
+	state = dtrace_state_allocate(minor);
+	if (NULL == state) {
+		printf("dtrace_open: couldn't acquire minor number %d. This usually means that too many DTrace clients are in use at the moment", minor);
+		return (ERESTART);	/* can't reacquire */
 	}
 
-	if (ddi_soft_state_zalloc(dtrace_softstate, minor) != DDI_SUCCESS) {
-		vmem_free(dtrace_minor, (void *)(uintptr_t)minor, 1);
-		return (EAGAIN);	/* temporary resource shortage */
-	}
-
-	state = ddi_get_soft_state(dtrace_softstate, minor);
 	state->dts_epid = DTRACE_EPIDNONE + 1;
 
 	(void) snprintf(c, sizeof (c), "dtrace_aggid_%d", minor);
@@ -12823,6 +13093,7 @@ dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
 	 */
 	state->dts_buffer = kmem_zalloc(bufsize, KM_SLEEP);
 	state->dts_aggbuffer = kmem_zalloc(bufsize, KM_SLEEP);
+	state->dts_buf_over_limit = 0;
 	state->dts_cleaner = CYCLIC_NONE;
 	state->dts_deadman = CYCLIC_NONE;
 	state->dts_vstate.dtvs_state = state;
@@ -12848,8 +13119,7 @@ dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
 	opt[DTRACEOPT_STATUSRATE] = dtrace_statusrate_default;
 	opt[DTRACEOPT_JSTACKFRAMES] = dtrace_jstackframes_default;
 	opt[DTRACEOPT_JSTACKSTRSIZE] = dtrace_jstackstrsize_default;
-
-	state->dts_activity = DTRACE_ACTIVITY_INACTIVE;
+	opt[DTRACEOPT_BUFLIMIT] = dtrace_buflimit_default;
 
 	/*
 	 * Depending on the user credentials, we set flag bits which alter probe
@@ -12857,10 +13127,28 @@ dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
 	 * actual anonymous tracing, or the possession of all privileges, all of
 	 * the normal checks are bypassed.
 	 */
+#if defined(__APPLE__)
+	if (cr == NULL || PRIV_POLICY_ONLY(cr, PRIV_ALL, B_FALSE)) {
+		if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed()) {
+			/*
+			 * Allow only proc credentials when DTrace is
+			 * restricted by the current security policy
+			 */
+			state->dts_cred.dcr_visible = DTRACE_CRV_ALLPROC;
+			state->dts_cred.dcr_action = DTRACE_CRA_PROC | DTRACE_CRA_PROC_CONTROL | DTRACE_CRA_PROC_DESTRUCTIVE_ALLUSER;
+		}
+		else {
+			state->dts_cred.dcr_visible = DTRACE_CRV_ALL;
+			state->dts_cred.dcr_action = DTRACE_CRA_ALL;
+		}
+	}
+
+#else
 	if (cr == NULL || PRIV_POLICY_ONLY(cr, PRIV_ALL, B_FALSE)) {
 		state->dts_cred.dcr_visible = DTRACE_CRV_ALL;
 		state->dts_cred.dcr_action = DTRACE_CRA_ALL;
-	} else {
+	}
+	else {
 		/*
 		 * Set up the credentials for this instantiation.  We take a
 		 * hold on the credential to prevent it from disappearing on
@@ -12977,6 +13265,7 @@ dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
 				    DTRACE_CRA_PROC_DESTRUCTIVE_ALLZONE;
 		}
 	}
+#endif
 
 	*new_state = state;
 	return(0);  /* Success */
@@ -12987,6 +13276,7 @@ dtrace_state_buffer(dtrace_state_t *state, dtrace_buffer_t *buf, int which)
 {
 	dtrace_optval_t *opt = state->dts_options, size;
 	processorid_t cpu = 0;
+	size_t limit = buf->dtb_size;
 	int flags = 0, rval;
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
@@ -13034,8 +13324,8 @@ dtrace_state_buffer(dtrace_state_t *state, dtrace_buffer_t *buf, int which)
 			 */
 			return (E2BIG);
 		}
-
-		rval = dtrace_buffer_alloc(buf, size, flags, cpu);
+		limit = opt[DTRACEOPT_BUFLIMIT] * size / 100;
+		rval = dtrace_buffer_alloc(buf, limit, size, flags, cpu);
 
 		if (rval != ENOMEM) {
 			opt[which] = size;
@@ -13282,6 +13572,18 @@ dtrace_state_go(dtrace_state_t *state, processorid_t *cpu)
 
 	if (opt[DTRACEOPT_CLEANRATE] > dtrace_cleanrate_max)
 		opt[DTRACEOPT_CLEANRATE] = dtrace_cleanrate_max;
+
+	if (opt[DTRACEOPT_STRSIZE] > dtrace_strsize_max)
+		opt[DTRACEOPT_STRSIZE] = dtrace_strsize_max;
+
+	if (opt[DTRACEOPT_STRSIZE] < dtrace_strsize_min)
+		opt[DTRACEOPT_STRSIZE] = dtrace_strsize_min;
+
+	if (opt[DTRACEOPT_BUFLIMIT] > dtrace_buflimit_max)
+		opt[DTRACEOPT_BUFLIMIT] = dtrace_buflimit_max;
+
+	if (opt[DTRACEOPT_BUFLIMIT] < dtrace_buflimit_min)
+		opt[DTRACEOPT_BUFLIMIT] = dtrace_buflimit_min;
 
 	hdlr.cyh_func = (cyc_func_t)dtrace_state_clean;
 	hdlr.cyh_arg = state;
@@ -13595,8 +13897,7 @@ dtrace_state_destroy(dtrace_state_t *state)
 	dtrace_format_destroy(state);
 
 	vmem_destroy(state->dts_aggid_arena);
-	ddi_soft_state_free(dtrace_softstate, minor);
-	vmem_free(dtrace_minor, (void *)(uintptr_t)minor, 1);
+	dtrace_state_free(minor);
 }
 
 /*
@@ -14597,10 +14898,6 @@ dtrace_lazy_dofs_add(proc_t *p, dof_ioctl_data_t* incoming_dofs, int *dofs_claim
 
 	lck_rw_lock_shared(&dtrace_dof_mode_lock);
 
-	/*
-	 * If we have lazy dof, dof mode better be LAZY_ON.
-	 */
-	ASSERT(p->p_dtrace_lazy_dofs == NULL || dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_ON);
 	ASSERT(p->p_dtrace_lazy_dofs == NULL || p->p_dtrace_helpers == NULL);
 	ASSERT(dtrace_dof_mode != DTRACE_DOF_MODE_NEVER);
 
@@ -14694,10 +14991,6 @@ dtrace_lazy_dofs_remove(proc_t *p, int generation)
 
 	lck_rw_lock_shared(&dtrace_dof_mode_lock);
 
-	/*
-	 * If we have lazy dof, dof mode better be LAZY_ON.
-	 */
-	ASSERT(p->p_dtrace_lazy_dofs == NULL || dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_ON);
 	ASSERT(p->p_dtrace_lazy_dofs == NULL || p->p_dtrace_helpers == NULL);
 	ASSERT(dtrace_dof_mode != DTRACE_DOF_MODE_NEVER);
 
@@ -14769,7 +15062,7 @@ dtrace_lazy_dofs_remove(proc_t *p, int generation)
 	}
 	
 	lck_rw_unlock_shared(&dtrace_dof_mode_lock);
-	
+
 	return rval;
 }
 
@@ -14779,12 +15072,6 @@ dtrace_lazy_dofs_destroy(proc_t *p)
 	lck_rw_lock_shared(&dtrace_dof_mode_lock);
 	lck_mtx_lock(&p->p_dtrace_sprlock);
 	
-	/*
-	 * If we have lazy dof, dof mode better be LAZY_ON, or we must be exiting.
-	 * We cannot assert against DTRACE_DOF_MODE_NEVER here, because we are called from
-	 * kern_exit.c and kern_exec.c.
-	 */
-	ASSERT(p->p_dtrace_lazy_dofs == NULL || dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_ON || p->p_lflag & P_LEXIT);
 	ASSERT(p->p_dtrace_lazy_dofs == NULL || p->p_dtrace_helpers == NULL);
 
 	dof_ioctl_data_t* lazy_dofs = p->p_dtrace_lazy_dofs;
@@ -14798,47 +15085,6 @@ dtrace_lazy_dofs_destroy(proc_t *p)
 	}
 }
 
-void
-dtrace_lazy_dofs_duplicate(proc_t *parent, proc_t *child)
-{
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
-	lck_mtx_assert(&parent->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
-	lck_mtx_assert(&child->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
-
-	lck_rw_lock_shared(&dtrace_dof_mode_lock);
-	lck_mtx_lock(&parent->p_dtrace_sprlock);
-
-	/*
-	 * If we have lazy dof, dof mode better be LAZY_ON, or we must be exiting.
-	 * We cannot assert against DTRACE_DOF_MODE_NEVER here, because we are called from
-	 * kern_fork.c
-	 */
-	ASSERT(parent->p_dtrace_lazy_dofs == NULL || dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_ON);
-	ASSERT(parent->p_dtrace_lazy_dofs == NULL || parent->p_dtrace_helpers == NULL);
-	/*
-	 * In theory we should hold the child sprlock, but this is safe...
-	 */
-	ASSERT(child->p_dtrace_lazy_dofs == NULL && child->p_dtrace_helpers == NULL);
-
-	dof_ioctl_data_t* parent_dofs = parent->p_dtrace_lazy_dofs;
-	dof_ioctl_data_t* child_dofs = NULL;
-	if (parent_dofs) {
-		size_t parent_dofs_size = DOF_IOCTL_DATA_T_SIZE(parent_dofs->dofiod_count);
-		child_dofs = kmem_alloc(parent_dofs_size, KM_SLEEP);
-		bcopy(parent_dofs, child_dofs, parent_dofs_size);
-	}
-
-	lck_mtx_unlock(&parent->p_dtrace_sprlock);
- 
-	if (child_dofs) {
-		lck_mtx_lock(&child->p_dtrace_sprlock);
-		child->p_dtrace_lazy_dofs = child_dofs;
-		lck_mtx_unlock(&child->p_dtrace_sprlock);
-	}
-
-	lck_rw_unlock_shared(&dtrace_dof_mode_lock);
-}
-
 static int
 dtrace_lazy_dofs_proc_iterate_filter(proc_t *p, void* ignored)
 {
@@ -14849,10 +15095,8 @@ dtrace_lazy_dofs_proc_iterate_filter(proc_t *p, void* ignored)
 	return p->p_dtrace_lazy_dofs != NULL;
 }
 
-static int
-dtrace_lazy_dofs_proc_iterate_doit(proc_t *p, void* ignored)
-{
-#pragma unused(ignored)
+static void
+dtrace_lazy_dofs_process(proc_t *p) {
 	/*
 	 * It is possible this process may exit during our attempt to
 	 * fault in the dof. We could fix this by holding locks longer,
@@ -14860,12 +15104,9 @@ dtrace_lazy_dofs_proc_iterate_doit(proc_t *p, void* ignored)
 	 */
 	lck_mtx_lock(&p->p_dtrace_sprlock);
 
-	/*
-	 * In this case only, it is okay to have lazy dof when dof mode is DTRACE_DOF_MODE_LAZY_OFF
-	 */
+
 	ASSERT(p->p_dtrace_lazy_dofs == NULL || p->p_dtrace_helpers == NULL);
 	ASSERT(dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_OFF);
-
 
 	dof_ioctl_data_t* lazy_dofs = p->p_dtrace_lazy_dofs;
 	p->p_dtrace_lazy_dofs = NULL;
@@ -14894,7 +15135,7 @@ dtrace_lazy_dofs_proc_iterate_doit(proc_t *p, void* ignored)
 			dhp->dofhp_dof = dhp->dofhp_addr;
 
 			dof_hdr_t *dof = dtrace_dof_copyin_from_proc(p, dhp->dofhp_dof, &rval);
-		
+
 			if (dof != NULL) {
 				dtrace_helpers_t *help;
 								
@@ -14929,8 +15170,71 @@ dtrace_lazy_dofs_proc_iterate_doit(proc_t *p, void* ignored)
 
 		kmem_free(lazy_dofs, DOF_IOCTL_DATA_T_SIZE(lazy_dofs->dofiod_count));
 	}
+}
+
+static int
+dtrace_lazy_dofs_proc_iterate_doit(proc_t *p, void* ignored)
+{
+#pragma unused(ignored)
+
+	dtrace_lazy_dofs_process(p);
 
 	return PROC_RETURNED;
+}
+
+#define DTRACE_LAZY_DOFS_DUPLICATED 1
+
+static int
+dtrace_lazy_dofs_duplicate(proc_t *parent, proc_t *child)
+{
+	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_assert(&parent->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_assert(&child->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
+
+	lck_rw_lock_shared(&dtrace_dof_mode_lock);
+	lck_mtx_lock(&parent->p_dtrace_sprlock);
+
+	/*
+	 * We need to make sure that the transition to lazy dofs -> helpers
+	 * was atomic for our parent
+	 */
+	ASSERT(parent->p_dtrace_lazy_dofs == NULL || parent->p_dtrace_helpers == NULL);
+	/*
+	 * In theory we should hold the child sprlock, but this is safe...
+	 */
+	ASSERT(child->p_dtrace_lazy_dofs == NULL && child->p_dtrace_helpers == NULL);
+
+	dof_ioctl_data_t* parent_dofs = parent->p_dtrace_lazy_dofs;
+	dof_ioctl_data_t* child_dofs = NULL;
+	if (parent_dofs) {
+		size_t parent_dofs_size = DOF_IOCTL_DATA_T_SIZE(parent_dofs->dofiod_count);
+		child_dofs = kmem_alloc(parent_dofs_size, KM_SLEEP);
+		bcopy(parent_dofs, child_dofs, parent_dofs_size);
+	}
+
+	lck_mtx_unlock(&parent->p_dtrace_sprlock);
+
+	if (child_dofs) {
+		lck_mtx_lock(&child->p_dtrace_sprlock);
+		child->p_dtrace_lazy_dofs = child_dofs;
+		lck_mtx_unlock(&child->p_dtrace_sprlock);
+		/**
+		 * We process the DOF at this point if the mode is set to
+		 * LAZY_OFF. This can happen if DTrace is still processing the
+		 * DOF of other process (which can happen because the
+		 * protected pager can have a huge latency)
+		 * but has not processed our parent yet
+		 */
+		if (dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_OFF) {
+			dtrace_lazy_dofs_process(child);
+		}
+		lck_rw_unlock_shared(&dtrace_dof_mode_lock);
+
+		return DTRACE_LAZY_DOFS_DUPLICATED;
+	}
+	lck_rw_unlock_shared(&dtrace_dof_mode_lock);
+
+	return 0;
 }
 
 static dtrace_helpers_t *
@@ -15123,6 +15427,148 @@ dtrace_helpers_duplicate(proc_t *from, proc_t *to)
 
 	if (hasprovs)
 		dtrace_helper_provider_register(to, newhelp, NULL);
+}
+
+/**
+ * DTrace Process functions
+ */
+
+void
+dtrace_proc_fork(proc_t *parent_proc, proc_t *child_proc, int spawn)
+{
+	/*
+	 * This code applies to new processes who are copying the task
+	 * and thread state and address spaces of their parent process.
+	 */
+	if (!spawn) {
+		/*
+		 * APPLE NOTE: Solaris does a sprlock() and drops the
+		 * proc_lock here. We're cheating a bit and only taking
+		 * the p_dtrace_sprlock lock. A full sprlock would
+		 * task_suspend the parent.
+		 */
+		lck_mtx_lock(&parent_proc->p_dtrace_sprlock);
+
+		/*
+		 * Remove all DTrace tracepoints from the child process. We
+		 * need to do this _before_ duplicating USDT providers since
+		 * any associated probes may be immediately enabled.
+		 */
+		if (parent_proc->p_dtrace_count > 0) {
+			dtrace_fasttrap_fork(parent_proc, child_proc);
+		}
+
+		lck_mtx_unlock(&parent_proc->p_dtrace_sprlock);
+
+		/*
+		 * Duplicate any lazy dof(s). This must be done while NOT
+		 * holding the parent sprlock! Lock ordering is
+		 * dtrace_dof_mode_lock, then sprlock.  It is imperative we
+		 * always call dtrace_lazy_dofs_duplicate, rather than null
+		 * check and call if !NULL. If we NULL test, during lazy dof
+		 * faulting we can race with the faulting code and proceed
+		 * from here to beyond the helpers copy. The lazy dof
+		 * faulting will then fail to copy the helpers to the child
+		 * process. We return if we duplicated lazy dofs as a process
+		 * can only have one at the same time to avoid a race between
+		 * a dtrace client and dtrace_proc_fork where a process would
+		 * end up with both lazy dofs and helpers.
+		 */
+		if (dtrace_lazy_dofs_duplicate(parent_proc, child_proc) == DTRACE_LAZY_DOFS_DUPLICATED) {
+			return;
+		}
+
+		/*
+		 * Duplicate any helper actions and providers if they haven't
+		 * already.
+		 */
+#if !defined(__APPLE__)
+		 /*
+		 * The SFORKING
+		 * we set above informs the code to enable USDT probes that
+		 * sprlock() may fail because the child is being forked.
+		 */
+#endif
+		/*
+		 * APPLE NOTE: As best I can tell, Apple's sprlock() equivalent
+		 * never fails to find the child. We do not set SFORKING.
+		 */
+		if (parent_proc->p_dtrace_helpers != NULL && dtrace_helpers_fork) {
+			(*dtrace_helpers_fork)(parent_proc, child_proc);
+		}
+	}
+}
+
+void
+dtrace_proc_exec(proc_t *p)
+{
+	/*
+	 * Invalidate any predicate evaluation already cached for this thread by DTrace.
+	 * That's because we've just stored to p_comm and DTrace refers to that when it
+	 * evaluates the "execname" special variable. uid and gid may have changed as well.
+	 */
+	dtrace_set_thread_predcache(current_thread(), 0);
+
+	/*
+	 * Free any outstanding lazy dof entries. It is imperative we
+	 * always call dtrace_lazy_dofs_destroy, rather than null check
+	 * and call if !NULL. If we NULL test, during lazy dof faulting
+	 * we can race with the faulting code and proceed from here to
+	 * beyond the helpers cleanup. The lazy dof faulting will then
+	 * install new helpers which no longer belong to this process!
+	 */
+	dtrace_lazy_dofs_destroy(p);
+
+
+	/*
+	 * Clean up any DTrace helpers for the process.
+	 */
+	if (p->p_dtrace_helpers != NULL && dtrace_helpers_cleanup) {
+		(*dtrace_helpers_cleanup)(p);
+	}
+
+	/*
+	 * Cleanup the DTrace provider associated with this process.
+	 */
+	proc_lock(p);
+	if (p->p_dtrace_probes && dtrace_fasttrap_exec_ptr) {
+		(*dtrace_fasttrap_exec_ptr)(p);
+	}
+	proc_unlock(p);
+}
+
+void
+dtrace_proc_exit(proc_t *p)
+{
+	/*
+	 * Free any outstanding lazy dof entries. It is imperative we
+	 * always call dtrace_lazy_dofs_destroy, rather than null check
+	 * and call if !NULL. If we NULL test, during lazy dof faulting
+	 * we can race with the faulting code and proceed from here to
+	 * beyond the helpers cleanup. The lazy dof faulting will then
+	 * install new helpers which will never be cleaned up, and leak.
+	 */
+	dtrace_lazy_dofs_destroy(p);
+
+	/*
+	 * Clean up any DTrace helper actions or probes for the process.
+	 */
+	if (p->p_dtrace_helpers != NULL) {
+		(*dtrace_helpers_cleanup)(p);
+	}
+
+	/*
+	 * Clean up any DTrace probes associated with this process.
+	 */
+	/*
+	 * APPLE NOTE: We release ptss pages/entries in dtrace_fasttrap_exit_ptr(),
+	 * call this after dtrace_helpers_cleanup()
+	 */
+	proc_lock(p);
+	if (p->p_dtrace_probes && dtrace_fasttrap_exit_ptr) {
+		(*dtrace_fasttrap_exit_ptr)(p);
+	}
+	proc_unlock(p);
 }
 
 /*
@@ -15704,15 +16150,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	lck_mtx_lock(&dtrace_provider_lock);
 	lck_mtx_lock(&dtrace_lock);
 
-	if (ddi_soft_state_init(&dtrace_softstate,
-	    sizeof (dtrace_state_t), 0) != 0) {
-		cmn_err(CE_NOTE, "/dev/dtrace failed to initialize soft state");
-		lck_mtx_unlock(&dtrace_lock);
-		lck_mtx_unlock(&dtrace_provider_lock);
-		lck_mtx_unlock(&cpu_lock);
-		return (DDI_FAILURE);
-	}
-
 	/* Darwin uses BSD cloning device driver to automagically obtain minor device number. */
 
 	ddi_report_dev(devi);
@@ -15734,9 +16171,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 
 	dtrace_arena = vmem_create("dtrace", (void *)1, UINT32_MAX, 1,
 	    NULL, NULL, NULL, 0, VM_SLEEP | VMC_IDENTIFIER);
-	dtrace_minor = vmem_create("dtrace_minor", (void *)DTRACEMNRN_CLONE,
-	    UINT32_MAX - DTRACEMNRN_CLONE, 1, NULL, NULL, NULL, 0,
-	    VM_SLEEP | VMC_IDENTIFIER);
 	dtrace_taskq = taskq_create("dtrace_taskq", 1, maxclsyspri,
 	    1, INT_MAX, 0);
 
@@ -15745,6 +16179,7 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    NULL, NULL, NULL, NULL, NULL, 0);
 
 	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+
 	dtrace_bymod = dtrace_hash_create(offsetof(dtrace_probe_t, dtpr_mod),
 	    offsetof(dtrace_probe_t, dtpr_nextmod),
 	    offsetof(dtrace_probe_t, dtpr_prevmod));
@@ -15841,7 +16276,7 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		lck_mtx_lock(&dtrace_lock);
 
 		if ((enab = dtrace_anon.dta_enabling) != NULL)
-			(void) dtrace_enabling_match(enab, NULL);
+			(void) dtrace_enabling_match(enab, NULL, NULL);
 
 		lck_mtx_unlock(&cpu_lock);
 	}
@@ -15933,7 +16368,16 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 	 */
 	if (dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_ON) {
 		dtrace_dof_mode = DTRACE_DOF_MODE_LAZY_OFF;
-		
+		/*
+		 * We do not need to hold the exclusive lock while processing
+		 * DOF on processes. We do need to make sure the mode does not get
+		 * changed to DTRACE_DOF_MODE_LAZY_ON during that stage though
+		 * (which should not happen anyway since it only happens in
+		 * dtrace_close). There is no way imcomplete USDT probes can be
+		 * activate by any DTrace clients here since they all have to
+		 * call dtrace_open and be blocked on dtrace_dof_mode_lock
+		 */
+		lck_rw_lock_exclusive_to_shared(&dtrace_dof_mode_lock);
 		/*
 		 * Iterate all existing processes and load lazy dofs.
 		 */
@@ -15942,9 +16386,13 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 			     NULL,
 			     dtrace_lazy_dofs_proc_iterate_filter,
 			     NULL);
+
+		lck_rw_unlock_shared(&dtrace_dof_mode_lock);
+	}
+	else {
+		lck_rw_unlock_exclusive(&dtrace_dof_mode_lock);
 	}
 
-	lck_rw_unlock_exclusive(&dtrace_dof_mode_lock);
 
 	/*
 	 * Update kernel symbol state.
@@ -15979,8 +16427,7 @@ dtrace_close(dev_t dev, int flag, int otyp, cred_t *cred_p)
 	dtrace_state_t *state;
 
 	/* APPLE NOTE: Darwin puts Helper on its own major device. */
-
-	state = ddi_get_soft_state(dtrace_softstate, minor);
+	state = dtrace_state_get(minor);
 
 	lck_mtx_lock(&cpu_lock);
 	lck_mtx_lock(&dtrace_lock);
@@ -16205,7 +16652,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 
 	/* Darwin puts Helper on its own major device. */
 
-	state = ddi_get_soft_state(dtrace_softstate, minor);
+	state = dtrace_state_get(minor);
 
 	if (state->dts_anon) {
 	   ASSERT(dtrace_anon.dta_state == NULL);
@@ -16465,7 +16912,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 			return (rval);
 		}
 
-		if ((err = dtrace_enabling_match(enab, rv)) == 0) {
+		if ((err = dtrace_enabling_match(enab, rv, NULL)) == 0) {
 			err = dtrace_enabling_retain(enab);
 		} else {
 			dtrace_enabling_destroy(enab);
@@ -16688,10 +17135,45 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 		return (rval == 0 ? 0 : EFAULT);
 	}
 
+	case DTRACEIOC_SLEEP: {
+		int64_t time;
+		uint64_t abstime;
+		uint64_t rvalue = DTRACE_WAKE_TIMEOUT;
+
+		if (copyin(arg, &time, sizeof(time)) != 0)
+			return (EFAULT);
+
+		nanoseconds_to_absolutetime((uint64_t)time, &abstime);
+		clock_absolutetime_interval_to_deadline(abstime, &abstime);
+
+		if (assert_wait_deadline(state, THREAD_ABORTSAFE, abstime) == THREAD_WAITING) {
+			if (state->dts_buf_over_limit > 0) {
+				clear_wait(current_thread(), THREAD_INTERRUPTED);
+				rvalue = DTRACE_WAKE_BUF_LIMIT;
+			} else {
+				thread_block(THREAD_CONTINUE_NULL);
+				if (state->dts_buf_over_limit > 0) {
+					rvalue = DTRACE_WAKE_BUF_LIMIT;
+				}
+			}
+		}
+
+		if (copyout(&rvalue, arg, sizeof(rvalue)) != 0)
+			return (EFAULT);
+
+		return (0);
+	}
+
+	case DTRACEIOC_SIGNAL: {
+		wakeup(state);
+		return (0);
+	}
+
 	case DTRACEIOC_AGGSNAP:
 	case DTRACEIOC_BUFSNAP: {
 		dtrace_bufdesc_t desc;
 		caddr_t cached;
+		boolean_t over_limit;
 		dtrace_buffer_t *buf;
 
 		if (copyin(arg, &desc, sizeof (desc)) != 0)
@@ -16773,6 +17255,8 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 		}
 
 		cached = buf->dtb_tomax;
+		over_limit = buf->dtb_cur_limit == buf->dtb_size;
+
 		ASSERT(!(buf->dtb_flags & DTRACEBUF_NOSWITCH));
 
 		dtrace_xcall(desc.dtbd_cpu,
@@ -16793,6 +17277,22 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 		}
 
 		ASSERT(cached == buf->dtb_xamot);
+		/*
+		 * At this point we know the buffer have switched, so we
+		 * can decrement the over limit count if the buffer was over
+		 * its limit. The new buffer might already be over its limit
+		 * yet, but we don't care since we're guaranteed not to be
+		 * checking the buffer over limit count  at this point.
+		 */
+		if (over_limit) {
+			uint32_t old = atomic_add_32(&state->dts_buf_over_limit, -1);
+			#pragma unused(old)
+
+			/*
+			 * Verify that we didn't underflow the value
+			 */
+			ASSERT(old != 0);
+		}
 
 		/*
 		* We have our snapshot; now copy it out.
@@ -17159,7 +17659,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 
 		/* NOTE! We can no longer exit this method via return */
 		if (copyin(arg, module_symbols, module_symbols_size) != 0) {
-			cmn_err(CE_WARN, "failed copyin of dtrace_module_symbols_t, symbol count %llu", module_symbols->dtmodsyms_count);
+			cmn_err(CE_WARN, "failed copyin of dtrace_module_symbols_t");
 			rval = EFAULT;
 			goto module_symbols_cleanup;
 		}
@@ -17354,7 +17854,6 @@ dtrace_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	dtrace_byname = NULL;
 
 	kmem_cache_destroy(dtrace_state_cache);
-	vmem_destroy(dtrace_minor);
 	vmem_destroy(dtrace_arena);
 
 	if (dtrace_toxrange != NULL) {
@@ -17530,34 +18029,47 @@ helper_init( void )
 
 #undef HELPER_MAJOR
 
-/*
- * Called with DEVFS_LOCK held, so vmem_alloc's underlying blist structures are protected.
- */
 static int
 dtrace_clone_func(dev_t dev, int action)
 {
 #pragma unused(dev)
 
 	if (action == DEVFS_CLONE_ALLOC) {
-		if (NULL == dtrace_minor) /* Arena not created yet!?! */
-			return 0;
-		else {
-			/*
-			 * Propose a minor number, namely the next number that vmem_alloc() will return.
-			 * Immediately put it back in play by calling vmem_free(). FIXME.
-			 */
-			int ret = (int)(uintptr_t)vmem_alloc(dtrace_minor, 1, VM_BESTFIT | VM_SLEEP);
-
-			vmem_free(dtrace_minor, (void *)(uintptr_t)ret, 1);
-
-			return ret;
-		}
+		return dtrace_state_reserve();
 	}
 	else if (action == DEVFS_CLONE_FREE) {
 		return 0;
 	}
 	else return -1;
 }
+
+void dtrace_ast(void);
+
+void
+dtrace_ast(void)
+{
+	int i;
+	uint32_t clients = atomic_and_32(&dtrace_wake_clients, 0);
+	if (clients == 0)
+		return;
+	/**
+	 * We disable preemption here to be sure that we won't get
+	 * interrupted by a wakeup to a thread that is higher
+	 * priority than us, so that we do issue all wakeups
+	 */
+	disable_preemption();
+	for (i = 0; i < DTRACE_NCLIENTS; i++) {
+		if (clients & (1 << i)) {
+			dtrace_state_t *state = dtrace_state_get(i);
+			if (state) {
+				wakeup(state);
+			}
+
+		}
+	}
+	enable_preemption();
+}
+
 
 #define DTRACE_MAJOR  -24 /* let the kernel pick the device number */
 
@@ -17703,7 +18215,7 @@ dtrace_init( void )
 
 		lck_mtx_lock(&cpu_lock);
 		for (i = 0; i < ncpu; ++i) 
-			/* FIXME: track CPU configuration a la CHUD Processor Pref Pane. */
+			/* FIXME: track CPU configuration */
 			dtrace_cpu_setup_initial( (processorid_t)i ); /* In lieu of register_cpu_setup_func() callback */
 		lck_mtx_unlock(&cpu_lock);
 

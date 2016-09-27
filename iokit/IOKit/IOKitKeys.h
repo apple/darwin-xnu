@@ -55,6 +55,8 @@
 
 // registry ID number
 #define kIORegistryEntryIDKey		"IORegistryEntryID"
+// property name to get array of property names
+#define kIORegistryEntryPropertyKeysKey "IORegistryEntryPropertyKeys"
 
 // IOService class name
 #define kIOServiceClass			"IOService"
@@ -71,10 +73,12 @@
 #define kIOProviderClassKey		"IOProviderClass"
 #define kIONameMatchKey			"IONameMatch"
 #define kIOPropertyMatchKey		"IOPropertyMatch"
+#define kIOPropertyExistsMatchKey	"IOPropertyExistsMatch"
 #define kIOPathMatchKey			"IOPathMatch"
 #define kIOLocationMatchKey		"IOLocationMatch"
 #define kIOParentMatchKey		"IOParentMatch"
 #define kIOResourceMatchKey		"IOResourceMatch"
+#define kIOResourceMatchedKey		"IOResourceMatched"
 #define kIOMatchedServiceCountKey	"IOMatchedServiceCountMatch"
 
 #define kIONameMatchedKey		"IONameMatched"
@@ -129,6 +133,7 @@
 #define kIOMaximumSegmentByteCountWriteKey      "IOMaximumSegmentByteCountWrite"      // (OSNumber)
 #define kIOMinimumSegmentAlignmentByteCountKey  "IOMinimumSegmentAlignmentByteCount"  // (OSNumber)
 #define kIOMaximumSegmentAddressableBitCountKey "IOMaximumSegmentAddressableBitCount" // (OSNumber)
+#define kIOMinimumSaturationByteCountKey        "IOMinimumSaturationByteCount"        // (OSNumber)
 
 // properties found in services that wish to describe an icon
 //

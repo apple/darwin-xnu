@@ -21,9 +21,9 @@ arm_level2_access_strings = [ " noaccess",
                               " supervisor(readonly) user(readonly)",
                               " "
                              ]
-kq_state_strings = {0:"", 1:"SEL", 2:"SLEEP", 4:"PROCWAIT", 8:"KEV32", 16:"KEV64"}
+kq_state_strings = {0:"", 1:"SEL", 2:"SLEEP", 4:"PROCWAIT", 8:"KEV32", 16:"KEV64", 32:"QOS", 64:"WORKQ", 128:"PROCESS", 256: "DRAIN"}
 
-kn_state_strings = {0:"", 1:"ACTIVE", 2:"QUEUED", 4:"DISABLED", 8:"DROPPING", 16:"USERWAIT", 32:"ATTACHING", 64:"STAYQUED"}
+kn_state_strings = {0:"", 1:"ACTIVE", 2:"QUEUED", 4:"DISABLED", 8:"DROPPING", 16:"USERWAIT", 32:"ATTACHING", 64:"STAYQUED", 128:"DEFERDROP"}
 
 mach_msg_type_descriptor_strings = {0: "PORT", 1: "OOLDESC", 2: "OOLPORTS", 3: "OOLVOLATILE"}
 

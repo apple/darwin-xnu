@@ -146,7 +146,6 @@ void evpipefree(struct pipe *);
 void postpipeevent(struct pipe *, int);
 void postevent(struct socket *, struct sockbuf *, int);
 extern kern_return_t IOBSDGetPlatformUUID(__darwin_uuid_t uuid, mach_timespec_t timeoutp);
-extern void delay(int);
 
 int rd_uio(struct proc *p, int fdes, uio_t uio, user_ssize_t *retval);
 int wr_uio(struct proc *p, struct fileproc *fp, uio_t uio, user_ssize_t *retval);
@@ -171,7 +170,7 @@ void select_waitq_init(void);
 void
 select_waitq_init(void)
 {
-	waitq_init(&select_conflict_queue, SYNC_POLICY_FIFO | SYNC_POLICY_DISABLE_IRQ);
+	waitq_init(&select_conflict_queue, SYNC_POLICY_FIFO);
 }
 
 #define f_flag f_fglob->fg_flag
@@ -1204,12 +1203,12 @@ select_internal(struct proc *p, struct select_nocancel_args *uap, uint64_t timeo
 			panic("can't allocate %ld bytes for wqstate buffer",
 			      uth->uu_wqstate_sz);
 		waitq_set_init(uth->uu_wqset,
-			       SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST|SYNC_POLICY_DISABLE_IRQ, NULL);
+			       SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST, NULL, NULL);
 	}
 
 	if (!waitq_set_is_valid(uth->uu_wqset))
 		waitq_set_init(uth->uu_wqset,
-			       SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST|SYNC_POLICY_DISABLE_IRQ, NULL);
+			       SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST, NULL, NULL);
 
 	/* the last chunk of our buffer is an array of waitq pointers */
 	seldata->wqp = (uint64_t *)((char *)(uth->uu_wqset) + ALIGN(sizeof(struct waitq_set)));
@@ -1691,7 +1690,7 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 	    (nfds > p->p_rlimit[RLIMIT_NOFILE].rlim_cur && (proc_suser(p) || nfds > FD_SETSIZE)))
 		return (EINVAL);
 
-	kq = kqueue_alloc(p);
+	kq = kqueue_alloc(p, 0);
 	if (kq == NULL)
 		return (EAGAIN);
 
@@ -1728,7 +1727,6 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 	OSBitOrAtomic(P_SELECT, &p->p_flag);
 	for (i = 0; i < nfds; i++) {
 		short events = fds[i].events;
-		int kerror = 0;
 
 		/* per spec, ignore fd values below zero */
 		if (fds[i].fd < 0) {
@@ -1747,19 +1745,19 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 			kev.filter = EVFILT_READ;
 			if (events & ( POLLPRI | POLLRDBAND ))
 				kev.flags |= EV_OOBAND;
-			kerror = kevent_register(kq, &kev, p);
+			kevent_register(kq, &kev, p);
 		}
 
 		/* Handle output events */
-		if (kerror == 0 &&
-		    events & ( POLLOUT | POLLWRNORM | POLLWRBAND )) {
+		if ((kev.flags & EV_ERROR) == 0 &&
+		    (events & ( POLLOUT | POLLWRNORM | POLLWRBAND ))) {
 			kev.filter = EVFILT_WRITE;
-			kerror = kevent_register(kq, &kev, p);
+			kevent_register(kq, &kev, p);
 		}
 
 		/* Handle BSD extension vnode events */
-		if (kerror == 0 &&
-		    events & ( POLLEXTEND | POLLATTRIB | POLLNLINK | POLLWRITE )) {
+		if ((kev.flags & EV_ERROR) == 0 &&
+		    (events & ( POLLEXTEND | POLLATTRIB | POLLNLINK | POLLWRITE ))) {
 			kev.filter = EVFILT_VNODE;
 			kev.fflags = 0;
 			if (events & POLLEXTEND)
@@ -1770,10 +1768,10 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 				kev.fflags |= NOTE_LINK;
 			if (events & POLLWRITE)
 				kev.fflags |= NOTE_WRITE;
-			kerror = kevent_register(kq, &kev, p);
+			kevent_register(kq, &kev, p);
 		}
 
-		if (kerror != 0) {
+		if (kev.flags & EV_ERROR) {
 			fds[i].revents = POLLNVAL;
 			rfds++;
 		} else
@@ -1781,14 +1779,14 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 	}
 
 	/* Did we have any trouble registering? */
-	if (rfds > 0)
+	if (rfds == nfds)
 		goto done;
 
 	/* scan for, and possibly wait for, the kevents to trigger */
 	cont->pca_fds = uap->fds;
 	cont->pca_nfds = nfds;
 	cont->pca_rfds = rfds;
-	error = kqueue_scan(kq, poll_callback, NULL, cont, &atv, p);
+	error = kqueue_scan(kq, poll_callback, NULL, cont, NULL, &atv, p);
 	rfds = cont->pca_rfds;
 
  done:
@@ -2104,7 +2102,7 @@ selrecord(__unused struct proc *selector, struct selinfo *sip, void *s_data)
 		return;
 
 	if ((sip->si_flags & SI_INITED) == 0) {
-		waitq_init(&sip->si_waitq, SYNC_POLICY_FIFO | SYNC_POLICY_DISABLE_IRQ);
+		waitq_init(&sip->si_waitq, SYNC_POLICY_FIFO);
 		sip->si_flags |= SI_INITED;
 		sip->si_flags &= ~SI_CLEAR;
 	}
@@ -3216,7 +3214,7 @@ ledger(struct proc *p, struct ledger_args *args, __unused int32_t *retval)
 
 			rval = ledger_get_task_entry_info_multiple(task, &buf, &len);
 			proc_rele(proc);
-			if ((rval == 0) && (len > 0)) {
+			if ((rval == 0) && (len >= 0)) {
 				sz = len * sizeof (struct ledger_entry_info);
 				rval = copyout(buf, args->arg2, sz);
 				kfree(buf, sz);
@@ -3231,7 +3229,7 @@ ledger(struct proc *p, struct ledger_args *args, __unused int32_t *retval)
 			int sz;
 
 			rval = ledger_template_info(&buf, &len);
-			if ((rval == 0) && (len > 0)) {
+			if ((rval == 0) && (len >= 0)) {
 				sz = len * sizeof (struct ledger_template_info);
 				rval = copyout(buf, args->arg1, sz);
 				kfree(buf, sz);
@@ -3303,7 +3301,7 @@ static inline struct waitq_set *sysctl_get_wqset(int idx)
 	gwqs = (struct g_wqset *)kalloc(sizeof(*gwqs));
 	assert(gwqs != NULL);
 
-	gwqs->wqset = waitq_set_alloc(SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST|SYNC_POLICY_DISABLE_IRQ);
+	gwqs->wqset = waitq_set_alloc(SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST, NULL);
 	enqueue_tail(&g_wqset_list, &gwqs->link);
 	printf("[WQ]: created new waitq set 0x%llx\n", wqset_id(gwqs->wqset));
 
@@ -3322,7 +3320,7 @@ static inline struct waitq *global_test_waitq(int idx)
 	if (!g_wq_init) {
 		g_wq_init = 1;
 		for (int i = 0; i < MAX_GLOBAL_TEST_QUEUES; i++)
-			waitq_init(&g_wq[i], SYNC_POLICY_FIFO|SYNC_POLICY_DISABLE_IRQ);
+			waitq_init(&g_wq[i], SYNC_POLICY_FIFO);
 	}
 
 	return &g_wq[idx % MAX_GLOBAL_TEST_QUEUES];

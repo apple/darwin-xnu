@@ -140,7 +140,8 @@ typedef struct mach_memory_info {
     uint64_t size;
     uint64_t free;
     uint64_t largest;
-    uint64_t _resv[3];
+	uint64_t collectable_bytes;
+    uint64_t _resv[2];
 } mach_memory_info_t;
 
 typedef mach_memory_info_t *mach_memory_info_array_t;

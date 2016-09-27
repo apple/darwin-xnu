@@ -47,6 +47,8 @@
 #include <mach/task.h>
 #include <mach/semaphore.h>
 
+#include <libproc_internal.h>
+
 typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY_FIXEDPRI } my_policy_type_t;
 
 #define DEFAULT_MAX_SLEEP_NS	2000000000ll /* Two seconds */
@@ -352,6 +354,18 @@ main(int argc, char **argv)
 	if (res != 0) {
 		printf("Couldn't set thread policy.\n");
 		exit(1);
+	}
+
+	/*
+	 * Disable the wake monitor.  If we are
+	 * performing a large number of
+	 * iterations, the wake monitor may
+	 * cause this process to get suspended,
+	 * thus causing a large jitter value.
+	 */
+	if (proc_disable_wakemon(getpid()) != KERN_SUCCESS) {
+		printf("Couldn't disable wake monitor.\n");
+		/* For now, do not exit; this call could be locked down */
 	}
 
 	/* 

@@ -77,6 +77,9 @@
 
 #include <libkern/OSAtomic.h>
 #include <sys/proc.h>
+#include <mach/resource_monitors.h>     // command/proc_name_t
+
+
 __BEGIN_DECLS
 #include <kern/locks.h>
 #if PSYNCH
@@ -319,10 +322,12 @@ struct	proc {
 	int	p_mac_enforce;			/* MAC policy enforcement control */
 #endif
 
-	char	p_comm[MAXCOMLEN+1];
-	char	p_name[(2*MAXCOMLEN)+1];	/* PL */
+	// types currently in sys/param.h
+	command_t   p_comm;
+	proc_name_t p_name;	/* can be changed by the process */
 
-	struct 	pgrp *p_pgrp;	/* Pointer to process group. (LL) */
+
+	struct 	pgrp *p_pgrp;		/* Pointer to process group. (LL) */
 	uint32_t	p_csflags;	/* flags for codesign (PL) */
 	uint32_t	p_pcaction;	/* action  for process control on starvation */
 	uint8_t p_uuid[16];		/* from LC_UUID load command */
@@ -357,12 +362,8 @@ struct	proc {
 	user_addr_t 	p_wqthread;		/* pthread workqueue fn */
 	int 	p_pthsize;			/* pthread size */
 	uint32_t	p_pth_tsd_offset;	/* offset from pthread_t to TSD for new threads */
-	user_addr_t	p_targconc;		/* target concurrency ptr */
 	user_addr_t	p_stack_addr_hint;	/* stack allocation hint for wq threads */
 	void * 	p_wqptr;			/* workq ptr */
-	int 	p_wqsize;			/* allocated size */
-	boolean_t       p_wqiniting;            /* semaphore to serialze wq_open */
-	lck_spin_t	p_wqlock;		/* lock to protect work queue */
 	struct kqueue * p_wqkqueue;             /* private workq kqueue */
 
 	struct  timeval p_start;        	/* starting time */
@@ -396,11 +397,11 @@ struct	proc {
 	uint32_t          p_memstat_dirty;              /* dirty state */
 	uint64_t          p_memstat_userdata;           /* user state */
 	uint64_t          p_memstat_idledeadline;       /* time at which process became clean */
-#if CONFIG_JETSAM
+	uint64_t          p_memstat_idle_start;         /* abstime process transitions into the idle band */
+	uint64_t	  p_memstat_idle_delta;         /* abstime delta spent in idle band */
 	int32_t           p_memstat_memlimit;           /* cached memory limit, toggles between active and inactive limits */
 	int32_t           p_memstat_memlimit_active;	/* memory limit enforced when process is in active jetsam state */
 	int32_t           p_memstat_memlimit_inactive;	/* memory limit enforced when process is in inactive jetsam state */
-#endif
 #if CONFIG_FREEZE
 	uint32_t          p_memstat_suspendedfootprint; /* footprint at time of suspensions */
 #endif /* CONFIG_FREEZE */
@@ -408,6 +409,8 @@ struct	proc {
 
 	/* cached proc-specific data required for corpse inspection */
 	pid_t             p_responsible_pid;	/* pid resonsible for this process */
+
+	struct os_reason     *p_exit_reason;
 };
 
 #define PGRPID_DEAD 0xdeaddead
@@ -492,26 +495,10 @@ struct	proc {
 /* p_vfs_iopolicy flags */
 #define P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY 0x0001
 
-/* defns for proc_iterate */
-#define PROC_ALLPROCLIST        1		/* walk the allproc list (procs not exited yet) */
-#define PROC_ZOMBPROCLIST       2		/*  walk the zombie list */
-#define PROC_NOWAITTRANS       4		/* do not wait for transitions (checkdirs only)  */
- 
-/* defns for pgrp_iterate */ 
-#define PGRP_DROPREF    	1
-#define	PGRP_BLOCKITERATE 	2
- 
-/* return values of the proc iteration callback routine */ 
-#define PROC_RETURNED           0
-#define PROC_RETURNED_DONE      1
-#define PROC_CLAIMED            2
-#define PROC_CLAIMED_DONE       3
-
 /* process creation arguments */
 #define	PROC_CREATE_FORK	0	/* independent child (running) */
 #define	PROC_CREATE_SPAWN	1	/* independent child (suspended) */
 #define	PROC_CREATE_VFORK	2	/* child borrows context */
-
 
 /* LP64 version of extern_proc.  all pointers 
  * grow when we're dealing with a 64-bit process.
@@ -677,6 +664,7 @@ extern lck_attr_t * proc_lck_attr;
 LIST_HEAD(proclist, proc);
 extern struct proclist allproc;		/* List of all processes. */
 extern struct proclist zombproc;	/* List of zombie processes. */
+
 extern struct proc *initproc;
 extern void	procinit(void);
 extern void proc_lock(struct proc *);
@@ -717,13 +705,11 @@ extern int	msleep0(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, int t
 extern void	vfork_return(struct proc *child, int32_t *retval, int rval);
 extern int	exit1(struct proc *, int, int *);
 extern int	exit1_internal(struct proc *, int, int *, boolean_t, boolean_t, int);
+extern int	exit_with_reason(struct proc *, int, int *, boolean_t, boolean_t, int, struct os_reason *);
 extern int	fork1(proc_t, thread_t *, int, coalition_t *);
 extern void vfork_exit_internal(struct proc *p, int rv, int forced);
 extern void proc_reparentlocked(struct proc *child, struct proc * newparent, int cansignal, int locked);
-extern int pgrp_iterate(struct pgrp * pgrp, int flags, int (*callout)(proc_t , void *), void *arg, int (*filterfn)(proc_t , void *), void *filterarg);
-extern int proc_iterate(int flags, int (*callout)(proc_t , void *), void *arg, int (*filterfn)(proc_t , void *), void *filterarg);
-extern int proc_rebootscan(int (*callout)(proc_t , void *), void *arg, int (*filterfn)(proc_t , void *), void *filterarg);
-extern int proc_childrenwalk(proc_t p, int (*callout)(proc_t , void *), void *arg);
+
 extern proc_t proc_findinternal(int pid, int locked);
 extern proc_t proc_findthread(thread_t thread);
 extern void proc_refdrain(proc_t);
@@ -751,6 +737,7 @@ extern proc_t proc_parentholdref(proc_t);
 extern int proc_parentdropref(proc_t, int);
 int     itimerfix(struct timeval *tv);
 int     itimerdecr(struct proc * p, struct itimerval *itp, int usec);
+void    proc_free_realitimer(proc_t proc);
 int  timespec_is_valid(const struct timespec *);
 void proc_signalstart(struct proc *, int locked);
 void proc_signalend(struct proc *, int locked);
@@ -762,8 +749,6 @@ void  proc_rele_locked(struct proc *  p);
 struct proc *proc_ref_locked(struct proc *  p);
 void proc_knote(struct proc * p, long hint);
 void proc_knote_drain(struct proc *p);
-void workqueue_init_lock(proc_t p);
-void workqueue_destroy_lock(proc_t p);
 void proc_setregister(proc_t p);
 void proc_resetregister(proc_t p);
 /* returns the first thread_t in the process, or NULL XXX for NFS, DO NOT USE */
@@ -786,10 +771,79 @@ void proc_set_return_wait(struct proc *);
 void proc_clear_return_wait(proc_t p, thread_t child_thread);
 void proc_wait_to_return(void);
 
-/* return 1 if process is forcing case-sensitive HFS+ access, 0 for default */
-extern int proc_is_forcing_hfs_case_sensitivity(proc_t);
+/* process iteration */
+
+#define ALLPROC_FOREACH(var) \
+	LIST_FOREACH((var), &allproc, p_list)
+
+#define ZOMBPROC_FOREACH(var) \
+	LIST_FOREACH((var), &zombproc, p_list)
+
+#define PGMEMBERS_FOREACH(group, var) \
+	LIST_FOREACH((var), &((struct pgrp *)(group))->pg_members, p_pglist)
+
+#define PCHILDREN_FOREACH(parent, var) \
+	LIST_FOREACH((var), &(((struct proc *)(parent))->p_children), p_sibling)
+
+typedef int (*proc_iterate_fn_t)(proc_t, void *);
+
+/*
+ * These are the only valid return values of `callout` functions provided to
+ * process iterators.
+ *
+ * CLAIMED returns expect the caller to call proc_rele on the proc.  DONE
+ * returns stop iterating processes early.
+ */
+#define PROC_RETURNED      (0)
+#define PROC_RETURNED_DONE (1)
+#define PROC_CLAIMED       (2)
+#define PROC_CLAIMED_DONE  (3)
+
+/*
+ * pgrp_iterate walks the provided process group, calling `filterfn` with
+ * `filterarg` for each process.  For processes where `filterfn` returned
+ * non-zero, `callout` is called with `arg`.  If `PGRP_DROPREF` is supplied in
+ * `flags`, a reference will be dropped from the process group after obtaining
+ * the list of processes to call `callout` on.
+ *
+ * `PGMEMBERS_FOREACH` might also be used under the pgrp_lock to achieve a
+ * similar effect.
+ */
+#define PGRP_DROPREF (1)
+
+extern int pgrp_iterate(struct pgrp *pgrp, unsigned int flags, proc_iterate_fn_t callout, void *arg, proc_iterate_fn_t filterfn, void *filterarg);
+
+/*
+ * proc_iterate walks the `allproc` and/or `zombproc` lists, calling `filterfn`
+ * with `filterarg` for each process.  For processes where `filterfn` returned
+ * non-zero, `callout` is called with `arg`.  If the `PROC_NOWAITTRANS` flag is
+ * set, this function waits for transitions.
+ *
+ * `ALLPROC_FOREACH` or `ZOMBPROC_FOREACH` might also be used under the
+ * `proc_list_lock` to achieve a similar effect.
+ */
+#define PROC_ALLPROCLIST  (1U << 0) /* walk the allproc list (processes not yet exited) */
+#define PROC_ZOMBPROCLIST (1U << 1) /* walk the zombie list */
+#define PROC_NOWAITTRANS  (1U << 2) /* do not wait for transitions (checkdirs only) */
+
+extern int proc_iterate(unsigned int flags, proc_iterate_fn_t callout, void *arg, proc_iterate_fn_t filterfn, void *filterarg);
+
+/*
+ * proc_childrenwalk walks the children of process `p`, calling `callout` for
+ * each one.
+ *
+ * `PCHILDREN_FOREACH` might also be used under the `proc_list_lock` to achieve
+ * a similar effect.
+ */
+extern int proc_childrenwalk(proc_t p, proc_iterate_fn_t callout, void *arg);
+
+/*
+ * proc_rebootscan should only be used by kern_shutdown.c
+ */
+extern void proc_rebootscan(proc_iterate_fn_t callout, void *arg, proc_iterate_fn_t filterfn, void *filterarg);
 
 pid_t dtrace_proc_selfpid(void);
 pid_t dtrace_proc_selfppid(void);
 uid_t dtrace_proc_selfruid(void);
+
 #endif	/* !_SYS_PROC_INTERNAL_H_ */

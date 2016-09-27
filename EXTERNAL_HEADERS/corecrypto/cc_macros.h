@@ -21,24 +21,50 @@
 #define __CC_DEBUG_ASSERT_PRODUCTION_CODE !CORECRYPTO_DEBUG
 #endif
 
-#ifndef __CC_DEBUG_ASSERT_MESSAGE
-#define __CC_DEBUG_ASSERT_MESSAGE(name, assertion, label, message, file, line, value) \
-cc_printf( "CCAssertMacros: %s, %s file: %s, line: %d\n", assertion, (message!=0) ? message : "", file, line);
+#if CORECRYPTO_DEBUG_ENABLE_CC_REQUIRE_PRINTS
+
+#if !CC_KERNEL
+    #include <string.h> // for strstr
+#endif // !CC_KERNEL
+
+CC_UNUSED static char *cc_strstr(const char *file) {
+#if CC_KERNEL
+    (void) file;
+#else
+    const char cc_char []="corecrypto";
+    char *p=strstr(file, cc_char);
+    if (p) return (p+strlen(cc_char)+1);
 #endif
+    return NULL;
+}
+
+#define __CC_DEBUG_REQUIRE_MESSAGE(name, assertion, label, message, file, line, value) \
+{char *___t = cc_strstr(file); cc_printf( "require: %s, %s%s:%d\n", assertion, (message!=0) ? message : "", ___t==NULL?file:___t, line);}
+
+#endif // CORECRYPTO_DEBUG_ENABLE_CC_REQUIRE_PRINTS
 
 #ifndef cc_require
-#if __CC_DEBUG_ASSERT_PRODUCTION_CODE
+#if (__CC_DEBUG_ASSERT_PRODUCTION_CODE) || (!CORECRYPTO_DEBUG_ENABLE_CC_REQUIRE_PRINTS)
+  #if defined(_WIN32) && defined (__clang__)
+    #define cc_require(assertion, exceptionLabel) \
+       do { \
+           if (!(assertion) ) { \
+              goto exceptionLabel; \
+           } \
+        } while ( 0 )
+  #else
     #define cc_require(assertion, exceptionLabel) \
         do { \
             if ( __builtin_expect(!(assertion), 0) ) { \
                 goto exceptionLabel; \
             } \
         } while ( 0 )
+ #endif
 #else
     #define cc_require(assertion, exceptionLabel) \
         do { \
             if ( __builtin_expect(!(assertion), 0) ) { \
-                __CC_DEBUG_ASSERT_MESSAGE(__CC_DEBUG_ASSERT_COMPONENT_NAME_STRING, \
+                __CC_DEBUG_REQUIRE_MESSAGE(__CC_DEBUG_ASSERT_COMPONENT_NAME_STRING, \
                     #assertion, #exceptionLabel, 0, __FILE__, __LINE__,  0); \
                 goto exceptionLabel; \
             } \
@@ -47,7 +73,20 @@ cc_printf( "CCAssertMacros: %s, %s file: %s, line: %d\n", assertion, (message!=0
 #endif
 
 #ifndef cc_require_action
-#if __CC_DEBUG_ASSERT_PRODUCTION_CODE
+#if __CC_DEBUG_ASSERT_PRODUCTION_CODE || (!CORECRYPTO_DEBUG_ENABLE_CC_REQUIRE_PRINTS)
+  #if defined(_WIN32) && defined(__clang__)
+    #define cc_require_action(assertion, exceptionLabel, action)                \
+        do                                                                      \
+        {                                                                       \
+            if (!(assertion))                                                   \
+            {                                                                   \
+                {                                                               \
+                    action;                                                     \
+                }                                                               \
+                goto exceptionLabel;                                            \
+            }                                                                   \
+        } while ( 0 )
+  #else
     #define cc_require_action(assertion, exceptionLabel, action)                \
         do                                                                      \
         {                                                                       \
@@ -59,13 +98,14 @@ cc_printf( "CCAssertMacros: %s, %s file: %s, line: %d\n", assertion, (message!=0
                 goto exceptionLabel;                                            \
             }                                                                   \
         } while ( 0 )
+  #endif
 #else
     #define cc_require_action(assertion, exceptionLabel, action)                \
         do                                                                      \
         {                                                                       \
             if ( __builtin_expect(!(assertion), 0) )                            \
             {                                                                   \
-                __CC_DEBUG_ASSERT_MESSAGE(                                      \
+                __CC_DEBUG_REQUIRE_MESSAGE(                                      \
                     __CC_DEBUG_ASSERT_COMPONENT_NAME_STRING,                    \
                     #assertion, #exceptionLabel, 0,   __FILE__, __LINE__, 0);   \
                 {                                                               \

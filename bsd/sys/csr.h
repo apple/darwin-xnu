@@ -48,6 +48,7 @@ typedef uint32_t csr_op_t;
 #define CSR_ALLOW_UNRESTRICTED_DTRACE	(1 << 5)
 #define CSR_ALLOW_UNRESTRICTED_NVRAM	(1 << 6)
 #define CSR_ALLOW_DEVICE_CONFIGURATION	(1 << 7)
+#define CSR_ALLOW_ANY_RECOVERY_OS	(1 << 8)
 
 #define CSR_VALID_FLAGS (CSR_ALLOW_UNTRUSTED_KEXTS | \
                          CSR_ALLOW_UNRESTRICTED_FS | \
@@ -56,7 +57,8 @@ typedef uint32_t csr_op_t;
                          CSR_ALLOW_APPLE_INTERNAL | \
                          CSR_ALLOW_UNRESTRICTED_DTRACE | \
                          CSR_ALLOW_UNRESTRICTED_NVRAM | \
-                         CSR_ALLOW_DEVICE_CONFIGURATION)
+                         CSR_ALLOW_DEVICE_CONFIGURATION | \
+                         CSR_ALLOW_ANY_RECOVERY_OS)
 
 
 /* CSR capabilities that a booter can give to the system */

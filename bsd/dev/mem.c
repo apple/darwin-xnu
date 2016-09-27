@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -233,7 +233,6 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 			continue; /* Keep going until UIO is done */
 		default:
 			return (ENODEV);
-			break;
 		}
 			
 		if (error)

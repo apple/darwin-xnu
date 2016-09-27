@@ -62,11 +62,7 @@ void OSCollection::haveUpdated()
 {
     if (fOptions & kImmutable)
     {
-#if __LP64__
 	if (!(gIOKitDebug & kOSRegistryModsMode))
-#else
-	if (gIOKitDebug & kOSRegistryModsMode)
-#endif
 	{
 	    panic("Trying to change a collection in the registry");
 	}

@@ -102,7 +102,7 @@ static void		setthetime(
 
 void time_zone_slock_init(void);
 
-/* 
+/*
  * Time of day and interval timer support.
  *
  * These routines provide the kernel entry points to get and set
@@ -114,31 +114,51 @@ void time_zone_slock_init(void);
 /* ARGSUSED */
 int
 gettimeofday(
-__unused	struct proc	*p,
-			struct gettimeofday_args *uap, 
-			int32_t *retval)
+			struct proc	*p,
+			struct gettimeofday_args *uap,
+			__unused int32_t *retval)
 {
 	int error = 0;
 	struct timezone ltz; /* local copy */
+	clock_sec_t secs;
+	clock_usec_t usecs;
+	uint64_t mach_time;
+
+	if (uap->tp || uap->mach_absolute_time) {
+		clock_gettimeofday_and_absolute_time(&secs, &usecs, &mach_time);
+	}
 
 	if (uap->tp) {
-		clock_sec_t		secs;
-		clock_usec_t	usecs;
-
-		clock_gettimeofday(&secs, &usecs);
-		retval[0] = secs;
-		retval[1] = usecs;
+		/* Casting secs through a uint32_t to match arm64 commpage */
+		if (IS_64BIT_PROCESS(p)) {
+			struct user64_timeval user_atv = {};
+			user_atv.tv_sec = (uint32_t)secs;
+			user_atv.tv_usec = usecs;
+			error = copyout(&user_atv, uap->tp, sizeof(user_atv));
+		} else {
+			struct user32_timeval user_atv = {};
+			user_atv.tv_sec = (uint32_t)secs;
+			user_atv.tv_usec = usecs;
+			error = copyout(&user_atv, uap->tp, sizeof(user_atv));
+		}
+		if (error) {
+			return error;
+		}
 	}
-	
+
 	if (uap->tzp) {
 		lck_spin_lock(tz_slock);
 		ltz = tz;
 		lck_spin_unlock(tz_slock);
 
-		error = copyout((caddr_t)&ltz, CAST_USER_ADDR_T(uap->tzp), sizeof (tz));
+		error = copyout((caddr_t)&ltz, CAST_USER_ADDR_T(uap->tzp), sizeof(tz));
 	}
 
-	return (error);
+	if (error == 0 && uap->mach_absolute_time) {
+		error = copyout(&mach_time, uap->mach_absolute_time, sizeof(mach_time));
+	}
+
+	return error;
 }
 
 /*
@@ -290,6 +310,18 @@ boottime_sec(void)
 
 	clock_get_boottime_nanotime(&secs, &nanosecs);
 	return (secs);
+}
+
+void
+boottime_timeval(struct timeval *tv)
+{
+	clock_sec_t		secs;
+	clock_usec_t	microsecs;
+
+	clock_get_boottime_microtime(&secs, &microsecs);
+
+	tv->tv_sec = secs;
+	tv->tv_usec = microsecs;
 }
 
 /*
@@ -481,24 +513,34 @@ setitimer(struct proc *p, struct setitimer_args *uap, int32_t *retval)
  */
 void
 realitexpire(
-	struct proc	*p)
+	struct proc *p)
 {
 	struct proc *r;
-	struct timeval	t;
+	struct timeval t;
 
 	r = proc_find(p->p_pid);
 
 	proc_spinlock(p);
 
+	assert(p->p_ractive > 0);
+
 	if (--p->p_ractive > 0 || r != p) {
+		/*
+		 * bail, because either proc is exiting
+		 * or there's another active thread call
+		 */
 		proc_spinunlock(p);
 
 		if (r != NULL)
 			proc_rele(r);
 		return;
 	}
-	
+
 	if (!timerisset(&p->p_realtimer.it_interval)) {
+		/*
+		 * p_realtimer was cleared while this call was pending,
+		 * send one last SIGALRM, but don't re-arm
+		 */
 		timerclear(&p->p_rtime);
 		proc_spinunlock(p);
 
@@ -507,8 +549,29 @@ realitexpire(
 		return;
 	}
 
+	proc_spinunlock(p);
+
+	/*
+	 * Send the signal before re-arming the next thread call,
+	 * so in case psignal blocks, we won't create yet another thread call.
+	 */
+
+	psignal(p, SIGALRM);
+
+	proc_spinlock(p);
+
+	/* Should we still re-arm the next thread call? */
+	if (!timerisset(&p->p_realtimer.it_interval)) {
+		timerclear(&p->p_rtime);
+		proc_spinunlock(p);
+
+		proc_rele(p);
+		return;
+	}
+
 	microuptime(&t);
 	timevaladd(&p->p_rtime, &p->p_realtimer.it_interval);
+
 	if (timercmp(&p->p_rtime, &t, <=)) {
 		if ((p->p_rtime.tv_sec + 2) >= t.tv_sec) {
 			for (;;) {
@@ -516,19 +579,60 @@ realitexpire(
 				if (timercmp(&p->p_rtime, &t, >))
 					break;
 			}
-		}
-		else {
+		} else {
 			p->p_rtime = p->p_realtimer.it_interval;
 			timevaladd(&p->p_rtime, &t);
 		}
 	}
 
-	if (!thread_call_enter_delayed(p->p_rcall, tvtoabstime(&p->p_rtime)))
+	assert(p->p_rcall != NULL);
+
+	if (!thread_call_enter_delayed_with_leeway(p->p_rcall, NULL, tvtoabstime(&p->p_rtime), 0,
+	                                           THREAD_CALL_DELAY_USER_NORMAL)) {
 		p->p_ractive++;
+	}
+
 	proc_spinunlock(p);
 
-	psignal(p, SIGALRM);
 	proc_rele(p);
+}
+
+/*
+ * Called once in proc_exit to clean up after an armed or pending realitexpire
+ *
+ * This will only be called after the proc refcount is drained,
+ * so realitexpire cannot be currently holding a proc ref.
+ * i.e. it will/has gotten PROC_NULL from proc_find.
+ */
+void
+proc_free_realitimer(proc_t p)
+{
+	proc_spinlock(p);
+
+	assert(p->p_rcall != NULL);
+	assert(p->p_refcount == 0);
+
+	timerclear(&p->p_realtimer.it_interval);
+
+	if (thread_call_cancel(p->p_rcall)) {
+		assert(p->p_ractive > 0);
+		p->p_ractive--;
+	}
+
+	while (p->p_ractive > 0) {
+		proc_spinunlock(p);
+
+		delay(1);
+
+		proc_spinlock(p);
+	}
+
+	thread_call_t call = p->p_rcall;
+	p->p_rcall = NULL;
+
+	proc_spinunlock(p);
+
+	thread_call_free(call);
 }
 
 /*

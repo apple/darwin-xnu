@@ -108,7 +108,8 @@ kxld_vtable_init(KXLDVTable *vtable, const KXLDSym *vtable_sym,
     } else {
         if (kxld_object_is_final_image(object)) {
             extrelocs = kxld_object_get_extrelocs(object);
-            require_action(extrelocs, finish,
+            
+             require_action(extrelocs, finish,
                 rval=KERN_FAILURE;
                 kxld_log(kKxldLogPatching, kKxldLogErr, 
                     kKxldLogMalformedVTable, 
@@ -119,6 +120,7 @@ kxld_vtable_init(KXLDVTable *vtable, const KXLDSym *vtable_sym,
                 relocator, extrelocs, defined_cxx_symbols);
             require_noerr(rval, finish);
         } else {
+
             require_action(kxld_sect_get_num_relocs(vtable_sect) > 0, finish,
                 rval=KERN_FAILURE;
                 kxld_log(kKxldLogPatching, kKxldLogErr, 
@@ -135,6 +137,7 @@ kxld_vtable_init(KXLDVTable *vtable, const KXLDSym *vtable_sym,
 
     rval = KERN_SUCCESS;
 finish:
+
     if (demangled_name) kxld_free(demangled_name, demangled_length);
 
     return rval;
@@ -399,6 +402,7 @@ init_by_entries_and_relocs(KXLDVTable *vtable, const KXLDSym *vtable_sym,
         } else {
             reloc = kxld_reloc_get_reloc_by_offset(relocs,
                 vtable_sym->base_addr + entry_offset);
+
             require_action(reloc, finish,
                 rval=KERN_FAILURE;
                 kxld_log(kKxldLogPatching, kKxldLogErr, 
@@ -621,6 +625,7 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
 
         rval = kxld_reloc_update_symindex(child_entry->unpatched.reloc, symindex);
         require_noerr(rval, finish);
+        
         kxld_log(kKxldLogPatching, kKxldLogDetail,
             "In vtable '%s', patching '%s' with '%s'.", 
             kxld_demangle(vtable->name, &demangled_name1, &demangled_length1),
@@ -671,7 +676,7 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
     rval = KERN_SUCCESS;
 
 finish:
-    if (demangled_name1) kxld_free(demangled_name1, demangled_length1);
+  if (demangled_name1) kxld_free(demangled_name1, demangled_length1);
     if (demangled_name2) kxld_free(demangled_name2, demangled_length2);
     if (demangled_name3) kxld_free(demangled_name3, demangled_length3);
     

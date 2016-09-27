@@ -17,15 +17,15 @@ CFLAGS	:=-g $(patsubst %, -arch %,$(ARCHS)) -isysroot $(SDKROOT)
 DSTROOT?=$(shell /bin/pwd)
 SYMROOT?=$(shell /bin/pwd)
 
-all: $(addprefix $(DSTROOT)/, file timer)
+all: $(addprefix $(DSTROOT)/, file_tests timer_tests)
 
-$(DSTROOT)/file:
+$(DSTROOT)/file_tests: kqueue_file_tests.c
 	$(CC) $(CFLAGS) -o $(SYMROOT)/file_tests kqueue_file_tests.c
-	if [ ! -e $(DSTROOT)/file_tests ]; then ditto $(SYMROOT)/file_tests $(DSTROOT)/file_tests; fi
+	ditto $(SYMROOT)/file_tests $(DSTROOT)/file_tests
 
-$(DSTROOT)/timer:
+$(DSTROOT)/timer_tests: kqueue_timer_tests.c
 	$(CC) $(CFLAGS) -o $(SYMROOT)/timer_tests kqueue_timer_tests.c
-	if [ ! -e $(DSTROOT)/timer_tests ]; then ditto $(SYMROOT)/timer_tests $(DSTROOT)/timer_tests; fi
+	ditto $(SYMROOT)/timer_tests $(DSTROOT)/timer_tests
 
 clean:
 	rm -rf $(DSTROOT)/file_tests $(DSTROOT)/timer_tests $(SYMROOT)/*.dSYM $(SYMROOT)/file_tests $(SYMROOT)/timer_tests

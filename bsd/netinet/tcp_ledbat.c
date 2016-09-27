@@ -249,8 +249,8 @@ tcp_ledbat_ack_rcvd(struct tcpcb *tp, struct tcphdr *th) {
 	 * greater than or equal to the congestion window.
 	 */
 
-	register u_int cw = tp->snd_cwnd;
-	register u_int incr = tp->t_maxseg;
+	u_int cw = tp->snd_cwnd;
+	u_int incr = tp->t_maxseg;
 	int acked = 0;
 
 	acked = BYTES_ACKED(th, tp);
@@ -374,15 +374,8 @@ tcp_ledbat_after_timeout(struct tcpcb *tp) {
 
 int
 tcp_ledbat_delay_ack(struct tcpcb *tp, struct tcphdr *th) {
-	/* If any flag other than TH_ACK is set, set "end-of-write" bit */
-	if (th->th_flags & ~TH_ACK)
-		tp->t_flagsext |= TF_STREAMEOW;
-	else
-		tp->t_flagsext &= ~(TF_STREAMEOW);
-
 	if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
-		(th->th_flags & TH_PUSH) == 0 &&
-		(tp->t_unacksegs == 1))
+		(th->th_flags & TH_PUSH) == 0 && (tp->t_unacksegs == 1))
 		return(1);
 	return(0);
 }

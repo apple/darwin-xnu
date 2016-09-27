@@ -39,6 +39,7 @@
 #include <net/if.h>
 #include <net/net_osdep.h>
 #include <net/classq/classq.h>
+#include <pexpert/pexpert.h>
 #if CLASSQ_RED
 #include <net/classq/classq_red.h>
 #endif /* CLASSQ_RED */
@@ -50,6 +51,7 @@
 #endif /* CLASSQ_BLUE */
 #include <net/classq/classq_sfb.h>
 #include <net/pktsched/pktsched.h>
+#include <net/pktsched/pktsched_fq_codel.h>
 
 #include <libkern/libkern.h>
 
@@ -58,12 +60,23 @@
 #endif /* PF_ALTQ */
 
 static errno_t ifclassq_dequeue_common(struct ifclassq *, mbuf_svc_class_t,
-    u_int32_t, struct mbuf **, struct mbuf **, u_int32_t *, u_int32_t *,
-    boolean_t);
+    u_int32_t, u_int32_t, struct mbuf **, struct mbuf **, u_int32_t *,
+    u_int32_t *, boolean_t);
 static struct mbuf *ifclassq_poll_common(struct ifclassq *,
     mbuf_svc_class_t, boolean_t);
 static struct mbuf *ifclassq_tbr_dequeue_common(struct ifclassq *, int,
     mbuf_svc_class_t, boolean_t);
+
+static u_int64_t ifclassq_target_qdelay = 0;
+SYSCTL_QUAD(_net_classq, OID_AUTO, target_qdelay, CTLFLAG_RW|CTLFLAG_LOCKED,
+    &ifclassq_target_qdelay, "target queue delay in nanoseconds");
+
+static u_int64_t ifclassq_update_interval = 0;
+SYSCTL_QUAD(_net_classq, OID_AUTO, update_interval,
+    CTLFLAG_RW|CTLFLAG_LOCKED, &ifclassq_update_interval,
+    "update interval in nanoseconds");
+
+static int32_t ifclassq_sched_fq_codel;
 
 void
 classq_init(void)
@@ -82,6 +95,11 @@ classq_init(void)
 	blue_init();
 #endif /* CLASSQ_BLUE */
 	sfb_init();
+	fq_codel_scheduler_init();
+
+	if (!PE_parse_boot_argn("fq_codel", &ifclassq_sched_fq_codel,
+	    sizeof (ifclassq_sched_fq_codel)))
+		ifclassq_sched_fq_codel = 0;
 }
 
 int
@@ -221,9 +239,18 @@ ifclassq_pktsched_setup(struct ifclassq *ifq)
 		break;
 
 	case IFNET_SCHED_MODEL_NORMAL:
-		err = pktsched_setup(ifq, PKTSCHEDT_QFQ, ifq->ifcq_sflags);
+		if (ifclassq_sched_fq_codel != 0) {
+			err = pktsched_setup(ifq, PKTSCHEDT_FQ_CODEL,
+			    ifq->ifcq_sflags);
+		} else {
+			err = pktsched_setup(ifq, PKTSCHEDT_QFQ,
+			    ifq->ifcq_sflags);
+		}
 		break;
-
+	case IFNET_SCHED_MODEL_FQ_CODEL:
+		err = pktsched_setup(ifq, PKTSCHEDT_FQ_CODEL,
+		    ifq->ifcq_sflags);
+		break;
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -294,26 +321,27 @@ ifclassq_enqueue(struct ifclassq *ifq, struct mbuf *m)
 }
 
 errno_t
-ifclassq_dequeue(struct ifclassq *ifq, u_int32_t limit, struct mbuf **head,
+ifclassq_dequeue(struct ifclassq *ifq, u_int32_t pkt_limit,
+    u_int32_t byte_limit, struct mbuf **head,
     struct mbuf **tail, u_int32_t *cnt, u_int32_t *len)
 {
-	return (ifclassq_dequeue_common(ifq, MBUF_SC_UNSPEC, limit, head, tail,
-	    cnt, len, FALSE));
+	return (ifclassq_dequeue_common(ifq, MBUF_SC_UNSPEC, pkt_limit,
+	    byte_limit, head, tail, cnt, len, FALSE));
 }
 
 errno_t
 ifclassq_dequeue_sc(struct ifclassq *ifq, mbuf_svc_class_t sc,
-    u_int32_t limit, struct mbuf **head, struct mbuf **tail, u_int32_t *cnt,
-    u_int32_t *len)
+    u_int32_t pkt_limit, struct mbuf **head, struct mbuf **tail,
+    u_int32_t *cnt, u_int32_t *len)
 {
-	return (ifclassq_dequeue_common(ifq, sc, limit, head, tail,
-	    cnt, len, TRUE));
+	return (ifclassq_dequeue_common(ifq, sc, pkt_limit,
+	    CLASSQ_DEQUEUE_MAX_BYTE_LIMIT, head, tail, cnt, len, TRUE));
 }
 
 static errno_t
 ifclassq_dequeue_common(struct ifclassq *ifq, mbuf_svc_class_t sc,
-    u_int32_t limit, struct mbuf **head, struct mbuf **tail, u_int32_t *cnt,
-    u_int32_t *len, boolean_t drvmgt)
+    u_int32_t pkt_limit, u_int32_t byte_limit, struct mbuf **head,
+    struct mbuf **tail, u_int32_t *cnt, u_int32_t *len, boolean_t drvmgt)
 {
 	struct ifnet *ifp = ifq->ifcq_ifp;
 	u_int32_t i = 0, l = 0;
@@ -325,14 +353,30 @@ ifclassq_dequeue_common(struct ifclassq *ifq, mbuf_svc_class_t sc,
 
 	VERIFY(!drvmgt || MBUF_VALID_SC(sc));
 
+	/*
+	 * If the scheduler support dequeueing multiple packets at the
+	 * same time, call that one instead.
+	 */
+
+	if (ifq->ifcq_dequeue_multi != NULL) {
+		int err;
+		IFCQ_LOCK_SPIN(ifq);
+		err = ifq->ifcq_dequeue_multi(ifq, CLASSQDQ_REMOVE,
+		    pkt_limit, byte_limit, head, tail, cnt, len);
+		IFCQ_UNLOCK(ifq);
+
+		if (err == 0 && (*head) == NULL)
+			err = EAGAIN;
+		return (err);
+	}
+
 	*head = NULL;
 	first = &(*head);
 	last = NULL;
 
-	ifq = &ifp->if_snd;
 	IFCQ_LOCK_SPIN(ifq);
 
-	while (i < limit) {
+	while (i < pkt_limit && l < byte_limit) {
 #if PF_ALTQ
 		u_int32_t qlen;
 
@@ -391,9 +435,8 @@ ifclassq_dequeue_common(struct ifclassq *ifq, mbuf_svc_class_t sc,
 #endif /* MEASURE_BW */
 		if (IFNET_IS_CELLULAR(ifp)) {
 			(*head)->m_pkthdr.pkt_flags |= PKTF_VALID_UNSENT_DATA;
-			(*head)->m_pkthdr.pkt_unsent_databytes =
-			    (total_snd_byte_count << MSIZESHIFT) +
-			    ifq->ifcq_bytes;
+			(*head)->m_pkthdr.bufstatus_if = IFCQ_BYTES(ifq);
+			(*head)->m_pkthdr.bufstatus_sndbuf = ifp->if_sndbyte_unsent;
 		}
 		head = &(*head)->m_nextpkt;
 		i++;
@@ -487,7 +530,8 @@ ifclassq_update(struct ifclassq *ifq, cqev_t ev)
 int
 ifclassq_attach(struct ifclassq *ifq, u_int32_t type, void *discipline,
     ifclassq_enq_func enqueue, ifclassq_deq_func dequeue,
-    ifclassq_deq_sc_func dequeue_sc, ifclassq_req_func request)
+    ifclassq_deq_sc_func dequeue_sc, ifclassq_deq_multi_func dequeue_multi,
+    ifclassq_req_func request)
 {
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
@@ -501,6 +545,7 @@ ifclassq_attach(struct ifclassq *ifq, u_int32_t type, void *discipline,
 	ifq->ifcq_enqueue = enqueue;
 	ifq->ifcq_dequeue = dequeue;
 	ifq->ifcq_dequeue_sc = dequeue_sc;
+	ifq->ifcq_dequeue_multi = dequeue_multi;
 	ifq->ifcq_request = request;
 
 	return (0);
@@ -824,4 +869,48 @@ ifclassq_tbr_set(struct ifclassq *ifq, struct tb_profile *profile,
 		ifclassq_update(ifq, CLASSQ_EV_LINK_BANDWIDTH);
 
 	return (0);
+}
+
+void
+ifclassq_calc_target_qdelay(struct ifnet *ifp, u_int64_t *if_target_qdelay)
+{
+	u_int64_t target_qdelay = 0;
+	target_qdelay = IFCQ_TARGET_QDELAY(&ifp->if_snd);
+
+	if (ifclassq_target_qdelay != 0)
+		target_qdelay = ifclassq_target_qdelay;
+
+	/*
+	 * If we do not know the effective bandwidth, use the default
+	 * target queue delay.
+	 */
+	if (target_qdelay == 0)
+		target_qdelay = IFQ_TARGET_DELAY;
+
+	/*
+	 * If a delay has been added to ifnet start callback for
+	 * coalescing, we have to add that to the pre-set target delay
+	 * because the packets can be in the queue longer.
+	 */
+	if ((ifp->if_eflags & IFEF_ENQUEUE_MULTI) &&
+	    ifp->if_start_delay_timeout > 0)
+		target_qdelay += ifp->if_start_delay_timeout;
+
+	*(if_target_qdelay) = target_qdelay;
+}
+
+void
+ifclassq_calc_update_interval(u_int64_t *update_interval)
+{
+	u_int64_t uint = 0;
+
+	/* If the system level override is set, use it */
+	if (ifclassq_update_interval != 0)
+		uint = ifclassq_update_interval;
+
+	/* Otherwise use the default value */
+	if (uint == 0)
+		uint = IFQ_UPDATE_INTERVAL;
+
+	*update_interval = uint;
 }

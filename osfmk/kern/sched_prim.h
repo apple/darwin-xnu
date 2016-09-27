@@ -141,10 +141,6 @@ extern void		sched_set_thread_base_priority(
 					thread_t		thread,
 					int				priority);
 
-/* Set the thread to be categorized as 'background' */
-extern void             sched_set_thread_throttled(thread_t thread,
-                                                   boolean_t wants_throttle);
-
 /* Set the thread's true scheduling mode */
 extern void             sched_set_thread_mode(thread_t thread,
                                               sched_mode_t mode);
@@ -402,6 +398,17 @@ extern char sched_string[SCHED_STRING_MAX_LENGTH];
 
 extern kern_return_t sched_work_interval_notify(thread_t thread, uint64_t work_interval_id, uint64_t start, uint64_t finish, uint64_t deadline, uint64_t next_start, uint32_t flags);
 
+extern thread_t port_name_to_thread_for_ulock(mach_port_name_t	thread_name);
+
+/* Attempt to context switch to a specific runnable thread */
+extern wait_result_t thread_handoff(thread_t thread);
+
+extern struct waitq	*assert_wait_queue(event_t event);
+
+extern kern_return_t thread_wakeup_one_with_pri(event_t event, int priority);
+
+extern thread_t thread_wakeup_identify(event_t event, int priority);
+
 #endif	/* XNU_KERNEL_PRIVATE */
 
 /* Context switch */
@@ -452,13 +459,6 @@ extern kern_return_t	thread_wakeup_prim(
 							boolean_t			one_thread,
 							wait_result_t			result);
 
-extern kern_return_t    thread_wakeup_prim_internal(
-	                                                event_t				event,
-							boolean_t			one_thread,
-							wait_result_t			result,
-							int				priority);
-
-
 #define thread_wakeup(x)					\
 			thread_wakeup_prim((x), FALSE, THREAD_AWAKENED)
 #define thread_wakeup_with_result(x, z)		\
@@ -466,12 +466,10 @@ extern kern_return_t    thread_wakeup_prim_internal(
 #define thread_wakeup_one(x)				\
 			thread_wakeup_prim((x), TRUE, THREAD_AWAKENED)
 
-#ifdef MACH_KERNEL_PRIVATE
-#define thread_wakeup_one_with_pri(x, pri)                              \
-	                thread_wakeup_prim_internal((x), TRUE, THREAD_AWAKENED, pri)
-#endif
+/* Wakeup the specified thread if it is waiting on this event */
+extern kern_return_t thread_wakeup_thread(event_t event, thread_t thread);
 
-extern boolean_t		preemption_enabled(void);
+extern boolean_t preemption_enabled(void);
 
 #ifdef MACH_KERNEL_PRIVATE
 

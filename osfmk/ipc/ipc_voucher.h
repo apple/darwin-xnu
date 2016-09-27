@@ -38,6 +38,7 @@
 #include <kern/queue.h>
 #include <kern/locks.h>
 #include <kern/simple_lock.h>
+#include <voucher/ipc_pthread_priority_types.h>
 
 /* locking */
 extern lck_grp_t 	ipc_lck_grp;
@@ -158,7 +159,8 @@ typedef ipc_voucher_attr_control_t iv_attr_control_t;
 extern ipc_voucher_attr_control_t  ivac_alloc(iv_index_t);
 extern void ipc_voucher_receive_postprocessing(ipc_kmsg_t kmsg, mach_msg_option_t option);
 extern void ipc_voucher_send_preprocessing(ipc_kmsg_t kmsg);
-
+extern void mach_init_activity_id(void);
+extern kern_return_t ipc_get_pthpriority_from_kmsg_voucher(ipc_kmsg_t kmsg, ipc_pthread_priority_value_t *qos);
 #define ivac_lock_init(ivac) \
 	lck_spin_init(&(ivac)->ivac_lock_data, &ipc_lck_grp, &ipc_lck_attr)
 #define ivac_lock_destroy(ivac) \

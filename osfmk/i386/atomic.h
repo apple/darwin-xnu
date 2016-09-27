@@ -49,5 +49,18 @@
 
 #endif
 
+#ifdef ATOMIC_PRIVATE
+
+static boolean_t
+atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
+			enum memory_order ord, boolean_t wait)
+{
+	(void)wait;
+	return __c11_atomic_compare_exchange_strong((_Atomic uintptr_t *)target, &oldval, newval, ord, memory_order_relaxed);
+}
+
+#endif // ATOMIC_PRIVATE
+
+
 #endif // _I386_ATOMIC_H_
 

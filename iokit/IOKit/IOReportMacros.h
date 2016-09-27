@@ -30,6 +30,7 @@
 #define _IOREPORT_MACROS_H_
 
 #include "IOReportTypes.h"
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -74,16 +75,17 @@ extern "C" {
  * IOReportCategories categories - categories of this channel
  *
  * If the buffer is not of sufficient size, the macro calls IOREPORT_ABORT().
- * If that returns, the buffer is filled with 0xbadcafe.
+ * If that returns, the buffer is left full of '&'.
  */
 
-#define SIMPLEREPORT_INIT(buffer, bufSize, providerID, channelID, cats)  \
+#define SIMPLEREPORT_INIT(buf, bufSize, providerID, channelID, cats)  \
 do {  \
-    IOReportElement     *__elem = (IOReportElement *)(buffer);  \
+    memset((buf), '&', (bufSize));  \
+    IOReportElement     *__elem = (IOReportElement *)(buf);  \
     IOSimpleReportValues *__vals;  \
     if ((bufSize) >= SIMPLEREPORT_BUFSIZE) {  \
-        __elem->channel_id = (channelID);  \
         __elem->provider_id = (providerID);  \
+        __elem->channel_id = (channelID);  \
         __elem->channel_type.report_format = kIOReportFormatSimple;  \
         __elem->channel_type.reserved = 0;  \
         __elem->channel_type.categories = (cats);  \
@@ -95,7 +97,6 @@ do {  \
     }  \
     else {  \
         IOREPORT_ABORT("bufSize is smaller than the required size\n");  \
-        __POLLUTE_BUF((buffer), (bufSize));  \
     }  \
 } while(0)
 
@@ -225,10 +226,11 @@ typedef struct {
  * IOReportCategories categories - categories of this channel
  *
  * If the buffer is not of sufficient size, the macro invokes IOREPORT_ABORT.
- * If that returns, the buffer is filled with 0xbadcafe.
+ * If that returns, the buffer is left full of '&'.
  */
 #define STATEREPORT_INIT(nstates, buf, bufSize, providerID, channelID, cats) \
 do {  \
+    memset((buf), '&', (bufSize));  \
     IOStateReportInfo *__info = (IOStateReportInfo *)(buf);  \
     IOStateReportValues *__rep;  \
     IOReportElement     *__elem;  \
@@ -236,8 +238,8 @@ do {  \
         for (unsigned __no = 0; __no < (nstates); __no++) {  \
             __elem =  &(__info->elem[__no]);  \
             __rep = (IOStateReportValues *) &(__elem->values);  \
-            __elem->channel_id = (channelID);  \
             __elem->provider_id = (providerID);  \
+            __elem->channel_id = (channelID);  \
             __elem->channel_type.report_format = kIOReportFormatState;  \
             __elem->channel_type.reserved = 0;  \
             __elem->channel_type.categories = (cats);  \
@@ -247,13 +249,13 @@ do {  \
             __rep->state_id = __no;  \
             __rep->intransitions = 0;  \
             __rep->upticks = 0;  \
+            __rep->last_intransition = 0;  \
         }  \
         __info->curr_state = 0;  \
         __info->update_ts = 0;  \
     }  \
     else {  \
         IOREPORT_ABORT("bufSize is smaller than the required size\n");  \
-        __POLLUTE_BUF((buf), (bufSize));  \
     }  \
 } while(0)
 
@@ -408,12 +410,13 @@ do {  \
  *            uint64_t channelID   - ID of this channel, see IOREPORT_MAKEID()
  * IOReportCategories categories   - categories of this channel
  *
- * If the buffer is not of sufficient size, the macro invokes IOREPORT_ABORT()
- * and, if that returns, fills the buffer with 0xbadcafe.
+ * If the buffer is not of sufficient size, the macro invokes IOREPORT_ABORT().
+ * If that returns, the buffer is left full of '&'.
  */
 
 #define SIMPLEARRAY_INIT(nValues, buf, bufSize, providerID, channelID, cats) \
 do {  \
+    memset((buf), '&', (bufSize));  \
     IOSimpleArrayReportValues *__rep;  \
     IOReportElement     *__elem;  \
     uint32_t            __nElems = (((nValues) / IOR_VALUES_PER_ELEMENT) + \
@@ -422,8 +425,8 @@ do {  \
         for (unsigned __no = 0; __no < __nElems; __no++) {  \
             __elem =  &(((IOReportElement *)(buf))[__no]);  \
             __rep = (IOSimpleArrayReportValues *) &(__elem->values);  \
-            __elem->channel_id = (channelID);  \
             __elem->provider_id = (providerID);  \
+            __elem->channel_id = (channelID);  \
             __elem->channel_type.report_format = kIOReportFormatSimpleArray;  \
             __elem->channel_type.reserved = 0;  \
             __elem->channel_type.categories = (cats);  \
@@ -438,7 +441,6 @@ do {  \
     }  \
     else {  \
         IOREPORT_ABORT("bufSize is smaller than the required size\n");  \
-        __POLLUTE_BUF((buf), (bufSize));  \
     }  \
 } while(0)
 
@@ -584,10 +586,11 @@ typedef struct {
  * IOReportCategories categories - categories of this channel
  *
  * If the buffer is not of sufficient size, the macro invokes IOREPORT_ABORT.
- * If that returns, the buffer is filled with 0xbadcafe.
+ * If that returns, the buffer is left full of '&'.
  */
 #define HISTREPORT_INIT(nbuckets, bktSize, buf, bufSize, providerID, channelID, cats) \
 do {  \
+    memset((buf), '&', (bufSize));  \
     IOHistReportInfo   *__info = (IOHistReportInfo *)(buf);  \
     IOReportElement         *__elem;  \
     IOHistogramReportValues *__rep;  \
@@ -596,20 +599,19 @@ do {  \
         for (unsigned __no = 0; __no < (nbuckets); __no++) {  \
             __elem =  &(__info->elem[__no]);  \
             __rep = (IOHistogramReportValues *) &(__elem->values);  \
-            __elem->channel_id = (channelID);  \
             __elem->provider_id = (providerID);  \
+            __elem->channel_id = (channelID);  \
             __elem->channel_type.report_format = kIOReportFormatHistogram;  \
             __elem->channel_type.reserved = 0;  \
             __elem->channel_type.categories = (cats);  \
             __elem->channel_type.nelements = (nbuckets);  \
             __elem->channel_type.element_idx = __no;  \
             __elem->timestamp = 0;  \
-            bzero(__rep, sizeof(IOHistogramReportValues)); \
+            memset(__rep, '\0', sizeof(IOHistogramReportValues)); \
         }  \
     }  \
     else {  \
         IOREPORT_ABORT("bufSize is smaller than the required size\n");  \
-        __POLLUTE_BUF((buf), (bufSize));  \
     }  \
 } while (0)
 
@@ -695,17 +697,6 @@ do {  \
  */
 #define HISTREPORT_GETCHTYPE(hist_buf)  \
     (*(uint64_t*)&(((IOHistReportInfo *)(hist_buf))->elem[0].channel_type))
-
-
-
-/* generic utilities */
-
-    #define __POLLUTE_BUF(buf, bufSize)  \
-    do {  \
-        int __cnt = (bufSize)/sizeof(uint32_t);  \
-        while (--__cnt >= 0)  \
-            ((uint32_t*)(buf))[__cnt] = 0xbadcafe;  \
-    } while (0)
 
 #ifdef __cplusplus
 }

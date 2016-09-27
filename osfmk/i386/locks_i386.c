@@ -287,7 +287,47 @@ boolean_t
 lck_spin_try_lock(
 	lck_spin_t	*lck)
 {
-	return((boolean_t)usimple_lock_try((usimple_lock_t) lck));
+	boolean_t lrval = (boolean_t)usimple_lock_try((usimple_lock_t) lck);
+#if	DEVELOPMENT || DEBUG
+	if (lrval) {
+		pltrace(FALSE);
+	}
+#endif
+	return(lrval);
+}
+
+/*
+ *	Routine:	lck_spin_assert
+ */
+void
+lck_spin_assert(lck_spin_t *lock, unsigned int type)
+{
+	thread_t thread, holder;
+	uintptr_t state;
+
+	if (__improbable(type != LCK_ASSERT_OWNED && type != LCK_ASSERT_NOTOWNED)) {
+		panic("lck_spin_assert(): invalid arg (%u)", type);
+	}
+
+	state = lock->interlock;
+	holder = (thread_t)state;
+	thread = current_thread();
+	if (type == LCK_ASSERT_OWNED) {
+		if (__improbable(holder == THREAD_NULL)) {
+			panic("Lock not owned %p = %lx", lock, state);
+		}
+		if (__improbable(holder != thread)) {
+			panic("Lock not owned by current thread %p = %lx", lock, state);
+		}
+	} else if (type == LCK_ASSERT_NOTOWNED) {
+		if (__improbable(holder != THREAD_NULL)) {
+			if (holder == thread) {
+				panic("Lock owned by current thread %p = %lx", lock, state);
+			} else {
+				panic("Lock %p owned by thread %p", lock, holder);
+			}
+		}
+	}
 }
 
 /*
@@ -378,6 +418,10 @@ usimple_lock(
 			panic("Spinlock acquisition timed out: lock=%p, lock owner thread=0x%lx, current_thread: %p, lock owner active on CPU 0x%x, current owner: 0x%lx", l, lowner,  current_thread(), lock_cpu, (uintptr_t)l->interlock.lock_data);
 		}
 	}
+#if DEVELOPMENT || DEBUG
+		pltrace(FALSE);
+#endif
+
 	USLDBG(usld_lock_post(l, pc));
 #else
 	simple_lock((simple_lock_t)l);
@@ -401,6 +445,9 @@ usimple_unlock(
 
 	OBTAIN_PC(pc);
 	USLDBG(usld_unlock(l, pc));
+#if DEVELOPMENT || DEBUG
+		pltrace(TRUE);
+#endif
 	hw_lock_unlock(&l->interlock);
 #else
 	simple_unlock_rwmb((simple_lock_t)l);
@@ -431,12 +478,31 @@ usimple_lock_try(
 	OBTAIN_PC(pc);
 	USLDBG(usld_lock_try_pre(l, pc));
 	if ((success = hw_lock_try(&l->interlock))) {
-		USLDBG(usld_lock_try_post(l, pc));
+#if DEVELOPMENT || DEBUG
+		pltrace(FALSE);
+#endif
+	USLDBG(usld_lock_try_post(l, pc));
 	}
 	return success;
 #else
 	return(simple_lock_try((simple_lock_t)l));
 #endif
+}
+
+/*
+ * Acquire a usimple_lock while polling for pending TLB flushes
+ * and spinning on a lock.
+ *
+ */
+void
+usimple_lock_try_lock_loop(usimple_lock_t l)
+{
+	boolean_t istate = ml_get_interrupts_enabled();
+	while (!simple_lock_try((l))) {
+		if (!istate)
+			handle_pending_TLB_flushes();
+		cpu_pause();
+	}
 }
 
 #if	USLOCK_DEBUG
@@ -548,7 +614,7 @@ usld_lock_post(
 	usimple_lock_t	l,
 	pc_t		pc)
 {
-	register int	mycpu;
+	int	mycpu;
 	char	caller[] = "successful usimple_lock";
 
 
@@ -585,7 +651,7 @@ usld_unlock(
 	usimple_lock_t	l,
 	pc_t		pc)
 {
-	register int	mycpu;
+	int	mycpu;
 	char	caller[] = "usimple_unlock";
 
 
@@ -650,7 +716,7 @@ usld_lock_try_post(
 	usimple_lock_t	l,
 	pc_t		pc)
 {
-	register int	mycpu;
+	int	mycpu;
 	char	caller[] = "successful usimple_lock_try";
 
 	if (!usld_lock_common_checks(l, caller))
@@ -1151,7 +1217,7 @@ lck_rw_unlock_shared(
 	ret = lck_rw_done(lck);
 
 	if (ret != LCK_RW_TYPE_SHARED)
-		panic("lck_rw_unlock(): lock held in mode: %d\n", ret);
+		panic("lck_rw_unlock_shared(): lock %p held in mode: %d\n", lck, ret);
 }
 
 
@@ -1649,7 +1715,7 @@ lck_mtx_ext_init(
 		lck->lck_mtx_attr |= LCK_MTX_ATTR_STAT;
 
 	lck->lck_mtx.lck_mtx_is_ext = 1;
-	lck->lck_mtx.lck_mtx_sw.lck_mtxd.lck_mtxd_pad32 = 0xFFFFFFFF;
+	lck->lck_mtx.lck_mtx_pad32 = 0xFFFFFFFF;
 }
 
 /*
@@ -1679,7 +1745,7 @@ lck_mtx_init(
 		lck->lck_mtx_owner = 0;
 		lck->lck_mtx_state = 0;
 	}
-	lck->lck_mtx_sw.lck_mtxd.lck_mtxd_pad32 = 0xFFFFFFFF;
+	lck->lck_mtx_pad32 = 0xFFFFFFFF;
 	lck_grp_reference(grp);
 	lck_grp_lckcnt_incr(grp, LCK_TYPE_MTX);
 }
@@ -1709,7 +1775,7 @@ lck_mtx_init_ext(
 		lck->lck_mtx_owner = 0;
 		lck->lck_mtx_state = 0;
 	}
-	lck->lck_mtx_sw.lck_mtxd.lck_mtxd_pad32 = 0xFFFFFFFF;
+	lck->lck_mtx_pad32 = 0xFFFFFFFF;
 
 	lck_grp_reference(grp);
 	lck_grp_lckcnt_incr(grp, LCK_TYPE_MTX);
@@ -2121,7 +2187,7 @@ kdp_lck_mtx_lock_spin_is_acquired(lck_mtx_t	*lck)
 		panic("panic: kdp_lck_mtx_lock_spin_is_acquired called outside of kernel debugger");
 	}
 
-	if (lck->lck_mtx_sw.lck_mtxd.lck_mtxd_ilocked || lck->lck_mtx_sw.lck_mtxd.lck_mtxd_mlocked) {
+	if (lck->lck_mtx_ilocked || lck->lck_mtx_mlocked) {
 		return TRUE;
 	}
 

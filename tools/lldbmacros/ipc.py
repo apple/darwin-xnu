@@ -8,6 +8,7 @@ from process import *
 from atm import *
 from bank import *
 from waitq import *
+from ioreg import *
 import xnudefines
 
 @header("{0: <20s} {1: <6s} {2: <6s} {3: <10s} {4: <15s}".format("task", "pid", '#acts', "tablesize", "command"))
@@ -365,9 +366,18 @@ def GetKObjectFromPort(portval):
     io_bits = unsigned(portval.ip_object.io_bits)
     objtype_index = io_bits & 0xfff
     if objtype_index < len(xnudefines.kobject_types) :
-        desc_str = "kobject({0:s})".format(xnudefines.kobject_types[objtype_index])
-        if xnudefines.kobject_types[objtype_index] in ('TASK_RESUME', 'TASK'):
-            desc_str += " " + GetProcNameForTask(Cast(portval.kdata.kobject, 'task *'))
+        objtype_str = xnudefines.kobject_types[objtype_index]
+        if objtype_str == 'IOKIT_OBJ':
+            iokit_classnm = GetObjectTypeStr(portval.kdata.kobject)
+            if not iokit_classnm:
+                iokit_classnm = "<unknown class>"
+            else:
+                iokit_classnm = re.sub(r'vtable for ', r'', iokit_classnm)
+            desc_str = "kobject({:s}:{:s})".format(objtype_str, iokit_classnm)
+        else:
+            desc_str = "kobject({0:s})".format(objtype_str)
+            if xnudefines.kobject_types[objtype_index] in ('TASK_RESUME', 'TASK'):
+                desc_str += " " + GetProcNameForTask(Cast(portval.kdata.kobject, 'task *'))
     else:
         desc_str = "kobject(UNKNOWN) {:d}".format(objtype_index)
     return kobject_str + " " + desc_str
@@ -905,13 +915,17 @@ def GetIPCImportanceElemSummary(iie):
 
     out_str = ''
     fmt = "{: <#018x} {: <4s} {: <8d} {: <8d} {: <#018x} {: <#018x}"
-    type_str = 'TASK'
     if unsigned(iie.iie_bits) & 0x80000000:
         type_str = "INH"
+        inherit_count = 0
+    else:
+        type_str = 'TASK'
+        iit = Cast(iie, 'struct ipc_importance_task *')
+        inherit_count = sum(1 for i in IterateQueue(iit.iit_inherits, 'struct ipc_importance_inherit *',  'iii_inheritance'))
+
     refs = unsigned(iie.iie_bits) & 0x7fffffff
     made_refs = unsigned(iie.iie_made)
     kmsg_count = sum(1 for i in IterateQueue(iie.iie_kmsgs, 'struct ipc_kmsg *',  'ikm_inheritance'))
-    inherit_count = sum(1 for i in IterateQueue(iie.iie_inherits, 'struct ipc_importance_inherit *',  'iii_inheritance'))
     out_str += fmt.format(iie, type_str, refs, made_refs, kmsg_count, inherit_count)
     if config['verbosity'] > vHUMAN:
         if kmsg_count > 0:
@@ -921,7 +935,7 @@ def GetIPCImportanceElemSummary(iie):
             out_str += "\n"
         if inherit_count > 0:
             out_str += "\n\t" + GetIPCImportanceInheritSummary.header + "\n"
-            for i in IterateQueue(iie.iie_inherits, 'struct ipc_importance_inherit *',  'iii_inheritance'):
+            for i in IterateQueue(iit.iit_inherits, 'struct ipc_importance_inherit *',  'iii_inheritance'):
                 out_str += "\t" + GetIPCImportanceInheritSummary(i) + "\n"
             out_str += "\n"
         if type_str == "INH":
@@ -1302,5 +1316,76 @@ def ShowVoucher(cmd_args=[], cmd_options={}):
     voucher = kern.GetValueFromAddress(cmd_args[0], 'ipc_voucher_t')
     print GetIPCVoucherSummary.header
     print GetIPCVoucherSummary(voucher, show_entries=True)
-    
 
+def GetSpaceSendRightEntries(space, port):
+    """ Get entry summaries for all send rights to port address in an IPC space.
+        params:
+            space - the IPC space to search for send rights
+            port_addr - the port address to match, or 0 to get all send rights
+        returns: an array of IPC entries
+    """
+    entry_table = space.is_table
+    ports = int(space.is_table_size)
+    i = 0
+    entries = []
+
+    while i < ports:
+        entry = GetObjectAtIndexFromArray(entry_table, i)
+
+        entry_ie_bits = unsigned(entry.ie_bits)
+        if (entry_ie_bits & 0x00010000) != 0 and (not port or entry.ie_object == port):
+            entries.append(entry)
+        i += 1
+
+    return entries
+
+@lldb_command('showportsendrights')
+def ShowPortSendRights(cmd_args=[], cmd_options={}):
+    """ Display a list of send rights across all tasks for a given port.
+        Usage: (lldb) showportsendrights <ipc_port_t>
+    """
+    if not cmd_args:
+        raise ArgumentError("no port address provided")
+    port = kern.GetValueFromAddress(cmd_args[0], 'struct ipc_port *')
+    i = 1
+
+    for t in kern.tasks:
+        # Write a progress line.  Using stderr avoids automatic newline when
+        # writing to stdout from lldb.  Blank spaces at the end clear out long
+        # lines.
+        sys.stderr.write("checking {:s} ({}/{})...{:30s}\r".format(Cast(t.bsd_info, 'proc_t').p_name, i, len(kern.tasks), ''))
+        i += 1
+        entries = GetSpaceSendRightEntries(t.itk_space, port)
+
+        if entries:
+            print GetTaskIPCSummary.header
+            print GetTaskIPCSummary(t)
+            print '\t' + GetIPCEntrySummary.header
+
+        for entry in entries:
+            print "\t" + GetIPCEntrySummary(entry)
+
+@lldb_command('showtasksuspenders')
+def ShowTaskSuspenders(cmd_args=[], cmd_options={}):
+    """ Display the tasks and send rights that are holding a target task suspended.
+        Usage: (lldb) showtasksuspenders <task_t>
+    """
+    if not cmd_args:
+        raise ArgumentError("no task address provided")
+    task = kern.GetValueFromAddress(cmd_args[0], 'task_t')
+
+    if task.suspend_count == 0:
+        print "task {:#x} ({:s}) is not suspended".format(unsigned(task), Cast(task.bsd_info, 'proc_t').p_name)
+        return
+
+    # If the task has been suspended by the kernel (potentially by
+    # kperf, using task_suspend_internal) or a client of task_suspend2
+    # that does not convert its task suspension token to a port using
+    # convert_task_suspension_token_to_port, then it's impossible to determine
+    # which task did the suspension.
+    port = task.itk_resume
+    if not port:
+        print "task {:#x} ({:s}) is suspended but no resume port exists".format(unsigned(task), Cast(task.bsd_info, 'proc_t').p_name)
+        return
+
+    return ShowPortSendRights(cmd_args=[unsigned(port)], cmd_options=cmd_options)

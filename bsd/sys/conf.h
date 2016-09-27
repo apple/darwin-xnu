@@ -198,7 +198,6 @@ struct cdevsw {
 };
 
 #ifdef BSD_KERNEL_PRIVATE
-void devsw_init(void);
 
 extern uint64_t cdevsw_flags[];
 #define CDEVSW_SELECT_KQUEUE	0x01
@@ -294,6 +293,7 @@ extern struct swdevt swdevt[];
  */
 __BEGIN_DECLS
 #ifdef KERNEL_PRIVATE
+void devsw_init(void);
 extern struct cdevsw cdevsw[];
 extern int cdevsw_setkqueueok(int, struct cdevsw*, int);
 #endif /* KERNEL_PRIVATE */

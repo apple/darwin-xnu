@@ -18,9 +18,17 @@ To obtain random bytes, open
 .Nm /dev/random
 for reading and read from it.
 .Pp
-To add entropy to the random generation system, open
+The same random data is also available from
+.Xr getentropy 2 .
+Using the
+.Xr getentropy 2
+system call interface will provide resiliency to file descriptor exhaustion, chroot, or sandboxing which can make
 .Nm /dev/random
-for writing and write data that you believe to be somehow random.
+unavailable.  Additionally, the
+.Xr arc4random 3
+API provides a fast userspace random number generator built on the
+.Nm
+data source and is preferred over directly accessing the system's random device.
 .Pp
 .Nm /dev/urandom
 is a compatibility nod to Linux. On Linux,
@@ -30,40 +38,13 @@ will produce lower quality output if the entropy pool drains, while
 will prefer to block and wait for additional entropy to be collected.
 With Yarrow, this choice and distinction is not necessary, and
 the two devices behave identically. You may use either.
-.Sh OPERATION
+.Pp
 The
 .Nm
 device implements the
 .Nm Yarrow
 pseudo random number generator algorithm and maintains its entropy pool.
-Additional entropy is fed to the generator regularly by the
-.Nm SecurityServer
-daemon from random jitter measurements of the kernel.
-.Nm SecurityServer
-is also responsible for periodically saving some entropy to disk
-and reloading it during startup to provide entropy in early system
-operation.
-.Pp
-You may feed additional entropy to the generator by writing it to the
-.Nm
-device, though this is not required in a normal operating environment.
-.Sh LIMITATIONS AND WARNINGS
-.Nm Yarrow
-is a fairly resilient algorithm, and is believed
-to be resistant to non-root.
-The quality of its output is however dependent on regular addition
-of appropriate entropy. If the
-.Nm SecurityServer
-system daemon fails for any reason, output quality will suffer
-over time without any explicit indication from the
-.Nm
-device itself.
-.Pp
-Paranoid programmers can counteract this risk somewhat by collecting
-entropy of their choice (e.g. from keystroke or mouse timings)
-and seeding it into
-.Nm
-directly before obtaining important random numbers.
+The kernel automatically seeds the algorithm with additional entropy during normal execution.
 .Sh FILES
 .Bl -tag -width /dev/urandom -compact
 .It Pa /dev/random

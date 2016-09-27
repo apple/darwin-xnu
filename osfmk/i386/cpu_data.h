@@ -107,6 +107,13 @@ typedef	uint8_t		pcid_ref_t;
 #define CPU_RTIME_BINS (12)
 #define CPU_ITIME_BINS (CPU_RTIME_BINS)
 
+#define MAXPLFRAMES (32)
+typedef struct {
+	boolean_t pltype;
+	int plevel;
+	uint64_t plbt[MAXPLFRAMES];
+} plrecord_t;
+
 /*
  * Per-cpu data.
  *
@@ -155,6 +162,7 @@ typedef struct cpu_data
 	volatile task_map_t	cpu_task_map;
 	volatile addr64_t	cpu_task_cr3;
 	addr64_t		cpu_kernel_cr3;
+	boolean_t		cpu_pagezero_mapped;
 	cpu_uber_t		cpu_uber;
 	void			*cpu_chud;
 	void			*cpu_console_buf;
@@ -192,6 +200,7 @@ typedef struct cpu_data
 	uint32_t		cpu_pmap_pcid_enabled;
 	pcid_t			cpu_active_pcid;
 	pcid_t			cpu_last_pcid;
+	pcid_t			cpu_kernel_pcid;
 	volatile pcid_ref_t	*cpu_pmap_pcid_coherentp;
 	volatile pcid_ref_t	*cpu_pmap_pcid_coherentp_kernel;
 #define	PMAP_PCID_MAX_PCID      (0x1000)
@@ -243,7 +252,12 @@ typedef struct cpu_data
  	int			cpu_threadtype;
  	boolean_t		cpu_iflag;
  	boolean_t		cpu_boot_complete;
- 	int			cpu_hibernate;
+	int			cpu_hibernate;
+#define MAX_PREEMPTION_RECORDS (128)
+#if	DEVELOPMENT || DEBUG
+	int			cpu_plri;
+	plrecord_t		plrecords[MAX_PREEMPTION_RECORDS];
+#endif
 } cpu_data_t;
 
 extern cpu_data_t	*cpu_data_ptr[];  
@@ -351,25 +365,140 @@ get_cpu_phys_number(void)
 	CPU_DATA_GET(cpu_phys_number,int)
 }
 
+static inline cpu_data_t *
+current_cpu_datap(void) {
+	CPU_DATA_GET(cpu_this, cpu_data_t *);
+}
+
+/*
+ * Facility to diagnose preemption-level imbalances, which are otherwise
+ * challenging to debug. On each operation that enables or disables preemption,
+ * we record a backtrace into a per-CPU ring buffer, along with the current
+ * preemption level and operation type. Thus, if an imbalance is observed,
+ * one can examine these per-CPU records to determine which codepath failed
+ * to re-enable preemption, enabled premption without a corresponding
+ * disablement etc. The backtracer determines which stack is currently active,
+ * and uses that to perform bounds checks on unterminated stacks.
+ * To enable, sysctl -w machdep.pltrace=1 on DEVELOPMENT or DEBUG kernels (DRK '15)
+ * The bounds check currently doesn't account for non-default thread stack sizes.
+ */
+#if DEVELOPMENT || DEBUG
+static inline void pltrace_bt(uint64_t *rets, int maxframes, uint64_t stacklo, uint64_t stackhi) {
+	uint64_t *cfp = (uint64_t *) __builtin_frame_address(0);
+	int plbtf;
+
+	assert(stacklo !=0  && stackhi !=0);
+
+	for (plbtf = 0; plbtf < maxframes; plbtf++) {
+		if (((uint64_t)cfp == 0) || (((uint64_t)cfp < stacklo) || ((uint64_t)cfp > stackhi))) {
+			rets[plbtf] = 0;
+			continue;
+		}
+		rets[plbtf] = *(cfp + 1);
+		cfp = (uint64_t *) (*cfp);
+	}
+}
+
+
+extern uint32_t		low_intstack[];		/* bottom */
+extern uint32_t		low_eintstack[];	/* top */
+extern char		mp_slave_stack[PAGE_SIZE];
+
+static inline void pltrace_internal(boolean_t enable) {
+	cpu_data_t *cdata = current_cpu_datap();
+	int cpli = cdata->cpu_preemption_level;
+	int cplrecord = cdata->cpu_plri;
+	uint64_t kstackb, kstackt, *plbts;
+
+	assert(cpli >= 0);
+
+	cdata->plrecords[cplrecord].pltype = enable;
+	cdata->plrecords[cplrecord].plevel = cpli;
+
+	plbts = &cdata->plrecords[cplrecord].plbt[0];
+
+	cplrecord++;
+
+	if (cplrecord >= MAX_PREEMPTION_RECORDS) {
+		cplrecord = 0;
+	}
+
+	cdata->cpu_plri = cplrecord;
+	/* Obtain the 'current' program counter, initial backtrace
+	 * element. This will also indicate if we were unable to
+	 * trace further up the stack for some reason
+	 */
+	__asm__ volatile("leaq 1f(%%rip), %%rax; mov %%rax, %0\n1:"
+	    : "=m" (plbts[0])
+	    :
+	    : "rax");
+
+
+	thread_t cplthread = cdata->cpu_active_thread;
+	if (cplthread) {
+		uintptr_t csp;
+		__asm__ __volatile__ ("movq %%rsp, %0": "=r" (csp):);
+		/* Determine which stack we're on to populate stack bounds.
+		 * We don't need to trace across stack boundaries for this
+		 * routine.
+		 */
+		kstackb = cdata->cpu_active_stack;
+		kstackt = kstackb + KERNEL_STACK_SIZE;
+		if (csp < kstackb || csp > kstackt) {
+			kstackt = cdata->cpu_kernel_stack;
+			kstackb = kstackb - KERNEL_STACK_SIZE;
+			if (csp < kstackb || csp > kstackt) {
+				kstackt = cdata->cpu_int_stack_top;
+				kstackb = kstackt - INTSTACK_SIZE;
+				if (csp < kstackb || csp > kstackt) {
+					kstackt = (uintptr_t)low_eintstack;
+					kstackb = (uintptr_t)low_eintstack - INTSTACK_SIZE;
+					if (csp < kstackb || csp > kstackt) {
+						kstackb = (uintptr_t) mp_slave_stack;
+						kstackt = (uintptr_t) mp_slave_stack + PAGE_SIZE;
+					}
+				}
+			}
+		}
+
+		if (kstackb) {
+			pltrace_bt(&plbts[1], MAXPLFRAMES - 1, kstackb, kstackt);
+		}
+	}
+}
+
+extern int plctrace_enabled;
+#endif /* DEVELOPMENT || DEBUG */
+
+static inline void pltrace(boolean_t plenable) {
+#if DEVELOPMENT || DEBUG
+	if (__improbable(plctrace_enabled != 0)) {
+		pltrace_internal(plenable);
+	}
+#else
+	(void)plenable;
+#endif
+}
 
 static inline void
-disable_preemption(void)
-{
+disable_preemption_internal(void) {
+	assert(get_preemption_level() >= 0);
+
 #if defined(__clang__)
 	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
 	cpu_data->cpu_preemption_level++;
 #else
 	__asm__ volatile ("incl %%gs:%P0"
-			:
-			: "i" (offsetof(cpu_data_t, cpu_preemption_level)));
+	    :
+	    : "i" (offsetof(cpu_data_t, cpu_preemption_level)));
 #endif
+	pltrace(FALSE);
 }
 
 static inline void
-enable_preemption(void)
-{
+enable_preemption_internal(void) {
 	assert(get_preemption_level() > 0);
-
+	pltrace(TRUE);
 #if defined(__clang__)
 	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
 	if (0 == --cpu_data->cpu_preemption_level)
@@ -390,6 +519,7 @@ enable_preemption_no_check(void)
 {
 	assert(get_preemption_level() > 0);
 
+	pltrace(TRUE);
 #if defined(__clang__)
 	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
 	cpu_data->cpu_preemption_level--;
@@ -402,32 +532,52 @@ enable_preemption_no_check(void)
 }
 
 static inline void
+_enable_preemption_no_check(void) {
+	enable_preemption_no_check();
+}
+
+static inline void
 mp_disable_preemption(void)
 {
-	disable_preemption();
+	disable_preemption_internal();
+}
+
+static inline void
+_mp_disable_preemption(void)
+{
+	disable_preemption_internal();
 }
 
 static inline void
 mp_enable_preemption(void)
 {
-	enable_preemption();
+	enable_preemption_internal();
 }
 
 static inline void
-mp_enable_preemption_no_check(void)
-{
+_mp_enable_preemption(void) {
+	enable_preemption_internal();
+}
+
+static inline void
+mp_enable_preemption_no_check(void) {
 	enable_preemption_no_check();
 }
 
-static inline cpu_data_t *
-current_cpu_datap(void)
-{
-	CPU_DATA_GET(cpu_this, cpu_data_t *);
+static inline void
+_mp_enable_preemption_no_check(void) {
+	enable_preemption_no_check();
 }
 
+#ifdef XNU_KERNEL_PRIVATE
+#define disable_preemption() disable_preemption_internal()
+#define enable_preemption() enable_preemption_internal()
+#define MACHINE_PREEMPTION_MACROS (1)
+#endif
+
+
 static inline cpu_data_t *
-cpu_datap(int cpu)
-{
+cpu_datap(int cpu) {
 	return cpu_data_ptr[cpu];
 }
 

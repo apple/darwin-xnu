@@ -34,16 +34,17 @@ def GetObjectSummary(obj):
 
     vt = dereference(Cast(obj, 'uintptr_t *')) - 2 * sizeof('uintptr_t')
     vtype = kern.SymbolicateFromAddress(vt)
+    if len(vtype):
+        vtype_str = " <" + vtype[0].GetName() + ">"
+    else:
+        vtype_str = ""
     if hasattr(obj, 'retainCount'):
         retCount = (obj.retainCount & 0xffff)
         cntnrRetCount = (retCount >> 16)
-        out_string = "`object 0x{0: <16x}, vt 0x{1: <16x} <{2:s}>, retain count {3:d}, container retain {4:d}` ".format(obj, vt, vtype[0].GetName(), retCount, cntnrRetCount)
+        out_string = "`object 0x{0: <16x}, vt 0x{1: <16x}{2:s}, retain count {3:d}, container retain {4:d}` ".format(obj, vt, vtype_str, retCount, cntnrRetCount)
     else:
-        if len(vtype):
-            out_string = "`object 0x{0: <16x}, vt 0x{1: <16x} <{2:s}>` ".format(obj, vt, vtype[0].GetName())
-        else:
-            out_string = "`object 0x{0: <16x}, vt 0x{1: <16x}` ".format(obj, vt)
-    
+        out_string = "`object 0x{0: <16x}, vt 0x{1: <16x}{2:s}` ".format(obj, vt, vtype_str)
+
     ztvAddr = kern.GetLoadAddressForSymbol('_ZTV8OSString')
     if vt == ztvAddr:
         out_string += GetString(obj)
@@ -80,6 +81,25 @@ def GetObjectSummary(obj):
         return out_string
     
     return out_string
+
+
+def GetObjectTypeStr(obj):
+    """ Return the type of an OSObject's container class
+    """
+    if obj is None:
+        return None
+
+    vt = dereference(Cast(obj, 'uintptr_t *')) - 2 * sizeof('uintptr_t')
+    vtype = kern.SymbolicateFromAddress(vt)
+    if len(vtype):
+        return vtype[0].GetName()
+
+    # See if the value is in a kext with no symbols
+    for kval in IterateLinkedList(kern.globals.kmod, 'next'):
+        if vt >= unsigned(kval.address) and vt <= (unsigned(kval.address) + unsigned(kval.size)):
+            return "kmod:{:s}+{:#0x}".format(kval.name, vt - unsigned(kval.address))
+    return None
+
 
 @lldb_type_summary(['IORegistryEntry *'])
 @header("")
@@ -160,6 +180,45 @@ def ShowObject(cmd_args=None):
     
     obj = kern.GetValueFromAddress(cmd_args[0], 'OSObject *')
     print GetObjectSummary(obj)
+
+#Macro: dumpobject
+@lldb_command('dumpobject')
+def DumpObject(cmd_args=None):
+    """ Dumps object information if it is a valid object confirmed by showobject
+        Usage: dumpobject <address of object to be dumped> [class/struct type of object]
+    """
+    if not cmd_args:
+        print "No arguments passed"
+        print DumpObject.__doc__
+        return False
+
+    if len(cmd_args) == 1:
+        try:
+            object_info = lldb_run_command("showobject {:s}".format(cmd_args[0]))
+        except:
+            print "Error!! showobject failed due to invalid value"
+            print DumpObject.__doc__
+            return False
+
+        srch = re.search(r'<vtable for ([A-Za-z].*)>', object_info)
+        if not srch:
+            print "Error!! Couldn't find object in registry, input type manually as 2nd argument"
+            print DumpObject.__doc__
+            return False
+
+        object_type = srch.group(1)
+    else:
+        type_lookup = lldb_run_command("image lookup -t {:s}".format(cmd_args[1]))
+        if type_lookup.find(cmd_args[1])!= -1:
+            object_type = cmd_args[1]
+        else:
+            print "Error!! Input type {:s} isn't available in image lookup".format(cmd_args[1])
+            return False
+
+    print "******** Object Dump for value \'{:s}\' with type \"{:s}\" ********".format(cmd_args[0], object_type)
+    print lldb_run_command("p/x *({:s}*){:s}".format(object_type, cmd_args[0]))
+
+#EndMacro: dumpobject
 
 @lldb_command('setregistryplane')
 def SetRegistryPlane(cmd_args=None):

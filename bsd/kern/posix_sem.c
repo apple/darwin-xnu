@@ -184,14 +184,14 @@ static int psem_unlink_internal(struct pseminfo *pinfo, struct psemcache *pcache
 static int psem_kqfilter (struct fileproc *fp, struct knote *kn, vfs_context_t ctx);
 
 static const struct fileops psemops = {
-	DTYPE_PSXSEM,
-	psem_read,
-	psem_write,
-	psem_ioctl,
-	psem_select,
-	psem_closefile,
-	psem_kqfilter,
-	NULL
+	.fo_type = DTYPE_PSXSEM,
+	.fo_read = psem_read,
+	.fo_write = psem_write,
+	.fo_ioctl = psem_ioctl,
+	.fo_select = psem_select,
+	.fo_close = psem_closefile,
+	.fo_kqfilter = psem_kqfilter,
+	.fo_drain = NULL,
 };
 
 static lck_grp_t       *psx_sem_subsys_lck_grp;
@@ -201,7 +201,7 @@ static lck_mtx_t        psx_sem_subsys_mutex;
 
 #define PSEM_SUBSYS_LOCK() lck_mtx_lock(& psx_sem_subsys_mutex)
 #define PSEM_SUBSYS_UNLOCK() lck_mtx_unlock(& psx_sem_subsys_mutex)
-#define PSEM_SUBSYS_ASSERT_HELD() lck_mtx_assert(&psx_sem_subsys_mutex, LCK_MTX_ASSERT_OWNED)
+#define PSEM_SUBSYS_ASSERT_HELD() LCK_MTX_ASSERT(&psx_sem_subsys_mutex, LCK_MTX_ASSERT_OWNED)
 
 
 static int psem_cache_add(struct pseminfo *psemp, struct psemname *pnp, struct psemcache *pcp);
@@ -1121,10 +1121,12 @@ psem_select(__unused struct fileproc *fp, __unused int which,
 }
 
 static int
-psem_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn, 
+psem_kqfilter(__unused struct fileproc *fp, struct knote *kn, 
 				__unused vfs_context_t ctx)
 {
-	return (ENOTSUP);
+	kn->kn_flags = EV_ERROR;
+	kn->kn_data = ENOTSUP;
+	return 0;
 }
 
 int

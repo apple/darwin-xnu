@@ -1,7 +1,7 @@
 ######################################################################
 #BEGIN  Machine dependent Makefile fragment for x86_64
 ######################################################################
- 
+
 # Files to build with certain warnings turned off
 dis_tables.o_CFLAGS_ADD += -Wno-cast-qual
 fbt_x86.o_CFLAGS_ADD += -Wno-cast-qual
@@ -14,4 +14,3 @@ dtrace.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
 ######################################################################
 #END    Machine dependent Makefile fragment for x86_64
 ######################################################################
-

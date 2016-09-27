@@ -62,7 +62,6 @@ struct ipc_importance_elem {
 	uint32_t				iie_bits;	/* type and refs */
 	mach_voucher_attr_value_reference_t	iie_made;	/* references given to vouchers */
 	queue_head_t				iie_kmsgs;	/* list of kmsgs inheriting from this */
-	queue_head_t				iie_inherits; 	/* list of inherit elems hung off this */
 	uint32_t				iie_externcnt;	/* number of externalized boosts */
 	uint32_t				iie_externdrop;	/* number of those dropped already */
 #define IIE_REF_DEBUG 0
@@ -105,6 +104,7 @@ struct ipc_importance_elem {
 struct ipc_importance_task {
 	struct ipc_importance_elem iit_elem;	/* common element parts */
 	task_t			iit_task;	/* task associated with */
+	queue_head_t		iit_inherits; 	/* list of inherit elems hung off this */
 	queue_t			iit_updateq;	/* queue chained on for task policy updates */
 	queue_chain_t		iit_updates;	/* link on update chain */
 	queue_chain_t		iit_props;	/* link on propagation chain */
@@ -130,7 +130,6 @@ struct ipc_importance_task {
 #define iit_bits		iit_elem.iie_bits
 #define iit_made		iit_elem.iie_made
 #define iit_kmsgs		iit_elem.iie_kmsgs
-#define iit_inherits		iit_elem.iie_inherits
 #define iit_externcnt		iit_elem.iie_externcnt
 #define iit_externdrop		iit_elem.iie_externdrop
 
@@ -162,7 +161,6 @@ struct ipc_importance_inherit {
 #define iii_bits			iii_elem.iie_bits
 #define iii_made			iii_elem.iie_made
 #define iii_kmsgs			iii_elem.iie_kmsgs
-#define iii_inherits			iii_elem.iie_inherits
 #define iii_externcnt			iii_elem.iie_externcnt
 #define iii_externdrop			iii_elem.iie_externdrop
 #define III_REFS_MAX			IIE_REFS_MAX

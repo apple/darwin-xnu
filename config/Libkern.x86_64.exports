@@ -128,9 +128,6 @@ __ZN9OSBoolean19_RESERVEDOSBoolean4Ev
 __ZN9OSBoolean19_RESERVEDOSBoolean5Ev
 __ZN9OSBoolean19_RESERVEDOSBoolean6Ev
 __ZN9OSBoolean19_RESERVEDOSBoolean7Ev
-_lck_mtx_convert_spin
-_lck_mtx_lock_spin
-_lck_mtx_try_lock_spin
 _sprintf
 _strcat
 _strcpy

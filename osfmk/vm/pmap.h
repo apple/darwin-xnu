@@ -413,17 +413,19 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 	pmap_t		__pmap = (pmap);				\
 	vm_page_t	__page = (page);				\
 	int		__options = 0;					\
+	vm_object_t	__obj;						\
 									\
 	PMAP_ENTER_CHECK(__pmap, __page)				\
-	if (__page->object->internal) {					\
+	__obj = VM_PAGE_OBJECT(__page);					\
+	if (__obj->internal) {						\
 		__options |= PMAP_OPTIONS_INTERNAL;			\
 	}								\
-	if (__page->reusable || __page->object->all_reusable) {		\
+	if (__page->reusable || __obj->all_reusable) {			\
 		__options |= PMAP_OPTIONS_REUSABLE;			\
 	}								\
 	(void) pmap_enter_options(__pmap,				\
 				  (virtual_address),			\
-				  __page->phys_page,			\
+				  VM_PAGE_GET_PHYS_PAGE(__page),	\
 				  (protection),				\
 				  (fault_type),				\
 				  (flags),				\
@@ -440,17 +442,19 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 	pmap_t		__pmap = (pmap);				\
 	vm_page_t	__page = (page);				\
 	int		__extra_options = 0;				\
+	vm_object_t	__obj;						\
 									\
 	PMAP_ENTER_CHECK(__pmap, __page)				\
-	if (__page->object->internal) {					\
+	__obj = VM_PAGE_OBJECT(__page);					\
+	if (__obj->internal) {						\
 		__extra_options |= PMAP_OPTIONS_INTERNAL;		\
 	}								\
-	if (__page->reusable || __page->object->all_reusable) {		\
+	if (__page->reusable || __obj->all_reusable) {			\
 		__extra_options |= PMAP_OPTIONS_REUSABLE;		\
 	}								\
 	result = pmap_enter_options(__pmap,				\
 				    (virtual_address),			\
-				    __page->phys_page,			\
+				    VM_PAGE_GET_PHYS_PAGE(__page),	\
 				    (protection),			\
 				    (fault_type),			\
 				    (flags),				\
@@ -464,7 +468,7 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 #define PMAP_SET_CACHE_ATTR(mem, object, cache_attr, batch_pmap_op)		\
 	MACRO_BEGIN								\
 		if (!batch_pmap_op) {						\
-			pmap_set_cache_attributes(mem->phys_page, cache_attr);	\
+			pmap_set_cache_attributes(VM_PAGE_GET_PHYS_PAGE(mem), cache_attr); \
 			object->set_cache_attr = TRUE;				\
 		}								\
 	MACRO_END							
@@ -575,6 +579,7 @@ extern kern_return_t pmap_unnest_options(pmap_t,
 				 uint64_t,
 				 unsigned int);
 extern boolean_t pmap_adjust_unnest_parameters(pmap_t, vm_map_offset_t *, vm_map_offset_t *);
+extern void		pmap_advise_pagezero_range(pmap_t, uint64_t);
 #endif	/* MACH_KERNEL_PRIVATE */
 
 extern boolean_t	pmap_is_noencrypt(ppnum_t);
@@ -662,6 +667,17 @@ mach_vm_size_t pmap_query_resident(pmap_t pmap,
 				   vm_map_offset_t s,
 				   vm_map_offset_t e,
 				   mach_vm_size_t *compressed_bytes_p);
+
+#define PMAP_QUERY_PAGE_PRESENT			0x01
+#define PMAP_QUERY_PAGE_REUSABLE		0x02
+#define PMAP_QUERY_PAGE_INTERNAL		0x04
+#define PMAP_QUERY_PAGE_ALTACCT			0x08
+#define PMAP_QUERY_PAGE_COMPRESSED		0x10
+#define PMAP_QUERY_PAGE_COMPRESSED_ALTACCT	0x20
+extern kern_return_t pmap_query_page_info(
+	pmap_t		pmap,
+	vm_map_offset_t	va,
+	int		*disp);
 
 #if CONFIG_PGTRACE
 int pmap_pgtrace_add_page(pmap_t pmap, vm_map_offset_t start, vm_map_offset_t end);

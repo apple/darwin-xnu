@@ -49,6 +49,7 @@
 #include <sys/ioctl.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
+#include <sys/syscall.h>
 #include <miscfs/devfs/devfs.h>
 
 #include <sys/dtrace.h>
@@ -139,7 +140,7 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 #endif
 
 	// Bounds "check" the value of code a la unix_syscall
-	sy = (code >= NUM_SYSENT) ? &systrace_sysent[63] : &systrace_sysent[code];
+	sy = (code >= nsysent) ? &systrace_sysent[SYS_invalid] : &systrace_sysent[code];
 
 	if ((id = sy->stsy_entry) != DTRACE_IDNONE) {
 		uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());		
@@ -254,7 +255,7 @@ dtrace_systrace_syscall_return(unsigned short code, int rval, int *rv)
 	dtrace_id_t id;
 
 	// Bounds "check" the value of code a la unix_syscall_return
-	sy = (code >= NUM_SYSENT) ? &systrace_sysent[63] : &systrace_sysent[code];
+	sy = (code >= nsysent) ? &systrace_sysent[SYS_invalid] : &systrace_sysent[code];
 
 	if ((id = sy->stsy_return) != DTRACE_IDNONE) {
 		uint64_t munged_rv0, munged_rv1;
@@ -338,7 +339,7 @@ systrace_init(struct sysent *actual, systrace_sysent_t **interposed)
 
 	systrace_sysent_t *ssysent = *interposed;  /* Avoid sysent shadow warning
 							   from bsd/sys/sysent.h */
-	int i;
+	unsigned int i;
 
 	if (ssysent == NULL) {
 		*interposed = ssysent = kmem_zalloc(sizeof (systrace_sysent_t) *
@@ -372,7 +373,7 @@ static void
 systrace_provide(void *arg, const dtrace_probedesc_t *desc)
 {
 #pragma unused(arg) /* __APPLE__ */
-	int i;
+	unsigned int i;
 
 	if (desc != NULL)
 		return;
@@ -943,6 +944,10 @@ void systrace_init( void );
 void systrace_init( void )
 {
 	if (0 == gSysTraceInited) {
+		if (dtrace_sdt_probes_restricted()) {
+			return;
+		}
+
 		int majdevno = cdevsw_add(SYSTRACE_MAJOR, &systrace_cdevsw);
 
 		if (majdevno < 0) {

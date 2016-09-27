@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <stdarg.h>
@@ -769,8 +769,7 @@ kxld_is_32_bit(cpu_type_t cputype)
 * Find the first occurrence of find in s.
 *******************************************************************************/
 const char *
-kxld_strstr(s, find)
-    const char *s, *find;
+kxld_strstr(const char *s, const char *find)
 {
 #if KERNEL
     char c, sc;
@@ -860,3 +859,36 @@ kxld_addr_t kxld_round_page_cross_safe(kxld_addr_t offset)
     }
 #endif /* KERNEL */
 }
+
+#if SPLIT_KEXTS_DEBUG
+
+void kxld_show_split_info(splitKextLinkInfo *info)
+{
+    kxld_log(kKxldLogLinking, kKxldLogErr,
+             "splitKextLinkInfo: \n"
+             "kextExecutable %p to %p kextSize %lu \n"
+             "linkedKext %p to %p linkedKextSize %lu \n"
+             "vmaddr_TEXT %p vmaddr_TEXT_EXEC %p "
+             "vmaddr_DATA %p vmaddr_DATA_CONST %p vmaddr_LINKEDIT %p",
+             (void *) info->kextExecutable,
+             (void *) (info->kextExecutable + info->kextSize),
+             info->kextSize,
+             (void*) info->linkedKext,
+             (void*) (info->linkedKext + info->linkedKextSize),
+             info->linkedKextSize,
+             (void *) info->vmaddr_TEXT,
+             (void *) info->vmaddr_TEXT_EXEC,
+             (void *) info->vmaddr_DATA,
+             (void *) info->vmaddr_DATA_CONST,
+             (void *) info->vmaddr_LINKEDIT);
+}
+
+boolean_t isTargetKextName(const char * the_name)
+{
+    if (the_name && 0 == strcmp(the_name, KXLD_TARGET_KEXT)) {
+        return(TRUE);
+    }
+    return(FALSE);
+}
+#endif
+

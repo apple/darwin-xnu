@@ -199,8 +199,6 @@ _futimes
 _fuword
 _groupmember
 _hashinit
-_hfs_addconverter
-_hfs_remconverter
 _ifaddr_address
 _ifaddr_address_family
 _ifaddr_dstaddress
@@ -346,6 +344,7 @@ _kauth_unlisten_scope
 _kdebug_enable
 _kernel_debug
 _kernel_debug1
+_kernel_debug_filtered
 _kernel_debug_enter
 _kernel_debug_register_callback
 _kernproc
@@ -425,6 +424,7 @@ _minphys
 _msleep
 _nanotime
 _nanouptime
+_nd6_lookup_ipv6
 _net_init_add
 _nop_access
 _nop_advlock
@@ -565,7 +565,6 @@ _sysctl_handle_long
 _sysctl_handle_opaque
 _sysctl_handle_quad
 _sysctl_handle_string
-_sysctl_register_fixed
 _sysctl_register_oid
 _sysctl_unregister_oid
 _thread_issignal
@@ -765,6 +764,7 @@ _vnop_blockmap_desc
 _vnop_bwrite_desc
 _vnop_close_desc
 _vnop_copyfile_desc
+_vnop_clonefile_desc
 _vnop_create_desc
 _vnop_default_desc
 _vnop_exchange_desc
@@ -794,6 +794,7 @@ _vnop_reclaim_desc
 _vnop_remove_desc
 _vnop_removexattr_desc
 _vnop_rename_desc
+_vnop_renamex_desc
 _vnop_revoke_desc
 _vnop_rmdir_desc
 _vnop_searchfs_desc

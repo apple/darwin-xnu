@@ -250,7 +250,7 @@ mach_port_names(
 	vm_map_copy_t memory2;	/* copied-in memory, for types */
 
 	/* safe simplifying assumption */
-	assert_static(sizeof(mach_port_name_t) == sizeof(mach_port_type_t));
+	static_assert(sizeof(mach_port_name_t) == sizeof(mach_port_type_t));
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -1022,7 +1022,7 @@ mach_port_peek(
 	/* Port locked and active */
 
 	found = ipc_mqueue_peek(&port->ip_messages, seqnop,
-				msg_sizep, msg_idp, &max_trailer);
+				msg_sizep, msg_idp, &max_trailer, NULL);
 	ip_unlock(port);
 
 	if (found != TRUE)
@@ -1390,8 +1390,7 @@ mach_port_move_member(
 		 */
 		wq_link_id = waitq_link_reserve(NULL);
 		wq_reserved_prepost = waitq_prepost_reserve(NULL, 10,
-							    WAITQ_DONT_LOCK,
-							    NULL);
+		                                            WAITQ_DONT_LOCK);
 	}
 
 	kr = ipc_right_lookup_read(space, member, &entry);
@@ -1428,6 +1427,7 @@ mach_port_move_member(
 		assert(nset != IPS_NULL);
 	}
 	ip_lock(port);
+	assert(ip_active(port));
 	ipc_pset_remove_from_all(port);
 
 	if (nset != IPS_NULL) {
@@ -2042,7 +2042,7 @@ mach_port_insert_member(
 
 	wq_link_id = waitq_link_reserve(NULL);
 	wq_reserved_prepost = waitq_prepost_reserve(NULL, 10,
-						    WAITQ_DONT_LOCK, NULL);
+						    WAITQ_DONT_LOCK);
 
 	kr = ipc_object_translate_two(space, 
 				      name, MACH_PORT_RIGHT_RECEIVE, &obj,
@@ -2221,24 +2221,13 @@ mach_port_unguard_locked(
  */
 kern_return_t
 mach_port_guard_exception(
-	mach_port_name_t	name,
-	uint64_t		inguard,
-	uint64_t		portguard,
-	unsigned		reason)
+	mach_port_name_t 	name,
+	__unused uint64_t 	inguard,
+	uint64_t 			portguard,
+	unsigned 			reason)
 {
 	thread_t t = current_thread();
 	uint64_t code, subcode;
-
-	/* Log exception info to syslog */
-	printf( "Mach Port Guard Exception - "
-	        "Thread: 0x%x, "
-		"Port Name: 0x%x, "
-		"Expected Guard: 0x%x, "
-		"Received Guard: 0x%x\n",
-		(unsigned)VM_KERNEL_UNSLIDE_OR_PERM(t),
-		(unsigned)name,
-		(unsigned)portguard,
-		(unsigned)inguard);
 
 	/*
 	 * EXC_GUARD namespace for mach ports

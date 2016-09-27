@@ -34,7 +34,9 @@
 #include <pexpert/device_tree.h>
 #include <kern/debug.h>
 
+
 static int DEBUGFlag;
+
 static uint32_t gPEKernelConfigurationBitmask;
 
 int32_t gPESerialBaud = -1;

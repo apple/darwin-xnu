@@ -664,7 +664,7 @@ m_tag_init(struct mbuf *m, int all)
 	 * (e.g. m_dup_pkthdr), don't zero them out.
 	 */
 	if (all) {
-		bzero(&m->m_pkthdr.pf_mtag, sizeof (m->m_pkthdr.pf_mtag));
+		bzero(m_pftag(m), sizeof (struct pf_mtag));
 		bzero(&m->m_pkthdr.proto_mtag, sizeof (m->m_pkthdr.proto_mtag));
 		bzero(&m->m_pkthdr.necp_mtag, sizeof (m->m_pkthdr.necp_mtag));
 	}

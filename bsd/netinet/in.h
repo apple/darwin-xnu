@@ -505,7 +505,7 @@ struct ip_opts {
 #define	MCAST_UNBLOCK_SOURCE		85   /* unblock a source */
 
 #ifdef PRIVATE
-#define	IP_FORCE_OUT_IFP	69   /* deprecated; use IP_BOUND_IF instead */
+#define	IP_FORCE_OUT_IFP	69   /* not implemented; use IP_BOUND_IF instead */
 #define	IP_NO_IFT_CELLULAR	6969 /* for internal use only */
 #define	IP_NO_IFT_PDP		IP_NO_IFT_CELLULAR /* deprecated */
 #define	IP_OUT_IF		9696 /* for internal use only */
@@ -801,6 +801,42 @@ union sockaddr_in_4_6 {
 	struct sockaddr_in      sin;
 	struct sockaddr_in6     sin6;
 };
+
+/*
+ * Recommended DiffServ Code Point values
+ */
+
+#define	_DSCP_DF	0	/* RFC 2474 */
+
+#define	_DSCP_CS0	0	/* RFC 2474 */
+#define	_DSCP_CS1	8	/* RFC 2474 */
+#define	_DSCP_CS2	16	/* RFC 2474 */
+#define	_DSCP_CS3	24	/* RFC 2474 */
+#define	_DSCP_CS4	32	/* RFC 2474 */
+#define	_DSCP_CS5	40	/* RFC 2474 */
+#define	_DSCP_CS6	48	/* RFC 2474 */
+#define	_DSCP_CS7	56	/* RFC 2474 */
+
+#define	_DSCP_EF	46	/* RFC 2474 */
+#define	_DSCP_VA	44	/* RFC 5865 */
+
+#define	_DSCP_AF11	10	/* RFC 2597 */
+#define	_DSCP_AF12	12	/* RFC 2597 */
+#define	_DSCP_AF13	14	/* RFC 2597 */
+#define	_DSCP_AF21	18	/* RFC 2597 */
+#define	_DSCP_AF22	20	/* RFC 2597 */
+#define	_DSCP_AF23	22	/* RFC 2597 */
+#define	_DSCP_AF31	26	/* RFC 2597 */
+#define	_DSCP_AF32	28	/* RFC 2597 */
+#define	_DSCP_AF33	30	/* RFC 2597 */
+#define	_DSCP_AF41	34	/* RFC 2597 */
+#define	_DSCP_AF42	36	/* RFC 2597 */
+#define	_DSCP_AF43	38	/* RFC 2597 */
+
+#define	_DSCP_52	52	/* Wi-Fi WMM Certification: Sigma */
+
+#define	_MAX_DSCP	63	/* coded on 6 bits */
+
 #endif /* PRIVATE */
 
 #ifdef KERNEL

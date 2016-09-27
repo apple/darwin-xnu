@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -95,7 +95,8 @@ thread_userstack(
     thread_state_t      tstate,
     __unused unsigned int        count,
     mach_vm_offset_t    *user_stack,
-	int					*customstack
+    int                 *customstack,
+    __unused boolean_t  is64bit
 )
 {
 	if (customstack)
@@ -153,10 +154,10 @@ thread_userstack(
  */
 kern_return_t
 thread_userstackdefault(
-	thread_t thread,
-	mach_vm_offset_t *default_user_stack)
+	mach_vm_offset_t *default_user_stack,
+	boolean_t is64bit)
 {
-	if (thread_is_64bit(thread)) {
+	if (is64bit) {
 		*default_user_stack = VM_USRSTACK64;
 	} else {
 		*default_user_stack = VM_USRSTACK32;
@@ -238,8 +239,7 @@ thread_set_child(thread_t child, int pid)
 
 extern long fuword(vm_offset_t);
 
-
-
+__attribute__((noreturn))
 void
 machdep_syscall(x86_saved_state_t *state)
 {
@@ -321,7 +321,7 @@ machdep_syscall(x86_saved_state_t *state)
 	/* NOTREACHED */
 }
 
-
+__attribute__((noreturn))
 void
 machdep_syscall64(x86_saved_state_t *state)
 {
@@ -406,6 +406,7 @@ __private_extern__ void mach_call_munger(x86_saved_state_t *state);
 
 extern const char *mach_syscall_name_table[];
 
+__attribute__((noreturn))
 void
 mach_call_munger(x86_saved_state_t *state)
 {
@@ -494,6 +495,7 @@ mach_call_munger(x86_saved_state_t *state)
 
 __private_extern__ void mach_call_munger64(x86_saved_state_t *regs);
 
+__attribute__((noreturn))
 void
 mach_call_munger64(x86_saved_state_t *state)
 {
@@ -693,21 +695,17 @@ thread_setsinglestep(thread_t thread, int on)
 	return (KERN_SUCCESS);
 }
 
-
-
-/* XXX this should be a struct savearea so that CHUD will work better on x86 */
-void *
-find_user_regs(thread_t thread)
-{
-	pal_register_cache_state(thread, DIRTY);
-	return USER_STATE(thread);
-}
-
 void *
 get_user_regs(thread_t th)
 {
 	pal_register_cache_state(th, DIRTY);
 	return(USER_STATE(th));
+}
+
+void *
+find_user_regs(thread_t thread)
+{
+	return get_user_regs(thread);
 }
 
 #if CONFIG_DTRACE

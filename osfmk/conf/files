@@ -36,6 +36,7 @@ OPTIONS/mach_debug		optional mach_debug
 #
 OPTIONS/mach_cluster_stats	optional mach_cluster_stats
 OPTIONS/mach_counters		optional mach_counters
+OPTIONS/mach_flipc		optional mach_flipc
 OPTIONS/mach_ipc_debug		optional mach_ipc_debug
 OPTIONS/mach_ipc_test		optional mach_ipc_test
 OPTIONS/mach_kdp		optional mach_kdp
@@ -50,7 +51,6 @@ OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
 OPTIONS/mig_debug		optional mig_debug
 OPTIONS/xpr_debug		optional xpr_debug
 OPTIONS/zone_debug		optional zone_debug
-OPTIONS/zone_alias_addr		optional zone_alias_addr
 OPTIONS/vm_cpm			optional vm_cpm
 OPTIONS/task_swapper		optional task_swapper
 OPTIONS/stack_usage		optional stack_usage
@@ -61,16 +61,6 @@ OPTIONS/config_ecc_logging	optional config_ecc_logging
 OPTIONS/config_dtrace		optional config_dtrace
 
 OPTIONS/no_kextd		optional no_kextd
-
-# Default pager and system pager files, to be moved to separate component
- 
-osfmk/vm/vm_compressor_backing_store.c	standard
-
-osfmk/default_pager/default_pager.c	standard
-osfmk/default_pager/dp_backing_store.c	standard
-osfmk/default_pager/dp_memory_object.c	standard
-./default_pager/default_pager_alerts_user.c	standard
-./default_pager/default_pager_object_server.c	standard
 
 #
 # gssd files
@@ -113,6 +103,7 @@ osfmk/ipc/ipc_right.c			standard
 osfmk/ipc/ipc_space.c			standard
 osfmk/ipc/ipc_table.c			standard
 osfmk/ipc/ipc_voucher.c			standard
+osfmk/ipc/flipc.c			optional mach_flipc
 osfmk/ipc/mach_debug.c		standard
 osfmk/ipc/mach_kernelrpc.c		standard
 osfmk/ipc/mach_msg.c			standard
@@ -121,7 +112,9 @@ osfmk/ipc/mig_log.c			optional mig_debug
 osfmk/kern/affinity.c			standard
 osfmk/kern/ast.c			standard
 osfmk/kern/audit_sessionport.c		optional config_audit
+osfmk/kern/backtrace.c			standard
 osfmk/kern/btlog.c			standard
+osfmk/kern/build_config.c		standard
 osfmk/kern/clock.c			standard
 osfmk/kern/clock_oldops.c		standard
 osfmk/kern/coalition.c			optional config_coalitions
@@ -141,9 +134,12 @@ osfmk/kern/ipc_sync.c			standard
 osfmk/kern/ipc_tt.c			standard
 osfmk/kern/kalloc.c			standard
 osfmk/kern/kern_ecc.c			optional config_ecc_logging
+osfmk/kern/ktrace_background_notify.c	standard
 osfmk/kern/ledger.c			standard
 osfmk/kern/locks.c			standard
+osfmk/kern/ltable.c			standard
 osfmk/kern/machine.c			standard
+osfmk/kern/mach_node.c			standard
 osfmk/kern/mk_sp.c			standard
 osfmk/kern/mk_timer.c		standard
 osfmk/kern/page_decrypt.c	standard
@@ -189,6 +185,7 @@ osfmk/kern/hibernate.c		optional hibernation
 ./mach/exc_server.c			optional mach_bsd
 ./mach/host_priv_server.c		standard
 ./mach/host_security_server.c		standard
+./mach/ktrace_background_user.c		standard
 ./mach/lock_set_server.c		standard
 ./mach/mach_exc_user.c			standard
 ./mach/mach_exc_server.c		optional mach_bsd
@@ -198,9 +195,8 @@ osfmk/kern/hibernate.c		optional hibernation
 ./mach/mach_vm_server.c			standard
 ./mach/mach_voucher_server.c		standard
 ./mach/mach_voucher_attr_control_server.c		standard
-./mach/memory_object_server.c		standard
 ./mach/memory_object_control_server.c	standard
-./mach/memory_object_default_server.c	standard
+./mach/resource_notify_user.c		standard
 ./mach/upl_server.c			standard
 ./mach/audit_triggers_user.c		standard
 ./mach/task_access_user.c          	standard
@@ -210,6 +206,7 @@ osfmk/kern/kern_cdata.c			standard
 osfmk/bank/bank.c		optional config_bank
 osfmk/atm/atm.c			optional config_atm
 ./atm/atm_notification_user.c		optional config_atm
+osfmk/voucher/ipc_pthread_priority.c		standard
 ./mach/coalition_notification_user.c	optional config_coalitions
 ./mach/sysdiagnose_notification_user.c	optional config_sysdiagnose
 #
@@ -227,12 +224,13 @@ osfmk/atm/atm.c			optional config_atm
 osfmk/vm/bsd_vm.c			optional mach_bsd
 osfmk/vm/vm_compressor.c		standard
 osfmk/vm/vm_compressor_pager.c		standard
+osfmk/vm/vm_compressor_backing_store.c	standard
+osfmk/vm/vm_compressor_algorithms.c	standard
+osfmk/vm/lz4.c				standard
 osfmk/vm/vm_phantom_cache.c		optional config_phantom_cache
-osfmk/vm/default_freezer.c		optional config_freeze
 osfmk/vm/device_vm.c			standard
 osfmk/vm/memory_object.c		standard
 osfmk/vm/vm_debug.c			standard
-osfmk/vm/vm_external.c			optional mach_pagemap
 osfmk/vm/vm_fault.c			standard
 osfmk/vm/vm_init.c			standard
 osfmk/vm/vm_kern.c			standard
@@ -281,20 +279,27 @@ osfmk/kperf/kperf.c                     optional kperf
 osfmk/kperf/action.c                    optional kperf
 osfmk/kperf/callstack.c                 optional kperf
 osfmk/kperf/pet.c                       optional kperf
-# osfmk/kperf/kperfbsd.c                    optional kperf # bsd/conf/files
-osfmk/kperf/threadinfo.c                optional kperf
+osfmk/kperf/thread_samplers.c           optional kperf
+osfmk/kperf/task_samplers.c             optional kperf
 osfmk/kperf/meminfo.c                   optional kperf
-osfmk/kperf/timetrigger.c               optional kperf
+osfmk/kperf/kperf_timer.c               optional kperf
 osfmk/kperf/kperf_kpc.c                 optional kperf
+osfmk/kperf/kdebug_trigger.c            optional kperf
 osfmk/kern/kpc_thread.c                 optional kpc
 osfmk/kern/kpc_common.c                 optional kpc
 
 osfmk/console/serial_general.c	standard
+osfmk/console/serial_console.c	optional	serial_console
+osfmk/console/video_scroll.c	optional	video_console
+osfmk/console/video_console.c	optional	video_console
+
 
 osfmk/kern/telemetry.c			optional config_telemetry
 
 # Built-in corecrypto for early_random():
 osfmk/corecrypto/cc/src/cc_clear.c          		standard
+osfmk/corecrypto/cc/src/cc_cmp_safe.c          		standard
+osfmk/corecrypto/cc/src/cc_abort.c          		standard
 osfmk/corecrypto/ccdbrg/src/ccdrbg_nisthmac.c		standard
 osfmk/corecrypto/ccdigest/src/ccdigest_init.c		standard
 osfmk/corecrypto/ccdigest/src/ccdigest_update.c		standard

@@ -119,6 +119,7 @@
 #include <mach/exception_types.h>
 #include <dev/busvar.h>			/* for pseudo_inits */
 #include <sys/kdebug.h>
+#include <sys/reason.h>
 
 #include <mach/mach_types.h>
 #include <mach/vm_prot.h>
@@ -191,6 +192,7 @@
 #include <net/if_pflog.h>
 #endif
 
+
 #include <pexpert/pexpert.h>
 #include <machine/pal_routines.h>
 #include <console/video_console.h>
@@ -238,7 +240,7 @@ int		hostnamelen;
 char	domainname[MAXDOMNAMELEN];
 int		domainnamelen;
 
-char rootdevice[16]; 	/* hfs device names have at least 9 chars */
+char rootdevice[16]; 	/* device names have at least 9 chars */
 
 #if  KMEMSTATS
 struct	kmemstats kmemstats[M_LAST];
@@ -252,6 +254,10 @@ int minimalboot = 0;
 __private_extern__ int proc_ref_tracking_disabled = 0; /* disable panics on leaked proc refs across syscall boundary */
 #endif
 
+#if OS_REASON_DEBUG
+__private_extern__ int os_reason_debug_disabled = 0; /* disable asserts for when we fail to allocate OS reasons */
+#endif
+
 extern kern_return_t IOFindBSDRoot(char *, unsigned int, dev_t *, u_int32_t *);
 extern void IOSecureBSDRoot(const char * rootName);
 extern kern_return_t IOKitBSDInit(void );
@@ -259,8 +265,8 @@ extern void kminit(void);
 extern void file_lock_init(void);
 extern void kmeminit(void);
 extern void bsd_bufferinit(void);
+extern void oslog_setsize(int size);
 extern void throttle_init(void);
-extern void macx_init(void);
 extern void acct_init(void);
 
 extern int serverperfmode;
@@ -290,16 +296,23 @@ __private_extern__ int bootarg_no_vnode_jetsam = 0;
 __private_extern__ int bootarg_disable_aslr = 0;
 #endif
 
+/*
+ * Allow an alternate dyld to be used for testing.
+ */
+
+#if DEVELOPMENT || DEBUG
+char dyld_alt_path[MAXPATHLEN];
+int use_alt_dyld = 0;
+#endif
+
 int	cmask = CMASK;
 extern int customnbuf;
 
-void bsd_init(void);
 kern_return_t bsd_autoconf(void);
 void bsd_utaskbootstrap(void);
 
 static void parse_bsd_args(void);
 extern task_t bsd_init_task;
-extern boolean_t init_task_died;
 #if CONFIG_DEV_KMEM
 extern void dev_kmem_init(void);
 #endif
@@ -318,6 +331,8 @@ extern void sysv_sem_lock_init(void);
 #if SYSV_MSG
 extern void sysv_msg_lock_init(void);
 #endif
+
+extern void ulock_initialize(void);
 
 #if CONFIG_MACF
 #if defined (__i386__) || defined (__x86_64__)
@@ -379,6 +394,17 @@ extern lck_mtx_t * execargs_cache_lock;
 /* hook called after root is mounted XXX temporary hack */
 void (*mountroot_post_hook)(void);
 void (*unmountroot_pre_hook)(void);
+
+/*
+ * This function is called before IOKit initialization, so that globals
+ * like the sysctl tree are initialized before kernel extensions
+ * are started (since they may want to register sysctls
+ */
+void
+bsd_early_init(void)
+{
+	sysctl_early_init();
+}
 
 /*
  * This function is called very early on in the Mach startup, from the
@@ -513,6 +539,8 @@ bsd_init(void)
 	/* Initialize System Override call */
 	init_system_override();
 	
+	ulock_initialize();
+
 	/*
 	 * Create process 0.
 	 */
@@ -556,7 +584,11 @@ bsd_init(void)
 	kernproc->p_flag = P_SYSTEM;
 	kernproc->p_lflag = 0;
 	kernproc->p_ladvflag = 0;
-	
+
+#if defined(__LP64__)
+	kernproc->p_flag |= P_LP64;
+#endif
+
 #if DEVELOPMENT || DEBUG
 	if (bootarg_disable_aslr)
 		kernproc->p_flag |= P_DISABLE_ASLR;
@@ -687,12 +719,6 @@ bsd_init(void)
 	bsd_init_kprintf("calling ubc_init\n");
 	ubc_init();
 
-	/*
-	 * Initialize device-switches.
-	 */
-	bsd_init_kprintf("calling devsw_init() \n");
-	devsw_init();
-
 	/* Initialize the file systems. */
 	bsd_init_kprintf("calling vfsinit\n");
 	vfsinit();
@@ -769,10 +795,6 @@ bsd_init(void)
 	 * Initialize protocols.  Block reception of incoming packets
 	 * until everything is ready.
 	 */
-	bsd_init_kprintf("calling sysctl_register_fixed\n");
-	sysctl_register_fixed(); 
-	bsd_init_kprintf("calling sysctl_mib_init\n");
-	sysctl_mib_init();
 #if NETWORKING
 	bsd_init_kprintf("calling dlil_init\n");
 	dlil_init();
@@ -808,9 +830,6 @@ bsd_init(void)
 	memorystatus_init();
 #endif /* CONFIG_MEMORYSTATUS */
 
-	bsd_init_kprintf("calling macx_init\n");
-	macx_init();
-
 	bsd_init_kprintf("calling acct_init\n");
 	acct_init();
 
@@ -819,8 +838,14 @@ bsd_init(void)
 	kmstartup();
 #endif
 
+	bsd_init_kprintf("calling sysctl_mib_init\n");
+	sysctl_mib_init()
+
 	bsd_init_kprintf("calling bsd_autoconf\n");
 	bsd_autoconf();
+
+	bsd_init_kprintf("calling os_reason_init\n");
+	os_reason_init();
 
 #if CONFIG_DTRACE
 	dtrace_postinit();
@@ -991,10 +1016,6 @@ bsd_init(void)
 	bsd_init_kprintf("calling bsd_utaskbootstrap\n");
 	bsd_utaskbootstrap();
 
-#if defined(__LP64__)
-	kernproc->p_flag |= P_LP64;
-#endif
-
 	pal_kernel_announce();
 
 	bsd_init_kprintf("calling mountroot_post_hook\n");
@@ -1004,7 +1025,7 @@ bsd_init(void)
 		mountroot_post_hook();
 
 #if 0 /* not yet */
-	consider_zone_gc(FALSE);
+	consider_zone_gc();
 #endif
 
 
@@ -1032,7 +1053,6 @@ bsdinit_task(void)
 	ut = (uthread_t)get_bsdthread_info(thread);
 
 	bsd_init_task = get_threadtask(thread);
-	init_task_died = FALSE;
 
 #if CONFIG_MACF
 	mac_cred_label_associate_user(p->p_ucred);
@@ -1171,6 +1191,7 @@ parse_bsd_args(void)
 
 	if (PE_parse_boot_argn("msgbuf", &msgbuf, sizeof (msgbuf))) {
 		log_setsize(msgbuf);
+		oslog_setsize(msgbuf);
 	}
 
 	if (PE_parse_boot_argn("-novfscache", namep, sizeof(namep))) {
@@ -1190,7 +1211,27 @@ parse_bsd_args(void)
 	}
 #endif
 
+#if OS_REASON_DEBUG
+	if (PE_parse_boot_argn("-disable_osreason_debug", namep, sizeof(namep))) {
+		os_reason_debug_disabled = 1;
+	}
+#endif
+
 	PE_parse_boot_argn("sigrestrict", &sigrestrict_arg, sizeof(sigrestrict_arg));
+
+#if DEVELOPMENT|| DEBUG
+	if (PE_parse_boot_argn("-no_sigsys", namep, sizeof(namep))) {
+		send_sigsys = false;
+	}
+#endif
+
+#if (DEVELOPMENT|| DEBUG)
+	if (PE_parse_boot_argn("alt-dyld", dyld_alt_path, sizeof(dyld_alt_path))) {
+        if (strlen(dyld_alt_path) > 0) {
+            use_alt_dyld = 1;
+        }
+	}
+#endif
 }
 
 void

@@ -112,8 +112,23 @@ class OSString;
  */
 class OSDictionary : public OSCollection
 {
-    OSDeclareDefaultStructors(OSDictionary)
     friend class OSSerialize;
+
+    OSDeclareDefaultStructors(OSDictionary)
+
+#if APPLE_KEXT_ALIGN_CONTAINERS
+
+protected:
+    unsigned int   count;
+    unsigned int   capacity;
+    unsigned int   capacityIncrement;
+    struct dictEntry {
+        const OSSymbol        * key;
+        const OSMetaClassBase * value;
+    };
+    dictEntry    * dictionary;
+
+#else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 protected:
     struct dictEntry {
@@ -129,6 +144,8 @@ protected:
 
    /* Reserved for future use.  (Internal use only)  */
     ExpansionData * reserved;
+
+#endif /* APPLE_KEXT_ALIGN_CONTAINERS */
 
     // Member functions used by the OSCollectionIterator class.
     virtual unsigned int iteratorSize() const APPLE_KEXT_OVERRIDE;
@@ -905,6 +922,7 @@ public:
 
 #if XNU_KERNEL_PRIVATE
     bool setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject, bool onlyAdd);
+    OSArray * copyKeys(void);
 #endif /* XNU_KERNEL_PRIVATE */
 
     OSMetaClassDeclareReservedUnused(OSDictionary, 0);

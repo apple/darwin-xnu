@@ -457,9 +457,7 @@ static void
 vm_shared_region_reference_locked(
 	vm_shared_region_t	shared_region)
 {
-#if DEBUG
-	lck_mtx_assert(&vm_shared_region_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_shared_region_lock, LCK_MTX_ASSERT_OWNED);
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> reference_locked(%p)\n",
@@ -713,6 +711,9 @@ vm_shared_region_create(
 			 "couldn't allocate map\n"));
 		goto done;
 	}
+
+	assert(!sub_map->disable_vmentry_reuse);
+	sub_map->is_nested_map = TRUE;
 
 	/* make the memory entry point to the VM sub map */
 	mem_entry->is_sub_map = TRUE;
@@ -1042,6 +1043,7 @@ vm_shared_region_map_file(
 	vm_object_size_t	obj_size;
 	struct shared_file_mapping_np	*mapping_to_slide = NULL;
 	mach_vm_offset_t	first_mapping = (mach_vm_offset_t) -1;
+	vm_map_offset_t		lowest_unnestable_addr = 0;
 
 
 
@@ -1184,6 +1186,7 @@ vm_shared_region_map_file(
 				mappings[i].sfm_init_prot & VM_PROT_ALL,
 				mappings[i].sfm_max_prot & VM_PROT_ALL,
 				VM_INHERIT_DEFAULT);
+
 		}
 
 		if (kr == KERN_SUCCESS) {
@@ -1195,6 +1198,18 @@ vm_shared_region_map_file(
 			 */
 			if (first_mapping == (mach_vm_offset_t) -1) {
 				first_mapping = target_address;
+			}
+
+			/*
+			 * Record the lowest writable address in this
+			 * sub map, to log any unexpected unnesting below
+			 * that address (see log_unnest_badness()).
+			 */
+			if ((mappings[i].sfm_init_prot & VM_PROT_WRITE) &&
+			    sr_map->is_nested_map &&
+			    (lowest_unnestable_addr == 0 ||
+			     (target_address < lowest_unnestable_addr))) {
+				lowest_unnestable_addr = target_address;
 			}
 		} else {
 			if (map_port == MACH_PORT_NULL) {
@@ -1253,7 +1268,7 @@ vm_shared_region_map_file(
 	}
 
 	if (kr == KERN_SUCCESS &&
-	    slide &&
+	    slide_size != 0 &&
 	    mapping_to_slide != NULL) {
 		kr = vm_shared_region_slide(slide, 
 					    mapping_to_slide->sfm_file_offset, 
@@ -1274,6 +1289,18 @@ vm_shared_region_map_file(
 						       sr_base_address,
 						       mappings,
 						       mappings_count);
+		}
+	}
+
+	if (kr == KERN_SUCCESS) {
+		/* adjust the map's "lowest_unnestable_start" */
+		lowest_unnestable_addr &= ~(pmap_nesting_size_min-1);
+		if (lowest_unnestable_addr !=
+		    sr_map->lowest_unnestable_start) {
+			vm_map_lock(sr_map);
+			sr_map->lowest_unnestable_start =
+				lowest_unnestable_addr;
+			vm_map_unlock(sr_map);
 		}
 	}
 
@@ -1309,6 +1336,7 @@ kern_return_t
 vm_shared_region_enter(
 	struct _vm_map		*map,
 	struct task		*task,
+	boolean_t		is_64bit,
 	void			*fsroot,
 	cpu_type_t		cpu)
 {
@@ -1319,9 +1347,7 @@ vm_shared_region_enter(
 	vm_map_offset_t		sr_pmap_nesting_start;
 	vm_map_size_t		sr_pmap_nesting_size;
 	ipc_port_t		sr_handle;
-	boolean_t		is_64bit;
-
-	is_64bit = task_has_64BitAddr(task);
+	vm_prot_t		cur_prot, max_prot;
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: -> "
@@ -1356,6 +1382,18 @@ vm_shared_region_enter(
 	sr_pmap_nesting_start = shared_region->sr_pmap_nesting_start;
 	sr_pmap_nesting_size = shared_region->sr_pmap_nesting_size;
 
+	cur_prot = VM_PROT_READ;
+#if __x86_64__
+	/*
+	 * XXX BINARY COMPATIBILITY
+	 * java6 apparently needs to modify some code in the
+	 * dyld shared cache and needs to be allowed to add
+	 * write access...
+	 */
+	max_prot = VM_PROT_ALL;
+#else /* __x86_64__ */
+	max_prot = VM_PROT_READ;
+#endif /* __x86_64__ */
 	/*
 	 * Start mapping the shared region's VM sub map into the task's VM map.
 	 */
@@ -1374,8 +1412,8 @@ vm_shared_region_enter(
 			sr_handle,
 			sr_offset,
 			TRUE,
-			VM_PROT_READ,
-			VM_PROT_ALL,
+			cur_prot,
+			max_prot,
 			VM_INHERIT_SHARE);
 		if (kr != KERN_SUCCESS) {
 			SHARED_REGION_TRACE_ERROR(
@@ -1425,8 +1463,8 @@ vm_shared_region_enter(
 			sr_handle,
 			sr_offset,
 			TRUE,
-			VM_PROT_READ,
-			VM_PROT_ALL,
+			cur_prot,
+			max_prot,
 			VM_INHERIT_SHARE);
 		if (kr != KERN_SUCCESS) {
 			SHARED_REGION_TRACE_ERROR(
@@ -1463,8 +1501,8 @@ vm_shared_region_enter(
 			sr_handle,
 			sr_offset,
 			TRUE,
-			VM_PROT_READ,
-			VM_PROT_ALL,
+			cur_prot,
+			max_prot,
 			VM_INHERIT_SHARE);
 		if (kr != KERN_SUCCESS) {
 			SHARED_REGION_TRACE_ERROR(
@@ -1501,7 +1539,7 @@ done:
 	return kr;
 }
 
-#define SANE_SLIDE_INFO_SIZE		(2048*1024) /*Can be changed if needed*/
+#define SANE_SLIDE_INFO_SIZE		(2560*1024) /*Can be changed if needed*/
 struct vm_shared_region_slide_info	slide_info;
 
 kern_return_t
@@ -1667,20 +1705,70 @@ vm_shared_region_get_slide_info_entry(vm_shared_region_t sr) {
 	return (void*)sr->sr_slide_info.slide_info_entry;
 }
 
-
-kern_return_t
-vm_shared_region_slide_sanity_check(vm_shared_region_t sr)
+static kern_return_t
+vm_shared_region_slide_sanity_check_v1(vm_shared_region_slide_info_entry_v1_t s_info)
 {
 	uint32_t pageIndex=0;
 	uint16_t entryIndex=0;
 	uint16_t *toc = NULL;
+
+	toc = (uint16_t*)((uintptr_t)s_info + s_info->toc_offset);
+	for (;pageIndex < s_info->toc_count; pageIndex++) {
+
+		entryIndex =  (uint16_t)(toc[pageIndex]);
+
+		if (entryIndex >= s_info->entry_count) {
+			printf("No sliding bitmap entry for pageIndex: %d at entryIndex: %d amongst %d entries\n", pageIndex, entryIndex, s_info->entry_count);
+			return KERN_FAILURE;
+		}
+
+	}
+	return KERN_SUCCESS;
+}
+
+static kern_return_t
+vm_shared_region_slide_sanity_check_v2(vm_shared_region_slide_info_entry_v2_t s_info, mach_vm_size_t slide_info_size)
+{
+	if (s_info->page_size != PAGE_SIZE_FOR_SR_SLIDE) {
+		return KERN_FAILURE;
+	}
+
+	/* Ensure that the slide info doesn't reference any data outside of its bounds. */
+
+	uint32_t page_starts_count = s_info->page_starts_count;
+	uint32_t page_extras_count = s_info->page_extras_count;
+	mach_vm_size_t num_trailing_entries = page_starts_count + page_extras_count;
+	if (num_trailing_entries < page_starts_count) {
+		return KERN_FAILURE;
+	}
+
+	/* Scale by sizeof(uint16_t). Hard-coding the size simplifies the overflow check. */
+	mach_vm_size_t trailing_size = num_trailing_entries << 1;
+	if (trailing_size >> 1 != num_trailing_entries) {
+		return KERN_FAILURE;
+	}
+
+	mach_vm_size_t required_size = sizeof(*s_info) + trailing_size;
+	if (required_size < sizeof(*s_info)) {
+		return KERN_FAILURE;
+	}
+
+	if (required_size > slide_info_size) {
+		return KERN_FAILURE;
+	}
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+vm_shared_region_slide_sanity_check(vm_shared_region_t sr)
+{
 	vm_shared_region_slide_info_t si;
 	vm_shared_region_slide_info_entry_t s_info;
 	kern_return_t kr;
 
 	si = vm_shared_region_get_slide_info(sr);
 	s_info = si->slide_info_entry;
-	toc = (uint16_t*)((uintptr_t)s_info + s_info->toc_offset);
 
 	kr = mach_vm_protect(kernel_map,
 			     (mach_vm_offset_t)(vm_offset_t)s_info,
@@ -1690,16 +1778,17 @@ vm_shared_region_slide_sanity_check(vm_shared_region_t sr)
 		panic("vm_shared_region_slide_sanity_check: vm_protect() error 0x%x\n", kr);
 	}
 
-	for (;pageIndex < s_info->toc_count; pageIndex++) {
-
-		entryIndex =  (uint16_t)(toc[pageIndex]);
-		
-		if (entryIndex >= s_info->entry_count) {
-			printf("No sliding bitmap entry for pageIndex: %d at entryIndex: %d amongst %d entries\n", pageIndex, entryIndex, s_info->entry_count);
-			goto fail;
-		}
-
+	if (s_info->version == 1) {
+		kr = vm_shared_region_slide_sanity_check_v1(&s_info->v1);
+	} else if (s_info->version == 2) {
+		kr = vm_shared_region_slide_sanity_check_v2(&s_info->v2, si->slide_info_size);
+	} else {
+		goto fail;
 	}
+	if (kr != KERN_SUCCESS) {
+		goto fail;
+	}
+
 	return KERN_SUCCESS;
 fail:
 	if (si->slide_info_entry != NULL) {
@@ -1723,8 +1812,8 @@ fail:
 	return KERN_FAILURE;
 }
 
-kern_return_t
-vm_shared_region_slide_page(vm_shared_region_slide_info_t si, vm_offset_t vaddr, uint32_t pageIndex)
+static kern_return_t
+vm_shared_region_slide_page_v1(vm_shared_region_slide_info_t si, vm_offset_t vaddr, uint32_t pageIndex)
 {
 	uint16_t *toc = NULL;
 	slide_info_entry_toc_t bitmap = NULL;
@@ -1733,7 +1822,7 @@ vm_shared_region_slide_page(vm_shared_region_slide_info_t si, vm_offset_t vaddr,
 	uint32_t slide = si->slide;
 	int is_64 = task_has_64BitAddr(current_task());
 
-	vm_shared_region_slide_info_entry_t s_info = si->slide_info_entry;
+	vm_shared_region_slide_info_entry_v1_t s_info = &si->slide_info_entry->v1;
 	toc = (uint16_t*)((uintptr_t)s_info + s_info->toc_offset);
 	
 	if (pageIndex >= s_info->toc_count) {
@@ -1777,6 +1866,198 @@ vm_shared_region_slide_page(vm_shared_region_slide_info_t si, vm_offset_t vaddr,
 	}
 
 	return KERN_SUCCESS;
+}
+
+static kern_return_t
+rebase_chain_32(
+	uint8_t *page_content,
+	uint16_t start_offset,
+	uint32_t slide_amount,
+	vm_shared_region_slide_info_entry_v2_t s_info)
+{
+	const uint32_t last_page_offset = PAGE_SIZE_FOR_SR_SLIDE - sizeof(uint32_t);
+
+	const uint32_t delta_mask = (uint32_t)(s_info->delta_mask);
+	const uint32_t value_mask = ~delta_mask;
+	const uint32_t value_add = (uint32_t)(s_info->value_add);
+	const uint32_t delta_shift = __builtin_ctzll(delta_mask) - 2;
+
+	uint32_t page_offset = start_offset;
+	uint32_t delta = 1;
+
+	while (delta != 0 && page_offset <= last_page_offset) {
+		uint8_t *loc;
+		uint32_t value;
+
+		loc = page_content + page_offset;
+		memcpy(&value, loc, sizeof(value));
+		delta = (value & delta_mask) >> delta_shift;
+		value &= value_mask;
+
+		if (value != 0) {
+			value += value_add;
+			value += slide_amount;
+		}
+		memcpy(loc, &value, sizeof(value));
+		page_offset += delta;
+	}
+
+	/* If the offset went past the end of the page, then the slide data is invalid. */
+	if (page_offset > last_page_offset) {
+		return KERN_FAILURE;
+	}
+	return KERN_SUCCESS;
+}
+
+static kern_return_t
+rebase_chain_64(
+	uint8_t *page_content,
+	uint16_t start_offset,
+	uint32_t slide_amount,
+	vm_shared_region_slide_info_entry_v2_t s_info)
+{
+	const uint32_t last_page_offset = PAGE_SIZE_FOR_SR_SLIDE - sizeof(uint64_t);
+
+	const uint64_t delta_mask = s_info->delta_mask;
+	const uint64_t value_mask = ~delta_mask;
+	const uint64_t value_add = s_info->value_add;
+	const uint64_t delta_shift = __builtin_ctzll(delta_mask) - 2;
+
+	uint32_t page_offset = start_offset;
+	uint32_t delta = 1;
+
+	while (delta != 0 && page_offset <= last_page_offset) {
+		uint8_t *loc;
+		uint64_t value;
+
+		loc = page_content + page_offset;
+		memcpy(&value, loc, sizeof(value));
+		delta = (uint32_t)((value & delta_mask) >> delta_shift);
+		value &= value_mask;
+
+		if (value != 0) {
+			value += value_add;
+			value += slide_amount;
+		}
+		memcpy(loc, &value, sizeof(value));
+		page_offset += delta;
+	}
+
+	if (page_offset + sizeof(uint32_t) == PAGE_SIZE_FOR_SR_SLIDE) {
+		/* If a pointer straddling the page boundary needs to be adjusted, then
+		 * add the slide to the lower half. The encoding guarantees that the upper
+		 * half on the next page will need no masking.
+		 *
+		 * This assumes a little-endian machine and that the region being slid
+		 * never crosses a 4 GB boundary. */
+
+		uint8_t *loc = page_content + page_offset;
+		uint32_t value;
+
+		memcpy(&value, loc, sizeof(value));
+		value += slide_amount;
+		memcpy(loc, &value, sizeof(value));
+	} else if (page_offset > last_page_offset) {
+		return KERN_FAILURE;
+	}
+
+	return KERN_SUCCESS;
+}
+
+static kern_return_t
+rebase_chain(
+	boolean_t is_64,
+	uint32_t pageIndex,
+	uint8_t *page_content,
+	uint16_t start_offset,
+	uint32_t slide_amount,
+	vm_shared_region_slide_info_entry_v2_t s_info)
+{
+	kern_return_t kr;
+	if (is_64) {
+		kr = rebase_chain_64(page_content, start_offset, slide_amount, s_info);
+	} else {
+		kr = rebase_chain_32(page_content, start_offset, slide_amount, s_info);
+	}
+
+	if (kr != KERN_SUCCESS) {
+		printf("vm_shared_region_slide_page() offset overflow: pageIndex=%u, start_offset=%u, slide_amount=%u\n",
+		       pageIndex, start_offset, slide_amount);
+	}
+	return kr;
+}
+
+static kern_return_t
+vm_shared_region_slide_page_v2(vm_shared_region_slide_info_t si, vm_offset_t vaddr, uint32_t pageIndex)
+{
+	vm_shared_region_slide_info_entry_v2_t s_info = &si->slide_info_entry->v2;
+	const uint32_t slide_amount = si->slide;
+
+	/* The high bits of the delta_mask field are nonzero precisely when the shared
+	 * cache is 64-bit. */
+	const boolean_t is_64 = (s_info->delta_mask >> 32) != 0;
+
+	const uint16_t *page_starts = (uint16_t *)((uintptr_t)s_info + s_info->page_starts_offset);
+	const uint16_t *page_extras = (uint16_t *)((uintptr_t)s_info + s_info->page_extras_offset);
+
+	uint8_t *page_content = (uint8_t *)vaddr;
+	uint16_t page_entry;
+
+	if (pageIndex >= s_info->page_starts_count) {
+		printf("vm_shared_region_slide_page() did not find page start in slide info: pageIndex=%u, count=%u\n",
+		       pageIndex, s_info->page_starts_count);
+		return KERN_FAILURE;
+	}
+	page_entry = page_starts[pageIndex];
+
+	if (page_entry == DYLD_CACHE_SLIDE_PAGE_ATTR_NO_REBASE) {
+		return KERN_SUCCESS;
+	}
+
+	if (page_entry & DYLD_CACHE_SLIDE_PAGE_ATTR_EXTRA) {
+		uint16_t chain_index = page_entry & DYLD_CACHE_SLIDE_PAGE_VALUE;
+		uint16_t info;
+
+		do {
+			uint16_t page_start_offset;
+			kern_return_t kr;
+
+			if (chain_index >= s_info->page_extras_count) {
+				printf("vm_shared_region_slide_page() out-of-bounds extras index: index=%u, count=%u\n",
+				       chain_index, s_info->page_extras_count);
+				return KERN_FAILURE;
+			}
+			info = page_extras[chain_index];
+			page_start_offset = (info & DYLD_CACHE_SLIDE_PAGE_VALUE) << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT;
+
+			kr = rebase_chain(is_64, pageIndex, page_content, page_start_offset, slide_amount, s_info);
+			if (kr != KERN_SUCCESS) {
+				return KERN_FAILURE;
+			}
+
+			chain_index++;
+		} while (!(info & DYLD_CACHE_SLIDE_PAGE_ATTR_END));
+	} else {
+		const uint32_t page_start_offset = page_entry << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT;
+		kern_return_t kr;
+
+		kr = rebase_chain(is_64, pageIndex, page_content, page_start_offset, slide_amount, s_info);
+		if (kr != KERN_SUCCESS) {
+			return KERN_FAILURE;
+		}
+	}
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+vm_shared_region_slide_page(vm_shared_region_slide_info_t si, vm_offset_t vaddr, uint32_t pageIndex)
+{
+	if (si->slide_info_entry->version == 1) {
+		return vm_shared_region_slide_page_v1(si, vaddr, pageIndex);
+	} else {
+		return vm_shared_region_slide_page_v2(si, vaddr, pageIndex);
+	}
 }
 
 /******************************************************************************/
@@ -1917,7 +2198,8 @@ vm_commpage_init(void)
 kern_return_t
 vm_commpage_enter(
 	vm_map_t	map,
-	task_t		task)
+	task_t		task,
+	boolean_t	is64bit)
 {
 	ipc_port_t		commpage_handle, commpage_text_handle;
 	vm_map_offset_t		commpage_address, objc_address, commpage_text_address;
@@ -1935,8 +2217,8 @@ vm_commpage_enter(
 	vm_flags = VM_FLAGS_FIXED | VM_FLAGS_BEYOND_MAX;
 
 	/* select the appropriate comm page for this task */
-	assert(! (task_has_64BitAddr(task) ^ vm_map_is_64bit(map)));
-	if (task_has_64BitAddr(task)) {
+	assert(! (is64bit ^ vm_map_is_64bit(map)));
+	if (is64bit) {
 		commpage_handle = commpage64_handle;
 		commpage_address = (vm_map_offset_t) _COMM_PAGE64_BASE_ADDRESS;
 		commpage_size = _COMM_PAGE64_AREA_LENGTH;

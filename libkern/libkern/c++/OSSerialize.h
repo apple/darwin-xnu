@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -35,6 +35,7 @@
 class OSCollection;
 class OSSet;
 class OSDictionary;
+class OSArray;
 
 /*!
  * @header
@@ -43,6 +44,8 @@ class OSDictionary;
  * This header declares the OSSerialize class.
  */
  
+OSObject *
+OSUnserializeBinary(const void *buffer, size_t bufferSize);
  
 /*!
  * @class OSSerialize
@@ -78,27 +81,18 @@ class OSDictionary;
  * for serializing properties.
  */
  
-OSObject *
-OSUnserializeBinary(const void *buffer, size_t bufferSize);
-
 class OSSerialize : public OSObject
 {
     OSDeclareDefaultStructors(OSSerialize)
     friend class OSBoolean;
 
-protected:
+private:
     char         * data;               // container for serialized data
     unsigned int   length;             // of serialized data (counting NULL)
     unsigned int   capacity;           // of container
     unsigned int   capacityIncrement;  // of container
 
-    unsigned int   tag;
-    OSDictionary * tags;               // tags for all objects seen
-
-    struct ExpansionData { };
-    
-    /* Reserved for future use. (Internal use only)  */
-    ExpansionData *reserved;
+    OSArray * tags;               	   // tags for all objects seen
 
 #ifdef XNU_KERNEL_PRIVATE
 public:
@@ -111,7 +105,6 @@ public:
     typedef void * Editor;
 #endif
 
-private:
     bool   binary;
     bool   endCollection;
     Editor editor;

@@ -80,6 +80,7 @@
 #endif
 #include <kern/waitq.h>
 #include <kern/ledger.h>
+#include <kperf/kperf_kpc.h>
 #include <mach/policy.h>
 #include <machine/trap.h> // for CHUD AST hook
 #include <machine/pal_routines.h>
@@ -93,7 +94,9 @@ ast_init(void)
 {
 }
 
-extern void chudxnu_thread_ast(thread_t); // XXX this should probably be in a header...
+#ifdef CONFIG_DTRACE
+extern void dtrace_ast(void);
+#endif
 
 /*
  * Called at splsched.
@@ -152,6 +155,12 @@ ast_taken(
 		if (!preempt_trap) {
 			ml_set_interrupts_enabled(enable);
 
+#if CONFIG_DTRACE
+			if (reasons & AST_DTRACE) {
+				dtrace_ast();
+			}
+#endif
+
 #ifdef	MACH_BSD
 			/*
 			 * Handle BSD hook.
@@ -175,14 +184,14 @@ ast_taken(
 			 */
 			if (reasons & AST_APC) {
 				thread_ast_clear(thread, AST_APC);
-				special_handler(thread);
+				thread_apc_ast(thread);
 			}
-			
+
 			if (reasons & AST_GUARD) {
 				thread_ast_clear(thread, AST_GUARD);
 				guard_ast(thread);
 			}
-			
+
 			if (reasons & AST_LEDGER) {
 				thread_ast_clear(thread, AST_LEDGER);
 				ledger_ast(thread);
@@ -193,19 +202,19 @@ ast_taken(
 			 */
 			if (reasons & AST_KPERF) {
 				thread_ast_clear(thread, AST_KPERF);
-				chudxnu_thread_ast(thread);
+				kperf_kpc_thread_ast(thread);
 			}
 
 #if CONFIG_TELEMETRY
 			if (reasons & AST_TELEMETRY_ALL) {
 				boolean_t interrupted_userspace = FALSE;
-				boolean_t is_windowed = FALSE;
+				boolean_t io_telemetry = FALSE;
 
 				assert((reasons & AST_TELEMETRY_ALL) != AST_TELEMETRY_ALL); /* only one is valid at a time */
 				interrupted_userspace = (reasons & AST_TELEMETRY_USER) ? TRUE : FALSE;
-				is_windowed = ((reasons & AST_TELEMETRY_WINDOWED) ? TRUE : FALSE);
+				io_telemetry = ((reasons & AST_TELEMETRY_IO) ? TRUE : FALSE);
 				thread_ast_clear(thread, AST_TELEMETRY_ALL);
-				telemetry_ast(thread, interrupted_userspace, is_windowed);
+				telemetry_ast(thread, interrupted_userspace, io_telemetry);
 			}
 #endif
 
@@ -309,4 +318,9 @@ ast_context(thread_t thread)
 	*pending_ast = ((*pending_ast & ~AST_PER_THREAD) | thread->ast);
 }
 
+void
+ast_dtrace_on(void)
+{
+	ast_on(AST_DTRACE);
+}
 

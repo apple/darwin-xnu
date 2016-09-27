@@ -42,12 +42,10 @@
 #include <kern/assert.h>
 #include <kern/host.h>
 #include <kern/thread.h>
+#include <kern/ipc_kobject.h>
 
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
-
-#include <default_pager/default_pager_types.h>
-#include <default_pager/default_pager_object_server.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_pageout.h>
@@ -123,9 +121,6 @@ typedef struct vnode_pager {
 
 #define pager_ikot pager_header.io_bits
 
-ipc_port_t
-trigger_name_to_port(			/* forward */
-	mach_port_t);
 
 kern_return_t
 vnode_pager_cluster_read(		/* forward */
@@ -151,6 +146,10 @@ vnode_object_create(			/* forward */
 
 vnode_pager_t
 vnode_pager_lookup(			/* forward */
+	memory_object_t);
+
+struct vnode *
+vnode_pager_lookup_vnode(		/* forward */
 	memory_object_t);
 
 zone_t	vnode_pager_zone;
@@ -182,175 +181,6 @@ extern int proc_resetpcontrol(int);
 #if DEVELOPMENT || DEBUG
 extern unsigned long vm_cs_validated_resets;
 #endif
-
-/*
- *	Routine:	mach_macx_triggers
- *	Function:
- *		Syscall interface to set the call backs for low and
- *		high water marks.
- */
-int
-mach_macx_triggers(
-	struct macx_triggers_args *args)
-{
-	int	hi_water = args->hi_water;
-	int	low_water = args->low_water;
-	int	flags = args->flags;
-	mach_port_t	trigger_name = args->alert_port;
-	kern_return_t kr;
-	memory_object_default_t	default_pager;
-	ipc_port_t		trigger_port;
-
-	default_pager = MEMORY_OBJECT_DEFAULT_NULL;
-	kr = host_default_memory_manager(host_priv_self(), 
-					&default_pager, 0);
-	if(kr != KERN_SUCCESS) {
-		return EINVAL;
-	}
-
-	if (((flags & SWAP_ENCRYPT_ON) && (flags & SWAP_ENCRYPT_OFF)) || 
-	    ((flags & SWAP_COMPACT_ENABLE) && (flags & SWAP_COMPACT_DISABLE))) {
-		/* can't have it both ways */
-		return EINVAL;
-	}
-
-	if (default_pager_init_flag == 0) {
-               start_def_pager(NULL);
-               default_pager_init_flag = 1;
-	}
-
-	if (flags & SWAP_ENCRYPT_ON) {
-		/* ENCRYPTED SWAP: tell default_pager to encrypt */
-		default_pager_triggers(default_pager,
-				       0, 0,
-				       SWAP_ENCRYPT_ON,
-				       IP_NULL);
-	} else if (flags & SWAP_ENCRYPT_OFF) {
-		/* ENCRYPTED SWAP: tell default_pager not to encrypt */
-		default_pager_triggers(default_pager,
-				       0, 0,
-				       SWAP_ENCRYPT_OFF,
-				       IP_NULL);
-	}
-
-	if (flags & USE_EMERGENCY_SWAP_FILE_FIRST) {
-		/*
-		 * Time to switch to the emergency segment.
-		 */
-		return default_pager_triggers(default_pager,
-					0, 0, 
-					USE_EMERGENCY_SWAP_FILE_FIRST,
-					IP_NULL);
-	}
-
-	if (flags & SWAP_FILE_CREATION_ERROR) {
-		/* 
-		 * For some reason, the dynamic pager failed to create a swap file.
-	 	 */
-		trigger_port = trigger_name_to_port(trigger_name);
-		if(trigger_port == NULL) {
-			return EINVAL;
-		}
-		/* trigger_port is locked and active */
-		ipc_port_make_send_locked(trigger_port); 
-		ip_unlock(trigger_port);
-		default_pager_triggers(default_pager,
-					0, 0, 
-					SWAP_FILE_CREATION_ERROR,
-					trigger_port);
-	}
-
-	if (flags & HI_WAT_ALERT) {
-		trigger_port = trigger_name_to_port(trigger_name);
-		if(trigger_port == NULL) {
-			return EINVAL;
-		}
-		/* trigger_port is locked and active */
-		ipc_port_make_send_locked(trigger_port); 
-		ip_unlock(trigger_port);
-		default_pager_triggers(default_pager, 
-				       hi_water, low_water,
-				       HI_WAT_ALERT, trigger_port);
-	}
-
-	if (flags & LO_WAT_ALERT) {
-		trigger_port = trigger_name_to_port(trigger_name);
-		if(trigger_port == NULL) {
-			return EINVAL;
-		}
-		/* trigger_port is locked and active */
-		ipc_port_make_send_locked(trigger_port);
-		ip_unlock(trigger_port);
-		default_pager_triggers(default_pager, 
-				       hi_water, low_water,
-				       LO_WAT_ALERT, trigger_port);
-	}
-
-
-	if (flags & PROC_RESUME) {
-
-		/*
-		 * For this call, hi_water is used to pass in the pid of the process we want to resume
-		 * or unthrottle.  This is of course restricted to the superuser (checked inside of 
-		 * proc_resetpcontrol).
-		 */
-
-		return proc_resetpcontrol(hi_water);
-	}
-
-	/*
-	 * Set thread scheduling priority and policy for the current thread
-	 * it is assumed for the time being that the thread setting the alert
-	 * is the same one which will be servicing it.
-	 *
-	 * XXX This does not belong in the kernel XXX
-	 */
-	if (flags & HI_WAT_ALERT) {
-		thread_precedence_policy_data_t		pre;
-		thread_extended_policy_data_t		ext;
-
-		ext.timeshare = FALSE;
-		pre.importance = INT32_MAX;
-
-		thread_policy_set(current_thread(),
-				  THREAD_EXTENDED_POLICY,
-				  (thread_policy_t)&ext,
-				  THREAD_EXTENDED_POLICY_COUNT);
-
-		thread_policy_set(current_thread(),
-				  THREAD_PRECEDENCE_POLICY,
-				  (thread_policy_t)&pre,
-				  THREAD_PRECEDENCE_POLICY_COUNT);
-
-		current_thread()->options |= TH_OPT_VMPRIV;
-	}
- 
-	if (flags & (SWAP_COMPACT_DISABLE | SWAP_COMPACT_ENABLE)) {
-		return macx_backing_store_compaction(flags & (SWAP_COMPACT_DISABLE | SWAP_COMPACT_ENABLE));
-	}
-
-	return 0;
-}
-
-/*
- *
- */
-ipc_port_t
-trigger_name_to_port(
-	mach_port_t	trigger_name)
-{
-	ipc_port_t	trigger_port;
-	ipc_space_t	space;
-
-	if (trigger_name == 0)
-		return (NULL);
-
-	space  = current_space();
-	if(ipc_port_translate_receive(space, CAST_MACH_PORT_TO_NAME(trigger_name), 
-						&trigger_port) != KERN_SUCCESS)
-		return (NULL);
-	return trigger_port;
-}
 
 
 extern int	uiomove64(addr64_t, int, void *);
@@ -424,11 +254,9 @@ memory_object_control_uiomove(
 				PAGE_SLEEP(object, dst_page, THREAD_UNINT);
 				continue;
 			}
-			if (dst_page->laundry) {
-				dst_page->pageout = FALSE;
-				
+			if (dst_page->laundry)
 				vm_pageout_steal_laundry(dst_page, FALSE);
-			}
+
 			/*
 			 * this routine is only called when copying
 			 * to/from real files... no need to consider
@@ -451,7 +279,7 @@ memory_object_control_uiomove(
 #if DEVELOPMENT || DEBUG
                                         vm_cs_validated_resets++;
 #endif
-					pmap_disconnect(dst_page->phys_page);
+					pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(dst_page));
 				}
 			}
 			dst_page->busy = TRUE;
@@ -477,7 +305,7 @@ memory_object_control_uiomove(
 			if ((xsize = PAGE_SIZE - start_offset) > io_requested)
 			        xsize = io_requested;
 
-			if ( (retval = uiomove64((addr64_t)(((addr64_t)(dst_page->phys_page) << PAGE_SHIFT) + start_offset), xsize, uio)) )
+			if ( (retval = uiomove64((addr64_t)(((addr64_t)(VM_PAGE_GET_PHYS_PAGE(dst_page)) << PAGE_SHIFT) + start_offset), xsize, uio)) )
 			        break;
 
 			io_requested -= xsize;
@@ -521,8 +349,9 @@ memory_object_control_uiomove(
 		}
 		orig_offset = 0;
 	}
+	if (object->pager)
+		task_update_logical_writes(current_task(), (dirty_count * PAGE_SIZE), TASK_WRITE_DEFERRED, vnode_pager_lookup_vnode(object->pager));
 	vm_object_unlock(object);
-	task_update_logical_writes(current_task(), (dirty_count * PAGE_SIZE), TASK_WRITE_DEFERRED);
 	return (retval);
 }
 
@@ -533,7 +362,7 @@ memory_object_control_uiomove(
 void
 vnode_pager_bootstrap(void)
 {
-	register vm_size_t      size;
+	vm_size_t      size;
 
 	size = (vm_size_t) sizeof(struct vnode_pager);
 	vnode_pager_zone = zinit(size, (vm_size_t) MAX_VNODE*size,
@@ -623,7 +452,7 @@ vnode_pager_data_return(
 	__unused boolean_t		kernel_copy,
 	int			upl_flags)  
 {
-	register vnode_pager_t	vnode_object;
+	vnode_pager_t	vnode_object;
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
@@ -764,24 +593,6 @@ vnode_pager_get_object_mtime(
 				     cs_mtime);
 }
 
-kern_return_t
-vnode_pager_get_object_cs_blobs(
-	memory_object_t	mem_obj,
-	void		**blobs)
-{
-	vnode_pager_t	vnode_object;
-
-	if (mem_obj == MEMORY_OBJECT_NULL ||
-	    mem_obj->mo_pager_ops != &vnode_pager_ops) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	vnode_object = vnode_pager_lookup(mem_obj);
-
-	return vnode_pager_get_cs_blobs(vnode_object->vnode_handle,
-					blobs);
-}
-
 #if CHECK_CS_VALIDATION_BITMAP
 kern_return_t
 vnode_pager_cs_check_validation_bitmap( 
@@ -838,7 +649,7 @@ void
 vnode_pager_reference(
 	memory_object_t		mem_obj)
 {	
-	register vnode_pager_t	vnode_object;
+	vnode_pager_t	vnode_object;
 	unsigned int		new_ref_count;
 
 	vnode_object = vnode_pager_lookup(mem_obj);
@@ -853,7 +664,7 @@ void
 vnode_pager_deallocate(
 	memory_object_t		mem_obj)
 {
-	register vnode_pager_t	vnode_object;
+	vnode_pager_t	vnode_object;
 
 	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_deallocate: %p\n", mem_obj));
 
@@ -893,7 +704,7 @@ vnode_pager_synchronize(
 	memory_object_size_t		length,
 	__unused vm_sync_t		sync_flags)
 {
-	register vnode_pager_t	vnode_object;
+	vnode_pager_t	vnode_object;
 
 	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_synchronize: %p\n", mem_obj));
 
@@ -935,7 +746,7 @@ kern_return_t
 vnode_pager_last_unmap(
 	memory_object_t		mem_obj)
 {
-	register vnode_pager_t	vnode_object;
+	vnode_pager_t	vnode_object;
 
 	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_last_unmap: %p\n", mem_obj));
 
@@ -1113,7 +924,7 @@ vnode_pager_t
 vnode_object_create(
         struct vnode *vp)
 {
-	register vnode_pager_t  vnode_object;
+	vnode_pager_t  vnode_object;
 
 	vnode_object = (struct vnode_pager *) zalloc(vnode_pager_zone);
 	if (vnode_object == VNODE_PAGER_NULL)
@@ -1149,6 +960,18 @@ vnode_pager_lookup(
 	return (vnode_object);
 }
 
+
+struct vnode *
+vnode_pager_lookup_vnode(
+	memory_object_t  name)
+{
+	vnode_pager_t   vnode_object;
+	vnode_object = (vnode_pager_t)name;
+	if(vnode_object->pager_ops == &vnode_pager_ops)
+		return (vnode_object->vnode_handle);
+	else
+		return NULL;
+}
 
 /*********************** proc_info implementation *************/
 

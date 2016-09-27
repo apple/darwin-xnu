@@ -98,6 +98,7 @@
 #include <mach/mach_vm.h>
 #include <mach/thread_act.h>  /* for thread_policy_set( ) */
 #include <kern/thread.h>
+#include <kern/policy_internal.h>
 
 #include <kern/task.h>
 #include <kern/clock.h>		/* for absolutetime_to_microtime() */
@@ -108,20 +109,19 @@
 
 #include <kern/assert.h>
 #include <sys/resource.h>
+#include <sys/priv.h>
 #include <IOKit/IOBSD.h>
 
 int	donice(struct proc *curp, struct proc *chgp, int n);
 int	dosetrlimit(struct proc *p, u_int which, struct rlimit *limp);
 int	uthread_get_background_state(uthread_t);
 static void do_background_socket(struct proc *p, thread_t thread);
-static int do_background_thread(struct proc *curp, thread_t thread, int priority);
+static int do_background_thread(thread_t thread, int priority);
 static int do_background_proc(struct proc *curp, struct proc *targetp, int priority);
 static int set_gpudeny_proc(struct proc *curp, struct proc *targetp, int priority);
 static int proc_set_darwin_role(proc_t curp, proc_t targetp, int priority);
 static int proc_get_darwin_role(proc_t curp, proc_t targetp, int *priority);
 static int get_background_proc(struct proc *curp, struct proc *targetp, int *priority);
-void proc_apply_task_networkbg_internal(proc_t, thread_t);
-void proc_restore_task_networkbg_internal(proc_t, thread_t);
 int proc_pid_rusage(int pid, int flavor, user_addr_t buf, int32_t *retval);
 void gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor);
 int fill_task_rusage(task_t task, rusage_info_current *ri);
@@ -212,7 +212,7 @@ getpriority(struct proc *curp, struct getpriority_args *uap, int32_t *retval)
 		}
 		/* No need for iteration as it is a simple scan */
 		pgrp_lock(pg);
-		for (p = pg->pg_members.lh_first; p != 0; p = p->p_pglist.le_next) {
+		PGMEMBERS_FOREACH(pg, p) {
 			if (p->p_nice < low)
 				low = p->p_nice;
 		}
@@ -244,7 +244,7 @@ getpriority(struct proc *curp, struct getpriority_args *uap, int32_t *retval)
 		if (uap->who != 0)
 			return (EINVAL);
 
-		low = proc_get_task_policy(current_task(), current_thread(), TASK_POLICY_INTERNAL, TASK_POLICY_DARWIN_BG);
+		low = proc_get_thread_policy(current_thread(), TASK_POLICY_INTERNAL, TASK_POLICY_DARWIN_BG);
 
 		break;
 
@@ -417,7 +417,7 @@ setpriority(struct proc *curp, struct setpriority_args *uap, int32_t *retval)
 		if (uap->who != 0)
 			return (EINVAL);
 
-		error = do_background_thread(curp, current_thread(), uap->prio);
+		error = do_background_thread(current_thread(), uap->prio);
 		found++;
 		break;
 	}
@@ -593,8 +593,10 @@ proc_set_darwin_role(proc_t curp, proc_t targetp, int priority)
 	if (!kauth_cred_issuser(ucred) && kauth_cred_getruid(ucred) &&
 	    kauth_cred_getuid(ucred)  != kauth_cred_getuid(target_cred) &&
 	    kauth_cred_getruid(ucred) != kauth_cred_getuid(target_cred)) {
-		error = EPERM;
-		goto out;
+		if (priv_check_cred(ucred, PRIV_SETPRIORITY_DARWIN_ROLE, 0) != 0) {
+			error = EPERM;
+			goto out;
+		}
 	}
 
 	if (curp != targetp) {
@@ -615,8 +617,8 @@ proc_set_darwin_role(proc_t curp, proc_t targetp, int priority)
 	if ((error = proc_darwin_role_to_task_role(priority, &role)))
 		goto out;
 
-	proc_set_task_policy(proc_task(targetp), THREAD_NULL,
-	                     TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE, role);
+	proc_set_task_policy(proc_task(targetp), TASK_POLICY_ATTRIBUTE,
+	                     TASK_POLICY_ROLE, role);
 
 out:
 	kauth_cred_unref(&target_cred);
@@ -648,8 +650,7 @@ proc_get_darwin_role(proc_t curp, proc_t targetp, int *priority)
 #endif
 	}
 
-	role = proc_get_task_policy(proc_task(targetp), THREAD_NULL,
-	                            TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE);
+	role = proc_get_task_policy(proc_task(targetp), TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE);
 
 	*priority = proc_task_role_to_darwin_role(role);
 
@@ -678,7 +679,7 @@ get_background_proc(struct proc *curp, struct proc *targetp, int *priority)
 
 	external = (curp == targetp) ? TASK_POLICY_INTERNAL : TASK_POLICY_EXTERNAL;
 
-	*priority = proc_get_task_policy(current_task(), THREAD_NULL, external, TASK_POLICY_DARWIN_BG);
+	*priority = proc_get_task_policy(current_task(), external, TASK_POLICY_DARWIN_BG);
 
 out:
 	kauth_cred_unref(&target_cred);
@@ -729,7 +730,7 @@ do_background_proc(struct proc *curp, struct proc *targetp, int priority)
 			break;
 	}
 
-	proc_set_task_policy(proc_task(targetp), THREAD_NULL, external, TASK_POLICY_DARWIN_BG, enable);
+	proc_set_task_policy(proc_task(targetp), external, TASK_POLICY_DARWIN_BG, enable);
 
 out:
 	kauth_cred_unref(&target_cred);
@@ -807,12 +808,15 @@ do_background_socket(struct proc *p, thread_t thread)
 
 /*
  * do_background_thread
+ *
+ * Requires: thread reference
+ *
  * Returns:     0                       Success
  *              EPERM                   Tried to background while in vfork
  * XXX - todo - does this need a MACF hook?
  */
 static int
-do_background_thread(struct proc *curp, thread_t thread, int priority)
+do_background_thread(thread_t thread, int priority)
 {
 	struct uthread *ut;
 	int enable, external;
@@ -824,6 +828,7 @@ do_background_thread(struct proc *curp, thread_t thread, int priority)
 	if ((ut->uu_flag & UT_VFORK) != 0)
 		return(EPERM);
 
+	/* Backgrounding is unsupported for workq threads */
 	if (thread_is_static_param(thread)) {
 		return(EPERM);
 	}
@@ -838,8 +843,7 @@ do_background_thread(struct proc *curp, thread_t thread, int priority)
 	enable   = (priority == PRIO_DARWIN_BG) ? TASK_POLICY_ENABLE   : TASK_POLICY_DISABLE;
 	external = (current_thread() == thread) ? TASK_POLICY_INTERNAL : TASK_POLICY_EXTERNAL;
 
-	proc_set_task_policy_thread(curp->task, thread_tid(thread), external,
-	                            TASK_POLICY_DARWIN_BG, enable);
+	proc_set_thread_policy(thread, external, TASK_POLICY_DARWIN_BG, enable);
 
 	return rv;
 }
@@ -1552,14 +1556,16 @@ iopolicysys_disk(struct proc *p __unused, int cmd, int scope, int policy, struct
 	/* Perform command */
 	switch(cmd) {
 		case IOPOL_CMD_SET:
-			proc_set_task_policy(current_task(), thread,
-								 TASK_POLICY_INTERNAL, policy_flavor,
-								 policy);
+			if (thread != THREAD_NULL)
+				proc_set_thread_policy(thread, TASK_POLICY_INTERNAL, policy_flavor, policy);
+			else
+				proc_set_task_policy(current_task(), TASK_POLICY_INTERNAL, policy_flavor, policy);
 			break;
 		case IOPOL_CMD_GET:
-			policy = proc_get_task_policy(current_task(), thread,
-										  TASK_POLICY_INTERNAL, policy_flavor);
-
+			if (thread != THREAD_NULL)
+				policy = proc_get_thread_policy(thread, TASK_POLICY_INTERNAL, policy_flavor);
+			else
+				policy = proc_get_task_policy(current_task(), TASK_POLICY_INTERNAL, policy_flavor);
 			iop_param->iop_policy = policy;
 			break;
 		default:
@@ -1640,9 +1646,7 @@ out:
 	return (error);
 }
 
-/* BSD call back function for task_policy */
-void proc_apply_task_networkbg(void * bsd_info, thread_t thread);
-
+/* BSD call back function for task_policy networking changes */
 void
 proc_apply_task_networkbg(void * bsd_info, thread_t thread)
 {

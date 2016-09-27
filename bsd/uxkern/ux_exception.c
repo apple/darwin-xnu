@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -97,8 +97,8 @@ mach_port_name_t		ux_exception_port;
 
 static task_t			ux_handler_self;
 
-static
-void
+__attribute__((noreturn))
+static void
 ux_handler(void)
 {
     task_t		self = current_task();
@@ -333,7 +333,7 @@ catch_mach_exception_raise(
 			ut->uu_exception = exception;
 			//ut->uu_code = code[0]; // filled in by threadsignal
 			ut->uu_subcode = code[1];			
-			threadsignal(th_act, ux_signal, code[0]);
+			threadsignal(th_act, ux_signal, code[0], TRUE);
 	    }
 	    if (p != NULL) 
 		    proc_rele(p);

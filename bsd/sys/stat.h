@@ -468,7 +468,7 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
  * in Mac OS X.
  */
 /* #define UF_NOUNLINK	0x00000010 */	/* file may not be removed or renamed */
-#define UF_COMPRESSED	0x00000020	/* file is hfs-compressed */
+#define UF_COMPRESSED	0x00000020	/* file is compressed (some file-systems) */
 
 /* UF_TRACKED is used for dealing with document IDs.  We no longer issue
    notifications for deletes or renames for files which have UF_TRACKED set. */

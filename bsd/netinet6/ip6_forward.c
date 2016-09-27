@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2009-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -97,9 +97,12 @@
 extern int ipsec_bypass;
 #endif /* IPSEC */
 
-#include <netinet6/ip6_fw.h>
-
 #include <net/net_osdep.h>
+
+#if DUMMYNET
+#include <netinet/ip_fw.h>
+#include <netinet/ip_dummynet.h>
+#endif /* DUMMYNET */
 
 #if PF
 #include <net/pfvar.h>
@@ -617,29 +620,6 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		}
 		type = ND_REDIRECT;
 	}
-
-#if IPFW2
-	/*
-	 * Check with the firewall...
-	 */
-	if (ip6_fw_enable && ip6_fw_chk_ptr) {
-		u_short port = 0;
-		ifp = rt->rt_ifp;
-		/* Drop the lock but retain the extra ref */
-		RT_UNLOCK(rt);
-		/* If ipfw says divert, we have to just drop packet */
-		if (ip6_fw_chk_ptr(&ip6, ifp, &port, &m)) {
-			m_freem(m);
-			goto freecopy;
-		}
-		if (!m) {
-			goto freecopy;
-		}
-		/* We still have the extra ref on rt */
-		RT_LOCK(rt);
-	}
-#endif
-
 	/*
 	 * Fake scoped addresses. Note that even link-local source or
 	 * destinaion can appear, if the originating node just sends the
@@ -709,25 +689,47 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		return (m);
 	}
 
-#if PF
-	/* Invoke outbound packet filter */
-	error = pf_af_hook(ifp, NULL, &m, AF_INET6, FALSE, NULL);
-
-	if (error != 0 || m == NULL) {
-		if (m != NULL) {
-			panic("%s: unexpected packet %p\n", __func__, m);
-			/* NOTREACHED */
-		}
-		/* Already freed by callee */
-		goto senderr;
-	}
-	ip6 = mtod(m, struct ip6_hdr *);
-#endif /* PF */
-
 	/* Mark this packet as being forwarded from another interface */
 	m->m_pkthdr.pkt_flags |= PKTF_FORWARDED;
-	len = m_pktlen(m);
 
+#if PF
+	if (PF_IS_ENABLED) {
+#if DUMMYNET
+		struct ip_fw_args args;
+		bzero(&args, sizeof(args));
+
+		args.fwa_m = m;
+		args.fwa_oif = ifp;
+		args.fwa_oflags = 0;
+		args.fwa_ro6 = ip6forward_rt;
+		args.fwa_ro6_pmtu = ip6forward_rt;
+		args.fwa_mtu = rt->rt_ifp->if_mtu;
+		args.fwa_dst6 = dst;
+		args.fwa_origifp = origifp;
+		/* Invoke outbound packet filter */
+		error = pf_af_hook(ifp, NULL, &m, AF_INET6, FALSE, &args);
+#else /* !DUMMYNET */
+		error = pf_af_hook(ifp, NULL, &m, AF_INET6, FALSE, NULL);
+#endif /* !DUMMYNET */
+		if (error != 0 || m == NULL) {
+			if (m != NULL) {
+				panic("%s: unexpected packet %p\n", __func__, m);
+				/* NOTREACHED */
+			}
+			/* Already freed by callee */
+			goto senderr;
+		}
+		/*
+		 * We do not use ip6 header again in the code below,
+		 * however still adding the bit here so that any new
+		 * code in future doesn't end up working with the
+		 * wrong pointer
+		 */
+		ip6 = mtod(m, struct ip6_hdr *);
+	}
+#endif /* PF */
+
+	len = m_pktlen(m);
 	error = nd6_output(ifp, origifp, m, dst, rt, NULL);
 	if (error) {
 		in6_ifstat_inc(ifp, ifs6_out_discard);

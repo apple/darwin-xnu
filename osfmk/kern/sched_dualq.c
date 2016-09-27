@@ -268,7 +268,13 @@ sched_dualq_processor_queue_has_priority(processor_t    processor,
                                          int            priority,
                                          boolean_t      gte)
 {
-	int qpri = MAX(dualq_main_runq(processor)->highq, dualq_bound_runq(processor)->highq);
+	run_queue_t main_runq  = dualq_main_runq(processor);
+	run_queue_t bound_runq = dualq_bound_runq(processor);
+
+	if (main_runq->count == 0 && bound_runq->count == 0)
+		return FALSE;
+
+	int qpri = MAX(main_runq->highq, bound_runq->highq);
 
 	if (gte)
 		return qpri >= priority;
@@ -316,12 +322,15 @@ sched_dualq_processor_queue_shutdown(processor_t processor)
 
 	while (rq->count > 0) {
 		thread = run_queue_dequeue(rq, SCHED_HEADQ);
-		enqueue_tail(&tqueue, (queue_entry_t)thread);
+		enqueue_tail(&tqueue, &thread->runq_links);
 	}
 
 	pset_unlock(pset);
 
-	while ((thread = (thread_t)(void*)dequeue_head(&tqueue)) != THREAD_NULL) {
+	qe_foreach_element_safe(thread, &tqueue, runq_links) {
+
+		remqueue(&thread->runq_links);
+
 		thread_lock(thread);
 
 		thread_setrun(thread, SCHED_TAILQ);

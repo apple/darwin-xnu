@@ -40,6 +40,10 @@
 #include <mach/memory_object_types.h>
 #include <sys/ucred.h>
 
+#ifdef KERNEL_PRIVATE
+#include <sys/imgact.h>
+#endif // KERNEL_PRIVATE
+
 /* defns for ubc_msync() and ubc_msync */
 
 #define	UBC_PUSHDIRTY	0x01	/* clean any dirty pages in the specified range to the backing store */
@@ -83,7 +87,7 @@ struct cs_blob *ubc_cs_blob_get(vnode_t, cpu_type_t, off_t);
 
 /* apis to handle generation count for cs blob */
 void cs_blob_reset_cache(void);
-int ubc_cs_blob_revalidate(vnode_t, struct cs_blob *, int);
+int ubc_cs_blob_revalidate(vnode_t, struct cs_blob *, struct image_params *, int);
 int ubc_cs_generation_check(vnode_t);
 
 int cs_entitlements_blob_get(proc_t, void **, size_t *);
@@ -139,6 +143,15 @@ upl_size_t ubc_upl_maxbufsize(void);
 int	is_file_clean(vnode_t, off_t);
 
 errno_t mach_to_bsd_errno(kern_return_t mach_err);
+
+#ifdef KERNEL_PRIVATE
+
+__attribute__((pure)) boolean_t ubc_is_mapped(const struct vnode *, boolean_t *writable);
+__attribute__((pure)) boolean_t ubc_is_mapped_writable(const struct vnode *);
+
+uint32_t cluster_max_io_size(mount_t, int);
+
+#endif
 
 __END_DECLS
 

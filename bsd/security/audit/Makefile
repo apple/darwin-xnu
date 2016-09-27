@@ -15,11 +15,9 @@ INSTALL_MI_DIR = security/audit
 
 INSTALL_KF_MI_LIST = ${DATAFILES}
 
-EXPORT_MI_LIST	= ${DATAFILES} audit.h audit_bsd.h audit_private.h 
+EXPORT_MI_LIST	= ${DATAFILES} audit.h audit_bsd.h audit_private.h
 
 EXPORT_MI_DIR =	security/audit
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

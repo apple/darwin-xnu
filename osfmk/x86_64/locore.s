@@ -79,7 +79,6 @@
 #define	RECOVERY_SECTION	.section	__VECTORS, __recover 
 #else
 #define	RECOVERY_SECTION	.text
-#define	RECOVERY_SECTION	.text
 #endif
 
 #define	RECOVER_TABLE_START	\
@@ -303,6 +302,41 @@ _bcopystr_fail:
 	popq	%rdi			/* restore registers */
 	movl	$(EFAULT),%eax		/* return error for failure */
 	ret
+
+/*
+ * Copyin 32 or 64 bit aligned word as a single transaction
+ * rdi: source address (user)
+ * rsi: destination address (kernel)
+ * rdx: size (4 or 8)
+ */
+Entry(_copyin_word)
+	pushq	%rbp			/* Save registers */
+	movq	%rsp, %rbp
+	cmpl	$0x4, %edx		/* If size = 4 */
+	je	L_copyin_word_4		/* 	handle 32-bit load */
+	movl	$(EINVAL), %eax		/* Set up error status */
+	cmpl	$0x8, %edx		/* If size != 8 */
+	jne	L_copyin_word_exit	/*	exit with error */
+	RECOVERY_SECTION
+	RECOVER(L_copyin_word_fail)	/* Set up recovery handler for next instruction*/
+	movq	(%rdi), %rax		/* Load quad from user */
+	jmp	L_copyin_word_store
+L_copyin_word_4:
+	RECOVERY_SECTION
+	RECOVER(L_copyin_word_fail)	/* Set up recovery handler for next instruction */
+	movl	(%rdi), %eax		/* Load long from user */
+L_copyin_word_store:
+	movq	%rax, (%rsi)		/* Store to kernel */
+	xorl	%eax, %eax		/* Return success */
+L_copyin_word_exit:
+	popq	%rbp			/* Restore registers */
+	retq				/* Return */
+
+L_copyin_word_fail:
+	movl	$(EFAULT), %eax		/* Return error for failure */
+	popq	%rbp			/* Restore registers */
+	retq				/* Return */
+
 
 /*
  * Done with recovery table.

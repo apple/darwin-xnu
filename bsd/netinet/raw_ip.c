@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -89,6 +89,7 @@
 #define _IP_VHL
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
+#include <netinet/in_tclass.h>
 #include <netinet/ip.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
@@ -197,9 +198,7 @@ static struct	sockaddr_in ripsrc = { sizeof(ripsrc), AF_INET , 0, {0}, {0,0,0,0,
  * mbuf chain.
  */
 void
-rip_input(m, iphlen)
-	struct mbuf *m;
-	int iphlen;
+rip_input(struct mbuf *m, int iphlen)
 {
 	struct ip *ip = mtod(m, struct ip *);
 	struct inpcb *inp;
@@ -276,7 +275,7 @@ rip_input(m, iphlen)
 				} else {
 					if (error) {
 						/* should notify about lost packet */
-						kprintf("rip_input can't append to socket\n");
+						ipstat.ips_raw_sappend_fail++;
 					}
 				}
 				opts = 0;
@@ -312,7 +311,7 @@ rip_input(m, iphlen)
 				if (ret != 0) {
 					m_freem(m);
 					m_freem(opts);
-					goto unlock;		
+					goto unlock;
 				}
 			}
 			if (last->inp_flags & INP_STRIPHDR) {
@@ -325,7 +324,7 @@ rip_input(m, iphlen)
 				(struct sockaddr *)&ripsrc, m, opts, NULL) != 0) {
 				sorwakeup(last->inp_socket);
 			} else {
-				kprintf("rip_input(2) can't append to socket\n");
+				ipstat.ips_raw_sappend_fail++;
 			}
 		} else {
 			m_freem(m);
@@ -335,7 +334,7 @@ rip_input(m, iphlen)
 	}
 unlock:
 	/*
-	 * Keep the list locked because socket filter may force the socket lock 
+	 * Keep the list locked because socket filter may force the socket lock
 	 * to be released when calling sbappendaddr() -- see rdar://7627704
 	 */
 	lck_rw_done(ripcbinfo.ipi_lock);
@@ -356,16 +355,21 @@ rip_output(
 	struct inpcb *inp = sotoinpcb(so);
 	int flags = (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
 	struct ip_out_args ipoa =
-	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0 };
+	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0, 0, 0 };
 	struct ip_moptions *imo;
 	int error = 0;
-	mbuf_svc_class_t msc = MBUF_SC_UNSPEC;
+	int sotc = SO_TC_UNSPEC;
+	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 
 	if (control != NULL) {
-		msc = mbuf_service_class_from_control(control);
+		sotc = so_tc_from_control(control, &netsvctype);
 
 		m_freem(control);
 		control = NULL;
+	}
+	if (sotc == SO_TC_UNSPEC) {
+		sotc = so->so_traffic_class;
+		netsvctype = so->so_netsvctype;
 	}
 
 	if (inp == NULL
@@ -391,6 +395,8 @@ rip_output(
 		ipoa.ipoa_flags |=  IPOAF_NO_EXPENSIVE;
 	if (INP_AWDL_UNRESTRICTED(inp))
 		ipoa.ipoa_flags |=  IPOAF_AWDL_UNRESTRICTED;
+	ipoa.ipoa_sotc = sotc;
+	ipoa.ipoa_netsvctype = netsvctype;
 
 	if (inp->inp_flowhash == 0)
 		inp->inp_flowhash = inp_calc_flowhash(inp);
@@ -444,6 +450,41 @@ rip_output(
 	{
 		necp_kernel_policy_id policy_id;
 		u_int32_t route_rule_id;
+
+		/*
+		 * We need a route to perform NECP route rule checks
+		 */
+		if (net_qos_policy_restricted != 0 &&
+		    ROUTE_UNUSABLE(&inp->inp_route)) {
+			struct sockaddr_in to;
+			struct sockaddr_in from;
+			struct in_addr laddr = ip->ip_src;
+
+			ROUTE_RELEASE(&inp->inp_route);
+
+			bzero(&from, sizeof(struct sockaddr_in));
+			from.sin_family = AF_INET;
+			from.sin_len = sizeof(struct sockaddr_in);
+			from.sin_addr = laddr;
+
+			bzero(&to, sizeof(struct sockaddr_in));
+			to.sin_family = AF_INET;
+			to.sin_len = sizeof(struct sockaddr_in);
+			to.sin_addr.s_addr = ip->ip_dst.s_addr;
+
+			if ((error = in_pcbladdr(inp, (struct sockaddr *)&to,
+			    &laddr, ipoa.ipoa_boundif, NULL, 1)) != 0) {
+				printf("%s in_pcbladdr(%p) error %d\n",
+					__func__, inp, error);
+				m_freem(m);
+				return (error);
+			}
+
+			inp_update_necp_policy(inp, (struct sockaddr *)&from,
+			    (struct sockaddr *)&to, ipoa.ipoa_boundif);
+			inp->inp_policyresult.results.qos_marking_gencount = 0;
+		}
+
 		if (!necp_socket_is_allowed_to_send_recv_v4(inp, 0, 0,
 			&ip->ip_src, &ip->ip_dst, NULL, &policy_id, &route_rule_id)) {
 			m_freem(m);
@@ -451,8 +492,27 @@ rip_output(
 		}
 
 		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id);
+
+		if (net_qos_policy_restricted != 0) {
+			struct ifnet *rt_ifp = NULL;
+
+			if (inp->inp_route.ro_rt != NULL)
+				rt_ifp = inp->inp_route.ro_rt->rt_ifp;
+
+			printf("%s inp %p last_pid %u inp_boundifp %d inp_last_outifp %d rt_ifp %d route_rule_id %u\n",
+				__func__, inp,
+				inp->inp_socket != NULL ? inp->inp_socket->last_pid : -1,
+				inp->inp_boundifp != NULL ? inp->inp_boundifp->if_index : -1,
+				inp->inp_last_outifp != NULL ?  inp->inp_last_outifp->if_index : -1,
+				rt_ifp != NULL ?  rt_ifp->if_index : -1,
+				route_rule_id);
+			necp_socket_update_qos_marking(inp, inp->inp_route.ro_rt,
+			    NULL, route_rule_id);
+		}
 	}
 #endif /* NECP */
+	if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED))
+		ipoa.ipoa_flags |= IPOAF_QOSMARKING_ALLOWED;
 
 #if IPSEC
 	if (inp->inp_sp != NULL && ipsec_setsocket(m, so) != 0) {
@@ -464,7 +524,7 @@ rip_output(
 	if (ROUTE_UNUSABLE(&inp->inp_route))
 		ROUTE_RELEASE(&inp->inp_route);
 
-	set_packet_service_class(m, so, msc, 0);
+	set_packet_service_class(m, so, sotc, 0);
 	m->m_pkthdr.pkt_flowsrc = FLOWSRC_INPCB;
 	m->m_pkthdr.pkt_flowid = inp->inp_flowhash;
 	m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC |
@@ -533,15 +593,15 @@ int
 load_ipfw(void)
 {
 	kern_return_t	err;
-	
+
 	ipfw_init();
-	
+
 #if DUMMYNET
 	if (!DUMMYNET_LOADED)
 		ip_dn_init();
 #endif /* DUMMYNET */
 	err = 0;
-	
+
 	return err == 0 && ip_fw_ctl_ptr == NULL ? -1 : err;
 }
 #endif /* IPFIREWALL */
@@ -550,9 +610,7 @@ load_ipfw(void)
  * Raw IP socket option processing.
  */
 int
-rip_ctloutput(so, sopt)
-	struct socket *so;
-	struct sockopt *sopt;
+rip_ctloutput(struct socket *so, struct sockopt *sopt)
 {
 	struct	inpcb *inp = sotoinpcb(so);
 	int	error, optval;
@@ -965,7 +1023,7 @@ bad:
 }
 
 /* note: rip_unlock is called from different protos  instead of the generic socket_unlock,
- * it will handle the socket dealloc on last reference 
+ * it will handle the socket dealloc on last reference
  * */
 int
 rip_unlock(struct socket *so, int refcount, void *debug)
@@ -1040,7 +1098,7 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 	 */
 	gencnt = ripcbinfo.ipi_gencnt;
 	n = ripcbinfo.ipi_count;
-	
+
 	bzero(&xig, sizeof(xig));
 	xig.xig_len = sizeof xig;
 	xig.xig_count = n;
@@ -1056,7 +1114,7 @@ rip_pcblist SYSCTL_HANDLER_ARGS
      */
     if (n == 0) {
 	lck_rw_done(ripcbinfo.ipi_lock);
-        return 0; 
+        return 0;
     }
 
 	inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
@@ -1064,7 +1122,7 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 		lck_rw_done(ripcbinfo.ipi_lock);
 		return ENOMEM;
 	}
-	
+
 	for (inp = ripcbinfo.ipi_listhead->lh_first, i = 0; inp && i < n;
 	     inp = inp->inp_list.le_next) {
 		if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD)

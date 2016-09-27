@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -133,7 +133,7 @@ typedef mach_vm_address_t	mach_port_context_t;
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#if VM32_SUPPORT
+#ifdef VM32_SUPPORT
 
 /*
  * These are types used internal to Mach to implement the

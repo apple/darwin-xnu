@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -47,6 +47,9 @@
 #define __KPI_MBUF__
 #include <sys/kernel_types.h>
 #include <mach/vm_types.h>
+#ifdef KERNEL_PRIVATE
+#include <mach/kern_return.h>
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@enum mbuf_flags_t
@@ -444,6 +447,20 @@ extern errno_t mbuf_alloccluster(mbuf_how_t how, size_t *size, caddr_t *addr);
  */
 extern void mbuf_freecluster(caddr_t addr, size_t size);
 
+#ifdef BSD_KERNEL_PRIVATE
+/*
+ * For now, restrict these to BSD kernel privates, since they are
+ * used only by the Nexus netif compatibility code.
+ */
+extern errno_t mbuf_ring_cluster_alloc(mbuf_how_t how, mbuf_type_t type,
+    mbuf_t *mbuf, void (*extfree)(caddr_t, u_int, caddr_t), size_t *size);
+extern int mbuf_ring_cluster_is_active(mbuf_t mbuf);
+extern errno_t mbuf_ring_cluster_activate(mbuf_t mbuf);
+extern errno_t mbuf_cluster_set_prop(mbuf_t mbuf, u_int32_t oldprop,
+    u_int32_t newprop);
+extern errno_t mbuf_cluster_get_prop(mbuf_t mbuf, u_int32_t *prop);
+#endif /* BSD_KERNEL_PRIVATE */
+
 /*!
 	@function mbuf_getcluster
 	@discussion Allocate a cluster of the requested size and attach it to
@@ -519,7 +536,7 @@ extern errno_t mbuf_mclget(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf);
 		pointed to by maxchunks.  E.g. a request for 9018 bytes may
 		result in 1 chunk when jumbo clusters are available, or
 		3 chunks otherwise.
-	@param Upon success, *mbuf will be a reference to the new mbuf.
+	@param mbuf Upon success, *mbuf will be a reference to the new mbuf.
 	@result Returns 0 upon success or the following error code:
 		EINVAL - Invalid parameter
 		ENOMEM - Not enough memory available
@@ -558,7 +575,7 @@ extern errno_t mbuf_allocpacket(mbuf_how_t how, size_t packetlen,
 		pointed to by maxchunks.  E.g. a request for 9018 bytes may
 		result in 1 chunk when jumbo clusters are available, or
 		3 chunks otherwise.
-	@param Upon success, *mbuf will be a reference to the new mbuf.
+	@param mbuf Upon success, *mbuf will be a reference to the new mbuf.
 	@result Returns 0 upon success or the following error code:
 		EINVAL - Invalid parameter
 		ENOMEM - Not enough memory available
@@ -862,7 +879,6 @@ extern size_t mbuf_len(const mbuf_t mbuf);
 		not set the length over the space available in the mbuf.
 	@param mbuf The mbuf.
 	@param len The new length.
-	@result 0 upon success otherwise the errno error.
  */
 extern void mbuf_setlen(mbuf_t mbuf, size_t len);
 
@@ -929,7 +945,7 @@ extern errno_t mbuf_setflags_mask(mbuf_t mbuf, mbuf_flags_t flags,
 	@function mbuf_copy_pkthdr
 	@discussion Copies the packet header from src to dest.
 	@param src The mbuf from which the packet header will be copied.
-	@param mbuf The mbuf to which the packet header will be copied.
+	@param dest The mbuf to which the packet header will be copied.
 	@result 0 upon success otherwise the errno error.
  */
 extern errno_t mbuf_copy_pkthdr(mbuf_t dest, const mbuf_t src);
@@ -991,7 +1007,7 @@ extern ifnet_t mbuf_pkthdr_rcvif(const mbuf_t mbuf);
 	@function mbuf_pkthdr_setrcvif
 	@discussion Sets the interface the packet was received on.
 	@param mbuf The mbuf containing the packet header.
-	@param ifnet A reference to an interface.
+	@param ifp A reference to an interface.
 	@result 0 upon success otherwise the errno error.
  */
 extern errno_t mbuf_pkthdr_setrcvif(mbuf_t mbuf, ifnet_t ifp);
@@ -1008,8 +1024,7 @@ extern void *mbuf_pkthdr_header(const mbuf_t mbuf);
 	@function mbuf_pkthdr_setheader
 	@discussion Sets the pointer to the packet header.
 	@param mbuf The mbuf containing the packet header.
-	@param ifnet A pointer to the header.
-	@result 0 upon success otherwise the errno error.
+	@param header A pointer to the header.
  */
 extern void mbuf_pkthdr_setheader(mbuf_t mbuf, void *header);
 
@@ -1103,7 +1118,7 @@ extern errno_t mbuf_get_vlan_tag(mbuf_t mbuf, u_int16_t *vlan);
 extern errno_t mbuf_clear_vlan_tag(mbuf_t mbuf);
 
 #ifdef KERNEL_PRIVATE
-/*
+/*!
 	@function mbuf_set_csum_requested
 	@discussion This function is used by the stack to indicate which
 		checksums should be calculated in hardware. The stack normally
@@ -1224,7 +1239,7 @@ extern errno_t mbuf_clear_csum_performed(mbuf_t mbuf);
 
 /*!
 	@function mbuf_inet_cksum
-	@discussions Calculates 16-bit 1's complement Internet checksum of the
+	@discussion Calculates 16-bit 1's complement Internet checksum of the
 		transport segment with or without the pseudo header checksum
 		of a given IPv4 packet.  If the caller specifies a non-zero
 		transport protocol, the checksum returned will also include
@@ -1253,7 +1268,7 @@ extern errno_t mbuf_inet_cksum(mbuf_t mbuf, int protocol, u_int32_t offset,
 
 /*!
 	@function mbuf_inet6_cksum
-	@discussions Calculates 16-bit 1's complement Internet checksum of the
+	@discussion Calculates 16-bit 1's complement Internet checksum of the
 		transport segment with or without the pseudo header checksum
 		of a given IPv6 packet.  If the caller specifies a non-zero
 		transport protocol, the checksum returned will also include
@@ -1353,7 +1368,7 @@ extern void mbuf_tag_free(mbuf_t mbuf, mbuf_tag_id_t module_id,
     mbuf_tag_type_t type);
 
 #ifdef KERNEL_PRIVATE
-/*
+/*!
 	@function mbuf_add_drvaux
 	@discussion Allocate space for driver auxiliary data and attach it
 		to the packet (MBUF_PKTHDR is required.)  This space is freed
@@ -1380,7 +1395,7 @@ extern void mbuf_tag_free(mbuf_t mbuf, mbuf_tag_id_t module_id,
 extern errno_t mbuf_add_drvaux(mbuf_t mbuf, mbuf_how_t how,
     u_int32_t family, u_int32_t subfamily, size_t length, void **data_p);
 
-/*
+/*!
 	@function mbuf_find_drvaux
 	@discussion Find the driver auxiliary data associated with a packet.
 	@param mbuf The mbuf the auxiliary data is attached to.
@@ -1400,7 +1415,7 @@ extern errno_t mbuf_add_drvaux(mbuf_t mbuf, mbuf_how_t how,
 extern errno_t mbuf_find_drvaux(mbuf_t mbuf, u_int32_t *family_p,
     u_int32_t *subfamily_p, u_int32_t *length_p, void **data_p);
 
-/*
+/*!
 	@function mbuf_del_drvaux
 	@discussion Remove and free any driver auxility data associated
 		with the packet.
@@ -1455,7 +1470,7 @@ extern mbuf_traffic_class_t mbuf_get_traffic_class(mbuf_t mbuf);
 	@function mbuf_set_traffic_class
 	@discussion Set the traffic class of an mbuf packet.
 	@param mbuf The mbuf to set the traffic class on.
-	@tc The traffic class
+	@param tc The traffic class
 	@result 0 on success, EINVAL if bad parameter is passed
 */
 extern errno_t mbuf_set_traffic_class(mbuf_t mbuf, mbuf_traffic_class_t tc);
@@ -1575,7 +1590,7 @@ extern mbuf_svc_class_t mbuf_get_service_class(mbuf_t mbuf);
 	@function mbuf_set_servicec_class
 	@discussion Set the service class of an mbuf packet.
 	@param mbuf The mbuf to set the service class on.
-	@sc The service class
+	@param sc The service class
 	@result 0 on success, EINVAL if bad parameter is passed
 */
 extern errno_t mbuf_set_service_class(mbuf_t mbuf, mbuf_svc_class_t sc);
@@ -1589,7 +1604,7 @@ extern errno_t mbuf_set_service_class(mbuf_t mbuf, mbuf_svc_class_t sc);
  */
 extern int mbuf_is_service_class_privileged(mbuf_t mbuf);
 
-/*
+/*!
 	@enum mbuf_pkthdr_aux_flags_t
 	@abstract Constants defining mbuf auxiliary flags.  Only the flags
 		listed below can be retrieved.
@@ -1606,7 +1621,7 @@ enum {
 };
 typedef u_int32_t mbuf_pkthdr_aux_flags_t;
 
-/*
+/*!
 	@function mbuf_pkthdr_aux_flags
 	@discussion Returns the auxiliary flags of a packet.
 	@param mbuf The mbuf containing the packet header.
@@ -1616,7 +1631,7 @@ typedef u_int32_t mbuf_pkthdr_aux_flags_t;
 extern errno_t mbuf_pkthdr_aux_flags(mbuf_t mbuf,
     mbuf_pkthdr_aux_flags_t *paux_flags);
 
-/*
+/*!
 	@function mbuf_get_driver_scratch
 	@discussion Returns a pointer to a driver specific area in the mbuf
 	@param m The mbuf whose driver scratch space is to be returned
@@ -1629,13 +1644,13 @@ extern errno_t mbuf_pkthdr_aux_flags(mbuf_t mbuf,
 extern errno_t mbuf_get_driver_scratch(mbuf_t m, u_int8_t **area,
     size_t *area_ln);
 
-/*
+/*!
 	@function mbuf_get_unsent_data_bytes
 	@discussion Returns the amount of data that is waiting to be sent
 		on this interface. This is a private SPI used by cellular
 		interface as an indication of future activity on that
 		interface.
-	@param mbuf The mbuf containingthe packet header
+	@param m The mbuf containing the packet header
 	@param unsent_data A pointer to an integer where the value of
 		unsent data will be set.
 	@result 0 upon success otherwise the errno error. If the mbuf
@@ -1644,6 +1659,58 @@ extern errno_t mbuf_get_driver_scratch(mbuf_t m, u_int8_t **area,
  */
 extern errno_t mbuf_get_unsent_data_bytes(const mbuf_t m,
     u_int32_t *unsent_data);
+
+typedef struct {
+	int32_t buf_interface; /* data to send at interface */
+	int32_t buf_sndbuf; /* data to send at socket buffer */
+} mbuf_buffer_status_t;
+
+/*!
+	@function mbuf_get_buffer_status
+	@discussion Returns the amount of data that is waiting to be sent
+		on this interface. This is a private SPI used by cellular
+		interface as an indication of future activity on that
+		interface.
+	@param m The mbuf containing the packet header
+	@param buf_status A pointer to the structure where the value of
+		unsent data will be set.
+	@result 0 upon success. If any of the arguments is NULL or if the
+		mbuf packet header does not have valid data bytes,
+		EINVAL will be returned
+ */
+extern errno_t mbuf_get_buffer_status(const mbuf_t m,
+	mbuf_buffer_status_t *buf_status);
+
+/*!
+	@function mbuf_pkt_new_flow
+	@discussion This function is used to check if the packet is from a
+		new flow that can be treated with higher priority. This is
+		a private SPI.
+	@param m The mbuf containing the packet header
+	@param retval A pointer to an integer used as an out argument. The
+		value is set to 1 if the packet is from a new flow,
+		otherwise it is set to 0.
+	@result	0 upon success otherwise the errno error. If any of the
+		arguments is NULL or if the mbuf does not have valid packet
+		header, the error code will be EINVAL
+ */
+extern errno_t mbuf_pkt_new_flow(const mbuf_t m, u_int32_t *retval);
+
+/*!
+	@function mbuf_last_pkt
+	@discussion This function is used to check if the packet is the
+		last one sent on a TCP socket. This is an advisory
+		for the underlying layers.
+	@param m The mbuf containing the packet header
+	@param retval A pointer to an integer whose value will be set to
+		1 if the packet is the last packet, otherwise it will
+		be set to 0.
+	@result 0 upon success otherwise the errno error. If any of the
+		arguments is NULL or if the mbuf does not have valid
+		packet header, the error code will be EINVAL
+ */
+extern errno_t mbuf_last_pkt(const mbuf_t m, u_int32_t *retval);
+
 #endif /* KERNEL_PRIVATE */
 
 #ifdef XNU_KERNEL_PRIVATE
@@ -1666,6 +1733,181 @@ extern size_t mbuf_pkt_list_len(const mbuf_t mbuf);
  */
 extern size_t mbuf_pkt_list_maxlen(const mbuf_t mbuf);
 #endif /* XNU_KERNEL_PRIVATE */
+
+#ifdef KERNEL_PRIVATE
+/*!
+	@function mbuf_get_timestamp
+	@discussion Retrieves the timestamp of the packet.
+	@param mbuf The mbuf representing the packet.
+	@param ts A pointer where the value of the timestamp will be copied
+		to.
+	@param valid A pointer to a boolean value that indicate if the 
+		timestamp is valid (i.e. the packet timestamp has been set).
+		If "false" the value of "ts" is undetermined.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_get_timestamp(mbuf_t mbuf, u_int64_t *ts, boolean_t *valid);
+
+/*!
+	@function mbuf_set_timestamp
+	@discussion Set the timestamp of the packet.
+	@param mbuf The mbuf representing the packet.
+	@param ts The value of the timestamp to be stored in the mbuf packet
+		header
+	@param valid A boolean value that indicate if the timestamp is valid.
+		Passing false clears any previous timestamp value.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_set_timestamp(mbuf_t mbuf, u_int64_t ts, boolean_t valid);
+
+/*!
+	@typedef mbuf_tx_compl_func
+	@discussion This callback is used to indicate when a driver has
+		transmitted a packet.
+	@param pktid The packet indentifier that was returned by
+		mbuf_set_timestamp_requested()
+	@param ifp The outgoing interface or NULL if the packet was dropped
+		before reaching the driver
+	@param ts The timestamp in nanoseconds when the packet was transmitted
+	@param tx_compl_arg An argument set by the driver
+	@param tx_compl_data Additional data set by the driver
+	@param tx_compl_val The transmission status is expected to be an
+		IOReturn value -- see <IOKit/IOReturn.h>
+*/
+
+typedef void (*mbuf_tx_compl_func)(uintptr_t pktid, ifnet_t ifp, u_int64_t ts,
+    uintptr_t tx_compl_arg, uintptr_t tx_compl_data, kern_return_t tx_compl_val);
+
+/*!
+	@function mbuf_register_tx_compl_callback
+	@discussion Register a transmit completion callback function. The
+		callback function must be unregistered before the calling
+		module unloads.
+	@param callback The completion callback function to register
+	@result 0 upon success otherwise the errno error. ENOSPC is returned
+		if too many callbacks are registered. EINVAL is returned when
+		the function pointer is invalid. EEXIST is returned when
+		the function pointer is already registered.
+ */
+extern errno_t mbuf_register_tx_compl_callback(
+    mbuf_tx_compl_func callback);
+
+/*!
+	@function mbuf_unregister_tx_compl_callback
+	@discussion Unregister a transmit completion callback function. The
+		callback function must be unregistered before the calling
+		module unloads.
+	@param callback The completion callback function to unregister
+	@result 0 upon success otherwise the errno error. EINVAL is returned 
+		when the function pointer is invalid. ENOENT is returned when
+		the function pointer is not registered.
+ */
+extern errno_t mbuf_unregister_tx_compl_callback(
+    mbuf_tx_compl_func callback);
+
+/*!
+	@function mbuf_get_timestamp_requested
+	@discussion Tell if the packet timestamp needs to be set. This is meant
+		to be used by a driver on egress packets.
+	@param mbuf The mbuf representing the packet.
+	@param requested A pointer to a boolean value that indicate if the 				
+		timestamp was requested to be set.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_get_timestamp_requested(mbuf_t mbuf, boolean_t *requested);
+
+/*!
+	@function mbuf_set_timestamp_requested
+	@discussion Indicate the callback is expected to be called with the
+		transmission complete timestamp. This is meant to be used
+		on egress packet by the driver.
+	@param mbuf The mbuf representing the packet.
+	@param callback A previously registered completion callback function.
+	@param pktid An output parameter with an opaque value that can be used 			
+		to identify the packet.
+	@result 0 upon success otherwise the errno error. EINVAL is retuned
+		if the mbuf is not a valid packet or if one of the parameter
+		is NULL. ENOENT if the callback is not registred.
+ */
+extern errno_t mbuf_set_timestamp_requested(mbuf_t mbuf,  
+    uintptr_t *pktid, mbuf_tx_compl_func callback);
+
+/*!
+	@function mbuf_get_status
+	@discussion Retrieves the packet completion status.
+	@param mbuf The mbuf representing the packet.
+	@param status A pointer where the value of the completion status will
+		be copied to.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_get_status(mbuf_t mbuf, kern_return_t *status);
+
+/*!
+	@function mbuf_set_status
+	@discussion Store the packet completion status in the mbuf packet
+		header.
+	@param mbuf The mbuf representing the packet.
+	@param status The value of the completion status.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_set_status(mbuf_t mbuf, kern_return_t status);
+
+/*!
+	@function mbuf_get_tx_compl_data
+	@discussion Retrieves the packet completion status.
+	@param m The mbuf representing the packet.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_get_tx_compl_data(mbuf_t m, uintptr_t *arg,
+    uintptr_t *data);
+
+/*!
+	@function mbuf_set_tx_compl_data
+	@discussion Retrieves the packet completion status.
+	@param m The mbuf representing the packet.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_set_tx_compl_data(mbuf_t m, uintptr_t arg,
+    uintptr_t data);
+
+/*!
+	@function mbuf_get_flowid
+	@discussion Retrieve the flow ID of the packet .
+	@param mbuf The mbuf representing the packet.
+	@param flowid The flow ID of the packet.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_get_flowid(mbuf_t mbuf, u_int16_t *flowid);
+
+/*!
+	@function mbuf_set_flowid
+	@discussion Set the flow ID of the packet .
+	@param mbuf The mbuf representing the packet.
+	@param flowid The flow ID to be set.
+	@result 0 upon success otherwise the errno error. If the mbuf
+		packet header does not have valid data bytes, the error
+		code will be EINVAL
+ */
+extern errno_t mbuf_set_flowid(mbuf_t mbuf, u_int16_t flowid);
+
+
+#endif /* KERNEL_PRIVATE */
 
 /* IF_QUEUE interaction */
 

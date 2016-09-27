@@ -122,7 +122,7 @@ zone_t	device_pager_zone;
 void
 device_pager_bootstrap(void)
 {
-	register vm_size_t      size;
+	vm_size_t      size;
 
 	size = (vm_size_t) sizeof(struct device_pager);
 	device_pager_zone = zinit(size, (vm_size_t) MAX_DNODE*size,
@@ -450,7 +450,7 @@ device_pager_last_unmap(
 device_pager_t
 device_object_create(void)
 {
-	register device_pager_t  device_object;
+	device_pager_t  device_object;
 
 	device_object = (struct device_pager *) zalloc(device_pager_zone);
 	if (device_object == DEVICE_PAGER_NULL)
@@ -464,3 +464,11 @@ device_object_create(void)
 	return(device_object);
 }
 
+boolean_t
+is_device_pager_ops(const struct memory_object_pager_ops *pager_ops)
+{
+	if (pager_ops == &device_pager_ops) {
+		return TRUE;
+	}
+	return FALSE;
+}

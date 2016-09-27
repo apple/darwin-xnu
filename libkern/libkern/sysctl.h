@@ -107,7 +107,11 @@ __BEGIN_DECLS
 /*
  * Sysctl handling
  */
+#ifdef XNU_KERNEL_PRIVATE
+int     kernel_sysctlbyname(const char *, void *, size_t *, void *, size_t);
+#else
 int     sysctlbyname(const char *, void *, size_t *, void *, size_t);
+#endif
 
 __END_DECLS
 

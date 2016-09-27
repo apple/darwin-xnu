@@ -32,6 +32,8 @@
 #ifndef _KERN_LEDGER_H_
 #define _KERN_LEDGER_H_
 
+#include <mach/mach_types.h>	/* ledger_t */
+
 #define	LEDGER_INFO		0
 #define	LEDGER_ENTRY_INFO	1
 #define	LEDGER_TEMPLATE_INFO	2
@@ -54,11 +56,11 @@ struct ledger_template_info {
 };
 
 struct ledger_entry_info {
-        int64_t		lei_balance;
-        int64_t		lei_credit;
-        int64_t		lei_debit;
-        uint64_t	lei_limit;
-	uint64_t	lei_refill_period;	/* In milliseconds */
+	int64_t		lei_balance;
+	int64_t		lei_credit;
+	int64_t		lei_debit;
+	uint64_t	lei_limit;
+	uint64_t	lei_refill_period;	/* In nanoseconds */
 	uint64_t	lei_last_refill;	/* Time since last refill */
 };
 
@@ -99,6 +101,8 @@ extern kern_return_t ledger_set_callback(ledger_template_t template, int entry,
 extern kern_return_t ledger_track_maximum(ledger_template_t template, int entry,
 	int period_in_secs);
 extern kern_return_t ledger_panic_on_negative(ledger_template_t template,
+					      int entry);
+extern kern_return_t ledger_track_credit_only(ledger_template_t template,
 					      int entry);
 extern int ledger_key_lookup(ledger_template_t template, const char *key);
 

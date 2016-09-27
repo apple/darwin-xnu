@@ -136,6 +136,7 @@ struct pktap_header {
 #define PTH_FLAG_DELAY_PKTAP		0x1000	/* Finalize pktap header on read */
 #endif /* BSD_KERNEL_PRIVATE */
 #define PTH_FLAG_TSTAMP			0x2000	/* Has time stamp */
+#define	PTH_FLAG_NEW_FLOW		0x4000	/* Packet from a new flow */
 
 
 #ifdef BSD_KERNEL_PRIVATE

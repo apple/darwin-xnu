@@ -92,13 +92,20 @@ typedef struct vm_shared_region *vm_shared_region_t;
 #include <vm/vm_object.h>
 #include <vm/memory_object.h>
 
-typedef struct vm_shared_region_slide_info_entry	*vm_shared_region_slide_info_entry_t;
-struct vm_shared_region_slide_info_entry {
+#define PAGE_SIZE_FOR_SR_SLIDE	4096
+
+/* Documentation for the slide info format can be found in the dyld project in
+ * the file 'launch-cache/dyld_cache_format.h'. */
+
+typedef struct vm_shared_region_slide_info_entry_v1 *vm_shared_region_slide_info_entry_v1_t;
+struct vm_shared_region_slide_info_entry_v1 {
 	uint32_t	version;
 	uint32_t	toc_offset;	// offset from start of header to table-of-contents
 	uint32_t	toc_count;	// number of entries in toc (same as number of pages in r/w mapping)
 	uint32_t	entry_offset;
 	uint32_t	entry_count;
+	// uint16_t	toc[toc_count];
+	// entrybitmap	entries[entries_count];
 };
 
 #define NBBY	8
@@ -106,6 +113,34 @@ struct vm_shared_region_slide_info_entry {
 typedef struct slide_info_entry_toc	*slide_info_entry_toc_t;
 struct slide_info_entry_toc { 
 	uint8_t entry[NUM_SLIDING_BITMAPS_PER_PAGE];
+};
+
+typedef struct vm_shared_region_slide_info_entry_v2 *vm_shared_region_slide_info_entry_v2_t;
+struct vm_shared_region_slide_info_entry_v2 {
+	uint32_t	version;
+	uint32_t	page_size;
+	uint32_t	page_starts_offset;
+	uint32_t	page_starts_count;
+	uint32_t	page_extras_offset;
+	uint32_t	page_extras_count;
+	uint64_t	delta_mask;		// which (contiguous) set of bits contains the delta to the next rebase location
+	uint64_t	value_add;
+	// uint16_t	page_starts[page_starts_count];
+	// uint16_t	page_extras[page_extras_count];
+};
+
+#define DYLD_CACHE_SLIDE_PAGE_ATTRS		0xC000	// high bits of uint16_t are flags
+#define DYLD_CACHE_SLIDE_PAGE_ATTR_EXTRA	0x8000	// index is into extras array (not starts array)
+#define DYLD_CACHE_SLIDE_PAGE_ATTR_NO_REBASE	0x4000	// page has no rebasing
+#define DYLD_CACHE_SLIDE_PAGE_ATTR_END		0x8000	// last chain entry for page
+#define DYLD_CACHE_SLIDE_PAGE_VALUE		0x3FFF	// bitwise negation of DYLD_CACHE_SLIDE_PAGE_ATTRS
+#define DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT	2
+
+typedef union vm_shared_region_slide_info_entry *vm_shared_region_slide_info_entry_t;
+union vm_shared_region_slide_info_entry {
+	uint32_t	version;
+	struct vm_shared_region_slide_info_entry_v1	v1;
+	struct vm_shared_region_slide_info_entry_v2	v2;
 };
 
 typedef struct vm_shared_region_slide_info *vm_shared_region_slide_info_t;
@@ -156,6 +191,7 @@ extern void vm_shared_region_init(void);
 extern kern_return_t vm_shared_region_enter(
 	struct _vm_map		*map,
 	struct task		*task,
+	boolean_t		is_64bit,
 	void			*fsroot,
 	cpu_type_t		cpu);
 extern kern_return_t vm_shared_region_remove(
@@ -211,7 +247,8 @@ extern void vm_commpage_init(void);
 extern void vm_commpage_text_init(void);
 extern kern_return_t vm_commpage_enter(
 	struct _vm_map		*map,
-	struct task		*task);
+	struct task		*task,
+	boolean_t		is64bit);
 extern kern_return_t vm_commpage_remove(
 	struct _vm_map		*map,
 	struct task		*task);

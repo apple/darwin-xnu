@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -72,7 +72,7 @@
 #ifndef	_IPC_IPC_PORT_H_
 #define _IPC_IPC_PORT_H_
 
-#if MACH_KERNEL_PRIVATE
+#ifdef MACH_KERNEL_PRIVATE
 
 #include <mach_rt.h>
 #include <mach_assert.h>
@@ -120,15 +120,6 @@ struct ipc_port {
 	struct ipc_object ip_object;
 	struct ipc_mqueue ip_messages;
 
-	natural_t ip_sprequests:1,	/* send-possible requests outstanding */
-		  ip_spimportant:1,	/* ... at least one is importance donating */
-		  ip_impdonation:1,	/* port supports importance donation */
-		  ip_tempowner:1,	/* dont give donations to current receiver */
-		  ip_guarded:1,         /* port guarded (use context value as guard) */
-		  ip_strict_guard:1,	/* Strict guarding; Prevents user manipulation of context values directly */
-		  ip_reserved:2,
-		  ip_impcount:24;	/* number of importance donations in nested queue */
-
 	union {
 		struct ipc_space *receiver;
 		struct ipc_port *destination;
@@ -147,6 +138,15 @@ struct ipc_port {
 	struct ipc_kmsg *ip_premsg;
 
 	mach_vm_address_t ip_context;
+
+	natural_t ip_sprequests:1,	/* send-possible requests outstanding */
+		  ip_spimportant:1,	/* ... at least one is importance donating */
+		  ip_impdonation:1,	/* port supports importance donation */
+		  ip_tempowner:1,	/* dont give donations to current receiver */
+		  ip_guarded:1,         /* port guarded (use context value as guard) */
+		  ip_strict_guard:1,	/* Strict guarding; Prevents user manipulation of context values directly */
+		  ip_reserved:2,
+		  ip_impcount:24;	/* number of importance donations in nested queue */
 
 	mach_port_mscount_t ip_mscount;
 	mach_port_rights_t ip_srights;
@@ -190,6 +190,15 @@ struct ipc_port {
 
 #define	ip_reference(port)	io_reference(&(port)->ip_object)
 #define	ip_release(port)	io_release(&(port)->ip_object)
+
+/* get an ipc_port pointer from an ipc_mqueue pointer */
+#define	ip_from_mq(mq)		((struct ipc_port *)((void *)( \
+					(char *)(mq) - \
+					__offsetof(struct ipc_port, ip_messages)) \
+				))
+
+#define	ip_reference_mq(mq)	ip_reference(ip_from_mq(mq))
+#define	ip_release_mq(mq)	ip_release(ip_from_mq(mq))
 
 #define	ip_kotype(port)		io_kotype(&(port)->ip_object)
 
@@ -340,18 +349,12 @@ extern ipc_port_t ipc_port_request_cancel(
 	ipc_port_request_index_t	index);
 
 /* Arm any delayed send-possible notification */
-#if IMPORTANCE_INHERITANCE
 extern boolean_t ipc_port_request_sparm(
-	ipc_port_t			port,
-	mach_port_name_t		name,
-	ipc_port_request_index_t	index,
-	mach_msg_option_t		option);
-#else
-extern boolean_t ipc_port_request_sparm(
-	ipc_port_t			port,
-	mach_port_name_t		name,
-	ipc_port_request_index_t	index);
-#endif /* IMPORTANCE_INHERITANCE */
+	ipc_port_t                port,
+	mach_port_name_t          name,
+	ipc_port_request_index_t  index,
+	mach_msg_option_t         option,
+	mach_msg_priority_t       override);
 
 /* Macros for manipulating a port's dead name notificaiton requests */
 #define	ipc_port_request_rename(port, index, oname, nname)		\
@@ -391,8 +394,9 @@ MACRO_BEGIN								\
 MACRO_END
 
 /* Prepare a receive right for transmission/destruction */
-extern void ipc_port_clear_receiver(
-	ipc_port_t		port);
+extern boolean_t ipc_port_clear_receiver(
+	ipc_port_t		port,
+	boolean_t		should_destroy);
 
 /* Initialize a newly-allocated port */
 extern void ipc_port_init(
@@ -499,7 +503,7 @@ extern void ipc_port_release(
 
 #endif /* KERNEL_PRIVATE */
 
-#if MACH_KERNEL_PRIVATE
+#ifdef MACH_KERNEL_PRIVATE
 
 /* Make a naked send-once right from a locked and active receive right */
 extern ipc_port_t ipc_port_make_sonce_locked(

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -618,10 +618,8 @@ devfs_read(struct vnop_read_args *ap)
 	  default: {
 	      printf("devfs_read(): bad file type %d", ap->a_vp->v_type);
 	      return(EINVAL);
-	      break;
 	  }
 	}
-	return (0); /* not reached */
 }
 
 static int
@@ -633,7 +631,7 @@ devfs_close(struct vnop_close_args *ap)
 	} */
 {
     	struct vnode *	    	vp = ap->a_vp;
-	register devnode_t * 	dnp;
+	devnode_t * 	dnp;
 
 	if (vnode_isinuse(vp, 1)) {
 	    DEVFS_LOCK();
@@ -653,7 +651,7 @@ devfsspec_close(struct vnop_close_args *ap)
 	} */
 {
     	struct vnode *	    	vp = ap->a_vp;
-	register devnode_t * 	dnp;
+	devnode_t * 	dnp;
 
 	if (vnode_isinuse(vp, 0)) {
 	    DEVFS_LOCK();
@@ -725,7 +723,7 @@ devfsspec_read(struct vnop_read_args *ap)
                 kauth_cred_t a_cred;
         } */
 {
-	register devnode_t * 	dnp = VTODN(ap->a_vp);
+	devnode_t * 	dnp = VTODN(ap->a_vp);
 
 	devfs_consider_time_update(dnp, DEVFS_UPDATE_ACCESS);
 
@@ -741,7 +739,7 @@ devfsspec_write(struct vnop_write_args *ap)
 		vfs_context_t a_context;
         } */
 {
-	register devnode_t * 	dnp = VTODN(ap->a_vp);
+	devnode_t * 	dnp = VTODN(ap->a_vp);
 
 	devfs_consider_time_update(dnp, DEVFS_UPDATE_CHANGE | DEVFS_UPDATE_MOD);
 
@@ -767,7 +765,6 @@ devfs_write(struct vnop_write_args *ap)
 		printf("devfs_write(): bad file type %d", ap->a_vp->v_type);
 		return (EINVAL);
 	}
-	return 0; /* not reached */
 }
 
 /* 

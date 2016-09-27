@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2012 Apple Inc.
+ * Copyright (c) 1999-2016 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -132,6 +132,14 @@ audit_arg_len(struct kaudit_record *ar, user_size_t len)
 
 	ar->k_ar.ar_arg_len = len;
 	ARG_SET_VALID(ar, ARG_LEN);
+}
+
+void
+audit_arg_fd2(struct kaudit_record *ar, int fd)
+{
+
+	ar->k_ar.ar_arg_fd2 = fd;
+	ARG_SET_VALID(ar, ARG_FD2);
 }
 
 void

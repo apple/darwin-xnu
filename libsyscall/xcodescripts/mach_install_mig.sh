@@ -57,6 +57,11 @@ MIG_INTERNAL_HEADER_DST="$BUILT_PRODUCTS_DIR/internal_hdr/include/mach"
 MIG_PRIVATE_DEFS_INCFLAGS="-I${SDKROOT}/System/Library/Frameworks/System.framework/PrivateHeaders"
 FILTER_MIG="$SRCROOT/xcodescripts/filter_mig.awk"
 
+ASROOT=""
+if [ `whoami` = "root" ]; then
+	ASROOT="-o 0"
+fi
+
 MIGS="clock.defs
 	clock_priv.defs
 	clock_reply.defs
@@ -109,13 +114,13 @@ MIG_FILTERS="watchos_prohibited_mig.txt tvos_prohibited_mig.txt"
 # install /usr/include/server headers 
 mkdir -p $SERVER_HEADER_DST
 for hdr in $SERVER_HDRS; do
-	install -o 0 -c -m 444 $SRC/servers/$hdr $SERVER_HEADER_DST
+	install $ASROOT -c -m 444 $SRC/servers/$hdr $SERVER_HEADER_DST
 done
 
 # install /usr/include/mach headers
 mkdir -p $MACH_HEADER_DST
 for hdr in $MACH_HDRS; do
-	install -o 0 -c -m 444 $SRC/mach/$hdr $MACH_HEADER_DST
+	install $ASROOT -c -m 444 $SRC/mach/$hdr $MACH_HEADER_DST
 done
 
 # special case because we only have one to do here
@@ -133,7 +138,7 @@ for mig in $MIGS $MIGS_DUAL_PUBLIC_PRIVATE; do
 		$FILTER_MIG $SRC/$filter $MIG_HEADER_OBJ/$MIG_NAME.h > $MIG_HEADER_OBJ/$MIG_NAME.tmp.h
 		mv $MIG_HEADER_OBJ/$MIG_NAME.tmp.h $MIG_HEADER_OBJ/$MIG_NAME.h
 	done
-	install -o 0 -c -m 444 $MIG_HEADER_OBJ/$MIG_NAME.h $MIG_HEADER_DST/$MIG_NAME.h
+	install $ASROOT -c -m 444 $MIG_HEADER_OBJ/$MIG_NAME.h $MIG_HEADER_DST/$MIG_NAME.h
 done
 
 mkdir -p $MIG_PRIVATE_HEADER_DST

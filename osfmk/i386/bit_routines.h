@@ -108,7 +108,7 @@
 
 static inline char	xchgb(volatile char * cp, char new)
 {
-	register char	old = new;
+	char	old = new;
 
 	__asm__ volatile ("	xchgb	%0,%2"			:
 			"=q" (old)				:

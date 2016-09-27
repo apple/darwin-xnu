@@ -70,8 +70,17 @@
  */
 class OSNumber : public OSObject
 {
-    OSDeclareDefaultStructors(OSNumber)
     friend class OSSerialize;
+
+    OSDeclareDefaultStructors(OSNumber)
+
+#if APPLE_KEXT_ALIGN_CONTAINERS
+
+protected:
+    unsigned int size;
+    unsigned long long value;
+
+#else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 protected:
     unsigned long long value;
@@ -82,8 +91,9 @@ protected:
     /* Reserved for future use.  (Internal use only)  */
     ExpansionData * reserved;
 
-public:
+#endif /* APPLE_KEXT_ALIGN_CONTAINERS */
 
+public:
 
    /*!
     * @function withNumber

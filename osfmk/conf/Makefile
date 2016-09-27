@@ -37,7 +37,7 @@ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
 		OBJPATH=${OBJPATH}					\
 		build_all;
 
-do_build_all:: do_all 
+do_build_all:: do_all
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

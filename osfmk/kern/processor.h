@@ -91,6 +91,7 @@ struct processor_set {
 
 	int					cpu_set_low, cpu_set_hi;
 	int					cpu_set_count;
+	uint64_t				recommended_bitmask;
 
 #if __SMP__
 	decl_simple_lock_data(,sched_lock)	/* lock for above */
@@ -142,9 +143,10 @@ struct pset_node {
 
 extern struct pset_node	pset_node0;
 
-extern queue_head_t		tasks, terminated_tasks, threads; /* Terminated tasks are ONLY for stackshot */
+extern queue_head_t		tasks, terminated_tasks, threads, corpse_tasks; /* Terminated tasks are ONLY for stackshot */
 extern int				tasks_count, terminated_tasks_count, threads_count;
 decl_lck_mtx_data(extern,tasks_threads_lock)
+decl_lck_mtx_data(extern,tasks_corpse_lock)
 
 struct processor {
 	queue_chain_t		processor_queue;/* idle/active queue link,
@@ -162,6 +164,7 @@ struct processor {
 	int					current_pri;	/* priority of current thread */
 	sched_mode_t		current_thmode;	/* sched mode of current thread */
 	sfi_class_id_t		current_sfi_class;	/* SFI class of current thread */
+	int                     starting_pri;       /* priority of current thread as it was when scheduled */
 	int					cpu_id;			/* platform numeric id */
 
 	timer_call_data_t	quantum_timer;	/* timer for quantum expiration */

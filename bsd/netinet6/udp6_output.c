@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -117,6 +117,7 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/in_systm.h>
+#include <netinet/in_tclass.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 #include <netinet/in_pcb.h>
@@ -158,9 +159,10 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	int flags;
 	struct sockaddr_in6 tmp;
 	struct	in6_addr storage;
-	mbuf_svc_class_t msc = MBUF_SC_UNSPEC;
+	int sotc = SO_TC_UNSPEC;
+	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 	struct ip6_out_args ip6oa =
-	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF, 0 };
+	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF, 0, 0, 0 };
 	struct flowadv *adv = &ip6oa.ip6oa_flowadv;
 	struct socket *so = in6p->in6p_socket;
 	struct route_in6 ro;
@@ -184,15 +186,24 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
 	if (INP_AWDL_UNRESTRICTED(in6p))
 		ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
+	if (INP_INTCOPROC_ALLOWED(in6p))
+		ip6oa.ip6oa_flags |= IP6OAF_INTCOPROC_ALLOWED;
 
 	if (control) {
-		msc = mbuf_service_class_from_control(control);
+		sotc = so_tc_from_control(control, &netsvctype);
 		if ((error = ip6_setpktopts(control, &opt,
 		    NULL, IPPROTO_UDP)) != 0)
 			goto release;
 		optp = &opt;
 	} else
 		optp = in6p->in6p_outputopts;
+
+	if (sotc == SO_TC_UNSPEC) {
+		sotc = so->so_traffic_class;
+		netsvctype = so->so_netsvctype;
+	}
+	ip6oa.ip6oa_sotc = sotc;
+	ip6oa.ip6oa_netsvctype = netsvctype;
 
 	if (addr6) {
 		/*
@@ -356,14 +367,54 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		{
 			necp_kernel_policy_id policy_id;
 			u_int32_t route_rule_id;
+
+			/*
+			 * We need a route to perform NECP route rule checks
+			 */
+			if (net_qos_policy_restricted != 0 &&
+			    ROUTE_UNUSABLE(&in6p->inp_route)) {
+				struct sockaddr_in6 to;
+				struct sockaddr_in6 from;
+
+				ROUTE_RELEASE(&in6p->inp_route);
+
+				bzero(&from, sizeof(struct sockaddr_in6));
+				from.sin6_family = AF_INET6;
+				from.sin6_len = sizeof(struct sockaddr_in6);
+				from.sin6_addr = *laddr;
+
+				bzero(&to, sizeof(struct sockaddr_in6));
+				to.sin6_family = AF_INET6;
+				to.sin6_len = sizeof(struct sockaddr_in6);
+				to.sin6_addr = *faddr;
+
+				in6p->inp_route.ro_dst.sa_family = AF_INET6;
+				in6p->inp_route.ro_dst.sa_len = sizeof(struct sockaddr_in6);
+				((struct sockaddr_in6 *)(void *)&in6p->inp_route.ro_dst)->sin6_addr =
+					*faddr;
+	
+				rtalloc_scoped(&in6p->inp_route, ip6oa.ip6oa_boundif);
+
+				inp_update_necp_policy(in6p, (struct sockaddr *)&from,
+				    (struct sockaddr *)&to, ip6oa.ip6oa_boundif);
+				in6p->inp_policyresult.results.qos_marking_gencount = 0;
+			}
+
 			if (!necp_socket_is_allowed_to_send_recv_v6(in6p, in6p->in6p_lport, fport, laddr, faddr, NULL, &policy_id, &route_rule_id)) {
 				error = EHOSTUNREACH;
 				goto release;
 			}
 
 			necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id);
+
+			if (net_qos_policy_restricted != 0) {
+				necp_socket_update_qos_marking(in6p, in6p->in6p_route.ro_rt,
+				    NULL, route_rule_id);
+			}
 		}
 #endif /* NECP */
+		if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED))
+			ip6oa.ip6oa_flags |= IP6OAF_QOSMARKING_ALLOWED;
 
 #if IPSEC
 		if (in6p->in6p_sp != NULL && ipsec_setsocket(m, so) != 0) {
@@ -380,7 +431,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		/* Copy the cached route and take an extra reference */
 		in6p_route_copyout(in6p, &ro);
 
-		set_packet_service_class(m, so, msc, PKT_SCF_IPV6);
+		set_packet_service_class(m, so, sotc, PKT_SCF_IPV6);
 
 		m->m_pkthdr.pkt_flowsrc = FLOWSRC_INPCB;
 		m->m_pkthdr.pkt_flowid = in6p->inp_flowhash;
@@ -484,7 +535,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 				    ifnet_hdrlen(outif) +
 				    ifnet_packetpreamblelen(outif),
 				    sizeof(u_int32_t));
-			}				
+			}
 		} else {
 			ROUTE_RELEASE(&in6p->in6p_route);
 		}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -327,14 +327,19 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr_in *sin,
 	struct inpcb *const inp = sotoinpcb(so);
 	struct ip *const ip = mtod(m, struct ip *);
 	int error = 0;
-	mbuf_svc_class_t msc = MBUF_SC_UNSPEC;
+	int sotc = SO_TC_UNSPEC;
 
 	if (control != NULL) {
-		msc = mbuf_service_class_from_control(control);
+		int ignored;
+
+		(void) so_tc_from_control(contro, &sotc, &ignored);
 
 		m_freem(control);		/* XXX */
 		control = NULL;
 	}
+	if (sotc == SO_TC_UNSPEC)
+		sotc = so->so_traffic_class;
+
 	/* Loopback avoidance and state recovery */
 	if (sin) {
 		struct m_tag *mtag;
@@ -370,7 +375,8 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr_in *sin,
 	/* Reinject packet into the system as incoming or outgoing */
 	if (!sin || sin->sin_addr.s_addr == 0) {
 		struct ip_out_args ipoa =
-		    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0 };
+		    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0, SO_TC_UNSPEC,
+		    _NET_SERVICE_TYPE_UNSPEC };
 		struct route ro;
 		struct ip_moptions *imo;
 
@@ -394,7 +400,11 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr_in *sin,
 		/* Copy the cached route and take an extra reference */
 		inp_route_copyout(inp, &ro);
 
-		set_packet_service_class(m, so, msc, 0);
+		if (sotc != SO_TC_UNSPEC) {
+			ipoa.ipoa_flags |= IPOAF_QOSMARKING_ALLOWED;
+			ipoa.ipoa_sotc = sotc;
+		}
+		set_packet_service_class(m, so, sotc, 0);
 
 		imo = inp->inp_moptions;
 		if (imo != NULL)

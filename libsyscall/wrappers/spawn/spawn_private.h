@@ -41,6 +41,9 @@ int	posix_spawnattr_getcpumonitor(posix_spawnattr_t * __restrict, uint64_t *, ui
 int	posix_spawnattr_setcpumonitor_default(posix_spawnattr_t * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_6_0);
 
 
+int     posix_spawnattr_setjetsam_ext(posix_spawnattr_t * __restrict attr,
+		   short flags, int priority, int memlimit_active, int memlimit_inactive) __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0);
+
 #define POSIX_SPAWN_IMPORTANCE_PORT_COUNT 32
 int	posix_spawnattr_set_importancewatch_port_np(posix_spawnattr_t * __restrict attr,
                  int count, mach_port_t portarray[])  __OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_6_0);

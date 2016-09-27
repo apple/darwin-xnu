@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,7 @@ kern_return_t OSKextLoadKextWithIdentifier(const char * bundle_id)
     return OSKext::loadKextWithIdentifier(bundle_id);
 }
 
+uint32_t OSKextGetLoadTagForIdentifier(const char * kextIdentifier);
 /*********************************************************************
 *********************************************************************/
 uint32_t
@@ -353,8 +354,8 @@ finish:
 /*********************************************************************
 * Gets the vm_map for the current kext
 *********************************************************************/
-extern vm_offset_t segPRELINKB;
-extern unsigned long segSizePRELINK;
+extern vm_offset_t segPRELINKTEXTB;
+extern unsigned long segSizePRELINKTEXT;
 extern int kth_started;
 extern vm_map_t g_kext_map;
 
@@ -364,8 +365,8 @@ kext_get_vm_map(kmod_info_t *info)
     vm_map_t kext_map = NULL;
 
     /* Set the vm map */
-    if ((info->address >= segPRELINKB) && 
-            (info->address < (segPRELINKB + segSizePRELINK)))
+    if ((info->address >= segPRELINKTEXTB) &&
+            (info->address < (segPRELINKTEXTB + segSizePRELINKTEXT)))
     {
         kext_map = kernel_map;
     } else {
@@ -456,6 +457,13 @@ kmod_dump_log(
 {
     OSKext::printKextsInBacktrace(addr, cnt, &printf, /* lock? */ true, doUnslide);
 }
+
+void *
+OSKextKextForAddress(const void *addr)
+{
+    return OSKext::kextForAddress(addr);
+}
+
 
 /*********************************************************************
 * Compatibility implementation for kmod_get_info() host_priv routine.

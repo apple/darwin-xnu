@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,22 +22,16 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#ifndef _KPERF_ARCH_H
-#define _KPERF_ARCH_H
+#ifndef KPERF_ARCH_H
+#define KPERF_ARCH_H
 
-/* per-arch header */
-#if defined(__x86_64__)
-#include "kperf/x86_64/kperf_arch.h"
-#else
-#error architecture not supported
-#endif
+struct kperf_timer;
+void kperf_mp_broadcast_running(struct kperf_timer *trigger);
 
-/* common definitions */
-extern int kperf_mp_broadcast( void (*func)(void*), void *arg );
-extern int kperf_mp_signal(void);
-extern kern_return_t kperf_get_phys_footprint(task_t, uint64_t *);
+void kperf_signal_handler(void);
+kern_return_t kperf_get_phys_footprint(task_t, uint64_t *);
 
-#endif /* _KPERF_ARCH_H */
+#endif /* KPERF_ARCH_H */

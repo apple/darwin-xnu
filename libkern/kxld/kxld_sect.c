@@ -49,6 +49,7 @@ static kern_return_t sect_export_macho_header_32(const KXLDSect *sect, u_char *b
 static kern_return_t sect_export_macho_header_64(const KXLDSect *sect, u_char *buf, 
     u_long *header_offset, u_long header_size, u_long data_offset);
 #endif
+extern boolean_t isSplitKext;
 
 #if KXLD_USER_OR_ILP32
 /*******************************************************************************
@@ -75,7 +76,7 @@ kxld_sect_init_from_macho_32(KXLDSect *sect, u_char *macho, u_long *sect_offset,
     sect->align = src->align;
     sect->reserved1 = src->reserved1;
     sect->reserved2 = src->reserved2;
-
+    
     if (src->offset) {
         sect->data = macho + src->offset;
     } else {
@@ -84,7 +85,7 @@ kxld_sect_init_from_macho_32(KXLDSect *sect, u_char *macho, u_long *sect_offset,
 
     relocs = (struct relocation_info *) ((void *) (macho + src->reloff));
 
-    rval = kxld_reloc_create_macho(&sect->relocs, relocator, 
+    rval = kxld_reloc_create_macho(&sect->relocs, relocator,
         relocs, src->nreloc);
     require_noerr(rval, finish);
 
@@ -132,8 +133,8 @@ kxld_sect_init_from_macho_64(KXLDSect *sect, u_char *macho, u_long *sect_offset,
 
     relocs = (struct relocation_info *) ((void *) (macho + src->reloff));
 
-    rval = kxld_reloc_create_macho(&sect->relocs, relocator, 
-        relocs, src->nreloc);
+    rval = kxld_reloc_create_macho(&sect->relocs, relocator,
+                                   relocs, src->nreloc);
     require_noerr(rval, finish);
 
     *sect_offset += sizeof(*src);
@@ -356,7 +357,6 @@ kxld_sect_export_macho_to_file_buffer(const KXLDSect *sect, u_char *buf,
 
         *data_offset += (u_long) sect->size;
     }
-        
     rval = KERN_SUCCESS;
 
 finish:
@@ -364,32 +364,37 @@ finish:
 }
 
 /*******************************************************************************
-*******************************************************************************/
+ *******************************************************************************/
 kern_return_t
-kxld_sect_export_macho_to_vm(const KXLDSect *sect, u_char *buf, 
-    u_long *header_offset, u_long header_size, 
-    kxld_addr_t link_addr, u_long data_size, 
-    boolean_t is_32_bit __unused)
+kxld_sect_export_macho_to_vm(const KXLDSect *sect,
+                             u_char *buf,
+                             u_long *header_offset,
+                             u_long header_size,
+                             kxld_addr_t link_addr,
+                             u_long data_size,
+                             boolean_t is_32_bit __unused)
 {
     kern_return_t rval = KERN_FAILURE;
-    u_long data_offset = (u_long) (sect->link_addr - link_addr);
-
+    u_long data_offset;
+    
     check(sect);
     check(buf);
     check(header_offset);
-
+    
+    data_offset = (u_long) (sect->link_addr - link_addr);
+        
     KXLD_3264_FUNC(is_32_bit, rval,
-        sect_export_macho_header_32, sect_export_macho_header_64,
-        sect, buf, header_offset, header_size, data_offset);
+                   sect_export_macho_header_32, sect_export_macho_header_64,
+                   sect, buf, header_offset, header_size, data_offset);
     require_noerr(rval, finish);
 
     rval = export_macho(sect, buf, data_offset, data_size);
     require_noerr(rval, finish);
-
+    
     rval = KERN_SUCCESS;
-
+    
 finish:
-    return rval;
+   return rval;
 }
 
 /*******************************************************************************
@@ -401,24 +406,33 @@ export_macho(const KXLDSect *sect, u_char *buf, u_long offset, u_long bufsize)
 
     check(sect);
     check(buf);
-
+    
     if (!sect->data) {
         rval = KERN_SUCCESS;
         goto finish;
     }
 
-    /* Verify that the section is properly aligned */
-
-    require_action(kxld_sect_align_address(sect, offset) == offset, finish,
-        rval = KERN_FAILURE);
+    if (!isSplitKext) {
+        /* Verify that the section is properly aligned */
+        if (kxld_sect_align_address(sect, offset) != offset) {
+            kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
+                     "Alignment error: %llu != %lu for %s %s <%s>",
+                     kxld_sect_align_address(sect, offset), offset,
+                     sect->segname, sect->sectname, __func__);
+            goto finish;
+        }
+    }
 
     /* Verify that we have enough space to copy */
-
-    require_action(sect->size <= bufsize - offset, finish,
-        rval=KERN_FAILURE);
+    if (buf + offset + sect->size > buf + bufsize) {
+        kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
+                 "Overflow: offset %lu + sect->size %llu > bufsize %lu for %s %s",
+                 offset, sect->size, bufsize,
+                 sect->segname, sect->sectname);
+        goto finish;
+    }
 
     /* Copy section data */
-
     switch (sect->flags & SECTION_TYPE) {
     case S_NON_LAZY_SYMBOL_POINTERS:
     case S_MOD_INIT_FUNC_POINTERS:
@@ -431,6 +445,29 @@ export_macho(const KXLDSect *sect, u_char *buf, u_long offset, u_long bufsize)
     case S_COALESCED:
     case S_16BYTE_LITERALS:
     case S_SYMBOL_STUBS:
+#if SPLIT_KEXTS_DEBUG
+            kxld_log(kKxldLogLinking, kKxldLogErr,
+                     " sectname %s copy from %p (sect->data) for %llu bytes (sect->size) to %p (buf %p + offset %lu <%s>",
+                     sect->sectname[0] ? sect->sectname : "none",
+                     (void *) sect->data,
+                     sect->size,
+                     (void *) (buf + offset),
+                     (void *) buf,
+                     offset,
+                     __func__);
+            
+            kxld_log(kKxldLogLinking, kKxldLogErr,
+                     " %p >>> Start of %s section data (sect->size %llu) <%s>",
+                     (void *) (buf + offset),
+                     sect->sectname[0] ? sect->sectname : "none",
+                     sect->size,
+                     __func__);
+            kxld_log(kKxldLogLinking, kKxldLogErr,
+                     " %p <<< End of %s section data <%s>",
+                     (void *) (buf + offset + sect->size),
+                     sect->sectname[0] ? sect->sectname : "none",
+                     __func__);
+#endif
         memcpy(buf + offset, sect->data, (size_t)sect->size);
         break;
     case S_ZEROFILL: /* sect->data should be NULL, so we'll never get here */
@@ -448,7 +485,7 @@ export_macho(const KXLDSect *sect, u_char *buf, u_long offset, u_long bufsize)
     rval = KERN_SUCCESS;
 
 finish:
-    return rval;
+   return rval;
 }
 
 #if KXLD_USER_OR_ILP32
@@ -484,6 +521,21 @@ sect_export_macho_header_32(const KXLDSect *sect, u_char *buf,
     secthdr->reserved1 = sect->reserved1;
     secthdr->reserved2 = sect->reserved2;
 
+#if SPLIT_KEXTS_DEBUG
+    {
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "sectname %s secthdr: %p addr %p size %02X %u offset %02X %u <%s>",
+                 sect->sectname[0] ? sect->sectname : "none",
+                 (void *) secthdr,
+                 (void *) ((uint64_t)secthdr->addr),
+                 secthdr->size,
+                 secthdr->size,
+                 secthdr->offset,
+                 secthdr->offset,
+                 __func__);
+    }
+#endif
+
     rval = KERN_SUCCESS;
 
 finish:
@@ -505,6 +557,7 @@ sect_export_macho_header_64(const KXLDSect *sect, u_char *buf,
     check(buf);
     check(header_offset);
     
+    
     require_action(sizeof(*secthdr) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
     secthdr = (struct section_64 *) ((void *) (buf + *header_offset));
@@ -524,6 +577,27 @@ sect_export_macho_header_64(const KXLDSect *sect, u_char *buf,
     secthdr->reserved1 = sect->reserved1;
     secthdr->reserved2 = sect->reserved2;
 
+#if SPLIT_KEXTS_DEBUG
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 " %p >>> Start of %s secthdr (size %lu) <%s>",
+                 (void *) secthdr,
+                 sect->sectname[0] ? sect->sectname : "none",
+                 sizeof(*secthdr),
+                 __func__);
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 " %p <<< End of %s secthdr <%s>",
+                 (void *) ((u_char *)secthdr + sizeof(*secthdr)),
+                 sect->sectname[0] ? sect->sectname : "none",
+                 __func__);
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 " secthdr: addr %p size %llu offset %u sectname %s <%s>",
+                 (void *) secthdr->addr,
+                 secthdr->size,
+                 secthdr->offset,
+                 sect->sectname[0] ? sect->sectname : "none",
+                 __func__);
+#endif
+    
     rval = KERN_SUCCESS;
 
 finish:
@@ -551,8 +625,24 @@ kxld_sect_grow(KXLDSect *sect, kxld_size_t nbytes, u_int align)
 void
 kxld_sect_relocate(KXLDSect *sect, kxld_addr_t link_addr)
 {
-    sect->link_addr = kxld_sect_align_address(sect, 
-        sect->link_addr + link_addr);
+#if SPLIT_KEXTS_DEBUG
+    {
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "%p >>> Start of %s section (sect->size %llu) <%s>",
+                 (void *) (kxld_sect_align_address(sect, sect->link_addr + link_addr)),
+                 sect->sectname[0] ? sect->sectname : "none",
+                 sect->size,
+                 __func__);
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "%p <<< End of %s section <%s>",
+                 (void *) (kxld_sect_align_address(sect, sect->link_addr + link_addr) + sect->size),
+                 sect->sectname[0] ? sect->sectname : "none",
+                 __func__);
+    }
+#endif
+
+    sect->link_addr = kxld_sect_align_address(sect,
+                                              sect->link_addr + link_addr);
 }
 
 #if KXLD_USER_OR_GOT

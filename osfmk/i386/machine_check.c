@@ -362,13 +362,11 @@ mca_dump(void)
 }
 
 
+#if DEVELOPMENT || DEBUG
 extern void mca_exception_panic(void);
 extern void lapic_trigger_MC(void);
 void mca_exception_panic(void)
 {
-#if DEBUG
 	lapic_trigger_MC();
-#else
-	kprintf("mca_exception_panic() requires DEBUG build\n");
-#endif
 }
+#endif

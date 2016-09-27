@@ -185,4 +185,7 @@ extern kern_return_t ipc_entry_grow_table(
 	ipc_space_t		space,
 	ipc_table_elems_t	target_size);
 
+/* mask on/off default entry generation bits */
+extern mach_port_name_t ipc_entry_name_mask(
+	mach_port_name_t name);
 #endif	/* _IPC_IPC_ENTRY_H_ */

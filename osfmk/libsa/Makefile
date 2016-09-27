@@ -7,17 +7,15 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 DATAFILES = \
-	string.h 
+	string.h
 
-INSTALL_MI_LIST = 
+INSTALL_MI_LIST =
 
-INSTALL_MI_DIR = 
+INSTALL_MI_DIR =
 
 EXPORT_MI_LIST = ${DATAFILES}
 
-EXPORT_MI_DIR = 
+EXPORT_MI_DIR =
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

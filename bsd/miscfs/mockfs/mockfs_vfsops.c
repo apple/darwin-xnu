@@ -241,19 +241,8 @@ int mockfs_init(__unused struct vfsconf * vfsc)
 }
 
 struct vfsops mockfs_vfsops = {
-	NULL, /* mount */
-	NULL, /* start */
-	mockfs_unmount, /* unmount */
-	mockfs_root, /* root */
-	NULL, /* quotactl */
-	NULL, /* getattr */
-	mockfs_sync, /* sync */
-	NULL, /* vget */
-	NULL, /* fhtovp */
-	NULL, /* vptofh */
-	mockfs_init, /* init */
-	NULL, /* sysctl */
-	NULL, /* setattr */
-	{NULL}
+	.vfs_unmount = mockfs_unmount,
+	.vfs_root = mockfs_root,
+	.vfs_sync = mockfs_sync,
+	.vfs_init = mockfs_init,
 };
-

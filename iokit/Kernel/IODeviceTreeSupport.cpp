@@ -430,14 +430,17 @@ static IORegistryEntry * FindPHandle( UInt32 phandle )
 static bool GetUInt32( IORegistryEntry * regEntry, const OSSymbol * name,
 			UInt32 * value )
 {
-    OSData	*data;
+    OSObject * obj;
+    OSData   * data;
+    bool       result;
 
-    if( (data = OSDynamicCast( OSData, regEntry->getProperty( name )))
-      && (4 == data->getLength())) {
-        *value = *((UInt32 *) data->getBytesNoCopy());
-        return( true );
-    } else
-        return( false );
+    if (!(obj = regEntry->copyProperty(name))) return (false);
+
+    result = ((data = OSDynamicCast(OSData, obj)) && (sizeof(UInt32) == data->getLength()));
+    if (result) *value = *((UInt32 *) data->getBytesNoCopy());
+
+    obj->release();
+    return(result);
 }
 
 static IORegistryEntry * IODTFindInterruptParent( IORegistryEntry * regEntry, IOItemCount index )
@@ -771,9 +774,10 @@ bool IODTMapInterrupts( IORegistryEntry * regEntry )
 /*
  */
 
-static const char *
+static bool
 CompareKey( OSString * key,
-		const IORegistryEntry * table, const OSSymbol * propName )
+		const IORegistryEntry * table, const OSSymbol * propName,
+		OSString ** matchingName )
 {
     OSObject		*prop;
     OSData			*data;
@@ -787,8 +791,7 @@ CompareKey( OSString * key,
     bool			matched;
     const char		*result = 0;
 
-    if( 0 == (prop = table->getProperty( propName )))
-	return( 0 );
+    if( 0 == (prop = table->copyProperty( propName ))) return( 0 );
 
     if( (data = OSDynamicCast( OSData, prop ))) {
         names = (const char *) data->getBytesNoCopy();
@@ -796,47 +799,48 @@ CompareKey( OSString * key,
     } else if( (string = OSDynamicCast( OSString, prop ))) {
         names = string->getCStringNoCopy();
         lastName = names + string->getLength() + 1;
-    } else
-		return( 0 );
+    } else names = 0;
 
-    ckey = key->getCStringNoCopy();
-    keyLen = key->getLength();
-    wild = ('*' == key->getChar( keyLen - 1 ));
+	if (names) {
+		ckey = key->getCStringNoCopy();
+		keyLen = key->getLength();
+		wild = ('*' == key->getChar( keyLen - 1 ));
 
-    do {
-        // for each name in the property
-        nlen = strnlen(names, lastName - names);
-        if( wild)
-            matched = ((nlen >= (keyLen - 1)) && (0 == strncmp(ckey, names, keyLen - 1)));
-        else
-            matched = (keyLen == nlen) && (0 == strncmp(ckey, names, keyLen));
+		do {
+			// for each name in the property
+			nlen = strnlen(names, lastName - names);
+			if( wild)
+				matched = ((nlen >= (keyLen - 1)) && (0 == strncmp(ckey, names, keyLen - 1)));
+			else
+				matched = (keyLen == nlen) && (0 == strncmp(ckey, names, keyLen));
 
-        if( matched)
-            result = names;
+			if( matched)
+				result = names;
 
-        names = names + nlen + 1;
+			names = names + nlen + 1;
 
-    } while( (names < lastName) && (false == matched));
+		} while( (names < lastName) && (false == matched));
+	}
 
-    return( result);
+    if (result && matchingName)	*matchingName = OSString::withCString( result );
+
+	if (prop) prop->release();
+
+    return (result != 0);
 }
 
 
 bool IODTCompareNubName( const IORegistryEntry * regEntry,
 			 OSString * name, OSString ** matchingName )
 {
-    const char		*result;
-    bool			matched;
+    bool matched;
 
-    matched =  (0 != (result = CompareKey( name, regEntry, gIODTNameKey)))
-	    || (0 != (result = CompareKey( name, regEntry, gIODTCompatibleKey)))
-	    || (0 != (result = CompareKey( name, regEntry, gIODTTypeKey)))
-	    || (0 != (result = CompareKey( name, regEntry, gIODTModelKey)));
+    matched = CompareKey( name, regEntry, gIODTNameKey,       matchingName)
+		   || CompareKey( name, regEntry, gIODTCompatibleKey, matchingName)
+		   || CompareKey( name, regEntry, gIODTTypeKey,       matchingName)
+		   || CompareKey( name, regEntry, gIODTModelKey,      matchingName);
 
-    if( result && matchingName)
-	*matchingName = OSString::withCString( result );
-
-    return( result != 0 );
+    return (matched);
 }
 
 bool IODTMatchNubWithKeys( IORegistryEntry * regEntry,

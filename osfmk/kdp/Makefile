@@ -20,5 +20,3 @@ EXPORT_MI_DIR = kdp
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

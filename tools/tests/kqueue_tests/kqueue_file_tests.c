@@ -14,12 +14,13 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/xattr.h>
+#include <sys/file.h>
 
-#define DIR1 	"dir1"
+#define DIR1 	"/tmp/dir1"
 #define DOTDOT 	".."
-#define DIR2 	"dir2"
-#define FILE1	"file1"
-#define FILE2 	"file2"
+#define DIR2 	"/tmp/dir2"
+#define FILE1	"/tmp/file1"
+#define FILE2 	"/tmp/file2"
 
 #define KEY	"somekey"
 #define VAL	"someval"
@@ -30,7 +31,7 @@
 #define YES_EVENT	1
 
 
-#define OUTPUT_LEVEL 	2
+#define OUTPUT_LEVEL 	0
 #define RESULT_LEVEL	3
 
 #define TEST_STRING	"Some text!!! Yes indeed, some of that very structure which has passed on man's knowledge for generations."
@@ -41,11 +42,18 @@
 #define FIFO_SPACE	8192	/* FIFOS have 8K of buffer space */
 
 /*
+ * These two variables are the non local memory for holding the return
+ * values from functions with which pthread_create is called.
+ */
+int thread_status;
+int fifo_read_fd;
+
+/*
  * Types of actions for setup, cleanup, and execution of tests
  */
 typedef enum {CREAT, MKDIR, READ, WRITE, WRITEFD, FILLFD, UNLINK, LSKEE, RMDIR, MKFIFO, LENGTHEN, TRUNC,
 	SYMLINK, CHMOD, CHOWN, EXCHANGEDATA, RENAME, LSEEK, OPEN, MMAP, NOTHING,
-	SETXATTR, UTIMES, STAT, HARDLINK, REVOKE} action_id_t;
+	SETXATTR, UTIMES, STAT, HARDLINK, REVOKE, FUNLOCK} action_id_t;
 
 /* 
  * Directs an action as mentioned above
@@ -109,7 +117,9 @@ void LOG(int level, FILE *f, const char *fmt, ...) {
 	if (level >= OUTPUT_LEVEL) {
 		/* Indent for ease of reading */
 		if (level < RESULT_LEVEL) {
-			fprintf(f, "\t");
+			for (int i = RESULT_LEVEL - level; i>0; i--) {
+				fprintf(f, "\t");
+			}
 		}
 		vfprintf(f, fmt, ap);
 	} 
@@ -117,6 +127,67 @@ void LOG(int level, FILE *f, const char *fmt, ...) {
 	va_end(ap);
 }
 
+char *
+get_action_name(action_id_t a)
+{
+	switch (a) {
+	case CREAT:
+		return "CREAT";
+	case MKDIR:
+		return "MKDIR";
+	case READ:
+		return "READ";
+	case WRITE:
+		return "WRITE";
+	case WRITEFD:
+		return "WRITEFD";
+	case FILLFD:
+		return "FILLFD";
+	case UNLINK:
+		return "UNLINK";
+	case LSKEE:
+		return "LSKEE";
+	case RMDIR:
+		return "RMDIR";
+	case MKFIFO:
+		return "MKFIFO";
+	case LENGTHEN:
+		return "LENGTHEN";
+	case TRUNC:
+		return "TRUNC";
+	case SYMLINK:
+		return "SYMLINK";
+	case CHMOD:
+		return "CHMOD";
+	case CHOWN:
+		return "CHOWN";
+	case EXCHANGEDATA:
+		return "EXCHANGEDATA";
+	case RENAME:
+		return "RENAME";
+	case LSEEK:
+		return "LSEEK";
+	case OPEN:
+		return "OPEN";
+	case MMAP:
+		return "MMAP";
+	case NOTHING:
+		return "NOTHING";
+	case SETXATTR:
+		return "SETXATTR";
+	case UTIMES:
+		return "UTIMES";
+	case STAT:
+		return "STAT";
+	case HARDLINK:
+		return "HARDLINK";
+	case REVOKE:
+		return "REVOKE";
+	case FUNLOCK:
+		return "FUNLOCK";
+	}
+	return "Unknown";
+}
 /*
  * Initialize an action struct.  Whether to sleep, what action to take,
  * and arguments for that action.
@@ -142,10 +213,11 @@ init_action(action_t *act, int sleep, action_id_t call, int nargs, ...)
 /*
  * Opening a fifo is complicated: need to open both sides at once 
  */
-void*
+void *
 open_fifo_readside(void *arg) 
 {
-	return (void*)open((char*)arg, O_RDONLY);
+	fifo_read_fd = open((char*)arg, O_RDONLY);
+	return (&fifo_read_fd);
 }
 
 /*
@@ -158,8 +230,9 @@ open_fifo(const char *path, int *readfd, int *writefd)
 	pthread_t thread;
 	int waitres;
 	int res;
-	int tmpreadfd, tmpwritefd;
+	int *tmpreadfd, tmpwritefd;
 	
+	fifo_read_fd = -1;
 	res = pthread_create(&thread, 0, open_fifo_readside, (void*)path);
 	if (res == 0) {
 		tmpwritefd = open(path, O_WRONLY);
@@ -167,8 +240,8 @@ open_fifo(const char *path, int *readfd, int *writefd)
 		
 		fcntl(tmpwritefd, F_SETFL, O_WRONLY | O_NONBLOCK);
 		
-		if ((waitres == 0) && (tmpwritefd >= 0) && (tmpreadfd >= 0)) {
-			*readfd = tmpreadfd;
+		if ((waitres == 0) && (tmpwritefd >= 0) && (*tmpreadfd >= 0)) {
+			*readfd = *tmpreadfd;
 			*writefd = tmpwritefd;
 		} else {
 			res = -1;	
@@ -215,7 +288,7 @@ execute_action(void *actionptr)
 	struct timeval tv;
 	struct stat sstat;
 	
-	LOG(1, stderr, "Beginning action of type %d\n", act->act_id);
+	LOG(1, stderr, "Beginning action of type %d: %s\n", act->act_id, get_action_name(act->act_id));
 	
 	/* Let other thread get into kevent() sleep */
 	if(SLEEP == act->act_dosleep) {
@@ -342,13 +415,22 @@ execute_action(void *actionptr)
 			res = revoke((char*)args[0]);
 			close(tmpfd);
 			break;
+		case FUNLOCK:
+			tmpfd = open((char*)args[0], O_RDONLY);
+			if (tmpfd != -1) {
+				res = flock(tmpfd, LOCK_EX);
+				if (res != -1)
+					res = flock(tmpfd, LOCK_UN);
+				(void)close(tmpfd);
+			}
+			break;
 		default:
 			res = -1;
 			break;
 	}
-	
-	return (void*)res;
-	
+
+	thread_status = res;
+	return (&thread_status);
 }
 
 /*
@@ -371,9 +453,9 @@ execute_action_list(action_t *actions, int nactions, int failout)
 	int i, res;
 	for (i = 0, res = 0; (0 == res || (!failout)) && (i < nactions); i++) {
 		LOG(1, stderr, "Starting prep action %d\n", i);
-		res = (int) execute_action(&(actions[i]));
+		res = *((int *) execute_action(&(actions[i])));
 		if(res != 0) {
-			LOG(2, stderr, "Action list failed on step %d.\n", i);
+			LOG(2, stderr, "Action list failed on step %d. res = %d\n", i, res);
 		} else {
 			LOG(1, stderr, "Action list work succeeded on step %d.\n", i);
 		}
@@ -388,12 +470,13 @@ execute_action_list(action_t *actions, int nactions, int failout)
 int
 execute_test(test_t *test)
 {
-	int i, kqfd, filefd = -1, res2, res, cnt, status, writefd = -1;
+	int i, kqfd, filefd = -1, res2, res, cnt, writefd = -1;
 	int retval = -1;
 	pthread_t thr;
 	struct kevent evlist;
 	struct timespec ts = {WAIT_TIME, 0l};
-	
+	int *status;
+
 	memset(&evlist, 0, sizeof(evlist));
 	
 	LOG(1, stderr, "Test %s starting.\n", test->t_testname);
@@ -434,10 +517,11 @@ execute_test(test_t *test)
 					action_t dowr;
 					init_action(&dowr, NOSLEEP, WRITEFD, 0);
 					dowr.act_fd = writefd;
-					execute_action(&dowr);
+					(void)execute_action(&dowr);
 				}
 				
 				/* Helper modifies the file that we're listening on (sleeps first, in general) */
+				thread_status = 0;
 				res = pthread_create(&thr, NULL, execute_action, (void*) &test->t_helpthreadact);
 				if (0 == res) {
 					LOG(1, stderr, "Created helper thread.\n");
@@ -475,14 +559,14 @@ execute_test(test_t *test)
 					}
 					
 					/* Success only if you've succeeded to this point AND joined AND other thread is happy*/
-					status = 0;
-					res2 = pthread_join(thr, (void**)&status);
+					status = NULL;
+					res2 = pthread_join(thr, (void **)&status);
 					if (res2 < 0) {
 						LOG(2, stderr, "Couldn't join helper thread.\n"); 
-					} else if (status) {
-						LOG(2, stderr, "Helper action had result %d\n", (int)status);
+					} else if (*status) {
+						LOG(2, stderr, "Helper action had result %d\n", *status);
 					}
-					res = ((res == 0) && (res2 == 0) && (status == 0)) ? 0 : -1;
+					res = ((res == 0) && (res2 == 0) && (*status == 0)) ? 0 : -1;
 				} else {
 					LOG(2, stderr, "Couldn't start thread.\n");
 				}
@@ -524,11 +608,12 @@ execute_test(test_t *test)
 			retval = -1;
 		}
 	} else {
-		LOG(2, stderr, "Failed to execute test.\n");
+		LOG(2, stderr, "Failed to execute test. res = %d\n", res);
 		retval = -1;
 	}
 	
 	LOG(3, stdout, "Test %s done with result %d.\n", test->t_testname, retval);
+	return (retval);
 }
 
 void
@@ -1558,7 +1643,18 @@ run_poll_tests()
 	execute_test(&test);
 }
 
-void 
+void
+run_note_funlock_tests()
+{
+	test_t test;
+	init_test(&test, "11.1.1: unlock file", FILE1, 1, 1, NOTE_FUNLOCK, YES_EVENT);
+	init_action(&(test.t_prep_actions[0]), NOSLEEP, CREAT, 2, (void*)FILE1, (void *)NULL);
+	init_action(&test.t_helpthreadact, SLEEP, FUNLOCK, 2, (void*)FILE1, (void *)NULL);
+	init_action(&(test.t_cleanup_actions[0]), NOSLEEP, UNLINK, 2, (void*)FILE1, (void *)NULL);
+	execute_test(&test);
+}
+
+void
 run_all_tests() 
 {
 	run_note_delete_tests();
@@ -1573,6 +1669,7 @@ run_all_tests()
 	run_evfilt_read_tests();
 	run_evfilt_write_tests();
 	run_poll_tests();
+	run_note_funlock_tests();
 }
 
 int 
@@ -1605,9 +1702,12 @@ main(int argc, char **argv)
 		run_evfilt_write_tests();
 	else if (strcmp(which, "poll") == 0)
 		run_poll_tests();
+	else if (strcmp(which, "funlock") == 0)
+		run_note_funlock_tests();
 	else {
-		fprintf(stderr, "Valid options are:\n\tdelete, write, extend,"
-				"attrib, link, rename, revoke, evfiltread, fifo, all, evfiltwrite<none>\n");
+		fprintf(stderr, "Valid options are:\n\tdelete, write, extend, "
+		                "attrib, link, rename, revoke, evfiltread, "
+	                        "fifo, all, evfiltwrite, funlock<none>\n");
 		exit(1);
 	}
 	return 0;

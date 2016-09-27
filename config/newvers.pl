@@ -96,16 +96,35 @@ my $RC_STRING = $ENV{'RC_ProjectNameAndSourceVersion'} . "~" . $ENV{'RC_ProjectB
 # need to synthesize the directory name to be more interesting.
 #
 
+sub describe {
+  my ($basename) = @_;
+
+  # get a git tag if we can
+  my $tag = `git describe --dirty 2>/dev/null`;
+  chomp $tag;
+  if ($? != 0 or $tag !~ /^xnu-([^\s\n]+)$/) {
+    return $basename;
+  }
+
+  # If basename is just 'xnu' then replace it with the tag.  Otherwise add
+  # the tag in brackets.
+  if ($basename eq 'xnu') {
+    return $tag
+  } else {
+    return "${basename}[$tag]"
+  }
+}
+
 if ($BUILD_OBJPATH =~ m,^$BUILD_SRCROOT/(.*)$,) {
-    $BUILD_OBJROOT = basename($BUILD_SRCROOT) . "/" . $1;
+    $BUILD_OBJROOT = describe(basename($BUILD_SRCROOT)) . "/" . $1;
 } elsif ($BUILD_OBJPATH =~ m,^$BUILD_OBJROOT/(.*)$,) {
-    if (defined($RC_STRING)) {
+  if (defined($RC_STRING)) {
 	$BUILD_OBJROOT = $RC_STRING . "/" . $1;
-    } else {
-	$BUILD_OBJROOT = basename($BUILD_OBJROOT) . "/" . $1;
-    }
+  } else {
+	$BUILD_OBJROOT = describe(basename($BUILD_OBJROOT)) . "/" . $1;
+  }
 } else {
-    # Use original OBJROOT
+  # Use original OBJROOT
 }
 
 my $rawvers = &ReadFile($versfile);

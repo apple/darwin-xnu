@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -136,13 +136,8 @@ static int	tcp6_connect(struct tcpcb *, struct sockaddr *, struct proc *);
 static int	tcp6_usr_connect(struct socket *, struct sockaddr *,
 		    struct proc *);
 #endif /* INET6 */
-static struct tcpcb *
-		tcp_disconnect(struct tcpcb *);
-static struct tcpcb *
-		tcp_usrclosed(struct tcpcb *);
-
-extern uint32_t tcp_autorcvbuf_max;
-
+static struct tcpcb *tcp_disconnect(struct tcpcb *);
+static struct tcpcb *tcp_usrclosed(struct tcpcb *);
 extern void tcp_sbrcv_trim(struct tcpcb *tp, struct sockbuf *sb);
 
 #if TCPDEBUG
@@ -183,7 +178,7 @@ tcp_usr_attach(struct socket *so, __unused int proto, struct proc *p)
 		error = EISCONN;
 		goto out;
 	}
-	
+
 	error = tcp_attach(so, p);
 	if (error)
 		goto out;
@@ -1212,6 +1207,7 @@ tcp_usr_rcvoob(struct socket *so, struct mbuf *m, int flags)
 	}
 	m->m_len = 1;
 	*mtod(m, caddr_t) = tp->t_iobc;
+	so->so_state &= ~SS_RCVATMARK;
 	if ((flags & MSG_PEEK) == 0)
 		tp->t_oobflags ^= (TCPOOB_HAVEDATA | TCPOOB_HADDATA);
 	COMMON_END(PRU_RCVOOB);
@@ -1315,10 +1311,7 @@ struct pr_usrreqs tcp6_usrreqs = {
  *	in_pcbladdr:EADDRNOTAVAIL	Address not available
  */
 static int
-tcp_connect(tp, nam, p)
-	register struct tcpcb *tp;
-	struct sockaddr *nam;
-	struct proc *p;
+tcp_connect(struct tcpcb *tp, struct sockaddr *nam, struct proc *p)
 {
 	struct inpcb *inp = tp->t_inpcb, *oinp;
 	struct socket *so = inp->inp_socket;
@@ -1339,7 +1332,7 @@ tcp_connect(tp, nam, p)
 	 * earlier incarnation of this same connection still in
 	 * TIME_WAIT state, creating an ADDRINUSE error.
 	 */
-	error = in_pcbladdr(inp, nam, &laddr, IFSCOPE_NONE, &outif);
+	error = in_pcbladdr(inp, nam, &laddr, IFSCOPE_NONE, &outif, 0);
 	if (error)
 		goto done;
 
@@ -1402,7 +1395,7 @@ skip_oinp:
 	if (inp->inp_flowhash == 0)
 		inp->inp_flowhash = inp_calc_flowhash(inp);
 
-	tcp_set_max_rwinscale(tp, so);
+	tcp_set_max_rwinscale(tp, so, TCP_AUTORCVBUF_MAX(outif));
 
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
@@ -1422,10 +1415,7 @@ done:
 
 #if INET6
 static int
-tcp6_connect(tp, nam, p)
-	register struct tcpcb *tp;
-	struct sockaddr *nam;
-	struct proc *p;
+tcp6_connect(struct tcpcb *tp, struct sockaddr *nam, struct proc *p)
 {
 	struct inpcb *inp = tp->t_inpcb, *oinp;
 	struct socket *so = inp->inp_socket;
@@ -1499,7 +1489,7 @@ tcp6_connect(tp, nam, p)
 		    (htonl(inp->inp_flowhash) & IPV6_FLOWLABEL_MASK);
 	}
 
-	tcp_set_max_rwinscale(tp, so);
+	tcp_set_max_rwinscale(tp, so, TCP_AUTORCVBUF_MAX(outif));
 
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
@@ -1548,6 +1538,9 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 		/* Are we in retranmission episode */
 		if (IN_FASTRECOVERY(tp) || tp->t_rxtshift > 0)
 			ti->tcpi_flags |= TCPI_FLAG_LOSSRECOVERY;
+
+		if (tp->t_flags & TF_STREAMING_ON)
+			ti->tcpi_flags |= TCPI_FLAG_STREAMING_ON;
 
 		ti->tcpi_rto = tp->t_timer[TCPT_REXMT] ? tp->t_rxtcur : 0;
 		ti->tcpi_snd_mss = tp->t_maxseg;
@@ -1618,6 +1611,11 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 		ti->tcpi_tfo_syn_data_sent = !!(tp->t_tfo_stats & TFO_S_SYN_DATA_SENT);
 		ti->tcpi_tfo_syn_data_acked = !!(tp->t_tfo_stats & TFO_S_SYN_DATA_ACKED);
 		ti->tcpi_tfo_syn_loss = !!(tp->t_tfo_stats & TFO_S_SYN_LOSS);
+		ti->tcpi_tfo_cookie_wrong = !!(tp->t_tfo_stats & TFO_S_COOKIE_WRONG);
+		ti->tcpi_tfo_no_cookie_rcv = !!(tp->t_tfo_stats & TFO_S_NO_COOKIE_RCV);
+		ti->tcpi_tfo_heuristics_disable = !!(tp->t_tfo_stats & TFO_S_HEURISTICS_DISABLE);
+		ti->tcpi_tfo_send_blackhole = !!(tp->t_tfo_stats & TFO_S_SEND_BLACKHOLE);
+		ti->tcpi_tfo_recv_blackhole = !!(tp->t_tfo_stats & TFO_S_RECV_BLACKHOLE);
 
 		ti->tcpi_ecn_client_setup = !!(tp->ecn_flags & TE_SETUPSENT);
 		ti->tcpi_ecn_server_setup = !!(tp->ecn_flags & TE_SETUPRECEIVED);
@@ -1757,6 +1755,11 @@ tcp_connection_fill_info(struct tcpcb *tp, struct tcp_connection_info *tci)
 		tci->tcpi_tfo_syn_data_sent = !!(tp->t_tfo_stats & TFO_S_SYN_DATA_SENT);
 		tci->tcpi_tfo_syn_data_acked = !!(tp->t_tfo_stats & TFO_S_SYN_DATA_ACKED);
 		tci->tcpi_tfo_syn_loss = !!(tp->t_tfo_stats & TFO_S_SYN_LOSS);
+		tci->tcpi_tfo_cookie_wrong = !!(tp->t_tfo_stats & TFO_S_COOKIE_WRONG);
+		tci->tcpi_tfo_no_cookie_rcv = !!(tp->t_tfo_stats & TFO_S_NO_COOKIE_RCV);
+		tci->tcpi_tfo_heuristics_disable = !!(tp->t_tfo_stats & TFO_S_HEURISTICS_DISABLE);
+		tci->tcpi_tfo_send_blackhole = !!(tp->t_tfo_stats & TFO_S_SEND_BLACKHOLE);
+		tci->tcpi_tfo_recv_blackhole = !!(tp->t_tfo_stats & TFO_S_RECV_BLACKHOLE);
 	}
 }
 
@@ -1875,9 +1878,7 @@ tcp_getconninfo(struct socket *so, struct conninfo_tcp *tcp_ci)
  * splnet() any more.  This needs more examination.)
  */
 int
-tcp_ctloutput(so, sopt)
-	struct socket *so;
-	struct sockopt *sopt;
+tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 {
 	int	error, opt, optval;
 	struct	inpcb *inp;
@@ -2095,6 +2096,21 @@ tcp_ctloutput(so, sopt)
 			}
 			break;
 
+		case TCP_KEEPALIVE_OFFLOAD:
+			error = sooptcopyin(sopt, &optval, sizeof(optval),
+				sizeof(optval));
+			if (error)
+				break;
+			if (optval < 0 || optval > INT32_MAX) {
+				error = EINVAL;
+				break;
+			} 
+			if (optval != 0)
+				inp->inp_flags2 |= INP2_KEEPALIVE_OFFLOAD;
+			else
+				inp->inp_flags2 &= ~INP2_KEEPALIVE_OFFLOAD;
+			break;
+
 		case PERSIST_TIMEOUT:
 			error = sooptcopyin(sopt, &optval, sizeof optval,
 						sizeof optval);
@@ -2180,13 +2196,13 @@ tcp_ctloutput(so, sopt)
 				}
 
 				/*
-				 * allocate memory for storing message 
+				 * allocate memory for storing message
 				 * related state
 				 */
 				VERIFY(so->so_msg_state == NULL);
-				MALLOC(so->so_msg_state, 
+				MALLOC(so->so_msg_state,
 					struct msg_state *,
-					sizeof(struct msg_state), 
+					sizeof(struct msg_state),
 					M_TEMP, M_WAITOK | M_ZERO);
 				if (so->so_msg_state == NULL) {
 					error = ENOMEM;
@@ -2196,9 +2212,9 @@ tcp_ctloutput(so, sopt)
 				/* Enable message delivery */
 				so->so_flags |= SOF_ENABLE_MSGS;
 			} else {
-				/* 
-				 * Can't disable message delivery on socket 
-				 * because of restrictions imposed by 
+				/*
+				 * Can't disable message delivery on socket
+				 * because of restrictions imposed by
 				 * encoding/decoding
 				 */
 				error = EINVAL;
@@ -2286,6 +2302,30 @@ tcp_ctloutput(so, sopt)
 				error = EINVAL;
 			}
 			break;
+		case TCP_NOTIFY_ACKNOWLEDGEMENT:
+			error = sooptcopyin(sopt, &optval,
+			    sizeof(optval), sizeof(optval));
+			if (error)
+				break;
+			if (optval <= 0) {
+				error = EINVAL;
+				break;
+			}
+			if (tp->t_notify_ack_count >= TCP_MAX_NOTIFY_ACK) {
+				error = ETOOMANYREFS;
+				break;
+			}
+
+			/*
+			 * validate that the given marker id is not
+			 * a duplicate to avoid ambiguity
+			 */
+			if ((error = tcp_notify_ack_id_valid(tp, so,
+			    optval)) != 0) {
+				break;
+			}
+			error = tcp_add_notify_ack_marker(tp, optval);
+			break;
 		case SO_FLUSH:
 			if ((error = sooptcopyin(sopt, &optval, sizeof (optval),
 			    sizeof (optval))) != 0)
@@ -2323,13 +2363,25 @@ tcp_ctloutput(so, sopt)
 			optval = tp->t_maxseg;
 			break;
 		case TCP_KEEPALIVE:
-			optval = tp->t_keepidle / TCP_RETRANSHZ;
+			if (tp->t_keepidle > 0)
+				optval = tp->t_keepidle / TCP_RETRANSHZ;
+			else
+				optval = tcp_keepidle  / TCP_RETRANSHZ;
 			break;
 		case TCP_KEEPINTVL:
-			optval = tp->t_keepintvl / TCP_RETRANSHZ;
+			if (tp->t_keepintvl > 0)
+				optval = tp->t_keepintvl / TCP_RETRANSHZ;
+			else
+				optval = tcp_keepintvl / TCP_RETRANSHZ;
 			break;
 		case TCP_KEEPCNT:
-			optval = tp->t_keepcnt;
+			if (tp->t_keepcnt > 0)
+				optval = tp->t_keepcnt;
+			else
+				optval = tcp_keepcnt;
+			break;
+		case TCP_KEEPALIVE_OFFLOAD:
+			optval = !!(inp->inp_flags2 & INP2_KEEPALIVE_OFFLOAD);
 			break;
 		case TCP_NOOPT:
 			optval = tp->t_flags & TF_NOOPT;
@@ -2442,9 +2494,24 @@ tcp_ctloutput(so, sopt)
 			optval = tp->t_adaptive_wtimo;
 			break;
 		case SO_TRAFFIC_MGT_BACKGROUND:
-			optval = (so->so_traffic_mgt_flags &
-			    TRAFFIC_MGT_SO_BACKGROUND) ? 1 : 0;
+			optval = (so->so_flags1 &
+			    SOF1_TRAFFIC_MGT_SO_BACKGROUND) ? 1 : 0;
 			break;
+		case TCP_NOTIFY_ACKNOWLEDGEMENT: {
+			struct tcp_notify_ack_complete retid;
+
+			if (sopt->sopt_valsize != sizeof (retid)) {
+				error = EINVAL;
+				break;
+			}
+			bzero(&retid, sizeof (retid));
+			tcp_get_notify_ack_count(tp, &retid);
+			if (retid.notify_complete_count > 0)
+				tcp_get_notify_ack_ids(tp, &retid);
+
+			error = sooptcopyout(sopt, &retid, sizeof (retid));
+			goto done;
+		}
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -2504,15 +2571,6 @@ SYSCTL_PROC(_net_inet_tcp, TCPCTL_SENDSPACE, sendspace, CTLTYPE_INT | CTLFLAG_RW
 SYSCTL_PROC(_net_inet_tcp, TCPCTL_RECVSPACE, recvspace, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_recvspace , 0, &sysctl_tcp_sospace, "IU", "Maximum incoming TCP datagram size");
 
-/* Sysctl for testing and tuning the connectx with data api */
-#define TCP_PRECONNECT_SBSZ_MAX 1460
-#define TCP_PRECONNECT_SBSZ_MIN (TCP_MSS)
-#define TCP_PRECONNECT_SBSZ_DEF	(TCP6_MSS)
-static int tcp_preconnect_sbspace = TCP_PRECONNECT_SBSZ_DEF;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, preconn_sbsz, CTLFLAG_RW | CTLFLAG_LOCKED,
-    &tcp_preconnect_sbspace, 0, "Maximum preconnect space");
-
-
 /*
  * Attach TCP protocol to socket, allocating
  * internet protocol control block, tcp control block,
@@ -2525,11 +2583,9 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, preconn_sbsz, CTLFLAG_RW | CTLFLAG_LOCKED,
  *	soreserve:ENOBUFS
  */
 static int
-tcp_attach(so, p)
-	struct socket *so;
-	struct proc *p;
+tcp_attach(struct socket *so, struct proc *p)
 {
-	register struct tcpcb *tp;
+	struct tcpcb *tp;
 	struct inpcb *inp;
 	int error;
 #if INET6
@@ -2549,8 +2605,7 @@ tcp_attach(so, p)
 	}
 
 	if (so->so_snd.sb_preconn_hiwat == 0) {
-		soreserve_preconnect(so, imin(TCP_PRECONNECT_SBSZ_MAX,
-		    imax(tcp_preconnect_sbspace, TCP_PRECONNECT_SBSZ_MIN)));
+		soreserve_preconnect(so, 2048);
 	}
 
 	if ((so->so_rcv.sb_flags & SB_USRSIZE) == 0)
@@ -2595,8 +2650,7 @@ tcp_attach(so, p)
  * send segment to peer (with FIN).
  */
 static struct tcpcb *
-tcp_disconnect(tp)
-	register struct tcpcb *tp;
+tcp_disconnect(struct tcpcb *tp)
 {
 	struct socket *so = tp->t_inpcb->inp_socket;
 
@@ -2631,10 +2685,8 @@ tcp_disconnect(tp)
  * We can let the user exit from the close as soon as the FIN is acked.
  */
 static struct tcpcb *
-tcp_usrclosed(tp)
-	register struct tcpcb *tp;
+tcp_usrclosed(struct tcpcb *tp)
 {
-
 	switch (tp->t_state) {
 
 	case TCPS_CLOSED:

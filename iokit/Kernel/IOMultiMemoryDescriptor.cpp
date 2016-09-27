@@ -276,26 +276,38 @@ IOReturn IOMultiMemoryDescriptor::doMap(vm_map_t           __addressMap,
     {
         prot = VM_PROT_READ;
         if (!(kIOMapReadOnly & options)) prot |= VM_PROT_WRITE;
-        ref.map     = map;
-	ref.tag     = IOMemoryTag(map);
-        ref.options = options;
-        ref.size    = length;
-        ref.prot    = prot;
-        if (options & kIOMapAnywhere)
-            // vm_map looks for addresses above here, even when VM_FLAGS_ANYWHERE
-            ref.mapped = 0;
-        else
-            ref.mapped = mapping->fAddress;
 
-        if ((ref.map == kernel_map) && (kIOMemoryBufferPageable & _flags))
-            err = IOIteratePageableMaps(ref.size, &IOMemoryDescriptorMapAlloc, &ref);
-        else
-            err = IOMemoryDescriptorMapAlloc(ref.map, &ref);
+	if (kIOMapOverwrite & options)
+	{
+	    if ((map == kernel_map) && (kIOMemoryBufferPageable & _flags))
+	    {
+		map = IOPageableMapForAddress(address);
+	    }
+	    err = KERN_SUCCESS;
+	}
+	else
+	{
+	    ref.map     = map;
+	    ref.tag     = IOMemoryTag(map);
+	    ref.options = options;
+	    ref.size    = length;
+	    ref.prot    = prot;
+	    if (options & kIOMapAnywhere)
+		// vm_map looks for addresses above here, even when VM_FLAGS_ANYWHERE
+		ref.mapped = 0;
+	    else
+		ref.mapped = mapping->fAddress;
 
-        if (KERN_SUCCESS != err) break;
+	    if ((ref.map == kernel_map) && (kIOMemoryBufferPageable & _flags))
+		err = IOIteratePageableMaps(ref.size, &IOMemoryDescriptorMapAlloc, &ref);
+	    else
+		err = IOMemoryDescriptorMapAlloc(ref.map, &ref);
 
-        address = ref.mapped;
-        mapping->fAddress = address;
+	    if (KERN_SUCCESS != err) break;
+
+	    address = ref.mapped;
+	    mapping->fAddress = address;
+	}
 
         mapOffset = offset;
         bytesRemaining = length;
@@ -329,13 +341,8 @@ IOReturn IOMultiMemoryDescriptor::doMap(vm_map_t           __addressMap,
     if (kIOReturnSuccess == err)
     {
 #if IOTRACKING
-        IOTrackingAdd(gIOMapTracking, &mapping->fTracking, length, false);
+        IOTrackingAddUser(gIOMapTracking, &mapping->fTracking, mapping->fLength);
 #endif
-    }
-    else
-    {
-        mapping->release();
-        mapping = 0;
     }
 
     return (err);
@@ -348,6 +355,7 @@ IOReturn IOMultiMemoryDescriptor::setPurgeable( IOOptionBits newState,
     IOOptionBits totalState, state;
 
     totalState = kIOMemoryPurgeableNonVolatile;
+    err = kIOReturnSuccess;
     for (unsigned index = 0; index < _descriptorsCount; index++) 
     {
         err = _descriptors[index]->setPurgeable(newState, &state);

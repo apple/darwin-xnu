@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -66,6 +66,7 @@
 
 #include <sys/queue.h>
 #include <sys/kern_event.h>
+#include <net/net_kev.h>
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <net/route.h>
@@ -142,25 +143,6 @@ struct kev_in_portinuse {
 	u_int32_t reserved[2];
 };
 #endif /* __APPLE_API_PRIVATE */
-
-/*
- * Define inet event subclass and specific inet events.
- */
-#define	KEV_INET_SUBCLASS		1 /* inet subclass identifier */
-
-#define	KEV_INET_NEW_ADDR		1 /* Userland configured IP address */
-#define	KEV_INET_CHANGED_ADDR		2 /* Address changed event */
-#define	KEV_INET_ADDR_DELETED		3 /* IPv6 address was deleted */
-#define	KEV_INET_SIFDSTADDR		4 /* Dest. address was set */
-#define	KEV_INET_SIFBRDADDR		5 /* Broadcast address was set */
-#define	KEV_INET_SIFNETMASK		6 /* Netmask was set */
-#define	KEV_INET_ARPCOLLISION		7 /* ARP collision detected */
-#ifdef __APPLE_API_PRIVATE
-#define	KEV_INET_PORTINUSE		8 /* use ken_in_portinuse */
-#endif
-#define	KEV_INET_ARPRTRFAILURE		9 /* ARP resolution failed for router */
-#define	KEV_INET_ARPRTRALIVE		10 /* ARP resolution succeeded for 
-					      router */
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <net/if.h>

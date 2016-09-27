@@ -2426,7 +2426,9 @@ loop:
 			i = b_to_q((u_char *)cp, ce, &tp->t_outq);
 			ce -= i;
 			tp->t_column += ce;
-			cp += ce, cc -= ce, tk_nout += ce;
+			cp += ce;
+			cc -= ce;
+			tk_nout += ce;
 			tp->t_outcc += ce;
 			if (i > 0) {
 				/* out of space */

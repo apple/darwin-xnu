@@ -144,11 +144,13 @@ kern_return_t kxld_sect_export_macho_to_file_buffer(const KXLDSect *sect, u_char
     u_long data_size, boolean_t is_32_bit)
     __attribute__((nonnull, visibility("hidden")));
 
-kern_return_t kxld_sect_export_macho_to_vm(const KXLDSect *sect, u_char *buf, 
-    u_long *header_offset, u_long header_size, 
-    kxld_addr_t link_addr, u_long data_size, 
-    boolean_t is_32_bit)
-    __attribute__((nonnull, visibility("hidden")));
+kern_return_t kxld_sect_export_macho_to_vm(const KXLDSect *sect, u_char *buf,
+                                           u_long *header_offset,
+                                           u_long header_size,
+                                           kxld_addr_t link_addr,
+                                           u_long data_size,
+                                           boolean_t is_32_bit)
+__attribute__((nonnull, visibility("hidden")));
 
 /*******************************************************************************
 * Mutators

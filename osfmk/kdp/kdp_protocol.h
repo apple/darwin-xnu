@@ -36,6 +36,7 @@
 
 #ifdef MACH_KERNEL_PRIVATE
 #include	<mach/vm_prot.h>
+#include    <mach/boolean.h>
 #include	<stdint.h>
 #endif
 

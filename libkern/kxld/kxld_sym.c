@@ -122,7 +122,7 @@ kxld_sym_init_from_macho64(KXLDSym *sym, char *strtab, const struct nlist_64 *sr
     if (kxld_sym_is_indirect(sym)) {
         sym->alias = strtab + src->n_value;
     }
-
+    
     rval = KERN_SUCCESS;
 
 finish:
@@ -147,6 +147,7 @@ kxld_sym_init_absolute(KXLDSym *sym, char *name, kxld_addr_t link_addr)
 
     init_predicates(sym, N_ABS | N_EXT, 0);
     sym->is_resolved = TRUE;
+    
 }
 
 /*******************************************************************************
@@ -920,9 +921,11 @@ kxld_sym_export_macho_64(const KXLDSym *sym, u_char *_nl, char *strtab,
     }
 
     str = (char *) (strtab + *stroff);
+
     strlcpy(str, sym->name, strsize - *stroff);
 
     *stroff += bytes;
+
     rval = KERN_SUCCESS;
 
 finish:
@@ -1032,4 +1035,3 @@ kxld_sym_mark_private(KXLDSym *sym)
     sym->type |= N_PEXT;
     sym->is_external = FALSE;
 }
-

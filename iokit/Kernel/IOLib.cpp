@@ -58,6 +58,7 @@
 #include "libkern/OSAtomic.h"
 #include <libkern/c++/OSKext.h>
 #include <IOKit/IOStatisticsPrivate.h>
+#include <os/log_private.h>
 #include <sys/msgbuf.h>
 
 #if IOKITSTATS
@@ -172,9 +173,17 @@ void IOLibInit(void)
 
 #if IOTRACKING
     IOTrackingInit();
-    gIOMallocTracking = IOTrackingQueueAlloc(kIOMallocTrackingName, 0, 0,         true);
-    gIOWireTracking   = IOTrackingQueueAlloc(kIOWireTrackingName,   0, page_size, false);
-    gIOMapTracking    = IOTrackingQueueAlloc(kIOMapTrackingName,    0, page_size, false);
+    gIOMallocTracking = IOTrackingQueueAlloc(kIOMallocTrackingName, 0, 0, 0,
+						 kIOTrackingQueueTypeAlloc,
+						 37);
+    gIOWireTracking   = IOTrackingQueueAlloc(kIOWireTrackingName,   0, 0, page_size, 0, 0);
+
+    size_t mapCaptureSize = (kIOTracking & gIOKitDebug) ? page_size : (1024*1024);
+    gIOMapTracking    = IOTrackingQueueAlloc(kIOMapTrackingName,    0, 0, mapCaptureSize,
+						 kIOTrackingQueueTypeDefaultOn
+						 | kIOTrackingQueueTypeMap
+						 | kIOTrackingQueueTypeUser,
+					     0);
 #endif
 
     gIOKitPageableSpace.maps[0].address = 0;
@@ -1117,30 +1126,36 @@ static void _iolog_consputc(int ch, void *arg __unused)
     cons_putc_locked(ch);
 }
 
-static void _iolog_logputc(int ch, void *arg __unused)
-{
-    log_putc_locked(ch);
-}
+static void _IOLogv(const char *format, va_list ap, void *caller);
 
+__attribute__((noinline,not_tail_called))
 void IOLog(const char *format, ...)
 {
+    void *caller = __builtin_return_address(0);
     va_list ap;
 
     va_start(ap, format);
-    IOLogv(format, ap);
+    _IOLogv(format, ap, caller);
     va_end(ap);
 }
 
+__attribute__((noinline,not_tail_called))
 void IOLogv(const char *format, va_list ap)
+{
+    void *caller = __builtin_return_address(0);
+    _IOLogv(format, ap, caller);
+}
+
+void _IOLogv(const char *format, va_list ap, void *caller)
 {
     va_list ap2;
 
+    /* Ideally not called at interrupt context or with interrupts disabled. Needs further validate */
+    /* assert(TRUE == ml_get_interrupts_enabled()); */
+
     va_copy(ap2, ap);
 
-    bsd_log_lock();
-    __doprnt(format, ap, _iolog_logputc, NULL, 16, TRUE);
-    bsd_log_unlock();
-    logwakeup();
+    os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, format, ap, caller);
 
     __doprnt(format, ap2, _iolog_consputc, NULL, 16, TRUE);
     va_end(ap2);

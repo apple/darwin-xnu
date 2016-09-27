@@ -185,7 +185,7 @@ unsigned int OSArray::ensureCapacity(unsigned int newCapacity)
 {
     const OSMetaClassBase **newArray;
     unsigned int finalCapacity;
-    unsigned int oldSize, newSize;
+    vm_size_t    oldSize, newSize;
 
     if (newCapacity <= capacity)
         return capacity;
@@ -200,8 +200,11 @@ unsigned int OSArray::ensureCapacity(unsigned int newCapacity)
 
     newSize = sizeof(const OSMetaClassBase *) * finalCapacity;
 
-    newArray = (const OSMetaClassBase **) kalloc_container(newSize);
+    newArray = (const OSMetaClassBase **) kallocp_container(&newSize);
     if (newArray) {
+        // use all of the actual allocation size
+        finalCapacity = newSize / sizeof(const OSMetaClassBase *);
+
         oldSize = sizeof(const OSMetaClassBase *) * capacity;
 
         OSCONTAINER_ACCUMSIZE(((size_t)newSize) - ((size_t)oldSize));
@@ -263,6 +266,9 @@ bool OSArray::merge(const OSArray * otherArray)
 
     if (!otherCount)
         return true;
+
+    if (newCount < count)
+        return false;
 
     // do we need more space?
     if (newCount > capacity && newCount > ensureCapacity(newCount))

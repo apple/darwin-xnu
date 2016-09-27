@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -234,14 +234,18 @@ inaddr_local(struct in_addr in)
 /*
  * Return 1 if an internet address is for a ``local'' host
  * (one to which we have a connection).  If subnetsarelocal
- * is true, this includes other subnets of the local net.
- * Otherwise, it includes only the directly-connected (sub)nets.
+ * is true, this includes other subnets of the local net,
+ * otherwise, it includes the directly-connected (sub)nets.
+ * The IPv4 link local prefix 169.254/16 is also included.
  */
 int
 in_localaddr(struct in_addr in)
 {
 	u_int32_t i = ntohl(in.s_addr);
 	struct in_ifaddr *ia;
+
+	if (IN_LINKLOCAL(i))
+		return (1);
 
 	if (subnetsarelocal) {
 		lck_rw_lock_shared(in_ifaddr_rwlock);
@@ -725,7 +729,7 @@ inctl_ifaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 			ev_msg.dv[0].data_length = sizeof (struct kev_in_data);
 			ev_msg.dv[1].data_length = 0;
 
-			kev_post_msg(&ev_msg);
+			dlil_post_complete_msg(ifp, &ev_msg);
 		} else {
 			IFA_UNLOCK(&ia->ia_ifa);
 		}
@@ -827,7 +831,7 @@ inctl_ifaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 		}
 
 		/* Post the kernel event */
-		kev_post_msg(&ev_msg);
+		dlil_post_complete_msg(ifp, &ev_msg);
 
 		/*
 		 * See if there is any IPV4 address left and if so,
@@ -946,7 +950,7 @@ inctl_ifdstaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 		ev_msg.dv[0].data_length = sizeof (struct kev_in_data);
 		ev_msg.dv[1].data_length = 0;
 
-		kev_post_msg(&ev_msg);
+		dlil_post_complete_msg(ifp, &ev_msg);
 
 		lck_mtx_lock(rnh_lock);
 		IFA_LOCK(&ia->ia_ifa);
@@ -1041,7 +1045,7 @@ inctl_ifbrdaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 		ev_msg.dv[0].data_length = sizeof (struct kev_in_data);
 		ev_msg.dv[1].data_length = 0;
 
-		kev_post_msg(&ev_msg);
+		dlil_post_complete_msg(ifp, &ev_msg);
 		break;
 
 	default:
@@ -1119,7 +1123,7 @@ inctl_ifnetmask(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 		ev_msg.dv[0].data_length = sizeof (struct kev_in_data);
 		ev_msg.dv[1].data_length = 0;
 
-		kev_post_msg(&ev_msg);
+		dlil_post_complete_msg(ifp, &ev_msg);
 		break;
 	}
 

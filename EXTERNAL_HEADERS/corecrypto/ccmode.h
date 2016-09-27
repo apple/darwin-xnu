@@ -13,6 +13,7 @@
 
 #include <corecrypto/cc.h>
 #include <corecrypto/ccmode_impl.h>
+#include <corecrypto/ccmode_siv.h>
 
 /* ECB mode. */
 
@@ -26,7 +27,7 @@ CC_INLINE size_t ccecb_context_size(const struct ccmode_ecb *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long ccecb_block_size(const struct ccmode_ecb *mode)
+CC_INLINE size_t ccecb_block_size(const struct ccmode_ecb *mode)
 {
 	return mode->block_size;
 }
@@ -38,14 +39,14 @@ CC_INLINE void ccecb_init(const struct ccmode_ecb *mode, ccecb_ctx *ctx,
 }
 
 CC_INLINE void ccecb_update(const struct ccmode_ecb *mode, const ccecb_ctx *ctx,
-                            unsigned long nblocks, const void *in, void *out)
+                            size_t nblocks, const void *in, void *out)
 {
 	mode->ecb(ctx, nblocks, in, out);
 }
 
 CC_INLINE void ccecb_one_shot(const struct ccmode_ecb *mode,
                               size_t key_len, const void *key,
-                              unsigned long nblocks, const void *in, void *out)
+                              size_t nblocks, const void *in, void *out)
 {
 	ccecb_ctx_decl(mode->size, ctx);
 	mode->init(mode, ctx, key_len, key);
@@ -84,7 +85,7 @@ CC_INLINE size_t cccbc_context_size(const struct ccmode_cbc *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long cccbc_block_size(const struct ccmode_cbc *mode)
+CC_INLINE size_t cccbc_block_size(const struct ccmode_cbc *mode)
 {
 	return mode->block_size;
 }
@@ -105,15 +106,15 @@ CC_INLINE void cccbc_set_iv(const struct ccmode_cbc *mode, cccbc_iv *iv_ctx,
 }
 
 CC_INLINE void cccbc_update(const struct ccmode_cbc *mode,  cccbc_ctx *ctx,
-                            cccbc_iv *iv, unsigned long nblocks,
+                            cccbc_iv *iv, size_t nblocks,
                             const void *in, void *out)
 {
 	mode->cbc(ctx, iv, nblocks, in, out);
 }
 
 CC_INLINE void cccbc_one_shot(const struct ccmode_cbc *mode,
-                              unsigned long key_len, const void *key,
-                              const void *iv, unsigned long nblocks,
+                              size_t key_len, const void *key,
+                              const void *iv, size_t nblocks,
                               const void *in, void *out)
 {
 	cccbc_ctx_decl(mode->size, ctx);
@@ -139,7 +140,7 @@ CC_INLINE size_t cccfb_context_size(const struct ccmode_cfb *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long cccfb_block_size(const struct ccmode_cfb *mode)
+CC_INLINE size_t cccfb_block_size(const struct ccmode_cfb *mode)
 {
 	return mode->block_size;
 }
@@ -179,7 +180,7 @@ CC_INLINE size_t cccfb8_context_size(const struct ccmode_cfb8 *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long cccfb8_block_size(const struct ccmode_cfb8 *mode)
+CC_INLINE size_t cccfb8_block_size(const struct ccmode_cfb8 *mode)
 {
 	return mode->block_size;
 }
@@ -222,7 +223,7 @@ CC_INLINE size_t ccctr_context_size(const struct ccmode_ctr *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long ccctr_block_size(const struct ccmode_ctr *mode)
+CC_INLINE size_t ccctr_block_size(const struct ccmode_ctr *mode)
 {
 	return mode->block_size;
 }
@@ -262,7 +263,7 @@ CC_INLINE size_t ccofb_context_size(const struct ccmode_ofb *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long ccofb_block_size(const struct ccmode_ofb *mode)
+CC_INLINE size_t ccofb_block_size(const struct ccmode_ofb *mode)
 {
 	return mode->block_size;
 }
@@ -321,7 +322,7 @@ CC_INLINE size_t ccxts_context_size(const struct ccmode_xts *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long ccxts_block_size(const struct ccmode_xts *mode)
+CC_INLINE size_t ccxts_block_size(const struct ccmode_xts *mode)
 {
 	return mode->block_size;
 }
@@ -340,7 +341,7 @@ CC_INLINE void ccxts_set_tweak(const struct ccmode_xts *mode, ccxts_ctx *ctx,
 }
 
 CC_INLINE void *ccxts_update(const struct ccmode_xts *mode, ccxts_ctx *ctx,
-	ccxts_tweak *tweak, unsigned long nblocks, const void *in, void *out)
+	ccxts_tweak *tweak, size_t nblocks, const void *in, void *out)
 {
 	return mode->xts(ctx, tweak, nblocks, in, out);
 }
@@ -348,7 +349,7 @@ CC_INLINE void *ccxts_update(const struct ccmode_xts *mode, ccxts_ctx *ctx,
 CC_INLINE void ccxts_one_shot(const struct ccmode_xts *mode,
                               size_t key_len, const void *key,
                               const void *tweak_key, const void *iv,
-                              unsigned long nblocks, const void *in, void *out)
+                              size_t nblocks, const void *in, void *out)
 {
 	ccxts_ctx_decl(mode->size, ctx);
     ccxts_tweak_decl(mode->tweak_size, tweak);
@@ -371,62 +372,70 @@ CC_INLINE size_t ccgcm_context_size(const struct ccmode_gcm *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long ccgcm_block_size(const struct ccmode_gcm *mode)
+CC_INLINE size_t ccgcm_block_size(const struct ccmode_gcm *mode)
 {
 	return mode->block_size;
 }
 
-CC_INLINE void ccgcm_init(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
+CC_INLINE int ccgcm_init(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
                           size_t key_len, const void *key)
 {
-    mode->init(mode, ctx, key_len, key);
+    return mode->init(mode, ctx, key_len, key);
 }
 
-CC_INLINE void ccgcm_set_iv(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
+CC_INLINE int ccgcm_set_iv(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
                             size_t iv_size, const void *iv)
 {
-	mode->set_iv(ctx, iv_size, iv);
+	return mode->set_iv(ctx, iv_size, iv);
 }
 
-CC_INLINE void ccgcm_gmac(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
+// add Additional authenticated data (AAD)
+CC_INLINE int ccgcm_aad(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
+                         size_t nbytes, const void *additional_data)
+{
+    return mode->gmac(ctx, nbytes, additional_data);
+}
+
+CC_INLINE int ccgcm_gmac(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
                           size_t nbytes, const void *in)
 {
-	mode->gmac(ctx, nbytes, in);
+	return mode->gmac(ctx, nbytes, in);
 }
 
-CC_INLINE void ccgcm_update(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
+// encrypt or decrypt
+CC_INLINE int ccgcm_update(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
                             size_t nbytes, const void *in, void *out)
 {
-	mode->gcm(ctx, nbytes, in, out);
+	return mode->gcm(ctx, nbytes, in, out);
 }
 
-CC_INLINE void ccgcm_finalize(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
+CC_INLINE int ccgcm_finalize(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
                               size_t tag_size, void *tag)
 {
-	mode->finalize(ctx, tag_size, tag);
+	return mode->finalize(ctx, tag_size, tag);
 }
 
-CC_INLINE void ccgcm_reset(const struct ccmode_gcm *mode, ccgcm_ctx *ctx)
+CC_INLINE int ccgcm_reset(const struct ccmode_gcm *mode, ccgcm_ctx *ctx)
 {
-    mode->reset(ctx);
+    return mode->reset(ctx);
 }
 
 
-CC_INLINE void ccgcm_one_shot(const struct ccmode_gcm *mode,
-                              size_t key_len, const void *key,
-                              size_t iv_len, const void *iv,
-                              size_t adata_len, const void *adata,
-                              size_t nbytes, const void *in, void *out,
-                              size_t tag_len, void *tag)
-{
-	ccgcm_ctx_decl(mode->size, ctx);
-	mode->init(mode, ctx, key_len, key);
-	mode->set_iv(ctx, iv_len, iv);
-	mode->gmac(ctx, adata_len, adata);
-	mode->gcm(ctx, nbytes, in, out);
-	mode->finalize(ctx, tag_len, tag);
-	ccgcm_ctx_clear(mode->size, ctx);
-}
+int ccgcm_one_shot(const struct ccmode_gcm *mode,
+                             size_t key_len, const void *key,
+                             size_t iv_len, const void *iv,
+                             size_t adata_len, const void *adata,
+                             size_t nbytes, const void *in, void *out,
+                             size_t tag_len, void *tag);
+
+//do not call ccgcm_one_shot_legacy() in any new application
+int ccgcm_one_shot_legacy(const struct ccmode_gcm *mode,
+                           size_t key_len, const void *key,
+                           size_t iv_len, const void *iv,
+                           size_t adata_len, const void *adata,
+                           size_t nbytes, const void *in, void *out,
+                           size_t tag_len, void *tag);
+
 
 /* CCM */
 
@@ -443,64 +452,67 @@ CC_INLINE size_t ccccm_context_size(const struct ccmode_ccm *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long ccccm_block_size(const struct ccmode_ccm *mode)
+CC_INLINE size_t ccccm_block_size(const struct ccmode_ccm *mode)
 {
 	return mode->block_size;
 }
 
-CC_INLINE void ccccm_init(const struct ccmode_ccm *mode, ccccm_ctx *ctx,
+CC_INLINE int ccccm_init(const struct ccmode_ccm *mode, ccccm_ctx *ctx,
                           size_t key_len, const void *key)
 {
-    mode->init(mode, ctx, key_len, key);
+    return mode->init(mode, ctx, key_len, key);
 }
 
-CC_INLINE void ccccm_set_iv(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx,
+CC_INLINE int ccccm_set_iv(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx,
                             size_t nonce_len, const void *nonce,
                             size_t mac_size, size_t auth_len, size_t data_len)
 {
-	mode->set_iv(ctx, nonce_ctx, nonce_len, nonce, mac_size, auth_len, data_len);
+	return mode->set_iv(ctx, nonce_ctx, nonce_len, nonce, mac_size, auth_len, data_len);
 }
 
-CC_INLINE void ccccm_cbcmac(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx,
+CC_INLINE int ccccm_cbcmac(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx,
                           size_t nbytes, const void *in)
 {
-	mode->cbcmac(ctx, nonce_ctx, nbytes, in);
+	return mode->cbcmac(ctx, nonce_ctx, nbytes, in);
 }
 
-CC_INLINE void ccccm_update(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx,
+CC_INLINE int ccccm_update(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx,
                             size_t nbytes, const void *in, void *out)
 {
-	mode->ccm(ctx, nonce_ctx, nbytes, in, out);
+	return mode->ccm(ctx, nonce_ctx, nbytes, in, out);
 }
 
-CC_INLINE void ccccm_finalize(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx,
+CC_INLINE int ccccm_finalize(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx,
                               void *mac)
 {
-	mode->finalize(ctx, nonce_ctx, mac);
+	return mode->finalize(ctx, nonce_ctx, mac);
 }
 
-CC_INLINE void ccccm_reset(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx)
+CC_INLINE int ccccm_reset(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_nonce *nonce_ctx)
 {
-    mode->reset(ctx, nonce_ctx);
+    return mode->reset(ctx, nonce_ctx);
 }
 
 
-CC_INLINE void ccccm_one_shot(const struct ccmode_ccm *mode,
-                              unsigned long key_len, const void *key,
+CC_INLINE int ccccm_one_shot(const struct ccmode_ccm *mode,
+                              size_t key_len, const void *key,
                               unsigned nonce_len, const void *nonce,
-                              unsigned long nbytes, const void *in, void *out,
+                              size_t nbytes, const void *in, void *out,
                               unsigned adata_len, const void* adata,
                               unsigned mac_size, void *mac)
 {
+    int rc=0;
 	ccccm_ctx_decl(mode->size, ctx);
 	ccccm_nonce_decl(mode->nonce_size, nonce_ctx);
-	mode->init(mode, ctx, key_len, key);
-	mode->set_iv(ctx, nonce_ctx, nonce_len, nonce, mac_size, adata_len, nbytes);
-	mode->cbcmac(ctx, nonce_ctx, adata_len, adata);
-	mode->ccm(ctx, nonce_ctx, nbytes, in, out);
-	mode->finalize(ctx, nonce_ctx, mac);
+	rc = mode->init(mode, ctx, key_len, key);
+	if(rc==0) rc=mode->set_iv(ctx, nonce_ctx, nonce_len, nonce, mac_size, adata_len, nbytes);
+	if(rc==0) rc=mode->cbcmac(ctx, nonce_ctx, adata_len, adata);
+	if(rc==0) rc=mode->ccm(ctx, nonce_ctx, nbytes, in, out);
+	if(rc==0) rc=mode->finalize(ctx, nonce_ctx, mac);
 	ccccm_ctx_clear(mode->size, ctx);
     ccccm_nonce_clear(mode->size, nonce_ctx);
+
+    return rc;
 }
 
 
@@ -517,7 +529,7 @@ CC_INLINE size_t ccomac_context_size(const struct ccmode_omac *mode)
     return mode->size;
 }
 
-CC_INLINE unsigned long ccomac_block_size(const struct ccmode_omac *mode)
+CC_INLINE size_t ccomac_block_size(const struct ccmode_omac *mode)
 {
 	return mode->block_size;
 }
@@ -525,18 +537,18 @@ CC_INLINE unsigned long ccomac_block_size(const struct ccmode_omac *mode)
 CC_INLINE void ccomac_init(const struct ccmode_omac *mode, ccomac_ctx *ctx,
                            size_t tweak_len, size_t key_len, const void *key)
 {
-    return mode->init(mode, ctx, tweak_len, key_len, key);
+    mode->init(mode, ctx, tweak_len, key_len, key);
 }
 
 CC_INLINE int ccomac_update(const struct ccmode_omac *mode, ccomac_ctx *ctx,
-	unsigned long nblocks, const void *tweak, const void *in, void *out)
+	size_t nblocks, const void *tweak, const void *in, void *out)
 {
 	return mode->omac(ctx, nblocks, tweak, in, out);
 }
 
 CC_INLINE int ccomac_one_shot(const struct ccmode_omac *mode,
 	size_t tweak_len, size_t key_len, const void *key,
-	const void *tweak, unsigned long nblocks, const void *in, void *out)
+	const void *tweak, size_t nblocks, const void *in, void *out)
 {
 	ccomac_ctx_decl(mode->size, ctx);
 	mode->init(mode, ctx, tweak_len, key_len, key);

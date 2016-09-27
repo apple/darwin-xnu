@@ -54,6 +54,11 @@ errno_t ipsec_inject_inbound_packet(ifnet_t	interface, mbuf_t packet);
 
 void ipsec_set_pkthdr_for_interface(ifnet_t interface, mbuf_t packet, int family);
 
+void ipsec_set_ipoa_for_interface(ifnet_t interface, struct ip_out_args *ipoa);
+
+struct ip6_out_args;
+void ipsec_set_ip6oa_for_interface(ifnet_t interface, struct ip6_out_args *ip6oa);
+
 #endif
 
 /*

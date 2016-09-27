@@ -42,12 +42,38 @@
 #define _OS_OVERFLOW_H
 
 #include <sys/cdefs.h>
+#include <stdbool.h>
+#include <os/base.h>
+
+bool __header_always_inline OS_WARN_RESULT
+__os_warn_unused(__const bool x)
+{
+	return x;
+}
+
+#if __has_builtin(__builtin_add_overflow) && \
+    __has_builtin(__builtin_sub_overflow) && \
+    __has_builtin(__builtin_mul_overflow)
+
+#define os_add_overflow(a, b, res) __os_warn_unused(__builtin_add_overflow((a), (b), (res)))
+#define os_sub_overflow(a, b, res) __os_warn_unused(__builtin_sub_overflow((a), (b), (res)))
+#define os_mul_overflow(a, b, res) __os_warn_unused(__builtin_mul_overflow((a), (b), (res)))
+
+#else
 
 /* compile-time assertion that 'x' and 'y' are equivalent types */
+#ifdef __cplusplus
 #define __OS_TYPE_CHECK(x, y) do { \
-	_Static_assert(__builtin_types_compatible_p(typeof(x),typeof(y)), \
+	__typeof__(x) _x; \
+	__typeof__(y) _y; \
+	(void)(&_x == &_y, "overflow arithmetic: incompatible types"); \
+} while (0)
+#else
+#define __OS_TYPE_CHECK(x, y) do { \
+	_Static_assert(__builtin_types_compatible_p(__typeof(x),__typeof(y)), \
 			"overflow arithmetic: incompatible types"); \
 } while (0)
+#endif
 
 #define __os_add_overflow_func(T,U,V) _Generic((T), \
 		unsigned:           __builtin_uadd_overflow, \
@@ -76,36 +102,51 @@
 		long long:          __builtin_smulll_overflow \
 	)(T,U,V)
 
-int __header_always_inline __attribute__((__warn_unused_result__))
-__os_warn_unused(const int x)
-{
-	return x;
-}
-
-#define os_add_overflow(a, b, res) __os_warn_unused(({ \
+#define os_add_overflow(a, b, res) __os_warn_unused(__extension__({ \
 	__OS_TYPE_CHECK((a), (b)); \
 	__OS_TYPE_CHECK((b), *(res)); \
 	__os_add_overflow_func((a), (b), (res)); \
 }))
 
-#define os_add3_overflow(a, b, c, res) __os_warn_unused(({ \
-	typeof(a) _tmp; \
-	int _s, _t; \
-	_s = os_add_overflow((a), (b), &_tmp); \
-	_t = os_add_overflow((c), _tmp, (res)); \
-	_s | _t; \
-}))
-
-#define os_sub_overflow(a, b, res) __os_warn_unused(({ \
+#define os_sub_overflow(a, b, res) __os_warn_unused(__extension__({ \
 	__OS_TYPE_CHECK((a), (b)); \
 	__OS_TYPE_CHECK((b), *(res)); \
 	__os_sub_overflow_func((a), (b), (res)); \
 }))
 
-#define os_mul_overflow(a, b, res) __os_warn_unused(({ \
+#define os_mul_overflow(a, b, res) __os_warn_unused(__extension__({ \
 	__OS_TYPE_CHECK((a), (b)); \
 	__OS_TYPE_CHECK((b), *(res)); \
 	__os_mul_overflow_func((a), (b), (res)); \
+}))
+
+#endif /* __has_builtin(...) */
+
+/* os_add3_overflow(a, b, c) -> (a + b + c) */
+#define os_add3_overflow(a, b, c, res) __os_warn_unused(__extension__({ \
+	__typeof(*(res)) _tmp; \
+	bool _s, _t; \
+	_s = os_add_overflow((a), (b), &_tmp); \
+	_t = os_add_overflow((c), _tmp, (res)); \
+	_s | _t; \
+}))
+
+/* os_add_and_mul_overflow(a, b, x) -> (a + b)*x */
+#define os_add_and_mul_overflow(a, b, x, res) __os_warn_unused(__extension__({ \
+	__typeof(*(res)) _tmp; \
+	bool _s, _t; \
+	_s = os_add_overflow((a), (b), &_tmp); \
+	_t = os_mul_overflow((x), _tmp, (res)); \
+	_s | _t; \
+}))
+
+/* os_mul_and_add_overflow(a, x, b) -> a*x + b */
+#define os_mul_and_add_overflow(a, x, b, res) __os_warn_unused(__extension__({ \
+	__typeof(*(res)) _tmp; \
+	bool _s, _t; \
+	_s = os_mul_overflow((a), (x), &_tmp); \
+	_t = os_add_overflow((b), _tmp, (res)); \
+	_s | _t; \
 }))
 
 #endif /* _OS_OVERFLOW_H */

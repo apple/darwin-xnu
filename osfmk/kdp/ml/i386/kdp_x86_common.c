@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,22 +66,22 @@
 boolean_t kdp_read_io;
 boolean_t kdp_trans_off;
 
-addr64_t kdp_vtophys(pmap_t pmap, addr64_t va);
+pmap_paddr_t kdp_vtophys(pmap_t pmap, vm_offset_t va);
 
 pmap_t kdp_pmap = 0;
 
-addr64_t
+pmap_paddr_t
 kdp_vtophys(
 	pmap_t pmap,
-	addr64_t va)
+	vm_offset_t va)
 {
-	addr64_t    pa;
+	pmap_paddr_t    pa;
 	ppnum_t pp;
 
 	pp = pmap_find_phys(pmap, va);
 	if(!pp) return 0;
         
-	pa = ((addr64_t)pp << PAGE_SHIFT) | (va & PAGE_MASK);
+	pa = ((pmap_paddr_t)pp << PAGE_SHIFT) | (va & PAGE_MASK);
 
 	return(pa);
 }
@@ -333,7 +333,6 @@ kdp_machine_ioport_read(kdp_readioport_req_t *rq, caddr_t data, uint16_t lcpu)
 		break;
 	default:
 		return KDPERR_BADFLAVOR;
-		break;
 	}
 
 	return KDPERR_NO_ERROR;
@@ -362,7 +361,6 @@ kdp_machine_ioport_write(kdp_writeioport_req_t *rq, caddr_t data, uint16_t lcpu)
 		break;
 	default:
 		return KDPERR_BADFLAVOR;
-		break;
 	}
 
 	return KDPERR_NO_ERROR;

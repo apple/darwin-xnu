@@ -297,6 +297,12 @@ typedef struct wrap_timer_call {
 #define WAKEUP_REAPER		0x7FFFFFFFFFFFFFFFLL
 #define NEARLY_FOREVER		0x7FFFFFFFFFFFFFFELL
 
+
+typedef struct cyc_list {
+	cyc_omni_handler_t cyl_omni;
+	wrap_timer_call_t cyl_wrap_by_cpus[];
+} cyc_list_t;
+
 /* CPU going online/offline notifications */
 void (*dtrace_cpu_state_changed_hook)(int, boolean_t) = NULL;
 void dtrace_cpu_state_changed(int, boolean_t);
@@ -386,10 +392,8 @@ timer_call_add_cyclic(wrap_timer_call_t *wrapTC, cyc_handler_t *handler, cyc_tim
  * Executed on the CPU the timer is running on.
  */
 static void
-timer_call_remove_cyclic(cyclic_id_t cyclic)
+timer_call_remove_cyclic(wrap_timer_call_t *wrapTC)
 {
-	wrap_timer_call_t *wrapTC = (wrap_timer_call_t *)cyclic;
-
 	assert(wrapTC);
 	assert(cpu_number() == wrapTC->cpuid);
 
@@ -400,12 +404,10 @@ timer_call_remove_cyclic(cyclic_id_t cyclic)
 }
 
 static void *
-timer_call_get_cyclic_arg(cyclic_id_t cyclic)
-{       
-	wrap_timer_call_t *wrapTC = (wrap_timer_call_t *)cyclic;
- 	
+timer_call_get_cyclic_arg(wrap_timer_call_t *wrapTC)
+{
 	return (wrapTC ? wrapTC->hdlr.cyh_arg : NULL);
-}   
+}
 
 cyclic_id_t
 cyclic_timer_add(cyc_handler_t *handler, cyc_time_t *when)
@@ -430,62 +432,48 @@ cyclic_timer_remove(cyclic_id_t cyclic)
 }
 
 static void
-_cyclic_add_omni(cyclic_id_list_t cyc_list)
+_cyclic_add_omni(cyc_list_t *cyc_list)
 {
 	cyc_time_t cT;
 	cyc_handler_t cH;
-	wrap_timer_call_t *wrapTC;
-	cyc_omni_handler_t *omni = (cyc_omni_handler_t *)cyc_list;
-	char *t;
+	cyc_omni_handler_t *omni = &cyc_list->cyl_omni;
 
-	(omni->cyo_online)(omni->cyo_arg, CPU, &cH, &cT); 
+	(omni->cyo_online)(omni->cyo_arg, CPU, &cH, &cT);
 
-	t = (char *)cyc_list;
-	t += sizeof(cyc_omni_handler_t);
-	cyc_list = (cyclic_id_list_t)(uintptr_t)t;
-
-	t += sizeof(cyclic_id_t)*NCPU;
-	t += (sizeof(wrap_timer_call_t))*cpu_number();
-	wrapTC = (wrap_timer_call_t *)(uintptr_t)t;
-
-	cyc_list[cpu_number()] = timer_call_add_cyclic(wrapTC, &cH, &cT);
+	wrap_timer_call_t *wrapTC = &cyc_list->cyl_wrap_by_cpus[cpu_number()];
+	timer_call_add_cyclic(wrapTC, &cH, &cT);
 }
 
 cyclic_id_list_t
 cyclic_add_omni(cyc_omni_handler_t *omni)
 {
-	cyclic_id_list_t cyc_list = 
-		_MALLOC( (sizeof(wrap_timer_call_t))*NCPU + 
-				 sizeof(cyclic_id_t)*NCPU + 
-				 sizeof(cyc_omni_handler_t), M_TEMP, M_ZERO | M_WAITOK);
-	if (NULL == cyc_list)
-		return (cyclic_id_list_t)CYCLIC_NONE;
+	cyc_list_t *cyc_list =
+		_MALLOC(sizeof(cyc_list_t) + NCPU * sizeof(wrap_timer_call_t), M_TEMP, M_ZERO | M_WAITOK);
 
-	*(cyc_omni_handler_t *)cyc_list = *omni;
+	if (NULL == cyc_list)
+		return NULL;
+
+	cyc_list->cyl_omni = *omni;
+
 	dtrace_xcall(DTRACE_CPUALL, (dtrace_xcall_t)_cyclic_add_omni, (void *)cyc_list);
 
-	return cyc_list;
+	return (cyclic_id_list_t)cyc_list;
 }
 
 static void
-_cyclic_remove_omni(cyclic_id_list_t cyc_list)
+_cyclic_remove_omni(cyc_list_t *cyc_list)
 {
-	cyc_omni_handler_t *omni = (cyc_omni_handler_t *)cyc_list;
+	cyc_omni_handler_t *omni = &cyc_list->cyl_omni;
 	void *oarg;
-	cyclic_id_t cid;
-	char *t;
-
-	t = (char *)cyc_list;
-	t += sizeof(cyc_omni_handler_t);
-	cyc_list = (cyclic_id_list_t)(uintptr_t)t;
+	wrap_timer_call_t *wrapTC;
 
 	/*
 	 * If the processor was offline when dtrace started, we did not allocate
 	 * a cyclic timer for this CPU.
 	 */
-	if ((cid = cyc_list[cpu_number()]) != CYCLIC_NONE) {
-		oarg = timer_call_get_cyclic_arg(cid);
-		timer_call_remove_cyclic(cid);
+	if ((wrapTC = &cyc_list->cyl_wrap_by_cpus[cpu_number()]) != NULL) {
+		oarg = timer_call_get_cyclic_arg(wrapTC);
+		timer_call_remove_cyclic(wrapTC);
 		(omni->cyo_offline)(omni->cyo_arg, CPU, oarg);
 	}
 }
@@ -493,7 +481,7 @@ _cyclic_remove_omni(cyclic_id_list_t cyc_list)
 void
 cyclic_remove_omni(cyclic_id_list_t cyc_list)
 {
-	ASSERT( cyc_list != (cyclic_id_list_t)CYCLIC_NONE );
+	ASSERT(cyc_list != NULL);
 
 	dtrace_xcall(DTRACE_CPUALL, (dtrace_xcall_t)_cyclic_remove_omni, (void *)cyc_list);
 	_FREE(cyc_list, M_TEMP);
@@ -617,54 +605,6 @@ ddi_report_dev(dev_info_t *devi)
 #pragma unused(devi)
 }
 
-#define NSOFT_STATES 32 /* XXX No more than 32 clients at a time, please. */
-static void *soft[NSOFT_STATES];
-
-int
-ddi_soft_state_init(void **state_p, size_t size, size_t n_items)
-{
-#pragma unused(n_items)
-	int i;
-	
-	for (i = 0; i < NSOFT_STATES; ++i) soft[i] = _MALLOC(size, M_TEMP, M_ZERO | M_WAITOK);
-	*(size_t *)state_p = size;
-	return 0;
-}
-
-int
-ddi_soft_state_zalloc(void *state, int item)
-{
-#pragma unused(state)
-	if (item < NSOFT_STATES)
-		return DDI_SUCCESS;
-	else
-		return DDI_FAILURE;
-}
-
-void *
-ddi_get_soft_state(void *state, int item)
-{
-#pragma unused(state)
-	ASSERT(item < NSOFT_STATES);
-	return soft[item];
-}
-
-int
-ddi_soft_state_free(void *state, int item)
-{
-	ASSERT(item < NSOFT_STATES);
-	bzero( soft[item], (size_t)state );
-	return DDI_SUCCESS;
-}
-
-void
-ddi_soft_state_fini(void **state_p)
-{
-#pragma unused(state_p)
-	int i;
-	
-	for (i = 0; i < NSOFT_STATES; ++i) _FREE( soft[i], M_TEMP );
-}
 
 static unsigned int gRegisteredProps = 0;
 static struct {

@@ -2,7 +2,7 @@
  * Copyright (c) 2004-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,12 +22,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#define __KPI__
-//#include <sys/kpi_interface.h>
+#define	__KPI__
 
 #include <sys/param.h>
 #include <sys/mbuf.h>
@@ -37,6 +36,7 @@
 #include <libkern/OSAtomic.h>
 #include <kern/kalloc.h>
 #include <string.h>
+#include <net/dlil.h>
 #include <netinet/in.h>
 #include <netinet/ip_var.h>
 
@@ -50,80 +50,170 @@ static const mbuf_flags_t mbuf_flags_mask = (MBUF_EXT | MBUF_PKTHDR | MBUF_EOR |
 /* Unalterable mbuf flags */
 static const mbuf_flags_t mbuf_cflags_mask = (MBUF_EXT);
 
-void* mbuf_data(mbuf_t mbuf)
+#define	MAX_MBUF_TX_COMPL_FUNC 32
+mbuf_tx_compl_func
+mbuf_tx_compl_table[MAX_MBUF_TX_COMPL_FUNC];
+extern lck_rw_t *mbuf_tx_compl_tbl_lock;
+u_int32_t mbuf_tx_compl_index = 0;
+
+#if (DEVELOPMENT || DEBUG)
+int mbuf_tx_compl_debug = 0;
+SInt64 mbuf_tx_compl_outstanding __attribute__((aligned(8))) = 0;
+u_int64_t mbuf_tx_compl_aborted __attribute__((aligned(8))) = 0;
+
+SYSCTL_DECL(_kern_ipc);
+SYSCTL_NODE(_kern_ipc, OID_AUTO, mbtxcf,
+    CTLFLAG_RW | CTLFLAG_LOCKED, 0, "");
+SYSCTL_INT(_kern_ipc_mbtxcf, OID_AUTO, debug,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &mbuf_tx_compl_debug, 0, "");
+SYSCTL_INT(_kern_ipc_mbtxcf, OID_AUTO, index,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &mbuf_tx_compl_index, 0, "");
+SYSCTL_QUAD(_kern_ipc_mbtxcf, OID_AUTO, oustanding,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &mbuf_tx_compl_outstanding, "");
+SYSCTL_QUAD(_kern_ipc_mbtxcf, OID_AUTO, aborted,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &mbuf_tx_compl_aborted, "");
+#endif /* (DEBUG || DEVELOPMENT) */
+
+void *
+mbuf_data(mbuf_t mbuf)
 {
-	return mbuf->m_data;
+	return (mbuf->m_data);
 }
 
-void* mbuf_datastart(mbuf_t mbuf)
+void *
+mbuf_datastart(mbuf_t mbuf)
 {
 	if (mbuf->m_flags & M_EXT)
-		return mbuf->m_ext.ext_buf;
+		return (mbuf->m_ext.ext_buf);
 	if (mbuf->m_flags & M_PKTHDR)
-		return mbuf->m_pktdat;
-	return mbuf->m_dat;
+		return (mbuf->m_pktdat);
+	return (mbuf->m_dat);
 }
 
-errno_t mbuf_setdata(mbuf_t mbuf, void* data, size_t len)
+errno_t
+mbuf_setdata(mbuf_t mbuf, void *data, size_t len)
 {
-	size_t	start = (size_t)((char*)mbuf_datastart(mbuf));
+	size_t	start = (size_t)((char *)mbuf_datastart(mbuf));
 	size_t	maxlen = mbuf_maxlen(mbuf);
-	
+
 	if ((size_t)data < start || ((size_t)data) + len > start + maxlen)
-		return EINVAL;
+		return (EINVAL);
 	mbuf->m_data = data;
 	mbuf->m_len = len;
-	
-	return 0;
+
+	return (0);
 }
 
-errno_t mbuf_align_32(mbuf_t mbuf, size_t len)
+errno_t
+mbuf_align_32(mbuf_t mbuf, size_t len)
 {
 	if ((mbuf->m_flags & M_EXT) != 0 && m_mclhasreference(mbuf))
-		return ENOTSUP;
+		return (ENOTSUP);
 	mbuf->m_data = mbuf_datastart(mbuf);
-	mbuf->m_data += ((mbuf_trailingspace(mbuf) - len) &~ (sizeof(u_int32_t) - 1));
-	
-	return 0;
+	mbuf->m_data +=
+	    ((mbuf_trailingspace(mbuf) - len) &~ (sizeof(u_int32_t) - 1));
+
+	return (0);
 }
 
-/* This function is used to provide mcl_to_paddr via symbol indirection,
- * please avoid any change in behavior or remove the indirection in 
+/*
+ * This function is used to provide mcl_to_paddr via symbol indirection,
+ * please avoid any change in behavior or remove the indirection in
  * config/Unsupported*
  */
-addr64_t mbuf_data_to_physical(void* ptr)
+addr64_t
+mbuf_data_to_physical(void *ptr)
 {
 	return ((addr64_t)mcl_to_paddr(ptr));
 }
 
-errno_t mbuf_get(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)
+errno_t
+mbuf_get(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)
 {
 	/* Must set *mbuf to NULL in failure case */
 	*mbuf = m_get(how, type);
-	
-	return (*mbuf == NULL) ? ENOMEM : 0;
+
+	return (*mbuf == NULL ? ENOMEM : 0);
 }
 
-errno_t mbuf_gethdr(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)
+errno_t
+mbuf_gethdr(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)
 {
 	/* Must set *mbuf to NULL in failure case */
 	*mbuf = m_gethdr(how, type);
-	
-	return (*mbuf == NULL) ? ENOMEM : 0;
+
+	return (*mbuf == NULL ? ENOMEM : 0);
 }
 
 errno_t
 mbuf_attachcluster(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf,
-    caddr_t extbuf, void (*extfree)(caddr_t , u_int, caddr_t),
+    caddr_t extbuf, void (*extfree)(caddr_t, u_int, caddr_t),
     size_t extsize, caddr_t extarg)
 {
 	if (mbuf == NULL || extbuf == NULL || extfree == NULL || extsize == 0)
 		return (EINVAL);
 
 	if ((*mbuf = m_clattach(*mbuf, type, extbuf,
-	    extfree, extsize, extarg, how)) == NULL)
+	    extfree, extsize, extarg, how, 0)) == NULL)
 		return (ENOMEM);
 
+	return (0);
+}
+
+errno_t
+mbuf_ring_cluster_alloc(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf,
+    void (*extfree)(caddr_t, u_int, caddr_t), size_t *size)
+{
+	caddr_t extbuf = NULL;
+	errno_t err;
+
+	if (mbuf == NULL || extfree == NULL || size == NULL || *size == 0)
+		return (EINVAL);
+
+	if ((err = mbuf_alloccluster(how, size, &extbuf)) != 0)
+		return (err);
+
+	if ((*mbuf = m_clattach(*mbuf, type, extbuf,
+	    extfree, *size, NULL, how, 1)) == NULL) {
+		mbuf_freecluster(extbuf, *size);
+		return (ENOMEM);
+	}
+
+	return (0);
+}
+
+int
+mbuf_ring_cluster_is_active(mbuf_t mbuf)
+{
+	return (m_ext_paired_is_active(mbuf));
+}
+
+errno_t
+mbuf_ring_cluster_activate(mbuf_t mbuf)
+{
+	if (mbuf_ring_cluster_is_active(mbuf))
+		return (EBUSY);
+
+	m_ext_paired_activate(mbuf);
+	return (0);
+}
+
+errno_t
+mbuf_cluster_set_prop(mbuf_t mbuf, u_int32_t oldprop, u_int32_t newprop)
+{
+	if (mbuf == NULL || !(mbuf->m_flags & M_EXT))
+		return (EINVAL);
+
+	return (m_ext_set_prop(mbuf, oldprop, newprop) ? 0 : EBUSY);
+}
+
+errno_t
+mbuf_cluster_get_prop(mbuf_t mbuf, u_int32_t *prop)
+{
+	if (mbuf == NULL || prop == NULL || !(mbuf->m_flags & M_EXT))
+		return (EINVAL);
+
+	*prop = m_ext_get_prop(mbuf);
 	return (0);
 }
 
@@ -174,18 +264,18 @@ mbuf_freecluster(caddr_t addr, size_t size)
 }
 
 errno_t
-mbuf_getcluster(mbuf_how_t how, mbuf_type_t type, size_t size, mbuf_t* mbuf)
+mbuf_getcluster(mbuf_how_t how, mbuf_type_t type, size_t size, mbuf_t *mbuf)
 {
 	/* Must set *mbuf to NULL in failure case */
 	errno_t	error = 0;
 	int	created = 0;
 
 	if (mbuf == NULL)
-		return EINVAL;
+		return (EINVAL);
 	if (*mbuf == NULL) {
 		*mbuf = m_get(how, type);
 		if (*mbuf == NULL)
-			return ENOMEM;
+			return (ENOMEM);
 		created = 1;
 	}
 	/*
@@ -215,167 +305,186 @@ out:
 		mbuf_free(*mbuf);
 		*mbuf = NULL;
 	}
-	return error;	
+	return (error);
 }
 
-errno_t mbuf_mclget(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)
+errno_t
+mbuf_mclget(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)
 {
 	/* Must set *mbuf to NULL in failure case */
 	errno_t	error = 0;
 	int		created = 0;
-	if (mbuf == NULL) return EINVAL;
+	if (mbuf == NULL)
+		return (EINVAL);
 	if (*mbuf == NULL) {
 		error = mbuf_get(how, type, mbuf);
 		if (error)
-			return error;
+			return (error);
 		created = 1;
 	}
-	
+
 	/*
 	 * At the time this code was written, m_mclget would always
 	 * return the same value that was passed in to it.
 	 */
 	*mbuf = m_mclget(*mbuf, how);
-	
+
 	if (created && ((*mbuf)->m_flags & M_EXT) == 0) {
 		mbuf_free(*mbuf);
 		*mbuf = NULL;
 	}
 	if (*mbuf == NULL || ((*mbuf)->m_flags & M_EXT) == 0)
 		error = ENOMEM;
-	return error;	
+	return (error);
 }
 
 
-errno_t mbuf_getpacket(mbuf_how_t how, mbuf_t *mbuf)
+errno_t
+mbuf_getpacket(mbuf_how_t how, mbuf_t *mbuf)
 {
 	/* Must set *mbuf to NULL in failure case */
 	errno_t	error = 0;
-	
+
 	*mbuf = m_getpacket_how(how);
-	
+
 	if (*mbuf == NULL) {
 		if (how == MBUF_WAITOK)
 			error = ENOMEM;
 		else
 			error = EWOULDBLOCK;
 	}
-	
-	return error;
+
+	return (error);
 }
 
-/* This function is used to provide m_free via symbol indirection, please avoid
+/*
+ * This function is used to provide m_free via symbol indirection, please avoid
  * any change in behavior or remove the indirection in config/Unsupported*
  */
-mbuf_t mbuf_free(mbuf_t mbuf)
+mbuf_t
+mbuf_free(mbuf_t mbuf)
 {
-	return m_free(mbuf);
+	return (m_free(mbuf));
 }
 
-/* This function is used to provide m_freem via symbol indirection, please avoid
+/*
+ * This function is used to provide m_freem via symbol indirection, please avoid
  * any change in behavior or remove the indirection in config/Unsupported*
  */
-void mbuf_freem(mbuf_t mbuf)
+void
+mbuf_freem(mbuf_t mbuf)
 {
 	m_freem(mbuf);
 }
 
-int	mbuf_freem_list(mbuf_t mbuf)
+int
+mbuf_freem_list(mbuf_t mbuf)
 {
-	return m_freem_list(mbuf);
+	return (m_freem_list(mbuf));
 }
 
-size_t mbuf_leadingspace(const mbuf_t mbuf)
+size_t
+mbuf_leadingspace(const mbuf_t mbuf)
 {
-	return m_leadingspace(mbuf);
+	return (m_leadingspace(mbuf));
 }
 
-/* This function is used to provide m_trailingspace via symbol indirection,
- * please avoid any change in behavior or remove the indirection in 
+/*
+ * This function is used to provide m_trailingspace via symbol indirection,
+ * please avoid any change in behavior or remove the indirection in
  * config/Unsupported*
  */
-size_t mbuf_trailingspace(const mbuf_t mbuf)
+size_t
+mbuf_trailingspace(const mbuf_t mbuf)
 {
-	return m_trailingspace(mbuf);
+	return (m_trailingspace(mbuf));
 }
 
 /* Manipulation */
-errno_t mbuf_copym(const mbuf_t src, size_t offset, size_t len,
-				   mbuf_how_t how, mbuf_t *new_mbuf)
+errno_t
+mbuf_copym(const mbuf_t src, size_t offset, size_t len,
+    mbuf_how_t how, mbuf_t *new_mbuf)
 {
 	/* Must set *mbuf to NULL in failure case */
 	*new_mbuf = m_copym(src, offset, len, how);
-	
-	return (*new_mbuf == NULL) ? ENOMEM : 0;
+
+	return (*new_mbuf == NULL ? ENOMEM : 0);
 }
 
-errno_t	mbuf_dup(const mbuf_t src, mbuf_how_t how, mbuf_t *new_mbuf)
+errno_t
+mbuf_dup(const mbuf_t src, mbuf_how_t how, mbuf_t *new_mbuf)
 {
 	/* Must set *new_mbuf to NULL in failure case */
 	*new_mbuf = m_dup(src, how);
-	
-	return (*new_mbuf == NULL) ? ENOMEM : 0;
+
+	return (*new_mbuf == NULL ? ENOMEM : 0);
 }
 
-errno_t mbuf_prepend(mbuf_t *orig, size_t len, mbuf_how_t how)
+errno_t
+mbuf_prepend(mbuf_t *orig, size_t len, mbuf_how_t how)
 {
 	/* Must set *orig to NULL in failure case */
 	*orig = m_prepend_2(*orig, len, how, 0);
-	
-	return (*orig == NULL) ? ENOMEM : 0;
+
+	return (*orig == NULL ? ENOMEM : 0);
 }
 
-errno_t mbuf_split(mbuf_t src, size_t offset,
+errno_t
+mbuf_split(mbuf_t src, size_t offset,
 					mbuf_how_t how, mbuf_t *new_mbuf)
 {
 	/* Must set *new_mbuf to NULL in failure case */
 	*new_mbuf = m_split(src, offset, how);
-	
-	return (*new_mbuf == NULL) ? ENOMEM : 0;
+
+	return (*new_mbuf == NULL ? ENOMEM : 0);
 }
 
-errno_t mbuf_pullup(mbuf_t *mbuf, size_t len)
+errno_t
+mbuf_pullup(mbuf_t *mbuf, size_t len)
 {
 	/* Must set *mbuf to NULL in failure case */
 	*mbuf = m_pullup(*mbuf, len);
-	
-	return (*mbuf == NULL) ? ENOMEM : 0;
+
+	return (*mbuf == NULL ? ENOMEM : 0);
 }
 
-errno_t mbuf_pulldown(mbuf_t src, size_t *offset, size_t len, mbuf_t *location)
+errno_t
+mbuf_pulldown(mbuf_t src, size_t *offset, size_t len, mbuf_t *location)
 {
 	/* Must set *location to NULL in failure case */
 	int new_offset;
 	*location = m_pulldown(src, *offset, len, &new_offset);
 	*offset = new_offset;
-	
-	return (*location == NULL) ? ENOMEM : 0;
+
+	return (*location == NULL ? ENOMEM : 0);
 }
 
-/* This function is used to provide m_adj via symbol indirection, please avoid
+/*
+ * This function is used to provide m_adj via symbol indirection, please avoid
  * any change in behavior or remove the indirection in config/Unsupported*
  */
-void mbuf_adj(mbuf_t mbuf, int len)
+void
+mbuf_adj(mbuf_t mbuf, int len)
 {
 	m_adj(mbuf, len);
 }
 
-errno_t mbuf_adjustlen(mbuf_t m, int amount)
+errno_t
+mbuf_adjustlen(mbuf_t m, int amount)
 {
 	/* Verify m_len will be valid after adding amount */
 	if (amount > 0) {
-		int		used = (size_t)mbuf_data(m) - (size_t)mbuf_datastart(m) +
-					   m->m_len;
-		
+		int used = (size_t)mbuf_data(m) - (size_t)mbuf_datastart(m) +
+		    m->m_len;
+
 		if ((size_t)(amount + used) > mbuf_maxlen(m))
-			return EINVAL;
+			return (EINVAL);
+	} else if (-amount > m->m_len) {
+		return (EINVAL);
 	}
-	else if (-amount > m->m_len) {
-		return EINVAL;
-	}
-	
+
 	m->m_len += amount;
-	return 0;
+	return (0);
 }
 
 mbuf_t
@@ -389,7 +498,8 @@ mbuf_concatenate(mbuf_t dst, mbuf_t src)
 	/* return dst as is in the current implementation */
 	return (dst);
 }
-errno_t mbuf_copydata(const mbuf_t m0, size_t off, size_t len, void* out_data)
+errno_t
+mbuf_copydata(const mbuf_t m0, size_t off, size_t len, void *out_data)
 {
 	/* Copied m_copydata, added error handling (don't just panic) */
 	int count;
@@ -397,7 +507,7 @@ errno_t mbuf_copydata(const mbuf_t m0, size_t off, size_t len, void* out_data)
 
 	while (off > 0) {
 		if (m == 0)
-			return EINVAL;
+			return (EINVAL);
 		if (off < (size_t)m->m_len)
 			break;
 		off -= m->m_len;
@@ -405,81 +515,93 @@ errno_t mbuf_copydata(const mbuf_t m0, size_t off, size_t len, void* out_data)
 	}
 	while (len > 0) {
 		if (m == 0)
-			return EINVAL;
+			return (EINVAL);
 		count = m->m_len - off > len ? len : m->m_len - off;
 		bcopy(mtod(m, caddr_t) + off, out_data, count);
 		len -= count;
-		out_data = ((char*)out_data) + count;
+		out_data = ((char *)out_data) + count;
 		off = 0;
 		m = m->m_next;
 	}
-	
-	return 0;
+
+	return (0);
 }
 
-int mbuf_mclhasreference(mbuf_t mbuf)
+int
+mbuf_mclhasreference(mbuf_t mbuf)
 {
 	if ((mbuf->m_flags & M_EXT))
-		return m_mclhasreference(mbuf);
+		return (m_mclhasreference(mbuf));
 	else
-		return 0;
+		return (0);
 }
 
 
 /* mbuf header */
-mbuf_t mbuf_next(const mbuf_t mbuf)
+mbuf_t
+mbuf_next(const mbuf_t mbuf)
 {
-	return mbuf->m_next;
+	return (mbuf->m_next);
 }
 
-errno_t mbuf_setnext(mbuf_t mbuf, mbuf_t next)
+errno_t
+mbuf_setnext(mbuf_t mbuf, mbuf_t next)
 {
 	if (next && ((next)->m_nextpkt != NULL ||
-		(next)->m_type == MT_FREE)) return EINVAL;
+	    (next)->m_type == MT_FREE))
+		return (EINVAL);
 	mbuf->m_next = next;
-	
-	return 0;
+
+	return (0);
 }
 
-mbuf_t mbuf_nextpkt(const mbuf_t mbuf)
+mbuf_t
+mbuf_nextpkt(const mbuf_t mbuf)
 {
-	return mbuf->m_nextpkt;
+	return (mbuf->m_nextpkt);
 }
 
-void mbuf_setnextpkt(mbuf_t mbuf, mbuf_t nextpkt)
+void
+mbuf_setnextpkt(mbuf_t mbuf, mbuf_t nextpkt)
 {
 	mbuf->m_nextpkt = nextpkt;
 }
 
-size_t mbuf_len(const mbuf_t mbuf)
+size_t
+mbuf_len(const mbuf_t mbuf)
 {
-	return mbuf->m_len;
+	return (mbuf->m_len);
 }
 
-void mbuf_setlen(mbuf_t mbuf, size_t len)
+void
+mbuf_setlen(mbuf_t mbuf, size_t len)
 {
 	mbuf->m_len = len;
 }
 
-size_t mbuf_maxlen(const mbuf_t mbuf)
+size_t
+mbuf_maxlen(const mbuf_t mbuf)
 {
 	if (mbuf->m_flags & M_EXT)
-		return mbuf->m_ext.ext_size;
-	return &mbuf->m_dat[MLEN] - ((char*)mbuf_datastart(mbuf));
+		return (mbuf->m_ext.ext_size);
+	return (&mbuf->m_dat[MLEN] - ((char *)mbuf_datastart(mbuf)));
 }
 
-mbuf_type_t mbuf_type(const mbuf_t mbuf)
+mbuf_type_t
+mbuf_type(const mbuf_t mbuf)
 {
-	return mbuf->m_type;
+	return (mbuf->m_type);
 }
 
-errno_t mbuf_settype(mbuf_t mbuf, mbuf_type_t new_type)
+errno_t
+mbuf_settype(mbuf_t mbuf, mbuf_type_t new_type)
 {
-	if (new_type == MBUF_TYPE_FREE) return EINVAL;
-	
+	if (new_type == MBUF_TYPE_FREE)
+		return (EINVAL);
+
 	m_mchtype(mbuf, new_type);
-	
-	return 0;
+
+	return (0);
 }
 
 mbuf_flags_t
@@ -499,9 +621,9 @@ mbuf_setflags(mbuf_t mbuf, mbuf_flags_t flags)
 	 *    in flags argument.
 	 * 2. Return error if bits other than public flags are set in passed
 	 *    flags argument.
-	 *    Please note that private flag bits must be passed as reset by kexts,
-	 *    as they must use mbuf_flags KPI to get current set of mbuf flags
-	 *    and mbuf_flags KPI does not expose private flags.
+	 *    Please note that private flag bits must be passed as reset by
+	 *    kexts, as they must use mbuf_flags KPI to get current set of
+	 *    mbuf flags and mbuf_flags KPI does not expose private flags.
 	 */
 	if ((flags ^ oflags) & mbuf_cflags_mask) {
 		ret = EINVAL;
@@ -530,7 +652,7 @@ mbuf_setflags_mask(mbuf_t mbuf, mbuf_flags_t flags, mbuf_flags_t mask)
 	errno_t ret = 0;
 
 	if (mask & (~mbuf_flags_mask | mbuf_cflags_mask)) {
-                ret = EINVAL;
+		ret = EINVAL;
 	} else {
 		mbuf_flags_t oflags = mbuf->m_flags;
 		mbuf->m_flags = (flags & mask) | (mbuf->m_flags & ~mask);
@@ -549,22 +671,25 @@ mbuf_setflags_mask(mbuf_t mbuf, mbuf_flags_t flags, mbuf_flags_t mask)
 	return (ret);
 }
 
-errno_t mbuf_copy_pkthdr(mbuf_t dest, const mbuf_t src)
+errno_t
+mbuf_copy_pkthdr(mbuf_t dest, const mbuf_t src)
 {
 	if (((src)->m_flags & M_PKTHDR) == 0)
-		return EINVAL;
-	
+		return (EINVAL);
+
 	m_copy_pkthdr(dest, src);
-	
-	return 0;
+
+	return (0);
 }
 
-size_t mbuf_pkthdr_len(const mbuf_t mbuf)
+size_t
+mbuf_pkthdr_len(const mbuf_t mbuf)
 {
-	return mbuf->m_pkthdr.len;
+	return (mbuf->m_pkthdr.len);
 }
 
-__private_extern__ size_t mbuf_pkthdr_maxlen(mbuf_t m)
+__private_extern__ size_t
+mbuf_pkthdr_maxlen(mbuf_t m)
 {
 	size_t maxlen = 0;
 	mbuf_t n = m;
@@ -576,35 +701,44 @@ __private_extern__ size_t mbuf_pkthdr_maxlen(mbuf_t m)
 	return (maxlen);
 }
 
-void mbuf_pkthdr_setlen(mbuf_t mbuf, size_t len)
+void
+mbuf_pkthdr_setlen(mbuf_t mbuf, size_t len)
 {
 	mbuf->m_pkthdr.len = len;
 }
 
-void mbuf_pkthdr_adjustlen(mbuf_t mbuf, int amount)
+void
+mbuf_pkthdr_adjustlen(mbuf_t mbuf, int amount)
 {
 	mbuf->m_pkthdr.len += amount;
 }
 
-ifnet_t mbuf_pkthdr_rcvif(const mbuf_t mbuf)
+ifnet_t
+mbuf_pkthdr_rcvif(const mbuf_t mbuf)
 {
-	// If we reference count ifnets, we should take a reference here before returning
-	return mbuf->m_pkthdr.rcvif;
+	/*
+	 * If we reference count ifnets, we should take a reference here
+	 * before returning
+	 */
+	return (mbuf->m_pkthdr.rcvif);
 }
 
-errno_t mbuf_pkthdr_setrcvif(mbuf_t mbuf, ifnet_t ifnet)
+errno_t
+mbuf_pkthdr_setrcvif(mbuf_t mbuf, ifnet_t ifnet)
 {
 	/* May want to walk ifnet list to determine if interface is valid */
-	mbuf->m_pkthdr.rcvif = (struct ifnet*)ifnet;
-	return 0;
+	mbuf->m_pkthdr.rcvif = (struct ifnet *)ifnet;
+	return (0);
 }
 
-void* mbuf_pkthdr_header(const mbuf_t mbuf)
+void*
+mbuf_pkthdr_header(const mbuf_t mbuf)
 {
-	return mbuf->m_pkthdr.pkt_hdr;
+	return (mbuf->m_pkthdr.pkt_hdr);
 }
 
-void mbuf_pkthdr_setheader(mbuf_t mbuf, void *header)
+void
+mbuf_pkthdr_setheader(mbuf_t mbuf, void *header)
 {
 	mbuf->m_pkthdr.pkt_hdr = (void*)header;
 }
@@ -648,8 +782,8 @@ mbuf_set_vlan_tag(
 {
 	mbuf->m_pkthdr.csum_flags |= CSUM_VLAN_TAG_VALID;
 	mbuf->m_pkthdr.vlan_tag = vlan;
-	
-	return 0;
+
+	return (0);
 }
 
 errno_t
@@ -658,11 +792,11 @@ mbuf_get_vlan_tag(
 	u_int16_t *vlan)
 {
 	if ((mbuf->m_pkthdr.csum_flags & CSUM_VLAN_TAG_VALID) == 0)
-		return ENXIO; // No vlan tag set
-	
+		return (ENXIO); // No vlan tag set
+
 	*vlan = mbuf->m_pkthdr.vlan_tag;
-	
-	return 0;
+
+	return (0);
 }
 
 errno_t
@@ -671,13 +805,13 @@ mbuf_clear_vlan_tag(
 {
 	mbuf->m_pkthdr.csum_flags &= ~CSUM_VLAN_TAG_VALID;
 	mbuf->m_pkthdr.vlan_tag = 0;
-	
-	return 0;
+
+	return (0);
 }
 
-static const mbuf_csum_request_flags_t mbuf_valid_csum_request_flags = 
-	MBUF_CSUM_REQ_IP | MBUF_CSUM_REQ_TCP | MBUF_CSUM_REQ_UDP |
-       	MBUF_CSUM_PARTIAL | MBUF_CSUM_REQ_TCPIPV6 | MBUF_CSUM_REQ_UDPIPV6;
+static const mbuf_csum_request_flags_t mbuf_valid_csum_request_flags =
+    MBUF_CSUM_REQ_IP | MBUF_CSUM_REQ_TCP | MBUF_CSUM_REQ_UDP |
+    MBUF_CSUM_PARTIAL | MBUF_CSUM_REQ_TCPIPV6 | MBUF_CSUM_REQ_UDPIPV6;
 
 errno_t
 mbuf_set_csum_requested(
@@ -686,13 +820,14 @@ mbuf_set_csum_requested(
 	u_int32_t value)
 {
 	request &= mbuf_valid_csum_request_flags;
-	mbuf->m_pkthdr.csum_flags = (mbuf->m_pkthdr.csum_flags & 0xffff0000) | request;
+	mbuf->m_pkthdr.csum_flags =
+	    (mbuf->m_pkthdr.csum_flags & 0xffff0000) | request;
 	mbuf->m_pkthdr.csum_data = value;
-	
-	return 0;
+
+	return (0);
 }
 
-static const mbuf_tso_request_flags_t mbuf_valid_tso_request_flags = 
+static const mbuf_tso_request_flags_t mbuf_valid_tso_request_flags =
 	MBUF_TSO_IPV4 | MBUF_TSO_IPV6;
 
 errno_t
@@ -703,14 +838,14 @@ mbuf_get_tso_requested(
 {
 	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 ||
 			request == NULL || value == NULL)
-		return EINVAL;
+		return (EINVAL);
 
 	*request = mbuf->m_pkthdr.csum_flags;
 	*request &= mbuf_valid_tso_request_flags;
-	if (*request && value != NULL) 
+	if (*request && value != NULL)
 		*value = mbuf->m_pkthdr.tso_segsz;
-	
-	return 0;
+
+	return (0);
 }
 
 errno_t
@@ -724,8 +859,8 @@ mbuf_get_csum_requested(
 	if (value != NULL) {
 		*value = mbuf->m_pkthdr.csum_data;
 	}
-	
-	return 0;
+
+	return (0);
 }
 
 errno_t
@@ -734,11 +869,11 @@ mbuf_clear_csum_requested(
 {
 	mbuf->m_pkthdr.csum_flags &= 0xffff0000;
 	mbuf->m_pkthdr.csum_data = 0;
-	
-	return 0;
+
+	return (0);
 }
 
-static const mbuf_csum_performed_flags_t mbuf_valid_csum_performed_flags = 
+static const mbuf_csum_performed_flags_t mbuf_valid_csum_performed_flags =
 	MBUF_CSUM_DID_IP | MBUF_CSUM_IP_GOOD | MBUF_CSUM_DID_DATA |
 	MBUF_CSUM_PSEUDO_HDR | MBUF_CSUM_PARTIAL;
 
@@ -749,10 +884,11 @@ mbuf_set_csum_performed(
 	u_int32_t value)
 {
 	performed &= mbuf_valid_csum_performed_flags;
-	mbuf->m_pkthdr.csum_flags = (mbuf->m_pkthdr.csum_flags & 0xffff0000) | performed;
+	mbuf->m_pkthdr.csum_flags =
+	    (mbuf->m_pkthdr.csum_flags & 0xffff0000) | performed;
 	mbuf->m_pkthdr.csum_data = value;
-	
-	return 0;
+
+	return (0);
 }
 
 errno_t
@@ -761,10 +897,11 @@ mbuf_get_csum_performed(
 	mbuf_csum_performed_flags_t *performed,
 	u_int32_t *value)
 {
-	*performed = mbuf->m_pkthdr.csum_flags & mbuf_valid_csum_performed_flags;
+	*performed =
+	    mbuf->m_pkthdr.csum_flags & mbuf_valid_csum_performed_flags;
 	*value = mbuf->m_pkthdr.csum_data;
-	
-	return 0;
+
+	return (0);
 }
 
 errno_t
@@ -773,8 +910,8 @@ mbuf_clear_csum_performed(
 {
 	mbuf->m_pkthdr.csum_flags &= 0xffff0000;
 	mbuf->m_pkthdr.csum_data = 0;
-	
-	return 0;
+
+	return (0);
 }
 
 errno_t
@@ -782,7 +919,7 @@ mbuf_inet_cksum(mbuf_t mbuf, int protocol, u_int32_t offset, u_int32_t length,
     u_int16_t *csum)
 {
 	if (mbuf == NULL || length == 0 || csum == NULL ||
-	   (u_int32_t)mbuf->m_pkthdr.len < (offset + length))
+	    (u_int32_t)mbuf->m_pkthdr.len < (offset + length))
 		return (EINVAL);
 
 	*csum = inet_cksum(mbuf, protocol, offset, length);
@@ -795,7 +932,7 @@ mbuf_inet6_cksum(mbuf_t mbuf, int protocol, u_int32_t offset, u_int32_t length,
     u_int16_t *csum)
 {
 	if (mbuf == NULL || length == 0 || csum == NULL ||
-	   (u_int32_t)mbuf->m_pkthdr.len < (offset + length))
+	    (u_int32_t)mbuf->m_pkthdr.len < (offset + length))
 		return (EINVAL);
 
 	*csum = inet6_cksum(mbuf, protocol, offset, length);
@@ -845,14 +982,14 @@ nd6_storelladdr(void)
  * Mbuf tag KPIs
  */
 
-#define MTAG_FIRST_ID FIRST_KPI_STR_ID
+#define	MTAG_FIRST_ID FIRST_KPI_STR_ID
 
 errno_t
 mbuf_tag_id_find(
 	const char		*string,
 	mbuf_tag_id_t	*out_id)
 {
-	return net_str_id_find_internal(string, out_id, NSI_MBUF_TAG, 1);
+	return (net_str_id_find_internal(string, out_id, NSI_MBUF_TAG, 1));
 }
 
 errno_t
@@ -866,71 +1003,74 @@ mbuf_tag_allocate(
 {
 	struct m_tag *tag;
 	u_int32_t mtag_id_first, mtag_id_last;
-	
+
 	if (data_p != NULL)
 		*data_p = NULL;
-	
+
 	/* Sanity check parameters */
-	(void) net_str_id_first_last(&mtag_id_first, &mtag_id_last, NSI_MBUF_TAG);
-	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 || id < mtag_id_first ||
-		id > mtag_id_last || length < 1 || (length & 0xffff0000) != 0 ||
-		data_p == NULL) {
-		return EINVAL;
+	(void) net_str_id_first_last(&mtag_id_first, &mtag_id_last,
+	    NSI_MBUF_TAG);
+	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 ||
+	    id < mtag_id_first || id > mtag_id_last || length < 1 ||
+	    (length & 0xffff0000) != 0 || data_p == NULL) {
+		return (EINVAL);
 	}
-	
+
 	/* Make sure this mtag hasn't already been allocated */
 	tag = m_tag_locate(mbuf, id, type, NULL);
 	if (tag != NULL) {
-		return EEXIST;
+		return (EEXIST);
 	}
-	
+
 	/* Allocate an mtag */
 	tag = m_tag_create(id, type, length, how, mbuf);
 	if (tag == NULL) {
-		return how == M_WAITOK ? ENOMEM : EWOULDBLOCK;
+		return (how == M_WAITOK ? ENOMEM : EWOULDBLOCK);
 	}
-	
+
 	/* Attach the mtag and set *data_p */
 	m_tag_prepend(mbuf, tag);
 	*data_p = tag + 1;
-	
-	return 0;
+
+	return (0);
 }
 
 errno_t
 mbuf_tag_find(
-	mbuf_t			mbuf,
-	mbuf_tag_id_t	id,
-	mbuf_tag_type_t	type,
-	size_t*			length,
-	void**			data_p)
+	mbuf_t mbuf,
+	mbuf_tag_id_t id,
+	mbuf_tag_type_t type,
+	size_t *length,
+	void **data_p)
 {
 	struct m_tag *tag;
 	u_int32_t mtag_id_first, mtag_id_last;
-	
+
 	if (length != NULL)
 		*length = 0;
 	if (data_p != NULL)
 		*data_p = NULL;
-	
+
 	/* Sanity check parameters */
-	(void) net_str_id_first_last(&mtag_id_first, &mtag_id_last, NSI_MBUF_TAG);
-	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 || id < mtag_id_first ||
-		id > mtag_id_last || length == NULL || data_p == NULL) {
-		return EINVAL;
+	(void) net_str_id_first_last(&mtag_id_first, &mtag_id_last,
+	    NSI_MBUF_TAG);
+	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 ||
+	    id < mtag_id_first || id > mtag_id_last || length == NULL ||
+	    data_p == NULL) {
+		return (EINVAL);
 	}
-	
+
 	/* Locate an mtag */
 	tag = m_tag_locate(mbuf, id, type, NULL);
 	if (tag == NULL) {
-		return ENOENT;
+		return (ENOENT);
 	}
-	
+
 	/* Copy out the pointer to the data and the lenght value */
 	*length = tag->m_tag_len;
 	*data_p = tag + 1;
-	
-	return 0;
+
+	return (0);
 }
 
 void
@@ -941,20 +1081,20 @@ mbuf_tag_free(
 {
 	struct m_tag *tag;
 	u_int32_t mtag_id_first, mtag_id_last;
-	
+
 	/* Sanity check parameters */
-	(void) net_str_id_first_last(&mtag_id_first, &mtag_id_last, NSI_MBUF_TAG);
-	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 || id < mtag_id_first ||
-		id > mtag_id_last)
+	(void) net_str_id_first_last(&mtag_id_first, &mtag_id_last,
+	    NSI_MBUF_TAG);
+	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 ||
+	    id < mtag_id_first || id > mtag_id_last)
 		return;
-	
+
 	tag = m_tag_locate(mbuf, id, type, NULL);
 	if (tag == NULL) {
 		return;
 	}
-	
+
 	m_tag_delete(mbuf, tag);
-	return;
 }
 
 /*
@@ -1053,7 +1193,8 @@ mbuf_del_drvaux(mbuf_t mbuf)
 }
 
 /* mbuf stats */
-void mbuf_stats(struct mbuf_stat *stats)
+void
+mbuf_stats(struct mbuf_stat *stats)
 {
 	stats->mbufs = mbstat.m_mbufs;
 	stats->clusters = mbstat.m_clusters;
@@ -1075,7 +1216,8 @@ void mbuf_stats(struct mbuf_stat *stats)
 }
 
 errno_t
-mbuf_allocpacket(mbuf_how_t how, size_t packetlen, unsigned int *maxchunks, mbuf_t *mbuf)
+mbuf_allocpacket(mbuf_how_t how, size_t packetlen, unsigned int *maxchunks,
+    mbuf_t *mbuf)
 {
 	errno_t error;
 	struct mbuf *m;
@@ -1086,7 +1228,8 @@ mbuf_allocpacket(mbuf_how_t how, size_t packetlen, unsigned int *maxchunks, mbuf
 		error = EINVAL;
 		goto out;
 	}
-	m = m_allocpacket_internal(&numpkts, packetlen, maxchunks ? &numchunks : NULL, how, 1, 0);
+	m = m_allocpacket_internal(&numpkts, packetlen,
+	    maxchunks ? &numchunks : NULL, how, 1, 0);
 	if (m == 0) {
 		if (maxchunks && *maxchunks && numchunks > *maxchunks)
 			error = ENOBUFS;
@@ -1099,11 +1242,12 @@ mbuf_allocpacket(mbuf_how_t how, size_t packetlen, unsigned int *maxchunks, mbuf
 		*mbuf = m;
 	}
 out:
-	return error;
+	return (error);
 }
 
 errno_t
-mbuf_allocpacket_list(unsigned int numpkts, mbuf_how_t how, size_t packetlen, unsigned int *maxchunks, mbuf_t *mbuf)
+mbuf_allocpacket_list(unsigned int numpkts, mbuf_how_t how, size_t packetlen,
+    unsigned int *maxchunks, mbuf_t *mbuf)
 {
 	errno_t error;
 	struct mbuf *m;
@@ -1117,7 +1261,8 @@ mbuf_allocpacket_list(unsigned int numpkts, mbuf_how_t how, size_t packetlen, un
 		error = EINVAL;
 		goto out;
 	}
-	m = m_allocpacket_internal(&numpkts, packetlen, maxchunks ? &numchunks : NULL, how, 1, 0);
+	m = m_allocpacket_internal(&numpkts, packetlen,
+	    maxchunks ? &numchunks : NULL, how, 1, 0);
 	if (m == 0) {
 		if (maxchunks && *maxchunks && numchunks > *maxchunks)
 			error = ENOBUFS;
@@ -1130,7 +1275,7 @@ mbuf_allocpacket_list(unsigned int numpkts, mbuf_how_t how, size_t packetlen, un
 		*mbuf = m;
 	}
 out:
-	return error;
+	return (error);
 }
 
 __private_extern__ size_t
@@ -1182,8 +1327,8 @@ mbuf_copyback(
 	const char	*cp = data;
 
 	if (m == NULL || len == 0 || data == NULL)
-		return EINVAL;
-	
+		return (EINVAL);
+
 	while (off > (mlen = m->m_len)) {
 		off -= mlen;
 		totlen += mlen;
@@ -1198,15 +1343,16 @@ mbuf_copyback(
 		}
 		m = m->m_next;
 	}
-	
+
 	while (len > 0) {
 		mlen = MIN(m->m_len - off, len);
-		if (mlen < len && m->m_next == NULL && mbuf_trailingspace(m) > 0) {
+		if (mlen < len && m->m_next == NULL &&
+		    mbuf_trailingspace(m) > 0) {
 			size_t	grow = MIN(mbuf_trailingspace(m), len - mlen);
 			mlen += grow;
 			m->m_len += grow;
 		}
-		bcopy(cp, off + (char*)mbuf_data(m), (unsigned)mlen);
+		bcopy(cp, off + (char *)mbuf_data(m), (unsigned)mlen);
 		cp += mlen;
 		len -= mlen;
 		mlen += off;
@@ -1221,7 +1367,10 @@ mbuf_copyback(
 				goto out;
 			}
 			if (len > MINCLSIZE) {
-				/* cluter allocation failure is okay, we can grow chain */
+				/*
+				 * cluster allocation failure is okay,
+				 * we can grow chain
+				 */
 				mbuf_mclget(how, m->m_type, &n);
 			}
 			n->m_len = MIN(mbuf_maxlen(n), len);
@@ -1229,12 +1378,12 @@ mbuf_copyback(
 		}
 		m = m->m_next;
 	}
-	
+
 out:
 	if ((m_start->m_flags & M_PKTHDR) && (m_start->m_pkthdr.len < totlen))
 		m_start->m_pkthdr.len = totlen;
-	
-	return result;
+
+	return (result);
 }
 
 u_int32_t
@@ -1379,6 +1528,357 @@ mbuf_get_unsent_data_bytes(const mbuf_t m, u_int32_t *unsent_data)
 	if (!(m->m_pkthdr.pkt_flags & PKTF_VALID_UNSENT_DATA))
 		return (EINVAL);
 
-	*unsent_data = m->m_pkthdr.pkt_unsent_databytes;
+	*unsent_data = m->m_pkthdr.bufstatus_if +
+	    m->m_pkthdr.bufstatus_sndbuf;
 	return (0);
+}
+
+errno_t
+mbuf_get_buffer_status(const mbuf_t m, mbuf_buffer_status_t *buf_status)
+{
+	if (m == NULL || buf_status == NULL || !(m->m_flags & M_PKTHDR) ||
+	    !(m->m_pkthdr.pkt_flags & PKTF_VALID_UNSENT_DATA))
+		return (EINVAL);
+
+	buf_status->buf_interface = m->m_pkthdr.bufstatus_if;
+	buf_status->buf_sndbuf = m->m_pkthdr.bufstatus_sndbuf;
+	return (0);
+}
+
+errno_t
+mbuf_pkt_new_flow(const mbuf_t m, u_int32_t *retval)
+{
+	if (m == NULL || retval == NULL || !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+	if (m->m_pkthdr.pkt_flags & PKTF_NEW_FLOW)
+		*retval = 1;
+	else
+		*retval = 0;
+	return (0);
+}
+
+errno_t
+mbuf_last_pkt(const mbuf_t m, u_int32_t *retval)
+{
+	if (m == NULL || retval == NULL || !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+	if (m->m_pkthdr.pkt_flags & PKTF_LAST_PKT)
+		*retval = 1;
+	else
+		*retval = 0;
+	return (0);
+}
+
+errno_t
+mbuf_get_timestamp(mbuf_t m, u_int64_t *ts, boolean_t *valid)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR) || ts == NULL ||
+	    valid == NULL)
+		return (EINVAL);
+
+	if ((m->m_pkthdr.pkt_flags & PKTF_DRV_TS_VALID) == 0) {
+		*valid = FALSE;
+		*ts = 0;
+	} else {
+		*valid = TRUE;
+		*ts = m->m_pkthdr.pkt_timestamp;
+	}
+	return (0);
+}
+
+errno_t
+mbuf_set_timestamp(mbuf_t m, u_int64_t ts, boolean_t valid)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+
+	if (valid == FALSE) {
+		m->m_pkthdr.pkt_flags &= ~PKTF_DRV_TS_VALID;
+		m->m_pkthdr.pkt_timestamp = 0;
+	} else {
+		m->m_pkthdr.pkt_flags |= PKTF_DRV_TS_VALID;
+		m->m_pkthdr.pkt_timestamp = ts;
+	}
+	return (0);
+}
+
+errno_t
+mbuf_get_status(mbuf_t m, kern_return_t *status)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR) || status == NULL)
+		return (EINVAL);
+
+	if ((m->m_pkthdr.pkt_flags & PKTF_DRIVER_MTAG) == 0) {
+		*status = 0;
+	} else {
+		*status = m->m_pkthdr.drv_tx_status;
+	}
+	return (0);
+}
+
+static void
+driver_mtag_init(mbuf_t m)
+{
+	if ((m->m_pkthdr.pkt_flags & PKTF_DRIVER_MTAG) == 0) {
+		m->m_pkthdr.pkt_flags |= PKTF_DRIVER_MTAG;
+		bzero(&m->m_pkthdr.driver_mtag,
+		    sizeof(m->m_pkthdr.driver_mtag));
+	}
+}
+
+errno_t
+mbuf_set_status(mbuf_t m, kern_return_t status)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+
+	driver_mtag_init(m);
+
+	m->m_pkthdr.drv_tx_status = status;
+
+	return (0);
+}
+
+errno_t
+mbuf_get_flowid(mbuf_t m, u_int16_t *flowid)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR) || flowid == NULL)
+		return (EINVAL);
+
+	if ((m->m_pkthdr.pkt_flags & PKTF_DRIVER_MTAG) == 0) {
+		*flowid = 0;
+	} else {
+		*flowid = m->m_pkthdr.drv_flowid;
+	}
+	return (0);
+}
+
+errno_t
+mbuf_set_flowid(mbuf_t m, u_int16_t flowid)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+
+	driver_mtag_init(m);
+
+	m->m_pkthdr.drv_flowid = flowid;
+
+	return (0);
+}
+
+errno_t
+mbuf_get_tx_compl_data(mbuf_t m, uintptr_t *arg, uintptr_t *data)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR) || arg == NULL ||
+	    data == NULL)
+		return (EINVAL);
+
+	if ((m->m_pkthdr.pkt_flags & PKTF_DRIVER_MTAG) == 0) {
+		*arg = 0;
+		*data = 0;
+	} else {
+		*arg = m->m_pkthdr.drv_tx_compl_arg;
+		*data = m->m_pkthdr.drv_tx_compl_data;
+	}
+	return (0);
+}
+
+errno_t
+mbuf_set_tx_compl_data(mbuf_t m, uintptr_t arg, uintptr_t data)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+
+	driver_mtag_init(m);
+
+	m->m_pkthdr.drv_tx_compl_arg = arg;
+	m->m_pkthdr.drv_tx_compl_data = data;
+
+	return (0);
+}
+
+static u_int32_t
+get_tx_compl_callback_index_locked(mbuf_tx_compl_func callback)
+{
+	u_int32_t i;
+
+	for (i = 0; i < MAX_MBUF_TX_COMPL_FUNC; i++) {
+		if (mbuf_tx_compl_table[i] == callback) {
+			return (i);
+		}
+	}
+	return (UINT32_MAX);
+}
+
+static u_int32_t
+get_tx_compl_callback_index(mbuf_tx_compl_func callback)
+{
+	u_int32_t i;
+
+	lck_rw_lock_shared(mbuf_tx_compl_tbl_lock);
+
+	i = get_tx_compl_callback_index_locked(callback);
+
+	lck_rw_unlock_shared(mbuf_tx_compl_tbl_lock);
+
+	return (i);
+}
+
+errno_t
+mbuf_register_tx_compl_callback(mbuf_tx_compl_func callback)
+{
+	int i;
+	errno_t error;
+
+	if (callback == NULL)
+		return (EINVAL);
+
+	lck_rw_lock_exclusive(mbuf_tx_compl_tbl_lock);
+
+	i = get_tx_compl_callback_index_locked(callback);
+	if (i != -1) {
+		error = EEXIST;
+		goto unlock;
+	}
+
+	/* assume the worst */
+	error = ENOSPC;
+	for (i = 0; i < MAX_MBUF_TX_COMPL_FUNC; i++) {
+		if (mbuf_tx_compl_table[i] == NULL) {
+			mbuf_tx_compl_table[i] = callback;
+			error = 0;
+			goto unlock;
+		}
+	}
+unlock:
+	lck_rw_unlock_exclusive(mbuf_tx_compl_tbl_lock);
+
+	return (error);
+}
+
+errno_t
+mbuf_unregister_tx_compl_callback(mbuf_tx_compl_func callback)
+{
+	int i;
+	errno_t error;
+
+	if (callback == NULL)
+		return (EINVAL);
+
+	lck_rw_lock_exclusive(mbuf_tx_compl_tbl_lock);
+
+	/* assume the worst */
+	error = ENOENT;
+	for (i = 0; i < MAX_MBUF_TX_COMPL_FUNC; i++) {
+		if (mbuf_tx_compl_table[i] == callback) {
+			mbuf_tx_compl_table[i] = NULL;
+			error = 0;
+			goto unlock;
+		}
+	}
+unlock:
+	lck_rw_unlock_exclusive(mbuf_tx_compl_tbl_lock);
+
+	return (error);
+}
+
+errno_t
+mbuf_get_timestamp_requested(mbuf_t m, boolean_t *requested)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return (EINVAL);
+
+	if ((m->m_pkthdr.pkt_flags & PKTF_TX_COMPL_TS_REQ) == 0) {
+		*requested = FALSE;
+	} else {
+		*requested = TRUE;
+	}
+	return (0);
+}
+
+errno_t
+mbuf_set_timestamp_requested(mbuf_t m, uintptr_t *pktid,
+    mbuf_tx_compl_func callback)
+{
+	size_t i;
+
+	if (m == NULL || !(m->m_flags & M_PKTHDR) || callback == NULL ||
+	    pktid == NULL)
+		return (EINVAL);
+
+	i = get_tx_compl_callback_index(callback);
+	if (i == UINT32_MAX)
+		return (ENOENT);
+
+#if (DEBUG || DEVELOPMENT)
+	VERIFY(i < sizeof(m->m_pkthdr.pkt_compl_callbacks));
+#endif /* (DEBUG || DEVELOPMENT) */
+
+	if ((m->m_pkthdr.pkt_flags & PKTF_TX_COMPL_TS_REQ) == 0) {
+		m->m_pkthdr.pkt_compl_callbacks = 0;
+		m->m_pkthdr.pkt_flags |= PKTF_TX_COMPL_TS_REQ;
+		m->m_pkthdr.pkt_compl_context =
+		    atomic_add_32_ov(&mbuf_tx_compl_index, 1);
+
+#if (DEBUG || DEVELOPMENT)
+		if (mbuf_tx_compl_debug != 0) {
+			OSIncrementAtomic64(&mbuf_tx_compl_outstanding);
+		}
+#endif /* (DEBUG || DEVELOPMENT) */
+	}
+	m->m_pkthdr.pkt_compl_callbacks |= (1 << i);
+	*pktid = m->m_pkthdr.pkt_compl_context;
+
+	return (0);
+}
+
+void
+m_do_tx_compl_callback(struct mbuf *m, struct ifnet *ifp)
+{
+	int i;
+
+	if (m == NULL)
+		return;
+
+	if ((m->m_pkthdr.pkt_flags & PKTF_TX_COMPL_TS_REQ) == 0)
+		return;
+
+#if (DEBUG || DEVELOPMENT)
+	if (mbuf_tx_compl_debug != 0 && ifp != NULL &&
+	    (ifp->if_xflags & IFXF_TIMESTAMP_ENABLED) != 0 &&
+	    (m->m_pkthdr.pkt_flags & PKTF_DRV_TS_VALID) == 0) {
+		struct timespec now;
+
+		nanouptime(&now);
+		net_timernsec(&now, &m->m_pkthdr.pkt_timestamp);
+	}
+#endif /* (DEBUG || DEVELOPMENT) */
+
+	for (i = 0; i < MAX_MBUF_TX_COMPL_FUNC; i++) {
+		mbuf_tx_compl_func callback;
+
+		if ((m->m_pkthdr.pkt_compl_callbacks & (1 << i)) == 0)
+			continue;
+
+		lck_rw_lock_shared(mbuf_tx_compl_tbl_lock);
+		callback = mbuf_tx_compl_table[i];
+		lck_rw_unlock_shared(mbuf_tx_compl_tbl_lock);
+
+		if (callback != NULL) {
+			callback(m->m_pkthdr.pkt_compl_context,
+			    ifp, m->m_pkthdr.pkt_timestamp,
+			    m->m_pkthdr.drv_tx_compl_arg,
+			    m->m_pkthdr.drv_tx_compl_data,
+			    m->m_pkthdr.drv_tx_status);
+		}
+	}
+	m->m_pkthdr.pkt_compl_callbacks = 0;
+
+#if (DEBUG || DEVELOPMENT)
+	if (mbuf_tx_compl_debug != 0) {
+		OSDecrementAtomic64(&mbuf_tx_compl_outstanding);
+		if (ifp == NULL)
+			atomic_add_64(&mbuf_tx_compl_aborted, 1);
+	}
+#endif /* (DEBUG || DEVELOPMENT) */
 }

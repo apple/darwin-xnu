@@ -92,6 +92,16 @@ class OSArray : public OSCollection
 
     OSDeclareDefaultStructors(OSArray)
 
+#if APPLE_KEXT_ALIGN_CONTAINERS
+
+protected:
+    unsigned int             count;
+    unsigned int             capacity;
+    unsigned int             capacityIncrement;
+    const OSMetaClassBase ** array;
+
+#else /* APPLE_KEXT_ALIGN_CONTAINERS */
+
 protected:
     const OSMetaClassBase ** array;
     unsigned int             count;
@@ -99,9 +109,11 @@ protected:
     unsigned int             capacityIncrement;
 
     struct ExpansionData { };
-    
+
    /* Reserved for future use. (Internal use only) */
     ExpansionData          * reserved;
+
+#endif /* APPLE_KEXT_ALIGN_CONTAINERS */
 
    /* OSCollectionIterator interfaces. */
     virtual unsigned int iteratorSize() const APPLE_KEXT_OVERRIDE;

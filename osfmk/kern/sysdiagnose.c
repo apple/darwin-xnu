@@ -28,6 +28,7 @@
 #include <mach/host_priv.h>
 #include <mach/host_special_ports.h>
 #include <mach/mach_types.h>
+#include <ipc/ipc_port.h>
 
 #include <mach/sysdiagnose_notification.h>
 
@@ -54,5 +55,7 @@ sysdiagnose_notify_user(uint32_t keycode)
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SYSDIAGNOSE, SYSDIAGNOSE_NOTIFY_USER) | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
-	return send_sysdiagnose_notification(user_port, keycode);
+	kr = send_sysdiagnose_notification(user_port, keycode);
+	ipc_port_release_send(user_port);
+	return kr;
 }

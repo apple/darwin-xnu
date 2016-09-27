@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -16,6 +15,13 @@ LLDBMACROS_BOOTSTRAP_DEST:=$(OBJPATH)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSD
 LLDBMACROS_DEST:=$(LLDBMACROS_BOOTSTRAP_DEST)/lldbmacros/
 LLDBMACROS_USERDEBUG_FILES=
 
+LLDBMACROS_USERDEBUG_FILES:= \
+	usertaskdebugging/__init__.py \
+	usertaskdebugging/gdbserver.py \
+	usertaskdebugging/interface.py \
+	usertaskdebugging/rsprotocol.py \
+	usertaskdebugging/target.py \
+	usertaskdebugging/userprocess.py
 
 LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	core/standard.py \
@@ -33,6 +39,8 @@ LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	bank.py \
 	xnu.py \
 	xnudefines.py \
+	ktrace.py \
+	macho.py \
 	mbufdefines.py \
 	netdefines.py \
 	routedefines.py \
@@ -55,7 +63,9 @@ LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	apic.py \
 	kauth.py \
 	usertaskgdbserver.py \
-	waitq.py
+	waitq.py \
+	pgtrace.py \
+	xnutriage.py
 
 ifneq ($(PLATFORM),MacOSX)
 	LLDBMACROS_PYTHON_FILES+= \
@@ -65,7 +75,7 @@ endif
 
 INSTALL_LLDBMACROS_PYTHON_FILES=$(addprefix $(LLDBMACROS_DEST), $(LLDBMACROS_PYTHON_FILES))
 
-$(INSTALL_LLDBMACROS_PYTHON_FILES): $(LLDBMACROS_DEST)% : $(LLDBMACROS_SOURCE)% 
+$(INSTALL_LLDBMACROS_PYTHON_FILES): $(LLDBMACROS_DEST)% : $(LLDBMACROS_SOURCE)%
 	$(_v)$(MKDIR) $(dir $@)
 	$(_v)$(PYTHON) $(LLDBMACROS_SOURCE)/core/syntax_checker.py $< $(_vstdout)
 	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@

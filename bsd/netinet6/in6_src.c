@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -232,7 +232,8 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	u_int32_t odstzone;
 	int prefer_tempaddr;
 	struct ip6_moptions *mopts;
-	struct ip6_out_args ip6oa = { ifscope, { 0 }, IP6OAF_SELECT_SRCIF, 0 };
+	struct ip6_out_args ip6oa = { ifscope, { 0 }, IP6OAF_SELECT_SRCIF, 0,
+	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
 	boolean_t islocal = FALSE;
 	uint64_t secs = net_uptime();
 	char s_src[MAX_IPv6_STR_LEN], s_dst[MAX_IPv6_STR_LEN];
@@ -252,9 +253,13 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 			ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
 		if (INP_AWDL_UNRESTRICTED(inp))
 			ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
-
+		if (INP_INTCOPROC_ALLOWED(inp))
+			ip6oa.ip6oa_flags |= IP6OAF_INTCOPROC_ALLOWED;
 	} else {
 		mopts = NULL;
+		/* Allow the kernel to retransmit packets. */
+		ip6oa.ip6oa_flags |= IP6OAF_INTCOPROC_ALLOWED |
+		    IP6OAF_AWDL_UNRESTRICTED;
 	}
 
 	if (ip6oa.ip6oa_boundif != IFSCOPE_NONE)
@@ -345,7 +350,7 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		tmp = &in6addr_any;
 		(void) inet_ntop(AF_INET6, tmp, s_src, sizeof (s_src));
 
-		printf("%s out src %s dst %s ifscope %d ifp %s\n", 
+		printf("%s out src %s dst %s ifscope %d ifp %s\n",
 		    __func__, s_src, s_dst, ifscope,
 		    ifp ? ifp->if_xname : "NULL");
 	}
@@ -637,7 +642,7 @@ out:
 
 	lck_rw_done(&in6_ifaddr_rwlock);
 
-	if (ia_best != NULL && inp && 
+	if (ia_best != NULL && inp &&
 	    inp_restricted_send(inp, ia_best->ia_ifa.ifa_ifp)) {
 		IFA_REMREF(&ia_best->ia_ifa);
 		ia_best = NULL;
@@ -663,8 +668,8 @@ done:
 
 		tmp = (src_storage != NULL) ? src_storage : &in6addr_any;
 		(void) inet_ntop(AF_INET6, tmp, s_src, sizeof (s_src));
-	    
-		printf("%s out src %s dst %s ifscope %d dst_scope %d best_scope %d\n", 
+
+		printf("%s out src %s dst %s ifscope %d dst_scope %d best_scope %d\n",
 		    __func__, s_src, s_dst, ifscope, dst_scope, best_scope);
 	}
 	if (ifpp != NULL) {
@@ -751,20 +756,13 @@ selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
 	 * Perform source interface selection only if Scoped Routing
 	 * is enabled and a source address that isn't unspecified.
 	 */
-	select_srcif = (ip6_doscopedroute && srcsock != NULL &&
+	select_srcif = (srcsock != NULL &&
 	    !IN6_IS_ADDR_UNSPECIFIED(&srcsock->sin6_addr));
 
 	if (ip6_select_srcif_debug) {
-		printf("%s src %s dst %s ifscope %d select_srcif %d\n", 
+		printf("%s src %s dst %s ifscope %d select_srcif %d\n",
 		    __func__, s_src, s_dst, ifscope, select_srcif);
 	}
-	/*
-	 * If Scoped Routing is disabled, ignore the given ifscope.
-	 * Otherwise even if source selection won't be performed,
-	 * we still obey IPV6_BOUND_IF.
-	 */
-	if (!ip6_doscopedroute && ifscope != IFSCOPE_NONE)
-		ifscope = IFSCOPE_NONE;
 
 	/* If the caller specified the outgoing interface explicitly, use it */
 	if (opts != NULL && (pi = opts->ip6po_pktinfo) != NULL &&
@@ -811,7 +809,7 @@ getsrcif:
 	 * If the outgoing interface was not set via IPV6_BOUND_IF or
 	 * IPV6_PKTINFO, use the scope ID in the destination address.
 	 */
-	if (ip6_doscopedroute && ifscope == IFSCOPE_NONE)
+	if (ifscope == IFSCOPE_NONE)
 		ifscope = dstsock->sin6_scope_id;
 
 	/*
@@ -884,13 +882,13 @@ getsrcif:
 			if (ro->ro_rt != NULL) {
 				printf("%s %s->%s ifscope %d->%d ifa_if %s "
 				    "ro_if %s\n",
-				    __func__, 
+				    __func__,
 				    s_src, s_dst, ifscope,
 				    scope, if_name(ifa->ifa_ifp),
 				    if_name(rt_ifp));
 			} else {
 				printf("%s %s->%s ifscope %d->%d ifa_if %s\n",
-				    __func__, 
+				    __func__,
 				    s_src, s_dst, ifscope, scope,
 				    if_name(ifa->ifa_ifp));
 			}
@@ -1160,12 +1158,14 @@ done:
 	    IFNET_IS_CELLULAR(_ifp)) || 			\
 	(((_ip6oa)->ip6oa_flags & IP6OAF_NO_EXPENSIVE) && 	\
 	    IFNET_IS_EXPENSIVE(_ifp)) ||			\
+	(!((_ip6oa)->ip6oa_flags & IP6OAF_INTCOPROC_ALLOWED) &&	\
+	    IFNET_IS_INTCOPROC(_ifp)) ||			\
 	(!((_ip6oa)->ip6oa_flags & IP6OAF_AWDL_UNRESTRICTED) &&	\
-	    IFNET_IS_AWDL_RESTRICTED(_ifp))) 
+	    IFNET_IS_AWDL_RESTRICTED(_ifp)))
 
 	if (error == 0 && ip6oa != NULL &&
 	    ((ifp && CHECK_RESTRICTIONS(ip6oa, ifp)) ||
-	    (route && route->ro_rt && 
+	    (route && route->ro_rt &&
 	    CHECK_RESTRICTIONS(ip6oa, route->ro_rt->rt_ifp)))) {
 		if (route != NULL && route->ro_rt != NULL) {
 			ROUTE_RELEASE(route);
@@ -1216,7 +1216,7 @@ done:
 	if (error == 0) {
 		if (retrt != NULL && route != NULL)
 			*retrt = route->ro_rt;	/* ro_rt may be NULL */
-	}  
+	}
 	if (ip6_select_srcif_debug) {
 		printf("%s %s->%s ifscope %d ifa_if %s ro_if %s (error=%d)\n",
 		    __func__,

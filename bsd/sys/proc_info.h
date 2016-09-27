@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,6 +43,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <mach/machine.h>
+#include <uuid/uuid.h>
 
 #ifdef PRIVATE
 #include <mach/coalition.h> /* COALITION_NUM_TYPES */
@@ -283,9 +284,9 @@ struct proc_workqueueinfo {
 /*
  *	workqueue state (pwq_state field)
  */
-#define WQ_EXCEEDED_CONSTRAINED_THREAD_LIMIT	0x1
-#define WQ_EXCEEDED_TOTAL_THREAD_LIMIT		0x2
-
+#define WQ_EXCEEDED_CONSTRAINED_THREAD_LIMIT 0x1
+#define WQ_EXCEEDED_TOTAL_THREAD_LIMIT 0x2
+#define WQ_FLAGS_AVAILABLE 0x4
 
 struct proc_fileinfo {
 	uint32_t		fi_openflags;
@@ -305,6 +306,21 @@ struct proc_fileinfo {
 #define PROC_FI_GUARD_DUP		(1u << 1)
 #define PROC_FI_GUARD_SOCKET_IPC	(1u << 2)
 #define PROC_FI_GUARD_FILEPORT		(1u << 3)
+
+struct proc_exitreasonbasicinfo {
+	uint32_t			beri_namespace;
+	uint64_t			beri_code;
+	uint64_t			beri_flags;
+	uint32_t			beri_reason_buf_size;
+} __attribute__((packed));
+
+struct proc_exitreasoninfo {
+	uint32_t			eri_namespace;
+	uint64_t			eri_code;
+	uint64_t			eri_flags;
+	uint32_t			eri_reason_buf_size;
+	uint64_t			eri_kcd_buf;
+} __attribute__((packed));
 
 /*
  * A copy of stat64 with static sized fields.
@@ -662,6 +678,7 @@ struct appletalk_fdinfo {
 #define PROX_FDTYPE_KQUEUE	5
 #define PROX_FDTYPE_PIPE	6
 #define PROX_FDTYPE_FSEVENTS	7
+#define PROX_FDTYPE_NETPOLICY	9
 
 struct proc_fdinfo {
 	int32_t			proc_fd;
@@ -672,6 +689,7 @@ struct proc_fileportinfo {
 	uint32_t		proc_fileport;
 	uint32_t		proc_fdtype;
 };
+
 
 /* Flavors for proc_pidinfo() */
 #define PROC_PIDLISTFDS			1
@@ -749,6 +767,12 @@ struct proc_fileportinfo {
 #define PROC_PIDREGIONPATHINFO3		23
 #define PROC_PIDREGIONPATHINFO3_SIZE	(sizeof(struct proc_regionwithpathinfo))
 
+#define PROC_PIDEXITREASONINFO		24
+#define PROC_PIDEXITREASONINFO_SIZE	(sizeof(struct proc_exitreasoninfo))
+
+#define PROC_PIDEXITREASONBASICINFO	25
+#define PROC_PIDEXITREASONBASICINFOSIZE	(sizeof(struct proc_exitreasonbasicinfo))
+
 #endif
 
 /* Flavors for proc_pidfdinfo */
@@ -780,7 +804,9 @@ struct proc_fileportinfo {
 #ifdef PRIVATE
 #define PROC_PIDFDKQUEUE_EXTINFO	9
 #define PROC_PIDFDKQUEUE_EXTINFO_SIZE	(sizeof(struct kevent_extinfo))
+#define PROC_PIDFDKQUEUE_KNOTES_MAX	(1024 * 128)
 #endif /* PRIVATE */
+
 
 /* Flavors for proc_pidfileportinfo */
 
@@ -891,8 +917,15 @@ extern int fill_pshminfo(struct pshmnode * pshm, struct pshm_info * pinfo);
 extern int fill_pseminfo(struct psemnode * psem, struct psem_info * pinfo);
 extern int fill_pipeinfo(struct pipe * cpipe, struct pipe_info * pinfo);
 extern int fill_kqueueinfo(struct kqueue * kq, struct kqueue_info * kinfo);
-extern int pid_kqueue_extinfo(proc_t, struct kqueue * kq, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+extern int pid_kqueue_extinfo(proc_t, struct kqueue * kq, user_addr_t buffer,
+			      uint32_t buffersize, int32_t * retval);
+extern int pid_kqueue_udatainfo(proc_t p, struct kqueue *kq, uint64_t *buf,
+				uint32_t bufsize);
 extern int fill_procworkqueue(proc_t, struct proc_workqueueinfo *);
+extern boolean_t workqueue_get_pwq_exceeded(void *v, boolean_t *exceeded_total,
+                                            boolean_t *exceeded_constrained);
+extern uint32_t workqueue_get_pwq_state_kdp(void *proc);
+
 #endif /* XNU_KERNEL_PRIVATE */
 
 __END_DECLS

@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2012 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
 #
 # MakeInc.cmd contains command paths for use during
 # the build, as well as make fragments and text
@@ -211,18 +211,18 @@ _function_create_build_configs_join = $(strip $(1))^$(strip $(2))^$(strip $(3))
 # $(3) is an un-expanded machine config from a TARGET_CONFIGS_UC tuple
 _function_create_build_configs_do_expand =          $(call _function_create_build_configs_join, \
 							   $(if $(filter DEFAULT,$(1)), \
-							   	$(DEFAULT_KERNEL_CONFIG), \
+								$(DEFAULT_KERNEL_CONFIG), \
 								$(1) \
 							    ), \
 							   $(if $(filter DEFAULT,$(2)), \
-							   	$(DEFAULT_ARCH_CONFIG), \
+								$(DEFAULT_ARCH_CONFIG), \
 								$(2) \
 							    ), \
 							   $(if $(filter DEFAULT,$(3)), \
-							   	$(if $(filter DEFAULT,$(2)), \
-							   	     $(DEFAULT_$(DEFAULT_ARCH_CONFIG)_MACHINE_CONFIG), \
+								$(if $(filter DEFAULT,$(2)), \
+								     $(DEFAULT_$(DEFAULT_ARCH_CONFIG)_MACHINE_CONFIG), \
 								     $(DEFAULT_$(strip $(2))_MACHINE_CONFIG) \
-							    	), \
+								), \
 								$(3) \
 							    ) \
 						     )
@@ -231,19 +231,56 @@ _function_create_build_configs_do_expand =          $(call _function_create_buil
 #      3 elements at a time
 function_create_build_configs = $(sort \
 					$(strip \
-				       	 	 $(call _function_create_build_configs_do_expand, \
-						 	$(word 1,$(1)), \
-						 	$(word 2,$(1)), \
-						 	$(word 3,$(1)), \
+						 $(call _function_create_build_configs_do_expand, \
+							$(word 1,$(1)), \
+							$(word 2,$(1)), \
+							$(word 3,$(1)), \
 						  ) \
 						 $(if $(word 4,$(1)), \
 						      $(call function_create_build_configs, \
 							     $(wordlist 4,$(words $(1)),$(1)) \
 						       ), \
-						       \
 						  ) \
 					  ) \
 				   )
+
+# Similar to build configs, but alias configs are a 4-tuple
+
+# $(1) is an expanded kernel config from a TARGET_CONFIGS_ALIASES_UC tuple
+# $(2) is an expanded arch config from a TARGET_CONFIGS_ALIASES_UC tuple
+# $(3) is an expanded kernel machine config from a TARGET_CONFIGS_ALIASES_UC tuple
+# $(4) is an expanded SoC platform config from a TARGET_CONFIGS_ALIASES_UC tuple,
+#      which should be an alias of $(3)
+_function_create_alias_configs_join = $(strip $(1))^$(strip $(2))^$(strip $(3))^$(strip $(4))
+
+_function_create_alias_configs_do_expand =	    $(call _function_create_alias_configs_join, \
+							   $(if $(filter DEFAULT,$(1)), \
+							        $(DEFAULT_KERNEL_CONFIG), \
+								$(1) \
+							    ), \
+							   $(if $(filter DEFAULT,$(2)), \
+								$(DEFAULT_ARCH_CONFIG), \
+								$(2) \
+							    ), \
+							   $(3), \
+							   $(4) \
+						     )
+
+function_create_alias_configs = $(sort \
+					$(strip \
+						 $(call _function_create_alias_configs_do_expand, \
+							$(word 1,$(1)), \
+							$(word 2,$(1)), \
+							$(word 3,$(1)), \
+							$(word 4,$(1)), \
+						  ) \
+						 $(if $(word 5,$(1)), \
+						      $(call function_create_alias_configs, \
+							     $(wordlist 5,$(words $(1)),$(1)) \
+						       ), \
+						  ) \
+					 ) \
+				 )
 
 # $(1) is a fully-expanded kernel config
 # $(2) is a fully-expanded arch config
@@ -252,7 +289,7 @@ function_convert_target_config_uc_to_objdir = $(if $(filter NONE,$(3)),$(strip $
 
 # $(1) is a fully-expanded build config (like "RELEASE^X86_64^NONE")
 function_convert_build_config_to_objdir = $(call function_convert_target_config_uc_to_objdir, \
-					  	 $(word 1,$(subst ^, ,$(1))), \
+						 $(word 1,$(subst ^, ,$(1))), \
 						 $(word 2,$(subst ^, ,$(1))), \
 						 $(word 3,$(subst ^, ,$(1))) \
 					   )
@@ -280,7 +317,7 @@ space := $(empty) $(empty)
 
 # Arithmetic
 # $(1) is the number to increment
-NUM32 = x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x 
+NUM32 = x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x
 increment = $(words x $(wordlist 1,$(1),$(NUM32)))
 decrement = $(words $(wordlist 2,$(1),$(NUM32)))
 

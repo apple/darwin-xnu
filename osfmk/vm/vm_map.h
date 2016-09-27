@@ -93,6 +93,7 @@ extern vm_map_t current_map(void);
 extern kern_return_t	vm_map_exec(
 				vm_map_t		new_map,
 				task_t			task,
+				boolean_t		is64bit,
 				void			*fsroot,
 				cpu_type_t		cpu);
 
@@ -301,7 +302,8 @@ struct vm_map_entry {
 	/* boolean_t */ iokit_acct:1,
 	/* boolean_t */ vme_resilient_codesign:1,
 	/* boolean_t */ vme_resilient_media:1,
-		__unused:6;
+	/* boolean_t */ vme_atomic:1, /* entry cannot be split/coalesced */
+		__unused:5;
 ;
 
 	unsigned short		wired_count;	/* can be paged if = 0 */
@@ -349,7 +351,6 @@ struct vm_map_header {
 	int			nentries;	/* Number of entries */
 	boolean_t		entries_pageable;
 						/* are map entries pageable? */
-	vm_map_offset_t		highest_entry_end_addr;	/* The ending address of the highest allocated vm_entry_t */
 #ifdef VM_MAP_STORE_USE_RB
 	struct rb_head	rb_head_store;
 #endif
@@ -380,11 +381,28 @@ struct _vm_map {
 	struct vm_map_header	hdr;		/* Map entry header */
 #define min_offset		hdr.links.start	/* start of range */
 #define max_offset		hdr.links.end	/* end of range */
-#define highest_entry_end	hdr.highest_entry_end_addr
 	pmap_t			pmap;		/* Physical map */
 	vm_map_size_t		size;		/* virtual size */
 	vm_map_size_t		user_wire_limit;/* rlimit on user locked memory */
 	vm_map_size_t		user_wire_size; /* current size of user locked memory in this map */
+
+	union {
+		/*
+		 * If map->disable_vmentry_reuse == TRUE:
+		 * the end address of the highest allocated vm_map_entry_t.
+		 */
+		vm_map_offset_t		vmu1_highest_entry_end;
+		/*
+		 * For a nested VM map:
+		 * the lowest address in this nested VM map that we would
+		 * expect to be unnested under normal operation (i.e. for
+		 * regular copy-on-write on DATA section).
+		 */
+		vm_map_offset_t		vmu1_lowest_unnestable_start;
+	} vmu1;
+#define highest_entry_end	vmu1.vmu1_highest_entry_end
+#define lowest_unnestable_start	vmu1.vmu1_lowest_unnestable_start
+
 	int			ref_count;	/* Reference count */
 #if	TASK_SWAPPER
 	int			res_count;	/* Residence count (swap) */
@@ -411,12 +429,11 @@ struct _vm_map {
 	/* boolean_t */		disable_vmentry_reuse:1, /*  All vm entries should keep using newer and higher addresses in the map */ 
 	/* boolean_t */		map_disallow_data_exec:1, /* Disallow execution from data pages on exec-permissive architectures */
 	/* boolean_t */		holelistenabled:1,
-	/* reserved */		pad:24;
+	/* boolean_t */		is_nested_map:1,
+	/* reserved */		pad:23;
 	unsigned int		timestamp;	/* Version number */
 	unsigned int		color_rr;	/* next color (not protected by a lock) */
-#if CONFIG_FREEZE
-	void			*default_freezer_handle;
-#endif
+
  	boolean_t		jit_entry_exists;
 } ;
 
@@ -788,7 +805,7 @@ extern vm_object_t	vm_submap_object;
 
 #define	vm_map_dealloc_fast(map)		\
 	MACRO_BEGIN					\
-	register int c;				\
+	int c;						\
 							\
 	lck_mtx_lock(&map->s_lock);			\
 	c = --map->ref_count;			\
@@ -878,7 +895,10 @@ extern	kern_return_t	vm_map_read_user(
 /* Create a new task map using an existing task map as a template. */
 extern vm_map_t		vm_map_fork(
 				ledger_t		ledger,
-				vm_map_t		old_map);
+				vm_map_t		old_map,
+				int			options);
+#define VM_MAP_FORK_SHARE_IF_INHERIT_NONE	0x00000001
+#define VM_MAP_FORK_PRESERVE_PURGEABLE		0x00000002
 
 /* Change inheritance */
 extern kern_return_t	vm_map_inherit(
@@ -981,16 +1001,14 @@ extern kern_return_t vm_map_set_cache_attr(
 
 extern int override_nx(vm_map_t map, uint32_t user_tag);
 
-extern int vm_map_purge(vm_map_t map);
-
 
 /* kext exported versions */
 
 extern kern_return_t vm_map_wire_external(
-	register vm_map_t	map,
-	register vm_map_offset_t	start,
-	register vm_map_offset_t	end,
-	register vm_prot_t	caller_prot,
+	vm_map_t		map,
+	vm_map_offset_t		start,
+	vm_map_offset_t		end,
+	vm_prot_t		caller_prot,
 	boolean_t		user_wire);
 
 extern kern_return_t vm_map_wire_and_extract_external(
@@ -1111,6 +1129,13 @@ extern kern_return_t	vm_map_remove(
 				vm_map_offset_t		end,
 				boolean_t		flags);
 
+/* Deallocate a region when the map is already locked */
+extern kern_return_t 	vm_map_remove_locked(
+				vm_map_t        map,
+				vm_map_offset_t     start,
+				vm_map_offset_t     end,
+				boolean_t       flags);
+
 /* Discard a copy without using it */
 extern void		vm_map_copy_discard(
 				vm_map_copy_t		copy);
@@ -1126,7 +1151,7 @@ extern kern_return_t	vm_map_copy_overwrite(
 extern boolean_t	vm_map_copy_validate_size(
 				vm_map_t		dst_map,
 				vm_map_copy_t		copy,
-				vm_map_size_t		size);
+				vm_map_size_t		*size);
 
 /* Place a copy into a map */
 extern kern_return_t	vm_map_copyout(
@@ -1134,10 +1159,17 @@ extern kern_return_t	vm_map_copyout(
 				vm_map_address_t	*dst_addr,	/* OUT */
 				vm_map_copy_t		copy);
 
+extern kern_return_t vm_map_copyout_size(
+				vm_map_t		dst_map,
+				vm_map_address_t	*dst_addr,	/* OUT */
+				vm_map_copy_t		copy,
+				vm_map_size_t		copy_size);
+
 extern kern_return_t	vm_map_copyout_internal(
 	vm_map_t		dst_map,
 	vm_map_address_t	*dst_addr,	/* OUT */
 	vm_map_copy_t		copy,
+	vm_map_size_t		copy_size,
 	boolean_t		consume_on_success,
 	vm_prot_t		cur_protection,
 	vm_prot_t		max_protection,
@@ -1162,7 +1194,8 @@ extern kern_return_t	vm_map_copyin_common(
 #define VM_MAP_COPYIN_SRC_DESTROY	0x00000001
 #define VM_MAP_COPYIN_USE_MAXPROT	0x00000002
 #define VM_MAP_COPYIN_ENTRY_LIST	0x00000004
-#define VM_MAP_COPYIN_ALL_FLAGS		0x00000007
+#define VM_MAP_COPYIN_PRESERVE_PURGEABLE 0x00000008
+#define VM_MAP_COPYIN_ALL_FLAGS		0x0000000F
 extern kern_return_t	vm_map_copyin_internal(
 				vm_map_t		src_map,
 				vm_map_address_t	src_addr,
@@ -1194,6 +1227,7 @@ extern void		vm_map_set_32bit(
 extern boolean_t	vm_map_has_hard_pagezero(
 		       		vm_map_t		map,
 				vm_map_offset_t		pagezero_size);
+extern void		vm_commit_pagezero_status(vm_map_t	tmap);
 
 extern boolean_t	vm_map_is_64bit(
 			        vm_map_t		map);
@@ -1348,19 +1382,16 @@ extern kern_return_t vm_map_partial_reap(
 		unsigned int *reclaimed_resident,
 		unsigned int *reclaimed_compressed);
 
-#if CONFIG_FREEZE
-void	vm_map_freeze_thaw_init(void);
-void	vm_map_freeze_thaw(void);
-void	vm_map_demand_fault(void);
 
-extern kern_return_t vm_map_freeze_walk(
-              	vm_map_t map,
-              	unsigned int *purgeable_count,
-              	unsigned int *wired_count,
-              	unsigned int *clean_count,
-              	unsigned int *dirty_count,
-             	unsigned int dirty_budget,
-              	boolean_t *has_shared);
+#if DEVELOPMENT || DEBUG
+
+extern int vm_map_disconnect_page_mappings(
+	        vm_map_t map,
+		boolean_t);
+#endif
+
+
+#if CONFIG_FREEZE
 
 extern kern_return_t vm_map_freeze(
              	vm_map_t map,
@@ -1370,9 +1401,6 @@ extern kern_return_t vm_map_freeze(
              	unsigned int *dirty_count,
              	unsigned int dirty_budget,
              	boolean_t *has_shared);
-                
-extern kern_return_t vm_map_thaw(
-                vm_map_t map);
 #endif
 
 __END_DECLS

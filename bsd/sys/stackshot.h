@@ -37,7 +37,7 @@ typedef struct stackshot_config {
 	/* Input options */
 	int		sc_pid;			/* PID to trace, or -1 for the entire system */
 	uint32_t	sc_flags;		/* Stackshot flags */
-	uint64_t	sc_since_timestamp;	/* Get traces of threads that have run since this time (NOT YET SUPPORTED) */
+	uint64_t	sc_delta_timestamp;	/* Retrieve a delta stackshot of system state that has changed since this time */
 
 	/* Stackshot results */
 	uint64_t	sc_buffer;		/* Pointer to stackshot buffer */
@@ -50,10 +50,6 @@ typedef struct stackshot_config {
 
 #ifndef KERNEL
 
-#if !LIBSYSCALL_INTERFACE
-typedef struct stackshot_config stackshot_config_t;
-#endif
-
 stackshot_config_t * stackshot_config_create(void);
 int stackshot_config_set_pid(stackshot_config_t * stackshot_config, int pid);
 int stackshot_config_set_flags(stackshot_config_t * stackshot_config, uint32_t flags);
@@ -61,6 +57,7 @@ int stackshot_capture_with_config(stackshot_config_t * stackshot_config);
 void * stackshot_config_get_stackshot_buffer(stackshot_config_t * stackshot_config);
 uint32_t stackshot_config_get_stackshot_size(stackshot_config_t * stackshot_config);
 int stackshot_config_set_size_hint(stackshot_config_t * stackshot_config, uint32_t suggested_size);
+int stackshot_config_set_delta_timestamp(stackshot_config_t * stackshot_config, uint64_t delta_timestamp);
 int stackshot_config_dealloc_buffer(stackshot_config_t * stackshot_config);
 int stackshot_config_dealloc(stackshot_config_t * stackshot_config);
 

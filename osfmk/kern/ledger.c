@@ -38,6 +38,8 @@
 #include <kern/processor.h>
 #include <kern/machine.h>
 #include <kern/queue.h>
+#include <kern/policy_internal.h>
+
 #include <sys/errno.h>
 
 #include <libkern/OSAtomic.h>
@@ -56,6 +58,7 @@
 #define	LF_WARNED               0x2000	/* callback was called for balance warning */ 
 #define	LF_TRACKING_MAX		0x4000	/* track max balance over user-specfied time */
 #define LF_PANIC_ON_NEGATIVE	0x8000	/* panic if it goes negative */
+#define LF_TRACK_CREDIT_ONLY	0x10000	/* only update "credit" */
 
 /* Determine whether a ledger entry exists and has been initialized and active */
 #define	ENTRY_VALID(l, e)					\
@@ -156,11 +159,11 @@ struct ledger_entry {
 } __attribute__((aligned(8)));
 
 struct ledger {
-	int			l_id;
+	uint64_t		l_id;
+	int32_t			l_refs;
+	int32_t			l_size;
 	struct ledger_template	*l_template;
-	int			l_refs;
-	int			l_size;
-	struct ledger_entry	*l_entries;
+	struct ledger_entry	l_entries[0] __attribute__((aligned(8)));
 };
 
 static int ledger_cnt = 0;
@@ -169,6 +172,9 @@ static uint32_t ledger_check_needblock(ledger_t l, uint64_t now);
 static kern_return_t ledger_perform_blocking(ledger_t l);
 static uint32_t flag_set(volatile uint32_t *flags, uint32_t bit);
 static uint32_t flag_clear(volatile uint32_t *flags, uint32_t bit);
+
+static void ledger_entry_check_new_balance(ledger_t ledger, int entry,
+					   struct ledger_entry *le);
 
 #if 0
 static void
@@ -345,29 +351,26 @@ ledger_t
 ledger_instantiate(ledger_template_t template, int entry_type)
 {
 	ledger_t ledger;
-	size_t sz;
+	size_t cnt, sz;
 	int i;
 
-	ledger = (ledger_t)kalloc(sizeof (struct ledger));
-	if (ledger == NULL)
-		return (LEDGER_NULL);
+	template_lock(template);
+	template->lt_refs++;
+	cnt = template->lt_cnt;
+	template_unlock(template);
+
+	sz = sizeof(*ledger) + (cnt * sizeof(struct ledger_entry));
+
+	ledger = (ledger_t)kalloc(sz);
+	if (ledger == NULL) {
+		ledger_template_dereference(template);
+		return LEDGER_NULL;
+	}
 
 	ledger->l_template = template;
 	ledger->l_id = ledger_cnt++;
 	ledger->l_refs = 1;
-
-	template_lock(template);
-	template->lt_refs++;
-	ledger->l_size = template->lt_cnt;
-	template_unlock(template);
-
-	sz = ledger->l_size * sizeof (struct ledger_entry);
-	ledger->l_entries = kalloc(sz);
-	if (sz && (ledger->l_entries == NULL)) {
-		ledger_template_dereference(template);
-		kfree(ledger, sizeof(struct ledger));
-		return (LEDGER_NULL);
-	}
+	ledger->l_size = (int32_t)cnt;
 
 	template_lock(template);
 	assert(ledger->l_size <= template->lt_cnt);
@@ -447,9 +450,8 @@ ledger_dereference(ledger_t ledger)
 
 	/* Just released the last reference.  Free it. */
 	if (v == 1) {
-		kfree(ledger->l_entries,
-		    ledger->l_size * sizeof (struct ledger_entry));
-		kfree(ledger, sizeof (*ledger));
+		kfree(ledger,
+		      sizeof(*ledger) + ledger->l_size * sizeof(struct ledger_entry));
 	}
 
 	return (KERN_SUCCESS);
@@ -463,7 +465,11 @@ warn_level_exceeded(struct ledger_entry *le)
 {
 	ledger_amount_t balance;
 
-	assert((le->le_credit >= 0) && (le->le_debit >= 0));
+	if (le->le_flags & LF_TRACK_CREDIT_ONLY) {
+		assert(le->le_debit == 0);
+	} else {
+		assert((le->le_credit >= 0) && (le->le_debit >= 0));
+	}
 
 	/*
 	 * XXX - Currently, we only support warnings for ledgers which
@@ -483,7 +489,11 @@ limit_exceeded(struct ledger_entry *le)
 {
 	ledger_amount_t balance;
 
-	assert((le->le_credit >= 0) && (le->le_debit >= 0));
+	if (le->le_flags & LF_TRACK_CREDIT_ONLY) {
+		assert(le->le_debit == 0);
+	} else {
+		assert((le->le_credit >= 0) && (le->le_debit >= 0));
+	}
 
 	balance = le->le_credit - le->le_debit;
 	if ((le->le_limit <= 0) && (balance < le->le_limit))
@@ -535,9 +545,16 @@ ledger_refill(uint64_t now, ledger_t ledger, int entry)
 	struct ledger_entry *le;
 	ledger_amount_t balance, due;
 
+	assert(entry >= 0 && entry < ledger->l_size);
+
 	le = &ledger->l_entries[entry];
 
 	assert(le->le_limit != LEDGER_LIMIT_INFINITY);
+
+	if (le->le_flags & LF_TRACK_CREDIT_ONLY) {
+		assert(le->le_debit == 0);
+		return;
+	}
 
 	/*
 	 * If another thread is handling the refill already, we're not
@@ -653,11 +670,9 @@ ledger_refill(uint64_t now, ledger_t ledger, int entry)
 #define TOCKSTAMP_IS_STALE(now, tock) ((((now) - (tock)) < NTOCKS) ? FALSE : TRUE)
 
 void
-ledger_check_new_balance(ledger_t ledger, int entry)
+ledger_entry_check_new_balance(ledger_t ledger, int entry, struct ledger_entry *le)
 {
-	struct ledger_entry *le;
-
-	le = &ledger->l_entries[entry];
+	ledger_amount_t	credit, debit;
 
 	if (le->le_flags & LF_TRACKING_MAX) {
 		ledger_amount_t balance = le->le_credit - le->le_debit;
@@ -749,12 +764,28 @@ ledger_check_new_balance(ledger_t ledger, int entry)
 		}
 	}
 
+	credit = le->le_credit;
+	debit = le->le_debit;
 	if ((le->le_flags & LF_PANIC_ON_NEGATIVE) &&
-	    (le->le_credit < le->le_debit)) {
-		panic("ledger_check_new_balance(%p,%d): negative ledger %p balance:%lld\n",
-		      ledger, entry, le, le->le_credit - le->le_debit);
+	    ((credit < debit) ||
+	     (le->le_credit < le->le_debit))) {
+		panic("ledger_entry_check_new_balance(%p,%d): negative ledger %p credit:%lld/%lld debit:%lld/%lld balance:%lld/%lld\n",
+		      ledger, entry, le,
+		      credit, le->le_credit,
+		      debit, le->le_debit,
+		      credit - debit, le->le_credit - le->le_debit);
 	}
 }
+
+void
+ledger_check_new_balance(ledger_t ledger, int entry)
+{
+	struct ledger_entry *le;
+	assert(entry > 0 && entry <= ledger->l_size);
+	le = &ledger->l_entries[entry];
+	ledger_entry_check_new_balance(ledger, entry, le);
+}
+
 
 /*
  * Add value to an entry in a ledger.
@@ -776,7 +807,7 @@ ledger_credit(ledger_t ledger, int entry, ledger_amount_t amount)
 	old = OSAddAtomic64(amount, &le->le_credit);
 	new = old + amount;
 	lprintf(("%p Credit %lld->%lld\n", current_thread(), old, new));
-	ledger_check_new_balance(ledger, entry);
+	ledger_entry_check_new_balance(ledger, entry, le);
 
 	return (KERN_SUCCESS);
 }
@@ -825,7 +856,13 @@ ledger_zero_balance(ledger_t ledger, int entry)
 	le = &ledger->l_entries[entry];
 
 top:
-	if (le->le_credit > le->le_debit) {
+	if (le->le_flags & LF_TRACK_CREDIT_ONLY) {
+		assert(le->le_debit == 0);
+		if (!OSCompareAndSwap64(le->le_credit, 0, &le->le_credit)) {
+			goto top;
+		}
+		lprintf(("%p zeroed %lld->%lld\n", current_thread(), le->le_credit, 0));
+	} else if (le->le_credit > le->le_debit) {
 		if (!OSCompareAndSwap64(le->le_debit, le->le_credit, &le->le_debit))
 			goto top;
 		lprintf(("%p zeroed %lld->%lld\n", current_thread(), le->le_debit, le->le_credit));
@@ -963,16 +1000,34 @@ ledger_panic_on_negative(ledger_template_t template, int entry)
 	template_lock(template);
 
 	if ((entry < 0) || (entry >= template->lt_cnt)) {
-		template_unlock(template);	
+		template_unlock(template);
 		return (KERN_INVALID_VALUE);
 	}
 
 	template->lt_entries[entry].et_flags |= LF_PANIC_ON_NEGATIVE;
 
-	template_unlock(template);	
+	template_unlock(template);
 
 	return (KERN_SUCCESS);
 }
+
+kern_return_t
+ledger_track_credit_only(ledger_template_t template, int entry)
+{
+	template_lock(template);
+
+	if ((entry < 0) || (entry >= template->lt_cnt)) {
+		template_unlock(template);
+		return (KERN_INVALID_VALUE);
+	}
+
+	template->lt_entries[entry].et_flags |= LF_TRACK_CREDIT_ONLY;
+
+	template_unlock(template);
+
+	return (KERN_SUCCESS);
+}
+
 /*
  * Add a callback to be executed when the resource goes into deficit.
  */
@@ -1165,11 +1220,17 @@ ledger_debit(ledger_t ledger, int entry, ledger_amount_t amount)
 
 	le = &ledger->l_entries[entry];
 
-	old = OSAddAtomic64(amount, &le->le_debit);
-	new = old + amount;
-
+	if (le->le_flags & LF_TRACK_CREDIT_ONLY) {
+		assert(le->le_debit == 0);
+		old = OSAddAtomic64(-amount, &le->le_credit);
+		new = old - amount;
+	} else {
+		old = OSAddAtomic64(amount, &le->le_debit);
+		new = old + amount;
+	}
 	lprintf(("%p Debit %lld->%lld\n", thread, old, new));
-	ledger_check_new_balance(ledger, entry);
+
+	ledger_entry_check_new_balance(ledger, entry, le);
 	return (KERN_SUCCESS);
 
 }
@@ -1446,7 +1507,11 @@ ledger_get_balance(ledger_t ledger, int entry, ledger_amount_t *balance)
 
 	le = &ledger->l_entries[entry];
 
-	assert((le->le_credit >= 0) && (le->le_debit >= 0));
+	if (le->le_flags & LF_TRACK_CREDIT_ONLY) {
+		assert(le->le_debit == 0);
+	} else {
+		assert((le->le_credit >= 0) && (le->le_debit >= 0));
+	}
 
 	*balance = le->le_credit - le->le_debit;
 
@@ -1550,11 +1615,11 @@ ledger_get_entry_info(ledger_t                  ledger,
 
 	assert(ledger != NULL);
 	assert(lei != NULL);
-	assert(entry < ledger->l_size);
 
-	struct ledger_entry *le = &ledger->l_entries[entry];
-
-	ledger_fill_entry_info(le, lei, now);
+	if (entry >= 0 && entry < ledger->l_size) {
+		struct ledger_entry *le = &ledger->l_entries[entry];
+		ledger_fill_entry_info(le, lei, now);
+	}
 }
 
 int

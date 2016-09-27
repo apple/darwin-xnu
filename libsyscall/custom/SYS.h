@@ -48,15 +48,6 @@
 
 #include <sys/syscall.h>
 
-/* Binary compatibility stubs for syscalls that no longer exist */
-
-#ifndef SYS_setquota
-#define SYS_setquota	148
-#endif
-#ifndef SYS_quota
-#define SYS_quota	149
-#endif
-
 #if defined(__i386__)
 
 #include <architecture/i386/asm_help.h>

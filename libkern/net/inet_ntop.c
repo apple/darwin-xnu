@@ -118,10 +118,12 @@ inet_ntop6(const u_char *src, char *dst, socklen_t size)
 	cur.len = 0;
 	for (i = 0; i < (NS_IN6ADDRSZ / NS_INT16SZ); i++) {
 		if (words[i] == 0) {
-			if (cur.base == -1)
-				cur.base = i, cur.len = 1;
-			else
+			if (cur.base == -1) {
+				cur.base = i;
+				cur.len = 1;
+			} else {
 				cur.len++;
+			}
 		} else {
 			if (cur.base != -1) {
 				if (best.base == -1 || cur.len > best.len)

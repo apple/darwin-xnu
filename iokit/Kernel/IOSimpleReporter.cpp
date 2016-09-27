@@ -56,7 +56,7 @@ IOSimpleReporter::with(IOService *reportingService,
     
 finish:
     if (!rval) {
-        if (reporter)       delete reporter;
+        OSSafeReleaseNULL(reporter);
     }
     
     return rval;

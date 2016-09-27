@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -118,7 +118,7 @@ public:
      * @abstract Primary initializer for an IOCommandPool object.
      * @discussion Primary initializer for an IOCommandPool.
      * Should probably use IOCommandPool::withWorkLoop() as it is easier to use.
-     * @param inWorkLoop
+     * @param workLoop
      * The workloop that this command pool should synchronize with.
      * @result Returns true if command pool was successfully initialized.
      */
@@ -176,7 +176,7 @@ public:
      * @discussion
      * The returnCommand method is used to place an object of type IOCommand
      * into the pool, whether it be the first time, or the 1000th time.
-     * @param commmand
+     * @param command
      * The command to place in the pool.
      */
     
@@ -189,10 +189,10 @@ protected:
      * @discussion
      * The gatedGetCommand method is used to serialize the extraction of a 
      * command from the pool behind a command gate, runAction-ed by getCommand.
-     * @param vCommand
+     * @param command
      * A pointer to a pointer to an IOCommand object where the returned
      * command will be stored.
-     * @param vBlock
+     * @param blockForCommand
      * A bool that indicates whether to block the request until a command
      * becomes available.
      * @result
@@ -207,7 +207,7 @@ protected:
      * @discussion
      * The gatedReturnCommand method is used to serialize the return of a 
      * command to the pool behind a command gate, runAction-ed by returnCommand.
-     * @param vCommand
+     * @param command
      * A pointer to the IOCommand object to be returned to the pool.
      * @result
      * Always returns kIOReturnSuccess if the vCommand argument is valid.

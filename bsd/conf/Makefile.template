@@ -1,14 +1,14 @@
 #
-# Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+# Copyright (c) 2000-2016 Apple Inc. All rights reserved.
 #
 # @APPLE_LICENSE_HEADER_START@
-# 
+#
 # The contents of this file constitute Original Code as defined in and
 # are subject to the Apple Public Source License Version 1.1 (the
 # "License").  You may not use this file except in compliance with the
 # License.  Please obtain a copy of the License at
 # http://www.apple.com/publicsource and read it before using this file.
-# 
+#
 # This Original Code and all software distributed under the License are
 # distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
 # EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -16,7 +16,7 @@
 # FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
 # License for the specific language governing rights and limitations
 # under the License.
-# 
+#
 # @APPLE_LICENSE_HEADER_END@
 #
 
@@ -45,7 +45,7 @@ CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE \
 #
 # Directories for mig generated files
 #
-COMP_SUBDIRS = 
+COMP_SUBDIRS =
 
 #
 #  Make sure we don't remove this by accident if interrupted at the wrong
@@ -81,6 +81,8 @@ vnode_pager.o_CFLAGS_ADD		+= -Wshorten-64-to-32
 vm_unix.o_CFLAGS_ADD			+= -Wshorten-64-to-32
 pthread_synch.o_CFLAGS_ADD		+= -Wno-unused-parameter -Wno-missing-prototypes
 pthread_support.o_CFLAGS_ADD		+= -Wno-unused-parameter -Wno-missing-prototypes
+
+ip_icmp.o_CFLFAGS_ADD		+= -O0
 
 # Objects that don't want -Wsign-compare
 OBJS_NO_SIGN_COMPARE =		\
@@ -150,13 +152,6 @@ $(foreach file,$(OBJS_NO_SIGN_COMPARE),$(eval $(call add_perfile_cflags,$(file),
 
 # Objects that don't want -Wcast-align warning (8474835)
 OBJS_NO_CAST_ALIGN =			\
-		BTree.o			\
-		BTreeAllocate.o		\
-		BTreeMiscOps.o		\
-		BTreeNodeOps.o		\
-		BTreeScanner.o		\
-		BTreeTreeOps.o		\
-		CatalogUtilities.o	\
 		audit_bsm_token.o	\
 		audit_pipe.o		\
 		audit_session.o		\
@@ -167,19 +162,6 @@ OBJS_NO_CAST_ALIGN =			\
 		fasttrap_isa.o		\
 		fbt_arm.o		\
 		fbt_x86.o		\
-		hfs_attrlist.o		\
-		hfs_btreeio.o		\
-		hfs_catalog.o		\
-		hfs_cnode.o		\
-		hfs_endian.o		\
-		hfs_hotfiles.o		\
-		hfs_link.o		\
-		hfs_quota.o		\
-		hfs_readwrite.o		\
-		hfs_search.o		\
-		hfs_vfsops.o		\
-		hfs_vnops.o		\
-		hfs_xattr.o		\
 		if_bond.o		\
 		ip6_fw.o		\
 		ip_dummynet.o		\
@@ -227,7 +209,6 @@ OBJS_NO_CAST_ALIGN =			\
 		uipc_usrreq.o		\
 		vfs_attrlist.o		\
 		vfs_fsevents.o		\
-		vfs_journal.o		\
 		vfs_lookup.o		\
 		vfs_syscalls.o		\
 		vfs_utfconv.o		\
@@ -264,8 +245,8 @@ $(SOBJS): .SFLAGS
 .SFLAGS: ALWAYS
 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
-$(COMPONENT).filelist: $(OBJS) 
-	@echo LDFILELIST $(COMPONENT)
+$(COMPONENT).filelist: $(OBJS)
+	@echo "$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0)"
 	$(_v)for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
@@ -273,15 +254,15 @@ $(COMPONENT).filelist: $(OBJS)
 MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
 
 init_sysent.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	@echo "Generating $@ from $<";
+	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0)";
 	$(_v)$(MAKESYSCALLS) $< table > /dev/null
 
 syscalls.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	@echo "Generating $@ from $<";
+	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0)";
 	$(_v)$(MAKESYSCALLS) $< names > /dev/null
 
 audit_kevents.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	@echo "Generating $@ from $<";
+	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0)";
 	$(_v)$(MAKESYSCALLS) $< audit > /dev/null
 
 do_all: $(COMPONENT).filelist

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -60,6 +60,9 @@ thread_t mapping_replenish_thread;
 event_t	mapping_replenish_event, pmap_user_pv_throttle_event;
 
 uint64_t pmap_pv_throttle_stat, pmap_pv_throttled_waiters;
+
+int pmap_asserts_enabled = DEBUG;
+int pmap_asserts_traced = 0;
 
 unsigned int pmap_cache_attributes(ppnum_t pn) {
 	if (pmap_get_cache_attributes(pn, FALSE) & INTEL_PTE_NCACHE)
@@ -341,7 +344,9 @@ unsigned pmap_kernel_reserve_replenish_stat;
 unsigned pmap_user_reserve_replenish_stat;
 unsigned pmap_kern_reserve_alloc_stat;
 
-void mapping_replenish(void)
+__attribute__((noreturn))
+void
+mapping_replenish(void)
 {
 	pv_hashed_entry_t	pvh_e;
 	pv_hashed_entry_t	pvh_eh;

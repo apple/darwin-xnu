@@ -433,6 +433,16 @@ struct proc_rlimit_control_wakeupmon {
 	int32_t wm_rate;
 };
 
+#if PRIVATE
+/* 
+ * Flags for I/O monitor control.
+ */
+#define IOMON_ENABLE 			0x01
+#define IOMON_DISABLE 			0x02
+
+#endif /* PRIVATE */
+
+
 /* I/O type */
 #define IOPOL_TYPE_DISK	0
 #if PRIVATE

@@ -26,21 +26,30 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <kern/thread.h>
 
-/* create the pet thread */
-extern int kperf_pet_init(void);
+#define KPERF_PET_DEFAULT_IDLE_RATE (15)
 
-/* Kick the pet thread so it runs a sample of all threads */
-extern void kperf_pet_thread_go(void);
+extern boolean_t kperf_lightweight_pet_active;
+extern uint32_t kperf_pet_gen;
 
-/* ensure the pet thread has stopped sampling */
-extern void kperf_pet_thread_wait(void);
+/* prepare PET to be able to fire action with given ID, or disable PET */
+void kperf_pet_config(unsigned int action_id);
 
-/* tell pet the timer parameters */
-extern void kperf_pet_timer_config( unsigned timerid, unsigned actionid );
+/* fire off a PET sample, both before and after on-core samples */
+void kperf_pet_fire_before(void);
+void kperf_pet_fire_after(void);
 
-/* get/set rate at which PET forces threads to be sampled */
-extern int kperf_get_pet_idle_rate( void );
-extern void kperf_set_pet_idle_rate( int val );
+/* notify PET of new threads switching on */
+void kperf_pet_on_cpu(thread_t thread, thread_continue_t continuation,
+                      uintptr_t *starting_frame);
 
+/* get/set rate at which idle threads are sampled by PET */
+int kperf_get_pet_idle_rate(void);
+int kperf_set_pet_idle_rate(int val);
 
+/* get/set whether lightweight PET is enabled */
+int kperf_get_lightweight_pet(void);
+int kperf_set_lightweight_pet(int val);
+
+void kperf_lightweight_pet_active_update(void);

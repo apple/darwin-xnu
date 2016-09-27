@@ -43,7 +43,7 @@ if __name__ == "__main__":
         try:
             compile_result = py_compile.compile(fname, cfile="/dev/null", doraise=True)
         except py_compile.PyCompileError as exc:
-            print str(exc)
+            print >>sys.stderr, str(exc)
             print >>sys.stderr, "Error: Compilation failed. Please fix the errors and try again."
             sys.exit(1)
         print "Success: Checked %s. No syntax errors found." % fname

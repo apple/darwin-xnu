@@ -50,7 +50,6 @@
 /* BSD KERN COMPONENT INTERFACE */
 
 task_t	bsd_init_task = TASK_NULL;
-boolean_t init_task_died;
 extern unsigned int not_in_kdp; /* Skip acquiring locks if we're in kdp */
  
 thread_t get_firstthread(task_t);
@@ -59,12 +58,14 @@ int get_thread_userstop(thread_t);
 boolean_t current_thread_aborted(void);
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
 kern_return_t get_signalact(task_t , thread_t *, int);
-int get_vmsubmap_entries(vm_map_t, vm_object_offset_t, vm_object_offset_t);
 int fill_task_rusage(task_t task, rusage_info_current *ri);
 int fill_task_io_rusage(task_t task, rusage_info_current *ri);
 int fill_task_qos_rusage(task_t task, rusage_info_current *ri);
 void fill_task_billed_usage(task_t task, rusage_info_current *ri);
 void task_bsdtask_kill(task_t);
+
+extern uint64_t get_dispatchqueue_serialno_offset_from_proc(void *p);
+extern uint64_t proc_uniqueid(void *p);
 
 #if MACH_BSD
 extern void psignal(void *, int);
@@ -319,8 +320,11 @@ swap_task_map(task_t task, thread_t thread, vm_map_t map, boolean_t doswitch)
 
 	task_lock(task);
 	mp_disable_preemption();
+
 	old_map = task->map;
 	thread->map = task->map = map;
+	vm_commit_pagezero_status(map);
+
 	if (doswitch) {
 		pmap_switch(map->pmap);
 	}
@@ -428,6 +432,126 @@ uint64_t get_task_phys_footprint_max(task_t task)
 	return 0;
 }
 
+/*
+ *
+ */
+uint64_t get_task_phys_footprint_limit(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t max;
+
+	ret = ledger_get_limit(task->ledger, task_ledgers.phys_footprint, &max);
+	if (KERN_SUCCESS == ret) {
+		return max;
+	}
+
+	return 0;
+}
+
+uint64_t get_task_internal(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.internal, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
+	}
+
+	return 0;
+}
+
+uint64_t get_task_internal_compressed(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.internal_compressed, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
+	}
+
+	return 0;
+}
+
+uint64_t get_task_purgeable_nonvolatile(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.purgeable_nonvolatile, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
+	}
+
+	return 0;
+}
+
+uint64_t get_task_purgeable_nonvolatile_compressed(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.purgeable_nonvolatile_compressed, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
+	}
+
+	return 0;
+}
+
+uint64_t get_task_alternate_accounting(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.alternate_accounting, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
+	}
+
+	return 0;
+}
+
+uint64_t get_task_alternate_accounting_compressed(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.alternate_accounting_compressed, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
+	}
+
+	return 0;
+}
+
+uint64_t get_task_page_table(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.page_table, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
+	}
+
+	return 0;
+}
+
+uint64_t get_task_iokit_mapped(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.iokit_mapped, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return (credit - debit);
+	}
+
+	return 0;
+}
+
 uint64_t get_task_cpu_time(task_t task)
 {
 	kern_return_t ret;
@@ -475,7 +599,9 @@ get_vmmap_size(
 	return(map->size);
 }
 
-int
+#if CONFIG_COREDUMP
+
+static int
 get_vmsubmap_entries(
 	vm_map_t	map,
 	vm_object_offset_t	start,
@@ -537,6 +663,7 @@ get_vmmap_entries(
 	  vm_map_unlock(map);
 	return(total_entries);
 }
+#endif /* CONFIG_COREDUMP */
 
 /*
  *
@@ -822,7 +949,7 @@ fill_task_rusage(task_t task, rusage_info_current *ri)
 	assert(task != TASK_NULL);
 	task_lock(task);
 
-	task_power_info_locked(task, &powerinfo, NULL);
+	task_power_info_locked(task, &powerinfo, NULL, NULL);
 	ri->ri_pkg_idle_wkups = powerinfo.task_platform_idle_wakeups;
 	ri->ri_interrupt_wkups = powerinfo.task_interrupt_wakeups;
 	ri->ri_user_time = powerinfo.total_user;
@@ -845,8 +972,8 @@ void
 fill_task_billed_usage(task_t task __unused, rusage_info_current *ri)
 {
 #if CONFIG_BANK
-	ri->ri_billed_system_time = bank_billed_time(task->bank_context);
-	ri->ri_serviced_system_time = bank_serviced_time(task->bank_context);
+	ri->ri_billed_system_time = bank_billed_time_safe(task);
+	ri->ri_serviced_system_time = bank_serviced_time_safe(task);
 #else
 	ri->ri_billed_system_time = 0;
 	ri->ri_serviced_system_time = 0;
@@ -884,10 +1011,7 @@ fill_task_qos_rusage(task_t task, rusage_info_current *ri)
 		if (thread->options & TH_OPT_IDLE_THREAD)
 			continue;
 
-		thread_mtx_lock(thread);
-		thread_update_qos_cpu_time(thread, TRUE);
-		thread_mtx_unlock(thread);
-		
+		thread_update_qos_cpu_time(thread);
 	}
 	ri->ri_cpu_time_qos_default = task->cpu_time_qos_stats.cpu_time_qos_default;
 	ri->ri_cpu_time_qos_maintenance = task->cpu_time_qos_stats.cpu_time_qos_maintenance;
@@ -900,3 +1024,39 @@ fill_task_qos_rusage(task_t task, rusage_info_current *ri)
 	task_unlock(task);
 	return (0);
 }
+
+uint64_t
+get_task_dispatchqueue_serialno_offset(task_t task)
+{
+	uint64_t dq_serialno_offset = 0;
+
+	if (task->bsd_info) {
+		dq_serialno_offset = get_dispatchqueue_serialno_offset_from_proc(task->bsd_info);
+	}
+
+	return dq_serialno_offset;
+}
+
+uint64_t
+get_task_uniqueid(task_t task)
+{
+	if (task->bsd_info) {
+		return proc_uniqueid(task->bsd_info);
+	} else {
+		return UINT64_MAX;
+	}
+}
+
+#if CONFIG_MACF
+struct label *
+get_task_crash_label(task_t task)
+{
+	return task->crash_label;
+}
+
+void
+set_task_crash_label(task_t task, struct label *label)
+{
+	task->crash_label = label;
+}
+#endif

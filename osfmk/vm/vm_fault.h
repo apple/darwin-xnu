@@ -176,8 +176,7 @@ extern kern_return_t vm_fault_enter(
 
 extern vm_offset_t kdp_lightweight_fault(
 		vm_map_t map,
-		vm_offset_t cur_target_addr,
-		uint32_t *fault_results);
+		vm_offset_t cur_target_addr);
 
 
 #endif	/* MACH_KERNEL_PRIVATE */

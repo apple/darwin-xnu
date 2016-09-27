@@ -26,7 +26,11 @@
 #define CCDRBG_STATUS_ERROR (-1)
 #define CCDRBG_STATUS_NEED_RESEED (-2)
 #define CCDRBG_STATUS_PARAM_ERROR (-3)
-
+// If this value is returned, the caller must abort or panic the process for security reasons.
+// for example in the case of catastrophic error in
+// http://csrc.nist.gov/publications/drafts/800-90/sp800_90a_r1_draft.pdf
+// ccdrbg calls abort() or panic(), if they are available in the system.
+#define CCDRBG_STATUS_ABORT (-4)
 /*
  * The maximum length of the entropy_input,  additional_input (max_additional_input_length) , personalization string 
  * (max_personalization_string_length) and max_number_of_bits_per_request  are implementation dependent
@@ -50,9 +54,9 @@
 
 CC_INLINE int ccdrbg_init(const struct ccdrbg_info *info,
 			struct ccdrbg_state *drbg,
-            unsigned long entropyLength, const void* entropy,
-            unsigned long nonceLength, const void* nonce,
-            unsigned long psLength, const void* ps)
+            size_t entropyLength, const void* entropy,
+            size_t nonceLength, const void* nonce,
+            size_t psLength, const void* ps)
 {
 	return info->init(info, drbg, entropyLength, entropy, nonceLength, nonce, psLength, ps);
 }
@@ -62,8 +66,8 @@ CC_INLINE int ccdrbg_init(const struct ccdrbg_info *info,
  */
 CC_INLINE int ccdrbg_reseed(const struct ccdrbg_info *info,
        struct ccdrbg_state *drbg,
-       unsigned long entropyLength, const void *entropy,
-       unsigned long additionalLength, const void *additional)
+       size_t entropyLength, const void *entropy,
+       size_t additionalLength, const void *additional)
 {
     return info->reseed(drbg, entropyLength, entropy, additionalLength, additional);
 }
@@ -71,8 +75,8 @@ CC_INLINE int ccdrbg_reseed(const struct ccdrbg_info *info,
 
 CC_INLINE int ccdrbg_generate(const struct ccdrbg_info *info,
          struct ccdrbg_state *drbg,
-         unsigned long dataOutLength, void *dataOut,
-         unsigned long additionalLength, const void *additional)
+         size_t dataOutLength, void *dataOut,
+         size_t additionalLength, const void *additional)
 {
     return info->generate(drbg, dataOutLength, dataOut, additionalLength, additional);
 }
@@ -95,7 +99,7 @@ CC_INLINE size_t ccdrbg_context_size(const struct ccdrbg_info *drbg)
  */
 struct ccdrbg_nistctr_custom {
     const struct ccmode_ecb *ecb;
-    unsigned long keylen;
+    size_t keylen;
     int strictFIPS;
     int use_df;
 };
@@ -104,7 +108,7 @@ void ccdrbg_factory_nistctr(struct ccdrbg_info *info, const struct ccdrbg_nistct
 
 /*
  * NIST SP 800-90 HMAC_DRBG
- * the mximum security strengh of drbg is half of output size of the input hash function and it internally is limited to 256 bits
+ * the maximum security strengh of drbg is half of output size of the input hash function and it internally is limited to 256 bits
  */
 extern struct ccdrbg_info ccdrbg_nistdigest_info;
 

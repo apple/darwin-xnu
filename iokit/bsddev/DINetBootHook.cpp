@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -89,6 +89,7 @@
 #include <sys/types.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
+#include "DINetBootHook.h"
 
 #define	kIOHDIXControllerClassName	"IOHDIXController"
 #define	kDIRootImageKey				"di-root-image"

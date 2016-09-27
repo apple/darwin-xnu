@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -498,11 +498,16 @@ struct vfsioattr {
 	u_int32_t	io_maxsegwritesize;	/* Max. segment write size */
 	u_int32_t	io_devblocksize;	/* the underlying device block size */
 	u_int32_t	io_flags;			/* flags for underlying device */
-	void *		io_reserved[2];		/* extended attribute information */
+	union {
+		int64_t	io_max_swappin_available;
+		// On 32 bit architectures, we don't have any spare
+		void *io_reserved[2];
+	};
 };
 
-#define VFS_IOATTR_FLAGS_FUA	0x01	/* Write-through cache supported */
-#define VFS_IOATTR_FLAGS_UNMAP		0x02	/* Unmap (trim) supported */
+#define VFS_IOATTR_FLAGS_FUA				0x00000001	/* Write-through cache supported */
+#define VFS_IOATTR_FLAGS_UNMAP				0x00000002	/* Unmap (trim) supported */
+#define VFS_IOATTR_FLAGS_SWAPPIN_SUPPORTED	0x00000010	/* Pinning swap file supported */
 
 /*
  * Filesystem Registration information
@@ -521,9 +526,8 @@ struct vfsioattr {
 #define VFS_TBLVNOP_PAGEINV2		0x2000
 #define VFS_TBLVNOP_PAGEOUTV2		0x4000
 #define VFS_TBLVNOP_NOUPDATEID_RENAME	0x8000	/* vfs should not call vnode_update_ident on rename */
-#if CONFIG_SECLUDED_RENAME
 #define	VFS_TBLVNOP_SECLUDE_RENAME 	0x10000
-#endif
+#define VFS_TBLCANMOUNTROOT		0x20000
 
 
 struct vfs_fsentry {
@@ -702,9 +706,64 @@ struct vfsops {
 	 @return 0 for success, else an error code.  
 	 */
 	int  (*vfs_setattr)(struct mount *mp, struct vfs_attr *, vfs_context_t context);
-	void *vfs_reserved[7];
+
+	/*!
+	 @function vfs_ioctl
+	 @abstract File system control operations.
+	 @discussion  Unlike vfs_sysctl, this is specific to a particular volume.
+	 @param mp The mount to execute the command on.
+	 @param command Identifier for action to take.  The command used here
+	 should be in the same namespace as VNOP ioctl commands.
+	 @param data Pointer to data; this can be an integer constant (of 32 bits
+	 only) or an address to be read from or written to, depending on "command."
+	 If it is an address, it is valid and resides in the kernel; callers of
+	 VFS_IOCTL() are responsible for copying to and from userland.
+	 @param flags Reserved for future use, set to zero
+	 @param ctx Context against which to authenticate ioctl request.
+	 @return 0 for success, else an error code.
+	 */
+	int  (*vfs_ioctl)(struct mount *mp, u_long command, caddr_t data,
+					  int flags, vfs_context_t context);
+
+	/*!
+	 @function vfs_vget_snapdir
+	 @abstract Get the vnode for the snapshot directory of a filesystem.
+	 @discussion Upon success, should return with an iocount held on the root vnode which the caller will
+	 drop with vnode_put().
+	 @param mp Mount for which to get the root.
+	 @param vpp Destination for snapshot directory vnode.
+	 @param context Context to authenticate for getting the snapshot directory.
+	 @return 0 for success, else an error code.
+	 */
+	int  (*vfs_vget_snapdir)(struct mount *mp, struct vnode **vpp, vfs_context_t context);
+	void *vfs_reserved5;
+	void *vfs_reserved4;
+	void *vfs_reserved3;
+	void *vfs_reserved2;
+	void *vfs_reserved1;
 };
 
+#ifdef KERNEL
+
+/*
+ * Commands for vfs_ioctl. While they are encoded the same way as for ioctl(2),
+ * there is no generic interface for them from userspace like ioctl(2).
+ */
+struct fs_snapshot_mount_args {
+	mount_t sm_mp;
+	struct componentname *sm_cnp;
+};
+
+#define VFSIOC_MOUNT_SNAPSHOT  _IOW('V', 1, struct fs_snapshot_mount_args)
+#define VFSCTL_MOUNT_SNAPSHOT  IOCBASECMD(VFSIOC_MOUNT_SNAPSHOT)
+
+struct fs_snapshot_revert_args {
+    struct componentname *sr_cnp;
+};
+#define VFSIOC_REVERT_SNAPSHOT  _IOW('V', 2, struct fs_snapshot_revert_args)
+#define VFSCTL_REVERT_SNAPSHOT  IOCBASECMD(VFSIOC_REVERT_SNAPSHOT)
+
+#endif /* KERNEL */
 
 /*
  * flags passed into vfs_iterate
@@ -736,6 +795,9 @@ extern int VFS_SYNC(mount_t, int, vfs_context_t);
 extern int VFS_VGET(mount_t, ino64_t, vnode_t *, vfs_context_t);
 extern int VFS_FHTOVP(mount_t, int, unsigned char *, vnode_t *, vfs_context_t);
 extern int VFS_VPTOFH(vnode_t, int *, unsigned char *, vfs_context_t);
+extern int VFS_IOCTL(mount_t mp, u_long command, caddr_t data,
+					 int flags, vfs_context_t context);
+extern int VFS_VGET_SNAPDIR(mount_t, vnode_t *, vfs_context_t);
 #endif /* BSD_KERNEL_PRIVATE */
 /*
  * prototypes for exported VFS operations
@@ -750,7 +812,7 @@ extern int VFS_VPTOFH(vnode_t, int *, unsigned char *, vfs_context_t);
   @param handle Opaque handle which will be passed to vfs_fsremove.
   @return 0 for success, else an error code.  
   */
-int vfs_fsadd(struct vfs_fsentry *, vfstable_t *);
+int vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t *handle);
 
 /*!
   @function vfs_fsremove
@@ -759,18 +821,18 @@ int vfs_fsadd(struct vfs_fsentry *, vfstable_t *);
   @param handle Handle which was returned by vfs_fsadd.
   @return 0 for success, else an error code.  
   */
-int vfs_fsremove(vfstable_t);
+int vfs_fsremove(vfstable_t handle);
 
 /*!
   @function vfs_iterate
   @abstract Iterate over all mountpoints with a callback.  Used, for example, by sync().
   @param flags Unused.
-  @param callback Function which takes a mount and arbitrary passed-in "arg," and returns one of VFS_RETURNED_DONE or VFS_CLAIMED_DONE: end
+  @param callout Function which takes a mount and arbitrary passed-in "arg," and returns one of VFS_RETURNED_DONE or VFS_CLAIMED_DONE: end
   iteration and return success.  VFS_RETURNED or VFS_CLAIMED: continue iterating. Anything else: continue iterating. 
   @param arg Arbitrary data to pass to callback.
   @return 0 for success, else an error code.  
   */
-int	vfs_iterate(int, int (*)(struct mount *, void *), void *);
+int	vfs_iterate(int flags, int (*callout)(struct mount *, void *), void *arg);
 
 /*!
   @function vfs_init_io_attributes
@@ -779,7 +841,7 @@ int	vfs_iterate(int, int (*)(struct mount *, void *), void *);
   @param mp Mountpoint whose I/O parameters to initialize.
   @return 0 for success, else an error code.  
   */
-int	vfs_init_io_attributes(vnode_t, mount_t);
+int	vfs_init_io_attributes(vnode_t devvp, mount_t mp);
 
 /*!
   @function vfs_flags
@@ -788,7 +850,7 @@ int	vfs_init_io_attributes(vnode_t, mount_t);
   @param mp Mount whose flags to grab.  
   @return Flags.
   */
-uint64_t vfs_flags(mount_t);
+uint64_t vfs_flags(mount_t mp);
 
 /*!
   @function vfs_setflags
@@ -797,9 +859,8 @@ uint64_t vfs_flags(mount_t);
   used by a filesystem as part of the mount process.
   @param mp Mount whose flags to set.
   @param flags Flags to activate.  Must be in the bitwise "OR" of MNT_VISFLAGMASK and MNT_CMDFLAGS.
-  @return Flags.
   */
-void	vfs_setflags(mount_t, uint64_t);
+void	vfs_setflags(mount_t mp, uint64_t flags);
 
 /*!
   @function vfs_clearflags
@@ -807,9 +868,8 @@ void	vfs_setflags(mount_t, uint64_t);
   @discussion Sets mount flags to the bitwise "AND" of their current value and the complement of the specified bits.
   @param mp Mount whose flags to set.
   @param flags Flags to deactivate.  Must be in the bitwise "OR" of MNT_VISFLAGMASK and MNT_CMDFLAGS.
-  @return void.
   */
-void	vfs_clearflags(mount_t, uint64_t);
+void	vfs_clearflags(mount_t mp, uint64_t flags);
 
 /*!
   @function vfs_issynchronous
@@ -817,7 +877,7 @@ void	vfs_clearflags(mount_t, uint64_t);
   @param mp Mount to test.
   @return Nonzero if writes occur synchronously, else 0.
   */
-int	vfs_issynchronous(mount_t);
+int	vfs_issynchronous(mount_t mp);
 
 /*!
   @function vfs_iswriteupgrade
@@ -826,7 +886,7 @@ int	vfs_issynchronous(mount_t);
   @param mp Mount to test.
   @return Nonzero if a request has been made to update from read-only to read-write, else 0.
   */
-int	vfs_iswriteupgrade(mount_t);
+int	vfs_iswriteupgrade(mount_t mp);
 
 /*!
   @function vfs_isupdate
@@ -834,7 +894,7 @@ int	vfs_iswriteupgrade(mount_t);
   @param mp Mount to test.
   @return Nonzero if a mount update is in progress, 0 otherwise.
   */
-int	vfs_isupdate(mount_t); 
+int	vfs_isupdate(mount_t mp); 
 
 /*!
   @function vfs_isreload
@@ -843,7 +903,7 @@ int	vfs_isupdate(mount_t);
   @param mp Mount to test.
   @return Nonzero if a request has been made to reload data, else 0.
   */
-int	vfs_isreload(mount_t);
+int	vfs_isreload(mount_t mp);
 
 /*!
   @function vfs_isforce
@@ -852,7 +912,7 @@ int	vfs_isreload(mount_t);
   @param mp Mount to test.
   @return Nonzero if a request has been made to forcibly unmount, else 0.
   */
-int	vfs_isforce(mount_t);
+int	vfs_isforce(mount_t mp);
 
 /*!
   @function vfs_isunmount
@@ -870,7 +930,7 @@ int 	vfs_isunmount(mount_t mp);
   @param mp Mount to test.
   @return Nonzero if filesystem is mounted read-only, else 0.
   */
-int	vfs_isrdonly(mount_t);
+int	vfs_isrdonly(mount_t mp);
 
 /*!
   @function vfs_isrdwr
@@ -878,7 +938,7 @@ int	vfs_isrdonly(mount_t);
   @param mp Mount to test.
   @return Nonzero if filesystem is mounted read-write, else 0.
   */
-int	vfs_isrdwr(mount_t);
+int	vfs_isrdwr(mount_t mp);
 
 /*!
   @function vfs_authopaque
@@ -886,7 +946,7 @@ int	vfs_isrdwr(mount_t);
   @param mp Mount to test.
   @return Nonzero if filesystem authorization is controlled remotely, else 0.
   */
-int	vfs_authopaque(mount_t);
+int	vfs_authopaque(mount_t mp);
 
 /*!
   @function vfs_authopaqueaccess
@@ -894,66 +954,59 @@ int	vfs_authopaque(mount_t);
   @param mp Mount to test.
   @return Nonzero if VNOP_ACCESS is supported remotely, else 0.
   */
-int	vfs_authopaqueaccess(mount_t);
+int	vfs_authopaqueaccess(mount_t mp);
 
 /*!
   @function vfs_setauthopaque
   @abstract Mark a filesystem as having authorization decisions controlled remotely.
   @param mp Mount to mark.
-  @return void.
   */
-void	vfs_setauthopaque(mount_t);
+void	vfs_setauthopaque(mount_t mp);
 
 /*!
   @function vfs_setauthopaqueaccess
   @abstract Mark a filesystem as having remote VNOP_ACCESS support.
   @param mp Mount to mark.
-  @return void.
   */
-void	vfs_setauthopaqueaccess(mount_t);
+void	vfs_setauthopaqueaccess(mount_t mp);
 
 /*!
   @function vfs_clearauthopaque
   @abstract Mark a filesystem as not having remote authorization decisions.
   @param mp Mount to mark.
-  @return void.
   */
-void	vfs_clearauthopaque(mount_t);
+void	vfs_clearauthopaque(mount_t mp);
 
 /*!
   @function vfs_clearauthopaque
   @abstract Mark a filesystem as not having remote VNOP_ACCESS support.
   @param mp Mount to mark.
-  @return void.
   */
-void	vfs_clearauthopaqueaccess(mount_t);
+void	vfs_clearauthopaqueaccess(mount_t mp);
 
 /*!
   @function vfs_setextendedsecurity
   @abstract Mark a filesystem as supporting security controls beyond POSIX permissions.
   @discussion Specific controls include ACLs, file owner UUIDs, and group UUIDs.
   @param mp Mount to test.
-  @return void.
   */
-void	vfs_setextendedsecurity(mount_t);
+void	vfs_setextendedsecurity(mount_t mp);
 
 /*!
   @function vfs_clearextendedsecurity
   @abstract Mark a filesystem as NOT supporting security controls beyond POSIX permissions.
   @discussion Specific controls include ACLs, file owner UUIDs, and group UUIDs.
   @param mp Mount to test.
-  @return void.
   */
-void	vfs_clearextendedsecurity(mount_t);
+void	vfs_clearextendedsecurity(mount_t mp);
 
 /*!
   @function vfs_setlocklocal
   @abstract Mark a filesystem as using VFS-level advisory locking support.
   @discussion Advisory locking operations will not call down to the filesystem if this flag is set.
   @param mp Mount to mark.
-  @return void.
   */
-void	vfs_setlocklocal(mount_t);
+void	vfs_setlocklocal(mount_t mp);
 
 /*!
   @function vfs_authcache_ttl
@@ -964,7 +1017,7 @@ void	vfs_setlocklocal(mount_t);
   @param mp Mount for which to check cache lifetime.
   @return  Cache lifetime in seconds.  CACHED_RIGHT_INFINITE_TTL indicates that credentials never expire.
   */
-int	vfs_authcache_ttl(mount_t);
+int	vfs_authcache_ttl(mount_t mp);
 
 /*!
   @function vfs_setauthcache_ttl
@@ -973,18 +1026,16 @@ int	vfs_authcache_ttl(mount_t);
   previously-authorized actions from the same vfs_context_t without calling down to the filesystem (though
   it will not deny based on the cache).
   @param mp Mount for which to set cache lifetime.
-  @return void.
   */
-void	vfs_setauthcache_ttl(mount_t, int);
+void	vfs_setauthcache_ttl(mount_t mp, int ttl);
 
 /*!
   @function vfs_clearauthcache_ttl
   @abstract Remove time-to-live controls for cached credentials on a filesytem.  Filesystems with remote authorization
   decisions (opaque) will still have KAUTH_VNODE_SEARCH rights cached for a default of CACHED_LOOKUP_RIGHT_TTL seconds.
   @param mp Mount for which to clear cache lifetime.
-  @return void.
   */
-void	vfs_clearauthcache_ttl(mount_t);
+void	vfs_clearauthcache_ttl(mount_t mp);
 
 /*
  * return value from vfs_cachedrights_ttl if
@@ -1000,16 +1051,15 @@ void	vfs_clearauthcache_ttl(mount_t);
   @param mp Mount from which to get symlink length cap.
   @return Max symlink length.
   */
-uint32_t vfs_maxsymlen(mount_t);
+uint32_t vfs_maxsymlen(mount_t mp);
 
 /*!
   @function vfs_setmaxsymlen
   @abstract Set the maximum length of a symbolic link on a filesystem.
   @param mp Mount on which to set symlink length cap.
   @param symlen Length to set.
-  @return Max symlink length.
   */
-void	vfs_setmaxsymlen(mount_t, uint32_t);
+void	vfs_setmaxsymlen(mount_t mp, uint32_t symlen);
 
 /*!
   @function vfs_fsprivate
@@ -1019,7 +1069,7 @@ void	vfs_setmaxsymlen(mount_t, uint32_t);
   @param mp Mount for which to get private data.
   @return Private data.
   */
-void *	vfs_fsprivate(mount_t);
+void *	vfs_fsprivate(mount_t mp);
 
 /*!
   @function vfs_setfsprivate
@@ -1027,9 +1077,8 @@ void *	vfs_fsprivate(mount_t);
   @discussion A filesystem generally has an internal mount structure which it attaches to the VFS-level mount structure
   as part of the mounting process.
   @param mp Mount for which to set private data.
-  @return Void.
   */
-void	vfs_setfsprivate(mount_t, void *mntdata);
+void	vfs_setfsprivate(mount_t mp, void *mntdata);
 
 /*!
   @function vfs_statfs
@@ -1040,7 +1089,7 @@ void	vfs_setfsprivate(mount_t, void *mntdata);
   @param mp Mount for which to get vfsstatfs pointer.
   @return Pointer to vfsstatfs.
   */
-struct vfsstatfs *	vfs_statfs(mount_t);
+struct vfsstatfs *	vfs_statfs(mount_t mp);
 #define	VFS_USER_EVENT		0
 #define	VFS_KERNEL_EVENT	1
 
@@ -1056,7 +1105,7 @@ struct vfsstatfs *	vfs_statfs(mount_t);
   @return 0 for success, or an error code for authentication failure or problem with call to filesystem to 
   request information.
   */
-int	vfs_update_vfsstat(mount_t, vfs_context_t, int eventtype);
+int	vfs_update_vfsstat(mount_t mp, vfs_context_t ctx, int eventtype);
 
 /*!
   @function vfs_typenum
@@ -1066,7 +1115,7 @@ int	vfs_update_vfsstat(mount_t, vfs_context_t, int eventtype);
   @param mp Mount for which to get type number.
   @return Type number.
   */
-int	vfs_typenum(mount_t);
+int	vfs_typenum(mount_t mp);
 
 /*!
   @function vfs_name
@@ -1075,9 +1124,8 @@ int	vfs_typenum(mount_t);
   rather than a name specific to the mountpoint.
   @param mp Mount for which to get name.
   @param buffer Destination for name; length should be at least MFSNAMELEN.
-  @return void.
   */
-void	vfs_name(mount_t, char *);
+void	vfs_name(mount_t mp, char *buffer);
 
 /*!
   @function vfs_devblocksize
@@ -1085,25 +1133,23 @@ void	vfs_name(mount_t, char *);
   @param mp Mount for which to get block size.
   @return Block size.
   */
-int	vfs_devblocksize(mount_t);
+int	vfs_devblocksize(mount_t mp);
 
 /*!
   @function vfs_ioattr
   @abstract Get I/O attributes associated with a mounpoint.
   @param mp Mount for which to get attributes.  If NULL, system defaults are filled into ioattrp.
   @param ioattrp Destination for results.
-  @return void.
   */
-void	vfs_ioattr(mount_t, struct vfsioattr *);
+void	vfs_ioattr(mount_t mp, struct vfsioattr *ioattrp);
 
 /*!
   @function vfs_setioattr
   @abstract Set I/O attributes associated with a mounpoint.
   @param mp Mount for which to set attributes.  
   @param ioattrp Structure containing I/O parameters; all fields must be filled in.
-  @return void.
   */
-void	vfs_setioattr(mount_t, struct vfsioattr *);
+void	vfs_setioattr(mount_t mp, struct vfsioattr *ioattrp);
 
 /*!
   @function vfs_64bitready
@@ -1111,7 +1157,7 @@ void	vfs_setioattr(mount_t, struct vfsioattr *);
   @param mp Mount to test.
   @return Nonzero if filesystem is ready for 64-bit; 0 otherwise.
   */
-int 	vfs_64bitready(mount_t);
+int 	vfs_64bitready(mount_t mp);
 
 
 #define LK_NOWAIT 1
@@ -1127,16 +1173,15 @@ int 	vfs_64bitready(mount_t);
   @param flags LK_NOWAIT: fail with ENOENT if an unmount is in progress.
   @return 0 for success, with a lock held; an error code otherwise, with no lock held.
   */
-int	vfs_busy(mount_t, int);
+int	vfs_busy(mount_t mp, int flags);
 
 /*!
   @function vfs_unbusy
   @abstract "Unbusy" a mountpoint by releasing its read-write lock.
   @discussion A successful vfs_busy() must be followed by a vfs_unbusy() to release the lock on the mount.
   @param mp Mount to unbusy.
-  @return void.
   */
-void	vfs_unbusy(mount_t);
+void	vfs_unbusy(mount_t mp);
 
 /*!
   @function vfs_getnewfsid
@@ -1144,9 +1189,8 @@ void	vfs_unbusy(mount_t);
   @discussion Filesystem IDs are returned as part of "struct statfs."  This function is typically
   called as part of file-system specific mount code (i.e. through VFS_MOUNT).
   @param mp Mount to set an ID for.
-  @return void.
   */
-void	vfs_getnewfsid(struct mount *);
+void	vfs_getnewfsid(struct mount *mp);
 
 /*!
   @function vfs_getvfs
@@ -1154,7 +1198,7 @@ void	vfs_getnewfsid(struct mount *);
   @param fsid Filesystem ID to look up.
   @return Mountpoint if found, else NULL.  Note unmounting mountpoints can be returned.
   */
-mount_t	vfs_getvfs(fsid_t *);
+mount_t	vfs_getvfs(fsid_t *fsid);
 
 /*!
   @function vfs_mountedon
@@ -1165,7 +1209,7 @@ mount_t	vfs_getvfs(fsid_t *);
   @param vp The vnode to test.
   @return EBUSY if vnode is indeed the source of a filesystem; 0 if it is not.
   */
-int	vfs_mountedon(struct vnode *);
+int	vfs_mountedon(struct vnode *vp);
 
 /*!
   @function vfs_unmountbyfsid
@@ -1176,7 +1220,7 @@ int	vfs_mountedon(struct vnode *);
   @param ctx Context against which to authenticate unmount operation.
   @return 0 for succcess, nonero for failure.
   */
-int	vfs_unmountbyfsid(fsid_t *, int, vfs_context_t);
+int	vfs_unmountbyfsid(fsid_t *fsid, int flags, vfs_context_t ctx);
 
 /*!
   @function vfs_event_signal
@@ -1184,14 +1228,15 @@ int	vfs_unmountbyfsid(fsid_t *, int, vfs_context_t);
   @param fsid Unused.
   @param event Events to post.
   @param data Unused.
-  @return void.
   */
-void	vfs_event_signal(fsid_t *, u_int32_t, intptr_t);
+void	vfs_event_signal(fsid_t *fsid, u_int32_t event, intptr_t data);
+
 /*!
   @function vfs_event_init
   @abstract This function should not be called by kexts.
   */
 void	vfs_event_init(void); /* XXX We should not export this */
+
 #ifdef KERNEL_PRIVATE
 int	vfs_getbyid(fsid_t *fsid, ino64_t ino, vnode_t *vpp, vfs_context_t ctx);
 int	vfs_getattr(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx);
@@ -1204,6 +1249,7 @@ int vfs_nativexattrs (mount_t mp); /* whether or not the FS supports EAs nativel
 void *  vfs_mntlabel(mount_t mp); /* Safe to cast to "struct label*"; returns "void*" to limit dependence of mount.h on security headers.  */
 void	vfs_setcompoundopen(mount_t mp);
 uint64_t vfs_throttle_mask(mount_t mp);
+int vfs_isswapmount(mount_t mp);
 
 struct vnode_trigger_info;
 
@@ -1273,6 +1319,9 @@ typedef void vfs_trigger_callback_t(mount_t mp, vfs_trigger_callback_op_t op, vo
   @return 0 for success.  EBUSY if a trigger has already been installed.
   */
 int 	vfs_settriggercallback(fsid_t *fsid, vfs_trigger_callback_t vtc, void *data, uint32_t flags, vfs_context_t ctx);
+
+/* tags a volume as not supporting extended readdir for NFS exports */
+void mount_set_noreaddirext (mount_t);
 
 #endif	/* KERNEL_PRIVATE */
 __END_DECLS

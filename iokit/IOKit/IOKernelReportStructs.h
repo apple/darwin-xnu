@@ -240,6 +240,12 @@ enum {
                                                 kIOReportScaleBytes)
 #define kIOReportUnit_KiB       __IOR_MAKEUNIT(kIOReportQuantityData,  \
                                                kIOReportScaleKiBytes)
+#define kIOReportUnit_MiB       __IOR_MAKEUNIT(kIOReportQuantityData,  \
+                                               kIOReportScaleMiBytes)
+#define kIOReportUnit_GiB       __IOR_MAKEUNIT(kIOReportQuantityData,  \
+                                               kIOReportScaleGiBytes)
+#define kIOReportUnit_TiB       __IOR_MAKEUNIT(kIOReportQuantityData,  \
+                                               kIOReportScaleTiBytes)
 
 #define kIOReportUnitEvents     __IOR_MAKEUNIT(kIOReportQuantityEventCount,  \
                                                kIOReportScaleUnity)

@@ -107,7 +107,7 @@ extern mach_msg_return_t mach_msg_overwrite_trap(
 				mach_msg_size_t rcv_size,
 				mach_port_name_t rcv_name,
 				mach_msg_timeout_t timeout,
-				mach_port_name_t notify,
+				mach_msg_priority_t override,
 				mach_msg_header_t *rcv_msg,
 				mach_msg_size_t rcv_limit);
 
@@ -176,6 +176,12 @@ extern kern_return_t _kernelrpc_mach_vm_map_trap(
 				int flags,
 				vm_prot_t cur_protection
 );
+
+extern kern_return_t _kernelrpc_mach_vm_purgable_control_trap(
+				mach_port_name_t target,
+				mach_vm_offset_t address,
+				vm_purgable_t control,
+				int *state);
 
 extern kern_return_t _kernelrpc_mach_port_allocate_trap(
 				mach_port_name_t target,
@@ -253,6 +259,12 @@ extern kern_return_t _kernelrpc_mach_port_unguard_trap(
 				uint64_t guard
 );
 
+extern kern_return_t mach_generate_activity_id(
+				mach_port_name_t target,
+				int count,
+				uint64_t *activity_id
+);
+
 extern kern_return_t macx_swapon(
 				uint64_t filename,
 				int flags,
@@ -285,6 +297,18 @@ extern kern_return_t thread_switch(
 				mach_msg_timeout_t option_time);
 
 extern mach_port_name_t task_self_trap(void);
+
+extern kern_return_t host_create_mach_voucher_trap(
+				mach_port_name_t host,
+				mach_voucher_attr_raw_recipe_array_t recipes,
+				int recipes_size,
+				mach_port_name_t *voucher);
+
+extern kern_return_t mach_voucher_extract_attr_recipe_trap(
+				mach_port_name_t voucher_name,
+				mach_voucher_attr_key_t key,
+				mach_voucher_attr_raw_recipe_t recipe,
+				mach_msg_type_number_t *recipe_size);
 
 /*
  *	Obsolete interfaces.
@@ -378,7 +402,7 @@ struct mach_msg_overwrite_trap_args {
 	PAD_ARG_(mach_msg_size_t, rcv_size);
 	PAD_ARG_(mach_port_name_t, rcv_name);
 	PAD_ARG_(mach_msg_timeout_t, timeout);
-	PAD_ARG_(mach_port_name_t, notify);
+	PAD_ARG_(mach_msg_priority_t, override);
 	PAD_ARG_8
 	PAD_ARG_(user_addr_t, rcv_msg);  /* Unused on mach_msg_trap */
 };
@@ -610,6 +634,16 @@ struct _kernelrpc_mach_vm_map_trap_args {
 extern kern_return_t _kernelrpc_mach_vm_map_trap(
 				struct _kernelrpc_mach_vm_map_trap_args *args);
 
+struct _kernelrpc_mach_vm_purgable_control_trap_args {
+	PAD_ARG_(mach_port_name_t, target);	/* 1 word */
+	PAD_ARG_(mach_vm_offset_t, address);	/* 2 words */
+	PAD_ARG_(vm_purgable_t, control);	/* 1 word */
+	PAD_ARG_(user_addr_t, state);		/* 1 word */
+};						/* Total: 5 */
+
+extern kern_return_t _kernelrpc_mach_vm_purgable_control_trap(
+	struct _kernelrpc_mach_vm_purgable_control_trap_args *args);
+
 struct _kernelrpc_mach_port_allocate_args {
 	PAD_ARG_(mach_port_name_t, target);
 	PAD_ARG_(mach_port_right_t, right);
@@ -709,6 +743,37 @@ struct _kernelrpc_mach_port_unguard_args {
 };
 extern kern_return_t _kernelrpc_mach_port_unguard_trap(
 				struct _kernelrpc_mach_port_unguard_args *args);
+
+struct mach_generate_activity_id_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(int, count);
+	PAD_ARG_(user_addr_t, activity_id);
+};
+extern kern_return_t mach_generate_activity_id(
+				struct mach_generate_activity_id_args *args);
+
+/*
+ * Voucher trap interfaces
+ */
+
+struct host_create_mach_voucher_args {
+	PAD_ARG_(mach_port_name_t, host);
+	PAD_ARG_(mach_voucher_attr_raw_recipe_array_t, recipes);
+	PAD_ARG_(int, recipes_size);
+	PAD_ARG_(user_addr_t, voucher);
+};
+extern kern_return_t host_create_mach_voucher_trap(
+				struct host_create_mach_voucher_args *args);
+
+struct mach_voucher_extract_attr_recipe_args {
+	PAD_ARG_(mach_port_name_t, voucher_name);
+	PAD_ARG_(mach_voucher_attr_key_t, key);
+	PAD_ARG_(mach_voucher_attr_raw_recipe_t, recipe);
+	PAD_ARG_(user_addr_t, recipe_size);
+};
+
+extern kern_return_t mach_voucher_extract_attr_recipe_trap(
+				struct mach_voucher_extract_attr_recipe_args *args);
 
 
 /* not published to LP64 clients yet */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -129,7 +129,7 @@ static buf_t	buf_create_shadow_internal(buf_t bp, boolean_t force_copy,
 					   uintptr_t external_storage, void (*iodone)(buf_t, void *), void *arg, int priv);
 
 
-__private_extern__ int  bdwrite_internal(buf_t, int);
+int  bdwrite_internal(buf_t, int);
 
 /* zone allocated buffer headers */
 static void	bufzoneinit(void);
@@ -1320,7 +1320,7 @@ buf_strategy(vnode_t devvp, void *ap)
 	cpx_t cpx = bufattr_cpx(buf_attr(bp));
 	if (cpx) {
 		/* No need to go here for older EAs */
-		if(cpx_use_offset_for_iv(cpx)) {
+		if(cpx_use_offset_for_iv(cpx) && !cpx_synthetic_offset_for_iv(cpx)) {
 			off_t f_offset;
 			if ((error = VNOP_BLKTOOFF(bp->b_vp, bp->b_lblkno, &f_offset)))
 				return error;
@@ -1362,7 +1362,7 @@ buf_strategy(vnode_t devvp, void *ap)
 buf_t
 buf_alloc(vnode_t vp)
 {
-        return(alloc_io_buf(vp, 0));
+        return(alloc_io_buf(vp, is_vm_privileged()));
 }
 
 void
@@ -2276,12 +2276,7 @@ buf_bwrite(buf_t bp)
 			}
 
 		/* Release the buffer. */
-		// XXXdbg - only if the unused bit is set
-		if (!ISSET(bp->b_flags, B_NORELSE)) {
-		    buf_brelse(bp);
-		} else {
-		    CLR(bp->b_flags, B_NORELSE);
-		}
+		buf_brelse(bp);
 
 		return (rv);
 	} else {
@@ -2314,7 +2309,7 @@ vn_bwrite(struct vnop_bwrite_args *ap)
  * buffers faster than the disks can service. Doing a buf_bawrite() in
  * cases where we have "too many" outstanding buf_bdwrite()s avoids that.
  */
-__private_extern__ int
+int
 bdwrite_internal(buf_t bp, int return_error)
 {
 	proc_t	p  = current_proc();
@@ -2940,7 +2935,6 @@ start:
 					return (NULL);
 				goto start;
 				/*NOTREACHED*/
-				break;
 
 			default:
 			        /*
@@ -3937,6 +3931,8 @@ buf_biodone(buf_t bp)
 		INCR_PENDING_IO(-(pending_io_t)buf_count(bp), mp->mnt_pending_read_size);
 	}
 
+	throttle_info_end_io(bp);
+
 	if (kdebug_enable) {
 		int code    = DKIO_DONE;
 		int io_tier = GET_BUFATTR_IO_TIER(bap);
@@ -4133,26 +4129,59 @@ vfs_bufstats()
 
 #define	NRESERVEDIOBUFS	128
 
+#define MNT_VIRTUALDEV_MAX_IOBUFS 16
+#define VIRTUALDEV_MAX_IOBUFS ((40*niobuf_headers)/100)
 
 buf_t
 alloc_io_buf(vnode_t vp, int priv)
 {
 	buf_t	bp;
+	mount_t mp = NULL;
+	int alloc_for_virtualdev = FALSE;
 
 	lck_mtx_lock_spin(iobuffer_mtxp);
+
+	/*
+	 * We subject iobuf requests for diskimages to additional restrictions.
+	 *
+	 * a) A single diskimage mount cannot use up more than
+	 * MNT_VIRTUALDEV_MAX_IOBUFS. However,vm privileged (pageout) requests
+	 * are not subject to this restriction.
+	 * b) iobuf headers used by all diskimage headers by all mount
+	 * points cannot exceed  VIRTUALDEV_MAX_IOBUFS.
+	 */
+	if (vp && ((mp = vp->v_mount)) && mp != dead_mountp &&
+	    mp->mnt_kern_flag & MNTK_VIRTUALDEV) {
+		alloc_for_virtualdev = TRUE;
+		while ((!priv && mp->mnt_iobufinuse > MNT_VIRTUALDEV_MAX_IOBUFS) ||
+		    bufstats.bufs_iobufinuse_vdev > VIRTUALDEV_MAX_IOBUFS) {
+			bufstats.bufs_iobufsleeps++;
+
+			need_iobuffer = 1;
+			(void)msleep(&need_iobuffer, iobuffer_mtxp,
+			    PSPIN | (PRIBIO+1), (const char *)"alloc_io_buf (1)",
+			    NULL);
+		}
+	}
 
 	while (((niobuf_headers - NRESERVEDIOBUFS < bufstats.bufs_iobufinuse) && !priv) || 
 	       (bp = iobufqueue.tqh_first) == NULL) {
 		bufstats.bufs_iobufsleeps++;
 
 		need_iobuffer = 1;
-		(void) msleep(&need_iobuffer, iobuffer_mtxp, PSPIN | (PRIBIO+1), (const char *)"alloc_io_buf", NULL);
+		(void)msleep(&need_iobuffer, iobuffer_mtxp, PSPIN | (PRIBIO+1),
+		    (const char *)"alloc_io_buf (2)", NULL);
 	}
 	TAILQ_REMOVE(&iobufqueue, bp, b_freelist);
 
 	bufstats.bufs_iobufinuse++;
 	if (bufstats.bufs_iobufinuse > bufstats.bufs_iobufmax)
 		bufstats.bufs_iobufmax = bufstats.bufs_iobufinuse;
+
+	if (alloc_for_virtualdev) {
+		mp->mnt_iobufinuse++;
+		bufstats.bufs_iobufinuse_vdev++;
+	}
 
 	lck_mtx_unlock(iobuffer_mtxp);
 
@@ -4168,6 +4197,8 @@ alloc_io_buf(vnode_t vp, int priv)
 	bp->b_datap = 0;
 	bp->b_flags = 0;
 	bp->b_lflags = BL_BUSY | BL_IOBUF;
+	if (alloc_for_virtualdev)
+		bp->b_lflags |= BL_IOBUF_VDEV;
 	bp->b_redundancy_flags = 0;
 	bp->b_blkno = bp->b_lblkno = 0;
 #ifdef JOE_DEBUG
@@ -4196,7 +4227,16 @@ alloc_io_buf(vnode_t vp, int priv)
 void
 free_io_buf(buf_t bp)
 {
-        int need_wakeup = 0;
+	int need_wakeup = 0;
+	int free_for_virtualdev = FALSE;
+	mount_t mp = NULL;
+
+	/* Was this iobuf for a diskimage ? */
+	if (bp->b_lflags & BL_IOBUF_VDEV) {
+		free_for_virtualdev = TRUE;
+		if (bp->b_vp)
+			mp = bp->b_vp->v_mount;
+	}
 
 	/*
 	 * put buffer back on the head of the iobufqueue
@@ -4228,6 +4268,12 @@ free_io_buf(buf_t bp)
 		panic("free_io_buf: bp(%p) - bufstats.bufs_iobufinuse < 0", bp);
 
 	bufstats.bufs_iobufinuse--;
+
+	if (free_for_virtualdev) {
+		bufstats.bufs_iobufinuse_vdev--;
+		if (mp && mp != dead_mountp)
+			mp->mnt_iobufinuse--;
+	}
 
 	lck_mtx_unlock(iobuffer_mtxp);
 
@@ -4267,6 +4313,7 @@ bcleanbuf_thread_init(void)
 
 typedef int (*bcleanbufcontinuation)(int);
 
+__attribute__((noreturn))
 static void
 bcleanbuf_thread(void)
 {

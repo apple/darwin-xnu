@@ -50,6 +50,9 @@
 #define TEXT_SEG_PROT (VM_PROT_READ | VM_PROT_EXECUTE)
 #define DATA_SEG_PROT (VM_PROT_READ | VM_PROT_WRITE)
 
+extern boolean_t isSplitKext;
+extern boolean_t isOldInterface;
+
 #if KXLD_USER_OR_OBJECT
 static kern_return_t reorder_sections(KXLDSeg *seg, KXLDArray *section_order);
 static void reorder_section(KXLDArray *sects, u_int *sect_reorder_index, 
@@ -114,11 +117,12 @@ kxld_seg_init_from_macho_64(KXLDSeg *seg, struct segment_command_64 *src)
     seg->base_addr = src->vmaddr;
     seg->link_addr = src->vmaddr;
     seg->vmsize = src->vmsize;
+    
     seg->fileoff = src->fileoff;
     seg->maxprot = src->maxprot;
     seg->initprot = src->initprot;
     seg->flags = src->flags;
-
+    
     rval = kxld_array_init(&seg->sects, sizeof(KXLDSect *), src->nsects);
     require_noerr(rval, finish);
 
@@ -469,7 +473,7 @@ kxld_size_t
 kxld_seg_get_vmsize(const KXLDSeg *seg)
 {
     check(seg);
-
+    
     return seg->vmsize;
 }
 
@@ -581,28 +585,38 @@ finish:
 
 }
 
+
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t
-kxld_seg_export_macho_to_vm(const KXLDSeg *seg, u_char *buf,
-    u_long *header_offset, u_long header_size, 
-    u_long data_size, kxld_addr_t file_link_addr, 
-    boolean_t is_32_bit)
+kxld_seg_export_macho_to_vm(const KXLDSeg *seg,
+                            u_char *buf,
+                            u_long *header_offset,
+                            u_long header_size,
+                            u_long data_size,
+                            kxld_addr_t file_link_addr,
+                            boolean_t is_32_bit)
 {
-    kern_return_t rval = KERN_FAILURE;
-    KXLDSect *sect = NULL;
-    u_long data_offset = (u_long) (seg->link_addr - file_link_addr);
-    u_int i = 0;
+    kern_return_t   rval = KERN_FAILURE;
+    KXLDSect *      sect = NULL;
+    
+    // data_offset is used to set fileoff field in segment header
+    u_long          data_offset;
+    u_int           i = 0;
 
     check(seg);
     check(buf);
     check(header_offset);
+    
+    data_offset = (u_long) (seg->link_addr - file_link_addr);
 
     /* Write out the header */
 
-    KXLD_3264_FUNC(is_32_bit, rval,
-        seg_export_macho_header_32, seg_export_macho_header_64,
-        seg, buf, header_offset, header_size, data_offset);
+   KXLD_3264_FUNC(is_32_bit, rval,
+                  seg_export_macho_header_32, seg_export_macho_header_64,
+                  seg,
+                  buf,
+                  header_offset, header_size, data_offset);
     require_noerr(rval, finish);
 
     /* Write out each section */
@@ -610,9 +624,9 @@ kxld_seg_export_macho_to_vm(const KXLDSeg *seg, u_char *buf,
     for (i = 0; i < seg->sects.nitems; ++i) {
         sect = get_sect_by_index(seg, i);
 
-        rval = kxld_sect_export_macho_to_vm(sect, buf, header_offset, 
-            header_size, file_link_addr, data_size, is_32_bit);
-        require_noerr(rval, finish);
+        rval = kxld_sect_export_macho_to_vm(sect, buf, header_offset,
+                                            header_size, file_link_addr, data_size, is_32_bit);
+       require_noerr(rval, finish);
     }
 
     rval = KERN_SUCCESS;
@@ -654,6 +668,21 @@ seg_export_macho_header_32(const KXLDSeg *seg, u_char *buf,
     seghdr->nsects = seg->sects.nitems;
     seghdr->flags = 0;
 
+#if SPLIT_KEXTS_DEBUG
+    {
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "segname %s seghdr %p vmaddr %p vmsize 0x%02X %u fileoff 0x%02X %u <%s>",
+                 seg->segname[0] ? seg->segname : "none",
+                 (void *) seghdr,
+                 (void *) ((uint64_t)seghdr->vmaddr),
+                 seghdr->vmsize,
+                 seghdr->vmsize,
+                 seghdr->fileoff,
+                 seghdr->fileoff,
+                 __func__);
+    }
+#endif
+    
     rval = KERN_SUCCESS;
 
 finish:
@@ -677,6 +706,22 @@ seg_export_macho_header_64(const KXLDSeg *seg, u_char *buf,
 
     require_action(sizeof(*seghdr) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
+    
+#if SPLIT_KEXTS_DEBUG
+    {
+        struct mach_header_64 *mach;
+        
+        mach = (struct mach_header_64 *) ((void *) buf);
+        
+        if (mach->magic != MH_MAGIC_64) {
+            kxld_log(kKxldLogLinking, kKxldLogErr,
+                     "bad macho header at %p <%s>",
+                     (void *) mach, __func__);
+            goto finish;
+        }
+    }
+#endif
+  
     seghdr = (struct segment_command_64 *) ((void *) (buf + *header_offset));
     *header_offset += sizeof(*seghdr);
 
@@ -693,6 +738,33 @@ seg_export_macho_header_64(const KXLDSeg *seg, u_char *buf,
     seghdr->initprot = seg->initprot;
     seghdr->nsects = seg->sects.nitems;
     seghdr->flags = 0;
+
+#if SPLIT_KEXTS_DEBUG
+    {
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "%p >>> Start of %s seghdr (size %lu) <%s>",
+                 (void *) seghdr,
+                 seg->segname[0] ? seg->segname : "none",
+                 sizeof(*seghdr),
+                 __func__);
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "%p <<< End of %s seghdr <%s>",
+                 (void *) ((u_char *)seghdr + sizeof(*seghdr)),
+                 seg->segname[0] ? seg->segname : "none",
+                 __func__);
+        
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "%s seghdr, cmdsize %d vmaddr %p vmsize %p %llu fileoff %p %llu <%s>",
+                 seg->segname[0] ? seg->segname : "none",
+                 seghdr->cmdsize,
+                 (void *) seghdr->vmaddr,
+                 (void *) seghdr->vmsize,
+                 seghdr->vmsize,
+                 (void *) seghdr->fileoff,
+                 seghdr->fileoff,
+                 __func__);
+    }
+#endif
 
     rval = KERN_SUCCESS;
 
@@ -760,9 +832,9 @@ kxld_seg_finish_init(KXLDSeg *seg)
                 maxsize = sect->size;
             }
         }
-
-        seg->vmsize = kxld_round_page_cross_safe(maxaddr + 
+        seg->vmsize = kxld_round_page_cross_safe(maxaddr +
                                                  maxsize - seg->base_addr);
+
     }
 
     rval = KERN_SUCCESS;
@@ -777,7 +849,7 @@ void
 kxld_seg_set_vm_protections(KXLDSeg *seg, boolean_t strict_protections)
 {
     if (strict_protections) {
-        if (!strncmp(seg->segname, SEG_TEXT, const_strlen(SEG_TEXT))) {
+        if (!strncmp(seg->segname, SEG_TEXT, sizeof(seg->segname))) {
             seg->initprot = TEXT_SEG_PROT;
             seg->maxprot = TEXT_SEG_PROT;
         } else {
@@ -797,11 +869,91 @@ kxld_seg_relocate(KXLDSeg *seg, kxld_addr_t link_addr)
 {
     KXLDSect *sect = NULL;
     u_int i = 0;
-
-    seg->link_addr += link_addr;
+    splitKextLinkInfo * link_info = (splitKextLinkInfo *) link_addr;
+    kxld_addr_t         my_link_addr;
+   
+    if (isOldInterface) {
+        seg->link_addr += link_addr;
+    }
+    else {
+        if (isSplitKext) {
+            // we have a split kext
+            if (kxld_seg_is_text_seg(seg)) {
+                // assumes this is the beginning of the kext
+                my_link_addr = link_info->vmaddr_TEXT;
+                seg->link_addr = my_link_addr;
+            }
+            else if (kxld_seg_is_text_exec_seg(seg)) {
+                my_link_addr = link_info->vmaddr_TEXT_EXEC;
+                seg->link_addr = my_link_addr;
+                // vmaddr_TEXT_EXEC is the actual vmaddr for this segment so we need
+                // to adjust for kxld_sect_relocate assuming the link addr is
+                // the address of the kext (macho header in __TEXT)
+                my_link_addr -= seg->base_addr;
+            }
+            else if (kxld_seg_is_data_seg(seg)) {
+                my_link_addr = link_info->vmaddr_DATA;
+                seg->link_addr = my_link_addr;
+                // vmaddr_DATA is the actual vmaddr for this segment so we need
+                // to adjust for kxld_sect_relocate assuming the link addr is
+                // the address of the kext (macho header in __TEXT)
+                my_link_addr -= seg->base_addr;
+            }
+            else if (kxld_seg_is_data_const_seg(seg)) {
+                my_link_addr = link_info->vmaddr_DATA_CONST;
+                seg->link_addr = my_link_addr;
+                // vmaddr_DATA_CONST is the actual vmaddr for this segment so we need
+                // to adjust for kxld_sect_relocate assuming the link addr is
+                // the address of the kext (macho header in __TEXT)
+                my_link_addr -= seg->base_addr;
+            }
+            else if (kxld_seg_is_linkedit_seg(seg)) {
+                my_link_addr = link_info->vmaddr_LINKEDIT;
+                seg->link_addr = my_link_addr;
+                // vmaddr_DATA is the actual vmaddr for this segment so we need
+                // to adjust for kxld_sect_relocate assuming the link addr is
+                // the address of the kext (macho header in __TEXT)
+                my_link_addr -= seg->base_addr;
+            }
+            else {
+                kxld_log(kKxldLogLinking, kKxldLogErr,
+                         " not expecting this segment %s!!! <%s>",
+                         seg->segname[0] ? seg->segname : "none",
+                         __func__);
+                my_link_addr = link_info->vmaddr_TEXT;
+                seg->link_addr += my_link_addr;
+            }
+        }
+        else {
+            my_link_addr = link_info->vmaddr_TEXT;
+            seg->link_addr += my_link_addr;
+        }
+    }
+    
+#if SPLIT_KEXTS_DEBUG
+    {
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "%p >>> Start of %s segment (vmsize %llu) <%s>)",
+                 (void *) seg->link_addr,
+                 seg->segname[0] ? seg->segname : "none",
+                 seg->vmsize,
+                 __func__);
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 "%p <<< End of %s segment <%s>",
+                 (void *) (seg->link_addr + seg->vmsize),
+                 seg->segname[0] ? seg->segname : "none",
+                 __func__);
+    }
+#endif
+    
     for (i = 0; i < seg->sects.nitems; ++i) {
         sect = get_sect_by_index(seg, i);
-        kxld_sect_relocate(sect, link_addr);
+        if (isOldInterface) {
+            kxld_sect_relocate(sect, link_addr);
+        }
+        else {
+            kxld_sect_relocate(sect, my_link_addr);
+        }
     }
 }
 
@@ -814,7 +966,8 @@ kxld_seg_populate_linkedit(KXLDSeg *seg, const KXLDSymtab *symtab, boolean_t is_
     , const KXLDArray *extrelocs
     , boolean_t target_supports_slideable_kexts
 #endif  /* KXLD_PIC_KEXTS */
-    )
+    , uint32_t splitinfolc_size
+   )
 {
     u_long size = 0;
 
@@ -826,6 +979,82 @@ kxld_seg_populate_linkedit(KXLDSeg *seg, const KXLDSymtab *symtab, boolean_t is_
     }
 #endif	/* KXLD_PIC_KEXTS */
 
+    // 0 unless this is a split kext
+    size += splitinfolc_size;
+
     seg->vmsize = kxld_round_page_cross_safe(size);
+}
+
+/*******************************************************************************
+ *******************************************************************************/
+boolean_t
+kxld_seg_is_split_seg(const KXLDSeg *seg)
+{
+    boolean_t       result = FALSE;
+    
+    check(seg);
+    if (isSplitKext) {
+        if (kxld_seg_is_data_seg(seg) || kxld_seg_is_linkedit_seg(seg) ||
+            kxld_seg_is_text_exec_seg(seg) || kxld_seg_is_data_const_seg(seg)) {
+            result = TRUE;
+        }
+    }
+    
+    return result;
+}
+
+boolean_t
+kxld_seg_is_text_seg(const KXLDSeg *seg)
+{
+    boolean_t       result = FALSE;
+    
+    check(seg);
+    result = !strncmp(seg->segname, SEG_TEXT, sizeof(seg->segname));
+    
+    return result;
+}
+
+boolean_t
+kxld_seg_is_text_exec_seg(const KXLDSeg *seg)
+{
+    boolean_t       result = FALSE;
+    
+    check(seg);
+    result = !strncmp(seg->segname, "__TEXT_EXEC", sizeof(seg->segname));
+    
+    return result;
+}
+
+boolean_t
+kxld_seg_is_data_seg(const KXLDSeg *seg)
+{
+    boolean_t       result = FALSE;
+    
+    check(seg);
+    result = !strncmp(seg->segname, SEG_DATA, sizeof(seg->segname));
+    
+    return result;
+}
+
+boolean_t
+kxld_seg_is_data_const_seg(const KXLDSeg *seg)
+{
+    boolean_t       result = FALSE;
+    
+    check(seg);
+    result = !strncmp(seg->segname, "__DATA_CONST", sizeof(seg->segname));
+    
+    return result;
+}
+
+boolean_t
+kxld_seg_is_linkedit_seg(const KXLDSeg *seg)
+{
+    boolean_t       result = FALSE;
+    
+    check(seg);
+    result = !strncmp(seg->segname, SEG_LINKEDIT, sizeof(seg->segname));
+    
+    return result;
 }
 

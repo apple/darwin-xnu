@@ -38,6 +38,7 @@
 #include <kern/timer_queue.h>
 #include <kern/call_entry.h>
 #include <kern/thread.h>
+#include <kern/policy_internal.h>
 
 #include <sys/kdebug.h>
 
@@ -563,6 +564,7 @@ timer_call_enter_internal(
 	uint32_t		urgency;
 	uint64_t		sdeadline, ttd;
 
+	assert(call->call_entry.func != NULL);
 	s = splclock();
 
 	sdeadline = deadline;
@@ -740,7 +742,7 @@ timer_queue_shutdown(
 	s = splclock();
 
 	/* Note comma operator in while expression re-locking each iteration */
-	while (timer_queue_lock_spin(queue), !queue_empty(&queue->head)) {
+	while ((void)timer_queue_lock_spin(queue), !queue_empty(&queue->head)) {
 		call = TIMER_CALL(queue_first(&queue->head));
 
 		if (!simple_lock_try(&call->lock)) {

@@ -105,6 +105,8 @@
 #define	DBG_FNC_SBDROP		NETDBG_CODE(DBG_NETSOCK, 4)
 #define	DBG_FNC_SBAPPEND	NETDBG_CODE(DBG_NETSOCK, 5)
 
+extern char *proc_best_name(proc_t p);
+
 SYSCTL_DECL(_kern_ipc);
 
 __private_extern__ u_int32_t net_io_policy_throttle_best_effort = 0;
@@ -136,8 +138,8 @@ u_int32_t	high_sb_max = SB_MAX;
 
 static	u_int32_t sb_efficiency = 8;	/* parameter for sbreserve() */
 int32_t total_sbmb_cnt __attribute__((aligned(8))) = 0;
+int32_t total_sbmb_cnt_floor __attribute__((aligned(8))) = 0;
 int32_t total_sbmb_cnt_peak __attribute__((aligned(8))) = 0;
-int32_t total_snd_byte_count __attribute__((aligned(8))) = 0;
 int64_t sbmb_limreached __attribute__((aligned(8))) = 0;
 
 /* Control whether to throttle sockets eligible to be throttled */
@@ -377,8 +379,8 @@ sonewconn_internal(struct socket *head, int connstatus)
 #endif
 
 	/* inherit traffic management properties of listener */
-	so->so_traffic_mgt_flags =
-	    head->so_traffic_mgt_flags & (TRAFFIC_MGT_SO_BACKGROUND);
+	so->so_flags1 |=
+	    head->so_flags1 & (SOF1_TRAFFIC_MGT_SO_BACKGROUND);
 	so->so_background_thread = head->so_background_thread;
 	so->so_traffic_class = head->so_traffic_class;
 
@@ -514,6 +516,18 @@ sbwait(struct sockbuf *sb)
 		/* NOTREACHED */
 	}
 
+	if ((so->so_state & SS_DRAINING) || (so->so_flags & SOF_DEFUNCT)) {
+		error = EBADF;
+		if (so->so_flags & SOF_DEFUNCT) {
+			SODEFUNCTLOG("%s[%d, %s]: defunct so 0x%llx [%d,%d] "
+			    "(%d)\n", __func__, proc_selfpid(),
+			    proc_best_name(current_proc()),
+			    (uint64_t)VM_KERNEL_ADDRPERM(so),
+			    SOCK_DOM(so), SOCK_TYPE(so), error);
+		}
+		return (error);
+	}
+
 	if (so->so_proto->pr_getlock != NULL)
 		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
 	else
@@ -544,10 +558,11 @@ sbwait(struct sockbuf *sb)
 	if ((so->so_state & SS_DRAINING) || (so->so_flags & SOF_DEFUNCT)) {
 		error = EBADF;
 		if (so->so_flags & SOF_DEFUNCT) {
-			SODEFUNCTLOG(("%s[%d]: defunct so 0x%llx [%d,%d] "
+			SODEFUNCTLOG("%s[%d, %s]: defunct so 0x%llx [%d,%d] "
 			    "(%d)\n", __func__, proc_selfpid(),
+			    proc_best_name(current_proc()),
 			    (uint64_t)VM_KERNEL_ADDRPERM(so),
-			    SOCK_DOM(so), SOCK_TYPE(so), error));
+			    SOCK_DOM(so), SOCK_TYPE(so), error);
 		}
 	}
 
@@ -570,11 +585,12 @@ void
 sowakeup(struct socket *so, struct sockbuf *sb)
 {
 	if (so->so_flags & SOF_DEFUNCT) {
-		SODEFUNCTLOG(("%s[%d]: defunct so 0x%llx [%d,%d] si 0x%x, "
+		SODEFUNCTLOG("%s[%d, %s]: defunct so 0x%llx [%d,%d] si 0x%x, "
 		    "fl 0x%x [%s]\n", __func__, proc_selfpid(),
+		    proc_best_name(current_proc()),
 		    (uint64_t)VM_KERNEL_ADDRPERM(so), SOCK_DOM(so),
 		    SOCK_TYPE(so), (uint32_t)sb->sb_sel.si_flags, sb->sb_flags,
-		    (sb->sb_flags & SB_RECV) ? "rcv" : "snd"));
+		    (sb->sb_flags & SB_RECV) ? "rcv" : "snd");
 	}
 
 	sb->sb_flags &= ~SB_SEL;
@@ -1691,6 +1707,14 @@ sbcompress(struct sockbuf *sb, struct mbuf *m, struct mbuf *n)
 				/* XXX: Probably don't need */
 				sb->sb_ctl += m->m_len;
 			}
+
+			/* update send byte count */
+			if (sb->sb_flags & SB_SNDBYTE_CNT) {
+				inp_incr_sndbytes_total(sb->sb_so,
+				    m->m_len);
+				inp_incr_sndbytes_unsent(sb->sb_so,
+				    m->m_len);
+			}
 			m = m_free(m);
 			continue;
 		}
@@ -1749,9 +1773,6 @@ sbflush(struct sockbuf *sb)
 {
 	void *lr_saved = __builtin_return_address(0);
 	struct socket *so = sb->sb_so;
-#ifdef notyet
-	lck_mtx_t *mutex_held;
-#endif
 	u_int32_t i;
 
 	/* so_usecount may be 0 if we get here from sofreelastref() */
@@ -1765,19 +1786,6 @@ sbflush(struct sockbuf *sb)
 		    so->so_usecount, lr_saved, solockhistory_nr(so));
 		/* NOTREACHED */
 	}
-#ifdef notyet
-	/*
-	 * XXX: This code is currently commented out, because we may get here
-	 * as part of sofreelastref(), and at that time, pr_getlock() may no
-	 * longer be able to return us the lock; this will be fixed in future.
-	 */
-	if (so->so_proto->pr_getlock != NULL)
-		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
-	else
-		mutex_held = so->so_proto->pr_domain->dom_mtx;
-
-	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
-#endif
 
 	/*
 	 * Obtain lock on the socket buffer (SB_LOCK).  This is required
@@ -1848,8 +1856,8 @@ sbdrop(struct sockbuf *sb, int len)
 	ml = (struct mbuf *)0;
 
 	while (len > 0) {
-		if (m == 0) {
-			if (next == 0) {
+		if (m == NULL) {
+			if (next == NULL) {
 				/*
 				 * temporarily replacing this panic with printf
 				 * because it occurs occasionally when closing
@@ -1881,6 +1889,9 @@ sbdrop(struct sockbuf *sb, int len)
 			m->m_len -= len;
 			m->m_data += len;
 			sb->sb_cc -= len;
+			/* update the send byte count */
+			if (sb->sb_flags & SB_SNDBYTE_CNT)
+				 inp_decr_sndbytes_total(sb->sb_so, len);
 			if (m->m_type != MT_DATA && m->m_type != MT_HEADER &&
 			    m->m_type != MT_OOBDATA)
 				sb->sb_ctl -= len;
@@ -2197,7 +2208,7 @@ pru_soreceive_notsupp(struct socket *so, struct sockaddr **paddr,
 }
 
 int
-pru_soreceive_list_notsupp(struct socket *so, 
+pru_soreceive_list_notsupp(struct socket *so,
     struct recv_msg_elem *recv_msg_array, u_int uiocnt, int *flagsp)
 {
 #pragma unused(so, recv_msg_array, uiocnt, flagsp)
@@ -2426,11 +2437,13 @@ sballoc(struct sockbuf *sb, struct mbuf *m)
 		total_sbmb_cnt_peak = total_sbmb_cnt;
 
 	/*
-	 * If data is being appended to the send socket buffer,
+	 * If data is being added to the send socket buffer,
 	 * update the send byte count
 	 */
-	if (!(sb->sb_flags & SB_RECV))
-		OSAddAtomic(cnt, &total_snd_byte_count);
+	if (sb->sb_flags & SB_SNDBYTE_CNT) {
+		inp_incr_sndbytes_total(sb->sb_so, m->m_len);
+		inp_incr_sndbytes_unsent(sb->sb_so, m->m_len);
+	}
 }
 
 /* adjust counters in sb reflecting freeing of m */
@@ -2450,14 +2463,15 @@ sbfree(struct sockbuf *sb, struct mbuf *m)
 	}
 	OSAddAtomic(cnt, &total_sbmb_cnt);
 	VERIFY(total_sbmb_cnt >= 0);
+	if (total_sbmb_cnt < total_sbmb_cnt_floor)
+		total_sbmb_cnt_floor = total_sbmb_cnt;
 
 	/*
 	 * If data is being removed from the send socket buffer,
 	 * update the send byte count
 	 */
-	if (!(sb->sb_flags & SB_RECV)) {
-		OSAddAtomic(cnt, &total_snd_byte_count);
-	}
+	if (sb->sb_flags & SB_SNDBYTE_CNT)
+		inp_decr_sndbytes_total(sb->sb_so, m->m_len);
 }
 
 /*
@@ -2550,10 +2564,11 @@ sblock(struct sockbuf *sb, uint32_t flags)
 		if (error == 0 && (so->so_flags & SOF_DEFUNCT) &&
 		    !(flags & SBL_IGNDEFUNCT)) {
 			error = EBADF;
-			SODEFUNCTLOG(("%s[%d]: defunct so 0x%llx [%d,%d] "
+			SODEFUNCTLOG("%s[%d, %s]: defunct so 0x%llx [%d,%d] "
 			    "(%d)\n", __func__, proc_selfpid(),
+			    proc_best_name(current_proc()),
 			    (uint64_t)VM_KERNEL_ADDRPERM(so),
-			    SOCK_DOM(so), SOCK_TYPE(so), error));
+			    SOCK_DOM(so), SOCK_TYPE(so), error);
 		}
 
 		if (error != 0)
@@ -2863,7 +2878,7 @@ soisthrottled(struct socket *so)
 	 * application, as we're missing the system wide "decision maker"
 	 */
 	return (
-		(so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BACKGROUND));
+		(so->so_flags1 & SOF1_TRAFFIC_MGT_SO_BACKGROUND));
 }
 
 inline int
@@ -2875,7 +2890,7 @@ soisprivilegedtraffic(struct socket *so)
 inline int
 soissrcbackground(struct socket *so)
 {
-	return ((so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BACKGROUND) ||
+	return ((so->so_flags1 & SOF1_TRAFFIC_MGT_SO_BACKGROUND) ||
 		IS_SO_TC_BACKGROUND(so->so_traffic_class));
 }
 
@@ -2940,8 +2955,8 @@ sysctl_io_policy_throttled SYSCTL_HANDLER_ARGS
 		return (err);
 
 	if (i != net_io_policy_throttled)
-		SOTHROTTLELOG(("throttle: network IO policy throttling is "
-		    "now %s\n", i ? "ON" : "OFF"));
+		SOTHROTTLELOG("throttle: network IO policy throttling is "
+		    "now %s\n", i ? "ON" : "OFF");
 
 	net_io_policy_throttled = i;
 
@@ -2970,6 +2985,16 @@ SYSCTL_INT(_kern_ipc, KIPC_SOQLIMITCOMPAT, soqlimitcompat,
 
 SYSCTL_INT(_kern_ipc, OID_AUTO, soqlencomp, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&soqlencomp, 0, "Listen backlog represents only complete queue");
+
+SYSCTL_INT(_kern_ipc, OID_AUTO, sbmb_cnt, CTLFLAG_RD | CTLFLAG_LOCKED,
+	&total_sbmb_cnt, 0, "");
+SYSCTL_INT(_kern_ipc, OID_AUTO, sbmb_cnt_peak, CTLFLAG_RD | CTLFLAG_LOCKED,
+	&total_sbmb_cnt_peak, 0, "");
+SYSCTL_INT(_kern_ipc, OID_AUTO, sbmb_cnt_floor, CTLFLAG_RD | CTLFLAG_LOCKED,
+	&total_sbmb_cnt_floor, 0, "");
+SYSCTL_QUAD(_kern_ipc, OID_AUTO, sbmb_limreached, CTLFLAG_RD | CTLFLAG_LOCKED,
+	&sbmb_limreached, "");
+
 
 SYSCTL_NODE(_kern_ipc, OID_AUTO, io_policy, CTLFLAG_RW, 0, "network IO policy");
 

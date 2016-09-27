@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1544,7 +1544,6 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 		IGMP_PRINTF(("%s: unknown sopt_name %d\n",
 		    __func__, sopt->sopt_name));
 		return (EOPNOTSUPP);
-		break;
 	}
 
 	if (!IN_MULTICAST(ntohl(gsa->sin.sin_addr.s_addr)))
@@ -2182,7 +2181,6 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 		IGMP_PRINTF(("%s: unknown sopt_name %d\n",
 		    __func__, sopt->sopt_name));
 		return (EOPNOTSUPP);
-		break;
 	}
 
 	if (ifp == NULL || (ifp->if_flags & IFF_MULTICAST) == 0)
@@ -2309,10 +2307,24 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 	/*
 	 * Begin state merge transaction at IGMP layer.
 	 */
-
 	if (is_new) {
+		/*
+		 * Unlock socket as we may end up calling ifnet_ioctl() to join (or leave)
+		 * the multicast group and we run the risk of a lock ordering issue
+		 * if the ifnet thread calls into the socket layer to acquire the pcb list
+		 * lock while the input thread delivers multicast packets
+		 */
+		IMO_ADDREF_LOCKED(imo);
+		IMO_UNLOCK(imo);
+		socket_unlock(inp->inp_socket, 0);
+
 		VERIFY(inm == NULL);
 		error = in_joingroup(ifp, &gsa->sin.sin_addr, imf, &inm);
+
+		socket_lock(inp->inp_socket, 0);
+		IMO_REMREF(imo);
+		IMO_LOCK(imo);
+
 		VERIFY(inm != NULL || error != 0);
 		if (error)
 			goto out_imo_free;
@@ -2484,7 +2496,6 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		IGMP_PRINTF(("%s: unknown sopt_name %d\n",
 		    __func__, sopt->sopt_name));
 		return (EOPNOTSUPP);
-		break;
 	}
 
 	if (!IN_MULTICAST(ntohl(gsa->sin.sin_addr.s_addr)))
@@ -2548,6 +2559,7 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 	 * Begin state merge transaction at IGMP layer.
 	 */
 
+
 	if (is_final) {
 		/*
 		 * Give up the multicast address record to which
@@ -2583,10 +2595,23 @@ out_imf_rollback:
 	imf_reap(imf);
 
 	if (is_final) {
-		/* Remove the gap in the membership and filter array. */
+		/* Remove the gap in the membership array. */
 		VERIFY(inm == imo->imo_membership[idx]);
 		imo->imo_membership[idx] = NULL;
+
+		/*
+		 * See inp_join_group() for why we need to unlock
+		 */
+		IMO_ADDREF_LOCKED(imo);
+		IMO_UNLOCK(imo);
+		socket_unlock(inp->inp_socket, 0);
+
 		INM_REMREF(inm);
+
+		socket_lock(inp->inp_socket, 0);
+		IMO_REMREF(imo);
+		IMO_LOCK(imo);
+
 		for (++idx; idx < imo->imo_num_memberships; ++idx) {
 			imo->imo_membership[idx-1] = imo->imo_membership[idx];
 			imo->imo_mfilters[idx-1] = imo->imo_mfilters[idx];

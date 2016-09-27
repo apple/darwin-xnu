@@ -44,6 +44,7 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <mach/policy.h>
+#include <kern/policy_internal.h>
 
 #include <kern/syscall_subr.h>
 #include <mach/mach_host_server.h>
@@ -86,8 +87,6 @@ thread_set_policy(
 
 	if (invalid_policy(policy))
 		return(KERN_INVALID_ARGUMENT);	
-
-	thread_mtx_lock(thread);
 
 	switch (policy) {
 
@@ -160,8 +159,6 @@ thread_set_policy(
 	}
 
 	if (result != KERN_SUCCESS) {
-		thread_mtx_unlock(thread);
-
 		return (result);
 	}
 
@@ -169,8 +166,6 @@ thread_set_policy(
 	if (result == KERN_SUCCESS) {
 	    result = thread_set_mode_and_absolute_pri(thread, policy, bas);
 	}
-
-	thread_mtx_unlock(thread);
 
 	return (result);
 }

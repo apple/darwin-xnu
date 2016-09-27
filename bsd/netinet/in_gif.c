@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -111,7 +111,8 @@ in_gif_output(
 	int proto, error;
 	u_int8_t tos;
 	struct ip_out_args ipoa =
-	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0 };
+	    { IFSCOPE_NONE, { 0 }, IPOAF_SELECT_SRCIF, 0, SO_TC_UNSPEC,
+	    _NET_SERVICE_TYPE_UNSPEC };
 
 	GIF_LOCK_ASSERT(sc);
 
@@ -232,9 +233,7 @@ in_gif_output(
 }
 
 void
-in_gif_input(m, off)
-	struct mbuf *m;
-	int off;
+in_gif_input(struct mbuf *m, int off)
 {
 	struct ifnet *gifp = NULL;
 	struct ip *ip;

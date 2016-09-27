@@ -65,7 +65,7 @@
  * [including the GNU Public Licence.]
  */
 
-#define USE_SUPER_COOL_NEW_CCOID_T
+
 #include <corecrypto/ccsha1.h>
 #include <corecrypto/cc_priv.h>
 #include <corecrypto/ccdigest_priv.h>
@@ -156,7 +156,7 @@
 # define X(i)	XX[i]
 #endif
 
-static void sha1_compress(ccdigest_state_t s, unsigned long num, const void *buf)
+static void sha1_compress(ccdigest_state_t s, size_t num, const void *buf)
 {
 	const unsigned char *data=buf;
     register uint32_t A,B,C,D,E,T,l;

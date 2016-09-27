@@ -34,6 +34,9 @@ output_sysprotofile=0
 output_syshdrfile=0
 output_syscalltablefile=0
 output_auditevfile=0
+output_tracecodes=0
+
+use_stdout=0
 
 # output files:
 syscallnamesfile="syscalls.c"
@@ -46,6 +49,7 @@ auditevfile="audit_kevents.c"
 syscallprefix="SYS_"
 switchname="sysent"
 namesname="syscallnames"
+tracecodename="syscall.codes"
 
 # tmp files:
 syslegal="sysent.syslegal.$$"
@@ -56,14 +60,15 @@ sysprotoend="sysprotoend.$$"
 syscallnamestempfile="syscallnamesfile.$$"
 syshdrtempfile="syshdrtempfile.$$"
 audittempfile="audittempfile.$$"
+tracecodetempfile="tracecodetempfile.$$"
 
-trap "rm $syslegal $sysent $sysinc $sysarg $sysprotoend $syscallnamestempfile $syshdrtempfile $audittempfile" 0
+trap "rm $syslegal $sysent $sysinc $sysarg $sysprotoend $syscallnamestempfile $syshdrtempfile $audittempfile $tracecodetempfile" 0
 
-touch $syslegal $sysent $sysinc $sysarg $sysprotoend $syscallnamestempfile $syshdrtempfile $audittempfile
+touch $syslegal $sysent $sysinc $sysarg $sysprotoend $syscallnamestempfile $syshdrtempfile $audittempfile $tracecodetempfile
 
 case $# in
     0)
-	echo "usage: $0 input-file [<names|proto|header|table|audit> [<config-file>]]" 1>&2
+	echo "usage: $0 input-file [<names|proto|header|table|audit|trace> [<config-file>]]" 1>&2
 	exit 1
 	;;
 esac
@@ -88,6 +93,10 @@ if [ -n "$1" ]; then
 	audit)
 	    output_auditevfile=1
 	    ;;
+	trace)
+	    output_tracecodes=1
+	    use_stdout=1
+	    ;;
     esac
     shift;
 else
@@ -96,6 +105,7 @@ else
     output_syshdrfile=1
     output_syscalltablefile=1
     output_auditevfile=1
+    output_tracecodes=1
 fi
 
 if [ -n "$1" -a -f "$1" ]; then
@@ -132,6 +142,7 @@ s/\$//g
 		syshdrfile = \"$syshdrfile\"
 		syshdrtempfile = \"$syshdrtempfile\"
 		audittempfile = \"$audittempfile\"
+		tracecodetempfile = \"$tracecodetempfile\"
 		syscallprefix = \"$syscallprefix\"
 		switchname = \"$switchname\"
 		namesname = \"$namesname\"
@@ -290,6 +301,7 @@ s/\$//g
 		argc = 0
 		argssize = "0"
 		additional_comments = " "
+		obs_comments = "_"
 
 		# find start and end of call name and arguments
 		if ($current_field != "{")
@@ -347,8 +359,14 @@ s/\$//g
 			current_field = comments_start + 1
 			while (current_field < comments_end) {
 				additional_comments = additional_comments $current_field " "
+				obs_comments = obs_comments $current_field "_"
 				current_field++
 			}
+		}
+		sub(/old/, "obs", obs_comments)
+		obs_comments = substr(obs_comments, 1, length(obs_comments)-1)
+		if (obs_comments == "_") {
+			obs_comments = ""
 		}
 
 		# get function return type
@@ -625,13 +643,6 @@ s/\$//g
 				linesize = length(syscallprefix) + length(tempname) + 12
 				align_comment(linesize, 30, syshdrtempfile)
 				printf("%d\n", syscall_num) > syshdrtempfile
-				# special case for gettimeofday on ppc - cctools project uses old name
-				if (tempname == "ppc_gettimeofday") {
-					printf("#define\t%s%s", syscallprefix, "gettimeofday") > syshdrtempfile
-					linesize = length(syscallprefix) + length(tempname) + 12
-					align_comment(linesize, 30, syshdrtempfile)
-					printf("%d\n", syscall_num) > syshdrtempfile
-				}
 			}
 			else if (skip_for_header == 0) {
 				printf("\t\t\t/* %d %s*/\n", syscall_num, additional_comments) > syshdrtempfile
@@ -653,7 +664,21 @@ s/\$//g
 		# output to audit_kevents.c
 		printf("\t%s,\t\t", auditev) > audittempfile
 		printf("/* %d = %s%s*/\n", syscall_num, tempname, additional_comments) > audittempfile 
-		
+
+		tempname = funcname
+		if (skip_for_header == 0) {
+			if (tempname == "nosys" || tempname == "enosys") {
+				if (obs_comments == "") {
+					printf("0x40c%04x\tBSC_#%d%s\n", (syscall_num*4), syscall_num, obs_comments) > tracecodetempfile 
+				} else {
+					printf("0x40c%04x\tBSC%s\n", (syscall_num*4), obs_comments) > tracecodetempfile 
+				}
+			} else {	
+				sub(/^_+/, "", tempname)
+				printf("0x40c%04x\tBSC_%s\n", (syscall_num*4), tempname) > tracecodetempfile 
+			}
+		}
+
 		syscall_num++
 		next
 	}
@@ -671,12 +696,12 @@ s/\$//g
 		printf("\n#endif /* !%s */\n", sysproto_h) > sysprotoend
 
 		printf("};\n") > sysent
-		printf("int	nsysent = sizeof(sysent) / sizeof(sysent[0]);\n") > sysent
-		printf("/* Verify that NUM_SYSENT reflects the latest syscall count */\n") > sysent
-		printf("_Static_assert(((sizeof(sysent) / sizeof(sysent[0])) == NUM_SYSENT), \"NUM_SYSENT needs to be updated to match syscall count\");\n") > sysent
+		printf("unsigned int	nsysent = sizeof(sysent) / sizeof(sysent[0]);\n") > sysent
 
 		printf("};\n") > syscallnamestempfile
 		printf("#define\t%sMAXSYSCALL\t%d\n", syscallprefix, syscall_num) \
+		    > syshdrtempfile
+		printf("#define\t%sinvalid\t%d\n", syscallprefix, 63) \
 		    > syshdrtempfile
 		printf("\n#endif /* __APPLE_API_PRIVATE */\n") > syshdrtempfile
 		printf("#endif /* !%s */\n", syscall_h) > syshdrtempfile
@@ -706,4 +731,12 @@ fi
 
 if [ $output_auditevfile -eq 1 ]; then
     cat $syslegal $audittempfile > $auditevfile
+fi
+
+if [ $output_tracecodes -eq 1 ]; then
+	if [ $use_stdout -eq 1 ]; then
+		cat $tracecodetempfile
+	else
+		cat $tracecodetempfile > $tracecodename
+	fi
 fi

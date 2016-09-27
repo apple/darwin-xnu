@@ -67,15 +67,6 @@ struct if_llreach_info {
 #endif /* INET6 */
 
 /*
- * Link-layer reachability is based off node constants in RFC4861.
- */
-#if INET6
-#define	LL_BASE_REACHABLE	REACHABLE_TIME
-#else
-#define	LL_BASE_REACHABLE	30000	/* msec */
-#endif /* !INET6 */
-
-/*
  * Per-interface link-layer reachability.  (Currently only for ARP/NDP/Ethernet.)
  */
 #define	IF_LLREACH_MAXLEN	ETHER_ADDR_LEN

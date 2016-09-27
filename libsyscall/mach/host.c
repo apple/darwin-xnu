@@ -31,6 +31,7 @@
 #include <mach/kern_return.h>
 #include <mach/mach_host.h>
 #include <mach/host_priv.h>
+#include <sys/types.h>
 
 kern_return_t
 host_get_atm_diagnostic_flag(host_t host __unused,
@@ -55,4 +56,36 @@ host_check_multiuser_mode(host_t host __unused,
 {
 	(void)multiuser_mode;
 	return KERN_NOT_SUPPORTED;
+}
+
+extern kern_return_t
+_kernelrpc_host_create_mach_voucher(mach_port_name_t host,
+                                    mach_voucher_attr_raw_recipe_array_t recipes,
+                                    mach_voucher_attr_recipe_size_t recipesCnt,
+                                    mach_port_name_t *voucher);
+
+kern_return_t
+host_create_mach_voucher(mach_port_name_t host,
+                         mach_voucher_attr_raw_recipe_array_t recipes,
+                         mach_voucher_attr_recipe_size_t recipesCnt,
+                         mach_port_name_t *voucher)
+{
+	kern_return_t rv;
+
+	rv = host_create_mach_voucher_trap(host, recipes, recipesCnt, voucher);
+
+#ifdef __x86_64__
+	/* REMOVE once XBS kernel has new trap */
+	if (rv == ((1 << 24) | 70)) /* see mach/i386/syscall_sw.h */
+		rv = MACH_SEND_INVALID_DEST;
+#elif defined(__i386__)
+	/* REMOVE once XBS kernel has new trap */
+	if (rv == (kern_return_t)(-70))
+		rv = MACH_SEND_INVALID_DEST;
+#endif
+
+	if (rv == MACH_SEND_INVALID_DEST)
+		rv = _kernelrpc_host_create_mach_voucher(host, recipes, recipesCnt, voucher);
+
+	return rv;
 }

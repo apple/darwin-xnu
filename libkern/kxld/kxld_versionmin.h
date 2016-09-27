@@ -41,6 +41,7 @@ typedef struct kxld_versionmin KXLDversionmin;
 enum kxld_versionmin_platforms {
     kKxldVersionMinMacOSX,
     kKxldVersionMiniPhoneOS,
+    kKxldVersionMinAppleTVOS,
     kKxldVersionMinWatchOS
 };
 

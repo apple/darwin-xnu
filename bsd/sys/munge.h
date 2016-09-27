@@ -86,6 +86,7 @@ void munge_wwlll(void *args);
 void munge_wwllww(void *args);
 void munge_wlw(void *args);
 void munge_wlww(void *args);
+void munge_wlwwwl(void *args);
 void munge_wlwwwll(void *args);
 void munge_wlwwwllw(void *args);
 void munge_wlwwlwlw(void *args);
@@ -115,5 +116,7 @@ void munge_l(void *args);
 void munge_ll(void *args);
 void munge_lw(void *args);
 void munge_lwww(void *args);
+void munge_wwlww(void *args);
 void munge_wwlwww(void *args);
+void munge_wwlwwwl(void *args);
 #endif /* __MUNGE_H__ */

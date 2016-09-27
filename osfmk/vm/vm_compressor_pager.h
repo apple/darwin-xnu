@@ -62,9 +62,7 @@ extern vm_external_state_t vm_compressor_pager_state_get(
 	memory_object_offset_t	offset);
 
 #define VM_COMPRESSOR_PAGER_STATE_GET(object, offset)			\
-	(((COMPRESSED_PAGER_IS_ACTIVE ||				\
-	   DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) &&		\
-	  (object)->internal &&						\
+	(((object)->internal &&					\
 	  (object)->pager != NULL &&					\
 	  !(object)->terminating &&					\
 	  (object)->alive)						\
@@ -74,9 +72,7 @@ extern vm_external_state_t vm_compressor_pager_state_get(
 
 #define VM_COMPRESSOR_PAGER_STATE_CLR(object, offset)			\
 	MACRO_BEGIN							\
-	if ((COMPRESSED_PAGER_IS_ACTIVE ||				\
-	     DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) &&		\
-	    (object)->internal &&					\
+	if ((object)->internal &&					\
 	    (object)->pager != NULL &&					\
 	    !(object)->terminating &&					\
 	    (object)->alive) {						\

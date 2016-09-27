@@ -216,7 +216,7 @@ static int
 msginit(__unused void *dummy)
 {
 	static int initted = 0;
-	register int i;
+	int i;
 
 	/* Lazy initialization on first system call; we don't have SYSINIT(). */
 	if (initted)

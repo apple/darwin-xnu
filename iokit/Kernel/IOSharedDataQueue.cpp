@@ -157,25 +157,35 @@ IOMemoryDescriptor *IOSharedDataQueue::getMemoryDescriptor()
 
 IODataQueueEntry * IOSharedDataQueue::peek()
 {
-    IODataQueueEntry *entry = 0;
+    IODataQueueEntry *entry      = 0;
+    UInt32            headOffset;
+    UInt32            tailOffset;
 
-    if (dataQueue && (dataQueue->head != dataQueue->tail)) {
+    if (!dataQueue) {
+        return NULL;
+    }
+
+    // Read head and tail with acquire barrier
+    headOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
+    tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_ACQUIRE);
+
+    if (headOffset != tailOffset) {
         IODataQueueEntry *  head        = 0;
         UInt32              headSize    = 0;
         UInt32              headOffset  = dataQueue->head;
         UInt32              queueSize   = getQueueSize();
-        
+
         if (headOffset >= queueSize) {
             return NULL;
         }
-        
+
         head         = (IODataQueueEntry *)((char *)dataQueue->queue + headOffset);
         headSize     = head->size;
-        
+
         // Check if there's enough room before the end of the queue for a header.
         // If there is room, check if there's enough room to hold the header and
         // the data.
-        
+
         if ((headOffset > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) ||
             (headOffset + DATA_QUEUE_ENTRY_HEADER_SIZE > queueSize) ||
             (headOffset + DATA_QUEUE_ENTRY_HEADER_SIZE > UINT32_MAX - headSize) ||
@@ -194,11 +204,16 @@ IODataQueueEntry * IOSharedDataQueue::peek()
 
 Boolean IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
 {
-    const UInt32       head      = dataQueue->head;  // volatile
-    const UInt32       tail      = dataQueue->tail;
+    UInt32             head;
+    UInt32             tail;
+    UInt32             newTail;
     const UInt32       entrySize = dataSize + DATA_QUEUE_ENTRY_HEADER_SIZE;
     IODataQueueEntry * entry;
     
+    // Force a single read of head and tail
+    head = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
+    tail = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_RELAXED);
+
     // Check for overflow of entrySize
     if (dataSize > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) {
         return false;
@@ -223,7 +238,7 @@ Boolean IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
             // exactly matches the available space at the end of the queue.
             // The tail can range from 0 to dataQueue->queueSize inclusive.
             
-            OSAddAtomic(entrySize, (SInt32 *)&dataQueue->tail);
+            newTail = tail + entrySize;
         }
         else if ( head > entrySize )     // Is there enough room at the beginning?
         {
@@ -242,7 +257,7 @@ Boolean IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
             }
             
             memcpy(&dataQueue->queue->data, data, dataSize);
-            OSCompareAndSwap(dataQueue->tail, entrySize, &dataQueue->tail);
+            newTail = entrySize;
         }
         else
         {
@@ -260,18 +275,21 @@ Boolean IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
             
             entry->size = dataSize;
             memcpy(&entry->data, data, dataSize);
-            OSAddAtomic(entrySize, (SInt32 *)&dataQueue->tail);
+            newTail = tail + entrySize;
         }
         else
         {
             return false;    // queue is full
         }
     }
+
+    // Update tail with release barrier
+    __c11_atomic_store((_Atomic UInt32 *)&dataQueue->tail, newTail, __ATOMIC_RELEASE);
     
     // Send notification (via mach message) that data is available.
     
-    if ( ( head == tail )                                                   /* queue was empty prior to enqueue() */
-        ||   ( dataQueue->head == tail ) )   /* queue was emptied during enqueue() */
+    if ( ( tail == head )                                                   /* queue was empty prior to enqueue() */
+      || ( tail == __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED) ) )   /* queue was emptied during enqueue() */
     {
         sendDataAvailableNotification();
     }
@@ -284,72 +302,77 @@ Boolean IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
     Boolean             retVal          = TRUE;
     IODataQueueEntry *  entry           = 0;
     UInt32              entrySize       = 0;
+    UInt32              headOffset      = 0;
+    UInt32              tailOffset      = 0;
     UInt32              newHeadOffset   = 0;
 
-    if (dataQueue) {
-        if (dataQueue->head != dataQueue->tail) {
-            IODataQueueEntry *  head        = 0;
-            UInt32              headSize    = 0;
-            UInt32              headOffset  = dataQueue->head;
-            UInt32              queueSize   = getQueueSize();
-            
-            if (headOffset > queueSize) {
+    if (!dataQueue) {
+        return false;
+    }
+
+    // Read head and tail with acquire barrier
+    tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_RELAXED);
+    headOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_ACQUIRE);
+
+    if (headOffset != tailOffset) {
+        IODataQueueEntry *  head        = 0;
+        UInt32              headSize    = 0;
+        UInt32              queueSize   = getQueueSize();
+
+        if (headOffset > queueSize) {
+            return false;
+        }
+
+        head         = (IODataQueueEntry *)((char *)dataQueue->queue + headOffset);
+        headSize     = head->size;
+
+        // we wrapped around to beginning, so read from there
+        // either there was not even room for the header
+        if ((headOffset > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) ||
+            (headOffset + DATA_QUEUE_ENTRY_HEADER_SIZE > queueSize) ||
+            // or there was room for the header, but not for the data
+            (headOffset + DATA_QUEUE_ENTRY_HEADER_SIZE > UINT32_MAX - headSize) ||
+            (headOffset + headSize + DATA_QUEUE_ENTRY_HEADER_SIZE > queueSize)) {
+            // Note: we have to wrap to the beginning even with the UINT32_MAX checks
+            // because we have to support a queueSize of UINT32_MAX.
+            entry           = dataQueue->queue;
+            entrySize       = entry->size;
+            if ((entrySize > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) ||
+                (entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE > queueSize)) {
                 return false;
             }
-            
-            head         = (IODataQueueEntry *)((char *)dataQueue->queue + headOffset);
-            headSize     = head->size;
-            
-            // we wrapped around to beginning, so read from there
-            // either there was not even room for the header
-            if ((headOffset > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) ||
-                (headOffset + DATA_QUEUE_ENTRY_HEADER_SIZE > queueSize) ||
-                // or there was room for the header, but not for the data
-                (headOffset + DATA_QUEUE_ENTRY_HEADER_SIZE > UINT32_MAX - headSize) ||
-                (headOffset + headSize + DATA_QUEUE_ENTRY_HEADER_SIZE > queueSize)) {
-                // Note: we have to wrap to the beginning even with the UINT32_MAX checks
-                // because we have to support a queueSize of UINT32_MAX.
-                entry           = dataQueue->queue;
-                entrySize       = entry->size;
-                if ((entrySize > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) ||
-                    (entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE > queueSize)) {
-                    return false;
-                }
-                newHeadOffset   = entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE;
-                // else it is at the end
-            } else {
-                entry           = head;
-                entrySize       = entry->size;
-                if ((entrySize > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) ||
-                    (entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE > UINT32_MAX - headOffset) ||
-                    (entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE + headOffset > queueSize)) {
-                    return false;
-                }
-                newHeadOffset   = headOffset + entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE;
+            newHeadOffset   = entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE;
+            // else it is at the end
+        } else {
+            entry           = head;
+            entrySize       = entry->size;
+            if ((entrySize > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) ||
+                (entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE > UINT32_MAX - headOffset) ||
+                (entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE + headOffset > queueSize)) {
+                return false;
             }
+            newHeadOffset   = headOffset + entrySize + DATA_QUEUE_ENTRY_HEADER_SIZE;
         }
-        
-        if (entry) {
-            if (data) {
-                if (dataSize) {
-                    if (entrySize <= *dataSize) {
-                        memcpy(data, &(entry->data), entrySize);
-                        OSCompareAndSwap( dataQueue->head, newHeadOffset, (SInt32 *)&dataQueue->head);
-                    } else {
-                        retVal = FALSE;
-                    }
+    }
+
+    if (entry) {
+        if (data) {
+            if (dataSize) {
+                if (entrySize <= *dataSize) {
+                    memcpy(data, &(entry->data), entrySize);
+                    __c11_atomic_store((_Atomic UInt32 *)&dataQueue->head, newHeadOffset, __ATOMIC_RELEASE);
                 } else {
                     retVal = FALSE;
                 }
             } else {
-                OSCompareAndSwap( dataQueue->head, newHeadOffset, (SInt32 *)&dataQueue->head);
-            }
-
-            if (dataSize) {
-                *dataSize = entrySize;
+                retVal = FALSE;
             }
         } else {
-            retVal = FALSE;
+            __c11_atomic_store((_Atomic UInt32 *)&dataQueue->head, newHeadOffset, __ATOMIC_RELEASE);
+        }
+
+        if (dataSize) {
+            *dataSize = entrySize;
         }
     } else {
         retVal = FALSE;

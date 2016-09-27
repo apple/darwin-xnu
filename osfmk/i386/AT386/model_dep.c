@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -105,6 +105,7 @@
 #include <pexpert/i386/boot.h>
 
 #include <kdp/kdp_dyld.h>
+#include <kdp/kdp_core.h>
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -133,7 +134,6 @@
 static void machine_conf(void);
 void panic_print_symbol_name(vm_address_t search);
 
-extern boolean_t init_task_died;
 extern const char	version[];
 extern char 	osversion[];
 extern int		max_unsafe_quanta;
@@ -807,6 +807,7 @@ int reset_mem_on_reboot = 1;
 /*
  * Halt the system or reboot.
  */
+__attribute__((noreturn))
 void
 halt_all_cpus(boolean_t reboot)
 {
@@ -882,8 +883,13 @@ void
 DebuggerWithContext(
 	__unused unsigned int	reason,
 	__unused void 		*ctx,
-	const char		*message)
+	const char		*message,
+	uint64_t		debugger_options_mask)
 {
+	if (debugger_options_mask != DEBUGGER_OPTION_NONE) {
+		kprintf("debugger options (%llx) not supported for desktop.\n", debugger_options_mask);
+	}
+
 	Debugger(message);
 }
 
@@ -894,8 +900,7 @@ Debugger(
 	unsigned long pi_size = 0;
 	void *stackptr;
 	int cn = cpu_number();
-	task_t task = current_task();
-	int	task_pid = pid_from_task(task);
+
 	boolean_t old_doprnt_hide_pointers = doprnt_hide_pointers;
 
 	hw_atomic_add(&debug_mode, 1);   
@@ -928,7 +933,7 @@ Debugger(
 		__asm__ volatile("movq %%rbp, %0" : "=m" (stackptr));
 
 		/* Print backtrace - callee is internally synchronized */
-		if (task_pid == 1 && (init_task_died)) {
+		if (strncmp(panicstr, LAUNCHD_CRASHED_PREFIX, strlen(LAUNCHD_CRASHED_PREFIX)) == 0) {
 			/* Special handling of launchd died panics */
 			print_launchd_info();
 		} else {
@@ -993,7 +998,7 @@ Debugger(
                     }
                 }
 
-		if (!panicDebugging) {
+		if (!panicDebugging && !kdp_has_polled_corefile()) {
 			unsigned cnum;
 			/* Clear the MP rendezvous function lock, in the event
 			 * that a panic occurred while in that codepath.
@@ -1344,9 +1349,10 @@ print_tasks_user_threads(task_t task)
 		pmap = get_task_pmap(task);
 		savestate = get_user_regs(thread);
 		rbp = savestate->ss_64.rbp;
+		kdb_printf("\t0x%016llx\n", savestate->ss_64.isf.rip);
 		print_one_backtrace(pmap, (vm_offset_t)rbp, cur_marker, TRUE, TRUE);
 		kdb_printf("\n");
-		}
+	}
 }
 
 void

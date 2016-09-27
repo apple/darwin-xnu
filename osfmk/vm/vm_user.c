@@ -98,6 +98,7 @@
 #include <mach/vm_param.h>
 #include <mach/vm_statistics.h>
 #include <mach/mach_syscalls.h>
+#include <mach/sdt.h>
 
 #include <mach/host_priv_server.h>
 #include <mach/mach_vm_server.h>
@@ -294,7 +295,7 @@ mach_vm_deallocate(
  */
 kern_return_t
 vm_deallocate(
-	register vm_map_t	map,
+	vm_map_t		map,
 	vm_offset_t		start,
 	vm_size_t		size)
 {
@@ -346,7 +347,7 @@ mach_vm_inherit(
  */
 kern_return_t
 vm_inherit(
-	register vm_map_t	map,
+	vm_map_t		map,
 	vm_offset_t		start,
 	vm_size_t		size,
 	vm_inherit_t		new_inheritance)
@@ -1163,7 +1164,7 @@ mach_vm_wire(
 kern_return_t
 vm_wire(
 	host_priv_t		host_priv,
-	register vm_map_t	map,
+	vm_map_t		map,
 	vm_offset_t		start,
 	vm_size_t		size,
 	vm_prot_t		access)
@@ -1303,6 +1304,7 @@ vm_toggle_entry_reuse(int toggle, int *old_value)
 {
 	vm_map_t map = current_map();
 	
+	assert(!map->is_nested_map);
 	if(toggle == VM_TOGGLE_GETVALUE && old_value != NULL){
 		*old_value = map->disable_vmentry_reuse;
 	} else if(toggle == VM_TOGGLE_SET){
@@ -1341,21 +1343,37 @@ kern_return_t
 mach_vm_behavior_set(
 	vm_map_t		map,
 	mach_vm_offset_t	start,
-	mach_vm_size_t	size,
+	mach_vm_size_t		size,
 	vm_behavior_t		new_behavior)
 {
+	vm_map_offset_t	align_mask;
+
 	if ((map == VM_MAP_NULL) || (start + size < start))
 		return(KERN_INVALID_ARGUMENT);
 
 	if (size == 0)
 		return KERN_SUCCESS;
 
-	return(vm_map_behavior_set(map,
-				   vm_map_trunc_page(start,
-						     VM_MAP_PAGE_MASK(map)), 
-				   vm_map_round_page(start+size,
-						     VM_MAP_PAGE_MASK(map)),
-				   new_behavior));
+	switch (new_behavior) {
+	case VM_BEHAVIOR_REUSABLE:
+	case VM_BEHAVIOR_REUSE:
+	case VM_BEHAVIOR_CAN_REUSE:
+		/*
+		 * Align to the hardware page size, to allow
+		 * malloc() to maximize the amount of re-usability,
+		 * even on systems with larger software page size.
+		 */
+		align_mask = PAGE_MASK;
+		break;
+	default:
+		align_mask = VM_MAP_PAGE_MASK(map);
+		break;
+	}
+
+	return vm_map_behavior_set(map,
+				   vm_map_trunc_page(start, align_mask),
+				   vm_map_round_page(start+size, align_mask),
+				   new_behavior);
 }
 
 /*
@@ -1378,18 +1396,13 @@ vm_behavior_set(
 	vm_size_t		size,
 	vm_behavior_t		new_behavior)
 {
-	if ((map == VM_MAP_NULL) || (start + size < start))
-		return(KERN_INVALID_ARGUMENT);
+	if (start + size < start)
+		return KERN_INVALID_ARGUMENT;
 
-	if (size == 0)
-		return KERN_SUCCESS;
-
-	return(vm_map_behavior_set(map,
-				   vm_map_trunc_page(start,
-						     VM_MAP_PAGE_MASK(map)), 
-				   vm_map_round_page(start+size,
-						     VM_MAP_PAGE_MASK(map)),
-				   new_behavior));
+	return mach_vm_behavior_set(map,
+				    (mach_vm_offset_t) start,
+				    (mach_vm_size_t) size,
+				    new_behavior);
 }
 
 /*
@@ -1851,6 +1864,7 @@ vm_map_get_upl(
 	return kr;
 }
 
+
 /*
  * mach_make_memory_entry_64
  *
@@ -1913,6 +1927,7 @@ mach_make_memory_entry_64(
 	if (((permission & 0x00FF0000) &
 	     ~(MAP_MEM_ONLY |
 	       MAP_MEM_NAMED_CREATE |
+	       MAP_MEM_GRAB_SECLUDED | /* XXX FBDP TODO: restrict usage? */
 	       MAP_MEM_PURGABLE | 
 	       MAP_MEM_NAMED_REUSE |
 	       MAP_MEM_USE_DATA_ADDR |
@@ -2044,6 +2059,25 @@ mach_make_memory_entry_64(
 			vm_object_unlock(object);
 		}
 
+#if CONFIG_SECLUDED_MEMORY
+		if (secluded_for_iokit && /* global boot-arg */
+		    ((permission & MAP_MEM_GRAB_SECLUDED)
+#if 11
+		     /* XXX FBDP for my testing only */
+		     || (secluded_for_fbdp && map_size == 97550336)
+#endif
+			    )) {
+#if 11
+			if (!(permission & MAP_MEM_GRAB_SECLUDED) &&
+			    secluded_for_fbdp) {
+				printf("FBDP: object %p size %lld can grab secluded\n", object, (uint64_t) map_size);
+			}
+#endif
+			object->can_grab_secluded = TRUE;
+			assert(!object->eligible_for_secluded);
+		}
+#endif /* CONFIG_SECLUDED_MEMORY */
+
 		/*
 		 * The VM object is brand new and nobody else knows about it,
 		 * so we don't need to lock it.
@@ -2163,6 +2197,7 @@ mach_make_memory_entry_64(
 			offset_in_page = 0;
 		}
 
+		cur_prot = VM_PROT_ALL;
 		kr = vm_map_copy_extract(target_map,
 					 map_start,
 					 map_size,
@@ -2263,8 +2298,9 @@ redo_lookup:
 			 */
 			protections &= prot;
 		}
+
 		if (((prot & protections) != protections) 
-					|| (object == kernel_object)) {
+		    || (object == kernel_object)) {
 			kr = KERN_INVALID_RIGHT;
 			vm_object_unlock(object);
 			vm_map_unlock_read(target_map);
@@ -2616,6 +2652,7 @@ redo_lookup:
 		}
 #endif /* VM_OBJECT_TRACKING_OP_TRUESHARE */
 
+		vm_object_lock_assert_exclusive(object);
 		object->true_share = TRUE;
 		if (object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC)
 			object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
@@ -2797,8 +2834,8 @@ redo_lookup:
 		   assert(object != VM_OBJECT_NULL);
 		   user_entry->backing.object = object;
 		   /* we now point to this object, hold on */
-		   vm_object_reference(object); 
 		   vm_object_lock(object);
+		   vm_object_reference_locked(object); 
 #if VM_OBJECT_TRACKING_OP_TRUESHARE
 		if (!object->true_share &&
 		    vm_object_tracking_inited) {
@@ -3562,7 +3599,7 @@ vm_map_get_phys_page(
 					break;
 				}
 			} else {
-				phys_page = (ppnum_t)(dst_page->phys_page);
+				phys_page = (ppnum_t)(VM_PAGE_GET_PHYS_PAGE(dst_page));
 				vm_object_unlock(object);
 				break;
 			}

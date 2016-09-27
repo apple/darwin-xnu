@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -30,17 +30,22 @@
 #include <sys/sysctl.h>
 extern "C" {
 #include <vm/vm_kern.h>
+#include <kern/task.h>
+#include <kern/debug.h>
 }
 
 #include <libkern/c++/OSContainers.h>
 #include <libkern/OSDebug.h>
 #include <libkern/c++/OSCPPDebug.h>
+#include <kern/backtrace.h>
 
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/assert.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOService.h>
+
+#include "IOKitKernelInternal.h"
 
 #ifdef IOKITDEBUG
 #define DEBUG_INIT_VALUE IOKITDEBUG
@@ -223,13 +228,15 @@ struct IOTrackingQueue
 {
     queue_chain_t     link;
     IOTRecursiveLock  lock;
-    queue_head_t      sites;
     const char *      name;
+    uintptr_t         btEntry;
     size_t            allocSize;
     size_t            minCaptureSize;
     uint32_t          siteCount;
+    uint32_t          type;
+    uint32_t          numSiteQs;
     uint8_t           captureOn;
-    uint8_t           isAlloc;
+    queue_head_t      sites[];
 };
 
 struct IOTrackingCallSite
@@ -237,24 +244,22 @@ struct IOTrackingCallSite
     queue_chain_t          link;
     IOTrackingQueue *      queue;
     uint32_t               crc;
-    IOTrackingCallSiteInfo info; 
-    queue_chain_t          instances;
+
+    uint32_t      count;
+    size_t        size[2];
+    uintptr_t     bt[kIOTrackingCallSiteBTs];
+
+    queue_head_t           instances;
     IOTracking *           addresses;
 };
 
 struct IOTrackingLeaksRef
 {
     uintptr_t * instances;
+    uint32_t    zoneSize;
     uint32_t    count;
     uint32_t    found;
     size_t      bytes;
-};
-
-enum
-{
-    kInstanceFlagAddress    = 0x01UL,
-    kInstanceFlagReferenced = 0x02UL,
-    kInstanceFlags          = 0x03UL
 };
 
 lck_mtx_t *  gIOTrackingLock;
@@ -310,20 +315,29 @@ IOTrackingInit(void)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 IOTrackingQueue *
-IOTrackingQueueAlloc(const char * name, size_t allocSize, size_t minCaptureSize, bool isAlloc)
+IOTrackingQueueAlloc(const char * name, uintptr_t btEntry,
+		     size_t allocSize, size_t minCaptureSize,
+		     uint32_t type, uint32_t numSiteQs)
 {
     IOTrackingQueue * queue;
-    queue = (typeof(queue)) kalloc(sizeof(IOTrackingQueue));
+    uint32_t          idx;
+
+    if (!numSiteQs) numSiteQs = 1;
+    queue = (typeof(queue)) kalloc(sizeof(IOTrackingQueue) + numSiteQs * sizeof(queue->sites[0]));
     bzero(queue, sizeof(IOTrackingQueue));
 
     queue->name           = name;
+    queue->btEntry        = btEntry;
     queue->allocSize      = allocSize;
     queue->minCaptureSize = minCaptureSize;
     queue->lock.mutex     = lck_mtx_alloc_init(IOLockGroup, LCK_ATTR_NULL);
-    queue_init(&queue->sites);
+    queue->numSiteQs      = numSiteQs;
+    queue->type           = type;
+    enum { kFlags = (kIOTracking | kIOTrackingBoot) };
+    queue->captureOn = (kFlags == (kFlags & gIOKitDebug))
+                     || (kIOTrackingQueueTypeDefaultOn & type);
 
-    queue->captureOn = (0 != (kIOTrackingBoot & gIOKitDebug));
-    queue->isAlloc   = isAlloc;
+    for (idx = 0; idx < numSiteQs; idx++) queue_init(&queue->sites[idx]);
 
     lck_mtx_lock(gIOTrackingLock);
     queue_enter(&gIOTrackingQ, queue, IOTrackingQueue *, link);
@@ -344,7 +358,7 @@ IOTrackingQueueFree(IOTrackingQueue * queue)
 
     lck_mtx_free(queue->lock.mutex, IOLockGroup);
 
-    kfree(queue, sizeof(IOTrackingQueue));
+    kfree(queue, sizeof(IOTrackingQueue) + queue->numSiteQs * sizeof(queue->sites[0]));
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -404,11 +418,17 @@ fasthash64(const void *buf, size_t len, uint64_t seed)
 
     switch (len & 7) {
     case 7: v ^= (uint64_t)pos2[6] << 48;
+    [[clang::fallthrough]];
     case 6: v ^= (uint64_t)pos2[5] << 40;
+    [[clang::fallthrough]];
     case 5: v ^= (uint64_t)pos2[4] << 32;
+    [[clang::fallthrough]];
     case 4: v ^= (uint64_t)pos2[3] << 24;
+    [[clang::fallthrough]];
     case 3: v ^= (uint64_t)pos2[2] << 16;
+    [[clang::fallthrough]];
     case 2: v ^= (uint64_t)pos2[1] << 8;
+    [[clang::fallthrough]];
     case 1: v ^= (uint64_t)pos2[0];
             h ^= mix(v);
             h *= m;
@@ -432,11 +452,60 @@ fasthash32(const void *buf, size_t len, uint32_t seed)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 void
+IOTrackingAddUser(IOTrackingQueue * queue, IOTrackingUser * mem, vm_size_t size)
+{
+    uint32_t num;
+    proc_t   self;
+
+    if (!queue->captureOn)            return;
+    if (size < queue->minCaptureSize) return;
+
+    assert(!mem->link.next);
+
+    num = backtrace(&mem->bt[0], kIOTrackingCallSiteBTs);
+    num = 0;
+    if ((kernel_task != current_task()) && (self = proc_self()))
+    {
+        bool user_64;
+        mem->btPID  = proc_pid(self);
+        (void)backtrace_user(&mem->btUser[0], kIOTrackingCallSiteBTs - 1, &num,
+            &user_64);
+        mem->user32 = !user_64;
+        proc_rele(self);
+    }
+    assert(num <= kIOTrackingCallSiteBTs);
+    mem->userCount = num;
+
+    IOTRecursiveLockLock(&queue->lock);
+    queue_enter/*last*/(&queue->sites[0], mem, IOTrackingUser *, link);
+    queue->siteCount++;
+    IOTRecursiveLockUnlock(&queue->lock);
+}
+
+void
+IOTrackingRemoveUser(IOTrackingQueue * queue, IOTrackingUser * mem)
+{
+    if (!mem->link.next) return;
+
+    IOTRecursiveLockLock(&queue->lock);
+    if (mem->link.next)
+    {
+        remque(&mem->link);
+        assert(queue->siteCount);
+        queue->siteCount--;
+    }
+    IOTRecursiveLockUnlock(&queue->lock);
+}
+
+uint64_t gIOTrackingAddTime;
+
+void
 IOTrackingAdd(IOTrackingQueue * queue, IOTracking * mem, size_t size, bool address)
 {
     IOTrackingCallSite * site;
     uint32_t             crc, num;
     uintptr_t            bt[kIOTrackingCallSiteBTs + 1];
+    queue_head_t       * que;
 
     if (mem->site)                    return;
     if (!queue->captureOn)            return;
@@ -444,17 +513,19 @@ IOTrackingAdd(IOTrackingQueue * queue, IOTracking * mem, size_t size, bool addre
 
     assert(!mem->link.next);
 
-    num  = fastbacktrace(&bt[0], kIOTrackingCallSiteBTs + 1);
+    num  = backtrace(&bt[0], kIOTrackingCallSiteBTs + 1);
+    if (!num)                         return;
     num--;
     crc = fasthash32(&bt[1], num * sizeof(bt[0]), 0x04C11DB7);
 
     IOTRecursiveLockLock(&queue->lock);
-    queue_iterate(&queue->sites, site, IOTrackingCallSite *, link)
+    que = &queue->sites[crc % queue->numSiteQs];
+    queue_iterate(que, site, IOTrackingCallSite *, link)
     {
         if (crc == site->crc) break;
     }
 
-    if (queue_end(&queue->sites, (queue_entry_t) site))
+    if (queue_end(que, (queue_entry_t) site))
     {
         site = (typeof(site)) kalloc(sizeof(IOTrackingCallSite));
 
@@ -462,26 +533,26 @@ IOTrackingAdd(IOTrackingQueue * queue, IOTracking * mem, size_t size, bool addre
         site->addresses  = (IOTracking *) &site->instances;
         site->queue      = queue;
         site->crc        = crc;
-        site->info.count = 0;
-        memset(&site->info.size[0], 0, sizeof(site->info.size));
-        bcopy(&bt[1], &site->info.bt[0], num * sizeof(site->info.bt[0]));
+        site->count      = 0;
+        memset(&site->size[0], 0, sizeof(site->size));
+        bcopy(&bt[1], &site->bt[0], num * sizeof(site->bt[0]));
         assert(num <= kIOTrackingCallSiteBTs);
-        bzero(&site->info.bt[num], (kIOTrackingCallSiteBTs - num) * sizeof(site->info.bt[0]));
+        bzero(&site->bt[num], (kIOTrackingCallSiteBTs - num) * sizeof(site->bt[0]));
 
-        queue_enter_first(&queue->sites, site, IOTrackingCallSite *, link);
+        queue_enter_first(que, site, IOTrackingCallSite *, link);
         queue->siteCount++;
     }
 
     if (address)
     {
-        queue_enter/*last*/(&site->instances, mem, IOTrackingCallSite *, link);
+        queue_enter/*last*/(&site->instances, mem, IOTracking *, link);
         if (queue_end(&site->instances, (queue_entry_t)site->addresses)) site->addresses = mem;
     }
-    else queue_enter_first(&site->instances, mem, IOTrackingCallSite *, link);
+    else queue_enter_first(&site->instances, mem, IOTracking *, link);
 
-    mem->site = site;
-    site->info.size[0] += size;
-    site->info.count++;
+    mem->site      = site;
+    site->size[0] += size;
+    site->count++;
 
     IOTRecursiveLockUnlock(&queue->lock);
 }
@@ -494,26 +565,28 @@ IOTrackingRemove(IOTrackingQueue * queue, IOTracking * mem, size_t size)
     if (!mem->link.next) return;
 
     IOTRecursiveLockLock(&queue->lock);
-
-    assert(mem->site);
-
-    if (mem == mem->site->addresses) mem->site->addresses = (IOTracking *) queue_next(&mem->link);
-    remque(&mem->link);
-
-    assert(mem->site->info.count);
-    mem->site->info.count--;
-    assert(mem->site->info.size[0] >= size);
-    mem->site->info.size[0] -= size;
-    if (!mem->site->info.count)
+    if (mem->link.next)
     {
-        assert(queue_empty(&mem->site->instances));
-        assert(!mem->site->info.size[0]);
-        assert(!mem->site->info.size[1]);
+        assert(mem->site);
 
-        remque(&mem->site->link);
-        assert(queue->siteCount);
-        queue->siteCount--;
-        kfree(mem->site, sizeof(IOTrackingCallSite));
+        if (mem == mem->site->addresses) mem->site->addresses = (IOTracking *) queue_next(&mem->link);
+        remque(&mem->link);
+
+        assert(mem->site->count);
+        mem->site->count--;
+        assert(mem->site->size[0] >= size);
+        mem->site->size[0] -= size;
+        if (!mem->site->count)
+        {
+            assert(queue_empty(&mem->site->instances));
+            assert(!mem->site->size[0]);
+            assert(!mem->site->size[1]);
+
+            remque(&mem->site->link);
+            assert(queue->siteCount);
+            queue->siteCount--;
+            kfree(mem->site, sizeof(IOTrackingCallSite));
+        }
     }
     IOTRecursiveLockUnlock(&queue->lock);
 }
@@ -545,26 +618,30 @@ IOTrackingFree(IOTrackingQueue * queue, uintptr_t address, size_t size)
 {
     IOTrackingCallSite * site;
     IOTrackingAddress  * tracking;
+    uint32_t             idx;
     bool                 done;
 
     address = ~address;
     IOTRecursiveLockLock(&queue->lock);
     done = false;
-    queue_iterate(&queue->sites, site, IOTrackingCallSite *, link)
+    for (idx = 0; idx < queue->numSiteQs; idx++)
     {
-        for (tracking = (IOTrackingAddress *) site->addresses; 
-                !done && !queue_end(&site->instances, (queue_entry_t) tracking);
-                tracking = (IOTrackingAddress *) queue_next(&tracking->tracking.link))
+        queue_iterate(&queue->sites[idx], site, IOTrackingCallSite *, link)
         {
-            if ((done = (address == tracking->address)))
+            for (tracking = (IOTrackingAddress *) site->addresses;
+                    !done && !queue_end(&site->instances, &tracking->tracking.link);
+                    tracking = (IOTrackingAddress *) queue_next(&tracking->tracking.link))
             {
-                IOTrackingRemove(queue, &tracking->tracking, size);
-                kfree(tracking, sizeof(IOTrackingAddress));
+                if ((done = (address == tracking->address)))
+                {
+                    IOTrackingRemove(queue, &tracking->tracking, size);
+                    kfree(tracking, sizeof(IOTrackingAddress));
+                }
             }
+            if (done) break;
         }
         if (done) break;
     }
-
     IOTRecursiveLockUnlock(&queue->lock);
 }
 
@@ -577,8 +654,8 @@ IOTrackingAccumSize(IOTrackingQueue * queue, IOTracking * mem, size_t size)
     if (mem->link.next)
     {
         assert(mem->site);
-        assert((size > 0) || (mem->site->info.size[1] >= -size));
-        mem->site->info.size[1] += size;    
+        assert((size > 0) || (mem->site->size[1] >= -size));
+        mem->site->size[1] += size;
     };
     IOTRecursiveLockUnlock(&queue->lock);
 }
@@ -589,30 +666,42 @@ void
 IOTrackingReset(IOTrackingQueue * queue)
 {
     IOTrackingCallSite * site;
+    IOTrackingUser     * user;
     IOTracking         * tracking;
     IOTrackingAddress  * trackingAddress;
+    uint32_t             idx;
     bool                 addresses;
 
     IOTRecursiveLockLock(&queue->lock);
-    while (!queue_empty(&queue->sites))
+    for (idx = 0; idx < queue->numSiteQs; idx++)
     {
-        queue_remove_first(&queue->sites, site, IOTrackingCallSite *, link);
-        addresses = false;
-        while (!queue_empty(&site->instances))
+        while (!queue_empty(&queue->sites[idx]))
         {
-            queue_remove_first(&site->instances, tracking, IOTracking *, link);
-            tracking->link.next = 0;
-            if (tracking == site->addresses) addresses = true;
-            if (addresses)
+            if (kIOTrackingQueueTypeMap & queue->type)
             {
-                trackingAddress = (typeof(trackingAddress)) tracking;
-                if (kTrackingAddressFlagAllocated & IOTrackingAddressFlags(trackingAddress))
+                queue_remove_first(&queue->sites[idx], user, IOTrackingUser *, link);
+                user->link.next = user->link.prev = NULL;
+            }
+            else
+            {
+                queue_remove_first(&queue->sites[idx], site, IOTrackingCallSite *, link);
+                addresses = false;
+                while (!queue_empty(&site->instances))
                 {
-		    kfree(tracking, sizeof(IOTrackingAddress));
-		}
-	    }
+                    queue_remove_first(&site->instances, tracking, IOTracking *, link);
+                    if (tracking == site->addresses) addresses = true;
+                    if (addresses)
+                    {
+                        trackingAddress = (typeof(trackingAddress)) tracking;
+                        if (kTrackingAddressFlagAllocated & IOTrackingAddressFlags(trackingAddress))
+                        {
+                            kfree(tracking, sizeof(IOTrackingAddress));
+                        }
+                    }
+                }
+                kfree(site, sizeof(IOTrackingCallSite));
+            }
         }
-        kfree(site, sizeof(IOTrackingCallSite));
     }
     queue->siteCount = 0;
     IOTRecursiveLockUnlock(&queue->lock);
@@ -642,7 +731,7 @@ IOTrackingAddressCompare(const void * left, const void * right)
     uintptr_t    inst, laddr, raddr;
 
     inst = ((typeof(inst) *) left)[0];
-    instance = (typeof(instance)) (inst & ~kInstanceFlags);
+    instance = (typeof(instance)) INSTANCE_GET(inst);
     if (kInstanceFlagAddress & inst) laddr = ~((IOTrackingAddress *)instance)->address;
     else                             laddr = (uintptr_t) (instance + 1);
 
@@ -652,6 +741,42 @@ IOTrackingAddressCompare(const void * left, const void * right)
     else                             raddr = (uintptr_t) (instance + 1);
 
     return ((laddr > raddr) ? 1 : ((laddr == raddr) ? 0 : -1));
+}
+
+
+static int
+IOTrackingZoneElementCompare(const void * left, const void * right)
+{
+    uintptr_t    inst, laddr, raddr;
+
+    inst = ((typeof(inst) *) left)[0];
+    laddr = INSTANCE_PUT(inst);
+    inst = ((typeof(inst) *) right)[0];
+    raddr = INSTANCE_PUT(inst);
+
+    return ((laddr > raddr) ? 1 : ((laddr == raddr) ? 0 : -1));
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+static void
+CopyOutKernelBacktrace(IOTrackingCallSite * site, IOTrackingCallSiteInfo * siteInfo)
+{
+    uint32_t j;
+    mach_vm_address_t bt, btEntry;
+
+    btEntry = site->queue->btEntry;
+    for (j = 0; j < kIOTrackingCallSiteBTs; j++)
+    {
+        bt = site->bt[j];
+        if (btEntry
+         && (!bt || (j == (kIOTrackingCallSiteBTs - 1))))
+        {
+            bt = btEntry;
+            btEntry = 0;
+        }
+        siteInfo->bt[0][j] = VM_KERNEL_UNSLIDE(bt);
+    }
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -664,39 +789,51 @@ IOTrackingLeakScan(void * refcon)
     IOTracking         * instance;
     uint64_t             vaddr, vincr;
     ppnum_t              ppn;
-    uintptr_t            ptr, addr, inst;
+    uintptr_t            ptr, addr, vphysaddr, inst;
     size_t               size;
     uint32_t             baseIdx, lim, ptrIdx, count;
     boolean_t            is;
-
-//    if (cpu_number()) return;
+    AbsoluteTime         deadline;
 
     instances = ref->instances;
     count     = ref->count;
+    size      = ref->zoneSize;
 
-    for (vaddr = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
-         vaddr < VM_MAX_KERNEL_ADDRESS;
-         ml_set_interrupts_enabled(is), vaddr += vincr)
+    for (deadline = 0, vaddr = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
+         ;
+         vaddr += vincr)
     {
-#if !defined(__LP64__)
-        thread_block(NULL);
-#endif
-        is = ml_set_interrupts_enabled(false);
+        if ((mach_absolute_time() > deadline) || (vaddr >= VM_MAX_KERNEL_ADDRESS))
+        {
+            if (deadline)
+            {
+                ml_set_interrupts_enabled(is);
+                IODelay(10);
+            }
+            if (vaddr >= VM_MAX_KERNEL_ADDRESS) break;
+            is = ml_set_interrupts_enabled(false);
+            clock_interval_to_deadline(10, kMillisecondScale, &deadline);
+        }
 
-        ppn = kernel_pmap_present_mapping(vaddr, &vincr);
+        ppn = kernel_pmap_present_mapping(vaddr, &vincr, &vphysaddr);
         // check noencrypt to avoid VM structs (map entries) with pointers
-        if (ppn && (!pmap_valid_page(ppn) || pmap_is_noencrypt(ppn))) ppn = 0;
+        if (ppn && (!pmap_valid_page(ppn) || (!ref->zoneSize && pmap_is_noencrypt(ppn)))) ppn = 0;
         if (!ppn) continue;
 
         for (ptrIdx = 0; ptrIdx < (page_size / sizeof(uintptr_t)); ptrIdx++)
         {
-            ptr = ((uintptr_t *)vaddr)[ptrIdx];
+            ptr = ((uintptr_t *)vphysaddr)[ptrIdx];
 
             for (lim = count, baseIdx = 0; lim; lim >>= 1)
             {
                 inst = instances[baseIdx + (lim >> 1)];
-                instance = (typeof(instance)) (inst & ~kInstanceFlags);
-                if (kInstanceFlagAddress & inst)
+                instance = (typeof(instance)) INSTANCE_GET(inst);
+
+                if (ref->zoneSize)
+                {
+                    addr = INSTANCE_PUT(inst) & ~kInstanceFlags;
+                }
+                else if (kInstanceFlagAddress & inst)
                 {
                     addr = ~((IOTrackingAddress *)instance)->address;
                     size = ((IOTrackingAddress *)instance)->size;
@@ -706,7 +843,10 @@ IOTrackingLeakScan(void * refcon)
                     addr = (uintptr_t) (instance + 1);
                     size = instance->site->queue->allocSize;
                 }
-                if ((ptr >= addr) && (ptr < (addr + size)))
+                if ((ptr >= addr) && (ptr < (addr + size))
+
+                && (((vaddr + ptrIdx * sizeof(uintptr_t)) < addr)
+                  || ((vaddr + ptrIdx * sizeof(uintptr_t)) >= (addr + size))))
                 {
                     if (!(kInstanceFlagReferenced & inst))
                     {
@@ -725,9 +865,62 @@ IOTrackingLeakScan(void * refcon)
                 // else move left
             }
         }
-        ref->bytes += page_size;    
+        ref->bytes += page_size;
     }
 }
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+extern "C" void
+zone_leaks_scan(uintptr_t * instances, uint32_t count, uint32_t zoneSize, uint32_t * found)
+{
+    IOTrackingLeaksRef       ref;
+    IOTrackingCallSiteInfo   siteInfo;
+    uint32_t                 idx;
+
+    qsort(instances, count, sizeof(*instances), &IOTrackingZoneElementCompare);
+
+    bzero(&siteInfo, sizeof(siteInfo));
+    bzero(&ref, sizeof(ref));
+    ref.instances = instances;
+    ref.count = count;
+    ref.zoneSize = zoneSize;
+
+    for (idx = 0; idx < 2; idx++)
+    {
+        ref.bytes = 0;
+        IOTrackingLeakScan(&ref);
+        IOLog("leaks(%d) scanned %ld MB, instance count %d, found %d\n", idx, ref.bytes / 1024 / 1024, count, ref.found);
+        if (count <= ref.found) break;
+    }
+
+    *found = ref.found;
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+static void
+ZoneSiteProc(void * refCon, uint32_t siteCount, uint32_t zoneSize,
+             uintptr_t * backtrace, uint32_t btCount)
+{
+    IOTrackingCallSiteInfo siteInfo;
+    OSData               * leakData;
+    uint32_t               idx;
+
+    leakData = (typeof(leakData)) refCon;
+
+    bzero(&siteInfo, sizeof(siteInfo));
+    siteInfo.count   = siteCount;
+    siteInfo.size[0] = zoneSize * siteCount;
+
+    for (idx = 0; (idx < btCount) && (idx < kIOTrackingCallSiteBTs); idx++)
+    {
+        siteInfo.bt[0][idx] = VM_KERNEL_UNSLIDE(backtrace[idx]);
+    }
+
+    leakData->appendBytes(&siteInfo, sizeof(siteInfo));
+}
+
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -735,7 +928,7 @@ static OSData *
 IOTrackingLeaks(OSData * data)
 {
     IOTrackingLeaksRef       ref;
-    IOTrackingCallSiteInfo   unslideInfo;
+    IOTrackingCallSiteInfo   siteInfo;
     IOTrackingCallSite     * site;
     OSData                 * leakData;
     uintptr_t              * instances;
@@ -747,13 +940,17 @@ IOTrackingLeaks(OSData * data)
     count = (data->getLength() / sizeof(*instances));
     qsort(instances, count, sizeof(*instances), &IOTrackingAddressCompare);
     
+    bzero(&siteInfo, sizeof(siteInfo));
     bzero(&ref, sizeof(ref));
     ref.instances = instances;
     ref.count = count;
-
-    IOTrackingLeakScan(&ref);
-    
-    IOLog("leaks scanned %ld MB, instance count %d, found %d\n", ref.bytes / 1024 / 1024, count, ref.found);
+    for (idx = 0; idx < 2; idx++)
+    {
+        ref.bytes = 0;
+        IOTrackingLeakScan(&ref);
+        IOLog("leaks(%d) scanned %ld MB, instance count %d, found %d\n", idx, ref.bytes / 1024 / 1024, count, ref.found);
+        if (count <= ref.found) break;
+    }
 
     leakData = OSData::withCapacity(128 * sizeof(IOTrackingCallSiteInfo));
 
@@ -761,7 +958,7 @@ IOTrackingLeaks(OSData * data)
     {
         inst = instances[idx];
         if (kInstanceFlagReferenced & inst) continue;
-        instance = (typeof(instance)) (inst & ~kInstanceFlags);
+        instance = (typeof(instance)) INSTANCE_GET(inst);
         site = instance->site;
 	instances[numSites] = (uintptr_t) site;
 	numSites++;
@@ -780,14 +977,11 @@ IOTrackingLeaks(OSData * data)
 		instances[dups] = 0;
 	    }
 	}
-        unslideInfo.count   = siteCount;
-        unslideInfo.size[0] = (site->info.size[0] * site->info.count) / siteCount;
-        unslideInfo.size[1] = (site->info.size[1] * site->info.count) / siteCount;;
-        for (uint32_t j = 0; j < kIOTrackingCallSiteBTs; j++)
-        {
-            unslideInfo.bt[j] = VM_KERNEL_UNSLIDE(site->info.bt[j]);
-        }
-        leakData->appendBytes(&unslideInfo, sizeof(unslideInfo));
+        siteInfo.count   = siteCount;
+        siteInfo.size[0] = (site->size[0] * site->count) / siteCount;
+        siteInfo.size[1] = (site->size[1] * site->count) / siteCount;;
+        CopyOutKernelBacktrace(site, &siteInfo);
+        leakData->appendBytes(&siteInfo, sizeof(siteInfo));
     }
     data->release();
 
@@ -829,7 +1023,7 @@ SkipName(uint32_t options, const char * name, size_t namesLen, const char * name
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 kern_return_t
-IOTrackingDebug(uint32_t selector, uint32_t options,
+IOTrackingDebug(uint32_t selector, uint32_t options, uint64_t value,
                 const char * names, size_t namesLen, 
                 size_t size, OSObject ** result)
 {
@@ -842,22 +1036,38 @@ IOTrackingDebug(uint32_t selector, uint32_t options,
 
 #if IOTRACKING
 
+    kern_return_t            kr;
     IOTrackingQueue        * queue;
     IOTracking             * instance;
     IOTrackingCallSite     * site;
-    IOTrackingCallSiteInfo * siteInfos;
-    IOTrackingCallSiteInfo * siteInfo;
-    bool                     addresses;
-    uint32_t                 num, idx;
+    IOTrackingCallSiteInfo   siteInfo;
+    IOTrackingUser         * user;
+    task_t                   mapTask;
+    mach_vm_address_t        mapAddress;
+    mach_vm_size_t           mapSize;
+    uint32_t                 num, idx, qIdx;
     uintptr_t                instFlags;
+    proc_t                   proc;
+    bool                     addresses;
 
-    if (!(kIOTracking & gIOKitDebug)) return (kIOReturnNotReady);
     ret = kIOReturnNotFound;
+    proc = NULL;
+    if (kIOTrackingGetMappings == selector)
+    {
+	if (value != -1ULL)
+	{
+	    proc = proc_find(value);
+	    if (!proc) return (kIOReturnNotFound);
+	}
+    }
 
+    bzero(&siteInfo, sizeof(siteInfo));
     lck_mtx_lock(gIOTrackingLock);
     queue_iterate(&gIOTrackingQ, queue, IOTrackingQueue *, link)
     {
         if (SkipName(options, queue->name, namesLen, names)) continue;
+
+	if (!(kIOTracking & gIOKitDebug) && (kIOTrackingQueueTypeAlloc & queue->type)) continue;
 
         switch (selector)
         {
@@ -885,20 +1095,23 @@ IOTrackingDebug(uint32_t selector, uint32_t options,
 
             case kIOTrackingLeaks:
             {
-                if (!queue->isAlloc) break;
+                if (!(kIOTrackingQueueTypeAlloc & queue->type)) break;
 
                 if (!data) data = OSData::withCapacity(1024 * sizeof(uintptr_t));
 
                 IOTRecursiveLockLock(&queue->lock);
-                queue_iterate(&queue->sites, site, IOTrackingCallSite *, link)
+                for (idx = 0; idx < queue->numSiteQs; idx++)
                 {
-                    addresses = false;
-                    queue_iterate(&site->instances, instance, IOTracking *, link)
+                    queue_iterate(&queue->sites[idx], site, IOTrackingCallSite *, link)
                     {
-                        if (instance == site->addresses) addresses = true;
-                        instFlags = (typeof(instFlags)) instance; 
-                        if (addresses) instFlags |= kInstanceFlagAddress;
-                        data->appendBytes(&instFlags, sizeof(instFlags));
+                        addresses = false;
+                        queue_iterate(&site->instances, instance, IOTracking *, link)
+                        {
+                            if (instance == site->addresses) addresses = true;
+                            instFlags = (typeof(instFlags)) instance;
+                            if (addresses) instFlags |= kInstanceFlagAddress;
+                            data->appendBytes(&instFlags, sizeof(instFlags));
+                        }
                     }
                 }
                 // queue is locked
@@ -907,35 +1120,84 @@ IOTrackingDebug(uint32_t selector, uint32_t options,
             }
 
             case kIOTrackingGetTracking:
-            case kIOTrackingPrintTracking:
             {
+                if (kIOTrackingQueueTypeMap & queue->type) break;
+
                 if (!data) data = OSData::withCapacity(128 * sizeof(IOTrackingCallSiteInfo));
 
                 IOTRecursiveLockLock(&queue->lock);
                 num = queue->siteCount;
                 idx = 0;
-                queue_iterate(&queue->sites, site, IOTrackingCallSite *, link)
+                for (qIdx = 0; qIdx < queue->numSiteQs; qIdx++)
                 {
-                    assert(idx < num);
-                    idx++;
-
-                    if (size && ((site->info.size[0] + site->info.size[1]) < size)) continue;
-
-                    IOTrackingCallSiteInfo unslideInfo;
-                    unslideInfo.count = site->info.count;
-                    memcpy(&unslideInfo.size[0], &site->info.size[0], sizeof(unslideInfo.size));
-
-                    for (uint32_t j = 0; j < kIOTrackingCallSiteBTs; j++)
+                    queue_iterate(&queue->sites[qIdx], site, IOTrackingCallSite *, link)
                     {
-                        unslideInfo.bt[j] = VM_KERNEL_UNSLIDE(site->info.bt[j]);
+                        assert(idx < num);
+                        idx++;
+
+                        if (size && ((site->size[0] + site->size[1]) < size)) continue;
+
+                        siteInfo.count   = site->count;
+                        siteInfo.size[0] = site->size[0];
+                        siteInfo.size[1] = site->size[1];
+
+                        CopyOutKernelBacktrace(site, &siteInfo);
+                        data->appendBytes(&siteInfo, sizeof(siteInfo));
                     }
-                    data->appendBytes(&unslideInfo, sizeof(unslideInfo));
                 }
                 assert(idx == num);
                 IOTRecursiveLockUnlock(&queue->lock);
                 ret = kIOReturnSuccess;
                 break;
             }
+
+            case kIOTrackingGetMappings:
+            {
+                if (!(kIOTrackingQueueTypeMap & queue->type)) break;
+                if (!data) data = OSData::withCapacity(page_size);
+
+                IOTRecursiveLockLock(&queue->lock);
+                num = queue->siteCount;
+                idx = 0;
+                for (qIdx = 0; qIdx < queue->numSiteQs; qIdx++)
+                {
+                    queue_iterate(&queue->sites[qIdx], user, IOTrackingUser *, link)
+                    {
+                        assert(idx < num);
+                        idx++;
+
+                        kr = IOMemoryMapTracking(user, &mapTask, &mapAddress, &mapSize);
+                        if (kIOReturnSuccess != kr)     continue;
+                        if (proc && (mapTask != proc_task(proc))) continue;
+                        if (size && (mapSize < size))   continue;
+
+                        siteInfo.count      = 1;
+                        siteInfo.size[0]    = mapSize;
+                        siteInfo.address    = mapAddress;
+                        siteInfo.addressPID = task_pid(mapTask);
+                        siteInfo.btPID      = user->btPID;
+
+                        for (uint32_t j = 0; j < kIOTrackingCallSiteBTs; j++)
+                        {
+                            siteInfo.bt[0][j] = VM_KERNEL_UNSLIDE(user->bt[j]);
+                        }
+                        uint32_t * bt32 = (typeof(bt32)) &user->btUser[0];
+                        uint64_t * bt64 = (typeof(bt64)) ((void *) &user->btUser[0]);
+                        for (uint32_t j = 0; j < kIOTrackingCallSiteBTs; j++)
+                        {
+                            if (j >= user->userCount) siteInfo.bt[1][j] = 0;
+                            else if (user->user32)    siteInfo.bt[1][j] = bt32[j];
+                            else                      siteInfo.bt[1][j] = bt64[j];
+                        }
+                        data->appendBytes(&siteInfo, sizeof(siteInfo));
+                    }
+                }
+                assert(idx == num);
+                IOTRecursiveLockUnlock(&queue->lock);
+                ret = kIOReturnSuccess;
+                break;
+            }
+
             default:
                 ret = kIOReturnUnsupported;
                 break;
@@ -948,40 +1210,54 @@ IOTrackingDebug(uint32_t selector, uint32_t options,
         queue_iterate(&gIOTrackingQ, queue, IOTrackingQueue *, link)
         {
             if (SkipName(options, queue->name, namesLen, names)) continue;
-            if (!queue->isAlloc)                                 continue;
+            if (!(kIOTrackingQueueTypeAlloc & queue->type))      continue;
             IOTRecursiveLockUnlock(&queue->lock);
         }
     }
 
     lck_mtx_unlock(gIOTrackingLock);
 
-    if (data)
+    if ((kIOTrackingLeaks == selector) && namesLen && names)
     {
-        siteInfos = (typeof(siteInfos)) data->getBytesNoCopy();
-        num = (data->getLength() / sizeof(IOTrackingCallSiteInfo));
-        qsort(siteInfos, num, sizeof(*siteInfos), &IOTrackingCallSiteInfoCompare);
+         const char * scan;
+         const char * next;
+         size_t       sLen;
 
-        if (kIOTrackingPrintTracking == selector)
-        {
-            for (idx = 0; idx < num; idx++)
-            {
-                siteInfo = &siteInfos[idx];
-                printf("\n0x%lx bytes (0x%lx + 0x%lx), %d call%s, [%d]\n",
-                    siteInfo->size[0] + siteInfo->size[1], 
-                    siteInfo->size[0], siteInfo->size[1], 
-                    siteInfo->count, (siteInfo->count != 1) ? "s" : "", idx);
-                uintptr_t * bt = &siteInfo->bt[0];
-                printf("      Backtrace 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx\n", 
-                        bt[0], bt[1], bt[2], bt[3], bt[4], bt[5], bt[6], bt[7], 
-                        bt[8], bt[9], bt[10], bt[11], bt[12], bt[13], bt[14], bt[15]);
-                kmod_dump_log((vm_offset_t *) &bt[0], kIOTrackingCallSiteBTs, FALSE);
-            }
-            data->release();
-            data = 0;
-        }
+         if (!data) data = OSData::withCapacity(4096 * sizeof(uintptr_t));
+
+         // <len><name>...<len><name><0>
+         scan    = names;
+         do
+         {
+             sLen = scan[0];
+             scan++;
+             next = scan + sLen;
+             if (next >= (names + namesLen)) break;
+             kr = zone_leaks(scan, sLen, &ZoneSiteProc, data);
+             if (KERN_SUCCESS == kr)           ret = kIOReturnSuccess;
+             else if (KERN_INVALID_NAME != kr) ret = kIOReturnVMError;
+             scan = next;
+         }
+         while (scan < (names + namesLen));
+    }
+
+    if (data) switch (selector)
+    {
+        case kIOTrackingLeaks:
+        case kIOTrackingGetTracking:
+        case kIOTrackingGetMappings:
+	{
+	    IOTrackingCallSiteInfo * siteInfos;
+	    siteInfos = (typeof(siteInfos)) data->getBytesNoCopy();
+	    num = (data->getLength() / sizeof(*siteInfos));
+	    qsort(siteInfos, num, sizeof(*siteInfos), &IOTrackingCallSiteInfoCompare);
+	    break;
+	}
+	default: assert(false); break;
     }
 
     *result = data;
+    if (proc) proc_rele(proc);
 
 #endif /* IOTRACKING */
 
@@ -1044,7 +1320,7 @@ IOReturn IOKitDiagnosticsClient::externalMethod(uint32_t selector, IOExternalMet
     namesLen = args->structureInputSize - sizeof(IOKitDiagnosticsParameters);
     if (namesLen) names = (typeof(names))(params + 1);
 
-    ret = IOTrackingDebug(selector, params->options, names, namesLen, params->size, &result);
+    ret = IOTrackingDebug(selector, params->options, params->value, names, namesLen, params->size, &result);
 
     if ((kIOReturnSuccess == ret) && args->structureVariableOutputData) *args->structureVariableOutputData = result;
     else if (result) result->release();

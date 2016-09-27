@@ -68,16 +68,43 @@ enum {
 #define CP_MAX_WRAPPEDKEYSIZE     128	/* The size of the largest allowed key */
 
 /* lock events from AppleKeyStore */
-#define CP_LOCKED_STATE           0 	/* Device is locked */
-#define CP_UNLOCKED_STATE         1 	/* Device is unlocked */
+enum {
+	CP_ACTION_LOCKED	= 0,
+	CP_ACTION_UNLOCKED	= 1,
+};
+/*
+ * Ideally, cp_key_store_action_t would be an enum, but we cannot fix
+ * that until AppleKeyStore is updated.
+ */
+typedef int cp_key_store_action_t;
 
-#define CP_MAX_STATE			  1 	/* uint8_t ; maximum # of states is 255 */
+/*
+ * It was once the case (and it may still be the case) where the lock
+ * state got conflated with the possible actions/events that
+ * AppleKeyStore can send.  For that reason, the locked states below
+ * should numerically match their corresponding actions above.
+ */
+typedef unsigned char cp_lock_state_t;
+enum {
+	CP_LOCKED_STATE		= 0,
+	CP_UNLOCKED_STATE	= 1,
+};
+
+typedef uint32_t cp_key_class_t;
+typedef uint32_t cp_key_os_version_t;
+typedef uint16_t cp_key_revision_t;
+typedef uint64_t cp_crypto_id_t;
 
 typedef struct cprotect *cprotect_t;
 typedef struct cp_wrap_func *cp_wrap_func_t;
 typedef struct cpx *cpx_t;
 
-/* Structures passed between HFS and AKS kext */
+typedef struct cp_key {
+	uint8_t len;
+	void *key;
+} cp_key_t;
+
+/* Interface to AKS kext */
 typedef struct {
 	void     *key;
 	unsigned key_len;
@@ -91,15 +118,16 @@ typedef cp_raw_key_s* cp_raw_key_t;
 typedef struct {
 	void     *key;
 	unsigned key_len;
-	uint32_t dp_class;
+	cp_key_class_t dp_class;
 } cp_wrapped_key_s;
 
 typedef cp_wrapped_key_s* cp_wrapped_key_t;
 
-typedef uint16_t cp_key_revision_t;
-
 typedef struct {
-	ino64_t				inode;
+	union {
+		ino64_t			inode;
+		cp_crypto_id_t	crypto_id;
+	};
 	uint32_t			volume;
 	pid_t				pid;
 	uid_t				uid;
@@ -110,11 +138,10 @@ typedef cp_cred_s* cp_cred_t;
 
 /* The wrappers are invoked on the AKS kext */
 typedef int unwrapper_t(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in, cp_raw_key_t key_out);
-typedef int rewrapper_t(cp_cred_t access, uint32_t dp_class, const cp_wrapped_key_t wrapped_key_in, cp_wrapped_key_t wrapped_key_out);
-typedef int new_key_t(cp_cred_t access, uint32_t dp_class, cp_raw_key_t key_out, cp_wrapped_key_t wrapped_key_out);
+typedef int rewrapper_t(cp_cred_t access, cp_key_class_t dp_class, const cp_wrapped_key_t wrapped_key_in, cp_wrapped_key_t wrapped_key_out);
+typedef int new_key_t(cp_cred_t access, cp_key_class_t dp_class, cp_raw_key_t key_out, cp_wrapped_key_t wrapped_key_out);
 typedef int invalidater_t(cp_cred_t access); /* invalidates keys */
 typedef int backup_key_t(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in, cp_wrapped_key_t wrapped_key_out);
-
 
 /* 
  * Flags for Interaction between AKS / Kernel 
@@ -129,16 +156,26 @@ typedef int backup_key_t(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in
  * without requiring kext changes.
  */
 cpx_t cpx_alloc(size_t key_size);
+void cpx_init(cpx_t, size_t key_len);
 void cpx_free(cpx_t);
 __attribute__((const)) size_t cpx_size(size_t key_size);
 __attribute__((pure)) bool cpx_is_sep_wrapped_key(const struct cpx *);
 void cpx_set_is_sep_wrapped_key(struct cpx *, bool);
 __attribute__((pure)) bool cpx_use_offset_for_iv(const struct cpx *);
 void cpx_set_use_offset_for_iv(struct cpx *, bool);
+__attribute__((pure)) bool cpx_synthetic_offset_for_iv(const struct cpx *);
+void cpx_set_synthetic_offset_for_iv(struct cpx *, bool);
 __attribute__((pure)) uint16_t cpx_key_len(const struct cpx *);
 void cpx_set_key_len(struct cpx *, uint16_t key_len);
 __attribute__((pure)) void *cpx_key(const struct cpx *);
 aes_encrypt_ctx *cpx_iv_aes_ctx(struct cpx *);
+void cpx_flush(cpx_t cpx);
+bool cpx_can_copy(const struct cpx *src, const struct cpx *dst);
+void cpx_copy(const struct cpx *src, cpx_t dst);
+uint16_t cpx_max_key_len(const struct cpx *cpx);
+bool cpx_has_key(const struct cpx *cpx);
+size_t cpx_sizex(const struct cpx *cpx);
+void cpx_set_aes_iv_key(struct cpx *cpx, void *iv_key);
 
 /* Structure to store pointers for AKS functions */
 struct cp_wrap_func {
@@ -149,41 +186,20 @@ struct cp_wrap_func {
 	backup_key_t	*backup_key;
 };
 
-int cp_key_store_action(int);
+int cp_key_store_action(cp_key_store_action_t);
 int cp_register_wraps(cp_wrap_func_t);
-
-#ifdef BSD_KERNEL_PRIVATE
-
-/*
- * Declarations that are not exported from the kernel but are used by
- * VFS to call into the implementation (i.e. HFS) should be here.
- */
-
-/* Content Protection VNOP Operation flags */
-#define CP_READ_ACCESS            0x1
-#define CP_WRITE_ACCESS           0x2
-
-/*
- * Functions to check the status of a CP and to query
- * the containing filesystem to see if it is supported.
- */
-struct vnode;
-struct hfsmount;
-
-int cp_vnode_getclass(struct vnode *, int *);
-int cp_vnode_setclass(struct vnode *, uint32_t);
-int cp_vnode_transcode(struct vnode * vp, void *key, unsigned *len);
-
-int cp_handle_vnop(struct vnode *, int, int);
-int cp_handle_open(struct vnode *vp, int mode);
-int cp_get_root_major_vers (struct vnode *vp, uint32_t *level);
-int cp_get_default_level (struct vnode *vp, uint32_t *level);
+int cp_rewrap_key(cp_cred_t access, cp_key_class_t dp_class,
+				  const cp_wrapped_key_t wrapped_key_in,
+				  cp_wrapped_key_t wrapped_key_out);
+int cp_new_key(cp_cred_t access, cp_key_class_t dp_class, cp_raw_key_t key_out,
+			   cp_wrapped_key_t wrapped_key_out);
+int cp_unwrap_key(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in,
+				  cp_raw_key_t key_out);
+int cp_get_backup_key(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in,
+					  cp_wrapped_key_t wrapped_key_out);
+cp_key_os_version_t cp_os_version(void);
+// Should be cp_key_class_t but HFS has a conflicting definition
 int cp_is_valid_class (int isdir, int32_t protectionclass);
-int cp_set_trimmed(struct hfsmount *hfsmp);
-int cp_set_rewrapped(struct hfsmount *hfsmp);
-int cp_flop_generation (struct hfsmount *hfsmp);
-
-#endif /* BSD_KERNEL_PRIVATE */
 
 __END_DECLS
 

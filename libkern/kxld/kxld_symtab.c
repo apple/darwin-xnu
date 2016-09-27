@@ -249,7 +249,7 @@ restrict_private_symbols(KXLDSymtab *symtab)
     KXLDSym *sym = NULL;
     const char *name = NULL;
     u_int i = 0;
-
+    
     kxld_symtab_iterator_init(&iter, symtab, kxld_sym_is_exported, FALSE);
     while ((sym = kxld_symtab_iterator_get_next(&iter))) {
         for (i = 0; i < const_array_len(private_symbols); ++i) {
@@ -448,18 +448,20 @@ kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf,
     check(header_offset);
     check(data_offset);
 
-    require_action(sizeof(*symtabhdr) <= header_size - *header_offset, 
+    require_action(sizeof(*symtabhdr) <= header_size - *header_offset,
         finish, rval=KERN_FAILURE);
     symtabhdr = (struct symtab_command *) ((void *) (buf + *header_offset));
     *header_offset += sizeof(*symtabhdr);
     
     /* Initialize the symbol table header */
 
+    // note - this assumes LC_SYMTAB is always before the LC_DYSYMTAB in the
+    // macho header we are processing.
     symtabhdr->cmd = LC_SYMTAB;
     symtabhdr->cmdsize = (uint32_t) sizeof(*symtabhdr);
     symtabhdr->symoff = (uint32_t) *data_offset;
     symtabhdr->strsize = 1; /* strtab start padding */
-    
+
     /* Find the size of the symbol and string tables */
 
     kxld_symtab_iterator_init(&iter, symtab, 
@@ -482,7 +484,6 @@ kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf,
         rval=KERN_FAILURE);
 
     /* Get pointers to the symbol and string tables */
-
     nl = buf + symtabhdr->symoff;
     strtab = (char *) (buf + symtabhdr->stroff);
 
@@ -490,7 +491,6 @@ kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf,
 
     kxld_symtab_iterator_reset(&iter);
     while ((sym = kxld_symtab_iterator_get_next(&iter))) {
-
         KXLD_3264_FUNC(is_32_bit, rval,
             kxld_sym_export_macho_32, kxld_sym_export_macho_64,
             sym, nl, strtab, &stroff, symtabhdr->strsize);
@@ -504,11 +504,35 @@ kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf,
     *data_offset += (symtabhdr->nsyms * nlistsize) + stroff;
 
     *data_offset = (*data_offset + 7) & ~7;
+    // at this point data_offset will be the offset just past the
+    // symbols and strings in the __LINKEDIT data
+    
+
+#if SPLIT_KEXTS_DEBUG
+    {
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 " %p to %p (size %lu) symtabhdr <%s>",
+                 (void *) symtabhdr,
+                 (void *) ((u_char *)symtabhdr + sizeof(*symtabhdr)),
+                 sizeof(*symtabhdr),
+                 __func__);
+      
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 " symtabhdr %p cmdsize %u symoff %u nsyms %u stroff %u strsize %u <%s>",
+                 (void *) symtabhdr,
+                 symtabhdr->cmdsize,
+                 symtabhdr->symoff,
+                 symtabhdr->nsyms,
+                 symtabhdr->stroff,
+                 symtabhdr->strsize,
+                 __func__);
+    }
+#endif
 
     rval = KERN_SUCCESS;
     
 finish:
-    return rval;
+   return rval;
 }
 
 /*******************************************************************************
@@ -559,7 +583,8 @@ kxld_symtab_index_cxx_symbols_by_value(KXLDSymtab *symtab)
         rval = kxld_dict_insert(&symtab->cxx_index, &sym->base_addr, sym);
         require_noerr(rval, finish);
     }
-
+    
+    
     symtab->cxx_index_initialized = TRUE;
     rval = KERN_SUCCESS;
 finish:
@@ -713,4 +738,3 @@ kxld_symtab_iterator_reset(KXLDSymtabIterator *iter)
     check(iter);
     iter->idx = 0;
 }
-

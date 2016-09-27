@@ -17,7 +17,7 @@
 /* An hmac_ctx_t is normally allocated as an array of these. */
 struct cchmac_ctx {
     uint8_t b[8];
-} __attribute__((aligned(8)));
+} CC_ALIGNED(8);
 
 typedef union {
     struct cchmac_ctx *hdr;
@@ -55,30 +55,30 @@ typedef union {
 #define cchmac_nbits(_di_, HC)     ccdigest_nbits(_di_, ((cchmac_ctx_t)(HC)).digest)
 
 void cchmac_init(const struct ccdigest_info *di, cchmac_ctx_t ctx,
-                 unsigned long key_len, const void *key);
+                 size_t key_len, const void *key);
 void cchmac_update(const struct ccdigest_info *di, cchmac_ctx_t ctx,
-                   unsigned long data_len, const void *data);
+                   size_t data_len, const void *data);
 void cchmac_final(const struct ccdigest_info *di, cchmac_ctx_t ctx,
                   unsigned char *mac);
 
-void cchmac(const struct ccdigest_info *di, unsigned long key_len,
-            const void *key, unsigned long data_len, const void *data,
+void cchmac(const struct ccdigest_info *di, size_t key_len,
+            const void *key, size_t data_len, const void *data,
             unsigned char *mac);
 
 /* Test functions */
 
 struct cchmac_test_input {
     const struct ccdigest_info *di;
-    unsigned long key_len;
+    size_t key_len;
     const void *key;
-    unsigned long data_len;
+    size_t data_len;
     const void *data;
-    unsigned long mac_len;
+    size_t mac_len;
     const void *expected_mac;
 };
 
 int cchmac_test(const struct cchmac_test_input *input);
-int cchmac_test_chunks(const struct cchmac_test_input *input, unsigned long chunk_size);
+int cchmac_test_chunks(const struct cchmac_test_input *input, size_t chunk_size);
 
 
 #endif /* _CORECRYPTO_CCHMAC_H_ */

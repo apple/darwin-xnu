@@ -160,11 +160,14 @@ bdevsw_isfree(int index)
 int
 bdevsw_add(int index, struct bdevsw * bsw)
 {
+	lck_mtx_lock_spin(&devsw_lock_list_mtx);
 	index = bdevsw_isfree(index);
 	if (index < 0) {
-		return (-1);
+		index = -1;
+	} else {
+		bdevsw[index] = *bsw;
 	}
-	bdevsw[index] = *bsw;
+	lck_mtx_unlock(&devsw_lock_list_mtx);
 	return (index);
 }
 /*
@@ -180,10 +183,13 @@ bdevsw_remove(int index, struct bdevsw * bsw)
 		return (-1);
 
 	devsw = &bdevsw[index];
+	lck_mtx_lock_spin(&devsw_lock_list_mtx);
 	if ((memcmp((char *)devsw, (char *)bsw, sizeof(struct bdevsw)) != 0)) {
-		return (-1);
+		index = -1;
+	} else {
+		bdevsw[index] = nobdev;
 	}
-	bdevsw[index] = nobdev;
+	lck_mtx_unlock(&devsw_lock_list_mtx);
 	return (index);
 }
 
@@ -240,11 +246,14 @@ cdevsw_isfree(int index)
 int
 cdevsw_add(int index, struct cdevsw * csw)
 {
+	lck_mtx_lock_spin(&devsw_lock_list_mtx);
 	index = cdevsw_isfree(index);
 	if (index < 0) {
-		return (-1);
+		index = -1;
+	} else {
+		cdevsw[index] = *csw;
 	}
-	cdevsw[index] = *csw;
+	lck_mtx_unlock(&devsw_lock_list_mtx);
 	return (index);
 }
 /*
@@ -260,11 +269,14 @@ cdevsw_remove(int index, struct cdevsw * csw)
 		return (-1);
 
 	devsw = &cdevsw[index];
+	lck_mtx_lock_spin(&devsw_lock_list_mtx);
 	if ((memcmp((char *)devsw, (char *)csw, sizeof(struct cdevsw)) != 0)) {
-		return (-1);
+		index = -1;
+	} else {
+		cdevsw[index] = nocdev;
+		cdevsw_flags[index] = 0;
 	}
-	cdevsw[index] = nocdev;
-	cdevsw_flags[index] = 0;
+	lck_mtx_unlock(&devsw_lock_list_mtx);
 	return (index);
 }
 

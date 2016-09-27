@@ -1,0 +1,87 @@
+.\" Copyright (c) 2014 Theo de Raadt
+.\" Copyright (c) 2015 Apple Inc. All rights reserved.
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd October 2 2015
+.Dt GETENTROPY 2
+.Os
+.Sh NAME
+.Nm getentropy
+.Nd get entropy
+.Sh SYNOPSIS
+.In sys/random.h
+.Ft int
+.Fn getentropy "void *buf" "size_t buflen"
+.Sh DESCRIPTION
+.Fn getentropy
+fills a buffer with random data, which can be used
+as input for process-context pseudorandom generators like
+.Xr arc4random 3 .
+.Pp
+The maximum buffer size permitted is 256 bytes.
+If
+.Fa buflen
+exceeds this, an error of
+.Er EIO
+will be indicated.
+.Pp
+.Fn getentropy
+should be used as a replacement for
+.Xr random 4
+when random data derived directly from the kernel random byte generator is required.
+Unlike the
+.Xr random 4
+pseudo-devices, it is not vulnerable to file descriptor exhaustion attacks
+and is available when sandboxed or in a chroot, making it more reliable for security-critical applications.
+.Pp
+However, it should be noted that
+.Fn getentropy
+is primarily intended for use in the construction and seeding of userspace PRNGs like
+.Xr arc4random 3
+or
+.Xr CC_crypto 3 .
+Clients who simply require random data should use
+.Xr arc4random 3 ,
+.Fn CCRandomGenerateBytes
+from
+.Xr CC_crypto 3 ,
+or
+.Fn SecRandomCopyBytes
+from the Security framework instead of
+.Fn getentropy
+or
+.Xr random 4
+.Sh RETURN VALUES
+.Rv -std
+.Sh ERRORS
+.Fn getentropy
+will succeed unless:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The
+.Fa buf
+parameter points to an
+invalid address.
+.It Bq Er EIO
+Too many bytes requested, or some other fatal error occurred.
+.El
+.Sh SEE ALSO
+.Xr arc4random 3
+.Xr CC_crypto 3
+.Xr random 4
+.Sh HISTORY
+The
+.Fn getentropy
+function appeared in
+OSX 10.12

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -422,11 +422,44 @@ nd6_llinfo_refresh(struct rtentry *rt)
 	if ((ln->ln_state > ND6_LLINFO_INCOMPLETE) &&
 	    (ln->ln_state < ND6_LLINFO_PROBE)) {
 		if (ln->ln_expire > timenow) {
-			ln->ln_expire = timenow;
-			ln->ln_state = ND6_LLINFO_PROBE;
+			ln_setexpire(ln, timenow);
+			ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_PROBE);
 		}
 	}
 	return;
+}
+
+const char *
+ndcache_state2str(short ndp_state)
+{
+	const char *ndp_state_str = "UNKNOWN";
+	switch (ndp_state) {
+	case ND6_LLINFO_PURGE:
+		ndp_state_str = "ND6_LLINFO_PURGE";
+		break;
+	case ND6_LLINFO_NOSTATE:
+		ndp_state_str = "ND6_LLINFO_NOSTATE";
+		break;
+	case ND6_LLINFO_INCOMPLETE:
+		ndp_state_str = "ND6_LLINFO_INCOMPLETE";
+		break;
+	case ND6_LLINFO_REACHABLE:
+		ndp_state_str = "ND6_LLINFO_REACHABLE";
+		break;
+	case ND6_LLINFO_STALE:
+		ndp_state_str = "ND6_LLINFO_STALE";
+		break;
+	case ND6_LLINFO_DELAY:
+		ndp_state_str = "ND6_LLINFO_DELAY";
+		break;
+	case ND6_LLINFO_PROBE:
+		ndp_state_str = "ND6_LLINFO_PROBE";
+		break;
+	default:
+		/* Init'd to UNKNOWN */
+		break;
+	}
+	return 	ndp_state_str;
 }
 
 void
@@ -484,6 +517,7 @@ nd6_ifattach(struct ifnet *ifp)
 	if (!ndi->initialized) {
 		lck_mtx_init(&ndi->lock, nd_if_lock_grp, nd_if_lock_attr);
 		ndi->flags = ND6_IFF_PERFORMNUD;
+		ndi->flags |= ND6_IFF_DAD;
 		ndi->initialized = TRUE;
 	}
 
@@ -659,6 +693,7 @@ nd6_options(union nd_opts *ndopts)
 		case ND_OPT_TARGET_LINKADDR:
 		case ND_OPT_MTU:
 		case ND_OPT_REDIRECTED_HEADER:
+		case ND_OPT_NONCE:
 			if (ndopts->nd_opt_array[nd_opt->nd_opt_type]) {
 				nd6log((LOG_INFO,
 				    "duplicated ND6 option found (type=%d)\n",
@@ -722,12 +757,14 @@ nd6_service(void *arg)
 {
 	struct nd6svc_arg *ap = arg;
 	struct llinfo_nd6 *ln;
-	struct nd_defrouter *dr;
-	struct nd_prefix *pr;
+	struct nd_defrouter *dr = NULL;
+	struct nd_prefix *pr = NULL;
 	struct ifnet *ifp = NULL;
 	struct in6_ifaddr *ia6, *nia6;
 	uint64_t timenow;
 	bool send_nc_failure_kev = false;
+	struct nd_drhead nd_defrouter_tmp;
+	struct nd_defrouter *ndr = NULL;
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	/*
@@ -789,7 +826,7 @@ again:
 		ev_msg.dv[0].data_ptr = &nd6_ndfailure;
 		ev_msg.dv[0].data_length =
 			sizeof(nd6_ndfailure);
-		kev_post_msg(&ev_msg);
+		dlil_post_complete_msg(NULL, &ev_msg);
 	}
 
 	send_nc_failure_kev = false;
@@ -862,9 +899,9 @@ again:
 			 * entries without oustanding route refcnt.
 			 */
 			if (ln->ln_state > ND6_LLINFO_INCOMPLETE)
-				ln->ln_state = ND6_LLINFO_STALE;
+				ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_STALE);
 			else
-				ln->ln_state = ND6_LLINFO_PURGE;
+				ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_PURGE);
 			ln_setexpire(ln, timenow);
 		}
 
@@ -909,7 +946,7 @@ again:
 					    NULL, &dst->sin6_addr, ln);
 				} else {
 					nd6_ns_output(ifp, NULL,
-					    &dst->sin6_addr, ln, 0);
+					    &dst->sin6_addr, ln, NULL);
 				}
 				RT_REMREF(rt);
 				ap->aging++;
@@ -947,7 +984,7 @@ again:
 
 		case ND6_LLINFO_REACHABLE:
 			if (ln->ln_expire != 0) {
-				ln->ln_state = ND6_LLINFO_STALE;
+				ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_STALE);
 				ln_setexpire(ln, timenow + nd6_gctimer);
 				ap->aging_lazy++;
 			}
@@ -975,19 +1012,19 @@ again:
 			if ((flags & ND6_IFF_PERFORMNUD) != 0) {
 				/* We need NUD */
 				ln->ln_asked = 1;
-				ln->ln_state = ND6_LLINFO_PROBE;
+				ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_PROBE);
 				ln_setexpire(ln, timenow + retrans / 1000);
 				RT_ADDREF_LOCKED(rt);
 				RT_UNLOCK(rt);
 				lck_mtx_unlock(rnh_lock);
 				nd6_ns_output(ifp, &dst->sin6_addr,
-				    &dst->sin6_addr, ln, 0);
+				    &dst->sin6_addr, ln, NULL);
 				RT_REMREF(rt);
 				ap->aging++;
 				lck_mtx_lock(rnh_lock);
 				goto again;
 			}
-			ln->ln_state = ND6_LLINFO_STALE; /* XXX */
+			ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_STALE); /* XXX */
 			ln_setexpire(ln, timenow + nd6_gctimer);
 			RT_UNLOCK(rt);
 			ap->aging_lazy++;
@@ -1001,7 +1038,7 @@ again:
 				RT_UNLOCK(rt);
 				lck_mtx_unlock(rnh_lock);
 				nd6_ns_output(ifp, &dst->sin6_addr,
-				    &dst->sin6_addr, ln, 0);
+				    &dst->sin6_addr, ln, NULL);
 				RT_REMREF(rt);
 				ap->aging++;
 				lck_mtx_lock(rnh_lock);
@@ -1041,23 +1078,78 @@ again:
 	lck_mtx_unlock(rnh_lock);
 
 	/* expire default router list */
+	TAILQ_INIT(&nd_defrouter_tmp);
+
 	lck_mtx_lock(nd6_mutex);
-	dr = TAILQ_FIRST(&nd_defrouter);
-	while (dr) {
+	TAILQ_FOREACH_SAFE(dr, &nd_defrouter, dr_entry, ndr) {
 		ap->found++;
 		if (dr->expire != 0 && dr->expire < timenow) {
-			struct nd_defrouter *t;
-			t = TAILQ_NEXT(dr, dr_entry);
-			defrtrlist_del(dr);
-			dr = t;
-			ap->killed++;
+			if (dr->ifp != NULL &&
+			    dr->ifp->if_type == IFT_CELLULAR) {
+				/*
+				 * Some buggy cellular gateways may not send
+				 * periodic router advertisements.
+				 * Or they may send it with router lifetime
+				 * value that is less than the configured Max and Min
+				 * Router Advertisement interval.
+				 * To top that an idle device may not wake up
+				 * when periodic RA is received on cellular
+				 * interface.
+				 * We could send RS on every wake but RFC
+				 * 4861 precludes that.
+				 * The addresses are of infinite lifetimes
+				 * and are tied to the lifetime of the bearer,
+				 * so keeping the addresses and just getting rid of
+				 * the router does not help us anyways.
+				 * If there's network renumbering, a lifetime with
+				 * value 0 would remove the default router.
+				 * Also it will get deleted as part of purge when
+				 * the PDP context is torn down and configured again.
+				 * For that reason, do not expire the default router
+				 * learned on cellular interface. Ever.
+				 */
+				dr->expire += dr->rtlifetime;
+				nd6log2((LOG_DEBUG,
+				    "%s: Refreshing expired default router entry "
+				    "%s for interface %s\n", __func__,
+				    ip6_sprintf(&dr->rtaddr), if_name(dr->ifp)));
+			} else {
+				ap->killed++;
+				/*
+				 * Remove the entry from default router list
+				 * and add it to the temp list.
+				 * nd_defrouter_tmp will be a local temporary
+				 * list as no one else can get the same
+				 * removed entry once it is removed from default
+				 * router list.
+				 * Remove the reference after calling defrtrlist_del
+				 */
+				TAILQ_REMOVE(&nd_defrouter, dr, dr_entry);
+				TAILQ_INSERT_TAIL(&nd_defrouter_tmp, dr, dr_entry);
+			}
 		} else {
 			if (dr->expire == 0 || (dr->stateflags & NDDRF_STATIC))
 				ap->sticky++;
 			else
 				ap->aging_lazy++;
-			dr = TAILQ_NEXT(dr, dr_entry);
 		}
+	}
+
+	/*
+	 * Keep the following  separate from the above
+	 * iteration of nd_defrouter because it's not safe
+	 * to call defrtrlist_del while iterating global default
+	 * router list. Global list has to be traversed
+	 * while holding nd6_mutex throughout.
+	 *
+	 * The following call to defrtrlist_del should be
+	 * safe as we are iterating a local list of
+	 * default routers.
+	 */
+	TAILQ_FOREACH_SAFE(dr, &nd_defrouter_tmp, dr_entry, ndr) {
+		TAILQ_REMOVE(&nd_defrouter_tmp, dr, dr_entry);
+		defrtrlist_del(dr);
+		NDDR_REMREF(dr);        /* remove list reference */
 	}
 	lck_mtx_unlock(nd6_mutex);
 
@@ -1243,21 +1335,18 @@ addrloop:
 	}
 }
 
+
+static int nd6_need_draining = 0;
+
 void
 nd6_drain(void *arg)
 {
 #pragma unused(arg)
-	struct nd6svc_arg sarg;
-
 	nd6log2((LOG_DEBUG, "%s: draining ND6 entries\n", __func__));
 
 	lck_mtx_lock(rnh_lock);
-	bzero(&sarg, sizeof (sarg));
-	sarg.draining = 1;
-	nd6_service(&sarg);
-	nd6log2((LOG_DEBUG, "%s: found %u, aging_lazy %u, aging %u, "
-	    "sticky %u, killed %u\n", __func__, sarg.found, sarg.aging_lazy,
-	    sarg.aging, sarg.sticky, sarg.killed));
+	nd6_need_draining = 1;
+	nd6_sched_timeout(NULL, NULL);	
 	lck_mtx_unlock(rnh_lock);
 }
 
@@ -1275,6 +1364,10 @@ nd6_timeout(void *arg)
 
 	lck_mtx_lock(rnh_lock);
 	bzero(&sarg, sizeof (sarg));
+	if (nd6_need_draining != 0) {
+		nd6_need_draining = 0;
+		sarg.draining = 1;
+	}
 	nd6_service(&sarg);
 	nd6log2((LOG_DEBUG, "%s: found %u, aging_lazy %u, aging %u, "
 	    "sticky %u, killed %u\n", __func__, sarg.found, sarg.aging_lazy,
@@ -1417,7 +1510,7 @@ nd6_post_msg(u_int32_t code, struct nd_prefix_list *prefix_list,
 		ev_msg.dv[0].data_ptr		= &nd6_ra_msg_data;
 		ev_msg.dv[0].data_length	= sizeof (nd6_ra_msg_data);
 		ev_msg.dv[1].data_length	= 0;
-		kev_post_msg(&ev_msg);
+		dlil_post_complete_msg(NULL, &ev_msg);
 
 		/* clean up for the next prefix */
 		bzero(&nd6_ra_msg_data.prefix, sizeof (nd6_ra_msg_data.prefix));
@@ -1520,33 +1613,57 @@ nd6_purge(struct ifnet *ifp)
 	struct nd_defrouter *dr, *ndr;
 	struct nd_prefix *pr, *npr;
 	boolean_t removed;
+	struct nd_drhead nd_defrouter_tmp;
+
+	TAILQ_INIT(&nd_defrouter_tmp);
 
 	/* Nuke default router list entries toward ifp */
 	lck_mtx_lock(nd6_mutex);
-	if ((dr = TAILQ_FIRST(&nd_defrouter)) != NULL) {
+	TAILQ_FOREACH_SAFE(dr, &nd_defrouter, dr_entry, ndr) {
+		if (dr->ifp != ifp)
+			continue;
 		/*
-		 * The first entry of the list may be stored in
-		 * the routing table, so we'll delete it later.
+		 * Remove the entry from default router list
+		 * and add it to the temp list.
+		 * nd_defrouter_tmp will be a local temporary
+		 * list as no one else can get the same
+		 * removed entry once it is removed from default
+		 * router list.
+		 * Remove the reference after calling defrtrlist_del.
+		 *
+		 * The uninstalled entries have to be iterated first
+		 * when we call defrtrlist_del.
+		 * This is to ensure that we don't end up calling
+		 * default router  selection when there are other
+		 * uninstalled candidate default routers on
+		 * the interface.
+		 * If we don't respect that order, we may end
+		 * up missing out on some entries.
+		 *
+		 * For that reason, installed ones must be inserted
+		 * at the tail and uninstalled ones at the head
 		 */
-		for (dr = TAILQ_NEXT(dr, dr_entry); dr; dr = ndr) {
-			ndr = TAILQ_NEXT(dr, dr_entry);
-			if (dr->stateflags & NDDRF_INSTALLED)
-				continue;
-			if (dr->ifp == ifp)
-				defrtrlist_del(dr);
-		}
-		dr = TAILQ_FIRST(&nd_defrouter);
-		if (dr->ifp == ifp)
-			defrtrlist_del(dr);
+		TAILQ_REMOVE(&nd_defrouter, dr, dr_entry);
+
+		if (dr->stateflags & NDDRF_INSTALLED)
+			TAILQ_INSERT_TAIL(&nd_defrouter_tmp, dr, dr_entry);
+		else
+			TAILQ_INSERT_HEAD(&nd_defrouter_tmp, dr, dr_entry);
 	}
 
-	for (dr = TAILQ_FIRST(&nd_defrouter); dr; dr = ndr) {
-		ndr = TAILQ_NEXT(dr, dr_entry);
-		if (!(dr->stateflags & NDDRF_INSTALLED))
-			continue;
-
-		if (dr->ifp == ifp)
-			defrtrlist_del(dr);
+	/*
+	 * The following call to defrtrlist_del should be
+	 * safe as we are iterating a local list of
+	 * default routers.
+	 *
+	 * We don't really need nd6_mutex here but keeping
+	 * it as it is to avoid changing assertios held in
+	 * the functions in the call-path.
+	 */
+	TAILQ_FOREACH_SAFE(dr, &nd_defrouter_tmp, dr_entry, ndr) {
+		TAILQ_REMOVE(&nd_defrouter_tmp, dr, dr_entry);
+		defrtrlist_del(dr);
+		NDDR_REMREF(dr);        /* remove list reference */
 	}
 
 	/* Nuke prefix list entries toward ifp */
@@ -1595,12 +1712,10 @@ nd6_purge(struct ifnet *ifp)
 	 * Perform default router selection even when we are a router,
 	 * if Scoped Routing is enabled.
 	 */
-	if (ip6_doscopedroute || !ip6_forwarding) {
-		lck_mtx_lock(nd6_mutex);
-		/* refresh default router list */
-		defrouter_select(ifp);
-		lck_mtx_unlock(nd6_mutex);
-	}
+	lck_mtx_lock(nd6_mutex);
+	/* refresh default router list */
+	defrouter_select(ifp);
+	lck_mtx_unlock(nd6_mutex);
 
 	/*
 	 * Nuke neighbor cache entries for the ifp.
@@ -1737,7 +1852,20 @@ nd6_lookup(struct in6_addr *addr6, int create, struct ifnet *ifp, int rt_locked)
 			RT_LOCK(rt);
 			if (rt->rt_llinfo) {
 				struct llinfo_nd6 *ln = rt->rt_llinfo;
-				ln->ln_state = ND6_LLINFO_NOSTATE;
+				struct nd_ifinfo *ndi = ND_IFINFO(rt->rt_ifp);
+
+				VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
+				/*
+				 * For interface's that do not perform NUD
+				 * neighbor cache entres must always be marked
+				 * reachable with no expiry
+				 */
+				if (ndi->flags & ND6_IFF_PERFORMNUD) {
+					ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_NOSTATE);
+				} else {
+					ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_REACHABLE);
+					ln_setexpire(ln, 0);
+				}
 			}
 		} else {
 			return (NULL);
@@ -1859,21 +1987,6 @@ nd6_is_new_addr_neighbor(struct sockaddr_in6 *addr, struct ifnet *ifp)
 		dstaddr = NULL;
 	}
 
-	/*
-	 * If the default router list is empty, all addresses are regarded
-	 * as on-link, and thus, as a neighbor.
-	 * XXX: we restrict the condition to hosts, because routers usually do
-	 * not have the "default router list".
-	 * XXX: this block should eventually be removed (it is disabled when
-	 * Scoped Routing is in effect); treating all destinations as on-link
-	 * in the absence of a router is rather harmful.
-	 */
-	if (!ip6_doscopedroute && !ip6_forwarding &&
-	    TAILQ_FIRST(&nd_defrouter) == NULL &&
-	    nd6_defifindex == ifp->if_index) {
-		return (1);
-	}
-
 	return (0);
 }
 
@@ -1944,60 +2057,55 @@ nd6_free(struct rtentry *rt)
 	 * not harmful, it was not really necessary.  Perform default router
 	 * selection even when we are a router, if Scoped Routing is enabled.
 	 */
-	if (ip6_doscopedroute || !ip6_forwarding) {
-		dr = defrouter_lookup(&SIN6(rt_key(rt))->sin6_addr, rt->rt_ifp);
+	dr = defrouter_lookup(&SIN6(rt_key(rt))->sin6_addr, rt->rt_ifp);
 
-		if ((ln && ln->ln_router) || dr) {
-			/*
-			 * rt6_flush must be called whether or not the neighbor
-			 * is in the Default Router List.
-			 * See a corresponding comment in nd6_na_input().
-			 */
-			RT_UNLOCK(rt);
-			lck_mtx_unlock(nd6_mutex);
-			rt6_flush(&in6, rt->rt_ifp);
-			lck_mtx_lock(nd6_mutex);
-		} else {
-			RT_UNLOCK(rt);
-		}
-
-		if (dr) {
-			NDDR_REMREF(dr);
-			/*
-			 * Unreachablity of a router might affect the default
-			 * router selection and on-link detection of advertised
-			 * prefixes.
-			 */
-
-			/*
-			 * Temporarily fake the state to choose a new default
-			 * router and to perform on-link determination of
-			 * prefixes correctly.
-			 * Below the state will be set correctly,
-			 * or the entry itself will be deleted.
-			 */
-			RT_LOCK_SPIN(rt);
-			ln->ln_state = ND6_LLINFO_INCOMPLETE;
-
-			/*
-			 * Since defrouter_select() does not affect the
-			 * on-link determination and MIP6 needs the check
-			 * before the default router selection, we perform
-			 * the check now.
-			 */
-			RT_UNLOCK(rt);
-			pfxlist_onlink_check();
-
-			/*
-			 * refresh default router list
-			 */
-			defrouter_select(rt->rt_ifp);
-		}
-		RT_LOCK_ASSERT_NOTHELD(rt);
+	if ((ln && ln->ln_router) || dr) {
+		/*
+		 * rt6_flush must be called whether or not the neighbor
+		 * is in the Default Router List.
+		 * See a corresponding comment in nd6_na_input().
+		 */
+		RT_UNLOCK(rt);
+		lck_mtx_unlock(nd6_mutex);
+		rt6_flush(&in6, rt->rt_ifp);
+		lck_mtx_lock(nd6_mutex);
 	} else {
 		RT_UNLOCK(rt);
 	}
 
+	if (dr) {
+		NDDR_REMREF(dr);
+		/*
+		 * Unreachablity of a router might affect the default
+		 * router selection and on-link detection of advertised
+		 * prefixes.
+		 */
+
+		/*
+		 * Temporarily fake the state to choose a new default
+		 * router and to perform on-link determination of
+		 * prefixes correctly.
+		 * Below the state will be set correctly,
+		 * or the entry itself will be deleted.
+		 */
+		RT_LOCK_SPIN(rt);
+		ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_INCOMPLETE);
+
+		/*
+		 * Since defrouter_select() does not affect the
+		 * on-link determination and MIP6 needs the check
+		 * before the default router selection, we perform
+		 * the check now.
+		 */
+		RT_UNLOCK(rt);
+		pfxlist_onlink_check();
+
+		/*
+		 * refresh default router list
+		 */
+		defrouter_select(rt->rt_ifp);
+	}
+	RT_LOCK_ASSERT_NOTHELD(rt);
 	lck_mtx_unlock(nd6_mutex);
 	/*
 	 * Detach the route from the routing tree and the list of neighbor
@@ -2022,7 +2130,9 @@ nd6_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 	struct ifaddr *ifa;
 	uint64_t timenow;
 	char buf[MAX_IPv6_STR_LEN];
+	struct nd_ifinfo *ndi = ND_IFINFO(rt->rt_ifp);
 
+	VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
 	VERIFY(nd6_init_done);
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
@@ -2187,20 +2297,26 @@ nd6_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 		rt->rt_flags |= RTF_LLINFO;
 		ln->ln_rt = rt;
 		/* this is required for "ndp" command. - shin */
-		if (req == RTM_ADD) {
+		/*
+		 * For interface's that do not perform NUD
+		 * neighbor cache entries must always be marked
+		 * reachable with no expiry
+		 */
+		if ((req == RTM_ADD) ||
+		    !(ndi->flags & ND6_IFF_PERFORMNUD)) {
 			/*
 			 * gate should have some valid AF_LINK entry,
 			 * and ln->ln_expire should have some lifetime
 			 * which is specified by ndp command.
 			 */
-			ln->ln_state = ND6_LLINFO_REACHABLE;
+			ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_REACHABLE);
+			ln_setexpire(ln, 0);
 		} else {
 			/*
 			 * When req == RTM_RESOLVE, rt is created and
 			 * initialized in rtrequest(), so rt_expire is 0.
 			 */
-			ln->ln_state = ND6_LLINFO_NOSTATE;
-
+			ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_NOSTATE);
 			/* In case we're called before 1.0 sec. has elapsed */
 			ln_setexpire(ln, (ifp->if_eflags & IFEF_IPV6_ND6ALT) ?
 			    0 : MAX(timenow, 1));
@@ -2236,9 +2352,9 @@ nd6_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 					continue;
 				}
 				if (ln_end->ln_state > ND6_LLINFO_INCOMPLETE)
-					ln_end->ln_state = ND6_LLINFO_STALE;
+					ND6_CACHE_STATE_TRANSITION(ln_end, ND6_LLINFO_STALE);
 				else
-					ln_end->ln_state = ND6_LLINFO_PURGE;
+					ND6_CACHE_STATE_TRANSITION(ln_end, ND6_LLINFO_PURGE);
 				ln_setexpire(ln_end, timenow);
 				RT_UNLOCK(rt_end);
 			}
@@ -2253,7 +2369,7 @@ nd6_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 		if (ifa != NULL) {
 			caddr_t macp = nd6_ifptomac(ifp);
 			ln_setexpire(ln, 0);
-			ln->ln_state = ND6_LLINFO_REACHABLE;
+			ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_REACHABLE);
 			if (macp != NULL) {
 				Bcopy(macp, LLADDR(SDL(gate)), ifp->if_addrlen);
 				SDL(gate)->sdl_alen = ifp->if_addrlen;
@@ -2298,7 +2414,7 @@ nd6_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 			IFA_REMREF(ifa);
 		} else if (rt->rt_flags & RTF_ANNOUNCE) {
 			ln_setexpire(ln, 0);
-			ln->ln_state = ND6_LLINFO_REACHABLE;
+			ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_REACHABLE);
 
 			/* join solicited node multicast for proxy ND */
 			if (ifp->if_flags & IFF_MULTICAST) {
@@ -2385,6 +2501,7 @@ nd6_siocgdrlst(void *data, int data_is_64)
 
 	dr = TAILQ_FIRST(&nd_defrouter);
 
+	/* XXX Handle mapped defrouter entries */
 	/* For 64-bit process */
 	if (data_is_64) {
 		struct in6_drlist_64 *drl_64;
@@ -2467,6 +2584,7 @@ nd6_siocgprlst(void *data, int data_is_64)
 
 	pr = nd_prefix.lh_first;
 
+	/* XXX Handle mapped defrouter entries */
 	/* For 64-bit process */
 	if (data_is_64) {
 		struct in6_prlist_64 *prl_64;
@@ -2765,7 +2883,9 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 	case SIOCSRTRFLUSH_IN6: {	/* struct in6_ifreq */
 		/* flush all the default routers */
 		struct nd_defrouter *next;
+		struct nd_drhead nd_defrouter_tmp;
 
+		TAILQ_INIT(&nd_defrouter_tmp);
 		lck_mtx_lock(nd6_mutex);
 		if ((dr = TAILQ_FIRST(&nd_defrouter)) != NULL) {
 			/*
@@ -2774,12 +2894,44 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 			 */
 			for (dr = TAILQ_NEXT(dr, dr_entry); dr; dr = next) {
 				next = TAILQ_NEXT(dr, dr_entry);
-				if (ifp == lo_ifp || dr->ifp == ifp)
-					defrtrlist_del(dr);
+				if (ifp == lo_ifp || dr->ifp == ifp) {
+					/*
+					 * Remove the entry from default router list
+					 * and add it to the temp list.
+					 * nd_defrouter_tmp will be a local temporary
+					 * list as no one else can get the same
+					 * removed entry once it is removed from default
+					 * router list.
+					 * Remove the reference after calling defrtrlist_de
+					 */
+					TAILQ_REMOVE(&nd_defrouter, dr, dr_entry);
+					TAILQ_INSERT_TAIL(&nd_defrouter_tmp, dr, dr_entry);
+				}
 			}
+
+			dr = TAILQ_FIRST(&nd_defrouter);
 			if (ifp == lo_ifp ||
-			    TAILQ_FIRST(&nd_defrouter)->ifp == ifp)
-				defrtrlist_del(TAILQ_FIRST(&nd_defrouter));
+			    dr->ifp == ifp) {
+				TAILQ_REMOVE(&nd_defrouter, dr, dr_entry);
+				TAILQ_INSERT_TAIL(&nd_defrouter_tmp, dr, dr_entry);
+			}
+		}
+
+		/*
+		 * Keep the following separate from the above iteration of
+		 * nd_defrouter because it's not safe to call
+		 * defrtrlist_del while iterating global default
+		 * router list. Global list has to be traversed
+		 * while holding nd6_mutex throughout.
+		 *
+		 * The following call to defrtrlist_del should be
+		 * safe as we are iterating a local list of
+		 * default routers.
+		 */
+		TAILQ_FOREACH_SAFE(dr, &nd_defrouter_tmp, dr_entry, next) {
+			TAILQ_REMOVE(&nd_defrouter_tmp, dr, dr_entry);
+			defrtrlist_del(dr);
+			NDDR_REMREF(dr);        /* remove list reference */
 		}
 		lck_mtx_unlock(nd6_mutex);
 		break;
@@ -2896,6 +3048,35 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 		return (error);
 		/* NOTREACHED */
 	}
+	case SIOCGIFCGAPREP_IN6:
+	case SIOCSIFCGAPREP_IN6:
+	{
+		struct in6_cgareq *p_cgareq =
+		    (struct in6_cgareq *)(void *)data;
+		struct nd_ifinfo *ndi = ND_IFINFO(ifp);
+
+		struct in6_cga_modifier *req_cga_mod =
+		    &(p_cgareq->cgar_cgaprep.cga_modifier);
+		struct in6_cga_modifier	*ndi_cga_mod = NULL;
+
+		if ((NULL == ndi) || !ndi->initialized) {
+			error = EINVAL;
+			break;
+		}
+
+		lck_mtx_lock(&ndi->lock);
+		ndi_cga_mod = &(ndi->local_cga_modifier);
+
+		if (cmd == SIOCSIFCGAPREP_IN6) {
+			bcopy(req_cga_mod, ndi_cga_mod, sizeof(*ndi_cga_mod));
+			ndi->cga_initialized = TRUE;
+		} else
+			bcopy(ndi_cga_mod, req_cga_mod, sizeof(*req_cga_mod));
+
+		lck_mtx_unlock(&ndi->lock);
+		return (error);
+		/* NOTREACHED */
+	}
 	}
 	return (error);
 }
@@ -2919,6 +3100,7 @@ nd6_cache_lladdr(struct ifnet *ifp, struct in6_addr *from, char *lladdr,
 	int newstate = 0;
 	uint64_t timenow;
 	boolean_t sched_timeout = FALSE;
+	struct nd_ifinfo *ndi = NULL;
 
 	if (ifp == NULL)
 		panic("ifp == NULL in nd6_cache_lladdr");
@@ -3017,13 +3199,27 @@ fail:
 			newstate = ND6_LLINFO_STALE;
 	}
 
+	/*
+	 * For interface's that do not perform NUD
+	 * neighbor cache entres must always be marked
+	 * reachable with no expiry
+	 */
+	ndi = ND_IFINFO(ifp);
+	VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
+
+	if (ndi && !(ndi->flags & ND6_IFF_PERFORMNUD)) {
+		newstate = ND6_LLINFO_REACHABLE;
+		ln_setexpire(ln, 0);
+	}
+
 	if (do_update) {
 		/*
 		 * Update the state of the neighbor cache.
 		 */
-		ln->ln_state = newstate;
+		ND6_CACHE_STATE_TRANSITION(ln, newstate);
 
-		if (ln->ln_state == ND6_LLINFO_STALE) {
+		if ((ln->ln_state == ND6_LLINFO_STALE) ||
+		   (ln->ln_state == ND6_LLINFO_REACHABLE)) {
 			struct mbuf *m = ln->ln_hold;
 			/*
 			 * XXX: since nd6_output() below will cause
@@ -3031,9 +3227,10 @@ fail:
 			 * we must set the timer now, although it is actually
 			 * meaningless.
 			 */
-			ln_setexpire(ln, timenow + nd6_gctimer);
-			ln->ln_hold = NULL;
+			if (ln->ln_state == ND6_LLINFO_STALE)
+				ln_setexpire(ln, timenow + nd6_gctimer);
 
+			ln->ln_hold = NULL;
 			if (m != NULL) {
 				struct sockaddr_in6 sin6;
 
@@ -3128,8 +3325,7 @@ fail:
 	 * Note: Perform default router selection even when we are a router,
 	 * if Scoped Routing is enabled.
 	 */
-	if (do_update && ln->ln_router &&
-	    (ip6_doscopedroute || !ip6_forwarding)) {
+	if (do_update && ln->ln_router) {
 		RT_REMREF_LOCKED(rt);
 		RT_UNLOCK(rt);
 		lck_mtx_lock(nd6_mutex);
@@ -3476,7 +3672,7 @@ lookup:
 	/* We don't have to do link-layer address resolution on a p2p link. */
 	if ((ifp->if_flags & IFF_POINTOPOINT) != 0 &&
 	    ln->ln_state < ND6_LLINFO_REACHABLE) {
-		ln->ln_state = ND6_LLINFO_STALE;
+		ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_STALE);
 		ln_setexpire(ln, timenow + nd6_gctimer);
 	}
 
@@ -3489,7 +3685,7 @@ lookup:
 	 */
 	if (ln->ln_state == ND6_LLINFO_STALE) {
 		ln->ln_asked = 0;
-		ln->ln_state = ND6_LLINFO_DELAY;
+		ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_DELAY);
 		ln_setexpire(ln, timenow + nd6_delay);
 		/* N.B.: we will re-arm the timer below. */
 		_CASSERT(ND6_LLINFO_DELAY > ND6_LLINFO_INCOMPLETE);
@@ -3548,7 +3744,7 @@ lookup:
 	 * an NS below.
 	 */
 	if (ln->ln_state == ND6_LLINFO_NOSTATE)
-		ln->ln_state = ND6_LLINFO_INCOMPLETE;
+		ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_INCOMPLETE);
 	if (ln->ln_hold)
 		m_freem_list(ln->ln_hold);
 	ln->ln_hold = m0;
@@ -3566,13 +3762,13 @@ lookup:
 			nd6_prproxy_ns_output(ifp, origifp, NULL,
 			    &dst->sin6_addr, ln);
 		else
-			nd6_ns_output(ifp, NULL, &dst->sin6_addr, ln, 0);
+			nd6_ns_output(ifp, NULL, &dst->sin6_addr, ln, NULL);
 		lck_mtx_lock(rnh_lock);
 		nd6_sched_timeout(NULL, NULL);
 		lck_mtx_unlock(rnh_lock);
 	} else {
 		if(ln->ln_state == ND6_LLINFO_INCOMPLETE) {
-			ln->ln_expire = timenow;
+			ln_setexpire(ln, timenow);
 		}
 		RT_UNLOCK(rt);
 	}
@@ -3801,6 +3997,9 @@ nd6_lookup_ipv6(ifnet_t	 ifp, const struct sockaddr_in6	*ip6_dest,
 	struct sockaddr_dl *sdl = NULL;
 	size_t	copy_len;
 
+	if (ifp == NULL || ip6_dest == NULL)
+		return (EINVAL);
+
 	if (ip6_dest->sin6_family != AF_INET6)
 		return (EAFNOSUPPORT);
 
@@ -3820,7 +4019,9 @@ nd6_lookup_ipv6(ifnet_t	 ifp, const struct sockaddr_in6	*ip6_dest,
 			RT_LOCK_ASSERT_HELD(route);
 	}
 
-	if ((packet->m_flags & M_MCAST) != 0) {
+	if ((packet != NULL && (packet->m_flags & M_MCAST) != 0) ||
+	    ((ifp->if_flags & IFF_MULTICAST) &&
+	    IN6_IS_ADDR_MULTICAST(&ip6_dest->sin6_addr))) {
 		if (route != NULL)
 			RT_UNLOCK(route);
 		result = dlil_resolve_multi(ifp,
@@ -3829,6 +4030,21 @@ nd6_lookup_ipv6(ifnet_t	 ifp, const struct sockaddr_in6	*ip6_dest,
 		if (route != NULL)
 			RT_LOCK(route);
 		goto release;
+	} else if (route == NULL) {
+		/*
+		 * rdar://24596652
+		 * For unicast, lookup existing ND6 entries but
+		 * do not trigger a resolution
+		 */
+		lck_mtx_lock(rnh_lock);
+		route = rt_lookup(TRUE,
+		    __DECONST(struct sockaddr *, ip6_dest), NULL,
+		    rt_tables[AF_INET6], ifp->if_index);
+		lck_mtx_unlock(rnh_lock);
+
+		if (route != NULL) {
+			 RT_LOCK(route);
+		}
 	}
 
 	if (route == NULL) {
@@ -3873,6 +4089,82 @@ release:
 	}
 	return (result);
 }
+
+#if (DEVELOPMENT || DEBUG)
+
+static int sysctl_nd6_lookup_ipv6 SYSCTL_HANDLER_ARGS;
+SYSCTL_PROC(_net_inet6_icmp6, OID_AUTO, nd6_lookup_ipv6,
+	CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
+	sysctl_nd6_lookup_ipv6, "S", "");
+
+int
+sysctl_nd6_lookup_ipv6 SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error = 0;
+	struct nd6_lookup_ipv6_args nd6_lookup_ipv6_args;
+	ifnet_t ifp = NULL;
+
+	/*
+	 * Only root can lookup MAC addresses
+	 */   
+	error = proc_suser(current_proc());
+	if (error != 0) {
+		printf("%s: proc_suser() error %d\n",
+		    __func__, error);
+		goto done;
+	}
+	if (req->oldptr == USER_ADDR_NULL) {
+		req->oldidx = sizeof(struct nd6_lookup_ipv6_args);
+	}
+	if (req->newptr == USER_ADDR_NULL) {
+		goto done;
+	}
+	if (req->oldlen != sizeof(struct nd6_lookup_ipv6_args) ||
+	    req->newlen != sizeof(struct nd6_lookup_ipv6_args)) {
+		error = EINVAL;
+		printf("%s: bad req, error %d\n",
+		    __func__, error);
+		goto done;
+	}
+	error = SYSCTL_IN(req, &nd6_lookup_ipv6_args,
+	    sizeof(struct nd6_lookup_ipv6_args));
+	if (error != 0) {
+		printf("%s: SYSCTL_IN() error %d\n",
+		    __func__, error);
+		goto done;
+	}
+	/* Make sure to terminate the string */
+	nd6_lookup_ipv6_args.ifname[IFNAMSIZ - 1] = 0;
+	
+	error = ifnet_find_by_name(nd6_lookup_ipv6_args.ifname, &ifp);
+	if (error != 0) {
+		printf("%s: ifnet_find_by_name() error %d\n",
+		    __func__, error);
+		goto done;
+	}
+	
+	error = nd6_lookup_ipv6(ifp, &nd6_lookup_ipv6_args.ip6_dest,
+	    &nd6_lookup_ipv6_args.ll_dest_._sdl,
+	    nd6_lookup_ipv6_args.ll_dest_len, NULL, NULL);
+	if (error != 0) {
+		printf("%s: nd6_lookup_ipv6() error %d\n",
+		    __func__, error);
+		goto done;
+	}
+	
+	error = SYSCTL_OUT(req, &nd6_lookup_ipv6_args,
+	    sizeof(struct nd6_lookup_ipv6_args));
+	if (error != 0) {
+		printf("%s: SYSCTL_OUT() error %d\n",
+		    __func__, error);
+		goto done;
+	}
+done:
+	return (error);
+}
+
+#endif /* (DEVELOPEMENT || DEBUG) */
 
 int
 nd6_setifinfo(struct ifnet *ifp, u_int32_t before, u_int32_t after)
@@ -3937,6 +4229,7 @@ nd6_sysctl_drlist SYSCTL_HANDLER_ARGS
 	if (req->newptr != USER_ADDR_NULL)
 		return (EPERM);
 
+	/* XXX Handle mapped defrouter entries */
 	lck_mtx_lock(nd6_mutex);
 	if (proc_is64bit(req->p)) {
 		struct in6_defrouter_64 d;
@@ -3954,7 +4247,6 @@ nd6_sysctl_drlist SYSCTL_HANDLER_ARGS
 				    &dr->rtaddr, pbuf, sizeof (pbuf)));
 			d.flags = dr->flags;
 			d.stateflags = dr->stateflags;
-			d.stateflags &= ~NDDRF_PROCESSED;
 			d.rtlifetime = dr->rtlifetime;
 			d.expire = nddr_getexpire(dr);
 			d.if_index = dr->ifp->if_index;
@@ -3978,7 +4270,6 @@ nd6_sysctl_drlist SYSCTL_HANDLER_ARGS
 				    &dr->rtaddr, pbuf, sizeof (pbuf)));
 			d.flags = dr->flags;
 			d.stateflags = dr->stateflags;
-			d.stateflags &= ~NDDRF_PROCESSED;
 			d.rtlifetime = dr->rtlifetime;
 			d.expire = nddr_getexpire(dr);
 			d.if_index = dr->ifp->if_index;
@@ -4008,6 +4299,7 @@ nd6_sysctl_prlist SYSCTL_HANDLER_ARGS
 	s6.sin6_family = AF_INET6;
 	s6.sin6_len = sizeof (s6);
 
+	/* XXX Handle mapped defrouter entries */
 	lck_mtx_lock(nd6_mutex);
 	if (proc_is64bit(req->p)) {
 		struct in6_prefix_64 p;
@@ -4107,3 +4399,87 @@ nd6_sysctl_prlist SYSCTL_HANDLER_ARGS
 
 	return (error);
 }
+
+void
+in6_ifaddr_set_dadprogress(struct in6_ifaddr *ia)
+{
+	struct ifnet* ifp = ia->ia_ifp;
+	uint32_t flags = IN6_IFF_TENTATIVE;
+	uint32_t optdad = nd6_optimistic_dad;
+	struct nd_ifinfo *ndi = NULL;
+
+	ndi = ND_IFINFO(ifp);
+	VERIFY((NULL != ndi)  && (TRUE == ndi->initialized));
+	if (!(ndi->flags & ND6_IFF_DAD))
+		return;
+
+	if (optdad) {
+		if ((ifp->if_eflags & IFEF_IPV6_ROUTER) != 0) {
+			optdad = 0;
+		} else {
+			lck_mtx_lock(&ndi->lock);
+			if ((ndi->flags & ND6_IFF_REPLICATED) != 0) {
+				optdad = 0;
+			}
+			lck_mtx_unlock(&ndi->lock);
+		}
+	}
+
+	if (optdad) {
+		if ((optdad & ND6_OPTIMISTIC_DAD_LINKLOCAL) &&
+				IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr))
+			flags = IN6_IFF_OPTIMISTIC;
+		else if ((optdad & ND6_OPTIMISTIC_DAD_AUTOCONF) &&
+				(ia->ia6_flags & IN6_IFF_AUTOCONF)) {
+			if (ia->ia6_flags & IN6_IFF_TEMPORARY) {
+				if (optdad & ND6_OPTIMISTIC_DAD_TEMPORARY)
+					flags = IN6_IFF_OPTIMISTIC;
+			} else if (ia->ia6_flags & IN6_IFF_SECURED) {
+				if (optdad & ND6_OPTIMISTIC_DAD_SECURED)
+					flags = IN6_IFF_OPTIMISTIC;
+			} else {
+				/*
+				 * Keeping the behavior for temp and CGA
+				 * SLAAC addresses to have a knob for optimistic
+				 * DAD.
+				 * Other than that if ND6_OPTIMISTIC_DAD_AUTOCONF
+				 * is set, we should default to optimistic
+				 * DAD.
+				 * For now this means SLAAC addresses with interface
+				 * identifier derived from modified EUI-64 bit
+				 * identifiers.
+				 */
+				flags = IN6_IFF_OPTIMISTIC;
+			}
+		} else if ((optdad & ND6_OPTIMISTIC_DAD_DYNAMIC) &&
+				(ia->ia6_flags & IN6_IFF_DYNAMIC)) {
+			if (ia->ia6_flags & IN6_IFF_TEMPORARY) {
+				if (optdad & ND6_OPTIMISTIC_DAD_TEMPORARY)
+					flags = IN6_IFF_OPTIMISTIC;
+			} else {
+				flags = IN6_IFF_OPTIMISTIC;
+			}
+		} else if ((optdad & ND6_OPTIMISTIC_DAD_MANUAL) &&
+				(ia->ia6_flags & IN6_IFF_OPTIMISTIC)) {
+			/*
+			 * rdar://17483438
+			 * Bypass tentative for address assignments
+			 * not covered above (e.g. manual) upon request
+			 */
+			if (!IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr) &&
+					!(ia->ia6_flags & IN6_IFF_AUTOCONF) &&
+					!(ia->ia6_flags & IN6_IFF_DYNAMIC))
+				flags = IN6_IFF_OPTIMISTIC;
+		}
+	}
+
+	ia->ia6_flags &= ~(IN6_IFF_DUPLICATED | IN6_IFF_DADPROGRESS);
+	ia->ia6_flags |= flags;
+
+	nd6log2((LOG_DEBUG, "%s - %s ifp %s ia6_flags 0x%x\n",
+				__func__,
+				ip6_sprintf(&ia->ia_addr.sin6_addr),
+				if_name(ia->ia_ifp),
+				ia->ia6_flags));
+}
+

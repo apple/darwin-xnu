@@ -350,6 +350,10 @@ bsd_scale_setup(int scale)
 			max_cached_sock_count = 60000 + ((scale-1) * 15000);
 		}
 	}
+
+	if(maxproc > hard_maxproc) {
+		hard_maxproc = maxproc;
+	}
 #endif
 	bsd_exec_setup(scale);
 }

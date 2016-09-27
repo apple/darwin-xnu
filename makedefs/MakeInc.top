@@ -1,11 +1,11 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 2010-2014 Apple Inc. All rights reserved.
+# Copyright (C) 2010-2016 Apple Inc. All rights reserved.
 #
 # MakeInc.top is the top-level makefile for the xnu
 # build system. All the main XBS targets
 # (like "installhdrs") are defined here, as
-# well as globals that can be overridden on 
+# well as globals that can be overridden on
 # the command-line by the user.
 #
 # This makefile's main purpose is to bootstrap
@@ -20,9 +20,9 @@
 # single-architecture build is responsible for
 # inserting its build products into the final
 # multi-architecture output files. To avoid
-# races, these aggregating stages for 
+# races, these aggregating stages for
 # "primary" build configs are done in serial.
-# 
+#
 
 export MakeInc_cmd=${VERSDIR}/makedefs/MakeInc.cmd
 
@@ -43,18 +43,17 @@ else
      override DEFAULT_ARCH_CONFIG := X86_64
 endif
 
-
 # Accept either explicit ARCH_CONFIGS or XBS-style RC_ARCHS
 ifndef ARCH_CONFIGS
 ifdef RC_ARCHS
-ARCH_CONFIGS 	:= $(shell printf "%s" "$(RC_ARCHS)" | $(TR) a-z A-Z | $(TR) " " "\n" | sort -u | $(TR) "\n" " ")
+ARCH_CONFIGS	:= $(shell printf "%s" "$(RC_ARCHS)" | $(TR) a-z A-Z | $(TR) " " "\n" | sort -u | $(TR) "\n" " ")
 else
 ARCH_CONFIGS	:= DEFAULT
 endif
 endif
 
 #
-# Kernel Configuration options  
+# Kernel Configuration options
 #
 
 ifeq ($(RC_ProjectName),xnu_debug)
@@ -73,7 +72,7 @@ KERNEL_CONFIGS := DEFAULT
 endif
 
 #
-# Machine Configuration options  
+# Machine Configuration options
 #
 
 override DEFAULT_I386_MACHINE_CONFIG := NONE
@@ -83,14 +82,14 @@ override DEFAULT_X86_64H_MACHINE_CONFIG := NONE
 
 # This is typically never specified (TARGET_CONFIGS is used)
 ifndef MACHINE_CONFIGS
-MACHINE_CONFIGS 	:= DEFAULT
+MACHINE_CONFIGS	:= DEFAULT
 endif
 
 #
-# Target configuration options.  NOTE - target configurations will 
+# Target configuration options.  NOTE - target configurations will
 # override ARCH_CONFIGS and KERNEL_CONFIGS and MACHINE_CONFIGS.
 #
-# Target configs come in groups of three parameters.  The first is the 
+# Target configs come in groups of three parameters.  The first is the
 # kernel configuration, the second is the architecture configuration,
 # and the third is the machine configuration.  You may pass in as
 # many groups of configurations as you wish.  Each item passed in is
@@ -100,7 +99,7 @@ endif
 #	TARGET_CONFIGS="release ppc default debug i386 default release arm MX31ADS"
 # Parameters may be in upper or lower case (they are converted to upper).
 #
-# "default" parameter is a special case.  It means use the default value for 
+# "default" parameter is a special case.  It means use the default value for
 # that parameter.  Here are the default values for each configuration:
 #
 # default kernel configuration = DEFAULT_KERNEL_CONFIG
@@ -121,22 +120,28 @@ endif
 ifndef TARGET_CONFIGS
 ifneq ($(PRODUCT_CONFIGS),)
 # generate TARGET_CONFIGS using KERNEL_CONFIGS and PRODUCT_CONFIGS
-TARGET_CONFIGS := $(foreach my_kernel_config,$(KERNEL_CONFIGS),$(foreach my_product_config,$(shell printf "%s" "$(PRODUCT_CONFIGS)" | $(TR) A-Z a-z),$(my_kernel_config) $(subst ;, ,$(call function_lookup_product,$(my_product_config)))))
+TARGET_CONFIGS := $(foreach my_devicemap_config,$(foreach my_product_config,$(shell printf "%s" "$(PRODUCT_CONFIGS)" | $(TR) A-Z a-z),$(call function_lookup_product,$(my_product_config))),$(foreach my_kernel_config,$(KERNEL_CONFIGS),$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
+TARGET_CONFIGS_ALIASES := $(foreach my_devicemap_config,$(foreach my_product_config,$(shell printf "%s" "$(PRODUCT_CONFIGS)" | $(TR) A-Z a-z),$(call function_lookup_product_alias,$(my_product_config))),$(foreach my_kernel_config,$(KERNEL_CONFIGS),$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
 else ifneq ($(filter %_release_embedded,$(MAKECMDGOALS)),)
 # generate TARGET_CONFIGS for RELEASE kernel configs and products in the device map
-TARGET_CONFIGS := $(foreach my_kernel_config,RELEASE,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(my_kernel_config) $(subst ;, ,$(call function_lookup_product,$(my_product_config))))))
+TARGET_CONFIGS := $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(call function_lookup_product,$(my_product_config)))),$(foreach my_kernel_config,RELEASE,$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
+TARGET_CONFIGS_ALIASES := $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(call function_lookup_product_alias,$(my_product_config)))),$(foreach my_kernel_config,RELEASE,$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
 else ifneq ($(filter %_development_embedded,$(MAKECMDGOALS)),)
 # generate TARGET_CONFIGS for DEVELOPMENT kernel configs and products in the device map
-TARGET_CONFIGS := $(foreach my_kernel_config,DEVELOPMENT,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(my_kernel_config) $(subst ;, ,$(call function_lookup_product,$(my_product_config))))))
+TARGET_CONFIGS := $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(call function_lookup_product,$(my_product_config)))),$(foreach my_kernel_config,DEVELOPMENT,$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
+TARGET_CONFIGS_ALIASES := $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(call function_lookup_product_alias,$(my_product_config)))),$(foreach my_kernel_config,DEVELOPMENT,$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
 else ifneq ($(filter %_embedded,$(MAKECMDGOALS)),)
 # generate TARGET_CONFIGS for all kernel configs and products in the device map
-TARGET_CONFIGS := $(foreach my_kernel_config,$(KERNEL_CONFIGS_EMBEDDED),$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(my_kernel_config) $(subst ;, ,$(call function_lookup_product,$(my_product_config))))))
+TARGET_CONFIGS := $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(call function_lookup_product,$(my_product_config)))),$(foreach my_kernel_config,$(KERNEL_CONFIGS_EMBEDDED),$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
+TARGET_CONFIGS_ALIASES := $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(call function_lookup_product_alias,$(my_product_config)))),$(foreach my_kernel_config,$(KERNEL_CONFIGS_EMBEDDED),$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
 else ifneq ($(filter %_desktop,$(MAKECMDGOALS)),)
 # generate TARGET_CONFIGS for all kernel configs for B&I
 TARGET_CONFIGS := $(foreach my_kern_config, $(KERNEL_CONFIGS_DESKTOP), $(foreach my_arch_config, $(ARCH_CONFIGS), $(foreach my_machine_config, $(MACHINE_CONFIGS), $(my_kern_config) $(my_arch_config) $(my_machine_config))))
+TARGET_CONFIGS_ALIASES :=
 else
 # generate TARGET_CONFIGS using KERNEL_CONFIGS and ARCH_CONFIGS and MACHINE_CONFIGS (which defaults to "DEFAULT")
 TARGET_CONFIGS := $(foreach my_kern_config, $(KERNEL_CONFIGS), $(foreach my_arch_config, $(ARCH_CONFIGS), $(foreach my_machine_config, $(MACHINE_CONFIGS), $(my_kern_config) $(my_arch_config) $(my_machine_config))))
+TARGET_CONFIGS_ALIASES :=
 endif
 endif
 
@@ -145,6 +150,7 @@ $(error No TARGET_CONFIGS specified)
 endif
 
 TARGET_CONFIGS_UC := $(strip $(shell printf "%s" "$(TARGET_CONFIGS)" | $(TR) a-z A-Z))
+TARGET_CONFIGS_ALIASES_UC := $(strip $(shell printf "%s" "$(TARGET_CONFIGS_ALIASES)" | $(TR) a-z A-Z))
 
 #
 # Build Configurations
@@ -163,11 +169,19 @@ PRIMARY_BUILD_CONFIGS = $(strip $(foreach arch, $(PRIMARY_ARCHS), $(firstword $(
 NON_PRIMARY_BUILD_CONFIGS = $(strip $(filter-out $(PRIMARY_BUILD_CONFIGS), $(BUILD_CONFIGS)))
 FIRST_BUILD_CONFIG = $(firstword $(BUILD_CONFIGS))
 
+ifneq ($(TARGET_CONFIGS_ALIASES_UC),)
+ALIAS_CONFIGS = $(call function_create_alias_configs, $(TARGET_CONFIGS_ALIASES_UC))
+else
+ALIAS_CONFIGS =
+endif
+
 # $(warning PRIMARY_ARCHS is $(PRIMARY_ARCHS))
 # $(warning TARGET_CONFIGS is $(TARGET_CONFIGS))
 # $(warning BUILD_CONFIGS is $(BUILD_CONFIGS))
 # $(warning PRIMARY_BUILD_CONFIGS is $(PRIMARY_BUILD_CONFIGS))
 # $(warning NON_PRIMARY_BUILD_CONFIGS is $(NON_PRIMARY_BUILD_CONFIGS))
+# $(warning TARGET_CONFIGS_ALIASES is $(TARGET_CONFIGS_ALIASES))
+# $(warning ALIAS_CONFIGS is $(ALIAS_CONFIGS))
 
 MEMORY_SIZE := $(shell /usr/sbin/sysctl -n hw.memsize)
 
@@ -175,7 +189,7 @@ MEMORY_SIZE := $(shell /usr/sbin/sysctl -n hw.memsize)
 LARGE_BUILD_FOOTPRINT := $(if $(BUILD_LTO),$(BUILD_LTO),1)
 
 ifeq ($(LARGE_BUILD_FOOTPRINT),1)
-RAM_PER_KERNEL_BUILD := 8589934592
+RAM_PER_KERNEL_BUILD := 4294967296
 else
 RAM_PER_KERNEL_BUILD := 268435456
 endif
@@ -214,10 +228,9 @@ $$(warning Generate makefile fragment: $$($(1)_generated_stripe_dependencies))
 endif
 $$(eval $$($(1)_generated_stripe_dependencies))
 
-
 $$($(1)_bootstrap_target_list): $(1)_bootstrap_% : $(1)_stripe_dep_for_% $$(addsuffix _bootstrap_%,$(4)) $(3)
 	$$(_v)$$(MKDIR) $${OBJROOT}/$$(call function_convert_build_config_to_objdir,$$(patsubst $(1)_bootstrap_%,%,$$@))$(2)
-	$$(_v)$${MAKE} 													        \
+	$$(_v)$${MAKE}													        \
 		-C $${OBJROOT}/$$(call function_convert_build_config_to_objdir,$$(patsubst $(1)_bootstrap_%,%,$$@))$(2)		\
 		-f $${SRCROOT}/Makefile												\
 		CURRENT_KERNEL_CONFIG=$$(call function_extract_kernel_config_from_build_config,$$(patsubst $(1)_bootstrap_%,%,$$@)) \
@@ -257,7 +270,6 @@ endef
 # $(4) is the list of remaining build configs
 _function_generate_stripe_groupings_recursive = $(foreach stripe_index,$(call sequence,$(2)),$(if $(word $(stripe_index),$(4)),$(call TOP_LEVEL_STRIPE_DEPENDENCY_template,$(1),$(word $(stripe_index),$(3)),$(word $(stripe_index),$(4))))) $(if $(word $(call increment,$(2)),$(4)),$(call _function_generate_stripe_groupings_recursive,$(1),$(2),$(wordlist 1,$(2),$(4)),$(wordlist $(call increment,$(2)),$(words $(4)),$(4))))
 
-
 # $(1) is the Makefile target we are building for
 # $(2) is the stripe size
 # $(3) is the list of the build configs
@@ -295,7 +307,7 @@ setup: build_setup_bootstrap
 #
 .PHONY: exporthdrs exporthdrs_mi exporthdrs_md
 
-exporthdrs: exporthdrs_mi exporthdrs_md 
+exporthdrs: exporthdrs_mi exporthdrs_md
 
 #
 # Install machine independent kernel header files
@@ -310,7 +322,7 @@ $(eval $(generated_top_level_build_exporthdrs_mi))
 exporthdrs_mi: build_exporthdrs_mi_bootstrap
 
 #
-# Install machine dependent kernel header files 
+# Install machine dependent kernel header files
 #
 
 generated_top_level_build_exporthdrs_md = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_exporthdrs_md,,setup,,$(KERNEL_BUILDS_IN_PARALLEL),$(PRIMARY_BUILD_CONFIGS))
@@ -354,7 +366,7 @@ $(eval $(generated_top_level_build_installhdrs_mi))
 installhdrs_mi: build_installhdrs_mi_bootstrap
 
 #
-# Install machine dependent kernel header files 
+# Install machine dependent kernel header files
 #
 
 generated_top_level_build_installhdrs_md = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,build_installhdrs_md,,setup,build_exporthdrs_md,$(KERNEL_BUILDS_IN_PARALLEL),$(PRIMARY_BUILD_CONFIGS))
@@ -461,7 +473,7 @@ else ifeq ($(RC_ProjectName),xnu_headers_Sim)
 install: installhdrs
 else
 
-install: installhdrs install_textfiles install_config install_kernels
+install: installhdrs install_textfiles install_config install_kernels install_aliases
 endif
 
 .PHONY: install_embedded install_release_embedded install_development_embedded install_desktop
@@ -470,15 +482,24 @@ endif
 install_embedded install_release_embedded install_desktop: install
 
 # These special configs only install the kernel files
-install_development_embedded: install_kernels
+install_development_embedded: install_kernels install_aliases
 
-.PHONY: install_kernels final_touch_kernel_timestamps
+.PHONY: install_kernels final_touch_kernel_timestamps install_aliases
 
 install_kernels: build_install_primary_bootstrap build_install_non_primary_bootstrap final_touch_kernel_timestamps
 
 # Tell the next build the latest timestamp of any potential file in DSTROOT/SYMROOT
 final_touch_kernel_timestamps: build_install_primary_bootstrap build_install_non_primary_bootstrap
 	$(_v)$(TOUCH) $(OBJROOT)/.mach_kernel.timestamp
+
+# Copy kernels that are aliases of another configuration
+generated_top_level_install_alias = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,install_alias,,install_kernels,,$(KERNEL_BUILDS_IN_PARALLEL),$(ALIAS_CONFIGS))
+ifeq ($(VERBOSE_GENERATED_MAKE_FRAGMENTS),YES)
+$(warning Generate makefile fragment: $(generated_top_level_install_alias))
+endif
+$(eval $(generated_top_level_install_alias))
+
+install_aliases: install_alias_bootstrap
 
 #
 # Install source tree
@@ -500,9 +521,8 @@ installsrc:
 clean:
 	@:
 	@rm -f cscope.* 2> /dev/null
-	@rm -f $(OBJROOT)/cscope.genhdrs/* 2> /dev/null  || true 
+	@rm -f $(OBJROOT)/cscope.genhdrs/* 2> /dev/null  || true
 	@rm -f TAGS 2> /dev/null
-
 
 #
 # Build source file list for cscope database and tags
@@ -554,13 +574,12 @@ reindent:
 .PHONY: help
 
 help:
-	@cat README
+	@cat README.md
 
 .PHONY: print_exports
 
 print_exports:
 	$(_v)printenv | sort
-
 
 generated_top_level_print_exports = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,print_exports,,,,1,$(FIRST_BUILD_CONFIG))
 ifeq ($(VERBOSE_GENERATED_MAKE_FRAGMENTS),YES)

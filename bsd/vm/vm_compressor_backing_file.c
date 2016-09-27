@@ -39,7 +39,6 @@
 #include <sys/disk.h>
 #include <vm/vm_protos.h>
 #include <vm/vm_pageout.h>
-#include <hfs/hfs.h>
 
 void vm_swapfile_open(const char *path, vnode_t *vp);
 void vm_swapfile_close(uint64_t path, vnode_t vp);
@@ -108,27 +107,6 @@ vm_swapfile_preallocate(vnode_t vp, uint64_t *size, boolean_t *pin)
 
 	ctx = vfs_context_current();
 
-#if CONFIG_PROTECT
-	{
-#if 0	// <rdar://11771612>
-
-		if ((error = cp_vnode_setclass(vp, PROTECTION_CLASS_F))) {
-			if(config_protect_bug) {
-				printf("swap protection class set failed with %d\n", error);
-			} else {
-				panic("swap protection class set failed with %d\n", error);
-			}
-		}
-#endif
-		/* initialize content protection keys manually */
-		if ((error = cp_handle_vnop(vp, CP_WRITE_ACCESS, 0)) != 0) {
-			printf("Content Protection key failure on swap: %d\n", error);
-			vnode_put(vp);
-			vp = NULL;
-			goto done;
- 		}
-	}
-#endif
 	error = vnode_setsize(vp, *size, IO_NOZEROFILL, ctx);
 
 	if (error) {
@@ -145,13 +123,10 @@ vm_swapfile_preallocate(vnode_t vp, uint64_t *size, boolean_t *pin)
 	assert(file_size == *size);
 	
 	if (pin != NULL && *pin != FALSE) {
-
-		assert(vnode_tag(vp) == VT_HFS);
-
-		error = hfs_pin_vnode(VTOHFS(vp), vp, HFS_PIN_IT | HFS_DATALESS_PIN, NULL, ctx);
+		error = VNOP_IOCTL(vp, FIOPINSWAP, NULL, 0, ctx);
 
 		if (error) {
-			printf("hfs_pin_vnode for swap files failed: %d\n", error);
+			printf("pin for swap files failed: %d,  file_size = %lld\n", error, file_size);
 			/* this is not fatal, carry on with files wherever they landed */
 			*pin = FALSE;
 			error = 0;

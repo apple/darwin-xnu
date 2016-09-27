@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* trees.c -- output deflated data using Huffman coding
@@ -216,10 +216,12 @@ local void gen_trees_header OF((void));
 #ifdef DEBUG
 local void send_bits      OF((deflate_state *s, int value, int length));
 
-local void send_bits(s, value, length)
-    deflate_state *s;
-    int value;  /* value to send */
-    int length; /* number of bits */
+/*
+ * @param value value to send
+ * @param length number of bits
+ */
+local void
+send_bits(deflate_state *s, int value, int length)
 {
     Tracevv((stderr," l %2d v %4x ", length, value));
     Assert(length > 0 && length <= 15, "invalid length");
@@ -262,7 +264,8 @@ local void send_bits(s, value, length)
 /* ===========================================================================
  * Initialize the various 'constant' tables.
  */
-local void tr_static_init()
+local void
+tr_static_init(void)
 {
 #if defined(GEN_TREES_H) || !defined(STDC)
     static int static_init_done = 0;
@@ -354,7 +357,8 @@ local void tr_static_init()
       ((i) == (last)? "\n};\n\n" :    \
        ((i) % (width) == (width)-1 ? ",\n" : ", "))
 
-void gen_trees_header()
+void
+gen_trees_header(void)
 {
     FILE *header = fopen("trees.h", "w");
     int i;
@@ -406,8 +410,8 @@ void gen_trees_header()
 /* ===========================================================================
  * Initialize the tree data structures for a new zlib stream.
  */
-void _tr_init(s)
-    deflate_state *s;
+void
+_tr_init(deflate_state *s)
 {
     tr_static_init();
 
@@ -435,8 +439,8 @@ void _tr_init(s)
 /* ===========================================================================
  * Initialize a new block.
  */
-local void init_block(s)
-    deflate_state *s;
+local void
+init_block(deflate_state *s)
 {
     int n; /* iterates over tree elements */
 
@@ -478,11 +482,12 @@ local void init_block(s)
  * exchanging a node with the smallest of its two sons if necessary, stopping
  * when the heap property is re-established (each father smaller than its
  * two sons).
+ *
+ * @param tree the tree to restore
+ * @param k node to move down
  */
-local void pqdownheap(s, tree, k)
-    deflate_state *s;
-    ct_data *tree;  /* the tree to restore */
-    int k;               /* node to move down */
+local void
+pqdownheap(deflate_state *s, ct_data *tree, int k)
 {
     int v = s->heap[k];
     int j = k << 1;  /* left son of k */
@@ -513,10 +518,10 @@ local void pqdownheap(s, tree, k)
  *     array bl_count contains the frequencies for each bit length.
  *     The length opt_len is updated; static_len is also updated if stree is
  *     not null.
+ * @param desc the tree descriptor
  */
-local void gen_bitlen(s, desc)
-    deflate_state *s;
-    tree_desc *desc;    /* the tree descriptor */
+local void
+gen_bitlen(deflate_state *s, tree_desc *desc)
 {
     ct_data *tree        = desc->dyn_tree;
     int max_code         = desc->max_code;
@@ -541,7 +546,10 @@ local void gen_bitlen(s, desc)
     for (h = s->heap_max+1; h < HEAP_SIZE; h++) {
         n = s->heap[h];
         bits = tree[tree[n].Dad].Len + 1;
-        if (bits > max_length) bits = max_length, overflow++;
+        if (bits > max_length) {
+	    bits = max_length;
+	    overflow++;
+	}
         tree[n].Len = (ush)bits;
         /* We overwrite tree[n].Dad which is no longer needed */
 
@@ -600,11 +608,13 @@ local void gen_bitlen(s, desc)
  * the given tree and the field len is set for all tree elements.
  * OUT assertion: the field code is set for all tree elements of non
  *     zero code length.
+ *
+ * @param tree the tree to decorate
+ * @param max_count largest code with non zero frequency
+ * @param bl_count number of codes at each bit length
  */
-local void gen_codes (tree, max_code, bl_count)
-    ct_data *tree;             /* the tree to decorate */
-    int max_code;              /* largest code with non zero frequency */
-    ushf *bl_count;            /* number of codes at each bit length */
+local void
+gen_codes(ct_data *tree, int max_code, ushf *bl_count)
 {
     ush next_code[MAX_BITS+1]; /* next code value for each bit length */
     ush code = 0;              /* running code value */
@@ -642,10 +652,11 @@ local void gen_codes (tree, max_code, bl_count)
  * OUT assertions: the fields len and code are set to the optimal bit length
  *     and corresponding code. The length opt_len is updated; static_len is
  *     also updated if stree is not null. The field max_code is set.
+ *
+ * @param desc the tree descriptor
  */
-local void build_tree(s, desc)
-    deflate_state *s;
-    tree_desc *desc; /* the tree descriptor */
+local void
+build_tree(deflate_state *s, tree_desc *desc)
 {
     ct_data *tree         = desc->dyn_tree;
     const ct_data *stree  = desc->stat_desc->static_tree;
@@ -658,7 +669,8 @@ local void build_tree(s, desc)
      * heap[SMALLEST]. The sons of heap[n] are heap[2*n] and heap[2*n+1].
      * heap[0] is not used.
      */
-    s->heap_len = 0, s->heap_max = HEAP_SIZE;
+    s->heap_len = 0;
+    s->heap_max = HEAP_SIZE;
 
     for (n = 0; n < elems; n++) {
         if (tree[n].Freq != 0) {
@@ -730,11 +742,12 @@ local void build_tree(s, desc)
 /* ===========================================================================
  * Scan a literal or distance tree to determine the frequencies of the codes
  * in the bit length tree.
+ *
+ * @param tree the tree to be scanned
+ * @param max_code and its largest code of non zero frequency
  */
-local void scan_tree (s, tree, max_code)
-    deflate_state *s;
-    ct_data *tree;   /* the tree to be scanned */
-    int max_code;    /* and its largest code of non zero frequency */
+local void
+scan_tree(deflate_state *s, ct_data *tree, int max_code)
 {
     int n;                     /* iterates over all tree elements */
     int prevlen = -1;          /* last emitted length */
@@ -744,7 +757,10 @@ local void scan_tree (s, tree, max_code)
     int max_count = 7;         /* max repeat count */
     int min_count = 4;         /* min repeat count */
 
-    if (nextlen == 0) max_count = 138, min_count = 3;
+    if (nextlen == 0) {
+        max_count = 138;
+	min_count = 3;
+    }
     tree[max_code+1].Len = (ush)0xffff; /* guard */
 
     for (n = 0; n <= max_code; n++) {
@@ -763,11 +779,14 @@ local void scan_tree (s, tree, max_code)
         }
         count = 0; prevlen = curlen;
         if (nextlen == 0) {
-            max_count = 138, min_count = 3;
+            max_count = 138;
+	    min_count = 3;
         } else if (curlen == nextlen) {
-            max_count = 6, min_count = 3;
+            max_count = 6;
+	    min_count = 3;
         } else {
-            max_count = 7, min_count = 4;
+            max_count = 7;
+	    min_count = 4;
         }
     }
 }
@@ -775,11 +794,12 @@ local void scan_tree (s, tree, max_code)
 /* ===========================================================================
  * Send a literal or distance tree in compressed form, using the codes in
  * bl_tree.
+ *
+ * @param tree the tree to be scanned
+ * @param max_code and its largest code of non zero frequency
  */
-local void send_tree (s, tree, max_code)
-    deflate_state *s;
-    ct_data *tree; /* the tree to be scanned */
-    int max_code;       /* and its largest code of non zero frequency */
+local void
+send_tree( deflate_state *s, ct_data *tree, int max_code)
 {
     int n;                     /* iterates over all tree elements */
     int prevlen = -1;          /* last emitted length */
@@ -790,7 +810,10 @@ local void send_tree (s, tree, max_code)
     int min_count = 4;         /* min repeat count */
 
     /* tree[max_code+1].Len = -1; */  /* guard already set */
-    if (nextlen == 0) max_count = 138, min_count = 3;
+    if (nextlen == 0) {
+        max_count = 138;
+	min_count = 3;
+    }
 
     for (n = 0; n <= max_code; n++) {
         curlen = nextlen; nextlen = tree[n+1].Len;
@@ -814,11 +837,14 @@ local void send_tree (s, tree, max_code)
         }
         count = 0; prevlen = curlen;
         if (nextlen == 0) {
-            max_count = 138, min_count = 3;
+            max_count = 138;
+	    min_count = 3;
         } else if (curlen == nextlen) {
-            max_count = 6, min_count = 3;
+            max_count = 6;
+	    min_count = 3;
         } else {
-            max_count = 7, min_count = 4;
+            max_count = 7;
+	    min_count = 4;
         }
     }
 }
@@ -827,8 +853,8 @@ local void send_tree (s, tree, max_code)
  * Construct the Huffman tree for the bit lengths and return the index in
  * bl_order of the last bit length code to send.
  */
-local int build_bl_tree(s)
-    deflate_state *s;
+local int
+build_bl_tree(deflate_state *s)
 {
     int max_blindex;  /* index of last bit length code of non zero freq */
 
@@ -861,10 +887,13 @@ local int build_bl_tree(s)
  * Send the header for a block using dynamic Huffman trees: the counts, the
  * lengths of the bit length codes, the literal tree and the distance tree.
  * IN assertion: lcodes >= 257, dcodes >= 1, blcodes >= 4.
+ *
+ * @param lcodes number of codes for each tree
+ * @param dcodes number of codes for each tree
+ * @param blcodes number of codes for each tree
  */
-local void send_all_trees(s, lcodes, dcodes, blcodes)
-    deflate_state *s;
-    int lcodes, dcodes, blcodes; /* number of codes for each tree */
+local void
+send_all_trees(deflate_state *s, int lcodes, int dcodes, int blcodes)
 {
     int rank;                    /* index in bl_order */
 
@@ -890,12 +919,13 @@ local void send_all_trees(s, lcodes, dcodes, blcodes)
 
 /* ===========================================================================
  * Send a stored block
+ *
+ * @param buf input block
+ * @param stored_len length of input block
+ * @param eof true if this is the last block for a file
  */
-void _tr_stored_block(s, buf, stored_len, eof)
-    deflate_state *s;
-    charf *buf;       /* input block */
-    ulg stored_len;   /* length of input block */
-    int eof;          /* true if this is the last block for a file */
+void
+_tr_stored_block(deflate_state *s, charf *buf, ulg stored_len, int eof)
 {
     send_bits(s, (STORED_BLOCK<<1)+eof, 3);  /* send block type */
 #ifdef DEBUG
@@ -916,8 +946,8 @@ void _tr_stored_block(s, buf, stored_len, eof)
  * To simplify the code, we assume the worst case of last real code encoded
  * on one bit only.
  */
-void _tr_align(s)
-    deflate_state *s;
+void
+_tr_align(deflate_state *s)
 {
     send_bits(s, STATIC_TREES<<1, 3);
     send_code(s, END_BLOCK, static_ltree);
@@ -944,12 +974,13 @@ void _tr_align(s)
 /* ===========================================================================
  * Determine the best encoding for the current block: dynamic trees, static
  * trees or store, and output the encoded block to the zip file.
+ *
+ * @param buf input block, or NULL if too old
+ * @param stored_len length of input block
+ * @param eof true if this is the last block for a file
  */
-void _tr_flush_block(s, buf, stored_len, eof)
-    deflate_state *s;
-    charf *buf;       /* input block, or NULL if too old */
-    ulg stored_len;   /* length of input block */
-    int eof;          /* true if this is the last block for a file */
+void
+_tr_flush_block(deflate_state *s, charf *buf, ulg stored_len, int eof)
 {
     ulg opt_lenb, static_lenb; /* opt_len and static_len in bytes */
     int max_blindex = 0;  /* index of last bit length code of non zero freq */
@@ -1045,11 +1076,12 @@ void _tr_flush_block(s, buf, stored_len, eof)
 /* ===========================================================================
  * Save the match info and tally the frequency counts. Return true if
  * the current block must be flushed.
+ *
+ * @param dist distance of matched string
+ * @param lc match length-MIN_MATCH or unmatched char (if dist==0)
  */
-int _tr_tally (s, dist, lc)
-    deflate_state *s;
-    unsigned dist;  /* distance of matched string */
-    unsigned lc;    /* match length-MIN_MATCH or unmatched char (if dist==0) */
+int
+_tr_tally(deflate_state *s, unsigned dist, unsigned lc)
 {
     s->d_buf[s->last_lit] = (ush)dist;
     s->l_buf[s->last_lit++] = (uch)lc;
@@ -1095,11 +1127,12 @@ int _tr_tally (s, dist, lc)
 
 /* ===========================================================================
  * Send the block data compressed using the given Huffman trees
+ *
+ * @param ltree literal tree
+ * @param dtree distance tree
  */
-local void compress_block(s, ltree, dtree)
-    deflate_state *s;
-    ct_data *ltree; /* literal tree */
-    ct_data *dtree; /* distance tree */
+local void
+compress_block(deflate_state *s, ct_data *ltree, ct_data *dtree)
 {
     unsigned dist;      /* distance of matched string */
     int lc;             /* match length or unmatched char (if dist == 0) */
@@ -1150,8 +1183,8 @@ local void compress_block(s, ltree, dtree)
  * or white spaces (9 to 13, or 32); or set it to Z_BINARY otherwise.
  * IN assertion: the fields Freq of dyn_ltree are set.
  */
-local void set_data_type(s)
-    deflate_state *s;
+local void
+set_data_type(deflate_state *s)
 {
     int n;
 
@@ -1169,15 +1202,18 @@ local void set_data_type(s)
  * Reverse the first len bits of a code, using straightforward code (a faster
  * method would use a table)
  * IN assertion: 1 <= len <= 15
+ *
+ * @param code the value to invert
+ * @param len its bit length
  */
-local unsigned bi_reverse(code, len)
-    unsigned code; /* the value to invert */
-    int len;       /* its bit length */
+local unsigned
+bi_reverse(unsigned code, int len)
 {
-    register unsigned res = 0;
+    unsigned res = 0;
     do {
         res |= code & 1;
-        code >>= 1, res <<= 1;
+        code >>= 1;
+	res <<= 1;
     } while (--len > 0);
     return res >> 1;
 }
@@ -1185,8 +1221,8 @@ local unsigned bi_reverse(code, len)
 /* ===========================================================================
  * Flush the bit buffer, keeping at most 7 bits in it.
  */
-local void bi_flush(s)
-    deflate_state *s;
+local void
+bi_flush(deflate_state *s)
 {
     if (s->bi_valid == 16) {
         put_short(s, s->bi_buf);
@@ -1202,8 +1238,8 @@ local void bi_flush(s)
 /* ===========================================================================
  * Flush the bit buffer and align the output on a byte boundary
  */
-local void bi_windup(s)
-    deflate_state *s;
+local void
+bi_windup(deflate_state *s)
 {
     if (s->bi_valid > 8) {
         put_short(s, s->bi_buf);
@@ -1220,12 +1256,13 @@ local void bi_windup(s)
 /* ===========================================================================
  * Copy a stored block, storing first the length and its
  * one's complement if requested.
+ *
+ * @param buf the input data
+ * @param len its length
+ * @param header true if block header must be written
  */
-local void copy_block(s, buf, len, header)
-    deflate_state *s;
-    charf    *buf;    /* the input data */
-    unsigned len;     /* its length */
-    int      header;  /* true if block header must be written */
+local void
+copy_block(deflate_state *s, charf *buf, unsigned len, int header)
 {
     bi_windup(s);        /* align on byte boundary */
     s->last_eob_len = 8; /* enough lookahead for inflate */

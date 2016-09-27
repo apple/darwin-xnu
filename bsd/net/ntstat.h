@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2010-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef __NTSTAT_H__
@@ -36,10 +36,26 @@
 #pragma pack(push, 4)
 #pragma mark -- Common Data Structures --
 
-#define __NSTAT_REVISION__	7
+#define __NSTAT_REVISION__	8
 
 typedef	u_int32_t	nstat_provider_id_t;
-typedef	u_int32_t	nstat_src_ref_t;
+typedef	u_int64_t	nstat_src_ref_t;
+typedef	u_int64_t	nstat_event_flags_t;
+
+// The following event definitions are very provisional..
+enum
+{
+	NSTAT_EVENT_SRC_ADDED 					= 0x00000001
+	,NSTAT_EVENT_SRC_REMOVED 				= 0x00000002
+	,NSTAT_EVENT_SRC_QUERIED 				= 0x00000004
+	,NSTAT_EVENT_SRC_QUERIED_ALL			= 0x00000008
+	,NSTAT_EVENT_SRC_WILL_CHANGE_STATE		= 0x00000010
+	,NSTAT_EVENT_SRC_DID_CHANGE_STATE		= 0x00000020
+	,NSTAT_EVENT_SRC_WILL_CHANGE_OWNER		= 0x00000040
+	,NSTAT_EVENT_SRC_DID_CHANGE_OWNER		= 0x00000080
+	,NSTAT_EVENT_SRC_WILL_CHANGE_PROPERTY	= 0x00000100
+	,NSTAT_EVENT_SRC_DID_CHANGE_PROPERTY	= 0x00000200
+};
 
 typedef struct nstat_counts
 {
@@ -52,10 +68,10 @@ typedef struct nstat_counts
 	u_int32_t	nstat_rxduplicatebytes;
 	u_int32_t	nstat_rxoutoforderbytes;
 	u_int32_t	nstat_txretransmit;
-	
+
 	u_int32_t	nstat_connectattempts;
 	u_int32_t	nstat_connectsuccesses;
-	
+
 	u_int32_t	nstat_min_rtt;
 	u_int32_t	nstat_avg_rtt;
 	u_int32_t	nstat_var_rtt;
@@ -184,8 +200,16 @@ enum
 	,NSTAT_SYSINFO_ECN_IFNET_OFF_TOTAL_OOPKTS = 89
 	,NSTAT_SYSINFO_ECN_IFNET_OFF_DROP_RST = 90
 	,NSTAT_SYSINFO_ECN_IFNET_TOTAL_CONN = 91
+	,NSTAT_SYSINFO_TFO_COOKIE_WRONG = 92
+	,NSTAT_SYSINFO_TFO_NO_COOKIE_RCV = 93
+	,NSTAT_SYSINFO_TFO_HEURISTICS_DISABLE = 94
+	,NSTAT_SYSINFO_TFO_SEND_BLACKHOLE = 95
+	,NSTAT_SYSINFO_KEY_SOCK_MBFLOOR = 96
+	,NSTAT_SYSINFO_IFNET_UNSENT_DATA = 97
+	,NSTAT_SYSINFO_ECN_IFNET_FALLBACK_DROPRST = 98
+	,NSTAT_SYSINFO_ECN_IFNET_FALLBACK_DROPRXMT = 99
 // NSTAT_SYSINFO_ENUM_VERSION must be updated any time a value is added
-#define	NSTAT_SYSINFO_ENUM_VERSION	20151208
+#define	NSTAT_SYSINFO_ENUM_VERSION	20160715
 };
 
 #pragma mark -- Network Statistics Providers --
@@ -208,10 +232,12 @@ enum
 {
 	NSTAT_PROVIDER_NONE	= 0
 	,NSTAT_PROVIDER_ROUTE	= 1
-	,NSTAT_PROVIDER_TCP	= 2
-	,NSTAT_PROVIDER_UDP	= 3
-	,NSTAT_PROVIDER_IFNET	= 4
-	,NSTAT_PROVIDER_SYSINFO = 5
+	,NSTAT_PROVIDER_TCP_KERNEL	= 2
+	,NSTAT_PROVIDER_TCP_USERLAND = 3
+	,NSTAT_PROVIDER_UDP_KERNEL	= 4
+	,NSTAT_PROVIDER_UDP_USERLAND = 5
+	,NSTAT_PROVIDER_IFNET	= 6
+	,NSTAT_PROVIDER_SYSINFO = 7
 };
 #define NSTAT_PROVIDER_LAST NSTAT_PROVIDER_SYSINFO
 #define NSTAT_PROVIDER_COUNT (NSTAT_PROVIDER_LAST+1)
@@ -252,17 +278,17 @@ typedef struct nstat_tcp_descriptor
 		struct sockaddr_in	v4;
 		struct sockaddr_in6	v6;
 	} local;
-	
+
 	union
 	{
 		struct sockaddr_in	v4;
 		struct sockaddr_in6	v6;
 	} remote;
-	
+
 	u_int32_t	ifindex;
-	
+
 	u_int32_t	state;
-	
+
 	u_int32_t	sndbufsize;
 	u_int32_t	sndbufused;
 	u_int32_t	rcvbufsize;
@@ -273,16 +299,16 @@ typedef struct nstat_tcp_descriptor
 	u_int32_t	traffic_class;
 	u_int32_t	traffic_mgt_flags;
 	char		cc_algo[16];
-	
+
 	u_int64_t	upid;
 	u_int32_t	pid;
 	char		pname[64];
 	u_int64_t	eupid;
 	u_int32_t	epid;
 
-	uint8_t		uuid[16];
-	uint8_t		euuid[16];
-	uint8_t		vuuid[16];
+	uuid_t		uuid;
+	uuid_t		euuid;
+	uuid_t		vuuid;
 	struct tcp_conn_status connstatus;
 	uint16_t	ifnet_properties	__attribute__((aligned(4)));
 } nstat_tcp_descriptor;
@@ -296,28 +322,28 @@ typedef struct nstat_udp_descriptor
 		struct sockaddr_in	v4;
 		struct sockaddr_in6	v6;
 	} local;
-	
+
 	union
 	{
 		struct sockaddr_in	v4;
 		struct sockaddr_in6	v6;
 	} remote;
-	
+
 	u_int32_t	ifindex;
-	
+
 	u_int32_t	rcvbufsize;
 	u_int32_t	rcvbufused;
 	u_int32_t	traffic_class;
-	
+
 	u_int64_t	upid;
 	u_int32_t	pid;
 	char		pname[64];
 	u_int64_t	eupid;
 	u_int32_t	epid;
 
-	uint8_t		uuid[16];
-	uint8_t		euuid[16];
-	uint8_t		vuuid[16];
+	uuid_t		uuid;
+	uuid_t		euuid;
+	uuid_t		vuuid;
 	uint16_t	ifnet_properties;
 } nstat_udp_descriptor;
 
@@ -326,31 +352,31 @@ typedef struct nstat_route_descriptor
 	u_int64_t	id;
 	u_int64_t	parent_id;
 	u_int64_t	gateway_id;
-	
+
 	union
 	{
 		struct sockaddr_in	v4;
 		struct sockaddr_in6	v6;
 		struct sockaddr		sa;
 	} dst;
-	
+
 	union
 	{
 		struct sockaddr_in	v4;
 		struct sockaddr_in6	v6;
 		struct sockaddr		sa;
 	} mask;
-	
+
 	union
 	{
 		struct sockaddr_in	v4;
 		struct sockaddr_in6	v6;
 		struct sockaddr		sa;
 	} gateway;
-	
+
 	u_int32_t	ifindex;
 	u_int32_t	flags;
-	
+
 } nstat_route_descriptor;
 
 typedef struct nstat_ifnet_add_param
@@ -377,6 +403,7 @@ typedef struct nstat_ifnet_desc_cellular_status
 #define NSTAT_IFNET_DESC_CELL_DL_MAX_BANDWIDTH_VALID		0x1000
 #define NSTAT_IFNET_DESC_CELL_CONFIG_INACTIVITY_TIME_VALID	0x2000
 #define NSTAT_IFNET_DESC_CELL_CONFIG_BACKOFF_TIME_VALID		0x4000
+#define NSTAT_IFNET_DESC_CELL_MSS_RECOMMENDED_VALID		0x8000
 	u_int32_t link_quality_metric;
 	u_int32_t ul_effective_bandwidth; /* Measured uplink bandwidth based on
 					     current activity (bps) */
@@ -405,6 +432,10 @@ typedef struct nstat_ifnet_desc_cellular_status
 				       (bps) */
 	u_int32_t config_inactivity_time; /* ms */
 	u_int32_t config_backoff_time; /* new connections backoff time in ms */
+#define	NSTAT_IFNET_DESC_MSS_RECOMMENDED_NONE	0x0
+#define	NSTAT_IFNET_DESC_MSS_RECOMMENDED_MEDIUM	0x1
+#define	NSTAT_IFNET_DESC_MSS_RECOMMENDED_LOW	0x2
+	u_int16_t mss_recommended; /* recommended MSS */
 } nstat_ifnet_desc_cellular_status;
 
 typedef struct nstat_ifnet_desc_wifi_status {
@@ -513,7 +544,7 @@ typedef struct nstat_sysinfo_add_param
 } nstat_sysinfo_add_param;
 
 #define	NSTAT_SYSINFO_MBUF_STATS	0x0001
-#define	NSTAT_SYSINFO_TCP_STATS		0x0002	
+#define	NSTAT_SYSINFO_TCP_STATS		0x0002
 #define NSTAT_SYSINFO_IFNET_ECN_STATS	0x0003
 
 #pragma mark -- Network Statistics User Client --
@@ -525,7 +556,7 @@ enum
 	// generic response messages
 	NSTAT_MSG_TYPE_SUCCESS			= 0
 	,NSTAT_MSG_TYPE_ERROR			= 1
-	
+
 	// Requests
 	,NSTAT_MSG_TYPE_ADD_SRC				= 1001
 	,NSTAT_MSG_TYPE_ADD_ALL_SRCS		= 1002
@@ -535,7 +566,7 @@ enum
 	,NSTAT_MSG_TYPE_SET_FILTER 			= 1006
 	,NSTAT_MSG_TYPE_GET_UPDATE			= 1007
 	,NSTAT_MSG_TYPE_SUBSCRIBE_SYSINFO	= 1008
-	
+
 	// Responses/Notfications
 	,NSTAT_MSG_TYPE_SRC_ADDED				= 10001
 	,NSTAT_MSG_TYPE_SRC_REMOVED				= 10002
@@ -547,7 +578,7 @@ enum
 
 enum
 {
-	NSTAT_SRC_REF_ALL	= 0xffffffff
+	NSTAT_SRC_REF_ALL	= 0xffffffffffffffffULL
 	,NSTAT_SRC_REF_INVALID	= 0
 };
 
@@ -565,10 +596,10 @@ enum
 	,NSTAT_FILTER_ACCEPT_CELLULAR        = 0x00000004
 	,NSTAT_FILTER_ACCEPT_WIFI            = 0x00000008
 	,NSTAT_FILTER_ACCEPT_WIRED           = 0x00000010
-	,NSTAT_FILTER_ACCEPT_ALL             = 0x0000001F
-	,NSTAT_FILTER_IFNET_FLAGS            = 0x000000FF
-
-	,NSTAT_FILTER_PROVIDER_NOZEROBYTES   = 0x00000100
+	,NSTAT_FILTER_ACCEPT_AWDL            = 0x00000020
+	,NSTAT_FILTER_ACCEPT_EXPENSIVE       = 0x00000040
+	,NSTAT_FILTER_ACCEPT_CELLFALLBACK    = 0x00000100
+	,NSTAT_FILTER_IFNET_FLAGS            = 0x00000FFF
 
 	,NSTAT_FILTER_TCP_NO_LISTENER        = 0x00001000
 	,NSTAT_FILTER_TCP_ONLY_LISTENER      = 0x00002000
@@ -580,6 +611,13 @@ enum
 
 	,NSTAT_FILTER_SUPPRESS_SRC_ADDED     = 0x00100000
 	,NSTAT_FILTER_REQUIRE_SRC_ADDED      = 0x00200000
+	,NSTAT_FILTER_PROVIDER_NOZEROBYTES   = 0x00400000
+
+	,NSTAT_FILTER_SPECIFIC_USER_BY_PID   = 0x01000000
+	,NSTAT_FILTER_SPECIFIC_USER_BY_EPID  = 0x02000000
+	,NSTAT_FILTER_SPECIFIC_USER_BY_UUID  = 0x04000000
+	,NSTAT_FILTER_SPECIFIC_USER_BY_EUUID = 0x08000000
+	,NSTAT_FILTER_SPECIFIC_USER          = 0x0F000000
 };
 
 enum
@@ -614,7 +652,10 @@ typedef struct nstat_msg_add_all_srcs
 {
 	nstat_msg_hdr		hdr;
 	nstat_provider_id_t	provider;
-	u_int64_t		filter;
+	u_int64_t			filter;
+	nstat_event_flags_t	events;
+	pid_t				target_pid;
+	uuid_t				target_uuid;
 } nstat_msg_add_all_srcs;
 
 typedef struct nstat_msg_src_added
@@ -647,6 +688,7 @@ typedef struct nstat_msg_src_description
 {
 	nstat_msg_hdr		hdr;
 	nstat_src_ref_t		srcref;
+	nstat_event_flags_t	event_flags;
 	nstat_provider_id_t	provider;
 	u_int8_t			data[];
 } nstat_msg_src_description;
@@ -661,6 +703,7 @@ typedef struct nstat_msg_src_counts
 {
 	nstat_msg_hdr		hdr;
 	nstat_src_ref_t		srcref;
+	nstat_event_flags_t	event_flags;
 	nstat_counts		counts;
 } nstat_msg_src_counts;
 
@@ -668,6 +711,7 @@ typedef struct nstat_msg_src_update
 {
 	nstat_msg_hdr		hdr;
 	nstat_src_ref_t		srcref;
+	nstat_event_flags_t	event_flags;
 	nstat_counts		counts;
 	nstat_provider_id_t	provider;
 	u_int8_t			data[];
@@ -726,11 +770,12 @@ typedef struct nstat_sysinfo_mbuf_stats
 	u_int32_t		sb_atmbuflimit;	/* Memory limit reached for socket buffer autoscaling */
 	u_int32_t		draincnt;	/* Number of times mbuf pool has been drained under memory pressure */
 	u_int32_t		memreleased;	/* Memory (bytes) released from mbuf pool to VM */
+	u_int32_t		sbmb_floor;	/* Lowest mbufs in sock buffer pool */
 } nstat_sysinfo_mbuf_stats;
 
 typedef struct nstat_sysinfo_tcp_stats
 {
-	u_int32_t		ipv4_avgrtt; 	/* Average RTT for IPv4 */
+	u_int32_t		ipv4_avgrtt;	/* Average RTT for IPv4 */
 	u_int32_t		ipv6_avgrtt;	/* Average RTT for IPv6 */
 	u_int32_t		send_plr;	/* Average uplink packet loss rate */
 	u_int32_t		recv_plr;	/* Average downlink packet loss rate */
@@ -768,6 +813,10 @@ typedef struct nstat_sysinfo_tcp_stats
 	u_int32_t		tfo_syn_data_acked;/* Number of times our SYN+data has been acknowledged */
 	u_int32_t		tfo_syn_loss;	/* Number of times SYN+TFO has been lost and we fallback */
 	u_int32_t		tfo_blackhole;	/* Number of times SYN+TFO has been lost and we fallback */
+	u_int32_t		tfo_cookie_wrong;	/* TFO-cookie we sent was wrong */
+	u_int32_t		tfo_no_cookie_rcv;	/* We asked for a cookie but didn't get one */
+	u_int32_t		tfo_heuristics_disable; /* TFO got disabled due to heuristics */
+	u_int32_t		tfo_sndblackhole;	/* TFO got blackholed in the sending direction */
 } nstat_sysinfo_tcp_stats;
 
 enum {
@@ -795,6 +844,7 @@ typedef struct nstat_sysinfo_data
 		nstat_sysinfo_tcp_stats tcp_stats;
 		nstat_sysinfo_ifnet_ecn_stats ifnet_ecn_stats;
 	} u;
+	uint32_t unsent_data_cnt; /* Before sleeping */
 } nstat_sysinfo_data;
 
 #pragma mark -- Generic Network Statistics Provider --
@@ -841,6 +891,38 @@ void nstat_pcb_invalidate_cache(struct inpcb *inp);
 void nstat_ifnet_threshold_reached(unsigned int ifindex);
 
 void nstat_sysinfo_send_data(struct nstat_sysinfo_data *);
+
+// Userland stats reporting
+
+// Each side, NetworkStatistics and the kernel provider for userland,
+// pass opaque references.
+typedef void *userland_stats_provider_context;
+typedef void *nstat_userland_context;
+
+// When things have been set up, Netstats can request a refresh of its data.
+typedef bool (userland_stats_request_vals_fn)(userland_stats_provider_context *ctx,
+											  nstat_counts *countsp,
+											  void *metadatap);
+
+// Things get started with a call to netstats to say that there’s a new connection:
+nstat_userland_context ntstat_userland_stats_open(userland_stats_provider_context *ctx,
+												  int provider_id,
+												  u_int64_t properties,
+												  userland_stats_request_vals_fn req_fn);
+
+void ntstat_userland_stats_close(nstat_userland_context nstat_ctx);
+
+
+// There may be other occasions where the stats have changed and NECP should push the new values.
+// This is provisional, ahead of full implementation.
+
+typedef enum {
+	USERLAND_STATS_WILL_UPDATE,
+	USERLAND_STATS_DID_UPDATE
+} userland_stats_event_t;
+
+void ntstat_userland_stats_event(nstat_userland_context nstat_ctx, userland_stats_event_t event);
+
 
 // locked_add_64 uses atomic operations on 32bit so the 64bit
 // value can be properly read. The values are only ever incremented

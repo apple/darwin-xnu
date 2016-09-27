@@ -102,15 +102,29 @@ class OSData;
  */
 class OSString : public OSObject
 {
+
     OSDeclareDefaultStructors(OSString)
 
+    enum { kMaxStringLength  = 262142 };
+
+#if APPLE_KEXT_ALIGN_CONTAINERS
+
 protected:
-    unsigned int   flags;
-    unsigned int   length;
+
+    unsigned int   flags:14,
+                   length:18;
     char         * string;
 
-public:
+#else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
+protected:
+    char         * string;
+    unsigned int   flags;
+    unsigned int   length;
+
+#endif /* APPLE_KEXT_ALIGN_CONTAINERS */
+
+public:
 
    /*!
     * @function withString
@@ -249,7 +263,9 @@ public:
     */
     virtual bool initWithCStringNoCopy(const char * cString);
 
+#if XNU_KERNEL_PRIVATE
     bool initWithStringOfLength(const char *cString, size_t inlength);
+#endif  /* XNU_KERNEL_PRIVATE */
 
    /*!
     * @function free

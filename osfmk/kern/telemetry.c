@@ -42,6 +42,8 @@
 #include <kern/sched_prim.h>
 #include <kern/telemetry.h>
 #include <kern/timer_call.h>
+#include <kern/policy_internal.h>
+#include <kern/kcdata.h>
 
 #include <pexpert/pexpert.h>
 
@@ -63,7 +65,6 @@ extern char	*proc_name_address(void *p);
 extern uint64_t proc_uniqueid(void *p);
 extern uint64_t proc_was_throttled(void *p);
 extern uint64_t proc_did_throttle(void *p);
-extern uint64_t get_dispatchqueue_serialno_offset_from_proc(void *p);
 extern int	proc_selfpid(void);
 
 struct micro_snapshot_buffer {
@@ -77,7 +78,6 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 int telemetry_buffer_gather(user_addr_t buffer, uint32_t *length, boolean_t mark, struct micro_snapshot_buffer * current_buffer);
 
 #define TELEMETRY_DEFAULT_SAMPLE_RATE (1) /* 1 sample every 1 second */
-#define TELEMETRY_DEFAULT_WINDOW_BUFFER_SIZE (512*1024) /* Should hopefully provide 10 seconds worth of samples */
 #define TELEMETRY_DEFAULT_BUFFER_SIZE (16*1024)
 #define TELEMETRY_MAX_BUFFER_SIZE (64*1024)
 
@@ -86,16 +86,7 @@ int telemetry_buffer_gather(user_addr_t buffer, uint32_t *length, boolean_t mark
 
 uint32_t 			telemetry_sample_rate = 0;
 volatile boolean_t 	telemetry_needs_record = FALSE;
-volatile boolean_t	telemetry_windowed_record = FALSE;
 volatile boolean_t 	telemetry_needs_timer_arming_record = FALSE;
-
-/*
- * Tells the scheduler that we want it to invoke
- * compute_telemetry_windowed(); it is still our responsibility
- * to ensure that we do not panic if someone disables the window
- * buffer immediately after the scheduler does so.
- */
-volatile boolean_t	telemetry_window_enabled = FALSE;
 
 /*
  * If TRUE, record micro-stackshot samples for all tasks.
@@ -107,17 +98,12 @@ uint32_t			telemetry_active_tasks = 0; // Number of tasks opted into telemetry
 uint32_t			telemetry_timestamp = 0;
 
 /*
- * We have two buffers.  The telemetry_buffer is responsible
+ * The telemetry_buffer is responsible
  * for timer samples and interrupt samples that are driven by
  * compute_averages().  It will notify its client (if one
  * exists) when it has enough data to be worth flushing.
- *
- * The window_buffer contains only interrupt_samples that are
- * driven by the scheduler.  Its intent is to provide a
- * window of recent activity on the cpu(s).
  */
 struct micro_snapshot_buffer telemetry_buffer = {0, 0, 0, 0};
-struct micro_snapshot_buffer window_buffer = {0, 0, 0, 0};
 
 int					telemetry_bytes_since_last_mark = -1; // How much data since buf was last marked?
 int					telemetry_buffer_notify_at = 0;
@@ -251,83 +237,6 @@ telemetry_task_ctl_locked(task_t task, uint32_t reasons, int enable_disable)
 }
 
 /*
- * Enable the window_buffer, and do any associated setup.
- */
-kern_return_t
-telemetry_enable_window(void)
-{
-	kern_return_t ret = KERN_SUCCESS;
-	vm_offset_t kern_buffer = 0;
-	vm_size_t kern_buffer_size = TELEMETRY_DEFAULT_WINDOW_BUFFER_SIZE;
-
-	/*
-	 * We have no guarantee we won't allocate the buffer, take
-	 * the lock, and then discover someone beat us to the punch,
-	 * but we would prefer to avoid blocking while holding the
-	 * lock.
-	 */
-	ret = kmem_alloc(kernel_map, &kern_buffer, kern_buffer_size, VM_KERN_MEMORY_DIAG);
-
-	TELEMETRY_LOCK();
-
-	if (!window_buffer.buffer) {
-		if (ret == KERN_SUCCESS) {
-			/* No existing buffer was found, so... */
-			window_buffer.end_point = 0;
-			window_buffer.current_position = 0;
-	
-			/* Hand off the buffer, and... */
-			window_buffer.size = (uint32_t) kern_buffer_size;
-			window_buffer.buffer = kern_buffer;
-			kern_buffer = 0;
-			kern_buffer_size = 0;
-			bzero((void *) window_buffer.buffer, window_buffer.size);
-	
-			/* Let the scheduler know it should drive windowed samples */
-			telemetry_window_enabled = TRUE;
-		}
-	} else {
-		/* We already have a buffer, so we have "succeeded" */
-		ret = KERN_SUCCESS;
-	}
-
-	TELEMETRY_UNLOCK();
-
-	if (kern_buffer)
-		kmem_free(kernel_map, kern_buffer, kern_buffer_size);
-
-	return ret;
-}
-
-/*
- * Disable the window_buffer, and do any associated teardown.
- */
-void
-telemetry_disable_window(void)
-{
-	vm_offset_t kern_buffer = 0;
-	vm_size_t kern_buffer_size = 0;
-
-	TELEMETRY_LOCK();
-
-	if (window_buffer.buffer) {
-		/* We have a window buffer, so tear it down */
-		telemetry_window_enabled = FALSE;
-		kern_buffer = window_buffer.buffer;
-		kern_buffer_size = window_buffer.size;
-		window_buffer.buffer = 0;
-		window_buffer.size = 0;
-		window_buffer.current_position = 0;
-		window_buffer.end_point = 0;
-	}
-
-	TELEMETRY_UNLOCK();
-
-	if (kern_buffer)
-		kmem_free(kernel_map, kern_buffer, kern_buffer_size);
-}
-
-/*
  * Determine if the current thread is eligible for telemetry:
  *
  * telemetry_sample_all_tasks: All threads are eligible. This takes precedence.
@@ -389,11 +298,6 @@ void telemetry_mark_curthread(boolean_t interrupted_userspace)
 
 	ast_bits |= (interrupted_userspace ? AST_TELEMETRY_USER : AST_TELEMETRY_KERNEL);
 
-	if (telemetry_windowed_record) {
-		ast_bits |= AST_TELEMETRY_WINDOWED;
-	}
-
-	telemetry_windowed_record = FALSE;
 	telemetry_needs_record = FALSE;
 	thread_ast_set(thread, ast_bits);
 	ast_propagate(thread->ast);
@@ -405,32 +309,6 @@ void compute_telemetry(void *arg __unused)
 		if ((++telemetry_timestamp) % telemetry_sample_rate == 0) {
 			telemetry_needs_record = TRUE;
 			telemetry_needs_timer_arming_record = TRUE;
-		}
-	}
-}
-
-void compute_telemetry_windowed(void)
-{
-	if (telemetry_sample_all_tasks || (telemetry_active_tasks > 0)) {
-		/*
-		 * Due to the relationship between the two fields here,
-		 * a request for a windowed record will "squash" a
-		 * request for a regular interrupt record.  We hedge
-		 * against this by doing a quick check for an existing
-		 * request.  compute_telemetry doesn't hedge because
-		 * a regular request cannot squash a windowed request
-		 * (due to the implementation).
-		 *
-		 * If we really want to do this properly, we could make
-		 * telemetry_needs_record a bitfield, and process one
-		 * request per telemetry_mark_curthread... but that
-		 * would be more expensive (atomics).  This should be
-		 * robust enough for now (although it biases in favor
-		 * of the regular records).
-		 */
-		if (!telemetry_needs_record) {
-			telemetry_needs_record = TRUE;
-			telemetry_windowed_record = TRUE;
 		}
 	}
 }
@@ -451,20 +329,20 @@ telemetry_notify_user(void)
 	}
 
 	telemetry_notification(user_port, flags);
+	ipc_port_release_send(user_port);
 }
 
-void telemetry_ast(thread_t thread, boolean_t interrupted_userspace, boolean_t is_windowed)
+void telemetry_ast(thread_t thread, boolean_t interrupted_userspace, boolean_t io_telemetry)
 {
 	uint8_t microsnapshot_flags = kInterruptRecord;
+	if (io_telemetry == TRUE) {
+		microsnapshot_flags = kIORecord;
+	}
 
 	if (interrupted_userspace)
 		microsnapshot_flags |= kUserMode;
 
-	if (is_windowed) {
-		telemetry_take_sample(thread, microsnapshot_flags, &window_buffer);
-	} else {
-		telemetry_take_sample(thread, microsnapshot_flags, &telemetry_buffer);
-	}
+	telemetry_take_sample(thread, microsnapshot_flags, &telemetry_buffer);
 }
 
 void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro_snapshot_buffer * current_buffer)
@@ -521,6 +399,7 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 	 * buffer with the global telemetry lock held -- so we must do our (possibly faulting)
 	 * copies from userland here, before taking the lock.
 	 */
+	cs.nframes = MAX_CALLSTACK_FRAMES;
 	kperf_ucallstack_sample(&cs, &ctx);
 	if (!(cs.flags & CALLSTACK_VALID))
 		return;
@@ -618,7 +497,7 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 	uint64_t dqkeyaddr = thread_dispatchqaddr(thread);
 	if (dqkeyaddr != 0) {
 		uint64_t dqaddr = 0;
-		uint64_t dq_serialno_offset = get_dispatchqueue_serialno_offset_from_proc(task->bsd_info);
+		uint64_t dq_serialno_offset = get_task_dispatchqueue_serialno_offset(task);
 		if ((copyin(dqkeyaddr, (char *)&dqaddr, (task_has_64BitAddr(task) ? 8 : 4)) == 0) &&
 		    (dqaddr != 0) && (dq_serialno_offset != 0)) {
 			uint64_t dqserialnumaddr = dqaddr + dq_serialno_offset;
@@ -633,7 +512,7 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 	TELEMETRY_LOCK();
 
 	/*
-	 * For the benefit of the window buffer; if our buffer is not backed by anything,
+	 * If our buffer is not backed by anything,
 	 * then we cannot take the sample.  Meant to allow us to deallocate the window
 	 * buffer if it is disabled.
 	 */
@@ -712,13 +591,13 @@ copytobuffer:
 		tsnap->ss_flags |= kTaskRsrcFlagged;
 	}
 
-	if (task->effective_policy.darwinbg == 1) {
+	if (proc_get_effective_task_policy(task, TASK_POLICY_DARWIN_BG)) {
 		tsnap->ss_flags |= kTaskDarwinBG;
 	}
 
 	proc_get_darwinbgstate(task, &tmp);
 
-	if (task->requested_policy.t_role == TASK_FOREGROUND_APPLICATION) {
+	if (proc_get_effective_task_policy(task, TASK_POLICY_ROLE) == TASK_FOREGROUND_APPLICATION) {
 		tsnap->ss_flags |= kTaskIsForeground;
 	}
 
@@ -797,7 +676,7 @@ copytobuffer:
 	thsnap->ts_rqos = thread->requested_policy.thrp_qos;
 	thsnap->ts_rqos_override = thread->requested_policy.thrp_qos_override;
 
-	if (thread->effective_policy.darwinbg) {
+	if (proc_get_effective_thread_policy(thread, TASK_POLICY_DARWIN_BG)) {
 		thsnap->ss_flags |= kThreadDarwinBG;
 	}
 
@@ -929,11 +808,6 @@ log_telemetry_output(vm_offset_t buf, uint32_t pos, uint32_t sz)
 int telemetry_gather(user_addr_t buffer, uint32_t *length, boolean_t mark)
 {
 	return telemetry_buffer_gather(buffer, length, mark, &telemetry_buffer);
-}
-
-int telemetry_gather_windowed(user_addr_t buffer, uint32_t *length)
-{
-	return telemetry_buffer_gather(buffer, length, 0, &window_buffer);
 }
 
 int telemetry_buffer_gather(user_addr_t buffer, uint32_t *length, boolean_t mark, struct micro_snapshot_buffer * current_buffer)
@@ -1069,13 +943,15 @@ vm_offset_t			bootprofile_buffer = 0;
 uint32_t			bootprofile_buffer_size = 0;
 uint32_t			bootprofile_buffer_current_position = 0;
 uint32_t			bootprofile_interval_ms = 0;
+uint32_t			bootprofile_stackshot_flags = 0;
 uint64_t			bootprofile_interval_abs = 0;
 uint64_t			bootprofile_next_deadline = 0;
 uint32_t			bootprofile_all_procs = 0;
 char				bootprofile_proc_name[17];
-
+uint64_t            bootprofile_delta_since_timestamp = 0;
 lck_grp_t       	bootprofile_lck_grp;
 lck_mtx_t       	bootprofile_mtx;
+
 
 enum {
 	kBootProfileDisabled = 0,
@@ -1094,9 +970,6 @@ static void bootprofile_timer_call(
 	timer_call_param_t      param0,
 	timer_call_param_t      param1);
 
-extern int  
-stack_snapshot_from_kernel(int pid, void *buf, uint32_t size, uint32_t flags, unsigned *retbytes);
-
 void bootprofile_init(void)
 {
 	kern_return_t ret;
@@ -1114,6 +987,10 @@ void bootprofile_init(void)
 
 	if (!PE_parse_boot_argn("bootprofile_interval_ms", &bootprofile_interval_ms, sizeof(bootprofile_interval_ms))) {
 		bootprofile_interval_ms = 0;
+	}
+
+	if (!PE_parse_boot_argn("bootprofile_stackshot_flags", &bootprofile_stackshot_flags, sizeof(bootprofile_stackshot_flags))) {
+		bootprofile_stackshot_flags = 0;
 	}
 
 	if (!PE_parse_boot_argn("bootprofile_proc_name", &bootprofile_proc_name, sizeof(bootprofile_proc_name))) {
@@ -1180,7 +1057,8 @@ bootprofile_wake_from_sleep(void)
 }
 
 
-static void bootprofile_timer_call(
+static void
+bootprofile_timer_call(
 	timer_call_param_t      param0 __unused,
 	timer_call_param_t      param1 __unused)
 {
@@ -1215,13 +1093,46 @@ static void bootprofile_timer_call(
 
 	/* initiate a stackshot with whatever portion of the buffer is left */
 	if (bootprofile_buffer_current_position < bootprofile_buffer_size) {
-		stack_snapshot_from_kernel(
-			pid_to_profile,
-			(void *)(bootprofile_buffer + bootprofile_buffer_current_position),
-			bootprofile_buffer_size - bootprofile_buffer_current_position,
-			STACKSHOT_SAVE_LOADINFO | STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_GET_GLOBAL_MEM_STATS,
-            &retbytes
-			);
+
+		uint32_t flags = STACKSHOT_KCDATA_FORMAT | STACKSHOT_TRYLOCK | STACKSHOT_SAVE_LOADINFO
+				| STACKSHOT_GET_GLOBAL_MEM_STATS;
+#if __x86_64__
+		flags |= STACKSHOT_SAVE_KEXT_LOADINFO;
+#endif /* __x86_64__ */
+
+
+		/* OR on flags specified in boot-args */
+		flags |= bootprofile_stackshot_flags;
+		if ((flags & STACKSHOT_COLLECT_DELTA_SNAPSHOT) && (bootprofile_delta_since_timestamp == 0)) {
+			/* Can't take deltas until the first one */
+			flags &= ~ STACKSHOT_COLLECT_DELTA_SNAPSHOT;
+		}
+
+		uint64_t timestamp = 0;
+		if (bootprofile_stackshot_flags & STACKSHOT_COLLECT_DELTA_SNAPSHOT) {
+			timestamp = mach_absolute_time();
+		}
+
+		kern_return_t r = stack_snapshot_from_kernel(
+		    pid_to_profile, (void *)(bootprofile_buffer + bootprofile_buffer_current_position),
+		    bootprofile_buffer_size - bootprofile_buffer_current_position,
+			flags, bootprofile_delta_since_timestamp, &retbytes);
+
+		/*
+		 * We call with STACKSHOT_TRYLOCK because the stackshot lock is coarser
+		 * than the bootprofile lock.  If someone else has the lock we'll just
+		 * try again later.
+		 */
+
+		if (r == KERN_LOCK_OWNED) {
+			BOOTPROFILE_UNLOCK();
+			goto reprogram;
+		}
+
+		if   (bootprofile_stackshot_flags & STACKSHOT_COLLECT_DELTA_SNAPSHOT &&
+			  r == KERN_SUCCESS) {
+			bootprofile_delta_since_timestamp = timestamp;
+		}
 
 		bootprofile_buffer_current_position += retbytes;
 	}
@@ -1249,6 +1160,14 @@ reprogram:
 								 0,
 								 TIMER_CALL_SYS_NORMAL,
 								 FALSE);
+}
+
+void bootprofile_get(void **buffer, uint32_t *length)
+{
+	BOOTPROFILE_LOCK();
+	*buffer = (void*) bootprofile_buffer;
+	*length = bootprofile_buffer_current_position;
+	BOOTPROFILE_UNLOCK();
 }
 
 int bootprofile_gather(user_addr_t buffer, uint32_t *length)

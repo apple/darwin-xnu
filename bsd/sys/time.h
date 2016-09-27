@@ -211,6 +211,7 @@ void	timevalsub(struct timeval *t1, struct timeval *t2);
 void	timevalfix(struct timeval *t1);
 #ifdef	BSD_KERNEL_PRIVATE
 time_t	boottime_sec(void);
+void	boottime_timeval(struct timeval *tv);
 void	inittodr(time_t base);
 int	ratecheck(struct timeval *lasttime, const struct timeval *mininterval);
 int	ppsratecheck(struct timeval *lasttime, int *curpps, int maxpps);

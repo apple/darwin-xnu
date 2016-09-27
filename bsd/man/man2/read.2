@@ -66,21 +66,21 @@
 .Fa "int iovcnt"
 .Fc
 .Sh DESCRIPTION
-.Fn Read
+.Fn read
 attempts to read
 .Fa nbyte
 bytes of data from the object referenced by the descriptor
 .Fa fildes
 into the buffer pointed to by
 .Fa buf .
-.Fn Readv
+.Fn readv
 performs the same action,
 but scatters the input data into the
 .Fa iovcnt
 buffers specified by the members of the
 .Fa iov
 array: iov[0], iov[1], ..., iov[iovcnt\|\-\|1].
-.Fn Pread
+.Fn pread
 performs the same function,
 but reads from the specified position in the file
 without modifying the file pointer.
@@ -102,7 +102,7 @@ Each
 .Fa iovec
 entry specifies the base address and length of an area
 in memory where data should be placed.
-.Fn Readv
+.Fn readv
 will always fill an area completely before proceeding
 to the next.
 .Pp

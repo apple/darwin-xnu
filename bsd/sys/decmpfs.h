@@ -29,6 +29,8 @@
 #define _SYS_DECMPFS_H_ 1
 
 #include <sys/kernel_types.h>
+#include <stdbool.h>
+#include <sys/vnode.h>
 
 #define MAX_DECMPFS_XATTR_SIZE 3802
 
@@ -77,7 +79,7 @@ typedef struct {
 
 #include <kern/locks.h>
 
-typedef struct decmpfs_cnode {
+struct decmpfs_cnode {
     uint8_t cmp_state;
     uint8_t cmp_minimal_xattr;       /* if non-zero, this file's com.apple.decmpfs xattr contained only the minimal decmpfs_disk_header */
     uint32_t cmp_type;
@@ -86,7 +88,11 @@ typedef struct decmpfs_cnode {
     uint64_t uncompressed_size __attribute__((aligned(8)));
     uint64_t decompression_flags;
     lck_rw_t compressed_data_lock;
-} decmpfs_cnode;
+};
+
+#endif // XNU_KERNEL_PRIVATE
+
+typedef struct decmpfs_cnode decmpfs_cnode;
 
 /* return values from decmpfs_file_is_compressed */
 enum {
@@ -101,19 +107,22 @@ extern vfs_context_t decmpfs_ctx;
 
 /* client filesystem entrypoints */
 void decmpfs_init(void);
+decmpfs_cnode *decmpfs_cnode_alloc(void);
+void decmpfs_cnode_free(decmpfs_cnode *dp);
 void decmpfs_cnode_init(decmpfs_cnode *cp);
 void decmpfs_cnode_destroy(decmpfs_cnode *cp);
 
 int decmpfs_hides_rsrc(vfs_context_t ctx, decmpfs_cnode *cp);
 int decmpfs_hides_xattr(vfs_context_t ctx, decmpfs_cnode *cp, const char *xattr);
 
-boolean_t decmpfs_trylock_compressed_data(decmpfs_cnode *cp, int exclusive);
+bool decmpfs_trylock_compressed_data(decmpfs_cnode *cp, int exclusive);
 void decmpfs_lock_compressed_data(decmpfs_cnode *cp, int exclusive);
 void decmpfs_unlock_compressed_data(decmpfs_cnode *cp, int exclusive);
 
 uint32_t decmpfs_cnode_get_vnode_state(decmpfs_cnode *cp);
 void decmpfs_cnode_set_vnode_state(decmpfs_cnode *cp, uint32_t state, int skiplock);
 uint64_t decmpfs_cnode_get_vnode_cached_size(decmpfs_cnode *cp);
+uint32_t decmpfs_cnode_cmp_type(decmpfs_cnode *cp);
 
 int decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp);
 errno_t decmpfs_validate_compressed_file(vnode_t vp, decmpfs_cnode *cp);
@@ -123,8 +132,6 @@ int decmpfs_update_attributes(vnode_t vp, struct vnode_attr *vap);
 /* the following two routines will set *is_compressed to 0 if the file was converted from compressed to decompressed before data could be fetched from the decompressor */
 errno_t decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmpfs_cnode *cp);
 errno_t decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_cnode *cp);
-
-#endif /* XNU_KERNEL_PRIVATE */
 
 /* types shared between the kernel and kexts */
 typedef int (*decmpfs_validate_compressed_file_func)(vnode_t vp, vfs_context_t ctx, decmpfs_header *hdr);

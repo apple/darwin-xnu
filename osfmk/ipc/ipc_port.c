@@ -78,6 +78,7 @@
 #include <kern/thread.h>
 #include <kern/misc_protos.h>
 #include <kern/waitq.h>
+#include <kern/policy_internal.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_object.h>
@@ -347,20 +348,13 @@ ipc_port_request_grow(
  *		(or armed with importance in that version).
  */
 
-#if IMPORTANCE_INHERITANCE
 boolean_t
 ipc_port_request_sparm(
 	ipc_port_t			port,
 	__assert_only mach_port_name_t	name,
 	ipc_port_request_index_t	index,
-	mach_msg_option_t		option)
-#else
-boolean_t
-ipc_port_request_sparm(
-	ipc_port_t			port,
-	__assert_only mach_port_name_t	name,
-	ipc_port_request_index_t	index)
-#endif /* IMPORTANCE_INHERITANCE */
+	mach_msg_option_t       option,
+	mach_msg_priority_t override)
 {
 	if (index != IE_REQ_NONE) {
 		ipc_port_request_t ipr, table;
@@ -373,9 +367,16 @@ ipc_port_request_sparm(
 		ipr = &table[index];
 		assert(ipr->ipr_name == name);
 
+		/* Is there a valid destination? */
 		if (IPR_SOR_SPREQ(ipr->ipr_soright)) {
 			ipr->ipr_soright = IPR_SOR_MAKE(ipr->ipr_soright, IPR_SOR_SPARM_MASK);
 			port->ip_sprequests = 1;
+
+			if (option & MACH_SEND_OVERRIDE) {
+				/* apply override to message queue */
+				ipc_mqueue_override_send(&port->ip_messages, override);
+			}
+
 #if IMPORTANCE_INHERITANCE
 			if (((option & MACH_SEND_NOIMPORTANCE) == 0) &&
 			    (port->ip_impdonation != 0) &&
@@ -538,21 +539,31 @@ ipc_port_nsrequest(
 /*
  *	Routine:	ipc_port_clear_receiver
  *	Purpose:
- *		Prepares a receive right for transmission/destruction.
+ *		Prepares a receive right for transmission/destruction,
+ *		optionally performs mqueue destruction (with port lock held)
+ *
  *	Conditions:
  *		The port is locked and active.
+ *	Returns:
+ *		If should_destroy is TRUE, then the return value indicates
+ *		whether the caller needs to reap kmsg structures that should
+ *		be destroyed (by calling ipc_kmsg_reap_delayed)
+ *
+ * 		If should_destroy is FALSE, this always returns FALSE
  */
 
-void
+boolean_t
 ipc_port_clear_receiver(
-	ipc_port_t	port)
+	ipc_port_t	port,
+	boolean_t	should_destroy)
 {
-	spl_t		s;
-
-	assert(ip_active(port));
+	ipc_mqueue_t	mqueue = &port->ip_messages;
+	boolean_t	reap_messages = FALSE;
 
 	/*
-	 * pull ourselves from any sets.
+	 * Pull ourselves out of any sets to which we belong.
+	 * We hold the port locked, so even though this acquires and releases
+	 * the mqueue lock, we know we won't be added to any other sets.
 	 */
 	if (port->ip_in_pset != 0) {
 		ipc_pset_remove_from_all(port);
@@ -563,14 +574,26 @@ ipc_port_clear_receiver(
 	 * Send anyone waiting on the port's queue directly away.
 	 * Also clear the mscount and seqno.
 	 */
-	s = splsched();
-	imq_lock(&port->ip_messages);
-	ipc_mqueue_changed(&port->ip_messages);
-	ipc_port_set_mscount(port, 0);
-	port->ip_messages.imq_seqno = 0;
+	imq_lock(mqueue);
+	ipc_mqueue_changed(mqueue);
+	port->ip_mscount = 0;
+	mqueue->imq_seqno = 0;
 	port->ip_context = port->ip_guarded = port->ip_strict_guard = 0;
+
+	if (should_destroy) {
+		/*
+		 * Mark the mqueue invalid, preventing further send/receive
+		 * operations from succeeding. It's important for this to be
+		 * done under the same lock hold as the ipc_mqueue_changed
+		 * call to avoid additional threads blocking on an mqueue
+		 * that's being destroyed.
+		 */
+		reap_messages = ipc_mqueue_destroy_locked(mqueue);
+	}
+
 	imq_unlock(&port->ip_messages);
-	splx(s);
+
+	return reap_messages;
 }
 
 /*
@@ -728,9 +751,6 @@ ipc_port_spnotify(
 {
 	ipc_port_request_index_t index = 0;
 	ipc_table_elems_t size = 0;
-#if IMPORTANCE_INHERITANCE
-	boolean_t dropassert = FALSE;
-#endif /* IMPORTANCE_INHERITANCE */
 
 	/*
 	 * If the port has no send-possible request
@@ -744,15 +764,15 @@ ipc_port_spnotify(
 #if IMPORTANCE_INHERITANCE
 	if (port->ip_spimportant != 0) {
 		port->ip_spimportant = 0;
-		if (ipc_port_impcount_delta(port, -1, IP_NULL) == -1) {
-			dropassert = TRUE;
+		if (ipc_port_importance_delta(port, IPID_OPTION_NORMAL, -1) == TRUE) {
+			ip_lock(port);
 		}
 	}
 #endif /* IMPORTANCE_INHERITANCE */
 
 	if (port->ip_sprequests == 0) {
 		ip_unlock(port);
-		goto out;
+		return;
 	}
 	port->ip_sprequests = 0;
 
@@ -791,13 +811,6 @@ revalidate:
 		}
 	}
 	ip_unlock(port);
-out:
-#if IMPORTANCE_INHERITANCE
-	if (dropassert == TRUE && ipc_importance_task_is_any_receiver_type(current_task()->task_imp_base)) {
-		/* drop internal assertion */
-		ipc_importance_task_drop_internal_assertion(current_task()->task_imp_base, 1);
-	}
-#endif /* IMPORTANCE_INHERITANCE */
 	return;
 }
 
@@ -850,8 +863,7 @@ ipc_port_dnnotify(
  */
 
 void
-ipc_port_destroy(
-	ipc_port_t	port)
+ipc_port_destroy(ipc_port_t port)
 {
 	ipc_port_t pdrequest, nsrequest;
 	ipc_mqueue_t mqueue;
@@ -867,8 +879,6 @@ ipc_port_destroy(
 	assert(ip_active(port));
 	/* port->ip_receiver_name is garbage */
 	/* port->ip_receiver/port->ip_destination is garbage */
-	assert(port->ip_in_pset == 0);
-	assert(port->ip_mscount == 0);
 
 	/* check for a backup port */
 	pdrequest = port->ip_pdrequest;
@@ -895,6 +905,11 @@ ipc_port_destroy(
 #endif /* IMPORTANCE_INHERITANCE */
 
 	if (pdrequest != IP_NULL) {
+		/* clear receiver, don't destroy the port */
+		(void)ipc_port_clear_receiver(port, FALSE);
+		assert(port->ip_in_pset == 0);
+		assert(port->ip_mscount == 0);
+
 		/* we assume the ref for pdrequest */
 		port->ip_pdrequest = IP_NULL;
 
@@ -909,17 +924,32 @@ ipc_port_destroy(
 		goto drop_assertions;
 	}
 
-	/* once port is dead, we don't need to keep it locked */
-
 	port->ip_object.io_bits &= ~IO_BITS_ACTIVE;
 	port->ip_timestamp = ipc_port_timestamp();
 	nsrequest = port->ip_nsrequest;
+
+	/*
+	 * The mach_msg_* paths don't hold a port lock, they only hold a
+	 * reference to the port object. If a thread raced us and is now
+	 * blocked waiting for message reception on this mqueue (or waiting
+	 * for ipc_mqueue_full), it will never be woken up. We call
+	 * ipc_port_clear_receiver() here, _after_ the port has been marked
+	 * inactive, to wakeup any threads which may be blocked and ensure
+	 * that no other thread can get lost waiting for a wake up on a
+	 * port/mqueue that's been destroyed.
+	 */
+	boolean_t reap_msgs = FALSE;
+	reap_msgs = ipc_port_clear_receiver(port, TRUE); /* marks mqueue inactive */
+	assert(port->ip_in_pset == 0);
+	assert(port->ip_mscount == 0);
 
 	/*
 	 * If the port has a preallocated message buffer and that buffer
 	 * is not inuse, free it.  If it has an inuse one, then the kmsg
 	 * free will detect that we freed the association and it can free it
 	 * like a normal buffer.
+	 *
+	 * Once the port is marked inactive we don't need to keep it locked.
 	 */
 	if (IP_PREALLOC(port)) {
 		ipc_port_t inuse_port;
@@ -942,9 +972,14 @@ ipc_port_destroy(
 	if (nsrequest != IP_NULL)
 		ipc_notify_send_once(nsrequest); /* consumes ref */
 
-	/* destroy any queued messages */
+	/*
+	 * Reap any kmsg objects waiting to be destroyed.
+	 * This must be done after we've released the port lock.
+	 */
+	if (reap_msgs)
+		ipc_kmsg_reap_delayed();
+
 	mqueue = &port->ip_messages;
-	ipc_mqueue_destroy(mqueue);
 
 	/* cleanup waitq related resources */
 	ipc_mqueue_deinit(mqueue);

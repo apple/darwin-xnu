@@ -78,6 +78,7 @@
 #include <sys/sysproto.h>
 
 #include <security/audit/audit.h>
+#include <pexpert/pexpert.h>
 
 lck_grp_t * sysctl_lock_group = NULL;
 lck_rw_t * sysctl_geometry_lock = NULL;
@@ -177,19 +178,6 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 		}
 	}
 
-	if(sysctl_geometry_lock == NULL)
-	{
-		/*
-		 * Initialise the geometry lock for reading/modifying the
-		 * sysctl tree. This is done here because IOKit registers
-		 * some sysctl's before bsd_init() calls
-		 * sysctl_register_fixed().
-		 */
-
-		sysctl_lock_group  = lck_grp_alloc_init("sysctl", NULL);
-		sysctl_geometry_lock = lck_rw_alloc_init(sysctl_lock_group, NULL);
-		sysctl_unlocked_node_lock = lck_mtx_alloc_init(sysctl_lock_group, NULL);
-	}
 	/* Get the write lock to modify the geometry */
 	lck_rw_lock_exclusive(sysctl_geometry_lock);
 
@@ -321,21 +309,35 @@ sysctl_unregister_set(const char *set)
 	}
 }
 
+/*
+ * Exported in BSDKernel.exports, kept for binary compatibility
+ */
+#if defined(__x86_64__)
+void
+sysctl_register_fixed(void)
+{
+}
+#endif
 
 /*
  * Register the kernel's oids on startup.
  */
 
 void
-sysctl_register_all()
+sysctl_early_init(void)
 {
-	sysctl_register_set("__sysctl_set");
-}
+	/*
+	 * Initialize the geometry lock for reading/modifying the
+	 * sysctl tree. This is done here because IOKit registers
+	 * some sysctl's before bsd_init() would otherwise perform
+	 * subsystem initialization.
+	 */
 
-void
-sysctl_register_fixed(void)
-{
-	sysctl_register_all();
+	sysctl_lock_group  = lck_grp_alloc_init("sysctl", NULL);
+	sysctl_geometry_lock = lck_rw_alloc_init(sysctl_lock_group, NULL);
+	sysctl_unlocked_node_lock = lck_mtx_alloc_init(sysctl_lock_group, NULL);
+
+	sysctl_register_set("__sysctl_set");
 }
 
 /*

@@ -146,7 +146,9 @@ extern	void	commpage_set_spin_count(unsigned int  count);
 extern	void	commpage_sched_gen_inc(void);
 extern	void	commpage_update_active_cpus(void);
 extern	void	commpage_update_mach_approximate_time(uint64_t abstime);
-extern	void	commpage_update_kdebug_enable(void);
+extern  void	commpage_update_mach_continuous_time(uint64_t sleeptime);
+extern  void	commpage_update_boottime(uint64_t boottime_usec);
+extern	void	commpage_update_kdebug_state(void);
 extern	void	commpage_update_atm_diagnostic_config(uint32_t);
 
 extern	uint32_t	commpage_is_in_pfz32(uint32_t);

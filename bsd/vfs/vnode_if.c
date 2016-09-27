@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -558,6 +558,26 @@ struct vnodeop_desc vnop_rename_desc = {
 	NULL
 };
 
+int vnop_renamex_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_renamex_args,a_fdvp),
+	VOPARG_OFFSETOF(struct vnop_renamex_args,a_fvp),
+	VOPARG_OFFSETOF(struct vnop_renamex_args,a_tdvp),
+	VOPARG_OFFSETOF(struct vnop_renamex_args,a_tvp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_renamex_desc = {
+	0,
+	"vnop_renamex",
+	0 | VDESC_VP0_WILLRELE | VDESC_VP1_WILLRELE | VDESC_VP2_WILLRELE | VDESC_VP3_WILLRELE,
+	vnop_renamex_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_renamex_args, a_fcnp),
+	VOPARG_OFFSETOF(struct vnop_renamex_args, a_context),
+	NULL
+};
+
 int vnop_compound_rename_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_fdvp),
 	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_fvpp),
@@ -888,6 +908,24 @@ struct vnodeop_desc vnop_copyfile_desc = {
 	NULL
 };
 
+int vnop_clonefile_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_clonefile_args,a_fvp),
+	VOPARG_OFFSETOF(struct vnop_clonefile_args,a_dvp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_clonefile_desc = {
+	0,
+	"vnop_clonefile",
+	0 | VDESC_VP0_WILLRELE | VDESC_VP1_WILLRELE | VDESC_VPP_WILLRELE,
+	vnop_clonefile_vp_offsets,
+	VOPARG_OFFSETOF(struct vnop_clonefile_args, a_vpp),
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_clonefile_args, a_cnp),
+	VOPARG_OFFSETOF(struct vnop_clonefile_args, a_context),
+	NULL
+};
+
 int vop_getxattr_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_getxattr_args,a_vp),
 	VDESC_NO_OFFSET
@@ -1132,6 +1170,7 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_compound_remove_desc,
 	&vnop_link_desc,
 	&vnop_rename_desc,
+	&vnop_renamex_desc,
 	&vnop_compound_rename_desc,
 	&vnop_mkdir_desc,
 	&vnop_compound_mkdir_desc,
@@ -1151,6 +1190,7 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_pageout_desc,
 	&vnop_searchfs_desc,
 	&vnop_copyfile_desc,
+	&vnop_clonefile_desc,
 	&vnop_getxattr_desc,
 	&vnop_setxattr_desc,
 	&vnop_removexattr_desc,

@@ -1,7 +1,6 @@
 #
-# Copyright (C) 1999-2013 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
 #
-
 ifndef VERSDIR
 export VERSDIR := $(shell /bin/pwd)
 endif
@@ -39,12 +38,15 @@ endif
 
 default: install
 
+# default to OS X
+SDKROOT ?= macosx.internal
+
 installhdrs install:
 	cd libsyscall ; \
 		xcodebuild $@ $(TARGET)	\
 			"SRCROOT=$(SRCROOT)/libsyscall"					\
-			"OBJROOT=$(OBJROOT)" 						\
-			"SYMROOT=$(SYMROOT)" 						\
+			"OBJROOT=$(OBJROOT)"						\
+			"SYMROOT=$(SYMROOT)"						\
 			"DSTROOT=$(DSTROOT)"						\
 			"SDKROOT=$(SDKROOT)"
 
@@ -87,10 +89,10 @@ default: install
 
 installhdrs install:
 	cd libkern/kmod ; \
-		xcodebuild $@ 	\
+		xcodebuild $@	\
 			"SRCROOT=$(SRCROOT)/libkern/kmod"				\
-			"OBJROOT=$(OBJROOT)" 						\
-			"SYMROOT=$(SYMROOT)" 						\
+			"OBJROOT=$(OBJROOT)"						\
+			"SYMROOT=$(SYMROOT)"						\
 			"DSTROOT=$(DSTROOT)"						\
 			"SDKROOT=$(SDKROOT)"
 
@@ -99,20 +101,15 @@ clean:
 installsrc:
 	pax -rw . $(SRCROOT)
 
-else ifeq ($(RC_ProjectName),xnu_quick_test)
-# This rule should be removed once rdar://22820602 is complete.
-default: install
-
-installhdrs:
-
-install: xnu_tests
-
-clean:
-
-installsrc:
-	pax -rw . $(SRCROOT)
-
 else ifeq ($(RC_ProjectName),xnu_tests)
+
+export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
+export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
+ifeq ($(SYSCTL_HW_PHYSICALCPU),$(SYSCTL_HW_LOGICALCPU))
+MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_PHYSICALCPU) + 1)
+else
+MAKEJOBS := --jobs=$(SYSCTL_HW_LOGICALCPU)
+endif
 
 default: install
 
@@ -151,26 +148,26 @@ else
 MAKEJOBS := --jobs=$(SYSCTL_HW_LOGICALCPU)
 endif
 
-TOP_TARGETS = 								\
-	clean 								\
-	installsrc 							\
-	exporthdrs 							\
+TOP_TARGETS =								\
+	clean								\
+	installsrc							\
+	exporthdrs							\
 	all all_desktop all_embedded					\
-	all_release_embedded all_development_embedded 			\
-	installhdrs installhdrs_desktop installhdrs_embedded 		\
-	installhdrs_release_embedded installhdrs_development_embedded 	\
-	install install_desktop install_embedded 			\
-	install_release_embedded install_development_embedded 		\
-	installopensource 						\
+	all_release_embedded all_development_embedded			\
+	installhdrs installhdrs_desktop installhdrs_embedded		\
+	installhdrs_release_embedded installhdrs_development_embedded	\
+	install install_desktop install_embedded			\
+	install_release_embedded install_development_embedded		\
+	installopensource						\
 	cscope tags TAGS reindent					\
 	help
 
 DEFAULT_TARGET = all
 
 # Targets for internal build system debugging
-TOP_TARGETS += 						\
+TOP_TARGETS +=						\
 	print_exports print_exports_first_build_config	\
-	setup 						\
+	setup						\
 	build						\
 	config						\
 	install_textfiles				\
@@ -242,10 +239,10 @@ endif # all other RC_ProjectName
 
 installhdrs_libkdd install_libkdd:
 	cd libkdd; \
-		xcodebuild $(subst _libkdd,,$@) 	\
+		xcodebuild -target libkdd $(subst _libkdd,,$@)	\
 			"SRCROOT=$(SRCROOT)/libkdd"		\
-			"OBJROOT=$(OBJROOT)" 			\
-			"SYMROOT=$(SYMROOT)" 			\
+			"OBJROOT=$(OBJROOT)"			\
+			"SYMROOT=$(SYMROOT)"			\
 			"DSTROOT=$(DSTROOT)"			\
 			"SDKROOT=$(SDKROOT)"
 
@@ -254,14 +251,6 @@ installhdrs_libkdd install_libkdd:
 # "make xnu_tests" or via buildit/XBS with the RC_ProjectName=xnu_tests.
 # Define the target here in the outermost scope of the initial Makefile
 
-xnu_tests xnu_quick_test:
-	$(MAKE) -C $(SRCROOT)/tools/tests					\
+xnu_tests:
+	$(MAKE) -C $(SRCROOT)/tools/tests	$(if $(filter -j,$(MAKEFLAGS)),,$(MAKEJOBS)) \
 		SRCROOT=$(SRCROOT)/tools/tests
-
-# This target is defined to compile and run xnu_quick_test under testbots
-testbots:
-	$(MAKE) -C $(SRCROOT)/tools/tests/xnu_quick_test			\
-		SRCROOT=$(SRCROOT)/tools/tests/xnu_quick_test			\
-		MORECFLAGS="-DRUN_UNDER_TESTBOTS=1" 				\
-		MAKE=$(MAKE)							\
-		testbots

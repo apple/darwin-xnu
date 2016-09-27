@@ -156,9 +156,10 @@ OSSet *OSSet::withSet(const OSSet *set,
 
 void OSSet::free()
 {
-    (void) members->super::setOptions(0, kImmutable);
-    if (members)
+    if (members) {
+        (void) members->super::setOptions(0, kImmutable);
         members->release();
+    }
 
     super::free();
 }

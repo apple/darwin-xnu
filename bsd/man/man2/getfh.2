@@ -67,7 +67,7 @@
 .Ft int
 .Fn getfh "const char *path" "fhandle_t *fhp"
 .Sh DESCRIPTION
-.Fn Getfh
+.Fn getfh
 returns a file handle for the specified file or directory
 in the file handle pointed to by
 .Fa fhp .
@@ -81,7 +81,7 @@ is returned and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Getfh
+.Fn getfh
 fails if one or more of the following are true:
 .Bl -tag -width Er
 .It Bq ENOTDIR

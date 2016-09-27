@@ -100,6 +100,7 @@
 #include <kern/cpu_number.h>	/* for cpu_number() */
 #include <machine/spl.h>
 #include <libkern/libkern.h>
+#include <os/log_private.h>
 
 /* for vaddlog(): the following are implemented in osfmk/kern/printf.c  */
 extern void bsd_log_lock(void);
@@ -214,8 +215,7 @@ void
 tprintf(tpr_t tpr, const char *fmt, ...)
 {
 	struct session *sess = (struct session *)tpr;
-	struct tty *tp = TTY_NULL;
-	int flags = TOLOG;
+	struct tty *tp;
 	va_list ap;
 	struct putchar_args pca;
 
@@ -225,25 +225,27 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 		/* ttycheckoutq(), tputchar() require a locked tp */
 		tty_lock(tp);
 		if(ttycheckoutq(tp, 0)) {
-			flags |= TOTTY;
+			pca.flags = TOTTY;
 			/* going to the tty; leave locked */
-		} else {
-			/* not going to the tty... */
-			tty_unlock(tp);
-			tp = TTY_NULL;
+			pca.tty = tp;
+			va_start(ap, fmt);
+			__doprnt(fmt, ap, putchar, &pca, 10, FALSE);
+			va_end(ap);
 		}
+		tty_unlock(tp);
 	}
-	
-	pca.flags = flags;
-	pca.tty   = tp;
+
+	pca.flags = TOLOG;
+	pca.tty   = TTY_NULL;
 	va_start(ap, fmt);
-	__doprnt(fmt, ap, putchar, &pca, 10, FALSE);
+	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 	va_end(ap);
 
-	if (tp != NULL)
-		tty_unlock(tp);	/* lock/unlock is guarded by tp, above */
-
 	logwakeup();
+
+	va_start(ap, fmt);
+	os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap, __builtin_return_address(0));
+	va_end(ap);
 }
 
 /*
@@ -437,11 +439,11 @@ putchar(int c, void *arg)
 }
 
 int
-vprintf(const char *fmt, va_list ap)
+vprintf_log_locked(const char *fmt, va_list ap)
 {
 	struct putchar_args pca;
 
-	pca.flags = TOLOG | TOCONS;
+	pca.flags = TOLOGLOCKED;
 	pca.tty   = NULL;
 	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 	return 0;

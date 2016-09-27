@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -53,6 +53,10 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
+
+#define ATOMIC_PRIVATE 1
+#define LOCK_PRIVATE 1
+
 #include <mach_ldebug.h>
 #include <debug.h>
 
@@ -67,6 +71,8 @@
 #include <kern/processor.h>
 #include <kern/sched_prim.h>
 #include <kern/debug.h>
+#include <machine/atomic.h>
+#include <machine/machine_cpu.h>
 #include <string.h>
 
 
@@ -86,6 +92,27 @@
 #define	LCK_MTX_SLEEP_DEADLINE_CODE	1
 #define	LCK_MTX_LCK_WAIT_CODE		2
 #define	LCK_MTX_UNLCK_WAKEUP_CODE	3
+
+#if MACH_LDEBUG
+#define ALIGN_TEST(p,t) do{if((uintptr_t)p&(sizeof(t)-1)) __builtin_trap();}while(0)
+#else
+#define ALIGN_TEST(p,t) do{}while(0)
+#endif
+
+/* Silence the volatile to _Atomic cast warning */
+#define ATOMIC_CAST(t,p) ((_Atomic t*)(uintptr_t)(p))
+
+/* Enforce program order of loads and stores. */
+#define ordered_load(target, type) \
+		__c11_atomic_load((_Atomic type *)(target), memory_order_relaxed)
+#define ordered_store(target, type, value) \
+		__c11_atomic_store((_Atomic type *)(target), value, memory_order_relaxed)
+
+#define ordered_load_hw(lock)			ordered_load(&(lock)->lock_data, uintptr_t)
+#define ordered_store_hw(lock, value)	ordered_store(&(lock)->lock_data, uintptr_t, (value))
+
+#define NOINLINE		__attribute__((noinline))
+
 
 static queue_head_t	lck_grp_queue;
 static unsigned int	lck_grp_cnt;
@@ -218,6 +245,9 @@ lck_grp_alloc_init(
 void
 lck_grp_init(lck_grp_t * grp, const char * grp_name, lck_grp_attr_t * attr)
 {
+	/* make sure locking infrastructure has been initialized */
+	assert(lck_grp_cnt > 0);
+
 	bzero((void *)grp, sizeof(lck_grp_t));
 
 	(void)strlcpy(grp->lck_grp_name, grp_name, LCK_GRP_MAX_NAME);
@@ -315,6 +345,7 @@ lck_grp_lckcnt_decr(
 	lck_type_t	lck_type)
 {
 	unsigned int	*lckcnt;
+	int		updated;
 
 	switch (lck_type) {
 	case LCK_TYPE_SPIN:
@@ -327,10 +358,12 @@ lck_grp_lckcnt_decr(
 		lckcnt = &grp->lck_grp_rwcnt;
 		break;
 	default:
-		return panic("lck_grp_lckcnt_decr(): invalid lock type: %d\n", lck_type);
+		panic("lck_grp_lckcnt_decr(): invalid lock type: %d\n", lck_type);
+		return;
 	}
 
-	(void)hw_atomic_sub(lckcnt, 1);
+	updated = (int)hw_atomic_sub(lckcnt, 1);
+	assert(updated >= 0);
 }
 
 /*
@@ -415,6 +448,212 @@ lck_attr_free(
 	kfree(attr, sizeof(lck_attr_t));
 }
 
+/*
+ * Routine:	hw_lock_init
+ *
+ *	Initialize a hardware lock.
+ */
+void
+hw_lock_init(hw_lock_t lock)
+{
+	ordered_store_hw(lock, 0);
+}
+
+/*
+ *	Routine: hw_lock_lock_contended
+ *
+ *	Spin until lock is acquired or timeout expires.
+ *	timeout is in mach_absolute_time ticks.
+ *	MACH_RT:  called with preemption disabled.
+ */
+
+#if	__SMP__
+static unsigned int NOINLINE
+hw_lock_lock_contended(hw_lock_t lock, uintptr_t data, uint64_t timeout, boolean_t do_panic)
+{
+	uint64_t	end = 0;
+	uintptr_t	holder = lock->lock_data;
+	int		i;
+
+	if (timeout == 0)
+		timeout = LOCK_PANIC_TIMEOUT;
+
+	for ( ; ; ) {	
+		for (i = 0; i < LOCK_SNOOP_SPINS; i++) {
+			boolean_t	wait = FALSE;
+
+			cpu_pause();
+#if (!__ARM_ENABLE_WFE_) || (LOCK_PRETEST)
+			holder = ordered_load_hw(lock);
+			if (holder != 0)
+				continue;
+#endif
+#if __ARM_ENABLE_WFE_
+			wait = TRUE;	// Wait for event
+#endif
+			if (atomic_compare_exchange(&lock->lock_data, 0, data,
+			    memory_order_acquire_smp, wait))
+				return 1;
+		}
+		if (end == 0)
+			end = ml_get_timebase() + timeout;
+		else if (ml_get_timebase() >= end)
+			break;
+	}
+	if (do_panic) {
+		// Capture the actual time spent blocked, which may be higher than the timeout
+		// if a misbehaving interrupt stole this thread's CPU time.
+		panic("Spinlock timeout after %llu ticks, %p = %lx",
+			(ml_get_timebase() - end + timeout), lock, holder);
+	}
+	return 0;
+}
+#endif	// __SMP__
+
+/*
+ *	Routine: hw_lock_lock
+ *
+ *	Acquire lock, spinning until it becomes available.
+ *	MACH_RT:  also return with preemption disabled.
+ */
+void
+hw_lock_lock(hw_lock_t lock)
+{
+	thread_t	thread;
+	uintptr_t	state;
+
+	thread = current_thread();
+	disable_preemption_for_thread(thread);
+	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
+#if	__SMP__
+#if	LOCK_PRETEST
+	if (ordered_load_hw(lock))
+		goto contended;
+#endif	// LOCK_PRETEST
+	if (atomic_compare_exchange(&lock->lock_data, 0, state,
+					memory_order_acquire_smp, TRUE))
+		return;
+#if	LOCK_PRETEST
+contended:
+#endif	// LOCK_PRETEST
+	hw_lock_lock_contended(lock, state, 0, TRUE);
+#else	// __SMP__
+	if (lock->lock_data)
+		panic("Spinlock held %p", lock);
+	lock->lock_data = state;
+#endif	// __SMP__
+	return;
+}
+
+/*
+ *	Routine: hw_lock_to
+ *
+ *	Acquire lock, spinning until it becomes available or timeout.
+ *	timeout is in mach_absolute_time ticks.
+ *	MACH_RT:  also return with preemption disabled.
+ */
+unsigned int
+hw_lock_to(hw_lock_t lock, uint64_t timeout)
+{
+	thread_t	thread;
+	uintptr_t	state;
+
+	thread = current_thread();
+	disable_preemption_for_thread(thread);
+	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
+#if	__SMP__
+#if	LOCK_PRETEST
+	if (ordered_load_hw(lock))
+		goto contended;
+#endif	// LOCK_PRETEST
+	if (atomic_compare_exchange(&lock->lock_data, 0, state,
+					memory_order_acquire_smp, TRUE))
+		return 1;
+#if	LOCK_PRETEST
+contended:
+#endif	// LOCK_PRETEST
+	return hw_lock_lock_contended(lock, state, timeout, FALSE);
+#else	// __SMP__
+	(void)timeout;
+	if (ordered_load_hw(lock) == 0) {
+		ordered_store_hw(lock, state);
+		return 1;
+	}
+	return 0;
+#endif	// __SMP__
+}
+
+/*
+ *	Routine: hw_lock_try
+ *	MACH_RT:  returns with preemption disabled on success.
+ */
+unsigned int
+hw_lock_try(hw_lock_t lock)
+{
+	thread_t	thread = current_thread();
+	int		success = 0;
+#if	LOCK_TRY_DISABLE_INT
+	long		intmask;
+
+	intmask = disable_interrupts();
+#else
+	disable_preemption_for_thread(thread);
+#endif	// LOCK_TRY_DISABLE_INT
+
+#if	__SMP__
+#if	LOCK_PRETEST
+	if (ordered_load_hw(lock))
+		goto failed;
+#endif	// LOCK_PRETEST
+	success = atomic_compare_exchange(&lock->lock_data, 0, LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK,
+					memory_order_acquire_smp, FALSE);
+#else
+	if (lock->lock_data == 0) {
+		lock->lock_data = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
+		success = 1;
+	}
+#endif	// __SMP__
+
+#if	LOCK_TRY_DISABLE_INT
+	if (success)
+		disable_preemption_for_thread(thread);
+#if	LOCK_PRETEST
+failed:
+#endif	// LOCK_PRETEST
+	restore_interrupts(intmask);
+#else
+#if	LOCK_PRETEST
+failed:
+#endif	// LOCK_PRETEST
+	if (!success)
+		enable_preemption();
+#endif	// LOCK_TRY_DISABLE_INT
+	return success;
+}
+
+/*
+ *	Routine: hw_lock_unlock
+ *
+ *	Unconditionally release lock.
+ *	MACH_RT:  release preemption level.
+ */
+void
+hw_lock_unlock(hw_lock_t lock)
+{
+	__c11_atomic_store((_Atomic uintptr_t *)&lock->lock_data, 0, memory_order_release_smp);
+	enable_preemption();
+}
+
+/*
+ *	RoutineL hw_lock_held
+ *	MACH_RT:  doesn't change preemption state.
+ *	N.B.  Racy, of course.
+ */
+unsigned int
+hw_lock_held(hw_lock_t lock)
+{
+	return (ordered_load_hw(lock) != 0);
+}
 
 /*
  * Routine:	lck_spin_sleep
@@ -665,9 +904,11 @@ lck_mtx_lock_wait (
 	priority = MIN(priority, MAXPRI_PROMOTE);
 
 	thread_lock(holder);
-	if (mutex->lck_mtx_pri == 0)
+	if (mutex->lck_mtx_pri == 0) {
 		holder->promotions++;
-	holder->sched_flags |= TH_SFLAG_PROMOTED;
+		holder->sched_flags |= TH_SFLAG_PROMOTED;
+	}
+
 	if (mutex->lck_mtx_pri < priority && holder->sched_pri < priority) {
 		KERNEL_DEBUG_CONSTANT(
 			MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
@@ -1118,6 +1359,41 @@ void lck_rw_clear_promotion(thread_t thread)
 	splx(s);
 }
 
+/*
+ * Callout from context switch if the thread goes
+ * off core with a positive rwlock_count
+ *
+ * Called at splsched with the thread locked
+ */
+void
+lck_rw_set_promotion_locked(thread_t thread)
+{
+	if (LcksOpts & disLkRWPrio)
+		return;
+
+	integer_t priority;
+
+	priority = thread->sched_pri;
+
+	if (priority < thread->base_pri)
+		priority = thread->base_pri;
+	if (priority < BASEPRI_BACKGROUND)
+		priority = BASEPRI_BACKGROUND;
+
+	if ((thread->sched_pri < priority) ||
+	    !(thread->sched_flags & TH_SFLAG_RW_PROMOTED)) {
+		KERNEL_DEBUG_CONSTANT(
+		        MACHDBG_CODE(DBG_MACH_SCHED, MACH_RW_PROMOTE) | DBG_FUNC_NONE,
+		        (uintptr_t)thread_tid(thread), thread->sched_pri,
+		        thread->base_pri, priority, 0);
+
+		thread->sched_flags |= TH_SFLAG_RW_PROMOTED;
+
+		if (thread->sched_pri < priority)
+			set_sched_pri(thread, priority);
+	}
+}
+
 kern_return_t
 host_lockgroup_info(
 	host_t					host,
@@ -1200,5 +1476,60 @@ host_lockgroup_info(
 	*lockgroup_infop = (lockgroup_info_t *) copy;
 
 	return(KERN_SUCCESS);
+}
+
+/*
+ * Atomic primitives, prototyped in kern/simple_lock.h
+ * Noret versions are more efficient on some architectures
+ */
+	
+uint32_t
+hw_atomic_add(volatile uint32_t *dest, uint32_t delt)
+{
+	ALIGN_TEST(dest,uint32_t);
+	return __c11_atomic_fetch_add(ATOMIC_CAST(uint32_t,dest), delt, memory_order_relaxed) + delt;
+}
+
+uint32_t
+hw_atomic_sub(volatile uint32_t *dest, uint32_t delt)
+{
+	ALIGN_TEST(dest,uint32_t);
+	return __c11_atomic_fetch_sub(ATOMIC_CAST(uint32_t,dest), delt, memory_order_relaxed) - delt;
+}
+
+uint32_t
+hw_atomic_or(volatile uint32_t *dest, uint32_t mask)
+{
+	ALIGN_TEST(dest,uint32_t);
+	return __c11_atomic_fetch_or(ATOMIC_CAST(uint32_t,dest), mask, memory_order_relaxed) | mask;
+}
+
+void
+hw_atomic_or_noret(volatile uint32_t *dest, uint32_t mask)
+{
+	ALIGN_TEST(dest,uint32_t);
+	__c11_atomic_fetch_or(ATOMIC_CAST(uint32_t,dest), mask, memory_order_relaxed);
+}
+
+uint32_t
+hw_atomic_and(volatile uint32_t *dest, uint32_t mask)
+{
+	ALIGN_TEST(dest,uint32_t);
+	return __c11_atomic_fetch_and(ATOMIC_CAST(uint32_t,dest), mask, memory_order_relaxed) & mask;
+}
+
+void
+hw_atomic_and_noret(volatile uint32_t *dest, uint32_t mask)
+{
+	ALIGN_TEST(dest,uint32_t);
+	__c11_atomic_fetch_and(ATOMIC_CAST(uint32_t,dest), mask, memory_order_relaxed);
+}
+
+uint32_t
+hw_compare_and_store(uint32_t oldval, uint32_t newval, volatile uint32_t *dest)
+{
+	ALIGN_TEST(dest,uint32_t);
+	return __c11_atomic_compare_exchange_strong(ATOMIC_CAST(uint32_t,dest), &oldval, newval,
+			memory_order_acq_rel_smp, memory_order_relaxed);
 }
 

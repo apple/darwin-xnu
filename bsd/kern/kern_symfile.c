@@ -139,7 +139,7 @@ kern_ioctl_file_extents(struct kern_direct_file_io_ref_t * ref, u_long theIoctl,
 	    (void) do_ioctl(p1, p2, _DKIOCCSUNPINEXTENT, (caddr_t)&pin);
     }
 
-    while (offset < end) 
+    for (; offset < end; offset += filechunk)
     {
         if (ref->vp->v_type == VREG)
         {
@@ -149,7 +149,8 @@ kern_ioctl_file_extents(struct kern_direct_file_io_ref_t * ref, u_long theIoctl,
 	    filechunk = (size_t)(end - offset);
             error = VNOP_BLOCKMAP(ref->vp, offset, filechunk, &blkno,
 								  &filechunk, NULL, VNODE_WRITE, NULL);
-			if (error) break;
+            if (error) break;
+            if (-1LL == blkno) continue;
             fileblk = blkno * ref->blksize;
         }
         else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR))
@@ -192,7 +193,6 @@ kern_ioctl_file_extents(struct kern_direct_file_io_ref_t * ref, u_long theIoctl,
 	else error = EINVAL;
 
         if (error) break;
-        offset += filechunk;
     }
     return (error);
 }
@@ -279,6 +279,7 @@ kern_open_file_for_direct_io(const char * name,
     VATTR_INIT(&va);
     VATTR_WANTED(&va, va_rdev);
     VATTR_WANTED(&va, va_fsid);
+    VATTR_WANTED(&va, va_devid);
     VATTR_WANTED(&va, va_data_size);
     VATTR_WANTED(&va, va_data_alloc);
     VATTR_WANTED(&va, va_nlink);
@@ -295,7 +296,7 @@ kern_open_file_for_direct_io(const char * name,
         /* Don't dump files with links. */
         if (va.va_nlink != 1) goto out;
 
-        device = va.va_fsid;
+        device = (VATTR_IS_SUPPORTED(&va, va_devid)) ? va.va_devid : va.va_fsid;
         ref->filelength = va.va_data_size;
 
         p1 = &device;
@@ -367,7 +368,7 @@ kern_open_file_for_direct_io(const char * name,
     locked = TRUE;
 
     f_offset = 0;
-    while (f_offset < ref->filelength) 
+    for (; f_offset < ref->filelength; f_offset += filechunk)
     {
         if (ref->vp->v_type == VREG)
         {
@@ -377,7 +378,7 @@ kern_open_file_for_direct_io(const char * name,
             error = VNOP_BLOCKMAP(ref->vp, f_offset, filechunk, &blkno,
 								  &filechunk, NULL, VNODE_WRITE, NULL);
             if (error) goto out;
-
+            if (-1LL == blkno) continue;
             fileblk = blkno * ref->blksize;
         }
         else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR))
@@ -416,7 +417,6 @@ kern_open_file_for_direct_io(const char * name,
 #endif
             physoffset += getphysreq.length;
         }
-        f_offset += filechunk;
     }
     callback(callback_ref, 0ULL, 0ULL);
 

@@ -63,16 +63,20 @@
 #include "kxld_uuid.h"
 #include "kxld_versionmin.h"
 #include "kxld_vtable.h"
+#include "kxld_splitinfolc.h"
 
 #include "kxld_object.h"
+
+extern boolean_t isSplitKext;
+extern boolean_t isOldInterface;
 
 /*******************************************************************************
 * Data structures
 *******************************************************************************/
 
 struct kxld_object {
-    u_char *file;
-    u_long size;
+    u_char *file;       // used by old interface
+    u_long size;        // used by old interface
     const char *name;
     uint32_t filetype;
     cpu_type_t cputype;
@@ -87,6 +91,8 @@ struct kxld_object {
     KXLDsrcversion srcversion;
     KXLDSymtab *symtab;
     struct dysymtab_command *dysymtab_hdr;
+    KXLDsplitinfolc splitinfolc;
+    splitKextLinkInfo split_info;
     kxld_addr_t link_addr;
     u_long    output_buffer_size;
     boolean_t is_kernel;
@@ -186,7 +192,7 @@ static kern_return_t populate_kmod_info(KXLDObject *object);
 *******************************************************************************/
 static boolean_t kxld_object_target_needs_swap(const KXLDObject *object __unused);
 static KXLDSeg * kxld_object_get_seg_by_name(const KXLDObject *object, const char *segname);
-static KXLDSect * kxld_object_get_sect_by_name(const KXLDObject *object, const char *segname, 
+static KXLDSect * kxld_object_get_sect_by_name(const KXLDObject *object, const char *segname,
     const char *sectname);
 
 /*******************************************************************************
@@ -207,6 +213,7 @@ kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
     kern_return_t       rval    = KERN_FAILURE;
     KXLDSeg           * seg     = NULL;
     u_int               i       = 0;
+    u_char *            my_file;
 
     check(object);
     check(file);
@@ -231,6 +238,13 @@ kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
     rval = get_macho_slice_for_arch(object, file, size);
     require_noerr(rval, finish);
 
+    if (isOldInterface) {
+        my_file = object->file;
+    }
+    else {
+        my_file = object->split_info.kextExecutable;
+    }
+    
     /* Allocate the symbol table */
 
     if (!object->symtab) {
@@ -241,9 +255,12 @@ kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
 
     /* Build the relocator */
 
-    rval = kxld_relocator_init(&object->relocator, object->file,
-        object->symtab, &object->sects, object->cputype, 
-        object->cpusubtype, kxld_object_target_needs_swap(object));
+    rval = kxld_relocator_init(&object->relocator,
+                               my_file,
+                               object->symtab, &object->sects,
+                               object->cputype,
+                               object->cpusubtype,
+                               kxld_object_target_needs_swap(object));
     require_noerr(rval, finish);
 
     /* There are four types of Mach-O files that we can support:
@@ -254,10 +271,10 @@ kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
      */
 
     if (kxld_object_is_32_bit(object)) {
-        struct mach_header *mach_hdr = (struct mach_header *) ((void *) object->file);
+        struct mach_header *mach_hdr = (struct mach_header *) ((void *) my_file);
         object->filetype = mach_hdr->filetype;
     } else {
-        struct mach_header_64 *mach_hdr = (struct mach_header_64 *) ((void *) object->file);
+        struct mach_header_64 *mach_hdr = (struct mach_header_64 *) ((void *) my_file);
         object->filetype = mach_hdr->filetype;
     }
 
@@ -301,15 +318,44 @@ kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
                 , &object->locrelocs, &object->extrelocs,
                 target_supports_slideable_kexts(object)
 #endif
+                , isOldInterface ? 0 : object->splitinfolc.datasize
                 );
         }
     }
-
+    
     (void) set_is_object_linked(object);
 
     rval = KERN_SUCCESS;
 finish:
     return rval;
+}
+
+/*******************************************************************************
+ *******************************************************************************/
+splitKextLinkInfo *
+kxld_object_get_link_info(KXLDObject *object)
+{
+    check(object);
+    
+    return &object->split_info;
+}
+
+
+/*******************************************************************************
+ *******************************************************************************/
+void
+kxld_object_set_link_info(KXLDObject *object, splitKextLinkInfo *link_info)
+{
+    check(object);
+    check(link_info);
+
+    object->split_info.vmaddr_TEXT = link_info->vmaddr_TEXT;
+    object->split_info.vmaddr_TEXT_EXEC = link_info->vmaddr_TEXT_EXEC;
+    object->split_info.vmaddr_DATA = link_info->vmaddr_DATA;
+    object->split_info.vmaddr_DATA_CONST = link_info->vmaddr_DATA_CONST;
+    object->split_info.vmaddr_LINKEDIT = link_info->vmaddr_LINKEDIT;
+    
+    return;
 }
 
 /*******************************************************************************
@@ -426,13 +472,12 @@ get_macho_slice_for_arch(KXLDObject *object, u_char *file, u_long size)
     struct fat_arch *archs = (struct fat_arch *) &fat[1];
     boolean_t swap = FALSE;
 #endif /* KERNEL */
-
+    u_char *my_file = file;
+    u_long my_file_size = size;
+    
     check(object);
     check(file);
     check(size);
-
-    object->file = file;
-    object->size = size;
 
     /* We are assuming that we will never receive a fat file in the kernel */
 
@@ -469,20 +514,20 @@ get_macho_slice_for_arch(KXLDObject *object, u_char *file, u_long size)
             rval=KERN_FAILURE;
             kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogTruncatedMachO));
 
-        object->file = file + arch->offset;
-        object->size = arch->size;
+        my_file = my_file + arch->offset;
+        my_file_size = arch->size;
     }
 #endif /* !KERNEL */
 
     /* Swap the Mach-O's headers to this architecture if necessary */
     if (kxld_object_is_32_bit(object)) {
-        rval = validate_and_swap_macho_32(object->file, object->size
+        rval = validate_and_swap_macho_32(my_file, my_file_size
 #if !KERNEL
             , object->host_order
 #endif /* !KERNEL */
             );
     } else {
-        rval = validate_and_swap_macho_64(object->file, object->size
+            rval = validate_and_swap_macho_64(my_file, my_file_size
 #if !KERNEL
             , object->host_order
 #endif /* !KERNEL */
@@ -490,11 +535,20 @@ get_macho_slice_for_arch(KXLDObject *object, u_char *file, u_long size)
     }
     require_noerr(rval, finish);
 
-    mach_hdr = (struct mach_header *) ((void *) object->file);
+    mach_hdr = (struct mach_header *) ((void *) my_file);
     require_action(object->cputype == mach_hdr->cputype, finish,
         rval=KERN_FAILURE;
         kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogTruncatedMachO));
     object->cpusubtype = mach_hdr->cpusubtype;  /* <rdar://problem/16008438> */
+
+    if (isOldInterface) {
+        object->file = my_file;
+        object->size = my_file_size;
+    }
+    else {
+        object->split_info.kextExecutable = my_file;
+        object->split_info.kextSize = my_file_size;
+    }
 
     rval = KERN_SUCCESS;
 finish:
@@ -526,16 +580,24 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
     u_int nsegs = 0;
     u_int nsects = 0;
     u_int ncmds = 0;
+    u_char *my_file;
+
+    if (isOldInterface) {
+        my_file = object->file;
+    }
+    else {
+        my_file = object->split_info.kextExecutable;
+    }
 
     KXLD_3264_FUNC(kxld_object_is_32_bit(object), base_offset,
         get_macho_cmd_data_32, get_macho_cmd_data_64,
-        object->file, offset, &filetype, &ncmds);
+        my_file, offset, &filetype, &ncmds);
 
     /* First pass to count segments and sections */
 
     offset = base_offset;
     for (i = 0; i < ncmds; ++i, offset += cmd_hdr->cmdsize) {
-        cmd_hdr = (struct load_command *) ((void *) (object->file + offset));
+        cmd_hdr = (struct load_command *) ((void *) (my_file + offset));
 
         switch(cmd_hdr->cmd) {
 #if KXLD_USER_OR_ILP32
@@ -585,7 +647,7 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
 
     offset = base_offset;
     for (i = 0; i < ncmds; ++i, offset += cmd_hdr->cmdsize) {
-        cmd_hdr = (struct load_command *) ((void *) (object->file + offset)); 
+        cmd_hdr = (struct load_command *) ((void *) (my_file + offset));
         seg = NULL;
 
         switch(cmd_hdr->cmd) {
@@ -634,6 +696,7 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
             break;
         case LC_VERSION_MIN_MACOSX:
         case LC_VERSION_MIN_IPHONEOS:
+        case LC_VERSION_MIN_TVOS:
         case LC_VERSION_MIN_WATCHOS:
             versionmin_hdr = (struct version_min_command *) cmd_hdr;
             kxld_versionmin_init_from_macho(&object->versionmin, versionmin_hdr);
@@ -644,14 +707,13 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
             break;
         case LC_DYSYMTAB:
             object->dysymtab_hdr = (struct dysymtab_command *) cmd_hdr;            
-
             rval = kxld_reloc_create_macho(&object->extrelocs, &object->relocator,
-                (struct relocation_info *) ((void *) (object->file + object->dysymtab_hdr->extreloff)), 
+                (struct relocation_info *) ((void *) (my_file + object->dysymtab_hdr->extreloff)),
                 object->dysymtab_hdr->nextrel);
             require_noerr(rval, finish);
 
             rval = kxld_reloc_create_macho(&object->locrelocs, &object->relocator,
-                (struct relocation_info *) ((void *) (object->file + object->dysymtab_hdr->locreloff)), 
+                (struct relocation_info *) ((void *) (my_file + object->dysymtab_hdr->locreloff)),
                 object->dysymtab_hdr->nlocrel);
             require_noerr(rval, finish);
 
@@ -665,7 +727,12 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
                     "LC_UNIXTHREAD/LC_MAIN segment is not valid in a kext."));
             break;
         case LC_SEGMENT_SPLIT_INFO:
-            /* To be implemented later; treat as uninteresting for now */
+                if (isSplitKext) {
+                    struct linkedit_data_command *split_info_hdr = NULL;
+                    split_info_hdr = (struct linkedit_data_command *) (void *) cmd_hdr;
+                    kxld_splitinfolc_init_from_macho(&object->splitinfolc, split_info_hdr);
+                }
+            break;
         case LC_CODE_SIGNATURE:
         case LC_DYLD_INFO:
         case LC_DYLD_INFO_ONLY:
@@ -686,9 +753,10 @@ init_from_final_linked_image(KXLDObject *object, u_int *filetype_out,
             /* Initialize the sections */
             for (j = 0; j < seg->sects.nitems; ++j, ++secti) {
                 sect = kxld_array_get_item(&object->sects, secti);
+                
                 KXLD_3264_FUNC(kxld_object_is_32_bit(object), rval,
-                    kxld_sect_init_from_macho_32, kxld_sect_init_from_macho_64,
-                    sect, object->file, &sect_offset, secti, &object->relocator);
+                               kxld_sect_init_from_macho_32, kxld_sect_init_from_macho_64,
+                               sect, my_file, &sect_offset, secti, &object->relocator);
                 require_noerr(rval, finish);
 
                 /* Add the section to the segment.  This will also make sure
@@ -725,11 +793,19 @@ init_from_execute(KXLDObject *object)
     KXLDSectionName *sname = NULL;
     u_int i = 0, j = 0, k = 0;
 #endif /* KXLD_USER_OR_OBJECT */
-
+    u_char *my_file;
+    
     check(object);
 
+    if (isOldInterface) {
+        my_file = object->file;
+    }
+    else {
+        my_file = object->split_info.kextExecutable;
+    }
+    
     require_action(kxld_object_is_kernel(object), finish, rval=KERN_FAILURE);
-
+    
     rval = init_from_final_linked_image(object, &filetype, &symtab_hdr);
     require_noerr(rval, finish);
 
@@ -749,7 +825,7 @@ init_from_execute(KXLDObject *object)
 
     KXLD_3264_FUNC(kxld_object_is_32_bit(object), rval,
         kxld_symtab_init_from_macho_32, kxld_symtab_init_from_macho_64,
-        object->symtab, symtab_hdr, object->file, kernel_linkedit_seg);
+        object->symtab, symtab_hdr, my_file, kernel_linkedit_seg);
     require_noerr(rval, finish);
 
 #if KXLD_USER_OR_OBJECT
@@ -801,8 +877,16 @@ init_from_bundle(KXLDObject *object)
     kern_return_t rval = KERN_FAILURE;
     struct symtab_command *symtab_hdr = NULL;
     u_int filetype = 0;
-
+    u_char *my_file;
+    
     check(object);
+   
+    if (isOldInterface) {
+        my_file = object->file;
+    }
+    else {
+        my_file = object->split_info.kextExecutable;
+    }
 
     require_action(target_supports_bundle(object), finish,
         rval=KERN_FAILURE;
@@ -812,18 +896,18 @@ init_from_bundle(KXLDObject *object)
     rval = init_from_final_linked_image(object, &filetype, &symtab_hdr);
     require_noerr(rval, finish);
 
-    require_action(filetype == MH_KEXT_BUNDLE, finish, 
+    require_action(filetype == MH_KEXT_BUNDLE, finish,
         rval=KERN_FAILURE);
 
     KXLD_3264_FUNC(kxld_object_is_32_bit(object), rval,
         kxld_symtab_init_from_macho_32, kxld_symtab_init_from_macho_64,
-        object->symtab, symtab_hdr, object->file,
+        object->symtab, symtab_hdr, my_file,
         /* kernel_linkedit_seg */ NULL);
     require_noerr(rval, finish);
 
     rval = KERN_SUCCESS;
 finish:
-    return rval;
+   return rval;
 }
 #endif /* KXLD_USER_OR_BUNDLE */
 
@@ -852,8 +936,16 @@ init_from_object(KXLDObject *object)
     u_int nsects = 0;
     u_int i = 0;
     boolean_t has_segment = FALSE;
-
+    u_char *my_file;
+    
     check(object);
+   
+    if (isOldInterface) {
+        my_file = object->file;
+    }
+    else {
+        my_file = object->split_info.kextExecutable;
+    }
 
     require_action(target_supports_object(object),
         finish, rval=KERN_FAILURE;
@@ -862,7 +954,7 @@ init_from_object(KXLDObject *object)
 
     KXLD_3264_FUNC(kxld_object_is_32_bit(object), offset,
         get_macho_cmd_data_32, get_macho_cmd_data_64,
-        object->file, offset, &filetype, &ncmds);
+        my_file, offset, &filetype, &ncmds);
 
     require_action(filetype == MH_OBJECT, finish, rval=KERN_FAILURE);
 
@@ -873,7 +965,7 @@ init_from_object(KXLDObject *object)
      */
 
     for (; i < ncmds; ++i, offset += cmd_hdr->cmdsize) {
-        cmd_hdr = (struct load_command *) ((void *) (object->file + offset));
+        cmd_hdr = (struct load_command *) ((void *) (my_file + offset));
 
         switch(cmd_hdr->cmd) {
 #if KXLD_USER_OR_ILP32
@@ -939,7 +1031,7 @@ init_from_object(KXLDObject *object)
 
             KXLD_3264_FUNC(kxld_object_is_32_bit(object), rval,
                 kxld_symtab_init_from_macho_32, kxld_symtab_init_from_macho_64,
-                object->symtab, symtab_hdr, object->file,
+                object->symtab, symtab_hdr, my_file,
                 /* kernel_linkedit_seg */ NULL);
             require_noerr(rval, finish);
             break;
@@ -961,6 +1053,7 @@ init_from_object(KXLDObject *object)
             break;
         case LC_VERSION_MIN_MACOSX:
         case LC_VERSION_MIN_IPHONEOS:
+        case LC_VERSION_MIN_TVOS:
         case LC_VERSION_MIN_WATCHOS:
         case LC_SOURCE_VERSION:
             /* Not supported for object files, fall through */
@@ -983,9 +1076,10 @@ init_from_object(KXLDObject *object)
 
         for (i = 0; i < nsects; ++i) {
             sect = kxld_array_get_item(&object->sects, i);
+            
             KXLD_3264_FUNC(kxld_object_is_32_bit(object), rval,
-                kxld_sect_init_from_macho_32, kxld_sect_init_from_macho_64,
-                sect, object->file, &sect_offset, i, &object->relocator); 
+                           kxld_sect_init_from_macho_32, kxld_sect_init_from_macho_64,
+                           sect, my_file, &sect_offset, i, &object->relocator);
             require_noerr(rval, finish);
         }
 
@@ -1092,6 +1186,10 @@ get_macho_header_size(const KXLDObject *object)
         header_size += kxld_srcversion_get_macho_header_size();
     }
     
+    if (isSplitKext && object->splitinfolc.has_splitinfolc) {
+        header_size += kxld_splitinfolc_get_macho_header_size();
+    }
+    
     return header_size;
 }
 
@@ -1125,8 +1223,9 @@ get_macho_data_size(const KXLDObject *object)
         
         /* get current __LINKEDIT sizes */
         seg = kxld_object_get_seg_by_name(object, SEG_LINKEDIT);
-        seg_vmsize = (u_long) kxld_seg_get_vmsize(seg);
         
+        seg_vmsize = (u_long) kxld_seg_get_vmsize(seg);
+         
         /* get size of symbol table data that will eventually be dumped
          * into the __LINKEDIT segment
          */
@@ -1233,10 +1332,10 @@ kxld_object_get_reloc_at_symbol(const KXLDObject *object, const KXLDSym *sym)
 
     if (kxld_object_is_final_image(object)) {
         reloc = kxld_reloc_get_reloc_by_offset(&object->extrelocs, 
-            sym->base_addr);
+                                               sym->base_addr);
         if (!reloc) {
             reloc = kxld_reloc_get_reloc_by_offset(&object->locrelocs, 
-                sym->base_addr);
+                                                   sym->base_addr);
         }
     } else {
         offset = kxld_sym_get_section_offset(sym, sect);
@@ -1254,13 +1353,20 @@ kxld_object_get_symbol_of_reloc(const KXLDObject *object,
     const KXLDReloc *reloc, const KXLDSect *sect)
 {
     const KXLDSym *sym = NULL;
-
-    if (kxld_object_is_final_image(object)) {
-        sym = kxld_reloc_get_symbol(&object->relocator, reloc, object->file);
-    } else {
-        sym = kxld_reloc_get_symbol(&object->relocator, reloc, sect->data);
+    u_char *my_file;
+    
+    if (isOldInterface) {
+        my_file = object->file;
     }
-
+    else {
+        my_file = object->split_info.kextExecutable;
+    }
+    
+    if (kxld_object_is_final_image(object)) {
+       sym = kxld_reloc_get_symbol(&object->relocator, reloc, my_file);
+   } else {
+       sym = kxld_reloc_get_symbol(&object->relocator, reloc, sect->data);
+   }
     return sym;
 }
 
@@ -1524,17 +1630,25 @@ set_is_object_linked(KXLDObject *object)
 
 /*******************************************************************************
 *******************************************************************************/
-void kxld_object_clear(KXLDObject *object __unused)
+void kxld_object_clear(KXLDObject *object)
 {
     KXLDSeg *seg = NULL;
     KXLDSect *sect = NULL;
     u_int i;
-
+    u_char *my_file;
+    
     check(object);
+
+    if (isOldInterface) {
+        my_file = object->file;
+    }
+    else {
+        my_file = object->split_info.kextExecutable;
+    }
 
 #if !KERNEL
     if (kxld_object_is_kernel(object)) {
-        unswap_macho(object->file, object->host_order, object->target_order);
+        unswap_macho(my_file, object->host_order, object->target_order);
     }
 #endif /* !KERNEL */
 
@@ -1559,8 +1673,15 @@ void kxld_object_clear(KXLDObject *object __unused)
 
     if (object->symtab) kxld_symtab_clear(object->symtab);
 
-    object->file = NULL;
-    object->size = 0;
+    if (isOldInterface) {
+        object->file = NULL;
+        object->size = 0;
+    }
+    else {
+        kxld_splitinfolc_clear(&object->splitinfolc);
+        object->split_info.kextExecutable = NULL;
+        object->split_info.kextSize = 0;
+    }
     object->filetype = 0;
     object->cputype = 0;
     object->cpusubtype = 0;
@@ -1585,12 +1706,20 @@ void kxld_object_deinit(KXLDObject *object __unused)
     KXLDSeg *seg = NULL;
     KXLDSect *sect = NULL;
     u_int i;
-
+    u_char *my_file;
+    
     check(object);
+    
+    if (isOldInterface) {
+        my_file = object->file;
+    }
+    else {
+        my_file = object->split_info.kextExecutable;
+    }
 
 #if !KERNEL
-    if (object->file && kxld_object_is_kernel(object)) {
-        unswap_macho(object->file, object->host_order, object->target_order);
+    if (my_file && kxld_object_is_kernel(object)) {
+        unswap_macho(my_file, object->host_order, object->target_order);
     }
 #endif /* !KERNEL */
 
@@ -1622,9 +1751,18 @@ void kxld_object_deinit(KXLDObject *object __unused)
 const u_char *
 kxld_object_get_file(const KXLDObject *object)
 {
+    const u_char *my_file;
+    
     check(object);
 
-    return object->file;
+    if (isOldInterface) {
+        my_file = object->file;
+    }
+    else {
+        my_file = object->split_info.kextExecutable;
+    }
+    
+    return my_file;
 }
 
 /*******************************************************************************
@@ -1697,6 +1835,42 @@ kxld_object_target_supports_common_symbols(const KXLDObject *object)
     return (object->cputype == CPU_TYPE_I386);
 }
 
+
+/*******************************************************************************
+ *******************************************************************************/
+void
+kxld_object_get_vmsize_for_seg_by_name(const KXLDObject *object,
+                                       const char *segname,
+                                       u_long *vmsize)
+{
+    check(object);
+    check(segname);
+    check(vmsize);
+
+    KXLDSeg *seg = NULL;
+    u_long  my_size = 0;
+
+    /* segment vmsize */
+    seg = kxld_object_get_seg_by_name(object, segname);
+    
+    my_size = (u_long) kxld_seg_get_vmsize(seg);
+    
+#if KXLD_PIC_KEXTS
+    if (kxld_seg_is_linkedit_seg(seg))
+    {
+        u_long  reloc_size = 0;
+        
+        if (target_supports_slideable_kexts(object)) {
+            /* get size of __DYSYMTAB relocation entries */
+            reloc_size = kxld_reloc_get_macho_data_size(&object->locrelocs, &object->extrelocs);
+            my_size += reloc_size;
+        }
+    }
+#endif
+    
+    *vmsize = my_size;
+}
+
 /*******************************************************************************
 *******************************************************************************/
 void
@@ -1713,6 +1887,7 @@ kxld_object_get_vmsize(const KXLDObject *object, u_long *header_size,
 
     *header_size = (object->is_final_image) ?
         0 : (u_long)kxld_round_page_cross_safe(get_macho_header_size(object));
+    
     *vmsize = *header_size + get_macho_data_size(object);
 
 }
@@ -1722,7 +1897,14 @@ kxld_object_get_vmsize(const KXLDObject *object, u_long *header_size,
 void
 kxld_object_set_linked_object_size(KXLDObject *object, u_long vmsize)
 {
-    object->output_buffer_size = vmsize;	/* cache this for use later */
+    check(object);
+
+    if (isOldInterface) {
+        object->output_buffer_size = vmsize;	/* cache this for use later */
+    }
+    else {
+        object->split_info.linkedKextSize = vmsize;
+    }
     return;
 }
 
@@ -1730,7 +1912,8 @@ kxld_object_set_linked_object_size(KXLDObject *object, u_long vmsize)
 *******************************************************************************/
 kern_return_t 
 kxld_object_export_linked_object(const KXLDObject *object, 
-    u_char *linked_object)
+                                 void *linked_object
+                                 )
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDSeg *seg = NULL;
@@ -1741,15 +1924,27 @@ kxld_object_export_linked_object(const KXLDObject *object,
     u_int ncmds = 0;
     u_int i = 0;
     boolean_t   is_32bit_object = kxld_object_is_32_bit(object);
+    kxld_addr_t link_addr;
+    u_char *my_linked_object;
 
     check(object);
     check(linked_object);
+    
+    if (isOldInterface) {
+        size = object->output_buffer_size;
+        link_addr = object->link_addr;
+        my_linked_object = (u_char *) linked_object;
+    }
+    else {
+        size = ((splitKextLinkInfo *)linked_object)->linkedKextSize;
+        link_addr = ((splitKextLinkInfo *)linked_object)->vmaddr_TEXT;
+        my_linked_object = ((splitKextLinkInfo *)linked_object)->linkedKext;
+    }
 
     /* Calculate the size of the headers and data */
 
     header_size = get_macho_header_size(object);
-    size = object->output_buffer_size;
-
+    
     /* Copy data to the file */
 
     ncmds = object->segs.nitems + 1 /* LC_SYMTAB */;
@@ -1774,50 +1969,75 @@ kxld_object_export_linked_object(const KXLDObject *object,
         ncmds++;
     }
     
-    rval = export_macho_header(object, linked_object, ncmds, &header_offset, header_size);
-    require_noerr(rval, finish);
+    if (isSplitKext && object->splitinfolc.has_splitinfolc) {
+       ncmds++;
+    }
 
+    rval = export_macho_header(object, my_linked_object, ncmds, &header_offset, header_size);
+    require_noerr(rval, finish);
+    
     for (i = 0; i < object->segs.nitems; ++i) {
         seg = kxld_array_get_item(&object->segs, i);
 
-        rval = kxld_seg_export_macho_to_vm(seg, linked_object, &header_offset,
-            header_size, size, object->link_addr, is_32bit_object);
-        require_noerr(rval, finish);
+        rval = kxld_seg_export_macho_to_vm(seg, my_linked_object, &header_offset,
+                                           header_size, size, link_addr, is_32bit_object);
+       require_noerr(rval, finish);
     }
 
     seg = kxld_object_get_seg_by_name(object, SEG_LINKEDIT);
-    data_offset = (u_long) (seg->link_addr - object->link_addr);
+    data_offset = (u_long) (seg->link_addr - link_addr);
     
-    rval = kxld_symtab_export_macho(object->symtab, linked_object, &header_offset,
-        header_size, &data_offset, size, is_32bit_object);
+    // data_offset is used to set the fileoff in the macho header load commands
+    rval = kxld_symtab_export_macho(object->symtab,
+                                    my_linked_object,
+                                    &header_offset,
+                                    header_size,
+                                    &data_offset, size, is_32bit_object);
     require_noerr(rval, finish);
+
+    // data_offset now points past the symbol tab and strings data in the linkedit
+    // segment - (it was used to set new values for symoff and stroff)
 
 #if KXLD_PIC_KEXTS
     if (target_supports_slideable_kexts(object)) {
-        rval = kxld_reloc_export_macho(&object->relocator, &object->locrelocs,
-            &object->extrelocs, linked_object, &header_offset, header_size,
-            &data_offset, size);
+        rval = kxld_reloc_export_macho(&object->relocator,
+                                       &object->locrelocs,
+                                       &object->extrelocs,
+                                       my_linked_object,
+                                       &header_offset,
+                                       header_size,
+                                       &data_offset, size);
         require_noerr(rval, finish);
     }
 #endif	/* KXLD_PIC_KEXTS */
 
     if (object->uuid.has_uuid) {
-        rval = kxld_uuid_export_macho(&object->uuid, linked_object, &header_offset, header_size);
+        rval = kxld_uuid_export_macho(&object->uuid, my_linked_object, &header_offset, header_size);
         require_noerr(rval, finish);
     }
 
     if (object->versionmin.has_versionmin) {
-        rval = kxld_versionmin_export_macho(&object->versionmin, linked_object, &header_offset, header_size);
+        rval = kxld_versionmin_export_macho(&object->versionmin, my_linked_object, &header_offset, header_size);
         require_noerr(rval, finish);
     }
 
     if (object->srcversion.has_srcversion) {
-        rval = kxld_srcversion_export_macho(&object->srcversion, linked_object, &header_offset, header_size);
+        rval = kxld_srcversion_export_macho(&object->srcversion, my_linked_object, &header_offset, header_size);
         require_noerr(rval, finish);
     }
-    
+
+    if (isSplitKext && object->splitinfolc.has_splitinfolc) {
+        rval = kxld_splitinfolc_export_macho(&object->splitinfolc,
+                                             linked_object,
+                                             &header_offset,
+                                             header_size,
+                                             &data_offset,
+                                             size);
+        require_noerr(rval, finish);
+    }
+
 #if !KERNEL
-    unswap_macho(linked_object, object->host_order, object->target_order);
+    unswap_macho(my_linked_object, object->host_order, object->target_order);
 #endif /* KERNEL */
 
     rval = KERN_SUCCESS;
@@ -1846,7 +2066,7 @@ export_macho_header(const KXLDObject *object, u_char *buf, u_int ncmds,
     rval = KERN_SUCCESS;
 
 finish:
-    return rval;
+   return rval;
 }
 
 #if KXLD_USER_OR_ILP32
@@ -1862,7 +2082,7 @@ export_macho_header_32(const KXLDObject *object, u_char *buf, u_int ncmds,
     check(object);
     check(buf);
     check(header_offset);
-
+    
     require_action(sizeof(*mach) <= header_size - *header_offset, finish,
         rval=KERN_FAILURE);
     mach = (struct mach_header *) ((void *) (buf + *header_offset));
@@ -1876,7 +2096,7 @@ export_macho_header_32(const KXLDObject *object, u_char *buf, u_int ncmds,
     mach->flags = MH_NOUNDEFS;
 
     *header_offset += sizeof(*mach);
-
+    
     rval = KERN_SUCCESS;
 
 finish:
@@ -1911,7 +2131,21 @@ export_macho_header_64(const KXLDObject *object, u_char *buf, u_int ncmds,
     mach->flags = MH_NOUNDEFS;
 
     *header_offset += sizeof(*mach);
-
+    
+#if SPLIT_KEXTS_DEBUG
+    {
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 " %p >>> Start of macho header (size %lu) <%s>",
+                 (void *) mach,
+                 sizeof(*mach),
+                 __func__);
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+                 " %p <<< End of macho header <%s>",
+                 (void *) ((u_char *)mach + sizeof(*mach)),
+                 __func__);
+    }
+#endif
+    
     rval = KERN_SUCCESS;
 
 finish:
@@ -1952,7 +2186,7 @@ kxld_object_relocate(KXLDObject *object, kxld_addr_t link_address)
     for (i = 0; i < object->segs.nitems; ++i) {
         seg = kxld_array_get_item(&object->segs, i);
         kxld_seg_relocate(seg, link_address);
-    }
+    } // for...
 
     /* Relocate symbols */
     rval = kxld_symtab_relocate(object->symtab, &object->sects);
@@ -1960,7 +2194,7 @@ kxld_object_relocate(KXLDObject *object, kxld_addr_t link_address)
 
     rval = KERN_SUCCESS;
 finish:
-    return rval;
+   return rval;
 }
 
 /*******************************************************************************
@@ -2087,10 +2321,14 @@ kxld_object_process_relocations(KXLDObject *object,
  
     rval = KERN_SUCCESS;
 finish:
-    return rval;
+   return rval;
 }
 
 #if KXLD_USER_OR_BUNDLE
+
+#if SPLIT_KEXTS_DEBUG
+static boolean_t  kxld_show_ptr_value;
+#endif
 
 #define SECT_SYM_PTRS "__nl_symbol_ptr"
 
@@ -2122,7 +2360,7 @@ process_symbol_pointers(KXLDObject *object)
     /* Get the __DATA,__nl_symbol_ptr section.  If it doesn't exist, we have
      * nothing to do.
      */
-
+    
     sect = kxld_object_get_sect_by_name(object, SEG_DATA, SECT_SYM_PTRS);
     if (!sect || !(sect->flags & S_NON_LAZY_SYMBOL_POINTERS)) {
         rval = KERN_SUCCESS;
@@ -2155,19 +2393,35 @@ process_symbol_pointers(KXLDObject *object)
      *      action is required.
      */
 
-    symidx = (int32_t *) ((void *) (object->file + object->dysymtab_hdr->indirectsymoff));
+    if (isOldInterface) {
+        symidx = (int32_t *) ((void *) (object->file + object->dysymtab_hdr->indirectsymoff));
+    }
+    else {
+        symidx = (int32_t *) ((void *) (object->split_info.kextExecutable + object->dysymtab_hdr->indirectsymoff));
+    }
+
     symidx += firstsym;
     symptr = sect->data;
     for (i = 0; i < nsyms; ++i, ++symidx, symptr+=symptrsize) {
         if (*symidx & INDIRECT_SYMBOL_LOCAL) {
             if (*symidx & INDIRECT_SYMBOL_ABS) continue;
 
-            add_to_ptr(symptr, object->link_addr, kxld_object_is_32_bit(object));
+            if (isOldInterface) {
+                add_to_ptr(symptr, object->link_addr, kxld_object_is_32_bit(object));
+            }
+            else {
+                add_to_ptr(symptr, object->split_info.vmaddr_TEXT, kxld_object_is_32_bit(object));
+            }
         } else {
             sym = kxld_symtab_get_symbol_by_index(object->symtab, *symidx);
             require_action(sym, finish, rval=KERN_FAILURE);
-
-            add_to_ptr(symptr, sym->link_addr, kxld_object_is_32_bit(object));
+            
+            if (isOldInterface) {
+                add_to_ptr(symptr, sym->link_addr, kxld_object_is_32_bit(object));
+            }
+            else {
+                add_to_ptr(symptr, object->split_info.vmaddr_TEXT, kxld_object_is_32_bit(object));
+            }
         }
     }
 
@@ -2214,8 +2468,31 @@ process_relocs_from_tables(KXLDObject *object)
         seg = get_seg_by_base_addr(object, reloc->address);
         require_action(seg, finish, rval=KERN_FAILURE);
 
-        rval = kxld_relocator_process_table_reloc(&object->relocator, reloc,
-            seg, object->link_addr);
+        if (isOldInterface) {
+            rval = kxld_relocator_process_table_reloc(&object->relocator, reloc,
+                                                      seg, object->link_addr);
+        }
+        else {
+            kxld_addr_t my_link_addr = object->split_info.vmaddr_TEXT;
+            if (isSplitKext) {
+                if (kxld_seg_is_text_exec_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_TEXT_EXEC;
+                }
+                else if (kxld_seg_is_data_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_DATA;
+                }
+                else if (kxld_seg_is_data_const_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_DATA_CONST;
+                }
+                else if (kxld_seg_is_linkedit_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_LINKEDIT;
+                }
+            }
+            rval = kxld_relocator_process_table_reloc(&object->relocator,
+                                                      reloc,
+                                                      seg,
+                                                      my_link_addr);
+        }
         require_noerr(rval, finish);
     }
 
@@ -2225,9 +2502,32 @@ process_relocs_from_tables(KXLDObject *object)
 
         seg = get_seg_by_base_addr(object, reloc->address);
         require_action(seg, finish, rval=KERN_FAILURE);
-
-        rval = kxld_relocator_process_table_reloc(&object->relocator, reloc,
-            seg, object->link_addr);
+        
+        if (isOldInterface) {
+            rval = kxld_relocator_process_table_reloc(&object->relocator, reloc,
+                                                      seg, object->link_addr);
+        }
+        else {
+            kxld_addr_t my_link_addr = object->split_info.vmaddr_TEXT;
+            if (isSplitKext) {
+                if (kxld_seg_is_text_exec_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_TEXT_EXEC;
+                }
+                else if (kxld_seg_is_data_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_DATA;
+                }
+                else if (kxld_seg_is_data_const_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_DATA_CONST;
+                }
+                else if (kxld_seg_is_linkedit_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_LINKEDIT;
+                }
+            }
+            rval = kxld_relocator_process_table_reloc(&object->relocator,
+                                                      reloc,
+                                                      seg,
+                                                      my_link_addr);
+        }
         require_noerr(rval, finish);
     }
 
@@ -2243,11 +2543,18 @@ add_to_ptr(u_char *symptr, kxld_addr_t val, boolean_t is_32_bit)
 {
     if (is_32_bit) {
         uint32_t *ptr = (uint32_t *) ((void *) symptr);
+        
         *ptr += (uint32_t) val;
     } else {
         uint64_t *ptr = (uint64_t *) ((void *) symptr);
+        
         *ptr += (uint64_t) val;
     }
+    
+#if SPLIT_KEXTS_DEBUG
+    kxld_show_ptr_value = FALSE;
+#endif
+
 }
 #endif /* KXLD_USER_OR_BUNDLE */
 
@@ -2299,12 +2606,20 @@ populate_kmod_info(KXLDObject *object)
         kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogNoKmodInfo));
  
     kmodsect = kxld_array_get_item(&object->sects, kmodsym->sectnum);
+    
     kmod_offset = (u_long) (kmodsym->base_addr -  kmodsect->base_addr);
     kmod_info = (kmod_info_t *) ((void *) (kmodsect->data + kmod_offset));
 
     if (kxld_object_is_32_bit(object)) {
         kmod_info_32_v1_t *kmod = (kmod_info_32_v1_t *) (kmod_info);
-        kmod->address = (uint32_t) object->link_addr;
+
+        if (isOldInterface) {
+            kmod->address = (uint32_t) object->link_addr;
+        }
+        else {
+            kmod->address = (uint32_t) object->split_info.vmaddr_TEXT;
+        }
+
         kmod->size = (uint32_t) size;
         kmod->hdr_size = (uint32_t) header_size;
 
@@ -2317,7 +2632,14 @@ populate_kmod_info(KXLDObject *object)
 #endif /* !KERNEL */
     } else {
         kmod_info_64_v1_t *kmod = (kmod_info_64_v1_t *) (kmod_info);
-        kmod->address = object->link_addr;
+        
+        if (isOldInterface) {
+            kmod->address = object->link_addr;
+        }
+        else {
+            kmod->address = object->split_info.vmaddr_TEXT;
+        }
+
         kmod->size = size;
         kmod->hdr_size = header_size;
 
@@ -2328,8 +2650,29 @@ populate_kmod_info(KXLDObject *object)
             kmod->hdr_size = OSSwapInt64(kmod->hdr_size);
         }
 #endif /* !KERNEL */
-    }
+        
+#if SPLIT_KEXTS_DEBUG
+        {
+            kxld_log(kKxldLogLinking, kKxldLogErr,
+                     " kmodsect %p kmod_info %p = kmodsect->data %p + kmod_offset %lu <%s>",
+                     (void *) kmodsect,
+                     (void *) kmod_info,
+                     (void *) kmodsect->data,
+                     kmod_offset,
+                     __func__);
+            
+            kxld_log(kKxldLogLinking, kKxldLogErr,
+                     " kmod_info data: address %p size %llu hdr_size %llu start_addr %p stop_addr %p <%s>",
+                     (void *) kmod->address,
+                     kmod->size,
+                     kmod->hdr_size,
+                     (void *) kmod->start_addr,
+                     (void *) kmod->stop_addr,
+                     __func__);
+        }
+#endif
 
+    }
 
     rval = KERN_SUCCESS;
 

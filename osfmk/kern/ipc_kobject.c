@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -91,8 +91,6 @@
 #include <mach/clock_server.h>
 #include <mach/clock_priv_server.h>
 #include <mach/lock_set_server.h>
-#include <default_pager/default_pager_object_server.h>
-#include <mach/memory_object_server.h>
 #include <mach/memory_object_control_server.h>
 #include <mach/memory_object_default_server.h>
 #include <mach/processor_server.h>
@@ -100,7 +98,7 @@
 #include <mach/task_server.h>
 #include <mach/mach_voucher_server.h>
 #include <mach/mach_voucher_attr_control_server.h>
-#if VM32_SUPPORT
+#ifdef VM32_SUPPORT
 #include <mach/vm32_map_server.h>
 #endif
 #include <mach/thread_act_server.h>
@@ -187,11 +185,10 @@ const struct mig_subsystem *mig_e[] = {
 	(const struct mig_subsystem *)&lock_set_subsystem,
 	(const struct mig_subsystem *)&task_subsystem,
 	(const struct mig_subsystem *)&thread_act_subsystem,
-#if VM32_SUPPORT
+#ifdef VM32_SUPPORT
 	(const struct mig_subsystem *)&vm32_map_subsystem,
 #endif
 	(const struct mig_subsystem *)&UNDReply_subsystem,
-	(const struct mig_subsystem *)&default_pager_object_subsystem,
 	(const struct mig_subsystem *)&mach_voucher_subsystem,
 	(const struct mig_subsystem *)&mach_voucher_attr_control_subsystem,
 
@@ -260,7 +257,8 @@ mig_init(void)
 
 ipc_kmsg_t
 ipc_kobject_server(
-	ipc_kmsg_t	request)
+	ipc_kmsg_t	request,
+	mach_msg_option_t __unused option)
 {
 	mach_msg_size_t reply_size;
 	ipc_kmsg_t reply;
@@ -268,19 +266,22 @@ ipc_kobject_server(
 	ipc_port_t *destp;
 	ipc_port_t  replyp = IPC_PORT_NULL;
 	mach_msg_format_0_trailer_t *trailer;
-	register mig_hash_t *ptr;
+	mig_hash_t *ptr;
+	task_t task = TASK_NULL;
+	uint32_t exec_token;
+	boolean_t exec_token_changed = FALSE;
 
 	/*
 	 * Find out corresponding mig_hash entry if any
 	 */
 	{
-	    register int key = request->ikm_header->msgh_id;
-	    register int i = MIG_HASH(key);
-	    register int max_iter = mig_table_max_displ;
-	
-	    do
+	    int key = request->ikm_header->msgh_id;
+	    unsigned int i = (unsigned int)MIG_HASH(key);
+	    int max_iter = mig_table_max_displ;
+
+	    do {
 		ptr = &mig_buckets[i++ % MAX_MIG_ENTRIES];
-	    while (key != ptr->num && ptr->num && --max_iter);
+	    } while (key != ptr->num && ptr->num && --max_iter);
 
 	    if (!ptr->routine || key != ptr->num) {
 	        ptr = (mig_hash_t *)0;
@@ -299,6 +300,7 @@ ipc_kobject_server(
 
 	if (reply == IKM_NULL) {
 		printf("ipc_kobject_server: dropping request\n");
+		ipc_kmsg_trace_send(request, option);
 		ipc_kmsg_destroy(request);
 		return IKM_NULL;
 	}
@@ -335,9 +337,28 @@ ipc_kobject_server(
 	 * Find the routine to call, and call it
 	 * to perform the kernel function
 	 */
+	ipc_kmsg_trace_send(request, option);
 	{
-	    if (ptr) {	
+	    if (ptr) {
+		/*
+		 * Check if the port is a task port, if its a task port then
+		 * snapshot the task exec token before the mig routine call.
+		 */
+		ipc_port_t port = request->ikm_header->msgh_remote_port;
+		if (IP_VALID(port) && ip_kotype(port) == IKOT_TASK) {
+			task = convert_port_to_task_with_exec_token(port, &exec_token);
+		}
+
 		(*ptr->routine)(request->ikm_header, reply->ikm_header);
+
+		/* Check if the exec token changed during the mig routine */
+		if (task != TASK_NULL) {
+			if (exec_token != task->exec_token) {
+				exec_token_changed = TRUE;
+			}
+			task_deallocate(task);
+		}
+
 		kernel_task->messages_received++;
 	    }
 	    else {
@@ -451,6 +472,52 @@ ipc_kobject_server(
 #endif	/* DEVELOPMENT || DEBUG */
 		ipc_kmsg_destroy(reply);
 		return IKM_NULL;
+	}
+
+	/* Fail the MIG call if the task exec token changed during the call */
+	if (kr == KERN_SUCCESS && exec_token_changed) {
+		/*
+		 *	Create a new reply msg with error and destroy the old reply msg.
+		 */
+		ipc_kmsg_t new_reply = ipc_kmsg_alloc(reply_size);
+
+		if (new_reply == IKM_NULL) {
+			printf("ipc_kobject_server: dropping request\n");
+			ipc_kmsg_destroy(reply);
+			return IKM_NULL;
+		}
+		/*
+		 *	Initialize the new reply message.
+		 */
+		{
+#define	OutP_new	((mig_reply_error_t *) new_reply->ikm_header)
+#define	OutP_old	((mig_reply_error_t *) reply->ikm_header)
+
+		    bzero((void *)OutP_new, reply_size);
+
+		    OutP_new->NDR = OutP_old->NDR;
+		    OutP_new->Head.msgh_size = sizeof(mig_reply_error_t);
+		    OutP_new->Head.msgh_bits = OutP_old->Head.msgh_bits & ~MACH_MSGH_BITS_COMPLEX;
+		    OutP_new->Head.msgh_remote_port = OutP_old->Head.msgh_remote_port;
+		    OutP_new->Head.msgh_local_port = MACH_PORT_NULL;
+		    OutP_new->Head.msgh_voucher_port = MACH_PORT_NULL;
+		    OutP_new->Head.msgh_id = OutP_old->Head.msgh_id;
+
+		    /* Set the error as KERN_INVALID_TASK */
+		    OutP_new->RetCode = KERN_INVALID_TASK;
+
+#undef	OutP_new
+#undef  OutP_old
+		}
+
+		/*
+		 *	Destroy everything in reply except the reply port right,
+		 *	which is needed in the new reply message.
+		 */
+		reply->ikm_header->msgh_remote_port = MACH_PORT_NULL;
+		ipc_kmsg_destroy(reply);
+
+		reply = new_reply;
 	}
 
  	trailer = (mach_msg_format_0_trailer_t *)
@@ -571,6 +638,10 @@ ipc_kobject_notify(
 
 			case IKOT_SEMAPHORE:
 				semaphore_notify(request_header);
+				return TRUE;
+
+			case IKOT_TASK:
+				task_port_notify(request_header);
 				return TRUE;
 				
 			case IKOT_NAMED_ENTRY:

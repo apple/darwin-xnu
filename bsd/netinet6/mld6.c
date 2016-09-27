@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1219,7 +1219,6 @@ mld_v2_process_group_query(struct in6_multi *inm, int timer, struct mbuf *m0,
 	case MLD_IDLE_MEMBER:
 	case MLD_LEAVING_MEMBER:
 		return (retval);
-		break;
 	case MLD_REPORTING_MEMBER:
 	case MLD_G_QUERY_PENDING_MEMBER:
 	case MLD_SG_QUERY_PENDING_MEMBER:
@@ -3616,22 +3615,16 @@ mld_rec_type_to_str(const int type)
 	switch (type) {
 		case MLD_CHANGE_TO_EXCLUDE_MODE:
 			return "TO_EX";
-			break;
 		case MLD_CHANGE_TO_INCLUDE_MODE:
 			return "TO_IN";
-			break;
 		case MLD_MODE_IS_EXCLUDE:
 			return "MODE_EX";
-			break;
 		case MLD_MODE_IS_INCLUDE:
 			return "MODE_IN";
-			break;
 		case MLD_ALLOW_NEW_SOURCES:
 			return "ALLOW_NEW";
-			break;
 		case MLD_BLOCK_OLD_SOURCES:
 			return "BLOCK_OLD";
-			break;
 		default:
 			break;
 	}

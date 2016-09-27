@@ -11,13 +11,13 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 MI_DIR = machine
-EXCLUDE_HEADERS = 
+EXCLUDE_HEADERS =
 
 ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
 HEADER_LIST = $(filter-out $(EXCLUDE_HEADERS), $(ALL_HEADERS))
 
 INSTALL_MI_LIST	= ${HEADER_LIST}
-INSTALL_MI_LCL_LIST = 
+INSTALL_MI_LCL_LIST =
 INSTALL_MI_DIR = $(MI_DIR)
 
 EXPORT_MI_LIST	= ${HEADER_LIST}

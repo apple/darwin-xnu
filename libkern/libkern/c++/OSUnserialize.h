@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -53,7 +53,7 @@ class OSString;
  *
  * @param buffer      A buffer containing nul-terminated XML data
  *                    representing the object to be recreated.
- * @param errorString If non-</code>NULL</code>, and the XML parser
+ * @param errorString If non-<code>NULL</code>, and the XML parser
  *                    finds an error in <code>buffer</code>,
  *                    <code>*errorString</code> indicates the line number
  *                    and type of error encountered.
@@ -79,7 +79,7 @@ extern "C++" OSObject * OSUnserializeXML(
  *                    representing the object to be recreated.
  * @param bufferSize  The size of the block of memory. The function
  *                    never scans beyond the first bufferSize bytes.
- * @param errorString If non-</code>NULL</code>, and the XML parser
+ * @param errorString If non-<code>NULL</code>, and the XML parser
  *                    finds an error in <code>buffer</code>,
  *                    <code>*errorString</code> indicates the line number
  *                    and type of error encountered.

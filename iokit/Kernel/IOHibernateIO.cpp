@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2004-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,10 +22,9 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-
 
 /*
 
@@ -167,12 +166,14 @@ to restrict I/O ops.
 #include <IOKit/IONVRAM.h>
 #include "IOHibernateInternal.h"
 #include <vm/WKdm_new.h>
+#include <vm/vm_protos.h>
 #include "IOKitKernelInternal.h"
 #include <pexpert/device_tree.h>
 
 #include <machine/pal_routines.h>
 #include <machine/pal_hibernate.h>
 #include <i386/tsc.h>
+#include <i386/cpuid.h>
 
 extern "C" addr64_t		kvtophys(vm_offset_t va);
 extern "C" ppnum_t		pmap_find_phys(pmap_t pmap, addr64_t va);
@@ -180,9 +181,8 @@ extern "C" ppnum_t		pmap_find_phys(pmap_t pmap, addr64_t va);
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define	DISABLE_TRIM		0
-#define TRIM_DELAY		5000
+#define TRIM_DELAY		25000
 
-extern boolean_t		root_is_CF_drive;
 extern unsigned int		save_kdebug_enable;
 extern uint32_t 		gIOHibernateState;
 uint32_t			gIOHibernateMode;
@@ -191,6 +191,7 @@ static char			gIOHibernateFilename[MAXPATHLEN+1];
 static uint32_t			gIOHibernateFreeRatio = 0;	 // free page target (percent)
 uint32_t			gIOHibernateFreeTime  = 0*1000;  // max time to spend freeing pages (ms)
 static uint64_t			gIOHibernateCompression = 0x80;  // default compression 50%
+boolean_t                       gIOHibernateStandbyDisabled;
 
 static IODTNVRAM *		gIOOptionsEntry;
 static IORegistryEntry *	gIOChosenEntry;
@@ -390,7 +391,7 @@ IOHibernateSystemSleep(void)
     OSObject * obj;
     OSString * str;
     OSNumber * num;
-    bool       dsSSD, vmflush;
+    bool       dsSSD, vmflush, swapPinned;
     IOHibernateVars * vars;
     uint64_t   setFileSize = 0;
 
@@ -437,10 +438,11 @@ IOHibernateSystemSleep(void)
     gFSState = kFSOpening;
     IOLockUnlock(gFSLock);
 
+    swapPinned = false;
     do
     {
         vars->srcBuffer = IOBufferMemoryDescriptor::withOptions(kIODirectionOutIn,
-				    2 * page_size + WKdm_SCRATCH_BUF_SIZE, page_size);
+				    2 * page_size + WKdm_SCRATCH_BUF_SIZE_INTERNAL, page_size);
 
 	vars->handoffBuffer = IOBufferMemoryDescriptor::withOptions(kIODirectionOutIn, 
 				    ptoa_64(gIOHibernateHandoffPageCount), page_size);
@@ -471,12 +473,15 @@ IOHibernateSystemSleep(void)
 	gIOHibernateCurrentHeader->debugFlags = gIOHibernateDebugFlags;
 	gIOHibernateCurrentHeader->signature = kIOHibernateHeaderInvalidSignature;
 
-	vmflush = ((kOSBooleanTrue == IOService::getPMRootDomain()->getProperty(kIOPMDeepSleepEnabledKey)) && root_is_CF_drive == FALSE);
+	vmflush = ((kOSBooleanTrue == IOService::getPMRootDomain()->getProperty(kIOPMDeepSleepEnabledKey)));
         err = hibernate_alloc_page_lists(&vars->page_list, 
         				 &vars->page_list_wired,
         				 &vars->page_list_pal);
-        if (KERN_SUCCESS != err)
-            break;
+        if (KERN_SUCCESS != err) break;
+
+	err = hibernate_pin_swap(TRUE);
+	if (KERN_SUCCESS != err) break;
+	swapPinned = true;
 
 	if (vars->fileMinSize || (kIOHibernateModeFileResize & gIOHibernateMode))
 	{
@@ -551,8 +556,18 @@ IOHibernateSystemSleep(void)
         clock_get_uptime(&endTime);
         SUB_ABSOLUTETIME(&endTime, &startTime);
         absolutetime_to_nanoseconds(endTime, &nsec);
-        HIBLOG("hibernate_setup(%d) took %qd ms\n", err, nsec / 1000000ULL);
+
+        boolean_t haveSwapPin, hibFileSSD;
+        haveSwapPin = vm_swap_files_pinned();
+
+        hibFileSSD = (kIOPolledFileSSD & vars->fileVars->flags);
+
+        HIBLOG("hibernate_setup(%d) took %qd ms, swapPin(%d) ssd(%d)\n",
+                err, nsec / 1000000ULL,
+                haveSwapPin, hibFileSSD);
         if (KERN_SUCCESS != err) break;
+
+        gIOHibernateStandbyDisabled = ((!haveSwapPin || !hibFileSSD));
 
         dsSSD = ((0 != (kIOPolledFileSSD & vars->fileVars->flags))
                 && (kOSBooleanTrue == IOService::getPMRootDomain()->getProperty(kIOPMDeepSleepEnabledKey)));
@@ -682,6 +697,8 @@ IOHibernateSystemSleep(void)
     }
     while (false);
 
+    if (swapPinned) hibernate_pin_swap(FALSE);
+
     IOLockLock(gFSLock);
     if ((kIOReturnSuccess == err) && (kFSOpening != gFSState))
     {
@@ -757,7 +774,7 @@ IOWriteExtentsToFile(IOPolledFileIOVars * vars, uint32_t signature)
     int                    rc;
     IOPolledFileExtent *   fileExtents;
 
-    fileExtents = (typeof(fileExtents)) vars->fileExtents->getBytesNoCopy(),
+    fileExtents = (typeof(fileExtents)) vars->fileExtents->getBytesNoCopy();
 
     memset(&hdr, 0, sizeof(IOHibernateImageHeader));
     count = vars->fileExtents->getLength();
@@ -798,6 +815,8 @@ exit:
     return err;
 }
 
+extern "C" boolean_t root_is_CF_drive;
+
 void
 IOOpenDebugDataFile(const char *fname, uint64_t size)
 {
@@ -808,6 +827,8 @@ IOOpenDebugDataFile(const char *fname, uint64_t size)
     if (!gDebugImageLock) {
         gDebugImageLock = IOLockAlloc();
     }
+
+    if (root_is_CF_drive) return;
 
     // Try to get a lock, but don't block for getting lock
     if (!IOLockTryLock(gDebugImageLock)) {
@@ -846,6 +867,23 @@ exit:
 
     if (imagePath) imagePath->release();
     return;
+}
+
+void
+IOCloseDebugDataFile()
+{
+    IOSetBootImageNVRAM(0);
+
+    if (gDebugImageLock) {
+        IOLockLock(gDebugImageLock);
+        if (gDebugImageFileVars != 0) {
+            kprintf("IOHibernateSystemPostWake: Closing debugdata file\n");
+            IOPolledFileClose(&gDebugImageFileVars, 0, 0, 0, 0, 0);
+        }
+        IOLockUnlock(gDebugImageLock);
+    }
+
+
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -1234,6 +1272,7 @@ IOReturn
 IOHibernateSystemPostWake(void)
 {
     gIOHibernateCurrentHeader->signature = kIOHibernateHeaderInvalidSignature;
+    IOLockLock(gFSLock);
     if (kFSOpened == gFSState)
     {
 	// invalidate & close the image file
@@ -1249,17 +1288,10 @@ IOHibernateSystemPostWake(void)
     }
     gFSState = kFSIdle;
 
-    IOSetBootImageNVRAM(0);
+	IOLockUnlock(gFSLock);
 
-    if (gDebugImageLock) {
-        IOLockLock(gDebugImageLock);
-        if (gDebugImageFileVars != 0) {
-            kprintf("IOHibernateSystemPostWake: Closing debugdata file\n");
-            IOPolledFileClose(&gDebugImageFileVars, 0, 0, 0, 0, 0);
-        }
-        IOLockUnlock(gDebugImageLock);
-    }
-
+    // IOCloseDebugDataFile() calls IOSetBootImageNVRAM() unconditionally
+    IOCloseDebugDataFile( );
     return (kIOReturnSuccess);
 }
 
@@ -1299,20 +1331,20 @@ SYSCTL_UINT(_kern, OID_AUTO, hibernatemode,
 		&gIOHibernateMode, 0, "");
 SYSCTL_STRUCT(_kern, OID_AUTO, hibernatestatistics,
 		CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
-		gIOHibernateStats, hibernate_statistics_t, "");
+		&_hibernateStats, hibernate_statistics_t, "");
 
 SYSCTL_UINT(_kern, OID_AUTO, hibernategraphicsready,
 		CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_ANYBODY,
-		&gIOHibernateStats->graphicsReadyTime, 0, "");
+		&_hibernateStats.graphicsReadyTime, 0, "");
 SYSCTL_UINT(_kern, OID_AUTO, hibernatewakenotification,
 		CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_ANYBODY,
-		&gIOHibernateStats->wakeNotificationTime, 0, "");
+		&_hibernateStats.wakeNotificationTime, 0, "");
 SYSCTL_UINT(_kern, OID_AUTO, hibernatelockscreenready,
 		CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_ANYBODY,
-		&gIOHibernateStats->lockScreenReadyTime, 0, "");
+		&_hibernateStats.lockScreenReadyTime, 0, "");
 SYSCTL_UINT(_kern, OID_AUTO, hibernatehidready,
 		CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_ANYBODY,
-		&gIOHibernateStats->hidReadyTime, 0, "");
+		&_hibernateStats.hidReadyTime, 0, "");
 
 
 void
@@ -1353,14 +1385,6 @@ IOHibernateSystemInit(IOPMrootDomain * rootDomain)
     gFSLock = IOLockAlloc();
 }
 
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-static void
-hibernate_setup_for_wake(void)
-{
-}
-
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static IOReturn 
@@ -1385,7 +1409,7 @@ hibernate_write_image(void)
     IOHibernateVars *        vars  = &gIOHibernateVars;
     IOPolledFileExtent *     fileExtents;
 
-    assert_static(sizeof(IOHibernateImageHeader) == 512);
+    _static_assert_1_arg(sizeof(IOHibernateImageHeader) == 512);
 
     uint32_t	 pageCount, pagesDone;
     IOReturn     err;
@@ -1433,8 +1457,9 @@ hibernate_write_image(void)
     svPageCount         = 0;
     zvPageCount         = 0;
 
-    if (!vars->fileVars || !vars->fileVars->pollers)
-        return (false /* sleep */ );
+    if (!vars->fileVars
+    || !vars->fileVars->pollers
+    || !(kIOHibernateModeOn & gIOHibernateMode))      return (kIOHibernatePostWriteSleep);
 
     if (kIOHibernateModeSleep & gIOHibernateMode)
 	kdebug_enable = save_kdebug_enable;
@@ -1475,8 +1500,6 @@ hibernate_write_image(void)
         bzero(&vars->cryptKey[0], sizeof(vars->cryptKey));
     }
 #endif /* CRYPTO */
-
-    hibernate_setup_for_wake();
 
     hibernate_page_list_setall(vars->page_list,
                                vars->page_list_wired,
@@ -1731,6 +1754,9 @@ hibernate_write_image(void)
             kUnwiredEncrypt = kEncrypt
         };
 
+        bool cpuAES = (0 != (CPUID_FEATURE_AES & cpuid_features()));
+#define _pmap_is_noencrypt(x) (cpuAES ? false : pmap_is_noencrypt((x)))
+
         for (pageType = kWiredEncrypt; pageType >= kUnwiredEncrypt; pageType--)
         {
 	    if (kUnwiredEncrypt == pageType)
@@ -1754,13 +1780,13 @@ hibernate_write_image(void)
                                                         &ppnum);
 //              kprintf("[%d](%x : %x)\n", pageType, ppnum, count);
                 iterDone = !count;
-    
+
                 if (count && (kWired & pageType) && needEncrypt)
                 {
                     uint32_t checkIndex;
                     for (checkIndex = 0;
                             (checkIndex < count) 
-                                && (((kEncrypt & pageType) == 0) == pmap_is_noencrypt(ppnum + checkIndex)); 
+                                && (((kEncrypt & pageType) == 0) == _pmap_is_noencrypt(ppnum + checkIndex));
                             checkIndex++)
                     {}
                     if (!checkIndex)
@@ -2068,7 +2094,7 @@ hibernate_machine_init(void)
 #define t40ms(x)	(tmrCvt((((uint64_t)(x)) << 8), tscFCvtt2n) / 1000000)
 #define tStat(x, y)	gIOHibernateStats->x = t40ms(gIOHibernateCurrentHeader->y);
     tStat(booterStart, booterStart);
-    gIOHibernateStats->smcStart = gIOHibernateCurrentHeader->smcStart,
+    gIOHibernateStats->smcStart = gIOHibernateCurrentHeader->smcStart;
     tStat(booterDuration0, booterTime0);
     tStat(booterDuration1, booterTime1);
     tStat(booterDuration2, booterTime2);
@@ -2124,7 +2150,10 @@ hibernate_machine_init(void)
 		break;
 
 	    case kIOHibernateHandoffTypeGraphicsInfo:
-		bcopy(data, gIOHibernateGraphicsInfo, sizeof(*gIOHibernateGraphicsInfo));
+		if (handoff->bytecount == sizeof(*gIOHibernateGraphicsInfo))
+		{
+		    bcopy(data, gIOHibernateGraphicsInfo, sizeof(*gIOHibernateGraphicsInfo));
+		}
 		break;
 
 	    case kIOHibernateHandoffTypeCryptVars:
@@ -2169,7 +2198,7 @@ hibernate_machine_init(void)
     if (cryptvars && !foundCryptData)
     	panic("hibernate handoff");
 
-    HIBPRINT("video %x %d %d %d status %x\n",
+    HIBPRINT("video 0x%llx %d %d %d status %x\n",
 	    gIOHibernateGraphicsInfo->physicalAddress, gIOHibernateGraphicsInfo->depth, 
 	    gIOHibernateGraphicsInfo->width, gIOHibernateGraphicsInfo->height, gIOHibernateGraphicsInfo->gfxStatus); 
 

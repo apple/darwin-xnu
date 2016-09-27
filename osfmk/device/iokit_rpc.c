@@ -141,7 +141,7 @@ MIGEXTERN io_object_t
 iokit_lookup_object_port(
 	ipc_port_t	port)
 {
-	register io_object_t	obj;
+	io_object_t	obj;
 
 	if (!IP_VALID(port))
 	    return (NULL);
@@ -163,7 +163,7 @@ MIGEXTERN io_object_t
 iokit_lookup_connect_port(
 	ipc_port_t	port)
 {
-	register io_object_t	obj;
+	io_object_t	obj;
 
 	if (!IP_VALID(port))
 	    return (NULL);
@@ -258,8 +258,8 @@ MIGEXTERN ipc_port_t
 iokit_make_object_port(
 	io_object_t	obj )
 {
-    register ipc_port_t	port;
-    register ipc_port_t	sendPort;
+    ipc_port_t	port;
+    ipc_port_t	sendPort;
 
     if( obj == NULL)
         return IP_NULL;
@@ -280,8 +280,8 @@ MIGEXTERN ipc_port_t
 iokit_make_connect_port(
 	io_object_t	obj )
 {
-    register ipc_port_t	port;
-    register ipc_port_t	sendPort;
+    ipc_port_t	port;
+    ipc_port_t	sendPort;
 
     if( obj == NULL)
         return IP_NULL;

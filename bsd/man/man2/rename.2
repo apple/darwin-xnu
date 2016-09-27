@@ -38,7 +38,9 @@
 .Os BSD 4.2
 .Sh NAME
 .Nm rename ,
-.Nm renameat
+.Nm renameat ,
+.Nm renamex_np ,
+.Nm renameatx_np
 .Nd change the name of a file
 .Sh SYNOPSIS
 .Fd #include <stdio.h>
@@ -49,6 +51,10 @@
 .Fc
 .Ft int
 .Fn renameat "int fromfd" "const char *from" "int tofd" "const char *to"
+.Ft int
+.Fn renamex_np "const char *from" "const char *to" "unsigned int flags"
+.Ft int
+.Fn renameatx_np "int fromfd" "const char *from" "int tofd" "const char *to" "unsigned int flags"
 .Sh DESCRIPTION
 The
 .Fn rename
@@ -110,6 +116,35 @@ or
 .Fa tofd
 parameter, the current working directory is used in the determination
 of the file for the respective path parameter.
+.Pp
+The
+.Fn renamex_np
+and
+.Fn renameatx_np
+system calls are similar to their counterparts except that they take a
+.Fa flags
+argument.
+Values for
+.Fa flags
+are constructed with below bits set:
+.Bl -tag -offset indent
+.It Dv RENAME_SWAP
+On file systems that support it (see
+.Xr getattrlist 2
+.Dv VOL_CAP_INT_RENAME_SWAP Ns ),
+it will cause the source and target to be atomically swapped.  Source and target need not be of
+the same type, i.e. it is possible to swap a file with a directory.
+EINVAL is returned in case of bitwise-inclusive OR with
+.Dv RENAME_EXCL .
+.It Dv RENAME_EXCL
+On file systems that support it (see
+.Xr getattrlist 2
+.Dv VOL_CAP_INT_RENAME_EXCL Ns ),
+it will cause
+.Dv EEXIST
+to be returned if the destination already exists. EINVAL is returned in case of bitwise-inclusive OR with
+.Dv RENAME_SWAP .
+.El
 .Sh CAVEATS
 The system can deadlock if a loop is present in the file system graph.
 This loop takes the form of an entry in directory
@@ -175,6 +210,14 @@ is being placed cannot be extended because the
 user's quota of disk blocks on the file system
 containing the directory has been exhausted.
 .\" ===========
+.It Bq Er EEXIST
+.Fa flags
+has
+.Dv RENAME_EXCL
+set but
+.Fa new
+already exists.
+.\" ===========
 .It Bq Er EFAULT
 .Em Path
 points outside the process's allocated address space.
@@ -187,6 +230,23 @@ or an attempt is made to rename
 .Ql \&.
 or
 .Ql \&.. .
+If
+.Dv RENAME_SWAP
+is used, then
+.Dv EINVAL
+will also be returned if
+.Fa new
+is a parent directory of
+.Fa old .
+If both RENAME_SWAP and RENAME_EXCL bits are set in
+.Fa flags ,
+then
+.Dv EINVAL
+will be returned.
+.\" ===========
+.It Bq Er EINVAL
+.Fa flags
+has an invalid value.
 .\" ===========
 .It Bq Er EIO
 An I/O error occurs while making or updating a directory entry.
@@ -216,6 +276,14 @@ or a path prefix of
 .Fa new
 does not exist.
 .\" ===========
+.It Bq Er ENOENT
+.Fa flags
+has
+.Dv RENAME_SWAP
+set but
+.Fa new
+does not exist.
+.\" ===========
 .It Bq Er ENOSPC
 The directory in which the entry for the new name is being placed
 cannot be extended because there is no space left on the file
@@ -233,6 +301,10 @@ is not a directory.
 .It Bq Er ENOTEMPTY
 .Fa New
 is a directory and is not empty.
+.\" ===========
+.It Bq Er ENOTSUP
+.Fa flags
+has a value that is not supported by the file system.
 .\" ===========
 .It Bq Er EPERM
 The directory containing
@@ -267,11 +339,11 @@ Note that this error code will not be returned
 if the implementation permits cross-device links.
 .El
 .Pp
-In addition to the errors returned by the
-.Fn rename ,
-the
+The
 .Fn renameat
-may fail if:
+and
+.Fn renameatx_np
+calls may also fail with:
 .Bl -tag -width Er
 .It Bq Er EBADF
 The
@@ -301,6 +373,7 @@ argument is not an absolute path and
 is neither
 .Dv AT_FDCWD
 nor a file descriptor associated with a directory.
+.El
 .Sh CONFORMANCE
 The restriction on renaming a directory whose permissions disallow writing
 is based on the fact that UFS directories contain a ".." entry.

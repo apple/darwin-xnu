@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -81,6 +81,16 @@ _i386_set_ldt:
 	jmp		tramp_cerror
 2:	ret
 
+	ALIGN
+	.globl __thread_set_tsd_base
+__thread_set_tsd_base:
+	pushl   4(%esp)
+	pushl   $0
+	movl    $3,%eax
+	MACHDEP_SYSCALL_TRAP
+	addl    $8,%esp
+	ret
+
 #elif defined(__x86_64__)
 
 	.globl _i386_get_ldt
@@ -104,4 +114,16 @@ _i386_set_ldt:
 	jmp		_cerror
 2:	ret
 
+	ALIGN
+	.globl __thread_set_tsd_base
+__thread_set_tsd_base:
+	movl	$0, %esi	// 0 as the second argument
+	movl    $ SYSCALL_CONSTRUCT_MDEP(3), %eax	// Machine-dependent syscall number 3
+	MACHDEP_SYSCALL_TRAP
+	ret
+
+#else
+#error unknown architecture
 #endif
+
+.subsections_via_symbols

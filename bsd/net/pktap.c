@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -231,6 +231,13 @@ pktap_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	pktap->pktp_filters[1].filter_op = PKTAP_FILTER_OP_PASS;
 	pktap->pktp_filters[1].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
 	pktap->pktp_filters[1].filter_param_if_type = IFT_IEEE1394;
+
+#if (DEVELOPMENT || DEBUG)
+	pktap->pktp_filters[2].filter_op = PKTAP_FILTER_OP_PASS;
+	pktap->pktp_filters[2].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
+	pktap->pktp_filters[2].filter_param_if_type = IFT_OTHER;
+#endif /* DEVELOPMENT || DEBUG */
+
 	/*
 	 * We do not use a set_bpf_tap() function as we rather rely on the more
 	 * accurate callback passed to bpf_attach()
@@ -818,6 +825,8 @@ pktap_fill_proc_info(struct pktap_header *hdr, protocol_family_t proto,
 			hdr->pth_ipproto = IPPROTO_RAW;
 		else		
 			hdr->pth_ipproto = m->m_pkthdr.pkt_proto;
+		if (m->m_pkthdr.pkt_flags & PKTF_NEW_FLOW)
+			hdr->pth_flags |= PTH_FLAG_NEW_FLOW;
 	} else if (outgoing == 0) {
 		struct inpcb *inp = NULL;
 
@@ -1083,6 +1092,10 @@ pktap_bpf_tap(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 						hdr_size = sizeof(hdr_buffer);
 						break;
 					}
+					hdr->pth_dlt = DLT_NULL;
+					hdr_buffer.proto = proto;
+					hdr_size = sizeof(hdr_buffer);
+					break;
 				default:
 					if (pre == 0)
 						hdr->pth_dlt = DLT_RAW;

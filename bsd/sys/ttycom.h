@@ -70,7 +70,6 @@
 #define	_SYS_TTYCOM_H_
 
 #include <sys/ioccom.h>
-
 /*
  * Tty ioctl's except for those supported only for backwards compatibility
  * with the old tty driver.

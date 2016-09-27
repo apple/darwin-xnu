@@ -70,32 +70,83 @@ __BEGIN_DECLS
 
 extern void *
 kalloc_canblock(
-		vm_size_t	       size,
+		vm_size_t	         * size,
 		boolean_t              canblock,
 		vm_allocation_site_t * site);
 
-#define kalloc(size)				\
+extern vm_size_t
+kalloc_size(
+		void 				 * addr);
+
+extern vm_size_t
+kfree_addr(
+		void 				 * addr);
+
+extern vm_size_t
+kalloc_bucket_size(
+		vm_size_t 			   size);
+
+#define kalloc(size)					\
 	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
-	kalloc_canblock((size), TRUE, &site); })
+	vm_size_t tsize = (size);			\
+	kalloc_canblock(&tsize, TRUE, &site); })
 
 #define kalloc_tag(size, tag)			\
 	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), 0 } ; \
-	kalloc_canblock((size), TRUE, &site); })
+		= { (tag), 0 }; 				\
+	vm_size_t tsize = (size);			\
+	kalloc_canblock(&tsize, TRUE, &site); })
 
 #define kalloc_tag_bt(size, tag)		\
 	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), VM_TAG_BT }; \
-	kalloc_canblock((size), TRUE, &site); })
+		= { (tag), VM_TAG_BT }; 		\
+	vm_size_t tsize = (size);			\
+	kalloc_canblock(&tsize, TRUE, &site); })
 
 #define kalloc_noblock(size)			\
 	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
-	kalloc_canblock((size), FALSE, &site); })
+	vm_size_t tsize = (size);			\
+	kalloc_canblock(&tsize, FALSE, &site); })
+
+#define kalloc_noblock_tag(size, tag)	\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
+		= { (tag), 0 }; 		\
+	vm_size_t tsize = (size);			\
+	kalloc_canblock(&tsize, FALSE, &site); })
 
 #define kalloc_noblock_tag_bt(size, tag)	\
 	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), VM_TAG_BT }; \
+		= { (tag), VM_TAG_BT }; 		\
+	vm_size_t tsize = (size);			\
+	kalloc_canblock(&tsize, FALSE, &site); })
+
+
+/* these versions update the size reference with the actual size allocated */
+
+#define kallocp(size)					\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+	kalloc_canblock((size), TRUE, &site); })
+
+#define kallocp_tag(size, tag)			\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
+		= { (tag), 0 }; 				\
+	kalloc_canblock((size), TRUE, &site); })
+
+#define kallocp_tag_bt(size, tag)		\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
+		= { (tag), VM_TAG_BT }; 		\
+	kalloc_canblock((size), TRUE, &site); })
+
+#define kallocp_noblock(size)			\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
 	kalloc_canblock((size), FALSE, &site); })
+
+#define kallocp_noblock_tag_bt(size, tag)	\
+	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
+		= { (tag), VM_TAG_BT }; 		\
+	kalloc_canblock((size), FALSE, &site); })
+
+
 
 extern void kfree(void		*data,
 		  vm_size_t	size);

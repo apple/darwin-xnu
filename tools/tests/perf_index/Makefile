@@ -21,7 +21,6 @@ endif
 endif
 endif
 
-
 ifeq "$(Embedded)" "YES"
 	TARGET_NAME:=PerfIndex.bundle-ios
 else

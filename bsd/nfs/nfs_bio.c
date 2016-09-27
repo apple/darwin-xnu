@@ -97,6 +97,8 @@
 #include <sys/buf_internal.h>
 #include <libkern/OSAtomic.h>
 
+#define NFS_BIO_DBG(...) NFS_DBG(NFS_FAC_BIO, 7, ## __VA_ARGS__)
+
 kern_return_t	thread_terminate(thread_t); /* XXX */
 
 #define	NFSBUFHASH(np, lbn)	\
@@ -3796,6 +3798,28 @@ again:
 			lck_mtx_lock(nfsiod_mutex);
 		}
 	}
+
+	/*
+	 * If we got here while being on the resendq we need to get off. This
+	 * happens when the timer fires and errors out requests from nfs_sigintr
+	 * or we receive a reply (UDP case) while being on the resend queue so
+	 * we're just finishing up and are not going to be resent.
+	 */
+	lck_mtx_lock(&req->r_mtx);
+	if (req->r_flags & R_RESENDQ) {
+		lck_mtx_lock(&nmp->nm_lock);
+		if (req->r_rchain.tqe_next != NFSREQNOLIST) {
+			NFS_BIO_DBG("Proccessing async request on resendq. Removing");
+			TAILQ_REMOVE(&nmp->nm_resendq, req, r_rchain);
+			req->r_rchain.tqe_next = NFSREQNOLIST;
+			assert(req->r_refs > 1);
+			/* Remove resendq reference */
+			req->r_refs--;
+		}
+		lck_mtx_unlock(&nmp->nm_lock);
+		req->r_flags &= ~R_RESENDQ;
+	}
+	lck_mtx_unlock(&req->r_mtx);
 
 	if (req->r_achain.tqe_next == NFSREQNOLIST)
 		TAILQ_INSERT_TAIL(&nmp->nm_iodq, req, r_achain);

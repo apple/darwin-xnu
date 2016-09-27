@@ -37,4 +37,7 @@ subsystem
 simpleroutine host_calendar_changed(
 		notify_port	: mach_port_move_send_once_t);
 
+simpleroutine host_calendar_set(
+		notify_port	: mach_port_move_send_once_t);
+
 /* vim: set ft=c : */

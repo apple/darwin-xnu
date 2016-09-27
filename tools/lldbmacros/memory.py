@@ -8,6 +8,7 @@ import shlex
 from utils import *
 import xnudefines
 from process import *
+import macho
 
 # Macro: memstats
 @lldb_command('memstats')
@@ -16,10 +17,8 @@ def Memstats(cmd_args=None):
     """
     try:
         print "memorystatus_level: {: >10d}".format(kern.globals.memorystatus_level)
-    except ValueError:
-        pass
-    try:
         print "memorystatus_available_pages: {: >10d}".format(kern.globals.memorystatus_available_pages)
+        print "inuse_ptepages_count:    {: >10d}".format(kern.globals.inuse_ptepages_count)
     except ValueError:
         pass
     print "vm_page_throttled_count: {: >10d}".format(kern.globals.vm_page_throttled_count)
@@ -30,7 +29,7 @@ def Memstats(cmd_args=None):
     print "vm_page_purgeable_count: {: >10d}".format(kern.globals.vm_page_purgeable_count)
     print "vm_page_inactive_target: {: >10d}".format(kern.globals.vm_page_inactive_target)
     print "vm_page_free_target:     {: >10d}".format(kern.globals.vm_page_free_target)
-    print "inuse_ptepages_count:    {: >10d}".format(kern.globals.inuse_ptepages_count)
+
     print "vm_page_free_reserved:   {: >10d}".format(kern.globals.vm_page_free_reserved)
 
 @xnudebug_test('test_memstats')
@@ -125,11 +124,118 @@ def ShowMemoryStatus(cmd_args=None):
     
 # EndMacro: showmemorystatus
 
+def GetRealMetadata(meta):
+    """ Get real metadata for a given metadata pointer
+    """
+    try:
+        if unsigned(meta.zindex) != 255:
+            return meta
+        else:
+            return kern.GetValueFromAddress(unsigned(meta) - unsigned(meta.real_metadata_offset), "struct zone_page_metadata *")
+    except:
+        return 0
+
+def GetFreeList(meta):
+    """ Get the free list pointer for a given metadata pointer
+    """
+    global kern
+    zone_map_min_address = kern.GetGlobalVariable('zone_map_min_address')
+    zone_map_max_address = kern.GetGlobalVariable('zone_map_max_address')
+    try:
+        if unsigned(meta.freelist_offset) == unsigned(0xffffffff):
+            return 0
+        else:
+            if (unsigned(meta) >= unsigned(zone_map_min_address)) and (unsigned(meta) < unsigned(zone_map_max_address)):
+                page_index = ((unsigned(meta) - unsigned(kern.GetGlobalVariable('zone_metadata_region_min'))) / sizeof('struct zone_page_metadata'))
+                return (unsigned(zone_map_min_address) + (kern.globals.page_size * (page_index))) + meta.freelist_offset
+            else:
+                return (unsigned(meta) + meta.freelist_offset)
+    except:
+        return 0
+
+@lldb_type_summary(['zone_page_metadata'])
+@header("{:<18s} {:<18s} {:>8s} {:>8s} {:<18s} {:<20s}".format('ZONE_METADATA', 'FREELIST', 'PG_CNT', 'FREE_CNT', 'ZONE', 'NAME'))
+def GetZoneMetadataSummary(meta):
+    """ Summarize a zone metadata object
+        params: meta - obj representing zone metadata in the kernel
+        returns: str - summary of the zone metadata
+    """
+    out_str = ""
+    global kern
+    zinfo = 0
+    try:
+        out_str += 'Metadata Description:\n' + GetZoneMetadataSummary.header + '\n'
+        meta = kern.GetValueFromAddress(meta, "struct zone_page_metadata *")
+        if unsigned(meta.zindex) == 255:
+            out_str += "{:#018x} {:#018x} {:8d} {:8d} {:#018x} {:s}\n".format(meta, 0, 0, 0, 0, '(fake multipage meta)')
+            meta = GetRealMetadata(meta)
+            if meta == 0:
+                return ""
+        zinfo = kern.globals.zone_array[unsigned(meta.zindex)]
+        out_str += "{:#018x} {:#018x} {:8d} {:8d} {:#018x} {:s}".format(meta, GetFreeList(meta), meta.page_count, meta.free_count, addressof(zinfo), zinfo.zone_name)
+        return out_str
+    except:
+        out_str = ""
+        return out_str
+
+@header("{:<18s} {:>18s} {:>18s} {:<18s}".format('ADDRESS', 'TYPE', 'OFFSET_IN_PG', 'METADATA'))
+def WhatIs(addr):
+    """ Information about kernel pointer
+    """
+    out_str = ""
+    global kern
+    pagesize = kern.globals.page_size
+    zone_map_min_address = kern.GetGlobalVariable('zone_map_min_address')
+    zone_map_max_address = kern.GetGlobalVariable('zone_map_max_address')
+    if (unsigned(addr) >= unsigned(zone_map_min_address)) and (unsigned(addr) < unsigned(zone_map_max_address)):
+        zone_metadata_region_min = kern.GetGlobalVariable('zone_metadata_region_min')
+        zone_metadata_region_max = kern.GetGlobalVariable('zone_metadata_region_max')
+        if (unsigned(addr) >= unsigned(zone_metadata_region_min)) and (unsigned(addr) < unsigned(zone_metadata_region_max)):
+            metadata_offset = (unsigned(addr) - unsigned(zone_metadata_region_min)) % sizeof('struct zone_page_metadata')
+            page_offset_str = "{:d}/{:d}".format((unsigned(addr) - (unsigned(addr) & ~(pagesize - 1))), pagesize)
+            out_str += WhatIs.header + '\n'
+            out_str += "{:#018x} {:>18s} {:>18s} {:#018x}\n\n".format(unsigned(addr), "Metadata", page_offset_str, unsigned(addr) - metadata_offset) 
+            out_str += GetZoneMetadataSummary((unsigned(addr) - metadata_offset)) + '\n\n'
+        else:
+            page_index = ((unsigned(addr) & ~(pagesize - 1)) - unsigned(zone_map_min_address)) / pagesize
+            meta = unsigned(zone_metadata_region_min) + (page_index * sizeof('struct zone_page_metadata'))
+            meta = kern.GetValueFromAddress(meta, "struct zone_page_metadata *")
+            page_meta = GetRealMetadata(meta)
+            if page_meta != 0:
+                zinfo = kern.globals.zone_array[unsigned(page_meta.zindex)]
+                page_offset_str = "{:d}/{:d}".format((unsigned(addr) - (unsigned(addr) & ~(pagesize - 1))), pagesize)
+                out_str += WhatIs.header + '\n'
+                out_str += "{:#018x} {:>18s} {:>18s} {:#018x}\n\n".format(unsigned(addr), "Element", page_offset_str, page_meta)
+                out_str += GetZoneMetadataSummary(unsigned(page_meta)) + '\n\n'
+            else:
+                out_str += "Unmapped address within the zone_map ({:#018x}-{:#018x})".format(zone_map_min_address, zone_map_max_address)
+    else:
+        out_str += "Address {:#018x} is outside the zone_map ({:#018x}-{:#018x})\n".format(addr, zone_map_min_address, zone_map_max_address)
+    print out_str
+    return
+
+@lldb_command('whatis')
+def WhatIsHelper(cmd_args=None):
+    """ Routine to show information about a kernel pointer
+        Usage: whatis <address>
+    """
+    if not cmd_args:
+        raise ArgumentError("No arguments passed")
+    addr = kern.GetValueFromAddress(cmd_args[0], 'void *')
+    WhatIs(addr)
+    print "Hexdump:\n"
+    try:
+        data_array = kern.GetValueFromAddress(unsigned(addr) - 16, "uint8_t *")
+        print_hex_data(data_array[0:48], unsigned(addr) - 16, "")
+    except:
+        pass
+    return
+
 # Macro: zprint
 
 @lldb_type_summary(['zone','zone_t'])
-@header("{:^18s} {:>10s} {:>10s} {:>10s} {:>10s} {:>10s} {:>10s} {:>10s}({:>6s} {:>6s} {:>6s}) {:^15s} {:<20s}".format(
-'ZONE', 'TOT_SZ', 'PAGE_COUNT', 'ALLOC_ELTS', 'FREE_ELTS', 'FREE_SZ', 'ELT_SZ', 'ALLOC', 'ELTS', 'PGS', 'WASTE', 'FLAGS', 'NAME'))
+@header("{:^18s} {:>10s} {:>10s} {:>10s} {:>10s} {:>10s} {:>10s} {:>10s} {:>10s}({:>6s} {:>6s} {:>6s}) {:^15s} {:<20s}".format(
+'ZONE', 'TOT_SZ', 'PAGE_COUNT', 'ALLOC_ELTS', 'FREE_ELTS', 'FREE_SZ', 'ALL_FREE_PGS', 'ELT_SZ', 'ALLOC', 'ELTS', 'PGS', 'WASTE', 'FLAGS', 'NAME'))
 def GetZoneSummary(zone):
     """ Summarize a zone with important information. See help zprint for description of each field
         params: 
@@ -145,16 +251,8 @@ def GetZoneSummary(zone):
     free_size = free_elements * zone.elem_size
     
     alloc_pages = zone.alloc_size / pagesize
-    if zone.use_page_list :
-        metadata_size = sizeof('struct zone_page_metadata')
-        metadata_offset = metadata_size
-        if ((metadata_size % zone.elem_size) != 0) :
-            metadata_offset += zone.elem_size - (metadata_size % zone.elem_size)
-        alloc_count = ((pagesize - metadata_offset) / zone.elem_size) * alloc_pages
-        alloc_waste = metadata_offset * alloc_pages
-    else :
-        alloc_count = zone.alloc_size / zone.elem_size
-        alloc_waste = zone.alloc_size  % zone.elem_size
+    alloc_count = zone.alloc_size / zone.elem_size
+    alloc_waste = zone.alloc_size % zone.elem_size
 
     marks = [
             ["collectable",                 "C"],
@@ -168,9 +266,7 @@ def GetZoneSummary(zone):
             ["zleak_on",                    "L"],
             ["doing_alloc_without_vm_priv", "A"],
             ["doing_alloc_with_vm_priv",    "S"],
-            ["waiting",                     "W"],
-            ["doing_gc",                    "G"],
-            ["use_page_list",               "P"]
+            ["waiting",                     "W"]
             ]
     if kern.arch == 'x86_64':
         marks.append(["gzalloc_exempt",     "M"])
@@ -183,7 +279,7 @@ def GetZoneSummary(zone):
         else:
             markings+=" "
     out_string += format_string.format(zone, zone.cur_size, zone.page_count,
-                    zone.count, free_elements, free_size,
+                    zone.count, free_elements, free_size, zone.count_all_free_pages, 
                     zone.elem_size, zone.alloc_size, alloc_count,
                     alloc_pages, alloc_waste, name = zone.zone_name, markings=markings)
     
@@ -212,7 +308,6 @@ def Zprint(cmd_args=None):
         W - another thread is waiting for more memory
         L - zone is being monitored by zleaks
         G - currently running GC
-        P - uses zone_page_metadata
     """
     global kern
     print GetZoneSummary.header
@@ -275,6 +370,8 @@ def ShowZfreeListChain(zone, zfirst, zlimit):
     while ShowZfreeList.elts_found < zlimit:
         ShowZfreeList.elts_found += 1
         znext = dereference(Cast(current, 'vm_offset_t *'))
+        znext = (unsigned(znext) ^ unsigned(kern.globals.zp_nopoison_cookie))
+        znext = kern.GetValueFromAddress(znext, 'vm_offset_t *')
         backup_ptr = kern.GetValueFromAddress((unsigned(Cast(current, 'vm_offset_t')) + unsigned(zone.elem_size) - sizeof('vm_offset_t')), 'vm_offset_t *')
         backup_val = dereference(backup_ptr)
         n_unobfuscated = (unsigned(backup_val) ^ unsigned(kern.globals.zp_nopoison_cookie))
@@ -313,28 +410,23 @@ def ShowZfreeList(cmd_args=None):
         zlimit = ArgumentStringToInt(cmd_args[1])
     ShowZfreeListHeader(zone)
 
-    if unsigned(zone.use_page_list) == 1:
-        if unsigned(zone.allows_foreign) == 1:
-            for free_page_meta in IterateQueue(zone.pages.any_free_foreign, 'struct zone_page_metadata *', 'pages'):
-                if ShowZfreeList.elts_found == zlimit:
-                    break
-                zfirst = Cast(free_page_meta.elements, 'void *')
-                if unsigned(zfirst) != 0:
-                    ShowZfreeListChain(zone, zfirst, zlimit)
-        for free_page_meta in IterateQueue(zone.pages.intermediate, 'struct zone_page_metadata *', 'pages'):
+    if unsigned(zone.allows_foreign) == 1:
+        for free_page_meta in IterateQueue(zone.pages.any_free_foreign, 'struct zone_page_metadata *', 'pages'):
             if ShowZfreeList.elts_found == zlimit:
                 break
-            zfirst = Cast(free_page_meta.elements, 'void *')
+            zfirst = kern.GetValueFromAddress(GetFreeList(free_page_meta), 'void *')
             if unsigned(zfirst) != 0:
                 ShowZfreeListChain(zone, zfirst, zlimit)
-        for free_page_meta in IterateQueue(zone.pages.all_free, 'struct zone_page_metadata *', 'pages'):
-            if ShowZfreeList.elts_found == zlimit:
-                break
-            zfirst = Cast(free_page_meta.elements, 'void *')
-            if unsigned(zfirst) != 0:
-                ShowZfreeListChain(zone, zfirst, zlimit)
-    else:
-        zfirst = Cast(zone.free_elements, 'void *')
+    for free_page_meta in IterateQueue(zone.pages.intermediate, 'struct zone_page_metadata *', 'pages'):
+        if ShowZfreeList.elts_found == zlimit:
+            break
+        zfirst = kern.GetValueFromAddress(GetFreeList(free_page_meta), 'void *')
+        if unsigned(zfirst) != 0:
+            ShowZfreeListChain(zone, zfirst, zlimit)
+    for free_page_meta in IterateQueue(zone.pages.all_free, 'struct zone_page_metadata *', 'pages'):
+        if ShowZfreeList.elts_found == zlimit:
+            break
+        zfirst = kern.GetValueFromAddress(GetFreeList(free_page_meta), 'void *')
         if unsigned(zfirst) != 0:
             ShowZfreeListChain(zone, zfirst, zlimit)
     
@@ -345,20 +437,28 @@ def ShowZfreeList(cmd_args=None):
 
 # EndMacro: showzfreelist
 
+# Macro: zstack_showzonesbeinglogged
+
+@lldb_command('zstack_showzonesbeinglogged')
+def ZstackShowZonesBeingLogged(cmd_args=None):
+    """
+    """    
+    global kern
+    for zval in kern.zones:
+        if zval.zlog_btlog:
+          print "Zone: %s with its BTLog at: 0x%lx" % (zval.zone_name, zval.zlog_btlog)
+
+# EndMacro: zstack_showzonesbeinglogged
+
 # Macro: zstack
 
 @lldb_command('zstack')
 def Zstack(cmd_args=None):
-    """ Zone leak debugging: Print the stack trace of log element at <index>. If a <count> is supplied, it prints <count> log elements starting at <index>.
-        Usage: zstack <index> [<count>]
+    """ Zone leak debugging: Print the stack trace logged at <index> in the stacks list. If a <count> is supplied, it prints <count> stacks starting at <index>.
+        Usage: zstack <btlog addr> <index> [<count>]
 
-        The suggested usage is to look at indexes below zcurrent and look for common stack traces.
-        The stack trace that occurs the most is probably the cause of the leak.  Find the pc of the
-        function calling into zalloc and use the countpcs command to find out how often that pc occurs in the log.
-        The pc occuring in a high percentage of records is most likely the source of the leak.
-        
-        The findoldest command is also useful for leak debugging since it identifies the oldest record
-        in the log, which may indicate the leaker.
+        The suggested usage is to look at stacks with high percentage of refs (maybe > 25%).
+        The stack trace that occurs the most is probably the cause of the leak. Use zstack_findleak for that.
     """
     if not cmd_args:
         print Zstack.__doc__
@@ -366,97 +466,125 @@ def Zstack(cmd_args=None):
     if int(kern.globals.log_records) == 0:
         print "Zone logging not enabled. Add 'zlog=<zone name>' to boot-args."
         return
-    if int(kern.globals.zlog_btlog) == 0:
-        print "Zone logging enabled, but zone has not been initialized yet."
-        return
 
+    btlog_ptr = kern.GetValueFromAddress(cmd_args[0], 'btlog_t *')
+    btrecords_total_size = unsigned(btlog_ptr.btlog_buffersize)
+    btrecord_size = unsigned(btlog_ptr.btrecord_size)
+    btrecords = unsigned(btlog_ptr.btrecords)
+    btlog_size = unsigned(sizeof('struct btlog'))
+    depth = unsigned(btlog_ptr.btrecord_btdepth)
+    zstack_index = ArgumentStringToInt(cmd_args[1])
     count = 1
-    if len(cmd_args) >= 2:
-        count = ArgumentStringToInt(cmd_args[1])
-    zstack_index = unsigned(cmd_args[0])
+    if len(cmd_args) >= 3:
+        count = ArgumentStringToInt(cmd_args[2])
+
+    max_count = ((btrecords_total_size - btlog_size)/btrecord_size)
+
+    if (zstack_index + count) > max_count:
+       count = max_count - zstack_index
+
     while count and (zstack_index != 0xffffff):
-        zstack_record_offset = zstack_index * unsigned(kern.globals.zlog_btlog.btrecord_size)
-        zstack_record = kern.GetValueFromAddress(unsigned(kern.globals.zlog_btlog.btrecords) + zstack_record_offset, 'btlog_record_t *')
-        ShowZStackRecord(zstack_record, zstack_index)
-        zstack_index = zstack_record.next
+        zstack_record_offset = zstack_index * btrecord_size
+        zstack_record = kern.GetValueFromAddress(btrecords + zstack_record_offset, 'btlog_record_t *')
+        if int(zstack_record.ref_count)!=0:
+           ShowZStackRecord(zstack_record, zstack_index, depth, unsigned(btlog_ptr.active_element_count))
+        zstack_index += 1
         count -= 1
 
 # EndMacro : zstack
+
+# Macro: zstack_inorder
+
+@lldb_command('zstack_inorder')
+def ZstackInOrder(cmd_args=None):
+    """ Zone leak debugging: Print the stack traces starting from head to the tail.
+        Usage: zstack_inorder <btlog addr>
+    """
+    if not cmd_args:
+        print "Zone leak debugging: Print the stack traces starting from head to the tail. \nUsage: zstack_inorder <btlog addr>"
+        return
+    if int(kern.globals.log_records) == 0:
+        print "Zone logging not enabled. Add 'zlog=<zone name>' to boot-args."
+        return
+
+    btlog_ptr = kern.GetValueFromAddress(cmd_args[0], 'btlog_t *')
+    btrecords_total_size = unsigned(btlog_ptr.btlog_buffersize)
+    btrecord_size = unsigned(btlog_ptr.btrecord_size)
+    btrecords = unsigned(btlog_ptr.btrecords)
+    btlog_size = unsigned(sizeof('struct btlog'))
+    depth = unsigned(btlog_ptr.btrecord_btdepth)
+    zstack_head = unsigned(btlog_ptr.head)
+    zstack_index = zstack_head
+    zstack_tail = unsigned(btlog_ptr.tail)
+    count = ((btrecords_total_size - btlog_size)/btrecord_size)
+
+    while count and (zstack_index != 0xffffff):
+        zstack_record_offset = zstack_index * btrecord_size
+        zstack_record = kern.GetValueFromAddress(btrecords + zstack_record_offset, 'btlog_record_t *')
+        ShowZStackRecord(zstack_record, zstack_index, depth, unsigned(btlog_ptr.active_element_count))
+        zstack_index = zstack_record.next
+        count -= 1
+
+# EndMacro : zstack_inorder
 
 # Macro: findoldest
 
 @lldb_command('findoldest')
 def FindOldest(cmd_args=None):
-    """ Zone leak debugging: find and print the oldest record in the log.
-        
-        Once it prints a stack trace, find the pc of the caller above all the zalloc, kalloc and
-        IOKit layers.  Then use the countpcs command to see how often this caller has allocated
-        memory.  A caller with a high percentage of records in the log is probably the leaker.
     """
-    if int(kern.globals.log_records) == 0:
-        print FindOldest.__doc__
-        return
-    if int(kern.globals.zlog_btlog) == 0:
-        print "Zone logging enabled, but zone has not been initialized yet."
-        return
-    index = kern.globals.zlog_btlog.head
-    if unsigned(index) != 0xffffff:
-        print "Oldest record is at log index: {0: <d}".format(index)
-        Zstack([index])
-    else:
-        print "No Records Present"
-
+    """
+    print "***** DEPRECATED ***** use 'zstack_findleak' macro instead."
+    return
 # EndMacro : findoldest
 
-# Macro: countpcs
+# Macro : zstack_findleak
 
-@lldb_command('countpcs')
-def Countpcs(cmd_args=None):
-    """ Zone leak debugging: search the log and print a count of all log entries that contain the given <pc>
+@lldb_command('zstack_findleak')
+def zstack_findleak(cmd_args=None):
+    """ Zone leak debugging: search the log and print the stack with the most active references
         in the stack trace.
-        Usage: countpcs <pc>
+        Usage: zstack_findleak <btlog address>
 
-        This is useful for verifying a suspected <pc> as being the source of
-        the leak.  If a high percentage of the log entries contain the given <pc>, then it's most
-        likely the source of the leak.  Note that this command can take several minutes to run.
+        This is useful for verifying a suspected stack as being the source of
+        the leak.
     """
-    if not cmd_args:
-        print Countpcs.__doc__
-        return
-    if int(kern.globals.log_records) == 0:
-        print "Zone logging not enabled. Add 'zlog=<zone name>' to boot-args."
-        return
-    if int(kern.globals.zlog_btlog) == 0:
-        print "Zone logging enabled, but zone has not been initialized yet."
-        return
-    
-    cpcs_index = unsigned(kern.globals.zlog_btlog.head)
-    target_pc = unsigned(kern.GetValueFromAddress(cmd_args[0], 'void *'))
-    found = 0
-    depth = unsigned(kern.globals.zlog_btlog.btrecord_btdepth)
+    btlog_ptr = kern.GetValueFromAddress(cmd_args[0], 'btlog_t *')
+    btrecord_size = unsigned(btlog_ptr.btrecord_size)
+    btrecords = unsigned(btlog_ptr.btrecords)
+
+    cpcs_index = unsigned(btlog_ptr.head)
+    depth = unsigned(btlog_ptr.btrecord_btdepth)
+    highref = 0
+    highref_index = 0
+    highref_record = 0
 
     while cpcs_index != 0xffffff:
-        cpcs_record_offset = cpcs_index * unsigned(kern.globals.zlog_btlog.btrecord_size)
-        cpcs_record = kern.GetValueFromAddress(unsigned(kern.globals.zlog_btlog.btrecords) + cpcs_record_offset, 'btlog_record_t *')
-        frame = 0
-        while frame < depth:
-            frame_pc = unsigned(cpcs_record.bt[frame])
-            if frame_pc == target_pc:
-                found += 1
-                break
-            frame += 1
+        cpcs_record_offset = cpcs_index * btrecord_size
+        cpcs_record = kern.GetValueFromAddress(btrecords + cpcs_record_offset, 'btlog_record_t *')
+        if cpcs_record.ref_count > highref:
+                highref_record = cpcs_record
+                highref = cpcs_record.ref_count
+                highref_index = cpcs_index
         cpcs_index = cpcs_record.next
-    print "Occured {0: <d} times in log ({1: <d}{2: <s} of records)".format(found, (found * 100)/unsigned(kern.globals.zlog_btlog.activecount), '%')
+    ShowZStackRecord(highref_record, highref_index, depth, unsigned(btlog_ptr.active_element_count))
 
-# EndMacro: countpcs
+# EndMacro: zstack_findleak
 
 # Macro: findelem
 
 @lldb_command('findelem')
 def FindElem(cmd_args=None):
-    """ Zone corruption debugging: search the log and print out the stack traces for all log entries that
+    """
+    """
+    print "***** DEPRECATED ***** use 'zstack_findelem' macro instead."
+    return
+# EndMacro: findelem
+
+@lldb_command('zstack_findelem')
+def ZStackFindElem(cmd_args=None):
+    """ Zone corruption debugging: search the zone log and print out the stack traces for all log entries that
         refer to the given zone element.  
-        Usage: findelem <elem addr>
+        Usage: zstack_findelem <btlog addr> <elem addr>
 
         When the kernel panics due to a corrupted zone element, get the
         element address and use this command.  This will show you the stack traces of all logged zalloc and
@@ -464,87 +592,59 @@ def FindElem(cmd_args=None):
         double-frees readily apparent.
     """
     if not cmd_args:
-        print FindElem.__doc__
+        print ZStackFindElem.__doc__
         return
-    if int(kern.globals.log_records) == 0:
-        print "Zone logging not enabled. Add 'zlog=<zone name>' to boot-args."
-        return
-    if int(kern.globals.zlog_btlog) == 0:
-        print "Zone logging enabled, but zone has not been initialized yet."
+    if int(kern.globals.log_records) == 0 or unsigned(kern.globals.corruption_debug_flag) == 0:
+        print "Zone logging with corruption detection not enabled. Add '-zc zlog=<zone name>' to boot-args."
         return
   
-    target_element = unsigned(kern.GetValueFromAddress(cmd_args[0], 'void *'))
-    index = unsigned(kern.globals.zlog_btlog.head)
+    btlog_ptr = kern.GetValueFromAddress(cmd_args[0], 'btlog_t *')
+    target_element = unsigned(kern.GetValueFromAddress(cmd_args[1], 'void *'))
+
+    btrecord_size = unsigned(btlog_ptr.btrecord_size)
+    btrecords = unsigned(btlog_ptr.btrecords)
+    depth = unsigned(btlog_ptr.btrecord_btdepth)
+
     prev_op = -1
-
-    while index != 0xffffff:
-        findelem_record_offset = index * unsigned(kern.globals.zlog_btlog.btrecord_size)
-        findelem_record = kern.GetValueFromAddress(unsigned(kern.globals.zlog_btlog.btrecords) + findelem_record_offset, 'btlog_record_t *')
-        if unsigned(findelem_record.element) == target_element:
-            Zstack([index])
-            if int(findelem_record.operation) == prev_op:
+    scan_items = 0
+    hashelem = cast(btlog_ptr.elem_linkage_un.element_hash_queue.tqh_first, 'btlog_element_t *')
+    if (target_element >> 32) != 0:
+        target_element = target_element ^ 0xFFFFFFFFFFFFFFFF
+    else:
+        target_element = target_element ^ 0xFFFFFFFF
+    while hashelem != 0:
+        if unsigned(hashelem.elem) == target_element:
+            recindex = hashelem.recindex
+            recoffset = recindex * btrecord_size
+            record = kern.GetValueFromAddress(btrecords + recoffset, 'btlog_record_t *')
+            out_str = ('-' * 8)
+            if record.operation == 1:
+               out_str += "OP: ALLOC. "
+            else:
+               out_str += "OP: FREE.  "
+            out_str += "Stack Index {0: <d} {1: <s}\n".format(recindex, ('-' * 8))
+            print out_str
+            print GetBtlogBacktrace(depth, record)
+            print " \n"
+            if int(record.operation) == prev_op:
                 print "{0: <s} DOUBLE OP! {1: <s}".format(('*' * 8), ('*' * 8))
-                prev_op = int(findelem_record.operation)
-        index = findelem_record.next
+                return
+            prev_op = int(record.operation)
+            scan_items = 0
+        hashelem = cast(hashelem.element_hash_link.tqe_next, 'btlog_element_t *')
+        scan_items += 1
+        if scan_items % 100 == 0:
+           print "Scanning is ongoing. {0: <d} items scanned since last check." .format(scan_items)
 
-# EndMacro: findelem
+# EndMacro: zstack_findelem
 
 # Macro: btlog_find
 
 @lldb_command('btlog_find', "AS")
 def BtlogFind(cmd_args=None, cmd_options={}):
-    """ Search the btlog_t for entries corresponding to the given element.
-        Use -A flag to print all entries.
-        Use -S flag to summarize the count of records
-        Usage: btlog_find <btlog_t> <element>
-        Usage: btlog_find <btlog_t> -A 
-        Note: Backtraces will be in chronological order, with oldest entries aged out in FIFO order as needed.
     """
-    if not cmd_args:
-        raise ArgumentError("Need a btlog_t parameter")
-    btlog = kern.GetValueFromAddress(cmd_args[0], 'btlog_t *')
-    printall = False
-    summarize = False
-    summary_cache = {}
-    target_elem = 0xffffffff
-
-    if "-A" in cmd_options:
-        printall = True
-    else:
-        if not printall and len(cmd_args) < 2:
-            raise ArgumentError("<element> is missing in args. Need a search pointer.")
-        target_elem = unsigned(kern.GetValueFromAddress(cmd_args[1], 'void *'))
-    
-    if "-S" in cmd_options:
-        summarize = True
-
-    index = unsigned(btlog.head)
-    progress = 0
-    record_size = unsigned(btlog.btrecord_size)
-    try:
-        while index != 0xffffff:
-            record_offset = index * record_size
-            record = kern.GetValueFromAddress(unsigned(btlog.btrecords) + record_offset, 'btlog_record_t *')
-            if printall or unsigned(record.element) == target_elem:
-                _s = '{0: <s} {2: <#0x} OP {1: <d} {3: <s}'.format(('-' * 8), record.operation, unsigned(record.element), ('-' * 8))
-                _s += GetBtlogBacktrace(btlog.btrecord_btdepth, record)
-                if summarize:
-                    if _s not in summary_cache:
-                        summary_cache[_s] = 1
-                    else:
-                        summary_cache[_s] += 1
-                else :
-                    print _s
-            index = record.next
-            progress += 1
-            if (progress % 1000) == 0: print '{0: <d} entries searched!\n'.format(progress)
-    except ValueError, e:
-        pass
-    
-    if summarize:
-        print "=================== SUMMARY =================="
-        for (k,v) in summary_cache.iteritems():
-            print "Count: %d %s \n " % (v, k)
+    """
+    print "***** DEPRECATED ***** use 'zstack_findelem' macro instead."
     return
 
 #EndMacro: btlog_find
@@ -819,7 +919,7 @@ def GetBtlogBacktrace(depth, zstack_record):
         frame += 1
     return out_str
 
-def ShowZStackRecord(zstack_record, zstack_index):
+def ShowZStackRecord(zstack_record, zstack_index, btrecord_btdepth, elements_count):
     """ Helper routine for printing a single zstack record
         params:
             zstack_record:btlog_record_t * -  A BTLog record
@@ -829,12 +929,13 @@ def ShowZStackRecord(zstack_record, zstack_index):
     """
     out_str = ('-' * 8)
     if zstack_record.operation == 1:
-        out_str += "ALLOC  "
+        out_str += "ALLOC.  "
     else:
-        out_str += "FREE   "
-    out_str += "{0: <#0x} : Index {1: <d} {2: <s}\n".format(zstack_record.element, zstack_index, ('-' * 8))
+        out_str += "FREE.   "
+    out_str += "Stack Index {0: <d} with active refs {1: <d} of {2: <d} {3: <s}\n".format(zstack_index, zstack_record.ref_count, elements_count, ('-' * 8))
     print out_str
-    print GetBtlogBacktrace(kern.globals.zlog_btlog.btrecord_btdepth, zstack_record)
+    print GetBtlogBacktrace(btrecord_btdepth, zstack_record)
+    print " \n"
 
 # Macro: showioalloc
 
@@ -1106,16 +1207,20 @@ def ShowMapWired(cmd_args=None):
         print "Invalid argument", ShowMapWired.__doc__
         return
     map_val = kern.GetValueFromAddress(cmd_args[0], 'vm_map_t')
-    
+
 
 @lldb_type_summary(['kmod_info_t *'])
-@header("{0: <20s} {1: <20s} {2: <20s} {3: >3s} {4: >5s} {5: >20s} {6: <30s}".format('kmod_info', 'address', 'size', 'id', 'refs', 'version', 'name'))
+@header("{0: <20s} {1: <20s} {2: <20s} {3: >3s} {4: >5s} {5: <20s} {6: <20s} {7: >20s} {8: <30s}".format('kmod_info', 'address', 'size', 'id', 'refs', 'TEXT exec', 'size', 'version', 'name'))
 def GetKextSummary(kmod):
     """ returns a string representation of kext information 
     """
     out_string = ""
-    format_string = "{0: <#020x} {1: <#020x} {2: <#020x} {3: >3d} {4: >5d} {5: >20s} {6: <30s}"
-    out_string += format_string.format(kmod, kmod.address, kmod.size, kmod.id, kmod.reference_count, kmod.version, kmod.name)
+    format_string = "{0: <#020x} {1: <#020x} {2: <#020x} {3: >3d} {4: >5d} {5: <#020x} {6: <#020x} {7: >20s} {8: <30s}"
+    segments, sections = GetAllSegmentsAndSectionsFromDataInMemory(unsigned(kmod.address), unsigned(kmod.size))
+    text_segment = macho.get_text_segment(segments)
+    if not text_segment:
+        text_segment = segments[0]
+    out_string += format_string.format(kmod, kmod.address, kmod.size, kmod.id, kmod.reference_count, text_segment.vmaddr, text_segment.vmsize, kmod.version, kmod.name)
     return out_string
 
 @lldb_type_summary(['uuid_t'])
@@ -1134,25 +1239,96 @@ def ShowAllKexts(cmd_args=None):
     """Display a summary listing of all loaded kexts (alias: showallkmods)
     """
     kmod_val = kern.globals.kmod
+    kextuuidinfo = GetKextLoadInformation(show_progress=(config['verbosity'] > vHUMAN))
     print "{: <36s} ".format("UUID") + GetKextSummary.header
-    kextuuidinfo = GetKextLoadInformation()
     for kval in IterateLinkedList(kmod_val, 'next'):
         uuid = "........-....-....-....-............"
         kaddr = unsigned(kval.address)
+        found_kext_summary = None
         for l in kextuuidinfo :
-            if kaddr == int(l[1],16):
+            if kaddr == int(l[3],16):
                 uuid = l[0]
+                found_kext_summary = l
                 break
-        print uuid + " " + GetKextSummary(kval) 
+        if found_kext_summary:
+            _ksummary = GetKextSummary(found_kext_summary[7])
+        else:
+            _ksummary = GetKextSummary(kval)
+        print uuid + " " + _ksummary
 
-def GetKextLoadInformation(addr=0):
+def GetKmodWithAddr(addr):
+    """ Go through kmod list and find one with begin_addr as addr
+        returns: None if not found. else a cvalue of type kmod
+    """
+    kmod_val = kern.globals.kmod
+    for kval in IterateLinkedList(kmod_val, 'next'):
+        if addr == unsigned(kval.address):
+                return kval
+    return None
+
+def GetAllSegmentsAndSectionsFromDataInMemory(address, size):
+    """ reads memory at address and parses mach_header to get segment and section information
+        returns: Tuple of (segments_list, sections_list) like ([MachOSegment,...], [MachOSegment, ...])
+            where MachOSegment has fields like 'name vmaddr vmsize fileoff filesize'
+            if TEXT segment is not found a dummy segment & section with address, size is returned.
+    """
+    cache_hash = "kern.kexts.segments.{}.{}".format(address, size)
+    cached_result = caching.GetDynamicCacheData(cache_hash,())
+    if cached_result:
+        return cached_result
+
+    defval = macho.MachOSegment('__TEXT', address, size, 0, size)
+    if address == 0 or size == 0:
+        return ([defval], [defval])
+
+    # if int(kern.globals.gLoadedKextSummaries.version) <= 2:
+    # until we have separate version. we will pay penalty only on arm64 devices
+    if kern.arch not in ('arm64',):
+        return ([defval], [defval])
+
+    restrict_size_to_read = 1536
+    machoObject = None
+    while machoObject is None:
+        err = lldb.SBError()
+        size_to_read = min(size, restrict_size_to_read)
+        data = LazyTarget.GetProcess().ReadMemory(address, size_to_read, err)
+        if not err.Success():
+            print "Failed to read memory at {} and size {}".format(address, size_to_read)
+            return ([defval], [defval])
+        try:
+            m = macho.MemMacho(data, len(data))
+            machoObject = m
+        except Exception as e:
+            if str(e.message).find('unpack requires a string argument') >= 0:
+                # this may be due to short read of memory. Lets do double read size.
+                restrict_size_to_read *= 2
+                debuglog("Bumping mach header read size to {}".format(restrict_size_to_read))
+                continue
+            else:
+                print "Failed to read MachO for address {} errormessage: {}".format(address, e.message)
+                return ([defval], [defval])
+    # end of while loop. We have machoObject defined
+    segments = machoObject.get_segments_with_name('')
+    sections = machoObject.get_sections_with_name('')
+    rval = (segments, sections)
+    caching.SaveDynamicCacheData(cache_hash, rval)
+    return rval
+
+def GetKextLoadInformation(addr=0, show_progress=False):
     """ Extract the kext uuid and load address information from the kernel data structure.
         params:
             addr - int - optional integer that is the address to search for.
-        returns: 
-            [] - array with each entry of format ( 'UUID', 'Hex Load Address')
+        returns:
+            [] - array with each entry of format
+                ( 'UUID', 'Hex Load Address of __TEXT or __TEXT_EXEC section', 'name',
+                  'addr of macho header', [macho.MachOSegment,..], [MachoSection,...], kext, kmod_obj)
     """
-    # because of <rdar://problem/12683084>, we can't find summaries directly 
+    cached_result = caching.GetDynamicCacheData("kern.kexts.loadinformation", [])
+    # if specific addr is provided then ignore caching
+    if cached_result and not addr:
+        return cached_result
+
+    # because of <rdar://problem/12683084>, we can't find summaries directly
     #addr = hex(addressof(kern.globals.gLoadedKextSummaries.summaries))
     baseaddr = unsigned(kern.globals.gLoadedKextSummaries) + 0x10
     summaries_begin = kern.GetValueFromAddress(baseaddr, 'OSKextLoadedKextSummary *')
@@ -1163,14 +1339,23 @@ def GetKextLoadInformation(addr=0):
         entry_size = int(kern.globals.gLoadedKextSummaries.entry_size)
     retval = []
     for i in range(total_summaries):
+        if show_progress:
+            print "progress: {}/{}".format(i, total_summaries)
         tmpaddress = unsigned(summaries_begin) + (i * entry_size)
         current_kext = kern.GetValueFromAddress(tmpaddress, 'OSKextLoadedKextSummary *')
+        # code to extract macho information
+        segments, sections = GetAllSegmentsAndSectionsFromDataInMemory(unsigned(current_kext.address), unsigned(current_kext.size))
+        seginfo = macho.get_text_segment(segments)
+        if not seginfo:
+            seginfo = segments[0]
+        kmod_obj = GetKmodWithAddr(unsigned(current_kext.address))
         if addr != 0 :
-            if addr == unsigned(current_kext.address):
-                retval.append((GetUUIDSummary(current_kext.uuid) , hex(current_kext.address), str(current_kext.name) ))
-        else:
-            retval.append((GetUUIDSummary(current_kext.uuid) , hex(current_kext.address), str(current_kext.name) )) 
-        
+            if addr == unsigned(current_kext.address) or addr == seginfo.vmaddr:
+                return [(GetUUIDSummary(current_kext.uuid) , hex(seginfo.vmaddr).rstrip('L'), str(current_kext.name), hex(current_kext.address), segments, seginfo, current_kext, kmod_obj)]
+        retval.append((GetUUIDSummary(current_kext.uuid) , hex(seginfo.vmaddr).rstrip('L'), str(current_kext.name), hex(current_kext.address), segments, seginfo, current_kext, kmod_obj))
+
+    if not addr:
+        caching.SaveDynamicCacheData("kern.kexts.loadinformation", retval)
     return retval
 
 lldb_alias('showallkexts', 'showallkmods')
@@ -1178,7 +1363,7 @@ lldb_alias('showallkexts', 'showallkmods')
 def GetOSKextVersion(version_num):
     """ returns a string of format 1.2.3x from the version_num
         params: version_num - int
-        return: str 
+        return: str
     """
     if version_num == -1 :
         return "invalid"
@@ -1219,7 +1404,7 @@ def ShowAllKnownKexts(cmd_args=None):
     print "%d kexts in sKextsByID:" % kext_count
     print "{0: <20s} {1: <20s} {2: >5s} {3: >20s} {4: <30s}".format('OSKEXT *', 'load_addr', 'id', 'version', 'name')
     format_string = "{0: <#020x} {1: <20s} {2: >5s} {3: >20s} {4: <30s}"
-    
+
     while index < kext_count:
         kext_dict = GetObjectAtIndexFromArray(kext_dictionary, index)
         kext_name = str(kext_dict.key.string)
@@ -1234,38 +1419,46 @@ def ShowAllKnownKexts(cmd_args=None):
         version = GetOSKextVersion(version_num)
         print format_string.format(osk, load_addr, id, version, kext_name)
         index += 1
-    
+
     return
 
 @lldb_command('showkmodaddr')
 def ShowKmodAddr(cmd_args=[]):
-    """ Given an address, print the offset and name for the kmod containing it 
+    """ Given an address, print the offset and name for the kmod containing it
         Syntax: (lldb) showkmodaddr <addr>
     """
     if len(cmd_args) < 1:
         raise ArgumentError("Insufficient arguments")
 
     addr = ArgumentStringToInt(cmd_args[0])
-    kmod_val = kern.globals.kmod
-    for kval in IterateLinkedList(kmod_val, 'next'):
-        if addr >= unsigned(kval.address) and addr <= (unsigned(kval.address) + unsigned(kval.size)):
-            print GetKextSummary.header
-            print GetKextSummary(kval) + " offset = {0: #0x}".format((addr - unsigned(kval.address)))
-            return True
+    all_kexts_info = GetKextLoadInformation()
+    found_kinfo = None
+    found_segment = None
+    for kinfo in all_kexts_info:
+        s = macho.get_segment_with_addr(kinfo[4], addr)
+        if s:
+            found_segment = s
+            found_kinfo = kinfo
+            break
+    if found_kinfo:
+        print GetKextSummary.header
+        print GetKextSummary(found_kinfo[7]) + " segment: {} offset = {:#0x}".format(found_segment.name, (addr - found_segment.vmaddr))
+        return True
     return False
+
 
 @lldb_command('addkext','AF:N:')
 def AddKextSyms(cmd_args=[], cmd_options={}):
     """ Add kext symbols into lldb.
         This command finds symbols for a uuid and load the required executable
-        Usage: 
+        Usage:
             addkext <uuid> : Load one kext based on uuid. eg. (lldb)addkext 4DD2344C0-4A81-3EAB-BDCF-FEAFED9EB73E
             addkext -F <abs/path/to/executable> <load_address> : Load kext executable at specified load address
             addkext -N <name> : Load one kext that matches the name provided. eg. (lldb) addkext -N corecrypto
             addkext -N <name> -A: Load all kext that matches the name provided. eg. to load all kext with Apple in name do (lldb) addkext -N Apple -A
-            addkext all    : Will load all the kext symbols - SLOW 
+            addkext all    : Will load all the kext symbols - SLOW
     """
-    
+
 
     if "-F" in cmd_options:
         exec_path = cmd_options["-F"]
@@ -1277,8 +1470,6 @@ def AddKextSyms(cmd_args=[], cmd_options={}):
             raise ArgumentError("Path is {:s} not a filepath. \nPlease check that path points to executable.\
 \nFor ex. path/to/Symbols/IOUSBFamily.kext/Contents/PlugIns/AppleUSBHub.kext/Contents/MacOS/AppleUSBHub.\
 \nNote: LLDB does not support adding kext based on directory paths like gdb used to.".format(exec_path))
-        if not os.access(exec_full_path, os.X_OK):
-            raise ArgumentError("Path is {:s} not an executable file".format(exec_path))
 
         slide_value = None
         if cmd_args:
@@ -1299,17 +1490,16 @@ def AddKextSyms(cmd_args=[], cmd_options={}):
                     if k[0].lower() == uuid_str.lower():
                         slide_value = k[1]
                         debuglog("found the slide %s for uuid %s" % (k[1], k[0]))
-        
         if slide_value is None:
             raise ArgumentError("Unable to find load address for module described at %s " % exec_full_path)
         load_cmd = "target modules load --file %s --slide %s" % (exec_full_path, str(slide_value))
         print load_cmd
-        print lldb_run_command(load_cmd)  
+        print lldb_run_command(load_cmd)
         kern.symbolicator = None
         return True
 
     all_kexts_info = GetKextLoadInformation()
-    
+
     if "-N" in cmd_options:
         kext_name = cmd_options["-N"]
         kext_name_matches = GetLongestMatchOption(kext_name, [str(x[2]) for x in all_kexts_info], True)
@@ -1328,7 +1518,7 @@ def AddKextSyms(cmd_args=[], cmd_options={}):
                     if info and 'DBGSymbolRichExecutable' in info:
                         print "Adding dSYM ({0:s}) for {1:s}".format(cur_uuid, info['DBGSymbolRichExecutable'])
                         addDSYM(cur_uuid, info)
-                        loadDSYM(cur_uuid, int(x[1],16))
+                        loadDSYM(cur_uuid, int(x[1],16), x[4])
                     else:
                         print "Failed to get symbol info for {:s}".format(cur_uuid)
                     break
@@ -1343,7 +1533,7 @@ def AddKextSyms(cmd_args=[], cmd_options={}):
     load_all_kexts = False
     if uuid == "all":
         load_all_kexts = True
-    
+
     if not load_all_kexts and len(uuid_regex.findall(uuid)) == 0:
         raise ArgumentError("Unknown argument {:s}".format(uuid))
 
@@ -1355,14 +1545,14 @@ def AddKextSyms(cmd_args=[], cmd_options={}):
             if info and 'DBGSymbolRichExecutable' in info:
                 print "Adding dSYM (%s) for %s" % (cur_uuid, info['DBGSymbolRichExecutable'])
                 addDSYM(cur_uuid, info)
-                loadDSYM(cur_uuid, int(k_info[1],16))
+                loadDSYM(cur_uuid, int(k_info[1],16), k_info[4])
             else:
                 print "Failed to get symbol info for %s" % cur_uuid
         #end of for loop
     kern.symbolicator = None
     return True
 
-    
+
 
 lldb_alias('showkmod', 'showkmodaddr')
 lldb_alias('showkext', 'showkmodaddr')
@@ -1958,32 +2148,38 @@ def GetMutexLockSummary(mtx):
         return "Invalid lock value: 0x0"
 
     if kern.arch == "x86_64":
-        out_str = "Lock Type\t\t: MUTEX\n"
-        mtxd = mtx.lck_mtx_sw.lck_mtxd
-        out_str += "Owner Thread\t\t: {:#x}\n".format(mtxd.lck_mtxd_owner)
-        cmd_str = "p/d ((lck_mtx_t*){:#x})->lck_mtx_sw.lck_mtxd.".format(mtx)
-        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_waiters")
-        out_str += "Number of Waiters\t: {:s}\n".format(cmd_out.split()[-1])
-        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_ilocked")
-        out_str += "ILocked\t\t\t: {:s}\n".format(cmd_out.split()[-1])
-        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_mlocked")
-        out_str += "MLocked\t\t\t: {:s}\n".format(cmd_out.split()[-1])
-        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_promoted")
-        out_str += "Promoted\t\t: {:s}\n".format(cmd_out.split()[-1])
-        cmd_out = lldb_run_command(cmd_str + "lck_mtxd_spin")
-        out_str += "Spin\t\t\t: {:s}\n".format(cmd_out.split()[-1])
+        out_str = "Lock Type            : MUTEX\n"
+        if mtx.lck_mtx_tag == 0x07ff1007 :
+            out_str += "Tagged as indirect, printing ext lock at: {:#x}\n".format(mtx.lck_mtx_ptr)
+            mtx = Cast(mtx.lck_mtx_ptr, 'lck_mtx_t *')
+
+        if mtx.lck_mtx_tag == 0x07fe2007 :
+            out_str += "*** Tagged as DESTROYED ({:#x}) ***\n".format(mtx.lck_mtx_tag)
+
+        out_str += "Owner Thread        : {mtx.lck_mtx_owner:#x}\n".format(mtx=mtx)
+        out_str += "Number of Waiters   : {mtx.lck_mtx_waiters:#x}\n".format(mtx=mtx)
+        out_str += "ILocked             : {mtx.lck_mtx_ilocked:#x}\n".format(mtx=mtx)
+        out_str += "MLocked             : {mtx.lck_mtx_mlocked:#x}\n".format(mtx=mtx)
+        out_str += "Promoted            : {mtx.lck_mtx_promoted:#x}\n".format(mtx=mtx)
+        out_str += "Pri                 : {mtx.lck_mtx_pri:#x}\n".format(mtx=mtx)
+        out_str += "Spin                : {mtx.lck_mtx_spin:#x}\n".format(mtx=mtx)
+        out_str += "Ext                 : {mtx.lck_mtx_is_ext:#x}\n".format(mtx=mtx)
+        if mtx.lck_mtxd_pad32 == 0xFFFFFFFF :
+            out_str += "Canary (valid)      : {mtx.lck_mtxd_pad32:#x}\n".format(mtx=mtx)
+        else:
+            out_str += "Canary (INVALID)    : {mtx.lck_mtxd_pad32:#x}\n".format(mtx=mtx)
         return out_str
 
     out_str = "Lock Type\t\t: MUTEX\n"
-    out_str += "Owner Thread\t\t: {:#x}\n".format(mtx.lck_mtx_hdr.lck_mtxd_data & ~0x3)
-    out_str += "Number of Waiters\t: {:d}\n".format(mtx.lck_mtx_sw.lck_mtxd.lck_mtxd_waiters)
+    out_str += "Owner Thread\t\t: {:#x}".format(mtx.lck_mtx_data & ~0x3)
+    if (mtx.lck_mtx_data & ~0x3) == 0xfffffff0:
+        out_str += " Held as spinlock"
+    out_str += "\nNumber of Waiters\t: {:d}\n".format(mtx.lck_mtx_waiters)
     out_str += "Flags\t\t\t: "
-    if mtx.lck_mtx_hdr.lck_mtxd_data & 0x1:
+    if mtx.lck_mtx_data & 0x1:
         out_str += "[Interlock Locked] "
-    if mtx.lck_mtx_hdr.lck_mtxd_data & 0x2:
+    if mtx.lck_mtx_data & 0x2:
         out_str += "[Wait Flag]"
-    if (mtx.lck_mtx_hdr.lck_mtxd_data & 0x3) == 0:
-        out_str += "None"
     return out_str
 
 @lldb_type_summary(['lck_spin_t *'])
@@ -2003,14 +2199,17 @@ def GetSpinLockSummary(spinlock):
         out_str += "Interlock\t\t: {:#x}\n".format(spinlock.interlock)
         return out_str 
 
-    out_str += "Owner Thread\t\t: {:#x}\n".format(spinlock.lck_spin_data & ~0x3)
-    out_str += "Flags\t\t\t: "
-    if spinlock.lck_spin_data & 0x1:
-        out_str += "[Interlock Locked] "
-    if spinlock.lck_spin_data & 0x2:
-        out_str += "[Wait Flag]"
-    if (spinlock.lck_spin_data & 0x3) == 0:
-        out_str += "None" 
+    lock_data = spinlock.hwlock.lock_data
+    if lock_data == 1:
+        out_str += "Invalid state: interlock is locked but no owner\n"
+        return out_str
+    out_str += "Owner Thread\t\t: "
+    if lock_data == 0:
+        out_str += "None\n"
+    else:
+        out_str += "{:#x}\n".format(lock_data & ~0x1)
+        if (lock_data & 1) == 0:
+            out_str += "Invalid state: owned but interlock bit is not set\n"
     return out_str
 
 @lldb_command('showlock', 'MS')
@@ -2046,7 +2245,7 @@ def ShowLock(cmd_args=None, cmd_options={}):
             summary_str = GetMutexLockSummary(lock_mtx)
 
         lock_spin = Cast(lock, 'lck_spin_t*')
-        if lock_spin.lck_spin_type == 0x11:
+        if lock_spin.type == 0x11:
             summary_str = GetSpinLockSummary(lock_spin)
 
     if summary_str == "":
@@ -2414,6 +2613,8 @@ def showmapvme(map, show_pager_info, show_all_shadows):
                 object_str = "KALLOC_MAP"
             elif object == kern.globals.zone_map:
                 object_str = "ZONE_MAP"
+            elif hasattr(kern.globals, 'compressor_map') and object == kern.globals.compressor_map:
+                object_str = "COMPRESSOR_MAP"
             elif hasattr(kern.globals, 'gzalloc_map') and object == kern.globals.gzalloc_map:
                 object_str = "GZALLOC_MAP"
             elif hasattr(kern.globals, 'g_kext_map') and object == kern.globals.g_kext_map:
@@ -2506,7 +2707,7 @@ def CountMapTags(map, tagcounts, slow):
                     page = _vm_page_unpack_ptr(page_list)
                     while (page != 0):
                         vmpage = kern.GetValueFromAddress(page, 'vm_page_t')
-                        if (addr == unsigned(vmpage.offset)) and (object == vmpage.object):
+                        if (addr == unsigned(vmpage.offset)) and (object == vm_object_t(_vm_page_unpack_ptr(vmpage.vm_page_object))):
                             if (not vmpage.local) and (vmpage.wire_count > 0):
                                 count += 1
                             break
@@ -2613,7 +2814,8 @@ def showvmtags(cmd_args=None, cmd_options={}):
 
     queue_head = kern.globals.vm_objects_wired
     for object in IterateQueue(queue_head, 'struct vm_object *', 'objq'):
-        CountWiredObject(object, tagcounts)
+        if object != kern.globals.kernel_object:
+            CountWiredObject(object, tagcounts)
 
     queue_head = kern.globals.purgeable_nonvolatile_queue
     for object in IterateQueue(queue_head, 'struct vm_object *', 'objq'):
@@ -2729,8 +2931,54 @@ def VMPageLookup(cmd_args=None):
     page = _vm_page_unpack_ptr(page_list)
     while (page != 0) :
         pg_t = kern.GetValueFromAddress(page, 'vm_page_t')
-        print format_string.format(page, pg_t.offset, pg_t.object)
+        print format_string.format(page, pg_t.offset, _vm_page_unpack_ptr(pg_t.vm_page_object))
         page = _vm_page_unpack_ptr(pg_t.next_m)
+
+
+
+@lldb_command('vmpage_get_phys_page')
+def VmPageGetPhysPage(cmd_args=None):
+    """ return the physical page for a vm_page_t
+        usage: vm_page_get_phys_page <vm_page_t>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        print  "Please provide valid vm_page_t. Type help vm_page_get_phys_page for help."
+        return
+
+    page = kern.GetValueFromAddress(cmd_args[0], 'vm_page_t')
+    phys_page = _vm_page_get_phys_page(page)
+    print("phys_page = 0x%x\n" % phys_page)
+
+
+def _vm_page_get_phys_page(page):
+    if kern.arch == 'x86_64':
+        return page.phys_page
+
+    if page == 0 :
+        return 0
+
+    m = unsigned(page)
+    if m >= unsigned(kern.globals.vm_page_array_beginning_addr) and m < unsigned(kern.globals.vm_page_array_ending_addr) :
+        return (m - unsigned(kern.globals.vm_page_array_beginning_addr)) / sizeof('struct vm_page') + unsigned(kern.globals.vm_first_phys_ppnum)
+
+    page_with_ppnum = Cast(page, 'uint32_t *')
+    ppnum_offset = sizeof('struct vm_page') / sizeof('uint32_t')
+    return page_with_ppnum[ppnum_offset]
+
+
+@lldb_command('vmpage_unpack_ptr')
+def VmPageUnpackPtr(cmd_args=None):
+    """ unpack a pointer
+        usage: vm_page_unpack_ptr <packed_ptr>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        print  "Please provide valid packed pointer argument. Type help vm_page_unpack_ptr for help."
+        return
+
+    packed = kern.GetValueFromAddress(cmd_args[0],'unsigned long')
+    unpacked = _vm_page_unpack_ptr(packed)
+    print("unpacked pointer = 0x%x\n" % unpacked)
+
 
 def _vm_page_unpack_ptr(page):
     if kern.ptrsize == 4 :
@@ -2740,10 +2988,15 @@ def _vm_page_unpack_ptr(page):
         return page
 
     min_addr = kern.globals.vm_min_kernel_and_kext_address
+    ptr_shift = kern.globals.vm_packed_pointer_shift
+    ptr_mask = kern.globals.vm_packed_from_vm_pages_array_mask
     #INTEL - min_addr = 0xffffff7f80000000
     #ARM - min_addr = 0x80000000
     #ARM64 - min_addr = 0xffffff8000000000
-    return ((page << 6) + min_addr)
+    if unsigned(page) & unsigned(ptr_mask) :
+        masked_page = (unsigned(page) & ~ptr_mask)
+        return (unsigned(addressof(kern.globals.vm_pages[masked_page])))
+    return ((unsigned(page) << unsigned(ptr_shift)) + unsigned(min_addr))
 
 @lldb_command('calcvmpagehash')
 def CalcVMPageHash(cmd_args=None):
@@ -2773,6 +3026,8 @@ def _calc_vm_page_hash(obj, off):
 
     return hash_id
 
+VM_PAGE_IS_WIRED = 1
+
 @header("{0: <10s} of {1: <10s} {2: <20s} {3: <20s} {4: <20s} {5: <10s} {6: <5s}\t {7: <28s}\t{8: <50s}".format("index", "total", "vm_page_t", "offset", "next", "phys_page", "wire#", "first bitfield", "second bitfield"))
 @lldb_command('vmobjectwalkpages', 'SBNQP:')
 def VMObjectWalkPages(cmd_args=None, cmd_options={}):
@@ -2784,7 +3039,7 @@ def VMObjectWalkPages(cmd_args=None, cmd_options={}):
             vmobjectwalkpages <vm_object_t> : Walk and print all the pages for a given object (up to 4K pages by default)
             vmobjectwalkpages <vm_object_t> -B : Walk and print all the pages for a given object (up to 4K pages by default), traversing the memq backwards
             vmobjectwalkpages <vm_object_t> -N : Walk and print all the pages for a given object, ignore the page limit
-            vmobjectwalkpages <vm_object_t> -Q : Walk all pages for a given object, looking for known signs of corruption (i.e. inactive and active both being set for a page)
+            vmobjectwalkpages <vm_object_t> -Q : Walk all pages for a given object, looking for known signs of corruption (i.e. q_state == VM_PAGE_IS_WIRED && wire_count == 0)
             vmobjectwalkpages <vm_object_t> -P <vm_page_t> : Walk all the pages for a given object, annotate the specified page in the output with ***
             vmobjectwalkpages <vm_object_t> -P <vm_page_t> -S : Walk all the pages for a given object, stopping when we find the specified page
 
@@ -2818,12 +3073,11 @@ def VMObjectWalkPages(cmd_args=None, cmd_options={}):
     if not quiet_mode:
         print VMObjectWalkPages.header
         format_string = "{0: <#10d} of {1: <#10d} {2: <#020x} {3: <#020x} {4: <#020x} {5: <#010x} {6: <#05d}\t"
-        first_bitfield_format_string = "{0: <#1d}:{1: <#1d}:{2: <#1d}:{3: <#1d}:{4: <#1d}:{5: <#1d}:{6: <#1d}:"
-        first_bitfield_format_string += "{7: <#1d}:{8: <#1d}:{9: <#1d}:{10: <#1d}:{11: <#1d}:{12: <#1d}"
-        second_bitfield_format_string = first_bitfield_format_string
-        second_bitfield_format_string += ":{13: <#1d}:{14: <#1d}:{15: <#1d}:{16: <#1d}:{17: <#1d}:{18: <#1d}:{19: <#1d}:"
+        first_bitfield_format_string = "{0: <#2d}:{1: <#1d}:{2: <#1d}:{3: <#1d}:{4: <#1d}:{5: <#1d}:{6: <#1d}:{7: <#1d}\t"
+        second_bitfield_format_string = "{0: <#1d}:{1: <#1d}:{2: <#1d}:{3: <#1d}:{4: <#1d}:{5: <#1d}:{6: <#1d}:"
+        second_bitfield_format_string += "{7: <#1d}:{8: <#1d}:{9: <#1d}:{10: <#1d}:{11: <#1d}:{12: <#1d}:"
+        second_bitfield_format_string += "{13: <#1d}:{14: <#1d}:{15: <#1d}:{16: <#1d}:{17: <#1d}:{18: <#1d}:{19: <#1d}:"
         second_bitfield_format_string +=  "{20: <#1d}:{21: <#1d}:{22: <#1d}:{23: <#1d}:{24: <#1d}:{25: <#1d}:{26: <#1d}\n"
-        first_bitfield_format_string += "\t"
 
     limit = 4096 #arbitrary limit of number of pages to walk
     ignore_limit = 0
@@ -2835,7 +3089,7 @@ def VMObjectWalkPages(cmd_args=None, cmd_options={}):
     page_found = False
     pages_seen = set()
 
-    for vmp in IterateQueue(obj.memq, "vm_page_t", "listq", walk_backwards):
+    for vmp in IterateQueue(obj.memq, "vm_page_t", "listq", walk_backwards, unpack_ptr_fn=_vm_page_unpack_ptr):
         page_count += 1
         out_string = ""
         if (page != 0 and not(page_found) and vmp == page):
@@ -2846,38 +3100,28 @@ def VMObjectWalkPages(cmd_args=None, cmd_options={}):
              if (page_count % 1000) == 0:
                 print "traversed %d pages ...\n" % (page_count)
         else:
-                out_string += format_string.format(page_count, res_page_count, vmp, vmp.offset, vmp.listq.next, vmp.phys_page, vmp.wire_count)
-                out_string += first_bitfield_format_string.format(vmp.active, vmp.inactive, vmp.clean_queue, vmp.local, vmp.speculative,
-                                                                    vmp.throttled, vmp.free, vmp.pageout_queue, vmp.laundry, vmp.reference,
-                                                                    vmp.gobbled, vmp.private, vmp.no_cache)
+                out_string += format_string.format(page_count, res_page_count, vmp, vmp.offset, _vm_page_unpack_ptr(vmp.listq.next), _vm_page_get_phys_page(vmp), vmp.wire_count)
+                out_string += first_bitfield_format_string.format(vmp.vm_page_q_state, vmp.vm_page_in_background, vmp.vm_page_on_backgroundq, vmp.gobbled, vmp.laundry, vmp.no_cache,
+                                                                   vmp.private, vmp.reference)
 
                 out_string += second_bitfield_format_string.format(vmp.busy, vmp.wanted, vmp.tabled, vmp.hashed, vmp.fictitious, vmp.clustered,
-                                                                    vmp.clustered, vmp.pmapped, vmp.xpmapped, vmp.wpmapped, vmp.pageout, vmp.absent,
-                                                                    vmp.error, vmp.dirty, vmp.cleaning, vmp.precious, vmp.precious, vmp.overwriting,
-                                                                    vmp.restart, vmp.unusual, vmp.encrypted, vmp.encrypted, vmp.encrypted_cleaning,
-                                                                    vmp.cs_validated, vmp.cs_tainted, vmp.cs_nx, vmp.reusable, vmp.lopage, vmp.slid, vmp.compressor,
+                                                                    vmp.pmapped, vmp.xpmapped, vmp.wpmapped, vmp.free_when_done, vmp.absent,
+                                                                    vmp.error, vmp.dirty, vmp.cleaning, vmp.precious, vmp.overwriting,
+                                                                    vmp.restart, vmp.unusual, vmp.encrypted, vmp.encrypted_cleaning,
+                                                                    vmp.cs_validated, vmp.cs_tainted, vmp.cs_nx, vmp.reusable, vmp.lopage, vmp.slid,
                                                                     vmp.written_by_kernel)
 
         if (vmp in pages_seen):
             print out_string + "cycle detected! we've seen vm_page_t: " + "{0: <#020x}".format(unsigned(vmp)) + " twice. stopping...\n"
             return
 
-        if (vmp.object != obj):
-            print out_string + " vm_page_t: " + "{0: <#020x}".format(unsigned(vmp)) +  " points to different vm_object_t: " + "{0: <#020x}".format(unsigned(vmp.object))
+        if (_vm_page_unpack_ptr(vmp.vm_page_object) != unsigned(obj)):
+            print out_string + " vm_page_t: " + "{0: <#020x}".format(unsigned(vmp)) +  " points to different vm_object_t: " + "{0: <#020x}".format(unsigned(_vm_page_unpack_ptr(vmp.vm_page_object)))
             return
 
-        if (not vmp.local) and (vmp.wire_count > 0):
-            if (vmp.active or vmp.inactive or vmp.speculative or vmp.throttled or vmp.pageout_queue):
-                print out_string + " wired page with wrong page queue attributes\n"
-                print "vm_page_t: " + "{0: <#020x}".format(unsigned(vmp)) + " active: %d inactive: %d speculative: %d throttled %d pageout_queue: %d\n" % (vmp.active,
-                                    vmp.inactive, vmp.speculative, vmp.throttled, vmp.pageout_queue)
-                print "stopping...\n"
-                return
-
-        if ((vmp.free + vmp.active + vmp.inactive + vmp.speculative + vmp.throttled + vmp.pageout_queue) > 1):
-            print out_string + " more than one pageout queue bit set active\n"
-            print "vm_page_t: " + "{0: <#020x}".format(unsigned(vmp)) + " free: %d active: %d inactive: %d speculative: %d throttled: %d pageout_queue: %d\n" % (vmp.free,
-                                            vmp.active, vmp.inactive, vmp.speculative, vmp.throttled, vmp.pageout_queue)
+        if (vmp.vm_page_q_state == VM_PAGE_IS_WIRED) and (vmp.wire_count == 0):
+            print out_string + " page in wired state with wire_count of 0\n"
+            print "vm_page_t: " + "{0: <#020x}".format(unsigned(vmp)) + "\n"
             print "stopping...\n"
             return
 
@@ -2956,3 +3200,102 @@ def show_apple_protect_pager(pager, qcnt, idx):
     vnode_pager = Cast(object.pager,'vnode_pager *')
     filename = GetVnodePath(vnode_pager.vnode_handle)
     print "{:>3}/{:<3d} {:#018x} {:>5d} {:>5d} {:>6d} {:#018x} {:#018x} {:#018x} {:#018x} {:#018x} {:#018x}\n\tcrypt_info:{:#018x} <decrypt:{:#018x} end:{:#018x} ops:{:#018x} refs:{:<d}>\n\tvnode:{:#018x} {:s}\n".format(idx, qcnt, pager, pager.ref_count, pager.is_ready, pager.is_mapped, pager.pager_control, pager.backing_object, pager.backing_offset, pager.crypto_backing_offset, pager.crypto_start, pager.crypto_end, pager.crypt_info, pager.crypt_info.page_decrypt, pager.crypt_info.crypt_end, pager.crypt_info.crypt_ops, pager.crypt_info.crypt_refcnt, vnode_pager.vnode_handle, filename)
+
+@lldb_command("show_console_ring")
+def ShowConsoleRingData(cmd_args=None):
+    """ Print console ring buffer stats and data
+    """
+    cr = kern.globals.console_ring
+    print "console_ring = {:#018x}  buffer = {:#018x}  length = {:<5d}  used = {:<5d}  read_ptr = {:#018x}  write_ptr = {:#018x}".format(addressof(cr), cr.buffer, cr.len, cr.used, cr.read_ptr, cr.write_ptr)
+    pending_data = []
+    for i in range(unsigned(cr.used)):
+        idx = ((unsigned(cr.read_ptr) - unsigned(cr.buffer)) + i) % unsigned(cr.len)
+        pending_data.append("{:c}".format(cr.buffer[idx]))
+
+    if pending_data:
+        print "Data:"
+        print "".join(pending_data)
+
+# Macro: showjetsamsnapshot
+
+@lldb_command("showjetsamsnapshot", "DA")
+def ShowJetsamSnapshot(cmd_args=None, cmd_options={}):
+    """ Dump entries in the jetsam snapshot table
+        usage: showjetsamsnapshot [-D] [-A]
+        Use -D flag to print extra physfootprint details
+        Use -A flag to print all entries (regardless of valid count)
+    """
+
+    # Not shown are uuid, user_data, cpu_time
+
+    global kern
+    if kern.arch == 'x86_64':
+        print "Snapshots are not supported.\n"
+        return
+
+    show_footprint_details = False
+    show_all_entries = False
+
+    if "-D" in cmd_options:
+        show_footprint_details = True
+
+    if "-A" in cmd_options:
+        show_all_entries = True
+
+    valid_count = kern.globals.memorystatus_jetsam_snapshot_count
+    max_count = kern.globals.memorystatus_jetsam_snapshot_max
+
+    if (show_all_entries == True):
+        count = max_count
+    else:
+        count = valid_count
+
+    print "{:s}".format(valid_count)
+    print "{:s}".format(max_count)
+
+    if int(count) == 0:
+        print "The jetsam snapshot is empty."
+        print "Use -A to force dump all entries (regardless of valid count)"
+        return
+
+    # Dumps the snapshot header info
+    print lldb_run_command('p *memorystatus_jetsam_snapshot')
+
+    hdr_format = "{0: >32s} {1: >5s} {2: >4s} {3: >6s} {4: >6s} {5: >20s} {6: >20s} {7: >20s} {8: >5s} {9: >10s} {10: >6s} {11: >6s} {12: >10s} {13: >15s} {14: >15s} {15: >15s} {16: >15s}"
+    if (show_footprint_details == True):
+        hdr_format += "{17: >15s} {18: >15s} {19: >12s} {20: >12s} {21: >17s} {22: >10s} {23: >13s} {24: >10s}"
+
+
+    if (show_footprint_details == False):
+        print hdr_format.format('command', 'index', 'pri', 'cid', 'pid', 'starttime', 'killtime', 'idletime', 'kill', '#ents', 'fds', 'gen', 'state', 'footprint', 'max', 'purgeable', 'lifetimeMax')
+        print hdr_format.format('', '', '', '', '', '(abs)', '(abs)', '(abs)', 'cause', '', '', 'Count', '', '(pages)', '(pages)', '(pages)', '(pages)')
+    else:
+        print hdr_format.format('command', 'index', 'pri', 'cid', 'pid', 'starttime', 'killtime', 'idletime', 'kill', '#ents', 'fds', 'gen', 'state', 'footprint', 'max', 'purgeable', 'lifetimeMax', '|| internal', 'internal_comp', 'iokit_mapped', 'purge_nonvol', 'purge_nonvol_comp', 'alt_acct', 'alt_acct_comp', 'page_table')
+        print hdr_format.format('', '', '', '', '', '(abs)', '(abs)', '(abs)', 'cause', '', '', 'Count', '', '(pages)', '(pages)', '(pages)', '(pages)', '(pages)', '(pages)', '(pages)', '(pages)', '(pages)', '(pages)', '(pages)', '(pages)')
+
+
+    entry_format = "{e.name: >32s} {index: >5d} {e.priority: >4d} {e.jse_coalition_jetsam_id: >6d} {e.pid: >6d} "\
+                   "{e.jse_starttime: >20d} {e.jse_killtime: >20d} "\
+                   "{e.jse_idle_delta: >20d} {e.killed: >5d} {e.jse_memory_region_count: >10d} "\
+                   "{e.fds: >6d} {e.jse_gencount: >6d} {e.state: >10x} {e.pages: >15d} {e.max_pages: >15d} "\
+                   "{e.purgeable_pages: >15d} {e.max_pages_lifetime: >15d}"
+
+    if (show_footprint_details == True):
+        entry_format += "{e.jse_internal_pages: >15d} "\
+                        "{e.jse_internal_compressed_pages: >15d} "\
+                        "{e.jse_iokit_mapped_pages: >12d} "\
+                        "{e.jse_purgeable_nonvolatile_pages: >12d} "\
+                        "{e.jse_purgeable_nonvolatile_compressed_pages: >17d} "\
+                        "{e.jse_alternate_accounting_pages: >10d} "\
+                        "{e.jse_alternate_accounting_compressed_pages: >13d} "\
+                        "{e.jse_page_table_pages: >10d}"
+
+    snapshot_list = kern.globals.memorystatus_jetsam_snapshot.entries
+    idx = 0
+    while idx < count:
+        current_entry = Cast(snapshot_list[idx], 'jetsam_snapshot_entry')
+        print entry_format.format(index=idx, e=current_entry)
+        idx +=1
+    return
+
+# EndMacro: showjetsamsnapshot

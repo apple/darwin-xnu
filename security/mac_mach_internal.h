@@ -82,6 +82,18 @@ int	mac_task_check_set_host_exception_ports(struct task *task,
 /* threads */
 void	act_set_astmacf(struct thread *);
 void	mac_thread_userret(struct thread *);
+
+/* exception actions */
+void mac_exc_action_label_init(struct exception_action *action);
+void mac_exc_action_label_inherit(struct exception_action *parent, struct exception_action *child);
+void mac_exc_action_label_destroy(struct exception_action *action);
+int mac_exc_action_label_update(struct task *task, struct exception_action *action);
+void mac_exc_action_label_reset(struct exception_action *action);
+
+void mac_exc_action_label_task_update(struct task *task, struct proc *proc);
+void mac_exc_action_label_task_destroy(struct task *task);
+
+int mac_exc_action_check_exception_send(struct task *victim_task, struct exception_action *action);
 #endif /* MAC */
 
 #endif	/* !_SECURITY_MAC_MACH_INTERNAL_H_ */

@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2009 Apple Inc.
+ * Copyright (c) 1999-2016 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -274,6 +274,7 @@ struct audit_record {
 	int			ar_arg_exitstatus;
 	int			ar_arg_exitretval;
 	struct sockaddr_storage ar_arg_sockaddr;
+	int			ar_arg_fd2;
 
 #if CONFIG_MACF
 	/*

@@ -12,18 +12,30 @@
 #include <corecrypto/cc_priv.h>
 
 void ccdigest_update(const struct ccdigest_info *di, ccdigest_ctx_t ctx,
-                     unsigned long len, const void *data) {
+                     size_t len, const void *data) {
     const char * data_ptr = data;
+    size_t nblocks, nbytes;
+
     while (len > 0) {
         if (ccdigest_num(di, ctx) == 0 && len > di->block_size) {
-            unsigned long nblocks = len / di->block_size;
+            //low-end processors are slow on divison
+            if(di->block_size == 1<<6 ){ //sha256
+                nblocks = len >> 6;
+                nbytes = len & 0xFFFFffC0;
+            }else if(di->block_size == 1<<7 ){ //sha512
+                nblocks = len >> 7;
+                nbytes = len & 0xFFFFff80;
+            }else {
+                nblocks = len / di->block_size;
+                nbytes = nblocks * di->block_size;
+            }
+
             di->compress(ccdigest_state(di, ctx), nblocks, data_ptr);
-            unsigned long nbytes = nblocks * di->block_size;
             len -= nbytes;
             data_ptr += nbytes;
             ccdigest_nbits(di, ctx) += nbytes * 8;
         } else {
-            unsigned long n = di->block_size - ccdigest_num(di, ctx);
+            size_t n = di->block_size - ccdigest_num(di, ctx);
             if (len < n)
                 n = len;
             CC_MEMCPY(ccdigest_data(di, ctx) + ccdigest_num(di, ctx), data_ptr, n);

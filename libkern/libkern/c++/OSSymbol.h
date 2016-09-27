@@ -85,17 +85,8 @@ class OSSymbol : public OSString
     OSDeclareAbstractStructors(OSSymbol)
 
 private:
-    struct ExpansionData { };
-    
-    /* Reserved for future use. (Internal use only)  */
-    ExpansionData * reserved;
 
     static void initialize();
-
-    // xx-review: not in xnu, delete?
-    friend void checkModuleForSymbols(void); /* in catalogue? */
-
-    // xx-review: these should be removed from the symbol set.
 
    /*!
     * @function initWithString

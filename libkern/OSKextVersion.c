@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -82,22 +82,21 @@ static int __vers_isspace(char c) {
 
 /*********************************************************************
 *********************************************************************/
-static int __vers_digit_for_char(char c) {
-    switch (c) {
-      case '0': return 0; break;
-      case '1': return 1; break;
-      case '2': return 2; break;
-      case '3': return 3; break;
-      case '4': return 4; break;
-      case '5': return 5; break;
-      case '6': return 6; break;
-      case '7': return 7; break;
-      case '8': return 8; break;
-      case '9': return 9; break;
-      default:  return -1; break;
-    }
-
-    return -1;
+static int
+__vers_digit_for_char(char c) {
+	switch (c) {
+		case '0': return 0;
+		case '1': return 1;
+		case '2': return 2;
+		case '3': return 3;
+		case '4': return 4;
+		case '5': return 5;
+		case '6': return 6;
+		case '7': return 7;
+		case '8': return 8;
+		case '9': return 9;
+		default:  return -1;
+	}
 }
 
 /*********************************************************************
@@ -150,10 +149,8 @@ static OSKextVersionStage __OSKextVersionStageForString(const char ** string_p) 
               } else {
                   return kOSKextVersionStageInvalid;
               }
-              break;
           default:
               return kOSKextVersionStageInvalid;
-              break;
         }
     }
 
@@ -162,18 +159,17 @@ static OSKextVersionStage __OSKextVersionStageForString(const char ** string_p) 
 
 /*********************************************************************
 *********************************************************************/
-static const char * __OSKextVersionStringForStage(OSKextVersionStage stage)
+static const char *
+__OSKextVersionStringForStage(OSKextVersionStage stage)
 {
-    switch (stage) {
-      case kOSKextVersionStageInvalid:     return NULL; break;
-      case kOSKextVersionStageDevelopment: return "d"; break;
-      case kOSKextVersionStageAlpha:       return "a"; break;
-      case kOSKextVersionStageBeta:        return "b"; break;
-      case kOSKextVersionStageCandidate:   return "f"; break;
-      case kOSKextVersionStageRelease:     return ""; break;
-    }
-
-    return NULL;
+	switch (stage) {
+		case kOSKextVersionStageInvalid:     return NULL;
+		case kOSKextVersionStageDevelopment: return "d";
+		case kOSKextVersionStageAlpha:       return "a";
+		case kOSKextVersionStageBeta:        return "b";
+		case kOSKextVersionStageCandidate:   return "f";
+		case kOSKextVersionStageRelease:     return "";
+	}
 }
 
 /*********************************************************************

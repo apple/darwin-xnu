@@ -50,9 +50,10 @@ typedef mach_voucher_attr_value_handle_t bank_handle_t;
 #define BANK_ACCOUNT     1
 
 struct bank_element {
-	int           be_type;                   /* Type of element */
+	unsigned int  be_type:31,                /* Type of element */
+	              be_voucher_ref:1;          /* Voucher system holds a ref */
 	int           be_refs;                   /* Ref count */
-	int           be_made;                   /* Made refs for voucher, Actual ref is also taken for each Made ref */
+	unsigned int  be_made;                   /* Made refs for voucher, Actual ref is only taken for voucher ref transition (0 to 1) */
 #if DEVELOPMENT || DEBUG
 	task_t        be_task;                   /* Customer task, do not use it since ref is not taken on task */
 #endif
@@ -76,6 +77,7 @@ struct bank_task {
 };
 
 #define bt_type             bt_elem.be_type
+#define bt_voucher_ref      bt_elem.be_voucher_ref
 #define bt_refs             bt_elem.be_refs
 #define bt_made             bt_elem.be_made
 
@@ -105,13 +107,13 @@ typedef struct bank_task * bank_task_t;
 		(OSAddAtomic(-(num), &(elem)->bt_refs))
 
 #define bank_task_made_reference(elem) 	\
-		(OSAddAtomic(1, &(elem)->bt_made))
+		(hw_atomic_add(&(elem)->bt_made, 1) - 1)
 
 #define bank_task_made_release(elem) 	\
-		(OSAddAtomic(-1, &(elem)->bt_made))
+		(hw_atomic_sub(&(elem)->bt_made, 1) + 1)
 
 #define bank_task_made_release_num(elem, num) 	\
-		(OSAddAtomic(-(num), &(elem)->bt_made))
+		(hw_atomic_sub(&(elem)->bt_made, (num)) + (num))
 
 
 struct bank_account {
@@ -129,6 +131,7 @@ struct bank_account {
 };
 
 #define ba_type             ba_elem.be_type
+#define ba_voucher_ref      ba_elem.be_voucher_ref
 #define ba_refs             ba_elem.be_refs
 #define ba_made             ba_elem.be_made
 
@@ -149,13 +152,13 @@ typedef struct bank_account * bank_account_t;
 		(OSAddAtomic(-(num), &(elem)->ba_refs))
 
 #define bank_account_made_reference(elem) 	\
-		(OSAddAtomic(1, &(elem)->ba_made))
+		(hw_atomic_add(&(elem)->ba_made, 1) - 1)
 
 #define bank_account_made_release(elem) 	\
-		(OSAddAtomic(-1, &(elem)->ba_made))
+		(hw_atomic_sub(&(elem)->ba_made, 1) + 1)
 
 #define bank_account_made_release_num(elem, num) 	\
-		(OSAddAtomic(-(num), &(elem)->ba_made))
+		(hw_atomic_sub(&(elem)->ba_made, (num)) + (num))
 
 struct _bank_ledger_indices {
 	int cpu_time;

@@ -61,6 +61,7 @@ typedef uint8_t *gssd_byte_buffer;
 typedef uint32_t *gssd_gid_list;
 typedef uint64_t gssd_ctx;
 typedef uint64_t gssd_cred;
+typedef int32_t *gssd_etype_list;
 
 /* The following need to correspond to GSS_C_*_FLAG in gssapi.h */
 #define GSSD_DELEG_FLAG		1
@@ -81,6 +82,6 @@ typedef uint64_t gssd_cred;
 #define GSSD_RESTART		16 // Destroy the supplied context and start over
 #define GSSD_NFS_1DES		64 // Only get single DES session keys
 #define GSSD_WIN2K_HACK		128 // Hack for Win2K
-
+#define GSSD_LUCID_CONTEXT	256 // Export Lucid context
 
 #endif /* _GSSD_MACH_TYPES_H_ */

@@ -42,7 +42,8 @@ extern "C" {
 #define	PKTSCHEDT_FAIRQ		4	/* fairq */
 #define	PKTSCHEDT_TCQ		5	/* traffic class queue */
 #define	PKTSCHEDT_QFQ		6	/* quick fair queueing */
-#define	PKTSCHEDT_MAX		7	/* should be max sched type + 1 */
+#define	PKTSCHEDT_FQ_CODEL	7	/* Flow queues with CoDel */
+#define	PKTSCHEDT_MAX		8	/* should be max sched type + 1 */
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <mach/mach_time.h>
@@ -57,6 +58,7 @@ extern "C" {
 #define	PKTSCHEDF_QALG_ECN	0x10	/* enable ECN */
 #define	PKTSCHEDF_QALG_FLOWCTL	0x20	/* enable flow control advisories */
 #define	PKTSCHEDF_QALG_DELAYBASED	0x40	/* Delay based queueing */
+#define	PKTSCHEDF_QALG_FQ_CODEL	0x80	/* Flow queueing with Codel */
 
 /* macro for timeout/untimeout */
 /* use old-style timeout/untimeout */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -104,6 +104,7 @@
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
 #include <netinet/kpi_ipfilter_var.h>
+#include <netinet/in_tclass.h>
 
 #if CONFIG_MACF_NET
 #include <security/mac_framework.h>
@@ -345,9 +346,14 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 		uint32_t raw;
 	} ipobf = { .raw = 0 };
 
+/*
+ * Here we check for restrictions when sending frames.
+ * N.B.: IPv4 over internal co-processor interfaces is not allowed.
+ */
 #define	IP_CHECK_RESTRICTIONS(_ifp, _ipobf) 				\
 	(((_ipobf).nocell && IFNET_IS_CELLULAR(_ifp)) ||		\
 	 ((_ipobf).noexpensive && IFNET_IS_EXPENSIVE(_ifp)) ||		\
+          (IFNET_IS_INTCOPROC(_ifp)) ||					\
 	 (!(_ipobf).awdl_unrestricted && IFNET_IS_AWDL_RESTRICTED(_ifp)))
 
 	if (ip_output_measure)
@@ -434,10 +440,10 @@ ipfw_tags_done:
 		}
 	}
 #endif /* IPSEC */
-	
+
 	VERIFY(ro != NULL);
 
-	if (ip_doscopedroute && (flags & IP_OUTARGS)) {
+	if (flags & IP_OUTARGS) {
 		/*
 		 * In the forwarding case, only the ifscope value is used,
 		 * as source interface selection doesn't take place.
@@ -484,7 +490,7 @@ ipfw_tags_done:
 		adv->code = FADV_SUCCESS;
 		ipoa->ipoa_retflags = 0;
 	}
-	
+
 #if IPSEC
 	if (ipsec_bypass == 0 && !(flags & IP_NOIPSEC)) {
 		so = ipsec_getsocket(m);
@@ -657,6 +663,7 @@ loopit:
 			if (ia == NULL) {
 				OSAddAtomic(1, &ipstat.ips_noroute);
 				error = ENETUNREACH;
+				/* XXX IPv6 APN fallback notification?? */
 				goto bad;
 			}
 		}
@@ -704,11 +711,11 @@ loopit:
 
 			/*
 			 * If the source address belongs to a restricted
-			 * interface and the caller forbids our using 
+			 * interface and the caller forbids our using
 			 * interfaces of such type, pretend that there is no
 			 * route.
 			 */
-			if (ia0 != NULL && 
+			if (ia0 != NULL &&
 			    IP_CHECK_RESTRICTIONS(ia0->ifa_ifp, ipobf)) {
 				IFA_REMREF(ia0);
 				ia0 = NULL;
@@ -801,7 +808,7 @@ loopit:
 				rtalloc_scoped_ign(ro, ign, ifscope);
 
 			/*
-			 * If the route points to a cellular/expensive interface 
+			 * If the route points to a cellular/expensive interface
 			 * and the caller forbids our using interfaces of such type,
 			 * pretend that there is no route.
 			 */
@@ -1237,7 +1244,6 @@ sendit:
 						goto bad;
 					}
 				}
-				break;
 			}
 			default:
 				break;
@@ -1701,7 +1707,7 @@ skip_ipsec:
 			ROUTE_RELEASE(ro_fwd);
 			bcopy(dst, &ro_fwd->ro_dst, sizeof (*dst));
 
-			rtalloc_ign(ro_fwd, RTF_PRCLONING);
+			rtalloc_ign(ro_fwd, RTF_PRCLONING, false);
 
 			if (ro_fwd->ro_rt == NULL) {
 				OSAddAtomic(1, &ipstat.ips_noroute);
@@ -1771,6 +1777,31 @@ pass:
 		OSAddAtomic(1, &ipstat.ips_badaddr);
 		error = EADDRNOTAVAIL;
 		goto bad;
+	}
+
+	if (ipoa != NULL) {
+		u_int8_t dscp = ip->ip_tos >> IPTOS_DSCP_SHIFT;
+
+		error = set_packet_qos(m, ifp,
+		    ipoa->ipoa_flags & IPOAF_QOSMARKING_ALLOWED ? TRUE : FALSE,
+		    ipoa->ipoa_sotc, ipoa->ipoa_netsvctype, &dscp);
+		if (error == 0) {
+			ip->ip_tos &= IPTOS_ECN_MASK;
+			ip->ip_tos |= dscp << IPTOS_DSCP_SHIFT;
+		} else {
+			printf("%s if_dscp_for_mbuf() error %d\n", __func__, error);
+			error = 0;
+		}
+	}
+
+	/*
+	 * Some Wi-Fi AP implementations do not correctly handle multicast IP
+	 * packets with DSCP bits set -- see radr://9331522 -- so as a
+	 * workaround we clear the DSCP bits and set the service class to BE
+	 */
+	if (IN_MULTICAST(ntohl(pkt_dst.s_addr))	&& IFNET_IS_WIFI_INFRA(ifp)) {
+		ip->ip_tos &= IPTOS_ECN_MASK;
+		mbuf_set_service_class(m, MBUF_SC_BE);
 	}
 
 	ip_output_checksum(ifp, m, (IP_VHL_HL(ip->ip_vhl) << 2),
@@ -2478,70 +2509,6 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 			}
 			break;
 #undef OPTSET
-
-#if CONFIG_FORCE_OUT_IFP
-		/*
-		 * Apple private interface, similar to IP_BOUND_IF, except
-		 * that the parameter is a NULL-terminated string containing
-		 * the name of the network interface; an emptry string means
-		 * unbind.  Applications are encouraged to use IP_BOUND_IF
-		 * instead, as that is the current "official" API.
-		 */
-		case IP_FORCE_OUT_IFP: {
-			char ifname[IFNAMSIZ];
-			unsigned int ifscope;
-
-			/* This option is settable only for IPv4 */
-			if (!(inp->inp_vflag & INP_IPV4)) {
-				error = EINVAL;
-				break;
-			}
-
-			/* Verify interface name parameter is sane */
-			if (sopt->sopt_valsize > sizeof (ifname)) {
-				error = EINVAL;
-				break;
-			}
-
-			/* Copy the interface name */
-			if (sopt->sopt_valsize != 0) {
-				error = sooptcopyin(sopt, ifname,
-				    sizeof (ifname), sopt->sopt_valsize);
-				if (error)
-					break;
-			}
-
-			if (sopt->sopt_valsize == 0 || ifname[0] == '\0') {
-				/* Unbind this socket from any interface */
-				ifscope = IFSCOPE_NONE;
-			} else {
-				ifnet_t	ifp;
-
-				/* Verify name is NULL terminated */
-				if (ifname[sopt->sopt_valsize - 1] != '\0') {
-					error = EINVAL;
-					break;
-				}
-
-				/* Bail out if given bogus interface name */
-				if (ifnet_find_by_name(ifname, &ifp) != 0) {
-					error = ENXIO;
-					break;
-				}
-
-				/* Bind this socket to this interface */
-				ifscope = ifp->if_index;
-
-				/*
-				 * Won't actually free; since we don't release
-				 * this later, we should do it now.
-				 */
-				ifnet_release(ifp);
-			}
-			error = inp_bindif(inp, ifscope, NULL);
-		}
-		break;
-#endif /* CONFIG_FORCE_OUT_IFP */
 		/*
 		 * Multicast socket options are processed by the in_mcast
 		 * module.
@@ -2602,7 +2569,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 			int priv;
 			struct mbuf *m;
 			int optname;
-			
+
 			if ((error = soopt_getm(sopt, &m)) != 0) /* XXX */
 				break;
 			if ((error = soopt_mcopyin(sopt, m)) != 0) /* XXX */
@@ -2796,11 +2763,10 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 
 #if TRAFFIC_MGT
 		case IP_TRAFFIC_MGT_BACKGROUND: {
-			unsigned background = (so->so_traffic_mgt_flags &
-			    TRAFFIC_MGT_SO_BACKGROUND) ? 1 : 0;
+			unsigned background = (so->so_flags1 &
+			    SOF1_TRAFFIC_MGT_SO_BACKGROUND) ? 1 : 0;
 			return (sooptcopyout(sopt, &background,
 			    sizeof (background)));
-			break;
 		}
 #endif /* TRAFFIC_MGT */
 
@@ -3577,4 +3543,3 @@ sysctl_ip_output_getperf SYSCTL_HANDLER_ARGS
 
 	return (SYSCTL_OUT(req, &net_perf, MIN(sizeof (net_perf), req->oldlen)));
 }
-

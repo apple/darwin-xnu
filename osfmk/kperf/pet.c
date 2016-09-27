@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,363 +22,600 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /* all thread states code */
 #include <mach/mach_types.h>
-#include <IOKit/IOTypes.h>
-#include <IOKit/IOLocks.h>
 #include <sys/errno.h>
 
-#include <chud/chud_xnu.h>
-
+#include <kperf/kperf.h>
 #include <kperf/buffer.h>
 #include <kperf/sample.h>
 #include <kperf/context.h>
 #include <kperf/action.h>
 #include <kperf/pet.h>
-#include <kperf/timetrigger.h>
+#include <kperf/kperf_timer.h>
 
 #include <kern/task.h>
+#include <kern/kalloc.h>
 
-/* timer id to call back on */
-static unsigned pet_timerid = 0;
-
-/* aciton ID to call
- * We also use this as the sync point for waiting, for no good reason
+/* action ID to call for each sample
+ *
+ * Address is used as the sync point for waiting.
  */
-static unsigned pet_actionid = 0;
+static unsigned int pet_action_id = 0;
 
-/* the actual thread pointer */
-static thread_t pet_thread = NULL;
+static lck_mtx_t *pet_lock;
+static boolean_t pet_initted = FALSE;
+static boolean_t pet_running = FALSE;
 
-/* Lock on which to synchronise */
-static IOLock *pet_lock = NULL;
+/* number of callstack samples to skip for idle threads */
+static uint32_t pet_idle_rate = KPERF_PET_DEFAULT_IDLE_RATE;
 
-/* where to sample data to */
-static struct kperf_sample pet_sample_buf;
+/*
+ * Lightweight PET mode samples the system less-intrusively than normal PET
+ * mode.  Instead of iterating tasks and threads on each sample, it increments
+ * a global generation count, kperf_pet_gen, which is checked as threads are
+ * context switched on-core.  If the thread's local generation count is older
+ * than the global generation, the thread samples itself.
+ *
+ *            |  |
+ * thread A   +--+---------|
+ *            |  |
+ * thread B   |--+---------------|
+ *            |  |
+ * thread C   |  |         |-------------------------------------
+ *            |  |         |
+ * thread D   |  |         |     |-------------------------------
+ *            |  |         |     |
+ *            +--+---------+-----+--------------------------------> time
+ *               |         │     |
+ *               |         +-----+--- threads sampled when they come on-core in
+ *               |                    kperf_pet_switch_context
+ *               |
+ *               +--- PET timer fire, sample on-core threads A and B,
+ *                    increment kperf_pet_gen
+ */
+static boolean_t lightweight_pet = FALSE;
 
-static int pet_idle_rate = 15;
+/*
+ * Whether or not lightweight PET and sampling is active.
+ */
+boolean_t kperf_lightweight_pet_active = FALSE;
 
-/* sample an actual, honest to god thread! */
-static void
-pet_sample_thread( thread_t thread )
+uint32_t kperf_pet_gen = 0;
+
+static struct kperf_sample *pet_sample;
+
+/* thread lifecycle */
+
+static kern_return_t pet_init(void);
+static void pet_start(void);
+static void pet_stop(void);
+
+/* PET thread-only */
+
+static void pet_thread_loop(void *param, wait_result_t wr);
+static void pet_thread_idle(void);
+static void pet_thread_work_unit(void);
+
+/* listing things to sample */
+
+static task_array_t pet_tasks = NULL;
+static vm_size_t pet_tasks_size = 0;
+static vm_size_t pet_tasks_count = 0;
+
+static thread_array_t pet_threads = NULL;
+static vm_size_t pet_threads_size = 0;
+static vm_size_t pet_threads_count = 0;
+
+static kern_return_t pet_tasks_prepare(void);
+static kern_return_t pet_tasks_prepare_internal(void);
+
+static kern_return_t pet_threads_prepare(task_t task);
+
+/* sampling */
+
+static void pet_sample_all_tasks(uint32_t idle_rate);
+static void pet_sample_task(task_t task, uint32_t idle_rate);
+static void pet_sample_thread(int pid, thread_t thread, uint32_t idle_rate);
+
+/* functions called by other areas of kperf */
+
+void
+kperf_pet_fire_before(void)
 {
-	struct kperf_context ctx;
-	task_t task;
-	unsigned skip_callstack;
-
-	/* work out the context */
-	ctx.cur_thread = thread;
-	ctx.cur_pid = 0;
-
-	task = chudxnu_task_for_thread(thread);
-	if(task)
-		ctx.cur_pid = chudxnu_pid_for_task(task);
-
-	skip_callstack = (chudxnu_thread_get_dirty(thread) == TRUE) || ((thread->kperf_pet_cnt % (uint64_t)pet_idle_rate) == 0) ? 0 : SAMPLE_FLAG_EMPTY_CALLSTACK;
-
-	/* do the actual sample */
-	kperf_sample( &pet_sample_buf, &ctx, pet_actionid,
-	              SAMPLE_FLAG_IDLE_THREADS | skip_callstack );
-
-	if (!skip_callstack)
-		chudxnu_thread_set_dirty(thread, FALSE);
-
-	thread->kperf_pet_cnt++;
-}
-
-/* given a list of threads, preferably stopped, sample 'em! */
-static void
-pet_sample_thread_list( mach_msg_type_number_t threadc, thread_array_t threadv )
-{
-	unsigned int i;
-	int ncpu;
-
-	for( i = 0; i < threadc; i++ )
-	{
-		thread_t thread = threadv[i];
-
-		if( !thread )
-			/* XXX? */
-			continue;
-
-		for (ncpu = 0; ncpu < machine_info.logical_cpu_max; ++ncpu)
-		{
-			thread_t candidate = kperf_thread_on_cpus[ncpu];
-			if (candidate && candidate->thread_id == thread->thread_id)
-				break;
-		}
-
-		/* the thread was not on a CPU */
-		if (ncpu == machine_info.logical_cpu_max)
-			pet_sample_thread( thread );
-	}
-}
-
-/* given a task (preferably stopped), sample all the threads in it */
-static void
-pet_sample_task( task_t task )
-{
-	mach_msg_type_number_t threadc;
-	thread_array_t threadv;
-	kern_return_t kr;
-
-	kr = chudxnu_task_threads(task, &threadv, &threadc);
-	if( kr != KERN_SUCCESS )
-	{
-		BUF_INFO2(PERF_PET_ERROR, ERR_THREAD, kr);
+	if (!pet_initted || !pet_running) {
 		return;
 	}
 
-	pet_sample_thread_list( threadc, threadv );
-
-	chudxnu_free_thread_list(&threadv, &threadc);
+	if (lightweight_pet) {
+		BUF_INFO(PERF_PET_SAMPLE);
+		OSIncrementAtomic(&kperf_pet_gen);
+	}
 }
 
-/* given a list of tasks, sample all the threads in 'em */
-static void
-pet_sample_task_list( int taskc, task_array_t taskv  )
+void
+kperf_pet_fire_after(void)
 {
-	int i;
+	if (!pet_initted || !pet_running) {
+		return;
+	}
 
-	for( i = 0; i < taskc; i++ )
-	{
-		kern_return_t kr;
-		task_t task = taskv[i];
+	if (lightweight_pet) {
+		kperf_timer_pet_rearm(0);
+	} else {
+		thread_wakeup(&pet_action_id);
+	}
+}
 
-		/* FIXME: necessary? old code did this, our hacky
-		 * filtering code does, too
+void
+kperf_pet_on_cpu(thread_t thread, thread_continue_t continuation,
+                 uintptr_t *starting_fp)
+{
+	assert(thread != NULL);
+	assert(ml_get_interrupts_enabled() == FALSE);
+
+	if (thread->kperf_pet_gen != kperf_pet_gen) {
+		BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_START, kperf_pet_gen, thread->kperf_pet_gen);
+
+		struct kperf_context ctx = {
+			.cur_thread = thread,
+			.cur_pid = task_pid(get_threadtask(thread)),
+			.starting_fp = starting_fp,
+		};
+		/*
+		 * Use a per-CPU interrupt buffer, since this is only called
+		 * while interrupts are disabled, from the scheduler.
 		 */
-		if(!task) {
-			continue;
+		struct kperf_sample *sample = kperf_intr_sample_buffer();
+		if (!sample) {
+			BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_END, 1);
+			return;
 		}
 
-		/* try and stop any task other than the kernel task */
-		if( task != kernel_task )
-		{
-			kr = task_suspend_internal( task );
-
-			/* try the next task */
-			if( kr != KERN_SUCCESS )
-				continue;
+		unsigned int flags = SAMPLE_FLAG_NON_INTERRUPT | SAMPLE_FLAG_PEND_USER;
+		if (continuation != NULL) {
+			flags |= SAMPLE_FLAG_CONTINUATION;
 		}
+		kperf_sample(sample, &ctx, pet_action_id, flags);
 
-		/* sample it */
-		pet_sample_task( task );
-
-		/* if it wasn't the kernel, resume it */
-		if( task != kernel_task )
-			(void) task_resume_internal(task);
+		BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_END);
+	} else {
+		BUF_VERB(PERF_PET_SAMPLE_THREAD, kperf_pet_gen, thread->kperf_pet_gen);
 	}
 }
 
-static void
-pet_sample_all_tasks(void)
+void
+kperf_pet_config(unsigned int action_id)
 {
-	task_array_t taskv = NULL;
-	mach_msg_type_number_t taskc = 0;
-	kern_return_t kr;
-
-	kr = chudxnu_all_tasks(&taskv, &taskc);
-
-	if( kr != KERN_SUCCESS )
-	{
-		BUF_INFO2(PERF_PET_ERROR, ERR_TASK, kr);
+	kern_return_t kr = pet_init();
+	if (kr != KERN_SUCCESS) {
 		return;
 	}
 
-	pet_sample_task_list( taskc, taskv );
-	chudxnu_free_task_list(&taskv, &taskc);
+	lck_mtx_lock(pet_lock);
+
+	BUF_INFO(PERF_PET_THREAD, 3, action_id);
+
+	if (action_id == 0) {
+		pet_stop();
+	} else {
+		pet_start();
+	}
+
+	pet_action_id = action_id;
+
+	lck_mtx_unlock(pet_lock);
 }
 
-#if 0
-static void
-pet_sample_pid_filter(void)
-{
-	task_t *taskv = NULL;
-	int *pidv, pidc, i;
-	vm_size_t asize;
+/* handle resource allocation */
 
-	kperf_filter_pid_list( &pidc, &pidv );
-	if( pidc == 0  )
-	{
-		BUF_INFO2(PERF_PET_ERROR, ERR_PID, 0);
+void
+pet_start(void)
+{
+	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
+
+	if (pet_running) {
 		return;
 	}
 
-	asize = pidc * sizeof(task_t);
-	taskv = kalloc( asize );
-
-	if( taskv == NULL )
-		goto out;
-
-	/* convert the pid list into a task list */
-	for( i = 0; i < pidc; i++ )
-	{
-		int pid = pidv[i];
-		if( pid == -1 )
-			taskv[i] = NULL;
-		else
-			taskv[i] = chudxnu_task_for_pid(pid);
+	pet_sample = kalloc(sizeof(struct kperf_sample));
+	if (!pet_sample) {
+		return;
 	}
 
-	/* now sample the task list */
-	pet_sample_task_list( pidc, taskv );
-
-	kfree(taskv, asize);
-
-out:
-	kperf_filter_free_pid_list( &pidc, &pidv );
+	pet_running = TRUE;
 }
-#endif
 
-/* do the pet sample */
+void
+pet_stop(void)
+{
+	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
+
+	if (!pet_initted) {
+		return;
+	}
+
+	if (pet_tasks != NULL) {
+		assert(pet_tasks_size != 0);
+		kfree(pet_tasks, pet_tasks_size);
+
+		pet_tasks = NULL;
+		pet_tasks_size = 0;
+		pet_tasks_count = 0;
+	}
+
+	if (pet_threads != NULL) {
+		assert(pet_threads_size != 0);
+		kfree(pet_threads, pet_threads_size);
+
+		pet_threads = NULL;
+		pet_threads_size = 0;
+		pet_threads_count = 0;
+	}
+
+	if (pet_sample != NULL) {
+		kfree(pet_sample, sizeof(struct kperf_sample));
+		pet_sample = NULL;
+	}
+
+	pet_running = FALSE;
+}
+
+/*
+ * Lazily initialize PET.  The PET thread never exits once PET has been used
+ * once.
+ */
+static kern_return_t
+pet_init(void)
+{
+	if (pet_initted) {
+		return KERN_SUCCESS;
+	}
+
+	/* make the sync point */
+	pet_lock = lck_mtx_alloc_init(&kperf_lck_grp, NULL);
+	assert(pet_lock);
+
+	/* create the thread */
+
+	BUF_INFO(PERF_PET_THREAD, 0);
+	thread_t t;
+	kern_return_t kr = kernel_thread_start(pet_thread_loop, NULL, &t);
+	if (kr != KERN_SUCCESS) {
+		lck_mtx_free(pet_lock, &kperf_lck_grp);
+		return kr;
+	}
+
+	thread_set_thread_name(t, "kperf sampling");
+	/* let the thread hold the only reference */
+	thread_deallocate(t);
+
+	pet_initted = TRUE;
+
+	return KERN_SUCCESS;
+}
+
+/* called by PET thread only */
+
 static void
-pet_work_unit(void)
+pet_thread_work_unit(void)
 {
-	int pid_filter;
-
-	/* check if we're filtering on pid  */
-	// pid_filter = kperf_filter_on_pid();
-	pid_filter = 0;  // FIXME
-
-#if 0
-	if( pid_filter )
-	{
-		BUF_INFO1(PERF_PET_SAMPLE | DBG_FUNC_START, 1);
-		pet_sample_pid_filter();
-	}
-	else
-#endif
-	{
-		/* otherwise filter everything */
-		BUF_INFO1(PERF_PET_SAMPLE | DBG_FUNC_START, 0);
-		pet_sample_all_tasks();
-	}
-
-	BUF_INFO1(PERF_PET_SAMPLE | DBG_FUNC_END, 0);
-
+	pet_sample_all_tasks(pet_idle_rate);
 }
 
-/* sleep indefinitely */
-static void 
-pet_idle(void)
-{
-	IOLockSleep(pet_lock, &pet_actionid, THREAD_UNINT);
-}
-
-/* loop between sampling and waiting */
 static void
-pet_thread_loop( __unused void *param, __unused wait_result_t wr )
+pet_thread_idle(void)
 {
+	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
+
+	(void)lck_mtx_sleep(pet_lock, LCK_SLEEP_DEFAULT, &pet_action_id,
+	                    THREAD_UNINT);
+}
+
+__attribute__((noreturn))
+static void
+pet_thread_loop(void *param, wait_result_t wr)
+{
+#pragma unused(param, wr)
 	uint64_t work_unit_ticks;
 
-	BUF_INFO1(PERF_PET_THREAD, 1);
+	BUF_INFO(PERF_PET_THREAD, 1);
 
-	IOLockLock(pet_lock);
-	while(1)
-	{
-		BUF_INFO1(PERF_PET_IDLE, 0);
-		pet_idle();
+	lck_mtx_lock(pet_lock);
+	for (;;) {
+		BUF_INFO(PERF_PET_IDLE);
+		pet_thread_idle();
 
-		BUF_INFO1(PERF_PET_RUN, 0);
+		BUF_INFO(PERF_PET_RUN);
 
 		/* measure how long the work unit takes */
 		work_unit_ticks = mach_absolute_time();
-		pet_work_unit();
+		pet_thread_work_unit();
 		work_unit_ticks = mach_absolute_time() - work_unit_ticks;
 
 		/* re-program the timer */
-		kperf_timer_pet_set( pet_timerid, work_unit_ticks );
-
-		/* FIXME: break here on a condition? */
+		kperf_timer_pet_rearm(work_unit_ticks);
 	}
 }
 
-/* make sure the thread takes a new period value */
-void
-kperf_pet_timer_config( unsigned timerid, unsigned actionid )
+/* sampling */
+
+static void
+pet_sample_thread(int pid, thread_t thread, uint32_t idle_rate)
 {
-	if( !pet_lock )
-		return;
+	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
 
-	/* hold the lock so pet thread doesn't run while we do this */
-	IOLockLock(pet_lock);
+	uint32_t sample_flags = SAMPLE_FLAG_IDLE_THREADS;
 
-	BUF_INFO1(PERF_PET_THREAD, 3);
+	BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_START);
 
-	/* set values */
-	pet_timerid = timerid;
-	pet_actionid = actionid;
+	/* work out the context */
+	struct kperf_context ctx = {
+		.cur_thread = thread,
+		.cur_pid = pid,
+	};
 
-	/* done */
-	IOLockUnlock(pet_lock);
+	boolean_t thread_dirty = kperf_thread_get_dirty(thread);
+
+	/*
+	 * Clean a dirty thread and skip callstack sample if the thread was not
+	 * dirty and thread has skipped less than pet_idle_rate samples.
+	 */
+	if (thread_dirty) {
+		kperf_thread_set_dirty(thread, FALSE);
+	} else if ((thread->kperf_pet_cnt % idle_rate) != 0) {
+		sample_flags |= SAMPLE_FLAG_EMPTY_CALLSTACK;
+	}
+	thread->kperf_pet_cnt++;
+
+	kperf_sample(pet_sample, &ctx, pet_action_id, sample_flags);
+
+	BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_END);
 }
 
-/* make the thread run! */
-void
-kperf_pet_thread_go(void)
+static kern_return_t
+pet_threads_prepare(task_t task)
 {
-	if( !pet_lock )
-		return;
+	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
 
-	/* Make the thread go */
-	IOLockWakeup(pet_lock, &pet_actionid, FALSE);
-}
+	vm_size_t threads_size_needed;
 
-
-/* wait for the pet thread to finish a run */
-void
-kperf_pet_thread_wait(void)
-{
-	if( !pet_lock )
-		return;
-
-	/* acquire the lock to ensure the thread is parked. */
-	IOLockLock(pet_lock);
-	IOLockUnlock(pet_lock);
-}
-
-/* keep the pet thread around while we run */
-int
-kperf_pet_init(void)
-{
-	kern_return_t rc;
-	thread_t t;
-
-	if( pet_thread != NULL )
-		return 0;
-
-	/* make the sync poing */
-	pet_lock = IOLockAlloc();
-	if( pet_lock == NULL )
-		return ENOMEM;
-
-	/* create the thread */
-	BUF_INFO1(PERF_PET_THREAD, 0);
-	rc = kernel_thread_start( pet_thread_loop, NULL, &t );
-	if( rc != KERN_SUCCESS )
-	{
-		IOLockFree( pet_lock );
-		pet_lock = NULL;
-		return ENOMEM;
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
 	}
 
-	/* OK! */
-	return 0;
+	for (;;) {
+		task_lock(task);
+
+		if (!task->active) {
+			task_unlock(task);
+
+			return KERN_FAILURE;
+		}
+
+		/* do we have the memory we need? */
+		threads_size_needed = task->thread_count * sizeof(thread_t);
+		if (threads_size_needed <= pet_threads_size) {
+			break;
+		}
+
+		/* not enough memory, unlock the task and increase allocation */
+		task_unlock(task);
+
+		if (pet_threads_size != 0) {
+			kfree(pet_threads, pet_threads_size);
+		}
+
+		assert(threads_size_needed > 0);
+		pet_threads_size = threads_size_needed;
+
+		pet_threads = kalloc(pet_threads_size);
+		if (pet_threads == NULL) {
+			pet_threads_size = 0;
+			return KERN_RESOURCE_SHORTAGE;
+		}
+	}
+
+	/* have memory and the task is locked and active */
+	thread_t thread;
+	pet_threads_count = 0;
+	queue_iterate(&(task->threads), thread, thread_t, task_threads) {
+		thread_reference_internal(thread);
+		pet_threads[pet_threads_count++] = thread;
+	}
+
+	/* can unlock task now that threads are referenced */
+	task_unlock(task);
+
+	return (pet_threads_count == 0) ? KERN_FAILURE : KERN_SUCCESS;
 }
 
+static void
+pet_sample_task(task_t task, uint32_t idle_rate)
+{
+	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
+
+	BUF_VERB(PERF_PET_SAMPLE_TASK | DBG_FUNC_START);
+
+	kern_return_t kr = pet_threads_prepare(task);
+	if (kr != KERN_SUCCESS) {
+		BUF_INFO(PERF_PET_ERROR, ERR_THREAD, kr);
+		BUF_VERB(PERF_PET_SAMPLE_TASK | DBG_FUNC_END, 1);
+		return;
+	}
+
+	int pid = task_pid(task);
+
+	for (unsigned int i = 0; i < pet_threads_count; i++) {
+		thread_t thread = pet_threads[i];
+		int cpu;
+		assert(thread);
+
+		/* do not sample the thread if it was on a CPU during the IPI. */
+		for (cpu = 0; cpu < machine_info.logical_cpu_max; cpu++) {
+			thread_t candidate = kperf_thread_on_cpus[cpu];
+			if (candidate && (thread_tid(candidate) == thread_tid(thread))) {
+				break;
+			}
+		}
+
+		/* the thread was not on a CPU */
+		if (cpu == machine_info.logical_cpu_max) {
+			pet_sample_thread(pid, thread, idle_rate);
+		}
+
+		thread_deallocate(pet_threads[i]);
+	}
+
+	BUF_VERB(PERF_PET_SAMPLE_TASK | DBG_FUNC_END, pet_threads_count);
+}
+
+static kern_return_t
+pet_tasks_prepare_internal(void)
+{
+	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
+
+	vm_size_t tasks_size_needed = 0;
+
+	for (;;) {
+		lck_mtx_lock(&tasks_threads_lock);
+
+		/* do we have the memory we need? */
+		tasks_size_needed = tasks_count * sizeof(task_t);
+		if (tasks_size_needed <= pet_tasks_size) {
+			break;
+		}
+
+		/* unlock and allocate more memory */
+		lck_mtx_unlock(&tasks_threads_lock);
+
+		/* grow task array */
+		if (tasks_size_needed > pet_tasks_size) {
+			if (pet_tasks_size != 0) {
+				kfree(pet_tasks, pet_tasks_size);
+			}
+
+			assert(tasks_size_needed > 0);
+			pet_tasks_size = tasks_size_needed;
+
+			pet_tasks = (task_array_t)kalloc(pet_tasks_size);
+			if (pet_tasks == NULL) {
+				pet_tasks_size = 0;
+				return KERN_RESOURCE_SHORTAGE;
+			}
+		}
+	}
+
+	return KERN_SUCCESS;
+}
+
+static kern_return_t
+pet_tasks_prepare(void)
+{
+	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
+
+	/* allocate space and take the tasks_threads_lock */
+	kern_return_t kr = pet_tasks_prepare_internal();
+	if (KERN_SUCCESS != kr) {
+		return kr;
+	}
+	lck_mtx_assert(&tasks_threads_lock, LCK_MTX_ASSERT_OWNED);
+
+	/* make sure the tasks are not deallocated after dropping the lock */
+	task_t task;
+	pet_tasks_count = 0;
+	queue_iterate(&tasks, task, task_t, tasks) {
+		if (task != kernel_task) {
+			task_reference_internal(task);
+			pet_tasks[pet_tasks_count++] = task;
+		}
+	}
+
+	lck_mtx_unlock(&tasks_threads_lock);
+
+	return KERN_SUCCESS;
+}
+
+static void
+pet_sample_all_tasks(uint32_t idle_rate)
+{
+	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
+
+	BUF_INFO(PERF_PET_SAMPLE | DBG_FUNC_START);
+
+	kern_return_t kr = pet_tasks_prepare();
+	if (kr != KERN_SUCCESS) {
+		BUF_INFO(PERF_PET_ERROR, ERR_TASK, kr);
+		BUF_INFO(PERF_PET_SAMPLE | DBG_FUNC_END, 0);
+		return;
+	}
+
+	for (unsigned int i = 0; i < pet_tasks_count; i++) {
+		task_t task = pet_tasks[i];
+
+		if (task != kernel_task) {
+			kr = task_suspend_internal(task);
+			if (kr != KERN_SUCCESS) {
+				continue;
+			}
+		}
+
+		pet_sample_task(task, idle_rate);
+
+		if (task != kernel_task) {
+			task_resume_internal(task);
+		}
+	}
+
+	for(unsigned int i = 0; i < pet_tasks_count; i++) {
+		task_deallocate(pet_tasks[i]);
+	}
+
+	BUF_INFO(PERF_PET_SAMPLE | DBG_FUNC_END, pet_tasks_count);
+}
+
+/* support sysctls */
+
 int
-kperf_get_pet_idle_rate( void )
+kperf_get_pet_idle_rate(void)
 {
 	return pet_idle_rate;
 }
 
-void
-kperf_set_pet_idle_rate( int val )
+int
+kperf_set_pet_idle_rate(int val)
 {
 	pet_idle_rate = val;
+
+	return 0;
+}
+
+int
+kperf_get_lightweight_pet(void)
+{
+	return lightweight_pet;
+}
+
+int
+kperf_set_lightweight_pet(int val)
+{
+	if (kperf_sampling_status() == KPERF_SAMPLING_ON) {
+		return EBUSY;
+	}
+
+	lightweight_pet = (val == 1);
+	kperf_lightweight_pet_active_update();
+
+	return 0;
+}
+
+void
+kperf_lightweight_pet_active_update(void)
+{
+	kperf_lightweight_pet_active = (kperf_sampling_status() && lightweight_pet);
+	kperf_on_cpu_update();
 }

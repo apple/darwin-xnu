@@ -990,6 +990,40 @@ dirloop:
 	 *    .. in the other file system.
 	 */
 	if ( (cnp->cn_flags & ISDOTDOT) ) {
+		/*
+		 * if this is a chroot'ed process, check if the current
+		 * directory is still a subdirectory of the process's
+		 * root directory.
+		 */
+		if (ndp->ni_rootdir && (ndp->ni_rootdir != rootvnode) &&
+		    dp !=  ndp->ni_rootdir) {
+			int sdir_error;
+			int is_subdir = FALSE;
+
+			sdir_error = vnode_issubdir(dp, ndp->ni_rootdir,
+			    &is_subdir, vfs_context_kernel());
+
+			/*
+			 * If we couldn't determine if dp is a subdirectory of
+			 * ndp->ni_rootdir (sdir_error != 0), we let the request
+			 * proceed.
+			 */
+			if (!sdir_error && !is_subdir) {
+				vnode_put(dp);
+				dp = ndp->ni_rootdir;
+				/*
+				 * There's a ref on the process's root directory
+				 * but we can't use vnode_getwithref here as
+				 * there is nothing preventing that ref being
+				 * released by another thread.
+				 */
+				if (vnode_get(dp)) {
+					error = ENOENT;
+					goto bad;
+				}
+			}
+		}
+
 		for (;;) {
 		        if (dp == ndp->ni_rootdir || dp == rootvnode) {
 			        ndp->ni_dvp = dp;
@@ -1419,7 +1453,14 @@ lookup_handle_symlink(struct nameidata *ndp, vnode_t *new_dp, vfs_context_t ctx)
 	int error;
 	char *cp;		/* pointer into pathname argument */
 	uio_t auio;
-	char uio_buf[ UIO_SIZEOF(1) ];
+	union {
+		union {
+			struct user_iovec s_uiovec;
+			struct kern_iovec s_kiovec;
+		} u_iovec;
+		struct uio s_uio;
+		char uio_buf[ UIO_SIZEOF(1) ];
+	} u_uio_buf; /* union only for aligning uio_buf correctly */
 	int need_newpathbuf;
 	u_int linklen;
 	struct componentname *cnp = &ndp->ni_cnd;
@@ -1446,7 +1487,8 @@ lookup_handle_symlink(struct nameidata *ndp, vnode_t *new_dp, vfs_context_t ctx)
 	} else {
 		cp = cnp->cn_pnbuf;
 	}
-	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ, &uio_buf[0], sizeof(uio_buf));
+	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ,
+	    &u_uio_buf.uio_buf[0], sizeof(u_uio_buf.uio_buf));
 
 	uio_addiov(auio, CAST_USER_ADDR_T(cp), MAXPATHLEN);
 
@@ -1695,7 +1737,7 @@ kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp, boolean_t l
 	if (dbg_namelen <= (int)(3 * sizeof(long)))
 		code |= DBG_FUNC_END;
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, code, VM_KERNEL_ADDRPERM(dp), dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, code, kdebug_vnode(dp), dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
 
 	code &= ~DBG_FUNC_START;
 

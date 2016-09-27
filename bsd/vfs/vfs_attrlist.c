@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -51,7 +51,6 @@
 #include <sys/fsevents.h>
 #include <kern/kalloc.h>
 #include <miscfs/specfs/specdev.h>
-#include <hfs/hfs.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -1167,6 +1166,7 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 		 * This attribute isn't really Finder Info, at least for HFS.
 		 */
 		if (vp->v_tag == VT_HFS) {
+#define HFS_GET_BOOT_INFO   (FCNTL_FS_SPECIFIC_BASE + 0x00004)
 			error = VNOP_IOCTL(vp, HFS_GET_BOOT_INFO, (caddr_t)&f, 0, ctx);
 			if (error == 0) {
 				attrlist_pack_fixed(&ab, f, sizeof(f));
@@ -1475,45 +1475,64 @@ attr_pack_common(vfs_context_t ctx, struct vnode *vp,  struct attrlist *alp,
 		}
 	}
 	if (alp->commonattr & ATTR_CMN_OBJID) {
-		fsobj_id_t f;
 		/*
 		 * Carbon can't deal with us reporting the target ID
 		 * for links.  So we ask the filesystem to give us the
 		 * source ID as well, and if it gives us one, we use
 		 * it instead.
 		 */
-		if (VATTR_IS_SUPPORTED(vap, va_linkid)) {
-			f.fid_objno = vap->va_linkid;
+		if (vap->va_vaflags & VA_64BITOBJIDS) {
+			if (VATTR_IS_SUPPORTED(vap, va_linkid)) {
+				ATTR_PACK8((*abp),  vap->va_linkid);
+			} else {
+				ATTR_PACK8((*abp),  vap->va_fileid);
+			}
 		} else {
-			f.fid_objno = vap->va_fileid;
+			fsobj_id_t f;
+			if (VATTR_IS_SUPPORTED(vap, va_linkid)) {
+				f.fid_objno = (uint32_t)vap->va_linkid;
+			} else {
+				f.fid_objno = (uint32_t)vap->va_fileid;
+			}
+			f.fid_generation = 0;
+			ATTR_PACK8((*abp), f);
 		}
-		f.fid_generation = 0;
-		ATTR_PACK8((*abp), f);
 		abp->actual.commonattr |= ATTR_CMN_OBJID;
 	}
 	if (alp->commonattr & ATTR_CMN_OBJPERMANENTID) {
-		fsobj_id_t f;
 		/*
 		 * Carbon can't deal with us reporting the target ID
 		 * for links.  So we ask the filesystem to give us the
 		 * source ID as well, and if it gives us one, we use
 		 * it instead.
 		 */
-		if (VATTR_IS_SUPPORTED(vap, va_linkid)) {
-			f.fid_objno = vap->va_linkid;
+		if (vap->va_vaflags & VA_64BITOBJIDS) {
+			if (VATTR_IS_SUPPORTED(vap, va_linkid)) {
+				ATTR_PACK8((*abp),  vap->va_linkid);
+			} else {
+				ATTR_PACK8((*abp),  vap->va_fileid);
+			}
 		} else {
-			f.fid_objno = vap->va_fileid;
+			fsobj_id_t f;
+			if (VATTR_IS_SUPPORTED(vap, va_linkid)) {
+				f.fid_objno = (uint32_t)vap->va_linkid;
+			} else {
+				f.fid_objno = (uint32_t)vap->va_fileid;
+			}
+			f.fid_generation = 0;
+			ATTR_PACK8((*abp), f);
 		}
-		f.fid_generation = 0;
-		ATTR_PACK8((*abp), f);
 		abp->actual.commonattr |= ATTR_CMN_OBJPERMANENTID;
 	}
 	if (alp->commonattr & ATTR_CMN_PAROBJID) {
-		fsobj_id_t f;
-
-		f.fid_objno = vap->va_parentid;  /* could be lossy here! */
-		f.fid_generation = 0;
-		ATTR_PACK8((*abp), f);
+		if (vap->va_vaflags & VA_64BITOBJIDS) {
+			ATTR_PACK8((*abp), vap->va_parentid);
+		} else {
+			fsobj_id_t f;
+			f.fid_objno = (uint32_t)vap->va_parentid;
+			f.fid_generation = 0;
+			ATTR_PACK8((*abp), f);
+		}
 		abp->actual.commonattr |= ATTR_CMN_PAROBJID;
 	}
 	if (alp->commonattr & ATTR_CMN_SCRIPT) {
@@ -1741,8 +1760,10 @@ attr_pack_common(vfs_context_t ctx, struct vnode *vp,  struct attrlist *alp,
 	}
 	
 	if (alp->commonattr & ATTR_CMN_FULLPATH) {
-		attrlist_pack_string (abp, fullpathptr, fullpathlen);
-		abp->actual.commonattr |= ATTR_CMN_FULLPATH;
+		if (vp) {
+			attrlist_pack_string (abp, fullpathptr, fullpathlen);
+			abp->actual.commonattr |= ATTR_CMN_FULLPATH;
+		}
 	}
     
 	if (alp->commonattr & ATTR_CMN_ADDEDTIME) {
@@ -2255,13 +2276,14 @@ vfs_attr_pack_internal(vnode_t vp, uio_t auio, struct attrlist *alp,
 			goto out;
 	}
 
-	if (alp->commonattr & (ATTR_CMN_FULLPATH)) {
+	if (vp && (alp->commonattr & (ATTR_CMN_FULLPATH))) {
 		fullpathptr = (char*) kalloc(MAXPATHLEN);
 		if (fullpathptr == NULL) {
 			error = ENOMEM;
 			VFS_DEBUG(ctx,vp, "ATTRLIST - ERROR: cannot allocate fullpath buffer");
 			goto out;
 		}
+		bzero(fullpathptr, MAXPATHLEN);
 	}
 
 	/*
@@ -3409,6 +3431,27 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 		goto out;
 	}
 
+	if (uap->options & FSOPT_LIST_SNAPSHOT) {
+		vnode_t snapdvp;
+
+		if (!vfs_context_issuser(ctx)) {
+			error = EPERM;
+			goto out;
+		}
+
+		if (!vnode_isvroot(dvp)) {
+			error = EINVAL;
+			goto out;
+		}
+
+		/* switch directory to snapshot directory */
+		error = vnode_get_snapdir(dvp, &snapdvp, ctx);
+		if (error)
+			goto out;
+		vnode_put(dvp);
+		dvp = snapdvp;
+	}
+
 	if (dvp->v_type != VDIR) {
 		error = ENOTDIR;
 		goto out;
@@ -3910,12 +3953,19 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 		goto out;
 	}
 
+#if CONFIG_MACF
+	mac_vnode_notify_setattrlist(ctx, vp, &al);
+	if (VATTR_IS_ACTIVE(&va, va_flags))
+		mac_vnode_notify_setflags(ctx, vp, va.va_flags);
+#endif
+
 	/*
 	 * Write the Finder Info if we have any.
 	 */
 	if (fndrinfo != NULL) {
 		if (al.volattr & ATTR_VOL_INFO) {
 			if (vp->v_tag == VT_HFS) {
+#define HFS_SET_BOOT_INFO   (FCNTL_FS_SPECIFIC_BASE + 0x00005)
 				error = VNOP_IOCTL(vp, HFS_SET_BOOT_INFO, (caddr_t)fndrinfo, 0, ctx);
 				if (error != 0)
 					goto out;

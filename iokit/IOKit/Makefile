@@ -22,9 +22,10 @@ INSTINC_SUBDIRS = \
 	rtc \
 	system_management
 
+
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 
-# By default, everything in xnu/iokit/IOKit gets installed into 
+# By default, everything in xnu/iokit/IOKit gets installed into
 # Kernel.framework/Headers/IOKit AND Kernel.framework/PrivateHeaders/IOKit.
 # This is so the files with #ifdef ...PRIVATE portions can be processed.
 # xnu/README documents the INSTALL* and EXPORT_MI_DIR lists.
@@ -37,7 +38,7 @@ NOT_EXPORT_HEADERS = IOInterruptAccountingPrivate.h
 NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\
 		     IOKitKeysPrivate.h IOCPU.h			\
 		     IOHibernatePrivate.h IOPolledInterface.h	\
-		     IOCommandQueue.h IOLocksPrivate.h 		\
+		     IOCommandQueue.h IOLocksPrivate.h		\
 		     IOSyncer.h AppleKeyStoreInterface.h	\
 		     IOStatistics.h IOStatisticsPrivate.h	\
 		     IOKernelReporters.h

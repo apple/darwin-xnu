@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,12 +22,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
- * Copyright (c) 1994 Gordon Ross, Adam Glass 
+ * Copyright (c) 1994 Gordon Ross, Adam Glass
  * Copyright (c) 1992 Regents of the University of California.
  * All rights reserved.
  *
@@ -146,10 +146,10 @@ struct rpc_reply {
  * Returns non-zero error on failure.
  */
 int
-krpc_portmap(sin, prog, vers, proto, portp)
-	struct sockaddr_in *sin;	/* server address */
-	u_int prog, vers, proto;	/* host order */
-	u_int16_t *portp;		/* network order */
+krpc_portmap(
+	struct sockaddr_in *sin,	/* server address */
+	u_int prog, u_int vers, u_int proto,	/* host order */
+	u_int16_t *portp)		/* network order */
 {
 	struct sdata {
 		u_int32_t prog;		/* call program */
@@ -204,11 +204,11 @@ krpc_portmap(sin, prog, vers, proto, portp)
  * the address from whence the response came is saved there.
  */
 int
-krpc_call(sa, sotype, prog, vers, func, data, from_p)
-	struct sockaddr_in *sa;
-	u_int sotype, prog, vers, func;
-	mbuf_t *data;			/* input/output */
-	struct sockaddr_in *from_p;	/* output */
+krpc_call(
+	struct sockaddr_in *sa,
+	u_int sotype, u_int prog, u_int vers, u_int func,
+	mbuf_t *data,			/* input/output */
+	struct sockaddr_in *from_p)	/* output */
 {
 	socket_t so;
 	struct sockaddr_in *sin;

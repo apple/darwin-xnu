@@ -23,11 +23,11 @@ INSTALL_MD_LIST = ${DATAFILES}
 INSTALL_MD_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MD_GEN_LIST = \
-	asm.h 
+	asm.h
 
 INSTALL_MD_DIR = mach/i386
 
-EXPORT_MD_LIST = ${DATAFILES} 
+EXPORT_MD_LIST = ${DATAFILES}
 
 EXPORT_MD_GEN_LIST = \
 	asm.h
@@ -36,5 +36,3 @@ EXPORT_MD_DIR = mach/i386
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

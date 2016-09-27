@@ -128,6 +128,12 @@ struct machine_thread {
 
 	struct pal_pcb		pal_pcb;
 	uint32_t		specFlags;
+	/* N.B.: These "specFlags" are read-modify-written non-atomically within
+	 * the copyio routine. So conceivably any exception that modifies the
+	 * flags in a persistent manner could be clobbered if it occurs within
+	 * a copyio context. For now, the only other flag here is OnProc which
+	 * is not modified except at context switch.
+	 */
 #define		OnProc		0x1
 #define		CopyIOActive 	0x2 /* Checked to ensure DTrace actions do not re-enter copyio(). */
 	uint64_t		thread_gpu_ns;

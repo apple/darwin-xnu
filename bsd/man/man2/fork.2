@@ -46,7 +46,7 @@
 .Fa void
 .Fc
 .Sh DESCRIPTION
-.Fn Fork
+.Fn fork
 causes creation of a new process.
 The new process (child process) is an exact copy of the
 calling process (parent process) except for the following:
@@ -85,7 +85,7 @@ no child process is created, and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Fork
+.Fn fork
 will fail and no child process will be created if:
 .Bl -tag -width Er
 .\" ==========

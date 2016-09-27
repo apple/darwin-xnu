@@ -14,4 +14,3 @@ IOHibernateRestoreKernel.o_CFLAGS_ADD += -fno-stack-protector $(CFLAGS_NOLTO_FLA
 ######################################################################
 #END    Machine dependent Makefile fragment for x86_64
 ######################################################################
-

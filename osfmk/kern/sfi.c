@@ -42,6 +42,8 @@
 #include <kern/timer_call.h>
 #include <kern/waitq.h>
 #include <kern/ledger.h>
+#include <kern/policy_internal.h>
+
 #include <pexpert/pexpert.h>
 
 #include <libkern/kernel_mach_header.h>
@@ -93,6 +95,8 @@ extern sched_call_t workqueue_get_sched_callback(void);
  * released before doing so.
  *
  * The pset lock may also be taken, but not while any other locks are held.
+ *
+ * The task and thread mutex may also be held while reevaluating sfi state.
  *
  * splsched ---> sfi_lock ---> waitq ---> thread_lock
  *        \  \              \__ thread_lock (*)
@@ -738,12 +742,14 @@ sfi_class_id_t sfi_thread_classify(thread_t thread)
 	task_t task = thread->task;
 	boolean_t is_kernel_thread = (task == kernel_task);
 	sched_mode_t thmode = thread->sched_mode;
-	int latency_qos = proc_get_effective_task_policy(task, TASK_POLICY_LATENCY_QOS);
-	int task_role = proc_get_effective_task_policy(task, TASK_POLICY_ROLE);
-	int thread_bg = proc_get_effective_thread_policy(thread, TASK_POLICY_DARWIN_BG);
-	int managed_task = proc_get_effective_task_policy(task, TASK_POLICY_SFI_MANAGED);
-	int thread_qos = proc_get_effective_thread_policy(thread, TASK_POLICY_QOS);
 	boolean_t focal = FALSE;
+
+	int task_role       = proc_get_effective_task_policy(task, TASK_POLICY_ROLE);
+	int latency_qos     = proc_get_effective_task_policy(task, TASK_POLICY_LATENCY_QOS);
+	int managed_task    = proc_get_effective_task_policy(task, TASK_POLICY_SFI_MANAGED);
+
+	int thread_qos      = proc_get_effective_thread_policy(thread, TASK_POLICY_QOS);
+	int thread_bg       = proc_get_effective_thread_policy(thread, TASK_POLICY_DARWIN_BG);
 
 	/* kernel threads never reach the user AST boundary, and are in a separate world for SFI */
 	if (is_kernel_thread) {
@@ -928,7 +934,6 @@ void sfi_ast(thread_t thread)
 	uint64_t	tid;
 	thread_continue_t	continuation;
 	sched_call_t	workq_callback = workqueue_get_sched_callback();
-	boolean_t	did_clear_wq = FALSE;
 
 	s = splsched();
 
@@ -964,7 +969,8 @@ void sfi_ast(thread_t thread)
 	/* Optimistically clear workq callback while thread is already locked */
 	if (workq_callback && (thread->sched_call == workq_callback)) {
 		thread_sched_call(thread, NULL);
-		did_clear_wq = TRUE;
+	} else {
+		workq_callback = NULL;
 	}
 	thread_unlock(thread);
 
@@ -991,15 +997,9 @@ void sfi_ast(thread_t thread)
 	splx(s);
 
 	if (did_wait) {
-		thread_block_reason(continuation, did_clear_wq ? workq_callback : NULL, AST_SFI);
-	} else {
-		if (did_clear_wq) {
-			s = splsched();
-			thread_lock(thread);
-			thread_sched_call(thread, workq_callback);
-			thread_unlock(thread);
-			splx(s);
-		}
+		thread_block_reason(continuation, workq_callback, AST_SFI);
+	} else if (workq_callback) {
+		thread_reenable_sched_call(thread, workq_callback);
 	}
 }
 

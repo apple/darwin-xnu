@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -64,7 +64,6 @@ struct ifnet_demux_desc;
 /*!
 	@enum Interface Families
 	@abstract Constants defining interface families.
-	@discussion
 	@constant IFNET_FAMILY_ANY Match interface of any family type.
 	@constant IFNET_FAMILY_LOOPBACK A software loopback interface.
 	@constant IFNET_FAMILY_ETHERNET An Ethernet interface.
@@ -123,6 +122,8 @@ enum {
 	IFNET_SUBFAMILY_WIFI		= 3,
 	IFNET_SUBFAMILY_THUNDERBOLT	= 4,
 	IFNET_SUBFAMILY_RESERVED	= 5,
+	IFNET_SUBFAMILY_INTCOPROC	= 6,
+	IFNET_SUBFAMILY_UTUN		= 7,
 };
 
 /*
@@ -137,7 +138,6 @@ typedef u_int32_t ifnet_subfamily_t;
 /*!
 	@enum BPF tap mode
 	@abstract Constants defining interface families.
-	@discussion
 	@constant BPF_MODE_DISABLED Disable bpf.
 	@constant BPF_MODE_INPUT Enable input only.
 	@constant BPF_MODE_OUTPUT Enable output only.
@@ -166,7 +166,6 @@ typedef u_int32_t protocol_family_t;
 /*!
 	@enum Interface Abilities
 	@abstract Constants defining interface offload support.
-	@discussion
 	@constant IFNET_CSUM_IP Hardware will calculate IPv4 checksums.
 	@constant IFNET_CSUM_TCP Hardware will calculate TCP checksums.
 	@constant IFNET_CSUM_UDP Hardware will calculate UDP checksums.
@@ -226,7 +225,9 @@ enum {
 	IFNET_MULTIPAGES	= 0x00100000,
 	IFNET_TSO_IPV4		= 0x00200000,
 	IFNET_TSO_IPV6		= 0x00400000,
-	IFNET_TX_STATUS		= 0x00800000
+	IFNET_TX_STATUS		= 0x00800000,
+	IFNET_HW_TIMESTAMP	= 0x01000000,
+	IFNET_SW_TIMESTAMP	= 0x02000000
 };
 /*!
 	@typedef ifnet_offload_t
@@ -239,7 +240,15 @@ typedef u_int32_t ifnet_offload_t;
 	"\020\1CSUM_IP\2CSUM_TCP\3CSUM_UDP\4CSUM_IP_FRAGS\5IP_FRAGMENT" \
 	"\6CSUM_TCPIPV6\7CSUM_UDPIPV6\10IPV6_FRAGMENT\15CSUM_PARTIAL"	 \
 	"\20VLAN_TAGGING\21VLAN_MTU\25MULTIPAGES\26TSO_IPV4\27TSO_IPV6" \
-	"\30TXSTATUS"
+	"\30TXSTATUS\31HW_TIMESTAMP\32SW_TIMESTAMP"
+
+#define	IFNET_CHECKSUMF							\
+	(IFNET_CSUM_IP | IFNET_CSUM_TCP | IFNET_CSUM_UDP |		\
+	IFNET_CSUM_FRAGMENT | IFNET_CSUM_TCPIPV6 | IFNET_CSUM_UDPIPV6 | \
+	IFNET_CSUM_PARTIAL)
+
+#define	IFNET_TSOF							\
+	(IFNET_TSO_IPV4	| IFNET_TSO_IPV6)
 #endif /* KERNEL_PRIVATE */
 
 /*
@@ -283,8 +292,6 @@ typedef errno_t (*ifnet_output_func)(ifnet_t interface, mbuf_t data);
 		you need to communicate with your kext using an ioctl, please
 		use SIOCSIFKPI and SIOCGIFKPI.
 	@param interface The interface the ioctl is being sent to.
-	@param proto_family The protocol family to handle the ioctl, may be
-		zero for no protocol_family.
 	@param cmd The ioctl command.
 	@param data A pointer to any data related to the ioctl.
  */
@@ -345,8 +352,6 @@ typedef errno_t (*ifnet_demux_func)(ifnet_t interface, mbuf_t packet,
 	@discussion ifnet_event_func is called when an event occurs on a
 		specific interface.
 	@param interface The interface the event occurred on.
-	@param event_ptr Pointer to a kern_event structure describing the
-		event.
  */
 typedef void (*ifnet_event_func)(ifnet_t interface, const struct kev_msg *msg);
 
@@ -365,9 +370,9 @@ typedef void (*ifnet_event_func)(ifnet_t interface, const struct kev_msg *msg);
 		protocol's pre-output function.
 	@param frame_type The frame type as determined by the protocol's
 		pre-output function.
-	@param prepend_len The length of prepended bytes to the mbuf.
+	@discussion prepend_len The length of prepended bytes to the mbuf.
 		(ONLY used if KPI_INTERFACE_EMBEDDED is defined to 1)
-	@param postpend_len The length of the postpended bytes to the mbuf.
+	@discussion postpend_len The length of the postpended bytes to the mbuf.
 		(ONLY used if KPI_INTERFACE_EMBEDDED is defined to 1)
 	@result
 		If the result is zero, processing will continue normally.
@@ -437,7 +442,7 @@ typedef errno_t (*ifnet_del_proto_func)(ifnet_t interface,
 		To prevent an address from being added to your multicast list,
 		return EADDRNOTAVAIL. If you don't know how to parse/translate
 		the address, return EOPNOTSUPP.
-	@param The interface.
+	@param interface The interface.
 	@param mcast The multicast address.
 	@result
 		Zero upon success, EADDRNOTAVAIL on invalid multicast,
@@ -452,7 +457,7 @@ typedef errno_t (*ifnet_check_multi)(ifnet_t interface,
 		a specific protocol on a specific interface. This function is
 		registered on an interface using ifnet_attach_protocol.
 	@param ifp The interface the packet was received on.
-	@param protocol_family The protocol of the packet received.
+	@param protocol The protocol of the packet received.
 	@param packet The packet being input.
 	@param header The frame header.
 	@result
@@ -474,7 +479,7 @@ typedef errno_t (*proto_media_input)(ifnet_t ifp, protocol_family_t protocol,
 		individual packet. The frame header can be retrieved using
 		mbuf_pkthdr_header.
 	@param ifp The interface the packet was received on.
-	@param protocol_family The protocol of the packet received.
+	@param protocol The protocol of the packet received.
 	@param packet The packet being input.
 	@result
 		If the result is zero, the caller will assume the packets were
@@ -492,7 +497,7 @@ typedef errno_t (*proto_media_input_v2)(ifnet_t ifp, protocol_family_t protocol,
 		opportunity to specify the media specific frame type and
 		destination.
 	@param ifp The interface the packet will be sent on.
-	@param protocol_family The protocol of the packet being sent
+	@param protocol The protocol of the packet being sent
 		(PF_INET/etc...).
 	@param packet The packet being sent.
 	@param dest The protocol level destination address.
@@ -514,8 +519,8 @@ typedef errno_t (*proto_media_preout)(ifnet_t ifp, protocol_family_t protocol,
 	@discussion proto_media_event is called to notify this layer of
 		interface specific events.
 	@param ifp The interface.
-	@param protocol_family The protocol family.
-	@param kev_msg The event.
+	@param protocol The protocol family.
+	@param event The event.
  */
 typedef void (*proto_media_event)(ifnet_t ifp, protocol_family_t protocol,
     const struct kev_msg *event);
@@ -535,7 +540,7 @@ typedef void (*proto_media_event)(ifnet_t ifp, protocol_family_t protocol,
 		you need to communicate with your kext using an ioctl, please
 		use SIOCSIFKPI and SIOCGIFKPI.
 	@param ifp The interface.
-	@param protocol_family The protocol family.
+	@param protocol The protocol family.
 	@param command The ioctl command.
 	@param argument The argument to the ioctl.
 	@result
@@ -549,7 +554,7 @@ typedef errno_t (*proto_media_ioctl)(ifnet_t ifp, protocol_family_t protocol,
 	@discussion proto_media_detached notifies you that your protocol
 		has been detached.
 	@param ifp The interface.
-	@param protocol_family The protocol family.
+	@param protocol The protocol family.
 	@result
 		See the discussion.
  */
@@ -577,8 +582,6 @@ typedef errno_t (*proto_media_resolve_multi)(ifnet_t ifp,
 		function should inspect the parameters and transmit an arp
 		packet using the information passed in.
 	@param ifp The interface the arp packet should be sent on.
-	@param protocol_family The protocol family of the addresses
-		(PF_INET).
 	@param arpop The arp operation (usually ARPOP_REQUEST or
 		ARPOP_REPLY).
 	@param sender_hw The value to use for the sender hardware
@@ -711,15 +714,17 @@ typedef errno_t (*ifnet_pre_enqueue_func)(ifnet_t interface, mbuf_t data);
 	@typedef ifnet_start_func
 	@discussion ifnet_start_func is used to indicate to the driver that
 		one or more packets may be dequeued by calling ifnet_dequeue()
-		or ifnet_dequeue_multi(). This routine gets invoked when
-		ifnet_start() is called; the ifnet_start_func callback will
-		be executed within the context of a dedicated kernel thread,
-		hence it is guaranteed to be single threaded. The driver must
-		employ additional serializations if this callback routine is
-		to be called directly from another context, in order to prevent
-		race condition related issues (e.g. out-of-order packets.)
-		The dequeued packets will be fully formed packets (including
-		frame headers). The packets must be freed by the driver.
+		or ifnet_dequeue_multi() or ifnet_dequeue_multi_bytes().
+		This routine gets invoked when ifnet_start() is called;
+		the ifnet_start_func callback will be executed within the
+		context of a dedicated kernel thread, hence it is
+		guaranteed to be single threaded. The driver must employ
+		additional serializations if this callback routine is
+		to be called directly from another context, in order to
+		prevent race condition related issues (e.g. out-of-order
+		packets.) The dequeued packets will be fully formed
+		packets (including frame headers). The packets must be
+		freed by the driver.
 	@param interface The interface being sent on.
  */
 typedef void (*ifnet_start_func)(ifnet_t interface);
@@ -742,6 +747,20 @@ typedef void (*ifnet_input_poll_func)(ifnet_t interface, u_int32_t flags,
     u_int32_t max_count, mbuf_t *first_packet, mbuf_t *last_packet,
     u_int32_t *cnt, u_int32_t *len);
 
+#ifdef BSD_KERNEL_PRIVATE
+struct thread;
+typedef errno_t (*ifnet_input_handler_func)(ifnet_t ifp, mbuf_t m_head,
+    mbuf_t m_tail, const struct ifnet_stat_increment_param *s,
+    boolean_t poll, struct thread *tp);
+typedef errno_t (*ifnet_output_handler_func)(ifnet_t interface, mbuf_t data);
+
+extern errno_t ifnet_set_input_handler(struct ifnet *ifp,
+    ifnet_input_handler_func fn);
+extern errno_t ifnet_set_output_handler(struct ifnet *ifp,
+    ifnet_output_handler_func fn);
+extern void ifnet_reset_input_handler(struct ifnet *ifp);
+extern void ifnet_reset_output_handler(struct ifnet *ifp);
+#endif /* BSD_KERNEL_PRIVATE */
 /*
 	@enum Interface control commands
 	@abstract Constants defining control commands.
@@ -991,7 +1010,7 @@ typedef errno_t (*ifnet_ctl_func)(ifnet_t interface, ifnet_ctl_cmd_t cmd,
 		(in nanosecond.)
 	@field start_delay_qlen The maximum length of output queue for
 		delaying start callback to the driver. This is an
-		optimization for coalescing output packets. 
+		optimization for coalescing output packets.
 	@field start_delay_timeout The timeout in microseconds to delay
 		start callback. If start_delay_qlen number of packets are
 		not in the output queue when the timer fires, the start
@@ -1228,8 +1247,8 @@ extern errno_t ifnet_allocate(const struct ifnet_init_params *init,
 	@param init The initial values for the interface. These values can
 		not be changed after the interface has been allocated.
 	@param interface The interface allocated upon success.
-	@result May return ENOMEM if there is insufficient memory or EEXIST
-		if an interface with the same uniqueid and family has already
+	@result May return ENOMEM if there is insufficient memory or EBUSY
+		if an interface with the same uniqueid/(name + unit) and family has already
 		been allocated and is in use.
  */
 extern errno_t ifnet_allocate_extended(const struct ifnet_init_eparams *init,
@@ -1319,6 +1338,36 @@ extern errno_t ifnet_dequeue_service_class(ifnet_t interface,
  */
 extern errno_t ifnet_dequeue_multi(ifnet_t interface, u_int32_t max,
     mbuf_t *first_packet, mbuf_t *last_packet, u_int32_t *cnt, u_int32_t *len);
+
+/*
+	@function ifnet_dequeue_multi_bytes
+	@discussion Dequeue one or more packets from the output queue of
+		an interface which implements the new driver output model,
+		where the scheduling model is set to
+		IFNET_SCHED_MODEL_NORMAL. The limit is specified in terms
+		of maximum number of bytes to return. The number of bytes
+		returned can be slightly higher than the limit so that
+		packet boundaries can be preserved.
+	@param interface The interface to dequeue the packets from
+	@param max_bytes The maximum number of bytes in the packet chain
+		that may be returned to the caller; this needs to be a
+		non-zero value for any packet to be returned.
+	@param first_packet Pointer to the first packet being dequeued
+	@param last_packet Pointer to the last packet being dequeued
+	@param cnt Pointer to a storage for the number of bytes dequeued.
+		Caller may supply NULL if not interested in this value
+	@param len Pointer to a storage for the total length (in bytes)
+		of the dequeued packets. Caller may supply NULL if not
+		interested in this value.
+	@result May return EINVAL if the parameters are invalid, ENXIO if
+		the interface doesn't implement the new driver output
+		model or the output scheduling model isn't
+		IFNET_SCHED_MODEL_NORMAL, or EAGAIN if there is currently
+		no packet available to be dequeued
+ */
+extern errno_t ifnet_dequeue_multi_bytes(ifnet_t interface,
+    u_int32_t max_bytes, mbuf_t *first_packet, mbuf_t *last_packet,
+    u_int32_t *cnt, u_int32_t *len);
 
 /*
 	@function ifnet_dequeue_service_class_multi
@@ -2085,7 +2134,6 @@ extern errno_t ifnet_get_tso_mtu(ifnet_t interface, sa_family_t family,
 /*!
 	@enum Interface wake properties
 	@abstract Constants defining Interface wake properties.
-	@discussion
 	@constant IFNET_WAKE_ON_MAGIC_PACKET Wake on Magic Packet.
 */
 enum {
@@ -2548,7 +2596,7 @@ u_int32_t packets_out, u_int32_t bytes_out, u_int32_t errors_out);
 		The one exception would be the case where a kext wants to zero
 		all of the counters.
 	@param interface The interface.
-	@param counts The new stats values.
+	@param stats The new stats values.
 	@result 0 on success otherwise the errno error.
  */
 extern errno_t ifnet_set_stat(ifnet_t interface,
@@ -2710,11 +2758,10 @@ extern void *ifnet_lladdr(ifnet_t interface);
 	@param interface The interface.
 	@param addr A buffer to copy the broadcast address in to.
 	@param bufferlen The length of the buffer at addr.
-	@param addr_len On return, the length of the broadcast address.
-	@param lladdr_len The length, in bytes, of the link layer address.
+	@param out_len On return, the length of the broadcast address.
  */
 extern errno_t ifnet_llbroadcast_copy_bytes(ifnet_t interface, void *addr,
-    size_t bufferlen, size_t *addr_len);
+    size_t bufferlen, size_t *out_len);
 
 #ifdef KERNEL_PRIVATE
 /*!
@@ -2726,7 +2773,7 @@ extern errno_t ifnet_llbroadcast_copy_bytes(ifnet_t interface, void *addr,
 		changed on.
 	@param lladdr A pointer to the raw link layer address (pointer to
 		the 6 byte ethernet address for ethernet).
-	@param lladdr_len The length, in bytes, of the link layer address.
+	@param length The length, in bytes, of the link layer address.
 	@param type The link-layer address type.
  */
 extern errno_t ifnet_set_lladdr_and_type(ifnet_t interface, const void *lladdr,
@@ -2738,7 +2785,7 @@ extern errno_t ifnet_set_lladdr_and_type(ifnet_t interface, const void *lladdr,
 	@discussion Resolves a multicast address for an attached protocol to
 		a link-layer address. If a link-layer address is passed in, the
 		interface will verify that it is a valid multicast address.
-	@param interface The interface.
+	@param ifp The interface.
 	@param proto_addr A protocol address to be converted to a link-layer
 		address.
 	@param ll_addr Storage for the resulting link-layer address.
@@ -2802,7 +2849,7 @@ extern errno_t ifnet_remove_multicast(ifmultiaddr_t multicast);
 		ifnet_free_multicast_list will decrement the reference counts
 		and free the array.
 	@param interface The interface.
-	@param multicasts A pointer to a NULL terminated array of references
+	@param addresses A pointer to a NULL terminated array of references
 		to the multicast addresses.
 	@result 0 on success otherwise the errno error.
  */
@@ -2815,7 +2862,6 @@ extern errno_t ifnet_get_multicast_list(ifnet_t interface,
 		ifnet_get_multicast_list. Decrements the refcount on each
 		multicast address and frees the array.
 	@param multicasts An array of references to the multicast addresses.
-	@result 0 on success otherwise the errno error.
  */
 extern void ifnet_free_multicast_list(ifmultiaddr_t *multicasts);
 
@@ -2824,7 +2870,7 @@ extern void ifnet_free_multicast_list(ifmultiaddr_t *multicasts);
 	@discussion Find an interface by the name including the unit number.
 		Caller must call ifnet_release on any non-null interface return
 		value.
-	@param name The name of the interface, including any unit number
+	@param ifname The name of the interface, including any unit number
 		(i.e. "en0").
 	@param interface A pointer to an interface reference. This will be
 		filled in if a matching interface is found.
@@ -3173,16 +3219,16 @@ extern errno_t ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield);
 		means all protocols, otherwise PF_INET or PF_INET6.
 	@param flags A bitwise of the following flags:
 		IFNET_GET_LOCAL_PORTS_WILDCARDOK: When bit is set,
-		the list of local ports should include those that are 
+		the list of local ports should include those that are
 		used by sockets that aren't bound to any local address.
 		IFNET_GET_LOCAL_PORTS_NOWAKEUPOK: When bit is
-		set, the list of local ports should return all sockets 
-		including the ones that do not need a wakeup from sleep. 
-		Sockets that do not want to wake from sleep are marked 
+		set, the list of local ports should return all sockets
+		including the ones that do not need a wakeup from sleep.
+		Sockets that do not want to wake from sleep are marked
 		with a socket option.
-		IFNET_GET_LOCAL_PORTS_TCPONLY: When bit is set, the list 
+		IFNET_GET_LOCAL_PORTS_TCPONLY: When bit is set, the list
 		of local ports should return the ports used by TCP sockets.
-		IFNET_GET_LOCAL_PORTS_UDPONLY: When bit is set, the list 
+		IFNET_GET_LOCAL_PORTS_UDPONLY: When bit is set, the list
 		of local ports should return the ports used by UDP sockets.
 		only.
 		IFNET_GET_LOCAL_PORTS_RECVANYIFONLY: When bit is set, the
@@ -3257,6 +3303,14 @@ typedef u_int32_t	tx_compl_val_t;
 	@param val indicates the status of the transmission
 */
 extern errno_t ifnet_tx_compl_status(ifnet_t ifp, mbuf_t m, tx_compl_val_t val);
+
+/*
+	@function ifnet_tx_compl
+	@discussion Used to indicates the packet has been transmitted.
+	@param ifp The interface to which the mbuf was sent
+	@param m The mbuf that was transmitted
+*/
+extern errno_t ifnet_tx_compl(ifnet_t ifp, mbuf_t m);
 
 /******************************************************************************/
 /* for interfaces that support dynamic node absence/presence events           */
@@ -3351,26 +3405,80 @@ ifnet_get_delegate(ifnet_t ifp, ifnet_t *pdelegated_ifp);
 /* for interface keep alive offload support                              */
 /*************************************************************************/
 
-#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE	128
+/*
+	@struct ifnet_keepalive_offload_frame
+	@discussion This structure is used to define various opportunistic
+		polling parameters for an interface.
+		For IPSec and AirPlay UDP keep alive only a subset of the
+		fields are relevant.
+		An incoming TCP keep alive probe has the sequence number
+		in the TCP header equal to "remote_seq" and the
+		acknowledgment number field is equal to "local_seq".
+		An incoming TCP keep alive probe has the sequence number
+		equlal to "remote_seq" minus 1 and the acknowledgment number
+		field is equal to "local_seq".
+		Note that remote_seq is in network byte order so the value to
+		match may have to be converted to host byte order when
+		subtracting 1.
+		For TCP, the field "interval" corresponds to the socket option
+		TCP_KEEPALIVE, the field "keep_cnt" to TCP_KEEPINTVL and
+		the field "keep_cnt" to TCP_KEEPCNT.
+	@field data Keep alive probe to be sent.
+	@field type The type of keep alive frame
+	@field length The length of the frame in the data field
+	@field interval Keep alive interval between probes in seconds
+	@field ether_type Tell if it's the protocol is IPv4 or IPv6
+	@field keep_cnt Maximum number of time to retry probes (TCP only)
+	@field keep_retry Interval before retrying if previous probe was not answered (TCP only)
+	@field reply_length The length of the frame in the reply_data field (TCP only)
+	@field addr_length Length in bytes of local_addr and remote_addr (TCP only)
+	@field reply_data Keep alive reply to be sent to incoming probe (TCP only)
+	@field local_addr Local address: 4 bytes IPv4 or 16 bytes IPv6 address (TCP only)
+	@field remote_addr Remote address: 4 bytes IPv4 or 16 bytes IPv6 address (TCP only)
+	@field local_port Local port (TCP only)
+	@field remote_port Remote port (TCP only)
+	@field local_seq Local sequence number for matching incoming replies (TCP only)
+	@field remote_seq Remote sequence number for matching incoming probes or replies (TCP only)
+*/
+
+#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE 128
+#define	IFNET_KEEPALIVE_OFFLOAD_MAX_ADDR_SIZE 16
+
 struct ifnet_keepalive_offload_frame {
 	u_int8_t data[IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE]; /* data bytes */
-#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_IPSEC	0x0
-#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_AIRPLAY	0x1
+#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_IPSEC 0x0
+#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_AIRPLAY 0x1
+#define	IFNET_KEEPALIVE_OFFLOAD_FRAME_TCP 0x2
 	u_int8_t type;	/* type of application */
 	u_int8_t length; /* Number of valid data bytes including offset */
 	u_int16_t interval; /* Keep alive interval in seconds */
 #define	IFNET_KEEPALIVE_OFFLOAD_FRAME_ETHERTYPE_IPV4	0x0
 #define	IFNET_KEEPALIVE_OFFLOAD_FRAME_ETHERTYPE_IPV6	0x1
 	u_int8_t ether_type; /* Ether type IPv4 or IPv6 */
-	u_int8_t __reserved[3];	/* For future */
+	u_int8_t keep_cnt; /* max number of time to retry probes */
+	u_int16_t keep_retry; /* interval before retrying if previous probe was not answered */
+	u_int8_t reply_length; /* Length of valid reply_data bytes including offset */
+	u_int8_t addr_length; /* Length of valid bytes in local_addr and remote_addr */
+	u_int8_t reserved[2];
+	u_int8_t reply_data[IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE]; /* Response packet */
+	u_int8_t local_addr[IFNET_KEEPALIVE_OFFLOAD_MAX_ADDR_SIZE]; /* in network byte order  */
+	u_int8_t remote_addr[IFNET_KEEPALIVE_OFFLOAD_MAX_ADDR_SIZE]; /* in network byte order  */
+	u_int16_t local_port; /* in host byte order */
+	u_int16_t remote_port; /* in host byte order */
+	u_int32_t local_seq; /* in host byte order */
+	u_int32_t remote_seq; /* in host byte order */
 };
 
 /*
 	@function ifnet_get_keepalive_offload_frames
 	@discussion Fills out frames_array with IP packets to send at
 		periodic intervals as Keep-alive or heartbeat messages.
-		These are UDP datagrams. This can be used to offload
-		IPSec keep alives.
+		This can be used to offload keep alives for UDP or TCP.
+		Note: The frames are returned in this order: first the IPSec
+		frames, then the AirPlay frames and finally the TCP frames.
+		If a device does not support one kind of keep alive frames_array
+		it should provide a frames_array large enough to accomodate
+		the other frames
 	@param ifp The interface to send frames out on. This is used to
 		select which sockets or IPSec SAs should generate the
 		packets.
@@ -3401,7 +3509,7 @@ extern errno_t ifnet_get_keepalive_offload_frames(ifnet_t ifp,
 		length provided by the driver. The contents of the buffer
 		will be read but will not be modified.
 	@param ifp The interface that is generating the report
-	@param buffer Buffer containing the link specific information 
+	@param buffer Buffer containing the link specific information
 		for this interface. It is the caller's responsibility
 		to free this buffer.
 	@param buffer_len Valid length of the buffer provided by the caller
@@ -3450,10 +3558,63 @@ extern u_int32_t ifnet_packetpreamblelen(ifnet_t interface);
  */
 extern u_int32_t ifnet_maxpacketpreamblelen(void);
 
+/*************************************************************************/
+/* QoS Fastlane                                                          */
+/*************************************************************************/
+/*!
+	@function ifnet_set_fastlane_capable
+	@param interface The interface.
+	@param capable Set the truth value that the interface is attached to
+		a network that is capable of Fastlane QoS marking.
+	@result Returns 0 on success, error number otherwise.
+ */
+extern errno_t ifnet_set_fastlane_capable(ifnet_t interface, boolean_t capable);
+
+/*!
+	@function ifnet_get_fastlane_capable
+	@param interface The interface.
+	@param capable On output contains the truth value that the interface
+		is attached ta network that is capable of Fastlane QoS marking.
+	@result Returns 0 on success, error number otherwise.
+ */
+extern errno_t ifnet_get_fastlane_capable(ifnet_t interface, boolean_t *capable);
+
+/*!
+	@function ifnet_get_unsent_bytes
+	@param interface The interface
+	@param unsent_bytes An out parameter that contains unsent bytes for
+		an interface
+	@result Returns 0 on success, error otherwise.
+ */
+extern errno_t ifnet_get_unsent_bytes(ifnet_t interface, int64_t *unsent_bytes);
+
+typedef struct {
+	int32_t buf_interface; /* data to send at interface */
+	int32_t buf_sndbuf; /* data to send at socket buffer */
+} ifnet_buffer_status_t;
+
+/*!
+	@function ifnet_get_buffer_status
+	@param interface The interface
+	@param buf_status An out parameter that contains unsent bytes
+		for an interface
+	@result Returns 0 on success, EINVAL if any of the arguments is
+		NULL, ENXIO if the interface pointer is invalid
+ */
+extern errno_t ifnet_get_buffer_status(const ifnet_t interface,
+    ifnet_buffer_status_t *buf_status);
+
+/*!
+	@function ifnet_normalise_unsent_data
+	@discussion
+		Gathers the unsent bytes on all the interfaces.
+		This data will be reported to NetworkStatistics.
+
+ */
+extern void ifnet_normalise_unsent_data(void);
 
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS
 
 #endif /* __KPI_INTERFACE__ */
-

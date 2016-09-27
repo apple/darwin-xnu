@@ -118,7 +118,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 39)
+#if (MAC_POLICY_OPS_VERSION != 45)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -201,15 +201,16 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(ipq_label_init)
 	CHECK_SET_HOOK(ipq_label_update)
 
-	.mpo_reserved1 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved2 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved3 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved4 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved5 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved6 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved7 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved8 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved9 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(file_check_library_validation)
+
+	CHECK_SET_HOOK(vnode_notify_setacl)
+	CHECK_SET_HOOK(vnode_notify_setattrlist)
+	CHECK_SET_HOOK(vnode_notify_setextattr)
+	CHECK_SET_HOOK(vnode_notify_setflags)
+	CHECK_SET_HOOK(vnode_notify_setmode)
+	CHECK_SET_HOOK(vnode_notify_setowner)
+	CHECK_SET_HOOK(vnode_notify_setutimes)
+	CHECK_SET_HOOK(vnode_notify_truncate)
 
 	CHECK_SET_HOOK(mbuf_label_associate_bpfdesc)
 	CHECK_SET_HOOK(mbuf_label_associate_ifnet)
@@ -272,12 +273,13 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(proc_check_expose_task)
 	CHECK_SET_HOOK(proc_check_set_host_special_port)
 	CHECK_SET_HOOK(proc_check_set_host_exception_port)
-	.mpo_reserved11 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved12 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved13 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved14 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved15 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved16 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(exc_action_check_exception_send)
+	CHECK_SET_HOOK(exc_action_label_associate)
+	CHECK_SET_HOOK(exc_action_label_copy)
+	CHECK_SET_HOOK(exc_action_label_destroy)
+	CHECK_SET_HOOK(exc_action_label_init)
+	CHECK_SET_HOOK(exc_action_label_update)
+
 	.mpo_reserved17 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved18 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved19 = (mpo_reserved_hook_t *)common_hook,
@@ -397,9 +399,9 @@ static struct mac_policy_ops policy_ops = {
 	.mpo_reserved23 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved24 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved25 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved26 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved27 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved28 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(mount_check_snapshot_create)
+	CHECK_SET_HOOK(mount_check_snapshot_delete)
+	CHECK_SET_HOOK(vnode_check_clone)
 	CHECK_SET_HOOK(proc_check_get_cs_info)
 	CHECK_SET_HOOK(proc_check_set_cs_info)
 
@@ -485,8 +487,9 @@ static struct mac_policy_ops policy_ops = {
 
 	CHECK_SET_HOOK(vnode_notify_rename)
 
-	.mpo_reserved32 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved33 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(vnode_check_setacl)
+
+	CHECK_SET_HOOK(vnode_notify_deleteextattr)
 
 	CHECK_SET_HOOK(system_check_kas_info)
 

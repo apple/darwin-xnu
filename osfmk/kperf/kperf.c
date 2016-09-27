@@ -25,183 +25,167 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#include <mach/mach_types.h>
+#include <kern/ipc_tt.h> /* port_name_to_task */
 #include <kern/thread.h>
 #include <kern/machine.h>
 #include <kern/kalloc.h>
+#include <mach/mach_types.h>
 #include <sys/errno.h>
+#include <sys/ktrace.h>
 
-#include <kperf/sample.h>
-#include <kperf/pet.h>
 #include <kperf/action.h>
+#include <kperf/buffer.h>
+#include <kperf/kdebug_trigger.h>
 #include <kperf/kperf.h>
-#include <kperf/timetrigger.h>
+#include <kperf/kperf_timer.h>
+#include <kperf/pet.h>
+#include <kperf/sample.h>
 
-#include <kern/ipc_tt.h> /* port_name_to_task */
-
-/** misc functions **/
-#include <chud/chud_xnu.h> /* XXX: should bust this out */
+lck_grp_t kperf_lck_grp;
 
 /* thread on CPUs before starting the PET thread */
 thread_t *kperf_thread_on_cpus = NULL;
 
-/* interupt sample buffers -- one wired per CPU */
-static struct kperf_sample *intr_samplev = NULL;
-static unsigned intr_samplec = 0;
+/* one wired sample buffer per CPU */
+static struct kperf_sample *intr_samplev;
+static unsigned int intr_samplec = 0;
 
-/* track recursion in the trace code */
-static struct
-{
-	int active;
-	int pad[64 / sizeof(int)];
-} *kpdbg_recursev;
-static unsigned kpdbg_recursec = 0;
-
-/* Curren sampling status */
+/* current sampling status */
 static unsigned sampling_status = KPERF_SAMPLING_OFF;
 
-/* Make sure we only init once */
-static unsigned kperf_initted = 0;
+/* only init once */
+static boolean_t kperf_initted = FALSE;
 
-extern void (*chudxnu_thread_ast_handler)(thread_t);
+/* whether or not to callback to kperf on context switch */
+boolean_t kperf_on_cpu_active = FALSE;
 
-struct kperf_sample*
+struct kperf_sample *
 kperf_intr_sample_buffer(void)
 {
-	unsigned ncpu = chudxnu_cpu_number();
+	unsigned ncpu = cpu_number();
 
-	// XXX: assert?
-	if( ncpu >= intr_samplec )
-		return NULL;
+	assert(ml_get_interrupts_enabled() == FALSE);
+	assert(ncpu < intr_samplec);
 
-	return &intr_samplev[ncpu];
-}
-
-int
-kperf_kdbg_recurse(int step)
-{
-	unsigned ncpu = chudxnu_cpu_number();
-
-	// XXX: assert?
-	if( ncpu >= kpdbg_recursec )
-		return 1;
-
-	/* recursing in, available */
-	if( (step > 0)
-	    && (kpdbg_recursev[ncpu].active == 0) )
-	{
-		kpdbg_recursev[ncpu].active = 1;
-		return 0;
-	}
-
-	/* recursing in, unavailable */
-	if( (step > 0)
-	    && (kpdbg_recursev[ncpu].active != 0) )
-	{
-		return 1;
-	}
-
-	/* recursing out, unavailable */
-	if( (step < 0)
-	    && (kpdbg_recursev[ncpu].active != 0) )
-	{
-		kpdbg_recursev[ncpu].active = 0;
-		return 0;
-	}
-
-	/* recursing out, available */
-	if( (step < 0)
-	    && (kpdbg_recursev[ncpu].active == 0) )
-		panic( "return from non-recursed kperf kdebug call" );
-
-	panic( "unknown kperf kdebug call" );
-	return 1;
+	return &(intr_samplev[ncpu]);
 }
 
 /* setup interrupt sample buffers */
 int
 kperf_init(void)
 {
+	static lck_grp_attr_t lck_grp_attr;
+
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+
 	unsigned ncpus = 0;
 	int err;
 
-	if( kperf_initted )
+	if (kperf_initted) {
 		return 0;
+	}
 
-	/* get number of cpus */
+	lck_grp_attr_setdefault(&lck_grp_attr);
+	lck_grp_init(&kperf_lck_grp, "kperf", &lck_grp_attr);
+
 	ncpus = machine_info.logical_cpu_max;
 
-	kperf_thread_on_cpus = kalloc( ncpus * sizeof(*kperf_thread_on_cpus) );
-	if( kperf_thread_on_cpus == NULL )
-	{
+	/* create buffers to remember which threads don't need to be sampled by PET */
+	kperf_thread_on_cpus = kalloc_tag(ncpus * sizeof(*kperf_thread_on_cpus),
+	                                  VM_KERN_MEMORY_DIAG);
+	if (kperf_thread_on_cpus == NULL) {
 		err = ENOMEM;
 		goto error;
 	}
+	bzero(kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus));
 
-	/* clear it */
-	bzero( kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus) );
-
-	/* make the CPU array
-	 * FIXME: cache alignment
-	 */
-	intr_samplev = kalloc( ncpus * sizeof(*intr_samplev));
+	/* create the interrupt buffers */
 	intr_samplec = ncpus;
-
-	if( intr_samplev == NULL )
-	{
+	intr_samplev = kalloc_tag(ncpus * sizeof(*intr_samplev),
+	                          VM_KERN_MEMORY_DIAG);
+	if (intr_samplev == NULL) {
 		err = ENOMEM;
 		goto error;
 	}
+	bzero(intr_samplev, ncpus * sizeof(*intr_samplev));
 
-	/* clear it */
-	bzero( intr_samplev, ncpus * sizeof(*intr_samplev) );
+	/* create kdebug trigger filter buffers */
+	if ((err = kperf_kdebug_init())) {
+		goto error;
+	}
 
-	/* make the recursion array */
-	kpdbg_recursev = kalloc( ncpus * sizeof(*kpdbg_recursev));
-	kpdbg_recursec = ncpus;
-
-	/* clear it */
-	bzero( kpdbg_recursev, ncpus * sizeof(*kpdbg_recursev) );
-
-	/* we're done */
-	kperf_initted = 1;
-
+	kperf_initted = TRUE;
 	return 0;
+
 error:
-	if( intr_samplev )
-		kfree( intr_samplev, ncpus * sizeof(*intr_samplev) );
-	if( kperf_thread_on_cpus )
-		kfree( kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus) );
+	if (intr_samplev) {
+		kfree(intr_samplev, ncpus * sizeof(*intr_samplev));
+		intr_samplev = NULL;
+		intr_samplec = 0;
+	}
+
+	if (kperf_thread_on_cpus) {
+		kfree(kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus));
+		kperf_thread_on_cpus = NULL;
+	}
+
 	return err;
+}
+
+void
+kperf_reset(void)
+{
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+
+	/* turn off sampling first */
+	(void)kperf_sampling_disable();
+
+	/* cleanup miscellaneous configuration first */
+	(void)kperf_kdbg_cswitch_set(0);
+	(void)kperf_set_lightweight_pet(0);
+	kperf_kdebug_reset();
+
+	/* timers, which require actions, first */
+	kperf_timer_reset();
+	kperf_action_reset();
+}
+
+void
+kperf_on_cpu_internal(thread_t thread, thread_continue_t continuation,
+                      uintptr_t *starting_fp)
+{
+	if (kperf_kdebug_cswitch) {
+		/* trace the new thread's PID for Instruments */
+		int pid = task_pid(get_threadtask(thread));
+
+		BUF_DATA(PERF_TI_CSWITCH, thread_tid(thread), pid);
+	}
+	if (kperf_lightweight_pet_active) {
+		kperf_pet_on_cpu(thread, continuation, starting_fp);
+	}
+}
+
+void
+kperf_on_cpu_update(void)
+{
+	kperf_on_cpu_active = kperf_kdebug_cswitch ||
+	                      kperf_lightweight_pet_active;
 }
 
 /* random misc-ish functions */
 uint32_t
-kperf_get_thread_bits( thread_t thread )
+kperf_get_thread_flags(thread_t thread)
 {
-	return thread->t_chud;
+	return thread->kperf_flags;
 }
 
 void
-kperf_set_thread_bits( thread_t thread, uint32_t bits )
+kperf_set_thread_flags(thread_t thread, uint32_t flags)
 {
-	thread->t_chud = bits;
+	thread->kperf_flags = flags;
 }
 
-/* mark an AST to fire on a thread */
-void
-kperf_set_thread_ast( thread_t thread )
-{
-	/* FIXME: only call this on current thread from an interrupt
-	 * handler for now... 
-	 */
-	if( thread != current_thread() )
-		panic( "unsafe AST set" );
-
-	act_set_kperf(thread);
-}
-
-unsigned
+unsigned int
 kperf_sampling_status(void)
 {
 	return sampling_status;
@@ -210,20 +194,22 @@ kperf_sampling_status(void)
 int
 kperf_sampling_enable(void)
 {
-	/* already running! */
-	if( sampling_status == KPERF_SAMPLING_ON )
+	if (sampling_status == KPERF_SAMPLING_ON) {
 		return 0;
+	}
 
-	if ( sampling_status != KPERF_SAMPLING_OFF )
-		panic( "kperf: sampling wasn't off" );
+	if (sampling_status != KPERF_SAMPLING_OFF) {
+		panic("kperf: sampling was %d when asked to enable", sampling_status);
+	}
 
 	/* make sure interrupt tables and actions are initted */
-	if( !kperf_initted
-	    || (kperf_action_get_count() == 0) )
+	if (!kperf_initted || (kperf_action_get_count() == 0)) {
 		return ECANCELED;
+	}
 
 	/* mark as running */
 	sampling_status = KPERF_SAMPLING_ON;
+	kperf_lightweight_pet_active_update();
 
 	/* tell timers to enable */
 	kperf_timer_go();
@@ -234,8 +220,9 @@ kperf_sampling_enable(void)
 int
 kperf_sampling_disable(void)
 {
-	if( sampling_status != KPERF_SAMPLING_ON )
+	if (sampling_status != KPERF_SAMPLING_ON) {
 		return 0;
+	}
 
 	/* mark a shutting down */
 	sampling_status = KPERF_SAMPLING_SHUTDOWN;
@@ -245,8 +232,25 @@ kperf_sampling_disable(void)
 
 	/* mark as off */
 	sampling_status = KPERF_SAMPLING_OFF;
+	kperf_lightweight_pet_active_update();
 
 	return 0;
+}
+
+boolean_t
+kperf_thread_get_dirty(thread_t thread)
+{
+	return (thread->c_switch != thread->kperf_c_switch);
+}
+
+void
+kperf_thread_set_dirty(thread_t thread, boolean_t dirty)
+{
+	if (dirty) {
+		thread->kperf_c_switch = thread->c_switch - 1;
+	} else {
+		thread->kperf_c_switch = thread->c_switch;
+	}
 }
 
 int
@@ -255,16 +259,17 @@ kperf_port_to_pid(mach_port_name_t portname)
 	task_t task;
 	int pid;
 
-	if( !MACH_PORT_VALID(portname) )
+	if (!MACH_PORT_VALID(portname)) {
 		return -1;
+	}
 
 	task = port_name_to_task(portname);
-	
-	if( task == TASK_NULL )
+
+	if (task == TASK_NULL) {
 		return -1;
+	}
 
-
-	pid = chudxnu_pid_for_task(task);
+	pid = task_pid(task);
 
 	task_deallocate_internal(task);
 

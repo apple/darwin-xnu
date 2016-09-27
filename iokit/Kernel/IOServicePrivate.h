@@ -47,8 +47,8 @@ enum {
 
 // masks for __state[1]
 enum {
-    kIOServiceBusyStateMask	= 0x000000ff,
-    kIOServiceBusyMax		= 255,
+    kIOServiceBusyStateMask	= 0x000003ff,
+    kIOServiceBusyMax		= 1023,
     kIOServiceNeedConfigState	= 0x80000000,
     kIOServiceSynchronousState	= 0x40000000,
     kIOServiceModuleStallState	= 0x20000000,
@@ -63,6 +63,7 @@ enum {
     kIOServiceTerm1WaiterState  = 0x00200000,
     kIOServiceRecursing		= 0x00100000,
     kIOServiceNeedWillTerminate = 0x00080000,
+    kIOServiceWaitDetachState   = 0x00040000,
 };
 
 // notify state
@@ -123,6 +124,20 @@ public:
     virtual void enable( bool was ) APPLE_KEXT_OVERRIDE;
     virtual void wait();
     virtual bool init() APPLE_KEXT_OVERRIDE;
+};
+
+class _IOServiceNullNotifier : public IONotifier
+{
+    OSDeclareDefaultStructors(_IOServiceNullNotifier)
+
+public:
+    virtual void taggedRetain(const void *tag) const APPLE_KEXT_OVERRIDE;
+    virtual void taggedRelease(const void *tag, const int when) const APPLE_KEXT_OVERRIDE;
+    virtual void free() APPLE_KEXT_OVERRIDE;
+    virtual void remove() APPLE_KEXT_OVERRIDE;
+    virtual bool disable() APPLE_KEXT_OVERRIDE;
+    virtual void enable( bool was ) APPLE_KEXT_OVERRIDE;
+    virtual void wait();
 };
 
 class _IOConfigThread : public OSObject

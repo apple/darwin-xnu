@@ -124,11 +124,9 @@ typedef struct fsevent_dev_filter_args {
 #define	FSEVENTS_GET_CURRENT_ID		_IOR('s', 103, uint64_t)
 
 
-#ifdef KERNEL
+#ifdef BSD_KERNEL_PRIVATE
 
 void fsevents_init(void);
-int  need_fsevent(int type, vnode_t vp);
-int  add_fsevent(int type, vfs_context_t, ...);
 void fsevent_unmount(struct mount *mp);
 struct vnode_attr;
 void create_fsevent_from_kevent(vnode_t vp, uint32_t kevents, struct vnode_attr *vap);
@@ -149,6 +147,13 @@ int   vnode_get_fse_info_from_vap(vnode_t vp, fse_info *fse, struct vnode_attr *
 char *get_pathbuff(void);
 void  release_pathbuff(char *path);
 
-#endif /* KERNEL */
+#endif /* BSD_KERNEL_PRIVATE */
+
+#ifdef KERNEL_PRIVATE
+
+int  need_fsevent(int type, vnode_t vp);
+int  add_fsevent(int type, vfs_context_t, ...);
+
+#endif /* KERNEL_PRIVATE */
 
 #endif /* FSEVENT_H */

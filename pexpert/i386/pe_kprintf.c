@@ -38,6 +38,7 @@
 #include <i386/mp.h>
 #include <machine/pal_routines.h>
 #include <i386/proc_reg.h>
+#include <os/log_private.h>
 
 /* Globals */
 void (*PE_kputc)(char c);
@@ -101,10 +102,14 @@ static void _kprintf(const char *format, ...)
 #endif /* MP_DEBUG */
 
 static int cpu_last_locked = 0;
+
+__attribute__((noinline,not_tail_called))
 void kprintf(const char *fmt, ...)
 {
-	va_list   listp;
-	boolean_t state;
+	va_list    listp;
+	va_list    listp2;
+	boolean_t  state;
+	void      *caller = __builtin_return_address(0);
 
 	if (!disable_serial_output) {
 		boolean_t early = FALSE;
@@ -115,8 +120,16 @@ void kprintf(const char *fmt, ...)
 		 * take any locks, just dump to serial */
 		if (!PE_kputc || early) {
 			va_start(listp, fmt);
+			va_copy(listp2, listp);
+
 			_doprnt_log(fmt, &listp, pal_serial_putc, 16);
 			va_end(listp);
+
+			// If interrupts are enabled
+			if (ml_get_interrupts_enabled()) {
+				os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp2, caller);
+			}
+			va_end(listp2);
 			return;
 		}
 
@@ -138,13 +151,30 @@ void kprintf(const char *fmt, ...)
 		}
 
 		va_start(listp, fmt);
+		va_copy(listp2, listp);
 		_doprnt(fmt, &listp, PE_kputc, 16);
 		va_end(listp);
 
 		simple_unlock(&kprintf_lock);
 		ml_set_interrupts_enabled(state);
+
+		// If interrupts are enabled
+		if (ml_get_interrupts_enabled()) {
+			os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp2, caller);
+		}
+		va_end(listp2);
+
+	}
+	else {
+		if (ml_get_interrupts_enabled()) {
+			va_start(listp, fmt);
+			os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp, caller);
+			va_end(listp);
+		}
 	}
 }
+
+
 
 extern void kprintf_break_lock(void);
 void

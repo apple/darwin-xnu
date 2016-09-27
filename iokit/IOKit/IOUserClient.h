@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -319,7 +319,7 @@ public:
         @function releaseNotificationPort
 	@abstract Release the mach_port_t passed to registerNotificationPort().
 	@discussion The mach_port_t passed to the registerNotificationPort() methods should be released to balance each call to registerNotificationPort(). Behavior is undefined if these calls are not correctly balanced.
-        @param reference The mach_port_t argument previously passed to the subclass implementation of registerNotificationPort().
+        @param port The mach_port_t argument previously passed to the subclass implementation of registerNotificationPort().
         @result A return code.
     */
     static IOReturn releaseNotificationPort(mach_port_t port);

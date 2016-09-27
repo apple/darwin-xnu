@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2012 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
 #
 # MakeInc.rule defines the targets and rules for
 # leaf directories once MakeInc.dir has recursed
@@ -45,6 +45,47 @@ ifndef INSTALL_KF_MD_GEN_LIST
     INSTALL_KF_MD_GEN_LIST = $(EXPORT_MD_GEN_LIST)
 endif
 
+ifeq (${XNU_LOGCOLORS},y)
+    LOGCOLORS ?= y
+endif
+
+ifeq ($(LOGCOLORS),y)
+    # Get a nice list of device code names associated with the build platform
+    ifndef CDevs
+        #ifdef EMBEDDED_DEVICE_MAP
+        #    export CDevs := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH) -query "SELECT DISTINCT TargetType FROM Targets WHERE KernelPlatform = '$(CURRENT_MACHINE_CONFIG_LC)'" | tr '[\r\n]' ':' | sed 's,:$$,,')
+        #endif
+    endif
+    ifndef CMD_MC
+        export _MACHINE := $(CURRENT_MACHINE_CONFIG_LC)
+        ifeq ($(CURRENT_MACHINE_CONFIG),NONE)
+            export _MACHINE := $(subst Mac,,$(PLATFORM))
+        endif
+        export CMD_MC := \\033[1m$(shell __A="$(CURRENT_ARCH_CONFIG_LC)"; \
+                                         __As=$$((6-$${\#__A})); \
+                                         printf "%-.6s%*.*s %9.9s" \
+                                                "$${__A}" \
+                                                $${__As} $${__As} " " \
+                                                "$(_MACHINE)")\\033[m
+    endif
+    # Turn off colored output
+    Color0=\\033[m
+    # Start a host command: bold, underlined pink text
+    ColorH=\\033[1;4;35m
+    # Start a compilation-related command: bold, underlined blue text
+    ColorC=[$(CMD_MC)] \\033[1;4;34m
+    # Start a MIG command: bold, green text on light grey background
+    ColorM=[$(CMD_MC)] \\033[1;32;40m
+    # Start a linking command: bold, white text on blue background
+    ColorL=[$(CMD_MC)] \\033[1;37;44m
+    # Start a filename: bold, white text
+    ColorF=\\033[1;37m
+    # Start a linked file name: yellow text on light grey background
+    ColorLF=\\033[1;33;40m
+    # Error strings: underlined bold white text on red background
+    ColorErr=\033[1;4;37;41m
+endif
+
 .PHONY: ALWAYS
 
 ALWAYS:
@@ -71,7 +112,7 @@ $(3)/.UNIFDEF_FLAGS: ALWAYS | $(3)_MKDIR
 	$$(_v)$$(REPLACECONTENTS) $$@ $$(UNIFDEF) $(4)
 
 $(1): $(dir $(firstword $(1)))% : $(if $(2),%,$$(SOURCE)/%) | $(3)_MKDIR
-	@echo INSTALLHDR $$*
+	@echo "$$(ColorH)INSTALLHDR$(Color0)    $$(ColorF)$$*$$(Color0)"
 	$$(_v)$$(UNIFDEF) $(4) $$< > ./$(3)/$$*.unifdef.$$$$$$$$;	\
 	if [ $$$$? -eq 2 ]; then						\
 		echo Parse failure for $$<;				\
@@ -211,7 +252,7 @@ do_exporthdrs_md: $(EXPORT_MD_GEN_INC_FILES)  $(EXPORT_MD_INC_FILES)
 # Compilation rules to generate .o from .s
 #
 
-S_RULE_0=@echo AS $@
+S_RULE_0=@echo "$(ColorC)AS$(Color0)  $(ColorF)$@$(Color0)"
 S_RULE_1A=$(_v)${S_KCC} -c ${SFLAGS} -MD -MF $(@:o=d) -MP ${$@_SFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
 S_RULE_1B=$(<F)
 S_RULE_2=
@@ -219,25 +260,39 @@ S_RULE_2=
 #
 # Compilation rules to generate .o from .c for normal files
 #
-C_RULE_0=@echo CC $@
-C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
+C_RULE_0=@echo "$(ColorC)CC$(Color0)  $(ColorF)$@$(Color0)"
+C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
 C_RULE_1B=$(<F)
 ifeq ($(BUILD_MACHO_OBJ),0)
 C_RULE_2=
 else ifeq ($(DO_CTFCONVERT),1)
-C_RULE_2=$(_v)if [ -z "${$@_SKIP_CTFCONVERT}" ]; then ${CTFCONVERT} -l xnu -v -o $@.ctf $@ > /dev/null || true; fi
+C_RULE_2=$(_v)if [ -z "${$@_SKIP_CTFCONVERT}" ]; then \
+                  ctferr=`${CTFCONVERT} -l xnu -v -o $@.ctf $@ 2>&1 > /dev/null || true`; \
+                  if [ ! -z "$${ctferr}" ]; then \
+                      echo "[$(CMD_MC)] $(ColorErr)$@$(Color0)  $(ColorErr)$${ctferr}$(Color0)"; \
+                  fi; \
+              fi
 else
 C_RULE_2=
 endif
 ifeq ($(DO_CTFMACHO), 1)
-C_CTFRULE_1A=$(_v)${KCC} -o $@.non_lto -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} $(CFLAGS_NOLTO_FLAG) 
+C_CTFRULE_1A=$(_v)${KCC} -o $@.non_lto -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} $(CFLAGS_NOLTO_FLAG) ${$@_INCFLAGS}
 C_CTFRULE_1B=$(<F)
-C_CTFRULE_2=$(_v)if [ -z "${$@_SKIP_CTFCONVERT}" ]; then ${CTFCONVERT} -l xnu -v -o $@.non_lto.ctf $@.non_lto > /dev/null || true; fi
+C_CTFRULE_2=$(_v)if [ -z "${$@_SKIP_CTFCONVERT}" ]; then \
+                     ctferr=`${CTFCONVERT} -l xnu -v -o $@.non_lto.ctf $@.non_lto 2>&1 > /dev/null || true`; \
+                     if [ ! -z "$${ctferr}" ]; then \
+                         echo "[$(CMD_MC)] $(ColorErr)$@$(Color0)  $(ColorErr)$${ctferr}$(Color0)"; \
+                     fi; \
+                 fi
 else
 C_CTFRULE_1A=@true 
 C_CTFRULE_1B=
 C_CTFRULE_2=@true 
 endif
+
+C_RULE_3=@true 
+C_RULE_4A=@true 
+C_RULE_4B=
 
 #
 # Compilation rules to generate .o from .c for driver files
@@ -246,22 +301,29 @@ C_RULE_0_D=${C_RULE_0}
 C_RULE_1A_D=${C_RULE_1A}
 C_RULE_1B_D=${C_RULE_1B}
 C_RULE_2_D=${C_RULE_2}
+C_RULE_3_D=${C_RULE_3}
+C_RULE_4A_D=${C_RULE_4A}
+C_RULE_4B_D=${C_RULE_4B}
 C_CTFRULE_1A_D=${C_CTFRULE_1A}
 C_CTFRULE_1B_D=${C_CTFRULE_1B}
 C_CTFRULE_2_D=${C_CTFRULE_2}
+C_CTFRULE_3_D=${C_CTFRULE_3}
 
 #
 # Compilation rules to generate .co from .cp or .cpo from .cpp
 #   The config tool slickly changes the last source filename char to 'o'
 #   for the object filename.
-P_RULE_0=@echo C++ $@
-P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CXXWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CXXWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
+P_RULE_0=@echo "$(ColorC)C++$(Color0) $(ColorF)$@$(Color0)"
+P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CXXWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CXXWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
 P_RULE_1B=$(<F)
 P_RULE_2=
 P_CTFRULE_1A=@true 
 P_CTFRULE_1B=
 P_CTFRULE_2=@true 
 
+P_RULE_3=@true 
+P_RULE_4A=@true 
+P_RULE_4B=
 
 #
 # This isn't the right place to put this, but we need to := override some settings
@@ -302,12 +364,12 @@ INSTALL_MAN_DIR:
 	$(_v)$(MKDIR) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)
 
 $(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : % | INSTALL_MAN_DIR
-	@echo MAN $*
+	@echo "$(ColorH)MAN$(Color0)        $(ColorF)$*$(Color0)"
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 define MAN_LINKS_RULE_template
 $$(DSTROOT)/$$(MANDIR)/$$(INSTALL_MAN_DIR)/$(2): $$(DSTROOT)/$$(MANDIR)/$$(INSTALL_MAN_DIR)/$(1)
-	@echo MANLINK $(2)
+	@echo "$$(ColorH)MANLINK$$(Color0)    $$(ColorF)$(2)$$(Color0)"
 	$(_v)ln -f $$< $$@
 endef
 

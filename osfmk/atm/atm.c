@@ -731,9 +731,14 @@ atm_send_user_notification(
 	/* Make sure that honor queue limit option is unset on the thread. */
 	th->options &= (~TH_OPT_HONOR_QLIMIT);
 
-	if (kr == MACH_SEND_TIMED_OUT) {
-		kr = KERN_SUCCESS;
+	if (kr != KERN_SUCCESS) {
+		ipc_port_release_send(user_port);
+
+		if (kr == MACH_SEND_TIMED_OUT) {
+			kr = KERN_SUCCESS;
+		}
 	}
+
 	return kr;
 }
 
@@ -794,8 +799,12 @@ atm_send_proc_inspect_notification(
 	/* Make sure that honor queue limit option is unset on the thread. */
 	th->options &= (~TH_OPT_HONOR_QLIMIT);
 
-	if (kr == MACH_SEND_TIMED_OUT) {
-		kr = KERN_SUCCESS;
+	if (kr != KERN_SUCCESS) {
+		ipc_port_release_send(user_port);
+
+		if (kr == MACH_SEND_TIMED_OUT) {
+			kr = KERN_SUCCESS;
+		}
 	}
 
 	ipc_port_release_send(memory_port);

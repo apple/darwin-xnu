@@ -33,6 +33,8 @@
 #include <kdp/kdp.h>
 #include <kdp/kdp_protocol.h>
 #include <mach/vm_types.h>
+#include <mach/boolean.h>
+#include <mach/mach_types.h>
 #include <libsa/types.h>
 
 typedef struct {
@@ -54,6 +56,8 @@ extern kdp_glob_t	kdp;
 extern volatile int	kdp_flag;
 extern int            noresume_on_disconnect;
 
+extern char kdp_kernelversion_string[256];
+
 #define KDP_READY       0x1
 #define KDP_ARP         0x2
 #define KDP_BP_DIS      0x4
@@ -70,6 +74,15 @@ typedef boolean_t
     int	 *,
     unsigned short *
 );
+
+struct debugger_callback {
+	kern_return_t (*callback) (void*);
+	void *callback_context;
+	boolean_t proceed_on_sync_failure;
+	kern_return_t error;
+};
+
+extern struct debugger_callback *debugger_callback;
 
 extern
 boolean_t

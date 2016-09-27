@@ -45,12 +45,10 @@
 #include <kern/page_decrypt.h>
 #include <kern/queue.h>
 #include <kern/thread.h>
+#include <kern/ipc_kobject.h>
 
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
-
-#include <default_pager/default_pager_types.h>
-#include <default_pager/default_pager_object_server.h>
 
 #include <vm/vm_fault.h>
 #include <vm/vm_map.h>
@@ -58,6 +56,7 @@
 #include <vm/memory_object.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
+#include <vm/vm_kern.h>
 
 
 /* 
@@ -266,6 +265,12 @@ fourk_pager_init(
 	if (kr != KERN_SUCCESS)
 		panic("fourk_pager_init: "
 		      "memory_object_change_attributes() failed");
+
+#if CONFIG_SECLUDED_MEMORY
+	if (secluded_for_filecache) {
+		memory_object_mark_eligible_for_secluded(control, TRUE);
+	}
+#endif /* CONFIG_SECLUDED_MEMORY */
 
 	return KERN_SUCCESS;
 }
@@ -942,6 +947,7 @@ fourk_pager_data_request(
 			memory_object_offset_t	src_offset;
 			vm_offset_t		offset_in_src_page;
 			kern_return_t		error_code;
+			vm_object_t		src_page_object;
 			vm_page_t		src_page;
 			vm_page_t		top_page;
 			vm_prot_t		prot;
@@ -1065,16 +1071,12 @@ fourk_pager_data_request(
 			assert(src_page != VM_PAGE_NULL);
 			assert(src_page->busy);
 
-			if (!src_page->active &&
-			    !src_page->inactive &&
-			    !src_page->speculative &&
-			    !src_page->throttled &&
+			src_page_object = VM_PAGE_OBJECT(src_page);
+
+			if (( !VM_PAGE_PAGEABLE(src_page)) &&
 			    !VM_PAGE_WIRED(src_page)) {
 				vm_page_lockspin_queues();
-				if (!src_page->active &&
-				    !src_page->inactive &&
-				    !src_page->speculative &&
-				    !src_page->throttled &&
+				if (( !VM_PAGE_PAGEABLE(src_page)) &&
 				    !VM_PAGE_WIRED(src_page)) {
 					vm_page_deactivate(src_page);
 				}
@@ -1083,7 +1085,7 @@ fourk_pager_data_request(
 
 #if __x86_64__
 			src_vaddr = (vm_map_offset_t)
-				PHYSMAP_PTOV((pmap_paddr_t)src_page->phys_page
+				PHYSMAP_PTOV((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
 					     << PAGE_SHIFT);
 #else
 			/*
@@ -1092,7 +1094,7 @@ fourk_pager_data_request(
 			 */
 			pmap_enter(kernel_pmap,
 				   src_vaddr,
-				   src_page->phys_page,
+				   VM_PAGE_GET_PHYS_PAGE(src_page),
 				   VM_PROT_READ,
 				   VM_PROT_NONE,
 				   0,
@@ -1105,11 +1107,12 @@ fourk_pager_data_request(
 			 */
 			subpg_validated = FALSE;
 			subpg_tainted = 0;
-			if (src_page->object->code_signed) {
+			if (src_page_object->code_signed) {
 				vm_page_validate_cs_mapped_chunk(
 					src_page,
 					(const void *) src_vaddr,
 					offset_in_src_page,
+					FOURK_PAGE_SIZE,
 					&subpg_validated,
 					&subpg_tainted);
 				num_subpg_signed++;
@@ -1155,7 +1158,7 @@ fourk_pager_data_request(
 				       pager,
 				       offset, cur_offset,
 				       (sub_page-sub_page_idx)*FOURK_PAGE_SIZE,
-				       src_page->object,
+				       src_page_object,
 				       src_page->offset + offset_in_src_page,
 				       *(uint64_t *)(dst_vaddr +
 						     ((sub_page-sub_page_idx) *
@@ -1164,7 +1167,7 @@ fourk_pager_data_request(
 						     ((sub_page-sub_page_idx) *
 						      FOURK_PAGE_SIZE) +
 						     8),
-				       src_page->object->code_signed,
+				       src_page_object->code_signed,
 				       subpg_validated,
 				       !!(subpg_tainted & CS_VALIDATE_TAINTED),
 				       !!(subpg_tainted & CS_VALIDATE_NX));
@@ -1188,9 +1191,8 @@ fourk_pager_data_request(
 			 * Cleanup the result of vm_fault_page().
 			 */
 			if (src_page) {
-				vm_object_t	src_page_object;
+				assert(VM_PAGE_OBJECT(src_page) == src_page_object);
 
-				src_page_object = src_page->object;
 				PAGE_WAKEUP_DONE(src_page);
 				src_page = VM_PAGE_NULL;
 				vm_object_paging_end(src_page_object);
@@ -1198,7 +1200,7 @@ fourk_pager_data_request(
 				if (top_page) {
 					vm_object_t	top_object;
 
-					top_object = top_page->object;
+					top_object = VM_PAGE_OBJECT(top_page);
 					vm_object_lock(top_object);
 					VM_PAGE_FREE(top_page);
 					top_page = VM_PAGE_NULL;

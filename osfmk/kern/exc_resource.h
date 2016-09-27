@@ -61,6 +61,7 @@
 #define RESOURCE_TYPE_CPU	1
 #define RESOURCE_TYPE_WAKEUPS	2
 #define	RESOURCE_TYPE_MEMORY	3
+#define RESOURCE_TYPE_IO 	4
 
 /* RESOURCE_TYPE_CPU flavors */
 #define FLAVOR_CPU_MONITOR		1
@@ -159,6 +160,40 @@
 #define EXC_RESOURCE_HWM_DECODE_LIMIT(code) \
 	((code) & 0x1FFFULL)
 
+/* RESOURCE_TYPE_IO flavors */
+#define FLAVOR_IO_PHYSICAL_WRITES 		1
+#define FLAVOR_IO_LOGICAL_WRITES 		2
+
+/*
+ * RESOURCE_TYPE_IO exception code & subcode.
+ *
+ * This is sent by the kernel when a task crosses its 
+ * I/O limits.
+ *
+ * code:
+ * +-----------------------------------------------+
+ * |[63:61] RESOURCE |[60:58] FLAVOR_IO_  |[57:32] |
+ * |_TYPE_IO         |PHYSICAL/LOGICAL    |Unused  |
+ * +-----------------------------------------------+
+ * |[31:15]  Interval (sec)    | [14:0] Limit (MB) |
+ * +-----------------------------------------------+
+ *
+ * subcode:
+ * +-----------------------------------------------+
+ * |                           | [14:0] I/O Count  |
+ * |                           | (in MB)           |
+ * +-----------------------------------------------+
+ *
+ */
+
+/* RESOURCE_TYPE_IO decoding macros */
+#define EXC_RESOURCE_IO_DECODE_INTERVAL(code) \
+        (((code) >> 15) & 0x1FFFFULL)
+#define EXC_RESOURCE_IO_DECODE_LIMIT(code) \
+        ((code) & 0x7FFFULL)
+#define EXC_RESOURCE_IO_OBSERVED(subcode) \
+        ((subcode) & 0x7FFFULL)
+
 
 #ifdef KERNEL
 
@@ -185,6 +220,14 @@
 /* RESOURCE_TYPE_MEMORY::FLAVOR_HIGH_WATERMARK specific encoding macros */
 #define EXC_RESOURCE_HWM_ENCODE_LIMIT(code, num) \
 	((code) |= ((uint64_t)(num) & 0x1FFFULL))
+
+/* RESOURCE_TYPE_IO::FLAVOR_IO_PHYSICAL_WRITES/FLAVOR_IO_LOGICAL_WRITES specific encoding macros */
+#define EXC_RESOURCE_IO_ENCODE_INTERVAL(code, interval) \
+	((code) |= (((uint64_t)(interval) & 0x1FFFFULL) << 15))
+#define EXC_RESOURCE_IO_ENCODE_LIMIT(code, limit) \
+	((code) |= (((uint64_t)(limit) & 0x7FFFULL)))
+#define EXC_RESOURCE_IO_ENCODE_OBSERVED(subcode, num) \
+	((subcode) |= (((uint64_t)(num) & 0x7FFFULL)))
 
 #endif /* KERNEL */
 

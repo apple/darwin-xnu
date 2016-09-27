@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -127,7 +127,15 @@
 #include <machine/cpu_data.h>
 #include <machine/thread.h>
 
+
 struct thread {
+
+#if MACH_ASSERT
+#define THREAD_MAGIC 0x1234ABCDDCBA4321ULL
+	/* Ensure nothing uses &thread as a queue entry */
+	uint64_t                thread_magic;
+#endif /* MACH_ASSERT */
+
 	/*
 	 *	NOTE:	The runq field in the thread structure has an unusual
 	 *	locking protocol.  If its value is PROCESSOR_NULL, then it is
@@ -140,11 +148,16 @@ struct thread {
 	 *	New waitq APIs allow the 'links' and 'runq' fields to be
 	 *	anywhere in the thread structure.
 	 */
-  	/* Items examined often, modified infrequently */
-	queue_chain_t	links;				/* run/wait queue links */
-	processor_t		runq;				/* run queue assignment */
-	event64_t		wait_event;			/* wait queue event */
-	struct waitq	*waitq;
+	union {
+		queue_chain_t           runq_links;     /* run queue links */
+		queue_chain_t           wait_links;     /* wait queue links */
+	};
+
+	processor_t             runq;           /* run queue assignment */
+
+	event64_t               wait_event;     /* wait queue event */
+	struct waitq           *waitq;          /* wait queue this thread is enqueued on */
+
 	/* Data updated during assert_wait/thread_wakeup */
 #if __SMP__
 	decl_simple_lock_data(,sched_lock)	/* scheduling lock (thread_lock()) */
@@ -195,14 +208,18 @@ struct thread {
 	sched_mode_t			sched_mode;		/* scheduling mode */
 	sched_mode_t			saved_mode;		/* saved mode during forced mode demotion */
 
+	/* This thread's contribution to global sched counters */
+	sched_bucket_t                  th_sched_bucket;
+
 	sfi_class_id_t			sfi_class;		/* SFI class (XXX Updated on CSW/QE/AST) */
 	sfi_class_id_t			sfi_wait_class;	/* Currently in SFI wait for this class, protected by sfi_lock */
-	
+
+
 	uint32_t			sched_flags;		/* current flag bits */
 /* TH_SFLAG_FAIRSHARE_TRIPPED (unused)	0x0001 */
 #define TH_SFLAG_FAILSAFE		0x0002		/* fail-safe has tripped */
-#define TH_SFLAG_THROTTLED		0x0004		/* thread treated as background for scheduler decay purposes */
-#define TH_SFLAG_DEMOTED_MASK      (TH_SFLAG_THROTTLE_DEMOTED | TH_SFLAG_FAILSAFE)	/* saved_mode contains previous sched_mode */
+#define TH_SFLAG_THROTTLED		0x0004		/* throttled thread forced to timeshare mode (may be applied in addition to failsafe) */
+#define TH_SFLAG_DEMOTED_MASK      (TH_SFLAG_THROTTLED | TH_SFLAG_FAILSAFE)	/* saved_mode contains previous sched_mode */
 
 #define	TH_SFLAG_PROMOTED		0x0008		/* sched pri has been promoted */
 #define TH_SFLAG_ABORT			0x0010		/* abort interruptible waits */
@@ -211,10 +228,10 @@ struct thread {
 #define	TH_SFLAG_DEPRESS		0x0040		/* normal depress yield */
 #define TH_SFLAG_POLLDEPRESS		0x0080		/* polled depress yield */
 #define TH_SFLAG_DEPRESSED_MASK		(TH_SFLAG_DEPRESS | TH_SFLAG_POLLDEPRESS)
-#define TH_SFLAG_PRI_UPDATE		0x0100		/* Updating priority */
+/* unused TH_SFLAG_PRI_UPDATE           0x0100 */
 #define TH_SFLAG_EAGERPREEMPT		0x0200		/* Any preemption of this thread should be treated as if AST_URGENT applied */
 #define TH_SFLAG_RW_PROMOTED		0x0400		/* sched pri has been promoted due to blocking with RW lock held */
-#define TH_SFLAG_THROTTLE_DEMOTED	0x0800		/* throttled thread forced to timeshare mode (may be applied in addition to failsafe) */
+/* unused TH_SFLAG_THROTTLE_DEMOTED     0x0800 */
 #define TH_SFLAG_WAITQ_PROMOTED		0x1000		/* sched pri promoted from waitq wakeup (generally for IPC receive) */
 #define TH_SFLAG_PROMOTED_MASK		(TH_SFLAG_PROMOTED | TH_SFLAG_RW_PROMOTED | TH_SFLAG_WAITQ_PROMOTED)
 
@@ -237,10 +254,6 @@ struct thread {
 	void				*pending_promoter[2];
 
 	uint32_t			rwlock_count;	/* Number of lck_rw_t locks held by thread */
-
-#if MACH_ASSERT
-	uint32_t			SHARE_COUNT, BG_COUNT; /* This thread's contribution to global sched counters (temporary debugging) */
-#endif /* MACH_ASSERT */
 
 	integer_t			importance;			/* task-relative importance */
 	uint32_t                        was_promoted_on_wakeup;
@@ -305,6 +318,7 @@ struct thread {
 	uint64_t			vtimer_user_save;	/* saved values for vtimers */
 	uint64_t			vtimer_prof_save;
 	uint64_t			vtimer_rlim_save;
+	uint64_t			vtimer_qos_save;
 
 #if CONFIG_SCHED_SFI
 	/* Timing for wait state */
@@ -331,10 +345,18 @@ struct thread {
 			mach_port_seqno_t	seqno;		/* seqno of recvd message */
 		  	ipc_object_t		object;		/* object received on */
 		  	mach_vm_address_t	msg_addr;	/* receive buffer pointer */
-			mach_msg_size_t		msize;		/* max size for recvd msg */
+			mach_msg_size_t		rsize;		/* max size for recvd msg */
+			mach_msg_size_t		msize;		/* actual size for recvd msg */
 		  	mach_msg_option_t	option;		/* options for receive */
 			mach_port_name_t	receiver_name;	/* the receive port name */
-			struct ipc_kmsg		*kmsg;		/* received message */
+			union {
+				struct ipc_kmsg   *kmsg;	/* received message */
+				struct ipc_mqueue *peekq;	/* mqueue to peek at */
+				struct {
+					mach_msg_priority_t qos;	/* received message qos */
+					mach_msg_priority_t oqos;	/* override qos for message */
+				} received_qos;
+			};
 			mach_msg_continue_t	continuation;
 		} receive;
 		struct {
@@ -390,13 +412,15 @@ struct thread {
 
 		/* Miscellaneous bits guarded by mutex */
 		uint32_t
-			active:1,				/* Thread is active and has not been terminated */
-			started:1,				/* Thread has been started after creation */
-			static_param:1,			/* Disallow policy parameter changes */
-		 	inspection:1,				/* TRUE when task is being inspected by crash reporter */
-			policy_reset:1,			/* Disallow policy parameter changes on terminating threads */
+			active:1,                       /* Thread is active and has not been terminated */
+			started:1,                      /* Thread has been started after creation */
+			static_param:1,                 /* Disallow policy parameter changes */
+			inspection:1,                   /* TRUE when task is being inspected by crash reporter */
+			policy_reset:1,                 /* Disallow policy parameter changes on terminating threads */
+			suspend_parked:1,               /* thread parked in thread_suspended */
+			corpse_dup:1,                   /* TRUE when thread is an inactive duplicate in a corpse */
 			:0;
-	
+
 		/* Ports associated with this thread */
 		struct ipc_port			*ith_self;		/* not a right, doesn't hold ref */
 		struct ipc_port			*ith_sself;		/* a send right */
@@ -422,30 +446,28 @@ struct thread {
 	        uint64_t    t_page_creation_throttled_soft;
 #endif /* DEVELOPMENT || DEBUG */
 
-#define T_CHUD_MARKED           0x01          /* this thread is marked by CHUD */
-#define T_IN_CHUD               0x02          /* this thread is already in a CHUD handler */
-#define THREAD_PMC_FLAG         0x04          /* Bit in "t_chud" signifying PMC interest */	
-#define T_AST_CALLSTACK         0x08          /* Thread scheduled to dump a
-					       * callstack on its next
-					       * AST */
-#define T_AST_NAME              0x10          /* Thread scheduled to dump
-					       * its name on its next
-					       * AST */
-#define T_NAME_DONE             0x20          /* Thread has previously
-					       * recorded its name */
-#define T_KPC_ALLOC             0x40          /* Thread needs a kpc_buf */
+#ifdef KPERF
+/* The high 7 bits are the number of frames to sample of a user callstack. */
+#define T_KPERF_CALLSTACK_DEPTH_OFFSET     (25)
+#define T_KPERF_SET_CALLSTACK_DEPTH(DEPTH) (((uint32_t)(DEPTH)) << T_KPERF_CALLSTACK_DEPTH_OFFSET)
+#define T_KPERF_GET_CALLSTACK_DEPTH(FLAGS) ((FLAGS) >> T_KPERF_CALLSTACK_DEPTH_OFFSET)
+#endif
 
-		uint32_t t_chud;	/* CHUD flags, used for Shark */
-		uint32_t chud_c_switch; /* last dispatch detection */
+#define T_KPERF_AST_CALLSTACK (1U << 0) /* dump a callstack on thread's next AST */
+#define T_KPERF_AST_DISPATCH  (1U << 1) /* dump a name on thread's next AST */
+#define T_KPC_ALLOC           (1U << 2) /* thread needs a kpc_buf allocated */
+/* only go up to T_KPERF_CALLSTACK_DEPTH_OFFSET - 1 */
+
+#ifdef KPERF
+	uint32_t kperf_flags;
+	uint32_t kperf_pet_gen;  /* last generation of PET that sampled this thread*/
+	uint32_t kperf_c_switch; /* last dispatch detection */
+	uint32_t kperf_pet_cnt;  /* how many times a thread has been sampled by PET */
+#endif
 
 #ifdef KPC
 	/* accumulated performance counters for this thread */
 	uint64_t *kpc_buf;
-#endif
-
-#ifdef KPERF
-	/* count of how many times a thread has been sampled since it was last scheduled */
-	uint64_t kperf_pet_cnt;
 #endif
 
 #if HYPERVISOR
@@ -460,16 +482,14 @@ struct thread {
 	uint32_t		syscalls_mach;
 	ledger_t		t_ledger;
 	ledger_t		t_threadledger;	/* per thread ledger */
-	uint64_t 		cpu_time_last_qos;
 #ifdef CONFIG_BANK
 	ledger_t		t_bankledger;  		   /* ledger to charge someone */
 	uint64_t		t_deduct_bank_ledger_time; /* cpu time to be deducted from bank ledger */
 #endif
 
-	/* policy is protected by the task lock */
-	struct task_requested_policy     requested_policy;
-	struct task_effective_policy     effective_policy;
-	struct task_pended_policy        pended_policy;
+	/* policy is protected by the thread mutex */
+	struct thread_requested_policy  requested_policy;
+	struct thread_effective_policy  effective_policy;
 
 	/* usynch override is protected by the task lock, eventually will be thread mutex */
 	struct thread_qos_override {
@@ -480,8 +500,11 @@ struct thread {
 		user_addr_t	override_resource;
 	} *overrides;
 
+	uint32_t        ipc_overrides;
+	uint32_t        user_promotions;
+	uint16_t        user_promotion_basepri;
+
 	int	iotier_override; /* atomic operations to set, cleared on ret to user */
-	integer_t               saved_importance;               /* saved task-relative importance */
 	io_stat_info_t  		thread_io_stats; /* per-thread I/O statistics */
 
 
@@ -506,23 +529,39 @@ struct thread {
 
 	/*** Machine-dependent state ***/
 	struct machine_thread   machine;
+
+#if	SCHED_TRACE_THREAD_WAKEUPS
+	uintptr_t		thread_wakeup_bt[64];
+#endif
 };
 
-#define ith_state		saved.receive.state
-#define ith_object		saved.receive.object
-#define ith_msg_addr			saved.receive.msg_addr
-#define ith_msize		saved.receive.msize
-#define	ith_option		saved.receive.option
-#define ith_receiver_name	saved.receive.receiver_name
-#define ith_continuation	saved.receive.continuation
-#define ith_kmsg		saved.receive.kmsg
-#define ith_seqno		saved.receive.seqno
+#define ith_state           saved.receive.state
+#define ith_object          saved.receive.object
+#define ith_msg_addr        saved.receive.msg_addr
+#define ith_rsize           saved.receive.rsize
+#define ith_msize           saved.receive.msize
+#define	ith_option          saved.receive.option
+#define ith_receiver_name   saved.receive.receiver_name
+#define ith_continuation    saved.receive.continuation
+#define ith_kmsg            saved.receive.kmsg
+#define ith_peekq           saved.receive.peekq
+#define ith_qos             saved.receive.received_qos.qos
+#define ith_qos_override    saved.receive.received_qos.oqos
+#define ith_seqno           saved.receive.seqno
 
-#define sth_waitsemaphore	saved.sema.waitsemaphore
-#define sth_signalsemaphore	saved.sema.signalsemaphore
-#define sth_options		saved.sema.options
-#define sth_result		saved.sema.result
-#define sth_continuation	saved.sema.continuation
+#define sth_waitsemaphore   saved.sema.waitsemaphore
+#define sth_signalsemaphore saved.sema.signalsemaphore
+#define sth_options         saved.sema.options
+#define sth_result          saved.sema.result
+#define sth_continuation    saved.sema.continuation
+
+#if MACH_ASSERT
+#define assert_thread_magic(thread) assertf((thread)->thread_magic == THREAD_MAGIC, \
+                                            "bad thread magic 0x%llx for thread %p, expected 0x%llx", \
+                                            (thread)->thread_magic, (thread), THREAD_MAGIC)
+#else
+#define assert_thread_magic(thread) do { (void)(thread); } while (0)
+#endif
 
 extern void			thread_bootstrap(void);
 
@@ -550,11 +589,24 @@ extern void			thread_terminate_self(void);
 extern kern_return_t	thread_terminate_internal(
 							thread_t		thread);
 
-extern void			thread_start_internal(
+extern void			thread_start(
 							thread_t			thread) __attribute__ ((noinline));
+
+extern void			thread_start_in_assert_wait(
+							thread_t			thread,
+							event_t             event,
+							wait_interrupt_t    interruptible) __attribute__ ((noinline));
 
 extern void			thread_terminate_enqueue(
 						thread_t		thread);
+
+extern void			thread_exception_enqueue(
+						task_t		task,
+						thread_t	thread);
+
+extern void			thread_copy_resource_info(
+						thread_t dst_thread,
+						thread_t src_thread);
 
 extern void			thread_terminate_crashed_threads(void);
 
@@ -566,6 +618,8 @@ extern void			thread_hold(
 
 extern void			thread_release(
 						thread_t	thread);
+
+extern void			thread_corpse_continue(void);
 
 /* Locking for scheduler state, always acquired with interrupts disabled (splsched()) */
 #if __SMP__
@@ -615,18 +669,7 @@ extern kern_return_t	thread_info_internal(
 							thread_info_t			thread_info_out,
 							mach_msg_type_number_t	*thread_info_count);
 
-extern void				thread_task_priority(
-							thread_t		thread,
-							integer_t		priority,
-							integer_t		max_priority);
 
-extern kern_return_t                    thread_set_mode_and_absolute_pri(
-                                                        thread_t       thread,
-                                                        integer_t      policy,
-                                                        integer_t      priority);
-
-extern void				thread_policy_reset(
-							thread_t		thread);
 
 extern kern_return_t	kernel_thread_create(
 							thread_continue_t	continuation,
@@ -660,9 +703,6 @@ extern void				machine_load_context(
 							thread_t		thread);
 
 extern kern_return_t	machine_thread_state_initialize(
-							thread_t				thread);
-
-extern kern_return_t	machine_thread_neon_state_initialize(
 							thread_t				thread);
 
 extern kern_return_t	machine_thread_set_state(
@@ -713,16 +753,9 @@ extern kern_return_t	machine_thread_set_tsd_base(
 #define	thread_mtx_try(thread)			lck_mtx_try_lock(&(thread)->mutex)
 #define	thread_mtx_unlock(thread)		lck_mtx_unlock(&(thread)->mutex)
 
-extern void			install_special_handler(
-						thread_t		thread);
+extern void thread_apc_ast(thread_t thread);
 
-extern void			special_handler(
-						thread_t		thread);
-
-extern void
-thread_update_qos_cpu_time(
-			thread_t thread,
-			boolean_t lock_needed);
+extern void thread_update_qos_cpu_time(thread_t thread);
 
 void act_machine_sv_free(thread_t, int);
 
@@ -737,12 +770,6 @@ static inline uint16_t	thread_get_tag_internal(thread_t	thread) {
 	return thread->thread_tag;
 }
 
-typedef struct {
-	int             qos_pri[THREAD_QOS_LAST];
-	int             qos_iotier[THREAD_QOS_LAST];
-	uint32_t        qos_through_qos[THREAD_QOS_LAST];
-	uint32_t        qos_latency_qos[THREAD_QOS_LAST];
-} qos_policy_params_t;
 
 extern void thread_set_options(uint32_t thopt);
 
@@ -793,20 +820,11 @@ __BEGIN_DECLS
 #define	THREAD_TAG_CALLOUT 0x2
 #define	THREAD_TAG_IOWORKLOOP 0x4
 
+#define	THREAD_TAG_PTHREAD 0x10
+#define	THREAD_TAG_WORKQUEUE 0x20
+
 uint16_t	thread_set_tag(thread_t, uint16_t);
 uint16_t	thread_get_tag(thread_t);
-
-/*
- * Allocate/assign a single work interval ID for a thread,
- * and support deallocating it.
- */
-extern kern_return_t			thread_policy_create_work_interval(
-	thread_t		thread,
-	uint64_t		*work_interval_id);
-
-extern kern_return_t			thread_policy_destroy_work_interval(
-	thread_t		thread,
-	uint64_t		work_interval_id);
 
 extern kern_return_t    thread_state_initialize(
 							thread_t				thread);
@@ -833,8 +851,16 @@ extern kern_return_t	thread_create_workq(
 							thread_continue_t	thread_return,
 							thread_t		*new_thread);
 
+extern kern_return_t	thread_create_workq_waiting(
+							task_t			task,
+							thread_continue_t	thread_return,
+							event_t         event,
+							thread_t		*new_thread);
+
 extern	void	thread_yield_internal(
 	mach_msg_timeout_t	interval);
+
+extern void 	thread_yield_to_preemption(void);
 
 /*
  * Thread-private CPU limits: apply a private CPU limit to this thread only. Available actions are:
@@ -889,7 +915,8 @@ extern kern_return_t	thread_userstack(
 						thread_state_t,
 						unsigned int,
 						mach_vm_offset_t *,
-						int *);
+						int *,
+						boolean_t);
 
 extern kern_return_t	thread_entrypoint(
 						thread_t,
@@ -899,8 +926,8 @@ extern kern_return_t	thread_entrypoint(
 						mach_vm_offset_t *); 
 
 extern kern_return_t	thread_userstackdefault(
-						thread_t,
-						mach_vm_offset_t *);
+						mach_vm_offset_t *,
+						boolean_t);
 
 extern kern_return_t	thread_wire_internal(
 							host_priv_t		host_priv,
@@ -910,6 +937,8 @@ extern kern_return_t	thread_wire_internal(
 
 
 extern kern_return_t	thread_dup(thread_t);
+
+extern kern_return_t thread_dup2(thread_t, thread_t);
 
 typedef void	(*sched_call_t)(
 					int				type,
@@ -922,22 +951,20 @@ extern void		thread_sched_call(
 					thread_t		thread,
 					sched_call_t	call);
 
+extern sched_call_t	thread_disable_sched_call(
+					thread_t		thread,
+					sched_call_t	call);
+
+extern void	thread_reenable_sched_call(
+					thread_t		thread,
+					sched_call_t	call);
+
 extern void		thread_static_param(
 					thread_t		thread,
 					boolean_t		state);
 
 extern boolean_t	thread_is_static_param(
 					thread_t		thread);
-
-extern kern_return_t	thread_policy_set_internal(
-	                                thread_t		thread,
-					thread_policy_flavor_t	flavor,
-					thread_policy_t		policy_info,
-					mach_msg_type_number_t	count);
-
-extern boolean_t thread_has_qos_policy(thread_t thread);
-
-extern kern_return_t thread_remove_qos_policy(thread_t thread);
 
 extern task_t	get_threadtask(thread_t);
 #define thread_is_64bit(thd)	\
@@ -948,7 +975,7 @@ extern void		*get_bsdthread_info(thread_t);
 extern void		set_bsdthread_info(thread_t, void *);
 extern void		*uthread_alloc(task_t, thread_t, int);
 extern void		uthread_cleanup_name(void *uthread);
-extern void		uthread_cleanup(task_t, void *, void *, boolean_t);
+extern void		uthread_cleanup(task_t, void *, void *);
 extern void		uthread_zone_free(void *); 
 extern void		uthread_cred_free(void *);
 
@@ -968,6 +995,7 @@ extern int is_64signalregset(void);
 
 extern void act_set_kperf(thread_t);
 extern void set_astledger(thread_t thread);
+extern void act_set_io_telemetry_ast(thread_t);
 
 extern uint32_t dtrace_get_thread_predcache(thread_t);
 extern int64_t dtrace_get_thread_vtime(thread_t);
@@ -1010,7 +1038,46 @@ extern kern_return_t thread_get_current_voucher_origin_pid(int32_t *pid);
 extern void set_thread_rwlock_boost(void);
 extern void clear_thread_rwlock_boost(void);
 
+/*! @function thread_has_thread_name
+    @abstract Checks if a thread has a name.
+    @discussion This function takes one input, a thread, and returns a boolean value indicating if that thread already has a name associated with it.
+    @param th The thread to inspect.
+    @result TRUE if the thread has a name, FALSE otherwise.
+*/
+extern boolean_t thread_has_thread_name(thread_t th);
+
+/*! @function thread_set_thread_name
+    @abstract Set a thread's name.
+    @discussion This function takes two input parameters: a thread to name, and the name to apply to the thread.  The name will be attached to the thread in order to better identify the thread.
+    @param th The thread to be named.
+    @param name The name to apply to the thread.
+*/
+extern void thread_set_thread_name(thread_t th, const char* name);
+
 extern void thread_enable_send_importance(thread_t thread, boolean_t enable);
+
+/* Get a backtrace for a threads kernel or user stack (user_p), with pc and optionally
+ * frame pointer (getfp). Returns bytes added to buffer, and kThreadTruncatedBT in
+ * thread_trace_flags if a user page is not present after kdp_lightweight_fault() is
+ * called.
+ */
+
+extern int 				machine_trace_thread(
+							thread_t thread,
+							char *tracepos,
+							char *tracebound,
+							int nframes,
+							boolean_t user_p,
+							boolean_t getfp,
+							uint32_t *thread_trace_flags);
+
+extern int 				machine_trace_thread64(thread_t thread,
+							char *tracepos,
+							char *tracebound,
+							int nframes,
+							boolean_t user_p,
+							boolean_t getfp,
+							uint32_t *thread_trace_flags);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 
@@ -1032,6 +1099,7 @@ extern kern_return_t	kernel_thread_start(
 void thread_set_eager_preempt(thread_t thread);
 void thread_clear_eager_preempt(thread_t thread);
 extern ipc_port_t convert_thread_to_port(thread_t);
+extern boolean_t is_vm_privileged(void);
 extern boolean_t set_vm_privilege(boolean_t);
 #endif /* KERNEL_PRIVATE */
 

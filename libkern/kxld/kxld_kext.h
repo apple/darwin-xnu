@@ -72,6 +72,11 @@ kern_return_t kxld_kext_export_symbols(const KXLDKext *kext,
     struct kxld_dict *defined_cxx_symbols_by_value)
     __attribute__((nonnull(1), visibility("hidden")));
 
+void kxld_kext_get_vmsize_for_seg_by_name(const KXLDKext *kext,
+                                          const char *segname,
+                                          u_long *vmsize)
+__attribute__((nonnull, visibility("hidden")));
+
 void kxld_kext_get_vmsize(const KXLDKext *kext, 
     u_long *header_size, u_long *vmsize)
     __attribute__((nonnull, visibility("hidden")));
@@ -80,7 +85,8 @@ void kxld_kext_set_linked_object_size(KXLDKext *kext, u_long vmsize)
 __attribute__((nonnull, visibility("hidden")));
 
 kern_return_t kxld_kext_export_linked_object(const KXLDKext *kext,
-    u_char *linked_object, kxld_addr_t *kmod_info)
+                                             void *linked_object,
+                                             kxld_addr_t *kmod_info)
     __attribute__((nonnull, visibility("hidden")));
 
 /*******************************************************************************
@@ -92,10 +98,13 @@ kern_return_t kxld_kext_export_vtables(KXLDKext *kext,
     struct kxld_dict *vtables)
     __attribute__((nonnull, visibility("hidden")));
 
-kern_return_t kxld_kext_relocate(KXLDKext *kext, kxld_addr_t link_address,
-    struct kxld_dict *patched_vtables, const struct kxld_dict *defined_symbols,
-    const struct kxld_dict *obsolete_symbols, 
-    const struct kxld_dict *defined_cxx_symbols)
-    __attribute__((nonnull(1,3,4), visibility("hidden")));
+kern_return_t kxld_kext_relocate(KXLDKext *kext,
+                                 kxld_addr_t link_address,
+                                 struct kxld_dict *patched_vtables,
+                                 const struct kxld_dict *defined_symbols,
+                                 const struct kxld_dict *obsolete_symbols,
+                                 const struct kxld_dict *defined_cxx_symbols)
+__attribute__((nonnull(1,3,4), visibility("hidden")));
+
 
 #endif /* _KXLD_KEXT_H_ */

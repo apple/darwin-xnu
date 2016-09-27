@@ -17,5 +17,3 @@ EXPORT_MI_DIR = dev/random
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

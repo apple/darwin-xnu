@@ -260,8 +260,7 @@ typedef enum mptcp_state {
 	MPTCPS_LAST_ACK		= 6,	/* had DFIN and close; await DFIN ACK */
 	MPTCPS_FIN_WAIT_2	= 7,	/* have closed, DFIN is acked */
 	MPTCPS_TIME_WAIT	= 8,	/* in 2*MSL quiet wait after close */
-	MPTCPS_FASTCLOSE_WAIT	= 9,	/* sent MP_FASTCLOSE */
-	MPTCPS_TERMINATE	= 10,	/* terminal state */
+	MPTCPS_TERMINATE	= 9,	/* terminal state */
 } mptcp_state_t;
 
 typedef u_int64_t	mptcp_key_t;
@@ -350,11 +349,14 @@ struct mptcb {
 #define	MPTCPF_SND_64BITDSN	0x20	/* Send full 64-bit DSN */
 #define	MPTCPF_SND_64BITACK	0x40	/* Send 64-bit ACK response */
 #define	MPTCPF_RCVD_64BITACK	0x80	/* Received 64-bit Data ACK */
-#define MPTCPF_POST_FALLBACK_SYNC	0x100	/* Post fallback resend data */
+#define	MPTCPF_POST_FALLBACK_SYNC	0x100	/* Post fallback resend data */
+#define	MPTCPF_FALLBACK_HEURISTIC	0x200	/* Send SYN without MP_CAPABLE due to heuristic */
+#define	MPTCPF_HEURISTIC_TRAC		0x400	/* Tracked this connection in the heuristics as a failure */
 
 #define	MPTCPF_BITS \
 	"\020\1CHECKSUM\2FALLBACK_TO_TCP\3JOIN_READY\4RECVD_MPFAIL\5PEEL_OFF" \
-	"\6SND_64BITDSN\7SND_64BITACK\10RCVD_64BITACK\11POST_FALLBACK_SYNC"
+	"\6SND_64BITDSN\7SND_64BITACK\10RCVD_64BITACK\11POST_FALLBACK_SYNC" \
+	"\12FALLBACK_HEURISTIC\13HEURISTIC_TRAC"
 
 /* valid values for mpt_timer_vals */
 #define	MPTT_REXMT		0x01	/* Starting Retransmit Timer */
@@ -527,9 +529,9 @@ extern int mptcp_rwnotify;	/* Enable RW notification on resume */
 extern uint32_t mptcp_dbg_level;	/* Multipath TCP debugging level */
 extern uint32_t mptcp_dbg_area;	/* Multipath TCP debugging area */
 
-#define MPPCB_LIMIT	16
+#define MPPCB_LIMIT	32
 extern uint32_t mptcp_socket_limit; /* max number of mptcp sockets allowed */
-extern uint32_t mptcp_delayed_subf_start; /* delayed cellular subflow start */	
+extern uint32_t mptcp_delayed_subf_start; /* delayed cellular subflow start */
 extern int tcp_jack_rxmt;	/* Join ACK retransmission value in msecs */
 
 __BEGIN_DECLS

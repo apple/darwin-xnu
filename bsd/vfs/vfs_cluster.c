@@ -84,6 +84,7 @@
 #include <mach/vm_map.h>
 #include <mach/upl.h>
 #include <kern/task.h>
+#include <kern/policy_internal.h>
 
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
@@ -125,6 +126,8 @@
 
 #define MAX_VECTOR_UPL_ELEMENTS	8
 #define MAX_VECTOR_UPL_SIZE	(2 * MAX_UPL_SIZE_BYTES)
+
+#define CLUSTER_IO_WAITING 		((buf_t)1)
 
 extern upl_t vector_upl_create(vm_offset_t);
 extern boolean_t vector_upl_is_valid(upl_t);
@@ -737,16 +740,10 @@ cluster_iodone(buf_t bp, void *callback_arg)
 		     cbp_head, bp->b_lblkno, bp->b_bcount, bp->b_flags, 0);
 
 	if (cbp_head->b_trans_next || !(cbp_head->b_flags & B_EOT)) {
-		boolean_t	need_wakeup = FALSE;
-
 		lck_mtx_lock_spin(cl_transaction_mtxp);
 
 		bp->b_flags |= B_TDONE;
 
-		if (bp->b_flags & B_TWANTED) {
-			CLR(bp->b_flags, B_TWANTED);
-			need_wakeup = TRUE;
-		}
 		for (cbp = cbp_head; cbp; cbp = cbp->b_trans_next) {
 			/*
 			 * all I/O requests that are part of this transaction
@@ -759,18 +756,23 @@ cluster_iodone(buf_t bp, void *callback_arg)
 
 				lck_mtx_unlock(cl_transaction_mtxp);
 
-				if (need_wakeup == TRUE)
-					wakeup(bp);
+				return 0;
+			}
+
+			if (cbp->b_trans_next == CLUSTER_IO_WAITING) {
+				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 20)) | DBG_FUNC_END,
+							 cbp_head, cbp, cbp->b_bcount, cbp->b_flags, 0);
+
+				lck_mtx_unlock(cl_transaction_mtxp);
+				wakeup(cbp);
 
 				return 0;
 			}
+
 			if (cbp->b_flags & B_EOT)
 				transaction_complete = TRUE;
 		}
 		lck_mtx_unlock(cl_transaction_mtxp);
-
-		if (need_wakeup == TRUE)
-			wakeup(bp);
 
 		if (transaction_complete == FALSE) {
 			KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 20)) | DBG_FUNC_END,
@@ -971,40 +973,53 @@ cluster_wait_IO(buf_t cbp_head, int async)
         buf_t	cbp;
 
 	if (async) {
-	        /*
-		 * async callback completion will not normally
-		 * generate a wakeup upon I/O completion...
-		 * by setting B_TWANTED, we will force a wakeup
-		 * to occur as any outstanding I/Os complete... 
-		 * I/Os already completed will have B_TDONE already
-		 * set and we won't cause us to block
-		 * note that we're actually waiting for the bp to have
-		 * completed the callback function... only then
-		 * can we safely take back ownership of the bp
+		/*
+		 * Async callback completion will not normally generate a
+		 * wakeup upon I/O completion.  To get woken up, we set
+		 * b_trans_next (which is safe for us to modify) on the last
+		 * buffer to CLUSTER_IO_WAITING so that cluster_iodone knows
+		 * to wake us up when all buffers as part of this transaction
+		 * are completed.  This is done under the umbrella of
+		 * cl_transaction_mtxp which is also taken in cluster_iodone.
 		 */
+		bool done = true;
+		buf_t last = NULL;
+
 		lck_mtx_lock_spin(cl_transaction_mtxp);
 
-		for (cbp = cbp_head; cbp; cbp = cbp->b_trans_next)
-		      cbp->b_flags |= B_TWANTED;
+		for (cbp = cbp_head; cbp; last = cbp, cbp = cbp->b_trans_next) {
+			if (!ISSET(cbp->b_flags, B_TDONE))
+				done = false;
+		}
+
+		if (!done) {
+			last->b_trans_next = CLUSTER_IO_WAITING;
+
+			DTRACE_IO1(wait__start, buf_t, last);
+			do {
+				msleep(last, cl_transaction_mtxp, PSPIN | (PRIBIO+1), "cluster_wait_IO", NULL);
+
+				/*
+				 * We should only have been woken up if all the
+				 * buffers are completed, but just in case...
+				 */
+				done = true;
+				for (cbp = cbp_head; cbp != CLUSTER_IO_WAITING; cbp = cbp->b_trans_next) {
+					if (!ISSET(cbp->b_flags, B_TDONE)) {
+						done = false;
+						break;
+					}
+				}
+			} while (!done);
+			DTRACE_IO1(wait__done, buf_t, last);
+
+			last->b_trans_next = NULL;
+		}
 
 		lck_mtx_unlock(cl_transaction_mtxp);
-	}
-	for (cbp = cbp_head; cbp; cbp = cbp->b_trans_next) {
-
-	        if (async) {
-			while (!ISSET(cbp->b_flags, B_TDONE)) {
-
-				lck_mtx_lock_spin(cl_transaction_mtxp);
-
-				if (!ISSET(cbp->b_flags, B_TDONE)) {
-					DTRACE_IO1(wait__start, buf_t, cbp);
-					(void) msleep(cbp, cl_transaction_mtxp, PDROP | (PRIBIO+1), "cluster_wait_IO", NULL);
-					DTRACE_IO1(wait__done, buf_t, cbp);
-				} else
-					lck_mtx_unlock(cl_transaction_mtxp);
-			}
-		} else
-		        buf_biowait(cbp);
+	} else { // !async
+		for (cbp = cbp_head; cbp; cbp = cbp->b_trans_next)
+			buf_biowait(cbp);
 	}
 }
 
@@ -1167,8 +1182,18 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 				u_int max_cluster_size;
 				u_int scale;
 
-				max_cluster_size = MAX_CLUSTER_SIZE(vp);
+				if (vp->v_mount->mnt_minsaturationbytecount) {
+					max_cluster_size = vp->v_mount->mnt_minsaturationbytecount;
 
+					scale = 1;
+				} else {
+					max_cluster_size = MAX_CLUSTER_SIZE(vp);
+
+					if ((vp->v_mount->mnt_kern_flag & MNTK_SSD) && !ignore_is_ssd)
+						scale = WRITE_THROTTLE_SSD;
+					else
+						scale = WRITE_THROTTLE;
+				}
 				if (max_iosize > max_cluster_size)
 				        max_cluster = max_cluster_size;
 				else
@@ -1177,14 +1202,9 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 				if (size < max_cluster)
 				        max_cluster = size;
 				
-				if ((vp->v_mount->mnt_kern_flag & MNTK_SSD) && !ignore_is_ssd)
-					scale = WRITE_THROTTLE_SSD;
-				else
-					scale = WRITE_THROTTLE;
-
 				if (flags & CL_CLOSE)
 					scale += MAX_CLUSTERS;
-
+				
 			        async_throttle = min(IO_SCALE(vp, VNODE_ASYNC_THROTTLE), ((scale * max_cluster_size) / max_cluster) - 1);
 			}
 		}
@@ -2329,6 +2349,7 @@ cluster_write_direct(vnode_t vp, struct uio *uio, off_t oldEOF, off_t newEOF, in
 	u_int32_t	 max_io_size;
 	u_int32_t	 max_upl_size;
 	u_int32_t        max_vector_size;
+	u_int32_t	 bytes_outstanding_limit;
 	boolean_t	 io_throttled = FALSE;
 
 	u_int32_t	 vector_upl_iosize = 0;
@@ -2405,7 +2426,7 @@ next_dwrite:
 	        goto wait_for_dwrites;
         }
 
-	task_update_logical_writes(current_task(), (io_req_size & ~PAGE_MASK), TASK_WRITE_IMMEDIATE);
+	task_update_logical_writes(current_task(), (io_req_size & ~PAGE_MASK), TASK_WRITE_IMMEDIATE, vp);
 	while (io_req_size >= PAGE_SIZE && uio->uio_offset < newEOF && retval == 0) {
 		int	throttle_type;
 
@@ -2567,7 +2588,12 @@ next_dwrite:
 		 * if there are already too many outstanding writes
 		 * wait until some complete before issuing the next
 		 */
-		cluster_iostate_wait(&iostate, max_upl_size * IO_SCALE(vp, 2), "cluster_write_direct");
+		if (vp->v_mount->mnt_minsaturationbytecount)
+			bytes_outstanding_limit = vp->v_mount->mnt_minsaturationbytecount;
+		else
+			bytes_outstanding_limit = max_upl_size * IO_SCALE(vp, 2);
+
+		cluster_iostate_wait(&iostate, bytes_outstanding_limit, "cluster_write_direct");
 
 		if (iostate.io_error) {
 		        /*
@@ -3478,11 +3504,20 @@ check_cluster:
 			    wbp->cl_seq_written >= (MAX_CLUSTERS * (max_cluster_pgcount * PAGE_SIZE))) {
 				uint32_t	n;
 
-				if (vp->v_mount->mnt_kern_flag & MNTK_SSD)
-					n = WRITE_BEHIND_SSD;
-				else
-					n = WRITE_BEHIND;
+				if (vp->v_mount->mnt_minsaturationbytecount) {
+					n = vp->v_mount->mnt_minsaturationbytecount / MAX_CLUSTER_SIZE(vp);
+					
+					if (n > MAX_CLUSTERS)
+						n = MAX_CLUSTERS;
+				} else
+					n = 0;
 
+				if (n == 0) {
+					if (vp->v_mount->mnt_kern_flag & MNTK_SSD)
+						n = WRITE_BEHIND_SSD;
+					else
+						n = WRITE_BEHIND;
+				}
 				while (n--)
 					cluster_try_push(wbp, vp, newEOF, 0, 0, callback, callback_arg);
 			}
@@ -3593,17 +3628,6 @@ cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*
 
 	if (flags & IO_SKIP_ENCRYPTION)
 		flags |= IO_ENCRYPTED;
-	/* 
-	 * If we're doing an encrypted IO, then first check to see
-	 * if the IO requested was page aligned.  If not, then bail 
-	 * out immediately.
-	 */
-	if (flags & IO_ENCRYPTED) {		
-		if (read_length & PAGE_MASK) {
-			retval = EINVAL;
-			return retval;
-		}
-	}
 
 	/*
 	 * do a read through the cache if one of the following is true....
@@ -3620,7 +3644,7 @@ cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*
 
 		retval = cluster_io_type(uio, &read_type, &read_length, 0);
 	}
-	
+
 	while ((cur_resid = uio_resid(uio)) && uio->uio_offset < filesize && retval == 0) {
 
 		switch (read_type) {
@@ -4377,11 +4401,6 @@ next_dread:
 	io_req_size = *read_length;
 	iov_base = uio_curriovbase(uio);
 
-        max_io_size = filesize - uio->uio_offset;
-
-	if ((off_t)io_req_size > max_io_size)
-	        io_req_size = max_io_size;
-
 	offset_in_file = (u_int32_t)uio->uio_offset & (devblocksize - 1);
 	offset_in_iovbase = (u_int32_t)iov_base & mem_alignment_mask;
 
@@ -4401,14 +4420,22 @@ next_dread:
 		misaligned = 1;
     }
 
+	max_io_size = filesize - uio->uio_offset;
+
 	/* 
 	 * The user must request IO in aligned chunks.  If the 
 	 * offset into the file is bad, or the userland pointer 
 	 * is non-aligned, then we cannot service the encrypted IO request.
 	 */
-	if ((flags & IO_ENCRYPTED) && (misaligned)) {
-		retval = EINVAL;
+	if (flags & IO_ENCRYPTED) {
+		if (misaligned || (io_req_size & (devblocksize - 1)))
+			retval = EINVAL;
+
+		max_io_size = roundup(max_io_size, devblocksize);
 	}
+
+	if ((off_t)io_req_size > max_io_size)
+	        io_req_size = max_io_size;
 
 	/*
 	 * When we get to this point, we know...
@@ -4510,31 +4537,14 @@ next_dread:
 		 * (which overlaps the end of the direct read) in order to 
 		 * get at the overhang bytes
 		 */
-		if (io_size & (devblocksize - 1)) {			
-			if (flags & IO_ENCRYPTED) {
-				/* 
-				 * Normally, we'd round down to the previous page boundary to 
-				 * let the UBC manage the zero-filling of the file past the EOF.
-				 * But if we're doing encrypted IO, we can't let any of
-				 * the data hit the UBC.  This means we have to do the full
-				 * IO to the upper block boundary of the device block that
-				 * contains the EOF. The user will be responsible for not
-				 * interpreting data PAST the EOF in its buffer.
-				 *
-				 * So just bump the IO back up to a multiple of devblocksize
-				 */
-				io_size = ((io_size + devblocksize) & ~(devblocksize - 1));
-				io_min = io_size;					
-			}
-			else {
-				/* 
-				 * Clip the request to the previous page size boundary
-				 * since request does NOT end on a device block boundary
-				 */
-				io_size &= ~PAGE_MASK;
-				io_min = PAGE_SIZE;
-			}
-			
+		if (io_size & (devblocksize - 1)) {
+			assert(!(flags & IO_ENCRYPTED));
+			/*
+			 * Clip the request to the previous page size boundary
+			 * since request does NOT end on a device block boundary
+			 */
+			io_size &= ~PAGE_MASK;
+			io_min = PAGE_SIZE;
 		}
 		if (retval || io_size < io_min) {
 		        /*
@@ -4755,18 +4765,8 @@ next_dread:
 		else {
 			uio_update(uio, (user_size_t)io_size);
 		}
-		/*
-		 * Under normal circumstances, the io_size should not be
-		 * bigger than the io_req_size, but we may have had to round up
-		 * to the end of the page in the encrypted IO case.  In that case only,
-		 * ensure that we only decrement io_req_size to 0. 
-		 */
-		if ((flags & IO_ENCRYPTED) && (io_size > io_req_size)) {
-			io_req_size = 0;
-		}
-		else {
-			io_req_size -= io_size;
-		}
+
+		io_req_size -= io_size;
 
 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 73)) | DBG_FUNC_END,
 			     upl, (int)uio->uio_offset, io_req_size, retval, 0);
@@ -5321,7 +5321,7 @@ cluster_push_ext(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *ca
 	struct	cl_writebehind *wbp;
 
 	if ( !UBCINFOEXISTS(vp)) {
-	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 53)) | DBG_FUNC_NONE, vp, flags, 0, -1, 0);
+	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 53)) | DBG_FUNC_NONE, kdebug_vnode(vp), flags, 0, -1, 0);
 	        return (0);
 	}
 	/* return if deferred write is set */
@@ -5329,13 +5329,13 @@ cluster_push_ext(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *ca
 		return (0);
 	}
 	if ((wbp = cluster_get_wbp(vp, CLW_RETURNLOCKED)) == NULL) {
-	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 53)) | DBG_FUNC_NONE, vp, flags, 0, -2, 0);
+	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 53)) | DBG_FUNC_NONE, kdebug_vnode(vp), flags, 0, -2, 0);
 	        return (0);
 	}
 	if (!ISSET(flags, IO_SYNC) && wbp->cl_number == 0 && wbp->cl_scmap == NULL) {
 	        lck_mtx_unlock(&wbp->cl_lockw);
 
-	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 53)) | DBG_FUNC_NONE, vp, flags, 0, -3, 0);
+	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 53)) | DBG_FUNC_NONE, kdebug_vnode(vp), flags, 0, -3, 0);
 		return(0);
 	}
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 53)) | DBG_FUNC_START,
@@ -5349,11 +5349,11 @@ cluster_push_ext(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *ca
 	 * in the sparse map case
 	 */
 	while (wbp->cl_sparse_wait) {
-		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 97)) | DBG_FUNC_START, vp, 0, 0, 0, 0);
+		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 97)) | DBG_FUNC_START, kdebug_vnode(vp), 0, 0, 0, 0);
 
 		msleep((caddr_t)&wbp->cl_sparse_wait, &wbp->cl_lockw, PRIBIO + 1, "cluster_push_ext", NULL);
 
-		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 97)) | DBG_FUNC_END, vp, 0, 0, 0, 0);
+		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 97)) | DBG_FUNC_END, kdebug_vnode(vp), 0, 0, 0, 0);
 	}
 	if (flags & IO_SYNC) {
 		my_sparse_wait = 1;
@@ -5366,11 +5366,11 @@ cluster_push_ext(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *ca
 		 * fsync actually get cleaned to the disk before this fsync returns
 		 */
 		while (wbp->cl_sparse_pushes) {
-			KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 98)) | DBG_FUNC_START, vp, 0, 0, 0, 0);
+			KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 98)) | DBG_FUNC_START, kdebug_vnode(vp), 0, 0, 0, 0);
 
 			msleep((caddr_t)&wbp->cl_sparse_pushes, &wbp->cl_lockw, PRIBIO + 1, "cluster_push_ext", NULL);
 
-			KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 98)) | DBG_FUNC_END, vp, 0, 0, 0, 0);
+			KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 98)) | DBG_FUNC_END, kdebug_vnode(vp), 0, 0, 0, 0);
 		}
 	}
 	if (wbp->cl_scmap) {
@@ -5509,7 +5509,9 @@ cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_fla
 
 	cl_len = cl_index;
 
-	if ( (push_flag & PUSH_DELAY) && cl_len == MAX_CLUSTERS ) {
+	/* skip switching to the sparse cluster mechanism if on diskimage */
+	if ( ((push_flag & PUSH_DELAY) && cl_len == MAX_CLUSTERS ) &&
+	    !(vp->v_mount->mnt_kern_flag & MNTK_VIRTUALDEV) ) {
 		int   i;
 		
 		/*
@@ -5815,7 +5817,7 @@ sparse_cluster_switch(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int (*c
 {
         int	cl_index;
 
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 78)) | DBG_FUNC_START, vp, wbp->cl_scmap, 0, 0, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 78)) | DBG_FUNC_START, kdebug_vnode(vp), wbp->cl_scmap, 0, 0, 0);
 
 	for (cl_index = 0; cl_index < wbp->cl_number; cl_index++) {
 	        int	  flags;
@@ -5834,7 +5836,7 @@ sparse_cluster_switch(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int (*c
 	}
 	wbp->cl_number = 0;
 
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 78)) | DBG_FUNC_END, vp, wbp->cl_scmap, 0, 0, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 78)) | DBG_FUNC_END, kdebug_vnode(vp), wbp->cl_scmap, 0, 0, 0);
 }
 
 
@@ -5850,7 +5852,7 @@ sparse_cluster_push(void **scmap, vnode_t vp, off_t EOF, int push_flag, int io_f
         off_t		offset;
 	u_int		length;
 
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 79)) | DBG_FUNC_START, vp, (*scmap), 0, push_flag, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 79)) | DBG_FUNC_START, kdebug_vnode(vp), (*scmap), 0, push_flag, 0);
 
 	if (push_flag & PUSH_ALL)
 	        vfs_drt_control(scmap, 1);
@@ -5867,7 +5869,7 @@ sparse_cluster_push(void **scmap, vnode_t vp, off_t EOF, int push_flag, int io_f
 		if ( !(push_flag & PUSH_ALL) )
 		        break;
 	}
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 79)) | DBG_FUNC_END, vp, (*scmap), 0, 0, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 79)) | DBG_FUNC_END, kdebug_vnode(vp), (*scmap), 0, 0, 0);
 }
 
 
@@ -5897,7 +5899,7 @@ sparse_cluster_add(void **scmap, vnode_t vp, struct cl_extent *cl, off_t EOF, in
 		offset += (new_dirty * PAGE_SIZE_64);
 		length -= (new_dirty * PAGE_SIZE);
 	}
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 80)) | DBG_FUNC_END, vp, (*scmap), 0, 0, 0);
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 80)) | DBG_FUNC_END, kdebug_vnode(vp), (*scmap), 0, 0, 0);
 }
 
 
@@ -5997,8 +5999,6 @@ cluster_align_phys_io(vnode_t vp, struct uio *uio, addr64_t usr_paddr, u_int32_t
 	return (error);
 }
 
-
-
 int
 cluster_copy_upl_data(struct uio *uio, upl_t upl, int upl_offset, int *io_resid)
 {
@@ -6065,10 +6065,10 @@ cluster_copy_upl_data(struct uio *uio, upl_t upl, int upl_offset, int *io_resid)
 
 	uio->uio_segflg = segflg;
 
-	task_update_logical_writes(current_task(), (dirty_count * PAGE_SIZE), TASK_WRITE_DEFERRED);
+	task_update_logical_writes(current_task(), (dirty_count * PAGE_SIZE), TASK_WRITE_DEFERRED, upl_lookup_vnode(upl));
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 34)) | DBG_FUNC_END,
 		     (int)uio->uio_offset, xsize, retval, segflg, 0);
-
+	
 	return (retval);
 }
 

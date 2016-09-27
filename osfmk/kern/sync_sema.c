@@ -687,7 +687,6 @@ semaphore_wait_internal(
 		thread_t	self = current_thread();
 
 		wait_semaphore->count = -1;  /* we don't keep an actual count */
-		thread_lock(self);
 		(void)waitq_assert_wait64_locked(
 					&wait_semaphore->waitq,
 					SEMAPHORE_EVENT,
@@ -695,7 +694,6 @@ semaphore_wait_internal(
 					TIMEOUT_URGENCY_USER_NORMAL,
 					deadline, TIMEOUT_NO_LEEWAY,
 					self);
-		thread_unlock(self);
 	}
 	semaphore_unlock(wait_semaphore);
 	splx(spl_level);

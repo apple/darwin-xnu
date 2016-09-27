@@ -32,55 +32,5 @@
 #include <kern/task.h>
 #include <sys/user.h>
 
-int	chudxnu_pid_for_task(task_t task);
-task_t	chudxnu_task_for_pid(int pid);
 int	chudxnu_current_pid(void);
 
-__private_extern__ int
-chudxnu_pid_for_task(task_t task)
-{
-     proc_t p;
-    int pid = -1;
-
-    if(task!=TASK_NULL) {
-        p = (proc_t)(get_bsdtask_info(task));
-        if(p) {
-            return (proc_pid(p));
-        }
-    }
-    return pid;
-}
-
-__private_extern__ task_t
-chudxnu_task_for_pid(int pid)
-{
-	task_t t = TASK_NULL;
-     proc_t p = proc_find(pid);
-    if(p) {
-        t =  p->task;
-	proc_rele(p);
-    }
-    return (t);
-}
-
-__private_extern__ int
-chudxnu_current_pid(void)
-{
-    int pid = -1;
-    struct uthread *ut = get_bsdthread_info(current_thread());
-    task_t t = current_task();
-
-    if(t != TASK_NULL) {
-        pid = chudxnu_pid_for_task(t);
-    }
-    if(-1 == pid) {
-        // no task, so try looking in the uthread and/or proc
-        pid = proc_pid(current_proc());
-
-        if(-1 == pid && ut && ut->uu_proc) {
-            pid = proc_pid(ut->uu_proc);
-        }
-    }
-    
-    return pid;
-}

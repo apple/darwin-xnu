@@ -92,3 +92,59 @@ mig_strncpy(
     *dest = '\0';
     return i;
 }
+
+/*
+ * mig_strncpy_zerofill -- Bounded string copy.  Does what the
+ * library routine strncpy OUGHT to do:  Copies the (null terminated)
+ * string in src into dest, a buffer of length len.  Assures that
+ * the copy is still null terminated and doesn't overflow the buffer,
+ * truncating the copy if necessary. If the string in src is smaller
+ * than given length len, it will zero fill the remaining bytes in dest.
+ *
+ * Parameters:
+ *
+ *     dest - Pointer to destination buffer.
+ *
+ *     src - Pointer to source string.
+ *
+ *     len - Length of destination buffer.
+ *
+ * Result:
+ *	length of string copied, INCLUDING the trailing 0.
+ */
+int
+mig_strncpy_zerofill(
+    char *dest,
+    const char *src,
+    int len)
+{
+	int i;
+	boolean_t terminated = FALSE;
+	int retval = 0;
+
+	if (len <= 0 || dest == 0) {
+		return 0;
+	}
+
+	if (src == 0) {
+		terminated = TRUE;
+	}
+
+	for (i = 1; i < len; i++) {
+		if (!terminated) {
+			if (!(*dest++ = *src++)) {
+				retval = i;
+				terminated = TRUE;
+			}
+		} else {
+			*dest++ = '\0';
+		}
+	}
+
+	*dest = '\0';
+	if (!terminated) {
+		retval = i;
+	}
+
+	return retval;
+}

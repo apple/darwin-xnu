@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -927,16 +927,12 @@ static errno_t pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u
 			break;
 		case IPPROTO_UDP:
 			goto input_done;
-			break;
 		case IPPROTO_ICMP:
 			goto input_done;
-			break;
 		case IPPROTO_ICMPV6:
 			goto input_done;
-			break;
 		default:
 			goto input_done;
-			break;
 	}
 
 	/* XXX Do IP actions here */

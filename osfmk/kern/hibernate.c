@@ -34,7 +34,6 @@
 #include <mach/machine.h>
 #include <mach/processor_info.h>
 #include <mach/mach_types.h>
-#include <default_pager/default_pager_internal.h>
 #include <IOKit/IOPlatformExpert.h>
 
 #include <IOKit/IOHibernatePrivate.h>
@@ -106,14 +105,13 @@ hibernate_setup(IOHibernateImageHeader * header,
 
     hibernate_reset_stats();
     
-    if (vmflush && (COMPRESSED_PAGER_IS_ACTIVE || dp_isssd)) {
+    if (vmflush && VM_CONFIG_COMPRESSOR_IS_PRESENT) {
 	    
 	    sync_internal();
 
-	    if (COMPRESSED_PAGER_IS_ACTIVE) {
-		    vm_decompressor_lock();
-		    need_to_unlock_decompressor = TRUE;
-	    }
+	    vm_decompressor_lock();
+	    need_to_unlock_decompressor = TRUE;
+
 	    hibernate_flush_memory();
     }
 
@@ -147,7 +145,7 @@ hibernate_teardown(hibernate_page_list_t * page_list,
     if (page_list_pal)
         kfree(page_list_pal, page_list_pal->list_size);
 
-    if (COMPRESSED_PAGER_IS_ACTIVE) {
+    if (VM_CONFIG_COMPRESSOR_IS_PRESENT) {
 	    if (need_to_unlock_decompressor == TRUE) {
 		    need_to_unlock_decompressor = FALSE;
 		    vm_decompressor_unlock();

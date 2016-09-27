@@ -1046,7 +1046,7 @@ tcq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags)
 
 	err = ifclassq_attach(ifq, PKTSCHEDT_TCQ, tif,
 	    tcq_enqueue_ifclassq, NULL, tcq_dequeue_tc_ifclassq,
-	    tcq_request_ifclassq);
+	    NULL, tcq_request_ifclassq);
 
 	/* cache these for faster lookup */
 	if (err == 0) {

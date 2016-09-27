@@ -33,7 +33,7 @@
 include ../Makefile.benchmarks
 
 EXTRA_CFILES= \
-		exec_bin.c 	\
+		exec_bin.c	\
 		elided.c	\
 		tattle.c
 
@@ -47,10 +47,10 @@ COMPILER_VERSION_CMD=$(COMPILER_VERSION_CMD_$(CC))
 default: $(ALL)
 
 %.o:	../%.c
-	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@	
+	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@
 
-%: %.o 
-	$(CC) -o $(@) $(@).o $($(@)_EXTRA_DEPS) $(CFLAGS) ../../bin-$(ARCH)/libmicro.a $($(@)_EXTRA_LIBS) $(EXTRA_LIBS) -lpthread -lm; cp $@ ../../bin-$(ARCH)/ 
+%: %.o
+	$(CC) -o $(@) $(@).o $($(@)_EXTRA_DEPS) $(CFLAGS) ../../bin-$(ARCH)/libmicro.a $($(@)_EXTRA_LIBS) $(EXTRA_LIBS) -lpthread -lm; cp $@ ../../bin-$(ARCH)/
 
 posix_spawn:    posix_spawn_bin
 
@@ -58,4 +58,4 @@ posix_spawn_bin:        posix_spawn_bin.o
 	$(CC) -o posix_spawn_bin $(CFLAGS) posix_spawn_bin.o
 
 od_query_create_with_node:  od_query_create_with_node.o
-	$(CC) -o $(@) $(@).o $($(@)_EXTRA_DEPS) $(CFLAGS) ../../bin-$(ARCH)/libmicro.a $($(@)_EXTRA_LIBS) $(EXTRA_LIBS) -lpthread -lm -framework CoreFoundation -framework OpenDirectory; cp $@ ../../bin-$(ARCH)/ 
+	$(CC) -o $(@) $(@).o $($(@)_EXTRA_DEPS) $(CFLAGS) ../../bin-$(ARCH)/libmicro.a $($(@)_EXTRA_LIBS) $(EXTRA_LIBS) -lpthread -lm -framework CoreFoundation -framework OpenDirectory; cp $@ ../../bin-$(ARCH)/

@@ -133,6 +133,10 @@ void ipc_host_init(void)
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 			realhost.exc_actions[i].port = IP_NULL;
+			realhost.exc_actions[i].label = NULL;
+			/* The mac framework is not yet initialized, so we defer
+			 * initializing the labels to later, when they are set
+			 * for the first time. */
 		}/* for */
 
 	/*
@@ -274,15 +278,12 @@ convert_port_to_host(
 	host_t host = HOST_NULL;
 
 	if (IP_VALID(port)) {
-		ip_lock(port);
-		if (ip_active(port) &&
-		    ((ip_kotype(port) == IKOT_HOST) ||
-		     (ip_kotype(port) == IKOT_HOST_PRIV) 
-		     ))
+		if (ip_kotype(port) == IKOT_HOST ||
+		    ip_kotype(port) == IKOT_HOST_PRIV) {
 			host = (host_t) port->ip_kobject;
-		ip_unlock(port);
+			assert(ip_active(port));
+		}
 	}
-
 	return host;
 }
 
@@ -543,7 +544,7 @@ host_set_exception_ports(
 	exception_behavior_t		new_behavior,
 	thread_state_flavor_t		new_flavor)
 {
-	register int	i;
+	int	i;
 	ipc_port_t	old_port[EXC_TYPES_COUNT];
 
 	if (host_priv == HOST_PRIV_NULL) {
@@ -583,14 +584,27 @@ host_set_exception_ports(
 	host_lock(host_priv);
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
-		if (exception_mask & (1 << i)) {
+#if CONFIG_MACF
+		if (host_priv->exc_actions[i].label == NULL) {
+			// Lazy initialization (see ipc_port_init).
+			mac_exc_action_label_init(host_priv->exc_actions + i);
+		}
+#endif
+
+		if ((exception_mask & (1 << i))
+#if CONFIG_MACF
+			&& mac_exc_action_label_update(current_task(), host_priv->exc_actions + i) == 0
+#endif
+			) {
 			old_port[i] = host_priv->exc_actions[i].port;
+
 			host_priv->exc_actions[i].port =
 				ipc_port_copy_send(new_port);
 			host_priv->exc_actions[i].behavior = new_behavior;
 			host_priv->exc_actions[i].flavor = new_flavor;
-		} else
+		} else {
 			old_port[i] = IP_NULL;
+		}
 	}/* for */
 
 	/*
@@ -650,6 +664,13 @@ host_get_exception_ports(
 	count = 0;
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+#if CONFIG_MACF
+		if (host_priv->exc_actions[i].label == NULL) {
+			// Lazy initialization (see ipc_port_init).
+			mac_exc_action_label_init(host_priv->exc_actions + i);
+		}
+#endif
+
 		if (exception_mask & (1 << i)) {
 			for (j = 0; j < count; j++) {
 /*
@@ -731,7 +752,18 @@ host_swap_exception_ports(
 
 	assert(EXC_TYPES_COUNT > FIRST_EXCEPTION);
 	for (count=0, i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT && count < *CountCnt; i++) {
-		if (exception_mask & (1 << i)) {
+#if CONFIG_MACF
+		if (host_priv->exc_actions[i].label == NULL) {
+			// Lazy initialization (see ipc_port_init).
+			mac_exc_action_label_init(host_priv->exc_actions + i);
+		}
+#endif
+
+		if ((exception_mask & (1 << i))
+#if CONFIG_MACF
+			&& mac_exc_action_label_update(current_task(), host_priv->exc_actions + i) == 0
+#endif
+			) {
 			for (j = 0; j < count; j++) {
 /*
  *				search for an identical entry, if found

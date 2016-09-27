@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -81,7 +81,7 @@
 #include <sys/appleapiopts.h>
 
 #ifdef __APPLE_API_PRIVATE
-#if MACH_KERNEL_PRIVATE
+#ifdef MACH_KERNEL_PRIVATE
 #include <kern/macro_help.h>
 #include <kern/kern_types.h>
 #include <kern/locks.h>
@@ -120,6 +120,7 @@ struct ipc_space {
 	struct ipc_table_size *is_table_next; /* info for larger table */
 	ipc_entry_num_t is_low_mod;	/* lowest modified entry during growth */
 	ipc_entry_num_t is_high_mod;	/* highest modified entry during growth */
+	int is_node_id;			/* HOST_LOCAL_NODE, or remote node if proxy space */
 };
 
 #define	IS_NULL			((ipc_space_t) 0)

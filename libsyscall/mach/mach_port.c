@@ -584,3 +584,36 @@ mach_port_unguard(
 
 }
 
+extern kern_return_t
+_kernelrpc_mach_voucher_extract_attr_recipe(
+		mach_port_name_t voucher,
+		mach_voucher_attr_key_t key,
+		mach_voucher_attr_raw_recipe_t recipe,
+		mach_msg_type_number_t *recipe_size);
+
+kern_return_t
+mach_voucher_extract_attr_recipe(
+	mach_port_name_t voucher,
+	mach_voucher_attr_key_t key,
+	mach_voucher_attr_raw_recipe_t recipe,
+	mach_msg_type_number_t *recipe_size)
+{
+	kern_return_t rv;
+
+	rv = mach_voucher_extract_attr_recipe_trap(voucher, key, recipe, recipe_size);
+
+#ifdef __x86_64__
+	/* REMOVE once XBS kernel has new trap */
+	if (rv == ((1 << 24) | 72)) /* see mach/i386/syscall_sw.h */
+		rv = MACH_SEND_INVALID_DEST;
+#elif defined(__i386__)
+	/* REMOVE once XBS kernel has new trap */
+	if (rv == (kern_return_t)(-72))
+		rv = MACH_SEND_INVALID_DEST;
+#endif
+
+	if (rv == MACH_SEND_INVALID_DEST)
+		rv = _kernelrpc_mach_voucher_extract_attr_recipe(voucher, key, recipe, recipe_size);
+
+	return rv;
+}

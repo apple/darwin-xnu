@@ -16,6 +16,5 @@ EXPORT_MI_LIST	= ${DATAFILES}
 
 EXPORT_MI_DIR = corpses
 
-
 include $(MakeInc_rule)
 include $(MakeInc_dir)

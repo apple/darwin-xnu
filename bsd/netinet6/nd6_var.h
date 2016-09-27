@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,6 +77,7 @@ struct nd_ifinfo {
 	/* keep track of routers and prefixes on this link */
 	int32_t nprefixes;
 	int32_t ndefrouters;
+	boolean_t cga_initialized;
 	struct in6_cga_modifier local_cga_modifier;
 };
 #endif /* BSD_KERNEL_PRIVATE */

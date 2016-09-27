@@ -144,22 +144,14 @@ to
 .Nm mmap
 are:
 .Pp
-VM_FLAGS_PURGABLE	to create Mach purgable (i.e. volatile) memory
+VM_FLAGS_PURGABLE	to create Mach purgable (i.e. volatile) memory.
 .Pp
-VM_MAKE_TAG(tag)	to associate an 8-bit tag with the region
+VM_MAKE_TAG(tag)	to associate an 8-bit tag with the region.
 .br
 <mach/vm_statistics.h> defines some preset tags (with a VM_MEMORY_ prefix).
 Users are encouraged to use tags between 240 and 255.
 Tags are used by tools such as vmmap(1) to help identify specific memory regions.
 .Pp
-VM_FLAGS_SUPERPAGE_SIZE_*	to use superpages for the allocation. 
-See <mach/vm_statistics.h> for supported architectures and sizes (or use
-VM_FLAGS_SUPERPAGE_SIZE_ANY to have the kernel choose a size).
-The specified size must be divisible by the superpage size (except for
-VM_FLAGS_SUPERPAGE_SIZE_ANY), and if you use MAP_FIXED, the specified address
-must be properly aligned. If the system cannot satisfy the request with superpages,
-the call will fail. Note that currently, superpages are always wired and not
-inherited by children of the process.
 .It Dv MAP_FILE
 Mapped from a regular file.  (This is
 the default mapping type, and need not be specified.)

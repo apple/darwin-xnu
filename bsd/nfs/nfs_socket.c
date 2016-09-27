@@ -4901,6 +4901,13 @@ restart:
 			    !(nmp->nm_sockflags & (NMSOCK_POKE|NMSOCK_UNMOUNT)) &&
 			    (nmp->nm_sockflags & NMSOCK_READY)) {
 				nmp->nm_sockflags |= NMSOCK_POKE;
+				/*
+				 * We take a ref on the mount so that we know the mount will still be there
+				 * when we process the nfs_mount_poke_queue. An unmount request will block
+				 * in nfs_mount_drain_and_cleanup until after the poke is finished. We release
+				 * the reference after calling nfs_sock_poke below;
+				 */
+				nmp->nm_ref++;
 				TAILQ_INSERT_TAIL(&nfs_mount_poke_queue, nmp, nm_pokeq);
 			}
 			lck_mtx_unlock(&nmp->nm_lock);
@@ -4973,6 +4980,7 @@ restart:
 	while ((nmp = TAILQ_FIRST(&nfs_mount_poke_queue))) {
 		TAILQ_REMOVE(&nfs_mount_poke_queue, nmp, nm_pokeq);
 		nfs_sock_poke(nmp);
+		nfs_mount_rele(nmp);
 	}
 
 	nfs_interval_timer_start(nfs_request_timer_call, NFS_REQUESTDELAY);

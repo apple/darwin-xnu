@@ -265,8 +265,8 @@ semsys(struct proc *p, struct semsys_args *uap, int32_t *retval)
 static int
 grow_semu_array(int newSize)
 {
-	register int i;
-	register struct sem_undo *newSemu;
+	int i;
+	struct sem_undo *newSemu;
 
 	if (newSize <= seminfo.semmnu)
 		return 1;
@@ -326,8 +326,8 @@ grow_semu_array(int newSize)
 static int
 grow_sema_array(int newSize)
 {
-	register struct semid_kernel *newSema;
-	register int i;
+	struct semid_kernel *newSema;
+	int i;
 
 	if (newSize <= seminfo.semmni)
 		return 0;
@@ -472,8 +472,8 @@ grow_sem_pool(int new_pool_size)
 static int
 semu_alloc(struct proc *p)
 {
-	register int i;
-	register struct sem_undo *suptr;
+	int i;
+	struct sem_undo *suptr;
 	int *supidx;
 	int attempt;
 
@@ -550,9 +550,9 @@ static int
 semundo_adjust(struct proc *p, int *supidx, int semid,
 	int semnum, int adjval)
 {
-	register struct sem_undo *suptr;
+	struct sem_undo *suptr;
 	int suidx;
-	register struct undo *sueptr, **suepptr, *new_sueptr;
+	struct undo *sueptr, **suepptr, *new_sueptr;
 	int i;
 
 	/*
@@ -1063,9 +1063,9 @@ semop(struct proc *p, struct semop_args *uap, int32_t *retval)
 	int semid = uap->semid;
 	int nsops = uap->nsops;
 	struct sembuf sops[seminfo.semopm];
-	register struct semid_kernel *semakptr;
-	register struct sembuf *sopptr = NULL;	/* protected by 'semptr' */
-	register struct sem *semptr = NULL;	/* protected by 'if' */
+	struct semid_kernel *semakptr;
+	struct sembuf *sopptr = NULL;	/* protected by 'semptr' */
+	struct sem *semptr = NULL;	/* protected by 'if' */
 	int supidx = -1;
 	int i, j, eval;
 	int do_wakeup, do_undos;
@@ -1392,7 +1392,7 @@ semopout:
 void
 semexit(struct proc *p)
 {
-	register struct sem_undo *suptr = NULL;
+	struct sem_undo *suptr = NULL;
 	int suidx;
 	int *supidx;
 	int did_something;

@@ -323,35 +323,29 @@ extern void				mutex_pause(uint32_t);
 extern void 			lck_mtx_yield (
 									lck_mtx_t		*lck);
 
-#if defined(__i386__) || defined(__x86_64__)
 extern boolean_t		lck_mtx_try_lock_spin(
-									lck_mtx_t		*lck);
-
-extern boolean_t		lck_mtx_try_lock_spin_always(
-									lck_mtx_t		*lck);
-
-extern void			lck_mtx_lock_spin_always(
 									lck_mtx_t		*lck);
 
 extern void			lck_mtx_lock_spin(
 									lck_mtx_t		*lck);
 
+extern boolean_t		kdp_lck_mtx_lock_spin_is_acquired(
+									lck_mtx_t		*lck);
+
 extern void			lck_mtx_convert_spin(
 									lck_mtx_t		*lck);
 
-extern boolean_t		kdp_lck_mtx_lock_spin_is_acquired(
+extern void			lck_mtx_lock_spin_always(
 									lck_mtx_t		*lck);
+
+extern boolean_t		lck_mtx_try_lock_spin_always(
+									lck_mtx_t		*lck);
+
 #define lck_mtx_unlock_always(l)	lck_mtx_unlock(l)
 
-#else
-#define lck_mtx_try_lock_spin(l)	lck_mtx_try_lock(l)
-#define	lck_mtx_lock_spin(l)		lck_mtx_lock(l)
-#define lck_mtx_try_lock_spin_always(l)	lck_spin_try_lock(l)
-#define lck_mtx_lock_spin_always(l)	lck_spin_lock(l)
-#define kdp_lck_mtx_lock_spin_is_acquired(l) kdp_lck_spin_is_acquired(l)
-#define lck_mtx_unlock_always(l)	lck_spin_unlock(l)
-#define	lck_mtx_convert_spin(l)		do {} while (0)
-#endif
+extern void				lck_spin_assert(
+									lck_spin_t		*lck,
+									unsigned int	type);
 
 extern boolean_t		kdp_lck_rw_lock_is_acquired_exclusive(
 									lck_rw_t 		*lck);
@@ -362,10 +356,25 @@ extern void				lck_mtx_assert(
 									lck_mtx_t		*lck,
 									unsigned int	type);
 
+#if MACH_ASSERT
+#define LCK_MTX_ASSERT(lck,type) lck_mtx_assert((lck),(type))
+#else /* MACH_ASSERT */
+#define LCK_MTX_ASSERT(lck,type)
+#endif /* MACH_ASSERT */
+
+#if DEBUG
+#define LCK_MTX_ASSERT_DEBUG(lck,type) lck_mtx_assert((lck),(type))
+#else /* DEBUG */
+#define LCK_MTX_ASSERT_DEBUG(lck,type)
+#endif /* DEBUG */
+
 __END_DECLS
 
-#define	LCK_MTX_ASSERT_OWNED	0x01
-#define	LCK_MTX_ASSERT_NOTOWNED	0x02
+#define	LCK_ASSERT_OWNED		1
+#define	LCK_ASSERT_NOTOWNED		2
+
+#define	LCK_MTX_ASSERT_OWNED	LCK_ASSERT_OWNED
+#define	LCK_MTX_ASSERT_NOTOWNED	LCK_ASSERT_NOTOWNED
 
 #ifdef	MACH_KERNEL_PRIVATE
 extern void				lck_mtx_lock_wait(
@@ -446,6 +455,7 @@ extern void				lck_rw_assert(
 
 extern void				lck_rw_clear_promotion(
 									thread_t		thread);
+extern void lck_rw_set_promotion_locked(thread_t thread);
 #endif
 
 #ifdef	KERNEL_PRIVATE

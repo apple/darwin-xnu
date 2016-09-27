@@ -1,0 +1,3 @@
+#freebsd = https://github.com/freebsd/freebsd.git
+bsd/man/man2/access.2	freebsd	lib/libc/sys/access.2	5b882020081a138285227631c46a406c08e17bc8
+bsd/man/man7/sticky.7	freebsd	share/man/man7/sticky.7	5b882020081a138285227631c46a406c08e17bc8

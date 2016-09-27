@@ -749,3 +749,29 @@ ipc_entry_grow_table(
 
 	return KERN_SUCCESS;
 }
+
+
+/*
+ *	Routine:	ipc_entry_name_mask
+ *	Purpose:
+ *		Ensure a mach port name has the default ipc entry
+ *		generation bits set. This can be used to ensure that
+ *		a name passed in by user space matches names generated
+ *		by the kernel.
+ *	Conditions:
+ *		None.
+ *	Returns:
+ *		'name' input with default generation bits masked or added
+ *		as appropriate.
+ */
+mach_port_name_t
+ipc_entry_name_mask(mach_port_name_t name)
+{
+#ifndef NO_PORT_GEN
+	static mach_port_name_t null_name = MACH_PORT_MAKE(0, IE_BITS_NEW_GEN(IE_BITS_GEN_MASK));
+	return name | null_name;
+#else
+	static mach_port_name_t null_name = MACH_PORT_MAKE(0, ~(IE_BITS_NEW_GEN(IE_BITS_GEN_MASK)));
+	return name & ~null_name;
+#endif
+}

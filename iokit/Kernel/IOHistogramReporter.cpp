@@ -62,6 +62,8 @@ IOHistogramReporter::with(IOService *reportingService,
             return reporter;
         }
     }
+    OSSafeReleaseNULL(reporter);
+    OSSafeReleaseNULL(tmpChannelName);
     
     return 0;
 }
@@ -208,7 +210,8 @@ IOHistogramReporter::initWith(IOService *reportingService,
             
             if (cnt3 >= _nElements) {
                 IORLOG("ERROR: _bucketBounds init");
-                return false;
+                result = false;
+                goto finish;
             }
             
             if (_histogramSegmentsConfig[cnt].scale_flag) {
@@ -245,21 +248,6 @@ IOHistogramReporter::initWith(IOService *reportingService,
     result = true;
     
 finish:
-    if (result != true) {
-        
-        if (_histogramSegmentsConfig)
-            IOFree(_histogramSegmentsConfig, configSize);
-        
-        if (_elements)
-            IOFree(_elements, elementsSize);
-        
-        if (_enableCounts)
-            IOFree(_enableCounts, eCountsSize);
-        
-        if (_bucketBounds)
-            IOFree(_bucketBounds, boundsSize);
-    }
-    
     return result;
 }
 
@@ -312,6 +300,33 @@ IOHistogramReporter::handleCreateLegend(void)
     
 finish:
     return legendEntry;
+}
+
+IOReturn
+IOHistogramReporter::overrideBucketValues(unsigned int index, 
+                                          uint64_t bucket_hits,
+                                          int64_t bucket_min,
+                                          int64_t bucket_max,
+                                          int64_t bucket_sum)
+{
+    IOReturn result;
+    IOHistogramReportValues bucket;
+    lockReporter();
+
+    if (index >= (unsigned int)_bucketCount) {
+        result = kIOReturnBadArgument;
+        goto finish;
+    }
+
+    bucket.bucket_hits = bucket_hits;
+    bucket.bucket_min = bucket_min;
+    bucket.bucket_max = bucket_max;
+    bucket.bucket_sum = bucket_sum;
+
+    result = setElementValues(index, (IOReportElementValues *)&bucket);
+finish:
+    unlockReporter();
+    return result;
 }
 
 int

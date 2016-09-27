@@ -356,12 +356,13 @@ struct x86_64_intr_stack_frame {
 	uint64_t	ss;
 };
 typedef struct x86_64_intr_stack_frame x86_64_intr_stack_frame_t;
-/* Note: sizeof(x86_64_intr_stack_frame_t) must be a multiple of 16 bytes */
+_Static_assert((sizeof(x86_64_intr_stack_frame_t) % 16) == 0,
+	"interrupt stack frame size must be a multiple of 16 bytes");
 
 /*
  * thread state format for task running in 64bit long mode
  * in long mode, the same hardware frame is always pushed regardless
- * of whether there was a change in privlege level... therefore, there
+ * of whether there was a change in privilege level... therefore, there
  * is no need for an x86_saved_state64_from_kernel variant
  */
 struct x86_saved_state64 {

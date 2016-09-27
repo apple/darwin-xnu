@@ -38,94 +38,26 @@
 #include <kern/kalloc.h>
 #include <mach/mach_vm.h>
 
-/*
- *
- * The format for data is setup in a generic format as follows
- *
- * Layout of data structure:
- *
- *   |         8 - bytes         |
- *   |  type = MAGIC |  LENGTH   |
- *   |            0              |
- *   |      type     |  size     |
- *   |          flags            |
- *   |           data            |
- *   |___________data____________|
- *   |      type     |   size    |
- *   |          flags            |
- *   |___________data____________|
- *   |  type = END   |  size=0   |
- *   |            0              |
- *
- *
- * The type field describes what kind of data is passed. For example type = TASK_CRASHINFO_UUID means the following data is a uuid.
- * These types need to be defined in task_corpses.h for easy consumption by userspace inspection tools.
- *
- * Some range of types is reserved for special types like ints, longs etc. A cool new functionality made possible with this
- * extensible data format is that kernel can decide to put more information as required without requiring user space tools to
- * re-compile to be compatible. The case of rusage struct versions could be introduced without breaking existing tools.
- *
- * Feature description: Generic data with description
- * -------------------
- * Further more generic data with description is very much possible now. For example
- *
- *   - kcdata_add_uint64_with_description(cdatainfo, 0x700, "NUM MACH PORTS");
- *   - and more functions that allow adding description.
- * The userspace tools can then look at the description and print the data even if they are not compiled with knowledge of the field apriori.
- *
- *  Example data:
- * 0000  57 f1 ad de 00 00 00 00 00 00 00 00 00 00 00 00  W...............
- * 0010  01 00 00 00 00 00 00 00 30 00 00 00 00 00 00 00  ........0.......
- * 0020  50 49 44 00 00 00 00 00 00 00 00 00 00 00 00 00  PID.............
- * 0030  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
- * 0040  9c 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
- * 0050  01 00 00 00 00 00 00 00 30 00 00 00 00 00 00 00  ........0.......
- * 0060  50 41 52 45 4e 54 20 50 49 44 00 00 00 00 00 00  PARENT PID......
- * 0070  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
- * 0080  01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
- * 0090  ed 58 91 f1
- *
- * Feature description: Container markers for compound data
- * ------------------
- * If a given kernel data type is complex and requires adding multiple optional fields inside a container
- * object for a consumer to understand arbitrary data, we package it using container markers.
- *
- * For example, the stackshot code gathers information and describes the state of a given task with respect
- * to many subsystems. It includes data such as io stats, vm counters, process names/flags and syscall counts.
- *
- * kcdata_add_container_marker(kcdata_p, KCDATA_TYPE_CONTAINER_BEGIN, STACKSHOT_KCCONTAINER_TASK, task_uniqueid);
- * // add multiple data, or add_<type>_with_description()s here
- *
- * kcdata_add_container_marker(kcdata_p, KCDATA_TYPE_CONTAINER_END, STACKSHOT_KCCONTAINER_TASK, task_uniqueid);
- *
- * Feature description: Custom Data formats on demand
- * --------------------
- * With the self describing nature of format, the kernel provider can describe a data type (uniquely identified by a number) and use
- * it in the buffer for sending data. The consumer can parse the type information and have knowledge of describing incoming data.
- * Following is an example of how we can describe a kernel specific struct sample_disk_io_stats in buffer.
- *
- * struct sample_disk_io_stats {
- *     uint64_t        disk_reads_count;
- *     uint64_t        disk_reads_size;
- *     uint64_t        io_priority_count[4];
- *     uint64_t        io_priority_size;
- * } __attribute__ ((packed));
- *
- *
- * struct kcdata_subtype_descriptor disk_io_stats_def[] = {
- *     {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 0 * sizeof(uint64_t), sizeof(uint64_t), "disk_reads_count"},
- *     {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 1 * sizeof(uint64_t), sizeof(uint64_t), "disk_reads_size"},
- *     {KCS_SUBTYPE_FLAGS_ARRAY, KC_ST_UINT64, 2 * sizeof(uint64_t), KCS_SUBTYPE_PACK_SIZE(4, sizeof(uint64_t)), "io_priority_count"},
- *     {KCS_SUBTYPE_FLAGS_ARRAY, KC_ST_UINT64, (2 + 4) * sizeof(uint64_t), sizeof(uint64_t), "io_priority_size"},
- * };
- *
- * Now you can add this custom type definition into the buffer as
- * kcdata_add_type_definition(kcdata_p, KCTYPE_SAMPLE_DISK_IO_STATS, "sample_disk_io_stats",
- *          &disk_io_stats_def[0], sizeof(disk_io_stats_def)/sizeof(struct kcdata_subtype_descriptor));
- *
- */
-
 static kern_return_t kcdata_get_memory_addr_with_flavor(kcdata_descriptor_t data, uint32_t type, uint32_t size, uint64_t flags, mach_vm_address_t *user_addr);
+
+/*
+ * Estimates how large of a buffer that should be allocated for a buffer that will contain
+ * num_items items of known types with overall length payload_size.
+ *
+ * NOTE: This function will not give an accurate estimate for buffers that will
+ * 	 contain unknown types (those with string descriptions).
+ */
+uint32_t kcdata_estimate_required_buffer_size(uint32_t num_items, uint32_t payload_size)
+{
+	/*
+	 * In the worst case each item will need (KCDATA_ALIGNMENT_SIZE - 1) padding
+	 */
+	uint32_t max_padding_bytes = num_items * (KCDATA_ALIGNMENT_SIZE - 1);
+	uint32_t item_description_bytes = num_items * sizeof(struct kcdata_item);
+	uint32_t begin_and_end_marker_bytes = 2 * sizeof(struct kcdata_item);
+
+	return max_padding_bytes + item_description_bytes + begin_and_end_marker_bytes + payload_size;
+}
 
 kcdata_descriptor_t kcdata_memory_alloc_init(mach_vm_address_t buffer_addr_p, unsigned data_type, unsigned size, unsigned flags)
 {
@@ -196,21 +128,40 @@ kern_return_t kcdata_memory_destroy(kcdata_descriptor_t data)
 /*
  * Routine: kcdata_get_memory_addr
  * Desc: get memory address in the userspace memory for corpse info
- *       NOTE: The caller is responsible to zero the resulting memory or
- *             user other means to mark memory if it has failed populating the
+ *       NOTE: The caller is responsible for zeroing the resulting memory or
+ *             using other means to mark memory if it has failed populating the
  *             data in middle of operation.
  * params:  data - pointer describing the crash info allocation
  *	        type - type of data to be put. See corpse.h for defined types
  *          size - size requested. The header describes this size
  * returns: mach_vm_address_t address in user memory for copyout().
  */
-kern_return_t kcdata_get_memory_addr(
-		kcdata_descriptor_t data,
-		uint32_t type,
-		uint32_t size,
-		mach_vm_address_t *user_addr)
+kern_return_t
+kcdata_get_memory_addr(kcdata_descriptor_t data, uint32_t type, uint32_t size, mach_vm_address_t * user_addr)
 {
-	return kcdata_get_memory_addr_with_flavor(data, type, size, 0, user_addr);
+	/* record number of padding bytes as lower 4 bits of flags */
+	uint64_t flags = (KCDATA_FLAGS_STRUCT_PADDING_MASK & kcdata_calc_padding(size)) | KCDATA_FLAGS_STRUCT_HAS_PADDING;
+	return kcdata_get_memory_addr_with_flavor(data, type, size, flags, user_addr);
+}
+
+/*
+ * Routine: kcdata_add_buffer_end
+ *
+ * Desc: Write buffer end marker.  This does not advance the end pointer in the
+ * kcdata_descriptor_t, so it may be used conservatively before additional data
+ * is added, as long as it is at least called after the last time data is added.
+ *
+ * params:  data - pointer describing the crash info allocation
+ */
+
+kern_return_t
+kcdata_write_buffer_end(kcdata_descriptor_t data)
+{
+	struct kcdata_item info;
+	bzero(&info, sizeof(info));
+	info.type = KCDATA_TYPE_BUFFER_END;
+	info.size = 0;
+	return kcdata_memcpy(data, data->kcd_addr_end, &info, sizeof(info));
 }
 
 /*
@@ -233,14 +184,12 @@ static kern_return_t kcdata_get_memory_addr_with_flavor(
 	}
 
 	/* make sure 16 byte aligned */
-	if (size & 0xf) {
-		size += (0x10 - (size & 0xf));
-	}
+	size += kcdata_calc_padding(size);
 
 	bzero(&info, sizeof(info));
-	KCDATA_ITEM_TYPE(&info) = type;
-	KCDATA_ITEM_SIZE(&info) = size;
-	KCDATA_ITEM_FLAGS(&info) = flags;
+	info.type  = type;
+	info.size = size;
+	info.flags = flags;
 	total_size = size + sizeof(info);
 
 	/* check available memory, including trailer size for KCDATA_TYPE_BUFFER_END */
@@ -259,19 +208,12 @@ static kern_return_t kcdata_get_memory_addr_with_flavor(
 	*user_addr = data->kcd_addr_end;
 	data->kcd_addr_end += size;
 
-	/* setup the end header as well */
-	bzero(&info, sizeof(info));
-	KCDATA_ITEM_TYPE(&info) = KCDATA_TYPE_BUFFER_END;
-	KCDATA_ITEM_SIZE(&info) = 0;
-
-	if (data->kcd_flags & KCFLAG_USE_COPYOUT) {
-		if (copyout(&info, data->kcd_addr_end, sizeof(info)))
-			return KERN_NO_ACCESS;
+	if (!(data->kcd_flags & KCFLAG_NO_AUTO_ENDBUFFER)) {
+		/* setup the end header as well */
+		return kcdata_write_buffer_end(data);
 	} else {
-		memcpy((void *)data->kcd_addr_end, &info, sizeof(info));
+		return KERN_SUCCESS;
 	}
-
-	return KERN_SUCCESS;
 }
 
 /*
@@ -294,10 +236,14 @@ kern_return_t kcdata_get_memory_addr_for_array(
 		uint32_t count,
 		mach_vm_address_t *user_addr)
 {
-	uint64_t flags = type_of_element;
-	flags = (flags << 32) | count;
+	/* for arrays we record the number of padding bytes as the low-order 4 bits
+	 * of the type field.  KCDATA_TYPE_ARRAY_PAD{x} means x bytes of pad. */
+	uint64_t flags      = type_of_element;
+	flags               = (flags << 32) | count;
 	uint32_t total_size = count * size_of_element;
-	return kcdata_get_memory_addr_with_flavor(data, KCDATA_TYPE_ARRAY, total_size, flags, user_addr);
+	uint32_t pad        = kcdata_calc_padding(total_size);
+
+	return kcdata_get_memory_addr_with_flavor(data, KCDATA_TYPE_ARRAY_PAD0 | pad, total_size, flags, user_addr);
 }
 
 /*
@@ -327,6 +273,28 @@ kern_return_t kcdata_add_container_marker(
 	if (data_size)
 		kr = kcdata_memcpy(data, user_addr, &container_type, data_size);
 	return kr;
+}
+
+/*
+ * Routine: kcdata_undo_addcontainer_begin
+ * Desc: call this after adding a container begin but before adding anything else to revert.
+ */
+kern_return_t
+kcdata_undo_add_container_begin(kcdata_descriptor_t data)
+{
+	/*
+	 * the payload of a container begin is a single uint64_t.  It is padded out
+	 * to 16 bytes.
+	 */
+	const mach_vm_address_t padded_payload_size = 16;
+	data->kcd_addr_end -= sizeof(struct kcdata_item) + padded_payload_size;
+
+	if (!(data->kcd_flags & KCFLAG_NO_AUTO_ENDBUFFER)) {
+		/* setup the end header as well */
+		return kcdata_write_buffer_end(data);
+	} else {
+		return KERN_SUCCESS;
+	}
 }
 
 /*
@@ -373,6 +341,7 @@ kern_return_t kcdata_add_type_definition(
 	struct kcdata_type_definition kc_type_definition;
 	mach_vm_address_t user_addr;
 	uint32_t total_size = sizeof(struct kcdata_type_definition);
+	bzero(&kc_type_definition, sizeof(kc_type_definition));
 
 	if (strnlen(type_name, KCDATA_DESC_MAXLEN + 1) >= KCDATA_DESC_MAXLEN)
 		return KERN_INVALID_ARGUMENT;
@@ -381,7 +350,9 @@ kern_return_t kcdata_add_type_definition(
 	kc_type_definition.kct_type_identifier = type_id;
 
 	total_size += elements_count * sizeof(struct kcdata_subtype_descriptor);
-	if (KERN_SUCCESS != (kr = kcdata_get_memory_addr_with_flavor(data, KCDATA_TYPE_TYPEDEFINTION, total_size, 0, &user_addr)))
+	/* record number of padding bytes as lower 4 bits of flags */
+	if (KERN_SUCCESS != (kr = kcdata_get_memory_addr_with_flavor(data, KCDATA_TYPE_TYPEDEFINTION, total_size,
+	                                                             kcdata_calc_padding(total_size), &user_addr)))
 		return kr;
 	if (KERN_SUCCESS != (kr = kcdata_memcpy(data, user_addr, (void *)&kc_type_definition, sizeof(struct kcdata_type_definition))))
 		return kr;
@@ -406,10 +377,8 @@ struct _uint32_with_description_data {
 
 #pragma pack()
 
-kern_return_t kcdata_add_uint64_with_description(
-				kcdata_descriptor_t data_desc,
-				uint64_t data,
-				const char *description)
+kern_return_t
+kcdata_add_uint64_with_description(kcdata_descriptor_t data_desc, uint64_t data, const char * description)
 {
 	if (strnlen(description, KCDATA_DESC_MAXLEN + 1) >= KCDATA_DESC_MAXLEN)
 		return KERN_INVALID_ARGUMENT;

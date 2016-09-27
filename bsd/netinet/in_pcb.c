@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -78,6 +78,7 @@
 #include <sys/proc_uuid_policy.h>
 #include <sys/syslog.h>
 #include <sys/priv.h>
+#include <net/dlil.h>
 
 #include <libkern/OSAtomic.h>
 #include <kern/locks.h>
@@ -108,9 +109,15 @@
 #include <dev/random/randomdev.h>
 #include <mach/boolean.h>
 
+#include <pexpert/pexpert.h>
+
 #if NECP
 #include <net/necp.h>
 #endif
+
+#include <sys/stat.h>
+#include <sys/ubc.h>
+#include <sys/vnode.h>
 
 static lck_grp_t	*inpcb_lock_grp;
 static lck_attr_t	*inpcb_lock_attr;
@@ -124,6 +131,7 @@ static u_int16_t inpcb_timeout_run = 0;	/* INPCB timer is scheduled to run */
 static boolean_t inpcb_garbage_collecting = FALSE; /* gc timer is scheduled */
 static boolean_t inpcb_ticking = FALSE;		/* "slow" timer is scheduled */
 static boolean_t inpcb_fast_timer_on = FALSE;
+static boolean_t intcoproc_unrestricted = FALSE;
 
 /*
  * If the total number of gc reqs is above a threshold, schedule
@@ -132,11 +140,13 @@ static boolean_t inpcb_fast_timer_on = FALSE;
 static boolean_t inpcb_toomany_gcreq = FALSE;
 
 #define	INPCB_GCREQ_THRESHOLD	50000
-#define	INPCB_TOOMANY_GCREQ_TIMER	(hz/10) /* 10 times a second */
 
-static void inpcb_sched_timeout(struct timeval *);
-static void inpcb_timeout(void *);
-int inpcb_timeout_lazy = 10;	/* 10 seconds leeway for lazy timers */
+static thread_call_t inpcb_thread_call, inpcb_fast_thread_call;
+static void inpcb_sched_timeout(void);
+static void inpcb_sched_lazy_timeout(void);
+static void _inpcb_sched_timeout(unsigned int);
+static void inpcb_timeout(void *, void *);
+const int inpcb_timeout_lazy = 10;	/* 10 seconds leeway for lazy timers */
 extern int tvtohz(struct timeval *);
 
 #if CONFIG_PROC_UUID_POLICY
@@ -206,6 +216,11 @@ SYSCTL_PROC(_net_inet_ip_portrange, OID_AUTO, hilast,
 	CTLTYPE_INT|CTLFLAG_RW | CTLFLAG_LOCKED,
 	&ipport_hilastauto, 0, &sysctl_net_ipport_check, "I", "");
 
+static uint32_t apn_fallbk_debug = 0;
+#define apn_fallbk_log(x)       do { if (apn_fallbk_debug >= 1) log x; } while (0)
+
+static boolean_t apn_fallbk_enabled = FALSE;
+
 extern int	udp_use_randomport;
 extern int	tcp_use_randomport;
 
@@ -272,6 +287,12 @@ in_pcbinit(void)
 	inpcb_lock_attr = lck_attr_alloc_init();
 	lck_mtx_init(&inpcb_lock, inpcb_lock_grp, inpcb_lock_attr);
 	lck_mtx_init(&inpcb_timeout_lock, inpcb_lock_grp, inpcb_lock_attr);
+	inpcb_thread_call = thread_call_allocate_with_priority(inpcb_timeout,
+	    NULL, THREAD_CALL_PRIORITY_KERNEL);
+	inpcb_fast_thread_call = thread_call_allocate_with_priority(
+	    inpcb_timeout, NULL, THREAD_CALL_PRIORITY_KERNEL);
+	if (inpcb_thread_call == NULL || inpcb_fast_thread_call == NULL)
+		panic("unable to alloc the inpcb thread call");
 
 	/*
 	 * Initialize data structures required to deliver
@@ -282,23 +303,25 @@ in_pcbinit(void)
 	RB_INIT(&inp_fc_tree);
 	bzero(&key_inp, sizeof(key_inp));
 	lck_mtx_unlock(&inp_fc_lck);
+
+	PE_parse_boot_argn("intcoproc_unrestricted", &intcoproc_unrestricted,
+	    sizeof (intcoproc_unrestricted));
 }
 
 #define	INPCB_HAVE_TIMER_REQ(req)	(((req).intimer_lazy > 0) || \
 	((req).intimer_fast > 0) || ((req).intimer_nodelay > 0))
 static void
-inpcb_timeout(void *arg)
+inpcb_timeout(void *arg0, void *arg1)
 {
-#pragma unused(arg)
+#pragma unused(arg0)
 	struct inpcbinfo *ipi;
 	boolean_t t, gc;
 	struct intimercount gccnt, tmcnt;
-	struct timeval leeway;
 	boolean_t toomany_gc = FALSE;
 
-	if (arg != NULL) {
-		VERIFY(arg == &inpcb_toomany_gcreq);
-		toomany_gc = *(boolean_t *)arg;
+	if (arg1 != NULL) {
+		VERIFY(arg1 == &inpcb_toomany_gcreq);
+		toomany_gc = *(boolean_t *)arg1;
 	}
 
 	/*
@@ -368,58 +391,74 @@ inpcb_timeout(void *arg)
 		VERIFY(inpcb_timeout_run >= 0 && inpcb_timeout_run < 2);
 	}
 
-	bzero(&leeway, sizeof(leeway));
-	leeway.tv_sec = inpcb_timeout_lazy;
 	if (gccnt.intimer_nodelay > 0 || tmcnt.intimer_nodelay > 0)
-		inpcb_sched_timeout(NULL);
+		inpcb_sched_timeout();
 	else if ((gccnt.intimer_fast + tmcnt.intimer_fast) <= 5)
 		/* be lazy when idle with little activity */
-		inpcb_sched_timeout(&leeway);
+		inpcb_sched_lazy_timeout();
 	else
-		inpcb_sched_timeout(NULL);
+		inpcb_sched_timeout();
 
 	lck_mtx_unlock(&inpcb_timeout_lock);
 }
 
 static void
-inpcb_sched_timeout(struct timeval *leeway)
+inpcb_sched_timeout(void)
 {
-	lck_mtx_assert(&inpcb_timeout_lock, LCK_MTX_ASSERT_OWNED);
+	_inpcb_sched_timeout(0);
+}
 
+static void
+inpcb_sched_lazy_timeout(void)
+{
+	_inpcb_sched_timeout(inpcb_timeout_lazy);
+}
+
+static void
+_inpcb_sched_timeout(unsigned int offset)
+{
+	uint64_t deadline, leeway;
+
+	clock_interval_to_deadline(1, NSEC_PER_SEC, &deadline);
+	lck_mtx_assert(&inpcb_timeout_lock, LCK_MTX_ASSERT_OWNED);
 	if (inpcb_timeout_run == 0 &&
-		(inpcb_garbage_collecting || inpcb_ticking)) {
+	    (inpcb_garbage_collecting || inpcb_ticking)) {
 		lck_mtx_convert_spin(&inpcb_timeout_lock);
 		inpcb_timeout_run++;
-		if (leeway == NULL) {
+		if (offset == 0) {
 			inpcb_fast_timer_on = TRUE;
-			timeout(inpcb_timeout, NULL, hz);
+			thread_call_enter_delayed(inpcb_thread_call,
+			    deadline);
 		} else {
 			inpcb_fast_timer_on = FALSE;
-			timeout_with_leeway(inpcb_timeout, NULL, hz,
-				tvtohz(leeway));
+			clock_interval_to_absolutetime_interval(offset,
+			    NSEC_PER_SEC, &leeway);
+			thread_call_enter_delayed_with_leeway(
+			    inpcb_thread_call, NULL, deadline, leeway,
+			    THREAD_CALL_DELAY_LEEWAY);
 		}
 	} else if (inpcb_timeout_run == 1 &&
-		leeway == NULL && !inpcb_fast_timer_on) {
+	    offset == 0 && !inpcb_fast_timer_on) {
 		/*
 		 * Since the request was for a fast timer but the
 		 * scheduled timer is a lazy timer, try to schedule
-		 * another instance of fast timer also
+		 * another instance of fast timer also.
 		 */
 		lck_mtx_convert_spin(&inpcb_timeout_lock);
 		inpcb_timeout_run++;
 		inpcb_fast_timer_on = TRUE;
-		timeout(inpcb_timeout, NULL, hz);
+		thread_call_enter_delayed(inpcb_fast_thread_call, deadline);
 	}
 }
 
 void
 inpcb_gc_sched(struct inpcbinfo *ipi, u_int32_t type)
 {
-	struct timeval leeway;
 	u_int32_t gccnt;
+	uint64_t deadline;
+
 	lck_mtx_lock_spin(&inpcb_timeout_lock);
 	inpcb_garbage_collecting = TRUE;
-
 	gccnt = ipi->ipi_gc_req.intimer_nodelay +
 		ipi->ipi_gc_req.intimer_fast;
 
@@ -432,24 +471,23 @@ inpcb_gc_sched(struct inpcbinfo *ipi, u_int32_t type)
 		 * the caller's request
 		 */
 		lck_mtx_convert_spin(&inpcb_timeout_lock);
-		timeout(inpcb_timeout, (void *)&inpcb_toomany_gcreq,
-		    INPCB_TOOMANY_GCREQ_TIMER);
+		clock_interval_to_deadline(100, NSEC_PER_MSEC, &deadline);
+		thread_call_enter1_delayed(inpcb_thread_call,
+		    &inpcb_toomany_gcreq, deadline);
 	}
 
 	switch (type) {
 	case INPCB_TIMER_NODELAY:
 		atomic_add_32(&ipi->ipi_gc_req.intimer_nodelay, 1);
-		inpcb_sched_timeout(NULL);
+		inpcb_sched_timeout();
 		break;
 	case INPCB_TIMER_FAST:
 		atomic_add_32(&ipi->ipi_gc_req.intimer_fast, 1);
-		inpcb_sched_timeout(NULL);
+		inpcb_sched_timeout();
 		break;
 	default:
 		atomic_add_32(&ipi->ipi_gc_req.intimer_lazy, 1);
-		leeway.tv_sec = inpcb_timeout_lazy;
-		leeway.tv_usec = 0;
-		inpcb_sched_timeout(&leeway);
+		inpcb_sched_lazy_timeout();
 		break;
 	}
 	lck_mtx_unlock(&inpcb_timeout_lock);
@@ -458,23 +496,21 @@ inpcb_gc_sched(struct inpcbinfo *ipi, u_int32_t type)
 void
 inpcb_timer_sched(struct inpcbinfo *ipi, u_int32_t type)
 {
-	struct timeval leeway;
+
 	lck_mtx_lock_spin(&inpcb_timeout_lock);
 	inpcb_ticking = TRUE;
 	switch (type) {
 	case INPCB_TIMER_NODELAY:
 		atomic_add_32(&ipi->ipi_timer_req.intimer_nodelay, 1);
-		inpcb_sched_timeout(NULL);
+		inpcb_sched_timeout();
 		break;
 	case INPCB_TIMER_FAST:
 		atomic_add_32(&ipi->ipi_timer_req.intimer_fast, 1);
-		inpcb_sched_timeout(NULL);
+		inpcb_sched_timeout();
 		break;
 	default:
 		atomic_add_32(&ipi->ipi_timer_req.intimer_lazy, 1);
-		leeway.tv_sec = inpcb_timeout_lazy;
-		leeway.tv_usec = 0;
-		inpcb_sched_timeout(&leeway);
+		inpcb_sched_lazy_timeout();
 		break;
 	}
 	lck_mtx_unlock(&inpcb_timeout_lock);
@@ -593,7 +629,7 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo, struct proc *p)
 		panic("%s: insufficient space to align inp_Wstat", __func__);
 		/* NOTREACHED */
 	}
-	
+
 	so->so_pcb = (caddr_t)inp;
 
 	if (so->so_proto->pr_flags & PR_PCBLOCK) {
@@ -608,6 +644,8 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo, struct proc *p)
 	if (ip6_auto_flowlabel)
 		inp->inp_flags |= IN6P_AUTOFLOWLABEL;
 #endif /* INET6 */
+	if (intcoproc_unrestricted)
+		inp->inp_flags2 |= INP2_INTCOPROC_ALLOWED;
 
 	(void) inp_update_policy(inp);
 
@@ -678,7 +716,7 @@ in_pcb_conflict_post_msg(u_int16_t port)
 	ev_msg.dv[0].data_ptr = &in_portinuse;
 	ev_msg.dv[0].data_length = sizeof (struct kev_in_portinuse);
 	ev_msg.dv[1].data_length = 0;
-	kev_post_msg(&ev_msg);
+	dlil_post_complete_msg(NULL, &ev_msg);
 }
 
 /*
@@ -916,7 +954,7 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 					*lastport = first;
 				lport = htons(*lastport);
 			} while (in_pcblookup_local_and_cleanup(pcbinfo,
-			    ((laddr.s_addr != INADDR_ANY) ? laddr : 
+			    ((laddr.s_addr != INADDR_ANY) ? laddr :
 			    inp->inp_laddr), lport, wild));
 		} else {
 			/*
@@ -984,6 +1022,161 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	return (0);
 }
 
+#define	APN_FALLBACK_IP_FILTER(a)	\
+	(IN_LINKLOCAL(ntohl((a)->sin_addr.s_addr)) || \
+	 IN_LOOPBACK(ntohl((a)->sin_addr.s_addr)) || \
+	 IN_ZERONET(ntohl((a)->sin_addr.s_addr)) || \
+	 IN_MULTICAST(ntohl((a)->sin_addr.s_addr)) || \
+	 IN_PRIVATE(ntohl((a)->sin_addr.s_addr)))
+
+#define	APN_FALLBACK_NOTIF_INTERVAL	2 /* Magic Number */
+static uint64_t last_apn_fallback = 0;
+
+static boolean_t
+apn_fallback_required (proc_t proc, struct socket *so, struct sockaddr_in *p_dstv4)
+{
+	uint64_t timenow;
+	struct sockaddr_storage lookup_default_addr;
+	struct rtentry *rt = NULL;
+
+	VERIFY(proc != NULL);
+
+	if (apn_fallbk_enabled  == FALSE)
+		return FALSE;
+
+	if (proc == kernproc)
+		return FALSE;
+
+	if (so && (so->so_options & SO_NOAPNFALLBK))
+		return FALSE;
+
+	timenow = net_uptime();
+	if ((timenow - last_apn_fallback) < APN_FALLBACK_NOTIF_INTERVAL) {
+		apn_fallbk_log((LOG_INFO, "APN fallback notification throttled.\n"));
+		return FALSE;
+	}
+
+	if (p_dstv4 && APN_FALLBACK_IP_FILTER(p_dstv4))
+		return FALSE;
+
+	/* Check if we have unscoped IPv6 default route through cellular */
+	bzero(&lookup_default_addr, sizeof(lookup_default_addr));
+	lookup_default_addr.ss_family = AF_INET6;
+	lookup_default_addr.ss_len = sizeof(struct sockaddr_in6);
+
+	rt = rtalloc1((struct sockaddr *)&lookup_default_addr, 0, 0);
+	if (NULL == rt) {
+		apn_fallbk_log((LOG_INFO, "APN fallback notification could not find "
+		    "unscoped default IPv6 route.\n"));
+		return FALSE;
+	}
+
+	if (!IFNET_IS_CELLULAR(rt->rt_ifp)) {
+		rtfree(rt);
+		apn_fallbk_log((LOG_INFO, "APN fallback notification could not find "
+		    "unscoped default IPv6 route through cellular interface.\n"));
+		return FALSE;
+	}
+
+	/*
+	 * We have a default IPv6 route, ensure that
+	 * we do not have IPv4 default route before triggering
+	 * the event
+	 */
+	rtfree(rt);
+	rt = NULL;
+
+	bzero(&lookup_default_addr, sizeof(lookup_default_addr));
+	lookup_default_addr.ss_family = AF_INET;
+	lookup_default_addr.ss_len = sizeof(struct sockaddr_in);
+
+	rt = rtalloc1((struct sockaddr *)&lookup_default_addr, 0, 0);
+
+	if (rt) {
+		rtfree(rt);
+		rt = NULL;
+		apn_fallbk_log((LOG_INFO, "APN fallback notification found unscoped "
+		    "IPv4 default route!\n"));
+		return FALSE;
+	}
+
+	{
+		/*
+		 * We disable APN fallback if the binary is not a third-party app.
+		 * Note that platform daemons use their process name as a
+		 * bundle ID so we filter out bundle IDs without dots.
+		 */
+		const char *bundle_id = cs_identity_get(proc);
+		if (bundle_id == NULL ||
+		    bundle_id[0] == '\0' ||
+		    strchr(bundle_id, '.') == NULL ||
+		    strncmp(bundle_id, "com.apple.", sizeof("com.apple.") - 1) == 0) {
+			apn_fallbk_log((LOG_INFO, "Abort: APN fallback notification found first-"
+			    "party bundle ID \"%s\"!\n", (bundle_id ? bundle_id : "NULL")));
+			return FALSE;
+		}
+	}
+
+	{
+		/*
+		 * The Apple App Store IPv6 requirement started on
+		 * June 1st, 2016 at 12:00:00 AM PDT.
+		 * We disable APN fallback if the binary is more recent than that.
+		 * We check both atime and birthtime since birthtime is not always supported.
+		 */
+		static const long ipv6_start_date = 1464764400L;
+		vfs_context_t context;
+		struct stat64 sb;
+		int vn_stat_error;
+
+		bzero(&sb, sizeof(struct stat64));
+		context = vfs_context_create(NULL);
+		vn_stat_error = vn_stat(proc->p_textvp, &sb, NULL, 1, context);
+		(void)vfs_context_rele(context);
+
+		if (vn_stat_error != 0 ||
+		    sb.st_atimespec.tv_sec >= ipv6_start_date ||
+		    sb.st_birthtimespec.tv_sec >= ipv6_start_date) {
+			apn_fallbk_log((LOG_INFO, "Abort: APN fallback notification found binary "
+			    "too recent! (err %d atime %ld mtime %ld ctime %ld birthtime %ld)\n",
+			    vn_stat_error, sb.st_atimespec.tv_sec, sb.st_mtimespec.tv_sec,
+			    sb.st_ctimespec.tv_sec, sb.st_birthtimespec.tv_sec));
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+static void
+apn_fallback_trigger(proc_t proc)
+{
+	pid_t pid = 0;
+	struct kev_msg ev_msg;
+	struct kev_netevent_apnfallbk_data apnfallbk_data;
+
+	last_apn_fallback = net_uptime();
+	pid = proc_pid(proc);
+	uuid_t application_uuid;
+	uuid_clear(application_uuid);
+	proc_getexecutableuuid(proc, application_uuid,
+	    sizeof(application_uuid));
+
+	bzero(&ev_msg, sizeof (struct kev_msg));
+	ev_msg.vendor_code      = KEV_VENDOR_APPLE;
+	ev_msg.kev_class        = KEV_NETWORK_CLASS;
+	ev_msg.kev_subclass     = KEV_NETEVENT_SUBCLASS;
+	ev_msg.event_code       = KEV_NETEVENT_APNFALLBACK;
+
+	bzero(&apnfallbk_data, sizeof(apnfallbk_data));
+	apnfallbk_data.epid = pid;
+	uuid_copy(apnfallbk_data.euuid, application_uuid);
+
+	ev_msg.dv[0].data_ptr   = &apnfallbk_data;
+	ev_msg.dv[0].data_length = sizeof(apnfallbk_data);
+	kev_post_msg(&ev_msg);
+	apn_fallbk_log((LOG_INFO, "APN fallback notification issued.\n"));
+}
+
 /*
  * Transform old in_pcbconnect() into an inner subroutine for new
  * in_pcbconnect(); do some validity-checking on the remote address
@@ -1006,7 +1199,7 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
  */
 int
 in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
-    unsigned int ifscope, struct ifnet **outif)
+    unsigned int ifscope, struct ifnet **outif, int raw)
 {
 	struct route *ro = &inp->inp_route;
 	struct in_ifaddr *ia = NULL;
@@ -1020,7 +1213,7 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
 		return (EINVAL);
 	if (SIN(nam)->sin_family != AF_INET)
 		return (EAFNOSUPPORT);
-	if (SIN(nam)->sin_port == 0)
+	if (raw == 0 && SIN(nam)->sin_port == 0)
 		return (EADDRNOTAVAIL);
 
 	/*
@@ -1030,8 +1223,8 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
 	 * and the primary interface supports broadcast,
 	 * choose the broadcast address for that interface.
 	 */
-	if (SIN(nam)->sin_addr.s_addr == INADDR_ANY ||
-	    SIN(nam)->sin_addr.s_addr == (u_int32_t)INADDR_BROADCAST) {
+	if (raw == 0 && (SIN(nam)->sin_addr.s_addr == INADDR_ANY ||
+	    SIN(nam)->sin_addr.s_addr == (u_int32_t)INADDR_BROADCAST)) {
 		lck_rw_lock_shared(in_ifaddr_rwlock);
 		if (!TAILQ_EMPTY(&in_ifaddrhead)) {
 			ia = TAILQ_FIRST(&in_ifaddrhead);
@@ -1103,11 +1296,18 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
 	 * interface to take the source address from.
 	 */
 	if (ro->ro_rt == NULL) {
+		proc_t proc = current_proc();
+
 		VERIFY(ia == NULL);
 		ia = ifatoia(ifa_ifwithdstaddr(SA(&sin)));
 		if (ia == NULL)
 			ia = ifatoia(ifa_ifwithnet_scoped(SA(&sin), ifscope));
 		error = ((ia == NULL) ? ENETUNREACH : 0);
+		
+		if (apn_fallback_required(proc, inp->inp_socket,
+		    (void *)nam))
+			apn_fallback_trigger(proc);
+
 		goto done;
 	}
 	RT_LOCK_ASSERT_HELD(ro->ro_rt);
@@ -1267,7 +1467,7 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p,
 	/*
 	 *   Call inner routine, to assign local interface address.
 	 */
-	if ((error = in_pcbladdr(inp, nam, &laddr, ifscope, outif)) != 0)
+	if ((error = in_pcbladdr(inp, nam, &laddr, ifscope, outif, 0)) != 0)
 		return (error);
 
 	socket_unlock(so, 0);
@@ -1377,18 +1577,18 @@ in_pcbdetach(struct inpcb *inp)
 		    inp, so, SOCK_PROTO(so));
 		/* NOTREACHED */
 	}
-	
+
 #if IPSEC
 	if (inp->inp_sp != NULL) {
 		(void) ipsec4_delete_pcbpolicy(inp);
 	}
 #endif /* IPSEC */
-	
+
 	/*
 	 * Let NetworkStatistics know this PCB is going away
 	 * before we detach it.
 	 */
-	if (nstat_collect && 
+	if (nstat_collect &&
 	    (SOCK_PROTO(so) == IPPROTO_TCP || SOCK_PROTO(so) == IPPROTO_UDP))
 		nstat_pcb_detach(inp);
 
@@ -1416,14 +1616,21 @@ in_pcbdetach(struct inpcb *inp)
 		ROUTE_RELEASE(&inp->inp_route);
 		imo = inp->inp_moptions;
 		inp->inp_moptions = NULL;
-		if (imo != NULL)
-			IMO_REMREF(imo);
 		sofreelastref(so, 0);
 		inp->inp_state = INPCB_STATE_DEAD;
 		/* makes sure we're not called twice from so_close */
 		so->so_flags |= SOF_PCBCLEARING;
 
 		inpcb_gc_sched(inp->inp_pcbinfo, INPCB_TIMER_FAST);
+
+		/*
+		 * See inp_join_group() for why we need to unlock
+		 */
+		if (imo != NULL) {
+			socket_unlock(so, 0);
+			IMO_REMREF(imo);
+			socket_lock(so, 0);
+		}
 	}
 }
 
@@ -1488,6 +1695,9 @@ in_pcbdispose(struct inpcb *inp)
 #if CONFIG_MACF_NET
 		mac_inpcb_label_destroy(inp);
 #endif /* CONFIG_MACF_NET */
+#if NECP
+		necp_inpcb_dispose(inp);
+#endif /* NECP */
 		/*
 		 * In case there a route cached after a detach (possible
 		 * in the tcp case), make sure that it is freed before
@@ -2141,12 +2351,12 @@ in_pcbinshash(struct inpcb *inp, int locked)
 
 	if (!locked)
 		lck_rw_done(pcbinfo->ipi_lock);
-	
+
 #if NECP
 	// This call catches the original setting of the local address
 	inp_update_necp_policy(inp, NULL, NULL, 0);
 #endif /* NECP */
-	
+
 	return (0);
 }
 
@@ -2181,7 +2391,7 @@ in_pcbrehash(struct inpcb *inp)
 	VERIFY(!(inp->inp_flags2 & INP2_INHASHLIST));
 	LIST_INSERT_HEAD(head, inp, inp_hash);
 	inp->inp_flags2 |= INP2_INHASHLIST;
-	
+
 #if NECP
 	// This call catches updates to the remote addresses
 	inp_update_necp_policy(inp, NULL, NULL, 0);
@@ -2199,7 +2409,7 @@ in_pcbremlists(struct inpcb *inp)
 
 	/*
 	 * Check if it's in hashlist -- an inp is placed in hashlist when
-	 * it's local port gets assigned. So it should also be present 
+	 * it's local port gets assigned. So it should also be present
 	 * in the port list.
 	 */
 	if (inp->inp_flags2 & INP2_INHASHLIST) {
@@ -2289,7 +2499,6 @@ stopusing:
 			OSCompareAndSwap(origwant, newwant, wantcnt);
 		}
 		return (WNT_STOPUSING);
-		break;
 
 	case WNT_ACQUIRE:
 		/*
@@ -2306,7 +2515,6 @@ stopusing:
 			newwant = origwant + 1;
 		} while (!OSCompareAndSwap(origwant, newwant, wantcnt));
 		return (WNT_ACQUIRE);
-		break;
 
 	case WNT_RELEASE:
 		/*
@@ -2343,7 +2551,6 @@ stopusing:
 		if (locked == 0)
 			socket_unlock(pcb->inp_socket, 1);
 		return (WNT_RELEASE);
-		break;
 
 	default:
 		panic("%s: so=%p not a valid state =%x\n", __func__,
@@ -2463,7 +2670,7 @@ inp_route_copyin(struct inpcb *inp, struct route *src)
 }
 
 /*
- * Handler for setting IP_FORCE_OUT_IFP/IP_BOUND_IF/IPV6_BOUND_IF socket option.
+ * Handler for setting IP_BOUND_IF/IPV6_BOUND_IF socket option.
  */
 int
 inp_bindif(struct inpcb *inp, unsigned int ifscope, struct ifnet **pifp)
@@ -2567,6 +2774,30 @@ void
 inp_clear_awdl_unrestricted(struct inpcb *inp)
 {
 	inp->inp_flags2 &= ~INP2_AWDL_UNRESTRICTED;
+
+	/* Blow away any cached route in the PCB */
+	ROUTE_RELEASE(&inp->inp_route);
+}
+
+void
+inp_set_intcoproc_allowed(struct inpcb *inp)
+{
+	inp->inp_flags2 |= INP2_INTCOPROC_ALLOWED;
+
+	/* Blow away any cached route in the PCB */
+	ROUTE_RELEASE(&inp->inp_route);
+}
+
+boolean_t
+inp_get_intcoproc_allowed(struct inpcb *inp)
+{
+	return (inp->inp_flags2 & INP2_INTCOPROC_ALLOWED) ? TRUE : FALSE;
+}
+
+void
+inp_clear_intcoproc_allowed(struct inpcb *inp)
+{
+	inp->inp_flags2 &= ~INP2_INTCOPROC_ALLOWED;
 
 	/* Blow away any cached route in the PCB */
 	ROUTE_RELEASE(&inp->inp_route);
@@ -3054,13 +3285,19 @@ inp_update_policy(struct inpcb *inp)
 	return (0);
 #endif /* !CONFIG_PROC_UUID_POLICY */
 }
+
+static unsigned int log_restricted;
+SYSCTL_DECL(_net_inet);
+SYSCTL_INT(_net_inet, OID_AUTO, log_restricted,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &log_restricted, 0,
+    "Log network restrictions");
 /*
  * Called when we need to enforce policy restrictions in the input path.
  *
  * Returns TRUE if we're not allowed to receive data, otherwise FALSE.
  */
-boolean_t
-inp_restricted_recv(struct inpcb *inp, struct ifnet *ifp)
+static boolean_t
+_inp_restricted_recv(struct inpcb *inp, struct ifnet *ifp)
 {
 	VERIFY(inp != NULL);
 
@@ -3081,7 +3318,7 @@ inp_restricted_recv(struct inpcb *inp, struct ifnet *ifp)
 
 	if (IFNET_IS_AWDL_RESTRICTED(ifp) && !INP_AWDL_UNRESTRICTED(inp))
 		return (TRUE);
-	
+
 	if (!(ifp->if_eflags & IFEF_RESTRICTED_RECV))
 		return (FALSE);
 
@@ -3091,7 +3328,23 @@ inp_restricted_recv(struct inpcb *inp, struct ifnet *ifp)
 	if ((inp->inp_flags & INP_BOUND_IF) && inp->inp_boundifp == ifp)
 		return (FALSE);
 
+	if (IFNET_IS_INTCOPROC(ifp) && !INP_INTCOPROC_ALLOWED(inp))
+		return (TRUE);
+
 	return (TRUE);
+}
+
+boolean_t
+inp_restricted_recv(struct inpcb *inp, struct ifnet *ifp)
+{
+	boolean_t ret;
+
+	ret = _inp_restricted_recv(inp, ifp);
+	if (ret == TRUE && log_restricted) {
+		printf("pid %d is unable to receive packets on %s\n",
+		    current_proc()->p_pid, ifp->if_xname);
+	}
+	return (ret);
 }
 
 /*
@@ -3099,8 +3352,8 @@ inp_restricted_recv(struct inpcb *inp, struct ifnet *ifp)
  *
  * Returns TRUE if we're not allowed to send data out, otherwise FALSE.
  */
-boolean_t
-inp_restricted_send(struct inpcb *inp, struct ifnet *ifp)
+static boolean_t
+_inp_restricted_send(struct inpcb *inp, struct ifnet *ifp)
 {
 	VERIFY(inp != NULL);
 
@@ -3122,5 +3375,111 @@ inp_restricted_send(struct inpcb *inp, struct ifnet *ifp)
 	if (IFNET_IS_AWDL_RESTRICTED(ifp) && !INP_AWDL_UNRESTRICTED(inp))
 		return (TRUE);
 
+	if (IFNET_IS_INTCOPROC(ifp) && !INP_INTCOPROC_ALLOWED(inp))
+		return (TRUE);
+
 	return (FALSE);
+}
+
+boolean_t
+inp_restricted_send(struct inpcb *inp, struct ifnet *ifp)
+{
+	boolean_t ret;
+
+	ret = _inp_restricted_send(inp, ifp);
+	if (ret == TRUE && log_restricted) {
+		printf("pid %d is unable to transmit packets on %s\n",
+		    current_proc()->p_pid, ifp->if_xname);
+	}
+	return (ret);
+}
+
+inline void
+inp_count_sndbytes(struct inpcb *inp, u_int32_t th_ack)
+{
+	struct ifnet *ifp = inp->inp_last_outifp;
+	struct socket *so = inp->inp_socket;
+	if (ifp != NULL && !(so->so_flags & SOF_MP_SUBFLOW) &&
+	    (ifp->if_type == IFT_CELLULAR ||
+	    ifp->if_subfamily == IFNET_SUBFAMILY_WIFI)) {
+		int32_t unsent;
+
+		so->so_snd.sb_flags |= SB_SNDBYTE_CNT;
+
+		/*
+		 * There can be data outstanding before the connection
+		 * becomes established -- TFO case
+		 */
+		if (so->so_snd.sb_cc > 0)
+			inp_incr_sndbytes_total(so, so->so_snd.sb_cc);
+
+		unsent = inp_get_sndbytes_allunsent(so, th_ack);
+		if (unsent > 0)
+			inp_incr_sndbytes_unsent(so, unsent);
+	}
+}
+
+inline void
+inp_incr_sndbytes_total(struct socket *so, int32_t len)
+{
+	struct inpcb *inp = (struct inpcb *)so->so_pcb;
+	struct ifnet *ifp = inp->inp_last_outifp;
+
+	if (ifp != NULL) {
+		VERIFY(ifp->if_sndbyte_total >= 0);
+		OSAddAtomic64(len, &ifp->if_sndbyte_total);
+	}
+}
+
+inline void
+inp_decr_sndbytes_total(struct socket *so, int32_t len)
+{
+	struct inpcb *inp = (struct inpcb *)so->so_pcb;
+	struct ifnet *ifp = inp->inp_last_outifp;
+
+	if (ifp != NULL) {
+		VERIFY(ifp->if_sndbyte_total >= len);
+		OSAddAtomic64(-len, &ifp->if_sndbyte_total);
+	}
+}
+
+inline void
+inp_incr_sndbytes_unsent(struct socket *so, int32_t len)
+{
+	struct inpcb *inp = (struct inpcb *)so->so_pcb;
+	struct ifnet *ifp = inp->inp_last_outifp;
+
+	if (ifp != NULL) {
+		VERIFY(ifp->if_sndbyte_unsent >= 0);
+		OSAddAtomic64(len, &ifp->if_sndbyte_unsent);
+	}
+}
+
+inline void
+inp_decr_sndbytes_unsent(struct socket *so, int32_t len)
+{
+	struct inpcb *inp = (struct inpcb *)so->so_pcb;
+	struct ifnet *ifp = inp->inp_last_outifp;
+
+	if (so == NULL || !(so->so_snd.sb_flags & SB_SNDBYTE_CNT))
+		return;
+
+	if (ifp != NULL) {
+		if (ifp->if_sndbyte_unsent >= len)
+			OSAddAtomic64(-len, &ifp->if_sndbyte_unsent);
+		else
+			ifp->if_sndbyte_unsent = 0;
+	}
+}
+
+inline void
+inp_decr_sndbytes_allunsent(struct socket *so, u_int32_t th_ack)
+{
+	int32_t len;
+
+	if (so == NULL || !(so->so_snd.sb_flags & SB_SNDBYTE_CNT))
+		return;
+
+	len = inp_get_sndbytes_allunsent(so, th_ack);
+	inp_decr_sndbytes_unsent(so, len);
 }

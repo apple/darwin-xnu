@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -98,14 +98,14 @@ public:
     static void *operator new(size_t size);
     static void operator delete(void *mem, size_t size);
 
-    OSSymbolPool() { };
+    OSSymbolPool() { }
     OSSymbolPool(const OSSymbolPool *old);
     virtual ~OSSymbolPool();
 
     bool init();
 
-    inline void closeGate() { lck_mtx_lock(poolGate); };
-    inline void openGate()  { lck_mtx_unlock(poolGate); };
+    inline void closeGate() { lck_mtx_lock(poolGate); }
+    inline void openGate()  { lck_mtx_unlock(poolGate); }
 
     OSSymbol *findSymbol(const char *cString) const;
     OSSymbol *insertSymbol(OSSymbol *sym);

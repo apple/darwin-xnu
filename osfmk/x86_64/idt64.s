@@ -284,13 +284,15 @@ L_common_dispatch:
 	clac		/* Clear EFLAGS.AC if SMAP is present/enabled */
 1:
 	/*
-	 * On entering the kernel, we don't need to switch cr3
+	 * On entering the kernel, we typically don't switch CR3
 	 * because the kernel shares the user's address space.
-	 * But we mark the kernel's cr3 as "active".
-	 * If, however, the invalid cr3 flag is set, we have to flush tlbs
-	 * since the kernel's mapping was changed while we were in userspace.
+	 * But we mark the kernel's cr3 as "active" for TLB coherency evaluation
+	 * If, however, the CPU's invalid TLB flag is set, we have to invalidate the TLB
+	 * since the kernel pagetables were changed while we were in userspace.
 	 *
-	 * But: if global no_shared_cr3 is TRUE we do switch to the kernel's cr3
+	 * For threads with a mapped pagezero (some WINE games) on non-SMAP platforms,
+	 * we switch to the kernel's address space on entry. Also, 
+	 * if the global no_shared_cr3 is TRUE we do switch to the kernel's cr3
 	 * so that illicit accesses to userspace can be trapped.
 	 */
 	mov	%gs:CPU_KERNEL_CR3, %rcx
@@ -298,8 +300,14 @@ L_common_dispatch:
 	test	$3, %esi			/* user/kernel? */
 	jz	2f				/* skip cr3 reload from kernel */
 	xor	%rbp, %rbp
+	cmpl	$0, %gs:CPU_PAGEZERO_MAPPED
+	jnz	11f
 	cmpl	$0, EXT(no_shared_cr3)(%rip)
 	je	2f
+11:
+	xor	%eax, %eax
+	movw	%gs:CPU_KERNEL_PCID, %ax
+	or	%rax, %rcx
 	mov	%rcx, %cr3			/* load kernel cr3 */
 	jmp	4f				/* and skip tlb flush test */
 2:
@@ -371,18 +379,21 @@ Entry(ret_to_user)
 	mov 	%rcx, %gs:CPU_DR7
 2:
 	/*
-	 * On exiting the kernel there's no need to switch cr3 since we're
+	 * On exiting the kernel there's typically no need to switch cr3 since we're
 	 * already running in the user's address space which includes the
-	 * kernel. Nevertheless, we now mark the task's cr3 as active.
-	 * But, if no_shared_cr3 is set, we do need to switch cr3 at this point.
+	 * kernel. We now mark the task's cr3 as active, for TLB coherency.
+	 * If the target address space has a pagezero mapping present, or
+	 * if no_shared_cr3 is set, we do need to switch cr3 at this point.
 	 */
 	mov	%gs:CPU_TASK_CR3, %rcx
 	mov	%rcx, %gs:CPU_ACTIVE_CR3
+	cmpl	$0, %gs:CPU_PAGEZERO_MAPPED
+	jnz	L_cr3_switch_island
 	movl	EXT(no_shared_cr3)(%rip), %eax
 	test	%eax, %eax		/* -no_shared_cr3 */
-	jz	3f
-	mov	%rcx, %cr3
-3:
+	jnz	L_cr3_switch_island
+
+L_cr3_switch_return:
 	mov	%gs:CPU_DR7, %rax	/* Is there a debug control register?*/
 	cmp	$0, %rax
 	je	4f
@@ -451,6 +462,7 @@ EXT(ret32_set_gs):
 EXT(ret32_iret):
 	iretq				/* return from interrupt */
 
+	
 L_fast_exit:
 	pop	%rdx			/* user return eip */
 	pop	%rcx			/* pop and toss cs */
@@ -459,6 +471,13 @@ L_fast_exit:
 	pop	%rcx			/* user return esp */
 	sti				/* interrupts enabled after sysexit */
 	sysexitl			/* 32-bit sysexit */
+
+L_cr3_switch_island:
+	xor	%eax, %eax
+	movw	%gs:CPU_ACTIVE_PCID, %ax
+	or	%rax, %rcx
+	mov	%rcx, %cr3
+	jmp	L_cr3_switch_return
 
 ret_to_kernel:
 #if DEBUG_IDT64
@@ -678,16 +697,8 @@ Entry(idt64_debug)
 Entry(idt64_double_fault)
 	PUSH_FUNCTION(HNDL_DOUBLE_FAULT)
 	pushq	$(T_DOUBLE_FAULT)
+	jmp	L_dispatch_kernel
 
-	push	%rax
-	leaq	EXT(idt64_syscall)(%rip), %rax
-	cmp	%rax, ISF64_RIP+8(%rsp)
-	pop	%rax
-	jne	L_dispatch_kernel
-
-	mov	ISF64_RSP(%rsp), %rsp
-	jmp	L_syscall_continue
-	
 
 /*
  * For GP/NP/SS faults, we use the IST1 stack.

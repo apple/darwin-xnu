@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,8 +73,8 @@ public:
 /*! @function withRange
     @abstract Constructs an IODeviceMemory instance, describing one physical range.
     @discussion This method creates an IODeviceMemory instance for one physical range passed as a physical address and length. It just calls IOMemoryDescriptor::withPhysicalAddress.
-    @param address The physical address of the first byte in the memory.
-    @param withLength The length of memory.
+    @param start The physical address of the first byte in the memory.
+    @param length The length of memory.
     @result Returns the created IODeviceMemory on success, to be released by the caller, or zero on failure. */
 
     static IODeviceMemory *	withRange( 

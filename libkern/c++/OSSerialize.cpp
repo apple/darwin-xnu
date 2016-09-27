@@ -70,42 +70,40 @@ void OSSerialize::clearText()
 		bzero((void *)data, capacity);
 		length = 1;
     }
-	tag = 0;
 	tags->flushCollection();
 }
 
 bool OSSerialize::previouslySerialized(const OSMetaClassBase *o)
 {
 	char temp[16];
-	OSString *tagString;
+	unsigned int tagIdx;
 
 	if (binary) return (binarySerialize(o));
 
 	// look it up
-	tagString = (OSString *)tags->getObject((const OSSymbol *) o);
+	tagIdx = tags->getNextIndexOfObject(o, 0);
 
 // xx-review: no error checking here for addString calls!
 	// does it exist?
-	if (tagString) {
+	if (tagIdx != -1U) {
 		addString("<reference IDREF=\"");
-		addString(tagString->getCStringNoCopy());
+		snprintf(temp, sizeof(temp), "%u", tagIdx);
+		addString(temp);
 		addString("\"/>");
 		return true;
 	}
 
-	// build a tag
-	snprintf(temp, sizeof(temp), "%u", tag++);
-	tagString = OSString::withCString(temp);
-
-	// add to tag dictionary
-        tags->setObject((const OSSymbol *) o, tagString);// XXX check return
-	tagString->release();
+	// add to tag array
+    tags->setObject(o);// XXX check return
 
 	return false;
 }
 
 bool OSSerialize::addXMLStartTag(const OSMetaClassBase *o, const char *tagString)
 {
+	char temp[16];
+	unsigned int tagIdx;
+
 	if (binary)
     {
 		printf("class %s: xml serialize\n", o->getMetaClass()->getClassName());
@@ -115,7 +113,10 @@ bool OSSerialize::addXMLStartTag(const OSMetaClassBase *o, const char *tagString
 	if (!addChar('<')) return false;
 	if (!addString(tagString)) return false;
 	if (!addString(" ID=\"")) return false;
-	if (!addString(((OSString *)tags->getObject((const OSSymbol *)o))->getCStringNoCopy())) 
+	tagIdx = tags->getNextIndexOfObject(o, 0);
+	assert(tagIdx != -1U);
+	snprintf(temp, sizeof(temp), "%u", tagIdx);
+	if (!addString(temp))
 		return false;
 	if (!addChar('\"')) return false;
 	if (!addChar('>')) return false;
@@ -164,14 +165,22 @@ bool OSSerialize::initWithCapacity(unsigned int inCapacity)
     if (!super::init())
             return false;
 
-    tags = OSDictionary::withCapacity(32);
+    tags = OSArray::withCapacity(256);
     if (!tags) {
         return false;
     }
 
-    tag = 0;
     length = 1;
-    capacity = (inCapacity) ? round_page_32(inCapacity) : round_page_32(1);
+
+    if (!inCapacity) {
+        inCapacity = 1;
+    }
+    if (round_page_overflow(inCapacity, &capacity)) {
+        tags->release();
+        tags = 0;
+        return false;
+    }
+
     capacityIncrement = capacity;
 
     // allocate from the kernel map so that we can safely map this data
@@ -219,8 +228,9 @@ unsigned int OSSerialize::ensureCapacity(unsigned int newCapacity)
 	if (newCapacity <= capacity)
 		return capacity;
 
-	// round up
-	newCapacity = round_page_32(newCapacity);
+	if (round_page_overflow(newCapacity, &newCapacity)) {
+		return capacity;
+	}
 
 	kern_return_t rc = kmem_realloc(kernel_map,
 					(vm_offset_t)data,

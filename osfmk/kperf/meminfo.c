@@ -52,7 +52,7 @@ kperf_meminfo_sample(struct meminfo *mi, struct kperf_context *context)
 
 	thread_t thread = context->cur_thread;
 
-	BUF_INFO1(PERF_MI_SAMPLE, (uintptr_t)thread_tid(thread));
+	BUF_INFO(PERF_MI_SAMPLE | DBG_FUNC_START, (uintptr_t)thread_tid(thread));
 
 	task = get_threadtask(thread);
 
@@ -79,13 +79,15 @@ kperf_meminfo_sample(struct meminfo *mi, struct kperf_context *context)
 	} else {
 		mi->purgeable_volatile_compressed = UINT64_MAX;
 	}
+
+	BUF_INFO(PERF_MI_SAMPLE | DBG_FUNC_END, (uintptr_t)thread_tid(thread));
 }
 
 /* log an existing sample into the buffer */
 void
 kperf_meminfo_log(struct meminfo *mi)
 {
-	BUF_DATA3(PERF_MI_DATA, mi->phys_footprint, mi->purgeable_volatile,
-	          mi->purgeable_volatile_compressed);
+	BUF_DATA(PERF_MI_DATA, mi->phys_footprint, mi->purgeable_volatile,
+	         mi->purgeable_volatile_compressed);
 }
 

@@ -75,7 +75,8 @@ member function's parameter list.
 			       void *arg0, void *arg1,
 			       void *arg2, void *arg3);
     enum {
-	kPreciousStack = 0x00000001
+	kPreciousStack  = 0x00000001,
+	kTimeLockPanics = 0x00000002,
     };
 
 private:
@@ -150,6 +151,8 @@ protected:
 #else
 	void *iokitstatsReserved;
 #endif
+        uint64_t lockInterval;
+        uint64_t lockTime;
     };
 
 /*! @var reserved
@@ -313,9 +316,20 @@ public:
 */
     virtual bool runEventSources();
 
+/*! @function setMaximumLockTime
+    @discussion For diagnostics use in DEVELOPMENT kernels, set a time interval which if the work loop lock is held for this time or greater, IOWorkLoop will panic or log a backtrace.
+    @param interval An absolute time interval, eg. created with clock_interval_to_absolutetime_interval().
+    @param options Pass IOWorkLoop::kTimeLockPanics to panic when the time is exceeded, otherwise a log will be generated with OSReportWithBacktrace().
+*/
+    void setMaximumLockTime(uint64_t interval, uint32_t options);
+
 protected:
     // Internal APIs used by event sources to control the thread
     virtual int sleepGate(void *event, AbsoluteTime deadline, UInt32 interuptibleType);
+
+#if XNU_KERNEL_PRIVATE
+    void lockTime(void);
+#endif /* XNU_KERNEL_PRIVATE */
 
 protected:
 #if __LP64__

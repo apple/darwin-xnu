@@ -70,7 +70,7 @@ does not indicate a block special or character special device,
 .Fa dev
 is ignored.
 .Pp
-.Fn Mknod
+.Fn mknod
 requires super-user privileges.
 .Sh RETURN VALUES
 Upon successful completion, a value of 0 is returned.
@@ -78,7 +78,7 @@ Otherwise, a value of -1 is returned and
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Mknod
+.Fn mknod
 will fail and the file will be not created if:
 .Bl -tag -width Er
 .\" ==========

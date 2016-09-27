@@ -23,6 +23,7 @@
 
 #include <kern/sched_prim.h>
 #include <kern/ledger.h>
+#include <kern/policy_internal.h>
 
 #include <libkern/OSDebug.h>
 
@@ -141,9 +142,7 @@ vm_purgeable_token_check_queue(purgeable_q_t queue)
 kern_return_t
 vm_purgeable_token_add(purgeable_q_t queue)
 {
-#if MACH_ASSERT
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	
 	/* new token */
 	token_idx_t     token;
@@ -299,9 +298,7 @@ find_available_token:
 static token_idx_t 
 vm_purgeable_token_remove_first(purgeable_q_t queue)
 {
-#if MACH_ASSERT
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	
 	token_idx_t     token;
 	token = queue->token_q_head;
@@ -357,9 +354,7 @@ vm_purgeable_token_remove_first(purgeable_q_t queue)
 static token_idx_t 
 vm_purgeable_token_remove_last(purgeable_q_t queue)
 {
-#if MACH_ASSERT
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	
 	token_idx_t     token;
 	token = queue->token_q_tail;
@@ -423,9 +418,7 @@ vm_purgeable_token_remove_last(purgeable_q_t queue)
 void
 vm_purgeable_token_delete_first(purgeable_q_t queue)
 {
-#if MACH_ASSERT
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	token_idx_t     token = vm_purgeable_token_remove_first(queue);
 
 	if (token) {
@@ -439,9 +432,7 @@ vm_purgeable_token_delete_first(purgeable_q_t queue)
 void
 vm_purgeable_token_delete_last(purgeable_q_t queue)
 {
-#if MACH_ASSERT
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	token_idx_t     token = vm_purgeable_token_remove_last(queue);
 
 	if (token) {
@@ -457,9 +448,7 @@ vm_purgeable_token_delete_last(purgeable_q_t queue)
 void
 vm_purgeable_q_advance_all()
 {
-#if MACH_ASSERT
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	
 	/* check queue counters - if they get really large, scale them back.
 	 * They tend to get that large when there is no purgeable queue action */
@@ -549,9 +538,7 @@ vm_purgeable_q_advance_all()
 static void
 vm_purgeable_token_remove_ripe(purgeable_q_t queue)
 {
-#if MACH_ASSERT
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	assert(queue->token_q_head && tokens[queue->token_q_head].count == 0);
 	/* return token to free list. advance token list. */
 	token_idx_t     new_head = tokens[queue->token_q_head].next;
@@ -581,9 +568,7 @@ vm_purgeable_token_remove_ripe(purgeable_q_t queue)
 static void
 vm_purgeable_token_choose_and_delete_ripe(purgeable_q_t queue, purgeable_q_t queue2)
 {
-#if MACH_ASSERT
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	assert(queue->token_q_head);
 
 	if (tokens[queue->token_q_head].count == 0) {
@@ -687,7 +672,7 @@ vm_purgeable_object_find_and_lock(
 	best_object = VM_OBJECT_NULL;
 	best_object_task_importance = INT_MAX;
 
-	lck_mtx_assert(&vm_purgeable_queue_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&vm_purgeable_queue_lock, LCK_MTX_ASSERT_OWNED);
 	/*
 	 * Usually we would pick the first element from a queue. However, we
 	 * might not be able to get a lock on it, in which case we try the
@@ -888,9 +873,7 @@ vm_purgeable_object_purge_one(
 	boolean_t	forced_purge;
 
 	/* Need the page queue lock since we'll be changing the token queue. */
-#if MACH_ASSERT
-	lck_mtx_assert(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-#endif
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	lck_mtx_lock(&vm_purgeable_queue_lock);
 	
 	/* Cycle through all queues */
@@ -1126,7 +1109,7 @@ vm_purgeable_object_remove(vm_object_t object)
 void
 vm_purgeable_stats_helper(vm_purgeable_stat_t *stat, purgeable_q_t queue, int group, task_t target_task)
 {
-	lck_mtx_assert(&vm_purgeable_queue_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&vm_purgeable_queue_lock, LCK_MTX_ASSERT_OWNED);
 
 	stat->count = stat->size = 0;
 	vm_object_t     object;
@@ -1272,7 +1255,7 @@ vm_purgeable_volatile_queue_disown(
 	collisions = 0;
 
 again:
-	lck_mtx_assert(&vm_purgeable_queue_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&vm_purgeable_queue_lock, LCK_MTX_ASSERT_OWNED);
 
 	for (object = (vm_object_t) queue_first(&queue->objq[group]);
 	     !queue_end(&queue->objq[group], (queue_entry_t) object);
@@ -1554,11 +1537,11 @@ vm_purgeable_nonvolatile_enqueue(
 
 	assert(object->purgable == VM_PURGABLE_NONVOLATILE);
 	assert(object->vo_purgeable_owner == NULL);
-	assert(owner != NULL);
 
 	lck_mtx_lock(&vm_purgeable_queue_lock);
 
-	if (owner->task_purgeable_disowning) {
+	if (owner != NULL &&
+	    owner->task_purgeable_disowning) {
 		/* task is exiting and no longer tracking purgeable objects */
 		owner = NULL;
 	}
@@ -1573,7 +1556,6 @@ vm_purgeable_nonvolatile_enqueue(
 #endif /* DEBUG */
 
 	page_count = object->resident_page_count;
-	assert(page_count == 0); /* should be a freshly-created object */
 	if (owner != NULL && page_count != 0) {
 		ledger_credit(owner->ledger,
 			      task_ledgers.purgeable_nonvolatile,
@@ -1663,9 +1645,8 @@ vm_purgeable_accounting(
 
 	resident_page_count = object->resident_page_count;
 	wired_page_count = object->wired_page_count;
-	if ((COMPRESSED_PAGER_IS_ACTIVE ||
-	     DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE) &&
-	    object->pager != NULL) {
+	if (VM_CONFIG_COMPRESSOR_IS_PRESENT &&
+	     object->pager != NULL) {
 		compressed_page_count =
 			vm_compressor_pager_get_count(object->pager);
 	} else {

@@ -472,9 +472,9 @@ routine mach_make_memory_entry_64(
  *	definition of the routine.
  */
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
-routine mach_vm_purgable_control(
+routine PREFIX(mach_vm_purgable_control) (
 #else
-routine vm_purgable_control(
+routine PREFIX(vm_purgable_control) (
 #endif
 		target_task	: vm_map_t;
 		address		: mach_vm_address_t;

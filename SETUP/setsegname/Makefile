@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -16,13 +15,13 @@ WARNFLAGS = -Wall
 LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
 
 setsegname: $(OBJS)
-	@echo HOST_LD $@
+	@echo "$(ColorH)HOST_LD$(Color0)       $(ColorF)$@$(Color0)"
 	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
-	@echo HOST_CODESIGN $@
+	@echo "$(ColorH)HOST_CODESIGN$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
 %.o: %.c
-	@echo HOST_CC $@
+	@echo "$(ColorH)HOST_CC$(Color0)       $(ColorF)$@$(Color0)"
 	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
 do_build_setup:: setsegname

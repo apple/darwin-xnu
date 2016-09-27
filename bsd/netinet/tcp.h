@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -244,10 +244,42 @@ struct tcphdr {
 #define	TCP_NOTIMEWAIT			0x208	/* Avoid going into time-wait */
 #define	TCP_DISABLE_BLACKHOLE_DETECTION	0x209	/* disable PMTU blackhole detection */
 #define	TCP_ECN_MODE			0x210	/* fine grain control for A/B testing */
+#define	TCP_KEEPALIVE_OFFLOAD		0x211	/* offload keep alive processing to firmware */
 
-#define	ECN_MODE_DEFAULT	0x0	/* per interface or system wide default */
-#define	ECN_MODE_ENABLE		0x1	/* force enable ECN on connection */
-#define	ECN_MODE_DISABLE	0x2	/* force disable ECN on connection */
+/*
+ * TCP_ECN_MODE values
+ */
+#define	ECN_MODE_DEFAULT		0x0	/* per interface or system wide default */
+#define	ECN_MODE_ENABLE			0x1	/* force enable ECN on connection */
+#define	ECN_MODE_DISABLE		0x2	/* force disable ECN on connection */
+
+/*
+ * TCP_NOTIFY_ACKNOWLEDGEMENT
+ *
+ * Application can use this socket option to get a notification when
+ * data that is currently written to the socket is acknowledged. The input
+ * argument given to this socket option is a marker_id that will be used for
+ * returning the notification. The application can continue to write
+ * data after setting the marker. There can be multiple of these events
+ * outstanding on a socket at any time up to a max of TCP_MAX_NOTIFY_ACK.
+ *
+ * To get the completed notifications, getsockopt should be called with the
+ * TCP_NOTIFY_ACKNOWLEDGEMENT with the following tcp_notify_ack_complete
+ * structure as an out argument. At most TCP_MAX_NOTIFY_ACK ids will be
+ * returned if they have been successfully acknowledged in each call.
+ */
+
+#define TCP_MAX_NOTIFY_ACK	10
+
+typedef	u_int32_t	tcp_notify_ack_id_t;
+
+struct tcp_notify_ack_complete {
+	u_int32_t	notify_pending;	/* still pending */
+	u_int32_t	notify_complete_count;
+	tcp_notify_ack_id_t notify_complete_id[TCP_MAX_NOTIFY_ACK];
+};
+
+#define	TCP_NOTIFY_ACKNOWLEDGEMENT	0x212	/* Notify when data is acknowledged */
 
 /*
  * The TCP_INFO socket option is a private API and is subject to change
@@ -260,6 +292,7 @@ struct tcphdr {
 #define	TCPI_OPT_ECN		0x08
 
 #define TCPI_FLAG_LOSSRECOVERY	0x01	/* Currently in loss recovery */
+#define	TCPI_FLAG_STREAMING_ON	0x02	/* Streaming detection on */
 
 struct tcp_conn_status {
 	unsigned int	probe_activated : 1;
@@ -297,10 +330,10 @@ struct tcp_info {
 	u_int32_t	tcpi_snd_wnd;		/* Advertised send window. */
 	u_int32_t	tcpi_snd_nxt;		/* Next egress seqno */
 	u_int32_t	tcpi_rcv_nxt;		/* Next ingress seqno */
-	
+
 	int32_t		tcpi_last_outif;	/* if_index of interface used to send last */
 	u_int32_t	tcpi_snd_sbbytes;	/* bytes in snd buffer including data inflight */
-	
+
 	u_int64_t	tcpi_txpackets __attribute__((aligned(8)));	/* total packets sent */
 	u_int64_t	tcpi_txbytes __attribute__((aligned(8)));
 									/* total bytes sent */	
@@ -333,17 +366,21 @@ struct tcp_info {
 	u_int64_t	tcpi_wired_txbytes __attribute((aligned(8)));	/* bytes transmitted over Wired */
 	struct tcp_conn_status	tcpi_connstatus; /* status of connection probes */
 
-	u_int16_t	/* Client-side information */
+	u_int16_t
 		tcpi_tfo_cookie_req:1, /* Cookie requested? */
 		tcpi_tfo_cookie_rcv:1, /* Cookie received? */
 		tcpi_tfo_syn_loss:1,   /* Fallback to reg. TCP after SYN-loss */
 		tcpi_tfo_syn_data_sent:1, /* SYN+data has been sent out */
 		tcpi_tfo_syn_data_acked:1, /* SYN+data has been fully acknowledged */
-		/* And the following are for server-side information (must be set on the listener socket) */
 		tcpi_tfo_syn_data_rcv:1, /* Server received SYN+data with a valid cookie */
 		tcpi_tfo_cookie_req_rcv:1, /* Server received cookie-request */
 		tcpi_tfo_cookie_sent:1, /* Server announced cookie */
-		tcpi_tfo_cookie_invalid:1; /* Server received an invalid cookie */
+		tcpi_tfo_cookie_invalid:1, /* Server received an invalid cookie */
+		tcpi_tfo_cookie_wrong:1, /* Our sent cookie was wrong */
+		tcpi_tfo_no_cookie_rcv:1, /* We did not receive a cookie upon our request */
+		tcpi_tfo_heuristics_disable:1, /* TFO-heuristics disabled it */
+		tcpi_tfo_send_blackhole:1, /* A sending-blackhole got detected */
+		tcpi_tfo_recv_blackhole:1; /* A receiver-blackhole got detected */
 
 	u_int16_t	tcpi_ecn_client_setup:1,	/* Attempted ECN setup from client side */
 			tcpi_ecn_server_setup:1,	/* Attempted ECN setup from server side */
@@ -435,18 +472,21 @@ struct tcp_connection_info {
         u_int32_t	tcpi_srtt;      /* average RTT in ms */
         u_int32_t	tcpi_rttvar;    /* RTT variance */
 	u_int32_t
-			/* Client-side information */
 			tcpi_tfo_cookie_req:1, /* Cookie requested? */
 			tcpi_tfo_cookie_rcv:1, /* Cookie received? */
 			tcpi_tfo_syn_loss:1,   /* Fallback to reg. TCP after SYN-loss */
 			tcpi_tfo_syn_data_sent:1, /* SYN+data has been sent out */
 			tcpi_tfo_syn_data_acked:1, /* SYN+data has been fully acknowledged */
-			/* And the following are for server-side information (must be set on the listener socket) */
 			tcpi_tfo_syn_data_rcv:1, /* Server received SYN+data with a valid cookie */
 			tcpi_tfo_cookie_req_rcv:1, /* Server received cookie-request */
 			tcpi_tfo_cookie_sent:1, /* Server announced cookie */
 			tcpi_tfo_cookie_invalid:1, /* Server received an invalid cookie */
-			__pad2:23;
+			tcpi_tfo_cookie_wrong:1, /* Our sent cookie was wrong */
+			tcpi_tfo_no_cookie_rcv:1, /* We did not receive a cookie upon our request */
+			tcpi_tfo_heuristics_disable:1, /* TFO-heuristics disabled it */
+			tcpi_tfo_send_blackhole:1, /* A sending-blackhole got detected */
+			tcpi_tfo_recv_blackhole:1, /* A receiver-blackhole got detected */
+			__pad2:18;
         u_int64_t	tcpi_txpackets __attribute__((aligned(8)));
         u_int64_t	tcpi_txbytes __attribute__((aligned(8)));
         u_int64_t	tcpi_txretransmitbytes __attribute__((aligned(8)));

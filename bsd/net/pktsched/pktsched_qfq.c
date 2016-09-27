@@ -1872,7 +1872,7 @@ qfq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags)
 
 	err = ifclassq_attach(ifq, PKTSCHEDT_QFQ, qif,
 	    qfq_enqueue_ifclassq, qfq_dequeue_ifclassq, NULL,
-	    qfq_request_ifclassq);
+	    NULL, qfq_request_ifclassq);
 
 	/* cache these for faster lookup */
 	if (err == 0) {

@@ -32,6 +32,7 @@
  *	This file contains machine independent code for performing core dumps.
  *
  */
+#if CONFIG_COREDUMP
 
 #include <mach/vm_param.h>
 #include <mach/thread_status.h>
@@ -65,6 +66,11 @@
 
 #include <security/audit/audit.h>
 
+#if CONFIG_CSR
+#include <sys/codesign.h>
+#include <sys/csr.h>
+#endif
+
 typedef struct {
 	int	flavor;			/* the number for this flavor */
 	mach_msg_type_number_t	count;	/* count of ints in this flavor */
@@ -90,18 +96,12 @@ typedef struct {
 	int flavor_count;
 } tir_t;
 
-/* XXX should be static */
-void collectth_state(thread_t th_act, void *tirp);
-
 extern int freespace_mb(vnode_t vp);
 
 /* XXX not in a Mach header anywhere */
-kern_return_t thread_getstatus(register thread_t act, int flavor,
+kern_return_t thread_getstatus(thread_t act, int flavor,
 	thread_state_t tstate, mach_msg_type_number_t *count);
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
-
-static cpu_type_t process_cpu_type(proc_t proc);
-static cpu_type_t process_cpu_subtype(proc_t proc);
 
 #ifdef SECURE_KERNEL
 __XNU_PRIVATE_EXTERN int do_coredump = 0;	/* default: don't dump cores */
@@ -142,7 +142,7 @@ process_cpu_subtype(proc_t core_proc)
 	return what_we_think;
 }
 
-void
+static void
 collectth_state(thread_t th_act, void *tirp)
 {
 	vm_offset_t	header;
@@ -180,7 +180,6 @@ collectth_state(thread_t th_act, void *tirp)
 
 		t->hoffset = hoffset;
 }
-
 
 /*
  * coredump
@@ -255,6 +254,20 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 #endif
 		return (EFAULT);
 	}
+
+#if CONFIG_CSR
+	/* If the process is restricted, CSR isn't configured to allow
+	 * restricted processes to be debugged, and CSR isn't configured in
+	 * AppleInternal mode, then don't dump core. */
+	if (cs_restricted(core_proc) &&
+	    csr_check(CSR_ALLOW_TASK_FOR_PID) &&
+	    csr_check(CSR_ALLOW_APPLE_INTERNAL)) {
+#if CONFIG_AUDIT
+		audit_proc_coredump(core_proc, NULL, EFAULT);
+#endif
+		return (EFAULT);
+	}
+#endif
 
 	if (IS_64BIT_PROCESS(core_proc)) {
 		is_64 = 1;
@@ -507,3 +520,11 @@ out2:
 
 	return (error);
 }
+
+#else /* CONFIG_COREDUMP */
+
+/* When core dumps aren't needed, no need to compile this file at all */
+
+#error assertion failed: this section is not compiled
+
+#endif /* CONFIG_COREDUMP */

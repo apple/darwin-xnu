@@ -310,7 +310,6 @@ commpage_init_cpu_capabilities( void )
 					CPUID_LEAF7_FEATURE_MPX);
 	setif(bits, kHasSGX,     cpuid_leaf7_features() &
 					CPUID_LEAF7_FEATURE_SGX);
-
 	uint64_t misc_enable = rdmsr64(MSR_IA32_MISC_ENABLE);
 	setif(bits, kHasENFSTRG, (misc_enable & 1ULL) &&
 				 (cpuid_leaf7_features() &
@@ -325,7 +324,7 @@ commpage_init_cpu_capabilities( void )
 static void
 commpage_mach_approximate_time_init(void)
 {
-        char *cp = commPagePtr32;
+	char *cp = commPagePtr32;
 	uint8_t supported;
 
 #ifdef CONFIG_MACH_APPROXIMATE_TIME
@@ -334,17 +333,32 @@ commpage_mach_approximate_time_init(void)
 	supported = 0;
 #endif
 	if ( cp ) {
-	        cp += (_COMM_PAGE_APPROX_TIME_SUPPORTED - _COMM_PAGE32_BASE_ADDRESS);
+		cp += (_COMM_PAGE_APPROX_TIME_SUPPORTED - _COMM_PAGE32_BASE_ADDRESS);
 		*(boolean_t *)cp = supported;
 	}
-        cp = commPagePtr64;
+	
+	cp = commPagePtr64;
 	if ( cp ) {
-	        cp += (_COMM_PAGE_APPROX_TIME_SUPPORTED - _COMM_PAGE32_START_ADDRESS);
+		cp += (_COMM_PAGE_APPROX_TIME_SUPPORTED - _COMM_PAGE32_START_ADDRESS);
 		*(boolean_t *)cp = supported;
 	}
 	commpage_update_mach_approximate_time(0);
 }
 
+static void
+commpage_mach_continuous_time_init(void)
+{
+	commpage_update_mach_continuous_time(0);
+}
+
+static void
+commpage_boottime_init(void)
+{
+	clock_sec_t secs;
+	clock_usec_t microsecs;
+	clock_get_boottime_microtime(&secs, &microsecs);
+	commpage_update_boottime(secs * USEC_PER_SEC + microsecs);
+}
 
 uint64_t
 _get_cpu_capabilities(void)
@@ -487,8 +501,10 @@ commpage_populate( void )
 
 	commpage_update_active_cpus();
 	commpage_mach_approximate_time_init();
+	commpage_mach_continuous_time_init();
+	commpage_boottime_init();
 	rtc_nanotime_init_commpage();
-	commpage_update_kdebug_enable();
+	commpage_update_kdebug_state();
 #if CONFIG_ATM
 	commpage_update_atm_diagnostic_config(atm_get_diagnostic_config());
 #endif
@@ -724,13 +740,15 @@ commpage_update_active_cpus(void)
 }
 
 /*
- * Update the commpage data with the value of the "kdebug_enable"
- * global so that userspace can avoid trapping into the kernel
- * for kdebug_trace() calls. Serialization is handled
- * by the caller in bsd/kern/kdebug.c.
+ * Update the commpage with current kdebug state. This currently has bits for
+ * global trace state, and typefilter enablement. It is likely additional state
+ * will be tracked in the future.
+ *
+ * INVARIANT: This value will always be 0 if global tracing is disabled. This
+ * allows simple guard tests of "if (*_COMM_PAGE_KDEBUG_ENABLE) { ... }"
  */
 void
-commpage_update_kdebug_enable(void)
+commpage_update_kdebug_state(void)
 {
 	volatile uint32_t *saved_data_ptr;
 	char *cp;
@@ -739,14 +757,14 @@ commpage_update_kdebug_enable(void)
 	if (cp) {
 		cp += (_COMM_PAGE_KDEBUG_ENABLE - _COMM_PAGE32_BASE_ADDRESS);
 		saved_data_ptr = (volatile uint32_t *)cp;
-		*saved_data_ptr = kdebug_enable;
+		*saved_data_ptr = kdebug_commpage_state();
 	}
 
 	cp = commPagePtr64;
-	if ( cp ) {
+	if (cp) {
 		cp += (_COMM_PAGE_KDEBUG_ENABLE - _COMM_PAGE32_START_ADDRESS);
 		saved_data_ptr = (volatile uint32_t *)cp;
-		*saved_data_ptr = kdebug_enable;
+		*saved_data_ptr = kdebug_commpage_state();
 	}
 }
 
@@ -810,6 +828,40 @@ commpage_update_mach_approximate_time(uint64_t abstime)
 #else
 #pragma unused (abstime)
 #endif
+}
+
+void
+commpage_update_mach_continuous_time(uint64_t sleeptime)
+{
+	char *cp;
+	cp = commPagePtr32;
+	if (cp) {
+		cp += (_COMM_PAGE_CONT_TIMEBASE - _COMM_PAGE32_START_ADDRESS);
+		*(uint64_t *)cp = sleeptime;
+	}
+	
+	cp = commPagePtr64;
+	if (cp) {
+		cp += (_COMM_PAGE_CONT_TIMEBASE - _COMM_PAGE32_START_ADDRESS);
+		*(uint64_t *)cp = sleeptime;
+	}
+}
+
+void
+commpage_update_boottime(uint64_t boottime)
+{
+	char *cp;
+	cp = commPagePtr32;
+	if (cp) {
+		cp += (_COMM_PAGE_BOOTTIME_USEC - _COMM_PAGE32_START_ADDRESS);
+		*(uint64_t *)cp = boottime;
+	}
+
+	cp = commPagePtr64;
+	if (cp) {
+		cp += (_COMM_PAGE_BOOTTIME_USEC - _COMM_PAGE32_START_ADDRESS);
+		*(uint64_t *)cp = boottime;
+	}
 }
 
 

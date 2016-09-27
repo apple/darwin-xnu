@@ -33,6 +33,8 @@ DATAFILES = \
 	chmod.2			\
 	chown.2			\
 	chroot.2		\
+	clonefile.2		\
+	clonefileat.2		\
 	close.2			\
 	connect.2		\
 	connectx.2		\
@@ -48,6 +50,7 @@ DATAFILES = \
 	fchmodat.2		\
 	fchown.2		\
 	fchownat.2		\
+	fclonefileat.2		\
 	fcntl.2			\
 	fgetattrlist.2		\
 	fsetattrlist.2		\
@@ -77,6 +80,7 @@ DATAFILES = \
 	getdirentriesattr.2	\
 	getdtablesize.2		\
 	getegid.2		\
+	getentropy.2    \
 	geteuid.2		\
 	getfh.2			\
 	getfsstat.2		\
@@ -136,7 +140,7 @@ DATAFILES = \
 	openat.2		\
 	pathconf.2		\
 	pipe.2			\
-	poll.2 			\
+	poll.2			\
 	posix_madvise.2		\
 	pread.2			\
 	profil.2		\
@@ -155,6 +159,8 @@ DATAFILES = \
 	recvmsg.2		\
 	rename.2		\
 	renameat.2		\
+	renamex_np.2		\
+	renameatx_np.2		\
 	removexattr.2		\
 	revoke.2		\
 	rmdir.2			\
@@ -215,7 +221,6 @@ DATAFILES = \
 	symlink.2		\
 	symlinkat.2		\
 	sync.2			\
-	syscall.2		\
 	truncate.2		\
 	umask.2			\
 	undelete.2		\
@@ -242,4 +247,3 @@ INSTALL_MAN_DIR = man2
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

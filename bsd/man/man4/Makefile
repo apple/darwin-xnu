@@ -23,7 +23,6 @@ DATAFILES = \
 	inet6.4	\
 	ip.4	\
 	ip6.4	\
-	ipfirewall.4	\
 	ipl.4	\
 	ipsec.4	\
 	lo.4	\
@@ -50,4 +49,3 @@ INSTALL_MAN_DIR = man4
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -108,6 +108,7 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/in_systm.h>
+#include <netinet/in_tclass.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
@@ -117,7 +118,6 @@
 #include <netinet6/ip6protosw.h>
 #include <netinet6/scope6_var.h>
 #include <netinet6/raw_ip6.h>
-#include <netinet6/ip6_fw.h>
 
 #if IPSEC
 #include <netinet6/ipsec.h>
@@ -211,7 +211,7 @@ rip6_input(
 						m_freem(opts);
 						last = in6p;
 						continue;
-					} 
+					}
 				}
 				/* strip intermediate headers */
 				m_adj(n, *offp);
@@ -247,7 +247,7 @@ rip6_input(
 				ip6stat.ip6s_delivered--;
 				goto unlock;
 			}
-				
+
 		}
 		/* strip intermediate headers */
 		m_adj(m, *offp);
@@ -298,9 +298,10 @@ rip6_ctlinput(
 
 	if ((unsigned)cmd >= PRC_NCMDS)
 		return;
-	if (PRC_IS_REDIRECT(cmd))
-		notify = in6_rtchange, d = NULL;
-	else if (cmd == PRC_HOSTDEAD)
+	if (PRC_IS_REDIRECT(cmd)) {
+		notify = in6_rtchange;
+		d = NULL;
+	} else if (cmd == PRC_HOSTDEAD)
 		d = NULL;
 	else if (inet6ctlerrmap[cmd] == 0)
 		return;
@@ -344,9 +345,10 @@ rip6_output(
 	struct ip6_moptions *im6o = NULL;
 	struct ifnet *oifp = NULL;
 	int type = 0, code = 0;		/* for ICMPv6 output statistics only */
-	mbuf_svc_class_t msc = MBUF_SC_UNSPEC;
+	int sotc = SO_TC_UNSPEC;
+	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 	struct ip6_out_args ip6oa =
-	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF, 0 };
+	    { IFSCOPE_NONE, { 0 }, IP6OAF_SELECT_SRCIF, 0, 0, 0 };
 	int flags = IPV6_OUTARGS;
 
 	in6p = sotoin6pcb(so);
@@ -377,10 +379,12 @@ rip6_output(
 		ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
 	if (INP_AWDL_UNRESTRICTED(in6p))
 		ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
+	if (INP_INTCOPROC_ALLOWED(in6p))
+		ip6oa.ip6oa_flags |= IP6OAF_INTCOPROC_ALLOWED;
 
 	dst = &dstsock->sin6_addr;
 	if (control) {
-		msc = mbuf_service_class_from_control(control);
+		sotc = so_tc_from_control(control, &netsvctype);
 
 		if ((error = ip6_setpktopts(control, &opt, NULL,
 		    SOCK_PROTO(so))) != 0)
@@ -388,6 +392,12 @@ rip6_output(
 		optp = &opt;
 	} else
 		optp = in6p->in6p_outputopts;
+	if (sotc == SO_TC_UNSPEC) {
+		sotc = so->so_traffic_class;
+		netsvctype = so->so_netsvctype;
+	}
+	ip6oa.ip6oa_sotc = sotc;
+	ip6oa.ip6oa_netsvctype = netsvctype;
 
 	/*
 	 * For an ICMPv6 packet, we should know its type and code
@@ -459,8 +469,8 @@ rip6_output(
 			ifnet_reference(oifp);
 			ip6->ip6_dst.s6_addr16[1] = htons(oifp->if_index);
 		} else if (dstsock->sin6_scope_id) {
-			/* 
-			 * boundary check 
+			/*
+			 * boundary check
 			 *
 			 * Sinced stsock->sin6_scope_id is unsigned, we don't
 			 * need to check if it's < 0
@@ -554,6 +564,39 @@ rip6_output(
 	{
 		necp_kernel_policy_id policy_id;
 		u_int32_t route_rule_id;
+
+		/*
+		 * We need a route to perform NECP route rule checks
+		 */
+		if (net_qos_policy_restricted != 0 &&
+		    ROUTE_UNUSABLE(&in6p->in6p_route)) {
+			struct sockaddr_in6 to;
+			struct sockaddr_in6 from;
+
+			ROUTE_RELEASE(&in6p->in6p_route);
+
+			bzero(&from, sizeof(struct sockaddr_in6));
+			from.sin6_family = AF_INET6;
+			from.sin6_len = sizeof(struct sockaddr_in6);
+			from.sin6_addr = ip6->ip6_src;
+
+			bzero(&to, sizeof(struct sockaddr_in6));
+			to.sin6_family = AF_INET6;
+			to.sin6_len = sizeof(struct sockaddr_in6);
+			to.sin6_addr = ip6->ip6_dst;
+
+			in6p->in6p_route.ro_dst.sin6_family = AF_INET6;
+			in6p->in6p_route.ro_dst.sin6_len = sizeof(struct sockaddr_in6);
+			((struct sockaddr_in6 *)(void *)&in6p->in6p_route.ro_dst)->sin6_addr =
+				ip6->ip6_dst;
+
+			rtalloc_scoped((struct route *)&in6p->in6p_route, ip6oa.ip6oa_boundif);
+
+			inp_update_necp_policy(in6p, (struct sockaddr *)&from,
+			    (struct sockaddr *)&to, ip6oa.ip6oa_boundif);
+			in6p->inp_policyresult.results.qos_marking_gencount = 0;
+		}
+
 		if (!necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
 			&ip6->ip6_src, &ip6->ip6_dst, NULL, &policy_id, &route_rule_id)) {
 			error = EHOSTUNREACH;
@@ -561,8 +604,15 @@ rip6_output(
 		}
 
 		necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id);
+
+		if (net_qos_policy_restricted != 0) {
+			necp_socket_update_qos_marking(in6p, in6p->in6p_route.ro_rt,
+			    NULL, route_rule_id);
+		}
 	}
 #endif /* NECP */
+	if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED))
+		ip6oa.ip6oa_flags |= IP6OAF_QOSMARKING_ALLOWED;
 
 #if IPSEC
 	if (in6p->in6p_sp != NULL && ipsec_setsocket(m, so) != 0) {
@@ -579,7 +629,7 @@ rip6_output(
 		oifp = NULL;
 	}
 
-	set_packet_service_class(m, so, msc, PKT_SCF_IPV6);
+	set_packet_service_class(m, so, sotc, PKT_SCF_IPV6);
 	m->m_pkthdr.pkt_flowsrc = FLOWSRC_INPCB;
 	m->m_pkthdr.pkt_flowid = in6p->inp_flowhash;
 	m->m_pkthdr.pkt_flags |= (PKTF_FLOW_ID | PKTF_FLOW_LOCALSRC |
@@ -659,14 +709,6 @@ freectl:
 	return(error);
 }
 
-#if IPFW2
-__private_extern__ void
-load_ip6fw(void)
-{
-	ip6_fw_init();
-}
-#endif
-
 /*
  * Raw IPv6 socket option processing.
  */
@@ -693,17 +735,6 @@ rip6_ctloutput(
 	switch (sopt->sopt_dir) {
 	case SOPT_GET:
 		switch (sopt->sopt_name) {
-#if IPFW2
-		case IPV6_FW_ADD:
-		case IPV6_FW_GET:
-			if (ip6_fw_ctl_ptr == 0)
-				load_ip6fw();
-			if (ip6_fw_ctl_ptr)
-				error = ip6_fw_ctl_ptr(sopt);
-			else
-				error = ENOPROTOOPT;
-			break;
-#endif
 		case IPV6_CHECKSUM:
 			error = ip6_raw_ctloutput(so, sopt);
 			break;
@@ -715,20 +746,6 @@ rip6_ctloutput(
 
 	case SOPT_SET:
 		switch (sopt->sopt_name) {
-#if IPFW2
-		case IPV6_FW_ADD:
-		case IPV6_FW_DEL:
-		case IPV6_FW_FLUSH:
-		case IPV6_FW_ZERO:
-			if (ip6_fw_ctl_ptr == 0)
-				load_ip6fw();
-			if (ip6_fw_ctl_ptr)
-				error = ip6_fw_ctl_ptr(sopt);
-			else
-				error = ENOPROTOOPT;
-			break;
-#endif
-
 		case IPV6_CHECKSUM:
 			error = ip6_raw_ctloutput(so, sopt);
 			break;
@@ -906,6 +923,10 @@ rip6_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 		addr->sin6_scope_id = scope6_addr2default(&addr->sin6_addr);
 	}
 #endif
+
+	/* KAME hack: embed scopeid */
+	if (in6_embedscope(&SIN6(nam)->sin6_addr, SIN6(nam), inp, NULL, NULL) != 0)
+		return (EINVAL);
 
 	ifscope = (inp->inp_flags & INP_BOUND_IF) ?
 	    inp->inp_boundifp->if_index : IFSCOPE_NONE;

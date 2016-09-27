@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -970,6 +970,7 @@ cpu_thread_init(void)
  * Called for a cpu to halt permanently
  * (as opposed to halting and expecting an interrupt to awaken it).
  */
+__attribute__((noreturn))
 void
 cpu_thread_halt(void)
 {

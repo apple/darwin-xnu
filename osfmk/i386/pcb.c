@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,6 +77,7 @@
 #include <kern/assert.h>
 #include <kern/spl.h>
 #include <kern/machine.h>
+#include <kern/kpc.h>
 #include <ipc/ipc_port.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
@@ -93,11 +94,6 @@
 #include <i386/thread.h>
 #include <i386/machine_routines.h>
 #include <i386/lapic.h> /* LAPIC_PMC_SWI_VECTOR */
-
-#if KPERF
-#include <kperf/kperf.h>
-#include <kperf/kperf_kpc.h>
-#endif
 
 #if HYPERVISOR
 #include <kern/hv_support.h>
@@ -394,6 +390,15 @@ machine_load_context(
 	Load_context(new);
 }
 
+static inline void pmap_switch_context(thread_t ot, thread_t nt, int cnum) {
+	pmap_assert(ml_get_interrupts_enabled() == FALSE);
+	vm_map_t nmap = nt->map, omap = ot->map;
+	if ((omap != nmap) || (nmap->pmap->pagezero_accessible)) {
+		PMAP_DEACTIVATE_MAP(omap, ot, cnum);
+		PMAP_ACTIVATE_MAP(nmap, nt, cnum);
+	}
+}
+
 /*
  * Switch to a new thread.
  * Save the old thread`s kernel state or continuation,
@@ -406,11 +411,11 @@ machine_switch_context(
 	thread_t			new)
 {
 #if MACH_RT
-        assert(current_cpu_datap()->cpu_active_stack == old->kernel_stack);
+	assert(current_cpu_datap()->cpu_active_stack == old->kernel_stack);
 #endif
-#if KPERF
-	kperf_kpc_cswitch(old, new);
-#endif
+
+	kpc_off_cpu(old);
+
 	/*
 	 *	Save FP registers if in use.
 	 */
@@ -420,7 +425,7 @@ machine_switch_context(
 	new->machine.specFlags |= OnProc;
 
 	/*
- 	 * Monitor the stack depth and report new max,
+	 * Monitor the stack depth and report new max,
 	 * not worrying about races.
 	 */
 	vm_offset_t	depth = current_stack_depth();
@@ -435,7 +440,7 @@ machine_switch_context(
 	 *	Switch address maps if need be, even if not switching tasks.
 	 *	(A server activation may be "borrowing" a client map.)
 	 */
-	PMAP_SWITCH_CONTEXT(old, new, cpu_number());
+	pmap_switch_context(old, new, cpu_number());
 
 	/*
 	 *	Load the rest of the user state for the new thread
@@ -459,7 +464,7 @@ machine_processor_shutdown(
 	vmx_suspend();
 #endif
 	fpu_save_context(thread);
-	PMAP_SWITCH_CONTEXT(thread, processor->idle_thread, cpu_number());
+	pmap_switch_context(thread, processor->idle_thread, cpu_number());
 	return(Shutdown_context(thread, doshutdown, processor));
 }
 
@@ -992,8 +997,6 @@ machine_thread_set_state(
 			return set_thread_state32(thr_act, &state->uts.ts32);
 		} else
 			return(KERN_INVALID_ARGUMENT);
-
-		break;
 	}
 	case x86_DEBUG_STATE32:
 	{
@@ -1767,9 +1770,7 @@ machine_stack_handoff(thread_t old,
 	assert(new);
 	assert(old);
 
-#if KPERF
-	kperf_kpc_cswitch(old, new);
-#endif
+	kpc_off_cpu(old);
 
 	stack = old->kernel_stack;
 	if (stack == old->reserved_stack) {
@@ -1789,7 +1790,7 @@ machine_stack_handoff(thread_t old,
 	old->machine.specFlags &= ~OnProc;
 	new->machine.specFlags |= OnProc;
 
-	PMAP_SWITCH_CONTEXT(old, new, cpu_number());
+	pmap_switch_context(old, new, cpu_number());
 	act_machine_switch_pcb(old, new);
 
 #if HYPERVISOR

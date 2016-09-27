@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <kern/backtrace.h>
 #include <mach/sdt.h>
 #include <vm/vm_map_store.h>
 #include <vm/vm_pageout.h> /* for vm_debug_events */
@@ -60,8 +61,8 @@ vm_map_store_init( struct vm_map_header *hdr )
 
 boolean_t
 vm_map_store_lookup_entry(
-	register vm_map_t		map,
-	register vm_map_offset_t	address,
+	vm_map_t		map,
+	vm_map_offset_t		address,
 	vm_map_entry_t		*entry)		/* OUT */
 {
 #ifdef VM_MAP_STORE_USE_LL
@@ -149,8 +150,8 @@ _vm_map_store_entry_link( struct vm_map_header * mapHdr, vm_map_entry_t after_wh
 	}
 #endif
 #if MAP_ENTRY_INSERTION_DEBUG
-	fastbacktrace(&entry->vme_insertion_bt[0],
-		      (sizeof (entry->vme_insertion_bt) / sizeof (uintptr_t)));
+	backtrace(&entry->vme_insertion_bt[0],
+	          (sizeof (entry->vme_insertion_bt) / sizeof (uintptr_t)));
 #endif
 }
 

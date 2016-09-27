@@ -78,7 +78,7 @@ mkioconf(void)
 void
 pseudo_inits(FILE *fp)
 {
-	register struct device *dp;
+	struct device *dp;
 	int count;
 
 	fprintf(fp, "\n");

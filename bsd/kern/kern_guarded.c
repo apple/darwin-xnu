@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -45,9 +45,6 @@
 #include <sys/kdebug.h>
 #include <stdbool.h>
 #include <vm/vm_protos.h>
-#if CONFIG_PROTECT
-#include <sys/cprotect.h>
-#endif
 
 
 #define f_flag f_fglob->fg_flag
@@ -958,4 +955,29 @@ ExitThisRoutine:
 		uio_free(auio);
 	}
 	return (error);
+}
+
+/*
+ * int falloc_guarded(struct proc *p, struct fileproc **fp, int *fd,
+ *     vfs_context_t ctx, const guardid_t *guard, u_int attrs);
+ *
+ * This SPI is the guarded variant of falloc().  It borrows the same
+ * restrictions as those used by the rest of the guarded_* routines.
+ */
+int
+falloc_guarded(struct proc *p, struct fileproc **fp, int *fd,
+    vfs_context_t ctx, const guardid_t *guard, u_int attrs)
+{
+	struct gfp_crarg crarg;
+
+	if (((attrs & GUARD_REQUIRED) != GUARD_REQUIRED) ||
+	    ((attrs & ~GUARD_ALL) != 0) || (*guard == 0))
+		return (EINVAL);
+
+	bzero(&crarg, sizeof (crarg));
+	crarg.gca_guard = *guard;
+	crarg.gca_attrs = attrs;
+
+	return (falloc_withalloc(p, fp, fd, ctx, guarded_fileproc_alloc_init,
+	    &crarg));
 }

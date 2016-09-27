@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -120,7 +120,6 @@
 #define SIOCAUTOADDR	_IOWR('i', 38, struct ifreq)	/* autoconf address */
 #define SIOCAUTONETMASK	_IOW('i', 39, struct ifreq)	/* autoconf netmask */
 #define SIOCARPIPLL		_IOWR('i', 40, struct ifreq)	/* arp for IPv4LL address */
-
 
 #define	SIOCADDMULTI	 _IOW('i', 49, struct ifreq)	/* add m'cast addr */
 #define	SIOCDELMULTI	 _IOW('i', 50, struct ifreq)	/* del m'cast addr */
@@ -256,6 +255,7 @@
 #define	SIOCDIFAGENTID	_IOWR('i', 166, struct if_agentidreq) /* Delete netagent id */
 #define	SIOCGIFAGENTIDS	_IOWR('i', 167, struct if_agentidsreq) /* Get netagent ids */
 #define	SIOCGIFAGENTDATA	_IOWR('i', 168, struct netagent_req) /* Get netagent data */
+
 #ifdef BSD_KERNEL_PRIVATE
 #define	SIOCGIFAGENTIDS32	_IOWR('i', 167, struct if_agentidsreq32)
 #define	SIOCGIFAGENTIDS64	_IOWR('i', 167, struct if_agentidsreq64)
@@ -274,6 +274,30 @@
 
 #define	SIOCGECNMODE		_IOWR('i', 176, struct ifreq)
 #define	SIOCSECNMODE		_IOW('i', 177, struct ifreq)
+
+#define	SIOCSIFORDER	_IOWR('i', 178, struct if_order)
+#define	SIOCGIFORDER	_IOWR('i', 179, struct if_order)
+
+#define	SIOCSQOSMARKINGMODE	_IOWR('i', 180, struct ifreq)
+#define	SIOCSFASTLANECAPABLE	SIOCSQOSMARKINGMODE
+#define	SIOCSQOSMARKINGENABLED	_IOWR('i', 181, struct ifreq)
+#define	SIOCSFASTLEENABLED	SIOCSQOSMARKINGENABLED
+#define	SIOCGQOSMARKINGMODE	_IOWR('i', 182, struct ifreq)
+#define	SIOCGQOSMARKINGENABLED	_IOWR('i', 183, struct ifreq)
+
+
+#define	SIOCSIFTIMESTAMPENABLE	_IOWR('i', 184, struct ifreq)
+#define	SIOCSIFTIMESTAMPDISABLE	_IOWR('i', 185, struct ifreq)
+#define	SIOCGIFTIMESTAMPENABLED	_IOWR('i', 186, struct ifreq)
+
+#define	SIOCSIFDISABLEOUTPUT	_IOWR('i', 187, struct ifreq)
+
+#define	SIOCGIFAGENTLIST	_IOWR('i', 190, struct netagentlist_req) /* Get netagent dump */
+#ifdef BSD_KERNEL_PRIVATE
+#define	SIOCGIFAGENTLIST32		_IOWR('i', 190, struct netagentlist_req32)
+#define	SIOCGIFAGENTLIST64		_IOWR('i', 190, struct netagentlist_req64)
+#endif /* BSD_KERNEL_PRIVATE */
+
 #endif /* PRIVATE */
 
 #endif /* !_SYS_SOCKIO_H_ */

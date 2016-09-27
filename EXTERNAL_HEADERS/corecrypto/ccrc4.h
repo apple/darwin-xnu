@@ -23,7 +23,7 @@ cc_aligned_struct(16) ccrc4_ctx;
 struct ccrc4_info {
     size_t size;        /* first argument to ccrc4_ctx_decl(). */
     void (*init)(ccrc4_ctx *ctx, size_t key_len, const void *key);
-    void (*crypt)(ccrc4_ctx *ctx, unsigned long nbytes, const void *in, void *out);
+    void (*crypt)(ccrc4_ctx *ctx, size_t nbytes, const void *in, void *out);
 };
 
 
@@ -34,7 +34,7 @@ extern const struct ccrc4_info ccrc4_eay;
 struct ccrc4_vector {
     size_t keylen;
     const void *key;
-    unsigned long datalen;
+    size_t datalen;
     const void *pt;
     const void *ct;
 };

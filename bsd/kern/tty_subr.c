@@ -203,8 +203,8 @@ int
 ndqb(struct clist *clp, int flag)
 {
 	int count = 0;
-	register int i;
-	register int cc;
+	int i;
+	int cc;
 
 	if ((cc = clp->c_cc) == 0)
 		goto out;
@@ -271,7 +271,7 @@ ndflush(struct clist *clp, int count)
 int
 putc(int c, struct clist *clp)
 {
-	register int i;
+	int i;
 
 	if (clp->c_cc == 0) {
 		if (!clp->c_cs) {
@@ -320,7 +320,7 @@ void
 clrbits(u_char *cp, int off, int len)
 {
 	int sby, sbi, eby, ebi;
-	register int i;
+	int i;
 	u_char mask;
 
 	if(len==1) {

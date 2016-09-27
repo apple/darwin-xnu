@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -131,6 +131,7 @@ extern boolean_t dtrace_tally_fault(user_addr_t);
 extern boolean_t pmap_smep_enabled;
 extern boolean_t pmap_smap_enabled;
 
+__attribute__((noreturn))
 void
 thread_syscall_return(
         kern_return_t ret)
@@ -512,7 +513,7 @@ kernel_trap(
 #if NCOPY_WINDOWS > 0
 	int			fault_in_copy_window = -1;
 #endif
-	int			is_user = 0;
+	int			is_user;
 	int			trap_pl = get_preemption_level();
 
 	thread = current_thread();
@@ -531,6 +532,8 @@ kernel_trap(
 	kern_ip = (vm_offset_t)saved_state->isf.rip;
 
 	myast = ast_pending();
+
+	is_user = (vaddr < VM_MAX_USER_PAGE_ADDRESS);
 
 	perfASTCallback astfn = perfASTHook;
 	if (__improbable(astfn != NULL)) {
@@ -567,7 +570,14 @@ kernel_trap(
 			0, 0, 0, VM_KERNEL_UNSLIDE(kern_ip), 0);
 		return;
 	}
-	
+
+	user_addr_t	kd_vaddr = is_user ? vaddr : VM_KERNEL_UNSLIDE(vaddr);
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		(MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
+		(unsigned)(kd_vaddr >> 32), (unsigned)kd_vaddr, is_user,
+		VM_KERNEL_UNSLIDE(kern_ip), 0);
+
+
 	if (T_PAGE_FAULT == type) {
 		/*
 		 * assume we're faulting in the kernel map
@@ -602,13 +612,11 @@ kernel_trap(
 					map = thread->map;
 					fault_in_copy_window = window_index;
 				}
-				is_user = -1;
 			}
 #else
 			if (__probable(vaddr < VM_MAX_USER_PAGE_ADDRESS)) {
 				/* fault occurred in userspace */
 				map = thread->map;
-				is_user = -1;
 
 				/* Intercept a potential Supervisor Mode Execute
 				 * Protection fault. These criteria identify
@@ -617,7 +625,8 @@ kernel_trap(
 				 * (The VM could just redrive a SMEP fault, hence
 				 * the intercept).
 				 */
-				if (__improbable((code == (T_PF_PROT | T_PF_EXECUTE)) && (pmap_smep_enabled) && (saved_state->isf.rip == vaddr))) {
+				if (__improbable((code == (T_PF_PROT | T_PF_EXECUTE)) &&
+					(pmap_smep_enabled) && (saved_state->isf.rip == vaddr))) {
 					goto debugger_entry;
 				}
 
@@ -644,17 +653,14 @@ kernel_trap(
 					set_cr3_raw(map->pmap->pm_cr3);
 					return;
 				}
-
+				if (__improbable(vaddr < PAGE_SIZE) &&
+				    ((thread->machine.specFlags & CopyIOActive) == 0)) {
+					goto debugger_entry;
+				}
 			}
 #endif
 		}
 	}
-	user_addr_t	kd_vaddr = is_user ? vaddr : VM_KERNEL_UNSLIDE(vaddr);	
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-		(MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
-		(unsigned)(kd_vaddr >> 32), (unsigned)kd_vaddr, is_user,
-		VM_KERNEL_UNSLIDE(kern_ip), 0);
-
 
 	(void) ml_set_interrupts_enabled(intr);
 
@@ -714,8 +720,7 @@ kernel_trap(
 		        prot |= VM_PROT_EXECUTE;
 
 		result = vm_fault(map,
-				  vm_map_trunc_page(vaddr,
-						    PAGE_MASK),
+				  vaddr,
 				  prot,
 				  FALSE, 
 				  THREAD_UNINT, NULL, 0);
@@ -781,10 +786,8 @@ debugger_entry:
 		 */
 		sync_iss_to_iks(state);
 #if  MACH_KDP
-		if (current_debugger != KDB_CUR_DB) {
-			if (kdp_i386_trap(type, saved_state, result, (vm_offset_t)vaddr))
-				return;
-		}
+		if (kdp_i386_trap(type, saved_state, result, (vm_offset_t)vaddr))
+			return;
 #endif
 	}
 	pal_cli();
@@ -800,9 +803,6 @@ set_recovery_ip(x86_saved_state64_t  *saved_state, vm_offset_t ip)
 {
         saved_state->isf.rip = ip;
 }
-
-
-
 
 static void
 panic_trap(x86_saved_state64_t *regs, uint32_t pl)
@@ -1090,8 +1090,7 @@ user_trap(
 		if (__improbable(err & T_PF_EXECUTE))
 		        prot |= VM_PROT_EXECUTE;
 		kret = vm_fault(thread->map,
-				vm_map_trunc_page(vaddr,
-						  PAGE_MASK),
+				vaddr,
 				prot, FALSE,
 				THREAD_ABORTSAFE, NULL, 0);
 

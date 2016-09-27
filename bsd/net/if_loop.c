@@ -254,6 +254,36 @@ lo_del_proto(struct ifnet *ifp, protocol_family_t protocol)
 	return (0);
 }
 
+static void
+lo_tx_compl(struct ifnet *ifp, struct mbuf *m)
+{
+	errno_t error;
+
+	if ((ifp->if_xflags & IFXF_TIMESTAMP_ENABLED) != 0) {
+		boolean_t requested;
+
+		error = mbuf_get_timestamp_requested(m, &requested);
+		if (requested) {
+			struct timespec now;
+			u_int64_t ts;
+
+			nanouptime(&now);
+			net_timernsec(&now, &ts);
+
+			error = mbuf_set_timestamp(m, ts, TRUE);
+			if (error != 0)
+				printf("%s: mbuf_set_timestamp() failed %d\n",
+					__func__, error);
+		}
+	}
+	error = mbuf_set_status(m, KERN_SUCCESS);
+	if (error != 0)
+		printf("%s: mbuf_set_status() failed %d\n",
+			__func__, error);
+
+	ifnet_tx_compl(ifp, m);
+}
+
 /*
  * Output callback.
  *
@@ -296,6 +326,7 @@ lo_output(struct ifnet *ifp, struct mbuf *m_list)
 		if (m->m_nextpkt == NULL) {
 			m_tail = m;
 		}
+		lo_tx_compl(ifp, m);
 	}
 
 	s.packets_in = cnt;
@@ -404,6 +435,7 @@ lo_start(struct ifnet *ifp)
 			if (cnt >= if_bw_measure_size)
 				ifnet_transmit_burst_end(ifp, m_tail);
 		}
+		lo_tx_compl(ifp, m);
 
 		/* stats are required for extended variant */
 		s.packets_in = cnt;
@@ -457,6 +489,21 @@ static errno_t
 lo_input(struct ifnet *ifp, protocol_family_t protocol_family, struct mbuf *m)
 {
 #pragma unused(ifp, protocol_family)
+
+	if ((ifp->if_xflags & IFXF_TIMESTAMP_ENABLED) != 0) {
+		errno_t error;
+		struct timespec now;
+		u_int64_t ts;
+
+		nanouptime(&now);
+		net_timernsec(&now, &ts);
+
+		error = mbuf_set_timestamp(m, ts, TRUE);
+		if (error != 0)
+			printf("%s: mbuf_set_timestamp() failed %d\n",
+				__func__, error);
+	}
+
 	if (proto_input(protocol_family, m) != 0)
 		m_freem(m);
 	return (0);
@@ -536,6 +583,8 @@ lo_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 	}
 
 	case SIOCSIFFLAGS:		/* struct ifreq */
+	case SIOCSIFTIMESTAMPENABLE:
+	case SIOCSIFTIMESTAMPDISABLE:
 		break;
 
 	default:
@@ -659,7 +708,8 @@ loopattach(void)
 	ifnet_set_offload(lo_ifp,
 	    IFNET_CSUM_IP | IFNET_CSUM_TCP | IFNET_CSUM_UDP |
 	    IFNET_CSUM_TCPIPV6 | IFNET_CSUM_UDPIPV6 | IFNET_IPV6_FRAGMENT |
-	    IFNET_CSUM_FRAGMENT | IFNET_IP_FRAGMENT | IFNET_MULTIPAGES);
+	    IFNET_CSUM_FRAGMENT | IFNET_IP_FRAGMENT | IFNET_MULTIPAGES |
+	    IFNET_TX_STATUS | IFNET_SW_TIMESTAMP);
 	ifnet_set_hdrlen(lo_ifp, sizeof (struct loopback_header));
 	ifnet_set_eflags(lo_ifp, IFEF_SENDLIST, IFEF_SENDLIST);
 
@@ -715,6 +765,7 @@ sysctl_sched_model SYSCTL_HANDLER_ARGS
 	switch (i) {
 	case IFNET_SCHED_MODEL_NORMAL:
 	case IFNET_SCHED_MODEL_DRIVER_MANAGED:
+	case IFNET_SCHED_MODEL_FQ_CODEL:
 		break;
 
 	default:

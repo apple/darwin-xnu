@@ -46,7 +46,7 @@
 .Ft int
 .Fn getdirentries "int fd" "char *buf" "int nbytes" "long *basep"
 .Sh DESCRIPTION
-.Fn Getdirentries
+.Fn getdirentries
 reads directory entries from the directory
 referenced by the file descriptor
 .Fa fd
@@ -129,7 +129,7 @@ The pointer may not advance by the number of bytes returned by
 A value of zero is returned when
 the end of the directory has been reached.
 .Pp
-.Fn Getdirentries
+.Fn getdirentries
 writes the position of the block read into the location pointed to by
 .Fa basep .
 Alternatively, the current position pointer may be set and retrieved by
@@ -171,7 +171,7 @@ Otherwise, -1 is returned and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Getdirentries
+.Fn getdirentries
 will fail if:
 .Bl -tag -width Er
 .It Bq Er EBADF

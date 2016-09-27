@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -3958,22 +3958,16 @@ igmp_rec_type_to_str(const int type)
 	switch (type) {
 		case IGMP_CHANGE_TO_EXCLUDE_MODE:
 			return "TO_EX";
-			break;
 		case IGMP_CHANGE_TO_INCLUDE_MODE:
 			return "TO_IN";
-			break;
 		case IGMP_MODE_IS_EXCLUDE:
 			return "MODE_EX";
-			break;
 		case IGMP_MODE_IS_INCLUDE:
 			return "MODE_IN";
-			break;
 		case IGMP_ALLOW_NEW_SOURCES:
 			return "ALLOW_NEW";
-			break;
 		case IGMP_BLOCK_OLD_SOURCES:
 			return "BLOCK_OLD";
-			break;
 		default:
 			break;
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -41,10 +41,10 @@
 #define pal_sti()			__asm__ volatile ("sti")
 #define pal_cli()			__asm__ volatile ("cli")
 
-static inline
-void pal_stop_cpu(boolean_t cli)
+static inline void
+pal_stop_cpu(boolean_t cli)
 {
-	if( cli )
+	if (cli)
 		__asm__ volatile ( "cli" );
 	__asm__ volatile ( "wbinvd; hlt" );
 }
@@ -54,7 +54,6 @@ void pal_stop_cpu(boolean_t cli)
 #define pal_execve_return(t)
 #define pal_thread_terminate_self(t)
 #define pal_ast_check(t)
-#define pal_switch_pmap(t,u,v)
 
 #define	panic_display_pal_info() do { } while(0)
 #define	pal_kernel_announce() do { } while(0)

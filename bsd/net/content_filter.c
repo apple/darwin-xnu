@@ -3201,11 +3201,13 @@ cfil_action_drop(struct socket *so, uint32_t kcunit)
 	 * (forcing fixed along with rdar://19391339)
 	 */
 	error = sosetdefunct(p, so,
-		SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL, FALSE);
+	    SHUTDOWN_SOCKET_LEVEL_CONTENT_FILTER | SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL,
+	    FALSE);
 
 	/* Flush the socket buffer and disconnect */
 	if (error == 0)
-		error = sodefunct(p, so, SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL);
+		error = sodefunct(p, so,
+		    SHUTDOWN_SOCKET_LEVEL_CONTENT_FILTER | SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL);
 
 	/* The filter is done, mark as detached */
 	entry->cfe_flags |= CFEF_CFIL_DETACHED;

@@ -53,7 +53,7 @@ $(OBJPATH)/allsymbols: $(OBJPATH)/$(KERNEL_FILE_NAME)
 	$(_v)$(NM) -gj $< > $@
 
 $(SYMBOL_SET_BUILD): $(OBJPATH)/%.symbolset :  %.exports %.$(EXPORT_SOURCE_ARCH_CONFIG_LC).exports $(OBJPATH)/allsymbols $(KEXT_CREATE_SYMBOL_SET)
-	@echo SYMBOLSET $* "($(CURRENT_ARCH_CONFIG_LC))"
+	@echo "$(ColorH)SYMBOLSET$(Color0)  $(ColorF)$*$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
 	$(_v)$(KEXT_CREATE_SYMBOL_SET)					\
 		$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))			\
 		-import $(OBJPATH)/allsymbols				\
@@ -80,11 +80,11 @@ check_all_exports: $(OBJPATH)/allsymbols $(KEXT_CREATE_SYMBOL_SET)
 		-output /dev/null $(_vstdout)
 
 $(OBJPATH)/$(MD_SUPPORTED_KPI_FILENAME): $(EXPORTS_FILES)
-	@echo SUPPORTED_KPI "($(CURRENT_ARCH_CONFIG_LC))"
+	@echo "$(ColorH)SUPPORTED_KPI$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
 	$(_v)$(SRCROOT)/config/list_supported.sh $(SOURCE) $(EXPORT_SOURCE_ARCH_CONFIG_LC) $@
 
 $(OBJPATH)/$(MI_SUPPORTED_KPI_FILENAME): $(EXPORTS_FILES)
-	@echo SUPPORTED_KPI "(all)"
+	@echo "$(ColorH)SUPPORTED_KPI$(Color0) \"($(ColorLF)all$(Color0))\""
 	$(_v)$(SRCROOT)/config/list_supported.sh $(SOURCE) all $@
 
 build_symbol_sets: check_all_exports $(SYMBOL_SET_BUILD) $(OBJPATH)/allsymbols \
@@ -109,23 +109,23 @@ $(SYMROOT_INSTALL_KEXT_MACHO_FILES): ALWAYS
 
 $(SYMROOT_INSTALL_KEXT_PLISTS): $(SYMROOT)/% : $(SOURCE)/%
 	$(_v)$(MKDIR) $(dir $@)
-	@echo INSTALLSYM kextplist $*
+	@echo "$(ColorH)INSTALLSYM$(ColorH) $(ColorLF)kextplist$(Color0) $(ColorF)$*$(Color0)"
 	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 	$(_v)$(NEWVERS) $@ $(_vstdout)
 
 $(DSTROOT_INSTALL_KEXT_PLISTS): $(INSTALL_KEXT_DIR)/% : $(SYMROOT)/%
 	$(_v)$(MKDIR) $(dir $@)
-	@echo INSTALL kextplist $*
+	@echo "$(ColorH)INSTALL$(ColorH)    $(ColorLF)kextplist$(Color0) $(ColorF)$*$(Color0)"
 	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 
 $(DSTROOT_INSTALL_KEXT_MACHO_FILES): $(INSTALL_KEXT_DIR)/% : $(SYMROOT)/% ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
-	@echo INSTALL $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))"
+	@echo "$(ColorF)INSTALL$(Color0)    $(ColorF)$(notdir $@)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
 	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@
 
 $(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) $(DSTROOT)/$(KRESDIR)/$(MI_SUPPORTED_KPI_FILENAME): $(DSTROOT)/$(KRESDIR)/% : $(OBJPATH)/%
 	$(_v)$(MKDIR) $(dir $@)
-	@echo INSTALL $*
+	@echo "$(ColorH)INSTALL$(Color0)    $(ColorF)$*$(Color0)"
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 do_config_install::	$(SYMROOT_INSTALL_KEXT_MACHO_FILES) \

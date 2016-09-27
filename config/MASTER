@@ -63,6 +63,7 @@ options		MACH_FASTLINK	# Fast symbolic links
 options		MACH_HOST	# Mach host (resource alloc.)	# <host>
 options		MACH_IPC_COMPAT	# Enable old IPC interface	# <ipc_compat>
 options		MACH_IPC_TEST	# Testing code/printfs		# <ipc_test>
+options		MACH_FLIPC	# Fast-Local IPC		# <mach_flipc>
 options 	MACH_NP		# Mach IPC support		# <np>
 options		MACH_NBC	# No buffer cache		# <nbc>
 options		MACH_NET	# Fast network access		# <mach_net>
@@ -85,13 +86,8 @@ options		MEASURE_BW	# interface bandwidth measurement # <measure_bw>
 options		CLASSQ_BLUE	# BLUE queueing algorithm	# <classq_blue>
 options		CLASSQ_RED	# RED queueing algorithm	# <classq_red>
 options		CLASSQ_RIO	# RIO queueing algorithm	# <classq_rio>
-options		IPDIVERT        # Divert sockets (for NAT)      # <ipdivert>
-options		IPFIREWALL      # IP Firewalling (used by NAT)  # <ipfirewall>
-options		IPFIREWALL_FORWARD      #Transparent proxy      # <ipfirewall>
-options		IPFIREWALL_DEFAULT_TO_ACCEPT    # allow everything by default   # <ipfirewall>
 options		DUMMYNET	# dummynet support		# <dummynet>
 options		TRAFFIC_MGT	# traffic management support		# <traffic_mgt>
-options		IPFW2		# IP firewall (new version)	# <ipfw2>
 options		MULTICAST	# Internet Protocol Class-D	$
 options		TCPDEBUG	# TCP debug			# <tcpdebug>
 options		TCP_DROP_SYNFIN	# Drop TCP packets with SYN+FIN set	# <tcpdrop_synfin>
@@ -107,6 +103,7 @@ options		FLOW_DIVERT								# <flow_divert>
 options		NECP									# <necp>
 options		CONTENT_FILTER	#						# <content_filter>
 options 	PACKET_MANGLER	#						# <packet_mangler>
+
 # secure_kernel - secure kernel from user programs
 options     SECURE_KERNEL       # <secure_kernel> 
 
@@ -124,26 +121,19 @@ options		NETWORKING	# networking layer		# <inet, inet6>
 options		CONFIG_FSE	# file system events		# <config_fse>
 options		CONFIG_IMAGEBOOT	# local image boot	# <config_imageboot>
 options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
-options		CONFIG_FORCE_OUT_IFP	# Enable IP_FORCE_OUT_IFP # <config_force_out_ifp>
-options		CONFIG_IFEF_NOWINDOWSCALE # Scale TCP window per driver # <config_ifef_nowindowscale>
 
 options		CONFIG_WORKQUEUE	# <config_workqueue>
 
 #
 #	4.4 filesystems 
 #
-options		HFS		# HFS/HFS+ support		# <hfs>
 options		MOCKFS		# Boot from an executable	# <mockfs>
 options		FIFO		# fifo support			# <fifo>
 options		FDESC		# fdesc_fs support		# <fdesc>
 options		DEVFS		# devfs support			# <devfs>
 options		ROUTEFS		# routefs support		# <routefs>
-options		JOURNALING	# journaling support		# <journaling>
-options		HFS_COMPRESSION	# hfs compression	    # <hfs_compression>
-options		CONFIG_HFS_STD	# hfs standard support	    # <config_hfs_std>
-options		CONFIG_HFS_TRIM	# hfs trims unused blocks   # <config_hfs_trim>
-options		CONFIG_HFS_MOUNT_UNMAP	# hfs trims blocks at mount # <config_hfs_mount_unmap>
-options		CONFIG_HFS_DIRLINK	# allow directory hardlink creation # <config_hfs_dirlink>
+options		NULLFS		# nullfs support 		# <nullfs>
+options		FS_COMPRESSION	# fs compression	    # <fs_compression>
 options		CONFIG_DEV_KMEM	    # /dev/kmem device for reading KVA	# <config_dev_kmem>
 
 #
@@ -157,7 +147,6 @@ options		CONFIG_IMGSRC_ACCESS # source of imageboot dmg	# <config_imgsrc_access>
 options		CONFIG_TRIGGERS	# trigger vnodes		# <config_triggers>
 options		CONFIG_EXT_RESOLVER # e.g. memberd		# <config_ext_resolver>
 options		CONFIG_SEARCHFS	# searchfs syscall support	# <config_searchfs>
-options		CONFIG_SECLUDED_RENAME # secluded rename syscall # <config_secluded_rename>
 
 #
 # NFS support
@@ -314,6 +303,7 @@ options   CONFIG_MSG_BSIZE=16384		# <medium,large,xlarge>
 options   CONFIG_IPC_TABLE_ENTRIES_STEPS=64  	# 137898 entries	# <bsmall,small,xsmall>
 options   CONFIG_IPC_TABLE_ENTRIES_STEPS=256 	# 300714 entries	# <medium,large,xlarge>
 
+
 #
 #  configurable kernel - use these options to strip strings from panic
 #  and printf calls.
@@ -359,6 +349,13 @@ options		CONFIG_MEMORYSTATUS		# <memorystatus>
 options		CONFIG_JETSAM			# <jetsam>
 
 #
+# enable new link table implementation stats/debugging
+# (adds mesaureable overhead)
+#
+options		CONFIG_LTABLE_STATS			# <config_ltable_stats>
+options		CONFIG_LTABLE_DEBUG			# <config_ltable_debug>
+
+#
 # enable new wait queue implementation stats / debugging
 #
 options		CONFIG_WAITQ_STATS			# <config_waitq_stats>
@@ -382,10 +379,19 @@ options		CONFIG_PHANTOM_CACHE		# <phantom_cache>
 #
 options		VM_PRESSURE_EVENTS		# <vm_pressure_events>
 
+options		CONFIG_SECLUDED_MEMORY		# <config_secluded_memory>
+
+options		CONFIG_BACKGROUND_QUEUE		# <config_background_queue>
+
 #
 # I/O Scheduling
 #
 options		CONFIG_IOSCHED			# <config_iosched>
+
+#
+# Accounting for I/O usage
+#
+options 	CONFIG_IO_ACCOUNTING 		# <config_io_accounting>
 
 #
 # Enable inheritance of importance through specially marked mach ports and for file locks
@@ -402,6 +408,11 @@ options		CONFIG_PROC_UUID_POLICY		# <config_proc_uuid_policy>
 # ECC data logging
 # 
 options		CONFIG_ECC_LOGGING		# <config_ecc_logging>
+
+#
+# Application core dumps
+#
+options		CONFIG_COREDUMP			# <config_coredump>
 
 #
 #  Ethernet (ARP)
@@ -513,7 +524,6 @@ options		CONFIG_AUDIT	    # Kernel auditing	    # <config_audit>
 #	forcibly suspending tasks when the demand exceeds supply. This
 #	option should be on.
 #
-options		MACH_PAGEMAP	#	<mach_pagemap>
 options		MACH_RT
 options		TASK_SWAPPER	#	<task_swapper_disabled>
 
@@ -552,10 +562,6 @@ options		MACH_MP_DEBUG	#				# <debug>
 options		ZONE_DEBUG	#		# <debug>
 
 options		CONFIG_ZLEAKS	# Live zone leak debugging	# <zleaks>
-
-#
-options		ZONE_ALIAS_ADDR	#		# <zone_alias_addr>
-
 
 #
 # CONFIG_TASK_ZONE_INFO allows per-task zone information to be extracted
@@ -696,6 +702,11 @@ options		CONFIG_XNUPOST				# <config_xnupost>
 # Kernel proc reference instrumentation
 #
 options PROC_REF_DEBUG					# <proc_ref_debug>
+
+#
+# Kernel OS reason debug instrumentation
+#
+options OS_REASON_DEBUG					# <os_reason_debug>
 
 #
 # Kernel Voucher Attr Manager for Activity Trace

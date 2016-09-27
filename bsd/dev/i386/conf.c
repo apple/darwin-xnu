@@ -91,7 +91,7 @@ struct bdevsw	bdevsw[] =
 	NO_BDEVICE,							/*23*/
 };
 
-int	nblkdev = sizeof (bdevsw) / sizeof (bdevsw[0]);
+const int nblkdev = sizeof(bdevsw) / sizeof(bdevsw[0]);
 
 extern struct tty *km_tty[];
 extern d_open_t		cnopen;
@@ -171,6 +171,17 @@ extern d_write_t	fdesc_write;
 extern d_ioctl_t	fdesc_ioctl;
 extern d_select_t	fdesc_select;
 
+extern d_open_t 	oslog_streamopen;
+extern d_close_t	oslog_streamclose;
+extern d_read_t 	oslog_streamread;
+extern d_ioctl_t	oslog_streamioctl;
+extern d_select_t	oslog_streamselect;
+
+extern d_open_t 	oslogopen;
+extern d_close_t	oslogclose;
+extern d_select_t	oslogselect;
+extern d_ioctl_t	oslogioctl;
+
 #define nullopen	(d_open_t *)&nulldev
 #define nullclose	(d_close_t *)&nulldev
 #define nullread	(d_read_t *)&nulldev
@@ -224,8 +235,16 @@ struct cdevsw	cdevsw[] =
 	logioctl,	eno_stop,	nullreset,	0,		logselect,
 	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	0
     },
-    NO_CDEVICE,								/* 7*/
-    NO_CDEVICE,								/* 8*/
+    {
+	oslogopen,	oslogclose,	eno_rdwrt,	eno_rdwrt,	/* 7*/
+	oslogioctl,	eno_stop,	nullreset,	0,		oslogselect,
+	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	0
+    },
+    {
+	oslog_streamopen,	oslog_streamclose,	oslog_streamread,	eno_rdwrt,	/* 8*/
+	oslog_streamioctl,	eno_stop,		nullreset,		0,		oslog_streamselect,
+	eno_mmap,		eno_strat,		eno_getc,		eno_putc,	0
+    },
     NO_CDEVICE,								/* 9*/
     NO_CDEVICE,								/*10*/
     NO_CDEVICE,								/*11*/
@@ -285,9 +304,9 @@ struct cdevsw	cdevsw[] =
 	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	0
     },
 };
-int	nchrdev = sizeof (cdevsw) / sizeof (cdevsw[0]);
+const int nchrdev = sizeof(cdevsw) / sizeof(cdevsw[0]);
 
-uint64_t cdevsw_flags[sizeof (cdevsw) / sizeof (cdevsw[0])];
+uint64_t cdevsw_flags[sizeof(cdevsw) / sizeof(cdevsw[0])];
 
 #include	<sys/vnode.h> /* for VCHR and VBLK */
 /*

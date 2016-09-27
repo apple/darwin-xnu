@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -265,7 +265,7 @@ protected:
     * to deallocate or release all dynamic resources held by the instance,
     * then call the superclass's implementation.  
     *
-    * <b>Caution:<b>
+    * <b>Caution:</b>
     * <ol>
     * <li>You can not assume that you have completed initialization
     *     before <code>free</code> is called,

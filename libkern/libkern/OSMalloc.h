@@ -260,6 +260,19 @@ extern void OSFree(
     uint32_t    size,
     OSMallocTag tag); 
 
+#ifdef XNU_KERNEL_PRIVATE
+/*!
+ * @function OSMalloc_size
+ *
+ * @abstract
+ * Returns the size of a block of memory allocated by <code>@link OSMalloc OSMalloc@/link</code>.
+ *
+ * @param addr A pointer to the memory block allocated via OSMalloc.
+ */
+extern uint32_t OSMalloc_size(
+	void 	* addr);
+#endif /* XNU_KERNEL_PRIVATE */
+
 __END_DECLS
 
 #endif	/* LIBKERN_OSMALLOC_h */

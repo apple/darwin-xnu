@@ -33,10 +33,12 @@
 #include <mach/processor.h>
 #include <kern/processor.h>
 #include <kern/machine.h>
-#include <kern/cpu_data.h>
+
 #include <kern/cpu_number.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
+#include <kern/policy_internal.h>
+
 #include <prng/random.h>
 #include <i386/machine_cpu.h>
 #include <i386/lapic.h>
@@ -56,7 +58,7 @@
 #include <kern/kpc.h>
 #endif
 #include <architecture/i386/pio.h>
-
+#include <i386/cpu_data.h>
 #if DEBUG
 #define DBG(x...)	kprintf("DBG: " x)
 #else
@@ -67,10 +69,11 @@ extern void 	wakeup(void *);
 
 static int max_cpus_initialized = 0;
 
-unsigned int	LockTimeOut;
-unsigned int	TLBTimeOut;
-unsigned int	LockTimeOutTSC;
-unsigned int	MutexSpin;
+uint64_t	LockTimeOut;
+uint64_t	TLBTimeOut;
+uint64_t	LockTimeOutTSC;
+uint32_t	LockTimeOutUsec;
+uint64_t	MutexSpin;
 uint64_t	LastDebuggerEntryAllowance;
 uint64_t	delay_spin_threshold;
 
@@ -448,10 +451,7 @@ failed:
 	chudxnu_cpu_free(this_cpu_datap->cpu_chud);
 	console_cpu_free(this_cpu_datap->cpu_console_buf);
 #if KPC
-	kpc_counterbuf_free(this_cpu_datap->cpu_kpc_buf[0]);
-	kpc_counterbuf_free(this_cpu_datap->cpu_kpc_buf[1]);
-	kpc_counterbuf_free(this_cpu_datap->cpu_kpc_shadow);
-	kpc_counterbuf_free(this_cpu_datap->cpu_kpc_reload);
+	kpc_unregister_cpu(this_cpu_datap);
 #endif
 
 	return KERN_FAILURE;
@@ -612,7 +612,6 @@ ml_get_max_cpus(void)
         (void) ml_set_interrupts_enabled(current_state);
         return(machine_info.max_cpus);
 }
-
 /*
  *	Routine:        ml_init_lock_timeout
  *	Function:
@@ -633,10 +632,14 @@ ml_init_lock_timeout(void)
 	if (PE_parse_boot_argn("slto_us", &slto, sizeof (slto)))
 		default_timeout_ns = slto * NSEC_PER_USEC;
 
-	/* LockTimeOut is absolutetime, LockTimeOutTSC is in TSC ticks */
+	/*
+	 * LockTimeOut is absolutetime, LockTimeOutTSC is in TSC ticks,
+	 * and LockTimeOutUsec is in microseconds and it's 32-bits.
+	 */
+	LockTimeOutUsec = (uint32_t) (default_timeout_ns / NSEC_PER_USEC);
 	nanoseconds_to_absolutetime(default_timeout_ns, &abstime);
-	LockTimeOut = (uint32_t) abstime;
-	LockTimeOutTSC = (uint32_t) tmrCvt(abstime, tscFCvtn2t);
+	LockTimeOut = abstime;
+	LockTimeOutTSC = tmrCvt(abstime, tscFCvtn2t);
 
 	/*
 	 * TLBTimeOut dictates the TLB flush timeout period. It defaults to
@@ -670,7 +673,37 @@ ml_init_lock_timeout(void)
 	nanoseconds_to_absolutetime(4ULL * NSEC_PER_SEC, &LastDebuggerEntryAllowance);
 	if (PE_parse_boot_argn("panic_restart_timeout", &prt, sizeof (prt)))
 		nanoseconds_to_absolutetime(prt * NSEC_PER_SEC, &panic_restart_timeout);
+
 	virtualized = ((cpuid_features() & CPUID_FEATURE_VMM) != 0);
+	if (virtualized) {
+		int	vti;
+		
+		if (!PE_parse_boot_argn("vti", &vti, sizeof (vti)))
+			vti = 6;
+		printf("Timeouts adjusted for virtualization (<<%d)\n", vti);
+		kprintf("Timeouts adjusted for virtualization (<<%d):\n", vti);
+#define VIRTUAL_TIMEOUT_INFLATE64(_timeout)			\
+MACRO_BEGIN							\
+	kprintf("%24s: 0x%016llx ", #_timeout, _timeout);	\
+	_timeout <<= vti;					\
+	kprintf("-> 0x%016llx\n",  _timeout);			\
+MACRO_END
+#define VIRTUAL_TIMEOUT_INFLATE32(_timeout)			\
+MACRO_BEGIN							\
+	kprintf("%24s:         0x%08x ", #_timeout, _timeout);	\
+	if ((_timeout <<vti) >> vti == _timeout)		\
+		_timeout <<= vti;				\
+	else							\
+		_timeout = ~0; /* cap rather than overflow */	\
+	kprintf("-> 0x%08x\n",  _timeout);			\
+MACRO_END
+		VIRTUAL_TIMEOUT_INFLATE32(LockTimeOutUsec);
+		VIRTUAL_TIMEOUT_INFLATE64(LockTimeOut);
+		VIRTUAL_TIMEOUT_INFLATE64(LockTimeOutTSC);
+		VIRTUAL_TIMEOUT_INFLATE64(TLBTimeOut);
+		VIRTUAL_TIMEOUT_INFLATE64(MutexSpin);
+	}
+
 	interrupt_latency_tracker_setup();
 	simple_lock_init(&ml_timer_evaluation_slock, 0);
 }
@@ -812,7 +845,7 @@ kernel_preempt_check(void)
 }
 
 boolean_t machine_timeout_suspended(void) {
-	return (virtualized || pmap_tlb_flush_timeout || spinlock_timed_out || panic_active() || mp_recent_debugger_activity() || ml_recent_wake());
+	return (pmap_tlb_flush_timeout || spinlock_timed_out || panic_active() || mp_recent_debugger_activity() || ml_recent_wake());
 }
 
 /* Eagerly evaluate all pending timer and thread callouts
@@ -864,6 +897,11 @@ ml_entropy_collect(void)
 	*ep = ror32(*ep, 9) ^ tsc_lo;
 }
 
+uint64_t
+ml_energy_stat(__unused thread_t t) {
+	return 0;
+}
+
 void
 ml_gpu_stat_update(uint64_t gpu_ns_delta) {
 	current_thread()->machine.thread_gpu_ns += gpu_ns_delta;
@@ -872,4 +910,18 @@ ml_gpu_stat_update(uint64_t gpu_ns_delta) {
 uint64_t
 ml_gpu_stat(thread_t t) {
 	return t->machine.thread_gpu_ns;
+}
+
+int plctrace_enabled = 0;
+
+void _disable_preemption(void) {
+	disable_preemption_internal();
+}
+
+void _enable_preemption(void) {
+	enable_preemption_internal();
+}
+
+void plctrace_disable(void) {
+	plctrace_enabled = 0;
 }

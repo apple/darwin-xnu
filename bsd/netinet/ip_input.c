@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -103,6 +103,7 @@
 #include <net/dlil.h>
 #include <net/classq/classq.h>
 #include <net/net_perf.h>
+#include <net/init.h>
 #if PF
 #include <net/pfvar.h>
 #endif /* PF */
@@ -186,9 +187,12 @@ static u_int32_t ipq_count;		/* current # of allocated ipq's */
 static int sysctl_ipforwarding SYSCTL_HANDLER_ARGS;
 static int sysctl_maxnipq SYSCTL_HANDLER_ARGS;
 static int sysctl_maxfragsperpacket SYSCTL_HANDLER_ARGS;
+
+#if (DEBUG || DEVELOPMENT)
 static int sysctl_reset_ip_input_stats SYSCTL_HANDLER_ARGS;
 static int sysctl_ip_input_measure_bins SYSCTL_HANDLER_ARGS;
 static int sysctl_ip_input_getperf SYSCTL_HANDLER_ARGS;
+#endif /* (DEBUG || DEVELOPMENT) */
 
 int ipforwarding = 0;
 SYSCTL_PROC(_net_inet_ip, IPCTL_FORWARDING, forwarding,
@@ -231,10 +235,6 @@ SYSCTL_PROC(_net_inet_ip, OID_AUTO, maxfragsperpacket,
 	sysctl_maxfragsperpacket, "I",
 	"Maximum number of IPv4 fragments allowed per packet");
 
-int ip_doscopedroute = 1;
-SYSCTL_INT(_net_inet_ip, OID_AUTO, scopedroute, CTLFLAG_RD | CTLFLAG_LOCKED,
-	&ip_doscopedroute, 0, "Enable IPv4 scoped routing");
-
 static uint32_t ip_adj_clear_hwcksum = 0;
 SYSCTL_UINT(_net_inet_ip, OID_AUTO, adj_clear_hwcksum,
 	CTLFLAG_RW | CTLFLAG_LOCKED, &ip_adj_clear_hwcksum, 0,
@@ -265,6 +265,7 @@ static int ip_chainsz = 6;
 SYSCTL_INT(_net_inet_ip, OID_AUTO, rx_chainsz, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&ip_chainsz, 1, "IP receive side max chaining");
 
+#if (DEBUG || DEVELOPMENT)
 static int ip_input_measure = 0;
 SYSCTL_PROC(_net_inet_ip, OID_AUTO, input_perf,
 	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
@@ -281,6 +282,7 @@ SYSCTL_PROC(_net_inet_ip, OID_AUTO, input_perf_data,
 	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 	0, 0, sysctl_ip_input_getperf, "S,net_perf",
 	"IP input performance data (struct net_perf, net/net_perf.h)");
+#endif /* (DEBUG || DEVELOPMENT) */
 
 #if DIAGNOSTIC
 static int ipprintfs = 0;
@@ -423,6 +425,25 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, random_id, CTLFLAG_RW | CTLFLAG_LOCKED,
  */
 static gre_input_func_t gre_input_func;
 
+static void
+ip_init_delayed(void)
+{
+	struct ifreq ifr;
+	int error;
+	struct sockaddr_in *sin;
+
+	bzero(&ifr, sizeof(ifr));
+	strlcpy(ifr.ifr_name, "lo0", sizeof(ifr.ifr_name));
+	sin = (struct sockaddr_in *)(void *)&ifr.ifr_addr;
+	sin->sin_len = sizeof(struct sockaddr_in);
+	sin->sin_family = AF_INET;
+	sin->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	error = in_control(NULL, SIOCSIFADDR, (caddr_t)&ifr, lo_ifp, kernproc);
+	if (error)
+		printf("%s: failed to initialise lo0's address, error=%d\n",
+		    __func__, error);
+}
+
 /*
  * IP initialization: fill in IP protocol switch table.
  * All protocols not implemented in kernel go to raw IP protocol handler.
@@ -450,9 +471,6 @@ ip_init(struct protosw *pp, struct domain *dp)
 	if (ip_initialized)
 		return;
 	ip_initialized = 1;
-
-	PE_parse_boot_argn("net.inet.ip.scopedroute",
-	    &ip_doscopedroute, sizeof (ip_doscopedroute));
 
 	in_ifaddr_init();
 
@@ -524,6 +542,7 @@ ip_init(struct protosw *pp, struct domain *dp)
 
 #endif
 	arp_init();
+	net_init_add(ip_init_delayed);
 }
 
 /*
@@ -730,10 +749,10 @@ ip_input_second_pass_loop_tbl(pktchain_elm_t *tbl, struct ip_fw_in_args *args)
 				ipstat.ips_rxc_chainsz_gt2++;
 			if (tbl[i].pkte_npkts > 4)
 				ipstat.ips_rxc_chainsz_gt4++;
-
+#if (DEBUG || DEVELOPMENT)
 			if (ip_input_measure)
 				net_perf_histogram(&net_perf, tbl[i].pkte_npkts);
-
+#endif /* (DEBUG || DEVELOPMENT) */
 			tbl[i].pkte_head = tbl[i].pkte_tail = NULL;
 			tbl[i].pkte_npkts = 0;
 			tbl[i].pkte_nbytes = 0;
@@ -1655,15 +1674,20 @@ ip_input_process_list(struct mbuf *packet_list)
 	int		retval = 0;
 	u_int32_t	div_info = 0;
 	int		ours = 0;
+#if (DEBUG || DEVELOPMENT)
 	struct timeval start_tv;
+#endif /* (DEBUG || DEVELOPMENT) */
 	int	num_pkts = 0;
 	int chain = 0;
 	struct ip_fw_in_args       args;
 
 	if (ip_chaining == 0) {
 		struct mbuf *m = packet_list;
+#if (DEBUG || DEVELOPMENT)
 		if (ip_input_measure)
 			net_perf_start_time(&net_perf, &start_tv);
+#endif /* (DEBUG || DEVELOPMENT) */
+
 		while (m) {
 			packet_list = mbuf_nextpkt(m);
 			mbuf_setnextpkt(m, NULL);
@@ -1671,12 +1695,16 @@ ip_input_process_list(struct mbuf *packet_list)
 			m = packet_list;
 			num_pkts++;
 		}
+#if (DEBUG || DEVELOPMENT)
 		if (ip_input_measure)
 			net_perf_measure_time(&net_perf, &start_tv, num_pkts);
+#endif /* (DEBUG || DEVELOPMENT) */
 		return;
 	}
+#if (DEBUG || DEVELOPMENT)
 	if (ip_input_measure)
 		net_perf_start_time(&net_perf, &start_tv);
+#endif /* (DEBUG || DEVELOPMENT) */
 
 	bzero(&pktchain_tbl, sizeof(pktchain_tbl));
 restart_list_process:
@@ -1726,9 +1754,10 @@ restart_list_process:
 		 * equivalent update in chaining case if performed in
 		 * ip_input_second_pass_loop_tbl().
 		 */
+#if (DEBUG || DEVELOPMENT)
 		if (ip_input_measure)
 			net_perf_histogram(&net_perf, 1);
-
+#endif /* (DEBUG || DEVELOPMENT) */
 		ip_input_second_pass(packet, packet->m_pkthdr.rcvif, div_info,
 		    1, packet->m_pkthdr.len, &args, ours);
 	}
@@ -1736,8 +1765,10 @@ restart_list_process:
 	if (packet_list)
 		goto restart_list_process;
 
+#if (DEBUG || DEVELOPMENT)
 	if (ip_input_measure)
 		net_perf_measure_time(&net_perf, &start_tv, num_pkts);
+#endif /* (DEBUG || DEVELOPMENT) */
 }
 /*
  * Ip input routine.  Checksum and byte swap header.  If fragmented
@@ -3736,7 +3767,8 @@ ip_forward(struct mbuf *m, int srcrt, struct sockaddr_in *next_hop)
 	n_long dest;
 	struct in_addr pkt_dst;
 	u_int32_t nextmtu = 0, len;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0, 0 };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0, 0,
+	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
 	struct ifnet *rcvifp = m->m_pkthdr.rcvif;
 #if IPSEC
 	struct secpolicy *sp = NULL;
@@ -4355,6 +4387,7 @@ ip_gre_register_input(gre_input_func_t fn)
 	return (0);
 }
 
+#if (DEBUG || DEVELOPMENT)
 static int
 sysctl_reset_ip_input_stats SYSCTL_HANDLER_ARGS
 {
@@ -4408,4 +4441,4 @@ sysctl_ip_input_getperf SYSCTL_HANDLER_ARGS
 
 	return (SYSCTL_OUT(req, &net_perf, MIN(sizeof (net_perf), req->oldlen)));
 }
-
+#endif /* (DEBUG || DEVELOPMENT) */

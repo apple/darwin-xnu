@@ -32,7 +32,7 @@ EXPORT_MI_DIR = device
 
 #
 # Build path
-#       
+#
 INCFLAGS_MAKEFILE= -I..
 
 MIGKSFLAGS	= -DMACH_KERNEL_PRIVATE -DKERNEL_SERVER=1
@@ -45,7 +45,7 @@ COMP_FILES	= ${DEVICE_FILES}
 do_build_all:: $(COMP_FILES)
 
 ${DEVICE_FILES}: device.defs
-	@echo MIG $@
+	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}	\
 	-header /dev/null			\
 	-user /dev/null				\

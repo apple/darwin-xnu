@@ -86,18 +86,27 @@ struct ccdrbg_nisthmac_state {
     const struct ccdrbg_nisthmac_custom *custom; //ccdrbg_nisthmac_state does not need to store ccdrbg_info. ccdrbg_nisthmac_custom is sufficient
     size_t bytesLeft;
     uint64_t reseed_counter; // the reseed counter should be able to hole 2^^48. size_t might be smaller than 48 bits
-    size_t vsize;
-    size_t keysize;
-    uint8_t v[NH_MAX_OUTPUT_BLOCK_SIZE];
+    size_t  vsize;
+    size_t  keysize;
+    uint8_t v[2*NH_MAX_OUTPUT_BLOCK_SIZE];
+    uint8_t *vptr;
+    uint8_t *nextvptr;
     uint8_t key[NH_MAX_KEY_SIZE];
 };
 
-#ifdef DEBUGFOO
+#define DRBG_NISTHMAC_DEBUG 0
+
+
+#if DRBG_NISTHMAC_DEBUG
 static void dumpState(const char *label, struct ccdrbg_nisthmac_state *state) {
-    cc_print(label, state->vsize, state->v);
+    //cc_print(label, state->vsize, state->nextvptr);
+    cc_print(label, state->vsize, state->vptr);
     cc_print(label, state->keysize, state->key);
 }
 #endif
+
+
+static void done(struct ccdrbg_state *drbg);
 
 /*
  NIST SP 800-90A, Rev. 1 HMAC_DRBG April 2014, p 46
@@ -120,7 +129,7 @@ static void dumpState(const char *label, struct ccdrbg_nisthmac_state *state) {
  6. Return K and V.
  */
 
-// was: unsigned long providedDataLength, const void *providedData
+// was: size_t providedDataLength, const void *providedData
 
 /*
  To handle the case where we have three strings that are concatenated,
@@ -128,56 +137,72 @@ static void dumpState(const char *label, struct ccdrbg_nisthmac_state *state) {
  */
 
 static int hmac_dbrg_update(struct ccdrbg_state *drbg,
-                            unsigned long daLen, const void *da,
-                            unsigned long dbLen, const void *db,
-                            unsigned long dcLen, const void *dc
+                            size_t daLen, const void *da,
+                            size_t dbLen, const void *db,
+                            size_t dcLen, const void *dc
                             )
 {
+    int rc=CCDRBG_STATUS_ERROR;
     struct ccdrbg_nisthmac_state *state = (struct ccdrbg_nisthmac_state *)drbg;
     const struct ccdigest_info *di = state->custom->di;
     
     const unsigned char cZero = 0x00;
     const unsigned char cOne  = 0x01;
+
     cchmac_ctx_decl(di->state_size, di->block_size, ctx);
-    
     cchmac_init(di, ctx, state->keysize, state->key);
     
     // 1. K = HMAC (K, V || 0x00 || provided_data).
-    cchmac_update(di, ctx, state->vsize, state->v);
+    cchmac_update(di, ctx, state->vsize, state->vptr);
     cchmac_update(di, ctx, 1, &cZero);
     if (da && daLen) cchmac_update(di, ctx, daLen, da);
     if (db && dbLen) cchmac_update(di, ctx, dbLen, db);
     if (dc && dcLen) cchmac_update(di, ctx, dcLen, dc);
     cchmac_final(di, ctx, state->key);
-    
-    //  2. V=HMAC(K,V).
-    cchmac(di, state->keysize, state->key, state->vsize, state->v, state->v);
-    
-    // 3. If (provided_data = Null), then return K and V.
+
     // One parameter must be non-empty, or return
-    if (!((da && daLen) || (db && dbLen) || (dc && dcLen)))
-        return CCDRBG_STATUS_OK;
-    
-    // 4. K = HMAC (K, V || 0x01 || provided_data).
-    cchmac_init(di, ctx, state->keysize, state->key);
-    cchmac_update(di, ctx, state->vsize, state->v);
-    cchmac_update(di, ctx, 1, &cOne);
-    if (da && daLen) cchmac_update(di, ctx, daLen, da);
-    if (db && dbLen) cchmac_update(di, ctx, dbLen, db);
-    if (dc && dcLen) cchmac_update(di, ctx, dcLen, dc);
-    cchmac_final(di, ctx, state->key);
-    
-    //  5. V=HMAC(K,V).
-    cchmac(di, state->keysize, state->key, state->vsize, state->v, state->v);
-    
-    return CCDRBG_STATUS_OK;
+    if (((da && daLen) || (db && dbLen) || (dc && dcLen))) {
+        //  2. V=HMAC(K,V).
+        cchmac(di, state->keysize, state->key, state->vsize, state->vptr, state->vptr);
+        //  4. K = HMAC (K, V || 0x01 || provided_data).
+        cchmac_init(di, ctx, state->keysize, state->key);
+        cchmac_update(di, ctx, state->vsize, state->vptr);
+        cchmac_update(di, ctx, 1, &cOne);
+        if (da && daLen) cchmac_update(di, ctx, daLen, da);
+        if (db && dbLen) cchmac_update(di, ctx, dbLen, db);
+        if (dc && dcLen) cchmac_update(di, ctx, dcLen, dc);
+        cchmac_final(di, ctx, state->key);
+    }
+    //  If additional data 5. V=HMAC(K,V)
+    //  If no addtional data, this is step 2. V=HMAC(K,V).
+    state->bytesLeft = 0;
+
+    // FIPS 140-2 4.9.2 Conditional Tests
+    // "the first n-bit block generated after power-up, initialization, or reset shall not be used, but shall be saved for comparison with the next n-bit block to be generated"
+    // Generate the first block and the second block. Compare for FIPS and discard the first block
+    // We keep the second block as the first set of data to be returned
+    cchmac(di, state->keysize, state->key, state->vsize, state->vptr, state->vptr);     // First block
+    cchmac(di, state->keysize, state->key, state->vsize, state->vptr, state->nextvptr); // First to be returned
+    if (0==cc_cmp_safe(state->vsize, state->vptr, state->nextvptr)) {
+        //The world as we know it has come to an end
+        //the DRBG data structure is zeroized. subsequent calls to
+        //DRBG ends up in NULL dereferencing and/or unpredictable state.
+        //catastrophic error in SP 800-90A
+        done(drbg);
+        rc=CCDRBG_STATUS_ABORT;
+        cc_abort(NULL);
+        goto errOut;
+    }
+    rc=CCDRBG_STATUS_OK;
+errOut:
+    return rc;
 }
 
 //make sure state is initialized, before calling this function
 static int validate_inputs(struct ccdrbg_nisthmac_state *state,
-                           unsigned long entropyLength,
-                           unsigned long additionalInputLength,
-                           unsigned long psLength)
+                           size_t entropyLength,
+                           size_t additionalInputLength,
+                           size_t psLength)
 {
     int rc;
     const struct ccdrbg_nisthmac_custom *custom=state->custom;
@@ -185,7 +210,7 @@ static int validate_inputs(struct ccdrbg_nisthmac_state *state,
     
     rc =CCDRBG_STATUS_ERROR;
     //buffer size checks
-    cc_require (di->output_size<=sizeof(state->v), end); //digest size too long
+    cc_require (di->output_size<=sizeof(state->v)/2, end); //digest size too long
     cc_require (di->output_size<=sizeof(state->key), end); //digest size too long
     
     //NIST SP800 compliance checks
@@ -224,9 +249,9 @@ end:
 //SP800-90 A: Required minimum entropy for instantiate and reseed=security_strength
 
 static int hmac_dbrg_instantiate_algorithm(struct ccdrbg_state *drbg,
-                                           unsigned long entropyLength, const void *entropy,
-                                           unsigned long nonceLength, const void *nonce,
-                                           unsigned long psLength, const void *ps)
+                                           size_t entropyLength, const void *entropy,
+                                           size_t nonceLength, const void *nonce,
+                                           size_t psLength, const void *ps)
 {
     // TODO: The NIST code passes nonce (i.e. HMAC key) to generate, but cc interface isn't set up that way
     struct ccdrbg_nisthmac_state *state = (struct ccdrbg_nisthmac_state *)drbg;
@@ -237,7 +262,7 @@ static int hmac_dbrg_instantiate_algorithm(struct ccdrbg_state *drbg,
     cc_zero(state->keysize, state->key);
     
     // 3. Set V to outlen/8 bytes of 0x01.
-    CC_MEMSET(state->v, 0x01, state->vsize);
+    CC_MEMSET(state->vptr, 0x01, state->vsize);
     
     // 4. (Key, V) = HMAC_DRBG_Update (seed_material, Key, V).
     hmac_dbrg_update(drbg, entropyLength, entropy, nonceLength, nonce, psLength, ps);
@@ -253,12 +278,10 @@ static int hmac_dbrg_instantiate_algorithm(struct ccdrbg_state *drbg,
 //      min_entropy = NH_REQUIRED_MIN_ENTROPY(security_strength)
 //  bytes of entropy
 
-static void done(struct ccdrbg_state *drbg);
-
 static int init(const struct ccdrbg_info *info, struct ccdrbg_state *drbg,
-                unsigned long entropyLength, const void* entropy,
-                unsigned long nonceLength, const void* nonce,
-                unsigned long psLength, const void* ps)
+                size_t entropyLength, const void* entropy,
+                size_t nonceLength, const void* nonce,
+                size_t psLength, const void* ps)
 {
     struct ccdrbg_nisthmac_state *state=(struct ccdrbg_nisthmac_state *)drbg;
     state->bytesLeft = 0;
@@ -275,11 +298,13 @@ static int init(const struct ccdrbg_info *info, struct ccdrbg_state *drbg,
     const struct ccdigest_info *di = state->custom->di;
     state->vsize = di->output_size;
     state->keysize = di->output_size;
-    
+    state->vptr=state->v;
+    state->nextvptr=state->v+state->vsize;
+
     // 7. (V, Key, reseed_counter) = HMAC_DRBG_Instantiate_algorithm (entropy_input, personalization_string).
     hmac_dbrg_instantiate_algorithm(drbg, entropyLength, entropy, nonceLength, nonce, psLength, ps);
     
-#ifdef DEBUGFOO
+#if DRBG_NISTHMAC_DEBUG
     dumpState("Init: ", state);
 #endif
     return CCDRBG_STATUS_OK;
@@ -312,8 +337,8 @@ static int init(const struct ccdrbg_info *info, struct ccdrbg_state *drbg,
 
 static int
 reseed(struct ccdrbg_state *drbg,
-       unsigned long entropyLength, const void *entropy,
-       unsigned long additionalLength, const void *additional)
+       size_t entropyLength, const void *entropy,
+       size_t additionalLength, const void *additional)
 {
     
     struct ccdrbg_nisthmac_state *state = (struct ccdrbg_nisthmac_state *)drbg;
@@ -323,7 +348,7 @@ reseed(struct ccdrbg_state *drbg,
     int rx = hmac_dbrg_update(drbg, entropyLength, entropy, additionalLength, additional, 0, NULL);
     state->reseed_counter = 1;
     
-#ifdef DEBUGFOO
+#if DRBG_NISTHMAC_DEBUG
     dumpState("Reseed: ", state);
 #endif
     return rx;
@@ -346,12 +371,12 @@ reseed(struct ccdrbg_state *drbg,
  7.      Return (“Success”, pseudorandom_bits, V, Key, reseed_counter).
  */
 
-static int validate_gen_params(uint64_t reseed_counter,  unsigned long dataOutLength, unsigned long additionalLength)
+static int validate_gen_params(uint64_t reseed_counter,  size_t dataOutLength, size_t additionalLength)
 
 {
     int rc=CCDRBG_STATUS_PARAM_ERROR;
     
-    cc_require (dataOutLength >= 1, end); //Requested zero byte in one request
+    // Zero byte in one request is a valid use-case (21208820)
     cc_require (dataOutLength <= CCDRBG_MAX_REQUEST_SIZE, end); //Requested too many bytes in one request
     cc_require (additionalLength<=CCDRBG_MAX_ADDITIONALINPUT_SIZE, end); //Additional input too long
     
@@ -365,8 +390,8 @@ end:
     return rc;
 }
 
-static int generate(struct ccdrbg_state *drbg, unsigned long dataOutLength, void *dataOut,
-                    unsigned long additionalLength, const void *additional)
+static int generate(struct ccdrbg_state *drbg, size_t dataOutLength, void *dataOut,
+                    size_t additionalLength, const void *additional)
 {
     struct ccdrbg_nisthmac_state *state = (struct ccdrbg_nisthmac_state *)drbg;
     const struct ccdrbg_nisthmac_custom *custom = state->custom;
@@ -384,27 +409,45 @@ static int generate(struct ccdrbg_state *drbg, unsigned long dataOutLength, void
     while (dataOutLength > 0) {
         if (!state->bytesLeft) {
             //  5. V=HMAC(K,V).
-            cchmac(di, state->keysize, state->key, state->vsize, state->v, state->v);
-            state->bytesLeft = di->output_size;//di->output_size;  state->vsize
+            cchmac(di, state->keysize, state->key, state->vsize, state->nextvptr, state->vptr);        // Won't be returned
+            // FIPS 140-2 4.9.2 Conditional Tests
+            // "Each subsequent generation of an n-bit block shall be compared with the previously generated block. The test shall fail if any two compared n-bit blocks are equal."
+            if (0==cc_cmp_safe(state->vsize, state->vptr, state->nextvptr)) {
+                //The world as we know it has come to an end
+                //the DRBG data structure is zeroized. subsequent calls to
+                //DRBG ends up in NULL dereferencing and/or unpredictable state.
+                //catastrophic error in SP 800-90A
+                done(drbg);
+                rc=CCDRBG_STATUS_ABORT;
+                cc_abort(NULL);
+                goto errOut;
+            }
+            CC_SWAP(state->nextvptr, state->vptr);
+            state->bytesLeft = state->vsize;
+#if DRBG_NISTHMAC_DEBUG
+            cc_print("generate blk: ", state->vsize, state->vptr);
+#endif
         }
         size_t outLength = dataOutLength > state->bytesLeft ? state->bytesLeft : dataOutLength;
-        CC_MEMCPY(outPtr, state->v, outLength);
+        CC_MEMCPY(outPtr, state->vptr, outLength);
         state->bytesLeft -= outLength;
         outPtr += outLength;
         dataOutLength -= outLength;
     }
-    
+
     // 6. (Key, V) = HMAC_DRBG_Update (additional_input, Key, V).
     hmac_dbrg_update(drbg, additionalLength, additional, 0, NULL, 0, NULL);
     
     // 7. reseed_counter = reseed_counter + 1.
     state->reseed_counter++;
     
-#ifdef DEBUGFOO
-    dumpState("generate: ", state);
+#if DRBG_NISTHMAC_DEBUG
+    dumpState("generate end: ", state);
+    cc_print("generate end nxt: ", state->vsize, state->nextvptr);
 #endif
-    
-    return CCDRBG_STATUS_OK;
+    rc=CCDRBG_STATUS_OK;
+errOut:
+    return rc;
 }
 
 static void done(struct ccdrbg_state *drbg)

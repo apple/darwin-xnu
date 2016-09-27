@@ -172,7 +172,8 @@ static int ipsec_sav_count = 0;
 
 static u_int32_t acq_seq = 0;
 static int key_tick_init_random = 0;
-__private_extern__ u_int32_t natt_now = 0;
+static u_int64_t up_time = 0;
+__private_extern__ u_int64_t natt_now = 0;
 
 static LIST_HEAD(_sptree, secpolicy) sptree[IPSEC_DIR_MAX];	/* SPD */
 static LIST_HEAD(_sahtree, secashead) sahtree;			/* SAD */
@@ -594,7 +595,6 @@ extern int ipsec_bypass;
 extern int esp_udp_encap_port;
 int ipsec_send_natt_keepalive(struct secasvar *sav);
 bool ipsec_fill_offload_frame(ifnet_t ifp, struct secasvar *sav, struct ifnet_keepalive_offload_frame *frame, size_t frame_data_offset);
-u_int32_t key_fill_offload_frames_for_savs (ifnet_t ifp, struct ifnet_keepalive_offload_frame *frames_array, u_int32_t frames_array_count, size_t frame_data_offset);
 
 void key_init(struct protosw *, struct domain *);
 
@@ -6214,8 +6214,10 @@ key_timehandler(void)
 		key_tick_init_random = 0;
 		key_srandom();
 	}
-	
-	natt_now++;
+
+	uint64_t acc_sleep_time = 0;
+	absolutetime_to_nanoseconds(mach_absolutetime_asleep, &acc_sleep_time);
+	natt_now = ++up_time + (acc_sleep_time / NSEC_PER_SEC);
 	
 	lck_mtx_unlock(sadb_mutex);
 	
@@ -6357,7 +6359,6 @@ key_satype2proto(
 			return IPPROTO_ESP;
 		case SADB_X_SATYPE_IPCOMP:
 			return IPPROTO_IPCOMP;
-			break;
 		default:
 			return 0;
 	}
@@ -6380,7 +6381,6 @@ key_proto2satype(
 			return SADB_SATYPE_ESP;
 		case IPPROTO_IPCOMP:
 			return SADB_X_SATYPE_IPCOMP;
-			break;
 		default:
 			return 0;
 	}
@@ -7075,7 +7075,7 @@ key_migrate(struct socket *so,
 	sav->natt_interval = ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_interval;
 	sav->natt_offload_interval = ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_offload_interval;
 	sav->natt_last_activity = natt_now;
-	
+
 	/*
 	 * Verify if SADB_X_EXT_NATT_MULTIPLEUSERS flag is set that
 	 * SADB_X_EXT_NATT is set and SADB_X_EXT_NATT_KEEPALIVE is not

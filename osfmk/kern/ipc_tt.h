@@ -131,7 +131,15 @@ extern task_name_t convert_port_to_task_name(
 extern task_t convert_port_to_task(
 	ipc_port_t	port);
 
+extern task_t
+convert_port_to_task_with_exec_token(
+	ipc_port_t		port,
+	uint32_t		*exec_token);
+
 extern task_t port_name_to_task(
+	mach_port_name_t name);
+
+extern host_t port_name_to_host(
 	mach_port_name_t name);
 
 extern boolean_t ref_task_port_locked(

@@ -56,6 +56,7 @@ extern void flowadv_init(void);
 extern struct flowadv_fcentry *flowadv_alloc_entry(int);
 extern void flowadv_free_entry(struct flowadv_fcentry *);
 extern void flowadv_add(struct flowadv_fclist *);
+extern void flowadv_add_entry(struct flowadv_fcentry *);
 
 __END_DECLS
 

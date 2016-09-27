@@ -1,15 +1,15 @@
-""" 
+"""
 A basic caching module for xnu debug macros to use.
-It is recommended to use [Get|Save][Static|Dynamic]CacheData() apis for 
-your caching needs. These APIs will handle the case of clearing caches when 
-a debugger continues and stops or hit a breakpoint. 
+It is recommended to use [Get|Save][Static|Dynamic]CacheData() apis for
+your caching needs. These APIs will handle the case of clearing caches when
+a debugger continues and stops or hit a breakpoint.
 
 Use Static caches for data that will not change if the program is run and stopped again. e.g. typedata, version numbers etc.
 An example invocation could be like
 def getDSYMPathForUUID(uuid):
     # Get the data from cache
     cached_data = caching.GetStaticCacheData('dsym.for.uuid', {})
-    
+
     if uuid in cached_data:
         return cached_data[uuid]
     else:
@@ -18,17 +18,17 @@ def getDSYMPathForUUID(uuid):
 
     # save the cached_data object to cache.
     caching.SaveStaticCacheData('dsym.for.uuid', cached_data)
-    
+
     return cached_data[uuid]
 
-And use Dynamic caches for things like thread data, zones information etc. 
-These will automatically be dropped when debugger continues the target 
+And use Dynamic caches for things like thread data, zones information etc.
+These will automatically be dropped when debugger continues the target
 An example use of Dynamic cache could be as follows
 
 def GetExecutablePathForPid(pid):
     # Get the data from cache
     cached_data = caching.GetDynamicCacheData('exec_for_path', {})
-    
+
     if pid in cached_data:
         return cached_data[pid]
     else:
@@ -37,7 +37,7 @@ def GetExecutablePathForPid(pid):
 
     # save the cached_data object to cache.
     caching.SaveDynamicCacheData('exec_for_path', cached_data)
-    
+
     return cached_data[pid]
 
 """
@@ -49,7 +49,7 @@ from configuration import *
 import sys
 
 """
-The format for the saved data dictionaries is 
+The format for the saved data dictionaries is
 {
     'key' : (valueobj, versno),
     ...
@@ -64,7 +64,7 @@ _dynamic_data = {}
 
 
 def _GetDebuggerSessionID():
-    """ A default callable function that _GetCurrentSessionID uses to 
+    """ A default callable function that _GetCurrentSessionID uses to
         identify a stopped session.
     """
     return 0
@@ -80,7 +80,14 @@ def _GetCurrentSessionID():
     return session_id;
 
 
-#Public APIs 
+#Public APIs
+
+def ClearAllCache():
+    """ remove all cached data.
+    """
+    global _static_data, _dynamic_data
+    _static_data = {}
+    _dynamic_data = {}
 
 def GetSizeOfCache():
     """ Returns number of bytes held in cache.
@@ -92,7 +99,7 @@ def GetSizeOfCache():
 
 
 def GetStaticCacheData(key, default_value = None):
-    """ Get cached object based on key from the cache of static information. 
+    """ Get cached object based on key from the cache of static information.
         params:
             key: str - a unique string identifying your data.
             default_value : obj - an object that should be returned if key is not found.
@@ -119,7 +126,7 @@ def SaveStaticCacheData(key, value):
 
     if not config['CacheStaticData']:
         return
-    
+
     key = str(key)
     _static_data[key] = (value, _GetCurrentSessionID())
     return

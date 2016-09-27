@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 1999, 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -490,8 +490,6 @@ prngStretch(BYTE *inbuf,UINT inbuflen,BYTE *outbuf,UINT outbuflen) {
 		
 		return PRNG_SUCCESS;
 	}
-
-	return PRNG_ERR_PROGRAM_FLOW;
 }
 
 
@@ -585,8 +583,6 @@ prngAllowReseed(PRNG *p, LONGLONG ticks)
 		return prngForceReseed(p, ticks);
 	else 
 		return PRNG_ERR_NOT_ENOUGH_ENTROPY;
-
-	return PRNG_ERR_PROGRAM_FLOW;
 }
 
 #if		SLOW_POLL_ENABLE

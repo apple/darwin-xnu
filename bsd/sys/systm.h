@@ -125,8 +125,8 @@ extern int	boothowto;	/* reboot flags, from console subsystem */
 extern int	show_space;
 extern int	minimalboot;
 
-extern int nblkdev;		/* number of entries in bdevsw */
-extern int nchrdev;		/* number of entries in cdevsw */
+extern const int nblkdev; /* number of entries in bdevsw */
+extern const int nchrdev; /* number of entries in cdevsw */
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
@@ -164,8 +164,6 @@ int64_t	fulong(user_addr_t addr);
 int	sulong(user_addr_t addr, int64_t longword);
 uint64_t fuulong(user_addr_t addr);
 int	suulong(user_addr_t addr, uint64_t ulongword);
-int	vslock(user_addr_t addr, user_size_t len);
-int	vsunlock(user_addr_t addr, user_size_t len, int dirtied);
 int	clone_system_shared_regions(int shared_regions_active,
 				    int chain_regions,
 				    int base_vnode);
@@ -182,6 +180,7 @@ void	load_init_program(struct proc *p);
 void __pthread_testcancel(int presyscall);
 void throttle_info_get_last_io_time(mount_t mp, struct timeval *tv);
 void update_last_io_time(mount_t mp);
+void throttle_info_end_io(buf_t bp);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
@@ -189,6 +188,8 @@ void	timeout(void (*)(void *), void *arg, int ticks);
 void	timeout_with_leeway(void (*)(void *), void *arg, int ticks, int leeway_ticks);
 void	untimeout(void (*)(void *), void *arg);
 int  	bsd_hostname(char *, int, int*);
+int	vslock(user_addr_t addr, user_size_t len);
+int	vsunlock(user_addr_t addr, user_size_t len, int dirtied);
 #endif /* KERNEL_PRIVATE */
 
 int	nullop(void);
@@ -237,6 +238,20 @@ void 	throttle_info_disable_throttle(int devno, boolean_t isfusion);
  * all other values will be treated as IOPOL_NORMAL (i.e. no throttling)
  */
 int	throttle_info_io_will_be_throttled(void *throttle_info_handle, int policy);
+
+#ifdef KERNEL_PRIVATE
+
+/* returned by throttle_io_will_be_throttled */
+#define THROTTLE_DISENGAGED	0
+#define THROTTLE_ENGAGED	1
+#define THROTTLE_NOW		2
+
+int  throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
+int throttle_lowpri_window(void) __attribute__((pure));
+struct uthread;
+void throttle_info_reset_window(struct uthread *ut);
+
+#endif
 
 #ifdef XNU_KERNEL_PRIVATE
 void *exec_spawnattr_getmacpolicyinfo(const void *macextensions, const char *policyname, size_t *lenp);

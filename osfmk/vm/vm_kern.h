@@ -74,6 +74,8 @@
 
 #ifdef XNU_KERNEL_PRIVATE
 
+#include <kern/locks.h>
+
 extern kern_return_t	kernel_memory_allocate(
 				vm_map_t	map,
 				vm_offset_t	*addrp,
@@ -94,6 +96,13 @@ extern kern_return_t	kernel_memory_allocate(
 #define KMA_KSTACK	0x100
 #define KMA_VAONLY	0x200
 #define KMA_COMPRESSOR	0x400   /* Pages belonging to the compressor are not on the paging queues, nor are they counted as wired. */
+#define KMA_ATOMIC 	0x800
+
+extern kern_return_t kmem_alloc(
+				vm_map_t    map,
+				vm_offset_t *addrp,
+				vm_size_t   size,
+				vm_tag_t    tag);
 
 extern kern_return_t kmem_alloc_contig(
 				vm_map_t	map,
@@ -105,11 +114,12 @@ extern kern_return_t kmem_alloc_contig(
 				int 		flags,
 				vm_tag_t        tag);
 
-extern kern_return_t	kmem_alloc(
+extern kern_return_t	kmem_alloc_flags(
 				vm_map_t	map,
 				vm_offset_t	*addrp,
 				vm_size_t	size,
-				vm_tag_t        tag);
+				vm_tag_t        tag,
+				int 		flags);
 
 extern kern_return_t	kmem_alloc_pageable(
 				vm_map_t	map,
@@ -174,7 +184,11 @@ extern kern_return_t	memory_object_iopl_request(
 
 struct mach_memory_info;
 extern kern_return_t	vm_page_diagnose(struct mach_memory_info * sites, 
-					 unsigned int num_sites);
+					 unsigned int num_sites, uint64_t zones_collectable_bytes);
+
+#if DEBUG || DEVELOPMENT
+extern void kern_wired_diagnose(void);
+#endif /* DEBUG || DEVELOPMENT */
 
 extern vm_tag_t 	vm_tag_bt(void);
 
@@ -184,9 +198,37 @@ extern void		vm_tag_alloc_locked(vm_allocation_site_t * site);
 
 extern vm_tag_t 	vm_tag_bt_debug(void);
 
+extern uint32_t         vm_tag_get_kext(vm_tag_t tag, char * name, vm_size_t namelen);
+
+#if DEBUG || DEVELOPMENT
+
+struct vm_tag_set_entry
+{
+    vm_tag_t tag;
+    uint32_t count;
+};
+
+struct vm_tag_set
+{
+    lck_spin_t              lock;
+    struct vm_tag_set_entry entries[0];
+};
+
+typedef struct vm_tag_set * vm_tag_set_t;
+
+extern void             vm_tag_set_init(vm_tag_set_t, uint32_t count);
+extern kern_return_t    vm_tag_set_enter(vm_tag_set_t set, uint32_t count, vm_tag_t tag);
+extern kern_return_t    vm_tag_set_remove(vm_tag_set_t set, uint32_t count, vm_tag_t tag, vm_tag_t * new_tag);
+
+#endif /* DEBUG || DEVELOPMENT */
+
 extern boolean_t	vm_kernel_map_is_kernel(vm_map_t map);
 
-extern ppnum_t		kernel_pmap_present_mapping(uint64_t vaddr, uint64_t * pvincr);
+extern ppnum_t		kernel_pmap_present_mapping(uint64_t vaddr, uint64_t * pvincr, uintptr_t * pvphysaddr);
+#if DEBUG || DEVELOPMENT
+extern void		kernel_pmap_lock(void);
+extern void		kernel_pmap_unlock(void);
+#endif /* DEBUG || DEVELOPMENT */
 
 #else /* XNU_KERNEL_PRIVATE */
 

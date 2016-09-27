@@ -596,14 +596,14 @@ nfsm_chain_get_secinfo(struct nfsm_chain *nmc, uint32_t *sec, int *seccountp)
 			/* we only recognize KRB5, KRB5I, KRB5P */
 			nfsm_chain_get_32(error, nmc, val); /* OID length */
 			nfsmout_if(error);
-			if (val != sizeof(krb5_mech)) {
+			if (val != sizeof(krb5_mech_oid)) {
 				nfsm_chain_adv(error, nmc, val);
 				nfsm_chain_adv(error, nmc, 2*NFSX_UNSIGNED);
 				break;
 			}
 			nfsm_chain_get_opaque(error, nmc, val, oid); /* OID bytes */
 			nfsmout_if(error);
-			if (bcmp(oid, krb5_mech, sizeof(krb5_mech))) {
+			if (bcmp(oid, krb5_mech_oid, sizeof(krb5_mech_oid))) {
 				nfsm_chain_adv(error, nmc, 2*NFSX_UNSIGNED);
 				break;
 			}
@@ -1024,7 +1024,7 @@ nfs4_id2guid(/*const*/ char *id, guid_t *guidp, int isgroup)
 	guid_t guid1, guid2, *gp;
 	ntsid_t sid;
 	long num, unknown;
-	const char *p, *at;
+	char *p, *at, *new_id = NULL;
 
 	*guidp = kauth_null_guid;
 	compare = ((nfs_idmap_ctrl & NFS_IDMAP_CTRL_USE_IDMAP_SERVICE) &&
@@ -1052,9 +1052,55 @@ nfs4_id2guid(/*const*/ char *id, guid_t *guidp, int isgroup)
 		/* must be numeric ID (or empty) */
 		num = *id ? strtol(id, NULL, 10) : unknown;
 		gp = guidp;
+		/* Since we are not initilizing guid1 and guid2, skip compare */
+		compare = 0;
 		goto gotnumid;
 	}
 
+	/* Handle nfs4 domain first */
+	if (at && at[1]) {
+		/* Try mapping nfs4 domain */
+		char *dsnode, *nfs4domain = at + 1;
+		size_t otw_domain_len = strnlen(nfs4domain, MAXPATHLEN);
+		int otw_id_2_at_len = at - id + 1;
+
+		MALLOC(dsnode, char*, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		if (dsnode) {
+			/* first try to map nfs4 domain to dsnode for scoped lookups */
+			memset(dsnode, 0, MAXPATHLEN);
+			error = kauth_cred_nfs4domain2dsnode(nfs4domain, dsnode);
+			if (!error) {
+				/* Success! Make new id be id@dsnode */
+				int dsnode_len = strnlen(dsnode, MAXPATHLEN);
+				int new_id_len = otw_id_2_at_len + dsnode_len + 1;
+
+				MALLOC(new_id, char*, new_id_len, M_NAMEI, M_WAITOK);
+				if (new_id) {
+					(void)strlcpy(new_id, id, otw_id_2_at_len + 1);
+					(void)strlcpy(new_id + otw_id_2_at_len, dsnode, dsnode_len + 1);
+					id = new_id;
+					at = id;
+					while (*at++ != '@');
+					at--;
+				}
+			} else {
+				/* Bummer:-( See if default nfs4 set for unscoped lookup */
+				size_t default_domain_len = strnlen(nfs4_domain, MAXPATHLEN);
+
+				if ((otw_domain_len == default_domain_len) && (strncmp(nfs4domain, nfs4_domain, otw_domain_len) == 0)) {
+					/* Woohoo! We have matching domains, do unscoped lookups */
+					*at = '\0';
+				}
+			}
+			FREE(dsnode, M_NAMEI);
+		}
+
+		if (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS) {
+			printf("nfs4_id2guid: after domain mapping id is %s\n", id);
+		}
+	}
+
+	/* Now try to do actual id mapping */
 	if (nfs_idmap_ctrl & NFS_IDMAP_CTRL_USE_IDMAP_SERVICE) {
 		/*
 		 * Ask the ID mapping service to map the ID string to a GUID.
@@ -1223,6 +1269,14 @@ gotnumid:
 		}
 	}
 
+	/* restore @ symbol in case we clobered for unscoped lookup */
+	if (at && *at == '\0')
+		*at = '@';
+
+	/* free mapped domain id string */
+	if (id == new_id)
+		FREE(id, M_NAMEI);
+
 	return (error);
 }
 
@@ -1236,7 +1290,7 @@ nfs4_guid2id(guid_t *guidp, char *id, int *idlen, int isgroup)
 {
 	int error1 = 0, error = 0, compare;
 	int id1len, id2len, len;
-	char *id1buf, *id1;
+	char *id1buf, *id1, *at;
 	char numbuf[32];
 	const char *id2 = NULL;
 
@@ -1268,6 +1322,7 @@ nfs4_guid2id(guid_t *guidp, char *id, int *idlen, int isgroup)
 			id1len = *idlen;
 		}
 
+		memset(id1, 0, id1len);
 		if (isgroup)
 			error = kauth_cred_guid2grnam(guidp, id1);
 		else
@@ -1457,11 +1512,55 @@ nfs4_guid2id(guid_t *guidp, char *id, int *idlen, int isgroup)
 					id, isgroup ? "G" : " ", error1, error);
 		}
 	}
+
+	at = id;
+	while (at && at[0] != '@' && at[0] != '\0' && at++);
+	if (at && at[0] == '@' && at[1] != '\0') {
+		char *dsnode = at + 1;
+		int id_2_at_len = at - id + 1;
+		char *nfs4domain, *new_id;
+		MALLOC(nfs4domain, char*, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		if (nfs4domain) {
+			int domain_len;
+			char *mapped_domain;
+			memset(nfs4domain, 0, MAXPATHLEN);
+			error = kauth_cred_dsnode2nfs4domain(dsnode, nfs4domain);
+			if (!error) {
+				domain_len = strnlen(nfs4domain, MAXPATHLEN);
+				mapped_domain = nfs4domain;
+			} else {
+				domain_len = strnlen(nfs4_domain, MAXPATHLEN);
+				mapped_domain = nfs4_domain;
+			}
+			if (domain_len) {
+				MALLOC(new_id, char*, MAXPATHLEN, M_NAMEI, M_WAITOK);
+				if (new_id) {
+					strlcpy(new_id, id, id_2_at_len + 1);
+					strlcpy(new_id + id_2_at_len, mapped_domain, domain_len + 1);
+					strlcpy(id, new_id, strnlen(new_id, MAXPATHLEN) + 1);
+					*idlen = strnlen(id, MAXPATHLEN);
+					FREE(new_id, M_NAMEI);
+				}
+			}
+			FREE(nfs4domain, M_NAMEI);
+		}
+	} else if (at && at[0] == '\0') {
+		int default_domain_len = strnlen(nfs4_domain, MAXPATHLEN);
+
+		if (default_domain_len && MAXPATHLEN - *idlen > default_domain_len) {
+			at[0] = '@';
+			strlcpy(at + 1, nfs4_domain, default_domain_len + 1);
+			*idlen = strnlen(id, MAXPATHLEN);
+		}
+	}
+
+	if (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS)
+		printf("nfs4_guid2id: id after nfs4 domain map: %s[%d].\n", id, *idlen);
+
 	if (id1buf)
 		FREE_ZONE(id1buf, MAXPATHLEN, M_NAMEI);
 	return (error);
 }
-
 
 /*
  * Set a vnode attr's supported bits according to the given bitmap

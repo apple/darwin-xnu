@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -293,7 +293,8 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip_moptions *imo = NULL;
-	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0, 0 };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, { 0 }, 0, 0,
+		SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
 
 	/* Make the IP header contiguous in the mbuf */
 	if ((size_t)m->m_len < sizeof (struct ip)) {
@@ -369,7 +370,8 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip6_moptions *im6o = NULL;
-	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 }, 0, 0 };
+	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 }, 0, 0,
+		SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
 
 	/* Make the IP header contiguous in the mbuf */
 	if ((size_t)m->m_len < sizeof(struct ip6_hdr)) {

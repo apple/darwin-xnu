@@ -433,6 +433,8 @@ An
 structure that uniquely identifies the file system object within a mounted 
 volume for the duration of it's mount; this identifier is not guaranteed to be 
 persistent for the volume and may change every time the volume is mounted.
+If the VOL_CAP_FMT_64BIT_OBJECT_IDS capability is set, this is instead a 64-bit
+object identifier.
 .Pp
 On HFS+ volumes, the ATTR_CMN_OBJID of a file system object is distinct from 
 the ATTR_CMN_OBJID of any hard link to that file system object. Although the 
@@ -446,6 +448,8 @@ An
 structure that uniquely and persistently identifies the file system object
 within its volume; persistence implies that this attribute is unaffected by
 mount/unmount operations on the volume.
+If the VOL_CAP_FMT_64BIT_OBJECT_IDS capability is set, this is instead a 64-bit
+object identifier.
 .Pp
 Some file systems can not return this attribute when the volume is mounted
 read-only and will fail the request with error
@@ -461,6 +465,8 @@ structure that uniquely identifies the parent directory of the file system
 object within a mounted volume, for the duration of the volume mount; this 
 identifier is not guaranteed to be persistent for the volume and may change 
 every time the volume is mounted.
+If the VOL_CAP_FMT_64BIT_OBJECT_IDS capability is set, this is instead a 64-bit
+object identifier.
 .Pp
 .
 If a file system object is hard linked from multiple directories, the parent
@@ -499,7 +505,7 @@ structure returned by
 .Xr stat 2 .
 .
 .It ATTR_CMN_CHGTIME
-(read/write) A
+A
 .Vt timespec
 structure containing the time that the file system object's
 attributes were last modified.
@@ -1082,19 +1088,26 @@ The following fork attributes are defined.
 .Bl -tag -width ATTR_VOL_ALLOCATIONCLUMP
 .
 .It ATTR_FORK_TOTALSIZE
+Deprecated.
 An
 .Vt off_t
 containing the length of the fork in bytes (the logical size).
 .
 .It ATTR_FORK_ALLOCSIZE
+Deprecated.
 An
 .Vt off_t
 containing a count of the bytes on disk used by the fork (the physical size).
 .
+.It ATTR_FORK_RESERVED
+Reserved.
+You must set this to 0.
+.
 .El
 .Pp
 .
-Fork attributes are not properly implemented by any current Mac OS X
+Fork attributes are deprecated and all bits are reserved.
+They are not properly implemented by any current Mac OS X
 volume format implementation.
 We strongly recommend that client programs do not request fork attributes.
 If you are implementing a volume format, you should not support these attributes.
@@ -1327,10 +1340,10 @@ Introduced with Darwin 10.0 (Mac OS X version 10.6).
 .
 .It VOL_CAP_FMT_64BIT_OBJECT_IDS
 If this bit is set, the volume format uses object IDs that are 64-bit. 
-This means that ATTR_CMN_FILEID and ATTR_CMN_PARENTID are the only
-legitimate attributes for obtaining object IDs from this volume and the
-32-bit fid_objno fields of the fsobj_id_t returned by ATTR_CMN_OBJID,
-ATTR_CMN_OBJPERMANENTID, and ATTR_CMN_PAROBJID are undefined.
+This means that ATTR_CMN_FILEID and ATTR_CMN_PARENTID are the primary means of
+obtaining object IDs from this volume. The values returned by ATTR_CMN_OBJID,
+ATTR_CMN_OBJPERMANENTID, and ATTR_CMN_PAROBJID can be interpreted as 64-bit
+object IDs instead of fsobj_id_t.
 .
 .El
 .Pp
@@ -1440,11 +1453,23 @@ AFP-style mandatory byte range locks via
 .It VOL_CAP_INT_EXTENDED_ATTR
 If this bit is set, the volume format implementation supports
 native extended attributes (see
-.Xr setxattr 2 ).
+.Xr setxattr 2 Ns ).
 .
 .It VOL_CAP_INT_NAMEDSTREAMS
 If this bit is set, the volume format implementation supports
 native named streams.
+.
+.It VOL_CAP_INT_RENAME_SWAP
+If this bit is set, the file system supports swapping file system
+objects.  See
+.Xr rename 2
+for more details.
+.
+.It VOL_CAP_INT_RENAME_EXCL
+If this bit is set, the file system supports an exclusive rename
+operation. See
+.Xr rename 2
+for more details.
 .
 .El
 .Pp

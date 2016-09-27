@@ -68,6 +68,8 @@
 #include <kern/spl.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/policy_internal.h>
+
 #include <mach/policy.h>
 
 #include <kern/syscall_subr.h>
@@ -104,7 +106,7 @@ __unused	struct pfz_exit_args *args)
 static void
 swtch_continue(void)
 {
-	register processor_t	myprocessor;
+	processor_t	myprocessor;
     boolean_t				result;
 
     disable_preemption();
@@ -120,7 +122,7 @@ boolean_t
 swtch(
 	__unused struct swtch_args *args)
 {
-	register processor_t	myprocessor;
+	processor_t	myprocessor;
 	boolean_t				result;
 
 	disable_preemption();
@@ -147,7 +149,7 @@ swtch(
 static void
 swtch_pri_continue(void)
 {
-	register processor_t	myprocessor;
+	processor_t	myprocessor;
     boolean_t				result;
 
 	thread_depress_abort_internal(current_thread());
@@ -165,7 +167,7 @@ boolean_t
 swtch_pri(
 __unused	struct swtch_pri_args *args)
 {
-	register processor_t	myprocessor;
+	processor_t	myprocessor;
 	boolean_t				result;
 
 	disable_preemption();
@@ -193,38 +195,24 @@ __unused	struct swtch_pri_args *args)
 	return (result);
 }
 
-static int
+static boolean_t
 thread_switch_disable_workqueue_sched_callback(void)
 {
 	sched_call_t callback = workqueue_get_sched_callback();
-	thread_t self = current_thread();
-	if (!callback || self->sched_call != callback) {
-		return FALSE;
-	}
-	spl_t s = splsched();
-	thread_lock(self);
-	thread_sched_call(self, NULL);
-	thread_unlock(self);
-	splx(s);
-	return TRUE;
+	return thread_disable_sched_call(current_thread(), callback) != NULL;
 }
 
 static void
 thread_switch_enable_workqueue_sched_callback(void)
 {
 	sched_call_t callback = workqueue_get_sched_callback();
-	thread_t self = current_thread();
-	spl_t s = splsched();
-	thread_lock(self);
-	thread_sched_call(self, callback);
-	thread_unlock(self);
-	splx(s);
+	thread_reenable_sched_call(current_thread(), callback);
 }
 
 static void
 thread_switch_continue(void)
 {
-	register thread_t	self = current_thread();
+	thread_t	self = current_thread();
 	int					option = self->saved.swtch.option;
 	boolean_t			reenable_workq_callback = self->saved.swtch.reenable_workq_callback;
 
@@ -397,6 +385,88 @@ thread_switch(
     return (KERN_SUCCESS);
 }
 
+/* Returns a +1 thread reference */
+thread_t
+port_name_to_thread_for_ulock(mach_port_name_t thread_name)
+{
+	thread_t thread = THREAD_NULL;
+	thread_t self = current_thread();
+
+	/*
+	 * Translate the port name if supplied.
+	 */
+	if (thread_name != MACH_PORT_NULL) {
+		ipc_port_t port;
+
+		if (ipc_port_translate_send(self->task->itk_space,
+		                            thread_name, &port) == KERN_SUCCESS) {
+			ip_reference(port);
+			ip_unlock(port);
+
+			thread = convert_port_to_thread(port);
+			ip_release(port);
+
+			if (thread == THREAD_NULL) {
+				return thread;
+			}
+
+			if ((thread == self) || (thread->task != self->task)) {
+				thread_deallocate(thread);
+				thread = THREAD_NULL;
+			}
+		}
+	}
+
+	return thread;
+}
+
+/* This function is called after an assert_wait(), therefore it must not
+ * cause another wait until after the thread_run() or thread_block()
+ *
+ * Consumes a ref on thread
+ */
+wait_result_t
+thread_handoff(thread_t thread)
+{
+	thread_t deallocate_thread = THREAD_NULL;
+	thread_t self = current_thread();
+
+	/*
+	 * Try to handoff if supplied.
+	 */
+	if (thread != THREAD_NULL) {
+		spl_t s = splsched();
+
+		thread_t pulled_thread = thread_run_queue_remove_for_handoff(thread);
+
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED_THREAD_SWITCH)|DBG_FUNC_NONE,
+				      thread_tid(thread), thread->state,
+				      pulled_thread ? TRUE : FALSE, 0, 0);
+
+		if (pulled_thread != THREAD_NULL) {
+			/* We can't be dropping the last ref here */
+			thread_deallocate_safe(thread);
+
+			int result = thread_run(self, THREAD_CONTINUE_NULL, NULL, pulled_thread);
+
+			splx(s);
+			return result;
+		}
+
+		splx(s);
+
+		deallocate_thread = thread;
+		thread = THREAD_NULL;
+	}
+
+	int result = thread_block(THREAD_CONTINUE_NULL);
+	if (deallocate_thread != THREAD_NULL) {
+		thread_deallocate(deallocate_thread);
+	}
+
+	return result;
+}
+
 /*
  * Depress thread's priority to lowest possible for the specified interval,
  * with a value of zero resulting in no timeout being scheduled.
@@ -405,7 +475,7 @@ void
 thread_depress_abstime(
 	uint64_t				interval)
 {
-	register thread_t		self = current_thread();
+	thread_t		self = current_thread();
 	uint64_t				deadline;
     spl_t					s;
 
@@ -566,5 +636,42 @@ thread_yield_internal(
 	thread_block_reason(THREAD_CONTINUE_NULL, NULL, AST_YIELD);
 
 	thread_depress_abort_internal(current_thread());
+}
+
+/*
+ * This yields to a possible non-urgent preemption pending on the current processor.
+ *
+ * This is useful when doing a long computation in the kernel without returning to userspace.
+ *
+ * As opposed to other yielding mechanisms, this does not drop the priority of the current thread.
+ */
+void
+thread_yield_to_preemption()
+{
+	/* 
+	 * ast_pending() should ideally be called with interrupts disabled, but 
+	 * the check here is fine because csw_check() will do the right thing.
+	 */
+	ast_t *pending_ast = ast_pending();
+	ast_t ast = AST_NONE;
+	processor_t p;
+
+	if (*pending_ast & AST_PREEMPT) {
+		thread_t self = current_thread();
+
+		spl_t s = splsched();
+
+		p = current_processor();
+		thread_lock(self);
+		ast = csw_check(p, AST_YIELD);
+		ast_on(ast);
+		thread_unlock(self);
+
+		if (ast != AST_NONE) {
+			(void)thread_block_reason(THREAD_CONTINUE_NULL,	NULL, ast);
+		}
+
+		splx(s);
+	}
 }
 

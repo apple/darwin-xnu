@@ -37,7 +37,7 @@ EXPORT_MI_DIR = UserNotification
 
 #
 # Build path
-#       
+#
 INCFLAGS_MAKEFILE= -I..
 
 MIGKSFLAGS	= -DMACH_KERNEL_PRIVATE -DKERNEL_SERVER=1
@@ -55,7 +55,7 @@ MIG_KSHDRS = \
 MIG_KSSRC = \
 	UNDReplyServer.c
 
-COMP_FILES = ${MIG_KUSRC} ${MIG_KSSRC} 
+COMP_FILES = ${MIG_KUSRC} ${MIG_KSSRC}
 
 do_build_all:: $(COMP_FILES)
 
@@ -63,7 +63,7 @@ ${COMP_FILES} : ${MIG_TYPES}
 
 ${MIG_KUSRC} : \
 	%.c : %.defs
-	@echo MIG $@
+	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
 		-user    $*.c              \
 		-header  $*.h              \
@@ -73,7 +73,7 @@ ${MIG_KUSRC} : \
 
 ${MIG_KSSRC}: \
 	%Server.c : %.defs
-	@echo MIG $@
+	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
 		-user    /dev/null              \
 		-header  /dev/null              \

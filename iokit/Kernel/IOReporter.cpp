@@ -216,12 +216,6 @@ IOReporter::init(IOService *reportingService,
     success = true;
 
 finish:
-    if (!success) {
-        if (_configLock)        IOLockFree(_configLock);
-        if (_reporterLock)      IOSimpleLockFree(_reporterLock);
-        if (_channelNames)      _channelNames->release();
-    }
-
     return success;
 }
 
@@ -235,6 +229,8 @@ finish:
 void
 IOReporter::free(void)
 {    
+    OSSafeReleaseNULL(_channelNames);
+
     if (_configLock)         IOLockFree(_configLock);
     if (_reporterLock)       IOSimpleLockFree(_reporterLock);
     

@@ -29,11 +29,15 @@
 
 #include <string.h>
 
+__BEGIN_DECLS
+#include <vm/vm_kern.h>
+__END_DECLS
+
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSString.h>
-#include <string.h>
+#include <IOKit/IOLib.h>
 
 #define super OSObject
 
@@ -57,7 +61,8 @@ bool OSData::initWithCapacity(unsigned int inCapacity)
 	if (!inCapacity || (capacity < inCapacity))
 	{
 	    // clean out old data's storage if it isn't big enough
-	    kfree(data, capacity);
+	    if (capacity < page_size) kfree(data, capacity);
+	    else                      kmem_free(kernel_map, (vm_offset_t)data, capacity);
 	    data = 0;
 	    capacity = 0;
 	}
@@ -67,7 +72,14 @@ bool OSData::initWithCapacity(unsigned int inCapacity)
         return false;
 
     if (inCapacity && !data) {
-        data = (void *) kalloc_container(inCapacity);
+
+	if (inCapacity < page_size) data = (void *) kalloc_container(inCapacity);
+	else {
+	    kern_return_t kr;
+	    inCapacity = round_page_32(inCapacity);
+	    kr = kmem_alloc(kernel_map, (vm_offset_t *)&data, inCapacity, IOMemoryTag(kernel_map));
+	    if (KERN_SUCCESS != kr) data = NULL;
+	}
         if (!data)
             return false;
         capacity = inCapacity;
@@ -185,8 +197,9 @@ OSData *OSData::withData(const OSData *inData,
 
 void OSData::free()
 {
-    if (capacity != EXTERNAL && data && capacity) {
-        kfree(data, capacity);
+    if ((capacity != EXTERNAL) && data && capacity) {
+	if (capacity < page_size) kfree(data, capacity);
+	else                      kmem_free(kernel_map, (vm_offset_t)data, capacity);
         OSCONTAINER_ACCUMSIZE( -((size_t)capacity) );
     } else if (capacity == EXTERNAL) {
 	DeallocFunction freemem = reserved ? reserved->deallocFunction : NULL;
@@ -217,6 +230,8 @@ unsigned int OSData::ensureCapacity(unsigned int newCapacity)
 {
     unsigned char * newData;
     unsigned int finalCapacity;
+    void * copydata;
+    kern_return_t kr;
 
     if (newCapacity <= capacity)
         return capacity;
@@ -225,16 +240,36 @@ unsigned int OSData::ensureCapacity(unsigned int newCapacity)
                 * capacityIncrement;
 
     // integer overflow check
-    if (finalCapacity < newCapacity)
-        return capacity;
+    if (finalCapacity < newCapacity) return capacity;
 
-    newData = (unsigned char *) kalloc_container(finalCapacity);
+    copydata = data;
+
+    if (finalCapacity >= page_size) {
+	// round up
+	finalCapacity = round_page_32(finalCapacity);
+	// integer overflow check
+	if (finalCapacity < newCapacity) return capacity;
+	if (capacity >= page_size) {
+	    copydata = NULL;
+	    kr = kmem_realloc(kernel_map,
+			      (vm_offset_t)data,
+			      capacity,
+			      (vm_offset_t *)&newData,
+			      finalCapacity,
+			      IOMemoryTag(kernel_map));
+	} else {
+	    kr = kmem_alloc(kernel_map, (vm_offset_t *)&newData, finalCapacity, IOMemoryTag(kernel_map));
+	}
+	if (KERN_SUCCESS != kr) newData = NULL;
+    }
+    else newData = (unsigned char *) kalloc_container(finalCapacity);
 
     if ( newData ) {
         bzero(newData + capacity, finalCapacity - capacity);
+        if (copydata) bcopy(copydata, newData, capacity);
         if (data) {
-            bcopy(data, newData, capacity);
-            kfree(data, capacity);
+	    if (capacity < page_size) kfree(data, capacity);
+	    else                      kmem_free(kernel_map, (vm_offset_t)data, capacity);
         }
         OSCONTAINER_ACCUMSIZE( ((size_t)finalCapacity) - ((size_t)capacity) );
         data = (void *) newData;
@@ -308,6 +343,7 @@ const void *OSData::getBytesNoCopy(unsigned int start,
 
     if (length
     &&  start < length
+    && (start + inLength) >= inLength // overflow check
     && (start + inLength) <= length)
         outData = (const void *) ((char *) data + start);
 

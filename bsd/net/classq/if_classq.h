@@ -111,6 +111,9 @@ typedef int (*ifclassq_enq_func)(struct ifclassq *, struct mbuf *);
 typedef struct mbuf *(*ifclassq_deq_func)(struct ifclassq *, enum cqdq_op);
 typedef struct mbuf *(*ifclassq_deq_sc_func)(struct ifclassq *,
     mbuf_svc_class_t, enum cqdq_op);
+typedef int (*ifclassq_deq_multi_func)(struct ifclassq *, enum cqdq_op,
+    u_int32_t, u_int32_t, struct mbuf **, struct mbuf **, u_int32_t *,
+    u_int32_t *);
 typedef int (*ifclassq_req_func)(struct ifclassq *, enum cqrq, void *);
 
 /*
@@ -158,6 +161,7 @@ struct ifclassq {
 	ifclassq_enq_func	ifcq_enqueue;
 	ifclassq_deq_func	ifcq_dequeue;
 	ifclassq_deq_sc_func	ifcq_dequeue_sc;
+	ifclassq_deq_multi_func ifcq_dequeue_multi;
 	ifclassq_req_func	ifcq_request;
 
 	/* token bucket regulator */
@@ -184,11 +188,11 @@ struct ifclassq {
 #define	IFCQ_TBR_IS_ENABLED(_ifcq)	((_ifcq)->ifcq_flags & IFCQF_TBR)
 
 /* classq enqueue return value */
-#define CLASSQEQ_DROPPED	(-1)	/* packet dropped (freed)  */
-#define CLASSQEQ_SUCCESS	0	/* success, packet enqueued */
-#define CLASSQEQ_SUCCESS_FC	1	/* packet enqueued; */
+#define	CLASSQEQ_DROPPED	(-1)	/* packet dropped (freed)  */
+#define	CLASSQEQ_SUCCESS	0	/* success, packet enqueued */
+#define	CLASSQEQ_SUCCESS_FC	1	/* packet enqueued; */
 					/*   give flow control feedback */
-#define CLASSQEQ_DROPPED_FC	2	/* packet dropped; */
+#define	CLASSQEQ_DROPPED_FC	2	/* packet dropped; */
 					/*  give flow control feedback */
 #define	CLASSQEQ_DROPPED_SP	3	/* packet dropped due to suspension; */
 					/*  give flow control feedback */
@@ -209,11 +213,11 @@ typedef enum cqev {
 #include <net/pktsched/pktsched_cbq.h>
 #include <net/pktsched/pktsched_hfsc.h>
 #include <net/pktsched/pktsched_qfq.h>
+#include <net/pktsched/pktsched_fq_codel.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 struct if_ifclassq_stats {
 	u_int32_t	ifqs_len;
 	u_int32_t	ifqs_maxlen;
@@ -227,6 +231,7 @@ struct if_ifclassq_stats {
 		struct cbq_classstats	ifqs_cbq_stats;
 		struct hfsc_classstats	ifqs_hfsc_stats;
 		struct qfq_classstats	ifqs_qfq_stats;
+		struct fq_codel_classstats	ifqs_fq_codel_stats;
 	};
 } __attribute__((aligned(8)));
 
@@ -342,10 +347,12 @@ struct if_ifclassq_stats {
 #define	IFCQ_DEC_LEN(_ifcq)	(IFCQ_LEN(_ifcq)--)
 #define	IFCQ_MAXLEN(_ifcq)	((_ifcq)->ifcq_maxlen)
 #define	IFCQ_SET_MAXLEN(_ifcq, _len) ((_ifcq)->ifcq_maxlen = (_len))
-#define IFCQ_TARGET_QDELAY(_ifcq)	((_ifcq)->ifcq_target_qdelay)
+#define	IFCQ_TARGET_QDELAY(_ifcq)	((_ifcq)->ifcq_target_qdelay)
 #define	IFCQ_BYTES(_ifcq)	((_ifcq)->ifcq_bytes)
-#define	IFCQ_INC_BYTES(_ifcq, _len) (IFCQ_BYTES(_ifcq) + _len)
-#define	IFCQ_DEC_BYTES(_ifcq, _len) (IFCQ_BYTES(_ifcq) - _len)
+#define	IFCQ_INC_BYTES(_ifcq, _len) \
+    ((_ifcq)->ifcq_bytes = (_ifcq)->ifcq_bytes + (_len))
+#define	IFCQ_DEC_BYTES(_ifcq, _len) \
+    ((_ifcq)->ifcq_bytes = (_ifcq)->ifcq_bytes - (_len))
 
 #define	IFCQ_XMIT_ADD(_ifcq, _pkt, _len) do {				\
 	PKTCNTR_ADD(&(_ifcq)->ifcq_xmitcnt, _pkt, _len);		\
@@ -363,8 +370,8 @@ extern u_int32_t ifclassq_get_maxlen(struct ifclassq *);
 extern int ifclassq_get_len(struct ifclassq *, mbuf_svc_class_t,
     u_int32_t *, u_int32_t *);
 extern errno_t ifclassq_enqueue(struct ifclassq *, struct mbuf *);
-extern errno_t ifclassq_dequeue(struct ifclassq *, u_int32_t, struct mbuf **,
-    struct mbuf **, u_int32_t *, u_int32_t *);
+extern errno_t ifclassq_dequeue(struct ifclassq *, u_int32_t, u_int32_t,
+    struct mbuf **, struct mbuf **, u_int32_t *, u_int32_t *);
 extern errno_t ifclassq_dequeue_sc(struct ifclassq *, mbuf_svc_class_t,
     u_int32_t, struct mbuf **, struct mbuf **, u_int32_t *, u_int32_t *);
 extern struct mbuf *ifclassq_poll(struct ifclassq *);
@@ -372,7 +379,7 @@ extern struct mbuf *ifclassq_poll_sc(struct ifclassq *, mbuf_svc_class_t);
 extern void ifclassq_update(struct ifclassq *, cqev_t);
 extern int ifclassq_attach(struct ifclassq *, u_int32_t, void *,
     ifclassq_enq_func, ifclassq_deq_func, ifclassq_deq_sc_func,
-    ifclassq_req_func);
+    ifclassq_deq_multi_func, ifclassq_req_func);
 extern int ifclassq_detach(struct ifclassq *);
 extern int ifclassq_getqstats(struct ifclassq *, u_int32_t,
     void *, u_int32_t *);
@@ -381,6 +388,10 @@ extern int ifclassq_tbr_set(struct ifclassq *, struct tb_profile *, boolean_t);
 extern struct mbuf *ifclassq_tbr_dequeue(struct ifclassq *, int);
 extern struct mbuf *ifclassq_tbr_dequeue_sc(struct ifclassq *, int,
     mbuf_svc_class_t);
+extern void ifclassq_calc_target_qdelay(struct ifnet *ifp,
+    u_int64_t *if_target_qdelay);
+extern void ifclassq_calc_update_interval(u_int64_t *update_interval);
+
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* PRIVATE */
 #endif /* _NET_CLASSQ_IF_CLASSQ_H_ */

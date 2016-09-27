@@ -96,6 +96,8 @@ extern int32_t gPESerialBaud;
 
 extern uint8_t gPlatformECID[8];
 
+extern uint32_t gPlatformMemoryID;
+
 unsigned int PE_init_taproot(vm_offset_t *taddr);
 
 extern void (*PE_kputc)(char c);
@@ -283,6 +285,13 @@ extern boolean_t PE_parse_boot_argn(
 	const char	*arg_string,
 	void    	*arg_ptr,
 	int			max_arg);
+
+#if XNU_KERNEL_PRIVATE
+extern boolean_t PE_parse_boot_arg_str(
+	const char *arg_string,
+	char *      arg_ptr,
+	int         size);
+#endif /* XNU_KERNEL_PRIVATE */
 
 extern boolean_t PE_get_default(
 	const char	*property_name,

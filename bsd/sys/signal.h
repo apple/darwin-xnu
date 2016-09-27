@@ -573,7 +573,7 @@ struct	sigstack {
 		    sigmask(SIGSEGV)|sigmask(SIGSYS)|\
 		    sigmask(SIGPIPE)|sigmask(SIGKILL))
 
-#define workq_threadmask (threadmask | sigcantmask)
+#define workq_threadmask (threadmask | sigcantmask | sigmask(SIGPROF))
 
 /*
  * Signals carried across exec.

@@ -75,6 +75,8 @@ typedef	kern_return_t		IOReturn;
 #define sub_iokit_sdio                    err_sub(0x174)
 #define sub_iokit_wlan                    err_sub(0x208)
 
+#define sub_iokit_appleembeddedsleepwakehandler  err_sub(0x209)
+
 #define sub_iokit_vendor_specific         err_sub(-2)
 #define sub_iokit_reserved                err_sub(-1)
 

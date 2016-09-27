@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -787,6 +787,10 @@ skipmcast:
 	return (0);
 }
 
+/*
+ * This routine is only meant to configure IPv6 Link Local
+ * addresses.
+ */
 int
 in6_ifattach_aliasreq(struct ifnet *ifp, struct ifnet *altifp,
     struct in6_aliasreq *ifra0)
@@ -802,7 +806,13 @@ in6_ifattach_aliasreq(struct ifnet *ifp, struct ifnet *altifp,
 	if (!ip6_auto_linklocal)
 		return (0);
 
-	/* assign a link-local address, only if there isn't one here already. */
+	/*
+	 * Assign a link-local address, only if there isn't one here already.
+	 * XXX If we ever allow more than one LLA on the interface
+	 * make sure that the corresponding prefix on the prefixlist
+	 * is reference counted and the address's prefix pointer
+	 * points to the prefix.
+	 */
 	ia6 = in6ifa_ifpforlinklocal(ifp, 0);
 	if (ia6 != NULL) {
 		IFA_REMREF(&ia6->ia_ifa);
@@ -818,7 +828,7 @@ in6_ifattach_aliasreq(struct ifnet *ifp, struct ifnet *altifp,
 	strlcpy(ifra.ifra_name, if_name(ifp), sizeof (ifra.ifra_name));
 
 	/* Initialize the IPv6 interface address in our in6_aliasreq block */
-	if ((ifp->if_eflags & IFEF_NOAUTOIPV6LL) != 0 && ifra0 != NULL) {
+	if (ifra0 != NULL) {
 		/* interface provided both addresses for us */
 		struct sockaddr_in6 *sin6 = &ifra.ifra_addr;
 		struct in6_addr *in6 = &sin6->sin6_addr;
@@ -887,20 +897,20 @@ in6_ifattach_aliasreq(struct ifnet *ifp, struct ifnet *altifp,
 }
 
 int
-in6_ifattach_llstartreq(struct ifnet *ifp, struct in6_llstartreq *llsr)
+in6_ifattach_llcgareq(struct ifnet *ifp, struct in6_cgareq *llcgasr)
 {
 	struct in6_aliasreq ifra;
 	struct in6_ifaddr *ia6 = NULL;
 	struct nd_ifinfo *ndi = NULL;
 	int error;
 
-	VERIFY(llsr != NULL);
+	VERIFY(llcgasr != NULL);
 
 	error = in6_ifattach_prelim(ifp);
 	if (error != 0)
 		return (error);
 
-	if (!ip6_auto_linklocal || (ifp->if_eflags & IFEF_NOAUTOIPV6LL) != 0)
+	if (!ip6_auto_linklocal)
 		return (0);
 
 	if (nd6_send_opstate == ND6_SEND_OPMODE_DISABLED)
@@ -912,7 +922,13 @@ in6_ifattach_llstartreq(struct ifnet *ifp, struct in6_llstartreq *llsr)
 		return (ENXIO);
 	}
 
-	/* assign a link-local address, only if there isn't one here already. */
+	/*
+	 * Assign a link-local address, only if there isn't one here already.
+	 * XXX If we ever allow more than one LLA on the interface
+	 * make sure that the corresponding prefix on the prefixlist
+	 * is reference counted and the address's prefix pointer
+	 * points to the prefix.
+	 */
 	ia6 = in6ifa_ifpforlinklocal(ifp, 0);
 	if (ia6 != NULL) {
 		IFA_REMREF(&ia6->ia_ifa);
@@ -930,7 +946,7 @@ in6_ifattach_llstartreq(struct ifnet *ifp, struct in6_llstartreq *llsr)
 	ifra.ifra_flags = IN6_IFF_SECURED;
 
 	in6_cga_node_lock();
-	if (in6_cga_generate(&llsr->llsr_cgaprep, 0,
+	if (in6_cga_generate(&llcgasr->cgar_cgaprep, 0,
 	    &ifra.ifra_addr.sin6_addr)) {
 		in6_cga_node_unlock();
 		return (EADDRNOTAVAIL);
@@ -952,7 +968,7 @@ in6_ifattach_llstartreq(struct ifnet *ifp, struct in6_llstartreq *llsr)
 	 * identifiers].
 	 */
 	ifra.ifra_lifetime.ia6t_vltime = ND6_INFINITE_LIFETIME;
-	ifra.ifra_lifetime.ia6t_pltime = llsr->llsr_lifetime.ia6t_pltime;
+	ifra.ifra_lifetime.ia6t_pltime = llcgasr->cgar_lifetime.ia6t_pltime;
 
 	/* Attach the link-local address */
 	if (in6_ifattach_linklocal(ifp, &ifra) != 0) {

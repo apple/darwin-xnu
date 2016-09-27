@@ -114,11 +114,14 @@ kxld_seg_export_macho_to_file_buffer(const KXLDSeg *seg, u_char *buf,
     __attribute__((nonnull, visibility("hidden")));
 
 kern_return_t
-kxld_seg_export_macho_to_vm(const KXLDSeg *seg, u_char *buf,
-    u_long *header_offset, u_long header_size, 
-    u_long data_size, kxld_addr_t file_link_addr, 
-    boolean_t is_32_bit)
-    __attribute__((nonnull, visibility("hidden")));
+kxld_seg_export_macho_to_vm(const KXLDSeg *seg,
+                            u_char *buf,
+                            u_long *header_offset,
+                            u_long header_size,
+                            u_long data_size,
+                            kxld_addr_t file_link_addr,
+                            boolean_t is_32_bit)
+__attribute__((nonnull, visibility("hidden")));
 
 /*******************************************************************************
 * Modifiers
@@ -135,7 +138,7 @@ void kxld_seg_set_vm_protections(KXLDSeg *seg, boolean_t strict_protections)
     __attribute__((nonnull, visibility("hidden")));
 
 void kxld_seg_relocate(KXLDSeg *seg, kxld_addr_t link_addr)
-    __attribute__((nonnull, visibility("hidden")));
+__attribute__((nonnull, visibility("hidden")));
 
 void kxld_seg_populate_linkedit(KXLDSeg *seg, const struct kxld_symtab *symtab,
     boolean_t is_32_bit
@@ -144,8 +147,28 @@ void kxld_seg_populate_linkedit(KXLDSeg *seg, const struct kxld_symtab *symtab,
     , const struct kxld_array *extrelocs
     , boolean_t target_supports_slideable_kexts
 #endif  /* KXLD_PIC_KEXTS */
+    , uint32_t splitinfolc_size
 	)
     __attribute__((nonnull, visibility("hidden")));
+
+boolean_t kxld_seg_is_split_seg(const KXLDSeg *seg)
+__attribute__((pure, nonnull, visibility("hidden")));
+
+boolean_t kxld_seg_is_text_seg(const KXLDSeg *seg)
+__attribute__((pure, nonnull, visibility("hidden")));
+
+boolean_t kxld_seg_is_text_exec_seg(const KXLDSeg *seg)
+__attribute__((pure, nonnull, visibility("hidden")));
+
+boolean_t kxld_seg_is_data_seg(const KXLDSeg *seg)
+__attribute__((pure, nonnull, visibility("hidden")));
+
+boolean_t kxld_seg_is_data_const_seg(const KXLDSeg *seg)
+__attribute__((pure, nonnull, visibility("hidden")));
+
+boolean_t kxld_seg_is_linkedit_seg(const KXLDSeg *seg)
+__attribute__((pure, nonnull, visibility("hidden")));
+
 
 #endif /* _KXLD_SEG_H_ */
 

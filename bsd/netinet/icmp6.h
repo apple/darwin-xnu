@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -328,6 +328,7 @@ struct nd_opt_hdr {		/* Neighbor discovery option header */
 #define ND_OPT_PREFIX_INFORMATION	3
 #define ND_OPT_REDIRECTED_HEADER	4
 #define ND_OPT_MTU			5
+#define ND_OPT_NONCE			14	/* RFC 3971 */
 #define ND_OPT_RDNSS			25	/* RFC 5006 */
 #define ND_OPT_DNSSL			31	/* RFC 6106 */
 
@@ -346,6 +347,17 @@ struct nd_opt_prefix_info {	/* prefix information */
 
 #define ND_OPT_PI_FLAG_ONLINK		0x80
 #define ND_OPT_PI_FLAG_AUTO		0x40
+
+#define	ND_OPT_NONCE_LEN	((1 * 8) - 2)
+#if ((ND_OPT_NONCE_LEN + 2) % 8) != 0
+#error "(ND_OPT_NONCE_LEN + 2) must be a multiple of 8."
+#endif
+
+struct nd_opt_nonce {		/* nonce option */
+	u_int8_t	nd_opt_nonce_type;
+	u_int8_t	nd_opt_nonce_len;
+	u_int8_t	nd_opt_nonce[ND_OPT_NONCE_LEN];
+} __attribute__((__packed__));
 
 struct nd_opt_rd_hdr {		/* redirected header */
 	u_int8_t	nd_opt_rh_type;
@@ -642,6 +654,7 @@ struct icmp6stat {
 	u_quad_t icp6s_badrs;		/* bad router advertisement */
 	u_quad_t icp6s_badra;		/* bad router advertisement */
 	u_quad_t icp6s_badredirect;	/* bad redirect message */
+	u_quad_t icp6s_rfc6980_drop;    /* NDP packet dropped based on RFC 6980 */
 };
 
 /*

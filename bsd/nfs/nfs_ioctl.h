@@ -69,6 +69,7 @@ struct user_nfs_gss_principal
 
 /* If no credential was found returned NFS_IOC_NO_CRED_FLAG in the flags field. */
 #define NFS_IOC_NO_CRED_FLAG		1	/* No credential was found */
+#define NFS_IOC_INVALID_CRED_FLAG	2	/* Found a credential, but its not valid */
 
 #define NFS_IOC_SET_CRED		_IOW('n', 2, struct nfs_gss_principal)
 #define NFS_FSCTL_SET_CRED		IOCBASECMD(NFS_IOC_SET_CRED)

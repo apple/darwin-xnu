@@ -225,6 +225,8 @@ struct thread_background_policy {
 	integer_t	priority;
 };
 
+#define THREAD_BACKGROUND_POLICY_DARWIN_BG 0x1000
+
 typedef struct thread_background_policy		thread_background_policy_data_t;
 typedef struct thread_background_policy 	*thread_background_policy_t;
 
@@ -272,7 +274,13 @@ struct thread_policy_state {
 	integer_t effective;
 	integer_t pending;
 	integer_t flags;
-	integer_t reserved[12];
+	uint64_t thps_requested_policy;
+	uint64_t thps_effective_policy;
+	uint32_t thps_user_promotions;
+	uint32_t thps_user_promotion_basepri;
+	uint32_t thps_ipc_overrides;
+	uint32_t reserved32;
+	uint64_t reserved[2];
 };
 
 typedef struct thread_policy_state		thread_policy_state_data_t;
@@ -339,13 +347,18 @@ typedef struct thread_policy_state		*thread_policy_state_t;
  * issue a reset-all in its outermost scope before deciding whether it
  * should return to dequeueing work from the global concurrent queues,
  * or return to the kernel.
+ *
+ * THREAD_QOS_OVERRIDE_TYPE_WILDCARD is a catch-all which will reset every
+ * resource matching the resource value.  Passing
+ * THREAD_QOS_OVERRIDE_RESOURCE_WILDCARD as well will reset everything.
  */
 
-#define THREAD_QOS_OVERRIDE_TYPE_UNKNOWN					(0)
-#define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_MUTEX				(1)
-#define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_RWLOCK				(2)
-#define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_EXPLICIT_OVERRIDE	(3)
-#define THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE	(4)
+#define THREAD_QOS_OVERRIDE_TYPE_UNKNOWN                        (0)
+#define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_MUTEX                  (1)
+#define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_RWLOCK                 (2)
+#define THREAD_QOS_OVERRIDE_TYPE_PTHREAD_EXPLICIT_OVERRIDE      (3)
+#define THREAD_QOS_OVERRIDE_TYPE_DISPATCH_ASYNCHRONOUS_OVERRIDE (4)
+#define THREAD_QOS_OVERRIDE_TYPE_WILDCARD                       (5)
 
 /* A special resource value to indicate a resource wildcard */
 #define THREAD_QOS_OVERRIDE_RESOURCE_WILDCARD (~((user_addr_t)0))
@@ -362,5 +375,58 @@ typedef struct thread_qos_policy      *thread_qos_policy_t;
         (sizeof (thread_qos_policy_data_t) / sizeof (integer_t)))
 
 #endif /* PRIVATE */
+
+#ifdef PRIVATE
+
+/*
+ * Internal bitfields are privately exported for revlocked tracing tools like msa to decode tracepoints.
+ *
+ * These struct definitions *will* change in the future.
+ * When they do, we will update THREAD_POLICY_INTERNAL_STRUCT_VERSION.
+ */
+
+#define THREAD_POLICY_INTERNAL_STRUCT_VERSION 4
+
+struct thread_requested_policy {
+	uint64_t        thrp_int_darwinbg       :1,     /* marked as darwinbg via setpriority */
+	                thrp_ext_darwinbg       :1,
+	                thrp_int_iotier         :2,     /* IO throttle tier */
+	                thrp_ext_iotier         :2,
+	                thrp_int_iopassive      :1,     /* should IOs cause lower tiers to be throttled */
+	                thrp_ext_iopassive      :1,
+	                thrp_latency_qos        :3,     /* Timer latency QoS */
+	                thrp_through_qos        :3,     /* Computation throughput QoS */
+
+	                thrp_pidbind_bg         :1,     /* task i'm bound to is marked 'watchbg' */
+	                thrp_qos                :3,     /* thread qos class */
+	                thrp_qos_relprio        :4,     /* thread qos relative priority (store as inverse, -10 -> 0xA) */
+	                thrp_qos_override       :3,     /* thread qos class override */
+	                thrp_qos_promote        :3,     /* thread qos class from promotion */
+	                thrp_qos_ipc_override   :3,     /* thread qos class from ipc override */
+	                thrp_terminated         :1,     /* heading for termination */
+
+	                thrp_reserved           :32;
+};
+
+struct thread_effective_policy {
+	uint64_t        thep_darwinbg           :1,     /* marked as 'background', and sockets are marked bg when created */
+	                thep_io_tier            :2,     /* effective throttle tier */
+	                thep_io_passive         :1,     /* should IOs cause lower tiers to be throttled */
+	                thep_all_sockets_bg     :1,     /* All existing sockets in process are marked as bg (thread: all created by thread) */
+	                thep_new_sockets_bg     :1,     /* Newly created sockets should be marked as bg */
+	                thep_terminated         :1,     /* all throttles have been removed for quick exit or SIGTERM handling */
+	                thep_qos_ui_is_urgent   :1,     /* bump UI-Interactive QoS up to the urgent preemption band */
+	                thep_latency_qos        :3,     /* Timer latency QoS level */
+	                thep_through_qos        :3,     /* Computation throughput QoS level */
+
+	                thep_qos                :3,     /* thread qos class */
+	                thep_qos_relprio        :4,     /* thread qos relative priority (store as inverse, -10 -> 0xA) */
+	                thep_qos_promote        :3,     /* thread qos class used for promotion */
+
+	                thep_reserved           :40;
+};
+
+#endif /* PRIVATE */
+
 
 #endif	/* _MACH_THREAD_POLICY_H_ */

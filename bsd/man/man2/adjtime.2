@@ -44,7 +44,7 @@
 .Ft int
 .Fn adjtime "const struct timeval *delta" "struct timeval *olddelta"
 .Sh DESCRIPTION
-.Fn Adjtime
+.Fn adjtime
 makes small adjustments to the system time, as returned by
 .Xr gettimeofday 2 ,
 advancing or retarding it
@@ -88,7 +88,7 @@ A return value of -1 indicates that an error occurred, and in this
 case an error code is stored in the global variable
 .Va errno .
 .Sh ERRORS
-.Fn Adjtime
+.Fn adjtime
 will fail if:
 .Bl -tag -width Er
 .It Bq Er EFAULT

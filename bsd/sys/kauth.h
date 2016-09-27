@@ -261,6 +261,8 @@ extern int      kauth_cred_gid2ntsid(gid_t _gid, ntsid_t *_sidp);
 extern int      kauth_cred_guid2ntsid(guid_t *_guid, ntsid_t *_sidp);
 extern int	kauth_cred_ismember_gid(kauth_cred_t _cred, gid_t _gid, int *_resultp);
 extern int	kauth_cred_ismember_guid(kauth_cred_t _cred, guid_t *_guidp, int *_resultp);
+extern int	kauth_cred_nfs4domain2dsnode(char *nfs4domain, char *dsnode);
+extern int	kauth_cred_dsnode2nfs4domain(char *dsnode, char *nfs4domain);
 
 extern int 	groupmember(gid_t gid, kauth_cred_t cred);
 

@@ -128,8 +128,8 @@ struct vnode {
 	lck_mtx_t v_lock;			/* vnode mutex */
 	TAILQ_ENTRY(vnode) v_freelist;		/* vnode freelist */
 	TAILQ_ENTRY(vnode) v_mntvnodes;		/* vnodes for mount point */
+        TAILQ_HEAD(, namecache) v_ncchildren;	/* name cache entries that regard us as their parent */
         LIST_HEAD(, namecache) v_nclinks;	/* name cache entries that name this vnode */
-        LIST_HEAD(, namecache) v_ncchildren;	/* name cache entries that regard us as their parent */
         vnode_t	 v_defer_reclaimlist;		/* in case we have to defer the reclaim to avoid recursion */
         uint32_t v_listflag;			/* flags protected by the vnode_list_lock (see below) */
 	uint32_t v_flag;			/* vnode flags (see below) */
@@ -397,19 +397,11 @@ extern struct vnodeop_desc *vnodeop_descs[];
 
 struct ostat;
 
-#define BUILDPATH_NO_FS_ENTER     0x1 /* Use cache values, do not enter file system */
-#define BUILDPATH_CHECKACCESS     0x2 /* Check if parents have search rights */
-#define BUILDPATH_CHECK_MOVED     0x4 /* Return EAGAIN if the parent hierarchy is modified */
-#define BUILDPATH_VOLUME_RELATIVE 0x8 /* Return path relative to the nearest mount point */
-
-int	build_path(vnode_t first_vp, char *buff, int buflen, int *outlen, int flags, vfs_context_t ctx);
-
-int 	bdevvp(dev_t dev, struct vnode **vpp);
+/* bdevvp moved to vnode.h as private KPI */
 void	cvtstat(struct stat *st, struct ostat *ost);
 void	vprint(const char *label, struct vnode *vp);
 
 
-__private_extern__ int is_package_name(const char *name, int len);
 __private_extern__ int set_package_extensions_table(user_addr_t data, int nentries, int maxwidth);
 int 	vn_rdwr_64(enum uio_rw rw, struct vnode *vp, uint64_t base,
 	    		int64_t len, off_t offset, enum uio_seg segflg,
@@ -447,6 +439,9 @@ int	vn_authorize_unlink(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_
 int 	vn_authorize_rename(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
        		struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp,
             	vfs_context_t ctx, void *reserved);
+int vn_authorize_renamex(struct vnode *fdvp,  struct vnode *fvp,  struct componentname *fcnp,
+						 struct vnode *tdvp,  struct vnode *tvp,  struct componentname *tcnp,
+						 vfs_context_t ctx, vfs_rename_flags_t flags, void *reserved);
 int	vn_authorize_rmdir(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_context_t ctx, void *reserved);
 
 typedef int (*vn_create_authorizer_t)(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
@@ -486,7 +481,6 @@ void	name_cache_unlock(void);
 void	cache_enter_with_gen(vnode_t dvp, vnode_t vp, struct componentname *cnp, int gen);
 const char *cache_enter_create(vnode_t dvp, vnode_t vp, struct componentname *cnp);
 
-int vn_pathconf(vnode_t, int, int32_t *, vfs_context_t);
 extern int nc_disabled; 	
 
 #define	vnode_lock_convert(v)	lck_mtx_convert_spin(&(v)->v_lock)
@@ -500,7 +494,6 @@ void	vnode_list_unlock(void);
 #define VNODE_REF_FORCE	0x1
 int	vnode_ref_ext(vnode_t, int, int);
 
-void	vnode_rele_ext(vnode_t, int, int);
 void	vnode_rele_internal(vnode_t, int, int, int);
 #ifdef BSD_KERNEL_PRIVATE
 int	vnode_getalways(vnode_t);
@@ -594,6 +587,8 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 
 void vnode_setswapmount(vnode_t);
 int64_t	vnode_getswappin_avail(vnode_t);
+
+int vnode_get_snapdir(vnode_t , vnode_t *, vfs_context_t);
 
 #if CONFIG_TRIGGERS
 /* VFS Internal Vnode Trigger Interfaces (Private) */

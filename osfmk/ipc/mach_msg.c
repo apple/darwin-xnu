@@ -138,10 +138,12 @@ mach_msg_return_t mach_msg_receive(
 
 mach_msg_return_t msg_receive_error(
 	ipc_kmsg_t		kmsg,
-	mach_vm_address_t	msg_addr,
 	mach_msg_option_t	option,
+	mach_vm_address_t	rcv_addr,
+	mach_msg_size_t		rcv_size,
 	mach_port_seqno_t	seqno,
-	ipc_space_t		space);
+	ipc_space_t		space,
+	mach_msg_size_t		*out_size);
 
 security_token_t KERNEL_SECURITY_TOKEN = KERNEL_SECURITY_TOKEN_VALUE;
 audit_token_t KERNEL_AUDIT_TOKEN = KERNEL_AUDIT_TOKEN_VALUE;
@@ -185,7 +187,7 @@ mach_msg_send(
 	mach_msg_option_t	option,
 	mach_msg_size_t		send_size,
 	mach_msg_timeout_t	send_timeout,
-	__unused mach_port_name_t	notify)
+	mach_msg_priority_t	override)
 {
 	ipc_space_t space = current_space();
 	vm_map_t map = current_map();
@@ -200,13 +202,22 @@ mach_msg_send(
 	if (send_size > MACH_MSG_SIZE_MAX - MAX_TRAILER_SIZE)
 		return MACH_SEND_TOO_LARGE;
 	
+	KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
+
 	msg_and_trailer_size = send_size + MAX_TRAILER_SIZE;
 
 	kmsg = ipc_kmsg_alloc(msg_and_trailer_size);
 
-	if (kmsg == IKM_NULL)
+	if (kmsg == IKM_NULL) {
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, MACH_SEND_NO_BUFFER);
 		return MACH_SEND_NO_BUFFER;
+	}
 
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_LINK) | DBG_FUNC_NONE,
+			      (uintptr_t)0, /* this should only be called from the kernel! */
+			      VM_KERNEL_ADDRPERM((uintptr_t)kmsg),
+			      0, 0,
+			      0);
 	(void) memcpy((void *) kmsg->ikm_header, (const void *) msg, send_size);
 
 	kmsg->ikm_header->msgh_size = send_size;
@@ -223,10 +234,11 @@ mach_msg_send(
 	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
 
-	mr = ipc_kmsg_copyin(kmsg, space, map, &option);
+	mr = ipc_kmsg_copyin(kmsg, space, map, override, &option);
 
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_free(kmsg);
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 		return mr;
 	}
 
@@ -237,6 +249,7 @@ mach_msg_send(
 	    (void) memcpy((void *) msg, (const void *) kmsg->ikm_header, 
 			  kmsg->ikm_header->msgh_size);
 	    ipc_kmsg_free(kmsg);
+	    KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 	}
 
 	return mr;
@@ -278,7 +291,8 @@ typedef	struct
  */
 
 mach_msg_return_t
-mach_msg_receive_results(void)
+mach_msg_receive_results(
+	mach_msg_size_t *sizep)
 {
 	thread_t          self = current_thread();
 	ipc_space_t       space = current_space();
@@ -286,46 +300,67 @@ mach_msg_receive_results(void)
 
 	ipc_object_t      object = self->ith_object;
 	mach_msg_return_t mr = self->ith_state;
-	mach_vm_address_t msg_addr = self->ith_msg_addr;
+	mach_vm_address_t rcv_addr = self->ith_msg_addr;
+	mach_msg_size_t   rcv_size = self->ith_rsize;
 	mach_msg_option_t option = self->ith_option;
 	ipc_kmsg_t        kmsg = self->ith_kmsg;
 	mach_port_seqno_t seqno = self->ith_seqno;
+
 	mach_msg_trailer_size_t trailer_size;
+	mach_msg_size_t   size = 0;
 
 	io_release(object);
 
 	if (mr != MACH_MSG_SUCCESS) {
 
-	  if (mr == MACH_RCV_TOO_LARGE ) {
-	    if (option & MACH_RCV_LARGE) {
-	      /*
-	       * We need to inform the user-level code that it needs more
-	       * space.  The value for how much space was returned in the
-	       * msize save area instead of the message (which was left on
-	       * the queue).
-	       */
-	      if (option & MACH_RCV_LARGE_IDENTITY) {
-		      if (copyout((char *) &self->ith_receiver_name,
-				  msg_addr + offsetof(mach_msg_user_header_t, msgh_local_port),
-				  sizeof(mach_port_name_t)))
-			      mr = MACH_RCV_INVALID_DATA;
-	      }
-	      if (copyout((char *) &self->ith_msize,
-			  msg_addr + offsetof(mach_msg_user_header_t, msgh_size),
-			  sizeof(mach_msg_size_t)))
-	      	mr = MACH_RCV_INVALID_DATA;
-	    } else {
+		if (mr == MACH_RCV_TOO_LARGE) {
 
-	    	/* discard importance in message */
-	    	ipc_importance_clean(kmsg);
+			/*
+			 * If the receive operation occurs with MACH_RCV_LARGE set
+			 * then no message was extracted from the queue, and the size
+			 * and (optionally) receiver names were the only thing captured.
+			 * Just copyout the size (and optional port name) in a fake
+			 * header.
+			 */
+			if (option & MACH_RCV_LARGE) {
 
-		if (msg_receive_error(kmsg, msg_addr, option, seqno, space)
-		    == MACH_RCV_INVALID_DATA)
-		    mr = MACH_RCV_INVALID_DATA;
-	    }
-	  }
-	  return mr;
+				if ((option & MACH_RCV_STACK) == 0 &&
+				    rcv_size >= offsetof(mach_msg_user_header_t, msgh_reserved)) {
+
+					/*
+					 * We need to inform the user-level code that it needs more
+					 * space.  The value for how much space was returned in the
+					 * msize save area instead of the message (which was left on
+					 * the queue).
+					 */
+					if (option & MACH_RCV_LARGE_IDENTITY) {
+						if (copyout((char *) &self->ith_receiver_name,
+							    rcv_addr + offsetof(mach_msg_user_header_t, msgh_local_port),
+							    sizeof(mach_port_name_t)))
+							mr = MACH_RCV_INVALID_DATA;
+					}
+					if (copyout((char *) &self->ith_msize,
+						    rcv_addr + offsetof(mach_msg_user_header_t, msgh_size),
+						    sizeof(mach_msg_size_t)))
+						mr = MACH_RCV_INVALID_DATA;
+				}
+			} else {
+
+				/* discard importance in message */
+				ipc_importance_clean(kmsg);
+
+				if (msg_receive_error(kmsg, option, rcv_addr, rcv_size, seqno, space, &size)
+				    == MACH_RCV_INVALID_DATA)
+					mr = MACH_RCV_INVALID_DATA;
+			}
+		}
+
+		if (sizep)
+			*sizep = size;
+		return mr;
 	}
+
+	/* MACH_MSG_SUCCESS */
 
 #if IMPORTANCE_INHERITANCE
 
@@ -339,30 +374,60 @@ mach_msg_receive_results(void)
 
 	trailer_size = ipc_kmsg_add_trailer(kmsg, space, option, self, seqno, FALSE, 
 			kmsg->ikm_header->msgh_remote_port->ip_context);
+	
 	mr = ipc_kmsg_copyout(kmsg, space, map, MACH_MSG_BODY_NULL, option);
 
 	if (mr != MACH_MSG_SUCCESS) {
+
 		/* already received importance, so have to undo that here */
 		ipc_importance_unreceive(kmsg, option);
 
+		/* if we had a body error copyout what we have, otherwise a simple header/trailer */
 		if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
-			if (ipc_kmsg_put(msg_addr, kmsg, kmsg->ikm_header->msgh_size +
-			   trailer_size) == MACH_RCV_INVALID_DATA)
+			if (ipc_kmsg_put(kmsg, option, rcv_addr, rcv_size, trailer_size, &size) == MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
-		} 
-		else {
-			if (msg_receive_error(kmsg, msg_addr, option, seqno, space) 
+		} else {
+			if (msg_receive_error(kmsg, option, rcv_addr, rcv_size, seqno, space, &size) 
 						== MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
 		}
 	} else {
-		mr = ipc_kmsg_put(msg_addr,
-				  kmsg,
-				  kmsg->ikm_header->msgh_size + 
-				  trailer_size);
+		/* capture ksmg QoS values to the thread continuation state */
+		self->ith_qos = kmsg->ikm_qos;
+		self->ith_qos_override = kmsg->ikm_qos_override;
+		mr = ipc_kmsg_put(kmsg, option, rcv_addr, rcv_size, trailer_size, &size);
 	}
 
+	if (sizep)
+		*sizep = size;
 	return mr;
+}
+#ifndef _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG
+#define _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG 0x02000000 /* pthread event manager bit */
+#endif
+#ifndef _PTHREAD_PRIORITY_OVERCOMMIT_FLAG
+#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG    0x80000000 /* request overcommit threads */
+#endif
+#ifndef _PTHREAD_PRIORITY_QOS_CLASS_MASK
+#define _PTHREAD_PRIORITY_QOS_CLASS_MASK    0x003fff00  /* QoS class mask */
+#endif
+
+/* JMM - this needs to invoke a pthread function to compute this */
+mach_msg_priority_t
+mach_msg_priority_combine(mach_msg_priority_t msg_qos,
+                          mach_msg_priority_t recv_qos)
+{
+    mach_msg_priority_t overcommit;
+	mach_msg_priority_t no_oc_qos;
+	mach_msg_priority_t res;
+
+	assert(msg_qos < _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG);
+	overcommit = recv_qos & _PTHREAD_PRIORITY_OVERCOMMIT_FLAG;
+	no_oc_qos =  recv_qos & ~overcommit; 
+	res = (no_oc_qos > msg_qos) ? no_oc_qos : msg_qos;
+	res |= overcommit;
+
+	return res;
 }
 
 /*
@@ -406,22 +471,28 @@ mach_msg_receive(
 
 	self->ith_msg_addr = CAST_DOWN(mach_vm_address_t, msg);
 	self->ith_object = object;
-	self->ith_msize = rcv_size;
+	self->ith_rsize = rcv_size;
+	self->ith_msize = 0;
 	self->ith_option = option;
 	self->ith_continuation = continuation;
 
 	ipc_mqueue_receive(mqueue, option, rcv_size, rcv_timeout, THREAD_ABORTSAFE);
 	if ((option & MACH_RCV_TIMEOUT) && rcv_timeout == 0)
 		thread_poll_yield(self);
-	return mach_msg_receive_results();
+	return mach_msg_receive_results(NULL);
 }
 
 void
 mach_msg_receive_continue(void)
 {
+	mach_msg_return_t mr;
 	thread_t self = current_thread();
 
-	(*self->ith_continuation)(mach_msg_receive_results());
+	if (self->ith_state == MACH_PEEK_READY)
+		mr = MACH_PEEK_READY;
+	else
+		mr = mach_msg_receive_results(NULL);
+	(*self->ith_continuation)(mr);
 }
 
 
@@ -445,7 +516,7 @@ mach_msg_overwrite_trap(
 	mach_msg_size_t		rcv_size = args->rcv_size;
 	mach_port_name_t	rcv_name = args->rcv_name;
 	mach_msg_timeout_t	msg_timeout = args->timeout;
-	__unused mach_port_name_t notify = args->notify;
+	mach_msg_priority_t override = args->override;
 	mach_vm_address_t	rcv_msg_addr = args->rcv_msg;
 	__unused mach_port_seqno_t temp_seqno = 0;
 
@@ -459,15 +530,26 @@ mach_msg_overwrite_trap(
 		ipc_space_t space = current_space();
 		ipc_kmsg_t kmsg;
 
+		KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
+
 		mr = ipc_kmsg_get(msg_addr, send_size, &kmsg);
 
-		if (mr != MACH_MSG_SUCCESS)
+		if (mr != MACH_MSG_SUCCESS) {
+			KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 			return mr;
+		}
 
-		mr = ipc_kmsg_copyin(kmsg, space, map, &option);
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_LINK) | DBG_FUNC_NONE,
+				      (uintptr_t)msg_addr,
+				      VM_KERNEL_ADDRPERM((uintptr_t)kmsg),
+				      0, 0,
+				      0);
+
+		mr = ipc_kmsg_copyin(kmsg, space, map, override, &option);
 
 		if (mr != MACH_MSG_SUCCESS) {
 			ipc_kmsg_free(kmsg);
+			KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 			return mr;
 		}
 
@@ -475,7 +557,8 @@ mach_msg_overwrite_trap(
 
 		if (mr != MACH_MSG_SUCCESS) {
 			mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
-			(void) ipc_kmsg_put(msg_addr, kmsg, kmsg->ikm_header->msgh_size);
+			(void) ipc_kmsg_put(kmsg, option, msg_addr, send_size, 0, NULL);
+			KDBG(MACHDBG_CODE(DBG_MACH_IPC,MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 			return mr;
 		}
 
@@ -498,7 +581,8 @@ mach_msg_overwrite_trap(
 		else
 			self->ith_msg_addr = msg_addr;
 		self->ith_object = object;
-		self->ith_msize = rcv_size;
+		self->ith_rsize = rcv_size;
+		self->ith_msize = 0;
 		self->ith_option = option;
 		self->ith_receiver_name = MACH_PORT_NULL;
 		self->ith_continuation = thread_syscall_return;
@@ -506,7 +590,7 @@ mach_msg_overwrite_trap(
 		ipc_mqueue_receive(mqueue, option, rcv_size, msg_timeout, THREAD_ABORTSAFE);
 		if ((option & MACH_RCV_TIMEOUT) && msg_timeout == 0)
 			thread_poll_yield(self);
-		return mach_msg_receive_results();
+		return mach_msg_receive_results(NULL);
 	}
 
 	return MACH_MSG_SUCCESS;
@@ -542,6 +626,8 @@ mach_msg_trap(
  *		MACH_RCV_TOO_LARGE or MACH_RCV_BODY_ERROR error.
  *	Conditions:
  *		Nothing locked.
+ *		size - maximum buffer size on input,
+ *		       actual copied-out size on output
  *	Returns:
  *		MACH_MSG_SUCCESS	minimal header/trailer copied
  *		MACH_RCV_INVALID_DATA	copyout to user buffer failed
@@ -550,10 +636,12 @@ mach_msg_trap(
 mach_msg_return_t
 msg_receive_error(
 	ipc_kmsg_t		kmsg,
-	mach_vm_address_t	msg_addr,
 	mach_msg_option_t	option,
+	mach_vm_address_t	rcv_addr,
+	mach_msg_size_t		rcv_size,
 	mach_port_seqno_t	seqno,
-	ipc_space_t		space)
+	ipc_space_t		space,
+	mach_msg_size_t		*sizep)
 {
 	mach_vm_address_t	context;
 	mach_msg_trailer_size_t trailer_size;
@@ -583,10 +671,11 @@ msg_receive_error(
 			TRUE, context);
 
 	/*
-	 * Copy the message to user space
+	 * Copy the message to user space and return the size
+	 * (note that ipc_kmsg_put may also adjust the actual
+	 * size copied out to user-space).
 	 */
-	if (ipc_kmsg_put(msg_addr, kmsg, kmsg->ikm_header->msgh_size +
-			trailer_size) == MACH_RCV_INVALID_DATA)
+	if (ipc_kmsg_put(kmsg, option, rcv_addr, rcv_size, trailer_size, sizep) == MACH_RCV_INVALID_DATA)
 		return(MACH_RCV_INVALID_DATA);
 	else 
 		return(MACH_MSG_SUCCESS);

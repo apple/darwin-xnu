@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -18,21 +17,21 @@ WARNFLAGS = -Wall
 LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
 
 config: $(OBJS)
-	@echo HOST_LD $@
+	@echo "$(ColorH)HOST_LD$(Color0)       $(ColorF)$@$(Color0)"
 	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
-	@echo HOST_CODESIGN $@
+	@echo "$(ColorH)HOST_CODESIGN$(Color0) $(ColorF)$@$(Color0)"
 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
 %.o: %.c
-	@echo HOST_CC $@
+	@echo "$(ColorH)HOST_CC$(Color0)       $(ColorF)$@$(Color0)"
 	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
 parser.c: parser.y
-	@echo HOST_BISON $@
+	@echo "$(ColorH)HOST_BISON$(Color0)    $(ColorF)$@$(Color0)"
 	$(_v)$(HOST_BISON) -y -d -d -o $@ $<
 
 lexer.yy.c: lexer.l
-	@echo HOST_FLEX $@
+	@echo "$(ColorH)HOST_FLEX$(Color0)     $(ColorF)$@$(Color0)"
 	$(_v)env M4=$(HOST_GM4) $(HOST_FLEX) --header-file=lexer.yy.h -o $@ $<
 
 main.o mkheaders.o mkioconf.o mkmakefile.o lexer.yy.c: parser.c

@@ -54,7 +54,7 @@ static inline void cpu_halt(void)
 
 static inline void cpu_pause(void)
 {
-	asm volatile( "rep; nop" );
+	__builtin_ia32_pause();
 }
 
 #endif /* _I386_MACHINE_CPU_H_ */

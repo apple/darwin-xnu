@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -290,7 +290,7 @@ void IODelay(unsigned microseconds);
 /*! @function IOPause
     @abstract Spin delay for a number of nanoseconds.
     @discussion This function spins to delay for at least the number of specified nanoseconds. Since the CPU is busy spinning no time is made available to other processes; this method of delay should be used only for short periods.
-    @param microseconds The integer number of nanoseconds to spin wait. */
+    @param nanoseconds The integer number of nanoseconds to spin wait. */
 
 void IOPause(unsigned nanoseconds);
 
@@ -298,7 +298,7 @@ void IOPause(unsigned nanoseconds);
     @abstract Log a message to console in text mode, and /var/log/system.log.
     @discussion This function allows a driver to log diagnostic information to the screen during verbose boots, and to a log file found at /var/log/system.log. IOLog should not be called from interrupt context.
     @param format A printf() style format string (see printf(3) documentation).
-    @param other arguments described by the format string. */
+    */
 
 void IOLog(const char *format, ...)
 __attribute__((format(printf, 1, 2)));

@@ -15,11 +15,11 @@ WK_pack_2bits(WK_word* source_buf,
               WK_word* source_end,
 	      WK_word* dest_buf) {
 
-   register WK_word* src_next = source_buf;
+   WK_word* src_next = source_buf;
    WK_word* dest_next = dest_buf;
   
    while (src_next < source_end) {
-      register WK_word temp = src_next[0];
+      WK_word temp = src_next[0];
       temp |= (src_next[1] << 2);
       temp |= (src_next[2] << 4);
       temp |= (src_next[3] << 6);
@@ -43,12 +43,12 @@ static WK_word*
 WK_pack_4bits(WK_word* source_buf,
 	      WK_word* source_end,
 	      WK_word* dest_buf) {
-   register WK_word* src_next = source_buf;
+   WK_word* src_next = source_buf;
    WK_word* dest_next = dest_buf;
   
    /* this loop should probably be unrolled */
    while (src_next < source_end) {
-     register WK_word temp = src_next[0];
+     WK_word temp = src_next[0];
      temp |= (src_next[1] << 4);
     
      dest_next[0] = temp;
@@ -69,12 +69,12 @@ WK_pack_3_tenbits(WK_word* source_buf,
 		  WK_word* source_end,
 		  WK_word* dest_buf) {
 
-   register WK_word* src_next = source_buf;
+   WK_word* src_next = source_buf;
    WK_word* dest_next = dest_buf;
   
    /* this loop should probably be unrolled */
    while (src_next < source_end) {
-      register WK_word temp = src_next[0];
+      WK_word temp = src_next[0];
       temp |= (src_next[1] << 10);
       temp |= (src_next[2] << 20);
     

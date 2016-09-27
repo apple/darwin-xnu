@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -90,10 +90,6 @@ extern errno_t proto_register_input(protocol_family_t protocol,
 		to unload until the proto_detached_handler is called.
 	@param protocol The protocol family these functions will receive
 		packets for.
-	@param input The function called when a packet is input.
-	@param inject The function to called when a packet is injected (not
-		on the normal input path).
-	@result A errno error on failure.
  */
 extern void proto_unregister_input(protocol_family_t protocol);
 #endif /* BSD_KERNEL_PRIVATE */
@@ -132,7 +128,7 @@ extern errno_t proto_inject(protocol_family_t protocol, mbuf_t packet);
 		interface. A typical protocol plumb function would fill out an
 		ifnet_attach_proto_param and call ifnet_attach_protocol.
 	@param ifp The interface the protocol should be attached to.
-	@param protocol_family The protocol that should be attached to the
+	@param protocol The protocol that should be attached to the
 		interface.
 	@result
 		A non-zero value of the attach failed.
@@ -145,7 +141,7 @@ typedef errno_t (*proto_plumb_handler)(ifnet_t ifp, protocol_family_t protocol);
 		from an interface. A typical unplumb function would call
 		ifnet_detach_protocol and perform any necessary cleanup.
 	@param ifp The interface the protocol should be detached from.
-	@param protocol_family The protocol that should be detached from the
+	@param protocol The protocol that should be detached from the
 		interface.
  */
 typedef void (*proto_unplumb_handler)(ifnet_t ifp, protocol_family_t protocol);

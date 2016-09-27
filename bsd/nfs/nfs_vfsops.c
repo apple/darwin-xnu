@@ -150,6 +150,7 @@ uint32_t nfs_open_owner_seqnum = 0;
 uint32_t nfs_lock_owner_seqnum = 0;
 thread_call_t nfs4_callback_timer_call;
 int nfs4_callback_timer_on = 0;
+char nfs4_domain[MAXPATHLEN];
 
 /* nfsiod */
 lck_grp_t *nfsiod_lck_grp;
@@ -204,26 +205,19 @@ int	nfs_vfs_init(struct vfsconf *);
 int	nfs_vfs_sysctl(int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, vfs_context_t);
 
 struct vfsops nfs_vfsops = {
-	nfs_vfs_mount,
-	nfs_vfs_start,
-	nfs_vfs_unmount,
-	nfs_vfs_root,
-	nfs_vfs_quotactl,
-	nfs_vfs_getattr,
-	nfs_vfs_sync,
-	nfs_vfs_vget,
-	nfs_vfs_fhtovp,
-	nfs_vfs_vptofh,
-	nfs_vfs_init,
-	nfs_vfs_sysctl,
-	NULL,		/* setattr */
-	{ NULL,		/* reserved */
-	  NULL,		/* reserved */
-	  NULL,		/* reserved */
-	  NULL,		/* reserved */
-	  NULL,		/* reserved */
-	  NULL,		/* reserved */
-	  NULL }	/* reserved */
+	.vfs_mount       = nfs_vfs_mount,
+	.vfs_start       = nfs_vfs_start,
+	.vfs_unmount     = nfs_vfs_unmount,
+	.vfs_root        = nfs_vfs_root,
+	.vfs_quotactl    = nfs_vfs_quotactl,
+	.vfs_getattr     = nfs_vfs_getattr,
+	.vfs_sync        = nfs_vfs_sync,
+	.vfs_vget        = nfs_vfs_vget,
+	.vfs_fhtovp      = nfs_vfs_fhtovp,
+	.vfs_vptofh      = nfs_vfs_vptofh,
+	.vfs_init        = nfs_vfs_init,
+	.vfs_sysctl      = nfs_vfs_sysctl,
+	// We do not support the remaining VFS ops
 };
 
 
@@ -2667,7 +2661,14 @@ mountnfs(
 	uint32_t *mflags;
 	uint32_t argslength, attrslength;
 	struct nfs_location_index firstloc = { NLI_VALID, 0, 0, 0 };
-
+	static const struct nfs_etype nfs_default_etypes = {
+		.count = NFS_MAX_ETYPES,
+		.selected = NFS_MAX_ETYPES,
+		.etypes = { NFS_AES256_CTS_HMAC_SHA1_96,
+			    NFS_AES128_CTS_HMAC_SHA1_96,
+			    NFS_DES3_CBC_SHA1_KD
+		}
+	};
 	/* make sure mbuf constants are set up */
 	if (!nfs_mbuf_mhlen)
 		nfs_mbuf_init();
@@ -2725,6 +2726,7 @@ mountnfs(
 		nmp->nm_acregmax = NFS_MAXATTRTIMO;
 		nmp->nm_acdirmin = NFS_MINDIRATTRTIMO;
 		nmp->nm_acdirmax = NFS_MAXDIRATTRTIMO;
+		nmp->nm_etype = nfs_default_etypes;
 		nmp->nm_auth = RPCAUTH_SYS;
 		nmp->nm_iodlink.tqe_next = NFSNOLIST;
 		nmp->nm_deadtimeout = 0;
@@ -2866,6 +2868,31 @@ mountnfs(
 		}
 		/* start with the first flavor */
 		nmp->nm_auth = nmp->nm_sec.flavors[0];
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_KERB_ETYPE)) {
+		uint32_t etypecnt;
+		xb_get_32(error, &xb, etypecnt);
+		if (!error && ((etypecnt < 1) || (etypecnt > NFS_MAX_ETYPES)))
+			error = EINVAL;
+		nfsmerr_if(error);
+		nmp->nm_etype.count = etypecnt;
+		xb_get_32(error, &xb, nmp->nm_etype.selected);
+		nfsmerr_if(error);
+		if (etypecnt) {
+			nmp->nm_etype.selected = etypecnt; /* Nothing is selected yet, so set selected to count */
+			for (i=0; i < etypecnt; i++) {
+				xb_get_32(error, &xb, nmp->nm_etype.etypes[i]);
+				/* Check for valid encryption type */
+				switch (nmp->nm_etype.etypes[i]) {
+				case NFS_DES3_CBC_SHA1_KD:
+				case NFS_AES128_CTS_HMAC_SHA1_96:
+				case NFS_AES256_CTS_HMAC_SHA1_96:
+					break;
+				default:
+					error = EINVAL;
+				}
+			}
+		}
 	}
 	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MAX_GROUP_LIST))
 		xb_get_32(error, &xb, nmp->nm_numgrps);
@@ -3309,7 +3336,7 @@ mountnfs(
 	lck_mtx_unlock(&nmp->nm_lock);
 	return (0);
 nfsmerr:
-	nfs_mount_cleanup(nmp);
+	nfs_mount_drain_and_cleanup(nmp);
 	return (error);
 }
 
@@ -3512,6 +3539,12 @@ nfs_mirror_mount_domount(vnode_t dvp, vnode_t vp, vfs_context_t ctx)
 		xb_copy_32(error, &xb, &xbnew, val);
 	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SECURITY)) {
 		xb_copy_32(error, &xb, &xbnew, count);
+		while (!error && (count-- > 0))
+			xb_copy_32(error, &xb, &xbnew, val);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_KERB_ETYPE)) {
+		xb_copy_32(error, &xb, &xbnew, count);
+		xb_add_32(error, &xbnew, -1);
 		while (!error && (count-- > 0))
 			xb_copy_32(error, &xb, &xbnew, val);
 	}
@@ -4514,8 +4547,8 @@ nfs_mount_cleanup(struct nfsmount *nmp)
 	NFS_VFS_DBG("Unmounting %s from %s\n",
 		    vfs_statfs(nmp->nm_mountp)->f_mntfromname,
 		    vfs_statfs(nmp->nm_mountp)->f_mntonname);
-	NFS_VFS_DBG("nfs state = %x\n", nmp->nm_state);
-	NFS_VFS_DBG("nfs socket flags = %x\n", nmp->nm_sockflags);
+	NFS_VFS_DBG("nfs state = 0x%8.8x\n", nmp->nm_state);
+	NFS_VFS_DBG("nfs socket flags = 0x%8.8x\n", nmp->nm_sockflags);
 	NFS_VFS_DBG("nfs mount ref count is %d\n", nmp->nm_ref);
 	NFS_VFS_DBG("mount ref count is %d\n", nmp->nm_mountp->mnt_count);
 	
@@ -4524,7 +4557,7 @@ nfs_mount_cleanup(struct nfsmount *nmp)
 
 	lck_mtx_lock(&nmp->nm_lock);
 	if (nmp->nm_ref)
-		panic("Some one has grabbed a ref %d\n", nmp->nm_ref);
+		panic("Some one has grabbed a ref %d state flags = 0x%8.8x\n", nmp->nm_ref, nmp->nm_state);
 
 	if (nmp->nm_saddr)
 		FREE(nmp->nm_saddr, M_SONAME);
@@ -5015,6 +5048,8 @@ nfs_mountinfo_assemble(struct nfsmount *nmp, struct xdrbuf *xb)
 	NFS_BITMAP_SET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MAX);
 	NFS_BITMAP_SET(mattrs, NFS_MATTR_LOCK_MODE);
 	NFS_BITMAP_SET(mattrs, NFS_MATTR_SECURITY);
+	if (nmp->nm_etype.selected < nmp->nm_etype.count)
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_KERB_ETYPE);
 	NFS_BITMAP_SET(mattrs, NFS_MATTR_MAX_GROUP_LIST);
 	NFS_BITMAP_SET(mattrs, NFS_MATTR_SOCKET_TYPE);
 	NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_PORT);
@@ -5163,6 +5198,13 @@ nfs_mountinfo_assemble(struct nfsmount *nmp, struct xdrbuf *xb)
 	} else {
 		xb_add_32(error, &xbinfo, 1);				/* SECURITY */
 		xb_add_32(error, &xbinfo, nmp->nm_auth);
+	}
+	if (nmp->nm_etype.selected < nmp->nm_etype.count) {
+		xb_add_32(error, &xbinfo, nmp->nm_etype.count);
+		xb_add_32(error, &xbinfo, nmp->nm_etype.selected);
+		for (uint32_t j=0; j < nmp->nm_etype.count; j++)
+			xb_add_32(error, &xbinfo, nmp->nm_etype.etypes[j]);
+		nfsmerr_if(error);
 	}
 	xb_add_32(error, &xbinfo, nmp->nm_numgrps);		/* MAX_GROUP_LIST */
 	nfsmerr_if(error);

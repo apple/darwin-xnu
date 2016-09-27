@@ -62,7 +62,6 @@ char	swapfilename[MAX_SWAPFILENAME_LEN + 1];
 #define SWAP_DEVICE_SHIFT	33
 
 extern int		vm_num_swap_files;
-extern boolean_t	vm_swap_up;
 
 struct swapfile;
 lck_grp_attr_t	vm_swap_data_lock_grp_attr;

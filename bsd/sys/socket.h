@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1998, 1999 Apple Computer, Inc. All Rights Reserved */
@@ -75,6 +75,7 @@
 #include <sys/types.h>
 #include <sys/cdefs.h>
 #include <machine/_param.h>
+#include <net/net_kev.h>
 
 #ifdef PRIVATE
 #include <sys/param.h>
@@ -101,7 +102,7 @@
 
 /* XXX Not explicitly defined by POSIX, but function return types are */
 #include <sys/_types/_size_t.h>
- 
+
 /* XXX Not explicitly defined by POSIX, but function return types are */
 #include <sys/_types/_ssize_t.h>
 
@@ -110,26 +111,6 @@
  */
 #include <sys/_types/_iovec_t.h>
 
-#ifdef PRIVATE
-#define SO_TCDBG_PID		0x01	/* Set/get traffic class for PID */
-#define SO_TCDBG_PNAME		0x02	/* Set/get traffic class for processes of that name */
-#define SO_TCDBG_PURGE		0x04	/* Purge entries for unused PIDs */
-#define SO_TCDBG_FLUSH		0x08	/* Flush all entries */
-#define SO_TCDBG_COUNT		0x10	/* Get count of entries */
-#define SO_TCDBG_LIST		0x20	/* List entries */
-#define SO_TCDBG_DELETE		0x40	/* Delete a process entry */
-#define SO_TCDBG_TCFLUSH_PID	0x80	/* Flush traffic class for PID */
-
-struct so_tcdbg {
-	u_int32_t	so_tcdbg_cmd;
-	int32_t		so_tcdbg_tclass;
-	u_int32_t	so_tcdbg_count;
-	pid_t		so_tcdbg_pid;
-	char		so_tcdbg_pname[MAXCOMLEN + 1];
-	int32_t		so_tcdbg_opportunistic; /* -1: unspecified, 0: off, 1: on, other: errors */
-};
-#endif /* PRIVATE */
- 
 /*
  * Types
  */
@@ -152,25 +133,26 @@ struct so_tcdbg {
 #define	SO_BROADCAST	0x0020		/* permit sending of broadcast msgs */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	SO_USELOOPBACK	0x0040		/* bypass hardware when possible */
-#define SO_LINGER	0x0080          /* linger on close if data present (in ticks) */
+#define	SO_LINGER	0x0080		/* linger on close if data present (in ticks) */
 #else
-#define SO_LINGER	0x1080          /* linger on close if data present (in seconds) */
+#define	SO_LINGER	0x1080		/* linger on close if data present (in seconds) */
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define	SO_OOBINLINE	0x0100		/* leave received OOB data in line */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	SO_REUSEPORT	0x0200		/* allow local address & port reuse */
 #define	SO_TIMESTAMP	0x0400		/* timestamp received dgram traffic */
-#define SO_TIMESTAMP_MONOTONIC	0x0800	/* Monotonically increasing timestamp on rcvd dgram */
+#define	SO_TIMESTAMP_MONOTONIC	0x0800	/* Monotonically increasing timestamp on rcvd dgram */
 #ifndef __APPLE__
 #define	SO_ACCEPTFILTER	0x1000		/* there is an accept filter */
 #else
-#define SO_DONTTRUNC	0x2000		/* APPLE: Retain unread data */
+#define	SO_DONTTRUNC	0x2000		/* APPLE: Retain unread data */
 					/*  (ATOMIC proto) */
-#define SO_WANTMORE	0x4000		/* APPLE: Give hint when more data ready */
-#define SO_WANTOOBFLAG	0x8000		/* APPLE: Want OOB in MSG_FLAG on receive */
+#define	SO_WANTMORE	0x4000		/* APPLE: Give hint when more data ready */
+#define	SO_WANTOOBFLAG	0x8000		/* APPLE: Want OOB in MSG_FLAG on receive */
 
 #ifdef PRIVATE
 #define	SO_NOWAKEFROMSLEEP	0x10000	/* Don't wake for traffic to this socket */
+#define	SO_NOAPNFALLBK		0x20000 /* Don't attempt APN fallback for the socket */
 #endif
 
 #endif  /* (!__APPLE__) */
@@ -179,43 +161,43 @@ struct so_tcdbg {
 /*
  * Additional options, not kept in so_options.
  */
-#define SO_SNDBUF	0x1001		/* send buffer size */
-#define SO_RCVBUF	0x1002		/* receive buffer size */
-#define SO_SNDLOWAT	0x1003		/* send low-water mark */
-#define SO_RCVLOWAT	0x1004		/* receive low-water mark */
-#define SO_SNDTIMEO	0x1005		/* send timeout */
-#define SO_RCVTIMEO	0x1006		/* receive timeout */
+#define	SO_SNDBUF	0x1001		/* send buffer size */
+#define	SO_RCVBUF	0x1002		/* receive buffer size */
+#define	SO_SNDLOWAT	0x1003		/* send low-water mark */
+#define	SO_RCVLOWAT	0x1004		/* receive low-water mark */
+#define	SO_SNDTIMEO	0x1005		/* send timeout */
+#define	SO_RCVTIMEO	0x1006		/* receive timeout */
 #define	SO_ERROR	0x1007		/* get error status and clear */
 #define	SO_TYPE		0x1008		/* get socket type */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-/*efine	SO_PRIVSTATE	0x1009		   get/deny privileged state */
-#define SO_LABEL        0x1010          /* socket's MAC label */
-#define SO_PEERLABEL    0x1011          /* socket's peer MAC label */
+#define	SO_LABEL	0x1010		/* socket's MAC label */
+#define	SO_PEERLABEL    0x1011		/* socket's peer MAC label */
 #ifdef __APPLE__
-#define SO_NREAD	0x1020		/* APPLE: get 1st-packet byte count */
-#define SO_NKE		0x1021		/* APPLE: Install socket-level NKE */
-#define SO_NOSIGPIPE	0x1022		/* APPLE: No SIGPIPE on EPIPE */
-#define SO_NOADDRERR	0x1023		/* APPLE: Returns EADDRNOTAVAIL when src is not available anymore */
-#define SO_NWRITE	0x1024		/* APPLE: Get number of bytes currently in send socket buffer */
-#define SO_REUSESHAREUID	0x1025		/* APPLE: Allow reuse of port/socket by different userids */
+#define	SO_NREAD	0x1020		/* APPLE: get 1st-packet byte count */
+#define	SO_NKE		0x1021		/* APPLE: Install socket-level NKE */
+#define	SO_NOSIGPIPE	0x1022		/* APPLE: No SIGPIPE on EPIPE */
+#define	SO_NOADDRERR	0x1023		/* APPLE: Returns EADDRNOTAVAIL when src is not available anymore */
+#define	SO_NWRITE	0x1024		/* APPLE: Get number of bytes currently in send socket buffer */
+#define	SO_REUSESHAREUID	0x1025		/* APPLE: Allow reuse of port/socket by different userids */
 #ifdef __APPLE_API_PRIVATE
-#define SO_NOTIFYCONFLICT	0x1026	/* APPLE: send notification if there is a bind on a port which is already in use */
+#define	SO_NOTIFYCONFLICT	0x1026	/* APPLE: send notification if there is a bind on a port which is already in use */
 #define	SO_UPCALLCLOSEWAIT	0x1027	/* APPLE: block on close until an upcall returns */
 #endif
-#define SO_LINGER_SEC	0x1080          /* linger on close if data present (in seconds) */
+#define	SO_LINGER_SEC	0x1080		/* linger on close if data present (in seconds) */
 #ifdef PRIVATE
 #define	SO_RESTRICTIONS	0x1081		/* APPLE: deny flag set */
 #define	 SO_RESTRICT_DENY_IN	0x1	/* deny inbound (trapdoor) */
 #define	 SO_RESTRICT_DENY_OUT	0x2	/* deny outbound (trapdoor) */
 #define	 SO_RESTRICT_DENY_CELLULAR 0x4	/* deny use of cellular (trapdoor) */
-#define	 SO_RESTRICT_DENY_EXPENSIVE 0x8	/* deny use of expensive if (trapdoor)*/
+#define	 SO_RESTRICT_DENY_EXPENSIVE 0x8	/* deny use of expensive if (trapdoor) */
 #endif /* PRIVATE */
-#define SO_RANDOMPORT   0x1082  /* APPLE: request local port randomization */
-#define SO_NP_EXTENSIONS	0x1083	/* To turn off some POSIX behavior */
+#define	SO_RANDOMPORT   0x1082  /* APPLE: request local port randomization */
+#define	SO_NP_EXTENSIONS	0x1083	/* To turn off some POSIX behavior */
 #endif
 
 #ifdef PRIVATE
 #define	SO_EXECPATH	0x1085 		/* Application Firewall Socket option */
+
 /*
  * Traffic service class definitions (lowest to highest):
  *
@@ -272,38 +254,54 @@ struct so_tcdbg {
  *	certain types of locally-originated ICMP, ICMPv6; IGMP/MLD join/leave,
  *	ARP.
  */
-#define SO_TRAFFIC_CLASS	0x1086	/* Traffic service class (int) */
-#define	 SO_TC_BK_SYS	100		/* lowest class */
-#define	 SO_TC_BK	200
-#define  SO_TC_BE	0
-#define	 SO_TC_RD	300
-#define	 SO_TC_OAM	400
-#define	 SO_TC_AV	500
-#define	 SO_TC_RV	600
-#define	 SO_TC_VI	700
-#define	 SO_TC_VO	800
-#define	 SO_TC_CTL	900		/* highest class */
-#define  SO_TC_MAX	10		/* Total # of traffic classes */
+#define	SO_TRAFFIC_CLASS	0x1086	/* Traffic service class (int) */
+#define	SO_TC_BK_SYS	100		/* lowest class */
+#define	SO_TC_BK	200
+#define	SO_TC_BE	0
+#define	SO_TC_RD	300
+#define	SO_TC_OAM	400
+#define	SO_TC_AV	500
+#define	SO_TC_RV	600
+#define	SO_TC_VI	700
+#define	SO_TC_VO	800
+#define	SO_TC_CTL	900		/* highest class */
+#define	SO_TC_MAX	10		/* Total # of traffic classes */
 #ifdef XNU_KERNEL_PRIVATE
-#define  _SO_TC_BK	1		/* deprecated */
-#define  _SO_TC_VI	2		/* deprecated */
-#define  _SO_TC_VO	3		/* deprecated */
-#define  _SO_TC_MAX	4		/* deprecated */
+#define	_SO_TC_BK	1		/* deprecated */
+#define	_SO_TC_VI	2		/* deprecated */
+#define	_SO_TC_VO	3		/* deprecated */
+#define	_SO_TC_MAX	4		/* deprecated */
 
 #define	SO_VALID_TC(c)							\
 	(c == SO_TC_BK_SYS || c == SO_TC_BK || c == SO_TC_BE ||		\
 	c == SO_TC_RD || c == SO_TC_OAM || c == SO_TC_AV ||		\
-	c == SO_TC_RV || c == SO_TC_VI || c == SO_TC_VO || c == SO_TC_CTL)
+	c == SO_TC_RV || c == SO_TC_VI || c == SO_TC_VO ||		\
+	c == SO_TC_CTL)
+
+#define	SO_TC_UNSPEC	((int)-1)		/* Traffic class not specified */
+
+#define	SO_TC_SIG	SO_TC_VI		/* to be removed XXX */
+
+#define	SOTCIX_BK_SYS	0
+#define	SOTCIX_BK	1
+#define	SOTCIX_BE	2
+#define	SOTCIX_RD	3
+#define	SOTCIX_OAM	4
+#define	SOTCIX_AV	5
+#define	SOTCIX_RV	6
+#define	SOTCIX_VI	7
+#define	SOTCIX_VO	8
+#define	SOTCIX_CTL	9
 #endif /* XNU_KERNEL_PRIVATE */
 
-/* Background socket configuration flags */
-#define TRAFFIC_MGT_SO_BACKGROUND       0x0001  /* background socket */
-#define TRAFFIC_MGT_TCP_RECVBG          0x0002  /* Only TCP sockets, receiver throttling */
+/* Background socket configuration flags  */
+#define	TRAFFIC_MGT_SO_BACKGROUND	0x0001  /* background socket */
+#define	TRAFFIC_MGT_TCP_RECVBG		0x0002  /* Only TCP sockets, receiver throttling */
 
-#define SO_RECV_TRAFFIC_CLASS	0x1087		/* Receive traffic class (bool)*/
-#define SO_TRAFFIC_CLASS_DBG	0x1088		/* Debug traffic class (struct so_tcdbg) */
-#define SO_TRAFFIC_CLASS_STATS	0x1089		/* Traffic class statistics */
-#define SO_PRIVILEGED_TRAFFIC_CLASS 0x1090	/* Privileged traffic class (bool) */
+#define	SO_RECV_TRAFFIC_CLASS	0x1087		/* Receive traffic class (bool) */
+#define	SO_TRAFFIC_CLASS_DBG	0x1088		/* Debug traffic class (struct so_tcdbg) */
+#define	SO_TRAFFIC_CLASS_STATS	0x1089		/* Traffic class statistics */
+#define	SO_PRIVILEGED_TRAFFIC_CLASS 0x1090	/* Privileged traffic class (bool) */
 #define	SO_DEFUNCTOK	0x1100		/* can be defunct'd */
 #define	SO_ISDEFUNCT	0x1101		/* get defunct status */
 
@@ -319,7 +317,7 @@ struct so_tcdbg {
 
 #define	SO_RECV_ANYIF	0x1104		/* unrestricted inbound processing */
 #define	SO_TRAFFIC_MGT_BACKGROUND	0x1105	/* Background traffic management */
- 
+
 #define	SO_FLOW_DIVERT_TOKEN	0x1106	/* flow divert token */
 
 #define	SO_DELEGATED		0x1107	/* set socket as delegate (pid_t) */
@@ -327,15 +325,138 @@ struct so_tcdbg {
 #define	SO_NECP_ATTRIBUTES	0x1109	/* NECP socket attributes (domain, account, etc.) */
 #define	SO_CFIL_SOCK_ID		0x1110	/* get content filter socket ID (cfil_sock_id_t) */
 #if MPTCP
-#define SO_MPTCP_FASTJOIN	0x1111	/* fast join MPTCP */
+#define	SO_MPTCP_FASTJOIN	0x1111	/* fast join MPTCP */
 #endif /* MPTCP */
 #endif /* PRIVATE */
-#define SO_NUMRCVPKT		0x1112	/* number of datagrams in receive socket buffer */
+#define	SO_NUMRCVPKT		0x1112	/* number of datagrams in receive socket buffer */
 #ifdef PRIVATE
 #define	SO_AWDL_UNRESTRICTED 	0x1113  /* try to use AWDL in restricted mode */
-#define SO_EXTENDED_BK_IDLE	0x1114	/* extended time to keep socket idle after app is suspended (int) */
+#define	SO_EXTENDED_BK_IDLE	0x1114	/* extended time to keep socket idle after app is suspended (int) */
 #define	SO_MARK_CELLFALLBACK	0x1115	/* Mark as initiated by cell fallback */
 #endif /* PRIVATE */
+
+/*
+ * Network Service Type for option SO_NET_SERVICE_TYPE
+ *
+ * The vast majority of sockets should use Best Effort that is the default
+ * Network Service Type. Other Network Service Types have to be used only if
+ * the traffic actually matches the description of the Network Service Type.
+ *
+ * Network Service Types do not represent priorities but rather describe
+ * different categories of delay, jitter and loss parameters.
+ * Those parameters may influence protocols from layer 4 protocols like TCP
+ * to layer 2 protocols like Wi-Fi. The Network Service Type can determine
+ * how the traffic is queued and scheduled by the host networking stack and
+ * by other entities on the network like switches and routers. For example
+ * for Wi-Fi, the Network Service Type can select the marking of the
+ * layer 2 packet with the appropriate WMM Access Category.
+ *
+ * There is no point in attempting to game the system and use
+ * a Network Service Type that does not correspond to the actual
+ * traffic characteristic but one that seems to have a higher precedence.
+ * The reason is that for service classes that have lower tolerance
+ * for delay and jitter, the queues size is lower than for service
+ * classes that are more tolerant to delay and jitter.
+ *
+ * For example using a voice service type for bulk data transfer will lead
+ * to disastrous results as soon as congestion happens because the voice
+ * queue overflows and packets get dropped. This is not only bad for the bulk
+ * data transfer but it is also bad for VoIP apps that legitimately are using
+ * the voice  service type.
+ *
+ * The characteristics of the Network Service Types are based on the service
+ * classes defined in RFC 4594 "Configuration Guidelines for DiffServ Service
+ * Classes"
+ *
+ * When system detects the outgoing interface belongs to a DiffServ domain
+ * that follows the recommendation of the IETF draft "Guidelines for DiffServ to
+ * IEEE 802.11 Mapping", the packet will marked at layer 3 with a DSCP value
+ * that corresponds to Network Service Type.
+ *
+ * NET_SERVICE_TYPE_BE
+ *	"Best Effort", unclassified/standard.  This is the default service
+ *	class and cover the majority of the traffic.
+ *
+ * NET_SERVICE_TYPE_BK
+ *	"Background", high delay tolerant, loss tolerant. elastic flow,
+ *	variable size & long-lived. E.g: non-interactive network bulk transfer
+ *	like synching or backup.
+ *
+ * NET_SERVICE_TYPE_RD
+ *	"Responsive Data", a notch higher than "Best Effort", medium delay
+ *	tolerant, elastic & inelastic flow, bursty, long-lived. E.g. email,
+ *	instant messaging, for which there is a sense of interactivity and
+ *	urgency (user waiting for output).
+ *
+ * NET_SERVICE_TYPE_OAM
+ *	"Operations, Administration, and Management", medium delay tolerant,
+ *	low-medium loss tolerant, elastic & inelastic flows, variable size.
+ *	E.g. VPN tunnels.
+ *
+ * NET_SERVICE_TYPE_AV
+ *	"Multimedia Audio/Video Streaming", medium delay tolerant, low-medium
+ *	loss tolerant, elastic flow, constant packet interval, variable rate
+ *	and size. E.g. video and audio playback with buffering.
+ *
+ * NET_SERVICE_TYPE_RV
+ *	"Responsive Multimedia Audio/Video", low delay tolerant, low-medium
+ *	loss tolerant, elastic flow, variable packet interval, rate and size.
+ *	E.g. screen sharing.
+ *
+ * NET_SERVICE_TYPE_VI
+ *	"Interactive Video", low delay tolerant, low-medium loss tolerant,
+ *	elastic flow, constant packet interval, variable rate & size. E.g.
+ *	video telephony.
+ *
+ * NET_SERVICE_TYPE_SIG
+ *	"Signaling", low delay tolerant, low loss tolerant, inelastic flow,
+ *	jitter tolerant, rate is bursty but short, variable size. E.g. SIP.
+ *
+ * NET_SERVICE_TYPE_VO
+ *	"Interactive Voice", very low delay tolerant, very low loss tolerant,
+ *	inelastic flow, constant packet rate, somewhat fixed size.
+ *	E.g. VoIP.
+ */
+#define	SO_NET_SERVICE_TYPE	0x1116	/* Network service type */
+
+#define	NET_SERVICE_TYPE_BE	0 /* Best effort */
+#define	NET_SERVICE_TYPE_BK	1 /* Background system initiated */
+#define	NET_SERVICE_TYPE_SIG	2 /* Signaling */
+#define	NET_SERVICE_TYPE_VI	3 /* Interactive Video */
+#define	NET_SERVICE_TYPE_VO	4 /* Interactive Voice */
+#define	NET_SERVICE_TYPE_RV	5 /* Responsive Multimedia Audio/Video */
+#define	NET_SERVICE_TYPE_AV	6 /* Multimedia Audio/Video Streaming */
+#define	NET_SERVICE_TYPE_OAM	7 /* Operations, Administration, and Management */
+#define	NET_SERVICE_TYPE_RD	8 /* Responsive Data */
+
+#if PRIVATE
+#define	SO_QOSMARKING_POLICY_OVERRIDE	0x1117	/* int */
+#define	SO_INTCOPROC_ALLOW		0x1118	/* Try to use internal co-processor interfaces. */
+
+#define	_NET_SERVICE_TYPE_COUNT	9
+#define	_NET_SERVICE_TYPE_UNSPEC	((int)-1)
+
+#define	IS_VALID_NET_SERVICE_TYPE(c)				\
+	(c >= NET_SERVICE_TYPE_BE && c <= NET_SERVICE_TYPE_RD)
+
+extern const int sotc_by_netservicetype[_NET_SERVICE_TYPE_COUNT];
+
+/*
+ * Facility to pass Network Service Type values using SO_TRAFFIC_CLASS
+ * Mostly useful to simplify implementation of frameworks to adopt the new
+ * Network Service Type values for Signaling.
+ */
+#define	SO_TC_NET_SERVICE_OFFSET	10000
+#define	SO_TC_NETSVC_SIG	(SO_TC_NET_SERVICE_OFFSET + NET_SERVICE_TYPE_SIG)
+#endif /* PRIVATE */
+
+#define	SO_NETSVC_MARKING_LEVEL	0x1119	/* Get QoS marking in effect for socket */
+
+#define	NETSVC_MRKNG_UNKNOWN		0	/* The outgoing network interface is not known */
+#define	NETSVC_MRKNG_LVL_L2		1	/* Default marking at layer 2 (for example Wi-Fi WMM) */
+#define	NETSVC_MRKNG_LVL_L3L2_ALL	2	/* Layer 3 DSCP marking and layer 2 marking for all Network Service Types */
+#define	NETSVC_MRKNG_LVL_L3L2_BK	3	/* The system policy limits layer 3 DSCP marking and layer 2 marking
+						 * to background Network Service Types */
 
 typedef __uint32_t sae_associd_t;
 #define	SAE_ASSOCID_ANY	0
@@ -346,16 +467,16 @@ typedef __uint32_t sae_connid_t;
 #define	SAE_CONNID_ALL	((sae_connid_t)(-1ULL))
 
 /* connectx() flag parameters */
-#define CONNECT_RESUME_ON_READ_WRITE	0x1 /* resume connect() on read/write */
-#define CONNECT_DATA_IDEMPOTENT		0x2 /* data is idempotent */
+#define	CONNECT_RESUME_ON_READ_WRITE	0x1 /* resume connect() on read/write */
+#define	CONNECT_DATA_IDEMPOTENT		0x2 /* data is idempotent */
 
 /* sockaddr endpoints */
 typedef struct sa_endpoints {
-	unsigned int	sae_srcif;      /* optional source interface */
-	struct sockaddr	*sae_srcaddr;   /* optional source address */
-	socklen_t	sae_srcaddrlen; /* size of source address */
-	struct sockaddr	*sae_dstaddr;   /* destination address */
-	socklen_t	sae_dstaddrlen; /* size of destination address */
+	unsigned int		sae_srcif;	/* optional source interface */
+	const struct sockaddr	*sae_srcaddr;   /* optional source address */
+	socklen_t		sae_srcaddrlen; /* size of source address */
+	const struct sockaddr	*sae_dstaddr;   /* destination address */
+	socklen_t		sae_dstaddrlen; /* size of destination address */
 } sa_endpoints_t;
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -378,20 +499,20 @@ struct	accept_filter_arg {
 #ifdef __APPLE__
 
 /*
- * Structure to control non-portable Sockets extension to POSIX  
+ * Structure to control non-portable Sockets extension to POSIX
  */
 struct so_np_extensions {
 	u_int32_t	npx_flags;
 	u_int32_t	npx_mask;
 };
 
-#define SONPX_SETOPTSHUT	0x000000001     /* flag for allowing setsockopt after shutdown */
+#define	SONPX_SETOPTSHUT	0x000000001	/* flag for allowing setsockopt after shutdown */
 
 
 #ifdef KERNEL_PRIVATE
-#define SONPX_MASK_VALID		(SONPX_SETOPTSHUT)
-#define IS_SO_TC_BACKGROUND(_tc_) ((_tc_) == SO_TC_BK || (_tc_) == SO_TC_BK_SYS)
-#define IS_SO_TC_BACKGROUNDSYSTEM(_tc_) ((_tc_) == SO_TC_BK_SYS)
+#define	SONPX_MASK_VALID		(SONPX_SETOPTSHUT)
+#define	IS_SO_TC_BACKGROUND(_tc_) ((_tc_) == SO_TC_BK || (_tc_) == SO_TC_BK_SYS)
+#define	IS_SO_TC_BACKGROUNDSYSTEM(_tc_) ((_tc_) == SO_TC_BK_SYS)
 #endif /* KERNEL_PRIVATE */
 
 #endif
@@ -423,9 +544,9 @@ struct so_np_extensions {
 #define	AF_DATAKIT	9		/* datakit protocols */
 #define	AF_CCITT	10		/* CCITT protocols, X.25 etc */
 #define	AF_SNA		11		/* IBM SNA */
-#define AF_DECnet	12		/* DECnet */
-#define AF_DLI		13		/* DEC Direct data link interface */
-#define AF_LAT		14		/* LAT */
+#define	AF_DECnet	12		/* DECnet */
+#define	AF_DLI		13		/* DEC Direct data link interface */
+#define	AF_LAT		14		/* LAT */
 #define	AF_HYLINK	15		/* NSC Hyperchannel */
 #define	AF_APPLETALK	16		/* Apple Talk */
 #define	AF_ROUTE	17		/* Internal Routing Protocol */
@@ -433,31 +554,30 @@ struct so_np_extensions {
 #define	pseudo_AF_XTP	19		/* eXpress Transfer Protocol (no AF) */
 #define	AF_COIP		20		/* connection-oriented IP, aka ST II */
 #define	AF_CNT		21		/* Computer Network Technology */
-#define pseudo_AF_RTIP	22		/* Help Identify RTIP packets */
+#define	pseudo_AF_RTIP	22		/* Help Identify RTIP packets */
 #define	AF_IPX		23		/* Novell Internet Protocol */
 #define	AF_SIP		24		/* Simple Internet Protocol */
-#define pseudo_AF_PIP	25		/* Help Identify PIP packets */
-/*define pseudo_AF_BLUE	26	   Identify packets for Blue Box - Not used */
-#define AF_NDRV		27		/* Network Driver 'raw' access */
-#define	AF_ISDN		28		/* Integrated Services Digital Network*/
+#define	pseudo_AF_PIP	25		/* Help Identify PIP packets */
+#define	AF_NDRV		27		/* Network Driver 'raw' access */
+#define	AF_ISDN		28		/* Integrated Services Digital Network */
 #define	AF_E164		AF_ISDN		/* CCITT E.164 recommendation */
 #define	pseudo_AF_KEY	29		/* Internal key-management function */
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define	AF_INET6	30		/* IPv6 */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	AF_NATM		31		/* native ATM access */
-#define AF_SYSTEM	32		/* Kernel event messages */
-#define AF_NETBIOS	33		/* NetBIOS */
-#define AF_PPP		34		/* PPP communication protocol */
-#define pseudo_AF_HDRCMPLT 35		/* Used by BPF to not rewrite headers
-					 * in interface output routine */
+#define	AF_SYSTEM	32		/* Kernel event messages */
+#define	AF_NETBIOS	33		/* NetBIOS */
+#define	AF_PPP		34		/* PPP communication protocol */
+#define	pseudo_AF_HDRCMPLT 35		/* Used by BPF to not rewrite headers
+					in interface output routine */
 #ifdef PRIVATE
-#define AF_AFP	36			/* Used by AFP */
+#define	AF_AFP	36			/* Used by AFP */
 #else
-#define AF_RESERVED_36	36		/* Reserved for internal usage */
+#define	AF_RESERVED_36	36		/* Reserved for internal usage */
 #endif
-#define AF_IEEE80211    37              /* IEEE 802.11 protocol */
-#define AF_UTUN		38
+#define	AF_IEEE80211	37		/* IEEE 802.11 protocol */
+#define	AF_UTUN		38
 #ifdef PRIVATE
 #define	AF_MULTIPATH	39
 #endif /* PRIVATE */
@@ -484,7 +604,7 @@ struct sockproto {
 	__uint16_t	sp_family;		/* address family */
 	__uint16_t	sp_protocol;		/* protocol */
 };
-#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE)*/
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
  * RFC 2553: protocol-independent placeholder for socket addresses
@@ -543,9 +663,9 @@ struct sockaddr_list {
 #define	PF_DATAKIT	AF_DATAKIT
 #define	PF_CCITT	AF_CCITT
 #define	PF_SNA		AF_SNA
-#define PF_DECnet	AF_DECnet
-#define PF_DLI		AF_DLI
-#define PF_LAT		AF_LAT
+#define	PF_DECnet	AF_DECnet
+#define	PF_DLI		AF_DLI
+#define	PF_LAT		AF_LAT
 #define	PF_HYLINK	AF_HYLINK
 #define	PF_APPLETALK	AF_APPLETALK
 #define	PF_ROUTE	AF_ROUTE
@@ -555,22 +675,22 @@ struct sockaddr_list {
 #define	PF_CNT		AF_CNT
 #define	PF_SIP		AF_SIP
 #define	PF_IPX		AF_IPX		/* same format as AF_NS */
-#define PF_RTIP		pseudo_AF_RTIP	/* same format as AF_INET */
-#define PF_PIP		pseudo_AF_PIP
-#define PF_NDRV		AF_NDRV
+#define	PF_RTIP		pseudo_AF_RTIP	/* same format as AF_INET */
+#define	PF_PIP		pseudo_AF_PIP
+#define	PF_NDRV		AF_NDRV
 #define	PF_ISDN		AF_ISDN
 #define	PF_KEY		pseudo_AF_KEY
 #define	PF_INET6	AF_INET6
 #define	PF_NATM		AF_NATM
-#define PF_SYSTEM	AF_SYSTEM
-#define PF_NETBIOS	AF_NETBIOS
-#define PF_PPP		AF_PPP
+#define	PF_SYSTEM	AF_SYSTEM
+#define	PF_NETBIOS	AF_NETBIOS
+#define	PF_PPP		AF_PPP
 #ifdef PRIVATE
-#define PF_AFP		AF_AFP
+#define	PF_AFP		AF_AFP
 #else
-#define PF_RESERVED_36  AF_RESERVED_36
+#define	PF_RESERVED_36  AF_RESERVED_36
 #endif
-#define PF_UTUN		AF_UTUN
+#define	PF_UTUN		AF_UTUN
 #ifdef PRIVATE
 #define	PF_MULTIPATH	AF_MULTIPATH
 #endif /* PRIVATE */
@@ -580,9 +700,9 @@ struct sockaddr_list {
  * These do not have socket-layer support:
  */
 #define	PF_VLAN		((uint32_t)0x766c616e)	/* 'vlan' */
-#define PF_BOND		((uint32_t)0x626f6e64)	/* 'bond' */
+#define	PF_BOND		((uint32_t)0x626f6e64)	/* 'bond' */
 #ifdef KERNEL_PRIVATE
-#define PF_BRIDGE	((uint32_t)0x62726467)	/* 'brdg' */
+#define	PF_BRIDGE	((uint32_t)0x62726467)	/* 'brdg' */
 #endif /* KERNEL_PRIVATE */
 
 /*
@@ -594,11 +714,11 @@ struct sockaddr_list {
  * Further levels are defined by the individual families below.
  */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define NET_MAXID	AF_MAX
+#define	NET_MAXID	AF_MAX
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 #ifdef KERNEL_PRIVATE
-#define CTL_NET_NAMES { \
+#define	CTL_NET_NAMES { \
 	{ 0, 0 }, \
 	{ "local", CTLTYPE_NODE }, \
 	{ "inet", CTLTYPE_NODE }, \
@@ -647,13 +767,13 @@ struct sockaddr_list {
  *	Fifth: type of info, defined below
  *	Sixth: flag(s) to mask with for NET_RT_FLAGS
  */
-#define NET_RT_DUMP		1	/* dump; may limit to a.f. */
-#define NET_RT_FLAGS		2	/* by flags, e.g. RESOLVING */
-#define NET_RT_IFLIST		3	/* survey interface list */
-#define NET_RT_STAT		4	/* routing statistics */
-#define NET_RT_TRASH		5	/* routes not in table but not freed */
-#define NET_RT_IFLIST2		6	/* interface list with addresses */
-#define NET_RT_DUMP2		7	/* dump; may limit to a.f. */
+#define	NET_RT_DUMP		1	/* dump; may limit to a.f. */
+#define	NET_RT_FLAGS		2	/* by flags, e.g. RESOLVING */
+#define	NET_RT_IFLIST		3	/* survey interface list */
+#define	NET_RT_STAT		4	/* routing statistics */
+#define	NET_RT_TRASH		5	/* routes not in table but not freed */
+#define	NET_RT_IFLIST2		6	/* interface list with addresses */
+#define	NET_RT_DUMP2		7	/* dump; may limit to a.f. */
 #ifdef PRIVATE
 #define	NET_RT_DUMPX		8	/* private */
 #define	NET_RT_DUMPX_FLAGS	9	/* private */
@@ -662,7 +782,7 @@ struct sockaddr_list {
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 #ifdef KERNEL_PRIVATE
-#define CTL_NET_RT_NAMES { \
+#define	CTL_NET_RT_NAMES { \
 	{ 0, 0 }, \
 	{ "dump", CTLTYPE_STRUCT }, \
 	{ "flags", CTLTYPE_STRUCT }, \
@@ -670,9 +790,9 @@ struct sockaddr_list {
 	{ "stat", CTLTYPE_STRUCT }, \
 	{ "trash", CTLTYPE_INT }, \
 	{ "iflist2", CTLTYPE_STRUCT }, \
-        { "dump2", CTLTYPE_STRUCT }, \
-        { "dumpx", CTLTYPE_STRUCT }, \
-        { "dumpx_flags", CTLTYPE_STRUCT }, \
+	{ "dump2", CTLTYPE_STRUCT }, \
+	{ "dumpx", CTLTYPE_STRUCT }, \
+	{ "dumpx_flags", CTLTYPE_STRUCT }, \
 }
 
 #endif /* KERNEL_PRIVATE */
@@ -703,7 +823,7 @@ struct msghdr {
  * For recvmsg_x(), the size of the data received is given by the field
  * msg_datalen.
  *
- * For sendmsg_x(), the size of the data to send is given by the length of 
+ * For sendmsg_x(), the size of the data to send is given by the length of
  * the iovec array -- like sendmsg(). The field msg_datalen is ignored.
  */
 struct msghdr_x {
@@ -869,27 +989,27 @@ struct user32_sa_endpoints {
 #ifdef __APPLE__
 #ifndef PRIVATE
 #ifdef __APPLE_API_OBSOLETE
-#define MSG_WAITSTREAM  0x200           /* wait up to full request.. may return partial */
+#define	MSG_WAITSTREAM	0x200		/* wait up to full request.. may return partial */
 #endif
 #else
-#define MSG_WAITSTREAM  0x200           /* wait up to full request.. may return partial */
+#define	MSG_WAITSTREAM	0x200		/* wait up to full request.. may return partial */
 #endif
-#define MSG_FLUSH	0x400		/* Start of 'hold' seq; dump so_temp */
-#define MSG_HOLD	0x800		/* Hold frag in so_temp */
-#define MSG_SEND	0x1000		/* Send the packet in so_temp */
-#define MSG_HAVEMORE	0x2000		/* Data ready to be read */
-#define MSG_RCVMORE	0x4000		/* Data remains in current pkt */
+#define	MSG_FLUSH	0x400		/* Start of 'hold' seq; dump so_temp */
+#define	MSG_HOLD	0x800		/* Hold frag in so_temp */
+#define	MSG_SEND	0x1000		/* Send the packet in so_temp */
+#define	MSG_HAVEMORE	0x2000		/* Data ready to be read */
+#define	MSG_RCVMORE	0x4000		/* Data remains in current pkt */
 #endif
 #ifdef KERNEL_PRIVATE
-#define MSG_COMPAT      0x8000		/* deprecated */
+#define	MSG_COMPAT	0x8000		/* deprecated */
 #endif /* KERNEL_PRIVATE */
-#define MSG_NEEDSA	0x10000		/* Fail receive if socket address cannot be allocated */
+#define	MSG_NEEDSA	0x10000		/* Fail receive if socket address cannot be allocated */
 #ifdef KERNEL_PRIVATE
-#define MSG_NBIO	0x20000		/* FIONBIO mode, used by fifofs */
-#define MSG_SKIPCFIL	0x40000		/* skip pass content filter */
+#define	MSG_NBIO	0x20000		/* FIONBIO mode, used by fifofs */
+#define	MSG_SKIPCFIL	0x40000		/* skip pass content filter */
 #endif
 #ifdef	KERNEL
-#define MSG_USEUPCALL	0x80000000 /* Inherit upcall in sock_accept */
+#define	MSG_USEUPCALL	0x80000000 /* Inherit upcall in sock_accept */
 #endif
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -912,8 +1032,8 @@ struct cmsghdr {
  * While we may have more groups than this, the cmsgcred struct must
  * be able to fit in an mbuf, and NGROUPS_MAX is too large to allow
  * this.
-*/
-#define CMGROUP_MAX 16
+ */
+#define	CMGROUP_MAX 16
 
 /*
  * Credentials structure, used to verify the identity of a peer
@@ -935,32 +1055,32 @@ struct cmsgcred {
 
 /* given pointer to struct cmsghdr, return pointer to data */
 #define	CMSG_DATA(cmsg)		((unsigned char *)(cmsg) + \
-				 __DARWIN_ALIGN32(sizeof(struct cmsghdr)))
+	__DARWIN_ALIGN32(sizeof(struct cmsghdr)))
 
 /*
  * RFC 2292 requires to check msg_controllen, in case that the kernel returns
  * an empty list for some reasons.
  */
-#define CMSG_FIRSTHDR(mhdr) \
-        ((mhdr)->msg_controllen >= sizeof(struct cmsghdr) ? \
-         (struct cmsghdr *)(mhdr)->msg_control : \
-         (struct cmsghdr *)0L)
+#define	CMSG_FIRSTHDR(mhdr) \
+	((mhdr)->msg_controllen >= sizeof(struct cmsghdr) ? \
+	    (struct cmsghdr *)(mhdr)->msg_control : \
+	    (struct cmsghdr *)0L)
 
 
-/* 
+/*
  * Given pointer to struct cmsghdr, return pointer to next cmsghdr
  * RFC 2292 says that CMSG_NXTHDR(mhdr, NULL) is equivalent to CMSG_FIRSTHDR(mhdr)
  */
 #define	CMSG_NXTHDR(mhdr, cmsg)						\
 	((char *)(cmsg) == (char *)0L ? CMSG_FIRSTHDR(mhdr) :		\
-	 ((((unsigned char *)(cmsg) +					\
+	    ((((unsigned char *)(cmsg) +				\
 	    __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len) +		\
 	    __DARWIN_ALIGN32(sizeof(struct cmsghdr))) >			\
 	    ((unsigned char *)(mhdr)->msg_control +			\
-	     (mhdr)->msg_controllen)) ?					\
-	  (struct cmsghdr *)0L /* NULL */ :				\
-	  (struct cmsghdr *)(void *)((unsigned char *)(cmsg) +		\
-	 		    __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len))))
+	    (mhdr)->msg_controllen)) ?					\
+		(struct cmsghdr *)0L /* NULL */ :			\
+		(struct cmsghdr *)(void *)((unsigned char *)(cmsg) +	\
+		    __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len))))
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* RFC 2292 additions */
@@ -977,11 +1097,11 @@ struct cmsgcred {
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	SCM_TIMESTAMP			0x02	/* timestamp (struct timeval) */
 #define	SCM_CREDS			0x03	/* process creds (struct cmsgcred) */
-#define	SCM_TIMESTAMP_MONOTONIC		0x04	/* timestamp (uint64_t) */ 
+#define	SCM_TIMESTAMP_MONOTONIC		0x04	/* timestamp (uint64_t) */
 
 #ifdef PRIVATE
-#define SCM_SEQNUM			0x05	/* TCP unordered recv seq no */
-#define SCM_MSG_PRIORITY		0x06	/* TCP unordered snd priority */
+#define	SCM_SEQNUM			0x05	/* TCP unordered recv seq no */
+#define	SCM_MSG_PRIORITY		0x06	/* TCP unordered snd priority */
 #endif /* PRIVATE */
 
 #ifdef KERNEL_PRIVATE
@@ -1162,7 +1282,7 @@ struct so_cinforeq64 {
 #define	CIF_MP_CAPABLE		0x100	/* supports multipath protocol */
 #define	CIF_MP_READY		0x200	/* multipath protocol confirmed */
 #define	CIF_MP_DEGRADED		0x400	/* has lost its multipath capability */
-#define CIF_MP_ACTIVE		0x800	/* this is the active subflow */
+#define	CIF_MP_ACTIVE		0x800	/* this is the active subflow */
 
 /* valid connection info auxiliary data types */
 #define	CIAUX_TCP	0x1	/* TCP auxiliary data (conninfo_tcp_t) */
@@ -1174,13 +1294,6 @@ struct so_cordreq {
 	sae_connid_t	sco_cid;		/* connection ID */
 	__uint32_t	sco_rank;		/* rank (0 means unspecified) */
 };
-
-/*
- * Network policy subclass (of KEV_NETWORK_CLASS)
- */
-#define	KEV_NETPOLICY_SUBCLASS	3
-
-#define	KEV_NETPOLICY_IFDENIED	1	/* denied access to interface */
 
 /*
  * Common structure for KEV_NETPOLICY_SUBCLASS
@@ -1199,17 +1312,8 @@ struct netpolicy_event_data {
  */
 struct kev_netpolicy_ifdenied {
 	struct netpolicy_event_data	ev_data;
+	__uint32_t ev_if_functional_type;
 };
-
-/*
- * Socket subclass (of KEV_NETWORK_CLASS)
- */
-#define	KEV_SOCKET_SUBCLASS	4
-
-/*
- * Events for KEV_SOCKET_SUBCLASS of KEV_NETWORK_CLASS
- */
-#define	KEV_SOCKET_CLOSED	1	/* completely closed by protocol */
 
 /*
  * Common structure for KEV_SOCKET_SUBCLASS
@@ -1221,6 +1325,14 @@ struct kev_socket_event_data {
 
 struct kev_socket_closed {
 	struct kev_socket_event_data ev_data;
+};
+
+/*
+ * Network Service Type to DiffServ Code Point mapping
+ */
+struct netsvctype_dscp_map {
+	int		netsvctype;
+	u_int8_t	dscp; /* 6 bits diffserv code point */
 };
 
 #ifndef	KERNEL
@@ -1235,11 +1347,11 @@ extern int socket_delegate(int, int, int, pid_t);
  *
  * recvmsg_x() can be used only with protocols handlers that have been specially
  * modified to support sending and receiving several datagrams at once.
- * 
+ *
  * The size of the array "msgp" is given by the argument "cnt".
  *
  * The "flags" arguments supports only the value MSG_DONTWAIT.
- * 
+ *
  * Each member of "msgp" array is of type "struct msghdr_x".
  *
  * The "msg_iov" and "msg_iovlen" are input parameters that describe where to
@@ -1255,7 +1367,7 @@ extern int socket_delegate(int, int, int, pid_t);
  * the low water mark and the amount of data pending in the socket buffer.
  *
  * recvmsg_x() returns the number of datagrams that have been received,
- * or -1 if an error occurred. 
+ * or -1 if an error occurred.
  *
  * NOTE: This a private system call, the API is subject to change.
  */
@@ -1267,11 +1379,11 @@ ssize_t recvmsg_x(int s, const struct msghdr_x *msgp, u_int cnt, int flags);
  *
  * sendmsg_x() can be used only with protocols handlers that have been specially
  * modified to support sending and receiving several datagrams at once.
- * 
+ *
  * The size of the array "msgp" is given by the argument "cnt".
  *
  * The "flags" arguments supports only the value MSG_DONTWAIT.
- * 
+ *
  * Each member of "msgp" array is of type "struct msghdr_x".
  *
  * The "msg_iov" and "msg_iovlen" are input parameters that specify the
@@ -1284,10 +1396,10 @@ ssize_t recvmsg_x(int s, const struct msghdr_x *msgp, u_int cnt, int flags);
  * must be set to zero on input:
  *   "msg_name", "msg_namelen", "msg_control" and "msg_controllen".
  *
- * The field "msg_flags" and "msg_datalen" must be set to zero on input. 
+ * The field "msg_flags" and "msg_datalen" must be set to zero on input.
  *
  * sendmsg_x() returns the number of datagrams that have been sent,
- * or -1 if an error occurred. 
+ * or -1 if an error occurred.
  *
  * NOTE: This a private system call, the API is subject to change.
  */
@@ -1303,7 +1415,7 @@ __BEGIN_DECLS
 int	accept(int, struct sockaddr * __restrict, socklen_t * __restrict)
 		__DARWIN_ALIAS_C(accept);
 int	bind(int, const struct sockaddr *, socklen_t) __DARWIN_ALIAS(bind);
-int	connect(int, const struct sockaddr *, socklen_t) __DARWIN_ALIAS_C( connect);
+int	connect(int, const struct sockaddr *, socklen_t) __DARWIN_ALIAS_C(connect);
 int	getpeername(int, struct sockaddr * __restrict, socklen_t * __restrict)
 		__DARWIN_ALIAS(getpeername);
 int	getsockname(int, struct sockaddr * __restrict, socklen_t * __restrict)
@@ -1330,9 +1442,9 @@ int	sendfile(int, int, off_t, off_t *, struct sf_hdtr *, int);
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 void	pfctlinput(int, struct sockaddr *);
-int connectx(int , const sa_endpoints_t *, sae_associd_t, unsigned int,
+int connectx(int, const sa_endpoints_t *, sae_associd_t, unsigned int,
     const struct iovec *, unsigned int, size_t *, sae_connid_t *);
-int disconnectx(int , sae_associd_t, sae_connid_t);
+int disconnectx(int, sae_associd_t, sae_connid_t);
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 __END_DECLS
 #endif /* !KERNEL */

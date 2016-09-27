@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2016 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/ipcomp_output.c,v 1.1.2.2 2001/07/03 11:01:54 ume Exp $	*/
 /*	$KAME: ipcomp_output.c,v 1.23 2001/01/23 08:59:37 itojun Exp $	*/
 
@@ -101,12 +129,7 @@ static int ipcomp_output(struct mbuf *, u_char *, struct mbuf *,
  *	<-----------------> compoff
  */
 static int
-ipcomp_output(m, nexthdrp, md, af, sav)
-	struct mbuf *m;
-	u_char *nexthdrp;
-	struct mbuf *md;
-	int af;
-	struct secasvar *sav;
+ipcomp_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md, int af, struct secasvar *sav)
 {
 	struct mbuf *n;
 	struct mbuf *md0;
@@ -345,9 +368,7 @@ fail:
 
 #if INET
 int
-ipcomp4_output(m, sav)
-	struct mbuf *m;
-	struct secasvar *sav;
+ipcomp4_output(struct mbuf *m, struct secasvar *sav)
 {
 	struct ip *ip;
 	if (m->m_len < sizeof(struct ip)) {
@@ -364,11 +385,11 @@ ipcomp4_output(m, sav)
 
 #if INET6
 int
-ipcomp6_output(m, nexthdrp, md, sav)
-	struct mbuf *m;
-	u_char *nexthdrp;
-	struct mbuf *md;
-	struct secasvar *sav;
+ipcomp6_output(
+	struct mbuf *m,
+	u_char *nexthdrp,
+	struct mbuf *md,
+	struct secasvar *sav)
 {
 	if (m->m_len < sizeof(struct ip6_hdr)) {
 		ipseclog((LOG_DEBUG, "ipcomp6_output: first mbuf too short\n"));

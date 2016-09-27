@@ -304,6 +304,8 @@ xb_grow(struct xdrbuf *xbp)
 		oldsize = xbp->xb_u.xb_buffer.xbb_size;
 		oldbuf = xbp->xb_u.xb_buffer.xbb_base;
 		newsize = oldsize + xbp->xb_growsize;
+		if (newsize < oldsize)
+			return (ENOMEM);
 		newbuf = xb_malloc(newsize);
 		if (newbuf == NULL)
 			return (ENOMEM);

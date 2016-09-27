@@ -43,6 +43,8 @@ struct ksyn_waitq_element {
 void workqueue_mark_exiting(struct proc *);
 void workqueue_exit(struct proc *);
 void pthread_init(void);
+int thread_qos_from_pthread_priority(unsigned long, unsigned long *);
+unsigned long pthread_priority_canonicalize(unsigned long priority, boolean_t propagation);
 
 #endif /* _SYS_PTHREAD_INTERNAL_H_ */
 

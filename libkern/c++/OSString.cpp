@@ -68,7 +68,10 @@ bool OSString::initWithCString(const char *cString)
 
     if (!cString || !super::init()) return false;
 
-    newLength = strlen(cString) + 1;
+    newLength = strnlen(cString, kMaxStringLength);
+    if (newLength >= kMaxStringLength) return false;
+
+    newLength++;
     newString = (char *) kalloc_container(newLength);
     if (!newString) return false;
 
@@ -93,6 +96,8 @@ bool OSString::initWithStringOfLength(const char *cString, size_t inlength)
     char         * newString;
 
     if (!cString || !super::init()) return false;
+
+    if (inlength >= kMaxStringLength) return false;
 
     newLength = inlength + 1;
     newString = (char *) kalloc_container(newLength);
@@ -120,7 +125,10 @@ bool OSString::initWithCStringNoCopy(const char *cString)
     if (!cString || !super::init())
         return false;
 
-    length = strlen(cString) + 1;
+    length = strnlen(cString, kMaxStringLength);
+    if (length >= kMaxStringLength) return false;
+
+    length++;
     flags |= kOSStringNoCopy;
     string = const_cast<char *>(cString);
 

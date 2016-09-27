@@ -153,18 +153,24 @@ extern int cs_debug;
 #if DEBUG
 #define __PROC_INTERNAL_DEBUG 1
 #endif
+#if CONFIG_COREDUMP
 /* Name to give to core files */
 __XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};
-
-#if PROC_REF_DEBUG
-extern uint32_t fastbacktrace(uintptr_t* bt, uint32_t max_frames) __attribute__((noinline));
 #endif
 
-static void orphanpg(struct pgrp *pg);
-void 	proc_name_kdp(task_t t, char * buf, int size);
-int	proc_threadname_kdp(void *uth, char *buf, size_t size);
-void	proc_starttime_kdp(void *p, uint64_t *tv_sec, uint64_t *tv_usec);
-char	*proc_name_address(void *p);
+#if PROC_REF_DEBUG
+#include <kern/backtrace.h>
+#endif
+
+static void orphanpg(struct pgrp * pg);
+void proc_name_kdp(task_t t, char * buf, int size);
+void * proc_get_uthread_uu_threadlist(void * uthread_v);
+int proc_threadname_kdp(void * uth, char * buf, size_t size);
+void proc_starttime_kdp(void * p, uint64_t * tv_sec, uint64_t * tv_usec, uint64_t * abstime);
+char * proc_name_address(void * p);
+
+/* TODO: make a header that's exported and usable in osfmk */
+char* proc_best_name(proc_t p);
 
 static void  pgrp_add(struct pgrp * pgrp, proc_t parent, proc_t child);
 static void pgrp_remove(proc_t p);
@@ -181,6 +187,20 @@ struct fixjob_iterargs {
 };
 
 int fixjob_callback(proc_t, void *);
+
+uint64_t get_current_unique_pid(void);
+
+
+uint64_t
+get_current_unique_pid(void)
+{
+	proc_t	p = current_proc();
+
+	if (p)
+		return p->p_uniqueid;
+	else
+		return 0;
+}
 
 /*
  * Initialize global process hashing structures.
@@ -410,7 +430,7 @@ record_procref(proc_t p, int count) {
 
 	if (count == 1) {
 		if (uth->uu_pindex < NUM_PROC_REFS_TO_TRACK) {
-			fastbacktrace((uintptr_t *) &uth->uu_proc_pcs[uth->uu_pindex], PROC_REF_STACK_DEPTH);
+			backtrace((uintptr_t *) &uth->uu_proc_pcs[uth->uu_pindex], PROC_REF_STACK_DEPTH);
 
 			uth->uu_proc_ps[uth->uu_pindex] = p;
 			uth->uu_pindex++;
@@ -775,9 +795,8 @@ proc_name_kdp(task_t t, char * buf, int size)
 		strlcpy(buf, &p->p_comm[0], MIN((int)sizeof(p->p_comm), size));
 }
 
-
 int
-proc_threadname_kdp(void *uth, char *buf, size_t size)
+proc_threadname_kdp(void * uth, char * buf, size_t size)
 {
 	if (size < MAXTHREADNAMESIZE) {
 		/* this is really just a protective measure for the future in
@@ -798,7 +817,7 @@ proc_threadname_kdp(void *uth, char *buf, size_t size)
  * thus the input arguments will in general be unaligned. We have to handle
  * that here. */
 void
-proc_starttime_kdp(void *p, uint64_t *tv_sec, uint64_t *tv_usec)
+proc_starttime_kdp(void *p, uint64_t *tv_sec, uint64_t *tv_usec, uint64_t *abstime)
 {
 	proc_t pp = (proc_t)p;
 	struct uint64p {
@@ -810,6 +829,12 @@ proc_starttime_kdp(void *p, uint64_t *tv_sec, uint64_t *tv_usec)
 			((struct uint64p *)tv_sec)->val = pp->p_start.tv_sec;
 		if (tv_usec != NULL)
 			((struct uint64p *)tv_usec)->val = pp->p_start.tv_usec;
+		if (abstime != NULL) {
+			if (pp->p_stats != NULL)
+				*abstime = pp->p_stats->ps_start;
+			else
+				*abstime = 0;
+		}
 	}
 }
 
@@ -817,6 +842,14 @@ char *
 proc_name_address(void *p)
 {
 	return &((proc_t)p)->p_comm[0];
+}
+
+char *
+proc_best_name(proc_t p)
+{
+    if (p->p_name[0] != 0)
+        return (&p->p_name[0]);
+    return (&p->p_comm[0]);
 }
 
 void
@@ -1554,75 +1587,95 @@ fixjobc(proc_t p, struct pgrp *pgrp, int entering)
 	proc_childrenwalk(p, fixjob_callback, &fjarg);
 }
 
-/* 
- * A process group has become orphaned;
- * if there are any stopped processes in the group,
- * hang-up all process in that group.
+/*
+ * A process group has become orphaned; if there are any stopped processes in
+ * the group, hang-up all process in that group.
  */
 static void
-orphanpg(struct pgrp * pgrp)
+orphanpg(struct pgrp *pgrp)
 {
+	pid_t *pid_list;
 	proc_t p;
-	pid_t * pid_list;
-	int count, pidcount, i, alloc_count;
+	vm_size_t pid_list_size = 0;
+	vm_size_t pid_list_size_needed = 0;
+	int pid_count = 0;
+	int pid_count_available = 0;
 
-	if (pgrp == PGRP_NULL)
-		return;
-	count = 0;
-	pgrp_lock(pgrp);
-	for (p = pgrp->pg_members.lh_first; p != 0; p = p->p_pglist.le_next) {
-		if (p->p_stat == SSTOP) {
-			for (p = pgrp->pg_members.lh_first; p != 0;
-				p = p->p_pglist.le_next) 
-				count++;
-			break;	/* ??? stops after finding one.. */
-		}
-	}
-	pgrp_unlock(pgrp);
+	assert(pgrp != NULL);
 
-	count += 20;
-	if (count > hard_maxproc)
-		count = hard_maxproc;
-	alloc_count = count * sizeof(pid_t);
-	pid_list = (pid_t *)kalloc(alloc_count);
-	bzero(pid_list, alloc_count);
-	
-	pidcount = 0;
-	pgrp_lock(pgrp);
-	for (p = pgrp->pg_members.lh_first; p != 0;
-	     p = p->p_pglist.le_next) {
-		if (p->p_stat == SSTOP) {
-			for (p = pgrp->pg_members.lh_first; p != 0;
-				p = p->p_pglist.le_next) {
-				pid_list[pidcount] = p->p_pid;
-				pidcount++;
-				if (pidcount >= count)
-					break;
+	/* allocate outside of the pgrp_lock */
+	for (;;) {
+		pgrp_lock(pgrp);
+
+		boolean_t should_iterate = FALSE;
+		pid_count_available = 0;
+
+		PGMEMBERS_FOREACH(pgrp, p) {
+			pid_count_available++;
+
+			if (p->p_stat == SSTOP) {
+				should_iterate = TRUE;
 			}
-			break; /* ??? stops after finding one.. */
+		}
+
+		if (pid_count_available == 0 || !should_iterate) {
+			pgrp_unlock(pgrp);
+			return;
+		}
+
+		pid_list_size_needed = pid_count_available * sizeof(pid_t);
+		if (pid_list_size >= pid_list_size_needed) {
+			break;
+		}
+		pgrp_unlock(pgrp);
+
+		if (pid_list_size != 0) {
+			kfree(pid_list, pid_list_size);
+		}
+		pid_list = kalloc(pid_list_size_needed);
+		if (!pid_list) {
+			return;
+		}
+		pid_list_size = pid_list_size_needed;
+	}
+
+	/* no orphaned processes */
+	if (pid_list_size == 0) {
+		pgrp_unlock(pgrp);
+		return;
+	}
+
+	PGMEMBERS_FOREACH(pgrp, p) {
+		pid_list[pid_count++] = proc_pid(p);
+		if (pid_count >= pid_count_available) {
+			break;
 		}
 	}
 	pgrp_unlock(pgrp);
-		
-	if (pidcount == 0)
+
+	if (pid_count == 0) {
 		goto out;
-
-
-	for (i = 0; i< pidcount; i++) {
-		/* No handling or proc0 */
-		if (pid_list[i] == 0)
-			continue;
-		p = proc_find(pid_list[i]);
-		if (p) {
-			proc_transwait(p, 0);
-			pt_setrunnable(p);
-			psignal(p, SIGHUP);
-			psignal(p, SIGCONT);
-			proc_rele(p);
-		}
 	}
+
+	for (int i = 0; i < pid_count; i++) {
+		/* do not handle kernproc */
+		if (pid_list[i] == 0) {
+			continue;
+		}
+		p = proc_find(pid_list[i]);
+		if (!p) {
+			continue;
+		}
+
+		proc_transwait(p, 0);
+		pt_setrunnable(p);
+		psignal(p, SIGHUP);
+		psignal(p, SIGCONT);
+		proc_rele(p);
+	}
+
 out:
-	kfree(pid_list, alloc_count);
+	kfree(pid_list, pid_list_size);
 	return;
 }
 
@@ -1645,6 +1698,7 @@ proc_is_forcing_hfs_case_sensitivity(proc_t p)
 	return (p->p_vfs_iopolicy & P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY) ? 1 : 0;
 }
 
+#if CONFIG_COREDUMP
 /*
  * proc_core_name(name, uid, pid)
  * Expand the name described in corefilename, using name, uid, and pid.
@@ -1687,6 +1741,8 @@ proc_core_name(const char *name, uid_t uid, pid_t pid, char *cf_name,
 				snprintf(id_buf, sizeof(id_buf), "%u", uid);
 				appendstr = id_buf;
 				break;
+			case '\0': /* format string ended in % symbol */
+				goto endofstring;
 			default:
 				appendstr = "";
 			  	log(LOG_ERR,
@@ -1710,7 +1766,12 @@ toolong:
 	log(LOG_ERR, "pid %ld (%s), uid (%u): corename is too long\n",
 	    (long)pid, name, (uint32_t)uid);
 	return (1);
+endofstring:
+	log(LOG_ERR, "pid %ld (%s), uid (%u): unexpected end of string after %% token\n",
+	    (long)pid, name, (uint32_t)uid);
+	return (1);
 }
+#endif /* CONFIG_COREDUMP */
 
 /* Code Signing related routines */
 
@@ -1816,6 +1877,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		case CS_OPS_MARKKILL:
 		case CS_OPS_MARKRESTRICT:
 		case CS_OPS_SET_STATUS:
+		case CS_OPS_CLEARINSTALLER:
 			if ((error = mac_proc_check_set_cs_info(current_proc(), pt, ops)))
 				goto out;
 			break;
@@ -1836,6 +1898,8 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 				retflags |= CS_ENFORCEMENT;
 			if (csproc_get_platform_binary(pt))
 				retflags |= CS_PLATFORM_BINARY;
+			if (csproc_get_platform_path(pt))
+				retflags |= CS_PLATFORM_PATH;
 			proc_unlock(pt);
 
 			if (uaddr != USER_ADDR_NULL)
@@ -1954,8 +2018,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			    CS_KILL | CS_EXEC_SET_KILL |
 			    CS_RESTRICT |
 			    CS_REQUIRE_LV |
-			    CS_ENFORCEMENT | CS_EXEC_SET_ENFORCEMENT |
-			    CS_ENTITLEMENTS_VALIDATED;
+			    CS_ENFORCEMENT | CS_EXEC_SET_ENFORCEMENT;
 
 			proc_lock(pt);
 			if (pt->p_csflags & CS_VALID)
@@ -2032,6 +2095,12 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 			break;
 		}
 
+		case CS_OPS_CLEARINSTALLER:
+			proc_lock(pt);
+			pt->p_csflags &= ~(CS_INSTALLER | CS_EXEC_SET_INSTALLER);
+			proc_unlock(pt);
+			break;
+
 		default:
 			error = EINVAL;
 			break;
@@ -2042,362 +2111,370 @@ out:
 }
 
 int
-proc_iterate(flags, callout, arg, filterfn, filterarg)
-	int flags;
-	int (*callout)(proc_t, void *);
-	void * arg;
-	int (*filterfn)(proc_t, void *);
-	void * filterarg;
+proc_iterate(
+	unsigned int flags,
+	proc_iterate_fn_t callout,
+	void *arg,
+	proc_iterate_fn_t filterfn,
+	void *filterarg)
 {
-	proc_t p;
-	pid_t * pid_list;
-	int count, pidcount, alloc_count, i, retval;
+	pid_t *pid_list;
+	vm_size_t pid_list_size = 0;
+	vm_size_t pid_list_size_needed = 0;
+	int pid_count = 0;
+	int pid_count_available = 0;
 
-	count = nprocs+ 10;
-	if (count > hard_maxproc)
-		count = hard_maxproc;
-	alloc_count = count * sizeof(pid_t);
-	pid_list = (pid_t *)kalloc(alloc_count);
-	bzero(pid_list, alloc_count);
+	assert(callout != NULL);
 
+	/* allocate outside of the proc_list_lock */
+	for (;;) {
+		proc_list_lock();
 
-	proc_list_lock();
+		pid_count_available = nprocs;
+		assert(pid_count_available > 0);
 
+		pid_list_size_needed = pid_count_available * sizeof(pid_t);
+		if (pid_list_size >= pid_list_size_needed) {
+			break;
+		}
+		proc_list_unlock();
 
-	pidcount = 0;
+		if (pid_list_size != 0) {
+			kfree(pid_list, pid_list_size);
+		}
+		pid_list = kalloc(pid_list_size_needed);
+		if (!pid_list) {
+			return 1;
+		}
+		pid_list_size = pid_list_size_needed;
+	}
+
+	/* filter pids into pid_list */
+
 	if (flags & PROC_ALLPROCLIST) {
-		for (p = allproc.lh_first; (p != 0); p = p->p_list.le_next) {
-			if (p->p_stat == SIDL)
+		proc_t p;
+		ALLPROC_FOREACH(p) {
+			/* ignore processes that are being forked */
+			if (p->p_stat == SIDL) {
 				continue;
-			if ( (filterfn == 0 ) || (filterfn(p, filterarg) != 0)) {
-				pid_list[pidcount] = p->p_pid;
-				pidcount++;
-				if (pidcount >= count)
-					break;
+			}
+			if ((filterfn != NULL) && (filterfn(p, filterarg) == 0)) {
+				continue;
+			}
+
+			pid_list[pid_count++] = proc_pid(p);
+			if (pid_count >= pid_count_available) {
+				break;
 			}
 		}
 	}
-	if ((pidcount <  count ) && (flags & PROC_ZOMBPROCLIST)) {
-		for (p = zombproc.lh_first; p != 0; p = p->p_list.le_next) {
-			if ( (filterfn == 0 ) || (filterfn(p, filterarg) != 0)) {
-				pid_list[pidcount] = p->p_pid;
-				pidcount++;
-				if (pidcount >= count)
-					break;
+
+	if ((pid_count < pid_count_available) &&
+	    (flags & PROC_ZOMBPROCLIST))
+	{
+		proc_t p;
+		ZOMBPROC_FOREACH(p) {
+			if ((filterfn != NULL) && (filterfn(p, filterarg) == 0)) {
+				continue;
+			}
+
+			pid_list[pid_count++] = proc_pid(p);
+			if (pid_count >= pid_count_available) {
+				break;
 			}
 		}
 	}
-		
 
 	proc_list_unlock();
 
+	/* call callout on processes in the pid_list */
 
-	for (i = 0; i< pidcount; i++) {
-		p = proc_find(pid_list[i]);
+	for (int i = 0; i < pid_count; i++) {
+		proc_t p = proc_find(pid_list[i]);
 		if (p) {
-			if ((flags & PROC_NOWAITTRANS) == 0)
+			if ((flags & PROC_NOWAITTRANS) == 0) {
 				proc_transwait(p, 0);
-			retval = callout(p, arg);
+			}
+			int callout_ret = callout(p, arg);
 
-			switch (retval) {
-		  		case PROC_RETURNED:
-		  			proc_rele(p);
-		  			break;
-		  		case PROC_RETURNED_DONE:
-			  		proc_rele(p);
-			  		goto out;
-		  		case PROC_CLAIMED_DONE:
-					goto out;
-		  		case PROC_CLAIMED:
-		  		default:
-					break;
+			switch (callout_ret) {
+			case PROC_RETURNED_DONE:
+				proc_rele(p);
+				/* FALLTHROUGH */
+			case PROC_CLAIMED_DONE:
+				goto out;
+
+			case PROC_RETURNED:
+				proc_rele(p);
+				/* FALLTHROUGH */
+			case PROC_CLAIMED:
+				break;
+
+			default:
+				panic("proc_iterate: callout returned %d for pid %d",
+				      callout_ret, pid_list[i]);
+				break;
 			}
 		} else if (flags & PROC_ZOMBPROCLIST) {
 			p = proc_find_zombref(pid_list[i]);
-			if (p != PROC_NULL) {
-				retval = callout(p, arg);
-		
-				switch (retval) {
-		  			case PROC_RETURNED:
-		  				proc_drop_zombref(p);
-		  				break;
-		  			case PROC_RETURNED_DONE:
-						proc_drop_zombref(p);
-						goto out;
-		  			case PROC_CLAIMED_DONE:
-						goto out;
-		  			case PROC_CLAIMED:
-		  			default:
-						break;
-				}
+			if (!p) {
+				continue;
+			}
+			int callout_ret = callout(p, arg);
+
+			switch (callout_ret) {
+			case PROC_RETURNED_DONE:
+				proc_drop_zombref(p);
+				/* FALLTHROUGH */
+			case PROC_CLAIMED_DONE:
+				goto out;
+
+			case PROC_RETURNED:
+				proc_drop_zombref(p);
+				/* FALLTHROUGH */
+			case PROC_CLAIMED:
+				break;
+
+			default:
+				panic("proc_iterate: callout returned %d for zombie pid %d",
+					callout_ret, pid_list[i]);
+				break;
 			}
 		}
 	}
 
-out: 
-	kfree(pid_list, alloc_count);
-	return(0);
-
-}
-
-
-#if 0
-/* This is for iteration in case of trivial non blocking callouts */
-int
-proc_scanall(flags, callout, arg)
-	int flags;
-	int (*callout)(proc_t, void *);
-	void * arg;
-{
-	proc_t p;
-	int retval;
-
-
-	proc_list_lock();
-
-
-	if (flags & PROC_ALLPROCLIST) {
-		for (p = allproc.lh_first; (p != 0); p = p->p_list.le_next) {
-			retval = callout(p, arg);
-			if (retval == PROC_RETURNED_DONE)
-				goto out;
-		}
-	}
-	if (flags & PROC_ZOMBPROCLIST) {
-		for (p = zombproc.lh_first; p != 0; p = p->p_list.le_next) {
-			retval = callout(p, arg);
-			if (retval == PROC_RETURNED_DONE)
-				goto out;
-		}
-	}
 out:
+	kfree(pid_list, pid_list_size);
+	return 0;
 
-	proc_list_unlock();
-
-	return(0);
 }
-#endif
 
-
-int
-proc_rebootscan(callout, arg, filterfn, filterarg)
-	int (*callout)(proc_t, void *);
-	void * arg;
-	int (*filterfn)(proc_t, void *);
-	void * filterarg;
+void
+proc_rebootscan(
+	proc_iterate_fn_t callout,
+	void *arg,
+	proc_iterate_fn_t filterfn,
+	void *filterarg)
 {
 	proc_t p;
-	int lockheld = 0, retval;
+
+	assert(callout != NULL);
 
 	proc_shutdown_exitcount = 0;
 
-ps_allprocscan:
+restart_foreach:
 
 	proc_list_lock();
 
-	lockheld = 1;
+	ALLPROC_FOREACH(p) {
+		if ((filterfn != NULL) && filterfn(p, filterarg) == 0) {
+			continue;
+		}
+		p = proc_ref_locked(p);
+		if (!p) {
+		    continue;
+		}
 
-	for (p = allproc.lh_first; (p != 0); p = p->p_list.le_next) {
-		if ( (filterfn == 0 ) || (filterfn(p, filterarg) != 0)) {
-			p = proc_ref_locked(p);
-
-			proc_list_unlock();
-			lockheld = 0;
-
-			if (p) {
-				proc_transwait(p, 0);
-				retval = callout(p, arg);
-				proc_rele(p);
-	
-				switch (retval) {
-					case PROC_RETURNED_DONE:
-					case PROC_CLAIMED_DONE:
-						goto out;
-				}
-			}
-			goto ps_allprocscan;	
-		} /* filter pass */
-	} /* allproc walk thru */
-
-	if (lockheld == 1) {
 		proc_list_unlock();
-		lockheld = 0;
+
+		proc_transwait(p, 0);
+		(void)callout(p, arg);
+		proc_rele(p);
+
+		goto restart_foreach;
 	}
 
-out: 
-	return(0);
-
+	proc_list_unlock();
 }
 
-
 int
-proc_childrenwalk(parent, callout, arg)
-	struct proc * parent;
-	int (*callout)(proc_t, void *);
-	void * arg;
+proc_childrenwalk(
+	proc_t parent,
+	proc_iterate_fn_t callout,
+	void *arg)
 {
-	register struct proc *p;
-	pid_t * pid_list;
-	int count, pidcount, alloc_count, i, retval;
+	pid_t *pid_list;
+	vm_size_t pid_list_size = 0;
+	vm_size_t pid_list_size_needed = 0;
+	int pid_count = 0;
+	int pid_count_available = 0;
 
-	count = nprocs+ 10;
-	if (count > hard_maxproc)
-		count = hard_maxproc;
-	alloc_count = count * sizeof(pid_t);
-	pid_list = (pid_t *)kalloc(alloc_count);
-	bzero(pid_list, alloc_count);
+	assert(parent != NULL);
+	assert(callout != NULL);
 
+	for (;;) {
+		proc_list_lock();
 
-	proc_list_lock();
+		pid_count_available = parent->p_childrencnt;
+		if (pid_count_available == 0) {
+			proc_list_unlock();
+			return 0;
+		}
 
-
-	pidcount = 0;
-	for (p = parent->p_children.lh_first; (p != 0); p = p->p_sibling.le_next) {
-		if (p->p_stat == SIDL)
-			continue;
-		pid_list[pidcount] = p->p_pid;
-		pidcount++;
-		if (pidcount >= count)
+		pid_list_size_needed = pid_count_available * sizeof(pid_t);
+		if (pid_list_size >= pid_list_size_needed) {
 			break;
+		}
+		proc_list_unlock();
+
+		if (pid_list_size != 0) {
+			kfree(pid_list, pid_list_size);
+		}
+		pid_list = kalloc(pid_list_size_needed);
+		if (!pid_list) {
+			return 1;
+		}
+		pid_list_size = pid_list_size_needed;
 	}
+
+	proc_t p;
+	PCHILDREN_FOREACH(parent, p) {
+		if (p->p_stat == SIDL) {
+			continue;
+		}
+
+		pid_list[pid_count++] = proc_pid(p);
+		if (pid_count >= pid_count_available) {
+			break;
+		}
+	}
+
 	proc_list_unlock();
 
-
-	for (i = 0; i< pidcount; i++) {
+	for (int i = 0; i < pid_count; i++) {
 		p = proc_find(pid_list[i]);
-		if (p) {
-			proc_transwait(p, 0);
-			retval = callout(p, arg);
+		if (!p) {
+			continue;
+		}
 
-			switch (retval) {
-		  		case PROC_RETURNED:
-		  		case PROC_RETURNED_DONE:
-			  		proc_rele(p);
-			  		if (retval == PROC_RETURNED_DONE) {
-						goto out;
-			  		}
-			  		break;
+		int callout_ret = callout(p, arg);
 
-		  		case PROC_CLAIMED_DONE:
-					goto out;
-		  		case PROC_CLAIMED:
-		  		default:
-					break;
-			}
+		switch (callout_ret) {
+		case PROC_RETURNED_DONE:
+			proc_rele(p);
+			/* FALLTHROUGH */
+		case PROC_CLAIMED_DONE:
+			goto out;
+
+		case PROC_RETURNED:
+			proc_rele(p);
+			/* FALLTHROUGH */
+		case PROC_CLAIMED:
+			break;
+		default:
+			panic("proc_childrenwalk: callout returned %d for pid %d",
+			      callout_ret, pid_list[i]);
+			break;
 		}
 	}
 
-out: 
-	kfree(pid_list, alloc_count);
-	return(0);
-
+out:
+	kfree(pid_list, pid_list_size);
+	return 0;
 }
 
-/*
- */
-/* PGRP_BLOCKITERATE is not implemented yet */
 int
-pgrp_iterate(pgrp, flags, callout, arg, filterfn, filterarg)
-	struct pgrp *pgrp;
-	int flags;
-	int (*callout)(proc_t, void *);
-	void * arg;
-	int (*filterfn)(proc_t, void *);
-	void * filterarg;
+pgrp_iterate(
+	struct pgrp *pgrp,
+	unsigned int flags,
+	proc_iterate_fn_t callout,
+	void * arg,
+	proc_iterate_fn_t filterfn,
+	void * filterarg)
 {
+	pid_t *pid_list;
 	proc_t p;
-	pid_t * pid_list;
-	int count, pidcount, i, alloc_count;
-	int retval;
-	pid_t pgid;
-	int dropref = flags & PGRP_DROPREF;
-#if 0
-	int serialize = flags & PGRP_BLOCKITERATE;
-#else
-	int serialize = 0;
-#endif
+	vm_size_t pid_list_size = 0;
+	vm_size_t pid_list_size_needed = 0;
+	int pid_count = 0;
+	int pid_count_available = 0;
 
-	if (pgrp == 0)
-		return(0);
-	count = pgrp->pg_membercnt + 10;
-	if (count > hard_maxproc)
-		count = hard_maxproc;
-	alloc_count = count * sizeof(pid_t);
-	pid_list = (pid_t *)kalloc(alloc_count);
-	bzero(pid_list, alloc_count);
-	
-	pgrp_lock(pgrp);
-	if (serialize  != 0) {
-		while ((pgrp->pg_listflags & PGRP_FLAG_ITERABEGIN) == PGRP_FLAG_ITERABEGIN) {
-			pgrp->pg_listflags |= PGRP_FLAG_ITERWAIT;
-			msleep(&pgrp->pg_listflags, &pgrp->pg_mlock, 0, "pgrp_iterate", 0);
+	pid_t pgid;
+
+	assert(pgrp != NULL);
+	assert(callout != NULL);
+
+	for (;;) {
+		pgrp_lock(pgrp);
+
+		pid_count_available = pgrp->pg_membercnt;
+		if (pid_count_available == 0) {
+			pgrp_unlock(pgrp);
+			return 0;
 		}
-		pgrp->pg_listflags |= PGRP_FLAG_ITERABEGIN;
+
+		pid_list_size_needed = pid_count_available * sizeof(pid_t);
+		if (pid_list_size >= pid_list_size_needed) {
+			break;
+		}
+		pgrp_unlock(pgrp);
+
+		if (pid_list_size != 0) {
+			kfree(pid_list, pid_list_size);
+		}
+		pid_list = kalloc(pid_list_size_needed);
+		if (!pid_list) {
+			return 1;
+		}
+		pid_list_size = pid_list_size_needed;
 	}
 
 	pgid = pgrp->pg_id;
 
-	pidcount = 0;
-	for (p = pgrp->pg_members.lh_first; p != 0;
-	     p = p->p_pglist.le_next) {
-		if ( (filterfn == 0 ) || (filterfn(p, filterarg) != 0)) {
-			pid_list[pidcount] = p->p_pid;
-			pidcount++;
-			if (pidcount >= count)
-				break;
+	PGMEMBERS_FOREACH(pgrp, p) {
+		if ((filterfn != NULL) && (filterfn(p, filterarg) == 0)) {
+			continue;;
+		}
+		pid_list[pid_count++] = proc_pid(p);
+		if (pid_count >= pid_count_available) {
+			break;
 		}
 	}
-		
 
 	pgrp_unlock(pgrp);
-	if ((serialize == 0) && (dropref != 0))
+
+	if (flags & PGRP_DROPREF) {
 		pg_rele(pgrp);
+	}
 
-
-	for (i = 0; i< pidcount; i++) {
-		/* No handling or proc0 */
-		if (pid_list[i] == 0)
+	for (int i = 0; i< pid_count; i++) {
+		/* do not handle kernproc */
+		if (pid_list[i] == 0) {
 			continue;
+		}
 		p = proc_find(pid_list[i]);
-		if (p) {
-			if (p->p_pgrpid != pgid) {
-				proc_rele(p);
-				continue;
-			}
-			proc_transwait(p, 0);
-			retval = callout(p, arg);
+		if (!p) {
+			continue;
+		}
+		if (p->p_pgrpid != pgid) {
+			proc_rele(p);
+			continue;
+		}
 
-			switch (retval) {
-		  		case PROC_RETURNED:
-		  		case PROC_RETURNED_DONE:
-			  		proc_rele(p);
-			  		if (retval == PROC_RETURNED_DONE) {
-						goto out;
-			  		}
-			  		break;
+		int callout_ret = callout(p, arg);
 
-		  		case PROC_CLAIMED_DONE:
-					goto out;
-		  		case PROC_CLAIMED:
-		  		default:
-					break;
-			}
+		switch (callout_ret) {
+		case PROC_RETURNED:
+			proc_rele(p);
+			/* FALLTHROUGH */
+		case PROC_CLAIMED:
+			break;
+
+		case PROC_RETURNED_DONE:
+			proc_rele(p);
+			/* FALLTHROUGH */
+		case PROC_CLAIMED_DONE:
+			goto out;
+
+		default:
+			panic("pgrp_iterate: callout returned %d for pid %d",
+			      callout_ret, pid_list[i]);
 		}
 	}
+
 out:
-	if (serialize != 0) {
-		pgrp_lock(pgrp);
-		pgrp->pg_listflags &= ~PGRP_FLAG_ITERABEGIN;
-		if ((pgrp->pg_listflags & PGRP_FLAG_ITERWAIT) == PGRP_FLAG_ITERWAIT) {
-			pgrp->pg_listflags &= ~PGRP_FLAG_ITERWAIT;
-			wakeup(&pgrp->pg_listflags);
-		}
-		pgrp_unlock(pgrp);
-		if (dropref != 0)
-			pg_rele(pgrp);
-	}
-	kfree(pid_list, alloc_count);
-	return(0);
+	kfree(pid_list, pid_list_size);
+	return 0;
 }
 
 static void
@@ -3197,4 +3274,11 @@ proc_chrooted(proc_t p)
 	}
 
 	return retval;
+}
+
+void *
+proc_get_uthread_uu_threadlist(void * uthread_v)
+{
+	uthread_t uth = (uthread_t)uthread_v;
+	return (uth != NULL) ? uth->uu_threadlist : NULL;
 }

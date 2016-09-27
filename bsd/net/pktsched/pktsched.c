@@ -45,6 +45,7 @@
 #include <net/pktsched/pktsched.h>
 #include <net/pktsched/pktsched_tcq.h>
 #include <net/pktsched/pktsched_qfq.h>
+#include <net/pktsched/pktsched_fq_codel.h>
 #if PKTSCHED_PRIQ
 #include <net/pktsched/pktsched_priq.h>
 #endif /* PKTSCHED_PRIQ */
@@ -185,7 +186,9 @@ pktsched_setup(struct ifclassq *ifq, u_int32_t scheduler, u_int32_t sflags)
 	case PKTSCHEDT_QFQ:
 		error = qfq_setup_ifclassq(ifq, sflags);
 		break;
-
+	case PKTSCHEDT_FQ_CODEL:
+		error = fq_if_setup_ifclassq(ifq, sflags);
+		break;
 	default:
 		error = ENXIO;
 		break;
@@ -227,6 +230,9 @@ pktsched_teardown(struct ifclassq *ifq)
 		error = qfq_teardown_ifclassq(ifq);
 		break;
 
+	case PKTSCHEDT_FQ_CODEL:
+		error = fq_if_teardown_ifclassq(ifq);
+		break;
 	default:
 		error = ENXIO;
 		break;
@@ -257,6 +263,9 @@ pktsched_getqstats(struct ifclassq *ifq, u_int32_t qid,
 		error = qfq_getqstats_ifclassq(ifq, qid, ifqs);
 		break;
 
+	case PKTSCHEDT_FQ_CODEL:
+		error = fq_if_getqstats_ifclassq(ifq, qid, ifqs);
+		break;
 	default:
 		error = ENXIO;
 		break;

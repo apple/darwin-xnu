@@ -129,7 +129,7 @@ decl_lck_mtx_data(,	memory_manager_default_lock)
 
 #define	memory_object_should_return_page(m, should_return) \
     (should_return != MEMORY_OBJECT_RETURN_NONE && \
-     (((m)->dirty || ((m)->dirty = pmap_is_modified((m)->phys_page))) || \
+     (((m)->dirty || ((m)->dirty = pmap_is_modified(VM_PAGE_GET_PHYS_PAGE(m)))) || \
       ((m)->precious && (should_return) == MEMORY_OBJECT_RETURN_ALL) || \
       (should_return) == MEMORY_OBJECT_RETURN_ANYTHING))
 
@@ -212,7 +212,7 @@ memory_object_lock_page(
 		 * for the page to go from the clean to the dirty state
 		 * after we've made our decision
 		 */
-		if (pmap_disconnect(m->phys_page) & VM_MEM_MODIFIED) {
+		if (pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(m)) & VM_MEM_MODIFIED) {
 			SET_PAGE_DIRTY(m, FALSE);
 		}
 	} else {
@@ -222,7 +222,7 @@ memory_object_lock_page(
 		 * (pmap_page_protect may not increase protection).
 		 */
 		if (prot != VM_PROT_NO_CHANGE)
-			pmap_page_protect(m->phys_page, VM_PROT_ALL & ~prot);
+			pmap_page_protect(VM_PAGE_GET_PHYS_PAGE(m), VM_PROT_ALL & ~prot);
 	}
 	/*
 	 *	Handle returning dirty or precious pages
@@ -238,7 +238,7 @@ memory_object_lock_page(
 		 * faulted back into an address space
 		 *
 		 *	if (!should_flush)
-		 *		pmap_disconnect(m->phys_page);
+		 *		pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(m));
 		 */
 		return (MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN);
 	}
@@ -513,7 +513,8 @@ MACRO_BEGIN								\
 	}								\
 MACRO_END
 
-
+extern struct vnode *
+vnode_pager_lookup_vnode(memory_object_t);
 
 static int
 vm_object_update_extent(
@@ -624,7 +625,7 @@ vm_object_update_extent(
 						/*
 						 * add additional state for the flush
 						 */
-						m->pageout = TRUE;
+						m->free_when_done = TRUE;
 					}
 					/*
 					 * we use to remove the page from the queues at this
@@ -651,9 +652,8 @@ vm_object_update_extent(
 		}
 	}
 	
-	if (dirty_count) {
-		task_update_logical_writes(current_task(), (dirty_count * PAGE_SIZE), TASK_WRITE_INVALIDATED);
-	}
+	if (object->pager)
+		task_update_logical_writes(current_task(), (dirty_count * PAGE_SIZE), TASK_WRITE_INVALIDATED, vnode_pager_lookup_vnode(object->pager));
 	/*
 	 *	We have completed the scan for applicable pages.
 	 *	Clean any pages that have been saved.
@@ -844,18 +844,17 @@ vm_object_update(
 			case VM_FAULT_SUCCESS:
 				if (top_page) {
 					vm_fault_cleanup(
-						page->object, top_page);
+						VM_PAGE_OBJECT(page), top_page);
 					vm_object_lock(copy_object);
 					vm_object_paging_begin(copy_object);
 				}
-				if (!page->active &&
-				    !page->inactive &&
-				    !page->throttled) {
+				if (( !VM_PAGE_NON_SPECULATIVE_PAGEABLE(page))) {
+
 					vm_page_lockspin_queues();
-					if (!page->active &&
-					    !page->inactive &&
-					    !page->throttled)
+					
+					if (( !VM_PAGE_NON_SPECULATIVE_PAGEABLE(page))) {
 						vm_page_deactivate(page);
+					}
 					vm_page_unlock_queues();
 				}
 				PAGE_WAKEUP_DONE(page);
@@ -904,6 +903,7 @@ vm_object_update(
 	}
 	if (copy_object != VM_OBJECT_NULL && copy_object != object) {
 	        if ((flags & MEMORY_OBJECT_DATA_PURGE)) {
+			vm_object_lock_assert_exclusive(copy_object);
 		        copy_object->shadow_severed = TRUE;
 			copy_object->shadowed = FALSE;
 			copy_object->shadow = NULL;
@@ -955,10 +955,10 @@ BYPASS_COW_COPYIN:
 		num_of_extents = 0;
 		e_mask = ~((vm_object_size_t)(EXTENT_SIZE - 1));
 
-		m = (vm_page_t) queue_first(&object->memq);
+		m = (vm_page_t) vm_page_queue_first(&object->memq);
 
-		while (!queue_end(&object->memq, (queue_entry_t) m)) {
-			next = (vm_page_t) queue_next(&m->listq);
+		while (!vm_page_queue_end(&object->memq, (vm_page_queue_entry_t) m)) {
+			next = (vm_page_t) vm_page_queue_next(&m->listq);
 
 			if ((m->offset >= start) && (m->offset < end)) {
 			        /*
@@ -1950,6 +1950,41 @@ memory_object_mark_io_tracking(
 	}
 }
 
+#if CONFIG_SECLUDED_MEMORY
+void
+memory_object_mark_eligible_for_secluded(
+	memory_object_control_t control,
+	boolean_t		eligible_for_secluded)
+{
+	vm_object_t             object;
+
+	if (control == NULL)
+		return;
+	object = memory_object_control_to_vm_object(control);
+
+	if (object == VM_OBJECT_NULL) {
+		return;
+	}
+
+	vm_object_lock(object);
+	if (eligible_for_secluded &&
+	    secluded_for_filecache && /* global boot-arg */
+	    !object->eligible_for_secluded) {
+		object->eligible_for_secluded = TRUE;
+		vm_page_secluded.eligible_for_secluded += object->resident_page_count;
+	} else if (!eligible_for_secluded &&
+		   object->eligible_for_secluded) {
+		object->eligible_for_secluded = FALSE;
+		vm_page_secluded.eligible_for_secluded -= object->resident_page_count;
+		if (object->resident_page_count) {
+			/* XXX FBDP TODO: flush pages from secluded queue? */
+			// printf("FBDP TODO: flush %d pages from %p from secluded queue\n", object->resident_page_count, object);
+		}
+	}
+	vm_object_unlock(object);
+}
+#endif /* CONFIG_SECLUDED_MEMORY */
+
 kern_return_t
 memory_object_pages_resident(
 	memory_object_control_t	control,
@@ -2321,19 +2356,6 @@ kern_return_t memory_object_data_reclaim
 	return (memory_object->mo_pager_ops->memory_object_data_reclaim)(
 		memory_object,
 		reclaim_backing_store);
-}
-
-/* Routine memory_object_create */
-kern_return_t memory_object_create
-(
-	memory_object_default_t default_memory_manager,
-	vm_size_t new_memory_object_size,
-	memory_object_t *new_memory_object
-)
-{
-	return default_pager_memory_object_create(default_memory_manager,
-						  new_memory_object_size,
-						  new_memory_object);
 }
 
 upl_t

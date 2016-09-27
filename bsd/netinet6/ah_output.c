@@ -117,8 +117,7 @@ extern lck_mtx_t *sadb_mutex;
  * virtual interface, and control MTU/MSS by the interface MTU.
  */
 size_t
-ah_hdrsiz(isr)
-	struct ipsecrequest *isr;
+ah_hdrsiz(struct ipsecrequest *isr)
 {
 
 	/* sanity check */
@@ -184,9 +183,7 @@ estimate:
  * the function does not modify m.
  */
 int
-ah4_output(m, sav)
-	struct mbuf *m;
-	struct secasvar *sav;
+ah4_output(struct mbuf *m, struct secasvar *sav)
 {
 	const struct ah_algorithm *algo;
 	u_int32_t spi;
@@ -371,8 +368,7 @@ ah4_output(m, sav)
 
 /* Calculate AH length */
 int
-ah_hdrlen(sav)
-	struct secasvar *sav;
+ah_hdrlen(struct secasvar *sav)
 {
 	const struct ah_algorithm *algo;
 	int plen, ahlen;
@@ -398,11 +394,8 @@ ah_hdrlen(sav)
  * Fill in the Authentication Header and calculate checksum.
  */
 int
-ah6_output(m, nexthdrp, md, sav)
-	struct mbuf *m;
-	u_char *nexthdrp;
-	struct mbuf *md;
-	struct secasvar *sav;
+ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
+	   struct secasvar *sav)
 {
 	struct mbuf *mprev;
 	struct mbuf *mah;
@@ -553,8 +546,7 @@ ah6_output(m, nexthdrp, md, sav)
  * The mbuf must be pulled up toward, at least, ip option part.
  */
 static struct in_addr *
-ah4_finaldst(m)
-	struct mbuf *m;
+ah4_finaldst(struct mbuf *m)
 {
 	struct ip *ip;
 	int optlen;

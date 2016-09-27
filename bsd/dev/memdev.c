@@ -110,17 +110,19 @@ static int				mdevcioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct p
 static int 				mdevrw(dev_t dev, struct uio *uio, int ioflag);
 
 #ifdef CONFIG_MEMDEV_INSECURE
-
 static char *			nonspace(char *pos, char *end);
 static char *			getspace(char *pos, char *end);
 static char *			cvtnum(char *pos, char *end, uint64_t *num);
-
 #endif /* CONFIG_MEMDEV_INSECURE */
 
 extern void		bcopy_phys(addr64_t from, addr64_t to, vm_size_t bytes);
 extern void		mapping_set_mod(ppnum_t pn);
 extern ppnum_t 	pmap_find_phys(pmap_t pmap, addr64_t va);
 
+/*
+ * Maximal number of memory devices.
+ */
+#define NB_MAX_MDEVICES (16)
 
 /*
  * cdevsw
@@ -164,7 +166,7 @@ struct mdev {
 	int			mdCDev;		/* Character device number */
 	void *		mdbdevb;
 	void *		mdcdevb;
-} mdev[16];
+} mdev[NB_MAX_MDEVICES];
 
 /* mdFlags */
 #define mdInited	0x01	/* This device defined */
@@ -174,10 +176,11 @@ struct mdev {
 int mdevBMajor = -1;
 int mdevCMajor = -1;
 
-static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p, int is_char);
-dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys);
-dev_t mdevlookup(int devid);
-void mdevremoveall(void);
+static int	mdevioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p, int is_char);
+dev_t		mdevadd(int devid, uint64_t base, unsigned int size, int phys);
+dev_t		mdevlookup(int devid);
+void		mdevremoveall(void);
+int		mdevgetrange(int devid, uint64_t *base, uint64_t *size);
 
 static	int mdevclose(__unused dev_t dev, __unused int flags, 
 					  __unused int devtype, __unused struct proc *p) {
@@ -191,7 +194,7 @@ static	int mdevopen(dev_t dev, int flags, __unused int devtype, __unused struct 
 
 	devid = minor(dev);									/* Get minor device number */
 
-	if (devid >= 16) return (ENXIO);						/* Not valid */
+	if (devid >= NB_MAX_MDEVICES) return (ENXIO);						/* Not valid */
 
 	if ((flags & FWRITE) && (mdev[devid].mdFlags & mdRO)) return (EACCES);	/* Currently mounted RO */
 
@@ -206,7 +209,7 @@ static int mdevrw(dev_t dev, struct uio *uio, __unused int ioflag) {
 
 	devid = minor(dev);									/* Get minor device number */
 
-	if (devid >= 16) return (ENXIO);						/* Not valid */
+	if (devid >= NB_MAX_MDEVICES) return (ENXIO);						/* Not valid */
 	if (!(mdev[devid].mdFlags & mdInited))  return (ENXIO);	/* Have we actually been defined yet? */
 
 	mdata = ((addr64_t)mdev[devid].mdBase << 12) + uio->uio_offset;	/* Point to the area in "file" */
@@ -358,7 +361,7 @@ static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
 
 	devid = minor(dev);									/* Get minor device number */
 
-	if (devid >= 16) return (ENXIO);						/* Not valid */
+	if (devid >= NB_MAX_MDEVICES) return (ENXIO);						/* Not valid */
 
 	error = proc_suser(p);			/* Are we superman? */
 	if (error) return (error);							/* Nope... */
@@ -434,7 +437,7 @@ static	int mdevsize(dev_t dev) {
 	int devid;
 
 	devid = minor(dev);									/* Get minor device number */
-	if (devid >= 16) return (ENXIO);						/* Not valid */
+	if (devid >= NB_MAX_MDEVICES) return (ENXIO);						/* Not valid */
 
 	if ((mdev[devid].mdFlags & mdInited) == 0) return(-1);		/* Not inited yet */
 
@@ -562,7 +565,7 @@ dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys) {
 	if(devid < 0) {
 
 		devid = -1;
-		for(i = 0; i < 16; i++) {						/* Search all known memory devices */
+		for(i = 0; i < NB_MAX_MDEVICES; i++) {						/* Search all known memory devices */
 			if(!(mdev[i].mdFlags & mdInited)) {			/* Is this a free one? */
 				if(devid < 0)devid = i;					/* Remember first free one */
 				continue;								/* Skip check */
@@ -572,11 +575,11 @@ dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys) {
 			}
 		}
 		if(devid < 0) {									/* Do we have free slots? */
-			panic("mdevadd: attempt to add more than 16 memory devices\n");
+			panic("mdevadd: attempt to add more than %d memory devices\n", NB_MAX_MDEVICES);
 		}
 	}
 	else {
-		if(devid >= 16) {								/* Giving us something bogus? */
+		if(devid >= NB_MAX_MDEVICES) {								/* Giving us something bogus? */
 			panic("mdevadd: attempt to explicitly add a bogus memory device: %08X\n", devid);
 		}
 		if(mdev[devid].mdFlags & mdInited) {			/* Already there? */
@@ -631,7 +634,7 @@ dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys) {
 
 dev_t mdevlookup(int devid) {
 	
-	if((devid < 0) || (devid > 15)) return -1;			/* Filter any bogus requests */
+	if((devid < 0) || (devid >= NB_MAX_MDEVICES)) return -1;			/* Filter any bogus requests */
 	if(!(mdev[devid].mdFlags & mdInited)) return -1;	/* This one hasn't been defined */
 	return mdev[devid].mdBDev;							/* Return the device number */
 }
@@ -640,7 +643,7 @@ void mdevremoveall(void) {
 
 	int i;
 
-	for(i = 0; i < 16; i++) {
+	for(i = 0; i < NB_MAX_MDEVICES; i++) {
 		if(!(mdev[i].mdFlags & mdInited)) continue;	/* Ignore unused mdevs */
 
 		devfs_remove(mdev[i].mdbdevb);			/* Remove the block device */
@@ -656,3 +659,29 @@ void mdevremoveall(void) {
 		mdev[i].mdcdevb = 0;
 	}
 }
+
+int
+mdevgetrange(int devid, uint64_t *base, uint64_t *size)
+{
+	assert(base);
+	assert(size);
+
+	/* filter invalid request */
+	if ((devid < 0) || (devid >= NB_MAX_MDEVICES)) {
+		return -1;
+	}
+
+	/* filter non-initialized memory devices */
+	if ((mdev[devid].mdFlags & mdInited) == 0) {
+		return -1;
+	}
+
+	*base = mdev[devid].mdBase << 12;
+	*size = mdev[devid].mdSize << 12;
+
+	/* make sure (base, size) is a valid range and will not overflow */
+	assert(*size < (UINT64_MAX - *base));
+
+	return 0;
+}
+

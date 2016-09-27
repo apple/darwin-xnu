@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -46,6 +46,7 @@ enum {
 					| kIOMemoryThreadSafe
 					| kIOMemoryClearEncrypt
 					| kIOMemoryMapperNone
+					| kIOMemoryUseReserve
 };
 
 #define _IOBUFFERMEMORYDESCRIPTOR_INTASKWITHOPTIONS_		1
@@ -178,7 +179,7 @@ public:
     kIOMapCopybackCache - allocate memory with copyback cache setting. <br>		
     kIOMapWriteCombineCache - allocate memory with writecombined cache setting.
     @param capacity The number of bytes to allocate.
-    @param mask The buffer will be allocated with pages such that physical addresses will only have bits set present in physicalMask. For example, pass 0x00000000FFFFFFFFULL for a buffer to be accessed by hardware that has 32 address bits.
+    @param physicalMask The buffer will be allocated with pages such that physical addresses will only have bits set present in physicalMask. For example, pass 0x00000000FFFFFFFFULL for a buffer to be accessed by hardware that has 32 address bits.
     @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */
 
     static IOBufferMemoryDescriptor * inTaskWithPhysicalMask(

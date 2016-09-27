@@ -12,7 +12,8 @@ KERNELFILES= \
 
 PRIVATE_DATAFILES = \
 	pktsched.h pktsched_cbq.h pktsched_fairq.h pktsched_hfsc.h \
-	pktsched_priq.h pktsched_tcq.h pktsched_rmclass.h pktsched_qfq.h
+	pktsched_priq.h pktsched_tcq.h pktsched_rmclass.h pktsched_qfq.h \
+	pktsched_fq_codel.h
 
 PRIVATE_KERNELFILES = ${KERNELFILES}
 

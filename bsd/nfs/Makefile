@@ -3,7 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -11,16 +10,15 @@ DATAFILES = \
 	krpc.h nfs.h nfsdiskless.h nfsm_subs.h nfsmount.h nfsnode.h \
 	nfs_lock.h nfs_gss.h nfs_ioctl.h \
 	nfsproto.h nfsrvcache.h rpcv2.h xdr_subs.h
+#	gss/gss_krb5_mech.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_DIR = nfs
 
-EXPORT_MI_LIST	= 
+EXPORT_MI_LIST	=
 
 EXPORT_MI_DIR = nfs
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

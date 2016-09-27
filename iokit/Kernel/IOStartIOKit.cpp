@@ -43,8 +43,8 @@
 #include <IOKit/IOStatisticsPrivate.h>
 #include <IOKit/IOKitKeysPrivate.h>
 #include <IOKit/IOInterruptAccountingPrivate.h>
-
 #include <IOKit/assert.h>
+#include <sys/conf.h>
 
 #include "IOKitKernelInternal.h"
 
@@ -52,6 +52,10 @@ const OSSymbol * gIOProgressBackbufferKey;
 OSSet *          gIORemoveOnReadProperties;
 
 extern "C" {
+
+void StartIOKit( void * p1, void * p2, void * p3, void * p4 );
+void IORegistrySetOSBuildVersion(char * build_version);
+void IORecordProgressBackbuffer(void * buffer, size_t size, uint32_t theme);
 
 extern void OSlibkernInit (void);
 
@@ -148,6 +152,7 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
     //
     IOLibInit(); 
     OSlibkernInit();
+    devsw_init();
 
     gIOProgressBackbufferKey  = OSSymbol::withCStringNoCopy(kIOProgressBackbufferKey);
     gIORemoveOnReadProperties = OSSet::withObjects((const OSObject **) &gIOProgressBackbufferKey, 1);

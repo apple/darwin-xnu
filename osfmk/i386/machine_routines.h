@@ -145,6 +145,7 @@ void	ml_get_bouncepool_info(
 			       vm_size_t   *size);
 /* Indicates if spinlock, IPI and other timeouts should be suspended */
 boolean_t machine_timeout_suspended(void);
+void plctrace_disable(void);
 #endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE  */
 
 /* Warm up a CPU to receive an interrupt */
@@ -328,6 +329,7 @@ void timer_queue_expire_rescan(void*);
 void ml_timer_evaluate(void);
 boolean_t ml_timer_forced_evaluation(void);
 
+uint64_t ml_energy_stat(thread_t);
 void ml_gpu_stat_update(uint64_t);
 uint64_t ml_gpu_stat(thread_t);
 boolean_t ml_recent_wake(void);

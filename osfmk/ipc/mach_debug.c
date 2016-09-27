@@ -188,7 +188,7 @@ mach_port_space_info(
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
 
-#if !(DEVELOPMENT | DEBUG)
+#if !(DEVELOPMENT || DEBUG) && CONFIG_MACF
 	const boolean_t dbg_ok = (mac_task_check_expose_task(kernel_task) == 0);
 #else
 	const boolean_t dbg_ok = TRUE;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -55,6 +55,13 @@ extern "C" {
 void osdata_kmem_free(void * ptr, unsigned int length);
 void osdata_phys_free(void * ptr, unsigned int length);
 void osdata_vm_deallocate(void * ptr, unsigned int length);
+void osdata_kext_free(void * ptr, unsigned int length);
+void kxld_log_callback(
+    KXLDLogSubsystem    subsystem,
+    KXLDLogLevel        level,
+    const char        * format,
+    va_list             argList,
+    void              * user_data);
 };
 #endif /* XNU_KERNEL_PRIVATE */
 
@@ -96,7 +103,7 @@ kern_return_t is_io_catalog_send_data(
     kern_return_t          * result);
 
 void kmod_dump_log(vm_offset_t*, unsigned int, boolean_t);
-
+void *OSKextKextForAddress(const void *addr);
 
 #endif /* XNU_KERNEL_PRIVATE */
 };
@@ -131,6 +138,7 @@ struct OSKextAccount
 {
     vm_allocation_site_t site;
     uint32_t    	 loadTag;
+    OSKext             * kext;
 };
 
 struct OSKextActiveAccount
@@ -222,7 +230,7 @@ class OSKext : public OSObject
     friend void kmod_panic_dump(vm_offset_t*, unsigned int);
     friend void kmod_dump_log(vm_offset_t*, unsigned int, boolean_t);
     friend void kext_dump_panic_lists(int (*printf_func)(const char * fmt, ...));
-
+    friend void *OSKextKextForAddress(const void *addr);
 
 #endif /* XNU_KERNEL_PRIVATE */
 
@@ -327,9 +335,13 @@ private:
         OSData   * booterData);
 
     static OSKext * withPrelinkedInfoDict(
-        OSDictionary * infoDict);
+        OSDictionary * infoDict,
+        bool doCoalesedSlides);
     virtual bool initWithPrelinkedInfoDict(
-        OSDictionary * infoDict);
+        OSDictionary * infoDict,
+        bool doCoalesedSlides);
+
+    static void setAllVMAttributes(void);
 
     static OSKext * withMkext2Info(
         OSDictionary * anInfoDict,
@@ -419,7 +431,7 @@ private:
     static void recordIdentifierRequest(
         OSString * kextIdentifier);
 
-    virtual OSReturn slidePrelinkedExecutable(void);
+    virtual OSReturn slidePrelinkedExecutable(bool doCoalesedSlides);
     virtual OSReturn loadExecutable(void);
     virtual void     jettisonLinkeditSegment(void);
     virtual void     jettisonDATASegmentPadding(void);
@@ -467,6 +479,10 @@ private:
     static  OSDictionary * copyLoadedKextInfo(
         OSArray * kextIdentifiers = NULL,
         OSArray * keys = NULL);
+    static  OSDictionary * copyLoadedKextInfoByUUID(
+        OSArray * kextIdentifiers = NULL,
+        OSArray * keys = NULL);
+    static OSData * copyKextUUIDForAddress(OSNumber *address = NULL);
     virtual OSDictionary * copyInfo(OSArray * keys = NULL);
 
    /* Logging to user space.
@@ -518,6 +534,8 @@ private:
         int          (* printf_func)(const char *fmt, ...),
         bool            lockFlag,
         bool            doUnslide);
+    static void * kextForAddress(
+        const void		  * addr);
     static boolean_t summaryIsInBacktrace(
         OSKextLoadedKextSummary * summary,
         vm_offset_t             * addr,
@@ -541,7 +559,7 @@ private:
     */
     static void updateLoadedKextSummaries(void);
     void updateLoadedKextSummary(OSKextLoadedKextSummary *summary);
-    void updateActiveAccount(OSKextActiveAccount *account);
+    void updateActiveAccount(OSKextActiveAccount *accountp);
 
     /* C++ Initialization.
      */

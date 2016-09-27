@@ -7,6 +7,55 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		081725D51C3F476500371A54 /* stackshot-sample-duration in Resources */ = {isa = PBXBuildFile; fileRef = 081725D31C3F475200371A54 /* stackshot-sample-duration */; };
+		081725D61C3F476500371A54 /* stackshot-sample-duration.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 081725D41C3F475200371A54 /* stackshot-sample-duration.plist.gz */; };
+		081EDD381C23855700A1C138 /* stackshot-sample-cputime in Resources */ = {isa = PBXBuildFile; fileRef = 081EDD361C23854500A1C138 /* stackshot-sample-cputime */; };
+		081EDD391C23855700A1C138 /* stackshot-sample-cputime.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 081EDD371C23854500A1C138 /* stackshot-sample-cputime.plist.gz */; };
+		08238A3B1BFEB5450053190C /* libz.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 08F1501D1BFEA7AC00F2C89C /* libz.dylib */; };
+		0834719E1BF7D05400D67253 /* kcdata.h in Headers */ = {isa = PBXBuildFile; fileRef = 0834719D1BF7D05400D67253 /* kcdata.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		0843EE921BF6AFC600CD4150 /* stackshot-sample in Resources */ = {isa = PBXBuildFile; fileRef = 0843EE911BF6AFB700CD4150 /* stackshot-sample */; };
+		0843EE941BF6BAC100CD4150 /* stackshot-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 0843EE931BF6BAB400CD4150 /* stackshot-sample.plist.gz */; };
+		08603F371BF69EDE007D3784 /* Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08603F361BF69EDE007D3784 /* Tests.swift */; };
+		08603F391BF69EDE007D3784 /* libkdd.a in Frameworks */ = {isa = PBXBuildFile; fileRef = C91C93C71ACB58B700119B60 /* libkdd.a */; };
+		0860F87A1BFC3857007E1301 /* stackshot-sample-tailspin-2 in Resources */ = {isa = PBXBuildFile; fileRef = 0860F8781BFC3845007E1301 /* stackshot-sample-tailspin-2 */; };
+		0860F87B1BFC3857007E1301 /* stackshot-sample-tailspin-2.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 0860F8791BFC3845007E1301 /* stackshot-sample-tailspin-2.plist.gz */; };
+		086395B51BF5655D005ED913 /* kdd_main.m in Sources */ = {isa = PBXBuildFile; fileRef = 086395B41BF5655D005ED913 /* kdd_main.m */; };
+		086395B91BF565A2005ED913 /* libkdd.a in Frameworks */ = {isa = PBXBuildFile; fileRef = C91C93C71ACB58B700119B60 /* libkdd.a */; };
+		08A4C94C1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m in Sources */ = {isa = PBXBuildFile; fileRef = 08A4C94B1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m */; };
+		08A4C94F1C470F1C00D5F010 /* nested-sample in Resources */ = {isa = PBXBuildFile; fileRef = 08A4C94D1C470F0900D5F010 /* nested-sample */; };
+		08A4C9501C470F1C00D5F010 /* nested-sample.plist in Resources */ = {isa = PBXBuildFile; fileRef = 08A4C94E1C470F0900D5F010 /* nested-sample.plist */; };
+		08B480781BF8297500B4AAE0 /* stackshot-sample-new-arrays in Resources */ = {isa = PBXBuildFile; fileRef = 08B480741BF8294E00B4AAE0 /* stackshot-sample-new-arrays */; };
+		08B480791BF8297500B4AAE0 /* stackshot-sample-new-arrays.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08B480751BF8294E00B4AAE0 /* stackshot-sample-new-arrays.plist.gz */; };
+		08B4807A1BF8297500B4AAE0 /* stackshot-sample-old-arrays in Resources */ = {isa = PBXBuildFile; fileRef = 08B480761BF8294E00B4AAE0 /* stackshot-sample-old-arrays */; };
+		08B4807B1BF8297500B4AAE0 /* stackshot-sample-old-arrays.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08B480771BF8294E00B4AAE0 /* stackshot-sample-old-arrays.plist.gz */; };
+		08B480831BF864D300B4AAE0 /* delta-stackshot-sample-new-arrays in Resources */ = {isa = PBXBuildFile; fileRef = 08B4807F1BF864C800B4AAE0 /* delta-stackshot-sample-new-arrays */; };
+		08B480841BF864D300B4AAE0 /* delta-stackshot-sample-new-arrays.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08B480801BF864C800B4AAE0 /* delta-stackshot-sample-new-arrays.plist.gz */; };
+		08B480851BF864D300B4AAE0 /* delta-stackshot-sample-old-arrays in Resources */ = {isa = PBXBuildFile; fileRef = 08B480811BF864C800B4AAE0 /* delta-stackshot-sample-old-arrays */; };
+		08B480861BF864D300B4AAE0 /* delta-stackshot-sample-old-arrays.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08B480821BF864C800B4AAE0 /* delta-stackshot-sample-old-arrays.plist.gz */; };
+		08B480881BF92E0500B4AAE0 /* kcdata.py in Resources */ = {isa = PBXBuildFile; fileRef = 08B480871BF92DFB00B4AAE0 /* kcdata.py */; };
+		08B4808B1BF9474A00B4AAE0 /* corpse-sample in Resources */ = {isa = PBXBuildFile; fileRef = 08B480891BF9473800B4AAE0 /* corpse-sample */; };
+		08B4808C1BF9474A00B4AAE0 /* corpse-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08B4808A1BF9473800B4AAE0 /* corpse-sample.plist.gz */; };
+		08B9297E1C1CCE8D003B1703 /* stackshot-sample-ths-thread-t in Resources */ = {isa = PBXBuildFile; fileRef = 08B9297C1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t */; };
+		08B9297F1C1CCE8D003B1703 /* stackshot-sample-ths-thread-t.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08B9297D1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t.plist.gz */; };
+		08C9D83D1BFFF8E100DF6C05 /* exitreason-sample in Resources */ = {isa = PBXBuildFile; fileRef = 08C9D83B1BFFF8D500DF6C05 /* exitreason-sample */; };
+		08C9D83E1BFFF8E100DF6C05 /* exitreason-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08C9D83C1BFFF8D500DF6C05 /* exitreason-sample.plist.gz */; };
+		08CF18FF1BF9B7B100D05813 /* stackshot-sample-tailspin in Resources */ = {isa = PBXBuildFile; fileRef = 08CF18FD1BF9B79E00D05813 /* stackshot-sample-tailspin */; };
+		08CF19001BF9B7B100D05813 /* stackshot-sample-tailspin.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08CF18FE1BF9B79E00D05813 /* stackshot-sample-tailspin.plist.gz */; };
+		08F1501E1BFEA7AC00F2C89C /* libz.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 08F1501D1BFEA7AC00F2C89C /* libz.dylib */; };
+		1368F0851C87E06A00940FC6 /* exitreason-codesigning.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 1368F0841C87E06300940FC6 /* exitreason-codesigning.plist.gz */; };
+		1368F0861C87E06C00940FC6 /* exitreason-codesigning in Resources */ = {isa = PBXBuildFile; fileRef = 1368F0831C87E06300940FC6 /* exitreason-codesigning */; };
+		13A79CAA1CF8C5D600FFC181 /* stackshot-with-kcid in Resources */ = {isa = PBXBuildFile; fileRef = 13A79CA81CF8C5D200FFC181 /* stackshot-with-kcid */; };
+		13A79CAB1CF8C5D600FFC181 /* stackshot-with-kcid.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 13A79CA91CF8C5D200FFC181 /* stackshot-with-kcid.plist.gz */; };
+		13CC08441CB97F8D00EA6069 /* stackshot-fault-stats in Resources */ = {isa = PBXBuildFile; fileRef = 13CC08421CB97F8A00EA6069 /* stackshot-fault-stats */; };
+		13CC08451CB97F9000EA6069 /* stackshot-fault-stats.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 13CC08431CB97F8A00EA6069 /* stackshot-fault-stats.plist.gz */; };
+		13D6C5D01C4DDDB6005E617C /* corpse-twr-sample in Resources */ = {isa = PBXBuildFile; fileRef = 13AF287B1C4A0D6A000795E2 /* corpse-twr-sample */; };
+		13D6C5D11C4DDDB8005E617C /* corpse-twr-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 13AF287C1C4A0D6A000795E2 /* corpse-twr-sample.plist.gz */; };
+		13D6C5D21C4DDDBE005E617C /* test-twr-sample in Resources */ = {isa = PBXBuildFile; fileRef = 13AF287E1C4A0D6A000795E2 /* test-twr-sample */; };
+		13D6C5D31C4DDE0D005E617C /* test-twr-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 13EADC171C4DCDA100468D97 /* test-twr-sample.plist.gz */; };
+		13DBA2681CAB1AD600227EB2 /* stackshot-sample-sharedcachev2.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 13DBA2661CAB1ACB00227EB2 /* stackshot-sample-sharedcachev2.plist.gz */; };
+		13DBA26A1CAB1BA000227EB2 /* stackshot-sample-sharedcachev2 in Resources */ = {isa = PBXBuildFile; fileRef = 13DBA2691CAB1B9C00227EB2 /* stackshot-sample-sharedcachev2 */; };
+		13F3DA9C1C7C1BEE00ACFFCC /* corpse-twr-sample-v2 in Resources */ = {isa = PBXBuildFile; fileRef = 13F3DA9B1C7C1BE700ACFFCC /* corpse-twr-sample-v2 */; };
+		13F3DA9E1C7C1C6600ACFFCC /* corpse-twr-sample-v2.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 13F3DA9D1C7C1C6000ACFFCC /* corpse-twr-sample-v2.plist.gz */; };
 		C91C93CB1ACB58B700119B60 /* kdd.h in Headers */ = {isa = PBXBuildFile; fileRef = C91C93CA1ACB58B700119B60 /* kdd.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		C91C93CD1ACB58B700119B60 /* kdd.m in Sources */ = {isa = PBXBuildFile; fileRef = C91C93CC1ACB58B700119B60 /* kdd.m */; };
 		C91C93E41ACB598700119B60 /* KCDBasicTypeDescription.h in Headers */ = {isa = PBXBuildFile; fileRef = C91C93E01ACB598700119B60 /* KCDBasicTypeDescription.h */; };
@@ -14,10 +63,92 @@
 		C91C93E61ACB598700119B60 /* KCDStructTypeDescription.h in Headers */ = {isa = PBXBuildFile; fileRef = C91C93E21ACB598700119B60 /* KCDStructTypeDescription.h */; };
 		C91C93E71ACB598700119B60 /* KCDStructTypeDescription.m in Sources */ = {isa = PBXBuildFile; fileRef = C91C93E31ACB598700119B60 /* KCDStructTypeDescription.m */; };
 		C9C5C68C1ACDAFDB00BE0E5E /* kcdtypes.c in Sources */ = {isa = PBXBuildFile; fileRef = C9C5C68B1ACDAFDB00BE0E5E /* kcdtypes.c */; };
+		C9D7B53F1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = C9D7B53D1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz */; };
+		C9D7B5401D1B41D700F1019D /* xnupost_testconfig-sample in Resources */ = {isa = PBXBuildFile; fileRef = C9D7B53E1D1B41D700F1019D /* xnupost_testconfig-sample */; };
 		C9DE39141ACB5A540020F4A3 /* kcdata_core.m in Sources */ = {isa = PBXBuildFile; fileRef = C9DE39131ACB5A540020F4A3 /* kcdata_core.m */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		08603F3A1BF69EDE007D3784 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C91C93BF1ACB58B700119B60 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C91C93C61ACB58B700119B60;
+			remoteInfo = libkdd;
+		};
+		086395BA1BF565AB005ED913 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C91C93BF1ACB58B700119B60 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C91C93C61ACB58B700119B60;
+			remoteInfo = libkdd;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		086395B01BF5655D005ED913 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		081725D31C3F475200371A54 /* stackshot-sample-duration */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-duration"; path = "tests/stackshot-sample-duration"; sourceTree = SOURCE_ROOT; };
+		081725D41C3F475200371A54 /* stackshot-sample-duration.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-duration.plist.gz"; path = "tests/stackshot-sample-duration.plist.gz"; sourceTree = SOURCE_ROOT; };
+		081EDD361C23854500A1C138 /* stackshot-sample-cputime */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-cputime"; path = "tests/stackshot-sample-cputime"; sourceTree = SOURCE_ROOT; };
+		081EDD371C23854500A1C138 /* stackshot-sample-cputime.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-cputime.plist.gz"; path = "tests/stackshot-sample-cputime.plist.gz"; sourceTree = SOURCE_ROOT; };
+		0834719D1BF7D05400D67253 /* kcdata.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = kcdata.h; path = ../osfmk/kern/kcdata.h; sourceTree = "<group>"; };
+		0843EE911BF6AFB700CD4150 /* stackshot-sample */ = {isa = PBXFileReference; lastKnownFileType = text; name = "stackshot-sample"; path = "tests/stackshot-sample"; sourceTree = SOURCE_ROOT; };
+		0843EE931BF6BAB400CD4150 /* stackshot-sample.plist.gz */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = archive.gzip; name = "stackshot-sample.plist.gz"; path = "tests/stackshot-sample.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08603F341BF69EDE007D3784 /* tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		08603F361BF69EDE007D3784 /* Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests.swift; sourceTree = "<group>"; };
+		08603F381BF69EDE007D3784 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		08603F3F1BF69F44007D3784 /* kdd_bridge.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = kdd_bridge.h; path = ../tests/kdd_bridge.h; sourceTree = "<group>"; };
+		0860F8781BFC3845007E1301 /* stackshot-sample-tailspin-2 */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-tailspin-2"; path = "tests/stackshot-sample-tailspin-2"; sourceTree = SOURCE_ROOT; };
+		0860F8791BFC3845007E1301 /* stackshot-sample-tailspin-2.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-tailspin-2.plist.gz"; path = "tests/stackshot-sample-tailspin-2.plist.gz"; sourceTree = SOURCE_ROOT; };
+		086395B21BF5655D005ED913 /* kdd */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = kdd; sourceTree = BUILT_PRODUCTS_DIR; };
+		086395B41BF5655D005ED913 /* kdd_main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = kdd_main.m; sourceTree = "<group>"; };
+		08A4C94A1C47019E00D5F010 /* KCDEmbeddedBufferDescription.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = KCDEmbeddedBufferDescription.h; sourceTree = "<group>"; };
+		08A4C94B1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = KCDEmbeddedBufferDescription.m; sourceTree = "<group>"; };
+		08A4C94D1C470F0900D5F010 /* nested-sample */ = {isa = PBXFileReference; lastKnownFileType = file; name = "nested-sample"; path = "tests/nested-sample"; sourceTree = SOURCE_ROOT; };
+		08A4C94E1C470F0900D5F010 /* nested-sample.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = "nested-sample.plist"; path = "tests/nested-sample.plist"; sourceTree = SOURCE_ROOT; };
+		08B480741BF8294E00B4AAE0 /* stackshot-sample-new-arrays */ = {isa = PBXFileReference; lastKnownFileType = text; name = "stackshot-sample-new-arrays"; path = "tests/stackshot-sample-new-arrays"; sourceTree = SOURCE_ROOT; };
+		08B480751BF8294E00B4AAE0 /* stackshot-sample-new-arrays.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-new-arrays.plist.gz"; path = "tests/stackshot-sample-new-arrays.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08B480761BF8294E00B4AAE0 /* stackshot-sample-old-arrays */ = {isa = PBXFileReference; lastKnownFileType = text; name = "stackshot-sample-old-arrays"; path = "tests/stackshot-sample-old-arrays"; sourceTree = SOURCE_ROOT; };
+		08B480771BF8294E00B4AAE0 /* stackshot-sample-old-arrays.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-old-arrays.plist.gz"; path = "tests/stackshot-sample-old-arrays.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08B4807F1BF864C800B4AAE0 /* delta-stackshot-sample-new-arrays */ = {isa = PBXFileReference; lastKnownFileType = text; name = "delta-stackshot-sample-new-arrays"; path = "tests/delta-stackshot-sample-new-arrays"; sourceTree = SOURCE_ROOT; };
+		08B480801BF864C800B4AAE0 /* delta-stackshot-sample-new-arrays.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "delta-stackshot-sample-new-arrays.plist.gz"; path = "tests/delta-stackshot-sample-new-arrays.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08B480811BF864C800B4AAE0 /* delta-stackshot-sample-old-arrays */ = {isa = PBXFileReference; lastKnownFileType = text; name = "delta-stackshot-sample-old-arrays"; path = "tests/delta-stackshot-sample-old-arrays"; sourceTree = SOURCE_ROOT; };
+		08B480821BF864C800B4AAE0 /* delta-stackshot-sample-old-arrays.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "delta-stackshot-sample-old-arrays.plist.gz"; path = "tests/delta-stackshot-sample-old-arrays.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08B480871BF92DFB00B4AAE0 /* kcdata.py */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.python; name = kcdata.py; path = ../tools/lldbmacros/kcdata.py; sourceTree = "<group>"; };
+		08B480891BF9473800B4AAE0 /* corpse-sample */ = {isa = PBXFileReference; lastKnownFileType = text; name = "corpse-sample"; path = "tests/corpse-sample"; sourceTree = SOURCE_ROOT; };
+		08B4808A1BF9473800B4AAE0 /* corpse-sample.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "corpse-sample.plist.gz"; path = "tests/corpse-sample.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08B9297C1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-ths-thread-t"; path = "tests/stackshot-sample-ths-thread-t"; sourceTree = SOURCE_ROOT; };
+		08B9297D1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-ths-thread-t.plist.gz"; path = "tests/stackshot-sample-ths-thread-t.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08C9D83B1BFFF8D500DF6C05 /* exitreason-sample */ = {isa = PBXFileReference; lastKnownFileType = file; name = "exitreason-sample"; path = "tests/exitreason-sample"; sourceTree = SOURCE_ROOT; };
+		08C9D83C1BFFF8D500DF6C05 /* exitreason-sample.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "exitreason-sample.plist.gz"; path = "tests/exitreason-sample.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08CF18FD1BF9B79E00D05813 /* stackshot-sample-tailspin */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-tailspin"; path = "tests/stackshot-sample-tailspin"; sourceTree = SOURCE_ROOT; };
+		08CF18FE1BF9B79E00D05813 /* stackshot-sample-tailspin.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-tailspin.plist.gz"; path = "tests/stackshot-sample-tailspin.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08F1501D1BFEA7AC00F2C89C /* libz.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libz.dylib; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.12.sdk/usr/lib/libz.dylib; sourceTree = DEVELOPER_DIR; };
+		1368F0831C87E06300940FC6 /* exitreason-codesigning */ = {isa = PBXFileReference; lastKnownFileType = file; name = "exitreason-codesigning"; path = "tests/exitreason-codesigning"; sourceTree = SOURCE_ROOT; };
+		1368F0841C87E06300940FC6 /* exitreason-codesigning.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "exitreason-codesigning.plist.gz"; path = "tests/exitreason-codesigning.plist.gz"; sourceTree = SOURCE_ROOT; };
+		13A79CA81CF8C5D200FFC181 /* stackshot-with-kcid */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-with-kcid"; path = "tests/stackshot-with-kcid"; sourceTree = SOURCE_ROOT; };
+		13A79CA91CF8C5D200FFC181 /* stackshot-with-kcid.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-with-kcid.plist.gz"; path = "tests/stackshot-with-kcid.plist.gz"; sourceTree = SOURCE_ROOT; };
+		13AF287B1C4A0D6A000795E2 /* corpse-twr-sample */ = {isa = PBXFileReference; lastKnownFileType = file; name = "corpse-twr-sample"; path = "tests/corpse-twr-sample"; sourceTree = SOURCE_ROOT; };
+		13AF287C1C4A0D6A000795E2 /* corpse-twr-sample.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "corpse-twr-sample.plist.gz"; path = "tests/corpse-twr-sample.plist.gz"; sourceTree = SOURCE_ROOT; };
+		13AF287E1C4A0D6A000795E2 /* test-twr-sample */ = {isa = PBXFileReference; lastKnownFileType = file; name = "test-twr-sample"; path = "tests/test-twr-sample"; sourceTree = SOURCE_ROOT; };
+		13CC08421CB97F8A00EA6069 /* stackshot-fault-stats */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-fault-stats"; path = "tests/stackshot-fault-stats"; sourceTree = SOURCE_ROOT; };
+		13CC08431CB97F8A00EA6069 /* stackshot-fault-stats.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-fault-stats.plist.gz"; path = "tests/stackshot-fault-stats.plist.gz"; sourceTree = SOURCE_ROOT; };
+		13DBA2661CAB1ACB00227EB2 /* stackshot-sample-sharedcachev2.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-sharedcachev2.plist.gz"; path = "tests/stackshot-sample-sharedcachev2.plist.gz"; sourceTree = SOURCE_ROOT; };
+		13DBA2691CAB1B9C00227EB2 /* stackshot-sample-sharedcachev2 */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-sharedcachev2"; path = "tests/stackshot-sample-sharedcachev2"; sourceTree = SOURCE_ROOT; };
+		13EADC171C4DCDA100468D97 /* test-twr-sample.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "test-twr-sample.plist.gz"; path = "tests/test-twr-sample.plist.gz"; sourceTree = SOURCE_ROOT; };
+		13F3DA9B1C7C1BE700ACFFCC /* corpse-twr-sample-v2 */ = {isa = PBXFileReference; lastKnownFileType = file; name = "corpse-twr-sample-v2"; path = "tests/corpse-twr-sample-v2"; sourceTree = SOURCE_ROOT; };
+		13F3DA9D1C7C1C6000ACFFCC /* corpse-twr-sample-v2.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "corpse-twr-sample-v2.plist.gz"; path = "tests/corpse-twr-sample-v2.plist.gz"; sourceTree = SOURCE_ROOT; };
 		C91C93C71ACB58B700119B60 /* libkdd.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libkdd.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		C91C93CA1ACB58B700119B60 /* kdd.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = kdd.h; sourceTree = "<group>"; };
 		C91C93CC1ACB58B700119B60 /* kdd.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = kdd.m; sourceTree = "<group>"; };
@@ -26,10 +157,30 @@
 		C91C93E21ACB598700119B60 /* KCDStructTypeDescription.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = KCDStructTypeDescription.h; sourceTree = "<group>"; };
 		C91C93E31ACB598700119B60 /* KCDStructTypeDescription.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = KCDStructTypeDescription.m; sourceTree = "<group>"; };
 		C9C5C68B1ACDAFDB00BE0E5E /* kcdtypes.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = kcdtypes.c; sourceTree = "<group>"; };
+		C9D7B53D1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "xnupost_testconfig-sample.plist.gz"; sourceTree = "<group>"; };
+		C9D7B53E1D1B41D700F1019D /* xnupost_testconfig-sample */ = {isa = PBXFileReference; lastKnownFileType = file; path = "xnupost_testconfig-sample"; sourceTree = "<group>"; };
 		C9DE39131ACB5A540020F4A3 /* kcdata_core.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = kcdata_core.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		08603F311BF69EDE007D3784 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				08238A3B1BFEB5450053190C /* libz.dylib in Frameworks */,
+				08603F391BF69EDE007D3784 /* libkdd.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		086395AF1BF5655D005ED913 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				08F1501E1BFEA7AC00F2C89C /* libz.dylib in Frameworks */,
+				086395B91BF565A2005ED913 /* libkdd.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C91C93C41ACB58B700119B60 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -40,23 +191,59 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		C91C93BE1ACB58B700119B60 = {
+		08603F351BF69EDE007D3784 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
-				C91C93C91ACB58B700119B60 /* kcdata */,
-				C91C93C81ACB58B700119B60 /* Products */,
+				C9D7B53D1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz */,
+				C9D7B53E1D1B41D700F1019D /* xnupost_testconfig-sample */,
+				13A79CA81CF8C5D200FFC181 /* stackshot-with-kcid */,
+				13A79CA91CF8C5D200FFC181 /* stackshot-with-kcid.plist.gz */,
+				13CC08421CB97F8A00EA6069 /* stackshot-fault-stats */,
+				13CC08431CB97F8A00EA6069 /* stackshot-fault-stats.plist.gz */,
+				13DBA2691CAB1B9C00227EB2 /* stackshot-sample-sharedcachev2 */,
+				13DBA2661CAB1ACB00227EB2 /* stackshot-sample-sharedcachev2.plist.gz */,
+				1368F0831C87E06300940FC6 /* exitreason-codesigning */,
+				1368F0841C87E06300940FC6 /* exitreason-codesigning.plist.gz */,
+				13F3DA9D1C7C1C6000ACFFCC /* corpse-twr-sample-v2.plist.gz */,
+				13F3DA9B1C7C1BE700ACFFCC /* corpse-twr-sample-v2 */,
+				13EADC171C4DCDA100468D97 /* test-twr-sample.plist.gz */,
+				13AF287B1C4A0D6A000795E2 /* corpse-twr-sample */,
+				13AF287C1C4A0D6A000795E2 /* corpse-twr-sample.plist.gz */,
+				13AF287E1C4A0D6A000795E2 /* test-twr-sample */,
+				08603F3F1BF69F44007D3784 /* kdd_bridge.h */,
+				0843EE911BF6AFB700CD4150 /* stackshot-sample */,
+				08603F361BF69EDE007D3784 /* Tests.swift */,
+				0843EE931BF6BAB400CD4150 /* stackshot-sample.plist.gz */,
+				08B480741BF8294E00B4AAE0 /* stackshot-sample-new-arrays */,
+				08B480751BF8294E00B4AAE0 /* stackshot-sample-new-arrays.plist.gz */,
+				08B480761BF8294E00B4AAE0 /* stackshot-sample-old-arrays */,
+				08B480771BF8294E00B4AAE0 /* stackshot-sample-old-arrays.plist.gz */,
+				08B4807F1BF864C800B4AAE0 /* delta-stackshot-sample-new-arrays */,
+				08B480801BF864C800B4AAE0 /* delta-stackshot-sample-new-arrays.plist.gz */,
+				08B480811BF864C800B4AAE0 /* delta-stackshot-sample-old-arrays */,
+				08B480821BF864C800B4AAE0 /* delta-stackshot-sample-old-arrays.plist.gz */,
+				08CF18FD1BF9B79E00D05813 /* stackshot-sample-tailspin */,
+				08CF18FE1BF9B79E00D05813 /* stackshot-sample-tailspin.plist.gz */,
+				0860F8781BFC3845007E1301 /* stackshot-sample-tailspin-2 */,
+				0860F8791BFC3845007E1301 /* stackshot-sample-tailspin-2.plist.gz */,
+				08B9297C1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t */,
+				08B9297D1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t.plist.gz */,
+				081EDD361C23854500A1C138 /* stackshot-sample-cputime */,
+				081EDD371C23854500A1C138 /* stackshot-sample-cputime.plist.gz */,
+				08B480891BF9473800B4AAE0 /* corpse-sample */,
+				08B4808A1BF9473800B4AAE0 /* corpse-sample.plist.gz */,
+				08C9D83B1BFFF8D500DF6C05 /* exitreason-sample */,
+				08C9D83C1BFFF8D500DF6C05 /* exitreason-sample.plist.gz */,
+				081725D31C3F475200371A54 /* stackshot-sample-duration */,
+				081725D41C3F475200371A54 /* stackshot-sample-duration.plist.gz */,
+				08A4C94D1C470F0900D5F010 /* nested-sample */,
+				08A4C94E1C470F0900D5F010 /* nested-sample.plist */,
+				08603F381BF69EDE007D3784 /* Info.plist */,
 			);
+			path = tests;
 			sourceTree = "<group>";
 		};
-		C91C93C81ACB58B700119B60 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				C91C93C71ACB58B700119B60 /* libkdd.a */,
-			);
-			name = Products;
-			sourceTree = "<group>";
-		};
-		C91C93C91ACB58B700119B60 /* kcdata */ = {
+		08DE68351BFFB70900BC682F /* libkdd */ = {
 			isa = PBXGroup;
 			children = (
 				C9C5C68B1ACDAFDB00BE0E5E /* kcdtypes.c */,
@@ -65,10 +252,43 @@
 				C91C93E11ACB598700119B60 /* KCDBasicTypeDescription.m */,
 				C91C93E21ACB598700119B60 /* KCDStructTypeDescription.h */,
 				C91C93E31ACB598700119B60 /* KCDStructTypeDescription.m */,
+				08A4C94A1C47019E00D5F010 /* KCDEmbeddedBufferDescription.h */,
+				08A4C94B1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m */,
 				C91C93CA1ACB58B700119B60 /* kdd.h */,
 				C91C93CC1ACB58B700119B60 /* kdd.m */,
 			);
-			path = kcdata;
+			name = libkdd;
+			sourceTree = "<group>";
+		};
+		08DE68361BFFB71D00BC682F /* kdd */ = {
+			isa = PBXGroup;
+			children = (
+				086395B41BF5655D005ED913 /* kdd_main.m */,
+			);
+			name = kdd;
+			sourceTree = "<group>";
+		};
+		C91C93BE1ACB58B700119B60 = {
+			isa = PBXGroup;
+			children = (
+				08DE68361BFFB71D00BC682F /* kdd */,
+				08DE68351BFFB70900BC682F /* libkdd */,
+				08F1501D1BFEA7AC00F2C89C /* libz.dylib */,
+				0834719D1BF7D05400D67253 /* kcdata.h */,
+				08B480871BF92DFB00B4AAE0 /* kcdata.py */,
+				08603F351BF69EDE007D3784 /* Tests */,
+				C91C93C81ACB58B700119B60 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C91C93C81ACB58B700119B60 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C91C93C71ACB58B700119B60 /* libkdd.a */,
+				086395B21BF5655D005ED913 /* kdd */,
+				08603F341BF69EDE007D3784 /* tests.xctest */,
+			);
+			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -79,6 +299,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C91C93CB1ACB58B700119B60 /* kdd.h in Headers */,
+				0834719E1BF7D05400D67253 /* kcdata.h in Headers */,
 				C91C93E41ACB598700119B60 /* KCDBasicTypeDescription.h in Headers */,
 				C91C93E61ACB598700119B60 /* KCDStructTypeDescription.h in Headers */,
 			);
@@ -87,9 +308,45 @@
 /* End PBXHeadersBuildPhase section */
 
 /* Begin PBXNativeTarget section */
-		C91C93C61ACB58B700119B60 /* kdd */ = {
+		08603F331BF69EDE007D3784 /* tests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C91C93DA1ACB58B700119B60 /* Build configuration list for PBXNativeTarget "kdd" */;
+			buildConfigurationList = 08603F3E1BF69EDE007D3784 /* Build configuration list for PBXNativeTarget "tests" */;
+			buildPhases = (
+				08603F301BF69EDE007D3784 /* Sources */,
+				08603F311BF69EDE007D3784 /* Frameworks */,
+				08603F321BF69EDE007D3784 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				08603F3B1BF69EDE007D3784 /* PBXTargetDependency */,
+			);
+			name = tests;
+			productName = Tests;
+			productReference = 08603F341BF69EDE007D3784 /* tests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		086395B11BF5655D005ED913 /* kdd */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 086395B61BF5655D005ED913 /* Build configuration list for PBXNativeTarget "kdd" */;
+			buildPhases = (
+				086395AE1BF5655D005ED913 /* Sources */,
+				086395AF1BF5655D005ED913 /* Frameworks */,
+				086395B01BF5655D005ED913 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				086395BB1BF565AB005ED913 /* PBXTargetDependency */,
+			);
+			name = kdd;
+			productName = kdd;
+			productReference = 086395B21BF5655D005ED913 /* kdd */;
+			productType = "com.apple.product-type.tool";
+		};
+		C91C93C61ACB58B700119B60 /* libkdd */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C91C93DA1ACB58B700119B60 /* Build configuration list for PBXNativeTarget "libkdd" */;
 			buildPhases = (
 				C91C93C31ACB58B700119B60 /* Sources */,
 				C91C93C41ACB58B700119B60 /* Frameworks */,
@@ -99,7 +356,7 @@
 			);
 			dependencies = (
 			);
-			name = kdd;
+			name = libkdd;
 			productName = kdd;
 			productReference = C91C93C71ACB58B700119B60 /* libkdd.a */;
 			productType = "com.apple.product-type.library.static";
@@ -110,9 +367,17 @@
 		C91C93BF1ACB58B700119B60 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				LastUpgradeCheck = 0700;
+				LastSwiftUpdateCheck = 0730;
+				LastUpgradeCheck = 0730;
 				ORGANIZATIONNAME = "Vishal Patel";
 				TargetAttributes = {
+					08603F331BF69EDE007D3784 = {
+						CreatedOnToolsVersion = 7.3;
+						LastSwiftMigration = 0800;
+					};
+					086395B11BF5655D005ED913 = {
+						CreatedOnToolsVersion = 7.3;
+					};
 					C91C93C61ACB58B700119B60 = {
 						CreatedOnToolsVersion = 7.0;
 					};
@@ -130,12 +395,83 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C91C93C61ACB58B700119B60 /* kdd */,
+				C91C93C61ACB58B700119B60 /* libkdd */,
+				086395B11BF5655D005ED913 /* kdd */,
+				08603F331BF69EDE007D3784 /* tests */,
 			);
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		08603F321BF69EDE007D3784 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				08A4C94F1C470F1C00D5F010 /* nested-sample in Resources */,
+				08A4C9501C470F1C00D5F010 /* nested-sample.plist in Resources */,
+				13D6C5D21C4DDDBE005E617C /* test-twr-sample in Resources */,
+				13D6C5D01C4DDDB6005E617C /* corpse-twr-sample in Resources */,
+				C9D7B5401D1B41D700F1019D /* xnupost_testconfig-sample in Resources */,
+				081725D51C3F476500371A54 /* stackshot-sample-duration in Resources */,
+				081725D61C3F476500371A54 /* stackshot-sample-duration.plist.gz in Resources */,
+				081EDD381C23855700A1C138 /* stackshot-sample-cputime in Resources */,
+				081EDD391C23855700A1C138 /* stackshot-sample-cputime.plist.gz in Resources */,
+				13A79CAA1CF8C5D600FFC181 /* stackshot-with-kcid in Resources */,
+				08B9297E1C1CCE8D003B1703 /* stackshot-sample-ths-thread-t in Resources */,
+				08B9297F1C1CCE8D003B1703 /* stackshot-sample-ths-thread-t.plist.gz in Resources */,
+				0860F87A1BFC3857007E1301 /* stackshot-sample-tailspin-2 in Resources */,
+				13CC08451CB97F9000EA6069 /* stackshot-fault-stats.plist.gz in Resources */,
+				13F3DA9E1C7C1C6600ACFFCC /* corpse-twr-sample-v2.plist.gz in Resources */,
+				0860F87B1BFC3857007E1301 /* stackshot-sample-tailspin-2.plist.gz in Resources */,
+				08CF18FF1BF9B7B100D05813 /* stackshot-sample-tailspin in Resources */,
+				1368F0861C87E06C00940FC6 /* exitreason-codesigning in Resources */,
+				13DBA26A1CAB1BA000227EB2 /* stackshot-sample-sharedcachev2 in Resources */,
+				C9D7B53F1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz in Resources */,
+				13DBA2681CAB1AD600227EB2 /* stackshot-sample-sharedcachev2.plist.gz in Resources */,
+				08CF19001BF9B7B100D05813 /* stackshot-sample-tailspin.plist.gz in Resources */,
+				13CC08441CB97F8D00EA6069 /* stackshot-fault-stats in Resources */,
+				13F3DA9C1C7C1BEE00ACFFCC /* corpse-twr-sample-v2 in Resources */,
+				13D6C5D31C4DDE0D005E617C /* test-twr-sample.plist.gz in Resources */,
+				1368F0851C87E06A00940FC6 /* exitreason-codesigning.plist.gz in Resources */,
+				08C9D83D1BFFF8E100DF6C05 /* exitreason-sample in Resources */,
+				08C9D83E1BFFF8E100DF6C05 /* exitreason-sample.plist.gz in Resources */,
+				08B4808B1BF9474A00B4AAE0 /* corpse-sample in Resources */,
+				13D6C5D11C4DDDB8005E617C /* corpse-twr-sample.plist.gz in Resources */,
+				08B4808C1BF9474A00B4AAE0 /* corpse-sample.plist.gz in Resources */,
+				08B480881BF92E0500B4AAE0 /* kcdata.py in Resources */,
+				08B480831BF864D300B4AAE0 /* delta-stackshot-sample-new-arrays in Resources */,
+				08B480841BF864D300B4AAE0 /* delta-stackshot-sample-new-arrays.plist.gz in Resources */,
+				08B480851BF864D300B4AAE0 /* delta-stackshot-sample-old-arrays in Resources */,
+				13A79CAB1CF8C5D600FFC181 /* stackshot-with-kcid.plist.gz in Resources */,
+				08B480861BF864D300B4AAE0 /* delta-stackshot-sample-old-arrays.plist.gz in Resources */,
+				08B480781BF8297500B4AAE0 /* stackshot-sample-new-arrays in Resources */,
+				08B480791BF8297500B4AAE0 /* stackshot-sample-new-arrays.plist.gz in Resources */,
+				08B4807A1BF8297500B4AAE0 /* stackshot-sample-old-arrays in Resources */,
+				08B4807B1BF8297500B4AAE0 /* stackshot-sample-old-arrays.plist.gz in Resources */,
+				0843EE941BF6BAC100CD4150 /* stackshot-sample.plist.gz in Resources */,
+				0843EE921BF6AFC600CD4150 /* stackshot-sample in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
+		08603F301BF69EDE007D3784 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				08603F371BF69EDE007D3784 /* Tests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		086395AE1BF5655D005ED913 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				086395B51BF5655D005ED913 /* kdd_main.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C91C93C31ACB58B700119B60 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -145,12 +481,85 @@
 				C91C93E51ACB598700119B60 /* KCDBasicTypeDescription.m in Sources */,
 				C91C93CD1ACB58B700119B60 /* kdd.m in Sources */,
 				C9C5C68C1ACDAFDB00BE0E5E /* kcdtypes.c in Sources */,
+				08A4C94C1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		08603F3B1BF69EDE007D3784 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C91C93C61ACB58B700119B60 /* libkdd */;
+			targetProxy = 08603F3A1BF69EDE007D3784 /* PBXContainerItemProxy */;
+		};
+		086395BB1BF565AB005ED913 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C91C93C61ACB58B700119B60 /* libkdd */;
+			targetProxy = 086395BA1BF565AB005ED913 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		08603F3C1BF69EDE007D3784 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_TESTABILITY = YES;
+				INFOPLIST_FILE = tests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 10.11;
+				PRODUCT_BUNDLE_IDENTIFIER = apple.com.Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = tests/kdd_bridge.h;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 2.3;
+			};
+			name = Debug;
+		};
+		08603F3D1BF69EDE007D3784 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = tests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 10.11;
+				PRODUCT_BUNDLE_IDENTIFIER = apple.com.Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = tests/kdd_bridge.h;
+				SWIFT_VERSION = 2.3;
+			};
+			name = Release;
+		};
+		086395B71BF5655D005ED913 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				ENABLE_TESTABILITY = YES;
+				MACOSX_DEPLOYMENT_TARGET = 10.11;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		086395B81BF5655D005ED913 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				MACOSX_DEPLOYMENT_TARGET = 10.11;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
 		C91C93D81ACB58B700119B60 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -163,6 +572,7 @@
 				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
 				CLANG_WARN_EMPTY_BODY = YES;
 				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_IMPLICIT_SIGN_CONVERSION = YES;
 				CLANG_WARN_INT_CONVERSION = YES;
 				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
@@ -170,6 +580,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu99;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -185,9 +596,11 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)";
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_CFLAGS = "";
+				SDKROOT = macosx.internal;
 			};
 			name = Debug;
 		};
@@ -203,6 +616,7 @@
 				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
 				CLANG_WARN_EMPTY_BODY = YES;
 				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_IMPLICIT_SIGN_CONVERSION = YES;
 				CLANG_WARN_INT_CONVERSION = YES;
 				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
@@ -219,14 +633,17 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)";
 				MTL_ENABLE_DEBUG_INFO = NO;
 				OTHER_CFLAGS = "";
+				SDKROOT = macosx.internal;
 			};
 			name = Release;
 		};
 		C91C93DB1ACB58B700119B60 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
 				EXECUTABLE_PREFIX = lib;
 				OTHER_CFLAGS = "-I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders";
 				PRODUCT_NAME = kdd;
@@ -236,6 +653,7 @@
 		C91C93DC1ACB58B700119B60 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
 				EXECUTABLE_PREFIX = lib;
 				OTHER_CFLAGS = "-I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders";
 				PRODUCT_NAME = kdd;
@@ -245,6 +663,24 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		08603F3E1BF69EDE007D3784 /* Build configuration list for PBXNativeTarget "tests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				08603F3C1BF69EDE007D3784 /* Debug */,
+				08603F3D1BF69EDE007D3784 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		086395B61BF5655D005ED913 /* Build configuration list for PBXNativeTarget "kdd" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				086395B71BF5655D005ED913 /* Debug */,
+				086395B81BF5655D005ED913 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		C91C93C21ACB58B700119B60 /* Build configuration list for PBXProject "kdd" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -254,7 +690,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C91C93DA1ACB58B700119B60 /* Build configuration list for PBXNativeTarget "kdd" */ = {
+		C91C93DA1ACB58B700119B60 /* Build configuration list for PBXNativeTarget "libkdd" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C91C93DB1ACB58B700119B60 /* Debug */,

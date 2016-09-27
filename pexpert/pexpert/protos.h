@@ -52,14 +52,14 @@ extern void interrupt_disable(void);
 //from kern/misc_protos.h
 extern void    
 _doprnt(
-        register const char     *fmt,
+        const char     *fmt,
         va_list                 *argp,
         void                    (*putc)(char),
         int                     radix);
 
 extern void    
 _doprnt_log(
-        register const char     *fmt,
+        const char     *fmt,
         va_list                 *argp,
         void                    (*putc)(char),
         int                     radix);

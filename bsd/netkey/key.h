@@ -108,6 +108,12 @@ extern void key_delsav(struct secasvar *sav);
 extern struct secpolicy *key_getspbyid(u_int32_t);
 extern void key_delsp_for_ipsec_if(ifnet_t ipsec_if);
 
+struct ifnet;
+struct ifnet_keepalive_offload_frame;
+extern u_int32_t key_fill_offload_frames_for_savs(struct ifnet *,
+    struct ifnet_keepalive_offload_frame *frames_array, u_int32_t, size_t);
+
+
 
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETKEY_KEY_H_ */

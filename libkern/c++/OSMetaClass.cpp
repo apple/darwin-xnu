@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -392,7 +392,19 @@ OSMetaClass::OSMetaClass(
     reserved = IONew(ExpansionData, 1);
     bzero(reserved, sizeof(ExpansionData));
 #if IOTRACKING
-    reserved->tracking = IOTrackingQueueAlloc(inClassName, inClassSize, 0, true);
+    uint32_t numSiteQs = 0;
+    if ((this == &OSSymbol    ::gMetaClass)
+     || (this == &OSString    ::gMetaClass)
+     || (this == &OSNumber    ::gMetaClass)
+     || (this == &OSString    ::gMetaClass)
+     || (this == &OSData      ::gMetaClass)
+     || (this == &OSDictionary::gMetaClass)
+     || (this == &OSArray     ::gMetaClass)
+     || (this == &OSSet       ::gMetaClass))                   numSiteQs = 27;
+
+    reserved->tracking = IOTrackingQueueAlloc(inClassName, (uintptr_t) this,
+					      inClassSize, 0, kIOTrackingQueueTypeAlloc,
+					      numSiteQs);
 #endif
 
    /* Hack alert: We are just casting inClassName and storing it in
@@ -591,6 +603,7 @@ OSMetaClass::postModLoad(void * loadHandle)
         case kNoDictionaries:
             sBootstrapState = kMakingDictionaries;
             // No break; fall through
+           [[clang::fallthrough]];
             
         case kMakingDictionaries:
             sAllClassesDict = OSDictionary::withCapacity(kClassCapacityIncrement);
@@ -600,7 +613,8 @@ OSMetaClass::postModLoad(void * loadHandle)
             }
             sAllClassesDict->setOptions(OSCollection::kSort, OSCollection::kSort);
 
-        // No break; fall through
+           // No break; fall through
+           [[clang::fallthrough]];
 
         case kCompletedBootstrap:
         {
@@ -711,8 +725,8 @@ finish:
         OSMetaClassLogErrorForKext(result, myKext);
     }
 
-    OSSafeRelease(myKextName);
-    OSSafeRelease(myKext);
+    OSSafeReleaseNULL(myKextName);
+    OSSafeReleaseNULL(myKext);
 
     if (sStalled) {
         OSMETA_ACCUMSIZE(-(sStalled->capacity * sizeof(OSMetaClass *) +
@@ -774,7 +788,7 @@ OSMetaClass::modHasInstance(const char * kextIdentifier)
     result = theKext->hasOSMetaClassInstances();
 
 finish:
-    OSSafeRelease(theKext);
+    OSSafeReleaseNULL(theKext);
     return result;
 }
 
@@ -1191,7 +1205,7 @@ OSMetaClass::serializeClassDictionary(OSDictionary * serializeDictionary)
     } while (0);
 
 finish:
-    OSSafeRelease(classDict);
+    OSSafeReleaseNULL(classDict);
 
     IOLockUnlock(sAllClassesLock);
 

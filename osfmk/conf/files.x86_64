@@ -31,6 +31,7 @@ osfmk/x86_64/bzero.s		standard
 osfmk/x86_64/WKdmDecompress_new.s	standard
 osfmk/x86_64/WKdmCompress_new.s		standard
 osfmk/x86_64/WKdmData_new.s		standard
+osfmk/x86_64/lz4_decode_x86_64.s	standard
 osfmk/i386/cpu.c		standard
 osfmk/i386/cpuid.c		standard
 osfmk/i386/cpu_threads.c	standard
@@ -83,10 +84,6 @@ osfmk/i386/acpi.c		standard
 
 osfmk/i386/mtrr.c		optional    config_mtrr
 
-osfmk/console/i386/serial_console.c  optional  serial_console
-
-osfmk/console/video_console.c        optional  video_console
-osfmk/console/i386/video_scroll.c    optional  video_console
 
 #osfmk/profiling/x86_64/profile-md.c	optional gprof
 #osfmk/profiling/x86_64/profile-asm.s	optional gprof

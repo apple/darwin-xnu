@@ -38,6 +38,8 @@
 #include <kern/thread.h>
 #include <kern/clock.h>
 #include <kern/host_notify.h>
+#include <kern/thread_call.h>
+#include <libkern/OSAtomic.h>
 
 #include <IOKit/IOPlatformExpert.h>
 
@@ -62,6 +64,12 @@ decl_simple_lock_data(,clock_lock)
 #define clock_lock_init()	\
 	simple_lock_init(&clock_lock, 0)
 
+#ifdef kdp_simple_lock_is_acquired
+boolean_t kdp_clock_is_locked()
+{
+	return kdp_simple_lock_is_acquired(&clock_lock);
+}
+#endif
 
 /*
  *	Time of day (calendar) variables.
@@ -130,7 +138,9 @@ void _clock_delay_until_deadline_with_leeway(uint64_t		interval,
 											 uint64_t		deadline,
 											 uint64_t		leeway);
 
-static uint64_t		clock_boottime;				/* Seconds boottime epoch */
+/* Seconds boottime epoch */
+static uint64_t clock_boottime;
+static uint32_t clock_boottime_usec;
 
 #define TIME_ADD(rsecs, secs, rfrac, frac, unit)	\
 MACRO_BEGIN											\
@@ -235,34 +245,20 @@ clock_get_calendar_microtime(
 	clock_get_calendar_absolute_and_microtime(secs, microsecs, NULL);
 }
 
-/*
- *	clock_get_calendar_absolute_and_microtime:
- *
- *	Returns the current calendar value,
- *	microseconds as the fraction. Also
- *	returns mach_absolute_time if abstime
- *	is not NULL.
- */
-void
-clock_get_calendar_absolute_and_microtime(
+static void
+clock_get_calendar_absolute_and_microtime_locked(
 	clock_sec_t			*secs,
 	clock_usec_t		*microsecs,
 	uint64_t    		*abstime)
 {
-	uint64_t		now;
-	spl_t			s;
-
-	s = splclock();
-	clock_lock();
-
-	now = mach_absolute_time();
+	uint64_t now  = mach_absolute_time();
 	if (abstime)
 		*abstime = now;
 
 	if (clock_calend.adjdelta < 0) {
 		uint32_t	t32;
 
-		/* 
+		/*
 		 * Since offset is decremented during a negative adjustment,
 		 * ensure that time increases monotonically without going
 		 * temporarily backwards.
@@ -286,6 +282,28 @@ clock_get_calendar_absolute_and_microtime(
 	absolutetime_to_microtime(now, secs, microsecs);
 
 	*secs += (clock_sec_t)clock_calend.epoch;
+}
+
+/*
+ *	clock_get_calendar_absolute_and_microtime:
+ *
+ *	Returns the current calendar value,
+ *	microseconds as the fraction. Also
+ *	returns mach_absolute_time if abstime
+ *	is not NULL.
+ */
+void
+clock_get_calendar_absolute_and_microtime(
+	clock_sec_t			*secs,
+	clock_usec_t		*microsecs,
+	uint64_t    		*abstime)
+{
+	spl_t			s;
+
+	s = splclock();
+	clock_lock();
+
+	clock_get_calendar_absolute_and_microtime_locked(secs, microsecs, abstime);
 
 	clock_unlock();
 	splx(s);
@@ -306,34 +324,14 @@ clock_get_calendar_nanotime(
 	clock_sec_t			*secs,
 	clock_nsec_t		*nanosecs)
 {
-	uint64_t		now;
 	spl_t			s;
 
 	s = splclock();
 	clock_lock();
 
-	now = mach_absolute_time();
-
-	if (clock_calend.adjdelta < 0) {
-		uint32_t	t32;
-
-		if (now > clock_calend.adjstart) {
-			t32 = (uint32_t)(now - clock_calend.adjstart);
-
-			if (t32 > clock_calend.adjoffset)
-				now -= clock_calend.adjoffset;
-			else
-				now = clock_calend.adjstart;
-		}
-	}
-
-	now += clock_calend.offset;
-
-	absolutetime_to_microtime(now, secs, nanosecs);
+	clock_get_calendar_absolute_and_microtime_locked(secs, nanosecs, NULL);
 
 	*nanosecs *= NSEC_PER_USEC;
-
-	*secs += (clock_sec_t)clock_calend.epoch;
 
 	clock_unlock();
 	splx(s);
@@ -354,6 +352,15 @@ void
 clock_gettimeofday(
 	clock_sec_t		*secs,
 	clock_usec_t	*microsecs)
+{
+	clock_gettimeofday_and_absolute_time(secs, microsecs, NULL);
+}
+
+void
+clock_gettimeofday_and_absolute_time(
+	clock_sec_t		*secs,
+	clock_usec_t	*microsecs,
+	uint64_t		*mach_time)
 {
 	uint64_t		now;
 	spl_t			s;
@@ -387,6 +394,10 @@ clock_gettimeofday(
 
 	clock_unlock();
 	splx(s);
+
+	if (mach_time) {
+		*mach_time = now;
+	}
 }
 
 /*
@@ -408,8 +419,12 @@ clock_set_calendar_microtime(
 {
 	clock_sec_t			sys;
 	clock_usec_t		microsys;
+	uint64_t			absolutesys;
 	clock_sec_t			newsecs;
+	clock_sec_t			oldsecs;
     clock_usec_t        newmicrosecs;
+	clock_usec_t		oldmicrosecs;
+	uint64_t			commpage_value;
 	spl_t				s;
 
     newsecs = secs;
@@ -421,16 +436,28 @@ clock_set_calendar_microtime(
 	commpage_disable_timestamp();
 
 	/*
+	 *	Adjust the boottime based on the delta.
+	 */
+	clock_get_calendar_absolute_and_microtime_locked(&oldsecs, &oldmicrosecs, &absolutesys);
+	if (oldsecs < secs || (oldsecs == secs && oldmicrosecs < microsecs)){
+		// moving forwards
+		long deltasecs = secs, deltamicrosecs = microsecs;
+		TIME_SUB(deltasecs, oldsecs, deltamicrosecs, oldmicrosecs, USEC_PER_SEC);
+		TIME_ADD(clock_boottime, deltasecs, clock_boottime_usec, deltamicrosecs, USEC_PER_SEC);
+	} else {
+		// moving backwards
+		long deltasecs = oldsecs, deltamicrosecs = oldmicrosecs;
+		TIME_SUB(deltasecs, secs, deltamicrosecs, microsecs, USEC_PER_SEC);
+		TIME_SUB(clock_boottime, deltasecs, clock_boottime_usec, deltamicrosecs, USEC_PER_SEC);
+	}
+	commpage_value = clock_boottime * USEC_PER_SEC + clock_boottime_usec;
+
+	/*
 	 *	Calculate the new calendar epoch based on
 	 *	the new value and the system clock.
 	 */
-	clock_get_system_microtime(&sys, &microsys);
+	absolutetime_to_microtime(absolutesys, &sys, &microsys);
 	TIME_SUB(secs, sys, microsecs, microsys, USEC_PER_SEC);
-
-	/*
-	 *	Adjust the boottime based on the delta.
-	 */
-	clock_boottime += secs - clock_calend.epoch;
 
 	/*
 	 *	Set the new calendar epoch.
@@ -456,11 +483,14 @@ clock_set_calendar_microtime(
 
 	splx(s);
 
+	commpage_update_boottime(commpage_value);
+
 	/*
 	 *	Send host notifications.
 	 */
 	host_notify_calendar_change();
-	
+	host_notify_calendar_set();
+
 #if CONFIG_DTRACE
 	clock_track_calend_nowait();
 #endif
@@ -482,12 +512,16 @@ uint64_t mach_absolutetime_last_sleep;
 void
 clock_initialize_calendar(void)
 {
-	clock_sec_t			sys, secs;
-	clock_usec_t 		microsys, microsecs;
-	uint64_t			new_epoch;
+	clock_sec_t			sys;  // sleepless time since boot in seconds
+	clock_sec_t			secs; // Current UTC time
+	clock_sec_t			utc_offset_secs; // Difference in current UTC time and sleepless time since boot
+	clock_usec_t		microsys;  
+	clock_usec_t		microsecs; 
+	clock_usec_t		utc_offset_microsecs; 
+	uint64_t			new_epoch; // utc_offset_secs in mach absolute time units
 	spl_t				s;
 
-    PEGetUTCTimeOfDay(&secs, &microsecs);
+	PEGetUTCTimeOfDay(&secs, &microsecs);
 
 	s = splclock();
 	clock_lock();
@@ -498,37 +532,56 @@ clock_initialize_calendar(void)
 		/*
 		 *	Initialize the boot time based on the platform clock.
 		 */
-		if (clock_boottime == 0)
+		if (clock_boottime == 0){
 			clock_boottime = secs;
+			clock_boottime_usec = microsecs;
+			commpage_update_boottime(clock_boottime * USEC_PER_SEC + clock_boottime_usec);
+		}
 
 		/*
 		 *	Calculate the new calendar epoch based on
 		 *	the platform clock and the system clock.
 		 */
 		clock_get_system_microtime(&sys, &microsys);
-		TIME_SUB(secs, sys, microsecs, microsys, USEC_PER_SEC);
+		utc_offset_secs = secs;
+		utc_offset_microsecs = microsecs;
+
+		// This macro mutates utc_offset_secs and micro_utc_offset
+		TIME_SUB(utc_offset_secs, sys, utc_offset_microsecs, microsys, USEC_PER_SEC);
 
 		/*
 		 *	Set the new calendar epoch.
 		 */
 
-		clock_calend.epoch = secs;
+		clock_calend.epoch = utc_offset_secs;
 
-		nanoseconds_to_absolutetime((uint64_t)microsecs * NSEC_PER_USEC, &clock_calend.offset);
+		nanoseconds_to_absolutetime((uint64_t)utc_offset_microsecs * NSEC_PER_USEC, &clock_calend.offset);
 
-		clock_interval_to_absolutetime_interval((uint32_t) secs, NSEC_PER_SEC, &new_epoch);
+		clock_interval_to_absolutetime_interval((uint32_t) utc_offset_secs, NSEC_PER_SEC, &new_epoch);
 		new_epoch += clock_calend.offset;
 
 		if (clock_calend.epoch_absolute)
 		{
-			mach_absolutetime_last_sleep = new_epoch - clock_calend.epoch_absolute;
+			/* new_epoch is the difference between absolute_time and utc_time
+			 * this value will remain constant until the system sleeps.
+			 * Then, difference between values would go up by the time the system sleeps.
+			 * epoch_absolute is the last difference between the two values
+			 * so the difference in the differences would be the time of the last sleep
+			 */
+
+			if(new_epoch > clock_calend.epoch_absolute) {
+				mach_absolutetime_last_sleep = new_epoch - clock_calend.epoch_absolute;
+			}
+			else {
+				mach_absolutetime_last_sleep = 0;
+			}
 			mach_absolutetime_asleep += mach_absolutetime_last_sleep;
 			KERNEL_DEBUG_CONSTANT(
 				  MACHDBG_CODE(DBG_MACH_CLOCK,MACH_EPOCH_CHANGE) | DBG_FUNC_NONE,
-				  (uintptr_t) mach_absolutetime_last_sleep, 
-				  (uintptr_t) mach_absolutetime_asleep, 
-				  (uintptr_t) (mach_absolutetime_last_sleep >> 32), 
-				  (uintptr_t) (mach_absolutetime_asleep >> 32), 
+				  (uintptr_t) mach_absolutetime_last_sleep,
+				  (uintptr_t) mach_absolutetime_asleep,
+				  (uintptr_t) (mach_absolutetime_last_sleep >> 32),
+				  (uintptr_t) (mach_absolutetime_asleep >> 32),
 				  0);
 		}
 		clock_calend.epoch_absolute = new_epoch;
@@ -538,6 +591,9 @@ clock_initialize_calendar(void)
 		 */
 		calend_adjtotal = clock_calend.adjdelta = 0;
 	}
+
+	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
+	adjust_cont_time_thread_calls();
 
 	clock_unlock();
 	splx(s);
@@ -568,7 +624,29 @@ clock_get_boottime_nanotime(
 	clock_lock();
 
 	*secs = (clock_sec_t)clock_boottime;
-	*nanosecs = 0;
+	*nanosecs = (clock_nsec_t)clock_boottime_usec * NSEC_PER_USEC;
+
+	clock_unlock();
+	splx(s);
+}
+
+/*
+ *	clock_get_boottime_nanotime:
+ *
+ *	Return the boottime, used by sysctl.
+ */
+void
+clock_get_boottime_microtime(
+	clock_sec_t			*secs,
+	clock_usec_t		*microsecs)
+{
+	spl_t	s;
+
+	s = splclock();
+	clock_lock();
+
+	*secs = (clock_sec_t)clock_boottime;
+	*microsecs = (clock_nsec_t)clock_boottime_usec;
 
 	clock_unlock();
 	splx(s);
@@ -953,6 +1031,14 @@ clock_absolutetime_interval_to_deadline(
 }
 
 void
+clock_continuoustime_interval_to_deadline(
+	uint64_t			conttime,
+	uint64_t			*result)
+{
+	*result = mach_continuous_time() + conttime;
+}
+
+void
 clock_get_uptime(
 	uint64_t	*result)
 {
@@ -976,6 +1062,61 @@ clock_deadline_for_periodic_event(
 		if (*deadline <= abstime)
 			*deadline = abstime + interval;
 	}
+}
+
+uint64_t
+mach_continuous_time(void)
+{
+	while(1) {	
+		uint64_t read1 = mach_absolutetime_asleep;
+		uint64_t absolute = mach_absolute_time();
+		OSMemoryBarrier();
+		uint64_t read2 = mach_absolutetime_asleep;
+
+		if(__builtin_expect(read1 == read2, 1)) {
+			return absolute + read1;
+		}
+	}
+}
+
+uint64_t
+mach_continuous_approximate_time(void)
+{
+	while(1) {
+		uint64_t read1 = mach_absolutetime_asleep;
+		uint64_t absolute = mach_approximate_time();
+		OSMemoryBarrier();
+		uint64_t read2 = mach_absolutetime_asleep;
+
+		if(__builtin_expect(read1 == read2, 1)) {
+			return absolute + read1;
+		}
+	}
+}
+
+/*
+ * continuoustime_to_absolutetime
+ * Must be called with interrupts disabled
+ * Returned value is only valid until the next update to
+ * mach_continuous_time 
+ */
+uint64_t
+continuoustime_to_absolutetime(uint64_t conttime) {
+	if (conttime <= mach_absolutetime_asleep)
+		return 0;
+	else
+		return conttime - mach_absolutetime_asleep;
+}
+
+/*
+ * absolutetime_to_continuoustime
+ * Must be called with interrupts disabled
+ * Returned value is only valid until the next update to
+ * mach_continuous_time 
+ */
+uint64_t
+absolutetime_to_continuoustime(uint64_t abstime) {
+	return abstime + mach_absolutetime_asleep;
 }
 
 #if	CONFIG_DTRACE

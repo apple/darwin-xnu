@@ -107,6 +107,7 @@
 #include <mach/vm_types.h>
 #include <mach/vm_region.h>
 #include <mach/kmod.h>
+#include <mach/dyld_kernel.h>
 
 #ifdef	KERNEL
 

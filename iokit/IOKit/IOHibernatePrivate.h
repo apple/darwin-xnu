@@ -218,7 +218,7 @@ enum
 
 struct hibernate_graphics_t
 {
-    uint32_t physicalAddress;	// Base address of video memory
+    uint64_t physicalAddress;	// Base address of video memory
     int32_t  gfxStatus;         // EFI config restore status
     uint32_t rowBytes;   		// Number of bytes per pixel row
     uint32_t width;      		// Width
@@ -304,6 +304,7 @@ void     IOHibernateSystemInit(IOPMrootDomain * rootDomain);
 
 IOReturn IOHibernateSystemSleep(void);
 void     IOOpenDebugDataFile(const char *fname, uint64_t size);
+void     IOCloseDebugDataFile();
 IOReturn IOHibernateIOKitSleep(void);
 IOReturn IOHibernateSystemHasSlept(void);
 IOReturn IOHibernateSystemWake(void);
@@ -339,6 +340,9 @@ kern_return_t
 hibernate_teardown(hibernate_page_list_t * page_list,
                     hibernate_page_list_t * page_list_wired,
                     hibernate_page_list_t * page_list_pal);
+
+kern_return_t 
+hibernate_pin_swap(boolean_t begin);
 
 kern_return_t 
 hibernate_processor_setup(IOHibernateImageHeader * header);
@@ -425,6 +429,7 @@ extern uint32_t    gIOHibernateState;
 extern uint32_t    gIOHibernateMode;
 extern uint32_t    gIOHibernateDebugFlags;
 extern uint32_t    gIOHibernateFreeTime;	// max time to spend freeing pages (ms)
+extern boolean_t   gIOHibernateStandbyDisabled;
 extern uint8_t     gIOHibernateRestoreStack[];
 extern uint8_t     gIOHibernateRestoreStackEnd[];
 extern IOHibernateImageHeader *    gIOHibernateCurrentHeader;

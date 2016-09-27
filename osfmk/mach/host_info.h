@@ -99,6 +99,7 @@ typedef	integer_t	host_flavor_t;
 #define HOST_MACH_MSG_TRAP	8	/* Has mach_msg_trap */
 #define HOST_VM_PURGABLE	9	/* purg'e'able memory info */
 #define HOST_DEBUG_INFO_INTERNAL 10	/* Used for kernel internal development tests only */
+#define HOST_CAN_HAS_DEBUGGER	11 
 
 #ifdef MACH_KERNEL_PRIVATE
 struct host_basic_info_old {
@@ -114,6 +115,14 @@ typedef struct host_basic_info_old	*host_basic_info_old_t;
 #define HOST_BASIC_INFO_OLD_COUNT ((mach_msg_type_number_t) \
 		(sizeof(host_basic_info_data_old_t)/sizeof(integer_t)))
 #endif /* MACH_KERNEL_PRIVATE */
+
+struct host_can_has_debugger_info {
+	boolean_t	can_has_debugger;
+};
+typedef	struct host_can_has_debugger_info	host_can_has_debugger_info_data_t;
+typedef struct host_can_has_debugger_info	*host_can_has_debugger_info_t;
+#define HOST_CAN_HAS_DEBUGGER_COUNT ((mach_msg_type_number_t) \
+		(sizeof(host_can_has_debugger_info_data_t)/sizeof(integer_t)))
 
 #pragma pack(4)
 

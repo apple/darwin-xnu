@@ -2,7 +2,7 @@
  * Copyright (c) 2013 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,41 +22,35 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-/*  Sample KPC data into kperf and manage a shared context-switch handler */
+/*
+ * Sample KPC data into kperf and manage shared context-switch and AST handlers
+ */
 
 #include <kperf/kperf.h>
 #include <kperf/buffer.h>
 #include <kperf/context.h>
+#include <kperf/pet.h>
 #include <kperf/kperf_kpc.h>
 #include <kern/kpc.h> /* kpc_cswitch_context, kpc_threads_counting */
 
-unsigned kperf_kpc_cswitch_set = 0;
-
 void
-kperf_kpc_switch_context(thread_t old, thread_t new)
+kperf_kpc_thread_ast(thread_t thread)
 {
-	if (kpc_threads_counting) {
-		kpc_switch_context(old, new);
-	}
-	if (kperf_cswitch_callback_set) {
-		kperf_switch_context(old, new);
-	}
-}
+	kpc_thread_ast_handler(thread);
+	kperf_thread_ast_handler(thread);
 
-void
-kperf_kpc_cswitch_callback_update(void)
-{
-	kperf_kpc_cswitch_set = kperf_cswitch_callback_set ||
-	                        kpc_threads_counting;
+	thread->kperf_flags = 0;
 }
 
 void
 kperf_kpc_thread_sample(struct kpcdata *kpcd, int sample_config)
 {
+	BUF_INFO(PERF_KPC_THREAD_SAMPLE | DBG_FUNC_START, sample_config);
+
 	kpcd->running = kpc_get_running();
 	/* let kpc_get_curthread_counters set the correct count */
 	kpcd->counterc = KPC_MAX_COUNTERS;
@@ -66,18 +60,22 @@ kperf_kpc_thread_sample(struct kpcdata *kpcd, int sample_config)
 		memset(kpcd->counterv, 0,
 		       sizeof(uint64_t) * kpcd->counterc);
 	}
-	/* help out Instruments */
+	/* help out Instruments by sampling KPC's config */
 	if (!sample_config) {
 		kpcd->configc = 0;
 	} else {
 		kpcd->configc = kpc_get_config_count(kpcd->running);
 		kpc_get_config(kpcd->running, kpcd->configv);
 	}
+
+	BUF_INFO(PERF_KPC_THREAD_SAMPLE | DBG_FUNC_END, kpcd->running, kpcd->counterc);
 }
 
 void
 kperf_kpc_cpu_sample(struct kpcdata *kpcd, int sample_config)
 {
+	BUF_INFO(PERF_KPC_CPU_SAMPLE | DBG_FUNC_START, sample_config);
+
 	kpcd->running  = kpc_get_running();
 	kpcd->counterc = kpc_get_cpu_counters(0, kpcd->running,
 	                                      &kpcd->curcpu,
@@ -88,6 +86,8 @@ kperf_kpc_cpu_sample(struct kpcdata *kpcd, int sample_config)
 		kpcd->configc = kpc_get_config_count(kpcd->running);
 		kpc_get_config(kpcd->running, kpcd->configv);
 	}
+
+	BUF_INFO(PERF_KPC_CPU_SAMPLE | DBG_FUNC_END, kpcd->running, kpcd->counterc);
 }
 
 static void

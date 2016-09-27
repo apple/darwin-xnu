@@ -1,14 +1,14 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @Apple_LICENSE_HEADER_START@
- * 
+ *
  * The contents of this file constitute Original Code as defined in and
  * are subject to the Apple Public Source License Version 1.1 (the
  * "License").  You may not use this file except in compliance with the
  * License.  Please obtain a copy of the License at
  * http://www.apple.com/publicsource and read it before using this file.
- * 
+ *
  * This Original Code and all software distributed under the License are
  * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -16,10 +16,9 @@
  * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
  * License for the specific language governing rights and limitations
  * under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-
 
 #include <machine/spl.h>
 
@@ -30,16 +29,20 @@
 #include <sys/vm.h>
 #include <sys/sysctl.h>
 #include <sys/kdebug.h>
+#include <sys/kauth.h>
+#include <sys/ktrace.h>
 #include <sys/sysproto.h>
 #include <sys/bsdtask_info.h>
 #include <sys/random.h>
-#include <sys/stackshot.h>
 
-#define HZ      100
 #include <mach/clock_types.h>
 #include <mach/mach_types.h>
 #include <mach/mach_time.h>
+#include <mach/mach_vm.h>
 #include <machine/machine_routines.h>
+
+#include <mach/machine.h>
+#include <mach/vm_map.h>
 
 #if defined(__i386__) || defined(__x86_64__)
 #include <i386/rtclock_protos.h>
@@ -59,10 +62,11 @@
 #include <kern/sched_prim.h>
 #include <vm/vm_kern.h>
 #include <sys/lock.h>
+#include <kperf/kperf.h>
+#include <pexpert/device_tree.h>
 
 #include <sys/malloc.h>
 #include <sys/mcache.h>
-#include <sys/kauth.h>
 
 #include <sys/vnode.h>
 #include <sys/vnode_internal.h>
@@ -75,14 +79,7 @@
 #include <libkern/OSAtomic.h>
 
 #include <machine/pal_routines.h>
-
-extern boolean_t kdebug_serial;
-#if KDEBUG_MOJO_TRACE
-#include <sys/kdebugevents.h>
-static void kdebug_serial_print(	/* forward */
-		uint32_t, uint32_t, uint64_t,
-		uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-#endif
+#include <machine/atomic.h>
 
 /*
  * IOP(s)
@@ -120,37 +117,161 @@ typedef struct kd_iop {
 
 static kd_iop_t* kd_iops = NULL;
 
-/* XXX should have prototypes, but Mach does not provide one */
+/*
+ * Typefilter(s)
+ *
+ * A typefilter is a 8KB bitmap that is used to selectively filter events
+ * being recorded. It is able to individually address every class & subclass.
+ *
+ * There is a shared typefilter in the kernel which is lazily allocated. Once
+ * allocated, the shared typefilter is never deallocated. The shared typefilter
+ * is also mapped on demand into userspace processes that invoke kdebug_trace
+ * API from Libsyscall. When mapped into a userspace process, the memory is
+ * read only, and does not have a fixed address.
+ *
+ * It is a requirement that the kernel's shared typefilter always pass DBG_TRACE
+ * events. This is enforced automatically, by having the needed bits set any
+ * time the shared typefilter is mutated.
+ */
+
+typedef uint8_t* typefilter_t;
+
+static typefilter_t kdbg_typefilter;
+static mach_port_t  kdbg_typefilter_memory_entry;
+
+/*
+ * There are 3 combinations of page sizes:
+ *
+ *  4KB /  4KB
+ *  4KB / 16KB
+ * 16KB / 16KB
+ *
+ * The typefilter is exactly 8KB. In the first two scenarios, we would like
+ * to use 2 pages exactly; in the third scenario we must make certain that
+ * a full page is allocated so we do not inadvertantly share 8KB of random
+ * data to userspace. The round_page_32 macro rounds to kernel page size.
+ */
+#define TYPEFILTER_ALLOC_SIZE MAX(round_page_32(KDBG_TYPEFILTER_BITMAP_SIZE), KDBG_TYPEFILTER_BITMAP_SIZE)
+
+static typefilter_t typefilter_create(void)
+{
+	typefilter_t tf;
+	if (KERN_SUCCESS == kmem_alloc(kernel_map, (vm_offset_t*)&tf, TYPEFILTER_ALLOC_SIZE, VM_KERN_MEMORY_DIAG)) {
+		memset(&tf[KDBG_TYPEFILTER_BITMAP_SIZE], 0, TYPEFILTER_ALLOC_SIZE - KDBG_TYPEFILTER_BITMAP_SIZE);
+		return tf;
+	}
+	return NULL;
+}
+
+static void typefilter_deallocate(typefilter_t tf)
+{
+	assert(tf);
+	assert(tf != kdbg_typefilter);
+	kmem_free(kernel_map, (vm_offset_t)tf, TYPEFILTER_ALLOC_SIZE);
+}
+
+static void typefilter_copy(typefilter_t dst, typefilter_t src)
+{
+	assert(src);
+	assert(dst);
+	memcpy(dst, src, KDBG_TYPEFILTER_BITMAP_SIZE);
+}
+
+static void typefilter_reject_all(typefilter_t tf)
+{
+	assert(tf);
+	memset(tf, 0, KDBG_TYPEFILTER_BITMAP_SIZE);
+}
+
+static void typefilter_allow_class(typefilter_t tf, uint8_t class)
+{
+	assert(tf);
+	const uint32_t BYTES_PER_CLASS = 256 / 8; // 256 subclasses, 1 bit each
+	memset(&tf[class * BYTES_PER_CLASS], 0xFF, BYTES_PER_CLASS);
+}
+
+static void typefilter_allow_csc(typefilter_t tf, uint16_t csc)
+{
+	assert(tf);
+	setbit(tf, csc);
+}
+
+static boolean_t typefilter_is_debugid_allowed(typefilter_t tf, uint32_t id)
+{
+	assert(tf);
+	return isset(tf, KDBG_EXTRACT_CSC(id));
+}
+
+static mach_port_t typefilter_create_memory_entry(typefilter_t tf)
+{
+	assert(tf);
+
+	mach_port_t memory_entry = MACH_PORT_NULL;
+	memory_object_size_t size = TYPEFILTER_ALLOC_SIZE;
+
+	mach_make_memory_entry_64(kernel_map,
+				  &size,
+				  (memory_object_offset_t)tf,
+				  VM_PROT_READ,
+				  &memory_entry,
+				  MACH_PORT_NULL);
+
+	return memory_entry;
+}
+
+static int  kdbg_copyin_typefilter(user_addr_t addr, size_t size);
+static void kdbg_enable_typefilter(void);
+static void kdbg_disable_typefilter(void);
+
+/*
+ * External prototypes
+ */
+
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
 int cpu_number(void);	/* XXX <machine/...> include path broken */
-void commpage_update_kdebug_enable(void); /* XXX sign */
+void commpage_update_kdebug_state(void); /* XXX sign */
 
-/* XXX should probably be static, but it's debugging code... */
-int kdbg_read(user_addr_t, size_t *, vnode_t, vfs_context_t, uint32_t);
-void kdbg_control_chud(int, void *);
+extern int log_leaks;
+extern boolean_t kdebug_serial;
+
+#if KDEBUG_MOJO_TRACE
+#include <sys/kdebugevents.h>
+static void kdebug_serial_print( /* forward */
+		uint32_t, uint32_t, uint64_t,
+		uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+#endif
+
 int kdbg_control(int *, u_int, user_addr_t, size_t *);
-int kdbg_readcpumap(user_addr_t, size_t *);
-int kdbg_readcurcpumap(user_addr_t, size_t *);
-int kdbg_readthrmap(user_addr_t, size_t *, vnode_t, vfs_context_t);
-int kdbg_readthrmap_v3(user_addr_t, size_t *, int);
-int kdbg_readcurthrmap(user_addr_t, size_t *);
-int kdbg_setreg(kd_regtype *);
-int kdbg_setrtcdec(kd_regtype *);
-int kdbg_setpidex(kd_regtype *);
-int kdbg_setpid(kd_regtype *);
-void kdbg_thrmap_init(void);
-int kdbg_reinit(boolean_t);
-int kdbg_bootstrap(boolean_t);
+
+static int kdbg_read(user_addr_t, size_t *, vnode_t, vfs_context_t, uint32_t);
+static int kdbg_readcpumap(user_addr_t, size_t *);
+static int kdbg_readthrmap_v3(user_addr_t, size_t, int);
+static int kdbg_readcurthrmap(user_addr_t, size_t *);
+static int kdbg_setreg(kd_regtype *);
+static int kdbg_setpidex(kd_regtype *);
+static int kdbg_setpid(kd_regtype *);
+static void kdbg_thrmap_init(void);
+static int kdbg_reinit(boolean_t);
+static int kdbg_bootstrap(boolean_t);
+static int kdbg_test(void);
+
+static int kdbg_write_v1_header(boolean_t write_thread_map, vnode_t vp, vfs_context_t ctx);
+static int kdbg_write_thread_map(vnode_t vp, vfs_context_t ctx);
+static int kdbg_copyout_thread_map(user_addr_t buffer, size_t *buffer_size);
+static void kdbg_clear_thread_map(void);
+
+static boolean_t kdbg_wait(uint64_t timeout_ms, boolean_t locked_wait);
+static void kdbg_wakeup(void);
 
 int kdbg_cpumap_init_internal(kd_iop_t* iops, uint32_t cpu_count,
                               uint8_t** cpumap, uint32_t* cpumap_size);
 
-kd_threadmap* kdbg_thrmap_init_internal(unsigned int count,
-                                        unsigned int *mapsize,
-                                        unsigned int *mapcount);
+static kd_threadmap *kdbg_thrmap_init_internal(unsigned int count,
+                                               unsigned int *mapsize,
+                                               unsigned int *mapcount);
 
 static boolean_t kdebug_current_proc_enabled(uint32_t debugid);
-static boolean_t kdebug_debugid_enabled(uint32_t debugid);
+boolean_t kdebug_debugid_enabled(uint32_t debugid);
 static errno_t kdebug_check_trace_string(uint32_t debugid, uint64_t str_id);
 
 int kdbg_write_v3_header(user_addr_t, size_t *, int);
@@ -162,14 +283,14 @@ user_addr_t kdbg_write_v3_event_chunk_header(user_addr_t buffer, uint32_t tag,
                                              uint64_t length, vnode_t vp,
                                              vfs_context_t ctx);
 
-static int kdbg_enable_typefilter(void);
-static int kdbg_disable_typefilter(void);
-static int kdbg_allocate_typefilter(void);
-static int kdbg_deallocate_typefilter(void);
+// Helper functions
 
 static int create_buffers(boolean_t);
 static void delete_buffers(void);
 
+extern int tasks_count;
+extern int threads_count;
+extern char *proc_best_name(proc_t p);
 extern void IOSleep(int);
 
 /* trace enable status */
@@ -181,9 +302,8 @@ static kd_buf		kd_early_buffer[KD_EARLY_BUFFER_MAX];
 static int		kd_early_index = 0;
 static boolean_t	kd_early_overflow = FALSE;
 
-#define SLOW_NOLOG	0x01
-#define SLOW_CHECKS	0x02
-#define SLOW_CHUD	0x08
+#define SLOW_NOLOG  0x01
+#define SLOW_CHECKS 0x02
 
 #define EVENTS_PER_STORAGE_UNIT		2048
 #define MIN_STORAGE_UNITS_PER_CPU	4
@@ -246,6 +366,7 @@ struct kd_ctrl_page_t {
 	int			kds_inuse_count;
 	uint32_t kdebug_flags;
 	uint32_t kdebug_slowcheck;
+	uint64_t oldest_time;
 	/*
 	 * The number of kd_bufinfo structs allocated may not match the current
 	 * number of active cpus. We capture the iops list head at initialization
@@ -255,7 +376,11 @@ struct kd_ctrl_page_t {
 	 */
 	kd_iop_t* kdebug_iops;
 	uint32_t kdebug_cpus;
-} kd_ctrl_page = { .kds_free_list = {.raw = KDS_PTR_NULL}, .kdebug_slowcheck = SLOW_NOLOG };
+} kd_ctrl_page = {
+	.kds_free_list = {.raw = KDS_PTR_NULL},
+	.kdebug_slowcheck = SLOW_NOLOG,
+	.oldest_time = 0
+};
 
 #pragma pack()
 
@@ -269,10 +394,6 @@ struct kd_bufinfo *kdbip = NULL;
 
 kd_buf *kdcopybuf = NULL;
 
-boolean_t kdlog_bg_trace = FALSE;
-boolean_t kdlog_bg_trace_running = FALSE;
-unsigned int bg_nkdbufs = 0;
-
 unsigned int nkdbufs = 0;
 unsigned int kdlog_beg=0;
 unsigned int kdlog_end=0;
@@ -283,24 +404,6 @@ unsigned int kdlog_value4=0;
 
 static lck_spin_t * kdw_spin_lock;
 static lck_spin_t * kds_spin_lock;
-static lck_mtx_t  * kd_trace_mtx_sysctl;
-static lck_grp_t  * kd_trace_mtx_sysctl_grp;
-static lck_attr_t * kd_trace_mtx_sysctl_attr;
-static lck_grp_attr_t   *kd_trace_mtx_sysctl_grp_attr;
-
-extern kern_return_t stack_snapshot2(int pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t flags, int32_t *retval);
-
-#if CONFIG_TELEMETRY
-extern kern_return_t stack_microstackshot(user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t flags, int32_t *retval);
-#endif /* CONFIG_TELEMETRY */
-
-extern kern_return_t kern_stack_snapshot_with_reason(char* reason);
-
-extern kern_return_t kern_stack_snapshot_internal(int stackshot_config_version, void *stackshot_config, size_t stackshot_config_size, boolean_t stackshot_from_user);
-
-extern kern_return_t stack_snapshot_from_kernel_internal(int pid, void *buf, uint32_t size, uint32_t flags, unsigned *bytes_traced);
-
-int stack_snapshot_from_kernel(pid_t pid, void *buf, uint32_t size, uint32_t flags, unsigned *bytes_traced);
 
 kd_threadmap *kd_mapptr = 0;
 unsigned int kd_mapsize = 0;
@@ -310,8 +413,6 @@ off_t	RAW_file_offset = 0;
 int	RAW_file_written = 0;
 
 #define	RAW_FLUSH_SIZE	(2 * 1024 * 1024)
-
-pid_t global_state_pid = -1;       /* Used to control exclusive use of kd_buffer */
 
 /*
  * A globally increasing counter for identifying strings in trace.  Starts at
@@ -355,46 +456,10 @@ struct krt
 
 typedef struct krt krt_t;
 
-/* This is for the CHUD toolkit call */
-typedef void (*kd_chudhook_fn) (uint32_t debugid, uintptr_t arg1,
-				uintptr_t arg2, uintptr_t arg3,
-				uintptr_t arg4, uintptr_t arg5);
-
-volatile kd_chudhook_fn kdebug_chudhook = 0;   /* pointer to CHUD toolkit function */
-
-static uint8_t *type_filter_bitmap;
-
-/*
- * This allows kperf to swap out the global state pid when kperf ownership is
- * passed from one process to another. It checks the old global state pid so
- * that kperf can't accidentally steal control of trace when a non-kperf trace user has
- * control of trace.
- */
-void
-kdbg_swap_global_state_pid(pid_t old_pid, pid_t new_pid);
-
-void
-kdbg_swap_global_state_pid(pid_t old_pid, pid_t new_pid)
-{
-	if (!(kd_ctrl_page.kdebug_flags & KDBG_LOCKINIT))
-		return;
-
-	lck_mtx_lock(kd_trace_mtx_sysctl);
-
-	if (old_pid == global_state_pid)
-		global_state_pid = new_pid;
-
-	lck_mtx_unlock(kd_trace_mtx_sysctl);
-}
-
 static uint32_t
 kdbg_cpu_count(boolean_t early_trace)
 {
 	if (early_trace) {
-		/*
-		 * we've started tracing before the IOKit has even
-		 * started running... just use the static max value
-		 */
 		return max_ncpus;
 	}
 
@@ -426,12 +491,12 @@ kdbg_set_tracing_enabled(boolean_t enabled, uint32_t trace_type)
 		kdebug_enable |= trace_type;
 		kd_ctrl_page.kdebug_slowcheck &= ~SLOW_NOLOG;
 		kd_ctrl_page.enabled = 1;
-		commpage_update_kdebug_enable();
+		commpage_update_kdebug_state();
 	} else {
 		kdebug_enable &= ~(KDEBUG_ENABLE_TRACE|KDEBUG_ENABLE_PPT);
 		kd_ctrl_page.kdebug_slowcheck |= SLOW_NOLOG;
 		kd_ctrl_page.enabled = 0;
-		commpage_update_kdebug_enable();
+		commpage_update_kdebug_state();
 	}
 	lck_spin_unlock(kds_spin_lock);
 	ml_set_interrupts_enabled(s);
@@ -467,20 +532,27 @@ kdbg_set_flags(int slowflag, int enableflag, boolean_t enabled)
 	ml_set_interrupts_enabled(s);
 }
 
-void
+/*
+ * Disable wrapping and return true if trace wrapped, false otherwise.
+ */
+boolean_t
 disable_wrap(uint32_t *old_slowcheck, uint32_t *old_flags)
 {
+	boolean_t wrapped;
 	int s = ml_set_interrupts_enabled(FALSE);
 	lck_spin_lock(kds_spin_lock);
 
 	*old_slowcheck = kd_ctrl_page.kdebug_slowcheck;
 	*old_flags = kd_ctrl_page.kdebug_flags;
 
+	wrapped = kd_ctrl_page.kdebug_flags & KDBG_WRAPPED;
 	kd_ctrl_page.kdebug_flags &= ~KDBG_WRAPPED;
 	kd_ctrl_page.kdebug_flags |= KDBG_NOWRAP;
 
 	lck_spin_unlock(kds_spin_lock);
 	ml_set_interrupts_enabled(s);
+
+	return wrapped;
 }
 
 void
@@ -504,11 +576,11 @@ enable_wrap(uint32_t old_slowcheck, boolean_t lostevents)
 static int
 create_buffers(boolean_t early_trace)
 {
-        int	i;
-	int	p_buffer_size;
-	int	f_buffer_size;
-	int	f_buffers;
-	int	error = 0;
+	int i;
+	int p_buffer_size;
+	int f_buffer_size;
+	int f_buffers;
+	int error = 0;
 
 	/*
 	 * For the duration of this allocation, trace code will only reference
@@ -696,13 +768,13 @@ release_storage_unit(int cpu, uint32_t kdsp_raw)
 boolean_t
 allocate_storage_unit(int cpu)
 {
-	union	kds_ptr kdsp;
-	struct	kd_storage *kdsp_actual, *kdsp_next_actual;
-	struct  kd_bufinfo *kdbp, *kdbp_vict, *kdbp_try;
-	uint64_t	oldest_ts, ts;
-	boolean_t	retval = TRUE;
-	int			s = 0;
-		
+	union kds_ptr kdsp;
+	struct kd_storage *kdsp_actual, *kdsp_next_actual;
+	struct kd_bufinfo *kdbp, *kdbp_vict, *kdbp_try;
+	uint64_t oldest_ts, ts;
+	boolean_t retval = TRUE;
+	int s = 0;
+
 	s = ml_set_interrupts_enabled(FALSE);
 	lck_spin_lock(kds_spin_lock);
 
@@ -729,7 +801,7 @@ allocate_storage_unit(int cpu)
 			goto out;
 		}
 		kdbp_vict = NULL;
-		oldest_ts = (uint64_t)-1;
+		oldest_ts = UINT64_MAX;
 
 		for (kdbp_try = &kdbip[0]; kdbp_try < &kdbip[kd_ctrl_page.kdebug_cpus]; kdbp_try++) {
 
@@ -751,14 +823,17 @@ allocate_storage_unit(int cpu)
 				 */
 				continue;
 			}
-			ts = kdbg_get_timestamp(&kdsp_actual->kds_records[0]);
 
+			/*
+			 * When wrapping, steal the storage unit with the
+			 * earliest timestamp on its last event, instead of the
+			 * earliest timestamp on the first event.  This allows a
+			 * storage unit with more recent events to be preserved,
+			 * even if the storage unit contains events that are
+			 * older than those found in other CPUs.
+			 */
+			ts = kdbg_get_timestamp(&kdsp_actual->kds_records[EVENTS_PER_STORAGE_UNIT - 1]);
 			if (ts < oldest_ts) {
-				/*
-				 * when 'wrapping', we want to steal the
-				 * storage unit that has the 'earliest' time
-				 * associated with it (first event time)
-				 */
 				oldest_ts = ts;
 				kdbp_vict = kdbp_try;
 			}
@@ -766,7 +841,7 @@ allocate_storage_unit(int cpu)
 		if (kdbp_vict == NULL) {
 			kdebug_enable = 0;
 			kd_ctrl_page.enabled = 0;
-			commpage_update_kdebug_enable();
+			commpage_update_kdebug_state();
 			retval = FALSE;
 			goto out;
 		}
@@ -780,6 +855,7 @@ allocate_storage_unit(int cpu)
 		} else
 			kdbp_vict->kd_lostevents = TRUE;
 
+		kd_ctrl_page.oldest_time = oldest_ts;
 		kd_ctrl_page.kdebug_flags |= KDBG_WRAPPED;
 	}
 	kdsp_actual->kds_timestamp = mach_absolute_time();
@@ -882,18 +958,8 @@ kernel_debug_enter(
 			goto out1;
 	
 		if (kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) {
-			/*
-			 * Recheck if TYPEFILTER is being used, and if so,
-			 * dereference bitmap. If the trace facility is being
-			 * disabled, we have ~100ms of preemption-free CPU
-			 * usage to access the bitmap.
-			 */
-			disable_preemption();
-			if (kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) {
-				if (isset(type_filter_bitmap, KDBG_EXTRACT_CSC(debugid)))
-					goto record_event_preempt_disabled;
-			}
-			enable_preemption();
+			if (typefilter_is_debugid_allowed(kdbg_typefilter, debugid))
+				goto record_event;
 			goto out1;
 		}
 		else if (kd_ctrl_page.kdebug_flags & KDBG_RANGECHECK) {
@@ -909,12 +975,17 @@ kernel_debug_enter(
 				goto out1;
 		}
 	}
-	
+
+	if (kd_ctrl_page.kdebug_flags & KDBG_WRAPPED) {
+		if (timestamp < kd_ctrl_page.oldest_time) {
+			goto out1;
+		}
+	}
+
 record_event:
 
 	disable_preemption();
 
-record_event_preempt_disabled:
 	if (kd_ctrl_page.enabled == 0)
 		goto out;
 
@@ -969,78 +1040,36 @@ out:
 	enable_preemption();
 out1:
 	if ((kds_waiter && kd_ctrl_page.kds_inuse_count >= n_storage_threshold)) {
-		boolean_t need_kds_wakeup = FALSE;
-		int	s;
-
-		/*
-		 * try to take the lock here to synchronize with the
-		 * waiter entering the blocked state... use the try
-		 * mode to prevent deadlocks caused by re-entering this
-		 * routine due to various trace points triggered in the
-		 * lck_spin_sleep_xxxx routines used to actually enter
-		 * our wait condition... no problem if we fail,
-		 * there will be lots of additional events coming in that
-		 * will eventually succeed in grabbing this lock
-		 */
-		s = ml_set_interrupts_enabled(FALSE);
-
-		if (lck_spin_try_lock(kdw_spin_lock)) {
-
-			if (kds_waiter && kd_ctrl_page.kds_inuse_count >= n_storage_threshold) {
-				kds_waiter = 0;
-				need_kds_wakeup = TRUE;
-			}
-			lck_spin_unlock(kdw_spin_lock);
-		}
-
-		ml_set_interrupts_enabled(s);
-
-		if (need_kds_wakeup == TRUE)
-			wakeup(&kds_waiter);
+		kdbg_wakeup();
 	}
 }
 
-
-
 static void
 kernel_debug_internal(
-	uint32_t	debugid,
-	uintptr_t	arg1,
-	uintptr_t	arg2,
-	uintptr_t	arg3,
-	uintptr_t	arg4,
-	uintptr_t	arg5)
+	boolean_t only_filter,
+	uint32_t  debugid,
+	uintptr_t arg1,
+	uintptr_t arg2,
+	uintptr_t arg3,
+	uintptr_t arg4,
+	uintptr_t arg5)
 {
-	struct proc 	*curproc;
+	struct proc	*curproc;
 	uint64_t 	now;
 	uint32_t	bindx;
-	boolean_t	s;
 	kd_buf		*kd;
 	int		cpu;
 	struct kd_bufinfo *kdbp;
 	struct kd_storage *kdsp_actual;
 	union  kds_ptr kds_raw;
 
-	
-
 	if (kd_ctrl_page.kdebug_slowcheck) {
-
-		if (kdebug_enable & KDEBUG_ENABLE_CHUD) {
-			kd_chudhook_fn chudhook;
-			/*
-			 * Mask interrupts to minimize the interval across
-			 * which the driver providing the hook could be
-			 * unloaded.
-			 */
-			s = ml_set_interrupts_enabled(FALSE);
-			chudhook = kdebug_chudhook;
-			if (chudhook)
-				chudhook(debugid, arg1, arg2, arg3, arg4, arg5);
-			ml_set_interrupts_enabled(s);
-		}
-		if ( (kd_ctrl_page.kdebug_slowcheck & SLOW_NOLOG) || !(kdebug_enable & (KDEBUG_ENABLE_TRACE|KDEBUG_ENABLE_PPT)))
+		if ((kd_ctrl_page.kdebug_slowcheck & SLOW_NOLOG) ||
+		    !(kdebug_enable & (KDEBUG_ENABLE_TRACE | KDEBUG_ENABLE_PPT)))
+		{
 			goto out1;
-	
+		}
+
 		if ( !ml_at_interrupt_context()) {
 			if (kd_ctrl_page.kdebug_flags & KDBG_PIDCHECK) {
 				/*
@@ -1067,22 +1096,11 @@ kernel_debug_internal(
 		}
 
 		if (kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) {
-			/* Always record trace system info */
-			if (KDBG_EXTRACT_CLASS(debugid) == DBG_TRACE)
+			if (typefilter_is_debugid_allowed(kdbg_typefilter, debugid))
 				goto record_event;
 
-			/*
-			 * Recheck if TYPEFILTER is being used, and if so,
-			 * dereference bitmap. If the trace facility is being
-			 * disabled, we have ~100ms of preemption-free CPU
-			 * usage to access the bitmap.
-			 */
-			disable_preemption();
-			if (kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) {
-				if (isset(type_filter_bitmap, KDBG_EXTRACT_CSC(debugid)))
-					goto record_event_preempt_disabled;
-			}
-			enable_preemption();
+			goto out1;
+		} else if (only_filter == TRUE) {
 			goto out1;
 		}
 		else if (kd_ctrl_page.kdebug_flags & KDBG_RANGECHECK) {
@@ -1104,11 +1122,13 @@ kernel_debug_internal(
 			    (debugid & KDBG_EVENTID_MASK) != kdlog_value4)
 				goto out1;
 		}
+	} else if (only_filter == TRUE) {
+		goto out1;
 	}
+
 record_event:
 	disable_preemption();
 
-record_event_preempt_disabled:
 	if (kd_ctrl_page.enabled == 0)
 		goto out;
 
@@ -1154,49 +1174,27 @@ retry_q:
 	kd->arg3 = arg3;
 	kd->arg4 = arg4;
 	kd->arg5 = arg5;
-	          
+
 	kdbg_set_timestamp_and_cpu(kd, now, cpu);
 
 	OSAddAtomic(1, &kdsp_actual->kds_bufcnt);
+
+#if KPERF
+	kperf_kdebug_callback(debugid, __builtin_frame_address(0));
+#endif
 out:
 	enable_preemption();
 out1:
 	if (kds_waiter && kd_ctrl_page.kds_inuse_count >= n_storage_threshold) {
 		uint32_t	etype;
 		uint32_t	stype;
-		
+
 		etype = debugid & KDBG_EVENTID_MASK;
 		stype = debugid & KDBG_CSC_MASK;
 
 		if (etype == INTERRUPT || etype == MACH_vmfault ||
 		    stype == BSC_SysCall || stype == MACH_SysCall) {
-
-			boolean_t need_kds_wakeup = FALSE;
-
-			/*
-			 * try to take the lock here to synchronize with the
-			 * waiter entering the blocked state... use the try
-			 * mode to prevent deadlocks caused by re-entering this
-			 * routine due to various trace points triggered in the
-			 * lck_spin_sleep_xxxx routines used to actually enter
-			 * one of our 2 wait conditions... no problem if we fail,
-			 * there will be lots of additional events coming in that
-			 * will eventually succeed in grabbing this lock
-			 */
-			s = ml_set_interrupts_enabled(FALSE);
-
-			if (lck_spin_try_lock(kdw_spin_lock)) {
-
-				if (kds_waiter && kd_ctrl_page.kds_inuse_count >= n_storage_threshold) {
-					kds_waiter = 0;
-					need_kds_wakeup = TRUE;
-				}
-				lck_spin_unlock(kdw_spin_lock);
-			}
-			ml_set_interrupts_enabled(s);
-			
-			if (need_kds_wakeup == TRUE)
-				wakeup(&kds_waiter);
+			kdbg_wakeup();
 		}
 	}
 }
@@ -1210,7 +1208,8 @@ kernel_debug(
 	uintptr_t	arg4,
 	__unused uintptr_t arg5)
 {
-	kernel_debug_internal(debugid, arg1, arg2, arg3, arg4, (uintptr_t)thread_tid(current_thread()));
+	kernel_debug_internal(FALSE, debugid, arg1, arg2, arg3, arg4,
+		(uintptr_t)thread_tid(current_thread()));
 }
 
 void
@@ -1222,19 +1221,70 @@ kernel_debug1(
 	uintptr_t	arg4,
 	uintptr_t	arg5)
 {
-	kernel_debug_internal(debugid, arg1, arg2, arg3, arg4, arg5);
+	kernel_debug_internal(FALSE, debugid, arg1, arg2, arg3, arg4, arg5);
 }
 
 void
-kernel_debug_string_simple(const char *message)
+kernel_debug_filtered(
+	uint32_t  debugid,
+	uintptr_t arg1,
+	uintptr_t arg2,
+	uintptr_t arg3,
+	uintptr_t arg4)
+{
+	kernel_debug_internal(TRUE, debugid, arg1, arg2, arg3, arg4,
+		(uintptr_t)thread_tid(current_thread()));
+}
+
+void
+kernel_debug_string_early(const char *message)
 {
 	uintptr_t arg[4] = {0, 0, 0, 0};
 
 	/* Stuff the message string in the args and log it. */
-        strncpy((char *)arg, message, MIN(sizeof(arg), strlen(message)));
+	strncpy((char *)arg, message, MIN(sizeof(arg), strlen(message)));
 	KERNEL_DEBUG_EARLY(
 		TRACE_INFO_STRING,
 		arg[0], arg[1], arg[2], arg[3]);
+}
+
+#define SIMPLE_STR_LEN (64)
+static_assert(SIMPLE_STR_LEN % sizeof(uintptr_t) == 0);
+
+void
+kernel_debug_string_simple(uint32_t eventid, const char *str)
+{
+	/* array of uintptr_ts simplifies emitting the string as arguments */
+	uintptr_t str_buf[(SIMPLE_STR_LEN / sizeof(uintptr_t)) + 1] = { 0 };
+	size_t len = strlcpy((char *)str_buf, str, SIMPLE_STR_LEN + 1);
+
+	uintptr_t thread_id = (uintptr_t)thread_tid(current_thread());
+	uint32_t debugid = eventid | DBG_FUNC_START;
+
+	/* string can fit in a single tracepoint */
+	if (len <= (4 * sizeof(uintptr_t))) {
+		debugid |= DBG_FUNC_END;
+	}
+
+	kernel_debug_internal(FALSE, debugid, str_buf[0],
+	                                      str_buf[1],
+	                                      str_buf[2],
+	                                      str_buf[3], thread_id);
+
+	debugid &= KDBG_EVENTID_MASK;
+	int i = 4;
+	size_t written = 4 * sizeof(uintptr_t);
+
+	for (; written < len; i += 4, written += 4 * sizeof(uintptr_t)) {
+		/* if this is the last tracepoint to be emitted */
+		if ((written + (4 * sizeof(uintptr_t))) >= len) {
+			debugid |= DBG_FUNC_END;
+		}
+		kernel_debug_internal(FALSE, debugid, str_buf[i],
+		                                      str_buf[i + 1],
+		                                      str_buf[i + 2],
+		                                      str_buf[i + 3], thread_id);
+	}
 }
 
 extern int	master_cpu;		/* MACH_KERNEL_PRIVATE */
@@ -1313,7 +1363,15 @@ kernel_debug_early_end(void)
 			TRACE_LOST_EVENTS, 0, 0, 0, 0, 0);
 
 	/* This trace marks the start of kernel tracing */
-	kernel_debug_string_simple("early trace done");
+	kernel_debug_string_early("early trace done");
+}
+
+void
+kernel_debug_disable(void)
+{
+	if (kdebug_enable) {
+		kdbg_set_tracing_enabled(FALSE, 0);
+	}
 }
 
 /*
@@ -1334,6 +1392,83 @@ kdebug_validate_debugid(uint32_t debugid)
 }
 
 /*
+ * Support syscall SYS_kdebug_typefilter.
+ */
+int
+kdebug_typefilter(__unused struct proc* p,
+		  struct kdebug_typefilter_args* uap,
+		  __unused int *retval)
+{
+	int ret = KERN_SUCCESS;
+
+	if (uap->addr == USER_ADDR_NULL ||
+	    uap->size == USER_ADDR_NULL) {
+		return EINVAL;
+	}
+
+	/*
+	 * The atomic load is to close a race window with setting the typefilter
+	 * and memory entry values. A description follows:
+	 *
+	 * Thread 1 (writer)
+	 *
+	 * Allocate Typefilter
+	 * Allocate MemoryEntry
+	 * Write Global MemoryEntry Ptr
+	 * Atomic Store (Release) Global Typefilter Ptr
+	 *
+	 * Thread 2 (reader, AKA us)
+	 *
+	 * if ((Atomic Load (Acquire) Global Typefilter Ptr) == NULL)
+	 *     return;
+	 *
+	 * Without the atomic store, it isn't guaranteed that the write of
+	 * Global MemoryEntry Ptr is visible before we can see the write of
+	 * Global Typefilter Ptr.
+	 *
+	 * Without the atomic load, it isn't guaranteed that the loads of
+	 * Global MemoryEntry Ptr aren't speculated.
+	 *
+	 * The global pointers transition from NULL -> valid once and only once,
+	 * and never change after becoming valid. This means that having passed
+	 * the first atomic load test of Global Typefilter Ptr, this function
+	 * can then safely use the remaining global state without atomic checks.
+	 */
+	if (!__c11_atomic_load((_Atomic typefilter_t *)&kdbg_typefilter, memory_order_acquire)) {
+		return EINVAL;
+	}
+
+	assert(kdbg_typefilter_memory_entry);
+
+	mach_vm_offset_t user_addr = 0;
+	vm_map_t user_map = current_map();
+
+	ret = mach_to_bsd_errno(
+			mach_vm_map(user_map,				// target map
+				    &user_addr,				// [in, out] target address
+				    TYPEFILTER_ALLOC_SIZE,		// initial size
+				    0,					// mask (alignment?)
+				    VM_FLAGS_ANYWHERE,			// flags
+				    kdbg_typefilter_memory_entry,	// port (memory entry!)
+				    0,					// offset (in memory entry)
+				    FALSE,				// should copy
+				    VM_PROT_READ,			// cur_prot
+				    VM_PROT_READ,			// max_prot
+				    VM_INHERIT_SHARE));			// inherit behavior on fork
+
+	if (ret == KERN_SUCCESS) {
+		vm_size_t user_ptr_size = vm_map_is_64bit(user_map) ? 8 : 4;
+		ret = copyout(CAST_DOWN(void *, &user_addr), uap->addr, user_ptr_size );
+
+		if (ret != KERN_SUCCESS) {
+			mach_vm_deallocate(user_map, user_addr, TYPEFILTER_ALLOC_SIZE);
+		}
+	}
+
+	return ret;
+}
+
+/*
  * Support syscall SYS_kdebug_trace. U64->K32 args may get truncated in kdebug_trace64
  */
 int
@@ -1351,20 +1486,30 @@ kdebug_trace(struct proc *p, struct kdebug_trace_args *uap, int32_t *retval)
 }
 
 /*
- * Support syscall SYS_kdebug_trace64. 64-bit args on K32 will get truncated to fit in 32-bit record format.
+ * Support syscall SYS_kdebug_trace64. 64-bit args on K32 will get truncated
+ * to fit in 32-bit record format.
+ *
+ * It is intentional that error conditions are not checked until kdebug is
+ * enabled. This is to match the userspace wrapper behavior, which is optimizing
+ * for non-error case performance.
  */
 int kdebug_trace64(__unused struct proc *p, struct kdebug_trace64_args *uap, __unused int32_t *retval)
 {
 	int err;
 
+	if ( __probable(kdebug_enable == 0) )
+		return(0);
+
 	if ((err = kdebug_validate_debugid(uap->code)) != 0) {
 		return err;
 	}
 
-	if ( __probable(kdebug_enable == 0) )
-		return(0); 
-
-	kernel_debug_internal(uap->code, (uintptr_t)uap->arg1, (uintptr_t)uap->arg2, (uintptr_t)uap->arg3, (uintptr_t)uap->arg4, (uintptr_t)thread_tid(current_thread()));
+	kernel_debug_internal(FALSE, uap->code,
+	                      (uintptr_t)uap->arg1,
+	                      (uintptr_t)uap->arg2,
+	                      (uintptr_t)uap->arg3,
+	                      (uintptr_t)uap->arg4,
+	                      (uintptr_t)thread_tid(current_thread()));
 
 	return(0);
 }
@@ -1409,7 +1554,7 @@ kernel_debug_string_internal(uint32_t debugid, uint64_t str_id, void *vstr,
 
 	/* if the ID is being invalidated, just emit that */
 	if (str_id != 0 && str_len == 0) {
-		kernel_debug_internal(trace_debugid | DBG_FUNC_START | DBG_FUNC_END,
+		kernel_debug_internal(FALSE, trace_debugid | DBG_FUNC_START | DBG_FUNC_END,
 		                      (uintptr_t)debugid, (uintptr_t)str_id, 0, 0,
 		                      thread_id);
 		return str_id;
@@ -1427,7 +1572,7 @@ kernel_debug_string_internal(uint32_t debugid, uint64_t str_id, void *vstr,
 		trace_debugid |= DBG_FUNC_END;
 	}
 
-	kernel_debug_internal(trace_debugid, (uintptr_t)debugid,
+	kernel_debug_internal(FALSE, trace_debugid, (uintptr_t)debugid,
 	                      (uintptr_t)str_id, str[0],
 	                                         str[1], thread_id);
 
@@ -1439,10 +1584,10 @@ kernel_debug_string_internal(uint32_t debugid, uint64_t str_id, void *vstr,
 		if ((written + (4 * sizeof(uintptr_t))) >= str_len) {
 			trace_debugid |= DBG_FUNC_END;
 		}
-		kernel_debug_internal(trace_debugid, str[i],
-		                                     str[i + 1],
-		                                     str[i + 2],
-		                                     str[i + 3], thread_id);
+		kernel_debug_internal(FALSE, trace_debugid, str[i],
+		                                            str[i + 1],
+		                                            str[i + 2],
+		                                            str[i + 3], thread_id);
 	}
 
 	return str_id;
@@ -1488,44 +1633,29 @@ kdebug_current_proc_enabled(uint32_t debugid)
 }
 
 /*
- * Returns true if the debugid is disabled by filters, and false if the
+ * Returns false if the debugid is disabled by filters, and true if the
  * debugid is allowed to be traced.  A debugid may not be traced if the
  * typefilter disables its class and subclass, it's outside a range
  * check, or if it's not an allowed debugid in a value check.  Trace
  * system events bypass this check.
  */
-static boolean_t
+boolean_t
 kdebug_debugid_enabled(uint32_t debugid)
 {
-	boolean_t is_enabled = TRUE;
-
 	/* if no filtering is enabled */
 	if (!kd_ctrl_page.kdebug_slowcheck) {
 		return TRUE;
 	}
 
-	if (KDBG_EXTRACT_CLASS(debugid) == DBG_TRACE) {
+	if (kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) {
+		return typefilter_is_debugid_allowed(kdbg_typefilter, debugid);
+	} else if (KDBG_EXTRACT_CLASS(debugid) == DBG_TRACE) {
 		return TRUE;
 	}
 
-	if (kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) {
-		disable_preemption();
-
-		/*
-		 * Recheck if typefilter is still being used.  If tracing is being
-		 * disabled, there's a 100ms sleep on the other end to keep the
-		 * bitmap around for this check.
-		 */
-		if (kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) {
-			if (!(isset(type_filter_bitmap, KDBG_EXTRACT_CSC(debugid)))) {
-				is_enabled = FALSE;
-			}
-		}
-
-		enable_preemption();
-	} else if (kd_ctrl_page.kdebug_flags & KDBG_RANGECHECK) {
+	if (kd_ctrl_page.kdebug_flags & KDBG_RANGECHECK) {
 		if (debugid < kdlog_beg || debugid > kdlog_end) {
-			is_enabled = FALSE;
+			return FALSE;
 		}
 	} else if (kd_ctrl_page.kdebug_flags & KDBG_VALCHECK) {
 		if ((debugid & KDBG_EVENTID_MASK) != kdlog_value1 &&
@@ -1533,11 +1663,11 @@ kdebug_debugid_enabled(uint32_t debugid)
 			(debugid & KDBG_EVENTID_MASK) != kdlog_value3 &&
 			(debugid & KDBG_EVENTID_MASK) != kdlog_value4)
 		{
-			is_enabled = FALSE;
+			return FALSE;
 		}
 	}
 
-	return is_enabled;
+	return TRUE;
 }
 
 /*
@@ -1571,7 +1701,7 @@ kernel_debug_string(uint32_t debugid, uint64_t *str_id, const char *str)
 {
 	/* arguments to tracepoints must be word-aligned */
 	__attribute__((aligned(sizeof(uintptr_t)))) char str_buf[STR_BUF_SIZE];
-	assert_static(sizeof(str_buf) > MAX_STR_LEN);
+	static_assert(sizeof(str_buf) > MAX_STR_LEN);
 	vm_size_t len_copied;
 	int err;
 
@@ -1618,7 +1748,7 @@ kdebug_trace_string(__unused struct proc *p,
                     uint64_t *retval)
 {
 	__attribute__((aligned(sizeof(uintptr_t)))) char str_buf[STR_BUF_SIZE];
-	assert_static(sizeof(str_buf) > MAX_STR_LEN);
+	static_assert(sizeof(str_buf) > MAX_STR_LEN);
 	size_t len_copied;
 	int err;
 
@@ -1673,36 +1803,29 @@ kdebug_trace_string(__unused struct proc *p,
 static void
 kdbg_lock_init(void)
 {
-	if (kd_ctrl_page.kdebug_flags & KDBG_LOCKINIT)
+	static lck_grp_attr_t *kdebug_lck_grp_attr = NULL;
+	static lck_grp_t      *kdebug_lck_grp      = NULL;
+	static lck_attr_t     *kdebug_lck_attr     = NULL;
+
+	if (kd_ctrl_page.kdebug_flags & KDBG_LOCKINIT) {
 		return;
-	
-	/*
-	 * allocate lock group attribute and group
-	 */
-	kd_trace_mtx_sysctl_grp_attr = lck_grp_attr_alloc_init();
-	kd_trace_mtx_sysctl_grp = lck_grp_alloc_init("kdebug", kd_trace_mtx_sysctl_grp_attr);
-		
-	/*
-	 * allocate the lock attribute
-	 */
-	kd_trace_mtx_sysctl_attr = lck_attr_alloc_init();
+	}
 
+	assert(kdebug_lck_grp_attr == NULL);
+	kdebug_lck_grp_attr = lck_grp_attr_alloc_init();
+	kdebug_lck_grp = lck_grp_alloc_init("kdebug", kdebug_lck_grp_attr);
+	kdebug_lck_attr = lck_attr_alloc_init();
 
-	/*
-	 * allocate and initialize mutex's
-	 */
-	kd_trace_mtx_sysctl = lck_mtx_alloc_init(kd_trace_mtx_sysctl_grp, kd_trace_mtx_sysctl_attr);
-	kds_spin_lock = lck_spin_alloc_init(kd_trace_mtx_sysctl_grp, kd_trace_mtx_sysctl_attr);
-	kdw_spin_lock = lck_spin_alloc_init(kd_trace_mtx_sysctl_grp, kd_trace_mtx_sysctl_attr);
+	kds_spin_lock = lck_spin_alloc_init(kdebug_lck_grp, kdebug_lck_attr);
+	kdw_spin_lock = lck_spin_alloc_init(kdebug_lck_grp, kdebug_lck_attr);
 
 	kd_ctrl_page.kdebug_flags |= KDBG_LOCKINIT;
 }
 
-
 int
 kdbg_bootstrap(boolean_t early_trace)
 {
-        kd_ctrl_page.kdebug_flags &= ~KDBG_WRAPPED;
+	kd_ctrl_page.kdebug_flags &= ~KDBG_WRAPPED;
 
 	return (create_buffers(early_trace));
 }
@@ -1717,7 +1840,7 @@ kdbg_reinit(boolean_t early_trace)
 	 * First make sure we're not in
 	 * the middle of cutting a trace
 	 */
-	kdbg_set_tracing_enabled(FALSE, KDEBUG_ENABLE_TRACE);
+	kernel_debug_disable();
 
 	/*
 	 * make sure the SLOW_NOLOG is seen
@@ -1728,13 +1851,7 @@ kdbg_reinit(boolean_t early_trace)
 
 	delete_buffers();
 
-	if ((kd_ctrl_page.kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr) {
-		kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
-		kd_ctrl_page.kdebug_flags &= ~KDBG_MAPINIT;
-		kd_mapsize = 0;
-		kd_mapptr = NULL;
-		kd_mapcount = 0;
-	}  
+	kdbg_clear_thread_map();
 	ret = kdbg_bootstrap(early_trace);
 
 	RAW_file_offset = 0;
@@ -1831,7 +1948,6 @@ kdbg_resolve_map(thread_t th_act, void *opaque)
  *
  * We may be reporting data from "now", or from the "past".
  *
- * The "now" data would be for something like kdbg_readcurcpumap().
  * The "past" data would be for kdbg_readcpumap().
  *
  * If we do not pass both iops and cpu_count, and iops is NULL, this function
@@ -1855,6 +1971,7 @@ kdbg_cpumap_init_internal(kd_iop_t* iops, uint32_t cpu_count, uint8_t** cpumap, 
 		if (kmem_alloc(kernel_map, (vm_offset_t*)cpumap, (vm_size_t)*cpumap_size, VM_KERN_MEMORY_DIAG) != KERN_SUCCESS) {
 			return ENOMEM;
 		}
+		bzero(*cpumap, *cpumap_size);
 	} else if (bytes_available < bytes_needed) {
 		return EINVAL;
 	}
@@ -1870,7 +1987,6 @@ kdbg_cpumap_init_internal(kd_iop_t* iops, uint32_t cpu_count, uint8_t** cpumap, 
 	while (iops) {
 		cpus[index].cpu_id = iops->cpu_id;
 		cpus[index].flags = KDBG_CPUMAP_IS_IOP;
-		bzero(cpus[index].name, sizeof(cpus->name));
 		strlcpy(cpus[index].name, iops->callback.iop_name, sizeof(cpus->name));
 		
 		iops = iops->next;
@@ -1880,7 +1996,6 @@ kdbg_cpumap_init_internal(kd_iop_t* iops, uint32_t cpu_count, uint8_t** cpumap, 
 	while (index >= 0) {
 		cpus[index].cpu_id = index;
 		cpus[index].flags = 0;
-		bzero(cpus[index].name, sizeof(cpus->name));
 		strlcpy(cpus[index].name, "AP", sizeof(cpus->name));
 
 		index--;
@@ -1892,40 +2007,35 @@ kdbg_cpumap_init_internal(kd_iop_t* iops, uint32_t cpu_count, uint8_t** cpumap, 
 void
 kdbg_thrmap_init(void)
 {
-        if (kd_ctrl_page.kdebug_flags & KDBG_MAPINIT)
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+
+	if (kd_ctrl_page.kdebug_flags & KDBG_MAPINIT) {
 		return;
+	}
 
 	kd_mapptr = kdbg_thrmap_init_internal(0, &kd_mapsize, &kd_mapcount);
 
-	if (kd_mapptr)
+	if (kd_mapptr) {
 		kd_ctrl_page.kdebug_flags |= KDBG_MAPINIT;
+	}
 }
 
-
-kd_threadmap* kdbg_thrmap_init_internal(unsigned int count, unsigned int *mapsize, unsigned int *mapcount)
+static kd_threadmap *
+kdbg_thrmap_init_internal(unsigned int count, unsigned int *mapsize, unsigned int *mapcount)
 {
-	kd_threadmap	*mapptr;
-	struct proc	*p;
-	struct krt	akrt;
-	int		tts_count;    /* number of task-to-string structures */
-	struct tts	*tts_mapptr;
-	unsigned int	tts_mapsize = 0;
-	int		i;
-	vm_offset_t	kaddr;
+	kd_threadmap *mapptr;
+	proc_t p;
+	struct krt akrt;
+	int tts_count = 0;    /* number of task-to-string structures */
+	struct tts *tts_mapptr;
+	unsigned int tts_mapsize = 0;
+	vm_offset_t kaddr;
 
-	/*
-	 * need to use PROC_SCANPROCLIST with proc_iterate
-	 */
-	proc_list_lock();
+	assert(mapsize != NULL);
+	assert(mapcount != NULL);
 
-	/*
-	 * Calculate the sizes of map buffers
-	 */
-	for (p = allproc.lh_first, *mapcount=0, tts_count=0; p; p = p->p_list.le_next) {
-		*mapcount += get_task_numacts((task_t)p->task);
-		tts_count++;
-	}
-	proc_list_unlock();
+	*mapcount = threads_count;
+	tts_count = tasks_count;
 
 	/*
 	 * The proc count could change during buffer allocation,
@@ -1933,19 +2043,21 @@ kd_threadmap* kdbg_thrmap_init_internal(unsigned int count, unsigned int *mapsiz
 	 * buffer sizes. This gives new tasks some chance of 
 	 * making into the tables.  Bump up by 25%.
 	 */
-	*mapcount += *mapcount/4;
-	tts_count += tts_count/4;
+	*mapcount += *mapcount / 4;
+	tts_count += tts_count / 4;
 
 	*mapsize = *mapcount * sizeof(kd_threadmap);
 
-	if (count && count < *mapcount)
-		return (0);
+	if (count && count < *mapcount) {
+		return 0;
+	}
 
 	if ((kmem_alloc(kernel_map, &kaddr, (vm_size_t)*mapsize, VM_KERN_MEMORY_DIAG) == KERN_SUCCESS)) {
 		bzero((void *)kaddr, *mapsize);
 		mapptr = (kd_threadmap *)kaddr;
-	} else
-		return (0);
+	} else {
+		return 0;
+	}
 
 	tts_mapsize = tts_count * sizeof(struct tts);
 
@@ -1955,28 +2067,28 @@ kd_threadmap* kdbg_thrmap_init_internal(unsigned int count, unsigned int *mapsiz
 	} else {
 		kmem_free(kernel_map, (vm_offset_t)mapptr, *mapsize);
 
-		return (0);
+		return 0;
 	}
-	/* 
-	 * We need to save the procs command string
-	 * and take a reference for each task associated
-	 * with a valid process
-	 */
-
-	proc_list_lock();
 
 	/*
-	 * should use proc_iterate
+	 * Save the proc's name and take a reference for each task associated
+	 * with a valid process.
 	 */
-	for (p = allproc.lh_first, i=0; p && i < tts_count; p = p->p_list.le_next) {
-		if (p->p_lflag & P_LEXIT)
-			continue;
+	proc_list_lock();
 
+	int i = 0;
+	ALLPROC_FOREACH(p) {
+		if (i >= tts_count) {
+			break;
+		}
+		if (p->p_lflag & P_LEXIT) {
+			continue;
+		}
 		if (p->task) {
 			task_reference(p->task);
 			tts_mapptr[i].task = p->task;
-			tts_mapptr[i].pid  = p->p_pid;
-			(void)strlcpy(tts_mapptr[i].task_comm, p->p_comm, sizeof(tts_mapptr[i].task_comm));
+			tts_mapptr[i].pid = p->p_pid;
+			(void)strlcpy(tts_mapptr[i].task_comm, proc_best_name(p), sizeof(tts_mapptr[i].task_comm));
 			i++;
 		}
 	}
@@ -1990,17 +2102,17 @@ kd_threadmap* kdbg_thrmap_init_internal(unsigned int count, unsigned int *mapsiz
 	akrt.map = mapptr;
 	akrt.count = 0;
 	akrt.maxcount = *mapcount;
-	    
+
 	for (i = 0; i < tts_count; i++) {
 		akrt.atts = &tts_mapptr[i];
 		task_act_iterate_wth_args(tts_mapptr[i].task, kdbg_resolve_map, &akrt);
-		task_deallocate((task_t) tts_mapptr[i].task);
+		task_deallocate((task_t)tts_mapptr[i].task);
 	}
 	kmem_free(kernel_map, (vm_offset_t)tts_mapptr, tts_mapsize);
 
 	*mapcount = akrt.count;
 
-	return (mapptr);
+	return mapptr;
 }
 
 static void
@@ -2011,7 +2123,7 @@ kdbg_clear(void)
 	 * First make sure we're not in
 	 * the middle of cutting a trace
 	 */
-	kdbg_set_tracing_enabled(FALSE, KDEBUG_ENABLE_TRACE);
+	kernel_debug_disable();
 	kdbg_disable_typefilter();
 
 	/*
@@ -2021,26 +2133,44 @@ kdbg_clear(void)
 	 */
 	IOSleep(100);
 
-	global_state_pid = -1;
+	/* reset kdebug state for each process */
+	if (kd_ctrl_page.kdebug_flags & (KDBG_PIDCHECK | KDBG_PIDEXCLUDE)) {
+		proc_list_lock();
+		proc_t p;
+		ALLPROC_FOREACH(p) {
+			p->p_kdebug = 0;
+		}
+		proc_list_unlock();
+	}
+
 	kd_ctrl_page.kdebug_flags &= (unsigned int)~KDBG_CKTYPES;
 	kd_ctrl_page.kdebug_flags &= ~(KDBG_NOWRAP | KDBG_RANGECHECK | KDBG_VALCHECK);
 	kd_ctrl_page.kdebug_flags &= ~(KDBG_PIDCHECK | KDBG_PIDEXCLUDE);
-	
-	kdbg_deallocate_typefilter();
+
+	kd_ctrl_page.oldest_time = 0;
+
 	delete_buffers();
 	nkdbufs	= 0;
 
 	/* Clean up the thread map buffer */
-	kd_ctrl_page.kdebug_flags &= ~KDBG_MAPINIT;
-	if (kd_mapptr) {
-		kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
-		kd_mapptr = (kd_threadmap *) 0;
-	}
-	kd_mapsize = 0;
-	kd_mapcount = 0;
+	kdbg_clear_thread_map();
 
 	RAW_file_offset = 0;
 	RAW_file_written = 0;
+}
+
+void
+kdebug_reset(void)
+{
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+
+	kdbg_lock_init();
+
+	kdbg_clear();
+	if (kdbg_typefilter) {
+		typefilter_reject_all(kdbg_typefilter);
+		typefilter_allow_class(kdbg_typefilter, DBG_TRACE);
+	}
 }
 
 int
@@ -2053,7 +2183,7 @@ kdbg_setpid(kd_regtype *kdr)
 	pid = (pid_t)kdr->value1;
 	flag = (int)kdr->value2;
 
-	if (pid > 0) {
+	if (pid >= 0) {
 		if ((p = proc_find(pid)) == NULL)
 			ret = ESRCH;
 		else {
@@ -2095,7 +2225,7 @@ kdbg_setpidex(kd_regtype *kdr)
 	pid = (pid_t)kdr->value1;
 	flag = (int)kdr->value2;
 
-	if (pid > 0) {
+	if (pid >= 0) {
 		if ((p = proc_find(pid)) == NULL)
 			ret = ESRCH;
 		else {
@@ -2126,98 +2256,130 @@ kdbg_setpidex(kd_regtype *kdr)
 	return(ret);
 }
 
+/*
+ * The following functions all operate on the "global" typefilter singleton.
+ */
 
 /*
- * This is for setting a maximum decrementer value
+ * The tf param is optional, you may pass either a valid typefilter or NULL.
+ * If you pass a valid typefilter, you release ownership of that typefilter.
  */
-int
-kdbg_setrtcdec(kd_regtype *kdr)
+static int
+kdbg_initialize_typefilter(typefilter_t tf)
 {
-	int ret = 0;
-	natural_t decval;
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+	assert(!kdbg_typefilter);
+	assert(!kdbg_typefilter_memory_entry);
+	typefilter_t deallocate_tf = NULL;
 
-	decval = (natural_t)kdr->value1;
+	if (!tf && ((tf = deallocate_tf = typefilter_create()) == NULL)) {
+		return ENOMEM;
+	}
 
-	if (decval && decval < KDBG_MINRTCDEC)
-		ret = EINVAL;
-	else
-		ret = ENOTSUP;
+	if ((kdbg_typefilter_memory_entry = typefilter_create_memory_entry(tf)) == MACH_PORT_NULL) {
+		if (deallocate_tf) {
+			typefilter_deallocate(deallocate_tf);
+		}
+		return ENOMEM;
+	}
 
-	return(ret);
+	/*
+	 * The atomic store closes a race window with
+	 * the kdebug_typefilter syscall, which assumes
+	 * that any non-null kdbg_typefilter means a
+	 * valid memory_entry is available.
+	 */
+	__c11_atomic_store(((_Atomic typefilter_t*)&kdbg_typefilter), tf, memory_order_release);
+
+	return KERN_SUCCESS;
 }
 
-int
+static int
+kdbg_copyin_typefilter(user_addr_t addr, size_t size)
+{
+	int ret = ENOMEM;
+	typefilter_t tf;
+
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+
+	if (size != KDBG_TYPEFILTER_BITMAP_SIZE) {
+		return EINVAL;
+	}
+
+	if ((tf = typefilter_create())) {
+		if ((ret = copyin(addr, tf, KDBG_TYPEFILTER_BITMAP_SIZE)) == 0) {
+			/* The kernel typefilter must always allow DBG_TRACE */
+			typefilter_allow_class(tf, DBG_TRACE);
+
+			/*
+			 * If this is the first typefilter; claim it.
+			 * Otherwise copy and deallocate.
+			 *
+			 * Allocating a typefilter for the copyin allows
+			 * the kernel to hold the invariant that DBG_TRACE
+			 * must always be allowed. 
+			 */
+			if (!kdbg_typefilter) {
+				if ((ret = kdbg_initialize_typefilter(tf))) {
+					return ret;
+				}
+				tf = NULL;
+			} else {
+				typefilter_copy(kdbg_typefilter, tf);
+			}
+
+			kdbg_enable_typefilter();
+			kdbg_iop_list_callback(kd_ctrl_page.kdebug_iops, KD_CALLBACK_TYPEFILTER_CHANGED, kdbg_typefilter);
+		}
+
+		if (tf)
+			typefilter_deallocate(tf);
+	}
+
+	return ret;
+}
+
+/*
+ * Enable the flags in the control page for the typefilter.  Assumes that
+ * kdbg_typefilter has already been allocated, so events being written
+ * don't see a bad typefilter.
+ */
+static void
 kdbg_enable_typefilter(void)
 {
-	int ret;
-
-	/* Allocate memory for bitmap if not already allocated */
-	ret = kdbg_allocate_typefilter();
-	if (ret) {
-		return ret;
-	}
-
-	/* Turn off range and value checks */
+	assert(kdbg_typefilter);
 	kd_ctrl_page.kdebug_flags &= ~(KDBG_RANGECHECK | KDBG_VALCHECK);
-	
-	/* Enable filter checking */
 	kd_ctrl_page.kdebug_flags |= KDBG_TYPEFILTER_CHECK;
 	kdbg_set_flags(SLOW_CHECKS, 0, TRUE);
-	return 0;
+	commpage_update_kdebug_state();
 }
 
-int
+/*
+ * Disable the flags in the control page for the typefilter.  The typefilter
+ * may be safely deallocated shortly after this function returns.
+ */
+static void
 kdbg_disable_typefilter(void)
 {
-	/*  Disable filter checking */	
 	kd_ctrl_page.kdebug_flags &= ~KDBG_TYPEFILTER_CHECK;
 
-	/*  Turn off slow checks unless pid checks are using them */
-	if ( (kd_ctrl_page.kdebug_flags & (KDBG_PIDCHECK | KDBG_PIDEXCLUDE)) )
+	if ((kd_ctrl_page.kdebug_flags & (KDBG_PIDCHECK | KDBG_PIDEXCLUDE))) {
 		kdbg_set_flags(SLOW_CHECKS, 0, TRUE);
-	else
-		kdbg_set_flags(SLOW_CHECKS, 0, FALSE);
-
-	/* typefilter bitmap will be deallocated later */
-
-	return 0;
-}
-
-static int
-kdbg_allocate_typefilter(void)
-{
-	if (type_filter_bitmap == NULL) {
-		vm_offset_t bitmap = 0;
-
-		if (kmem_alloc(kernel_map, &bitmap, KDBG_TYPEFILTER_BITMAP_SIZE, VM_KERN_MEMORY_DIAG) != KERN_SUCCESS) {
-			return ENOSPC;
-		}
-
-		bzero((void *)bitmap, KDBG_TYPEFILTER_BITMAP_SIZE);
-
-		if (!OSCompareAndSwapPtr(NULL, (void *)bitmap, &type_filter_bitmap)) {
-			kmem_free(kernel_map, bitmap, KDBG_TYPEFILTER_BITMAP_SIZE);
-			return 0; /* someone assigned a buffer */
-		}
 	} else {
-		bzero(type_filter_bitmap, KDBG_TYPEFILTER_BITMAP_SIZE);
+		kdbg_set_flags(SLOW_CHECKS, 0, FALSE);
 	}
-
-	return 0;
+	commpage_update_kdebug_state();
 }
 
-static int
-kdbg_deallocate_typefilter(void)
+uint32_t
+kdebug_commpage_state(void)
 {
-	if(type_filter_bitmap) {
-		vm_offset_t bitmap = (vm_offset_t)type_filter_bitmap;
-
-		if (OSCompareAndSwapPtr((void *)bitmap, NULL, &type_filter_bitmap)) {
-			kmem_free(kernel_map, bitmap, KDBG_TYPEFILTER_BITMAP_SIZE);
-			return 0;
-		} else {
-			/* already swapped */
+	if (kdebug_enable) {
+		if (kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) {
+			return KDEBUG_COMMPAGE_ENABLE_TYPEFILTER | KDEBUG_COMMPAGE_ENABLE_TRACE;
 		}
+
+		return KDEBUG_COMMPAGE_ENABLE_TRACE;
 	}
 
 	return 0;
@@ -2300,11 +2462,11 @@ int
 kdbg_write_v3_chunk_header(user_addr_t buffer, uint32_t tag, uint32_t sub_tag, uint64_t length, vnode_t vp, vfs_context_t ctx)
 {
 	int ret = KERN_SUCCESS;
-	kd_chunk_header_v3 header;
-
-	header.tag = tag;
-	header.sub_tag = sub_tag;
-	header.length = length;
+	kd_chunk_header_v3 header = {
+		.tag = tag,
+		.sub_tag = sub_tag,
+		.length = length,
+	};
 
 	// Check that only one of them is valid
 	assert(!buffer ^ !vp);
@@ -2333,11 +2495,11 @@ write_error:
 int
 kdbg_write_v3_chunk_header_to_buffer(void * buffer, uint32_t tag, uint32_t sub_tag, uint64_t length)
 {
-	kd_chunk_header_v3 header;
-
-	header.tag = tag;
-	header.sub_tag = sub_tag;
-	header.length = length;
+	kd_chunk_header_v3 header = {
+		.tag = tag,
+		.sub_tag = sub_tag,
+		.length = length,
+	};
 
 	if (!buffer) {
 		return 0;
@@ -2377,7 +2539,11 @@ kdbg_write_v3_chunk_to_fd(uint32_t tag, uint32_t sub_tag, uint64_t length, void 
 	if ( (vnode_getwithref(vp)) == 0 ) {
 		RAW_file_offset = fp->f_fglob->fg_offset;
 
-		kd_chunk_header_v3 chunk_header = { .tag = tag, .sub_tag = sub_tag, .length = length };
+		kd_chunk_header_v3 chunk_header = {
+			.tag = tag,
+			.sub_tag = sub_tag,
+			.length = length,
+		};
 
 		int ret = kdbg_write_to_vnode((caddr_t)  &chunk_header, sizeof(kd_chunk_header_v3), vp, &context, RAW_file_offset);
 		if (!ret) {
@@ -2436,7 +2602,6 @@ int
 kdbg_write_v3_header(user_addr_t user_header, size_t *user_header_size, int fd)
 {
         int ret = KERN_SUCCESS;
-        kd_header_v3 header;
 
         uint8_t* cpumap = 0;
         uint32_t cpumap_size = 0;
@@ -2471,36 +2636,32 @@ kdbg_write_v3_header(user_addr_t user_header, size_t *user_header_size, int fd)
         }
         thrmap_size = kd_mapcount * sizeof(kd_threadmap);
 
-        // Setup the header.
-        // See v3 header description in sys/kdebug.h for more inforamtion.
-
-        header.tag = RAW_VERSION3;
-        header.sub_tag = V3_HEADER_VERSION;
-        header.length = ( sizeof(kd_header_v3) + cpumap_size - sizeof(kd_cpumap_header));
-
         mach_timebase_info_data_t timebase = {0, 0};
         clock_timebase_info(&timebase);
-        header.timebase_numer = timebase.numer;
-        header.timebase_denom = timebase.denom;
-        header.timestamp = 0;
-        header.walltime_secs = 0;
-        header.walltime_usecs = 0;
-        header.timezone_minuteswest = 0;
-        header.timezone_dst = 0;
 
-#if defined __LP64__
-        header.flags = 1;
+        // Setup the header.
+        // See v3 header description in sys/kdebug.h for more inforamtion.
+        kd_header_v3 header = {
+            .tag = RAW_VERSION3,
+            .sub_tag = V3_HEADER_VERSION,
+            .length = (sizeof(kd_header_v3) + cpumap_size - sizeof(kd_cpumap_header)),
+            .timebase_numer = timebase.numer,
+            .timebase_denom = timebase.denom,
+            .timestamp = 0, /* FIXME rdar://problem/22053009 */
+            .walltime_secs = 0,
+            .walltime_usecs = 0,
+            .timezone_minuteswest = 0,
+            .timezone_dst = 0,
+#if defined(__LP64__)
+            .flags = 1,
 #else
-        header.flags = 0;
+            .flags = 0,
 #endif
+        };
 
         // If its a buffer, check if we have enough space to copy the header and the maps.
         if (user_header) {
                 bytes_needed = header.length + thrmap_size + (2 * sizeof(kd_chunk_header_v3));
-                if ( !user_header_size ) {
-                        ret = EINVAL;
-                        goto bail;
-                }
                 if (*user_header_size < bytes_needed) {
                         ret = EINVAL;
                         goto bail;
@@ -2632,32 +2793,44 @@ kdbg_readcurthrmap(user_addr_t buffer, size_t *bufsize)
 }
 
 static int
-kdbg_write_v1_plus_header(uint32_t count, vnode_t vp, vfs_context_t ctx)
+kdbg_write_v1_header(boolean_t write_thread_map, vnode_t vp, vfs_context_t ctx)
 {
 	int ret = 0;
-	RAW_header	header;
-	clock_sec_t	secs;
-	clock_usec_t	usecs;
-	char	*pad_buf;
+	RAW_header header;
+	clock_sec_t secs;
+	clock_usec_t usecs;
+	char *pad_buf;
 	uint32_t pad_size;
 	uint32_t extra_thread_count = 0;
 	uint32_t cpumap_size;
-	unsigned int mapsize = kd_mapcount * sizeof(kd_threadmap);
+	size_t map_size = 0;
+	size_t map_count = 0;
+
+	if (write_thread_map) {
+		assert(kd_ctrl_page.kdebug_flags & KDBG_MAPINIT);
+		map_count = kd_mapcount;
+		map_size = map_count * sizeof(kd_threadmap);
+	}
 
 	/*
-	 * To write a RAW_VERSION1+ file, we
-	 * must embed a cpumap in the "padding"
-	 * used to page align the events following
-	 * the threadmap. If the threadmap happens
-	 * to not require enough padding, we
-	 * artificially increase its footprint
-	 * until it needs enough padding.
+	 * Without the buffers initialized, we cannot construct a CPU map or a
+	 * thread map, and cannot write a header.
+	 */
+	if (!(kd_ctrl_page.kdebug_flags & KDBG_BUFINIT)) {
+		return EINVAL;
+	}
+
+	/*
+	 * To write a RAW_VERSION1+ file, we must embed a cpumap in the
+	 * "padding" used to page align the events following the threadmap. If
+	 * the threadmap happens to not require enough padding, we artificially
+	 * increase its footprint until it needs enough padding.
 	 */
 
-        assert(vp);
-        assert(ctx);
+	assert(vp);
+	assert(ctx);
 
-	pad_size = PAGE_16KB - ((sizeof(RAW_header) + (count * sizeof(kd_threadmap))) & PAGE_MASK_64);
+	pad_size = PAGE_16KB - ((sizeof(RAW_header) + map_size) & PAGE_MASK_64);
 	cpumap_size = sizeof(kd_cpumap_header) + kd_ctrl_page.kdebug_cpus * sizeof(kd_cpumap);
 
 	if (cpumap_size > pad_size) {
@@ -2665,7 +2838,8 @@ kdbg_write_v1_plus_header(uint32_t count, vnode_t vp, vfs_context_t ctx)
 		 * we increase the pad_size by 16K. We do this so that the event
 		 * data is always  available on a page aligned boundary for both
 		 * 4k and 16k systems. We enforce this alignment for the event
-		 * data so that we can take advantage of optimized file/disk writes.*/
+		 * data so that we can take advantage of optimized file/disk writes.
+		 */
 		pad_size += PAGE_16KB;
 	}
 
@@ -2680,28 +2854,36 @@ kdbg_write_v1_plus_header(uint32_t count, vnode_t vp, vfs_context_t ctx)
 		extra_thread_count = (pad_size / sizeof(kd_threadmap)) + 1;
 	}
 
+	memset(&header, 0, sizeof(header));
 	header.version_no = RAW_VERSION1;
-	header.thread_count = count + extra_thread_count;
+	header.thread_count = map_count + extra_thread_count;
 
 	clock_get_calendar_microtime(&secs, &usecs);
 	header.TOD_secs = secs;
 	header.TOD_usecs = usecs;
 
 	ret = vn_rdwr(UIO_WRITE, vp, (caddr_t)&header, sizeof(RAW_header), RAW_file_offset,
-		      UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
-	if (ret)
+	              UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
+	if (ret) {
 		goto write_error;
+	}
 	RAW_file_offset += sizeof(RAW_header);
+	RAW_file_written += sizeof(RAW_header);
 
-	ret = vn_rdwr(UIO_WRITE, vp, (caddr_t)kd_mapptr, mapsize, RAW_file_offset,
-		      UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
-	if (ret)
-		goto write_error;
-	RAW_file_offset += mapsize;
+	if (write_thread_map) {
+		ret = vn_rdwr(UIO_WRITE, vp, (caddr_t)kd_mapptr, map_size, RAW_file_offset,
+		              UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
+		if (ret) {
+			goto write_error;
+		}
+
+		RAW_file_offset += map_size;
+		RAW_file_written += map_size;
+	}
 
 	if (extra_thread_count) {
 		pad_size = extra_thread_count * sizeof(kd_threadmap);
-		pad_buf = (char *)kalloc(pad_size);
+		pad_buf = kalloc(pad_size);
 		if (!pad_buf) {
 			ret = ENOMEM;
 			goto write_error;
@@ -2709,13 +2891,14 @@ kdbg_write_v1_plus_header(uint32_t count, vnode_t vp, vfs_context_t ctx)
 		memset(pad_buf, 0, pad_size);
 
 		ret = vn_rdwr(UIO_WRITE, vp, (caddr_t)pad_buf, pad_size, RAW_file_offset,
-				UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
+		              UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
 		kfree(pad_buf, pad_size);
-
-		if (ret)
+		if (ret) {
 			goto write_error;
-		RAW_file_offset += pad_size;
+		}
 
+		RAW_file_offset += pad_size;
+		RAW_file_written += pad_size;
 	}
 
 	pad_size = PAGE_SIZE - (RAW_file_offset & PAGE_MASK_64);
@@ -2740,201 +2923,244 @@ kdbg_write_v1_plus_header(uint32_t count, vnode_t vp, vfs_context_t ctx)
 		ret = vn_rdwr(UIO_WRITE, vp, (caddr_t)pad_buf, pad_size, RAW_file_offset,
 				UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
 		kfree(pad_buf, pad_size);
-
-		if (ret)
+		if (ret) {
 			goto write_error;
+		}
+
 		RAW_file_offset += pad_size;
+		RAW_file_written += pad_size;
 	}
-	RAW_file_written += sizeof(RAW_header) + mapsize + pad_size;
 
 write_error:
 	return ret;
 }
 
-int
-kdbg_readthrmap(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx)
+static void
+kdbg_clear_thread_map(void)
 {
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
 
-	int avail = 0;
+	if (kd_ctrl_page.kdebug_flags & KDBG_MAPINIT) {
+		assert(kd_mapptr != NULL);
+		kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
+		kd_mapptr = NULL;
+		kd_mapsize = 0;
+		kd_mapcount = 0;
+		kd_ctrl_page.kdebug_flags &= ~KDBG_MAPINIT;
+	}
+}
+
+/*
+ * Write out a version 1 header and the thread map, if it is initialized, to a
+ * vnode.  Used by KDWRITEMAP and kdbg_dump_trace_to_file.
+ *
+ * Returns write errors from vn_rdwr if a write fails.  Returns ENODATA if the
+ * thread map has not been initialized, but the header will still be written.
+ * Returns ENOMEM if padding could not be allocated.  Returns 0 otherwise.
+ */
+static int
+kdbg_write_thread_map(vnode_t vp, vfs_context_t ctx)
+{
 	int ret = 0;
-	uint32_t count = 0;
-	unsigned int mapsize;
+	boolean_t map_initialized;
 
-	if ((!vp && !buffer) || (vp && buffer)) {
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+	assert(ctx != NULL);
+
+	map_initialized = (kd_ctrl_page.kdebug_flags & KDBG_MAPINIT);
+
+	ret = kdbg_write_v1_header(map_initialized, vp, ctx);
+	if (ret == 0) {
+		if (map_initialized) {
+			kdbg_clear_thread_map();
+		} else {
+			ret = ENODATA;
+		}
+	}
+
+	return ret;
+}
+
+/*
+ * Copy out the thread map to a user space buffer.  Used by KDTHRMAP.
+ *
+ * Returns copyout errors if the copyout fails.  Returns ENODATA if the thread
+ * map has not been initialized.  Returns EINVAL if the buffer provided is not
+ * large enough for the entire thread map.  Returns 0 otherwise.
+ */
+static int
+kdbg_copyout_thread_map(user_addr_t buffer, size_t *buffer_size)
+{
+	boolean_t map_initialized;
+	size_t map_size;
+	int ret = 0;
+
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+	assert(buffer_size != NULL);
+
+	map_initialized = (kd_ctrl_page.kdebug_flags & KDBG_MAPINIT);
+	if (!map_initialized) {
+		return ENODATA;
+	}
+
+	map_size = kd_mapcount * sizeof(kd_threadmap);
+	if (*buffer_size < map_size) {
 		return EINVAL;
 	}
 
-	assert(number);
-	assert((vp == NULL) || (ctx != NULL));
-
-	avail = *number;
-	count = avail/sizeof (kd_threadmap);
-	mapsize = kd_mapcount * sizeof(kd_threadmap);
-
-	if (count && (count <= kd_mapcount)) {
-		if ((kd_ctrl_page.kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr) {
-			if (*number < mapsize)
-				ret = EINVAL;
-			else {
-				if (vp) {
-					ret = kdbg_write_v1_plus_header(count, vp, ctx);
-					if (ret)
-						goto write_error;
-				}
-				else {
-					if (copyout(kd_mapptr, buffer, mapsize))
-						ret = EINVAL;
-				}
-			}
-		}
-		else
-			ret = EINVAL;
+	ret = copyout(kd_mapptr, buffer, map_size);
+	if (ret == 0) {
+		kdbg_clear_thread_map();
 	}
-	else
-		ret = EINVAL;
 
-	if (ret && vp)
-	{
-		count = 0;
-
-		ret = kdbg_write_to_vnode((caddr_t)&count, sizeof(uint32_t), vp, ctx, RAW_file_offset);
-		if (!ret) {
-			RAW_file_offset += sizeof(uint32_t);
-			RAW_file_written += sizeof(uint32_t);
-		}
-	}
-write_error:
-	if ((kd_ctrl_page.kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr)
-	{
-		kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
-		kd_ctrl_page.kdebug_flags &= ~KDBG_MAPINIT;
-		kd_mapsize = 0;
-		kd_mapptr = (kd_threadmap *) 0;
-		kd_mapcount = 0;
-	}  
-	return(ret);
+	return ret;
 }
 
 int
-kdbg_readthrmap_v3(user_addr_t buffer, size_t *number, int fd)
+kdbg_readthrmap_v3(user_addr_t buffer, size_t buffer_size, int fd)
 {
-	int avail = 0;
 	int ret = 0;
-	uint32_t count = 0;
-	unsigned int mapsize;
+	boolean_t map_initialized;
+	size_t map_size;
+
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if ((!fd && !buffer) || (fd && buffer)) {
 		return EINVAL;
 	}
 
-	assert(number);
+	map_initialized = (kd_ctrl_page.kdebug_flags & KDBG_MAPINIT);
+	map_size = kd_mapcount * sizeof(kd_threadmap);
 
-	avail = *number;
-	count = avail/sizeof (kd_threadmap);
-	mapsize = kd_mapcount * sizeof(kd_threadmap);
+	if (map_initialized && (buffer_size >= map_size))
+	{
+		ret = kdbg_write_v3_header(buffer, &buffer_size, fd);
 
-	if (count && (count <= kd_mapcount)) {
-		if ((kd_ctrl_page.kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr) {
-			if (*number < mapsize) {
-				ret = EINVAL;
-			}
-			else {
-				ret = kdbg_write_v3_header(buffer, number, fd);
-				if (ret) {
-					goto write_error;
-				}
-			}
+		if (ret == 0) {
+			kdbg_clear_thread_map();
 		}
-		else {
-			ret = EINVAL;
-		}
-	}
-	else {
+	} else {
 		ret = EINVAL;
 	}
-write_error:
-	if ((kd_ctrl_page.kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr) {
-		kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
-		kd_ctrl_page.kdebug_flags &= ~KDBG_MAPINIT;
-		kd_mapsize = 0;
-		kd_mapptr = (kd_threadmap *) 0;
-		kd_mapcount = 0;
-	}  
-	return(ret);
-}
 
-
-static int
-kdbg_set_nkdbufs(unsigned int value)
-{
-        /*
-	 * We allow a maximum buffer size of 50% of either ram or max mapped address, whichever is smaller
-	 * 'value' is the desired number of trace entries
-	 */
-        unsigned int max_entries = (sane_size/2) / sizeof(kd_buf);
-
-	if (value <= max_entries)
-		return (value);
-	else
-		return (max_entries);
-}
-
-
-static int
-kdbg_enable_bg_trace(void)
-{
-	int ret = 0;
-
-	if (kdlog_bg_trace == TRUE && kdlog_bg_trace_running == FALSE && n_storage_buffers == 0) {
-		nkdbufs = bg_nkdbufs;
-		ret = kdbg_reinit(FALSE);
-		if (0 == ret) {
-			kdbg_set_tracing_enabled(TRUE, KDEBUG_ENABLE_TRACE);
-			kdlog_bg_trace_running = TRUE;
-		}
-		wakeup(&kdlog_bg_trace);
-	}
-	return ret;
+	return  ret;
 }
 
 static void
-kdbg_disable_bg_trace(void)
+kdbg_set_nkdbufs(unsigned int value)
 {
-	if (kdlog_bg_trace_running == TRUE) {
-		kdlog_bg_trace_running = FALSE;
-		kdbg_clear();		
+	/*
+	 * We allow a maximum buffer size of 50% of either ram or max mapped
+	 * address, whichever is smaller 'value' is the desired number of trace
+	 * entries
+	 */
+	unsigned int max_entries = (sane_size / 2) / sizeof(kd_buf);
+
+	if (value <= max_entries) {
+		nkdbufs = value;
+	} else {
+		nkdbufs = max_entries;
 	}
 }
-
-
 
 /*
- * This function is provided for the CHUD toolkit only.
- *    int val:
- *        zero disables kdebug_chudhook function call
- *        non-zero enables kdebug_chudhook function call
- *    char *fn:
- *        address of the enabled kdebug_chudhook function
-*/
-
-void
-kdbg_control_chud(int val, void *fn)
+ * Block until there are `n_storage_threshold` storage units filled with
+ * events or `timeout_ms` milliseconds have passed.  If `locked_wait` is true,
+ * `ktrace_lock` is held while waiting.  This is necessary while waiting to
+ * write events out of the buffers.
+ *
+ * Returns true if the threshold was reached and false otherwise.
+ *
+ * Called with `ktrace_lock` locked and interrupts enabled.
+ */
+static boolean_t
+kdbg_wait(uint64_t timeout_ms, boolean_t locked_wait)
 {
-	kdbg_lock_init();
-    
-	if (val) {
-		/* enable chudhook */
-		kdebug_chudhook = fn;
-		kdbg_set_flags(SLOW_CHUD, KDEBUG_ENABLE_CHUD, TRUE);
+	int wait_result = THREAD_AWAKENED;
+	uint64_t abstime = 0;
+
+	if (timeout_ms != 0) {
+		uint64_t ns = timeout_ms * NSEC_PER_MSEC;
+		nanoseconds_to_absolutetime(ns,  &abstime);
+		clock_absolutetime_interval_to_deadline(abstime, &abstime);
 	}
-	else {
-		/* disable chudhook */
-		kdbg_set_flags(SLOW_CHUD, KDEBUG_ENABLE_CHUD, FALSE);
-		kdebug_chudhook = 0;
+
+	boolean_t s = ml_set_interrupts_enabled(FALSE);
+	if (!s) {
+		panic("kdbg_wait() called with interrupts disabled");
+	}
+	lck_spin_lock(kdw_spin_lock);
+
+	if (!locked_wait) {
+		/* drop the mutex to allow others to access trace */
+		lck_mtx_unlock(ktrace_lock);
+	}
+
+	while (wait_result == THREAD_AWAKENED &&
+	       kd_ctrl_page.kds_inuse_count < n_storage_threshold)
+	{
+		kds_waiter = 1;
+
+		if (abstime) {
+			wait_result = lck_spin_sleep_deadline(kdw_spin_lock, 0, &kds_waiter, THREAD_ABORTSAFE, abstime);
+		} else {
+			wait_result = lck_spin_sleep(kdw_spin_lock, 0, &kds_waiter, THREAD_ABORTSAFE);
+		}
+
+		kds_waiter = 0;
+	}
+
+	/* check the count under the spinlock */
+	boolean_t threshold_exceeded = (kd_ctrl_page.kds_inuse_count >= n_storage_threshold);
+
+	lck_spin_unlock(kdw_spin_lock);
+	ml_set_interrupts_enabled(s);
+
+	if (!locked_wait) {
+		/* pick the mutex back up again */
+		lck_mtx_lock(ktrace_lock);
+	}
+
+	/* write out whether we've exceeded the threshold */
+	return threshold_exceeded;
+}
+
+/*
+ * Wakeup a thread waiting using `kdbg_wait` if there are at least
+ * `n_storage_threshold` storage units in use.
+ */
+static void
+kdbg_wakeup(void)
+{
+	boolean_t need_kds_wakeup = FALSE;
+
+	/*
+	 * Try to take the lock here to synchronize with the waiter entering
+	 * the blocked state.  Use the try mode to prevent deadlocks caused by
+	 * re-entering this routine due to various trace points triggered in the
+	 * lck_spin_sleep_xxxx routines used to actually enter one of our 2 wait
+	 * conditions.  No problem if we fail, there will be lots of additional
+	 * events coming in that will eventually succeed in grabbing this lock.
+	 */
+	boolean_t s = ml_set_interrupts_enabled(FALSE);
+
+	if (lck_spin_try_lock(kdw_spin_lock)) {
+		if (kds_waiter &&
+		    (kd_ctrl_page.kds_inuse_count >= n_storage_threshold))
+		{
+			kds_waiter = 0;
+			need_kds_wakeup = TRUE;
+		}
+		lck_spin_unlock(kdw_spin_lock);
+	}
+
+	ml_set_interrupts_enabled(s);
+
+	if (need_kds_wakeup == TRUE) {
+		wakeup(&kds_waiter);
 	}
 }
 
-	
 int
 kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 {
@@ -2943,8 +3169,7 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 	unsigned int value = 0;
 	kd_regtype kd_Reg;
 	kbufinfo_t kd_bufinfo;
-	pid_t curpid;
-	proc_t p, curproc;
+	proc_t p;
 
 	if (name[0] == KERN_KDGETENTROPY ||
 		name[0] == KERN_KDWRITETR ||
@@ -2954,49 +3179,68 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 		name[0] == KERN_KDEFLAGS ||
 		name[0] == KERN_KDDFLAGS ||
 		name[0] == KERN_KDENABLE ||
-		name[0] == KERN_KDENABLE_BG_TRACE ||
-		name[0] == KERN_KDSETBUF) {
-		
-		if ( namelen < 2 )
-			return(EINVAL);
+		name[0] == KERN_KDSETBUF)
+	{
+		if (namelen < 2) {
+			return EINVAL;
+		}
 		value = name[1];
 	}
-	
+
 	kdbg_lock_init();
+	assert(kd_ctrl_page.kdebug_flags & KDBG_LOCKINIT);
 
-	if ( !(kd_ctrl_page.kdebug_flags & KDBG_LOCKINIT))
-		return(ENOSPC);
+	lck_mtx_lock(ktrace_lock);
 
-	lck_mtx_lock(kd_trace_mtx_sysctl);
+	/*
+	 * Some requests only require "read" access to kdebug trace.  Regardless,
+	 * tell ktrace that a configuration or read is occurring (and see if it's
+	 * allowed).
+	 */
+	if (name[0] != KERN_KDGETBUF &&
+	    name[0] != KERN_KDGETREG &&
+	    name[0] != KERN_KDREADCURTHRMAP &&
+	    name[0] != KERN_KDGETENTROPY)
+	{
+		if ((ret = ktrace_configure(KTRACE_KDEBUG))) {
+			goto out;
+		}
+	} else {
+		if ((ret = ktrace_read_check())) {
+			goto out;
+		}
+	}
 
 	switch(name[0]) {
 		case KERN_KDGETBUF:
-			/*
-			 * Does not alter the global_state_pid
-			 * This is a passive request.
-			 */
 			if (size < sizeof(kd_bufinfo.nkdbufs)) {
 				/*
 				 * There is not enough room to return even
 				 * the first element of the info structure.
 				 */
 				ret = EINVAL;
-				goto out;
+				break;
 			}
+
+			memset(&kd_bufinfo, 0, sizeof(kd_bufinfo));
+
 			kd_bufinfo.nkdbufs = nkdbufs;
 			kd_bufinfo.nkdthreads = kd_mapcount;
-			
+
 			if ( (kd_ctrl_page.kdebug_slowcheck & SLOW_NOLOG) )
 				kd_bufinfo.nolog = 1;
 			else
 				kd_bufinfo.nolog = 0;
-			
+
 			kd_bufinfo.flags = kd_ctrl_page.kdebug_flags;
 #if defined(__LP64__)
 			kd_bufinfo.flags |= KDBG_LP64;
 #endif
-			kd_bufinfo.bufid = global_state_pid;
-			
+			{
+				int pid = ktrace_get_owning_pid();
+				kd_bufinfo.bufid = (pid == 0 ? -1 : pid);
+			}
+
 			if (size >= sizeof(kd_bufinfo)) {
 				/*
 				 * Provide all the info we have
@@ -3011,103 +3255,31 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 				if (copyout(&kd_bufinfo, where, size))
 					ret = EINVAL;
 			}
-			goto out;
+			break;
+
 		case KERN_KDGETENTROPY: {
 			/* Obsolescent - just fake with a random buffer */
 			char	*buffer = (char *) kalloc(size);
 			read_frandom((void *) buffer, size);
 			ret = copyout(buffer, where, size);
 			kfree(buffer, size);
-			goto out;
+			break;
 		}
-			
-		case KERN_KDENABLE_BG_TRACE:
-			bg_nkdbufs = kdbg_set_nkdbufs(value);
-			kdlog_bg_trace = TRUE;
-			ret = kdbg_enable_bg_trace();
-			goto out;
-			
-		case KERN_KDDISABLE_BG_TRACE:
-			kdlog_bg_trace = FALSE;
-			kdbg_disable_bg_trace();
-			goto out;
 
-		case KERN_KDWAIT_BG_TRACE_RESET:
-			if (!kdlog_bg_trace){
-				ret = EINVAL;
-				goto out;
-			}
-			wait_result_t wait_result = assert_wait(&kdlog_bg_trace, THREAD_ABORTSAFE);
-			lck_mtx_unlock(kd_trace_mtx_sysctl);
-			if (wait_result == THREAD_WAITING)
-				wait_result = thread_block(THREAD_CONTINUE_NULL);
-			if (wait_result == THREAD_INTERRUPTED)
-				ret = EINTR;
-			lck_mtx_lock(kd_trace_mtx_sysctl);
-			goto out;
+		case KERN_KDREADCURTHRMAP:
+			ret = kdbg_readcurthrmap(where, sizep);
+			break;
 
-		case KERN_KDSET_BG_TYPEFILTER:
-			if (!kdlog_bg_trace || !kdlog_bg_trace_running){
-				ret = EINVAL;
-				goto out;
-			}
-
-			if (size != KDBG_TYPEFILTER_BITMAP_SIZE) {
-				ret = EINVAL;
-				goto out;
-			}
-
-			if ((kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) == 0){
-				if ((ret = kdbg_enable_typefilter()))
-					goto out;
-			}
-
-			if (copyin(where, type_filter_bitmap, KDBG_TYPEFILTER_BITMAP_SIZE)) {
-				ret = EINVAL;
-				goto out;
-			}
-			kdbg_iop_list_callback(kd_ctrl_page.kdebug_iops, KD_CALLBACK_TYPEFILTER_CHANGED, type_filter_bitmap);
-			goto out;
-	}
-	
-	if ((curproc = current_proc()) != NULL)
-		curpid = curproc->p_pid;
-	else {
-		ret = ESRCH;
-		goto out;
-	}
-	if (global_state_pid == -1)
-		global_state_pid = curpid;
-	else if (global_state_pid != curpid) {
-		if ((p = proc_find(global_state_pid)) == NULL) {
-			/*
-			 * The global pid no longer exists
-			 */
-			global_state_pid = curpid;
-		} else {
-			/*
-			 * The global pid exists, deny this request
-			 */
-			proc_rele(p);
-
-			ret = EBUSY;
-			goto out;
-		}
-	}
-
-	switch(name[0]) {
 		case KERN_KDEFLAGS:
-			kdbg_disable_bg_trace();
-
 			value &= KDBG_USERFLAGS;
 			kd_ctrl_page.kdebug_flags |= value;
 			break;
-		case KERN_KDDFLAGS:
-			kdbg_disable_bg_trace();
 
+		case KERN_KDDFLAGS:
 			value &= KDBG_USERFLAGS;
 			kd_ctrl_page.kdebug_flags &= ~value;
 			break;
+
 		case KERN_KDENABLE:
 			/*
 			 * Enable tracing mechanism.  Two types:
@@ -3130,23 +3302,26 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 			}
 			else
 			{
-				kdbg_set_tracing_enabled(FALSE, 0);
+				if (!kdebug_enable) {
+					break;
+				}
+
+				kernel_debug_disable();
 			}
 			break;
+
 		case KERN_KDSETBUF:
-			kdbg_disable_bg_trace();
-
-			nkdbufs = kdbg_set_nkdbufs(value);
+			kdbg_set_nkdbufs(value);
 			break;
-		case KERN_KDSETUP:
-			kdbg_disable_bg_trace();
 
+		case KERN_KDSETUP:
 			ret = kdbg_reinit(FALSE);
 			break;
+
 		case KERN_KDREMOVE:
-			kdbg_clear();
-			ret = kdbg_enable_bg_trace();
+			ktrace_reset(KTRACE_KDEBUG);
 			break;
+
 		case KERN_KDSETREG:
 			if(size < sizeof(kd_regtype)) {
 				ret = EINVAL;
@@ -3156,17 +3331,18 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 				ret = EINVAL;
 				break;
 			}
-			kdbg_disable_bg_trace();
 
 			ret = kdbg_setreg(&kd_Reg);
 			break;
+
 		case KERN_KDGETREG:
-			kdbg_disable_bg_trace();
 			ret = EINVAL;
 			break;
+
 		case KERN_KDREADTR:
 			ret = kdbg_read(where, sizep, NULL, NULL, RAW_VERSION1);
 			break;
+
 		case KERN_KDWRITETR:
 		case KERN_KDWRITETR_V3:
 		case KERN_KDWRITEMAP:
@@ -3179,34 +3355,7 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 			int	fd;
 
 			if (name[0] == KERN_KDWRITETR || name[0] == KERN_KDWRITETR_V3) {
-				int s;
-				int wait_result = THREAD_AWAKENED;
-				u_int64_t abstime;
-				u_int64_t ns;
-
-				if (*sizep) {
-					ns = ((u_int64_t)*sizep) * (u_int64_t)(1000 * 1000);
-					nanoseconds_to_absolutetime(ns,  &abstime );
-					clock_absolutetime_interval_to_deadline( abstime, &abstime );
-				} else
-					abstime = 0;
-
-				s = ml_set_interrupts_enabled(FALSE);
-				lck_spin_lock(kdw_spin_lock);
-
-				while (wait_result == THREAD_AWAKENED && kd_ctrl_page.kds_inuse_count < n_storage_threshold) {
-
-					kds_waiter = 1;
-
-					if (abstime)
-						wait_result = lck_spin_sleep_deadline(kdw_spin_lock, 0, &kds_waiter, THREAD_ABORTSAFE, abstime);
-					else
-						wait_result = lck_spin_sleep(kdw_spin_lock, 0, &kds_waiter, THREAD_ABORTSAFE);
-					
-					kds_waiter = 0;
-				}
-				lck_spin_unlock(kdw_spin_lock);
-				ml_set_interrupts_enabled(s);
+				(void)kdbg_wait(size, TRUE);
 			}
 			p = current_proc();
 			fd = value;
@@ -3244,10 +3393,11 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 					*sizep = number;
 				} else {
 					number = kd_mapcount * sizeof(kd_threadmap);
-					if (name[0] == KERN_KDWRITEMAP_V3)
-						kdbg_readthrmap_v3(0, &number, fd);
-					else
-						kdbg_readthrmap(0, &number, vp, &context);
+					if (name[0] == KERN_KDWRITEMAP_V3) {
+						ret = kdbg_readthrmap_v3(0, number, fd);
+					} else {
+						ret = kdbg_write_thread_map(vp, &context);
+					}
 				}
 				fp->f_fglob->fg_offset = RAW_file_offset;
 				vnode_put(vp);
@@ -3257,60 +3407,9 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 			break;
 		}
 		case KERN_KDBUFWAIT:
-		{
-			/* WRITETR lite -- just block until there's data */
-			int s;
-			int wait_result = THREAD_AWAKENED;
-			u_int64_t abstime;
-			u_int64_t ns;
-			size_t	number = 0;
-
-			kdbg_disable_bg_trace();
-
-
-			if (*sizep) {
-				ns = ((u_int64_t)*sizep) * (u_int64_t)(1000 * 1000);
-				nanoseconds_to_absolutetime(ns,  &abstime );
-				clock_absolutetime_interval_to_deadline( abstime, &abstime );
-			} else
-				abstime = 0;
-
-			s = ml_set_interrupts_enabled(FALSE);
-			if( !s )
-				panic("trying to wait with interrupts off");
-			lck_spin_lock(kdw_spin_lock);
-
-			/* drop the mutex so don't exclude others from
-			 * accessing trace
-			 */
-			lck_mtx_unlock(kd_trace_mtx_sysctl);
-
-			while (wait_result == THREAD_AWAKENED &&
-				kd_ctrl_page.kds_inuse_count < n_storage_threshold) {
-
-				kds_waiter = 1;
-
-				if (abstime)
-					wait_result = lck_spin_sleep_deadline(kdw_spin_lock, 0, &kds_waiter, THREAD_ABORTSAFE, abstime);
-				else
-					wait_result = lck_spin_sleep(kdw_spin_lock, 0, &kds_waiter, THREAD_ABORTSAFE);
-				
-				kds_waiter = 0;
-			}
-
-			/* check the count under the spinlock */
-			number = (kd_ctrl_page.kds_inuse_count >= n_storage_threshold);
-
-			lck_spin_unlock(kdw_spin_lock);
-			ml_set_interrupts_enabled(s);
-
-			/* pick the mutex back up again */
-			lck_mtx_lock(kd_trace_mtx_sysctl);
-
-			/* write out whether we've exceeded the threshold */
-			*sizep = number;
+			*sizep = kdbg_wait(size, FALSE);
 			break;
-		}
+
 		case KERN_KDPIDTR:
 			if (size < sizeof(kd_regtype)) {
 				ret = EINVAL;
@@ -3320,10 +3419,10 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 				ret = EINVAL;
 				break;
 			}
-			kdbg_disable_bg_trace();
 
 			ret = kdbg_setpid(&kd_Reg);
 			break;
+
 		case KERN_KDPIDEX:
 			if (size < sizeof(kd_regtype)) {
 				ret = EINVAL;
@@ -3333,56 +3432,33 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 				ret = EINVAL;
 				break;
 			}
-			kdbg_disable_bg_trace();
 
 			ret = kdbg_setpidex(&kd_Reg);
 			break;
+
 		case KERN_KDCPUMAP:
 			ret = kdbg_readcpumap(where, sizep);
 			break;
+
 		case KERN_KDTHRMAP:
-			ret = kdbg_readthrmap(where, sizep, NULL, NULL);
+			ret = kdbg_copyout_thread_map(where, sizep);
 			break;
-		case KERN_KDREADCURTHRMAP:
-			ret = kdbg_readcurthrmap(where, sizep);
+
+		case KERN_KDSET_TYPEFILTER: {
+			ret = kdbg_copyin_typefilter(where, size);
 			break;
-		case KERN_KDSETRTCDEC:
-			if (size < sizeof(kd_regtype)) {
-				ret = EINVAL;
-				break;
-			}
-			if (copyin(where, &kd_Reg, sizeof(kd_regtype))) {
-				ret = EINVAL;
-				break;
-			}
-			kdbg_disable_bg_trace();
+		}
 
-			ret = kdbg_setrtcdec(&kd_Reg);
+		case KERN_KDTEST:
+			ret = kdbg_test();
 			break;
-		case KERN_KDSET_TYPEFILTER:
-			kdbg_disable_bg_trace();
 
-			if (size != KDBG_TYPEFILTER_BITMAP_SIZE) {
-				ret = EINVAL;
-				break;
-			}
-
-			if ((kd_ctrl_page.kdebug_flags & KDBG_TYPEFILTER_CHECK) == 0){
-				if ((ret = kdbg_enable_typefilter()))
-					break;
-			}
-
-			if (copyin(where, type_filter_bitmap, KDBG_TYPEFILTER_BITMAP_SIZE)) {
-				ret = EINVAL;
-				break;
-			}
-			kdbg_iop_list_callback(kd_ctrl_page.kdebug_iops, KD_CALLBACK_TYPEFILTER_CHANGED, type_filter_bitmap);
-			break;
 		default:
 			ret = EINVAL;
+			break;
 	}
 out:
-	lck_mtx_unlock(kd_trace_mtx_sysctl);
+	lck_mtx_unlock(ktrace_lock);
 
 	return(ret);
 }
@@ -3399,7 +3475,7 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 {
 	unsigned int count;
 	unsigned int cpu, min_cpu;
-	uint64_t  mintime, t, barrier = 0;
+	uint64_t barrier_min = 0, barrier_max = 0, t, earliest_time;
 	int error = 0;
 	kd_buf *tempbuf;
 	uint32_t rcursor;
@@ -3414,64 +3490,99 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 	uint32_t old_kdebug_slowcheck;
 	boolean_t lostevents = FALSE;
 	boolean_t out_of_events = FALSE;
+	boolean_t wrapped = FALSE;
 
-        assert(number);
+	assert(number);
 	count = *number/sizeof(kd_buf);
 	*number = 0;
 
 	if (count == 0 || !(kd_ctrl_page.kdebug_flags & KDBG_BUFINIT) || kdcopybuf == 0)
 		return EINVAL;
 
+	thread_set_eager_preempt(current_thread());
+
 	memset(&lostevent, 0, sizeof(lostevent));
 	lostevent.debugid = TRACE_LOST_EVENTS;
 
-	/* Capture timestamp. Only sort events that have occured before the timestamp.
-	 * Since the iop is being flushed here, its possible that events occur on the AP
-	 * while running live tracing. If we are disabled, no new events should 
-	 * occur on the AP.
-	*/
-	
-	if (kd_ctrl_page.enabled)
-	{
-		// timestamp is non-zero value
-		barrier = mach_absolute_time() & KDBG_TIMESTAMP_MASK;
+	/*
+	 * Capture the current time. Only sort events that have occured
+	 * before now.  Since the IOPs are being flushed here, it is possible
+	 * that events occur on the AP while running live tracing. If we are
+	 * disabled, no new events should occur on the AP.
+	 */
+	if (kd_ctrl_page.enabled) {
+		barrier_max = mach_absolute_time() & KDBG_TIMESTAMP_MASK;
 	}
-	
-	// Request each IOP to provide us with up to date entries before merging buffers together.
+
+	/*
+	 * Request each IOP to provide us with up to date entries before merging
+	 * buffers together.
+	 */
 	kdbg_iop_list_callback(kd_ctrl_page.kdebug_iops, KD_CALLBACK_SYNC_FLUSH, NULL);
 
 	/*
-	 * because we hold kd_trace_mtx_sysctl, no other control threads can 
-	 * be playing with kdebug_flags... the code that cuts new events could
-	 * be running, but it grabs kds_spin_lock if it needs to acquire a new
-	 * storage chunk which is where it examines kdebug_flags... it its adding
-	 * to the same chunk we're reading from, no problem... 
+	 * Disable wrap so storage units cannot be stolen out from underneath us
+	 * while merging events.
+	 *
+	 * Because we hold ktrace_lock, no other control threads can be playing
+	 * with kdebug_flags.  The code that emits new events could be running,
+	 * but it grabs kds_spin_lock if it needs to acquire a new storage
+	 * chunk, which is where it examines kdebug_flags.  If it is adding to
+	 * the same chunk we're reading from, check for that below.
 	 */
-
-	disable_wrap(&old_kdebug_slowcheck, &old_kdebug_flags);
+	wrapped = disable_wrap(&old_kdebug_slowcheck, &old_kdebug_flags);
 
 	if (count > nkdbufs)
 		count = nkdbufs;
 
-	if ((tempbuf_count = count) > KDCOPYBUF_COUNT)
-	        tempbuf_count = KDCOPYBUF_COUNT;
+	if ((tempbuf_count = count) > KDCOPYBUF_COUNT) {
+		tempbuf_count = KDCOPYBUF_COUNT;
+	}
+
+	/*
+	 * If the buffers have wrapped, capture the earliest time where there
+	 * are events for all CPUs and do not emit additional lost events for
+	 * oldest storage units.
+	 */
+	if (wrapped) {
+		barrier_min = kd_ctrl_page.oldest_time;
+		kd_ctrl_page.kdebug_flags &= ~KDBG_WRAPPED;
+		kd_ctrl_page.oldest_time = 0;
+
+		for (cpu = 0, kdbp = &kdbip[0]; cpu < kd_ctrl_page.kdebug_cpus; cpu++, kdbp++) {
+			if ((kdsp = kdbp->kd_list_head).raw == KDS_PTR_NULL) {
+				continue;
+			}
+			kdsp_actual = POINTER_FROM_KDS_PTR(kdsp);
+			kdsp_actual->kds_lostevents = FALSE;
+		}
+	}
 
 	while (count) {
 		tempbuf = kdcopybuf;
 		tempbuf_number = 0;
 
-		// While space
+		if (wrapped) {
+			/* Trace a single lost events event for wrapping. */
+			kdbg_set_timestamp_and_cpu(&lostevent, barrier_min, 0);
+			*tempbuf = lostevent;
+			wrapped = FALSE;
+			goto nextevent;
+		}
+
+		/* While space left in merged events scratch buffer. */
 		while (tempbuf_count) {
-			mintime = 0xffffffffffffffffULL;
+			earliest_time = UINT64_MAX;
 			min_kdbp = NULL;
 			min_cpu = 0;
 
-			// Check all CPUs
+			/* Check each CPU's buffers. */
 			for (cpu = 0, kdbp = &kdbip[0]; cpu < kd_ctrl_page.kdebug_cpus; cpu++, kdbp++) {
-
-				// Find one with raw data
-				if ((kdsp = kdbp->kd_list_head).raw == KDS_PTR_NULL)
-				        continue;
+				/* Skip CPUs without data. */
+				if ((kdsp = kdbp->kd_list_head).raw == KDS_PTR_NULL) {
+next_cpu:
+					continue;
+				}
 				/* Debugging aid: maintain a copy of the "kdsp"
 				 * index.
 				 */
@@ -3479,29 +3590,50 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 
 				kdsp_shadow = kdsp;
 
-				// Get from cpu data to buffer header to buffer
+				/* From CPU data to buffer header to buffer. */
 				kdsp_actual = POINTER_FROM_KDS_PTR(kdsp);
 
 				volatile struct kd_storage *kdsp_actual_shadow;
 
 				kdsp_actual_shadow = kdsp_actual;
 
-				// See if there are actual data left in this buffer
+				/* Skip buffer if there are no events left. */
 				rcursor = kdsp_actual->kds_readlast;
 
-				if (rcursor == kdsp_actual->kds_bufindx)
+				if (rcursor == kdsp_actual->kds_bufindx) {
 					continue;
+				}
 
 				t = kdbg_get_timestamp(&kdsp_actual->kds_records[rcursor]);
 
-				if ((t > barrier) && (barrier > 0)) {
-					/* 
-					 * Need to wait to flush iop again before we 
-					 * sort any more data from the buffers
-					*/
+				/* Ignore events that have aged out due to wrapping. */
+				while (t < barrier_min) {
+					rcursor = ++kdsp_actual->kds_readlast;
+
+					if (rcursor >= EVENTS_PER_STORAGE_UNIT) {
+						release_storage_unit(cpu, kdsp.raw);
+
+						if ((kdsp = kdbp->kd_list_head).raw == KDS_PTR_NULL) {
+							goto next_cpu;
+						}
+						kdsp_shadow = kdsp;
+						kdsp_actual = POINTER_FROM_KDS_PTR(kdsp);
+						kdsp_actual_shadow = kdsp_actual;
+						rcursor = kdsp_actual->kds_readlast;
+					}
+
+					t = kdbg_get_timestamp(&kdsp_actual->kds_records[rcursor]);
+				}
+
+				if ((t > barrier_max) && (barrier_max > 0)) {
+					/*
+					 * Need to flush IOPs again before we
+					 * can sort any more data from the
+					 * buffers.
+					 */
 					out_of_events = TRUE;
 					break;
-				}	
+				}
 				if (t < kdsp_actual->kds_timestamp) {
 					/*
 					 * indicates we've not yet completed filling
@@ -3517,8 +3649,8 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 					out_of_events = TRUE;
 					break;
 				}
-				if (t < mintime) {
-				        mintime = t;
+				if (t < earliest_time) {
+					earliest_time = t;
 					min_kdbp = kdbp;
 					min_cpu = cpu;
 				}
@@ -3531,21 +3663,10 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 				break;
 			}
 
-			// Get data
 			kdsp = min_kdbp->kd_list_head;
 			kdsp_actual = POINTER_FROM_KDS_PTR(kdsp);
 
-			if (kdsp_actual->kds_lostevents == TRUE) {
-				kdbg_set_timestamp_and_cpu(&lostevent, kdsp_actual->kds_records[kdsp_actual->kds_readlast].timestamp, min_cpu);
-				*tempbuf = lostevent;
-				
-				kdsp_actual->kds_lostevents = FALSE;
-				lostevents = TRUE;
-
-				goto nextevent;
-			}
-
-			// Copy into buffer
+			/* Copy earliest event into merged events scratch buffer. */
 			*tempbuf = kdsp_actual->kds_records[kdsp_actual->kds_readlast++];
 
 			if (kdsp_actual->kds_readlast == EVENTS_PER_STORAGE_UNIT)
@@ -3553,15 +3674,15 @@ kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx, uin
 
 			/*
 			 * Watch for out of order timestamps
-			 */	
-			if (mintime < min_kdbp->kd_prev_timebase) {
+			 */
+			if (earliest_time < min_kdbp->kd_prev_timebase) {
 				/*
 				 * if so, use the previous timestamp + 1 cycle
 				 */
 				min_kdbp->kd_prev_timebase++;
 				kdbg_set_timestamp_and_cpu(tempbuf, min_kdbp->kd_prev_timebase, kdbg_get_cpu(tempbuf));
 			} else
-				min_kdbp->kd_prev_timebase = mintime;
+				min_kdbp->kd_prev_timebase = earliest_time;
 nextevent:
 			tempbuf_count--;
 			tempbuf_number++;
@@ -3619,326 +3740,256 @@ check_error:
 	if ( !(old_kdebug_flags & KDBG_NOWRAP)) {
 		enable_wrap(old_kdebug_slowcheck, lostevents);
 	}
+	thread_clear_eager_preempt(current_thread());
 	return (error);
 }
 
-
-unsigned char *getProcName(struct proc *proc);
-unsigned char *getProcName(struct proc *proc) {
-
-	return (unsigned char *) &proc->p_comm;	/* Return pointer to the proc name */
-
-}
-
 static int
-stackshot_kern_return_to_bsd_error(kern_return_t kr)
+kdbg_test(void)
 {
-	switch (kr) {
-		case KERN_SUCCESS:
-			return 0;
-		case KERN_RESOURCE_SHORTAGE:
-			return ENOMEM;
-		case KERN_NO_SPACE:
-			return ENOSPC;
-		case KERN_NO_ACCESS:
-			return EPERM;
-		case KERN_MEMORY_PRESENT:
-			return EEXIST;
-		case KERN_NOT_SUPPORTED:
-			return ENOTSUP;
-		case KERN_NOT_IN_SET:
-			return ENOENT;
-		default:
-			return EINVAL;
-	}
-}
+#define KDEBUG_TEST_CODE(code) BSDDBG_CODE(DBG_BSD_KDEBUG_TEST, (code))
+	int code = 0;
 
+	KDBG(KDEBUG_TEST_CODE(code)); code++;
+	KDBG(KDEBUG_TEST_CODE(code), 1); code++;
+	KDBG(KDEBUG_TEST_CODE(code), 1, 2); code++;
+	KDBG(KDEBUG_TEST_CODE(code), 1, 2, 3); code++;
+	KDBG(KDEBUG_TEST_CODE(code), 1, 2, 3, 4); code++;
 
-/*
- * DEPRECATION WARNING: THIS SYSCALL IS BEING REPLACED WITH SYS_stack_snapshot_with_config and SYS_microstackshot.
- *
- * stack_snapshot:   Obtains a coherent set of stack traces for all threads
- *		     on the system, tracing both kernel and user stacks
- *		     where available. Uses machine specific trace routines
- *		     for ppc, ppc64 and x86.
- * Inputs:	     uap->pid - process id of process to be traced, or -1
- *		     for the entire system
- *		     uap->tracebuf - address of the user space destination
- *		     buffer 
- *		     uap->tracebuf_size - size of the user space trace buffer
- *		     uap->options - various options, including the maximum
- *		     number of frames to trace.
- * Outputs:	     EPERM if the caller is not privileged
- *		     EINVAL if the supplied trace buffer isn't sanely sized
- *		     ENOMEM if we don't have enough memory to satisfy the
- *		     request
- *		     ENOENT if the target pid isn't found
- *		     ENOSPC if the supplied buffer is insufficient
- *		     *retval contains the number of bytes traced, if successful
- *		     and -1 otherwise. If the request failed due to
- *		     tracebuffer exhaustion, we copyout as much as possible.
- */
-int
-stack_snapshot(struct proc *p, register struct stack_snapshot_args *uap, int32_t *retval) {
-	int error = 0;
-	kern_return_t kr;
+	KDBG_RELEASE(KDEBUG_TEST_CODE(code)); code++;
+	KDBG_RELEASE(KDEBUG_TEST_CODE(code), 1); code++;
+	KDBG_RELEASE(KDEBUG_TEST_CODE(code), 1, 2); code++;
+	KDBG_RELEASE(KDEBUG_TEST_CODE(code), 1, 2, 3); code++;
+	KDBG_RELEASE(KDEBUG_TEST_CODE(code), 1, 2, 3, 4); code++;
 
-	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
-                return(error);
+	KDBG_FILTERED(KDEBUG_TEST_CODE(code)); code++;
+	KDBG_FILTERED(KDEBUG_TEST_CODE(code), 1); code++;
+	KDBG_FILTERED(KDEBUG_TEST_CODE(code), 1, 2); code++;
+	KDBG_FILTERED(KDEBUG_TEST_CODE(code), 1, 2, 3); code++;
+	KDBG_FILTERED(KDEBUG_TEST_CODE(code), 1, 2, 3, 4); code++;
 
-	kr = stack_snapshot2(uap->pid, uap->tracebuf, uap->tracebuf_size, uap->flags, retval);
-	return stackshot_kern_return_to_bsd_error(kr);
-}
+	KDBG_DEBUG(KDEBUG_TEST_CODE(code)); code++;
+	KDBG_DEBUG(KDEBUG_TEST_CODE(code), 1); code++;
+	KDBG_DEBUG(KDEBUG_TEST_CODE(code), 1, 2); code++;
+	KDBG_DEBUG(KDEBUG_TEST_CODE(code), 1, 2, 3); code++;
+	KDBG_DEBUG(KDEBUG_TEST_CODE(code), 1, 2, 3, 4); code++;
 
-/*
- * stack_snapshot_with_config:	Obtains a coherent set of stack traces for specified threads on the sysem,
- *				tracing both kernel and user stacks where available. Allocates a buffer from the
- *				kernel and maps the buffer into the calling task's address space.
- *
- * Inputs:      		uap->stackshot_config_version - version of the stackshot config that is being passed
- *				uap->stackshot_config - pointer to the stackshot config
- *				uap->stackshot_config_size- size of the stackshot config being passed
- * Outputs:			EINVAL if there is a problem with the arguments
- *				EFAULT if we failed to copy in the arguments succesfully
- *				EPERM if the caller is not privileged
- *				ENOTSUP if the caller is passing a version of arguments that is not supported by the kernel
- *				(indicates libsyscall:kernel mismatch) or if the caller is requesting unsupported flags
- *				ENOENT if the caller is requesting an existing buffer that doesn't exist or if the
- *				requested PID isn't found
- *				ENOMEM if the kernel is unable to allocate enough memory to serve the request
- *				ENOSPC if there isn't enough space in the caller's address space to remap the buffer
- *				ESRCH if the target PID isn't found
- *				returns KERN_SUCCESS on success	
- */
-int
-stack_snapshot_with_config(struct proc *p, struct stack_snapshot_with_config_args *uap, __unused int *retval)
-{
-	int error = 0;
-	kern_return_t kr;
-
-	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
-                return(error);
-
-	if((void*)uap->stackshot_config == NULL) {
-		return EINVAL;
-	}
-
-	switch (uap->stackshot_config_version) {
-		case STACKSHOT_CONFIG_TYPE:
-			if (uap->stackshot_config_size != sizeof(stackshot_config_t)) {
-				return EINVAL;
-			}
-			stackshot_config_t config;
-			error = copyin(uap->stackshot_config, &config, sizeof(stackshot_config_t));
-			if (error != KERN_SUCCESS)
-			{
-				return EFAULT;
-			}
-			kr = kern_stack_snapshot_internal(uap->stackshot_config_version, &config, sizeof(stackshot_config_t), TRUE);
-			return stackshot_kern_return_to_bsd_error(kr);
-		default:
-			return ENOTSUP;
-	}
-}
-
-#if CONFIG_TELEMETRY
-/*
- * microstackshot:	Catch all system call for microstackshot related operations, including
- *			enabling/disabling both global and windowed microstackshots as well
- *			as retrieving windowed or global stackshots and the boot profile.
- * Inputs:   		uap->tracebuf - address of the user space destination
- *			buffer
- *			uap->tracebuf_size - size of the user space trace buffer
- *			uap->flags - various flags
- * Outputs:		EPERM if the caller is not privileged
- *			EINVAL if the supplied mss_args is NULL, mss_args.tracebuf is NULL or mss_args.tracebuf_size is not sane
- *			ENOMEM if we don't have enough memory to satisfy the request
- *			*retval contains the number of bytes traced, if successful
- *			and -1 otherwise.
- */
-int
-microstackshot(struct proc *p, struct microstackshot_args *uap, int32_t *retval)
-{
-	int error = 0;
-	kern_return_t kr;
-
-	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
-                return(error);
-
-	kr = stack_microstackshot(uap->tracebuf, uap->tracebuf_size, uap->flags, retval);
-	return stackshot_kern_return_to_bsd_error(kr);
-}
-#endif /* CONFIG_TELEMETRY */
-
-/*
- * kern_stack_snapshot_with_reason:	Obtains a coherent set of stack traces for specified threads on the sysem,
- *					tracing both kernel and user stacks where available. Allocates a buffer from the
- *					kernel and stores the address of this buffer.
- *
- * Inputs:      			reason - the reason for triggering a stackshot (unused at the moment, but in the
- *						future will be saved in the stackshot)
- * Outputs:				EINVAL/ENOTSUP if there is a problem with the arguments
- *					EPERM if the caller doesn't pass at least one KERNEL stackshot flag
- *					ENOMEM if the kernel is unable to allocate enough memory to serve the request
- *					ESRCH if the target PID isn't found
- *					returns KERN_SUCCESS on success
- */
-int
-kern_stack_snapshot_with_reason(__unused char *reason)
-{
-	stackshot_config_t config;
-	kern_return_t kr;
-
-	config.sc_pid = -1;
-	config.sc_flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_GET_GLOBAL_MEM_STATS | STACKSHOT_SAVE_IN_KERNEL_BUFFER |
-				STACKSHOT_KCDATA_FORMAT);
-	config.sc_since_timestamp = 0;
-	config.sc_out_buffer_addr = 0;
-	config.sc_out_size_addr = 0;
-
-	kr = kern_stack_snapshot_internal(STACKSHOT_CONFIG_TYPE, &config, sizeof(stackshot_config_t), FALSE);
-	return stackshot_kern_return_to_bsd_error(kr);
-}
-
-/*
- * stack_snapshot_from_kernel:	Stackshot function for kernel consumers who have their own buffer.
- *
- * Inputs:			pid - the PID to be traced or -1 for the whole system
- *				buf - a pointer to the buffer where the stackshot should be written
- *				size - the size of the buffer
- *				flags - flags to be passed to the stackshot
- *				*bytes_traced - a pointer to be filled with the length of the stackshot
- * Outputs:			-1 if there is a problem with the arguments
- *				the error returned by the stackshot code otherwise
- */
-int
-stack_snapshot_from_kernel(pid_t pid, void *buf, uint32_t size, uint32_t flags, unsigned *bytes_traced)
-{
-	kern_return_t kr;
-
-	kr = stack_snapshot_from_kernel_internal(pid, buf, size, flags, bytes_traced);
-	if (kr == KERN_FAILURE) {
-		return -1;
-	}
-
-	return kr;
+	return 0;
+#undef KDEBUG_TEST_CODE
 }
 
 void
-start_kern_tracing(unsigned int new_nkdbufs, boolean_t need_map)
+kdebug_boot_trace(unsigned int n_events, char *filter_desc)
 {
+	assert(filter_desc != NULL);
 
-	if (!new_nkdbufs)
+#if (defined(__i386__) || defined(__x86_64__))
+	/* only trace MACH events when outputting kdebug to serial */
+	if (kdebug_serial) {
+		n_events = 1;
+		if (filter_desc[0] == '\0') {
+			filter_desc[0] = 'C';
+			filter_desc[1] = '1';
+			filter_desc[2] = '\0';
+		}
+	}
+#endif
+
+	if (log_leaks && n_events == 0) {
+		n_events = 200000;
+	}
+
+	kdebug_trace_start(n_events, filter_desc, FALSE);
+}
+
+static void
+kdbg_set_typefilter_string(const char *filter_desc)
+{
+	char *end = NULL;
+
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+
+	assert(filter_desc != NULL);
+
+	typefilter_reject_all(kdbg_typefilter);
+	typefilter_allow_class(kdbg_typefilter, DBG_TRACE);
+
+	/* if the filter description starts with a number, assume it's a csc */
+	if (filter_desc[0] >= '0' && filter_desc[0] <= '9'){
+		unsigned long csc = strtoul(filter_desc, NULL, 0);
+		if (filter_desc != end && csc <= KDBG_CSC_MAX) {
+			typefilter_allow_csc(kdbg_typefilter, csc);
+		}
 		return;
-	nkdbufs = kdbg_set_nkdbufs(new_nkdbufs);
+	}
+
+	while (filter_desc[0] != '\0') {
+		unsigned long allow_value;
+
+		char filter_type = filter_desc[0];
+		if (filter_type != 'C' && filter_type != 'S') {
+			return;
+		}
+		filter_desc++;
+
+		allow_value = strtoul(filter_desc, &end, 0);
+		if (filter_desc == end) {
+			/* cannot parse as integer */
+			return;
+		}
+
+		switch (filter_type) {
+			case 'C':
+				if (allow_value <= KDBG_CLASS_MAX) {
+					typefilter_allow_class(kdbg_typefilter, allow_value);
+				} else {
+					/* illegal class */
+					return;
+				}
+				break;
+			case 'S':
+				if (allow_value <= KDBG_CSC_MAX) {
+					typefilter_allow_csc(kdbg_typefilter, allow_value);
+				} else {
+					/* illegal class subclass */
+					return;
+				}
+				break;
+			default:
+				return;
+		}
+
+		/* advance to next filter entry */
+		filter_desc = end;
+		if (filter_desc[0] == ',') {
+			filter_desc++;
+		}
+	}
+}
+
+/*
+ * This function is meant to be called from the bootstrap thread or coming out
+ * of acpi_idle_kernel.
+ */
+void
+kdebug_trace_start(unsigned int n_events, const char *filter_desc,
+                   boolean_t need_map)
+{
+	uint32_t old1, old2;
+
+	if (!n_events) {
+		return;
+	}
+
+	lck_mtx_lock(ktrace_lock);
+
 	kdbg_lock_init();
 
-	kernel_debug_string_simple("start_kern_tracing");
+	ktrace_kernel_configure(KTRACE_KDEBUG);
 
-	if (0 == kdbg_reinit(TRUE)) {
+	kdbg_set_nkdbufs(n_events);
 
-		if (need_map == TRUE) {
-			uint32_t old1, old2;
+	kernel_debug_string_early("start_kern_tracing");
 
-			kdbg_thrmap_init();
-
-			disable_wrap(&old1, &old2);
-		}
-
-		/* Hold off interrupts until the early traces are cut */
-		boolean_t	s = ml_set_interrupts_enabled(FALSE);
-
-		kdbg_set_tracing_enabled(
-			TRUE,
-		 	kdebug_serial ?
-				(KDEBUG_ENABLE_TRACE | KDEBUG_ENABLE_SERIAL) :
-				 KDEBUG_ENABLE_TRACE);
-
-		/*
-		 * Transfer all very early events from the static buffer
-		 * into the real buffers.
-		 */
-		kernel_debug_early_end();
-	
-		ml_set_interrupts_enabled(s);
-
-		printf("kernel tracing started\n");
-#if KDEBUG_MOJO_TRACE
-		if (kdebug_serial) {
-			printf("serial output enabled with %lu named events\n",
-			sizeof(kd_events)/sizeof(kd_event_t));
-		}
-#endif
-	} else {
+	if (kdbg_reinit(TRUE)) {
 		printf("error from kdbg_reinit, kernel tracing not started\n");
+		goto out;
 	}
-}
 
-void
-start_kern_tracing_with_typefilter(unsigned int new_nkdbufs,
-		                   boolean_t need_map,
-		                   unsigned int typefilter)
-{
-	/* startup tracing */
-	start_kern_tracing(new_nkdbufs, need_map);
+	/*
+	 * Wrapping is disabled because boot and wake tracing is interested in
+	 * the earliest events, at the expense of later ones.
+	 */
+	(void)disable_wrap(&old1, &old2);
 
-	/* check that tracing was actually enabled */
-	if (!(kdebug_enable & KDEBUG_ENABLE_TRACE))
-		return;
+	if (filter_desc && filter_desc[0] != '\0') {
+		if (kdbg_initialize_typefilter(NULL) == KERN_SUCCESS) {
+			kdbg_set_typefilter_string(filter_desc);
+			kdbg_enable_typefilter();
+		}
+	}
 
-	/* setup the typefiltering */
-	if (0 == kdbg_enable_typefilter())
-		setbit(type_filter_bitmap,
-		       typefilter & (KDBG_CSC_MASK >> KDBG_CSC_OFFSET));
+	/*
+	 * Hold off interrupts between getting a thread map and enabling trace
+	 * and until the early traces are recorded.
+	 */
+	boolean_t s = ml_set_interrupts_enabled(FALSE);
+
+	if (need_map == TRUE) {
+		kdbg_thrmap_init();
+	}
+
+	kdbg_set_tracing_enabled(TRUE, kdebug_serial ?
+	                         (KDEBUG_ENABLE_TRACE | KDEBUG_ENABLE_SERIAL) :
+	                         KDEBUG_ENABLE_TRACE);
+
+	/*
+	 * Transfer all very early events from the static buffer into the real
+	 * buffers.
+	 */
+	kernel_debug_early_end();
+
+	ml_set_interrupts_enabled(s);
+
+	printf("kernel tracing started with %u events\n", n_events);
+
+#if KDEBUG_MOJO_TRACE
+	if (kdebug_serial) {
+		printf("serial output enabled with %lu named events\n",
+		sizeof(kd_events)/sizeof(kd_event_t));
+	}
+#endif
+
+out:
+	lck_mtx_unlock(ktrace_lock);
 }
 
 void
 kdbg_dump_trace_to_file(const char *filename)
 {
-	vfs_context_t	ctx;
-	vnode_t		vp;
-	int		error;
-	size_t		number;
+	vfs_context_t ctx;
+	vnode_t vp;
+	size_t write_size;
 
+	lck_mtx_lock(ktrace_lock);
 
-	if ( !(kdebug_enable & KDEBUG_ENABLE_TRACE))
-		return;
-
-        if (global_state_pid != -1) {
-		if ((proc_find(global_state_pid)) != NULL) {
-			/*
-			 * The global pid exists, we're running
-			 * due to fs_usage, latency, etc...
-			 * don't cut the panic/shutdown trace file
-			 * Disable tracing from this point to avoid
-			 * perturbing state.
-			 */
-			kdebug_enable = 0;
-			kd_ctrl_page.enabled = 0;
-			commpage_update_kdebug_enable();
-			return;
-		}
+	if (!(kdebug_enable & KDEBUG_ENABLE_TRACE)) {
+		goto out;
 	}
+
+	if (ktrace_get_owning_pid() != 0) {
+		/*
+		 * Another process owns ktrace and is still active, disable tracing to
+		 * capture whatever was being recorded.
+		 */
+		kdebug_enable = 0;
+		kd_ctrl_page.enabled = 0;
+		commpage_update_kdebug_state();
+		goto out;
+	}
+
 	KERNEL_DEBUG_CONSTANT(TRACE_PANIC | DBG_FUNC_NONE, 0, 0, 0, 0, 0);
 
 	kdebug_enable = 0;
 	kd_ctrl_page.enabled = 0;
-	commpage_update_kdebug_enable();
+	commpage_update_kdebug_state();
 
 	ctx = vfs_context_kernel();
 
-	if ((error = vnode_open(filename, (O_CREAT | FWRITE | O_NOFOLLOW), 0600, 0, &vp, ctx)))
-		return;
+	if (vnode_open(filename, (O_CREAT | FWRITE | O_NOFOLLOW), 0600, 0, &vp, ctx)) {
+		goto out;
+	}
 
-	number = kd_mapcount * sizeof(kd_threadmap);
-	kdbg_readthrmap(0, &number, vp, ctx);
+	kdbg_write_thread_map(vp, ctx);
 
-	number = nkdbufs*sizeof(kd_buf);
-	kdbg_read(0, &number, vp, ctx, RAW_VERSION1);
-	
+	write_size = nkdbufs * sizeof(kd_buf);
+	kdbg_read(0, &write_size, vp, ctx, RAW_VERSION1);
+
 	vnode_close(vp, FWRITE, ctx);
-
 	sync(current_proc(), (void *)NULL, (int *)NULL);
+
+out:
+	lck_mtx_unlock(ktrace_lock);
 }
 
 /* Helper function for filling in the BSD name for an address space
@@ -4103,4 +4154,5 @@ kdebug_serial_print(
 	kprintf("%s", kprintf_line);
 	kd_last_timstamp = timestamp;
 }
+
 #endif

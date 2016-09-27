@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010, 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -462,7 +462,7 @@ type vm_page_info_t		= array[*:32] of int;
 
 type mach_vm_read_entry_t = array[512] of mach_vm_offset_t;
 type vm_read_entry_t = array[512] of vm_offset_t;
-#if VM32_SUPPORT
+#ifdef VM32_SUPPORT
 type vm32_read_entry_t = array[512] of vm32_offset_t;
 #endif
 
@@ -573,6 +573,11 @@ type kmod_args_t = ^array[] of MACH_MSG_TYPE_BYTE
 
 type io_master_t = mach_port_t;
 type UNDServerRef = mach_port_t;
+
+/* These must be kept in sync with definitions in osfmk/mach/dyld_kernel.h */
+type dyld_kernel_image_info_t = struct[40] of MACH_MSG_TYPE_BYTE;
+type dyld_kernel_image_info_array_t = ^array[] of dyld_kernel_image_info_t;
+type dyld_kernel_process_info_t = struct[64] of MACH_MSG_TYPE_BYTE;
 
 #if KERNEL_SERVER
 #ifdef	MACH_KERNEL_PRIVATE

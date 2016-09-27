@@ -78,10 +78,10 @@
 #include <sys/_types/_int32_t.h>
 #include <sys/_types/_int64_t.h>
 
-typedef	unsigned char		u_int8_t;
-typedef	unsigned short		u_int16_t;
-typedef	unsigned int		u_int32_t;
-typedef	unsigned long long	u_int64_t;
+#include <sys/_types/_u_int8_t.h>
+#include <sys/_types/_u_int16_t.h>
+#include <sys/_types/_u_int32_t.h>
+#include <sys/_types/_u_int64_t.h>
 
 #if __LP64__
 typedef int64_t			register_t;

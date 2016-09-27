@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -126,6 +126,8 @@ struct ip {
 #define	IPTOS_CE		0x01
 #define	IPTOS_ECT		0x02
 #endif
+
+#define	IPTOS_DSCP_SHIFT	2
 
 /*
  * ECN (Explicit Congestion Notification) codepoints in RFC3168

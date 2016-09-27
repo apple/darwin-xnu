@@ -143,7 +143,15 @@ ipc_task_init(
 	task->itk_self = kport;
 	task->itk_nself = nport;
 	task->itk_resume = IP_NULL; /* Lazily allocated on-demand */
-	task->itk_sself = ipc_port_make_send(kport);
+	if (task_is_a_corpse_fork(task)) {
+		/*
+		 * No sender's notification for corpse would not
+		 * work with a naked send right in kernel.
+		 */
+		task->itk_sself = IP_NULL;
+	} else {
+		task->itk_sself = ipc_port_make_send(kport);
+	}
 	task->itk_debug_control = IP_NULL;
 	task->itk_space = space;
 
@@ -152,6 +160,9 @@ ipc_task_init(
 
 		for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 			task->exc_actions[i].port = IP_NULL;
+#if CONFIG_MACF
+			mac_exc_action_label_init(task->exc_actions + i);
+#endif
 		}/* for */
 		
 		kr = host_get_host_port(host_priv_self(), &port);
@@ -186,6 +197,9 @@ ipc_task_init(
 				parent->exc_actions[i].behavior;
 		    task->exc_actions[i].privileged =
 				parent->exc_actions[i].privileged;
+#if CONFIG_MACF
+		    mac_exc_action_label_inherit(parent->exc_actions + i, task->exc_actions + i);
+#endif
 		}/* for */
 		task->itk_host =
 			ipc_port_copy_send(parent->itk_host);
@@ -320,6 +334,9 @@ ipc_task_terminate(
 		if (IP_VALID(task->exc_actions[i].port)) {
 			ipc_port_release_send(task->exc_actions[i].port);
 		}
+#if CONFIG_MACF
+		mac_exc_action_label_destroy(task->exc_actions + i);
+#endif
 	}
 
 	if (IP_VALID(task->itk_host))
@@ -392,7 +409,13 @@ ipc_task_reset(
 	task->itk_self = new_kport;
 	old_sself = task->itk_sself;
 	task->itk_sself = ipc_port_make_send(new_kport);
-	ipc_kobject_set(old_kport, IKO_NULL, IKOT_NONE);
+
+	/* Set the old kport to IKOT_NONE and update the exec token while under the port lock */
+	ip_lock(old_kport);
+	ipc_kobject_set_atomically(old_kport, IKO_NULL, IKOT_NONE);
+	task->exec_token += 1;
+	ip_unlock(old_kport);
+
 	ipc_kobject_set(new_kport, (ipc_kobject_t) task, IKOT_TASK);
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
@@ -403,6 +426,9 @@ ipc_task_reset(
 		}
 
 		if (!task->exc_actions[i].privileged) {
+#if CONFIG_MACF
+			mac_exc_action_label_reset(task->exc_actions + i);
+#endif
 			old_exc_actions[i] = task->exc_actions[i].port;
 			task->exc_actions[i].port = IP_NULL;
 		}
@@ -471,6 +497,12 @@ ipc_thread_init_exc_actions(
 
 	thread->exc_actions = kalloc(sizeof(struct exception_action) * EXC_TYPES_COUNT);
 	bzero(thread->exc_actions, sizeof(struct exception_action) * EXC_TYPES_COUNT);
+
+#if CONFIG_MACF
+	for (size_t i = 0; i < EXC_TYPES_COUNT; ++i) {
+		mac_exc_action_label_init(thread->exc_actions + i);
+	}
+#endif
 }
 
 void
@@ -478,6 +510,12 @@ ipc_thread_destroy_exc_actions(
 	thread_t	thread)
 {
 	if (thread->exc_actions != NULL) {
+#if CONFIG_MACF
+		for (size_t i = 0; i < EXC_TYPES_COUNT; ++i) {
+			mac_exc_action_label_destroy(thread->exc_actions + i);
+		}
+#endif
+
 		kfree(thread->exc_actions, 
 		      sizeof(struct exception_action) * EXC_TYPES_COUNT);
 		thread->exc_actions = NULL;
@@ -594,6 +632,9 @@ ipc_thread_reset(
 			if (thread->exc_actions[i].privileged) {
 				old_exc_actions[i] = IP_NULL;
 			} else {
+#if CONFIG_MACF
+				mac_exc_action_label_reset(thread->exc_actions + i);
+#endif
 				old_exc_actions[i] = thread->exc_actions[i].port;
 				thread->exc_actions[i].port = IP_NULL;		
 			}
@@ -633,9 +674,9 @@ ipc_thread_reset(
 
 ipc_port_t
 retrieve_task_self_fast(
-	register task_t		task)
+	task_t		task)
 {
-	register ipc_port_t port;
+	ipc_port_t port;
 
 	assert(task == current_task());
 
@@ -673,7 +714,7 @@ ipc_port_t
 retrieve_thread_self_fast(
 	thread_t		thread)
 {
-	register ipc_port_t port;
+	ipc_port_t port;
 
 	assert(thread == current_thread());
 
@@ -909,36 +950,36 @@ task_get_special_port(
 	}
 
 	switch (which) {
-	    case TASK_KERNEL_PORT:
+	case TASK_KERNEL_PORT:
 		port = ipc_port_copy_send(task->itk_sself);
 		break;
 
-	    case TASK_NAME_PORT:
+	case TASK_NAME_PORT:
 		port = ipc_port_make_send(task->itk_nself);
 		break;
 
-	    case TASK_HOST_PORT:
+	case TASK_HOST_PORT:
 		port = ipc_port_copy_send(task->itk_host);
 		break;
 
-	    case TASK_BOOTSTRAP_PORT:
+	case TASK_BOOTSTRAP_PORT:
 		port = ipc_port_copy_send(task->itk_bootstrap);
 		break;
 
-	    case TASK_SEATBELT_PORT:
+	case TASK_SEATBELT_PORT:
 		port = ipc_port_copy_send(task->itk_seatbelt);
 		break;
 
-	    case TASK_ACCESS_PORT:
+	case TASK_ACCESS_PORT:
 		port = ipc_port_copy_send(task->itk_task_access);
 		break;
 
-		case TASK_DEBUG_CONTROL_PORT:
+	case TASK_DEBUG_CONTROL_PORT:
 		port = ipc_port_copy_send(task->itk_debug_control);
 		break;
 
-	    default:
-               itk_unlock(task);
+	default:
+	    itk_unlock(task);
 		return KERN_INVALID_ARGUMENT;
 	}
 	itk_unlock(task);
@@ -976,33 +1017,32 @@ task_set_special_port(
 		return KERN_INVALID_ARGUMENT;
 
 	switch (which) {
-	    case TASK_KERNEL_PORT:
-		whichp = &task->itk_sself;
-		break;
+	case TASK_KERNEL_PORT:
+	    whichp = &task->itk_sself;
+	    break;
 
-	    case TASK_HOST_PORT:
-		whichp = &task->itk_host;
-		break;
+	case TASK_HOST_PORT:
+	    whichp = &task->itk_host;
+	    break;
 
-	    case TASK_BOOTSTRAP_PORT:
-		whichp = &task->itk_bootstrap;
-		break;
+	case TASK_BOOTSTRAP_PORT:
+	    whichp = &task->itk_bootstrap;
+	    break;
 
-	    case TASK_SEATBELT_PORT:
-		whichp = &task->itk_seatbelt;
-		break;
+	case TASK_SEATBELT_PORT:
+	    whichp = &task->itk_seatbelt;
+	    break;
 
-	    case TASK_ACCESS_PORT:
-		whichp = &task->itk_task_access;
-		break;
-		
-	    case TASK_DEBUG_CONTROL_PORT: 
-		whichp = &task->itk_debug_control;
-		break;
+	case TASK_ACCESS_PORT:
+	    whichp = &task->itk_task_access;
+	    break;
 
+	case TASK_DEBUG_CONTROL_PORT:
+	    whichp = &task->itk_debug_control;
+	    break;
 
-	    default:
-		return KERN_INVALID_ARGUMENT;
+	default:
+	    return KERN_INVALID_ARGUMENT;
 	}/* switch */
 
 	itk_lock(task);
@@ -1221,6 +1261,24 @@ task_t
 convert_port_to_task(
 	ipc_port_t		port)
 {
+	return convert_port_to_task_with_exec_token(port, NULL);
+}
+
+/*
+ *	Routine:	convert_port_to_task_with_exec_token
+ *	Purpose:
+ *		Convert from a port to a task and return
+ *		the exec token stored in the task.
+ *		Doesn't consume the port ref; produces a task ref,
+ *		which may be null.
+ *	Conditions:
+ *		Nothing locked.
+ */
+task_t
+convert_port_to_task_with_exec_token(
+	ipc_port_t		port,
+	uint32_t		*exec_token)
+{
 	task_t		task = TASK_NULL;
 
 	if (IP_VALID(port)) {
@@ -1231,6 +1289,9 @@ convert_port_to_task(
 			task = (task_t)port->ip_kobject;
 			assert(task != TASK_NULL);
 
+			if (exec_token) {
+				*exec_token = task->exec_token;
+			}
 			task_reference_internal(task);
 		}
 
@@ -1461,6 +1522,33 @@ port_name_to_task(
 }
 
 /*
+ *	Routine:	port_name_to_host
+ *	Purpose:
+ *		Convert from a port name to a host pointer.
+ *		NOTE: This does _not_ return a +1 reference to the host_t
+ *	Conditions:
+ *		Nothing locked.
+ */
+host_t
+port_name_to_host(
+	mach_port_name_t name)
+{
+
+	host_t host = HOST_NULL;
+	kern_return_t kr;
+	ipc_port_t port;
+
+	if (MACH_PORT_VALID(name)) {
+		kr = ipc_port_translate_send(current_space(), name, &port);
+		if (kr == KERN_SUCCESS) {
+			host = convert_port_to_host(port);
+			ip_unlock(port);
+		}
+	}
+	return host;
+}
+
+/*
  *	Routine:	convert_task_to_port
  *	Purpose:
  *		Convert from a task to a port.
@@ -1673,7 +1761,11 @@ thread_set_exception_ports(
 		ipc_thread_init_exc_actions(thread);
 	}
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; ++i) {
-		if (exception_mask & (1 << i)) {
+		if ((exception_mask & (1 << i))
+#if CONFIG_MACF
+			&& mac_exc_action_label_update(current_task(), thread->exc_actions + i) == 0
+#endif
+			) {
 			old_port[i] = thread->exc_actions[i].port;
 			thread->exc_actions[i].port = ipc_port_copy_send(new_port);
 			thread->exc_actions[i].behavior = new_behavior;
@@ -1744,7 +1836,11 @@ task_set_exception_ports(
 	}
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; ++i) {
-		if (exception_mask & (1 << i)) {
+		if ((exception_mask & (1 << i))
+#if CONFIG_MACF
+			&& mac_exc_action_label_update(current_task(), task->exc_actions + i) == 0
+#endif
+			) {
 			old_port[i] = task->exc_actions[i].port;
 			task->exc_actions[i].port =
 				ipc_port_copy_send(new_port);
@@ -1848,7 +1944,11 @@ thread_swap_exception_ports(
 
 	assert(EXC_TYPES_COUNT > FIRST_EXCEPTION);
 	for (count = 0, i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT && count < *CountCnt; ++i) {
-		if (exception_mask & (1 << i)) {
+		if ((exception_mask & (1 << i))
+#if CONFIG_MACF
+			&& mac_exc_action_label_update(current_task(), thread->exc_actions + i) == 0
+#endif
+			) {
 			for (j = 0; j < count; ++j) {
 				/*
 				 * search for an identical entry, if found
@@ -1945,7 +2045,11 @@ task_swap_exception_ports(
 
 	assert(EXC_TYPES_COUNT > FIRST_EXCEPTION);
 	for (count = 0, i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT && count < *CountCnt; ++i) {
-		if (exception_mask & (1 << i)) {
+		if ((exception_mask & (1 << i))
+#if CONFIG_MACF
+			&& mac_exc_action_label_update(current_task(), task->exc_actions + i) == 0
+#endif
+			) {
 			for (j = 0; j < count; j++) {
 				/*
 				 * search for an identical entry, if found

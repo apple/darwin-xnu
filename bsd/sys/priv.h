@@ -2,7 +2,7 @@
  * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -77,15 +77,20 @@
  * privileges, such as the ability to reboot, and then loosely by
  * subsystem, indicated by a subsystem name.
  */
-#define	PRIV_ADJTIME		1000	/* Set time adjustment. */
-#define PRIV_PROC_UUID_POLICY	1001	/* Change process uuid policy table. */
-#define PRIV_GLOBAL_PROC_INFO	1002	/* Query information for processes owned by other users */
-#define PRIV_SYSTEM_OVERRIDE	1003	/* Override global system settings for various subsystems for a limited duration/system-mode */
-#define PRIV_HW_DEBUG_DATA	    1004	/* Extract hw-specific debug data (e.g. ECC data) */
+#define	PRIV_ADJTIME			1000	/* Set time adjustment. */
+#define PRIV_PROC_UUID_POLICY		1001	/* Change process uuid policy table. */
+#define PRIV_GLOBAL_PROC_INFO		1002	/* Query information for processes owned by other users */
+#define PRIV_SYSTEM_OVERRIDE		1003	/* Override global system settings for various subsystems for a limited duration/system-mode */
+#define PRIV_HW_DEBUG_DATA		1004	/* Extract hw-specific debug data (e.g. ECC data) */
 #define PRIV_SELECTIVE_FORCED_IDLE	1005	/* Configure and control Selective Forced Idle (SFI) subsystem */
-#define PRIV_PROC_TRACE_INSPECT 1006   /* Request trace memory of arbitrary process to be inspected */
-#define PRIV_DARKBOOT		1007 	/* Manipulate the darkboot flag */
-#define PRIV_WORK_INTERVAL	1008 	/* Express details about a work interval */
+#define PRIV_PROC_TRACE_INSPECT		1006	/* Request trace memory of arbitrary process to be inspected */
+#define PRIV_DARKBOOT			1007	/* Manipulate the darkboot flag */
+#define PRIV_WORK_INTERVAL		1008	/* Express details about a work interval */
+#define PRIV_SMB_TIMEMACHINE_CONTROL	1009	/* Control Time Machine properties of an SMB share */
+#define PRIV_AUDIO_LATENCY		1010	/* set audio latency requirements for background tracing */
+#define PRIV_KTRACE_BACKGROUND		1011	/* Operate ktrace in the background */
+#define PRIV_SETPRIORITY_DARWIN_ROLE	1012	/* Allow setpriority(PRIO_DARWIN_ROLE) */
+#define PRIV_PACKAGE_EXTENSIONS		1013	/* Push package extension list used by vn_path_package_check() */
 
 /*
  * Virtual memory privileges.
@@ -97,24 +102,27 @@
 /*
  * Network stack privileges.
  */
-#define	PRIV_NET_PRIVILEGED_TRAFFIC_CLASS	10000	/* Set SO_PRIVILEGED_TRAFFIC_CLASS. */ 
+#define	PRIV_NET_PRIVILEGED_TRAFFIC_CLASS	10000	/* Set SO_PRIVILEGED_TRAFFIC_CLASS. */
 #define	PRIV_NET_PRIVILEGED_SOCKET_DELEGATE	10001	/* Set delegate on a socket */
 #define	PRIV_NET_INTERFACE_CONTROL		10002	/* Enable interface debug logging. */
 #define	PRIV_NET_PRIVILEGED_NETWORK_STATISTICS	10003	/* Access to all sockets */
 #define	PRIV_NET_PRIVILEGED_NECP_POLICIES	10004	/* Access to privileged Network Extension policies */
 #define	PRIV_NET_RESTRICTED_AWDL		10005	/* Access to restricted AWDL mode */
 #define	PRIV_NET_PRIVILEGED_NECP_MATCH		10006	/* Privilege verified by Network Extension policies */
-
+#define	PRIV_NET_QOSMARKING_POLICY_OVERRIDE	10007	/* Privilege verified by Network Extension policies */
+#define	PRIV_NET_RESTRICTED_INTCOPROC		10008	/* Access to internal co-processor network interfaces */
 /*
  * IPv4 and IPv6 privileges.
  */
 #define	PRIV_NETINET_RESERVEDPORT	11000	/* Bind low port number. */
+
 
 /*
  * VFS privileges
  */
 #define PRIV_VFS_OPEN_BY_ID		14000 	/* Allow calling openbyid_np() */
 #define PRIV_VFS_MOVE_DATA_EXTENTS	14001   /* Allow F_MOVEDATAEXTENTS fcntl */
+#define PRIV_VFS_SNAPSHOT		14002	/* Allow calling fs_snapshot_*() */
 
 #ifdef KERNEL
 /*

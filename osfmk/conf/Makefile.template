@@ -58,7 +58,6 @@ OBJS_NO_CAST_ALIGN =			\
 		wait_queue.o		\
 		bsd_kern.o		\
 		pmc.o			\
-		default_freezer.o	\
 		status.o		\
 		machine_routines.o	\
 		loose_ends.o		\
@@ -72,17 +71,17 @@ OBJS_NO_CAST_ALIGN =			\
 		cchmac_final.o		\
 		cchmac_init.o		\
 		ccsha1.o		\
-		dp_memory_object.o	\
 		ipc_object.o		\
 		ipc_kmsg.o		\
 		ipc_right.o		\
 		bsd_vm.o		\
 		vm_map_store.o		\
 		vm_map_store_ll.o	\
-		vm_map_store_rb.o
+		vm_map_store_rb.o	\
+		vm_debug.o
 
 # Objects that don't want -Wsign-compare warning (15294427)
-OBJS_NO_SIGN_COMPARE = 		\
+OBJS_NO_SIGN_COMPARE =		\
 		atm_notification_user.o
 
 $(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
@@ -155,7 +154,7 @@ $(COMPONENT).filelist: $(OBJS)
                 $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
                 mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
-	@echo LDFILELIST $(COMPONENT)
+	@echo "$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0)"
 	$(_v)for obj in ${OBJS}; do	\
 		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
@@ -179,7 +178,7 @@ endif
 -include genassym.d
 genassym.o: .CFLAGS $(firstword $(MAKEFILE_LIST))
 genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(GENASSYM_LOCATION)/genassym.c
-	@echo GENASSYM $<
+	@echo "[$(CMD_MC)] $(ColorH)GENASSYM$(Color0)      $(ColorLF)$<$(Color0)"
 	$(_v)${GENASSYM_KCC} ${CFLAGS} ${CFLAGS_NOLTO_FLAG} -MD -S -o ${@} ${INCFLAGS} $<
 
 assym.s: genassym.o

@@ -100,6 +100,33 @@ static int write_buffer(int flags, char *buffer)
 
 #endif
 
+/* this variable is used to signal to the debugger that we'd like it to reset
+ * the counters */
+int kdp_pgo_reset_counters = 0;
+
+/* called in debugger context */
+static kern_return_t do_pgo_reset_counters(void *context)
+{
+#pragma unused(context)
+#ifdef PROFILE
+    memset(&__pgo_hib_CountersStart, 0,
+           ((uintptr_t)(&__pgo_hib_CountersEnd)) - ((uintptr_t)(&__pgo_hib_CountersStart)));
+#endif
+    OSKextResetPgoCounters();
+    kdp_pgo_reset_counters = 0;
+    return KERN_SUCCESS;
+}
+
+static kern_return_t
+pgo_reset_counters()
+{
+    kern_return_t r;
+    OSKextResetPgoCountersLock();
+    kdp_pgo_reset_counters = 1;
+    r = DebuggerWithCallback(do_pgo_reset_counters, NULL, FALSE);
+    OSKextResetPgoCountersUnlock();
+    return r;
+}
 
 
 /*
@@ -140,6 +167,26 @@ int grab_pgo_data(struct proc *p,
         {
                 err = EINVAL;
                 goto out;
+        }
+
+        if ( uap->flags & PGO_RESET_ALL ) {
+            if (uap->flags != PGO_RESET_ALL || uap->uuid || uap->buffer || uap->size ) {
+                err = EINVAL;
+            } else {
+                kern_return_t r = pgo_reset_counters();
+                switch (r) {
+                case KERN_SUCCESS:
+                    err = 0;
+                    break;
+                case KERN_OPERATION_TIMED_OUT:
+                    err = ETIMEDOUT;
+                    break;
+                default:
+                    err = EIO;
+                    break;
+                }
+            }
+            goto out;
         }
 
         *retval = 0;

@@ -64,7 +64,7 @@ extern int in6_domifattach(struct ifnet *);
 extern int in6_ifattach_prelim(struct ifnet *);
 extern int in6_ifattach_aliasreq(struct ifnet *, struct ifnet *,
     struct in6_aliasreq *);
-extern int in6_ifattach_llstartreq(struct ifnet *, struct in6_llstartreq *);
+extern int in6_ifattach_llcgareq(struct ifnet *, struct in6_cgareq *);
 extern void in6_ifdetach(struct ifnet *);
 extern int in6_iid_from_hw(struct ifnet *, struct in6_addr *);
 extern void in6_iid_mktmp(struct ifnet *, u_int8_t *, const u_int8_t *, int);

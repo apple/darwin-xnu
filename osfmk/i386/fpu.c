@@ -665,13 +665,15 @@ fpu_dup_fxstate(
 	        /*
 		 * Make sure we`ve got the latest fp state info
 		 */
-	        intr = ml_set_interrupts_enabled(FALSE);
-		assert(current_thread() == parent);
-		clear_ts();
-		fp_save(parent);
-		clear_fpu();
+		if (current_thread() == parent) {
+			intr = ml_set_interrupts_enabled(FALSE);
+			assert(current_thread() == parent);
+			clear_ts();
+			fp_save(parent);
+			clear_fpu();
 
-		(void)ml_set_interrupts_enabled(intr);
+			(void)ml_set_interrupts_enabled(intr);
+		}
 
 		if (ifps->fp_valid) {
 			child->machine.ifps = new_ifps;

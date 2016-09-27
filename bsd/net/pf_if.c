@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -284,7 +284,6 @@ pfi_match_addr(struct pfi_dynaddr *dyn, struct pf_addr *a, sa_family_t af)
 		default:
 			return (pfr_match_addr(dyn->pfid_kt, a, AF_INET));
 		}
-		break;
 #endif /* INET */
 #if INET6
 	case AF_INET6:
@@ -297,7 +296,6 @@ pfi_match_addr(struct pfi_dynaddr *dyn, struct pf_addr *a, sa_family_t af)
 		default:
 			return (pfr_match_addr(dyn->pfid_kt, a, AF_INET6));
 		}
-		break;
 #endif /* INET6 */
 	default:
 		return (0);

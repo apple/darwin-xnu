@@ -32,13 +32,16 @@ void ccsha1_final(const struct ccdigest_info *di, ccdigest_ctx_t,
 extern const struct ccdigest_info ccsha1_ltc_di;
 extern const struct ccdigest_info ccsha1_eay_di;
 
-#if !defined(__NO_ASM__) && CCSHA1_VNG_INTEL
+#if  CCSHA1_VNG_INTEL
 //extern const struct ccdigest_info ccsha1_vng_intel_di;
+#if defined(__x86_64__)
+extern const struct ccdigest_info ccsha1_vng_intel_AVX2_di;
+extern const struct ccdigest_info ccsha1_vng_intel_AVX1_di;
+#endif
 extern const struct ccdigest_info ccsha1_vng_intel_SupplementalSSE3_di;
-extern const struct ccdigest_info ccsha1_vng_intel_NOSupplementalSSE3_di;
 #endif
 
-#if !defined(__NO_ASM__) && CCSHA1_VNG_ARMV7NEON
+#if  CCSHA1_VNG_ARMV7NEON
 extern const struct ccdigest_info ccsha1_vng_armv7neon_di;
 #endif
 

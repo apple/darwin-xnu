@@ -70,8 +70,13 @@
 #define	LOCKLEAF	0x0004	/* lock inode on return */
 #define	LOCKPARENT	0x0008	/* want parent vnode returned */
 #define	WANTPARENT	0x0010	/* want parent vnode returned */
+
+#ifdef KERNEL_PRIVATE
+#define CN_SECLUDE_RENAME 0x10000000 /*rename iff ￢(hard-linked ∨ opened ∨ mmaped)*/
+#define CN_RAW_ENCRYPTED 0x80000000 /* Look-up is for RO raw encrypted access. */
 #endif
 
+#endif // KERNEL
 
 #ifdef BSD_KERNEL_PRIVATE
 
@@ -178,16 +183,13 @@ struct nameidata {
 #if NAMEDRSRCFORK
 #define CN_WANTSRSRCFORK 0x04000000
 #define CN_ALLOWRSRCFORK 0x08000000
-#endif
-#if CONFIG_SECLUDED_RENAME
-#ifdef BSD_KERNEL_PRIVATE
-#define CN_SECLUDE_RENAME 0x10000000 /*rename iff ￢(hard-linked ∨ opened ∨ mmaped)*/
-#endif
-#endif
+#endif // NAMEDRSRCFORK
+// CN_SECLUDE_RENAME is defined above as 0x10000000 (SPI)
 #define CN_NBMOUNTLOOK	0x20000000 /* do not block for cross mount lookups */
 #ifdef BSD_KERNEL_PRIVATE
 #define CN_SKIPNAMECACHE	0x40000000	/* skip cache during lookup(), allow FS to handle all components */
 #endif
+// CN_RAW_ENCRYPTED	is defined above as 0x80000000 (SPI)
 
 /*
  * Initialization of an nameidata structure.
@@ -236,12 +238,12 @@ struct nameidata {
  */
 struct	namecache {
 	TAILQ_ENTRY(namecache)	nc_entry;	/* chain of all entries */
-	LIST_ENTRY(namecache)	nc_hash;	/* hash chain */
-        LIST_ENTRY(namecache)	nc_child;	/* chain of ncp's that are children of a vp */
+        TAILQ_ENTRY(namecache)	nc_child;	/* chain of ncp's that are children of a vp */
         union {
 	  LIST_ENTRY(namecache)	 nc_link;	/* chain of ncp's that 'name' a vp */
 	  TAILQ_ENTRY(namecache) nc_negentry;	/* chain of ncp's that 'name' a vp */
 	} nc_un;
+	LIST_ENTRY(namecache)	nc_hash;	/* hash chain */
 	vnode_t			nc_dvp;		/* vnode of parent of name */
 	vnode_t			nc_vp;		/* vnode the name refers to */
         unsigned int		nc_hashval;	/* hashval of stringname */

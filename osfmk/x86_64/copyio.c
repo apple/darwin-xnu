@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,6 +73,7 @@ static int copyio_phys(addr64_t, addr64_t, vm_size_t, int);
  */
 extern int _bcopy(const void *, void *, vm_size_t);
 extern int _bcopystr(const void *, void *, vm_size_t, vm_size_t *);
+extern int _copyin_word(const char *src, uint64_t *dst, vm_size_t len);
 
 
 /*
@@ -83,8 +84,9 @@ extern int _bcopystr(const void *, void *, vm_size_t, vm_size_t *);
 #define COPYINSTR	2	/* string variant of copyout */
 #define COPYINPHYS	3	/* from user virtual to kernel physical */
 #define COPYOUTPHYS	4	/* from kernel physical to user virtual */
+#define COPYINWORD	5	/* from user virtual to kernel virtual */
 
-#if DEVELOPMENT
+#if ENABLE_SMAPLOG
 typedef struct {
 	uint64_t 	timestamp;
 	thread_t	thread;
@@ -119,13 +121,13 @@ smaplog_add_entry(boolean_t enabling)
 	smaplog_cbuf[index].smap_state = enabling;
 	smaplog_cbuf[index].copyio_active = (thread->machine.specFlags & CopyIOActive) ? 1 : 0;
 }
-#endif /* DEVELOPMENT */
+#endif /* ENABLE_SMAPLOG */
 
 extern boolean_t pmap_smap_enabled;
 static inline void user_access_enable(void) {
 	if (pmap_smap_enabled) {
 		stac();
-#if DEVELOPMENT
+#if ENABLE_SMAPLOG
 		smaplog_add_entry(TRUE);
 #endif
 	}
@@ -133,48 +135,52 @@ static inline void user_access_enable(void) {
 static inline void user_access_disable(void) {
 	if (pmap_smap_enabled) {
 		clac();
-#if DEVELOPMENT
+#if ENABLE_SMAPLOG
 		smaplog_add_entry(FALSE);
 #endif
 	}
 }
 
+#if COPYIO_TRACE_ENABLED
+#define COPYIO_TRACE(x, a, b, c, d, e) KERNEL_DEBUG_CONSTANT(x, a, b, c, d, e)
+#else
+#define COPYIO_TRACE(x, a, b, c, d, e) do { } while(0)
+#endif
+
 static int
 copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
        vm_size_t nbytes, vm_size_t *lencopied, int use_kernel_map)
 {
-        thread_t	thread;
+        thread_t	thread = current_thread();
 	pmap_t		pmap;
 	vm_size_t	bytes_copied;
 	int		error = 0;
 	boolean_t	istate = FALSE;
 	boolean_t	recursive_CopyIOActive;
-#if KDEBUG
+#if	COPYIO_TRACE_ENABLED
 	int		debug_type = 0xeff70010;
 	debug_type += (copy_type << 2);
 #endif
+	boolean_t nopagezero = thread->map->pmap->pagezero_accessible;
 
 	assert(nbytes < COPYSIZELIMIT_PANIC);
 
-	thread = current_thread();
+	COPYIO_TRACE(debug_type | DBG_FUNC_START,
+	    user_addr, kernel_addr, nbytes, use_kernel_map, 0);
 
-	KERNEL_DEBUG(debug_type | DBG_FUNC_START,
-		     (unsigned)(user_addr >> 32), (unsigned)user_addr,
-		     nbytes, thread->machine.copyio_state, 0);
-
-	if (nbytes == 0)
+	if (__improbable(nbytes == 0))
 		goto out;
 
         pmap = thread->map->pmap;
 
-	if ((copy_type != COPYINPHYS) && (copy_type != COPYOUTPHYS) && ((vm_offset_t)kernel_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS)) {
+	if (__improbable((copy_type != COPYINPHYS) && (copy_type != COPYOUTPHYS) && ((vm_offset_t)kernel_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS))) {
 		panic("Invalid copy parameter, copy type: %d, kernel address: %p", copy_type, kernel_addr);
 	}
 
 	/* Sanity and security check for addresses to/from a user */
 
-	if (((pmap != kernel_pmap) && (use_kernel_map == 0)) &&
-	    ((nbytes && (user_addr+nbytes <= user_addr)) || ((user_addr + nbytes) > vm_map_max(thread->map)))) {
+	if (__improbable(((pmap != kernel_pmap) && (use_kernel_map == 0)) &&
+		((nbytes && (user_addr+nbytes <= user_addr)) || ((user_addr + nbytes) > vm_map_max(thread->map))))) {
 		error = EFAULT;
 		goto out;
 	}
@@ -188,14 +194,24 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	 * we will later restore the correct cr3.
 	 */
 	recursive_CopyIOActive = thread->machine.specFlags & CopyIOActive;
-	thread->machine.specFlags |= CopyIOActive;
-	user_access_enable();
-	if (no_shared_cr3) {
+
+	boolean_t pdswitch = no_shared_cr3 || nopagezero;
+
+	if (__improbable(pdswitch)) {
 		istate = ml_set_interrupts_enabled(FALSE);
- 		if (get_cr3_base() != pmap->pm_cr3)
+		if (nopagezero && pmap_pcid_ncpus) {
+			pmap_pcid_activate(pmap, cpu_number(), TRUE, TRUE);
+		} else if (get_cr3_base() != pmap->pm_cr3) {
 			set_cr3_raw(pmap->pm_cr3);
+		}
+		thread->machine.specFlags |= CopyIOActive;
+	} else {
+		thread->machine.specFlags |= CopyIOActive;
 	}
 
+	user_access_enable();
+
+#if DEVELOPMENT || DEBUG	
 	/*
 	 * Ensure that we're running on the target thread's cr3.
 	 */
@@ -205,11 +221,14 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 			copy_type, (void *)user_addr, kernel_addr, nbytes, lencopied, use_kernel_map,
 			(void *) get_cr3_raw(), (void *) pmap->pm_cr3);
 	}
-	if (no_shared_cr3)
-		(void) ml_set_interrupts_enabled(istate);
+#endif
 
-	KERNEL_DEBUG(0xeff70044 | DBG_FUNC_NONE, (unsigned)user_addr,
-		     (unsigned)kernel_addr, nbytes, 0, 0);
+	if (__improbable(pdswitch)) {
+		(void) ml_set_interrupts_enabled(istate);
+	}
+
+	COPYIO_TRACE(0xeff70044 | DBG_FUNC_NONE, user_addr,
+		     kernel_addr, nbytes, 0, 0);
 
         switch (copy_type) {
 
@@ -234,6 +253,12 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	case COPYOUTPHYS:
 	        error = _bcopy((const void *) PHYSMAP_PTOV(kernel_addr),
 				(void *) user_addr,
+				nbytes);
+		break;
+
+	case COPYINWORD:
+		error = _copyin_word((const void *) user_addr,
+				(void *) kernel_addr,
 				nbytes);
 		break;
 
@@ -275,23 +300,30 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		        error = ENAMETOOLONG;
 			break;
 		}
-		break;
 	}
 
 	user_access_disable();
-	if (!recursive_CopyIOActive) {
-		thread->machine.specFlags &= ~CopyIOActive;
-	}
-	if (no_shared_cr3) {
+
+	if (__improbable(pdswitch)) {
 		istate = ml_set_interrupts_enabled(FALSE);
-		if  (get_cr3_raw() != kernel_pmap->pm_cr3)
-			set_cr3_raw(kernel_pmap->pm_cr3);
+		if  (!recursive_CopyIOActive && (get_cr3_raw() != kernel_pmap->pm_cr3)) {
+			if (nopagezero && pmap_pcid_ncpus) {
+				pmap_pcid_activate(pmap, cpu_number(), TRUE, FALSE);
+			} else {
+				set_cr3_raw(kernel_pmap->pm_cr3);
+			}
+		}
+
+		if (!recursive_CopyIOActive) {
+			thread->machine.specFlags &= ~CopyIOActive;
+		}
 		(void) ml_set_interrupts_enabled(istate);
+	} else if (!recursive_CopyIOActive) {
+		thread->machine.specFlags &= ~CopyIOActive;
 	}
 
 out:
-	KERNEL_DEBUG(debug_type | DBG_FUNC_END, (unsigned)user_addr,
-		     (unsigned)kernel_addr, (unsigned)nbytes, error, 0);
+	COPYIO_TRACE(debug_type | DBG_FUNC_END, user_addr, kernel_addr, nbytes, error, 0);
 
 	return (error);
 }
@@ -326,6 +358,24 @@ int
 copyin(const user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes)
 {
     return copyio(COPYIN, user_addr, kernel_addr, nbytes, NULL, 0);
+}
+
+/*
+ * copyin_word
+ * Read an aligned value from userspace as a single memory transaction.
+ * This function supports userspace synchronization features
+ */
+int
+copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_size_t nbytes)
+{
+	/* Verify sizes */
+	if ((nbytes != 4) && (nbytes != 8))
+		return EINVAL;
+
+	/* Test alignment */
+	if (user_addr & (nbytes - 1))
+		return EINVAL;
+	return copyio(COPYINWORD, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0);
 }
 
 int

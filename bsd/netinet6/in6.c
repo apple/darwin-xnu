@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -141,6 +141,8 @@
 
 #include <net/net_osdep.h>
 
+#include <net/dlil.h>
+
 #if PF
 #include <net/pfvar.h>
 #endif /* PF */
@@ -195,20 +197,17 @@ static void in6_ifaddr_detached(struct ifaddr *);
 static void in6_ifaddr_free(struct ifaddr *);
 static void in6_ifaddr_trace(struct ifaddr *, int);
 #if defined(__LP64__)
-static void in6_llstartreq_32_to_64(struct in6_llstartreq_32 *,
-    struct in6_llstartreq_64 *);
+static void in6_cgareq_32_to_64(struct in6_cgareq_32 *,
+    struct in6_cgareq_64 *);
 #else
-static void in6_llstartreq_64_to_32(struct in6_llstartreq_64 *,
-    struct in6_llstartreq_32 *);
+static void in6_cgareq_64_to_32(struct in6_cgareq_64 *,
+    struct in6_cgareq_32 *);
 #endif
 static struct in6_aliasreq *in6_aliasreq_to_native(void *, int,
     struct in6_aliasreq *);
-static struct in6_llstartreq *in6_llstartreq_to_native(void *, int,
-    struct in6_llstartreq *);
+static struct in6_cgareq *in6_cgareq_to_native(void *, int,
+    struct in6_cgareq *);
 static int in6_to_kamescope(struct sockaddr_in6 *, struct ifnet *);
-
-static void in6_ifaddr_set_dadprogress(struct in6_ifaddr *);
-
 static int in6_getassocids(struct socket *, uint32_t *, user_addr_t);
 static int in6_getconnids(struct socket *, sae_associd_t, uint32_t *,
     user_addr_t);
@@ -430,9 +429,7 @@ in6_ifremloop(struct ifaddr *ifa)
 
 
 int
-in6_mask2len(mask, lim0)
-	struct in6_addr *mask;
-	u_char *lim0;
+in6_mask2len(struct in6_addr *mask, u_char *lim0)
 {
 	int x = 0, y;
 	u_char *lim = lim0, *p;
@@ -468,9 +465,7 @@ in6_mask2len(mask, lim0)
 }
 
 void
-in6_len2mask(mask, len)
-	struct in6_addr *mask;
-	int len;
+in6_len2mask(struct in6_addr *mask, int len)
 {
 	int i;
 
@@ -513,41 +508,41 @@ in6_aliasreq_32_to_64(struct in6_aliasreq_32 *src, struct in6_aliasreq_64 *dst)
 
 #if defined(__LP64__)
 void
-in6_llstartreq_32_to_64(struct in6_llstartreq_32 *src,
-    struct in6_llstartreq_64 *dst)
+in6_cgareq_32_to_64(struct in6_cgareq_32 *src,
+    struct in6_cgareq_64 *dst)
 {
 	bzero(dst, sizeof (*dst));
-	bcopy(src->llsr_name, dst->llsr_name, sizeof (dst->llsr_name));
-	dst->llsr_flags = src->llsr_flags;
-	bcopy(src->llsr_cgaprep.cga_modifier.octets,
-	    dst->llsr_cgaprep.cga_modifier.octets,
-	    sizeof (dst->llsr_cgaprep.cga_modifier.octets));
-	dst->llsr_cgaprep.cga_security_level =
-	    src->llsr_cgaprep.cga_security_level;
-	dst->llsr_lifetime.ia6t_expire = src->llsr_lifetime.ia6t_expire;
-	dst->llsr_lifetime.ia6t_preferred = src->llsr_lifetime.ia6t_preferred;
-	dst->llsr_lifetime.ia6t_vltime = src->llsr_lifetime.ia6t_vltime;
-	dst->llsr_lifetime.ia6t_pltime = src->llsr_lifetime.ia6t_pltime;
+	bcopy(src->cgar_name, dst->cgar_name, sizeof (dst->cgar_name));
+	dst->cgar_flags = src->cgar_flags;
+	bcopy(src->cgar_cgaprep.cga_modifier.octets,
+	    dst->cgar_cgaprep.cga_modifier.octets,
+	    sizeof (dst->cgar_cgaprep.cga_modifier.octets));
+	dst->cgar_cgaprep.cga_security_level =
+	    src->cgar_cgaprep.cga_security_level;
+	dst->cgar_lifetime.ia6t_expire = src->cgar_lifetime.ia6t_expire;
+	dst->cgar_lifetime.ia6t_preferred = src->cgar_lifetime.ia6t_preferred;
+	dst->cgar_lifetime.ia6t_vltime = src->cgar_lifetime.ia6t_vltime;
+	dst->cgar_lifetime.ia6t_pltime = src->cgar_lifetime.ia6t_pltime;
 }
 #endif
 
 #if !defined(__LP64__)
 void
-in6_llstartreq_64_to_32(struct in6_llstartreq_64 *src,
-    struct in6_llstartreq_32 *dst)
+in6_cgareq_64_to_32(struct in6_cgareq_64 *src,
+    struct in6_cgareq_32 *dst)
 {
 	bzero(dst, sizeof (*dst));
-	bcopy(src->llsr_name, dst->llsr_name, sizeof (dst->llsr_name));
-	dst->llsr_flags = src->llsr_flags;
-	bcopy(src->llsr_cgaprep.cga_modifier.octets,
-	    dst->llsr_cgaprep.cga_modifier.octets,
-	    sizeof (dst->llsr_cgaprep.cga_modifier.octets));
-	dst->llsr_cgaprep.cga_security_level =
-	    src->llsr_cgaprep.cga_security_level;
-	dst->llsr_lifetime.ia6t_expire = src->llsr_lifetime.ia6t_expire;
-	dst->llsr_lifetime.ia6t_preferred = src->llsr_lifetime.ia6t_preferred;
-	dst->llsr_lifetime.ia6t_vltime = src->llsr_lifetime.ia6t_vltime;
-	dst->llsr_lifetime.ia6t_pltime = src->llsr_lifetime.ia6t_pltime;
+	bcopy(src->cgar_name, dst->cgar_name, sizeof (dst->cgar_name));
+	dst->cgar_flags = src->cgar_flags;
+	bcopy(src->cgar_cgaprep.cga_modifier.octets,
+	    dst->cgar_cgaprep.cga_modifier.octets,
+	    sizeof (dst->cgar_cgaprep.cga_modifier.octets));
+	dst->cgar_cgaprep.cga_security_level =
+	    src->cgar_cgaprep.cga_security_level;
+	dst->cgar_lifetime.ia6t_expire = src->cgar_lifetime.ia6t_expire;
+	dst->cgar_lifetime.ia6t_preferred = src->cgar_lifetime.ia6t_preferred;
+	dst->cgar_lifetime.ia6t_vltime = src->cgar_lifetime.ia6t_vltime;
+	dst->cgar_lifetime.ia6t_pltime = src->cgar_lifetime.ia6t_pltime;
 }
 #endif
 
@@ -570,19 +565,19 @@ in6_aliasreq_to_native(void *data, int data_is_64, struct in6_aliasreq *dst)
 	return (dst);
 }
 
-static struct in6_llstartreq *
-in6_llstartreq_to_native(void *data, int is64, struct in6_llstartreq *dst)
+static struct in6_cgareq *
+in6_cgareq_to_native(void *data, int is64, struct in6_cgareq *dst)
 {
 #if defined(__LP64__)
 	if (is64)
 		bcopy(data, dst, sizeof (*dst));
 	else
-		in6_llstartreq_32_to_64((struct in6_llstartreq_32 *)data,
-		    (struct in6_llstartreq_64 *)dst);
+		in6_cgareq_32_to_64((struct in6_cgareq_32 *)data,
+		    (struct in6_cgareq_64 *)dst);
 #else
 	if (is64)
-		in6_llstartreq_64_to_32((struct in6_llstartreq_64 *)data,
-		    (struct in6_llstartreq_32 *)dst);
+		in6_cgareq_64_to_32((struct in6_cgareq_64 *)data,
+		    (struct in6_cgareq_32 *)dst);
 	else
 		bcopy(data, dst, sizeof (*dst));
 #endif /* __LP64__ */
@@ -733,8 +728,7 @@ in6ctl_llstart(struct ifnet *ifp, u_long cmd, caddr_t data)
 		 * be done here.  They are currently done in in6_ifattach_aux()
 		 * for the interfaces that need it.
 		 */
-		if ((ifp->if_eflags & IFEF_NOAUTOIPV6LL) != 0 &&
-		    ifra->ifra_addr.sin6_family == AF_INET6 &&
+		if (ifra->ifra_addr.sin6_family == AF_INET6 &&
 		    /* Only check ifra_dstaddr if valid */
 		    (ifra->ifra_dstaddr.sin6_len == 0 ||
 		    ifra->ifra_dstaddr.sin6_family == AF_INET6)) {
@@ -812,33 +806,36 @@ in6ctl_llstop(struct ifnet *ifp)
 	return (0);
 }
 
+/*
+ * This routine configures secure link local address
+ */
 static __attribute__((noinline)) int
 in6ctl_cgastart(struct ifnet *ifp, u_long cmd, caddr_t data)
 {
-	struct in6_llstartreq llsr;
+	struct in6_cgareq llcgasr;
 	int is64, error = 0;
 
 	VERIFY(ifp != NULL);
 
 	switch (cmd) {
-	case SIOCLL_CGASTART_32:	/* struct in6_llstartreq_32 */
-	case SIOCLL_CGASTART_64:	/* struct in6_llstartreq_64 */
+	case SIOCLL_CGASTART_32:	/* struct in6_cgareq_32 */
+	case SIOCLL_CGASTART_64:	/* struct in6_cgareq_64 */
 		is64 = (cmd == SIOCLL_CGASTART_64);
 		/*
-		 * Convert user llstartreq to the kernel form, when appropriate.
+		 * Convert user cgareq to the kernel form, when appropriate.
 		 * This allows the conversion between different data models
 		 * to be centralized, so that it can be passed around to other
 		 * routines that are expecting the kernel form.
 		 */
-		in6_llstartreq_to_native(data, is64, &llsr);
+		in6_cgareq_to_native(data, is64, &llcgasr);
 
 		/*
 		 * NOTE: All the interface specific DLIL attachements
 		 * should be done here.  They are currently done in
-		 * in6_ifattach_llstartreq() for the interfaces that
+		 * in6_ifattach_cgareq() for the interfaces that
 		 * need it.
 		 */
-		error = in6_ifattach_llstartreq(ifp, &llsr);
+		error = in6_ifattach_llcgareq(ifp, &llcgasr);
 		if (error == 0)
 			in6_if_up_dad_start(ifp);
 		break;
@@ -1230,6 +1227,8 @@ in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 	case SIOCSDEFIFACE_IN6_32:	/* struct in6_ndifreq_32 */
 	case SIOCSDEFIFACE_IN6_64:	/* struct in6_ndifreq_64 */
 	case SIOCSIFINFO_FLAGS:		/* struct in6_ndireq */
+	case SIOCGIFCGAPREP_IN6:	/* struct in6_ifreq */
+	case SIOCSIFCGAPREP_IN6:	/* struct in6_ifreq */
 		if (!privileged) {
 			error = EPERM;
 			goto done;
@@ -1266,8 +1265,8 @@ in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 		error = EOPNOTSUPP;
 		goto done;
 	
-	case SIOCLL_CGASTART_32:	/* struct in6_llstartreq_32 */
-	case SIOCLL_CGASTART_64:	/* struct in6_llstartreq_64 */
+	case SIOCLL_CGASTART_32:	/* struct in6_cgareq_32 */
+	case SIOCLL_CGASTART_64:	/* struct in6_cgareq_64 */
 		if (!privileged)
 			error = EPERM;
 		else
@@ -1823,6 +1822,15 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 	if (in6if_do_dad(ifp))
 		in6_ifaddr_set_dadprogress(ia);
 
+	/*
+	 * Do not delay sending neighbor solicitations when using optimistic
+	 * duplicate address detection, c.f. RFC 4429.
+	 */
+	if (ia->ia6_flags & IN6_IFF_OPTIMISTIC)
+		ifaupflags &= ~IN6_IFAUPDATE_DADDELAY;
+	else
+		ifaupflags |= IN6_IFAUPDATE_DADDELAY;
+
 	/* Join necessary multicast groups */
 	if ((ifp->if_flags & IFF_MULTICAST) != 0) {
 
@@ -2295,13 +2303,6 @@ in6_update_ifa(struct ifnet *ifp, struct in6_aliasreq *ifra, int ifaupflags,
 	}
 
 	/*
-	 * Do not delay sending neighbor solicitations when using optimistic
-	 * duplicate address detection, c.f. RFC 4429.
-	 */
-	if ((ia->ia6_flags & IN6_IFF_OPTIMISTIC) == 0)
-		ifaupflags |= IN6_IFAUPDATE_DADDELAY;
-
-	/*
 	 * Update flag or prefix length
 	 */
 	ia->ia_plen = plen;
@@ -2441,19 +2442,33 @@ in6_unlink_ifa(struct in6_ifaddr *ia, struct ifnet *ifp)
 	 */
 	ifa = &oia->ia_ifa;
 	IFA_LOCK(ifa);
-	if (oia->ia6_ndpr == NULL) {
-		log(LOG_NOTICE, "in6_unlink_ifa: IPv6 address "
-		    "0x%llx has no prefix\n",
-		    (uint64_t)VM_KERNEL_ADDRPERM(oia));
-	} else {
-		struct nd_prefix *pr = oia->ia6_ndpr;
-		oia->ia6_flags &= ~IN6_IFF_AUTOCONF;
-		oia->ia6_ndpr = NULL;
-		NDPR_LOCK(pr);
-		VERIFY(pr->ndpr_addrcnt != 0);
-		pr->ndpr_addrcnt--;
-		NDPR_UNLOCK(pr);
-		NDPR_REMREF(pr);	/* release addr reference */
+	/*
+	 * Only log the below message for addresses other than
+	 * link local.
+	 * Only one LLA (auto-configured or statically) is allowed
+	 * on an interface.
+	 * LLA prefix, while added to the prefix list, is not
+	 * reference countedi (as it is the only one).
+	 * The prefix also never expires on its own as LLAs
+	 * have infinite lifetime.
+	 *
+	 * For now quiece down the log message for LLAs.
+	 */
+	if (!IN6_IS_ADDR_LINKLOCAL(&oia->ia_addr.sin6_addr)) {
+		if (oia->ia6_ndpr == NULL)
+			log(LOG_NOTICE, "in6_unlink_ifa: IPv6 address "
+			    "0x%llx has no prefix\n",
+			    (uint64_t)VM_KERNEL_ADDRPERM(oia));
+		else {
+			struct nd_prefix *pr = oia->ia6_ndpr;
+			oia->ia6_flags &= ~IN6_IFF_AUTOCONF;
+			oia->ia6_ndpr = NULL;
+			NDPR_LOCK(pr);
+			VERIFY(pr->ndpr_addrcnt != 0);
+			pr->ndpr_addrcnt--;
+			NDPR_UNLOCK(pr);
+			NDPR_REMREF(pr);	/* release addr reference */
+		}
 	}
 	IFA_UNLOCK(ifa);
 	lck_rw_done(&in6_ifaddr_rwlock);
@@ -2587,9 +2602,7 @@ in6_purgeaddrs(struct ifnet *ifp)
  * Find an IPv6 interface link-local address specific to an interface.
  */
 struct in6_ifaddr *
-in6ifa_ifpforlinklocal(ifp, ignoreflags)
-	struct ifnet *ifp;
-	int ignoreflags;
+in6ifa_ifpforlinklocal(struct ifnet *ifp, int ignoreflags)
 {
 	struct ifaddr *ifa;
 
@@ -2622,9 +2635,7 @@ in6ifa_ifpforlinklocal(ifp, ignoreflags)
  * find the internet address corresponding to a given interface and address.
  */
 struct in6_ifaddr *
-in6ifa_ifpwithaddr(ifp, addr)
-	struct ifnet *ifp;
-	struct in6_addr *addr;
+in6ifa_ifpwithaddr(struct ifnet *ifp, struct in6_addr *addr)
 {
 	struct ifaddr *ifa;
 
@@ -2850,36 +2861,12 @@ in6_localaddr(struct in6_addr *in6)
 	return (0);
 }
 
-int
-in6_is_addr_deprecated(struct sockaddr_in6 *sa6)
-{
-	struct in6_ifaddr *ia;
-
-	lck_rw_lock_shared(&in6_ifaddr_rwlock);
-	for (ia = in6_ifaddrs; ia; ia = ia->ia_next) {
-		IFA_LOCK_SPIN(&ia->ia_ifa);
-		if (IN6_ARE_ADDR_EQUAL(&ia->ia_addr.sin6_addr,
-		    &sa6->sin6_addr) &&
-		    (ia->ia6_flags & IN6_IFF_DEPRECATED) != 0) {
-			IFA_UNLOCK(&ia->ia_ifa);
-			lck_rw_done(&in6_ifaddr_rwlock);
-			return (1); /* true */
-		}
-		/* XXX: do we still have to go thru the rest of the list? */
-		IFA_UNLOCK(&ia->ia_ifa);
-	}
-
-	lck_rw_done(&in6_ifaddr_rwlock);
-	return (0);		/* false */
-}
-
 /*
  * return length of part which dst and src are equal
  * hard coding...
  */
 int
-in6_matchlen(src, dst)
-struct in6_addr *src, *dst;
+in6_matchlen(struct in6_addr *src, struct in6_addr *dst)
 {
 	int match = 0;
 	u_char *s = (u_char *)src, *d = (u_char *)dst;
@@ -2899,9 +2886,7 @@ struct in6_addr *src, *dst;
 
 /* XXX: to be scope conscious */
 int
-in6_are_prefix_equal(p1, p2, len)
-	struct in6_addr *p1, *p2;
-	int len;
+in6_are_prefix_equal(struct in6_addr *p1, struct in6_addr *p2, int len)
 {
 	int bytelen, bitlen;
 
@@ -2925,9 +2910,7 @@ in6_are_prefix_equal(p1, p2, len)
 }
 
 void
-in6_prefixlen2mask(maskp, len)
-	struct in6_addr *maskp;
-	int len;
+in6_prefixlen2mask(struct in6_addr *maskp, int len)
 {
 	u_char maskarray[8] = {0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe, 0xff};
 	int bytelen, bitlen, i;
@@ -3397,6 +3380,12 @@ static void
 in6_if_up_dad_start(struct ifnet *ifp)
 {
 	struct ifaddr *ifa;
+	struct nd_ifinfo *ndi = NULL;
+
+	ndi = ND_IFINFO(ifp);
+	VERIFY((NULL != ndi)  && (TRUE == ndi->initialized));
+	if (!(ndi->flags & ND6_IFF_DAD))
+		return;
 
 	/* start DAD on all the interface addresses */
 	ifnet_lock_exclusive(ifp);
@@ -3424,7 +3413,14 @@ int
 in6if_do_dad(
 	struct ifnet *ifp)
 {
+	struct nd_ifinfo *ndi = NULL;
+
 	if ((ifp->if_flags & IFF_LOOPBACK) != 0)
+		return (0);
+
+	ndi = ND_IFINFO(ifp);
+	VERIFY((NULL != ndi)  && (TRUE == ndi->initialized));
+	if (!(ndi->flags & ND6_IFF_DAD))
 		return (0);
 
 	/*
@@ -3684,7 +3680,7 @@ in6_post_msg(struct ifnet *ifp, u_int32_t event_code, struct in6_ifaddr *ifa,
 	ev_msg.dv[0].data_length = sizeof (in6_event_data);
 	ev_msg.dv[1].data_length = 0;
 
-	kev_post_msg(&ev_msg);
+	dlil_post_complete_msg(NULL, &ev_msg);
 }
 
 /*
@@ -3839,87 +3835,6 @@ in6_ifaddr_trace(struct ifaddr *ifa, int refhold)
 
 	idx = atomic_add_16_ov(cnt, 1) % IN6IFA_TRACE_HIST_SIZE;
 	ctrace_record(&tr[idx]);
-}
-
-static void
-in6_ifaddr_set_dadprogress(struct in6_ifaddr *ia)
-{
-	struct ifnet* ifp = ia->ia_ifp;
-	uint32_t flags = IN6_IFF_TENTATIVE;
-	uint32_t optdad = nd6_optimistic_dad;
-
-	if (optdad) {
-		if ((ifp->if_eflags & IFEF_IPV6_ROUTER) != 0) {
-			optdad = 0;
-		} else {
-			struct nd_ifinfo *ndi = NULL;
-
-			ndi = ND_IFINFO(ifp);
-			VERIFY (ndi != NULL && ndi->initialized);
-			lck_mtx_lock(&ndi->lock);
-			if ((ndi->flags & ND6_IFF_REPLICATED) != 0) {
-				optdad = 0;
-			}
-			lck_mtx_unlock(&ndi->lock);
-		}
-	}
-
-	if (optdad) {
-		if ((optdad & ND6_OPTIMISTIC_DAD_LINKLOCAL) &&
-		    IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr))
-			flags = IN6_IFF_OPTIMISTIC;
-		else if ((optdad & ND6_OPTIMISTIC_DAD_AUTOCONF) &&
-		    (ia->ia6_flags & IN6_IFF_AUTOCONF)) {
-			if (ia->ia6_flags & IN6_IFF_TEMPORARY) {
-				if (optdad & ND6_OPTIMISTIC_DAD_TEMPORARY)
-					flags = IN6_IFF_OPTIMISTIC;
-			} else if (ia->ia6_flags & IN6_IFF_SECURED) {
-				if (optdad & ND6_OPTIMISTIC_DAD_SECURED)
-					flags = IN6_IFF_OPTIMISTIC;
-			} else {
-				/*
-				 * Keeping the behavior for temp and CGA
-				 * SLAAC addresses to have a knob for optimistic
-				 * DAD.
-				 * Other than that if ND6_OPTIMISTIC_DAD_AUTOCONF
-				 * is set, we should default to optimistic
-				 * DAD.
-				 * For now this means SLAAC addresses with interface
-				 * identifier derived from modified EUI-64 bit
-				 * identifiers.
-				 */
-				flags = IN6_IFF_OPTIMISTIC;
-			}
-		} else if ((optdad & ND6_OPTIMISTIC_DAD_DYNAMIC) &&
-		    (ia->ia6_flags & IN6_IFF_DYNAMIC)) {
-			if (ia->ia6_flags & IN6_IFF_TEMPORARY) {
-				if (optdad & ND6_OPTIMISTIC_DAD_TEMPORARY)
-					flags = IN6_IFF_OPTIMISTIC;
-			} else {
-				flags = IN6_IFF_OPTIMISTIC;
-			}
-		} else if ((optdad & ND6_OPTIMISTIC_DAD_MANUAL) &&
-		    (ia->ia6_flags & IN6_IFF_OPTIMISTIC)) {
-		    	/*
-		    	 * rdar://17483438
-		    	 * Bypass tentative for address assignments
-		    	 * not covered above (e.g. manual) upon request
-		    	 */
-			if (!IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr) &&
-			    !(ia->ia6_flags & IN6_IFF_AUTOCONF) &&
-			    !(ia->ia6_flags & IN6_IFF_DYNAMIC))
-				flags = IN6_IFF_OPTIMISTIC;
-		}
-	}
-
-	ia->ia6_flags &= ~(IN6_IFF_DUPLICATED | IN6_IFF_DADPROGRESS);
-	ia->ia6_flags |= flags;
-	
-	nd6log2((LOG_DEBUG, "%s - %s ifp %s ia6_flags 0x%x\n",
-	    __func__,
-	    ip6_sprintf(&ia->ia_addr.sin6_addr),
-	    if_name(ia->ia_ifp),
-	    ia->ia6_flags));
 }
 
 /*

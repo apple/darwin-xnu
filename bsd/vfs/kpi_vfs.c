@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -138,6 +138,8 @@ static void xattrfile_setattr(vnode_t dvp, const char * basename,
 				struct vnode_attr * vap, vfs_context_t ctx);
 #endif /* CONFIG_APPLEDOUBLE */
 
+static errno_t post_rename(vnode_t fdvp, vnode_t fvp, vnode_t tdvp, vnode_t tvp);
+
 /*
  * vnode_setneedinactive
  *
@@ -233,7 +235,7 @@ VFS_UNMOUNT(mount_t mp, int flags, vfs_context_t ctx)
  *
  *		The return codes documented above are those which may currently
  *		be returned by HFS from hfs_vfs_root, which is a simple wrapper
- *		for a call to hfs_vget on the volume mount poit, not including
+ *		for a call to hfs_vget on the volume mount point, not including
  *		additional error codes which may be propagated from underlying
  *		routines called by hfs_vget.
  */
@@ -336,7 +338,7 @@ VFS_VGET(mount_t mp, ino64_t ino, struct vnode **vpp, vfs_context_t ctx)
 }
 
 int 
-VFS_FHTOVP(mount_t mp, int fhlen, unsigned char * fhp, vnode_t * vpp, vfs_context_t ctx) 
+VFS_FHTOVP(mount_t mp, int fhlen, unsigned char *fhp, vnode_t *vpp, vfs_context_t ctx) 
 {
 	int error;
 
@@ -353,7 +355,7 @@ VFS_FHTOVP(mount_t mp, int fhlen, unsigned char * fhp, vnode_t * vpp, vfs_contex
 }
 
 int 
-VFS_VPTOFH(struct vnode * vp, int *fhlenp, unsigned char * fhp, vfs_context_t ctx)
+VFS_VPTOFH(struct vnode *vp, int *fhlenp, unsigned char *fhp, vfs_context_t ctx)
 {
 	int error;
 
@@ -369,6 +371,31 @@ VFS_VPTOFH(struct vnode * vp, int *fhlenp, unsigned char * fhp, vfs_context_t ct
 	return(error);
 }
 
+int VFS_IOCTL(struct mount *mp, u_long command, caddr_t data,
+			  int flags, vfs_context_t context)
+{
+	if (mp == dead_mountp || !mp->mnt_op->vfs_ioctl)
+		return ENOTSUP;
+
+	return mp->mnt_op->vfs_ioctl(mp, command, data, flags,
+								 context ?: vfs_context_current());
+}
+
+int
+VFS_VGET_SNAPDIR(mount_t mp, vnode_t *vpp, vfs_context_t ctx)
+{
+	int error;
+
+	if ((mp == dead_mountp) || (mp->mnt_op->vfs_vget_snapdir == 0))
+		return(ENOTSUP);
+
+	if (ctx == NULL)
+		ctx = vfs_context_current();
+
+	error = (*mp->mnt_op->vfs_vget_snapdir)(mp, vpp, ctx);
+
+	return (error);
+}
 
 /* returns the cached throttle mask for the mount_t */
 uint64_t
@@ -379,7 +406,7 @@ vfs_throttle_mask(mount_t mp)
 
 /* returns a  copy of vfs type name for the mount_t */
 void 
-vfs_name(mount_t mp, char * buffer)
+vfs_name(mount_t mp, char *buffer)
 {
         strncpy(buffer, mp->mnt_vtable->vfc_name, MFSNAMELEN);
 }
@@ -736,8 +763,10 @@ vfs_devvp(mount_t mp)
 void
 vfs_ioattr(mount_t mp, struct vfsioattr *ioattrp)
 {
-        if (mp == NULL) {
-	        ioattrp->io_maxreadcnt  = MAXPHYS;
+	ioattrp->io_reserved[0] = NULL;
+	ioattrp->io_reserved[1] = NULL;
+	if (mp == NULL) {
+		ioattrp->io_maxreadcnt  = MAXPHYS;
 		ioattrp->io_maxwritecnt = MAXPHYS;
 		ioattrp->io_segreadcnt  = 32;
 		ioattrp->io_segwritecnt = 32;
@@ -745,8 +774,9 @@ vfs_ioattr(mount_t mp, struct vfsioattr *ioattrp)
 		ioattrp->io_maxsegwritesize = MAXPHYS;
 		ioattrp->io_devblocksize = DEV_BSIZE;
 		ioattrp->io_flags = 0;
+		ioattrp->io_max_swappin_available = 0;
 	} else {
-	        ioattrp->io_maxreadcnt  = mp->mnt_maxreadcnt;
+		ioattrp->io_maxreadcnt  = mp->mnt_maxreadcnt;
 		ioattrp->io_maxwritecnt = mp->mnt_maxwritecnt;
 		ioattrp->io_segreadcnt  = mp->mnt_segreadcnt;
 		ioattrp->io_segwritecnt = mp->mnt_segwritecnt;
@@ -754,9 +784,8 @@ vfs_ioattr(mount_t mp, struct vfsioattr *ioattrp)
 		ioattrp->io_maxsegwritesize = mp->mnt_maxsegwritesize;
 		ioattrp->io_devblocksize = mp->mnt_devblocksize;
 		ioattrp->io_flags = mp->mnt_ioflags;
+		ioattrp->io_max_swappin_available = mp->mnt_max_swappin_available;
 	}
-	ioattrp->io_reserved[0] = NULL;
-	ioattrp->io_reserved[1] = NULL;
 }
 
 
@@ -776,6 +805,7 @@ vfs_setioattr(mount_t mp, struct vfsioattr * ioattrp)
 	mp->mnt_maxsegwritesize = ioattrp->io_maxsegwritesize;
 	mp->mnt_devblocksize = ioattrp->io_devblocksize;
 	mp->mnt_ioflags = ioattrp->io_flags;
+	mp->mnt_max_swappin_available = ioattrp->io_max_swappin_available;
 }
  
 /*
@@ -787,7 +817,7 @@ vfs_setioattr(mount_t mp, struct vfsioattr * ioattrp)
 typedef int (*PFI)(void *);
 extern int vfs_opv_numops;
 errno_t
-vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t * handle)
+vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t *handle)
 {
 	struct vfstable	*newvfstbl = NULL;
 	int	i,j;
@@ -854,6 +884,10 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t * handle)
 		newvfstbl->vfc_vfsflags |= VFC_VFSNOMACLABEL;
 	if (vfe->vfe_flags & VFS_TBLVNOP_NOUPDATEID_RENAME)
 		newvfstbl->vfc_vfsflags |= VFC_VFSVNOP_NOUPDATEID_RENAME;
+	if (vfe->vfe_flags & VFS_TBLVNOP_SECLUDE_RENAME)
+		newvfstbl->vfc_vfsflags |= VFC_VFSVNOP_SECLUDE_RENAME;
+	if (vfe->vfe_flags & VFS_TBLCANMOUNTROOT)
+		newvfstbl->vfc_vfsflags |= VFC_VFSCANMOUNTROOT;
 
 	/*
 	 * Allocate and init the vectors.
@@ -970,7 +1004,7 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t * handle)
  * file system was added
  */
 errno_t  
-vfs_fsremove(vfstable_t  handle)
+vfs_fsremove(vfstable_t handle)
 {
 	struct vfstable * vfstbl =  (struct vfstable *)handle;
 	void *old_desc = NULL;
@@ -1000,6 +1034,32 @@ vfs_fsremove(vfstable_t  handle)
 	}
 
 	return(err);
+}
+
+void vfs_setowner(mount_t mp, uid_t uid, gid_t gid)
+{
+	mp->mnt_fsowner = uid;
+	mp->mnt_fsgroup = gid;
+}
+
+/*
+ * Callers should be careful how they use this; accessing
+ * mnt_last_write_completed_timestamp is not thread-safe.  Writing to
+ * it isn't either.  Point is: be prepared to deal with strange values
+ * being returned.
+ */
+uint64_t vfs_idle_time(mount_t mp)
+{
+	if (mp->mnt_pending_write_size)
+		return 0;
+
+	struct timeval now;
+
+	microuptime(&now);
+
+	return ((now.tv_sec
+			 - mp->mnt_last_write_completed_timestamp.tv_sec) * 1000000
+			+ now.tv_usec - mp->mnt_last_write_completed_timestamp.tv_usec);
 }
 
 int
@@ -1295,6 +1355,11 @@ vfs_context_issuser(vfs_context_t ctx)
 	return(kauth_cred_issuser(vfs_context_ucred(ctx)));
 }
 
+int vfs_context_iskernel(vfs_context_t ctx)
+{
+	return ctx == &kerncontext;
+}
+
 /*
  * Given a context, for all fields of vfs_context_t which
  * are not held with a reference, set those fields to the
@@ -1314,6 +1379,11 @@ vfs_context_bind(vfs_context_t ctx)
 {
 	ctx->vc_thread = current_thread();
 	return 0;
+}
+
+int vfs_isswapmount(mount_t mnt)
+{
+	return mnt && ISSET(mnt->mnt_kern_flag, MNTK_SWAP_MOUNT) ? 1 : 0;
 }
 
 /* XXXXXXXXXXXXXX VNODE KAPIS XXXXXXXXXXXXXXXXXXXXXXXXX */
@@ -2050,10 +2120,10 @@ vnode_get_filesec(vnode_t vp, kauth_filesec_t *fsecp, vfs_context_t ctx)
 
 	fsec = NULL;
 	fsec_uio = NULL;
-	error = 0;
-	
+
 	/* find out how big the EA is */
-	if (vn_getxattr(vp, KAUTH_FILESEC_XATTR, NULL, &xsize, XATTR_NOSECURITY, ctx) != 0) {
+	error = vn_getxattr(vp, KAUTH_FILESEC_XATTR, NULL, &xsize, XATTR_NOSECURITY, ctx);
+	if (error != 0) {
 		/* no EA, no filesec */
 		if ((error == ENOATTR) || (error == ENOENT) || (error == EJUSTRETURN))
 			error = 0;
@@ -3762,7 +3832,7 @@ VNOP_LINK(vnode_t vp, vnode_t tdvp, struct componentname * cnp, vfs_context_t ct
 errno_t
 vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, struct vnode_attr *fvap,
             struct vnode *tdvp, struct vnode **tvpp, struct componentname *tcnp, struct vnode_attr *tvap,
-            uint32_t flags, vfs_context_t ctx)
+            vfs_rename_flags_t flags, vfs_context_t ctx)
 {
 	int _err;
 	struct nameidata *fromnd = NULL;
@@ -3784,13 +3854,6 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 		if (*fvpp == NULLVP) 
 			panic("Not batched, and no fvp?");
 	}
-
-#if CONFIG_SECLUDED_RENAME
-	if ((fcnp->cn_flags & CN_SECLUDE_RENAME) && 
-	    (((*fvpp)->v_mount->mnt_vtable->vfc_vfsflags & VFC_VFSVNOP_SECLUDE_RENAME) == 0)) {
-	    return ENOTSUP;
-	}
-#endif
 
 #if CONFIG_APPLEDOUBLE
 	/* 
@@ -3875,7 +3938,17 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 			printf("VNOP_COMPOUND_RENAME() returned %d\n", _err);
 		}
 	} else {
-		_err = VNOP_RENAME(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, ctx);
+		if (flags) {
+			_err = VNOP_RENAMEX(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, flags, ctx);
+			if (_err == ENOTSUP && flags == VFS_RENAME_SECLUDE) {
+				// Legacy...
+				if ((*fvpp)->v_mount->mnt_vtable->vfc_vfsflags & VFC_VFSVNOP_SECLUDE_RENAME) {
+					fcnp->cn_flags |= CN_SECLUDE_RENAME;
+					_err = VNOP_RENAME(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, ctx);
+				}
+			}
+		} else
+			_err = VNOP_RENAME(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, ctx);
 	}
 
 	/*
@@ -4048,7 +4121,6 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
             vfs_context_t ctx)
 {
 	int _err = 0;
-	int events;
 	struct vnop_rename_args a;
 
 	a.a_desc = &vnop_rename_desc;
@@ -4064,40 +4136,95 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 	_err = (*fdvp->v_op[vnop_rename_desc.vdesc_offset])(&a);
 	DTRACE_FSINFO(rename, vnode_t, fdvp);
 
-	if (_err == 0) {
-		if (tvp && tvp != fvp)
-		        vnode_setneedinactive(tvp);
-	}
+	if (_err)
+		return _err;
+
+	return post_rename(fdvp, fvp, tdvp, tvp);
+}
+
+static errno_t
+post_rename(vnode_t fdvp, vnode_t fvp, vnode_t tdvp, vnode_t tvp)
+{
+	if (tvp && tvp != fvp)
+		vnode_setneedinactive(tvp);
 
 	/* Wrote at least one directory.  If transplanted a dir, also changed link counts */
-	if (_err == 0) {
-		events = NOTE_WRITE;
-		if (vnode_isdir(fvp)) {
-			/* Link count on dir changed only if we are moving a dir and...
-			 * 	--Moved to new dir, not overwriting there
-			 * 	--Kept in same dir and DID overwrite
-			 */
-			if (((fdvp != tdvp) && (!tvp)) || ((fdvp == tdvp) && (tvp))) {
-				events |= NOTE_LINK;
-			}
+	int events = NOTE_WRITE;
+	if (vnode_isdir(fvp)) {
+		/* Link count on dir changed only if we are moving a dir and...
+		 * 	--Moved to new dir, not overwriting there
+		 * 	--Kept in same dir and DID overwrite
+		 */
+		if (((fdvp != tdvp) && (!tvp)) || ((fdvp == tdvp) && (tvp))) {
+			events |= NOTE_LINK;
 		}
-
-		lock_vnode_and_post(fdvp, events);
-		if (fdvp != tdvp) {
-			lock_vnode_and_post(tdvp,  events);
-		}
-
-		/* If you're replacing the target, post a deletion for it */
-		if (tvp)
-		{
-			lock_vnode_and_post(tvp, NOTE_DELETE);
-		}
-
-		lock_vnode_and_post(fvp, NOTE_RENAME);
 	}
 
-	return (_err);
+	lock_vnode_and_post(fdvp, events);
+	if (fdvp != tdvp) {
+		lock_vnode_and_post(tdvp,  events);
+	}
+
+	/* If you're replacing the target, post a deletion for it */
+	if (tvp)
+	{
+		lock_vnode_and_post(tvp, NOTE_DELETE);
+	}
+
+	lock_vnode_and_post(fvp, NOTE_RENAME);
+
+	return 0;
 }
+
+#if 0
+/*
+ *#
+ *#% renamex      fdvp    U U U
+ *#% renamex      fvp     U U U
+ *#% renamex      tdvp    L U U
+ *#% renamex      tvp     X U U
+ *#
+ */
+struct vnop_renamex_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_fdvp;
+	vnode_t a_fvp;
+	struct componentname *a_fcnp;
+	vnode_t a_tdvp;
+	vnode_t a_tvp;
+	struct componentname *a_tcnp;
+	vfs_rename_flags_t a_flags;
+	vfs_context_t a_context;
+};
+#endif /* 0*/
+errno_t
+VNOP_RENAMEX(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
+			 struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp,
+			 vfs_rename_flags_t flags, vfs_context_t ctx)
+{
+	int _err = 0;
+	struct vnop_renamex_args a;
+
+	a.a_desc = &vnop_renamex_desc;
+	a.a_fdvp = fdvp;
+	a.a_fvp = fvp;
+	a.a_fcnp = fcnp;
+	a.a_tdvp = tdvp;
+	a.a_tvp = tvp;
+	a.a_tcnp = tcnp;
+	a.a_flags = flags;
+	a.a_context = ctx;
+
+	/* do the rename of the main file. */
+	_err = (*fdvp->v_op[vnop_renamex_desc.vdesc_offset])(&a);
+	DTRACE_FSINFO(renamex, vnode_t, fdvp);
+
+	if (_err)
+		return _err;
+
+	return post_rename(fdvp, fvp, tdvp, tvp);
+}
+
 
 int
 VNOP_COMPOUND_RENAME( 
@@ -4951,6 +5078,8 @@ VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, 
 			_err = (*vp->v_op[vnop_advlock_desc.vdesc_offset])(&a);
 		}
 		DTRACE_FSINFO(advlock, vnode_t, vp);
+		if (op == F_UNLCK && flags == F_FLOCK)
+			post_event_if_success(vp, _err, NOTE_FUNLOCK);
 	}
 
 	return (_err);
@@ -5178,6 +5307,45 @@ VNOP_COPYFILE(struct vnode *fvp, struct vnode *tdvp, struct vnode *tvp, struct c
 	a.a_context = ctx;
 	_err = (*fvp->v_op[vnop_copyfile_desc.vdesc_offset])(&a);
 	DTRACE_FSINFO(copyfile, vnode_t, fvp);
+	return (_err);
+}
+
+#if 0
+struct vnop_clonefile_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_fvp;
+	vnode_t a_dvp;
+	vnode_t a_vpp;
+	struct componentname *a_cnp;
+	struct vnode_attr *a_vap;
+	uint32_t a_flags;
+	vfs_context_t a_context;
+};
+#endif /* 0 */
+
+errno_t
+VNOP_CLONEFILE(vnode_t fvp, vnode_t dvp, vnode_t *vpp,
+    struct componentname *cnp, struct vnode_attr *vap, uint32_t flags,
+    vfs_context_t ctx)
+{
+	int _err;
+	struct vnop_clonefile_args a;
+	a.a_desc = &vnop_clonefile_desc;
+	a.a_fvp = fvp;
+	a.a_dvp = dvp;
+	a.a_vpp = vpp;
+	a.a_cnp = cnp;
+	a.a_vap = vap;
+	a.a_flags = flags;
+	a.a_context = ctx;
+
+	_err = (*dvp->v_op[vnop_clonefile_desc.vdesc_offset])(&a);
+
+	if (_err == 0 && *vpp)
+		DTRACE_FSINFO(clonefile, vnode_t, *vpp);
+
+	post_event_if_success(dvp, _err, NOTE_WRITE);
+
 	return (_err);
 }
 

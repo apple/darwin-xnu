@@ -44,6 +44,7 @@ type gssd_verifier =  uint64_t;
 type gssd_gid_list = array [*:16] of uint32_t;
 type gssd_ctx = uint64_t;
 type gssd_cred = uint64_t;
+type gssd_etype_list = array [*:64] of int32_t;
 
 subsystem
 #if KERNEL_USER
@@ -135,6 +136,29 @@ routine mach_gss_accept_sec_context_v2(
 	out gids		: gssd_gid_list;
 	out key			: gssd_byte_buffer, dealloc;
 	out outtoken		: gssd_byte_buffer, dealloc;
+	out major_stat		: uint32_t;
+	out minor_stat		: uint32_t
+);
+
+routine mach_gss_init_sec_context_v3(
+	server			: mach_port_t;
+	in  mech		: gssd_mechtype;
+	in  intoken		: gssd_byte_buffer;
+	in  uid			: uint32_t;
+	in  clnt_nt		: gssd_nametype;
+	in  clnt_princ		: gssd_byte_buffer;
+	in  svc_nt		: gssd_nametype;
+	in  svc_princ		: gssd_byte_buffer;
+	in  flags		: uint32_t;
+	in  etypes		: gssd_etype_list;
+	inout gssd_flags	: uint32_t;
+	inout context		: gssd_ctx;
+	inout cred_handle	: gssd_cred;
+	ServerAuditToken atoken	: audit_token_t;
+	out  ret_flags		: uint32_t;
+	out key			: gssd_byte_buffer, dealloc;
+	out outtoken		: gssd_byte_buffer, dealloc;
+	out displayname		: gssd_dstring;
 	out major_stat		: uint32_t;
 	out minor_stat		: uint32_t
 );

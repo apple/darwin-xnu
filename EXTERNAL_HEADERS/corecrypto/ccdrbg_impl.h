@@ -18,7 +18,7 @@ struct ccdrbg_info {
     /*! Size of the DRBG state in bytes **/
     size_t size;
 
-    /** Instantiate the PRNG
+    /*! Instantiate the PRNG
      @param prng       The PRNG state
      @param entropylen Length of entropy
      @param entropy    Entropy bytes
@@ -27,9 +27,9 @@ struct ccdrbg_info {
      @return 0 if successful
      */
     int (*init)(const struct ccdrbg_info *info, struct ccdrbg_state *drbg,
-                unsigned long entropyLength, const void* entropy,
-                unsigned long nonceLength, const void* nonce,
-                unsigned long psLength, const void* ps);
+                size_t entropyLength, const void* entropy,
+                size_t nonceLength, const void* nonce,
+                size_t psLength, const void* ps);
 
     /*! Add entropy to the PRNG
      @param prng       The PRNG state
@@ -40,8 +40,8 @@ struct ccdrbg_info {
      @return 0 if successful
      */
     int (*reseed)(struct ccdrbg_state *prng,
-                  unsigned long entropylen, const void *entropy,
-                  unsigned long inlen, const void *in);
+                  size_t entropylen, const void *entropy,
+                  size_t inlen, const void *in);
 
     /*! Read from the PRNG in a FIPS Testing compliant manor
      @param prng    The PRNG state to read from
@@ -52,8 +52,8 @@ struct ccdrbg_info {
      @return 0 if successfull
      */
     int (*generate)(struct ccdrbg_state *prng,
-                    unsigned long outlen, void *out,
-                    unsigned long inlen, const void *in);
+                    size_t outlen, void *out,
+                    size_t inlen, const void *in);
 
     /*! Terminate a PRNG state
      @param prng   The PRNG state to terminate

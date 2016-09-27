@@ -29,10 +29,10 @@
 #ifndef _NFS_NFS_GSS_H_
 #define _NFS_NFS_GSS_H_
 
+#include "gss/gss_krb5_mech.h"
 #include <gssd/gssd_mach.h>
 #include <sys/param.h>
 #include <nfs/nfs_ioctl.h>
-#include <libkern/crypto/des.h>
 
 #define RPCSEC_GSS			6
 #define	RPCSEC_GSS_VERS_1		1
@@ -51,77 +51,19 @@ enum rpcsec_gss_service {
 };
 
 /* encoded krb5 OID */
-extern u_char krb5_mech[11];
+extern u_char krb5_mech_oid[11];
 
-/*
- * GSS-API things
- */
-typedef uint32_t OM_uint32;
-
-#define GSS_S_COMPLETE			0
-#define GSS_S_CONTINUE_NEEDED		1
-
-/*
- * Some "helper" definitions to make the status code macros obvious.
- * From gssapi.h:
- */
-#define GSS_C_CALLING_ERROR_OFFSET 24
-#define GSS_C_ROUTINE_ERROR_OFFSET 16
-#define GSS_C_SUPPLEMENTARY_OFFSET 0
-#define GSS_C_CALLING_ERROR_MASK ((OM_uint32) 0377ul)
-#define GSS_C_ROUTINE_ERROR_MASK ((OM_uint32) 0377ul)
-#define GSS_C_SUPPLEMENTARY_MASK ((OM_uint32) 0177777ul)
-
-/*
- * The macros that test status codes for error conditions.  Note that the
- * GSS_ERROR() macro has changed slightly from the V1 GSSAPI so that it now
- * evaluates its argument only once.
- */
-#define GSS_CALLING_ERROR(x) \
-	((x) & (GSS_C_CALLING_ERROR_MASK << GSS_C_CALLING_ERROR_OFFSET))
-#define GSS_ROUTINE_ERROR(x) \
-	((x) & (GSS_C_ROUTINE_ERROR_MASK << GSS_C_ROUTINE_ERROR_OFFSET))
-#define GSS_SUPPLEMENTARY_INFO(x) \
-	((x) & (GSS_C_SUPPLEMENTARY_MASK << GSS_C_SUPPLEMENTARY_OFFSET))
-#define GSS_ERROR(x) \
-	((x) & ((GSS_C_CALLING_ERROR_MASK << GSS_C_CALLING_ERROR_OFFSET) | \
-		(GSS_C_ROUTINE_ERROR_MASK << GSS_C_ROUTINE_ERROR_OFFSET)))
 
 #define GSS_MAXSEQ			0x80000000	// The biggest sequence number
 #define GSS_SVC_MAXCONTEXTS		500000		// Max contexts supported
 #define GSS_SVC_SEQWINDOW		256		// Server's sequence window
 #define GSS_CLNT_SEQLISTMAX		32		// Max length of req seq num list
 
-#define SKEYLEN	8			// length of DES key
-#define SKEYLEN3 24			// length of DES3 keyboard
-#define MAX_SKEYLEN	SKEYLEN3
-
+#define MAX_SKEYLEN	32
+#define MAX_LUCIDLEN	(sizeof (lucid_context) + MAX_SKEYLEN)
 #define GSS_MAX_NEG_CACHE_ENTRIES 16
 #define GSS_NEG_CACHE_TO 3
 #define GSS_PRINT_DELAY	 (8 * 3600)	// Wait day before printing the same error message
-
-typedef struct {
-	uint32_t type; 		// See defines below
-	uint32_t keybytes; 	// Session key length bytes;
-	uint32_t hash_len;
-	u_char   skey[MAX_SKEYLEN];	   	// Session key;
-	union {
-		struct {
-			des_cblock  *key;
-			des_cbc_key_schedule gss_sched;
-			des_cbc_key_schedule gss_sched_Ke;
-		} des;
-		struct {
-			des_cblock		(*key)[3];
-			des_cblock		ckey[3];
-			des3_cbc_key_schedule	gss_sched;
-		} des3;
-	} ks_u;
-} gss_key_info;
-
-#define NFS_GSS_0DES	0 // Not DES or uninitialized
-#define NFS_GSS_1DES	1 // Single DES with DES_MAC_MD5
-#define NFS_GSS_3DES	2 // Triple EDE DES KD with SHA1
 
 /*
  * The client's RPCSEC_GSS context information
@@ -146,15 +88,16 @@ struct nfs_gss_clnt_ctx {
 	uint32_t		gss_clnt_seqwin;	// Server's seq num window
 	uint32_t		*gss_clnt_seqbits;	// Bitmap to track seq numbers in use
 	mach_port_t		gss_clnt_mport;		// Mach port for gssd upcall
+	uint32_t		gss_clnt_verflen;	// RPC verifier length from server
 	uint8_t			*gss_clnt_verf;		// RPC verifier from server
 	uint8_t			*gss_clnt_svcname;	// Service name e.g. "nfs/big.apple.com"
 	uint32_t		gss_clnt_svcnamlen;	// Service name length
 	gssd_nametype		gss_clnt_svcnt;		// Service name type
 	gssd_cred		gss_clnt_cred_handle;	// Opaque cred handle from gssd
 	gssd_ctx		gss_clnt_context;	// Opaque context handle from gssd
+	gss_ctx_id_t		gss_clnt_ctx_id;	// Underlying gss context
 	uint8_t			*gss_clnt_token;	// GSS token exchanged via gssd & server
 	uint32_t		gss_clnt_tokenlen;	// Length of token
-	gss_key_info		*gss_clnt_kinfo;		// GSS key info
 	uint32_t		gss_clnt_gssd_flags;	// Special flag bits to gssd
 	uint32_t		gss_clnt_major;		// GSS major result from gssd or server
 	uint32_t		gss_clnt_minor;		// GSS minor result from gssd or server
@@ -189,9 +132,9 @@ struct nfs_gss_svc_ctx {
 	uint32_t		*gss_svc_seqbits;	// Bitmap to track seq numbers
 	gssd_cred		gss_svc_cred_handle;	// Opaque cred handle from gssd
 	gssd_ctx		gss_svc_context;	// Opaque context handle from gssd
+	gss_ctx_id_t		gss_svc_ctx_id;		// Underlying gss context
 	u_char			*gss_svc_token;		// GSS token exchanged via gssd & client
 	uint32_t		gss_svc_tokenlen;	// Length of token
-	gss_key_info		gss_svc_kinfo;		// Session key info
 	uint32_t		gss_svc_major;		// GSS major result from gssd
 	uint32_t		gss_svc_minor;		// GSS minor result from gssd
 };

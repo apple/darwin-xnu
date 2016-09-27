@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -85,6 +85,7 @@
 #include <kern/simple_lock.h>
 #include <kern/queue.h>
 #include <kern/sched_prim.h>
+#include <kern/backtrace.h>
 #include <kern/cpu_number.h>
 #include <kern/zalloc.h>
 
@@ -314,7 +315,7 @@ static lck_grp_t *mbuf_mlock_grp;
 static lck_grp_attr_t *mbuf_mlock_grp_attr;
 
 /* Back-end (common) layer */
-static void *mbuf_worker_run;	/* wait channel for worker thread */
+static boolean_t mbuf_worker_needs_wakeup; /* wait channel for mbuf worker */
 static int mbuf_worker_ready;	/* worker thread is runnable */
 static int mbuf_expand_mcl;	/* number of cluster creation requets */
 static int mbuf_expand_big;	/* number of big cluster creation requests */
@@ -558,6 +559,13 @@ static lck_attr_t *mleak_lock_attr;
 static lck_grp_t *mleak_lock_grp;
 static lck_grp_attr_t *mleak_lock_grp_attr;
 
+/* Lock to protect the completion callback table */
+static lck_grp_attr_t *mbuf_tx_compl_tbl_lck_grp_attr = NULL;
+static lck_attr_t *mbuf_tx_compl_tbl_lck_attr = NULL;
+static lck_grp_t *mbuf_tx_compl_tbl_lck_grp = NULL;
+decl_lck_rw_data(, mbuf_tx_compl_tbl_lck_rw_data);
+lck_rw_t *mbuf_tx_compl_tbl_lock = &mbuf_tx_compl_tbl_lck_rw_data;
+
 extern u_int32_t high_sb_max;
 
 /* The minimum number of objects that are allocated, to start. */
@@ -679,7 +687,7 @@ static int mleak_table_sysctl SYSCTL_HANDLER_ARGS;
 static char *mbuf_dump(void);
 static void mbuf_table_init(void);
 static inline void m_incref(struct mbuf *);
-static inline u_int32_t m_decref(struct mbuf *);
+static inline u_int16_t m_decref(struct mbuf *);
 static int m_clalloc(const u_int32_t, const int, const u_int32_t);
 static void mbuf_worker_thread_init(void);
 static mcache_obj_t *slab_alloc(mbuf_class_t, int);
@@ -766,19 +774,43 @@ static boolean_t mbuf_report_usage(mbuf_class_t);
  * cleared.
  */
 #define	EXTF_READONLY	0x2
-#define	EXTF_MASK	(EXTF_COMPOSITE | EXTF_READONLY)
+/*
+ * This flag indicates that the external cluster is paired with the mbuf.
+ * Pairing implies an external free routine defined which will be invoked
+ * when the reference count drops to the minimum at m_free time.  This
+ * flag is never cleared.
+ */
+#define	EXTF_PAIRED	0x4
+
+#define	EXTF_MASK	\
+	(EXTF_COMPOSITE | EXTF_READONLY | EXTF_PAIRED)
 
 #define	MEXT_RFA(m)		((m)->m_ext.ext_refflags)
+#define	MEXT_MINREF(m)		(MEXT_RFA(m)->minref)
 #define	MEXT_REF(m)		(MEXT_RFA(m)->refcnt)
+#define	MEXT_PREF(m)		(MEXT_RFA(m)->prefcnt)
 #define	MEXT_FLAGS(m)		(MEXT_RFA(m)->flags)
-#define	MBUF_IS_COMPOSITE(m)	\
-	(MEXT_REF(m) == 0 && (MEXT_FLAGS(m) & EXTF_MASK) == EXTF_COMPOSITE)
+#define	MEXT_PRIV(m)		(MEXT_RFA(m)->priv)
+#define	MEXT_PMBUF(m)		(MEXT_RFA(m)->paired)
+#define	MBUF_IS_COMPOSITE(m)						\
+	(MEXT_REF(m) == MEXT_MINREF(m) &&				\
+	(MEXT_FLAGS(m) & EXTF_MASK) == EXTF_COMPOSITE)
+/*
+ * This macro can be used to test if the mbuf is paired to an external
+ * cluster.  The test for MEXT_PMBUF being equal to the mbuf in subject
+ * is important, as EXTF_PAIRED alone is insufficient since it is immutable,
+ * and thus survives calls to m_free_paired.
+ */
+#define	MBUF_IS_PAIRED(m)						\
+	(((m)->m_flags & M_EXT) &&					\
+	(MEXT_FLAGS(m) & EXTF_MASK) == EXTF_PAIRED &&			\
+	MEXT_PMBUF(m) == (m))
 
 /*
  * Macros used to verify the integrity of the mbuf.
  */
 #define	_MCHECK(m) {							\
-	if ((m)->m_type != MT_FREE) {					\
+	if ((m)->m_type != MT_FREE && !MBUF_IS_PAIRED(m)) {		\
 		if (mclaudit == NULL)					\
 			panic("MCHECK: m_type=%d m=%p",			\
 			    (u_int16_t)(m)->m_type, m);			\
@@ -856,27 +888,33 @@ static boolean_t mbuf_report_usage(mbuf_class_t);
 	}								\
 }
 
-#define	MEXT_INIT(m, buf, size, free, arg, rfa, ref, flag) {		\
+#define	MEXT_INIT(m, buf, size, free, arg, rfa, min, ref, pref, flag,	\
+    priv, pm) {								\
 	(m)->m_data = (m)->m_ext.ext_buf = (buf);			\
 	(m)->m_flags |= M_EXT;						\
 	(m)->m_ext.ext_size = (size);					\
 	(m)->m_ext.ext_free = (free);					\
 	(m)->m_ext.ext_arg = (arg);					\
-	(m)->m_ext.ext_refs.forward = (m)->m_ext.ext_refs.backward =	\
-	    &(m)->m_ext.ext_refs;					\
 	MEXT_RFA(m) = (rfa);						\
+	MEXT_MINREF(m) = (min);						\
 	MEXT_REF(m) = (ref);						\
+	MEXT_PREF(m) = (pref);						\
 	MEXT_FLAGS(m) = (flag);						\
+	MEXT_PRIV(m) = (priv);						\
+	MEXT_PMBUF(m) = (pm);						\
 }
 
 #define	MBUF_CL_INIT(m, buf, rfa, ref, flag)	\
-	MEXT_INIT(m, buf, m_maxsize(MC_CL), NULL, NULL, rfa, ref, flag)
+	MEXT_INIT(m, buf, m_maxsize(MC_CL), NULL, NULL, rfa, 0,		\
+	    ref, 0, flag, 0, NULL)
 
 #define	MBUF_BIGCL_INIT(m, buf, rfa, ref, flag)	\
-	MEXT_INIT(m, buf, m_maxsize(MC_BIGCL), m_bigfree, NULL, rfa, ref, flag)
+	MEXT_INIT(m, buf, m_maxsize(MC_BIGCL), m_bigfree, NULL, rfa, 0,	\
+	    ref, 0, flag, 0, NULL)
 
 #define	MBUF_16KCL_INIT(m, buf, rfa, ref, flag)	\
-	MEXT_INIT(m, buf, m_maxsize(MC_16KCL), m_16kfree, NULL, rfa, ref, flag)
+	MEXT_INIT(m, buf, m_maxsize(MC_16KCL), m_16kfree, NULL, rfa, 0,	\
+	    ref, 0, flag, 0, NULL)
 
 /*
  * Macro to convert BSD malloc sleep flag to mcache's
@@ -1149,35 +1187,35 @@ mleak_table_sysctl SYSCTL_HANDLER_ARGS
 static inline void
 m_incref(struct mbuf *m)
 {
-	UInt32 old, new;
-	volatile UInt32 *addr = (volatile UInt32 *)&MEXT_REF(m);
+	UInt16 old, new;
+	volatile UInt16 *addr = (volatile UInt16 *)&MEXT_REF(m);
 
 	do {
 		old = *addr;
 		new = old + 1;
 		ASSERT(new != 0);
-	} while (!OSCompareAndSwap(old, new, addr));
+	} while (!OSCompareAndSwap16(old, new, addr));
 
 	/*
 	 * If cluster is shared, mark it with (sticky) EXTF_READONLY;
-	 * we don't clear the flag when the refcount goes back to 1
-	 * to simplify code calling m_mclhasreference().
+	 * we don't clear the flag when the refcount goes back to the
+	 * minimum, to simplify code calling m_mclhasreference().
 	 */
-	if (new > 1 && !(MEXT_FLAGS(m) & EXTF_READONLY))
-		(void) OSBitOrAtomic(EXTF_READONLY, &MEXT_FLAGS(m));
+	if (new > (MEXT_MINREF(m) + 1) && !(MEXT_FLAGS(m) & EXTF_READONLY))
+		(void) OSBitOrAtomic16(EXTF_READONLY, &MEXT_FLAGS(m));
 }
 
-static inline u_int32_t
+static inline u_int16_t
 m_decref(struct mbuf *m)
 {
-	UInt32 old, new;
-	volatile UInt32 *addr = (volatile UInt32 *)&MEXT_REF(m);
+	UInt16 old, new;
+	volatile UInt16 *addr = (volatile UInt16 *)&MEXT_REF(m);
 
 	do {
 		old = *addr;
 		new = old - 1;
 		ASSERT(old != 0);
-	} while (!OSCompareAndSwap(old, new, addr));
+	} while (!OSCompareAndSwap16(old, new, addr));
 
 	return (new);
 }
@@ -1667,6 +1705,27 @@ mbinit(void)
 	    (nmbclusters << MCLSHIFT) >> MBSHIFT,
 	    (nclusters << MCLSHIFT) >> MBSHIFT,
 	    (njcl << MCLSHIFT) >> MBSHIFT);
+
+	/* initialize lock form tx completion callback table */
+	mbuf_tx_compl_tbl_lck_grp_attr = lck_grp_attr_alloc_init();
+	if (mbuf_tx_compl_tbl_lck_grp_attr == NULL) {
+		panic("%s: lck_grp_attr_alloc_init failed", __func__);
+		/* NOTREACHED */
+	}
+	mbuf_tx_compl_tbl_lck_grp = lck_grp_alloc_init("mbuf_tx_compl_tbl",
+	    mbuf_tx_compl_tbl_lck_grp_attr);
+	if (mbuf_tx_compl_tbl_lck_grp == NULL) {
+		panic("%s: lck_grp_alloc_init failed", __func__);
+		/* NOTREACHED */
+	}
+	mbuf_tx_compl_tbl_lck_attr = lck_attr_alloc_init();
+	if (mbuf_tx_compl_tbl_lck_attr == NULL) {
+		panic("%s: lck_attr_alloc_init failed", __func__);
+		/* NOTREACHED */
+	}
+	lck_rw_init(mbuf_tx_compl_tbl_lock, mbuf_tx_compl_tbl_lck_grp,
+	    mbuf_tx_compl_tbl_lck_attr);
+
 }
 
 /*
@@ -1744,7 +1803,7 @@ slab_alloc(mbuf_class_t class, int wait)
 		 * A 4K cluster slab can have NBCLPG references.
 		 */
 		VERIFY(sp->sl_refcnt >= 1 && sp->sl_chunks == NBCLPG &&
-		    sp->sl_len == PAGE_SIZE && 
+		    sp->sl_len == PAGE_SIZE &&
 		    (sp->sl_refcnt < NBCLPG || sp->sl_head == NULL));
 	} else if (class == MC_16KCL) {
 		mcl_slab_t *nsp;
@@ -2321,7 +2380,7 @@ cslab_free(mbuf_class_t class, mcache_obj_t *list, int purged)
 			VERIFY(clsp->sl_refcnt >= 1 &&
 			    clsp->sl_refcnt <= NCLPG);
 		} else {
-			VERIFY(clsp->sl_refcnt >= 1 && 
+			VERIFY(clsp->sl_refcnt >= 1 &&
 			    clsp->sl_refcnt <= NBCLPG);
 		}
 		if (cl_class == MC_16KCL) {
@@ -2345,8 +2404,12 @@ cslab_free(mbuf_class_t class, mcache_obj_t *list, int purged)
 			if (mclaudit != NULL)
 				mcl_audit_restore_mbuf(m, mca, TRUE);
 
+			MEXT_MINREF(m) = 0;
 			MEXT_REF(m) = 0;
+			MEXT_PREF(m) = 0;
 			MEXT_FLAGS(m) = 0;
+			MEXT_PRIV(m) = 0;
+			MEXT_PMBUF(m) = NULL;
 
 			rfa = (mcache_obj_t *)(void *)MEXT_RFA(m);
 			rfa->obj_next = ref_list;
@@ -2815,8 +2878,8 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 		} else {
 			/*
 			 * if multiple 4K pages are being used for a
-			 * 16K cluster 
-			 */ 
+			 * 16K cluster
+			 */
 			needed = numpages / NSLABSP16KB;
 		}
 
@@ -2884,7 +2947,7 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 			union m16kcluster *m16kcl = (union m16kcluster *)page;
 			mcl_slab_t *nsp;
 			int k;
-				
+
 			/* One for the entire 16KB */
 			sp = slab_get(m16kcl);
 			if (mclaudit != NULL)
@@ -2944,6 +3007,10 @@ out:
 	 * When non-blocking we kick a thread if we have to grow the
 	 * pool or if the number of free clusters is less than requested.
 	 */
+	if (i > 0 && mbuf_worker_ready && mbuf_worker_needs_wakeup) {
+		wakeup((caddr_t)&mbuf_worker_needs_wakeup);
+		mbuf_worker_needs_wakeup = FALSE;
+	}
 	if (class == MC_BIGCL) {
 		if (i > 0) {
 			/*
@@ -2953,11 +3020,8 @@ out:
 			i += m_total(MC_BIGCL);
 			if (i > mbuf_expand_big) {
 				mbuf_expand_big = i;
-				if (mbuf_worker_ready)
-					wakeup((caddr_t)&mbuf_worker_run);
 			}
 		}
-
 		if (m_infree(MC_BIGCL) >= num)
 			return (1);
 	} else {
@@ -2969,11 +3033,8 @@ out:
 			i += m_total(MC_16KCL);
 			if (i > mbuf_expand_16k) {
 				mbuf_expand_16k = i;
-				if (mbuf_worker_ready)
-					wakeup((caddr_t)&mbuf_worker_run);
 			}
 		}
-
 		if (m_infree(MC_16KCL) >= num)
 			return (1);
 	}
@@ -3045,7 +3106,7 @@ freelist_populate(mbuf_class_t class, unsigned int num, int wait)
 		 * MC_CL, verify that the reference count will match that
 		 * assumption
 		 */
-		VERIFY(sp->sl_refcnt == 1 && slab_is_detached(sp)); 
+		VERIFY(sp->sl_refcnt == 1 && slab_is_detached(sp));
 		VERIFY((sp->sl_flags & (SLF_MAPPED | SLF_PARTIAL)) == SLF_MAPPED);
 		/*
 		 * Make sure that the cluster is unmolested
@@ -3400,6 +3461,78 @@ m_getclr(int wait, int type)
 	return (m);
 }
 
+static int
+m_free_paired(struct mbuf *m)
+{
+	VERIFY((m->m_flags & M_EXT) && (MEXT_FLAGS(m) & EXTF_PAIRED));
+
+	membar_sync();
+	if (MEXT_PMBUF(m) == m) {
+		volatile UInt16 *addr = (volatile UInt16 *)&MEXT_PREF(m);
+		int16_t oprefcnt, prefcnt;
+
+		/*
+		 * Paired ref count might be negative in case we lose
+		 * against another thread clearing MEXT_PMBUF, in the
+		 * event it occurs after the above memory barrier sync.
+		 * In that case just ignore as things have been unpaired.
+		 */
+		do {
+			oprefcnt = *addr;
+			prefcnt = oprefcnt - 1;
+		} while (!OSCompareAndSwap16(oprefcnt, prefcnt, addr));
+
+		if (prefcnt > 1) {
+			return (1);
+		} else if (prefcnt == 1) {
+			(*(m->m_ext.ext_free))(m->m_ext.ext_buf,
+			    m->m_ext.ext_size, m->m_ext.ext_arg);
+			return (1);
+		} else if (prefcnt == 0) {
+			VERIFY(MBUF_IS_PAIRED(m));
+
+			/*
+			 * Restore minref to its natural value, so that
+			 * the caller will be able to free the cluster
+			 * as appropriate.
+			 */
+			MEXT_MINREF(m) = 0;
+
+			/*
+			 * Clear MEXT_PMBUF, but leave EXTF_PAIRED intact
+			 * as it is immutable.  atomic_set_ptr also causes
+			 * memory barrier sync.
+			 */
+			atomic_set_ptr(&MEXT_PMBUF(m), NULL);
+
+			switch (m->m_ext.ext_size) {
+			case MCLBYTES:
+				m->m_ext.ext_free = NULL;
+				break;
+
+			case MBIGCLBYTES:
+				m->m_ext.ext_free = m_bigfree;
+				break;
+
+			case M16KCLBYTES:
+				m->m_ext.ext_free = m_16kfree;
+				break;
+
+			default:
+				VERIFY(0);
+				/* NOTREACHED */
+			}
+		}
+	}
+
+	/*
+	 * Tell caller the unpair has occurred, and that the reference
+	 * count on the external cluster held for the paired mbuf should
+	 * now be dropped.
+	 */
+	return (0);
+}
+
 struct mbuf *
 m_free(struct mbuf *m)
 {
@@ -3413,15 +3546,21 @@ m_free(struct mbuf *m)
 		m_redzone_verify(m);
 		/* Free the aux data and tags if there is any */
 		m_tag_delete_chain(m, NULL);
+
+		m_do_tx_compl_callback(m, NULL);
 	}
 
 	if (m->m_flags & M_EXT) {
-		u_int32_t refcnt;
+		u_int16_t refcnt;
 		u_int32_t composite;
+
+		if (MBUF_IS_PAIRED(m) && m_free_paired(m))
+			return (n);
 
 		refcnt = m_decref(m);
 		composite = (MEXT_FLAGS(m) & EXTF_COMPOSITE);
-		if (refcnt == 0 && !composite) {
+
+		if (refcnt == MEXT_MINREF(m) && !composite) {
 			if (m->m_ext.ext_free == NULL) {
 				mcache_free(m_cache(MC_CL), m->m_ext.ext_buf);
 			} else if (m->m_ext.ext_free == m_bigfree) {
@@ -3436,7 +3575,8 @@ m_free(struct mbuf *m)
 			}
 			mcache_free(ref_cache, MEXT_RFA(m));
 			MEXT_RFA(m) = NULL;
-		} else if (refcnt == 0 && composite) {
+		} else if (refcnt == MEXT_MINREF(m) && composite) {
+			VERIFY(!(MEXT_FLAGS(m) & EXTF_PAIRED));
 			VERIFY(m->m_type != MT_FREE);
 
 			mtype_stat_dec(m->m_type);
@@ -3479,20 +3619,27 @@ m_free(struct mbuf *m)
 __private_extern__ struct mbuf *
 m_clattach(struct mbuf *m, int type, caddr_t extbuf,
     void (*extfree)(caddr_t, u_int, caddr_t), u_int extsize, caddr_t extarg,
-    int wait)
+    int wait, int pair)
 {
 	struct ext_ref *rfa = NULL;
 
-	if (m == NULL && (m = _M_GETHDR(wait, type)) == NULL)
+	/*
+	 * If pairing is requested and an existing mbuf is provided, reject
+	 * it if it's already been paired to another cluster.  Otherwise,
+	 * allocate a new one or free any existing below.
+	 */
+	if ((m != NULL && MBUF_IS_PAIRED(m)) ||
+	    (m == NULL && (m = _M_GETHDR(wait, type)) == NULL))
 		return (NULL);
 
 	if (m->m_flags & M_EXT) {
-		u_int32_t refcnt;
+		u_int16_t refcnt;
 		u_int32_t composite;
 
 		refcnt = m_decref(m);
 		composite = (MEXT_FLAGS(m) & EXTF_COMPOSITE);
-		if (refcnt == 0 && !composite) {
+		VERIFY(!(MEXT_FLAGS(m) & EXTF_PAIRED) && MEXT_PMBUF(m) == NULL);
+		if (refcnt == MEXT_MINREF(m) && !composite) {
 			if (m->m_ext.ext_free == NULL) {
 				mcache_free(m_cache(MC_CL), m->m_ext.ext_buf);
 			} else if (m->m_ext.ext_free == m_bigfree) {
@@ -3507,7 +3654,7 @@ m_clattach(struct mbuf *m, int type, caddr_t extbuf,
 			}
 			/* Re-use the reference structure */
 			rfa = MEXT_RFA(m);
-		} else if (refcnt == 0 && composite) {
+		} else if (refcnt == MEXT_MINREF(m) && composite) {
 			VERIFY(m->m_type != MT_FREE);
 
 			mtype_stat_dec(m->m_type);
@@ -3544,7 +3691,13 @@ m_clattach(struct mbuf *m, int type, caddr_t extbuf,
 		return (NULL);
 	}
 
-	MEXT_INIT(m, extbuf, extsize, extfree, extarg, rfa, 1, 0);
+	if (!pair) {
+		MEXT_INIT(m, extbuf, extsize, extfree, extarg, rfa,
+		    0, 1, 0, 0, 0, NULL);
+	} else {
+		MEXT_INIT(m, extbuf, extsize, extfree, (caddr_t)m, rfa,
+		    1, 1, 1, EXTF_PAIRED, 0, m);
+	}
 
 	return (m);
 }
@@ -3566,7 +3719,7 @@ m_getcl(int wait, int type, int flags)
 
 	m = mcache_alloc(m_cache(MC_MBUF_CL), mcflags);
 	if (m != NULL) {
-		u_int32_t flag;
+		u_int16_t flag;
 		struct ext_ref *rfa;
 		void *cl;
 
@@ -3778,10 +3931,10 @@ m_dup_pkthdr(struct mbuf *to, struct mbuf *from, int how)
 void
 m_copy_pftag(struct mbuf *to, struct mbuf *from)
 {
-	to->m_pkthdr.pf_mtag = from->m_pkthdr.pf_mtag;
+	memcpy(m_pftag(to), m_pftag(from), sizeof(struct pf_mtag));
 #if PF_ECN
-	to->m_pkthdr.pf_mtag.pftag_hdr = NULL;
-	to->m_pkthdr.pf_mtag.pftag_flags &= ~(PF_TAG_HDR_INET|PF_TAG_HDR_INET6);
+	m_pftag(to)->pftag_hdr = NULL;
+	m_pftag(to)->pftag_flags &= ~(PF_TAG_HDR_INET|PF_TAG_HDR_INET6);
 #endif /* PF_ECN */
 }
 
@@ -3802,7 +3955,7 @@ m_classifier_init(struct mbuf *m, uint32_t pktf_mask)
 #if MEASURE_BW
 	m->m_pkthdr.pkt_bwseq  = 0;
 #endif /* MEASURE_BW */
-	m->m_pkthdr.pkt_enqueue_ts = 0;
+	m->m_pkthdr.pkt_timestamp = 0;
 }
 
 void
@@ -3839,7 +3992,7 @@ m_getpackets_internal(unsigned int *num_needed, int num_with_pkthdrs,
 	unsigned int pnum, needed = *num_needed;
 	mcache_obj_t *mp_list = NULL;
 	int mcflags = MSLEEPF(wait);
-	u_int32_t flag;
+	u_int16_t flag;
 	struct ext_ref *rfa;
 	mcache_t *cp;
 	void *cl;
@@ -3933,7 +4086,7 @@ m_getpackets_internal(unsigned int *num_needed, int num_with_pkthdrs,
 		printf("%s: File a radar related to <rdar://10146739>. \
 			needed = %u, pnum = %u, num_needed = %u \n",
 			__func__, needed, pnum, *num_needed);
-	}		
+	}
 
 	*num_needed = pnum;
 	return (top);
@@ -4183,7 +4336,7 @@ m_allocpacket_internal(unsigned int *numlist, size_t packetlen,
 
 	for (;;) {
 		struct mbuf *m;
-		u_int32_t flag;
+		u_int16_t flag;
 		struct ext_ref *rfa;
 		void *cl;
 		int pkthdr;
@@ -4361,13 +4514,11 @@ m_freem_list(struct mbuf *m)
 		while (m != NULL) {
 			struct mbuf *next = m->m_next;
 			mcache_obj_t *o, *rfa;
-			u_int32_t refcnt, composite;
+			u_int32_t composite;
+			u_int16_t refcnt;
 
 			if (m->m_type == MT_FREE)
 				panic("m_free: freeing an already freed mbuf");
-
-			if (m->m_type != MT_FREE)
-				mt_free++;
 
 			if (m->m_flags & M_PKTHDR) {
 				/* Check for scratch area overflow */
@@ -4376,13 +4527,23 @@ m_freem_list(struct mbuf *m)
 				m_tag_delete_chain(m, NULL);
 			}
 
-			if (!(m->m_flags & M_EXT))
+			if (!(m->m_flags & M_EXT)) {
+				mt_free++;
 				goto simple_free;
+			}
+
+			if (MBUF_IS_PAIRED(m) && m_free_paired(m)) {
+				m = next;
+				continue;
+			}
+
+			mt_free++;
 
 			o = (mcache_obj_t *)(void *)m->m_ext.ext_buf;
 			refcnt = m_decref(m);
 			composite = (MEXT_FLAGS(m) & EXTF_COMPOSITE);
-			if (refcnt == 0 && !composite) {
+
+			if (refcnt == MEXT_MINREF(m) && !composite) {
 				if (m->m_ext.ext_free == NULL) {
 					o->obj_next = mcl_list;
 					mcl_list = o;
@@ -4401,7 +4562,8 @@ m_freem_list(struct mbuf *m)
 				rfa->obj_next = ref_list;
 				ref_list = rfa;
 				MEXT_RFA(m) = NULL;
-			} else if (refcnt == 0 && composite) {
+			} else if (refcnt == MEXT_MINREF(m) && composite) {
+				VERIFY(!(MEXT_FLAGS(m) & EXTF_PAIRED));
 				VERIFY(m->m_type != MT_FREE);
 				/*
 				 * Amortize the costs of atomic operations
@@ -4685,7 +4847,7 @@ m_copym_mode(struct mbuf *m, int off0, int len, int wait, uint32_t mode)
 				n->m_len = MIN(n->m_len, MLEN);
 
 			if (MTOD(n, char *) + n->m_len > ((char *)n) + MSIZE)
-				panic("%s n %p copy overflow", 
+				panic("%s n %p copy overflow",
 					__func__, n);
 
 			bcopy(MTOD(m, caddr_t)+off, MTOD(n, caddr_t),
@@ -4737,7 +4899,7 @@ m_copym_with_hdrs(struct mbuf *m0, int off0, int len0, int wait,
 
 	if (off == 0 && (m->m_flags & M_PKTHDR))
 		copyhdr = 1;
-	
+
 	if (m_lastm != NULL && *m_lastm != NULL) {
 		m = *m_lastm;
 		off = *m_off;
@@ -4817,7 +4979,7 @@ m_copym_with_hdrs(struct mbuf *m0, int off0, int len0, int wait,
 			n->m_flags |= M_EXT;
 		} else {
 			if (MTOD(n, char *) + n->m_len > ((char *)n) + MSIZE)
-				panic("%s n %p copy overflow", 
+				panic("%s n %p copy overflow",
 					__func__, n);
 
 			bcopy(MTOD(m, caddr_t)+off, MTOD(n, caddr_t),
@@ -5727,7 +5889,7 @@ m_dup(struct mbuf *m, int how)
 	}
 	while (m != NULL) {
 #if BLUE_DEBUG
-		kprintf("<%x: %x, %x, %x\n", m, m->m_flags, m->m_len,
+		printf("<%x: %x, %x, %x\n", m, m->m_flags, m->m_len,
 		    m->m_data);
 #endif
 		if (copyhdr)
@@ -5766,7 +5928,7 @@ m_dup(struct mbuf *m, int how)
 		m = m->m_next;
 		np = &n->m_next;
 #if BLUE_DEBUG
-		kprintf(">%x: %x, %x, %x\n", n, n->m_flags, n->m_len,
+		printf(">%x: %x, %x, %x\n", n, n->m_flags, n->m_len,
 		    n->m_data);
 #endif
 	}
@@ -5904,7 +6066,8 @@ m_append(struct mbuf *m0, int len, caddr_t cp)
 			space = remainder;
 		bcopy(cp, mtod(m, caddr_t) + m->m_len, space);
 		m->m_len += space;
-		cp += space, remainder -= space;
+		cp += space;
+		remainder -= space;
 	}
 	while (remainder > 0) {
 		/*
@@ -6241,6 +6404,7 @@ done:
 	return (mcache_retry);
 }
 
+__attribute__((noreturn))
 static void
 mbuf_worker_thread(void)
 {
@@ -6248,7 +6412,6 @@ mbuf_worker_thread(void)
 
 	while (1) {
 		lck_mtx_lock(mbuf_mlock);
-
 		mbuf_expand = 0;
 		if (mbuf_expand_mcl) {
 			int n;
@@ -6304,13 +6467,15 @@ mbuf_worker_thread(void)
 			}
 		}
 
+		mbuf_worker_needs_wakeup = TRUE;
+		assert_wait((caddr_t)&mbuf_worker_needs_wakeup,
+		    THREAD_UNINT);
 		lck_mtx_unlock(mbuf_mlock);
-
-		assert_wait(&mbuf_worker_run, THREAD_UNINT);
 		(void) thread_block((thread_continue_t)mbuf_worker_thread);
 	}
 }
 
+__attribute__((noreturn))
 static void
 mbuf_worker_thread_init(void)
 {
@@ -6332,7 +6497,7 @@ slab_get(void *buf)
 
 	if ((slg = slabstbl[ix]) == NULL) {
 		/*
-		 * In the current implementation, we never shrink the slabs 
+		 * In the current implementation, we never shrink the slabs
 		 * table; if we attempt to reallocate a cluster group when
 		 * it's already allocated, panic since this is a sign of a
 		 * memory corruption (slabstbl[ix] got nullified).
@@ -6557,7 +6722,7 @@ mcl_audit_free(void *buf, unsigned int num)
 
 	ix = MTOPG(buf);
 	VERIFY(ix < maxclaudit);
-	
+
 	if (mclaudit[ix].cl_audit[0] != NULL) {
 		mca_list = mclaudit[ix].cl_audit[0];
 		for (i = 0; i < num; i++) {
@@ -6823,7 +6988,7 @@ mleak_logger(u_int32_t num, mcache_obj_t *addr, boolean_t alloc)
 
 	if ((temp % mleak_table.mleak_sample_factor) == 0 && addr != NULL) {
 		uintptr_t bt[MLEAK_STACK_DEPTH];
-		int logged = fastbacktrace(bt, MLEAK_STACK_DEPTH);
+		int logged = backtrace(bt, MLEAK_STACK_DEPTH);
 		mleak_log(bt, addr, logged, num);
 	}
 }
@@ -7293,6 +7458,59 @@ m_reinit(struct mbuf *m, int hdr)
 	return (ret);
 }
 
+int
+m_ext_set_prop(struct mbuf *m, uint32_t o, uint32_t n)
+{
+	ASSERT(m->m_flags & M_EXT);
+	return (atomic_test_set_32(&MEXT_PRIV(m), o, n));
+}
+
+uint32_t
+m_ext_get_prop(struct mbuf *m)
+{
+	ASSERT(m->m_flags & M_EXT);
+	return (MEXT_PRIV(m));
+}
+
+int
+m_ext_paired_is_active(struct mbuf *m)
+{
+	return (MBUF_IS_PAIRED(m) ? (MEXT_PREF(m) > MEXT_MINREF(m)) : 1);
+}
+
+void
+m_ext_paired_activate(struct mbuf *m)
+{
+	struct ext_ref *rfa;
+	int hdr, type;
+	caddr_t extbuf;
+	void *extfree;
+	u_int extsize;
+
+	VERIFY(MBUF_IS_PAIRED(m));
+	VERIFY(MEXT_REF(m) == MEXT_MINREF(m));
+	VERIFY(MEXT_PREF(m) == MEXT_MINREF(m));
+
+	hdr = (m->m_flags & M_PKTHDR);
+	type = m->m_type;
+	extbuf = m->m_ext.ext_buf;
+	extfree = m->m_ext.ext_free;
+	extsize = m->m_ext.ext_size;
+	rfa = MEXT_RFA(m);
+
+	VERIFY(extbuf != NULL && rfa != NULL);
+
+	/*
+	 * Safe to reinitialize packet header tags, since it's
+	 * already taken care of at m_free() time.  Similar to
+	 * what's done in m_clattach() for the cluster.  Bump
+	 * up MEXT_PREF to indicate activation.
+	 */
+	MBUF_INIT(m, hdr, type);
+	MEXT_INIT(m, extbuf, extsize, extfree, (caddr_t)m, rfa,
+	    1, 1, 2, EXTF_PAIRED, MEXT_PRIV(m), m);
+}
+
 void
 m_scratch_init(struct mbuf *m)
 {
@@ -7378,7 +7596,7 @@ m_redzone_verify(struct mbuf *m)
  *
  * The values 6% and 3% are chosen so that we can do simple arithmetic
  * with shift operations.
- */ 
+ */
 static boolean_t
 mbuf_report_usage(mbuf_class_t cl)
 {
@@ -7396,7 +7614,7 @@ mbuf_report_usage(mbuf_class_t cl)
 __private_extern__ void
 mbuf_report_peak_usage(void)
 {
-	int i = 0; 
+	int i = 0;
 	u_int64_t uptime;
 	struct nstat_sysinfo_data ns_data;
 	uint32_t memreleased = 0;
@@ -7405,7 +7623,7 @@ mbuf_report_peak_usage(void)
 	lck_mtx_lock(mbuf_mlock);
 
 	/* Generate an initial report after 1 week of uptime */
-	if (!mb_peak_firstreport && 
+	if (!mb_peak_firstreport &&
 	    uptime > MBUF_PEAK_FIRST_REPORT_THRESHOLD) {
 		mb_peak_newreport = TRUE;
 		mb_peak_firstreport = TRUE;
@@ -7417,7 +7635,7 @@ mbuf_report_peak_usage(void)
 	}
 
 	/*
-	 * Since a report is being generated before 1 week, 
+	 * Since a report is being generated before 1 week,
 	 * we do not need to force another one later
 	 */
 	if (uptime < MBUF_PEAK_FIRST_REPORT_THRESHOLD)
@@ -7441,8 +7659,17 @@ mbuf_report_peak_usage(void)
 	ns_data.u.mb_stats.sb_atmbuflimit = sbmb_limreached;
 	ns_data.u.mb_stats.draincnt = mbstat.m_drain;
 	ns_data.u.mb_stats.memreleased = memreleased;
+	ns_data.u.mb_stats.sbmb_floor = total_sbmb_cnt_floor;
 
 	nstat_sysinfo_send_data(&ns_data);
+
+	/*
+	 * Reset the floor whenever we report a new
+	 * peak to track the trend (increase peek usage
+	 * is not a leak if mbufs get released
+	 * between reports and the floor stays low)
+	 */
+	total_sbmb_cnt_floor = total_sbmb_cnt_peak;
 }
 
 /*
@@ -7454,11 +7681,11 @@ m_drain(void)
 	mbuf_class_t mc;
 	mcl_slab_t *sp, *sp_tmp, *nsp;
 	unsigned int num, k, interval, released = 0;
-	unsigned int total_mem = 0, use_mem = 0;
+	unsigned long total_mem = 0, use_mem = 0;
 	boolean_t ret, purge_caches = FALSE;
 	ppnum_t offset;
 	mcache_obj_t *obj;
-	float per;
+	unsigned long per;
 	static uint64_t last_drain = 0;
 	static unsigned char scratch[32];
 	static ppnum_t scratch_pa = 0;
@@ -7488,11 +7715,11 @@ m_drain(void)
 		lck_mtx_unlock(mbuf_mlock);
 		return;
 	}
-	interval = net_uptime() - last_drain; 
+	interval = net_uptime() - last_drain;
 	if (interval <= mb_drain_maxint) {
 		lck_mtx_unlock(mbuf_mlock);
 		return;
-	} 
+	}
 	if (interval <= mb_drain_maxint * 5)
 		purge_caches = TRUE;
 	last_drain = net_uptime();
@@ -7503,8 +7730,8 @@ m_drain(void)
 		total_mem += m_total(mc) * m_maxsize(mc);
 		use_mem += m_active(mc) * m_maxsize(mc);
 	}
-	per = (float)use_mem / (float)total_mem;
-	if (per >= 0.6) {
+	per = (use_mem * 100) / total_mem;
+	if (per >= 60) {
 		lck_mtx_unlock(mbuf_mlock);
 		return;
 	}
@@ -7529,7 +7756,7 @@ m_drain(void)
 	 * total in the freelist.
 	 */
 	for (mc = 0; mc < NELEM(mbuf_table); mc++) {
-		while (m_cobjlist(mc) && 
+		while (m_cobjlist(mc) &&
 		    m_total(mc) < m_avgtotal(mc) &&
 		    m_infree(mc) > 0.1 * m_avgtotal(mc) + m_minlimit(mc)) {
 			obj = m_cobjlist(mc);
@@ -7586,7 +7813,7 @@ m_drain(void)
 				m_total(mc)--;
 				for (nsp = sp, k = 1; k < NSLABSP16KB; k++) {
 					nsp = nsp->sl_next;
-					VERIFY(nsp->sl_refcnt == 0 && 
+					VERIFY(nsp->sl_refcnt == 0 &&
 					    nsp->sl_base != NULL &&
 					    nsp->sl_len == 0);
 					slab_init(nsp, 0, 0, NULL, NULL, 0, 0,
@@ -7616,7 +7843,7 @@ m_drain(void)
 			 */
 			IOMapperInsertPage(mcl_paddr_base, offset, scratch_pa);
 			mcl_paddr[offset] = 0;
-			kmem_free(mb_map, (vm_offset_t)sp->sl_base, 
+			kmem_free(mb_map, (vm_offset_t)sp->sl_base,
 			    sp->sl_len);
 			slab_init(sp, 0, 0, NULL, NULL, 0, 0, 0);
 			sp->sl_flags = 0;
@@ -7636,7 +7863,7 @@ m_drain_force_sysctl SYSCTL_HANDLER_ARGS
 {
 #pragma unused(arg1, arg2)
 	int val = 0, err;
-	
+
 	err = sysctl_handle_int(oidp, &val, 0, req);
 	if (err != 0 || req->newptr == USER_ADDR_NULL)
 		return (err);
@@ -7666,7 +7893,7 @@ SYSCTL_INT(_kern_ipc, OID_AUTO, mb_normalized,
 SYSCTL_INT(_kern_ipc, OID_AUTO, mb_watchdog,
     CTLFLAG_RW | CTLFLAG_LOCKED, &mb_watchdog, 0, "");
 SYSCTL_PROC(_kern_ipc, OID_AUTO, mb_drain_force,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, NULL, 0, 
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, NULL, 0,
     m_drain_force_sysctl, "I",
     "Forces the mbuf garbage collection to run");
 SYSCTL_INT(_kern_ipc, OID_AUTO, mb_drain_maxint,

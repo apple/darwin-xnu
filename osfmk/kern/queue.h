@@ -136,7 +136,7 @@ __BEGIN_DECLS
  * 		[1] remqueue
  * 		[1] insque
  * 		[1] remque
- * 		[1] re_queue
+ * 		[1] re_queue_head
  * 		[1] re_queue_tail
  * 		[1] movqueue
  * 		[1] qe_element
@@ -519,6 +519,46 @@ re_queue_tail(queue_t que, queue_entry_t elt)
 	         (elt = qe_element((head)->next, typeof(*(elt)), field)); \
 	     &((elt)->field) != (head); \
 	     elt = _nelt, _nelt = qe_element((elt)->field.next, typeof(*(elt)), field)) \
+
+#ifdef XNU_KERNEL_PRIVATE
+
+/* Dequeue an element from head, or return NULL if the queue is empty */
+#define qe_dequeue_head(head, type, field) ({ \
+	queue_entry_t _tmp_entry = dequeue_head((head)); \
+	type *_tmp_element = (type*) NULL; \
+	if (_tmp_entry != (queue_entry_t) NULL) \
+		_tmp_element = qe_element(_tmp_entry, type, field); \
+	_tmp_element; \
+})
+
+/* Dequeue an element from tail, or return NULL if the queue is empty */
+#define qe_dequeue_tail(head, type, field) ({ \
+	queue_entry_t _tmp_entry = dequeue_tail((head)); \
+	type *_tmp_element = (type*) NULL; \
+	if (_tmp_entry != (queue_entry_t) NULL) \
+		_tmp_element = qe_element(_tmp_entry, type, field); \
+	_tmp_element; \
+})
+
+/* Peek at the first element, or return NULL if the queue is empty */
+#define qe_queue_first(head, type, field) ({ \
+	queue_entry_t _tmp_entry = queue_first((head)); \
+	type *_tmp_element = (type*) NULL; \
+	if (_tmp_entry != (queue_entry_t) head) \
+		_tmp_element = qe_element(_tmp_entry, type, field); \
+	_tmp_element; \
+})
+
+/* Peek at the last element, or return NULL if the queue is empty */
+#define qe_queue_last(head, type, field) ({ \
+	queue_entry_t _tmp_entry = queue_last((head)); \
+	type *_tmp_element = (type*) NULL; \
+	if (_tmp_entry != (queue_entry_t) head) \
+		_tmp_element = qe_element(_tmp_entry, type, field); \
+	_tmp_element; \
+})
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*
  *	Macro:		queue_init
@@ -983,11 +1023,9 @@ struct mpqueue_head {
 	struct queue_entry	head;		/* header for queue */
 	uint64_t		earliest_soft_deadline;
 	uint64_t		count;
-#if defined(__i386__) || defined(__x86_64__)
 	lck_mtx_t		lock_data;
+#if defined(__i386__) || defined(__x86_64__)
 	lck_mtx_ext_t		lock_data_ext;
-#else
-	lck_spin_t		lock_data;
 #endif
 };
 
@@ -1014,7 +1052,7 @@ MACRO_END
 #define mpqueue_init(q, lck_grp, lck_attr)		\
 MACRO_BEGIN						\
 	queue_init(&(q)->head);				\
-        lck_spin_init(&(q)->lock_data,			\
+        lck_mtx_init(&(q)->lock_data,			\
 		      lck_grp,				\
 		      lck_attr);			\
 MACRO_END

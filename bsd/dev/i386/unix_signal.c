@@ -63,7 +63,7 @@
 /* Forward: */
 extern boolean_t machine_exception(int, mach_exception_code_t, 
 		mach_exception_subcode_t, int *, mach_exception_subcode_t *);
-extern kern_return_t thread_getstatus(register thread_t act, int flavor,
+extern kern_return_t thread_getstatus(thread_t act, int flavor,
 			thread_state_t tstate, mach_msg_type_number_t *count);
 extern kern_return_t thread_setstatus(thread_t thread, int flavor,
 			thread_state_t tstate, mach_msg_type_number_t count);

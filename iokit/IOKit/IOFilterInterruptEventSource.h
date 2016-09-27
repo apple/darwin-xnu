@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -60,7 +60,7 @@ public:
     @param owner Pointer to the owning/client instance.
     @param sender Where is the interrupt comming from.
     @result false if this interrupt can be ignored. */
-    typedef bool (*Filter)(OSObject *, IOFilterInterruptEventSource *);
+    typedef bool (*Filter)(OSObject *owner, IOFilterInterruptEventSource *sender);
 
 /*! @defined IOFilterInterruptAction
     @discussion Backward compatibilty define for the old non-class scoped type definition.  See $link IOFilterInterruptSource::Filter */

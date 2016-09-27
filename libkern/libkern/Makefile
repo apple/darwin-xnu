@@ -49,7 +49,8 @@ PRIVATE_KERNELFILES = \
 	OSSerializeBinary.h \
 	kext_request_keys.h \
 	mkext.h \
-	prelink.h
+	prelink.h \
+	section_keywords.h
 
 PRIVATE_DATAFILES = \
 	${PRIVATE_KERNELFILES} \
@@ -75,14 +76,12 @@ EXPORT_MI_LIST = \
 	kxld_types.h           \
 	stack_protector.h
 
-
-
 EXPORT_MI_GEN_LIST = version.h
 
 EXPORT_MI_DIR = libkern
 
 version.h: version.h.template $(SRCROOT)/config/MasterVersion
-	@echo "Generating libkern/$@ from $<";
+	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)libkern/$@$(Color0) from $(ColorF)$<$(Color0)";
 	$(_v)install $(DATA_INSTALL_FLAGS) $< $@
 	$(_v)$(NEWVERS) $@ > /dev/null;
 

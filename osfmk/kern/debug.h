@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -29,10 +29,13 @@
 #ifndef	_KERN_DEBUG_H_
 #define _KERN_DEBUG_H_
 
+#include <kern/kcdata.h>
+
 #include <sys/cdefs.h>
 #include <stdint.h>
 #include <uuid/uuid.h>
 #include <mach/boolean.h>
+#include <mach/kern_return.h>
 
 #ifndef XNU_KERNEL_PRIVATE
 #include <TargetConditionals.h>
@@ -40,11 +43,6 @@
 
 #ifdef __APPLE_API_PRIVATE
 #ifdef __APPLE_API_UNSTABLE
-
-/* This value must always match IO_NUM_PRIORITIES defined in thread_info.h */
-#define STACKSHOT_IO_NUM_PRIORITIES 	4
-/* This value must always match MAXTHREADNAMESIZE used in bsd */
-#define STACKSHOT_MAX_THREAD_NAME_SIZE	64
 
 struct thread_snapshot {
 	uint32_t 		snapshot_magic;
@@ -90,33 +88,12 @@ struct thread_snapshot {
 	uint64_t		total_syscalls;
 	char			pth_name[STACKSHOT_MAX_THREAD_NAME_SIZE];
 
-} __attribute__ ((packed));
+} __attribute__((packed));
 
-struct thread_snapshot_v2 {
-	uint64_t  ths_thread_id;
-	uint64_t  ths_wait_event;
-	uint64_t  ths_continuation;
-	uint64_t  ths_total_syscalls;
-	uint64_t  ths_voucher_identifier;
-	uint64_t  ths_dqserialnum;
-	uint64_t  ths_user_time;
-	uint64_t  ths_sys_time;
-	uint64_t  ths_ss_flags;
-	uint64_t  ths_last_run_time;
-	uint64_t  ths_last_made_runnable_time;
-	uint32_t  ths_state;
-	uint32_t  ths_sched_flags;
-	int16_t   ths_base_priority;
-	int16_t   ths_sched_priority;
-	uint8_t   ths_eqos;
-	uint8_t   ths_rqos;
-	uint8_t   ths_rqos_override;
-	uint8_t   ths_io_tier;
-} __attribute__ ((packed));
-
+/* old, non kcdata format */
 struct task_snapshot {
-	uint32_t		snapshot_magic;
-	int32_t			pid;
+	uint32_t snapshot_magic;
+	int32_t pid;
 	uint64_t		uniqueid;
 	uint64_t		user_time_in_terminated_threads;
 	uint64_t		system_time_in_terminated_threads;
@@ -166,48 +143,7 @@ struct task_snapshot {
 
 } __attribute__ ((packed));
 
-struct io_stats_snapshot
-{
-	/*
-	 * I/O Statistics
-	 * XXX: These fields must be together.
-	 */
-	uint64_t         ss_disk_reads_count;
-	uint64_t         ss_disk_reads_size;
-	uint64_t         ss_disk_writes_count;
-	uint64_t         ss_disk_writes_size;
-	uint64_t         ss_io_priority_count[STACKSHOT_IO_NUM_PRIORITIES];
-	uint64_t         ss_io_priority_size[STACKSHOT_IO_NUM_PRIORITIES];
-	uint64_t         ss_paging_count;
-	uint64_t         ss_paging_size;
-	uint64_t         ss_non_paging_count;
-	uint64_t         ss_non_paging_size;
-	uint64_t         ss_data_count;
-	uint64_t         ss_data_size;
-	uint64_t         ss_metadata_count;
-	uint64_t         ss_metadata_size;
-	/* XXX: I/O Statistics end */
 
-} __attribute__ ((packed));
-
-struct task_snapshot_v2 {
-	uint64_t  ts_unique_pid;
-	uint64_t  ts_ss_flags;
-	uint64_t  ts_user_time_in_terminated_threads;
-	uint64_t  ts_system_time_in_terminated_threads;
-	uint64_t  ts_p_start_sec;
-	uint64_t  ts_task_size;
-	uint64_t  ts_max_resident_size;
-	uint32_t  ts_suspend_count;
-	uint32_t  ts_faults;
-	uint32_t  ts_pageins;
-	uint32_t  ts_cow_faults;
-	uint32_t  ts_was_throttled;
-	uint32_t  ts_did_throttle;
-	uint32_t  ts_latency_qos;
-	int32_t   ts_pid;
-	char      ts_p_comm[32];
-} __attribute__ ((packed));
 
 struct micro_snapshot {
 	uint32_t		snapshot_magic;
@@ -218,34 +154,7 @@ struct micro_snapshot {
 	uint16_t		ms_opaque_flags;	/* managed by external entity, e.g. fdrmicrod */
 } __attribute__ ((packed));
 
-struct mem_and_io_snapshot {
-	uint32_t	snapshot_magic;
-	uint32_t	free_pages;
-	uint32_t	active_pages;
-	uint32_t	inactive_pages;
-	uint32_t	purgeable_pages;
-	uint32_t	wired_pages;
-	uint32_t	speculative_pages;
-	uint32_t	throttled_pages;
-	uint32_t	filebacked_pages;
-	uint32_t 	compressions;
-	uint32_t	decompressions;
-	uint32_t	compressor_size;
-	int     	busy_buffer_count;
-	uint32_t	pages_wanted;
-	uint32_t	pages_reclaimed;
-	uint8_t		pages_wanted_reclaimed_valid; // did mach_vm_pressure_monitor succeed?
-} __attribute__((packed));
 
-struct stack_snapshot_frame32 {
-	uint32_t lr;
-    uint32_t sp;
-};
-
-struct stack_snapshot_frame64 {
-    uint64_t lr;
-    uint64_t sp;
-};
 
 struct _dyld_cache_header
 {
@@ -264,20 +173,12 @@ struct _dyld_cache_header
     uint8_t     uuid[16];               // unique value for each shared cache file
 };
 
-struct dyld_uuid_info_32 {
-    uint32_t imageLoadAddress; /* base address image is mapped at */
-	uuid_t	 imageUUID;
-};
-
-struct dyld_uuid_info_64 {
-    uint64_t imageLoadAddress; /* base address image is mapped at */
-    uuid_t   imageUUID;
-};
 
 enum micro_snapshot_flags {
 	kInterruptRecord	= 0x1,
 	kTimerArmingRecord	= 0x2,
-	kUserMode 			= 0x4, /* interrupted usermode, or armed by usermode */
+	kUserMode 		= 0x4, /* interrupted usermode, or armed by usermode */
+	kIORecord 		= 0x8,
 };
 
 /*
@@ -288,80 +189,54 @@ enum generic_snapshot_flags {
 	kKernel64_p 		= 0x2
 };
 
-enum task_snapshot_flags {
-	kTaskRsrcFlagged      = 0x4, // In the EXC_RESOURCE danger zone?
-	kTerminatedSnapshot   = 0x8,
-	kPidSuspended         = 0x10, // true for suspended task
-	kFrozen               = 0x20, // true for hibernated task (along with pidsuspended)
-	kTaskDarwinBG         = 0x40,
-	kTaskExtDarwinBG      = 0x80,
-	kTaskVisVisible       = 0x100,
-	kTaskVisNonvisible    = 0x200,
-	kTaskIsForeground     = 0x400,
-	kTaskIsBoosted        = 0x800,
-	kTaskIsSuppressed     = 0x1000,
-	kTaskIsTimerThrottled = 0x2000, /* deprecated */
-	kTaskIsImpDonor       = 0x4000,
-	kTaskIsLiveImpDonor   = 0x8000
-};
-
-enum thread_snapshot_flags {
-	kHasDispatchSerial = 0x4,
-	kStacksPCOnly      = 0x8,  /* Stack traces have no frame pointers. */
-	kThreadDarwinBG    = 0x10, /* Thread is darwinbg */
-	kThreadIOPassive   = 0x20, /* Thread uses passive IO */
-	kThreadSuspended   = 0x40, /* Thread is suspended */
-	kThreadTruncatedBT = 0x80, /* Unmapped pages caused truncated backtrace */
-	kGlobalForcedIdle  = 0x100, /* Thread performs global forced idle */
-	kThreadDecompressedBT = 0x200,   /* Some thread stack pages were decompressed as part of BT */
-	kThreadFaultedBT = 0x400   /* Some thread stack pages were faulted in as part of BT */
-};
 
 #define VM_PRESSURE_TIME_WINDOW 5 /* seconds */
 
 enum {
-	STACKSHOT_GET_DQ							= 0x01,
-	STACKSHOT_SAVE_LOADINFO						= 0x02,
-	STACKSHOT_GET_GLOBAL_MEM_STATS				= 0x04,
-	STACKSHOT_SAVE_KEXT_LOADINFO				= 0x08,
-	STACKSHOT_GET_MICROSTACKSHOT				= 0x10,
-	STACKSHOT_GLOBAL_MICROSTACKSHOT_ENABLE		= 0x20,
-	STACKSHOT_GLOBAL_MICROSTACKSHOT_DISABLE		= 0x40,
-	STACKSHOT_SET_MICROSTACKSHOT_MARK			= 0x80,
-	STACKSHOT_SAVE_KERNEL_FRAMES_ONLY			= 0x100,
-	STACKSHOT_GET_BOOT_PROFILE					= 0x200,
-	STACKSHOT_GET_WINDOWED_MICROSTACKSHOTS		= 0x400,
-	STACKSHOT_WINDOWED_MICROSTACKSHOTS_ENABLE	= 0x800,
-	STACKSHOT_WINDOWED_MICROSTACKSHOTS_DISABLE	= 0x1000,
-	STACKSHOT_SAVE_IMP_DONATION_PIDS		= 0x2000,
-	STACKSHOT_SAVE_IN_KERNEL_BUFFER			= 0x4000,
-	STACKSHOT_RETRIEVE_EXISTING_BUFFER		= 0x8000,
-	STACKSHOT_KCDATA_FORMAT				= 0x10000,
-	STACKSHOT_ENABLE_FAULTING			= 0x20000
+	STACKSHOT_GET_DQ                           = 0x01,
+	STACKSHOT_SAVE_LOADINFO                    = 0x02,
+	STACKSHOT_GET_GLOBAL_MEM_STATS             = 0x04,
+	STACKSHOT_SAVE_KEXT_LOADINFO               = 0x08,
+	STACKSHOT_GET_MICROSTACKSHOT               = 0x10,
+	STACKSHOT_GLOBAL_MICROSTACKSHOT_ENABLE     = 0x20,
+	STACKSHOT_GLOBAL_MICROSTACKSHOT_DISABLE    = 0x40,
+	STACKSHOT_SET_MICROSTACKSHOT_MARK          = 0x80,
+	STACKSHOT_ACTIVE_KERNEL_THREADS_ONLY       = 0x100,
+	STACKSHOT_GET_BOOT_PROFILE                 = 0x200,
+	STACKSHOT_SAVE_IMP_DONATION_PIDS           = 0x2000,
+	STACKSHOT_SAVE_IN_KERNEL_BUFFER            = 0x4000,
+	STACKSHOT_RETRIEVE_EXISTING_BUFFER         = 0x8000,
+	STACKSHOT_KCDATA_FORMAT                    = 0x10000,
+	STACKSHOT_ENABLE_BT_FAULTING               = 0x20000,
+	STACKSHOT_COLLECT_DELTA_SNAPSHOT           = 0x40000,
+	/*
+	 * STACKSHOT_TAILSPIN flips on several features aimed at minimizing the size
+	 * of stackshots.  It is meant to be used only by the tailspin daemon.  Its
+	 * behavior may be changed at any time to suit the needs of the tailspin
+	 * daemon.  Seriously, if you are not the tailspin daemon, don't use this
+	 * flag.  If you need these features, ask us to add a stable SPI for what
+	 * you need.   That being said, the features it turns on are:
+	 *
+	 * minimize_uuids: If the set of loaded dylibs or kexts has not changed in
+	 * the delta period, do then not report them.
+	 *
+	 * iostats: do not include io statistics.
+	 *
+	 * trace_fp: do not include the frame pointers in stack traces.
+	 *
+	 * minimize_nonrunnables: Do not report detailed information about threads
+	 * which were not runnable in the delta period.
+	 */
+	STACKSHOT_TAILSPIN                         = 0x80000,
+	/*
+	 * Kernel consumers of stackshot (via stack_snapshot_from_kernel) can ask
+	 * that we try to take the stackshot lock, and fail if we don't get it.
+	 */
+	STACKSHOT_TRYLOCK                          = 0x100000,
+	STACKSHOT_ENABLE_UUID_FAULTING             = 0x200000,
+	STACKSHOT_FROM_PANIC                       = 0x400000,
+	STACKSHOT_NO_IO_STATS                      = 0x800000,
 };
-
-/*
- * NOTE: Please update libkdd/kcdata/kcdtypes.c if you make any changes
- * in STACKSHOT_KCTYPE_* types.
- */
-#define STACKSHOT_KCTYPE_IOSTATS                0x901  /* io_stats_snapshot */
-#define STACKSHOT_KCTYPE_GLOBAL_MEM_STATS       0x902  /* struct mem_and_io_snapshot */
-#define STACKSHOT_KCCONTAINER_TASK              0x903
-#define STACKSHOT_KCCONTAINER_THREAD            0x904
-#define STACKSHOT_KCTYPE_TASK_SNAPSHOT          0x905  /* task_snapshot_v2 */
-#define STACKSHOT_KCTYPE_THREAD_SNAPSHOT        0x906  /* thread_snapshot_v2 */
-#define STASKSHOT_KCTYPE_DONATING_PIDS          0x907  /* int[] */
-#define STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO   0x908  /* same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
-#define STACKSHOT_KCTYPE_THREAD_NAME            0x909  /* char[] */
-#define STACKSHOT_KCTYPE_KERN_STACKFRAME        0x90A  /* struct stack_snapshot_frame32 */
-#define STACKSHOT_KCTYPE_KERN_STACKFRAME64      0x90B  /* struct stack_snapshot_frame64 */
-#define STACKSHOT_KCTYPE_USER_STACKFRAME        0x90C  /* struct stack_snapshot_frame32 */
-#define STACKSHOT_KCTYPE_USER_STACKFRAME64      0x90D  /* struct stack_snapshot_frame64 */
-#define STACKSHOT_KCTYPE_BOOTARGS               0x90E  /* boot args string */
-#define STACKSHOT_KCTYPE_OSVERSION              0x90F  /* os version string */
-#define STACKSHOT_KCTYPE_KERN_PAGE_SIZE         0x910  /* kernel page size in uint32_t */
-#define STACKSHOT_KCTYPE_JETSAM_LEVEL           0x911  /* jetsam level in uint32_t */
-
 
 #define STACKSHOT_THREAD_SNAPSHOT_MAGIC 	0xfeedface
 #define STACKSHOT_TASK_SNAPSHOT_MAGIC   	0xdecafbad
@@ -378,6 +253,9 @@ extern unsigned int	systemLogDiags;
 extern char debug_buf[];
 #endif
 extern char *debug_buf_addr;
+extern char *debug_buf_stackshot_start;
+extern char *debug_buf_stackshot_end;
+
 extern unsigned int	debug_boot_arg;
 extern unsigned char *kernel_uuid;
 extern char kernel_uuid_string[];
@@ -393,7 +271,8 @@ extern unsigned int     switch_debugger;
 extern unsigned int     current_debugger;
 #define NO_CUR_DB       0x0
 #define KDP_CUR_DB      0x1
-#define KDB_CUR_DB      0x2
+//#define KDB_CUR_DB      0x2
+#define HW_SHM_CUR_DB   0x3
 
 extern unsigned int 	active_debugger;
 extern unsigned int 	debug_mode; 
@@ -466,7 +345,8 @@ void 	panic_display_ecc_errors(void);
 						*/
 #define DB_NMI_BTN_ENA  	0x8000  /* Enable button to directly trigger NMI */
 #define DB_PRT_KDEBUG   	0x10000 /* kprintf KDEBUG traces */
-#define DB_DISABLE_LOCAL_CORE   0x20000 /* ignore local core dump support */
+#define DB_DISABLE_LOCAL_CORE   0x20000 /* ignore local kernel core dump support */
+#define DB_DISABLE_GZIP_CORE    0x40000 /* don't gzip kernel core dumps */
 
 #if DEBUG
 /*
@@ -515,6 +395,63 @@ enum {
 
 #endif	/* KERNEL_PRIVATE */
 
+
+#ifdef XNU_KERNEL_PRIVATE
+
+/*
+ * @var not_in_kdp
+ *
+ * @abstract True if we're in normal kernel operation, False if we're in a
+ * single-core debugger context.
+ */
+extern unsigned int not_in_kdp;
+
+/*
+ * @function DebuggerWithCallback
+ *
+ * @abstract Enter single-core debugger context and call a callback function.
+ *
+ * @param proceed_on_sync_failure If true, then go ahead and try to debug even
+ * if we can't synch with the other cores.  This is inherently unsafe and should
+ * only be used if the kernel is going down in flames anyway.
+ *
+ * @result returns KERN_OPERATION_TIMED_OUT if synchronization times out and
+ * proceed_on_sync_failure is false.  Otherwise return the return value of the
+ * callback.
+ */
+kern_return_t
+DebuggerWithCallback(kern_return_t (*callback) (void*),
+					 void *callback_context,
+					 boolean_t proceed_on_sync_failure);
+
+boolean_t oslog_is_safe(void);
+
+/*
+ * @function stack_snapshot_from_kernel
+ *
+ * @abstract Stackshot function for kernel consumers who have their own buffer.
+ *
+ * @param pid     the PID to be traced or -1 for the whole system
+ * @param buf     a pointer to the buffer where the stackshot should be written
+ * @param size    the size of the buffer
+ * @param flags   flags to be passed to the stackshot
+ * @param delta_since_timestamp start time for delta period
+ * @bytes_traced  a pointer to be filled with the length of the stackshot
+ *
+ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+kern_return_t
+stack_snapshot_from_kernel(int pid, void *buf, uint32_t size, uint32_t flags,
+						   uint64_t delta_since_timestamp, unsigned *bytes_traced);
+#ifdef __cplusplus
+}
+#endif
+
+
+#endif /* XNU_KERNEL_PRIVATE */
+
 #ifdef KERNEL
 
 __BEGIN_DECLS
@@ -524,9 +461,19 @@ extern void panic(const char *string, ...) __printflike(1,2);
 #if KERNEL_PRIVATE
 void _consume_panic_args(int, ...);
 void panic_context(unsigned int reason, void *ctx, const char *string, ...);
+void panic_with_options(unsigned int reason, void *ctx, uint64_t debugger_options_mask, const char *str, ...);
+
+/* launchd crashed prefix in message to signal special panic handling */
+#define	LAUNCHD_CRASHED_PREFIX			"initproc exited"
+
+/*
+ * Values for a 64-bit mask that's passed to the debugger.
+ */
+#define DEBUGGER_OPTION_NONE			0x0ULL
+#define DEBUGGER_OPTION_PANICLOGANDREBOOT	0x1ULL /* capture a panic log and then reboot immediately */
 #endif
 
-#if CONFIG_NO_PANIC_STRINGS
+#ifdef CONFIG_NO_PANIC_STRINGS
 #if KERNEL_PRIVATE
 #define panic_plain(x, ...) _consume_panic_args( 0, ## __VA_ARGS__ )
 #define panic(x, ...) _consume_panic_args( 0, ## __VA_ARGS__ )
@@ -548,6 +495,33 @@ void panic_context(unsigned int reason, void *ctx, const char *string, ...);
 void 		populate_model_name(char *);
 unsigned	panic_active(void);
 #endif
+
+
+#if XNU_KERNEL_PRIVATE
+#if DEBUG || DEVELOPMENT
+/* leak pointer scan definitions */
+
+enum
+{
+    kInstanceFlagAddress    = 0x01UL,
+    kInstanceFlagReferenced = 0x02UL,
+    kInstanceFlags          = 0x03UL
+};
+
+#define INSTANCE_GET(x) ((x) & ~kInstanceFlags)
+#define INSTANCE_PUT(x) ((x) ^ ~kInstanceFlags)
+
+typedef void (*leak_site_proc)(void * refCon, uint32_t siteCount, uint32_t zoneSize,
+                               uintptr_t * backtrace, uint32_t btCount);
+
+extern kern_return_t
+zone_leaks(const char * zoneName, uint32_t nameLen, leak_site_proc proc, void * refCon);
+
+extern void
+zone_leaks_scan(uintptr_t * instances, uint32_t count, uint32_t zoneSize, uint32_t * found);
+
+#endif  /* DEBUG || DEVELOPMENT */
+#endif  /* XNU_KERNEL_PRIVATE */
 
 __END_DECLS
 

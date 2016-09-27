@@ -112,7 +112,7 @@ LEAF(___vfork, 0)
 	pushq		%rdi			// put return address back on stack for cerror
 	movq		__current_pid@GOTPCREL(%rip), %rcx
 	lock
-	addq		$1, (%rcx)
+	addl		$1, (%rcx)
 	movq		%rax, %rdi
 	BRANCH_EXTERN(_cerror)
 
@@ -125,7 +125,7 @@ L1:
 L2:
 	movq		__current_pid@GOTPCREL(%rip), %rdx
 	lock
-	addq		$1, (%rdx)
+	addl		$1, (%rdx)
 	jmp		*%rdi
 
 #else

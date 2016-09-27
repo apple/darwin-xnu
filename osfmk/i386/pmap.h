@@ -96,9 +96,6 @@
 #define	intel_ptob(x)		i386_ptob(x)
 #define	intel_round_page(x)	i386_round_page(x)
 #define	intel_trunc_page(x)	i386_trunc_page(x)
-#define trunc_intel_to_vm(x)	trunc_i386_to_vm(x)
-#define round_intel_to_vm(x)	round_i386_to_vm(x)
-#define vm_to_intel(x)		vm_to_i386(x)
 
 /*
  *	i386/i486/i860 Page Table Entry
@@ -170,17 +167,25 @@ typedef uint64_t        pt_entry_t;
 
 typedef uint64_t  pmap_paddr_t;
 
-#if	DEBUG
+#if	DEVELOPMENT || DEBUG
 #define PMAP_ASSERT 1
+extern int pmap_asserts_enabled;
+extern int pmap_asserts_traced;
 #endif
+
 #if PMAP_ASSERT
-#define	pmap_assert(ex) ((ex) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
+#define	pmap_assert(ex) (pmap_asserts_enabled ? ((ex) ? (void)0 : Assert(__FILE__, __LINE__, # ex)) : (void)0)
 
 #define pmap_assert2(ex, fmt, args...)					\
 	do {								\
-		if (!(ex)) {						\
-			kprintf("Assertion %s failed (%s:%d, caller %p) " fmt , #ex, __FILE__, __LINE__, __builtin_return_address(0),  ##args); \
-			panic("Assertion %s failed (%s:%d, caller %p) " fmt , #ex, __FILE__, __LINE__, __builtin_return_address(0),  ##args); 		\
+		if (__improbable(pmap_asserts_enabled && !(ex))) {	\
+			if (pmap_asserts_traced) {			\
+				KERNEL_DEBUG_CONSTANT(0xDEAD1000, __builtin_return_address(0), __LINE__, 0, 0, 0); \
+				kdebug_enable = 0;			\
+			} else {					\
+					kprintf("Assertion %s failed (%s:%d, caller %p) " fmt , #ex, __FILE__, __LINE__, __builtin_return_address(0),  ##args); \
+					panic("Assertion %s failed (%s:%d, caller %p) " fmt , #ex, __FILE__, __LINE__, __builtin_return_address(0),  ##args); \
+			}						\
 		}							\
 	} while(0)
 #else
@@ -307,7 +312,17 @@ pmap_store_pte(pt_entry_t *entryp, pt_entry_t value)
 /* This is conservative, but suffices */
 #define INTEL_PTE_RSVD		((1ULL << 10) | (1ULL << 11) | (0x1FFULL << 54))
 
-#define INTEL_COMPRESSED	(1ULL << 62) /* marker, for invalid PTE only -- ignored by hardware for both regular/EPT entries*/
+#define INTEL_PTE_COMPRESSED	(1ULL << 62) /* marker, for invalid PTE only -- ignored by hardware for both regular/EPT entries*/
+#define INTEL_PTE_COMPRESSED_ALT (1ULL << 61) /* compressed but with "alternate accounting" */
+
+#define INTEL_PTE_COMPRESSED_MASK (INTEL_PTE_COMPRESSED | \
+				   INTEL_PTE_COMPRESSED_ALT)
+#define PTE_IS_COMPRESSED(x)						\
+	((((x) & INTEL_PTE_VALID) == 0) && /* PTE is not valid... */	\
+	 ((x) & INTEL_PTE_COMPRESSED) && /* ...has "compressed" marker" */ \
+	 ((!((x) & ~INTEL_PTE_COMPRESSED_MASK)) || /* ...no other bits */ \
+	  (panic("compressed PTE %p 0x%llx has extra bits 0x%llx: corrupted?", \
+		 &(x), (x), (x) & ~INTEL_PTE_COMPRESSED_MASK), FALSE)))
 
 #define	pa_to_pte(a)		((a) & INTEL_PTE_PFN) /* XXX */
 #define	pte_to_pa(p)		((p) & INTEL_PTE_PFN) /* XXX */
@@ -407,7 +422,8 @@ extern boolean_t pmap_ept_support_ad;
 #define PTE_READ(is_ept)	((is_ept) ? INTEL_EPT_READ : INTEL_PTE_VALID)
 #define PTE_WRITE(is_ept)	((is_ept) ? INTEL_EPT_WRITE : INTEL_PTE_WRITE)
 #define PTE_PS			INTEL_PTE_PS
-#define PTE_COMPRESSED		INTEL_COMPRESSED
+#define PTE_COMPRESSED		INTEL_PTE_COMPRESSED
+#define PTE_COMPRESSED_ALT	INTEL_PTE_COMPRESSED_ALT
 #define PTE_NCACHE(is_ept)	((is_ept) ? INTEL_EPT_NCACHE : INTEL_PTE_NCACHE)
 #define PTE_WTHRU(is_ept)	((is_ept) ? INTEL_EPT_WTHRU : INTEL_PTE_WTHRU)
 #define PTE_REF(is_ept) 	((is_ept) ? INTEL_EPT_REF : INTEL_PTE_REF)
@@ -434,7 +450,6 @@ extern pt_entry_t	*PTmap;
 extern pdpt_entry_t	*IdlePDPT;
 extern pml4_entry_t	*IdlePML4;
 extern boolean_t	no_shared_cr3;
-extern addr64_t		kernel64_cr3;
 extern pd_entry_t	*IdlePTD;	/* physical addr of "Idle" state PTD */
 
 extern uint64_t		pmap_pv_hashlist_walks;
@@ -478,6 +493,12 @@ static	inline void * PHYSMAP_PTOV_check(void *paddr) {
 #define LOWGLOBAL_ALIAS		(VM_MIN_KERNEL_ADDRESS + 0x2000)
 #define CPU_GDT_ALIAS(_cpu)	(LOWGLOBAL_ALIAS + (0x1000*(_cpu)))
 
+/*
+ * This indicates (roughly) where there is free space for the VM
+ * to use for the heap; this does not need to be precise.
+ */
+#define KERNEL_PMAP_HEAP_RANGE_START VM_MIN_KERNEL_AND_KEXT_ADDRESS
+
 #endif /*__x86_64__ */
 
 #include <vm/vm_page.h>
@@ -491,22 +512,27 @@ static	inline void * PHYSMAP_PTOV_check(void *paddr) {
 struct pmap {
 	decl_simple_lock_data(,lock)	/* lock on map */
 	pmap_paddr_t    pm_cr3;         /* physical addr */
-	pmap_paddr_t	pm_eptp;	/* EPTP */
-	boolean_t       pm_shared;
-        pd_entry_t      *dirbase;        /* page directory pointer */
-        vm_object_t     pm_obj;         /* object to hold pde's */
         task_map_t      pm_task_map;
-        pdpt_entry_t    *pm_pdpt;       /* KVA of 3rd level page */
-	pml4_entry_t    *pm_pml4;       /* VKA of top level */
-	vm_object_t     pm_obj_pdpt;    /* holds pdpt pages */
-	vm_object_t     pm_obj_pml4;    /* holds pml4 pages */
+	boolean_t       pm_shared;
+	boolean_t	pagezero_accessible;
 #define	PMAP_PCID_MAX_CPUS	MAX_CPUS	/* Must be a multiple of 8 */
 	pcid_t		pmap_pcid_cpus[PMAP_PCID_MAX_CPUS];
 	volatile uint8_t pmap_pcid_coherency_vector[PMAP_PCID_MAX_CPUS];
 	struct pmap_statistics	stats;	/* map statistics */
 	int		ref_count;	/* reference count */
         int		nx_enabled;
+	pdpt_entry_t    *pm_pdpt;       /* KVA of 3rd level page */
+	pml4_entry_t    *pm_pml4;       /* VKA of top level */
+	vm_object_t     pm_obj;         /* object to hold pde's */
+	vm_object_t     pm_obj_pdpt;    /* holds pdpt pages */
+	vm_object_t     pm_obj_pml4;    /* holds pml4 pages */
+	pmap_paddr_t	pm_eptp;	/* EPTP */
+	pd_entry_t      *dirbase;        /* page directory pointer */
 	ledger_t	ledger;		/* ledger tracking phys mappings */
+#if MACH_ASSERT
+	int		pmap_pid;
+	char		pmap_procname[17];
+#endif /* MACH_ASSERT */
 };
 
 static inline boolean_t
@@ -569,24 +595,45 @@ extern unsigned pmap_memory_region_current;
 
 extern pmap_memory_region_t pmap_memory_regions[];
 #include <i386/pmap_pcid.h>
+#include <vm/vm_map.h>
 
 static inline void
-set_dirbase(pmap_t tpmap, __unused thread_t thread, int my_cpu) {
+set_dirbase(pmap_t tpmap, thread_t thread, int my_cpu) {
 	int ccpu = my_cpu;
 	cpu_datap(ccpu)->cpu_task_cr3 = tpmap->pm_cr3;
 	cpu_datap(ccpu)->cpu_task_map = tpmap->pm_task_map;
+
+	assert((get_preemption_level() > 0) || (ml_get_interrupts_enabled() == FALSE));
+	assert(ccpu == cpu_number());
 	/*
 	 * Switch cr3 if necessary
 	 * - unless running with no_shared_cr3 debugging mode
 	 *   and we're not on the kernel's cr3 (after pre-empted copyio)
 	 */
+	boolean_t nopagezero = tpmap->pagezero_accessible;
+	boolean_t priorpagezero = cpu_datap(ccpu)->cpu_pagezero_mapped;
+	cpu_datap(ccpu)->cpu_pagezero_mapped = nopagezero;
+
 	if (__probable(!no_shared_cr3)) {
-		if (get_cr3_base() != tpmap->pm_cr3) {
+		if (__improbable(nopagezero)) {
+			boolean_t copyio_active = ((thread->machine.specFlags & CopyIOActive) != 0);
 			if (pmap_pcid_ncpus) {
-				pmap_pcid_activate(tpmap, ccpu);
+				pmap_pcid_activate(tpmap, ccpu, TRUE, copyio_active);
+			} else {
+				if (copyio_active) {
+					if (get_cr3_base() != tpmap->pm_cr3) {
+						set_cr3_raw(tpmap->pm_cr3);
+					}
+				} else if (get_cr3_base() != cpu_datap(ccpu)->cpu_kernel_cr3) {
+					set_cr3_raw(cpu_datap(ccpu)->cpu_kernel_cr3);
+				}
 			}
-			else
+		} else if ((get_cr3_base() != tpmap->pm_cr3) || priorpagezero) {
+			if (pmap_pcid_ncpus) {
+				pmap_pcid_activate(tpmap, ccpu, FALSE, FALSE);
+			} else {
 				set_cr3_raw(tpmap->pm_cr3);
+			}
 		}
 	} else {
 		if (get_cr3_base() != cpu_datap(ccpu)->cpu_kernel_cr3)
@@ -696,7 +743,7 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 
 				  
 #define PMAP_ACTIVATE_MAP(map, thread, my_cpu)	{				\
-	register pmap_t		tpmap;					\
+	pmap_t		tpmap;					\
                                                                         \
         tpmap = vm_map_pmap(map);					\
         set_dirbase(tpmap, thread, my_cpu);					\
@@ -704,19 +751,10 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 
 #if   defined(__x86_64__)
 #define PMAP_DEACTIVATE_MAP(map, thread, ccpu)				\
-	pmap_assert(pmap_pcid_ncpus ? (pcid_for_pmap_cpu_tuple(map->pmap, ccpu) == (get_cr3_raw() & 0xFFF)) : TRUE);
+	pmap_assert2((pmap_pcid_ncpus ? (pcid_for_pmap_cpu_tuple(map->pmap, thread, ccpu) == (get_cr3_raw() & 0xFFF)) : TRUE),"PCIDs: 0x%x, active PCID: 0x%x, CR3: 0x%lx, pmap_cr3: 0x%llx, kernel_cr3: 0x%llx, kernel pmap cr3: 0x%llx, CPU active PCID: 0x%x, CPU kernel PCID: 0x%x, specflags: 0x%x, pagezero: 0x%x", pmap_pcid_ncpus, pcid_for_pmap_cpu_tuple(map->pmap, thread, ccpu), get_cr3_raw(), map->pmap->pm_cr3, cpu_datap(ccpu)->cpu_kernel_cr3, kernel_pmap->pm_cr3, cpu_datap(ccpu)->cpu_active_pcid, cpu_datap(ccpu)->cpu_kernel_pcid, thread->machine.specFlags, map->pmap->pagezero_accessible);
 #else
 #define PMAP_DEACTIVATE_MAP(map, thread)
 #endif
-
-#define	PMAP_SWITCH_CONTEXT(old_th, new_th, my_cpu) {			\
-                                                                        \
-	pmap_assert(ml_get_interrupts_enabled() == FALSE);		\
-	if (old_th->map != new_th->map) {				\
-		PMAP_DEACTIVATE_MAP(old_th->map, old_th, my_cpu);		\
-		PMAP_ACTIVATE_MAP(new_th->map, new_th, my_cpu);		\
-	}								\
-}
 
 #if NCOPY_WINDOWS > 0
 #define	PMAP_SWITCH_USER(th, new_map, my_cpu) {				\
@@ -820,6 +858,16 @@ extern boolean_t pmap_is_empty(pmap_t		pmap,
 
 kern_return_t
 pmap_permissions_verify(pmap_t, vm_map_t, vm_offset_t, vm_offset_t);
+
+#if MACH_ASSERT
+extern int pmap_stats_assert;
+#define PMAP_STATS_ASSERTF(args)		\
+	MACRO_BEGIN				\
+	if (pmap_stats_assert) assertf args;	\
+	MACRO_END
+#else /* MACH_ASSERT */
+#define PMAP_STATS_ASSERTF(args)
+#endif /* MACH_ASSERT */
 
 #endif	/* ASSEMBLER */
 

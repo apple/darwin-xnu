@@ -307,7 +307,7 @@ diagCall64(x86_saved_state_t * state)
  		rval = 1;
  	}
  	break;
-#if	DEBUG
+#if	DEVELOPMENT || DEBUG
 	case dgGzallocTest:
 	{
 		(void) ml_set_interrupts_enabled(TRUE);
@@ -321,7 +321,7 @@ diagCall64(x86_saved_state_t * state)
 	break;
 #endif
 
-#if PERMIT_PERMCHECK	
+#if DEVELOPMENT || DEBUG
 	case	dgPermCheck:
 	{
 		(void) ml_set_interrupts_enabled(TRUE);
@@ -330,7 +330,7 @@ diagCall64(x86_saved_state_t * state)
 		(void) ml_set_interrupts_enabled(FALSE);
 	}
  		break;
-#endif /* PERMIT_PERMCHECK */
+#endif /* DEVELOPMENT || DEBUG */
 	default:		/* Handle invalid ones */
 		rval = 0;	/* Return an exception */
 	}

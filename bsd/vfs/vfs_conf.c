@@ -89,14 +89,13 @@ int (*mountroot)(void) = NULL;
  */
 extern	struct vfsops mfs_vfsops;
 extern	int mfs_mountroot(mount_t, vnode_t, vfs_context_t);	/* dead */
-extern  struct vfsops hfs_vfsops;
-extern	int hfs_mountroot(mount_t, vnode_t, vfs_context_t);
 extern	struct vfsops nfs_vfsops;
 extern	int nfs_mountroot(void);
 extern	struct vfsops afs_vfsops;
 extern	struct vfsops null_vfsops;
 extern	struct vfsops devfs_vfsops;
 extern	struct vfsops routefs_vfsops;
+extern  struct vfsops nullfs_vfsops;
 
 #if MOCKFS
 extern	struct vfsops mockfs_vfsops;
@@ -111,10 +110,10 @@ typedef int (*mountroot_t)(mount_t, vnode_t, vfs_context_t);
 
 enum fs_type_num {
 	FT_NFS = 2,
-	FT_HFS = 17,
 	FT_DEVFS = 19,
 	FT_SYNTHFS = 20,
 	FT_ROUTEFS = 21,
+	FT_NULLFS = 22,
 	FT_MOCKFS  = 0x6D6F636B
 };
 
@@ -122,15 +121,6 @@ enum fs_type_num {
  * Set up the filesystem operations for vnodes.
  */
 static struct vfstable vfstbllist[] = {
-	/* HFS/HFS+ Filesystem */
-#if HFS
-	{ &hfs_vfsops, "hfs", FT_HFS, 0, (MNT_LOCAL | MNT_DOVOLFS), hfs_mountroot, NULL, 0, 0, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED | VFC_VFS64BITREADY | VFC_VFSVNOP_PAGEOUTV2 | VFC_VFSVNOP_PAGEINV2
-#if CONFIG_SECLUDED_RENAME
-	| VFC_VFSVNOP_SECLUDE_RENAME
-#endif
-	, NULL, 0, NULL},
-#endif
-
 	/* Sun-compatible Network Filesystem */
 #if NFSCLIENT
 	{ &nfs_vfsops, "nfs", FT_NFS, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFSPREFLIGHT | VFC_VFS64BITREADY | VFC_VFSREADDIR_EXTENDED, NULL, 0, NULL},
@@ -147,6 +137,10 @@ static struct vfstable vfstbllist[] = {
 
 #ifndef __LP64__
 #endif /* __LP64__ */
+
+#if NULLFS
+	{ &nullfs_vfsops, "nullfs", FT_NULLFS, 0, (MNT_DONTBROWSE | MNT_RDONLY), NULL, NULL, 0, 0, VFC_VFS64BITREADY, NULL, 0, NULL},
+#endif /* NULLFS */
 
 #if MOCKFS
 	/* If we are configured for it, mockfs should always be the last standard entry (and thus the last FS we attempt mountroot with) */
@@ -190,12 +184,6 @@ extern struct vnodeopv_desc nfsv4_vnodeop_opv_desc;
 extern struct vnodeopv_desc spec_nfsv4nodeop_opv_desc;
 extern struct vnodeopv_desc fifo_nfsv4nodeop_opv_desc;
 extern struct vnodeopv_desc null_vnodeop_opv_desc;
-extern struct vnodeopv_desc hfs_vnodeop_opv_desc;
-#if CONFIG_HFS_STD
-extern struct vnodeopv_desc hfs_std_vnodeop_opv_desc;
-#endif
-extern struct vnodeopv_desc hfs_specop_opv_desc;
-extern struct vnodeopv_desc hfs_fifoop_opv_desc;
 extern struct vnodeopv_desc devfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_spec_vnodeop_opv_desc;
 #if FDESC
@@ -206,6 +194,8 @@ extern struct vnodeopv_desc devfs_fdesc_vnodeop_opv_desc;
 #if MOCKFS
 extern struct vnodeopv_desc mockfs_vnodeop_opv_desc;
 #endif /* MOCKFS */
+
+extern struct vnodeopv_desc nullfs_vnodeop_opv_desc;
 
 struct vnodeopv_desc *vfs_opv_descs[] = {
 	&dead_vnodeop_opv_desc,
@@ -226,16 +216,6 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 	&fifo_nfsv4nodeop_opv_desc,
 #endif
 #endif
-#if HFS
-	&hfs_vnodeop_opv_desc,
-#if CONFIG_HFS_STD
-	&hfs_std_vnodeop_opv_desc,
-#endif
-	&hfs_specop_opv_desc,
-#if FIFO
-	&hfs_fifoop_opv_desc,
-#endif
-#endif
 #if DEVFS
 	&devfs_vnodeop_opv_desc,
 	&devfs_spec_vnodeop_opv_desc,
@@ -244,6 +224,9 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 	&devfs_fdesc_vnodeop_opv_desc,
 #endif /* FDESC */
 #endif /* DEVFS */
+#if NULLFS
+	&nullfs_vnodeop_opv_desc,
+#endif /* NULLFS */
 #if MOCKFS
 	&mockfs_vnodeop_opv_desc,
 #endif /* MOCKFS */

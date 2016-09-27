@@ -69,5 +69,6 @@ extern rtc_timer_t	*rtc_timer;
 extern void		rtc_timer_init(void);
 
 extern void		rtclock_early_init(void);
-
+extern void		rtc_nanotime_init(uint64_t);
+extern void		rtc_decrementer_configure(void);
 #endif /* _I386_RTCLOCK_PROTOS_H_ */

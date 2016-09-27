@@ -23,31 +23,44 @@ endif
 
 COMMON_TARGETS = unit_tests \
 		MPMMTest		\
+		packetdrill		\
 		affinity		\
 		execperf		\
 		kqueue_tests		\
 		superpages		\
 		zero-to-n		\
 		jitter			\
-		perf_index
+		perf_index		\
+		darwintests		\
+		unixconf
 
-IPHONE_TARGETS = 
+IPHONE_TARGETS =
 
-MAC_TARGETS = 
-
+MAC_TARGETS =
 
 BATS_TARGET = $(BATS_CONFIG_PATH)/BATS
 
 ifeq "$(Embedded)" "YES"
-TARGETS = 	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(IPHONE_TARGETS))
+TARGETS =	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(IPHONE_TARGETS))
 else
-TARGETS = 	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(MAC_TARGETS))
+TARGETS =	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(MAC_TARGETS))
 endif
 
 all:	$(BATS_TARGET) $(TARGETS)
 
-$(BATS_TARGET) $(DSTSUBPATH)/%:
-	mkdir -p $@
-	mkdir -p $(OBJROOT)/$(notdir $@) 
-	mkdir -p $(SYMROOT)
-	$(MAKE) -C $(SRCROOT)/$(notdir $@) SRCROOT=$(SRCROOT)/$(notdir $@) DSTROOT=$@ OBJROOT=$(OBJROOT)/$(notdir $@) SDKROOT=$(SDKROOT)
+.PHONY: always
+
+always:
+
+$(DSTSUBPATH)/%: always
+	$(_v)echo Building $@
+	$(_v)mkdir -p $@
+	$(_v)mkdir -p $(OBJROOT)/$(notdir $@)
+	$(_v)mkdir -p $(SYMROOT)/$(notdir $@)
+	$(_v)$(MAKE) -C $(SRCROOT)/$(notdir $@) SRCROOT=$(SRCROOT)/$(notdir $@) DSTROOT=$@ OBJROOT=$(OBJROOT)/$(notdir $@) SYMROOT=$(SYMROOT)/$(notdir $@) SDKROOT=$(SDKROOT) BASEDSTROOT=$(DSTROOT)
+
+$(BATS_TARGET): $(TARGETS)
+	$(_v)mkdir -p $@
+	$(_v)mkdir -p $(OBJROOT)/$(notdir $@)
+	$(_v)mkdir -p $(SYMROOT)
+	$(_v)$(MAKE) -C $(SRCROOT)/$(notdir $@) SRCROOT=$(SRCROOT)/$(notdir $@) DSTROOT=$@ OBJROOT=$(OBJROOT)/$(notdir $@) SDKROOT=$(SDKROOT) BASEDSTROOT=$(DSTROOT)

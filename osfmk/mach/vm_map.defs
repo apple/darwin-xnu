@@ -489,7 +489,7 @@ skip; /* was vm_upl_unmap */
  *	specified.  See the routine implementation for a complete
  *	definition of the routine.
  */
-routine vm_purgable_control(
+routine PREFIX(vm_purgable_control) (
 		target_task	: vm_map_t;
 		address		: vm_address_t;
 		control		: vm_purgable_t;

@@ -93,9 +93,9 @@ extern boolean_t vm_kernel_ready;
  * Forward declarations for internal functions.
  */
 extern kern_return_t kmem_alloc_pages(
-	register vm_object_t		object,
-	register vm_object_offset_t	offset,
-	register vm_object_size_t	size);
+	vm_object_t		object,
+	vm_object_offset_t	offset,
+	vm_object_size_t	size);
 
 kern_return_t
 kmem_alloc_contig(
@@ -237,10 +237,10 @@ kmem_alloc_contig(
 
 kern_return_t
 kernel_memory_allocate(
-	register vm_map_t	map,
-	register vm_offset_t	*addrp,
-	register vm_size_t	size,
-	register vm_offset_t	mask,
+	vm_map_t	map,
+	vm_offset_t	*addrp,
+	vm_size_t	size,
+	vm_offset_t	mask,
 	int			flags,
 	vm_tag_t                tag)
 {
@@ -342,7 +342,7 @@ kernel_memory_allocate(
 			}
 			vm_page_more_fictitious();
 		}
-		mem->pageq.next = (queue_entry_t)guard_page_list;
+		mem->snext = guard_page_list;
 		guard_page_list = mem;
 	}
 
@@ -375,7 +375,7 @@ kernel_memory_allocate(
 			}
 			VM_PAGE_WAIT();
 		}
-		mem->pageq.next = (queue_entry_t)wired_page_list;
+		mem->snext = wired_page_list;
 		wired_page_list = mem;
 	}
 	}
@@ -394,6 +394,9 @@ kernel_memory_allocate(
 		object = vm_object_allocate(map_size);
 	}
 
+	if (flags & KMA_ATOMIC) 
+		vm_alloc_flags |= VM_FLAGS_ATOMIC_ENTRY;
+		
 	kr = vm_map_find_space(map, &map_addr,
 			       fill_size, map_mask,
 			       vm_alloc_flags, &entry);
@@ -429,8 +432,8 @@ kernel_memory_allocate(
 			panic("kernel_memory_allocate: guard_page_list == NULL");
 
 		mem = guard_page_list;
-		guard_page_list = (vm_page_t)mem->pageq.next;
-		mem->pageq.next = NULL;
+		guard_page_list = mem->snext;
+		mem->snext = NULL;
 
 		vm_page_insert(mem, object, offset + pg_offset);
 
@@ -448,9 +451,18 @@ kernel_memory_allocate(
 			panic("kernel_memory_allocate: wired_page_list == NULL");
 
 		mem = wired_page_list;
-		wired_page_list = (vm_page_t)mem->pageq.next;
-		mem->pageq.next = NULL;
+		wired_page_list = mem->snext;
+		mem->snext = NULL;
+
+		assert(mem->wire_count == 0);
+		assert(mem->vm_page_q_state == VM_PAGE_NOT_ON_Q);
+
+		mem->vm_page_q_state = VM_PAGE_IS_WIRED;
 		mem->wire_count++;
+		if (__improbable(mem->wire_count == 0)) {
+			panic("kernel_memory_allocate(%p): wire_count overflow",
+			      mem);
+		}
 
 		vm_page_insert_wired(mem, object, offset + pg_offset, tag);
 
@@ -473,7 +485,7 @@ kernel_memory_allocate(
 		if (flags & KMA_NOENCRYPT) {
 			bzero(CAST_DOWN(void *, (map_addr + pg_offset)), PAGE_SIZE);
 
-			pmap_set_noencrypt(mem->phys_page);
+			pmap_set_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem));
 		}
 	}
 	}
@@ -482,8 +494,8 @@ kernel_memory_allocate(
 			panic("kernel_memory_allocate: guard_page_list == NULL");
 
 		mem = guard_page_list;
-		guard_page_list = (vm_page_t)mem->pageq.next;
-		mem->pageq.next = NULL;
+		guard_page_list = mem->snext;
+		mem->snext = NULL;
 
 		vm_page_insert(mem, object, offset + pg_offset);
 
@@ -557,13 +569,13 @@ kernel_memory_populate(
 				
 				VM_PAGE_WAIT();
 			}
-			mem->pageq.next = (queue_entry_t) page_list;
+			mem->snext = page_list;
 			page_list = mem;
 
 			pg_offset -= PAGE_SIZE_64;
 
 			kr = pmap_enter_options(kernel_pmap,
-						  addr + pg_offset, mem->phys_page,
+						  addr + pg_offset, VM_PAGE_GET_PHYS_PAGE(mem),
 						  VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE, 0, TRUE,
 						  PMAP_OPTIONS_INTERNAL, NULL);
 			assert(kr == KERN_SUCCESS);
@@ -580,8 +592,8 @@ kernel_memory_populate(
 		     pg_offset += PAGE_SIZE_64) {
 
 			mem = page_list;
-			page_list = (vm_page_t) mem->pageq.next;
-			mem->pageq.next = NULL;
+			page_list = mem->snext;
+			mem->snext = NULL;
 
 			vm_page_insert(mem, object, offset + pg_offset);
 			assert(mem->busy);
@@ -589,7 +601,7 @@ kernel_memory_populate(
 			mem->busy = FALSE;
 			mem->pmapped = TRUE;
 			mem->wpmapped = TRUE;
-			mem->compressor = TRUE;
+			mem->vm_page_q_state = VM_PAGE_USED_BY_COMPRESSOR;
 		}
 		vm_object_unlock(object);
 
@@ -617,7 +629,7 @@ kernel_memory_populate(
 			}
 			VM_PAGE_WAIT();
 		}
-		mem->pageq.next = (queue_entry_t) page_list;
+		mem->snext = page_list;
 		page_list = mem;
 	}
 	if (flags & KMA_KOBJECT) {
@@ -647,10 +659,16 @@ kernel_memory_populate(
 			panic("kernel_memory_populate: page_list == NULL");
 
 		mem = page_list;
-		page_list = (vm_page_t) mem->pageq.next;
-		mem->pageq.next = NULL;
+		page_list = mem->snext;
+		mem->snext = NULL;
 
+		assert(mem->vm_page_q_state == VM_PAGE_NOT_ON_Q);
+		mem->vm_page_q_state = VM_PAGE_IS_WIRED;
 		mem->wire_count++;
+		if (__improbable(mem->wire_count == 0)) {
+			panic("kernel_memory_populate(%p): wire_count overflow",
+			      mem);
+		}
 
 		vm_page_insert_wired(mem, object, offset + pg_offset, tag);
 
@@ -675,7 +693,7 @@ kernel_memory_populate(
 		}
 		if (flags & KMA_NOENCRYPT) {
 			bzero(CAST_DOWN(void *, (addr + pg_offset)), PAGE_SIZE);
-			pmap_set_noencrypt(mem->phys_page);
+			pmap_set_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem));
 		}
 	}
 	vm_page_lock_queues();
@@ -741,8 +759,9 @@ kernel_memory_depopulate(
 		mem = vm_page_lookup(object, offset + pg_offset);
 
 		assert(mem);
-
-		pmap_disconnect(mem->phys_page);
+		
+		if (mem->vm_page_q_state != VM_PAGE_USED_BY_COMPRESSOR)
+			pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(mem));
 
 		mem->busy = TRUE;
 
@@ -750,9 +769,12 @@ kernel_memory_depopulate(
 		vm_page_remove(mem, TRUE);
 		assert(mem->busy);
 
-		assert(mem->pageq.next == NULL &&
-		       mem->pageq.prev == NULL);
-		mem->pageq.next = (queue_entry_t)local_freeq;
+		assert(mem->pageq.next == 0 && mem->pageq.prev == 0);
+		assert((mem->vm_page_q_state == VM_PAGE_USED_BY_COMPRESSOR) ||
+		       (mem->vm_page_q_state == VM_PAGE_NOT_ON_Q));
+
+		mem->vm_page_q_state = VM_PAGE_NOT_ON_Q;
+		mem->snext = local_freeq;
 		local_freeq = mem;
 	}
 	vm_object_unlock(object);
@@ -777,14 +799,26 @@ kmem_alloc_external(
     return (kmem_alloc(map, addrp, size, vm_tag_bt()));
 }
 
+
 kern_return_t
 kmem_alloc(
 	vm_map_t	map,
 	vm_offset_t	*addrp,
 	vm_size_t	size,
-	vm_tag_t        tag)
+	vm_tag_t 	tag)
 {
-	kern_return_t kr = kernel_memory_allocate(map, addrp, size, 0, 0, tag);
+	return kmem_alloc_flags(map, addrp, size, tag, 0);
+}
+
+kern_return_t
+kmem_alloc_flags(
+	vm_map_t	map,
+	vm_offset_t	*addrp,
+	vm_size_t	size,
+	vm_tag_t 	tag,
+	int 		flags)
+{
+	kern_return_t kr = kernel_memory_allocate(map, addrp, size, 0, flags, tag);
 	TRACE_MACHLEAKS(KMEM_ALLOC_CODE, KMEM_ALLOC_CODE_2, size, *addrp);
 	return kr;
 }
@@ -1050,16 +1084,16 @@ kmem_free(
 
 kern_return_t
 kmem_alloc_pages(
-	register vm_object_t		object,
-	register vm_object_offset_t	offset,
-	register vm_object_size_t	size)
+	vm_object_t		object,
+	vm_object_offset_t	offset,
+	vm_object_size_t	size)
 {
 	vm_object_size_t		alloc_size;
 
 	alloc_size = vm_object_round_page(size);
         vm_object_lock(object);
 	while (alloc_size) {
-	    register vm_page_t	mem;
+	    vm_page_t	mem;
 
 
 	    /*
@@ -1445,9 +1479,7 @@ vm_kernel_unslide_or_perm_external(
 	vm_offset_t addr,
 	vm_offset_t *up_addr)
 {
-	if (VM_KERNEL_IS_SLID(addr) || VM_KERNEL_IS_KEXT(addr) ||
-        VM_KERNEL_IS_PRELINKTEXT(addr) || VM_KERNEL_IS_PRELINKINFO(addr) ||
-        VM_KERNEL_IS_KEXT_LINKEDIT(addr)) {
+	if (VM_KERNEL_IS_SLID(addr)) {
 		*up_addr = addr - vm_kernel_slide;
 		return;
 	}

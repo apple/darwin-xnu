@@ -53,7 +53,7 @@
 .Fa "int fd" "const char *restrict path" "char *restrict buf" "size_t bufsize"
 .Fc
 .Sh DESCRIPTION
-.Fn Readlink
+.Fn readlink
 places the contents of the symbolic link
 .Fa path
 in the buffer
@@ -91,7 +91,7 @@ if it succeeds, or a -1 if an error occurs, placing the error
 code in the global variable
 .Va errno .
 .Sh ERRORS
-.Fn Readlink
+.Fn readlink
 will fail if:
 .Bl -tag -width Er
 .\" ===========

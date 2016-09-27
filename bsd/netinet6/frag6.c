@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -355,6 +355,32 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 
 	/* offset now points to data portion */
 	offset += sizeof(struct ip6_frag);
+
+	/*
+	 * RFC 6946: Handle "atomic" fragments (offset and m bit set to 0)
+	 * upfront, unrelated to any reassembly.  Just skip the fragment header.
+	 */
+	if ((ip6f->ip6f_offlg & ~IP6F_RESERVED_MASK) == 0) {
+		/*
+		 * In ICMPv6 processing, we drop certain
+		 * NDP messages that are not expected to
+		 * have fragment header based on recommendations
+		 * against security vulnerability as described in
+		 * RFC 6980.
+		 * We set PKTF_REASSEMBLED flag to let ICMPv6 NDP
+		 * drop such packets.
+		 * However there are already devices running software
+		 * that are creating interface with MTU < IPv6 Min
+		 * MTU. We should not have allowed that but they are
+		 * out, and sending atomic NDP fragments.
+		 * For that reason, we do not set the same flag here
+		 * and relax the check.
+		 */
+		ip6stat.ip6s_atmfrag_rcvd++;
+		in6_ifstat_inc(dstifp, ifs6_atmfrag_rcvd);
+		*offp = offset;
+		return (ip6f->ip6f_nxt);
+	}
 
 	/*
 	 * Leverage partial checksum offload for simple UDP/IP fragments,
@@ -781,9 +807,18 @@ insert:
 	frag6_nfrags -= q6->ip6q_nfrag;
 	ip6q_free(q6);
 
-	if (m->m_flags & M_PKTHDR)	/* Isn't it always true? */
+	if (m->m_flags & M_PKTHDR) {	/* Isn't it always true? */
 		m_fixhdr(m);
-
+		/*
+		 * Mark packet as reassembled
+		 * In ICMPv6 processing, we drop certain
+		 * NDP messages that are not expected to
+		 * have fragment header based on recommendations
+		 * against security vulnerability as described in
+		 * RFC 6980.
+		 */
+		m->m_pkthdr.pkt_flags |= PKTF_REASSEMBLED;
+	}
 	ip6stat.ip6s_reassembled++;
 
 	/*

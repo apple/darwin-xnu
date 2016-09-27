@@ -51,7 +51,10 @@ __END_DECLS
 #include <libkern/OSAtomic.h>
 
 #define kalloc_container(size)	\
-	kalloc_tag_bt(size, VM_KERN_MEMORY_LIBKERN)
+	({ kalloc_tag_bt(size, VM_KERN_MEMORY_LIBKERN); })
+
+#define kallocp_container(size)	\
+	({ kallocp_tag_bt(size, VM_KERN_MEMORY_LIBKERN); })
 
 #if OSALLOCDEBUG
 extern "C" int debug_container_malloc_size;

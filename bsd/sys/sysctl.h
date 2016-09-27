@@ -281,8 +281,8 @@ int sysctl_io_opaque(struct sysctl_req *req, void *pValue, size_t valueSize, int
 void sysctl_register_oid(struct sysctl_oid *oidp);
 void sysctl_unregister_oid(struct sysctl_oid *oidp);
 
-/* Not exported */
-void sysctl_register_fixed(void);
+/* Deprecated */
+void sysctl_register_fixed(void) __deprecated;
 
 __END_DECLS
 
@@ -409,6 +409,10 @@ SYSCTL_DECL(_debug);
 SYSCTL_DECL(_hw);
 SYSCTL_DECL(_machdep);
 SYSCTL_DECL(_user);
+
+#ifdef PRIVATE
+SYSCTL_DECL(_hw_features);
+#endif
 
 #endif /* KERNEL */
 
@@ -562,34 +566,33 @@ SYSCTL_DECL(_user);
 #define KERN_TFP_POLICY_DEFAULT 	2	/* Default  Mode: related ones allowed and upcall authentication */
 
 /* KERN_KDEBUG types */
-#define KERN_KDEFLAGS		1
-#define KERN_KDDFLAGS		2
-#define KERN_KDENABLE		3
-#define KERN_KDSETBUF		4
-#define KERN_KDGETBUF		5
-#define KERN_KDSETUP		6
-#define KERN_KDREMOVE		7
-#define KERN_KDSETREG		8
-#define KERN_KDGETREG		9
-#define KERN_KDREADTR		10
-#define KERN_KDPIDTR		11
-#define KERN_KDTHRMAP           12
+#define KERN_KDEFLAGS         1
+#define KERN_KDDFLAGS         2
+#define KERN_KDENABLE         3
+#define KERN_KDSETBUF         4
+#define KERN_KDGETBUF         5
+#define KERN_KDSETUP          6
+#define KERN_KDREMOVE         7
+#define KERN_KDSETREG         8
+#define KERN_KDGETREG         9
+#define KERN_KDREADTR         10
+#define KERN_KDPIDTR          11
+#define KERN_KDTHRMAP         12
 /* Don't use 13 as it is overloaded with KERN_VNODE */
-#define KERN_KDPIDEX            14
-#define KERN_KDSETRTCDEC        15
-#define KERN_KDGETENTROPY       16		/* Obsolescent */
-#define KERN_KDWRITETR		17
-#define KERN_KDWRITEMAP		18
-#define KERN_KDENABLE_BG_TRACE	19
-#define KERN_KDDISABLE_BG_TRACE	20
-#define KERN_KDREADCURTHRMAP	21
-#define KERN_KDSET_TYPEFILTER   22
-#define KERN_KDBUFWAIT		23
-#define KERN_KDCPUMAP		24
-#define KERN_KDWAIT_BG_TRACE_RESET 25
-#define KERN_KDSET_BG_TYPEFILTER   26
-#define KERN_KDWRITEMAP_V3	27
-#define KERN_KDWRITETR_V3	28
+#define KERN_KDPIDEX          14
+#define KERN_KDSETRTCDEC      15 /* obsolete */
+#define KERN_KDGETENTROPY     16 /* obsolete */
+#define KERN_KDWRITETR        17
+#define KERN_KDWRITEMAP       18
+#define KERN_KDTEST           19
+/* 20 unused */
+#define KERN_KDREADCURTHRMAP  21
+#define KERN_KDSET_TYPEFILTER 22
+#define KERN_KDBUFWAIT        23
+#define KERN_KDCPUMAP         24
+/* 25 - 26 unused */
+#define KERN_KDWRITEMAP_V3    27
+#define KERN_KDWRITETR_V3     28
 
 #define CTL_KERN_NAMES { \
 	{ 0, 0 }, \
@@ -1117,7 +1120,7 @@ void	sysctl_mib_init(void);
 int sysctl_int(user_addr_t, size_t *, user_addr_t, size_t, int *);
 int sysctl_quad(user_addr_t, size_t *, user_addr_t, size_t, quad_t *);
 
-void sysctl_register_all(void);
+void sysctl_early_init(void);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #else	/* !KERNEL */

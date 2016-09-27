@@ -27,4 +27,5 @@
  */
 
 /* pend ast bits on a thread */
-extern int kperf_ast_pend( thread_t, uint32_t, uint32_t );
+extern int kperf_ast_pend(thread_t thread, uint32_t flags);
+extern void kperf_ast_set_callstack_depth(thread_t thread, uint32_t depth);

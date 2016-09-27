@@ -268,6 +268,14 @@ sdt_enable(void *arg, dtrace_id_t id, void *parg)
 	while (sdp != NULL) {
 		(void)ml_nofault_copy( (vm_offset_t)&sdp->sdp_patchval, (vm_offset_t)sdp->sdp_patchpoint, 
 		                       (vm_size_t)sizeof(sdp->sdp_patchval));
+
+		/*
+		 * Make the patched instruction visible via a data + instruction
+		 * cache fush on platforms that need it
+		 */
+		flush_dcache((vm_offset_t)sdp->sdp_patchpoint,(vm_size_t)sizeof(sdp->sdp_patchval), 0);
+		invalidate_icache((vm_offset_t)sdp->sdp_patchpoint,(vm_size_t)sizeof(sdp->sdp_patchval), 0);
+
 		sdp = sdp->sdp_next;
 	}
 
@@ -291,6 +299,12 @@ sdt_disable(void *arg, dtrace_id_t id, void *parg)
 	while (sdp != NULL) {
 		(void)ml_nofault_copy( (vm_offset_t)&sdp->sdp_savedval, (vm_offset_t)sdp->sdp_patchpoint, 
 		                       (vm_size_t)sizeof(sdp->sdp_savedval));
+		/*
+		 * Make the patched instruction visible via a data + instruction
+		 * cache flush on platforms that need it
+		 */
+		flush_dcache((vm_offset_t)sdp->sdp_patchpoint,(vm_size_t)sizeof(sdp->sdp_savedval), 0);
+		invalidate_icache((vm_offset_t)sdp->sdp_patchpoint,(vm_size_t)sizeof(sdp->sdp_savedval), 0);
 		sdp = sdp->sdp_next;
 	}
 
@@ -436,7 +450,7 @@ void sdt_init( void )
 			return;
 		}
 
-		if (dtrace_fbt_probes_restricted()) {
+		if (dtrace_sdt_probes_restricted()) {
 			return;
 		}
 

@@ -85,6 +85,7 @@ struct	timezone tz = { 0, 0 };
 #define	NPROC (20 + 16 * 32)
 #define	NPROC_PER_UID (NPROC/2)
 
+/* NOTE: maxproc and hard_maxproc values are subject to device specific scaling in bsd_scale_setup */
 #define HNPROC 2500	/* based on thread_max */
 int	maxproc = NPROC;
 int	maxprocperuid = NPROC_PER_UID;

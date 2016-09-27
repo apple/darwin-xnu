@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -160,8 +160,11 @@ vsscanf(const char *inp, char const *fmt0, va_list ap)
 		if (c == 0)
 			return (nassigned);
 		if (isspace(c)) {
-			while (inr > 0 && isspace(*inp))
-				nread++, inr--, inp++;
+			while (inr > 0 && isspace(*inp)) {
+				nread++;
+				inr--;
+				inp++;
+			}
 			continue;
 		}
 		if (c != '%')
@@ -180,7 +183,8 @@ literal:
 				goto input_failure;
 			if (*inp != c)
 				goto match_failure;
-			inr--, inp++;
+			inr--;
+			inp++;
 			nread++;
 			continue;
 
@@ -352,7 +356,9 @@ literal:
 			if (flags & SUPPRESS) {
 				n = 0;
 				while (ccltab[(unsigned char)*inp]) {
-					n++, inr--, inp++;
+					n++;
+					inr--;
+					inp++;
 					if (--width == 0)
 						break;
 					if (inr <= 0) {
@@ -393,7 +399,9 @@ literal:
 			if (flags & SUPPRESS) {
 				n = 0;
 				while (!isspace(*inp)) {
-					n++, inr--, inp++;
+					n++;
+					inr--;
+					inp++;
 					if (--width == 0)
 						break;
 					if (inr <= 0)
@@ -651,7 +659,6 @@ doswitch:
 			 * This too is permitted by the standard....
 			 */
 			goto doswitch;
-			break;
 
 		case ']':		/* end of scanset */
 			return (fmt);

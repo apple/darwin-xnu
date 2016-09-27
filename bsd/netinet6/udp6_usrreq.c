@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -164,25 +164,6 @@ static int udp6_send(struct socket *, int, struct mbuf *, struct sockaddr *,
 static void udp6_append(struct inpcb *, struct ip6_hdr *,
     struct sockaddr_in6 *, struct mbuf *, int, struct ifnet *);
 static int udp6_input_checksum(struct mbuf *, struct udphdr *, int, int);
-
-#if IPFIREWALL
-extern int fw_verbose;
-extern void ipfwsyslog( int level, const char *format,...);
-extern void ipfw_stealth_stats_incr_udpv6(void);
-
-/* Apple logging, log to ipfw.log */
-#define log_in_vain_log(a) {						\
-	if ((udp_log_in_vain == 3) && (fw_verbose == 2)) {		\
-		ipfwsyslog a;						\
-        } else if ((udp_log_in_vain == 4) && (fw_verbose == 2)) {       \
-	        ipfw_stealth_stats_incr_udpv6();			\
-	} else {							\
-		log a;							\
-	}								\
-}
-#else /* !IPFIREWALL */
-#define log_in_vain_log( a ) { log a; }
-#endif /* !IPFIREWALL */
 
 struct pr_usrreqs udp6_usrreqs = {
 	.pru_abort =		udp6_abort,
@@ -548,11 +529,11 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 				    ntohs(uh->uh_sport));
 			} else if (!(m->m_flags & (M_BCAST | M_MCAST)) &&
 			    !IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst, &ip6->ip6_src)) {
-				log_in_vain_log((LOG_INFO, "Connection attempt "
+				log(LOG_INFO, "Connection attempt "
 				    "to UDP %s:%d from %s:%d\n", buf,
 				    ntohs(uh->uh_dport),
 				    ip6_sprintf(&ip6->ip6_src),
-				    ntohs(uh->uh_sport)));
+				    ntohs(uh->uh_sport));
 			}
 		}
 		udpstat.udps_noport++;
@@ -643,9 +624,10 @@ udp6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 
 	if ((unsigned)cmd >= PRC_NCMDS)
 		return;
-	if (PRC_IS_REDIRECT(cmd))
-		notify = in6_rtchange, d = NULL;
-	else if (cmd == PRC_HOSTDEAD)
+	if (PRC_IS_REDIRECT(cmd)) {
+		notify = in6_rtchange;
+		d = NULL;
+	} else if (cmd == PRC_HOSTDEAD)
 		d = NULL;
 	else if (inet6ctlerrmap[cmd] == 0)
 		return;
@@ -1016,9 +998,9 @@ udp6_input_checksum(struct mbuf *m, struct udphdr *uh, int off, int ulen)
 		uh->uh_sum == 0) {
 		/* UDP/IPv6 checksum is mandatory (RFC2460) */
 
-		/* 
+		/*
 		 * If checksum was already validated, ignore this check.
-		 * This is necessary for transport-mode ESP, which may be 
+		 * This is necessary for transport-mode ESP, which may be
 		 * getting UDP payloads without checksums when the network
 		 * has a NAT64.
 		 */

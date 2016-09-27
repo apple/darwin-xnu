@@ -136,12 +136,12 @@
  * large enough to induce this much delay and nothing more than that.
  */
 #define	TARGET_QDELAY_BASE	(10ULL * 1000 * 1000)	/* 10ms */
-#define TARGET_QDELAY_MIN	(10ULL * 1000)	/* 10us */
-#define TARGET_QDELAY_MAX	(20ULL * 1000 * 1000 * 1000)	/* 20s */
+#define	TARGET_QDELAY_MIN	(10ULL * 1000)	/* 10us */
+#define	TARGET_QDELAY_MAX	(20ULL * 1000 * 1000 * 1000)	/* 20s */
 
 /*
  * Update interval for checking the extra delay added by the queue. This
- * should be 90-95 percentile of RTT experienced by any TCP connection 
+ * should be 90-95 percentile of RTT experienced by any TCP connection
  * so that it will take care of the burst traffic.
  */
 #define	UPDATE_INTERVAL_BASE	(100ULL * 1000 * 1000)	/* 100ms */
@@ -188,14 +188,14 @@
 /* Minimum nuber of bytes in queue to get flow controlled */
 #define	SFB_MIN_FC_THRESHOLD_BYTES	7500
 
-#define SFB_SET_DELAY_HIGH(_sp_, _q_) do {				\
+#define	SFB_SET_DELAY_HIGH(_sp_, _q_) do {				\
 	(_sp_)->sfb_flags |= SFBF_DELAYHIGH;				\
 	(_sp_)->sfb_fc_threshold = max(SFB_MIN_FC_THRESHOLD_BYTES,	\
 		(qsize((_q_)) >> 3));		\
 } while (0)
 
 #define	SFB_QUEUE_DELAYBASED(_sp_) ((_sp_)->sfb_flags & SFBF_DELAYBASED)
-#define SFB_IS_DELAYHIGH(_sp_) ((_sp_)->sfb_flags & SFBF_DELAYHIGH)
+#define	SFB_IS_DELAYHIGH(_sp_) ((_sp_)->sfb_flags & SFBF_DELAYHIGH)
 #define	SFB_QUEUE_DELAYBASED_MAXSIZE	2048	/* max pkts */
 
 #define	HINTERVAL_MIN	(10)	/* 10 seconds */
@@ -243,7 +243,6 @@ static void sfb_resetq(struct sfb *, cqev_t);
 static void sfb_calc_holdtime(struct sfb *, u_int64_t);
 static void sfb_calc_pboxtime(struct sfb *, u_int64_t);
 static void sfb_calc_hinterval(struct sfb *, u_int64_t *);
-static void sfb_calc_target_qdelay(struct sfb *, u_int64_t);
 static void sfb_calc_update_interval(struct sfb *, u_int64_t);
 static void sfb_swap_bins(struct sfb *, u_int32_t);
 static inline int sfb_pcheck(struct sfb *, struct pkthdr *);
@@ -279,14 +278,6 @@ SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, pboxtime, CTLFLAG_RW|CTLFLAG_LOCKED,
 static u_int64_t sfb_hinterval;
 SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, hinterval, CTLFLAG_RW|CTLFLAG_LOCKED,
     &sfb_hinterval, "SFB hash interval in nanoseconds");
-
-static u_int64_t sfb_target_qdelay = 0;
-SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, target_qdelay, CTLFLAG_RW|CTLFLAG_LOCKED,
-    &sfb_target_qdelay, "SFB target queue delay in nanoseconds");
-
-static u_int64_t sfb_update_interval;
-SYSCTL_QUAD(_net_classq_sfb, OID_AUTO, update_interval,
-    CTLFLAG_RW|CTLFLAG_LOCKED, &sfb_update_interval, "SFB update interval");
 
 static u_int32_t sfb_increment = SFB_INCREMENT;
 SYSCTL_UINT(_net_classq_sfb, OID_AUTO, increment, CTLFLAG_RW|CTLFLAG_LOCKED,
@@ -440,52 +431,11 @@ sfb_calc_hinterval(struct sfb *sp, u_int64_t *t)
 }
 
 static void
-sfb_calc_target_qdelay(struct sfb *sp, u_int64_t out_bw)
-{
-#pragma unused(out_bw)
-	u_int64_t target_qdelay = 0;
-	struct ifnet *ifp = sp->sfb_ifp;
-
-	target_qdelay = IFCQ_TARGET_QDELAY(&ifp->if_snd);	
-
-	if (sfb_target_qdelay != 0)
-		target_qdelay = sfb_target_qdelay;
-
-	/*
-	 * If we do not know the effective bandwidth, use the default
-	 * target queue delay.
-	 */
-	if (target_qdelay == 0)
-		target_qdelay = IFQ_TARGET_DELAY;
-
-	/*
-	 * If a delay has been added to ifnet start callback for
-	 * coalescing, we have to add that to the pre-set target delay
-	 * because the packets can be in the queue longer.
-	 */
-	if ((ifp->if_eflags & IFEF_ENQUEUE_MULTI) &&
-		ifp->if_start_delay_timeout > 0)
-		target_qdelay += ifp->if_start_delay_timeout;
-
-	sp->sfb_target_qdelay = target_qdelay;
-}
-
-static void
 sfb_calc_update_interval(struct sfb *sp, u_int64_t out_bw)
 {
 #pragma unused(out_bw)
 	u_int64_t update_interval = 0;
-
-	/* If the system-level override is set, use it */
-	if (sfb_update_interval != 0)
-		update_interval = sfb_update_interval;
-	/*
-	 * If we do not know the effective bandwidth, use the default
-	 * update interval.
-	 */
-	if (update_interval == 0)
-		update_interval = IFQ_UPDATE_INTERVAL;
-
+	ifclassq_calc_update_interval(&update_interval);
 	net_nsectimer(&update_interval, &sp->sfb_update_interval);
 }
 
@@ -518,7 +468,7 @@ sfb_alloc(struct ifnet *ifp, u_int32_t qid, u_int32_t qlim, u_int32_t flags)
 		log(LOG_ERR, "%s: SFB unable to allocate flow control lists\n",
 		    if_name(ifp));
 		sfb_destroy(sp);
-		return(NULL);
+		return (NULL);
 	}
 	bzero(sp->sfb_fc_lists, sfb_fcl_size);
 
@@ -609,11 +559,11 @@ sfb_resetq(struct sfb *sp, cqev_t ev)
 	sfb_calc_holdtime(sp, eff_rate);
 	sfb_calc_pboxtime(sp, eff_rate);
 	sfb_calc_hinterval(sp, NULL);
-	sfb_calc_target_qdelay(sp, eff_rate);
+	ifclassq_calc_target_qdelay(ifp, &sp->sfb_target_qdelay);
 	sfb_calc_update_interval(sp, eff_rate);
 
 	if (ev == CLASSQ_EV_LINK_DOWN ||
-		ev == CLASSQ_EV_LINK_UP)
+	    ev == CLASSQ_EV_LINK_UP)
 		sfb_fclists_clean(sp);
 
 	bzero(sp->sfb_bins, sizeof (*sp->sfb_bins));
@@ -1165,11 +1115,11 @@ sfb_addq(struct sfb *sp, class_queue_t *q, struct mbuf *m, struct pf_mtag *t)
 	VERIFY(!(pkt->pkt_flags & PKTF_PRIV_GUARDED));
 	pkt->pkt_flags |= PKTF_PRIV_GUARDED;
 
-	if (pkt->pkt_enqueue_ts > 0) {
-		net_nsectimer(&pkt->pkt_enqueue_ts, &now); 
+	if (pkt->pkt_timestamp > 0) {
+		net_nsectimer(&pkt->pkt_timestamp, &now);
 	} else {
 		nanouptime(&now);
-		net_timernsec(&now, &pkt->pkt_enqueue_ts);
+		net_timernsec(&now, &pkt->pkt_timestamp);
 	}
 
 	/* time to swap the bins? */
@@ -1356,8 +1306,8 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 	if (!purge && SFB_QUEUE_DELAYBASED(sp)) {
 		u_int64_t dequeue_ns, queue_delay = 0;
 		net_timernsec(&now, &dequeue_ns);
-		if (dequeue_ns > pkt->pkt_enqueue_ts)
-			queue_delay = dequeue_ns - pkt->pkt_enqueue_ts;
+		if (dequeue_ns > pkt->pkt_timestamp)
+			queue_delay = dequeue_ns - pkt->pkt_timestamp;
 
 		if (sp->sfb_min_qdelay == 0 ||
 		    (queue_delay > 0 && queue_delay < sp->sfb_min_qdelay))
@@ -1369,14 +1319,14 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge)
 			} else {
 				sp->sfb_flags &= ~(SFBF_DELAYHIGH);
 				sp->sfb_fc_threshold = 0;
-				
+
 			}
 			net_timeradd(&now, &sp->sfb_update_interval,
 			    &sp->sfb_update_time);
 			sp->sfb_min_qdelay = 0;
 		}
 	}
-	pkt->pkt_enqueue_ts = 0;
+	pkt->pkt_timestamp = 0;
 
 	/*
 	 * Clearpkts are the ones which were in the queue when the hash
@@ -1464,7 +1414,7 @@ sfb_updateq(struct sfb *sp, cqev_t ev)
 		}
 		sfb_calc_holdtime(sp, eff_rate);
 		sfb_calc_pboxtime(sp, eff_rate);
-		sfb_calc_target_qdelay(sp, eff_rate);
+		ifclassq_calc_target_qdelay(ifp, &sp->sfb_target_qdelay);
 		sfb_calc_update_interval(sp, eff_rate);
 		break;
 	}

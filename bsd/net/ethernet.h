@@ -105,6 +105,7 @@ struct	ether_addr {
 #define ETHERTYPE_IPV6		0x86dd	/* IPv6 */
 #define ETHERTYPE_PAE		0x888e  /* EAPOL PAE/802.1x */
 #define ETHERTYPE_RSN_PREAUTH	0x88c7  /* 802.11i / RSN Pre-Authentication */
+#define ETHERTYPE_PTP		0x88f7  /* IEEE 1588 Precision Time Protocol */
 #define	ETHERTYPE_LOOPBACK	0x9000	/* used to test interfaces */
 /* XXX - add more useful types here */
 

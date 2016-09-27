@@ -104,7 +104,7 @@ Otherwise, -1 is returned and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Chflags
+.Fn chflags
 will fail if:
 .Bl -tag -width Er
 .It Bq Er ENOTDIR
@@ -137,7 +137,7 @@ error occurred while reading from or writing to the file system.
 The operation isn't supported by the filesystem.
 .El
 .Pp
-.Fn Fchflags
+.Fn fchflags
 will fail if:
 .Bl -tag -width Er
 .It Bq Er EBADF

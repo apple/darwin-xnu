@@ -252,7 +252,7 @@
 
 #define PMAP_SET_CACHE_ATTR(mem, object, cache_attr, batch_pmap_op)	\
 	MACRO_BEGIN							\
-		pmap_set_cache_attributes((mem)->phys_page, (cache_attr));	\
+		pmap_set_cache_attributes(VM_PAGE_GET_PHYS_PAGE(mem), (cache_attr));	\
 		(object)->set_cache_attr = TRUE;				\
 		(void) batch_pmap_op;					\
 	MACRO_END							

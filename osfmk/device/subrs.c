@@ -557,17 +557,17 @@ STRDUP(const char *string, int type)
 
 /*
  * Return TRUE(1) if string 2 is a prefix of string 1.
- */     
-int       
-strprefix(register const char *s1, register const char *s2)
-{               
-        register int    c;
-                
-        while ((c = *s2++) != '\0') {
-            if (c != *s1++) 
-                return (0);
-        }       
-        return (1);
+ */
+int
+strprefix(const char *s1, const char *s2)
+{
+	int c;
+
+	while ((c = *s2++) != '\0') {
+		if (c != *s1++)
+			return (0);
+	}
+	return (1);
 }
 
 char *

@@ -299,10 +299,13 @@ IOReturn RootDomainUserClient::externalMethod(
                     (uint32_t *)&arguments->scalarOutput[0]);
             break;
         case kPMSetMaintenanceWakeCalendar:
-            ret = this->secureSetMaintenanceWakeCalendar(
-                    (IOPMCalendarStruct *)arguments->structureInput,
-                    (uint32_t *)&arguments->structureOutput);
-            arguments->structureOutputSize = sizeof(uint32_t);
+            if ((arguments->structureInputSize >= sizeof(IOPMCalendarStruct)) &&
+                (arguments->structureOutputSize >= sizeof(uint32_t) )) {
+                ret = this->secureSetMaintenanceWakeCalendar(
+                                                             (IOPMCalendarStruct *)arguments->structureInput,
+                                                             (uint32_t *)&arguments->structureOutput);
+                arguments->structureOutputSize = sizeof(uint32_t);
+            }
             break;
 
         case kPMSetUserAssertionLevels:

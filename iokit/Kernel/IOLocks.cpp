@@ -118,7 +118,7 @@ void	IOLockWakeup_legacy_x86_64(IOLock * lock, void *event, bool oneThread)
 
 
 struct _IORecursiveLock {
-	lck_mtx_t	*mutex;
+	lck_mtx_t	mutex;
 	lck_grp_t	*group;
 	thread_t	thread;
 	UInt32		count;
@@ -135,15 +135,10 @@ IORecursiveLock * IORecursiveLockAllocWithLockGroup( lck_grp_t * lockGroup )
     if( !lock )
         return( 0 );
 
-    lock->mutex = lck_mtx_alloc_init( lockGroup, LCK_ATTR_NULL );
-    if( lock->mutex ) {
-		lock->group = lockGroup;
-        lock->thread = 0;
-        lock->count  = 0;
-    } else {
-        IODelete( lock, _IORecursiveLock, 1 );
-        lock = 0;
-    }
+    lck_mtx_init( &lock->mutex, lockGroup, LCK_ATTR_NULL );
+    lock->group = lockGroup;
+    lock->thread = 0;
+    lock->count  = 0;
 
     return( (IORecursiveLock *) lock );
 }
@@ -158,13 +153,13 @@ void IORecursiveLockFree( IORecursiveLock * _lock )
 {
     _IORecursiveLock * lock = (_IORecursiveLock *)_lock;
 	
-    lck_mtx_free( lock->mutex, lock->group );
+    lck_mtx_destroy(&lock->mutex, lock->group);
     IODelete( lock, _IORecursiveLock, 1 );
 }
 
 lck_mtx_t * IORecursiveLockGetMachLock( IORecursiveLock * lock )
 {
-    return( lock->mutex );
+    return( &lock->mutex );
 }
 
 void IORecursiveLockLock( IORecursiveLock * _lock)
@@ -174,7 +169,7 @@ void IORecursiveLockLock( IORecursiveLock * _lock)
     if( lock->thread == IOThreadSelf())
         lock->count++;
     else {
-        lck_mtx_lock( lock->mutex );
+        lck_mtx_lock( &lock->mutex );
         assert( lock->thread == 0 );
         assert( lock->count == 0 );
         lock->thread = IOThreadSelf();
@@ -190,7 +185,7 @@ boolean_t IORecursiveLockTryLock( IORecursiveLock * _lock)
         lock->count++;
 	return( true );
     } else {
-        if( lck_mtx_try_lock( lock->mutex )) {
+        if( lck_mtx_try_lock( &lock->mutex )) {
             assert( lock->thread == 0 );
             assert( lock->count == 0 );
             lock->thread = IOThreadSelf();
@@ -209,7 +204,7 @@ void IORecursiveLockUnlock( IORecursiveLock * _lock)
 
     if( 0 == (--lock->count)) {
         lock->thread = 0;
-        lck_mtx_unlock( lock->mutex );
+        lck_mtx_unlock( &lock->mutex );
     }
 }
 
@@ -230,7 +225,7 @@ int IORecursiveLockSleep(IORecursiveLock *_lock, void *event, UInt32 interType)
     
     lock->count = 0;
     lock->thread = 0;
-    res = lck_mtx_sleep(lock->mutex, LCK_SLEEP_PROMOTED_PRI, (event_t) event, (wait_interrupt_t) interType);
+    res = lck_mtx_sleep(&lock->mutex, LCK_SLEEP_PROMOTED_PRI, (event_t) event, (wait_interrupt_t) interType);
 
     // Must re-establish the recursive lock no matter why we woke up
     // otherwise we would potentially leave the return path corrupted.
@@ -252,7 +247,7 @@ int	IORecursiveLockSleepDeadline( IORecursiveLock * _lock, void *event,
     
     lock->count = 0;
     lock->thread = 0;
-    res = lck_mtx_sleep_deadline(lock->mutex, LCK_SLEEP_PROMOTED_PRI, (event_t) event, 
+    res = lck_mtx_sleep_deadline(&lock->mutex, LCK_SLEEP_PROMOTED_PRI, (event_t) event,
 								      (wait_interrupt_t) interType, __OSAbsoluteTime(deadline));
 
     // Must re-establish the recursive lock no matter why we woke up

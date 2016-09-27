@@ -157,12 +157,12 @@ vm_map_store_init_ll( __unused struct vm_map_header *hdr)
  */
 boolean_t
 vm_map_store_lookup_entry_ll(
-	register vm_map_t		map,
-	register vm_map_offset_t	address,
+	vm_map_t		map,
+	vm_map_offset_t		address,
 	vm_map_entry_t		*entry)		/* OUT */
 {
-	register vm_map_entry_t		cur;
-	register vm_map_entry_t		last;
+	vm_map_entry_t		cur;
+	vm_map_entry_t		last;
 
 	/*
 	 *	Start looking either from the head of the

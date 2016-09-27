@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -62,16 +62,17 @@ PE_parse_boot_arg(
 }
 #endif
 
-boolean_t
-PE_parse_boot_argn(
-	const char	*arg_string,
-	void		*arg_ptr,
-	int			max_len)
+static boolean_t
+PE_parse_boot_argn_internal(
+	const char *arg_string,
+	void *      arg_ptr,
+	int         max_len,
+	boolean_t   force_string)
 {
 	char *args;
 	char *cp, c;
 	uintptr_t i;
-	long long val;
+	long long val = 0;
 	boolean_t arg_boolean;
 	boolean_t arg_found;
 
@@ -102,9 +103,12 @@ PE_parse_boot_argn(
 		if (strncmp(args, arg_string, i) ||
 		    (i!=strlen(arg_string)))
 			goto gotit;
+
 		if (arg_boolean) {
-			argnumcpy(1, arg_ptr, max_len);
-			arg_found = TRUE;
+			if (!force_string){
+				argnumcpy(1, arg_ptr, max_len);
+				arg_found = TRUE;
+			}
 			break;
 		} else {
 			while (*cp && isargsep (*cp))
@@ -120,7 +124,7 @@ PE_parse_boot_argn(
 				arg_found = TRUE;
 				break;
 			}
-			switch (getval(cp, &val, isargsep, FALSE))
+			switch ((force_string && *cp == '=') ? STR : getval(cp, &val, isargsep, FALSE))
 			{
 				case NUM:
 					argnumcpy(val, arg_ptr, max_len);
@@ -145,6 +149,24 @@ gotit:
 	}
 
 	return(arg_found);
+}
+
+boolean_t
+PE_parse_boot_argn(
+	const char	*arg_string,
+	void		*arg_ptr,
+	int			max_len)
+{
+	return PE_parse_boot_argn_internal(arg_string, arg_ptr, max_len, FALSE);
+}
+
+boolean_t
+PE_parse_boot_arg_str(
+	const char	*arg_string,
+	char		*arg_ptr,
+	int			strlen)
+{
+	return PE_parse_boot_argn_internal(arg_string, arg_ptr, strlen, TRUE);
 }
 
 static boolean_t
@@ -245,8 +267,10 @@ getval(
 	}
 
 	if (has_value || skip_equal_sign) {
-		if (*s == '-')
-			sign = -1, s++;
+		if (*s == '-') {
+			sign = -1;
+			s++;
+		}
 		intval = *s++-'0';
 		radix = 10;
 		if (intval == 0) {

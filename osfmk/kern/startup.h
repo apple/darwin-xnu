@@ -64,6 +64,7 @@ extern void	device_service_create(void);
 
 /* BSD subsystem initialization */
 extern void	bsd_init(void);
+extern void bsd_early_init(void);
 
 /* codesigning subsystem initialization */
 extern void	cs_init(void);

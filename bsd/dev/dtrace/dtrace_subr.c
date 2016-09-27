@@ -295,6 +295,47 @@ dtrace_invop_remove(int (*func)(uintptr_t, uintptr_t *, uintptr_t))
 	kmem_free(hdlr, sizeof (dtrace_invop_hdlr_t));
 }
 
+static minor_t next_minor = 0;
+static dtrace_state_t* dtrace_clients[DTRACE_NCLIENTS] = {NULL};
+
+
+minor_t
+dtrace_state_reserve(void)
+{
+	for (int i = 0; i < DTRACE_NCLIENTS; i++) {
+		minor_t minor = atomic_add_32(&next_minor, 1) % DTRACE_NCLIENTS;
+		if (dtrace_clients[minor] == NULL)
+			return minor;
+	}
+	return 0;
+}
+
+dtrace_state_t*
+dtrace_state_get(minor_t minor)
+{
+	ASSERT(minor < DTRACE_NCLIENTS);
+	return dtrace_clients[minor];
+}
+
+dtrace_state_t*
+dtrace_state_allocate(minor_t minor)
+{
+	dtrace_state_t *state = _MALLOC(sizeof(dtrace_state_t), M_TEMP, M_ZERO | M_WAITOK);
+	if (dtrace_casptr(&dtrace_clients[minor], NULL, state) != NULL) {
+		// We have been raced by another client for this number, abort
+		_FREE(state, M_TEMP);
+		return NULL;
+	}
+	return state;
+}
+
+void
+dtrace_state_free(minor_t minor)
+{
+	dtrace_state_t *state = dtrace_clients[minor];
+	dtrace_clients[minor] = NULL;
+	_FREE(state, M_TEMP);
+}
 
 
 
@@ -317,11 +358,8 @@ dtrace_is_restricted(void)
 	return FALSE;
 }
 
-/*
- * Check if DTrace is running on a machine currently configured for Apple Internal development
- */
 boolean_t
-dtrace_is_running_apple_internal(void)
+dtrace_are_restrictions_relaxed(void)
 {
 #if CONFIG_CSR
 	if (csr_check(CSR_ALLOW_APPLE_INTERNAL) == 0)
@@ -336,9 +374,16 @@ dtrace_fbt_probes_restricted(void)
 {
 
 #if CONFIG_CSR
-	if (dtrace_is_restricted() && !dtrace_is_running_apple_internal())
+	if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed())
 		return TRUE;
 #endif
+
+	return FALSE;
+}
+
+boolean_t
+dtrace_sdt_probes_restricted(void)
+{
 
 	return FALSE;
 }

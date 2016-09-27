@@ -33,6 +33,8 @@
 #include <sys/work_interval.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
+#include <kern/policy_internal.h>
+
 #include <libkern/libkern.h>
 
 int

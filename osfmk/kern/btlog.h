@@ -30,6 +30,7 @@
 #define _KERN_BTLOG_H_
 
 #include <kern/kern_types.h>
+#include <kern/debug.h>
 #include <sys/cdefs.h>
 #include <stdint.h>
 
@@ -66,14 +67,9 @@
 struct btlog;
 typedef struct btlog btlog_t;
 
-typedef void (*btlog_lock_t)(void *context);
-typedef void (*btlog_unlock_t)(void *context);
-
 extern btlog_t *btlog_create(size_t numrecords,
                              size_t record_btdepth,
-                             btlog_lock_t lock_callback,
-                             btlog_unlock_t unlock_callback,
-                             void *callback_context);
+			     boolean_t caller_will_remove_entries_for_element);
 
 extern void btlog_add_entry(btlog_t *btlog,
                             void *element,
@@ -83,6 +79,15 @@ extern void btlog_add_entry(btlog_t *btlog,
 
 extern void btlog_remove_entries_for_element(btlog_t *btlog,
                                              void *element);
+
+#if DEBUG || DEVELOPMENT
+void btlog_copy_backtraces_for_elements(btlog_t      * btlog,
+                                        uintptr_t    * instances,
+                                        uint32_t     * count,
+                                        uint32_t       zoneSize,
+                                        leak_site_proc proc,
+                                        void         * refCon);
+#endif  /* DEBUG || DEVELOPMENT */
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

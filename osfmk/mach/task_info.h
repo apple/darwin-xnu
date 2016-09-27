@@ -324,14 +324,20 @@ struct task_vm_info {
 
 	/* added for rev1 */
 	mach_vm_size_t	phys_footprint;
+
+	/* added for rev2 */
+	mach_vm_address_t	min_address;
+	mach_vm_address_t	max_address;
 };
 typedef struct task_vm_info	task_vm_info_data_t;
 typedef struct task_vm_info	*task_vm_info_t;
 #define TASK_VM_INFO_COUNT	((mach_msg_type_number_t) \
 		(sizeof (task_vm_info_data_t) / sizeof (natural_t)))
+#define TASK_VM_INFO_REV2_COUNT TASK_VM_INFO_COUNT
+#define TASK_VM_INFO_REV1_COUNT /* doesn't include min and max address */ \
+	((mach_msg_type_number_t) (TASK_VM_INFO_REV2_COUNT - 4))
 #define TASK_VM_INFO_REV0_COUNT /* doesn't include phys_footprint */ \
-		((mach_msg_type_number_t) \
-		(TASK_VM_INFO_COUNT - 2))
+	((mach_msg_type_number_t) (TASK_VM_INFO_REV1_COUNT - 2))
 
 typedef struct vm_purgeable_info	task_purgable_info_t;
 

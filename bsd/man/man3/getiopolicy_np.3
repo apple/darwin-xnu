@@ -25,14 +25,17 @@ can be get or set for the given
 .Pp
 The I/O type is specified in the argument
 .Fa iotype .
-The currently supported I/O type is 
+The only currently supported I/O type is 
 .Dv IOPOL_TYPE_DISK ,
-which means the I/O policy for I/Os to local disks can be get or set.  I/Os to
-local disks are I/Os sent to the media without going through a network,
+which can mean either the I/O policy for I/Os to local disks or to
+remote volumes.
+I/Os to local disks are I/Os sent to the media without going through a network,
 including I/Os to internal and external hard drives, optical media in internal
 and external drives, flash drives, floppy disks, ram disks, and mounted disk
-images which reside on these media, but not including remote volumes mounted
-through networks (AFP, SMB, NFS, etc) or disk images residing on remote volumes.
+images which reside on these media.
+I/Os to remote volumes are I/Os that require network activity to complete the
+operation.
+This is currently only supported for remote volumes mounted by SMB or AFP.
 .Pp
 The scope that the I/O policy takes effect is specified in the argument
 .Fa scope
@@ -109,7 +112,7 @@ call returns 0 if there is no error, or -1 if there is an error.  When error
 happens, the error code is stored in the external variable
 .Fa errno .
 .Sh ERRORS
-.Fn Getiopolicy_np
+.Fn getiopolicy_np
 and
 .Fn setiopolicy_np
 will fail if:

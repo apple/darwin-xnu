@@ -412,7 +412,7 @@ void
 machine_thread_destroy(
 	thread_t		thread)
 {
-	register pcb_t	pcb = THREAD_TO_PCB(thread);
+	pcb_t	pcb = THREAD_TO_PCB(thread);
 
 #if HYPERVISOR
 	if (thread->hv_thread_target) {

@@ -84,24 +84,34 @@ class OSArray;
  */
 class OSSet : public OSCollection
 {
-    OSDeclareDefaultStructors(OSSet)
     friend class OSSerialize;
+
+    OSDeclareDefaultStructors(OSSet)
+
+#if APPLE_KEXT_ALIGN_CONTAINERS
+
+private:
+    OSArray * members;
+
+#else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 private:
     OSArray * members;
 
 protected:
+    struct ExpansionData { };
+
+    /* Reserved for future use.  (Internal use only)  */
+    ExpansionData * reserved;
+
+#endif /* APPLE_KEXT_ALIGN_CONTAINERS */
+
     /*
      * OSCollectionIterator interfaces.
      */
     virtual unsigned int iteratorSize() const APPLE_KEXT_OVERRIDE;
     virtual bool initIterator(void * iterator) const APPLE_KEXT_OVERRIDE;
     virtual bool getNextObjectForIterator(void * iterator, OSObject ** ret) const APPLE_KEXT_OVERRIDE;
-
-    struct ExpansionData { };
-    
-    /* Reserved for future use.  (Internal use only)  */
-    ExpansionData * reserved;
 
 public:
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -100,7 +100,7 @@ enum {
 #define	net_timernsec(tvp, nsp) do {					\
 	*(nsp) = (tvp)->tv_nsec;					\
 	if ((tvp)->tv_sec > 0)						\
-		*(nsp) += ((tvp)->tv_sec * (integer_t)NSEC_PER_SEC);		\
+		*(nsp) += ((tvp)->tv_sec * NSEC_PER_SEC);		\
 } while (0)
 
 #if defined(__x86_64__) || defined(__arm64__)
@@ -321,6 +321,8 @@ extern void dlil_proto_unplumb_all(ifnet_t);
 extern void dlil_post_msg(struct ifnet *, u_int32_t, u_int32_t,
     struct net_event_data *, u_int32_t);
 
+extern int dlil_post_complete_msg(struct ifnet *, struct kev_msg *);
+
 extern int dlil_alloc_local_stats(struct ifnet *);
 
 /*
@@ -332,8 +334,6 @@ extern int dlil_if_acquire(u_int32_t, const void *, size_t, struct ifnet **);
  * an interface is detached.
  */
 extern void dlil_if_release(struct ifnet *ifp);
-
-extern u_int32_t ifnet_aggressive_drainers;
 
 extern errno_t dlil_if_ref(struct ifnet *);
 extern errno_t dlil_if_free(struct ifnet *);
@@ -358,6 +358,11 @@ extern errno_t dlil_rxpoll_set_params(struct ifnet *,
     struct ifnet_poll_params *, boolean_t);
 extern errno_t dlil_rxpoll_get_params(struct ifnet *,
     struct ifnet_poll_params *);
+
+extern errno_t dlil_output_handler(struct ifnet *, struct mbuf *);
+extern errno_t dlil_input_handler(struct ifnet *, struct mbuf *,
+    struct mbuf *, const struct ifnet_stat_increment_param *,
+    boolean_t, struct thread *);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* KERNEL_PRIVATE */

@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2012 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
 #
 # MakeInc.dir contains the recursion rules for the build system.
 # For instance, the "build_installhdrs_md" target is auto-generated
@@ -24,23 +24,23 @@ $(1)_recurse_target_list = $$(addprefix $(1)_recurse_into_,$(2))
 .PHONY: $$($(1)_recurse_target_list)
 
 $$($(1)_recurse_target_list):
-	$$(_v)$$(MKDIR) $$(CURDIR)/$$(patsubst $(1)_recurse_into_%,%,$$@)
-	$$(_v)$${MAKE} -C $$(CURDIR)/$$(patsubst $(1)_recurse_into_%,%,$$@)	\
-		-f $$(SOURCE)$$(patsubst $(1)_recurse_into_%,%,$$@)/Makefile	\
+	$$(_v)$$(MKDIR) "$$(CURDIR)/$$(patsubst $(1)_recurse_into_%,%,$$@)"
+	$$(_v)$${MAKE} -C "$$(CURDIR)/$$(patsubst $(1)_recurse_into_%,%,$$@)"	\
+		-f "$$(SOURCE)$$(patsubst $(1)_recurse_into_%,%,$$@)/Makefile"	\
 		CURRENT_KERNEL_CONFIG=$${CURRENT_KERNEL_CONFIG}		\
 		CURRENT_ARCH_CONFIG=$${CURRENT_ARCH_CONFIG}		\
 		CURRENT_MACHINE_CONFIG=$${CURRENT_MACHINE_CONFIG}	\
 		CURRENT_BUILD_CONFIG=$${CURRENT_BUILD_CONFIG}		\
-		SOURCE=$$(SOURCE)$$(patsubst $(1)_recurse_into_%,%,$$@)/	\
-		RELATIVE_SOURCE_PATH=$$(RELATIVE_SOURCE_PATH)/$$(patsubst $(1)_recurse_into_%,%,$$@)	\
+		SOURCE="$$(SOURCE)$$(patsubst $(1)_recurse_into_%,%,$$@)/"	\
+		RELATIVE_SOURCE_PATH="$$(RELATIVE_SOURCE_PATH)/$$(patsubst $(1)_recurse_into_%,%,$$@)"	\
 		TARGET=$(if $(4),$${OBJPATH}/$$(COMPONENT),$$(TARGET)$$(patsubst $(1)_recurse_into_%,%,$$@)/)		\
-		OBJPATH=$${OBJPATH}		     			\
+		OBJPATH=$${OBJPATH}					\
 		$(1);
 
 .PHONY: $(1)
 
 $(1): $$($(1)_recurse_target_list)
-	$$(_v)$${MAKE} -C $$(CURDIR)						\
+	$$(_v)$${MAKE} -C "$$(CURDIR)"						\
 		-f $$(firstword $$(MAKEFILE_LIST))				\
 		CURRENT_KERNEL_CONFIG=$${CURRENT_KERNEL_CONFIG}			\
 		CURRENT_ARCH_CONFIG=$${CURRENT_ARCH_CONFIG}			\
@@ -49,7 +49,7 @@ $(1): $$($(1)_recurse_target_list)
 		SOURCE=$$(SOURCE)						\
 		RELATIVE_SOURCE_PATH=$$(RELATIVE_SOURCE_PATH)			\
 		TARGET=$$(TARGET)						\
-		OBJPATH=$${OBJPATH}		     				\
+		OBJPATH=$${OBJPATH}						\
 		$(3);
 endef
 
@@ -59,22 +59,22 @@ endef
 $(eval $(call RECURSIVE_BUILD_RULES_template,build_setup,$(SETUP_SUBDIRS),do_build_setup,))
 
 #
-# Install machine independent kernel header files 
+# Install machine independent kernel header files
 #
 $(eval $(call RECURSIVE_BUILD_RULES_template,build_installhdrs_mi,$(INSTINC_SUBDIRS),do_installhdrs_mi,))
 
 #
-# Install machine dependent kernel header files 
+# Install machine dependent kernel header files
 #
 $(eval $(call RECURSIVE_BUILD_RULES_template,build_installhdrs_md,$(INSTINC_SUBDIRS_$(CURRENT_ARCH_CONFIG)),do_installhdrs_md,))
 
 #
-# Install machine independent kernel header files 
+# Install machine independent kernel header files
 #
 $(eval $(call RECURSIVE_BUILD_RULES_template,build_exporthdrs_mi,$(EXPINC_SUBDIRS),do_exporthdrs_mi,))
 
 #
-# Install machine dependent kernel header files 
+# Install machine dependent kernel header files
 #
 $(eval $(call RECURSIVE_BUILD_RULES_template,build_exporthdrs_md,$(EXPINC_SUBDIRS_$(CURRENT_ARCH_CONFIG)),do_exporthdrs_md,))
 

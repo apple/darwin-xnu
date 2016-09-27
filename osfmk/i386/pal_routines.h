@@ -92,6 +92,7 @@ extern struct pal_apic_table *apic_table;
 /* serial / debug output routines */
 extern int  pal_serial_init(void);
 extern void pal_serial_putc(char);
+extern void pal_serial_putc_nocr(char);
 extern int  pal_serial_getc(void);
 
 /* Generic I386 PAL functions go here */
@@ -123,9 +124,6 @@ void pal_ast_check(thread_t thread);
 
 /* Called by sync_iss_to_iks */
 extern void pal_get_kern_regs( x86_saved_state_t *state );
-
-/* Called by load_machfile */
-void pal_switch_pmap(thread_t, pmap_t, boolean_t);
 
 /*
  * Platform-specific hlt/sti.

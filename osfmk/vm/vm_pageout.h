@@ -94,14 +94,27 @@ extern unsigned int vm_pageout_cleaned_reactivated, vm_pageout_cleaned_fault_rea
 
 #if CONFIG_FREEZE
 extern boolean_t memorystatus_freeze_enabled;
-#define VM_DYNAMIC_PAGING_ENABLED(port) (COMPRESSED_PAGER_IS_ACTIVE || DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPBACKED || (memorystatus_freeze_enabled == FALSE && IP_VALID(port)))
-#else
-#define VM_DYNAMIC_PAGING_ENABLED(port) (COMPRESSED_PAGER_IS_ACTIVE || IP_VALID(port))
 #endif
+
+#define VM_DYNAMIC_PAGING_ENABLED() (VM_CONFIG_COMPRESSOR_IS_ACTIVE)
 
 #if VM_PRESSURE_EVENTS
 extern boolean_t vm_pressure_events_enabled;
 #endif /* VM_PRESSURE_EVENTS */
+
+
+/*
+ * the following codes are used in the DBG_MACH_WORKINGSET subclass
+ * of the DBG_MACH class
+ */
+#define	VM_DISCONNECT_ALL_PAGE_MAPPINGS		0x00
+#define VM_DISCONNECT_TASK_PAGE_MAPPINGS	0x01
+#define VM_REAL_FAULT_ADDR_INTERNAL		0x02
+#define VM_REAL_FAULT_ADDR_PURGABLE		0x03
+#define VM_REAL_FAULT_ADDR_EXTERNAL		0x04
+#define VM_REAL_FAULT_ADDR_SHAREDCACHE		0x05
+
+
 
 extern int	vm_debug_events;
 
@@ -168,6 +181,16 @@ extern void upl_set_associated_upl(upl_t upl, upl_t associated_upl);
 extern void iopl_valid_data(
 	upl_t			upl_ptr);
 
+#ifdef	XNU_KERNEL_PRIVATE
+
+extern vm_tag_t iopl_set_tag(
+	upl_t			upl_ptr,
+	vm_tag_t                tag);
+
+#endif	/* XNU_KERNEL_PRIVATE */
+
+extern struct vnode * upl_lookup_vnode(upl_t upl);
+
 #ifndef	MACH_KERNEL_PRIVATE
 typedef struct vm_page	*vm_page_t;
 #endif
@@ -203,7 +226,7 @@ extern unsigned int	vm_page_anonymous_count;
  * manipulate this structure
  */
 struct vm_pageout_queue {
-        queue_head_t	pgo_pending;	/* laundry pages to be processed by pager's iothread */
+        vm_page_queue_head_t	pgo_pending;	/* laundry pages to be processed by pager's iothread */
         unsigned int	pgo_laundry;	/* current count of laundry pages on queue or in flight */
         unsigned int	pgo_maxlaundry;
 	uint64_t	pgo_tid;	/* thread ID of I/O thread that services this queue */
@@ -236,7 +259,6 @@ extern void		vm_pageout_object_terminate(
 
 extern int		vm_pageout_cluster(
 	                                vm_page_t	m,
-					boolean_t	pageout,
 					boolean_t	immediate_ok,
 					boolean_t	keep_object_locked);
 
@@ -295,7 +317,6 @@ struct upl {
 	int		ref_count;
 	int		ext_ref_count;
 	int		flags;
-	vm_object_t	src_object; /* object derived from */
 	vm_object_offset_t offset;
 	upl_size_t	size;	    /* size in bytes of the address space */
 	vm_offset_t	kaddr;      /* secondary mapping in kernel */
@@ -502,6 +523,9 @@ struct vm_page_stats_reusable {
 	uint64_t	can_reuse_success;
 	uint64_t	can_reuse_failure;
 	uint64_t	reusable_reclaimed;
+	uint64_t	reusable_nonwritable;
+	uint64_t	reusable_shared;
+	uint64_t	free_shared;
 };
 extern struct vm_page_stats_reusable vm_page_stats_reusable;
 	
@@ -518,29 +542,36 @@ extern boolean_t vm_compressor_immediate_preferred;
 extern boolean_t vm_compressor_immediate_preferred_override;
 extern kern_return_t vm_pageout_compress_page(void **, char *, vm_page_t, boolean_t);
 extern void vm_pageout_anonymous_pages(void);
+extern void vm_pageout_disconnect_all_pages(void);
 
 
-#define VM_PAGER_DEFAULT				0x1	/* Use default pager. */
-#define VM_PAGER_COMPRESSOR_NO_SWAP			0x2	/* In-core compressor only. */
-#define VM_PAGER_COMPRESSOR_WITH_SWAP			0x4	/* In-core compressor + swap backend. */
-#define VM_PAGER_FREEZER_DEFAULT			0x8	/* Freezer backed by default pager.*/
+struct	vm_config {
+	boolean_t	compressor_is_present;		/* compressor is initialized and can be used by the freezer, the sweep or the pager */
+	boolean_t	compressor_is_active;		/* pager can actively compress pages...  'compressor_is_present' must be set */
+	boolean_t	swap_is_present;		/* swap is initialized and can be used by the freezer, the sweep or the pager */
+	boolean_t	swap_is_active;			/* pager can actively swap out compressed segments... 'swap_is_present' must be set */
+	boolean_t	freezer_swap_is_active;		/* freezer can swap out frozen tasks... "compressor_is_present + swap_is_present" must be set */
+};
+
+extern	struct vm_config	vm_config;
+
+
+#define	VM_PAGER_NOT_CONFIGURED				0x0	/* no compresser or swap configured */
+#define VM_PAGER_DEFAULT				0x1	/* Use default pager... DEPRECATED */
+#define VM_PAGER_COMPRESSOR_NO_SWAP			0x2	/* Active in-core compressor only. */
+#define VM_PAGER_COMPRESSOR_WITH_SWAP			0x4	/* Active in-core compressor + swap backend. */
+#define VM_PAGER_FREEZER_DEFAULT			0x8	/* Freezer backed by default pager... DEPRECATED */
 #define VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP		0x10	/* Freezer backed by in-core compressor only i.e. frozen data remain in-core compressed.*/
-#define VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP		0x20	/* Freezer backed by in-core compressor with swap support too.*/
+#define VM_PAGER_COMPRESSOR_NO_SWAP_PLUS_FREEZER_COMPRESSOR_WITH_SWAP	0x20	/* Active in-core compressor + Freezer backed by in-core compressor with swap support too.*/
 
 #define VM_PAGER_MAX_MODES				6	/* Total number of vm compressor modes supported */
 
-#define DEFAULT_PAGER_IS_ACTIVE		((vm_compressor_mode & VM_PAGER_DEFAULT) == VM_PAGER_DEFAULT)
 
-#define COMPRESSED_PAGER_IS_ACTIVE	(vm_compressor_mode & (VM_PAGER_COMPRESSOR_NO_SWAP | VM_PAGER_COMPRESSOR_WITH_SWAP))
-#define COMPRESSED_PAGER_IS_SWAPLESS	((vm_compressor_mode & VM_PAGER_COMPRESSOR_NO_SWAP) == VM_PAGER_COMPRESSOR_NO_SWAP)
-#define COMPRESSED_PAGER_IS_SWAPBACKED	((vm_compressor_mode & VM_PAGER_COMPRESSOR_WITH_SWAP) == VM_PAGER_COMPRESSOR_WITH_SWAP)
-
-#define DEFAULT_FREEZER_IS_ACTIVE	((vm_compressor_mode & VM_PAGER_FREEZER_DEFAULT) == VM_PAGER_FREEZER_DEFAULT)
-
-#define DEFAULT_FREEZER_COMPRESSED_PAGER_IS_ACTIVE		(vm_compressor_mode & (VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP | VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP))
-#define DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPLESS		((vm_compressor_mode & VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP) == VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP)
-#define DEFAULT_FREEZER_COMPRESSED_PAGER_IS_SWAPBACKED		((vm_compressor_mode & VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP) == VM_PAGER_FREEZER_COMPRESSOR_WITH_SWAP)
-
+#define	VM_CONFIG_COMPRESSOR_IS_PRESENT		(vm_config.compressor_is_present == TRUE)
+#define	VM_CONFIG_COMPRESSOR_IS_ACTIVE		(vm_config.compressor_is_active == TRUE)
+#define	VM_CONFIG_SWAP_IS_PRESENT		(vm_config.swap_is_present == TRUE)
+#define	VM_CONFIG_SWAP_IS_ACTIVE		(vm_config.swap_is_active == TRUE)
+#define	VM_CONFIG_FREEZER_SWAP_IS_ACTIVE	(vm_config.freezer_swap_is_active == TRUE)
 
 #endif	/* KERNEL_PRIVATE */
 

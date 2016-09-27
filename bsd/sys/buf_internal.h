@@ -177,6 +177,7 @@ extern vm_offset_t buf_kernel_addrperm;
 #define BL_WAITSHADOW	0x00000080
 #define BL_IOBUF_ALLOC	0x00000100
 #define BL_WANTED_REF	0x00000200
+#define BL_IOBUF_VDEV	0x00000400	/* iobuf was for a diskimage */
 
 /*
  * Parameters for buffer cache garbage collection 
@@ -236,13 +237,8 @@ extern vm_offset_t buf_kernel_addrperm;
 #define	B_HDRALLOC	0x04000000	/* zone allocated buffer header */
 #define	B_ZALLOC	0x08000000	/* b_datap is zalloc()ed */
 /*
- * private flags used by the journal layer
- */
-#define	B_NORELSE	0x10000000	/* don't brelse() in bwrite() */
-/*
  * private flags used by by the cluster layer
  */
-#define B_TWANTED	0x20000000	/* but_t that is part of a cluster level transaction is wanted */
 #define B_COMMIT_UPL    0x40000000	/* commit/abort the UPL on I/O success/failure */
 #define B_TDONE		0x80000000	/* buf_t that is part of a cluster level transaction has completed */
 
@@ -272,6 +268,8 @@ extern vm_offset_t buf_kernel_addrperm;
 #define BA_IO_TIER_SHIFT	8
 
 #define BA_ISOCHRONOUS  	0x00001000 /* device specific isochronous throughput to media */
+
+#define BA_STRATEGY_TRACKED_IO  0x00002000 /* tracked by spec_strategy */
 
 
 #define GET_BUFATTR_IO_TIER(bap)	((bap->ba_flags & BA_IO_TIER_MASK) >> BA_IO_TIER_SHIFT)
@@ -303,31 +301,18 @@ extern struct buf *buf_headers;		/* The buffer headers. */
 
 __BEGIN_DECLS
 
-buf_t	buf_create_shadow_priv(buf_t bp, boolean_t force_copy, uintptr_t external_storage, void (*iodone)(buf_t, void *), void *arg);
-
 buf_t	alloc_io_buf(vnode_t, int);
 void	free_io_buf(buf_t);
 
 int	allocbuf(struct buf *, int);
 void	bufinit(void);
 
-/*
- * Flags for buf_acquire
- */
-#define BAC_NOWAIT		0x01	/* Don't wait if buffer is busy */
-#define BAC_REMOVE		0x02	/* Remove from free list once buffer is acquired */
-#define BAC_SKIP_NONLOCKED	0x04	/* Don't return LOCKED buffers */
-#define BAC_SKIP_LOCKED		0x08	/* Only return LOCKED buffers */
-
 void	buf_list_lock(void);
 void	buf_list_unlock(void);
 
 void	cluster_init(void);
-void	buf_drop(buf_t);
-errno_t	buf_acquire(buf_t, int, int, int);
 
 int	count_busy_buffers(void);
-int	count_lock_queue(void);
 
 int buf_flushdirtyblks_skipinfo (vnode_t, int, int, const char *);
 void buf_wait_for_shadow_io (vnode_t, daddr64_t);
@@ -356,6 +341,8 @@ struct bufstats {
 	long	bufs_iobufmax;		/* Max. number of IO buffers used */
 	long	bufs_iobufinuse;	/* number of IO buffers in use */
 	long	bufs_iobufsleeps;	/* IO buffer starvation */
+	long	bufs_iobufinuse_vdev;	/* number of IO buffers in use by
+					   diskimages */
 };
 
 #endif /* KERNEL */

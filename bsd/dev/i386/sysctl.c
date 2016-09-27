@@ -39,6 +39,7 @@
 #include <kern/clock.h>
 #include <libkern/libkern.h>
 #include <i386/lapic.h>
+#include <i386/mp.h>
 
 
 static int
@@ -285,6 +286,7 @@ misc_interrupt_latency_max(__unused struct sysctl_oid *oidp, __unused void *arg1
 	return error;
 }
 
+#if DEVELOPMENT || DEBUG
 /*
  * Triggers a machine-check exception - for a suitably configured kernel only.
  */
@@ -303,6 +305,30 @@ misc_machine_check_panic(__unused struct sysctl_oid *oidp, __unused void *arg1, 
 	}
 	return error;
 }
+
+/*
+ * Triggers a non-responsive processor timeout panic - for a suitably configured kernel only.
+ */
+static uint64_t kernel_timeout_spin = 0;
+static int
+misc_kernel_timeout_spin(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	uint64_t	old_value;
+	uint64_t	new_value;
+	int changed = 0, error;
+	char buf[128];
+	buf[0] = '\0';
+
+	absolutetime_to_nanoseconds(kernel_timeout_spin, &old_value);
+
+	error = sysctl_io_number(req, old_value, sizeof(uint64_t), &new_value, &changed);
+	if (error == 0 && changed) {
+		nanoseconds_to_absolutetime(((uint64_t)new_value), &kernel_timeout_spin);
+		kernel_spin(kernel_timeout_spin);
+	}
+	return error;
+}
+#endif /* DEVELOPMENT || DEBUG */
 
 
 SYSCTL_NODE(_machdep, OID_AUTO, cpu, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
@@ -796,19 +822,61 @@ SYSCTL_PROC(_machdep_misc, OID_AUTO, interrupt_latency_max,
 	    0, 0,
 	    misc_interrupt_latency_max, "A", "Maximum Interrupt latency");
 
+#if DEVELOPMENT || DEBUG
 SYSCTL_PROC(_machdep_misc, OID_AUTO, machine_check_panic,
 	    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED, 
 	    0, 0,
 	    misc_machine_check_panic, "A", "Machine-check exception test");
 
-#if DEVELOPMENT || DEBUG
+SYSCTL_PROC(_machdep_misc, OID_AUTO, kernel_timeout_spin,
+	    CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED, 
+	    0, sizeof(kernel_timeout_spin),
+	    misc_kernel_timeout_spin, "Q", "Kernel timeout panic test");
+
 SYSCTL_QUAD(_machdep, OID_AUTO, reportphyreadabs,
 		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
 		&reportphyreaddelayabs, "");
 SYSCTL_INT(_machdep, OID_AUTO, reportphyreadosbt,
 		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
 		&reportphyreadosbt, 0, "");
-#endif
+
+extern int pmap_pagezero_mitigation;
+extern int pmap_asserts_enabled, pmap_asserts_traced;
+/* On DEV/DEBUG kernels, clear this to disable the SMAP emulation
+ * (address space disconnect) for pagezero-less processes.
+ */
+SYSCTL_INT(_machdep, OID_AUTO, pmap_pagezero_mitigation,
+    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &pmap_pagezero_mitigation, 0, "");
+/* Toggle pmap assertions */
+SYSCTL_INT(_machdep, OID_AUTO, pmap_asserts,
+    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &pmap_asserts_enabled, 0, "");
+/* Transform pmap assertions into kernel trace terminations */
+SYSCTL_INT(_machdep, OID_AUTO, pmap_asserts_traced,
+    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &pmap_asserts_traced, 0, "");
+
+static int
+misc_svisor_read(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	uint64_t new_value = 0, old_value = 0;
+	int changed = 0, error;
+
+	error = sysctl_io_number(req, old_value, sizeof(uint64_t), &new_value, &changed);
+	if ((error == 0) && changed) {
+		volatile uint32_t *raddr = (uint32_t *) new_value;
+		printf("Supervisor: value at 0x%llx is 0x%x\n", new_value, *raddr);
+	}
+	return error;
+}
+
+SYSCTL_PROC(_machdep_misc, OID_AUTO, misc_svisor_read,
+	    CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED, 
+	    0, 0,
+	    misc_svisor_read, "I", "supervisor mode read");
+
+#endif /* DEVELOPMENT || DEBUG */
 
 extern void timer_queue_trace_cpu(int);
 static int
@@ -885,3 +953,11 @@ extern uint64_t x86_isr_fp_simd_use;
 SYSCTL_QUAD(_machdep, OID_AUTO, x86_fp_simd_isr_uses,
 		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
 		&x86_isr_fp_simd_use, "");
+#if DEVELOPMENT || DEBUG
+
+extern int plctrace_enabled;
+
+SYSCTL_INT(_machdep, OID_AUTO, pltrace,
+		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+		&plctrace_enabled, 0, "");
+#endif /* DEVELOPMENT || DEBUG */

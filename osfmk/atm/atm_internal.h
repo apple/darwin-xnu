@@ -130,9 +130,9 @@ void atm_task_descriptor_destroy(atm_task_descriptor_t task_descriptor);
 kern_return_t atm_register_trace_memory(task_t	task, uint64_t trace_buffer_address, uint64_t buffer_size);
 kern_return_t atm_send_proc_inspect_notification(task_t task, int32_t traced_pid, uint64_t traced_uniqueid);
 
+#endif /* MACH_KERNEL_PRIVATE */
+
 kern_return_t atm_set_diagnostic_config(uint32_t);
 uint32_t atm_get_diagnostic_config(void);
-
-#endif /* MACH_KERNEL_PRIVATE */
 
 #endif /* _ATM_ATM_INTERNAL_H_ */

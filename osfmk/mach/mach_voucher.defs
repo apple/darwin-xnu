@@ -42,7 +42,11 @@ routine mach_voucher_extract_attr_content(
 	out	content		: mach_voucher_attr_content_t, CountInOut);
 
 /* extract a recipe to reconstitue a <voucher, key> pair item in a future voucher */
+#if !KERNEL && !LIBSYSCALL_INTERFACE
+routine _kernelrpc_mach_voucher_extract_attr_recipe(
+#else
 routine mach_voucher_extract_attr_recipe(
+#endif
 		voucher		: ipc_voucher_t;
 		key		: mach_voucher_attr_key_t;
 	out	recipe		: mach_voucher_attr_raw_recipe_t, CountInOut);

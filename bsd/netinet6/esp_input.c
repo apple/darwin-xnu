@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -174,9 +174,7 @@ esp6_input_strip_udp_encap (struct mbuf *m, int ip6hlen)
 }
 
 void
-esp4_input(m, off)
-	struct mbuf *m;
-	int off;
+esp4_input(struct mbuf *m, int off)
 {
 	struct ip *ip;
 #if INET6
@@ -498,17 +496,6 @@ noreplaycheck:
 		esp = (struct esp *)(void *)(((u_int8_t *)ip) + off);
 	}
 
-	if (sav->utun_is_keepalive_fn) {
-		if (sav->utun_is_keepalive_fn(sav->utun_pcb, &m, nxt, sav->flags, (off + esplen + ivlen))) {
-			if (m) {
-				// not really bad, we just wanna exit
-				IPSEC_STAT_INCREMENT(ipsecstat.in_success);
-				m = NULL;
-			}
-			goto bad;
-		}
-	}
-
 	/* was it transmitted over the IPsec tunnel SA? */
 	if (ipsec4_tunnel_validate(m, off + esplen + ivlen, nxt, sav, &ifamily)) {
 		ifaddr_t ifa;
@@ -562,13 +549,11 @@ noreplaycheck:
 				goto bad;
 			}
 
-			if (ip_doscopedroute) {
-				bzero(&addr, sizeof(addr));
-				ipaddr = (__typeof__(ipaddr))&addr;
-				ipaddr->sin_family = AF_INET;
-				ipaddr->sin_len = sizeof(*ipaddr);
-				ipaddr->sin_addr = ip->ip_dst;
-			}
+			bzero(&addr, sizeof(addr));
+			ipaddr = (__typeof__(ipaddr))&addr;
+			ipaddr->sin_family = AF_INET;
+			ipaddr->sin_len = sizeof(*ipaddr);
+			ipaddr->sin_addr = ip->ip_dst;
 #if INET6
 		} else if (ifamily == AF_INET6) {
 			struct sockaddr_in6 *ip6addr;
@@ -608,13 +593,11 @@ noreplaycheck:
 				goto bad;
 			}
 
-			if (ip6_doscopedroute) {
-				bzero(&addr, sizeof(addr));
-				ip6addr = (__typeof__(ip6addr))&addr;
-				ip6addr->sin6_family = AF_INET6;
-				ip6addr->sin6_len = sizeof(*ip6addr);
-				ip6addr->sin6_addr = ip6->ip6_dst;
-			}
+			bzero(&addr, sizeof(addr));
+			ip6addr = (__typeof__(ip6addr))&addr;
+			ip6addr->sin6_family = AF_INET6;
+			ip6addr->sin6_len = sizeof(*ip6addr);
+			ip6addr->sin6_addr = ip6->ip6_dst;
 #endif /* INET6 */
 		} else {
 			ipseclog((LOG_ERR, "ipsec tunnel unsupported address family "
@@ -629,13 +612,11 @@ noreplaycheck:
 			goto bad;
 		}
 
-		if (ip_doscopedroute || ip6_doscopedroute) {
-			// update the receiving interface address based on the inner address
-			ifa = ifa_ifwithaddr((struct sockaddr *)&addr);
-			if (ifa) {
-				m->m_pkthdr.rcvif = ifa->ifa_ifp;
-				IFA_REMREF(ifa);
-			}
+		// update the receiving interface address based on the inner address
+		ifa = ifa_ifwithaddr((struct sockaddr *)&addr);
+		if (ifa) {
+			m->m_pkthdr.rcvif = ifa->ifa_ifp;
+			IFA_REMREF(ifa);
 		}
 
 		/* Clear the csum flags, they can't be valid for the inner headers */
@@ -651,14 +632,6 @@ noreplaycheck:
 			}
 		}
 		
-		if (sav->utun_in_fn) {
-			if (!(sav->utun_in_fn(sav->utun_pcb, &m, ifamily == AF_INET ? PF_INET : PF_INET6))) {
-				m = NULL;
-				// we just wanna exit since packet has been completely processed
-				goto bad;
-			}
-		}
-
 		if (proto_input(ifamily == AF_INET ? PF_INET : PF_INET6, m) != 0)
 			goto bad;
 
@@ -765,14 +738,6 @@ noreplaycheck:
 				}
 			}
 			
-			if (sav->utun_in_fn) {
-				if (!(sav->utun_in_fn(sav->utun_pcb, &m, PF_INET))) {
-					m = NULL;
-					// we just wanna exit since packet has been completely processed
-					goto bad;
-				}
-			}
-
 			ip_proto_dispatch_in(m, off, nxt, 0);
 		} else
 			m_freem(m);
@@ -1092,17 +1057,6 @@ noreplaycheck:
 	ip6 = mtod(m, struct ip6_hdr *);
 	ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) - taillen);
 
-	if (sav->utun_is_keepalive_fn) {
-		if (sav->utun_is_keepalive_fn(sav->utun_pcb, &m, nxt, sav->flags, (off + esplen + ivlen))) {
-			if (m) {
-				// not really bad, we just wanna exit
-				IPSEC_STAT_INCREMENT(ipsec6stat.in_success);
-				m = NULL;
-			}
-			goto bad;
-		}
-	}
-
 	if (*nproto == IPPROTO_UDP) {
 		// offset includes the outer ip and udp header lengths.
 		if (m->m_len < off) {
@@ -1149,6 +1103,8 @@ noreplaycheck:
 		flowinfo = ip6->ip6_flow;
 		m_adj(m, off + esplen + ivlen);
 		if (ifamily == AF_INET6) {
+			struct sockaddr_in6 *ip6addr;
+
 			if (m->m_len < sizeof(*ip6)) {
 #ifndef PULLDOWN_TEST
 				/*
@@ -1180,15 +1136,11 @@ noreplaycheck:
 				goto bad;
 			}
 
-			if (ip6_doscopedroute) {
-				struct sockaddr_in6 *ip6addr;
-
-				bzero(&addr, sizeof(addr));
-				ip6addr = (__typeof__(ip6addr))&addr;
-				ip6addr->sin6_family = AF_INET6;
-				ip6addr->sin6_len = sizeof(*ip6addr);
-				ip6addr->sin6_addr = ip6->ip6_dst;
-			}
+			bzero(&addr, sizeof(addr));
+			ip6addr = (__typeof__(ip6addr))&addr;
+			ip6addr->sin6_family = AF_INET6;
+			ip6addr->sin6_len = sizeof(*ip6addr);
+			ip6addr->sin6_addr = ip6->ip6_dst;
 		} else if (ifamily == AF_INET) {
 			struct sockaddr_in *ipaddr;
 
@@ -1228,13 +1180,11 @@ noreplaycheck:
 				goto bad;
 			}
 
-			if (ip_doscopedroute) {
-				bzero(&addr, sizeof(addr));
-				ipaddr = (__typeof__(ipaddr))&addr;
-				ipaddr->sin_family = AF_INET;
-				ipaddr->sin_len = sizeof(*ipaddr);
-				ipaddr->sin_addr = ip->ip_dst;
-			}
+			bzero(&addr, sizeof(addr));
+			ipaddr = (__typeof__(ipaddr))&addr;
+			ipaddr->sin_family = AF_INET;
+			ipaddr->sin_len = sizeof(*ipaddr);
+			ipaddr->sin_addr = ip->ip_dst;
 		}
 
 		key_sa_recordxfer(sav, m);
@@ -1244,13 +1194,11 @@ noreplaycheck:
 			goto bad;
 		}
 
-		if (ip_doscopedroute || ip6_doscopedroute) {
-			// update the receiving interface address based on the inner address
-			ifa = ifa_ifwithaddr((struct sockaddr *)&addr);
-			if (ifa) {
-				m->m_pkthdr.rcvif = ifa->ifa_ifp;
-				IFA_REMREF(ifa);
-			}
+		// update the receiving interface address based on the inner address
+		ifa = ifa_ifwithaddr((struct sockaddr *)&addr);
+		if (ifa) {
+			m->m_pkthdr.rcvif = ifa->ifa_ifp;
+			IFA_REMREF(ifa);
 		}
 
 		// Input via IPSec interface
@@ -1264,14 +1212,6 @@ noreplaycheck:
 			}
 		}
 		
-		if (sav->utun_in_fn) {
-			if (!(sav->utun_in_fn(sav->utun_pcb, &m, PF_INET6))) {
-				m = NULL;
-				// we just wanna exit since packet has been completely processed
-				goto bad;
-			}
-		}
-
 		if (proto_input(ifamily == AF_INET ? PF_INET : PF_INET6, m) != 0)
 			goto bad;
 		nxt = IPPROTO_DONE;
@@ -1393,13 +1333,6 @@ noreplaycheck:
 			}
 		}
 		
-		if (sav->utun_in_fn) {
-			if (!(sav->utun_in_fn(sav->utun_pcb, &m, PF_INET6))) {
-				m = NULL;
-				// we just wanna exit since packet has been completely processed
-				goto bad;
-			}
-		}
 	}
 
 done:
@@ -1427,10 +1360,7 @@ bad:
 }
 
 void
-esp6_ctlinput(cmd, sa, d)
-	int cmd;
-	struct sockaddr *sa;
-	void *d;
+esp6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 {
 	const struct newesp *espp;
 	struct newesp esp;

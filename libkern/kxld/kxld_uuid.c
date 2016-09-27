@@ -88,6 +88,6 @@ kxld_uuid_export_macho(const KXLDuuid *uuid, u_char *buf,
     rval = KERN_SUCCESS;
 
 finish:
-    return rval;
+   return rval;
 }
 

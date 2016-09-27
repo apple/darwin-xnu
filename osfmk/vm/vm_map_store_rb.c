@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <kern/backtrace.h>
 #include <vm/vm_map_store_rb.h>
 
 RB_GENERATE(rb_head, vm_map_store, entry, rb_node_compare);
@@ -136,8 +137,8 @@ void	vm_map_store_copy_insert_rb( vm_map_t map, __unused vm_map_entry_t after_wh
 					 (uintptr_t)(VME_FOR_STORE(rbh->rbh_root))->vme_start,  (uintptr_t)(VME_FOR_STORE(rbh->rbh_root))->vme_end);
 		} else {
 #if MAP_ENTRY_INSERTION_DEBUG
-			fastbacktrace(&entry->vme_insertion_bt[0],
-				      (sizeof (entry->vme_insertion_bt) / sizeof (uintptr_t)));
+			backtrace(&entry->vme_insertion_bt[0],
+			          (sizeof (entry->vme_insertion_bt) / sizeof (uintptr_t)));
 #endif
 			entry = entry->vme_next;
 			inserted++;

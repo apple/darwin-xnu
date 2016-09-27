@@ -325,6 +325,10 @@ A component of the path prefix is not a directory.
 The new process file is a pure procedure (shared text)
 file that is currently open for writing or reading by some process.
 .El
+.Pp
+Additionally, they may fail for any of the reasons listed in
+.Xr fork 2 or
+.Xr exec 3 .
 .Sh CAVEAT
 If a program is
 .Em setuid

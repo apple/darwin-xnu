@@ -67,10 +67,6 @@ void chudxnu_cancel_all_callbacks(void)
     chudxnu_cpu_timer_callback_cancel_all();
     chudxnu_interrupt_callback_cancel();
     chudxnu_perfmon_ast_callback_cancel();
-    chudxnu_kdebug_callback_cancel();
-    chudxnu_trap_callback_cancel();
-	chudxnu_syscall_callback_cancel();
-	chudxnu_dtrace_callback_cancel();
 }
 
 static lck_grp_t	chud_request_lck_grp;
@@ -216,106 +212,6 @@ chudxnu_cpu_timer_callback_cancel_all(void)
 		chud_proc_info->cpu_timer_callback_fn = NULL;
 	}
 	return KERN_SUCCESS;
-}
-
-#if 0
-#pragma mark **** trap ****
-#endif
-static kern_return_t chud_null_trap(uint32_t trapentry, thread_flavor_t flavor,
-	thread_state_t tstate,  mach_msg_type_number_t count);
-static chudxnu_trap_callback_func_t trap_callback_fn = chud_null_trap;
-
-static kern_return_t chud_null_trap(uint32_t trapentry __unused, thread_flavor_t flavor __unused,
-	thread_state_t tstate __unused,  mach_msg_type_number_t count __unused) {
-	return KERN_FAILURE;
-}
-
-static kern_return_t
-chudxnu_private_trap_callback(
-	int trapno,
-	void			*regs,
-	int			unused1,
-	int			unused2)
-{
-#pragma unused (regs)
-#pragma unused (unused1)
-#pragma unused (unused2)
-	kern_return_t retval = KERN_FAILURE;
-	chudxnu_trap_callback_func_t fn = trap_callback_fn;
-
-	if(fn) {
-		boolean_t oldlevel;
-		x86_thread_state_t state;
-		mach_msg_type_number_t count;
-		thread_t thread = current_thread();
-		
-		oldlevel = ml_set_interrupts_enabled(FALSE);
-		
-		/* prevent reentry into CHUD when dtracing */
-		if(thread->t_chud & T_IN_CHUD) {
-			/* restore interrupts */
-			ml_set_interrupts_enabled(oldlevel);
-
-			return KERN_FAILURE;	// not handled - pass off to dtrace
-		}
-
-		/* update the chud state bits */
-		thread->t_chud |= T_IN_CHUD;
-
-		count = x86_THREAD_STATE_COUNT;
-		
-		if(chudxnu_thread_get_state(thread,
-				x86_THREAD_STATE,
-				(thread_state_t)&state,
-				&count,
-				FALSE) == KERN_SUCCESS) {
-		  
-					retval = (fn)(
-						trapno,
-						x86_THREAD_STATE,
-						(thread_state_t)&state,
-						count);
-		}
-
-		/* no longer in CHUD */
-		thread->t_chud &= ~(T_IN_CHUD);
-
-		ml_set_interrupts_enabled(oldlevel);
-	}
-
-	return retval;
-}
-
-__private_extern__ kern_return_t
-chudxnu_trap_callback_enter(chudxnu_trap_callback_func_t func)
-{
-	if(OSCompareAndSwapPtr(NULL, chudxnu_private_trap_callback, 
-		(void * volatile *)&perfTrapHook)) {
-
-		chudxnu_trap_callback_func_t old = trap_callback_fn;
-		while(!OSCompareAndSwapPtr(old, func, 
-			(void * volatile *)&trap_callback_fn)) {
-			old = trap_callback_fn;
-		}
-		return KERN_SUCCESS;
-	}
-	return KERN_FAILURE;
-}
-
-__private_extern__ kern_return_t
-chudxnu_trap_callback_cancel(void)
-{
-	if(OSCompareAndSwapPtr(chudxnu_private_trap_callback,  NULL,
-		(void * volatile *)&perfTrapHook)) {
-
-		chudxnu_trap_callback_func_t old = trap_callback_fn;
-		while(!OSCompareAndSwapPtr(old, chud_null_trap, 
-			(void * volatile *)&trap_callback_fn)) {
-			old = trap_callback_fn;
-		}
-		return KERN_SUCCESS;
-	}
-	return KERN_FAILURE;
 }
 
 #if 0

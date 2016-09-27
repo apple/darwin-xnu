@@ -46,6 +46,7 @@
 #include <sys/fcntl.h>
 #include <sys/filedesc.h>
 #include <sys/sem.h>
+#include <sys/syscall.h>
 
 #include <bsm/audit.h>
 #include <bsm/audit_kevents.h>
@@ -150,7 +151,7 @@ au_evclassmap_insert(au_event_t event, au_class_t class)
 void
 au_evclassmap_init(void)
 {
-	int i;
+	unsigned int i;
 
 	EVCLASS_LOCK_INIT();
 	for (i = 0; i < EVCLASSMAP_HASH_TABLE_SIZE; i++)
@@ -159,7 +160,7 @@ au_evclassmap_init(void)
 	/*
 	 * Set up the initial event to class mapping for system calls.
 	 */
-	for (i = 0; i < NUM_SYSENT; i++) {
+	for (i = 0; i < nsysent; i++) {
 		if (sys_au_event[i] != AUE_NULL)
 			au_evclassmap_insert(sys_au_event[i], 0);
 

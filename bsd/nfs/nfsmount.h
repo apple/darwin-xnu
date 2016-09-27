@@ -291,6 +291,7 @@ struct nfsmount {
 	uint32_t nm_mappers;		/* Number of nodes that have mmapped */
 	struct nfs_sec nm_sec;		/* acceptable security mechanism flavors */
 	struct nfs_sec nm_servsec;	/* server's acceptable security mechanism flavors */
+	struct nfs_etype nm_etype;	/* If using kerberos, the support session key encryption types */
 	fhandle_t *nm_fh;		/* initial file handle */
 	uint8_t  nm_lockmode;		/* advisory file locking mode */
 	/* mount info */

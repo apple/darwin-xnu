@@ -64,6 +64,9 @@ typedef atm_memory_descriptor_t *atm_memory_descriptor_array_t;
 typedef uint64_t *atm_memory_size_array_t;
 
 #define ATM_SUBAID32_MAX 	(UINT32_MAX)
-#define ATM_TRACE_DISABLE       (0x100)
+#define ATM_TRACE_DISABLE		(0x0100) /* OS_TRACE_MODE_DISABLE - Do not initialize the new logging*/
+#define ATM_TRACE_OFF			(0x0400) /* OS_TRACE_MODE_OFF - Don't drop log messages to new log buffers */
+#define ATM_ENABLE_LEGACY_LOGGING	(0x0200) /* OS_TRACE_SYSTEMMODE_LEGACY_LOGGING - Enable legacy logging  */
 
 #endif /* _ATM_ATM_TYPES_H_ */
+

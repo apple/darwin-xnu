@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -33,11 +33,11 @@
 #include <vm/vm_protos.h>
 #include <vm/WKdm_new.h>
 #include <vm/vm_object.h>
+#include <vm/vm_map.h>
 #include <machine/pmap.h>
 #include <kern/locks.h>
 
 #include <sys/kdebug.h>
-
 
 #define C_SEG_OFFSET_BITS	16
 #define C_SEG_BUFSIZE		(1024 * 256)
@@ -47,19 +47,24 @@
 #define C_SEG_ALLOCSIZE		(C_SEG_BUFSIZE)
 #define C_SEG_MAX_POPULATE_SIZE	(4 * PAGE_SIZE)
 
+#if DEBUG || COMPRESSOR_INTEGRITY_CHECKS
+#define ENABLE_SWAP_CHECKS 1
+#define ENABLE_COMPRESSOR_CHECKS 1
+#else
+#define ENABLE_SWAP_CHECKS 0
+#define ENABLE_COMPRESSOR_CHECKS 0
+#endif
 
-#define CHECKSUM_THE_SWAP		0	/* Debug swap data */
-#define CHECKSUM_THE_DATA		0	/* Debug compressor/decompressor data */
-#define CHECKSUM_THE_COMPRESSED_DATA	0	/* Debug compressor/decompressor compressed data */
-#define VALIDATE_C_SEGMENTS		0	/* Debug compaction */
+#define CHECKSUM_THE_SWAP		ENABLE_SWAP_CHECKS	/* Debug swap data */
+#define CHECKSUM_THE_DATA		ENABLE_COMPRESSOR_CHECKS	/* Debug compressor/decompressor data */
+#define CHECKSUM_THE_COMPRESSED_DATA	ENABLE_COMPRESSOR_CHECKS	/* Debug compressor/decompressor compressed data */
+#define VALIDATE_C_SEGMENTS		ENABLE_COMPRESSOR_CHECKS	/* Debug compaction */
 
 #define RECORD_THE_COMPRESSED_DATA	0
 
-
-
 struct c_slot {
 	uint64_t	c_offset:C_SEG_OFFSET_BITS,
-		        c_size:12,
+			c_size:12,
 		        c_packed_ptr:36;
 #if CHECKSUM_THE_DATA
 	unsigned int	c_hash_data;
@@ -83,11 +88,7 @@ struct c_slot {
 
 
 struct c_segment {
-#if __i386__ || __x86_64__
 	lck_mtx_t	c_lock;
-#else /* __i386__ || __x86_64__ */
-	lck_spin_t	c_lock;
-#endif /* __i386__ || __x86_64__ */
 	queue_chain_t	c_age_list;
 	queue_chain_t	c_list;
 
@@ -181,12 +182,34 @@ extern	vm_offset_t	c_buffers;
 	MACRO_END
 	
 
+#if DEVELOPMENT || DEBUG
+extern vm_map_t compressor_map;
+
+#define	C_SEG_MAKE_WRITEABLE(cseg)			\
+	MACRO_BEGIN					\
+	vm_map_protect(compressor_map,			\
+		       (vm_map_offset_t)cseg->c_store.c_buffer,		\
+		       (vm_map_offset_t)&cseg->c_store.c_buffer[C_SEG_BYTES_TO_OFFSET(C_SEG_ALLOCSIZE)],\
+		       VM_PROT_READ | VM_PROT_WRITE,	\
+		       0);				\
+	MACRO_END
+
+#define	C_SEG_WRITE_PROTECT(cseg)			\
+	MACRO_BEGIN					\
+	vm_map_protect(compressor_map,			\
+		       (vm_map_offset_t)cseg->c_store.c_buffer,		\
+		       (vm_map_offset_t)&cseg->c_store.c_buffer[C_SEG_BYTES_TO_OFFSET(C_SEG_ALLOCSIZE)],\
+		       VM_PROT_READ,			\
+		       0);				\
+	MACRO_END
+#endif
 
 typedef	struct c_segment *c_segment_t;
 typedef struct c_slot	*c_slot_t;
 
 uint64_t vm_compressor_total_compressions(void);
 void vm_wake_compactor_swapper(void);
+void vm_run_compactor(void);
 void vm_thrashing_jetsam_done(void);
 void vm_consider_waking_compactor_swapper(void);
 void vm_consider_swapping(void);
@@ -194,6 +217,7 @@ void vm_compressor_flush(void);
 void c_seg_free(c_segment_t);
 void c_seg_free_locked(c_segment_t);
 void c_seg_insert_into_age_q(c_segment_t);
+void c_seg_need_delayed_compaction(c_segment_t, boolean_t);
 
 void vm_decompressor_lock(void);
 void vm_decompressor_unlock(void);
@@ -204,8 +228,8 @@ void vm_compressor_record_warmup_start(void);
 void vm_compressor_record_warmup_end(void);
 
 int			vm_wants_task_throttled(task_t);
-boolean_t		vm_compression_available(void);
 
+extern void		vm_compaction_swapper_do_init(void);
 extern void		vm_compressor_swap_init(void);
 extern void		vm_compressor_init_locks(void);
 extern lck_rw_t		c_master_lock;
@@ -215,17 +239,18 @@ extern void		vm_swap_decrypt(c_segment_t);
 #endif /* ENCRYPTED_SWAP */
 
 extern int		vm_swap_low_on_space(void);
-extern kern_return_t	vm_swap_get(vm_offset_t, uint64_t, uint64_t);
+extern kern_return_t	vm_swap_get(c_segment_t, uint64_t, uint64_t);
 extern void		vm_swap_free(uint64_t);
 extern void		vm_swap_consider_defragmenting(void);
 
-extern void		c_seg_swapin_requeue(c_segment_t, boolean_t);
-extern void		c_seg_swapin(c_segment_t, boolean_t);
+extern void		c_seg_swapin_requeue(c_segment_t, boolean_t, boolean_t, boolean_t);
+extern int		c_seg_swapin(c_segment_t, boolean_t, boolean_t);
 extern void		c_seg_wait_on_busy(c_segment_t);
 extern void		c_seg_trim_tail(c_segment_t);
 extern void		c_seg_switch_state(c_segment_t, int, boolean_t);
 
 extern boolean_t	fastwake_recording_in_progress;
+extern int		compaction_swapper_inited;
 extern int		compaction_swapper_running;
 extern uint64_t		vm_swap_put_failures;
 
@@ -248,6 +273,7 @@ extern uint64_t		first_c_segment_to_warm_generation_id;
 extern uint64_t		last_c_segment_to_warm_generation_id;
 extern boolean_t	hibernate_flushing;
 extern boolean_t	hibernate_no_swapspace;
+extern boolean_t	hibernate_in_progress_with_pinned_swap;
 extern uint32_t		swapout_target_age;
 
 extern void c_seg_insert_into_q(queue_head_t *, c_segment_t);
@@ -264,6 +290,9 @@ extern uint64_t vm_compressor_compute_elapsed_msecs(clock_sec_t, clock_nsec_t, c
 
 #define AVAILABLE_NON_COMPRESSED_MEMORY		(vm_page_active_count + vm_page_inactive_count + vm_page_free_count + vm_page_speculative_count)
 #define AVAILABLE_MEMORY			(AVAILABLE_NON_COMPRESSED_MEMORY + VM_PAGE_COMPRESSOR_COUNT)
+/* TODO, there may be a minor optimisation opportunity to replace these divisions
+ * with multiplies and shifts
+ */
 
 #define	VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD		(((AVAILABLE_MEMORY) * 10) / (vm_compressor_minorcompact_threshold_divisor ? vm_compressor_minorcompact_threshold_divisor : 1))
 #define	VM_PAGE_COMPRESSOR_SWAP_THRESHOLD		(((AVAILABLE_MEMORY) * 10) / (vm_compressor_majorcompact_threshold_divisor ? vm_compressor_majorcompact_threshold_divisor : 1))
@@ -279,31 +308,17 @@ extern uint64_t vm_compressor_compute_elapsed_msecs(clock_sec_t, clock_nsec_t, c
 #define SWAPPER_NEEDS_TO_UNTHROTTLE()		((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) ? 1 : 0)
 #define COMPRESSOR_NEEDS_TO_MINOR_COMPACT()	((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD) ? 1 : 0)
 
-/*
- * indicate the need to do a major compaction if
- * the overall set of in-use compression segments
- * becomes sparse... on systems that support pressure
- * driven swapping, this will also cause swapouts to
- * be initiated.
- */
-#define COMPRESSOR_NEEDS_TO_MAJOR_COMPACT()	(((c_segment_count >= (c_segments_nearing_limit / 8)) && \
-						  ((c_segment_count * C_SEG_MAX_PAGES) - VM_PAGE_COMPRESSOR_COUNT) > \
-						  ((c_segment_count / 8) * C_SEG_MAX_PAGES)) \
-						 ? 1 : 0)
 
 #define COMPRESSOR_FREE_RESERVED_LIMIT		128
 
-#define COMPRESSOR_SCRATCH_BUF_SIZE WKdm_SCRATCH_BUF_SIZE
+uint32_t vm_compressor_get_encode_scratch_size(void);
+uint32_t vm_compressor_get_decode_scratch_size(void);
 
+#define COMPRESSOR_SCRATCH_BUF_SIZE vm_compressor_get_encode_scratch_size()
 
 #if RECORD_THE_COMPRESSED_DATA
 extern void 	 c_compressed_record_init(void);
 extern void 	 c_compressed_record_write(char *, int);
 #endif
 
-
-#if __i386__ || __x86_64__
 extern lck_mtx_t	*c_list_lock;
-#else /* __i386__ || __x86_64__ */
-extern lck_spin_t	*c_list_lock;
-#endif /* __i386__ || __x86_64__ */

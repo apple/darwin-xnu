@@ -34,6 +34,10 @@
 #include <mach/mach_types.h>
 #include <kern/kern_types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * This file contains various type definitions and routine prototypes
  * that are needed to avoid compilation warnings for VM code (in osfmk,
@@ -58,12 +62,7 @@ extern kern_return_t device_data_action(
 extern kern_return_t device_close(
 	uintptr_t     device_handle);
 
-/*
- * default_pager
- */
-extern int start_def_pager(
-	char *bs_device);
-extern int default_pager_init_flag;
+extern boolean_t vm_swap_files_pinned(void);
 
 /*
  * osfmk
@@ -79,9 +78,9 @@ extern task_t port_name_to_task(
 extern ipc_space_t  get_task_ipcspace(
 	task_t t);
 
-#if CONFIG_JETSAM
+#if CONFIG_MEMORYSTATUS
 extern int max_task_footprint_mb;	/* Per-task limit on physical memory consumption in megabytes */
-#endif // CONFIG_JETSAM
+#endif /* CONFIG_MEMORYSTATUS */
 
 /* Some loose-ends VM stuff */
 
@@ -93,11 +92,16 @@ extern void consider_machine_adjust(void);
 extern vm_map_offset_t get_map_min(vm_map_t);
 extern vm_map_offset_t get_map_max(vm_map_t);
 extern vm_map_size_t get_vmmap_size(vm_map_t);
+#if CONFIG_COREDUMP
 extern int get_vmmap_entries(vm_map_t);
+#endif
+extern int get_map_nentries(vm_map_t);
 
 extern vm_map_offset_t vm_map_page_mask(vm_map_t);
 
+#if CONFIG_COREDUMP
 extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);
+#endif
 
 /*
  * VM routines that used to be published to
@@ -133,6 +137,9 @@ extern mach_vm_offset_t mach_get_vm_end(vm_map_t);
 
 #if CONFIG_CODE_DECRYPTION
 #define VM_MAP_DEBUG_APPLE_PROTECT	MACH_ASSERT
+#if VM_MAP_DEBUG_APPLE_PROTECT
+extern int vm_map_debug_apple_protect;
+#endif /* VM_MAP_DEBUG_APPLE_PROTECT */
 struct pager_crypt_info;
 extern kern_return_t vm_map_apple_protected(
 	vm_map_t		map,
@@ -166,7 +173,6 @@ extern memory_object_control_t swapfile_pager_control(memory_object_t mem_obj);
  * bsd
  */
 struct vnode;
-extern void vnode_pager_shutdown(void);
 extern void *upl_get_internal_page_list(
 	upl_t upl);
 
@@ -269,9 +275,6 @@ extern kern_return_t vnode_pager_get_object_mtime(
 	memory_object_t	mem_obj,
 	struct timespec *mtime,
 	struct timespec	*cs_mtime);
-extern kern_return_t vnode_pager_get_object_cs_blobs(
-	memory_object_t	mem_obj,
-	void		**blobs);
 
 #if CHECK_CS_VALIDATION_BITMAP	
 extern kern_return_t vnode_pager_cs_check_validation_bitmap( 
@@ -324,6 +327,9 @@ extern void vnode_pager_vrele(
 	struct vnode *vp);
 extern void vnode_pager_release_from_cache(
 	int	*);
+extern struct vnode *vnode_pager_lookup_vnode(
+	memory_object_t);
+
 extern int  ubc_map(
 	struct vnode *vp,
 	int flags);
@@ -332,83 +338,6 @@ extern void ubc_unmap(
 
 struct vm_map_entry;
 extern struct vm_object *find_vnode_object(struct vm_map_entry *entry);
-
-extern void   dp_memory_object_reference(memory_object_t);
-extern void   dp_memory_object_deallocate(memory_object_t);
-#ifndef _memory_object_server_
-extern kern_return_t   dp_memory_object_init(memory_object_t,
-					     memory_object_control_t,
-					     memory_object_cluster_size_t);
-extern	kern_return_t dp_memory_object_terminate(memory_object_t);
-extern	kern_return_t   dp_memory_object_data_request(memory_object_t, 
-						      memory_object_offset_t,
-						      memory_object_cluster_size_t,
-						      vm_prot_t,
-						      memory_object_fault_info_t);
-extern kern_return_t dp_memory_object_data_return(memory_object_t,
-						    memory_object_offset_t,
-						    memory_object_cluster_size_t,
-						    memory_object_offset_t *,
-						    int *,
-						    boolean_t,
-						    boolean_t,
-						    int);
-extern kern_return_t dp_memory_object_data_initialize(memory_object_t,
-						      memory_object_offset_t,
-						      memory_object_cluster_size_t);
-extern kern_return_t dp_memory_object_data_unlock(memory_object_t,
-						  memory_object_offset_t,
-						  memory_object_size_t,
-						  vm_prot_t);
-extern kern_return_t dp_memory_object_synchronize(memory_object_t,
-						  memory_object_offset_t,
-						  memory_object_size_t,
-						  vm_sync_t);
-extern kern_return_t dp_memory_object_map(memory_object_t,
-					  vm_prot_t);
-extern kern_return_t dp_memory_object_last_unmap(memory_object_t);
-#endif /* _memory_object_server_ */
-#ifndef _memory_object_default_server_
-extern kern_return_t default_pager_memory_object_create(
-	memory_object_default_t,
-	vm_size_t,
-	memory_object_t *);
-#endif /* _memory_object_default_server_ */
-
-#if CONFIG_FREEZE
-extern unsigned int default_pager_swap_pages_free(void);
-struct default_freezer_handle;
-struct vm_page;
-__private_extern__ void	default_freezer_init(void);
-__private_extern__ struct default_freezer_handle* default_freezer_handle_allocate(void);
-__private_extern__ kern_return_t
-default_freezer_handle_init(
-	struct  default_freezer_handle *df_handle);
-__private_extern__ void
-default_freezer_handle_deallocate(
-	struct default_freezer_handle *df_handle);
-__private_extern__ void
-default_freezer_pageout(
-	struct default_freezer_handle *df_handle);
-__private_extern__ kern_return_t
-default_freezer_pack(
-	unsigned int		*purgeable_count,
-	unsigned int		*wired_count,
-	unsigned int		*clean_count,
-	unsigned int		*dirty_count,
-	unsigned int		dirty_budget,
-	boolean_t		*shared,
-	vm_object_t		src_object,
-	struct default_freezer_handle *df_handle);
-__private_extern__ kern_return_t
-default_freezer_unpack(
-	struct default_freezer_handle *df_handle);	
-__private_extern__ void
-default_freezer_pack_page(
-	struct vm_page* p,
-	struct default_freezer_handle *df_handle);
-
-#endif /* CONFIG_FREEZE */
 
 extern void   device_pager_reference(memory_object_t);
 extern void   device_pager_deallocate(memory_object_t);
@@ -453,6 +382,7 @@ extern memory_object_t device_pager_setup(
 	vm_size_t,
 	int);
 extern void device_pager_bootstrap(void);
+extern boolean_t is_device_pager_ops(const struct memory_object_pager_ops *pager_ops);
 
 extern kern_return_t pager_map_to_phys_contiguous(
 	memory_object_control_t	object,
@@ -476,19 +406,25 @@ extern int macx_swapinfo(
 	boolean_t		*encrypted_p);
 
 extern void log_stack_execution_failure(addr64_t vaddr, vm_prot_t prot);
-extern void log_unnest_badness(vm_map_t, vm_map_offset_t, vm_map_offset_t);
+extern void log_unnest_badness(
+	vm_map_t map,
+	vm_map_offset_t start_unnest,
+	vm_map_offset_t end_unnest,
+	boolean_t is_nested_map,
+	vm_map_offset_t lowest_unnestable_addr);
 
 struct proc;
 extern int cs_allow_invalid(struct proc *p);
-extern int cs_invalid_page(addr64_t vaddr);
+extern int cs_invalid_page(addr64_t vaddr, boolean_t *cs_killed);
 
 #define CS_VALIDATE_TAINTED	0x00000001
 #define CS_VALIDATE_NX		0x00000002
-extern boolean_t cs_validate_page(void *blobs,
-				  memory_object_t pager,
-				  memory_object_offset_t offset, 
-				  const void *data,
-				  unsigned *result);
+extern boolean_t cs_validate_range(struct vnode *vp,
+				   memory_object_t pager,
+				   memory_object_offset_t offset,
+				   const void *data,
+				   vm_size_t size,
+				   unsigned *result);
 
 extern kern_return_t mach_memory_entry_purgable_control(
 	ipc_port_t	entry_port,
@@ -578,6 +514,73 @@ struct vm_counters {
 	unsigned int	create_upl_lookup_failure_copy;
 };
 extern struct vm_counters vm_counters;
+
+#if CONFIG_SECLUDED_MEMORY
+struct vm_page_secluded_data {
+	int	eligible_for_secluded;
+	int	grab_success_free;
+	int	grab_success_other;
+	int	grab_failure_locked;
+	int	grab_failure_state;
+	int	grab_failure_dirty;
+	int	grab_for_iokit;
+	int	grab_for_iokit_success;
+};
+extern struct vm_page_secluded_data vm_page_secluded;
+
+extern int num_tasks_can_use_secluded_mem;
+
+/* boot-args */
+extern int secluded_for_apps;
+extern int secluded_for_iokit;
+extern int secluded_for_filecache;
+#if 11
+extern int secluded_for_fbdp;
+#endif
+
+/*
+ * "secluded_aging_policy" controls the aging of secluded pages:
+ *
+ * SECLUDED_AGING_FIFO
+ * When a page eligible for the secluded queue is activated or
+ * deactivated, it is inserted in the secluded queue.
+ * When it get pushed out of the secluded queue, it gets freed.
+ *
+ * SECLUDED_AGING_ALONG_ACTIVE
+ * When a page eligible for the secluded queue is activated, it is
+ * inserted in the secluded queue.
+ * When it gets pushed out of the secluded queue, its "referenced" bit
+ * is reset and it is inserted in the inactive queue.
+ *
+ * SECLUDED_AGING_AFTER_INACTIVE
+ * A page eligible for the secluded queue first makes its way through the
+ * active and inactive queues.
+ * When it is pushed out of the inactive queue without being re-activated,
+ * it is inserted in the secluded queue instead of being reclaimed.
+ * When it is pushed out of the secluded queue, it is either freed if it
+ * hasn't been re-referenced, or re-activated if it has been re-referenced.
+ *
+ * SECLUDED_AGING_BEFORE_ACTIVE
+ * A page eligible for the secluded queue will first make its way through
+ * the secluded queue.  When it gets pushed out of the secluded queue (by
+ * new secluded pages), it goes back to the normal aging path, through the
+ * active queue and then the inactive queue.
+ */
+extern int secluded_aging_policy;
+#define SECLUDED_AGING_FIFO		0
+#define SECLUDED_AGING_ALONG_ACTIVE	1
+#define SECLUDED_AGING_AFTER_INACTIVE	2
+#define SECLUDED_AGING_BEFORE_ACTIVE	3
+
+extern void 		memory_object_mark_eligible_for_secluded(
+	memory_object_control_t		control,
+	boolean_t			eligible_for_secluded);
+
+#endif /* CONFIG_SECLUDED_MEMORY */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif	/* _VM_VM_PROTOS_H_ */
 

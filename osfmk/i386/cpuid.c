@@ -757,9 +757,6 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 	switch (info_p->cpuid_family) {
 	case 6:
 		switch (info_p->cpuid_model) {
-		case 15:
-			cpufamily = CPUFAMILY_INTEL_MEROM;
-			break;
 		case 23:
 			cpufamily = CPUFAMILY_INTEL_PENRYN;
 			break;
@@ -850,7 +847,6 @@ cpuid_set_info(void)
 	 * (which determines whether SMT/Hyperthreading is active).
 	 */
 	switch (info_p->cpuid_cpufamily) {
-	case CPUFAMILY_INTEL_MEROM:
 	case CPUFAMILY_INTEL_PENRYN:
 		info_p->core_count   = info_p->cpuid_cores_per_package;
 		info_p->thread_count = info_p->cpuid_logical_per_package;

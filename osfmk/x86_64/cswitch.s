@@ -69,9 +69,9 @@ Entry(Load_context)
 	movq	%rdx,%gs:CPU_KERNEL_STACK	/* store stack top */
 
 	movq	%rdx,%rsp
-	movq	%rdx,%rbp
+	xorl	%ebp, %ebp
 
-	xorq	%rdi,%rdi			/* return zero (no old thread) */
+	xorl	%edi,%edi			/* return zero (no old thread) */
 	call	EXT(thread_continue)
 
 
@@ -152,6 +152,9 @@ Entry(Shutdown_context)
 
 	movq	%gs:CPU_INT_STACK_TOP,%rsp 	/* switch to interrupt stack */
 
+	movq	%rsp, %gs:CPU_ACTIVE_STACK
+	movq	EXT(kernel_stack_size)(%rip),%rcx /* point to stack top */
+	subq	%rcx, %gs:CPU_ACTIVE_STACK
 	movq	%rdx,%rdi			/* processor arg to routine */
 	call	*%rsi				/* call routine to run */
 	hlt					/* (should never return) */

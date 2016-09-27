@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1876,7 +1876,6 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kif *kif,
 		switch (proto) {
 		case IPPROTO_FRAGMENT:
 			goto fragment;
-			break;
 		case IPPROTO_AH:
 		case IPPROTO_ROUTING:
 		case IPPROTO_DSTOPTS:

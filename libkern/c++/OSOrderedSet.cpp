@@ -120,7 +120,8 @@ unsigned int OSOrderedSet::setCapacityIncrement(unsigned int increment)
 unsigned int OSOrderedSet::ensureCapacity(unsigned int newCapacity)
 {
     _Element *newArray;
-    unsigned int finalCapacity, oldSize, newSize;
+    unsigned int finalCapacity;
+    vm_size_t    oldSize, newSize;
 
     if (newCapacity <= capacity)
         return capacity;
@@ -134,8 +135,11 @@ unsigned int OSOrderedSet::ensureCapacity(unsigned int newCapacity)
     }
     newSize = sizeof(_Element) * finalCapacity;
 
-    newArray = (_Element *) kalloc_container(newSize);
+    newArray = (_Element *) kallocp_container(&newSize);
     if (newArray) {
+        // use all of the actual allocation size
+        finalCapacity = newSize / sizeof(_Element);
+
         oldSize = sizeof(_Element) * capacity;
 
         OSCONTAINER_ACCUMSIZE(((size_t)newSize) - ((size_t)oldSize));

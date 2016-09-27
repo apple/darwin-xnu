@@ -51,6 +51,8 @@
 #include <mach/host_special_ports.h>
 #include <mach/audit_triggers_server.h>
 
+extern void ipc_port_release_send(ipc_port_t port);
+
 #if CONFIG_AUDIT
 struct mhdr {
 	size_t 		 	 mh_size;
@@ -650,7 +652,8 @@ audit_send_trigger(unsigned int trigger)
 
 	error = host_get_audit_control_port(host_priv_self(), &audit_port);
 	if (error == KERN_SUCCESS && audit_port != MACH_PORT_NULL) {
-		audit_triggers(audit_port, trigger);
+		(void)audit_triggers(audit_port, trigger);
+		ipc_port_release_send(audit_port);
 		return (0);
 	} else {
 		printf("Cannot get audit control port\n");

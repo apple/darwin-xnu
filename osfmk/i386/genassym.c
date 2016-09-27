@@ -376,6 +376,8 @@ main(
 		offsetof(cpu_data_t, cpu_kernel_cr3));
 	DECLARE("CPU_TLB_INVALID",
 		offsetof(cpu_data_t, cpu_tlb_invalid));
+	DECLARE("CPU_PAGEZERO_MAPPED",
+		offsetof(cpu_data_t, cpu_pagezero_mapped));
 
 	DECLARE("CPU_TASK_MAP",
 		offsetof(cpu_data_t, cpu_task_map));
@@ -397,6 +399,9 @@ main(
 	DECLARE("hwIntCnt", 	offsetof(cpu_data_t,cpu_hwIntCnt));
 	DECLARE("CPU_ACTIVE_PCID",
 		offsetof(cpu_data_t, cpu_active_pcid));
+	DECLARE("CPU_KERNEL_PCID",
+		offsetof(cpu_data_t, cpu_kernel_pcid));
+
 	DECLARE("CPU_PCID_COHERENTP",
 		offsetof(cpu_data_t, cpu_pmap_pcid_coherentp));
 	DECLARE("CPU_PCID_COHERENTP_KERNEL",

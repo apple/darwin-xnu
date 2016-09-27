@@ -8,7 +8,6 @@ __ZN22IOInterruptEventSource7warmCPUEy
 _acpi_install_wake_handler
 _acpi_sleep_kernel
 _acpi_idle_kernel
-_add_fsevent
 _apic_table
 _apply_func_phys
 _bufattr_delayidlesleep
@@ -29,7 +28,6 @@ _mp_broadcast
 _mp_cpus_call
 _mp_cpus_call1
 _mp_cpus_kick
-_need_fsevent
 _pal_efi_call_in_32bit_mode
 _pal_efi_call_in_64bit_mode
 _semaphore_timedwait
@@ -50,3 +48,7 @@ _xts_start
 _aes_decrypt
 _PE_reboot_on_panic
 
+# HFS Kext Requirements
+_file_vnode
+_proc_ucred
+_suser

@@ -24,16 +24,16 @@ WK_unpack_2bits(WK_word *input_buf,
                 WK_word *input_end,
                 WK_word *output_buf) {
 
-  register WK_word *input_next = input_buf;
-  register WK_word *output_next = output_buf;
-  register WK_word packing_mask = TWO_BITS_PACKING_MASK;
+  WK_word *input_next = input_buf;
+  WK_word *output_next = output_buf;
+  WK_word packing_mask = TWO_BITS_PACKING_MASK;
 
   /* loop to repeatedly grab one input word and unpack it into
    * 4 output words.  This loop could be unrolled a little---it's
    * designed to be easy to do that.
    */   
   while (input_next < input_end) {
-    register WK_word temp = input_next[0];
+    WK_word temp = input_next[0];
     DEBUG_PRINT_2("Unpacked tags word: %.8x\n", temp);
     output_next[0] = temp & packing_mask;
     output_next[1] = (temp >> 2) & packing_mask;
@@ -59,9 +59,9 @@ WK_unpack_4bits(WK_word *input_buf,
                 WK_word *input_end,
                 WK_word *output_buf) {
 
-  register WK_word *input_next = input_buf;
-  register WK_word *output_next = output_buf;
-  register WK_word packing_mask = FOUR_BITS_PACKING_MASK;
+  WK_word *input_next = input_buf;
+  WK_word *output_next = output_buf;
+  WK_word packing_mask = FOUR_BITS_PACKING_MASK;
   
   
   /* loop to repeatedly grab one input word and unpack it into
@@ -69,7 +69,7 @@ WK_unpack_4bits(WK_word *input_buf,
    * a little---it's designed to be easy to do that.
    */   
   while (input_next < input_end) {
-    register WK_word temp = input_next[0];
+    WK_word temp = input_next[0];
     DEBUG_PRINT_2("Unpacked dictionary indices word: %.8x\n", temp);
     output_next[0] = temp & packing_mask;
     output_next[1] = (temp >> 4) & packing_mask;
@@ -90,16 +90,16 @@ WK_unpack_3_tenbits(WK_word *input_buf,
                     WK_word *input_end,
                     WK_word *output_buf) {
 
-  register WK_word *input_next = input_buf;
-  register WK_word *output_next = output_buf;
-  register WK_word packing_mask = LOW_BITS_MASK;
+  WK_word *input_next = input_buf;
+  WK_word *output_next = output_buf;
+  WK_word packing_mask = LOW_BITS_MASK;
   
   /* loop to fetch words of input, splitting each into three
    * words of output with 10 meaningful low bits.  This loop
    * probably ought to be unrolled and maybe coiled
    */
   while (input_next < input_end) {
-    register WK_word temp = input_next[0];
+    WK_word temp = input_next[0];
     
     output_next[0] = temp & packing_mask;
     output_next[1] = (temp >> 10) & packing_mask;
@@ -203,7 +203,7 @@ WKdm_decompress (WK_word* src_buf,
 #endif
 
   {
-    register char *next_tag = (char *) tempTagsArray;
+    char *next_tag = (char *) tempTagsArray;
     char *tags_area_end =
        ((char *) tempTagsArray) + PAGE_SIZE_IN_WORDS;
     char *next_q_pos = (char *) tempQPosArray;

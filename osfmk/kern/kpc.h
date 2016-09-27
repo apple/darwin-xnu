@@ -2,7 +2,7 @@
  * Copyright (c) 2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,17 +22,19 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef __KERN_KPC_H__
-#define __KERN_KPC_H__
+#ifndef KERN_KPC_H
+#define KERN_KPC_H
 
 /* Kernel interfaces to KPC PMC infrastructure. */
 
 #include <machine/machine_kpc.h>
 #include <kern/thread.h> /* thread_* */
+
+__BEGIN_DECLS
 
 /* cross-platform class constants */
 #define KPC_CLASS_FIXED         (0)
@@ -87,6 +89,7 @@ typedef void (*kpc_pm_handler_t)(boolean_t);
  */
 struct cpu_data;
 extern boolean_t kpc_register_cpu(struct cpu_data *cpu_data);
+extern void kpc_unregister_cpu(struct cpu_data *cpu_data);
 
 /* bootstrap */
 extern void kpc_init(void);
@@ -159,8 +162,24 @@ extern int kpc_threads_counting;
 /* AST callback for KPC */
 extern void kpc_thread_ast_handler( thread_t thread );
 
-/* context switch accounting between two threads */
-extern void kpc_switch_context( thread_t old_thread, thread_t new_thread );
+#ifdef MACH_KERNEL_PRIVATE
+
+/* context switch callback for KPC */
+
+extern boolean_t kpc_off_cpu_active;
+
+extern void kpc_off_cpu_internal(thread_t thread);
+extern void kpc_off_cpu_update(void);
+
+static inline void
+kpc_off_cpu(thread_t thread)
+{
+	if (__improbable(kpc_off_cpu_active)) {
+		kpc_off_cpu_internal(thread);
+	}
+}
+
+#endif /* defined(MACH_KERNEL_PRIVATE) */
 
 /* acquire/release the counters used by the Power Manager */
 extern int kpc_force_all_ctrs( task_t task, int val );
@@ -323,4 +342,6 @@ struct kpc_driver
 	int      (*set_period)(uint32_t classes, uint64_t *period);
 };
 
-#endif /* __KERN_KPC_H__ */
+__END_DECLS
+
+#endif /* !definde(KERN_KPC_H) */

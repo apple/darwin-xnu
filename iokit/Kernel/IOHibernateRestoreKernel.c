@@ -396,7 +396,7 @@ store_one_page(uint32_t procFlags, uint32_t * src, uint32_t compressedSize,
 		uint32_t * buffer, uint32_t ppnum)
 {
 	uint64_t dst = ptoa_64(ppnum);
-	uint8_t scratch[WKdm_SCRATCH_BUF_SIZE] __attribute__ ((aligned (16)));
+	uint8_t scratch[WKdm_SCRATCH_BUF_SIZE_INTERNAL] __attribute__ ((aligned (16)));
 
 	if (compressedSize != PAGE_SIZE)
 	{
@@ -456,7 +456,7 @@ hibernate_kernel_entrypoint(uint32_t p1,
     uint64_t timeStart;
     timeStart = rdtsc64();
 
-    assert_static(sizeof(IOHibernateImageHeader) == 512);
+    static_assert(sizeof(IOHibernateImageHeader) == 512);
 
     headerPhys = ptoa_64(p1);
 

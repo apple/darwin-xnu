@@ -326,9 +326,8 @@ sched_proto_choose_thread(processor_t		processor,
 				SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
 				rq->count--;
 				if (queue_empty(queue)) {
-					if (pri != IDLEPRI)
-						clrbit(MAXPRI - pri, rq->bitmap);
-					rq->highq = MAXPRI - ffsbit(rq->bitmap);
+					bitmap_clear(rq->bitmap, pri);
+					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
 				
 				simple_unlock(&global_runq_lock);
@@ -435,9 +434,8 @@ sched_proto_processor_queue_remove(
 		
 		if (queue_empty(rq->queues + thread->sched_pri)) {
 			/* update run queue status */
-			if (thread->sched_pri != IDLEPRI)
-				clrbit(MAXPRI - thread->sched_pri, rq->bitmap);
-			rq->highq = MAXPRI - ffsbit(rq->bitmap);
+			bitmap_clear(rq->bitmap, thread->sched_pri);
+			rq->highq = bitmap_first(rq->bitmap, NRQS);
 		}
 		
 		thread->runq = PROCESSOR_NULL;
@@ -475,7 +473,9 @@ sched_proto_processor_queue_has_priority(processor_t		processor __unused,
 	
 	simple_lock(&global_runq_lock);
 
-	if (gte)
+	if (global_runq->count == 0)
+		result = FALSE;
+	else if (gte)
 		result = global_runq->highq >= priority;
 	else
 		result = global_runq->highq >= priority;

@@ -69,4 +69,7 @@
 #include <mach/port.h>
 #include <mach/vm_types.h>
 
+#include <sys/_types.h>
+#include <sys/_types/_uuid_t.h>
+
 #endif	/* _MACH_STD_TYPES_H_ */

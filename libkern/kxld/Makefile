@@ -90,10 +90,10 @@ STRIP = xcrun -sdk $(SDK_DIR) strip
 DSYMUTIL = xcrun -sdk $(SDK_DIR) dsymutil
 
 # Files
-HDR_NAMES=kxld.h kxld_types.h
+HDR_NAMES=kxld.h kxld_types.h prelink.h
 OBJ_NAMES=kxld.o kxld_array.o kxld_copyright.o kxld_demangle.o kxld_dict.o \
 	kxld_kext.o kxld_object.o kxld_reloc.o kxld_sect.o kxld_seg.o	   \
-	kxld_srcversion.o kxld_sym.o kxld_symtab.o kxld_util.o kxld_uuid.o \
+	kxld_srcversion.o kxld_splitinfolc.o kxld_sym.o kxld_symtab.o kxld_util.o kxld_uuid.o \
     kxld_vtable.o kxld_versionmin.o
 
 HDRS=$(addprefix $(HDRSRC)/, $(HDR_NAMES))
@@ -161,8 +161,7 @@ $(LIBKXLDDST_ARCHIVE): $(LIBKXLDSYM_ARCHIVE)
 	@mkdir -p $(ARCHIVEDST)
 	install -o 0 -g 0 -c -m 555 $< $@
 
-
-KEXTCOPYOBJS=$(OBJROOT)/kextcopyright.o $(OBJROOT)/kxld_copyright.o $(OBJROOT)/kxld_util.o 
+KEXTCOPYOBJS=$(OBJROOT)/kextcopyright.o $(OBJROOT)/kxld_copyright.o $(OBJROOT)/kxld_util.o
 kextcopyright: $(TESTDST)/kextcopyright
 $(TESTDST)/kextcopyright: $(KEXTCOPYOBJS)
 	@mkdir -p $(TESTDST)
@@ -198,7 +197,7 @@ analyze:
 	@$(CLANG_ANALYZER) $(CFLAGS) $(INCLUDES) -I$(SRCROOT) tests/*.c
 	@rm -f *.plist
 
-clean: 
+clean:
 	@rm -rf $(OBJROOT)/*
 
 fullclean:
@@ -211,4 +210,3 @@ endif
 # Automatically build dependency information when .c or .h files change based
 # on implicit rule for .d:.c
 -include $(OBJS:.o=.d)
-

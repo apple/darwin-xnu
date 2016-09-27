@@ -158,8 +158,6 @@ typedef struct namespace_handler_data {
 } namespace_handler_data;
 
 
-#define NSPACE_REARM_NO_ARG ((void *)1)
-extern int resolve_nspace_item(struct vnode *vp, uint64_t op);
 extern int resolve_nspace_item_ext(struct vnode *vp, uint64_t op, void *arg);
 extern int get_nspace_item_status(struct vnode *vp, int32_t *status);
 
@@ -190,6 +188,14 @@ typedef struct namespace_handler_data {
 } namespace_handler_data;
 
 #endif /* XNU_KERNEL_PRIVATE */
+
+#ifdef KERNEL_PRIVATE
+
+#define NSPACE_REARM_NO_ARG ((void *)1)
+int resolve_nspace_item(struct vnode *vp, uint64_t op);
+int nspace_snapshot_event(vnode_t vp, time_t ctime, uint64_t op_type, void *arg);
+
+#endif // defined(KERNEL_PRIVATE)
 
 #define NAMESPACE_HANDLER_READ_OP             0x0001
 #define NAMESPACE_HANDLER_WRITE_OP            0x0002

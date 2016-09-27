@@ -156,8 +156,9 @@ void IODataQueue::free()
 
 Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
 {
-    const UInt32       head      = dataQueue->head;  // volatile
-    const UInt32       tail      = dataQueue->tail;
+    UInt32             head;
+    UInt32             tail;
+    UInt32             newTail;
     const UInt32       entrySize = dataSize + DATA_QUEUE_ENTRY_HEADER_SIZE;
     UInt32             queueSize;
     IODataQueueEntry * entry;
@@ -166,6 +167,10 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
     if (dataSize > UINT32_MAX - DATA_QUEUE_ENTRY_HEADER_SIZE) {
         return false;
     }
+
+    // Force a single read of head and tail
+    head = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED);
+    tail = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_RELAXED);
 
     // Check for underflow of (dataQueue->queueSize - tail)
     queueSize = ((IODataQueueInternal *) notifyMsg)->queueSize;
@@ -187,8 +192,8 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
             // The tail can be out of bound when the size of the new entry
             // exactly matches the available space at the end of the queue.
             // The tail can range from 0 to dataQueue->queueSize inclusive.
-            
-            OSAddAtomic(entrySize, (SInt32 *)&dataQueue->tail);
+
+            newTail = tail + entrySize;
         }
         else if ( head > entrySize )     // Is there enough room at the beginning?
         {
@@ -207,7 +212,7 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
             }
 
             memcpy(&dataQueue->queue->data, data, dataSize);
-            OSCompareAndSwap(dataQueue->tail, entrySize, &dataQueue->tail);
+            newTail = entrySize;
         }
         else
         {
@@ -225,7 +230,7 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
 
             entry->size = dataSize;
             memcpy(&entry->data, data, dataSize);
-            OSAddAtomic(entrySize, (SInt32 *)&dataQueue->tail);
+            newTail = tail + entrySize;
         }
         else
         {
@@ -233,10 +238,13 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
         }
     }
 
+    // Store tail with a release memory barrier
+    __c11_atomic_store((_Atomic UInt32 *)&dataQueue->tail, newTail, __ATOMIC_RELEASE);
+
     // Send notification (via mach message) that data is available.
 
-    if ( ( head == tail )                                                   /* queue was empty prior to enqueue() */
-    ||   ( dataQueue->head == tail ) )   /* queue was emptied during enqueue() */
+    if ( ( head == tail )                /* queue was empty prior to enqueue() */
+    ||   ( tail == __c11_atomic_load((_Atomic UInt32 *)&dataQueue->head, __ATOMIC_RELAXED) ) )   /* queue was emptied during enqueue() */
     {
         sendDataAvailableNotification();
     }

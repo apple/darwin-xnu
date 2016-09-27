@@ -166,7 +166,7 @@ IODMACommand::cloneCommand(void *refCon)
     SegmentOptions segmentOptions =
     {
 	.fStructSize                = sizeof(segmentOptions),
-	.fNumAddressBits            = fNumAddressBits,
+	.fNumAddressBits            = (uint8_t)fNumAddressBits,
 	.fMaxSegmentSize            = fMaxSegmentSize,
 	.fMaxTransferSize           = fMaxTransferSize,
 	.fAlignment                 = fAlignMask + 1,
@@ -379,8 +379,15 @@ IODMACommand::setMemoryDescriptor(const IOMemoryDescriptor *mem, bool autoPrepar
 	fInternalState->fNewMD = true;
 	mem->retain();
 	fMemory = mem;
-
-	mem->dmaCommandOperation(kIOMDSetDMAActive, this, 0);
+        if (fMapper)
+        {
+#if IOTRACKING
+            fInternalState->fTag = IOMemoryTag(kernel_map);
+            __IODEQUALIFY(IOMemoryDescriptor *, mem)->prepare((IODirection)
+                    (kIODirectionDMACommand | (fInternalState->fTag << kIODirectionDMACommandShift)));
+            IOTrackingAdd(gIOWireTracking, &fInternalState->fWireTracking, fMemory->getLength(), false);
+#endif /* IOTRACKING */
+        }
 	if (autoPrepare) {
 	    err = prepare();
 	    if (err) {
@@ -395,13 +402,19 @@ IODMACommand::setMemoryDescriptor(const IOMemoryDescriptor *mem, bool autoPrepar
 IOReturn
 IODMACommand::clearMemoryDescriptor(bool autoComplete)
 {
-    if (fActive && !autoComplete)
-	return (kIOReturnNotReady);
+    if (fActive && !autoComplete) return (kIOReturnNotReady);
 
-    if (fMemory) {
-	while (fActive)
-	    complete();
-	fMemory->dmaCommandOperation(kIOMDSetDMAInactive, this, 0);
+    if (fMemory)
+    {
+	while (fActive) complete();
+        if (fMapper)
+        {
+#if IOTRACKING
+            __IODEQUALIFY(IOMemoryDescriptor *, fMemory)->complete((IODirection)
+                    (kIODirectionDMACommand | (fInternalState->fTag << kIODirectionDMACommandShift)));
+            IOTrackingRemove(gIOWireTracking, &fInternalState->fWireTracking, fMemory->getLength());
+#endif /* IOTRACKING */
+        }
 	fMemory->release();
 	fMemory = 0;
     }
@@ -1150,7 +1163,7 @@ IODMACommand::genIOVMSegments(uint32_t op,
 
 	    if (internalState->fMapContig && internalState->fLocalMapperAlloc)
 	    {
-		state->fIOVMAddr = internalState->fLocalMapperAlloc + offset;
+		state->fIOVMAddr = internalState->fLocalMapperAlloc + offset - internalState->fPreparedOffset;
 		rtn = kIOReturnSuccess;
 #if 0
 		{

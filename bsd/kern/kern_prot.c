@@ -580,7 +580,7 @@ setsid(proc_t p, __unused struct setsid_args *uap, int32_t *retval)
  * XXX:		Belongs in kern_proc.c
  */
 int
-setpgid(proc_t curp, register struct setpgid_args *uap, __unused int32_t *retval)
+setpgid(proc_t curp, struct setpgid_args *uap, __unused int32_t *retval)
 {
 	proc_t targp = PROC_NULL;	/* target process */
 	struct pgrp *pg = PGRP_NULL;	/* target pgrp */

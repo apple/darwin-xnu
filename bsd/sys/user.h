@@ -97,26 +97,6 @@ struct vfs_context {
 	kauth_cred_t	vc_ucred;		/* per thread credential */
 };
 
-/*
- * struct representing a document "tombstone" that's recorded
- * when a thread manipulates files marked with a document-id.
- * if the thread recreates the same item, this tombstone is
- * used to preserve the document_id on the new file.
- *
- * It is a separate structure because of its size - we want to
- * allocate it on demand instead of just stuffing it into the
- * uthread structure.
- */
-struct doc_tombstone {
-	struct vnode	 *t_lastop_parent;
-	struct vnode	 *t_lastop_item;
-	uint32_t 	  t_lastop_parent_vid;
-	uint32_t 	  t_lastop_item_vid;
-	uint64_t          t_lastop_fileid;
-	uint64_t          t_lastop_document_id;
-	unsigned char     t_lastop_filename[NAME_MAX+1];
-};
-
 #endif /* !__LP64 || XNU_KERNEL_PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -147,24 +127,27 @@ struct uthread {
 			u_int64_t abstime;
 			uint64_t *wqp;
 			int count;
-			struct select_nocancel_args *args;	/* original syscall arguments */
-			int32_t *retval;					/* place to store return val */
+			struct select_nocancel_args *args;  /* original syscall arguments */
+			int32_t *retval;                    /* place to store return val */
 		} ss_select_data;
 		struct _kqueue_scan {
-			kevent_callback_t call; /* per-event callback */
-			kqueue_continue_t cont; /* whole call continuation */
-			uint64_t deadline;	/* computed deadline for operation */
-			void *data;		/* caller's private data */
-		} ss_kqueue_scan;		/* saved state for kevent_scan() */
+			kevent_callback_t call;             /* per-event callback */
+			kqueue_continue_t cont;             /* whole call continuation */
+			filt_process_data_t process_data;   /* needed for filter processing */
+			uint8_t servicer_qos_index;         /* requested qos index of servicer */
+			uint64_t deadline;                  /* computed deadline for operation */
+			void *data;                         /* caller's private data */
+		} ss_kqueue_scan;                           /* saved state for kevent_scan() */
 		struct _kevent {
-			struct _kqueue_scan scan;/* space for the generic data */
-			struct fileproc *fp;	 /* fileproc we hold iocount on */
-			int fd;			         /* filedescriptor for kq */
-			unsigned int eventflags; /* flags to determine kevent size/direction */
-			int eventcount;	 	     /* user-level event count */
-			int eventout;		     /* number of events output */
-			int32_t *retval;	     /* place to store return val */
-			user_addr_t eventlist;	 /* user-level event list address */
+			struct _kqueue_scan scan;           /* space for the generic data */
+			struct fileproc *fp;                /* fileproc we hold iocount on */
+			int fd;			            /* filedescriptor for kq */
+			int eventcount;	                    /* user-level event count */
+			int eventout;                       /* number of events output */
+			struct filt_process_s process_data; /* space for process data fed thru */
+			int32_t *retval;                    /* place to store return val */
+			user_addr_t eventlist;              /* user-level event list address */
+			uint64_t data_available;            /* [user/kernel] addr of in/out size */
 		} ss_kevent;			 /* saved state for kevent() */
 
 		struct _kauth {
@@ -216,10 +199,13 @@ struct uthread {
     
 	lck_mtx_t	*uu_mtx;
 
+	lck_spin_t	uu_rethrottle_lock;     /* locks was_rethrottled and is_throttled */
 	TAILQ_ENTRY(uthread) uu_throttlelist;	/* List of uthreads currently throttled */
 	void	*	uu_throttle_info; 	/* pointer to throttled I/Os info */
 	int		uu_on_throttlelist;
 	int		uu_lowpri_window;
+	boolean_t	uu_was_rethrottled;
+	boolean_t	uu_is_throttled;
 	boolean_t	uu_throttle_bc;
 
 	u_int32_t	uu_network_marks;	/* network control flow marks */
@@ -229,6 +215,9 @@ struct uthread {
 	vnode_t		uu_cdir;		/* per thread CWD */
 	int		uu_dupfd;		/* fd in fdesc_open/dupfdopen */
         int		uu_defer_reclaims;
+
+	unsigned int uu_kqueue_bound;      /* qos index we are bound to service */
+	unsigned int uu_kqueue_flags;      /* if so, the flags being using */
 
 #ifdef JOE_DEBUG
         int		uu_iocount;
@@ -291,6 +280,8 @@ struct uthread {
 
 	/* Document Tracking struct used to track a "tombstone" for a document */
 	struct doc_tombstone *t_tombstone;
+
+	struct os_reason *uu_exit_reason;
 };
 
 typedef struct uthread * uthread_t;

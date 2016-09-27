@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004, 2012-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2004, 2012-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -188,6 +188,9 @@ struct kctlstat {
 	u_int64_t	kcs_enqueue_fail __attribute__((aligned(8)));
 	u_int64_t	kcs_enqueue_fullsock __attribute__((aligned(8)));
 	u_int64_t	kcs_bad_kctlref __attribute__((aligned(8)));
+	u_int64_t	kcs_tbl_size_too_big __attribute__((aligned(8)));
+	u_int64_t	kcs_enqdata_mb_alloc_fail __attribute__((aligned(8)));
+	u_int64_t	kcs_enqdata_sbappend_fail __attribute__((aligned(8)));
 };
 
 #endif /* PRIVATE */
@@ -547,7 +550,7 @@ ctl_enqueuembuf(kern_ctl_ref kctlref, u_int32_t unit, mbuf_t m, u_int32_t flags)
 		Not valid if ctl_flags contains CTL_FLAG_REG_SOCK_STREAM.
 	@param kctlref The control reference of the kernel control.
 	@param unit The unit number of the kernel control instance.
-	@param m An mbuf chain containing the data to send to the client.
+	@param m_list An mbuf chain containing the data to send to the client.
 	@param flags Send flags. CTL_DATA_NOWAKEUP is
 		the only supported flags.
 	@param m_remain A pointer to the list of mbuf packets in the chain that
@@ -594,7 +597,7 @@ ctl_getenqueuespace(kern_ctl_ref kctlref, u_int32_t unit, size_t *space);
 	low-water mark for the socket receive buffer.
  @param kctlref The control reference of the kernel control.
  @param unit The unit number of the kernel control instance.
- @param u_int32_t The address at which to return the current difference
+ @param difference The address at which to return the current difference
 	between the low-water mark for the socket and the number of bytes
 	enqueued. 0 indicates that the socket is readable by the client
 	(the number of bytes in the buffer is above the low-water mark).

@@ -48,7 +48,7 @@
 .Fa "char *const envp[]"
 .Fc
 .Sh DESCRIPTION
-.Fn Execve
+.Fn execve
 transforms the calling process into a new process.
 The new process is constructed from an ordinary file,
 whose name is pointed to by
@@ -196,7 +196,7 @@ the return value will be -1 and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Execve
+.Fn execve
 will fail and return to the calling process if:
 .Bl -tag -width Er
 .\" ==========

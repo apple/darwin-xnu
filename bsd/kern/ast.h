@@ -39,4 +39,8 @@
 extern void act_set_astbsd(thread_t);
 extern void bsd_ast(thread_t);
 
+#if CONFIG_DTRACE
+extern void ast_dtrace_on(void);
+#endif
+
 #endif  /* _KERN_AST_H_ */
