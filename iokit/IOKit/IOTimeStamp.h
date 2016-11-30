@@ -116,6 +116,7 @@ IOTimeStamp(uintptr_t csc,
 #define IODBG_MDESC(code)			(KDBG_CODE(DBG_IOKIT, DBG_IOMDESC, code))
 #define IODBG_POWER(code)			(KDBG_CODE(DBG_IOKIT, DBG_IOPOWER, code))
 #define IODBG_IOSERVICE(code)		(KDBG_CODE(DBG_IOKIT, DBG_IOSERVICE, code))
+#define IODBG_IOREGISTRY(code)		(KDBG_CODE(DBG_IOKIT, DBG_IOREGISTRY, code))
 
 /* IOKit specific codes - within each subclass */
 
@@ -201,5 +202,8 @@ IOTimeStamp(uintptr_t csc,
 #define IOSERVICE_TERM_UC_DEFER			25	/* 0x05080064 */
 #define IOSERVICE_DETACH			26	/* 0x05080068 */
 
+/* DBG_IOKIT/DBG_IOREGISTRY codes */
+#define IOREGISTRYENTRY_NAME_STRING              1	/* 0x05090004 */
+#define IOREGISTRYENTRY_NAME			 2	/* 0x05090008 */
 
 #endif /* ! IOKIT_IOTIMESTAMP_H */

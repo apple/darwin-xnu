@@ -66,6 +66,8 @@ extern uint64_t proc_uniqueid(void *p);
 extern uint64_t proc_was_throttled(void *p);
 extern uint64_t proc_did_throttle(void *p);
 extern int	proc_selfpid(void);
+extern boolean_t task_did_exec(task_t task);
+extern boolean_t task_is_exec_copy(task_t task);
 
 struct micro_snapshot_buffer {
 	vm_offset_t		buffer;
@@ -366,7 +368,7 @@ void telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct 
 		return;
 
 	task = thread->task;
-	if ((task == TASK_NULL) || (task == kernel_task))
+	if ((task == TASK_NULL) || (task == kernel_task) || task_did_exec(task) || task_is_exec_copy(task))
 		return;
 
 	/*

@@ -316,14 +316,12 @@ load_machfile(
 	off_t			file_offset = imgp->ip_arch_offset;
 	off_t			macho_size = imgp->ip_arch_size;
 	off_t			file_size = imgp->ip_vattr->va_data_size;
-	vm_map_t		new_map = *mapp;
 	pmap_t			pmap = 0;	/* protected by create_map */
 	vm_map_t		map;
 	load_result_t		myresult;
 	load_return_t		lret;
-	boolean_t create_map = FALSE;
 	boolean_t enforce_hard_pagezero = TRUE;
-	int spawn = (imgp->ip_flags & IMGPF_SPAWN);
+	int in_exec = (imgp->ip_flags & IMGPF_EXEC);
 	task_t task = current_task();
 	proc_t p = current_proc();
 	mach_vm_offset_t	aslr_offset = 0;
@@ -334,38 +332,21 @@ load_machfile(
 		return(LOAD_BADMACHO);
 	}
 
-	if (new_map == VM_MAP_NULL) {
-		create_map = TRUE;
-	}
-
 	result->is64bit = ((imgp->ip_flags & IMGPF_IS_64BIT) == IMGPF_IS_64BIT);
 
-	/*
-	 * If we are spawning, we have created backing objects for the process
-	 * already, which include non-lazily creating the task map.  So we
-	 * are going to switch out the task map with one appropriate for the
-	 * bitness of the image being loaded.
-	 */
-	if (spawn) {
-		create_map = TRUE;
+	task_t ledger_task;
+	if (imgp->ip_new_thread) {
+		ledger_task = get_threadtask(imgp->ip_new_thread);
+	} else {
+		ledger_task = task;
 	}
-
-	if (create_map) {
-		task_t ledger_task;
-		if (imgp->ip_new_thread) {
-			ledger_task = get_threadtask(imgp->ip_new_thread);
-		} else {
-			ledger_task = task;
-		}
-		pmap = pmap_create(get_task_ledger(ledger_task),
-				   (vm_map_size_t) 0,
-				   result->is64bit);
-		map = vm_map_create(pmap,
-				0,
-				vm_compute_max_offset(result->is64bit),
-				TRUE);
-	} else
-		map = new_map;
+	pmap = pmap_create(get_task_ledger(ledger_task),
+			   (vm_map_size_t) 0,
+			   result->is64bit);
+	map = vm_map_create(pmap,
+			0,
+			vm_compute_max_offset(result->is64bit),
+			TRUE);
 
 #if   (__ARM_ARCH_7K__ >= 2) && defined(PLATFORM_WatchOS)
 	/* enforce 16KB alignment for watch targets with new ABI */
@@ -419,9 +400,7 @@ load_machfile(
 			      NULL, imgp);
 
 	if (lret != LOAD_SUCCESS) {
-		if (create_map) {
-			vm_map_deallocate(map);	/* will lose pmap reference too */
-		}
+		vm_map_deallocate(map);	/* will lose pmap reference too */
 		return(lret);
 	}
 
@@ -439,55 +418,57 @@ load_machfile(
 	if (enforce_hard_pagezero &&
 	    (vm_map_has_hard_pagezero(map, 0x1000) == FALSE)) {
 		{
-			if (create_map) {
-				vm_map_deallocate(map);	/* will lose pmap reference too */
-			}
+			vm_map_deallocate(map);	/* will lose pmap reference too */
 			return (LOAD_BADMACHO);
 		}
 	}
 
 	vm_commit_pagezero_status(map);
 
-	if (create_map) {
+	/*
+	 * If this is an exec, then we are going to destroy the old
+	 * task, and it's correct to halt it; if it's spawn, the
+	 * task is not yet running, and it makes no sense.
+	 */
+	if (in_exec) {
 		/*
-		 * If this is an exec, then we are going to destroy the old
-		 * task, and it's correct to halt it; if it's spawn, the
-		 * task is not yet running, and it makes no sense.
+		 * Mark the task as halting and start the other
+		 * threads towards terminating themselves.  Then
+		 * make sure any threads waiting for a process
+		 * transition get informed that we are committed to
+		 * this transition, and then finally complete the
+		 * task halting (wait for threads and then cleanup
+		 * task resources).
+		 *
+		 * NOTE: task_start_halt() makes sure that no new
+		 * threads are created in the task during the transition.
+		 * We need to mark the workqueue as exiting before we
+		 * wait for threads to terminate (at the end of which
+		 * we no longer have a prohibition on thread creation).
+		 *
+		 * Finally, clean up any lingering workqueue data structures
+		 * that may have been left behind by the workqueue threads
+		 * as they exited (and then clean up the work queue itself).
 		 */
-		if (!spawn) {
-			/*
-			 * Mark the task as halting and start the other
-			 * threads towards terminating themselves.  Then
-			 * make sure any threads waiting for a process
-			 * transition get informed that we are committed to
-			 * this transition, and then finally complete the
-			 * task halting (wait for threads and then cleanup
-			 * task resources).
-			 *
-			 * NOTE: task_start_halt() makes sure that no new
-			 * threads are created in the task during the transition.
-			 * We need to mark the workqueue as exiting before we
-			 * wait for threads to terminate (at the end of which
-			 * we no longer have a prohibition on thread creation).
-			 * 
-			 * Finally, clean up any lingering workqueue data structures
-			 * that may have been left behind by the workqueue threads
-			 * as they exited (and then clean up the work queue itself).
-			 */
-			kret = task_start_halt(task);
-			if (kret != KERN_SUCCESS) {
-				vm_map_deallocate(map);	/* will lose pmap reference too */
-				return (LOAD_FAILURE);
-			}
-			proc_transcommit(p, 0);
-			workqueue_mark_exiting(p);
-			task_complete_halt(task);
-			workqueue_exit(p);
-			kqueue_dealloc(p->p_wqkqueue);
-			p->p_wqkqueue = NULL;
+		kret = task_start_halt(task);
+		if (kret != KERN_SUCCESS) {
+			vm_map_deallocate(map);	/* will lose pmap reference too */
+			return (LOAD_FAILURE);
 		}
-		*mapp = map;
+		proc_transcommit(p, 0);
+		workqueue_mark_exiting(p);
+		task_complete_halt(task);
+		workqueue_exit(p);
+		kqueue_dealloc(p->p_wqkqueue);
+		p->p_wqkqueue = NULL;
+		/*
+		 * Roll up accounting info to new task. The roll up is done after
+		 * task_complete_halt to make sure the thread accounting info is
+		 * rolled up to current_task.
+		 */
+		task_rollup_accounting_info(get_threadtask(thread), task);
 	}
+	*mapp = map;
 	return(LOAD_SUCCESS);
 }
 

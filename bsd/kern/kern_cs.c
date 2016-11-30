@@ -535,6 +535,20 @@ csproc_get_platform_path(struct proc *p)
 }
 
 /*
+ * Function: csproc_get_prod_signed
+ *
+ * Description: Returns 1 if process is not signed with a developer identity.
+ *		Note the inverted meaning from the cs_flag to make the error case safer.
+ *		Will go away with rdar://problem/28322552.
+ */
+int
+csproc_get_prod_signed(struct proc *p)
+{
+	return ((p->p_csflags & CS_DEV_CODE) == 0);
+}
+
+
+/*
  * Function: csfg_get_platform_binary
  *
  * Description: This function returns the 
@@ -636,6 +650,48 @@ out:
 
 	return str;
 }
+
+/*
+ * Function: csfg_get_prod_signed
+ *
+ * Description: Returns 1 if code is not signed with a developer identity.
+ *		Note the inverted meaning from the cs_flag to make the error case safer.
+ *		Will go away with rdar://problem/28322552.
+ */
+int
+csfg_get_prod_signed(struct fileglob *fg)
+{
+	struct ubc_info *uip;
+	vnode_t vp;
+	int prod_signed = 0;
+
+	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
+		return NULL;
+	
+	vp = (struct vnode *)fg->fg_data;
+	if (vp == NULL)
+		return NULL;
+
+	vnode_lock(vp);
+	if (!UBCINFOEXISTS(vp))
+		goto out;
+	
+	uip = vp->v_ubcinfo;
+	if (uip == NULL)
+		goto out;
+	
+	if (uip->cs_blobs == NULL)
+		goto out;
+
+	/* It is OK to extract the flag from the first blob
+	   because all blobs of a vnode must have the same cs_flags */	
+	prod_signed = (uip->cs_blobs->csb_flags & CS_DEV_CODE) == 0;
+out:
+	vnode_unlock(vp);
+
+	return prod_signed;
+}
+
 
 uint32_t
 cs_entitlement_flags(struct proc *p)

@@ -56,7 +56,8 @@
 #define CS_PLATFORM_PATH	0x8000000	/* platform binary by the fact of path (osx only) */
 #define CS_DEBUGGED     	0x10000000  /* process is currently or has previously been debugged and allowed to run with invalid pages */
 #define CS_SIGNED           0x20000000  /* process has a signature (may have gone invalid) */
-
+#define CS_DEV_CODE         0x40000000  /* code is dev signed, cannot be loaded into prod signed code (will go away with rdar://problem/28322552) */
+	
 #define CS_ENTITLEMENT_FLAGS	(CS_GET_TASK_ALLOW | CS_INSTALLER)
 
 /* MAC flags used by F_ADDFILESIGS_* */
@@ -245,10 +246,12 @@ void            csblob_entitlements_dictionary_set(struct cs_blob *csblob, void 
 const 	char * csproc_get_teamid(struct proc *);
 const 	char * csvnode_get_teamid(struct vnode *, off_t);
 int 	csproc_get_platform_binary(struct proc *);
+int csproc_get_prod_signed(struct proc *);
 const 	char * csfg_get_teamid(struct fileglob *);
 int	csfg_get_path(struct fileglob *, char *, int *);
 int 	csfg_get_platform_binary(struct fileglob *);
 uint8_t * csfg_get_cdhash(struct fileglob *, uint64_t, size_t *);
+int csfg_get_prod_signed(struct fileglob *);
 
 extern int cs_debug;
 

@@ -3519,9 +3519,9 @@ vm_compressor_get(ppnum_t pn, int *slot, int flags)
 			*dptr++ = data;
 		}
 #endif
-		c_segment_sv_hash_drop_ref(slot_ptr->s_cindx);
-
 		if ( !(flags & C_KEEP)) {
+			c_segment_sv_hash_drop_ref(slot_ptr->s_cindx);
+
 			OSAddAtomic(-1, &c_segment_pages_compressed);
 			*slot = 0;
 		}

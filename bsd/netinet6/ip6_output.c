@@ -804,7 +804,9 @@ skip_ipsec:
 		in6_delayed_cksum_offset(m, 0, optlen, nxt0);
 #endif /* IPSEC */
 
-	if (!TAILQ_EMPTY(&ipv6_filters)) {
+	if (!TAILQ_EMPTY(&ipv6_filters) &&
+	    !((flags & IPV6_OUTARGS) &&
+	    (ip6oa->ip6oa_flags & IP6OAF_INTCOPROC_ALLOWED))) {
 		struct ipfilter	*filter;
 		int seen = (inject_filter_ref == NULL);
 		int fixscope = 0;

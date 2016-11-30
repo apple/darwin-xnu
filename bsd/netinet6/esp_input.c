@@ -122,6 +122,7 @@
 
 #include <net/net_osdep.h>
 #include <mach/sdt.h>
+#include <corecrypto/cc.h>
 
 #include <sys/kdebug.h>
 #define DBG_LAYER_BEG		NETDBG_CODE(DBG_NETIPSEC, 1)
@@ -335,7 +336,7 @@ esp4_input(struct mbuf *m, int off)
 		goto bad;
 	}
 
-	if (bcmp(sum0, sum, siz) != 0) {
+	if (cc_cmp_safe(siz, sum0, sum)) {
 		ipseclog((LOG_WARNING, "auth fail in IPv4 ESP input: %s %s\n",
 		    ipsec4_logpacketstr(ip, spi), ipsec_logsastr(sav)));
 		IPSEC_STAT_INCREMENT(ipsecstat.in_espauthfail);
@@ -433,8 +434,8 @@ noreplaycheck:
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 1,0,0,0,0);
 		goto bad;
-	    }	  
-	    if (memcmp(saved_icv, tag, algo->icvlen)) {
+	    }
+	    if (cc_cmp_safe(algo->icvlen, saved_icv, tag)) {	  
 		ipseclog((LOG_ERR, "packet decryption ICV mismatch\n"));
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 1,0,0,0,0);
@@ -932,7 +933,7 @@ esp6_input(struct mbuf **mp, int *offp, int proto)
 		goto bad;
 	}
 
-	if (bcmp(sum0, sum, siz) != 0) {
+	if (cc_cmp_safe(siz, sum0, sum)) {
 		ipseclog((LOG_WARNING, "auth fail in IPv6 ESP input: %s %s\n",
 		    ipsec6_logpacketstr(ip6, spi), ipsec_logsastr(sav)));
 		IPSEC_STAT_INCREMENT(ipsec6stat.in_espauthfail);
@@ -1026,8 +1027,8 @@ noreplaycheck:
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 1,0,0,0,0);
 		goto bad;
-	    }	  
-	    if (memcmp(saved_icv, tag, algo->icvlen)) {
+	    }
+	    if (cc_cmp_safe(algo->icvlen, saved_icv, tag)) {	  
 		ipseclog((LOG_ERR, "packet decryption ICV mismatch\n"));
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 1,0,0,0,0);

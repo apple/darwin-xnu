@@ -271,6 +271,7 @@ nstat_ifnet_to_flags(
 		flags |= NSTAT_IFNET_IS_LOOPBACK;
 		break;
 	case IFRTYPE_FUNCTIONAL_WIRED:
+	case IFRTYPE_FUNCTIONAL_INTCOPROC:
 		flags |= NSTAT_IFNET_IS_WIRED;
 		break;
 	case IFRTYPE_FUNCTIONAL_WIFI_INFRA:

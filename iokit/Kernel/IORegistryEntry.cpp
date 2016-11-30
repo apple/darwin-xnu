@@ -30,10 +30,13 @@
 #include <libkern/c++/OSContainers.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOKitKeys.h>
+#include <IOKit/IOTimeStamp.h>
 
 #include <IOKit/IOLib.h>
 
 #include <IOKit/assert.h>
+
+#include "IOKitKernelInternal.h"
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -820,6 +823,19 @@ void IORegistryEntry::setName( const OSSymbol * name,
             key = plane->pathNameKey;
         else
             key = gIONameKey;
+
+        if (gIOKitTrace && reserved && reserved->fRegistryEntryID)
+        {
+            uint64_t str_id = 0;
+            uint64_t __unused regID = getRegistryEntryID();
+            kernel_debug_string(IODBG_IOREGISTRY(IOREGISTRYENTRY_NAME_STRING), &str_id, name->getCStringNoCopy());
+            KERNEL_DEBUG_CONSTANT(IODBG_IOREGISTRY(IOREGISTRYENTRY_NAME),
+                (uintptr_t) regID,
+                (uintptr_t) (regID >> 32),
+                (uintptr_t) str_id,
+                (uintptr_t) (str_id >> 32),
+                0);
+        }
 
 	WLOCK;
         registryTable()->setObject( key, (OSObject *) name);
@@ -1668,6 +1684,7 @@ bool IORegistryEntry::attachToParent( IORegistryEntry * parent,
     OSArray *	links;
     bool	ret;
     bool	needParent;
+    bool        traceName = false;
 
     if( this == parent)
 	return( false );
@@ -1675,7 +1692,10 @@ bool IORegistryEntry::attachToParent( IORegistryEntry * parent,
     WLOCK;
 
     if (!reserved->fRegistryEntryID)
+    {
 	reserved->fRegistryEntryID = ++gIORegistryLastID;
+	traceName = (0 != gIOKitTrace);
+    }
 
     ret = makeLink( parent, kParentSetIndex, plane );
 
@@ -1685,6 +1705,19 @@ bool IORegistryEntry::attachToParent( IORegistryEntry * parent,
 	needParent = true;
 
     UNLOCK;
+
+    if (traceName)
+    {
+        uint64_t str_id = 0;
+        uint64_t __unused regID = getRegistryEntryID();
+        kernel_debug_string(IODBG_IOREGISTRY(IOREGISTRYENTRY_NAME_STRING), &str_id, getName());
+        KERNEL_DEBUG_CONSTANT(IODBG_IOREGISTRY(IOREGISTRYENTRY_NAME),
+            (uintptr_t) regID,
+            (uintptr_t) (regID >> 32),
+            (uintptr_t) str_id,
+            (uintptr_t) (str_id >> 32),
+            0);
+    }
 
     PLOCK;
 

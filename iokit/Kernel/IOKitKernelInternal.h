@@ -44,7 +44,7 @@ __BEGIN_DECLS
 #if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD)
 
 #define IOServiceTrace(csc, a, b, c, d) do {				\
-    if(kIOTraceIOService & gIOKitDebug) {				\
+    if(kIOTraceIOService & gIOKitTrace) {				\
 	KERNEL_DEBUG_CONSTANT(IODBG_IOSERVICE(csc), a, b, c, d, 0);	\
     }									\
 } while(0)

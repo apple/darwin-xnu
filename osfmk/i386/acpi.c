@@ -386,12 +386,6 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 
 	assert(cpu_number() == master_cpu);
 
-	/*
-	 * Effectively set the boot cpu offline.
-	 * This will stop further deadlines being set.
-	 */
-	cpu_datap(master_cpu)->cpu_running = FALSE;
-
 	/* Cancel any pending deadline */
 	setPop(0);
 	while (lapic_is_interrupting(LAPIC_TIMER_VECTOR)) {
@@ -440,7 +434,6 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 	}
 	acpi_wake_postrebase_abstime = mach_absolute_time();
 	assert(mach_absolute_time() >= acpi_idle_abstime);
-	cpu_datap(master_cpu)->cpu_running = TRUE;
 
 	KERNEL_DEBUG_CONSTANT(
 		MACHDBG_CODE(DBG_MACH_SCHED, MACH_DEEP_IDLE) | DBG_FUNC_END,

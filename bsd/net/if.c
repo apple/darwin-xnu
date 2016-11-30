@@ -718,6 +718,8 @@ if_functional_type(struct ifnet *ifp, bool exclude_delegate)
 		    (ifp->if_type == IFT_CELLULAR)) ||
 		    (!exclude_delegate && IFNET_IS_CELLULAR(ifp))) {
 			ret = IFRTYPE_FUNCTIONAL_CELLULAR;
+		} else if (IFNET_IS_INTCOPROC(ifp)) {
+			ret = IFRTYPE_FUNCTIONAL_INTCOPROC;
 		} else if ((exclude_delegate &&
 		    (ifp->if_family == IFNET_FAMILY_ETHERNET ||
 		    ifp->if_family == IFNET_FAMILY_FIREWIRE)) ||
@@ -881,9 +883,9 @@ ifa_ifwithaddr(const struct sockaddr *addr)
 	struct ifaddr *result = NULL;
 
 	ifnet_head_lock_shared();
-	
+
 	result = ifa_ifwithaddr_locked(addr);
-	
+
 	ifnet_head_done();
 
 	return (result);
@@ -982,17 +984,17 @@ ifa_ifwithaddr_scoped_locked(const struct sockaddr *addr, unsigned int ifscope)
 	}
 
 	return (result);
-} 
- 
+}
+
 struct ifaddr *
 ifa_ifwithaddr_scoped(const struct sockaddr *addr, unsigned int ifscope)
 {
 	struct ifaddr *result = NULL;
 
 	ifnet_head_lock_shared();
-	
+
 	result = ifa_ifwithaddr_scoped_locked(addr, ifscope);
-	
+
 	ifnet_head_done();
 
 	return (result);
@@ -1270,9 +1272,7 @@ link_rtrequest(int cmd, struct rtentry *rt, struct sockaddr *sa)
  * up/down state and updating the rest of the flags.
  */
 __private_extern__ void
-if_updown(
-	struct ifnet	*ifp,
-	int				up)
+if_updown( struct ifnet *ifp, int up)
 {
 	int i;
 	struct ifaddr **ifa;
@@ -1308,6 +1308,14 @@ if_updown(
 
 	/* Drop the lock to notify addresses and route */
 	ifnet_lock_done(ifp);
+
+	IFCQ_LOCK(ifq);
+	if_qflush(ifp, 1);
+
+	/* Inform all transmit queues about the new link state */
+	ifnet_update_sndq(ifq, up ? CLASSQ_EV_LINK_UP : CLASSQ_EV_LINK_DOWN);
+	IFCQ_UNLOCK(ifq);
+
 	if (ifnet_get_address_list(ifp, &ifa) == 0) {
 		for (i = 0; ifa[i] != 0; i++) {
 			pfctlinput(up ? PRC_IFUP : PRC_IFDOWN, ifa[i]->ifa_addr);
@@ -1315,14 +1323,6 @@ if_updown(
 		ifnet_free_address_list(ifa);
 	}
 	rt_ifmsg(ifp);
-
-	if (!up)
-		if_qflush(ifp, 0);
-
-	/* Inform all transmit queues about the new link state */
-	IFCQ_LOCK(ifq);
-	ifnet_update_sndq(ifq, up ? CLASSQ_EV_LINK_UP : CLASSQ_EV_LINK_DOWN);
-	IFCQ_UNLOCK(ifq);
 
 	/* Aquire the lock to clear the changing flag */
 	ifnet_lock_exclusive(ifp);

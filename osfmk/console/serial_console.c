@@ -243,8 +243,14 @@ _cnputs(char * c, int size)
 	/* The console device output routines are assumed to be
 	 * non-reentrant.
 	 */
+#ifdef __x86_64__
+	uint32_t lock_timeout_ticks = UINT32_MAX;
+#else
+	uint32_t lock_timeout_ticks = LockTimeOut;
+#endif
+
 	mp_disable_preemption();
-	if (!hw_lock_to(&cnputc_lock, LockTimeOut)) {
+	if (!hw_lock_to(&cnputc_lock, lock_timeout_ticks)) {
 		/* If we timed out on the lock, and we're in the debugger,
 		 * copy lock data for debugging and break the lock.
 		 */

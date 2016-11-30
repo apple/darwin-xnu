@@ -133,5 +133,6 @@ struct image_params {
 #define	IMGPF_DISABLE_ASLR	0x00000020	/* disable ASLR */
 #define	IMGPF_ALLOW_DATA_EXEC	0x00000040	/* forcibly disallow data execution */
 #define	IMGPF_VFORK_EXEC	0x00000080	/* vfork followed by exec */
+#define	IMGPF_EXEC		0x00000100	/* exec */
 
 #endif	/* !_SYS_IMGACT */

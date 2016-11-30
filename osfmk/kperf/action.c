@@ -336,6 +336,11 @@ kperf_thread_ast_handler(thread_t thread)
 
 	task_t task = get_threadtask(thread);
 
+	if (task_did_exec(task) || task_is_exec_copy(task)) {
+		BUF_INFO(PERF_AST_HNDLR | DBG_FUNC_END, SAMPLE_CONTINUE);
+		return;
+	}
+
 	/* make a context, take a sample */
 	struct kperf_context ctx;
 	ctx.cur_thread = thread;

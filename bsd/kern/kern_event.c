@@ -94,8 +94,6 @@
 #include <kern/kalloc.h>
 #include <kern/assert.h>
 
-#include <machine/spl.h>
-
 #include <libkern/libkern.h>
 #include "net/net_str_id.h"
 
@@ -4825,9 +4823,6 @@ knote_fdfind(struct kqueue *kq,
  *
  * The knote may have already been detached from
  * (or not yet attached to) its source object.
- *
- * should be called at spl == 0, since we don't want to hold spl
- * while calling fdrop and free.
  */
 static void
 knote_drop(struct knote *kn, __unused struct proc *ctxp)

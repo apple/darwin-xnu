@@ -1203,7 +1203,8 @@ error_out:
  *	vnode_getattr:???
  */
 int
-vn_stat_noauth(struct vnode *vp, void *sbptr, kauth_filesec_t *xsec, int isstat64, vfs_context_t ctx)
+vn_stat_noauth(struct vnode *vp, void *sbptr, kauth_filesec_t *xsec, int isstat64,
+	       vfs_context_t ctx, struct ucred *file_cred)
 {
 	struct vnode_attr va;
 	int error;
@@ -1244,6 +1245,19 @@ vn_stat_noauth(struct vnode *vp, void *sbptr, kauth_filesec_t *xsec, int isstat6
 	error = vnode_getattr(vp, &va, ctx);
 	if (error)
 		goto out;
+#if CONFIG_MACF
+	/*
+	 * Give MAC polices a chance to reject or filter the attributes
+	 * returned by the filesystem.  Note that MAC policies are consulted
+	 * *after* calling the filesystem because filesystems can return more
+	 * attributes than were requested so policies wouldn't be authoritative
+	 * is consulted beforehand.  This also gives policies an opportunity
+	 * to change the values of attributes retrieved.
+	 */
+	error = mac_vnode_check_getattr(ctx, file_cred, vp, &va);
+	if (error)
+		goto out;
+#endif
 	/*
 	 * Copy from vattr table
 	 */
@@ -1388,7 +1402,7 @@ vn_stat(struct vnode *vp, void *sb, kauth_filesec_t *xsec, int isstat64, vfs_con
 		return(error);
 
 	/* actual stat */
-	return(vn_stat_noauth(vp, sb, xsec, isstat64, ctx));
+	return(vn_stat_noauth(vp, sb, xsec, isstat64, ctx, NOCRED));
 }
 
 

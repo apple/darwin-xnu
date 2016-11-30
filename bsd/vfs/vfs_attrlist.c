@@ -907,17 +907,18 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 			}
 		}
 
-#if CONFIG_MACF
-		error = mac_mount_check_getattr(ctx, mnt, &vs);
-		if (error != 0)
-			goto out;
-#endif
 		VFS_DEBUG(ctx, vp, "ATTRLIST -       calling to get %016llx with supported %016llx", vs.f_active, vs.f_supported);
 		if ((error = vfs_getattr(mnt, &vs, ctx)) != 0) {
 			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: filesystem returned %d", error);
 			goto out;
 		}
-
+#if CONFIG_MACF
+		error = mac_mount_check_getattr(ctx, mnt, &vs);
+		if (error != 0) {
+			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: MAC framework returned %d", error);
+			goto out;
+		}
+#endif
 		/*
 		 * Did we ask for something the filesystem doesn't support?
 		 */
@@ -1017,7 +1018,13 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: could not fetch attributes from root vnode", vp);
 			goto out;
 		}
-
+#if CONFIG_MACF
+		error = mac_vnode_check_getattr(ctx, NOCRED, vp, &va);
+		if (error != 0) {
+			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: MAC framework returned %d for root vnode", error);
+			goto out;
+		}
+#endif
 		if (VATTR_IS_ACTIVE(&va, va_encoding) &&
 		    !VATTR_IS_SUPPORTED(&va, va_encoding)) {
 			if (!return_valid || pack_invalid)
@@ -2536,7 +2543,7 @@ out:
 static int
 getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
     user_addr_t attributeBuffer, size_t bufferSize, uint64_t options,
-    enum uio_seg segflg, char* alt_name)
+    enum uio_seg segflg, char* alt_name, struct ucred *file_cred)
 {
 	struct vnode_attr va;
 	kauth_action_t	action;
@@ -2638,7 +2645,6 @@ getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
 	}
 
 
-
 	if (va.va_active != 0) {
 		uint64_t va_active = va.va_active;
 
@@ -2664,7 +2670,25 @@ getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
 			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: filesystem returned %d", error);
 			goto out;
 		}
-
+#if CONFIG_MACF
+		/*
+		 * Give MAC polices a chance to reject or filter the
+		 * attributes returned by the filesystem.  Note that MAC
+		 * policies are consulted *after* calling the filesystem
+		 * because filesystems can return more attributes than
+		 * were requested so policies wouldn't be authoritative
+		 * is consulted beforehand.  This also gives policies an
+		 * opportunity to change the values of attributes
+		 * retrieved.
+		 */
+		error = mac_vnode_check_getattr(ctx, file_cred, vp, &va);
+		if (error) {
+			VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: MAC framework returned %d", error);
+			goto out;
+		}
+#else
+		(void)file_cred;
+#endif
 
 		/* 
 		 * If ATTR_CMN_NAME is not supported by filesystem and the
@@ -2701,17 +2725,19 @@ fgetattrlist(proc_t p, struct fgetattrlist_args *uap, __unused int32_t *retval)
 	vnode_t vp;
 	int error;
 	struct attrlist al;
+	struct fileproc *fp;
 
 	ctx = vfs_context_current();
+	vp = NULL;
+	fp = NULL;
 	error = 0;
 
 	if ((error = file_vnode(uap->fd, &vp)) != 0)
 		return (error);
 
-	if ((error = vnode_getwithref(vp)) != 0) {
-		file_drop(uap->fd);
-		return(error);
-	}
+	if ((error = fp_lookup(p, uap->fd, &fp, 0)) != 0 ||
+	    (error = vnode_getwithref(vp)) != 0)
+		goto out;
 
 	/*
 	 * Fetch the attribute request.
@@ -2724,12 +2750,15 @@ fgetattrlist(proc_t p, struct fgetattrlist_args *uap, __unused int32_t *retval)
 	error = getattrlist_internal(ctx, vp, &al, uap->attributeBuffer,
 	                             uap->bufferSize, uap->options,
 				     (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : \
-	                             UIO_USERSPACE32), NULL);
+				     UIO_USERSPACE32), NULL,
+				     fp->f_fglob->fg_cred);
 
 out:
-	file_drop(uap->fd);
+	if (fp)
+		fp_drop(p, uap->fd, fp, 0);
 	if (vp)
 		vnode_put(vp);
+	file_drop(uap->fd);
 
 	return error;
 }
@@ -2763,7 +2792,7 @@ getattrlistat_internal(vfs_context_t ctx, user_addr_t path,
 	vp = nd.ni_vp;
 
 	error = getattrlist_internal(ctx, vp, alp, attributeBuffer,
-	    bufferSize, options, segflg, NULL);
+	    bufferSize, options, segflg, NULL, NOCRED);
 	
 	/* Retain the namei reference until the getattrlist completes. */
 	nameidone(&nd);
@@ -3276,7 +3305,8 @@ readdirattr(vnode_t dvp, struct fd_vn_data *fvd, uio_t auio,
 		error = getattrlist_internal(ctx, vp, &al,
 		    CAST_USER_ADDR_T(kern_attr_buf), kern_attr_buf_siz,
 		    options | FSOPT_REPORT_FULLSIZE, UIO_SYSSPACE, 
-		    CAST_DOWN_EXPLICIT(char *, name_buffer));
+		    CAST_DOWN_EXPLICIT(char *, name_buffer),
+		    NOCRED);
 
 		nameidone(&nd);
 

@@ -822,7 +822,8 @@ int PEHaltRestart(unsigned int type)
    }
    else if(type == kPEPanicRestartCPU || type == kPEPanicSync)
    {
-    IOCPURunPlatformPanicActions(type);
+   	IOCPURunPlatformPanicActions(type);
+	PE_sync_panic_buffers();
    }
 
   if (gIOPlatform) return gIOPlatform->haltRestart(type);

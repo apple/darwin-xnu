@@ -150,12 +150,13 @@ void thread_set_parent(thread_t parent, int pid);
 extern void act_thread_catt(void *ctx);
 void thread_set_child(thread_t child, int pid);
 void *act_thread_csave(void);
+extern boolean_t task_is_exec_copy(task_t);
 
 
 thread_t cloneproc(task_t, coalition_t *, proc_t, int, int);
 proc_t forkproc(proc_t);
 void forkproc_free(proc_t);
-thread_t fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t child, int inherit_memory, int is64bit);
+thread_t fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t child, int inherit_memory, int is64bit, int in_exec);
 void proc_vfork_begin(proc_t parent_proc);
 void proc_vfork_end(proc_t parent_proc);
 
@@ -324,7 +325,7 @@ vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
  * Parameters: parent_proc		parent process of the process being
  *		child_threadp		pointer to location to receive the
  *					Mach thread_t of the child process
- *					breated
+ *					created
  *		kind			kind of creation being requested
  *		coalitions		if spawn, the set of coalitions the
  *					child process should join, or NULL to
@@ -724,6 +725,8 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
  *		is64bit			TRUE, if the child being created will
  *					be associated with a 64 bit process
  *					rather than a 32 bit process
+ *		in_exec			TRUE, if called from execve or posix spawn set exec
+ *					FALSE, if called from fork or vfexec
  *
  * Note:	This code is called in the fork() case, from the execve() call
  *		graph, if implementing an execve() following a vfork(), from
@@ -742,7 +745,7 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
  *		in this case, 'inherit_memory' MUST be FALSE.
  */
 thread_t
-fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t child_proc, int inherit_memory, int is64bit)
+fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t child_proc, int inherit_memory, int is64bit, int in_exec)
 {
 	thread_t	child_thread = NULL;
 	task_t		child_task;
@@ -753,7 +756,8 @@ fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t chi
 					parent_coalitions,
 					inherit_memory,
 					is64bit,
-					TF_NONE,
+					TF_LRETURNWAIT | TF_LRETURNWAITER,         /* All created threads will wait in task_wait_to_return */
+					in_exec ? TPF_EXEC_COPY : TPF_NONE,   /* Mark the task exec copy if in execve */
 					&child_task);
 	if (result != KERN_SUCCESS) {
 		printf("%s: task_create_internal failed.  Code: %d\n",
@@ -761,8 +765,13 @@ fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t chi
 		goto bad;
 	}
 
-	/* Set the child process task to the new task */
-	child_proc->task = child_task;
+	if (!in_exec) {
+		/*
+		 * Set the child process task to the new task if not in exec,
+		 * will set the task for exec case in proc_exec_switch_task after image activation.
+		 */
+		child_proc->task = child_task;
+	}
 
 	/* Set child task process to child proc */
 	set_bsdtask_info(child_task, child_proc);
@@ -784,8 +793,15 @@ fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t chi
 	if (child_proc->p_nice != 0)
 		resetpriority(child_proc);
 
-	/* Create a new thread for the child process */
-	result = thread_create_with_continuation(child_task, &child_thread, (thread_continue_t)proc_wait_to_return);
+	/*
+	 * Create a new thread for the child process
+	 * The new thread is waiting on the event triggered by 'task_clear_return_wait'
+	 */
+	result = thread_create_waiting(child_task,
+	                               (thread_continue_t)task_wait_to_return,
+	                               task_get_return_wait_event(child_task),
+	                               &child_thread);
+
 	if (result != KERN_SUCCESS) {
 		printf("%s: thread_create failed. Code: %d\n",
 		    __func__, result);
@@ -873,7 +889,7 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
 #endif
 
 		/* "Return" to the child */
-		proc_clear_return_wait(child_proc, child_thread);
+		task_clear_return_wait(get_threadtask(child_thread));
 
 		/* drop the extra references we got during the creation */
 		if ((child_task = (task_t)get_threadtask(child_thread)) != NULL) {
@@ -939,7 +955,7 @@ cloneproc(task_t parent_task, coalition_t *parent_coalitions, proc_t parent_proc
 		goto bad;
 	}
 
-	child_thread = fork_create_child(parent_task, parent_coalitions, child_proc, inherit_memory, parent_proc->p_flag & P_LP64);
+	child_thread = fork_create_child(parent_task, parent_coalitions, child_proc, inherit_memory, parent_proc->p_flag & P_LP64, FALSE);
 
 	if (child_thread == NULL) {
 		/*
@@ -1317,7 +1333,6 @@ retry:
 	 */
 	proc_signalstart(child_proc, 0);
 	proc_transstart(child_proc, 0, 0);
-	proc_set_return_wait(child_proc);
 
 	child_proc->p_pcaction = 0;
 
@@ -1522,11 +1537,17 @@ uthread_alloc(task_t task, thread_t thread, int noinherit)
 				uth->uu_sigmask = uth_parent->uu_sigmask;
 		}
 		uth->uu_context.vc_thread = thread;
-		TAILQ_INSERT_TAIL(&p->p_uthlist, uth, uu_list);
+		/*
+		 * Do not add the uthread to proc uthlist for exec copy task,
+		 * since they do not hold a ref on proc.
+		 */
+		if (!task_is_exec_copy(task)) {
+			TAILQ_INSERT_TAIL(&p->p_uthlist, uth, uu_list);
+		}
 		proc_unlock(p);
 
 #if CONFIG_DTRACE
-		if (p->p_dtrace_ptss_pages != NULL) {
+		if (p->p_dtrace_ptss_pages != NULL && !task_is_exec_copy(task)) {
 			uth->t_dtrace_scratch = dtrace_ptss_claim_entry(p);
 		}
 #endif
@@ -1639,9 +1660,13 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 		/*
 		 * Remove the thread from the process list and
 		 * transfer [appropriate] pending signals to the process.
+		 * Do not remove the uthread from proc uthlist for exec
+		 * copy task, since they does not have a ref on proc and
+		 * would not have been added to the list.
 		 */
-		if (get_bsdtask_info(task) == p) { 
+		if (get_bsdtask_info(task) == p && !task_is_exec_copy(task)) {
 			proc_lock(p);
+
 			TAILQ_REMOVE(&p->p_uthlist, uth, uu_list);
 			p->p_siglist |= (uth->uu_siglist & execmask & (~p->p_sigignore | sigcantmask));
 			proc_unlock(p);
@@ -1649,7 +1674,7 @@ uthread_cleanup(task_t task, void *uthread, void * bsd_info)
 #if CONFIG_DTRACE
 		struct dtrace_ptss_page_entry *tmpptr = uth->t_dtrace_scratch;
 		uth->t_dtrace_scratch = NULL;
-		if (tmpptr != NULL) {
+		if (tmpptr != NULL && !task_is_exec_copy(task)) {
 			dtrace_ptss_release_entry(p, tmpptr);
 		}
 #endif

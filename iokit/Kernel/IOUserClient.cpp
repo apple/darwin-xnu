@@ -2932,6 +2932,7 @@ kern_return_t is_io_registry_entry_get_property_bytes(
     } else if( (off = OSDynamicCast( OSNumber, obj ))) {
 	offsetBytes = off->unsigned64BitValue();
 	len = off->numberOfBytes();
+	if (len > sizeof(offsetBytes)) len = sizeof(offsetBytes);
 	bytes = &offsetBytes;
 #ifdef __BIG_ENDIAN__
 	bytes = (const void *)

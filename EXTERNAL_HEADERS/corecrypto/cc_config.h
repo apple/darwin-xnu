@@ -237,6 +237,14 @@
 #endif /* __has_include(<TargetConditionals.h>) */
 #endif /* defined(__has_include) */
 
+// Disable FIPS key gen algorithm on userland and kext so that related POST
+// is skipped and boot time is reduced
+#if defined(TARGET_OS_BRIDGE) && TARGET_OS_BRIDGE && CC_KERNEL
+#define CC_DISABLE_RSAKEYGEN 1 /* for iBridge */
+#else
+#define CC_DISABLE_RSAKEYGEN 0 /* default */
+#endif
+
 //- functions implemented in assembly ------------------------------------------
 //this the list of corecrypto clients that use assembly and the clang compiler
 #if !(CC_XNU_KERNEL_AVAILABLE || CC_KERNEL || CC_USE_L4 || CC_IBOOT || CC_USE_SEPROM || CC_USE_S3) && !defined(_WIN32) && CORECRYPTO_DEBUG

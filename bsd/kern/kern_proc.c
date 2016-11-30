@@ -472,8 +472,22 @@ proc_ref_locked(proc_t p)
 	/* if process still in creation return failure */
 	if ((p == PROC_NULL) || ((p->p_listflag & P_LIST_INCREATE) != 0))
 			return (PROC_NULL);
-	/* do not return process marked for termination */
-	if ((p->p_stat != SZOMB) && ((p->p_listflag & P_LIST_EXITED) == 0) && ((p->p_listflag & (P_LIST_DRAINWAIT | P_LIST_DRAIN | P_LIST_DEAD)) == 0)) {
+retry:
+	/*
+	 * Do not return process marked for termination
+	 * or proc_refdrain called without ref wait.
+	 * Wait for proc_refdrain_with_refwait to complete if
+	 * process in refdrain and refwait flag is set.
+	 */
+	if ((p->p_stat != SZOMB) &&
+	    ((p->p_listflag & P_LIST_EXITED) == 0) &&
+	    ((p->p_listflag & P_LIST_DEAD) == 0) &&
+	    (((p->p_listflag & (P_LIST_DRAIN | P_LIST_DRAINWAIT)) == 0) ||
+	     ((p->p_listflag & P_LIST_REFWAIT) != 0))) {
+		if ((p->p_listflag & P_LIST_REFWAIT) != 0) {
+			msleep(&p->p_listflag, proc_list_mlock, 0, "proc_refwait", 0) ;
+			goto retry;
+		}
 		p->p_refcount++;
 #if PROC_REF_DEBUG
 		record_procref(p, 1);
@@ -549,20 +563,59 @@ proc_drop_zombref(proc_t p)
 void
 proc_refdrain(proc_t p)
 {
+	proc_refdrain_with_refwait(p, FALSE);
+}
 
+proc_t
+proc_refdrain_with_refwait(proc_t p, boolean_t get_ref_and_allow_wait)
+{
+	boolean_t initexec = FALSE;
 	proc_list_lock();
 
 	p->p_listflag |= P_LIST_DRAIN;
-	while (p->p_refcount) {
+	if (get_ref_and_allow_wait) {
+		/*
+		 * All the calls to proc_ref_locked will wait
+		 * for the flag to get cleared before returning a ref.
+		 */
+		p->p_listflag |= P_LIST_REFWAIT;
+		if (p == initproc) {
+			initexec = TRUE;
+		}
+	}
+
+	/* Do not wait in ref drain for launchd exec */
+	while (p->p_refcount && !initexec) {
 		p->p_listflag |= P_LIST_DRAINWAIT;
 		msleep(&p->p_refcount, proc_list_mlock, 0, "proc_refdrain", 0) ;
 	}
+
 	p->p_listflag &= ~P_LIST_DRAIN;
-	p->p_listflag |= P_LIST_DEAD;
+	if (!get_ref_and_allow_wait) {
+		p->p_listflag |= P_LIST_DEAD;
+	} else {
+		/* Return a ref to the caller */
+		p->p_refcount++;
+#if PROC_REF_DEBUG
+		record_procref(p, 1);
+#endif
+	}
 
 	proc_list_unlock();
 
+	if (get_ref_and_allow_wait) {
+		return (p);
+	}
+	return NULL;
+}
 
+void
+proc_refwake(proc_t p)
+{
+	proc_list_lock();
+	p->p_listflag &= ~P_LIST_REFWAIT;
+	wakeup(&p->p_listflag);
+	proc_list_unlock();
 }
 
 proc_t 

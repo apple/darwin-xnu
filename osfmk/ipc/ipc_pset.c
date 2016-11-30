@@ -74,7 +74,6 @@
 #include <ipc/ipc_port.h>
 
 #include <kern/kern_types.h>
-#include <kern/spl.h>
 
 #include <vm/vm_map.h>
 
@@ -321,8 +320,6 @@ void
 ipc_pset_destroy(
 	ipc_pset_t	pset)
 {
-	spl_t		s;
-
 	assert(ips_active(pset));
 
 	pset->ips_object.io_bits &= ~IO_BITS_ACTIVE;
@@ -332,16 +329,14 @@ ipc_pset_destroy(
 	 * AND remove this message queue from any containing sets
 	 */
 	ipc_mqueue_remove_all(&pset->ips_messages);
-	
+
 	/*
 	 * Set all waiters on the portset running to
 	 * discover the change.
 	 */
-	s = splsched();
 	imq_lock(&pset->ips_messages);
 	ipc_mqueue_changed(&pset->ips_messages);
 	imq_unlock(&pset->ips_messages);
-	splx(s);
 
 	ipc_mqueue_deinit(&pset->ips_messages);
 
@@ -378,7 +373,6 @@ filt_machportattach(
 	ipc_space_t space = current_space();
 	ipc_kmsg_t first;
 
-	spl_t s;
 	int error;
 	int result = 0;
 	kern_return_t kr;
@@ -395,10 +389,9 @@ filt_machportattach(
 			__IGNORE_WCASTALIGN(pset = (ipc_pset_t)entry->ie_object);
 			mqueue = &pset->ips_messages;
 
-			s = splsched();
 			imq_lock(mqueue);
 
-			/* 
+			/*
 			 * Bind the portset wait queue directly to knote/kqueue.
 			 * This allows us to just use wait_queue foo to effect a wakeup,
 			 * rather than having to call knote() from the Mach code on each
@@ -412,8 +405,7 @@ filt_machportattach(
 				KNOTE_ATTACH(&mqueue->imq_klist, kn);
 			}
 			imq_unlock(mqueue);
-			splx(s);
-			
+
 			is_read_unlock(space);
 
 			/*
@@ -428,7 +420,7 @@ filt_machportattach(
 			__IGNORE_WCASTALIGN(port = (ipc_port_t)entry->ie_object);
 			mqueue = &port->ip_messages;
 			ip_reference(port);
-		
+
 			/*
 			 * attach knote to port and determine result
 			 * If the filter requested direct message receipt,
@@ -436,7 +428,6 @@ filt_machportattach(
 			 * reflect the requested and override qos of the
 			 * first message in the queue.
 			 */
-			s = splsched();
 			imq_lock(mqueue);
 			kn->kn_ptr.p_mqueue = mqueue; 
 			KNOTE_ATTACH(&mqueue->imq_klist, kn);
@@ -446,7 +437,6 @@ filt_machportattach(
 				result = 1;
 			}
 			imq_unlock(mqueue);
-			splx(s);
 
 			is_read_unlock(space);
 			error = 0;
@@ -482,14 +472,11 @@ filt_machportdetach(
 {
 	ipc_mqueue_t mqueue = kn->kn_ptr.p_mqueue;
 	ipc_object_t object = mqueue_to_object(mqueue);
-	spl_t s;
 
-	s = splsched();
 	imq_lock(mqueue);
 	KNOTE_DETACH(&mqueue->imq_klist, kn);
 	kn->kn_ptr.p_mqueue = IMQ_NULL;
 	imq_unlock(mqueue);
-	splx(s);
 
 	if (io_otype(object) == IOT_PORT_SET) {
 		/*
@@ -558,9 +545,7 @@ filt_machporttouch(
 	ipc_mqueue_t mqueue = kn->kn_ptr.p_mqueue;
 	ipc_kmsg_t first;
 	int result = 0;
-	spl_t s;
 
-	s = splsched();
 	imq_lock(mqueue);
 
 	/* copy in new settings and save off new input fflags */
@@ -588,7 +573,6 @@ filt_machporttouch(
 		                 MACH_MSG_PRIORITY_UNSPECIFIED);
 	}
 	imq_unlock(mqueue);
-	splx(s);
 
 	return result;
 }

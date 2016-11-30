@@ -194,6 +194,7 @@ extern void ipc_importance_reset(ipc_importance_task_t task_imp, boolean_t donor
 
 extern ipc_importance_task_t ipc_importance_for_task(task_t task, boolean_t made);
 extern void ipc_importance_disconnect_task(task_t task);
+extern ipc_importance_inherit_t ipc_importance_exec_switch_task(task_t old_task, task_t new_task);
 
 extern boolean_t ipc_importance_task_is_donor(ipc_importance_task_t task_imp);
 extern boolean_t ipc_importance_task_is_never_donor(ipc_importance_task_t task_imp);

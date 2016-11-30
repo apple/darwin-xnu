@@ -89,7 +89,6 @@
 #include <kern/processor.h>
 #include <kern/thread.h>
 #include <kern/sched_prim.h>
-#include <kern/spl.h>
 #include <kern/misc_protos.h>
 #include <kern/counters.h>
 #include <kern/cpu_data.h>

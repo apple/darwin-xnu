@@ -249,6 +249,9 @@ struct task {
 #define TF_CORPSE               0x00000020                              /* task is a corpse */
 #define TF_PENDING_CORPSE       0x00000040                              /* task corpse has not been reported yet */
 #define TF_CORPSE_FORK          0x00000080                              /* task is a forked corpse */
+#define TF_LRETURNWAIT          0x00000100                              /* task is waiting for fork/posix_spawn/exec to complete */
+#define TF_LRETURNWAITER        0x00000200                              /* task is waiting for TF_LRETURNWAIT to get cleared */
+
 
 #define task_has_64BitAddr(task)	\
 	 (((task)->t_flags & TF_64B_ADDR) != 0)
@@ -276,6 +279,17 @@ struct task {
 
 #define task_is_a_corpse_fork(task)	\
 	(((task)->t_flags & TF_CORPSE_FORK) != 0)
+
+	uint32_t t_procflags;                                            /* general-purpose task flags protected by proc_lock (PL) */
+#define TPF_NONE                 0
+#define TPF_DID_EXEC             0x00000001                              /* task has been execed to a new task */
+#define TPF_EXEC_COPY            0x00000002                              /* task is the new copy of an exec */
+
+#define task_did_exec_internal(task)		\
+	(((task)->t_procflags & TPF_DID_EXEC) != 0)
+
+#define task_is_exec_copy_internal(task)	\
+	(((task)->t_procflags & TPF_EXEC_COPY) != 0)
 
 	mach_vm_address_t	all_image_info_addr; /* dyld __all_image_info     */
 	mach_vm_size_t		all_image_info_size; /* section location and size */
@@ -443,6 +457,12 @@ extern task_t	current_task(void);
 extern void		task_reference(task_t	task);
 
 #define TF_NONE                 0
+#define TF_LRETURNWAIT          0x00000100                              /* task is waiting for fork/posix_spawn/exec to complete */
+#define TF_LRETURNWAITER        0x00000200                              /* task is waiting for TF_LRETURNWAIT to get cleared */
+
+#define TPF_NONE                0
+#define TPF_EXEC_COPY           0x00000002                              /* task is the new copy of an exec */
+
 
 __END_DECLS
 
@@ -528,6 +548,7 @@ extern kern_return_t	task_create_internal(
 							boolean_t	inherit_memory,
 							boolean_t	is_64bit,
 							uint32_t	flags,
+							uint32_t	procflags,
 							task_t		*child_task);	/* OUT */
 
 
@@ -667,7 +688,16 @@ thread_t task_findtid(task_t task, uint64_t tid);
 
 extern kern_return_t task_wakeups_monitor_ctl(task_t task, uint32_t *rate_hz, int32_t *flags);
 extern kern_return_t task_cpu_usage_monitor_ctl(task_t task, uint32_t *flags);
+extern void task_rollup_accounting_info(task_t new_task, task_t parent_task);
 extern kern_return_t task_io_monitor_ctl(task_t task, uint32_t *flags);
+extern void task_set_did_exec_flag(task_t task);
+extern void task_clear_exec_copy_flag(task_t task);
+extern boolean_t task_is_exec_copy(task_t);
+extern boolean_t task_did_exec(task_t task);
+extern boolean_t task_is_active(task_t task);
+extern void task_clear_return_wait(task_t task);
+extern void task_wait_to_return(void);
+extern event_t task_get_return_wait_event(task_t task);
 
 extern void task_atm_reset(task_t task);
 extern void task_bank_reset(task_t task);

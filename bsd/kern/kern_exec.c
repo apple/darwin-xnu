@@ -175,9 +175,17 @@ static void (*dtrace_proc_waitfor_hook)(proc_t) = NULL;
 #endif
 
 /* support for child creation in exec after vfork */
-thread_t fork_create_child(task_t parent_task, coalition_t *parent_coalition, proc_t child_proc, int inherit_memory, int is64bit);
+thread_t fork_create_child(task_t parent_task, coalition_t *parent_coalition, proc_t child_proc, int inherit_memory, int is64bit, int in_exec);
 void vfork_exit(proc_t p, int rv);
 extern void proc_apply_task_networkbg_internal(proc_t, thread_t);
+extern void task_set_did_exec_flag(task_t task);
+extern void task_clear_exec_copy_flag(task_t task);
+proc_t proc_exec_switch_task(proc_t p, task_t old_task, task_t new_task, thread_t new_thread);
+boolean_t task_is_active(task_t);
+boolean_t thread_is_active(thread_t thread);
+void thread_copy_resource_info(thread_t dst_thread, thread_t src_thread);
+void *ipc_importance_exec_switch_task(task_t old_task, task_t new_task);
+extern void ipc_importance_release(void *elem);
 
 /*
  * Mach things for which prototypes are unavailable from Mach headers
@@ -798,12 +806,13 @@ exec_mach_imgact(struct image_params *imgp)
 	thread_t		thread;
 	struct uthread		*uthread;
 	vm_map_t old_map = VM_MAP_NULL;
-	vm_map_t map;
+	vm_map_t map = VM_MAP_NULL;
 	load_return_t		lret;
 	load_result_t		load_result;
 	struct _posix_spawnattr *psa = NULL;
 	int			spawn = (imgp->ip_flags & IMGPF_SPAWN);
 	int			vfexec = (imgp->ip_flags & IMGPF_VFORK_EXEC);
+	int			exec = (imgp->ip_flags & IMGPF_EXEC);
 	os_reason_t		exec_failure_reason = OS_REASON_NULL;
 
 	/*
@@ -896,23 +905,20 @@ grade:
 	 * obtained indirectly from the image_params vfs_context_t, is the
 	 * new child process.
 	 */
-	if (vfexec || spawn) {
-		if (vfexec) {
-			imgp->ip_new_thread = fork_create_child(task, NULL, p, FALSE, (imgp->ip_flags & IMGPF_IS_64BIT));
-			if (imgp->ip_new_thread == NULL) {
-				error = ENOMEM;
-				goto bad;
-			}
+	if (vfexec) {
+		imgp->ip_new_thread = fork_create_child(task, NULL, p, FALSE, (imgp->ip_flags & IMGPF_IS_64BIT), FALSE);
+		/* task and thread ref returned, will be released in __mac_execve */
+		if (imgp->ip_new_thread == NULL) {
+			error = ENOMEM;
+			goto bad;
 		}
-
-		/* reset local idea of thread, uthread, task */
-		thread = imgp->ip_new_thread;
-		uthread = get_bsdthread_info(thread);
-		task = new_task = get_threadtask(thread);
-		map = get_task_map(task);
-	} else {
-		map = VM_MAP_NULL;
 	}
+
+
+	/* reset local idea of thread, uthread, task */
+	thread = imgp->ip_new_thread;
+	uthread = get_bsdthread_info(thread);
+	task = new_task = get_threadtask(thread);
 
 	/*
 	 *	Load the Mach-O file.
@@ -962,7 +968,7 @@ grade:
 	 */
 	if (load_result.csflags & CS_VALID) {
 		imgp->ip_csflags |= load_result.csflags & 
-			(CS_VALID|CS_SIGNED|
+			(CS_VALID|CS_SIGNED|CS_DEV_CODE|
 			 CS_HARD|CS_KILL|CS_RESTRICT|CS_ENFORCEMENT|CS_REQUIRE_LV|
 			 CS_ENTITLEMENTS_VALIDATED|CS_DYLD_PLATFORM|
 			 CS_ENTITLEMENT_FLAGS|
@@ -995,9 +1001,7 @@ grade:
 	 */
 	error = exec_handle_sugid(imgp);
 	if (error) {
-		if (spawn || !vfexec) {
-			vm_map_deallocate(map);
-		}
+		vm_map_deallocate(map);
 
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
 						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_SUGID_FAILURE, 0, 0);
@@ -1012,10 +1016,8 @@ grade:
 	 * each leaves us responsible for the old_map reference.  That lets us get
 	 * off the pmap associated with it, and then we can release it.
 	 */
-	if (!vfexec) {
-		old_map = swap_task_map(task, thread, map, !spawn);
-		vm_map_deallocate(old_map);
-	}
+	old_map = swap_task_map(task, thread, map, !spawn);
+	vm_map_deallocate(old_map);
 
 	lret = activate_exec_state(task, p, thread, &load_result);
 	if (lret != KERN_SUCCESS) {
@@ -1057,9 +1059,7 @@ grade:
 		goto badtoolate;
 	}
 
-	if (vfexec || spawn) {
-		old_map = vm_map_switch(get_task_map(task));
-	}
+	old_map = vm_map_switch(get_task_map(task));
 
 	if (load_result.unixproc) {
 		user_addr_t	ap;
@@ -1071,8 +1071,7 @@ grade:
 		ap = p->user_stack;
 		error = exec_copyout_strings(imgp, &ap);
 		if (error) {
-			if (vfexec || spawn)
-				vm_map_switch(old_map);
+			vm_map_switch(old_map);
 
 			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
 						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_COPYOUT_STRINGS, 0, 0);
@@ -1092,8 +1091,7 @@ grade:
 		error = copyoutptr(load_result.mach_header, ap, new_ptr_size);
 
 		if (error) {
-			if (vfexec || spawn)
-				vm_map_switch(old_map);
+			vm_map_switch(old_map);
 
 			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
 						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_COPYOUT_DYNLINKER, 0, 0);
@@ -1107,9 +1105,7 @@ grade:
 	/* Avoid immediate VM faults back into kernel */
 	exec_prefault_data(p, imgp, &load_result);
 
-	if (vfexec || spawn) {
-		vm_map_switch(old_map);
-	}
+	vm_map_switch(old_map);
 
 	/* Stop profiling */
 	stopprofclock(p);
@@ -1155,25 +1151,25 @@ grade:
 		    strncmp(p->p_name,
 			    "testCamera",
 			    sizeof (p->p_name)) == 0) {
-			task_set_could_use_secluded_mem(p->task, TRUE);
+			task_set_could_use_secluded_mem(task, TRUE);
 		} else {
-			task_set_could_use_secluded_mem(p->task, FALSE);
+			task_set_could_use_secluded_mem(task, FALSE);
 		}
 		if (strncmp(p->p_name,
 			    "mediaserverd",
 			    sizeof (p->p_name)) == 0) {
-			task_set_could_also_use_secluded_mem(p->task, TRUE);
+			task_set_could_also_use_secluded_mem(task, TRUE);
 		}
 	}
 #endif /* CONFIG_SECLUDED_MEMORY */
 
-	pal_dbg_set_task_name( p->task );
+	pal_dbg_set_task_name( task );
 
 #if DEVELOPMENT || DEBUG
 	/* 
 	 * Update the pid an proc name for importance base if any
 	 */
-	task_importance_update_owner_info(p->task);
+	task_importance_update_owner_info(task);
 #endif
 
 	memcpy(&p->p_uuid[0], &load_result.uuid[0], sizeof(p->p_uuid));
@@ -1190,17 +1186,10 @@ grade:
 		 */
 		kdbg_trace_string(p, &dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
 
-		if (vfexec || spawn) {
-			KERNEL_DEBUG_CONSTANT1(TRACE_DATA_EXEC | DBG_FUNC_NONE,
-					p->p_pid ,0,0,0, (uintptr_t)thread_tid(thread));
-			KERNEL_DEBUG_CONSTANT1(TRACE_STRING_EXEC | DBG_FUNC_NONE,
-					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, (uintptr_t)thread_tid(thread));
-		} else {
-			KERNEL_DEBUG_CONSTANT(TRACE_DATA_EXEC | DBG_FUNC_NONE,
-					p->p_pid ,0,0,0,0);
-			KERNEL_DEBUG_CONSTANT(TRACE_STRING_EXEC | DBG_FUNC_NONE,
-					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
-		}
+		KERNEL_DEBUG_CONSTANT1(TRACE_DATA_EXEC | DBG_FUNC_NONE,
+				p->p_pid ,0,0,0, (uintptr_t)thread_tid(thread));
+		KERNEL_DEBUG_CONSTANT1(TRACE_STRING_EXEC | DBG_FUNC_NONE,
+				dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, (uintptr_t)thread_tid(thread));
 	}
 
 	/*
@@ -1213,7 +1202,7 @@ grade:
 			proc_lock(p);
 			p->p_stat = SSTOP;
 			proc_unlock(p);
-			(void) task_suspend_internal(p->task);
+			(void) task_suspend_internal(task);
 		}
 	}
 
@@ -1251,6 +1240,11 @@ badtoolate:
 			assert(exec_failure_reason != OS_REASON_NULL);
 			psignal_with_reason(p, SIGKILL, exec_failure_reason);
 			exec_failure_reason = OS_REASON_NULL;
+
+			if (exec) {
+				/* Terminate the exec copy task */
+				task_terminate_internal(task);
+			}
 		}
 
 		/* We can't stop this system call at this point, so just pretend we succeeded */
@@ -1265,12 +1259,6 @@ done:
 		/* notify only if it has not failed due to FP Key error */
 		if ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)
 			proc_knote(p, NOTE_EXEC);
-	}
-
-	/* Drop extra references for cases where we don't expect the caller to clean up */
-	if (vfexec || (spawn && error == 0)) {
-		task_deallocate(new_task);
-		thread_deallocate(thread);
 	}
 
 	if (load_result.threadstate) {
@@ -1479,18 +1467,6 @@ encapsulated_binary:
 					KAUTH_FILEOP_EXEC,
 					(uintptr_t)ndp->ni_vp, 0);
 	}
-
-	if (error == 0) {
-		/*
-		 * Reset atm context from task
-		 */
-		task_atm_reset(p->task);
-
-		/*
-		 * Reset old bank context from task
-		 */
-		task_bank_reset(p->task);
-	}
 bad:
 	proc_transend(p, 0);
 
@@ -1604,9 +1580,11 @@ exec_handle_port_actions(struct image_params *imgp, boolean_t * portwatch_presen
                          ipc_port_t * portwatch_ports)
 {
 	_posix_spawn_port_actions_t pacts = imgp->ip_px_spa;
+#if CONFIG_AUDIT
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
+#endif
 	_ps_port_action_t *act = NULL;
-	task_t task = p->task;
+	task_t task = get_threadtask(imgp->ip_new_thread);
 	ipc_port_t port = NULL;
 	errno_t ret = 0;
 	int i;
@@ -1647,7 +1625,7 @@ exec_handle_port_actions(struct image_params *imgp, boolean_t * portwatch_presen
 			break;
 #if CONFIG_AUDIT
 		case PSPA_AU_SESSION:
-			ret = audit_session_spawnjoin(p, port);
+			ret = audit_session_spawnjoin(p, task, port);
 			break;
 #endif
 		case PSPA_IMP_WATCHPORTS:
@@ -2122,50 +2100,6 @@ out:
 }
 #endif
 
-void
-proc_set_return_wait(proc_t p)
-{
-	proc_lock(p);
-	p->p_lflag |= P_LRETURNWAIT;
-	proc_unlock(p);
-}
-
-void
-proc_clear_return_wait(proc_t p, thread_t child_thread)
-{
-	proc_lock(p);
-
-	p->p_lflag &= ~P_LRETURNWAIT;
-	if (p->p_lflag & P_LRETURNWAITER) {
-		wakeup(&p->p_lflag);
-	}
-
-	proc_unlock(p);
-
-	(void)thread_resume(child_thread);
-}
-
-void
-proc_wait_to_return()
-{
-	proc_t	p;
-
-	p = current_proc();
-	proc_lock(p);
-
-	if (p->p_lflag & P_LRETURNWAIT) {
-		p->p_lflag |= P_LRETURNWAITER;
-		do {
-			msleep(&p->p_lflag, &p->p_mlock, 0,
-				"thread_check_setup_complete", NULL);
-		} while (p->p_lflag & P_LRETURNWAIT);
-		p->p_lflag &= ~P_LRETURNWAITER;
-	}
-
-	proc_unlock(p);
-	thread_bootstrap_return();
-}
-
 /*
  * posix_spawn
  *
@@ -2218,7 +2152,10 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	boolean_t exec_done = FALSE;
 	int portwatch_count = 0;
 	ipc_port_t * portwatch_ports = NULL;
-	vm_size_t px_sa_offset = offsetof(struct _posix_spawnattr, psa_ports); 
+	vm_size_t px_sa_offset = offsetof(struct _posix_spawnattr, psa_ports);
+	task_t new_task = NULL;
+	boolean_t should_release_proc_ref = FALSE;
+	void *inherit = NULL;
 #if CONFIG_PERSONAS
 	struct _posix_spawn_persona_info *px_persona = NULL;
 #endif
@@ -2485,7 +2422,11 @@ do_fork1:
 		 * caller's persona (if it exists)
 		 */
 		error = fork1(p, &imgp->ip_new_thread, PROC_CREATE_SPAWN, coal);
+		/* returns a thread and task reference */
 
+		if (error == 0) {
+			new_task = get_threadtask(imgp->ip_new_thread);
+		}
 #if CONFIG_COALITIONS
 		/* set the roles of this task within each given coalition */
 		if (error == 0) {
@@ -2527,6 +2468,42 @@ do_fork1:
 		}
 #endif /* 0 */
 #endif /* CONFIG_PERSONAS */
+	} else {
+		/*
+		 * For execve case, create a new task and thread
+		 * which points to current_proc. The current_proc will point
+		 * to the new task after image activation and proc ref drain.
+		 *
+		 * proc (current_proc) <-----  old_task (current_task)
+		 *  ^ |                                ^
+		 *  | |                                |
+		 *  | ----------------------------------
+		 *  |
+		 *  --------- new_task (task marked as TF_EXEC_COPY)
+		 *
+		 * After image activation, the proc will point to the new task
+		 * and would look like following.
+		 *
+		 * proc (current_proc)  <-----  old_task (current_task, marked as TPF_DID_EXEC)
+		 *  ^ |
+		 *  | |
+		 *  | ----------> new_task
+		 *  |               |
+		 *  -----------------
+		 *
+		 * During exec any transition from new_task -> proc is fine, but don't allow
+		 * transition from proc->task, since it will modify old_task.
+		 */
+		imgp->ip_new_thread = fork_create_child(current_task(),
+					NULL, p, FALSE, p->p_flag & P_LP64, TRUE);
+		/* task and thread ref returned by fork_create_child */
+		if (imgp->ip_new_thread == NULL) {
+			error = ENOMEM;
+			goto bad;
+		}
+
+		new_task = get_threadtask(imgp->ip_new_thread);
+		imgp->ip_flags |= IMGPF_EXEC;
 	}
 
 	if (spawn_no_exec) {
@@ -2541,16 +2518,8 @@ do_fork1:
 	}
 	assert(p != NULL);
 
-	/* By default, the thread everyone plays with is the parent */
-	context.vc_thread = current_thread();
+	context.vc_thread = imgp->ip_new_thread;
 	context.vc_ucred = p->p_ucred;	/* XXX must NOT be kauth_cred_get() */
-
-	/*
-	 * However, if we're not in the setexec case, redirect the context
-	 * to the newly created process instead
-	 */
-	if (spawn_no_exec)
-		context.vc_thread = imgp->ip_new_thread;
 
 	/*
 	 * Post fdcopy(), pre exec_handle_sugid() - this is where we want
@@ -2729,6 +2698,12 @@ do_fork1:
 	 */
 	error = exec_activate_image(imgp);
 	
+	if (error == 0 && !spawn_no_exec) {
+		p = proc_exec_switch_task(p, current_task(), new_task, imgp->ip_new_thread);
+		/* proc ref returned */
+		should_release_proc_ref = TRUE;
+	}
+
 	if (error == 0) {
 		/* process completed the exec */
 		exec_done = TRUE;
@@ -2747,18 +2722,8 @@ do_fork1:
 	 * until after the image is activated.
 	 */
 	if (!error && imgp->ip_px_sa != NULL) {
-		thread_t child_thread = current_thread();
-		uthread_t child_uthread = uthread;
-
-		/*
-		 * If we created a new child thread, then the thread and
-		 * uthread are different than the current ones; otherwise,
-		 * we leave them, since we are in the exec case instead.
-		 */
-		if (spawn_no_exec) {
-			child_thread = imgp->ip_new_thread;
-			child_uthread = get_bsdthread_info(child_thread);
-		}
+		thread_t child_thread = imgp->ip_new_thread;
+		uthread_t child_uthread = get_bsdthread_info(child_thread);
 
 		/*
 		 * Mask a list of signals, instead of them being unmasked, if
@@ -2892,9 +2857,6 @@ bad:
 		/* notify only if it has not failed due to FP Key error */
 		if ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)
 			proc_knote(p, NOTE_EXEC);
-	} else if (error == 0) {
-		/* reset the importance attribute from our previous life */
-		task_importance_reset(p->task);
 	}
 
 	if (error == 0) {
@@ -2907,7 +2869,7 @@ bad:
 		error = proc_transstart(p, 0, 0);
 
 		if (error == 0) {
-			task_bank_init(p->task);
+			task_bank_init(get_threadtask(imgp->ip_new_thread));
 			proc_transend(p, 0);
 		}
 	}
@@ -2929,11 +2891,22 @@ bad:
 		                              portwatch_ports, portwatch_count);
 	}
 
+	/*
+	 * Need to transfer pending watch port boosts to the new task while still making
+	 * sure that the old task remains in the importance linkage. Create an importance
+	 * linkage from old task to new task, then switch the task importance base
+	 * of old task and new task. After the switch the port watch boost will be
+	 * boosting the new task and new task will be donating importance to old task.
+	 */
+	if (error == 0 && task_did_exec(current_task())) {
+		inherit = ipc_importance_exec_switch_task(current_task(), get_threadtask(imgp->ip_new_thread));
+	}
+
 	/* Apply the main thread qos */
 	if (error == 0) {
-		thread_t main_thread = (imgp->ip_new_thread != NULL) ? imgp->ip_new_thread : current_thread();
+		thread_t main_thread = imgp->ip_new_thread;
 
-		task_set_main_thread_qos(p->task, main_thread);
+		task_set_main_thread_qos(get_threadtask(imgp->ip_new_thread), main_thread);
 	}
 
 	/*
@@ -3042,9 +3015,23 @@ bad:
 		}
 	}
 
-	if ((dtrace_proc_waitfor_hook = dtrace_proc_waitfor_exec_ptr) != NULL)
+	if ((dtrace_proc_waitfor_hook = dtrace_proc_waitfor_exec_ptr) != NULL) {
 		(*dtrace_proc_waitfor_hook)(p);
+	}
 #endif
+	/*
+	 * exec-success dtrace probe fired, clear bsd_info from
+	 * old task if it did exec.
+	 */
+	if (task_did_exec(current_task())) {
+		set_bsdtask_info(current_task(), NULL);
+	}
+
+	/* clear bsd_info from new task and terminate it if exec failed  */
+	if (new_task != NULL && task_is_exec_copy(new_task)) {
+		set_bsdtask_info(new_task, NULL);
+		task_terminate_internal(new_task);
+	}
 
 	/* Return to both the parent and the child? */
 	if (imgp != NULL && spawn_no_exec) {
@@ -3069,37 +3056,165 @@ bad:
 				p->exit_thread = current_thread();
 				proc_unlock(p);
 				exit1(p, 1, (int *)NULL);
-				proc_clear_return_wait(p, imgp->ip_new_thread);
-				if (exec_done == FALSE) {
-					task_deallocate(get_threadtask(imgp->ip_new_thread));
-					thread_deallocate(imgp->ip_new_thread);
-				}
 			} else {
 				/* someone is doing it for us; just skip it */
 				proc_unlock(p);
-				proc_clear_return_wait(p, imgp->ip_new_thread);
 			}
-		} else {
-
-			/*
-			 * Return to the child
-			 *
-			 * Note: the image activator earlier dropped the
-			 * task/thread references to the newly spawned
-			 * process; this is OK, since we still have suspended
-			 * queue references on them, so we should be fine
-			 * with the delayed resume of the thread here.
-			 */
-			proc_clear_return_wait(p, imgp->ip_new_thread);
 		}
 	}
+
+	/*
+	 * Do not terminate the current task, if proc_exec_switch_task did not
+	 * switch the tasks, terminating the current task without the switch would
+	 * result in loosing the SIGKILL status.
+	 */
+	if (task_did_exec(current_task())) {
+		/* Terminate the current task, since exec will start in new task */
+		task_terminate_internal(current_task());
+	}
+
+	/* Release the thread ref returned by fork_create_child/fork1 */
+	if (imgp != NULL && imgp->ip_new_thread) {
+		/* wake up the new thread */
+		task_clear_return_wait(get_threadtask(imgp->ip_new_thread));
+		thread_deallocate(imgp->ip_new_thread);
+		imgp->ip_new_thread = NULL;
+	}
+
+	/* Release the ref returned by fork_create_child/fork1 */
+	if (new_task) {
+		task_deallocate(new_task);
+		new_task = NULL;
+	}
+
+	if (should_release_proc_ref) {
+		proc_rele(p);
+	}
+
 	if (bufp != NULL) {
 		FREE(bufp, M_TEMP);
+	}
+
+	if (inherit != NULL) {
+		ipc_importance_release(inherit);
 	}
 	
 	return(error);
 }
 
+/*
+ * proc_exec_switch_task
+ *
+ * Parameters:  p			proc
+ *		old_task		task before exec
+ *		new_task		task after exec
+ *		new_thread		thread in new task
+ *
+ * Returns: proc.
+ *
+ * Note: The function will switch the task pointer of proc
+ * from old task to new task. The switch needs to happen
+ * after draining all proc refs and inside a proc translock.
+ * In the case of failure to switch the task, which might happen
+ * if the process received a SIGKILL or jetsam killed it, it will make
+ * sure that the new tasks terminates. User proc ref returned
+ * to caller.
+ *
+ * This function is called after point of no return, in the case
+ * failure to switch, it will terminate the new task and swallow the
+ * error and let the terminated process complete exec and die.
+ */
+proc_t
+proc_exec_switch_task(proc_t p, task_t old_task, task_t new_task, thread_t new_thread)
+{
+	int error = 0;
+	boolean_t task_active;
+	boolean_t proc_active;
+	boolean_t thread_active;
+	thread_t old_thread = current_thread();
+
+	/*
+	 * Switch the task pointer of proc to new task.
+	 * Before switching the task, wait for proc_refdrain.
+	 * After the switch happens, the proc can disappear,
+	 * take a ref before it disappears.
+	 */
+	p = proc_refdrain_with_refwait(p, TRUE);
+	/* extra proc ref returned to the caller */
+
+	assert(get_threadtask(new_thread) == new_task);
+	task_active = task_is_active(new_task);
+
+	/* Take the proc_translock to change the task ptr */
+	proc_lock(p);
+	proc_active = !(p->p_lflag & P_LEXIT);
+
+	/* Check if the current thread is not aborted due to SIGKILL */
+	thread_active = thread_is_active(old_thread);
+
+	/*
+	 * Do not switch the task if the new task or proc is already terminated
+	 * as a result of error in exec past point of no return
+	 */
+	if (proc_active && task_active && thread_active) {
+		error = proc_transstart(p, 1, 0);
+		if (error == 0) {
+			uthread_t new_uthread = get_bsdthread_info(new_thread);
+			uthread_t old_uthread = get_bsdthread_info(current_thread());
+
+			/*
+			 * bsd_info of old_task will get cleared in execve and posix_spawn
+			 * after firing exec-success/error dtrace probe.
+			 */
+			p->task = new_task;
+
+			/* Copy the signal state, dtrace state and set bsd ast on new thread */
+			act_set_astbsd(new_thread);
+			new_uthread->uu_siglist = old_uthread->uu_siglist;
+			new_uthread->uu_sigwait = old_uthread->uu_sigwait;
+			new_uthread->uu_sigmask = old_uthread->uu_sigmask;
+			new_uthread->uu_oldmask = old_uthread->uu_oldmask;
+			new_uthread->uu_vforkmask = old_uthread->uu_vforkmask;
+			new_uthread->uu_exit_reason = old_uthread->uu_exit_reason;
+#if CONFIG_DTRACE
+			new_uthread->t_dtrace_sig = old_uthread->t_dtrace_sig;
+			new_uthread->t_dtrace_stop = old_uthread->t_dtrace_stop;
+			new_uthread->t_dtrace_resumepid = old_uthread->t_dtrace_resumepid;
+			assert(new_uthread->t_dtrace_scratch == NULL);
+			new_uthread->t_dtrace_scratch = old_uthread->t_dtrace_scratch;
+
+			old_uthread->t_dtrace_sig = 0;
+			old_uthread->t_dtrace_stop = 0;
+			old_uthread->t_dtrace_resumepid = 0;
+			old_uthread->t_dtrace_scratch = NULL;
+#endif
+			/* Copy the resource accounting info */
+			thread_copy_resource_info(new_thread, current_thread());
+
+			/* Clear the exit reason and signal state on old thread */
+			old_uthread->uu_exit_reason = NULL;
+			old_uthread->uu_siglist = 0;
+
+			/* Add the new uthread to proc uthlist and remove the old one */
+			TAILQ_INSERT_TAIL(&p->p_uthlist, new_uthread, uu_list);
+			TAILQ_REMOVE(&p->p_uthlist, old_uthread, uu_list);
+
+			task_set_did_exec_flag(old_task);
+			task_clear_exec_copy_flag(new_task);
+
+			proc_transend(p, 1);
+		}
+	}
+
+	proc_unlock(p);
+	proc_refwake(p);
+
+	if (error != 0 || !task_active || !proc_active || !thread_active) {
+		task_terminate_internal(new_task);
+	}
+
+	return p;
+}
 
 /*
  * execve
@@ -3177,6 +3292,11 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	int is_64 = IS_64BIT_PROCESS(p);
 	struct vfs_context context;
 	struct uthread	*uthread;
+	task_t new_task = NULL;
+	boolean_t should_release_proc_ref = FALSE;
+	boolean_t exec_done = FALSE;
+	boolean_t in_vfexec = FALSE;
+	void *inherit = NULL;
 
 	context.vc_thread = current_thread();
 	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX must NOT be kauth_cred_get() */
@@ -3208,6 +3328,45 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	uthread = get_bsdthread_info(current_thread());
 	if (uthread->uu_flag & UT_VFORK) {
 		imgp->ip_flags |= IMGPF_VFORK_EXEC;
+		in_vfexec = TRUE;
+	} else {
+		imgp->ip_flags |= IMGPF_EXEC;
+
+		/*
+		 * For execve case, create a new task and thread
+		 * which points to current_proc. The current_proc will point
+		 * to the new task after image activation and proc ref drain.
+		 *
+		 * proc (current_proc) <-----  old_task (current_task)
+		 *  ^ |                                ^
+		 *  | |                                |
+		 *  | ----------------------------------
+		 *  |
+		 *  --------- new_task (task marked as TF_EXEC_COPY)
+		 *
+		 * After image activation, the proc will point to the new task
+		 * and would look like following.
+		 *
+		 * proc (current_proc)  <-----  old_task (current_task, marked as TPF_DID_EXEC)
+		 *  ^ |
+		 *  | |
+		 *  | ----------> new_task
+		 *  |               |
+		 *  -----------------
+		 *
+		 * During exec any transition from new_task -> proc is fine, but don't allow
+		 * transition from proc->task, since it will modify old_task.
+		 */
+		imgp->ip_new_thread = fork_create_child(current_task(),
+					NULL, p, FALSE, p->p_flag & P_LP64, TRUE);
+		/* task and thread ref returned by fork_create_child */
+		if (imgp->ip_new_thread == NULL) {
+			error = ENOMEM;
+			goto exit_with_error;
+		}
+
+		new_task = get_threadtask(imgp->ip_new_thread);
+		context.vc_thread = imgp->ip_new_thread;
 	}
 
 #if CONFIG_MACF
@@ -3221,6 +3380,21 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 #endif
 
 	error = exec_activate_image(imgp);
+	/* thread and task ref returned for vfexec case */
+
+	if (imgp->ip_new_thread != NULL) {
+		/*
+		 * task reference might be returned by exec_activate_image
+		 * for vfexec.
+		 */
+		new_task = get_threadtask(imgp->ip_new_thread);
+	}
+
+	if (!error && !in_vfexec) {
+		p = proc_exec_switch_task(p, current_task(), new_task, imgp->ip_new_thread);
+		/* proc ref returned */
+		should_release_proc_ref = TRUE;
+	}
 
 	kauth_cred_unref(&context.vc_ucred);
 	
@@ -3228,7 +3402,10 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	if (error == -1)
 		error = ENOEXEC;
 
-	if (error == 0) {
+	if (!error) {
+		exec_done = TRUE;
+		assert(imgp->ip_new_thread != NULL);
+
 		exec_resettextvp(p, imgp);
 		error = check_for_signature(p, imgp);
 	}	
@@ -3257,23 +3434,18 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		 * aren't loaded until subsequent calls (including exec_resettextvp).
 		 */
 		error = proc_transstart(p, 0, 0);
-
-		if (!error) {
-			task_bank_init(p->task);
-			proc_transend(p, 0);
-		}
 	}
 
 	if (!error) {
+		task_bank_init(get_threadtask(imgp->ip_new_thread));
+		proc_transend(p, 0);
+
 		/* Sever any extant thread affinity */
 		thread_affinity_exec(current_thread());
 
-		thread_t main_thread = (imgp->ip_new_thread != NULL) ? imgp->ip_new_thread : current_thread();
+		thread_t main_thread = imgp->ip_new_thread;
 
-		task_set_main_thread_qos(p->task, main_thread);
-
-		/* reset task importance */
-		task_importance_reset(p->task);
+		task_set_main_thread_qos(new_task, main_thread);
 
 		DTRACE_PROC(exec__success);
 
@@ -3282,17 +3454,76 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 			(*dtrace_proc_waitfor_hook)(p);
 #endif
 
-		if (imgp->ip_flags & IMGPF_VFORK_EXEC) {
+		if (in_vfexec) {
 			vfork_return(p, retval, p->p_pid);
-			proc_clear_return_wait(p, imgp->ip_new_thread);
 		}
 	} else {
 		DTRACE_PROC1(exec__failure, int, error);
 	}
 
 exit_with_error:
+
+	/*
+	 * exec-success dtrace probe fired, clear bsd_info from
+	 * old task if it did exec.
+	 */
+	if (task_did_exec(current_task())) {
+		set_bsdtask_info(current_task(), NULL);
+	}
+
+	/* clear bsd_info from new task and terminate it if exec failed  */
+	if (new_task != NULL && task_is_exec_copy(new_task)) {
+		set_bsdtask_info(new_task, NULL);
+		task_terminate_internal(new_task);
+	}
+
+	/*
+	 * Need to transfer pending watch port boosts to the new task while still making
+	 * sure that the old task remains in the importance linkage. Create an importance
+	 * linkage from old task to new task, then switch the task importance base
+	 * of old task and new task. After the switch the port watch boost will be
+	 * boosting the new task and new task will be donating importance to old task.
+	 */
+	if (error == 0 && task_did_exec(current_task())) {
+		inherit = ipc_importance_exec_switch_task(current_task(), get_threadtask(imgp->ip_new_thread));
+	}
+
+	if (imgp != NULL) {
+		/*
+		 * Do not terminate the current task, if proc_exec_switch_task did not
+		 * switch the tasks, terminating the current task without the switch would
+		 * result in loosing the SIGKILL status.
+		 */
+		if (task_did_exec(current_task())) {
+			/* Terminate the current task, since exec will start in new task */
+			task_terminate_internal(current_task());
+		}
+
+		/* Release the thread ref returned by fork_create_child */
+		if (imgp->ip_new_thread) {
+			/* wake up the new exec thread */
+			task_clear_return_wait(get_threadtask(imgp->ip_new_thread));
+			thread_deallocate(imgp->ip_new_thread);
+			imgp->ip_new_thread = NULL;
+		}
+	}
+
+	/* Release the ref returned by fork_create_child */
+	if (new_task) {
+		task_deallocate(new_task);
+		new_task = NULL;
+	}
+
+	if (should_release_proc_ref) {
+		proc_rele(p);
+	}
+
 	if (bufp != NULL) {
 		FREE(bufp, M_TEMP);
+	}
+
+	if (inherit != NULL) {
+		ipc_importance_release(inherit);
 	}
 	
 	return(error);
@@ -4126,6 +4357,7 @@ exec_handle_sugid(struct image_params *imgp)
 	int			leave_sugid_clear = 0;
 	int			mac_reset_ipc = 0;
 	int			error = 0;
+	task_t			task = NULL;
 #if CONFIG_MACF
 	int			mac_transition, disjoint_cred = 0;
 	int 		label_update_return = 0;
@@ -4319,7 +4551,8 @@ handle_mac_transition:
 			 * a setuid exec to be able to access/control the
 			 * task/thread after.
 			 */
-			ipc_task_reset(p->task);
+			ipc_task_reset((imgp->ip_new_thread != NULL) ?
+					get_threadtask(imgp->ip_new_thread) : p->task);
 			ipc_thread_reset((imgp->ip_new_thread != NULL) ?
 				 	 imgp->ip_new_thread : current_thread());
 		}
@@ -4457,7 +4690,13 @@ handle_mac_transition:
 
 	/* Update the process' identity version and set the security token */
 	p->p_idversion++;
-	set_security_token(p);
+
+	if (imgp->ip_new_thread != NULL) {
+		task = get_threadtask(imgp->ip_new_thread);
+	} else {
+		task = p->task;
+	}
+	set_security_token_task_internal(p, task);
 
 	return(error);
 }

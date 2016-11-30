@@ -112,9 +112,11 @@ _csblob_get_size
 _csfg_get_cdhash
 _csfg_get_path
 _csfg_get_platform_binary
+_csfg_get_prod_signed
 _csfg_get_teamid
 _csproc_get_blob
 _csproc_get_platform_binary
+_csproc_get_prod_signed
 _csproc_get_teamid
 _csvnode_get_blob
 _csvnode_get_teamid

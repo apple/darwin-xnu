@@ -1140,7 +1140,7 @@ bsd_utaskbootstrap(void)
 	ut = (struct uthread *)get_bsdthread_info(thread);
 	ut->uu_sigmask = 0;
 	act_set_astbsd(thread);
-	proc_clear_return_wait(initproc, thread);
+	task_clear_return_wait(get_threadtask(thread));
 }
 
 static void

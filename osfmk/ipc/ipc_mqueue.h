@@ -73,7 +73,6 @@
 #include <kern/assert.h>
 #include <kern/macro_help.h>
 #include <kern/kern_types.h>
-#include <kern/spl.h>
 #include <kern/waitq.h>
 
 #include <ipc/ipc_kmsg.h>

@@ -1075,6 +1075,7 @@ bool IOPMrootDomain::start( IOService * nub )
 
     userDisabledAllSleep = false;
     systemBooting = true;
+    idleSleepEnabled = false;
     sleepSlider = 0;
     idleSleepTimerPending = false;
     wrangler = NULL;
@@ -2065,7 +2066,7 @@ uint32_t IOPMrootDomain::getTimeToIdleSleep( void )
     uint32_t        minutesSinceUserInactive = 0;
     uint32_t         sleepDelay = 0;
 
-    if (sleepSlider == 0)
+    if (!idleSleepEnabled)
         return 0xffffffff;
 
     if (userActivityTime)
@@ -2777,7 +2778,7 @@ void IOPMrootDomain::systemDidNotSleep( void )
 
     if (!wrangler)
     {
-        if (idleSeconds)
+        if (idleSleepEnabled)
         {
             // stay awake for at least idleSeconds
             startIdleSleepTimer(idleSeconds);
@@ -2785,7 +2786,7 @@ void IOPMrootDomain::systemDidNotSleep( void )
     }
     else
     {
-        if (sleepSlider && !userIsActive)
+        if (idleSleepEnabled && !userIsActive)
         {
             // Manually start the idle sleep timer besides waiting for
             // the user to become inactive.
@@ -4342,7 +4343,6 @@ void IOPMrootDomain::evaluateSystemSleepPolicyFinal( void )
             bcopy(&gEarlySystemSleepParams, &params, sizeof(params));
             params.sleepType = kIOPMSleepTypeAbortedSleep;
             params.ecWakeTimer = 1;
-            gIOHibernateMode = 0;
             if (standbyNixed)
             {
                 resetTimers = true;
@@ -5260,6 +5260,12 @@ void IOPMrootDomain::handleOurPowerChangeDone(
         if (lowBatteryCondition) {
             privateSleepSystem (kIOPMSleepReasonLowPower);
         }
+        else if ((fullWakeReason == kFullWakeReasonDisplayOn) && (!displayPowerOnRequested)) {
+            // Request for full wake is removed while system is waking up to full wake
+            DLOG("DisplayOn fullwake request is removed\n");
+            handleDisplayPowerOn();
+        }
+
     }
 }
 
@@ -5488,6 +5494,13 @@ void IOPMrootDomain::handleUpdatePowerClientForDisplayWrangler(
         {
             evaluatePolicy( kStimulusLeaveUserActiveState );
         }
+    }
+
+    if (newPowerState <= kWranglerPowerStateSleep) {
+        evaluatePolicy( kStimulusDisplayWranglerSleep );
+    }
+    else if (newPowerState == kWranglerPowerStateMax) {
+        evaluatePolicy( kStimulusDisplayWranglerWake );
     }
 #endif
 }
@@ -6231,12 +6244,12 @@ bool IOPMrootDomain::checkSystemCanSustainFullWake( void )
 
 void IOPMrootDomain::adjustPowerState( bool sleepASAP )
 {
-    DLOG("adjustPowerState ps %u, asap %d, slider %ld\n",
-        (uint32_t) getPowerState(), sleepASAP, sleepSlider);
+    DLOG("adjustPowerState ps %u, asap %d, idleSleepEnabled %d\n",
+        (uint32_t) getPowerState(), sleepASAP, idleSleepEnabled);
 
     ASSERT_GATED();
 
-    if ((sleepSlider == 0) || !checkSystemSleepEnabled())
+    if ((!idleSleepEnabled) || !checkSystemSleepEnabled())
     {
         changePowerStateToPriv(ON_STATE);
     }
@@ -6807,7 +6820,6 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
             if (!wranglerAsleep)
             {
                 // first transition to wrangler sleep or lower
-                wranglerAsleep = true;
                 flags.bit.displaySleep = true;
             }
             break;
@@ -6869,8 +6881,6 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
             DLOG("idle time -> %ld secs (ena %d)\n",
                 idleSeconds, (minutesToIdleSleep != 0));
 
-            if (0x7fffffff == minutesToIdleSleep)
-                minutesToIdleSleep = idleSeconds;
 
             // How long to wait before sleeping the system once
             // the displays turns off is indicated by 'extraSleepDelay'.
@@ -6880,11 +6890,15 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
             else if ( minutesToIdleSleep == minutesToDisplayDim )
                 minutesDelta = 1;
 
-            if ((sleepSlider == 0) && (minutesToIdleSleep != 0))
-                flags.bit.idleSleepEnabled = true;
+            if ((!idleSleepEnabled) && (minutesToIdleSleep != 0))
+                idleSleepEnabled = flags.bit.idleSleepEnabled = true;
 
-            if ((sleepSlider != 0) && (minutesToIdleSleep == 0))
+            if ((idleSleepEnabled) && (minutesToIdleSleep == 0)) {
                 flags.bit.idleSleepDisabled = true;
+                idleSleepEnabled = false;
+            }
+            if (0x7fffffff == minutesToIdleSleep)
+                minutesToIdleSleep = idleSeconds;
 
             if (((minutesDelta != extraSleepDelay) ||
                         (userActivityTime != userActivityTime_prev)) &&
@@ -7064,7 +7078,7 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
             DLOG("user inactive\n");
         }
 
-        if (!userIsActive && sleepSlider)
+        if (!userIsActive && idleSleepEnabled)
         {
             startIdleSleepTimer(getTimeToIdleSleep());
         }
@@ -7079,10 +7093,7 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
         if (!wrangler)
         {
             changePowerStateToPriv(ON_STATE);
-            if (idleSeconds)
-            {
-                startIdleSleepTimer( idleSeconds );
-            }
+            startIdleSleepTimer( idleSeconds );
         }
         else
         {
@@ -7114,7 +7125,7 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
             if (!wrangler)
             {
                 changePowerStateToPriv(ON_STATE);
-                if (idleSeconds)
+                if (idleSleepEnabled)
                 {
                     // stay awake for at least idleSeconds
                     startIdleSleepTimer(idleSeconds);

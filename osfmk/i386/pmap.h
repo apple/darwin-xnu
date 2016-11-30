@@ -751,7 +751,9 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 
 #if   defined(__x86_64__)
 #define PMAP_DEACTIVATE_MAP(map, thread, ccpu)				\
+/*
 	pmap_assert2((pmap_pcid_ncpus ? (pcid_for_pmap_cpu_tuple(map->pmap, thread, ccpu) == (get_cr3_raw() & 0xFFF)) : TRUE),"PCIDs: 0x%x, active PCID: 0x%x, CR3: 0x%lx, pmap_cr3: 0x%llx, kernel_cr3: 0x%llx, kernel pmap cr3: 0x%llx, CPU active PCID: 0x%x, CPU kernel PCID: 0x%x, specflags: 0x%x, pagezero: 0x%x", pmap_pcid_ncpus, pcid_for_pmap_cpu_tuple(map->pmap, thread, ccpu), get_cr3_raw(), map->pmap->pm_cr3, cpu_datap(ccpu)->cpu_kernel_cr3, kernel_pmap->pm_cr3, cpu_datap(ccpu)->cpu_active_pcid, cpu_datap(ccpu)->cpu_kernel_pcid, thread->machine.specFlags, map->pmap->pagezero_accessible);
+*/
 #else
 #define PMAP_DEACTIVATE_MAP(map, thread)
 #endif

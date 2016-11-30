@@ -133,6 +133,8 @@ static boolean_t inpcb_ticking = FALSE;		/* "slow" timer is scheduled */
 static boolean_t inpcb_fast_timer_on = FALSE;
 static boolean_t intcoproc_unrestricted = FALSE;
 
+extern char *proc_best_name(proc_t);
+
 /*
  * If the total number of gc reqs is above a threshold, schedule
  * garbage collect timer sooner
@@ -1303,7 +1305,7 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
 		if (ia == NULL)
 			ia = ifatoia(ifa_ifwithnet_scoped(SA(&sin), ifscope));
 		error = ((ia == NULL) ? ENETUNREACH : 0);
-		
+
 		if (apn_fallback_required(proc, inp->inp_socket,
 		    (void *)nam))
 			apn_fallback_trigger(proc);
@@ -3341,8 +3343,9 @@ inp_restricted_recv(struct inpcb *inp, struct ifnet *ifp)
 
 	ret = _inp_restricted_recv(inp, ifp);
 	if (ret == TRUE && log_restricted) {
-		printf("pid %d is unable to receive packets on %s\n",
-		    current_proc()->p_pid, ifp->if_xname);
+		printf("pid %d (%s) is unable to receive packets on %s\n",
+		    current_proc()->p_pid, proc_best_name(current_proc()),
+		    ifp->if_xname);
 	}
 	return (ret);
 }
@@ -3388,8 +3391,9 @@ inp_restricted_send(struct inpcb *inp, struct ifnet *ifp)
 
 	ret = _inp_restricted_send(inp, ifp);
 	if (ret == TRUE && log_restricted) {
-		printf("pid %d is unable to transmit packets on %s\n",
-		    current_proc()->p_pid, ifp->if_xname);
+		printf("pid %d (%s) is unable to transmit packets on %s\n",
+		    current_proc()->p_pid, proc_best_name(current_proc()),
+		    ifp->if_xname);
 	}
 	return (ret);
 }

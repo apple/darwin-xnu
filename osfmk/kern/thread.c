@@ -420,6 +420,12 @@ thread_init(void)
 	init_thread_ledgers();
 }
 
+boolean_t
+thread_is_active(thread_t thread)
+{
+	return (thread->active);
+}
+
 void
 thread_corpse_continue(void)
 {
@@ -504,7 +510,7 @@ thread_terminate_self(void)
 	uthread_cleanup(task, thread->uthread, task->bsd_info);
 	threadcnt = hw_atomic_sub(&task->active_thread_count, 1);
 
-	if (task->bsd_info) {
+	if (task->bsd_info && !task_is_exec_copy(task)) {
 		/* trace out pid before we sign off */
 		long	dbg_arg1 = 0;
 
@@ -518,7 +524,7 @@ thread_terminate_self(void)
 	 * If we are the last thread to terminate and the task is
 	 * associated with a BSD process, perform BSD process exit.
 	 */
-	if (threadcnt == 0 && task->bsd_info != NULL) {
+	if (threadcnt == 0 && task->bsd_info != NULL && !task_is_exec_copy(task)) {
 		mach_exception_data_type_t subcode = 0;
 		{
 			/* since we're the last thread in this process, trace out the command name too */
@@ -1227,9 +1233,24 @@ thread_create_internal(
 
 		kdbg_trace_data(parent_task->bsd_info, &dbg_arg2);
 
+		/*
+		 * Starting with 26604425, exec'ing creates a new task/thread.
+		 *
+		 * NEWTHREAD in the current process has two possible meanings:
+		 *
+		 * 1) Create a new thread for this process.
+		 * 2) Create a new thread for the future process this will become in an exec.
+		 *
+		 * To disambiguate these, arg3 will be set to TRUE for case #2.
+		 *
+		 * The value we need to find (TPF_EXEC_COPY) is stable in the case of a
+		 * task exec'ing. The read of t_procflags does not take the proc_lock.
+		 */
+		dbg_arg3 = (task_is_exec_copy(parent_task)) ? TRUE : 0;
+
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 			TRACE_DATA_NEWTHREAD | DBG_FUNC_NONE,
-			(vm_address_t)(uintptr_t)thread_tid(new_thread), dbg_arg2, 0, 0, 0);
+			(vm_address_t)(uintptr_t)thread_tid(new_thread), dbg_arg2, dbg_arg3, 0, 0);
 
 		kdbg_trace_string(parent_task->bsd_info,
 							&dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
@@ -1307,6 +1328,56 @@ thread_create_with_continuation(
 {
 	return thread_create_internal2(task, new_thread, FALSE, continuation);
 }
+
+/*
+ * Create a thread that is already started, but is waiting on an event
+ */
+static kern_return_t
+thread_create_waiting_internal(
+	task_t                  task,
+	thread_continue_t       continuation,
+	event_t                 event,
+	int                     options,
+	thread_t                *new_thread)
+{
+	kern_return_t result;
+	thread_t thread;
+
+	if (task == TASK_NULL || task == kernel_task)
+		return (KERN_INVALID_ARGUMENT);
+
+	result = thread_create_internal(task, -1, continuation, options, &thread);
+	if (result != KERN_SUCCESS)
+		return (result);
+
+	/* note no user_stop_count or thread_hold here */
+
+	if (task->suspend_count > 0)
+		thread_hold(thread);
+
+	thread_mtx_lock(thread);
+	thread_start_in_assert_wait(thread, event, THREAD_INTERRUPTIBLE);
+	thread_mtx_unlock(thread);
+
+	task_unlock(task);
+	lck_mtx_unlock(&tasks_threads_lock);
+
+	*new_thread = thread;
+
+	return (KERN_SUCCESS);
+}
+
+kern_return_t
+thread_create_waiting(
+	task_t                  task,
+	thread_continue_t       continuation,
+	event_t                 event,
+	thread_t                *new_thread)
+{
+	return thread_create_waiting_internal(task, continuation, event,
+	                                      TH_OPTION_NONE, new_thread);
+}
+
 
 static kern_return_t
 thread_create_running_internal2(
@@ -1422,34 +1493,14 @@ thread_create_workq(
 kern_return_t
 thread_create_workq_waiting(
 	task_t              task,
-	thread_continue_t   thread_return,
+	thread_continue_t   continuation,
 	event_t             event,
 	thread_t            *new_thread)
 {
-	thread_t            thread;
-	kern_return_t       result;
 
-	if (task == TASK_NULL || task == kernel_task)
-		return KERN_INVALID_ARGUMENT;
-
-	result = thread_create_internal(task, -1, thread_return, TH_OPTION_NOCRED | TH_OPTION_NOSUSP, &thread);
-
-	if (result != KERN_SUCCESS)
-		return result;
-
-	if (task->suspend_count > 0)
-		thread_hold(thread);
-
-	thread_mtx_lock(thread);
-	thread_start_in_assert_wait(thread, event, THREAD_INTERRUPTIBLE);
-	thread_mtx_unlock(thread);
-
-	task_unlock(task);
-	lck_mtx_unlock(&tasks_threads_lock);
-
-	*new_thread = thread;
-
-	return result;
+	return thread_create_waiting_internal(task, continuation, event,
+	                                      TH_OPTION_NOCRED | TH_OPTION_NOSUSP,
+	                                      new_thread);
 }
 
 /*

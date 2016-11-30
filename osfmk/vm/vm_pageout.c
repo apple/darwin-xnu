@@ -2726,7 +2726,18 @@ consider_inactive:
 
 				bg_m_object = VM_PAGE_OBJECT(m);
 
-				if (force_anonymous == FALSE || bg_m_object->internal) {
+				if (!VM_PAGE_PAGEABLE(m)) {
+					/*
+					 * This page is on the background queue
+					 * but not on a pageable queue.  This is
+					 * likely a transient state and whoever
+					 * took it out of its pageable queue
+					 * will likely put it back on a pageable
+					 * queue soon but we can't deal with it
+					 * at this point, so let's ignore this
+					 * page.
+					 */
+				} else if (force_anonymous == FALSE || bg_m_object->internal) {
 					ignore_reference = TRUE;
 				
 					if (bg_m_object->internal)

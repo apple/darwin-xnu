@@ -824,17 +824,32 @@ kern_return_t
 ledger_rollup(ledger_t to_ledger, ledger_t from_ledger)
 {
 	int i;
-	struct ledger_entry *from_le, *to_le;
 
 	assert(to_ledger->l_template == from_ledger->l_template);
 
 	for (i = 0; i < to_ledger->l_size; i++) {
-		if (ENTRY_VALID(from_ledger, i) && ENTRY_VALID(to_ledger, i)) {
-			from_le = &from_ledger->l_entries[i];
-			to_le   =   &to_ledger->l_entries[i];
-			OSAddAtomic64(from_le->le_credit, &to_le->le_credit);
-			OSAddAtomic64(from_le->le_debit,  &to_le->le_debit);
-		}
+		ledger_rollup_entry(to_ledger, from_ledger, i);
+	}
+
+	return (KERN_SUCCESS);
+}
+
+/* Add one ledger entry value to another.
+ * They must have been created from the same template.
+ * Since the credit and debit values are added one
+ * at a time, other thread might read the a bogus value.
+ */
+kern_return_t
+ledger_rollup_entry(ledger_t to_ledger, ledger_t from_ledger, int entry)
+{
+	struct ledger_entry *from_le, *to_le;
+
+	assert(to_ledger->l_template == from_ledger->l_template);
+	if (ENTRY_VALID(from_ledger, entry) && ENTRY_VALID(to_ledger, entry)) {
+		from_le = &from_ledger->l_entries[entry];
+		to_le   =   &to_ledger->l_entries[entry];
+		OSAddAtomic64(from_le->le_credit, &to_le->le_credit);
+		OSAddAtomic64(from_le->le_debit,  &to_le->le_debit);
 	}
 
 	return (KERN_SUCCESS);

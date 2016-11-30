@@ -2854,6 +2854,7 @@ vm_page_grab_secluded(void)
 	if (mem->dirty || mem->precious) {
 		/* can't grab a dirty page; re-activate */
 //		printf("SECLUDED: dirty page %p\n", mem);
+		PAGE_WAKEUP_DONE(mem);
 		vm_page_secluded.grab_failure_dirty++;
 		vm_object_unlock(object);
 		goto reactivate_secluded_page;
@@ -2861,6 +2862,9 @@ vm_page_grab_secluded(void)
 	if (mem->reference) {
 		/* it's been used but we do need to grab a page... */
 	}
+	/* page could still be on vm_page_queue_background... */
+	vm_page_free_prepare_queues(mem);
+
 	vm_page_unlock_queues();
 
 	/* finish what vm_page_free() would have done... */
@@ -7542,12 +7546,17 @@ vm_page_queues_remove(vm_page_t mem, boolean_t __unused remove_from_backgroundq)
 	{
 		assert(mem->pageq.next == 0 && mem->pageq.prev == 0);
 #if CONFIG_BACKGROUND_QUEUE
-		if (mem->vm_page_on_backgroundq == FALSE) {
-			assert(mem->vm_page_backgroundq.next == 0 &&
-			       mem->vm_page_backgroundq.prev == 0 &&
-			       mem->vm_page_on_backgroundq == FALSE);
+		if (remove_from_backgroundq == TRUE) {
+			vm_page_remove_from_backgroundq(mem);
 		}
-#endif
+		if (mem->vm_page_on_backgroundq) {
+			assert(mem->vm_page_backgroundq.next != 0);
+			assert(mem->vm_page_backgroundq.prev != 0);
+		} else {
+			assert(mem->vm_page_backgroundq.next == 0);
+			assert(mem->vm_page_backgroundq.prev == 0);
+		}
+#endif /* CONFIG_BACKGROUND_QUEUE */
 		return;
 	}
 	if (mem->vm_page_q_state == VM_PAGE_USED_BY_COMPRESSOR)

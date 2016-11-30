@@ -2549,7 +2549,6 @@ memorystatus_update_idle_priority_locked(proc_t p) {
 			 * explicitly because it won't be going through the demotion paths
 			 * that take care to apply the limits appropriately.
 			 */
-			assert((p->p_memstat_dirty & P_DIRTY_AGING_IN_PROGRESS) == 0);
 			memorystatus_update_priority_locked(p, priority, false, true);
 
 		} else {

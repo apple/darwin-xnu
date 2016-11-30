@@ -335,6 +335,11 @@ PE_reboot_on_panic(void)
 		return FALSE;
 }
 
+void
+PE_sync_panic_buffers(void)
+{
+}
+
 /* rdar://problem/21244753 */
 uint32_t
 PE_i_can_has_debugger(uint32_t *debug_flags)

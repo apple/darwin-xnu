@@ -483,10 +483,8 @@ int	mac_vnode_check_exchangedata(vfs_context_t ctx, struct vnode *v1,
 int	mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
 	    struct image_params *imgp);
 int	mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp);
-int	mac_vnode_check_signature(struct vnode *vp,
-		struct cs_blob *cs_blob, struct image_params *imgp,
-		unsigned int *cs_flags,
-		int flags);
+int	mac_vnode_check_getattr(vfs_context_t ctx, struct ucred *file_cred,
+            struct vnode *vp, struct vnode_attr *va);
 int     mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
 	    struct attrlist *alist);
 int	mac_vnode_check_getextattr(vfs_context_t ctx, struct vnode *vp,
@@ -530,6 +528,10 @@ int	mac_vnode_check_setowner(vfs_context_t ctx, struct vnode *vp,
 	    uid_t uid, gid_t gid);
 int	mac_vnode_check_setutimes(vfs_context_t ctx, struct vnode *vp,
 	    struct timespec atime, struct timespec mtime);
+int	mac_vnode_check_signature(struct vnode *vp,
+		struct cs_blob *cs_blob, struct image_params *imgp,
+		unsigned int *cs_flags,
+		int flags);
 int	mac_vnode_check_stat(vfs_context_t ctx,
 	    kauth_cred_t file_cred, struct vnode *vp);
 int	mac_vnode_check_truncate(vfs_context_t ctx,

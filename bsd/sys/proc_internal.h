@@ -434,7 +434,8 @@ struct	proc {
 #define P_LIST_INPGRP	 		0x00020000	/* process is in pgrp */
 #define P_LIST_PGRPTRANS 		0x00040000	/* pgrp is getting replaced */
 #define P_LIST_PGRPTRWAIT 		0x00080000	/* wait for pgrp replacement */
-#define P_LIST_EXITCOUNT 		0x00100000	/* counted for process exit */ 
+#define P_LIST_EXITCOUNT 		0x00100000	/* counted for process exit */
+#define P_LIST_REFWAIT   		0x00200000	/* wait to take a ref */
  
 
 /* local flags */
@@ -459,11 +460,9 @@ struct	proc {
 #define	P_LLIMWAIT	0x00040000
 #define P_LWAITED   	0x00080000 
 #define P_LINSIGNAL    	0x00100000 
-#define P_LRETURNWAIT  	0x00200000 	/* process is completing spawn/vfork-exec/fork */
 #define P_LRAGE_VNODES	0x00400000
 #define P_LREGISTER	0x00800000	/* thread start fns registered  */
 #define P_LVMRSRCOWNER	0x01000000	/* can handle the resource ownership of  */
-#define P_LRETURNWAITER 0x02000000	/* thread is waiting on P_LRETURNWAIT being cleared */
 #define P_LTERM_DECRYPTFAIL	0x04000000	/* process terminating due to key failure to decrypt */
 #define	P_LTERM_JETSAM		0x08000000	/* process is being jetsam'd */
 #define P_JETSAM_VMPAGESHORTAGE	0x00000000	/* jetsam: lowest jetsam priority proc, killed due to vm page shortage */
@@ -713,6 +712,8 @@ extern void proc_reparentlocked(struct proc *child, struct proc * newparent, int
 extern proc_t proc_findinternal(int pid, int locked);
 extern proc_t proc_findthread(thread_t thread);
 extern void proc_refdrain(proc_t);
+extern proc_t proc_refdrain_with_refwait(proc_t p, boolean_t get_ref_and_allow_wait);
+extern void proc_refwake(proc_t p);
 extern void proc_childdrainlocked(proc_t);
 extern void proc_childdrainstart(proc_t);
 extern void proc_childdrainend(proc_t);
@@ -766,10 +767,6 @@ void psynch_wq_cleanup(__unused void *  param, __unused void * param1);
 extern lck_mtx_t * pthread_list_mlock;
 #endif /* PSYNCH */
 struct uthread * current_uthread(void);
-
-void proc_set_return_wait(struct proc *);
-void proc_clear_return_wait(proc_t p, thread_t child_thread);
-void proc_wait_to_return(void);
 
 /* process iteration */
 

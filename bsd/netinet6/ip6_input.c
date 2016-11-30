@@ -1140,7 +1140,7 @@ injectit:
 		/*
 		 * Call IP filter
 		 */
-		if (!TAILQ_EMPTY(&ipv6_filters)) {
+		if (!TAILQ_EMPTY(&ipv6_filters) && !IFNET_IS_INTCOPROC(inifp)) {
 			ipf_ref();
 			TAILQ_FOREACH(filter, &ipv6_filters, ipf_link) {
 				if (seen == 0) {

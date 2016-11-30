@@ -348,6 +348,7 @@ extern boolean_t PE_imgsrc_mount_supported(void);
 
 #if KERNEL_PRIVATE
 boolean_t PE_reboot_on_panic(void);
+void PE_sync_panic_buffers(void);
 #endif
 
 __END_DECLS

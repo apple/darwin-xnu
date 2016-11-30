@@ -389,14 +389,17 @@ i_coal_resource_remove_task(coalition_t coal, task_t task)
 		cr->time_nonempty += last_time_nonempty;
 	}
 
-	ledger_rollup(cr->ledger, task->ledger);
-	cr->bytesread += task->task_io_stats->disk_reads.size;
-	cr->byteswritten += task->task_io_stats->total_io.size - task->task_io_stats->disk_reads.size;
-	cr->gpu_time += task_gpu_utilisation(task);
-	cr->logical_immediate_writes += task->task_immediate_writes;	
-	cr->logical_deferred_writes += task->task_deferred_writes;
-	cr->logical_invalidated_writes += task->task_invalidated_writes;
-	cr->logical_metadata_writes += task->task_metadata_writes;
+	/* Do not roll up for exec'd task or exec copy task */
+	if (!task_is_exec_copy(task) && !task_did_exec(task)) {
+		ledger_rollup(cr->ledger, task->ledger);
+		cr->bytesread += task->task_io_stats->disk_reads.size;
+		cr->byteswritten += task->task_io_stats->total_io.size - task->task_io_stats->disk_reads.size;
+		cr->gpu_time += task_gpu_utilisation(task);
+		cr->logical_immediate_writes += task->task_immediate_writes;
+		cr->logical_deferred_writes += task->task_deferred_writes;
+		cr->logical_invalidated_writes += task->task_invalidated_writes;
+		cr->logical_metadata_writes += task->task_metadata_writes;
+	}
 
 	/* remove the task from the coalition's list */
 	remqueue(&task->task_coalition[COALITION_TYPE_RESOURCE]);
@@ -503,6 +506,14 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	 */
 	task_t task;
 	qe_foreach_element(task, &coal->r.tasks, task_coalition[COALITION_TYPE_RESOURCE]) {
+		/*
+		 * Rolling up stats for exec copy task or exec'd task will lead to double accounting.
+		 * Cannot take task lock after taking coaliton lock
+		 */
+		if (task_is_exec_copy(task) || task_did_exec(task)) {
+			continue;
+		}
+
 		ledger_rollup(sum_ledger, task->ledger);
 		bytesread += task->task_io_stats->disk_reads.size;
 		byteswritten += task->task_io_stats->total_io.size - task->task_io_stats->disk_reads.size;

@@ -402,15 +402,15 @@ store_one_page(uint32_t procFlags, uint32_t * src, uint32_t compressedSize,
 	{
 		dst = pal_hib_map(DEST_COPY_AREA, dst);
 		if (compressedSize != 4) WKdm_decompress_new((WK_word*) src, (WK_word*)(uintptr_t)dst, (WK_word*) &scratch[0], compressedSize);
-		else {
-			int i;
-			uint32_t *s, *d;
-			
-			s = src;
-			d = (uint32_t *)(uintptr_t)dst;
+		else
+		{
+			size_t i;
+			uint32_t s, *d;
 
-			for (i = 0; i < (int)(PAGE_SIZE / sizeof(int32_t)); i++)
-				*d++ = *s;
+			s = *src;
+			d = (uint32_t *)(uintptr_t)dst;
+            if (!s) bzero((void *) dst, PAGE_SIZE);
+            else    for (i = 0; i < (PAGE_SIZE / sizeof(int32_t)); i++) *d++ = s;
 		}
 	}
 	else

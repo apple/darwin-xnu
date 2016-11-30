@@ -4884,13 +4884,14 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 			    sizeof(optval));
 			if (error != 0)
 				goto out;
-			if (optval != 0) {
+			if (optval != 0 &&
+					inp_get_intcoproc_allowed(sotoinpcb(so)) == FALSE) {
 				error = soopt_cred_check(so,
 				    PRIV_NET_RESTRICTED_INTCOPROC);
 				if (error == 0)
 					inp_set_intcoproc_allowed(
 					    sotoinpcb(so));
-			} else
+			} else if (optval == 0)
 				inp_clear_intcoproc_allowed(sotoinpcb(so));
 			break;
 

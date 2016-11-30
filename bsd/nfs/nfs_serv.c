@@ -85,9 +85,12 @@
 #include <libkern/OSAtomic.h>
 #include <sys/fsevents.h>
 #include <kern/thread_call.h>
+#include <sys/time.h>
 
 #include <sys/vm.h>
 #include <sys/vmparam.h>
+
+#include <sys/fcntl.h>
 
 #include <netinet/in.h>
 
@@ -98,6 +101,11 @@
 #include <nfs/nfsm_subs.h>
 #include <nfs/nfsrvcache.h>
 #include <nfs/nfs_gss.h>
+
+#if CONFIG_MACF
+#include <security/mac.h>
+#include <security/mac_framework.h>
+#endif
 
 #if NFSSERVER
 
@@ -547,6 +555,34 @@ nfsrv_setattr(
 	if (!error)
 		error = nfsrv_authorize(vp, NULL, action, ctx, nxo, 0);
 
+#if CONFIG_MACF
+	if (!error) {
+		/* chown case */
+		if (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_gid)) {
+			error = mac_vnode_check_setowner(ctx, vp,
+				VATTR_IS_ACTIVE(vap, va_uid) ? vap->va_uid : -1,
+				VATTR_IS_ACTIVE(vap, va_gid) ? vap->va_gid : -1);
+		}
+		/* chmod case */
+		if (!error && VATTR_IS_ACTIVE(vap, va_mode)) {
+			error = mac_vnode_check_setmode(ctx, vp, (mode_t)vap->va_mode);
+		}
+		/* truncate case */
+		if (!error && VATTR_IS_ACTIVE(vap, va_data_size)) {
+			/* NOTE: File has not been open for NFS case, so NOCRED for filecred */
+			error = mac_vnode_check_truncate(ctx, NOCRED, vp);
+		}
+		/* set utimes case */
+		if (!error && (VATTR_IS_ACTIVE(vap, va_access_time) || VATTR_IS_ACTIVE(vap, va_modify_time))) {
+			struct timespec current_time;
+			nanotime(&current_time);
+
+			error = mac_vnode_check_setutimes(ctx, vp,
+							  VATTR_IS_ACTIVE(vap, va_access_time) ? vap->va_access_time : current_time,
+							  VATTR_IS_ACTIVE(vap, va_modify_time) ? vap->va_modify_time : current_time);
+		}
+	}
+#endif
 	/* set the new attributes */
 	if (!error)
 		error = vnode_setattr(vp, vap, ctx);
@@ -1256,6 +1292,21 @@ nfsrv_write(
 		error = nfsrv_authorize(vp, NULL, KAUTH_VNODE_WRITE_DATA, ctx, nxo, 1);
 	nfsmerr_if(error);
 
+#if CONFIG_MACF
+	if (!error) {
+		error = mac_vnode_check_open(ctx, vp, FWRITE);
+		if (error) {
+			error = EACCES;
+		} else {
+			/* XXXab: Do we need to do this?! */
+			error = mac_vnode_check_write(ctx, vfs_context_ucred(ctx), vp);
+			if (error)
+				error = EACCES;
+		}
+	}
+	nfsmerr_if(error);
+#endif
+
 	if (len > 0) {
 		for (mcount=0, m=nmreq->nmc_mcur; m; m = mbuf_next(m))
 			if (mbuf_len(m) > 0)
@@ -1844,6 +1895,8 @@ nfsrv_create(
 	ni.ni_op = OP_LINK;
 #endif
 	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
+	ni.ni_cnd.cn_ndp = &ni;
+
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -1953,6 +2006,12 @@ nfsrv_create(
 		if (!error) 
 			error = vnode_authattr_new(dvp, vap, 0, ctx);
 
+		if (!error) {
+			error = vn_authorize_create(dvp, &ni.ni_cnd, vap, ctx, NULL);
+			if (error)
+				error = EACCES;
+		}
+
 		if (vap->va_type == VREG || vap->va_type == VSOCK) {
 
 			if (!error)
@@ -2052,6 +2111,14 @@ nfsrv_create(
 
 		vnode_put(dvp);
 
+#if CONFIG_MACF
+		if (!error && VATTR_IS_ACTIVE(vap, va_data_size)) {
+			/* NOTE: File has not been open for NFS case, so NOCRED for filecred */
+			error = mac_vnode_check_truncate(ctx, NOCRED, vp);
+			if (error)
+				error = EACCES;
+		}
+#endif
 		if (!error && VATTR_IS_ACTIVE(vap, va_data_size)) {
 			error = nfsrv_authorize(vp, NULL, KAUTH_VNODE_WRITE_DATA,
 			    ctx, nxo, 0);
@@ -2172,6 +2239,7 @@ nfsrv_mknod(
 	ni.ni_op = OP_LINK;
 #endif
 	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
+	ni.ni_cnd.cn_ndp = &ni;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -2249,7 +2317,11 @@ nfsrv_mknod(
 	/* validate new-file security information */
 	if (!error) 
 		error = vnode_authattr_new(dvp, vap, 0, ctx);
-
+	if (!error) {
+		error = vn_authorize_create(dvp, &ni.ni_cnd, vap, ctx, NULL);
+		if (error)
+			error = EACCES;
+	}
 	if (error)
 		goto out1;
 
@@ -2401,6 +2473,7 @@ nfsrv_remove(
 	ni.ni_op = OP_UNLINK;
 #endif
 	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
+	ni.ni_cnd.cn_ndp = &ni;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -2435,6 +2508,12 @@ nfsrv_remove(
 			error = EBUSY;
 		else
 			error = nfsrv_authorize(vp, dvp, KAUTH_VNODE_DELETE, ctx, nxo, 0);
+
+		if (!error) {
+			error = vn_authorize_unlink(dvp, vp, &ni.ni_cnd, ctx, NULL);
+			if (error)
+				error = EACCES;
+		}
 
 		if (!error) {
 #if CONFIG_FSE
@@ -2589,6 +2668,7 @@ retry:
 	frompath = NULL;
 	fromni.ni_cnd.cn_pnlen = MAXPATHLEN;
 	fromni.ni_cnd.cn_flags |= HASBUF;
+	fromni.ni_cnd.cn_ndp = &fromni;
 
 	error = nfsrv_namei(nd, ctx, &fromni, &fnfh, &fdirp, &fnx, &fnxo);
 	if (error)
@@ -2624,6 +2704,7 @@ retry:
 	topath = NULL;
 	toni.ni_cnd.cn_pnlen = MAXPATHLEN;
 	toni.ni_cnd.cn_flags |= HASBUF;
+	toni.ni_cnd.cn_ndp = &toni;
 
 	if (fvtype == VDIR)
 		toni.ni_cnd.cn_flags |= WILLBEDIR;
@@ -2743,6 +2824,12 @@ retry:
 		    ((error = nfsrv_authorize(tvp, tdvp, KAUTH_VNODE_DELETE, ctx, tnxo, 0)) != 0))
 			goto auth_exit;
 
+		if (!error &&
+		    ((error = vn_authorize_rename(fdvp, fvp, &fromni.ni_cnd , tdvp, tvp, &toni.ni_cnd , ctx, NULL)) != 0)) {
+			if (error)
+				error = EACCES;
+			goto auth_exit;
+		}
 		/* XXX more checks? */
 
 auth_exit:
@@ -3193,6 +3280,13 @@ nfsrv_link(
 	else
 		error = nfsrv_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx, nxo, 0);
 
+#if CONFIG_MACF
+	if (!error) {
+		error = mac_vnode_check_link(ctx, dvp, vp, &ni.ni_cnd);
+		if (error)
+			error = EACCES;
+	}
+#endif
 	if (!error)
 		error = VNOP_LINK(vp, dvp, &ni.ni_cnd, ctx);
 
@@ -3315,6 +3409,8 @@ nfsrv_symlink(
 	ni.ni_op = OP_LINK;
 #endif
 	ni.ni_cnd.cn_flags = LOCKPARENT;
+	ni.ni_flag = 0;
+	ni.ni_cnd.cn_ndp = &ni;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -3386,6 +3482,11 @@ nfsrv_symlink(
 	/* validate given attributes */
 	if (!error)
 		error = vnode_authattr_new(dvp, vap, 0, ctx);
+	if (!error) {
+		error = vn_authorize_create(dvp, &ni.ni_cnd, vap, ctx, NULL);
+		if (error)
+			error = EACCES;
+	}
 
 	if (!error)
 		error = VNOP_SYMLINK(dvp, &vp, &ni.ni_cnd, vap, linkdata, ctx);
@@ -3531,7 +3632,8 @@ nfsrv_mkdir(
 #if CONFIG_TRIGGERS
 	ni.ni_op = OP_LINK;
 #endif
-	ni.ni_cnd.cn_flags = LOCKPARENT;
+	ni.ni_cnd.cn_flags = LOCKPARENT | WILLBEDIR;
+	ni.ni_cnd.cn_ndp = &ni;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -3616,6 +3718,12 @@ nfsrv_mkdir(
          */
 	if (error)
 		error = EPERM;
+
+	if(!error) {
+		error = vn_authorize_mkdir(dvp, &ni.ni_cnd, vap, ctx, NULL);
+		if (error)
+			error = EACCES;
+	}
 
 	if (!error)
 		error = VNOP_MKDIR(dvp, &vp, &ni.ni_cnd, vap, ctx);
@@ -3742,6 +3850,7 @@ nfsrv_rmdir(
 	ni.ni_op = OP_UNLINK;
 #endif
 	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
+	ni.ni_cnd.cn_ndp = &ni;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -3785,6 +3894,12 @@ nfsrv_rmdir(
 		error = EBUSY;
 	if (!error)
 		error = nfsrv_authorize(vp, dvp, KAUTH_VNODE_DELETE, ctx, nxo, 0);
+	if (!error) {
+		error = vn_authorize_rmdir(dvp, vp, &ni.ni_cnd, ctx, NULL);
+		if (error)
+			error = EACCES;
+	}
+
 	if (!error) {
 #if CONFIG_FSE
 		char     *path = NULL;

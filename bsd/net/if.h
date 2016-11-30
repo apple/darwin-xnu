@@ -467,7 +467,8 @@ struct	ifreq {
 #define IFRTYPE_FUNCTIONAL_WIFI_INFRA	3
 #define IFRTYPE_FUNCTIONAL_WIFI_AWDL	4
 #define IFRTYPE_FUNCTIONAL_CELLULAR	5
-#define IFRTYPE_FUNCTIONAL_LAST		5
+#define	IFRTYPE_FUNCTIONAL_INTCOPROC	6          
+#define IFRTYPE_FUNCTIONAL_LAST		6
 		u_int32_t ifru_expensive;
 		u_int32_t ifru_2kcl;
 		struct {

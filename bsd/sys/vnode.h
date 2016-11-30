@@ -2021,8 +2021,10 @@ int vnode_getfromfd (vfs_context_t ctx, int fd, vnode_t *vpp);
 #ifdef BSD_KERNEL_PRIVATE
 /* Not in export list so can be private */
 struct stat;
-int	vn_stat(struct vnode *vp, void * sb, kauth_filesec_t *xsec, int isstat64, vfs_context_t ctx);
-int	vn_stat_noauth(struct vnode *vp, void * sb, kauth_filesec_t *xsec, int isstat64, vfs_context_t ctx);
+int	vn_stat(struct vnode *vp, void * sb, kauth_filesec_t *xsec, int isstat64,
+		vfs_context_t ctx);
+int	vn_stat_noauth(struct vnode *vp, void * sb, kauth_filesec_t *xsec, int isstat64,
+		       vfs_context_t ctx, struct ucred *file_cred);
 int	vaccess(mode_t file_mode, uid_t uid, gid_t gid,
 	  		mode_t acc_mode, kauth_cred_t cred);
 int	check_mountedon(dev_t dev, enum vtype type, int  *errorp);

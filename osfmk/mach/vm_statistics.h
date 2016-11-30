@@ -494,6 +494,11 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 /* DHMM data */
 #define VM_MEMORY_DHMM 84
 
+#if !(defined(RC_HIDE_XNU_J79) || defined(RC_HIDE_XNU_J80))
+/* memory needed for DFR related actions */
+#define VM_MEMORY_DFR 85
+#endif // !(defined(RC_HIDE_XNU_J79) || defined(RC_HIDE_XNU_J80))
+
 /* memory allocated by SceneKit.framework */
 #define VM_MEMORY_SCENEKIT 86
 

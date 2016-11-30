@@ -118,7 +118,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 45)
+#if (MAC_POLICY_OPS_VERSION != 46)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -280,12 +280,12 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(exc_action_label_init)
 	CHECK_SET_HOOK(exc_action_label_update)
 
-	.mpo_reserved17 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved18 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved19 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved20 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved21 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved22 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved1 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved2 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved3 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved4 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved5 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved6 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(posixsem_check_create)
 	CHECK_SET_HOOK(posixsem_check_open)
@@ -363,7 +363,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(system_check_settime)
 	CHECK_SET_HOOK(system_check_swapoff)
 	CHECK_SET_HOOK(system_check_swapon)
-	.mpo_reserved31 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved7 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(sysvmsg_label_associate)
 	CHECK_SET_HOOK(sysvmsg_label_destroy)
@@ -396,9 +396,9 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(sysvshm_label_init)
 	CHECK_SET_HOOK(sysvshm_label_recycle)
 
-	.mpo_reserved23 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved24 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved25 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved8 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved9 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(vnode_check_getattr)
 	CHECK_SET_HOOK(mount_check_snapshot_create)
 	CHECK_SET_HOOK(mount_check_snapshot_delete)
 	CHECK_SET_HOOK(vnode_check_clone)

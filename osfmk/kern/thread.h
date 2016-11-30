@@ -621,6 +621,8 @@ extern void			thread_release(
 
 extern void			thread_corpse_continue(void);
 
+extern boolean_t		thread_is_active(thread_t thread);
+
 /* Locking for scheduler state, always acquired with interrupts disabled (splsched()) */
 #if __SMP__
 #define	thread_lock_init(th)	simple_lock_init(&(th)->sched_lock, 0)
@@ -845,6 +847,11 @@ extern kern_return_t	thread_create_with_continuation(
 							task_t task,
 							thread_t *new_thread,
 							thread_continue_t continuation);
+
+extern kern_return_t thread_create_waiting(task_t               task,
+                                           thread_continue_t    continuation,
+                                           event_t              event,
+                                           thread_t             *new_thread);
 
 extern kern_return_t	thread_create_workq(
 							task_t			task,

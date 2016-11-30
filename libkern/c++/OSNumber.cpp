@@ -53,6 +53,8 @@ bool OSNumber::init(unsigned long long inValue, unsigned int newNumberOfBits)
 {
     if (!super::init())
         return false;
+    if (newNumberOfBits > 64)
+        return false;
 
     size = newNumberOfBits;
     value = (inValue & sizeMask);

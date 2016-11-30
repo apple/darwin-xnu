@@ -1737,6 +1737,9 @@ typedef int mpo_mount_check_fsctl_t(
 
   @return Return 0 if access is granted, otherwise an appropriate value for
   errno should be returned.
+
+  @note Policies may change the contents of vfa to alter the list of
+  file system attributes returned.
 */
 
 typedef int mpo_mount_check_getattr_t(
@@ -4660,25 +4663,34 @@ typedef int mpo_vnode_check_fsgetpath_t(
 	struct label *label
 );
 /**
-  @brief Access control check after determining the code directory hash
-  @param vp vnode vnode to combine into proc
-  @param label label associated with the vnode
-  @param cs_blob the code signature to check
-  @param cs_flags update code signing flags if needed
-  @param flags operational flag to mpo_vnode_check_signature
-  @param fatal_failure_desc description of fatal failure
-  @param fatal_failure_desc_len failure description len, failure is fatal if non-0
+  @brief Access control check for retrieving file attributes
+  @param active_cred Subject credential
+  @param file_cred Credential associated with the struct fileproc
+  @param vp Object vnode
+  @param vlabel Policy label for vp
+  @param va Vnode attributes to retrieve
+
+  Determine whether the subject identified by the credential can
+  get information about the passed vnode.  The active_cred hold
+  the credentials of the subject performing the operation, and
+  file_cred holds the credentials of the subject that originally
+  opened the file. This check happens during stat(), lstat(),
+  fstat(), and getattrlist() syscalls.  See <sys/vnode.h> for
+  definitions of the attributes.
 
   @return Return 0 if access is granted, otherwise an appropriate value for
   errno should be returned.
- */
-typedef int mpo_vnode_check_signature_t(
+
+  @note Policies may change the contents of va to alter the list of
+  file attributes returned.
+*/
+typedef int mpo_vnode_check_getattr_t(
+	kauth_cred_t active_cred,
+	kauth_cred_t file_cred, /* NULLOK */
 	struct vnode *vp,
-	struct label *label,
-	struct cs_blob *cs_blob,
-	unsigned int *cs_flags,
-	int flags,
-	char **fatal_failure_desc, size_t *fatal_failure_desc_len);
+	struct label *vlabel,
+	struct vnode_attr *va
+);
 /**
   @brief Access control check for retrieving file attributes
   @param cred Subject credential
@@ -5244,6 +5256,27 @@ typedef int mpo_vnode_check_setutimes_t(
 	struct label *label,
 	struct timespec atime,
 	struct timespec mtime
+);
+/**
+  @brief Access control check after determining the code directory hash
+  @param vp vnode vnode to combine into proc
+  @param label label associated with the vnode
+  @param cs_blob the code signature to check
+  @param cs_flags update code signing flags if needed
+  @param flags operational flag to mpo_vnode_check_signature
+  @param fatal_failure_desc description of fatal failure
+  @param fatal_failure_desc_len failure description len, failure is fatal if non-0
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+ */
+typedef int mpo_vnode_check_signature_t(
+	struct vnode *vp,
+	struct label *label,
+	struct cs_blob *cs_blob,
+	unsigned int *cs_flags,
+	int flags,
+	char **fatal_failure_desc, size_t *fatal_failure_desc_len
 );
 /**
   @brief Access control check for stat
@@ -6138,7 +6171,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 45 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 46 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -6285,17 +6318,17 @@ struct mac_policy_ops {
 	mpo_proc_check_set_host_exception_port_t *mpo_proc_check_set_host_exception_port;
 	mpo_exc_action_check_exception_send_t	*mpo_exc_action_check_exception_send;
 	mpo_exc_action_label_associate_t	*mpo_exc_action_label_associate;
-	mpo_exc_action_label_copy_t	*mpo_exc_action_label_copy;
-	mpo_exc_action_label_destroy_t	*mpo_exc_action_label_destroy;
-	mpo_exc_action_label_init_t	*mpo_exc_action_label_init;
-	mpo_exc_action_label_update_t	*mpo_exc_action_label_update;
+	mpo_exc_action_label_copy_t		*mpo_exc_action_label_copy;
+	mpo_exc_action_label_destroy_t		*mpo_exc_action_label_destroy;
+	mpo_exc_action_label_init_t		*mpo_exc_action_label_init;
+	mpo_exc_action_label_update_t		*mpo_exc_action_label_update;
 
-	mpo_reserved_hook_t			*mpo_reserved17;
-	mpo_reserved_hook_t			*mpo_reserved18;
-	mpo_reserved_hook_t			*mpo_reserved19;
-	mpo_reserved_hook_t			*mpo_reserved20;
-	mpo_reserved_hook_t			*mpo_reserved21;
-	mpo_reserved_hook_t			*mpo_reserved22;
+	mpo_reserved_hook_t			*mpo_reserved1;
+	mpo_reserved_hook_t			*mpo_reserved2;
+	mpo_reserved_hook_t			*mpo_reserved3;
+	mpo_reserved_hook_t			*mpo_reserved4;
+	mpo_reserved_hook_t			*mpo_reserved5;
+	mpo_reserved_hook_t			*mpo_reserved6;
 
 	mpo_posixsem_check_create_t		*mpo_posixsem_check_create;
 	mpo_posixsem_check_open_t		*mpo_posixsem_check_open;
@@ -6373,7 +6406,7 @@ struct mac_policy_ops {
 	mpo_system_check_settime_t		*mpo_system_check_settime;
 	mpo_system_check_swapoff_t		*mpo_system_check_swapoff;
 	mpo_system_check_swapon_t		*mpo_system_check_swapon;
-	mpo_reserved_hook_t			*mpo_reserved31;
+	mpo_reserved_hook_t			*mpo_reserved7;
 
 	mpo_sysvmsg_label_associate_t		*mpo_sysvmsg_label_associate;
 	mpo_sysvmsg_label_destroy_t		*mpo_sysvmsg_label_destroy;
@@ -6406,9 +6439,9 @@ struct mac_policy_ops {
 	mpo_sysvshm_label_init_t		*mpo_sysvshm_label_init;
 	mpo_sysvshm_label_recycle_t		*mpo_sysvshm_label_recycle;
 
-	mpo_reserved_hook_t			*mpo_reserved23;
-	mpo_reserved_hook_t			*mpo_reserved24;
-	mpo_reserved_hook_t			*mpo_reserved25;
+	mpo_reserved_hook_t			*mpo_reserved8;
+	mpo_reserved_hook_t			*mpo_reserved9;
+	mpo_vnode_check_getattr_t		*mpo_vnode_check_getattr;
 	mpo_mount_check_snapshot_create_t	*mpo_mount_check_snapshot_create;
 	mpo_mount_check_snapshot_delete_t	*mpo_mount_check_snapshot_delete;
 	mpo_vnode_check_clone_t			*mpo_vnode_check_clone;

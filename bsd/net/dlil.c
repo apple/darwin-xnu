@@ -1678,10 +1678,15 @@ dlil_attach_filter(struct ifnet	*ifp, const struct iff_filter *if_filter,
 	filter->filt_cookie = if_filter->iff_cookie;
 	filter->filt_name = if_filter->iff_name;
 	filter->filt_protocol = if_filter->iff_protocol;
-	filter->filt_input = if_filter->iff_input;
-	filter->filt_output = if_filter->iff_output;
-	filter->filt_event = if_filter->iff_event;
-	filter->filt_ioctl = if_filter->iff_ioctl;
+	/*
+	 * Do not install filter callbacks for internal coproc interface
+	 */
+	if (!IFNET_IS_INTCOPROC(ifp)) {
+		filter->filt_input = if_filter->iff_input;
+		filter->filt_output = if_filter->iff_output;
+		filter->filt_event = if_filter->iff_event;
+		filter->filt_ioctl = if_filter->iff_ioctl;
+	}
 	filter->filt_detached = if_filter->iff_detached;
 
 	lck_mtx_lock(&ifp->if_flt_lock);

@@ -467,6 +467,7 @@ task_generate_corpse_internal(
 				TRUE,
 				is64bit,
 				t_flags,
+				TPF_NONE,
 				&new_task);
 	if (kr != KERN_SUCCESS) {
 		goto error_task_generate_corpse;

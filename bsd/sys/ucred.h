@@ -149,6 +149,7 @@ __BEGIN_DECLS
 int		crcmp(kauth_cred_t cr1, kauth_cred_t cr2);
 int		suser(kauth_cred_t cred, u_short *acflag);
 int		set_security_token(struct proc * p);
+int		set_security_token_task_internal(struct proc *p, void *task);
 void		cru2x(kauth_cred_t cr, struct xucred *xcr);
 __END_DECLS
 #endif /* __APPLE_API_OBSOLETE */

@@ -188,11 +188,31 @@ do {                                  \
 #define kIOPMTardyAckPSCKey         "IOPMTardyAckPowerStateChange"
 #define kPwrMgtKey                  "IOPowerManagement"
 
-#define OUR_PMLog(t, a, b) do {          \
-    if (gIOKitDebug & kIOLogPower)       \
-        pwrMgt->pmPrint(t, a, b);        \
-    if (gIOKitTrace & kIOTracePowerMgmt) \
-        pwrMgt->pmTrace(t, a, b);        \
+#define OUR_PMLog(t, a, b) do {                 \
+    if (pwrMgt) {                               \
+        if (gIOKitDebug & kIOLogPower)          \
+            pwrMgt->pmPrint(t, a, b);           \
+        if (gIOKitTrace & kIOTracePowerMgmt)    \
+            pwrMgt->pmTrace(t, DBG_FUNC_NONE, a, b);        \
+    }                                           \
+    } while(0)
+
+#define OUR_PMLogFuncStart(t, a, b) do {        \
+    if (pwrMgt) {                               \
+        if (gIOKitDebug & kIOLogPower)          \
+            pwrMgt->pmPrint(t, a, b);           \
+        if (gIOKitTrace & kIOTracePowerMgmt)    \
+            pwrMgt->pmTrace(t, DBG_FUNC_START, a, b);       \
+    }                                           \
+    } while(0)
+
+#define OUR_PMLogFuncEnd(t, a, b) do {          \
+    if (pwrMgt) {                               \
+        if (gIOKitDebug & kIOLogPower)          \
+            pwrMgt->pmPrint(-t, a, b);          \
+        if (gIOKitTrace & kIOTracePowerMgmt)    \
+            pwrMgt->pmTrace(t, DBG_FUNC_END, a, b);        \
+    }                                           \
     } while(0)
 
 #define NS_TO_MS(nsec)              ((int)((nsec) / 1000000ULL))
@@ -3961,13 +3981,13 @@ void IOService::driverSetPowerState( void )
 
     if (assertPMDriverCall(&callEntry))
     {
-        OUR_PMLog(          kPMLogProgramHardware, (uintptr_t) this, powerState);
+        OUR_PMLogFuncStart(kPMLogProgramHardware, (uintptr_t) this, powerState);
         start_spindump_timer("SetState");
         clock_get_uptime(&fDriverCallStartTime);
         result = fControllingDriver->setPowerState( powerState, this );
         clock_get_uptime(&end);
         stop_spindump_timer();
-        OUR_PMLog((UInt32) -kPMLogProgramHardware, (uintptr_t) this, (UInt32) result);
+        OUR_PMLogFuncEnd(kPMLogProgramHardware, (uintptr_t) this, (UInt32) result);
 
         deassertPMDriverCall(&callEntry);
 
@@ -4043,23 +4063,23 @@ void IOService::driverInformPowerChange( void )
         {
             if (fDriverCallReason == kDriverCallInformPreChange)
             {
-                OUR_PMLog(kPMLogInformDriverPreChange, (uintptr_t) this, powerState);
+                OUR_PMLogFuncStart(kPMLogInformDriverPreChange, (uintptr_t) this, powerState);
                 start_spindump_timer("WillChange");
                 clock_get_uptime(&informee->startTime);
                 result = driver->powerStateWillChangeTo(powerFlags, powerState, this);
                 clock_get_uptime(&end);
                 stop_spindump_timer();
-                OUR_PMLog((UInt32)-kPMLogInformDriverPreChange, (uintptr_t) this, result);
+                OUR_PMLogFuncEnd(kPMLogInformDriverPreChange, (uintptr_t) this, result);
             }
             else
             {
-                OUR_PMLog(kPMLogInformDriverPostChange, (uintptr_t) this, powerState);
+                OUR_PMLogFuncStart(kPMLogInformDriverPostChange, (uintptr_t) this, powerState);
                 start_spindump_timer("DidChange");
                 clock_get_uptime(&informee->startTime);
                 result = driver->powerStateDidChangeTo(powerFlags, powerState, this);
                 clock_get_uptime(&end);
                 stop_spindump_timer();
-                OUR_PMLog((UInt32)-kPMLogInformDriverPostChange, (uintptr_t) this, result);
+                OUR_PMLogFuncEnd(kPMLogInformDriverPostChange, (uintptr_t) this, result);
             }
 
             deassertPMDriverCall(&callEntry);
@@ -8820,38 +8840,19 @@ void IOServicePM::pmPrint(
 
 void IOServicePM::pmTrace(
     uint32_t        event,
+    uint32_t        eventFunc,
     uintptr_t       param1,
     uintptr_t       param2 ) const
 {
-    const char *  who = Name;
-    uint64_t    regId = Owner->getRegistryEntryID();
-    uintptr_t    name = 0;
+    uintptr_t nameAsArg = 0;
 
-    static const uint32_t sStartStopBitField[] =
-    { 0x00000000, 0x00000040 }; // Only Program Hardware so far
+    assert(event < KDBG_CODE_MAX);
+    assert((eventFunc & ~KDBG_FUNC_MASK) == 0);
 
-    // Arcane formula from Hacker's Delight by Warren
-    // abs(x)  = ((int) x >> 31) ^ (x + ((int) x >> 31))
-    uint32_t sgnevent = ((int) event >> 31);
-    uint32_t absevent = sgnevent ^ (event + sgnevent);
-    uint32_t code     = IODBG_POWER(absevent);
+    // Copy the first characters of the name into an uintptr_t.
+    // NULL termination is not required.
+    strncpy((char*)&nameAsArg, Name, sizeof(nameAsArg));
 
-    uint32_t bit = 1 << (absevent & 0x1f);
-    if ((absevent < (sizeof(sStartStopBitField) * 8)) &&
-        (sStartStopBitField[absevent >> 5] & bit))
-    {
-        // Or in the START or END bits, Start = 1 & END = 2
-        //      If sgnevent ==  0 then START -  0 => START
-        // else if sgnevent == -1 then START - -1 => END
-        code |= DBG_FUNC_START - sgnevent;
-    }
-
-    // Copy the first characters of the name into an uintptr_t
-    for (uint32_t i = 0; (i < sizeof(uintptr_t) && who[i] != 0); i++)
-    {
-        ((char *) &name)[sizeof(uintptr_t) - i - 1] = who[i];
-    }
-
-    IOTimeStampConstant(code, name, (uintptr_t) regId, (uintptr_t)(OBFUSCATE(param1)), (uintptr_t)(OBFUSCATE(param2)));
+    IOTimeStampConstant(IODBG_POWER(event) | eventFunc, nameAsArg, (uintptr_t)Owner->getRegistryEntryID(), (uintptr_t)(OBFUSCATE(param1)), (uintptr_t)(OBFUSCATE(param2)));
 }
 

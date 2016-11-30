@@ -339,6 +339,7 @@ static bool necp_is_addr_in_subnet(struct sockaddr *addr, struct sockaddr *subne
 static int necp_addr_compare(struct sockaddr *sa1, struct sockaddr *sa2, int check_port);
 static bool necp_buffer_compare_with_bit_prefix(u_int8_t *p1, u_int8_t *p2, u_int32_t bits);
 static bool necp_is_loopback(struct sockaddr *local_addr, struct sockaddr *remote_addr, struct inpcb *inp, struct mbuf *packet);
+static bool necp_is_intcoproc(struct inpcb *inp, struct mbuf *packet);
 
 struct necp_uuid_id_mapping {
 	LIST_ENTRY(necp_uuid_id_mapping) chain;
@@ -6190,6 +6191,19 @@ necp_socket_is_connected(struct inpcb *inp)
 	return (inp->inp_socket->so_state & (SS_ISCONNECTING | SS_ISCONNECTED | SS_ISDISCONNECTING));
 }
 
+static inline bool
+necp_socket_bypass(struct sockaddr *override_local_addr, struct sockaddr *override_remote_addr, struct inpcb *inp)
+{
+
+	if (necp_pass_loopback > 0 && necp_is_loopback(override_local_addr, override_remote_addr, inp, NULL)) {
+		return (true);
+	} else if (necp_is_intcoproc(inp, NULL)) {
+		return (true);
+	}
+
+	return (false);
+}
+
 necp_kernel_policy_id
 necp_socket_find_policy_match(struct inpcb *inp, struct sockaddr *override_local_addr, struct sockaddr *override_remote_addr, u_int32_t override_bound_interface)
 {
@@ -6233,8 +6247,7 @@ necp_socket_find_policy_match(struct inpcb *inp, struct sockaddr *override_local
 			inp->inp_policyresult.flowhash = 0;
 			inp->inp_policyresult.results.filter_control_unit = 0;
 			inp->inp_policyresult.results.route_rule_id = 0;
-			if (necp_pass_loopback > 0 &&
-				necp_is_loopback(override_local_addr, override_remote_addr, inp, NULL)) {
+			if (necp_socket_bypass(override_local_addr, override_remote_addr, inp)) {
 				inp->inp_policyresult.results.result = NECP_KERNEL_POLICY_RESULT_PASS;
 			} else {
 				inp->inp_policyresult.results.result = NECP_KERNEL_POLICY_RESULT_DROP;
@@ -6244,8 +6257,7 @@ necp_socket_find_policy_match(struct inpcb *inp, struct sockaddr *override_local
 	}
 
 	// Check for loopback exception
-	if (necp_pass_loopback > 0 &&
-		necp_is_loopback(override_local_addr, override_remote_addr, inp, NULL)) {
+	if (necp_socket_bypass(override_local_addr, override_remote_addr, inp)) {
 		// Mark socket as a pass
 		inp->inp_policyresult.policy_id = NECP_KERNEL_POLICY_ID_NO_MATCH;
 		inp->inp_policyresult.policy_gencount = 0;
@@ -6564,6 +6576,21 @@ necp_ip_output_find_policy_match_locked(necp_kernel_policy_id socket_policy_id, 
 	return (matched_policy);
 }
 
+static inline bool
+necp_output_bypass(struct mbuf *packet)
+{
+	if (necp_pass_loopback > 0 && necp_is_loopback(NULL, NULL, NULL, packet)) {
+		return (true);
+	}
+	if (necp_pass_keepalives > 0 && necp_get_is_keepalive_from_packet(packet)) {
+		return (true);
+	}
+	if (necp_is_intcoproc(NULL, packet)) {
+		return (true);
+	}
+	return (false);
+}
+
 necp_kernel_policy_id
 necp_ip_output_find_policy_match(struct mbuf *packet, int flags, struct ip_out_args *ipoa, necp_kernel_policy_result *result, necp_kernel_policy_result_parameter *result_parameter)
 {
@@ -6599,10 +6626,7 @@ necp_ip_output_find_policy_match(struct mbuf *packet, int flags, struct ip_out_a
 		if (necp_drop_all_order > 0) {
 			matched_policy_id = NECP_KERNEL_POLICY_ID_NO_MATCH;
 			if (result) {
-				if ((necp_pass_loopback > 0 &&
-					 necp_is_loopback(NULL, NULL, NULL, packet)) ||
-					(necp_pass_keepalives > 0 &&
-					 necp_get_is_keepalive_from_packet(packet))) {
+				if (necp_output_bypass(packet)) {
 					*result = NECP_KERNEL_POLICY_RESULT_PASS;
 				} else {
 					*result = NECP_KERNEL_POLICY_RESULT_DROP;
@@ -6614,10 +6638,7 @@ necp_ip_output_find_policy_match(struct mbuf *packet, int flags, struct ip_out_a
 	}
 
 	// Check for loopback exception
-	if ((necp_pass_loopback > 0 &&
-		 necp_is_loopback(NULL, NULL, NULL, packet)) ||
-		(necp_pass_keepalives > 0 &&
-		 necp_get_is_keepalive_from_packet(packet))) {
+	if (necp_output_bypass(packet)) {
 		matched_policy_id = NECP_KERNEL_POLICY_ID_NO_MATCH;
 		if (result) {
 			*result = NECP_KERNEL_POLICY_RESULT_PASS;
@@ -6741,10 +6762,7 @@ necp_ip6_output_find_policy_match(struct mbuf *packet, int flags, struct ip6_out
 		if (necp_drop_all_order > 0) {
 			matched_policy_id = NECP_KERNEL_POLICY_ID_NO_MATCH;
 			if (result) {
-				if ((necp_pass_loopback > 0 &&
-					 necp_is_loopback(NULL, NULL, NULL, packet)) ||
-					(necp_pass_keepalives > 0 &&
-					 necp_get_is_keepalive_from_packet(packet))) {
+				if (necp_output_bypass(packet)) {
 					*result = NECP_KERNEL_POLICY_RESULT_PASS;
 				} else {
 					*result = NECP_KERNEL_POLICY_RESULT_DROP;
@@ -6756,10 +6774,7 @@ necp_ip6_output_find_policy_match(struct mbuf *packet, int flags, struct ip6_out
 	}
 
 	// Check for loopback exception
-	if ((necp_pass_loopback > 0 &&
-		 necp_is_loopback(NULL, NULL, NULL, packet)) ||
-		(necp_pass_keepalives > 0 &&
-		 necp_get_is_keepalive_from_packet(packet))) {
+	if (necp_output_bypass(packet)) {
 		matched_policy_id = NECP_KERNEL_POLICY_ID_NO_MATCH;
 		if (result) {
 			*result = NECP_KERNEL_POLICY_RESULT_PASS;
@@ -7376,8 +7391,7 @@ necp_socket_is_allowed_to_send_recv_internal(struct inpcb *inp, struct sockaddr 
 	if (necp_kernel_socket_policies_count == 0 ||
 		(!(inp->inp_flags2 & INP2_WANT_APP_POLICY) && necp_kernel_socket_policies_non_app_count == 0)) {
 		if (necp_drop_all_order > 0) {
-			if (necp_pass_loopback > 0 &&
-				necp_is_loopback(override_local_addr, override_remote_addr, inp, NULL)) {
+			if (necp_socket_bypass(override_local_addr, override_remote_addr, inp)) {
 				allowed_to_receive = TRUE;
 			} else {
 				allowed_to_receive = FALSE;
@@ -7421,8 +7435,7 @@ necp_socket_is_allowed_to_send_recv_internal(struct inpcb *inp, struct sockaddr 
 	}
 
 	// Check for loopback exception
-	if (necp_pass_loopback > 0 &&
-		necp_is_loopback(override_local_addr, override_remote_addr, inp, NULL)) {
+	if (necp_socket_bypass(override_local_addr, override_remote_addr, inp)) {
 		allowed_to_receive = TRUE;
 		goto done;
 	}
@@ -7926,4 +7939,24 @@ necp_is_loopback(struct sockaddr *local_addr, struct sockaddr *remote_addr, stru
 	}
 
 	return (FALSE);
+}
+
+static bool
+necp_is_intcoproc(struct inpcb *inp, struct mbuf *packet)
+{
+
+	if (inp != NULL) {
+		return (sflt_permission_check(inp) ? true : false);
+	}
+	if (packet != NULL) {
+		struct ip6_hdr *ip6 = mtod(packet, struct ip6_hdr *);
+		if ((ip6->ip6_vfc & IPV6_VERSION_MASK) == IPV6_VERSION &&
+		    IN6_IS_ADDR_LINKLOCAL(&ip6->ip6_dst) &&
+		    ip6->ip6_dst.s6_addr32[2] == ntohl(0xaede48ff) &&
+		    ip6->ip6_dst.s6_addr32[3] == ntohl(0xfe334455)) {
+			return (true);
+		}
+	}
+
+	return (false);
 }

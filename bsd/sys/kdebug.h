@@ -572,6 +572,7 @@ extern void kdebug_reset(void);
 #define DBG_IOMDESC			6	/* Memory Descriptors */
 #define DBG_IOPOWER			7	/* Power Managerment */
 #define DBG_IOSERVICE			8	/* Matching etc. */
+#define DBG_IOREGISTRY			9	/* Registry */
 
 /* **** 9-32 reserved for internal IOKit usage **** */
 
@@ -774,6 +775,7 @@ extern void kdebug_reset(void);
 #define DBG_APP_APPKIT          0x0C
 #define DBG_APP_DFR             0x0E
 #define DBG_APP_SAMBA           0x80
+#define DBG_APP_EOSSUPPORT      0x81
 
 /* Kernel Debug codes for Throttling (DBG_THROTTLE) */
 #define OPEN_THROTTLE_WINDOW	0x1

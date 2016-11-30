@@ -1713,9 +1713,6 @@ void mach_port_get_status_helper(
 	ipc_port_t		port,
 	mach_port_status_t	*statusp)
 {
-	spl_t s;
-
-	s = splsched();
 	imq_lock(&port->ip_messages);
 	/* don't leak set IDs, just indicate that the port is in one or not */
 	statusp->mps_pset = !!(port->ip_in_pset);
@@ -1723,8 +1720,7 @@ void mach_port_get_status_helper(
 	statusp->mps_qlimit = port->ip_messages.imq_qlimit;
 	statusp->mps_msgcount = port->ip_messages.imq_msgcount;
 	imq_unlock(&port->ip_messages);
-	splx(s);
-	
+
 	statusp->mps_mscount = port->ip_mscount;
 	statusp->mps_sorights = port->ip_sorights;
 	statusp->mps_srights = port->ip_srights > 0;

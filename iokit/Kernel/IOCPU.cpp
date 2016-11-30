@@ -163,7 +163,7 @@ IOCPURunPlatformHaltRestartActions(uint32_t message)
 extern "C" kern_return_t 
 IOCPURunPlatformPanicActions(uint32_t message)
 {
-    if (!gActionQueues[kQueueHaltRestart].next) return (kIOReturnNotReady);
+    if (!gActionQueues[kQueuePanic].next) return (kIOReturnNotReady);
     return (iocpu_run_platform_actions(&gActionQueues[kQueuePanic], 0, 0U-1,
 				     (void *)(uintptr_t) message, NULL, NULL));
 }

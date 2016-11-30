@@ -2904,7 +2904,8 @@ fstat1(proc_t p, int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_t xsec
 			 * going to let them get the basic stat information.
 			 */
 			if (xsecurity == USER_ADDR_NULL) {
-				error = vn_stat_noauth((vnode_t)data, sbptr, NULL, isstat64, ctx);
+				error = vn_stat_noauth((vnode_t)data, sbptr, NULL, isstat64, ctx,
+						       fp->f_fglob->fg_cred);
 			} else {
 				error = vn_stat((vnode_t)data, sbptr, &fsec, isstat64, ctx);
 			}

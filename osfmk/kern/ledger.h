@@ -140,6 +140,7 @@ extern kern_return_t ledger_reset_callback_state(ledger_t ledger, int entry);
 extern kern_return_t ledger_disable_panic_on_negative(ledger_t ledger, int entry);
 
 extern kern_return_t ledger_rollup(ledger_t to_ledger, ledger_t from_ledger);
+extern kern_return_t ledger_rollup_entry(ledger_t to_ledger, ledger_t from_ledger, int entry);
 
 extern void ledger_ast(thread_t thread);
 

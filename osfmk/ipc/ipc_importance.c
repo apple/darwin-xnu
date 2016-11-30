@@ -161,6 +161,14 @@ static zone_t ipc_importance_inherit_zone;
 
 static ipc_voucher_attr_control_t ipc_importance_control;
 
+static boolean_t ipc_importance_task_check_transition(ipc_importance_task_t task_imp,
+	iit_update_type_t type, uint32_t delta);
+
+static void ipc_importance_task_propagate_assertion_locked(ipc_importance_task_t task_imp,
+	iit_update_type_t type, boolean_t update_task_imp);
+
+static ipc_importance_inherit_t ipc_importance_inherit_from_task(task_t from_task, task_t to_task);
+
 /*
  *	Routine:	ipc_importance_kmsg_link
  *	Purpose:
@@ -277,8 +285,9 @@ ipc_importance_inherit_find(
 
 	queue_iterate(&link_task->iit_inherits, inherit,
 		      ipc_importance_inherit_t, iii_inheritance) {
-		if (inherit->iii_to_task == to_task && inherit->iii_depth == depth)
+		if (inherit->iii_to_task == to_task && inherit->iii_depth == depth) {
 			return inherit;
+		}
 	}
 	return III_NULL;
 }
@@ -399,25 +408,63 @@ ipc_importance_release_locked(ipc_importance_elem_t elem)
 	/* dropping an inherit element */
 	case IIE_TYPE_INHERIT:
 	{
-		ipc_importance_inherit_t inherit;
+		ipc_importance_inherit_t inherit = (ipc_importance_inherit_t)elem;
+		ipc_importance_task_t to_task = inherit->iii_to_task;
 		ipc_importance_elem_t from_elem;
-		ipc_importance_task_t to_task;
 
-
-		inherit = (ipc_importance_inherit_t)elem;
-		to_task = inherit->iii_to_task;
 		assert(IIT_NULL != to_task);
-		assert(!inherit->iii_donating);
-
-		/* unlink and release the inherit */
 		assert(ipc_importance_task_is_any_receiver_type(to_task));
+
+		/* unlink the inherit from its source element */
 		from_elem = ipc_importance_inherit_unlink(inherit);
 		assert(IIE_NULL != from_elem);
+
+		/*
+		 * The attribute might have pending external boosts if the attribute
+		 * was given out during exec, drop them from the appropriate destination
+		 * task.
+		 *
+		 * The attribute will not have any pending external boosts if the
+		 * attribute was given out to voucher system since it would have been
+		 * dropped by ipc_importance_release_value, but there is not way to
+		 * detect that, thus if the attribute has a pending external boost,
+		 * drop them from the appropriate destination task.
+		 *
+		 * The inherit attribute from exec and voucher system would not
+		 * get deduped to each other, thus dropping the external boost
+		 * from destination task at two different places will not have
+		 * any unintended side effects.
+		 */
+		assert(inherit->iii_externcnt >= inherit->iii_externdrop);
+		if (inherit->iii_donating) {
+			uint32_t assertcnt = III_EXTERN(inherit);
+
+			assert(ipc_importance_task_is_any_receiver_type(to_task));
+			assert(to_task->iit_externcnt >= inherit->iii_externcnt);
+			assert(to_task->iit_externdrop >= inherit->iii_externdrop);
+			to_task->iit_externcnt -= inherit->iii_externcnt;
+			to_task->iit_externdrop -= inherit->iii_externdrop;
+			inherit->iii_externcnt = 0;
+			inherit->iii_externdrop = 0;
+			inherit->iii_donating = FALSE;
+
+			/* adjust the internal assertions - and propagate as needed */
+			if (ipc_importance_task_check_transition(to_task, IIT_UPDATE_DROP, assertcnt)) {
+				ipc_importance_task_propagate_assertion_locked(to_task, IIT_UPDATE_DROP, TRUE);
+			}
+		} else {
+			inherit->iii_externcnt = 0;
+			inherit->iii_externdrop = 0;
+		}
+
+		/* release the reference on the source element */
 		ipc_importance_release_locked(from_elem);
 		/* unlocked on return */
 
+		/* release the reference on the destination task */
 		ipc_importance_task_release(to_task);
 
+		/* free the inherit */
 		zfree(ipc_importance_inherit_zone, inherit);
 		break;
 	}
@@ -2078,6 +2125,60 @@ ipc_importance_disconnect_task(task_t task)
 }
 
 /*
+ *	Routine:	ipc_importance_exec_switch_task
+ *	Purpose:
+ *		Switch importance task base from old task to new task in exec.
+ *
+ *		Create an ipc importance linkage from old task to new task,
+ *		once the linkage is created, switch the importance task base
+ *		from old task to new task. After the switch, the linkage will
+ *		represent importance linkage from new task to old task with
+ *		watch port importance inheritance linked to new task.
+ *	Conditions:
+ *		Nothing locked.
+ *		Returns a reference on importance inherit.
+ */
+ipc_importance_inherit_t
+ipc_importance_exec_switch_task(
+	task_t old_task,
+	task_t new_task)
+{
+	ipc_importance_inherit_t inherit = III_NULL;
+	ipc_importance_task_t old_task_imp = IIT_NULL;
+	ipc_importance_task_t new_task_imp = IIT_NULL;
+
+	task_importance_reset(old_task);
+
+	/* Create an importance linkage from old_task to new_task */
+	inherit = ipc_importance_inherit_from_task(old_task, new_task);
+	if (inherit == III_NULL) {
+		return inherit;
+	}
+
+	/* Switch task importance base from old task to new task */
+	ipc_importance_lock();
+
+	old_task_imp = old_task->task_imp_base;
+	new_task_imp = new_task->task_imp_base;
+
+	old_task_imp->iit_task = new_task;
+	new_task_imp->iit_task = old_task;
+
+	old_task->task_imp_base = new_task_imp;
+	new_task->task_imp_base = old_task_imp;
+
+#if DEVELOPMENT || DEBUG
+	/*
+	 * Update the pid an proc name for importance base if any
+	 */
+	task_importance_update_owner_info(new_task);
+#endif
+	ipc_importance_unlock();
+
+	return inherit;
+}
+
+/*
  *	Routine:	ipc_importance_check_circularity
  *	Purpose:
  *		Check if queueing "port" in a message for "dest"
@@ -2524,7 +2625,7 @@ ipc_importance_send(
 }
 	
 /*
- *	Routine:	ipc_importance_inherit_from
+ *	Routine:	ipc_importance_inherit_from_kmsg
  *	Purpose:
  *		Create a "made" reference for an importance attribute representing
  *		an inheritance between the sender of a message (if linked) and the
@@ -2538,7 +2639,7 @@ ipc_importance_send(
  *		Nothing locked on entry.  May block.
  */
 static ipc_importance_inherit_t
-ipc_importance_inherit_from(ipc_kmsg_t kmsg)
+ipc_importance_inherit_from_kmsg(ipc_kmsg_t kmsg)
 {
 	ipc_importance_task_t	task_imp = IIT_NULL;
 	ipc_importance_elem_t 	from_elem = kmsg->ikm_importance;
@@ -2794,6 +2895,181 @@ ipc_importance_inherit_from(ipc_kmsg_t kmsg)
 }
 
 /*
+ *	Routine:	ipc_importance_inherit_from_task
+ *	Purpose:
+ *		Create a reference for an importance attribute representing
+ *		an inheritance between the to_task and from_task. The iii
+ *		created will be marked as III_FLAGS_FOR_OTHERS.
+ *
+ *		It will not dedup any iii which are not marked as III_FLAGS_FOR_OTHERS.
+ *
+ *		If the task is inactive, there isn't any need to return a new reference.
+ *	Conditions:
+ *		Nothing locked on entry.  May block.
+ *		It should not be called from voucher subsystem.
+ */
+static ipc_importance_inherit_t
+ipc_importance_inherit_from_task(
+	task_t from_task,
+	task_t to_task)
+{
+	ipc_importance_task_t	to_task_imp = IIT_NULL;
+	ipc_importance_task_t	from_task_imp = IIT_NULL;
+	ipc_importance_elem_t 	from_elem = IIE_NULL;
+
+	ipc_importance_inherit_t inherit = III_NULL;
+	ipc_importance_inherit_t alloc = III_NULL;
+	boolean_t donating;
+	uint32_t depth = 1;
+
+	to_task_imp = ipc_importance_for_task(to_task, FALSE);
+	from_task_imp = ipc_importance_for_task(from_task, FALSE);
+	from_elem = (ipc_importance_elem_t)from_task_imp;
+
+	ipc_importance_lock();
+
+	if (IIT_NULL == to_task_imp || IIT_NULL == from_task_imp) {
+		goto out_locked;
+	}
+
+	/*
+	 * No need to set up an inherit linkage if the to_task or from_task
+	 * isn't a receiver of one type or the other.
+	 */
+	if (!ipc_importance_task_is_any_receiver_type(to_task_imp) ||
+	    !ipc_importance_task_is_any_receiver_type(from_task_imp)) {
+		goto out_locked;
+	}
+
+	/* Do not allow to create a linkage to self */
+	if (to_task_imp == from_task_imp) {
+		goto out_locked;
+	}
+
+	incr_ref_counter(to_task_imp->iit_elem.iie_task_refs_added_inherit_from);
+	incr_ref_counter(from_elem->iie_kmsg_refs_added);
+
+	/*
+	 * Now that we have the from_elem figured out,
+	 * check to see if we already have an inherit for this pairing
+	 */
+	while (III_NULL == inherit) {
+		inherit = ipc_importance_inherit_find(from_elem, to_task_imp, depth);
+
+		/* Do we have to allocate a new inherit */
+		if (III_NULL == inherit) {
+			if (III_NULL != alloc) {
+				break;
+			}
+
+			/* allocate space */
+			ipc_importance_unlock();
+			alloc = (ipc_importance_inherit_t)
+				zalloc(ipc_importance_inherit_zone);
+			ipc_importance_lock();
+		}
+	}
+
+	/* snapshot the donating status while we have importance locked */
+	donating = ipc_importance_task_is_donor(from_task_imp);
+
+	if (III_NULL != inherit) {
+		/* We found one, piggyback on that */
+		assert(0 < III_REFS(inherit));
+		assert(0 < IIE_REFS(inherit->iii_from_elem));
+
+		/* Take a reference for inherit */
+		assert(III_REFS_MAX > III_REFS(inherit));
+		ipc_importance_inherit_reference_internal(inherit);
+
+		/* Reflect the inherit's change of status into the task boosts */
+		if (0 == III_EXTERN(inherit)) {
+			assert(!inherit->iii_donating);
+			inherit->iii_donating = donating;
+			if (donating) {
+				to_task_imp->iit_externcnt += inherit->iii_externcnt;
+				to_task_imp->iit_externdrop += inherit->iii_externdrop;
+			}
+		} else {
+			assert(donating == inherit->iii_donating);
+		}
+
+		/* add in a external reference for this use of the inherit */
+		inherit->iii_externcnt++;
+	} else {
+		/* initialize the previously allocated space */
+		inherit = alloc;
+		inherit->iii_bits = IIE_TYPE_INHERIT | 1;
+		inherit->iii_made = 0;
+		inherit->iii_externcnt = 1;
+		inherit->iii_externdrop = 0;
+		inherit->iii_depth = depth;
+		inherit->iii_to_task = to_task_imp;
+		inherit->iii_from_elem = IIE_NULL;
+		queue_init(&inherit->iii_kmsgs);
+
+		if (donating) {
+			inherit->iii_donating = TRUE;
+		} else {
+			inherit->iii_donating = FALSE;
+		}
+
+		/*
+		 * Chain our new inherit on the element it inherits from.
+		 * The new inherit takes our reference on from_elem.
+		 */
+		ipc_importance_inherit_link(inherit, from_elem);
+
+#if IIE_REF_DEBUG
+		ipc_importance_counter_init(&inherit->iii_elem);
+		from_elem->iie_kmsg_refs_inherited++;
+		task_imp->iit_elem.iie_task_refs_inherited++;
+#endif
+	}
+
+out_locked:
+
+	/* If found inherit and donating, reflect that in the task externcnt */
+	if (III_NULL != inherit && donating) {
+		to_task_imp->iit_externcnt++;
+		/* take the internal assertion */
+		ipc_importance_task_hold_internal_assertion_locked(to_task_imp, 1);
+		/* may have dropped and retaken importance lock */
+	}
+
+	/* If we didn't create a new inherit, we have some resources to release */
+	if (III_NULL == inherit || inherit != alloc) {
+		if (IIE_NULL != from_elem) {
+			if (III_NULL != inherit) {
+				incr_ref_counter(from_elem->iie_kmsg_refs_coalesced);
+			} else {
+				incr_ref_counter(from_elem->iie_kmsg_refs_dropped);
+			}
+			ipc_importance_release_locked(from_elem);
+			/* importance unlocked */
+		} else {
+			ipc_importance_unlock();
+		}
+
+		if (IIT_NULL != to_task_imp) {
+			if (III_NULL != inherit) {
+				incr_ref_counter(to_task_imp->iit_elem.iie_task_refs_coalesced);
+			}
+			ipc_importance_task_release(to_task_imp);
+		}
+
+		if (III_NULL != alloc) {
+			zfree(ipc_importance_inherit_zone, alloc);
+		}
+	} else {
+		/* from_elem and to_task_imp references transferred to new inherit */
+		ipc_importance_unlock();
+	}
+
+	return inherit;
+}
+
+/*
  *	Routine:	ipc_importance_receive
  *	Purpose:
  *		Process importance attributes in a received message.
@@ -2845,7 +3121,7 @@ ipc_importance_receive(
 		 * transferring any boosts from the kmsg linkage through the
 		 * port directly to the new inheritance object.
 		 */
-		inherit = ipc_importance_inherit_from(kmsg);
+		inherit = ipc_importance_inherit_from_kmsg(kmsg);
 		handle = (mach_voucher_attr_value_handle_t)inherit;
 
 		assert(IIE_NULL == kmsg->ikm_importance);
@@ -3115,9 +3391,9 @@ ipc_importance_release_value(
 	/* clear made */ 
 	elem->iie_made = 0;
 
-	/* 
-	 * If there are pending external boosts represented by this attribute, 
-	 * drop them from the apropriate task 
+	/*
+	 * If there are pending external boosts represented by this attribute,
+	 * drop them from the apropriate task
 	 */
 	if (IIE_TYPE_INHERIT == IIE_TYPE(elem)) {
 		ipc_importance_inherit_t inherit = (ipc_importance_inherit_t)elem;
@@ -3145,7 +3421,7 @@ ipc_importance_release_value(
 			inherit->iii_externcnt = 0;
 			inherit->iii_externdrop = 0;
 		}
-	} 
+	}
 
 	/* drop the made reference on elem */
 	ipc_importance_release_locked(elem);

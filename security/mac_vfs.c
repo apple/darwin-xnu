@@ -996,6 +996,26 @@ mac_vnode_check_getacl(vfs_context_t ctx, struct vnode *vp, acl_type_t type)
 #endif
 
 int
+mac_vnode_check_getattr(vfs_context_t ctx, struct ucred *file_cred,
+    struct vnode *vp, struct vnode_attr *va)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce)
+		return 0;
+#endif
+	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
+		return 0;
+
+	cred = vfs_context_ucred(ctx);
+	MAC_CHECK(vnode_check_getattr, cred, file_cred, vp, vp->v_label, va);
+	return (error);
+}
+
+int
 mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
     struct attrlist *alist)
 {

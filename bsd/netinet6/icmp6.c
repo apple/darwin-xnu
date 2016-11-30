@@ -164,7 +164,7 @@ static const char *icmp6_redirect_diag(struct in6_addr *,
 static struct mbuf *ni6_input(struct mbuf *, int);
 static struct mbuf *ni6_nametodns(const char *, int, int);
 static int ni6_dnsmatch(const char *, int, const char *, int);
-static int ni6_addrs(struct icmp6_nodeinfo *, 
+static int ni6_addrs(struct icmp6_nodeinfo *,
 			  struct ifnet **, char *);
 static int ni6_store_addrs(struct icmp6_nodeinfo *, struct icmp6_nodeinfo *,
 				struct ifnet *, int);
@@ -752,7 +752,7 @@ icmp6_input(struct mbuf **mp, int *offp, int proto)
 		if (!icmp6_nodeinfo)
 			break;
 //### LD 10/20 Check fbsd differences here. Not sure we're more advanced or not.
-		/* By RFC 4620 refuse to answer queries from global scope addresses */ 
+		/* By RFC 4620 refuse to answer queries from global scope addresses */
 		if ((icmp6_nodeinfo & 8) != 8 && in6_addrscope(&ip6->ip6_src) == IPV6_ADDR_SCOPE_GLOBAL)
 			break;
 
@@ -2036,7 +2036,7 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 	rip6src.sin6_family = AF_INET6;
 	rip6src.sin6_len = sizeof(struct sockaddr_in6);
 	rip6src.sin6_addr = ip6->ip6_src;
-	if (sa6_recoverscope(&rip6src, TRUE)) 
+	if (sa6_recoverscope(&rip6src, TRUE))
 		return (IPPROTO_DONE);
 
 	lck_rw_lock_shared(ripcbinfo.ipi_lock);
@@ -2136,7 +2136,8 @@ icmp6_reflect(struct mbuf *m, size_t off)
 	struct nd_ifinfo *ndi = NULL;
 	u_int32_t oflow;
 	struct ip6_out_args ip6oa = { IFSCOPE_NONE, { 0 },
-	    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR, 0,
+	    IP6OAF_SELECT_SRCIF | IP6OAF_BOUND_SRCADDR |
+	    IP6OAF_INTCOPROC_ALLOWED | IP6OAF_AWDL_UNRESTRICTED, 0,
 	    SO_TC_UNSPEC, _NET_SERVICE_TYPE_UNSPEC };
 
 	if (!(m->m_pkthdr.pkt_flags & PKTF_LOOP) && m->m_pkthdr.rcvif != NULL) {
@@ -2897,7 +2898,7 @@ icmp6_ctloutput(struct socket *so, struct sockopt *sopt)
 			}
 
 			if (optlen == 0) {
-				/* According to RFC 3542, an installed filter can be 
+				/* According to RFC 3542, an installed filter can be
 				 * cleared by issuing a setsockopt for ICMP6_FILTER
 				 * with a zero length.
 				 */

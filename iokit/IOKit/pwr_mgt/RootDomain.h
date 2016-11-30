@@ -636,6 +636,7 @@ private:
     bool                    uuidPublished;
 
     // Pref: idle time before idle sleep
+    bool                    idleSleepEnabled;
     unsigned long           sleepSlider;
     unsigned long           idleSeconds;
     uint64_t                autoWakeStart;

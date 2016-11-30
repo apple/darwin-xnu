@@ -664,7 +664,8 @@ task_policy_create(task_t task, task_t parent_task)
 	task->requested_policy.trp_terminated       = parent_task->requested_policy.trp_terminated;
 	task->requested_policy.trp_qos_clamp        = parent_task->requested_policy.trp_qos_clamp;
 
-	if (task->requested_policy.trp_apptype == TASK_APPTYPE_DAEMON_ADAPTIVE) {
+	if (task->requested_policy.trp_apptype == TASK_APPTYPE_DAEMON_ADAPTIVE && !task_is_exec_copy(task)) {
+		/* Do not update the apptype for exec copy task */
 		if (parent_task->requested_policy.trp_boosted) {
 			task->requested_policy.trp_apptype = TASK_APPTYPE_DAEMON_INTERACTIVE;
 			task_importance_mark_donor(task, TRUE);

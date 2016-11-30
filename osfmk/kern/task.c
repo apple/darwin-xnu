@@ -220,6 +220,7 @@ extern kern_return_t iokit_task_terminate(task_t task);
 
 extern kern_return_t exception_deliver(thread_t, exception_type_t, mach_exception_data_t, mach_msg_type_number_t, struct exception_action *, lck_mtx_t *);
 extern void bsd_copythreadname(void *dst_uth, void *src_uth);
+extern kern_return_t thread_resume(thread_t thread);
 
 // Warn tasks when they hit 80% of their memory limit.
 #define	PHYS_FOOTPRINT_WARNING_LEVEL 80
@@ -409,6 +410,88 @@ task_bank_init(__unused task_t task) {
 	bank_task_initialize(task);
 #endif
 
+}
+
+void
+task_set_did_exec_flag(task_t task)
+{
+	task->t_procflags |= TPF_DID_EXEC;
+}
+
+void
+task_clear_exec_copy_flag(task_t task)
+{
+	task->t_procflags &= ~TPF_EXEC_COPY;
+}
+
+/*
+ * This wait event is t_procflags instead of t_flags because t_flags is volatile
+ *
+ * TODO: store the flags in the same place as the event
+ * rdar://problem/28501994
+ */
+event_t
+task_get_return_wait_event(task_t task)
+{
+	return (event_t)&task->t_procflags;
+}
+
+void
+task_clear_return_wait(task_t task)
+{
+	task_lock(task);
+
+	task->t_flags &= ~TF_LRETURNWAIT;
+
+	if (task->t_flags & TF_LRETURNWAITER) {
+		thread_wakeup(task_get_return_wait_event(task));
+		task->t_flags &= ~TF_LRETURNWAITER;
+	}
+
+	task_unlock(task);
+}
+
+void
+task_wait_to_return(void)
+{
+	task_t task;
+
+	task = current_task();
+	task_lock(task);
+
+	if (task->t_flags & TF_LRETURNWAIT) {
+		do {
+			task->t_flags |= TF_LRETURNWAITER;
+			assert_wait(task_get_return_wait_event(task), THREAD_UNINT);
+			task_unlock(task);
+
+			thread_block(THREAD_CONTINUE_NULL);
+
+			task_lock(task);
+		} while (task->t_flags & TF_LRETURNWAIT);
+	}
+
+	task_unlock(task);
+
+	thread_bootstrap_return();
+}
+
+boolean_t
+task_is_exec_copy(task_t task)
+{
+	return task_is_exec_copy_internal(task);
+}
+
+boolean_t
+task_did_exec(task_t task)
+{
+	return task_did_exec_internal(task);
+}
+
+boolean_t
+task_is_active(task_t task)
+{
+	return task->active;
 }
 
 #if TASK_REFERENCE_LEAK_DEBUG
@@ -602,9 +685,9 @@ task_init(void)
 	 * Create the kernel task as the first task.
 	 */
 #ifdef __LP64__
-	if (task_create_internal(TASK_NULL, NULL, FALSE, TRUE, TF_NONE, &kernel_task) != KERN_SUCCESS)
+	if (task_create_internal(TASK_NULL, NULL, FALSE, TRUE, TF_NONE, TPF_NONE, &kernel_task) != KERN_SUCCESS)
 #else
-	if (task_create_internal(TASK_NULL, NULL, FALSE, FALSE, TF_NONE, &kernel_task) != KERN_SUCCESS)
+	if (task_create_internal(TASK_NULL, NULL, FALSE, FALSE, TF_NONE, TPF_NONE, &kernel_task) != KERN_SUCCESS)
 #endif
 		panic("task_init\n");
 
@@ -857,6 +940,7 @@ task_create_internal(
 	boolean_t	inherit_memory,
 	boolean_t	is_64bit,
 	uint32_t	t_flags,
+	uint32_t	t_procflags,
 	task_t		*child_task)		/* OUT */
 {
 	task_t			new_task;
@@ -909,6 +993,7 @@ task_create_internal(
 	new_task->user_data = NULL;
 	new_task->priv_flags = 0;
 	new_task->t_flags = t_flags;
+	new_task->t_procflags = t_procflags;
 	new_task->importance = 0;
 	new_task->corpse_info_kernel = NULL;
 	new_task->exec_token = 0;
@@ -1020,24 +1105,27 @@ task_create_internal(
 
 #if IMPORTANCE_INHERITANCE
 		ipc_importance_task_t new_task_imp = IIT_NULL;
+		boolean_t inherit_receive = TRUE;
 
 		if (task_is_marked_importance_donor(parent_task)) {
 			new_task_imp = ipc_importance_for_task(new_task, FALSE);
 			assert(IIT_NULL != new_task_imp);
 			ipc_importance_task_mark_donor(new_task_imp, TRUE);
 		}
-		/* Embedded doesn't want this to inherit */
-		if (task_is_marked_importance_receiver(parent_task)) {
-			if (IIT_NULL == new_task_imp)
-				new_task_imp = ipc_importance_for_task(new_task, FALSE);
-			assert(IIT_NULL != new_task_imp);
-			ipc_importance_task_mark_receiver(new_task_imp, TRUE);
-		}
-		if (task_is_marked_importance_denap_receiver(parent_task)) {
-			if (IIT_NULL == new_task_imp)
-				new_task_imp = ipc_importance_for_task(new_task, FALSE);
-			assert(IIT_NULL != new_task_imp);
-			ipc_importance_task_mark_denap_receiver(new_task_imp, TRUE);
+
+		if (inherit_receive) {
+			if (task_is_marked_importance_receiver(parent_task)) {
+				if (IIT_NULL == new_task_imp)
+					new_task_imp = ipc_importance_for_task(new_task, FALSE);
+				assert(IIT_NULL != new_task_imp);
+				ipc_importance_task_mark_receiver(new_task_imp, TRUE);
+			}
+			if (task_is_marked_importance_denap_receiver(parent_task)) {
+				if (IIT_NULL == new_task_imp)
+					new_task_imp = ipc_importance_for_task(new_task, FALSE);
+				assert(IIT_NULL != new_task_imp);
+				ipc_importance_task_mark_denap_receiver(new_task_imp, TRUE);
+			}
 		}
 		
 		if (IIT_NULL != new_task_imp) {
@@ -1086,35 +1174,7 @@ task_create_internal(
 
 	/* Copy resource acc. info from Parent for Corpe Forked task. */
 	if (parent_task != NULL && (t_flags & TF_CORPSE_FORK)) {
-		new_task->total_user_time = parent_task->total_user_time;
-		new_task->total_system_time = parent_task->total_system_time;
-		ledger_rollup(new_task->ledger, parent_task->ledger);
-		new_task->faults = parent_task->faults;
-		new_task->pageins = parent_task->pageins;
-		new_task->cow_faults = parent_task->cow_faults;
-		new_task->messages_sent = parent_task->messages_sent;
-		new_task->messages_received = parent_task->messages_received;
-		new_task->syscalls_mach = parent_task->syscalls_mach;
-		new_task->syscalls_unix = parent_task->syscalls_unix;
-		new_task->c_switch = parent_task->c_switch;
-		new_task->p_switch = parent_task->p_switch;
-		new_task->ps_switch = parent_task->ps_switch;
-		new_task->extmod_statistics = parent_task->extmod_statistics;
-		new_task->low_mem_notified_warn = parent_task->low_mem_notified_warn;
-		new_task->low_mem_notified_critical = parent_task->low_mem_notified_critical;
-		new_task->purged_memory_warn = parent_task->purged_memory_warn;
-		new_task->purged_memory_critical = parent_task->purged_memory_critical;
-		new_task->low_mem_privileged_listener = parent_task->low_mem_privileged_listener;
-		*new_task->task_io_stats = *parent_task->task_io_stats;
-		new_task->cpu_time_qos_stats = parent_task->cpu_time_qos_stats;
-		new_task->task_timer_wakeups_bin_1 = parent_task->task_timer_wakeups_bin_1;
-		new_task->task_timer_wakeups_bin_2 = parent_task->task_timer_wakeups_bin_2;
-		new_task->task_gpu_ns = parent_task->task_gpu_ns;
-		new_task->task_immediate_writes = parent_task->task_immediate_writes;
-		new_task->task_deferred_writes = parent_task->task_deferred_writes;
-		new_task->task_invalidated_writes = parent_task->task_invalidated_writes;
-		new_task->task_metadata_writes = parent_task->task_metadata_writes;
-		new_task->task_energy = parent_task->task_energy;
+		task_rollup_accounting_info(new_task, parent_task);
 	} else {
 		/* Initialize to zero for standard fork/spawn case */
 		new_task->total_user_time = 0;
@@ -1203,6 +1263,63 @@ task_create_internal(
 
 	*child_task = new_task;
 	return(KERN_SUCCESS);
+}
+
+/*
+ *	task_rollup_accounting_info
+ *
+ *	Roll up accounting stats. Used to rollup stats
+ *	for exec copy task and corpse fork.
+ */
+void
+task_rollup_accounting_info(task_t to_task, task_t from_task)
+{
+	assert(from_task != to_task);
+
+	to_task->total_user_time = from_task->total_user_time;
+	to_task->total_system_time = from_task->total_system_time;
+	to_task->faults = from_task->faults;
+	to_task->pageins = from_task->pageins;
+	to_task->cow_faults = from_task->cow_faults;
+	to_task->messages_sent = from_task->messages_sent;
+	to_task->messages_received = from_task->messages_received;
+	to_task->syscalls_mach = from_task->syscalls_mach;
+	to_task->syscalls_unix = from_task->syscalls_unix;
+	to_task->c_switch = from_task->c_switch;
+	to_task->p_switch = from_task->p_switch;
+	to_task->ps_switch = from_task->ps_switch;
+	to_task->extmod_statistics = from_task->extmod_statistics;
+	to_task->low_mem_notified_warn = from_task->low_mem_notified_warn;
+	to_task->low_mem_notified_critical = from_task->low_mem_notified_critical;
+	to_task->purged_memory_warn = from_task->purged_memory_warn;
+	to_task->purged_memory_critical = from_task->purged_memory_critical;
+	to_task->low_mem_privileged_listener = from_task->low_mem_privileged_listener;
+	*to_task->task_io_stats = *from_task->task_io_stats;
+	to_task->cpu_time_qos_stats = from_task->cpu_time_qos_stats;
+	to_task->task_timer_wakeups_bin_1 = from_task->task_timer_wakeups_bin_1;
+	to_task->task_timer_wakeups_bin_2 = from_task->task_timer_wakeups_bin_2;
+	to_task->task_gpu_ns = from_task->task_gpu_ns;
+	to_task->task_immediate_writes = from_task->task_immediate_writes;
+	to_task->task_deferred_writes = from_task->task_deferred_writes;
+	to_task->task_invalidated_writes = from_task->task_invalidated_writes;
+	to_task->task_metadata_writes = from_task->task_metadata_writes;
+	to_task->task_energy = from_task->task_energy;
+
+	/* Skip ledger roll up for memory accounting entries */
+	ledger_rollup_entry(to_task->ledger, from_task->ledger, task_ledgers.cpu_time);
+	ledger_rollup_entry(to_task->ledger, from_task->ledger, task_ledgers.platform_idle_wakeups);
+	ledger_rollup_entry(to_task->ledger, from_task->ledger, task_ledgers.interrupt_wakeups);
+#if CONFIG_SCHED_SFI
+	for (sfi_class_id_t class_id = SFI_CLASS_UNSPECIFIED; class_id < MAX_SFI_CLASS_ID; class_id++) {
+		ledger_rollup_entry(to_task->ledger, from_task->ledger, task_ledgers.sfi_wait_times[class_id]);
+	}
+#endif
+#if CONFIG_BANK
+	ledger_rollup_entry(to_task->ledger, from_task->ledger, task_ledgers.cpu_time_billed_to_me);
+	ledger_rollup_entry(to_task->ledger, from_task->ledger, task_ledgers.cpu_time_billed_to_others);
+#endif
+	ledger_rollup_entry(to_task->ledger, from_task->ledger, task_ledgers.physical_writes);
+	ledger_rollup_entry(to_task->ledger, from_task->ledger, task_ledgers.logical_writes);
 }
 
 int task_dropped_imp_count = 0;
@@ -1974,7 +2091,7 @@ task_terminate_internal(
 	}
 
 #ifdef MACH_BSD
-	if (task->bsd_info != NULL) {
+	if (task->bsd_info != NULL && !task_is_exec_copy(task)) {
 		pid = proc_pid(task->bsd_info);
 	}
 #endif /* MACH_BSD */
@@ -2045,7 +2162,7 @@ task_terminate_internal(
 	 * and we have to report it.
 	 */
 	char procname[17];
-	if (task->bsd_info) {
+	if (task->bsd_info && !task_is_exec_copy(task)) {
 		pid = proc_pid(task->bsd_info);
 		proc_name_kdp(task, procname, sizeof (procname));
 	} else {
@@ -2185,6 +2302,9 @@ task_start_halt_locked(task_t task, boolean_t should_mark_corpse)
  *	Complete task halt by waiting for threads to terminate, then clean
  *	up task resources (VM, port namespace, etc...) and then let the
  *	current thread go in the (practically empty) task context.
+ *
+ *	Note: task->halting flag is not cleared in order to avoid creation
+ *	of new thread in old exec'ed task.
  */
 void
 task_complete_halt(task_t task)
@@ -2239,8 +2359,6 @@ task_complete_halt(task_t task)
 	 * at worst someone is racing a SUID exec.
 	 */
 	iokit_task_terminate(task);
-
-	task->halting = FALSE;
 }
 
 /*

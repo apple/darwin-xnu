@@ -126,6 +126,8 @@ extern int thread_enable_fpe(thread_t act, int onoff);
 extern thread_t	port_name_to_thread(mach_port_name_t port_name);
 extern kern_return_t get_signalact(task_t , thread_t *, int);
 extern unsigned int get_useraddr(void);
+extern boolean_t task_did_exec(task_t task);
+extern boolean_t task_is_exec_copy(task_t task);
 
 /*
  * ---
@@ -3318,6 +3320,11 @@ bsd_ast(thread_t thread)
 
 	if (p == NULL)
 		return;
+
+	/* don't run bsd ast on exec copy or exec'ed tasks */
+	if (task_did_exec(current_task()) || task_is_exec_copy(current_task())) {
+		return;
+	}
 
 	if ((p->p_flag & P_OWEUPC) && (p->p_flag & P_PROFIL)) {
 		pc = get_useraddr();

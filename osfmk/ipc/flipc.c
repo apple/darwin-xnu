@@ -318,7 +318,6 @@ flipc_cmd_ack(flipc_ack_msg_t   fmsg,
     ip_lock(lport);
 
     ipc_mqueue_t lport_mq = &lport->ip_messages;
-    spl_t s = splsched();
     imq_lock(lport_mq);
 
     assert(fport->peek_count >= msg_count); // Can't ack what we haven't peeked!
@@ -330,7 +329,6 @@ flipc_cmd_ack(flipc_ack_msg_t   fmsg,
     }
 
     imq_unlock(lport_mq);
-    splx(s);
     ip_unlock(lport);
 
     if (kick)
@@ -461,10 +459,9 @@ flipc_msg_to_remote_node(mach_node_t  to_node,
                 port_mq->data.port.fport->peek_count++;
 
             /* Clean up outstanding prepost on port_mq.
-             * This also unlocks port_mq and restores spl.
+             * This also unlocks port_mq.
              */
-            spl_t spl = splsched();
-            ipc_mqueue_release_peek_ref(port_mq, &spl);
+            ipc_mqueue_release_peek_ref(port_mq);
             assert(get_preemption_level()==0);
 
             /* DANGER:  The code below must be allowed to allocate so it can't
@@ -636,17 +633,15 @@ flipc_msg_ack(mach_node_t   node,
 
 #if (0)
     mach_msg_return_t mmr;
-    spl_t s;
     ipc_mqueue_t ack_mqueue;
 
     ip_lock(ack_port);
     ack_mqueue = &ack_port->ip_messages;
-    s = splsched();
     imq_lock(ack_mqueue);
     ip_unlock(ack_port);
 
-    /* ipc_mqueue_send() unlocks ack_mqueue and restores splx(s) */
-    mmr = ipc_mqueue_send(ack_mqueue, kmsg, 0,  0, s);
+    /* ipc_mqueue_send() unlocks ack_mqueue */
+    mmr = ipc_mqueue_send(ack_mqueue, kmsg, 0,  0);
 #else
     kern_return_t kr;
     kr = ipc_kmsg_send(kmsg,

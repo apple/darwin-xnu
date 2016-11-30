@@ -5328,6 +5328,11 @@ vfs_update_vfsstat(mount_t mp, vfs_context_t ctx, __unused int eventtype)
 	VFSATTR_WANTED(&va, f_ffree);
 	VFSATTR_WANTED(&va, f_bsize);
 	VFSATTR_WANTED(&va, f_fssubtype);
+
+	if ((error = vfs_getattr(mp, &va, ctx)) != 0) {
+		KAUTH_DEBUG("STAT - filesystem returned error %d", error);
+		return(error);
+	}
 #if CONFIG_MACF
 	if (eventtype == VFS_USER_EVENT) {
 		error = mac_mount_check_getattr(ctx, mp, &va);
@@ -5335,12 +5340,6 @@ vfs_update_vfsstat(mount_t mp, vfs_context_t ctx, __unused int eventtype)
 			return (error);
 	}
 #endif
-
-	if ((error = vfs_getattr(mp, &va, ctx)) != 0) {
-		KAUTH_DEBUG("STAT - filesystem returned error %d", error);
-		return(error);
-	}
-
 	/*
 	 * Unpack into the per-mount structure.
 	 *

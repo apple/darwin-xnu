@@ -1985,11 +1985,24 @@ setlogin(proc_t p, struct setlogin_args *uap, __unused int32_t *retval)
 int
 set_security_token(proc_t p)
 {
+	return set_security_token_task_internal(p, p->task);
+}
+
+/*
+ * Set the secrity token of the task with current euid and eguid
+ * The function takes a proc and a task, where proc->task might point to a
+ * different task if called from exec.
+ */
+
+int
+set_security_token_task_internal(proc_t p, void *t)
+{
 	security_token_t sec_token;
 	audit_token_t    audit_token;
 	kauth_cred_t my_cred;
 	posix_cred_t my_pcred;
 	host_priv_t host_priv;
+	task_t task = t;
 
 	/*
 	 * Don't allow a vfork child to override the parent's token settings
@@ -1997,7 +2010,7 @@ set_security_token(proc_t p)
 	 * suffer along using the parent's token until the exec().  It's all
 	 * undefined behavior anyway, right?
 	 */
-	if (p->task == current_task()) {
+	if (task == current_task()) {
 		uthread_t	 uthread;
 		uthread = (uthread_t)get_bsdthread_info(current_thread());
 		if (uthread->uu_flag & UT_VFORK)
@@ -2045,11 +2058,11 @@ set_security_token(proc_t p)
 	/* 
 	 * Update the pid an proc name for importance base if any
 	 */
-	task_importance_update_owner_info(p->task);
+	task_importance_update_owner_info(task);
 #endif
 
 	return (host_security_set_task_token(host_security_self(),
-					   p->task,
+					   task,
 					   sec_token,
 					   audit_token,
 					   host_priv) != KERN_SUCCESS);

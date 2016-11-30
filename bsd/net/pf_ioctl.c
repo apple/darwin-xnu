@@ -2855,7 +2855,7 @@ pf_delete_rule_by_ticket(struct pfioc_rule *pr, u_int32_t req_dev)
 	}
 	if (rule == NULL)
 		return (ENOENT);
-	else 
+	else
 		i--;
 
 	if (strcmp(rule->owner, pr->rule.owner))
@@ -2882,7 +2882,7 @@ delete_rule:
 		if (rule == NULL)
 			panic("%s: rule not found!", __func__);
 
-		/* 
+		/*
 		 * if reqest device != rule's device, bail :
 		 * with error if ticket matches;
 		 * without error if ticket doesn't match (i.e. its just cleanup)
@@ -2905,7 +2905,7 @@ delete_rule:
 		    ++delete_ruleset->rules[i].inactive.ticket;
 		goto delete_rule;
 	} else {
-		/* 
+		/*
 		 * process deleting rule only if device that added the
 		 * rule matches device that issued the request
 		 */
@@ -2937,7 +2937,7 @@ pf_delete_rule_by_owner(char *owner, u_int32_t req_dev)
 		ruleset = &pf_main_ruleset;
 		while (rule) {
 			next = TAILQ_NEXT(rule, entries);
-			/* 
+			/*
 			 * process deleting rule only if device that added the
 			 * rule matches device that issued the request
 			 */
@@ -4856,6 +4856,10 @@ pf_af_hook(struct ifnet *ifp, struct mbuf **mppn, struct mbuf **mp,
 	struct mbuf *nextpkt;
 	net_thread_marks_t marks;
 	struct ifnet * pf_ifp = ifp;
+
+	/* Always allow traffic on co-processor interfaces. */
+	if (ifp && IFNET_IS_INTCOPROC(ifp))
+		return (0);
 
 	marks = net_thread_marks_push(NET_THREAD_HELD_PF);
 
