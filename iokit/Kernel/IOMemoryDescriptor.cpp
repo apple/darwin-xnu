@@ -383,17 +383,19 @@ struct IOMemoryEntry
 
 struct IOMemoryReference
 {
-    volatile SInt32 refCount;
-    vm_prot_t       prot;
-    uint32_t        capacity;
-    uint32_t        count;
-    IOMemoryEntry   entries[0];
+    volatile SInt32             refCount;
+    vm_prot_t                   prot;
+    uint32_t                    capacity;
+    uint32_t                    count;
+    struct IOMemoryReference  * mapRef;
+    IOMemoryEntry               entries[0];
 };
 
 enum
 {
     kIOMemoryReferenceReuse = 0x00000001,
     kIOMemoryReferenceWrite = 0x00000002,
+    kIOMemoryReferenceCOW   = 0x00000004,
 };
 
 SInt32 gIOMemoryReferenceCount;
@@ -434,6 +436,12 @@ IOGeneralMemoryDescriptor::memoryReferenceFree(IOMemoryReference * ref)
 {
     IOMemoryEntry * entries;
     size_t          size;
+
+    if (ref->mapRef)
+    {
+	memoryReferenceFree(ref->mapRef);
+	ref->mapRef = 0;
+    }
 
     entries = ref->entries + ref->count;
     while (entries > &ref->entries[0])
@@ -489,10 +497,14 @@ IOGeneralMemoryDescriptor::memoryReferenceCreate(
     tag = getVMTag(kernel_map);
     entries = &ref->entries[0];
     count = 0;
+    err = KERN_SUCCESS;
 
     offset = 0;
     rangeIdx = 0;
-    if (_task) getAddrLenForInd(nextAddr, nextLen, type, _ranges, rangeIdx);
+    if (_task)
+    {
+        getAddrLenForInd(nextAddr, nextLen, type, _ranges, rangeIdx);
+    }
     else
     {
         nextAddr = getPhysicalSegment(offset, &physLen, kIOMemoryMapperNone);
@@ -526,6 +538,7 @@ IOGeneralMemoryDescriptor::memoryReferenceCreate(
     if (kIODefaultCache != cacheMode)                    prot |= VM_PROT_WRITE;
     if (kIODirectionOut != (kIODirectionOutIn & _flags)) prot |= VM_PROT_WRITE;
     if (kIOMemoryReferenceWrite & options)               prot |= VM_PROT_WRITE;
+    if (kIOMemoryReferenceCOW   & options)               prot |= MAP_MEM_VM_COPY;
 
     if ((kIOMemoryReferenceReuse & options) && _memRef)
     {
@@ -650,6 +663,13 @@ IOGeneralMemoryDescriptor::memoryReferenceCreate(
     ref->count = count;
     ref->prot  = prot;
 
+    if (_task && (KERN_SUCCESS == err)
+      && (kIOMemoryMapCopyOnWrite & _flags)
+      && !(kIOMemoryReferenceCOW & options))
+    {
+        err = memoryReferenceCreate(options | kIOMemoryReferenceCOW, &ref->mapRef);
+    }
+
     if (KERN_SUCCESS == err)
     {
 	if (MAP_MEM_NAMED_REUSE & prot)
@@ -723,14 +743,19 @@ IOGeneralMemoryDescriptor::memoryReferenceMap(
     IOOptionBits      type;
     IOOptionBits      cacheMode;
     vm_tag_t          tag;
+    // for the kIOMapPrefault option.
+    upl_page_info_t * pageList = NULL;
+    UInt              currentPageIndex = 0;
+    bool              didAlloc;
 
-    /*
-     * For the kIOMapPrefault option.
-     */
-    upl_page_info_t *pageList = NULL;
-    UInt currentPageIndex = 0;
+    if (ref->mapRef)
+    {
+	err = memoryReferenceMap(ref->mapRef, map, inoffset, size, options, inaddr);
+	return (err);
+    }
 
     type = _flags & kIOMemoryTypeMask;
+
     prot = VM_PROT_READ;
     if (!(kIOMapReadOnly & options)) prot |= VM_PROT_WRITE;
     prot &= ref->prot;
@@ -769,7 +794,9 @@ IOGeneralMemoryDescriptor::memoryReferenceMap(
     nextAddr  += remain;
     nextLen   -= remain;
     pageOffset = (page_mask & nextAddr);
-    addr = 0;
+    addr       = 0;
+    didAlloc   = false;
+
     if (!(options & kIOMapAnywhere))
     {
         addr = *inaddr;
@@ -813,8 +840,9 @@ IOGeneralMemoryDescriptor::memoryReferenceMap(
 	    err = IOMemoryDescriptorMapAlloc(ref.map, &ref);
 	if (KERN_SUCCESS == err)
 	{
-	    addr = ref.mapped;
-	    map  = ref.map;
+	    addr     = ref.mapped;
+	    map      = ref.map;
+	    didAlloc = true;
 	}
     }
 
@@ -956,7 +984,7 @@ IOGeneralMemoryDescriptor::memoryReferenceMap(
             }
         }
 
-    if ((KERN_SUCCESS != err) && addr && !(kIOMapOverwrite & options))
+    if ((KERN_SUCCESS != err) && didAlloc)
     {
         (void) mach_vm_deallocate(map, trunc_page_64(addr), size);
         addr = 0;
@@ -1449,12 +1477,6 @@ IOGeneralMemoryDescriptor::initWithOptions(void *	buffers,
         gIOSystemMapper = mapper = IOMapper::gSystem;
     }
 
-    // Temp binary compatibility for kIOMemoryThreadSafe
-    if (kIOMemoryReserved6156215 & options)
-    {
-	options &= ~kIOMemoryReserved6156215;
-	options |= kIOMemoryThreadSafe;
-    }
     // Remove the dynamic internal use flags from the initial setting
     options 		  &= ~(kIOMemoryPreparedReadOnly);
     _flags		   = options;
@@ -3503,7 +3525,7 @@ IOReturn IOGeneralMemoryDescriptor::doMap(
     // upl_transpose> //
     else
     {
-	err = memoryReferenceMap(_memRef, mapping->fAddressMap, offset, length, options, &mapping->fAddress);
+        err = memoryReferenceMap(_memRef, mapping->fAddressMap, offset, length, options, &mapping->fAddress);
 #if IOTRACKING
         if ((err == KERN_SUCCESS) && ((kIOTracking & gIOKitDebug) || _task))
         {

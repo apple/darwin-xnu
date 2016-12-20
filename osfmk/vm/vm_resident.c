@@ -1598,6 +1598,7 @@ vm_page_replace(
 				 */
 				*mp = m->next_m;
 				m->hashed = FALSE;
+				m->next_m = VM_PAGE_PACK_PTR(NULL);
 
 				found_m = m;
 				break;
@@ -1698,6 +1699,7 @@ vm_page_remove(
 		bucket->cur_count--;
 #endif /* MACH_PAGE_HASH_STATS */
 		mem->hashed = FALSE;
+		this->next_m = VM_PAGE_PACK_PTR(NULL);
 		lck_spin_unlock(bucket_lock);
 	}
 	/*
@@ -2799,15 +2801,9 @@ vm_page_grab_secluded(void)
 	}
 	assert(!vm_page_queue_empty(&vm_page_queue_secluded));
 	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-	vm_page_queue_remove_first(&vm_page_queue_secluded,
-			   mem,
-			   vm_page_t,
-			   pageq);
+	mem = vm_page_queue_first(&vm_page_queue_secluded);
 	assert(mem->vm_page_q_state == VM_PAGE_ON_SECLUDED_Q);
-
-	VM_PAGE_ZERO_PAGEQ_ENTRY(mem);
-	mem->vm_page_q_state = VM_PAGE_NOT_ON_Q;
-	vm_page_secluded_count--;
+	vm_page_queues_remove(mem, TRUE);
 
 	object = VM_PAGE_OBJECT(mem);
 
@@ -2815,14 +2811,24 @@ vm_page_grab_secluded(void)
 	assert(!VM_PAGE_WIRED(mem));
 	if (object == VM_OBJECT_NULL) {
 		/* free for grab! */
-		assert(mem->busy);
-		vm_page_secluded_count_free--;
 		vm_page_unlock_queues();
 		vm_page_secluded.grab_success_free++;
+
+		assert(mem->busy);
+		assert(mem->vm_page_q_state == VM_PAGE_NOT_ON_Q);
+		assert(VM_PAGE_OBJECT(mem) == VM_OBJECT_NULL);
+		assert(mem->pageq.next == 0);
+		assert(mem->pageq.prev == 0);
+		assert(mem->listq.next == 0);
+		assert(mem->listq.prev == 0);
+#if CONFIG_BACKGROUND_QUEUE
+		assert(mem->vm_page_on_backgroundq == 0);
+		assert(mem->vm_page_backgroundq.next == 0);
+		assert(mem->vm_page_backgroundq.prev == 0);
+#endif /* CONFIG_BACKGROUND_QUEUE */
 		return mem;
 	}
 
-	vm_page_secluded_count_inuse--;
 	assert(!object->internal);
 //	vm_page_pageable_external_count--;
 
@@ -2862,8 +2868,6 @@ vm_page_grab_secluded(void)
 	if (mem->reference) {
 		/* it's been used but we do need to grab a page... */
 	}
-	/* page could still be on vm_page_queue_background... */
-	vm_page_free_prepare_queues(mem);
 
 	vm_page_unlock_queues();
 
@@ -2875,8 +2879,20 @@ vm_page_grab_secluded(void)
 		assert(pmap_verify_free(VM_PAGE_GET_PHYS_PAGE(mem)));
 	}
 	pmap_clear_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem));
-	assert(mem->busy);
 	vm_page_secluded.grab_success_other++;
+
+	assert(mem->busy);
+	assert(mem->vm_page_q_state == VM_PAGE_NOT_ON_Q);
+	assert(VM_PAGE_OBJECT(mem) == VM_OBJECT_NULL);
+	assert(mem->pageq.next == 0);
+	assert(mem->pageq.prev == 0);
+	assert(mem->listq.next == 0);
+	assert(mem->listq.prev == 0);
+#if CONFIG_BACKGROUND_QUEUE
+	assert(mem->vm_page_on_backgroundq == 0);
+	assert(mem->vm_page_backgroundq.next == 0);
+	assert(mem->vm_page_backgroundq.prev == 0);
+#endif /* CONFIG_BACKGROUND_QUEUE */
 
 	return mem;
 }
@@ -3347,6 +3363,15 @@ vm_page_free_prepare_object(
 		VM_PAGE_SET_PHYS_PAGE(mem, vm_page_fictitious_addr);
 	}
 	if ( !mem->fictitious) {
+		assert(mem->pageq.next == 0);
+		assert(mem->pageq.prev == 0);
+		assert(mem->listq.next == 0);
+		assert(mem->listq.prev == 0);
+#if CONFIG_BACKGROUND_QUEUE
+		assert(mem->vm_page_backgroundq.next == 0);
+		assert(mem->vm_page_backgroundq.prev == 0);
+#endif /* CONFIG_BACKGROUND_QUEUE */
+		assert(mem->next_m == 0);
 		vm_page_init(mem, VM_PAGE_GET_PHYS_PAGE(mem), mem->lopage);
 	}
 }
@@ -3399,6 +3424,9 @@ vm_page_free_unlocked(
  * as blocked up by vm_pageout_scan().
  * The big win is not having to take the free list lock once
  * per page.
+ *
+ * The VM page queues lock (vm_page_queue_lock) should NOT be held.
+ * The VM page free queues lock (vm_page_queue_free_lock) should NOT be held.
  */
 void
 vm_page_free_list(
@@ -3409,6 +3437,9 @@ vm_page_free_list(
         vm_page_t	nxt;
 	vm_page_t	local_freeq;
 	int		pg_count;
+
+	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&vm_page_queue_free_lock, LCK_MTX_ASSERT_NOTOWNED);
 
 	while (freeq) {
 
@@ -5431,12 +5462,6 @@ did_consider:
 		}
 
 		if (abort_run == TRUE) {
-			if (m != VM_PAGE_NULL) {
-				vm_page_free_list(m, FALSE);
-			}
-
-			dumped_run++;
-
 			/*
 			 * want the index of the last
 			 * page in this run that was
@@ -5446,8 +5471,16 @@ did_consider:
 			 */
 			page_idx = tmp_start_idx + 2;
 			if (page_idx >= vm_pages_count) {
-				if (wrapped)
+				if (wrapped) {
+					if (m != VM_PAGE_NULL) {
+						vm_page_unlock_queues();
+						vm_page_free_list(m, FALSE);
+						vm_page_lock_queues();
+						m = VM_PAGE_NULL;
+					}
+					dumped_run++;
 					goto done_scanning;
+				}
 				page_idx = last_idx = 0;
 				wrapped = TRUE;
 			}
@@ -5467,6 +5500,14 @@ did_consider:
 			
 			last_idx = page_idx;
 			
+			if (m != VM_PAGE_NULL) {
+				vm_page_unlock_queues();
+				vm_page_free_list(m, FALSE);
+				vm_page_lock_queues();
+				m = VM_PAGE_NULL;
+			}
+			dumped_run++;
+
 			lck_mtx_lock(&vm_page_queue_free_lock);
 			/*
 			* reset our free page limit since we
@@ -7559,6 +7600,7 @@ vm_page_queues_remove(vm_page_t mem, boolean_t __unused remove_from_backgroundq)
 #endif /* CONFIG_BACKGROUND_QUEUE */
 		return;
 	}
+
 	if (mem->vm_page_q_state == VM_PAGE_USED_BY_COMPRESSOR)
 	{
 		assert(mem->pageq.next == 0 && mem->pageq.prev == 0);

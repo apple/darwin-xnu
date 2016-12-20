@@ -835,7 +835,7 @@ extern void sbunlock(struct sockbuf *sb, boolean_t keeplocked);
 
 extern int soaccept(struct socket *so, struct sockaddr **nam);
 extern int soacceptlock(struct socket *so, struct sockaddr **nam, int dolock);
-extern int soacceptfilter(struct socket *so);
+extern int soacceptfilter(struct socket *so, struct socket *head);
 extern struct socket *soalloc(int waitok, int dom, int type);
 extern int sobindlock(struct socket *so, struct sockaddr *nam, int dolock);
 extern int soclose(struct socket *so);

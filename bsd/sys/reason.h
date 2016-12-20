@@ -33,7 +33,7 @@
 
 __BEGIN_DECLS
 
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 
 #include <kern/kern_cdata.h>
 
@@ -62,6 +62,9 @@ os_reason_t build_userspace_exit_reason(uint32_t reason_namespace, uint64_t reas
 					user_addr_t reason_string, uint64_t reason_flags);
 char *launchd_exit_reason_get_string_desc(os_reason_t exit_reason);
 
+/* The blocking allocation is currently not exported to KEXTs */
+int os_reason_alloc_buffer(os_reason_t cur_reason, uint32_t osr_bufsize);
+
 #else /* XNU_KERNEL_PRIVATE */
 
 typedef void * os_reason_t;
@@ -69,12 +72,12 @@ typedef void * os_reason_t;
 #endif /* XNU_KERNEL_PRIVATE */
 
 os_reason_t os_reason_create(uint32_t osr_namespace, uint64_t osr_code);
-int os_reason_alloc_buffer(os_reason_t cur_reason, uint32_t osr_bufsize);
+int os_reason_alloc_buffer_noblock(os_reason_t cur_reason, uint32_t osr_bufsize);
 struct kcdata_descriptor * os_reason_get_kcdata_descriptor(os_reason_t cur_reason);
 void os_reason_ref(os_reason_t cur_reason);
 void os_reason_free(os_reason_t cur_reason);
 
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
 
 /*
  * Reason namespaces.

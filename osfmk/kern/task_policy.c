@@ -1835,6 +1835,20 @@ proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
 				  task_is_importance_receiver(task), 0);
 }
 
+/*
+ * Inherit task role across exec
+ */
+void
+proc_inherit_task_role(task_t new_task,
+                       task_t old_task)
+{
+	int role;
+
+	/* inherit the role from old task to new task */
+	role = proc_get_task_policy(old_task, TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE);
+	proc_set_task_policy(new_task, TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE, role);
+}
+
 extern task_t bsd_init_task;
 
 /*

@@ -2249,9 +2249,10 @@ udp_unlock(struct socket *so, int refcount, void *debug)
 	else
 		lr_saved = debug;
 
-	if (refcount)
+	if (refcount) {
+		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
-
+	}
 	if (so->so_pcb == NULL) {
 		panic("%s: so=%p NO PCB! lr=%p lrh= %s\n", __func__,
 		    so, lr_saved, solockhistory_nr(so));

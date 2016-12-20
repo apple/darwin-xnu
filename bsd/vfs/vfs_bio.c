@@ -95,6 +95,7 @@
 #include <kern/thread.h>
 
 #include <sys/fslog.h>		/* fslog_io_error() */
+#include <sys/disk.h>		/* dk_error_description_t */
 
 #include <mach/mach_types.h>
 #include <mach/memory_object_types.h>
@@ -2945,6 +2946,8 @@ start:
 				break;
 			}		
 		} else {
+			int clear_bdone;
+
 			/*
 			 * buffer in core and not busy
 			 */
@@ -2963,8 +2966,41 @@ start:
 			if ( (bp->b_upl) )
 			        panic("buffer has UPL, but not marked BUSY: %p", bp);
 
-			if ( !ret_only_valid && bp->b_bufsize != size)
-			        allocbuf(bp, size);
+			clear_bdone = FALSE;
+			if (!ret_only_valid) {
+				/*
+				 * If the number bytes that are valid is going
+				 * to increase (even if we end up not doing a
+				 * reallocation through allocbuf) we have to read
+				 * the new size first.
+				 *
+				 * This is required in cases where we doing a read
+				 * modify write of a already valid data on disk but
+				 * in cases where the data on disk beyond (blkno + b_bcount)
+				 * is invalid, we may end up doing extra I/O.
+				 */
+				if (operation == BLK_META && bp->b_bcount < size) {
+					/*
+					 * Since we are going to read in the whole size first
+					 * we first have to ensure that any pending delayed write
+					 * is flushed to disk first.
+					 */
+					if (ISSET(bp->b_flags, B_DELWRI)) {
+						CLR(bp->b_flags, B_CACHE);
+						buf_bwrite(bp);
+						goto start;
+					}
+					/*
+					 * clear B_DONE before returning from
+					 * this function so that the caller can
+					 * can issue a read for the new size.
+					 */
+					clear_bdone = TRUE;
+				}
+
+				if (bp->b_bufsize != size)
+					allocbuf(bp, size);
+			}
 
 			upl_flags = 0;
 			switch (operation) {
@@ -3016,6 +3052,9 @@ start:
 				/*NOTREACHED*/
 				break;
 			}
+
+			if (clear_bdone)
+				CLR(bp->b_flags, B_DONE);
 		}
 	} else { /* not incore() */
 		int queue = BQ_EMPTY; /* Start with no preference */
@@ -3924,6 +3963,16 @@ buf_biodone(buf_t bp)
 		mp = NULL;
 	}
 	
+	if (ISSET(bp->b_flags, B_ERROR)) {
+		if (mp && (MNT_ROOTFS & mp->mnt_flag)) {
+			dk_error_description_t desc;
+			bzero(&desc, sizeof(desc));
+			desc.description      = panic_disk_error_description;
+			desc.description_size = panic_disk_error_description_size;
+			VNOP_IOCTL(mp->mnt_devvp, DKIOCGETERRORDESCRIPTION, (caddr_t)&desc, 0, vfs_context_kernel());
+		}
+	}
+
 	if (mp && (bp->b_flags & B_READ) == 0) {
 		update_last_io_time(mp);
 		INCR_PENDING_IO(-(pending_io_t)buf_count(bp), mp->mnt_pending_write_size);
@@ -3958,6 +4007,10 @@ buf_biodone(buf_t bp)
 		if (bap->ba_flags & BA_NOCACHE)
 			code |= DKIO_NOCACHE;
 
+		if (bap->ba_flags & BA_IO_TIER_UPGRADE) {
+			code |= DKIO_TIER_UPGRADE;
+		}
+
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
 		                          buf_kernel_addrperm_addr(bp), (uintptr_t)VM_KERNEL_ADDRPERM(bp->b_vp), bp->b_resid, bp->b_error, 0);
         }
@@ -3969,7 +4022,7 @@ buf_biodone(buf_t bp)
 	 * indicators
 	 */
 	CLR(bp->b_flags, (B_WASDIRTY | B_PASSIVE));
-	CLR(bap->ba_flags, (BA_META | BA_NOCACHE | BA_DELAYIDLESLEEP));
+	CLR(bap->ba_flags, (BA_META | BA_NOCACHE | BA_DELAYIDLESLEEP | BA_IO_TIER_UPGRADE));
 
 	SET_BUFATTR_IO_TIER(bap, 0);
 

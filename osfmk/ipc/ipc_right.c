@@ -261,8 +261,6 @@ ipc_right_reverse(
  *		KERN_INVALID_RIGHT	Name doesn't denote port/dead rights.
  *		KERN_INVALID_ARGUMENT	Name denotes dead name, but
  *			immediate is FALSE or notify is IP_NULL.
- *		KERN_UREFS_OVERFLOW	Name denotes dead name, but
- *			generating immediate notif. would overflow urefs.
  *		KERN_RESOURCE_SHORTAGE	Couldn't allocate memory.
  */
 
@@ -397,15 +395,12 @@ ipc_right_request_alloc(
 
 			assert(urefs > 0);
 
-			if (MACH_PORT_UREFS_OVERFLOW(urefs, 1)) {
-				is_write_unlock(space);
-				if (port != IP_NULL)
-					ip_release(port);
-				return KERN_UREFS_OVERFLOW;
-			}
+			/* leave urefs pegged to maximum if it overflowed */
+			if (urefs < MACH_PORT_UREFS_MAX)
+				(entry->ie_bits)++; /* increment urefs */
 
-			(entry->ie_bits)++; /* increment urefs */
 			ipc_entry_modified(space, name, entry);
+
 			is_write_unlock(space);
 
 			if (port != IP_NULL)
@@ -563,8 +558,9 @@ ipc_right_check(
 	 */
 	if (entry->ie_request != IE_REQ_NONE) {
 		if (ipc_port_request_type(port, name, entry->ie_request) != 0) {
-			assert(IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX);
-			bits++;	
+			/* if urefs are pegged due to overflow, leave them pegged */
+			if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+				bits++; /* increment urefs */
 		}
 		entry->ie_request = IE_REQ_NONE; 
 	}
@@ -878,7 +874,9 @@ ipc_right_dealloc(
 		if (IE_BITS_UREFS(bits) == 1) {
 			ipc_entry_dealloc(space, name, entry);
 		} else {
-			entry->ie_bits = bits-1; /* decrement urefs */
+			/* if urefs are pegged due to overflow, leave them pegged */
+			if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+				entry->ie_bits = bits-1; /* decrement urefs */
 			ipc_entry_modified(space, name, entry);
 		}
 		is_write_unlock(space);
@@ -963,12 +961,13 @@ ipc_right_dealloc(
 			ip_release(port);
 
 		} else {
-			ip_unlock(port);			
-			entry->ie_bits = bits-1; /* decrement urefs */
+			ip_unlock(port);
+			/* if urefs are pegged due to overflow, leave them pegged */
+			if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+				entry->ie_bits = bits-1; /* decrement urefs */
 			ipc_entry_modified(space, name, entry);
 			is_write_unlock(space);
 		}
-		
 
 		if (nsrequest != IP_NULL)
 			ipc_notify_no_senders(nsrequest, mscount);
@@ -1004,9 +1003,12 @@ ipc_right_dealloc(
 
 			entry->ie_bits = bits &~ (IE_BITS_UREFS_MASK |
 						  MACH_PORT_TYPE_SEND);
-		} else
-			entry->ie_bits = bits-1; /* decrement urefs */
-
+		} else {
+			/* if urefs are pegged due to overflow, leave them pegged */
+			if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX) {
+				entry->ie_bits = bits-1; /* decrement urefs */
+			}
+		}
 		ip_unlock(port);
 
 		ipc_entry_modified(space, name, entry);
@@ -1037,7 +1039,6 @@ ipc_right_dealloc(
  *		KERN_SUCCESS		Count was modified.
  *		KERN_INVALID_RIGHT	Entry has wrong type.
  *		KERN_INVALID_VALUE	Bad delta for the right.
- *		KERN_UREFS_OVERFLOW	OK delta, except would overflow.
  */
 
 kern_return_t
@@ -1138,7 +1139,6 @@ ipc_right_delta(
 			assert(IE_BITS_TYPE(bits) ==
 					MACH_PORT_TYPE_SEND_RECEIVE);
 			assert(IE_BITS_UREFS(bits) > 0);
-			assert(IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX);
 			assert(port->ip_srights > 0);
 
 			if (port->ip_pdrequest != NULL) {
@@ -1169,7 +1169,9 @@ ipc_right_delta(
 				bits |= MACH_PORT_TYPE_DEAD_NAME;
 				if (entry->ie_request) {
 					entry->ie_request = IE_REQ_NONE;
-					bits++;
+					/* if urefs are pegged due to overflow, leave them pegged */
+					if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+						bits++; /* increment urefs */
 				}
 				entry->ie_bits = bits;
 				entry->ie_object = IO_NULL;
@@ -1256,26 +1258,46 @@ ipc_right_delta(
 			bits = entry->ie_bits;
 			relport = port;
 			port = IP_NULL;
-		} else if ((bits & MACH_PORT_TYPE_DEAD_NAME) == 0)
+		} else if ((bits & MACH_PORT_TYPE_DEAD_NAME) == 0) {
 			goto invalid_right;
+		}
 
 		assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_DEAD_NAME);
 		assert(IE_BITS_UREFS(bits) > 0);
 		assert(entry->ie_object == IO_NULL);
 		assert(entry->ie_request == IE_REQ_NONE);
 
-		urefs = IE_BITS_UREFS(bits);
-		if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta))
+		if (delta >   ((mach_port_delta_t)MACH_PORT_UREFS_MAX) ||
+		    delta < (-((mach_port_delta_t)MACH_PORT_UREFS_MAX))) {
 			goto invalid_value;
-		if (MACH_PORT_UREFS_OVERFLOW(urefs, delta))
-			goto urefs_overflow;
+		}
+
+		urefs = IE_BITS_UREFS(bits);
+
+		if (urefs == MACH_PORT_UREFS_MAX) {
+			/*
+			 * urefs are pegged due to an overflow
+			 * only a delta removing all refs at once can change it
+			 */
+
+			if (delta != (-((mach_port_delta_t)MACH_PORT_UREFS_MAX)))
+				delta = 0;
+		} else {
+			if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta))
+				goto invalid_value;
+			if (MACH_PORT_UREFS_OVERFLOW(urefs, delta)) {
+				/* leave urefs pegged to maximum if it overflowed */
+				delta = MACH_PORT_UREFS_MAX - urefs;
+			}
+		}
 
 		if ((urefs + delta) == 0) {
 			ipc_entry_dealloc(space, name, entry);
-		} else {
+		} else if (delta != 0) {
 			entry->ie_bits = bits + delta;
 			ipc_entry_modified(space, name, entry);
 		}
+
 		is_write_unlock(space);
 
 		if (relport != IP_NULL)
@@ -1293,7 +1315,7 @@ ipc_right_delta(
 		if ((bits & MACH_PORT_TYPE_SEND) == 0)
 			goto invalid_right;
 
-		/* maximum urefs for send is MACH_PORT_UREFS_MAX-1 */
+		/* maximum urefs for send is MACH_PORT_UREFS_MAX */
 
 		port = (ipc_port_t) entry->ie_object;
 		assert(port != IP_NULL);
@@ -1306,14 +1328,31 @@ ipc_right_delta(
 
 		assert(port->ip_srights > 0);
 
-		urefs = IE_BITS_UREFS(bits);
-		if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta)) {
+		if (delta >   ((mach_port_delta_t)MACH_PORT_UREFS_MAX) ||
+		    delta < (-((mach_port_delta_t)MACH_PORT_UREFS_MAX))) {
 			ip_unlock(port);
 			goto invalid_value;
 		}
-		if (MACH_PORT_UREFS_OVERFLOW(urefs+1, delta)) {
-			ip_unlock(port);
-			goto urefs_overflow;
+
+		urefs = IE_BITS_UREFS(bits);
+
+		if (urefs == MACH_PORT_UREFS_MAX) {
+			/*
+			 * urefs are pegged due to an overflow
+			 * only a delta removing all refs at once can change it
+			 */
+
+			if (delta != (-((mach_port_delta_t)MACH_PORT_UREFS_MAX)))
+				delta = 0;
+		} else {
+			if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta)) {
+				ip_unlock(port);
+				goto invalid_value;
+			}
+			if (MACH_PORT_UREFS_OVERFLOW(urefs, delta)) {
+				/* leave urefs pegged to maximum if it overflowed */
+				delta = MACH_PORT_UREFS_MAX - urefs;
+			}
 		}
 
 		if ((urefs + delta) == 0) {
@@ -1328,7 +1367,7 @@ ipc_right_delta(
 			if (bits & MACH_PORT_TYPE_RECEIVE) {
 				assert(port->ip_receiver_name == name);
 				assert(port->ip_receiver == space);
-				ip_unlock(port);				
+				ip_unlock(port);
 				assert(IE_BITS_TYPE(bits) ==
 						MACH_PORT_TYPE_SEND_RECEIVE);
 
@@ -1350,10 +1389,12 @@ ipc_right_delta(
 				entry->ie_object = IO_NULL;
 				ipc_entry_dealloc(space, name, entry);
 			}
-		} else {
+		} else if (delta != 0) {
 			ip_unlock(port);
 			entry->ie_bits = bits + delta;
 			ipc_entry_modified(space, name, entry);
+		} else {
+			ip_unlock(port);
 		}
 
 		is_write_unlock(space);
@@ -1386,12 +1427,8 @@ ipc_right_delta(
 	is_write_unlock(space);
 	return KERN_INVALID_VALUE;
 
-    urefs_overflow:
-	is_write_unlock(space);
-	return KERN_UREFS_OVERFLOW;
-	
     guard_failure:
-	return KERN_INVALID_RIGHT;		
+	return KERN_INVALID_RIGHT;
 }
 
 /*
@@ -1439,7 +1476,7 @@ ipc_right_destruct(
 
 	port = (ipc_port_t) entry->ie_object;
 	assert(port != IP_NULL);
-	
+
 	ip_lock(port);
 	assert(ip_active(port));
 	assert(port->ip_receiver_name == name);
@@ -1462,10 +1499,11 @@ ipc_right_destruct(
 	 */
 
 	if (srdelta) {
-		
+
 		assert(port->ip_srights > 0);
 
 		urefs = IE_BITS_UREFS(bits);
+
 		/*
 		 * Since we made sure that srdelta is negative,
 		 * the check for urefs overflow is not required.
@@ -1474,6 +1512,16 @@ ipc_right_destruct(
 			ip_unlock(port);
 			goto invalid_value;
 		}
+
+		if (urefs == MACH_PORT_UREFS_MAX) {
+			/*
+			 * urefs are pegged due to an overflow
+			 * only a delta removing all refs at once can change it
+			 */
+			if (srdelta != (-((mach_port_delta_t)MACH_PORT_UREFS_MAX)))
+				srdelta = 0;
+		}
+
 		if ((urefs + srdelta) == 0) {
 			if (--port->ip_srights == 0) {
 				nsrequest = port->ip_nsrequest;
@@ -1498,7 +1546,7 @@ ipc_right_destruct(
 	bits = entry->ie_bits;
 	if (bits & MACH_PORT_TYPE_SEND) {
 		assert(IE_BITS_UREFS(bits) > 0);
-		assert(IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX);
+		assert(IE_BITS_UREFS(bits) <= MACH_PORT_UREFS_MAX);
 
 		if (port->ip_pdrequest != NULL) {
 			/*
@@ -1528,7 +1576,8 @@ ipc_right_destruct(
 			bits |= MACH_PORT_TYPE_DEAD_NAME;
 			if (entry->ie_request) {
 				entry->ie_request = IE_REQ_NONE;
-				bits++;
+				if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+					bits++; /* increment urefs */
 			}
 			entry->ie_bits = bits;
 			entry->ie_object = IO_NULL;
@@ -1953,14 +2002,18 @@ ipc_right_copyin(
 				ipc_hash_delete(space, (ipc_object_t) port,
 						name, entry);
 				entry->ie_object = IO_NULL;
+				/* transfer entry's reference to caller */
 			}
 			entry->ie_bits = bits &~
 				(IE_BITS_UREFS_MASK|MACH_PORT_TYPE_SEND);
 		} else {
 			port->ip_srights++;
 			ip_reference(port);
-			entry->ie_bits = bits-1; /* decrement urefs */
+			/* if urefs are pegged due to overflow, leave them pegged */
+			if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+				entry->ie_bits = bits-1; /* decrement urefs */
 		}
+
 		ipc_entry_modified(space, name, entry);
 		ip_unlock(port);
 
@@ -2048,7 +2101,10 @@ ipc_right_copyin(
 	if (IE_BITS_UREFS(bits) == 1) {
 		bits &= ~MACH_PORT_TYPE_DEAD_NAME;
 	}
-	entry->ie_bits = bits-1; /* decrement urefs */
+	/* if urefs are pegged due to overflow, leave them pegged */
+	if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+		entry->ie_bits = bits-1; /* decrement urefs */
+
 	ipc_entry_modified(space, name, entry);
 	*objectp = IO_DEAD;
 	*sorightp = IP_NULL;
@@ -2105,8 +2161,10 @@ ipc_right_copyin_undo(
 		assert(IE_BITS_UREFS(bits) > 0);
 
 		if (msgt_name != MACH_MSG_TYPE_COPY_SEND) {
-			assert(IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX);
-			entry->ie_bits = bits+1; /* increment urefs */
+			assert(IE_BITS_UREFS(bits) <= MACH_PORT_UREFS_MAX);
+			/* if urefs are pegged due to overflow, leave them pegged */
+			if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+				entry->ie_bits = bits+1; /* increment urefs */
 		}
 	} else {
 		assert((msgt_name == MACH_MSG_TYPE_MOVE_SEND) ||
@@ -2117,8 +2175,10 @@ ipc_right_copyin_undo(
 		assert(IE_BITS_UREFS(bits) > 0);
 
 		if (msgt_name != MACH_MSG_TYPE_COPY_SEND) {
-			assert(IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX-1);
-			entry->ie_bits = bits+1; /* increment urefs */
+			assert(IE_BITS_UREFS(bits) <= MACH_PORT_UREFS_MAX);
+			/* if urefs are pegged due to overflow, leave them pegged */
+			if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+				entry->ie_bits = bits+1; /* increment urefs */
 		}
 
 		/*
@@ -2216,7 +2276,9 @@ ipc_right_copyin_two_move_sends(
 		port->ip_srights += 2;
 		ip_reference(port);
 		ip_reference(port);
-		entry->ie_bits = bits-2; /* decrement urefs */
+		/* if urefs are pegged due to overflow, leave them pegged */
+		if (IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+			entry->ie_bits = bits-2; /* decrement urefs */
 	}
 	ipc_entry_modified(space, name, entry);
 
@@ -2401,9 +2463,6 @@ ipc_right_copyin_two(
  *		The object is unlocked; the space isn't.
  *	Returns:
  *		KERN_SUCCESS		Copied out capability.
- *		KERN_UREFS_OVERFLOW	User-refs would overflow;
- *			guaranteed not to happen with a fresh entry
- *			or if overflow=TRUE was specified.
  */
 
 kern_return_t
@@ -2412,7 +2471,7 @@ ipc_right_copyout(
 	mach_port_name_t	name,
 	ipc_entry_t		entry,
 	mach_msg_type_name_t	msgt_name,
-	boolean_t		overflow,
+	__unused boolean_t	overflow,
 	ipc_object_t		object)
 {
 	ipc_entry_bits_t bits;
@@ -2429,14 +2488,15 @@ ipc_right_copyout(
 
 	switch (msgt_name) {
 	    case MACH_MSG_TYPE_PORT_SEND_ONCE:
-		
+
 		assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_NONE);
+		assert(IE_BITS_UREFS(bits) == 0);
 		assert(port->ip_sorights > 0);
 
 		/* transfer send-once right and ref to entry */
 		ip_unlock(port);
 
-		entry->ie_bits = bits | (MACH_PORT_TYPE_SEND_ONCE | 1);
+		entry->ie_bits = bits | (MACH_PORT_TYPE_SEND_ONCE | 1); /* set urefs to 1 */
 		ipc_entry_modified(space, name, entry);
 		break;
 
@@ -2448,33 +2508,33 @@ ipc_right_copyout(
 
 			assert(port->ip_srights > 1);
 			assert(urefs > 0);
-			assert(urefs < MACH_PORT_UREFS_MAX);
+			assert(urefs <= MACH_PORT_UREFS_MAX);
 
-			if (urefs+1 == MACH_PORT_UREFS_MAX) {
-				if (overflow) {
-					/* leave urefs pegged to maximum */
+			if (urefs == MACH_PORT_UREFS_MAX) {
+				/*
+				 * leave urefs pegged to maximum,
+				 * consume send right and ref
+				 */
 
-					port->ip_srights--;
-					ip_unlock(port);
-					ip_release(port);
-					return KERN_SUCCESS;
-				}
-
+				port->ip_srights--;
 				ip_unlock(port);
-				return KERN_UREFS_OVERFLOW;
+				ip_release(port);
+				return KERN_SUCCESS;
 			}
+
+			/* consume send right and ref */
 			port->ip_srights--;
 			ip_unlock(port);
 			ip_release(port);
-			
+
 		} else if (bits & MACH_PORT_TYPE_RECEIVE) {
 			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_RECEIVE);
 			assert(IE_BITS_UREFS(bits) == 0);
 
-			/* transfer send right to entry */
+			/* transfer send right to entry, consume ref */
 			ip_unlock(port);
 			ip_release(port);
-			
+
 		} else {
 			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_NONE);
 			assert(IE_BITS_UREFS(bits) == 0);
@@ -2488,7 +2548,7 @@ ipc_right_copyout(
 					name, entry);
 		}
 
-		entry->ie_bits = (bits | MACH_PORT_TYPE_SEND) + 1;
+		entry->ie_bits = (bits | MACH_PORT_TYPE_SEND) + 1; /* increment urefs */
 		ipc_entry_modified(space, name, entry);
 		break;
 

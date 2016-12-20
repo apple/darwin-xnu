@@ -4421,6 +4421,7 @@ OSKext::recordIdentifierRequest(
         goto finish;
     }
 
+    IORecursiveLockLock(sKextLock);
     if (!sAllKextLoadIdentifiers->containsObject(kextIdentifierSymbol)) {
         if (!sAllKextLoadIdentifiers->setObject(kextIdentifierSymbol)) {
             fail = true;
@@ -4434,6 +4435,8 @@ OSKext::recordIdentifierRequest(
                 kextIdentifier->getCStringNoCopy());
         }
     }
+    IORecursiveLockUnlock(sKextLock);
+
 finish:
 
     if (fail) {

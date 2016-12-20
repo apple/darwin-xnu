@@ -6841,8 +6841,11 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
                 userWasActive = true;
 
                 // Stay awake after dropping demand for display power on
-                if (kFullWakeReasonDisplayOn == fullWakeReason)
+                if (kFullWakeReasonDisplayOn == fullWakeReason) {
                     fullWakeReason = fFullWakeReasonDisplayOnAndLocalUser;
+                    DLOG("User activity while in notification wake\n");
+                    changePowerStateWithOverrideTo( ON_STATE, 0);
+                }
 
                 kdebugTrace(kPMLogUserActiveState, 0, 1, 0);
                 setProperty(gIOPMUserIsActiveKey, kOSBooleanTrue);
@@ -7056,6 +7059,7 @@ void IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
         (kFullWakeReasonDisplayOn == fullWakeReason))
     {
         // kIOPMSleepReasonMaintenance?
+        DLOG("Display sleep while in notification wake\n");
         changePowerStateWithOverrideTo( SLEEP_STATE, kIOPMSleepReasonMaintenance );
     }
 

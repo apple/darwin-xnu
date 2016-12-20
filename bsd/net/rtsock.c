@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1150,7 +1150,7 @@ again:
 			sa = rtm_scrub(type, i, hint, sa, &ssbuf,
 			    sizeof (ssbuf), NULL);
 			break;
-
+		case RTAX_GATEWAY:
 		case RTAX_IFP:
 			sa = rtm_scrub(type, i, NULL, sa, &ssbuf,
 			    sizeof (ssbuf), credp);

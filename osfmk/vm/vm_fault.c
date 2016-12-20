@@ -2851,7 +2851,7 @@ vm_fault_enter(vm_page_t m,
 					struct codesigning_exit_reason_info *ceri = NULL;
 					uint32_t reason_buffer_size_estimate = kcdata_estimate_required_buffer_size(1, sizeof(*ceri));
 
-					if (os_reason_alloc_buffer(codesigning_exit_reason, reason_buffer_size_estimate)) {
+					if (os_reason_alloc_buffer_noblock(codesigning_exit_reason, reason_buffer_size_estimate)) {
 						printf("vm_fault_enter: failed to allocate buffer for codesigning exit reason\n");
 					} else {
 						if (KERN_SUCCESS == kcdata_get_memory_addr(&codesigning_exit_reason->osr_kcd_descriptor,
@@ -2889,7 +2889,7 @@ vm_fault_enter(vm_page_t m,
 							printf("vm_fault_enter: failed to allocate kcdata for codesigning exit reason\n");
 #endif /* DEBUG || DEVELOPMENT */
 							/* Free the buffer */
-							os_reason_alloc_buffer(codesigning_exit_reason, 0);
+							os_reason_alloc_buffer_noblock(codesigning_exit_reason, 0);
 						}
 					}
 				}
@@ -3440,16 +3440,28 @@ vm_fault_internal(
 	vm_object_t		top_object = VM_OBJECT_NULL;
 	int			throttle_delay;
 	int			compressed_count_delta;
-	vm_map_offset_t		real_vaddr;
 	int			grab_options;
+	vm_map_offset_t		trace_vaddr;
+	vm_map_offset_t		trace_real_vaddr;
+#if DEVELOPMENT || DEBUG
+	vm_map_offset_t		real_vaddr;
 
 	real_vaddr = vaddr;
+#endif /* DEVELOPMENT || DEBUG */
+	trace_real_vaddr = vaddr;
 	vaddr = vm_map_trunc_page(vaddr, PAGE_MASK);
+
+	if (map == kernel_map) {
+		trace_vaddr = VM_KERNEL_UNSLIDE_OR_PERM(vaddr);
+		trace_real_vaddr = VM_KERNEL_UNSLIDE_OR_PERM(trace_real_vaddr);
+	} else {
+		trace_vaddr = vaddr;
+	}
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 	              (MACHDBG_CODE(DBG_MACH_VM, 2)) | DBG_FUNC_START,
-			      ((uint64_t)vaddr >> 32),
-			      vaddr,
+			      ((uint64_t)trace_vaddr >> 32),
+			      trace_vaddr,
 			      (map == kernel_map),
 			      0,
 			      0);
@@ -3457,8 +3469,8 @@ vm_fault_internal(
 	if (get_preemption_level() != 0) {
 	        KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 				      (MACHDBG_CODE(DBG_MACH_VM, 2)) | DBG_FUNC_END,
-				      ((uint64_t)vaddr >> 32),
-				      vaddr,
+				      ((uint64_t)trace_vaddr >> 32),
+				      trace_vaddr,
 				      KERN_FAILURE,
 				      0,
 				      0);
@@ -4014,7 +4026,7 @@ FastPmapEnter:
 				else
 					event_code = (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_REAL_FAULT_ADDR_EXTERNAL));
 
-				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, event_code, real_vaddr, (fault_info.user_tag << 16) | (caller_prot << 8) | type_of_fault, m->offset, get_current_unique_pid(), 0);
+				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, event_code, trace_real_vaddr, (fault_info.user_tag << 16) | (caller_prot << 8) | type_of_fault, m->offset, get_current_unique_pid(), 0);
 
 				DTRACE_VM6(real_fault, vm_map_offset_t, real_vaddr, vm_map_offset_t, m->offset, int, event_code, int, caller_prot, int, type_of_fault, int, fault_info.user_tag);
 				}
@@ -4871,7 +4883,7 @@ handle_copy_delay:
 		else
 			event_code = (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_REAL_FAULT_ADDR_EXTERNAL));
 
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, event_code, real_vaddr, (fault_info.user_tag << 16) | (caller_prot << 8) | type_of_fault, m->offset, get_current_unique_pid(), 0);
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, event_code, trace_real_vaddr, (fault_info.user_tag << 16) | (caller_prot << 8) | type_of_fault, m->offset, get_current_unique_pid(), 0);
 
 		DTRACE_VM6(real_fault, vm_map_offset_t, real_vaddr, vm_map_offset_t, m->offset, int, event_code, int, caller_prot, int, type_of_fault, int, fault_info.user_tag);
 		}
@@ -5064,8 +5076,8 @@ done:
 	}
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 			      (MACHDBG_CODE(DBG_MACH_VM, 2)) | DBG_FUNC_END,
-			      ((uint64_t)vaddr >> 32),
-			      vaddr,
+			      ((uint64_t)trace_vaddr >> 32),
+			      trace_vaddr,
 			      kr,
 			      type_of_fault,
 			      0);

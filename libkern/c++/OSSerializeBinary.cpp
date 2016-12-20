@@ -69,8 +69,9 @@ bool OSSerialize::addBinary(const void * bits, size_t size)
     unsigned int newCapacity;
     size_t       alignSize;
 
-	alignSize = ((size + 3) & ~3L);
-	newCapacity = length + alignSize;
+	if (os_add_overflow(size, 3, &alignSize)) return (false);
+	alignSize &= ~3L;
+	if (os_add_overflow(length, alignSize, &newCapacity)) return (false);
 	if (newCapacity >= capacity) 
 	{
 	   newCapacity = (((newCapacity - 1) / capacityIncrement) + 1) * capacityIncrement;
@@ -92,8 +93,9 @@ bool OSSerialize::addBinaryObject(const OSMetaClassBase * o, uint32_t key,
     // add to tag array
 	tags->setObject(o);
 
-	alignSize = ((size + sizeof(key) + 3) & ~3L);
-	newCapacity = length + alignSize;
+	if (os_add3_overflow(size, sizeof(key), 3, &alignSize)) return (false);
+	alignSize &= ~3L;
+	if (os_add_overflow(length, alignSize, &newCapacity)) return (false);
 	if (newCapacity >= capacity) 
 	{
 	   newCapacity = (((newCapacity - 1) / capacityIncrement) + 1) * capacityIncrement;
@@ -267,7 +269,7 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 
 	OSObject ** stackArray;
 	uint32_t    stackCapacity;
-	enum      { stackCapacityMax = 64*1024 };
+	enum      { stackCapacityMax = 64 };
 	uint32_t    stackIdx;
 
     OSObject     * result;
@@ -430,14 +432,12 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 
 		if (!ok) break;
 
+        if (end) parent = 0;
 		if (newCollect)
 		{
-			if (!end)
-			{
-				stackIdx++;
-				setAtIndex(stack, stackIdx, parent);
-				if (!ok) break;
-			}
+            stackIdx++;
+            setAtIndex(stack, stackIdx, parent);
+            if (!ok) break;
 			DEBG("++stack[%d] %p\n", stackIdx, parent);
 			parent = o;
 			dict   = newDict;
@@ -448,11 +448,15 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 
 		if (end)
 		{
-			if (!stackIdx) break;
-			parent = stackArray[stackIdx];
-			DEBG("--stack[%d] %p\n", stackIdx, parent);
-			stackIdx--;
-			set   = 0; 
+            while (stackIdx)
+            {
+                parent = stackArray[stackIdx];
+                DEBG("--stack[%d] %p\n", stackIdx, parent);
+                stackIdx--;
+                if (parent) break;
+            }
+            if (!parent) break;
+			set   = 0;
 			dict  = 0; 
 			array = 0;
 			if (!(dict = OSDynamicCast(OSDictionary, parent)))

@@ -1,13 +1,3 @@
-/*
- *  ccsha1_eay.c
- *  corecrypto
- *
- *  Created on 12/06/2010
- *
- *  Copyright (c) 2010,2011,2012,2015 Apple Inc. All rights reserved.
- *
- */
-
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *

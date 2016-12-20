@@ -1561,7 +1561,7 @@ mptcp_subflow_del(struct mptses *mpte, struct mptsub *mpts, boolean_t close)
 	if (close)
 		(void) mptcp_subflow_soclose(mpts, so);
 
-	VERIFY(mp_so->so_usecount != 0);
+	VERIFY(mp_so->so_usecount > 0);
 	mp_so->so_usecount--;		/* for subflow socket */
 	mpts->mpts_mpte = NULL;
 	mpts->mpts_socket = NULL;
@@ -3943,7 +3943,7 @@ mptcp_thread_destroy(struct mptses *mpte)
 
 	mp_so = mpte->mpte_mppcb->mpp_socket;
 	VERIFY(mp_so != NULL);
-	VERIFY(mp_so->so_usecount != 0);
+	VERIFY(mp_so->so_usecount > 0);
 	mp_so->so_usecount--;		/* for thread */
 	mpte->mpte_mppcb->mpp_flags |= MPP_DEFUNCT;
 	MPTE_UNLOCK(mpte);

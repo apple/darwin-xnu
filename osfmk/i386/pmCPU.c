@@ -787,12 +787,13 @@ thread_tell_urgency(int urgency,
 void
 machine_thread_going_on_core(__unused thread_t      new_thread,
 							 __unused int           urgency,
-							 __unused uint64_t      sched_latency)
+							 __unused uint64_t      sched_latency,
+							 __unused uint64_t      dispatch_time)
 {
 }
 
 void
-machine_thread_going_off_core(__unused thread_t old_thread, __unused boolean_t thread_terminating)
+machine_thread_going_off_core(__unused thread_t old_thread, __unused boolean_t thread_terminating, __unused uint64_t last_dispatch)
 {
 }
 

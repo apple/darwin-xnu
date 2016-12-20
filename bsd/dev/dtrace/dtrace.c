@@ -580,7 +580,7 @@ static intptr_t dtrace_buffer_reserve(dtrace_buffer_t *, size_t, size_t,
     dtrace_state_t *, dtrace_mstate_t *);
 static int dtrace_state_option(dtrace_state_t *, dtrace_optid_t,
     dtrace_optval_t);
-static int dtrace_ecb_create_enable(dtrace_probe_t *, void *);
+static int dtrace_ecb_create_enable(dtrace_probe_t *, void *, void *);
 static void dtrace_helper_provider_destroy(dtrace_helper_provider_t *);
 static int dtrace_canload_remains(uint64_t, size_t, size_t *,
 	dtrace_mstate_t *, dtrace_vstate_t *);
@@ -7464,7 +7464,7 @@ dtrace_match_nonzero(const char *s, const char *p, int depth)
 
 static int
 dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
-    zoneid_t zoneid, int (*matched)(dtrace_probe_t *, void *), void *arg)
+    zoneid_t zoneid, int (*matched)(dtrace_probe_t *, void *, void *), void *arg1, void *arg2)
 {
 	dtrace_probe_t template, *probe;
 	dtrace_hash_t *hash = NULL;
@@ -7480,7 +7480,7 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 	if (pkp->dtpk_id != DTRACE_IDNONE) {
 		if ((probe = dtrace_probe_lookup_id(pkp->dtpk_id)) != NULL &&
 		    dtrace_match_probe(probe, pkp, priv, uid, zoneid) > 0) {
-		        if ((*matched)(probe, arg) == DTRACE_MATCH_FAIL)
+		        if ((*matched)(probe, arg1, arg2) == DTRACE_MATCH_FAIL)
                                return (DTRACE_MATCH_FAIL);
 			nmatched++;
 		}
@@ -7528,7 +7528,7 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 
 			nmatched++;
 
-                       if ((rc = (*matched)(probe, arg)) != DTRACE_MATCH_NEXT) {
+                       if ((rc = (*matched)(probe, arg1, arg2)) != DTRACE_MATCH_NEXT) {
 			       if (rc == DTRACE_MATCH_FAIL)
                                        return (DTRACE_MATCH_FAIL);
 			       break;
@@ -7551,7 +7551,7 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 
 		nmatched++;
 
-		if ((rc = (*matched)(probe, arg)) != DTRACE_MATCH_NEXT) {
+		if ((rc = (*matched)(probe, arg1, arg2)) != DTRACE_MATCH_NEXT) {
 		    if (rc == DTRACE_MATCH_FAIL)
 			return (DTRACE_MATCH_FAIL);
 		    break;
@@ -8117,9 +8117,10 @@ dtrace_probe_lookup_id(dtrace_id_t id)
 }
 
 static int
-dtrace_probe_lookup_match(dtrace_probe_t *probe, void *arg)
+dtrace_probe_lookup_match(dtrace_probe_t *probe, void *arg1, void *arg2)
 {
-	*((dtrace_id_t *)arg) = probe->dtpr_id;
+#pragma unused(arg2)
+	*((dtrace_id_t *)arg1) = probe->dtpr_id;
 
 	return (DTRACE_MATCH_DONE);
 }
@@ -8148,7 +8149,7 @@ dtrace_probe_lookup(dtrace_provider_id_t prid, const char *mod,
 
 	lck_mtx_lock(&dtrace_lock);
 	match = dtrace_match(&pkey, DTRACE_PRIV_ALL, 0, 0,
-	    dtrace_probe_lookup_match, &id);
+	    dtrace_probe_lookup_match, &id, NULL);
 	lck_mtx_unlock(&dtrace_lock);
 
 	ASSERT(match == 1 || match == 0);
@@ -8287,7 +8288,7 @@ dtrace_probe_foreach(uintptr_t offs)
 }
 
 static int
-dtrace_probe_enable(const dtrace_probedesc_t *desc, dtrace_enabling_t *enab)
+dtrace_probe_enable(const dtrace_probedesc_t *desc, dtrace_enabling_t *enab, dtrace_ecbdesc_t *ep)
 {
 	dtrace_probekey_t pkey;
 	uint32_t priv;
@@ -8303,7 +8304,7 @@ dtrace_probe_enable(const dtrace_probedesc_t *desc, dtrace_enabling_t *enab)
 		 * If we're passed a NULL description, we're being asked to
 		 * create an ECB with a NULL probe.
 		 */
-		(void) dtrace_ecb_create_enable(NULL, enab);
+		(void) dtrace_ecb_create_enable(NULL, enab, ep);
 		return (0);
 	}
 
@@ -8312,7 +8313,7 @@ dtrace_probe_enable(const dtrace_probedesc_t *desc, dtrace_enabling_t *enab)
 	    &priv, &uid, &zoneid);
 
 	return (dtrace_match(&pkey, priv, uid, zoneid, dtrace_ecb_create_enable,
-	    enab));
+	    enab, ep));
 }
 
 /*
@@ -8344,7 +8345,7 @@ dtrace_dofprov2hprov(dtrace_helper_provdesc_t *hprov,
 }
 
 static void
-dtrace_helper_provide_one(dof_helper_t *dhp, dof_sec_t *sec, pid_t pid)
+dtrace_helper_provide_one(dof_helper_t *dhp, dof_sec_t *sec, proc_t *p)
 {
 	uintptr_t daddr = (uintptr_t)dhp->dofhp_dof;
 	dof_hdr_t *dof = (dof_hdr_t *)daddr;
@@ -8393,7 +8394,7 @@ dtrace_helper_provide_one(dof_helper_t *dhp, dof_sec_t *sec, pid_t pid)
 	 */
 	dtrace_dofprov2hprov(&dhpv, provider, strtab);
 
-	if ((parg = mops->dtms_provide_pid(meta->dtm_arg, &dhpv, pid)) == NULL)
+	if ((parg = mops->dtms_provide_proc(meta->dtm_arg, &dhpv, p)) == NULL)
 		return;
 
 	meta->dtm_count++;
@@ -8444,7 +8445,7 @@ dtrace_helper_provide_one(dof_helper_t *dhp, dof_sec_t *sec, pid_t pid)
 }
 
 static void
-dtrace_helper_provide(dof_helper_t *dhp, pid_t pid)
+dtrace_helper_provide(dof_helper_t *dhp, proc_t *p)
 {
 	uintptr_t daddr = (uintptr_t)dhp->dofhp_dof;
 	dof_hdr_t *dof = (dof_hdr_t *)daddr;
@@ -8459,12 +8460,12 @@ dtrace_helper_provide(dof_helper_t *dhp, pid_t pid)
 		if (sec->dofs_type != DOF_SECT_PROVIDER)
 			continue;
 
-		dtrace_helper_provide_one(dhp, sec, pid);
+		dtrace_helper_provide_one(dhp, sec, p);
 	}
 }
 
 static void
-dtrace_helper_provider_remove_one(dof_helper_t *dhp, dof_sec_t *sec, pid_t pid)
+dtrace_helper_provider_remove_one(dof_helper_t *dhp, dof_sec_t *sec, proc_t *p)
 {
 	uintptr_t daddr = (uintptr_t)dhp->dofhp_dof;
 	dof_hdr_t *dof = (dof_hdr_t *)daddr;
@@ -8486,13 +8487,13 @@ dtrace_helper_provider_remove_one(dof_helper_t *dhp, dof_sec_t *sec, pid_t pid)
 	 */
 	dtrace_dofprov2hprov(&dhpv, provider, strtab);
 
-	mops->dtms_remove_pid(meta->dtm_arg, &dhpv, pid);
+	mops->dtms_remove_proc(meta->dtm_arg, &dhpv, p);
 
 	meta->dtm_count--;
 }
 
 static void
-dtrace_helper_provider_remove(dof_helper_t *dhp, pid_t pid)
+dtrace_helper_provider_remove(dof_helper_t *dhp, proc_t *p)
 {
 	uintptr_t daddr = (uintptr_t)dhp->dofhp_dof;
 	dof_hdr_t *dof = (dof_hdr_t *)daddr;
@@ -8507,7 +8508,7 @@ dtrace_helper_provider_remove(dof_helper_t *dhp, pid_t pid)
 		if (sec->dofs_type != DOF_SECT_PROVIDER)
 			continue;
 
-		dtrace_helper_provider_remove_one(dhp, sec, pid);
+		dtrace_helper_provider_remove_one(dhp, sec, p);
 	}
 }
 
@@ -8539,8 +8540,8 @@ dtrace_meta_register(const char *name, const dtrace_mops_t *mops, void *arg,
 
 	if (mops == NULL ||
 	    mops->dtms_create_probe == NULL ||
-	    mops->dtms_provide_pid == NULL ||
-	    mops->dtms_remove_pid == NULL) {
+	    mops->dtms_provide_proc == NULL ||
+	    mops->dtms_remove_proc == NULL) {
 		cmn_err(CE_WARN, "failed to register meta-register %s: "
 		    "invalid ops", name);
 		return (EINVAL);
@@ -8586,8 +8587,12 @@ dtrace_meta_register(const char *name, const dtrace_mops_t *mops, void *arg,
 
 	while (help != NULL) {
 		for (i = 0; i < help->dthps_nprovs; i++) {
+			proc_t *p = proc_find(help->dthps_pid);
+			if (p == PROC_NULL)
+				continue;
 			dtrace_helper_provide(&help->dthps_provs[i]->dthp_prov,
-			    help->dthps_pid);
+			    p);
+			proc_rele(p);
 		}
 
 		next = help->dthps_next;
@@ -10824,15 +10829,16 @@ dtrace_ecb_create(dtrace_state_t *state, dtrace_probe_t *probe,
 }
 
 static int
-dtrace_ecb_create_enable(dtrace_probe_t *probe, void *arg)
+dtrace_ecb_create_enable(dtrace_probe_t *probe, void *arg1, void *arg2)
 {
 	dtrace_ecb_t *ecb;
-	dtrace_enabling_t *enab = arg;
+	dtrace_enabling_t *enab = arg1;
+	dtrace_ecbdesc_t *ep = arg2;
 	dtrace_state_t *state = enab->dten_vstate->dtvs_state;
 
 	ASSERT(state != NULL);
 
-	if (probe != NULL && probe->dtpr_gen < enab->dten_probegen) {
+	if (probe != NULL && ep != NULL && probe->dtpr_gen < ep->dted_probegen) {
 		/*
 		 * This probe was created in a generation for which this
 		 * enabling has previously created ECBs; we don't want to
@@ -11730,7 +11736,7 @@ dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched, dtrace_match_cond_
 		 * If a provider failed to enable a probe then get out and
 		 * let the consumer know we failed.
 		 */
-		if ((matched = dtrace_probe_enable(&ep->dted_probe, enab)) < 0)
+		if ((matched = dtrace_probe_enable(&ep->dted_probe, enab, ep)) < 0)
 			return (EBUSY);
 
 		total_matched += matched;
@@ -11757,9 +11763,10 @@ dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched, dtrace_match_cond_
 
 			return (enab->dten_error);
 		}
+
+		ep->dted_probegen = dtrace_probegen;
 	}
 
-	enab->dten_probegen = dtrace_probegen;
 	if (nmatched != NULL)
 		*nmatched = total_matched;
 
@@ -11840,7 +11847,7 @@ dtrace_enabling_prime(dtrace_state_t *state)
 
 		for (i = 0; i < enab->dten_ndesc; i++) {
 			enab->dten_current = enab->dten_desc[i];
-			(void) dtrace_probe_enable(NULL, enab);
+			(void) dtrace_probe_enable(NULL, enab, NULL);
 		}
 
 		enab->dten_primed = 1;
@@ -14274,7 +14281,7 @@ dtrace_helper_destroygen(proc_t* p, int gen)
 		if (dtrace_meta_pid != NULL) {
 			ASSERT(dtrace_deferred_pid == NULL);
 			dtrace_helper_provider_remove(&prov->dthp_prov,
-			    p->p_pid);
+			    p);
 		}
 		lck_mtx_unlock(&dtrace_meta_lock);
 
@@ -14417,7 +14424,7 @@ dtrace_helper_provider_register(proc_t *p, dtrace_helpers_t *help,
 
 		lck_mtx_unlock(&dtrace_lock);
 
-		dtrace_helper_provide(dofhp, p->p_pid);
+		dtrace_helper_provide(dofhp, p);
 
 	} else {
 		/*
@@ -14430,7 +14437,7 @@ dtrace_helper_provider_register(proc_t *p, dtrace_helpers_t *help,
 
 		for (i = 0; i < help->dthps_nprovs; i++) {
 			dtrace_helper_provide(&help->dthps_provs[i]->dthp_prov,
-			    p->p_pid);
+				p);
 		}
 	}
 
@@ -15301,7 +15308,7 @@ dtrace_helpers_destroy(proc_t* p)
 
 			for (i = 0; i < help->dthps_nprovs; i++) {
 				dtrace_helper_provider_remove(
-				    &help->dthps_provs[i]->dthp_prov, p->p_pid);
+				    &help->dthps_provs[i]->dthp_prov, p);
 			}
 		} else {
 			lck_mtx_lock(&dtrace_lock);

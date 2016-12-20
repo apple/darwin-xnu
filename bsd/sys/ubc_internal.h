@@ -107,7 +107,7 @@ struct cs_blob {
 	vm_offset_t	csb_mem_offset;
 	vm_address_t	csb_mem_kaddr;
 	unsigned char	csb_cdhash[CS_CDHASH_LEN];
-	struct cs_hash  *csb_hashtype;
+	const struct cs_hash  *csb_hashtype;
 	vm_size_t	csb_hash_pagesize;	/* each hash entry represent this many bytes in the file */
 	vm_size_t	csb_hash_pagemask;
 	vm_size_t	csb_hash_pageshift;

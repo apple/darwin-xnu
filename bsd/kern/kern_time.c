@@ -395,6 +395,7 @@ getitimer(struct proc *p, struct getitimer_args *uap, __unused int32_t *retval)
 
 	if (IS_64BIT_PROCESS(p)) {
 		struct user64_itimerval user_itv;
+		bzero(&user_itv, sizeof (user_itv));
 		user_itv.it_interval.tv_sec = aitv.it_interval.tv_sec;
 		user_itv.it_interval.tv_usec = aitv.it_interval.tv_usec;
 		user_itv.it_value.tv_sec = aitv.it_value.tv_sec;
@@ -402,6 +403,7 @@ getitimer(struct proc *p, struct getitimer_args *uap, __unused int32_t *retval)
 		return (copyout((caddr_t)&user_itv, uap->itv, sizeof (user_itv)));
 	} else {
 		struct user32_itimerval user_itv;
+		bzero(&user_itv, sizeof (user_itv));		
 		user_itv.it_interval.tv_sec = aitv.it_interval.tv_sec;
 		user_itv.it_interval.tv_usec = aitv.it_interval.tv_usec;
 		user_itv.it_value.tv_sec = aitv.it_value.tv_sec;

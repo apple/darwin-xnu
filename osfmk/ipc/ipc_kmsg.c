@@ -117,6 +117,8 @@
 #include <ipc/flipc.h>
 #endif
 
+#include <os/overflow.h>
+
 #include <security/mac_mach_internal.h>
 
 #include <device/device_server.h>
@@ -2406,18 +2408,37 @@ ipc_kmsg_copyin_header(
 		}
 	}
 
-	/* the entry(s) might need to be deallocated */
+	/*
+	 * The entries might need to be deallocated.
+	 *
+	 * Each entry should be deallocated only once,
+	 * even if it was specified in more than one slot in the header.
+	 * Note that dest can be the same entry as reply or voucher,
+	 * but reply and voucher must be distinct entries.
+	 */
 	assert(IE_NULL != dest_entry);
+	if (IE_NULL != reply_entry)
+		assert(reply_entry != voucher_entry);
+
 	if (IE_BITS_TYPE(dest_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
 		ipc_entry_dealloc(space, dest_name, dest_entry);
+
+		if (dest_entry == reply_entry) {
+			reply_entry = IE_NULL;
+		}
+
+		if (dest_entry == voucher_entry) {
+			voucher_entry = IE_NULL;
+		}
+
 		dest_entry = IE_NULL;
 	}
-	if (dest_entry != reply_entry && IE_NULL != reply_entry &&
+	if (IE_NULL != reply_entry &&
 	    IE_BITS_TYPE(reply_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
 		ipc_entry_dealloc(space, reply_name, reply_entry);
 		reply_entry = IE_NULL;
 	}
-	if (dest_entry != voucher_entry && IE_NULL != voucher_entry &&
+	if (IE_NULL != voucher_entry &&
 	    IE_BITS_TYPE(voucher_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
 		ipc_entry_dealloc(space, voucher_name, voucher_entry);
 		voucher_entry = IE_NULL;
@@ -2776,14 +2797,24 @@ ipc_kmsg_copyin_ool_ports_descriptor(
     result_disp = ipc_object_copyin_type(user_disp);
     dsc->disposition = result_disp;
 
-    if (count > (INT_MAX / sizeof(mach_port_t))) {
-        *mr = MACH_SEND_TOO_LARGE;
+    /* We always do a 'physical copy', but you have to specify something valid */
+    if (copy_option != MACH_MSG_PHYSICAL_COPY &&
+        copy_option != MACH_MSG_VIRTUAL_COPY) {
+        *mr = MACH_SEND_INVALID_TYPE;
         return NULL;
     }
 
     /* calculate length of data in bytes, rounding up */
-    ports_length = count * sizeof(mach_port_t);
-    names_length = count * sizeof(mach_port_name_t);
+
+    if (os_mul_overflow(count, sizeof(mach_port_t), &ports_length)) {
+        *mr = MACH_SEND_TOO_LARGE;
+        return NULL;
+    }
+
+    if (os_mul_overflow(count, sizeof(mach_port_name_t), &names_length)) {
+        *mr = MACH_SEND_TOO_LARGE;
+        return NULL;
+    }
 
     if (ports_length == 0) {
         return user_dsc;
@@ -2895,6 +2926,8 @@ ipc_kmsg_copyin_body(
 
     vm_size_t           descriptor_size = 0;
 
+    mach_msg_type_number_t total_ool_port_count = 0;
+
     /*
      * Determine if the target is a kernel port.
      */
@@ -2914,6 +2947,7 @@ ipc_kmsg_copyin_body(
     daddr = NULL;
     for (i = 0; i < dsc_count; i++) {
 	mach_msg_size_t size;
+	mach_msg_type_number_t ool_port_count = 0;
 
 	daddr = naddr;
 
@@ -2938,9 +2972,8 @@ ipc_kmsg_copyin_body(
 
 	if (naddr > (mach_msg_descriptor_t *)
 	    ((vm_offset_t)kmsg->ikm_header + kmsg->ikm_header->msgh_size)) {
-	    ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
-	    mr = MACH_SEND_MSG_TOO_SMALL;
-	    goto out;
+		mr = MACH_SEND_MSG_TOO_SMALL;
+		goto clean_message;
 	}
 
 	switch (daddr->type.type) {
@@ -2955,11 +2988,10 @@ ipc_kmsg_copyin_body(
 		/*
 		 * Invalid copy option
 		 */
-		ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
 		mr = MACH_SEND_INVALID_TYPE;
-		goto out;
+		goto clean_message;
 	    }
-	    
+
 	    if ((size >= MSG_OOL_SIZE_SMALL) &&
 		(daddr->out_of_line.copy == MACH_MSG_PHYSICAL_COPY) &&
 		!(daddr->out_of_line.deallocate)) {
@@ -2969,25 +3001,51 @@ ipc_kmsg_copyin_body(
 		 * memory requirements
 		 */
 		if (space_needed + round_page(size) <= space_needed) {
-		    /* Overflow dectected */
-		    ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
-		    mr = MACH_MSG_VM_KERNEL;
-		    goto out;
-		}		    
-		    
+			/* Overflow dectected */
+			mr = MACH_MSG_VM_KERNEL;
+			goto clean_message;
+		}
+
 		space_needed += round_page(size);
 		if (space_needed > ipc_kmsg_max_vm_space) {
-		    
-		    /*
-		     * Per message kernel memory limit exceeded
-		     */
-		    ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
+		    /* Per message kernel memory limit exceeded */
 		    mr = MACH_MSG_VM_KERNEL;
-		    goto out;
+		    goto clean_message;
 		}
 	    }
+	    break;
+	case MACH_MSG_PORT_DESCRIPTOR:
+		if (os_add_overflow(total_ool_port_count, 1, &total_ool_port_count)) {
+			/* Overflow detected */
+			mr = MACH_SEND_TOO_LARGE;
+			goto clean_message;
+		}
+		break;
+	case MACH_MSG_OOL_PORTS_DESCRIPTOR:
+		ool_port_count = (is_task_64bit) ?
+		        ((mach_msg_ool_ports_descriptor64_t *)daddr)->count :
+		        daddr->ool_ports.count;
+
+		if (os_add_overflow(total_ool_port_count, ool_port_count, &total_ool_port_count)) {
+			/* Overflow detected */
+			mr = MACH_SEND_TOO_LARGE;
+			goto clean_message;
+		}
+
+		if (ool_port_count > (ipc_kmsg_max_vm_space/sizeof(mach_port_t))) {
+			/* Per message kernel memory limit exceeded */
+			mr = MACH_SEND_TOO_LARGE;
+			goto clean_message;
+		}
+		break;
 	}
     }
+
+	/* Sending more than 16383 rights in one message seems crazy */
+	if (total_ool_port_count >= (MACH_PORT_UREFS_MAX / 4)) {
+		mr = MACH_SEND_TOO_LARGE;
+		goto clean_message;
+	}
 
     /*
      * Allocate space in the pageable kernel ipc copy map for all the
@@ -2997,9 +3055,8 @@ ipc_kmsg_copyin_body(
     if (space_needed) {
         if (vm_allocate(ipc_kernel_copy_map, &paddr, space_needed, 
                     VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC)) != KERN_SUCCESS) {
-            ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
             mr = MACH_MSG_VM_KERNEL;
-            goto out;
+            goto clean_message;
         }
     }
 
@@ -3063,6 +3120,11 @@ ipc_kmsg_copyin_body(
     }
  out:
     return mr;
+
+clean_message:
+	/* no descriptors have been copied in yet */
+	ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
+	return mr;
 }
 
 

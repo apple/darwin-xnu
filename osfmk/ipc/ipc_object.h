@@ -179,9 +179,12 @@ extern void	io_free(
 #define _VOLATILE_ volatile
 
 /* Sanity check the ref count.  If it is 0, we may be doubly zfreeing.
- * If it is larger than max int, it has been corrupted, probably by being
- * modified into an address (this is architecture dependent, but it's
- * safe to assume there cannot really be max int references).
+ * If it is larger than max int, it has been corrupted or leaked,
+ * probably by being modified into an address (this is architecture
+ * dependent, but it's safe to assume there cannot really be max int
+ * references unless some code is leaking the io_reference without leaking
+ * object). Saturate the io_reference on release kernel if it reaches
+ * max int to avoid use after free.
  *
  * NOTE: The 0 test alone will not catch double zfreeing of ipc_port
  * structs, because the io_references field is the first word of the struct,
@@ -192,18 +195,42 @@ extern void	io_free(
 
 static inline void
 io_reference(ipc_object_t io) {
+	ipc_object_refs_t new_io_references;
+	ipc_object_refs_t old_io_references;
+
 	assert((io)->io_references > 0 &&
 	    (io)->io_references < IO_MAX_REFERENCES);
-	OSIncrementAtomic(&((io)->io_references));
+
+	do {
+		old_io_references = (io)->io_references;
+		new_io_references = old_io_references + 1;
+		if (old_io_references == IO_MAX_REFERENCES) {
+			break;
+		}
+	} while (OSCompareAndSwap(old_io_references, new_io_references,
+			&((io)->io_references)) == FALSE);
 }
 
 
 static inline void
 io_release(ipc_object_t io) {
+	ipc_object_refs_t new_io_references;
+	ipc_object_refs_t old_io_references;
+
 	assert((io)->io_references > 0 &&
 	    (io)->io_references < IO_MAX_REFERENCES);
+
+	do {
+		old_io_references = (io)->io_references;
+		new_io_references = old_io_references - 1;
+		if (old_io_references == IO_MAX_REFERENCES) {
+			break;
+		}
+	} while (OSCompareAndSwap(old_io_references, new_io_references,
+			&((io)->io_references)) == FALSE);
+
         /* If we just removed the last reference count */
-	if ( 1 == OSDecrementAtomic(&((io)->io_references))) {
+	if (1 == old_io_references) {
 		/* Free the object */
 		io_free(io_otype((io)), (io));
 	}

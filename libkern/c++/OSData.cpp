@@ -496,3 +496,8 @@ void OSData::setSerializable(bool serializable)
     }
     reserved->disableSerialization = (!serializable);
 }
+
+bool OSData::isSerializable(void)
+{
+    return (!reserved || !reserved->disableSerialization);
+}

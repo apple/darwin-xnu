@@ -2568,7 +2568,7 @@ thread_dispatch(
 				 */
 				thread->last_made_runnable_time = mach_approximate_time();
 
-				machine_thread_going_off_core(thread, FALSE);
+				machine_thread_going_off_core(thread, FALSE, processor->last_dispatch);
 
 				if (thread->reason & AST_QUANTUM)
 					thread_setrun(thread, SCHED_TAILQ);
@@ -2622,7 +2622,7 @@ thread_dispatch(
 				}
 #endif
 
-				machine_thread_going_off_core(thread, should_terminate);
+				machine_thread_going_off_core(thread, should_terminate, processor->last_dispatch);
 
 				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				        MACHDBG_CODE(DBG_MACH_SCHED,MACH_DISPATCH) | DBG_FUNC_NONE,
@@ -2672,7 +2672,7 @@ thread_dispatch(
 
 		thread_tell_urgency(urgency, arg1, arg2, latency, self);
 
-		machine_thread_going_on_core(self, urgency, latency);
+		machine_thread_going_on_core(self, urgency, latency, processor->last_dispatch);
 		
 		/*
 		 *	Get a new quantum if none remaining.
@@ -2693,7 +2693,7 @@ thread_dispatch(
 		processor->first_timeslice = FALSE;
 
 		thread_tell_urgency(THREAD_URGENCY_NONE, 0, 0, 0, self);
-		machine_thread_going_on_core(self, THREAD_URGENCY_NONE, 0);
+		machine_thread_going_on_core(self, THREAD_URGENCY_NONE, 0, processor->last_dispatch);
 	}
 
 	self->computation_epoch = processor->last_dispatch;
@@ -3313,8 +3313,7 @@ processor_setrun(
 		if (processor->state == PROCESSOR_SHUTDOWN		&&
 			thread->sched_pri >= processor->current_pri	) {
 			ipi_action = eInterruptRunning;
-		} else if (	processor->state == PROCESSOR_IDLE	&&
-					processor != current_processor()	) {
+		} else if (processor->state == PROCESSOR_IDLE) {
 			re_queue_tail(&pset->active_queue, &processor->processor_queue);
 
 			processor->next_thread = THREAD_NULL;
@@ -3996,7 +3995,7 @@ set_sched_pri(
 		 */
 		if (nurgency != curgency) {
 			thread_tell_urgency(nurgency, urgency_param1, urgency_param2, 0, thread);
-			machine_thread_going_on_core(thread, nurgency, 0);
+			machine_thread_going_on_core(thread, nurgency, 0, 0);
 		}
 	}
 

@@ -143,9 +143,6 @@ protected:
     struct ExpansionData {
 	IOOptionBits options;
 	IOEventSource *passiveEventChain;
-#if DEBUG
-	void * allocationBacktrace[16];
-#endif /* DEBUG */
 #if IOKITSTATS
 	struct IOWorkLoopCounter *counter;
 #else

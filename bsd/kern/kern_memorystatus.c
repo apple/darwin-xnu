@@ -1091,6 +1091,7 @@ SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_min_processes, CTLFLAG_RW|CTLFL
 boolean_t memorystatus_freeze_throttle_enabled = TRUE;
 SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_throttle_enabled, CTLFLAG_RW|CTLFLAG_LOCKED, &memorystatus_freeze_throttle_enabled, 0, "");
 
+#define VM_PAGES_FOR_ALL_PROCS	(2)
 /* 
  * Manual trigger of freeze and thaw for dev / debug kernels only.
  */
@@ -1109,7 +1110,7 @@ sysctl_memorystatus_freeze SYSCTL_HANDLER_ARGS
 	if (error || !req->newptr)
 		return (error);
 
-	if (pid == 2) {
+	if (pid == VM_PAGES_FOR_ALL_PROCS) {
 		vm_pageout_anonymous_pages();
 
 		return 0;
@@ -1175,14 +1176,19 @@ sysctl_memorystatus_available_pages_thaw SYSCTL_HANDLER_ARGS
 	if (error || !req->newptr)
 		return (error);
 
-	p = proc_find(pid);
-	if (p != NULL) {
-		error = task_thaw(p->task);
-		proc_rele(p);
-		
-		if (error)
-			error = EIO;
-		return error;
+	if (pid == VM_PAGES_FOR_ALL_PROCS) {
+		do_fastwake_warmup_all();
+		return 0;
+	} else {
+		p = proc_find(pid);
+		if (p != NULL) {
+			error = task_thaw(p->task);
+			proc_rele(p);
+
+			if (error)
+				error = EIO;
+			return error;
+		}
 	}
 
 	return EINVAL;
@@ -3601,8 +3607,8 @@ done:
 		uint64_t timestamp_now = mach_absolute_time();
 		memorystatus_jetsam_snapshot->notification_time = timestamp_now;
 		memorystatus_jetsam_snapshot->js_gencount++;
-		if (memorystatus_jetsam_snapshot_last_timestamp == 0 ||
-				timestamp_now > memorystatus_jetsam_snapshot_last_timestamp + memorystatus_jetsam_snapshot_timeout) {
+		if (memorystatus_jetsam_snapshot_count > 0 && (memorystatus_jetsam_snapshot_last_timestamp == 0 ||
+				timestamp_now > memorystatus_jetsam_snapshot_last_timestamp + memorystatus_jetsam_snapshot_timeout)) {
 			proc_list_unlock();
 			int ret = memorystatus_send_note(kMemorystatusSnapshotNote, &snapshot_size, sizeof(snapshot_size));
 			if (!ret) {
@@ -3851,8 +3857,8 @@ memorystatus_kill_process_sync(pid_t victim_pid, uint32_t cause, os_reason_t jet
 			sizeof(memorystatus_jetsam_snapshot_entry_t) * memorystatus_jetsam_snapshot_count;
 		uint64_t timestamp_now = mach_absolute_time();
 		memorystatus_jetsam_snapshot->notification_time = timestamp_now;
-		if (memorystatus_jetsam_snapshot_last_timestamp == 0 ||
-				timestamp_now > memorystatus_jetsam_snapshot_last_timestamp + memorystatus_jetsam_snapshot_timeout) {
+		if (memorystatus_jetsam_snapshot_count > 0 && (memorystatus_jetsam_snapshot_last_timestamp == 0 ||
+				timestamp_now > memorystatus_jetsam_snapshot_last_timestamp + memorystatus_jetsam_snapshot_timeout)) {
 			proc_list_unlock();
 			int ret = memorystatus_send_note(kMemorystatusSnapshotNote, &snapshot_size, sizeof(snapshot_size));
 			if (!ret) {
@@ -5815,6 +5821,28 @@ memorystatus_freeze_thread(void *param __unused, wait_result_t wr __unused)
 	assert_wait((event_t) &memorystatus_freeze_wakeup, THREAD_UNINT);
 	thread_block((thread_continue_t) memorystatus_freeze_thread);	
 }
+
+static int
+sysctl_memorystatus_do_fastwake_warmup_all  SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, req, arg1, arg2)
+
+	/* Need to be root or have entitlement */
+	if (!kauth_cred_issuser(kauth_cred_get()) && !IOTaskHasEntitlement(current_task(), MEMORYSTATUS_ENTITLEMENT)) {
+		return EPERM;
+	}
+
+	if (memorystatus_freeze_enabled == FALSE) {
+		return ENOTSUP;
+	}
+
+	do_fastwake_warmup_all();
+
+	return 0;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_do_fastwake_warmup_all, CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_LOCKED|CTLFLAG_MASKED,
+    0, 0, &sysctl_memorystatus_do_fastwake_warmup_all, "I", "");
 
 #endif /* CONFIG_FREEZE */
 

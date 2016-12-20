@@ -558,6 +558,8 @@ esp_gcm_schedule( __unused const struct esp_algorithm *algo,
 {
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	aes_gcm_ctx *ctx = (aes_gcm_ctx*)P2ROUNDUP(sav->sched, ESP_GCM_ALIGN);
+	u_int ivlen = sav->ivlen;
+	unsigned char nonce[ESP_GCM_SALT_LEN+ivlen];
 	int rc;
 
 	ctx->decrypt = &ctx->ctxt[0];
@@ -568,10 +570,20 @@ esp_gcm_schedule( __unused const struct esp_algorithm *algo,
 	        return (rc);
 	}
 
-	rc = aes_encrypt_key_gcm((const unsigned char *) _KEYBUF(sav->key_enc), _KEYLEN(sav->key_enc)-ESP_GCM_SALT_LEN, ctx->encrypt);
+	bzero(nonce, ESP_GCM_SALT_LEN + ivlen);
+	memcpy(nonce, _KEYBUF(sav->key_enc)+_KEYLEN(sav->key_enc)-ESP_GCM_SALT_LEN, ESP_GCM_SALT_LEN);
+	memcpy(nonce+ESP_GCM_SALT_LEN, sav->iv, ivlen);
+
+	rc = aes_encrypt_key_with_iv_gcm((const unsigned char *) _KEYBUF(sav->key_enc), _KEYLEN(sav->key_enc)-ESP_GCM_SALT_LEN, nonce, ctx->encrypt);
 	if (rc) {
 	        return (rc);
 	}
+
+	rc = aes_encrypt_reset_gcm(ctx->encrypt);
+	if (rc) {
+			return (rc);
+	}
+
 	return (rc);
 }
 
@@ -611,7 +623,7 @@ esp_gcm_encrypt_aes(
 	int scutoff;
 	int i, len;
 	unsigned char nonce[ESP_GCM_SALT_LEN+ivlen];
-	
+
 	if (ivlen != ESP_GCM_IVLEN) {
 	        ipseclog((LOG_ERR, "%s: unsupported ivlen %d\n", __FUNCTION__, ivlen));
 		m_freem(m);
@@ -627,27 +639,40 @@ esp_gcm_encrypt_aes(
 		bodyoff = off + sizeof(struct newesp) + ivlen;
 	}
 
+	bzero(nonce, ESP_GCM_SALT_LEN+ivlen);
+	/* generate new iv */
+	ctx = (aes_gcm_ctx *)P2ROUNDUP(sav->sched, ESP_GCM_ALIGN);
+
+	if (aes_encrypt_reset_gcm(ctx->encrypt)) {
+		ipseclog((LOG_ERR, "%s: gcm reset failure\n", __FUNCTION__));
+		m_freem(m);
+		return EINVAL;
+	}
+
+	if (aes_encrypt_inc_iv_gcm((unsigned char *)nonce, ctx->encrypt)) {
+		ipseclog((LOG_ERR, "%s: iv generation failure\n", __FUNCTION__));
+		m_freem(m);
+		return EINVAL;
+	}
+
+	/*
+	 * The IV is now generated within corecrypto and
+	 * is provided to ESP using aes_encrypt_inc_iv_gcm().
+	 * This makes the sav->iv redundant and is no longer
+	 * used in GCM operations. But we still copy the IV
+	 * back to sav->iv to ensure that any future code reading
+	 * this value will get the latest IV.
+	 */
+	memcpy(sav->iv, (nonce + ESP_GCM_SALT_LEN), ivlen);
 	m_copyback(m, ivoff, ivlen, sav->iv);
+	bzero(nonce, ESP_GCM_SALT_LEN+ivlen);
 
 	if (m->m_pkthdr.len < bodyoff) {
-	        ipseclog((LOG_ERR, "%s: bad len %d/%lu\n", __FUNCTION__,
+		ipseclog((LOG_ERR, "%s: bad len %d/%lu\n", __FUNCTION__,
 		    m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
 	}
-
-	/* Set IV */
-	memcpy(nonce, _KEYBUF(sav->key_enc)+_KEYLEN(sav->key_enc)-ESP_GCM_SALT_LEN, ESP_GCM_SALT_LEN);
-	memcpy(nonce+ESP_GCM_SALT_LEN, sav->iv, ivlen);
-
-	ctx = (aes_gcm_ctx *)P2ROUNDUP(sav->sched, ESP_GCM_ALIGN);
-	if (aes_encrypt_set_iv_gcm(nonce, sizeof(nonce), ctx->encrypt)) {
-	        ipseclog((LOG_ERR, "%s: failed to set IV\n", __FUNCTION__));
-		m_freem(m);
-		bzero(nonce, sizeof(nonce));
-		return EINVAL;
-	}
-	bzero(nonce, sizeof(nonce));
 
 	/* Set Additional Authentication Data */
 	if (!(sav->flags & SADB_X_EXT_OLD)) {
@@ -783,9 +808,6 @@ esp_gcm_encrypt_aes(
 		FREE(sp_aligned, M_SECA);
 		sp_aligned = NULL;
 	}
-
-	/* generate new iv */
-	key_sa_stir_iv(sav);
 
 	return 0;
 }

@@ -531,11 +531,6 @@ machine_trace_thread(thread_t thread,
 
 	nframes = (tracebound > tracepos) ? MIN(nframes, (int)((tracebound - tracepos) / framesize)) : 0;
 
-    if (thread->machine.iss == NULL) {
-		// no register states to backtrace, probably thread is terminating
-		return 0;
-	}
-
 	if (user_p) {
 		    x86_saved_state32_t	*iss32;
 		
@@ -632,11 +627,6 @@ machine_trace_thread64(thread_t thread,
 	addr64_t prevsp            = 0;
 	vm_offset_t kern_virt_addr = 0;
 	vm_map_t bt_vm_map         = VM_MAP_NULL;
-
-	if (thread->machine.iss == NULL) {
-        // no register states to backtrace, probably thread is terminating
-        return 0;
-	}
 
 	nframes = (tracebound > tracepos) ? MIN(nframes, (int)((tracebound - tracepos) / framesize)) : 0;
 

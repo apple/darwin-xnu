@@ -181,7 +181,7 @@ thread_quantum_expire(
 
 	/* Tell platform layer that we are still running this thread */
 	urgency = thread_get_urgency(thread, &ignore1, &ignore2);
-	machine_thread_going_on_core(thread, urgency, 0);
+	machine_thread_going_on_core(thread, urgency, 0, 0);
 
 	/*
 	 *	This quantum is up, give this thread another.

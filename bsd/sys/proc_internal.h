@@ -487,6 +487,10 @@ struct	proc {
 #define PROC_SETACTION_STATE(p) (p->p_pcaction = (PROC_CONTROL_STATE(p) | (PROC_CONTROL_STATE(p) << 16)))
 #define PROC_RESETACTION_STATE(p) (p->p_pcaction = PROC_CONTROL_STATE(p))
 
+/* Process exit reason macros */
+#define PROC_HAS_EXITREASON(p) (p->p_exit_reason != OS_REASON_NULL)
+#define PROC_EXITREASON_FLAGS(p) p->p_exit_reason->osr_flags
+
 /* additional process flags */
 #define P_LADVLOCK		0x01
 #define P_LXBKIDLEINPROG	0x02

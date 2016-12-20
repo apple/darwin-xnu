@@ -309,7 +309,7 @@ IOReturn IOHibernateIOKitSleep(void);
 IOReturn IOHibernateSystemHasSlept(void);
 IOReturn IOHibernateSystemWake(void);
 IOReturn IOHibernateSystemPostWake(void);
-bool     IOHibernateWasScreenLocked(void);
+uint32_t IOHibernateWasScreenLocked(void);
 void     IOHibernateSetScreenLocked(uint32_t lockState);
 void     IOHibernateSetWakeCapabilities(uint32_t capability);
 void     IOHibernateSystemRestart(void);
@@ -540,7 +540,8 @@ enum
 	kIOScreenLockFileVaultDialog = 4,
 };	
 
-#define kIOScreenLockStateKey      "IOScreenLockState"
+#define kIOScreenLockStateKey       "IOScreenLockState"
+#define kIOBooterScreenLockStateKey "IOBooterScreenLockState"
 
 #endif /* ! __IOKIT_IOHIBERNATEPRIVATE_H */
 

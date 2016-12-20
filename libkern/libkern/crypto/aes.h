@@ -97,14 +97,20 @@ aes_rval aes_decrypt_cbc(const unsigned char *in_blk, const unsigned char *in_iv
 					 unsigned char *out_blk, aes_decrypt_ctx cx[1]);
 
 aes_rval aes_encrypt_key_gcm(const unsigned char *key, int key_len, ccgcm_ctx *ctx);
+aes_rval aes_encrypt_key_with_iv_gcm(const unsigned char *key, int key_len, const unsigned char *in_iv, ccgcm_ctx *ctx);
 aes_rval aes_encrypt_set_iv_gcm(const unsigned char *in_iv, unsigned int len, ccgcm_ctx *ctx);
+aes_rval aes_encrypt_reset_gcm(ccgcm_ctx *ctx);
+aes_rval aes_encrypt_inc_iv_gcm(unsigned char *out_iv, ccgcm_ctx *ctx);
 aes_rval aes_encrypt_aad_gcm(const unsigned char *aad, unsigned int aad_bytes, ccgcm_ctx *ctx);
 aes_rval aes_encrypt_gcm(const unsigned char *in_blk, unsigned int num_bytes, unsigned char *out_blk, ccgcm_ctx *ctx);
 aes_rval aes_encrypt_finalize_gcm(unsigned char *tag, unsigned int tag_bytes, ccgcm_ctx *ctx);
 unsigned aes_encrypt_get_ctx_size_gcm(void);
 
 aes_rval aes_decrypt_key_gcm(const unsigned char *key, int key_len, ccgcm_ctx *ctx);
+aes_rval aes_decrypt_key_with_iv_gcm(const unsigned char *key, int key_len, const unsigned char *in_iv, ccgcm_ctx *ctx);
 aes_rval aes_decrypt_set_iv_gcm(const unsigned char *in_iv, unsigned int len, ccgcm_ctx *ctx);
+aes_rval aes_decrypt_reset_gcm(ccgcm_ctx *ctx);
+aes_rval aes_decrypt_inc_iv_gcm(unsigned char *out_iv, ccgcm_ctx *ctx);
 aes_rval aes_decrypt_aad_gcm(const unsigned char *aad, unsigned int aad_bytes, ccgcm_ctx *ctx);
 aes_rval aes_decrypt_gcm(const unsigned char *in_blk, unsigned int num_bytes, unsigned char *out_blk, ccgcm_ctx *ctx);
 aes_rval aes_decrypt_finalize_gcm(unsigned char *tag, unsigned int tag_bytes, ccgcm_ctx *ctx);

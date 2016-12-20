@@ -268,7 +268,8 @@ want to export a function only to kernel level but not user level.
        header files installed in all the paths described above in (1) will not
        have code enclosed within this macro.
 
-    b. `KERNEL_PRIVATE` : Same as PRIVATE
+    b. `KERNEL_PRIVATE` : If true, code is available to all of the xnu kernel and Apple
+        internal kernel extensions.
 
     c. `BSD_KERNEL_PRIVATE` : If true, code is available to the xnu/bsd part of
        the kernel and is not available to rest of the kernel, kernel extensions

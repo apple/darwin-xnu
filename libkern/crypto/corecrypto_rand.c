@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,19 +22,26 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*
- * @OSF_COPYRIGHT@
- */
 
-#ifndef VM_INIT_H
-#define VM_INIT_H
+#include <libkern/crypto/crypto_internal.h>
+#include <corecrypto/ccrng.h>
+#include <libkern/crypto/rand.h>
 
-extern void vm_mem_bootstrap(void);
-extern void vm_mem_init(void);
-extern void vm_map_steal_memory(void);;
-extern void vm_user_init(void);
+int
+cc_rand_generate(void *out, size_t outlen)
+{
+	struct ccrng_state *rng_state = NULL;
+	int error = -1;
 
-#endif /* VM_INIT_H */
+	if (g_crypto_funcs) {
+		rng_state = g_crypto_funcs->ccrng_fn(&error);
+		if (rng_state != NULL) {
+			error = ccrng_generate(rng_state, outlen, out);
+		}
+	}
+
+	return error;
+}

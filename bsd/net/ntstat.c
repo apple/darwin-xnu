@@ -65,8 +65,11 @@
 #include <netinet6/in6_var.h>
 
 __private_extern__ int	nstat_collect = 1;
+
+#if (DEBUG || DEVELOPMENT)
 SYSCTL_INT(_net, OID_AUTO, statistics, CTLFLAG_RW | CTLFLAG_LOCKED,
     &nstat_collect, 0, "Collect detailed statistics");
+#endif /* (DEBUG || DEVELOPMENT) */
 
 static int nstat_privcheck = 0;
 SYSCTL_INT(_net, OID_AUTO, statistics_privcheck, CTLFLAG_RW | CTLFLAG_LOCKED,
@@ -1272,9 +1275,13 @@ nstat_pcb_detach(struct inpcb *inp)
 		for (prevsrc = NULL, src = state->ncs_srcs; src;
 		    prevsrc = src, src = src->next)
 		{
-			tucookie = (struct nstat_tucookie *)src->cookie;
-			if (tucookie->inp == inp)
-				break;
+			nstat_provider_id_t provider_id = src->provider->nstat_provider_id;
+			if (provider_id == NSTAT_PROVIDER_TCP_KERNEL || provider_id == NSTAT_PROVIDER_UDP_KERNEL)
+			{
+				tucookie = (struct nstat_tucookie *)src->cookie;
+				if (tucookie->inp == inp)
+					break;
+			}
 		}
 
 		if (src)
@@ -4220,6 +4227,7 @@ nstat_control_source_add(
 	src->provider = provider;
 	src->cookie = cookie;
 	src->filter = src_filter;
+	src->seq = 0;
 
 	if (msg)
 	{
@@ -4590,16 +4598,6 @@ nstat_control_begin_query(
 			state->ncs_context = hdrp->context;
 			state->ncs_seq++;
 		}
-	}
-	else if (state->ncs_context != 0)
-	{
-		/*
-		 * A continuation of a paced-query was in progress. Send that
-		 * context an error and reset the state.  If the same context
-		 * has changed its mind, just send the full query results.
-		 */
-		if (state->ncs_context != hdrp->context)
-			nstat_send_error(state, state->ncs_context, EAGAIN);
 	}
 
 	return partial;

@@ -539,6 +539,7 @@ tcp_garbage_collect(struct inpcb *inp, int istimewait)
 #endif /* INET6 */
 				in_pcbdetach(inp);
 		}
+		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
 		if (inp->inp_wantcnt == WNT_STOPUSING)
 			active = TRUE;

@@ -753,6 +753,7 @@ socreate_internal(int dom, struct socket **aso, int type, int proto,
 		 * so protocol attachment handler must be coded carefuly
 		 */
 		so->so_state |= SS_NOFDREF;
+		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
 		sofreelastref(so, 1);	/* will deallocate the socket */
 		return (error);
@@ -1068,10 +1069,19 @@ sofreelastref(struct socket *so, int dealloc)
 		return;
 	}
 	if (head != NULL) {
-		socket_lock(head, 1);
+		/*
+		 * Need to lock the listener when the protocol has
+		 * per socket locks
+		 */
+		if (head->so_proto->pr_getlock != NULL)
+			socket_lock(head, 1);
+
 		if (so->so_state & SS_INCOMP) {
+			so->so_state &= ~SS_INCOMP;
 			TAILQ_REMOVE(&head->so_incomp, so, so_list);
 			head->so_incqlen--;
+			head->so_qlen--;
+			so->so_head = NULL;
 		} else if (so->so_state & SS_COMP) {
 			/*
 			 * We must not decommission a socket that's
@@ -1084,15 +1094,14 @@ sofreelastref(struct socket *so, int dealloc)
 			so->so_rcv.sb_flags &= ~(SB_SEL|SB_UPCALL);
 			so->so_snd.sb_flags &= ~(SB_SEL|SB_UPCALL);
 			so->so_event = sonullevent;
-			socket_unlock(head, 1);
+			if (head->so_proto->pr_getlock != NULL)
+				socket_unlock(head, 1);
 			return;
 		} else {
 			panic("sofree: not queued");
 		}
-		head->so_qlen--;
-		so->so_state &= ~SS_INCOMP;
-		so->so_head = NULL;
-		socket_unlock(head, 1);
+		if (head->so_proto->pr_getlock != NULL)
+			socket_unlock(head, 1);
 	}
 	sowflush(so);
 	sorflush(so);
@@ -1177,8 +1186,7 @@ soclose_locked(struct socket *so)
 	}
 
 	if ((so->so_options & SO_ACCEPTCONN)) {
-		struct socket *sp, *sonext;
-		int socklock = 0;
+		struct socket *sp;
 
 		/*
 		 * We do not want new connection to be added
@@ -1186,9 +1194,8 @@ soclose_locked(struct socket *so)
 		 */
 		so->so_options &= ~SO_ACCEPTCONN;
 
-		for (sp = TAILQ_FIRST(&so->so_incomp);
-		    sp != NULL; sp = sonext) {
-			sonext = TAILQ_NEXT(sp, so_list);
+		while ((sp = TAILQ_FIRST(&so->so_incomp)) != NULL) {
+		    	int socklock = 0;
 
 			/*
 			 * Radar 5350314
@@ -1204,7 +1211,7 @@ soclose_locked(struct socket *so)
 				/*
 				 * Lock ordering for consistency with the
 				 * rest of the stack, we lock the socket
-				 * first and then grabb the head.
+				 * first and then grab the head.
 				 */
 				socket_unlock(so, 0);
 				socket_lock(sp, 1);
@@ -1212,43 +1219,55 @@ soclose_locked(struct socket *so)
 				socklock = 1;
 			}
 
-			TAILQ_REMOVE(&so->so_incomp, sp, so_list);
-			so->so_incqlen--;
-
+			/*
+			 * Radar 27945981
+			 * The extra reference for the list insure the
+			 * validity of the socket pointer when we perform the
+			 * unlock of the head above
+			 */
 			if (sp->so_state & SS_INCOMP) {
 				sp->so_state &= ~SS_INCOMP;
 				sp->so_head = NULL;
+				TAILQ_REMOVE(&so->so_incomp, sp, so_list);
+				so->so_incqlen--;
+				so->so_qlen--;
+
+				(void) soabort(sp);
+			}
+
+			if (socklock != 0)
+				socket_unlock(sp, 1);
+		}
+
+		while ((sp = TAILQ_FIRST(&so->so_comp)) != NULL) {
+			int socklock = 0;
+			
+			/* Dequeue from so_comp since sofree() won't do it */
+			if (so->so_proto->pr_getlock != NULL) {
+				/*
+				 * Lock ordering for consistency with the
+				 * rest of the stack, we lock the socket
+				 * first and then grab the head.
+				 */
+				socket_unlock(so, 0);
+				socket_lock(sp, 1);
+				socket_lock(so, 0);
+				socklock = 1;
+			}
+
+			if (sp->so_state & SS_COMP) {
+				sp->so_state &= ~SS_COMP;
+				sp->so_head = NULL;
+				TAILQ_REMOVE(&so->so_comp, sp, so_list);
+				so->so_qlen--;
 
 				(void) soabort(sp);
 			}
 
 			if (socklock)
 				socket_unlock(sp, 1);
-		}
-
-		while ((sp = TAILQ_FIRST(&so->so_comp)) != NULL) {
-			/* Dequeue from so_comp since sofree() won't do it */
-			TAILQ_REMOVE(&so->so_comp, sp, so_list);
-			so->so_qlen--;
-
-			if (so->so_proto->pr_getlock != NULL) {
-				socket_unlock(so, 0);
-				socket_lock(sp, 1);
-			}
-
-			if (sp->so_state & SS_COMP) {
-				sp->so_state &= ~SS_COMP;
-				sp->so_head = NULL;
-
-				(void) soabort(sp);
-			}
-
-			if (so->so_proto->pr_getlock != NULL) {
-				socket_unlock(sp, 1);
-				socket_lock(so, 0);
 			}
 		}
-	}
 	if (so->so_pcb == NULL) {
 		/* 3915887: mark the socket as ready for dealloc */
 		so->so_flags |= SOF_PCBCLEARING;
@@ -1317,6 +1336,7 @@ discard:
 	atomic_add_32(&so->so_proto->pr_domain->dom_refs, -1);
 	evsofree(so);
 
+	VERIFY(so->so_usecount > 0);
 	so->so_usecount--;
 	sofree(so);
 	return (error);
@@ -1405,11 +1425,10 @@ soaccept(struct socket *so, struct sockaddr **nam)
 }
 
 int
-soacceptfilter(struct socket *so)
+soacceptfilter(struct socket *so, struct socket *head)
 {
 	struct sockaddr *local = NULL, *remote = NULL;
 	int error = 0;
-	struct socket *head = so->so_head;
 
 	/*
 	 * Hold the lock even if this socket has not been made visible
@@ -1419,8 +1438,7 @@ soacceptfilter(struct socket *so)
 	socket_lock(so, 1);
 	if (sogetaddr_locked(so, &remote, 1) != 0 ||
 	    sogetaddr_locked(so, &local, 0) != 0) {
-		so->so_state &= ~(SS_NOFDREF | SS_COMP);
-		so->so_head = NULL;
+		so->so_state &= ~SS_NOFDREF;
 		socket_unlock(so, 1);
 		soclose(so);
 		/* Out of resources; try it again next time */
@@ -1448,8 +1466,7 @@ soacceptfilter(struct socket *so)
 		 * the following is done while holding the lock since
 		 * the socket has been exposed to the filter(s) earlier.
 		 */
-		so->so_state &= ~(SS_NOFDREF | SS_COMP);
-		so->so_head = NULL;
+		so->so_state &= ~SS_COMP;
 		socket_unlock(so, 1);
 		soclose(so);
 		/* Propagate socket filter's error code to the caller */

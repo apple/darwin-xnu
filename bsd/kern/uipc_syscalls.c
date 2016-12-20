@@ -491,7 +491,6 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 		goto out;
 	}
 
-
 	/*
 	 * At this point we know that there is at least one connection
 	 * ready to be accepted. Remove it from the queue prior to
@@ -502,6 +501,8 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 	so = TAILQ_FIRST(&head->so_comp);
 	TAILQ_REMOVE(&head->so_comp, so, so_list);
+	so->so_head = NULL;
+	so->so_state &= ~SS_COMP;
 	head->so_qlen--;
 	/* unlock head to avoid deadlock with select, keep a ref on head */
 	socket_unlock(head, 0);
@@ -515,8 +516,7 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 	 */
 	if ((error = mac_socket_check_accepted(kauth_cred_get(), so)) != 0) {
 		socket_lock(so, 1);
-		so->so_state &= ~(SS_NOFDREF | SS_COMP);
-		so->so_head = NULL;
+		so->so_state &= ~SS_NOFDREF;
 		socket_unlock(so, 1);
 		soclose(so);
 		/* Drop reference on listening socket */
@@ -529,7 +529,7 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 	 * Pass the pre-accepted socket to any interested socket filter(s).
 	 * Upon failure, the socket would have been closed by the callee.
 	 */
-	if (so->so_filt != NULL && (error = soacceptfilter(so)) != 0) {
+	if (so->so_filt != NULL && (error = soacceptfilter(so, head)) != 0) {
 		/* Drop reference on listening socket */
 		sodereference(head);
 		/* Propagate socket filter's error code to the caller */
@@ -547,8 +547,7 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 		 * just causes the client to spin. Drop the socket.
 		 */
 		socket_lock(so, 1);
-		so->so_state &= ~(SS_NOFDREF | SS_COMP);
-		so->so_head = NULL;
+		so->so_state &= ~SS_NOFDREF;
 		socket_unlock(so, 1);
 		soclose(so);
 		sodereference(head);
@@ -562,9 +561,6 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 	socket_lock(head, 0);
 	if (dosocklock)
 		socket_lock(so, 1);
-
-	so->so_state &= ~SS_COMP;
-	so->so_head = NULL;
 
 	/* Sync socket non-blocking/async state with file flags */
 	if (fp->f_flag & FNONBLOCK) {

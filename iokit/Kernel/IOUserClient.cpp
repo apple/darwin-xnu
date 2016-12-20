@@ -2920,6 +2920,7 @@ kern_return_t is_io_registry_entry_get_property_bytes(
     if( (data = OSDynamicCast( OSData, obj ))) {
 	len = data->getLength();
 	bytes = data->getBytesNoCopy();
+	if (!data->isSerializable()) len = 0;
 
     } else if( (str = OSDynamicCast( OSString, obj ))) {
 	len = str->getLength() + 1;
@@ -3384,7 +3385,8 @@ kern_return_t is_io_service_open_extended(
 
     do
     {
-	if (properties)
+	if (properties) return (kIOReturnUnsupported);
+#if 0
 	{
 	    OSObject *	    obj;
 	    vm_offset_t     data;
@@ -3412,7 +3414,7 @@ kern_return_t is_io_service_open_extended(
 	    if (kIOReturnSuccess != res)
 		break;
 	}
-
+#endif
 	crossEndian = (ndr.int_rep != NDR_record.int_rep);
 	if (crossEndian)
 	{
@@ -3793,7 +3795,8 @@ kern_return_t is_io_connect_method_var_output
 
     if (ool_input)
 	inputMD = IOMemoryDescriptor::withAddressRange(ool_input, ool_input_size, 
-						    kIODirectionOut, current_task());
+						    kIODirectionOut | kIOMemoryMapCopyOnWrite,
+						    current_task());
 
     args.structureInputDescriptor = inputMD;
 
@@ -3887,7 +3890,8 @@ kern_return_t is_io_connect_method
 
     if (ool_input)
 	inputMD = IOMemoryDescriptor::withAddressRange(ool_input, ool_input_size, 
-						    kIODirectionOut, current_task());
+						    kIODirectionOut | kIOMemoryMapCopyOnWrite,
+						    current_task());
 
     args.structureInputDescriptor = inputMD;
 
@@ -3971,7 +3975,8 @@ kern_return_t is_io_connect_async_method
 
     if (ool_input)
 	inputMD = IOMemoryDescriptor::withAddressRange(ool_input, ool_input_size,
-						    kIODirectionOut, current_task());
+						    kIODirectionOut | kIOMemoryMapCopyOnWrite,
+						    current_task());
 
     args.structureInputDescriptor = inputMD;
 

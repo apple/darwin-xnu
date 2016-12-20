@@ -1174,6 +1174,7 @@ tcp_usr_abort(struct socket *so)
         if (tp == NULL)
 		goto out;
 	tp = tcp_drop(tp, ECONNABORTED);
+	VERIFY(so->so_usecount > 0);
 	so->so_usecount--;
 	COMMON_END(PRU_ABORT);
 }

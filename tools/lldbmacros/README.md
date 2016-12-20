@@ -185,6 +185,10 @@ To easily reload your changes in lldb please follow the below example.
          memory is reloaded from ./memory.py
         (lldb)
 
+  * Alternatively, you can use lldb`s command for script loading as
+        (lldb) command script import /path/to/memory.py
+    You can re-run the same command every time you update the code in file.
+
  It is very important that you do reload using xnudebug command as it does the plumbing of commands and types for your change in the module. Otherwise you could easily get confused
  why your changes are not reflected in the command.
 

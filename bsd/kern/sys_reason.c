@@ -54,6 +54,8 @@ lck_attr_t	*os_reason_lock_attr;
 #define OS_REASON_MAX_COUNT	(maxproc + 100)
 
 static struct zone *os_reason_zone;
+static int os_reason_alloc_buffer_internal(os_reason_t cur_reason, uint32_t osr_bufsize,
+						boolean_t can_block);
 
 void
 os_reason_init()
@@ -152,6 +154,26 @@ os_reason_dealloc_buffer(os_reason_t cur_reason)
 }
 
 /*
+ * Allocates and initializes a buffer of specified size for the reason. This function
+ * may block and should not be called from extremely performance sensitive contexts
+ * (i.e. jetsam). Also initializes the kcdata descriptor accordingly. If there is an
+ * existing buffer, we dealloc the buffer before allocating a new one and
+ * clear the associated kcdata descriptor. If osr_bufsize is passed as 0,
+ * we deallocate the existing buffer and then return.
+ *
+ * Returns:
+ * 0 on success
+ * EINVAL if the passed reason pointer is invalid or the requested size is
+ * 	  larger than REASON_BUFFER_MAX_SIZE
+ * EIO if we fail to initialize the kcdata buffer
+ */
+int
+os_reason_alloc_buffer(os_reason_t cur_reason, uint32_t osr_bufsize)
+{
+	return os_reason_alloc_buffer_internal(cur_reason, osr_bufsize, TRUE);
+}
+
+/*
  * Allocates and initializes a buffer of specified size for the reason. Also
  * initializes the kcdata descriptor accordingly. If there is an existing
  * buffer, we dealloc the buffer before allocating a new one and
@@ -166,7 +188,14 @@ os_reason_dealloc_buffer(os_reason_t cur_reason)
  * EIO if we fail to initialize the kcdata buffer
  */
 int
-os_reason_alloc_buffer(os_reason_t cur_reason, uint32_t osr_bufsize)
+os_reason_alloc_buffer_noblock(os_reason_t cur_reason, uint32_t osr_bufsize)
+{
+	return os_reason_alloc_buffer_internal(cur_reason, osr_bufsize, FALSE);
+}
+
+static int
+os_reason_alloc_buffer_internal(os_reason_t cur_reason, uint32_t osr_bufsize,
+				boolean_t can_block)
 {
 	if (cur_reason == OS_REASON_NULL) {
 		return EINVAL;
@@ -185,14 +214,15 @@ os_reason_alloc_buffer(os_reason_t cur_reason, uint32_t osr_bufsize)
 		return 0;
 	}
 
-	/*
-	 * We don't want to block trying to acquire a reason buffer and hold
-	 * up important things trying to clean up the system (i.e. jetsam).
-	 */
-	cur_reason->osr_kcd_buf = kalloc_noblock_tag(osr_bufsize, VM_KERN_MEMORY_REASON);
-	if (cur_reason->osr_kcd_buf == NULL) {
-		lck_mtx_unlock(&cur_reason->osr_lock);
-		return ENOMEM;
+	if (can_block) {
+		cur_reason->osr_kcd_buf = kalloc_tag(osr_bufsize, VM_KERN_MEMORY_REASON);
+		assert(cur_reason->osr_kcd_buf != NULL);
+	} else {
+		cur_reason->osr_kcd_buf = kalloc_noblock_tag(osr_bufsize, VM_KERN_MEMORY_REASON);
+		if (cur_reason->osr_kcd_buf == NULL) {
+			lck_mtx_unlock(&cur_reason->osr_lock);
+			return ENOMEM;
+		}
 	}
 
 	bzero(cur_reason->osr_kcd_buf, osr_bufsize);

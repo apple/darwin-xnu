@@ -122,7 +122,7 @@ enum {
 #endif
     kIOMemoryPersistent		= 0x00010000,
 #ifdef XNU_KERNEL_PRIVATE
-    kIOMemoryReserved6156215	= 0x00020000,
+    kIOMemoryMapCopyOnWrite	= 0x00020000,
 #endif
     kIOMemoryThreadSafe		= 0x00100000,	// Shared with Buffer MD
     kIOMemoryClearEncrypt	= 0x00200000,	// Shared with Buffer MD

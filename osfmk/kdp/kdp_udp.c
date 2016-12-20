@@ -2166,16 +2166,19 @@ kdp_init(void)
 	struct kdp_in_addr ipaddr;
 	struct kdp_ether_addr macaddr;
 
+	boolean_t kdp_match_name_found = PE_parse_boot_argn("kdp_match_name", kdpname, sizeof(kdpname));
+	boolean_t kdp_not_serial = kdp_match_name_found ? (strncmp(kdpname, "serial", sizeof(kdpname))) : TRUE;
+
         // serial must be explicitly requested
-        if(!PE_parse_boot_argn("kdp_match_name", kdpname, sizeof(kdpname)) || strncmp(kdpname, "serial", sizeof(kdpname)) != 0)
+        if(!kdp_match_name_found || kdp_not_serial)
 		return;
 
 #if WITH_CONSISTENT_DBG
-	if (PE_consistent_debug_enabled() && debug_boot_arg) {
+	if (kdp_not_serial && PE_consistent_debug_enabled() && debug_boot_arg) {
 		current_debugger = HW_SHM_CUR_DB;
 		return;
 	} else {
-		printf("Consistent debug disabled or debug boot arg not present, falling through to serial for debugger\n");
+		printf("Serial requested, consistent debug disabled or debug boot arg not present, configuring debugging over serial\n");
 	}
 #endif /* WITH_CONSISTENT_DBG */
 

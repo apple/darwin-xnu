@@ -116,7 +116,7 @@ extern void kprint_state(x86_saved_state64_t *saved_state);
  * Forward declarations
  */
 static void user_page_fault_continue(kern_return_t kret);
-static void panic_trap(x86_saved_state64_t *saved_state, uint32_t pl);
+static void panic_trap(x86_saved_state64_t *saved_state, uint32_t pl, kern_return_t fault_result);
 static void set_recovery_ip(x86_saved_state64_t *saved_state, vm_offset_t ip);
 
 volatile perfCallback perfTrapHook = NULL; /* Pointer to CHUD trap hook routine */
@@ -504,6 +504,7 @@ kernel_trap(
 	int			type;
 	vm_map_t		map = 0;	/* protected by T_PAGE_FAULT */
 	kern_return_t		result = KERN_FAILURE;
+	kern_return_t		fault_result = KERN_SUCCESS;
 	thread_t		thread;
 	ast_t			*myast;
 	boolean_t               intr;
@@ -719,7 +720,7 @@ kernel_trap(
 		if (code & T_PF_EXECUTE)
 		        prot |= VM_PROT_EXECUTE;
 
-		result = vm_fault(map,
+		fault_result = result = vm_fault(map,
 				  vaddr,
 				  prot,
 				  FALSE, 
@@ -791,7 +792,7 @@ debugger_entry:
 #endif
 	}
 	pal_cli();
-	panic_trap(saved_state, trap_pl);
+	panic_trap(saved_state, trap_pl, fault_result);
 	/*
 	 * NO RETURN
 	 */
@@ -805,7 +806,7 @@ set_recovery_ip(x86_saved_state64_t  *saved_state, vm_offset_t ip)
 }
 
 static void
-panic_trap(x86_saved_state64_t *regs, uint32_t pl)
+panic_trap(x86_saved_state64_t *regs, uint32_t pl, kern_return_t fault_result)
 {
 	const char	*trapname = "Unknown";
 	pal_cr_t	cr0, cr2, cr3, cr4;
@@ -851,7 +852,7 @@ panic_trap(x86_saved_state64_t *regs, uint32_t pl)
 	      "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
 	      "R12: 0x%016llx, R13: 0x%016llx, R14: 0x%016llx, R15: 0x%016llx\n"
 	      "RFL: 0x%016llx, RIP: 0x%016llx, CS:  0x%016llx, SS:  0x%016llx\n"
-	      "Fault CR2: 0x%016llx, Error code: 0x%016llx, Fault CPU: 0x%x%s%s%s%s, PL: %d\n",
+	      "Fault CR2: 0x%016llx, Error code: 0x%016llx, Fault CPU: 0x%x%s%s%s%s, PL: %d, VF: %d\n",
 	      regs->isf.rip, regs->isf.trapno, trapname,
 	      cr0, cr2, cr3, cr4,
 	      regs->rax, regs->rbx, regs->rcx, regs->rdx,
@@ -863,7 +864,9 @@ panic_trap(x86_saved_state64_t *regs, uint32_t pl)
 	      virtualized ? " VMM" : "",
 	      potential_kernel_NX_fault ? " Kernel NX fault" : "",
 	      potential_smep_fault ? " SMEP/User NX fault" : "",
-	      potential_smap_fault ? " SMAP fault" : "", pl);
+	      potential_smap_fault ? " SMAP fault" : "",
+	      pl,
+	      fault_result);
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization

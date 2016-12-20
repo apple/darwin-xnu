@@ -770,6 +770,17 @@ rtm_scrub(int type, int idx, struct sockaddr *hint, struct sockaddr *sa,
 		}
 		break;
 	}
+	case RTAX_GATEWAY: {
+		/*
+		 * Break if the gateway is not AF_LINK type (indirect routes)
+		 *
+		 * Else, if is, check if it is resolved. If not yet resolved
+		 * simply break else scrub the link layer address.
+		 */
+		if ((sa->sa_family != AF_LINK) || (SDL(sa)->sdl_alen == 0))
+			break;
+		/* fallthrough */
+	}
 	case RTAX_IFP: {
 		if (sa->sa_family == AF_LINK && credp) {
 			struct sockaddr_dl *sdl = SDL(buf);

@@ -81,7 +81,7 @@
 #define	MACH_PORT_UREFS_OVERFLOW(urefs, delta)				\
 		(((delta) > 0) &&					\
 		 ((((urefs) + (delta)) <= (urefs)) ||			\
-		  (((urefs) + (delta)) > MACH_PORT_UREFS_MAX)))
+		  (((urefs) + (delta)) >= MACH_PORT_UREFS_MAX)))
 
 #define	MACH_PORT_UREFS_UNDERFLOW(urefs, delta)				\
 		(((delta) < 0) && (((mach_port_urefs_t)-(delta)) > (urefs)))

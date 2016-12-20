@@ -3146,6 +3146,7 @@ vm_map_enter_mem_object_helper(
 			if (flags & ~(VM_FLAGS_FIXED |
 				      VM_FLAGS_ANYWHERE |
 				      VM_FLAGS_OVERWRITE |
+				      VM_FLAGS_IOKIT_ACCT |
 				      VM_FLAGS_RETURN_4K_DATA_ADDR |
 				      VM_FLAGS_RETURN_DATA_ADDR |
 				      VM_FLAGS_ALIAS_MASK)) {
@@ -3182,6 +3183,7 @@ vm_map_enter_mem_object_helper(
 					  mask,
 					  flags & (VM_FLAGS_ANYWHERE |
 						   VM_FLAGS_OVERWRITE |
+						   VM_FLAGS_IOKIT_ACCT |
 						   VM_FLAGS_RETURN_4K_DATA_ADDR |
 						   VM_FLAGS_RETURN_DATA_ADDR |
 						   VM_FLAGS_ALIAS_MASK),
@@ -5430,7 +5432,17 @@ vm_map_wire_nested(
 			goto done;
 		}
 
+		if ((entry != vm_map_to_entry(map)) && /* we still have entries in the map */
+		    (tmp_entry.vme_end != end) &&    /* AND, we are not at the end of the requested range */
+		    (entry->vme_start != tmp_entry.vme_end)) { /* AND, the next entry is not contiguous. */
+			/* found a "new" hole */
+			s = tmp_entry.vme_end;
+			rc = KERN_INVALID_ADDRESS;
+			goto done;
+		}
+
 		s = entry->vme_start;
+
 	} /* end while loop through map entries */
 
 done:

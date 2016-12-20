@@ -479,7 +479,7 @@ extern kern_return_t compressor_memory_object_create(
 
 extern boolean_t vm_compressor_low_on_space(void);
 extern int	 vm_swap_low_on_space(void);
-
+void		 do_fastwake_warmup_all(void);
 #if CONFIG_JETSAM
 extern int proc_get_memstat_priority(struct proc*, boolean_t);
 #endif /* CONFIG_JETSAM */

@@ -223,6 +223,7 @@ void	psignal_with_reason(struct proc *p, int sig, struct os_reason *signal_reaso
 void	psignal_locked(struct proc *, int);
 void	psignal_try_thread(proc_t, thread_t, int signum);
 void	psignal_try_thread_with_reason(proc_t, thread_t, int, struct os_reason*);
+void	psignal_thread_with_reason(proc_t, thread_t, int, struct os_reason*);
 void	psignal_uthread(thread_t, int);
 void	pgsignal(struct pgrp *pgrp, int sig, int checkctty);
 void	tty_pgsignal(struct tty * tp, int sig, int checkctty);

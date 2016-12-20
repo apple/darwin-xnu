@@ -247,31 +247,17 @@ def ShowTaskUserArgs(cmd_args=None, cmd_options={}):
 
     return True
 
-
-@lldb_command('showtaskuserstacks')
-def ShowTaskUserStacks(cmd_args=None):
-    """ Print out the user stack for each thread in a task, followed by the user libraries.
-        Syntax: (lldb) showtaskuserstacks <task_t>
-        The format is compatible with CrashTracer. You can also use the speedtracer plugin as follows
-        (lldb) showtaskuserstacks <task_t> -p speedtracer
-
-        Note: the address ranges are approximations. Also the list may not be completely accurate. This command expects memory read failures
-        and hence will skip a library if unable to read information. Please use your good judgement and not take the output as accurate
-    """
-    if not cmd_args:
-        raise ArgumentError("Insufficient arguments")
-
-    task = kern.GetValueFromAddress(cmd_args[0], 'task *')
+def ShowTaskUserStacks(task):
     #print GetTaskSummary.header + " " + GetProcSummary.header
     pval = Cast(task.bsd_info, 'proc *')
     #print GetTaskSummary(task) + " " + GetProcSummary(pval) + "\n \n"
     crash_report_format_string = """\
-Process:         {pid: <10d}
+Process:         {pname:s} [{pid:d}]
 Path:            {path: <50s}
 Identifier:      {pname: <30s}
 Version:         ??? (???)
 Code Type:       {parch: <20s}
-Parent Process:  {ppname: >20s}[{ppid:d}]
+Parent Process:  {ppname:s} [{ppid:d}]
 
 Date/Time:       {timest:s}.000 -0800
 OS Version:      {osversion: <20s}
@@ -344,6 +330,36 @@ Synthetic crash log generated from Kernel userstacks
                 print "Enable debugging ('(lldb) xnudebug debug') to see detailed trace."
     return
 
+@lldb_command('showtaskuserstacks', "P:F:")
+def ShowTaskUserStacksCmdHelper(cmd_args=None, cmd_options={}):
+    """ Print out the user stack for each thread in a task, followed by the user libraries.
+        Syntax: (lldb) showtaskuserstacks <task_t>
+            or: (lldb) showtaskuserstacks -P <pid>
+            or: (lldb) showtaskuserstacks -F <task_name>
+        The format is compatible with CrashTracer. You can also use the speedtracer plugin as follows
+        (lldb) showtaskuserstacks <task_t> -p speedtracer
+
+        Note: the address ranges are approximations. Also the list may not be completely accurate. This command expects memory read failures
+        and hence will skip a library if unable to read information. Please use your good judgement and not take the output as accurate
+    """
+    task_list = []
+    if "-F" in cmd_options:
+        task_list = FindTasksByName(cmd_options["-F"])
+    elif "-P" in cmd_options:
+        pidval = ArgumentStringToInt(cmd_options["-P"])
+        for t in kern.tasks:
+            pval = Cast(t.bsd_info, 'proc *')
+            if pval and pval.p_pid == pidval:
+                task_list.append(t)
+                break
+    elif cmd_args:
+        t = kern.GetValueFromAddress(cmd_args[0], 'task *')
+        task_list.append(t)
+    else:
+        raise ArgumentError("Insufficient arguments")
+
+    for task in task_list:
+        ShowTaskUserStacks(task)
 
 def GetUserDataAsString(task, addr, size):
     """ Get data from task's address space as a string of bytes

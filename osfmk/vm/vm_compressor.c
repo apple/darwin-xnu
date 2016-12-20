@@ -225,7 +225,7 @@ uint32_t	swapout_target_age = 0;
 uint32_t	age_of_decompressions_during_sample_period[DECOMPRESSION_SAMPLE_MAX_AGE];
 uint32_t	overage_decompressions_during_sample_period = 0;
 
-void		do_fastwake_warmup(void);
+void		do_fastwake_warmup(queue_head_t *, boolean_t);
 boolean_t	fastwake_warmup = FALSE;
 boolean_t	fastwake_recording_in_progress = FALSE;
 clock_sec_t	dont_trim_until_ts = 0;
@@ -2212,9 +2212,32 @@ vm_compressor_do_warmup(void)
 	lck_mtx_unlock_always(c_list_lock);
 }
 
+void
+do_fastwake_warmup_all(void)
+{
+
+	lck_mtx_lock_spin_always(c_list_lock);
+
+	if (queue_empty(&c_swappedout_list_head) && queue_empty(&c_swappedout_sparse_list_head)) {
+
+		lck_mtx_unlock_always(c_list_lock);
+		return;
+	}
+
+	fastwake_warmup = TRUE;
+
+	do_fastwake_warmup(&c_swappedout_list_head, TRUE);
+
+	do_fastwake_warmup(&c_swappedout_sparse_list_head, TRUE);
+
+	fastwake_warmup = FALSE;
+
+	lck_mtx_unlock_always(c_list_lock);
+
+}
 
 void
-do_fastwake_warmup(void)
+do_fastwake_warmup(queue_head_t *c_queue, boolean_t consider_all_cseg)
 {
 	c_segment_t	c_seg = NULL;
 	AbsoluteTime	startTime, endTime;
@@ -2234,16 +2257,18 @@ do_fastwake_warmup(void)
 
 	lck_mtx_lock_spin_always(c_list_lock);
 
-	while (!queue_empty(&c_swappedout_list_head) && fastwake_warmup == TRUE) {
+	while (!queue_empty(c_queue) && fastwake_warmup == TRUE) {
 
-		c_seg = (c_segment_t) queue_first(&c_swappedout_list_head);
+		c_seg = (c_segment_t) queue_first(c_queue);
 
-		if (c_seg->c_generation_id < first_c_segment_to_warm_generation_id || 
-		    c_seg->c_generation_id > last_c_segment_to_warm_generation_id)
-			break;
+		if (consider_all_cseg == FALSE) {
+			if (c_seg->c_generation_id < first_c_segment_to_warm_generation_id ||
+			    c_seg->c_generation_id > last_c_segment_to_warm_generation_id)
+				break;
 
-		if (vm_page_free_count < (AVAILABLE_MEMORY / 4))
-			break;
+			if (vm_page_free_count < (AVAILABLE_MEMORY / 4))
+				break;
+		}
 
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 		lck_mtx_unlock_always(c_list_lock);
@@ -2278,7 +2303,9 @@ do_fastwake_warmup(void)
 
 	lck_mtx_lock_spin_always(c_list_lock);
 
-	first_c_segment_to_warm_generation_id = last_c_segment_to_warm_generation_id = 0;
+	if (consider_all_cseg == FALSE) {
+		first_c_segment_to_warm_generation_id = last_c_segment_to_warm_generation_id = 0;
+	}
 }
 
 
@@ -2298,7 +2325,7 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 		KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 11) | DBG_FUNC_START, c_segment_warmup_count,
 				      first_c_segment_to_warm_generation_id, last_c_segment_to_warm_generation_id, 0, 0);
-		do_fastwake_warmup();
+		do_fastwake_warmup(&c_swappedout_list_head, FALSE);
 		KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 11) | DBG_FUNC_END, c_segment_warmup_count, c_segment_warmup_count - starting_warmup_count, 0, 0, 0);
 
 		fastwake_warmup = FALSE;

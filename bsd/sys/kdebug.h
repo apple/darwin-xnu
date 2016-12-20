@@ -766,6 +766,7 @@ extern void kdebug_reset(void);
 #define DKIO_NOCACHE	0x80
 #define DKIO_TIER_MASK	0xF00
 #define DKIO_TIER_SHIFT	8
+#define DKIO_TIER_UPGRADE 0x1000
 
 /* Kernel Debug Sub Classes for Applications (DBG_APPS) */
 #define DBG_APP_LOGINWINDOW     0x03

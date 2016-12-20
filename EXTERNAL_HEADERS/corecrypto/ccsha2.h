@@ -52,9 +52,11 @@ extern const struct ccdigest_info ccsha512_vng_intel_AVX2_di;
 extern const struct ccdigest_info ccsha512_vng_intel_AVX1_di;
 extern const struct ccdigest_info ccsha512_vng_intel_SupplementalSSE3_di;
 #endif
+extern const struct ccdigest_info ccsha224_vng_intel_SupplementalSSE3_di;
 extern const struct ccdigest_info ccsha256_vng_intel_SupplementalSSE3_di;
 #endif
 #if  CCSHA2_VNG_ARMV7NEON
+extern const struct ccdigest_info ccsha224_vng_armv7neon_di;
 extern const struct ccdigest_info ccsha256_vng_armv7neon_di;
 extern const struct ccdigest_info ccsha384_vng_arm64_di;
 extern const struct ccdigest_info ccsha384_vng_armv7neon_di;
@@ -67,12 +69,6 @@ extern const uint64_t ccsha512_K[80];
 /* SHA224 */
 #define	CCSHA224_OUTPUT_SIZE 28
 extern const struct ccdigest_info ccsha224_ltc_di;
-#if  CCSHA2_VNG_INTEL
-extern const struct ccdigest_info ccsha224_vng_intel_SupplementalSSE3_di;
-#endif
-#if  CCSHA2_VNG_ARMV7NEON
-extern const struct ccdigest_info ccsha224_vng_armv7neon_di;
-#endif
 
 /* SHA512 */
 #define CCSHA512_BLOCK_SIZE  128

@@ -370,6 +370,8 @@ kernel_bootstrap(void)
 	/* initialize the corpse config based on boot-args */
 	corpses_init();
 
+	vm_user_init();
+
 	/*
 	 *	Create a kernel thread to execute the kernel bootstrap.
 	 */

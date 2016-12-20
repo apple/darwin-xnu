@@ -256,6 +256,11 @@ _kernelrpc_mach_port_insert_right_trap(struct _kernelrpc_mach_port_insert_right_
 	disp = ipc_object_copyin_type(args->polyPoly);
 
 	rv = mach_port_insert_right(task->itk_space, args->name, port, disp);
+	if (rv != KERN_SUCCESS) {
+		if (IO_VALID((ipc_object_t)port)) {
+			ipc_object_destroy((ipc_object_t)port, disp);
+		}
+	}
 	
 done:
 	if (task)

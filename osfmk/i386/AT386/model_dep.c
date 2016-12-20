@@ -1269,7 +1269,7 @@ out:
 	if (PC != 0)
 		kmod_panic_dump(&PC, 1);
 
-	panic_display_system_configuration();
+	panic_display_system_configuration(FALSE);
 
 	doprnt_hide_pointers = old_doprnt_hide_pointers;
 
@@ -1467,10 +1467,8 @@ void print_launchd_info(void)
 	print_thread_num_that_crashed(task);
 	print_threads_registers(thread);
 	print_tasks_user_threads(task);
-	kdb_printf("Mac OS version: %s\n", (osversion[0] != 0) ? osversion : "Not yet set");
-	kdb_printf("Kernel version: %s\n", version);
-	panic_display_kernel_uuid();
-	panic_display_model_name();
+
+	panic_display_system_configuration(TRUE);
 	
 	/* Release print backtrace lock, to permit other callers in the
 	 * event of panics on multiple processors.

@@ -1295,26 +1295,21 @@ IOHibernateSystemPostWake(void)
     return (kIOReturnSuccess);
 }
 
-bool IOHibernateWasScreenLocked(void)
+uint32_t IOHibernateWasScreenLocked(void)
 {
-    bool ret = false;
+    uint32_t ret = 0;
     if ((kIOHibernateStateWakingFromHibernate == gIOHibernateState) && gIOChosenEntry)
     {
 	OSData *
 	data = OSDynamicCast(OSData, gIOChosenEntry->getProperty(kIOScreenLockStateKey));
-	if (data) switch (*((uint32_t *)data->getBytesNoCopy()))
+	if (data)
 	{
-	    case kIOScreenLockLocked:
-	    case kIOScreenLockFileVaultDialog:
-		ret = true;
-		break;
-	    case kIOScreenLockNoLock:
-	    case kIOScreenLockUnlocked:
-	    default:
-		ret = false;
-		break;
-	}
+	    ret = ((uint32_t *)data->getBytesNoCopy())[0];
+	    gIOChosenEntry->setProperty(kIOBooterScreenLockStateKey, data);
+        }
     }
+    else gIOChosenEntry->removeProperty(kIOBooterScreenLockStateKey);
+
     return (ret);
 }
 

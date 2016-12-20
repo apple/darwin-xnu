@@ -141,6 +141,8 @@ char *debug_buf_stackshot_end;
 static char model_name[64];
 unsigned char *kernel_uuid;
 /* uuid_string_t */ char kernel_uuid_string[37];
+char   panic_disk_error_description[512];
+size_t panic_disk_error_description_size = sizeof(panic_disk_error_description);
 
 static spl_t panic_prologue(const char *str);
 static void panic_epilogue(spl_t s);
@@ -657,32 +659,45 @@ static void panic_display_uptime(void) {
 	kdb_printf("\nSystem uptime in nanoseconds: %llu\n", uptime);
 }
 
+static void panic_display_disk_errors(void) {
+
+	if (panic_disk_error_description[0]) {
+		panic_disk_error_description[sizeof(panic_disk_error_description) - 1] = '\0';
+		kdb_printf("Root disk errors: \"%s\"\n", panic_disk_error_description);
+	}
+};
+
 extern const char version[];
 extern char osversion[];
 
 static volatile uint32_t config_displayed = 0;
 
-__private_extern__ void panic_display_system_configuration(void) {
+__private_extern__ void panic_display_system_configuration(boolean_t launchd_exit) {
 
-	panic_display_process_name();
+	if (!launchd_exit) panic_display_process_name();
 	if (OSCompareAndSwap(0, 1, &config_displayed)) {
 		char buf[256];
-		if (strlcpy(buf, PE_boot_args(), sizeof(buf)))
+		if (!launchd_exit && strlcpy(buf, PE_boot_args(), sizeof(buf)))
 			kdb_printf("Boot args: %s\n", buf);
 		kdb_printf("\nMac OS version:\n%s\n",
 		    (osversion[0] != 0) ? osversion : "Not yet set");
 		kdb_printf("\nKernel version:\n%s\n",version);
 		panic_display_kernel_uuid();
-		panic_display_kernel_aslr();
-		panic_display_hibb();
-		panic_display_pal_info();
+		if (!launchd_exit) {
+			panic_display_kernel_aslr();
+			panic_display_hibb();
+			panic_display_pal_info();
+		}
 		panic_display_model_name();
-		panic_display_uptime();
-		panic_display_zprint();
+		panic_display_disk_errors();
+		if (!launchd_exit) {
+			panic_display_uptime();
+			panic_display_zprint();
 #if CONFIG_ZLEAKS
-		panic_display_ztrace();
+			panic_display_ztrace();
 #endif /* CONFIG_ZLEAKS */
-		kext_dump_panic_lists(&kdb_log);
+			kext_dump_panic_lists(&kdb_log);
+		}
 	}
 }
 

@@ -357,6 +357,10 @@ static int32_t tcp_tfo_check(struct tcpcb *tp, int32_t len)
 		/* No cookie, so we request one */
 		return (0);
 
+	/* There is not enough space for the cookie, so we cannot do TFO */
+	if (MAX_TCPOPTLEN - optlen < cookie_len)
+		goto fallback;
+
 	/* Do not send SYN+data if there is more in the queue than MSS */
 	if (so->so_snd.sb_cc > (tp->t_maxopd - MAX_TCPOPTLEN))
 		goto fallback;
@@ -1156,8 +1160,7 @@ after_sack_rexmit:
 		if ((tp->t_state >= TCPS_ESTABLISHED) &&
 		    ((tp->t_mpflags & TMPF_SND_MPPRIO) ||
 		    (tp->t_mpflags & TMPF_SND_REM_ADDR) ||
-		    (tp->t_mpflags & TMPF_SND_MPFAIL) ||
-		    (tp->t_mpflags & TMPF_MPCAP_RETRANSMIT))) {
+		    (tp->t_mpflags & TMPF_SND_MPFAIL))) {
 			if (len > 0) {
 				len = 0;
 			}
@@ -1244,16 +1247,19 @@ after_sack_rexmit:
 
 #if TRAFFIC_MGT
 	if (tcp_recv_bg == 1  || IS_TCP_RECV_BG(so)) {
-		if (tcp_recv_throttle(tp)) {
-			uint32_t min_iaj_win =
-				tcp_min_iaj_win * tp->t_maxseg;
+		if (recwin > 0 && tcp_recv_throttle(tp)) {
+			uint32_t min_iaj_win = tcp_min_iaj_win * tp->t_maxseg;
 			if (tp->iaj_rwintop == 0 ||
-				SEQ_LT(tp->iaj_rwintop, tp->rcv_adv))
+			    SEQ_LT(tp->iaj_rwintop, tp->rcv_adv))
 				tp->iaj_rwintop = tp->rcv_adv;
 			if (SEQ_LT(tp->iaj_rwintop,
-				tp->rcv_nxt + min_iaj_win))
-				tp->iaj_rwintop =  tp->rcv_nxt + min_iaj_win;
-			recwin = min(tp->iaj_rwintop - tp->rcv_nxt, recwin);
+			    tp->rcv_nxt + min_iaj_win))
+				tp->iaj_rwintop =  tp->rcv_nxt +
+				    min_iaj_win;
+			recwin = imin((int32_t)(tp->iaj_rwintop -
+			    tp->rcv_nxt), recwin);
+			if (recwin < 0)
+				recwin = 0;
 		}
 	}
 #endif /* TRAFFIC_MGT */
@@ -2625,7 +2631,8 @@ out:
 
 		if (error == ENOBUFS) {
 			if (!tp->t_timer[TCPT_REXMT] &&
-				!tp->t_timer[TCPT_PERSIST])
+			    !tp->t_timer[TCPT_PERSIST] &&
+			    SEQ_GT(tp->snd_max, tp->snd_una))
 				tp->t_timer[TCPT_REXMT] =
 					OFFSET_FROM_START(tp, tp->t_rxtcur);
 			tp->snd_cwnd = tp->t_maxseg;

@@ -71,17 +71,11 @@ static void abort_with_payload_wrapper_internal(uint32_t reason_namespace, uint6
 	__abort_with_payload(reason_namespace, reason_code, payload, payload_size,
 			reason_string, reason_flags);
 
-	/* If sending a SIGABRT failed, we try to fall back to SIGKILL */
+	/* If sending a SIGABRT failed, we fall back to SIGKILL */
 	terminate_with_payload(getpid(), reason_namespace, reason_code, payload, payload_size,
 			reason_string, reason_flags);
 
-	/* Last resort, let's use SIGTRAP (SIGILL on i386) */
-	sigemptyset(&unmask_signal);
-	sigaddset(&unmask_signal, SIGTRAP);
-	sigaddset(&unmask_signal, SIGILL);
-	sigprocmask(SIG_UNBLOCK, &unmask_signal, NULL);
-
-	__builtin_trap();
+	__builtin_unreachable();
 }
 
 void

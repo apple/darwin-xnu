@@ -257,23 +257,29 @@ int IODTGetLoaderInfo( const char *key, void **infoAddr, int *infoSize )
     OSData				*propObj;
     dtptr_t				*propPtr;
     unsigned int		propSize;
+    int ret = -1;
 
     chosen = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane );
     if ( chosen == 0 ) return -1;
 
     propObj = OSDynamicCast( OSData, chosen->getProperty(key) );
-    if ( propObj == 0 ) return -1;
+    if ( propObj == 0 ) goto cleanup;
 
     propSize = propObj->getLength();
-    if ( propSize != (2 * sizeof(dtptr_t)) ) return -1;
+    if ( propSize != (2 * sizeof(dtptr_t)) ) goto cleanup;
  
     propPtr = (dtptr_t *)propObj->getBytesNoCopy();
-    if ( propPtr == 0 ) return -1;
+    if ( propPtr == 0 ) goto cleanup;
 
     *infoAddr = (void *)(uintptr_t) (propPtr[0]);
     *infoSize = (int)               (propPtr[1]);
 
-    return 0;
+    ret = 0;
+
+cleanup:
+    chosen->release();
+
+    return ret;
 }
 
 void IODTFreeLoaderInfo( const char *key, void *infoAddr, int infoSize )
@@ -289,6 +295,7 @@ void IODTFreeLoaderInfo( const char *key, void *infoAddr, int infoSize )
         chosen = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane );
         if ( chosen != 0 ) {
             chosen->removeProperty(key);
+            chosen->release();
         }
     }
 }
@@ -337,6 +344,7 @@ MakeReferenceTable( DTEntry dtEntry, bool copy )
     char				*name;
     char				location[ 32 ];
     bool				noLocation = true;
+    bool				kernelOnly;
 
     regEntry = new IOService;
 
@@ -348,6 +356,7 @@ MakeReferenceTable( DTEntry dtEntry, bool copy )
     if( regEntry &&
       (kSuccess == DTCreatePropertyIterator( dtEntry, &dtIter))) {
 
+        kernelOnly = (kSuccess == DTGetProperty(dtEntry, "kernel-only", &prop, &propSize));
         propTable = regEntry->getPropertyTable();
 
         while( kSuccess == DTIterateProperties( dtIter, &name)) {
@@ -363,6 +372,9 @@ MakeReferenceTable( DTEntry dtEntry, bool copy )
                 data = OSData::withBytesNoCopy(prop, propSize);
             }
             assert( nameKey && data );
+
+            if (kernelOnly)
+                data->setSerializable(false);
 
             propTable->setObject( nameKey, data);
             data->release();

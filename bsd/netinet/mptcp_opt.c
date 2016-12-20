@@ -426,8 +426,7 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 	boolean_t send_64bit_dsn = FALSE;
 	boolean_t send_64bit_ack = FALSE;
 	u_int32_t old_mpt_flags = tp->t_mpflags &
-	    (TMPF_SND_MPPRIO | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL |
-	    TMPF_MPCAP_RETRANSMIT);
+	    (TMPF_SND_MPPRIO | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL);
 
 	if ((mptcp_enable == 0) ||
 	    (mp_tp == NULL) ||
@@ -474,8 +473,7 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 
 	if (((tp->t_mpflags & TMPF_PREESTABLISHED) &&
 	    (!(tp->t_mpflags & TMPF_SENT_KEYS)) &&
-	    (!(tp->t_mpflags & TMPF_JOINED_FLOW))) ||
-	    (tp->t_mpflags & TMPF_MPCAP_RETRANSMIT)) {
+	    (!(tp->t_mpflags & TMPF_JOINED_FLOW)))) {
 		struct mptcp_mpcapable_opt_rsp1 mptcp_opt;
 		if ((MAX_TCPOPTLEN - optlen) <
 		    sizeof (struct mptcp_mpcapable_opt_rsp1))
@@ -499,7 +497,6 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 		tp->t_mpflags |= TMPF_SENT_KEYS | TMPF_MPTCP_TRUE;
 		so->so_flags |= SOF_MPTCP_TRUE;
 		tp->t_mpflags &= ~TMPF_PREESTABLISHED;
-		tp->t_mpflags &= ~TMPF_MPCAP_RETRANSMIT;
 
 		if (!tp->t_mpuna) {
 			tp->t_mpuna = tp->snd_una;
@@ -952,8 +949,7 @@ ret_optlen:
 	if (TRUE == *p_mptcp_acknow ) {
 		VERIFY(old_mpt_flags != 0);
 		u_int32_t new_mpt_flags = tp->t_mpflags &
-		    (TMPF_SND_MPPRIO | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL |
-		    TMPF_MPCAP_RETRANSMIT);
+		    (TMPF_SND_MPPRIO | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL);
 
 		/*
 		 * If none of the above mpflags were acted on by
@@ -971,8 +967,7 @@ ret_optlen:
 		 */
 		if ((old_mpt_flags == new_mpt_flags) || (new_mpt_flags == 0)) {
 			tp->t_mpflags &= ~(TMPF_SND_MPPRIO
-			    | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL |
-			    TMPF_MPCAP_RETRANSMIT);
+			    | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL);
 			*p_mptcp_acknow = FALSE;
 			mptcplog((LOG_DEBUG, "MPTCP Sender: %s: no action \n",
 			    __func__), MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
@@ -1063,15 +1058,9 @@ mptcp_do_mpcapable_opt(struct tcpcb *tp, u_char *cp, struct tcphdr *th,
 		return;
 	}
 
-	/* Handle old duplicate SYN/ACK retransmission */
-	if (SEQ_GT(tp->rcv_nxt, (tp->irs + 1)))
-		return;
-
 	/* handle SYN/ACK retransmission by acknowledging with ACK */
-	if (mp_tp->mpt_state >= MPTCPS_ESTABLISHED) {
-		tp->t_mpflags |= TMPF_MPCAP_RETRANSMIT;
+	if (mp_tp->mpt_state >= MPTCPS_ESTABLISHED)
 		return;
-	}
 
 	/* A SYN/ACK contains peer's key and flags */
 	if (optlen != sizeof (struct mptcp_mpcapable_opt_rsp)) {

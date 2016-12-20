@@ -633,6 +633,29 @@ proc_list_uptrs(int pid, uint64_t *buf, uint32_t bufsz)
 	return count;
 }
 
+int 
+proc_setcpu_percentage(pid_t pid, int action, int percentage)
+{
+	proc_policy_cpuusage_attr_t attr;
+
+	bzero(&attr, sizeof(proc_policy_cpuusage_attr_t));
+	attr.ppattr_cpu_attr = action;
+	attr.ppattr_cpu_percentage = percentage;
+	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_RESOURCE_USAGE, PROC_POLICY_RUSAGE_CPU, (proc_policy_attribute_t*)&attr, pid, (uint64_t)0) != -1)
+		return(0);
+	else
+		return(errno);
+}
+
+int
+proc_clear_cpulimits(pid_t pid)
+{
+	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_RESTORE, PROC_POLICY_RESOURCE_USAGE, PROC_POLICY_RUSAGE_CPU, NULL, pid, (uint64_t)0) != -1)
+		return(0);
+	else
+		return(errno);
+}
+
 
 
 /* Donate importance to adaptive processes from this process */

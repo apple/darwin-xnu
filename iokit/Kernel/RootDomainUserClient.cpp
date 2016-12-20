@@ -216,14 +216,19 @@ IOReturn RootDomainUserClient::secureGetSystemSleepType(
 
 IOReturn RootDomainUserClient::clientClose( void )
 {
-    detach(fOwner);
+    terminate();
 
+    return kIOReturnSuccess;
+}
+
+void RootDomainUserClient::stop( IOService *provider)
+{
     if(fOwningTask) {
         task_deallocate(fOwningTask);
         fOwningTask = 0;
     }
 
-    return kIOReturnSuccess;
+    super::stop(provider);
 }
 
 IOReturn RootDomainUserClient::externalMethod(

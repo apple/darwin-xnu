@@ -37,6 +37,8 @@ extern "C" {
 #include <corecrypto/cchmac.h>
 #include <corecrypto/ccmode.h>
 #include <corecrypto/ccrc4.h>
+#include <corecrypto/ccrng.h>
+#include <corecrypto/ccrsa.h>
 
 /* Function types */
 
@@ -61,6 +63,13 @@ typedef void (*cchmac_fn_t)(const struct ccdigest_info *di, unsigned long key_le
                          const void *key, unsigned long data_len, const void *data,
                          unsigned char *mac);
 
+/* gcm */
+typedef int (*ccgcm_init_with_iv_fn_t)(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
+                                       size_t key_nbytes, const void *key,
+                                       const void *iv);
+typedef int (*ccgcm_inc_iv_fn_t)(const struct ccmode_gcm *mode, ccgcm_ctx *ctx, void *iv);
+
+
 /* pbkdf2 */
 typedef void (*ccpbkdf2_hmac_fn_t)(const struct ccdigest_info *di,
                                 unsigned long passwordLen, const void *password,
@@ -82,6 +91,19 @@ typedef	void (*ccpad_xts_encrypt_fn_t)(const struct ccmode_xts *xts, ccxts_ctx *
 /* CBC padding (such as PKCS7 or CTSx per NIST standard) */
 typedef size_t (*ccpad_cts3_crypt_fn_t)(const struct ccmode_cbc *cbc, cccbc_ctx *cbc_key,
                          cccbc_iv *iv, size_t nbytes, const void *in, void *out);
+
+/* rng */
+typedef struct ccrng_state *(*ccrng_fn_t)(int *error);
+
+/* rsa */
+typedef int (*ccrsa_make_pub_fn_t)(ccrsa_pub_ctx_t pubk,
+                       size_t exp_nbytes, const uint8_t *exp,
+                       size_t mod_nbytes, const uint8_t *mod);
+
+typedef int (*ccrsa_verify_pkcs1v15_fn_t)(ccrsa_pub_ctx_t key, const uint8_t *oid,
+                              size_t digest_len, const uint8_t *digest,
+                              size_t sig_len, const uint8_t *sig,
+    bool *valid);
 
 typedef struct crypto_functions {
     /* digests common functions */
@@ -112,6 +134,10 @@ typedef struct crypto_functions {
     const struct ccmode_xts *ccaes_xts_decrypt;
     const struct ccmode_gcm *ccaes_gcm_encrypt;
     const struct ccmode_gcm *ccaes_gcm_decrypt;
+
+    ccgcm_init_with_iv_fn_t ccgcm_init_with_iv_fn;
+    ccgcm_inc_iv_fn_t ccgcm_inc_iv_fn;
+
     /* DES, ecb and cbc */
     const struct ccmode_ecb *ccdes_ecb_encrypt;
     const struct ccmode_ecb *ccdes_ecb_decrypt;
@@ -138,7 +164,14 @@ typedef struct crypto_functions {
 	ccpad_xts_decrypt_fn_t ccpad_xts_decrypt_fn;
 	/* CTS3 padding+encrypt functions */
 	ccpad_cts3_crypt_fn_t ccpad_cts3_encrypt_fn;
-	ccpad_cts3_crypt_fn_t ccpad_cts3_decrypt_fn;
+    ccpad_cts3_crypt_fn_t ccpad_cts3_decrypt_fn;
+
+    /* rng */
+    ccrng_fn_t ccrng_fn;
+
+    /* rsa */
+    ccrsa_make_pub_fn_t        ccrsa_make_pub_fn;
+    ccrsa_verify_pkcs1v15_fn_t ccrsa_verify_pkcs1v15_fn;
 } *crypto_functions_t;
 
 int register_crypto_functions(const crypto_functions_t funcs);

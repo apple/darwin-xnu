@@ -1840,6 +1840,7 @@ cfil_info_free(struct socket *so, struct cfil_info *cfil_info)
 
 	if (so->so_flags & SOF_CONTENT_FILTER) {
 		so->so_flags &= ~SOF_CONTENT_FILTER;
+		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
 	}
 	if (cfil_info == NULL)

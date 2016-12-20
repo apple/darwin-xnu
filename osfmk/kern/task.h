@@ -605,7 +605,7 @@ void task_wait_till_threads_terminate_locked(task_t task);
 /* JMM - should just be temporary (implementation in bsd_kern still) */
 extern void	set_bsdtask_info(task_t,void *);
 extern vm_map_t get_task_map_reference(task_t);
-extern vm_map_t	swap_task_map(task_t, thread_t, vm_map_t, boolean_t);
+extern vm_map_t	swap_task_map(task_t, thread_t, vm_map_t);
 extern pmap_t	get_task_pmap(task_t);
 extern uint64_t	get_task_resident_size(task_t);
 extern uint64_t	get_task_compressed(task_t);

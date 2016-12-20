@@ -129,11 +129,7 @@ bool IOWorkLoop::init()
 		
 		bzero(reserved,sizeof(ExpansionData));
 	}
-	
-#if DEBUG
-	OSBacktrace ( reserved->allocationBacktrace, sizeof ( reserved->allocationBacktrace ) / sizeof ( reserved->allocationBacktrace[0] ) );
-#endif
-	
+
     if ( gateLock == NULL ) {
         if ( !( gateLock = IORecursiveLockAlloc()) )
             return false;

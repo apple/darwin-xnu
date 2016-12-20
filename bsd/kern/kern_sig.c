@@ -1643,18 +1643,11 @@ terminate_with_payload_internal(struct proc *cur_proc, int target_pid, uint32_t 
 {
 	proc_t target_proc = PROC_NULL;
 	kauth_cred_t cur_cred = kauth_cred_get();
-	int signum = SIGKILL;
 
 	os_reason_t signal_reason = OS_REASON_NULL;
 
 	AUDIT_ARG(pid, target_pid);
-	if ((target_pid <= 0) || (cur_proc->p_pid == target_pid)) {
-		return EINVAL;
-	}
-
-	if (reason_namespace == OS_REASON_INVALID ||
-		reason_namespace > OS_REASON_MAX_VALID_NAMESPACE) {
-
+	if ((target_pid <= 0)) {
 		return EINVAL;
 	}
 
@@ -1665,7 +1658,7 @@ terminate_with_payload_internal(struct proc *cur_proc, int target_pid, uint32_t 
 
 	AUDIT_ARG(process, target_proc);
 
-	if (!cansignal(cur_proc, cur_cred, target_proc, signum, 0)) {
+	if (!cansignal(cur_proc, cur_cred, target_proc, SIGKILL, 0)) {
 		proc_rele(target_proc);
 		return EPERM;
 	}
@@ -1677,7 +1670,17 @@ terminate_with_payload_internal(struct proc *cur_proc, int target_pid, uint32_t 
 	signal_reason = build_userspace_exit_reason(reason_namespace, reason_code, payload, payload_size,
 							reason_string, reason_flags);
 
-	psignal_with_reason(target_proc, signum, signal_reason);
+	if (target_pid == cur_proc->p_pid) {
+		/*
+		 * psignal_thread_with_reason() will pend a SIGKILL on the specified thread or
+		 * return if the thread and/or task are already terminating. Either way, the
+		 * current thread won't return to userspace.
+		 */
+		psignal_thread_with_reason(target_proc, current_thread(), SIGKILL, signal_reason);
+	} else {
+		psignal_with_reason(target_proc, SIGKILL, signal_reason);
+	}
+
 	proc_rele(target_proc);
 
 	return 0;
@@ -2038,7 +2041,7 @@ build_signal_reason(int signum, const char *procname)
 	reason_buffer_size_estimate = kcdata_estimate_required_buffer_size(2, sizeof(sender_proc->p_name) +
 										sizeof(sender_proc->p_pid));
 
-	ret = os_reason_alloc_buffer(signal_reason, reason_buffer_size_estimate);
+	ret = os_reason_alloc_buffer_noblock(signal_reason, reason_buffer_size_estimate);
 	if (ret != 0) {
 		printf("build_signal_reason: unable to allocate signal reason buffer.\n");
 		return signal_reason;
@@ -2654,6 +2657,12 @@ void
 psignal_try_thread_with_reason(proc_t p, thread_t thread, int signum, struct os_reason *signal_reason)
 {
 	psignal_internal(p, TASK_NULL, thread, PSIG_TRY_THREAD, signum, signal_reason);
+}
+
+void
+psignal_thread_with_reason(proc_t p, thread_t thread, int signum, struct os_reason *signal_reason)
+{
+	psignal_internal(p, TASK_NULL, thread, PSIG_THREAD, signum, signal_reason);
 }
 
 /*

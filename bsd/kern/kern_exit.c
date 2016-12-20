@@ -763,10 +763,21 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 		/* NOTREACHED */
 	}
 
- 	/* If a core should be generated, notify crash reporter */
-	if (hassigprop(WTERMSIG(rv), SA_CORE) || ((p->p_csflags & CS_KILLED) != 0) ||
-		(p->p_exit_reason != OS_REASON_NULL && (p->p_exit_reason->osr_flags &
-							OS_REASON_FLAG_GENERATE_CRASH_REPORT))) {
+	/*
+	 * Generate a corefile/crashlog if:
+	 * 	The process doesn't have an exit reason that indicates no crash report should be created
+	 * 	AND any of the following are true:
+	 *	- The process was terminated due to a fatal signal that generates a core
+	 *	- The process was killed due to a code signing violation
+	 *	- The process has an exit reason that indicates we should generate a crash report
+	 *
+	 * The first condition is necessary because abort_with_reason()/payload() use SIGABRT
+	 * (which normally triggers a core) but may indicate that no crash report should be created.
+	 */
+	if (!(PROC_HAS_EXITREASON(p) && (PROC_EXITREASON_FLAGS(p) & OS_REASON_FLAG_NO_CRASH_REPORT)) &&
+		(hassigprop(WTERMSIG(rv), SA_CORE) || ((p->p_csflags & CS_KILLED) != 0) ||
+		(PROC_HAS_EXITREASON(p) && (PROC_EXITREASON_FLAGS(p) &
+							OS_REASON_FLAG_GENERATE_CRASH_REPORT)))) {
 		/* 
 		 * Workaround for processes checking up on PT_DENY_ATTACH:
 		 * should be backed out post-Leopard (details in 5431025).
@@ -803,7 +814,7 @@ skipcheck:
 
 	/* stash the usage into corpse data if making_corpse == true */
 	if (create_corpse == TRUE) {
-		kr = task_mark_corpse(current_task());
+		kr = task_mark_corpse(p->task);
 		if (kr != KERN_SUCCESS) {
 			if (kr == KERN_NO_SPACE) {
 				printf("Process[%d] has no vm space for corpse info.\n", p->p_pid);
@@ -854,7 +865,7 @@ skipcheck:
 
 		/* Update the code, subcode based on exit reason */
 		proc_update_corpse_exception_codes(p, &code, &subcode);
-		populate_corpse_crashinfo(p, task_get_corpseinfo(current_task()), rup, code, subcode, buffer, num_knotes);
+		populate_corpse_crashinfo(p, task_get_corpseinfo(p->task), rup, code, subcode, buffer, num_knotes);
 		if (buffer != NULL) {
 			kfree(buffer, buf_size);
 		}

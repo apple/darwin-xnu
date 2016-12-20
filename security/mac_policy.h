@@ -6591,7 +6591,7 @@ typedef unsigned int mac_policy_handle_t;
 struct mac_policy_conf {
 	const char		*mpc_name;		/** policy name */
 	const char		*mpc_fullname;		/** full name */
-	const char		**mpc_labelnames;	/** managed label namespaces */
+	char const * const *mpc_labelnames;	/** managed label namespaces */
 	unsigned int		 mpc_labelname_count;	/** number of managed label namespaces */
 	struct mac_policy_ops	*mpc_ops;		/** operation vector */
 	int			 mpc_loadtime_flags;	/** load time flags */

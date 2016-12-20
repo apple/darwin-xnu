@@ -351,7 +351,7 @@ task_set_64bit(
 			 */
 			thread_lock(thread);
 			urgency = thread_get_urgency(thread, &arg1, &arg2);
-			machine_thread_going_on_core(thread, urgency, 0);
+			machine_thread_going_on_core(thread, urgency, 0, 0);
 			thread_unlock(thread);
 			splx(spl);
 		}
@@ -5448,6 +5448,13 @@ kdebug_trace_dyld(task_t task, uint32_t base_code,
 	dyld_kernel_image_info_array_t infos;
 	vm_map_offset_t map_data;
 	vm_offset_t data;
+
+	if (!kdebug_enable ||
+		!kdebug_debugid_enabled(KDBG_EVENTID(DBG_DYLD, DBG_DYLD_UUID, 0)))
+	{
+		vm_map_copy_discard(infos_copy);
+		return KERN_SUCCESS;
+	}
 
 	assert(infos_copy != NULL);
 

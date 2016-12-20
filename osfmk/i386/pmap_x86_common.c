@@ -497,6 +497,7 @@ pmap_enter_options(
 	pt_entry_t		old_pte;
 	kern_return_t		kr_expand;
 	boolean_t		is_ept;
+	boolean_t		is_altacct;
 
 	pmap_intr_assert();
 
@@ -751,6 +752,7 @@ dont_update_pte:
 	 */
 
 	if (old_pa != (pmap_paddr_t) 0) {
+		boolean_t	was_altacct;
 
 		/*
 	         *	Don't do anything to pages outside valid memory here.
@@ -769,11 +771,22 @@ dont_update_pte:
 		pmap_store_pte(pte, 0);
 
 		if (IS_MANAGED_PAGE(pai)) {
+			/*
+			 *	Remove the mapping from the pvlist for
+			 *	this physical page.
+			 *      We'll end up with either a rooted pv or a
+			 *      hashed pv
+			 */
+			pvh_e = pmap_pv_remove(pmap, vaddr, (ppnum_t *) &pai, &old_pte, &was_altacct);
+		}
+
+		if (IS_MANAGED_PAGE(pai)) {
 			pmap_assert(old_pa_locked == TRUE);
 			pmap_ledger_debit(pmap, task_ledgers.phys_mem, PAGE_SIZE);
 			assert(pmap->stats.resident_count >= 1);
 			OSAddAtomic(-1, &pmap->stats.resident_count);
 			if (pmap != kernel_pmap) {
+				/* update pmap stats */
 				if (IS_REUSABLE_PAGE(pai)) {
 					PMAP_STATS_ASSERTF(
 						(pmap->stats.reusable > 0,
@@ -786,18 +799,30 @@ dont_update_pte:
 						 "internal %d",
 						 pmap->stats.internal));
 					OSAddAtomic(-1, &pmap->stats.internal);
-					pmap_ledger_debit(pmap, task_ledgers.internal, PAGE_SIZE);
-					if (IS_ALTACCT_PAGE(pai)) {
-						pmap_ledger_debit(pmap, task_ledgers.alternate_accounting, PAGE_SIZE);
-					} else {
-						pmap_ledger_debit(pmap, task_ledgers.phys_footprint, PAGE_SIZE);
-					}
 				} else {
 					PMAP_STATS_ASSERTF(
 						(pmap->stats.external > 0,
 						 "external %d",
 						 pmap->stats.external));
 					OSAddAtomic(-1, &pmap->stats.external);
+				}
+
+				/* update ledgers */
+				if (was_altacct) {
+					assert(IS_INTERNAL_PAGE(pai));
+					pmap_ledger_debit(pmap, task_ledgers.internal, PAGE_SIZE);
+					pmap_ledger_debit(pmap, task_ledgers.alternate_accounting, PAGE_SIZE);
+				} else if (IS_REUSABLE_PAGE(pai)) {
+					assert(!was_altacct);
+					assert(IS_INTERNAL_PAGE(pai));
+					/* was already not in phys_footprint */
+				} else if (IS_INTERNAL_PAGE(pai)) {
+					assert(!was_altacct);
+					assert(!IS_REUSABLE_PAGE(pai));
+					pmap_ledger_debit(pmap, task_ledgers.internal, PAGE_SIZE);
+					pmap_ledger_debit(pmap, task_ledgers.phys_footprint, PAGE_SIZE);
+				} else {
+					/* not an internal page */
 				}
 			}
 			if (iswired(*pte)) {
@@ -812,14 +837,6 @@ dont_update_pte:
 			} else {
 				pmap_phys_attributes[pai] |= ept_refmod_to_physmap(oattr);
 			}
-
-			/*
-			 *	Remove the mapping from the pvlist for
-			 *	this physical page.
-			 *      We'll end up with either a rooted pv or a
-			 *      hashed pv
-			 */
-			pvh_e = pmap_pv_remove(pmap, vaddr, (ppnum_t *) &pai, &old_pte);
 
 		} else {
 
@@ -881,10 +898,11 @@ dont_update_pte:
 			}
 			if ((options & PMAP_OPTIONS_ALT_ACCT) &&
 			    IS_INTERNAL_PAGE(pai)) {
-				assert(!IS_REUSABLE_PAGE(pai));
 				pv_h->va_and_flags |= PVE_IS_ALTACCT;
+				is_altacct = TRUE;
 			} else {
 				pv_h->va_and_flags &= ~PVE_IS_ALTACCT;
+				is_altacct = FALSE;
 			}
 		} else {
 			/*
@@ -923,6 +941,14 @@ dont_update_pte:
 			pvh_e->va_and_flags = vaddr;
 			pvh_e->pmap = pmap;
 			pvh_e->ppn = pn;
+			if ((options & PMAP_OPTIONS_ALT_ACCT) &&
+			    IS_INTERNAL_PAGE(pai)) {
+				pvh_e->va_and_flags |= PVE_IS_ALTACCT;
+				is_altacct = TRUE;
+			} else {
+				pvh_e->va_and_flags &= ~PVE_IS_ALTACCT;
+				is_altacct = FALSE;
+			}
 			pv_hash_add(pvh_e, pv_h);
 
 			/*
@@ -941,21 +967,37 @@ dont_update_pte:
 			pmap->stats.resident_max = pmap->stats.resident_count;
 		}
 		if (pmap != kernel_pmap) {
+			/* update pmap stats */
 			if (IS_REUSABLE_PAGE(pai)) {
 				OSAddAtomic(+1, &pmap->stats.reusable);
 				PMAP_STATS_PEAK(pmap->stats.reusable);
 			} else if (IS_INTERNAL_PAGE(pai)) {
 				OSAddAtomic(+1, &pmap->stats.internal);
 				PMAP_STATS_PEAK(pmap->stats.internal);
-				pmap_ledger_credit(pmap, task_ledgers.internal, PAGE_SIZE);
-				if (IS_ALTACCT_PAGE(pai)) {
-					pmap_ledger_credit(pmap, task_ledgers.alternate_accounting, PAGE_SIZE);
-				} else {
-					pmap_ledger_credit(pmap, task_ledgers.phys_footprint, PAGE_SIZE);
-				}
 			} else {
 				OSAddAtomic(+1, &pmap->stats.external);
 				PMAP_STATS_PEAK(pmap->stats.external);
+			}
+
+			/* update ledgers */
+			if (is_altacct) {
+				/* internal but also alternate accounting */
+				assert(IS_INTERNAL_PAGE(pai));
+				pmap_ledger_credit(pmap, task_ledgers.internal, PAGE_SIZE);
+				pmap_ledger_credit(pmap, task_ledgers.alternate_accounting, PAGE_SIZE);
+				/* alternate accounting, so not in footprint */
+			} else if (IS_REUSABLE_PAGE(pai)) {
+				assert(!is_altacct);
+				assert(IS_INTERNAL_PAGE(pai));
+				/* internal but reusable: not in footprint */
+			} else if (IS_INTERNAL_PAGE(pai)) {
+				assert(!is_altacct);
+				assert(!IS_REUSABLE_PAGE(pai));
+				/* internal: add to footprint */
+				pmap_ledger_credit(pmap, task_ledgers.internal, PAGE_SIZE);
+				pmap_ledger_credit(pmap, task_ledgers.phys_footprint, PAGE_SIZE);
+			} else {
+				/* not internal: not in footprint */
 			}
 		}
 	} else if (last_managed_page == 0) {
@@ -1114,24 +1156,28 @@ pmap_remove_range_options(
 	pv_hashed_entry_t       pvh_e;
 	int			pvh_cnt = 0;
 	int			num_removed, num_unwired, num_found, num_invalid;
-	int			num_external, num_reusable;
-	int			num_internal, num_alt_internal;
-	uint64_t		num_compressed, num_alt_compressed;
+	int			stats_external, stats_internal, stats_reusable;
+	uint64_t		stats_compressed;
+	int			ledgers_internal, ledgers_alt_internal;
+	uint64_t		ledgers_compressed, ledgers_alt_compressed;
 	ppnum_t			pai;
 	pmap_paddr_t		pa;
 	vm_map_offset_t		vaddr;
 	boolean_t		is_ept = is_ept_pmap(pmap);
+	boolean_t		was_altacct;
 
 	num_removed = 0;
 	num_unwired = 0;
 	num_found   = 0;
 	num_invalid = 0;
-	num_external = 0;
-	num_internal = 0;
-	num_reusable = 0;
-	num_compressed = 0;
-	num_alt_internal = 0;
-	num_alt_compressed = 0;
+	stats_external = 0;
+	stats_internal = 0;
+	stats_reusable = 0;
+	stats_compressed = 0;
+	ledgers_internal = 0;
+	ledgers_compressed = 0;
+	ledgers_alt_internal = 0;
+	ledgers_alt_compressed = 0;
 	/* invalidate the PTEs first to "freeze" them */
 	for (cpte = spte, vaddr = start_vaddr;
 	     cpte < epte;
@@ -1140,14 +1186,15 @@ pmap_remove_range_options(
 
 		pa = pte_to_pa(p);
 		if (pa == 0) {
-			if (pmap != kernel_pmap &&
-			    (options & PMAP_OPTIONS_REMOVE) &&
+			if ((options & PMAP_OPTIONS_REMOVE) &&
 			    (PTE_IS_COMPRESSED(p))) {
+				assert(pmap != kernel_pmap);
 				/* one less "compressed"... */
-				num_compressed++;
+				stats_compressed++;
+				ledgers_compressed++;
 				if (p & PTE_COMPRESSED_ALT) {
 					/* ... but it used to be "ALTACCT" */
-					num_alt_compressed++;
+					ledgers_alt_compressed++;
 				}
 				/* clear marker(s) */
 				/* XXX probably does not need to be atomic! */
@@ -1199,14 +1246,15 @@ pmap_remove_range_options(
 			 * "compressed" marker after our first "freeze"
 			 * loop above, so check again.
 			 */
-			if (pmap != kernel_pmap &&
-			    (options & PMAP_OPTIONS_REMOVE) &&
+			if ((options & PMAP_OPTIONS_REMOVE) &&
 			    (PTE_IS_COMPRESSED(*cpte))) {
+				assert(pmap != kernel_pmap);
 				/* one less "compressed"... */
-				num_compressed++;
+				stats_compressed++;
+				ledgers_compressed++;
 				if (*cpte & PTE_COMPRESSED_ALT) {
 					/* ... but it used to be "ALTACCT" */
-					num_alt_compressed++;
+					ledgers_alt_compressed++;
 				}
 				pmap_store_pte(cpte, 0);
 			}
@@ -1222,17 +1270,38 @@ pmap_remove_range_options(
 			UNLOCK_PVH(pai);
 			goto check_pte_for_compressed_marker;
 		}
+
+		/*
+		 * Remove the mapping from the pvlist for this physical page.
+		 */
+		pvh_e = pmap_pv_remove(pmap, vaddr, (ppnum_t *) &pai, cpte, &was_altacct);
+
 		num_removed++;
+		/* update pmap stats */
 		if (IS_REUSABLE_PAGE(pai)) {
-			assert(!IS_ALTACCT_PAGE(pai));
-			num_reusable++;
+			stats_reusable++;
 		} else if (IS_INTERNAL_PAGE(pai)) {
-			num_internal++;
-			if (IS_ALTACCT_PAGE(pai)) {
-				num_alt_internal++;
-			}
+			stats_internal++;
 		} else {
-			num_external++;
+			stats_external++;
+		}
+		/* update ledgers */
+		if (was_altacct) {
+			/* internal and alternate accounting */
+			assert(IS_INTERNAL_PAGE(pai));
+			ledgers_internal++;
+			ledgers_alt_internal++;
+		} else if (IS_REUSABLE_PAGE(pai)) {
+			/* internal but reusable */
+			assert(!was_altacct);
+			assert(IS_INTERNAL_PAGE(pai));
+		} else if (IS_INTERNAL_PAGE(pai)) {
+			/* internal */
+			assert(!was_altacct);
+			assert(!IS_REUSABLE_PAGE(pai));
+			ledgers_internal++;
+		} else {
+			/* not internal */
 		}
 
 		/*
@@ -1247,11 +1316,6 @@ pmap_remove_range_options(
 			pmap_phys_attributes[pai] |=
 				ept_refmod_to_physmap((*cpte & (INTEL_EPT_REF | INTEL_EPT_MOD))) & (PHYS_MODIFIED | PHYS_REFERENCED);
 		}
-
-		/*
-	      	 * Remove the mapping from the pvlist for this physical page.
-	         */
-		pvh_e = pmap_pv_remove(pmap, vaddr, (ppnum_t *) &pai, cpte);
 
 		/* completely invalidate the PTE */
 		pmap_store_pte(cpte, 0);
@@ -1287,52 +1351,57 @@ update_counts:
 	OSAddAtomic(-num_removed,  &pmap->stats.resident_count);
 
 	if (pmap != kernel_pmap) {
-		PMAP_STATS_ASSERTF((pmap->stats.external >= num_external,
-				    "pmap=%p num_external=%d stats.external=%d",
-				    pmap, num_external, pmap->stats.external));
-		PMAP_STATS_ASSERTF((pmap->stats.internal >= num_internal,
-				    "pmap=%p num_internal=%d stats.internal=%d",
-				    pmap, num_internal, pmap->stats.internal));
-		PMAP_STATS_ASSERTF((pmap->stats.reusable >= num_reusable,
-				    "pmap=%p num_reusable=%d stats.reusable=%d",
-				    pmap, num_reusable, pmap->stats.reusable));
-		PMAP_STATS_ASSERTF((pmap->stats.compressed >= num_compressed,
-				    "pmap=%p num_compressed=%lld, stats.compressed=%lld",
-				    pmap, num_compressed, pmap->stats.compressed));
+		PMAP_STATS_ASSERTF((pmap->stats.external >= stats_external,
+				    "pmap=%p stats_external=%d stats.external=%d",
+				    pmap, stats_external, pmap->stats.external));
+		PMAP_STATS_ASSERTF((pmap->stats.internal >= stats_internal,
+				    "pmap=%p stats_internal=%d stats.internal=%d",
+				    pmap, stats_internal, pmap->stats.internal));
+		PMAP_STATS_ASSERTF((pmap->stats.reusable >= stats_reusable,
+				    "pmap=%p stats_reusable=%d stats.reusable=%d",
+				    pmap, stats_reusable, pmap->stats.reusable));
+		PMAP_STATS_ASSERTF((pmap->stats.compressed >= stats_compressed,
+				    "pmap=%p stats_compressed=%lld, stats.compressed=%lld",
+				    pmap, stats_compressed, pmap->stats.compressed));
 
-		if (num_external) {
-			OSAddAtomic(-num_external, &pmap->stats.external);
+		/* update pmap stats */
+		if (stats_external) {
+			OSAddAtomic(-stats_external, &pmap->stats.external);
 		}
-		if (num_internal) {
-			OSAddAtomic(-num_internal, &pmap->stats.internal);
+		if (stats_internal) {
+			OSAddAtomic(-stats_internal, &pmap->stats.internal);
+		}
+		if (stats_reusable)
+			OSAddAtomic(-stats_reusable, &pmap->stats.reusable);
+		if (stats_compressed)
+			OSAddAtomic64(-stats_compressed, &pmap->stats.compressed);
+		/* update ledgers */
+		if (ledgers_internal) {
 			pmap_ledger_debit(pmap,
 					  task_ledgers.internal,
-					  machine_ptob(num_internal));
+					  machine_ptob(ledgers_internal));
 		}
-		if (num_alt_internal) {
-			pmap_ledger_debit(pmap,
-					  task_ledgers.alternate_accounting,
-					  machine_ptob(num_alt_internal));
-		}
-		if (num_alt_compressed) {
-			pmap_ledger_debit(pmap,
-					  task_ledgers.alternate_accounting_compressed,
-					  machine_ptob(num_alt_compressed));
-		}
-		if (num_reusable)
-			OSAddAtomic(-num_reusable, &pmap->stats.reusable);
-		if (num_compressed) {
-			OSAddAtomic64(-num_compressed, &pmap->stats.compressed);
+		if (ledgers_compressed) {
 			pmap_ledger_debit(pmap,
 					  task_ledgers.internal_compressed,
-					  machine_ptob(num_compressed));
+					  machine_ptob(ledgers_compressed));
+		}
+		if (ledgers_alt_internal) {
+			pmap_ledger_debit(pmap,
+					  task_ledgers.alternate_accounting,
+					  machine_ptob(ledgers_alt_internal));
+		}
+		if (ledgers_alt_compressed) {
+			pmap_ledger_debit(pmap,
+					  task_ledgers.alternate_accounting_compressed,
+					  machine_ptob(ledgers_alt_compressed));
 		}
 		pmap_ledger_debit(pmap,
 				  task_ledgers.phys_footprint,
-				  machine_ptob((num_internal -
-						num_alt_internal) +
-					       (num_compressed -
-						num_alt_compressed)));
+				  machine_ptob((ledgers_internal -
+						ledgers_alt_internal) +
+					       (ledgers_compressed -
+						ledgers_alt_compressed)));
 	}
 
 #if TESTING
@@ -1598,7 +1667,7 @@ pmap_page_protect_options(
 				assert(!PTE_IS_COMPRESSED(*pte));
 				/* mark this PTE as having been "compressed" */
 				new_pte_value = PTE_COMPRESSED;
-				if (IS_ALTACCT_PAGE(pai)) {
+				if (IS_ALTACCT_PAGE(pai, pv_e)) {
 					new_pte_value |= PTE_COMPRESSED_ALT;
 				}
 			} else {
@@ -1640,9 +1709,11 @@ pmap_page_protect_options(
 					options &= ~PMAP_OPTIONS_COMPRESSOR_IFF_MODIFIED;
 					options |= PMAP_OPTIONS_COMPRESSOR;
 					assert(new_pte_value == 0);
-					new_pte_value = PTE_COMPRESSED;
-					if (IS_ALTACCT_PAGE(pai)) {
-						new_pte_value |= PTE_COMPRESSED_ALT;
+					if (pmap != kernel_pmap) {
+						new_pte_value = PTE_COMPRESSED;
+						if (IS_ALTACCT_PAGE(pai, pv_e)) {
+							new_pte_value |= PTE_COMPRESSED_ALT;
+						}
 					}
 				}
 				pmap_store_pte(pte, new_pte_value);
@@ -1663,6 +1734,7 @@ pmap_page_protect_options(
 				assert(IS_INTERNAL_PAGE(pai));
 			}
 			if (pmap != kernel_pmap) {
+				/* update pmap stats */
 				if (IS_REUSABLE_PAGE(pai)) {
 					assert(pmap->stats.reusable > 0);
 					OSAddAtomic(-1, &pmap->stats.reusable);
@@ -1680,14 +1752,27 @@ pmap_page_protect_options(
 					PMAP_STATS_PEAK(pmap->stats.compressed);
 					pmap->stats.compressed_lifetime++;
 				}
-				if (IS_REUSABLE_PAGE(pai)) {
-					assert(!IS_ALTACCT_PAGE(pai));
+
+				/* update ledgers */
+				if (IS_ALTACCT_PAGE(pai, pv_e)) {
+					assert(IS_INTERNAL_PAGE(pai));
+					pmap_ledger_debit(pmap, task_ledgers.internal, PAGE_SIZE);
+					pmap_ledger_debit(pmap, task_ledgers.alternate_accounting, PAGE_SIZE);
+					if (options & PMAP_OPTIONS_COMPRESSOR) {
+						pmap_ledger_credit(pmap, task_ledgers.internal_compressed, PAGE_SIZE);
+						pmap_ledger_credit(pmap, task_ledgers.alternate_accounting_compressed, PAGE_SIZE);
+					}
+				} else if (IS_REUSABLE_PAGE(pai)) {
+					assert(!IS_ALTACCT_PAGE(pai, pv_e));
+					assert(IS_INTERNAL_PAGE(pai));
 					if (options & PMAP_OPTIONS_COMPRESSOR) {
 						pmap_ledger_credit(pmap, task_ledgers.internal_compressed, PAGE_SIZE);
 						/* was not in footprint, but is now */
 						pmap_ledger_credit(pmap, task_ledgers.phys_footprint, PAGE_SIZE);
 					}
 				} else if (IS_INTERNAL_PAGE(pai)) {
+					assert(!IS_ALTACCT_PAGE(pai, pv_e));
+					assert(!IS_REUSABLE_PAGE(pai));
 					pmap_ledger_debit(pmap, task_ledgers.internal, PAGE_SIZE);
 					/*
 					 * Update all stats related to physical
@@ -1702,19 +1787,6 @@ pmap_page_protect_options(
 						 * it mustn't affect total task
 						 * footprint.
 						 */
-						if (IS_ALTACCT_PAGE(pai)) {
-							/*
-							 * We've already debited
-							 * internal, above.
-							 * Debit
-							 * alternate_accounting
-							 * here, which means the
-							 * net change on 
-							 * phys_footprint is 0.
-							 */
-							pmap_ledger_debit(pmap, task_ledgers.alternate_accounting, PAGE_SIZE);
-							pmap_ledger_credit(pmap, task_ledgers.alternate_accounting_compressed, PAGE_SIZE);
-						}
 						pmap_ledger_credit(pmap, task_ledgers.internal_compressed, PAGE_SIZE);
 					} else {
 						/*
@@ -1723,20 +1795,7 @@ pmap_page_protect_options(
 						 * so adjust stats to keep 
 						 * phys_footprint up to date.
 						 */
-						if (IS_ALTACCT_PAGE(pai)) {
-							/*
-							 * We've already debited
-							 * internal, above.
-							 * Debit
-							 * alternate_accounting
-							 * here, which means
-							 * the net change on
-							 * phys_footprint is 0.
-							 */
-							pmap_ledger_debit(pmap, task_ledgers.alternate_accounting, PAGE_SIZE);
-						} else {
-							pmap_ledger_debit(pmap, task_ledgers.phys_footprint, PAGE_SIZE);
-						}
+						pmap_ledger_debit(pmap, task_ledgers.phys_footprint, PAGE_SIZE);
 					}
 				}
 			}
@@ -1791,12 +1850,9 @@ pmap_page_protect_options(
 		pvh_e = (pv_hashed_entry_t) queue_next(&pv_h->qlink);
 
 		if (pvh_e != (pv_hashed_entry_t) pv_h) {
-			vm_map_offset_t	pve_flags;
-
 			pv_hash_remove(pvh_e);
 			pv_h->pmap = pvh_e->pmap;
-			pve_flags = pv_h->va_and_flags & PAGE_MASK;
-			pv_h->va_and_flags = PVE_VA(pvh_e) | pve_flags;
+			pv_h->va_and_flags = pvh_e->va_and_flags;
 			pvh_e->qlink.next = (queue_entry_t) pvh_eh;
 			pvh_eh = pvh_e;
 
@@ -1832,7 +1888,7 @@ phys_attribute_clear(
 	int			pai;
 	pmap_t			pmap;
 	char			attributes = 0;
-	boolean_t		is_internal, is_reusable, is_ept;
+	boolean_t		is_internal, is_reusable, is_altacct, is_ept;
 	int			ept_bits_to_clear;
 	boolean_t		ept_keep_global_mod = FALSE;
 
@@ -1892,6 +1948,7 @@ phys_attribute_clear(
 
 			pmap = pv_e->pmap;
 			is_ept = is_ept_pmap(pmap);
+			is_altacct = IS_ALTACCT_PAGE(pai, pv_e);
 			va = PVE_VA(pv_e);
 			pte_bits = 0;
 
@@ -1957,12 +2014,12 @@ phys_attribute_clear(
 					OSAddAtomic(+1, &pmap->stats.internal);
 					PMAP_STATS_PEAK(pmap->stats.internal);
 					assert(pmap->stats.internal > 0);
-					pmap_ledger_credit(pmap,
-							   task_ledgers.internal,
-							   PAGE_SIZE);
-					if (IS_ALTACCT_PAGE(pai)) {
-						/* no impact on footprint */
+					if (is_altacct) {
+						/* no impact on ledgers */
 					} else {
+						pmap_ledger_credit(pmap,
+								   task_ledgers.internal,
+								   PAGE_SIZE);
 						pmap_ledger_credit(
 							pmap,
 							task_ledgers.phys_footprint,
@@ -1985,12 +2042,12 @@ phys_attribute_clear(
 					/* one less "internal" */
 					assert(pmap->stats.internal > 0);
 					OSAddAtomic(-1, &pmap->stats.internal);
-					pmap_ledger_debit(pmap,
-							  task_ledgers.internal,
-							  PAGE_SIZE);
-					if (IS_ALTACCT_PAGE(pai)) {
+					if (is_altacct) {
 						/* no impact on footprint */
 					} else {
+						pmap_ledger_debit(pmap,
+								  task_ledgers.internal,
+								  PAGE_SIZE);
 						pmap_ledger_debit(
 							pmap,
 							task_ledgers.phys_footprint,
@@ -2352,13 +2409,14 @@ pmap_query_page_info(
 		disp |= PMAP_QUERY_PAGE_PRESENT;
 		pai = pa_index(pa);
 		if (!IS_MANAGED_PAGE(pai)) {
+		} else if (pmap_pv_is_altacct(pmap, va, pai)) {
+			assert(IS_INTERNAL_PAGE(pai));
+			disp |= PMAP_QUERY_PAGE_INTERNAL;
+			disp |= PMAP_QUERY_PAGE_ALTACCT;
 		} else if (IS_REUSABLE_PAGE(pai)) {
 			disp |= PMAP_QUERY_PAGE_REUSABLE;
 		} else if (IS_INTERNAL_PAGE(pai)) {
 			disp |= PMAP_QUERY_PAGE_INTERNAL;
-			if (IS_ALTACCT_PAGE(pai)) {
-				disp |= PMAP_QUERY_PAGE_ALTACCT;
-			}
 		}
 	}
 

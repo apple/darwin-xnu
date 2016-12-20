@@ -295,15 +295,25 @@ void * IOMalloc(vm_size_t size)
     return address;
 }
 
-void IOFree(void * address, vm_size_t size)
+void IOFree(void * inAddress, vm_size_t size)
 {
-    if (address) {
+    void * address;
 
+    if ((address = inAddress))
+    {
 	address = (typeof(address)) (((uintptr_t) address) - sizeofIOLibMallocHeader);
 	
 #if IOTRACKING
-	if (TRACK_ALLOC) {
+	if (TRACK_ALLOC)
+	{
 	    IOLibMallocHeader * hdr;
+	    struct ptr_reference{ void * ptr; };
+	    volatile struct ptr_reference ptr;
+
+            // we're about to block in IOTrackingRemove(), make sure the original pointer
+            // exists in memory or a register for leak scanning to find
+            ptr.ptr = inAddress;
+
 	    hdr = (typeof(hdr)) address;
             if (size != hdr->tracking.size)
 	    {
@@ -311,6 +321,7 @@ void IOFree(void * address, vm_size_t size)
 		size = hdr->tracking.size;
 	    }
 	    IOTrackingRemove(gIOMallocTracking, &hdr->tracking.tracking, size);
+            ptr.ptr = NULL;
 	}
 #endif
 
@@ -746,7 +757,7 @@ kern_return_t IOIteratePageableMaps(vm_size_t size,
             else
                 index = gIOKitPageableSpace.count - 1;
         }
-        if( KERN_SUCCESS == kr)
+        if (KERN_NO_SPACE != kr)
             break;
 
         lck_mtx_lock( gIOKitPageableSpace.lock );

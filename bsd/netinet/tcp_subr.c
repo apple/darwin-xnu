@@ -2991,9 +2991,14 @@ tcp_sbspace(struct tcpcb *tp)
 {
 	struct socket *so = tp->t_inpcb->inp_socket;
 	struct sockbuf *sb = &so->so_rcv;
-	u_int32_t rcvbuf = sb->sb_hiwat;
+	u_int32_t rcvbuf;
 	int32_t space;
 	int32_t pending = 0;
+
+	tcp_sbrcv_grow_rwin(tp, sb);
+
+	/* hiwat might have changed */
+	rcvbuf = sb->sb_hiwat;
 
 	/*
 	 * If message delivery is enabled, do not count
@@ -3004,8 +3009,6 @@ tcp_sbspace(struct tcpcb *tp)
 	 */
 	if (so->so_flags & SOF_ENABLE_MSGS)
 		rcvbuf = rcvbuf - so->so_msg_state->msg_uno_bytes;
-
-	tcp_sbrcv_grow_rwin(tp, sb);
 
 	space =  ((int32_t) imin((rcvbuf - sb->sb_cc),
 		(sb->sb_mbmax - sb->sb_mbcnt)));

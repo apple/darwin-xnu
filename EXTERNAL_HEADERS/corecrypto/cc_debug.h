@@ -24,7 +24,7 @@
 #include <pexpert/pexpert.h>
 #define cc_printf(x...) kprintf(x)
 extern int printf(const char *format, ...) __printflike(1,2);
-#elif CC_USE_S3
+#elif CC_USE_S3 || CC_IBOOT
 #include <stdio.h>
 #define cc_printf(x...) printf(x)
 #else

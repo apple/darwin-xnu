@@ -21,10 +21,10 @@ cc_aligned_struct(16) ccecb_ctx;
 struct ccmode_ecb {
     size_t size;        /* first argument to ccecb_ctx_decl(). */
     size_t block_size;
-    void (*init)(const struct ccmode_ecb *ecb, ccecb_ctx *ctx,
-                 size_t key_len, const void *key);
-    void (*ecb)(const ccecb_ctx *ctx, size_t nblocks, const void *in,
-                void *out);
+    int (*init)(const struct ccmode_ecb *ecb, ccecb_ctx *ctx,
+                size_t key_nbytes, const void *key);
+    int (*ecb)(const ccecb_ctx *ctx, size_t nblocks, const void *in,
+               void *out);
 };
 
 /*!
@@ -64,11 +64,11 @@ cc_aligned_struct(16) cccbc_iv;
 struct ccmode_cbc {
     size_t size;        /* first argument to cccbc_ctx_decl(). */
     size_t block_size;
-    void (*init)(const struct ccmode_cbc *cbc, cccbc_ctx *ctx,
-                 size_t key_len, const void *key);
+    int (*init)(const struct ccmode_cbc *cbc, cccbc_ctx *ctx,
+                size_t key_len, const void *key);
     /* cbc encrypt or decrypt nblocks from in to out, iv will be used and updated. */
-    void (*cbc)(const cccbc_ctx *ctx, cccbc_iv *iv,
-                size_t nblocks, const void *in, void *out);
+    int (*cbc)(const cccbc_ctx *ctx, cccbc_iv *iv,
+               size_t nblocks, const void *in, void *out);
     const void *custom;
 };
 
@@ -78,9 +78,9 @@ cc_aligned_struct(16) cccfb_ctx;
 struct ccmode_cfb {
     size_t size;        /* first argument to cccfb_ctx_decl(). */
     size_t block_size;
-    void (*init)(const struct ccmode_cfb *cfb, cccfb_ctx *ctx,
-                 size_t key_len, const void *key, const void *iv);
-    void (*cfb)(cccfb_ctx *ctx, size_t nbytes, const void *in, void *out);
+    int (*init)(const struct ccmode_cfb *cfb, cccfb_ctx *ctx,
+                size_t key_len, const void *key, const void *iv);
+    int (*cfb)(cccfb_ctx *ctx, size_t nbytes, const void *in, void *out);
     const void *custom;
 };
 
@@ -90,9 +90,9 @@ cc_aligned_struct(16) cccfb8_ctx;
 struct ccmode_cfb8 {
     size_t size;        /* first argument to cccfb8_ctx_decl(). */
     size_t block_size;
-    void (*init)(const struct ccmode_cfb8 *cfb8, cccfb8_ctx *ctx,
-                 size_t key_len, const void *key, const void *iv);
-    void (*cfb8)(cccfb8_ctx *ctx, size_t nbytes, const void *in, void *out);
+    int (*init)(const struct ccmode_cfb8 *cfb8, cccfb8_ctx *ctx,
+                size_t key_len, const void *key, const void *iv);
+    int (*cfb8)(cccfb8_ctx *ctx, size_t nbytes, const void *in, void *out);
     const void *custom;
 };
 
@@ -102,9 +102,9 @@ cc_aligned_struct(16) ccctr_ctx;
 struct ccmode_ctr {
     size_t size;        /* first argument to ccctr_ctx_decl(). */
     size_t block_size;
-    void (*init)(const struct ccmode_ctr *ctr, ccctr_ctx *ctx,
-                 size_t key_len, const void *key, const void *iv);
-    void (*ctr)(ccctr_ctx *ctx, size_t nbytes, const void *in, void *out);
+    int (*init)(const struct ccmode_ctr *ctr, ccctr_ctx *ctx,
+                size_t key_len, const void *key, const void *iv);
+    int (*ctr)(ccctr_ctx *ctx, size_t nbytes, const void *in, void *out);
     const void *custom;
 };
 
@@ -114,9 +114,9 @@ cc_aligned_struct(16) ccofb_ctx;
 struct ccmode_ofb {
     size_t size;        /* first argument to ccofb_ctx_decl(). */
     size_t block_size;
-    void (*init)(const struct ccmode_ofb *ofb, ccofb_ctx *ctx,
-                 size_t key_len, const void *key, const void *iv);
-    void (*ofb)(ccofb_ctx *ctx, size_t nbytes, const void *in, void *out);
+    int (*init)(const struct ccmode_ofb *ofb, ccofb_ctx *ctx,
+                size_t key_len, const void *key, const void *iv);
+    int (*ofb)(ccofb_ctx *ctx, size_t nbytes, const void *in, void *out);
     const void *custom;
 };
 
@@ -133,12 +133,18 @@ struct ccmode_xts {
      determines how long the tweak is in bytes, for each subsequent call to
      ccmode_xts->xts().
      key must point to at least 'size' cc_units of free storage.
-     tweak_key must point to at least 'tweak_size' cc_units of free storage. */
-    void (*init)(const struct ccmode_xts *xts, ccxts_ctx *ctx,
-                 size_t key_len, const void *key, const void *tweak_key);
+     tweak_key must point to at least 'tweak_size' cc_units of free storage.
+     key and tweak_key must differ.
+     Returns nonzero on failure.
+     */
+    int (*init)(const struct ccmode_xts *xts, ccxts_ctx *ctx,
+                size_t key_nbytes, const void *data_key, const void *tweak_key);
+    
+    void (*key_sched)(const struct ccmode_xts *xts, ccxts_ctx *ctx,
+                      size_t key_nbytes, const void *data_key, const void *tweak_key);
 
     /* Set the tweak (sector number), the block within the sector zero. */
-    void (*set_tweak)(const ccxts_ctx *ctx, ccxts_tweak *tweak, const void *iv);
+    int (*set_tweak)(const ccxts_ctx *ctx, ccxts_tweak *tweak, const void *iv);
 
     /* Encrypt blocks for a sector, clients must call set_tweak before calling
        this function. Return a pointer to the tweak buffer */
@@ -159,11 +165,11 @@ struct ccmode_gcm {
     int encdec;        //is it encrypt or decrypt object
     size_t block_size;
     int (*init)(const struct ccmode_gcm *gcm, ccgcm_ctx *ctx,
-                 size_t key_len, const void *key);
-    int (*set_iv)(ccgcm_ctx *ctx, size_t iv_size, const void *iv);
+                 size_t key_nbytes, const void *key);
+    int (*set_iv)(ccgcm_ctx *ctx, size_t iv_nbytes, const void *iv);
     int (*gmac)(ccgcm_ctx *ctx, size_t nbytes, const void *in);  // could just be gcm with NULL out
     int (*gcm)(ccgcm_ctx *ctx, size_t nbytes, const void *in, void *out);
-    int (*finalize)(ccgcm_ctx *key, size_t tag_size, void *tag);
+    int (*finalize)(ccgcm_ctx *key, size_t tag_nbytes, void *tag);
     int (*reset)(ccgcm_ctx *ctx);
     const void *custom;
 };
@@ -194,8 +200,8 @@ cc_aligned_struct(16) ccomac_ctx;
 struct ccmode_omac {
     size_t size;        /* first argument to ccomac_ctx_decl(). */
     size_t block_size;
-    void (*init)(const struct ccmode_omac *omac, ccomac_ctx *ctx,
-                 size_t tweak_len, size_t key_len, const void *key);
+    int (*init)(const struct ccmode_omac *omac, ccomac_ctx *ctx,
+                size_t tweak_len, size_t key_len, const void *key);
     int (*omac)(ccomac_ctx *ctx, size_t nblocks,
                 const void *tweak, const void *in, void *out);
     const void *custom;

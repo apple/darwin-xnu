@@ -978,7 +978,7 @@ purge_now:
 	vm_page_lock_queues();
 
 	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, OBJECT_PURGE)),
-			      object,	/* purged object */
+			      VM_KERNEL_UNSLIDE_OR_PERM(object),	/* purged object */
 			      0,
 			      available_for_purge,
 			      0,

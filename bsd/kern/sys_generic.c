@@ -1778,8 +1778,15 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 			fds[i].revents = 0;
 	}
 
-	/* Did we have any trouble registering? */
-	if (rfds == nfds)
+	/*
+	 * Did we have any trouble registering?
+	 * If user space passed 0 FDs, then respect any timeout value passed.
+	 * This is an extremely inefficient sleep. If user space passed one or
+	 * more FDs, and we had trouble registering _all_ of them, then bail
+	 * out. If a subset of the provided FDs failed to register, then we
+	 * will still call the kqueue_scan function.
+	 */
+	if (nfds && (rfds == nfds))
 		goto done;
 
 	/* scan for, and possibly wait for, the kevents to trigger */

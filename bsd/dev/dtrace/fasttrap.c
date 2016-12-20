@@ -176,9 +176,9 @@ static lck_mtx_t       		fasttrap_count_mtx;	/* lock on ref count */
 static int fasttrap_tracepoint_enable(proc_t *, fasttrap_probe_t *, uint_t);
 static void fasttrap_tracepoint_disable(proc_t *, fasttrap_probe_t *, uint_t);
 
-static fasttrap_provider_t *fasttrap_provider_lookup(pid_t, fasttrap_provider_type_t, const char *,
+static fasttrap_provider_t *fasttrap_provider_lookup(proc_t*, fasttrap_provider_type_t, const char *,
     const dtrace_pattr_t *);
-static void fasttrap_provider_retire(pid_t, const char *, int);
+static void fasttrap_provider_retire(proc_t*, const char *, int);
 static void fasttrap_provider_free(fasttrap_provider_t *);
 
 static fasttrap_proc_t *fasttrap_proc_lookup(pid_t);
@@ -547,15 +547,15 @@ fasttrap_exec_exit(proc_t *p)
 	 * We clean up the pid provider for this process here; user-land
 	 * static probes are handled by the meta-provider remove entry point.
 	 */
-	fasttrap_provider_retire(p->p_pid, FASTTRAP_PID_NAME, 0);
+	fasttrap_provider_retire(p, FASTTRAP_PID_NAME, 0);
 
 	/*
 	 * APPLE NOTE: We also need to remove any aliased providers.
 	 * XXX optimization: track which provider types are instantiated
 	 * and only retire as needed.
 	 */
-	fasttrap_provider_retire(p->p_pid, FASTTRAP_OBJC_NAME, 0);
-	fasttrap_provider_retire(p->p_pid, FASTTRAP_ONESHOT_NAME, 0);
+	fasttrap_provider_retire(p, FASTTRAP_OBJC_NAME, 0);
+	fasttrap_provider_retire(p, FASTTRAP_ONESHOT_NAME, 0);
 
 	/*
 	 * This should be called after it is no longer possible for a user
@@ -1387,19 +1387,20 @@ fasttrap_proc_release(fasttrap_proc_t *proc)
 }
 
 /*
- * Lookup a fasttrap-managed provider based on its name and associated pid.
+ * Lookup a fasttrap-managed provider based on its name and associated proc.
+ * A reference to the proc must be held for the duration of the call.
  * If the pattr argument is non-NULL, this function instantiates the provider
  * if it doesn't exist otherwise it returns NULL. The provider is returned
  * with its lock held.
  */
 static fasttrap_provider_t *
-fasttrap_provider_lookup(pid_t pid, fasttrap_provider_type_t provider_type, const char *name,
+fasttrap_provider_lookup(proc_t *p, fasttrap_provider_type_t provider_type, const char *name,
     const dtrace_pattr_t *pattr)
 {
+	pid_t pid = p->p_pid;
 	fasttrap_provider_t *fp, *new_fp = NULL;
 	fasttrap_bucket_t *bucket;
 	char provname[DTRACE_PROVNAMELEN];
-	proc_t *p;
 	cred_t *cred;
 
 	ASSERT(strlen(name) < sizeof (fp->ftp_name));
@@ -1429,16 +1430,12 @@ fasttrap_provider_lookup(pid_t pid, fasttrap_provider_type_t provider_type, cons
 	lck_mtx_unlock(&bucket->ftb_mtx);
 
 	/*
-	 * Make sure the process exists, isn't a child created as the result
+	 * Make sure the process isn't a child created as the result
 	 * of a vfork(2), and isn't a zombie (but may be in fork).
 	 */
-	if ((p = proc_find(pid)) == NULL) {
-		return NULL;
-	}
 	proc_lock(p);
 	if (p->p_lflag & (P_LINVFORK | P_LEXIT)) {
 		proc_unlock(p);
-		proc_rele(p);
 		return (NULL);
 	}
 
@@ -1460,11 +1457,10 @@ fasttrap_provider_lookup(pid_t pid, fasttrap_provider_type_t provider_type, cons
 	cred = p->p_ucred;
 	// lck_mtx_unlock(&p->p_crlock);
 	proc_unlock(p);
-	proc_rele(p);
 
 	new_fp = kmem_zalloc(sizeof (fasttrap_provider_t), KM_SLEEP);
 	ASSERT(new_fp != NULL);
-	new_fp->ftp_pid = pid;
+	new_fp->ftp_pid = p->p_pid;
 	new_fp->ftp_proc = fasttrap_proc_lookup(pid);
 	new_fp->ftp_provider_type = provider_type;
 
@@ -1578,7 +1574,7 @@ fasttrap_provider_free(fasttrap_provider_t *provider)
 }
 
 static void
-fasttrap_provider_retire(pid_t pid, const char *name, int mprov)
+fasttrap_provider_retire(proc_t *p, const char *name, int mprov)
 {
 	fasttrap_provider_t *fp;
 	fasttrap_bucket_t *bucket;
@@ -1586,11 +1582,11 @@ fasttrap_provider_retire(pid_t pid, const char *name, int mprov)
 
 	ASSERT(strlen(name) < sizeof (fp->ftp_name));
 
-	bucket = &fasttrap_provs.fth_table[FASTTRAP_PROVS_INDEX(pid, name)];
+	bucket = &fasttrap_provs.fth_table[FASTTRAP_PROVS_INDEX(p->p_pid, name)];
 	lck_mtx_lock(&bucket->ftb_mtx);
 
 	for (fp = bucket->ftb_data; fp != NULL; fp = fp->ftp_next) {
-		if (fp->ftp_pid == pid && strncmp(fp->ftp_name, name, sizeof(fp->ftp_name)) == 0 &&
+		if (fp->ftp_pid == p->p_pid && strncmp(fp->ftp_name, name, sizeof(fp->ftp_name)) == 0 &&
 		    !fp->ftp_retired)
 			break;
 	}
@@ -1633,7 +1629,7 @@ fasttrap_provider_retire(pid_t pid, const char *name, int mprov)
 
 	/*
 	 * We don't have to worry about invalidating the same provider twice
-	 * since fasttrap_provider_lookup() will ignore provider that have
+	 * since fasttrap_provider_lookup() will ignore providers that have
 	 * been marked as retired.
 	 */
 	dtrace_invalidate(provid);
@@ -1658,6 +1654,7 @@ fasttrap_uint64_cmp(const void *ap, const void *bp)
 static int
 fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 {
+	proc_t *p;
 	fasttrap_provider_t *provider;
 	fasttrap_probe_t *pp;
 	fasttrap_tracepoint_t *tp;
@@ -1702,10 +1699,15 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 			return (EINVAL);
 	}
 
-	if ((provider = fasttrap_provider_lookup(pdata->ftps_pid, pdata->ftps_provider_type,
+	p = proc_find(pdata->ftps_pid);
+	if (p == PROC_NULL)
+		return (ESRCH);
+
+	if ((provider = fasttrap_provider_lookup(p, pdata->ftps_provider_type,
 						 provider_name, &pid_attr)) == NULL)
 		return (ESRCH);
 
+	proc_rele(p);
 	/*
 	 * Increment this reference count to indicate that a consumer is
 	 * actively adding a new probe associated with this provider. This
@@ -1859,7 +1861,7 @@ no_mem:
 
 /*ARGSUSED*/
 static void *
-fasttrap_meta_provide(void *arg, dtrace_helper_provdesc_t *dhpv, pid_t pid)
+fasttrap_meta_provide(void *arg, dtrace_helper_provdesc_t *dhpv, proc_t *p)
 {
 #pragma unused(arg)
 	fasttrap_provider_t *provider;
@@ -1917,10 +1919,10 @@ fasttrap_meta_provide(void *arg, dtrace_helper_provdesc_t *dhpv, pid_t pid)
 	if (dhpv->dthpv_pattr.dtpa_args.dtat_class > DTRACE_CLASS_ISA)
 		dhpv->dthpv_pattr.dtpa_args.dtat_class = DTRACE_CLASS_ISA;
 
-	if ((provider = fasttrap_provider_lookup(pid, DTFTP_PROVIDER_USDT, dhpv->dthpv_provname,
+	if ((provider = fasttrap_provider_lookup(p, DTFTP_PROVIDER_USDT, dhpv->dthpv_provname,
 	    &dhpv->dthpv_pattr)) == NULL) {
 		cmn_err(CE_WARN, "failed to instantiate provider %s for "
-		    "process %u",  dhpv->dthpv_provname, (uint_t)pid);
+		    "process %u",  dhpv->dthpv_provname, (uint_t)p->p_pid);
 		return (NULL);
 	}
 
@@ -2120,7 +2122,7 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 
 /*ARGSUSED*/
 static void
-fasttrap_meta_remove(void *arg, dtrace_helper_provdesc_t *dhpv, pid_t pid)
+fasttrap_meta_remove(void *arg, dtrace_helper_provdesc_t *dhpv, proc_t *p)
 {
 #pragma unused(arg)
 	/*
@@ -2129,7 +2131,7 @@ fasttrap_meta_remove(void *arg, dtrace_helper_provdesc_t *dhpv, pid_t pid)
 	 * provider until that count has dropped to zero. This just puts
 	 * the provider on death row.
 	 */
-	fasttrap_provider_retire(pid, dhpv->dthpv_provname, 1);
+	fasttrap_provider_retire(p, dhpv->dthpv_provname, 1);
 }
 
 static char*
@@ -2559,7 +2561,7 @@ fasttrap_init( void )
 			return;
 		}
 
-		gFasttrapInited = 1;		
+		gFasttrapInited = 1;
 	}
 }
 

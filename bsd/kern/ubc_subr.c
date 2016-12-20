@@ -158,7 +158,7 @@ struct cs_hash {
     cs_md_final		cs_final;
 };
 
-static struct cs_hash cs_hash_sha1 = {
+static const struct cs_hash cs_hash_sha1 = {
     .cs_type = CS_HASHTYPE_SHA1,
     .cs_size = CS_SHA1_LEN,
     .cs_digest_size = SHA_DIGEST_LENGTH,
@@ -167,7 +167,7 @@ static struct cs_hash cs_hash_sha1 = {
     .cs_final = (cs_md_final)SHA1Final,
 };
 #if CRYPTO_SHA2
-static struct cs_hash cs_hash_sha256 = {
+static const struct cs_hash cs_hash_sha256 = {
     .cs_type = CS_HASHTYPE_SHA256,
     .cs_size = SHA256_DIGEST_LENGTH,
     .cs_digest_size = SHA256_DIGEST_LENGTH,
@@ -175,7 +175,7 @@ static struct cs_hash cs_hash_sha256 = {
     .cs_update = (cs_md_update)SHA256_Update,
     .cs_final = (cs_md_final)SHA256_Final,
 };
-static struct cs_hash cs_hash_sha256_truncate = {
+static const struct cs_hash cs_hash_sha256_truncate = {
     .cs_type = CS_HASHTYPE_SHA256_TRUNCATED,
     .cs_size = CS_SHA256_TRUNCATED_LEN,
     .cs_digest_size = SHA256_DIGEST_LENGTH,
@@ -183,7 +183,7 @@ static struct cs_hash cs_hash_sha256_truncate = {
     .cs_update = (cs_md_update)SHA256_Update,
     .cs_final = (cs_md_final)SHA256_Final,
 };
-static struct cs_hash cs_hash_sha384 = {
+static const struct cs_hash cs_hash_sha384 = {
     .cs_type = CS_HASHTYPE_SHA384,
     .cs_size = SHA384_DIGEST_LENGTH,
     .cs_digest_size = SHA384_DIGEST_LENGTH,
@@ -193,7 +193,7 @@ static struct cs_hash cs_hash_sha384 = {
 };
 #endif
 
-static struct cs_hash *
+static struct cs_hash const *
 cs_find_md(uint8_t type)
 {
 	if (type == CS_HASHTYPE_SHA1) {
@@ -221,7 +221,7 @@ union cs_hash_union {
  * Choose among different hash algorithms.
  * Higher is better, 0 => don't use at all.
  */
-static uint32_t hashPriorities[] = {
+static const uint32_t hashPriorities[] = {
 	CS_HASHTYPE_SHA1,
 	CS_HASHTYPE_SHA256_TRUNCATED,
 	CS_HASHTYPE_SHA256,
@@ -354,7 +354,7 @@ hashes(
 static int
 cs_validate_codedirectory(const CS_CodeDirectory *cd, size_t length)
 {
-	struct cs_hash *hashtype;
+	struct cs_hash const *hashtype;
 
 	if (length < sizeof(*cd))
 		return EBADEXEC;
@@ -3612,7 +3612,7 @@ cs_validate_hash(
 	unsigned		*tainted)
 {
 	union cs_hash_union	mdctx;
-	struct cs_hash		*hashtype = NULL;
+	struct cs_hash const	*hashtype = NULL;
 	unsigned char		actual_hash[CS_HASH_MAX_SIZE];
 	unsigned char		expected_hash[CS_HASH_MAX_SIZE];
 	boolean_t		found_hash;

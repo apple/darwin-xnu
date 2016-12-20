@@ -620,7 +620,8 @@ exec_fat_imgact(struct image_params *imgp)
 
 	if (imgp->ip_origcputype != 0) {
 		/* Fat header previously matched, don't allow another fat file inside */
-		return (-1);
+		error = -1; /* not claimed */
+		goto bad;
 	}
 
 	/* Make sure it's a fat binary */
@@ -1012,12 +1013,18 @@ grade:
 	/*
 	 * Commit to new map.
 	 *
-	 * Swap the new map for the old, which consumes our new map reference but
-	 * each leaves us responsible for the old_map reference.  That lets us get
-	 * off the pmap associated with it, and then we can release it.
+	 * Swap the new map for the old for target task, which consumes
+	 * our new map reference but each leaves us responsible for the
+	 * old_map reference.  That lets us get off the pmap associated
+	 * with it, and then we can release it.
+	 *
+	 * The map needs to be set on the target task which is different
+	 * than current task, thus swap_task_map is used instead of
+	 * vm_map_switch.
 	 */
-	old_map = swap_task_map(task, thread, map, !spawn);
+	old_map = swap_task_map(task, thread, map);
 	vm_map_deallocate(old_map);
+	old_map = NULL;
 
 	lret = activate_exec_state(task, p, thread, &load_result);
 	if (lret != KERN_SUCCESS) {
@@ -1059,6 +1066,7 @@ grade:
 		goto badtoolate;
 	}
 
+	/* Switch to target task's map to copy out strings */
 	old_map = vm_map_switch(get_task_map(task));
 
 	if (load_result.unixproc) {
@@ -2874,6 +2882,10 @@ bad:
 		}
 	}
 
+	/* Inherit task role from old task to new task for exec */
+	if (error == 0 && !spawn_no_exec) {
+		proc_inherit_task_role(get_threadtask(imgp->ip_new_thread), current_task());
+	}
 
 	/*
 	 * Apply the spawnattr policy, apptype (which primes the task for importance donation),
@@ -3442,6 +3454,11 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 
 		/* Sever any extant thread affinity */
 		thread_affinity_exec(current_thread());
+
+		/* Inherit task role from old task to new task for exec */
+		if (!in_vfexec) {
+			proc_inherit_task_role(get_threadtask(imgp->ip_new_thread), current_task());
+		}
 
 		thread_t main_thread = imgp->ip_new_thread;
 

@@ -1835,26 +1835,19 @@ Restart:
 				assert((vm_page_secluded_count_free +
 					vm_page_secluded_count_inuse) ==
 				       vm_page_secluded_count);
-				vm_page_queue_remove_first(&vm_page_queue_secluded,
-							   secluded_page,
-							   vm_page_t,
-							   pageq);
+				secluded_page = vm_page_queue_first(&vm_page_queue_secluded);
 				assert(secluded_page->vm_page_q_state ==
 				       VM_PAGE_ON_SECLUDED_Q);
-				VM_PAGE_ZERO_PAGEQ_ENTRY(secluded_page);
-				secluded_page->vm_page_q_state = VM_PAGE_NOT_ON_Q;
-				vm_page_secluded_count--;
+				vm_page_queues_remove(secluded_page, FALSE);
 				assert(!secluded_page->fictitious);
 				assert(!VM_PAGE_WIRED(secluded_page));
 				if (secluded_page->vm_page_object == 0) {
 					/* transfer to free queue */
 					assert(secluded_page->busy);
-					vm_page_secluded_count_free--;
 					secluded_page->snext = local_freeq;
 					local_freeq = secluded_page;
 					local_freed++;
 				} else {
-					vm_page_secluded_count_inuse--;
 					/* transfer to head of inactive queue */
 					pmap_clear_refmod_options(
 						VM_PAGE_GET_PHYS_PAGE(secluded_page),
@@ -1927,26 +1920,19 @@ Restart:
 				assert((vm_page_secluded_count_free +
 					vm_page_secluded_count_inuse) ==
 				       vm_page_secluded_count);
-				vm_page_queue_remove_first(&vm_page_queue_secluded,
-							   secluded_page,
-							   vm_page_t,
-							   pageq);
+				secluded_page = vm_page_queue_first(&vm_page_queue_secluded);
 				assert(secluded_page->vm_page_q_state ==
 				       VM_PAGE_ON_SECLUDED_Q);
-				VM_PAGE_ZERO_PAGEQ_ENTRY(secluded_page);
-				secluded_page->vm_page_q_state = VM_PAGE_NOT_ON_Q;
-				vm_page_secluded_count--;
+				vm_page_queues_remove(secluded_page, FALSE);
 				assert(!secluded_page->fictitious);
 				assert(!VM_PAGE_WIRED(secluded_page));
 				if (secluded_page->vm_page_object == 0) {
 					/* transfer to free queue */
 					assert(secluded_page->busy);
-					vm_page_secluded_count_free--;
 					secluded_page->snext = local_freeq;
 					local_freeq = secluded_page;
 					local_freed++;
 				} else {
-					vm_page_secluded_count_inuse--;
 					/* transfer to head of active queue */
 					vm_page_enqueue_active(secluded_page,
 							       FALSE);
@@ -2745,7 +2731,6 @@ consider_inactive:
 					else
 						vm_pageout_considered_bq_external++;
 					
-					assert(VM_PAGE_PAGEABLE(m));
 					break;
 				}
 			}
@@ -2883,6 +2868,7 @@ consider_inactive:
 			
 			/* NOTREACHED */
 		}
+		assert(VM_PAGE_PAGEABLE(m));
 		m_object = VM_PAGE_OBJECT(m);
 		force_anonymous = FALSE;
 		

@@ -1165,6 +1165,7 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 			socket_lock(so, 0);
 		} else {
 			/* Release the reference held for the listen socket */
+			VERIFY(so2->so_usecount > 0);
 			so2->so_usecount--;
 		}
 		goto out;
@@ -1207,6 +1208,7 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 				/* Release the reference held for
 				 * listen socket.
 				 */
+				VERIFY(so2->so_usecount > 0);
 				so2->so_usecount--;
 			}
 			goto out;
@@ -1298,6 +1300,7 @@ decref_out:
 			 * This is possible only for SOCK_DGRAM sockets. We refuse
 			 * connecting to the same socket for SOCK_STREAM sockets.
 			 */
+			VERIFY(so2->so_usecount > 0);
 			so2->so_usecount--;
 		}
 	}
@@ -1352,6 +1355,7 @@ unp_connect2(struct socket *so, struct socket *so2)
 			socket_unlock(so2, 0);
 			soisconnected(so);
 			unp_get_locks_in_order(so, so2);
+			VERIFY(so2->so_usecount > 0);
 			so2->so_usecount--;
 		} else {
 			soisconnected(so);
@@ -1386,6 +1390,7 @@ unp_connect2(struct socket *so, struct socket *so2)
 
 		unp_get_locks_in_order(so, so2);
 		/* Decrement the extra reference left before */
+		VERIFY(so2->so_usecount > 0);
 		so2->so_usecount--;
 		break;
 
@@ -1478,6 +1483,7 @@ try_again:
 	}
 
 	unp->unp_conn = NULL;
+	VERIFY(so2->so_usecount > 0);
 	so2->so_usecount--;
 
 	if (unp->unp_flags & UNP_TRACE_MDNS)
@@ -1494,6 +1500,7 @@ try_again:
 
 	case SOCK_STREAM:
 		unp2->unp_conn = NULL;
+		VERIFY(so2->so_usecount > 0);
 		so->so_usecount--;
 
 		/* Set the socket state correctly but do a wakeup later when
@@ -2411,9 +2418,10 @@ unp_lock(struct socket *so, int refcount, void * lr)
                 panic("unp_lock: so=%p so_pcb=%p lr=%p ref=0x%x\n",
                 so, so->so_pcb, lr_saved, so->so_usecount);
 
-        if (refcount)
-                so->so_usecount++;
-
+        if (refcount) {
+		VERIFY(so->so_usecount > 0);
+		so->so_usecount++;
+	}
         so->lock_lr[so->next_lock_lr] = lr_saved;
         so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
         return (0);

@@ -76,6 +76,8 @@
  *
  * DKIOCGETPROVISIONSTATUS               get device's block provision status
  * DKIOCGETIOMINSATURATIONBYTECOUNT      get minimum byte count to saturate storage bandwidth
+ *
+ * DKIOCGETERRORDESCRIPTION              get description of any drive error
  */
 
 #define DK_FEATURE_BARRIER                    0x00000002
@@ -174,6 +176,15 @@ typedef struct
 	dk_provision_extent_t *	extents;        /* output:       provision extents */
 } dk_provision_status_t;
 
+typedef struct
+{
+	uint64_t               options;        /*               reserved, clear to zero */
+	uint64_t               reserved;       /*               reserved, clear to zero */
+	uint64_t               description_size;
+	char *                 description;
+} dk_error_description_t;
+
+
 #ifdef KERNEL
 #ifdef PRIVATE
 
@@ -218,6 +229,8 @@ typedef struct
 #define DKIOCGETCOMMANDPOOLSIZE               _IOR('d', 78, uint32_t)
 
 #define DKIOCGETPROVISIONSTATUS               _IOWR('d', 79, dk_provision_status_t)
+
+#define DKIOCGETERRORDESCRIPTION              _IOR('d', 80, dk_error_description_t)
 
 #define DKIOCSYNCHRONIZECACHE                 _IO('d', 22)
 

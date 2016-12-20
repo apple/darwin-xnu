@@ -822,8 +822,13 @@ int PEHaltRestart(unsigned int type)
    }
    else if(type == kPEPanicRestartCPU || type == kPEPanicSync)
    {
-   	IOCPURunPlatformPanicActions(type);
-	PE_sync_panic_buffers();
+       // Do an initial sync to flush as much panic data as possible,
+       // in case we have a problem in one of the platorm panic handlers.
+       // After running the platform handlers, do a final sync w/
+       // platform hardware quiesced for the panic.
+       PE_sync_panic_buffers();
+       IOCPURunPlatformPanicActions(type);
+       PE_sync_panic_buffers();
    }
 
   if (gIOPlatform) return gIOPlatform->haltRestart(type);

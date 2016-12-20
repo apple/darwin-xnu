@@ -1138,6 +1138,52 @@ def ShowTaskStacksCmdHelper(cmd_args=None, cmd_options={}):
 
 # EndMacro: showtaskstacks
 
+def CheckTaskProcRefs(task, proc):
+    for thread in IterateQueue(task.threads, 'thread *', 'task_threads'):
+        if int(thread.uthread) == 0:
+            continue
+        uthread = Cast(thread.uthread, 'uthread *')
+        refcount = int(uthread.uu_proc_refcount)
+        uu_ref_index = int(uthread.uu_pindex)
+        if refcount == 0:
+            continue
+        for ref in range(0, uu_ref_index):
+            if unsigned(uthread.uu_proc_ps[ref]) == unsigned(proc):
+                print GetTaskSummary.header + " " + GetProcSummary.header
+                pval = Cast(task.bsd_info, 'proc *')
+                print GetTaskSummary(task) + " " + GetProcSummary(pval)
+                print "\t" + GetThreadSummary.header
+                print "\t" + GetThreadSummary(thread) + "\n"
+
+                for frame in range (0, 10):
+                    trace_addr = unsigned(uthread.uu_proc_pcs[ref][frame])
+                    symbol_arr = kern.SymbolicateFromAddress(unsigned(trace_addr))
+                    if symbol_arr:
+                        symbol_str = str(symbol_arr[0].addr)
+                    else:
+                        symbol_str = ''
+                    print '{0: <#x} {1: <s}'.format(trace_addr, symbol_str)
+    return
+
+@lldb_command('showprocrefs')
+def ShowProcRefs(cmd_args = None):
+    """ Display information on threads/BTs that could be holding a reference on the specified proc
+        NOTE: We can't say affirmatively if any of these references are still held since
+              there's no way to pair references with drop-refs in the current infrastructure.
+        Usage: showprocrefs <proc>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+         raise ArgumentError("No arguments passed")
+
+    proc = kern.GetValueFromAddress(cmd_args[0], 'proc *')
+
+    for t in kern.tasks:
+        CheckTaskProcRefs(t, proc)
+    for t in kern.terminated_tasks:
+        CheckTaskProcRefs(t, proc)
+
+    return
+
 @lldb_command('showallthreads')
 def ShowAllThreads(cmd_args = None):
     """ Display info about all threads in the system

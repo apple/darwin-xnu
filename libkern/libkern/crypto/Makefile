@@ -8,7 +8,7 @@ include $(MakeInc_def)
 
 DATAFILES = md5.h sha1.h
 
-PRIVATE_DATAFILES = register_crypto.h sha2.h des.h aes.h aesxts.h
+PRIVATE_DATAFILES = register_crypto.h sha2.h des.h aes.h aesxts.h rand.h rsa.h
 
 INSTALL_KF_MI_LIST = ${DATAFILES}
 

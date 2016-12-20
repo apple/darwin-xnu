@@ -1461,6 +1461,7 @@ defrouter_select(struct ifnet *ifp)
 					rtaddr = installed_dr->rtaddr_mapped;
 				else
 					rtaddr = installed_dr->rtaddr;
+				NDDR_UNLOCK(dr);
 				lck_mtx_unlock(nd6_mutex);
 				/* Callee returns a locked route upon success */
 				if ((rt = nd6_lookup(&rtaddr, 0, ifp, 0)) != NULL) {
@@ -1479,9 +1480,11 @@ defrouter_select(struct ifnet *ifp)
 				nd6log((LOG_ERR, "defrouter_select: more than one "
 				    "default router is installed for interface :%s.\n",
 				    if_name(ifp)));
+				NDDR_UNLOCK(dr);
 			}
-		}
-		NDDR_UNLOCK(dr);
+		} else
+			NDDR_UNLOCK(dr);
+
 		NDDR_REMREF(dr);	/* for this for loop */
 		if (drrele != NULL)
 			NDDR_REMREF(drrele);
@@ -1497,7 +1500,7 @@ defrouter_select(struct ifnet *ifp)
 			}
 
 			if (installed_dr) {
-				NDDR_REMREF(selected_dr);
+				NDDR_REMREF(installed_dr);
 				installed_dr = NULL;
 			}
 
@@ -2159,8 +2162,6 @@ prelist_update(
 		NDPR_REMREF(pr);
 		lck_mtx_unlock(nd6_mutex);
 	} else {
-		struct nd_prefix *newpr = NULL;
-
 		newprefix = 1;
 
 		if (new->ndpr_vltime == 0)
@@ -2170,33 +2171,16 @@ prelist_update(
 
 		bzero(&new->ndpr_addr, sizeof (struct in6_addr));
 
-		error = nd6_prelist_add(new, dr, &newpr, FALSE);
-		if (error != 0 || newpr == NULL) {
+		error = nd6_prelist_add(new, dr, &pr, FALSE);
+		if (error != 0 || pr == NULL) {
 			nd6log((LOG_NOTICE, "prelist_update: "
 			    "nd6_prelist_add failed for %s/%d on %s "
 			    "errno=%d, returnpr=0x%llx\n",
 			    ip6_sprintf(&new->ndpr_prefix.sin6_addr),
 			    new->ndpr_plen, if_name(new->ndpr_ifp),
-			    error, (uint64_t)VM_KERNEL_ADDRPERM(newpr)));
+			    error, (uint64_t)VM_KERNEL_ADDRPERM(pr)));
 			goto end; /* we should just give up in this case. */
 		}
-
-		/*
-		 * XXX: from the ND point of view, we can ignore a prefix
-		 * with the on-link bit being zero.  However, we need a
-		 * prefix structure for references from autoconfigured
-		 * addresses.  Thus, we explicitly make sure that the prefix
-		 * itself expires now.
-		 */
-		NDPR_LOCK(newpr);
-		if (newpr->ndpr_raf_onlink == 0) {
-			newpr->ndpr_vltime = 0;
-			newpr->ndpr_pltime = 0;
-			in6_init_prefix_ltimes(newpr);
-		}
-
-		pr = newpr;
-		NDPR_UNLOCK(newpr);
 	}
 
 	/*
@@ -2206,7 +2190,7 @@ prelist_update(
 
 	/* 5.5.3 (a). Ignore the prefix without the A bit set. */
 	if (!new->ndpr_raf_auto)
-		goto afteraddrconf;
+		goto end;
 
 	/*
 	 * 5.5.3 (b). the link-local prefix should have been ignored in
@@ -2418,8 +2402,6 @@ prelist_update(
 			lck_mtx_unlock(nd6_mutex);
 		}
 	}
-
-afteraddrconf:
 
 end:
 	if (pr != NULL)

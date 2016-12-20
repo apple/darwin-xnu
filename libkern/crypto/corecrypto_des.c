@@ -64,6 +64,7 @@ void des_ecb_encrypt(des_cblock *in, des_cblock *out, des_ecb_key_schedule *ks, 
 /* Triple DES ECB - used by ipv6 (esp_core.c) */
 int des3_ecb_key_sched(des_cblock *key, des3_ecb_key_schedule *ks)
 {
+	int rc;
 	const struct ccmode_ecb *enc = g_crypto_funcs->cctdes_ecb_encrypt;
 	const struct ccmode_ecb *dec = g_crypto_funcs->cctdes_ecb_decrypt;
 
@@ -71,12 +72,10 @@ int des3_ecb_key_sched(des_cblock *key, des3_ecb_key_schedule *ks)
         if((enc->size>sizeof(ks->enc)) || (dec->size>sizeof(ks->dec)))
                 panic("%s: inconsistent size for 3DES-ECB context", __FUNCTION__);
  
-	enc->init(enc, ks->enc, CCDES_KEY_SIZE*3, key);
-	dec->init(dec, ks->dec, CCDES_KEY_SIZE*3, key);
+	rc = enc->init(enc, ks->enc, CCDES_KEY_SIZE*3, key);
+	rc |= dec->init(dec, ks->dec, CCDES_KEY_SIZE*3, key);
 
-	/* The old DES interface could return -1 or -2 for weak keys and wrong parity,
-	 but this was disabled all the time, so we never fail here */
-	return 0;
+	return rc;
 }
 
 /* Simple des - 1 block */

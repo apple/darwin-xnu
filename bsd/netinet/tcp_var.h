@@ -539,7 +539,6 @@ struct tcpcb {
 #define TMPF_SND_MPFAIL		0x00200000 /* Received mapping csum failure */
 #define TMPF_FASTJOIN_SEND	0x00400000 /* Fast join early data send */
 #define TMPF_FASTJOINBY2_SEND	0x00800000 /* Fast join send after 3 WHS */
-#define TMPF_MPCAP_RETRANSMIT	0x01000000 /* Retransmission of 3rd ACK */
 #define TMPF_TFO_REQUEST	0x02000000 /* TFO Requested */
 
 	tcp_seq			t_mpuna;	/* unacknowledged sequence */

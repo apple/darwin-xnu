@@ -5167,9 +5167,10 @@ event_unlock(struct socket *so, int refcount, void *lr)
 	else
 		lr_saved = lr;
 
-	if (refcount)
+	if (refcount) {
+		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
-
+	}
 	if (so->so_usecount < 0) {
 		panic("%s: so=%p usecount=%d lrh= %s\n", __func__,
 		    so, so->so_usecount, solockhistory_nr(so));

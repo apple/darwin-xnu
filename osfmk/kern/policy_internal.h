@@ -133,6 +133,7 @@ extern int  proc_task_role_to_darwin_role(int task_role);
 extern void task_set_main_thread_qos(task_t task, thread_t main_thread);
 extern void proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
                                       ipc_port_t * portwatch_ports, int portwatch_count);
+extern void proc_inherit_task_role(task_t new_task, task_t old_task);
 
 /* IO Throttle tiers */
 #define THROTTLE_LEVEL_NONE     -1

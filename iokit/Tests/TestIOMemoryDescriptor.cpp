@@ -65,6 +65,8 @@ __END_DECLS
 
 #if DEVELOPMENT || DEBUG
 
+extern SInt32 gIOMemoryReferenceCount;
+
 static int IOMultMemoryDescriptorTest(int newValue)
 {
     IOMemoryDescriptor * mds[3];
@@ -123,6 +125,23 @@ ZeroLengthTest(int newValue)
     return (0);
 }
 
+// <rdar://problem/27002624>
+static IOReturn
+BadFixedAllocTest(int newValue)
+{
+    IOBufferMemoryDescriptor * bmd;
+    IOMemoryMap              * map;
+
+    bmd = IOBufferMemoryDescriptor::inTaskWithOptions(NULL,
+                        kIODirectionIn | kIOMemoryPageable, ptoa(1));
+    assert(bmd);
+    map = bmd->createMappingInTask(kernel_task, 0x2000, 0);
+    assert(!map);
+
+    bmd->release();
+    return (0);
+}
+
 // <rdar://problem/26466423>
 static IOReturn
 IODirectionPrepareNoZeroFillTest(int newValue)
@@ -140,9 +159,88 @@ IODirectionPrepareNoZeroFillTest(int newValue)
     return (0);
 }
 
+
+// <rdar://problem/28190483>
+static IOReturn
+IOMemoryMapTest(uint32_t options)
+{
+    IOBufferMemoryDescriptor * bmd;
+    IOMemoryDescriptor       * md;
+    IOMemoryMap              * map;
+    uint32_t    data;
+    user_addr_t p;
+    uint8_t *   p2;
+    int         r;
+    uint64_t    time, nano;
+
+    bmd = IOBufferMemoryDescriptor::inTaskWithOptions(current_task(),
+                        kIODirectionOutIn | kIOMemoryPageable, 0x4018+0x800);
+    assert(bmd);
+    p = (typeof(p)) bmd->getBytesNoCopy();
+    p += 0x800;
+    data = 0x11111111;
+    r = copyout(&data, p, sizeof(data));
+    assert(r == 0);
+    data = 0x22222222;
+    r = copyout(&data, p + 0x1000, sizeof(data));
+    assert(r == 0);
+    data = 0x33333333;
+    r = copyout(&data, p + 0x2000, sizeof(data));
+    assert(r == 0);
+    data = 0x44444444;
+    r = copyout(&data, p + 0x3000, sizeof(data));
+    assert(r == 0);
+
+    md = IOMemoryDescriptor::withAddressRange(p, 0x4018, 
+                                              kIODirectionOut | options,
+                                              current_task());
+    assert(md);
+    time = mach_absolute_time();
+    map = md->map(kIOMapReadOnly);
+    time = mach_absolute_time() - time;
+    assert(map);
+    absolutetime_to_nanoseconds(time, &nano);
+    
+    p2 = (typeof(p2)) map->getVirtualAddress();
+    assert(0x11 == p2[0]);
+    assert(0x22 == p2[0x1000]);
+    assert(0x33 == p2[0x2000]);
+    assert(0x44 == p2[0x3000]);
+
+    data = 0x99999999;
+    r = copyout(&data, p + 0x2000, sizeof(data));
+    assert(r == 0);
+
+    assert(0x11 == p2[0]);
+    assert(0x22 == p2[0x1000]);
+    assert(0x44 == p2[0x3000]);
+    if (kIOMemoryMapCopyOnWrite & options) assert(0x33 == p2[0x2000]);
+    else                                   assert(0x99 == p2[0x2000]);
+
+    IOLog("IOMemoryMapCopyOnWriteTest map(%s) %lld ns\n", 
+                        kIOMemoryMapCopyOnWrite & options ? "kIOMemoryMapCopyOnWrite" : "",
+                        nano);
+
+    map->release();
+    md->release();
+    bmd->release();
+
+    return (kIOReturnSuccess);
+}
+
+static int
+IOMemoryMapCopyOnWriteTest(int newValue)
+{
+    IOMemoryMapTest(0);
+    IOMemoryMapTest(kIOMemoryMapCopyOnWrite);
+    return (0);
+}
+
 int IOMemoryDescriptorTest(int newValue)
 {
     int result;
+
+    IOLog("/IOMemoryDescriptorTest %d\n", (int) gIOMemoryReferenceCount);
 
 #if 0
     if (6 == newValue)
@@ -368,6 +466,9 @@ int IOMemoryDescriptorTest(int newValue)
     }
 #endif
 
+    result = IOMemoryMapCopyOnWriteTest(newValue);
+    if (result) return (result);
+
     result = IOMultMemoryDescriptorTest(newValue);
     if (result) return (result);
 
@@ -377,13 +478,19 @@ int IOMemoryDescriptorTest(int newValue)
     result = IODirectionPrepareNoZeroFillTest(newValue);
     if (result) return (result);
 
+    result = BadFixedAllocTest(newValue);
+    if (result) return (result);
+
     IOGeneralMemoryDescriptor * md;
     vm_offset_t data[2];
     vm_size_t  bsize = 16*1024*1024;
     vm_size_t  srcsize, srcoffset, mapoffset, size;
     kern_return_t kr;
 
+    data[0] = data[1] = 0;
     kr = vm_allocate(kernel_map, &data[0], bsize, VM_FLAGS_ANYWHERE);
+    assert(KERN_SUCCESS == kr);
+
     vm_inherit(kernel_map, data[0] + ptoa(1), ptoa(1), VM_INHERIT_NONE);
     vm_inherit(kernel_map, data[0] + ptoa(16), ptoa(4), VM_INHERIT_NONE);
 
@@ -405,6 +512,7 @@ int IOMemoryDescriptorTest(int newValue)
 	    bzero(&ranges[0], sizeof(ranges));
 	    ranges[0].address = data[0] + srcoffset;
 	    ranges[0].length  = srcsize;
+	    ranges[1].address = ranges[2].address = data[0];
 
 	    if (srcsize > ptoa(5))
 	    {
@@ -431,7 +539,7 @@ int IOMemoryDescriptorTest(int newValue)
 	    assert(md);
 
 	    IOLog("IOMemoryDescriptor::withAddressRanges [0x%lx @ 0x%lx]\n[0x%llx, 0x%llx],\n[0x%llx, 0x%llx],\n[0x%llx, 0x%llx]\n", 
-	    	    (long) srcsize, (long) srcoffset,
+		    (long) srcsize, (long) srcoffset,
 		    (long long) ranges[0].address - data[0], (long long) ranges[0].length,
 		    (long long) ranges[1].address - data[0], (long long) ranges[1].length,
 		    (long long) ranges[2].address - data[0], (long long) ranges[2].length);
@@ -505,6 +613,8 @@ int IOMemoryDescriptorTest(int newValue)
 
     vm_deallocate(kernel_map, data[0], bsize);
 //    vm_deallocate(kernel_map, data[1], size);
+
+    IOLog("IOMemoryDescriptorTest/ %d\n", (int) gIOMemoryReferenceCount);
 
     return (0);
 }

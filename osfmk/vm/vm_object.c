@@ -8764,11 +8764,13 @@ vm_page_handle_prio_inversion(vm_object_t o, vm_page_t m)
 		for(i=0; i < num_pages; i++) {
 			if(UPL_PAGE_PRESENT(pl,i) && VM_PAGE_GET_PHYS_PAGE(m) == pl[i].phys_addr) {
 				if ((upl->flags & UPL_DECMP_REQ) && upl->decmp_io_upl) {
-                        		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_PAGE_EXPEDITE)) | DBG_FUNC_NONE, upl->upl_creator, m, upl, upl->upl_priority, 0);
+					KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_PAGE_EXPEDITE)) | DBG_FUNC_NONE, VM_KERNEL_UNSLIDE_OR_PERM(upl->upl_creator), VM_KERNEL_UNSLIDE_OR_PERM(m),
+						VM_KERNEL_UNSLIDE_OR_PERM(upl), upl->upl_priority, 0);
 					vm_decmp_upl_reprioritize(upl, cur_tier);
 					break;
 				}
-				KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_PAGE_EXPEDITE)) | DBG_FUNC_NONE, upl->upl_creator, m, upl->upl_reprio_info[i], upl->upl_priority, 0);
+				KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_PAGE_EXPEDITE)) | DBG_FUNC_NONE, VM_KERNEL_UNSLIDE_OR_PERM(upl->upl_creator), VM_KERNEL_UNSLIDE_OR_PERM(m),
+					upl->upl_reprio_info[i], upl->upl_priority, 0);
 				if (UPL_REPRIO_INFO_BLKNO(upl, i) != 0 && UPL_REPRIO_INFO_LEN(upl, i) != 0) 
 					vm_page_request_reprioritize(o, UPL_REPRIO_INFO_BLKNO(upl, i), UPL_REPRIO_INFO_LEN(upl, i), cur_tier);
                                 break;
@@ -8787,7 +8789,7 @@ vm_page_sleep(vm_object_t o, vm_page_t m, int interruptible)
 {
 	wait_result_t ret;
 
-	KERNEL_DEBUG((MACHDBG_CODE(DBG_MACH_VM, VM_PAGE_SLEEP)) | DBG_FUNC_START, o, m, 0, 0, 0);	
+	KERNEL_DEBUG((MACHDBG_CODE(DBG_MACH_VM, VM_PAGE_SLEEP)) | DBG_FUNC_START, o, m, 0, 0, 0);
 	
 	if (o->io_tracking && ((m->busy == TRUE) || (m->cleaning == TRUE) || VM_PAGE_WIRED(m))) {
 		/* 

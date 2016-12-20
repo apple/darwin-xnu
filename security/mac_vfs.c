@@ -1199,7 +1199,7 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 				int reason_error = 0;
 				int kcdata_error = 0;
 
-				if ((reason_error = os_reason_alloc_buffer(reason, kcdata_estimate_required_buffer_size
+				if ((reason_error = os_reason_alloc_buffer_noblock(reason, kcdata_estimate_required_buffer_size
 																		 (1, fatal_failure_desc_len))) == 0 &&
 					 (kcdata_error = kcdata_get_memory_addr(&reason->osr_kcd_descriptor,
 																		 EXIT_REASON_USER_DESC, fatal_failure_desc_len,

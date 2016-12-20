@@ -130,9 +130,10 @@ extern void consider_machine_collect(void);
 
 extern void	machine_thread_going_on_core(thread_t	new_thread,
 					int		urgency,
-					uint64_t	sched_latency);
+					uint64_t	sched_latency,
+					uint64_t	dispatch_time);
 
-extern void machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating);
+extern void machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating, uint64_t last_dispatch);
 
 extern void machine_max_runnable_latency(uint64_t bg_max_latency,
 										 uint64_t default_max_latency,

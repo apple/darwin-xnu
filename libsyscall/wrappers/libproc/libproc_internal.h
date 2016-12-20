@@ -31,6 +31,16 @@
 
 __BEGIN_DECLS
 
+/* CPU monitor action */
+#define PROC_SETCPU_ACTION_NONE		0
+#define PROC_SETCPU_ACTION_THROTTLE	1
+
+int proc_setcpu_percentage(pid_t pid, int action, int percentage) __OSX_AVAILABLE_STARTING(__MAC_10_12_2, __IPHONE_5_0);
+int proc_clear_cpulimits(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_12_2, __IPHONE_5_0);
+
+/* CPU limits, applies to current thread only. 0% unsets limit */
+int proc_setthread_cpupercent(uint8_t percentage, uint32_t ms_refill) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_5_0);
+
 
 /* resume the process suspend due to low VM resource */
 int proc_clear_vmpressure(pid_t pid);

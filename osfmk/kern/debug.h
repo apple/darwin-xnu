@@ -259,6 +259,8 @@ extern char *debug_buf_stackshot_end;
 extern unsigned int	debug_boot_arg;
 extern unsigned char *kernel_uuid;
 extern char kernel_uuid_string[];
+extern char   panic_disk_error_description[];
+extern size_t panic_disk_error_description_size;
 
 #ifdef MACH_KERNEL_PRIVATE
 
@@ -310,7 +312,7 @@ extern void	panic_init(void);
 int	packA(char *inbuf, uint32_t length, uint32_t buflen);
 void	unpackA(char *inbuf, uint32_t length);
 
-void	panic_display_system_configuration(void);
+void	panic_display_system_configuration(boolean_t launchd_exit);
 void	panic_display_zprint(void);
 void	panic_display_kernel_aslr(void);
 void	panic_display_hibb(void);

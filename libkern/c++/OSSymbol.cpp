@@ -501,7 +501,7 @@ const OSSymbol *OSSymbol::withCString(const char *cString)
 	    newSymb->OSString::free();
     }
     
-    oldSymb->retain();	// Retain the old symbol before releasing the lock.
+    if (oldSymb) oldSymb->retain();    // Retain the old symbol before releasing the lock.
 
     pool->openGate();
     return oldSymb;

@@ -39,6 +39,7 @@
 #include <sys/protosw.h>
 #include <sys/domain.h>
 #include <sys/mbuf.h>
+#include <sys/mcache.h>
 #include <sys/fcntl.h>
 #include <sys/filio.h>
 #include <sys/uio_internal.h>
@@ -108,6 +109,8 @@ sock_accept(socket_t sock, struct sockaddr *from, int fromlen, int flags,
 
 	new_so = TAILQ_FIRST(&sock->so_comp);
 	TAILQ_REMOVE(&sock->so_comp, new_so, so_list);
+	new_so->so_state &= ~SS_COMP;
+	new_so->so_head = NULL;
 	sock->so_qlen--;
 
 	/*
@@ -122,7 +125,7 @@ sock_accept(socket_t sock, struct sockaddr *from, int fromlen, int flags,
 		 * again once we're done with the filter(s).
 		 */
 		socket_unlock(sock, 0);
-		if ((error = soacceptfilter(new_so)) != 0) {
+		if ((error = soacceptfilter(new_so, sock)) != 0) {
 			/* Drop reference on listening socket */
 			sodereference(sock);
 			return (error);
@@ -136,8 +139,6 @@ sock_accept(socket_t sock, struct sockaddr *from, int fromlen, int flags,
 		socket_lock(new_so, 1);
 	}
 
-	new_so->so_state &= ~SS_COMP;
-	new_so->so_head = NULL;
 	(void) soacceptlock(new_so, &sa, 0);
 
 	socket_unlock(sock, 1);	/* release the head */
@@ -961,6 +962,7 @@ sock_release(socket_t sock)
 		soclose_locked(sock);
 	} else {
 		/* remove extra reference holding the socket */
+		VERIFY(sock->so_usecount > 1);
 		sock->so_usecount--;
 	}
 	socket_unlock(sock, 1);

@@ -5399,14 +5399,25 @@ tcp_compute_rtt(struct tcpcb *tp, struct tcpopt *to, struct tcphdr *th)
 }
 
 /*
- * Collect new round-trip time estimate
- * and update averages and current timeout.
+ * Collect new round-trip time estimate and update averages and
+ * current timeout.
  */
 static void
 tcp_xmit_timer(struct tcpcb *tp, int rtt,
 	u_int32_t tsecr, tcp_seq th_ack)
 {
 	int delta;
+
+	/*
+	 * On AWDL interface, the initial RTT measurement on SYN
+	 * can be wrong due to peer caching. Avoid the first RTT
+	 * measurement as it might skew up the RTO.
+	 * <rdar://problem/28739046>
+	 */
+	if (tp->t_inpcb->inp_last_outifp != NULL &&
+	    (tp->t_inpcb->inp_last_outifp->if_eflags & IFEF_AWDL) &&
+	    th_ack == tp->iss + 1)
+		return;
 
 	if (tp->t_flagsext & TF_RECOMPUTE_RTT) {
 		if (SEQ_GT(th_ack, tp->snd_una) &&
@@ -5903,7 +5914,6 @@ tcp_newreno_partial_ack(struct tcpcb *tp, struct tcphdr *th)
 		else
 			tp->snd_cwnd = 0;
 		tp->snd_cwnd += tp->t_maxseg;
-
 }
 
 /*
@@ -5970,7 +5980,6 @@ tcp_dropdropablreq(struct socket *head)
 		cur_cnt = 0;
 	}
 
-
 	qlen = head->so_incqlen;
 	if (rnd == 0)
 		rnd = RandomULong();
@@ -6022,7 +6031,6 @@ tcp_dropdropablreq(struct socket *head)
 			}
 		}
 		so = sonext;
-
 	}
 	if (so == NULL) {
 		return (0);
@@ -6043,12 +6051,15 @@ found_victim:
 	}
 
 	TAILQ_REMOVE(&head->so_incomp, so, so_list);
+	head->so_incqlen--;
+	head->so_qlen--;
+	so->so_state &= ~SS_INCOMP;
+	so->so_flags |= SOF_OVERFLOW;
+	so->so_head = NULL;
 	tcp_unlock(head, 0, 0);
 
 	lck_mtx_assert(&inp->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
 	tp = sototcpcb(so);
-	so->so_flags |= SOF_OVERFLOW;
-	so->so_head = NULL;
 
 	tcp_close(tp);
 	if (inp->inp_wantcnt > 0 && inp->inp_wantcnt != WNT_STOPUSING) {
@@ -6059,6 +6070,7 @@ found_victim:
 		 * be garbage collected later.
 		 * Release the reference held for so_incomp queue
 		 */
+		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
 		tcp_unlock(so, 1, 0);
 	} else {
@@ -6073,6 +6085,7 @@ found_victim:
 
 		tcp_lock(so, 0, 0);
 		/* Release the reference held for so_incomp queue */
+		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
 
 		if (so->so_usecount != 1 ||
@@ -6086,8 +6099,8 @@ found_victim:
 			 */
 			tcp_unlock(so, 1, 0);
 		} else {
-
 			/* Drop the reference held for this function */
+			VERIFY(so->so_usecount > 0);
 			so->so_usecount--;
 
 			in_pcbdispose(inp);
@@ -6097,8 +6110,6 @@ found_victim:
 	tcpstat.tcps_drops++;
 
 	tcp_lock(head, 0, 0);
-	head->so_incqlen--;
-	head->so_qlen--;
 	return(1);
 }
 

@@ -636,7 +636,8 @@ devfs_close(struct vnop_close_args *ap)
 	if (vnode_isinuse(vp, 1)) {
 	    DEVFS_LOCK();
 	    dnp = VTODN(vp);
-	    dn_times_now(dnp, 0);
+	    if (dnp)
+	        dn_times_now(dnp, 0);
 	    DEVFS_UNLOCK();
 	}
 	return (0);
@@ -656,7 +657,8 @@ devfsspec_close(struct vnop_close_args *ap)
 	if (vnode_isinuse(vp, 0)) {
 	    DEVFS_LOCK();
 	    dnp = VTODN(vp);
-	    dn_times_now(dnp, 0);
+	    if (dnp)
+	        dn_times_now(dnp, 0);
 	    DEVFS_UNLOCK();
 	}
 

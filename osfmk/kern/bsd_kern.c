@@ -308,12 +308,13 @@ int is_64signalregset(void)
 
 /*
  * Swap in a new map for the task/thread pair; the old map reference is
- * returned.
+ * returned. Also does a pmap switch if thread provided is current thread.
  */
 vm_map_t
-swap_task_map(task_t task, thread_t thread, vm_map_t map, boolean_t doswitch)
+swap_task_map(task_t task, thread_t thread, vm_map_t map)
 {
 	vm_map_t old_map;
+	boolean_t doswitch = (thread == current_thread()) ? TRUE : FALSE;
 
 	if (task != thread->task)
 		panic("swap_task_map");

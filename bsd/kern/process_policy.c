@@ -243,6 +243,12 @@ handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t targ
 	}
 #endif
 
+	// on macOS tasks can only set and clear their own CPU limits
+	if ((action == PROC_POLICY_ACTION_APPLY || action == PROC_POLICY_ACTION_RESTORE)
+	     && proc != current_proc()) {
+		return (EPERM);
+	}
+
 	switch (action) {
 		case PROC_POLICY_ACTION_GET: 
 			error = proc_get_task_ruse_cpu(proc->task, &cpuattr.ppattr_cpu_attr,

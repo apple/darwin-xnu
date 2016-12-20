@@ -103,7 +103,7 @@
 #include <netkey/keysock.h>
 #include <netkey/key_debug.h>
 #include <stdarg.h>
-
+#include <libkern/crypto/rand.h>
 
 #include <netinet6/ipsec.h>
 #if INET6
@@ -4245,7 +4245,11 @@ key_setsaval(
 			}
 			
 			/* initialize */
-			key_randomfill(sav->iv, sav->ivlen);
+			if (sav->alg_enc == SADB_X_EALG_AES_GCM) {
+				bzero(sav->iv, sav->ivlen);
+			} else {
+				key_randomfill(sav->iv, sav->ivlen);
+			}
 #endif
 			break;
 		case SADB_SATYPE_AH:
@@ -4495,7 +4499,11 @@ key_setsaval2(struct secasvar      *sav,
 				}
 			}
 			/* initialize */
-			key_randomfill(sav->iv, sav->ivlen);
+			if (sav->alg_enc == SADB_X_EALG_AES_GCM) {
+				bzero(sav->iv, sav->ivlen);
+			} else {
+				key_randomfill(sav->iv, sav->ivlen);
+			}
 		}
 #endif
 	}
@@ -6315,8 +6323,7 @@ key_randomfill(
 			   size_t l)
 {
 #ifdef __APPLE__
-	
-	read_random(p, (u_int)l);
+	cc_rand_generate(p, l);	
 #else
 	size_t n;
 	u_int32_t v;

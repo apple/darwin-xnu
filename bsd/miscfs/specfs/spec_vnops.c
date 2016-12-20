@@ -90,6 +90,7 @@
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
 #include <kern/policy_internal.h>
+#include <kern/timer_call.h>
 
 #include <pexpert/pexpert.h>
 
@@ -237,6 +238,7 @@ int	lowpri_throttle_enabled = 1;
 static void throttle_info_end_io_internal(struct _throttle_io_info_t *info, int throttle_level);
 static int throttle_info_update_internal(struct _throttle_io_info_t *info, uthread_t ut, int flags, boolean_t isssd, boolean_t inflight, struct bufattr *bap);
 static int throttle_get_thread_throttle_level(uthread_t ut);
+static int throttle_get_thread_throttle_level_internal(uthread_t ut, int io_tier);
 
 /*
  * Trivial lookup routine that always fails.
@@ -941,7 +943,7 @@ throttle_timer_start(struct _throttle_io_info_t *info, boolean_t update_io_count
 
 			if (!TAILQ_EMPTY(&info->throttle_uthlist[level])) {
 
-				if (elapsed_msecs < (uint64_t)throttle_windows_msecs[level] || info->throttle_inflight_count[level]) {
+				if (elapsed_msecs < (uint64_t)throttle_windows_msecs[level] || info->throttle_inflight_count[throttle_level]) {
 					/*
 					 * we had an I/O occur at a higher priority tier within
 					 * this tier's throttle window
@@ -1556,16 +1558,39 @@ throttle_get_passive_io_policy(uthread_t *ut)
 static int
 throttle_get_thread_throttle_level(uthread_t ut)
 {
-	int thread_throttle_level;
+	uthread_t *ut_p = (ut == NULL) ? &ut : NULL;
+	int io_tier = throttle_get_io_policy(ut_p);
 
-	if (ut == NULL)
-		ut = get_bsdthread_info(current_thread());
+	return throttle_get_thread_throttle_level_internal(ut, io_tier);
+}
 
-	thread_throttle_level = proc_get_effective_thread_policy(ut->uu_thread, TASK_POLICY_IO);
+/*
+ * Return a throttle level given an existing I/O tier (such as returned by throttle_get_io_policy)
+ */
+static int
+throttle_get_thread_throttle_level_internal(uthread_t ut, int io_tier) {
+	int thread_throttle_level = io_tier;
+	int user_idle_level;
+
+	assert(ut != NULL);
 
 	/* Bootcache misses should always be throttled */
 	if (ut->uu_throttle_bc == TRUE)
 		thread_throttle_level = THROTTLE_LEVEL_TIER3;
+
+	/*
+	 * Issue tier3 I/O as tier2 when the user is idle
+	 * to allow maintenance tasks to make more progress.
+	 *
+	 * Assume any positive idle level is enough... for now it's
+	 * only ever 0 or 128 but this is not defined anywhere.
+	 */
+	if (thread_throttle_level >= THROTTLE_LEVEL_TIER3) {
+		user_idle_level = timer_get_user_idle_level();
+		if (user_idle_level > 0) {
+			thread_throttle_level--;
+		}
+	}
 
 	return (thread_throttle_level);
 }
@@ -1899,6 +1924,7 @@ void throttle_info_end_io(buf_t bp) {
 	mount_t mp;
 	struct bufattr *bap;
 	struct _throttle_io_info_t *info;
+	int io_tier;
 
 	bap = &bp->b_attr;
 	if (!ISSET(bap->ba_flags, BA_STRATEGY_TRACKED_IO)) {
@@ -1913,7 +1939,12 @@ void throttle_info_end_io(buf_t bp) {
 		info = &_throttle_io_info[LOWPRI_MAX_NUM_DEV - 1];
 	}
 
-	throttle_info_end_io_internal(info, GET_BUFATTR_IO_TIER(bap));
+	io_tier = GET_BUFATTR_IO_TIER(bap);
+	if (ISSET(bap->ba_flags, BA_IO_TIER_UPGRADE)) {
+		io_tier--;
+	}
+
+	throttle_info_end_io_internal(info, io_tier);
 }
 
 /*
@@ -1947,6 +1978,9 @@ int throttle_info_update_internal(struct _throttle_io_info_t *info, uthread_t ut
 
 	if (bap && inflight && !ut->uu_throttle_bc) {
 		thread_throttle_level = GET_BUFATTR_IO_TIER(bap);
+		if (ISSET(bap->ba_flags, BA_IO_TIER_UPGRADE)) {
+			thread_throttle_level--;
+		}
 	} else {
 		thread_throttle_level = throttle_get_thread_throttle_level(ut);
 	}
@@ -2139,6 +2173,7 @@ spec_strategy(struct vnop_strategy_args *ap)
 	struct _throttle_io_info_t *throttle_info;
 	boolean_t isssd = FALSE;
 	boolean_t inflight = FALSE;
+	boolean_t upgrade = FALSE;
 	int code = 0;
 
 	proc_t curproc = current_proc();
@@ -2150,6 +2185,21 @@ spec_strategy(struct vnop_strategy_args *ap)
 
 	io_tier = throttle_get_io_policy(&ut);
 	passive = throttle_get_passive_io_policy(&ut);
+
+	/*
+	 * Mark if the I/O was upgraded by throttle_get_thread_throttle_level
+	 * while preserving the original issued tier (throttle_get_io_policy
+	 * does not return upgraded tiers)
+	 */
+	if (mp && io_tier > throttle_get_thread_throttle_level_internal(ut, io_tier)) {
+#if CONFIG_IOSCHED
+		if (!(mp->mnt_ioflags & MNT_IOFLAGS_IOSCHED_SUPPORTED)) {
+			upgrade = TRUE;
+		}
+#else /* CONFIG_IOSCHED */
+		upgrade = TRUE;
+#endif /* CONFIG_IOSCHED */
+	}
 
 	if (bp->b_flags & B_META)
 		bap->ba_flags |= BA_META;
@@ -2211,6 +2261,11 @@ spec_strategy(struct vnop_strategy_args *ap)
 
 	if (bap->ba_flags & BA_NOCACHE)
 		code |= DKIO_NOCACHE;
+
+	if (upgrade) {
+		code |= DKIO_TIER_UPGRADE;
+		SET(bap->ba_flags, BA_IO_TIER_UPGRADE);
+	}
 
 	if (kdebug_enable) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,

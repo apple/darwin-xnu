@@ -116,6 +116,7 @@
 #include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
 #include <vm/vm_purgeable_internal.h>
+#include <vm/vm_init.h>
 
 vm_size_t        upl_offset_to_pagelist = 0;
 
@@ -123,6 +124,8 @@ vm_size_t        upl_offset_to_pagelist = 0;
 #include <vm/cpm.h>
 #endif	/* VM_CPM */
 
+lck_grp_t	dynamic_pager_control_port_lock_group;
+decl_lck_mtx_data(, dynamic_pager_control_port_lock);
 ipc_port_t	dynamic_pager_control_port=NULL;
 
 /*
@@ -3327,19 +3330,30 @@ mach_memory_entry_range_op(
 	return kr;
 }
 
+static void dp_control_port_init(void)
+{
+	lck_grp_init(&dynamic_pager_control_port_lock_group,"dp_control_port", LCK_GRP_ATTR_NULL);
+	lck_mtx_init(&dynamic_pager_control_port_lock, &dynamic_pager_control_port_lock_group, LCK_ATTR_NULL);
+}
 
 kern_return_t
 set_dp_control_port(
 	host_priv_t	host_priv,
 	ipc_port_t	control_port)	
 {
-        if (host_priv == HOST_PRIV_NULL)
+	ipc_port_t old_port;
+
+	if (host_priv == HOST_PRIV_NULL)
                 return (KERN_INVALID_HOST);
 
-	if (IP_VALID(dynamic_pager_control_port))
-		ipc_port_release_send(dynamic_pager_control_port);
-
+	lck_mtx_lock(&dynamic_pager_control_port_lock);
+	old_port = dynamic_pager_control_port;
 	dynamic_pager_control_port = control_port;
+	lck_mtx_unlock(&dynamic_pager_control_port_lock);
+
+	if (IP_VALID(old_port))
+		ipc_port_release_send(old_port);
+
 	return KERN_SUCCESS;
 }
 
@@ -3348,10 +3362,13 @@ get_dp_control_port(
 	host_priv_t	host_priv,
 	ipc_port_t	*control_port)	
 {
-        if (host_priv == HOST_PRIV_NULL)
+	if (host_priv == HOST_PRIV_NULL)
                 return (KERN_INVALID_HOST);
 
+	lck_mtx_lock(&dynamic_pager_control_port_lock);
 	*control_port = ipc_port_copy_send(dynamic_pager_control_port);
+	lck_mtx_unlock(&dynamic_pager_control_port_lock);
+
 	return KERN_SUCCESS;
 	
 }
@@ -3612,6 +3629,11 @@ vm_map_get_phys_page(
 	return phys_page;
 }
 
+void
+vm_user_init(void)
+{
+	dp_control_port_init();
+}
 
 #if 0
 kern_return_t kernel_object_iopl_request(	/* forward */

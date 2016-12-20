@@ -293,7 +293,7 @@ _net_del_domain:_net_del_domain_old
 _net_del_proto:_net_del_proto_old
 _netboot_root
 _os_reason_create
-_os_reason_alloc_buffer
+_os_reason_alloc_buffer_noblock
 _os_reason_get_kcdata_descriptor
 _os_reason_ref
 _os_reason_free

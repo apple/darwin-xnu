@@ -493,15 +493,12 @@ kern_stack_snapshot_internal(int stackshot_config_version, void *stackshot_confi
 		}
 	}
 
-	/*
-	 * We only support the KDP fault path and delta snapshots and tailspin mode with the kcdata format
-	 */
-	if (!(flags & STACKSHOT_KCDATA_FORMAT)) {
+	if (!((flags & STACKSHOT_KCDATA_FORMAT) || (flags & STACKSHOT_RETRIEVE_EXISTING_BUFFER))) {
 		return KERN_NOT_SUPPORTED;
 	}
 
 	/*
-	 * If we're not saving the buffer in the kernel pointer, we need places to copy into.
+	 * If we're not saving the buffer in the kernel pointer, we need a place to copy into.
 	 */
 	if ((!out_buffer_addr || !out_size_addr) && !(flags & STACKSHOT_SAVE_IN_KERNEL_BUFFER)) {
 		return KERN_INVALID_ARGUMENT;

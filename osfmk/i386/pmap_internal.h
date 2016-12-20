@@ -385,9 +385,9 @@ static inline void pmap_pv_throttle(__unused pmap_t p) {
 	(IS_MANAGED_PAGE(x) && (pmap_phys_attributes[x] & PHYS_INTERNAL))
 #define IS_REUSABLE_PAGE(x)			\
 	(IS_MANAGED_PAGE(x) && (pmap_phys_attributes[x] & PHYS_REUSABLE))
-#define IS_ALTACCT_PAGE(x)				\
+#define IS_ALTACCT_PAGE(x,pve)				\
 	(IS_MANAGED_PAGE((x)) &&			\
-	 (PVE_IS_ALTACCT_PAGE(&pv_head_table[(x)])))
+	 (PVE_IS_ALTACCT_PAGE((pve))))
 
 /*
  *	Physical page attributes.  Copy bits from PTE definition.
@@ -661,7 +661,7 @@ pmap_classify_pagetable_corruption(pmap_t pmap, vm_map_offset_t vaddr, ppnum_t *
 	uint32_t	bitdex;
 	pmap_t pvpmap = pv_h->pmap;
 	vm_map_offset_t pvva = PVE_VA(pv_h);
-	vm_map_offset_t pve_flags = PVE_FLAGS(pv_h);
+	vm_map_offset_t pve_flags;
 	boolean_t ppcd = FALSE;
 	boolean_t is_ept;
 
@@ -684,12 +684,9 @@ pmap_classify_pagetable_corruption(pmap_t pmap, vm_map_offset_t vaddr, ppnum_t *
 	do {
 		if ((popcnt1((uintptr_t)pv_e->pmap ^ (uintptr_t)pmap) && PVE_VA(pv_e) == vaddr) ||
 		    (pv_e->pmap == pmap && popcnt1(PVE_VA(pv_e) ^ vaddr))) {
+			pve_flags = PVE_FLAGS(pv_e);
 			pv_e->pmap = pmap;
-			if (pv_e == pv_h) {
-				pv_h->va_and_flags = vaddr | pve_flags;
-			} else {
-				pv_e->va_and_flags = vaddr;
-			}
+			pv_h->va_and_flags = vaddr | pve_flags;
 			suppress_reason = PV_BITFLIP;
 			action = PMAP_ACTION_RETRY;
 			goto pmap_cpc_exit;
@@ -763,8 +760,9 @@ pmap_cpc_exit:
 static inline __attribute__((always_inline)) pv_hashed_entry_t
 pmap_pv_remove(pmap_t		pmap,
 	       vm_map_offset_t	vaddr,
-    		ppnum_t		*ppnp,
-		pt_entry_t	*pte) 
+	       ppnum_t		*ppnp,
+	       pt_entry_t	*pte,
+	       boolean_t	*was_altacct)
 {
 	pv_hashed_entry_t       pvh_e;
 	pv_rooted_entry_t	pv_h;
@@ -773,6 +771,7 @@ pmap_pv_remove(pmap_t		pmap,
 	uint32_t                pv_cnt;
 	ppnum_t			ppn;
 
+	*was_altacct = FALSE;
 pmap_pv_remove_retry:
 	ppn = *ppnp;
 	pvh_e = PV_HASHED_ENTRY_NULL;
@@ -794,6 +793,7 @@ pmap_pv_remove_retry:
 	}
 
 	if (PVE_VA(pv_h) == vaddr && pv_h->pmap == pmap) {
+		*was_altacct = IS_ALTACCT_PAGE(ppn_to_pai(*ppnp), pv_h);
 		/*
 	         * Header is the pv_rooted_entry.
 		 * We can't free that. If there is a queued
@@ -803,8 +803,6 @@ pmap_pv_remove_retry:
 	         */
 		pvh_e = (pv_hashed_entry_t) queue_next(&pv_h->qlink);
 		if (pv_h != (pv_rooted_entry_t) pvh_e) {
-			vm_map_offset_t	pve_flags;
-
 			/*
 			 * Entry queued to root, remove this from hash
 			 * and install as new root.
@@ -822,8 +820,7 @@ pmap_pv_remove_retry:
 			pmap_pvh_unlink(pvh_e);
 			UNLOCK_PV_HASH(pvhash_idx);
 			pv_h->pmap = pvh_e->pmap;
-			pve_flags = PVE_FLAGS(pv_h);
-			pv_h->va_and_flags = PVE_VA(pvh_e) | pve_flags;
+			pv_h->va_and_flags = pvh_e->va_and_flags;
 			/* dispose of pvh_e */
 		} else {
 			/* none queued after rooted */
@@ -877,6 +874,8 @@ pmap_pv_remove_retry:
 			}
 		}
 
+		*was_altacct = IS_ALTACCT_PAGE(ppn_to_pai(*ppnp), pvh_e);
+
 		pmap_pv_hashlist_cnts += pv_cnt;
 		if (pmap_pv_hashlist_max < pv_cnt)
 			pmap_pv_hashlist_max = pv_cnt;
@@ -888,6 +887,55 @@ pmap_pv_remove_exit:
 	return pvh_e;
 }
 
+static inline __attribute__((always_inline)) boolean_t
+pmap_pv_is_altacct(
+	pmap_t		pmap,
+	vm_map_offset_t	vaddr,
+	ppnum_t		ppn)
+{
+	pv_hashed_entry_t       pvh_e;
+	pv_rooted_entry_t	pv_h;
+	int                     pvhash_idx;
+	boolean_t		is_altacct;
+
+	pvh_e = PV_HASHED_ENTRY_NULL;
+	pv_h = pai_to_pvh(ppn_to_pai(ppn));
+
+	if (__improbable(pv_h->pmap == PMAP_NULL)) {
+		return FALSE;
+	}
+
+	if (PVE_VA(pv_h) == vaddr && pv_h->pmap == pmap) {
+		/*
+	         * Header is the pv_rooted_entry.
+	         */
+		return IS_ALTACCT_PAGE(ppn, pv_h);
+	}
+
+	CHK_NPVHASH();
+	pvhash_idx = pvhashidx(pmap, vaddr);
+	LOCK_PV_HASH(pvhash_idx);
+	pvh_e = *(pvhash(pvhash_idx));
+	if (PV_HASHED_ENTRY_NULL == pvh_e) {
+		panic("Possible memory corruption: pmap_pv_is_altacct(%p,0x%llx,0x%x): empty hash",
+		      pmap, vaddr, ppn);
+	}
+	while (PV_HASHED_ENTRY_NULL != pvh_e) {
+		if (pvh_e->pmap == pmap &&
+		    PVE_VA(pvh_e) == vaddr &&
+		    pvh_e->ppn == ppn)
+			break;
+		pvh_e = pvh_e->nexth;
+	}
+	if (PV_HASHED_ENTRY_NULL == pvh_e) {
+		is_altacct = FALSE;
+	} else {
+		is_altacct = IS_ALTACCT_PAGE(ppn, pvh_e);
+	}
+	UNLOCK_PV_HASH(pvhash_idx);
+
+	return is_altacct;
+}
 
 extern int 	pt_fake_zone_index;
 static inline void

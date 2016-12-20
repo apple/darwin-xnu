@@ -428,15 +428,8 @@ noreplaycheck:
 
 	if (algo->finalizedecrypt)
         {
-	    unsigned char tag[algo->icvlen];
-	    if ((*algo->finalizedecrypt)(sav, tag, algo->icvlen)) {
+	    if ((*algo->finalizedecrypt)(sav, saved_icv, algo->icvlen)) {
 		ipseclog((LOG_ERR, "packet decryption ICV failure\n"));
-		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
-		KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 1,0,0,0,0);
-		goto bad;
-	    }
-	    if (cc_cmp_safe(algo->icvlen, saved_icv, tag)) {	  
-		ipseclog((LOG_ERR, "packet decryption ICV mismatch\n"));
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 1,0,0,0,0);
 		goto bad;
@@ -1021,15 +1014,8 @@ noreplaycheck:
 
 	if (algo->finalizedecrypt)
         {
-	    unsigned char tag[algo->icvlen];
-	    if ((*algo->finalizedecrypt)(sav, tag, algo->icvlen)) {
+	    if ((*algo->finalizedecrypt)(sav, saved_icv, algo->icvlen)) {
 		ipseclog((LOG_ERR, "packet decryption ICV failure\n"));
-		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
-		KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 1,0,0,0,0);
-		goto bad;
-	    }
-	    if (cc_cmp_safe(algo->icvlen, saved_icv, tag)) {	  
-		ipseclog((LOG_ERR, "packet decryption ICV mismatch\n"));
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 1,0,0,0,0);
 		goto bad;

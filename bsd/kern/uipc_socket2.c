@@ -193,7 +193,6 @@ soisconnecting(struct socket *so)
 void
 soisconnected(struct socket *so)
 {
-	struct socket *head = so->so_head;
 
 	so->so_state &= ~(SS_ISCONNECTING|SS_ISDISCONNECTING|SS_ISCONFIRMING);
 	so->so_state |= SS_ISCONNECTED;
@@ -202,23 +201,38 @@ soisconnected(struct socket *so)
 
 	sflt_notify(so, sock_evt_connected, NULL);
 
-	if (head && (so->so_state & SS_INCOMP)) {
-		so->so_state &= ~SS_INCOMP;
-		so->so_state |= SS_COMP;
+	if (so->so_head != NULL && (so->so_state & SS_INCOMP)) {
+		struct socket *head = so->so_head;
+		int locked = 0;
+		
+		/*
+		 * Enforce lock order when the protocol has per socket locks
+		 */
 		if (head->so_proto->pr_getlock != NULL) {
 			socket_unlock(so, 0);
 			socket_lock(head, 1);
+			socket_lock(so, 0);
+			locked = 1;
 		}
-		postevent(head, 0, EV_RCONN);
+		if (so->so_head == head && (so->so_state & SS_INCOMP)) {
+			so->so_state &= ~SS_INCOMP;
+			so->so_state |= SS_COMP;
 		TAILQ_REMOVE(&head->so_incomp, so, so_list);
+			TAILQ_INSERT_TAIL(&head->so_comp, so, so_list);
 		head->so_incqlen--;
-		TAILQ_INSERT_TAIL(&head->so_comp, so, so_list);
+		
+			if (locked != 0)
+				socket_unlock(so, 0);
+		
+			postevent(head, 0, EV_RCONN);
 		sorwakeup(head);
 		wakeup_one((caddr_t)&head->so_timeo);
-		if (head->so_proto->pr_getlock != NULL) {
-			socket_unlock(head, 1);
+
+			if (locked != 0)
 			socket_lock(so, 0);
 		}
+		if (locked != 0)
+			socket_unlock(head, 1);
 	} else {
 		postevent(so, 0, EV_WCONN);
 		wakeup((caddr_t)&so->so_timeo);
@@ -235,7 +249,6 @@ socanwrite(struct socket *so)
 	return ((so->so_state & SS_ISCONNECTED) ||
 	       !(so->so_proto->pr_flags & PR_CONNREQUIRED) ||
 	       (so->so_flags1 & SOF1_PRECONNECT_DATA));
-
 }
 
 void
@@ -679,7 +692,6 @@ sowakeup(struct socket *so, struct sockbuf *sb)
 int
 soreserve(struct socket *so, u_int32_t sndcc, u_int32_t rcvcc)
 {
-
 	if (sbreserve(&so->so_snd, sndcc) == 0)
 		goto bad;
 	else
@@ -2644,7 +2656,7 @@ sbunlock(struct sockbuf *sb, boolean_t keeplocked)
 
 		lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 
-		VERIFY(so->so_usecount != 0);
+		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
 		so->unlock_lr[so->next_unlock_lr] = lr_saved;
 		so->next_unlock_lr = (so->next_unlock_lr + 1) % SO_LCKDBG_MAX;

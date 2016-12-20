@@ -131,10 +131,11 @@ const OSSymbol *		gIOConsoleSessionOnConsoleKey;
 const OSSymbol *		gIOConsoleSessionLoginDoneKey;
 const OSSymbol *		gIOConsoleSessionSecureInputPIDKey;
 const OSSymbol *		gIOConsoleSessionScreenLockedTimeKey;
-
+const OSSymbol *		gIOConsoleSessionScreenIsLockedKey;
 clock_sec_t			gIOConsoleLockTime;
 static bool			gIOConsoleLoggedIn;
 #if HIBERNATION
+static OSBoolean *		gIOConsoleBooterLockState;
 static uint32_t			gIOScreenLockState;
 #endif
 static IORegistryEntry *        gIOChosenEntry;
@@ -367,6 +368,7 @@ void IOService::initialize( void )
     gIOConsoleSessionLoginDoneKey        = OSSymbol::withCStringNoCopy(kIOConsoleSessionLoginDoneKey);
     gIOConsoleSessionSecureInputPIDKey   = OSSymbol::withCStringNoCopy(kIOConsoleSessionSecureInputPIDKey);
     gIOConsoleSessionScreenLockedTimeKey = OSSymbol::withCStringNoCopy(kIOConsoleSessionScreenLockedTimeKey);
+    gIOConsoleSessionScreenIsLockedKey   = OSSymbol::withCStringNoCopy(kIOConsoleSessionScreenIsLockedKey);
 
     gIOConsoleUsersSeedValue	       = OSData::withBytesNoCopy(&gIOConsoleUsersSeed, sizeof(gIOConsoleUsersSeed));
 
@@ -4994,9 +4996,25 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
     {
         sSystemPower = systemMessage;
 #if HIBERNATION
-	if ((kIOMessageSystemHasPoweredOn == systemMessage) && IOHibernateWasScreenLocked())
+	if (kIOMessageSystemHasPoweredOn == systemMessage)
 	{
-	    locked = kOSBooleanTrue;
+	    uint32_t lockState = IOHibernateWasScreenLocked();
+	    switch (lockState)
+	    {
+		case 0:
+		    break;
+		case kIOScreenLockLocked:
+		case kIOScreenLockFileVaultDialog:
+		    gIOConsoleBooterLockState = kOSBooleanTrue;
+		    break;
+		case kIOScreenLockNoLock:
+		    gIOConsoleBooterLockState = 0;
+		    break;
+		case kIOScreenLockUnlocked:
+		default:
+		    gIOConsoleBooterLockState = kOSBooleanFalse;
+		    break;
+	    }
 	}
 #endif /* HIBERNATION */
     }
@@ -5004,6 +5022,8 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
     if (consoleUsers)
     {
         OSNumber * num = 0;
+	bool       loginLocked = true;
+
 	gIOConsoleLoggedIn = false;
 	for (idx = 0; 
 	      (user = OSDynamicCast(OSDictionary, consoleUsers->getObject(idx))); 
@@ -5011,11 +5031,16 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
 	{
 	    gIOConsoleLoggedIn |= ((kOSBooleanTrue == user->getObject(gIOConsoleSessionOnConsoleKey))
 	      		&& (kOSBooleanTrue == user->getObject(gIOConsoleSessionLoginDoneKey)));
+
+	    loginLocked &= (kOSBooleanTrue == user->getObject(gIOConsoleSessionScreenIsLockedKey));
 	    if (!num)
 	    {
    	        num = OSDynamicCast(OSNumber, user->getObject(gIOConsoleSessionScreenLockedTimeKey));
 	    }
 	}
+#if HIBERNATION
+        if (!loginLocked) gIOConsoleBooterLockState = 0;
+#endif /* HIBERNATION */
         gIOConsoleLockTime = num ? num->unsigned32BitValue() : 0;
     }
 
@@ -5025,6 +5050,12 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
     {
 	locked = kOSBooleanTrue;
     }
+#if HIBERNATION
+    else if (gIOConsoleBooterLockState)
+    {
+	locked = gIOConsoleBooterLockState;
+    }
+#endif /* HIBERNATION */
     else if (gIOConsoleLockTime)
     {
 	clock_sec_t  now;
