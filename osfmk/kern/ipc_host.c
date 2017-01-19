@@ -167,10 +167,13 @@ mach_port_name_t
 host_self_trap(
 	__unused struct host_self_trap_args *args)
 {
+	task_t self = current_task();
 	ipc_port_t sright;
 	mach_port_name_t name;
 
-	sright = ipc_port_copy_send(current_task()->itk_host);
+	itk_lock(self);
+	sright = ipc_port_copy_send(self->itk_host);
+	itk_unlock(self);
 	name = ipc_port_copyout_send(sright, current_space());
 	return name;
 }

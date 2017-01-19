@@ -5021,6 +5021,9 @@ void IOPMrootDomain::handleOurPowerChangeStart(
             _systemMessageClientMask &= ~kSystemMessageClientLegacyApp;
         if ((_highestCapability & kIOPMSystemCapabilityGraphics) == 0)
             _systemMessageClientMask &= ~kSystemMessageClientKernel;
+#if HIBERNATION
+        gIOHibernateState = 0;
+#endif
 
         // Record the reason for dark wake back to sleep
         // System may not have ever achieved full wake

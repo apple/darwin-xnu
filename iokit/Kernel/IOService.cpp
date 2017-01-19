@@ -4984,6 +4984,8 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
     bool              publish;
     OSDictionary *    user;
     static IOMessage  sSystemPower;
+    clock_sec_t       now = 0;
+    clock_usec_t      microsecs;
 
     regEntry = IORegistryEntry::getRegistryRoot();
 
@@ -5040,6 +5042,9 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
 	}
 #if HIBERNATION
         if (!loginLocked) gIOConsoleBooterLockState = 0;
+	IOLog("IOConsoleUsers: time(%d) %ld->%d, lin %d, llk %d, \n",
+		(num != 0), gIOConsoleLockTime, (num ? num->unsigned32BitValue() : 0),
+		gIOConsoleLoggedIn, loginLocked);
 #endif /* HIBERNATION */
         gIOConsoleLockTime = num ? num->unsigned32BitValue() : 0;
     }
@@ -5058,9 +5063,6 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
 #endif /* HIBERNATION */
     else if (gIOConsoleLockTime)
     {
-	clock_sec_t  now;
-	clock_usec_t microsecs;
-
 	clock_get_calendar_microtime(&now, &microsecs);
 	if (gIOConsoleLockTime > now)
 	{
@@ -5092,6 +5094,9 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
 	else if (gIOConsoleLockTime)  gIOScreenLockState = kIOScreenLockUnlocked;
 	else                          gIOScreenLockState = kIOScreenLockNoLock;
 	gIOChosenEntry->setProperty(kIOScreenLockStateKey, &gIOScreenLockState, sizeof(gIOScreenLockState));
+
+	IOLog("IOConsoleUsers: gIOScreenLockState %d, hs %d, bs %d, now %ld, sm 0x%x\n",
+		gIOScreenLockState, gIOHibernateState, (gIOConsoleBooterLockState != 0), now, systemMessage);
     }
 #endif /* HIBERNATION */
 

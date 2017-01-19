@@ -450,7 +450,7 @@ mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_ar
 	if (voucher == IV_NULL)
 		return MACH_SEND_INVALID_DEST;
 
-	mach_msg_type_number_t __assert_only max_sz = sz;
+	mach_msg_type_number_t max_sz = sz;
 
 	if (sz < MACH_VOUCHER_TRAP_STACK_LIMIT) {
 		/* keep small recipes on the stack for speed */
@@ -466,14 +466,14 @@ mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_ar
 		if (kr == KERN_SUCCESS && sz > 0)
 			kr = copyout(krecipe, (void *)args->recipe, sz);
 	} else {
-		uint8_t *krecipe = kalloc((vm_size_t)sz);
+		uint8_t *krecipe = kalloc((vm_size_t)max_sz);
 		if (!krecipe) {
 			kr = KERN_RESOURCE_SHORTAGE;
 			goto done;
 		}
 
-		if (copyin(args->recipe, (void *)krecipe, args->recipe_size)) {
-			kfree(krecipe, (vm_size_t)sz);
+		if (copyin(args->recipe, (void *)krecipe, sz)) {
+			kfree(krecipe, (vm_size_t)max_sz);
 			kr = KERN_MEMORY_ERROR;
 			goto done;
 		}
@@ -484,7 +484,7 @@ mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_ar
 
 		if (kr == KERN_SUCCESS && sz > 0)
 			kr = copyout(krecipe, (void *)args->recipe, sz);
-		kfree(krecipe, (vm_size_t)sz);
+		kfree(krecipe, (vm_size_t)max_sz);
 	}
 
 	kr = copyout(&sz, args->recipe_size, sizeof(sz));
