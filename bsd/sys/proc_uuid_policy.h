@@ -60,7 +60,7 @@ __BEGIN_DECLS
 /* To be removed, replaced by PROC_UUID_NECP_APP_POLICY */
 #define	PROC_UUID_FLOW_DIVERT				0x00000002
 
-#if BSD_KERNEL_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Look up a policy indexed by UUID.
  *

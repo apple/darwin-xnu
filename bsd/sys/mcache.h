@@ -266,7 +266,7 @@ typedef struct mcache_cpu {
 	int		cc_objs;	/* number of objects in filled bkt */
 	int		cc_pobjs;	/* number of objects in previous bkt */
 	int		cc_bktsize;	/* number of elements in a full bkt */
-} __attribute__((aligned(MAX_CPU_CACHE_LINE_SIZE), packed)) mcache_cpu_t;
+} __attribute__((aligned(MAX_CPU_CACHE_LINE_SIZE))) mcache_cpu_t;
 
 typedef unsigned int (*mcache_allocfn_t)(void *, mcache_obj_t ***,
     unsigned int, int);

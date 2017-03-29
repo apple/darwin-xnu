@@ -534,8 +534,8 @@ private:
         int          (* printf_func)(const char *fmt, ...),
         bool            lockFlag,
         bool            doUnslide);
-    static void * kextForAddress(
-        const void		  * addr);
+    static OSKextLoadedKextSummary *summaryForAddress(const uintptr_t addr);
+    static void *kextForAddress(const void *addr);
     static boolean_t summaryIsInBacktrace(
         OSKextLoadedKextSummary * summary,
         vm_offset_t             * addr,

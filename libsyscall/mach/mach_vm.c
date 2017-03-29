@@ -73,14 +73,14 @@ mach_vm_deallocate(
 {
 	kern_return_t rv;
 
+	if (__syscall_logger) {
+		__syscall_logger(stack_logging_type_vm_deallocate, (uintptr_t)target, (uintptr_t)address, (uintptr_t)size, 0, 0);
+	}
+
 	rv = _kernelrpc_mach_vm_deallocate_trap(target, address, size);
 
 	if (rv == MACH_SEND_INVALID_DEST)
 		rv = _kernelrpc_mach_vm_deallocate(target, address, size);
-
-	if (__syscall_logger) {
-		__syscall_logger(stack_logging_type_vm_deallocate, (uintptr_t)target, (uintptr_t)address, (uintptr_t)size, 0, 0);
-	}
 
 	return (rv);
 }

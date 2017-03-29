@@ -35,5 +35,6 @@ int	imageboot_mount_image(const char *root_path, int height);
 
 #define IMAGEBOOT_CONTAINER_ARG		"container-dmg"
 #define IMAGEBOOT_ROOT_ARG		"root-dmg"
+#define IMAGEBOOT_AUTHROOT_ARG		"auth-root-dmg"
 
 #endif

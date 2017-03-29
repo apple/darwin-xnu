@@ -223,6 +223,9 @@ struct vfsstatfs {
 #define VFSATTR_f_signature		(1LL<< 22)
 #define VFSATTR_f_carbon_fsid		(1LL<< 23)
 #define VFSATTR_f_uuid			(1LL<< 24)
+#define VFSATTR_f_quota		(1LL<< 25)
+#define VFSATTR_f_reserved		(1LL<< 26)
+
 
 /*
  * Argument structure.
@@ -269,6 +272,8 @@ struct vfs_attr {
 	uint16_t	f_signature;	/* used for ATTR_VOL_SIGNATURE, Carbon's FSVolumeInfo.signature */
 	uint16_t	f_carbon_fsid;	/* same as Carbon's FSVolumeInfo.filesystemID */
 	uuid_t		f_uuid;		/* file system UUID (version 3 or 5), available in 10.6 and later */
+	uint64_t	f_quota;	/* total quota data blocks in file system */
+	uint64_t	f_reserved;	/* total reserved data blocks in file system */
 };
 
 #pragma pack()
@@ -481,8 +486,8 @@ struct netfs_status {
 #define VQ_SYNCEVENT	0x0400	/* a sync just happened (not set by kernel starting Mac OS X 10.9) */
 #define VQ_SERVEREVENT  0x0800  /* server issued notification/warning */
 #define VQ_QUOTA	0x1000	/* a user quota has been hit */
-#define VQ_FLAG2000	0x2000	/* placeholder */
-#define VQ_FLAG4000	0x4000	/* placeholder */
+#define VQ_NEARLOWDISK		0x2000	/* Above lowdisk and below desired disk space */
+#define VQ_DESIRED_DISK 	0x4000	/* the desired disk space */
 #define VQ_FLAG8000	0x8000	/* placeholder */
 
 
@@ -763,6 +768,12 @@ struct fs_snapshot_revert_args {
 #define VFSIOC_REVERT_SNAPSHOT  _IOW('V', 2, struct fs_snapshot_revert_args)
 #define VFSCTL_REVERT_SNAPSHOT  IOCBASECMD(VFSIOC_REVERT_SNAPSHOT)
 
+struct fs_snapshot_root_args {
+    struct componentname *sr_cnp;
+};  
+#define VFSIOC_ROOT_SNAPSHOT  _IOW('V', 3, struct fs_snapshot_root_args)
+#define VFSCTL_ROOT_SNAPSHOT  IOCBASECMD(VFSIOC_ROOT_SNAPSHOT)
+
 #endif /* KERNEL */
 
 /*
@@ -999,6 +1010,20 @@ void	vfs_setextendedsecurity(mount_t mp);
   @param mp Mount to test.
   */
 void	vfs_clearextendedsecurity(mount_t mp);
+
+/*!
+  @function vfs_setnoswap
+  @abstract Mark a filesystem as unable to use swap files.
+  @param mp Mount to mark.
+  */
+void	vfs_setnoswap(mount_t mp);
+
+/*!
+  @function vfs_clearnoswap
+  @abstract Mark a filesystem as capable of using swap files.
+  @param mp Mount to mark.
+  */
+void	vfs_clearnoswap(mount_t mp);
 
 /*!
   @function vfs_setlocklocal

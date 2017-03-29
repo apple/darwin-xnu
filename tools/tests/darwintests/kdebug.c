@@ -18,7 +18,7 @@
 #define TRACE_DEBUGID (0xfedfed00U)
 
 T_DECL(kdebug_trace_syscall, "test that kdebug_trace(2) emits correct events",
-       T_META_ASROOT(YES))
+       T_META_ASROOT(true))
 {
     ktrace_session_t s;
     dispatch_time_t timeout;
@@ -60,7 +60,7 @@ T_DECL(kdebug_trace_syscall, "test that kdebug_trace(2) emits correct events",
 
 T_DECL(kdebug_signpost_syscall,
     "test that kdebug_signpost(2) emits correct events",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     ktrace_session_t s;
     __block int single_seen = 0;
@@ -140,7 +140,7 @@ T_DECL(kdebug_signpost_syscall,
 
 T_DECL(kdebug_wrapping,
     "ensure that wrapping traces lost events and no events prior to the wrap",
-    T_META_ASROOT(YES), T_META_CHECK_LEAKS(NO))
+    T_META_ASROOT(true), T_META_CHECK_LEAKS(false))
 {
     ktrace_session_t s;
     __block int events = 0;
@@ -342,7 +342,7 @@ expect_dyld_events(ktrace_session_t s, const char *name, uint32_t base_code,
 }
 
 T_DECL(dyld_events, "test that dyld registering libraries emits events",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     ktrace_session_t s;
     dyld_kernel_image_info_t info;
@@ -359,6 +359,7 @@ T_DECL(dyld_events, "test that dyld registering libraries emits events",
 
     s = ktrace_session_create();
     T_ASSERT_NOTNULL(s, NULL);
+    T_ASSERT_POSIX_ZERO(ktrace_filter_pid(s, getpid()), NULL);
 
     expect_dyld_events(s, "mapping", DBG_DYLD_UUID_MAP_A, map_uuid,
         MAP_LOAD_ADDR, &map_fsid, &map_fsobjid, saw_mapping);
@@ -436,17 +437,13 @@ is_development_kernel(void)
     static bool is_development;
 
     dispatch_once(&is_development_once, ^(void) {
-        host_debug_info_internal_data_t info;
-        mach_msg_type_number_t count = HOST_DEBUG_INFO_INTERNAL_COUNT;
-        kern_return_t kr;
+        int dev;
+        size_t dev_size = sizeof(dev);
 
-        kr = host_info(mach_host_self(), HOST_DEBUG_INFO_INTERNAL,
-            (host_info_t)(void *)&info, &count);
-        if (kr != KERN_SUCCESS && kr != KERN_NOT_SUPPORTED) {
-            T_ASSERT_FAIL("check for development kernel failed %d", kr);
-        }
-
-        is_development = (kr == KERN_SUCCESS);
+        T_QUIET;
+        T_ASSERT_POSIX_SUCCESS(sysctlbyname("kern.development", &dev,
+                                            &dev_size, NULL, 0), NULL);
+        is_development = (dev != 0);
     });
 
     return is_development;
@@ -511,9 +508,10 @@ expect_filtered_event(struct trace_point *tp, unsigned int *events)
 }
 
 T_DECL(kernel_events, "ensure kernel macros work",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     ktrace_session_t s;
+
 
     s = ktrace_session_create();
     T_QUIET; T_ASSERT_NOTNULL(s, NULL);
@@ -531,10 +529,17 @@ T_DECL(kernel_events, "ensure kernel macros work",
     });
 
     ktrace_set_completion_handler(s, ^(void) {
-        T_EXPECT_EQ(rel_seen, EXP_KERNEL_EVENTS, NULL);
-        T_EXPECT_EQ(dev_seen, is_development_kernel() ? EXP_KERNEL_EVENTS : 0U,
-            NULL);
-        T_EXPECT_EQ(filt_seen, EXP_KERNEL_EVENTS, NULL);
+        /*
+         * Development-only events are only filtered if running on an embedded
+         * OS.
+         */
+        unsigned dev_exp;
+        dev_exp = EXP_KERNEL_EVENTS;
+
+        T_EXPECT_EQ(rel_seen, EXP_KERNEL_EVENTS,
+                "release and development events seen");
+        T_EXPECT_EQ(dev_seen, dev_exp, "development-only events seen/not seen");
+        T_EXPECT_EQ(filt_seen, EXP_KERNEL_EVENTS, "filter-only events seen");
         ktrace_session_destroy(s);
         T_END;
     });
@@ -550,7 +555,7 @@ T_DECL(kernel_events, "ensure kernel macros work",
 }
 
 T_DECL(kernel_events_filtered, "ensure that the filtered kernel macros work",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     ktrace_session_t s;
 

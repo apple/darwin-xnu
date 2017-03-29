@@ -469,6 +469,7 @@ typedef __uint32_t sae_connid_t;
 /* connectx() flag parameters */
 #define	CONNECT_RESUME_ON_READ_WRITE	0x1 /* resume connect() on read/write */
 #define	CONNECT_DATA_IDEMPOTENT		0x2 /* data is idempotent */
+#define	CONNECT_DATA_AUTHENTICATED	0x4 /* data includes security that replaces the TFO-cookie */
 
 /* sockaddr endpoints */
 typedef struct sa_endpoints {
@@ -627,24 +628,6 @@ struct sockaddr_storage {
 	__int64_t	__ss_align;	/* force structure storage alignment */
 	char			__ss_pad2[_SS_PAD2SIZE];
 };
-
-#ifdef BSD_KERNEL_PRIVATE
-#include <sys/queue.h>
-
-struct sockaddr_entry {
-	TAILQ_ENTRY(sockaddr_entry)	se_link;
-	struct sockaddr			*se_addr;
-	uint32_t			se_flags;
-};
-
-#define	SEF_ATTACHED		1	/* attached to sockaddr_list */
-
-struct sockaddr_list {
-	TAILQ_HEAD(, sockaddr_entry)	sl_head;
-	uint32_t			sl_cnt;
-
-};
-#endif /* BSD_KERNEL_PRIVATE */
 
 /*
  * Protocol families, same as address families for now.

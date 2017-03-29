@@ -3210,6 +3210,7 @@ vm_map_enter_mem_object_helper(
 				vm_object_offset_t	copy_offset;
 				int			copy_vm_alias;
 
+				copy_object = VME_OBJECT(copy_entry);
 				copy_offset = VME_OFFSET(copy_entry);
 				copy_size = (copy_entry->vme_end -
 					     copy_entry->vme_start);
@@ -3241,7 +3242,57 @@ vm_map_enter_mem_object_helper(
 					vm_map_reference(copy_submap);
 					vm_map_unlock(copy_submap);
 					copy_object = (vm_object_t) copy_submap;
+				} else if (!copy &&
+					   copy_object != VM_OBJECT_NULL &&
+					   (copy_entry->needs_copy ||
+					    copy_object->shadowed ||
+					    (!copy_object->true_share &&
+					     !copy_entry->is_shared &&
+					     copy_object->vo_size > copy_size))) {
+					/*
+					 * We need to resolve our side of this
+					 * "symmetric" copy-on-write now; we
+					 * need a new object to map and share,
+					 * instead of the current one which
+					 * might still be shared with the
+					 * original mapping.
+					 *
+					 * Note: A "vm_map_copy_t" does not
+					 * have a lock but we're protected by
+					 * the named entry's lock here.
+					 */
+					// assert(copy_object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC);
+					VME_OBJECT_SHADOW(copy_entry, copy_size);
+					if (!copy_entry->needs_copy &&
+					    copy_entry->protection & VM_PROT_WRITE) {
+						vm_prot_t prot;
+
+						prot = copy_entry->protection & ~VM_PROT_WRITE;
+						vm_object_pmap_protect(copy_object,
+								       copy_offset,
+								       copy_size,
+								       PMAP_NULL,
+								       0,
+								       prot);
+					}
+
+					copy_entry->needs_copy = FALSE;
+					copy_entry->is_shared = TRUE;
+					copy_object = VME_OBJECT(copy_entry);
+					copy_offset = VME_OFFSET(copy_entry);
+					vm_object_lock(copy_object);
+					vm_object_reference_locked(copy_object);
+					if (copy_object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC) {
+						/* we're about to make a shared mapping of this object */
+						copy_object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
+						copy_object->true_share = TRUE;
+					}
+					vm_object_unlock(copy_object);
 				} else {
+					/*
+					 * We already have the right object
+					 * to map.
+					 */
 					copy_object = VME_OBJECT(copy_entry);
 					vm_object_reference(copy_object);
 				}
@@ -3252,6 +3303,14 @@ vm_map_enter_mem_object_helper(
 				remap_flags |= VM_FLAGS_OVERWRITE;
 				remap_flags &= ~VM_FLAGS_ANYWHERE;
 				remap_flags |= VM_MAKE_TAG(copy_vm_alias);
+				if (!copy && !copy_entry->is_sub_map) {
+					/*
+					 * copy-on-write should have been
+					 * resolved at this point, or we would
+					 * end up sharing instead of copying.
+					 */
+					assert(!copy_entry->needs_copy);
+				}
 				kr = vm_map_enter(target_map,
 						  &copy_addr,
 						  copy_size,
@@ -9651,10 +9710,12 @@ vm_map_copyin_internal(
 		 *	Attempt non-blocking copy-on-write optimizations.
 		 */
 
-		if (src_destroy && 
-		    (src_object == VM_OBJECT_NULL || 
-		     (src_object->internal && !src_object->true_share
-		      && !map_share))) {
+		if (src_destroy &&
+		    (src_object == VM_OBJECT_NULL ||
+		     (src_object->internal &&
+		      src_object->copy_strategy != MEMORY_OBJECT_COPY_DELAY &&
+		      !src_object->true_share &&
+		      !map_share))) {
 			/*
 			 * If we are destroying the source, and the object
 			 * is internal, we can move the object reference
@@ -15520,6 +15581,15 @@ void
 vm_map_set_64bit(vm_map_t map)
 {
 	map->max_offset = (vm_map_offset_t)MACH_VM_MAX_ADDRESS;
+}
+
+/*
+ * Expand the maximum size of an existing map.
+ */
+void
+vm_map_set_jumbo(vm_map_t map)
+{
+	(void) map;
 }
 
 vm_map_offset_t

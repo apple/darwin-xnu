@@ -114,7 +114,7 @@ expect_kdebug_trigger(const char *filter_desc, const uint32_t *debugids,
     (KDBG_EVENTID(TRIGGER_CLASS, TRIGGER_SUBCLASS, TRIGGER_CODE))
 
 T_DECL(kdebug_trigger_classes, "test that kdebug trigger samples on classes",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     const uint32_t class_debugids[] = {
         KDBG_EVENTID(TRIGGER_CLASS, 1, 1),
@@ -130,7 +130,7 @@ T_DECL(kdebug_trigger_classes, "test that kdebug trigger samples on classes",
 
 T_DECL(kdebug_trigger_subclasses,
     "test that kdebug trigger samples on subclasses",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     const uint32_t subclass_debugids[] = {
         KDBG_EVENTID(TRIGGER_CLASS, TRIGGER_SUBCLASS, 0),
@@ -145,7 +145,7 @@ T_DECL(kdebug_trigger_subclasses,
 }
 
 T_DECL(kdebug_trigger_debugids, "test that kdebug trigger samples on debugids",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     const uint32_t debugids[] = {
         TRIGGER_DEBUGID
@@ -162,7 +162,7 @@ T_DECL(kdebug_trigger_debugids, "test that kdebug trigger samples on debugids",
  */
 
 T_DECL(kdbg_callstacks, "test that the kdbg_callstacks samples on syscalls",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     ktrace_session_t s;
     __block bool saw_user_stack = false;
@@ -288,7 +288,7 @@ expect_stacks_traced(void (^cb)(void))
 }
 
 T_DECL(pet, "test that PET mode samples kernel and user stacks",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     configure_kperf_stacks_timer(-1, 10);
     T_ASSERT_POSIX_SUCCESS(kperf_timer_pet_set(0), NULL);
@@ -302,7 +302,7 @@ T_DECL(pet, "test that PET mode samples kernel and user stacks",
 
 T_DECL(lightweight_pet,
     "test that lightweight PET mode samples kernel and user stacks",
-    T_META_ASROOT(YES))
+    T_META_ASROOT(true))
 {
     int set = 1;
 

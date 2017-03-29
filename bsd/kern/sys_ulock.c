@@ -54,6 +54,7 @@
 #include <kern/waitq.h>
 #include <kern/sched_prim.h>
 #include <kern/zalloc.h>
+#include <kern/debug.h>
 
 #include <pexpert/pexpert.h>
 
@@ -95,6 +96,9 @@ static lck_mtx_t ull_table_lock;
 #define ull_unlock(ull)         lck_mtx_unlock(&ull->ull_lock)
 #define ull_assert_owned(ull)	LCK_MTX_ASSERT(&ull->ull_lock, LCK_MTX_ASSERT_OWNED)
 
+#define ULOCK_TO_EVENT(ull)   ((event_t)ull)
+#define EVENT_TO_ULOCK(event) ((ull_t *)event)
+
 typedef struct __attribute__((packed)) {
 	user_addr_t	ulk_addr;
 	pid_t		ulk_pid;
@@ -127,6 +131,7 @@ typedef struct ull {
 static const bool ull_debug = false;
 
 extern void ulock_initialize(void);
+extern void kdp_ulock_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
 
 #define ULL_MUST_EXIST	0x0001
 static ull_t *ull_get(ulk_t *, uint32_t);
@@ -535,10 +540,11 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 
 	wait_result_t wr;
 	uint32_t timeout = args->timeout;
+	thread_set_pending_block_hint(self, kThreadWaitUserLock);
 	if (timeout) {
-		wr = assert_wait_timeout((event_t)ull, THREAD_ABORTSAFE, timeout, NSEC_PER_USEC);
+		wr = assert_wait_timeout(ULOCK_TO_EVENT(ull), THREAD_ABORTSAFE, timeout, NSEC_PER_USEC);
 	} else {
-		wr = assert_wait((event_t)ull, THREAD_ABORTSAFE);
+		wr = assert_wait(ULOCK_TO_EVENT(ull), THREAD_ABORTSAFE);
 	}
 
 	ull_unlock(ull);
@@ -717,9 +723,9 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 	}
 
 	if (flags & ULF_WAKE_ALL) {
-		thread_wakeup((event_t)ull);
+		thread_wakeup(ULOCK_TO_EVENT(ull));
 	} else if (flags & ULF_WAKE_THREAD) {
-		kern_return_t kr = thread_wakeup_thread((event_t)ull, wake_thread);
+		kern_return_t kr = thread_wakeup_thread(ULOCK_TO_EVENT(ull), wake_thread);
 		if (kr != KERN_SUCCESS) {
 			assert(kr == KERN_NOT_WAITING);
 			ret = EALREADY;
@@ -732,7 +738,7 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 		 * TODO: 'owner is not current_thread (or null)' likely means we can avoid this wakeup
 		 * <rdar://problem/25487001>
 		 */
-		thread_wakeup_one_with_pri((event_t)ull, WAITQ_SELECT_MAX_PRI);
+		thread_wakeup_one_with_pri(ULOCK_TO_EVENT(ull), WAITQ_SELECT_MAX_PRI);
 	}
 
 	/*
@@ -808,3 +814,20 @@ ull_promote_owner_locked(ull_t*    ull,
 	return old_owner;
 }
 
+void
+kdp_ulock_find_owner(__unused struct waitq * waitq, event64_t event, thread_waitinfo_t * waitinfo)
+{
+	ull_t *ull = EVENT_TO_ULOCK(event);
+	assert(kdp_is_in_zone(ull, "ulocks"));
+
+	if (ull->ull_opcode == UL_UNFAIR_LOCK) {// owner is only set if it's an os_unfair_lock
+		waitinfo->owner = thread_tid(ull->ull_owner);
+		waitinfo->context = ull->ull_key.ulk_addr;
+	} else if (ull->ull_opcode == UL_COMPARE_AND_WAIT) { // otherwise, this is a spinlock
+		waitinfo->owner = 0;
+		waitinfo->context = ull->ull_key.ulk_addr;
+	} else {
+		panic("%s: Invalid ulock opcode %d addr %p", __FUNCTION__, ull->ull_opcode, (void*)ull);
+	}
+	return;
+}

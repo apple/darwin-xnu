@@ -2966,6 +2966,8 @@ tcp_sbrcv_grow_rwin(struct tcpcb *tp, struct sockbuf *sb)
 	u_int32_t rcvbuf = sb->sb_hiwat;
 	struct socket *so = tp->t_inpcb->inp_socket;
 
+	if (tcp_recv_bg == 1 || IS_TCP_RECV_BG(so))
+		return;
 	/*
 	 * If message delivery is enabled, do not count
 	 * unordered bytes in receive buffer towards hiwat
@@ -3448,7 +3450,7 @@ tcp_make_keepalive_frame(struct tcpcb *tp, struct ifnet *ifp,
 		ip->ip_id = ip_randomid();
 		ip->ip_len = htons(sizeof(struct ip) + sizeof(struct tcphdr));
 		ip->ip_ttl = inp->inp_ip_ttl;
-		ip->ip_tos = inp->inp_ip_tos;
+		ip->ip_tos |= (inp->inp_ip_tos & ~IPTOS_ECN_MASK);
 		ip->ip_sum = in_cksum_hdr(ip);
 	} else {
 		struct ip6_hdr *ip6;
@@ -3457,6 +3459,7 @@ tcp_make_keepalive_frame(struct tcpcb *tp, struct ifnet *ifp,
 
 		ip6->ip6_plen = htons(sizeof(struct tcphdr));
 		ip6->ip6_hlim = in6_selecthlim(inp, ifp);
+		ip6->ip6_flow = ip6->ip6_flow & ~IPV6_FLOW_ECN_MASK;
 
 		if (IN6_IS_SCOPE_EMBED(&ip6->ip6_src))
 			ip6->ip6_src.s6_addr16[1] = 0;

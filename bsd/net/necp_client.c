@@ -656,7 +656,13 @@ necp_client_parse_parameters(u_int8_t *parameters,
 		u_int8_t type = necp_buffer_get_tlv_type(parameters, offset);
 		u_int32_t length = necp_buffer_get_tlv_length(parameters, offset);
 
-		if (length > 0 && (offset + sizeof(u_int8_t) + sizeof(u_int32_t) + length) <= parameters_size) {
+		if (length > (parameters_size - (offset + sizeof(u_int8_t) + sizeof(u_int32_t)))) {
+			// If the length is larger than what can fit in the remaining parameters size, bail
+			NECPLOG(LOG_ERR, "Invalid TLV length (%u)", length);
+			break;
+		}
+
+		if (length > 0) {
 			u_int8_t *value = necp_buffer_get_tlv_value(parameters, offset, NULL);
 			if (value != NULL) {
 				switch (type) {
@@ -975,10 +981,10 @@ necp_update_client_result(proc_t proc,
 	ifnet_t delegate_interface = NULL;
 	ifnet_t original_scoped_interface = NULL;
 
-	if (result.routed_interface_index != IFSCOPE_NONE && (int)result.routed_interface_index <= if_index) {
+	if (result.routed_interface_index != IFSCOPE_NONE && result.routed_interface_index <= (u_int32_t)if_index) {
 		direct_interface = ifindex2ifnet[result.routed_interface_index];
 	} else if (parsed_parameters.required_interface_index != IFSCOPE_NONE &&
-			   (int)parsed_parameters.required_interface_index <= if_index) {
+			   parsed_parameters.required_interface_index <= (u_int32_t)if_index) {
 		// If the request was scoped, but the route didn't match, still grab the agents
 		direct_interface = ifindex2ifnet[parsed_parameters.required_interface_index];
 	} else if (result.routed_interface_index == IFSCOPE_NONE &&
@@ -992,7 +998,7 @@ necp_update_client_result(proc_t proc,
 	if (result.routing_result == NECP_KERNEL_POLICY_RESULT_IP_TUNNEL &&
 		parsed_parameters.required_interface_index != IFSCOPE_NONE &&
 		parsed_parameters.required_interface_index != result.routing_result_parameter.tunnel_interface_index &&
-		(int)parsed_parameters.required_interface_index <= if_index) {
+		parsed_parameters.required_interface_index <= (u_int32_t)if_index) {
 		original_scoped_interface = ifindex2ifnet[parsed_parameters.required_interface_index];
 	}
 	// Add interfaces
@@ -1576,7 +1582,13 @@ necp_find_netstat_data(struct necp_client *client, union necp_sockaddr_union *lo
 		u_int8_t type = necp_buffer_get_tlv_type(parameters, offset);
 		u_int32_t length = necp_buffer_get_tlv_length(parameters, offset);
 
-		if (length > 0 && (offset + sizeof(u_int8_t) + sizeof(u_int32_t) + length) <= parameters_size) {
+		if (length > (parameters_size - (offset + sizeof(u_int8_t) + sizeof(u_int32_t)))) {
+			// If the length is larger than what can fit in the remaining parameters size, bail
+			NECPLOG(LOG_ERR, "Invalid TLV length (%u)", length);
+			break;
+		}
+
+		if (length > 0) {
 			u_int8_t *value = necp_buffer_get_tlv_value(parameters, offset, NULL);
 			if (value != NULL) {
 				switch (type) {
@@ -1790,13 +1802,14 @@ necp_open(struct proc *p, struct necp_open_args *uap, int *retval)
 	*fdflags(p, fd) |= (UF_EXCLOSE | UF_FORKCLOSE);
 	procfdtbl_releasefd(p, fd, NULL);
 	fp_drop(p, fd, fp, 1);
-	proc_fdunlock(p);
 
 	*retval = fd;
 
 	lck_rw_lock_exclusive(&necp_fd_lock);
 	LIST_INSERT_HEAD(&necp_fd_list, fd_data, chain);
 	lck_rw_done(&necp_fd_lock);
+
+	proc_fdunlock(p);
 
 done:
 	if (error != 0) {
@@ -2264,7 +2277,13 @@ necp_client_agent_action(struct necp_fd_data *fd_data, struct necp_client_action
 			u_int8_t type = necp_buffer_get_tlv_type(parameters, offset);
 			u_int32_t length = necp_buffer_get_tlv_length(parameters, offset);
 
-			if (length > 0 && (offset + sizeof(u_int8_t) + sizeof(u_int32_t) + length) <= parameters_size) {
+			if (length > (parameters_size - (offset + sizeof(u_int8_t) + sizeof(u_int32_t)))) {
+				// If the length is larger than what can fit in the remaining parameters size, bail
+				NECPLOG(LOG_ERR, "Invalid TLV length (%u)", length);
+				break;
+			}
+
+			if (length > 0) {
 				u_int8_t *value = necp_buffer_get_tlv_value(parameters, offset, NULL);
 				if (length >= sizeof(uuid_t) &&
 					value != NULL &&
@@ -2356,6 +2375,63 @@ done:
 }
 
 static int
+necp_client_agent_use(struct necp_fd_data *fd_data, struct necp_client_action_args *uap, int *retval)
+{
+	int error = 0;
+	struct necp_client *matched_client = NULL;
+	struct necp_client *client = NULL;
+	uuid_t client_id;
+	struct necp_agent_use_parameters parameters;
+
+	if (uap->client_id == 0 || uap->client_id_len != sizeof(uuid_t) ||
+		uap->buffer_size != sizeof(parameters) || uap->buffer == 0) {
+		error = EINVAL;
+		goto done;
+	}
+
+	error = copyin(uap->client_id, client_id, sizeof(uuid_t));
+	if (error) {
+		NECPLOG(LOG_ERR, "Copyin client_id error (%d)", error);
+		goto done;
+	}
+
+	error = copyin(uap->buffer, &parameters, uap->buffer_size);
+	if (error) {
+		NECPLOG(LOG_ERR, "Parameters copyin error (%d)", error);
+		goto done;
+	}
+
+	lck_mtx_lock(&fd_data->fd_lock);
+	LIST_FOREACH(client, &fd_data->clients, chain) {
+		if (uuid_compare(client->client_id, client_id) == 0) {
+			matched_client = client;
+			break;
+		}
+	}
+
+	if (matched_client) {
+		error = netagent_use(parameters.agent_uuid, &parameters.out_use_count);
+	} else {
+		error = ENOENT;
+	}
+
+	lck_mtx_unlock(&fd_data->fd_lock);
+
+	if (error == 0) {
+		error = copyout(&parameters, uap->buffer, uap->buffer_size);
+		if (error) {
+			NECPLOG(LOG_ERR, "Parameters copyout error (%d)", error);
+			goto done;
+		}
+	}
+
+done:
+	*retval = error;
+
+	return (error);
+}
+
+static int
 necp_client_copy_interface(__unused struct necp_fd_data *fd_data, struct necp_client_action_args *uap, int *retval)
 {
 	int error = 0;
@@ -2385,7 +2461,7 @@ necp_client_copy_interface(__unused struct necp_fd_data *fd_data, struct necp_cl
 
 	ifnet_head_lock_shared();
 	ifnet_t interface = NULL;
-	if (interface_index != IFSCOPE_NONE && (int)interface_index <= if_index) {
+	if (interface_index != IFSCOPE_NONE && interface_index <= (u_int32_t)if_index) {
 		interface = ifindex2ifnet[interface_index];
 	}
 
@@ -2603,6 +2679,10 @@ necp_client_action(struct proc *p, struct necp_client_action_args *uap, int *ret
 		}
 		case NECP_CLIENT_ACTION_COPY_AGENT: {
 			return_value = necp_client_copy_agent(fd_data, uap, retval);
+			break;
+		}
+		case NECP_CLIENT_ACTION_AGENT_USE: {
+			return_value = necp_client_agent_use(fd_data, uap, retval);
 			break;
 		}
 		case NECP_CLIENT_ACTION_COPY_INTERFACE: {

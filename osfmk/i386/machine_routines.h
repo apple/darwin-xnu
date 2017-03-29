@@ -219,6 +219,12 @@ unsigned long long ml_phys_read_double(
 unsigned long long ml_phys_read_double_64(
 	addr64_t paddr);
 
+unsigned long long ml_io_read(uintptr_t iovaddr, int iovsz);
+unsigned int ml_io_read8(uintptr_t iovaddr);
+unsigned int ml_io_read16(uintptr_t iovaddr);
+unsigned int ml_io_read32(uintptr_t iovaddr);
+unsigned long long ml_io_read64(uintptr_t iovaddr);
+
 /* Write physical address byte */
 void ml_phys_write_byte(
 	vm_offset_t paddr, unsigned int data);
@@ -314,7 +320,12 @@ void bzero_phys(
 vm_offset_t ml_stack_remaining(void);
 
 __END_DECLS
-
+#if defined(MACH_KERNEL_PRIVATE)
+__private_extern__ uint64_t
+ml_phys_read_data(uint64_t paddr, int psz);
+__private_extern__ void
+pmap_verify_noncacheable(uintptr_t vaddr);
+#endif /* MACH_KERNEL_PRIVATE */
 #ifdef	XNU_KERNEL_PRIVATE
 
 boolean_t ml_fpu_avx_enabled(void);
@@ -336,6 +347,7 @@ boolean_t ml_recent_wake(void);
 
 extern uint64_t reportphyreaddelayabs;
 extern uint32_t reportphyreadosbt;
+extern uint32_t phyreadpanic;
 
 #endif /* XNU_KERNEL_PRIVATE */
 #endif /* _I386_MACHINE_ROUTINES_H_ */

@@ -294,7 +294,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	if ((n->m_flags & M_EXT) == 0)
 		sharedcluster = 0;
 	else {
-		if (n->m_ext.ext_free)
+		if (m_get_ext_free(n) != NULL)
 			sharedcluster = 1;
 		else if (m_mclhasreference(n))
 			sharedcluster = 1;

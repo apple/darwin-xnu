@@ -157,7 +157,16 @@ nfs4_access_rpc(nfsnode_t np, u_int32_t *access, int rpcflags, vfs_context_t ctx
 	nfsm_chain_loadattr(error, &nmrep, np, nfsvers, &xid);
 	nfsmout_if(error);
 
-	uid = kauth_cred_getuid(vfs_context_ucred(ctx));
+	if (nfs_mount_gone(nmp)) {
+		error = ENXIO;
+	}
+	nfsmout_if(error);
+
+	if (auth_is_kerberized(np->n_auth) || auth_is_kerberized(nmp->nm_auth)) {
+		uid = nfs_cred_getasid2uid(vfs_context_ucred(ctx));
+	} else {
+		uid = kauth_cred_getuid(vfs_context_ucred(ctx));
+	}
 	slot = nfs_node_access_slot(np, uid, 1);
 	np->n_accessuid[slot] = uid;
 	microuptime(&now);

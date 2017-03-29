@@ -17,7 +17,8 @@ PRIVATE_KERNELFILES =
 EXPORTFILES = \
 	firehose_types_private.h \
 	ioctl_private.h \
-	tracepoint_private.h
+	tracepoint_private.h \
+	chunk_private.h
 
 PRIVATE_DATAFILES = ${EXPORTFILES} \
 	private.h

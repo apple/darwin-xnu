@@ -49,7 +49,9 @@ typedef __WCHAR_TYPE__ wchar_t;
 #define NULL ((void*)0)
 #endif
 
+#ifndef offsetof
 #define offsetof(t, d) __builtin_offsetof(t, d)
+#endif
 
 #endif /* __STDDEF_H */
 

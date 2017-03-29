@@ -236,6 +236,8 @@ enum {
 	STACKSHOT_ENABLE_UUID_FAULTING             = 0x200000,
 	STACKSHOT_FROM_PANIC                       = 0x400000,
 	STACKSHOT_NO_IO_STATS                      = 0x800000,
+	/* Report owners of and pointers to kernel objects that threads are blocked on */
+	STACKSHOT_THREAD_WAITINFO                  = 0x1000000,
 };
 
 #define STACKSHOT_THREAD_SNAPSHOT_MAGIC 	0xfeedface
@@ -521,6 +523,9 @@ zone_leaks(const char * zoneName, uint32_t nameLen, leak_site_proc proc, void * 
 
 extern void
 zone_leaks_scan(uintptr_t * instances, uint32_t count, uint32_t zoneSize, uint32_t * found);
+
+extern boolean_t
+kdp_is_in_zone(void *addr, const char *zone_name);
 
 #endif  /* DEBUG || DEVELOPMENT */
 #endif  /* XNU_KERNEL_PRIVATE */

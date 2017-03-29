@@ -88,9 +88,16 @@ struct ipc_pset {
 #define	ips_active(pset)	io_active(&(pset)->ips_object)
 #define	ips_lock(pset)		io_lock(&(pset)->ips_object)
 #define	ips_lock_try(pset)	io_lock_try(&(pset)->ips_object)
+#define ips_lock_held_kdp(pset)	io_lock_held_kdp(&(pset)->ips_object)
 #define	ips_unlock(pset)	io_unlock(&(pset)->ips_object)
 #define	ips_reference(pset)	io_reference(&(pset)->ips_object)
 #define	ips_release(pset)	io_release(&(pset)->ips_object)
+
+/* get an ipc_pset pointer from an ipc_mqueue pointer */
+#define	ips_from_mq(mq)		((struct ipc_pset *)((void *)( \
+					(char *)(mq) - \
+					__offsetof(struct ipc_pset, ips_messages)) \
+				))
 
 /* Allocate a port set */
 extern kern_return_t ipc_pset_alloc(

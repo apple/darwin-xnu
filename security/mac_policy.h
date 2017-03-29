@@ -1823,6 +1823,23 @@ typedef int mpo_mount_check_snapshot_delete_t(
 	const char *name
 );
 /**
+  @brief Access control check for fs_snapshot_revert
+  @param cred Subject credential
+  @mp Filesystem mount point to revert to snapshot
+  @name Name of snapshot to revert to
+
+  Determine whether the subject identified by the credential can
+  revert the filesystem at the given mount point to the named snapshot.
+
+  @return Return 0 if access is granted, otherwise an appropriate value
+  for errno should be returned.
+*/
+typedef int mpo_mount_check_snapshot_revert_t(
+	kauth_cred_t cred,
+	struct mount *mp,
+	const char *name
+);
+/**
   @brief Access control check remounting a filesystem
   @param cred Subject credential
   @param mp The mount point
@@ -6171,7 +6188,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 46 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 47 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -6440,7 +6457,7 @@ struct mac_policy_ops {
 	mpo_sysvshm_label_recycle_t		*mpo_sysvshm_label_recycle;
 
 	mpo_reserved_hook_t			*mpo_reserved8;
-	mpo_reserved_hook_t			*mpo_reserved9;
+	mpo_mount_check_snapshot_revert_t	*mpo_mount_check_snapshot_revert;
 	mpo_vnode_check_getattr_t		*mpo_vnode_check_getattr;
 	mpo_mount_check_snapshot_create_t	*mpo_mount_check_snapshot_create;
 	mpo_mount_check_snapshot_delete_t	*mpo_mount_check_snapshot_delete;

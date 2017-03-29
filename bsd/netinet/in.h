@@ -461,7 +461,7 @@ struct ip_opts {
 #define	IP_BOUND_IF		25   /* int; set/get bound interface */
 #define	IP_PKTINFO		26   /* get pktinfo on recv socket, set src on sent dgram  */
 #define	IP_RECVPKTINFO		IP_PKTINFO	/* receive pktinfo w/dgram */
-
+#define	IP_RECVTOS		27   /* bool; receive IP TOS w/dgram */
 
 #define	IP_FW_ADD     		40   /* add a firewall rule to chain */
 #define	IP_FW_DEL    		41   /* delete a firewall rule from chain */

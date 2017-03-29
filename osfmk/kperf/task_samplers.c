@@ -33,8 +33,6 @@
 
 #include <kern/task.h>
 
-extern boolean_t workqueue_get_pwq_exceeded(void *v, boolean_t *exceeded_total,
-                                            boolean_t *exceeded_constrained);
 extern boolean_t memorystatus_proc_is_dirty_unsafe(void *v);
 
 void
@@ -43,8 +41,6 @@ kperf_task_snapshot_sample(struct kperf_task_snapshot *tksn,
 {
 	thread_t thread;
 	task_t task;
-	boolean_t wq_state_available = FALSE;
-	boolean_t exceeded_total, exceeded_constrained;
 
 	BUF_INFO(PERF_TK_SNAP_SAMPLE | DBG_FUNC_START);
 
@@ -69,22 +65,6 @@ kperf_task_snapshot_sample(struct kperf_task_snapshot *tksn,
 		tksn->kptksn_flags |= KPERF_TASK_FLAG_DIRTY;
 	}
 #endif
-
-	if (task->bsd_info) {
-		wq_state_available =
-			workqueue_get_pwq_exceeded(task->bsd_info, &exceeded_total,
-			                           &exceeded_constrained);
-	}
-	if (wq_state_available) {
-		tksn->kptksn_flags |= KPERF_TASK_FLAG_WQ_FLAGS_VALID;
-
-		if (exceeded_total) {
-			tksn->kptksn_flags |= KPERF_TASK_FLAG_WQ_EXCEEDED_TOTAL;
-		}
-		if (exceeded_constrained) {
-			tksn->kptksn_flags |= KPERF_TASK_FLAG_WQ_EXCEEDED_CONSTRAINED;
-		}
-	}
 
 	tksn->kptksn_suspend_count = task->suspend_count;
 	tksn->kptksn_pageins = task->pageins;

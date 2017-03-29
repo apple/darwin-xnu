@@ -81,6 +81,7 @@ kcdata_type_def = {
     'STACKSHOT_KCTYPE_STACKSHOT_DURATION': 0x91a,
     'STACKSHOT_KCTYPE_STACKSHOT_FAULT_STATS': 0x91b,
     'STACKSHOT_KCTYPE_KERNELCACHE_LOADINFO': 0x91c,
+    'STACKSHOT_KCTYPE_THREAD_WAITINFO' : 0x91d,
 
     'KCDATA_TYPE_BUFFER_END':      0xF19158ED,
 
@@ -934,6 +935,15 @@ KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_STACKSHOT_FAULT_STATS')]
                         KCSubTypeElement.FromBasicCtype('sfs_stopped_faulting', KCSUBTYPE_TYPE.KC_ST_UINT8, 20)
             ),
             'stackshot_fault_stats')
+
+KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_THREAD_WAITINFO')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_THREAD_WAITINFO'),
+            (
+                        KCSubTypeElement.FromBasicCtype('owner', KCSUBTYPE_TYPE.KC_ST_UINT64, 0),
+                        KCSubTypeElement.FromBasicCtype('waiter', KCSUBTYPE_TYPE.KC_ST_UINT64, 8),
+                        KCSubTypeElement.FromBasicCtype('context', KCSUBTYPE_TYPE.KC_ST_UINT64, 16),
+                        KCSubTypeElement.FromBasicCtype('wait_type', KCSUBTYPE_TYPE.KC_ST_UINT8, 24)
+            ),
+            'thread_waitinfo')
 
 #KNOWN_TYPES_COLLECTION[0x907] = KCSubTypeElement('donating_pids', KCSUBTYPE_TYPE.KC_ST_UINT32, 4, 0, 0, KCSubTypeElement._get_naked_element_value)
 KNOWN_TYPES_COLLECTION[GetTypeForName('TASK_CRASHINFO_PID')] = KCSubTypeElement('pid', KCSUBTYPE_TYPE.KC_ST_INT32, 4, 0, 0)

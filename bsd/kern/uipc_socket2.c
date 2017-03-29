@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -183,7 +183,6 @@ u_int32_t net_io_policy_uuid = 1;	/* enable UUID socket policy */
 void
 soisconnecting(struct socket *so)
 {
-
 	so->so_state &= ~(SS_ISCONNECTED|SS_ISDISCONNECTING);
 	so->so_state |= SS_ISCONNECTING;
 
@@ -193,7 +192,6 @@ soisconnecting(struct socket *so)
 void
 soisconnected(struct socket *so)
 {
-
 	so->so_state &= ~(SS_ISCONNECTING|SS_ISDISCONNECTING|SS_ISCONFIRMING);
 	so->so_state |= SS_ISCONNECTED;
 
@@ -204,35 +202,42 @@ soisconnected(struct socket *so)
 	if (so->so_head != NULL && (so->so_state & SS_INCOMP)) {
 		struct socket *head = so->so_head;
 		int locked = 0;
-		
+
 		/*
 		 * Enforce lock order when the protocol has per socket locks
 		 */
 		if (head->so_proto->pr_getlock != NULL) {
-			socket_unlock(so, 0);
 			socket_lock(head, 1);
-			socket_lock(so, 0);
+			so_acquire_accept_list(head, so);
 			locked = 1;
 		}
 		if (so->so_head == head && (so->so_state & SS_INCOMP)) {
 			so->so_state &= ~SS_INCOMP;
 			so->so_state |= SS_COMP;
-		TAILQ_REMOVE(&head->so_incomp, so, so_list);
+			TAILQ_REMOVE(&head->so_incomp, so, so_list);
 			TAILQ_INSERT_TAIL(&head->so_comp, so, so_list);
-		head->so_incqlen--;
-		
-			if (locked != 0)
-				socket_unlock(so, 0);
-		
-			postevent(head, 0, EV_RCONN);
-		sorwakeup(head);
-		wakeup_one((caddr_t)&head->so_timeo);
+			head->so_incqlen--;
 
-			if (locked != 0)
-			socket_lock(so, 0);
+			/*
+			 * We have to release the accept list in
+			 * case a socket callback calls sock_accept()
+			 */
+			if (locked != 0) {
+				so_release_accept_list(head);
+				socket_unlock(so, 0);
+			}
+			postevent(head, 0, EV_RCONN);
+			sorwakeup(head);
+			wakeup_one((caddr_t)&head->so_timeo);
+
+			if (locked != 0) {
+				socket_unlock(head, 1);
+				socket_lock(so, 0);
 		}
-		if (locked != 0)
+		} else if (locked != 0) {
+			so_release_accept_list(head);
 			socket_unlock(head, 1);
+		}
 	} else {
 		postevent(so, 0, EV_WCONN);
 		wakeup((caddr_t)&so->so_timeo);
@@ -433,6 +438,8 @@ sonewconn_internal(struct socket *head, int connstatus)
 	atomic_add_32(&so->so_proto->pr_domain->dom_refs, 1);
 
 	/* Insert in head appropriate lists */
+	so_acquire_accept_list(head, NULL);
+
 	so->so_head = head;
 
 	/*
@@ -453,6 +460,8 @@ sonewconn_internal(struct socket *head, int connstatus)
 		head->so_incqlen++;
 	}
 	head->so_qlen++;
+
+	so_release_accept_list(head);
 
 	/* Attach socket filters for this protocol */
 	sflt_initsock(so);
@@ -2083,12 +2092,12 @@ pru_connect2_notsupp(struct socket *so1, struct socket *so2)
 }
 
 int
-pru_connectx_notsupp(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
+pru_connectx_notsupp(struct socket *so, struct sockaddr *src,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope,
     sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
     uint32_t arglen, struct uio *uio, user_ssize_t *bytes_written)
 {
-#pragma unused(so, src_sl, dst_sl, p, ifscope, aid, pcid, flags, arg, arglen, uio, bytes_written)
+#pragma unused(so, src, dst, p, ifscope, aid, pcid, flags, arg, arglen, uio, bytes_written)
 	return (EOPNOTSUPP);
 }
 

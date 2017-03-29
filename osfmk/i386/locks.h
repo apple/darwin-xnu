@@ -143,7 +143,8 @@ typedef struct _lck_mtx_ext_ {
 #define	LCK_MTX_ATTR_STAT	0x2
 #define	LCK_MTX_ATTR_STATb	1
 
-#define LCK_MTX_EVENT(lck) ((event_t)(((unsigned int*)lck)+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)))
+#define LCK_MTX_EVENT(lck)        ((event_t)(((unsigned int*)(lck))+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)))
+#define LCK_EVENT_TO_MUTEX(event) ((lck_mtx_t *)(uintptr_t)(((unsigned int *)(event)) - ((sizeof(lck_mtx_t)-1)/sizeof(unsigned int))))
 
 #else /* MACH_KERNEL_PRIVATE */
 #ifdef	XNU_KERNEL_PRIVATE
@@ -205,6 +206,11 @@ typedef struct _lck_rw_t_internal_ {
 #define	LCK_RW_ATTR_DIS_MYLOCKb	28
 
 #define	LCK_RW_TAG_DESTROYED		0x00002007	/* lock marked as Destroyed */
+
+#define RW_LOCK_READER_EVENT(x)   ((event_t) (((unsigned char*) (x)) + (offsetof(lck_rw_t, lck_rw_tag))))
+#define RW_LOCK_WRITER_EVENT(x)   ((event_t) (((unsigned char*) (x)) + (offsetof(lck_rw_t, lck_rw_pad8))))
+#define READ_EVENT_TO_RWLOCK(x)   ((lck_rw_t *)(((unsigned char*)(x) - (offsetof(lck_rw_t, lck_rw_tag)))))
+#define WRITE_EVENT_TO_RWLOCK(x)  ((lck_rw_t *)(((unsigned char*)(x) - (offsetof(lck_rw_t, lck_rw_pad8)))))
 
 #if LOCK_PRIVATE
 

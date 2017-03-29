@@ -382,3 +382,80 @@ host_get_boot_info(
 
 	return (KERN_SUCCESS);
 }
+
+#if CONFIG_DTRACE
+#include <mach/sdt.h>
+#endif
+
+unsigned long long ml_io_read(uintptr_t vaddr, int size) {
+	unsigned long long result = 0;
+	unsigned char s1;
+	unsigned short s2;
+
+#if defined(__x86_64__)
+	uint64_t sabs, eabs;
+	boolean_t istate, timeread = FALSE;
+#if DEVELOPMENT || DEBUG
+	pmap_verify_noncacheable(vaddr);
+#endif /* x86_64 DEVELOPMENT || DEBUG */
+	if (__improbable(reportphyreaddelayabs != 0)) {
+		istate = ml_set_interrupts_enabled(FALSE);
+		sabs = mach_absolute_time();
+		timeread = TRUE;
+	}
+#endif /* x86_64 */
+
+	switch (size) {
+        case 1:
+		s1 = *(volatile unsigned char *)vaddr;
+		result = s1;
+		break;
+        case 2:
+		s2 = *(volatile unsigned short *)vaddr;
+		result = s2;
+		break;
+        case 4:
+		result = *(volatile unsigned int *)vaddr;
+		break;
+	case 8:
+		result = *(volatile unsigned long long *)vaddr;
+		break;
+	default:
+		panic("Invalid size %d for ml_io_read(%p)\n", size, (void *)vaddr);
+		break;
+        }
+
+#if defined(__x86_64__)
+	if (__improbable(timeread == TRUE)) {
+		eabs = mach_absolute_time();
+		(void)ml_set_interrupts_enabled(istate);
+
+		if (__improbable((eabs - sabs) > reportphyreaddelayabs)) {
+			if (phyreadpanic) {
+				panic("Read from IO virtual addr 0x%lx took %llu ns, result: 0x%llx (start: %llu, end: %llu), ceiling: %llu", vaddr, (eabs - sabs), result, sabs, eabs, reportphyreaddelayabs);
+			}
+#if CONFIG_DTRACE
+			DTRACE_PHYSLAT3(physread, uint64_t, (eabs - sabs),
+			    uint64_t, vaddr, uint32_t, size);
+#endif /* CONFIG_DTRACE */
+		}
+	}
+#endif /* x86_64 */
+	return result;
+}
+
+unsigned int ml_io_read8(uintptr_t vaddr) {
+	return (unsigned) ml_io_read(vaddr, 1);
+}
+
+unsigned int ml_io_read16(uintptr_t vaddr) {
+	return (unsigned) ml_io_read(vaddr, 2);
+}
+
+unsigned int ml_io_read32(uintptr_t vaddr) {
+	return (unsigned) ml_io_read(vaddr, 4);
+}
+
+unsigned long long ml_io_read64(uintptr_t vaddr) {
+	return ml_io_read(vaddr, 8);
+}

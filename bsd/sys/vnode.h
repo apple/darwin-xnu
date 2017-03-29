@@ -548,6 +548,7 @@ struct vnode_trigger_param {
 #define VNODE_ATTR_va_rsrc_alloc	(1LL<<40)	/* 10000000000 */
 #define VNODE_ATTR_va_fsid64		(1LL<<41)	/* 20000000000 */
 #define VNODE_ATTR_va_write_gencount    (1LL<<42)	/* 40000000000 */
+#define VNODE_ATTR_va_private_size	(1LL<<43)	/* 80000000000 */
 
 #define VNODE_ATTR_BIT(n)	(VNODE_ATTR_ ## n)
 /*
@@ -578,7 +579,8 @@ struct vnode_trigger_param {
 				VNODE_ATTR_BIT(va_rsrc_length) |	\
 				VNODE_ATTR_BIT(va_rsrc_alloc) |		\
 				VNODE_ATTR_BIT(va_fsid64) |		\
-				VNODE_ATTR_BIT(va_write_gencount))
+				VNODE_ATTR_BIT(va_write_gencount) |		\
+				VNODE_ATTR_BIT(va_private_size))
 /*
  * Attributes that can be applied to a new file object.
  */
@@ -646,7 +648,7 @@ struct vnode_attr {
 	/* misc parameters */
 	uint32_t	va_encoding;	/* filename encoding script */
 
-	enum vtype	va_type;	/* file type (create only) */
+	enum vtype	va_type;	/* file type */
 	char *		va_name;	/* Name for ATTR_CMN_NAME; MAXPATHLEN bytes */
 	guid_t		va_uuuid;	/* file owner UUID */
 	guid_t		va_guuid;	/* file group UUID */
@@ -680,6 +682,8 @@ struct vnode_attr {
 	fsid_t 		va_fsid64;	/* fsid, of the correct type  */
 
 	uint32_t va_write_gencount;     /* counter that increments each time the file changes */
+
+	uint64_t va_private_size; /* If the file were deleted, how many bytes would be freed immediately */
 
 	/* add new fields here only */
 };
@@ -749,6 +753,10 @@ extern int		vttoif_tab[];
 #define VNODE_READDIR_SEEKOFF32   0x0004   /* seek offset values should fit in 32 bits */
 #define VNODE_READDIR_NAMEMAX     0x0008   /* For extended readdir, try to limit names to NAME_MAX bytes */
 
+/* VNOP_CLONEFILE flags: */
+#define VNODE_CLONEFILE_DEFAULT   0x0000
+
+
 #define	NULLVP	((struct vnode *)NULL)
 
 #ifndef BSD_KERNEL_PRIVATE
@@ -787,11 +795,6 @@ struct vnop_generic_args {
 	/* other random data follows, presumably */
 };
 
-#ifndef _KAUTH_ACTION_T
-typedef int kauth_action_t;
-# define _KAUTH_ACTION_T
-#endif
-
 #include <sys/vnode_if.h>
 
 __BEGIN_DECLS
@@ -808,7 +811,7 @@ __BEGIN_DECLS
  */
 errno_t	vnode_create(uint32_t flavor, uint32_t size, void  *data, vnode_t *vpp);
 
-#if KERNEL_PRIVATE
+#ifdef KERNEL_PRIVATE
 /*!
  @function vnode_create_empty
  @abstract Create an empty, uninitialized vnode.
@@ -1630,6 +1633,35 @@ int	vn_bwrite(struct vnop_bwrite_args *ap);
  */
 int	vnode_authorize(vnode_t vp, vnode_t dvp, kauth_action_t action, vfs_context_t ctx);
 
+#ifdef KERNEL_PRIVATE
+/*!
+ @function vnode_attr_authorize_init
+ @abstract Initialize attributes for authorization of a kauth-style action on a file system object based on its attributes.
+ @discussion This function tells the caller what attributes may be required for a authorizing
+ a kauth style action.
+ @param vap attributes of file system object on which to authorize action.
+ @param dvap attributes of parent of file system object, can be NULL.
+ @param action Action to authorize, e.g. KAUTH_VNODE_READ_DATA.  See bsd/sys/kauth.h.
+ @param ctx Context for which to authorize actions.
+ @return EINVAL if a required parameters are not passed (for eg. not passing dvap when the action is KAUTH_ACTION_DELETE), 0 otherwise.
+ */
+#define VNODE_ATTR_AUTHORIZE_AVAILABLE		0x01
+int	vnode_attr_authorize_init(struct vnode_attr *vap, struct vnode_attr *dvap, kauth_action_t action, vfs_context_t ctx);
+
+/*!
+ @function vnode_attr_authorize
+ @abstract Authorize a kauth-style action on a file system object based on its attributes.
+ @discussion This function should be preceded by a call to vnode_attr_authorize_init to get what attributes are required.
+ @param vap attributes of file system object on which to authorize action.
+ @param dvap attributes of parent of file system object, can be NULL.
+ @param mp  mountpoint to which file system object belongs, can be NULL.
+ @param action Action to authorize, e.g. KAUTH_VNODE_READ_DATA.  See bsd/sys/kauth.h.
+ @param ctx Context for which to authorize actions.
+ @return EACCESS if permission is denied.  0 if operation allowed.  Various errors from lower layers.
+ */
+int	vnode_attr_authorize(struct vnode_attr *vap, struct vnode_attr *dvap, mount_t mp, kauth_action_t action, vfs_context_t ctx);
+#endif /* KERNEL_PRIVATE */
+
 /*!
  @function vnode_authattr
  @abstract Given a vnode_attr structure, determine what kauth-style actions must be authorized in order to set those attributes.
@@ -2085,6 +2117,7 @@ void vnode_putname_printable(const char *name);
  @function vfs_setup_vattr_from_attrlist
  @abstract Setup a vnode_attr structure given an attrlist structure.
  @Used by a VNOP_GETATTRLISTBULK implementation to setup a vnode_attr structure from a attribute list. It also returns the fixed size of the attribute buffer required.
+ @warning this forces new fork attr behavior, i.e. reinterpret forkattr bits as ATTR_CMNEXT
  @param alp Pointer to attribute list structure.
  @param vap Pointer to vnode_attr structure.
  @param obj_vtype Type of object - If VNON is passed, then the type is ignored and common, file and dir attrs are used to initialise the vattrs. If set to VDIR, only common and directory attributes are used. For all other types, only common and file attrbutes are used.

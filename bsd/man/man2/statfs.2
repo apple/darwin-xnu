@@ -96,7 +96,7 @@ struct statfs { /* when _DARWIN_FEATURE_64_BIT_INODE is NOT defined */
     uid_t   f_owner;	/* user that mounted the file system */
     short   f_reserved1;	/* reserved for future use */
     short   f_type;	/* type of file system (reserved) */
-    long    f_flags;	/* copy of mount flags (reserved) */
+    long    f_flags;	/* copy of mount flags */
     long    f_reserved2[2];	/* reserved for future use */
     char    f_fstypename[MFSNAMELEN]; /* fs type name */
     char    f_mntonname[MNAMELEN];    /* directory on which mounted */

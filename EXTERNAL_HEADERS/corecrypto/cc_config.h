@@ -213,7 +213,7 @@
 #endif
 
 #if !defined(CC_USE_HEAP_FOR_WORKSPACE)
- #if CC_USE_L4 || CC_IBOOT || CC_BASEBAND || defined(_MSC_VER)
+ #if CC_USE_L4 || CC_IBOOT || defined(_MSC_VER)
  /* For L4, stack is too short, need to use HEAP for some computations */
  /* CC_USE_HEAP_FOR_WORKSPACE not supported for KERNEL!  */
   #define CC_USE_HEAP_FOR_WORKSPACE 1

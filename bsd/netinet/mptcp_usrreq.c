@@ -55,11 +55,11 @@ static int mptcp_usr_attach(struct socket *, int, struct proc *);
 static int mptcp_usr_detach(struct socket *);
 static int mptcp_attach(struct socket *, struct proc *);
 static int mptcp_detach(struct socket *, struct mppcb *);
-static int mptcp_connectx(struct mptses *, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+static int mptcp_connectx(struct mptses *, struct sockaddr *,
+    struct sockaddr *, struct proc *, uint32_t, sae_associd_t,
     sae_connid_t *, uint32_t, void *, uint32_t);
-static int mptcp_usr_connectx(struct socket *, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+static int mptcp_usr_connectx(struct socket *, struct sockaddr *,
+    struct sockaddr *, struct proc *, uint32_t, sae_associd_t,
     sae_connid_t *, uint32_t, void *, uint32_t, struct uio *, user_ssize_t *);
 static int mptcp_getassocids(struct mptses *, uint32_t *, user_addr_t);
 static int mptcp_getconnids(struct mptses *, sae_associd_t, uint32_t *,
@@ -245,8 +245,8 @@ mptcp_detach(struct socket *mp_so, struct mppcb *mpp)
  * or to join an existing one.  Returns a connection handle upon success.
  */
 static int
-mptcp_connectx(struct mptses *mpte, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
+mptcp_connectx(struct mptses *mpte, struct sockaddr *src,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope,
     sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
     uint32_t arglen)
 {
@@ -258,7 +258,7 @@ mptcp_connectx(struct mptses *mpte, struct sockaddr_list **src_sl,
 	MPTE_LOCK_ASSERT_HELD(mpte);	/* same as MP socket lock */
 	mp_so = mpte->mpte_mppcb->mpp_socket;
 
-	VERIFY(dst_sl != NULL && *dst_sl != NULL);
+	VERIFY(dst != NULL);
 	VERIFY(pcid != NULL);
 
 	mptcplog((LOG_DEBUG, "MPTCP Socket: "
@@ -276,12 +276,25 @@ mptcp_connectx(struct mptses *mpte, struct sockaddr_list **src_sl,
 	}
 	MPTS_ADDREF(mpts);		/* for this routine */
 
-	if (src_sl != NULL) {
-		mpts->mpts_src_sl = *src_sl;
-		*src_sl = NULL;
+	if (src != NULL) {
+		int len = src->sa_len;
+
+		MALLOC(mpts->mpts_src, struct sockaddr *, len, M_SONAME,
+		    M_WAITOK | M_ZERO);
+		if (mpts->mpts_src == NULL) {
+			error = ENOBUFS;
+			goto out;
+		}
+		bcopy(src, mpts->mpts_src, len);
 	}
-	mpts->mpts_dst_sl = *dst_sl;
-	*dst_sl = NULL;
+
+	MALLOC(mpts->mpts_dst, struct sockaddr *, dst->sa_len, M_SONAME,
+	    M_WAITOK | M_ZERO);
+	if (mpts->mpts_dst == NULL) {
+		error = ENOBUFS;
+		goto out;
+	}
+	bcopy(dst, mpts->mpts_dst, dst->sa_len);
 
 	error = mptcp_subflow_add(mpte, mpts, p, ifscope);
 	if (error == 0 && pcid != NULL)
@@ -309,8 +322,8 @@ out:
  * User-protocol pru_connectx callback.
  */
 static int
-mptcp_usr_connectx(struct socket *mp_so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
+mptcp_usr_connectx(struct socket *mp_so, struct sockaddr *src,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope,
     sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
     uint32_t arglen, struct uio *auio, user_ssize_t *bytes_written)
 {
@@ -336,7 +349,7 @@ mptcp_usr_connectx(struct socket *mp_so, struct sockaddr_list **src_sl,
 		goto out;
 	}
 
-	error = mptcp_connectx(mpte, src_sl, dst_sl, p, ifscope,
+	error = mptcp_connectx(mpte, src, dst, p, ifscope,
 	    aid, pcid, flags, arg, arglen);
 
 	/* If there is data, copy it */
@@ -431,7 +444,6 @@ mptcp_getconninfo(struct mptses *mpte, sae_connid_t *cid, uint32_t *flags,
     user_addr_t aux_data, uint32_t *aux_len)
 {
 #pragma unused(aux_data)
-	struct sockaddr_entry *se;
 	struct ifnet *ifp = NULL;
 	struct mptsub *mpts;
 	int error = 0;
@@ -479,22 +491,18 @@ mptcp_getconninfo(struct mptses *mpte, sae_connid_t *cid, uint32_t *flags,
 	if (mpts->mpts_flags & MPTSF_ACTIVE)
 		*flags |= CIF_MP_ACTIVE;
 
-	VERIFY(mpts->mpts_src_sl != NULL);
-	se = TAILQ_FIRST(&mpts->mpts_src_sl->sl_head);
-	VERIFY(se != NULL && se->se_addr != NULL);
-	*src_len = se->se_addr->sa_len;
+	VERIFY(mpts->mpts_src != NULL);
+	*src_len = mpts->mpts_src->sa_len;
 	if (src != USER_ADDR_NULL) {
-		error = copyout(se->se_addr, src, se->se_addr->sa_len);
+		error = copyout(mpts->mpts_src, src, mpts->mpts_src->sa_len);
 		if (error != 0)
 			goto out;
 	}
 
-	VERIFY(mpts->mpts_dst_sl != NULL);
-	se = TAILQ_FIRST(&mpts->mpts_dst_sl->sl_head);
-	VERIFY(se != NULL && se->se_addr != NULL);
-	*dst_len = se->se_addr->sa_len;
+	VERIFY(mpts->mpts_dst != NULL);
+	*dst_len = mpts->mpts_dst->sa_len;
 	if (dst != USER_ADDR_NULL) {
-		error = copyout(se->se_addr, dst, se->se_addr->sa_len);
+		error = copyout(mpts->mpts_dst, dst, mpts->mpts_dst->sa_len);
 		if (error != 0)
 			goto out;
 	}
@@ -503,10 +511,10 @@ mptcp_getconninfo(struct mptses *mpte, sae_connid_t *cid, uint32_t *flags,
 	*aux_len = 0;
 	if (mpts->mpts_socket != NULL) {
 		struct conninfo_tcp tcp_ci;
-		
+
 		*aux_type = CIAUX_TCP;
 		*aux_len = sizeof (tcp_ci);
-		
+
 		if (aux_data != USER_ADDR_NULL) {
 			struct socket *so = mpts->mpts_socket;
 

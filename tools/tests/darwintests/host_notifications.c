@@ -28,7 +28,7 @@ static void do_test(int notify_type, void (^trigger_block)(void)){
 	mach_msg_destroy(&message.hdr);
 }
 
-T_DECL(host_notify_calendar_change, "host_request_notification(HOST_NOTIFY_CALENDAR_CHANGE)", T_META_CHECK_LEAKS(NO))
+T_DECL(host_notify_calendar_change, "host_request_notification(HOST_NOTIFY_CALENDAR_CHANGE)", T_META_CHECK_LEAKS(false), T_META_LTEPHASE(LTE_POSTINIT))
 {
 	do_test(HOST_NOTIFY_CALENDAR_CHANGE, ^{
 		struct timeval tm;
@@ -38,7 +38,7 @@ T_DECL(host_notify_calendar_change, "host_request_notification(HOST_NOTIFY_CALEN
 	});
 }
 
-T_DECL(host_notify_calendar_set, "host_request_notification(HOST_NOTIFY_CALENDAR_SET)", T_META_CHECK_LEAKS(NO))
+T_DECL(host_notify_calendar_set, "host_request_notification(HOST_NOTIFY_CALENDAR_SET)", T_META_CHECK_LEAKS(false), T_META_LTEPHASE(LTE_POSTINIT))
 {
 	do_test(HOST_NOTIFY_CALENDAR_SET, ^{
 		struct timeval tm;

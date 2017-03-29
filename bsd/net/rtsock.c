@@ -131,7 +131,7 @@ static void rt_setif(struct rtentry *, struct sockaddr *, struct sockaddr *,
 static int rt_xaddrs(caddr_t, caddr_t, struct rt_addrinfo *);
 static struct mbuf *rt_msg1(int, struct rt_addrinfo *);
 static int rt_msg2(int, struct rt_addrinfo *, caddr_t, struct walkarg *,
-    kauth_cred_t *);
+    kauth_cred_t *, uint32_t);
 static int sysctl_dumpentry(struct radix_node *rn, void *vw);
 static int sysctl_dumpentry_ext(struct radix_node *rn, void *vw);
 static int sysctl_iflist(int af, struct walkarg *w);
@@ -307,7 +307,7 @@ route_output(struct mbuf *m, struct socket *so)
 	int sendonlytoself = 0;
 	unsigned int ifscope = IFSCOPE_NONE;
 	struct rawcb *rp = NULL;
-
+	uint32_t rtm_hint_flags = 0;
 #define	senderr(e) { error = (e); goto flush; }
 	if (m == NULL || ((m->m_len < sizeof (intptr_t)) &&
 	    (m = m_pullup(m, sizeof (intptr_t))) == NULL))
@@ -519,6 +519,9 @@ route_output(struct mbuf *m, struct socket *so)
 			senderr(ESRCH);
 		RT_LOCK(rt);
 
+		if (rt->rt_ifp == lo_ifp)
+			rtm_hint_flags |= RTMF_HIDE_LLADDR;
+
 		/*
 		 * Holding rnh_lock here prevents the possibility of
 		 * ifa from changing (e.g. in_ifinit), so it is safe
@@ -526,8 +529,10 @@ route_output(struct mbuf *m, struct socket *so)
 		 */
 		switch (rtm->rtm_type) {
 		case RTM_GET: {
+			kauth_cred_t cred;
 			struct ifaddr *ifa2;
 report:
+			cred = kauth_cred_proc_ref(current_proc());
 			ifa2 = NULL;
 			RT_LOCK_ASSERT_HELD(rt);
 			info.rti_info[RTAX_DST] = rt_key(rt);
@@ -556,7 +561,9 @@ report:
 			}
 			if (ifa2 != NULL)
 				IFA_LOCK(ifa2);
-			len = rt_msg2(rtm->rtm_type, &info, NULL, NULL, NULL);
+
+			len = rt_msg2(rtm->rtm_type, &info, NULL, NULL, &cred, rtm_hint_flags);
+
 			if (ifa2 != NULL)
 				IFA_UNLOCK(ifa2);
 			if (len > rtm->rtm_msglen) {
@@ -573,8 +580,10 @@ report:
 			}
 			if (ifa2 != NULL)
 				IFA_LOCK(ifa2);
+
 			(void) rt_msg2(rtm->rtm_type, &info, (caddr_t)rtm,
-			    NULL, NULL);
+			    NULL, &cred, rtm_hint_flags);
+
 			if (ifa2 != NULL)
 				IFA_UNLOCK(ifa2);
 			rtm->rtm_flags = rt->rt_flags;
@@ -1057,7 +1066,7 @@ rt_msg1(int type, struct rt_addrinfo *rtinfo)
 
 			/* Scrub away any trace of embedded interface scope */
 			sa = rtm_scrub(type, i, hint, sa, &ssbuf,
-			    sizeof (ssbuf), NULL);
+			    sizeof (ssbuf), NULL, 0);
 			break;
 
 		default:
@@ -1082,7 +1091,7 @@ rt_msg1(int type, struct rt_addrinfo *rtinfo)
 
 static int
 rt_msg2(int type, struct rt_addrinfo *rtinfo, caddr_t cp, struct walkarg *w,
-	kauth_cred_t* credp)
+	kauth_cred_t* credp, uint32_t rtm_hint_flags)
 {
 	int i;
 	int len, dlen, rlen, second_time = 0;
@@ -1148,12 +1157,12 @@ again:
 
 			/* Scrub away any trace of embedded interface scope */
 			sa = rtm_scrub(type, i, hint, sa, &ssbuf,
-			    sizeof (ssbuf), NULL);
+			    sizeof (ssbuf), NULL, rtm_hint_flags);
 			break;
 		case RTAX_GATEWAY:
 		case RTAX_IFP:
 			sa = rtm_scrub(type, i, NULL, sa, &ssbuf,
-			    sizeof (ssbuf), credp);
+			    sizeof (ssbuf), credp, rtm_hint_flags);
 			break;
 
 		default:
@@ -1468,6 +1477,7 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	int error = 0, size;
 	struct rt_addrinfo info;
 	kauth_cred_t cred;
+	uint32_t rtm_hint_flags = 0;
 
 	cred = kauth_cred_proc_ref(current_proc());
 
@@ -1480,8 +1490,11 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
 	info.rti_info[RTAX_GENMASK] = rt->rt_genmask;
 
+	if (rt->rt_ifp == lo_ifp)
+		rtm_hint_flags |= RTMF_HIDE_LLADDR;
+
 	if (w->w_op != NET_RT_DUMP2) {
-		size = rt_msg2(RTM_GET, &info, NULL, w, &cred);
+		size = rt_msg2(RTM_GET, &info, NULL, w, &cred, rtm_hint_flags);
 		if (w->w_req != NULL && w->w_tmem != NULL) {
 			struct rt_msghdr *rtm =
 			    (struct rt_msghdr *)(void *)w->w_tmem;
@@ -1497,7 +1510,7 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 			error = SYSCTL_OUT(w->w_req, (caddr_t)rtm, size);
 		}
 	} else {
-		size = rt_msg2(RTM_GET2, &info, NULL, w, &cred);
+		size = rt_msg2(RTM_GET2, &info, NULL, w, &cred, rtm_hint_flags);
 		if (w->w_req != NULL && w->w_tmem != NULL) {
 			struct rt_msghdr2 *rtm =
 			    (struct rt_msghdr2 *)(void *)w->w_tmem;
@@ -1534,6 +1547,7 @@ sysctl_dumpentry_ext(struct radix_node *rn, void *vw)
 	int error = 0, size;
 	struct rt_addrinfo info;
 	kauth_cred_t cred;
+	uint32_t rtm_hint_flags = 0;
 
 	cred = kauth_cred_proc_ref(current_proc());
 
@@ -1546,7 +1560,10 @@ sysctl_dumpentry_ext(struct radix_node *rn, void *vw)
 	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
 	info.rti_info[RTAX_GENMASK] = rt->rt_genmask;
 
-	size = rt_msg2(RTM_GET_EXT, &info, NULL, w, &cred);
+	if (rt->rt_ifp == lo_ifp)
+		rtm_hint_flags |= RTMF_HIDE_LLADDR;
+
+	size = rt_msg2(RTM_GET_EXT, &info, NULL, w, &cred, rtm_hint_flags);
 	if (w->w_req != NULL && w->w_tmem != NULL) {
 		struct rt_msghdr_ext *ertm =
 		    (struct rt_msghdr_ext *)(void *)w->w_tmem;
@@ -1622,7 +1639,7 @@ sysctl_iflist(int af, struct walkarg *w)
 			 */
 			ifa = ifp->if_lladdr;
 			info.rti_info[RTAX_IFP] = ifa->ifa_addr;
-			len = rt_msg2(RTM_IFINFO, &info, NULL, NULL, &cred);
+			len = rt_msg2(RTM_IFINFO, &info, NULL, NULL, &cred, RTMF_HIDE_LLADDR);
 			if (pass == 0) {
 				total_len += len;
 			} else {
@@ -1635,7 +1652,7 @@ sysctl_iflist(int af, struct walkarg *w)
 				}
 				info.rti_info[RTAX_IFP] = ifa->ifa_addr;
 				len = rt_msg2(RTM_IFINFO, &info,
-				    (caddr_t)cp, NULL, &cred);
+				    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
 				info.rti_info[RTAX_IFP] = NULL;
 
 				ifm = (struct if_msghdr *)(void *)cp;
@@ -1659,7 +1676,7 @@ sysctl_iflist(int af, struct walkarg *w)
 				info.rti_info[RTAX_NETMASK] = ifa->ifa_netmask;
 				info.rti_info[RTAX_BRD] = ifa->ifa_dstaddr;
 				len = rt_msg2(RTM_NEWADDR, &info, NULL, NULL,
-				    &cred);
+				    &cred, RTMF_HIDE_LLADDR);
 				if (pass == 0) {
 					total_len += len;
 				} else {
@@ -1671,7 +1688,7 @@ sysctl_iflist(int af, struct walkarg *w)
 						break;
 					}
 					len = rt_msg2(RTM_NEWADDR, &info,
-					    (caddr_t)cp, NULL, &cred);
+					    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
 
 					ifam = (struct ifa_msghdr *)(void *)cp;
 					ifam->ifam_index =
@@ -1766,7 +1783,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 			 */
 			ifa = ifp->if_lladdr;
 			info.rti_info[RTAX_IFP] = ifa->ifa_addr;
-			len = rt_msg2(RTM_IFINFO2, &info, NULL, NULL, &cred);
+			len = rt_msg2(RTM_IFINFO2, &info, NULL, NULL, &cred, RTMF_HIDE_LLADDR);
 			if (pass == 0) {
 				total_len += len;
 			} else {
@@ -1779,7 +1796,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 				}
 				info.rti_info[RTAX_IFP] = ifa->ifa_addr;
 				len = rt_msg2(RTM_IFINFO2, &info,
-				    (caddr_t)cp, NULL, &cred);
+				    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
 				info.rti_info[RTAX_IFP] = NULL;
 
 				ifm = (struct if_msghdr2 *)(void *)cp;
@@ -1808,7 +1825,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 				info.rti_info[RTAX_NETMASK] = ifa->ifa_netmask;
 				info.rti_info[RTAX_BRD] = ifa->ifa_dstaddr;
 				len = rt_msg2(RTM_NEWADDR, &info, NULL, NULL,
-				    &cred);
+				    &cred, RTMF_HIDE_LLADDR);
 				if (pass == 0) {
 					total_len += len;
 				} else {
@@ -1820,7 +1837,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 						break;
 					}
 					len = rt_msg2(RTM_NEWADDR, &info,
-					    (caddr_t)cp, NULL, &cred);
+					    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
 
 					ifam = (struct ifa_msghdr *)(void *)cp;
 					ifam->ifam_index =
@@ -1864,7 +1881,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 					info.rti_info[RTAX_GATEWAY] =
 					    ifma->ifma_ll->ifma_addr;
 				len = rt_msg2(RTM_NEWMADDR2, &info, NULL, NULL,
-				    &cred);
+				    &cred, RTMF_HIDE_LLADDR);
 				if (pass == 0) {
 					total_len += len;
 				} else {
@@ -1876,7 +1893,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 						break;
 					}
 					len = rt_msg2(RTM_NEWMADDR2, &info,
-					    (caddr_t)cp, NULL, &cred);
+					    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
 
 					ifmam =
 					    (struct ifma_msghdr2 *)(void *)cp;

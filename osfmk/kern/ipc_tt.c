@@ -100,6 +100,7 @@
 
 /* forward declarations */
 task_t convert_port_to_locked_task(ipc_port_t port);
+task_inspect_t convert_port_to_locked_task_inspect(ipc_port_t port);
 
 
 /*
@@ -1232,6 +1233,11 @@ convert_port_to_locked_task(ipc_port_t port)
 		task = (task_t) port->ip_kobject;
 		assert(task != TASK_NULL);
 
+		if (task == kernel_task && current_task() != kernel_task) {
+			ip_unlock(port);
+			return TASK_NULL;
+		}
+
 		/*
 		 * Normal lock ordering puts task_lock() before ip_lock().
 		 * Attempt out-of-order locking here.
@@ -1247,6 +1253,47 @@ convert_port_to_locked_task(ipc_port_t port)
 	}
 	return TASK_NULL;
 }
+
+/*
+ *	Routine: convert_port_to_locked_task_inspect
+ *	Purpose:
+ *		Internal helper routine to convert from a port to a locked
+ *		task inspect right. Used by internal routines that try to convert from a
+ *		task inspect port to a reference on some task related object.
+ *	Conditions:
+ *		Nothing locked, blocking OK.
+ */
+task_inspect_t
+convert_port_to_locked_task_inspect(ipc_port_t port)
+{
+        int try_failed_count = 0;
+
+	while (IP_VALID(port)) {
+		task_inspect_t task;
+
+		ip_lock(port);
+		if (!ip_active(port) || (ip_kotype(port) != IKOT_TASK)) {
+			ip_unlock(port);
+			return TASK_INSPECT_NULL;
+		}
+		task = (task_inspect_t)port->ip_kobject;
+		assert(task != TASK_INSPECT_NULL);
+		/*
+		 * Normal lock ordering puts task_lock() before ip_lock().
+		 * Attempt out-of-order locking here.
+		 */
+		if (task_lock_try((task_t)task)) {
+			ip_unlock(port);
+			return task;
+		}
+		try_failed_count++;
+
+		ip_unlock(port);
+		mutex_pause(try_failed_count);
+	}
+	return TASK_INSPECT_NULL;
+}
+
 
 /*
  *	Routine:	convert_port_to_task
@@ -1289,6 +1336,11 @@ convert_port_to_task_with_exec_token(
 			task = (task_t)port->ip_kobject;
 			assert(task != TASK_NULL);
 
+			if (task == kernel_task && current_task() != kernel_task) {
+				ip_unlock(port);
+				return TASK_NULL;
+			}
+
 			if (exec_token) {
 				*exec_token = task->exec_token;
 			}
@@ -1324,6 +1376,38 @@ convert_port_to_task_name(
 				 ip_kotype(port) == IKOT_TASK_NAME)) {
 			task = (task_name_t)port->ip_kobject;
 			assert(task != TASK_NAME_NULL);
+
+			task_reference_internal(task);
+		}
+
+		ip_unlock(port);
+	}
+
+	return (task);
+}
+
+/*
+ *	Routine:	convert_port_to_task_inspect
+ *	Purpose:
+ *		Convert from a port to a task inspection right
+ *		Doesn't consume the port ref; produces a task ref,
+ *		which may be null.
+ *	Conditions:
+ *		Nothing locked.
+ */
+task_inspect_t
+convert_port_to_task_inspect(
+	ipc_port_t		port)
+{
+	task_inspect_t task = TASK_INSPECT_NULL;
+
+	if (IP_VALID(port)) {
+		ip_lock(port);
+
+		if (ip_active(port)	&&
+		    ip_kotype(port) == IKOT_TASK) {
+			task = (task_inspect_t)port->ip_kobject;
+			assert(task != TASK_INSPECT_NULL);
 
 			task_reference_internal(task);
 		}
@@ -1399,6 +1483,38 @@ convert_port_to_space(
 }
 
 /*
+ *	Routine:	convert_port_to_space_inspect
+ *	Purpose:
+ *		Convert from a port to a space inspect right.
+ *		Doesn't consume the port ref; produces a space inspect ref,
+ *		which may be null.
+ *	Conditions:
+ *		Nothing locked.
+ */
+ipc_space_inspect_t
+convert_port_to_space_inspect(
+	ipc_port_t	port)
+{
+	ipc_space_inspect_t space;
+	task_inspect_t task;
+
+	task = convert_port_to_locked_task_inspect(port);
+
+	if (task == TASK_INSPECT_NULL)
+		return IPC_SPACE_INSPECT_NULL;
+
+	if (!task->active) {
+		task_unlock(task);
+		return IPC_SPACE_INSPECT_NULL;
+	}
+
+	space = (ipc_space_inspect_t)task->itk_space;
+	is_reference((ipc_space_t)space);
+	task_unlock((task_t)task);
+	return space;
+}
+
+/*
  *	Routine:	convert_port_to_map
  *	Purpose:
  *		Convert from a port to a map.
@@ -1455,6 +1571,11 @@ convert_port_to_thread(
 				ip_kotype(port) == IKOT_THREAD		) {
 			thread = (thread_t)port->ip_kobject;
 			assert(thread != THREAD_NULL);
+			if (thread->task && thread->task == kernel_task &&
+			    current_task() != kernel_task) {
+				ip_unlock(port);
+				return THREAD_NULL;
+			}
 
 			thread_reference_internal(thread);
 		}
@@ -1464,6 +1585,55 @@ convert_port_to_thread(
 
 	return (thread);
 }
+
+/*
+ *	Routine:	convert_port_to_thread_inspect
+ *	Purpose:
+ *		Convert from a port to a thread inspection right
+ *		Doesn't consume the port ref; produces a thread ref,
+ *		which may be null.
+ *	Conditions:
+ *		Nothing locked.
+ */
+thread_inspect_t
+convert_port_to_thread_inspect(
+	ipc_port_t		port)
+{
+	thread_inspect_t thread = THREAD_INSPECT_NULL;
+
+	if (IP_VALID(port)) {
+		ip_lock(port);
+
+		if (ip_active(port) &&
+		    ip_kotype(port) == IKOT_THREAD) {
+			thread = (thread_inspect_t)port->ip_kobject;
+			assert(thread != THREAD_INSPECT_NULL);
+			thread_reference_internal((thread_t)thread);
+		}
+		ip_unlock(port);
+	}
+
+	return thread;
+}
+
+/*
+ *	Routine:	convert_thread_inspect_to_port
+ *	Purpose:
+ *		Convert from a thread inspect reference to a port.
+ *		Consumes a thread ref;
+ *		As we never export thread inspect ports, always
+ *		creates a NULL port.
+ *	Conditions:
+ *		Nothing locked.
+ */
+
+ipc_port_t
+convert_thread_inspect_to_port(thread_inspect_t thread)
+{
+	thread_deallocate(thread);
+	return IP_NULL;
+}
+
 
 /*
  *	Routine:	port_name_to_thread
@@ -1521,6 +1691,29 @@ port_name_to_task(
 	return task;
 }
 
+task_inspect_t
+port_name_to_task_inspect(
+	mach_port_name_t name)
+{
+	ipc_port_t kern_port;
+	kern_return_t kr;
+	task_inspect_t ti = TASK_INSPECT_NULL;
+
+	if (MACH_PORT_VALID(name)) {
+		kr = ipc_object_copyin(current_space(), name,
+		                       MACH_MSG_TYPE_COPY_SEND,
+		                       (ipc_object_t *)&kern_port);
+		if (kr != KERN_SUCCESS)
+			return TASK_NULL;
+
+		ti = convert_port_to_task_inspect(kern_port);
+
+		if (IP_VALID(kern_port))
+			ipc_port_release_send(kern_port);
+	}
+	return ti;
+}
+
 /*
  *	Routine:	port_name_to_host
  *	Purpose:
@@ -1565,14 +1758,35 @@ convert_task_to_port(
 	ipc_port_t port;
 
 	itk_lock(task);
+
 	if (task->itk_self != IP_NULL)
 		port = ipc_port_make_send(task->itk_self);
 	else
 		port = IP_NULL;
+
 	itk_unlock(task);
 
 	task_deallocate(task);
 	return port;
+}
+
+/*
+ *	Routine:	convert_task_inspect_to_port
+ *	Purpose:
+ *		Convert from a task inspect reference to a port.
+ *		Consumes a task ref;
+ *		As we never export task inspect ports, always
+ *		creates a NULL port.
+ *	Conditions:
+ *		Nothing locked.
+ */
+ipc_port_t
+convert_task_inspect_to_port(
+	task_inspect_t		task)
+{
+	task_deallocate(task);
+
+	return IP_NULL;
 }
 
 /*
@@ -1690,6 +1904,22 @@ space_deallocate(
 {
 	if (space != IS_NULL)
 		is_release(space);
+}
+
+/*
+ *	Routine:	space_inspect_deallocate
+ *	Purpose:
+ *		Deallocate a space inspect ref produced by convert_port_to_space_inspect.
+ *	Conditions:
+ *		Nothing locked.
+ */
+
+void
+space_inspect_deallocate(
+	ipc_space_inspect_t	space)
+{
+	if (space != IS_INSPECT_NULL)
+		is_release((ipc_space_t)space);
 }
 
 /*

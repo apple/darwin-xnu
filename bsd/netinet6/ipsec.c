@@ -2623,7 +2623,8 @@ ipsec6_update_routecache_and_output(
 
 	adv = &ip6oa.ip6oa_flowadv;
 	(void) ip6_output(state->m, NULL, &ro6_new, IPV6_OUTARGS, NULL, NULL, &ip6oa);
-
+	state->m = NULL;
+	
 	if (adv->code == FADV_FLOW_CONTROLLED || adv->code == FADV_SUSPENDED) {
 		error = ENOBUFS;
 		ifnet_disable_output(sav->sah->ipsec_if);
@@ -4410,7 +4411,7 @@ ipsec_copypkt(struct mbuf *m)
 			 * XXX: is this approach effective?
 			 */
 			if (
-				n->m_ext.ext_free ||
+				m_get_ext_free(n) != NULL ||
 				m_mclhasreference(n)
 			    )
 			{

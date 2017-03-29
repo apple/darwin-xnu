@@ -60,6 +60,7 @@ typedef uint32_t csr_op_t;
                          CSR_ALLOW_DEVICE_CONFIGURATION | \
                          CSR_ALLOW_ANY_RECOVERY_OS)
 
+#define CSR_ALWAYS_ENFORCED_FLAGS (CSR_ALLOW_DEVICE_CONFIGURATION | CSR_ALLOW_ANY_RECOVERY_OS)
 
 /* CSR capabilities that a booter can give to the system */
 #define CSR_CAPABILITY_UNLIMITED				(1 << 0)

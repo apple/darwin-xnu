@@ -37,10 +37,11 @@
 #include <types.h>
 #include <kern/thread.h>
 #include <console/serial_protos.h>
+#include <libkern/section_keywords.h>
 
 extern void cons_cinput(char ch);		/* The BSD routine that gets characters */
 
-unsigned int serialmode;				/* Serial mode keyboard and console control */
+SECURITY_READ_ONLY_LATE(unsigned int) serialmode;				/* Serial mode keyboard and console control */
 
 /*
  *  This routine will start a thread that polls the serial port, listening for

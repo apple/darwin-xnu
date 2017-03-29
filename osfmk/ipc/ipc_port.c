@@ -79,6 +79,8 @@
 #include <kern/misc_protos.h>
 #include <kern/waitq.h>
 #include <kern/policy_internal.h>
+#include <kern/debug.h>
+#include <kern/kcdata.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_object.h>
@@ -109,6 +111,9 @@ void	ipc_port_callstack_init_debug(
 		unsigned int	callstack_max);
 	
 #endif	/* MACH_ASSERT */
+
+void kdp_mqueue_send_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+void kdp_mqueue_recv_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
 
 void
 ipc_port_release(ipc_port_t port)
@@ -1828,6 +1833,120 @@ ipc_port_finalize(
 #if	MACH_ASSERT
 	ipc_port_track_dealloc(port);
 #endif	/* MACH_ASSERT */
+}
+
+/*
+ *	Routine:	kdp_mqueue_send_find_owner
+ *	Purpose:
+ *		Discover the owner of the ipc_mqueue that contains the input
+ *		waitq object. The thread blocked on the waitq should be
+ *		waiting for an IPC_MQUEUE_FULL event.
+ *	Conditions:
+ *		The 'waitinfo->wait_type' value should already be set to
+ *		kThreadWaitPortSend.
+ *	Note:
+ *		If we find out that the containing port is actually in
+ *		transit, we reset the wait_type field to reflect this.
+ */
+void
+kdp_mqueue_send_find_owner(struct waitq * waitq, __assert_only event64_t event, thread_waitinfo_t * waitinfo)
+{
+	assert(waitinfo->wait_type == kThreadWaitPortSend);
+	assert(event == IPC_MQUEUE_FULL);
+
+	ipc_mqueue_t mqueue = imq_from_waitq(waitq);
+	ipc_port_t port     = ip_from_mq(mqueue); /* we are blocking on send */
+	assert(kdp_is_in_zone(port, "ipc ports"));
+
+	waitinfo->owner = 0;
+	waitinfo->context  = VM_KERNEL_UNSLIDE_OR_PERM(port);
+	if (ip_lock_held_kdp(port)) {
+		/*
+		 * someone has the port locked: it may be in an
+		 * inconsistent state: bail
+		 */
+		waitinfo->owner = STACKSHOT_WAITOWNER_PORT_LOCKED;
+		return;
+	}
+
+	if (ip_active(port)) {
+		if (port->ip_tempowner) {
+			if (port->ip_imp_task != IIT_NULL) {
+				/* port is held by a tempowner */
+				waitinfo->owner = pid_from_task(port->ip_imp_task->iit_task);
+			} else {
+				waitinfo->owner = STACKSHOT_WAITOWNER_INTRANSIT;
+			}
+		} else if (port->ip_receiver_name) {
+			/* port in a space */
+			if (port->ip_receiver == ipc_space_kernel) {
+				/*
+				 * The kernel pid is 0, make this
+				 * distinguishable from no-owner and
+				 * inconsistent port state.
+				 */
+				waitinfo->owner = STACKSHOT_WAITOWNER_KERNEL;
+			} else {
+				waitinfo->owner = pid_from_task(port->ip_receiver->is_task);
+			}
+		} else if (port->ip_destination != IP_NULL) {
+			/* port in transit */
+			waitinfo->wait_type = kThreadWaitPortSendInTransit;
+			waitinfo->owner     = VM_KERNEL_UNSLIDE_OR_PERM(port->ip_destination);
+		}
+	}
+}
+
+/*
+ *	Routine:	kdp_mqueue_recv_find_owner
+ *	Purpose:
+ *		Discover the "owner" of the ipc_mqueue that contains the input
+ *		waitq object. The thread blocked on the waitq is trying to
+ *		receive on the mqueue.
+ *	Conditions:
+ *		The 'waitinfo->wait_type' value should already be set to
+ *		kThreadWaitPortReceive.
+ *	Note:
+ *		If we find that we are actualy waiting on a port set, we reset
+ *		the wait_type field to reflect this.
+ */
+void
+kdp_mqueue_recv_find_owner(struct waitq * waitq, __assert_only event64_t event, thread_waitinfo_t * waitinfo)
+{
+	assert(waitinfo->wait_type == kThreadWaitPortReceive);
+	assert(event == IPC_MQUEUE_RECEIVE);
+
+	ipc_mqueue_t mqueue = imq_from_waitq(waitq);
+	waitinfo->owner     = 0;
+	if (imq_is_set(mqueue)) { /* we are waiting on a port set */
+		ipc_pset_t set = ips_from_mq(mqueue);
+		assert(kdp_is_in_zone(set, "ipc port sets"));
+
+		/* Reset wait type to specify waiting on port set receive */
+		waitinfo->wait_type = kThreadWaitPortSetReceive;
+		waitinfo->context   = VM_KERNEL_UNSLIDE_OR_PERM(set);
+		if (ips_lock_held_kdp(set)) {
+			waitinfo->owner = STACKSHOT_WAITOWNER_PSET_LOCKED;
+		}
+		/* There is no specific owner "at the other end" of a port set, so leave unset. */
+	} else {
+		ipc_port_t port   = ip_from_mq(mqueue);
+		assert(kdp_is_in_zone(port, "ipc ports"));
+
+		waitinfo->context = VM_KERNEL_UNSLIDE_OR_PERM(port);
+		if (ip_lock_held_kdp(port)) {
+			waitinfo->owner = STACKSHOT_WAITOWNER_PORT_LOCKED;
+			return;
+		}
+
+		if (ip_active(port)) {
+			if (port->ip_receiver_name != MACH_PORT_NULL) {
+				waitinfo->owner = port->ip_receiver_name;
+			} else {
+				waitinfo->owner = STACKSHOT_WAITOWNER_INTRANSIT;
+			}
+		}
+	}
 }
 
 #if	MACH_ASSERT

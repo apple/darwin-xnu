@@ -627,6 +627,10 @@ nfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx)
 //			caps |= VOL_CAP_FMT_OPENDENYMODES;
 //			valid |= VOL_CAP_FMT_OPENDENYMODES;
 		}
+		// no version of nfs supports immutable files
+		caps |= VOL_CAP_FMT_NO_IMMUTABLE_FILES;
+		valid |= VOL_CAP_FMT_NO_IMMUTABLE_FILES;
+
 		fsap->f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] =
 			// VOL_CAP_FMT_PERSISTENTOBJECTIDS |
 			// VOL_CAP_FMT_SYMBOLICLINKS |

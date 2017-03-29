@@ -553,6 +553,16 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		break;
 	}
 
+	case STACKSHOT_KCTYPE_THREAD_WAITINFO: {
+		i = 0;
+		_SUBTYPE(KC_ST_UINT64, struct stackshot_thread_waitinfo, owner);
+		_SUBTYPE(KC_ST_UINT64, struct stackshot_thread_waitinfo, waiter);
+		_SUBTYPE(KC_ST_UINT64, struct stackshot_thread_waitinfo, context);
+		_SUBTYPE(KC_ST_UINT8, struct stackshot_thread_waitinfo, wait_type);
+		setup_type_definition(retval, type_id, i, "thread_waitinfo");
+		break;
+	}
+
 	case TASK_CRASHINFO_PROC_STARTTIME: {
 		i = 0;
 		_SUBTYPE(KC_ST_INT64, struct timeval64, tv_sec);

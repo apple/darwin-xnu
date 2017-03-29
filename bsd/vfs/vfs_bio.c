@@ -171,8 +171,17 @@ static lck_attr_t	*buf_mtx_attr;
 static lck_grp_attr_t   *buf_mtx_grp_attr;
 static lck_mtx_t	*iobuffer_mtxp;
 static lck_mtx_t	*buf_mtxp;
+static lck_mtx_t	*buf_gc_callout;
 
 static int buf_busycount;
+
+#define FS_BUFFER_CACHE_GC_CALLOUTS_MAX_SIZE 16
+typedef struct {
+	void (* callout)(int, void *);
+	void *context;
+} fs_buffer_cache_gc_callout_t;
+
+fs_buffer_cache_gc_callout_t fs_callouts[FS_BUFFER_CACHE_GC_CALLOUTS_MAX_SIZE] = { {NULL, NULL} };
 
 static __inline__ int
 buf_timestamp(void)
@@ -1329,7 +1338,8 @@ buf_strategy(vnode_t devvp, void *ap)
 			/* 
 			 * Attach the file offset to this buffer.  The
 			 * bufattr attributes will be passed down the stack
-			 * until they reach IOFlashStorage.  IOFlashStorage
+			 * until they reach the storage driver (whether 
+			 * IOFlashStorage, ASP, or IONVMe). The driver
 			 * will retain the offset in a local variable when it
 			 * issues its I/Os to the NAND controller.	 
 			 * 
@@ -1338,6 +1348,11 @@ buf_strategy(vnode_t devvp, void *ap)
 			 * case, LwVM will update this field when it dispatches
 			 * each I/O to IOFlashStorage.  But from our perspective
 			 * we have only issued a single I/O.
+			 *
+			 * In the case of APFS we do not bounce through another 
+			 * intermediate layer (such as CoreStorage). APFS will
+			 * issue the I/Os directly to the block device / IOMedia
+			 * via buf_strategy on the specfs node. 	 
 			 */
 			buf_setcpoff(bp, f_offset);
 			CP_DEBUG((CPDBG_OFFSET_IO | DBG_FUNC_NONE), (uint32_t) f_offset, (uint32_t) bp->b_lblkno, (uint32_t) bp->b_blkno, (uint32_t) bp->b_bcount, 0);
@@ -1991,12 +2006,16 @@ bufinit(void)
 	 */
 	buf_mtxp	= lck_mtx_alloc_init(buf_mtx_grp, buf_mtx_attr);
 	iobuffer_mtxp	= lck_mtx_alloc_init(buf_mtx_grp, buf_mtx_attr);
+	buf_gc_callout  = lck_mtx_alloc_init(buf_mtx_grp, buf_mtx_attr);
 
 	if (iobuffer_mtxp == NULL)
 	        panic("couldn't create iobuffer mutex");
 
 	if (buf_mtxp == NULL)
 	        panic("couldn't create buf mutex");
+
+	if (buf_gc_callout == NULL)
+		panic("couldn't create buf_gc_callout mutex");
 
 	/*
 	 * allocate and initialize cluster specific global locks...
@@ -2024,7 +2043,7 @@ bufinit(void)
  */
 
 #define MINMETA 512
-#define MAXMETA 8192
+#define MAXMETA 16384
 
 struct meta_zone_entry {
 	zone_t mz_zone;
@@ -2039,6 +2058,7 @@ struct meta_zone_entry meta_zones[] = {
 	{NULL, (MINMETA * 4),  16 * (MINMETA * 4), "buf.2048" },
 	{NULL, (MINMETA * 8), 512 * (MINMETA * 8), "buf.4096" },
 	{NULL, (MINMETA * 16), 512 * (MINMETA * 16), "buf.8192" },
+	{NULL, (MINMETA * 32), 512 * (MINMETA * 32), "buf.16384" },
 	{NULL, 0, 0, "" } /* End */
 };
 
@@ -4496,6 +4516,50 @@ dump_buffer:
 	return(0);
 }
 
+int
+fs_buffer_cache_gc_register(void (* callout)(int, void *), void *context)
+{
+	lck_mtx_lock(buf_gc_callout);
+	for (int i = 0; i < FS_BUFFER_CACHE_GC_CALLOUTS_MAX_SIZE; i++) {
+		if (fs_callouts[i].callout == NULL) {
+			fs_callouts[i].callout = callout;
+			fs_callouts[i].context = context;
+			lck_mtx_unlock(buf_gc_callout);
+			return 0;
+		}
+	}
+
+	lck_mtx_unlock(buf_gc_callout);
+	return ENOMEM;
+}
+
+int
+fs_buffer_cache_gc_unregister(void (* callout)(int, void *), void *context)
+{
+	lck_mtx_lock(buf_gc_callout);
+	for (int i = 0; i < FS_BUFFER_CACHE_GC_CALLOUTS_MAX_SIZE; i++) {
+		if (fs_callouts[i].callout == callout &&
+		    fs_callouts[i].context == context) {
+			fs_callouts[i].callout = NULL;
+			fs_callouts[i].context = NULL;
+		}
+	}
+	lck_mtx_unlock(buf_gc_callout);
+	return 0;
+}
+
+static void
+fs_buffer_cache_gc_dispatch_callouts(int all)
+{
+	lck_mtx_lock(buf_gc_callout);
+	for(int i = 0; i < FS_BUFFER_CACHE_GC_CALLOUTS_MAX_SIZE; i++) {
+		if (fs_callouts[i].callout != NULL) {
+			fs_callouts[i].callout(all, fs_callouts[i].context);
+		}
+	}
+	lck_mtx_unlock(buf_gc_callout);
+}
+
 boolean_t 
 buffer_cache_gc(int all)
 {
@@ -4624,6 +4688,8 @@ buffer_cache_gc(int all)
 	} while (all && (found == BUF_MAX_GC_BATCH_SIZE));
 
 	lck_mtx_unlock(buf_mtxp);
+
+	fs_buffer_cache_gc_dispatch_callouts(all);
 
 	return did_large_zfree;
 }

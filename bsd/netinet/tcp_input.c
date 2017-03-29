@@ -397,7 +397,6 @@ void
 reset_acc_iaj(struct tcpcb *tp)
 {
 	tp->acc_iaj = 0;
-	tp->iaj_rwintop = 0;
 	CLEAR_IAJ_STATE(tp);
 }
 
@@ -3392,7 +3391,8 @@ findpcb:
 #endif /* MPTCP */
 				isconnected = TRUE;
 
-			if (tp->t_tfo_flags & (TFO_F_COOKIE_REQ | TFO_F_COOKIE_SENT)) {
+			if ((tp->t_tfo_flags & (TFO_F_COOKIE_REQ | TFO_F_COOKIE_SENT)) ||
+			    (tp->t_tfo_stats & TFO_S_SYN_DATA_SENT)) {
 				tcp_tfo_synack(tp, &to);
 
 				if ((tp->t_tfo_stats & TFO_S_SYN_DATA_SENT) &&
@@ -5943,6 +5943,9 @@ tcp_dropdropablreq(struct socket *head)
 	if (TAILQ_EMPTY(&head->so_incomp))
 		return (0);
 
+	so_acquire_accept_list(head, NULL);
+	socket_unlock(head, NULL);
+
 	/*
 	 * Check if there is any socket in the incomp queue
 	 * that is closed because of a reset from the peer and is
@@ -6033,6 +6036,8 @@ tcp_dropdropablreq(struct socket *head)
 		so = sonext;
 	}
 	if (so == NULL) {
+		socket_lock(head, 0);
+		so_release_accept_list(head);
 		return (0);
 	}
 
@@ -6040,6 +6045,8 @@ tcp_dropdropablreq(struct socket *head)
 
 	if (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING) {
 		tcp_unlock(so, 1, 0);
+		socket_lock(head, 0);
+		so_release_accept_list(head);
 		return (0);
 	}
 
@@ -6047,15 +6054,19 @@ found_victim:
 	if (so->so_usecount != 2 || !(so->so_state & SS_INCOMP)) {
 		/* do not discard: that socket is being accepted */
 		tcp_unlock(so, 1, 0);
+		socket_lock(head, 0);
+		so_release_accept_list(head);
 		return (0);
 	}
 
+	socket_lock(head, 0);
 	TAILQ_REMOVE(&head->so_incomp, so, so_list);
 	head->so_incqlen--;
 	head->so_qlen--;
 	so->so_state &= ~SS_INCOMP;
 	so->so_flags |= SOF_OVERFLOW;
 	so->so_head = NULL;
+	so_release_accept_list(head);
 	tcp_unlock(head, 0, 0);
 
 	lck_mtx_assert(&inp->inpcb_mtx, LCK_MTX_ASSERT_OWNED);

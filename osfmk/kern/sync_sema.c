@@ -119,6 +119,12 @@ semaphore_wait_internal(
 			int				option,
 			void (*caller_cont)(kern_return_t));
 
+void
+kdp_sema_find_owner(
+			struct waitq * 		waitq,
+			event64_t		event,
+			thread_waitinfo_t *	waitinfo);
+
 static __inline__ uint64_t
 semaphore_deadline(
 	unsigned int		sec,
@@ -687,6 +693,8 @@ semaphore_wait_internal(
 		thread_t	self = current_thread();
 
 		wait_semaphore->count = -1;  /* we don't keep an actual count */
+
+		thread_set_pending_block_hint(self, kThreadWaitSemaphore);
 		(void)waitq_assert_wait64_locked(
 					&wait_semaphore->waitq,
 					SEMAPHORE_EVENT,
@@ -1171,4 +1179,15 @@ semaphore_dereference(
 	zfree(semaphore_zone, semaphore);
 }
 
+#define WAITQ_TO_SEMA(wq) ((semaphore_t) ((uintptr_t)(wq) - offsetof(struct semaphore, waitq)))
+void
+kdp_sema_find_owner(struct waitq * waitq, __assert_only event64_t event, thread_waitinfo_t * waitinfo)
+{
+	semaphore_t sem = WAITQ_TO_SEMA(waitq);
+	assert(event == SEMAPHORE_EVENT);
+	assert(kdp_is_in_zone(sem, "semaphores"));
 
+	waitinfo->context = VM_KERNEL_UNSLIDE_OR_PERM(sem->port);
+	if (sem->owner)
+		waitinfo->owner = pid_from_task(sem->owner);
+}

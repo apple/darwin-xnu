@@ -487,7 +487,6 @@ struct tcpcb {
 	uint8_t		t_pipeack_ind;		/* index for next pipeack sample */
 	uint16_t	iaj_pktcnt;		/* packet count, to avoid throttling initially */
 	uint16_t	acc_iaj;		/* Accumulated iaj */
-	tcp_seq 	iaj_rwintop;		/* recent max advertised window */
 	uint32_t	avg_iaj;		/* Mean */
 	uint32_t	std_dev_iaj;		/* Standard deviation */
 #endif /* TRAFFIC_MGT */
@@ -1450,6 +1449,7 @@ extern int tcp_ecn_inbound;
 extern u_int32_t tcp_autorcvbuf_max;
 extern u_int32_t tcp_autorcvbuf_max_ca;
 extern u_int32_t tcp_autorcvbuf_inc_shift;
+extern int tcp_recv_bg;
 
 struct protosw;
 struct domain;

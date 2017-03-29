@@ -907,6 +907,14 @@ kxld_seg_relocate(KXLDSeg *seg, kxld_addr_t link_addr)
                 // the address of the kext (macho header in __TEXT)
                 my_link_addr -= seg->base_addr;
             }
+            else if (kxld_seg_is_llvm_cov_seg(seg)) {
+                my_link_addr = link_info->vmaddr_LLVM_COV;
+                seg->link_addr = my_link_addr;
+                // vmaddr_LLVM_COV is the actual vmaddr for this segment so we need
+                // to adjust for kxld_sect_relocate assuming the link addr is
+                // the address of the kext (macho header in __TEXT)
+                my_link_addr -= seg->base_addr;
+            }
             else if (kxld_seg_is_linkedit_seg(seg)) {
                 my_link_addr = link_info->vmaddr_LINKEDIT;
                 seg->link_addr = my_link_addr;
@@ -995,7 +1003,8 @@ kxld_seg_is_split_seg(const KXLDSeg *seg)
     check(seg);
     if (isSplitKext) {
         if (kxld_seg_is_data_seg(seg) || kxld_seg_is_linkedit_seg(seg) ||
-            kxld_seg_is_text_exec_seg(seg) || kxld_seg_is_data_const_seg(seg)) {
+            kxld_seg_is_text_exec_seg(seg) || kxld_seg_is_data_const_seg(seg) ||
+            kxld_seg_is_llvm_cov_seg(seg)) {
             result = TRUE;
         }
     }
@@ -1058,3 +1067,13 @@ kxld_seg_is_linkedit_seg(const KXLDSeg *seg)
     return result;
 }
 
+boolean_t
+kxld_seg_is_llvm_cov_seg(const KXLDSeg *seg)
+{
+    boolean_t       result = FALSE;
+
+    check(seg);
+    result = !strncmp(seg->segname, "__LLVM_COV", sizeof(seg->segname));
+
+    return result;
+}

@@ -120,10 +120,23 @@ typedef uint8_t firehose_tracepoint_type_t;
  */
 OS_ENUM(firehose_tracepoint_flags, uint16_t,
 	_firehose_tracepoint_flags_base_has_current_aid		= 0x0001,
-	_firehose_tracepoint_flags_base_main_executable		= 0x0002,
-	_firehose_tracepoint_flags_base_shared_cache		= 0x0004,
-	_firehose_tracepoint_flags_base_caller_pc			= 0x0008,
+#define _firehose_tracepoint_flags_pc_style_mask		 (0x0007 << 1)
+	_firehose_tracepoint_flags_pc_style_none			= 0x0000 << 1,
+	_firehose_tracepoint_flags_pc_style_main_exe		= 0x0001 << 1,
+	_firehose_tracepoint_flags_pc_style_shared_cache	= 0x0002 << 1,
+	_firehose_tracepoint_flags_pc_style_main_plugin		= 0x0003 << 1,
+	_firehose_tracepoint_flags_pc_style_absolute		= 0x0004 << 1,
+	_firehose_tracepoint_flags_pc_style_uuid_relative	= 0x0005 << 1,
+	_firehose_tracepoint_flags_pc_style__unused6		= 0x0006 << 1,
+	_firehose_tracepoint_flags_pc_style__unused7		= 0x0007 << 1,
 	_firehose_tracepoint_flags_base_has_unique_pid		= 0x0010,
+
+	_firehose_tracepoint_flags_base_main_executable __deprecated =
+			_firehose_tracepoint_flags_pc_style_main_exe,
+	_firehose_tracepoint_flags_base_shared_cache __deprecated =
+			_firehose_tracepoint_flags_pc_style_shared_cache,
+	_firehose_tracepoint_flags_base_caller_pc __deprecated =
+			_firehose_tracepoint_flags_pc_style_absolute,
 );
 
 /*!
@@ -229,4 +242,4 @@ __END_DECLS
 
 OS_ASSUME_NONNULL_END
 
-#endif // __FIREHOSE_TYPES__
+#endif // __FIREHOSE_TYPES_PRIVATE__

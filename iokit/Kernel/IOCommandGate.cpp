@@ -189,7 +189,7 @@ IOReturn IOCommandGate::runAction(Action inAction,
 	    if (workLoop)
 	    {
 		*sleepersP |= kSleepersWaitEnabled;
-		sleepResult = wl->sleepGate(&enabled, THREAD_ABORTSAFE);
+		sleepResult = wl->sleepGate(&enabled, THREAD_INTERRUPTIBLE);
 		*sleepersP &= ~kSleepersWaitEnabled;
 	    }
 	    bool wakeupTearDown = (!workLoop || (0 != (*sleepersP & kSleepersRemoved)));

@@ -709,6 +709,18 @@ update:
 			  MNT_UNKNOWNPERMISSIONS | MNT_DONTBROWSE |
 			  MNT_AUTOMOUNTED | MNT_DEFWRITE | MNT_NOATIME |
 			  MNT_QUARANTINE | MNT_CPROTECT);
+
+#if SECURE_KERNEL
+#if !CONFIG_MNT_SUID
+	/*
+	 * On release builds of iOS based platforms, always enforce NOSUID and NODEV on
+	 * all mounts. We do this here because we can catch update mounts as well as
+	 * non-update mounts in this case.
+	 */
+	mp->mnt_flag |= (MNT_NOSUID);
+#endif
+#endif
+
 	mp->mnt_flag |= flags & (MNT_NOSUID | MNT_NOEXEC | MNT_NODEV |
 				 MNT_SYNCHRONOUS | MNT_UNION | MNT_ASYNC |
 				 MNT_UNKNOWNPERMISSIONS | MNT_DONTBROWSE |
@@ -1866,6 +1878,12 @@ dounmount(struct mount *mp, int flags, int withref, vfs_context_t ctx)
 	int pflags_save = 0;
 #endif /* CONFIG_TRIGGERS */
 
+#if CONFIG_FSE
+	if (!(flags & MNT_FORCE)) {
+		fsevent_unmount(mp, ctx);  /* has to come first! */
+	}
+#endif
+
 	mount_lock(mp);
 
 	/*
@@ -1926,9 +1944,6 @@ dounmount(struct mount *mp, int flags, int withref, vfs_context_t ctx)
 	lck_rw_lock_exclusive(&mp->mnt_rwlock);
 	if (withref != 0)
 		mount_drop(mp, 0);
-#if CONFIG_FSE
-	fsevent_unmount(mp);  /* has to come first! */
-#endif
 	error = 0;
 	if (forcedunmount == 0) {
 		ubc_umount(mp);	/* release cached vnodes */
@@ -4593,7 +4608,7 @@ retry:
 	nd.ni_flag |= NAMEI_COMPOUNDREMOVE;
 	cnp = &nd.ni_cnd;
 
-lookup_continue:
+continue_lookup:
 	error = nameiat(&nd, fd);
 	if (error)
 		return (error);
@@ -4693,7 +4708,7 @@ lookup_continue:
 				error = EISDIR;
 				goto out;
 			}
-			goto lookup_continue;
+			goto continue_lookup;
 		} else if (error == ENOENT && batched) {
 			assert(retry_count < MAX_AUTHORIZE_ENOENT_RETRIES);
 			if (retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
@@ -4874,6 +4889,12 @@ lseek(proc_t p, struct lseek_args *uap, off_t *retval)
 		offset += file_size;
 		break;
 	case L_SET:
+		break;
+	case SEEK_HOLE:
+        error = VNOP_IOCTL(vp, FSCTL_FIOSEEKHOLE, (caddr_t)&offset, 0, ctx);
+		break;
+	case SEEK_DATA:
+        error = VNOP_IOCTL(vp, FSCTL_FIOSEEKDATA, (caddr_t)&offset, 0, ctx);
 		break;
 	default:
 		error = EINVAL;
@@ -5753,6 +5774,8 @@ readlinkat(proc_t p, struct readlinkat_args *uap, int32_t *retval)
 
 /*
  * Change file flags.
+ *
+ * NOTE: this will vnode_put() `vp'
  */
 static int
 chflags1(vnode_t vp, int flags, vfs_context_t ctx)
@@ -5816,6 +5839,7 @@ chflags(__unused proc_t p, struct chflags_args *uap, __unused int32_t *retval)
 	vp = nd.ni_vp;
 	nameidone(&nd);
 
+	/* we don't vnode_put() here because chflags1 does internally */
 	error = chflags1(vp, uap->flags, ctx);
 
 	return(error);
@@ -5843,6 +5867,7 @@ fchflags(__unused proc_t p, struct fchflags_args *uap, __unused int32_t *retval)
 
 	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 
+	/* we don't vnode_put() here because chflags1 does internally */
 	error = chflags1(vp, uap->flags, vfs_context_current());
 
 	file_drop(uap->fd);
@@ -6804,13 +6829,14 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 	struct nameidata tond;
 	int error;
 	int follow;
-	boolean_t free_acl;
+	boolean_t free_src_acl;
 	boolean_t attr_cleanup;
 	enum vtype v_type;
 	kauth_action_t action;
 	struct componentname *cnp;
 	uint32_t defaulted;
 	struct vnode_attr va;
+	struct vnode_attr nva;
 
 	v_type = vnode_vtype(fvp);
 	switch (v_type) {
@@ -6842,7 +6868,7 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 	tdvp = tond.ni_dvp;
 	tvp = tond.ni_vp;
 
-	free_acl = FALSE;
+	free_src_acl = FALSE;
 	attr_cleanup = FALSE;
 
 	if (tvp != NULL) {
@@ -6873,7 +6899,8 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 	 * those here.
 	 */
 	VATTR_INIT(&va);
-	VATTR_WANTED(&va, va_type);
+	VATTR_WANTED(&va, va_uid);
+	VATTR_WANTED(&va, va_gid);
 	VATTR_WANTED(&va, va_mode);
 	VATTR_WANTED(&va, va_flags);
 	VATTR_WANTED(&va, va_acl);
@@ -6881,44 +6908,46 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 	if ((error = vnode_getattr(fvp, &va, ctx)) != 0)
 		goto out;
 
-	if (!VATTR_IS_SUPPORTED(&va, va_acl))
-		VATTR_CLEAR_ACTIVE(&va, va_acl);
-	else if (va.va_acl != NULL)
-		free_acl = TRUE;
-
-	if (!VATTR_IS_SUPPORTED(&va, va_mode)) {
-		VATTR_CLEAR_ACTIVE(&va, va_mode);
-	} else {
-		proc_t p = vfs_context_proc(ctx);
-
-		VATTR_SET(&va, va_mode,
-		    (va.va_mode & ACCESSPERMS) & ~p->p_fd->fd_cmask);
-	}
-
-	if (!VATTR_IS_SUPPORTED(&va, va_flags)) {
-		VATTR_CLEAR_ACTIVE(&va, va_flags);
-	} else if (va.va_flags & SF_RESTRICTED) {
-		/*
-		 * Turn off SF_RESTRICTED from source, if the destination needs
-		 * it, it will be handled in vnode_authattr_new.
-		 */
-		VATTR_SET(&va, va_flags, (va.va_flags & ~SF_RESTRICTED));
+	VATTR_INIT(&nva);
+	VATTR_SET(&nva, va_type, v_type);
+	if (VATTR_IS_SUPPORTED(&va, va_acl) && va.va_acl != NULL) {
+		VATTR_SET(&nva, va_acl, va.va_acl);
+		free_src_acl = TRUE;
 	}
 
 	/* Handle ACL inheritance, initialize vap. */
 	if (v_type == VLNK) {
-		error = vnode_authattr_new(tdvp, &va, 0, ctx);
+		error = vnode_authattr_new(tdvp, &nva, 0, ctx);
 	} else {
-		error = vn_attribute_prepare(tdvp, &va, &defaulted, ctx);
+		error = vn_attribute_prepare(tdvp, &nva, &defaulted, ctx);
+		if (error)
+			goto out;
 		attr_cleanup = TRUE;
 	}
 
-	if (error) {
-		attr_cleanup = FALSE;
-		goto out;
+	/*
+	 * We've got initial values for all security parameters,
+	 * If we are superuser, then we can change owners to be the
+	 * same as the source. Both superuser and the owner have default
+	 * WRITE_SECURITY privileges so all other fields can be taken
+	 * from source as well.
+	 */
+	if (vfs_context_issuser(ctx)) {
+		if (VATTR_IS_SUPPORTED(&va, va_uid))
+			VATTR_SET(&nva, va_uid, va.va_uid);
+		if (VATTR_IS_SUPPORTED(&va, va_gid))
+			VATTR_SET(&nva, va_gid, va.va_gid);
+	}
+	if (VATTR_IS_SUPPORTED(&va, va_mode))
+		VATTR_SET(&nva, va_mode, va.va_mode);
+	if (VATTR_IS_SUPPORTED(&va, va_flags)) {
+		VATTR_SET(&nva, va_flags,
+		    ((va.va_flags & ~SF_RESTRICTED) | /* Turn off from source */
+		    (nva.va_flags & SF_RESTRICTED)));
 	}
 
-	error = VNOP_CLONEFILE(fvp, tdvp, &tvp, cnp, &va, flags, ctx);
+	error = VNOP_CLONEFILE(fvp, tdvp, &tvp, cnp, &nva,
+	    VNODE_CLONEFILE_DEFAULT, ctx);
 
 	if (!error && tvp) {
 		int	update_flags = 0;
@@ -6935,7 +6964,7 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 		 * VNOP, use our fallback code.
 		 */
 		if (!VATTR_ALL_SUPPORTED(&va))
-			(void)vnode_setattr_fallback(tvp, &va, ctx);
+			(void)vnode_setattr_fallback(tvp, &nva, ctx);
 
 		// Make sure the name & parent pointers are hooked up
 		if (tvp->v_name == NULL)
@@ -6968,31 +6997,11 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 		}
 #endif /* CONFIG_FSE */
 	}
-#if CLONE_SNAPSHOT_FALLBACKS_ENABLED
-          else if (error == ENOTSUP) {
-		struct vfs_attr vfa;
-
-		/*
-		 * Fallback to VNOP_COPYFILE but check first that the
-		 * filesystem supports cloning.
-		 */
-		VFSATTR_INIT(&vfa);
-		VFSATTR_WANTED(&vfa, f_capabilities);
-		if ((vfs_getattr(vnode_mount(tdvp), &vfa, ctx) == 0) &&
-		    VFSATTR_IS_SUPPORTED(&vfa, f_capabilities) &&
-		    (vfa.f_capabilities.capabilities[VOL_CAPABILITIES_INTERFACES] & VOL_CAP_INT_CLONE) &&
-		    (vfa.f_capabilities.valid[VOL_CAPABILITIES_INTERFACES] & VOL_CAP_INT_CLONE)) {
-
-			error = VNOP_COPYFILE(fvp, tdvp, tvp, cnp, 0,
-			    0, ctx);
-		}
-	}
-#endif /* CLONE_SNAPSHOT_FALLBACKS_ENABLED */
 
 out:
 	if (attr_cleanup)
-		vn_attribute_cleanup(&va, defaulted);
-	if (free_acl && va.va_acl)
+		vn_attribute_cleanup(&nva, defaulted);
+	if (free_src_acl && va.va_acl)
 		kauth_acl_free(va.va_acl);
 	nameidone(&tond);
 	if (tvp)
@@ -8246,8 +8255,10 @@ unionread:
 			error = union_dircheckp(&vp, fp, &context);
 			if (error == -1)
 				goto unionread;
-			if (error)
+			if (error) {
+				(void)vnode_put(vp);
 				goto out;
+			}
 		}
 
 		if ((vp->v_mount->mnt_flag & MNT_UNION)) {
@@ -8941,8 +8952,10 @@ searchfs(proc_t p, struct searchfs_args *uap, __unused int32_t *retval)
 			error = ENOENT;
 			goto freeandexit;
 		}
-		vnode_getwithref(vp);
+		error = vnode_getwithref(vp);
 		vnode_put(tvp);
+		if (error)
+			goto freeandexit;
 	}
 
 #if CONFIG_MACF
@@ -10743,6 +10756,8 @@ static int fsgetpath_internal(
 	vnode_t vp;
 	int length;
 	int bpflags;
+	/* maximum number of times to retry build_path */
+	unsigned int retries = 0x10;
 
 	if (bufsize > PAGE_SIZE) {
 		return (EINVAL);
@@ -10752,6 +10767,7 @@ static int fsgetpath_internal(
 		return (ENOMEM);
 	}
 
+retry:
 	if ((mp = mount_lookupby_volfsid(volfs_id, 1)) == NULL) {
 		error = ENOTSUP;  /* unexpected failure */
 		return ENOTSUP;
@@ -10798,6 +10814,14 @@ unionget:
 	vnode_put(vp);
 
 	if (error) {
+		/* there was a race building the path, try a few more times */
+		if (error == EAGAIN) {
+			--retries;
+			if (retries > 0)
+				goto retry;
+
+			error = ENOENT;
+		}
 		goto out;
 	}
 
@@ -11197,32 +11221,7 @@ vfs_purge(__unused struct proc *p, __unused struct vfs_purge_args *uap, __unused
 int
 vnode_get_snapdir(vnode_t rvp, vnode_t *sdvpp, vfs_context_t ctx)
 {
-	int error;
-
-	error = VFS_VGET_SNAPDIR(vnode_mount(rvp), sdvpp, ctx);
-
-#if CLONE_SNAPSHOT_FALLBACKS_ENABLED
-	if (error == ENOTSUP) {
-		struct nameidata snapnd;
-
-		/*
-		 * Temporary fallback to <mountpoint>/.snaps lookup
-		 * XXX: To be removed.
-		 */
-		NDINIT(&snapnd, LOOKUP, OP_LOOKUP,  USEDVP,
-		    UIO_SYSSPACE, CAST_USER_ADDR_T(".snaps"), ctx);
-		snapnd.ni_dvp = rvp;
-
-		if ((error = namei(&snapnd))) {
-			error = ENOTSUP;
-			*sdvpp = NULLVP;
-		} else {
-			*sdvpp = snapnd.ni_vp;
-			nameidone(&snapnd);
-		}
-	}
-#endif /* CLONE_SNAPSHOT_FALLBACKS_ENABLED */
-	return (error);
+	return (VFS_VGET_SNAPDIR(vnode_mount(rvp), sdvpp, ctx));
 }
 
 /*
@@ -11376,12 +11375,6 @@ snapshot_create(int dirfd, user_addr_t name, __unused uint32_t flags,
 		    VN_CREATE_NOAUTH  | VN_CREATE_NOINHERIT, 0, NULL, ctx);
 		if (!error && vp)
 			vnode_put(vp);
-#if CLONE_SNAPSHOT_FALLBACKS_ENABLED
-		else if (error) {
-			error = VNOP_COPYFILE(rvp, rvp, NULLVP, &namend.ni_cnd,
-			    0, 0, ctx);
-		}
-#endif /* CLONE_SNAPSHOT_FALLBACKS_ENABLED */
 	}
 
 	nameidone(&namend);
@@ -11443,6 +11436,23 @@ snapshot_revert(int dirfd, user_addr_t name, __unused uint32_t flags,
     }
     mp = vnode_mount(rvp);
 
+    MALLOC(name_buf, caddr_t, MAXPATHLEN, M_TEMP, M_WAITOK);
+    error = copyinstr(name, name_buf, MAXPATHLEN, &name_len);
+    if (error) {
+        FREE(name_buf, M_TEMP);
+        vnode_put(rvp);
+        return (error);
+    }
+
+#if CONFIG_MACF
+    error = mac_mount_check_snapshot_revert(ctx, mp, name_buf);
+    if (error) {
+        FREE(name_buf, M_TEMP);
+        vnode_put(rvp);
+        return (error);
+    }
+#endif
+
     /*
      * Grab mount_iterref so that we can release the vnode,
      * since VFSIOC_REVERT_SNAPSHOT could conceivably cause a sync.
@@ -11450,13 +11460,6 @@ snapshot_revert(int dirfd, user_addr_t name, __unused uint32_t flags,
     error = mount_iterref (mp, 0);
     vnode_put(rvp);
     if (error) {
-        return (error);
-    }
-
-    MALLOC(name_buf, caddr_t, MAXPATHLEN, M_TEMP, M_WAITOK);
-    error = copyinstr(name, name_buf, MAXPATHLEN, &name_len);
-    if (error) {
-        mount_iterdrop(mp);
         FREE(name_buf, M_TEMP);
         return (error);
     }
@@ -11613,7 +11616,7 @@ out:
  */
 static int
 snapshot_mount(int dirfd, user_addr_t name, user_addr_t directory,
-    user_addr_t mnt_data, __unused uint32_t flags, vfs_context_t ctx)
+    __unused user_addr_t mnt_data, __unused uint32_t flags, vfs_context_t ctx)
 {
 	vnode_t rvp, snapdvp, snapvp, vp, pvp;
 	int error;
@@ -11661,12 +11664,6 @@ snapshot_mount(int dirfd, user_addr_t name, user_addr_t directory,
 		error = mount_common(mp->mnt_vfsstat.f_fstypename, pvp, vp,
 		   &dirndp->ni_cnd, CAST_USER_ADDR_T(&smnt_data), 0,
 		   KERNEL_MOUNT_SNAPSHOT, NULL, FALSE, ctx);
-		if (error) {
-			/* Retry with user passed args */
-			error = mount_common(mp->mnt_vfsstat.f_fstypename, pvp,
-			   vp, &dirndp->ni_cnd, CAST_USER_ADDR_T(mnt_data), 0,
-			   0, NULL, FALSE, ctx);
-		}
 	}
 
 	vnode_put(vp);
@@ -11683,6 +11680,67 @@ out:
 }
 
 /*
+ * Root from a snapshot of the filesystem
+ *
+ * Marks the filesystem to root from the given snapshot on next boot.
+ */
+static int
+snapshot_root(int dirfd, user_addr_t name, __unused uint32_t flags,
+                vfs_context_t ctx)
+{
+    int error;
+    vnode_t rvp;
+    mount_t mp;
+    struct fs_snapshot_root_args root_data;
+    struct componentname cnp;
+    caddr_t name_buf;
+    size_t name_len;
+    
+    error = vnode_getfromfd(ctx, dirfd, &rvp);
+    if (error) {
+        return (error);
+    }
+    mp = vnode_mount(rvp);
+    
+    MALLOC(name_buf, caddr_t, MAXPATHLEN, M_TEMP, M_WAITOK);
+    error = copyinstr(name, name_buf, MAXPATHLEN, &name_len);
+    if (error) {
+        FREE(name_buf, M_TEMP);
+        vnode_put(rvp);
+        return (error);
+    }
+   
+    // XXX MAC checks ?
+    
+    /*
+     * Grab mount_iterref so that we can release the vnode,
+     * since VFSIOC_ROOT_SNAPSHOT could conceivably cause a sync.
+     */
+    error = mount_iterref (mp, 0);
+    vnode_put(rvp);
+    if (error) {
+        FREE(name_buf, M_TEMP);
+        return (error);
+    }
+    
+    memset(&cnp, 0, sizeof(cnp));
+    cnp.cn_pnbuf = (char *)name_buf;
+    cnp.cn_nameiop = LOOKUP;
+    cnp.cn_flags = ISLASTCN | HASBUF;
+    cnp.cn_pnlen = MAXPATHLEN;
+    cnp.cn_nameptr = cnp.cn_pnbuf;
+    cnp.cn_namelen = (int)name_len;
+    root_data.sr_cnp = &cnp;
+    
+    error = VFS_IOCTL(mp, VFSIOC_ROOT_SNAPSHOT, (caddr_t)&root_data, 0, ctx);
+    
+    mount_iterdrop(mp);
+    FREE(name_buf, M_TEMP);
+    
+    return (error);
+}
+
+/*
  * FS snapshot operations dispatcher
  */
 int
@@ -11691,6 +11749,9 @@ fs_snapshot(__unused proc_t p, struct fs_snapshot_args *uap,
 {
 	int error;
 	vfs_context_t ctx = vfs_context_current();
+
+	AUDIT_ARG(fd, uap->dirfd);
+	AUDIT_ARG(value32, uap->op);
 
 	error = priv_check_cred(vfs_context_ucred(ctx), PRIV_VFS_SNAPSHOT, 0);
 	if (error)
@@ -11714,6 +11775,9 @@ fs_snapshot(__unused proc_t p, struct fs_snapshot_args *uap,
     case SNAPSHOT_OP_REVERT:
         error = snapshot_revert(uap->dirfd, uap->name1, uap->flags, ctx);
         break;
+	case SNAPSHOT_OP_ROOT:
+		error = snapshot_root(uap->dirfd, uap->name1, uap->flags, ctx);
+		break;
 	default:
 		error = ENOSYS;
 	}

@@ -1849,7 +1849,7 @@ proc_inherit_task_role(task_t new_task,
 	proc_set_task_policy(new_task, TASK_POLICY_ATTRIBUTE, TASK_POLICY_ROLE, role);
 }
 
-extern task_t bsd_init_task;
+extern void *initproc;
 
 /*
  * Compute the default main thread qos for a task
@@ -1878,7 +1878,7 @@ task_compute_main_thread_qos(task_t task)
 			break;
 	}
 
-	if (task == bsd_init_task) {
+	if (task->bsd_info == initproc) {
 		/* PID 1 gets a special case */
 		primordial_qos = MAX(primordial_qos, THREAD_QOS_USER_INITIATED);
 	}

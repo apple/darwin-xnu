@@ -119,6 +119,8 @@
 #include <kern/task.h>
 #include <kern/exception.h>
 #include <kern/affinity.h>
+#include <kern/debug.h>
+#include <kern/block_hint.h>
 
 #include <kern/waitq.h>
 
@@ -504,6 +506,9 @@ struct thread {
 	uint32_t        user_promotions;
 	uint16_t        user_promotion_basepri;
 
+	block_hint_t    pending_block_hint;
+	block_hint_t    block_hint;      /* What type of primitive last caused us to block. */
+
 	int	iotier_override; /* atomic operations to set, cleared on ret to user */
 	io_stat_info_t  		thread_io_stats; /* per-thread I/O statistics */
 
@@ -583,6 +588,9 @@ extern void			thread_deallocate(
 
 extern void			thread_deallocate_safe(
 						thread_t		thread);
+
+extern void			thread_inspect_deallocate(
+						thread_inspect_t	thread);
 
 extern void			thread_terminate_self(void);
 
@@ -986,9 +994,9 @@ extern void		uthread_cleanup(task_t, void *, void *);
 extern void		uthread_zone_free(void *); 
 extern void		uthread_cred_free(void *);
 
+extern void		uthread_reset_proc_refcount(void *);
 #if PROC_REF_DEBUG
 extern int		uthread_get_proc_refcount(void *);
-extern void		uthread_reset_proc_refcount(void *);
 extern int		proc_ref_tracking_disabled;
 #endif
 
@@ -1106,6 +1114,7 @@ extern kern_return_t	kernel_thread_start(
 void thread_set_eager_preempt(thread_t thread);
 void thread_clear_eager_preempt(thread_t thread);
 extern ipc_port_t convert_thread_to_port(thread_t);
+extern ipc_port_t convert_thread_inspect_to_port(thread_inspect_t);
 extern boolean_t is_vm_privileged(void);
 extern boolean_t set_vm_privilege(boolean_t);
 #endif /* KERNEL_PRIVATE */

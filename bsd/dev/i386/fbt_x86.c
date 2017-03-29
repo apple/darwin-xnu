@@ -650,6 +650,14 @@ __provide_probe_64(struct modctl *ctl, uintptr_t instrLow, uintptr_t instrHigh, 
 	machine_inst_t *instr, *limit, theInstr, i1, i2, i3;
 	int size;
 		
+	/*
+	 * Guard against null symbols
+	 */
+	if (!symbolStart || !instrLow || !instrHigh) {
+		kprintf("dtrace: %s has an invalid address\n", symbolName);
+		return;
+	}
+
 	for (j = 0, instr = symbolStart, theInstr = 0;
 	     (j < 4) && ((uintptr_t)instr >= instrLow) && (instrHigh > (uintptr_t)(instr + 2)); 
 	     j++) {

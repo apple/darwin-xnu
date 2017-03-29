@@ -490,7 +490,7 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 static int
 tcp_usr_connectx_common(struct socket *so, int af,
-    struct sockaddr_list **src_sl, struct sockaddr_list **dst_sl,
+    struct sockaddr *src, struct sockaddr *dst,
     struct proc *p, uint32_t ifscope, sae_associd_t aid, sae_connid_t *pcid,
     uint32_t flags, void *arg, uint32_t arglen, struct uio *auio,
     user_ssize_t *bytes_written)
@@ -499,7 +499,6 @@ tcp_usr_connectx_common(struct socket *so, int af,
 #if !MPTCP
 #pragma unused(flags, arg, arglen)
 #endif /* !MPTCP */
-	struct sockaddr_entry *src_se = NULL, *dst_se = NULL;
 	struct inpcb *inp = sotoinpcb(so);
 	int error;
 	user_ssize_t datalen = 0;
@@ -507,20 +506,10 @@ tcp_usr_connectx_common(struct socket *so, int af,
 	if (inp == NULL)
 		return (EINVAL);
 
-	VERIFY(dst_sl != NULL);
-
-	/* select source (if specified) and destination addresses */
-	error = in_selectaddrs(af, src_sl, &src_se, dst_sl, &dst_se);
-	if (error != 0)
-		return (error);
-
-	VERIFY(*dst_sl != NULL && dst_se != NULL);
-	VERIFY(src_se == NULL || *src_sl != NULL);
-	VERIFY(dst_se->se_addr->sa_family == af);
-	VERIFY(src_se == NULL || src_se->se_addr->sa_family == af);
+	VERIFY(dst != NULL);
 
 #if NECP
-	inp_update_necp_policy(inp, src_se ? src_se->se_addr : NULL, dst_se ? dst_se->se_addr : NULL, ifscope);
+	inp_update_necp_policy(inp, src, dst, ifscope);
 #endif /* NECP */
 
 	if ((so->so_flags1 & SOF1_DATA_IDEMPOTENT) &&
@@ -564,9 +553,8 @@ tcp_usr_connectx_common(struct socket *so, int af,
 			return (error);
 
 		/* if source address and/or port is specified, bind to it */
-		if (src_se != NULL) {
-			struct sockaddr *sa = src_se->se_addr;
-			error = sobindlock(so, sa, 0);	/* already locked */
+		if (src != NULL) {
+			error = sobindlock(so, src, 0);	/* already locked */
 			if (error != 0)
 				return (error);
 		}
@@ -574,11 +562,11 @@ tcp_usr_connectx_common(struct socket *so, int af,
 
 	switch (af) {
 	case AF_INET:
-		error = tcp_usr_connect(so, dst_se->se_addr, p);
+		error = tcp_usr_connect(so, dst, p);
 		break;
 #if INET6
 	case AF_INET6:
-		error = tcp6_usr_connect(so, dst_se->se_addr, p);
+		error = tcp6_usr_connect(so, dst, p);
 		break;
 #endif /* INET6 */
 	default:
@@ -622,14 +610,13 @@ tcp_usr_connectx_common(struct socket *so, int af,
 }
 
 static int
-tcp_usr_connectx(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
+tcp_usr_connectx(struct socket *so, struct sockaddr *src,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope,
     sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
     uint32_t arglen, struct uio *uio, user_ssize_t *bytes_written)
 {
-	return (tcp_usr_connectx_common(so, AF_INET, src_sl, dst_sl,
-	    p, ifscope, aid, pcid, flags, arg, arglen, uio,
-	    bytes_written));
+	return (tcp_usr_connectx_common(so, AF_INET, src, dst, p, ifscope, aid,
+	    pcid, flags, arg, arglen, uio, bytes_written));
 }
 
 #if INET6
@@ -720,14 +707,13 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 }
 
 static int
-tcp6_usr_connectx(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
+tcp6_usr_connectx(struct socket *so, struct sockaddr*src,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope,
     sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
     uint32_t arglen, struct uio *uio, user_ssize_t *bytes_written)
 {
-	return (tcp_usr_connectx_common(so, AF_INET6, src_sl, dst_sl,
-	    p, ifscope, aid, pcid, flags, arg, arglen, uio,
-	    bytes_written));
+	return (tcp_usr_connectx_common(so, AF_INET6, src, dst, p, ifscope, aid,
+	    pcid, flags, arg, arglen, uio, bytes_written));
 }
 #endif /* INET6 */
 
@@ -1567,7 +1553,7 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 			tp->t_bwmeas != NULL) {
 			ti->tcpi_snd_bw	= (tp->t_bwmeas->bw_sndbw * 8000);
 		}
-		
+
 		ti->tcpi_last_outif = (tp->t_inpcb->inp_last_outifp == NULL) ? 0 :
 		    tp->t_inpcb->inp_last_outifp->if_index;
 
@@ -1575,8 +1561,9 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 		ti->tcpi_txpackets = inp->inp_stat->txpackets;
 		ti->tcpi_txbytes = inp->inp_stat->txbytes;
 		ti->tcpi_txretransmitbytes = tp->t_stat.txretransmitbytes;
+		ti->tcpi_txretransmitpackets = tp->t_stat.rxmitpkts;
 		ti->tcpi_txunacked = tp->snd_max - tp->snd_una;
-		
+
 		//atomic_get_64(ti->tcpi_rxbytes, &inp->inp_stat->rxbytes);
 		ti->tcpi_rxpackets = inp->inp_stat->rxpackets;
 		ti->tcpi_rxbytes = inp->inp_stat->rxbytes;
@@ -1743,6 +1730,7 @@ tcp_connection_fill_info(struct tcpcb *tp, struct tcp_connection_info *tci)
 		tci->tcpi_txpackets = inp->inp_stat->txpackets;
 		tci->tcpi_txbytes = inp->inp_stat->txbytes;
 		tci->tcpi_txretransmitbytes = tp->t_stat.txretransmitbytes;
+		tci->tcpi_txretransmitpackets = tp->t_stat.rxmitpkts;
 		tci->tcpi_rxpackets = inp->inp_stat->rxpackets;
 		tci->tcpi_rxbytes = inp->inp_stat->rxbytes;
 		tci->tcpi_rxoutoforderbytes = tp->t_stat.rxoutoforderbytes;

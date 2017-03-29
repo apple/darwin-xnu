@@ -1224,6 +1224,9 @@ extern void		vm_map_set_64bit(
 extern void		vm_map_set_32bit(
 			        vm_map_t		map);
 
+extern void		vm_map_set_jumbo(
+			        vm_map_t		map);
+
 extern boolean_t	vm_map_has_hard_pagezero(
 		       		vm_map_t		map,
 				vm_map_offset_t		pagezero_size);

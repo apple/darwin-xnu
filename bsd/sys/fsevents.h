@@ -43,8 +43,9 @@
 #define FSE_XATTR_REMOVED       10
 #define FSE_DOCID_CREATED       11
 #define FSE_DOCID_CHANGED       12
+#define FSE_UNMOUNT_PENDING     13 // iOS-only: client must respond via FSEVENTS_UNMOUNT_PENDING_ACK
 
-#define FSE_MAX_EVENTS          13
+#define FSE_MAX_EVENTS          14
 #define FSE_ALL_EVENTS         998
 
 #define FSE_EVENTS_DROPPED     999
@@ -122,12 +123,13 @@ typedef struct fsevent_dev_filter_args {
 #define	FSEVENTS_WANT_COMPACT_EVENTS	_IO('s', 101)
 #define	FSEVENTS_WANT_EXTENDED_INFO	_IO('s', 102)
 #define	FSEVENTS_GET_CURRENT_ID		_IOR('s', 103, uint64_t)
+#define	FSEVENTS_UNMOUNT_PENDING_ACK	_IOW('s', 104, dev_t)
 
 
 #ifdef BSD_KERNEL_PRIVATE
 
 void fsevents_init(void);
-void fsevent_unmount(struct mount *mp);
+void fsevent_unmount(struct mount *mp, vfs_context_t ctx);
 struct vnode_attr;
 void create_fsevent_from_kevent(vnode_t vp, uint32_t kevents, struct vnode_attr *vap);
 

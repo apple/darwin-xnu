@@ -32,6 +32,7 @@ extern "C" {
 #include <kern/host.h>
 #include <kern/kext_alloc.h>
 #include <firehose/tracepoint_private.h>
+#include <firehose/chunk_private.h>
 #include <os/firehose_buffer_private.h>
 #include <vm/vm_kern.h>
 #include <kextd/kextd_mach.h>
@@ -3305,6 +3306,52 @@ finish:
     return foundKext;
 }
 
+OSData *
+OSKext::copyKextUUIDForAddress(OSNumber *address)
+{
+	OSData *uuid = NULL;
+
+	if (!address) {
+		return NULL;
+	}
+
+	uintptr_t addr = (uintptr_t)address->unsigned64BitValue() + vm_kernel_slide;
+
+#if CONFIG_MACF
+	/* Is the calling process allowed to query kext info? */
+	if (current_task() != kernel_task) {
+		int macCheckResult = 0;
+		kauth_cred_t cred = NULL;
+
+		cred = kauth_cred_get_with_ref();
+		macCheckResult = mac_kext_check_query(cred);
+		kauth_cred_unref(&cred);
+
+		if (macCheckResult != 0) {
+			OSKextLog(/* kext */ NULL,
+					kOSKextLogErrorLevel | kOSKextLogLoadFlag,
+					"Failed to query kext UUID (MAC policy error 0x%x).",
+					macCheckResult);
+			return NULL;
+		}
+	}
+#endif
+
+	if (((vm_offset_t)addr >= vm_kernel_stext) && ((vm_offset_t)addr < vm_kernel_etext)) {
+		/* address in xnu proper */
+		unsigned long uuid_len = 0;
+		uuid = OSData::withBytes(getuuidfromheader(&_mh_execute_header, &uuid_len), uuid_len);
+	} else {
+		IOLockLock(sKextSummariesLock);
+		OSKextLoadedKextSummary *summary = OSKext::summaryForAddress(addr);
+		if (summary) {
+			uuid = OSData::withBytes(summary->uuid, sizeof(uuid_t));
+		}
+		IOLockUnlock(sKextSummariesLock);
+	}
+
+	return uuid;
+}
 
 /*********************************************************************
 *********************************************************************/
@@ -7891,10 +7938,6 @@ OSKext::handleRequest(
          if (responseObject) {
              result = kOSReturnSuccess;
          } else {
-             OSKextLog(/* kext */ NULL,
-                       kOSKextLogErrorLevel |
-                       kOSKextLogIPCFlag,
-                       "Get UUID by Address failed.");
              goto finish;
          }
 
@@ -8489,54 +8532,6 @@ finish:
 
     return result;
 }
-
-/*********************************************************************
-*********************************************************************/
-/* static */
-OSData *
-OSKext::copyKextUUIDForAddress(OSNumber *address)
-{
-    OSKext *kext = NULL;
-    OSData *uuid = NULL;
-    vm_address_t vm_addr = 0;
-
-    if (!address)
-        goto finish;
-
-#if CONFIG_MACF
-    /* Is the calling process allowed to query kext info? */
-    if (current_task() != kernel_task) {
-        int                 macCheckResult      = 0;
-        kauth_cred_t        cred                = NULL;
-
-        cred = kauth_cred_get_with_ref();
-        macCheckResult = mac_kext_check_query(cred);
-        kauth_cred_unref(&cred);
-
-        if (macCheckResult != 0) {
-            OSKextLog(/* kext */ NULL,
-                      kOSKextLogErrorLevel | kOSKextLogLoadFlag,
-                      "Failed to query kext UUID (MAC policy error 0x%x).",
-                      macCheckResult);
-            goto finish;
-        }
-    }
-#endif
-
-    vm_addr = (vm_address_t)(address->unsigned64BitValue() + vm_kernel_slide);
-
-    kext = OSKext::lookupKextWithAddress(vm_addr);
-    if (kext) {
-        uuid = kext->copyUUID();
-    }
-
-finish:
-    if (kext) {
-        kext->release();
-    }
-    return uuid;
-}
-
 
 /*********************************************************************
 *********************************************************************/
@@ -10826,72 +10821,67 @@ OSKext::summaryIsInBacktrace(
     return FALSE;
 }
 
+/*
+ * Get the kext summary object for the kext where 'addr' lies. Must be called with
+ * sKextSummariesLock held.
+ */
+OSKextLoadedKextSummary *
+OSKext::summaryForAddress(const uintptr_t addr)
+{
+	for (unsigned i = 0; i < gLoadedKextSummaries->numSummaries; ++i) {
+
+		OSKextLoadedKextSummary *summary = &gLoadedKextSummaries->summaries[i];
+		if (!summary->address) {
+			continue;
+		}
+
+#if VM_MAPPED_KEXTS
+		/* On our platforms that use VM_MAPPED_KEXTS, we currently do not
+		 * support split kexts, but we also may unmap the kexts, which can
+		 * race with the above codepath (see OSKext::unload).  As such,
+		 * use a simple range lookup if we are using VM_MAPPED_KEXTS.
+		 */
+		if ((addr >= summary->address) && (addr < (summary->address + summary->size))) {
+			return summary;
+		}
+#else
+		kernel_mach_header_t *mh = (kernel_mach_header_t *)summary->address;
+		kernel_segment_command_t *seg;
+
+		for (seg = firstsegfromheader(mh); seg != NULL; seg = nextsegfromheader(mh, seg)) {
+			if ((addr >= seg->vmaddr) && (addr < (seg->vmaddr + seg->vmsize))) {
+				return summary;
+			}
+		}
+#endif
+	}
+
+	/* addr did not map to any kext */
+	return NULL;
+}
+
 /* static */
 void *
-OSKext::kextForAddress(
-    const void		  * addr)
+OSKext::kextForAddress(const void *addr)
 {
-   void *image = NULL;
-   u_int   i;
+	void *image = NULL;
 
-#if !VM_MAPPED_KEXTS
-   kernel_mach_header_t     *mh  = NULL;
-   kernel_segment_command_t *seg = NULL;
-#endif
+	if (((vm_offset_t)(uintptr_t)addr >= vm_kernel_stext) &&
+			((vm_offset_t)(uintptr_t)addr < vm_kernel_etext)) {
+		return (void *)&_mh_execute_header;
+	}
 
-   if (((vm_offset_t)(uintptr_t)addr >= vm_kernel_stext) &&
-	   ((vm_offset_t)(uintptr_t)addr < vm_kernel_etext)) {
-	   return (void *)&_mh_execute_header;
-   }
+	if (!sKextSummariesLock) {
+		return NULL;
+	}
+	IOLockLock(sKextSummariesLock);
+	OSKextLoadedKextSummary *summary = OSKext::summaryForAddress((uintptr_t)addr);
+	if (summary) {
+		image = (void *)summary->address;
+	}
+	IOLockUnlock(sKextSummariesLock);
 
-   if (!sKextSummariesLock) return image;
-   IOLockLock(sKextSummariesLock);
-
-   if (!gLoadedKextSummaries) {
-      goto finish;
-   }
-
-   for (i = 0; i < gLoadedKextSummaries->numSummaries; ++i) {
-       OSKextLoadedKextSummary * summary;
-
-       summary = gLoadedKextSummaries->summaries + i;
-       if (!summary->address) {
-	 continue;
-       }
-
-#if !VM_MAPPED_KEXTS
-       mh = (kernel_mach_header_t *)summary->address;
-
-       for (seg = firstsegfromheader(mh); seg != NULL; seg = nextsegfromheader(mh, seg)) {
-           if (((uint64_t)addr >= seg->vmaddr) &&
-               ((uint64_t)addr < (seg->vmaddr + seg->vmsize))) {
-                   image = (void *)summary->address;
-                   break;
-           }
-       }
-
-       if (image) {
-           break;
-       }
-#else
-      /* On our platforms that use VM_MAPPED_KEXTS, we currently do not
-       * support split kexts, but we also may unmap the kexts, which can
-       * race with the above codepath (see OSKext::unload).  As such,
-       * use a simple range lookup if we are using VM_MAPPED_KEXTS.
-       */
-       if (((uint64_t)(uintptr_t)addr >= summary->address) &&
-	   ((uint64_t)(uintptr_t)addr < (summary->address + summary->size)))
-       {
-	 image = (void *)(uintptr_t)summary->address;
-	 break;
-       }
-#endif
-    }
-
-finish:
-    IOLockUnlock(sKextSummariesLock);
-
-    return image;
+	return image;
 }
 
 /*********************************************************************
@@ -11729,4 +11719,23 @@ GetAppleTEXTHashForKext(OSKext * theKext, OSDictionary *theInfoDict)
 }
     
 #endif // CONFIG_KEC_FIPS
+
+#if CONFIG_IMAGEBOOT
+int OSKextGetUUIDForName(const char *name, uuid_t uuid)
+{
+	OSKext *kext = OSKext::lookupKextWithIdentifier(name);
+	if (!kext) {
+		return 1;
+	}
+
+	OSData *uuid_data = kext->copyUUID();
+	if (uuid_data) {
+		memcpy(uuid, uuid_data->getBytesNoCopy(), sizeof(uuid_t));
+		OSSafeReleaseNULL(uuid_data);
+		return 0;
+	}
+
+	return 1;
+}
+#endif
 

@@ -5,19 +5,19 @@
 
 #define NUM_PROC_UUID_POLICY_FLAGS 4
 
-T_DECL(proc_uuid_policy_26567533, "Tests passing a NULL uuid in (uap->uuid).", T_META("owner", "Core Kernel Team"))
+T_DECL(proc_uuid_policy_26567533, "Tests passing a NULL uuid in (uap->uuid).", T_META_LTEPHASE(LTE_POSTINIT))
 {
 	int i, ret;
 	uuid_t null_uuid;
 	memset(null_uuid, 0, sizeof(uuid_t));
 
-	uint32_t policy_flags[] = { 
-		PROC_UUID_POLICY_FLAGS_NONE, 
-		PROC_UUID_NO_CELLULAR, 
-		PROC_UUID_NECP_APP_POLICY, 
-		PROC_UUID_ALT_DYLD_POLICY 
+	uint32_t policy_flags[] = {
+		PROC_UUID_POLICY_FLAGS_NONE,
+		PROC_UUID_NO_CELLULAR,
+		PROC_UUID_NECP_APP_POLICY,
+		PROC_UUID_ALT_DYLD_POLICY
 	};
-	
+
 	for (i = 0; i < NUM_PROC_UUID_POLICY_FLAGS; i++) {
 		T_LOG("Testing policy add with flag value 0x%x", policy_flags[i]);
 
@@ -39,5 +39,4 @@ T_DECL(proc_uuid_policy_26567533, "Tests passing a NULL uuid in (uap->uuid).", T
 		T_WITH_ERRNO;
 		T_ASSERT_TRUE(errno = EINVAL, "errno is %d", errno);
 	}
-	T_PASS("proc_uuid_policy_26567533 PASSED");
 }

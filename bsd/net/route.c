@@ -699,7 +699,7 @@ sa_trim(struct sockaddr *sa, int skip)
  */
 struct sockaddr *
 rtm_scrub(int type, int idx, struct sockaddr *hint, struct sockaddr *sa,
-    void *buf, uint32_t buflen, kauth_cred_t *credp)
+    void *buf, uint32_t buflen, kauth_cred_t *credp, uint32_t rtm_hint_flags)
 {
 	struct sockaddr_storage *ss = (struct sockaddr_storage *)buf;
 	struct sockaddr *ret = sa;
@@ -782,7 +782,8 @@ rtm_scrub(int type, int idx, struct sockaddr *hint, struct sockaddr *sa,
 		/* fallthrough */
 	}
 	case RTAX_IFP: {
-		if (sa->sa_family == AF_LINK && credp) {
+		if (sa->sa_family == AF_LINK && credp &&
+		    (rtm_hint_flags & RTMF_HIDE_LLADDR)) {
 			struct sockaddr_dl *sdl = SDL(buf);
 			const void *bytes;
 			size_t size;

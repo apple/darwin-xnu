@@ -10,6 +10,51 @@
 """
 import os, re
 
+def GetStateString(strings_dict, state):
+    """ Turn a dictionary from flag value to flag name and a state mask with
+        those flags into a space-separated string of names.
+
+        params:
+            strings_dict: a dictionary of flag values to flag names
+            state: the value to get the state string of
+        return:
+            a space separated list of flag names present in state
+    """
+    max_mask = max(strings_dict.keys())
+
+    first = True
+    output = ''
+    mask = 0x1
+    while mask <= max_mask:
+        bit = int(state & mask)
+        if bit and bit in strings_dict:
+            if not first:
+                output += ' '
+            else:
+                first = False
+            output += strings_dict[int(state & mask)]
+        mask = mask << 1
+
+    return output
+
+kdebug_flags_strings = { 0x00100000: 'RANGECHECK',
+                         0x00200000: 'VALCHECK',
+                         0x00400000: 'TYPEFILTER_CHECK',
+                         0x80000000: 'BUFINIT' }
+kdebug_typefilter_check = 0x00400000
+
+kperf_samplers_strings = { 1 << 0: 'TH_INFO',
+                           1 << 1: 'TH_SNAP',
+                           1 << 2: 'KSTACK',
+                           1 << 3: 'USTACK',
+                           1 << 4: 'PMC_THREAD',
+                           1 << 5: 'PMC_CPU',
+                           1 << 6: 'PMC_CONFIG',
+                           1 << 7: 'MEMINFO',
+                           1 << 8: 'TH_SCHED',
+                           1 << 9: 'TH_DISP',
+                           1 << 10: 'TK_SNAP' }
+
 lcpu_self = 0xFFFE
 arm_level2_access_strings = [ " noaccess",
                               " supervisor(readwrite) user(noaccess)",

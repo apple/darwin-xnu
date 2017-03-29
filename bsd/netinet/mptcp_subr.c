@@ -671,13 +671,13 @@ mptcp_subflow_free(struct mptsub *mpts)
 	VERIFY(mpts->mpts_mpte == NULL);
 	VERIFY(mpts->mpts_socket == NULL);
 
-	if (mpts->mpts_src_sl != NULL) {
-		sockaddrlist_free(mpts->mpts_src_sl);
-		mpts->mpts_src_sl = NULL;
+	if (mpts->mpts_src != NULL) {
+		FREE(mpts->mpts_src, M_SONAME);
+		mpts->mpts_src = NULL;
 	}
-	if (mpts->mpts_dst_sl != NULL) {
-		sockaddrlist_free(mpts->mpts_dst_sl);
-		mpts->mpts_dst_sl = NULL;
+	if (mpts->mpts_dst != NULL) {
+		FREE(mpts->mpts_dst, M_SONAME);
+		mpts->mpts_dst = NULL;
 	}
 	MPTS_UNLOCK(mpts);
 	lck_mtx_destroy(&mpts->mpts_lock, mtcbinfo.mppi_lock_grp);
@@ -896,21 +896,20 @@ mptcp_subflow_soconnectx(struct mptses *mpte, struct mptsub *mpts)
 	af = mpts->mpts_family;
 
 	if (af == AF_INET || af == AF_INET6) {
-		struct sockaddr_entry *dst_se;
+		struct sockaddr *dst;
 		char dbuf[MAX_IPv6_STR_LEN];
 
-		dst_se = TAILQ_FIRST(&mpts->mpts_dst_sl->sl_head);
-		VERIFY(dst_se != NULL);
+		dst = mpts->mpts_dst;
 
 		mptcplog((LOG_DEBUG, "MPTCP Socket: connectx mp_so 0x%llx "
 		    "dst %s[%d] cid %d [pended %s]\n",
 		    (u_int64_t)VM_KERNEL_ADDRPERM(mpte->mpte_mppcb->mpp_socket),
 		    inet_ntop(af, ((af == AF_INET) ?
-		    (void *)&SIN(dst_se->se_addr)->sin_addr.s_addr :
-		    (void *)&SIN6(dst_se->se_addr)->sin6_addr),
+		    (void *)&SIN(dst)->sin_addr.s_addr :
+		    (void *)&SIN6(dst)->sin6_addr),
 		    dbuf, sizeof (dbuf)), ((af == AF_INET) ?
-		    ntohs(SIN(dst_se->se_addr)->sin_port) :
-		    ntohs(SIN6(dst_se->se_addr)->sin6_port)),
+		    ntohs(SIN(dst)->sin_port) :
+		    ntohs(SIN6(dst)->sin6_port)),
 		    mpts->mpts_connid,
 		    ((mpts->mpts_flags & MPTSF_CONNECT_PENDING) ?
 		    "YES" : "NO")),
@@ -923,7 +922,7 @@ mptcp_subflow_soconnectx(struct mptses *mpte, struct mptsub *mpts)
 	mptcp_attach_to_subf(so, mpte->mpte_mptcb, mpte->mpte_addrid_last);
 
 	/* connect the subflow socket */
-	error = soconnectxlocked(so, &mpts->mpts_src_sl, &mpts->mpts_dst_sl,
+	error = soconnectxlocked(so, mpts->mpts_src, mpts->mpts_dst,
 	    mpts->mpts_mpcr.mpcr_proc, mpts->mpts_mpcr.mpcr_ifscope,
 	    mpte->mpte_associd, NULL, CONNREQF_MPTCP,
 	    &mpts->mpts_mpcr, sizeof (mpts->mpts_mpcr), NULL, NULL);
@@ -1220,7 +1219,6 @@ int
 mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
     struct proc *p, uint32_t ifscope)
 {
-	struct sockaddr_entry *se, *src_se = NULL, *dst_se = NULL;
 	struct socket *mp_so, *so = NULL;
 	struct mptsub_connreq mpcr;
 	struct mptcb *mp_tp;
@@ -1243,19 +1241,10 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	VERIFY(!(mpts->mpts_flags & (MPTSF_CONNECTING|MPTSF_CONNECTED)));
 	VERIFY(mpts->mpts_mpte == NULL);
 	VERIFY(mpts->mpts_socket == NULL);
-	VERIFY(mpts->mpts_dst_sl != NULL);
+	VERIFY(mpts->mpts_dst != NULL);
 	VERIFY(mpts->mpts_connid == SAE_CONNID_ANY);
 
-	/* select source (if specified) and destination addresses */
-	if ((error = in_selectaddrs(AF_UNSPEC, &mpts->mpts_src_sl, &src_se,
-	    &mpts->mpts_dst_sl, &dst_se)) != 0)
-		goto out;
-
-	VERIFY(mpts->mpts_dst_sl != NULL && dst_se != NULL);
-	VERIFY(src_se == NULL || mpts->mpts_src_sl != NULL);
-	af = mpts->mpts_family = dst_se->se_addr->sa_family;
-	VERIFY(src_se == NULL || src_se->se_addr->sa_family == af);
-	VERIFY(af == AF_INET || af == AF_INET6);
+	af = mpts->mpts_family = mpts->mpts_dst->sa_family;
 
 	/*
 	 * If the source address is not specified, allocate a storage for
@@ -1263,19 +1252,18 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	 * IP address chosen by the underlying layer for the subflow after
 	 * it is connected.
 	 */
-	if (mpts->mpts_src_sl == NULL) {
-		mpts->mpts_src_sl =
-		    sockaddrlist_dup(mpts->mpts_dst_sl, M_WAITOK);
-		if (mpts->mpts_src_sl == NULL) {
+	if (mpts->mpts_src == NULL) {
+		int len = mpts->mpts_dst->sa_len;
+
+		MALLOC(mpts->mpts_src, struct sockaddr *, len, M_SONAME,
+		    M_WAITOK | M_ZERO);
+		if (mpts->mpts_src == NULL) {
 			error = ENOBUFS;
 			goto out;
 		}
-		se = TAILQ_FIRST(&mpts->mpts_src_sl->sl_head);
-		VERIFY(se != NULL && se->se_addr != NULL &&
-		    se->se_addr->sa_len == dst_se->se_addr->sa_len);
-		bzero(se->se_addr, se->se_addr->sa_len);
-		se->se_addr->sa_len = dst_se->se_addr->sa_len;
-		se->se_addr->sa_family = dst_se->se_addr->sa_family;
+		bzero(mpts->mpts_src, len);
+		mpts->mpts_src->sa_len = len;
+		mpts->mpts_src->sa_family = mpts->mpts_dst->sa_family;
 	}
 
 	/* create the subflow socket */
@@ -1331,8 +1319,8 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 	}
 
 	/* if source address and/or port is specified, bind to it */
-	if (src_se != NULL) {
-		struct sockaddr *sa = src_se->se_addr;
+	if (mpts->mpts_src != NULL) {
+		struct sockaddr *sa = mpts->mpts_src;
 		uint32_t mpts_flags = 0;
 		in_port_t lport;
 
@@ -1475,11 +1463,11 @@ mptcp_subflow_add(struct mptses *mpte, struct mptsub *mpts,
 		    "[pending %s]\n", __func__,
 		    (u_int64_t)VM_KERNEL_ADDRPERM(mp_so),
 		    inet_ntop(af, ((af == AF_INET) ?
-		    (void *)&SIN(dst_se->se_addr)->sin_addr.s_addr :
-		    (void *)&SIN6(dst_se->se_addr)->sin6_addr),
+		    (void *)&SIN(mpts->mpts_dst)->sin_addr.s_addr :
+		    (void *)&SIN6(mpts->mpts_dst)->sin6_addr),
 		    dbuf, sizeof (dbuf)), ((af == AF_INET) ?
-		    ntohs(SIN(dst_se->se_addr)->sin_port) :
-		    ntohs(SIN6(dst_se->se_addr)->sin6_port)),
+		    ntohs(SIN(mpts->mpts_dst)->sin_port) :
+		    ntohs(SIN6(mpts->mpts_dst)->sin6_port)),
 		    mpts->mpts_connid,
 		    ((mpts->mpts_flags & MPTSF_CONNECT_PENDING) ?
 		    "YES" : "NO")),
@@ -2701,7 +2689,6 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 	uint64_t *p_mpsofilt_hint)
 {
 	char buf0[MAX_IPv6_STR_LEN], buf1[MAX_IPv6_STR_LEN];
-	struct sockaddr_entry *src_se, *dst_se;
 	struct sockaddr_storage src;
 	struct socket *mp_so, *so;
 	struct mptcb *mp_tp;
@@ -2786,22 +2773,16 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 
 	tp->t_mpflags &= ~TMPF_TFO_REQUEST;
 
-	VERIFY(mpts->mpts_dst_sl != NULL);
-	dst_se = TAILQ_FIRST(&mpts->mpts_dst_sl->sl_head);
-	VERIFY(dst_se != NULL && dst_se->se_addr != NULL &&
-	    dst_se->se_addr->sa_family == af);
+	VERIFY(mpts->mpts_dst != NULL);
 
-	VERIFY(mpts->mpts_src_sl != NULL);
-	src_se = TAILQ_FIRST(&mpts->mpts_src_sl->sl_head);
-	VERIFY(src_se != NULL && src_se->se_addr != NULL &&
-	    src_se->se_addr->sa_family == af);
+	VERIFY(mpts->mpts_src != NULL);
 
 	/* get/check source IP address */
 	switch (af) {
 	case AF_INET: {
 		error = in_getsockaddr_s(so, &src);
 		if (error == 0) {
-			struct sockaddr_in *ms = SIN(src_se->se_addr);
+			struct sockaddr_in *ms = SIN(mpts->mpts_src);
 			struct sockaddr_in *s = SIN(&src);
 
 			VERIFY(s->sin_len == ms->sin_len);
@@ -2828,7 +2809,7 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 	case AF_INET6: {
 		error = in6_getsockaddr_s(so, &src);
 		if (error == 0) {
-			struct sockaddr_in6 *ms = SIN6(src_se->se_addr);
+			struct sockaddr_in6 *ms = SIN6(mpts->mpts_src);
 			struct sockaddr_in6 *s = SIN6(&src);
 
 			VERIFY(s->sin6_len == ms->sin6_len);
@@ -2909,15 +2890,15 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 	    "%s: cid %d outif %s %s[%d] -> %s[%d] "
 	    "is %s\n", __func__, mpts->mpts_connid, ((outifp != NULL) ?
 	    outifp->if_xname : "NULL"), inet_ntop(af, (af == AF_INET) ?
-	    (void *)&SIN(src_se->se_addr)->sin_addr.s_addr :
-	    (void *)&SIN6(src_se->se_addr)->sin6_addr, buf0, sizeof (buf0)),
-	    ((af == AF_INET) ? ntohs(SIN(src_se->se_addr)->sin_port) :
-	    ntohs(SIN6(src_se->se_addr)->sin6_port)),
+	    (void *)&SIN(mpts->mpts_src)->sin_addr.s_addr :
+	    (void *)&SIN6(mpts->mpts_src)->sin6_addr, buf0, sizeof (buf0)),
+	    ((af == AF_INET) ? ntohs(SIN(mpts->mpts_src)->sin_port) :
+	    ntohs(SIN6(mpts->mpts_src)->sin6_port)),
 	    inet_ntop(af, ((af == AF_INET) ?
-	    (void *)&SIN(dst_se->se_addr)->sin_addr.s_addr :
-	    (void *)&SIN6(dst_se->se_addr)->sin6_addr), buf1, sizeof (buf1)),
-	    ((af == AF_INET) ? ntohs(SIN(dst_se->se_addr)->sin_port) :
-	    ntohs(SIN6(dst_se->se_addr)->sin6_port)),
+	    (void *)&SIN(mpts->mpts_dst)->sin_addr.s_addr :
+	    (void *)&SIN6(mpts->mpts_dst)->sin6_addr), buf1, sizeof (buf1)),
+	    ((af == AF_INET) ? ntohs(SIN(mpts->mpts_dst)->sin_port) :
+	    ntohs(SIN6(mpts->mpts_dst)->sin6_port)),
 	    ((mpts->mpts_flags & MPTSF_MP_CAPABLE) ?
 	    "MPTCP capable" : "a regular TCP")),
 	    (MPTCP_SOCKET_DBG | MPTCP_EVENTS_DBG), MPTCP_LOGLVL_LOG);
@@ -2952,6 +2933,7 @@ mptcp_subflow_connected_ev(struct mptses *mpte, struct mptsub *mpts,
 			} else {
 				mpts->mpts_flags |= MPTSF_PREFERRED;
 			}
+			mpts->mpts_flags |= MPTSF_ACTIVE;
 			soisconnected(mp_so);
 		}
 		MPTS_LOCK(mpts);

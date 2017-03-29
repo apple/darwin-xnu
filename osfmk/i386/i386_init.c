@@ -117,7 +117,12 @@ extern const char	version[];
 extern const char	version_variant[];
 extern int		nx_enabled;
 
-uint64_t		physmap_base, physmap_max;
+/*
+ * Set initial values so that ml_phys_* routines can use the booter's ID mapping
+ * to touch physical space before the kernel's physical aperture exists.
+ */
+uint64_t		physmap_base = 0;
+uint64_t		physmap_max = 4*GB;
 
 pd_entry_t		*KPTphys;
 pd_entry_t		*IdlePTD;

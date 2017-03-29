@@ -1634,6 +1634,11 @@ exec_handle_port_actions(struct image_params *imgp, boolean_t * portwatch_presen
 #if CONFIG_AUDIT
 		case PSPA_AU_SESSION:
 			ret = audit_session_spawnjoin(p, task, port);
+			if (ret) {
+				/* audit_session_spawnjoin() has already dropped the reference in case of error. */
+				goto done;
+			}
+
 			break;
 #endif
 		case PSPA_IMP_WATCHPORTS:
@@ -2914,11 +2919,20 @@ bad:
 		inherit = ipc_importance_exec_switch_task(current_task(), get_threadtask(imgp->ip_new_thread));
 	}
 
-	/* Apply the main thread qos */
 	if (error == 0) {
+		/* Apply the main thread qos */		
 		thread_t main_thread = imgp->ip_new_thread;
-
 		task_set_main_thread_qos(get_threadtask(imgp->ip_new_thread), main_thread);
+
+#if CONFIG_MACF
+		/*
+		 * Processes with the MAP_JIT entitlement are permitted to have
+		 * a jumbo-size map.
+		 */
+		if (mac_proc_check_map_anon(p, 0, 0, 0, MAP_JIT, NULL) == 0) {
+			vm_map_set_jumbo(get_task_map(p->task));
+		}
+#endif /* CONFIG_MACF */
 	}
 
 	/*
@@ -3337,6 +3351,15 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	imgp->ip_mac_return = 0;
 	imgp->ip_cs_error = OS_REASON_NULL;
 
+#if CONFIG_MACF
+	if (uap->mac_p != USER_ADDR_NULL) {
+		error = mac_execve_enter(uap->mac_p, imgp);
+		if (error) {
+			kauth_cred_unref(&context.vc_ucred);
+			goto exit_with_error;
+		}
+	}
+#endif
 	uthread = get_bsdthread_info(current_thread());
 	if (uthread->uu_flag & UT_VFORK) {
 		imgp->ip_flags |= IMGPF_VFORK_EXEC;
@@ -3380,16 +3403,6 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		new_task = get_threadtask(imgp->ip_new_thread);
 		context.vc_thread = imgp->ip_new_thread;
 	}
-
-#if CONFIG_MACF
-	if (uap->mac_p != USER_ADDR_NULL) {
-		error = mac_execve_enter(uap->mac_p, imgp);
-		if (error) {
-			kauth_cred_unref(&context.vc_ucred);
-			goto exit_with_error;
-		}
-	}
-#endif
 
 	error = exec_activate_image(imgp);
 	/* thread and task ref returned for vfexec case */
@@ -3463,6 +3476,16 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		thread_t main_thread = imgp->ip_new_thread;
 
 		task_set_main_thread_qos(new_task, main_thread);
+
+#if CONFIG_MACF
+		/*
+		 * Processes with the MAP_JIT entitlement are permitted to have
+		 * a jumbo-size map.
+		 */
+		if (mac_proc_check_map_anon(p, 0, 0, 0, MAP_JIT, NULL) == 0) {
+			vm_map_set_jumbo(get_task_map(new_task));
+		}
+#endif /* CONFIG_MACF */
 
 		DTRACE_PROC(exec__success);
 

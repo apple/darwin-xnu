@@ -154,6 +154,32 @@ extern struct vnodeop_desc vnop_removenamedstream_desc;
 
 #endif
 
+#ifdef KERNEL_PRIVATE
+/*
+ * This pair of functions register and unregister callout with
+ * buffer_cache_gc() code path. This callout enables underlying
+ * fs to kick off any memory reclamation that would be otherwise
+ * satisfied by buffer_cache_gc(). callout() will be called in the
+ * vm_pageout code path, so precautions should be taken to not
+ * allocate memory or take any locks which might have memory
+ * allocation behind them. callout() can be called with first parameter
+ * set to false, in which case memory reclamation should be
+ * limited in scope. In case of the first parameter set to true, fs
+ * MUST free some memory if possible. Second parameter to the
+ * register function will be passed as a second parameter to the
+ * callout() as is.
+ * fs_buffer_cache_gc_unregister() second parameter will be used
+ * to distinguish between same callout() and this parameter should
+ * match the one passed during registration. It will unregister all
+ * instances of the matching callout() and argument from the callout
+ * list.
+ */
+
+
+extern int fs_buffer_cache_gc_register(void (* callout)(int, void *), void *);
+extern int fs_buffer_cache_gc_unregister(void (* callout)(int, void *), void *);
+#endif
+
 __BEGIN_DECLS
 
 struct vnop_lookup_args {
@@ -1326,6 +1352,12 @@ struct vnop_copyfile_args {
 extern errno_t VNOP_COPYFILE(vnode_t, vnode_t, vnode_t, struct componentname *, int, int, vfs_context_t);
 #endif /* XNU_KERNEL_PRIVATE */
 
+typedef enum dir_clone_authorizer_op {
+	OP_AUTHORIZE = 0,           /* request authorization of action */
+	OP_VATTR_SETUP = 1,         /* query for attributes that are required for OP_AUTHORIZE */
+	OP_VATTR_CLEANUP = 2        /* request to cleanup any state or free any memory allocated in OP_AUTHORIZE */
+} dir_clone_authorizer_op_t;
+
 struct vnop_clonefile_args {
 	struct vnodeop_desc *a_desc;
 	vnode_t a_fvp;
@@ -1335,7 +1367,16 @@ struct vnop_clonefile_args {
 	struct vnode_attr *a_vap;
 	uint32_t a_flags;
 	vfs_context_t a_context;
-	/* XXX Add recursive directory cloning authorizer */
+	int (*a_dir_clone_authorizer)(	/* Authorization callback */
+			struct vnode_attr *vap, /* attribute to be authorized */
+			kauth_action_t action, /* action for which attribute is to be authorized */
+			struct vnode_attr *dvap, /* target directory attributes */
+			vnode_t sdvp, /* source directory vnode pointer (optional) */
+			mount_t mp, /* mount point of filesystem */
+			dir_clone_authorizer_op_t vattr_op, /* specific operation requested : setup, authorization or cleanup  */
+			vfs_context_t ctx, 		/* As passed to VNOP */
+			void *reserved);		/* Always NULL */
+	void *a_reserved;		/* Currently unused */
 };
 
 /*!

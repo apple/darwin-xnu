@@ -212,10 +212,10 @@ static void	cluster_read_ahead(vnode_t vp, struct cl_extent *extent, off_t files
 
 static int	cluster_push_now(vnode_t vp, struct cl_extent *, off_t EOF, int flags, int (*)(buf_t, void *), void *callback_arg);
 
-static int	cluster_try_push(struct cl_writebehind *, vnode_t vp, off_t EOF, int push_flag, int flags, int (*)(buf_t, void *), void *callback_arg);
+static int	cluster_try_push(struct cl_writebehind *, vnode_t vp, off_t EOF, int push_flag, int flags, int (*)(buf_t, void *), void *callback_arg, int *err);
 
 static void	sparse_cluster_switch(struct cl_writebehind *, vnode_t vp, off_t EOF, int (*)(buf_t, void *), void *callback_arg);
-static void	sparse_cluster_push(void **cmapp, vnode_t vp, off_t EOF, int push_flag, int io_flags, int (*)(buf_t, void *), void *callback_arg);
+static int	sparse_cluster_push(void **cmapp, vnode_t vp, off_t EOF, int push_flag, int io_flags, int (*)(buf_t, void *), void *callback_arg);
 static void	sparse_cluster_add(void **cmapp, vnode_t vp, struct cl_extent *, off_t EOF, int (*)(buf_t, void *), void *callback_arg);
 
 static kern_return_t vfs_drt_mark_pages(void **cmapp, off_t offset, u_int length, u_int *setcountp);
@@ -479,7 +479,7 @@ cluster_syncup(vnode_t vp, off_t newEOF, int (*callback)(buf_t, void *), void *c
 	        if (wbp->cl_number) {
 		        lck_mtx_lock(&wbp->cl_lockw);
 
-			cluster_try_push(wbp, vp, newEOF, PUSH_ALL | flags, 0, callback, callback_arg);
+			cluster_try_push(wbp, vp, newEOF, PUSH_ALL | flags, 0, callback, callback_arg, NULL);
 
 			lck_mtx_unlock(&wbp->cl_lockw);
 		}
@@ -3519,7 +3519,7 @@ check_cluster:
 						n = WRITE_BEHIND;
 				}
 				while (n--)
-					cluster_try_push(wbp, vp, newEOF, 0, 0, callback, callback_arg);
+					cluster_try_push(wbp, vp, newEOF, 0, 0, callback, callback_arg, NULL);
 			}
 			if (wbp->cl_number < MAX_CLUSTERS) {
 			        /*
@@ -3546,7 +3546,7 @@ check_cluster:
 			 */
 			if (!((unsigned int)vfs_flags(vp->v_mount) & MNT_DEFWRITE)) {
 				
-				ret_cluster_try_push = cluster_try_push(wbp, vp, newEOF, (flags & IO_NOCACHE) ? 0 : PUSH_DELAY, 0, callback, callback_arg);
+				ret_cluster_try_push = cluster_try_push(wbp, vp, newEOF, (flags & IO_NOCACHE) ? 0 : PUSH_DELAY, 0, callback, callback_arg, NULL);
 			}
 
 			/*
@@ -5316,9 +5316,19 @@ cluster_push(vnode_t vp, int flags)
 int
 cluster_push_ext(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *callback_arg)
 {
+	return cluster_push_err(vp, flags, callback, callback_arg, NULL);
+}
+
+/* write errors via err, but return the number of clusters written */
+int
+cluster_push_err(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *callback_arg, int *err)
+{
         int	retval;
 	int	my_sparse_wait = 0;
 	struct	cl_writebehind *wbp;
+
+	if (err)
+		*err = 0;
 
 	if ( !UBCINFOEXISTS(vp)) {
 	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 53)) | DBG_FUNC_NONE, kdebug_vnode(vp), flags, 0, -1, 0);
@@ -5385,7 +5395,7 @@ cluster_push_ext(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *ca
 
 			lck_mtx_unlock(&wbp->cl_lockw);
 
-			sparse_cluster_push(&scmap, vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg);
+			retval = sparse_cluster_push(&scmap, vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg);
 
 			lck_mtx_lock(&wbp->cl_lockw);
 
@@ -5394,11 +5404,13 @@ cluster_push_ext(vnode_t vp, int flags, int (*callback)(buf_t, void *), void *ca
 			if (wbp->cl_sparse_wait && wbp->cl_sparse_pushes == 0)
 				wakeup((caddr_t)&wbp->cl_sparse_pushes);
 		} else {
-			sparse_cluster_push(&(wbp->cl_scmap), vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg);
+			retval = sparse_cluster_push(&(wbp->cl_scmap), vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg);
 		}
+		if (err)
+			*err = retval;
 		retval = 1;
-	} else  {
-		retval = cluster_try_push(wbp, vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg);
+	} else {
+		retval = cluster_try_push(wbp, vp, ubc_getsize(vp), PUSH_ALL, flags, callback, callback_arg, err);
 	}
 	lck_mtx_unlock(&wbp->cl_lockw);
 
@@ -5459,7 +5471,7 @@ cluster_release(struct ubc_info *ubc)
 
 
 static int
-cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_flag, int io_flags, int (*callback)(buf_t, void *), void *callback_arg)
+cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_flag, int io_flags, int (*callback)(buf_t, void *), void *callback_arg, int *err)
 {
         int cl_index;
 	int cl_index1;
@@ -5468,7 +5480,7 @@ cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_fla
 	int cl_pushed = 0;
 	struct cl_wextent l_clusters[MAX_CLUSTERS];
 	u_int  max_cluster_pgcount;
-
+	int error = 0;
 
 	max_cluster_pgcount = MAX_CLUSTER_SIZE(vp) / PAGE_SIZE;
 	/*
@@ -5543,6 +5555,7 @@ cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_fla
 	for (cl_index = 0; cl_index < cl_len; cl_index++) {
 	        int	flags;
 		struct	cl_extent cl;
+		int retval;
 
 		flags = io_flags & (IO_PASSIVE|IO_CLOSE);
 
@@ -5561,7 +5574,10 @@ cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_fla
 		cl.b_addr = l_clusters[cl_index].b_addr;
 		cl.e_addr = l_clusters[cl_index].e_addr;
 
-	        cluster_push_now(vp, &cl, EOF, flags, callback, callback_arg);
+		retval = cluster_push_now(vp, &cl, EOF, flags, callback, callback_arg);
+
+		if (error == 0 && retval)
+			error = retval;
 
 		l_clusters[cl_index].b_addr = 0;
 		l_clusters[cl_index].e_addr = 0;
@@ -5571,6 +5587,9 @@ cluster_try_push(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int push_fla
 		if ( !(push_flag & PUSH_ALL) )
 		        break;
 	}
+	if (err)
+		*err = error;
+
 dont_try:
 	if (cl_len > cl_pushed) {
 	       /*
@@ -5845,12 +5864,13 @@ sparse_cluster_switch(struct cl_writebehind *wbp, vnode_t vp, off_t EOF, int (*c
  * still associated with the write-behind context... however, if the scmap has been disassociated
  * from the write-behind context (the cluster_push case), the wb lock is not held
  */
-static void
+static int
 sparse_cluster_push(void **scmap, vnode_t vp, off_t EOF, int push_flag, int io_flags, int (*callback)(buf_t, void *), void *callback_arg)
 {
         struct cl_extent cl;
         off_t		offset;
 	u_int		length;
+	int error = 0;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 79)) | DBG_FUNC_START, kdebug_vnode(vp), (*scmap), 0, push_flag, 0);
 
@@ -5858,18 +5878,23 @@ sparse_cluster_push(void **scmap, vnode_t vp, off_t EOF, int push_flag, int io_f
 	        vfs_drt_control(scmap, 1);
 
 	for (;;) {
+		int retval;
 	        if (vfs_drt_get_cluster(scmap, &offset, &length) != KERN_SUCCESS)
 			break;
 
 		cl.b_addr = (daddr64_t)(offset / PAGE_SIZE_64);
 		cl.e_addr = (daddr64_t)((offset + length) / PAGE_SIZE_64);
 
-		cluster_push_now(vp, &cl, EOF, io_flags & (IO_PASSIVE|IO_CLOSE), callback, callback_arg);
+		retval = cluster_push_now(vp, &cl, EOF, io_flags & (IO_PASSIVE|IO_CLOSE), callback, callback_arg);
+		if (error == 0 && retval)
+			error = retval;
 
 		if ( !(push_flag & PUSH_ALL) )
 		        break;
 	}
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 79)) | DBG_FUNC_END, kdebug_vnode(vp), (*scmap), 0, 0, 0);
+
+	return error;
 }
 
 

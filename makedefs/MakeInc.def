@@ -311,6 +311,7 @@ LDFLAGS_KERNEL_GEN = \
     -Wl,-sectcreate,"__PLK_TEXT_EXEC",__text,/dev/null \
     -Wl,-sectcreate,__PRELINK_DATA,__data,/dev/null \
     -Wl,-sectcreate,"__PLK_DATA_CONST",__data,/dev/null \
+    -Wl,-sectcreate,"__PLK_LLVM_COV",__llvm_covmap,/dev/null \
     -Wl,-sectcreate,"__PLK_LINKEDIT",__data,/dev/null \
 	-Wl,-sectcreate,__PRELINK_INFO,__info,/dev/null \
 	-Wl,-new_linker \
@@ -496,6 +497,8 @@ endif
 # Default VPATH
 #
 export VPATH = .:$(SOURCE)
+
+
 
 #
 # Macros that control installation of kernel and its header files

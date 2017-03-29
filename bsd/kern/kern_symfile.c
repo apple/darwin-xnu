@@ -513,7 +513,7 @@ kern_open_file_for_direct_io(const char * name,
     }
 
 out:
-    printf("kern_open_file_for_direct_io(%d)\n", error);
+    printf("kern_open_file_for_direct_io(%p, %d)\n", ref, error);
 
     if (error && locked)
     {
@@ -570,7 +570,7 @@ kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
 			      off_t discard_offset, off_t discard_end)
 {
     int error;
-    kprintf("kern_close_file_for_direct_io\n");
+    printf("kern_close_file_for_direct_io(%p)\n", ref);
 
     if (!ref) return;
 

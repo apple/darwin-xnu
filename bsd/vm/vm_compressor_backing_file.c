@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -60,6 +60,18 @@ vm_swapfile_open(const char *path, vnode_t *vp)
 		*vp = NULL;
 		return;
 	}	
+
+	/*
+	 * If MNT_IOFLAGS_NOSWAP is set, opening the swap file should fail.
+	 * To avoid a race on the mount we only make this check after creating the
+	 * vnode.
+	 */
+	if ((*vp)->v_mount->mnt_kern_flag & MNTK_NOSWAP) {
+		vnode_put(*vp);
+		vm_swapfile_close((uint64_t)path, *vp);
+		*vp = NULL;
+		return;
+	}
 
 	vnode_put(*vp);
 }

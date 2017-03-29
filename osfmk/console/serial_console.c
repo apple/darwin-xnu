@@ -44,6 +44,7 @@
 #include <kern/kalloc.h>
 #include <kern/thread.h>
 #include <kern/cpu_data.h>
+#include <libkern/section_keywords.h>
 
 
 
@@ -109,7 +110,7 @@ extern void serial_putc(char);
 
 static void _serial_putc(int, int, int);
 
-struct console_ops cons_ops[] = {
+SECURITY_READ_ONLY_EARLY(struct console_ops) cons_ops[] = {
     {
         .putc = _serial_putc, .getc = _serial_getc,
     },
@@ -118,7 +119,7 @@ struct console_ops cons_ops[] = {
     },
 };
 
-uint32_t nconsops = (sizeof cons_ops / sizeof cons_ops[0]);
+SECURITY_READ_ONLY_EARLY(uint32_t) nconsops = (sizeof cons_ops / sizeof cons_ops[0]);
 
 uint32_t cons_ops_index = VC_CONS_OPS;
 
@@ -585,12 +586,5 @@ vcgetc(__unused int l, __unused int u, __unused boolean_t wait, __unused boolean
 		return c;
 	else
 		return 0;
-}
-
-/* So we can re-write the serial device functions at boot-time */
-void
-console_set_serial_ops(struct console_ops * newops)
-{
-	cons_ops[SERIAL_CONS_OPS] = *newops;
 }
 

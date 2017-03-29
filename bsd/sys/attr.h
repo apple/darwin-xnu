@@ -229,6 +229,12 @@ typedef struct vol_capabilities_attr {
  *
  * VOL_CAP_FMT_WRITE_GENERATION_COUNT: When set, the volume supports write
  * generation counts (a count of how many times an object has been modified)
+ *
+ * VOL_CAP_FMT_NO_IMMUTABLE_FILES: When set, the volume does not support
+ * setting the UF_IMMUTABLE flag.
+ *
+ * VOL_CAP_FMT_NO_PERMISSIONS: When set, the volume does not support setting
+ * permissions.
  */
 #define VOL_CAP_FMT_PERSISTENTOBJECTIDS		0x00000001
 #define VOL_CAP_FMT_SYMBOLICLINKS 		0x00000002
@@ -251,6 +257,8 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_FMT_DIR_HARDLINKS		0x00040000
 #define VOL_CAP_FMT_DOCUMENT_ID			0x00080000
 #define VOL_CAP_FMT_WRITE_GENERATION_COUNT	0x00100000
+#define VOL_CAP_FMT_NO_IMMUTABLE_FILES		0x00200000
+#define VOL_CAP_FMT_NO_PERMISSIONS		0x00400000
 
 
 /*
@@ -421,8 +429,10 @@ typedef struct vol_attributes_attr {
  * ATTR_CMN_UUID
  * 
  * ATTR_CMN_GRPUUID
+ * 
+ * ATTR_CMN_DATA_PROTECT_FLAGS
  */
-#define ATTR_CMN_SETMASK			0x01C7FF00
+#define ATTR_CMN_SETMASK			0x41C7FF00
 #define ATTR_CMN_VOLSETMASK			0x00006700
 
 #define ATTR_VOL_FSTYPE				0x00000001
@@ -444,10 +454,12 @@ typedef struct vol_attributes_attr {
 #define ATTR_VOL_ENCODINGSUSED			0x00010000
 #define ATTR_VOL_CAPABILITIES			0x00020000
 #define ATTR_VOL_UUID				0x00040000
+#define ATTR_VOL_QUOTA_SIZE			0x10000000
+#define ATTR_VOL_RESERVED_SIZE		0x20000000
 #define ATTR_VOL_ATTRIBUTES			0x40000000
 #define ATTR_VOL_INFO				0x80000000
 
-#define ATTR_VOL_VALIDMASK			0xC007FFFF
+#define ATTR_VOL_VALIDMASK			0xF007FFFF
 
 /*
  * The list of settable ATTR_VOL_* attributes include the following:
@@ -461,11 +473,15 @@ typedef struct vol_attributes_attr {
 #define ATTR_DIR_LINKCOUNT			0x00000001
 #define ATTR_DIR_ENTRYCOUNT			0x00000002
 #define ATTR_DIR_MOUNTSTATUS			0x00000004
+#define ATTR_DIR_ALLOCSIZE			0x00000008
+#define ATTR_DIR_IOBLOCKSIZE			0x00000010
+#define ATTR_DIR_DATALENGTH			0x00000020
+
 /* ATTR_DIR_MOUNTSTATUS Flags: */
 #define	  DIR_MNTSTATUS_MNTPOINT		0x00000001
 #define	  DIR_MNTSTATUS_TRIGGER			0x00000002
 
-#define ATTR_DIR_VALIDMASK			0x00000007
+#define ATTR_DIR_VALIDMASK			0x0000003f
 #define ATTR_DIR_SETMASK			0x00000000
 
 #define ATTR_FILE_LINKCOUNT			0x00000001
@@ -487,8 +503,17 @@ typedef struct vol_attributes_attr {
  */
 #define ATTR_FILE_SETMASK			0x00000020
 
+/* CMNEXT attributes extend the common attributes, but in the forkattr field */
+#define ATTR_CMNEXT_RELPATH     0x00000004
+#define ATTR_CMNEXT_PRIVATESIZE 0x00000008
+
+#define ATTR_CMNEXT_VALIDMASK	0x0000000c
+#define ATTR_CMNEXT_SETMASK		0x00000000
+
+/* Deprecated fork attributes */
 #define ATTR_FORK_TOTALSIZE			0x00000001
 #define ATTR_FORK_ALLOCSIZE			0x00000002
+#define ATTR_FORK_RESERVED			0xffffffff
 
 #define ATTR_FORK_VALIDMASK			0x00000003
 #define ATTR_FORK_SETMASK			0x00000000

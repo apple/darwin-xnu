@@ -1146,8 +1146,7 @@ kdp_dumpinfo(
         }
 
         /* gather some stats for reply */
-        kdp_get_dump_info(&rp->type, rp->name, rp->destip, rp->routerip, 
-                          &rp->port);
+        kdp_get_dump_info(rp);
 
 	*reply_port = kdp.reply_port;
 	*len = rp->hdr.len;

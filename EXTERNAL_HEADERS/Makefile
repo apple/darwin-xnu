@@ -25,12 +25,13 @@ INSTINC_SUBDIRS_ARM64 =	\
 EXPORT_FILES = \
 	Availability.h	\
 	AvailabilityInternal.h	\
-	AvailabilityMacros.h	\
-	stddef.h
+	AvailabilityMacros.h
 
 KERNEL_FILES = \
 	stdarg.h	\
+	stdatomic.h	\
 	stdbool.h	\
+	stddef.h	\
 	stdint.h
 
 INSTALL_MI_LIST =

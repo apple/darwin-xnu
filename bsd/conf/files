@@ -505,7 +505,8 @@ bsd/kern/kern_kpc.c			optional kpc
 
 bsd/kern/proc_uuid_policy.c		optional config_proc_uuid_policy
 
-bsd/pgo/profile_runtime.c        	standard
+bsd/pgo/profile_runtime.c        	optional pgo
+bsd/pgo/profile_runtime_data.c     	standard
 
 bsd/miscfs/nullfs/null_subr.c       optional nullfs
 bsd/miscfs/nullfs/null_vfsops.c     optional nullfs

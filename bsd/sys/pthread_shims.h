@@ -35,6 +35,7 @@
 
 #include <kern/clock.h>
 #include <kern/kern_types.h>
+#include <kern/kcdata.h>
 #include <kern/locks.h>
 #include <sys/_types.h>
 #include <sys/_types/_sigset_t.h>
@@ -117,8 +118,11 @@ typedef const struct pthread_functions_s {
 	unsigned long (*pthread_priority_canonicalize)(unsigned long pthread_priority);
 	unsigned long (*pthread_priority_canonicalize2)(unsigned long pthread_priority, boolean_t propagation);
 
+	void (*pthread_find_owner)(thread_t thread, struct stackshot_thread_waitinfo *waitinfo);
+	void *(*pthread_get_thread_kwq)(thread_t thread);
+
 	/* padding for future */
-	void * _pad[92];
+	void * _pad[90];
 } * pthread_functions_t;
 
 typedef const struct pthread_callbacks_s {

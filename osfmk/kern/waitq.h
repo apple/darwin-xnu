@@ -88,16 +88,7 @@ jenkins_hash(char *key, size_t length)
 	#error Unknown size requirement
 #endif
 
-#ifndef MACH_KERNEL_PRIVATE
-
-/*
- * The opaque waitq structure is here mostly for AIO and selinfo,
- * but could potentially be used by other BSD subsystems.
- */
-struct waitq { char opaque[WQ_OPAQUE_SIZE]; } __attribute__((aligned(WQ_OPAQUE_ALIGN)));
-struct waitq_set { char opaque[WQS_OPAQUE_SIZE]; } __attribute__((aligned(WQS_OPAQUE_ALIGN)));
-
-#else /* MACH_KERNEL_PRIVATE */
+#ifdef MACH_KERNEL_PRIVATE
 
 #include <kern/spl.h>
 #include <kern/simple_lock.h>
@@ -343,6 +334,15 @@ extern uint64_t waitq_prepost_reserve(struct waitq *waitq, int extra,
 				      waitq_lock_state_t lock_state);
 
 extern void waitq_prepost_release_reserve(uint64_t id);
+
+#else /* !MACH_KERNEL_PRIVATE */
+
+/*
+ * The opaque waitq structure is here mostly for AIO and selinfo,
+ * but could potentially be used by other BSD subsystems.
+ */
+struct waitq { char opaque[WQ_OPAQUE_SIZE]; } __attribute__((aligned(WQ_OPAQUE_ALIGN)));
+struct waitq_set { char opaque[WQS_OPAQUE_SIZE]; } __attribute__((aligned(WQS_OPAQUE_ALIGN)));
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

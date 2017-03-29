@@ -293,6 +293,12 @@ typedef struct package_ext_info {
 #define FSIOC_ROUTEFS_SETROUTEID			  _IO('A', 15)
 #define	FSCTL_ROUTEFS_SETROUTEID			  IOCBASECMD(FSIOC_ROUTEFS_SETROUTEID)
 
+/* ioctls to support SEEK_HOLE SEEK_DATA */
+#define FSIOC_FIOSEEKHOLE					  _IOWR('A', 16, off_t)
+#define	FSCTL_FIOSEEKHOLE					  IOCBASECMD(FSIOC_FIOSEEKHOLE)
+#define FSIOC_FIOSEEKDATA					  _IOWR('A', 17, off_t)
+#define	FSCTL_FIOSEEKDATA					  IOCBASECMD(FSIOC_FIOSEEKDATA)
+
 //
 // IO commands 16 and 17 are currently unused
 //

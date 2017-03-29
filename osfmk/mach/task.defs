@@ -95,7 +95,7 @@ routine task_terminate(
  *	Returns the set of threads belonging to the target task.
  */
 routine task_threads(
-		target_task	: task_t;
+		target_task	: task_inspect_t;
 	out	act_list	: thread_act_array_t);
 
 /*
@@ -154,7 +154,7 @@ routine	task_resume(
  *	associated with the target task.
  */
 routine task_get_special_port(
-		task		: task_t;
+		task		: task_inspect_t;
 		which_port	: int;
 	out	special_port	: mach_port_t);
 
@@ -217,7 +217,7 @@ routine	task_set_exception_ports(
  * Lookup some of the old exception handlers for a task
  */
 routine	task_get_exception_ports(
-		task		: task_t;
+		task		: task_inspect_t;
 		exception_mask	: exception_mask_t;
 	  out	masks		: exception_mask_array_t;
 	  out	old_handlers	: exception_handler_array_t, SameCount;
@@ -469,7 +469,7 @@ routine task_unregister_dyld_image_infos(
         dyld_images     :dyld_kernel_image_info_array_t);
 
 routine task_get_dyld_image_infos(
-        task            :task_t;
+        task            :task_inspect_t;
     out dyld_images     :dyld_kernel_image_info_array_t);
 
 routine task_register_dyld_shared_cache_image_info(

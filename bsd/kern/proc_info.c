@@ -1149,6 +1149,8 @@ proc_pidpathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, uint32_t b
 	if (buf == NULL) 
 		return(ENOMEM);
 
+	bzero(buf, buffersize);
+
 	error = proc_pidpathinfo_internal(p, arg, buf, buffersize, retval);
 	if (error == 0) {
 		error = copyout(buf, buffer, len);

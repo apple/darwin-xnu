@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		045F7F121D2ADE7C00B4808B /* stackshot-with-waitinfo in Resources */ = {isa = PBXBuildFile; fileRef = 04C64AC91D25C43400C6C781 /* stackshot-with-waitinfo */; };
+		045F7F131D2ADE8000B4808B /* stackshot-with-waitinfo.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 04C64ACA1D25C43400C6C781 /* stackshot-with-waitinfo.plist.gz */; };
 		081725D51C3F476500371A54 /* stackshot-sample-duration in Resources */ = {isa = PBXBuildFile; fileRef = 081725D31C3F475200371A54 /* stackshot-sample-duration */; };
 		081725D61C3F476500371A54 /* stackshot-sample-duration.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 081725D41C3F475200371A54 /* stackshot-sample-duration.plist.gz */; };
 		081EDD381C23855700A1C138 /* stackshot-sample-cputime in Resources */ = {isa = PBXBuildFile; fileRef = 081EDD361C23854500A1C138 /* stackshot-sample-cputime */; };
@@ -98,6 +100,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		04C64AC91D25C43400C6C781 /* stackshot-with-waitinfo */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-with-waitinfo"; path = "tests/stackshot-with-waitinfo"; sourceTree = SOURCE_ROOT; };
+		04C64ACA1D25C43400C6C781 /* stackshot-with-waitinfo.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-with-waitinfo.plist.gz"; path = "tests/stackshot-with-waitinfo.plist.gz"; sourceTree = SOURCE_ROOT; };
 		081725D31C3F475200371A54 /* stackshot-sample-duration */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-duration"; path = "tests/stackshot-sample-duration"; sourceTree = SOURCE_ROOT; };
 		081725D41C3F475200371A54 /* stackshot-sample-duration.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-duration.plist.gz"; path = "tests/stackshot-sample-duration.plist.gz"; sourceTree = SOURCE_ROOT; };
 		081EDD361C23854500A1C138 /* stackshot-sample-cputime */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-cputime"; path = "tests/stackshot-sample-cputime"; sourceTree = SOURCE_ROOT; };
@@ -191,11 +195,13 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		08603F351BF69EDE007D3784 /* Tests */ = {
+		08603F351BF69EDE007D3784 /* tests */ = {
 			isa = PBXGroup;
 			children = (
 				C9D7B53D1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz */,
 				C9D7B53E1D1B41D700F1019D /* xnupost_testconfig-sample */,
+				04C64AC91D25C43400C6C781 /* stackshot-with-waitinfo */,
+				04C64ACA1D25C43400C6C781 /* stackshot-with-waitinfo.plist.gz */,
 				13A79CA81CF8C5D200FFC181 /* stackshot-with-kcid */,
 				13A79CA91CF8C5D200FFC181 /* stackshot-with-kcid.plist.gz */,
 				13CC08421CB97F8A00EA6069 /* stackshot-fault-stats */,
@@ -276,7 +282,7 @@
 				08F1501D1BFEA7AC00F2C89C /* libz.dylib */,
 				0834719D1BF7D05400D67253 /* kcdata.h */,
 				08B480871BF92DFB00B4AAE0 /* kcdata.py */,
-				08603F351BF69EDE007D3784 /* Tests */,
+				08603F351BF69EDE007D3784 /* tests */,
 				C91C93C81ACB58B700119B60 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -407,6 +413,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				045F7F131D2ADE8000B4808B /* stackshot-with-waitinfo.plist.gz in Resources */,
+				045F7F121D2ADE7C00B4808B /* stackshot-with-waitinfo in Resources */,
 				08A4C94F1C470F1C00D5F010 /* nested-sample in Resources */,
 				08A4C9501C470F1C00D5F010 /* nested-sample.plist in Resources */,
 				13D6C5D21C4DDDBE005E617C /* test-twr-sample in Resources */,

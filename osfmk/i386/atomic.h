@@ -61,6 +61,20 @@ atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
 
 #endif // ATOMIC_PRIVATE
 
+#define os_atomic_rmw_loop(p, ov, nv, m, ...)  ({ \
+		bool _result = false; \
+		typeof(p) _p = (p); \
+		ov = atomic_load_explicit(_p, memory_order_relaxed); \
+		do { \
+			__VA_ARGS__; \
+			typeof(ov) _r = (ov); \
+			_result = atomic_compare_exchange_weak_explicit(_p, &_r, nv, \
+					memory_order_##m, memory_order_relaxed); \
+			(ov) = _r; \
+		} while (__builtin_expect(!_result, 0)); \
+		_result; \
+	})
+
+#define os_atomic_rmw_loop_give_up(expr) ({ expr; __builtin_trap(); })
 
 #endif // _I386_ATOMIC_H_
-

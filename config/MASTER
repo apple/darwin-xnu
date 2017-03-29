@@ -147,6 +147,7 @@ options		CONFIG_IMGSRC_ACCESS # source of imageboot dmg	# <config_imgsrc_access>
 options		CONFIG_TRIGGERS	# trigger vnodes		# <config_triggers>
 options		CONFIG_EXT_RESOLVER # e.g. memberd		# <config_ext_resolver>
 options		CONFIG_SEARCHFS	# searchfs syscall support	# <config_searchfs>
+options		CONFIG_MNT_SUID # allow suid binaries  # <config_mnt_suid>
 
 #
 # NFS support
@@ -605,6 +606,8 @@ options		CONFIG_DTRACE		#		    # <config_dtrace>
 # kernel performance tracing
 options     KPERF                  # <kperf>
 options     KPC                    # <kpc>
+
+options     PGO                    # <pgo>
 
 # MACH_COUNTERS enables code that handles various counters in the system.
 # 

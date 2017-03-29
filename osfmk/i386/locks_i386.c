@@ -126,6 +126,15 @@ decl_simple_lock_data(extern , panic_lock)
 #endif	/* USLOCK_DEBUG */
 
 extern unsigned int not_in_kdp;
+extern void kdp_lck_mtx_find_owner(
+	struct waitq *  	waitq,
+	event64_t		event,
+	thread_waitinfo_t *	waitinfo);
+
+extern void kdp_rwlck_find_owner(
+	struct waitq *  	waitq,
+	event64_t		event,
+	thread_waitinfo_t *	waitinfo);
 
 /*
  *	We often want to know the addresses of the callers
@@ -848,12 +857,6 @@ lck_rw_destroy(
 
 #define DECREMENTER_TIMEOUT 1000000
 
-#define RW_LOCK_READER_EVENT(x)		\
-		((event_t) (((unsigned char*) (x)) + (offsetof(lck_rw_t, lck_rw_tag))))
-
-#define RW_LOCK_WRITER_EVENT(x)		\
-		((event_t) (((unsigned char*) (x)) + (offsetof(lck_rw_t, lck_rw_pad8))))
-
 /*
  * We disable interrupts while holding the RW interlock to prevent an
  * interrupt from exacerbating hold time.
@@ -991,6 +994,7 @@ lck_rw_lock_exclusive_gen(
 
 				lck->lck_w_waiting = TRUE;
 
+				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockWrite);
 				res = assert_wait(RW_LOCK_WRITER_EVENT(lck), THREAD_UNINT);
 				lck_interlock_unlock(lck, istate);
 
@@ -1069,6 +1073,7 @@ lck_rw_lock_exclusive_gen(
 
 				lck->lck_w_waiting = TRUE;
 
+				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockWrite);
 				res = assert_wait(RW_LOCK_WRITER_EVENT(lck), THREAD_UNINT);
 				lck_interlock_unlock(lck, istate);
 
@@ -1330,6 +1335,7 @@ lck_rw_lock_shared_gen(
 
 				lck->lck_r_waiting = TRUE;
 
+				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockRead);
 				res = assert_wait(RW_LOCK_READER_EVENT(lck), THREAD_UNINT);
 				lck_interlock_unlock(lck, istate);
 
@@ -1489,6 +1495,7 @@ lck_rw_lock_shared_to_exclusive_success(
 
 				lck->lck_w_waiting = TRUE;
 
+				thread_set_pending_block_hint(current_thread(), kThreadWaitKernelRWLockUpgrade);
 				res = assert_wait(RW_LOCK_WRITER_EVENT(lck), THREAD_UNINT);
 				lck_interlock_unlock(lck, istate);
 
@@ -2149,6 +2156,7 @@ lck_mtx_lock_wait_x86 (
 		thread_unlock(holder);
 		splx(s);
 	}
+	thread_set_pending_block_hint(self, kThreadWaitKernelMutex);
 	assert_wait(LCK_MTX_EVENT(mutex), THREAD_UNINT);
 
 	lck_mtx_ilk_unlock(mutex);
@@ -2194,3 +2202,31 @@ kdp_lck_mtx_lock_spin_is_acquired(lck_mtx_t	*lck)
 	return FALSE;
 }
 
+void
+kdp_lck_mtx_find_owner(__unused struct waitq * waitq, event64_t event, thread_waitinfo_t * waitinfo)
+{
+	lck_mtx_t * mutex = LCK_EVENT_TO_MUTEX(event);
+	waitinfo->context = VM_KERNEL_UNSLIDE_OR_PERM(mutex);
+	thread_t holder   = (thread_t)mutex->lck_mtx_owner;
+	waitinfo->owner   = thread_tid(holder);
+}
+
+void
+kdp_rwlck_find_owner(__unused struct waitq * waitq, event64_t event, thread_waitinfo_t * waitinfo)
+{
+	lck_rw_t *rwlck = NULL;
+	switch(waitinfo->wait_type) {
+		case kThreadWaitKernelRWLockRead:
+			rwlck = READ_EVENT_TO_RWLOCK(event);
+			break;
+		case kThreadWaitKernelRWLockWrite:
+		case kThreadWaitKernelRWLockUpgrade:
+			rwlck = WRITE_EVENT_TO_RWLOCK(event);
+			break;
+		default:
+			panic("%s was called with an invalid blocking type", __FUNCTION__);
+			break;
+	}
+	waitinfo->context = VM_KERNEL_UNSLIDE_OR_PERM(rwlck);
+	waitinfo->owner = 0;
+}

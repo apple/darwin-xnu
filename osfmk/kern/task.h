@@ -346,6 +346,12 @@ struct task {
 			low_mem_privileged_listener	:1,	/* if set, task would like to know about pressure changes before other tasks on the system */
 	                mem_notify_reserved		:27;	/* reserved for future use */
 
+	uint32_t memlimit_is_active                 :1, /* if set, use active attributes, otherwise use inactive attributes */
+                memlimit_is_fatal                   :1, /* if set, exceeding current memlimit will prove fatal to the task */
+		memlimit_active_exc_resource        :1, /* if set, suppress exc_resource exception when task exceeds active memory limit */
+		memlimit_inactive_exc_resource      :1, /* if set, suppress exc_resource exception when task exceeds inactive memory limit */
+		memlimit_attrs_reserved             :28; /* reserved for future use */
+
 	io_stat_info_t 		task_io_stats;
 	uint64_t 		task_immediate_writes __attribute__((aligned(8)));
 	uint64_t 		task_deferred_writes __attribute__((aligned(8)));
@@ -630,8 +636,16 @@ extern uint64_t get_task_memory_region_count(task_t);
 extern uint64_t get_task_page_table(task_t);
 
 extern kern_return_t task_convert_phys_footprint_limit(int, int *);
-extern kern_return_t task_set_phys_footprint_limit_internal(task_t, int, int *, boolean_t);
+extern kern_return_t task_set_phys_footprint_limit_internal(task_t, int, int *, boolean_t, boolean_t);
 extern kern_return_t task_get_phys_footprint_limit(task_t task, int *limit_mb);
+
+/* Jetsam memlimit attributes */
+extern boolean_t task_get_memlimit_is_active(task_t task);
+extern boolean_t task_get_memlimit_is_fatal(task_t task);
+extern void task_set_memlimit_is_active(task_t task, boolean_t memlimit_is_active);
+extern void task_set_memlimit_is_fatal(task_t task, boolean_t memlimit_is_fatal);
+extern boolean_t task_has_triggered_exc_resource(task_t task, boolean_t memlimit_is_active);
+extern void task_mark_has_triggered_exc_resource(task_t task, boolean_t memlimit_is_active);
 
 extern boolean_t	is_kerneltask(task_t task);
 extern boolean_t	is_corpsetask(task_t task);
@@ -685,6 +699,7 @@ extern struct _task_ledger_indices task_ledgers;
 
 /* requires task to be unlocked, returns a referenced thread */
 thread_t task_findtid(task_t task, uint64_t tid);
+int pid_from_task(task_t task);
 
 extern kern_return_t task_wakeups_monitor_ctl(task_t task, uint32_t *rate_hz, int32_t *flags);
 extern kern_return_t task_cpu_usage_monitor_ctl(task_t task, uint32_t *flags);
@@ -728,6 +743,7 @@ extern boolean_t get_task_frozen(task_t);
 /* Convert from a task to a port */
 extern ipc_port_t convert_task_to_port(task_t);
 extern ipc_port_t convert_task_name_to_port(task_name_t);
+extern ipc_port_t convert_task_inspect_to_port(task_inspect_t);
 extern ipc_port_t convert_task_suspension_token_to_port(task_suspension_token_t task);
 
 /* Convert from a port (in this case, an SO right to a task's resume port) to a task. */
@@ -769,6 +785,9 @@ extern void		task_deallocate(
 
 extern void		task_name_deallocate(
 					task_name_t		task_name);
+
+extern void		task_inspect_deallocate(
+					task_inspect_t		task_inspect);
 
 extern void		task_suspension_token_deallocate(
 					task_suspension_token_t	token);

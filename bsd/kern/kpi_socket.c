@@ -74,6 +74,7 @@ sock_accept(socket_t sock, struct sockaddr *from, int fromlen, int flags,
 		socket_unlock(sock, 1);
 		return (ENOTSUP);
 	}
+check_again:
 	if (((flags & MSG_DONTWAIT) != 0 || (sock->so_state & SS_NBIO) != 0) &&
 	    sock->so_comp.tqh_first == NULL) {
 		socket_unlock(sock, 1);
@@ -107,11 +108,18 @@ sock_accept(socket_t sock, struct sockaddr *from, int fromlen, int flags,
 		return (error);
 	}
 
+	so_acquire_accept_list(sock, NULL);
+	if (TAILQ_EMPTY(&sock->so_comp)) {
+		so_release_accept_list(sock);
+		goto check_again;
+	}
 	new_so = TAILQ_FIRST(&sock->so_comp);
 	TAILQ_REMOVE(&sock->so_comp, new_so, so_list);
 	new_so->so_state &= ~SS_COMP;
 	new_so->so_head = NULL;
 	sock->so_qlen--;
+
+	so_release_accept_list(sock);
 
 	/*
 	 * Pass the pre-accepted socket to any interested socket filter(s).

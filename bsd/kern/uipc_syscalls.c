@@ -148,15 +148,13 @@ static int getsockaddr(struct socket *, struct sockaddr **, user_addr_t,
     size_t, boolean_t);
 static int getsockaddr_s(struct socket *, struct sockaddr_storage *,
     user_addr_t, size_t, boolean_t);
-static int getsockaddrlist(struct socket *, struct sockaddr_list **,
-    user_addr_t, socklen_t, boolean_t);
 #if SENDFILE
 static void alloc_sendpkt(int, size_t, unsigned int *, struct mbuf **,
     boolean_t);
 #endif /* SENDFILE */
 static int connectx_nocancel(struct proc *, struct connectx_args *, int *);
-static int connectitx(struct socket *, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+static int connectitx(struct socket *, struct sockaddr *,
+    struct sockaddr *, struct proc *, uint32_t, sae_associd_t,
     sae_connid_t *, uio_t, unsigned int, user_ssize_t *);
 static int peeloff_nocancel(struct proc *, struct peeloff_args *, int *);
 static int disconnectx_nocancel(struct proc *, struct disconnectx_args *,
@@ -458,6 +456,7 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 		socket_unlock(head, 1);
 		goto out;
 	}
+check_again:
 	if ((head->so_state & SS_NBIO) && head->so_comp.tqh_first == NULL) {
 		socket_unlock(head, 1);
 		error = EWOULDBLOCK;
@@ -499,11 +498,20 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 	 * instead.
 	 */
 	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+
+	so_acquire_accept_list(head, NULL);
+	if (TAILQ_EMPTY(&head->so_comp)) {
+		so_release_accept_list(head);
+		goto check_again;
+	}
+
 	so = TAILQ_FIRST(&head->so_comp);
 	TAILQ_REMOVE(&head->so_comp, so, so_list);
 	so->so_head = NULL;
 	so->so_state &= ~SS_COMP;
 	head->so_qlen--;
+	so_release_accept_list(head);
+
 	/* unlock head to avoid deadlock with select, keep a ref on head */
 	socket_unlock(head, 0);
 
@@ -725,7 +733,8 @@ static int
 connectx_nocancel(struct proc *p, struct connectx_args *uap, int *retval)
 {
 #pragma unused(p, retval)
-	struct sockaddr_list *src_sl = NULL, *dst_sl = NULL;
+	struct sockaddr_storage ss, sd;
+	struct sockaddr *src = NULL, *dst = NULL;
 	struct socket *so;
 	int error, error1, fd = uap->socket;
 	boolean_t dgram;
@@ -779,28 +788,38 @@ connectx_nocancel(struct proc *p, struct connectx_args *uap, int *retval)
 	 */
 	dgram = (so->so_type == SOCK_DGRAM);
 
-	/*
-	 * Get socket address(es) now before we obtain socket lock; use
-	 * sockaddr_list for src address for convenience, if present,
-	 * even though it won't hold more than one.
-	 */
-	if (ep.sae_srcaddr != USER_ADDR_NULL && (error = getsockaddrlist(so,
-	    &src_sl, (user_addr_t)(caddr_t)ep.sae_srcaddr, ep.sae_srcaddrlen,
-	    dgram)) != 0)
-		goto out;
+	/* Get socket address now before we obtain socket lock */
+	if (ep.sae_srcaddr != USER_ADDR_NULL) {
+		if (ep.sae_srcaddrlen > sizeof (ss)) {
+			error = getsockaddr(so, &src, ep.sae_srcaddr, ep.sae_srcaddrlen, dgram);
+		} else {
+			error = getsockaddr_s(so, &ss, ep.sae_srcaddr, ep.sae_srcaddrlen, dgram);
+			if (error == 0)
+				src = (struct sockaddr *)&ss;
+		}
+
+		if (error)
+			goto out;
+	}
 
 	if (ep.sae_dstaddr == USER_ADDR_NULL) {
 		error = EINVAL;
 		goto out;
 	}
 
-	error = getsockaddrlist(so, &dst_sl, (user_addr_t)(caddr_t)ep.sae_dstaddr,
-	    ep.sae_dstaddrlen, dgram);
-	if (error != 0)
+	/* Get socket address now before we obtain socket lock */
+	if (ep.sae_dstaddrlen > sizeof (sd)) {
+		error = getsockaddr(so, &dst, ep.sae_dstaddr, ep.sae_dstaddrlen, dgram);
+	} else {
+		error = getsockaddr_s(so, &sd, ep.sae_dstaddr, ep.sae_dstaddrlen, dgram);
+		if (error == 0)
+			dst = (struct sockaddr *)&sd;
+	}
+
+	if (error)
 		goto out;
 
-	VERIFY(dst_sl != NULL &&
-	    !TAILQ_EMPTY(&dst_sl->sl_head) && dst_sl->sl_cnt > 0);
+	VERIFY(dst != NULL);
 
 	if (uap->iov != USER_ADDR_NULL) {
 		/* Verify range before calling uio_create() */
@@ -842,7 +861,7 @@ connectx_nocancel(struct proc *p, struct connectx_args *uap, int *retval)
 		}
 	}
 
-	error = connectitx(so, &src_sl, &dst_sl, p, ep.sae_srcif, uap->associd,
+	error = connectitx(so, src, dst, p, ep.sae_srcif, uap->associd,
 	    &cid, auio, uap->flags, &bytes_written);
 	if (error == ERESTART)
 		error = EINTR;
@@ -865,10 +884,10 @@ out:
 	if (auio != NULL) {
 		uio_free(auio);
 	}
-	if (src_sl != NULL)
-		sockaddrlist_free(src_sl);
-	if (dst_sl != NULL)
-		sockaddrlist_free(dst_sl);
+	if (src != NULL && src != SA(&ss))
+		FREE(src, M_SONAME);
+	if (dst != NULL && dst != SA(&sd))
+		FREE(dst, M_SONAME);
 	return (error);
 }
 
@@ -933,27 +952,21 @@ out:
 }
 
 static int
-connectitx(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
+connectitx(struct socket *so, struct sockaddr *src,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope,
     sae_associd_t aid, sae_connid_t *pcid, uio_t auio, unsigned int flags,
     user_ssize_t *bytes_written)
 {
-	struct sockaddr_entry *se;
 	int error;
 #pragma unused (flags)
 
-	VERIFY(dst_sl != NULL && *dst_sl != NULL);
+	VERIFY(dst != NULL);
 
-	TAILQ_FOREACH(se, &(*dst_sl)->sl_head, se_link) {
-		VERIFY(se->se_addr != NULL);
-		AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()),
-		    se->se_addr);
+	AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()), dst);
 #if CONFIG_MACF_SOCKET_SUBSET
-		if ((error = mac_socket_check_connect(kauth_cred_get(),
-		    so, se->se_addr)) != 0)
-			return (error);
+	if ((error = mac_socket_check_connect(kauth_cred_get(), so, dst)) != 0)
+		return (error);
 #endif /* MAC_SOCKET_SUBSET */
-	}
 
 	socket_lock(so, 1);
 	if ((so->so_state & SS_NBIO) && (so->so_state & SS_ISCONNECTING)) {
@@ -962,8 +975,12 @@ connectitx(struct socket *so, struct sockaddr_list **src_sl,
 	}
 
 	if ((so->so_proto->pr_flags & PR_DATA_IDEMPOTENT) &&
-	    (flags & CONNECT_DATA_IDEMPOTENT))
+	    (flags & CONNECT_DATA_IDEMPOTENT)) {
 		so->so_flags1 |= SOF1_DATA_IDEMPOTENT;
+
+		if (flags & CONNECT_DATA_AUTHENTICATED)
+			so->so_flags |= SOF1_DATA_AUTHENTICATED;
+	}
 
 	/*
 	 * Case 1: CONNECT_RESUME_ON_READ_WRITE set, no data.
@@ -988,7 +1005,7 @@ connectitx(struct socket *so, struct sockaddr_list **src_sl,
 		so->so_flags1 &= ~SOF1_DATA_IDEMPOTENT;
 	}
 
-	error = soconnectxlocked(so, src_sl, dst_sl, p, ifscope,
+	error = soconnectxlocked(so, src, dst, p, ifscope,
 	    aid, pcid, 0, NULL, 0, auio, bytes_written);
 	if (error != 0) {
 		so->so_state &= ~SS_ISCONNECTING;
@@ -2817,88 +2834,6 @@ getsockaddr_s(struct socket *so, struct sockaddr_storage *ss,
 
 		ss->ss_len = len;
 	}
-	return (error);
-}
-
-/*
- * Hard limit on the number of source and/or destination addresses
- * that can be specified by an application.
- */
-#define	SOCKADDRLIST_MAX_ENTRIES	64
-
-static int
-getsockaddrlist(struct socket *so, struct sockaddr_list **slp,
-    user_addr_t uaddr, socklen_t uaddrlen, boolean_t xlate_unspec)
-{
-	struct sockaddr_list *sl;
-	int error = 0;
-
-	*slp = NULL;
-
-	if (uaddr == USER_ADDR_NULL || uaddrlen == 0 ||
-	    uaddrlen > (sizeof(struct sockaddr_in6) * SOCKADDRLIST_MAX_ENTRIES))
-		return (EINVAL);
-
-	sl = sockaddrlist_alloc(M_WAITOK);
-	if (sl == NULL)
-		return (ENOMEM);
-
-	VERIFY(sl->sl_cnt == 0);
-	while (uaddrlen > 0 && sl->sl_cnt < SOCKADDRLIST_MAX_ENTRIES) {
-		struct sockaddr_storage ss;
-		struct sockaddr_entry *se;
-		struct sockaddr *sa;
-
-		if (uaddrlen < sizeof (struct sockaddr)) {
-			error = EINVAL;
-			break;
-		}
-
-		bzero(&ss, sizeof (ss));
-		error = copyin(uaddr, (caddr_t)&ss, sizeof (struct sockaddr));
-		if (error != 0)
-			break;
-
-		/* getsockaddr does the same but we need them now */
-		if (uaddrlen < ss.ss_len ||
-		    ss.ss_len < offsetof(struct sockaddr, sa_data[0])) {
-			error = EINVAL;
-			break;
-		} else if (ss.ss_len > sizeof (ss)) {
-			/*
-			 * sockaddr_storage size is less than SOCK_MAXADDRLEN,
-			 * so the check here is inclusive.  We could use the
-			 * latter instead, but seems like an overkill for now.
-			 */
-			error = ENAMETOOLONG;
-			break;
-		}
-
-		se = sockaddrentry_alloc(M_WAITOK);
-		if (se == NULL) {
-			error = ENOBUFS;
-			break;
-		}
-
-		sockaddrlist_insert(sl, se);
-
-		error = getsockaddr(so, &sa, uaddr, ss.ss_len, xlate_unspec);
-		if (error != 0)
-			break;
-
-		VERIFY(sa != NULL && sa->sa_len == ss.ss_len);
-		se->se_addr = sa;
-
-		uaddr += ss.ss_len;
-		VERIFY(((signed)uaddrlen - ss.ss_len) >= 0);
-		uaddrlen -= ss.ss_len;
-	}
-
-	if (error != 0)
-		sockaddrlist_free(sl);
-	else
-		*slp = sl;
-
 	return (error);
 }
 

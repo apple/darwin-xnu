@@ -694,7 +694,7 @@ audit_pipe_open(dev_t dev, __unused int flags,  __unused int devtype,
 	int u;
 
 	u = minor(dev);
-	if (u < 0 || u > MAX_AUDIT_PIPES)
+	if (u < 0 || u >= MAX_AUDIT_PIPES)
 		return (ENXIO);
 
 	AUDIT_PIPE_LIST_WLOCK();

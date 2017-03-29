@@ -238,6 +238,19 @@ def GetTaskSummary(task, showcorpse=False):
         out_string += " " + GetKCDataSummary(task.corpse_info)
     return out_string
 
+def GetThreadName(thread):
+    """ Get the name of a thread, if possible.  Returns the empty string
+        otherwise.
+    """
+    if int(thread.uthread) != 0:
+        uthread = Cast(thread.uthread, 'uthread *')
+        if int(uthread.pth_name) != 0 :
+            th_name_strval = Cast(uthread.pth_name, 'char *')
+            if len(str(th_name_strval)) > 0 :
+                return str(th_name_strval)
+
+    return ''
+
 @lldb_type_summary(['thread *', 'thread_t'])
 @header("{0: <24s} {1: <10s} {2: <20s} {3: <6s} {4: <6s} {5: <15s} {6: <15s} {7: <8s} {8: <12s} {9: <32s} {10: <20s} {11: <20s} {12: <20s}".format('thread', 'thread_id', 'processor', 'base', 'pri', 'sched_mode', 'io_policy', 'state', 'ast', 'waitq', 'wait_event', 'wmesg', 'thread_name'))
 def GetThreadSummary(thread):
@@ -267,7 +280,6 @@ def GetThreadSummary(thread):
     if int(thread.static_param) : 
         thread_ptr_str+="[WQ]"
     thread_id = hex(thread.thread_id)
-    thread_name = ''
     processor = hex(thread.last_processor)
     base_priority = str(int(thread.base_pri))
     sched_priority = str(int(thread.sched_pri))
@@ -288,14 +300,10 @@ def GetThreadSummary(thread):
         sched_mode+=" BG"
     
     io_policy_str = ""
+    thread_name = GetThreadName(thread)
     if int(thread.uthread) != 0:
         uthread = Cast(thread.uthread, 'uthread *')
-        #check for thread name
-        if int(uthread.pth_name) != 0 :
-            th_name_strval = Cast(uthread.pth_name, 'char *')
-            if len(str(th_name_strval)) > 0 :
-                thread_name = str(th_name_strval)
-        
+
         #check for io_policy flags 
         if int(uthread.uu_flag) & 0x400:
             io_policy_str+='RAGE '
@@ -612,6 +620,12 @@ def GetProcSummary(proc):
         wq_idle_threads = -1
         wq_req_threads = -1
     process_name = str(proc.p_comm)
+    if process_name == 'xpcproxy':
+        for thread in IterateQueue(task.threads, 'thread *', 'task_threads'):
+            thread_name = GetThreadName(thread)
+            if thread_name:
+                process_name += ' (' + thread_name + ')'
+                break
     out_string += format_string.format(pid, proc_addr, " ".join([proc_rage_str, io_policy_str]), wq_num_threads, wq_idle_threads, wq_req_threads, process_name)
     return out_string
 
@@ -1059,6 +1073,23 @@ def ShowAllTasks(cmd_args=None, cmd_options={}):
         out_str = GetTaskSummary(t, showcorpse) + " " + GetProcSummary(pval)
         print out_str
     ZombTasks()
+
+@lldb_command('taskforpmap')
+def TaskForPmap(cmd_args=None):
+    """ Find the task whose pmap corresponds to <pmap>.
+        Syntax: (lldb) taskforpmap <pmap>
+            Multiple -v's can be specified for increased verbosity
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        raise ArgumentError("Too few arguments to taskforpmap.")
+    pmap = kern.GetValueFromAddress(cmd_args[0], 'pmap_t')
+    print GetTaskSummary.header + " " + GetProcSummary.header
+    for tasklist in [kern.tasks, kern.terminated_tasks]:
+        for t in tasklist:
+            if t.map.pmap == pmap:
+                pval = Cast(t.bsd_info, 'proc *')
+                out_str = GetTaskSummary(t) + " " + GetProcSummary(pval)
+                print out_str
 
 @lldb_command('showterminatedtasks') 
 def ShowTerminatedTasks(cmd_args=None):

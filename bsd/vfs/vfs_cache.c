@@ -916,6 +916,7 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 			tcred = vp->v_cred;
 			vp->v_cred = NOCRED;
 			vp->v_authorized_actions = 0;
+			vp->v_cred_timestamp = 0;
 		}
 		if ( (flags & VNODE_UPDATE_NAME) ) {
 			vname = vp->v_name;
@@ -1376,8 +1377,11 @@ skiprsrcfork:
 			}
 		}
 #endif /* MAC */
-		if (ttl_enabled && ((tv.tv_sec - dp->v_cred_timestamp) > dp->v_mount->mnt_authcache_ttl))
+		if (ttl_enabled &&
+		    (dp->v_mount->mnt_authcache_ttl == 0 ||
+		    ((tv.tv_sec - dp->v_cred_timestamp) > dp->v_mount->mnt_authcache_ttl))) {
 		        break;
+		}
 
 		/*
 		 * NAME_CACHE_LOCK holds these fields stable
@@ -1386,11 +1390,17 @@ skiprsrcfork:
 		 * so we make an ugly check for root here. root is always
 		 * allowed and breaking out of here only to find out that is
 		 * authorized by virtue of being root is very very expensive.
+		 * However, the check for not root is valid only for filesystems
+		 * which use local authorization.
+		 *
+		 * XXX: Remove the check for root when we can reliably set
+		 * KAUTH_VNODE_SEARCHBYANYONE as root.
 		 */
 		if ((dp->v_cred != ucred || !(dp->v_authorized_actions & KAUTH_VNODE_SEARCH)) &&
 		    !(dp->v_authorized_actions & KAUTH_VNODE_SEARCHBYANYONE) &&
-		    !vfs_context_issuser(ctx))
+		    (ttl_enabled || !vfs_context_issuser(ctx)))  {
 		        break;
+		}
 
 		/*
 		 * indicate that we're allowed to traverse this directory...

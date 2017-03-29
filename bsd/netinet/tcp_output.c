@@ -307,10 +307,9 @@ extern int fw_bypass;		/* firewall check: disable packet chaining if there is ru
 
 extern u_int32_t dlil_filter_disable_tso_count;
 extern u_int32_t kipf_count;
-extern int tcp_recv_bg;
 
-static int tcp_ip_output(struct socket *, struct tcpcb *, struct mbuf *, int,
-    struct mbuf *, int, int, int32_t, boolean_t);
+static int tcp_ip_output(struct socket *, struct tcpcb *, struct mbuf *,
+    int, struct mbuf *, int, int, boolean_t);
 static struct mbuf* tcp_send_lroacks(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th);
 static int tcp_recv_throttle(struct tcpcb *tp);
 
@@ -322,6 +321,9 @@ static int32_t tcp_tfo_check(struct tcpcb *tp, int32_t len)
 
 	if (tp->t_flags & TF_NOOPT)
 		goto fallback;
+
+	if (so->so_flags & SOF1_DATA_AUTHENTICATED)
+		return (len);
 
 	if (!tcp_heuristic_do_tfo(tp)) {
 		tp->t_tfo_stats |= TFO_S_HEURISTICS_DISABLE;
@@ -401,13 +403,24 @@ tcp_tfo_write_cookie_rep(struct tcpcb *tp, unsigned optlen, u_char *opt)
 }
 
 static unsigned
-tcp_tfo_write_cookie(struct tcpcb *tp, unsigned optlen, int32_t *len,
+tcp_tfo_write_cookie(struct tcpcb *tp, unsigned optlen, int32_t len,
 		     u_char *opt)
 {
 	u_int8_t tfo_len = MAX_TCPOPTLEN - optlen - TCPOLEN_FASTOPEN_REQ;
+	struct socket *so = tp->t_inpcb->inp_socket;
 	unsigned ret = 0;
 	int res;
 	u_char *bp;
+
+	if (so->so_flags & SOF1_DATA_AUTHENTICATED) {
+		/* If there is some data, let's track it */
+		if (len > 0) {
+			tp->t_tfo_stats |= TFO_S_SYN_DATA_SENT;
+			tcpstat.tcps_tfo_syn_data_sent++;
+		}
+
+		return (0);
+	}
 
 	bp = opt + optlen;
 
@@ -435,7 +448,7 @@ tcp_tfo_write_cookie(struct tcpcb *tp, unsigned optlen, int32_t *len,
 		tp->t_tfo_flags |= TFO_F_COOKIE_SENT;
 
 		/* If there is some data, let's track it */
-		if (*len) {
+		if (len > 0) {
 			tp->t_tfo_stats |= TFO_S_SYN_DATA_SENT;
 			tcpstat.tcps_tfo_syn_data_sent++;
 		}
@@ -1006,7 +1019,7 @@ after_sack_rexmit:
 				error = tcp_ip_output(so, tp, packetlist,
 				    packchain_listadd, tp_inp_options,
 				    (so_options & SO_DONTROUTE),
-				    (sack_rxmit | (sack_bytes_rxmt != 0)), 0,
+				    (sack_rxmit | (sack_bytes_rxmt != 0)),
 				    isipv6);
 			}
 
@@ -1240,24 +1253,16 @@ after_sack_rexmit:
 	if (recwin < (int32_t)(so->so_rcv.sb_hiwat / 4) &&
 	    recwin < (int)tp->t_maxseg)
 		recwin = 0;
-	if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0) {
-		if (recwin > (int32_t)slowlink_wsize)
-			recwin = slowlink_wsize;
-	}
 
 #if TRAFFIC_MGT
-	if (tcp_recv_bg == 1  || IS_TCP_RECV_BG(so)) {
+	if (tcp_recv_bg == 1 || IS_TCP_RECV_BG(so)) {
 		if (recwin > 0 && tcp_recv_throttle(tp)) {
 			uint32_t min_iaj_win = tcp_min_iaj_win * tp->t_maxseg;
-			if (tp->iaj_rwintop == 0 ||
-			    SEQ_LT(tp->iaj_rwintop, tp->rcv_adv))
-				tp->iaj_rwintop = tp->rcv_adv;
-			if (SEQ_LT(tp->iaj_rwintop,
-			    tp->rcv_nxt + min_iaj_win))
-				tp->iaj_rwintop =  tp->rcv_nxt +
-				    min_iaj_win;
-			recwin = imin((int32_t)(tp->iaj_rwintop -
-			    tp->rcv_nxt), recwin);
+			uint32_t bg_rwintop = tp->rcv_adv;
+			if (SEQ_LT(bg_rwintop, tp->rcv_nxt + min_iaj_win))
+				bg_rwintop =  tp->rcv_nxt + min_iaj_win;
+			recwin = imin((int32_t)(bg_rwintop - tp->rcv_nxt),
+			    recwin);
 			if (recwin < 0)
 				recwin = 0;
 		}
@@ -1436,8 +1441,7 @@ just_return:
 		error = tcp_ip_output(so, tp, packetlist,
 		    packchain_listadd,
 		    tp_inp_options, (so_options & SO_DONTROUTE),
-		    (sack_rxmit | (sack_bytes_rxmt != 0)), recwin,
-		    isipv6);
+		    (sack_rxmit | (sack_bytes_rxmt != 0)), isipv6);
 	}
 	/* tcp was closed while we were in ip; resume close */
 	if (inp->inp_sndinprog_cnt == 0 &&
@@ -1575,7 +1579,7 @@ send:
 
 	if (tfo_enabled(tp) && !(tp->t_flags & TF_NOOPT) &&
 	    (flags & (TH_SYN | TH_ACK)) == TH_SYN)
-		optlen += tcp_tfo_write_cookie(tp, optlen, &len, opt);
+		optlen += tcp_tfo_write_cookie(tp, optlen, len, opt);
 
 	if (tfo_enabled(tp) &&
 	    (flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK) &&
@@ -2156,6 +2160,8 @@ send:
 	}
 	th->th_flags = flags;
 	th->th_win = htons((u_short) (recwin>>tp->rcv_scale));
+	if (recwin > 0 && SEQ_LT(tp->rcv_adv, tp->rcv_nxt + recwin))
+		tp->rcv_adv = tp->rcv_nxt + recwin;
 
 	/*
 	 * Adjust the RXWIN0SENT flag - indicate that we have advertised
@@ -2562,8 +2568,7 @@ timer:
 			error = tcp_ip_output(so, tp, packetlist,
 			    packchain_listadd, tp_inp_options,
 			    (so_options & SO_DONTROUTE),
-			    (sack_rxmit | (sack_bytes_rxmt != 0)), recwin,
-			    isipv6);
+			    (sack_rxmit | (sack_bytes_rxmt != 0)), isipv6);
 			if (error) {
 				/*
 				 * Take into account the rest of unsent
@@ -2632,7 +2637,8 @@ out:
 		if (error == ENOBUFS) {
 			if (!tp->t_timer[TCPT_REXMT] &&
 			    !tp->t_timer[TCPT_PERSIST] &&
-			    SEQ_GT(tp->snd_max, tp->snd_una))
+			    (SEQ_GT(tp->snd_max, tp->snd_una) ||
+			    so->so_snd.sb_cc > 0))
 				tp->t_timer[TCPT_REXMT] =
 					OFFSET_FROM_START(tp, tp->t_rxtcur);
 			tp->snd_cwnd = tp->t_maxseg;
@@ -2692,8 +2698,7 @@ out:
 
 static int
 tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
-    int cnt, struct mbuf *opt, int flags, int sack_in_progress, int recwin,
-    boolean_t isipv6)
+    int cnt, struct mbuf *opt, int flags, int sack_in_progress, boolean_t isipv6)
 {
 	int error = 0;
 	boolean_t chain;
@@ -2793,14 +2798,9 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 		inp_route_copyout(inp, &ro);
 
 	/*
-	 * Data sent (as far as we can tell).
-	 * If this advertises a larger window than any other segment,
-	 * then remember the size of the advertised window.
 	 * Make sure ACK/DELACK conditions are cleared before
 	 * we unlock the socket.
 	 */
-	if (recwin > 0 && SEQ_GT(tp->rcv_nxt + recwin, tp->rcv_adv))
-		tp->rcv_adv = tp->rcv_nxt + recwin;
 	tp->last_ack_sent = tp->rcv_nxt;
 	tp->t_flags &= ~(TF_ACKNOW | TF_DELACK);
 	tp->t_timer[TCPT_DELACK] = 0;

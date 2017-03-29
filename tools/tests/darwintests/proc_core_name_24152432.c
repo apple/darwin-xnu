@@ -50,10 +50,9 @@ static int fork_and_wait_for_segfault() {
 #endif
 
 T_DECL(
-    proc_core_name_24152432, 
-    "Tests behavior of core dump when kern.corefile ends in %, e.g., /cores/core.%", 
-    T_META("owner", "Core Kernel Team"),
-    T_META_ASROOT(YES))
+    proc_core_name_24152432,
+    "Tests behavior of core dump when kern.corefile ends in %, e.g., /cores/core.%",
+    T_META_ASROOT(true))
 {
 #if TARGET_OS_OSX
 	int ret, pid;

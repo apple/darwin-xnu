@@ -380,7 +380,7 @@ if_detach_ifa_common(struct ifnet *ifp, struct ifaddr *ifa, int link)
 		panic("%s: unexpected (missing) refcnt ifa=%p", __func__, ifa);
 		/* NOTREACHED */
 	}
-	ifa->ifa_debug &= ~IFD_ATTACHED;
+	ifa->ifa_debug &= ~(IFD_ATTACHED | IFD_DETACHING);
 
 	if (ifa->ifa_detached != NULL)
 		(*ifa->ifa_detached)(ifa);
@@ -2049,7 +2049,7 @@ ifnet_reset_order(u_int32_t *ordered_indices, u_int32_t count)
 	for (u_int32_t order_index = 0; order_index < count; order_index++) {
 		u_int32_t interface_index = ordered_indices[order_index];
 		if (interface_index == IFSCOPE_NONE ||
-		    (int)interface_index > if_index) {
+			interface_index > (uint32_t)if_index) {
 			break;
 		}
 		ifp = ifindex2ifnet[interface_index];
@@ -2112,7 +2112,7 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 	case SIOCSIFORDER: {		/* struct if_order */
 		struct if_order *ifo = (struct if_order *)(void *)data;
 
-		if ((int)ifo->ifo_count > if_index) {
+		if (ifo->ifo_count > (u_int32_t)if_index) {
 			error = EINVAL;
 			break;
 		}
@@ -2163,7 +2163,7 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 
 			ifnet_head_lock_shared();
 			TAILQ_FOREACH(ifp, &ifnet_ordered_head, if_ordered_link) {
-				if (cursor > count_to_copy) {
+				if (cursor >= count_to_copy) {
 					break;
 				}
 				ordered_indices[cursor] = ifp->if_index;

@@ -124,6 +124,7 @@
 #include <libkern/OSKextLibPrivate.h>
 
 #include <mach/branch_predicates.h>
+#include <libkern/section_keywords.h>
 
 #if	DEBUG
 #define DPRINTF(x...)	kprintf(x)
@@ -169,7 +170,7 @@ typedef struct _cframe_t {
 static unsigned panic_io_port;
 static unsigned	commit_paniclog_to_nvram;
 
-unsigned int debug_boot_arg;
+SECURITY_READ_ONLY_LATE(unsigned int) debug_boot_arg;
 
 /*
  * Backtrace a single frame.
@@ -867,16 +868,6 @@ machine_halt_cpu(void) {
 	if (PE_halt_restart)
 		(*PE_halt_restart)(kPERestartCPU);
 	pmCPUHalt(PM_HALT_DEBUG);
-}
-
-static int pid_from_task(task_t task)
-{
-        int pid = -1;
-
-        if (task->bsd_info)
-                pid = proc_pid(task->bsd_info);
-
-        return pid;
 }
 
 void

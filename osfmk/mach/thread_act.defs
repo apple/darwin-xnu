@@ -217,7 +217,7 @@ routine thread_set_special_port(
  *      Returns information about the target thread.
  */
 routine thread_info(
-                target_act      : thread_act_t;
+                target_act      : thread_inspect_t;
                 flavor          : thread_flavor_t;
         out     thread_info_out : thread_info_t, CountInOut);
 
@@ -235,7 +235,7 @@ routine		thread_set_exception_ports(
  * Lookup some of the old exception handlers for a thread
  */
 routine		thread_get_exception_ports(
-			thread		: thread_act_t;
+			thread		: thread_inspect_t;
 			exception_mask	: exception_mask_t;
 		  out	masks		: exception_mask_array_t;
 		  out	old_handlers	: exception_handler_array_t, SameCount;
@@ -278,7 +278,7 @@ routine PREFIX(thread_policy_set)(
 	policy_info		: thread_policy_t);
 
 routine thread_policy_get(
-	thread			: thread_act_t;
+	thread			: thread_inspect_t;
 	flavor			: thread_policy_flavor_t;
 out	policy_info		: thread_policy_t, CountInOut;
 inout	get_default		: boolean_t);

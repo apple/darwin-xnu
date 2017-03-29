@@ -3407,4 +3407,11 @@ kern_wired_diagnose(void)
            top_wired, total_wired, total_zone, osfmk_wired);
 }
 
+boolean_t
+kdp_is_in_zone(void *addr, const char *zone_name)
+{
+	zone_t z;
+	return (zone_element_size(addr, &z) && !strcmp(z->zone_name, zone_name));
+}
+
 #endif /* DEBUG || DEVELOPMENT */

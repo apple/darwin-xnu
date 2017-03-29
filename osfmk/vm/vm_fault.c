@@ -4582,6 +4582,24 @@ handle_copy_delay:
 	if (real_map != map)
 		vm_map_unlock(real_map);
 
+	if (__improbable(object == compressor_object ||
+			 object == kernel_object ||
+			 object == vm_submap_object)) {
+		/*
+		 * These objects are explicitly managed and populated by the
+		 * kernel.  The virtual ranges backed by these objects should
+		 * either have wired pages or "holes" that are not supposed to
+		 * be accessed at all until they get explicitly populated.
+		 * We should never have to resolve a fault on a mapping backed
+		 * by one of these VM objects and providing a zero-filled page
+		 * would be wrong here, so let's fail the fault and let the
+		 * caller crash or recover.
+		 */
+		vm_object_unlock(object);
+		kr = KERN_MEMORY_ERROR;
+		goto done;
+	}
+
 	assert(object != compressor_object);
 	assert(object != kernel_object);
 	assert(object != vm_submap_object);

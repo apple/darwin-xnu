@@ -642,7 +642,8 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, 
 	 */
 
 	 ut = get_bsdthread_info(self);
-	 if (ut->uu_flag & UT_VFORK) {
+	 if ((p == current_proc()) &&
+	     (ut->uu_flag & UT_VFORK)) {
 		os_reason_free(exit_reason);
 		if (!thread_can_terminate) {
 			return EINVAL;
@@ -667,6 +668,10 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, 
  	 * what the return value is.
 	 */
 	AUDIT_ARG(exit, WEXITSTATUS(rv), 0);
+	/*
+	 * TODO: what to audit here when jetsam calls exit and the uthread,
+	 * 'ut' does not belong to the proc, 'p'.
+	 */
 	AUDIT_SYSCALL_EXIT(SYS_exit, p, ut, 0); /* Exit is always successfull */
 
 	DTRACE_PROC1(exit, int, CLD_EXITED);

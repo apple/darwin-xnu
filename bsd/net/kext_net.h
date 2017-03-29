@@ -66,8 +66,6 @@ extern int	sflt_getpeername(struct socket *so, struct sockaddr **remote);
 extern int	sflt_connectin(struct socket *head,
 		    const struct sockaddr *remote);
 extern int	sflt_connectout(struct socket *so, const struct sockaddr *nam);
-extern int	sflt_connectxout(struct socket *so,
-		    struct sockaddr_list **nam_sl);
 extern int	sflt_setsockopt(struct socket *so, struct sockopt *sopt);
 extern int	sflt_getsockopt(struct socket *so, struct sockopt *sopt);
 extern int	sflt_data_out(struct socket *so, const struct sockaddr	*to,

@@ -677,6 +677,7 @@ thread_unblock(
 	thread->quantum_remaining = 0;
 	thread->computation_metered = 0;
 	thread->reason = AST_NONE;
+	thread->block_hint = kThreadWaitNone;
 
 	/* Obtain power-relevant interrupt and "platform-idle exit" statistics.
 	 * We also account for "double hop" thread signaling via
@@ -813,11 +814,19 @@ thread_mark_wait_locked(
 
 		thread->state |= (interruptible) ? TH_WAIT : (TH_WAIT | TH_UNINT);
 		thread->at_safe_point = at_safe_point;
+
+		/* TODO: pass this through assert_wait instead, have
+		 * assert_wait just take a struct as an argument */
+		assert(!thread->block_hint);
+		thread->block_hint = thread->pending_block_hint;
+		thread->pending_block_hint = kThreadWaitNone;
+
 		return (thread->wait_result = THREAD_WAITING);
 	}
 	else
 	if (thread->sched_flags & TH_SFLAG_ABORTSAFELY)
 		thread->sched_flags &= ~TH_SFLAG_ABORTED_MASK;
+	thread->pending_block_hint = kThreadWaitNone;
 
 	return (thread->wait_result = THREAD_INTERRUPTED);
 }
@@ -2696,6 +2705,7 @@ thread_dispatch(
 		machine_thread_going_on_core(self, THREAD_URGENCY_NONE, 0, processor->last_dispatch);
 	}
 
+	assert(self->block_hint == kThreadWaitNone);
 	self->computation_epoch = processor->last_dispatch;
 	self->reason = AST_NONE;
 	processor->starting_pri = self->sched_pri;
@@ -4873,4 +4883,8 @@ void thread_set_options(uint32_t thopt) {
  
  	thread_unlock(t);
  	splx(x);
+}
+
+void thread_set_pending_block_hint(thread_t thread, block_hint_t block_hint) {
+	thread->pending_block_hint = block_hint;
 }

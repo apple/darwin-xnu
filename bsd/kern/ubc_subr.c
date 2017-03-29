@@ -468,20 +468,26 @@ cs_validate_blob(const CS_GenericBlob *blob, size_t length)
  */
 
 static int
-cs_validate_csblob(const uint8_t *addr, size_t length,
-		   const CS_CodeDirectory **rcd,
-		   const CS_GenericBlob **rentitlements)
+cs_validate_csblob(
+	const uint8_t *addr,
+	size_t *blob_size_p,
+	const CS_CodeDirectory **rcd,
+	const CS_GenericBlob **rentitlements)
 {
-	const CS_GenericBlob *blob = (const CS_GenericBlob *)(const void *)addr;
+	const CS_GenericBlob *blob;
 	int error;
+	size_t length, blob_size;
 
 	*rcd = NULL;
 	*rentitlements = NULL;
 
+	blob = (const CS_GenericBlob *)(const void *)addr;
+	blob_size = *blob_size_p;
+
+	length = blob_size;
 	error = cs_validate_blob(blob, length);
 	if (error)
 		return error;
-
 	length = ntohl(blob->length);
 
 	if (ntohl(blob->magic) == CSMAGIC_EMBEDDED_SIGNATURE) {
@@ -560,6 +566,8 @@ cs_validate_csblob(const uint8_t *addr, size_t length,
 
 	if (*rcd == NULL)
 		return EBADEXEC;
+
+	*blob_size_p = blob_size;
 
 	return 0;
 }
@@ -2878,6 +2886,7 @@ ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
 	vm_size_t       new_cdsize;
 	kern_return_t	kr;
 	int				error;
+	size_t		length;
 
 	uint32_t		hashes_per_new_hash_shift = (uint32_t)(PAGE_SHIFT - blob->csb_hash_pageshift);
 
@@ -2994,7 +3003,9 @@ ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
 		blob->csb_hashtype->cs_final(dst, &mdctx);
 	}
 
-	error = cs_validate_csblob((const uint8_t *)new_blob_addr, new_blob_size, &cd, &entitlements);
+	length = new_blob_size;
+	error = cs_validate_csblob((const uint8_t *)new_blob_addr, &length, &cd, &entitlements);
+	assert(length == new_blob_size);
 	if (error) {
 
 		if (cs_debug > 1) {
@@ -3051,6 +3062,7 @@ ubc_cs_blob_add(
 	off_t			blob_start_offset, blob_end_offset;
 	union cs_hash_union	mdctx;
 	boolean_t		record_mtime;
+	size_t			length;
 
 	record_mtime = FALSE;
 	if (ret_blob)
@@ -3080,19 +3092,65 @@ ubc_cs_blob_add(
 	/*
 	 * Validate the blob's contents
 	 */
-
-	error = cs_validate_csblob((const uint8_t *)blob->csb_mem_kaddr, size, &cd, &entitlements);
+	length = (size_t) size;
+	error = cs_validate_csblob((const uint8_t *)blob->csb_mem_kaddr,
+				   &length, &cd, &entitlements);
 	if (error) {
 
-        if (cs_debug)
+		if (cs_debug)
 			printf("CODESIGNING: csblob invalid: %d\n", error);
-        /* The vnode checker can't make the rest of this function succeed if csblob validation failed, so bail */
-        goto out;
+		/*
+		 * The vnode checker can't make the rest of this function
+		 * succeed if csblob validation failed, so bail */
+		goto out;
 
 	} else {
 		const unsigned char *md_base;
 		uint8_t hash[CS_HASH_MAX_SIZE];
 		int md_size;
+
+		size = (vm_size_t) length;
+		assert(size <= blob->csb_mem_size);
+		if (size < blob->csb_mem_size) {
+			vm_address_t new_blob_addr;
+			const CS_CodeDirectory *new_cd;
+			const CS_GenericBlob *new_entitlements;
+
+			kr = ubc_cs_blob_allocate(&new_blob_addr, &size);
+			if (kr != KERN_SUCCESS) {
+				if (cs_debug > 1) {
+					printf("CODE SIGNING: failed to "
+					       "re-allocate blob (size "
+					       "0x%llx->0x%llx) error 0x%x\n",
+					       (uint64_t)blob->csb_mem_size,
+					       (uint64_t)size,
+					       kr);
+				}
+			} else {
+				memcpy(new_blob_addr, blob->csb_mem_kaddr, size);
+				if (cd == NULL) {
+					new_cd = NULL;
+				} else {
+					new_cd = ((uintptr_t)cd
+						  - (uintptr_t)blob->csb_mem_kaddr
+						  + (uintptr_t)new_blob_addr);
+				}
+				if (entitlements == NULL) {
+					new_entitlements = NULL;
+				} else {
+					new_entitlements = ((uintptr_t)entitlements
+							    - (uintptr_t)blob->csb_mem_kaddr
+							    + (uintptr_t)new_blob_addr);
+				}
+//				printf("CODE SIGNING: %s:%d kaddr 0x%llx cd %p ents %p -> blob 0x%llx cd %p ents %p\n", __FUNCTION__, __LINE__, (uint64_t)blob->csb_mem_kaddr, cd, entitlements, (uint64_t)new_blob_addr, new_cd, new_entitlements);
+				ubc_cs_blob_deallocate(blob->csb_mem_kaddr,
+						       blob->csb_mem_size);
+				blob->csb_mem_kaddr = new_blob_addr;
+				blob->csb_mem_size = size;
+				cd = new_cd;
+				entitlements = new_entitlements;
+			}
+		}
 
 		blob->csb_cd = cd;
 		blob->csb_entitlements_blob = entitlements; /* may be NULL, not yet validated */
@@ -3501,16 +3559,20 @@ ubc_cs_blob_revalidate(
 	int error = 0;
 	const CS_CodeDirectory *cd = NULL;
 	const CS_GenericBlob *entitlements = NULL;
+	size_t size;
 	assert(vp != NULL);
 	assert(blob != NULL);
 
-	error = cs_validate_csblob((const uint8_t *)blob->csb_mem_kaddr, blob->csb_mem_size, &cd, &entitlements);
+	size = blob->csb_mem_size;
+	error = cs_validate_csblob((const uint8_t *)blob->csb_mem_kaddr,
+				   &size, &cd, &entitlements);
 	if (error) {
 		if (cs_debug) {
 			printf("CODESIGNING: csblob invalid: %d\n", error);
 		}
 		goto out;
 	}
+	assert(size == blob->csb_mem_size);
 
     unsigned int cs_flags = (ntohl(cd->flags) & CS_ALLOWED_MACHO) | CS_VALID;
     

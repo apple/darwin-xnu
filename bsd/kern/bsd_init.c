@@ -312,7 +312,6 @@ kern_return_t bsd_autoconf(void);
 void bsd_utaskbootstrap(void);
 
 static void parse_bsd_args(void);
-extern task_t bsd_init_task;
 #if CONFIG_DEV_KMEM
 extern void dev_kmem_init(void);
 #endif
@@ -388,6 +387,7 @@ lck_grp_attr_t * proc_lck_grp_attr;
 lck_attr_t * proc_lck_attr;
 lck_mtx_t * proc_list_mlock;
 lck_mtx_t * proc_klist_mlock;
+
 
 extern lck_mtx_t * execargs_cache_lock;
 
@@ -482,6 +482,7 @@ bsd_init(void)
 	proc_ucred_mlock_grp = lck_grp_alloc_init("proc-ucred-mlock",  proc_lck_grp_attr);
 	proc_mlock_grp = lck_grp_alloc_init("proc-mlock",  proc_lck_grp_attr);
 #endif
+
 	/* Allocate proc lock attribute */
 	proc_lck_attr = lck_attr_alloc_init();
 #if 0
@@ -1028,7 +1029,6 @@ bsd_init(void)
 	consider_zone_gc();
 #endif
 
-
 	bsd_init_kprintf("done\n");
 }
 
@@ -1052,11 +1052,11 @@ bsdinit_task(void)
 
 	ut = (uthread_t)get_bsdthread_info(thread);
 
-	bsd_init_task = get_threadtask(thread);
-
 #if CONFIG_MACF
 	mac_cred_label_associate_user(p->p_ucred);
 #endif
+
+
 	load_init_program(p);
 	lock_trace = 1;
 }

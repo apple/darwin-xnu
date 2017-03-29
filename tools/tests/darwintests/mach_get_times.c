@@ -11,7 +11,7 @@
 #define timespec2nanosec(ts) ((uint64_t)((ts)->tv_sec) * NSEC_PER_SEC + (uint64_t)((ts)->tv_nsec))
 
 T_DECL(mach_get_times, "mach_get_times()",
-	   T_META_CHECK_LEAKS(NO), T_META_ALL_VALID_ARCHS(YES))
+	   T_META_CHECK_LEAKS(false), T_META_ALL_VALID_ARCHS(true))
 {
 	const int ITERATIONS = 500000 * dt_ncpu();
 	struct timespec gtod_ts;

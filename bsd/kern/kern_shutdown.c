@@ -140,6 +140,12 @@ kernel_hwm_panic_info(void)
 }
 
 int
+get_system_inshutdown()
+{
+	return (system_inshutdown);
+}
+
+int
 reboot_kernel(int howto, char *message)
 {
 	int hostboot_option=0;

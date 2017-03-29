@@ -36,6 +36,8 @@
 #ifndef __KDP_CORE_H
 #define __KDP_CORE_H
 
+#include <kdp/kdp_protocol.h>
+
 /*
  * Packet types.
  */
@@ -121,8 +123,7 @@ void kdp_panic_dump (void);
 void abort_panic_transfer (void);
 void kdp_set_dump_info(const uint32_t flags, const char *file, const char *destip,
                        const char *routerip, const uint32_t port);
-void kdp_get_dump_info(uint32_t *flags, char *file, char *destip, char *routerip, 
-                       uint32_t *port);
+void kdp_get_dump_info(kdp_dumpinfo_reply_t *rp);
 
 enum kern_dump_type {
 	KERN_DUMP_DISK, /* local, on device core dump */

@@ -839,6 +839,9 @@ SYSCTL_QUAD(_machdep, OID_AUTO, reportphyreadabs,
 SYSCTL_INT(_machdep, OID_AUTO, reportphyreadosbt,
 		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
 		&reportphyreadosbt, 0, "");
+SYSCTL_INT(_machdep, OID_AUTO, phyreaddelaypanic,
+		CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+		&phyreadpanic, 0, "");
 
 extern int pmap_pagezero_mitigation;
 extern int pmap_asserts_enabled, pmap_asserts_traced;

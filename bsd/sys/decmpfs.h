@@ -73,9 +73,9 @@ typedef struct {
     user_ssize_t size;
 } decmpfs_vector;
 
-#if KERNEL
+#ifdef KERNEL
 
-#if XNU_KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 
 #include <kern/locks.h>
 

@@ -869,7 +869,8 @@ void kxld_show_split_info(splitKextLinkInfo *info)
              "kextExecutable %p to %p kextSize %lu \n"
              "linkedKext %p to %p linkedKextSize %lu \n"
              "vmaddr_TEXT %p vmaddr_TEXT_EXEC %p "
-             "vmaddr_DATA %p vmaddr_DATA_CONST %p vmaddr_LINKEDIT %p",
+             "vmaddr_DATA %p vmaddr_DATA_CONST %p "
+             "vmaddr_LLVM_COV %p vmaddr_LINKEDIT %p",
              (void *) info->kextExecutable,
              (void *) (info->kextExecutable + info->kextSize),
              info->kextSize,
@@ -880,6 +881,7 @@ void kxld_show_split_info(splitKextLinkInfo *info)
              (void *) info->vmaddr_TEXT_EXEC,
              (void *) info->vmaddr_DATA,
              (void *) info->vmaddr_DATA_CONST,
+             (void *) info->vmaddr_LLVM_COV,
              (void *) info->vmaddr_LINKEDIT);
 }
 

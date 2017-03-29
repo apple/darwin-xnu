@@ -106,9 +106,7 @@ unix_syscall(x86_saved_state_t *state)
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);
 
-#if PROC_REF_DEBUG
 	uthread_reset_proc_refcount(uthread);
-#endif
 
 	/* Get the approriate proc; may be different from task's for vfork() */
 	is_vfork = uthread->uu_flag & UT_VFORK;
@@ -285,9 +283,7 @@ unix_syscall64(x86_saved_state_t *state)
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);
 
-#if PROC_REF_DEBUG
 	uthread_reset_proc_refcount(uthread);
-#endif
 
 	/* Get the approriate proc; may be different from task's for vfork() */
 	if (__probable(!(uthread->uu_flag & UT_VFORK)))

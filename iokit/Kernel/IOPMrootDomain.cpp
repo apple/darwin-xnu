@@ -713,6 +713,10 @@ void IOPMrootDomain::swdDebugSetup( )
     DLOG("swdDebugSetup state:%d\n", swd_DebugImageSetup);
     if (swd_DebugImageSetup == FALSE) {
         swd_DebugImageSetup = TRUE;
+        if (CAP_GAIN(kIOPMSystemCapabilityGraphics) ||
+                (CAP_LOSS(kIOPMSystemCapabilityGraphics))) {
+            IOHibernateSystemPostWakeTrim((void*)1, NULL);
+        }
         IOOpenDebugDataFile(kSleepWakeStackBinFilename, SWD_BUF_SIZE);
     }
 #endif
@@ -4327,7 +4331,9 @@ void IOPMrootDomain::evaluateSystemSleepPolicyFinal( void )
     wakeNow = false;
     if (evaluateSystemSleepPolicy(&params, kIOPMSleepPhase2, &hibernateMode))
     {
-        if ((kIOPMSleepTypeStandby == params.sleepType) && gIOHibernateStandbyDisabled)
+        if ((kIOPMSleepTypeStandby == params.sleepType)
+         && gIOHibernateStandbyDisabled
+         && (!(kIOPMSleepFactorStandbyForced & gSleepPolicyVars->sleepFactors)))
         {
             standbyNixed = true;
             wakeNow = true;
@@ -5005,6 +5011,8 @@ void IOPMrootDomain::handleOurPowerChangeStart(
                 clock_get_uptime(&ts_sleepStart);
                 DLOG("sleepDelaysReport f->9 start at 0x%llx\n", ts_sleepStart);
             }
+
+            wranglerTickled = false;
         }
     }
 
@@ -5149,7 +5157,6 @@ void IOPMrootDomain::handleOurPowerChangeDone(
                 {
                     // Going dark, reset full wake state
                     // userIsActive will be cleared by wrangler powering down
-                    wranglerTickled = false;
                     fullWakeReason = kFullWakeReasonNone;
 
                     if (ts_sleepStart) {
@@ -5240,6 +5247,9 @@ void IOPMrootDomain::handleOurPowerChangeDone(
         {
             darkWakePostTickle = false;
             reportUserInput();
+        }
+        else if (wranglerTickled) {
+            requestFullWake( kFullWakeReasonLocalUser );
         }
 
         // Reset tracepoint at completion of capability change,
@@ -10093,7 +10103,7 @@ IOMemoryMap *IOPMrootDomain::sleepWakeDebugRetrieve( )
    IOMemoryDescriptor * desc = NULL;
    IOMemoryMap *        logBufMap = NULL;
 
-   uint32_t          len;
+   uint32_t          len = INT_MAX;
    addr64_t          data[3];
    uint64_t          bufSize = 0;
    uint64_t          crc = 0;

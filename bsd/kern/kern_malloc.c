@@ -589,13 +589,17 @@ __MALLOC(
 			/*
 			 * We get here when the caller told us to block waiting for memory, but
 			 * kalloc said there's no memory left to get.  Generally, this means there's a 
-			 * leak or the caller asked for an impossibly large amount of memory.  Since there's
-			 * nothing left to wait for and the caller isn't expecting a NULL return code, we
-			 * just panic.  This is less than ideal, but returning NULL doesn't help since the
-			 * majority of callers don't check the return value and will just dereference the pointer and
-			 * trap anyway.  We may as well get a more descriptive message out while we can.
+			 * leak or the caller asked for an impossibly large amount of memory. If the caller
+			 * is expecting a NULL return code then it should explicitly set the flag M_NULL. 
+			 * If the caller isn't expecting a NULL return code, we just panic. This is less 
+			 * than ideal, but returning NULL when the caller isn't expecting it doesn't help 
+			 * since the majority of callers don't check the return value and will just 
+			 * dereference the pointer and trap anyway.  We may as well get a more 
+			 * descriptive message out while we can.
 			 */
-
+			if (flags & M_NULL) {
+				return NULL;
+			}
 			panic("_MALLOC: kalloc returned NULL (potential leak), size %llu", (uint64_t) size);
 		}
 	}
@@ -643,8 +647,15 @@ __REALLOC(
 	 * would land. If it matches the bucket of the original allocation, 
 	 * simply return the address.
 	 */
-	if (kalloc_bucket_size(size) == alloc)
+	if (kalloc_bucket_size(size) == alloc) {
+		if (flags & M_ZERO) { 
+			if (alloc < size)
+				bzero((uintptr_t)addr + alloc, (size - alloc));
+			else
+				bzero((uintptr_t)addr + size, (alloc - size));
+		}
 		return addr;
+	}
 
 	/* Allocate a new, bigger (or smaller) block */
 	if ((newaddr = __MALLOC(size, type, flags, site)) == NULL)

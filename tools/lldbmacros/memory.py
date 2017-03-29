@@ -3299,3 +3299,64 @@ def ShowJetsamSnapshot(cmd_args=None, cmd_options={}):
     return
 
 # EndMacro: showjetsamsnapshot
+
+# Macro: showvnodecleanblk/showvnodedirtyblk
+
+def _GetBufSummary(buf):
+    """ Get a summary of important information out of a buf_t.
+    """
+    initial = "(struct buf) {0: <#0x} ="
+
+    # List all of the fields in this buf summary.
+    entries = [buf.b_hash, buf.b_vnbufs, buf.b_freelist, buf.b_timestamp, buf.b_whichq,
+        buf.b_flags, buf.b_lflags, buf.b_error, buf.b_bufsize, buf.b_bcount, buf.b_resid,
+        buf.b_dev, buf.b_datap, buf.b_lblkno, buf.b_blkno, buf.b_iodone, buf.b_vp,
+        buf.b_rcred, buf.b_wcred, buf.b_upl, buf.b_real_bp, buf.b_act, buf.b_drvdata,
+        buf.b_fsprivate, buf.b_transaction, buf.b_dirtyoff, buf.b_dirtyend, buf.b_validoff,
+        buf.b_validend, buf.b_redundancy_flags, buf.b_proc, buf.b_attr]
+
+    # Join an (already decent) string representation of each field
+    # with newlines and indent the region.
+    joined_strs = "\n".join([str(i).rstrip() for i in entries]).replace('\n', "\n    ")
+
+    # Add the total string representation to our title and return it.
+    out_str = initial.format(int(buf)) + " {\n    " + joined_strs + "\n}\n\n"
+    return out_str
+
+def _ShowVnodeBlocks(dirty=True, cmd_args=None):
+    """ Display info about all [dirty|clean] blocks in a vnode.
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        print "Please provide a valid vnode argument."
+        return
+
+    vnodeval = kern.GetValueFromAddress(cmd_args[0], 'vnode *')
+    list_head = vnodeval.v_cleanblkhd;
+    if dirty:
+        list_head = vnodeval.v_dirtyblkhd
+
+    print "Blocklist for vnode {}:".format(cmd_args[0])
+
+    i = 0
+    for buf in IterateListEntry(list_head, 'struct buf *', 'b_hash'):
+        # For each block (buf_t) in the appropriate list,
+        # ask for a summary and print it.
+        print "---->\nblock {}: ".format(i) + _GetBufSummary(buf)
+        i += 1
+    return
+
+@lldb_command('showvnodecleanblk')
+def ShowVnodeCleanBlocks(cmd_args=None):
+    """ Display info about all clean blocks in a vnode.
+        usage: showvnodecleanblk <address of vnode>
+    """
+    _ShowVnodeBlocks(False, cmd_args)
+
+@lldb_command('showvnodedirtyblk')
+def ShowVnodeDirtyBlocks(cmd_args=None):
+    """ Display info about all dirty blocks in a vnode.
+        usage: showvnodedirtyblk <address of vnode>
+    """
+    _ShowVnodeBlocks(True, cmd_args)
+
+# EndMacro: showvnodecleanblk/showvnodedirtyblk

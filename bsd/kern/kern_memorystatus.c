@@ -127,7 +127,6 @@ do {                                              \
 #define SET_ACTIVE_LIMITS_LOCKED(p, limit, is_fatal)			\
 MACRO_BEGIN								\
 (p)->p_memstat_memlimit_active = (limit);				\
-   (p)->p_memstat_state &= ~P_MEMSTAT_MEMLIMIT_ACTIVE_EXC_TRIGGERED;	\
    if (is_fatal) {							\
 	   (p)->p_memstat_state |= P_MEMSTAT_MEMLIMIT_ACTIVE_FATAL;	\
    } else {								\
@@ -138,7 +137,6 @@ MACRO_END
 #define SET_INACTIVE_LIMITS_LOCKED(p, limit, is_fatal)			\
 MACRO_BEGIN								\
 (p)->p_memstat_memlimit_inactive = (limit);				\
-   (p)->p_memstat_state &= ~P_MEMSTAT_MEMLIMIT_INACTIVE_EXC_TRIGGERED;	\
    if (is_fatal) {							\
 	   (p)->p_memstat_state |= P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL;	\
    } else {								\
@@ -146,33 +144,27 @@ MACRO_BEGIN								\
    }									\
 MACRO_END
 
-#define CACHE_ACTIVE_LIMITS_LOCKED(p, trigger_exception)		\
+#define CACHE_ACTIVE_LIMITS_LOCKED(p, is_fatal)				\
 MACRO_BEGIN								\
 (p)->p_memstat_memlimit = (p)->p_memstat_memlimit_active;		\
    if ((p)->p_memstat_state & P_MEMSTAT_MEMLIMIT_ACTIVE_FATAL) {	\
 	   (p)->p_memstat_state |= P_MEMSTAT_FATAL_MEMLIMIT;		\
+	   is_fatal = TRUE;						\
    } else {								\
 	   (p)->p_memstat_state &= ~P_MEMSTAT_FATAL_MEMLIMIT;		\
-   }									\
-   if ((p)->p_memstat_state & P_MEMSTAT_MEMLIMIT_ACTIVE_EXC_TRIGGERED) { \
-	   trigger_exception = FALSE;					\
-   } else {								\
-	   trigger_exception = TRUE;					\
+	   is_fatal = FALSE;						\
    }									\
 MACRO_END
 
-#define CACHE_INACTIVE_LIMITS_LOCKED(p, trigger_exception)		\
+#define CACHE_INACTIVE_LIMITS_LOCKED(p, is_fatal)			\
 MACRO_BEGIN								\
 (p)->p_memstat_memlimit = (p)->p_memstat_memlimit_inactive;		\
    if ((p)->p_memstat_state & P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL) {	\
 	   (p)->p_memstat_state |= P_MEMSTAT_FATAL_MEMLIMIT;		\
+	   is_fatal = TRUE;						\
    } else {								\
 	   (p)->p_memstat_state &= ~P_MEMSTAT_FATAL_MEMLIMIT;		\
-   }									\
-   if ((p)->p_memstat_state & P_MEMSTAT_MEMLIMIT_INACTIVE_EXC_TRIGGERED) { \
-	   trigger_exception = FALSE;					\
-   } else {								\
-	   trigger_exception = TRUE;					\
+	   is_fatal = FALSE;						\
    }									\
 MACRO_END
 
@@ -631,7 +623,7 @@ extern unsigned int	vm_page_secluded_count;
 
 #if VM_PRESSURE_EVENTS
 
-boolean_t memorystatus_warn_process(pid_t pid, boolean_t exceeded);
+boolean_t memorystatus_warn_process(pid_t pid, __unused boolean_t is_active, __unused boolean_t is_fatal,  boolean_t exceeded);
 
 vm_pressure_level_t memorystatus_vm_pressure_level = kVMPressureNormal;
 
@@ -827,6 +819,8 @@ sysctl_memorystatus_highwater_enable SYSCTL_HANDLER_ARGS
 	proc_t p;
 	unsigned int b = 0;
 	int error, enable = 0;
+	boolean_t use_active;	/* use the active limit and active limit attributes */
+	boolean_t is_fatal;
 
 	error = SYSCTL_OUT(req, arg1, sizeof(int));
 	if (error || !req->newptr) {
@@ -846,7 +840,7 @@ sysctl_memorystatus_highwater_enable SYSCTL_HANDLER_ARGS
 
 	p = memorystatus_get_first_proc_locked(&b, TRUE);
 	while (p) {
-		boolean_t trigger_exception;
+		use_active = proc_jetsam_state_is_active_locked(p);
 
 		if (enable) {
 			/*
@@ -854,10 +848,10 @@ sysctl_memorystatus_highwater_enable SYSCTL_HANDLER_ARGS
 			 * Background limits are described via the inactive limit slots.
 			 */
 
-			if (proc_jetsam_state_is_active_locked(p) == TRUE) {
-				CACHE_ACTIVE_LIMITS_LOCKED(p, trigger_exception);
+			if (use_active == TRUE) {
+				CACHE_ACTIVE_LIMITS_LOCKED(p, is_fatal);
 			} else {
-				CACHE_INACTIVE_LIMITS_LOCKED(p, trigger_exception);
+				CACHE_INACTIVE_LIMITS_LOCKED(p, is_fatal);
 			}
 
 		} else {
@@ -867,13 +861,13 @@ sysctl_memorystatus_highwater_enable SYSCTL_HANDLER_ARGS
 			 */
 			p->p_memstat_memlimit = -1;
 			p->p_memstat_state |= P_MEMSTAT_FATAL_MEMLIMIT;
-			trigger_exception = TRUE;
+			is_fatal = TRUE;
 		}
 
 		/*
 		 * Enforce the cached limit by writing to the ledger.
 		 */
-		task_set_phys_footprint_limit_internal(p->task, (p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit: -1, NULL, trigger_exception);
+		task_set_phys_footprint_limit_internal(p->task, (p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit: -1, NULL, use_active, is_fatal);
 
 		p = memorystatus_get_next_proc_locked(&b, p, TRUE);
 	}
@@ -891,8 +885,10 @@ SYSCTL_PROC(_kern, OID_AUTO, memorystatus_highwater_enabled, CTLTYPE_INT|CTLFLAG
 #if VM_PRESSURE_EVENTS
 
 /*
- * This routine is used for targeted notifications
- * regardless of system memory pressure.
+ * This routine is used for targeted notifications regardless of system memory pressure
+ * and regardless of whether or not the process has already been notified.
+ * It bypasses and has no effect on the only-one-notification per soft-limit policy.
+ * 
  * "memnote" is the current user.
  */
 
@@ -1654,9 +1650,17 @@ memorystatus_update_inactive_jetsam_priority_band(pid_t pid, uint32_t op_flags, 
 
 				if (effective_now) {
 					if (p->p_memstat_effectivepriority < JETSAM_PRIORITY_ELEVATED_INACTIVE) {
-						boolean_t trigger_exception;
-						CACHE_ACTIVE_LIMITS_LOCKED(p, trigger_exception);
-						task_set_phys_footprint_limit_internal(p->task, (p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1, NULL, trigger_exception);
+						if(memorystatus_highwater_enabled) {
+							/*
+							 * Process is about to transition from
+							 * inactive --> active
+							 * assign active state
+							 */
+							boolean_t is_fatal;
+							boolean_t use_active = TRUE;
+							CACHE_ACTIVE_LIMITS_LOCKED(p, is_fatal);
+							task_set_phys_footprint_limit_internal(p->task, (p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1, NULL, use_active, is_fatal);
+						}
 						memorystatus_update_priority_locked(p, JETSAM_PRIORITY_ELEVATED_INACTIVE, FALSE, FALSE);
 					}
 				} else {
@@ -2080,7 +2084,8 @@ memorystatus_update_priority_locked(proc_t p, int priority, boolean_t head_inser
 	new_bucket->count++;
 
 	if (memorystatus_highwater_enabled) {
-		boolean_t trigger_exception;
+		boolean_t is_fatal;
+		boolean_t use_active;
 
 		/* 
 		 * If cached limit data is updated, then the limits
@@ -2107,7 +2112,8 @@ memorystatus_update_priority_locked(proc_t p, int priority, boolean_t head_inser
 		if (p->p_memstat_dirty & P_DIRTY_TRACK) {
 
 			if (skip_demotion_check == TRUE && priority == JETSAM_PRIORITY_IDLE) {
-				CACHE_INACTIVE_LIMITS_LOCKED(p, trigger_exception);
+				CACHE_INACTIVE_LIMITS_LOCKED(p, is_fatal);
+				use_active = FALSE;
 			} else {
 				ledger_update_needed = FALSE;
 			}
@@ -2118,7 +2124,8 @@ memorystatus_update_priority_locked(proc_t p, int priority, boolean_t head_inser
 			 *	BG       -->     FG
 			 *      assign active state
 			 */
-			CACHE_ACTIVE_LIMITS_LOCKED(p, trigger_exception);
+			CACHE_ACTIVE_LIMITS_LOCKED(p, is_fatal);
+			use_active = TRUE;
 
 		} else if ((priority < JETSAM_PRIORITY_FOREGROUND) && (p->p_memstat_effectivepriority >= JETSAM_PRIORITY_FOREGROUND)) {
 			/*
@@ -2126,7 +2133,8 @@ memorystatus_update_priority_locked(proc_t p, int priority, boolean_t head_inser
 			 *	FG     -->       BG
 			 *      assign inactive state
 			 */
-			CACHE_INACTIVE_LIMITS_LOCKED(p, trigger_exception);
+			CACHE_INACTIVE_LIMITS_LOCKED(p, is_fatal);
+			use_active = FALSE;
 		} else {
 			/*
 			 * The transition between jetsam priority buckets apparently did
@@ -2141,7 +2149,7 @@ memorystatus_update_priority_locked(proc_t p, int priority, boolean_t head_inser
 		 * Enforce the new limits by writing to the ledger
 		 */
 		if (ledger_update_needed) {
-			task_set_phys_footprint_limit_internal(p->task, (p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1, NULL, trigger_exception);
+			task_set_phys_footprint_limit_internal(p->task, (p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1, NULL, use_active, is_fatal);
 
 			MEMORYSTATUS_DEBUG(3, "memorystatus_update_priority_locked: new limit on pid %d (%dMB %s) priority old --> new (%d --> %d) dirty?=0x%x %s\n",
 					   p->p_pid, (p->p_memstat_memlimit > 0 ? p->p_memstat_memlimit : -1),
@@ -2279,7 +2287,8 @@ memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t effect
 	p->p_memstat_requestedpriority = priority;
 
 	if (update_memlimit) {
-		boolean_t trigger_exception;
+		boolean_t is_fatal;
+		boolean_t use_active;
 
 		/*
 		 * Posix_spawn'd processes come through this path to instantiate ledger limits.
@@ -2358,9 +2367,11 @@ memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t effect
 		 */
 
 		if (proc_jetsam_state_is_active_locked(p) == TRUE) {
-			CACHE_ACTIVE_LIMITS_LOCKED(p, trigger_exception);
+			CACHE_ACTIVE_LIMITS_LOCKED(p, is_fatal);
+			use_active = TRUE;
 		} else {
-			CACHE_INACTIVE_LIMITS_LOCKED(p, trigger_exception);
+			CACHE_INACTIVE_LIMITS_LOCKED(p, is_fatal);
+			use_active = FALSE;
 		}
 
 		/*
@@ -2368,8 +2379,7 @@ memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t effect
 		 */
 		if (memorystatus_highwater_enabled) {
 			/* apply now */
-			assert(trigger_exception == TRUE);
-			task_set_phys_footprint_limit_internal(p->task, ((p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1), NULL, trigger_exception);
+			task_set_phys_footprint_limit_internal(p->task, ((p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1), NULL, use_active, is_fatal);
 
 			MEMORYSTATUS_DEBUG(3, "memorystatus_update: init: limit on pid %d (%dMB %s) targeting priority(%d) dirty?=0x%x %s\n",
 					   p->p_pid, (p->p_memstat_memlimit > 0 ? p->p_memstat_memlimit : -1),
@@ -2881,7 +2891,9 @@ memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol) {
 		memorystatus_update_idle_priority_locked(p);
 
 		if (memorystatus_highwater_enabled) {
-			boolean_t trigger_exception = FALSE, ledger_update_needed = TRUE;
+			boolean_t ledger_update_needed = TRUE;
+			boolean_t use_active;
+			boolean_t is_fatal;
 			/* 
 			 * We are in this path because this process transitioned between 
 			 * dirty <--> clean state.  Update the cached memory limits.
@@ -2891,7 +2903,8 @@ memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol) {
 				/*
 				 * process is dirty
 				 */
-				CACHE_ACTIVE_LIMITS_LOCKED(p, trigger_exception);
+				CACHE_ACTIVE_LIMITS_LOCKED(p, is_fatal);
+				use_active = TRUE;
 				ledger_update_needed = TRUE;
 			} else {
 				/*
@@ -2904,7 +2917,8 @@ memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol) {
 				if (p->p_memstat_dirty & P_DIRTY_ALLOW_IDLE_EXIT) {
 					ledger_update_needed = FALSE;
 				} else {
-					CACHE_INACTIVE_LIMITS_LOCKED(p, trigger_exception);
+					CACHE_INACTIVE_LIMITS_LOCKED(p, is_fatal);
+					use_active = FALSE;
 					ledger_update_needed = TRUE;
 				}
 			}
@@ -2926,7 +2940,7 @@ memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol) {
 					ledger_limit = -1;
 				}
 				proc_list_unlock();
-				task_set_phys_footprint_limit_internal(p->task, ledger_limit, NULL, trigger_exception);
+				task_set_phys_footprint_limit_internal(p->task, ledger_limit, NULL, use_active, is_fatal);
 				proc_list_lock();
 				proc_rele_locked(p);
 
@@ -3649,74 +3663,6 @@ boolean_t memorystatus_idle_exit_from_VM(void) {
 #endif /* !CONFIG_JETSAM */
 
 /*
- * Returns TRUE:
- *	when exceeding ledger footprint is fatal.
- * Returns FALSE:
- *	when exceeding ledger footprint is non fatal.
- */
-boolean_t
-memorystatus_turnoff_exception_and_get_fatalness(boolean_t warning, const int max_footprint_mb)
-{
-	proc_t p = current_proc();
-	boolean_t is_fatal;
-
-	proc_list_lock();
-
-	is_fatal = (p->p_memstat_state & P_MEMSTAT_FATAL_MEMLIMIT);
-
-	if (warning == FALSE) {
-		boolean_t is_active;
-		boolean_t state_changed = FALSE;
-
-		/*
-		 * We are here because a process has exceeded its ledger limit.
-		 * That is, the process is no longer in the limit warning range.
-		 *
-		 * When a process exceeds its ledger limit, we want an EXC_RESOURCE
-		 * to trigger, but only once per process per limit.  We enforce that
-		 * here, by identifying the active/inactive limit type. We then turn
-		 * off the exception state by marking the limit as exception triggered.
-		 */
-
-		is_active = proc_jetsam_state_is_active_locked(p);
-
-		if (is_active == TRUE) {
-			/*
-			 * turn off exceptions for active state
-			 */
-			if (!(p->p_memstat_state & P_MEMSTAT_MEMLIMIT_ACTIVE_EXC_TRIGGERED)) {
-				p->p_memstat_state |= P_MEMSTAT_MEMLIMIT_ACTIVE_EXC_TRIGGERED;
-				state_changed = TRUE;
-			}
-		} else {
-			/*
-			 * turn off exceptions for inactive state
-			 */
-			if (!(p->p_memstat_state & P_MEMSTAT_MEMLIMIT_INACTIVE_EXC_TRIGGERED)) {
-				p->p_memstat_state |= P_MEMSTAT_MEMLIMIT_INACTIVE_EXC_TRIGGERED;
-				state_changed = TRUE;
-			}
-		}
-
-		/*
-		 * The limit violation is logged here, but only once per process per limit.
-		 * This avoids excessive logging when a process consistently exceeds a soft limit.
-		 * Soft memory limit is a non-fatal high-water-mark
-		 * Hard memory limit is a fatal custom-task-limit or system-wide per-task memory limit.
-		 */
-		if(state_changed) {
-			printf("process %d (%s) exceeded physical memory footprint, the %s%sMemoryLimit of %d MB\n",
-			       p->p_pid, (*p->p_name ? p->p_name : "unknown"), (is_active ? "Active" : "Inactive"),
-			       (is_fatal  ? "Hard" : "Soft"), max_footprint_mb);
-		}
-
-	}
-	proc_list_unlock();
-
-	return is_fatal;
-}
-
-/*
  * Callback invoked when allowable physical memory footprint exceeded
  * (dirty pages + IOKit mappings)
  *
@@ -3724,7 +3670,7 @@ memorystatus_turnoff_exception_and_get_fatalness(boolean_t warning, const int ma
  * as well as the fatal task memory limits.
  */
 void
-memorystatus_on_ledger_footprint_exceeded(boolean_t warning, boolean_t is_fatal)
+memorystatus_on_ledger_footprint_exceeded(boolean_t warning, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal)
 {
 	os_reason_t jetsam_reason = OS_REASON_NULL;
 
@@ -3736,7 +3682,7 @@ memorystatus_on_ledger_footprint_exceeded(boolean_t warning, boolean_t is_fatal)
 		 * This is a warning path which implies that the current process is close, but has
 		 * not yet exceeded its per-process memory limit.
 		 */
-		if (memorystatus_warn_process(p->p_pid, FALSE /* not exceeded */) != TRUE) {
+		if (memorystatus_warn_process(p->p_pid, memlimit_is_active, memlimit_is_fatal,  FALSE /* not exceeded */) != TRUE) {
 			/* Print warning, since it's possible that task has not registered for pressure notifications */
 			printf("task_exceeded_footprint: failed to warn the current task (%d exiting, or no handler registered?).\n", p->p_pid);
 		}
@@ -3744,7 +3690,7 @@ memorystatus_on_ledger_footprint_exceeded(boolean_t warning, boolean_t is_fatal)
 	}
 #endif /* VM_PRESSURE_EVENTS */
 
-	if (is_fatal) {
+	if (memlimit_is_fatal) {
 		/*
 		 * If this process has no high watermark or has a fatal task limit, then we have been invoked because the task
 		 * has violated either the system-wide per-task memory limit OR its own task limit.
@@ -3773,11 +3719,30 @@ memorystatus_on_ledger_footprint_exceeded(boolean_t warning, boolean_t is_fatal)
 		 * This path implies the current process has exceeded a non-fatal (soft) memory limit.
 		 * Failure to send note is ignored here.
 		 */
-		(void)memorystatus_warn_process(p->p_pid, TRUE /* exceeded */);
+		(void)memorystatus_warn_process(p->p_pid, memlimit_is_active, memlimit_is_fatal, TRUE /* exceeded */);
 
 #endif /* VM_PRESSURE_EVENTS */
 	}
 }
+
+void
+memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal)
+{
+	proc_t p = current_proc();
+
+	/*
+	 * The limit violation is logged here, but only once per process per limit.
+	 * Soft memory limit is a non-fatal high-water-mark
+	 * Hard memory limit is a fatal custom-task-limit or system-wide per-task memory limit.
+	 */
+
+	printf("process %d (%s) exceeded physical memory footprint, the %s%sMemoryLimit of %d MB\n",
+	       p->p_pid, (*p->p_name ? p->p_name : "unknown"), (memlimit_is_active ? "Active" : "Inactive"),
+	       (memlimit_is_fatal  ? "Hard" : "Soft"), max_footprint_mb);
+
+	return;
+}
+
 
 /*
  * Description:
@@ -5874,11 +5839,12 @@ memorystatus_send_note(int event_code, void *data, size_t data_length) {
 }
 
 boolean_t
-memorystatus_warn_process(pid_t pid, boolean_t limit_exceeded) {
+memorystatus_warn_process(pid_t pid, __unused boolean_t is_active, __unused boolean_t is_fatal, boolean_t limit_exceeded) {
 
 	boolean_t ret = FALSE;
 	boolean_t found_knote = FALSE;
 	struct knote *kn = NULL;
+	int send_knote_count = 0;
 
 	/*
 	 * See comment in sysctl_memorystatus_vm_pressure_send.
@@ -5906,27 +5872,103 @@ memorystatus_warn_process(pid_t pid, boolean_t limit_exceeded) {
 				 * Processes on desktop are not expecting to handle a system-wide
 				 * critical or system-wide warning notification from this path.
 				 * Intentionally set only the unambiguous limit warning here.
+				 *
+				 * If the limit is soft, however, limit this to one notification per
+				 * active/inactive limit (per each registered listener).
 				 */
 
 				if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN) {
-					kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
-					found_knote = TRUE;
+					found_knote=TRUE;
+					if (!is_fatal) {
+						/*
+						 * Restrict proc_limit_warn notifications when
+						 * non-fatal (soft) limit is at play.
+						 */
+						if (is_active) {
+							if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE) {
+                                                                /*
+                                                                 * Mark this knote for delivery.
+                                                                 */
+                                                                kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
+								/*
+								 * And suppress it from future notifications.
+                                                                 */
+                                                                kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE;
+								send_knote_count++;
+                                                        }
+						} else {
+							if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE) {
+                                                                /*
+                                                                 * Mark this knote for delivery.
+                                                                 */
+                                                                kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
+								/*
+								 * And suppress it from future notifications.
+                                                                 */
+                                                                kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE;
+								send_knote_count++;
+                                                        }
+						}
+					} else {
+						/*
+						 * No restriction on proc_limit_warn notifications when
+						 * fatal (hard) limit is at play.
+						 */
+						kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
+						send_knote_count++;
+					}
 				}
-
 			} else {
 				/*
-				 * Send this notification when a process has exceeded a soft limit.
+				 * Send this notification when a process has exceeded a soft limit,
 				 */
+
 				if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL) {
-					kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL;
 					found_knote = TRUE;
+					if (!is_fatal) {
+						/*
+						 * Restrict critical notifications for soft limits.
+						 */
+
+						if (is_active) {
+							if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE) {
+								/*
+								 * Suppress future proc_limit_critical notifications
+								 * for the active soft limit.
+								 */
+								kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE;
+								kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL;
+								send_knote_count++;
+
+							}
+						} else {
+							if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE) {
+								/*
+								 * Suppress future proc_limit_critical_notifications
+								 * for the inactive soft limit.
+								 */
+								kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE;
+								kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL;
+								send_knote_count++;
+							}
+						}
+					} else {
+						/*
+						 * We should never be trying to send a critical notification for
+						 * a hard limit... the process would be killed before it could be
+						 * received.
+						 */
+						panic("Caught sending pid %d a critical warning for a fatal limit.\n", pid);
+					}
 				}
 			}
 		}
 	}
 
 	if (found_knote) {
-		KNOTE(&memorystatus_klist, 0);
+		if (send_knote_count > 0) {
+			KNOTE(&memorystatus_klist, 0);
+		}
 		ret = TRUE;
 	}
 
@@ -7703,21 +7745,23 @@ memorystatus_set_memlimit_properties(pid_t pid, memorystatus_memlimit_properties
 	 */
 
 	if (memorystatus_highwater_enabled) {
-		boolean_t trigger_exception;
+		boolean_t is_fatal;
+		boolean_t use_active;
 		/*
 		 * No need to consider P_MEMSTAT_MEMLIMIT_BACKGROUND anymore.
 		 * Background limits are described via the inactive limit slots.
 		 */
 
 		if (proc_jetsam_state_is_active_locked(p) == TRUE) {
-			CACHE_ACTIVE_LIMITS_LOCKED(p, trigger_exception);
+			CACHE_ACTIVE_LIMITS_LOCKED(p, is_fatal);
+			use_active = TRUE;
 		} else {
-			CACHE_INACTIVE_LIMITS_LOCKED(p, trigger_exception);
+			CACHE_INACTIVE_LIMITS_LOCKED(p, is_fatal);
+			use_active = FALSE;
 		}
 
 		/* Enforce the limit by writing to the ledgers */
-		assert(trigger_exception == TRUE);
-		error = (task_set_phys_footprint_limit_internal(p->task, ((p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1), NULL, trigger_exception) == 0) ? 0 : EINVAL;
+		error = (task_set_phys_footprint_limit_internal(p->task, ((p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1), NULL, use_active, is_fatal) == 0) ? 0 : EINVAL;
 
 		MEMORYSTATUS_DEBUG(3, "memorystatus_set_memlimit_properties: new limit on pid %d (%dMB %s) current priority (%d) dirty_state?=0x%x %s\n",
 				   p->p_pid, (p->p_memstat_memlimit > 0 ? p->p_memstat_memlimit : -1),
@@ -7944,7 +7988,17 @@ filt_memorystatus(struct knote *kn __unused, long hint)
 			break;
 		}
 	}
-	
+
+#if 0
+	if (kn->kn_fflags != 0) {
+		proc_t knote_proc = knote_get_kq(kn)->kq_p;
+		pid_t knote_pid = knote_proc->p_pid;
+
+		printf("filt_memorystatus: sending kn 0x%lx (event 0x%x) for pid (%d)\n",
+		       (unsigned long)kn, kn->kn_fflags, knote_pid);
+	}
+#endif
+
 	return (kn->kn_fflags != 0);
 }
 
@@ -7952,6 +8006,7 @@ static int
 filt_memorystatustouch(struct knote *kn, struct kevent_internal_s *kev)
 {
 	int res;
+	int prev_kn_sfflags = 0;
 
 	memorystatus_klist_lock();
 
@@ -7959,7 +8014,63 @@ filt_memorystatustouch(struct knote *kn, struct kevent_internal_s *kev)
 	 * copy in new kevent settings
 	 * (saving the "desired" data and fflags).
 	 */
-	kn->kn_sfflags = kev->fflags;
+
+	prev_kn_sfflags = kn->kn_sfflags;
+	kn->kn_sfflags = (kev->fflags & EVFILT_MEMORYSTATUS_ALL_MASK);
+
+	/*
+	 * Only on desktop do we restrict notifications to
+	 * one per active/inactive state (soft limits only).
+	 */
+	if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN) {
+		/*
+		 * Is there previous state to preserve?
+		 */
+		if (prev_kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN) {
+			/*
+			 * This knote was previously interested in proc_limit_warn,
+			 * so yes, preserve previous state.
+			 */
+			if (prev_kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE) {
+				kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE;
+			}
+			if (prev_kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE) {
+				kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE;
+			}
+		} else {
+			/*
+			 * This knote was not previously interested in proc_limit_warn,
+			 * but it is now.  Set both states.
+			 */
+			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE;
+			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE;
+		}
+	}
+
+	if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL) {
+		/*
+		 * Is there previous state to preserve?
+		 */
+		if (prev_kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL) {
+			/*
+			 * This knote was previously interested in proc_limit_critical,
+			 * so yes, preserve previous state.
+			 */
+			if (prev_kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE) {
+				kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE;
+			}
+			if (prev_kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE) {
+				kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE;
+			}
+		} else {
+			/*
+			 * This knote was not previously interested in proc_limit_critical,
+			 * but it is now.  Set both states.
+			 */
+			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE;
+			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE;
+		}
+	}
 
 	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
 		kn->kn_udata = kev->udata;
@@ -8016,12 +8127,23 @@ memorystatus_kevent_init(lck_grp_t *grp, lck_attr_t *attr) {
 int
 memorystatus_knote_register(struct knote *kn) {
 	int error = 0;
-	
+
 	memorystatus_klist_lock();
-	
-	if (kn->kn_sfflags & (NOTE_MEMORYSTATUS_PRESSURE_NORMAL | NOTE_MEMORYSTATUS_PRESSURE_WARN |
-			      NOTE_MEMORYSTATUS_PRESSURE_CRITICAL | NOTE_MEMORYSTATUS_LOW_SWAP |
-			      NOTE_MEMORYSTATUS_PROC_LIMIT_WARN | NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL)) {
+
+	/*
+	 * Support only userspace visible flags.
+	 */
+	if ((kn->kn_sfflags & EVFILT_MEMORYSTATUS_ALL_MASK) == kn->kn_sfflags) {
+
+		if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN) {
+			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE;
+			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE;
+		}
+
+		if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL) {
+			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE;
+			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE;
+		}
 
 		KNOTE_ATTACH(&memorystatus_klist, kn);
 

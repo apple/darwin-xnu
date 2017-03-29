@@ -240,7 +240,7 @@ spinning_non_work_queue_thread(void * ignored)
 	return NULL;
 }
 
-T_DECL(stackshot_idle_25570396, "Tests that stackshot can properly recognize idle and non-idle threads", T_META("owner", "Core Kernel Team"))
+T_DECL(stackshot_idle_25570396, "Tests that stackshot can properly recognize idle and non-idle threads", T_META_ASROOT(true))
 {
 	int ret;
 	uint64_t initial_stackshot_time;

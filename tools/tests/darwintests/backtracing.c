@@ -161,10 +161,12 @@ backtrace_thread(void *arg)
 }
 
 T_DECL(backtrace_user, "test that the kernel can backtrace user stacks",
-    T_META_ALL_VALID_ARCHS(YES))
+    T_META_CHECK_LEAKS(false), T_META_ALL_VALID_ARCHS(true))
 {
     pthread_t thread;
 
     T_QUIET; T_ASSERT_POSIX_ZERO(pthread_create(&thread, NULL, backtrace_thread,
         NULL), "create additional thread to backtrace");
+
+    T_QUIET; T_ASSERT_POSIX_ZERO(pthread_join(thread, NULL), NULL);
 }

@@ -1097,10 +1097,53 @@ struct vnodeop_desc vnop_removenamedstream_desc = {
 	NULL
 };
 #else
-/* These symbols are in the exports list so they need to always be defined. */
-int vnop_getnamedstream_desc;
-int vnop_makenamedstream_desc;
-int vnop_removenamedstream_desc;
+int vnop_getnamedstream_vp_offsets[] = {
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_getnamedstream_desc = {
+	0,
+	"vnop_getnamedstream",
+	VDESC_DISABLED, /* flags */
+	vnop_getnamedstream_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	NULL
+};
+
+int vnop_makenamedstream_vp_offsets[] = {
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_makenamedstream_desc = {
+	0,
+	"vnop_makenamedstream",
+	VDESC_DISABLED, /* flags */
+	vnop_makenamedstream_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	NULL
+};
+
+int vnop_removenamedstream_vp_offsets[] = {
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_removenamedstream_desc = {
+	0,
+	"vnop_removenamedstream",
+	VDESC_DISABLED, /* flags */
+	vnop_removenamedstream_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	NULL
+};
 #endif
 
 /* Special cases: */
@@ -1199,11 +1242,18 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_offtoblk_desc,
 	&vnop_blockmap_desc,
 	&vnop_monitor_desc,
-#if NAMEDSTREAMS
+#if !defined(NAMEDSTREAMS)
+	/*
+	 * We define the named streams ops descriptors as we _always_ have to
+	 * have symbols with their names, and as such we really really need
+	 * those symbols to be valid operations descriptors. However if
+	 * named streams support is not enabled, we flag these descriptors
+	 * as ignored.
+	 */
+#endif
 	&vnop_getnamedstream_desc,
 	&vnop_makenamedstream_desc,
 	&vnop_removenamedstream_desc,
-#endif
 	NULL
 };
 

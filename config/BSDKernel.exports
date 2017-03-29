@@ -111,6 +111,7 @@ _cluster_pageout
 _cluster_pageout_ext
 _cluster_push
 _cluster_push_ext
+_cluster_push_err
 _cluster_read
 _cluster_read_ext
 _cluster_write
@@ -634,6 +635,7 @@ _vfs_clearauthcache_ttl
 _vfs_clearauthopaque
 _vfs_clearauthopaqueaccess
 _vfs_clearextendedsecurity
+_vfs_clearnoswap
 _vfs_clearflags
 _vfs_context_create
 _vfs_context_is64bit
@@ -673,6 +675,7 @@ _vfs_setauthcache_ttl
 _vfs_setauthopaque
 _vfs_setauthopaqueaccess
 _vfs_setextendedsecurity
+_vfs_setnoswap
 _vfs_setflags
 _vfs_setfsprivate
 _vfs_setioattr

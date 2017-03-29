@@ -93,17 +93,17 @@ __END_DECLS
 #if 	MACH_ASSERT
 
 #define assert(ex)  \
-	(__builtin_expect(!!((long)(ex)), 1L) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
+	(__builtin_expect(!!((ex)), 1L) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
 #define assertf(ex, fmt, args...) \
-	(__builtin_expect(!!((long)(ex)), 1L) ? (void)0 : __Panic("%s:%d Assertion failed: %s : " fmt, __FILE__, __LINE__, # ex, ##args))
+	(__builtin_expect(!!((ex)), 1L) ? (void)0 : __Panic("%s:%d Assertion failed: %s : " fmt, __FILE__, __LINE__, # ex, ##args))
 #define __assert_only
 
 #elif APPLE_KEXT_ASSERTIONS && !XNU_KERNEL_PRIVATE	/* MACH_ASSERT */
 
 #define assert(ex)  \
-	(__builtin_expect(!!((long)((!kext_assertions_enable) || (ex))), 1L) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
+	(__builtin_expect(!!(((!kext_assertions_enable) || (ex))), 1L) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
 #define assertf(ex, fmt, args...) \
-	(__builtin_expect(!!((long)((!kext_assertions_enable) || (ex))), 1L) ? (void)0 : __Panic("%s:%d Assertion failed: %s : " fmt, __FILE__, __LINE__, # ex, ##args))
+	(__builtin_expect(!!(((!kext_assertions_enable) || (ex))), 1L) ? (void)0 : __Panic("%s:%d Assertion failed: %s : " fmt, __FILE__, __LINE__, # ex, ##args))
 #define __assert_only
 
 #else 				/* APPLE_KEXT_ASSERTIONS && !XNU_KERNEL_PRIVATE */

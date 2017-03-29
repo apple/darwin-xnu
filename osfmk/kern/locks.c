@@ -930,6 +930,7 @@ lck_mtx_lock_wait (
 		mutex->lck_mtx_waiters++;
 	}
 
+	thread_set_pending_block_hint(self, kThreadWaitKernelMutex);
 	assert_wait(LCK_MTX_EVENT(mutex), THREAD_UNINT);
 	lck_mtx_ilk_unlock(mutex);
 

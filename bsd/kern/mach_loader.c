@@ -2023,8 +2023,7 @@ load_code_signature(
 	if (blob != NULL) {
 		/* we already have a blob for this vnode and cputype */
 		if (blob->csb_cpu_type == cputype &&
-		    blob->csb_base_offset == macho_offset &&
-		    blob->csb_mem_size == lcp->datasize) {
+		    blob->csb_base_offset == macho_offset) {
 			/* it matches the blob we want here, lets verify the version */
 			if(0 != ubc_cs_generation_check(vp)) {
 				if (0 != ubc_cs_blob_revalidate(vp, blob, imgp, 0)) {

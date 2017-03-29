@@ -1112,9 +1112,11 @@ kdp_handler(
 			unsigned short manual_port_unused = 0;
 			if (!manual_hdr->is_reply) {
 				/* process */
+				int packet_length = manual_pkt.len;
 				kdp_packet((unsigned char *)&manual_pkt.data,
-						(int *)&manual_pkt.len,
+						&packet_length,
 						&manual_port_unused);
+				manual_pkt.len = packet_length;
 			}
 			manual_pkt.input = 0;
 		}
@@ -1831,49 +1833,45 @@ kdp_set_dump_info(const uint32_t flags, const char *filename,
 }
 
 void
-kdp_get_dump_info(uint32_t *flags, char *filename, char *destipstr, 
-                  char *routeripstr, uint32_t *port)
+kdp_get_dump_info(kdp_dumpinfo_reply_t *rp)
 {
-	if (destipstr) {
+	if (rp->destip) {
 		if (panicd_specified)
-			strlcpy(destipstr, panicd_ip_str, 
+			strlcpy(rp->destip, panicd_ip_str,
                                 sizeof(panicd_ip_str));
 		else 
-			destipstr[0] = '\0';
+			rp->destip[0] = '\0';
 	}
 
-	if (routeripstr) {
+	if (rp->routerip) {
 		if (router_specified)
-			strlcpy(routeripstr, router_ip_str,
+			strlcpy(rp->routerip, router_ip_str,
                                 sizeof(router_ip_str));
 		else
-			routeripstr[0] = '\0';
+			rp->routerip[0] = '\0';
 	}
 
-	if (filename) {
+	if (rp->name) {
 		if (corename_specified)
-			strlcpy(filename, corename_str, 
+			strlcpy(rp->name, corename_str,
                                 sizeof(corename_str));
 		else 
-			filename[0] = '\0';
+			rp->name[0] = '\0';
 
 	}
 
-	if (port) 
-		*port = panicd_port;
+	rp->port = panicd_port;
 
-	if (flags) {
-		*flags = 0;
-                if (!panicd_specified) 
-			*flags |= KDP_DUMPINFO_DISABLE;
-                else if (kdp_flag & PANIC_LOG_DUMP)
-			*flags |= KDP_DUMPINFO_PANICLOG;
-		else
-			*flags |= KDP_DUMPINFO_CORE;
+	rp->type = 0;
+	if (!panicd_specified)
+		rp->type |= KDP_DUMPINFO_DISABLE;
+	else if (kdp_flag & PANIC_LOG_DUMP)
+		rp->type |= KDP_DUMPINFO_PANICLOG;
+	else
+		rp->type |= KDP_DUMPINFO_CORE;
 
-		if (noresume_on_disconnect)
-			*flags |= KDP_DUMPINFO_NORESUME;
-	}
+	if (noresume_on_disconnect)
+		rp->type |= KDP_DUMPINFO_NORESUME;
 }
 
 

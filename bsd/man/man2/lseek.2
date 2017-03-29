@@ -91,6 +91,23 @@ the offset is set to the size of the
 file plus
 .Fa offset
 bytes.
+.It
+If
+.Fa whence
+is
+.Dv SEEK_HOLE ,
+the offset is set to the start of the next hole greater than or equal
+to the supplied
+.Fa offset .
+The definition of a hole is provided below.
+.It
+If
+.Fa whence
+is
+.Dv SEEK_DATA ,
+the offset is set to the start of the next non-hole file region greater
+than or equal to the supplied
+.Fa offset .
 .El
 .Pp
 The
@@ -102,6 +119,39 @@ bytes of zeros (until data is actually written into the gap).
 .Pp
 Some devices are incapable of seeking.  The value of the pointer
 associated with such a device is undefined.
+.Pp
+A
+.Qq hole
+is defined as a contiguous range of bytes in a file, all having the value of
+zero, but not all zeros in a file are guaranteed to be represented as holes
+returned with
+.Dv SEEK_HOLE .
+File systems are allowed to expose ranges of zeros with
+.Dv SEEK_HOLE ,
+but not required to.
+Applications can use
+.Dv SEEK_HOLE
+to optimise their behavior for ranges of zeros, but must not depend on it to
+find all such ranges in a file.
+Each file is presented as having a zero-size virtual hole at the very
+end of the file.
+The existence of a hole at the end of every data region allows for easy
+programming and also provides compatibility to the original implementation
+in Solaris.
+It also causes the current file size (i.e., end-of-file offset) to be returned
+to indicate that there are no more holes past the supplied
+.Fa offset .
+Applications should use
+.Fn fpathconf _PC_MIN_HOLE_SIZE
+or
+.Fn pathconf _PC_MIN_HOLE_SIZE
+to determine if a file system supports
+.Dv SEEK_HOLE .
+See
+.Xr pathconf 2 .
+.Pp
+For file systems that do not supply information about holes, the file will be
+represented as one entire data region.
 .Sh RETURN VALUES
 Upon successful completion,
 .Fn lseek
@@ -132,6 +182,15 @@ and
 .Fa whence )
 is negative.
 .\" ==========
+.It Bq Er ENXIO
+For
+.Dv SEEK_DATA ,
+there are no more data regions past the supplied offset.
+Due to existence of the hole at the end of the file, for
+.Dv SEEK_HOLE
+this error is only returned when the
+.Fa offset
+already points to the end-of-file position.
 .It Bq Er EOVERFLOW
 The seek location is too large to be stored
 in an object of type off_t.

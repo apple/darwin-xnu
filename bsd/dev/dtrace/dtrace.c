@@ -7622,7 +7622,7 @@ dtrace_cond_provider_match(dtrace_probedesc_t *desc, void *data)
 
 	dtrace_probekey_f *func = dtrace_probekey_func(desc->dtpd_provider);
 
-	return func(desc->dtpd_provider, (char*)data, 0);
+	return func((char*)data, desc->dtpd_provider, 0);
 }
 
 /*
@@ -13067,7 +13067,12 @@ dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
 	/* Cause restart */
 	*new_state = NULL;
 	
-	minor = getminor(*devp);
+	if (devp != NULL) {
+		minor = getminor(*devp);
+	}
+	else {
+		minor = DTRACE_NCLIENTS - 1;
+	}
 
 	state = dtrace_state_allocate(minor);
 	if (NULL == state) {

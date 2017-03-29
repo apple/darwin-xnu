@@ -50,6 +50,7 @@ fcntl(int fd, int cmd, ...)
 	case F_OFD_SETLKW:
 	case F_OFD_SETLKWTIMEOUT:
 	 case F_PREALLOCATE:
+	 case F_PUNCHHOLE:
 	 case F_SETSIZE:
 	 case F_RDADVISE:
 	 case F_LOG2PHYS:
@@ -66,6 +67,7 @@ fcntl(int fd, int cmd, ...)
 	 case F_ADDFILESIGS_RETURN:
 	 case F_FINDSIGS:
 	 case F_TRANSCODEKEY:
+	 case F_TRIM_ACTIVE_FILE:
 	 case F_CHECK_LV:
 		arg = va_arg(ap, void *);
 		break;

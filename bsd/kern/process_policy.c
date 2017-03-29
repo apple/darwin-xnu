@@ -164,9 +164,11 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 				case PROC_POLICY_RUSAGE_DISK:
 				case PROC_POLICY_RUSAGE_NETWORK:
 				case PROC_POLICY_RUSAGE_POWER:
-					return(ENOTSUP);
+					error = ENOTSUP;
+					goto out;
 				default:
-					return(EINVAL);
+					error = EINVAL;
+					goto out;
 				case PROC_POLICY_RUSAGE_CPU:
 					break;
 			}

@@ -105,9 +105,14 @@ PE_parse_boot_argn_internal(
 			goto gotit;
 
 		if (arg_boolean) {
-			if (!force_string){
-				argnumcpy(1, arg_ptr, max_len);
-				arg_found = TRUE;
+			if (!force_string) {
+				if (max_len > 0) {
+					argnumcpy(1, arg_ptr, max_len);/* max_len of 0 performs no copy at all*/
+					arg_found = TRUE;
+				}
+				else if (max_len == 0) {	
+					arg_found = TRUE;
+				}
 			}
 			break;
 		} else {
@@ -119,23 +124,39 @@ PE_parse_boot_argn_internal(
 			}
 			if ('_' == *arg_string) /* Force a string copy if the argument name begins with an underscore */
 			{
-				int hacklen = 17 > max_len ? 17 : max_len;
-				argstrcpy2 (++cp, (char *)arg_ptr, hacklen - 1); /* Hack - terminate after 16 characters */
-				arg_found = TRUE;
+				if (max_len > 0) {
+					int hacklen = 17 > max_len ? 17 : max_len;
+					argstrcpy2 (++cp, (char *)arg_ptr, hacklen - 1); /* Hack - terminate after 16 characters */
+					arg_found = TRUE;
+				}
+				else if (max_len == 0) {
+					arg_found = TRUE;
+				}
 				break;
 			}
 			switch ((force_string && *cp == '=') ? STR : getval(cp, &val, isargsep, FALSE))
 			{
 				case NUM:
-					argnumcpy(val, arg_ptr, max_len);
-					arg_found = TRUE;
+					if (max_len > 0) {
+						argnumcpy(val, arg_ptr, max_len);
+						arg_found = TRUE;
+					}
+					else if (max_len == 0) {
+						arg_found = TRUE;
+					}
 					break;
 				case STR:
-					if(max_len > 0) //max_len of 0 performs no copy at all
-						argstrcpy2(++cp, (char *)arg_ptr, max_len - 1);
-					else if(max_len == -1) // unreachable on embedded
+					if (max_len > 0) {
+						argstrcpy2(++cp, (char *)arg_ptr, max_len - 1);/*max_len of 0 performs no copy at all*/
+						arg_found = TRUE;
+					}
+					else if (max_len == 0) {
+						arg_found = TRUE;
+					}
+					else if (max_len == -1) { /* unreachable on embedded */
 						argstrcpy(++cp, (char *)arg_ptr);
-					arg_found = TRUE;
+						arg_found = TRUE;
+					}
 					break;
 			}
 			goto gotit;

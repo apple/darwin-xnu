@@ -389,21 +389,23 @@ proc_findthread(thread_t thread)
 	return(p);
 }
 
-#if PROC_REF_DEBUG
 void
 uthread_reset_proc_refcount(void *uthread) {
 	uthread_t uth;
 
+	uth = (uthread_t) uthread;
+	uth->uu_proc_refcount = 0;
+
+#if PROC_REF_DEBUG
 	if (proc_ref_tracking_disabled) {
 		return;
 	}
 
-	uth = (uthread_t) uthread;
-
-	uth->uu_proc_refcount = 0;
 	uth->uu_pindex = 0;
+#endif
 }
 
+#if PROC_REF_DEBUG
 int
 uthread_get_proc_refcount(void *uthread) {
 	uthread_t uth;
@@ -416,17 +418,19 @@ uthread_get_proc_refcount(void *uthread) {
 
 	return uth->uu_proc_refcount;
 }
+#endif
 
 static void
-record_procref(proc_t p, int count) {
+record_procref(proc_t p __unused, int count) {
 	uthread_t uth;
-
-	if (proc_ref_tracking_disabled) {
-		return;
-	}
 
 	uth = current_uthread();
 	uth->uu_proc_refcount += count;
+
+#if PROC_REF_DEBUG
+	if (proc_ref_tracking_disabled) {
+		return;
+	}
 
 	if (count == 1) {
 		if (uth->uu_pindex < NUM_PROC_REFS_TO_TRACK) {
@@ -436,8 +440,24 @@ record_procref(proc_t p, int count) {
 			uth->uu_pindex++;
 		}
 	}
-}
 #endif
+}
+
+static boolean_t
+uthread_needs_to_wait_in_proc_refwait(void) {
+	uthread_t uth = current_uthread();
+
+	/*
+	 * Allow threads holding no proc refs to wait
+	 * in proc_refwait, allowing threads holding
+	 * proc refs to wait in proc_refwait causes
+	 * deadlocks and makes proc_find non-reentrant.
+	 */
+	if (uth->uu_proc_refcount == 0)
+		return TRUE;
+
+	return FALSE;
+}
 
 int 
 proc_rele(proc_t p)
@@ -477,21 +497,21 @@ retry:
 	 * Do not return process marked for termination
 	 * or proc_refdrain called without ref wait.
 	 * Wait for proc_refdrain_with_refwait to complete if
-	 * process in refdrain and refwait flag is set.
+	 * process in refdrain and refwait flag is set, unless
+	 * the current thread is holding to a proc_ref
+	 * for any proc.
 	 */
 	if ((p->p_stat != SZOMB) &&
 	    ((p->p_listflag & P_LIST_EXITED) == 0) &&
 	    ((p->p_listflag & P_LIST_DEAD) == 0) &&
 	    (((p->p_listflag & (P_LIST_DRAIN | P_LIST_DRAINWAIT)) == 0) ||
 	     ((p->p_listflag & P_LIST_REFWAIT) != 0))) {
-		if ((p->p_listflag & P_LIST_REFWAIT) != 0) {
+		if ((p->p_listflag & P_LIST_REFWAIT) != 0 && uthread_needs_to_wait_in_proc_refwait()) {
 			msleep(&p->p_listflag, proc_list_mlock, 0, "proc_refwait", 0) ;
 			goto retry;
 		}
 		p->p_refcount++;
-#if PROC_REF_DEBUG
 		record_procref(p, 1);
-#endif
 	}
 	else 
 		p1 = PROC_NULL;
@@ -505,9 +525,7 @@ proc_rele_locked(proc_t p)
 
 	if (p->p_refcount > 0) {
 		p->p_refcount--;
-#if PROC_REF_DEBUG
 		record_procref(p, -1);
-#endif
 		if ((p->p_refcount == 0) && ((p->p_listflag & P_LIST_DRAINWAIT) == P_LIST_DRAINWAIT)) {
 			p->p_listflag &= ~P_LIST_DRAINWAIT;
 			wakeup(&p->p_refcount);
@@ -576,7 +594,9 @@ proc_refdrain_with_refwait(proc_t p, boolean_t get_ref_and_allow_wait)
 	if (get_ref_and_allow_wait) {
 		/*
 		 * All the calls to proc_ref_locked will wait
-		 * for the flag to get cleared before returning a ref.
+		 * for the flag to get cleared before returning a ref,
+		 * unless the current thread is holding to a proc ref
+		 * for any proc.
 		 */
 		p->p_listflag |= P_LIST_REFWAIT;
 		if (p == initproc) {
@@ -596,9 +616,7 @@ proc_refdrain_with_refwait(proc_t p, boolean_t get_ref_and_allow_wait)
 	} else {
 		/* Return a ref to the caller */
 		p->p_refcount++;
-#if PROC_REF_DEBUG
 		record_procref(p, 1);
-#endif
 	}
 
 	proc_list_unlock();
@@ -3147,6 +3165,12 @@ extern uint64_t	vm_compressor_pages_compressed(void);
 
 struct timeval	last_no_space_action = {0, 0};
 
+#if DEVELOPMENT || DEBUG
+extern boolean_t kill_on_no_paging_space;
+#endif /* DEVELOPMENT || DEBUG */
+
+#define MB_SIZE	(1024 * 1024ULL)
+
 int
 no_paging_space_action()
 {
@@ -3199,7 +3223,7 @@ no_paging_space_action()
 				 */
 				last_no_space_action = now;
 
-				printf("low swap: killing pid %d (%s)\n", p->p_pid, p->p_comm);
+				printf("low swap: killing largest compressed process with pid %d (%s) and size %llu MB\n", p->p_pid, p->p_comm, (nps.pcs_max_size/MB_SIZE));
 				psignal(p, SIGKILL);
 			
 				proc_rele(p);
@@ -3222,6 +3246,22 @@ no_paging_space_action()
 				 */
 				last_no_space_action = now;
 		
+#if DEVELOPMENT || DEBUG
+				if (kill_on_no_paging_space == TRUE) {
+					/*
+					 * We found the largest process that has a process policy i.e. one of
+					 * PC_KILL, PC_SUSP, PC_THROTTLE.
+					 * But we are in a mode where we will kill it regardless of its policy.
+					 */
+					printf("low swap: killing largest process with pid %d (%s) and size %llu MB\n", p->p_pid, p->p_comm, (nps.pcs_max_size/MB_SIZE));
+					psignal(p, SIGKILL);
+
+					proc_rele(p);
+
+					return 1;
+				}
+#endif /* DEVELOPMENT || DEBUG */
+
 				proc_dopcontrol(p);
 			
 				proc_rele(p);

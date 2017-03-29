@@ -54,6 +54,13 @@ kern_return_t	mk_timer_arm(
 kern_return_t	mk_timer_cancel(
 					mach_port_name_t	name,
 					uint64_t			*result_time);
+#define MK_TIMER_NORMAL (0)
+#define MK_TIMER_CRITICAL (1)
+kern_return_t	mk_timer_arm_leeway(
+					mach_port_name_t	name,
+					uint64_t		mk_timer_flags,
+					uint64_t		mk_timer_expire_time,
+					uint64_t		mk_timer_leeway);
 
 __END_DECLS
 

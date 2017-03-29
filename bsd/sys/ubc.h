@@ -114,6 +114,7 @@ int	cluster_pagein_ext(vnode_t, upl_t, upl_offset_t, off_t, int, off_t, int, int
 
 int	cluster_push(vnode_t, int);
 int	cluster_push_ext(vnode_t, int, int (*)(buf_t, void *), void *);
+int	cluster_push_err(vnode_t, int, int (*)(buf_t, void *), void *, int *);
 
 int	cluster_bp(buf_t);
 int	cluster_bp_ext(buf_t, int (*)(buf_t, void *), void *);

@@ -354,6 +354,7 @@ typedef struct necp_all_stats {
 #define	NECP_CLIENT_ACTION_COPY_AGENT					8 // Copy agent content. Input: agent UUID; Output: struct netagent
 #define	NECP_CLIENT_ACTION_COPY_INTERFACE				9 // Copy interface details. Input: ifindex cast to UUID; Output: struct necp_interface_details
 #define	NECP_CLIENT_ACTION_SET_STATISTICS				10 // Start/update/complete per-flow statistics. Input: client_id, statistics area
+#define	NECP_CLIENT_ACTION_AGENT_USE					12 // Return the use count and increment the use count. Input/Output: struct necp_agent_use_parameters
 
 #define	NECP_CLIENT_PARAMETER_APPLICATION				NECP_POLICY_CONDITION_APPLICATION		// Requires entitlement
 #define	NECP_CLIENT_PARAMETER_REAL_APPLICATION			NECP_POLICY_CONDITION_REAL_APPLICATION	// Requires entitlement
@@ -464,6 +465,11 @@ struct kev_necp_policies_changed_data {
 	u_int32_t		changed_count;	// Defaults to 0.
 };
 
+struct necp_agent_use_parameters {
+	uuid_t agent_uuid;
+	uint64_t out_use_count;
+};
+
 #ifdef BSD_KERNEL_PRIVATE
 #include <stdbool.h>
 #include <sys/socketvar.h>
@@ -562,6 +568,12 @@ union necp_sockaddr_union {
 	struct sockaddr_in6		sin6;
 };
 
+enum necp_boolean_state {
+	necp_boolean_state_unknown = 0,
+	necp_boolean_state_false = 1,
+	necp_boolean_state_true = 2,
+};
+
 struct necp_kernel_socket_policy {
 	LIST_ENTRY(necp_kernel_socket_policy)	chain;
 	necp_policy_id				parent_policy_id;
@@ -576,6 +588,7 @@ struct necp_kernel_socket_policy {
 	u_int32_t					cond_app_id;					// Locally assigned ID value stored
 	u_int32_t					cond_real_app_id;				// Locally assigned ID value stored
 	char						*cond_custom_entitlement;		// String
+	u_int8_t					cond_custom_entitlement_matched;// Boolean if entitlement matched app
 	u_int32_t					cond_account_id;				// Locally assigned ID value stored
 	char						*cond_domain;					// String
 	u_int8_t					cond_domain_dot_count;			// Number of dots in cond_domain

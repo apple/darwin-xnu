@@ -214,6 +214,7 @@ static IOLock             *     gDebugImageLock;
 
 static IOLock *                           gFSLock;
 static uint32_t                           gFSState;
+static thread_call_t                      gIOHibernateTrimCalloutEntry;
 static IOPolledFileIOVars	          gFileVars;
 static IOHibernateVars			  gIOHibernateVars;
 static IOPolledFileCryptVars 		  gIOHibernateCryptWakeContext;
@@ -224,10 +225,11 @@ static hibernate_statistics_t *		  gIOHibernateStats = &_hibernateStats;
 
 enum 
 {
-    kFSIdle     = 0,
-    kFSOpening  = 2,
-    kFSOpened   = 3,
-    kFSTimedOut = 4,
+    kFSIdle      = 0,
+    kFSOpening   = 2,
+    kFSOpened    = 3,
+    kFSTimedOut  = 4,
+    kFSTrimDelay = 5
 };
 
 static IOReturn IOHibernateDone(IOHibernateVars * vars);
@@ -428,6 +430,11 @@ IOHibernateSystemSleep(void)
     bzero(vars, sizeof(*vars));
 
     IOLockLock(gFSLock);
+    if (!gIOHibernateTrimCalloutEntry)
+    {
+        gIOHibernateTrimCalloutEntry = thread_call_allocate(&IOHibernateSystemPostWakeTrim, &gFSLock);
+    }
+    IOHibernateSystemPostWakeTrim(NULL, NULL);
     if (kFSIdle != gFSState)
     {
 	HIBLOG("hibernate file busy\n");
@@ -518,7 +525,6 @@ IOHibernateSystemSleep(void)
     if (gDebugImageLock) {
         IOLockLock(gDebugImageLock);
         if (gDebugImageFileVars != 0) {
-            kprintf("IOHIBSystemSleep: Closing debugdata file\n");
             IOSetBootImageNVRAM(0);
             IOPolledFileClose(&gDebugImageFileVars, 0, 0, 0, 0, 0);
         }
@@ -859,7 +865,6 @@ IOOpenDebugDataFile(const char *fname, uint64_t size)
         // write extents for debug data usage in EFI
         IOWriteExtentsToFile(gDebugImageFileVars, kIOHibernateHeaderOpenSignature);
         IOSetBootImageNVRAM(imagePath);
-        kprintf("IOOpenDebugDataFile: opened debugdata file\n");
     }
 
 exit:
@@ -877,7 +882,6 @@ IOCloseDebugDataFile()
     if (gDebugImageLock) {
         IOLockLock(gDebugImageLock);
         if (gDebugImageFileVars != 0) {
-            kprintf("IOHibernateSystemPostWake: Closing debugdata file\n");
             IOPolledFileClose(&gDebugImageFileVars, 0, 0, 0, 0, 0);
         }
         IOLockUnlock(gDebugImageLock);
@@ -1268,27 +1272,42 @@ IOHibernateDone(IOHibernateVars * vars)
     return (kIOReturnSuccess);
 }
 
+void
+IOHibernateSystemPostWakeTrim(void * p1, void * p2)
+{
+    // invalidate & close the image file
+    if (p1) IOLockLock(gFSLock);
+    if (kFSTrimDelay == gFSState)
+    {
+	IOPolledFileIOVars * vars = &gFileVars;
+	IOPolledFileClose(&vars,
+#if DISABLE_TRIM
+			  0, NULL, 0, 0, 0);
+#else
+			  0, (caddr_t)gIOHibernateCurrentHeader, sizeof(IOHibernateImageHeader),
+			  sizeof(IOHibernateImageHeader), gIOHibernateCurrentHeader->imageSize);
+#endif
+        gFSState = kFSIdle;
+    }
+    if (p1) IOLockUnlock(gFSLock);
+}
+
 IOReturn
 IOHibernateSystemPostWake(void)
 {
     gIOHibernateCurrentHeader->signature = kIOHibernateHeaderInvalidSignature;
     IOLockLock(gFSLock);
-    if (kFSOpened == gFSState)
+    if (kFSTrimDelay == gFSState) IOHibernateSystemPostWakeTrim(NULL, NULL);
+    else if (kFSOpened != gFSState) gFSState = kFSIdle;
+    else
     {
-	// invalidate & close the image file
-	IOSleep(TRIM_DELAY);
-	IOPolledFileIOVars * vars = &gFileVars;
-	IOPolledFileClose(&vars,
-#if DISABLE_TRIM
-				       0, NULL, 0, 0, 0);
-#else
-				       0, (caddr_t)gIOHibernateCurrentHeader, sizeof(IOHibernateImageHeader),
-				       sizeof(IOHibernateImageHeader), gIOHibernateCurrentHeader->imageSize);
-#endif
-    }
-    gFSState = kFSIdle;
+	AbsoluteTime deadline;
 
-	IOLockUnlock(gFSLock);
+        gFSState = kFSTrimDelay;
+	clock_interval_to_deadline(TRIM_DELAY, kMillisecondScale, &deadline );
+	thread_call_enter1_delayed(gIOHibernateTrimCalloutEntry, NULL, deadline);
+    }
+    IOLockUnlock(gFSLock);
 
     // IOCloseDebugDataFile() calls IOSetBootImageNVRAM() unconditionally
     IOCloseDebugDataFile( );

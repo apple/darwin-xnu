@@ -468,6 +468,7 @@ struct kcdata_type_definition {
 #define STACKSHOT_KCTYPE_STACKSHOT_DURATION 0x91au    /* struct stackshot_duration */
 #define STACKSHOT_KCTYPE_STACKSHOT_FAULT_STATS 0x91bu /* struct stackshot_fault_stats */
 #define STACKSHOT_KCTYPE_KERNELCACHE_LOADINFO  0x91cu /* kernelcache UUID -- same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
+#define STACKSHOT_KCTYPE_THREAD_WAITINFO 0x91du       /* struct stackshot_thread_waitinfo */
 
 struct stack_snapshot_frame32 {
 	uint32_t lr;
@@ -708,6 +709,20 @@ struct stackshot_fault_stats {
 	uint64_t sfs_system_max_fault_time; /* MATUs fault time limit per stackshot */
 	uint8_t  sfs_stopped_faulting;      /* we stopped decompressing because we hit the limit */
 } __attribute__((packed));
+
+typedef struct stackshot_thread_waitinfo {
+	uint64_t owner;		/* The thread that owns the object */
+	uint64_t waiter;	/* The thread that's waiting on the object */
+	uint64_t context;	/* A context uniquely identifying the object */
+	uint8_t wait_type;	/* The type of object that the thread is waiting on */
+} __attribute__((packed)) thread_waitinfo_t;
+
+#define STACKSHOT_WAITOWNER_KERNEL         (UINT64_MAX - 1)
+#define STACKSHOT_WAITOWNER_PORT_LOCKED    (UINT64_MAX - 2)
+#define STACKSHOT_WAITOWNER_PSET_LOCKED    (UINT64_MAX - 3)
+#define STACKSHOT_WAITOWNER_INTRANSIT      (UINT64_MAX - 4)
+#define STACKSHOT_WAITOWNER_MTXSPIN        (UINT64_MAX - 5)
+
 
 /**************** definitions for crashinfo *********************/
 

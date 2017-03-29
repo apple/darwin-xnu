@@ -479,6 +479,7 @@ nfs3_access_rpc(nfsnode_t np, u_int32_t *access, int rpcflags, vfs_context_t ctx
 	uint32_t access_result = 0;
 	u_int64_t xid;
 	struct nfsm_chain nmreq, nmrep;
+	struct nfsmount *nmp;
 	struct timeval now;
 	uid_t uid;
 
@@ -501,7 +502,18 @@ nfs3_access_rpc(nfsnode_t np, u_int32_t *access, int rpcflags, vfs_context_t ctx
 	nfsm_chain_get_32(error, &nmrep, access_result);
 	nfsmout_if(error);
 
-	uid = kauth_cred_getuid(vfs_context_ucred(ctx));
+	/* XXXab do we really need mount here, also why are we doing access cache management here? */
+	nmp = NFSTONMP(np);
+	if (nfs_mount_gone(nmp)) {
+		error = ENXIO;
+	}
+	nfsmout_if(error);
+
+	if (auth_is_kerberized(np->n_auth) || auth_is_kerberized(nmp->nm_auth)) {
+		uid = nfs_cred_getasid2uid(vfs_context_ucred(ctx));
+	} else {
+		uid = kauth_cred_getuid(vfs_context_ucred(ctx));
+	}
 	slot = nfs_node_access_slot(np, uid, 1);
 	np->n_accessuid[slot] = uid;
 	microuptime(&now);
@@ -1785,6 +1797,7 @@ nfs_vnop_setattr(
 	u_quad_t origsize, vapsize;
 	struct nfs_dulookup dul;
 	nfsnode_t dnp = NULL;
+	int dul_in_progress = 0;
 	vnode_t dvp = NULL;
 	const char *vname = NULL;
 	struct nfs_open_owner *noop = NULL;
@@ -1993,15 +2006,19 @@ restart:
 			vname = vnode_getname(vp);
 			dnp = (dvp && vname) ? VTONFS(dvp) : NULL;
 			if (dnp) {
-				error = nfs_node_set_busy(dnp, vfs_context_thread(ctx));
-				if (error) {
-					dnp = NULL;
-					error = 0;
+				if (nfs_node_set_busy(dnp, vfs_context_thread(ctx))) {
+					vnode_put(dvp);
+					vnode_putname(vname);
+				} else {
+					nfs_dulookup_init(&dul, dnp, vname, strlen(vname), ctx);
+					nfs_dulookup_start(&dul, dnp, ctx);
+					dul_in_progress = 1;
 				}
-			}
-			if (dnp) {
-				nfs_dulookup_init(&dul, dnp, vname, strlen(vname), ctx);
-				nfs_dulookup_start(&dul, dnp, ctx);
+			} else {
+				if (dvp)
+					vnode_put(dvp);
+				if (vname)
+					vnode_putname(vname);
 			}
 		}
 	}
@@ -2009,18 +2026,11 @@ restart:
 	if (!error)
 		error = nmp->nm_funcs->nf_setattr_rpc(np, vap, ctx);
 
-	if (VATTR_IS_ACTIVE(vap, va_mode) || VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_gid) ||
-	    VATTR_IS_ACTIVE(vap, va_acl) || VATTR_IS_ACTIVE(vap, va_uuuid) || VATTR_IS_ACTIVE(vap, va_guuid)) {
-		if (!namedattrs) {
-			if (dnp) {
-				nfs_dulookup_finish(&dul, dnp, ctx);
-				nfs_node_clear_busy(dnp);
-			}
-			if (dvp != NULLVP)
-				vnode_put(dvp);
-			if (vname != NULL)
-				vnode_putname(vname);
-		}
+	if (dul_in_progress) {
+		nfs_dulookup_finish(&dul, dnp, ctx);
+		nfs_node_clear_busy(dnp);
+		vnode_put(dvp);
+		vnode_putname(vname);
 	}
 
 	FSDBG_BOT(512, np->n_size, vap->va_data_size, np->n_vattr.nva_size, error);

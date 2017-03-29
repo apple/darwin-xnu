@@ -35,13 +35,6 @@
 #include <libkern/OSKextLib.h>
 
 
-/*
- * This tells compiler_rt not to include userspace-specific stuff writing
- * profile data to a file.
- */
-int __llvm_profile_runtime = 0;
-
-
 #ifdef PROFILE
 
 /* These __llvm functions are defined in InstrProfiling.h in compiler_rt.  That
@@ -207,6 +200,9 @@ int grab_pgo_data(struct proc *p,
                     }
 
                     err = OSKextGrabPgoData(uuid, &size64, NULL, 0, 0, !!(uap->flags & PGO_METADATA));
+                    if (size64 == 0 && err == 0) {
+                        err = EIO;
+                    }
                     if (err) {
                         goto out;
                     }
@@ -230,22 +226,38 @@ int grab_pgo_data(struct proc *p,
 
                 } else {
 
-                    MALLOC(buffer, char *, uap->size, M_TEMP, M_WAITOK);
+                    uint64_t size64 = 0 ;
+
+                    err = OSKextGrabPgoData(uuid, &size64, NULL, 0,
+                                            false,
+                                            !!(uap->flags & PGO_METADATA));
+
+                    if (size64 == 0 && err == 0) {
+                        err = EIO;
+                    }
+                    if (err) {
+                        goto out;
+                    }
+
+                    if (uap->size < 0 || (uint64_t)uap->size < size64) {
+                        err = EINVAL;
+                        goto out;
+                    }
+
+                    MALLOC(buffer, char *, size64, M_TEMP, M_WAITOK);
                     if (!buffer) {
                         err = ENOMEM;
                         goto out;
                     }
 
-                    uint64_t size64;
-
-                    err = OSKextGrabPgoData(uuid, &size64, buffer, uap->size,
+                    err = OSKextGrabPgoData(uuid, &size64, buffer, size64,
                                             !!(uap->flags & PGO_WAIT_FOR_UNLOAD),
                                             !!(uap->flags & PGO_METADATA));
                     if (err) {
                         goto out;
                     }
 
-                    ssize_t size = size64;
+                    ssize_t size = size64;                    
                     if ( ((uint64_t) size) != size64  ||
                          size < 0 )
                     {

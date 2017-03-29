@@ -663,6 +663,7 @@ struct inpcbinfo {
 #define	IN6P_RTHDR		0x00100000 /* receive routing header */
 #define	IN6P_RTHDRDSTOPTS	0x00200000 /* receive dstoptions before rthdr */
 #define	IN6P_TCLASS		0x00400000 /* receive traffic class value */
+#define	INP_RECVTOS		IN6P_TCLASS	/* receive incoming IP TOS */
 #define	IN6P_AUTOFLOWLABEL	0x00800000 /* attach flowlabel automatically */
 #endif /* BSD_KERNEL_PRIVATE */
 

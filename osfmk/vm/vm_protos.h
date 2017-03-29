@@ -73,6 +73,8 @@ extern mach_port_name_t ipc_port_copyout_send(
 	ipc_space_t	space);
 extern task_t port_name_to_task(
 	mach_port_name_t name);
+extern task_t port_name_to_task_inspect(
+	mach_port_name_t name);
 #endif /* _IPC_IPC_PORT_H_ */
 
 extern ipc_space_t  get_task_ipcspace(

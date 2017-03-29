@@ -149,6 +149,7 @@ static void	 lf_hold_assertion(task_t, struct lockf *);
 static void	 lf_jump_to_queue_head(struct lockf *, struct lockf *);
 static void	 lf_drop_assertion(struct lockf *);
 static void	 lf_boost_blocking_proc(struct lockf *, struct lockf *);
+static void	 lf_adjust_assertion(struct lockf *block);
 #endif /* IMPORTANCE_INHERITANCE */
 
 /*
@@ -665,6 +666,12 @@ lf_setlock(struct lockf *lock, struct timespec *timeout)
 			 * in the spurious case, which would create a cycle)
 			 */
 			TAILQ_REMOVE(&lock->lf_next->lf_blkhd, lock, lf_block);
+#if IMPORTANCE_INHERITANCE
+			/*
+			 * Adjust the boost on lf_next.
+			 */
+			lf_adjust_assertion(lock->lf_next);
+#endif /* IMPORTANCE_INHERITANCE */
 			lock->lf_next = NULL;
 
 			if (error == 0) {
@@ -1481,6 +1488,50 @@ lf_drop_assertion(struct lockf *block)
 	task_t current_task = proc_task(block->lf_owner);
 	task_importance_drop_file_lock_assertion(current_task, 1);
 	block->lf_boosted = LF_NOT_BOOSTED;
+}
+
+/*
+ * lf_adjust_assertion
+ *
+ * Adjusts importance assertion of file lock. Goes through
+ * all the blocking locks and checks if the file lock needs
+ * to be boosted anymore.
+ *
+ * Parameters: block	lockf structure which needs to be adjusted.
+ *
+ * Returns:	<void>
+ */
+static void
+lf_adjust_assertion(struct lockf *block)
+{
+	boolean_t drop_boost = TRUE;
+	struct lockf *next;
+
+	/* Return if the lock is not boosted */
+	if (block->lf_boosted == LF_NOT_BOOSTED) {
+		return;
+	}
+
+	TAILQ_FOREACH(next, &block->lf_blkhd, lf_block) {
+		/* Check if block and next are same type of locks */
+		if (((block->lf_flags & next->lf_flags & F_POSIX) != 0) ||
+		    ((block->lf_flags & next->lf_flags & F_OFD_LOCK) &&
+		     (block->lf_owner != next->lf_owner) &&
+		     (NULL != block->lf_owner && NULL != next->lf_owner))) {
+
+			/* Check if next would be boosting block */
+			if (task_is_importance_donor(proc_task(next->lf_owner)) &&
+			    task_is_importance_receiver_type(proc_task(block->lf_owner))) {
+				/* Found a lock boosting block */
+				drop_boost = FALSE;
+				break;
+			}
+		}
+	}
+
+	if (drop_boost) {
+		lf_drop_assertion(block);
+	}
 }
 
 static void

@@ -40,7 +40,7 @@ def GetObjectSummary(obj):
         vtype_str = ""
     if hasattr(obj, 'retainCount'):
         retCount = (obj.retainCount & 0xffff)
-        cntnrRetCount = (retCount >> 16)
+        cntnrRetCount = (obj.retainCount >> 16)
         out_string = "`object 0x{0: <16x}, vt 0x{1: <16x}{2:s}, retain count {3:d}, container retain {4:d}` ".format(obj, vt, vtype_str, retCount, cntnrRetCount)
     else:
         out_string = "`object 0x{0: <16x}, vt 0x{1: <16x}{2:s}` ".format(obj, vt, vtype_str)

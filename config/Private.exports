@@ -56,14 +56,9 @@ _cons_cinput
 _convert_port_to_task_suspension_token
 _convert_task_suspension_token_to_port
 _convert_task_to_port
-_cp_get_backup_key
 _cp_is_valid_class
 _cp_key_store_action
-_cp_new_key
 _cp_os_version
-_cp_register_wraps
-_cp_rewrap_key
-_cp_unwrap_key
 _cpu_to_processor
 _cpx_alloc
 _cpx_can_copy
@@ -73,12 +68,14 @@ _cpx_free
 _cpx_has_key
 _cpx_init
 _cpx_is_sep_wrapped_key
+_cpx_is_composite_key
 _cpx_iv_aes_ctx
 _cpx_key
 _cpx_key_len
 _cpx_max_key_len
 _cpx_set_aes_iv_key
 _cpx_set_is_sep_wrapped_key
+_cpx_set_is_composite_key
 _cpx_set_key_len
 _cpx_set_use_offset_for_iv
 _cpx_set_synthetic_offset_for_iv
@@ -127,6 +124,7 @@ _ctl_name_by_id
 _escape_str
 _fd_rdwr
 _get_aiotask
+_get_system_inshutdown
 _gpu_accumulate_time
 _gpu_describe
 _gpu_fceiling_cb_register
@@ -277,6 +275,11 @@ _mbuf_set_flowid
 _mbuf_pkt_new_flow
 _mbuf_last_pkt
 _mcl_to_paddr
+_ml_io_read
+_ml_io_read16
+_ml_io_read32
+_ml_io_read64
+_ml_io_read8
 _mnl_instantiate
 _mnl_register
 _mnl_msg_alloc
@@ -380,6 +383,7 @@ _thread_clear_eager_preempt
 _thread_dispatchqaddr
 _thread_set_eager_preempt
 _thread_set_mach_voucher
+_thread_set_pending_block_hint
 _throttle_info_create
 _throttle_info_io_will_be_throttled
 _throttle_info_mount_ref
@@ -536,6 +540,8 @@ _mount_set_noreaddirext
 _cluster_max_io_size
 _vfs_context_cwd
 _resolve_nspace_item
+_vnode_attr_authorize
+_vnode_attr_authorize_init
 _vnode_usecount
 _vnode_iocount
 _vfs_context_iskernel
@@ -560,3 +566,10 @@ _qf_get
 _qf_put
 _dqfileinit
 _dqreclaim
+_zalloc
+_zfree
+_zinit
+_zone_change
+_fs_buffer_cache_gc_register
+_fs_buffer_cache_gc_unregister
+_cp_key_store_action_for_volume

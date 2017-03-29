@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -2078,6 +2078,7 @@ nfsrv_create(
 			ni.ni_cnd.cn_context = ctx;
 			ni.ni_startdir = dvp;
 			ni.ni_usedvp   = dvp;
+			ni.ni_rootdir = rootvnode;
 			cnflags = ni.ni_cnd.cn_flags; /* store in case we have to restore */
 			while ((error = lookup(&ni)) == ERECYCLE) {
 				ni.ni_cnd.cn_flags = cnflags;
@@ -2352,6 +2353,7 @@ nfsrv_mknod(
 		ni.ni_cnd.cn_context = vfs_context_current();
 		ni.ni_startdir = dvp;
 		ni.ni_usedvp   = dvp;
+		ni.ni_rootdir = rootvnode;
 		cnflags = ni.ni_cnd.cn_flags; /* store in case we have to restore */
 		while ((error = lookup(&ni)) == ERECYCLE) {
 			ni.ni_cnd.cn_flags = cnflags;
@@ -3502,6 +3504,7 @@ nfsrv_symlink(
 			ni.ni_cnd.cn_context = ctx;
 			ni.ni_startdir = dvp;
 			ni.ni_usedvp   = dvp;
+			ni.ni_rootdir = rootvnode;
 			cnflags = ni.ni_cnd.cn_flags; /* store in case we have to restore */
 			while ((error = lookup(&ni)) == ERECYCLE) {
 				ni.ni_cnd.cn_flags = cnflags;

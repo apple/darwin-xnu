@@ -30,31 +30,6 @@
 
 __BEGIN_DECLS
 
-typedef union {
-    struct {
-#if __LP64__
-        uintptr_t pc : 48;
-#else
-        uintptr_t pc;
-#endif
-        // not encoded
-        firehose_tracepoint_flags_t flags;
-        uintptr_t dso;
-        uuid_t uuid;
-    };
-
-    uint32_t offset;
-    uint64_t vlocation : 48; // we never use the full 64-bits
-
-#if defined(__LP64__)
-    uint8_t encode_value[6]; // 48-bits
-#else
-    uint8_t encode_value[sizeof(uintptr_t)];
-#endif
-} os_trace_location_u;
-
-typedef os_trace_location_u *os_trace_location_t;
-
 OS_ALWAYS_INLINE
 inline uint32_t
 _os_trace_offset(const void *dso, const void *addr, _firehose_tracepoint_flags_activity_t flags __unused)

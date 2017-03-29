@@ -364,8 +364,8 @@ void
 ktrace_set_invalid_owning_pid(void)
 {
 	if (ktrace_keep_ownership_on_reset) {
-		ktrace_reset(ktrace_active_mask);
 		ktrace_keep_ownership_on_reset = FALSE;
+		ktrace_reset(ktrace_active_mask);
 	}
 }
 

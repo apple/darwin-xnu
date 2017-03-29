@@ -121,7 +121,7 @@ typedef struct fs_event_watcher {
 #define WATCHER_CLOSING                0x0002
 #define WATCHER_WANTS_COMPACT_EVENTS   0x0004
 #define WATCHER_WANTS_EXTENDED_INFO    0x0008
-#define WATCHER_APPLE_SYSTEM_SERVICE   0x0010   // fseventsd, coreservicesd, mds
+#define WATCHER_APPLE_SYSTEM_SERVICE   0x0010   // fseventsd, coreservicesd, mds, revisiond
 
 #define MAX_WATCHERS  8
 static fs_event_watcher *watcher_table[MAX_WATCHERS];
@@ -139,6 +139,11 @@ static int        fs_event_init = 0;
 // early from the event delivery
 //
 static int16_t     fs_event_type_watchers[FSE_MAX_EVENTS];
+
+// the device currently being unmounted:
+static dev_t fsevent_unmount_dev = 0;
+// how many ACKs are still outstanding:
+static int fsevent_unmount_ack_count = 0;
 
 static int  watcher_add_event(fs_event_watcher *watcher, kfs_event *kfse);
 static void fsevents_wakeup(fs_event_watcher *watcher);
@@ -619,6 +624,19 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	    goto done_with_args;
     }
 
+    if (type == FSE_UNMOUNT_PENDING) {
+
+	    // Just a dev_t
+	    arg_type = va_arg(ap, int32_t);
+	    if (arg_type == FSE_ARG_DEV) {
+		    cur->dev = (dev_t)(va_arg(ap, dev_t));
+	    } else {
+		    cur->dev = (dev_t)0xbadc0de1;
+	    }
+
+	    goto done_with_args;
+    }
+
     for(arg_type=va_arg(ap, int32_t); arg_type != FSE_ARG_DONE; arg_type=va_arg(ap, int32_t))
 
 	switch(arg_type) {
@@ -857,8 +875,8 @@ release_event_ref(kfs_event *kfse)
     // holding the fs_event_buf lock
     //
     copy = *kfse;
-    if (kfse->dest && OSAddAtomic(-1, &kfse->dest->refcount) == 1) {
-	dest_copy = *kfse->dest;
+    if (kfse->type != FSE_DOCID_CREATED && kfse->type != FSE_DOCID_CHANGED && kfse->dest && OSAddAtomic(-1, &kfse->dest->refcount) == 1) {
+	    dest_copy = *kfse->dest;
     } else {
 	dest_copy.str  = NULL;
 	dest_copy.len  = 0;
@@ -906,7 +924,7 @@ release_event_ref(kfs_event *kfse)
     unlock_fs_event_list();
     
     // if we have a pointer in the union
-    if (copy.str && copy.type != FSE_DOCID_CHANGED) {
+    if (copy.str && copy.type != FSE_DOCID_CREATED && copy.type != FSE_DOCID_CHANGED) {
 	if (copy.len == 0) {    // and it's not a string
 	    panic("%s:%d: no more fref.vp!\n", __FILE__, __LINE__);
 	    // vnode_rele_ext(copy.fref.vp, O_EVTONLY, 0);
@@ -965,6 +983,7 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
 
     if (!strncmp(watcher->proc_name, "fseventsd", sizeof(watcher->proc_name)) ||
 	!strncmp(watcher->proc_name, "coreservicesd", sizeof(watcher->proc_name)) ||
+	!strncmp(watcher->proc_name, "revisiond", sizeof(watcher->proc_name)) ||
 	!strncmp(watcher->proc_name, "mds", sizeof(watcher->proc_name))) {
 	watcher->flags |= WATCHER_APPLE_SYSTEM_SERVICE;
     } else {
@@ -1323,7 +1342,7 @@ copy_out_kfse(fs_event_watcher *watcher, kfs_event *kfse, struct uio *uio)
 
     if (kfse->type == FSE_DOCID_CHANGED || kfse->type == FSE_DOCID_CREATED) {
 	dev_t    dev  = cur->dev;
-	ino_t    ino  = cur->ino;
+	ino64_t    ino  = cur->ino;
 	uint64_t ival;
 
 	error = fill_buff(FSE_ARG_DEV, sizeof(dev_t), &dev, evbuff, &evbuff_idx, sizeof(evbuff), uio);
@@ -1331,19 +1350,30 @@ copy_out_kfse(fs_event_watcher *watcher, kfs_event *kfse, struct uio *uio)
 	    goto get_out;
 	}
 
-	error = fill_buff(FSE_ARG_INO, sizeof(ino_t), &ino, evbuff, &evbuff_idx, sizeof(evbuff), uio);
+	error = fill_buff(FSE_ARG_INO, sizeof(ino64_t), &ino, evbuff, &evbuff_idx, sizeof(evbuff), uio);
 	if (error != 0) {
 	    goto get_out;
 	}
 
-	memcpy(&ino, &cur->str, sizeof(ino_t));
-	error = fill_buff(FSE_ARG_INO, sizeof(ino_t), &ino, evbuff, &evbuff_idx, sizeof(evbuff), uio);
+	memcpy(&ino, &cur->str, sizeof(ino64_t));
+	error = fill_buff(FSE_ARG_INO, sizeof(ino64_t), &ino, evbuff, &evbuff_idx, sizeof(evbuff), uio);
 	if (error != 0) {
 	    goto get_out;
 	}
 
 	memcpy(&ival, &cur->uid, sizeof(uint64_t));   // the docid gets stuffed into the ino field
 	error = fill_buff(FSE_ARG_INT64, sizeof(uint64_t), &ival, evbuff, &evbuff_idx, sizeof(evbuff), uio);
+	if (error != 0) {
+	    goto get_out;
+	}
+
+	goto done;
+    }
+
+    if (kfse->type == FSE_UNMOUNT_PENDING) {
+	dev_t    dev  = cur->dev;
+
+	error = fill_buff(FSE_ARG_DEV, sizeof(dev_t), &dev, evbuff, &evbuff_idx, sizeof(evbuff), uio);
 	if (error != 0) {
 	    goto get_out;
 	}
@@ -1379,15 +1409,12 @@ copy_out_kfse(fs_event_watcher *watcher, kfs_event *kfse, struct uio *uio)
 	    goto get_out;
 	}
     } else {
-	ino_t ino;
-	
 	error = fill_buff(FSE_ARG_DEV, sizeof(dev_t), &cur->dev, evbuff, &evbuff_idx, sizeof(evbuff), uio);
 	if (error != 0) {
 	    goto get_out;
 	}
 
-	ino = (ino_t)cur->ino;
-	error = fill_buff(FSE_ARG_INO, sizeof(ino_t), &ino, evbuff, &evbuff_idx, sizeof(evbuff), uio);
+	error = fill_buff(FSE_ARG_INO, sizeof(ino64_t), &cur->ino, evbuff, &evbuff_idx, sizeof(evbuff), uio);
 	if (error != 0) {
 	    goto get_out;
 	}
@@ -1541,7 +1568,7 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 
 	if (watcher->event_list[kfse->type] == FSE_REPORT && watcher_cares_about_dev(watcher, kfse->dev)) {
 
-	  if (!(watcher->flags & WATCHER_APPLE_SYSTEM_SERVICE) && kfse->type != FSE_DOCID_CHANGED && is_ignored_directory(kfse->str)) {
+	  if (!(watcher->flags & WATCHER_APPLE_SYSTEM_SERVICE) && kfse->type != FSE_DOCID_CREATED && kfse->type != FSE_DOCID_CHANGED && is_ignored_directory(kfse->str)) {
 	    // If this is not an Apple System Service, skip specified directories
 	    // radar://12034844
 	    error = 0;
@@ -1591,18 +1618,13 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 }
 
 
-// release any references we might have on vnodes which are 
-// the mount point passed to us (so that it can be cleanly
-// unmounted).
 //
-// since we don't want to lose the events we'll convert the
-// vnode refs to full paths.
+// Shoo watchers away from a volume that's about to be unmounted
+// (so that it can be cleanly unmounted).
 //
 void
-fsevent_unmount(__unused struct mount *mp)
+fsevent_unmount(__unused struct mount *mp, __unused vfs_context_t ctx)
 {
-    // we no longer maintain pointers to vnodes so
-    // there is nothing to do... 
 }
 
 
@@ -1722,13 +1744,13 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 	    
 	    new_num_devices = devfilt_args->num_devices;
 	    if (new_num_devices == 0) {
-		tmp = fseh->watcher->devices_not_to_watch;
-
 		lock_watch_table();
+
+		tmp = fseh->watcher->devices_not_to_watch;
 		fseh->watcher->devices_not_to_watch = NULL;
 		fseh->watcher->num_devices = new_num_devices;
-		unlock_watch_table();
 
+		unlock_watch_table();
 		if (tmp) {
 		    FREE(tmp, M_TEMP);
 		}
@@ -1763,6 +1785,22 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 	    
 	    break;
 	}	    
+
+	case FSEVENTS_UNMOUNT_PENDING_ACK: {
+	    lock_watch_table();
+	    dev_t dev = *(dev_t *)data;
+	    if (fsevent_unmount_dev == dev) {
+		if (--fsevent_unmount_ack_count <= 0) {
+			fsevent_unmount_dev = 0;
+			wakeup((caddr_t)&fsevent_unmount_dev);
+		}
+	    } else {
+		printf("unexpected unmount pending ack %d (%d)\n", dev, fsevent_unmount_dev);
+		ret = EINVAL;
+	    }
+	    unlock_watch_table();
+	    break;
+	}
 
 	default:
 	    ret = EINVAL;

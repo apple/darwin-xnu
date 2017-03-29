@@ -63,6 +63,10 @@ static_assert((sizeof(struct pthread_callbacks_s) - offsetof(struct pthread_call
 extern kern_return_t mach_port_deallocate(ipc_space_t, mach_port_name_t);
 extern kern_return_t semaphore_signal_internal_trap(mach_port_name_t);
 
+/* Used for stackshot introspection */
+extern void kdp_pthread_find_owner(thread_t thread, struct stackshot_thread_waitinfo *waitinfo);
+extern void* kdp_pthread_get_thread_kwq(thread_t thread);
+
 #define PTHREAD_STRUCT_ACCESSOR(get, set, rettype, structtype, member) \
 	static rettype \
 	get(structtype x) { \
@@ -502,6 +506,22 @@ pthread_priority_canonicalize(unsigned long priority, boolean_t propagation)
 	} else {
 		return pthread_functions->pthread_priority_canonicalize(priority);
 	}
+}
+
+void
+kdp_pthread_find_owner(thread_t thread, struct stackshot_thread_waitinfo *waitinfo)
+{
+	if (pthread_functions->pthread_find_owner)
+		pthread_functions->pthread_find_owner(thread, waitinfo);
+}
+
+void *
+kdp_pthread_get_thread_kwq(thread_t thread)
+{
+	if (pthread_functions->pthread_get_thread_kwq)
+		return pthread_functions->pthread_get_thread_kwq(thread);
+
+	return NULL;
 }
 
 /*

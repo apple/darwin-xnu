@@ -354,7 +354,6 @@ void
 audit_arg_sockaddr(struct kaudit_record *ar, struct vnode *cwd_vp,
     struct sockaddr *sa)
 {
-	int slen;
 	struct sockaddr_un *sun;
 	char path[SOCK_MAXADDRLEN - offsetof(struct sockaddr_un, sun_path) + 1];
 
@@ -363,7 +362,11 @@ audit_arg_sockaddr(struct kaudit_record *ar, struct vnode *cwd_vp,
 	if (cwd_vp == NULL || sa == NULL)
 		return;
 
-	bcopy(sa, &ar->k_ar.ar_arg_sockaddr, sa->sa_len);
+	if (sa->sa_len > sizeof(ar->k_ar.ar_arg_sockaddr))
+		bcopy(sa, &ar->k_ar.ar_arg_sockaddr, sizeof(ar->k_ar.ar_arg_sockaddr));
+	else
+		bcopy(sa, &ar->k_ar.ar_arg_sockaddr, sa->sa_len);
+
 	switch (sa->sa_family) {
 	case AF_INET:
 		ARG_SET_VALID(ar, ARG_SADDRINET);
@@ -375,20 +378,12 @@ audit_arg_sockaddr(struct kaudit_record *ar, struct vnode *cwd_vp,
 
 	case AF_UNIX:
 		sun = (struct sockaddr_un *)sa;
-		slen = sun->sun_len - offsetof(struct sockaddr_un, sun_path);
-
-		if (slen >= 0) {
+		if (sun->sun_len > offsetof(struct sockaddr_un, sun_path)) {
 			/*
 			 * Make sure the path is NULL-terminated
 			 */
-			if (sun->sun_path[slen] != 0) {
-				bcopy(sun->sun_path, path, slen);
-				path[slen] = 0;
-				audit_arg_upath(ar, cwd_vp, path, ARG_UPATH1);
-			} else {
-				audit_arg_upath(ar, cwd_vp, sun->sun_path, 
-					ARG_UPATH1);
-			}
+			strlcpy(path, sun->sun_path, sizeof(path));
+			audit_arg_upath(ar, cwd_vp, path, ARG_UPATH1);
 		}
 		ARG_SET_VALID(ar, ARG_SADDRUNIX);
 		break;

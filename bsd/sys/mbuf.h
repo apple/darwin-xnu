@@ -493,10 +493,10 @@ struct pkthdr {
 /*
  * Description of external storage mapped into mbuf, valid only if M_EXT set.
  */
+typedef void (*m_ext_free_func_t)(caddr_t, u_int, caddr_t);
 struct m_ext {
 	caddr_t	ext_buf;		/* start of buffer */
-	void	(*ext_free)		/* free routine if not the usual */
-		    (caddr_t, u_int, caddr_t);
+	m_ext_free_func_t ext_free;	/* free routine if not the usual */
 	u_int	ext_size;		/* size of buffer, for ext_free */
 	caddr_t	ext_arg;		/* additional ext_free argument */
 	struct ext_ref {
@@ -506,6 +506,7 @@ struct m_ext {
 		u_int16_t prefcnt;
 		u_int16_t flags;
 		u_int32_t priv;
+		uintptr_t ext_token;
 	} *ext_refflags;
 };
 
@@ -1455,6 +1456,11 @@ __private_extern__ mbuf_traffic_class_t m_get_traffic_class(struct mbuf *);
 __private_extern__ u_int16_t m_adj_sum16(struct mbuf *, u_int32_t,
     u_int32_t, u_int32_t);
 __private_extern__ u_int16_t m_sum16(struct mbuf *, u_int32_t, u_int32_t);
+
+__private_extern__ void m_set_ext(struct mbuf *, struct ext_ref *, m_ext_free_func_t, caddr_t);
+__private_extern__ struct ext_ref *m_get_rfa(struct mbuf *);
+__private_extern__ m_ext_free_func_t m_get_ext_free(struct mbuf *);
+__private_extern__ caddr_t m_get_ext_arg(struct mbuf *);
 
 extern void m_do_tx_compl_callback(struct mbuf *, struct ifnet *);
 

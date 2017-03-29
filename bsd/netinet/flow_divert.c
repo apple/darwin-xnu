@@ -2823,13 +2823,9 @@ done:
 }
 
 static int
-flow_divert_connectx_out_common(struct socket *so, int af,
-    struct sockaddr_list **src_sl, struct sockaddr_list **dst_sl,
-    struct proc *p, uint32_t ifscope __unused, sae_associd_t aid __unused,
-    sae_connid_t *pcid, uint32_t flags __unused, void *arg __unused,
-    uint32_t arglen __unused, struct uio *auio, user_ssize_t *bytes_written)
+flow_divert_connectx_out_common(struct socket *so, struct sockaddr *dst,
+    struct proc *p, sae_connid_t *pcid, struct uio *auio, user_ssize_t *bytes_written)
 {
-	struct sockaddr_entry *src_se = NULL, *dst_se = NULL;
 	struct inpcb *inp = sotoinpcb(so);
 	int error;
 
@@ -2837,20 +2833,9 @@ flow_divert_connectx_out_common(struct socket *so, int af,
 		return (EINVAL);
 	}
 
-	VERIFY(dst_sl != NULL);
+	VERIFY(dst != NULL);
 
-	/* select source (if specified) and destination addresses */
-	error = in_selectaddrs(af, src_sl, &src_se, dst_sl, &dst_se);
-	if (error != 0) {
-		return (error);
-	}
-
-	VERIFY(*dst_sl != NULL && dst_se != NULL);
-	VERIFY(src_se == NULL || *src_sl != NULL);
-	VERIFY(dst_se->se_addr->sa_family == af);
-	VERIFY(src_se == NULL || src_se->se_addr->sa_family == af);
-
-	error = flow_divert_connect_out(so, dst_se->se_addr, p);
+	error = flow_divert_connect_out(so, dst, p);
 
 	if (error != 0) {
 		return error;
@@ -2893,26 +2878,22 @@ flow_divert_connectx_out_common(struct socket *so, int af,
 }
 
 static int
-flow_divert_connectx_out(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
-    sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
-    uint32_t arglen, struct uio *uio, user_ssize_t *bytes_written)
+flow_divert_connectx_out(struct socket *so, struct sockaddr *src __unused,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope __unused,
+    sae_associd_t aid __unused, sae_connid_t *pcid, uint32_t flags __unused, void *arg __unused,
+    uint32_t arglen __unused, struct uio *uio, user_ssize_t *bytes_written)
 {
-#pragma unused(uio, bytes_written)
-	return (flow_divert_connectx_out_common(so, AF_INET, src_sl, dst_sl,
-	    p, ifscope, aid, pcid, flags, arg, arglen, uio, bytes_written));
+	return (flow_divert_connectx_out_common(so, dst, p, pcid, uio, bytes_written));
 }
 
 #if INET6
 static int
-flow_divert_connectx6_out(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
-    sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
-    uint32_t arglen, struct uio *uio, user_ssize_t *bytes_written)
+flow_divert_connectx6_out(struct socket *so, struct sockaddr *src __unused,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope __unused,
+    sae_associd_t aid __unused, sae_connid_t *pcid, uint32_t flags __unused, void *arg __unused,
+    uint32_t arglen __unused, struct uio *uio, user_ssize_t *bytes_written)
 {
-#pragma unused(uio, bytes_written)
-	return (flow_divert_connectx_out_common(so, AF_INET6, src_sl, dst_sl,
-	    p, ifscope, aid, pcid, flags, arg, arglen, uio, bytes_written));
+	return (flow_divert_connectx_out_common(so, dst, p, pcid, uio, bytes_written));
 }
 #endif /* INET6 */
 

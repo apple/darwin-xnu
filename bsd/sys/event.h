@@ -416,6 +416,23 @@ enum {
 #define NOTE_MEMORYSTATUS_PROC_LIMIT_WARN	0x00000010	/* process memory limit has hit a warning state */
 #define NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL	0x00000020	/* process memory limit has hit a critical state - soft limit */
 
+#ifdef KERNEL_PRIVATE
+/*
+ * data/hint fflags for EVFILT_MEMORYSTATUS, but not shared with userspace.
+ */
+#define NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE        0x00000040      /* Used to restrict sending a warn event only once, per active limit, soft limits only */
+#define NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE      0x00000080      /* Used to restrict sending a warn event only once, per inactive limit, soft limit only */
+#define NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE    0x00000100      /* Used to restrict sending a critical event only once per active limit, soft limit only */
+#define NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE  0x00000200      /* Used to restrict sending a critical event only once per inactive limit, soft limit only */
+
+/*
+ * Use this mask to protect the kernel private flags.
+ */
+#define EVFILT_MEMORYSTATUS_ALL_MASK \
+	(NOTE_MEMORYSTATUS_PRESSURE_NORMAL | NOTE_MEMORYSTATUS_PRESSURE_WARN | NOTE_MEMORYSTATUS_PRESSURE_CRITICAL | NOTE_MEMORYSTATUS_LOW_SWAP | NOTE_MEMORYSTATUS_PROC_LIMIT_WARN | NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL)
+
+#endif /* KERNEL_PRIVATE */
+
 typedef enum vm_pressure_level {
         kVMPressureNormal   = 0,
         kVMPressureWarning  = 1,
@@ -423,7 +440,7 @@ typedef enum vm_pressure_level {
         kVMPressureCritical = 3,
 } vm_pressure_level_t;
 
-#endif
+#endif /* PRIVATE */
 
 /*
  * data/hint fflags for EVFILT_TIMER, shared with userspace.
@@ -560,10 +577,7 @@ typedef uint16_t kn_status_t;
 #define KN_DISPATCH2		(KN_DISPATCH | KN_UDATA_SPECIFIC)
 					/* combination defines deferred-delete mode enabled */
 
-struct __attribute__((__packed__)) knote {
-	uint16_t                 kn_inuse;          /* inuse count */
-	kn_status_t              kn_status;         /* status bits */
-	int                      kn_hookid;
+struct knote {
 	TAILQ_ENTRY(knote)       kn_tqe;            /* linkage for tail queue */
 	SLIST_ENTRY(knote)       kn_link;           /* linkage for search list */
 	SLIST_ENTRY(knote)       kn_selnext;        /* klist element chain */
@@ -579,13 +593,16 @@ struct __attribute__((__packed__)) knote {
 							 kn_filtid:8, 					/* filter id to index filter ops */
 							 kn_kq_packed:KNOTE_KQ_BITSIZE; /* packed pointer for kq */
 
-	int                      kn_sfflags;        /* saved filter flags */
 	union {
 		void                 *kn_hook;
-		uint64_t            kn_hook_data;
+		uint64_t             kn_hook_data;
 	};
 	int64_t                  kn_sdata;          /* saved data field */
 	struct kevent_internal_s kn_kevent;
+	int                      kn_sfflags;        /* saved filter flags */
+	int                      kn_hookid;
+	uint16_t                 kn_inuse;          /* inuse count */
+	kn_status_t              kn_status;         /* status bits */
 
 #define kn_id		kn_kevent.ident
 #define kn_filter	kn_kevent.filter

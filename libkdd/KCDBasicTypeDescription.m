@@ -90,20 +90,25 @@ KCDBasicTypeDescription () {
 	return self;
 }
 
+#define read_unaligned(type, data) ({ \
+    type x; \
+    memcpy((void*)&x, (void*)(data), sizeof(type)); \
+    x; })
+
 - (NSObject *)objectForType:(kctype_subtype_t)elem_type withData:(uint8_t *)data
 {
 	NSObject * obj;
 
 	switch (elem_type) {
 	case KC_ST_CHAR: obj = [NSString stringWithFormat:@"%c", *(char *)data]; break;
-	case KC_ST_INT8: obj = [NSNumber numberWithInt:*(int8_t *)data]; break;
-	case KC_ST_UINT8: obj = [NSNumber numberWithInt:*(uint8_t *)data]; break;
-	case KC_ST_INT16: obj = [NSNumber numberWithShort:*(int16_t *)data]; break;
-	case KC_ST_UINT16: obj = [NSNumber numberWithUnsignedShort:*(uint16_t *)data]; break;
-	case KC_ST_INT32: obj = [NSNumber numberWithInt:*(int32_t *)data]; break;
-	case KC_ST_UINT32: obj = [NSNumber numberWithUnsignedInt:*(uint32_t *)data]; break;
-	case KC_ST_INT64: obj = [NSNumber numberWithLongLong:*(int64_t *)data]; break;
-	case KC_ST_UINT64: obj = [NSNumber numberWithUnsignedLongLong:*(uint64_t *)data]; break;
+	case KC_ST_INT8: obj =   [NSNumber numberWithInt:read_unaligned(int8_t, data)]; break;
+	case KC_ST_UINT8: obj =  [NSNumber numberWithInt:read_unaligned(uint8_t, data)]; break;
+	case KC_ST_INT16: obj =  [NSNumber numberWithShort:read_unaligned(int16_t, data)]; break;
+	case KC_ST_UINT16: obj = [NSNumber numberWithUnsignedShort:read_unaligned(uint16_t, data)]; break;
+	case KC_ST_INT32: obj =  [NSNumber numberWithInt:read_unaligned(int32_t, data)]; break;
+	case KC_ST_UINT32: obj = [NSNumber numberWithUnsignedInt:read_unaligned(uint32_t, data)]; break;
+	case KC_ST_INT64: obj =  [NSNumber numberWithLongLong:read_unaligned(int64_t, data)]; break;
+	case KC_ST_UINT64: obj = [NSNumber numberWithUnsignedLongLong:read_unaligned(uint64_t, data)]; break;
 
 	default: obj = @"<Unknown error occurred>"; break;
 	}

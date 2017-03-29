@@ -1,8 +1,16 @@
+#ifdef T_NAMESPACE
+#undef T_NAMESPACE
+#endif
 #include <darwintest.h>
+
 #include <spawn.h>
 #include <stdlib.h>
 #include <unistd.h>
 
+T_GLOBAL_META(
+	T_META_NAMESPACE("xnu.perf.fork"),
+	T_META_CHECK_LEAKS(false)
+);
 
 #define SPAWN_MEASURE_LOOP(s) \
 	char *args[] = {"/usr/bin/true", NULL}; \
@@ -22,7 +30,7 @@
 		} \
 	}
 
-T_DECL(posix_spawn_platform_binary_latency, "posix_spawn platform binary latency", T_META_TYPE_PERF, T_META_CHECK_LEAKS(NO)) {
+T_DECL(posix_spawn_platform_binary_latency, "posix_spawn platform binary latency") {
 	{
 		dt_stat_time_t s = dt_stat_time_create("time");
 		SPAWN_MEASURE_LOOP(s);
@@ -53,7 +61,7 @@ T_DECL(posix_spawn_platform_binary_latency, "posix_spawn platform binary latency
 		} \
 	}
 
-T_DECL(fork, "fork latency", T_META_TYPE_PERF, T_META_CHECK_LEAKS(NO)) {
+T_DECL(fork, "fork latency") {
 	{
 		dt_stat_time_t s = dt_stat_time_create("time");
 		FORK_MEASURE_LOOP(s);

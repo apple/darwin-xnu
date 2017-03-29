@@ -68,54 +68,16 @@ fs_snapshot_revert(int dirfd, const char *name, uint32_t flags)
     return __fs_snapshot(SNAPSHOT_OP_REVERT, dirfd, name, NULL, NULL, flags);
 }
 
-/*
- * XXX Temporary hack to do what mount_apfs(8) does. This will be removed and
- * replaced with a VFS_IOCTL based implementation in the kernel.
- */
-#include <sys/stat.h>
-#include "strings.h"
-
-#ifndef SNAPSHOT_OP_MOUNT
-#define SNAPSHOT_OP_MOUNT 0x4
-#endif
-
-#define	FS_MOUNT_SNAPSHOT 2
-#define MAX_SNAPSHOT_NAMELEN	256
-
-struct fs_mount_options {
-	uint32_t fs_flags;
-	uint8_t	_padding_[2];
-};
-
-struct fs_mount_args {
-	char *specdev;
-	struct fs_mount_options options;
-	uint16_t mode;
-	uint16_t _padding_[3];
-	union {
-		struct {			// FS_MOUNT_SNAPSHOT
-			dev_t snap_fsys;
-			char snap_name[MAX_SNAPSHOT_NAMELEN];
-		};
-		struct {			// APFS_MOUNT_FOR_CONVERSION
-		};
-	};
-};
+int
+fs_snapshot_root(int dirfd, const char *name, uint32_t flags)
+{
+    return __fs_snapshot(SNAPSHOT_OP_ROOT, dirfd, name, NULL, NULL, flags);
+}
 
 int
 fs_snapshot_mount(int dirfd, const char *dir, const char *snapshot,
     uint32_t flags)
 {
-	struct stat st;
-	struct fs_mount_args mnt_args;
-
-	mnt_args.specdev = NULL;
-	mnt_args.mode = FS_MOUNT_SNAPSHOT;
-	if (fstat(dirfd, &st) == -1)
-		return (-1);
-
-	mnt_args.snap_fsys = st.st_dev;
-	strlcpy(mnt_args.snap_name, snapshot, sizeof(mnt_args.snap_name));
 	return (__fs_snapshot(SNAPSHOT_OP_MOUNT, dirfd, snapshot, dir,
-	    (void *)&mnt_args, flags));
+	    NULL, flags));
 }

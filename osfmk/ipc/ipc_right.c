@@ -1310,6 +1310,7 @@ ipc_right_delta(
 		mach_port_urefs_t urefs;
 		ipc_port_t request = IP_NULL;
 		ipc_port_t nsrequest = IP_NULL;
+		ipc_port_t port_to_release = IP_NULL;
 		mach_port_mscount_t mscount = 0;
 
 		if ((bits & MACH_PORT_TYPE_SEND) == 0)
@@ -1384,7 +1385,7 @@ ipc_right_delta(
 						name, entry);
 
 				ip_unlock(port);
-				ip_release(port);
+				port_to_release = port;
 
 				entry->ie_object = IO_NULL;
 				ipc_entry_dealloc(space, name, entry);
@@ -1398,6 +1399,9 @@ ipc_right_delta(
 		}
 
 		is_write_unlock(space);
+
+		if (port_to_release != IP_NULL)
+			ip_release(port_to_release);
 
 		if (nsrequest != IP_NULL)
 			ipc_notify_no_senders(nsrequest, mscount);

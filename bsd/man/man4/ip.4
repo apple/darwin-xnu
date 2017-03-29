@@ -129,9 +129,28 @@ that contains a cmsghdr structure followed by the
 address. 
 The cmsghdr fields have the following values:
 .Bd -literal
-cmsg_len = sizeof(struct in_addr)
+cmsg_len = CMSG_LEN(sizeof(struct in_addr))
 cmsg_level = IPPROTO_IP
 cmsg_type = IP_RECVDSTADDR
+.Ed
+.Pp
+If the 
+.Dv IP_RECVTOS 
+option is enabled on a 
+.Dv SOCK_DGRAM 
+or 
+.Dv SOCK_RAW 
+socket,
+the
+.Xr recvmsg
+call will return the TOS (type of service) field of the IP header.
+The msg_control field in the msghdr structure points to a buffer 
+that contains a cmsghdr structure followed by the TOS.
+The cmsghdr fields have the following values:
+.Bd -literal
+cmsg_len = CMSG_LEN(sizeof(u_char))
+cmsg_level = IPPROTO_IP
+cmsg_type = IP_RECVTOS
 .Ed
 .Ss "Multicast Options"
 .Pp

@@ -309,6 +309,7 @@ IOReturn IOHibernateIOKitSleep(void);
 IOReturn IOHibernateSystemHasSlept(void);
 IOReturn IOHibernateSystemWake(void);
 IOReturn IOHibernateSystemPostWake(void);
+void     IOHibernateSystemPostWakeTrim(void * p1, void * p2);
 uint32_t IOHibernateWasScreenLocked(void);
 void     IOHibernateSetScreenLocked(uint32_t lockState);
 void     IOHibernateSetWakeCapabilities(uint32_t capability);

@@ -52,6 +52,8 @@ int fs_snapshot_mount(int, const char *, const char *, uint32_t) __OSX_AVAILABLE
 
 int fs_snapshot_revert(int, const char *, uint32_t) __OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __TVOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0);
 
+int fs_snapshot_root(int, const char *, uint32_t) __OSX_AVAILABLE(10.12.4) __IOS_AVAILABLE(10.3) __TVOS_AVAILABLE(10.3) __WATCHOS_AVAILABLE(3.3);
+
 __END_DECLS
 
 #endif /* !KERNEL */
@@ -63,6 +65,7 @@ __END_DECLS
 #define SNAPSHOT_OP_RENAME 0x03
 #define SNAPSHOT_OP_MOUNT  0x04
 #define SNAPSHOT_OP_REVERT 0x05
+#define SNAPSHOT_OP_ROOT   0x06
 
 #endif
 

@@ -25,6 +25,7 @@
 #include <kern/assert.h>
 
 #include <firehose/tracepoint_private.h>
+#include <firehose/chunk_private.h>
 #include <os/firehose_buffer_private.h>
 #include <os/firehose.h>
 
@@ -40,7 +41,7 @@ struct os_log_s {
 struct os_log_s _os_log_default;
 struct os_log_s _os_log_replay;
 extern vm_offset_t kernel_firehose_addr;
-extern firehose_buffer_chunk_t firehose_boot_chunk;
+extern firehose_chunk_t firehose_boot_chunk;
 
 extern void bsd_log_lock(void);
 extern void bsd_log_unlock(void);
@@ -298,49 +299,45 @@ _os_log_to_log_internal(os_log_t oslog, os_log_type_t type,
     va_end(args_copy);
 }
 
-size_t
-_os_trace_location_for_address(void *dso, const void *address,
-		os_trace_location_t location, firehose_tracepoint_flags_t *flags);
-
-size_t
-_os_trace_location_for_address(void *dso, const void *address,
-		os_trace_location_t location, firehose_tracepoint_flags_t *flags)
+static inline size_t
+_os_trace_write_location_for_address(uint8_t buf[static sizeof(uint64_t)],
+		void *dso, const void *address, firehose_tracepoint_flags_t *flags)
 {
 	kernel_mach_header_t *mh = dso;
 
 	if (mh->filetype == MH_EXECUTE) {
-		location->flags = _firehose_tracepoint_flags_base_main_executable;
-		location->offset = (uint32_t) ((uintptr_t)address - (uintptr_t)dso);
-		(*flags) |= location->flags;
-		return sizeof(location->offset); // offset based
+		*flags = _firehose_tracepoint_flags_pc_style_main_exe;
+		memcpy(buf, (uint32_t[]){ (uintptr_t)address - (uintptr_t)dso },
+				sizeof(uint32_t));
+		return sizeof(uint32_t);
 	} else {
-		location->flags = _firehose_tracepoint_flags_base_caller_pc;
-		(*flags) |= location->flags;
-		location->pc = (uintptr_t)VM_KERNEL_UNSLIDE(address);
-		return sizeof(location->encode_value);
+		*flags = _firehose_tracepoint_flags_pc_style_absolute;
+		memcpy(buf, (uintptr_t[]){ VM_KERNEL_UNSLIDE(address) }, sizeof(uintptr_t));
+#if __LP64__
+		return 6; // 48 bits are enough
+#else
+		return sizeof(uintptr_t);
+#endif
 	}
 }
 
 
 OS_ALWAYS_INLINE
-inline bool
-_os_log_buffer_pack(uint8_t *buffdata, unsigned int *buffdata_sz, os_log_buffer_context_t ctx)
+static inline size_t
+_os_log_buffer_pack(uint8_t *buffdata, size_t buffdata_sz,
+		os_log_buffer_context_t ctx)
 {
-    os_log_buffer_t buffer = ctx->buffer;
-    uint16_t buffer_sz = (uint16_t) (sizeof(*ctx->buffer) + ctx->content_sz);
-    uint16_t total_sz = buffer_sz + ctx->pubdata_sz;
+	os_log_buffer_t buffer = ctx->buffer;
+	size_t buffer_sz = sizeof(*ctx->buffer) + ctx->content_sz;
+	size_t total_sz  = buffer_sz + ctx->pubdata_sz;
 
-    // [buffer] [pubdata]
-    if (total_sz >= (*buffdata_sz)) {
-        return false;
-    }
+	if (total_sz > buffdata_sz) {
+		return 0;
+	}
 
-    memcpy(buffdata, buffer, buffer_sz);
-    memcpy(&buffdata[buffer_sz], ctx->pubdata, ctx->pubdata_sz);
-
-    (*buffdata_sz) = total_sz;
-
-    return true;
+	memcpy(buffdata, buffer, buffer_sz);
+	memcpy(&buffdata[buffer_sz], ctx->pubdata, ctx->pubdata_sz);
+	return total_sz;
 }
 
 static void
@@ -350,48 +347,37 @@ _os_log_actual(os_log_t oslog __unused, os_log_type_t type, const char *format,
 	firehose_stream_t stream;
 	firehose_tracepoint_flags_t flags = 0;
 	firehose_tracepoint_id_u trace_id;
-	os_trace_location_u addr_loc;
 	uint8_t buffdata[OS_LOG_BUFFER_MAX_SIZE];
-	unsigned int buffdata_sz = (unsigned int) sizeof(buffdata);
-	size_t buffdata_idx = 0;
-	size_t addr_loc_sz;
+	size_t addr_len = 0, buffdata_sz;
 	uint64_t timestamp;
 	uint64_t thread_id;
 
-	memset(&addr_loc, 0, sizeof(addr_loc));
-
 	// dso == the start of the binary that was loaded
-	// codes are the offset into the binary from start
-	addr_loc_sz = _os_trace_location_for_address(dso, addr, &addr_loc, &flags);
+	addr_len = _os_trace_write_location_for_address(buffdata, dso, addr, &flags);
+	buffdata_sz = _os_log_buffer_pack(buffdata + addr_len,
+			sizeof(buffdata) - addr_len, context);
+	if (buffdata_sz == 0) {
+		return;
+	}
+	buffdata_sz += addr_len;
 
 	timestamp = firehose_tracepoint_time(firehose_activity_flags_default);
 	thread_id = thread_tid(current_thread());
-
-	// insert the location
-	memcpy(&buffdata[buffdata_idx], &addr_loc, addr_loc_sz);
-	buffdata_idx += addr_loc_sz;
 
 	// create trace_id after we've set additional flags
 	trace_id.ftid_value = FIREHOSE_TRACE_ID_MAKE(firehose_tracepoint_namespace_log,
 			type, flags, _os_trace_offset(dso, format, flags));
 
-	// pack the buffer data after the header data
-	buffdata_sz -= buffdata_idx; // subtract the existing content from the size
-	_os_log_buffer_pack(&buffdata[buffdata_idx], &buffdata_sz, context);
-	buffdata_sz += buffdata_idx; // add the header amount too
-
 	if (FALSE) {
 		firehose_debug_trace(stream, trace_id.ftid_value, timestamp,
 					format, buffdata, buffdata_sz);
 	}
-
 	if (type == OS_LOG_TYPE_INFO || type == OS_LOG_TYPE_DEBUG) {
 		stream = firehose_stream_memory;
 	}
 	else {
 		stream = firehose_stream_persist;
 	}
-
 	_firehose_trace(stream, trace_id, timestamp, buffdata, buffdata_sz);
 }
 
@@ -401,7 +387,7 @@ _firehose_trace(firehose_stream_t stream, firehose_tracepoint_id_u ftid,
 {
 	const uint16_t ft_size = offsetof(struct firehose_tracepoint_s, ft_data);
 	const size_t _firehose_chunk_payload_size =
-			sizeof(((struct firehose_buffer_chunk_s *)0)->fbc_data);
+			sizeof(((struct firehose_chunk_s *)0)->fc_data);
 
 	firehose_tracepoint_t ft;
 
@@ -439,20 +425,23 @@ out:
 			}
 			return 0;
 		}
-		firehose_buffer_chunk_t fbc = firehose_boot_chunk;
+		firehose_chunk_t fbc = firehose_boot_chunk;
+		long offset;
 
 		//only stream available during boot is persist
-		ft = __firehose_buffer_tracepoint_reserve_with_chunk(fbc, stamp, firehose_stream_persist, publen, 0, NULL);
-		if (!fastpath(ft)) {
+		offset = firehose_chunk_tracepoint_try_reserve(fbc, stamp,
+				firehose_stream_persist, 0, publen, 0, NULL);
+		if (offset <= 0) {
 			(void)hw_atomic_add(&oslog_p_boot_dropped_msgcount, 1);
 			return 0;
 		}
-		else {
-			memcpy(ft->ft_data, pubdata, publen);
-			__firehose_buffer_tracepoint_flush_chunk(fbc, ft, ftid);
-			(void)hw_atomic_add(&oslog_p_saved_msgcount, 1);
-			return ftid.ftid_value;
-		}
+
+		ft = firehose_chunk_tracepoint_begin(fbc, stamp, publen,
+				thread_tid(current_thread()), offset);
+		memcpy(ft->ft_data, pubdata, publen);
+		firehose_chunk_tracepoint_end(fbc, ft, ftid);
+		(void)hw_atomic_add(&oslog_p_saved_msgcount, 1);
+		return ftid.ftid_value;
 	}
 	if (!oslog_boot_done) {
 		oslog_boot_done = true;
@@ -574,8 +563,9 @@ __firehose_buffer_push_to_logd(firehose_buffer_t fb __unused, bool for_io __unus
 }
 
 void
-__firehose_allocate(vm_offset_t *addr, vm_size_t size __unused) {
-        firehose_buffer_chunk_t kernel_buffer = (firehose_buffer_chunk_t)kernel_firehose_addr;
+__firehose_allocate(vm_offset_t *addr, vm_size_t size __unused)
+{
+        firehose_chunk_t kernel_buffer = (firehose_chunk_t)kernel_firehose_addr;
 
         if (kernel_firehose_addr) {
                 *addr = kernel_firehose_addr;
@@ -586,8 +576,8 @@ __firehose_allocate(vm_offset_t *addr, vm_size_t size __unused) {
         }
         // Now that we are done adding logs to this chunk, set the number of writers to 0
         // Without this, logd won't flush when the page is full
-        firehose_boot_chunk->fbc_pos.fbc_refcnt = 0;
-        memcpy(&kernel_buffer[FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT - 1], (const void *)firehose_boot_chunk, FIREHOSE_BUFFER_CHUNK_SIZE);
+        firehose_boot_chunk->fc_pos.fcp_refcnt = 0;
+        memcpy(&kernel_buffer[FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT - 1], (const void *)firehose_boot_chunk, FIREHOSE_CHUNK_SIZE);
         return;
 }
 // There isnt a lock held in this case.

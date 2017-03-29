@@ -278,8 +278,8 @@ extern uint64_t get_dispatchqueue_offset_from_proc(void *);
 
 #if CONFIG_MEMORYSTATUS
 extern void	proc_memstat_terminated(struct proc* p, boolean_t set);
-extern boolean_t memorystatus_turnoff_exception_and_get_fatalness(boolean_t warning, const int max_footprint_mb);
-extern void	memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t is_fatal);
+extern void	memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
+extern void	memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
 #endif /* CONFIG_MEMORYSTATUS */
 
 #endif /* MACH_BSD */
@@ -895,6 +895,7 @@ init_task_ledgers(void)
 	}
 
 	ledger_track_credit_only(t, task_ledgers.phys_footprint);
+	ledger_track_credit_only(t, task_ledgers.page_table);
 	ledger_track_credit_only(t, task_ledgers.internal);
 	ledger_track_credit_only(t, task_ledgers.internal_compressed);
 	ledger_track_credit_only(t, task_ledgers.iokit_mapped);
@@ -938,7 +939,7 @@ task_create_internal(
 	task_t		parent_task,
 	coalition_t	*parent_coalitions __unused,
 	boolean_t	inherit_memory,
-	boolean_t	is_64bit,
+	__unused boolean_t	is_64bit,
 	uint32_t	t_flags,
 	uint32_t	t_procflags,
 	task_t		*child_task)		/* OUT */
@@ -1051,6 +1052,8 @@ task_create_internal(
 	new_task->shared_region = NULL;
 
 	new_task->affinity_space = NULL;
+
+	new_task->t_chud = 0;
 
 	new_task->pidsuspended = FALSE;
 	new_task->frozen = FALSE;
@@ -1194,6 +1197,10 @@ task_create_internal(
 		new_task->purged_memory_warn = 0;
 		new_task->purged_memory_critical = 0;
 		new_task->low_mem_privileged_listener = 0;
+		new_task->memlimit_is_active = 0;
+		new_task->memlimit_is_fatal = 0;
+		new_task->memlimit_active_exc_resource = 0;
+		new_task->memlimit_inactive_exc_resource = 0;
 		new_task->task_timer_wakeups_bin_1 = 0;
 		new_task->task_timer_wakeups_bin_2 = 0;
 		new_task->task_gpu_ns = 0;
@@ -1493,6 +1500,18 @@ task_name_deallocate(
 	task_name_t		task_name)
 {
 	return(task_deallocate((task_t)task_name));
+}
+
+/*
+ *	task_inspect_deallocate:
+ *
+ *	Drop a task inspection reference.
+ */
+void
+task_inspect_deallocate(
+	task_inspect_t		task_inspect)
+{
+	return(task_deallocate((task_t)task_inspect));
 }
 
 /*
@@ -1836,7 +1855,6 @@ task_duplicate_map_and_threads(
 		void *p,
 		task_t new_task,
 		thread_t *thread_ret,
-		int is64bit,
 		uint64_t **udata_buffer,
 		int *size,
 		int *num_udata)
@@ -1884,12 +1902,6 @@ task_duplicate_map_and_threads(
 				    (VM_MAP_FORK_SHARE_IF_INHERIT_NONE |
 				     VM_MAP_FORK_PRESERVE_PURGEABLE));
 	vm_map_deallocate(oldmap);
-
-	if (is64bit) {
-		vm_map_set_64bit(get_task_map(new_task));
-	} else {
-		vm_map_set_32bit(get_task_map(new_task));
-	}
 
 	/* Get all the udata pointers from kqueue */
 	est_knotes = proc_list_uptrs(p, NULL, 0);
@@ -4625,6 +4637,76 @@ task_get_state(
 }
 
 #if CONFIG_MEMORYSTATUS
+
+boolean_t
+task_get_memlimit_is_active(task_t task)
+{
+	assert (task != NULL);
+
+	return (task->memlimit_is_active ? TRUE : FALSE);
+}
+
+void
+task_set_memlimit_is_active(task_t task, boolean_t memlimit_is_active)
+{
+	assert (task != NULL);
+
+	memlimit_is_active ? (task->memlimit_is_active = 1) : (task->memlimit_is_active = 0);
+}
+
+boolean_t
+task_get_memlimit_is_fatal(task_t task)
+{	
+	assert(task != NULL);
+
+	return (task->memlimit_is_fatal ? TRUE : FALSE);
+}
+
+void
+task_set_memlimit_is_fatal(task_t task, boolean_t memlimit_is_fatal)
+{
+	assert (task != NULL);
+
+	memlimit_is_fatal ? (task->memlimit_is_fatal = 1) : (task->memlimit_is_fatal = 0);
+}
+
+boolean_t
+task_has_triggered_exc_resource(task_t task, boolean_t memlimit_is_active)
+{
+	boolean_t triggered = FALSE;
+
+	assert(task == current_task());
+
+	/* 
+	 * Returns true, if task has already triggered an exc_resource exception.
+	 */
+
+	if (memlimit_is_active) {
+		triggered = (task->memlimit_active_exc_resource ? TRUE : FALSE);
+	} else {
+		triggered = (task->memlimit_inactive_exc_resource ? TRUE : FALSE);
+	}
+
+	return(triggered);
+}
+
+void
+task_mark_has_triggered_exc_resource(task_t task, boolean_t memlimit_is_active)
+{
+	assert(task == current_task());
+
+	/*
+	 * We allow one exc_resource per process per active/inactive limit.
+	 * The limit's fatal attribute does not come into play.
+	 */
+
+	if (memlimit_is_active) {
+		task->memlimit_active_exc_resource = 1;
+	} else {
+		task->memlimit_inactive_exc_resource = 1;
+	}
+}
+
 #define HWM_USERCORE_MINSPACE 250 // free space (in MB) required *after* core file creation
 
 void __attribute__((noinline))
@@ -4731,38 +4813,50 @@ task_footprint_exceeded(int warning, __unused const void *param0, __unused const
 {
 	ledger_amount_t max_footprint, max_footprint_mb;
 	task_t task;
-	boolean_t is_fatal;
-	boolean_t trigger_exception;
+        boolean_t is_warning;
+	boolean_t memlimit_is_active;
+	boolean_t memlimit_is_fatal;
 
 	if (warning == LEDGER_WARNING_DIPPED_BELOW) {
 		/*
 		 * Task memory limits only provide a warning on the way up.
 		 */
 		return;
-	}
+        } else if (warning == LEDGER_WARNING_ROSE_ABOVE) {
+                /*
+                 * This task is in danger of violating a memory limit,
+                 * It has exceeded a percentage level of the limit.
+                 */
+                is_warning = TRUE;
+        } else {
+                /*
+                 * The task has exceeded the physical footprint limit.
+                 * This is not a warning but a true limit violation.
+                 */
+                is_warning = FALSE;
+        }
 
 	task = current_task();
 
 	ledger_get_limit(task->ledger, task_ledgers.phys_footprint, &max_footprint);
 	max_footprint_mb = max_footprint >> 20;
 
-	/*
-	 * Capture the trigger exception flag before turning off the exception.
-	 */
-	trigger_exception = task->rusage_cpu_flags & TASK_RUSECPU_FLAGS_PHYS_FOOTPRINT_EXCEPTION ? TRUE : FALSE;
-
-	is_fatal = memorystatus_turnoff_exception_and_get_fatalness((warning == LEDGER_WARNING_ROSE_ABOVE) ? TRUE : FALSE, (int)max_footprint_mb);
+	memlimit_is_active = task_get_memlimit_is_active(task);
+	memlimit_is_fatal = task_get_memlimit_is_fatal(task);
 
 	/*
-	 * If this an actual violation (not a warning),
-	 * generate a non-fatal high watermark EXC_RESOURCE.
+	 * If this is an actual violation (not a warning), then generate EXC_RESOURCE exception.
+	 * We only generate the exception once per process per memlimit (active/inactive limit).
+	 * To enforce this, we monitor state based on the  memlimit's active/inactive attribute
+	 * and we disable it by marking that memlimit as exception triggered.
 	 */
-	if ((warning == 0) && trigger_exception) {
-		PROC_CROSSED_HIGH_WATERMARK__SEND_EXC_RESOURCE_AND_SUSPEND((int)max_footprint_mb, is_fatal);
+	if ((is_warning == FALSE) && (!task_has_triggered_exc_resource(task, memlimit_is_active))) {
+		PROC_CROSSED_HIGH_WATERMARK__SEND_EXC_RESOURCE_AND_SUSPEND((int)max_footprint_mb, memlimit_is_fatal);
+		memorystatus_log_exception((int)max_footprint_mb, memlimit_is_active, memlimit_is_fatal);
+		task_mark_has_triggered_exc_resource(task, memlimit_is_active);
 	}
 
-	memorystatus_on_ledger_footprint_exceeded((warning == LEDGER_WARNING_ROSE_ABOVE) ? TRUE : FALSE,
-		is_fatal);
+	memorystatus_on_ledger_footprint_exceeded(is_warning, memlimit_is_active, memlimit_is_fatal);
 }
 
 extern int proc_check_footprint_priv(void);
@@ -4775,11 +4869,21 @@ task_set_phys_footprint_limit(
 {
 	kern_return_t error;
 
+	boolean_t memlimit_is_active;
+	boolean_t memlimit_is_fatal;
+
 	if ((error = proc_check_footprint_priv())) {
 		return (KERN_NO_ACCESS);
 	}
 
-	return task_set_phys_footprint_limit_internal(task, new_limit_mb, old_limit_mb, FALSE);
+	/*
+	 * This call should probably be obsoleted.
+	 * But for now, we default to current state.
+	 */
+	memlimit_is_active = task_get_memlimit_is_active(task);
+	memlimit_is_fatal = task_get_memlimit_is_fatal(task);
+
+	return task_set_phys_footprint_limit_internal(task, new_limit_mb, old_limit_mb, memlimit_is_active, memlimit_is_fatal);
 }
 
 kern_return_t
@@ -4809,7 +4913,8 @@ task_set_phys_footprint_limit_internal(
 	task_t task,
 	int new_limit_mb,
 	int *old_limit_mb,
-	boolean_t trigger_exception)
+	boolean_t memlimit_is_active,
+	boolean_t memlimit_is_fatal)
 {
 	ledger_amount_t	old;
 
@@ -4832,6 +4937,10 @@ task_set_phys_footprint_limit_internal(
 		ledger_set_limit(task->ledger, task_ledgers.phys_footprint,
 		                 max_task_footprint ? max_task_footprint : LEDGER_LIMIT_INFINITY,
 		                 max_task_footprint ? max_task_footprint_warning_level : 0);
+
+		task_set_memlimit_is_active(task, memlimit_is_active);
+		task_set_memlimit_is_fatal(task, memlimit_is_fatal);
+
 		return (KERN_SUCCESS);
 	}
 
@@ -4841,11 +4950,8 @@ task_set_phys_footprint_limit_internal(
 
 	task_lock(task);
 
-	if (trigger_exception) {
-		task->rusage_cpu_flags |= TASK_RUSECPU_FLAGS_PHYS_FOOTPRINT_EXCEPTION;
-	} else {
-		task->rusage_cpu_flags &= ~TASK_RUSECPU_FLAGS_PHYS_FOOTPRINT_EXCEPTION;
-	}
+	task_set_memlimit_is_active(task, memlimit_is_active);
+	task_set_memlimit_is_fatal(task, memlimit_is_fatal);
 
 	ledger_set_limit(task->ledger, task_ledgers.phys_footprint,
 		(ledger_amount_t)new_limit_mb << 20, PHYS_FOOTPRINT_WARNING_LEVEL);
@@ -4982,6 +5088,18 @@ task_findtid(task_t task, uint64_t tid)
 	return (found_thread);
 }
 
+int pid_from_task(task_t task)
+{
+	int pid = -1;
+
+	if (task->bsd_info) {
+		pid = proc_pid(task->bsd_info);
+	} else {
+		pid = task_pid(task);
+	}
+
+	return pid;
+}
 
 /*
  * Control the CPU usage monitor for a task.

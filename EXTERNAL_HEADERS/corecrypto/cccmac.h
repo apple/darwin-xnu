@@ -175,9 +175,15 @@ int cccmac_one_shot_verify(const struct ccmode_cbc *cbc,
 int cccmac_init(const struct ccmode_cbc *cbc,
                   cccmac_ctx_t ctx,
                   size_t key_nbytes, const void *key)
-// This is the good prototype! The deprecate warning is only for clients using the old function (now defined as macro)
 __attribute__((deprecated("see guidelines in corecrypto/cccmac.h for migration", "define 'CC_CHANGEFUNCTION_28544056_cccmac_init' and use new cccmac_init with parameter key_nbytes")));
+// If you see this deprecate warning
+// Define CC_CHANGEFUNCTION_28544056_cccmac_init and use "cccmac_init(...,...,16,...)"
+// This will be removed with 28544056
+#define cccmac_init(cbc,ctx,key) cccmac_init(cbc,ctx,16,key)
+
 #else
+
+// This is the authoritative prototype, which will be left after 28544056
 int cccmac_init(const struct ccmode_cbc *cbc,
                 cccmac_ctx_t ctx,
                 size_t key_nbytes, const void *key);
@@ -236,8 +242,6 @@ int cccmac_final_verify(cccmac_ctx_t ctx,
 
  ==============================================================================*/
 
-#ifndef CC_CHANGEFUNCTION_28544056_cccmac_init
-
 /*
  Guidelines for switching to new CMAC functions
 
@@ -251,17 +255,6 @@ int cccmac_final_verify(cccmac_ctx_t ctx,
  depending the use case
 
  */
-
-/*!
- @function   cccmac_init
- @abstract   Initialize CMAC context with 128bit key
- 
- Define CC_CHANGEFUNCTION_28544056_cccmac_init and use "cccmac_init(...,...,16,...)"
-
- */
-#define cccmac_init(cbc,ctx,key) cccmac_init(cbc,ctx,16,key)
-
-#endif /* CC_CHANGEFUNCTION_28544056_cccmac_init - TO BE REMOVED WITH 28544056 */
 
 /*!
  @function   cccmac_block_update

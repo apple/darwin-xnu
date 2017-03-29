@@ -49,7 +49,6 @@
 
 /* BSD KERN COMPONENT INTERFACE */
 
-task_t	bsd_init_task = TASK_NULL;
 extern unsigned int not_in_kdp; /* Skip acquiring locks if we're in kdp */
  
 thread_t get_firstthread(task_t);

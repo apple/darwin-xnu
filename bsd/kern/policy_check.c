@@ -118,7 +118,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 46)
+#if (MAC_POLICY_OPS_VERSION != 47)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -397,7 +397,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(sysvshm_label_recycle)
 
 	.mpo_reserved8 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved9 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(mount_check_snapshot_revert)
 	CHECK_SET_HOOK(vnode_check_getattr)
 	CHECK_SET_HOOK(mount_check_snapshot_create)
 	CHECK_SET_HOOK(mount_check_snapshot_delete)

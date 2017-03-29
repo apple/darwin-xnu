@@ -206,27 +206,24 @@ extern struct zone             zone_array[];
 
 __BEGIN_DECLS
 
+
+/* Item definitions for zalloc/zinit/zone_change */
+#define Z_EXHAUST	1	/* Make zone exhaustible	*/
+#define Z_COLLECT	2	/* Make zone collectable	*/
+#define Z_EXPAND	3	/* Make zone expandable		*/
+#define	Z_FOREIGN	4	/* Allow collectable zone to contain foreign elements */
+#define Z_CALLERACCT	5	/* Account alloc/free against the caller */
+#define Z_NOENCRYPT	6	/* Don't encrypt zone during hibernation */
+#define Z_NOCALLOUT 	7	/* Don't asynchronously replenish the zone via callouts */
+#define Z_ALIGNMENT_REQUIRED 8
+#define Z_GZALLOC_EXEMPT 9	/* Not tracked in guard allocation mode */
+
+
+
 #ifdef	XNU_KERNEL_PRIVATE
 
 extern vm_offset_t     zone_map_min_address;
 extern vm_offset_t     zone_map_max_address;
-
-
-/* Allocate from zone */
-extern void *	zalloc(
-					zone_t		zone);
-
-/* Free zone element */
-extern void		zfree(
-					zone_t		zone,
-					void 		*elem);
-
-/* Create zone */
-extern zone_t	zinit(
-					vm_size_t	size,		/* the size of an element */
-					vm_size_t	maxmem,		/* maximum memory to use */
-					vm_size_t	alloc,		/* allocation size */
-					const char	*name);		/* a name for the zone */
 
 
 /* Non-waiting for memory version of zalloc */
@@ -257,24 +254,9 @@ extern int		zfill(
 					zone_t		zone,
 					int			nelem);
 
-/* Change zone parameters */
-extern void		zone_change(
-					zone_t			zone,
-					unsigned int	item,
-					boolean_t		value);
 extern void		zone_prio_refill_configure(zone_t, vm_size_t);
-/* Item definitions */
-#define Z_EXHAUST	1	/* Make zone exhaustible	*/
-#define Z_COLLECT	2	/* Make zone collectable	*/
-#define Z_EXPAND	3	/* Make zone expandable		*/
-#define	Z_FOREIGN	4	/* Allow collectable zone to contain foreign elements */
-#define Z_CALLERACCT	5	/* Account alloc/free against the caller */
-#define Z_NOENCRYPT	6	/* Don't encrypt zone during hibernation */
-#define Z_NOCALLOUT 	7	/* Don't asynchronously replenish the zone via
-				 * callouts
-				 */
-#define Z_ALIGNMENT_REQUIRED 8
-#define Z_GZALLOC_EXEMPT 9	/* Not tracked in guard allocation mode */
+
+/* See above/top of file. Z_* definitions moved so they would be usable by kexts */
 
 /* Preallocate space for zone from zone map */
 extern void		zprealloc(
@@ -356,6 +338,29 @@ void zlog_btlog_lock(__unused void *);
 void zlog_btlog_unlock(__unused void *);
 
 #endif	/* XNU_KERNEL_PRIVATE */
+
+/* Allocate from zone */
+extern void *	zalloc(
+					zone_t		zone);
+
+/* Free zone element */
+extern void		zfree(
+					zone_t		zone,
+					void 		*elem);
+
+/* Create zone */
+extern zone_t	zinit(
+					vm_size_t	size,		/* the size of an element */
+					vm_size_t	maxmem,		/* maximum memory to use */
+					vm_size_t	alloc,		/* allocation size */
+					const char	*name);		/* a name for the zone */
+
+/* Change zone parameters */
+extern void		zone_change(
+					zone_t			zone,
+					unsigned int	item,
+					boolean_t		value);
+
 
 __END_DECLS
 

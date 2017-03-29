@@ -3236,3 +3236,18 @@ void pmap_advise_pagezero_range(pmap_t lpmap, uint64_t low_bound) {
 		mp_enable_preemption();
 	}
 }
+
+void pmap_verify_noncacheable(uintptr_t vaddr) {
+	pt_entry_t *ptep = NULL;
+	ptep = pmap_pte(kernel_pmap, vaddr);
+	if (ptep == NULL) {
+		panic("pmap_verify_noncacheable: no translation for 0x%lx", vaddr);
+	}
+	/* Non-cacheable OK */
+	if (*ptep & (INTEL_PTE_NCACHE))
+		return;
+	/* Write-combined OK */
+	if (*ptep & (INTEL_PTE_PTA))
+		return;
+	panic("pmap_verify_noncacheable: IO read from a cacheable address? address: 0x%lx, PTE: %p, *PTE: 0x%llx", vaddr, ptep, *ptep);
+}

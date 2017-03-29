@@ -1679,8 +1679,7 @@ static void
 mp_kdp_wait(boolean_t flush, boolean_t isNMI)
 {
 	DBG("mp_kdp_wait()\n");
-	/* If an I/O port has been specified as a debugging aid, issue a read */
-	panic_io_port_read();
+
 	current_cpu_datap()->debugger_ipi_time = mach_absolute_time();
 #if CONFIG_MCA
 	/* If we've trapped due to a machine-check, save MCA registers */

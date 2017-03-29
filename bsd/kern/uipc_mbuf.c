@@ -668,6 +668,9 @@ static char *mbuf_dump_buf;
 static unsigned int mb_watchdog = 0;
 static unsigned int mb_drain_maxint = 0;
 
+uintptr_t mb_obscure_extfree __attribute__((visibility("hidden")));
+uintptr_t mb_obscure_extref __attribute__((visibility("hidden")));
+
 /* Red zone */
 static u_int32_t mb_redzone_cookie;
 static void m_redzone_init(struct mbuf *);
@@ -785,13 +788,13 @@ static boolean_t mbuf_report_usage(mbuf_class_t);
 #define	EXTF_MASK	\
 	(EXTF_COMPOSITE | EXTF_READONLY | EXTF_PAIRED)
 
-#define	MEXT_RFA(m)		((m)->m_ext.ext_refflags)
-#define	MEXT_MINREF(m)		(MEXT_RFA(m)->minref)
-#define	MEXT_REF(m)		(MEXT_RFA(m)->refcnt)
-#define	MEXT_PREF(m)		(MEXT_RFA(m)->prefcnt)
-#define	MEXT_FLAGS(m)		(MEXT_RFA(m)->flags)
-#define	MEXT_PRIV(m)		(MEXT_RFA(m)->priv)
-#define	MEXT_PMBUF(m)		(MEXT_RFA(m)->paired)
+#define	MEXT_MINREF(m)		((m_get_rfa(m))->minref)
+#define	MEXT_REF(m)		((m_get_rfa(m))->refcnt)
+#define	MEXT_PREF(m)		((m_get_rfa(m))->prefcnt)
+#define	MEXT_FLAGS(m)		((m_get_rfa(m))->flags)
+#define	MEXT_PRIV(m)		((m_get_rfa(m))->priv)
+#define	MEXT_PMBUF(m)		((m_get_rfa(m))->paired)
+#define	MEXT_TOKEN(m)		((m_get_rfa(m))->ext_token)
 #define	MBUF_IS_COMPOSITE(m)						\
 	(MEXT_REF(m) == MEXT_MINREF(m) &&				\
 	(MEXT_FLAGS(m) & EXTF_MASK) == EXTF_COMPOSITE)
@@ -892,10 +895,8 @@ static boolean_t mbuf_report_usage(mbuf_class_t);
     priv, pm) {								\
 	(m)->m_data = (m)->m_ext.ext_buf = (buf);			\
 	(m)->m_flags |= M_EXT;						\
+	m_set_ext((m), (rfa), (free), (arg));				\
 	(m)->m_ext.ext_size = (size);					\
-	(m)->m_ext.ext_free = (free);					\
-	(m)->m_ext.ext_arg = (arg);					\
-	MEXT_RFA(m) = (rfa);						\
 	MEXT_MINREF(m) = (min);						\
 	MEXT_REF(m) = (ref);						\
 	MEXT_PREF(m) = (pref);						\
@@ -1492,6 +1493,10 @@ mbinit(void)
 	_CASSERT(sizeof (mb_redzone_cookie) ==
 	    sizeof (((struct pkthdr *)0)->redzone));
 	read_random(&mb_redzone_cookie, sizeof (mb_redzone_cookie));
+	read_random(&mb_obscure_extref, sizeof (mb_obscure_extref));
+	read_random(&mb_obscure_extfree, sizeof (mb_obscure_extfree));
+	mb_obscure_extref |= 0x3;
+	mb_obscure_extfree |= 0x3;
 
 	/* Make sure we don't save more than we should */
 	_CASSERT(MCA_SAVED_MBUF_SIZE <= sizeof (struct mbuf));
@@ -2286,7 +2291,7 @@ cslab_alloc(mbuf_class_t class, mcache_obj_t ***plist, unsigned int num)
 		cl = m->m_ext.ext_buf;
 		clsp = slab_get(cl);
 		VERIFY(m->m_flags == M_EXT && cl != NULL);
-		VERIFY(MEXT_RFA(m) != NULL && MBUF_IS_COMPOSITE(m));
+		VERIFY(m_get_rfa(m) != NULL && MBUF_IS_COMPOSITE(m));
 
 		if (class == MC_MBUF_CL) {
 			VERIFY(clsp->sl_refcnt >= 1 &&
@@ -2375,7 +2380,7 @@ cslab_free(mbuf_class_t class, mcache_obj_t *list, int purged)
 		}
 		VERIFY(ms->m_type == MT_FREE);
 		VERIFY(ms->m_flags == M_EXT);
-		VERIFY(MEXT_RFA(ms) != NULL && MBUF_IS_COMPOSITE(ms));
+		VERIFY(m_get_rfa(ms) != NULL && MBUF_IS_COMPOSITE(ms));
 		if (cl_class == MC_CL) {
 			VERIFY(clsp->sl_refcnt >= 1 &&
 			    clsp->sl_refcnt <= NCLPG);
@@ -2410,11 +2415,12 @@ cslab_free(mbuf_class_t class, mcache_obj_t *list, int purged)
 			MEXT_FLAGS(m) = 0;
 			MEXT_PRIV(m) = 0;
 			MEXT_PMBUF(m) = NULL;
+			MEXT_TOKEN(m) = 0;
 
-			rfa = (mcache_obj_t *)(void *)MEXT_RFA(m);
+			rfa = (mcache_obj_t *)(void *)m_get_rfa(m);
+			m_set_ext(m, NULL, NULL, NULL);
 			rfa->obj_next = ref_list;
 			ref_list = rfa;
-			MEXT_RFA(m) = NULL;
 
 			m->m_type = MT_FREE;
 			m->m_flags = m->m_len = 0;
@@ -2625,7 +2631,7 @@ mbuf_cslab_alloc(void *arg, mcache_obj_t ***plist, unsigned int needed,
 			MBUF_CL_INIT(ms, cl, rfa, 0, EXTF_COMPOSITE);
 		}
 		VERIFY(ms->m_flags == M_EXT);
-		VERIFY(MEXT_RFA(ms) != NULL && MBUF_IS_COMPOSITE(ms));
+		VERIFY(m_get_rfa(ms) != NULL && MBUF_IS_COMPOSITE(ms));
 
 		*list = (mcache_obj_t *)m;
 		(*list)->obj_next = NULL;
@@ -2736,7 +2742,7 @@ mbuf_cslab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 		cl = ms->m_ext.ext_buf;
 		clsp = slab_get(cl);
 		VERIFY(ms->m_flags == M_EXT && cl != NULL);
-		VERIFY(MEXT_RFA(ms) != NULL && MBUF_IS_COMPOSITE(ms));
+		VERIFY(m_get_rfa(ms) != NULL && MBUF_IS_COMPOSITE(ms));
 		if (class == MC_MBUF_CL)
 			VERIFY(clsp->sl_refcnt >= 1 &&
 			    clsp->sl_refcnt <= NCLPG);
@@ -3485,8 +3491,8 @@ m_free_paired(struct mbuf *m)
 		if (prefcnt > 1) {
 			return (1);
 		} else if (prefcnt == 1) {
-			(*(m->m_ext.ext_free))(m->m_ext.ext_buf,
-			    m->m_ext.ext_size, m->m_ext.ext_arg);
+			(*(m_get_ext_free(m)))(m->m_ext.ext_buf,
+			    m->m_ext.ext_size, m_get_ext_arg(m));
 			return (1);
 		} else if (prefcnt == 0) {
 			VERIFY(MBUF_IS_PAIRED(m));
@@ -3507,15 +3513,15 @@ m_free_paired(struct mbuf *m)
 
 			switch (m->m_ext.ext_size) {
 			case MCLBYTES:
-				m->m_ext.ext_free = NULL;
+				m_set_ext(m, m_get_rfa(m), NULL, NULL);
 				break;
 
 			case MBIGCLBYTES:
-				m->m_ext.ext_free = m_bigfree;
+				m_set_ext(m, m_get_rfa(m), m_bigfree, NULL);
 				break;
 
 			case M16KCLBYTES:
-				m->m_ext.ext_free = m_16kfree;
+				m_set_ext(m, m_get_rfa(m), m_16kfree, NULL);
 				break;
 
 			default:
@@ -3553,28 +3559,30 @@ m_free(struct mbuf *m)
 	if (m->m_flags & M_EXT) {
 		u_int16_t refcnt;
 		u_int32_t composite;
+		m_ext_free_func_t m_free_func;
 
 		if (MBUF_IS_PAIRED(m) && m_free_paired(m))
 			return (n);
 
 		refcnt = m_decref(m);
 		composite = (MEXT_FLAGS(m) & EXTF_COMPOSITE);
+		m_free_func = m_get_ext_free(m);
 
 		if (refcnt == MEXT_MINREF(m) && !composite) {
-			if (m->m_ext.ext_free == NULL) {
+			if (m_free_func == NULL) {
 				mcache_free(m_cache(MC_CL), m->m_ext.ext_buf);
-			} else if (m->m_ext.ext_free == m_bigfree) {
+			} else if (m_free_func == m_bigfree) {
 				mcache_free(m_cache(MC_BIGCL),
 				    m->m_ext.ext_buf);
-			} else if (m->m_ext.ext_free == m_16kfree) {
+			} else if (m_free_func == m_16kfree) {
 				mcache_free(m_cache(MC_16KCL),
 				    m->m_ext.ext_buf);
 			} else {
-				(*(m->m_ext.ext_free))(m->m_ext.ext_buf,
-				    m->m_ext.ext_size, m->m_ext.ext_arg);
+				(*m_free_func)(m->m_ext.ext_buf,
+				    m->m_ext.ext_size, m_get_ext_arg(m));
 			}
-			mcache_free(ref_cache, MEXT_RFA(m));
-			MEXT_RFA(m) = NULL;
+			mcache_free(ref_cache, m_get_rfa(m));
+			m_set_ext(m, NULL, NULL, NULL);
 		} else if (refcnt == MEXT_MINREF(m) && composite) {
 			VERIFY(!(MEXT_FLAGS(m) & EXTF_PAIRED));
 			VERIFY(m->m_type != MT_FREE);
@@ -3590,12 +3598,12 @@ m_free(struct mbuf *m)
 			MEXT_FLAGS(m) &= ~EXTF_READONLY;
 
 			/* "Free" into the intermediate cache */
-			if (m->m_ext.ext_free == NULL) {
+			if (m_free_func == NULL) {
 				mcache_free(m_cache(MC_MBUF_CL), m);
-			} else if (m->m_ext.ext_free == m_bigfree) {
+			} else if (m_free_func == m_bigfree) {
 				mcache_free(m_cache(MC_MBUF_BIGCL), m);
 			} else {
-				VERIFY(m->m_ext.ext_free == m_16kfree);
+				VERIFY(m_free_func == m_16kfree);
 				mcache_free(m_cache(MC_MBUF_16KCL), m);
 			}
 			return (n);
@@ -3635,25 +3643,27 @@ m_clattach(struct mbuf *m, int type, caddr_t extbuf,
 	if (m->m_flags & M_EXT) {
 		u_int16_t refcnt;
 		u_int32_t composite;
+		m_ext_free_func_t m_free_func;
 
 		refcnt = m_decref(m);
 		composite = (MEXT_FLAGS(m) & EXTF_COMPOSITE);
 		VERIFY(!(MEXT_FLAGS(m) & EXTF_PAIRED) && MEXT_PMBUF(m) == NULL);
+		m_free_func = m_get_ext_free(m);
 		if (refcnt == MEXT_MINREF(m) && !composite) {
-			if (m->m_ext.ext_free == NULL) {
+			if (m_free_func == NULL) {
 				mcache_free(m_cache(MC_CL), m->m_ext.ext_buf);
-			} else if (m->m_ext.ext_free == m_bigfree) {
+			} else if (m_free_func == m_bigfree) {
 				mcache_free(m_cache(MC_BIGCL),
 				    m->m_ext.ext_buf);
-			} else if (m->m_ext.ext_free == m_16kfree) {
+			} else if (m_free_func == m_16kfree) {
 				mcache_free(m_cache(MC_16KCL),
 				    m->m_ext.ext_buf);
 			} else {
-				(*(m->m_ext.ext_free))(m->m_ext.ext_buf,
-				    m->m_ext.ext_size, m->m_ext.ext_arg);
+				(*m_free_func)(m->m_ext.ext_buf,
+				    m->m_ext.ext_size, m_get_ext_arg(m));
 			}
 			/* Re-use the reference structure */
-			rfa = MEXT_RFA(m);
+			rfa = m_get_rfa(m);
 		} else if (refcnt == MEXT_MINREF(m) && composite) {
 			VERIFY(m->m_type != MT_FREE);
 
@@ -3668,12 +3678,12 @@ m_clattach(struct mbuf *m, int type, caddr_t extbuf,
 			MEXT_FLAGS(m) &= ~EXTF_READONLY;
 
 			/* "Free" into the intermediate cache */
-			if (m->m_ext.ext_free == NULL) {
+			if (m_free_func == NULL) {
 				mcache_free(m_cache(MC_MBUF_CL), m);
-			} else if (m->m_ext.ext_free == m_bigfree) {
+			} else if (m_free_func == m_bigfree) {
 				mcache_free(m_cache(MC_MBUF_BIGCL), m);
 			} else {
-				VERIFY(m->m_ext.ext_free == m_16kfree);
+				VERIFY(m_free_func == m_16kfree);
 				mcache_free(m_cache(MC_MBUF_16KCL), m);
 			}
 			/*
@@ -3725,10 +3735,10 @@ m_getcl(int wait, int type, int flags)
 
 		VERIFY(m->m_type == MT_FREE && m->m_flags == M_EXT);
 		cl = m->m_ext.ext_buf;
-		rfa = MEXT_RFA(m);
+		rfa = m_get_rfa(m);
 
 		ASSERT(cl != NULL && rfa != NULL);
-		VERIFY(MBUF_IS_COMPOSITE(m) && m->m_ext.ext_free == NULL);
+		VERIFY(MBUF_IS_COMPOSITE(m) && m_get_ext_free(m) == NULL);
 
 		flag = MEXT_FLAGS(m);
 
@@ -3795,7 +3805,7 @@ m_mclhasreference(struct mbuf *m)
 	if (!(m->m_flags & M_EXT))
 		return (0);
 
-	ASSERT(MEXT_RFA(m) != NULL);
+	ASSERT(m_get_rfa(m) != NULL);
 
 	return ((MEXT_FLAGS(m) & EXTF_READONLY) ? 1 : 0);
 }
@@ -4035,7 +4045,7 @@ m_getpackets_internal(unsigned int *num_needed, int num_with_pkthdrs,
 
 		VERIFY(m->m_type == MT_FREE && m->m_flags == M_EXT);
 		cl = m->m_ext.ext_buf;
-		rfa = MEXT_RFA(m);
+		rfa = m_get_rfa(m);
 
 		ASSERT(cl != NULL && rfa != NULL);
 		VERIFY(MBUF_IS_COMPOSITE(m));
@@ -4340,6 +4350,7 @@ m_allocpacket_internal(unsigned int *numlist, size_t packetlen,
 		struct ext_ref *rfa;
 		void *cl;
 		int pkthdr;
+		m_ext_free_func_t m_free_func;
 
 		++num;
 		if (nsegs == 1 || (num % nsegs) != 0 || resid == 0) {
@@ -4349,14 +4360,14 @@ m_allocpacket_internal(unsigned int *numlist, size_t packetlen,
 			m = (struct mbuf *)rmp_list;
 			rmp_list = rmp_list->obj_next;
 		}
+		m_free_func = m_get_ext_free(m);
 		ASSERT(m != NULL);
 		VERIFY(m->m_type == MT_FREE && m->m_flags == M_EXT);
-		VERIFY(m->m_ext.ext_free == NULL ||
-		    m->m_ext.ext_free == m_bigfree ||
-		    m->m_ext.ext_free == m_16kfree);
+		VERIFY(m_free_func == NULL || m_free_func == m_bigfree ||
+		    m_free_func == m_16kfree);
 
 		cl = m->m_ext.ext_buf;
-		rfa = MEXT_RFA(m);
+		rfa = m_get_rfa(m);
 
 		ASSERT(cl != NULL && rfa != NULL);
 		VERIFY(MBUF_IS_COMPOSITE(m));
@@ -4367,9 +4378,9 @@ m_allocpacket_internal(unsigned int *numlist, size_t packetlen,
 		if (pkthdr)
 			first = m;
 		MBUF_INIT(m, pkthdr, MT_DATA);
-		if (m->m_ext.ext_free == m_16kfree) {
+		if (m_free_func == m_16kfree) {
 			MBUF_16KCL_INIT(m, cl, rfa, 1, flag);
-		} else if (m->m_ext.ext_free == m_bigfree) {
+		} else if (m_free_func == m_bigfree) {
 			MBUF_BIGCL_INIT(m, cl, rfa, 1, flag);
 		} else {
 			MBUF_CL_INIT(m, cl, rfa, 1, flag);
@@ -4516,6 +4527,7 @@ m_freem_list(struct mbuf *m)
 			mcache_obj_t *o, *rfa;
 			u_int32_t composite;
 			u_int16_t refcnt;
+			m_ext_free_func_t m_free_func;
 
 			if (m->m_type == MT_FREE)
 				panic("m_free: freeing an already freed mbuf");
@@ -4542,26 +4554,26 @@ m_freem_list(struct mbuf *m)
 			o = (mcache_obj_t *)(void *)m->m_ext.ext_buf;
 			refcnt = m_decref(m);
 			composite = (MEXT_FLAGS(m) & EXTF_COMPOSITE);
-
+			m_free_func = m_get_ext_free(m);
 			if (refcnt == MEXT_MINREF(m) && !composite) {
-				if (m->m_ext.ext_free == NULL) {
+				if (m_free_func == NULL) {
 					o->obj_next = mcl_list;
 					mcl_list = o;
-				} else if (m->m_ext.ext_free == m_bigfree) {
+				} else if (m_free_func == m_bigfree) {
 					o->obj_next = mbc_list;
 					mbc_list = o;
-				} else if (m->m_ext.ext_free == m_16kfree) {
+				} else if (m_free_func == m_16kfree) {
 					o->obj_next = m16k_list;
 					m16k_list = o;
 				} else {
-					(*(m->m_ext.ext_free))((caddr_t)o,
+					(*(m_free_func))((caddr_t)o,
 					    m->m_ext.ext_size,
-					    m->m_ext.ext_arg);
+					    m_get_ext_arg(m));
 				}
-				rfa = (mcache_obj_t *)(void *)MEXT_RFA(m);
+				rfa = (mcache_obj_t *)(void *)m_get_rfa(m);
 				rfa->obj_next = ref_list;
 				ref_list = rfa;
-				MEXT_RFA(m) = NULL;
+				m_set_ext(m, NULL, NULL, NULL);
 			} else if (refcnt == MEXT_MINREF(m) && composite) {
 				VERIFY(!(MEXT_FLAGS(m) & EXTF_PAIRED));
 				VERIFY(m->m_type != MT_FREE);
@@ -4589,14 +4601,14 @@ m_freem_list(struct mbuf *m)
 
 				/* "Free" into the intermediate cache */
 				o = (mcache_obj_t *)m;
-				if (m->m_ext.ext_free == NULL) {
+				if (m_free_func == NULL) {
 					o->obj_next = m_mcl_list;
 					m_mcl_list = o;
-				} else if (m->m_ext.ext_free == m_bigfree) {
+				} else if (m_free_func == m_bigfree) {
 					o->obj_next = m_mbc_list;
 					m_mbc_list = o;
 				} else {
-					VERIFY(m->m_ext.ext_free == m_16kfree);
+					VERIFY(m_free_func == m_16kfree);
 					o->obj_next = m_m16k_list;
 					m_m16k_list = o;
 				}
@@ -6835,7 +6847,7 @@ mcl_audit_restore_mbuf(struct mbuf *m, mcache_audit_t *mca, boolean_t composite)
 
 	if (composite) {
 		struct mbuf *next = m->m_next;
-		VERIFY(ms->m_flags == M_EXT && MEXT_RFA(ms) != NULL &&
+		VERIFY(ms->m_flags == M_EXT && m_get_rfa(ms) != NULL &&
 		    MBUF_IS_COMPOSITE(ms));
 		VERIFY(mca->mca_contents_size == AUDIT_CONTENTS_SIZE);
 		/*
@@ -7484,7 +7496,7 @@ m_ext_paired_activate(struct mbuf *m)
 	struct ext_ref *rfa;
 	int hdr, type;
 	caddr_t extbuf;
-	void *extfree;
+	m_ext_free_func_t extfree;
 	u_int extsize;
 
 	VERIFY(MBUF_IS_PAIRED(m));
@@ -7494,9 +7506,9 @@ m_ext_paired_activate(struct mbuf *m)
 	hdr = (m->m_flags & M_PKTHDR);
 	type = m->m_type;
 	extbuf = m->m_ext.ext_buf;
-	extfree = m->m_ext.ext_free;
+	extfree = m_get_ext_free(m);
 	extsize = m->m_ext.ext_size;
-	rfa = MEXT_RFA(m);
+	rfa = m_get_rfa(m);
 
 	VERIFY(extbuf != NULL && rfa != NULL);
 
@@ -7587,6 +7599,93 @@ m_redzone_verify(struct mbuf *m)
 		    "(instead of 0x%x, using cookie 0x%x)\n",
 		    m, m->m_pkthdr.redzone, mb_redzone, mb_redzone_cookie);
 		/* NOTREACHED */
+	}
+}
+
+__private_extern__ inline void
+m_set_ext(struct mbuf *m, struct ext_ref *rfa, m_ext_free_func_t ext_free,
+    caddr_t ext_arg)
+{
+	VERIFY(m->m_flags & M_EXT);
+	if (rfa != NULL) {
+		m->m_ext.ext_refflags =
+		    (struct ext_ref *)(((uintptr_t)rfa) ^ mb_obscure_extref);
+		if (ext_free != NULL) {
+			rfa->ext_token = ((uintptr_t)&rfa->ext_token) ^
+			    mb_obscure_extfree;
+			m->m_ext.ext_free = (m_ext_free_func_t)
+			    (((uintptr_t)ext_free) ^ rfa->ext_token);
+			if (ext_arg != NULL) {
+				m->m_ext.ext_arg = (((uintptr_t)ext_arg) ^
+				    rfa->ext_token);
+			} else {
+				m->m_ext.ext_arg = NULL;
+			}
+		} else {
+			rfa->ext_token = 0;
+			m->m_ext.ext_free = NULL;
+			m->m_ext.ext_arg = NULL;
+		}
+	} else {
+		/*
+		 * If we are going to loose the cookie in ext_token by
+		 * resetting the rfa, we should use the global cookie
+		 * to obscure the ext_free and ext_arg pointers.
+		 */
+		if (ext_free != NULL) {
+			m->m_ext.ext_free = ((uintptr_t)ext_free ^
+			    mb_obscure_extfree);
+			if (ext_arg != NULL) {
+				m->m_ext.ext_arg = ((uintptr_t)ext_arg ^
+				    mb_obscure_extfree);
+			} else {
+				m->m_ext.ext_arg = NULL;
+			}
+		} else {
+			m->m_ext.ext_free = NULL;
+			m->m_ext.ext_arg = NULL;
+		}
+		m->m_ext.ext_refflags = NULL;
+	}
+}
+
+__private_extern__ inline struct ext_ref *
+m_get_rfa(struct mbuf *m)
+{
+	if (m->m_ext.ext_refflags == NULL)
+		return (NULL);
+	else
+		return ((struct ext_ref *)(((uintptr_t)m->m_ext.ext_refflags) ^ mb_obscure_extref));
+}
+
+__private_extern__ inline m_ext_free_func_t
+m_get_ext_free(struct mbuf *m)
+{
+	struct ext_ref *rfa;
+	if (m->m_ext.ext_free == NULL)
+		return (NULL);
+
+	rfa = m_get_rfa(m);
+	if (rfa == NULL)
+		return ((uintptr_t)m->m_ext.ext_free ^ mb_obscure_extfree);
+	else
+		return ((m_ext_free_func_t)(((uintptr_t)m->m_ext.ext_free)
+		    ^ rfa->ext_token));
+}
+
+__private_extern__ inline caddr_t
+m_get_ext_arg(struct mbuf *m)
+{
+	struct ext_ref *rfa;
+	if (m->m_ext.ext_arg == NULL)
+		return (NULL);
+
+	rfa = m_get_rfa(m);
+	if (rfa == NULL) {
+		return ((uintptr_t)m->m_ext.ext_arg ^ mb_obscure_extfree);
+	} else {
+		return ((caddr_t)(((uintptr_t)m->m_ext.ext_arg) ^
+		    rfa->ext_token));
 	}
 }
 

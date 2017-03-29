@@ -13,7 +13,8 @@ DATAFILES = \
 
 PRIVATE_DATAFILES = \
 	debug.h \
-	ecc.h
+	ecc.h \
+	block_hint.h
 
 EXPORT_FILES = \
 	affinity.h \

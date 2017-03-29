@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -195,6 +195,8 @@ struct mount {
 	char		fstypename_override[MFSTYPENAMELEN];
 
 	uint32_t	mnt_iobufinuse;
+
+	lck_mtx_t	mnt_iter_lock;		/* mutex that protects iteration of vnodes */
 };
 
 /*
@@ -232,6 +234,7 @@ extern struct mount * dead_mountp;
  *		because the bits here were broken out from the high bits
  *		of the mount flags.
  */
+#define MNTK_NOSWAP		0x00000080  /* swap files cannot be used on this mount */
 #define MNTK_SWAP_MOUNT		0x00000100	/* we are swapping to this mount */
 #define MNTK_DENY_READDIREXT 0x00000200 /* Deny Extended-style readdir's for this volume */
 #define MNTK_PERMIT_UNMOUNT	0x00000400	/* Allow (non-forced) unmounts by UIDs other than the one that mounted the volume */
@@ -270,7 +273,7 @@ extern struct mount * dead_mountp;
 #define MNT_LITER		0x00000010	/* mount in iteration */
 #define MNT_LNEWVN		0x00000020	/* mount has new vnodes created */
 #define MNT_LWAIT		0x00000040	/* wait for unmount op */
-#define MNT_LITERWAIT		0x00000080	/* mount in iteration */
+#define MNT_LUNUSED		0x00000080	/* available flag bit, used to be MNT_LITERWAIT */
 #define MNT_LDEAD		0x00000100	/* mount already unmounted*/
 #define MNT_LNOSUB		0x00000200	/* submount - no recursion */
 
@@ -421,6 +424,8 @@ void mount_lock_destroy(mount_t);
 void mount_lock(mount_t);
 void mount_lock_spin(mount_t);
 void mount_unlock(mount_t);
+void mount_iterate_lock(mount_t);
+void mount_iterate_unlock(mount_t);
 void mount_lock_renames(mount_t);
 void mount_unlock_renames(mount_t);
 void mount_ref(mount_t, int);

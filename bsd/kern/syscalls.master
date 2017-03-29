@@ -773,7 +773,11 @@
 #else
 492	AUE_NULL	ALL { int enosys(void); }
 #endif /* CONFIG_TELEMETRY */
+#if PGO
 493 	AUE_NULL	ALL	{ user_ssize_t grab_pgo_data (user_addr_t uuid, int flags, user_addr_t buffer, user_ssize_t size); }
+#else
+493	AUE_NULL	ALL { int enosys(void); }
+#endif
 #if CONFIG_PERSONAS
 494	AUE_PERSONA	ALL	{ int persona(uint32_t operation, uint32_t flags, struct kpersona_info *info, uid_t *id, size_t *idlen) NO_SYSCALL_STUB; }
 #else

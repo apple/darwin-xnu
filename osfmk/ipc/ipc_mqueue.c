@@ -502,6 +502,8 @@ ipc_mqueue_send(
 			clock_interval_to_deadline(send_timeout, 1000*NSEC_PER_USEC, &deadline);
 		else
 			deadline = 0;
+
+		thread_set_pending_block_hint(cur_thread, kThreadWaitPortSend);
 		wresult = waitq_assert_wait64_locked(
 						&mqueue->imq_wait_queue,
 						IPC_MQUEUE_FULL,
@@ -587,10 +589,6 @@ extern void ipc_mqueue_override_send(
 		    port->ip_receiver != ipc_space_kernel) {
 			dst_pid = task_pid(port->ip_receiver->is_task);
 		}
-		printf("%s[%d] could not override mqueue (dst:%d) with 0x%x: "
-		       "queue slots are full, but there are no messages!\n",
-		       proc_name_address(current_task()->bsd_info),
-		       task_pid(current_task()), dst_pid, override);
 	}
 #endif
 }
@@ -1084,6 +1082,7 @@ ipc_mqueue_receive_on_thread(
 	else
 		deadline = 0;
 
+	thread_set_pending_block_hint(thread, kThreadWaitPortReceive);
 	wresult = waitq_assert_wait64_locked(&mqueue->imq_wait_queue,
 					     IPC_MQUEUE_RECEIVE,
 					     interruptible,

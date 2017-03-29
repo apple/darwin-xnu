@@ -321,17 +321,17 @@ SYSCTL_INT(_kern_ipc, OID_AUTO, notsent_lowat, CTLFLAG_RW|CTLFLAG_LOCKED,
     &so_notsent_lowat_check, 0, "enable/disable notsnet lowat check");
 #endif /* DEBUG || DEVELOPMENT */
 
+int so_accept_list_waits = 0;
+#if (DEBUG || DEVELOPMENT)
+SYSCTL_INT(_kern_ipc, OID_AUTO, accept_list_waits, CTLFLAG_RW|CTLFLAG_LOCKED,
+    &so_accept_list_waits, 0, "number of waits for listener incomp list");
+#endif /* DEBUG || DEVELOPMENT */
+
 extern struct inpcbinfo tcbinfo;
 
 /* TODO: these should be in header file */
 extern int get_inpcb_str_size(void);
 extern int get_tcp_str_size(void);
-
-static unsigned int sl_zone_size;		/* size of sockaddr_list */
-static struct zone *sl_zone;			/* zone for sockaddr_list */
-
-static unsigned int se_zone_size;		/* size of sockaddr_entry */
-static struct zone *se_zone;			/* zone for sockaddr_entry */
 
 vm_size_t	so_cache_zone_element_size;
 
@@ -435,24 +435,6 @@ socketinit(void)
 	    (120000 * so_cache_zone_element_size), 8192, "socache zone");
 	zone_change(so_cache_zone, Z_CALLERACCT, FALSE);
 	zone_change(so_cache_zone, Z_NOENCRYPT, TRUE);
-
-	sl_zone_size = sizeof (struct sockaddr_list);
-	if ((sl_zone = zinit(sl_zone_size, 1024 * sl_zone_size, 1024,
-	    "sockaddr_list")) == NULL) {
-		panic("%s: unable to allocate sockaddr_list zone\n", __func__);
-		/* NOTREACHED */
-	}
-	zone_change(sl_zone, Z_CALLERACCT, FALSE);
-	zone_change(sl_zone, Z_EXPAND, TRUE);
-
-	se_zone_size = sizeof (struct sockaddr_entry);
-	if ((se_zone = zinit(se_zone_size, 1024 * se_zone_size, 1024,
-	    "sockaddr_entry")) == NULL) {
-		panic("%s: unable to allocate sockaddr_entry zone\n", __func__);
-		/* NOTREACHED */
-	}
-	zone_change(se_zone, Z_CALLERACCT, FALSE);
-	zone_change(se_zone, Z_EXPAND, TRUE);
 
 	bzero(&soextbkidlestat, sizeof(struct soextbkidlestat));
 	soextbkidlestat.so_xbkidle_maxperproc = SO_IDLE_BK_IDLE_MAX_PER_PROC;
@@ -1053,6 +1035,75 @@ out:
 	return (error);
 }
 
+/*
+ * The "accept list lock" protects the fields related to the listener queues
+ * because we can unlock a socket to respect the lock ordering between
+ * the listener socket and its clients sockets. The lock ordering is first to
+ * acquire the client socket before the listener socket.
+ *
+ * The accept list lock serializes access to the following fields:
+ * - of the listener socket:
+ *   - so_comp
+ *   - so_incomp
+ *   - so_qlen
+ *   - so_inqlen
+ * - of client sockets that are in so_comp or so_incomp:
+ *   - so_head
+ *   - so_list
+ *
+ * As one can see the accept list lock protects the consistent of the
+ * linkage of the client sockets.
+ *
+ * Note that those fields may be read without holding the accept list lock
+ * for a preflight provided the accept list lock is taken when committing
+ * to take an action based on the result of the preflight. The preflight
+ * saves the cost of doing the unlock/lock dance.
+ */
+void
+so_acquire_accept_list(struct socket *head, struct socket *so)
+{
+	lck_mtx_t *mutex_held;
+
+	if (head->so_proto->pr_getlock == NULL) {
+		return;
+	}
+	mutex_held = (*head->so_proto->pr_getlock)(head, 0);
+	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+
+	if (!(head->so_flags1 & SOF1_ACCEPT_LIST_HELD)) {
+		head->so_flags1 |= SOF1_ACCEPT_LIST_HELD;
+		return;
+	}
+	if (so != NULL) {
+		socket_unlock(so, 0);
+	}
+	while (head->so_flags1 & SOF1_ACCEPT_LIST_HELD) {
+		so_accept_list_waits += 1;
+		msleep((caddr_t)&head->so_incomp, mutex_held,
+		    PSOCK | PCATCH, __func__, NULL);
+	}
+	head->so_flags1 |= SOF1_ACCEPT_LIST_HELD;
+	if (so != NULL) {
+		socket_unlock(head, 0);
+		socket_lock(so, 0);
+		socket_lock(head, 0);
+	}
+}
+
+void
+so_release_accept_list(struct socket *head)
+{
+	if (head->so_proto->pr_getlock != NULL) {
+		lck_mtx_t *mutex_held;
+
+		mutex_held = (*head->so_proto->pr_getlock)(head, 0);
+		lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+	
+		head->so_flags1 &= ~SOF1_ACCEPT_LIST_HELD;
+		wakeup((caddr_t)&head->so_incomp);
+	}
+}
+
 void
 sofreelastref(struct socket *so, int dealloc)
 {
@@ -1073,16 +1124,26 @@ sofreelastref(struct socket *so, int dealloc)
 		 * Need to lock the listener when the protocol has
 		 * per socket locks
 		 */
-		if (head->so_proto->pr_getlock != NULL)
+		if (head->so_proto->pr_getlock != NULL) {
 			socket_lock(head, 1);
-
+			so_acquire_accept_list(head, so);
+		}
 		if (so->so_state & SS_INCOMP) {
 			so->so_state &= ~SS_INCOMP;
 			TAILQ_REMOVE(&head->so_incomp, so, so_list);
 			head->so_incqlen--;
 			head->so_qlen--;
 			so->so_head = NULL;
+
+			if (head->so_proto->pr_getlock != NULL) {
+				so_release_accept_list(head);
+				socket_unlock(head, 1);
+			}
 		} else if (so->so_state & SS_COMP) {
+			if (head->so_proto->pr_getlock != NULL) {
+				so_release_accept_list(head);
+				socket_unlock(head, 1);
+			}
 			/*
 			 * We must not decommission a socket that's
 			 * on the accept(2) queue.  If we do, then
@@ -1094,14 +1155,14 @@ sofreelastref(struct socket *so, int dealloc)
 			so->so_rcv.sb_flags &= ~(SB_SEL|SB_UPCALL);
 			so->so_snd.sb_flags &= ~(SB_SEL|SB_UPCALL);
 			so->so_event = sonullevent;
-			if (head->so_proto->pr_getlock != NULL)
-				socket_unlock(head, 1);
 			return;
 		} else {
-			panic("sofree: not queued");
+			if (head->so_proto->pr_getlock != NULL) {
+				so_release_accept_list(head);
+				socket_unlock(head, 1);
+			}
+			printf("sofree: not queued\n");
 		}
-		if (head->so_proto->pr_getlock != NULL)
-			socket_unlock(head, 1);
 	}
 	sowflush(so);
 	sorflush(so);
@@ -1156,7 +1217,6 @@ int
 soclose_locked(struct socket *so)
 {
 	int error = 0;
-	lck_mtx_t *mutex_held;
 	struct timespec ts;
 
 	if (so->so_usecount == 0) {
@@ -1186,7 +1246,9 @@ soclose_locked(struct socket *so)
 	}
 
 	if ((so->so_options & SO_ACCEPTCONN)) {
-		struct socket *sp;
+		struct socket *sp, *sonext;
+		int persocklock = 0;
+		int incomp_overflow_only;
 
 		/*
 		 * We do not want new connection to be added
@@ -1194,9 +1256,19 @@ soclose_locked(struct socket *so)
 		 */
 		so->so_options &= ~SO_ACCEPTCONN;
 
-		while ((sp = TAILQ_FIRST(&so->so_incomp)) != NULL) {
-		    	int socklock = 0;
+		/*
+		 * We can drop the lock on the listener once
+		 * we've acquired the incoming list
+		 */
+		if (so->so_proto->pr_getlock != NULL) {
+			persocklock = 1;
+			so_acquire_accept_list(so, NULL);
+			socket_unlock(so, 0);
+		}
+again:
+		incomp_overflow_only = 1;
 
+		TAILQ_FOREACH_SAFE(sp, &so->so_incomp, so_list, sonext) {
 			/*
 			 * Radar 5350314
 			 * skip sockets thrown away by tcpdropdropblreq
@@ -1207,17 +1279,8 @@ soclose_locked(struct socket *so)
 			if (sp->so_flags & SOF_OVERFLOW)
 				continue;
 
-			if (so->so_proto->pr_getlock != NULL) {
-				/*
-				 * Lock ordering for consistency with the
-				 * rest of the stack, we lock the socket
-				 * first and then grab the head.
-				 */
-				socket_unlock(so, 0);
+			if (persocklock != 0)
 				socket_lock(sp, 1);
-				socket_lock(so, 0);
-				socklock = 1;
-			}
 
 			/*
 			 * Radar 27945981
@@ -1233,27 +1296,19 @@ soclose_locked(struct socket *so)
 				so->so_qlen--;
 
 				(void) soabort(sp);
+			} else {
+				panic("%s sp %p in so_incomp but !SS_INCOMP",
+				    __func__, sp);
 			}
 
-			if (socklock != 0)
+			if (persocklock != 0)
 				socket_unlock(sp, 1);
 		}
 
-		while ((sp = TAILQ_FIRST(&so->so_comp)) != NULL) {
-			int socklock = 0;
-			
+		TAILQ_FOREACH_SAFE(sp, &so->so_comp, so_list, sonext) {
 			/* Dequeue from so_comp since sofree() won't do it */
-			if (so->so_proto->pr_getlock != NULL) {
-				/*
-				 * Lock ordering for consistency with the
-				 * rest of the stack, we lock the socket
-				 * first and then grab the head.
-				 */
-				socket_unlock(so, 0);
+			if (persocklock != 0)
 				socket_lock(sp, 1);
-				socket_lock(so, 0);
-				socklock = 1;
-			}
 
 			if (sp->so_state & SS_COMP) {
 				sp->so_state &= ~SS_COMP;
@@ -1262,12 +1317,36 @@ soclose_locked(struct socket *so)
 				so->so_qlen--;
 
 				(void) soabort(sp);
+			} else {
+				panic("%s sp %p in so_comp but !SS_COMP",
+				    __func__, sp);
 			}
 
-			if (socklock)
+			if (persocklock)
 				socket_unlock(sp, 1);
 			}
+
+		if (incomp_overflow_only == 0 && !TAILQ_EMPTY(&so->so_incomp)) {
+#if (DEBUG|DEVELOPMENT)
+			panic("%s head %p so_comp not empty\n", __func__, so);
+#endif /* (DEVELOPMENT || DEBUG) */
+
+			goto again;
 		}
+
+		if (!TAILQ_EMPTY(&so->so_comp)) {
+#if (DEBUG|DEVELOPMENT)
+			panic("%s head %p so_comp not empty\n", __func__, so);
+#endif /* (DEVELOPMENT || DEBUG) */
+
+			goto again;
+		}
+
+		if (persocklock) {
+			socket_lock(so, 0);
+			so_release_accept_list(so);
+		}
+	}
 	if (so->so_pcb == NULL) {
 		/* 3915887: mark the socket as ready for dealloc */
 		so->so_flags |= SOF_PCBCLEARING;
@@ -1280,6 +1359,8 @@ soclose_locked(struct socket *so)
 				goto drop;
 		}
 		if (so->so_options & SO_LINGER) {
+			lck_mtx_t *mutex_held;
+
 			if ((so->so_state & SS_ISDISCONNECTING) &&
 			    (so->so_state & SS_NBIO))
 				goto drop;
@@ -1594,8 +1675,8 @@ soconnect2(struct socket *so1, struct socket *so2)
 }
 
 int
-soconnectxlocked(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
+soconnectxlocked(struct socket *so, struct sockaddr *src,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope,
     sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
     uint32_t arglen, uio_t auio, user_ssize_t *bytes_written)
 {
@@ -1639,7 +1720,7 @@ soconnectxlocked(struct socket *so, struct sockaddr_list **src_sl,
 		 * Run connect filter before calling protocol:
 		 *  - non-blocking connect returns before completion;
 		 */
-		error = sflt_connectxout(so, dst_sl);
+		error = sflt_connectout(so, dst);
 		if (error != 0) {
 			/* Disable PRECONNECT_DATA, as we don't need to send a SYN anymore. */
 			so->so_flags1 &= ~SOF1_PRECONNECT_DATA;
@@ -1647,7 +1728,7 @@ soconnectxlocked(struct socket *so, struct sockaddr_list **src_sl,
 				error = 0;
 		} else {
 			error = (*so->so_proto->pr_usrreqs->pru_connectx)
-			    (so, src_sl, dst_sl, p, ifscope, aid, pcid,
+			    (so, src, dst, p, ifscope, aid, pcid,
 			    flags, arg, arglen, auio, bytes_written);
 		}
 	}
@@ -7140,125 +7221,6 @@ so_get_restrictions(struct socket *so)
 	return (so->so_restrictions & (SO_RESTRICT_DENY_IN |
 	    SO_RESTRICT_DENY_OUT |
 	    SO_RESTRICT_DENY_CELLULAR | SO_RESTRICT_DENY_EXPENSIVE));
-}
-
-struct sockaddr_entry *
-sockaddrentry_alloc(int how)
-{
-	struct sockaddr_entry *se;
-
-	se = (how == M_WAITOK) ? zalloc(se_zone) : zalloc_noblock(se_zone);
-	if (se != NULL)
-		bzero(se, se_zone_size);
-
-	return (se);
-}
-
-void
-sockaddrentry_free(struct sockaddr_entry *se)
-{
-	if (se->se_addr != NULL) {
-		FREE(se->se_addr, M_SONAME);
-		se->se_addr = NULL;
-	}
-	zfree(se_zone, se);
-}
-
-struct sockaddr_entry *
-sockaddrentry_dup(const struct sockaddr_entry *src_se, int how)
-{
-	struct sockaddr_entry *dst_se;
-
-	dst_se = sockaddrentry_alloc(how);
-	if (dst_se != NULL) {
-		int len = src_se->se_addr->sa_len;
-
-		MALLOC(dst_se->se_addr, struct sockaddr *,
-		    len, M_SONAME, how | M_ZERO);
-		if (dst_se->se_addr != NULL) {
-			bcopy(src_se->se_addr, dst_se->se_addr, len);
-		} else {
-			sockaddrentry_free(dst_se);
-			dst_se = NULL;
-		}
-	}
-
-	return (dst_se);
-}
-
-struct sockaddr_list *
-sockaddrlist_alloc(int how)
-{
-	struct sockaddr_list *sl;
-
-	sl = (how == M_WAITOK) ? zalloc(sl_zone) : zalloc_noblock(sl_zone);
-	if (sl != NULL) {
-		bzero(sl, sl_zone_size);
-		TAILQ_INIT(&sl->sl_head);
-	}
-	return (sl);
-}
-
-void
-sockaddrlist_free(struct sockaddr_list *sl)
-{
-	struct sockaddr_entry *se, *tse;
-
-	TAILQ_FOREACH_SAFE(se, &sl->sl_head, se_link, tse) {
-		sockaddrlist_remove(sl, se);
-		sockaddrentry_free(se);
-	}
-	VERIFY(sl->sl_cnt == 0 && TAILQ_EMPTY(&sl->sl_head));
-	zfree(sl_zone, sl);
-}
-
-void
-sockaddrlist_insert(struct sockaddr_list *sl, struct sockaddr_entry *se)
-{
-	VERIFY(!(se->se_flags & SEF_ATTACHED));
-	se->se_flags |= SEF_ATTACHED;
-	TAILQ_INSERT_TAIL(&sl->sl_head, se, se_link);
-	sl->sl_cnt++;
-	VERIFY(sl->sl_cnt != 0);
-}
-
-void
-sockaddrlist_remove(struct sockaddr_list *sl, struct sockaddr_entry *se)
-{
-	VERIFY(se->se_flags & SEF_ATTACHED);
-	se->se_flags &= ~SEF_ATTACHED;
-	VERIFY(sl->sl_cnt != 0);
-	sl->sl_cnt--;
-	TAILQ_REMOVE(&sl->sl_head, se, se_link);
-}
-
-struct sockaddr_list *
-sockaddrlist_dup(const struct sockaddr_list *src_sl, int how)
-{
-	struct sockaddr_entry *src_se, *tse;
-	struct sockaddr_list *dst_sl;
-
-	dst_sl = sockaddrlist_alloc(how);
-	if (dst_sl == NULL)
-		return (NULL);
-
-	TAILQ_FOREACH_SAFE(src_se, &src_sl->sl_head, se_link, tse) {
-		struct sockaddr_entry *dst_se;
-
-		if (src_se->se_addr == NULL)
-			continue;
-
-		dst_se = sockaddrentry_dup(src_se, how);
-		if (dst_se == NULL) {
-			sockaddrlist_free(dst_sl);
-			return (NULL);
-		}
-
-		sockaddrlist_insert(dst_sl, dst_se);
-	}
-	VERIFY(src_sl->sl_cnt == dst_sl->sl_cnt);
-
-	return (dst_sl);
 }
 
 int

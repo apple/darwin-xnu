@@ -173,6 +173,7 @@ PRIVATE_DATAFILES = \
 	mach_traps.h \
 	memory_object_types.h \
 	mig.h \
+	mk_timer.h \
 	processor_info.h \
 	resource_notify.defs \
 	resource_monitors.h \

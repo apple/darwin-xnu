@@ -564,7 +564,7 @@ pid_for_task(
 	AUDIT_MACH_SYSCALL_ENTER(AUE_PIDFORTASK);
 	AUDIT_ARG(mach_port1, t);
 
-	t1 = port_name_to_task(t);
+	t1 = port_name_to_task_inspect(t);
 
 	if (t1 == TASK_NULL) {
 		err = KERN_FAILURE;

@@ -1701,7 +1701,7 @@ audit_sdev_open(dev_t dev, __unused int flags,  __unused int devtype, proc_t p)
 	int u;
 
 	u = minor(dev);
-	if (u < 0 || u > MAX_AUDIT_SDEVS)
+	if (u < 0 || u >= MAX_AUDIT_SDEVS)
 		return (ENXIO);
 
 	(void) audit_sdev_get_aia(p, &aia);

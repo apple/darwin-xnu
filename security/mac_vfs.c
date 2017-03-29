@@ -1961,6 +1961,26 @@ mac_mount_check_snapshot_delete(vfs_context_t ctx, struct mount *mp,
 }
 
 int
+mac_mount_check_snapshot_revert(vfs_context_t ctx, struct mount *mp,
+    const char *name)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce)
+		return 0;
+#endif
+	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
+		return 0;
+
+	cred = vfs_context_ucred(ctx);
+	MAC_CHECK(mount_check_snapshot_revert, cred, mp, name);
+	return (error);
+}
+
+int
 mac_mount_check_remount(vfs_context_t ctx, struct mount *mp)
 {
 	kauth_cred_t cred;

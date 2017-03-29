@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2015 by Apple Inc.. All rights reserved.
+ * Copyright (c) 2007-2016 by Apple Inc.. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -130,7 +130,13 @@
 #define __MAC_10_10_2       101002
 #define __MAC_10_10_3       101003
 #define __MAC_10_11         101100
+#define __MAC_10_11_2       101102
+#define __MAC_10_11_3       101103
+#define __MAC_10_11_4       101104
 #define __MAC_10_12         101200
+#define __MAC_10_12_1       101201
+#define __MAC_10_12_2       101202
+#define __MAC_10_12_4       101204
 /* __MAC_NA is not defined to a value but is uses as a token by macros to indicate that the API is unavailable */
 
 #define __IPHONE_2_0      20000
@@ -157,16 +163,27 @@
 #define __IPHONE_9_0      90000
 #define __IPHONE_9_1      90100
 #define __IPHONE_9_2      90200
+#define __IPHONE_9_3      90300
 #define __IPHONE_10_0    100000
+#define __IPHONE_10_1    100100
+#define __IPHONE_10_2    100200
+#define __IPHONE_10_3    100300
 /* __IPHONE_NA is not defined to a value but is uses as a token by macros to indicate that the API is unavailable */
 
 #define __TVOS_9_0        90000
+#define __TVOS_9_1        90100
 #define __TVOS_9_2        90200
 #define __TVOS_10_0      100000
+#define __TVOS_10_0_1    100001
+#define __TVOS_10_1      100100
+#define __TVOS_10_2      100200
 
 #define __WATCHOS_1_0     10000
 #define __WATCHOS_2_0     20000
 #define __WATCHOS_3_0     30000
+#define __WATCHOS_3_1     30100
+#define __WATCHOS_3_1_1   30101
+#define __WATCHOS_3_2     30200
 
 #include <AvailabilityInternal.h>
 
@@ -195,6 +212,9 @@
   #if __has_feature(attribute_availability_with_message)
     #define __OS_AVAILABILITY(_target, _availability)            __attribute__((availability(_target,_availability)))
     #define __OS_AVAILABILITY_MSG(_target, _availability, _msg)  __attribute__((availability(_target,_availability,message=_msg)))
+  #elif __has_feature(attribute_availability)
+    #define __OS_AVAILABILITY(_target, _availability)            __attribute__((availability(_target,_availability)))
+    #define __OS_AVAILABILITY_MSG(_target, _availability, _msg)  __attribute__((availability(_target,_availability)))
   #else
     #define __OS_AVAILABILITY(_target, _availability)
     #define __OS_AVAILABILITY_MSG(_target, _availability, _msg)
@@ -224,7 +244,7 @@
 
 
 /* for use marking APIs available info for Mac OSX */
-#if defined(__has_feature)
+#if defined(__has_attribute)
   #if __has_attribute(availability)
     #define __OSX_UNAVAILABLE                    __OS_AVAILABILITY(macosx,unavailable)
     #define __OSX_AVAILABLE(_vers)               __OS_AVAILABILITY(macosx,introduced=_vers)
@@ -246,7 +266,7 @@
 
 
 /* for use marking APIs available info for iOS */
-#if defined(__has_feature)
+#if defined(__has_attribute)
   #if __has_attribute(availability)
     #define __IOS_UNAVAILABLE                    __OS_AVAILABILITY(ios,unavailable)
     #define __IOS_PROHIBITED                     __OS_AVAILABILITY(ios,unavailable)
@@ -325,8 +345,76 @@
   #define __WATCHOS_DEPRECATED(_start, _dep, _msg)
 #endif
 
+
+/* for use marking APIs unavailable for swift */
+#if defined(__has_feature)
+  #if __has_feature(attribute_availability_swift)
+    #define __SWIFT_UNAVAILABLE                   __OS_AVAILABILITY(swift,unavailable)
+    #define __SWIFT_UNAVAILABLE_MSG(_msg)         __OS_AVAILABILITY_MSG(swift,unavailable,_msg)
+  #endif
+#endif
+
+#ifndef __SWIFT_UNAVAILABLE
+  #define __SWIFT_UNAVAILABLE
+#endif
+
+#ifndef __SWIFT_UNAVAILABLE_MSG
+  #define __SWIFT_UNAVAILABLE_MSG(_msg)
+#endif
+
 #if __has_include(<AvailabilityProhibitedInternal.h>)
   #include <AvailabilityProhibitedInternal.h>
 #endif
+
+/*
+ Macros for defining which versions/platform a given symbol can be used.
+ 
+ @see http://clang.llvm.org/docs/AttributeReference.html#availability
+ */
+
+/*
+ * API Introductions
+ *
+ * Use to specify the release that a particular API became available.
+ *
+ * Platform names:
+ *   macos, ios, tvos, watchos
+ *
+ * Examples:
+ *    __API_AVAILABLE(macos(10.10))
+ *    __API_AVAILABLE(macos(10.9), ios(10.0))
+ *    __API_AVAILABLE(macos(10.4), ios(8.0), watchos(2.0), tvos(10.0))
+ */
+#define __API_AVAILABLE(...) __API_AVAILABLE_GET_MACRO(__VA_ARGS__,__API_AVAILABLE4, __API_AVAILABLE3, __API_AVAILABLE2, __API_AVAILABLE1)(__VA_ARGS__)
+
+
+/*
+ * API Deprecations
+ *
+ * Use to specify the release that a particular API became unavailable.
+ *
+ * Platform names:
+ *   macos, ios, tvos, watchos
+ *
+ * Examples:
+ *
+ *    __API_DEPRECATED("No longer supported", macos(10.4, 10.8))
+ *    __API_DEPRECATED("No longer supported", macos(10.4, 10.8), ios(2.0, 3.0), watchos(2.0, 3.0), tvos(9.0, 10.0))
+ *
+ *    __API_DEPRECATED_WITH_REPLACEMENT("-setName:", tvos(10.0, 10.4), ios(9.0, 10.0))
+ *    __API_DEPRECATED_WITH_REPLACEMENT("SomeClassName", macos(10.4, 10.6), watchos(2.0, 3.0))
+ */
+#define __API_DEPRECATED(...) __API_DEPRECATED_MSG_GET_MACRO(__VA_ARGS__,__API_DEPRECATED_MSG5,__API_DEPRECATED_MSG4,__API_DEPRECATED_MSG3,__API_DEPRECATED_MSG2,__API_DEPRECATED_MSG1)(__VA_ARGS__)
+#define __API_DEPRECATED_WITH_REPLACEMENT(...) __API_DEPRECATED_REP_GET_MACRO(__VA_ARGS__,__API_DEPRECATED_REP5,__API_DEPRECATED_REP4,__API_DEPRECATED_REP3,__API_DEPRECATED_REP2,__API_DEPRECATED_REP1)(__VA_ARGS__)
+
+/*
+ * API Unavailability
+ * Use to specify that an API is unavailable for a particular platform.
+ *
+ * Example:
+ *    __API_UNAVAILABLE(macos)
+ *    __API_UNAVAILABLE(watchos, tvos)
+ */
+#define __API_UNAVAILABLE(...) __API_UNAVAILABLE_GET_MACRO(__VA_ARGS__,__API_UNAVAILABLE3,__API_UNAVAILABLE2,__API_UNAVAILABLE1)(__VA_ARGS__)
 
 #endif /* __AVAILABILITY__ */

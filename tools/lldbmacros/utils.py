@@ -398,7 +398,7 @@ def dsymForUUID(uuid):
     """
     import subprocess
     import plistlib
-    output = subprocess.check_output(["/usr/local/bin/dsymForUUID", uuid])
+    output = subprocess.check_output(["/usr/local/bin/dsymForUUID", "--copyExecutable", uuid])
     if output:
         # because of <rdar://12713712>
         #plist = plistlib.readPlistFromString(output)

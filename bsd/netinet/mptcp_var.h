@@ -145,8 +145,8 @@ struct mptsub {
 	int32_t			mpts_soerror;	/* most recent subflow error */
 	struct mptses		*mpts_mpte;	/* back ptr to MPTCP session */
 	struct socket		*mpts_socket;	/* subflow socket */
-	struct sockaddr_list	*mpts_src_sl;	/* source list */
-	struct sockaddr_list	*mpts_dst_sl;	/* destination list */
+	struct sockaddr		*mpts_src;	/* source address */
+	struct sockaddr		*mpts_dst;	/* destination address */
 	struct ifnet		*mpts_outif;	/* outbound interface */
 	u_int64_t		mpts_sndnxt;	/* next byte to send in mp so */
 	u_int32_t		mpts_rel_seq;	/* running count of subflow # */

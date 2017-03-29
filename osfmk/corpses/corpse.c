@@ -475,7 +475,7 @@ task_generate_corpse_internal(
 
 	/* Create and copy threads from task, returns a ref to thread */
 	kr = task_duplicate_map_and_threads(task, p, new_task, &thread,
-				is64bit, &udata_buffer, &size, &num_udata);
+				&udata_buffer, &size, &num_udata);
 	if (kr != KERN_SUCCESS) {
 		goto error_task_generate_corpse;
 	}

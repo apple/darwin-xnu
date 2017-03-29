@@ -518,11 +518,39 @@ installsrc:
 #
 .PHONY: clean
 
+CLEAN_RM_DIRS= $(OBJROOT) $(SYMROOT) $(DSTROOT) \
+		$(SRCROOT)/tools/test/BUILD \
+		$(SRCROOT)/tools/tests/darwintests/build \
+		$(SRCROOT)/tools/tests/testkext/build \
+		$(SRCROOT)/libkdd/build \
+		$(SRCROOT)/tools/tests/unit_tests/BUILD \
+		$(SRCROOT)/tools/tests/execperf/BUILD \
+		$(SRCROOT)/tools/tests/packetdrill/BUILD \
+		$(SRCROOT)/tools/tests/perf_index/BUILD
+
+CLEAN_ACTION_DIRS= $(SRCROOT)/tools/tests/MPMMTest \
+		$(SRCROOT)/tools/tests/TLBcoherency \
+		$(SRCROOT)/tools/tests/kqueue_tests \
+		$(SRCROOT)/tools/tests/libMicro \
+		$(SRCROOT)/tools/tests/mktimer \
+		$(SRCROOT)/tools/tests/zero-to-n \
+		$(SRCROOT)/tools/tests/personas
+
 clean:
 	@:
-	@rm -f cscope.* 2> /dev/null
-	@rm -f $(OBJROOT)/cscope.genhdrs/* 2> /dev/null  || true
-	@rm -f TAGS 2> /dev/null
+	$(_v)rm -f cscope.* 2> /dev/null
+	$(_v)rm -f TAGS 2> /dev/null
+	$(_v)for cdir in $(CLEAN_RM_DIRS); do \
+		if [ -d $${cdir} ] ; then \
+			echo "Removing $${cdir}"; \
+			rm -fr $${cdir} 2> /dev/null  || true ; \
+		fi ; \
+	done
+
+	$(_v)for mcdir in $(CLEAN_ACTION_DIRS); do \
+		make -C $${mcdir} clean; \
+	done
+
 
 #
 # Build source file list for cscope database and tags

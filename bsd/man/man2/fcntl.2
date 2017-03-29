@@ -155,6 +155,12 @@ or greater.
 Preallocate file storage space. Note: upon success, 
 the space that is allocated can be the same size or 
 larger than the space requested.
+.It Dv F_PUNCHHOLE
+Deallocate a region and replace it with a hole. Subsequent reads of the
+affected region will return bytes of zeros that are usually not backed by
+physical blocks. This will not change the actual file size. Holes must be
+aligned to file system block boundaries. This will fail on
+file systems that do not support this interface.
 .It Dv F_SETSIZE
 Truncate a file without zeroing space.
 The calling process must have root privileges.
@@ -491,6 +497,19 @@ Allocate from the volume offset.
 .El
 .Pp
 The
+.Dv F_PUNCHHOLE
+command operates on the following structure:
+.ne 7v
+.Bd -literal
+        typedef struct fpunchhole {
+            u_int32_t fp_flags;     /* unused */
+            u_int32_t reserved;     /* (to maintain 8-byte alignment) */
+            off_t     fp_offset;    /* IN: start of the region */
+            off_t     fp_length;    /* IN: size of the region */
+        } fpunchhole_t;
+.Ed
+.Pp
+The
 .Dv F_RDADVISE
 command operates on the following structure
 which holds information passed from the
@@ -708,6 +727,21 @@ or when
 is set and
 .Fa fst_offset
 is a negative or zero value.
+.Pp
+The argument
+.Fa cmd
+is
+.Dv F_PUNCHHOLE
+and
+either
+.Fa fp_offset
+or
+.Fa fp_length
+are negative, or both
+.Fa fp_offset
+and
+.Fa fp_length
+are not multiples of the file system block size.
 .Pp
 The argument
 .Fa cmd

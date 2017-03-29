@@ -384,6 +384,10 @@ struct rt_msghdr_ext {
 #define	RTM_GET_EXT	0x15
 #endif /* PRIVATE */
 
+#ifdef BSD_KERNEL_PRIVATE
+/* RTM flags */
+#define RTMF_HIDE_LLADDR		0x00000001
+#endif /* BSD_KERNEL_PRIVATE */
 /*
  * Bitmask values for rtm_inits and rmx_locks.
  */
@@ -577,7 +581,7 @@ extern unsigned int sin6_get_ifscope(struct sockaddr *);
 extern void rt_lock(struct rtentry *, boolean_t);
 extern void rt_unlock(struct rtentry *);
 extern struct sockaddr *rtm_scrub(int, int, struct sockaddr *,
-    struct sockaddr *, void *, uint32_t, kauth_cred_t *);
+    struct sockaddr *, void *, uint32_t, kauth_cred_t *, uint32_t);
 extern boolean_t rt_validate(struct rtentry *);
 extern void rt_set_proxy(struct rtentry *, boolean_t);
 extern void rt_set_gwroute(struct rtentry *, struct sockaddr *,

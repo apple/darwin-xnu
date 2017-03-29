@@ -452,8 +452,8 @@ struct pr_usrreqs {
 	int	(*pru_connect)(struct socket *, struct sockaddr *,
 		    struct proc *);
 	int	(*pru_connect2)(struct socket *, struct socket *);
-	int	(*pru_connectx)(struct socket *, struct sockaddr_list **,
-		    struct sockaddr_list **, struct proc *, uint32_t,
+	int	(*pru_connectx)(struct socket *, struct sockaddr *,
+		    struct sockaddr *, struct proc *, uint32_t,
 		    sae_associd_t, sae_connid_t *, uint32_t, void *, uint32_t,
 		    struct uio *, user_ssize_t *);
 	int	(*pru_control)(struct socket *, u_long, caddr_t,
@@ -505,8 +505,8 @@ extern int pru_connect_notsupp(struct socket *so, struct sockaddr *nam,
     struct proc *p);
 extern int pru_connect2_notsupp(struct socket *so1, struct socket *so2);
 #ifdef XNU_KERNEL_PRIVATE
-extern int pru_connectx_notsupp(struct socket *, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+extern int pru_connectx_notsupp(struct socket *, struct sockaddr *,
+    struct sockaddr *, struct proc *, uint32_t, sae_associd_t,
     sae_connid_t *, uint32_t, void *, uint32_t, struct uio *, user_ssize_t *);
 extern int pru_disconnectx_notsupp(struct socket *, sae_associd_t,
     sae_connid_t);

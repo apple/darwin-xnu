@@ -84,7 +84,12 @@ Volume attributes  cannot be requested but all other supported getattrlist attri
 .Dv ATTR_CMN_NAME
 and
 .Dv ATRR_CMN_RETURNED_ATTRS
-are required and the absence of these attributes in the attrList parameter results in an error.
+are required and the absence of these attributes in the attrList parameter results in an error. Note that 
+not all attributes supported by 
+.Fn getattrlist
+may be vended back by this call, which is why the aforementioned flag must be supplied. In particular
+.Dv ATTR_CMN_FULLPATH
+may not be valid on all directory entries whose information is requested by this call. 
 .Pp
 .
 .\" attrBuf and attrBufSize parameters

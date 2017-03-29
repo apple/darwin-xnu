@@ -153,8 +153,8 @@ extern int esp_udp_encap_port;
 static int udp6_abort(struct socket *);
 static int udp6_attach(struct socket *, int, struct proc *);
 static int udp6_bind(struct socket *, struct sockaddr *, struct proc *);
-static int udp6_connectx(struct socket *, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+static int udp6_connectx(struct socket *, struct sockaddr *,
+    struct sockaddr *, struct proc *, uint32_t, sae_associd_t,
     sae_connid_t *, uint32_t, void *, uint32_t, struct uio *, user_ssize_t *);
 static	int udp6_detach(struct socket *);
 static int udp6_disconnect(struct socket *);
@@ -839,12 +839,12 @@ do_flow_divert:
 }
 
 static int
-udp6_connectx(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
+udp6_connectx(struct socket *so, struct sockaddr *src,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope,
     sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
     uint32_t arglen, struct uio *uio, user_ssize_t *bytes_written)
 {
-	return (udp_connectx_common(so, AF_INET6, src_sl, dst_sl,
+	return (udp_connectx_common(so, AF_INET6, src, dst,
 	    p, ifscope, aid, pcid, flags, arg, arglen, uio, bytes_written));
 }
 

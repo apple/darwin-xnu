@@ -626,6 +626,22 @@ vfs_clearextendedsecurity(mount_t mp)
 	mount_unlock(mp);
 }
 
+void
+vfs_setnoswap(mount_t mp)
+{
+	mount_lock(mp);
+	mp->mnt_kern_flag |= MNTK_NOSWAP;
+	mount_unlock(mp);
+}
+
+void
+vfs_clearnoswap(mount_t mp)
+{
+	mount_lock(mp);
+	mp->mnt_kern_flag &= ~MNTK_NOSWAP;
+	mount_unlock(mp);
+}
+
 int
 vfs_extendedsecurity(mount_t mp)
 {
@@ -920,6 +936,13 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t *handle)
 	for (j = 0; vfe->vfe_opvdescs[i]->opv_desc_ops[j].opve_op; j++) {
 		opve_descp = &(vfe->vfe_opvdescs[i]->opv_desc_ops[j]);
 
+		/* Silently skip known-disabled operations */
+		if (opve_descp->opve_op->vdesc_flags & VDESC_DISABLED) {
+			printf("vfs_fsadd: Ignoring reference in %p to disabled operation %s.\n",
+				vfe->vfe_opvdescs[i], opve_descp->opve_op->vdesc_name);
+			continue;
+		}
+
 		/*
 		 * Sanity check:  is this operation listed
 		 * in the list of operations?  We check this
@@ -938,7 +961,7 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t *handle)
 		 * list of supported operations.
 		 */
 		if (opve_descp->opve_op->vdesc_offset == 0 &&
-		    opve_descp->opve_op->vdesc_offset != VOFFSET(vnop_default)) {
+		    opve_descp->opve_op != VDESC(vnop_default)) {
 			printf("vfs_fsadd: operation %s not listed in %s.\n",
 			       opve_descp->opve_op->vdesc_name,
 			       "vfs_op_descs");
@@ -2542,6 +2565,7 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		error = EROFS;
 		goto out;
 	}
+
 #if NAMEDSTREAMS
 	/* For streams, va_data_size is the only setable attribute. */
 	if ((vp->v_flag & VISNAMEDSTREAM) && (vap->va_active != VNODE_ATTR_va_data_size)) {
@@ -2549,6 +2573,25 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		goto out;
 	}
 #endif
+	/* Check for truncation */
+	if(VATTR_IS_ACTIVE(vap,  va_data_size)) {
+		switch(vp->v_type) {
+		case VREG:
+			/* For regular files it's ok */
+			break;
+		case VDIR:
+			/* Not allowed to truncate directories */
+			error = EISDIR;
+			goto out;
+		default:
+			/* For everything else we will clear the bit and let underlying FS decide on the rest */
+			VATTR_CLEAR_ACTIVE(vap, va_data_size);
+			if (vap->va_active)
+				break;
+			/* If it was the only bit set, return success, to handle cases like redirect to /dev/null */
+			return (0);
+		}
+	}
 	
 	/*
 	 * If ownership is being ignored on this volume, we silently discard
@@ -5315,11 +5358,21 @@ struct vnop_clonefile_args {
 	struct vnodeop_desc *a_desc;
 	vnode_t a_fvp;
 	vnode_t a_dvp;
-	vnode_t a_vpp;
+	vnode_t *a_vpp;
 	struct componentname *a_cnp;
 	struct vnode_attr *a_vap;
 	uint32_t a_flags;
 	vfs_context_t a_context;
+	int (*a_dir_clone_authorizer)(	/* Authorization callback */
+			struct vnode_attr *vap, /* attribute to be authorized */
+			kauth_action_t action, /* action for which attribute is to be authorized */
+			struct vnode_attr *dvap, /* target directory attributes */
+			vnode_t sdvp, /* source directory vnode pointer (optional) */
+			mount_t mp, /* mount point of filesystem */
+			dir_clone_authorizer_op_t vattr_op, /* specific operation requested : setup, authorization or cleanup  */
+			vfs_context_t ctx, 		/* As passed to VNOP */
+			void *reserved);		/* Always NULL */
+	void *a_reserved;		/* Currently unused */
 };
 #endif /* 0 */
 
@@ -5338,6 +5391,11 @@ VNOP_CLONEFILE(vnode_t fvp, vnode_t dvp, vnode_t *vpp,
 	a.a_vap = vap;
 	a.a_flags = flags;
 	a.a_context = ctx;
+
+	if (vnode_vtype(fvp) == VDIR)
+		a.a_dir_clone_authorizer = vnode_attr_authorize_dir_clone;
+	else
+		a.a_dir_clone_authorizer = NULL;
 
 	_err = (*dvp->v_op[vnop_clonefile_desc.vdesc_offset])(&a);
 

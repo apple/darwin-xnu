@@ -29,7 +29,7 @@
 #ifndef _SYS_CPROTECT_H_
 #define	_SYS_CPROTECT_H_
 
-#if KERNEL_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #include <sys/cdefs.h>
 #include <sys/param.h>
@@ -37,6 +37,7 @@
 #include <sys/kdebug.h>
 #include <crypto/aes.h>
 #include <stdbool.h>
+#include <uuid/uuid.h>
 
 __BEGIN_DECLS
 
@@ -96,7 +97,6 @@ typedef uint16_t cp_key_revision_t;
 typedef uint64_t cp_crypto_id_t;
 
 typedef struct cprotect *cprotect_t;
-typedef struct cp_wrap_func *cp_wrap_func_t;
 typedef struct cpx *cpx_t;
 
 typedef struct cp_key {
@@ -161,6 +161,8 @@ void cpx_free(cpx_t);
 __attribute__((const)) size_t cpx_size(size_t key_size);
 __attribute__((pure)) bool cpx_is_sep_wrapped_key(const struct cpx *);
 void cpx_set_is_sep_wrapped_key(struct cpx *, bool);
+__attribute__((pure)) bool cpx_is_composite_key(const struct cpx *);
+void cpx_set_is_composite_key(struct cpx *, bool);
 __attribute__((pure)) bool cpx_use_offset_for_iv(const struct cpx *);
 void cpx_set_use_offset_for_iv(struct cpx *, bool);
 __attribute__((pure)) bool cpx_synthetic_offset_for_iv(const struct cpx *);
@@ -177,26 +179,8 @@ bool cpx_has_key(const struct cpx *cpx);
 size_t cpx_sizex(const struct cpx *cpx);
 void cpx_set_aes_iv_key(struct cpx *cpx, void *iv_key);
 
-/* Structure to store pointers for AKS functions */
-struct cp_wrap_func {
-	new_key_t       *new_key;
-	unwrapper_t     *unwrapper;
-	rewrapper_t     *rewrapper;
-	invalidater_t	*invalidater;
-	backup_key_t	*backup_key;
-};
-
 int cp_key_store_action(cp_key_store_action_t);
-int cp_register_wraps(cp_wrap_func_t);
-int cp_rewrap_key(cp_cred_t access, cp_key_class_t dp_class,
-				  const cp_wrapped_key_t wrapped_key_in,
-				  cp_wrapped_key_t wrapped_key_out);
-int cp_new_key(cp_cred_t access, cp_key_class_t dp_class, cp_raw_key_t key_out,
-			   cp_wrapped_key_t wrapped_key_out);
-int cp_unwrap_key(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in,
-				  cp_raw_key_t key_out);
-int cp_get_backup_key(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in,
-					  cp_wrapped_key_t wrapped_key_out);
+int cp_key_store_action_for_volume(uuid_t volume_uuid, cp_key_store_action_t action);
 cp_key_os_version_t cp_os_version(void);
 // Should be cp_key_class_t but HFS has a conflicting definition
 int cp_is_valid_class (int isdir, int32_t protectionclass);

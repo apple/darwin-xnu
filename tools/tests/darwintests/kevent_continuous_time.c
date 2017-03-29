@@ -82,7 +82,7 @@ static int wait_for_sleep() {
 	return -1;
 }
 
-T_DECL(kevent_continuous_time_periodic_tick, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME)"){
+T_DECL(kevent_continuous_time_periodic_tick, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME)", T_META_LTEPHASE(LTE_POSTINIT)){
 	mach_timebase_info(&tb_info);
 	int kq;
 	T_ASSERT_POSIX_SUCCESS((kq = kqueue()), NULL);
@@ -130,7 +130,7 @@ T_DECL(kevent_continuous_time_periodic_tick, "kevent(EVFILT_TIMER with NOTE_MACH
 	T_ASSERT_POSIX_ZERO(close(kq), NULL);
 }
 
-T_DECL(kevent_continuous_time_absolute, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME and NOTE_ABSOLUTE)"){
+T_DECL(kevent_continuous_time_absolute, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME and NOTE_ABSOLUTE)", T_META_LTEPHASE(LTE_POSTINIT)){
 	mach_timebase_info(&tb_info);
 
 	int kq;
@@ -182,7 +182,7 @@ T_DECL(kevent_continuous_time_absolute, "kevent(EVFILT_TIMER with NOTE_MACH_CONT
 	T_ASSERT_POSIX_ZERO(close(kq), NULL);
 }
 
-T_DECL(kevent_continuous_time_pops, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME with multiple pops)"){
+T_DECL(kevent_continuous_time_pops, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME with multiple pops)", T_META_LTEPHASE(LTE_POSTINIT)){
 	// have to throttle rate at which pmset is called
 	sleep(2);
 

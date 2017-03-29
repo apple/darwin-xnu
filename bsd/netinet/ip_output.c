@@ -2464,6 +2464,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 		case IP_RECVIF:
 		case IP_RECVTTL:
 		case IP_RECVPKTINFO:
+		case IP_RECVTOS:
 			error = sooptcopyin(sopt, &optval, sizeof (optval),
 			    sizeof (optval));
 			if (error)
@@ -2506,9 +2507,13 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 			case IP_RECVPKTINFO:
 				OPTSET(INP_PKTINFO);
 				break;
+
+			case IP_RECVTOS:
+				OPTSET(INP_RECVTOS);
+				break;
+ #undef OPTSET
 			}
 			break;
-#undef OPTSET
 		/*
 		 * Multicast socket options are processed by the in_mcast
 		 * module.
@@ -2697,8 +2702,8 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 		case IP_RECVTTL:
 		case IP_PORTRANGE:
 		case IP_RECVPKTINFO:
+		case IP_RECVTOS:
 			switch (sopt->sopt_name) {
-
 			case IP_TOS:
 				optval = inp->inp_ip_tos;
 				break;
@@ -2740,6 +2745,10 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 
 			case IP_RECVPKTINFO:
 				optval = OPTBIT(INP_PKTINFO);
+				break;
+
+			case IP_RECVTOS:
+				optval = OPTBIT(INP_RECVTOS);
 				break;
 			}
 			error = sooptcopyout(sopt, &optval, sizeof (optval));

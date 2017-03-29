@@ -1646,7 +1646,6 @@ vm_pageout_scan(void)
 	boolean_t	force_anonymous = FALSE;
 	int		anons_grabbed = 0;
 	int		page_prev_q_state = 0;
-	boolean_t	requeue_insert_first = FALSE;
 #if CONFIG_BACKGROUND_QUEUE
 	boolean_t	ignore_reference = FALSE;
 #endif
@@ -2873,7 +2872,6 @@ consider_inactive:
 		force_anonymous = FALSE;
 		
 		page_prev_q_state = m->vm_page_q_state;
-		requeue_insert_first = FALSE;
 		/*
 		 * we just found this page on one of our queues...
 		 * it can't also be on the pageout queue, so safe
@@ -2927,9 +2925,6 @@ consider_inactive:
 
 				if (page_prev_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q)
 					vm_pageout_cleaned_nolock++;
-
-				if (page_prev_q_state == VM_PAGE_ON_SPECULATIVE_Q)
-					requeue_insert_first = TRUE;
 
 				pmap_clear_reference(VM_PAGE_GET_PHYS_PAGE(m));
 				m->reference = FALSE;
@@ -3014,12 +3009,12 @@ consider_inactive:
 
 			if (page_prev_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q)
 				vm_pageout_cleaned_busy++;
-			
 requeue_page:
-			if (requeue_insert_first)
-				vm_page_enqueue_inactive(m, TRUE);
-			else
+			if (page_prev_q_state == VM_PAGE_ON_SPECULATIVE_Q)
 				vm_page_enqueue_inactive(m, FALSE);
+			else
+			        vm_page_activate(m);
+
 #if CONFIG_BACKGROUND_QUEUE
 			if (ignore_reference == TRUE) {
 				if (m_object->internal)
@@ -3433,7 +3428,7 @@ throttle_inactive:
 					vm_object_unlock(object);
 					object = VM_OBJECT_NULL;
 					vm_page_unlock_queues();
-					
+
 					VM_DEBUG_CONSTANT_EVENT(vm_pageout_jetsam, VM_PAGEOUT_JETSAM, DBG_FUNC_START,
     					       vm_page_active_count, vm_page_inactive_count, vm_page_free_count, vm_page_free_count);
 
@@ -4546,6 +4541,10 @@ extern vm_map_offset_t vm_page_fake_buckets_start, vm_page_fake_buckets_end;
 #define FBDP_TEST_COLLAPSE_COMPRESSOR 0
 #define FBDP_TEST_WIRE_AND_EXTRACT 0
 #define FBDP_TEST_PAGE_WIRE_OVERFLOW 0
+#define FBDP_TEST_KERNEL_OBJECT_FAULT 0
+
+#if FBDP_TEST_KERNEL_OBJECT_FAULT
+#endif /* FBDP_TEST_KERNEL_OBJECT_FAULT */
 
 #if FBDP_TEST_COLLAPSE_COMPRESSOR
 extern boolean_t vm_object_collapse_compressor_allowed;
@@ -5066,6 +5065,11 @@ vm_pageout(void)
 	panic("FBDP(%p,%p): wire_count overflow not detected\n",
 	      fbdp_object, fbdp_page);
 #endif /* FBDP_TEST_PAGE_WIRE_OVERFLOW */
+
+#if FBDP_TEST_KERNEL_OBJECT_FAULT
+	{
+	}
+#endif /* FBDP_TEST_KERNEL_OBJECT_FAULT */
 
 	vm_pageout_continue();
 

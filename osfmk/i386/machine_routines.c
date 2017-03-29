@@ -655,6 +655,9 @@ ml_init_lock_timeout(void)
 		TLBTimeOut = LockTimeOut;
 	}
 
+#if DEVELOPMENT || DEBUG
+	reportphyreaddelayabs = LockTimeOut;
+#endif
 	if (PE_parse_boot_argn("phyreadmaxus", &slto, sizeof (slto))) {
 		default_timeout_ns = slto * NSEC_PER_USEC;
 		nanoseconds_to_absolutetime(default_timeout_ns, &abstime);
@@ -702,6 +705,7 @@ MACRO_END
 		VIRTUAL_TIMEOUT_INFLATE64(LockTimeOutTSC);
 		VIRTUAL_TIMEOUT_INFLATE64(TLBTimeOut);
 		VIRTUAL_TIMEOUT_INFLATE64(MutexSpin);
+		VIRTUAL_TIMEOUT_INFLATE64(reportphyreaddelayabs);
 	}
 
 	interrupt_latency_tracker_setup();

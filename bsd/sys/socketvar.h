@@ -342,6 +342,8 @@ struct socket {
 #define	SOF1_TRAFFIC_MGT_SO_BACKGROUND	0x00002000 /* background socket */
 #define	SOF1_TRAFFIC_MGT_TCP_RECVBG	0x00004000 /* Only TCP sockets, receiver throttling */
 #define	SOF1_QOSMARKING_POLICY_OVERRIDE	0x00008000 /* Opt-out of QoS marking NECP policy */
+#define	SOF1_DATA_AUTHENTICATED		0x00010000 /* idempotent data is authenticated */
+#define	SOF1_ACCEPT_LIST_HELD		0x00020000 /* Another thread is accessing one of the accept lists */
 	u_int64_t	so_extended_bk_start;
 };
 
@@ -789,6 +791,8 @@ extern int sockargs(struct mbuf **mp, user_addr_t data, int buflen, int type);
 extern void get_sockev_state(struct socket *, u_int32_t *);
 extern void so_update_last_owner_locked(struct socket *, struct proc *);
 extern void so_update_policy(struct socket *);
+extern void so_acquire_accept_list(struct socket *, struct socket *);
+extern void so_release_accept_list(struct socket *);
 
 extern int sbappend(struct sockbuf *sb, struct mbuf *m);
 extern int sbappendstream(struct sockbuf *sb, struct mbuf *m);
@@ -844,8 +848,8 @@ extern void soclose_wait_locked(struct socket *so);
 extern int soconnect(struct socket *so, struct sockaddr *nam);
 extern int soconnectlock(struct socket *so, struct sockaddr *nam, int dolock);
 extern int soconnect2(struct socket *so1, struct socket *so2);
-extern int soconnectxlocked(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *, uint32_t, sae_associd_t,
+extern int soconnectxlocked(struct socket *so, struct sockaddr *src,
+    struct sockaddr *dst, struct proc *, uint32_t, sae_associd_t,
     sae_connid_t *, uint32_t, void *, u_int32_t, uio_t, user_ssize_t *);
 extern int sodisconnectx(struct socket *so, sae_associd_t, sae_connid_t);
 extern int sodisconnectxlocked(struct socket *so, sae_associd_t, sae_connid_t);
@@ -907,19 +911,6 @@ extern int soo_ioctl(struct fileproc *, u_long, caddr_t, vfs_context_t);
 extern int soo_stat(struct socket *, void *, int);
 extern int soo_select(struct fileproc *, int, void *, vfs_context_t);
 extern int soo_kqfilter(struct fileproc *, struct knote *, vfs_context_t);
-
-extern struct sockaddr_entry *sockaddrentry_alloc(int);
-extern void sockaddrentry_free(struct sockaddr_entry *);
-extern struct sockaddr_entry *sockaddrentry_dup(const struct sockaddr_entry *,
-    int);
-extern struct sockaddr_list *sockaddrlist_alloc(int);
-extern void sockaddrlist_free(struct sockaddr_list *);
-extern void sockaddrlist_insert(struct sockaddr_list *,
-    struct sockaddr_entry *);
-extern void sockaddrlist_remove(struct sockaddr_list *,
-    struct sockaddr_entry *);
-extern struct sockaddr_list *sockaddrlist_dup(const struct sockaddr_list *,
-    int);
 
 /* Service class flags used for setting service class on a packet */
 #define	PKT_SCF_IPV6		0x00000001	/* IPv6 packet */

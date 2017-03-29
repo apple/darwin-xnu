@@ -173,6 +173,13 @@ vfs_opv_init(void)
 		for (j=0; vfs_opv_descs[i]->opv_desc_ops[j].opve_op; j++) {
 			opve_descp = &(vfs_opv_descs[i]->opv_desc_ops[j]);
 
+			/* Silently skip known-disabled operations */
+			if (opve_descp->opve_op->vdesc_flags & VDESC_DISABLED) {
+				printf("vfs_fsadd: Ignoring reference in %p to disabled operation %s.\n",
+					vfs_opv_descs[i], opve_descp->opve_op->vdesc_name);
+				continue;
+			}
+
 			/*
 			 * Sanity check:  is this operation listed
 			 * in the list of operations?  We check this
@@ -191,8 +198,8 @@ vfs_opv_init(void)
 			 * list of supported operations.
 			 */
 			if (opve_descp->opve_op->vdesc_offset == 0 &&
-				    opve_descp->opve_op->vdesc_offset !=
-				    	VOFFSET(vnop_default)) {
+				    opve_descp->opve_op !=
+					VDESC(vnop_default)) {
 				printf("operation %s not listed in %s.\n",
 				    opve_descp->opve_op->vdesc_name,
 				    "vfs_op_descs");
@@ -244,6 +251,10 @@ vfs_op_init(void)
 	 * and assign each its offset.
 	 */
 	for (vfs_opv_numops = 0, i = 0; vfs_op_descs[i]; i++) {
+		/* Silently skip known-disabled operations */
+		if (vfs_op_descs[i]->vdesc_flags & VDESC_DISABLED) {
+			continue;
+		}
 		vfs_op_descs[i]->vdesc_offset = vfs_opv_numops;
 		vfs_opv_numops++;
 	}
@@ -529,6 +540,7 @@ void
 mount_lock_init(mount_t mp)
 {
 	lck_mtx_init(&mp->mnt_mlock, mnt_lck_grp, mnt_lck_attr);
+	lck_mtx_init(&mp->mnt_iter_lock, mnt_lck_grp, mnt_lck_attr);
 	lck_mtx_init(&mp->mnt_renamelock, mnt_lck_grp, mnt_lck_attr);
 	lck_rw_init(&mp->mnt_rwlock, mnt_lck_grp, mnt_lck_attr);
 }
@@ -537,6 +549,7 @@ void
 mount_lock_destroy(mount_t mp)
 {
 	lck_mtx_destroy(&mp->mnt_mlock, mnt_lck_grp);
+	lck_mtx_destroy(&mp->mnt_iter_lock, mnt_lck_grp);
 	lck_mtx_destroy(&mp->mnt_renamelock, mnt_lck_grp);
 	lck_rw_destroy(&mp->mnt_rwlock, mnt_lck_grp);
 }

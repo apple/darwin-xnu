@@ -113,6 +113,17 @@ that the maximum attribute size can be anywhere from
 fork can have much larger size, and some file system 
 specific extended attributes can have smaller and preset 
 size; for example, Finder Info is always 32 bytes.
+.It Li _PC_MIN_HOLE_SIZE
+If a file system supports the reporting of holes (see
+.Xr lseek 2 ) ,
+.Fn pathconf
+and
+.Fn fpathconf
+return a positive number that represents the minimum hole size returned in
+bytes.
+The offsets of holes returned will be aligned to this same value.
+A special value of 1 is returned if the file system does not specify the minimum
+hole size but still reports holes.
 .El
 .Sh RETURN VALUES
 If the call to

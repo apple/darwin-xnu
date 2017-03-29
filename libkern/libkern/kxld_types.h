@@ -127,6 +127,7 @@ typedef struct splitKextLinkInfo {
     uint64_t        vmaddr_DATA;        // vmaddr of kext __DATA segment
     uint64_t        vmaddr_DATA_CONST;  // vmaddr of kext __DATA_CONST segment
     uint64_t        vmaddr_LINKEDIT;    // vmaddr of kext __LINKEDIT segment
+    uint64_t        vmaddr_LLVM_COV;    // vmaddr of kext __LLVM_COV segment
     uint32_t        kaslr_offsets_count; // offsets into the kext to slide
     uint32_t *      kaslr_offsets;      // offsets into the kext to slide
 } splitKextLinkInfo;

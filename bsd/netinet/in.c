@@ -741,8 +741,13 @@ inctl_ifaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 		error = ifnet_ioctl(ifp, PF_INET, SIOCDIFADDR, ia);
 		if (error == EOPNOTSUPP)
 			error = 0;
-		if (error != 0)
+		if (error != 0) {
+			/* Reset the detaching flag */
+			IFA_LOCK(&ia->ia_ifa);
+			ia->ia_ifa.ifa_debug &= ~IFD_DETACHING;
+			IFA_UNLOCK(&ia->ia_ifa);
 			break;
+		}
 
 		/* Fill out the kernel event information */
 		ev_msg.vendor_code	= KEV_VENDOR_APPLE;
@@ -1291,15 +1296,28 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 			if (iap->ia_ifp == ifp &&
 			    iap->ia_addr.sin_addr.s_addr ==
 			    sa->sin_addr.s_addr) {
+				/*
+				 * Avoid the race condition seen when two
+				 * threads process SIOCDIFADDR command
+				 * at the same time (radar 28942007)
+				 */
+				if (cmd == SIOCDIFADDR) {
+					if (iap->ia_ifa.ifa_debug &
+					    IFD_DETACHING) {
+						IFA_UNLOCK(&iap->ia_ifa);
+						continue;
+					} else {
+						iap->ia_ifa.ifa_debug |=
+						    IFD_DETACHING;
+					}
+				}
 				ia = iap;
+				IFA_ADDREF_LOCKED(&iap->ia_ifa);
 				IFA_UNLOCK(&iap->ia_ifa);
 				break;
 			}
 			IFA_UNLOCK(&iap->ia_ifa);
 		}
-		/* take a reference on ia before releasing lock */
-		if (ia != NULL)
-			IFA_ADDREF(&ia->ia_ifa);
 		lck_rw_done(in_ifaddr_rwlock);
 
 		if (ia == NULL) {
@@ -1909,120 +1927,6 @@ in_purgeaddrs(struct ifnet *ifp)
 		printf("%s: error retrieving list of AF_INET addresses for "
 		    "ifp=%s (err=%d)\n", __func__, ifp->if_xname, err);
 	}
-}
-
-/*
- * Select endpoint address(es).  For now just take the first matching
- * address and discard the rest, if present.
- */
-int
-in_selectaddrs(int af, struct sockaddr_list **src_sl,
-    struct sockaddr_entry **src_se, struct sockaddr_list **dst_sl,
-    struct sockaddr_entry **dst_se)
-{
-	struct sockaddr_entry *se = NULL;
-	struct sockaddr_entry *tse = NULL;
-	int error = 0;
-
-	VERIFY(src_sl != NULL && dst_sl != NULL && *dst_sl != NULL);
-	VERIFY(src_se != NULL && dst_se != NULL);
-
-	*src_se = *dst_se = NULL;
-
-	/* pick a source address, if available */
-	if (*src_sl != NULL) {
-		TAILQ_FOREACH(se, &(*src_sl)->sl_head, se_link) {
-			VERIFY(se->se_addr != NULL);
-			/*
-			 * Take the first source address, or the first
-			 * one with matching address family.
-			 */
-			if (af == AF_UNSPEC || se->se_addr->sa_family == af) {
-				sockaddrlist_remove(*src_sl, se);
-				*src_se = se;
-				break;
-			}
-		}
-		/* get rid of the rest */
-		TAILQ_FOREACH_SAFE(se, &(*src_sl)->sl_head, se_link, tse) {
-			sockaddrlist_remove(*src_sl, se);
-			sockaddrentry_free(se);
-		}
-		if (*src_se != NULL) {
-			/* insert the first src address back in */
-			sockaddrlist_insert(*src_sl, *src_se);
-			VERIFY((*src_sl)->sl_cnt == 1);
-			/* destination address must be of this family */
-			af = (*src_se)->se_addr->sa_family;
-		} else {
-			/* no usable source address with matching family */
-			VERIFY(af != AF_UNSPEC);
-			error = EAFNOSUPPORT;
-			goto out;
-		}
-	}
-	/* pick a (matching) destination address */
-	TAILQ_FOREACH(se, &(*dst_sl)->sl_head, se_link) {
-		VERIFY(se->se_addr != NULL);
-		/*
-		 * Take the first destination address; if source is specified,
-		 * find one which uses the same address family.
-		 */
-		if (af == AF_UNSPEC || se->se_addr->sa_family == af) {
-			sockaddrlist_remove(*dst_sl, se);
-			*dst_se = se;
-			break;
-		}
-	}
-	/* get rid of the rest */
-	TAILQ_FOREACH_SAFE(se, &(*dst_sl)->sl_head, se_link, tse) {
-		sockaddrlist_remove(*dst_sl, se);
-		sockaddrentry_free(se);
-	}
-	if (*dst_se != NULL) {
-		/* insert the first dst address back in */
-		sockaddrlist_insert(*dst_sl, *dst_se);
-		VERIFY((*dst_sl)->sl_cnt == 1);
-	} else {
-		/* source and destination address families don't match */
-		error = EAFNOSUPPORT;
-		goto out;
-	}
-
-	af = (*dst_se)->se_addr->sa_family;
-	VERIFY(*src_se == NULL || (*src_se)->se_addr->sa_family == af);
-
-	/* verify address length */
-	switch (af) {
-	case AF_INET:
-		if ((*dst_se)->se_addr->sa_len !=
-		    sizeof (struct sockaddr_in)) {
-			error = EAFNOSUPPORT;
-			goto out;
-		}
-		break;
-#if INET6
-	case AF_INET6:
-		if ((*dst_se)->se_addr->sa_len !=
-		    sizeof (struct sockaddr_in6)) {
-			error = EAFNOSUPPORT;
-			goto out;
-		}
-		break;
-#endif /* INET6 */
-	default:
-		error = EAFNOSUPPORT;
-		goto out;
-	}
-
-	/* if source address is specified, length must match destination */
-	if (*src_se != NULL && (*src_se)->se_addr->sa_len !=
-	    (*dst_se)->se_addr->sa_len) {
-		error = EAFNOSUPPORT;
-		goto out;
-	}
-out:
-	return (error);
 }
 
 /*

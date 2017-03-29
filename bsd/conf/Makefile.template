@@ -224,6 +224,41 @@ OBJS_NO_CAST_ALIGN =			\
 
 $(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
 
+# Relax -Waddress-of-packed-member on networking (28123676)
+OBJS_NO_PACKED_ADDRESS =    \
+		ah_core.o           \
+		ah_input.o          \
+		esp_input.o         \
+		esp_output.o        \
+		frag6.o             \
+		icmp6.o             \
+		if_stf.o            \
+		in6_cksum.o         \
+		in6_gif.o           \
+		ip6_forward.o       \
+		ip6_input.o         \
+		ip6_output.o        \
+		ipsec.o             \
+		mld6.o              \
+		mptcp_opt.o         \
+		nd6.o               \
+		nd6_nbr.o           \
+		nd6_prproxy.o       \
+		nd6_rtr.o           \
+		necp.o              \
+		pf.o                \
+		pf_norm.o           \
+		pktap.o             \
+		raw_ip6.o           \
+		tcp_input.o         \
+		tcp_subr.o          \
+		udp6_output.o       \
+		udp6_usrreq.o       \
+		udp_usrreq.o
+
+$(foreach file,$(OBJS_NO_PACKED_ADDRESS),$(eval $(call add_perfile_cflags,$(file),-Wno-unknown-warning-option)))
+$(foreach file,$(OBJS_NO_PACKED_ADDRESS),$(eval $(call add_perfile_cflags,$(file),-Wno-address-of-packed-member)))
+
 #
 # This rule insures that the subr_prof.c does NOT get compiled with
 # profiling. It implements mcount() and profiling it leads to recursion.

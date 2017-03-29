@@ -428,7 +428,7 @@ grow_sem_pool(int new_pool_size)
 	printf("growing sem_pool array from %d to %d\n", seminfo.semmns, new_pool_size);
 #endif
 	MALLOC(new_sem_pool, struct sem *, sizeof (struct sem) * new_pool_size,
-	       M_SYSVSEM, M_WAITOK | M_ZERO);
+	       M_SYSVSEM, M_WAITOK | M_ZERO | M_NULL);
 	if (NULL == new_sem_pool) {
 #ifdef SEM_DEBUG
 		printf("allocation failed.  no changes made.\n");

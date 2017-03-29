@@ -416,6 +416,7 @@ def cast(obj, target_type):
         print "ERROR: You cannot cast an 'int' to %s, please use kern.GetValueFromAddress() for such purposes." % str(target_type) 
     raise TypeError("object of type %s cannot be casted to %s" % (str(type(obj)), str(target_type)))
 
+
 _value_types_cache={}
 
 def gettype(target_type):
@@ -429,19 +430,35 @@ def gettype(target_type):
     """
     global _value_types_cache
     target_type = str(target_type).strip()
-    if target_type not in _value_types_cache:
-        tmp_type = None
-        if target_type.endswith('*') :
-            tmp_type = LazyTarget.GetTarget().FindFirstType(target_type.rstrip('*').strip())
-            if not tmp_type.IsValid():
-                raise NameError('Unable to Cast to type '+target_type)
-            tmp_type = tmp_type.GetPointerType()
-        else :
-            tmp_type = LazyTarget.GetTarget().FindFirstType(target_type)
-            if not tmp_type.IsValid():
-                raise NameError('Unable to Cast to type '+target_type)
-        _value_types_cache[target_type] = tmp_type
+    if target_type in _value_types_cache:
+        return _value_types_cache[target_type]
+
+    tmp_type = None
+    requested_type_is_pointer = False
+    if target_type.endswith('*') :
+        requested_type_is_pointer = True
+
+    # tmp_type = LazyTarget.GetTarget().FindFirstType(target_type.rstrip('*').strip())
+    search_type = target_type.rstrip('*').strip()
+    type_arr = [t for t in LazyTarget.GetTarget().FindTypes(search_type)]
+
+    # After the sort, the struct type with more fields will be at index [0].
+    # This hueristic helps selecting struct type with more fields compared to ones with "opaque" members
+    type_arr.sort(reverse=True, key=lambda x: x.GetNumberOfFields())
+    if len(type_arr) > 0:
+        tmp_type = type_arr[0]
+    else:
+        raise NameError('Unable to find type '+target_type)
+
+    if not tmp_type.IsValid():
+        raise NameError('Unable to Cast to type '+target_type)
+
+    if requested_type_is_pointer:
+        tmp_type = tmp_type.GetPointerType()
+    _value_types_cache[target_type] = tmp_type
+
     return _value_types_cache[target_type]
+
 
 def getfieldoffset(struct_type, field_name):
     """ Returns the byte offset of a field inside a given struct

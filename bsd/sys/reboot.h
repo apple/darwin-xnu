@@ -146,4 +146,10 @@ __END_DECLS
 
 #endif /* BSD_KERNEL_PRIVATE */
 
+#if KERNEL_PRIVATE
+__BEGIN_DECLS
+int get_system_inshutdown(void);
+__END_DECLS
+#endif /* KERNEL_PRIVATE */
+
 #endif	/* _SYS_REBOOT_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -2188,6 +2188,7 @@ nfsrv_namei(
 	cnp->cn_flags |= NOCROSSMOUNT;
 	cnp->cn_nameptr = cnp->cn_pnbuf;
 	nip->ni_usedvp = nip->ni_startdir = dp;
+	nip->ni_rootdir = rootvnode;
 
 	/*
 	 * And call lookup() to do the real work
@@ -3109,6 +3110,7 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 					xnd.ni_cnd.cn_nameptr = xnd.ni_cnd.cn_pnbuf = path;
 					xnd.ni_startdir = mvp;
 					xnd.ni_usedvp   = mvp;
+					xnd.ni_rootdir = rootvnode;
 					xnd.ni_cnd.cn_context = ctx;
 					while ((error = lookup(&xnd)) == ERECYCLE) {
 						xnd.ni_cnd.cn_flags = LOCKLEAF;

@@ -1282,8 +1282,79 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 				error = error2;
 		}
 		goto outdrop;
+	}
+	case F_PUNCHHOLE: {
+		fpunchhole_t args;
 
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
 		}
+
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		/* need write permissions */
+		if ((fp->f_flag & FWRITE) == 0) {
+			error = EPERM;
+			goto outdrop;
+		}
+
+		if ((error = copyin(argp, (caddr_t)&args, sizeof(args)))) {
+			goto outdrop;
+		}
+
+		if ((error = vnode_getwithref(vp))) {
+			goto outdrop;
+		}
+
+#if CONFIG_MACF
+		if ((error = mac_vnode_check_write(&context, fp->f_fglob->fg_cred, vp))) {
+			(void)vnode_put(vp);
+			goto outdrop;
+		}
+#endif
+
+		error = VNOP_IOCTL(vp, F_PUNCHHOLE, (caddr_t)&args, 0, &context);
+		(void)vnode_put(vp);
+
+		goto outdrop;
+	}
+	case F_TRIM_ACTIVE_FILE: {
+		ftrimactivefile_t args;
+
+		if (priv_check_cred(kauth_cred_get(), PRIV_TRIM_ACTIVE_FILE, 0)) {
+			error = EACCES;
+			goto out;
+		}
+
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
+		}
+
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		/* need write permissions */
+		if ((fp->f_flag & FWRITE) == 0) {
+			error = EPERM;
+			goto outdrop;
+		}
+
+		if ((error = copyin(argp, (caddr_t)&args, sizeof(args)))) {
+			goto outdrop;
+		}
+
+		if ((error = vnode_getwithref(vp))) {
+			goto outdrop;
+		}
+
+		error = VNOP_IOCTL(vp, F_TRIM_ACTIVE_FILE, (caddr_t)&args, 0, &context);
+		(void)vnode_put(vp);
+
+		goto outdrop;
+	}
 	case F_SETSIZE:
 		if (fp->f_type != DTYPE_VNODE) {
 			error = EBADF;
@@ -1452,7 +1523,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
                 proc_fdunlock(p);
 
                 if ( (error = vnode_getwithref(vp)) == 0 ) {
-                        error = cluster_push(vp, 0);
+                        error = VNOP_FSYNC(vp, MNT_NOWAIT, &context);
 
                         (void)vnode_put(vp);
                 }

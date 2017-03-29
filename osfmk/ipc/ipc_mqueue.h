@@ -93,10 +93,10 @@ typedef struct ipc_mqueue {
 #if MACH_FLIPC
 			struct flipc_port	*fport;	// Null for local port, or ptr to flipc port
 #endif
-		} __attribute__((__packed__)) port;
+		} port;
 		struct {
 			struct waitq_set	setq;
-		} __attribute__((__packed__)) pset;
+		} pset;
 	} data;
 	struct klist imq_klist;
 } *ipc_mqueue_t;
@@ -131,6 +131,23 @@ typedef struct ipc_mqueue {
 #define	imq_unlock(mq)		waitq_unlock(&(mq)->imq_wait_queue)
 #define imq_held(mq)		waitq_held(&(mq)->imq_wait_queue)
 #define imq_valid(mq)		waitq_valid(&(mq)->imq_wait_queue)
+
+/*
+ * Get an ipc_mqueue pointer from a waitq pointer. These are traditionally the
+ * same pointer, but this conversion makes no assumptions on union structure
+ * member positions - it should allow the waitq to move around in either the
+ * port-set mqueue or the port mqueue independently.
+ */
+#define	imq_from_waitq(waitq)	(waitq_is_set(waitq) ? \
+					((struct ipc_mqueue *)((void *)( \
+						(uintptr_t)(waitq) - \
+						__offsetof(struct ipc_mqueue, imq_wait_queue)) \
+					)) : \
+					((struct ipc_mqueue *)((void *)( \
+						(uintptr_t)(waitq) - \
+						__offsetof(struct ipc_mqueue, imq_set_queue)) \
+					)) \
+				 )
 
 extern void imq_reserve_and_lock(ipc_mqueue_t mq,
 				 uint64_t *reserved_prepost);

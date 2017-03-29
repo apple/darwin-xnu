@@ -205,8 +205,8 @@ static int udp_abort(struct socket *);
 static int udp_attach(struct socket *, int, struct proc *);
 static int udp_bind(struct socket *, struct sockaddr *, struct proc *);
 static int udp_connect(struct socket *, struct sockaddr *, struct proc *);
-static int udp_connectx(struct socket *, struct sockaddr_list **,
-    struct sockaddr_list **, struct proc *, uint32_t, sae_associd_t,
+static int udp_connectx(struct socket *, struct sockaddr *,
+    struct sockaddr *, struct proc *, uint32_t, sae_associd_t,
     sae_connid_t *, uint32_t, void *, uint32_t, struct uio *, user_ssize_t *);
 static int udp_detach(struct socket *);
 static int udp_disconnect(struct socket *);
@@ -2002,14 +2002,12 @@ udp_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 }
 
 int
-udp_connectx_common(struct socket *so, int af,
-    struct sockaddr_list **src_sl, struct sockaddr_list **dst_sl,
+udp_connectx_common(struct socket *so, int af, struct sockaddr *src, struct sockaddr *dst,
     struct proc *p, uint32_t ifscope, sae_associd_t aid, sae_connid_t *pcid,
     uint32_t flags, void *arg, uint32_t arglen,
     struct uio *uio, user_ssize_t *bytes_written)
 {
 #pragma unused(aid, flags, arg, arglen)
-	struct sockaddr_entry *src_se = NULL, *dst_se = NULL;
 	struct inpcb *inp = sotoinpcb(so);
 	int error;
 	user_ssize_t datalen = 0;
@@ -2017,21 +2015,10 @@ udp_connectx_common(struct socket *so, int af,
 	if (inp == NULL)
 		return (EINVAL);
 
-	VERIFY(dst_sl != NULL);
-
-	/* select source (if specified) and destination addresses */
-	error = in_selectaddrs(af, src_sl, &src_se, dst_sl, &dst_se);
-	if (error != 0)
-		return (error);
-
-	VERIFY(*dst_sl != NULL && dst_se != NULL);
-	VERIFY(src_se == NULL || *src_sl != NULL);
-	VERIFY(dst_se->se_addr->sa_family == af);
-	VERIFY(src_se == NULL || src_se->se_addr->sa_family == af);
+	VERIFY(dst != NULL);
 
 #if NECP
-	inp_update_necp_policy(inp, src_se ? src_se->se_addr : NULL,
-	    dst_se ? dst_se->se_addr : NULL, ifscope);
+	inp_update_necp_policy(inp, src, dst, ifscope);
 #endif /* NECP */
 
 	/* bind socket to the specified interface, if requested */
@@ -2040,20 +2027,19 @@ udp_connectx_common(struct socket *so, int af,
 		return (error);
 
 	/* if source address and/or port is specified, bind to it */
-	if (src_se != NULL) {
-		struct sockaddr *sa = src_se->se_addr;
-		error = sobindlock(so, sa, 0);	/* already locked */
+	if (src != NULL) {
+		error = sobindlock(so, src, 0);	/* already locked */
 		if (error != 0)
 			return (error);
 	}
 
 	switch (af) {
 	case AF_INET:
-		error = udp_connect(so, dst_se->se_addr, p);
+		error = udp_connect(so, dst, p);
 		break;
 #if INET6
 	case AF_INET6:
-		error = udp6_connect(so, dst_se->se_addr, p);
+		error = udp6_connect(so, dst, p);
 		break;
 #endif /* INET6 */
 	default:
@@ -2099,12 +2085,12 @@ udp_connectx_common(struct socket *so, int af,
 }
 
 static int
-udp_connectx(struct socket *so, struct sockaddr_list **src_sl,
-    struct sockaddr_list **dst_sl, struct proc *p, uint32_t ifscope,
+udp_connectx(struct socket *so, struct sockaddr *src,
+    struct sockaddr *dst, struct proc *p, uint32_t ifscope,
     sae_associd_t aid, sae_connid_t *pcid, uint32_t flags, void *arg,
     uint32_t arglen, struct uio *uio, user_ssize_t *bytes_written)
 {
-	return (udp_connectx_common(so, AF_INET, src_sl, dst_sl,
+	return (udp_connectx_common(so, AF_INET, src, dst,
 	    p, ifscope, aid, pcid, flags, arg, arglen, uio, bytes_written));
 }
 
@@ -2609,7 +2595,7 @@ udp_fill_keepalive_offload_frames(ifnet_t ifp,
 			ip->ip_len = htons(sizeof(struct udpiphdr) +
 			    (u_short)inp->inp_keepalive_datalen);
 			ip->ip_ttl = inp->inp_ip_ttl;
-			ip->ip_tos = inp->inp_ip_tos;
+			ip->ip_tos |= (inp->inp_ip_tos & ~IPTOS_ECN_MASK);
 			ip->ip_src = inp->inp_laddr;
 			ip->ip_dst = inp->inp_faddr;
 			ip->ip_sum = in_cksum_hdr_opt(ip);
@@ -2671,6 +2657,7 @@ udp_fill_keepalive_offload_frames(ifnet_t ifp,
 			}
 			m->m_pkthdr.len = m->m_len;
 			ip6->ip6_flow = inp->inp_flow & IPV6_FLOWINFO_MASK;
+			ip6->ip6_flow = ip6->ip6_flow & ~IPV6_FLOW_ECN_MASK;
 			ip6->ip6_vfc &= ~IPV6_VERSION_MASK;
 			ip6->ip6_vfc |= IPV6_VERSION;
 			ip6->ip6_nxt = IPPROTO_UDP;

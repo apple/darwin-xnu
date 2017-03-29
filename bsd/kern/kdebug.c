@@ -3171,8 +3171,7 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 	kbufinfo_t kd_bufinfo;
 	proc_t p;
 
-	if (name[0] == KERN_KDGETENTROPY ||
-		name[0] == KERN_KDWRITETR ||
+	if (name[0] == KERN_KDWRITETR ||
 		name[0] == KERN_KDWRITETR_V3 ||
 		name[0] == KERN_KDWRITEMAP ||
 		name[0] == KERN_KDWRITEMAP_V3 ||
@@ -3199,8 +3198,7 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 	 */
 	if (name[0] != KERN_KDGETBUF &&
 	    name[0] != KERN_KDGETREG &&
-	    name[0] != KERN_KDREADCURTHRMAP &&
-	    name[0] != KERN_KDGETENTROPY)
+	    name[0] != KERN_KDREADCURTHRMAP)
 	{
 		if ((ret = ktrace_configure(KTRACE_KDEBUG))) {
 			goto out;
@@ -3256,15 +3254,6 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 					ret = EINVAL;
 			}
 			break;
-
-		case KERN_KDGETENTROPY: {
-			/* Obsolescent - just fake with a random buffer */
-			char	*buffer = (char *) kalloc(size);
-			read_frandom((void *) buffer, size);
-			ret = copyout(buffer, where, size);
-			kfree(buffer, size);
-			break;
-		}
 
 		case KERN_KDREADCURTHRMAP:
 			ret = kdbg_readcurthrmap(where, sizep);
@@ -3711,7 +3700,7 @@ nextevent:
 					RAW_file_offset += write_size;
 	
 				if (RAW_file_written >= RAW_FLUSH_SIZE) {
-					cluster_push(vp, 0);
+					error = VNOP_FSYNC(vp, MNT_NOWAIT, ctx);
 
 					RAW_file_written = 0;
 				}

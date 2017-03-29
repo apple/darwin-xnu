@@ -780,12 +780,6 @@ fork_create_child(task_t parent_task, coalition_t *parent_coalitions, proc_t chi
 	if (timerisset(&child_proc->p_rlim_cpu))
 		task_vtimer_set(child_task, TASK_VTIMER_RLIM);
 
-	/* Set/clear 64 bit vm_map flag */
-	if (is64bit)
-		vm_map_set_64bit(get_task_map(child_task));
-	else
-		vm_map_set_32bit(get_task_map(child_task));
-
 	/*
 	 * Set child process BSD visible scheduler priority if nice value
 	 * inherited from parent

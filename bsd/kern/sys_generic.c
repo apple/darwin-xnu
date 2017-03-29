@@ -1789,6 +1789,14 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 	if (nfds && (rfds == nfds))
 		goto done;
 
+	/*
+	 * If any events have trouble registering, an event has fired and we
+	 * shouldn't wait for events in kqueue_scan -- use the current time as
+	 * the deadline.
+	 */
+	if (rfds)
+		getmicrouptime(&atv);
+
 	/* scan for, and possibly wait for, the kevents to trigger */
 	cont->pca_fds = uap->fds;
 	cont->pca_nfds = nfds;
@@ -3164,9 +3172,11 @@ ledger(struct proc *p, struct ledger_args *args, __unused int32_t *retval)
 		error = copyin(args->arg3, (char *)&len, sizeof (len));
 	else if (args->cmd == LEDGER_TEMPLATE_INFO)
 		error = copyin(args->arg2, (char *)&len, sizeof (len));
-#ifdef LEDGER_DEBUG
 	else if (args->cmd == LEDGER_LIMIT)
+#ifdef LEDGER_DEBUG
 		error = copyin(args->arg2, (char *)&lla, sizeof (lla));
+#else
+		return (EINVAL);
 #endif
 	else if ((args->cmd < 0) || (args->cmd > LEDGER_MAX_CMD))
 		return (EINVAL);

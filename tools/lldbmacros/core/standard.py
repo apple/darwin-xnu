@@ -43,7 +43,7 @@ class CommandOutput(object):
        will be printed/saved only if it matches the expression. 
        The command header will not be filtered in any case.
     """
-    def __init__(self, CommandResult):
+    def __init__(self, cmd_name, CommandResult):
         """ Create a new instance to handle command output.
         params:
                 CommandResult : SBCommandReturnObject result param from lldb's command invocation. 
@@ -53,6 +53,7 @@ class CommandOutput(object):
         self.FILTER=False
         self.pluginRequired = False
         self.pluginName = None
+        self.cmd_name = cmd_name
         self.resultObj = CommandResult
         self.immediateOutput = False
         self.verbose_level = 0
@@ -61,9 +62,13 @@ class CommandOutput(object):
 
     def write(self, s):
         """ Handler for all commands output. By default just print to stdout """
-        if self.FILTER and not self.reg.search(s): return
-        if self.FILTER : s+="\n"
-        if self.fhandle != None: self.fhandle.write(s)
+        if self.FILTER and not self.reg.search(s):
+            return
+        if self.FILTER:
+            s += "\n"
+
+        if self.fhandle != None:
+            self.fhandle.write(s)
         else:
             if self.immediateOutput:
                 sys.__stdout__.write(s)
@@ -82,7 +87,7 @@ class CommandOutput(object):
         if self.fhandle != None :
             self.fhandle.close()
     
-    def setOptions(self,cmdargs, cmdoptions =''):
+    def setOptions(self, cmdargs, cmdoptions =''):
         """ parse the arguments passed to the command 
             param : 
                 cmdargs => [] of <str> (typically args.split())
@@ -107,7 +112,7 @@ class CommandOutput(object):
                 self.fname=os.path.normpath(os.path.expanduser(a.strip()))
                 self.fhandle=open(self.fname,"w")
                 print "saving results in file ",str(a)
-                self.fhandle.write("(lldb)%s \n" % " ".join(cmdargs))
+                self.fhandle.write("(lldb)%s %s \n" % (self.cmd_name, " ".join(cmdargs)))
             elif o == "-s" and len(a) > 0:
                 self.reg = re.compile(a.strip(),re.MULTILINE|re.DOTALL)
                 self.FILTER=True

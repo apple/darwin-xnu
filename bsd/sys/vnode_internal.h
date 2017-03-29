@@ -318,12 +318,14 @@ extern	struct vnode *imgsrc_rootvnodes[];
  */
 #define VDESC_MAX_VPS		16
 /* Low order 16 flag bits are reserved for willrele flags for vp arguments. */
-#define VDESC_VP0_WILLRELE	0x0001
-#define VDESC_VP1_WILLRELE	0x0002
-#define VDESC_VP2_WILLRELE	0x0004
-#define VDESC_VP3_WILLRELE	0x0008
-#define VDESC_NOMAP_VPP		0x0100
-#define VDESC_VPP_WILLRELE	0x0200
+#define VDESC_VP0_WILLRELE	0x00001
+#define VDESC_VP1_WILLRELE	0x00002
+#define VDESC_VP2_WILLRELE	0x00004
+#define VDESC_VP3_WILLRELE	0x00008
+#define VDESC_NOMAP_VPP		0x00100
+#define VDESC_VPP_WILLRELE	0x00200
+
+#define VDESC_DISABLED		0x10000 /* descriptor defined but op is unused, has no op slot */
 
 /*
  * VDESC_NO_OFFSET is used to identify the end of the offset list
@@ -447,6 +449,9 @@ int	vn_authorize_rmdir(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_c
 typedef int (*vn_create_authorizer_t)(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
 int vn_authorize_mkdir(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
 int vn_authorize_null(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
+int vnode_attr_authorize_dir_clone(struct vnode_attr *vap, kauth_action_t action,
+    struct vnode_attr *dvap, vnode_t sdvp, mount_t mp, dir_clone_authorizer_op_t vattr_op,
+    vfs_context_t ctx, void *reserved);
 /* End of authorization subroutines */
 
 #define VN_CREATE_NOAUTH		(1<<0)

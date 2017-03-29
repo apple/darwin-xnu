@@ -91,7 +91,6 @@ extern kern_return_t task_duplicate_map_and_threads(
 			void *p,
 			task_t new_task,
 			thread_t *thread,
-			int is64bit,
 			uint64_t **udata_buffer,
 			int *size,
 			int*num_udata);

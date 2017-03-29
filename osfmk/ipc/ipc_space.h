@@ -124,6 +124,7 @@ struct ipc_space {
 };
 
 #define	IS_NULL			((ipc_space_t) 0)
+#define	IS_INSPECT_NULL		((ipc_space_inspect_t) 0)
 
 #define is_active(is) 		(((is)->is_bits & IS_INACTIVE) != IS_INACTIVE)
 

@@ -7,11 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		086FC22B1E0347E700A7EBEF /* pgokext.c in Sources */ = {isa = PBXBuildFile; fileRef = 086FC22A1E0347E700A7EBEF /* pgokext.c */; };
 		C68D22B30EB2441400C3A06C /* testvmx.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C68D22B20EB2441400C3A06C /* testvmx.cpp */; };
 		C6CBD9CE1225B9FF00F317B5 /* testthreadcall.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C6CBD9CD1225B9FF00F317B5 /* testthreadcall.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		086FC2281E0347E700A7EBEF /* pgokext.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = pgokext.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		086FC22A1E0347E700A7EBEF /* pgokext.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = pgokext.c; sourceTree = "<group>"; };
+		086FC22C1E0347E700A7EBEF /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8DA8362C06AD9B9200E5AC22 /* Kernel.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Kernel.framework; path = /System/Library/Frameworks/Kernel.framework; sourceTree = "<absolute>"; };
 		C68D22A80EB243BC00C3A06C /* testvmx.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = testvmx.kext; sourceTree = BUILT_PRODUCTS_DIR; };
 		C68D22A90EB243BC00C3A06C /* testvmx-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "testvmx-Info.plist"; sourceTree = "<group>"; };
@@ -24,6 +28,13 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		086FC2241E0347E700A7EBEF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C68D22A60EB243BC00C3A06C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -41,11 +52,21 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		086FC2291E0347E700A7EBEF /* pgokext */ = {
+			isa = PBXGroup;
+			children = (
+				086FC22A1E0347E700A7EBEF /* pgokext.c */,
+				086FC22C1E0347E700A7EBEF /* Info.plist */,
+			);
+			path = pgokext;
+			sourceTree = "<group>";
+		};
 		089C166AFE841209C02AAC07 /* testkext */ = {
 			isa = PBXGroup;
 			children = (
 				247142CAFF3F8F9811CA285C /* Source */,
 				8DA8362C06AD9B9200E5AC22 /* Kernel.framework */,
+				086FC2291E0347E700A7EBEF /* pgokext */,
 				19C28FB6FE9D52B211CA2CBB /* Products */,
 			);
 			name = testkext;
@@ -56,6 +77,7 @@
 			children = (
 				C68D22A80EB243BC00C3A06C /* testvmx.kext */,
 				C6CBD9C31225B98F00F317B5 /* testthreadcall.kext */,
+				086FC2281E0347E700A7EBEF /* pgokext.kext */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -75,7 +97,35 @@
 		};
 /* End PBXGroup section */
 
+/* Begin PBXHeadersBuildPhase section */
+		086FC2251E0347E700A7EBEF /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXHeadersBuildPhase section */
+
 /* Begin PBXNativeTarget section */
+		086FC2271E0347E700A7EBEF /* pgokext */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 086FC22F1E0347E700A7EBEF /* Build configuration list for PBXNativeTarget "pgokext" */;
+			buildPhases = (
+				086FC2231E0347E700A7EBEF /* Sources */,
+				086FC2241E0347E700A7EBEF /* Frameworks */,
+				086FC2251E0347E700A7EBEF /* Headers */,
+				086FC2261E0347E700A7EBEF /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = pgokext;
+			productName = pgokext;
+			productReference = 086FC2281E0347E700A7EBEF /* pgokext.kext */;
+			productType = "com.apple.product-type.kernel-extension";
+		};
 		C68D22A70EB243BC00C3A06C /* testvmx */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C68D22AC0EB243BD00C3A06C /* Build configuration list for PBXNativeTarget "testvmx" */;
@@ -115,6 +165,14 @@
 /* Begin PBXProject section */
 		089C1669FE841209C02AAC07 /* Project object */ = {
 			isa = PBXProject;
+			attributes = {
+				TargetAttributes = {
+					086FC2271E0347E700A7EBEF = {
+						CreatedOnToolsVersion = 8.3;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
 			buildConfigurationList = 1DEB91DD08733DB10010E9CD /* Build configuration list for PBXProject "testkext" */;
 			compatibilityVersion = "Xcode 3.1";
 			developmentRegion = English;
@@ -131,11 +189,19 @@
 			targets = (
 				C68D22A70EB243BC00C3A06C /* testvmx */,
 				C6CBD9C21225B98F00F317B5 /* testthreadcall */,
+				086FC2271E0347E700A7EBEF /* pgokext */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		086FC2261E0347E700A7EBEF /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C68D22A50EB243BC00C3A06C /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -153,6 +219,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		086FC2231E0347E700A7EBEF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				086FC22B1E0347E700A7EBEF /* pgokext.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C68D22A40EB243BC00C3A06C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -172,6 +246,107 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		086FC22D1E0347E700A7EBEF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				INFOPLIST_FILE = pgokext/Info.plist;
+				INSTALL_PATH = /;
+				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				MODULE_NAME = com.apple.pgokext;
+				MODULE_START = pgokext_start;
+				MODULE_STOP = pgokext_stop;
+				MODULE_VERSION = 1.0.0d1;
+				MTL_ENABLE_DEBUG_INFO = YES;
+				OTHER_CFLAGS = "-fprofile-instr-generate";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.pgokext;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Debug;
+		};
+		086FC22E1E0347E700A7EBEF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				INFOPLIST_FILE = pgokext/Info.plist;
+				INSTALL_PATH = /;
+				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				MODULE_NAME = com.apple.pgokext;
+				MODULE_START = pgokext_start;
+				MODULE_STOP = pgokext_stop;
+				MODULE_VERSION = 1.0.0d1;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				OTHER_CFLAGS = "-fprofile-instr-generate";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.pgokext;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Release;
+		};
 		1DEB91DE08733DB10010E9CD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -279,6 +454,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		086FC22F1E0347E700A7EBEF /* Build configuration list for PBXNativeTarget "pgokext" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				086FC22D1E0347E700A7EBEF /* Debug */,
+				086FC22E1E0347E700A7EBEF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		1DEB91DD08733DB10010E9CD /* Build configuration list for PBXProject "testkext" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

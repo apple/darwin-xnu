@@ -10,7 +10,7 @@
 #include <mach/mach.h>
 #include <darwintest.h>
 
-T_DECL(voucher_entry, "voucher_entry", T_META_CHECK_LEAKS(NO), T_META_ALL_VALID_ARCHS(YES))
+T_DECL(voucher_entry, "voucher_entry", T_META_CHECK_LEAKS(false), T_META_ALL_VALID_ARCHS(true))
 {
 	kern_return_t kr        = KERN_SUCCESS;
 	mach_voucher_t voucher  = MACH_VOUCHER_NULL;

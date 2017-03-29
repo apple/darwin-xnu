@@ -107,6 +107,6 @@ __END_DECLS
  * Source level -> #define USE_OLD_TTY
  * Kernel level -> always on
  */
-#if defined(USE_OLD_TTY) || BSD_KERNEL_PRIVATE
+#if defined(USE_OLD_TTY) || defined(BSD_KERNEL_PRIVATE)
 #include <sys/ioctl_compat.h>
 #endif /* !_SYS_IOCTL_H_ */

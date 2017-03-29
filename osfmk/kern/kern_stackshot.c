@@ -37,6 +37,7 @@
 #endif
 #include <sys/appleapiopts.h>
 #include <kern/debug.h>
+#include <kern/block_hint.h>
 #include <uuid/uuid.h>
 
 #include <kdp/kdp_dyld.h>
@@ -67,6 +68,9 @@
 extern unsigned int not_in_kdp;
 
 
+/* indicate to the compiler that some accesses are unaligned */
+typedef uint64_t unaligned_u64 __attribute__((aligned(1)));
+
 extern addr64_t kdp_vtophys(pmap_t pmap, addr64_t va);
 extern void * proc_get_uthread_uu_threadlist(void * uthread_v);
 
@@ -85,7 +89,7 @@ static boolean_t panic_stackshot;
 static boolean_t stack_enable_faulting = FALSE;
 static struct stackshot_fault_stats fault_stats;
 
-static uint64_t * stackshot_duration_outer;
+static unaligned_u64 * stackshot_duration_outer;
 static uint64_t stackshot_microsecs;
 
 void * kernel_stackshot_buf   = NULL; /* Pointer to buffer for stackshots triggered from the kernel and retrieved later */
@@ -107,11 +111,12 @@ boolean_t               stackshot_thread_is_idle_worker_unsafe(thread_t thread);
 static int		kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t *pBytesTraced);
 kern_return_t	kdp_stack_snapshot_geterror(void);
 uint32_t		kdp_stack_snapshot_bytes_traced(void);
-static int 		pid_from_task(task_t task);
 static void		kdp_mem_and_io_snapshot(struct mem_and_io_snapshot *memio_snap);
 static boolean_t	kdp_copyin(vm_map_t map, uint64_t uaddr, void *dest, size_t size, boolean_t try_fault, uint32_t *kdp_fault_result);
 static boolean_t	kdp_copyin_word(task_t task, uint64_t addr, uint64_t *result, boolean_t try_fault, uint32_t *kdp_fault_results);
 static uint64_t		proc_was_throttled_from_task(task_t task);
+static void		stackshot_thread_wait_owner_info(thread_t thread, thread_waitinfo_t * waitinfo);
+static int		stackshot_thread_has_valid_waitinfo(thread_t thread);
 
 extern uint32_t workqueue_get_pwq_state_kdp(void *proc);
 
@@ -135,6 +140,15 @@ extern kern_return_t stack_microstackshot(user_addr_t tracebuf, uint32_t tracebu
 
 extern kern_return_t kern_stack_snapshot_with_reason(char* reason);
 extern kern_return_t kern_stack_snapshot_internal(int stackshot_config_version, void *stackshot_config, size_t stackshot_config_size, boolean_t stackshot_from_user);
+/* Used for stackshot_thread_waitinfo_unsafe */
+extern void kdp_lck_mtx_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_sema_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_mqueue_send_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_mqueue_recv_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_ulock_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_rwlck_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_pthread_find_owner(thread_t thread, thread_waitinfo_t *waitinfo);
+extern void *kdp_pthread_get_thread_kwq(thread_t thread);
 
 /*
  * Validates that the given address is both a valid page and has
@@ -779,7 +793,7 @@ kcdata_get_task_ss_flags(task_t task)
 }
 
 static kern_return_t
-kcdata_record_shared_cache_info(kcdata_descriptor_t kcd, task_t task, struct dyld_uuid_info_64_v2 *sys_shared_cache_loadinfo, uint32_t trace_flags, uint64_t *task_snap_ss_flags)
+kcdata_record_shared_cache_info(kcdata_descriptor_t kcd, task_t task, struct dyld_uuid_info_64_v2 *sys_shared_cache_loadinfo, uint32_t trace_flags, unaligned_u64 *task_snap_ss_flags)
 {
 	kern_return_t error = KERN_SUCCESS;
 	mach_vm_address_t out_addr = 0;
@@ -857,7 +871,7 @@ error_exit:
 }
 
 static kern_return_t
-kcdata_record_uuid_info(kcdata_descriptor_t kcd, task_t task, uint32_t trace_flags, boolean_t have_pmap, uint64_t *task_snap_ss_flags)
+kcdata_record_uuid_info(kcdata_descriptor_t kcd, task_t task, uint32_t trace_flags, boolean_t have_pmap, unaligned_u64 *task_snap_ss_flags)
 {
 	boolean_t save_loadinfo_p         = ((trace_flags & STACKSHOT_SAVE_LOADINFO) != 0);
 	boolean_t save_kextloadinfo_p     = ((trace_flags & STACKSHOT_SAVE_KEXT_LOADINFO) != 0);
@@ -1024,7 +1038,7 @@ error_exit:
 }
 
 static kern_return_t
-kcdata_record_task_snapshot(kcdata_descriptor_t kcd, task_t task, uint32_t trace_flags, boolean_t have_pmap, uint64_t **task_snap_ss_flags)
+kcdata_record_task_snapshot(kcdata_descriptor_t kcd, task_t task, uint32_t trace_flags, boolean_t have_pmap, unaligned_u64 **task_snap_ss_flags)
 {
 	boolean_t collect_delta_stackshot = ((trace_flags & STACKSHOT_COLLECT_DELTA_SNAPSHOT) != 0);
 	boolean_t collect_iostats         = !collect_delta_stackshot && !(trace_flags & STACKSHOT_TAILSPIN) && !(trace_flags & STACKSHOT_NO_IO_STATS);
@@ -1037,6 +1051,7 @@ kcdata_record_task_snapshot(kcdata_descriptor_t kcd, task_t task, uint32_t trace
 
 	int task_pid           = pid_from_task(task);
 	uint64_t task_uniqueid = get_task_uniqueid(task);
+	uint64_t proc_starttime_secs = 0;
 
 	kcd_exit_on_error(kcdata_get_memory_addr(kcd, STACKSHOT_KCTYPE_TASK_SNAPSHOT, sizeof(struct task_snapshot_v2), &out_addr));
 
@@ -1044,12 +1059,12 @@ kcdata_record_task_snapshot(kcdata_descriptor_t kcd, task_t task, uint32_t trace
 
 	cur_tsnap->ts_unique_pid = task_uniqueid;
 	cur_tsnap->ts_ss_flags = kcdata_get_task_ss_flags(task);
-	*task_snap_ss_flags = &cur_tsnap->ts_ss_flags;
+	*task_snap_ss_flags = (unaligned_u64 *)&cur_tsnap->ts_ss_flags;
 	cur_tsnap->ts_user_time_in_terminated_threads = task->total_user_time;
 	cur_tsnap->ts_system_time_in_terminated_threads = task->total_system_time;
 
-	cur_tsnap->ts_p_start_sec = 0;
-	proc_starttime_kdp(task->bsd_info, &cur_tsnap->ts_p_start_sec, NULL, NULL);
+	proc_starttime_kdp(task->bsd_info, &proc_starttime_secs, NULL, NULL);
+	cur_tsnap->ts_p_start_sec = proc_starttime_secs;
 
 	cur_tsnap->ts_task_size = have_pmap ? (pmap_resident_count(task->map->pmap) * PAGE_SIZE) : 0;
 	cur_tsnap->ts_max_resident_size = get_task_resident_max(task);
@@ -1085,7 +1100,7 @@ error_exit:
 }
 
 static kern_return_t
-kcdata_record_task_delta_snapshot(kcdata_descriptor_t kcd, task_t task, boolean_t have_pmap, uint64_t **task_snap_ss_flags)
+kcdata_record_task_delta_snapshot(kcdata_descriptor_t kcd, task_t task, boolean_t have_pmap, unaligned_u64 **task_snap_ss_flags)
 {
 	kern_return_t error                       = KERN_SUCCESS;
 	struct task_delta_snapshot_v2 * cur_tsnap = NULL;
@@ -1100,7 +1115,7 @@ kcdata_record_task_delta_snapshot(kcdata_descriptor_t kcd, task_t task, boolean_
 
 	cur_tsnap->tds_unique_pid = task_uniqueid;
 	cur_tsnap->tds_ss_flags = kcdata_get_task_ss_flags(task);
-	*task_snap_ss_flags = &cur_tsnap->tds_ss_flags;
+	*task_snap_ss_flags = (unaligned_u64 *)&cur_tsnap->tds_ss_flags;
 
 	cur_tsnap->tds_user_time_in_terminated_threads = task->total_user_time;
 	cur_tsnap->tds_system_time_in_terminated_threads = task->total_system_time;
@@ -1465,12 +1480,17 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 
 	abs_time = mach_absolute_time();
 
+#if !(DEVELOPMENT || DEBUG)
+	trace_flags &= ~STACKSHOT_THREAD_WAITINFO;
+#endif
+
 	/* process the flags */
 	boolean_t active_kthreads_only_p  = ((trace_flags & STACKSHOT_ACTIVE_KERNEL_THREADS_ONLY) != 0);
 	boolean_t save_donating_pids_p    = ((trace_flags & STACKSHOT_SAVE_IMP_DONATION_PIDS) != 0);
 	boolean_t collect_delta_stackshot = ((trace_flags & STACKSHOT_COLLECT_DELTA_SNAPSHOT) != 0);
 	boolean_t minimize_nonrunnables   = ((trace_flags & STACKSHOT_TAILSPIN) != 0);
 	boolean_t use_fault_path          = ((trace_flags & (STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_ENABLE_BT_FAULTING)) != 0);
+	boolean_t save_owner_info         = ((trace_flags & STACKSHOT_THREAD_WAITINFO) != 0);
 
 	stack_enable_faulting = (trace_flags & (STACKSHOT_ENABLE_BT_FAULTING));
 
@@ -1556,11 +1576,12 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 		uint64_t task_uniqueid         = 0;
 		int num_delta_thread_snapshots = 0;
 		int num_nonrunnable_threads    = 0;
+		int num_waitinfo_threads       = 0;
 		uint64_t task_start_abstime    = 0;
 		boolean_t task_delta_stackshot = FALSE;
 		boolean_t task64 = FALSE, have_map = FALSE, have_pmap = FALSE;
 		boolean_t some_thread_ran = FALSE;
-		uint64_t *task_snap_ss_flags = NULL;
+		unaligned_u64 *task_snap_ss_flags = NULL;
 
 		if ((task == NULL) || !ml_validate_nofault((vm_offset_t)task, sizeof(struct task))) {
 			error = KERN_FAILURE;
@@ -1657,6 +1678,12 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 					num_nonrunnable_threads++;
 					break;
 				}
+
+				/* We want to report owner information regardless of whether a thread
+				 * has changed since the last delta, whether it's a normal stackshot,
+				 * or whether it's nonrunnable */
+				if (save_owner_info && stackshot_thread_has_valid_waitinfo(thread))
+					num_waitinfo_threads++;
 			}
 
 			if (task_delta_stackshot && minimize_nonrunnables) {
@@ -1696,11 +1723,27 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 				nonrunnable_tids = (uint64_t *)out_addr;
 			}
 
-			if (num_delta_thread_snapshots > 0 || num_nonrunnable_threads > 0) {
+			thread_waitinfo_t *thread_waitinfo = NULL;
+			int current_waitinfo_index         = 0;
+
+			if (num_waitinfo_threads > 0) {
+				kcd_exit_on_error(kcdata_get_memory_addr_for_array(stackshot_kcdata_p, STACKSHOT_KCTYPE_THREAD_WAITINFO,
+									   sizeof(thread_waitinfo_t), num_waitinfo_threads, &out_addr));
+				thread_waitinfo = (thread_waitinfo_t *)out_addr;
+			}
+
+			if (num_delta_thread_snapshots > 0 || num_nonrunnable_threads > 0 || num_waitinfo_threads > 0) {
 				queue_iterate(&task->threads, thread, thread_t, task_threads)
 				{
 					if (active_kthreads_only_p && thread->kernel_stack == 0)
 						continue;
+
+					/* If we want owner info, we should capture it regardless of its classification */
+					if (save_owner_info && stackshot_thread_has_valid_waitinfo(thread)) {
+						stackshot_thread_wait_owner_info(
+								thread,
+								&thread_waitinfo[current_waitinfo_index++]);
+					}
 
 					boolean_t thread_on_core;
 					enum thread_classification thread_classification = classify_thread(thread, &thread_on_core, trace_flags);
@@ -1727,8 +1770,12 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 					      num_delta_thread_snapshots, current_delta_snapshot_index);
 				}
 				if (current_nonrunnable_index != num_nonrunnable_threads) {
-					panic("delta thread snapshot count mismatch while capturing snapshots for task %p. expected %d, found %d", task,
+					panic("nonrunnable thread count mismatch while capturing snapshots for task %p. expected %d, found %d", task,
 					      num_nonrunnable_threads, current_nonrunnable_index);
+				}
+				if (current_waitinfo_index != num_waitinfo_threads) {
+					panic("thread wait info count mismatch while capturing snapshots for task %p. expected %d, found %d", task,
+					      num_waitinfo_threads, current_waitinfo_index);
 				}
 #endif
 			}
@@ -1783,7 +1830,7 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 	struct stackshot_duration * stackshot_duration = (struct stackshot_duration *)out_addr;
 	stackshot_duration->stackshot_duration         = (abs_time_end - abs_time);
 	stackshot_duration->stackshot_duration_outer   = 0;
-	stackshot_duration_outer                       = &stackshot_duration->stackshot_duration_outer;
+	stackshot_duration_outer                       = (unaligned_u64 *)&stackshot_duration->stackshot_duration_outer;
 #endif
 	stackshot_memcpy((void *)abs_time_addr, &abs_time_end, sizeof(uint64_t));
 
@@ -1798,19 +1845,6 @@ error_exit:
 	stack_enable_faulting = FALSE;
 
 	return error;
-}
-
-static int pid_from_task(task_t task)
-{
-	int pid = -1;
-
-	if (task->bsd_info) {
-		pid = proc_pid(task->bsd_info);
-	} else {
-		pid = task_pid(task);
-	}
-
-	return pid;
 }
 
 static uint64_t
@@ -2121,15 +2155,74 @@ machine_trace_thread_clear_validation_cache(void)
 boolean_t
 stackshot_thread_is_idle_worker_unsafe(thread_t thread)
 {
-	/* When the pthread kext puts a worker thread to sleep, it will call
-	 * assert_wait on the thread's own threadlist.  see parkit() in
-	 * kern_support.c.
+	/* When the pthread kext puts a worker thread to sleep, it will
+	 * set kThreadWaitParkedWorkQueue in the block_hint of the thread
+	 * struct. See parkit() in kern/kern_support.c in libpthread.
 	 */
-	struct uthread * uthread = get_bsdthread_info(thread);
-	event64_t threadlist = (event64_t)proc_get_uthread_uu_threadlist(uthread);
-	event64_t wait_event = thread->wait_event;
-	return uthread &&
-		(thread->state & TH_WAIT) &&
-		wait_event &&
-		threadlist == wait_event;
+	return (thread->state & TH_WAIT) &&
+		(thread->block_hint == kThreadWaitParkedWorkQueue);
+}
+
+/* Determine if a thread has waitinfo that stackshot can provide */
+static int
+stackshot_thread_has_valid_waitinfo(thread_t thread)
+{
+	if (!(thread->state & TH_WAIT))
+		return 0;
+
+	switch (thread->block_hint) {
+		// If set to None or is a parked work queue, ignore it
+		case kThreadWaitParkedWorkQueue:
+		case kThreadWaitNone:
+			return 0;
+		// There is a short window where the pthread kext removes a thread
+		// from its ksyn wait queue before waking the thread up
+		case kThreadWaitPThreadMutex:
+		case kThreadWaitPThreadRWLockRead:
+		case kThreadWaitPThreadRWLockWrite:
+		case kThreadWaitPThreadCondVar:
+			return (kdp_pthread_get_thread_kwq(thread) != NULL);
+		// All other cases are valid block hints if in a wait state
+		default:
+			return 1;
+	}
+}
+
+static void
+stackshot_thread_wait_owner_info(thread_t thread, thread_waitinfo_t *waitinfo)
+{
+	waitinfo->waiter    = thread_tid(thread);
+	waitinfo->wait_type = thread->block_hint;
+	switch (waitinfo->wait_type) {
+		case kThreadWaitKernelMutex:
+			kdp_lck_mtx_find_owner(thread->waitq, thread->wait_event, waitinfo);
+			break;
+		case kThreadWaitPortReceive:
+			kdp_mqueue_recv_find_owner(thread->waitq, thread->wait_event, waitinfo);
+			break;
+		case kThreadWaitPortSend:
+			kdp_mqueue_send_find_owner(thread->waitq, thread->wait_event, waitinfo);
+			break;
+		case kThreadWaitSemaphore:
+			kdp_sema_find_owner(thread->waitq, thread->wait_event, waitinfo);
+			break;
+		case kThreadWaitUserLock:
+			kdp_ulock_find_owner(thread->waitq, thread->wait_event, waitinfo);
+			break;
+		case kThreadWaitKernelRWLockRead:
+		case kThreadWaitKernelRWLockWrite:
+		case kThreadWaitKernelRWLockUpgrade:
+			kdp_rwlck_find_owner(thread->waitq, thread->wait_event, waitinfo);
+			break;
+		case kThreadWaitPThreadMutex:
+		case kThreadWaitPThreadRWLockRead:
+		case kThreadWaitPThreadRWLockWrite:
+		case kThreadWaitPThreadCondVar:
+			kdp_pthread_find_owner(thread, waitinfo);
+			break;
+		default:
+			waitinfo->owner = 0;
+			waitinfo->context = 0;
+			break;
+	}
 }

@@ -197,8 +197,8 @@ const mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 91 */	MACH_TRAP(mk_timer_create_trap, 0, 0, NULL),
 /* 92 */	MACH_TRAP(mk_timer_destroy_trap, 1, 1, munge_w),
 /* 93 */	MACH_TRAP(mk_timer_arm_trap, 2, 3, munge_wl),
-/* 94 */	MACH_TRAP(mk_timer_cancel_trap, 2, 2, munge_ww),		
-/* 95 */	MACH_TRAP(kern_invalid, 0, 0, NULL),		
+/* 94 */	MACH_TRAP(mk_timer_cancel_trap, 2, 2, munge_ww),
+/* 95 */	MACH_TRAP(mk_timer_arm_leeway_trap, 4, 6, munge_wlll),
 /* traps 64 - 95 reserved (debo) */
 /* 96 */	MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 97 */	MACH_TRAP(kern_invalid, 0, 0, NULL),

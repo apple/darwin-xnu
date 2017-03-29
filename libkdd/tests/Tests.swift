@@ -1331,6 +1331,10 @@ class Tests: XCTestCase {
         self.testSampleStackshot("xnupost_testconfig-sample")
     }
 
+    func testStackshotWithWaitinfo() {
+        self.testSampleStackshot("stackshot-with-waitinfo")
+    }
+
     func testTrivial() {
     }
 }

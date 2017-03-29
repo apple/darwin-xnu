@@ -41,7 +41,7 @@ void serial_keyboard_poll(void);
 
 extern uint32_t serialmode;
 extern uint32_t cons_ops_index;
-extern uint32_t nconsops;
+extern const uint32_t nconsops;
 extern unsigned int disable_serial_output;
 
 int _serial_getc(int unit, int line, boolean_t wait, boolean_t raw);
@@ -55,7 +55,6 @@ boolean_t console_is_serial(void);
 int switch_to_serial_console(void);
 int switch_to_video_console(void);
 void switch_to_old_console(int old_console);
-void console_set_serial_ops( struct console_ops *newops );
 
 #define SERIAL_CONS_OPS 0
 #define VC_CONS_OPS 1

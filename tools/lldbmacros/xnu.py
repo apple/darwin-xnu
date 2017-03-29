@@ -85,7 +85,7 @@ def lldb_command(cmd_name, option_string = ''):
     def _cmd(obj):
         def _internal_command_function(debugger, command, result, internal_dict):
             global config, lldb_run_command_state
-            stream = CommandOutput(result)
+            stream = CommandOutput(cmd_name, result)
             # need to avoid printing on stdout if called from lldb_run_command.
             if 'active' in lldb_run_command_state and lldb_run_command_state['active']:
                 debuglog('Running %s from lldb_run_command' % command)
@@ -616,7 +616,7 @@ def ShowPanicLog(cmd_args=None, cmd_options={}):
         if p_char == '\n':
             if not in_binary_data_region:
                 num_print_bytes += 1
-                print out_str
+                print out_str[:-1]
             if (out_str.find("Data: BEGIN>>") >= 0):
                 in_binary_data_region = True
                 pos += binary_data_bytes_to_skip - 1

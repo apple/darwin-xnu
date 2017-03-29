@@ -169,7 +169,11 @@ kernel_trap(mk_timer_arm,-93,3)
 #endif	/* __LP64__ */
 
 kernel_trap(mk_timer_cancel,-94,2)
-
+#if		defined(__LP64__)
+kernel_trap(mk_timer_arm_leeway,-95,4)
+#else
+kernel_trap(mk_timer_arm_leeway,-95,7)
+#endif
 /*
  * N.B: Trap #-100 is in use by IOTrap.s in the IOKit Framework
  * (iokit_user_client_trap)

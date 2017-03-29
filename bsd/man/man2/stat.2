@@ -105,11 +105,13 @@ returns information about the link,
 while
 .Fn stat
 returns information about the file the link references.
-The attributes cannot be relied on in case of symbolic links.
-In this case, the only attributes returned from an
-.Fn lstat
-that refer to the symbolic link itself are the file type (S_IFLNK),
-size, blocks, and link count (always 1).
+For symbolic links, the st_mode member contains meaningful information
+when used with the file type macros, and the st_size member contains
+the length of the pathname contained in the symbolic link. File mode
+bits and the contents of the remaining members of the stat structure
+are unspecified. The value returned in the st_size member is the
+length of the contents of the symbolic link, and does not count any
+trailing null.
 .Pp
 The
 .Fn fstat

@@ -169,6 +169,8 @@ __attribute__((pure, nonnull, visibility("hidden")));
 boolean_t kxld_seg_is_linkedit_seg(const KXLDSeg *seg)
 __attribute__((pure, nonnull, visibility("hidden")));
 
+boolean_t kxld_seg_is_llvm_cov_seg(const KXLDSeg *seg)
+__attribute__((pure, nonnull, visibility("hidden")));
 
 #endif /* _KXLD_SEG_H_ */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -949,7 +949,7 @@ tcp_timers(struct tcpcb *tp, int timer)
 			tp->t_stat.synrxtshift = tp->t_rxtshift;
 
 			/* When retransmitting, disable TFO */
-			if (tfo_enabled(tp)) {
+			if (tfo_enabled(tp) && !(so->so_flags & SOF1_DATA_AUTHENTICATED)) {
 				tp->t_flagsext &= ~TF_FASTOPEN;
 				tp->t_tfo_flags |= TFO_F_SYN_LOSS;
 			}
@@ -1866,18 +1866,19 @@ tcp_sched_timers(struct tcpcb *tp)
 			list_locked = TRUE;
 		}
 
-		LIST_INSERT_HEAD(&listp->lhead, te, le);
-		tp->t_flags |= TF_TIMER_ONLIST;
+		if (!TIMER_IS_ON_LIST(tp)) {
+			LIST_INSERT_HEAD(&listp->lhead, te, le);
+			tp->t_flags |= TF_TIMER_ONLIST;
 
-		listp->entries++;
-		if (listp->entries > listp->maxentries)
-			listp->maxentries = listp->entries;
+			listp->entries++;
+			if (listp->entries > listp->maxentries)
+				listp->maxentries = listp->entries;
 
-		/* if the list is not scheduled, just schedule it */
-		if (!listp->scheduled)
-			goto schedule;
+			/* if the list is not scheduled, just schedule it */
+			if (!listp->scheduled)
+				goto schedule;
+		}
 	}
-
 
 	/*
 	 * Timer entry is currently on the list, check if the list needs

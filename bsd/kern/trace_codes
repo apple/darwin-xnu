@@ -152,7 +152,7 @@
 0x10c0170	MSC_mk_timer_destroy
 0x10c0174	MSC_mk_timer_arm
 0x10c0178	MSC_mk_timer_cancel
-0x10c017c	MSC_kern_invalid_#95
+0x10c017c	MSC_mk_timer_arm_leeway
 0x10c0180	MSC_kern_invalid_#96
 0x10c0184	MSC_kern_invalid_#97
 0x10c0188	MSC_kern_invalid_#98

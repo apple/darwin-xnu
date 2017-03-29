@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1514,7 +1514,14 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 
 			bcopy(addr, &size, sizeof (size));
 
-			if (size > bpf_maxbufsize)
+			/*
+			 * Allow larger buffer in head drop mode with the
+			 * assumption the capture is in standby mode to
+			 * keep a cache of recent traffic
+			 */
+			if (d->bd_headdrop != 0 && size > 2 * bpf_maxbufsize)
+				size = 2 * bpf_maxbufsize;
+			else if (size > bpf_maxbufsize)
 				size = bpf_maxbufsize;
 			else if (size < BPF_MINBUFSIZE)
 				size = BPF_MINBUFSIZE;
@@ -1970,20 +1977,16 @@ bpf_setif(struct bpf_d *d, ifnet_t theywant, u_int32_t dlt)
 			continue;
 		/*
 		 * We found the requested interface.
-		 * Allocate the packet buffers if we need to.
-		 * If we're already attached to requested interface,
-		 * just flush the buffer.
+		 * Allocate the packet buffers.
 		 */
-		if (d->bd_sbuf == 0) {
-			error = bpf_allocbufs(d);
-			if (error != 0)
-				return (error);
-		}
+		error = bpf_allocbufs(d);
+		if (error != 0)
+			return (error);
+		/*
+		 * Detach if attached to something else.
+		 */
 		if (bp != d->bd_bif) {
-				/*
-				 * Detach if attached to something else.
-				 */
-			if (d->bd_bif) {
+			if (d->bd_bif != NULL) {
 				if (bpf_detachd(d, 0) != 0)
 					return (ENXIO);
 			}
@@ -2550,7 +2553,15 @@ catchpacket(struct bpf_d *d, u_char *pkt, struct mbuf *m, u_int pktlen,
 		 * This packet will overflow the storage buffer.
 		 * Rotate the buffers if we can, then wakeup any
 		 * pending reads.
+		 *
+		 * We cannot rotate buffers if a read is in progress
+		 * so drop the packet
 		 */
+		if (d->bd_hbuf_read) {
+			++d->bd_dcount;
+			return;
+		}
+		
 		if (d->bd_fbuf == NULL) {
 			if (d->bd_headdrop == 0) {
 				/*
@@ -2658,13 +2669,27 @@ catchpacket(struct bpf_d *d, u_char *pkt, struct mbuf *m, u_int pktlen,
 static int
 bpf_allocbufs(struct bpf_d *d)
 {
+	if (d->bd_sbuf != NULL) {
+		FREE(d->bd_sbuf, M_DEVBUF);
+		d->bd_sbuf = NULL;
+	}
+	if (d->bd_hbuf != NULL) {
+		FREE(d->bd_hbuf, M_DEVBUF);
+		d->bd_hbuf = NULL;
+	}
+	if (d->bd_fbuf != NULL) {
+		FREE(d->bd_fbuf, M_DEVBUF);
+		d->bd_fbuf = NULL;
+	}
+
 	d->bd_fbuf = (caddr_t) _MALLOC(d->bd_bufsize, M_DEVBUF, M_WAIT);
-	if (d->bd_fbuf == 0)
+	if (d->bd_fbuf == NULL)
 		return (ENOBUFS);
 
 	d->bd_sbuf = (caddr_t) _MALLOC(d->bd_bufsize, M_DEVBUF, M_WAIT);
-	if (d->bd_sbuf == 0) {
+	if (d->bd_sbuf == NULL) {
 		FREE(d->bd_fbuf, M_DEVBUF);
+		d->bd_fbuf = NULL;
 		return (ENOBUFS);
 	}
 	d->bd_slen = 0;

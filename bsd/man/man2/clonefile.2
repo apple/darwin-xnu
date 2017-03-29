@@ -53,10 +53,16 @@ with the exceptions listed below
 .Bl -enum
 .
 .It
-ownership information and timestamps are set as they would be if
+ownership information is set as it would be if
 .Fa dst
 was created by
 .Xr openat 2
+or
+.Xr mkdirat 2
+or
+.Xr symlinkat 2
+if the current user does not have privileges to change ownership.
+
 .
 .It
 setuid and setgid bits are turned off in the mode bits for regular files.
@@ -261,6 +267,7 @@ nor a file descriptor associated with a directory.
 .Sh SEE ALSO
 .
 .Xr copyfile 3
+.Xr chown 2
 .
 .Sh HISTORY
 The 

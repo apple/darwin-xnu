@@ -587,7 +587,7 @@ struct nfs_export_stat_counters {
 	struct nfsstatcount64 ops;		/* Count of NFS Requests received for this export  */
 	struct nfsstatcount64 bytes_read;	/* Count of bytes read from this export */
 	struct nfsstatcount64 bytes_written;	/* Count of bytes written to his export */
-}__attribute__((__packed__));
+};
 
 /* Macro for updating nfs export stat counters */
 #define NFSStatAdd64(PTR, VAL) \

@@ -822,7 +822,8 @@ vm_io_reprioritize_init(void)
 
 	io_reprioritize_req_zone = zinit(sizeof(struct io_reprioritize_req),
 					 MAX_IO_REPRIORITIZE_REQS * sizeof(struct io_reprioritize_req),
-                                      	 4096, "io_reprioritize_req");	
+                                      	 4096, "io_reprioritize_req");
+	zone_change(io_reprioritize_req_zone, Z_COLLECT, FALSE);
 
 	result = kernel_thread_start_priority(io_reprioritize_thread, NULL, 95 /* MAXPRI_KERNEL */, &thread);
         if (result == KERN_SUCCESS) {
@@ -4743,6 +4744,19 @@ vm_object_compressor_pager_create(
 		return;
 	}
 
+	if ((uint32_t) (object->vo_size/PAGE_SIZE) !=
+	    (object->vo_size/PAGE_SIZE)) {
+#if DEVELOPMENT || DEBUG
+		printf("vm_object_compressor_pager_create(%p): "
+		       "object size 0x%llx >= 0x%llx\n",
+		       object,
+		       (uint64_t) object->vo_size,
+		       0x0FFFFFFFFULL*PAGE_SIZE);
+#endif /* DEVELOPMENT || DEBUG */
+		vm_object_paging_end(object);
+		return;
+	}
+
 	/*
 	 *	Indicate that a memory object has been assigned
 	 *	before dropping the lock, to prevent a race.
@@ -4752,15 +4766,6 @@ vm_object_compressor_pager_create(
 	object->paging_offset = 0;
 		
 	vm_object_unlock(object);
-
-	if ((uint32_t) (object->vo_size/PAGE_SIZE) !=
-	    (object->vo_size/PAGE_SIZE)) {
-		panic("vm_object_compressor_pager_create(%p): "
-		      "object size 0x%llx >= 0x%llx\n",
-		      object,
-		      (uint64_t) object->vo_size,
-		      0x0FFFFFFFFULL*PAGE_SIZE);
-	}
 
 	/*
 	 *	Create the [internal] pager, and associate it with this object.
@@ -6607,9 +6612,15 @@ vm_object_purgable_control(
 	}
 
 	new_state = *state & VM_PURGABLE_STATE_MASK;
-	if (new_state == VM_PURGABLE_VOLATILE &&
-	    object->volatile_empty) {
-		new_state = VM_PURGABLE_EMPTY;
+	if (new_state == VM_PURGABLE_VOLATILE) {
+		if (old_state == VM_PURGABLE_EMPTY) {
+			/* what's been emptied must stay empty */
+			new_state = VM_PURGABLE_EMPTY;
+		}
+		if (object->volatile_empty) {
+			/* debugging mode: go straight to empty */
+			new_state = VM_PURGABLE_EMPTY;
+		}
 	}
 
 	switch (new_state) {
@@ -6689,11 +6700,8 @@ vm_object_purgable_control(
 				}
 			}
 		}
-					       
-		if (old_state == VM_PURGABLE_EMPTY &&
-		    object->resident_page_count == 0 &&
-		    object->pager == NULL)
-			break;
+
+		assert(old_state != VM_PURGABLE_EMPTY);
 
 		purgeable_q_t queue;
         
@@ -6825,13 +6833,6 @@ vm_object_purgable_control(
 			}
 		}
 
-		if (old_state == new_state) {
-			/* nothing changes */
-			break;
-		}
-
-		assert(old_state == VM_PURGABLE_NONVOLATILE ||
-		       old_state == VM_PURGABLE_VOLATILE);
 		if (old_state == VM_PURGABLE_VOLATILE) {
 			purgeable_q_t old_queue;
 

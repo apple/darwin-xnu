@@ -3211,10 +3211,6 @@ in6_multi_attach(struct in6_multi *in6m)
 		panic("%s: Attempt to attach an already attached in6m=%p",
 		    __func__, in6m);
 		/* NOTREACHED */
-	} else if (in6m->in6m_debug & IFD_TRASHED) {
-		panic("%s: Attempt to reattach a detached in6m=%p",
-		    __func__, in6m);
-		/* NOTREACHED */
 	}
 
 	in6m->in6m_reqcnt++;

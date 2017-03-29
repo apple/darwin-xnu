@@ -225,11 +225,10 @@ struct uthread {
         void 	*	uu_vps[32];
         void    *       uu_pcs[32][10];
 #endif
-
+	int		uu_proc_refcount;
 #if PROC_REF_DEBUG
 #define NUM_PROC_REFS_TO_TRACK 32
 #define PROC_REF_STACK_DEPTH 10
-	int		uu_proc_refcount;
 	int		uu_pindex;
 	void	*	uu_proc_ps[NUM_PROC_REFS_TO_TRACK];
 	uintptr_t	uu_proc_pcs[NUM_PROC_REFS_TO_TRACK][PROC_REF_STACK_DEPTH];

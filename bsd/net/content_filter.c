@@ -1910,11 +1910,12 @@ cfil_sock_attach(struct socket *so)
 
 	socket_lock_assert_owned(so);
 
-	/* Limit ourselves to TCP */
+	/* Limit ourselves to TCP that are not MPTCP subflows */
 	if ((so->so_proto->pr_domain->dom_family != PF_INET &&
 		so->so_proto->pr_domain->dom_family != PF_INET6) ||
 		so->so_proto->pr_type != SOCK_STREAM ||
-		so->so_proto->pr_protocol != IPPROTO_TCP)
+		so->so_proto->pr_protocol != IPPROTO_TCP ||
+		(so->so_flags & SOF_MP_SUBFLOW) != 0)
 		goto done;
 
 	filter_control_unit = necp_socket_get_content_filter_control_unit(so);

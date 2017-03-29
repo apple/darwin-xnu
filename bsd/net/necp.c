@@ -888,6 +888,10 @@ necp_buffer_find_tlv(u_int8_t *buffer, u_int32_t buffer_length, int offset, u_in
 			curr_type = NECP_TLV_NIL;
 		}
 		curr_length = necp_buffer_get_tlv_length(buffer, cursor);
+		if (curr_length > buffer_length - ((u_int32_t)cursor + sizeof(curr_type) + sizeof(curr_length))) {
+			return (-1);
+		}
+
 		next_cursor = (cursor + sizeof(curr_type) + sizeof(curr_length) + curr_length);
 		if (curr_type == type) {
 			// check if entire TLV fits inside buffer
@@ -1306,10 +1310,23 @@ necp_policy_condition_is_application(u_int8_t *buffer, u_int32_t length)
 }
 
 static inline bool
+necp_policy_condition_is_real_application(u_int8_t *buffer, u_int32_t length)
+{
+	return (necp_policy_condition_get_type_from_buffer(buffer, length) == NECP_POLICY_CONDITION_REAL_APPLICATION);
+}
+
+static inline bool
 necp_policy_condition_requires_application(u_int8_t *buffer, u_int32_t length)
 {
 	u_int8_t type = necp_policy_condition_get_type_from_buffer(buffer, length);
 	return (type == NECP_POLICY_CONDITION_REAL_APPLICATION);
+}
+
+static inline bool
+necp_policy_condition_requires_real_application(u_int8_t *buffer, u_int32_t length)
+{
+	u_int8_t type = necp_policy_condition_get_type_from_buffer(buffer, length);
+	return (type == NECP_POLICY_CONDITION_ENTITLEMENT);
 }
 
 static bool
@@ -1612,7 +1629,9 @@ necp_handle_policy_add(struct necp_session *session, u_int32_t message_id, mbuf_
 	bool has_default_condition = FALSE;
 	bool has_non_default_condition = FALSE;
 	bool has_application_condition = FALSE;
+	bool has_real_application_condition = FALSE;
 	bool requires_application_condition = FALSE;
+	bool requires_real_application_condition = FALSE;
 	u_int8_t *conditions_array = NULL;
 	u_int32_t conditions_array_size = 0;
 	int conditions_array_cursor;
@@ -1806,8 +1825,16 @@ necp_handle_policy_add(struct necp_session *session, u_int32_t message_id, mbuf_
 				has_application_condition = TRUE;
 			}
 
+			if (necp_policy_condition_is_real_application((conditions_array + conditions_array_cursor), condition_size)) {
+				has_real_application_condition = TRUE;
+			}
+
 			if (necp_policy_condition_requires_application((conditions_array + conditions_array_cursor), condition_size)) {
 				requires_application_condition = TRUE;
+			}
+
+			if (necp_policy_condition_requires_real_application((conditions_array + conditions_array_cursor), condition_size)) {
+				requires_real_application_condition = TRUE;
 			}
 
 			conditions_array_cursor += condition_size;
@@ -1816,6 +1843,12 @@ necp_handle_policy_add(struct necp_session *session, u_int32_t message_id, mbuf_
 
 	if (requires_application_condition && !has_application_condition) {
 		NECPLOG0(LOG_ERR, "Failed to validate conditions; did not contain application condition");
+		response_error = NECP_ERROR_POLICY_CONDITIONS_INVALID;
+		goto fail;
+	}
+
+	if (requires_real_application_condition && !has_real_application_condition) {
+		NECPLOG0(LOG_ERR, "Failed to validate conditions; did not contain real application condition");
 		response_error = NECP_ERROR_POLICY_CONDITIONS_INVALID;
 		goto fail;
 	}
@@ -3302,6 +3335,7 @@ necp_kernel_socket_policy_add(necp_policy_id parent_policy_id, necp_policy_order
 	}
 	if (new_kernel_policy->condition_mask & NECP_KERNEL_CONDITION_CUSTOM_ENTITLEMENT) {
 		new_kernel_policy->cond_custom_entitlement = cond_custom_entitlement;
+		new_kernel_policy->cond_custom_entitlement_matched = necp_boolean_state_unknown;
 	}
 	if (new_kernel_policy->condition_mask & NECP_KERNEL_CONDITION_ACCOUNT_ID) {
 		new_kernel_policy->cond_account_id = cond_account_id;
@@ -5291,7 +5325,13 @@ necp_application_find_policy_match_internal(proc_t proc,
 		u_int8_t type = necp_buffer_get_tlv_type(parameters, offset);
 		u_int32_t length = necp_buffer_get_tlv_length(parameters, offset);
 
-		if (length > 0 && (offset + sizeof(u_int8_t) + sizeof(u_int32_t) + length) <= parameters_size) {
+		if (length > (parameters_size - (offset + sizeof(u_int8_t) + sizeof(u_int32_t)))) {
+			// If the length is larger than what can fit in the remaining parameters size, bail
+			NECPLOG(LOG_ERR, "Invalid TLV length (%u)", length);
+			break;
+		}
+
+		if (length > 0) {
 			u_int8_t *value = necp_buffer_get_tlv_value(parameters, offset, NULL);
 			if (value != NULL) {
 				switch (type) {
@@ -5735,16 +5775,24 @@ necp_socket_check_policy(struct necp_kernel_socket_policy *kernel_policy, necp_a
 	}
 
 	if (kernel_policy->condition_mask & NECP_KERNEL_CONDITION_CUSTOM_ENTITLEMENT) {
-		if (kernel_policy->cond_custom_entitlement != NULL) {
-			if (proc == NULL) {
-				// No process found, cannot check entitlement
-				return (FALSE);
-			}
-			task_t task = proc_task(proc);
-			if (task == NULL ||
-				!IOTaskHasEntitlement(task, kernel_policy->cond_custom_entitlement)) {
-				// Process is missing custom entitlement
-				return (FALSE);
+		if (kernel_policy->cond_custom_entitlement_matched == necp_boolean_state_false) {
+			// Process is missing entitlement based on previous check
+			return (FALSE);
+		} else if (kernel_policy->cond_custom_entitlement_matched == necp_boolean_state_unknown) {
+			if (kernel_policy->cond_custom_entitlement != NULL) {
+				if (proc == NULL) {
+					// No process found, cannot check entitlement
+					return (FALSE);
+				}
+				task_t task = proc_task(proc);
+				if (task == NULL ||
+					!IOTaskHasEntitlement(task, kernel_policy->cond_custom_entitlement)) {
+					// Process is missing custom entitlement
+					kernel_policy->cond_custom_entitlement_matched = necp_boolean_state_false;
+					return (FALSE);
+				} else {
+					kernel_policy->cond_custom_entitlement_matched = necp_boolean_state_true;
+				}
 			}
 		}
 	}

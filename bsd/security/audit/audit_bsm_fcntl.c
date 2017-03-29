@@ -220,6 +220,12 @@ static const bsm_fcntl_cmd_t bsm_fcntl_cmdtab[] = {
 #ifdef	F_BARRIERFSYNC
 	{ BSM_F_BARRIERFSYNC,	F_BARRIERFSYNC },
 #endif
+#ifdef	F_PUNCHHOLE
+	{ BSM_F_PUNCHHOLE,	F_PUNCHHOLE },
+#endif
+#ifdef	F_TRIM_ACTIVE_FILE
+	{ BSM_F_TRIM_ACTIVE_FILE,	F_TRIM_ACTIVE_FILE },
+#endif
 
 #ifdef	FCNTL_FS_SPECIFIC_BASE
 	{ BSM_F_FS_SPECIFIC_0,	FCNTL_FS_SPECIFIC_BASE},

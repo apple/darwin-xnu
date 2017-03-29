@@ -353,8 +353,9 @@ kxld_object_set_link_info(KXLDObject *object, splitKextLinkInfo *link_info)
     object->split_info.vmaddr_TEXT_EXEC = link_info->vmaddr_TEXT_EXEC;
     object->split_info.vmaddr_DATA = link_info->vmaddr_DATA;
     object->split_info.vmaddr_DATA_CONST = link_info->vmaddr_DATA_CONST;
+    object->split_info.vmaddr_LLVM_COV = link_info->vmaddr_LLVM_COV;
     object->split_info.vmaddr_LINKEDIT = link_info->vmaddr_LINKEDIT;
-    
+
     return;
 }
 
@@ -2484,6 +2485,9 @@ process_relocs_from_tables(KXLDObject *object)
                 else if (kxld_seg_is_data_const_seg(seg)) {
                     my_link_addr = object->split_info.vmaddr_DATA_CONST;
                 }
+                else if (kxld_seg_is_llvm_cov_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_LLVM_COV;
+                }
                 else if (kxld_seg_is_linkedit_seg(seg)) {
                     my_link_addr = object->split_info.vmaddr_LINKEDIT;
                 }
@@ -2518,6 +2522,9 @@ process_relocs_from_tables(KXLDObject *object)
                 }
                 else if (kxld_seg_is_data_const_seg(seg)) {
                     my_link_addr = object->split_info.vmaddr_DATA_CONST;
+                }
+                else if (kxld_seg_is_llvm_cov_seg(seg)) {
+                    my_link_addr = object->split_info.vmaddr_LLVM_COV;
                 }
                 else if (kxld_seg_is_linkedit_seg(seg)) {
                     my_link_addr = object->split_info.vmaddr_LINKEDIT;

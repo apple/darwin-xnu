@@ -32,3 +32,11 @@
 #define	SEEK_CUR	1	/* set file offset to current plus offset */
 #define	SEEK_END	2	/* set file offset to EOF plus offset */
 #endif	/* !SEEK_SET */
+
+#ifndef SEEK_HOLE
+#define	SEEK_HOLE	3	/* set file offset to the start of the next hole greater than or equal to the supplied offset */
+#endif
+
+#ifndef SEEK_DATA
+#define	SEEK_DATA	4	/* set file offset to the start of the next non-hole file region greater than or equal to the supplied offset */
+#endif

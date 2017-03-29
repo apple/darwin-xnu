@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2014, 2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -81,6 +81,7 @@ struct netagent_wrapper {
 	LIST_ENTRY(netagent_wrapper) master_chain;
 	u_int32_t control_unit;
 	u_int32_t generation;
+	u_int64_t use_count;
 	struct netagent_client_list_s pending_triggers_list;
 	struct netagent netagent;
 };
@@ -148,6 +149,10 @@ static void netagent_handle_assign_nexus_message(struct netagent_session *sessio
 												 u_int32_t payload_length, mbuf_t packet, int offset);
 static errno_t netagent_handle_assign_nexus_setopt(struct netagent_session *session, u_int8_t *payload,
 												   u_int32_t payload_length);
+
+// Set/get assert count
+static errno_t netagent_handle_use_count_setopt(struct netagent_session *session, u_int8_t *payload, size_t payload_length);
+static errno_t netagent_handle_use_count_getopt(struct netagent_session *session, u_int8_t *buffer, size_t *buffer_length);
 
 static void netagent_handle_get(struct netagent_session *session, u_int32_t message_id,
 								u_int32_t payload_length, mbuf_t packet, int offset);
@@ -509,8 +514,30 @@ static errno_t
 netagent_ctl_getopt(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo, int opt,
 					void *data, size_t *len)
 {
-#pragma unused(kctlref, unit, unitinfo, opt, data, len)
-	return (0);
+#pragma unused(kctlref, unit)
+	struct netagent_session *session = (struct netagent_session *)unitinfo;
+	errno_t error;
+
+	if (session == NULL) {
+		NETAGENTLOG0(LOG_ERR, "Received a NULL session");
+		error = EINVAL;
+		goto done;
+	}
+
+	switch (opt) {
+		case NETAGENT_OPTION_TYPE_USE_COUNT: {
+			NETAGENTLOG0(LOG_DEBUG, "Request to get use count");
+			error = netagent_handle_use_count_getopt(session, data, len);
+		}
+		break;
+		default:
+			NETAGENTLOG0(LOG_ERR, "Received unknown option");
+			error = ENOPROTOOPT;
+		break;
+	}
+
+done:
+	return (error);
 }
 
 static errno_t
@@ -546,6 +573,11 @@ netagent_ctl_setopt(kern_ctl_ref kctlref, u_int32_t unit, void *unitinfo, int op
 		case NETAGENT_OPTION_TYPE_ASSIGN_NEXUS: {
 			NETAGENTLOG0(LOG_DEBUG, "Request for assigning nexus");
 			error = netagent_handle_assign_nexus_setopt(session, data, len);
+		}
+		break;
+		case NETAGENT_OPTION_TYPE_USE_COUNT: {
+			NETAGENTLOG0(LOG_DEBUG, "Request to set use count");
+			error = netagent_handle_use_count_setopt(session, data, len);
 		}
 		break;
 		default:
@@ -926,6 +958,7 @@ netagent_handle_update_inner(struct netagent_session *session, struct netagent_w
 	}
 
 	new_wrapper->generation = g_next_generation++;
+	new_wrapper->use_count = session->wrapper->use_count;
 
 	if ((new_wrapper->netagent.netagent_flags & NETAGENT_FLAG_ACTIVE) &&
 		!(session->wrapper->netagent.netagent_flags & NETAGENT_FLAG_ACTIVE)) {
@@ -1269,6 +1302,92 @@ netagent_handle_assign_nexus_message(struct netagent_session *session, u_int32_t
 	return;
 fail:
 	netagent_send_error_response(session, NETAGENT_MESSAGE_TYPE_ASSIGN_NEXUS, message_id, response_error);
+}
+
+errno_t
+netagent_handle_use_count_setopt(struct netagent_session *session, u_int8_t *payload, size_t payload_length)
+{
+	errno_t response_error = 0;
+	uint64_t use_count = 0;
+
+	if (session == NULL) {
+		NETAGENTLOG0(LOG_ERR, "Failed to find session");
+		response_error = ENOENT;
+		goto done;
+	}
+
+	if (payload == NULL) {
+		NETAGENTLOG0(LOG_ERR, "No payload received");
+		response_error = EINVAL;
+		goto done;
+	}
+
+	if (payload_length != sizeof(use_count)) {
+		NETAGENTLOG(LOG_ERR, "Payload length is invalid (%u)", payload_length);
+		response_error = EINVAL;
+		goto done;
+	}
+
+	memcpy(&use_count, payload, sizeof(use_count));
+
+	lck_rw_lock_shared(&netagent_lock);
+
+	if (session->wrapper == NULL) {
+		NETAGENTLOG0(LOG_ERR, "Session has no agent registered");
+		response_error = ENOENT;
+		lck_rw_done(&netagent_lock);
+		goto done;
+	}
+
+	session->wrapper->use_count = use_count;
+
+	lck_rw_done(&netagent_lock);
+
+done:
+	return response_error;
+}
+
+errno_t
+netagent_handle_use_count_getopt(struct netagent_session *session, u_int8_t *buffer, size_t *buffer_length)
+{
+	errno_t response_error = 0;
+	uint64_t use_count = 0;
+
+	if (session == NULL) {
+		NETAGENTLOG0(LOG_ERR, "Failed to find session");
+		response_error = ENOENT;
+		goto done;
+	}
+
+	if (buffer == NULL) {
+		NETAGENTLOG0(LOG_ERR, "No payload received");
+		response_error = EINVAL;
+		goto done;
+	}
+
+	if (*buffer_length != sizeof(use_count)) {
+		NETAGENTLOG(LOG_ERR, "Buffer length is invalid (%u)", buffer_length);
+		response_error = EINVAL;
+		goto done;
+	}
+
+	lck_rw_lock_shared(&netagent_lock);
+
+	if (session->wrapper == NULL) {
+		NETAGENTLOG0(LOG_ERR, "Session has no agent registered");
+		response_error = ENOENT;
+		lck_rw_done(&netagent_lock);
+		goto done;
+	}
+
+	use_count = session->wrapper->use_count;
+	lck_rw_done(&netagent_lock);
+
+	memcpy(buffer, &use_count, sizeof(use_count));
+	*buffer_length = sizeof(use_count);
+
+done:
+	return response_error;
 }
 
 static struct netagent_wrapper *
@@ -1629,6 +1748,31 @@ done:
 	if (should_unlock) {
 		lck_rw_done(&netagent_lock);
 	}
+	return (error);
+}
+
+int
+netagent_use(uuid_t agent_uuid, uint64_t *out_use_count)
+{
+	int error = 0;
+
+	lck_rw_lock_exclusive(&netagent_lock);
+	struct netagent_wrapper *wrapper = netagent_find_agent_with_uuid(agent_uuid);
+	if (wrapper == NULL) {
+		NETAGENTLOG0(LOG_ERR, "netagent_assert: Requested netagent UUID is not registered");
+		error = ENOENT;
+		goto done;
+	}
+
+	uint64_t current_count = wrapper->use_count;
+	wrapper->use_count++;
+
+	if (out_use_count != NULL) {
+		*out_use_count = current_count;
+	}
+
+done:
+	lck_rw_done(&netagent_lock);
 	return (error);
 }
 

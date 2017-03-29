@@ -688,6 +688,18 @@ thread_deallocate(
 }
 
 /*
+ *	thread_inspect_deallocate:
+ *
+ *	Drop a thread inspection reference.
+ */
+void
+thread_inspect_deallocate(
+	thread_inspect_t		thread_inspect)
+{
+	return(thread_deallocate((thread_t)thread_inspect));
+}
+
+/*
  *	thread_exception_daemon:
  *
  *	Deliver EXC_RESOURCE exception

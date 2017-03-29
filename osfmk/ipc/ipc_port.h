@@ -161,7 +161,7 @@ struct ipc_port {
 	uintptr_t	ip_callstack[IP_CALLSTACK_MAX]; /* stack trace */
 	unsigned long	ip_spares[IP_NSPARES]; /* for debugging */
 #endif	/* MACH_ASSERT */
-} __attribute__((__packed__));
+};
 
 
 #define ip_references		ip_object.io_references
@@ -186,6 +186,7 @@ struct ipc_port {
 #define	ip_lock_init(port)	io_lock_init(&(port)->ip_object)
 #define	ip_lock(port)		io_lock(&(port)->ip_object)
 #define	ip_lock_try(port)	io_lock_try(&(port)->ip_object)
+#define ip_lock_held_kdp(port)	io_lock_held_kdp(&(port)->ip_object)
 #define	ip_unlock(port)		io_unlock(&(port)->ip_object)
 
 #define	ip_reference(port)	io_reference(&(port)->ip_object)

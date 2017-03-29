@@ -44,6 +44,7 @@
 
 #include <libkern/OSAtomic.h>
 #include <mach/mach_types.h>
+#include <os/overflow.h>
 
 /*
  * Ledger entry flags. Bits in second nibble (masked by 0xF0) are used for
@@ -269,18 +270,24 @@ ledger_entry_add(ledger_template_t template, const char *key,
 	/* If the table is full, attempt to double its size */
 	if (template->lt_cnt == template->lt_table_size) {
 		struct entry_template *new_entries, *old_entries;
-		int old_cnt, old_sz;
+		int old_cnt, old_sz, new_sz = 0;
 		spl_t s;
 
 		old_cnt = template->lt_table_size;
-		old_sz = (int)(old_cnt * sizeof (struct entry_template));
-		new_entries = kalloc(old_sz * 2);
+		old_sz = old_cnt * (int)(sizeof(struct entry_template));
+		/* double old_sz allocation, but check for overflow */
+		if (os_mul_overflow(old_sz, 2, &new_sz)) {
+			template_unlock(template);
+			return -1;
+		}
+		new_entries = kalloc(new_sz);
 		if (new_entries == NULL) {
 			template_unlock(template);
-			return (-1);
+			return -1;
 		}
 		memcpy(new_entries, template->lt_entries, old_sz);
 		memset(((char *)new_entries) + old_sz, 0, old_sz);
+		/* assume: if the sz didn't overflow, neither will the count */
 		template->lt_table_size = old_cnt * 2;
 
 		old_entries = template->lt_entries;
@@ -604,10 +611,11 @@ ledger_refill(uint64_t now, ledger_t ledger, int entry)
 
 	balance = le->le_credit - le->le_debit;
 	due = periods * le->le_limit;
+
 	if (balance - due < 0)
 		due = balance;
 
-	assert(due >= 0);
+	assertf(due >= 0,"now=%llu, ledger=%p, entry=%d, balance=%lld, due=%lld", now, ledger, entry, balance, due);
 
 	OSAddAtomic64(due, &le->le_debit);
 
@@ -864,6 +872,7 @@ kern_return_t
 ledger_zero_balance(ledger_t ledger, int entry)
 {
 	struct ledger_entry *le;
+	ledger_amount_t debit, credit;
 
 	if (!ENTRY_VALID(ledger, entry))
 		return (KERN_INVALID_VALUE);
@@ -871,18 +880,21 @@ ledger_zero_balance(ledger_t ledger, int entry)
 	le = &ledger->l_entries[entry];
 
 top:
+	debit = le->le_debit;
+	credit = le->le_credit;
+
 	if (le->le_flags & LF_TRACK_CREDIT_ONLY) {
 		assert(le->le_debit == 0);
-		if (!OSCompareAndSwap64(le->le_credit, 0, &le->le_credit)) {
+		if (!OSCompareAndSwap64(credit, 0, &le->le_credit)) {
 			goto top;
 		}
 		lprintf(("%p zeroed %lld->%lld\n", current_thread(), le->le_credit, 0));
-	} else if (le->le_credit > le->le_debit) {
-		if (!OSCompareAndSwap64(le->le_debit, le->le_credit, &le->le_debit))
+	} else if (credit > debit) {
+		if (!OSCompareAndSwap64(debit, credit, &le->le_debit))
 			goto top;
 		lprintf(("%p zeroed %lld->%lld\n", current_thread(), le->le_debit, le->le_credit));
-	} else if (le->le_credit < le->le_debit) {
-		if (!OSCompareAndSwap64(le->le_credit, le->le_debit, &le->le_credit))
+	} else if (credit < debit) {
+		if (!OSCompareAndSwap64(credit, debit, &le->le_credit))
 			goto top;
 		lprintf(("%p zeroed %lld->%lld\n", current_thread(), le->le_credit, le->le_debit));
 	}

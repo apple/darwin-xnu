@@ -71,6 +71,7 @@
 #include <sys/vnode.h>
 #include <stdbool.h>
 #include <firehose/tracepoint_private.h>
+#include <firehose/chunk_private.h>
 #include <firehose/ioctl_private.h>
 #include <os/firehose_buffer_private.h>
 
@@ -128,17 +129,17 @@ struct logsoftc {
 
 int	log_open;			/* also used in log() */
 char smsg_bufc[CONFIG_MSG_BSIZE]; /* static buffer */
-char oslog_stream_bufc[FIREHOSE_BUFFER_CHUNK_SIZE]; /* static buffer */
-struct firehose_buffer_chunk_s __attribute__((aligned(8))) oslog_boot_buf = {
-	.fbc_pos = {
-		.fbc_next_entry_offs = offsetof(struct firehose_buffer_chunk_s, fbc_data),
-		.fbc_private_offs = FIREHOSE_BUFFER_CHUNK_SIZE,
-		.fbc_refcnt = 1, // indicate that there is a writer to this chunk
-		.fbc_stream = firehose_stream_persist,
-		.fbc_flag_io = 1, // for now, lets assume this is coming from the io bank
+char oslog_stream_bufc[FIREHOSE_CHUNK_SIZE]; /* static buffer */
+struct firehose_chunk_s oslog_boot_buf = {
+	.fc_pos = {
+		.fcp_next_entry_offs = offsetof(struct firehose_chunk_s, fc_data),
+		.fcp_private_offs = FIREHOSE_CHUNK_SIZE,
+		.fcp_refcnt = 1, // indicate that there is a writer to this chunk
+		.fcp_stream = firehose_stream_persist,
+		.fcp_flag_io = 1, // for now, lets assume this is coming from the io bank
 	},
 }; /* static buffer */
-firehose_buffer_chunk_t firehose_boot_chunk = &oslog_boot_buf;
+firehose_chunk_t firehose_boot_chunk = &oslog_boot_buf;
 struct msgbuf msgbuf = {MSG_MAGIC,sizeof(smsg_bufc),0,0,smsg_bufc};
 struct msgbuf oslog_stream_buf = {MSG_MAGIC,0,0,0,NULL};
 struct msgbuf *msgbufp __attribute__((used)) = &msgbuf;
@@ -466,7 +467,7 @@ oslog_streamread(__unused dev_t dev, struct uio *uio, int flag)
 {
 	int error = 0;
 	int copy_size = 0;
-	static char logline[FIREHOSE_BUFFER_CHUNK_SIZE];
+	static char logline[FIREHOSE_CHUNK_SIZE];
 
 	lck_spin_lock(&oslog_stream_lock);
 
@@ -765,7 +766,7 @@ int
 oslogioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __unused struct proc *p)
 {
 	int ret = 0;
-	mach_vm_size_t buffer_size = (FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT * FIREHOSE_BUFFER_CHUNK_SIZE);
+	mach_vm_size_t buffer_size = (FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT * FIREHOSE_CHUNK_SIZE);
 	firehose_buffer_map_info_t map_info = {0, 0};
 	firehose_buffer_t kernel_firehose_buffer = NULL;
 	mach_vm_address_t user_addr = 0;
@@ -856,7 +857,7 @@ void
 oslog_init(void)
 {
 	kern_return_t kr;
-	vm_size_t size = FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT * FIREHOSE_BUFFER_CHUNK_SIZE;
+	vm_size_t size = FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT * FIREHOSE_CHUNK_SIZE;
 
 	oslog_lock_init();
 

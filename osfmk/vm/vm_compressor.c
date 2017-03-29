@@ -329,6 +329,11 @@ vm_wants_task_throttled(task_t task)
 }
 
 
+#if DEVELOPMENT || DEBUG
+boolean_t kill_on_no_paging_space = FALSE; /* On compressor/swap exhaustion, kill the largest process regardless of
+					    * its chosen process policy. Controlled by a boot-arg of the same name. */
+#endif /* DEVELOPMENT || DEBUG */
+
 
 static uint32_t	no_paging_space_action_in_progress = 0;
 extern void memorystatus_send_low_swap_note(void);
@@ -341,6 +346,17 @@ vm_compressor_take_paging_space_action(void)
 		if (OSCompareAndSwap(0, 1, (UInt32 *)&no_paging_space_action_in_progress)) {
 
 			if (no_paging_space_action()) {
+#if DEVELOPMENT || DEBUG
+				if (kill_on_no_paging_space == TRUE) {
+					/*
+					 * Since we are choosing to always kill a process, we don't need the
+					 * "out of application memory" dialog box in this mode. And, hence we won't
+					 * send the knote.
+					 */
+					no_paging_space_action_in_progress = 0;
+					return;
+				}
+#endif /* DEVELOPMENT || DEBUG */
 				memorystatus_send_low_swap_note();
 			}
 
@@ -410,6 +426,13 @@ vm_compressor_init(void)
 #if RECORD_THE_COMPRESSED_DATA
 	vm_size_t	c_compressed_record_sbuf_size = 0;
 #endif /* RECORD_THE_COMPRESSED_DATA */
+
+#if DEVELOPMENT || DEBUG
+	char bootarg_name[32];
+	if (PE_parse_boot_argn("-kill_on_no_paging_space", bootarg_name, sizeof (bootarg_name))) {
+		kill_on_no_paging_space = TRUE;
+	}
+#endif /* DEVELOPMENT || DEBUG */
 
 	/*
 	 * ensure that any pointer that gets created from

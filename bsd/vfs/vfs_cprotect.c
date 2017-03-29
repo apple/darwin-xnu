@@ -53,19 +53,20 @@ enum {
 
 	// Using AES IV context generated from key
 	CPX_IV_AES_CTX_VFS			= 0x08,
-	CPX_SYNTHETIC_OFFSET_FOR_IV     = 0x10,
+	CPX_SYNTHETIC_OFFSET_FOR_IV = 0x10,
+    CPX_COMPOSITEKEY            = 0x20
 };
 
 struct cpx {
 #if DEBUG
 	uint32_t		cpx_magic1;
 #endif
+	aes_encrypt_ctx cpx_iv_aes_ctx;		// Context used for generating the IV
 	cpx_flags_t		cpx_flags;
 	uint16_t		cpx_max_key_len;
 	uint16_t		cpx_key_len;
-	aes_encrypt_ctx cpx_iv_aes_ctx;		// Context used for generating the IV
 	uint8_t			cpx_cached_key[];
-} __attribute__((packed));
+};
 
 // -- cpx_t accessors --
 
@@ -133,6 +134,19 @@ void cpx_set_is_sep_wrapped_key(struct cpx *cpx, bool v)
 	SET(cpx->cpx_flags, CPX_SEP_WRAPPEDKEY);
 	else
 	CLR(cpx->cpx_flags, CPX_SEP_WRAPPEDKEY);
+}
+
+bool cpx_is_composite_key(const struct cpx *cpx)
+{
+    return ISSET(cpx->cpx_flags, CPX_COMPOSITEKEY);
+}
+
+void cpx_set_is_composite_key(struct cpx *cpx, bool v)
+{
+    if (v)
+        SET(cpx->cpx_flags, CPX_COMPOSITEKEY);
+    else
+        CLR(cpx->cpx_flags, CPX_COMPOSITEKEY);
 }
 
 bool cpx_use_offset_for_iv(const struct cpx *cpx)
@@ -253,75 +267,68 @@ void cpx_copy(const struct cpx *src, cpx_t dst)
 	dst->cpx_iv_aes_ctx = src->cpx_iv_aes_ctx;
 }
 
-static struct cp_wrap_func g_cp_wrap_func = {};
+typedef struct {
+	cp_lock_state_t state;
+	int		valid_uuid;
+	uuid_t		volume_uuid;
+} cp_lock_vfs_callback_arg;
 
 static int
 cp_lock_vfs_callback(mount_t mp, void *arg)
 {
-	VFS_IOCTL(mp, FIODEVICELOCKED, arg, 0, vfs_context_kernel());
+	cp_lock_vfs_callback_arg *callback_arg = (cp_lock_vfs_callback_arg *)arg;
 
+	if (callback_arg->valid_uuid)  {
+		struct vfs_attr va;
+		VFSATTR_INIT(&va);
+		VFSATTR_WANTED(&va, f_uuid);
+
+		if (vfs_getattr(mp, &va, vfs_context_current()))
+			return 0;
+
+		if (!VFSATTR_IS_SUPPORTED(&va, f_uuid))
+			return 0;
+
+		if(memcmp(va.f_uuid, callback_arg->volume_uuid, sizeof(uuid_t)))
+			return 0;
+	}
+
+	VFS_IOCTL(mp, FIODEVICELOCKED, (void *)(uintptr_t)callback_arg->state, 0, vfs_context_kernel());
 	return 0;
 }
 
 int
 cp_key_store_action(cp_key_store_action_t action)
 {
+	cp_lock_vfs_callback_arg callback_arg;
+
 	switch (action) {
 		case CP_ACTION_LOCKED:
-		case CP_ACTION_UNLOCKED:;
-			cp_lock_state_t state = (action == CP_ACTION_LOCKED
-									 ? CP_LOCKED_STATE : CP_UNLOCKED_STATE);
-			return vfs_iterate(0, cp_lock_vfs_callback, (void *)(uintptr_t)state);
+		case CP_ACTION_UNLOCKED:
+			callback_arg.state = (action == CP_ACTION_LOCKED ? CP_LOCKED_STATE : CP_UNLOCKED_STATE);
+			memset(callback_arg.volume_uuid, 0, sizeof(uuid_t));
+			callback_arg.valid_uuid = 0;
+			return vfs_iterate(0, cp_lock_vfs_callback, (void *)&callback_arg);
 		default:
 			return -1;
 	}
 }
 
 int
-cp_register_wraps(cp_wrap_func_t key_store_func)
+cp_key_store_action_for_volume(uuid_t volume_uuid, cp_key_store_action_t action)
 {
-  g_cp_wrap_func.new_key = key_store_func->new_key;
-  g_cp_wrap_func.unwrapper = key_store_func->unwrapper;
-  g_cp_wrap_func.rewrapper = key_store_func->rewrapper;
-  /* do not use invalidater until rdar://12170050 goes in ! */
-  g_cp_wrap_func.invalidater = key_store_func->invalidater;
-  g_cp_wrap_func.backup_key = key_store_func->backup_key;
+	cp_lock_vfs_callback_arg callback_arg;
 
-  return 0;
-}
-
-int cp_rewrap_key(cp_cred_t access, uint32_t dp_class,
-				  const cp_wrapped_key_t wrapped_key_in,
-				  cp_wrapped_key_t wrapped_key_out)
-{
-	if (!g_cp_wrap_func.rewrapper)
-		return ENXIO;
-	return g_cp_wrap_func.rewrapper(access, dp_class, wrapped_key_in,
-									wrapped_key_out);
-}
-
-int cp_new_key(cp_cred_t access, uint32_t dp_class, cp_raw_key_t key_out,
-               cp_wrapped_key_t wrapped_key_out)
-{
-	if (!g_cp_wrap_func.new_key)
-		return ENXIO;
-	return g_cp_wrap_func.new_key(access, dp_class, key_out, wrapped_key_out);
-}
-
-int cp_unwrap_key(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in,
-                  cp_raw_key_t key_out)
-{
-	if (!g_cp_wrap_func.unwrapper)
-		return ENXIO;
-	return g_cp_wrap_func.unwrapper(access, wrapped_key_in, key_out);
-}
-
-int cp_get_backup_key(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in,
-                      cp_wrapped_key_t wrapped_key_out)
-{
-	if (!g_cp_wrap_func.backup_key)
-		return ENXIO;
-	return g_cp_wrap_func.backup_key(access, wrapped_key_in, wrapped_key_out);
+	switch (action) {
+		case CP_ACTION_LOCKED:
+		case CP_ACTION_UNLOCKED:
+			callback_arg.state = (action == CP_ACTION_LOCKED ? CP_LOCKED_STATE : CP_UNLOCKED_STATE);
+			memcpy(callback_arg.volume_uuid, volume_uuid, sizeof(uuid_t));
+			callback_arg.valid_uuid = 1;
+			return vfs_iterate(0, cp_lock_vfs_callback, (void *)&callback_arg);
+		default:
+			return -1;
+	}
 }
 
 int

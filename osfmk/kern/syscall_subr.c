@@ -76,12 +76,14 @@
 #include <mach/mach_host_server.h>
 #include <mach/mach_syscalls.h>
 #include <sys/kdebug.h>
+#include <kern/ast.h>
 
 #ifdef MACH_BSD
 extern void workqueue_thread_yielded(void);
 extern sched_call_t workqueue_get_sched_callback(void);
 #endif /* MACH_BSD */
 
+extern wait_result_t thread_handoff_reason(thread_t thread, ast_t reason);
 
 /* Called from commpage to take a delayed preemption when exiting
  * the "Preemption Free Zone" (PFZ).

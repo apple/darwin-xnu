@@ -369,8 +369,13 @@ retry_trace_me:;
 		}
 
 		if (uap->data != 0) {
+#if CONFIG_MACF
+			error = mac_proc_check_signal(p, t, uap->data);
+			if (0 != error)
+				goto out;
+#endif
 			psignal(t, uap->data);
-                }
+		}
 
 		if (uap->req == PT_STEP) {
 		        /*

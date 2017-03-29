@@ -497,9 +497,6 @@ extern int in_ifadown(struct ifaddr *ifa, int);
 extern void in_ifscrub(struct ifnet *, struct in_ifaddr *, int);
 extern u_int32_t inaddr_hashval(u_int32_t);
 extern void in_purgeaddrs(struct ifnet *);
-extern int in_selectaddrs(int af, struct sockaddr_list **,
-    struct sockaddr_entry **, struct sockaddr_list **,
-    struct sockaddr_entry **);
 extern void gre_input(struct mbuf *, int);
 extern void imf_leave(struct in_mfilter *);
 extern void imf_purge(struct in_mfilter *);

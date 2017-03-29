@@ -411,7 +411,7 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
             goto shmat_out;
 		}
 
-		MALLOC(shmmap_s, struct shmmap_state *, size, M_SHM, M_WAITOK);
+		MALLOC(shmmap_s, struct shmmap_state *, size, M_SHM, M_WAITOK | M_NULL);
 		if (shmmap_s == NULL) {
 			shmat_ret = ENOMEM;
 			goto shmat_out;

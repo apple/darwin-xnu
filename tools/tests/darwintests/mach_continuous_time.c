@@ -27,7 +27,7 @@ update(uint64_t *a, uint64_t *c) {
 }
 
 T_DECL(mct_monotonic, "Testing mach_continuous_time returns sane, monotonic values",
-		T_META_ALL_VALID_ARCHS(YES))
+		T_META_ALL_VALID_ARCHS(true))
 {
 	mach_timebase_info(&tb_info);
 
@@ -159,7 +159,7 @@ T_DECL(mct_settimeofday, "Testing mach_continuous_time behavior over settimeofda
 }
 
 T_DECL(mct_aproximate, "Testing mach_continuous_approximate_time()",
-		T_META_ALL_VALID_ARCHS(YES))
+		T_META_ALL_VALID_ARCHS(true))
 {
 	mach_timebase_info(&tb_info);
 

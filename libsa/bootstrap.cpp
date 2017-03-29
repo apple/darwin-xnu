@@ -114,7 +114,7 @@ static const char * sKernelComponentNames[] = {
 
 static int __whereIsAddr(vm_offset_t theAddr, unsigned long * segSizes, vm_offset_t *segAddrs, int segCount );
 
-#define PLK_SEGMENTS 11
+#define PLK_SEGMENTS 12
 
 static const char * plk_segNames[] = {
     "__TEXT",
@@ -126,6 +126,7 @@ static const char * plk_segNames[] = {
     "__PLK_TEXT_EXEC",
     "__PRELINK_DATA",
     "__PLK_DATA_CONST",
+    "__PLK_LLVM_COV",
     "__PLK_LINKEDIT",
     "__PRELINK_INFO",
     NULL

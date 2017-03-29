@@ -364,6 +364,9 @@
 #define F_ADDFILESIGS_RETURN	97	/* Add signature from same file, return end offset in structure on sucess */
 #define F_CHECK_LV		98	/* Check if Library Validation allows this Mach-O file to be mapped into the calling process */
 
+#define F_PUNCHHOLE	99		/* Deallocate a range of the file */
+
+#define F_TRIM_ACTIVE_FILE	100 /* Trim an active file */
 
 // FS-specific fcntl()'s numbers begin at 0x00010000 and go up
 #define FCNTL_FS_SPECIFIC_BASE  0x00010000
@@ -591,7 +594,7 @@ typedef struct user_fchecklv {
 #define	LOCK_NB		0x04		/* don't block when locking */
 #define	LOCK_UN		0x08		/* unlock file */
 
-/*  fstore_t type used by F_DEALLOCATE and F_PREALLOCATE commands */
+/* fstore_t type used by F_PREALLOCATE command */
 
 typedef struct fstore {
 	unsigned int fst_flags;	/* IN: flags word */
@@ -600,6 +603,20 @@ typedef struct fstore {
 	off_t	fst_length;	/* IN: size of the region */
 	off_t   fst_bytesalloc;	/* OUT: number of bytes allocated */
 } fstore_t;
+
+/* fpunchhole_t used by F_PUNCHHOLE */
+typedef struct fpunchhole {
+	unsigned int fp_flags; /* unused */
+	unsigned int reserved; /* (to maintain 8-byte alignment) */
+	off_t fp_offset; /* IN: start of the region */
+	off_t fp_length; /* IN: size of the region */
+} fpunchhole_t;
+
+/* factive_file_trim_t used by F_TRIM_ACTIVE_FILE */
+typedef struct ftrimactivefile {
+	off_t fta_offset;  /* IN: start of the region */
+	off_t fta_length; /* IN: size of the region */
+} ftrimactivefile_t;
 
 /* fbootstraptransfer_t used by F_READBOOTSTRAP and F_WRITEBOOTSTRAP commands */
 

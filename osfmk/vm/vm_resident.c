@@ -6523,6 +6523,7 @@ hibernate_vm_lock_queues(void)
     vm_object_lock(compressor_object);
     vm_page_lock_queues();
     lck_mtx_lock(&vm_page_queue_free_lock);
+    lck_mtx_lock(&vm_purgeable_queue_lock);
 
     if (vm_page_local_q) {
 	uint32_t  i;
@@ -6545,6 +6546,7 @@ hibernate_vm_unlock_queues(void)
 	    VPL_UNLOCK(&lq->vpl_lock);
 	}
     }
+    lck_mtx_unlock(&vm_purgeable_queue_lock);
     lck_mtx_unlock(&vm_page_queue_free_lock);
     vm_page_unlock_queues();
     vm_object_unlock(compressor_object);

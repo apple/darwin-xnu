@@ -73,6 +73,7 @@
 #include <kern/kern_types.h>
 #include <kern/thread.h>
 #include <sys/cdefs.h>
+#include <kern/block_hint.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -410,6 +411,13 @@ extern kern_return_t thread_wakeup_one_with_pri(event_t event, int priority);
 extern thread_t thread_wakeup_identify(event_t event, int priority);
 
 #endif	/* XNU_KERNEL_PRIVATE */
+
+#ifdef KERNEL_PRIVATE
+/* Set pending block hint for a particular object before we go into a wait state */
+extern void		thread_set_pending_block_hint(
+							thread_t			thread,
+							block_hint_t			block_hint);
+#endif /* KERNEL_PRIVATE */
 
 /* Context switch */
 extern wait_result_t	thread_block(

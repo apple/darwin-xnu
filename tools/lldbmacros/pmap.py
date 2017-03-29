@@ -441,17 +441,18 @@ def _PmapL4Walk(pmap_addr_val,vaddr, ept_pmap, verbose_level = vSCRIPT):
 
     return paddr
 
-def _PmapWalkARMLevel1Section(tte, vaddr, verbose_level = vSCRIPT):
-    paddr = 0
+def PmapDecodeTTEARM(tte, level, verbose_level):
+    """ Display the bits of an ARM translation table or page table entry
+        in human-readable form.
+        tte: integer value of the TTE/PTE
+        level: translation table level.  Valid values are 1 or 2.
+        verbose_level: verbosity. vHUMAN, vSCRIPT, vDETAIL
+    """
     out_string = ""
-    #Supersection or just section?
-    if (tte & 0x40000) == 0x40000:
-        paddr = ( (tte & 0xFF000000) | (vaddr & 0x00FFFFFF) )
-    else:
-        paddr = ( (tte & 0xFFF00000) | (vaddr & 0x000FFFFF) )
+    if level == 1 and (tte & 0x3) == 0x2:
+        if verbose_level < vSCRIPT:
+            return
 
-    if verbose_level >= vSCRIPT:
-        out_string += "{0: <#020x}\n\t{1: <#020x}\n\t".format(addressof(tte), tte)
         #bit [1:0] evaluated in PmapWalkARM
         # B bit 2
         b_bit = (tte & 0x4) >> 2
@@ -502,7 +503,89 @@ def _PmapWalkARMLevel1Section(tte, vaddr, verbose_level = vSCRIPT):
         else:
             out_string += " secure"
 
+    elif level == 1 and (tte & 0x3) == 0x1:
+
+        if verbose_level >= vSCRIPT:
+            # bit [1:0] evaluated in PmapWalkARM
+            # NS bit 3
+            if tte & 0x8:
+                out_string += ' no-secure'
+            else:
+                out_string += ' secure'
+            #Domain bit [8:5]
+            out_string += " domain({:d})".format(((tte & 0x1e0) >> 5))
+            # IMP bit 9
+            out_string += " imp({:d})".format( ((tte & 0x200) >> 9))
+            out_string += "\n"
+
+    elif level == 2:
+        pte = tte
+        if verbose_level >= vSCRIPT:
+            if (pte & 0x3) == 0x0:
+                out_string += " invalid"
+            else:
+                if (pte & 0x3) == 0x1:
+                    out_string += " large"
+                    # XN bit 15
+                    if pte & 0x8000 == 0x8000:
+                        out_string+= " no-execute"
+                    else:
+                        out_string += " execute"
+                else:
+                    out_string += " small"
+                    # XN bit 0
+                    if (pte & 0x1) == 0x01:
+                        out_string += " no-execute"
+                    else:
+                        out_string += " execute"
+                # B bit 2
+                b_bit = (pte & 0x4) >> 2
+                c_bit = (pte & 0x8) >> 3
+                # AP bit 9 and [5:4], merged to a single 3-bit value
+                access = (pte & 0x30) >> 4 | (pte & 0x200) >> 7
+                out_string += xnudefines.arm_level2_access_strings[access]
+
+                #TEX bit [14:12] for large, [8:6] for small
+                tex_bits = ((pte & 0x1c0) >> 6)
+                if (pte & 0x3) == 0x1:
+                    tex_bits = ((pte & 0x7000) >> 12)
+
+                # Print TEX, C , B alltogether
+                out_string += " TEX:C:B({:d}{:d}{:d}:{:d}:{:d})".format(
+                                                                        1 if (tex_bits & 0x4) else 0,
+                                                                        1 if (tex_bits & 0x2) else 0,
+                                                                        1 if (tex_bits & 0x1) else 0,
+                                                                        c_bit,
+                                                                        b_bit
+                                                                        )
+                # S bit 10
+                if pte & 0x400 :
+                    out_string += " shareable"
+                else:
+                    out_string += " not-shareable"
+
+                # nG bit 11
+                if pte & 0x800:
+                    out_string += " not-global"
+                else:
+                    out_string += " global"
+    
     print out_string
+
+
+def _PmapWalkARMLevel1Section(tte, vaddr, verbose_level = vSCRIPT):
+    paddr = 0
+    #Supersection or just section?
+    if (tte & 0x40000) == 0x40000:
+        paddr = ( (tte & 0xFF000000) | (vaddr & 0x00FFFFFF) )
+    else:
+        paddr = ( (tte & 0xFFF00000) | (vaddr & 0x000FFFFF) )
+
+    if verbose_level >= vSCRIPT:
+        print "{0: <#020x}\n\t{1: <#020x}\n\t".format(addressof(tte), tte),
+
+    PmapDecodeTTEARM(tte, 1, verbose_level)
+
     return paddr
 
 
@@ -518,82 +601,27 @@ def _PmapWalkARMLevel2(tte, vaddr, verbose_level = vSCRIPT):
     pte_index = (vaddr >> 12) & 0xFF
     pte_base_val = kern.GetValueFromAddress(pte_base, 'pt_entry_t *')
     pte = pte_base_val[pte_index]
-    out_string = ''
-    if verbose_level >= vSCRIPT:
-        out_string += "{0: <#020x}\n\t{1: <#020x}\n\t".format(addressof(tte), tte)
-        # bit [1:0] evaluated in PmapWalkARM
-        # NS bit 3
-        if tte & 0x8:
-            out_string += ' no-secure'
-        else:
-            out_string += ' secure'
-        #Domain bit [8:5]
-        out_string += " domain({:d})".format(((tte & 0x1e0) >> 5))
-        # IMP bit 9
-        out_string += " imp({:d})".format( ((tte & 0x200) >> 9))
-        out_string += "\n"
-    if verbose_level >= vSCRIPT:
-        out_string += "second-level table (index {:d}):\n".format(pte_index)
-    if verbose_level >= vDETAIL:
-        for i in range(256):
-            tmp = pte_base_val[i]
-            out_string += "{0: <#020x}:\t{1: <#020x}\n".format(addressof(tmp), unsigned(tmp))
 
     paddr = 0
     if pte & 0x2:
         paddr = (unsigned(pte) & 0xFFFFF000) | (vaddr & 0xFFF)
 
     if verbose_level >= vSCRIPT:
-        out_string += " {0: <#020x}\n\t{1: <#020x}\n\t".format(addressof(pte), unsigned(pte))
-        if (pte & 0x3) == 0x0:
-            out_string += " invalid"
-        else:
-            if (pte & 0x3) == 0x1:
-                out_string += " large"
-                # XN bit 15
-                if pte & 0x8000 == 0x8000:
-                    out_string+= " no-execute"
-                else:
-                    out_string += " execute"
-            else:
-                out_string += " small"
-                # XN bit 0
-                if (pte & 0x1) == 0x01:
-                    out_string += " no-execute"
-                else:
-                    out_string += " execute"
-            # B bit 2
-            b_bit = (pte & 0x4) >> 2
-            c_bit = (pte & 0x8) >> 3
-            # AP bit 9 and [5:4], merged to a single 3-bit value
-            access = (pte & 0x30) >> 4 | (pte & 0x200) >> 7
-            out_string += xnudefines.arm_level2_access_strings[access]
+        print "{0: <#020x}\n\t{1: <#020x}\n\t".format(addressof(tte), tte),
 
-            #TEX bit [14:12] for large, [8:6] for small
-            tex_bits = ((pte & 0x1c0) >> 6)
-            if (pte & 0x3) == 0x1:
-                tex_bits = ((pte & 0x7000) >> 12)
+    PmapDecodeTTEARM(tte, 1, verbose_level)
+    if verbose_level >= vSCRIPT:
+        print "second-level table (index {:d}):".format(pte_index)
+    if verbose_level >= vDETAIL:
+        for i in range(256):
+            tmp = pte_base_val[i]
+            print "{0: <#020x}:\t{1: <#020x}".format(addressof(tmp), unsigned(tmp))
 
-            # Print TEX, C , B alltogether
-            out_string += " TEX:C:B({:d}{:d}{:d}:{:d}:{:d})".format(
-                                                                    1 if (tex_bits & 0x4) else 0,
-                                                                    1 if (tex_bits & 0x2) else 0,
-                                                                    1 if (tex_bits & 0x1) else 0,
-                                                                    c_bit,
-                                                                    b_bit
-                                                                    )
-            # S bit 10
-            if pte & 0x400 :
-                out_string += " shareable"
-            else:
-                out_string += " not-shareable"
+    if verbose_level >= vSCRIPT:
+        print " {0: <#020x}\n\t{1: <#020x}\n\t".format(addressof(pte), unsigned(pte)),
 
-            # nG bit 11
-            if pte & 0x800:
-                out_string += " not-global"
-            else:
-                out_string += " global"
-    print out_string
+    PmapDecodeTTEARM(pte, 2, verbose_level)
+
     return paddr
     #end of level 2 walking of arm
 
@@ -606,12 +634,15 @@ def PmapWalkARM(pmap, vaddr, verbose_level = vHUMAN):
     """
     paddr = 0
     # shift by TTESHIFT (20) to get tte index
-    tte_index = ((vaddr - unsigned(pmap.min)) >> 20 )
+    # Assume all L1 indexing starts at VA 0...for our purposes it does,
+    # as that's where all user pmaps start, and the kernel pmap contains
+    # 4 L1 pages (the lower 2 of which are unused after bootstrap)
+    tte_index = vaddr >> 20
     tte = pmap.tte[tte_index]
     if verbose_level >= vSCRIPT:
         print "First-level table (index {:d}):".format(tte_index)
     if verbose_level >= vDETAIL:
-        for i in range(0, 4096):
+        for i in range(0, pmap.tte_index_max):
             ptr = unsigned(addressof(pmap.tte[i]))
             val = unsigned(pmap.tte[i])
             print "{0: <#020x}:\t {1: <#020x}".format(ptr, val)
@@ -683,6 +714,11 @@ def PmapTTnIndexARM64(vaddr, level):
     return (vaddr & PmapIndexMaskARM64(level)) // PmapIndexDivideARM64(level)
 
 def PmapDecodeTTEARM64(tte, level):
+    """ Display the bits of an ARM64 translation table or page table entry
+        in human-readable form.
+        tte: integer value of the TTE/PTE
+        level: translation table level.  Valid values are 1, 2, or 3.
+    """
     assert(type(tte) == long)
     assert(type(level) == int)
     assert_64bit(tte)
@@ -869,3 +905,349 @@ def PmapWalkHelper(cmd_args=None):
     addr = unsigned(kern.GetValueFromAddress(cmd_args[1], 'void *'))
     PmapWalk(pmap, addr, config['verbosity'])
     return
+
+@lldb_command('decode_tte')
+def DecodeTTE(cmd_args=None):
+    """ Decode the bits in the TTE/PTE value specified <tte_val> for translation level <level>
+        Syntax: (lldb) decode_tte <tte_val> <level>
+    """
+    if cmd_args == None or len(cmd_args) < 2:
+        raise ArgumentError("Too few arguments to decode_tte.")
+    if kern.arch == 'arm':
+        PmapDecodeTTEARM(kern.GetValueFromAddress(cmd_args[0], "unsigned long"), ArgumentStringToInt(cmd_args[1]), vSCRIPT)
+    elif kern.arch == 'arm64':
+        PmapDecodeTTEARM64(long(kern.GetValueFromAddress(cmd_args[0], "unsigned long")), ArgumentStringToInt(cmd_args[1]))
+    else:
+        raise NotImplementedError("decode_tte does not support {0}".format(kern.arch))
+
+def PVWalkARM(pa):
+    """ Walk a physical-to-virtual reverse mapping list maintained by the arm pmap
+        pa: physical address (NOT page number).  Does not need to be page-aligned 
+    """
+    vm_first_phys = unsigned(kern.globals.vm_first_phys)
+    vm_last_phys = unsigned(kern.globals.vm_last_phys)
+    if pa < vm_first_phys or pa >= vm_last_phys:
+        raise ArgumentError("PA {:#x} is outside range of managed physical addresses: [{:#x}, {:#x})".format(pa, vm_first_phys, vm_last_phys))
+    page_size = kern.globals.arm_hardware_page_size
+    pn = (pa - unsigned(kern.globals.vm_first_phys)) / page_size
+    pvh = unsigned(kern.globals.pv_head_table[pn])
+    pvh_type = pvh & 0x3
+    if pvh_type == 0:
+        print "PVH type: NULL"
+        return
+    elif pvh_type == 3:
+        print "PVH type: page-table descriptor"
+        return
+    elif pvh_type == 2:
+        ptep = pvh & ~0x3
+        print "PVH type: single PTE"
+        print "PTE {:#x}: {:#x}".format(ptep, dereference(kern.GetValueFromAddress(ptep, 'pt_entry_t *')))
+    elif pvh_type == 1:
+        pvep = pvh & ~0x3
+        print "PVH type: PTE list"
+        while pvep != 0:
+            pve = kern.GetValueFromAddress(pvep, "pv_entry_t *")
+            if unsigned(pve.pve_next) & 0x1:
+                pve_str = ' (alt acct) '
+            else:
+                pve_str = ''
+            pvep = unsigned(pve.pve_next) & ~0x1
+            ptep = unsigned(pve.pve_ptep) & ~0x3
+            print "PTE {:#x}{:s}: {:#x}".format(ptep, pve_str, dereference(kern.GetValueFromAddress(ptep, 'pt_entry_t *')))
+
+@lldb_command('pv_walk')
+def PVWalk(cmd_args=None):
+    """ Show mappings for <physical_address> tracked in the PV list.
+        Syntax: (lldb) pv_walk <physical_address>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        raise ArgumentError("Too few arguments to pv_walk.")
+    if kern.arch != 'arm' and kern.arch != 'arm64':
+        raise NotImplementedError("pv_walk does not support {0}".format(kern.arch))
+    PVWalkARM(kern.GetValueFromAddress(cmd_args[0], 'unsigned long'))
+
+def ShowPTEARM(pte):
+    """ Display vital information about an ARM page table entry
+        pte: kernel virtual address of the PTE.  Should be L3 PTE.  May also work with L2 TTEs for certain devices.
+    """
+    page_size = kern.globals.arm_hardware_page_size
+    pn = (pte - unsigned(kern.globals.gVirtBase) + unsigned(kern.globals.gPhysBase) - unsigned(kern.globals.vm_first_phys)) / page_size
+    pvh = kern.globals.pv_head_table[pn]
+    pvh_type = pvh & 0x3
+    if pvh_type != 0x3 and pvh_type != 0x0:
+        raise ValueError("PV head {:#x} does not correspond to a page-table descriptor".format(pvh))
+    ptd = kern.GetValueFromAddress(pvh & ~0x3, 'pt_desc_t *')
+    print "descriptor: {:#x}".format(ptd)
+    print "pmap: {:#x}".format(ptd.pmap)
+    pt_index = (pte % kern.globals.page_size) / page_size
+    pte_pgoff = pte % page_size
+    if kern.arch == 'arm64':
+        pte_pgoff = pte_pgoff / 8
+        nttes = page_size / 8
+    else:
+        pte_pgoff = pte_pgoff / 4
+        nttes = page_size / 4
+    if ptd.pt_cnt[pt_index].refcnt == 0x8000:
+        level = 2
+        granule = nttes * page_size
+    else:
+        level = 3
+        granule = page_size
+    print "maps VA: {:#x}".format(long(unsigned(ptd.pt_map[pt_index].va)) + (pte_pgoff * granule))
+    pteval = long(unsigned(dereference(kern.GetValueFromAddress(unsigned(pte), 'pt_entry_t *'))))
+    print "value: {:#x}".format(pteval)
+    if kern.arch == 'arm64':
+        print "level: {:d}".format(level)
+        PmapDecodeTTEARM64(pteval, level)
+    elif kern.arch == 'arm':
+        PmapDecodeTTEARM(pteval, 2, vSCRIPT)
+
+@lldb_command('showpte')
+def ShowPTE(cmd_args=None):
+    """ Display vital information about the page table entry at VA <pte>
+        Syntax: (lldb) showpte <pte_va>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        raise ArgumentError("Too few arguments to showpte.")
+    if kern.arch != 'arm' and kern.arch != 'arm64':
+        raise NotImplementedError("showpte does not support {0}".format(kern.arch))
+    ShowPTEARM(kern.GetValueFromAddress(cmd_args[0], 'unsigned long'))
+
+def FindMappingAtLevelARM(pmap, tt, nttes, level, action):
+    """ Perform the specified action for all valid mappings in an ARM translation table
+        pmap: owner of the translation table
+        tt: translation table or page table
+        nttes: number of entries in tt
+        level: translation table level, 1 or 2
+        action: callback for each valid TTE
+    """
+    for i in range(nttes):
+        try:
+            tte = tt[i]
+            if level == 1:
+                if tte & 0x3 == 0x1:
+                    type = 'table'
+                    granule = 1024
+                    paddr = tte & 0xFFFFFC00
+                elif tte & 0x3 == 0x2:
+                    type = 'block'
+                    if (tte & 0x40000) == 0x40000:
+                        granule = 1 << 24
+                        paddr = tte & 0xFF000000
+                    else:
+                        granule = 1 << 20
+                        paddr = tte & 0xFFF00000
+                else:
+                    continue
+            elif (tte & 0x3) == 0x1:
+                type = 'entry'
+                granule = 1 << 16
+                paddr = tte & 0xFFFF0000
+            elif (tte & 0x3) != 0:
+                type = 'entry' 
+                granule = 1 << 12
+                paddr = tte & 0xFFFFF000
+            else:
+                continue
+            action(pmap, level, type, addressof(tt[i]), paddr, granule)
+            if level == 1 and (tte & 0x3) == 0x1:
+                tt_next = kern.GetValueFromAddress(kern.PhysToKernelVirt(paddr), 'tt_entry_t *')
+                FindMappingAtLevelARM(pmap, tt_next, granule / 4, level + 1, action)
+        except Exception as exc:
+            print "Unable to access tte {:#x}".format(unsigned(addressof(tt[i])))
+
+def FindMappingAtLevelARM64(pmap, tt, nttes, level, action):
+    """ Perform the specified action for all valid mappings in an ARM64 translation table
+        pmap: owner of the translation table
+        tt: translation table or page table
+        nttes: number of entries in tt
+        level: translation table level, 1 2 or 3
+        action: callback for each valid TTE
+    """
+    page_size = kern.globals.arm_hardware_page_size
+    page_offset_mask = (page_size - 1)
+    page_base_mask = ((1 << ARM64_VMADDR_BITS) - 1) & (~page_offset_mask)
+    for i in range(nttes):
+        try:
+            tte = tt[i]
+            if tte & 0x1 == 0x1:
+                if tte & 0x2 == 0x2:
+                    if level < 3:
+                        type = 'table'
+                    else:
+                        type = 'entry'
+                    granule = page_size
+                    paddr = tte & page_base_mask
+                elif level < 3:
+                    type = 'block'
+                    granule = PmapBlockOffsetMaskARM64(level) + 1
+                    paddr = tte & PmapBlockBaseMaskARM64(level)
+                else:
+                    continue
+                action(pmap, level, type, addressof(tt[i]), paddr, granule)
+                if level < 3 and (tte & 0x2 == 0x2):
+                    tt_next = kern.GetValueFromAddress(kern.PhysToKernelVirt(paddr), 'tt_entry_t *')
+                    FindMappingAtLevelARM64(pmap, tt_next, granule / ARM64_TTE_SIZE, level + 1, action)
+        except Exception as exc:
+            print "Unable to access tte {:#x}".format(unsigned(addressof(tt[i]))) 
+
+def ScanPageTables(action, targetPmap=None):
+    """ Perform the specified action for all valid mappings in all page tables,
+        optionally restricted to a single pmap.
+        pmap: pmap whose page table should be scanned.  If None, all pmaps on system will be scanned.
+    """
+    print "Scanning all available translation tables.  This may take a long time..."
+    def ScanPmap(pmap, action):
+        if kern.arch == 'arm64':
+            granule = kern.globals.arm64_root_pgtable_num_ttes * 8
+        elif kern.arch == 'arm':
+            granule = pmap.tte_index_max * 4
+        action(pmap, 1, 'root', pmap.tte, unsigned(pmap.ttep), granule)
+        if kern.arch == 'arm64':
+            FindMappingAtLevelARM64(pmap, pmap.tte, kern.globals.arm64_root_pgtable_num_ttes, kern.globals.arm64_root_pgtable_level, action)
+        elif kern.arch == 'arm':
+            FindMappingAtLevelARM(pmap, pmap.tte, pmap.tte_index_max, 1, action)
+
+    if targetPmap is not None:
+        ScanPmap(kern.GetValueFromAddress(targetPmap, 'pmap_t'), action)
+    else:
+        for pmap in IterateQueue(kern.globals.map_pmap_list, 'pmap_t', 'pmaps'):
+            ScanPmap(pmap, action)        
+
+@lldb_command('showallmappings')
+def ShowAllMappings(cmd_args=None):
+    """ Find and display all available mappings on the system for
+        <physical_address>.  Optionally only searches the pmap
+        specified by [<pmap>]
+        Syntax: (lldb) showallmappings <physical_address> [<pmap>]
+        WARNING: this macro can take a long time (up to 30min.) to complete!
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        raise ArgumentError("Too few arguments to showallmappings.")
+    if kern.arch != 'arm' and kern.arch != 'arm64':
+        raise NotImplementedError("showallmappings does not support {0}".format(kern.arch))
+    pa = kern.GetValueFromAddress(cmd_args[0], 'unsigned long')
+    targetPmap = None
+    if len(cmd_args) > 1:
+        targetPmap = cmd_args[1]
+    def printMatchedMapping(pmap, level, type, tte, paddr, granule):
+        if paddr <= pa < (paddr + granule):
+            print "pmap: {:#x}: L{:d} {:s} at {:#x}: [{:#x}, {:#x})".format(pmap, level, type, unsigned(tte), paddr, paddr + granule)
+    ScanPageTables(printMatchedMapping, targetPmap)
+
+def checkPVList(pmap, level, type, tte, paddr, granule):
+    """ Checks an ARM physical-to-virtual mapping list for consistency error.
+        pmap: owner of the translation table
+        level: translation table level.  PV lists will only be checked for L2 (arm32) or L3 (arm64) tables.
+        type: unused
+        tte: KVA of PTE to check for presence in PV list.  If None, presence check will be skipped.
+        paddr: physical address whose PV list should be checked.  Need not be page-aligned.
+        granule: unused
+    """
+    vm_first_phys = unsigned(kern.globals.vm_first_phys)
+    vm_last_phys = unsigned(kern.globals.vm_last_phys)
+    page_size = kern.globals.arm_hardware_page_size
+    if kern.arch == 'arm64':
+        page_offset_mask = (page_size - 1)
+        page_base_mask = ((1 << ARM64_VMADDR_BITS) - 1) & (~page_offset_mask)
+        paddr = paddr & page_base_mask
+        max_level = 3
+    elif kern.arch == 'arm':
+        page_base_mask = 0xFFFFF000
+        paddr = paddr & page_base_mask
+        max_level = 2
+    if level < max_level or paddr < vm_first_phys or paddr >= vm_last_phys:
+        return
+    pn = (paddr - vm_first_phys) / page_size
+    pvh = unsigned(kern.globals.pv_head_table[pn])
+    pvh_type = pvh & 0x3
+    if pmap is not None:
+        pmap_str = "pmap: {:#x}: ".format(pmap)
+    else:
+        pmap_str = ''
+    if tte is not None:
+        tte_str = "pte {:#x} ({:#x}): ".format(unsigned(tte), paddr)
+    else:
+        tte_str = "paddr {:#x}: ".format(paddr) 
+    if pvh_type == 0 or pvh_type == 3:
+        print "{:s}{:s}unexpected PVH type {:d}".format(pmap_str, tte_str, pvh_type)
+    elif pvh_type == 2:
+        ptep = pvh & ~0x3
+        if tte is not None and ptep != unsigned(tte):
+            print "{:s}{:s}PVH mismatch ({:#x})".format(pmap_str, tte_str, ptep)
+        try:
+            pte = long(unsigned(dereference(kern.GetValueFromAddress(ptep, 'pt_entry_t *')))) & page_base_mask 
+            if (pte != paddr):
+                print "{:s}{:s}PVH {:#x} maps wrong page ({:#x}) ".format(pmap_str, tte_str, ptep, pte)
+        except Exception as exc:
+            print "{:s}{:s}Unable to read PVH {:#x}".format(pmap_str, tte_str, ptep)
+    elif pvh_type == 1:
+        pvep = pvh & ~0x3
+        tte_match = False
+        while pvep != 0:
+            pve = kern.GetValueFromAddress(pvep, "pv_entry_t *")
+            pvep = unsigned(pve.pve_next) & ~0x1
+            ptep = unsigned(pve.pve_ptep) & ~0x3
+            if tte is not None and ptep == unsigned(tte):
+                tte_match = True
+            try:
+                pte = long(unsigned(dereference(kern.GetValueFromAddress(ptep, 'pt_entry_t *')))) & page_base_mask 
+                if (pte != paddr):
+                    print "{:s}{:s}PVE {:#x} maps wrong page ({:#x}) ".format(pmap_str, tte_str, ptep, pte)
+            except Exception as exc:
+                print "{:s}{:s}Unable to read PVE {:#x}".format(pmap_str, tte_str, ptep)
+        if tte is not None and not tte_match:
+            print "{:s}{:s}not found in PV list".format(pmap_str, tte_str, paddr)
+
+@lldb_command('pv_check', 'P')
+def PVCheck(cmd_args=None, cmd_options={}):
+    """ Check the physical-to-virtual mapping for a given PTE or physical address
+        Syntax: (lldb) pv_check <addr> [-p]
+            -P        : Interpret <addr> as a physical address rather than a PTE
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        raise ArgumentError("Too few arguments to showallmappings.")
+    if kern.arch == 'arm':
+        level = 2
+    elif kern.arch == 'arm64':
+        level = 3
+    else:
+        raise NotImplementedError("showallmappings does not support {0}".format(kern.arch))
+    if "-P" in cmd_options:
+        pte = None
+        pa = long(unsigned(kern.GetValueFromAddress(cmd_args[0], "unsigned long")))
+    else:
+        pte = kern.GetValueFromAddress(cmd_args[0], 'pt_entry_t *')
+        pa = long(unsigned(dereference(pte)))
+    checkPVList(None, level, None, pte, pa, None)
+
+@lldb_command('check_pmaps')
+def CheckPmapIntegrity(cmd_args=None):
+    """ Performs a system-wide integrity check of all PTEs and associated PV lists.
+        Optionally only checks the pmap specified by [<pmap>]
+        Syntax: (lldb) check_pmaps [<pmap>]
+        WARNING: this macro can take a HUGE amount of time (several hours) if you do not
+        specify [pmap] to limit it to a single pmap.  It will also give false positives
+        for kernel_pmap, as we do not create PV entries for static kernel mappings on ARM.
+        Use of this macro without the [<pmap>] argument is heavily discouraged.
+    """
+    if kern.arch != 'arm' and kern.arch != 'arm64':
+        raise NotImplementedError("showallmappings does not support {0}".format(kern.arch))
+    targetPmap = None
+    if len(cmd_args) > 0:
+        targetPmap = cmd_args[0]
+    ScanPageTables(checkPVList, targetPmap)
+
+@lldb_command('pmapsforledger')
+def PmapsForLedger(cmd_args=None):
+    """ Find and display all pmaps currently using <ledger>.
+        Syntax: (lldb) pmapsforledger <ledger>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        raise ArgumentError("Too few arguments to pmapsforledger.")
+    if kern.arch != 'arm' and kern.arch != 'arm64':
+        raise NotImplementedError("pmapsforledger does not support {0}".format(kern.arch))
+    ledger = kern.GetValueFromAddress(cmd_args[0], 'ledger_t')
+    for pmap in IterateQueue(kern.globals.map_pmap_list, 'pmap_t', 'pmaps'):
+        if pmap.ledger == ledger:
+            print "pmap: {:#x}".format(pmap)

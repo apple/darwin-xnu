@@ -339,7 +339,6 @@ extern boolean_t task_is_marked_importance_denap_receiver(task_t task);
 #define TASK_RUSECPU_FLAGS_DEADLINE                     0x04
 #define TASK_RUSECPU_FLAGS_FATAL_CPUMON                 0x08    /* CPU usage monitor violations are fatal */
 #define TASK_RUSECPU_FLAGS_FATAL_WAKEUPSMON             0x10    /* wakeups monitor violations are fatal */
-#define TASK_RUSECPU_FLAGS_PHYS_FOOTPRINT_EXCEPTION     0x20    /* exceeding physical footprint generates EXC_RESOURCE */
 
 extern void proc_init_cpumon_params(void);
 extern void thread_policy_init(void);

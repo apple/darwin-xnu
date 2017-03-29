@@ -587,6 +587,15 @@ struct mk_timer_arm_trap_args {
 extern kern_return_t mk_timer_arm_trap(
 				struct mk_timer_arm_trap_args *args);
 
+struct mk_timer_arm_leeway_trap_args {
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(uint64_t, mk_timer_flags);
+	PAD_ARG_(uint64_t, expire_time);
+	PAD_ARG_(uint64_t, mk_leeway);
+};
+extern kern_return_t mk_timer_arm_leeway_trap(
+				struct mk_timer_arm_leeway_trap_args *args);
+
 struct mk_timer_cancel_trap_args {
     PAD_ARG_(mach_port_name_t, name);
     PAD_ARG_(user_addr_t, result_time);

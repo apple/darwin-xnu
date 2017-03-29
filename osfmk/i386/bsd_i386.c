@@ -417,11 +417,8 @@ mach_call_munger(x86_saved_state_t *state)
 	struct mach_call_args args = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	x86_saved_state32_t	*regs;
 
-#if PROC_REF_DEBUG
 	struct uthread *ut = get_bsdthread_info(current_thread());
-
 	uthread_reset_proc_refcount(ut);
-#endif
 
 	assert(is_saved_state32(state));
 	regs = saved_state32(state);
@@ -505,11 +502,8 @@ mach_call_munger64(x86_saved_state_t *state)
 	struct mach_call_args args = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	x86_saved_state64_t	*regs;
 
-#if PROC_REF_DEBUG
 	struct uthread *ut = get_bsdthread_info(current_thread());
-
 	uthread_reset_proc_refcount(ut);
-#endif
 
 	assert(is_saved_state64(state));
 	regs = saved_state64(state);

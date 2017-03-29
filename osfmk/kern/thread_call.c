@@ -191,7 +191,7 @@ thread_call_group_should_add_thread(thread_call_group_t group)
 
 	if (group->pending_count > 0) {
 		if (group->idle_count > 0) {
-			panic("Pending work, but threads are idle?");
+			return FALSE;
 		}
 
 		thread_count = group->active_count;

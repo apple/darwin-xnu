@@ -4231,6 +4231,13 @@ makedummy:
 			goto no_mbufs;
 		}
 	}
+	if (inp->inp_flags & INP_RECVTOS) {
+		mp = sbcreatecontrol_mbuf((caddr_t)&ip->ip_tos,
+		    sizeof(u_char), IP_RECVTOS, IPPROTO_IP, mp);
+		if (*mp == NULL) {
+			goto no_mbufs;
+		}
+	}
 	return (0);
 
 no_mbufs:

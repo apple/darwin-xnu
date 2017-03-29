@@ -91,6 +91,7 @@
 #define PRIV_KTRACE_BACKGROUND		1011	/* Operate ktrace in the background */
 #define PRIV_SETPRIORITY_DARWIN_ROLE	1012	/* Allow setpriority(PRIO_DARWIN_ROLE) */
 #define PRIV_PACKAGE_EXTENSIONS		1013	/* Push package extension list used by vn_path_package_check() */
+#define PRIV_TRIM_ACTIVE_FILE		1014	/* Allow freeing space out from under an active file  */
 
 /*
  * Virtual memory privileges.
@@ -122,7 +123,8 @@
  */
 #define PRIV_VFS_OPEN_BY_ID		14000 	/* Allow calling openbyid_np() */
 #define PRIV_VFS_MOVE_DATA_EXTENTS	14001   /* Allow F_MOVEDATAEXTENTS fcntl */
-#define PRIV_VFS_SNAPSHOT		14002	/* Allow calling fs_snapshot_*() */
+#define PRIV_VFS_SNAPSHOT		14002	/* Allow create/rename/delete of snapshots */
+#define PRIV_VFS_SNAPSHOT_REVERT	14003	/* Allow reverting filesystem to a previous snapshot */
 
 #ifdef KERNEL
 /*

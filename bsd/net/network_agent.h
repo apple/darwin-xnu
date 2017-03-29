@@ -88,6 +88,7 @@ struct netagent_assign_nexus_message {
 #define	NETAGENT_OPTION_TYPE_UNREGISTER			NETAGENT_MESSAGE_TYPE_UNREGISTER	// No value, no return value
 #define	NETAGENT_OPTION_TYPE_UPDATE				NETAGENT_MESSAGE_TYPE_UPDATE		// Pass netagent to update, no return value
 #define NETAGENT_OPTION_TYPE_ASSIGN_NEXUS		NETAGENT_MESSAGE_TYPE_ASSIGN_NEXUS	// Pass struct netagent_assign_nexus_message
+#define	NETAGENT_OPTION_TYPE_USE_COUNT			16									// Pass use count to set, get current use count
 
 #define	NETAGENT_MESSAGE_FLAGS_RESPONSE			0x01	// Used for acks, errors, and query responses
 
@@ -209,6 +210,8 @@ extern int netagent_kernel_trigger(uuid_t uuid);
 extern int netagent_client_message(uuid_t agent_uuid, uuid_t necp_client_uuid, u_int8_t message_type);
 
 extern int netagent_copyout(uuid_t uuid, user_addr_t user_addr, u_int32_t user_size);
+
+extern int netagent_use(uuid_t agent_uuid, uint64_t *out_use_count);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifndef KERNEL

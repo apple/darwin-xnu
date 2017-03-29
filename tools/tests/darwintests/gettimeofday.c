@@ -7,7 +7,7 @@
 extern int __gettimeofday(struct timeval *, struct timezone *);
 
 T_DECL(gettimeofday, "gettimeofday()",
-	   T_META_CHECK_LEAKS(NO), T_META_ALL_VALID_ARCHS(YES))
+	   T_META_CHECK_LEAKS(false), T_META_ALL_VALID_ARCHS(true), T_META_LTEPHASE(LTE_POSTINIT))
 {
 	struct timeval tv_a, tv_b, tv_c;
 
@@ -29,7 +29,7 @@ T_DECL(gettimeofday, "gettimeofday()",
 extern int __gettimeofday_with_mach(struct timeval *, struct timezone *, uint64_t *mach_time);
 
 T_DECL(gettimeofday_with_mach, "gettimeofday_with_mach()",
-	   T_META_CHECK_LEAKS(NO), T_META_ALL_VALID_ARCHS(YES))
+	   T_META_CHECK_LEAKS(false), T_META_ALL_VALID_ARCHS(true))
 {
 	struct timeval gtod_ts;
 

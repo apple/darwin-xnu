@@ -182,6 +182,8 @@ A bit set that specifies the fork attributes that you require.
 Fork attributes relate to the actual data in the file,
 which can be held in multiple named contiguous ranges, or forks.
 See below for a description of these attributes.
+If the FSOPT_ATTR_CMN_EXTENDED option is given, this bit set is reinterpreted
+as extended common attributes attributes, also described below.
 .
 .El
 .Pp
@@ -240,8 +242,8 @@ If this is bit is set, then
 .Dv ATTR_CMN_GEN_COUNT
 and
 .Dv ATTR_CMN_DOCUMENT_ID
-can be requested. When this option is used, callers must not reference
-forkattrs anywhere.
+can be requested. When this option is used, forkattrs are reinterpreted as a
+set of extended common attributes.
 .
 .El
 .
@@ -903,6 +905,16 @@ A
 containing the file system UUID.  Typically this will be a
 version 5 UUID.
 .
+.It ATTR_VOL_QUOTA_SIZE
+An
+.Vt off_t
+containing the maximum size of the volume in bytes.
+.
+.It ATTR_VOL_RESERVED_SIZE
+An
+.Vt off_t
+containing the minimum size of the volume in bytes.
+.
 .It ATTR_VOL_ATTRIBUTES
 A
 .Vt vol_attributes_attr_t
@@ -940,6 +952,21 @@ Currently the only flag defined is
 .Dv DIR_MNTSTATUS_MNTPOINT,
 which indicates that there is a file system mounted on this directory.
 .
+.It ATTR_DIR_ALLOCSIZE
+An
+.Vt off_t
+containing the number of bytes on disk used by the directory
+(the physical size).
+.
+.It ATTR_DIR_IOBLOCKSIZE
+A
+.Vt u_int32_t
+containing the optimal block size when reading or writing data.
+.
+.It ATTR_DIR_DATALENGTH
+An
+.Vt off_t
+containing the length of the directory in bytes (the logical size).
 .El
 .
 .Pp
@@ -1083,6 +1110,7 @@ are directories.
 .
 Fork attributes relate to the actual data in the file,
 which can be held in multiple named contiguous ranges, or forks.
+These cannot be used if the FSOPT_ATTR_CMN_EXTENDED is given.
 The following fork attributes are defined.
 .
 .Bl -tag -width ATTR_VOL_ALLOCATIONCLUMP
@@ -1111,6 +1139,36 @@ They are not properly implemented by any current Mac OS X
 volume format implementation.
 We strongly recommend that client programs do not request fork attributes.
 If you are implementing a volume format, you should not support these attributes.
+.
+.Sh COMMON EXTENDED ATTRIBUTES
+.
+Common extended attributes are like common attributes except that they are set
+in the forkattr field and can only be used if the FSOPT_ATTR_CMN_EXTENDED
+option is given. Use of these attributes is mutually exclusive with the above
+fork attributes.
+.
+.Bl -tag -width ATTR_VOL_ALLOCATIONCLUMP
+.
+.It ATTR_CMNEXT_RELPATH
+An
+.Vt attrreference
+structure containing the mount-relative path of
+the file system object as
+a UTF-8 encoded, null terminated C string.
+The attribute data length will not be greater than
+.Dv PATH_MAX.
+Inconsistent behavior may be observed when this attribute is requested on
+hard-linked items, particularly when the file system does not support
+ATTR_CMN_PARENTID natively. Callers should be aware of this when requesting the
+relative path of a hard-linked item.
+.
+.It ATTR_CMNEXT_PRIVATESIZE
+An
+.Vt off_t
+containing the number of bytes that are \fBnot\fP trapped inside a clone
+or snapshot, and which would be freed immediately if the file were deleted.
+.
+.El
 .
 .Sh VOLUME CAPABILITIES
 .
@@ -1345,6 +1403,15 @@ obtaining object IDs from this volume. The values returned by ATTR_CMN_OBJID,
 ATTR_CMN_OBJPERMANENTID, and ATTR_CMN_PAROBJID can be interpreted as 64-bit
 object IDs instead of fsobj_id_t.
 .
+.It VOL_CAP_FMT_NO_IMMUTABLE_FILES
+If this bit is set, the volume format does not support setting the UF_IMMUTABLE
+flag.
+See ATTR_CMN_FLAGS for more details.
+.It VOL_CAP_FMT_NO_PERMISSIONS
+If this bit is set, the volume format does not support setting file
+permissions.
+See ATTR_CMN_USERACCESS for more details.
+.
 .El
 .Pp
 .
@@ -1454,6 +1521,12 @@ AFP-style mandatory byte range locks via
 If this bit is set, the volume format implementation supports
 native extended attributes (see
 .Xr setxattr 2 Ns ).
+.
+.It VOL_CAP_INT_CLONE
+If this bit is set, the file system supports cloning files and directories.
+See 
+.Xr clonefileat 2 
+for more details.
 .
 .It VOL_CAP_INT_NAMEDSTREAMS
 If this bit is set, the volume format implementation supports

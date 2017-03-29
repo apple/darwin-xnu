@@ -354,10 +354,8 @@ typedef struct memorystatus_memlimit_properties {
 #define P_MEMSTAT_INTERNAL             0x00001000
 #define P_MEMSTAT_FATAL_MEMLIMIT                  0x00002000   /* current fatal state of the process's memlimit */
 #define P_MEMSTAT_MEMLIMIT_ACTIVE_FATAL           0x00004000   /* if set, exceeding limit is fatal when the process is active   */
-#define P_MEMSTAT_MEMLIMIT_ACTIVE_EXC_TRIGGERED   0x00008000   /* if set, supresses high-water-mark EXC_RESOURCE, allows one hit per active limit */
-#define P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL         0x00010000   /* if set, exceeding limit is fatal when the process is inactive */
-#define P_MEMSTAT_MEMLIMIT_INACTIVE_EXC_TRIGGERED 0x00020000   /* if set, supresses high-water-mark EXC_RESOURCE, allows one hit per inactive limit */
-#define P_MEMSTAT_USE_ELEVATED_INACTIVE_BAND 	  0x00040000   /* if set, the process will go into this band & stay there when in the background instead
+#define P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL         0x00008000   /* if set, exceeding limit is fatal when the process is inactive */
+#define P_MEMSTAT_USE_ELEVATED_INACTIVE_BAND 	  0x00010000   /* if set, the process will go into this band & stay there when in the background instead
 								  of the aging bands and/or the IDLE band. */
 
 extern void memorystatus_init(void) __attribute__((section("__TEXT, initcode")));
@@ -395,8 +393,8 @@ int memorystatus_knote_register(struct knote *kn);
 void memorystatus_knote_unregister(struct knote *kn);
 
 #if CONFIG_MEMORYSTATUS
-boolean_t memorystatus_turnoff_exception_and_get_fatalness(boolean_t warning, const int max_footprint_mb);
-void memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t is_fatal);
+void memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
+void memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
 void proc_memstat_terminated(proc_t p, boolean_t set);
 boolean_t memorystatus_proc_is_dirty_unsafe(void *v);
 #endif /* CONFIG_MEMORYSTATUS */
