@@ -241,15 +241,17 @@ int _NumCPUs( void )
 
 #define _COMM_TEXT_PREEMPT_OFFSET		(0x5a0)	/* called from withing pfz */
 #define _COMM_TEXT_BACKOFF_OFFSET		(0x600)	/* called from PFZ */
+#define _COMM_TEXT_RET_OFFSET			(0x680)	/* called from PFZ */
 #define _COMM_TEXT_PFZ_START_OFFSET		(0xc00)	/* offset for Preemption Free Zone */
 #define _COMM_TEXT_PFZ_ENQUEUE_OFFSET		(0xc00)	/* internal FIFO enqueue */
 #define _COMM_TEXT_PFZ_DEQUEUE_OFFSET		(0xc80)	/* internal FIFO dequeue */
-#define _COMM_TEXT_UNUSED_OFFSET		(0xd80)	/* end of routines in text page */
-#define _COMM_TEXT_PFZ_END_OFFSET		(0xfff)	/* offset for end of PFZ */
+#define _COMM_TEXT_UNUSED_OFFSET		(0xd00)	/* end of routines in text page */
+#define _COMM_TEXT_PFZ_END_OFFSET		(0xd00)	/* offset for end of PFZ */
 
 
 #define _COMM_PAGE_PREEMPT		(_COMM_PAGE_TEXT_START+_COMM_TEXT_PREEMPT_OFFSET)
 #define _COMM_PAGE_BACKOFF		(_COMM_PAGE_TEXT_START+_COMM_TEXT_BACKOFF_OFFSET)	
+#define _COMM_PAGE_RET			(_COMM_PAGE_TEXT_START+_COMM_TEXT_RET_OFFSET)	
 
 #define _COMM_PAGE_PFZ_START		(_COMM_PAGE_TEXT_START+_COMM_PAGE_PFZ_START_OFFSET)
 

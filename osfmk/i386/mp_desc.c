@@ -202,43 +202,6 @@ extern void hi64_syscall(void);
  * Allocate and initialize the per-processor descriptor tables.
  */
 
-struct fake_descriptor ldt_desc_pattern = {
-	(unsigned int) 0,
-	LDTSZ_MIN * sizeof(struct fake_descriptor) - 1,
-	0,
-	ACC_P|ACC_PL_K|ACC_LDT
-};
-
-struct fake_descriptor tss_desc_pattern = {
-	(unsigned int) 0,
-	sizeof(struct i386_tss) - 1,
-	0,
-	ACC_P|ACC_PL_K|ACC_TSS
-};
-
-struct fake_descriptor cpudata_desc_pattern = {
-	(unsigned int) 0,
-	sizeof(cpu_data_t)-1,
-	SZ_32,
-	ACC_P|ACC_PL_K|ACC_DATA_W
-};
-
-#if	NCOPY_WINDOWS > 0
-struct fake_descriptor userwindow_desc_pattern = {
-	(unsigned int) 0,
-	((NBPDE * NCOPY_WINDOWS) / PAGE_SIZE) - 1,
-	SZ_32 | SZ_G,
-	ACC_P|ACC_PL_U|ACC_DATA_W
-};
-#endif
-
-struct fake_descriptor physwindow_desc_pattern = {
-	(unsigned int) 0,
-	PAGE_SIZE - 1,
-	SZ_32,
-	ACC_P|ACC_PL_K|ACC_DATA_W
-};
-
 /*
  * This is the expanded, 64-bit variant of the kernel LDT descriptor.
  * When switching to 64-bit mode this replaces KERNEL_LDT entry
@@ -715,6 +678,13 @@ valid_user_code_selector(uint16_t selector)
     else if (sel.index < GDTSZ && sel.rpl == USER_PRIV) {
 	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
 	    return (TRUE);
+	/* Explicitly validate the system code selectors
+	 * even if not instantaneously privileged,
+	 * since they are dynamically re-privileged
+	 * at context switch
+	 */
+	if ((selector == USER_CS) || (selector == USER64_CS))
+		return (TRUE);
     }
 
     return (FALSE);

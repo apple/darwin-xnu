@@ -1892,13 +1892,13 @@ unp_externalize(struct mbuf *rights)
 	struct fileglob **rp = (struct fileglob **)(cm + 1);
 	int *fds = (int *)(cm + 1);
 	struct fileproc *fp;
-	struct fileglob **fgl;
+	struct fileproc **fileproc_l;
 	int newfds = (cm->cmsg_len - sizeof (*cm)) / sizeof (int);
 	int f, error = 0;
 
-	MALLOC(fgl, struct fileglob **, newfds * sizeof (struct fileglob *),
-		M_TEMP, M_WAITOK);
-	if (fgl == NULL) {
+	MALLOC(fileproc_l, struct fileproc **,
+	    newfds * sizeof (struct fileproc *), M_TEMP, M_WAITOK);
+	if (fileproc_l == NULL) {
 		error = ENOMEM;
 		goto discard;
 	}
@@ -1942,27 +1942,40 @@ unp_externalize(struct mbuf *rights)
 			panic("unp_externalize: MALLOC_ZONE");
 		fp->f_iocount = 0;
 		fp->f_fglob = rp[i];
-		if (fg_removeuipc_mark(rp[i]))
-			fgl[i] = rp[i];
-		else
-			fgl[i] = NULL;
+		if (fg_removeuipc_mark(rp[i])) {
+
+			/*
+			 * Take an iocount on the fp for completing the
+			 * removal from the global msg queue
+			 */
+			fp->f_iocount++;
+			fileproc_l[i] = fp;
+		} else {
+			fileproc_l[i] = NULL;
+		}
 		procfdtbl_releasefd(p, f, fp);
 		fds[i] = f;
 	}
 	proc_fdunlock(p);
 
 	for (i = 0; i < newfds; i++) {
-		if (fgl[i] != NULL) {
-			VERIFY(fgl[i]->fg_lflags & FG_RMMSGQ);
-			fg_removeuipc(fgl[i]);
+		if (fileproc_l[i] != NULL) {
+			VERIFY(fileproc_l[i]->f_fglob != NULL &&
+			    (fileproc_l[i]->f_fglob->fg_lflags & FG_RMMSGQ));
+			VERIFY(fds[i] > 0);
+			fg_removeuipc(fileproc_l[i]->f_fglob);
+
+			/* Drop the iocount */
+			fp_drop(p, fds[i], fileproc_l[i], 0);
+			fileproc_l[i] = NULL;
 		}
-		if (fds[i])
+		if (fds[i] != 0)
 			(void) OSAddAtomic(-1, &unp_rights);
 	}
 
 discard:
-	if (fgl)
-		FREE(fgl, M_TEMP);
+	if (fileproc_l != NULL)
+		FREE(fileproc_l, M_TEMP);
 	if (error) {
 		for (i = 0; i < newfds; i++) {
 			unp_discard(*rp, p);

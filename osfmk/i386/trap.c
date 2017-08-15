@@ -1270,3 +1270,27 @@ sync_iss_to_iks_unconditionally(__unused x86_saved_state_t *saved_state) {
 		__asm__ volatile("leaq 1f(%%rip), %%rax; mov %%rax, %0\n1:" : "=m" (iks->k_rip)::"rax");
 	}
 }
+
+#if DEBUG
+extern void	thread_exception_return_internal(void) __dead2;
+
+void thread_exception_return(void) {
+	thread_t thread = current_thread();
+	ml_set_interrupts_enabled(FALSE);
+	if (thread_is_64bit(thread) != task_has_64BitAddr(thread->task)) {
+		panic("Task/thread bitness mismatch %p %p, task: %d, thread: %d", thread, thread->task, thread_is_64bit(thread),  task_has_64BitAddr(thread->task));
+	}
+
+	if (thread_is_64bit(thread)) {
+		if ((gdt_desc_p(USER64_CS)->access & ACC_PL_U) == 0) {
+			panic("64-GDT mismatch %p, descriptor: %p", thread, gdt_desc_p(USER64_CS));
+		}
+	} else {
+			if ((gdt_desc_p(USER_CS)->access & ACC_PL_U) == 0) {
+				panic("32-GDT mismatch %p, descriptor: %p", thread, gdt_desc_p(USER_CS));
+
+		}
+	}
+	thread_exception_return_internal();
+}
+#endif

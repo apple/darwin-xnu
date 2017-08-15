@@ -2566,6 +2566,19 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		goto out;
 	}
 
+#if DEVELOPMENT || DEBUG
+	/*
+	 * XXX VSWAP: Check for entitlements or special flag here
+	 * so we can restrict access appropriately.
+	 */
+#else /* DEVELOPMENT || DEBUG */
+
+	if (vnode_isswap(vp) && (ctx != vfs_context_kernel())) {
+		error = EPERM;
+		goto out;
+	}
+#endif /* DEVELOPMENT || DEBUG */
+
 #if NAMEDSTREAMS
 	/* For streams, va_data_size is the only setable attribute. */
 	if ((vp->v_flag & VISNAMEDSTREAM) && (vap->va_active != VNODE_ATTR_va_data_size)) {

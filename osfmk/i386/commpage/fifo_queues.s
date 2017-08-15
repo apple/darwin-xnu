@@ -141,17 +141,17 @@ COMMPAGE_FUNCTION_START(pfz_enqueue, 32, 4)
 	COMMPAGE_CALL(_COMM_PAGE_BACKOFF,_COMM_PAGE_PFZ_ENQUEUE,pfz_enqueue)
 	jmp	    1b		    // loop to try again
 2:
-	movl	    4(%edi),%ecx    // get ptr to last element in q
-	testl	    %ecx,%ecx	    // q null?
+	movl	    4(%edi),%eax    // get ptr to last element in q
+	testl	    %eax,%eax	    // q null?
 	jnz	    3f		    // no
 	movl	    %esi,(%edi)	    // q empty so this is first element
 	jmp	    4f
 3:
-	movl	    %esi,(%edx,%ecx) // point to new element from last
+	movl	    %esi,(%edx,%eax) // point to new element from last
 4:
 	movl	    %esi,4(%edi)    // new element becomes last in q
 	movl	    $0,8(%edi)	    // unlock spinlock
-	ret
+	COMMPAGE_JMP(_COMM_PAGE_RET,_COMM_PAGE_PFZ_ENQUEUE,pfz_enqueue)
 COMMPAGE_DESCRIPTOR(pfz_enqueue,_COMM_PAGE_PFZ_ENQUEUE)
 
 
@@ -197,9 +197,13 @@ COMMPAGE_FUNCTION_START(pfz_dequeue, 32, 4)
 	movl	    %esi,(%edi)	    // update "first" field of q head
 4:
 	movl	    $0,8(%edi)	    // unlock spinlock
-	ret
+	COMMPAGE_JMP(_COMM_PAGE_RET,_COMM_PAGE_PFZ_DEQUEUE,pfz_dequeue)
 COMMPAGE_DESCRIPTOR(pfz_dequeue,_COMM_PAGE_PFZ_DEQUEUE)
 
+
+COMMPAGE_FUNCTION_START(ret, 32, 4)
+	ret
+COMMPAGE_DESCRIPTOR(ret,_COMM_PAGE_RET)
 
 
 
@@ -286,17 +290,17 @@ COMMPAGE_FUNCTION_START(pfz_enqueue_64, 64, 4)
 	COMMPAGE_CALL(_COMM_PAGE_BACKOFF,_COMM_PAGE_PFZ_ENQUEUE,pfz_enqueue_64)
 	jmp	    1b		    // loop to try again
 2:
-	movq	    8(%rdi),%rcx    // get ptr to last element in q
-	testq	    %rcx,%rcx	    // q null?
+	movq	    8(%rdi),%rax    // get ptr to last element in q
+	testq	    %rax,%rax	    // q null?
 	jnz	    3f		    // no
 	movq	    %rsi,(%rdi)	    // q empty so this is first element
 	jmp	    4f
 3:
-	movq	    %rsi,(%rdx,%rcx) // point to new element from last
+	movq	    %rsi,(%rdx,%rax) // point to new element from last
 4:
 	movq	    %rsi,8(%rdi)    // new element becomes last in q
 	movl	    $0,16(%rdi)	    // unlock spinlock
-	ret
+	COMMPAGE_JMP(_COMM_PAGE_RET,_COMM_PAGE_PFZ_ENQUEUE,pfz_enqueue_64)
 COMMPAGE_DESCRIPTOR(pfz_enqueue_64,_COMM_PAGE_PFZ_ENQUEUE)
 
 
@@ -343,5 +347,9 @@ COMMPAGE_FUNCTION_START(pfz_dequeue_64, 64, 4)
 	movq	    %rsi,(%rdi)	    // update "first" field of q head
 4:
 	movl	    $0,16(%rdi)	    // unlock spinlock
-	ret
+	COMMPAGE_JMP(_COMM_PAGE_RET,_COMM_PAGE_PFZ_DEQUEUE,pfz_dequeue_64)
 COMMPAGE_DESCRIPTOR(pfz_dequeue_64,_COMM_PAGE_PFZ_DEQUEUE)
+
+COMMPAGE_FUNCTION_START(ret_64, 64, 4)
+	ret
+COMMPAGE_DESCRIPTOR(ret_64,_COMM_PAGE_RET)

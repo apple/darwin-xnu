@@ -567,6 +567,19 @@ continue_create_lookup:
 		panic("Haven't cleaned up adequately in vn_open_auth()");
 	}
 
+#if DEVELOPMENT || DEBUG
+	/*
+	 * XXX VSWAP: Check for entitlements or special flag here
+	 * so we can restrict access appropriately.
+	 */
+#else /* DEVELOPMENT || DEBUG */
+
+	if (vnode_isswap(vp) && (fmode & (FWRITE | O_TRUNC)) && (ctx != vfs_context_kernel())) {
+		error = EPERM;
+		goto bad;
+	}
+#endif /* DEVELOPMENT || DEBUG */
+
 	/*
 	 * Expect to use this code for filesystems without compound VNOPs, for the root 
 	 * of a filesystem, which can't be "looked up" in the sense of VNOP_LOOKUP(),
@@ -922,7 +935,21 @@ vn_rdwr_64(
 				error = VNOP_READ(vp, auio, ioflg, &context);
 			}
 		} else {
+
+#if DEVELOPMENT || DEBUG
+			/*
+	 		 * XXX VSWAP: Check for entitlements or special flag here
+	 		 * so we can restrict access appropriately.
+	 		 */
 			error = VNOP_WRITE(vp, auio, ioflg, &context);
+#else /* DEVELOPMENT || DEBUG */
+
+			if (vnode_isswap(vp) && ((ioflg & (IO_SWAP_DISPATCH | IO_SKIP_ENCRYPTION)) == 0)) {
+				error = EPERM;
+			} else {
+				error = VNOP_WRITE(vp, auio, ioflg, &context);
+			}
+#endif /* DEVELOPMENT || DEBUG */
 		}
 	}
 
@@ -1017,11 +1044,13 @@ vn_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	count = uio_resid(uio);
 
 	if (vnode_isswap(vp) && !(IO_SKIP_ENCRYPTION & ioflag)) {
+
 		/* special case for swap files */
 		error = vn_read_swapfile(vp, uio);
 	} else {
 		error = VNOP_READ(vp, uio, ioflag, ctx);
 	}
+
 	if ((flags & FOF_OFFSET) == 0) {
 		fp->f_fglob->fg_offset += count - uio_resid(uio);
 		if (offset_locked) {
@@ -1055,6 +1084,21 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	if ( (error = vnode_getwithref(vp)) ) {
 		return(error);
 	}
+
+#if DEVELOPMENT || DEBUG
+	/*
+	 * XXX VSWAP: Check for entitlements or special flag here
+	 * so we can restrict access appropriately.
+	 */
+#else /* DEVELOPMENT || DEBUG */
+
+	if (vnode_isswap(vp)) {
+		(void)vnode_put(vp);
+		error = EPERM;
+		return (error);
+	}
+#endif /* DEVELOPMENT || DEBUG */
+
 
 #if CONFIG_MACF
 	error = mac_vnode_check_write(ctx, vfs_context_ucred(ctx), vp);

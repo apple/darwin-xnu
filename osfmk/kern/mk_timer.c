@@ -70,7 +70,7 @@ mk_timer_create_trap(
 		return (MACH_PORT_NULL);
 
 	result = mach_port_allocate_qos(myspace, MACH_PORT_RIGHT_RECEIVE,
-														&mk_timer_qos, &name);
+	                                &mk_timer_qos, &name);
 	if (result == KERN_SUCCESS)
 		result = ipc_port_translate_receive(myspace, name, &port);
 

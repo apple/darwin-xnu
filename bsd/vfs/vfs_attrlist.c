@@ -3912,6 +3912,19 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 		goto out;
 	}
 
+#if DEVELOPMENT || DEBUG
+	/*
+	 * XXX VSWAP: Check for entitlements or special flag here
+	 * so we can restrict access appropriately.
+	 */
+#else /* DEVELOPMENT || DEBUG */
+
+	if (vnode_isswap(vp) && (ctx != vfs_context_kernel())) {
+		error = EPERM;
+		goto out;
+	}
+#endif /* DEVELOPMENT || DEBUG */
+
 	VFS_DEBUG(ctx, vp, "%p  ATTRLIST - %s set common %08x vol %08x file %08x dir %08x fork %08x %sfollow on '%s'",
 	    vp, p->p_comm, al.commonattr, al.volattr, al.fileattr, al.dirattr, al.forkattr,
 	    (uap->options & FSOPT_NOFOLLOW) ? "no":"", vp->v_name);

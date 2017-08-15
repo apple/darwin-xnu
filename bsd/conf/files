@@ -151,6 +151,7 @@ bsd/libkern/skpc.c			standard
 bsd/libkern/strsep.c			standard
 bsd/libkern/bcd.c			standard
 bsd/libkern/memchr.c			standard
+bsd/libkern/url_encode.c		standard
 
 bsd/vfs/vfs_attrlist.c			standard
 bsd/vfs/vfs_bio.c			standard

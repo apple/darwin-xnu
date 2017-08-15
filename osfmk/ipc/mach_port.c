@@ -1550,6 +1550,12 @@ mach_port_request_notification(
 			return kr;
 		/* port is locked and active */
 
+		/* you cannot register for port death notifications on a kobject */
+		if (ip_kotype(port) != IKOT_NONE) {
+			ip_unlock(port);
+			return KERN_INVALID_RIGHT;
+		}
+
 		ipc_port_pdrequest(port, notify, &previous);
 		/* port is unlocked */
 

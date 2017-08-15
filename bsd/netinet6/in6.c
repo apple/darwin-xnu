@@ -1791,6 +1791,12 @@ in6_to_kamescope(struct sockaddr_in6 *sin6, struct ifnet *ifp)
 	return (0);
 }
 
+/*
+ * When the address is being configured we should clear out certain flags
+ * coming in from the caller.
+ */
+#define	IN6_IFF_CLR_ADDR_FLAG_MASK	(~(IN6_IFF_DEPRECATED | IN6_IFF_DETACHED | IN6_IFF_DUPLICATED))
+
 static int
 in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 {
@@ -1814,22 +1820,34 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 	    ifaupflags));
 
 	/*
+	 * Just to be safe, always clear certain flags when address
+	 * is being configured
+	 */
+	ia->ia6_flags &= IN6_IFF_CLR_ADDR_FLAG_MASK;
+
+	/*
 	 * Mark the address as tentative before joining multicast addresses,
 	 * so that corresponding MLD responses would not have a tentative
 	 * source address.
 	 */
-	ia->ia6_flags &= ~IN6_IFF_DUPLICATED;	/* safety */
-	if (in6if_do_dad(ifp))
+	if (in6if_do_dad(ifp)) {
 		in6_ifaddr_set_dadprogress(ia);
-
-	/*
-	 * Do not delay sending neighbor solicitations when using optimistic
-	 * duplicate address detection, c.f. RFC 4429.
-	 */
-	if (ia->ia6_flags & IN6_IFF_OPTIMISTIC)
-		ifaupflags &= ~IN6_IFAUPDATE_DADDELAY;
-	else
-		ifaupflags |= IN6_IFAUPDATE_DADDELAY;
+		/*
+		 * Do not delay sending neighbor solicitations when using optimistic
+		 * duplicate address detection, c.f. RFC 4429.
+		 */
+		if (ia->ia6_flags & IN6_IFF_OPTIMISTIC)
+			ifaupflags &= ~IN6_IFAUPDATE_DADDELAY;
+		else
+			ifaupflags |= IN6_IFAUPDATE_DADDELAY;
+	} else {
+		/*
+		 * If the interface has been marked to not perform
+		 * DAD, make sure to reset DAD in progress flags
+		 * that may come in from the caller.
+		 */
+		ia->ia6_flags &= ~IN6_IFF_DADPROGRESS;
+	}
 
 	/* Join necessary multicast groups */
 	if ((ifp->if_flags & IFF_MULTICAST) != 0) {

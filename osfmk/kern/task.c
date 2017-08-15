@@ -330,7 +330,7 @@ task_set_64bit(
 	 * state with respect to its task's 64-bitness.
 	 */
 
-#if defined(__i386__) || defined(__x86_64__) || defined(__arm64__)	
+#if defined(__x86_64__) || defined(__arm64__)
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
 		thread_mtx_lock(thread);
 		machine_thread_switch_addrmode(thread);
@@ -356,7 +356,7 @@ task_set_64bit(
 			splx(spl);
 		}
 	}
-#endif /* defined(__i386__) || defined(__x86_64__) || defined(__arm64__) */	
+#endif /* defined(__x86_64__) || defined(__arm64__) */
 
 out:
 	task_unlock(task);

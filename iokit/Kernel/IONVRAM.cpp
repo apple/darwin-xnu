@@ -94,7 +94,7 @@ void IODTNVRAM::initProxyData(void)
       data = OSDynamicCast(OSData, prop);
       if (data != 0) {
         bytes = data->getBytesNoCopy();
-        if (bytes != 0) {
+        if ((bytes != 0) && (data->getLength() <= kIODTNVRAMImageSize)) {
           bcopy(bytes, _nvramImage, data->getLength());
           initNVRAMImage();
           _isProxied = true;

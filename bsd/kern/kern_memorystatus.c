@@ -635,6 +635,14 @@ unsigned int memorystatus_frozen_count = 0;
 unsigned int memorystatus_suspended_count = 0;
 unsigned int memorystatus_policy_more_free_offset_pages = 0;
 
+#if CONFIG_JETSAM
+#if DEVELOPMENT || DEBUG
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_available_pages, 0, "");
+#else
+SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages, CTLFLAG_RD| CTLFLAG_MASKED | CTLFLAG_LOCKED, &memorystatus_available_pages, 0, "");
+#endif /* DEVELOPMENT || DEBUG */
+#endif /* CONFIG_JETSAM */
+
 /*
  * We use this flag to signal if we have any HWM offenders
  * on the system. This way we can reduce the number of wakeups
@@ -983,7 +991,6 @@ SYSCTL_PROC(_kern, OID_AUTO, memorystatus_vm_pressure_send, CTLTYPE_QUAD|CTLFLAG
 
 SYSCTL_INT(_kern, OID_AUTO, memorystatus_idle_snapshot, CTLFLAG_RW|CTLFLAG_LOCKED, &memorystatus_idle_snapshot, 0, "");
 
-SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages, CTLFLAG_RD|CTLFLAG_LOCKED, &memorystatus_available_pages, 0, "");
 SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages_critical, CTLFLAG_RD|CTLFLAG_LOCKED, &memorystatus_available_pages_critical, 0, "");
 SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages_critical_base, CTLFLAG_RW|CTLFLAG_LOCKED, &memorystatus_available_pages_critical_base, 0, "");
 SYSCTL_UINT(_kern, OID_AUTO, memorystatus_available_pages_critical_idle_offset, CTLFLAG_RW|CTLFLAG_LOCKED, &memorystatus_available_pages_critical_idle_offset, 0, "");

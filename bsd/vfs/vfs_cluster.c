@@ -1360,47 +1360,69 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 			        pageout_flags |= UPL_NOCOMMIT;
 
 			if (cbp_head) {
-			        buf_t last_cbp;
+				buf_t prev_cbp;
+				int   bytes_in_last_page;
 
 				/*
 				 * first we have to wait for the the current outstanding I/Os
 				 * to complete... EOT hasn't been set yet on this transaction
-				 * so the pages won't be released just because all of the current
-				 * I/O linked to this transaction has completed...
+				 * so the pages won't be released
 				 */
 				cluster_wait_IO(cbp_head, (flags & CL_ASYNC));
 
-			        /*
-				 * we've got a transcation that
-				 * includes the page we're about to push out through vnode_pageout...
-				 * find the last bp in the list which will be the one that
-				 * includes the head of this page and round it's iosize down
-				 * to a page boundary...
-				 */
-                                for (last_cbp = cbp = cbp_head; cbp->b_trans_next; cbp = cbp->b_trans_next)
-				        last_cbp = cbp;
-
-				cbp->b_bcount &= ~PAGE_MASK;
-
-				if (cbp->b_bcount == 0) {
-				        /*
-					 * this buf no longer has any I/O associated with it
+				bytes_in_last_page = cbp_head->b_uploffset & PAGE_MASK;
+				for (cbp = cbp_head; cbp; cbp = cbp->b_trans_next)
+					bytes_in_last_page += cbp->b_bcount;
+				bytes_in_last_page &= PAGE_MASK;
+				
+				while (bytes_in_last_page) {
+					/*
+					 * we've got a transcation that
+					 * includes the page we're about to push out through vnode_pageout...
+					 * find the bp's in the list which intersect this page and either
+					 * remove them entirely from the transaction (there could be multiple bp's), or
+					 * round it's iosize down to the page boundary (there can only be one)...
+					 *
+					 * find the last bp in the list and act on it
 					 */
-				        free_io_buf(cbp);
+					for (prev_cbp = cbp = cbp_head; cbp->b_trans_next; cbp = cbp->b_trans_next)
+						prev_cbp = cbp;
 
-					if (cbp == cbp_head) {
-					        /*
-						 * the buf we just freed was the only buf in
-						 * this transaction... so there's no I/O to do
+					if (bytes_in_last_page >= cbp->b_bcount) {
+						/*
+						 * this buf no longer has any I/O associated with it
 						 */
-					        cbp_head = NULL;
+						bytes_in_last_page -= cbp->b_bcount;
+						cbp->b_bcount = 0;
+
+						free_io_buf(cbp);
+
+						if (cbp == cbp_head) {
+							assert(bytes_in_last_page == 0);
+							/*
+							 * the buf we just freed was the only buf in
+							 * this transaction... so there's no I/O to do
+							 */
+							cbp_head = NULL;
+							cbp_tail = NULL;
+						} else {
+							/*
+							 * remove the buf we just freed from
+							 * the transaction list
+							 */
+							prev_cbp->b_trans_next = NULL;
+							cbp_tail = prev_cbp;
+						}
 					} else {
-					        /*
-						 * remove the buf we just freed from
-						 * the transaction list
+						/*
+						 * this is the last bp that has I/O
+						 * intersecting the page of interest
+						 * only some of the I/O is in the intersection
+						 * so clip the size but keep it in the transaction list
 						 */
-					        last_cbp->b_trans_next = NULL;
-						cbp_tail = last_cbp;
+						cbp->b_bcount -= bytes_in_last_page;
+						cbp_tail = cbp;
+						bytes_in_last_page = 0;
 					}
 				}
 				if (cbp_head) {

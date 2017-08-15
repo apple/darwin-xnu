@@ -354,8 +354,9 @@ void
 audit_arg_sockaddr(struct kaudit_record *ar, struct vnode *cwd_vp,
     struct sockaddr *sa)
 {
+	char path[SOCK_MAXADDRLEN - offsetof(struct sockaddr_un, sun_path) + 1] = "";
 	struct sockaddr_un *sun;
-	char path[SOCK_MAXADDRLEN - offsetof(struct sockaddr_un, sun_path) + 1];
+	ssize_t namelen;
 
 	KASSERT(sa != NULL, ("audit_arg_sockaddr: sa == NULL"));
 
@@ -378,11 +379,13 @@ audit_arg_sockaddr(struct kaudit_record *ar, struct vnode *cwd_vp,
 
 	case AF_UNIX:
 		sun = (struct sockaddr_un *)sa;
-		if (sun->sun_len > offsetof(struct sockaddr_un, sun_path)) {
+		namelen = sun->sun_len - offsetof(struct sockaddr_un, sun_path);
+		if (namelen > 0 && (size_t)namelen < sizeof(path)) {
 			/*
-			 * Make sure the path is NULL-terminated
+			 * Make sure the path is NUL-terminated
 			 */
-			strlcpy(path, sun->sun_path, sizeof(path));
+			bcopy(sun->sun_path, path, namelen);
+			path[namelen] = 0;
 			audit_arg_upath(ar, cwd_vp, path, ARG_UPATH1);
 		}
 		ARG_SET_VALID(ar, ARG_SADDRUNIX);

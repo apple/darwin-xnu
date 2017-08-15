@@ -420,6 +420,22 @@ route_output(struct mbuf *m, struct socket *so)
 			senderr(EINVAL);
 		ifscope = rtm->rtm_index;
 	}
+	/*
+	 * Block changes on INTCOPROC interfaces.
+	 */
+	if (ifscope) {
+		unsigned int intcoproc_scope = 0;
+		ifnet_head_lock_shared();
+		TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
+			if (IFNET_IS_INTCOPROC(ifp)) {
+				intcoproc_scope = ifp->if_index;
+				break;
+			}
+		}
+		ifnet_head_done();
+		if (intcoproc_scope == ifscope && current_proc()->p_pid != 0)
+			senderr(EINVAL);
+	}
 
 	/*
 	 * RTF_PROXY can only be set internally from within the kernel.

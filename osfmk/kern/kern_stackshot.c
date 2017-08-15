@@ -1176,7 +1176,7 @@ kcdata_record_thread_snapshot(
 {
 	boolean_t dispatch_p              = ((trace_flags & STACKSHOT_GET_DQ) != 0);
 	boolean_t active_kthreads_only_p  = ((trace_flags & STACKSHOT_ACTIVE_KERNEL_THREADS_ONLY) != 0);
-	boolean_t trace_fp_p              = ((trace_flags & STACKSHOT_TAILSPIN) == 0);
+	boolean_t trace_fp_p              = false;
 	boolean_t collect_delta_stackshot = ((trace_flags & STACKSHOT_COLLECT_DELTA_SNAPSHOT) != 0);
 	boolean_t collect_iostats         = !collect_delta_stackshot && !(trace_flags & STACKSHOT_TAILSPIN) && !(trace_flags & STACKSHOT_NO_IO_STATS);
 

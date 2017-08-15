@@ -129,7 +129,6 @@ struct ipc_port {
 	union {
 		ipc_kobject_t kobject;
 		ipc_importance_task_t imp_task;
-		uintptr_t alias;
 	} kdata;
 		
 	struct ipc_port *ip_nsrequest;
@@ -176,7 +175,6 @@ struct ipc_port {
 
 #define ip_kobject		kdata.kobject
 #define ip_imp_task		kdata.imp_task
-#define ip_alias		kdata.alias
 
 #define IP_NULL			IPC_PORT_NULL
 #define IP_DEAD			IPC_PORT_DEAD

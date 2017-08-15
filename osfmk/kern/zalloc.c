@@ -356,14 +356,13 @@ struct zone_free_element {
 };
 
 /*
- *      Protects num_zones, zone_array and zone_array_index
+ *      Protects num_zones and zone_array
  */
 decl_simple_lock_data(, all_zones_lock)
 unsigned int            num_zones;
 
 #define MAX_ZONES       256
 struct zone             zone_array[MAX_ZONES];
-static int              zone_array_index = 0;
 
 #define MULTIPAGE_METADATA_MAGIC 		(0xff)
 
@@ -1565,9 +1564,10 @@ zinit(
 	zone_t		z;
 
 	simple_lock(&all_zones_lock);
-	z = &(zone_array[zone_array_index]);
-	zone_array_index++;
-	assert(zone_array_index != MAX_ZONES);
+	assert(num_zones < MAX_ZONES);
+	z = &(zone_array[num_zones]);
+	z->index = num_zones;
+	num_zones++;
 	simple_unlock(&all_zones_lock);
 
 	/* Zone elements must fit both a next pointer and a backup pointer */
@@ -1639,14 +1639,6 @@ zinit(
 #endif /* CONFIG_ZLEAKS */
 
 	lock_zone_init(z);
-
-	/*
-	 *	Add the zone to the all-zones list.
-	 */
-	simple_lock(&all_zones_lock);
-	z->index = num_zones;
-	num_zones++;
-	simple_unlock(&all_zones_lock);
 
 	/*
 	 * Check for and set up zone leak detection if requested via boot-args.  We recognized two

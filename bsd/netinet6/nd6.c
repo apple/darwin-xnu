@@ -4427,10 +4427,10 @@ in6_ifaddr_set_dadprogress(struct in6_ifaddr *ia)
 
 	if (optdad) {
 		if ((optdad & ND6_OPTIMISTIC_DAD_LINKLOCAL) &&
-				IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr))
+		    IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr))
 			flags = IN6_IFF_OPTIMISTIC;
 		else if ((optdad & ND6_OPTIMISTIC_DAD_AUTOCONF) &&
-				(ia->ia6_flags & IN6_IFF_AUTOCONF)) {
+		    (ia->ia6_flags & IN6_IFF_AUTOCONF)) {
 			if (ia->ia6_flags & IN6_IFF_TEMPORARY) {
 				if (optdad & ND6_OPTIMISTIC_DAD_TEMPORARY)
 					flags = IN6_IFF_OPTIMISTIC;
@@ -4452,7 +4452,7 @@ in6_ifaddr_set_dadprogress(struct in6_ifaddr *ia)
 				flags = IN6_IFF_OPTIMISTIC;
 			}
 		} else if ((optdad & ND6_OPTIMISTIC_DAD_DYNAMIC) &&
-				(ia->ia6_flags & IN6_IFF_DYNAMIC)) {
+		    (ia->ia6_flags & IN6_IFF_DYNAMIC)) {
 			if (ia->ia6_flags & IN6_IFF_TEMPORARY) {
 				if (optdad & ND6_OPTIMISTIC_DAD_TEMPORARY)
 					flags = IN6_IFF_OPTIMISTIC;
@@ -4460,15 +4460,15 @@ in6_ifaddr_set_dadprogress(struct in6_ifaddr *ia)
 				flags = IN6_IFF_OPTIMISTIC;
 			}
 		} else if ((optdad & ND6_OPTIMISTIC_DAD_MANUAL) &&
-				(ia->ia6_flags & IN6_IFF_OPTIMISTIC)) {
+		    (ia->ia6_flags & IN6_IFF_OPTIMISTIC)) {
 			/*
 			 * rdar://17483438
 			 * Bypass tentative for address assignments
 			 * not covered above (e.g. manual) upon request
 			 */
 			if (!IN6_IS_ADDR_LINKLOCAL(&ia->ia_addr.sin6_addr) &&
-					!(ia->ia6_flags & IN6_IFF_AUTOCONF) &&
-					!(ia->ia6_flags & IN6_IFF_DYNAMIC))
+			    !(ia->ia6_flags & IN6_IFF_AUTOCONF) &&
+			    !(ia->ia6_flags & IN6_IFF_DYNAMIC))
 				flags = IN6_IFF_OPTIMISTIC;
 		}
 	}

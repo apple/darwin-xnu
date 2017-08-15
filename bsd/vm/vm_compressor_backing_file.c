@@ -53,7 +53,7 @@ void
 vm_swapfile_open(const char *path, vnode_t *vp)
 {
 	int error = 0;
-	vfs_context_t	ctx = vfs_context_current();
+	vfs_context_t	ctx = vfs_context_kernel();
 
 	if ((error = vnode_open(path, (O_CREAT | O_TRUNC | FREAD | FWRITE), S_IRUSR | S_IWUSR, 0, vp, ctx))) {
 		printf("Failed to open swap file %d\n", error);
@@ -93,7 +93,7 @@ int unlink1(vfs_context_t, vnode_t, user_addr_t, enum uio_seg, int);
 void
 vm_swapfile_close(uint64_t path_addr, vnode_t vp)
 {
-	vfs_context_t context = vfs_context_current();
+	vfs_context_t context = vfs_context_kernel();
 	int error;
 
 	vnode_getwithref(vp);
@@ -117,7 +117,7 @@ vm_swapfile_preallocate(vnode_t vp, uint64_t *size, boolean_t *pin)
 	vfs_context_t	ctx = NULL;
 
 
-	ctx = vfs_context_current();
+	ctx = vfs_context_kernel();
 
 	error = vnode_setsize(vp, *size, IO_NOZEROFILL, ctx);
 

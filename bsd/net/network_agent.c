@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2014, 2016, 2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -746,11 +746,16 @@ netagent_handle_register_setopt(struct netagent_session *session, u_int8_t *payl
 
 	data_size = register_netagent->netagent_data_size;
 	if (data_size < 0 || data_size > NETAGENT_MAX_DATA_SIZE) {
-		NETAGENTLOG(LOG_ERR, "Register message size could not be read, data_size %d",
-					data_size);
+		NETAGENTLOG(LOG_ERR, "Register message size could not be read, data_size %d", data_size);
 		response_error = EINVAL;
 		goto done;
 	}
+
+	if (payload_length != (sizeof(struct netagent) + data_size)) {
+		NETAGENTLOG(LOG_ERR, "Mismatch between data size and payload length (%u != %u)", (sizeof(struct netagent) + data_size), payload_length);
+		response_error = EINVAL;
+		goto done;
+    }
 
 	MALLOC(new_wrapper, struct netagent_wrapper *, sizeof(*new_wrapper) + data_size, M_NETAGENT, M_WAITOK);
 	if (new_wrapper == NULL) {
@@ -1024,6 +1029,12 @@ netagent_handle_update_setopt(struct netagent_session *session, u_int8_t *payloa
 		response_error = EINVAL;
 		goto done;
 	}
+
+	if (payload_length != (sizeof(struct netagent) + data_size)) {
+		NETAGENTLOG(LOG_ERR, "Mismatch between data size and payload length (%u != %u)", (sizeof(struct netagent) + data_size), payload_length);
+		response_error = EINVAL;
+		goto done;
+    }
 
 	MALLOC(new_wrapper, struct netagent_wrapper *, sizeof(*new_wrapper) + data_size, M_NETAGENT, M_WAITOK);
 	if (new_wrapper == NULL) {

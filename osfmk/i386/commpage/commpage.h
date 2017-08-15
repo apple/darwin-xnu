@@ -106,6 +106,14 @@ COMMPAGE_DESCRIPTOR_NAME(label) ## :				;\
 
 #define UNIQUEID(name)	L ## name
 
+/* COMMPAGE_JMP(target,from,start)
+ *
+ * This macro perform a jump to another commpage routine.
+ * Used to return from the PFZ by jumping via a return outside the PFZ.
+ */
+#define COMMPAGE_JMP(target,from,start)				\
+	jmp      L ## start - from + target
+
 #else /* __ASSEMBLER__ */
 
 /* Each potential commpage routine is described by one of these.

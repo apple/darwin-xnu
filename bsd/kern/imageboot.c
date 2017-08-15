@@ -872,11 +872,20 @@ imageboot_setup_new()
 #endif
 
 	if (auth_root) {
-		const char *path = root_path;
+		/* Copy the path to use locally */
+		char *path_alloc = kalloc(MAXPATHLEN);
+		if (path_alloc == NULL) {
+			panic("imageboot path allocation failed\n");
+		}
+
+		char *path = path_alloc;
+		strlcpy(path, root_path, MAXPATHLEN);
+
 		size_t len = strlen(kIBFilePrefix);
 		if (strncmp(kIBFilePrefix, path, len) == 0) {
-			/* remove the file:// prefix */
+			/* its a URL - remove the file:// prefix and percent-decode */
 			path += len;
+			url_decode(path);
 		}
 
 		AUTHDBG("authenticating root image at %s", path);
@@ -885,6 +894,8 @@ imageboot_setup_new()
 			panic("root image authentication failed (err = %d)\n", error);
 		}
 		AUTHDBG("successfully authenticated %s", path);
+
+		kfree_safe(path_alloc);
 	}
 
 	error = imageboot_mount_image(root_path, height);

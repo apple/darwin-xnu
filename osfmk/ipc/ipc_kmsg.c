@@ -3937,6 +3937,7 @@ ipc_kmsg_copyout_port_descriptor(mach_msg_descriptor_t *dsc,
     {
         mach_msg_port_descriptor_t *user_dsc = (typeof(user_dsc))dest_dsc;
         user_dsc--; // point to the start of this port descriptor
+        bzero((void *)user_dsc, sizeof(*user_dsc));
         user_dsc->name = CAST_MACH_NAME_TO_PORT(name);
         user_dsc->disposition = disp;
         user_dsc->type = MACH_MSG_PORT_DESCRIPTOR;
@@ -3944,6 +3945,7 @@ ipc_kmsg_copyout_port_descriptor(mach_msg_descriptor_t *dsc,
     } else {
         mach_msg_legacy_port_descriptor_t *user_dsc = (typeof(user_dsc))dest_dsc;
         user_dsc--; // point to the start of this port descriptor
+        bzero((void *)user_dsc, sizeof(*user_dsc));
         user_dsc->name = CAST_MACH_PORT_TO_NAME(name);
         user_dsc->disposition = disp;
         user_dsc->type = MACH_MSG_PORT_DESCRIPTOR;
@@ -4004,6 +4006,7 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
     {
         mach_msg_ool_descriptor_t *user_ool_dsc = (typeof(user_ool_dsc))user_dsc;
         user_ool_dsc--;
+        bzero((void *)user_ool_dsc, sizeof(*user_ool_dsc));
 
         user_ool_dsc->address = (void *)(uintptr_t)rcv_addr;
         user_ool_dsc->deallocate = (copy_options == MACH_MSG_VIRTUAL_COPY) ?
@@ -4016,6 +4019,7 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
     } else if (is_64bit) {
         mach_msg_ool_descriptor64_t *user_ool_dsc = (typeof(user_ool_dsc))user_dsc;
         user_ool_dsc--;
+        bzero((void *)user_ool_dsc, sizeof(*user_ool_dsc));
 
         user_ool_dsc->address = rcv_addr;
         user_ool_dsc->deallocate = (copy_options == MACH_MSG_VIRTUAL_COPY) ?
@@ -4028,6 +4032,7 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
     } else {
         mach_msg_ool_descriptor32_t *user_ool_dsc = (typeof(user_ool_dsc))user_dsc;
         user_ool_dsc--;
+        bzero((void *)user_ool_dsc, sizeof(*user_ool_dsc));
 
         user_ool_dsc->address = CAST_DOWN_EXPLICIT(uint32_t, rcv_addr);
         user_ool_dsc->size = (mach_msg_size_t)size;
@@ -4155,6 +4160,7 @@ ipc_kmsg_copyout_ool_ports_descriptor(mach_msg_ool_ports_descriptor_t *dsc,
     if(current_task() == kernel_task) {
         mach_msg_ool_ports_descriptor_t *user_ool_dsc = (typeof(user_ool_dsc))user_dsc;
         user_ool_dsc--;
+        bzero((void *)user_ool_dsc, sizeof(*user_ool_dsc));
 
         user_ool_dsc->address = (void *)(uintptr_t)rcv_addr;
         user_ool_dsc->deallocate = (copy_options == MACH_MSG_VIRTUAL_COPY) ?
@@ -4168,6 +4174,7 @@ ipc_kmsg_copyout_ool_ports_descriptor(mach_msg_ool_ports_descriptor_t *dsc,
     } if (is_64bit) {
         mach_msg_ool_ports_descriptor64_t *user_ool_dsc = (typeof(user_ool_dsc))user_dsc;
         user_ool_dsc--;
+        bzero((void *)user_ool_dsc, sizeof(*user_ool_dsc));
 
         user_ool_dsc->address = rcv_addr;
         user_ool_dsc->deallocate = (copy_options == MACH_MSG_VIRTUAL_COPY) ?
@@ -4181,6 +4188,7 @@ ipc_kmsg_copyout_ool_ports_descriptor(mach_msg_ool_ports_descriptor_t *dsc,
     } else {
         mach_msg_ool_ports_descriptor32_t *user_ool_dsc = (typeof(user_ool_dsc))user_dsc;
         user_ool_dsc--;
+        bzero((void *)user_ool_dsc, sizeof(*user_ool_dsc));
 
         user_ool_dsc->address = CAST_DOWN_EXPLICIT(uint32_t, rcv_addr);
         user_ool_dsc->count = count;

@@ -149,6 +149,7 @@ extern quad_t	strtoq(const char *, char **, int);
 extern u_quad_t strtouq(const char *, char **, int);
 extern char	*strsep(char **, const char *);
 extern void	*memchr(const void *, int, size_t);
+extern void	url_decode(char *str);
 
 int	snprintf(char *, size_t, const char *, ...) __printflike(3,4);
 

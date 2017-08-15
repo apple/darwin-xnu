@@ -134,10 +134,9 @@ ipc_object_release(
  *	Returns:
  *		KERN_SUCCESS		Object returned locked.
  *		KERN_INVALID_TASK	The space is dead.
- *		KERN_INVALID_NAME	The name doesn't denote a right.
- *		KERN_INVALID_RIGHT	Name doesn't denote the correct right.
+ *		KERN_INVALID_NAME	The name doesn't denote a right
+ *		KERN_INVALID_RIGHT	Name doesn't denote the correct right
  */
-
 kern_return_t
 ipc_object_translate(
 	ipc_space_t		space,

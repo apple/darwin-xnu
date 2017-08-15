@@ -53,7 +53,7 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
-
+#include <debug.h>
 #include <mach_rt.h>
 #include <mach_kdp.h>
 #include <mach_assert.h>
@@ -157,14 +157,22 @@ wrmsr_fail:
 	movl	$1, %eax
 	ret
 
+#if DEBUG
+.globl	EXT(thread_exception_return_internal)
+#else
 .globl	EXT(thread_exception_return)
+#endif
 .globl	EXT(thread_bootstrap_return)
 LEXT(thread_bootstrap_return)
 #if CONFIG_DTRACE
 	call EXT(dtrace_thread_bootstrap)
 #endif
 
+#if DEBUG
+LEXT(thread_exception_return_internal)
+#else
 LEXT(thread_exception_return)
+#endif
 	cli
 	xorl	%ecx, %ecx		/* don't check if we're in the PFZ */
 	jmp	EXT(return_from_trap)

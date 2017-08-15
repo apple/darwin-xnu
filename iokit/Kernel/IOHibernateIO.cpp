@@ -1556,7 +1556,9 @@ hibernate_write_image(void)
     
         HIBLOG("IOHibernatePollerOpen, ml_get_interrupts_enabled %d\n", 
                 ml_get_interrupts_enabled());
-        err = IOPolledFilePollersOpen(vars->fileVars, kIOPolledBeforeSleepState, true);
+        err = IOPolledFilePollersOpen(vars->fileVars, kIOPolledBeforeSleepState,
+                // abortable if not low battery
+                !IOService::getPMRootDomain()->mustHibernate());
         HIBLOG("IOHibernatePollerOpen(%x)\n", err);
         pollerOpen = (kIOReturnSuccess == err);
         if (!pollerOpen)

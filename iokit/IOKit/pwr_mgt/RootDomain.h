@@ -545,6 +545,7 @@ public:
                     uint32_t *  hibernateMode,
                     uint32_t *  hibernateFreeRatio,
                     uint32_t *  hibernateFreeTime );
+    bool        mustHibernate( void );
 #endif
     void        takeStackshot(bool restart, bool isOSXWatchdog, bool isSpinDump);
     void        sleepWakeDebugTrig(bool restart);

@@ -6246,6 +6246,19 @@ bool IOPMrootDomain::checkSystemCanSustainFullWake( void )
 }
 
 //******************************************************************************
+// mustHibernate
+//******************************************************************************
+
+#if HIBERNATION
+
+bool IOPMrootDomain::mustHibernate( void )
+{
+    return (lowBatteryCondition || thermalWarningState);
+}
+
+#endif /* HIBERNATION */
+
+//******************************************************************************
 // adjustPowerState
 //
 // Conditions that affect our wake/sleep decision has changed.

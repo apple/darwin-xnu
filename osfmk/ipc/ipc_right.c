@@ -75,6 +75,7 @@
 #include <mach/port.h>
 #include <mach/message.h>
 #include <kern/assert.h>
+#include <kern/ipc_kobject.h>
 #include <kern/misc_protos.h>
 #include <ipc/port.h>
 #include <ipc/ipc_entry.h>
@@ -1718,6 +1719,8 @@ ipc_right_copyin_check(
 	    case MACH_MSG_TYPE_MOVE_RECEIVE:
 		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0)
 			return FALSE;
+		if (io_kotype(entry->ie_object) != IKOT_NONE)
+			return FALSE;
 		break;
 
 	    case MACH_MSG_TYPE_COPY_SEND:
@@ -1856,6 +1859,23 @@ ipc_right_copyin(
 
 		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0)
 			goto invalid_right;
+
+		/*
+		 * Disallow moving receive-right kobjects, e.g. mk_timer ports
+		 * The ipc_port structure uses the kdata union of kobject and
+		 * imp_task exclusively. Thus, general use of a kobject port as
+		 * a receive right can cause type confusion in the importance
+		 * code.
+		 */
+		if (io_kotype(entry->ie_object) != IKOT_NONE) {
+			/*
+			 * Distinguish an invalid right, e.g., trying to move
+			 * a send right as a receive right, from this
+			 * situation which is, "This is a valid receive right,
+			 * but it's also a kobject and you can't move it."
+			 */
+			return KERN_INVALID_CAPABILITY;
+		}
 
 		port = (ipc_port_t) entry->ie_object;
 		assert(port != IP_NULL);

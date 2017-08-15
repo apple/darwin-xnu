@@ -177,8 +177,8 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 		 * Enable the 64-bit user code segment, USER64_CS.
 		 * Disable the 32-bit user code segment, USER_CS.
 		 */
-		ldt_desc_p(USER64_CS)->access |= ACC_PL_U;
-		ldt_desc_p(USER_CS)->access &= ~ACC_PL_U;
+		gdt_desc_p(USER64_CS)->access |= ACC_PL_U;
+		gdt_desc_p(USER_CS)->access &= ~ACC_PL_U;
 
 		/*
 		 * Switch user's GS base if necessary
@@ -190,7 +190,8 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 		 * in the event it was altered in user space.
 		 */
 		if ((pcb->cthread_self != 0) || (new->task != kernel_task)) {
-			if ((cdp->cpu_uber.cu_user_gs_base != pcb->cthread_self) || (pcb->cthread_self != rdmsr64(MSR_IA32_KERNEL_GS_BASE))) {
+			if ((cdp->cpu_uber.cu_user_gs_base != pcb->cthread_self) ||
+			    (pcb->cthread_self != rdmsr64(MSR_IA32_KERNEL_GS_BASE))) {
 				cdp->cpu_uber.cu_user_gs_base = pcb->cthread_self;
 				wrmsr64(MSR_IA32_KERNEL_GS_BASE, pcb->cthread_self);
 			}
@@ -204,8 +205,14 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 		 * Disable USER64_CS
 		 * Enable USER_CS
 		 */
-		ldt_desc_p(USER64_CS)->access &= ~ACC_PL_U;
-		ldt_desc_p(USER_CS)->access |= ACC_PL_U;
+
+		/* It's possible that writing to the GDT areas
+		 * is expensive, if the processor intercepts those
+		 * writes to invalidate its internal segment caches
+		 * TODO: perhaps only do this if switching bitness
+		 */
+		gdt_desc_p(USER64_CS)->access &= ~ACC_PL_U;
+		gdt_desc_p(USER_CS)->access |= ACC_PL_U;
 
 		/*
 		 * Set the thread`s cthread (a.k.a pthread)
@@ -359,7 +366,7 @@ machine_thread_create(
 	}
 
 	/*
-	 * Assure that the synthesized 32-bit state including
+	 * Ensure that the synthesized 32-bit state including
 	 * the 64-bit interrupt state can be acommodated in the 
 	 * 64-bit state we allocate for both 32-bit and 64-bit threads.
 	 */

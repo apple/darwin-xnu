@@ -2547,7 +2547,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 		if ( (error = vnode_getwithref(vp)) == 0 ) {
 #define STK_PARAMS 128
-			char stkbuf[STK_PARAMS];
+			char stkbuf[STK_PARAMS] = {0};
 			unsigned int size;
 			caddr_t data, memp;
 			/*

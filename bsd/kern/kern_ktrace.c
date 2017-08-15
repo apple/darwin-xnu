@@ -135,19 +135,9 @@ static void ktrace_set_invalid_owning_pid(void);
  */
 int ktrace_root_set_owner_allowed = 0;
 
-void
-ktrace_reset(uint32_t reset_mask)
+static void
+ktrace_reset_internal(uint32_t reset_mask)
 {
-	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
-	assert(reset_mask != 0);
-
-	if (ktrace_active_mask == 0) {
-		if (!ktrace_keep_ownership_on_reset) {
-			assert(ktrace_state == KTRACE_STATE_OFF);
-		}
-		return;
-	}
-
 	if (!ktrace_keep_ownership_on_reset) {
 		ktrace_active_mask &= ~reset_mask;
 	}
@@ -170,6 +160,21 @@ ktrace_reset(uint32_t reset_mask)
 			ktrace_state = KTRACE_STATE_OFF;
 		}
 	}
+}
+
+void
+ktrace_reset(uint32_t reset_mask)
+{
+	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
+
+	if (ktrace_active_mask == 0) {
+		if (!ktrace_keep_ownership_on_reset) {
+			assert(ktrace_state == KTRACE_STATE_OFF);
+		}
+		return;
+	}
+
+	ktrace_reset_internal(reset_mask);
 }
 
 static void
@@ -365,7 +370,7 @@ ktrace_set_invalid_owning_pid(void)
 {
 	if (ktrace_keep_ownership_on_reset) {
 		ktrace_keep_ownership_on_reset = FALSE;
-		ktrace_reset(ktrace_active_mask);
+		ktrace_reset_internal(ktrace_active_mask);
 	}
 }
 

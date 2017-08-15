@@ -3438,6 +3438,20 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 		fp->f_fglob->fg_flag |= FHASLOCK;
 	}
 
+#if DEVELOPMENT || DEBUG
+	/*
+	 * XXX VSWAP: Check for entitlements or special flag here
+	 * so we can restrict access appropriately.
+	 */
+#else /* DEVELOPMENT || DEBUG */
+
+	if (vnode_isswap(vp) && (flags & (FWRITE | O_TRUNC)) && (ctx != vfs_context_kernel())) {
+		/* block attempt to write/truncate swapfile */
+		error = EPERM;
+		goto bad;
+	}
+#endif /* DEVELOPMENT || DEBUG */
+
 	/* try to truncate by setting the size attribute */
 	if ((flags & O_TRUNC) && ((error = vnode_setsize(vp, (off_t)0, 0, ctx)) != 0))
 		goto bad;
@@ -4635,6 +4649,19 @@ continue_lookup:
 		if (vp->v_flag & VROOT) {
 			error = EBUSY;
 		}
+
+#if DEVELOPMENT || DEBUG
+	/*
+	 * XXX VSWAP: Check for entitlements or special flag here
+	 * so we can restrict access appropriately.
+	 */
+#else /* DEVELOPMENT || DEBUG */
+
+		if (vnode_isswap(vp) && (ctx != vfs_context_kernel())) {
+			error = EPERM;
+			goto out;
+		}
+#endif /* DEVELOPMENT || DEBUG */
 
 		if (!batched) {
 			error = vn_authorize_unlink(dvp, vp, cnp, ctx, NULL);
@@ -7166,6 +7193,24 @@ continue_lookup:
 		tvp  = tond->ni_vp;
 	}
 
+#if DEVELOPMENT || DEBUG
+	/*
+	 * XXX VSWAP: Check for entitlements or special flag here
+	 * so we can restrict access appropriately.
+	 */
+#else /* DEVELOPMENT || DEBUG */
+
+	if (fromnd->ni_vp && vnode_isswap(fromnd->ni_vp) && (ctx != vfs_context_kernel())) {
+		error = EPERM;
+		goto out1;
+	}
+
+	if (tond->ni_vp && vnode_isswap(tond->ni_vp) && (ctx != vfs_context_kernel())) {
+		error = EPERM;
+		goto out1;
+	}
+#endif /* DEVELOPMENT || DEBUG */
+
 	if (!tvp && ISSET(flags, VFS_RENAME_SWAP)) {
 		error = ENOENT;
 		goto out1;
@@ -7914,6 +7959,19 @@ continue_lookup:
 				error = EBUSY;
 				goto out;
 			}
+
+#if DEVELOPMENT || DEBUG
+			/*
+	 		 * XXX VSWAP: Check for entitlements or special flag here
+	 		 * so we can restrict access appropriately.
+	 		 */
+#else /* DEVELOPMENT || DEBUG */
+
+			if (vnode_isswap(vp) && (ctx != vfs_context_kernel())) {
+				error = EPERM;
+				goto out;
+			}
+#endif /* DEVELOPMENT || DEBUG */
 
 			/*
 			 * Removed a check here; we used to abort if vp's vid
@@ -9869,6 +9927,17 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 	if (IOCBASECMD(cmd) == HFS_GETPATH) {
 		/* Round up to MAXPATHLEN regardless of user input */
 		size = MAXPATHLEN;
+	}
+	else if (vp->v_tag == VT_CIFS) {
+		/*
+		 * XXX Until fsctl's length encoding can be
+		 * XXX fixed properly.
+		 */
+		if (IOCBASECMD(cmd) == _IOWR('z', 19, 0) && size < 1432) {
+			size = 1432; /* sizeof(struct UniqueSMBShareID) */
+		} else if (IOCBASECMD(cmd) == _IOWR('z', 28, 0) && size < 308) {
+			size = 308; /* sizeof(struct smbDebugTestPB) */
+		}
 	}
 
 	if (size > sizeof (stkbuf)) {
