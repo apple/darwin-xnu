@@ -37,6 +37,7 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOBSD.h>
 #include <IOKit/IOStatisticsPrivate.h>
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/system.h>
@@ -1617,7 +1618,7 @@ IOMemoryMap * IOUserClient::mapClientMemory64(
 {
     IOReturn		err;
     IOOptionBits	options = 0;
-    IOMemoryDescriptor * memory;
+    IOMemoryDescriptor * memory = 0;
     IOMemoryMap *	map = 0;
 
     err = clientMemoryForType( (UInt32) type, &options, &memory );
@@ -3666,7 +3667,7 @@ kern_return_t is_io_connect_unmap_memory_from_task
 {
     IOReturn		err;
     IOOptionBits	options = 0;
-    IOMemoryDescriptor * memory;
+    IOMemoryDescriptor * memory = 0;
     IOMemoryMap *	map;
 
     CHECK( IOUserClient, connection, client );
@@ -3793,6 +3794,8 @@ kern_return_t is_io_connect_method_var_output
     args.structureInput = inband_input;
     args.structureInputSize = inband_inputCnt;
 
+    if (ool_input && (ool_input_size <= sizeof(io_struct_inband_t)))    return (kIOReturnIPCError);
+
     if (ool_input)
 	inputMD = IOMemoryDescriptor::withAddressRange(ool_input, ool_input_size, 
 						    kIODirectionOut | kIOMemoryMapCopyOnWrite,
@@ -3888,6 +3891,9 @@ kern_return_t is_io_connect_method
     args.structureInput = inband_input;
     args.structureInputSize = inband_inputCnt;
 
+    if (ool_input && (ool_input_size <= sizeof(io_struct_inband_t)))    return (kIOReturnIPCError);
+    if (ool_output && (*ool_output_size <= sizeof(io_struct_inband_t))) return (kIOReturnIPCError);
+
     if (ool_input)
 	inputMD = IOMemoryDescriptor::withAddressRange(ool_input, ool_input_size, 
 						    kIODirectionOut | kIOMemoryMapCopyOnWrite,
@@ -3972,6 +3978,9 @@ kern_return_t is_io_connect_async_method
     args.scalarInputCount = scalar_inputCnt;
     args.structureInput = inband_input;
     args.structureInputSize = inband_inputCnt;
+
+    if (ool_input && (ool_input_size <= sizeof(io_struct_inband_t)))    return (kIOReturnIPCError);
+    if (ool_output && (*ool_output_size <= sizeof(io_struct_inband_t))) return (kIOReturnIPCError);
 
     if (ool_input)
 	inputMD = IOMemoryDescriptor::withAddressRange(ool_input, ool_input_size,
@@ -4862,6 +4871,9 @@ kern_return_t is_io_catalog_send_data(
         mach_msg_type_number_t 	inDataCount,
         kern_return_t *		result)
 {
+#if NO_KEXTD
+    return kIOReturnNotPrivileged;
+#else /* NO_KEXTD */
     OSObject * obj = 0;
     vm_offset_t data;
     kern_return_t kr = kIOReturnError;
@@ -4877,6 +4889,16 @@ kern_return_t is_io_catalog_send_data(
         ( !inData || !inDataCount) ) 
     {
         return kIOReturnBadArgument;
+    }
+
+    if (!IOTaskHasEntitlement(current_task(), "com.apple.rootless.kext-management"))
+    {
+        OSString * taskName = IOCopyLogNameForPID(proc_selfpid());
+        IOLog("IOCatalogueSendData(%s): Not entitled\n", taskName ? taskName->getCStringNoCopy() : "");
+        OSSafeReleaseNULL(taskName);
+        // For now, fake success to not break applications relying on this function succeeding.
+        // See <rdar://problem/32554970> for more details.
+        return kIOReturnSuccess;
     }
 
     if (inData) {
@@ -5008,9 +5030,10 @@ kern_return_t is_io_catalog_send_data(
     }
 
     if (obj) obj->release();
-    
+
     *result = kr;
     return( KERN_SUCCESS);
+#endif /* NO_KEXTD */
 }
 
 /* Routine io_catalog_terminate */

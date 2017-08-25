@@ -1040,6 +1040,12 @@ defrtrlist_ioctl(u_long cmd, caddr_t data)
 		dr0.ifp = dr_ifp;
 		ifnet_head_done();
 
+		if (ND_IFINFO(dr_ifp) == NULL ||
+		    !ND_IFINFO(dr_ifp)->initialized) {
+			error = ENXIO;
+			break;
+		}
+
 		if (IN6_IS_SCOPE_EMBED(&dr0.rtaddr)) {
 			uint16_t *scope = &dr0.rtaddr.s6_addr16[1];
 

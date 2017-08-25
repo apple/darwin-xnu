@@ -1327,6 +1327,19 @@ in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 		bcopy(&ifr->ifr_addr, &sin6, sizeof (sin6));
 		sa6 = &sin6;
 		break;
+	case SIOCGIFDSTADDR:
+	case SIOCSIFDSTADDR:
+	case SIOCGIFBRDADDR:
+	case SIOCSIFBRDADDR:
+	case SIOCGIFNETMASK:
+	case SIOCSIFNETMASK:
+	case SIOCGIFADDR:
+	case SIOCSIFADDR:
+	case SIOCAIFADDR:
+	case SIOCDIFADDR:
+		/* Do not handle these AF_INET commands in AF_INET6 path */
+		error = EINVAL;
+		goto done;
 	}
 
 	/*

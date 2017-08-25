@@ -9266,6 +9266,82 @@ bzero_keys(const struct sadb_msghdr *mh)
 	}
 }
 
+static int
+key_validate_address_pair(struct sadb_address *src0,
+						  struct sadb_address *dst0)
+{
+	u_int plen = 0;
+
+	/* check upper layer protocol */
+	if (src0->sadb_address_proto != dst0->sadb_address_proto) {
+		ipseclog((LOG_DEBUG, "key_parse: upper layer protocol mismatched.\n"));
+		PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
+		return (EINVAL);
+	}
+
+	/* check family */
+	if (PFKEY_ADDR_SADDR(src0)->sa_family !=
+		PFKEY_ADDR_SADDR(dst0)->sa_family) {
+		ipseclog((LOG_DEBUG, "key_parse: address family mismatched.\n"));
+		PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
+		return (EINVAL);
+	}
+	if (PFKEY_ADDR_SADDR(src0)->sa_len !=
+		PFKEY_ADDR_SADDR(dst0)->sa_len) {
+		ipseclog((LOG_DEBUG,
+				  "key_parse: address struct size mismatched.\n"));
+		PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
+		return (EINVAL);
+	}
+
+	switch (PFKEY_ADDR_SADDR(src0)->sa_family) {
+		case AF_INET:
+			if (PFKEY_ADDR_SADDR(src0)->sa_len != sizeof(struct sockaddr_in)) {
+				PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
+				return (EINVAL);
+			}
+			break;
+		case AF_INET6:
+			if (PFKEY_ADDR_SADDR(src0)->sa_len != sizeof(struct sockaddr_in6)) {
+				PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
+				return (EINVAL);
+			}
+			break;
+		default:
+			ipseclog((LOG_DEBUG,
+					  "key_parse: unsupported address family.\n"));
+			PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
+			return (EAFNOSUPPORT);
+	}
+
+	switch (PFKEY_ADDR_SADDR(src0)->sa_family) {
+		case AF_INET:
+			plen = sizeof(struct in_addr) << 3;
+			break;
+		case AF_INET6:
+			plen = sizeof(struct in6_addr) << 3;
+			break;
+		default:
+			plen = 0;	/*fool gcc*/
+			break;
+	}
+
+	/* check max prefix length */
+	if (src0->sadb_address_prefixlen > plen ||
+		dst0->sadb_address_prefixlen > plen) {
+		ipseclog((LOG_DEBUG,
+				  "key_parse: illegal prefixlen.\n"));
+		PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
+		return (EINVAL);
+	}
+
+	/*
+	 * prefixlen == 0 is valid because there can be a case when
+	 * all addresses are matched.
+	 */
+	return (0);
+}
+
 /*
  * parse sadb_msg buffer to process PFKEYv2,
  * and create a data to response if needed.
@@ -9438,91 +9514,41 @@ key_parse(
 			goto senderror;
 	}
 	
-	/* check field of upper layer protocol and address family */
-	if (mh.ext[SADB_EXT_ADDRESS_SRC] != NULL
-		&& mh.ext[SADB_EXT_ADDRESS_DST] != NULL) {
-		struct sadb_address *src0, *dst0;
-		u_int plen;
-		
-		src0 = (struct sadb_address *)(mh.ext[SADB_EXT_ADDRESS_SRC]);
-		dst0 = (struct sadb_address *)(mh.ext[SADB_EXT_ADDRESS_DST]);
-		
-		/* check upper layer protocol */
-		if (src0->sadb_address_proto != dst0->sadb_address_proto) {
-			ipseclog((LOG_DEBUG, "key_parse: upper layer protocol mismatched.\n"));
-			PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
-			error = EINVAL;
+	/* Validate address fields for matching families, lengths, etc. */
+	void *src0 = mh.ext[SADB_EXT_ADDRESS_SRC];
+	void *dst0 = mh.ext[SADB_EXT_ADDRESS_DST];
+	if (mh.ext[SADB_X_EXT_ADDR_RANGE_SRC_START] != NULL &&
+		mh.ext[SADB_X_EXT_ADDR_RANGE_SRC_END] != NULL) {
+
+		error = key_validate_address_pair((struct sadb_address *)(mh.ext[SADB_X_EXT_ADDR_RANGE_SRC_START]),
+										  (struct sadb_address *)(mh.ext[SADB_X_EXT_ADDR_RANGE_SRC_END]));
+		if (error != 0) {
 			goto senderror;
 		}
-		
-		/* check family */
-		if (PFKEY_ADDR_SADDR(src0)->sa_family !=
-		    PFKEY_ADDR_SADDR(dst0)->sa_family) {
-			ipseclog((LOG_DEBUG, "key_parse: address family mismatched.\n"));
-			PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
-			error = EINVAL;
+
+		if (src0 == NULL) {
+			src0 = mh.ext[SADB_X_EXT_ADDR_RANGE_SRC_START];
+		}
+	}
+	if (mh.ext[SADB_X_EXT_ADDR_RANGE_DST_START] != NULL &&
+		mh.ext[SADB_X_EXT_ADDR_RANGE_DST_END] != NULL) {
+
+		error = key_validate_address_pair((struct sadb_address *)(mh.ext[SADB_X_EXT_ADDR_RANGE_DST_START]),
+										  (struct sadb_address *)(mh.ext[SADB_X_EXT_ADDR_RANGE_DST_END]));
+		if (error != 0) {
 			goto senderror;
 		}
-		if (PFKEY_ADDR_SADDR(src0)->sa_len !=
-		    PFKEY_ADDR_SADDR(dst0)->sa_len) {
-			ipseclog((LOG_DEBUG,
-					  "key_parse: address struct size mismatched.\n"));
-			PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
-			error = EINVAL;
+
+		if (dst0 == NULL) {
+			dst0 = mh.ext[SADB_X_EXT_ADDR_RANGE_DST_START];
+		}
+	}
+	if (src0 != NULL && dst0 != NULL) {
+		error = key_validate_address_pair((struct sadb_address *)(src0),
+										  (struct sadb_address *)(dst0));
+		if (error != 0) {
 			goto senderror;
 		}
-		
-		switch (PFKEY_ADDR_SADDR(src0)->sa_family) {
-			case AF_INET:
-				if (PFKEY_ADDR_SADDR(src0)->sa_len !=
-					sizeof(struct sockaddr_in)) {
-					PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
-					error = EINVAL;
-					goto senderror;
-				}
-				break;
-			case AF_INET6:
-				if (PFKEY_ADDR_SADDR(src0)->sa_len !=
-					sizeof(struct sockaddr_in6)) {
-					PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
-					error = EINVAL;
-					goto senderror;
-				}
-				break;
-			default:
-				ipseclog((LOG_DEBUG,
-						  "key_parse: unsupported address family.\n"));
-				PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
-				error = EAFNOSUPPORT;
-				goto senderror;
-		}
-		
-		switch (PFKEY_ADDR_SADDR(src0)->sa_family) {
-			case AF_INET:
-				plen = sizeof(struct in_addr) << 3;
-				break;
-			case AF_INET6:
-				plen = sizeof(struct in6_addr) << 3;
-				break;
-			default:
-				plen = 0;	/*fool gcc*/
-				break;
-		}
-		
-		/* check max prefix length */
-		if (src0->sadb_address_prefixlen > plen ||
-		    dst0->sadb_address_prefixlen > plen) {
-			ipseclog((LOG_DEBUG,
-					  "key_parse: illegal prefixlen.\n"));
-			PFKEY_STAT_INCREMENT(pfkeystat.out_invaddr);
-			error = EINVAL;
-			goto senderror;
-		}
-		
-		/*
-		 * prefixlen == 0 is valid because there can be a case when
-		 * all addresses are matched.
-		 */
 	}
 	
 	if (msg->sadb_msg_type >= sizeof(key_typesw)/sizeof(key_typesw[0]) ||

@@ -61,7 +61,6 @@
 #include <kern/task.h>
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
-#include <kern/assert.h>
 #include <kern/policy_internal.h>
 
 #include <libkern/libkern.h>
@@ -89,8 +88,6 @@ int
 macx_backing_store_recovery(
 	__unused struct macx_backing_store_recovery_args *args)
 {
-	assert(FALSE);
-
 	return ENOTSUP;
 }
 
@@ -105,8 +102,6 @@ int
 macx_backing_store_suspend(
 	__unused struct macx_backing_store_suspend_args *args)
 {
-	assert(FALSE);
-
 	return ENOTSUP;
 }
 
@@ -165,8 +160,6 @@ macx_triggers(
 	if (flags & (SWAP_COMPACT_DISABLE | SWAP_COMPACT_ENABLE))
 		return (macx_backing_store_compaction(flags));
 
-	assert(FALSE);
-
 	return ENOTSUP;
 }
 
@@ -175,8 +168,6 @@ int
 macx_swapon(
 	__unused struct macx_swapon_args *args)
 {
-	assert(FALSE);
-
 	return ENOTSUP;
 }
 
@@ -190,8 +181,6 @@ int
 macx_swapoff(
 	__unused struct macx_swapoff_args *args)
 {
-	assert(FALSE);
-
 	return ENOTSUP;
 }
 

@@ -1366,6 +1366,9 @@ typedef enum {
 #define	IF_LLADDR(_ifp)	\
 	(LLADDR(SDL(((_ifp)->if_lladdr)->ifa_addr)))
 
+#define	IF_INDEX_IN_RANGE(_ind_) ((_ind_) > 0 && \
+	(unsigned int)(_ind_) <= (unsigned int)if_index)
+
 __private_extern__ void ifnet_lock_assert(struct ifnet *, ifnet_lock_assert_t);
 __private_extern__ void ifnet_lock_shared(struct ifnet *ifp);
 __private_extern__ void ifnet_lock_exclusive(struct ifnet *ifp);

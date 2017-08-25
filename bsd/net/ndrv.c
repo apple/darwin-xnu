@@ -337,6 +337,7 @@ ndrv_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 		return(ENOMEM);
 	bcopy((caddr_t) sa, (caddr_t) np->nd_laddr, sizeof(struct sockaddr_ndrv));
 	dname = (char *) sa->snd_name;
+	np->nd_laddr->snd_len = sizeof(struct sockaddr_ndrv);
 	if (*dname == '\0')
 		return(EINVAL);
 #if NDRV_DEBUG

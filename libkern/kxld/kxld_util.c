@@ -62,7 +62,7 @@ static unsigned long bytes_freed = 0;
 #endif
 
 static KXLDLoggingCallback s_logging_callback = NULL;
-static const char *s_callback_name = NULL;
+static char s_callback_name[64] = "internal";
 static void *s_callback_data = NULL;
 
 #if !KERNEL
@@ -84,7 +84,18 @@ kxld_set_logging_callback(KXLDLoggingCallback logging_callback)
 void 
 kxld_set_logging_callback_data(const char *name, void *user_data)
 {
-    s_callback_name = name;
+    if (name) {
+        (void)strlcpy(s_callback_name, name, sizeof(s_callback_name));
+        /* disallow format strings in the kxld logging callback name */
+        for (size_t i = 0; i < sizeof(s_callback_name); i++) {
+            if (s_callback_name[i] == '%') {
+                s_callback_name[i] = '.';
+            }
+        }
+    } else {
+        (void)strlcpy(s_callback_name, "internal", sizeof(s_callback_name));
+    }
+
     s_callback_data = user_data;
 }
 
@@ -97,14 +108,13 @@ kxld_log(KXLDLogSubsystem subsystem, KXLDLogLevel level,
     char stack_buffer[256];
     char *alloc_buffer = NULL;
     char *format = stack_buffer;
-    const char *name = (s_callback_name) ? s_callback_name : "internal";
     u_int length = 0;
     va_list ap;
 
     if (s_logging_callback) {
 
         length = snprintf(stack_buffer, sizeof(stack_buffer), "kxld[%s]: %s",
-            name, in_format);
+                          s_callback_name, in_format);
 
         if (length >= sizeof(stack_buffer)) {
             length += 1;
@@ -112,7 +122,7 @@ kxld_log(KXLDLogSubsystem subsystem, KXLDLogLevel level,
             if (!alloc_buffer) return;
 
             snprintf(alloc_buffer, length, "kxld[%s]: %s",
-                name, in_format);
+                     s_callback_name, in_format);
             format = alloc_buffer;
         }
 

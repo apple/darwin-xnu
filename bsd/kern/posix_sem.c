@@ -413,7 +413,7 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 	 * Preallocate everything we might need up front to avoid taking
 	 * and dropping the lock, opening us up to race conditions.
 	 */
-	MALLOC_ZONE(pnbuf, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	MALLOC_ZONE(pnbuf, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK | M_ZERO);
 	if (pnbuf == NULL) {
 		error = ENOSPC;
 		goto bad;

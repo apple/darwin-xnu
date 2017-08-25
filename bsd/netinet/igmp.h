@@ -105,6 +105,7 @@ struct igmpv3 {
 	/*struct in_addr	igmp_sources[1];*/ /* source addresses */
 };
 #define IGMP_V3_QUERY_MINLEN		12
+#define	IGMP_V3_QUERY_MAX_SRCS		366 /* From RFC 3376, section 4.1.8 */
 #define IGMP_EXP(x)			(((x) >> 4) & 0x07)
 #define IGMP_MANT(x)			((x) & 0x0f)
 #define IGMP_QRESV(x)			(((x) >> 4) & 0x0f)

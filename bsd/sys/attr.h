@@ -506,8 +506,11 @@ typedef struct vol_attributes_attr {
 /* CMNEXT attributes extend the common attributes, but in the forkattr field */
 #define ATTR_CMNEXT_RELPATH     0x00000004
 #define ATTR_CMNEXT_PRIVATESIZE 0x00000008
+#ifdef PRIVATE
+#define ATTR_CMNEXT_LINKID	0x00000010
+#endif /* PRIVATE */
 
-#define ATTR_CMNEXT_VALIDMASK	0x0000000c
+#define ATTR_CMNEXT_VALIDMASK	0x0000001c
 #define ATTR_CMNEXT_SETMASK		0x00000000
 
 /* Deprecated fork attributes */

@@ -536,6 +536,7 @@ static struct getattrlist_attrtab getattrlist_file_tab[] = {
 static struct getattrlist_attrtab getattrlist_common_extended_tab[] = {
 	{ATTR_CMNEXT_RELPATH,		0,							sizeof(struct attrreference),	KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMNEXT_PRIVATESIZE,	VATTR_BIT(va_private_size),	sizeof(off_t),					KAUTH_VNODE_READ_ATTRIBUTES},
+	{ATTR_CMNEXT_LINKID,		VATTR_BIT(va_fileid) | VATTR_BIT(va_linkid),		sizeof(uint64_t),	KAUTH_VNODE_READ_ATTRIBUTES},
 	{0, 0, 0, 0}
 };
 
@@ -596,7 +597,7 @@ static struct getattrlist_attrtab getattrlistbulk_common_extended_tab[] = {
 				 ATTR_CMN_DOCUMENT_ID | ATTR_CMN_GEN_COUNT | \
 				 ATTR_CMN_DATA_PROTECT_FLAGS)
 
-#define VFS_DFLT_ATT_CMN_EXT	(ATTR_CMNEXT_PRIVATESIZE)
+#define VFS_DFLT_ATTR_CMN_EXT	(ATTR_CMNEXT_PRIVATESIZE | ATTR_CMNEXT_LINKID)
 
 #define VFS_DFLT_ATTR_DIR	(ATTR_DIR_LINKCOUNT | ATTR_DIR_MOUNTSTATUS)
 
@@ -1006,7 +1007,7 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 				attrp->validattr.volattr = VFS_DFLT_ATTR_VOL;
 				attrp->validattr.dirattr = VFS_DFLT_ATTR_DIR;
 				attrp->validattr.fileattr = VFS_DFLT_ATTR_FILE;
-				attrp->validattr.forkattr = 0;
+				attrp->validattr.forkattr = VFS_DFLT_ATTR_CMN_EXT;
 		
 				attrp->nativeattr.commonattr =  0;
 				attrp->nativeattr.volattr = 0;
@@ -2181,6 +2182,18 @@ attr_pack_common_extended(struct vnode *vp, struct attrlist *alp,
 			uint64_t zero_val = 0;
 			ATTR_PACK8((*abp), zero_val);
 		}
+	}
+
+	if (alp->forkattr & ATTR_CMNEXT_LINKID) {
+		uint64_t linkid;
+
+		if (VATTR_IS_SUPPORTED(vap, va_linkid))
+			linkid = vap->va_linkid;
+		else
+			linkid = vap->va_fileid;
+
+		ATTR_PACK8((*abp), linkid);
+		abp->actual.forkattr |= ATTR_CMNEXT_LINKID;
 	}
 
 	return 0;

@@ -2470,6 +2470,8 @@ in6p_leave_group(struct inpcb *inp, struct sockopt *sopt)
 			    ip6_sprintf(&gsa->sin6.sin6_addr)));
 			ifp = in6p_lookup_mcast_ifp(inp, &gsa->sin6);
 		} else {
+			if (!IF_INDEX_IN_RANGE(ifindex))
+				return (EADDRNOTAVAIL);
 			ifnet_head_lock_shared();
 			ifp = ifindex2ifnet[ifindex];
 			ifnet_head_done();

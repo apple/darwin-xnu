@@ -3377,6 +3377,9 @@ flow_divert_token_set(struct socket *so, struct sockopt *sopt)
 	error = flow_divert_packet_get_tlv(token, 0, FLOW_DIVERT_TLV_KEY_UNIT, sizeof(key_unit), (void *)&key_unit, NULL);
 	if (!error) {
 		key_unit = ntohl(key_unit);
+		if (key_unit >= GROUP_COUNT_MAX) {
+			key_unit = 0;
+		}
 	} else if (error != ENOENT) {
 		FDLOG(LOG_ERR, &nil_pcb, "Failed to get the key unit from the token: %d", error);
 		goto done;

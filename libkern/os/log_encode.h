@@ -27,8 +27,9 @@
 #include "log_encode_types.h"
 #include <sys/param.h>
 
-#if KERNEL
+#ifdef KERNEL
 #define isdigit(ch) (((ch) >= '0') && ((ch) <= '9'))
+extern boolean_t doprnt_hide_pointers;
 #endif
 
 static bool
@@ -138,13 +139,28 @@ _os_log_parse_annotated(char *annotated, const char **visibility, const char **l
 
 OS_ALWAYS_INLINE
 static inline bool
-_os_log_encode_arg(const void *arg, uint16_t arg_len, os_log_value_type_t ctype, bool is_private, os_log_buffer_context_t context)
+_os_log_encode_arg(void *arg, uint16_t arg_len, os_log_value_type_t ctype, bool is_private, os_log_buffer_context_t context)
 {
     os_log_buffer_value_t content = (os_log_buffer_value_t) &context->buffer->content[context->content_off];
     size_t content_sz = sizeof(*content) + arg_len;
     char tempString[OS_LOG_BUFFER_MAX_SIZE] = {};
 #ifndef KERNEL
     bool obj_private = true;
+#endif
+
+#ifdef KERNEL
+    /* scrub kernel pointers */
+    if (doprnt_hide_pointers &&
+            ctype == OS_LOG_BUFFER_VALUE_TYPE_SCALAR &&
+            arg_len >= sizeof(void *)) {
+        unsigned long long value = 0;
+        memcpy(&value, arg, arg_len);
+
+        if (value >= VM_MIN_KERNEL_AND_KEXT_ADDRESS && value <= VM_MAX_KERNEL_ADDRESS) {
+            is_private = true;
+            bzero(arg, arg_len);
+        }
+    }
 #endif
     
     content->type = ctype;

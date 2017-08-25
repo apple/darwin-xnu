@@ -8345,7 +8345,7 @@ sysctl_get_ports_used SYSCTL_HANDLER_ARGS
 	flags = name[2];
 
 	ifnet_head_lock_shared();
-	if (idx > if_index) {
+	if (!IF_INDEX_IN_RANGE(idx)) {
 		ifnet_head_done();
 		error = ENOENT;
 		goto done;
@@ -8432,7 +8432,7 @@ sysctl_get_kao_frames SYSCTL_HANDLER_ARGS
 	}
 
 	ifnet_head_lock_shared();
-	if (idx > if_index) {
+	if (!IF_INDEX_IN_RANGE(idx)) {
 		ifnet_head_done();
 		error = ENOENT;
 		goto done;

@@ -1737,6 +1737,17 @@ igmp_input(struct mbuf *m, int off)
 				 * Validate length based on source count.
 				 */
 				nsrc = ntohs(igmpv3->igmp_numsrc);
+				/*
+				 * The max vaue of nsrc is limited by the
+				 * MTU of the network on which the datagram
+				 * is received
+				 */
+				if (nsrc < 0 || nsrc > IGMP_V3_QUERY_MAX_SRCS) {
+					IGMPSTAT_INC(igps_rcv_tooshort);
+					OIGMPSTAT_INC(igps_rcv_tooshort);
+					m_freem(m);
+					return;
+				}
 				srclen = sizeof(struct in_addr) * nsrc;
 				if (igmplen < (IGMP_V3_QUERY_MINLEN + srclen)) {
 					IGMPSTAT_INC(igps_rcv_tooshort);

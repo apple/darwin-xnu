@@ -720,6 +720,9 @@ __MALLOC_ZONE(
 		}
 	}
 
+	if (elem && (flags & M_ZERO))
+		bzero(elem, size);
+
 	return (elem);
 }
 
