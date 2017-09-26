@@ -11,11 +11,13 @@
 #include <stdlib.h>
 #include <errno.h>
 
+#include <TargetConditionals.h>
+
 #define TMP_FILE_PATH "/tmp/test_kqueue_fifo_18776047"
 
 #define READ_BUFFER_LEN 256
 
-#if defined(PLATFORM_WatchOS)
+#if TARGET_OS_WATCH
 #define TOTAL_ITERATIONS 5000
 #else
 #define TOTAL_ITERATIONS 10000

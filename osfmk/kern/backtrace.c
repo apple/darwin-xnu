@@ -35,6 +35,11 @@
 #include <sys/errno.h>
 #include <vm/vm_map.h>
 
+#if defined(__arm__) || defined(__arm64__)
+#include <arm/cpu_data.h>
+#include <arm/cpu_data_internal.h>
+#endif
+
 
 uint32_t __attribute__((noinline))
 backtrace(uintptr_t *bt, uint32_t max_frames)
@@ -56,9 +61,9 @@ backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
 {
 	thread_t thread = current_thread();
 	uintptr_t *fp;
-	uintptr_t *next_fp;
 	uint32_t frame_index = 0;
 	uintptr_t top, bottom;
+	bool in_valid_stack;
 
 	assert(bt != NULL);
 	assert(max_frames > 0);
@@ -67,21 +72,27 @@ backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
 	bottom = thread->kernel_stack;
 	top = bottom + kernel_stack_size;
 
-	if ((uintptr_t)fp >= top || (uintptr_t)fp < bottom) {
+#define IN_STK_BOUNDS(__addr) \
+	(((uintptr_t)(__addr) >= (uintptr_t)bottom) && \
+	((uintptr_t)(__addr) < (uintptr_t)top))
+
+	in_valid_stack = IN_STK_BOUNDS(fp);
+
+	if (!in_valid_stack) {
 		fp = NULL;
 	}
 
 	while (fp != NULL && frame_index < max_frames) {
-		next_fp = (uintptr_t *)*fp;
+		uintptr_t *next_fp = (uintptr_t *)*fp;
 
 		/*
 		 * If the frame pointer is 0, backtracing has reached the top of
 		 * the stack and there is no return address.  Some stacks might not
 		 * have set this up, so bounds check, as well.
 		 */
-		if (next_fp == NULL ||
-		    (uintptr_t)next_fp >= top ||
-		    (uintptr_t)next_fp < bottom)
+		in_valid_stack = IN_STK_BOUNDS(next_fp);
+
+		if (next_fp == NULL || !in_valid_stack)
 		{
 			break;
 		}
@@ -97,6 +108,7 @@ backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
 	}
 
 	return frame_index;
+#undef IN_STK_BOUNDS
 }
 
 #if defined(__x86_64__)
@@ -135,6 +147,52 @@ interrupted_kernel_pc_fp(uintptr_t *pc, uintptr_t *fp)
 	return KERN_SUCCESS;
 }
 
+#elif defined(__arm64__)
+
+static kern_return_t
+interrupted_kernel_pc_fp(uintptr_t *pc, uintptr_t *fp)
+{
+	struct arm_saved_state *state;
+	bool state_64;
+
+	state = getCpuDatap()->cpu_int_state;
+	if (!state) {
+		return KERN_FAILURE;
+	}
+	state_64 = is_saved_state64(state);
+
+	/* return early if interrupted a thread in user space */
+	if (PSR64_IS_USER(get_saved_state_cpsr(state))) {
+		return KERN_FAILURE;
+	}
+
+	*pc = get_saved_state_pc(state);
+	*fp = get_saved_state_fp(state);
+	return KERN_SUCCESS;
+}
+
+#elif defined(__arm__)
+
+static kern_return_t
+interrupted_kernel_pc_fp(uintptr_t *pc, uintptr_t *fp)
+{
+	struct arm_saved_state *state;
+
+	state = getCpuDatap()->cpu_int_state;
+	if (!state) {
+		return KERN_FAILURE;
+	}
+
+	/* return early if interrupted a thread in user space */
+	if (PSR_IS_USER(get_saved_state_cpsr(state))) {
+		return KERN_FAILURE;
+	}
+
+	*pc = get_saved_state_pc(state);
+	*fp = get_saved_state_fp(state);
+	return KERN_SUCCESS;
+}
+
 #else /* defined(__arm__) */
 #error "interrupted_kernel_pc_fp: unsupported architecture"
 #endif /* !defined(__arm__) */
@@ -143,14 +201,14 @@ uint32_t
 backtrace_interrupted(uintptr_t *bt, uint32_t max_frames)
 {
 	uintptr_t pc;
-	uintptr_t *fp;
+	uintptr_t fp;
 	kern_return_t kr;
 
 	assert(bt != NULL);
 	assert(max_frames > 0);
 	assert(ml_at_interrupt_context() == TRUE);
 
-	kr = interrupted_kernel_pc_fp(&pc, (uintptr_t)&fp);
+	kr = interrupted_kernel_pc_fp(&pc, &fp);
 	if (kr != KERN_SUCCESS) {
 		return 0;
 	}
@@ -160,7 +218,7 @@ backtrace_interrupted(uintptr_t *bt, uint32_t max_frames)
 		return 1;
 	}
 
-	return backtrace_frame(bt + 1, max_frames - 1, fp);
+	return backtrace_frame(bt + 1, max_frames - 1, (void *)fp);
 }
 
 int
@@ -211,6 +269,34 @@ backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
 		pc = saved_state32(state)->eip;
 		fp = saved_state32(state)->ebp;
 	}
+
+#elif defined(__arm64__)
+
+	/* ARM expects stack frames to be aligned to 16 bytes */
+#define INVALID_USER_FP(FP) ((FP) == 0 || ((FP) & 0x3UL) != 0UL)
+
+	struct arm_saved_state *state = get_user_regs(thread);
+	if (!state) {
+		return EINVAL;
+	}
+
+	user_64 = is_saved_state64(state);
+	pc = get_saved_state_pc(state);
+	fp = get_saved_state_fp(state);
+
+#elif defined(__arm__)
+
+	/* ARM expects stack frames to be aligned to 16 bytes */
+#define INVALID_USER_FP(FP) ((FP) == 0 || ((FP) & 0x3UL) != 0UL)
+
+	struct arm_saved_state *state = get_user_regs(thread);
+	if (!state) {
+		return EINVAL;
+	}
+
+	user_64 = false;
+	pc = get_saved_state_pc(state);
+	fp = get_saved_state_fp(state);
 
 #else /* defined(__arm__) */
 #error "backtrace_thread_user: unsupported architecture"

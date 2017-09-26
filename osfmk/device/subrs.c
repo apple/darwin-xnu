@@ -143,10 +143,18 @@
 #undef strcmp
 #undef strncmp
 #undef strcpy
-#undef strncpy
 #undef strlen
 #endif
 
+/* to prevent recursion in the _chk functions */
+#undef strcat
+#undef strncpy
+#undef strncat
+#undef memcpy
+#undef memset
+#undef memmove
+#undef strlcpy
+#undef strlcat
 /*
  * Abstract:
  *      strcmp (s1, s2) compares the strings "s1" and "s2".
@@ -187,6 +195,7 @@ strcmp(
  *      comparison runs for at most "n" characters.
  */
 
+#if !defined __arm__ && !defined __arm64__
 // ARM implementation in ../arm/strncmp.s
 // ARM64 implementation in ../arm64/strncmp.s
 int
@@ -211,6 +220,7 @@ strncmp(
 
         return 0;
 }
+#endif // #ifndef __arm__
 
 
 //
@@ -254,6 +264,39 @@ strncasecmp(const char *s1, const char *s2, size_t n)
     return (0);
 }
 
+char *
+strchr(const char *s, int c)
+{
+	if (!s) {
+		return NULL;
+	}
+
+	do {
+		if (*s == c) {
+			return __CAST_AWAY_QUALIFIER(s, const, char *);
+		}
+	} while (*s++);
+
+	return NULL;
+}
+
+char *
+strrchr(const char *s, int c)
+{
+	const char *found = NULL;
+
+	if (!s) {
+		return NULL;
+	}
+
+	do {
+		if (*s == c) {
+			found = s;
+		}
+	} while (*s++);
+
+	return __CAST_AWAY_QUALIFIER(found, const, char *);
+}
 
 /*
  * Abstract:
@@ -263,6 +306,7 @@ strncasecmp(const char *s1, const char *s2, size_t n)
  * Deprecation Warning: 
  *	strcpy() is being deprecated. Please use strlcpy() instead.
  */
+#if !CONFIG_EMBEDDED
 char *
 strcpy(
         char *to,
@@ -275,6 +319,7 @@ strcpy(
 
         return ret;
 }
+#endif
 
 /*
  * Abstract:
@@ -285,7 +330,9 @@ strcpy(
  *      to the "to" string.
  */
 
+#if !defined __arm__ && !defined __arm64__
 // ARM and ARM64 implementation in ../arm/strncpy.c
+#undef strncpy
 char *
 strncpy(
 	char *s1, 
@@ -303,6 +350,7 @@ strncpy(
                         i++;
         return (os1);
 }
+#endif // #ifndef __arm__
 
 /*
  * atoi:
@@ -380,8 +428,10 @@ atoi_term(
  *	length of s or max; whichever is smaller
  */
 
+#if !defined __arm__ && !defined __arm64__
 // ARM implementation in ../arm/strnlen.s
 // ARM64 implementation in ../arm64/strnlen.s
+#undef strnlen
 size_t
 strnlen(const char *s, size_t max) {
 	const char *es = s + max, *p = s;
@@ -390,6 +440,7 @@ strnlen(const char *s, size_t max) {
 
 	return p - s;
 }
+#endif // #ifndef __arm__
 
 /*
  * convert an integer to an ASCII string.
@@ -432,6 +483,7 @@ itoa(
  * Deprecation Warning:
  *	strcat() is being deprecated. Please use strlcat() instead.
  */
+#if !CONFIG_EMBEDDED
 char *
 strcat(
 	char *dest,
@@ -445,6 +497,7 @@ strcat(
 		;
 	return (old);
 }
+#endif
 
 /*
  * Appends src to string dst of size siz (unlike strncat, siz is the
@@ -453,6 +506,7 @@ strcat(
  * Returns strlen(src) + MIN(siz, strlen(initial dst)).
  * If retval >= siz, truncation occurred.
  */
+#undef strlcat
 size_t
 strlcat(char *dst, const char *src, size_t siz)
 {
@@ -487,7 +541,9 @@ strlcat(char *dst, const char *src, size_t siz)
  * Returns strlen(src); if retval >= siz, truncation occurred.
  */
 
+#if !defined __arm__ && !defined __arm64__
 // ARM and ARM64 implementation in ../arm/strlcpy.c
+#undef strlcpy
 size_t
 strlcpy(char *dst, const char *src, size_t siz)
 {
@@ -513,6 +569,7 @@ strlcpy(char *dst, const char *src, size_t siz)
 
 	return(s - src - 1);	/* count does not include NUL */
 }
+#endif
 
 /*
  * STRDUP
@@ -591,3 +648,98 @@ strnstr(char *s, const char *find, size_t slen)
   return (s);
 }
 
+void * __memcpy_chk(void *dst, void const *src, size_t s, size_t chk_size);
+void * __memmove_chk(void *dst, void const *src, size_t s, size_t chk_size);
+void * __memset_chk(void *dst, int c, size_t s, size_t chk_size);
+size_t __strlcpy_chk(char *dst, char const *src, size_t s, size_t chk_size);
+size_t __strlcat_chk(char *dst, char const *src, size_t s, size_t chk_size);
+char * __strncpy_chk (char *restrict dst, char *restrict src, size_t len, size_t chk_size);
+char * __strncat_chk (char *restrict dst, const char *restrict src, size_t len, size_t chk_size);
+char * __strcpy_chk(char *restrict dst, const char *restrict src, size_t chk_size);
+char * __strcat_chk (char *restrict dst, const char *restrict src, size_t chk_size);
+
+void *
+__memcpy_chk(void *dst, void const *src, size_t s, size_t chk_size)
+{
+    if (__improbable(chk_size < s))
+        panic("__memcpy_chk object size check failed: dst %p, src %p, (%zu < %zu)", dst, src, chk_size, s);
+    return memcpy(dst, src, s);
+}
+
+void *
+__memmove_chk(void *dst, void const *src, size_t s, size_t chk_size)
+{
+    if (__improbable(chk_size < s))
+        panic("__memmove_chk object size check failed: dst %p, src %p, (%zu < %zu)", dst, src, chk_size, s);
+    return memmove(dst, src, s);
+}
+
+void *
+__memset_chk(void *dst, int c, size_t s, size_t chk_size)
+{
+    if (__improbable(chk_size < s))
+        panic("__memset_chk object size check failed: dst %p, c %c, (%zu < %zu)", dst, c, chk_size, s);
+    return memset(dst, c, s);
+}
+
+size_t
+__strlcat_chk(char *dst, char const *src, size_t s, size_t chk_size)
+{
+    if (__improbable(chk_size < s))
+        panic("__strlcat_chk object size check failed: dst %p, src %p, (%zu < %zu)", dst, src, chk_size, s);
+    return strlcat(dst, src, s);
+}
+
+size_t
+__strlcpy_chk(char *dst, char const *src, size_t s, size_t chk_size)
+{
+    if (__improbable(chk_size < s))
+        panic("__strlcpy_chk object size check failed: dst %p, src %p, (%zu < %zu)", dst, src, chk_size, s);
+    return strlcpy(dst, src, s);
+}
+
+char *
+__strncpy_chk (char *restrict dst, char *restrict src,
+               size_t len, size_t chk_size)
+{
+    if (__improbable(chk_size < len)) {
+        panic("__strncpy_chk object size check failed: dst %p, src %p, (%zu < %zu)", dst, src, chk_size, len);
+    }
+    return strncpy(dst, src, len);
+}
+
+char *
+__strncat_chk (char *restrict dst, const char *restrict src,
+               size_t len, size_t chk_size)
+{
+    size_t len1 = strlen(dst);
+    size_t len2 = strnlen(src, len);
+    if (__improbable (chk_size < len1 + len2 + 1)) {
+        panic("__strncat_chk object size check failed: dst %p, src %p, (%zu < %zu + %zu + 1)", dst, src, chk_size, len1, len2);
+    }
+    return strncat(dst, src, len);
+}
+
+char *
+__strcpy_chk (char *restrict dst, const char *restrict src, size_t chk_size)
+{
+  size_t len = strlen(src);
+  if (__improbable (chk_size < len + 1)) {
+    panic("__strcpy_chk object size check failed: dst %p, src %p, (%zu < %zu + 1)", dst, src, chk_size, len);
+  }
+  memcpy(dst, src, len+1);
+  return dst;
+}
+
+char *
+__strcat_chk (char *restrict dst, const char *restrict src, size_t chk_size)
+{
+  size_t len1 = strlen(dst);
+  size_t len2 = strlen(src);
+  size_t required_len = len1 + len2 + 1;
+  if (__improbable (chk_size < required_len)) {
+    panic("__strcat_chk object size check failed: dst %p, src %p, (%zu < %zu + %zu + 1)", dst, src, chk_size, len1, len2);
+  }
+  memcpy(dst + len1, src, len2 + 1);
+  return dst;
+}

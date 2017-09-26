@@ -381,6 +381,8 @@ struct nfsmount {
 #define NFSSTA_HASWRITEVERF	0x00040000  /* Has write verifier for V3 */
 #define NFSSTA_GOTPATHCONF	0x00080000  /* Got the V3 pathconf info */
 #define NFSSTA_GOTFSINFO	0x00100000  /* Got the V3 fsinfo */
+#define NFSSTA_WANTRQUOTA	0x00200000  /* Want rquota address */
+#define NFSSTA_RQUOTAINPROG	0x00400000  /* Getting rquota address */
 #define NFSSTA_SENDING		0x00800000  /* Sending on socket */
 #define NFSSTA_SNDLOCK		0x01000000  /* Send socket lock */
 #define NFSSTA_WANTSND		0x02000000  /* Want above */

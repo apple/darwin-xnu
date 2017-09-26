@@ -301,24 +301,23 @@ cdevsw_add_with_bdev(int index, struct cdevsw * csw, int bdev)
 }
 
 int
-cdevsw_setkqueueok(int index, struct cdevsw * csw, int use_offset)
+cdevsw_setkqueueok(int maj, struct cdevsw * csw, int extra_flags)
 {
 	struct cdevsw * devsw;
 	uint64_t flags = CDEVSW_SELECT_KQUEUE;
 
-	if (index < 0 || index >= nchrdev)
-		return (-1);
+	if (maj < 0 || maj >= nchrdev) {
+		return -1;
+	}
 
-	devsw = &cdevsw[index];
+	devsw = &cdevsw[maj];
 	if ((memcmp((char *)devsw, (char *)csw, sizeof(struct cdevsw)) != 0)) {
-		return (-1);
+		return -1;
 	}
 
-	if (use_offset) {
-		flags |= CDEVSW_USE_OFFSET;
-	}
+	flags |= extra_flags;
 
-	cdevsw_flags[index] = flags;
+	cdevsw_flags[maj] = flags;
 	return 0;
 }
 

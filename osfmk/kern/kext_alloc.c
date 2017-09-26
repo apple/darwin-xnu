@@ -38,6 +38,7 @@
 
 #include <mach-o/loader.h>
 #include <libkern/kernel_mach_header.h>
+#include <san/kasan.h>
 
 #define KASLR_IOREG_DEBUG 0
 
@@ -103,7 +104,8 @@ kext_alloc_init(void)
     /* Allocate the sub block of the kernel map */
     rval = kmem_suballoc(kernel_map, (vm_offset_t *) &kext_alloc_base, 
 			 kext_alloc_size, /* pageable */ TRUE,
-			 VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE | VM_MAKE_TAG(VM_KERN_MEMORY_KEXT),
+			 VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE,
+			 VM_MAP_KERNEL_FLAGS_NONE, VM_KERN_MEMORY_KEXT,
 			 &g_kext_map);
     if (rval != KERN_SUCCESS) {
 	    panic("kext_alloc_init: kmem_suballoc failed 0x%x\n", rval);
@@ -141,8 +143,6 @@ kext_alloc(vm_offset_t *_addr, vm_size_t size, boolean_t fixed)
 #endif
     int flags = (fixed) ? VM_FLAGS_FIXED : VM_FLAGS_ANYWHERE;
  
-    flags |= VM_MAKE_TAG(VM_KERN_MEMORY_KEXT);
-     
 #if CONFIG_KEXT_BASEMENT
     /* Allocate the kext virtual memory
      * 10608884 - use mach_vm_map since we want VM_FLAGS_ANYWHERE allocated past
@@ -151,11 +151,12 @@ kext_alloc(vm_offset_t *_addr, vm_size_t size, boolean_t fixed)
      * fixed (post boot) kext allocations to start looking for free space 
      * just past where prelinked kexts have loaded.  
      */
-    rval = mach_vm_map(g_kext_map, 
+    rval = mach_vm_map_kernel(g_kext_map,
                        &addr, 
                        size, 
                        0,
                        flags,
+                       VM_KERN_MEMORY_KEXT,
                        MACH_PORT_NULL,
                        0,
                        TRUE,
@@ -167,7 +168,7 @@ kext_alloc(vm_offset_t *_addr, vm_size_t size, boolean_t fixed)
         goto finish;
     }
 #else
-    rval = mach_vm_allocate(g_kext_map, &addr, size, flags);
+    rval = mach_vm_allocate_kernel(g_kext_map, &addr, size, flags, VM_KERN_MEMORY_KEXT);
     if (rval != KERN_SUCCESS) {
         printf("vm_allocate failed - %d\n", rval);
         goto finish;
@@ -183,6 +184,9 @@ kext_alloc(vm_offset_t *_addr, vm_size_t size, boolean_t fixed)
 
     *_addr = (vm_offset_t)addr;
     rval = KERN_SUCCESS;
+#if KASAN
+    kasan_notify_address(addr, size);
+#endif
 
 finish:
     return rval;

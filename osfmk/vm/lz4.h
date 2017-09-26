@@ -117,3 +117,5 @@ UTIL_FUNCTION void store64(void * ptr,vector_uchar64 data) { *(packed_uchar64 *)
 UTIL_FUNCTION void copy8(void * dst,const void * src) { store8(dst,load8(src)); }
 UTIL_FUNCTION void copy16(void * dst,const void * src) { *(packed_uchar16 *)dst = *(const packed_uchar16 *)src; }
 UTIL_FUNCTION void copy32(void * dst,const void * src) { *(packed_uchar32 *)dst = *(const packed_uchar32 *)src; }
+
+#undef memcpy

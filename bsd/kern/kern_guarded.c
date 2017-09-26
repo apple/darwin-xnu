@@ -31,6 +31,7 @@
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
 #include <sys/file_internal.h>
+#include <kern/exc_guard.h>
 #include <sys/guarded.h>
 #include <kern/kalloc.h>
 #include <sys/sysproto.h>
@@ -45,6 +46,14 @@
 #include <sys/kdebug.h>
 #include <stdbool.h>
 #include <vm/vm_protos.h>
+#include <libkern/section_keywords.h>
+#if CONFIG_MACF && CONFIG_VNGUARD
+#include <security/mac.h>
+#include <security/mac_framework.h>
+#include <security/mac_policy.h>
+#include <pexpert/pexpert.h>
+#include <sys/sysctl.h>
+#endif
 
 
 #define f_flag f_fglob->fg_flag
@@ -60,6 +69,7 @@ extern int wr_uio(struct proc *p, struct fileproc *fp, uio_t uio, user_ssize_t *
 
 kern_return_t task_exception_notify(exception_type_t exception,
         mach_exception_data_type_t code, mach_exception_data_type_t subcode);
+kern_return_t task_violated_guard(mach_exception_code_t, mach_exception_subcode_t, void *);
 
 /*
  * Most fd's have an underlying fileproc struct; but some may be
@@ -78,10 +88,7 @@ struct guarded_fileproc {
 	struct fileproc gf_fileproc;
 	u_int		gf_magic;
 	u_int		gf_attrs;
-	thread_t	gf_thread;
 	guardid_t	gf_guard;
-	int		gf_exc_fd;
-	u_int		gf_exc_code;
 };
 
 const size_t sizeof_guarded_fileproc = sizeof (struct guarded_fileproc);
@@ -180,48 +187,23 @@ fp_isguarded(struct fileproc *fp, u_int attrs)
 extern char *proc_name_address(void *p);
 
 int
-fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int code)
+fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int flavor)
 {
 	if (FILEPROC_TYPE(fp) != FTYPE_GUARDED)
 		panic("%s corrupt fp %p flags %x", __func__, fp, fp->f_flags);
 
 	struct guarded_fileproc *gfp = FP_TO_GFP(fp);
-
 	/* all gfd fields protected via proc_fdlock() */
 	proc_fdlock_assert(p, LCK_MTX_ASSERT_OWNED);
 
-	if (NULL == gfp->gf_thread) {
-		thread_t t = current_thread();
-		gfp->gf_thread = t;
-		gfp->gf_exc_fd = fd;
-		gfp->gf_exc_code = code;
+	mach_exception_code_t code = 0;
+	EXC_GUARD_ENCODE_TYPE(code, GUARD_TYPE_FD);
+	EXC_GUARD_ENCODE_FLAVOR(code, flavor);
+	EXC_GUARD_ENCODE_TARGET(code, fd);
+	mach_exception_subcode_t subcode = gfp->gf_guard;
 
-		/*
-		 * This thread was the first to attempt the
-		 * operation that violated the guard on this fd;
-		 * generate an exception.
-		 */
-		printf("%s: guarded fd exception: "
-		    "fd %d code 0x%x guard 0x%llx\n",
-		    proc_name_address(p), gfp->gf_exc_fd,
-		    gfp->gf_exc_code, gfp->gf_guard);
-
-		thread_guard_violation(t, GUARD_TYPE_FD);
-	} else {
-		/*
-		 * We already recorded a violation on this fd for a
-		 * different thread, so posting an exception is
-		 * already in progress.  We could pause for a bit
-		 * and check again, or we could panic (though that seems
-		 * heavy handed), or we could just press on with the
-		 * error return alone.  For now, resort to printf.
-		 */
-		printf("%s: guarded fd exception+: "
-		    "fd %d code 0x%x guard 0x%llx\n",
-		    proc_name_address(p), gfp->gf_exc_fd,
-		    gfp->gf_exc_code, gfp->gf_guard);
-	}
-
+	thread_t t = current_thread();
+	thread_guard_violation(t, code, subcode);
 	return (EPERM);
 }
 
@@ -229,73 +211,14 @@ fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int code)
  * (Invoked before returning to userland from the syscall handler.)
  */
 void
-fd_guard_ast(thread_t t)
+fd_guard_ast(
+	thread_t __unused t,
+	mach_exception_code_t code,
+	mach_exception_subcode_t subcode)
 {
+	task_exception_notify(EXC_GUARD, code, subcode);
 	proc_t p = current_proc();
-	struct filedesc *fdp = p->p_fd;
-	int i;
-
-	proc_fdlock(p);
-	for (i = fdp->fd_lastfile; i >= 0; i--) {
-		struct fileproc *fp = fdp->fd_ofiles[i];
-
-		if (fp == NULL ||
-		    FILEPROC_TYPE(fp) != FTYPE_GUARDED)
-			continue;
-
-		struct guarded_fileproc *gfp = FP_TO_GFP(fp);
-
-		if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic)
-			panic("%s: corrupt gfp %p flags %x",
-			    __func__, gfp, fp->f_flags);
-
-		if (gfp->gf_thread == t) {
-			mach_exception_data_type_t code, subcode;
-
-			gfp->gf_thread = NULL;
-
-			/*
-			 * EXC_GUARD exception code namespace.
-			 *
-			 * code:
-			 * +-------------------------------------------------+
-			 * | [63:61] guard type | [60:0] guard-specific data |
-			 * +-------------------------------------------------+
-			 *
-			 * subcode:
-			 * +-------------------------------------------------+
-			 * |       [63:0] guard-specific data                |
-			 * +-------------------------------------------------+
-			 *
-			 * At the moment, we have just one guard type: file
-			 * descriptor guards.
-			 *
-			 * File descriptor guards use the exception codes like
-			 * so:
-			 *
-			 * code:			 
-			 * +--------------------------------------------------+
-			 * |[63:61] GUARD_TYPE_FD | [60:32] flavor | [31:0] fd|
-			 * +--------------------------------------------------+
-			 *
-			 * subcode:
-			 * +--------------------------------------------------+
-			 * |       [63:0] guard value                         |
-			 * +--------------------------------------------------+
-			 */
-			code = (((uint64_t)GUARD_TYPE_FD) << 61) |
-			       (((uint64_t)gfp->gf_exc_code) << 32) |
-			       ((uint64_t)gfp->gf_exc_fd);
-			subcode = gfp->gf_guard;
-			proc_fdunlock(p);
-
-			(void) task_exception_notify(EXC_GUARD, code, subcode);
-			psignal(p, SIGKILL);
-
-			return;
-		}
-	}
-	proc_fdunlock(p);
+	psignal(p, SIGKILL);
 }
 
 /*
@@ -665,6 +588,7 @@ restart:
 			case DTYPE_PIPE:
 			case DTYPE_SOCKET:
 			case DTYPE_KQUEUE:
+			case DTYPE_NETPOLICY:
 				break;
 			default:
 				error = ENOTSUP;
@@ -981,3 +905,627 @@ falloc_guarded(struct proc *p, struct fileproc **fp, int *fd,
 	return (falloc_withalloc(p, fp, fd, ctx, guarded_fileproc_alloc_init,
 	    &crarg));
 }
+
+#if CONFIG_MACF && CONFIG_VNGUARD
+
+/*
+ * Guarded vnodes
+ *
+ * Uses MAC hooks to guard operations on vnodes in the system. Given an fd,
+ * add data to the label on the fileglob and the vnode it points at.
+ * The data contains a pointer to the fileglob, the set of attributes to
+ * guard, a guard value for uniquification, and the pid of the process
+ * who set the guard up in the first place.
+ *
+ * The fd must have been opened read/write, and the underlying
+ * fileglob is FG_CONFINED so that there's no ambiguity about the
+ * owning process.
+ *
+ * When there's a callback for a vnode operation of interest (rename, unlink,
+ * etc.) check to see if the guard permits that operation, and if not
+ * take an action e.g. log a message or generate a crash report.
+ *
+ * The label is removed from the vnode and the fileglob when the fileglob
+ * is closed.
+ *
+ * The initial action to be taken can be specified by a boot arg (vnguard=0x42)
+ * and change via the "kern.vnguard.flags" sysctl.
+ */
+
+struct vng_owner;
+
+struct vng_info { /* lives on the vnode label */
+	guardid_t vgi_guard;
+	unsigned vgi_attrs;
+	TAILQ_HEAD(, vng_owner) vgi_owners;
+};
+
+struct vng_owner { /* lives on the fileglob label */
+	proc_t vgo_p;
+	struct fileglob *vgo_fg;
+	struct vng_info *vgo_vgi;
+	TAILQ_ENTRY(vng_owner) vgo_link;
+};
+
+static struct vng_info *
+new_vgi(unsigned attrs, guardid_t guard)
+{
+	struct vng_info *vgi = kalloc(sizeof (*vgi));
+	vgi->vgi_guard = guard;
+	vgi->vgi_attrs = attrs;
+	TAILQ_INIT(&vgi->vgi_owners);
+	return vgi;
+}
+
+static struct vng_owner *
+new_vgo(proc_t p, struct fileglob *fg)
+{
+	struct vng_owner *vgo = kalloc(sizeof (*vgo));
+	memset(vgo, 0, sizeof (*vgo));
+	vgo->vgo_p = p;
+	vgo->vgo_fg = fg;
+	return vgo;
+}
+
+static void
+vgi_add_vgo(struct vng_info *vgi, struct vng_owner *vgo)
+{
+	vgo->vgo_vgi = vgi;
+	TAILQ_INSERT_HEAD(&vgi->vgi_owners, vgo, vgo_link);
+}
+
+static boolean_t
+vgi_remove_vgo(struct vng_info *vgi, struct vng_owner *vgo)
+{
+	TAILQ_REMOVE(&vgi->vgi_owners, vgo, vgo_link);
+	vgo->vgo_vgi = NULL;
+	return TAILQ_EMPTY(&vgi->vgi_owners);
+}
+
+static void
+free_vgi(struct vng_info *vgi)
+{
+	assert(TAILQ_EMPTY(&vgi->vgi_owners));
+#if DEVELOP || DEBUG
+	memset(vgi, 0xbeadfade, sizeof (*vgi));
+#endif
+	kfree(vgi, sizeof (*vgi));
+}
+
+static void
+free_vgo(struct vng_owner *vgo)
+{
+#if DEVELOP || DEBUG
+	memset(vgo, 0x2bedf1d0, sizeof (*vgo));
+#endif
+	kfree(vgo, sizeof (*vgo));
+}
+
+static int label_slot;
+static lck_rw_t llock;
+static lck_grp_t *llock_grp;
+
+static __inline void *
+vng_lbl_get(struct label *label)
+{
+	lck_rw_assert(&llock, LCK_RW_ASSERT_HELD);
+	void *data;
+	if (NULL == label)
+		data = NULL;
+	else
+		data = (void *)mac_label_get(label, label_slot);
+	return data;
+}
+
+static __inline struct vng_info *
+vng_lbl_get_withattr(struct label *label, unsigned attrmask)
+{
+	struct vng_info *vgi = vng_lbl_get(label);
+	assert(NULL == vgi || (vgi->vgi_attrs & ~VNG_ALL) == 0);
+	if (NULL != vgi && 0 == (vgi->vgi_attrs & attrmask))
+		vgi = NULL;
+	return vgi;
+}
+
+static __inline void
+vng_lbl_set(struct label *label, void *data)
+{
+	assert(NULL != label);
+	lck_rw_assert(&llock, LCK_RW_ASSERT_EXCLUSIVE);
+	mac_label_set(label, label_slot, (intptr_t)data);
+}
+
+static int
+vnguard_sysc_setguard(proc_t p, const struct vnguard_set *vns)
+{
+	const int fd = vns->vns_fd;
+
+	if ((vns->vns_attrs & ~VNG_ALL) != 0 ||
+	    0 == vns->vns_attrs || 0 == vns->vns_guard)
+		return EINVAL;
+
+	int error;
+	struct fileproc *fp;
+	if (0 != (error = fp_lookup(p, fd, &fp, 0)))
+		return error;
+	do {
+		/*
+		 * To avoid trivial DoS, insist that the caller
+		 * has read/write access to the file.
+		 */
+		if ((FREAD|FWRITE) != (fp->f_flag & (FREAD|FWRITE))) {
+			error = EBADF;
+			break;
+		}
+		struct fileglob *fg = fp->f_fglob;
+		if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE) {
+			error = EBADF;
+			break;
+		}
+		/*
+		 * Confinement means there's only one fd pointing at
+		 * this fileglob, and will always be associated with
+		 * this pid.
+		 */
+		if (0 == (FG_CONFINED & fg->fg_lflags)) {
+			error = EBADF;
+			break;
+		}
+		struct vnode *vp = fg->fg_data;
+		if (!vnode_isreg(vp) || NULL == vp->v_mount) {
+			error = EBADF;
+			break;
+		}
+		error = vnode_getwithref(vp);
+		if (0 != error) {
+			fp_drop(p, fd, fp, 0);
+			break;
+		}
+		/* Ensure the target vnode -has- a label */
+		struct vfs_context *ctx = vfs_context_current();
+		mac_vnode_label_update(ctx, vp, NULL);
+
+		struct vng_info *nvgi = new_vgi(vns->vns_attrs, vns->vns_guard);
+		struct vng_owner *nvgo = new_vgo(p, fg);
+
+		lck_rw_lock_exclusive(&llock);
+
+		do {
+			/*
+			 * A vnode guard is associated with one or more
+			 * fileglobs in one or more processes.
+			 */
+			struct vng_info *vgi = vng_lbl_get(vp->v_label);
+			struct vng_owner *vgo = vng_lbl_get(fg->fg_label);
+
+			if (NULL == vgi) {
+				/* vnode unguarded, add the first guard */
+				if (NULL != vgo)
+					panic("vnguard label on fileglob "
+					      "but not vnode");
+				/* add a kusecount so we can unlabel later */
+				error = vnode_ref_ext(vp, O_EVTONLY, 0);
+				if (0 == error) {
+					/* add the guard */
+					vgi_add_vgo(nvgi, nvgo);
+					vng_lbl_set(vp->v_label, nvgi);
+					vng_lbl_set(fg->fg_label, nvgo);
+				} else {
+					free_vgo(nvgo);
+					free_vgi(nvgi);
+				}
+			} else {
+				/* vnode already guarded */
+				free_vgi(nvgi);
+				if (vgi->vgi_guard != vns->vns_guard)
+					error = EPERM; /* guard mismatch */
+				else if (vgi->vgi_attrs != vns->vns_attrs)
+					error = EACCES; /* attr mismatch */
+				if (0 != error || NULL != vgo) {
+					free_vgo(nvgo);
+					break;
+				}
+				/* record shared ownership */
+				vgi_add_vgo(vgi, nvgo);
+				vng_lbl_set(fg->fg_label, nvgo);
+			}
+		} while (0);
+
+		lck_rw_unlock_exclusive(&llock);
+		vnode_put(vp);
+	} while (0);
+
+	fp_drop(p, fd, fp, 0);
+	return error;
+}
+
+static int
+vng_policy_syscall(proc_t p, int cmd, user_addr_t arg)
+{
+	int error = EINVAL;
+
+	switch (cmd) {
+	case VNG_SYSC_PING:
+		if (0 == arg)
+			error = 0;
+		break;
+	case VNG_SYSC_SET_GUARD: {
+		struct vnguard_set vns;
+		error = copyin(arg, (void *)&vns, sizeof (vns));
+		if (error)
+			break;
+		error = vnguard_sysc_setguard(p, &vns);
+		break;
+	}
+	default:
+		break;
+	}
+	return (error);
+}
+
+/*
+ * This is called just before the fileglob disappears in fg_free().
+ * Take the exclusive lock: no other thread can add or remove
+ * a vng_info to any vnode in the system.
+ */
+static void
+vng_file_label_destroy(struct label *label)
+{
+	lck_rw_lock_exclusive(&llock);
+	struct vng_owner *lvgo = vng_lbl_get(label);
+	if (lvgo) {
+		vng_lbl_set(label, 0);
+		struct vng_info *vgi = lvgo->vgo_vgi;
+		assert(vgi);
+		if (vgi_remove_vgo(vgi, lvgo)) {
+			/* that was the last reference */
+			vgi->vgi_attrs = 0;
+			struct fileglob *fg = lvgo->vgo_fg;
+			assert(fg);
+			if (DTYPE_VNODE == FILEGLOB_DTYPE(fg)) {
+				struct vnode *vp = fg->fg_data;
+				int error = vnode_getwithref(vp);
+				if (0 == error) {
+					vng_lbl_set(vp->v_label, 0);
+					lck_rw_unlock_exclusive(&llock);
+					/* may trigger VNOP_INACTIVE */
+					vnode_rele_ext(vp, O_EVTONLY, 0);
+					vnode_put(vp);
+					free_vgi(vgi);
+					free_vgo(lvgo);
+					return;
+				}
+			}
+		}
+		free_vgo(lvgo);
+	}
+	lck_rw_unlock_exclusive(&llock);
+}
+
+static int vng_policy_flags;
+
+static int
+vng_guard_violation(const struct vng_info *vgi,
+    unsigned opval, const char *nm)
+{
+	int retval = 0;
+
+	if (vng_policy_flags & kVNG_POLICY_EPERM) {
+		/* deny the operation */
+		retval = EPERM;
+	}
+
+	if (vng_policy_flags & kVNG_POLICY_LOGMSG) {
+		/* log a message */
+		const char *op;
+		switch (opval) {
+		case VNG_RENAME_FROM:
+			op = "rename-from";
+			break;
+		case VNG_RENAME_TO:
+			op = "rename-to";
+			break;
+		case VNG_UNLINK:
+			op = "unlink";
+			break;
+		case VNG_LINK:
+			op = "link";
+			break;
+		case VNG_EXCHDATA:
+			op = "exchdata";
+			break;
+		case VNG_WRITE_OTHER:
+			op = "write";
+			break;
+		case VNG_TRUNC_OTHER:
+			op = "truncate";
+			break;
+		default:
+			op = "(unknown)";
+			break;
+		}
+		proc_t p = current_proc();
+		const struct vng_owner *vgo;
+		TAILQ_FOREACH(vgo, &vgi->vgi_owners, vgo_link) {
+			printf("%s[%d]: %s%s: '%s' guarded by %s[%d] (0x%llx)\n",
+			    proc_name_address(p), proc_pid(p), op,
+			    0 != retval ? " denied" : "",
+			    NULL != nm ? nm : "(unknown)",
+			    proc_name_address(vgo->vgo_p), proc_pid(vgo->vgo_p),
+			    vgi->vgi_guard);
+		}
+	}
+
+	if (vng_policy_flags & (kVNG_POLICY_EXC|kVNG_POLICY_EXC_CORPSE)) {
+		/* EXC_GUARD exception */
+		const struct vng_owner *vgo = TAILQ_FIRST(&vgi->vgi_owners);
+		pid_t pid = vgo ? proc_pid(vgo->vgo_p) : 0;
+		mach_exception_code_t code;
+		mach_exception_subcode_t subcode;
+
+		code = 0;
+		EXC_GUARD_ENCODE_TYPE(code, GUARD_TYPE_VN);
+		EXC_GUARD_ENCODE_FLAVOR(code, opval);
+		EXC_GUARD_ENCODE_TARGET(code, pid);
+		subcode = vgi->vgi_guard;
+
+		if (vng_policy_flags & kVNG_POLICY_EXC_CORPSE) {
+			task_violated_guard(code, subcode, NULL);
+			/* not fatal */
+		} else {
+			thread_t t = current_thread();
+			thread_guard_violation(t, code, subcode);
+		}
+	} else if (vng_policy_flags & kVNG_POLICY_SIGKILL) {
+		proc_t p = current_proc();
+		psignal(p, SIGKILL);
+	}
+
+	return retval;
+}
+
+/*
+ * A vnode guard was tripped on this thread.
+ *
+ * (Invoked before returning to userland from the syscall handler.)
+ */
+void
+vn_guard_ast(thread_t __unused t,
+    mach_exception_data_type_t code, mach_exception_data_type_t subcode)
+{
+	task_exception_notify(EXC_GUARD, code, subcode);
+	proc_t p = current_proc();
+	psignal(p, SIGKILL);
+}
+
+/*
+ * vnode callbacks
+ */
+
+static int
+vng_vnode_check_rename(kauth_cred_t __unused cred,
+    struct vnode *__unused dvp, struct label *__unused dlabel,
+    struct vnode *__unused vp, struct label *label,
+    struct componentname *cnp,
+    struct vnode *__unused tdvp, struct label *__unused tdlabel,
+    struct vnode *__unused tvp, struct label *tlabel,
+    struct componentname *tcnp)
+{
+	int error = 0;
+	if (NULL != label || NULL != tlabel) {
+		lck_rw_lock_shared(&llock);
+		const struct vng_info *vgi =
+		    vng_lbl_get_withattr(label, VNG_RENAME_FROM);
+		if (NULL != vgi)
+			error = vng_guard_violation(vgi,
+			    VNG_RENAME_FROM, cnp->cn_nameptr);
+		if (0 == error) {
+			vgi = vng_lbl_get_withattr(tlabel, VNG_RENAME_TO);
+			if (NULL != vgi)
+				error = vng_guard_violation(vgi,
+				    VNG_RENAME_TO, tcnp->cn_nameptr);
+		}
+		lck_rw_unlock_shared(&llock);
+	}
+	return error;
+}
+
+static int
+vng_vnode_check_link(kauth_cred_t __unused cred,
+    struct vnode *__unused dvp, struct label *__unused dlabel,
+    struct vnode *vp, struct label *label, struct componentname *__unused cnp)
+{
+	int error = 0;
+	if (NULL != label) {
+		lck_rw_lock_shared(&llock);
+		const struct vng_info *vgi =
+			vng_lbl_get_withattr(label, VNG_LINK);
+		if (vgi) {
+			const char *nm = vnode_getname(vp);
+			error = vng_guard_violation(vgi, VNG_LINK, nm);
+			if (nm)
+				vnode_putname(nm);
+		}
+		lck_rw_unlock_shared(&llock);
+	}
+	return error;
+}
+
+static int
+vng_vnode_check_unlink(kauth_cred_t __unused cred,
+    struct vnode *__unused dvp, struct label *__unused dlabel,
+    struct vnode *__unused vp, struct label *label, struct componentname *cnp)
+{
+	int error = 0;
+	if (NULL != label) {
+		lck_rw_lock_shared(&llock);
+		const struct vng_info *vgi =
+		    vng_lbl_get_withattr(label, VNG_UNLINK);
+		if (vgi)
+			error = vng_guard_violation(vgi, VNG_UNLINK,
+			    cnp->cn_nameptr);
+		lck_rw_unlock_shared(&llock);
+	}
+	return error;
+}
+
+/*
+ * Only check violations for writes performed by "other processes"
+ */
+static int
+vng_vnode_check_write(kauth_cred_t __unused actv_cred,
+    kauth_cred_t __unused file_cred, struct vnode *vp, struct label *label)
+{
+	int error = 0;
+	if (NULL != label) {
+		lck_rw_lock_shared(&llock);
+		const struct vng_info *vgi =
+		    vng_lbl_get_withattr(label, VNG_WRITE_OTHER);
+		if (vgi) {
+			proc_t p = current_proc();
+			const struct vng_owner *vgo;
+			TAILQ_FOREACH(vgo, &vgi->vgi_owners, vgo_link) {
+				if (vgo->vgo_p == p)
+					goto done;
+			}
+			const char *nm = vnode_getname(vp);
+			error = vng_guard_violation(vgi,
+			    VNG_WRITE_OTHER, nm);
+			if (nm)
+				vnode_putname(nm);
+		}
+	done:
+		lck_rw_unlock_shared(&llock);
+	}
+	return error;
+}
+
+/*
+ * Only check violations for truncates performed by "other processes"
+ */
+static int
+vng_vnode_check_truncate(kauth_cred_t __unused actv_cred,
+    kauth_cred_t __unused file_cred, struct vnode *vp,
+    struct label *label)
+{
+	int error = 0;
+	if (NULL != label) {
+		lck_rw_lock_shared(&llock);
+		const struct vng_info *vgi =
+		    vng_lbl_get_withattr(label, VNG_TRUNC_OTHER);
+		if (vgi) {
+			proc_t p = current_proc();
+			const struct vng_owner *vgo;
+			TAILQ_FOREACH(vgo, &vgi->vgi_owners, vgo_link) {
+				if (vgo->vgo_p == p)
+					goto done;
+			}
+			const char *nm = vnode_getname(vp);
+			error = vng_guard_violation(vgi,
+			    VNG_TRUNC_OTHER, nm);
+			if (nm)
+				vnode_putname(nm);
+		}
+	done:
+		lck_rw_unlock_shared(&llock);
+	}
+	return error;
+}
+
+static int
+vng_vnode_check_exchangedata(kauth_cred_t __unused cred,
+    struct vnode *fvp, struct label *flabel,
+    struct vnode *svp, struct label *slabel)
+{
+	int error = 0;
+	if (NULL != flabel || NULL != slabel) {
+		lck_rw_lock_shared(&llock);
+		const struct vng_info *vgi =
+			vng_lbl_get_withattr(flabel, VNG_EXCHDATA);
+		if (NULL != vgi) {
+                        const char *nm = vnode_getname(fvp);
+			error = vng_guard_violation(vgi,
+			    VNG_EXCHDATA, nm);
+			if (nm)
+				vnode_putname(nm);
+		}
+		if (0 == error) {
+			vgi = vng_lbl_get_withattr(slabel, VNG_EXCHDATA);
+			if (NULL != vgi) {
+				const char *nm = vnode_getname(svp);
+				error = vng_guard_violation(vgi,
+				    VNG_EXCHDATA, nm);
+				if (nm)
+					vnode_putname(nm);
+			}
+		}
+		lck_rw_unlock_shared(&llock);
+	}
+	return error;
+}
+
+/*
+ * Configuration gorp
+ */
+
+static void
+vng_init(struct mac_policy_conf *mpc)
+{
+	llock_grp = lck_grp_alloc_init(mpc->mpc_name, LCK_GRP_ATTR_NULL);
+	lck_rw_init(&llock, llock_grp, LCK_ATTR_NULL);
+}
+
+SECURITY_READ_ONLY_EARLY(static struct mac_policy_ops) vng_policy_ops = {
+	.mpo_file_label_destroy = vng_file_label_destroy,
+
+	.mpo_vnode_check_link = vng_vnode_check_link,
+	.mpo_vnode_check_unlink = vng_vnode_check_unlink,
+	.mpo_vnode_check_rename = vng_vnode_check_rename,
+	.mpo_vnode_check_write = vng_vnode_check_write,
+	.mpo_vnode_check_truncate = vng_vnode_check_truncate,
+	.mpo_vnode_check_exchangedata = vng_vnode_check_exchangedata,
+
+	.mpo_policy_syscall = vng_policy_syscall,
+	.mpo_policy_init = vng_init,
+};
+
+static const char *vng_labelnames[] = {
+	"vnguard",
+};
+
+#define ACOUNT(arr) ((unsigned)(sizeof (arr) / sizeof (arr[0])))
+
+SECURITY_READ_ONLY_LATE(static struct mac_policy_conf) vng_policy_conf = {
+	.mpc_name = VNG_POLICY_NAME,
+	.mpc_fullname = "Guarded vnode policy",
+	.mpc_field_off = &label_slot,
+	.mpc_labelnames = vng_labelnames,
+	.mpc_labelname_count = ACOUNT(vng_labelnames),
+	.mpc_ops = &vng_policy_ops,
+	.mpc_loadtime_flags = 0,
+	.mpc_runtime_flags = 0
+};
+
+static mac_policy_handle_t vng_policy_handle;
+
+void
+vnguard_policy_init(void)
+{
+	if (0 == PE_i_can_has_debugger(NULL))
+		return;
+	vng_policy_flags = kVNG_POLICY_LOGMSG | kVNG_POLICY_EXC_CORPSE;
+	PE_parse_boot_argn("vnguard", &vng_policy_flags, sizeof (vng_policy_flags));
+	if (vng_policy_flags)
+		mac_policy_register(&vng_policy_conf, &vng_policy_handle, NULL);
+}
+
+#if DEBUG || DEVELOPMENT
+#include <sys/sysctl.h>
+
+SYSCTL_DECL(_kern_vnguard);
+SYSCTL_NODE(_kern, OID_AUTO, vnguard, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "vnguard");
+SYSCTL_INT(_kern_vnguard, OID_AUTO, flags, CTLFLAG_RW | CTLFLAG_LOCKED,
+	   &vng_policy_flags, 0, "vnguard policy flags");
+#endif
+
+#endif /* CONFIG_MACF && CONFIG_VNGUARD */

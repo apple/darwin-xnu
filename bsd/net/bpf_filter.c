@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -100,106 +100,189 @@
 #endif
 #include <net/bpf.h>
 #ifdef KERNEL
-#define MINDEX(m, k) \
-{ \
-	unsigned int len = m->m_len; \
- \
-	while (k >= len) { \
-		k -= len; \
-		m = m->m_next; \
-		if (m == 0) \
-			return 0; \
-		len = m->m_len; \
-	} \
-}
 
 extern unsigned int bpf_maxbufsize;
 
-static u_int16_t	m_xhalf(struct mbuf *m, bpf_u_int32 k, int *err);
-static u_int32_t	m_xword(struct mbuf *m, bpf_u_int32 k, int *err);
+static inline u_int32_t
+get_word_from_buffers(u_char * cp, u_char * np, int num_from_cp)
+{
+	u_int32_t	val;
+
+	switch (num_from_cp) {
+	case 1:
+		val = ((u_int32_t)cp[0] << 24) |
+			((u_int32_t)np[0] << 16) |
+			((u_int32_t)np[1] << 8)  |
+			(u_int32_t)np[2];
+		break;
+
+	case 2:
+		val = ((u_int32_t)cp[0] << 24) |
+			((u_int32_t)cp[1] << 16) |
+			((u_int32_t)np[0] << 8) |
+			(u_int32_t)np[1];
+		break;
+	default:
+		val = ((u_int32_t)cp[0] << 24) |
+			((u_int32_t)cp[1] << 16) |
+			((u_int32_t)cp[2] << 8) |
+			(u_int32_t)np[0];
+		break;
+	}
+	return (val);
+}
+
+static u_char *
+m_hdr_offset(struct mbuf **m_p, void * hdr, size_t hdrlen, bpf_u_int32 * k_p,
+    size_t * len_p)
+{
+	u_char	*cp;
+	bpf_u_int32 k = *k_p;
+	size_t len;
+
+	if (k >= hdrlen) {
+		struct mbuf *m = *m_p;
+
+		/* there's no header or the offset we want is past the header */
+		k -= hdrlen;
+		len = m->m_len;
+		while (k >= len) {
+			k -= len;
+			m = m->m_next;
+			if (m == NULL)
+				return (NULL);
+			len = m->m_len;
+		}
+		cp = mtod(m, u_char *) + k;
+
+		/* return next mbuf, in case it's needed */
+		*m_p = m->m_next;
+
+		/* update the offset */
+		*k_p = k;
+	} else {
+		len = hdrlen;
+		cp = (u_char *)hdr + k;
+	}
+	*len_p = len;
+	return (cp);
+}
 
 static u_int32_t
-m_xword(struct mbuf *m, bpf_u_int32 k, int *err)
+m_xword(struct mbuf *m, void * hdr, size_t hdrlen, bpf_u_int32 k, int *err)
 {
 	size_t len;
 	u_char *cp, *np;
-	struct mbuf *m0;
 
-	len = m->m_len;
-	while (k >= len) {
-		k -= len;
-		m = m->m_next;
-		if (m == 0)
-			goto bad;
-		len = m->m_len;
-	}
-	cp = mtod(m, u_char *) + k;
+	cp = m_hdr_offset(&m, hdr, hdrlen, &k, &len);
+	if (cp == NULL)
+		goto bad;
 	if (len - k >= 4) {
 		*err = 0;
 		return EXTRACT_LONG(cp);
 	}
-	m0 = m->m_next;
-	if (m0 == 0 || m0->m_len + len - k < 4)
+	if (m == 0 || m->m_len + len - k < 4)
 		goto bad;
 	*err = 0;
-	np = mtod(m0, u_char *);
-	switch (len - k) {
+	np = mtod(m, u_char *);
+	return get_word_from_buffers(cp, np, len - k);
 
-	case 1:
-		return
-		    ((u_int32_t)cp[0] << 24) |
-		    ((u_int32_t)np[0] << 16) |
-		    ((u_int32_t)np[1] << 8)  |
-		    (u_int32_t)np[2];
-
-	case 2:
-		return
-		    ((u_int32_t)cp[0] << 24) |
-		    ((u_int32_t)cp[1] << 16) |
-		    ((u_int32_t)np[0] << 8) |
-		    (u_int32_t)np[1];
-
-	default:
-		return
-		    ((u_int32_t)cp[0] << 24) |
-		    ((u_int32_t)cp[1] << 16) |
-		    ((u_int32_t)cp[2] << 8) |
-		    (u_int32_t)np[0];
-	}
     bad:
 	*err = 1;
 	return 0;
 }
 
 static u_int16_t
-m_xhalf(struct mbuf *m, bpf_u_int32 k, int *err)
+m_xhalf(struct mbuf *m, void * hdr, size_t hdrlen, bpf_u_int32 k, int *err)
 {
 	size_t len;
 	u_char *cp;
-	struct mbuf *m0;
 
-	len = m->m_len;
-	while (k >= len) {
-		k -= len;
-		m = m->m_next;
-		if (m == 0)
-			goto bad;
-		len = m->m_len;
-	}
-	cp = mtod(m, u_char *) + k;
+	cp = m_hdr_offset(&m, hdr, hdrlen, &k, &len);
+	if (cp == NULL)
+		goto bad;
 	if (len - k >= 2) {
 		*err = 0;
 		return EXTRACT_SHORT(cp);
 	}
-	m0 = m->m_next;
-	if (m0 == 0)
+	if (m == 0)
 		goto bad;
 	*err = 0;
-	return (cp[0] << 8) | mtod(m0, u_char *)[0];
+	return (cp[0] << 8) | mtod(m, u_char *)[0];
  bad:
 	*err = 1;
 	return 0;
 }
+
+static u_int8_t
+m_xbyte(struct mbuf *m, void * hdr, size_t hdrlen, bpf_u_int32 k, int *err)
+{
+	size_t len;
+	u_char *cp;
+
+	cp = m_hdr_offset(&m, hdr, hdrlen, &k, &len);
+	if (cp == NULL)
+		goto bad;
+	*err = 0;
+	return (*cp);
+ bad:
+	*err = 1;
+	return 0;
+
+}
+
+
+static u_int32_t
+bp_xword(struct bpf_packet *bp, bpf_u_int32 k, int *err)
+{
+	void * 	hdr = bp->bpfp_header;
+	size_t	hdrlen = bp->bpfp_header_length;
+
+	switch (bp->bpfp_type) {
+	case BPF_PACKET_TYPE_MBUF:
+		return m_xword(bp->bpfp_mbuf, hdr, hdrlen, k, err);
+	default:
+		break;
+	}
+	*err = 1;
+	return 0;
+
+}
+
+static u_int16_t
+bp_xhalf(struct bpf_packet *bp, bpf_u_int32 k, int *err)
+{
+	void * 	hdr = bp->bpfp_header;
+	size_t	hdrlen = bp->bpfp_header_length;
+
+	switch (bp->bpfp_type) {
+	case BPF_PACKET_TYPE_MBUF:
+		return m_xhalf(bp->bpfp_mbuf, hdr, hdrlen, k, err);
+	default:
+		break;
+	}
+	*err = 1;
+	return 0;
+
+}
+
+static u_int8_t
+bp_xbyte(struct bpf_packet *bp, bpf_u_int32 k, int *err)
+{
+	void * 	hdr = bp->bpfp_header;
+	size_t	hdrlen = bp->bpfp_header_length;
+
+	switch (bp->bpfp_type) {
+	case BPF_PACKET_TYPE_MBUF:
+		return m_xbyte(bp->bpfp_mbuf, hdr, hdrlen, k, err);
+	default:
+		break;
+	}
+	*err = 1;
+	return 0;
+
+}
+
 #endif
 
 /*
@@ -213,6 +296,10 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 	u_int32_t A = 0, X = 0;
 	bpf_u_int32 k;
 	int32_t mem[BPF_MEMWORDS];
+#ifdef KERNEL
+	int merr;
+	struct bpf_packet * bp = (struct bpf_packet *)(void *)p;
+#endif /* KERNEL */
 
 	bzero(mem, sizeof(mem));
 
@@ -230,9 +317,9 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 		default:
 #ifdef KERNEL
 			return 0;
-#else
+#else /* KERNEL */
 			abort();
-#endif
+#endif /* KERNEL */
 		case BPF_RET|BPF_K:
 			return (u_int)pc->k;
 
@@ -243,23 +330,21 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			k = pc->k;
 			if (k > buflen || sizeof(int32_t) > buflen - k) {
 #ifdef KERNEL
-				int merr;
-
 				if (buflen != 0)
 					return 0;
-				A = m_xword((struct mbuf *)(void *)p, k, &merr);
+				A = bp_xword(bp, k, &merr);
 				if (merr != 0)
 					return 0;
 				continue;
-#else
+#else /* KERNEL */
 				return 0;
-#endif
+#endif /* KERNEL */
 			}
 #if BPF_ALIGN
 			if (((intptr_t)(p + k) & 3) != 0)
 				A = EXTRACT_LONG(&p[k]);
 			else
-#endif
+#endif /* BPF_ALIGN */
 				A = ntohl(*(int32_t *)(void *)(p + k));
 			continue;
 
@@ -267,15 +352,15 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			k = pc->k;
 			if (k > buflen || sizeof(int16_t) > buflen - k) {
 #ifdef KERNEL
-				int merr;
-
 				if (buflen != 0)
 					return 0;
-				A = m_xhalf((struct mbuf *)(void *)p, k, &merr);
+				A = bp_xhalf(bp, k, &merr);
+				if (merr != 0)
+					return 0;
 				continue;
-#else
+#else /* KERNEL */
 				return 0;
-#endif
+#endif /* KERNEL */
 			}
 			A = EXTRACT_SHORT(&p[k]);
 			continue;
@@ -284,17 +369,15 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			k = pc->k;
 			if (k >= buflen) {
 #ifdef KERNEL
-				struct mbuf *m;
-
 				if (buflen != 0)
 					return 0;
-				m = (struct mbuf *)(void *)p;
-				MINDEX(m, k);
-				A = mtod(m, u_char *)[k];
+				A = bp_xbyte(bp, k, &merr);
+				if (merr != 0)
+					return 0;
 				continue;
-#else
+#else /* KERNEL */
 				return 0;
-#endif
+#endif /* KERNEL */
 			}
 			A = p[k];
 			continue;
@@ -312,23 +395,21 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			if (pc->k > buflen || X > buflen - pc->k ||
 			    sizeof(int32_t) > buflen - k) {
 #ifdef KERNEL
-				int merr;
-
 				if (buflen != 0)
 					return 0;
-				A = m_xword((struct mbuf *)(void *)p, k, &merr);
+				A = bp_xword(bp, k, &merr);
 				if (merr != 0)
 					return 0;
 				continue;
-#else
+#else /* KERNEL */
 				return 0;
-#endif
+#endif /* KERNEL */
 			}
 #if BPF_ALIGN
 			if (((intptr_t)(p + k) & 3) != 0)
 				A = EXTRACT_LONG(&p[k]);
 			else
-#endif
+#endif /* BPF_ALIGN */
 				A = ntohl(*(int32_t *)(void *)(p + k));
 			continue;
 
@@ -337,17 +418,15 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			if (X > buflen || pc->k > buflen - X ||
 			    sizeof(int16_t) > buflen - k) {
 #ifdef KERNEL
-				int merr;
-
 				if (buflen != 0)
 					return 0;
-				A = m_xhalf((struct mbuf *)(void *)p, k, &merr);
+				A = bp_xhalf(bp, k, &merr);
 				if (merr != 0)
 					return 0;
 				continue;
-#else
+#else /* KERNEL */
 				return 0;
-#endif
+#endif /* KERNEL */
 			}
 			A = EXTRACT_SHORT(&p[k]);
 			continue;
@@ -356,17 +435,15 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			k = X + pc->k;
 			if (pc->k >= buflen || X >= buflen - pc->k) {
 #ifdef KERNEL
-				struct mbuf *m;
-
 				if (buflen != 0)
 					return 0;
-				m = (struct mbuf *)(void *)p;
-				MINDEX(m, k);
-				A = mtod(m, u_char *)[k];
+				A = bp_xbyte(bp, k, &merr);
+				if (merr != 0)
+					return 0;
 				continue;
-#else
+#else /* KERNEL */
 				return 0;
-#endif
+#endif /* KERNEL */
 			}
 			A = p[k];
 			continue;
@@ -375,13 +452,12 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 			k = pc->k;
 			if (k >= buflen) {
 #ifdef KERNEL
-				struct mbuf *m;
-
 				if (buflen != 0)
 					return 0;
-				m = (struct mbuf *)(void *)p;
-				MINDEX(m, k);
-				X = (mtod(m, u_char *)[k] & 0xf) << 2;
+				X = bp_xbyte(bp, k, &merr);
+				if (merr != 0)
+					return 0;
+				X = (X & 0xf) << 2;
 				continue;
 #else
 				return 0;

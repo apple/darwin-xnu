@@ -757,7 +757,7 @@ div_unlock(struct socket *so, int refcount, void *lr)
 		lck_rw_done(divcbinfo.ipi_lock);
 		return (0);
 	}
-	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
 	so->unlock_lr[so->next_unlock_lr] = lr_saved;
 	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 	lck_mtx_unlock(mutex_held);
@@ -765,17 +765,17 @@ div_unlock(struct socket *so, int refcount, void *lr)
 }
 
 __private_extern__ lck_mtx_t *
-div_getlock(struct socket *so, __unused int locktype)
+div_getlock(struct socket *so, __unused int flags)
 {
 	struct inpcb *inpcb = (struct inpcb *)so->so_pcb;
-	
+
 	if (so->so_pcb)  {
 		if (so->so_usecount < 0)
-			panic("div_getlock: so=%p usecount=%x lrh= %s\n", 
+			panic("div_getlock: so=%p usecount=%x lrh= %s\n",
 			    so, so->so_usecount, solockhistory_nr(so));
 		return(&inpcb->inpcb_mtx);
 	} else {
-		panic("div_getlock: so=%p NULL NO PCB lrh= %s\n", 
+		panic("div_getlock: so=%p NULL NO PCB lrh= %s\n",
 		    so, solockhistory_nr(so));
 		return (so->so_proto->pr_domain->dom_mtx);
 	}

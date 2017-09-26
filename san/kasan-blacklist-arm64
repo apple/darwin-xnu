@@ -1,0 +1,10 @@
+# ARM64 specific blacklist
+
+# Exclude KASan runtime
+src:./san/kasan-arm64.c
+
+# Uses a local to work out if we're on the interrupt stack, but ends up with a
+# fakestack allocation
+fun:ml_at_interrupt_context
+
+

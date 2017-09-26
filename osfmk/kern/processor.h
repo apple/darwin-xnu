@@ -82,15 +82,23 @@
 #include <mach/sfi_class.h>
 #include <kern/processor_data.h>
 
+typedef enum {
+	PSET_SMP,
+} pset_cluster_type_t;
+
 struct processor_set {
 	queue_head_t		active_queue;	/* active processors */
 	queue_head_t		idle_queue;		/* idle processors */
-	queue_head_t		idle_secondary_queue;		/* idle secondary processors */
+	queue_head_t		idle_secondary_queue;	/* idle secondary processors */
+	queue_head_t		unused_queue;		/* processors not recommended by CLPC */
 
 	int					online_processor_count;
+	int					active_processor_count;
+	int					load_average;
 
 	int					cpu_set_low, cpu_set_hi;
 	int					cpu_set_count;
+	uint64_t				cpu_bitmask;
 	uint64_t				recommended_bitmask;
 
 #if __SMP__
@@ -100,6 +108,7 @@ struct processor_set {
 #if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_MULTIQ)
 	struct run_queue	pset_runq;      /* runq for this processor set */
 #endif
+	struct rt_queue		rt_runq;	/* realtime runq for this processor set */
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
 	int					pset_runq_bound_count;
@@ -110,7 +119,7 @@ struct processor_set {
 	uint64_t			pending_AST_cpu_mask;
 #if defined(CONFIG_SCHED_DEFERRED_AST)
 	/*
-	 * A seperate mask, for ASTs that we may be able to cancel.  This is dependent on
+	 * A separate mask, for ASTs that we may be able to cancel.  This is dependent on
 	 * some level of support for requesting an AST on a processor, and then quashing
 	 * that request later.
 	 *
@@ -122,12 +131,15 @@ struct processor_set {
 	 */
 	uint64_t			pending_deferred_AST_cpu_mask;
 #endif
+	uint64_t			pending_spill_cpu_mask;
 
 	struct ipc_port	*	pset_self;		/* port for operations */
 	struct ipc_port *	pset_name_self;	/* port for information */
 
 	processor_set_t		pset_list;		/* chain of associated psets */
-	pset_node_t			node;
+	pset_node_t		node;
+	uint32_t		pset_cluster_id;
+	pset_cluster_type_t	pset_cluster_type;
 };
 
 extern struct processor_set	pset0;
@@ -161,11 +173,12 @@ struct processor {
 
 	processor_set_t		processor_set;	/* assigned set */
 
-	int					current_pri;	/* priority of current thread */
-	sched_mode_t		current_thmode;	/* sched mode of current thread */
+	int			current_pri;	/* priority of current thread */
 	sfi_class_id_t		current_sfi_class;	/* SFI class of current thread */
+	perfcontrol_class_t	current_perfctl_class;	/* Perfcontrol class for current thread */
 	int                     starting_pri;       /* priority of current thread as it was when scheduled */
-	int					cpu_id;			/* platform numeric id */
+	pset_cluster_type_t	current_recommended_pset_type;	/* Cluster type recommended for current thread */
+	int			cpu_id;			/* platform numeric id */
 
 	timer_call_data_t	quantum_timer;	/* timer for quantum expiration */
 	uint64_t			quantum_end;	/* time when current quantum ends */
@@ -196,8 +209,10 @@ struct processor {
 };
 
 extern processor_t		processor_list;
-extern unsigned int		processor_count;
 decl_simple_lock_data(extern,processor_list_lock)
+
+#define MAX_SCHED_CPUS          64 /* Maximum number of CPUs supported by the scheduler.  bits.h:bitmap_*() macros need to be used to support greater than 64 */
+extern processor_t              processor_array[MAX_SCHED_CPUS]; /* array indexed by cpuid */
 
 extern uint32_t			processor_avail_count;
 
@@ -268,10 +283,18 @@ extern processor_t	current_processor(void);
 #define pset_lock(p)			simple_lock(&(p)->sched_lock)
 #define pset_unlock(p)			simple_unlock(&(p)->sched_lock)
 #define pset_lock_init(p)		simple_lock_init(&(p)->sched_lock, 0)
+
+#define rt_lock_lock(p)			simple_lock(&SCHED(rt_runq)(p)->rt_lock)
+#define rt_lock_unlock(p)		simple_unlock(&SCHED(rt_runq)(p)->rt_lock)
+#define rt_lock_init(p)			simple_lock_init(&SCHED(rt_runq)(p)->rt_lock, 0)
 #else
 #define pset_lock(p)			do { (void)p; } while(0)
 #define pset_unlock(p)			do { (void)p; } while(0)
 #define pset_lock_init(p)		do { (void)p; } while(0)
+
+#define rt_lock_lock(p)			do { (void)p; } while(0)
+#define rt_lock_unlock(p)		do { (void)p; } while(0)
+#define rt_lock_init(p)			do { (void)p; } while(0)
 #endif
 
 extern void		processor_bootstrap(void);
@@ -303,6 +326,10 @@ extern void		pset_init(
 					processor_set_t		pset,
 					pset_node_t			node);
 
+extern processor_set_t pset_find(
+					uint32_t cluster_id,
+					processor_set_t default_pset);
+
 extern kern_return_t	processor_info_count(
 							processor_flavor_t		flavor,
 							mach_msg_type_number_t	*count);
@@ -328,6 +355,20 @@ extern kern_return_t	processor_set_things(
 			mach_msg_type_number_t *count,
 			int type);
 
+extern pset_cluster_type_t recommended_pset_type(thread_t thread);
+
+inline static bool
+pset_is_recommended(processor_set_t pset)
+{
+	return ((pset->recommended_bitmask & pset->cpu_bitmask) != 0);
+}
+
+extern void processor_state_update_idle(processor_t processor);
+extern void processor_state_update_from_thread(processor_t processor, thread_t thread);
+extern void processor_state_update_explicit(processor_t processor, int pri,
+	sfi_class_id_t sfi_class, pset_cluster_type_t pset_type, 
+	perfcontrol_class_t perfctl_class);
+
 #else	/* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -344,6 +385,7 @@ __END_DECLS
 
 #ifdef KERNEL_PRIVATE
 __BEGIN_DECLS
+extern unsigned int		processor_count;
 extern processor_t	cpu_to_processor(int cpu);
 __END_DECLS
 

@@ -104,6 +104,10 @@
 #define	TCPS_HAVERCVDSYN(s)	((s) >= TCPS_SYN_RECEIVED)
 #define	TCPS_HAVEESTABLISHED(s)	((s) >= TCPS_ESTABLISHED)
 #define	TCPS_HAVERCVDFIN(s)	((s) >= TCPS_TIME_WAIT)
+#define	TCPS_HAVERCVDFIN2(s)	((s) == TCPS_CLOSE_WAIT ||			\
+				 (s) == TCPS_CLOSING ||				\
+				 (s) == TCPS_LAST_ACK ||			\
+				 (s) == TCPS_TIME_WAIT)
 
 #ifdef KERNEL_PRIVATE
 #ifdef	TCPOUTFLAGS

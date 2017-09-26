@@ -229,7 +229,11 @@ __BEGIN_DECLS
 void	closelog(void);
 void	openlog(const char *, int, int);
 int	setlogmask(int);
+#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __DARWIN_C_LEVEL >= __DARWIN_C_FULL
+void	syslog(int, const char *, ...) __printflike(2, 3) __not_tail_called __DARWIN_ALIAS_STARTING(__MAC_10_13, __IPHONE_NA, __DARWIN_EXTSN(syslog));
+#else
 void	syslog(int, const char *, ...) __printflike(2, 3) __not_tail_called;
+#endif
 #if __DARWIN_C_LEVEL >= __DARWIN_C_FULL
 void	vsyslog(int, const char *, __darwin_va_list) __printflike(2, 0) __not_tail_called;
 #endif
@@ -323,7 +327,7 @@ __BEGIN_DECLS
 void	log(int, const char *, ...);
 #ifdef XNU_KERNEL_PRIVATE
 void	logpri(int);
-int	vaddlog(const char *, va_list);
+int	vaddlog(const char *, va_list) __printflike(1,0);
 void	logtime(time_t);
 #endif /* XNU_KERNEL_PRIVATE */
 

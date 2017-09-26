@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -51,14 +51,26 @@ extern "C" {
 #include <libkern/libkern.h>
 
 /* flags for pktsched_setup */
-#define	PKTSCHEDF_QALG_RED	0x1	/* use RED */
-#define	PKTSCHEDF_QALG_RIO	0x2	/* use RIO */
-#define	PKTSCHEDF_QALG_BLUE	0x4	/* use BLUE */
-#define	PKTSCHEDF_QALG_SFB	0x8	/* use SFB */
-#define	PKTSCHEDF_QALG_ECN	0x10	/* enable ECN */
-#define	PKTSCHEDF_QALG_FLOWCTL	0x20	/* enable flow control advisories */
-#define	PKTSCHEDF_QALG_DELAYBASED	0x40	/* Delay based queueing */
-#define	PKTSCHEDF_QALG_FQ_CODEL	0x80	/* Flow queueing with Codel */
+#define	PKTSCHEDF_QALG_SFB	0x01	/* use SFB */
+#define	PKTSCHEDF_QALG_ECN	0x02	/* enable ECN */
+#define	PKTSCHEDF_QALG_FLOWCTL	0x04	/* enable flow control advisories */
+#define	PKTSCHEDF_QALG_DELAYBASED	0x08	/* Delay based queueing */
+#define	PKTSCHEDF_QALG_DRIVER_MANAGED	0x10	/* driver managed */
+
+typedef struct _pktsched_pkt_ {
+	classq_pkt_type_t	__ptype;
+	uint32_t		__plen;
+	void			*__pkt;
+#define	pktsched_ptype	__ptype
+#define	pktsched_plen	__plen
+#define	pktsched_pkt	__pkt
+} pktsched_pkt_t;
+
+#define	_PKTSCHED_PKT_INIT(_p)	do {		\
+	(_p)->pktsched_ptype = QP_INVALID;	\
+	(_p)->pktsched_plen = 0;		\
+	(_p)->pktsched_pkt = NULL;		\
+} while (0)
 
 /* macro for timeout/untimeout */
 /* use old-style timeout/untimeout */
@@ -144,12 +156,22 @@ SYSCTL_DECL(_net_pktsched);
 struct if_ifclassq_stats;
 
 extern void pktsched_init(void);
-extern int pktsched_setup(struct ifclassq *, u_int32_t, u_int32_t);
+extern int pktsched_setup(struct ifclassq *, u_int32_t, u_int32_t,
+    classq_pkt_type_t);
 extern int pktsched_teardown(struct ifclassq *);
 extern int pktsched_getqstats(struct ifclassq *, u_int32_t,
     struct if_ifclassq_stats *);
 extern u_int64_t pktsched_abs_to_nsecs(u_int64_t);
 extern u_int64_t pktsched_nsecs_to_abstime(u_int64_t);
+extern void pktsched_free_pkt(pktsched_pkt_t *);
+extern uint32_t pktsched_get_pkt_len(pktsched_pkt_t *);
+extern void pktsched_get_pkt_vars(pktsched_pkt_t *, uint32_t **, uint64_t **,
+    uint32_t *, uint8_t *, uint8_t *, uint32_t *);
+extern uint32_t *pktsched_get_pkt_sfb_vars(pktsched_pkt_t *, uint32_t **);
+extern void pktsched_pkt_encap(pktsched_pkt_t *, classq_pkt_type_t, void *);
+extern mbuf_svc_class_t pktsched_get_pkt_svc(pktsched_pkt_t *);
+extern struct flowadv_fcentry *pktsched_alloc_fcentry(pktsched_pkt_t *,
+    struct ifnet *, int);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef __cplusplus

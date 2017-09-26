@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -80,6 +80,7 @@
 
 #include <net/if.h>
 #include <net/if_dl.h>
+#include <net/net_api_stats.h>
 #include <net/route.h>
 
 #include <netinet/in.h>
@@ -88,17 +89,6 @@
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
 #include <netinet/igmp_var.h>
-
-#ifndef __SOCKUNION_DECLARED
-union sockunion {
-	struct sockaddr_storage	ss;
-	struct sockaddr		sa;
-	struct sockaddr_dl	sdl;
-	struct sockaddr_in	sin;
-};
-typedef union sockunion sockunion_t;
-#define __SOCKUNION_DECLARED
-#endif /* __SOCKUNION_DECLARED */
 
 /*
  * Functions with non-static linkage defined in this file should be
@@ -128,10 +118,10 @@ static void	imf_rollback(struct in_mfilter *);
 static void	imf_reap(struct in_mfilter *);
 static int	imo_grow(struct ip_moptions *, size_t);
 static size_t	imo_match_group(const struct ip_moptions *,
-		    const struct ifnet *, const struct sockaddr *);
+		    const struct ifnet *, const struct sockaddr_in *);
 static struct in_msource *
 		imo_match_source(const struct ip_moptions *, const size_t,
-		    const struct sockaddr *);
+		    const struct sockaddr_in *);
 static void	ims_merge(struct ip_msource *ims,
 		    const struct in_msource *lims, const int rollback);
 static int	in_getmulti(struct ifnet *, const struct in_addr *,
@@ -335,16 +325,14 @@ imo_grow(struct ip_moptions *imo, size_t newmax)
  */
 static size_t
 imo_match_group(const struct ip_moptions *imo, const struct ifnet *ifp,
-    const struct sockaddr *group)
+    const struct sockaddr_in *group)
 {
-	const struct sockaddr_in *gsin;
 	struct in_multi	*pinm;
 	int		  idx;
 	int		  nmships;
 
 	IMO_LOCK_ASSERT_HELD(__DECONST(struct ip_moptions *, imo));
 
-	gsin = (struct sockaddr_in *)(uintptr_t)(size_t)group;
 
 	/* The imo_membership array may be lazy allocated. */
 	if (imo->imo_membership == NULL || imo->imo_num_memberships == 0)
@@ -357,7 +345,7 @@ imo_match_group(const struct ip_moptions *imo, const struct ifnet *ifp,
 			continue;
 		INM_LOCK(pinm);
 		if ((ifp == NULL || (pinm->inm_ifp == ifp)) &&
-		    in_hosteq(pinm->inm_addr, gsin->sin_addr)) {
+		    in_hosteq(pinm->inm_addr, group->sin_addr)) {
 			INM_UNLOCK(pinm);
 			break;
 		}
@@ -378,16 +366,15 @@ imo_match_group(const struct ip_moptions *imo, const struct ifnet *ifp,
  */
 static struct in_msource *
 imo_match_source(const struct ip_moptions *imo, const size_t gidx,
-    const struct sockaddr *src)
+    const struct sockaddr_in *src)
 {
 	struct ip_msource	 find;
 	struct in_mfilter	*imf;
 	struct ip_msource	*ims;
-	const sockunion_t	*psa;
 
 	IMO_LOCK_ASSERT_HELD(__DECONST(struct ip_moptions *, imo));
 
-	VERIFY(src->sa_family == AF_INET);
+	VERIFY(src->sin_family == AF_INET);
 	VERIFY(gidx != (size_t)-1 && gidx < imo->imo_num_memberships);
 
 	/* The imo_mfilters array may be lazy allocated. */
@@ -396,8 +383,7 @@ imo_match_source(const struct ip_moptions *imo, const size_t gidx,
 	imf = &imo->imo_mfilters[gidx];
 
 	/* Source trees are keyed in host byte order. */
-	psa = (sockunion_t *)(uintptr_t)(size_t)src;
-	find.ims_haddr = ntohl(psa->sin.sin_addr.s_addr);
+	find.ims_haddr = ntohl(src->sin_addr.s_addr);
 	ims = RB_FIND(ip_msource_tree, &imf->imf_sources, &find);
 
 	return ((struct in_msource *)ims);
@@ -411,7 +397,7 @@ imo_match_source(const struct ip_moptions *imo, const size_t gidx,
  */
 int
 imo_multi_filter(const struct ip_moptions *imo, const struct ifnet *ifp,
-    const struct sockaddr *group, const struct sockaddr *src)
+    const struct sockaddr_in *group, const struct sockaddr_in *src)
 {
 	size_t gidx;
 	struct in_msource *ims;
@@ -1077,7 +1063,7 @@ ims_merge(struct ip_msource *ims, const struct in_msource *lims,
 static int
 inm_merge(struct in_multi *inm, /*const*/ struct in_mfilter *imf)
 {
-	struct ip_msource	*ims, *nims;
+	struct ip_msource	*ims, *nims = NULL;
 	struct in_msource	*lims;
 	int			 schanged, error;
 	int			 nsrc0, nsrc1;
@@ -1455,7 +1441,7 @@ static int
 inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 {
 	struct group_source_req		 gsr;
-	sockunion_t			*gsa, *ssa;
+	struct sockaddr_in 		*gsa, *ssa;
 	struct ifnet			*ifp;
 	struct in_mfilter		*imf;
 	struct ip_moptions		*imo;
@@ -1473,8 +1459,8 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	doblock = 0;
 
 	memset(&gsr, 0, sizeof(struct group_source_req));
-	gsa = (sockunion_t *)&gsr.gsr_group;
-	ssa = (sockunion_t *)&gsr.gsr_source;
+	gsa = (struct sockaddr_in *)&gsr.gsr_group;
+	ssa = (struct sockaddr_in *)&gsr.gsr_source;
 
 	switch (sopt->sopt_name) {
 	case IP_BLOCK_SOURCE:
@@ -1487,13 +1473,13 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 
-		gsa->sin.sin_family = AF_INET;
-		gsa->sin.sin_len = sizeof(struct sockaddr_in);
-		gsa->sin.sin_addr = mreqs.imr_multiaddr;
+		gsa->sin_family = AF_INET;
+		gsa->sin_len = sizeof(struct sockaddr_in);
+		gsa->sin_addr = mreqs.imr_multiaddr;
 
-		ssa->sin.sin_family = AF_INET;
-		ssa->sin.sin_len = sizeof(struct sockaddr_in);
-		ssa->sin.sin_addr = mreqs.imr_sourceaddr;
+		ssa->sin_family = AF_INET;
+		ssa->sin_len = sizeof(struct sockaddr_in);
+		ssa->sin_addr = mreqs.imr_sourceaddr;
 
 		if (!in_nullhost(mreqs.imr_interface))
 			ifp = ip_multicast_if(&mreqs.imr_interface, &ifindex);
@@ -1515,12 +1501,12 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 
-		if (gsa->sin.sin_family != AF_INET ||
-		    gsa->sin.sin_len != sizeof(struct sockaddr_in))
+		if (gsa->sin_family != AF_INET ||
+		    gsa->sin_len != sizeof(struct sockaddr_in))
 			return (EINVAL);
 
-		if (ssa->sin.sin_family != AF_INET ||
-		    ssa->sin.sin_len != sizeof(struct sockaddr_in))
+		if (ssa->sin_family != AF_INET ||
+		    ssa->sin_len != sizeof(struct sockaddr_in))
 			return (EINVAL);
 
 		ifnet_head_lock_shared();
@@ -1546,7 +1532,7 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 		return (EOPNOTSUPP);
 	}
 
-	if (!IN_MULTICAST(ntohl(gsa->sin.sin_addr.s_addr)))
+	if (!IN_MULTICAST(ntohl(gsa->sin_addr.s_addr)))
 		return (EINVAL);
 
 	/*
@@ -1557,7 +1543,7 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 		return (ENOMEM);
 
 	IMO_LOCK(imo);
-	idx = imo_match_group(imo, ifp, &gsa->sa);
+	idx = imo_match_group(imo, ifp, gsa);
 	if (idx == (size_t)-1 || imo->imo_mfilters == NULL) {
 		error = EADDRNOTAVAIL;
 		goto out_imo_locked;
@@ -1583,9 +1569,9 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	 *  Asked to unblock, but nothing to unblock.
 	 * If adding a new block entry, allocate it.
 	 */
-	ims = imo_match_source(imo, idx, &ssa->sa);
+	ims = imo_match_source(imo, idx, ssa);
 	if ((ims != NULL && doblock) || (ims == NULL && !doblock)) {
-		IGMP_INET_PRINTF(ssa->sin.sin_addr,
+		IGMP_INET_PRINTF(ssa->sin_addr,
 		    ("%s: source %s %spresent\n", __func__,
 		    _igmp_inet_buf, doblock ? "" : "not "));
 		error = EADDRNOTAVAIL;
@@ -1597,12 +1583,12 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	 */
 	if (doblock) {
 		IGMP_PRINTF(("%s: %s source\n", __func__, "block"));
-		ims = imf_graft(imf, fmode, &ssa->sin);
+		ims = imf_graft(imf, fmode, ssa);
 		if (ims == NULL)
 			error = ENOMEM;
 	} else {
 		IGMP_PRINTF(("%s: %s source\n", __func__, "allow"));
-		error = imf_prune(imf, &ssa->sin);
+		error = imf_prune(imf, ssa);
 	}
 
 	if (error) {
@@ -1713,7 +1699,7 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 {
 	struct __msfilterreq64	msfr, msfr64;
 	struct __msfilterreq32	msfr32;
-	sockunion_t		*gsa;
+	struct sockaddr_in	*gsa;
 	struct ifnet		*ifp;
 	struct ip_moptions	*imo;
 	struct in_mfilter	*imf;
@@ -1770,8 +1756,9 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	/*
 	 * Lookup group on the socket.
 	 */
-	gsa = (sockunion_t *)&msfr.msfr_group;
-	idx = imo_match_group(imo, ifp, &gsa->sa);
+	gsa = (struct sockaddr_in *)&msfr.msfr_group;
+
+	idx = imo_match_group(imo, ifp, gsa);
 	if (idx == (size_t)-1 || imo->imo_mfilters == NULL) {
 		IMO_UNLOCK(imo);
 		return (EADDRNOTAVAIL);
@@ -2063,7 +2050,7 @@ int
 inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 {
 	struct group_source_req		 gsr;
-	sockunion_t			*gsa, *ssa;
+	struct sockaddr_in		*gsa, *ssa;
 	struct ifnet			*ifp;
 	struct in_mfilter		*imf;
 	struct ip_moptions		*imo;
@@ -2080,10 +2067,10 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 	is_new = 0;
 
 	memset(&gsr, 0, sizeof(struct group_source_req));
-	gsa = (sockunion_t *)&gsr.gsr_group;
-	gsa->ss.ss_family = AF_UNSPEC;
-	ssa = (sockunion_t *)&gsr.gsr_source;
-	ssa->ss.ss_family = AF_UNSPEC;
+	gsa = (struct sockaddr_in *)&gsr.gsr_group;
+	gsa->sin_family = AF_UNSPEC;
+	ssa = (struct sockaddr_in *)&gsr.gsr_source;
+	ssa->sin_family = AF_UNSPEC;
 
 	switch (sopt->sopt_name) {
 	case IP_ADD_MEMBERSHIP:
@@ -2112,21 +2099,20 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 			return (error);
 		}
 
-		gsa->sin.sin_family = AF_INET;
-		gsa->sin.sin_len = sizeof(struct sockaddr_in);
-		gsa->sin.sin_addr = mreqs.imr_multiaddr;
+		gsa->sin_family = AF_INET;
+		gsa->sin_len = sizeof(struct sockaddr_in);
+		gsa->sin_addr = mreqs.imr_multiaddr;
 
 		if (sopt->sopt_name == IP_ADD_SOURCE_MEMBERSHIP) {
-			ssa->sin.sin_family = AF_INET;
-			ssa->sin.sin_len = sizeof(struct sockaddr_in);
-			ssa->sin.sin_addr = mreqs.imr_sourceaddr;
+			ssa->sin_family = AF_INET;
+			ssa->sin_len = sizeof(struct sockaddr_in);
+			ssa->sin_addr = mreqs.imr_sourceaddr;
 		}
 
-		if (!IN_MULTICAST(ntohl(gsa->sin.sin_addr.s_addr)))
+		if (!IN_MULTICAST(ntohl(gsa->sin_addr.s_addr)))
 			return (EINVAL);
 
-		ifp = inp_lookup_mcast_ifp(inp, &gsa->sin,
-		    mreqs.imr_interface);
+		ifp = inp_lookup_mcast_ifp(inp, gsa, mreqs.imr_interface);
 		IGMP_INET_PRINTF(mreqs.imr_interface,
 		    ("%s: imr_interface = %s, ifp = 0x%llx\n", __func__,
 		    _igmp_inet_buf, (uint64_t)VM_KERNEL_ADDRPERM(ifp)));
@@ -2147,23 +2133,23 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 
-		if (gsa->sin.sin_family != AF_INET ||
-		    gsa->sin.sin_len != sizeof(struct sockaddr_in))
+		if (gsa->sin_family != AF_INET ||
+		    gsa->sin_len != sizeof(struct sockaddr_in))
 			return (EINVAL);
 
 		/*
 		 * Overwrite the port field if present, as the sockaddr
 		 * being copied in may be matched with a binary comparison.
 		 */
-		gsa->sin.sin_port = 0;
+		gsa->sin_port = 0;
 		if (sopt->sopt_name == MCAST_JOIN_SOURCE_GROUP) {
-			if (ssa->sin.sin_family != AF_INET ||
-			    ssa->sin.sin_len != sizeof(struct sockaddr_in))
+			if (ssa->sin_family != AF_INET ||
+			    ssa->sin_len != sizeof(struct sockaddr_in))
 				return (EINVAL);
-			ssa->sin.sin_port = 0;
+			ssa->sin_port = 0;
 		}
 
-		if (!IN_MULTICAST(ntohl(gsa->sin.sin_addr.s_addr)))
+		if (!IN_MULTICAST(ntohl(gsa->sin_addr.s_addr)))
 			return (EINVAL);
 
 		ifnet_head_lock_shared();
@@ -2186,18 +2172,26 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 	if (ifp == NULL || (ifp->if_flags & IFF_MULTICAST) == 0)
 		return (EADDRNOTAVAIL);
 
+	INC_ATOMIC_INT64_LIM(net_api_stats.nas_socket_mcast_join_total);
+	/*
+	 * TBD: revisit the criteria for non-OS initiated joins
+	 */
+	if (inp->inp_lport == htons(5353)) {
+		INC_ATOMIC_INT64_LIM(net_api_stats.nas_socket_mcast_join_os_total);
+	}
+
 	imo = inp_findmoptions(inp);
 	if (imo == NULL)
 		return (ENOMEM);
 
 	IMO_LOCK(imo);
-	idx = imo_match_group(imo, ifp, &gsa->sa);
+	idx = imo_match_group(imo, ifp, gsa);
 	if (idx == (size_t)-1) {
 		is_new = 1;
 	} else {
 		inm = imo->imo_membership[idx];
 		imf = &imo->imo_mfilters[idx];
-		if (ssa->ss.ss_family != AF_UNSPEC) {
+		if (ssa->sin_family != AF_UNSPEC) {
 			/*
 			 * MCAST_JOIN_SOURCE_GROUP on an exclusive membership
 			 * is an error. On an existing inclusive membership,
@@ -2223,7 +2217,7 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 			 * full-state SSM API with the delta-based API,
 			 * which is discouraged in the relevant RFCs.
 			 */
-			lims = imo_match_source(imo, idx, &ssa->sa);
+			lims = imo_match_source(imo, idx, ssa);
 			if (lims != NULL /*&&
 			    lims->imsl_st[1] == MCAST_INCLUDE*/) {
 				error = EADDRNOTAVAIL;
@@ -2281,7 +2275,7 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 	 * been allocated yet if this is a new membership, however,
 	 * the in_mfilter slot will be allocated and must be initialized.
 	 */
-	if (ssa->ss.ss_family != AF_UNSPEC) {
+	if (ssa->sin_family != AF_UNSPEC) {
 		/* Membership starts in IN mode */
 		if (is_new) {
 			IGMP_PRINTF(("%s: new join w/source\n", __func__));
@@ -2289,7 +2283,7 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 		} else {
 			IGMP_PRINTF(("%s: %s source\n", __func__, "allow"));
 		}
-		lims = imf_graft(imf, MCAST_INCLUDE, &ssa->sin);
+		lims = imf_graft(imf, MCAST_INCLUDE, ssa);
 		if (lims == NULL) {
 			IGMP_PRINTF(("%s: merge imf state failed\n",
 			    __func__));
@@ -2319,7 +2313,7 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 		socket_unlock(inp->inp_socket, 0);
 
 		VERIFY(inm == NULL);
-		error = in_joingroup(ifp, &gsa->sin.sin_addr, imf, &inm);
+		error = in_joingroup(ifp, &gsa->sin_addr, imf, &inm);
 
 		socket_lock(inp->inp_socket, 0);
 		IMO_REMREF(imo);
@@ -2388,7 +2382,7 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 {
 	struct group_source_req		 gsr;
 	struct ip_mreq_source		 mreqs;
-	sockunion_t			*gsa, *ssa;
+	struct sockaddr_in 		*gsa, *ssa;
 	struct ifnet			*ifp;
 	struct in_mfilter		*imf;
 	struct ip_moptions		*imo;
@@ -2405,10 +2399,8 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 	is_final = 1;
 
 	memset(&gsr, 0, sizeof(struct group_source_req));
-	gsa = (sockunion_t *)&gsr.gsr_group;
-	gsa->ss.ss_family = AF_UNSPEC;
-	ssa = (sockunion_t *)&gsr.gsr_source;
-	ssa->ss.ss_family = AF_UNSPEC;
+	gsa = (struct sockaddr_in *)&gsr.gsr_group;
+	ssa = (struct sockaddr_in *)&gsr.gsr_source;
 
 	switch (sopt->sopt_name) {
 	case IP_DROP_MEMBERSHIP:
@@ -2432,14 +2424,14 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 
-		gsa->sin.sin_family = AF_INET;
-		gsa->sin.sin_len = sizeof(struct sockaddr_in);
-		gsa->sin.sin_addr = mreqs.imr_multiaddr;
+		gsa->sin_family = AF_INET;
+		gsa->sin_len = sizeof(struct sockaddr_in);
+		gsa->sin_addr = mreqs.imr_multiaddr;
 
 		if (sopt->sopt_name == IP_DROP_SOURCE_MEMBERSHIP) {
-			ssa->sin.sin_family = AF_INET;
-			ssa->sin.sin_len = sizeof(struct sockaddr_in);
-			ssa->sin.sin_addr = mreqs.imr_sourceaddr;
+			ssa->sin_family = AF_INET;
+			ssa->sin_len = sizeof(struct sockaddr_in);
+			ssa->sin_addr = mreqs.imr_sourceaddr;
 		}
 		/*
 		 * Attempt to look up hinted ifp from interface address.
@@ -2471,13 +2463,13 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		if (error)
 			return (error);
 
-		if (gsa->sin.sin_family != AF_INET ||
-		    gsa->sin.sin_len != sizeof(struct sockaddr_in))
+		if (gsa->sin_family != AF_INET ||
+		    gsa->sin_len != sizeof(struct sockaddr_in))
 			return (EINVAL);
 
 		if (sopt->sopt_name == MCAST_LEAVE_SOURCE_GROUP) {
-			if (ssa->sin.sin_family != AF_INET ||
-			    ssa->sin.sin_len != sizeof(struct sockaddr_in))
+			if (ssa->sin_family != AF_INET ||
+			    ssa->sin_len != sizeof(struct sockaddr_in))
 				return (EINVAL);
 		}
 
@@ -2498,7 +2490,7 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		return (EOPNOTSUPP);
 	}
 
-	if (!IN_MULTICAST(ntohl(gsa->sin.sin_addr.s_addr)))
+	if (!IN_MULTICAST(ntohl(gsa->sin_addr.s_addr)))
 		return (EINVAL);
 
 	/*
@@ -2509,7 +2501,7 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		return (ENOMEM);
 
 	IMO_LOCK(imo);
-	idx = imo_match_group(imo, ifp, &gsa->sa);
+	idx = imo_match_group(imo, ifp, gsa);
 	if (idx == (size_t)-1) {
 		error = EADDRNOTAVAIL;
 		goto out_locked;
@@ -2517,7 +2509,7 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 	inm = imo->imo_membership[idx];
 	imf = &imo->imo_mfilters[idx];
 
-	if (ssa->ss.ss_family != AF_UNSPEC) {
+	if (ssa->sin_family != AF_UNSPEC) {
 		IGMP_PRINTF(("%s: opt=%d is_final=0\n", __func__,
 		    sopt->sopt_name));
 		is_final = 0;
@@ -2538,16 +2530,16 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 			error = EADDRNOTAVAIL;
 			goto out_locked;
 		}
-		ims = imo_match_source(imo, idx, &ssa->sa);
+		ims = imo_match_source(imo, idx, ssa);
 		if (ims == NULL) {
-			IGMP_INET_PRINTF(ssa->sin.sin_addr,
+			IGMP_INET_PRINTF(ssa->sin_addr,
 			    ("%s: source %s %spresent\n", __func__,
 			    _igmp_inet_buf, "not "));
 			error = EADDRNOTAVAIL;
 			goto out_locked;
 		}
 		IGMP_PRINTF(("%s: %s source\n", __func__, "block"));
-		error = imf_prune(imf, &ssa->sin);
+		error = imf_prune(imf, ssa);
 		if (error) {
 			IGMP_PRINTF(("%s: merge imf state failed\n",
 			    __func__));
@@ -2647,6 +2639,7 @@ inp_set_multicast_if(struct inpcb *inp, struct sockopt *sopt)
 	int			 error = 0 ;
 	unsigned int		 ifindex = 0;
 
+	bzero(&addr, sizeof(addr));
 	if (sopt->sopt_valsize == sizeof(struct ip_mreqn)) {
 		/*
 		 * An interface index was specified using the
@@ -2728,7 +2721,7 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 {
 	struct __msfilterreq64	 msfr, msfr64;
 	struct __msfilterreq32	 msfr32;
-	sockunion_t		*gsa;
+	struct sockaddr_in	*gsa;
 	struct ifnet		*ifp;
 	struct in_mfilter	*imf;
 	struct ip_moptions	*imo;
@@ -2773,11 +2766,11 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	    msfr.msfr_group.ss_len != sizeof(struct sockaddr_in))
 		return (EINVAL);
 
-	gsa = (sockunion_t *)&msfr.msfr_group;
-	if (!IN_MULTICAST(ntohl(gsa->sin.sin_addr.s_addr)))
+	gsa = (struct sockaddr_in *)&msfr.msfr_group;
+	if (!IN_MULTICAST(ntohl(gsa->sin_addr.s_addr)))
 		return (EINVAL);
 
-	gsa->sin.sin_port = 0;	/* ignore port */
+	gsa->sin_port = 0;	/* ignore port */
 
 	ifnet_head_lock_shared();
 	if (msfr.msfr_ifindex == 0 || (u_int)if_index < msfr.msfr_ifindex) {
@@ -2798,7 +2791,7 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		return (ENOMEM);
 
 	IMO_LOCK(imo);
-	idx = imo_match_group(imo, ifp, &gsa->sa);
+	idx = imo_match_group(imo, ifp, gsa);
 	if (idx == (size_t)-1 || imo->imo_mfilters == NULL) {
 		error = EADDRNOTAVAIL;
 		goto out_imo_locked;
@@ -3571,7 +3564,10 @@ in_multihead_lock_shared(void)
 void
 in_multihead_lock_assert(int what)
 {
-	lck_rw_assert(&in_multihead_lock, what);
+#if !MACH_ASSERT
+#pragma unused(what)
+#endif
+	LCK_RW_ASSERT(&in_multihead_lock, what);
 }
 
 void

@@ -99,7 +99,7 @@ struct gif_softc {
 
 #define	GIF_LOCK(_sc)		lck_mtx_lock(&(_sc)->gif_lock)
 #define	GIF_UNLOCK(_sc)		lck_mtx_unlock(&(_sc)->gif_lock)
-#define	GIF_LOCK_ASSERT(_sc)	lck_mtx_assert(&(_sc)->gif_lock,	\
+#define	GIF_LOCK_ASSERT(_sc)	LCK_MTX_ASSERT(&(_sc)->gif_lock,	\
     LCK_MTX_ASSERT_OWNED)
 
 #define	gif_ro gifsc_gifscr.gifscr_ro

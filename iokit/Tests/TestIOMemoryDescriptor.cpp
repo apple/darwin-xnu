@@ -110,6 +110,204 @@ static int IOMultMemoryDescriptorTest(int newValue)
     return (0);
 }
 
+
+
+// <rdar://problem/30102458>
+static int
+IODMACommandForceDoubleBufferTest(int newValue)
+{
+    IOReturn                   ret;
+    IOBufferMemoryDescriptor * bmd;
+    IODMACommand             * dma;
+    uint32_t                   dir, data;
+    IODMACommand::SegmentOptions segOptions =
+    {
+	.fStructSize      = sizeof(segOptions),
+	.fNumAddressBits  = 64,
+	.fMaxSegmentSize  = 0x2000,
+	.fMaxTransferSize = 128*1024,
+	.fAlignment       = 1,
+	.fAlignmentLength = 1,
+	.fAlignmentInternalSegments = 1
+    };
+    IODMACommand::Segment64 segments[1];
+    UInt32                  numSegments;
+    UInt64                  dmaOffset;
+
+
+    for (dir = kIODirectionIn; ; dir++)
+    {
+	bmd = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+	                    dir | kIOMemoryPageable, ptoa(8));
+	assert(bmd);
+
+	((uint32_t*) bmd->getBytesNoCopy())[0] = 0x53535300 | dir;
+
+	ret = bmd->prepare((IODirection) dir);
+	assert(kIOReturnSuccess == ret);
+
+	dma = IODMACommand::withSpecification(kIODMACommandOutputHost64, &segOptions,
+					      kIODMAMapOptionMapped,
+					      NULL, NULL);
+	assert(dma);
+	ret = dma->setMemoryDescriptor(bmd, true);
+	assert(kIOReturnSuccess == ret);
+
+	ret = dma->synchronize(IODMACommand::kForceDoubleBuffer | kIODirectionOut);
+	assert(kIOReturnSuccess == ret);
+
+	dmaOffset   = 0;
+	numSegments = 1;
+	ret = dma->gen64IOVMSegments(&dmaOffset, &segments[0], &numSegments);
+	assert(kIOReturnSuccess == ret);
+	assert(1 == numSegments);
+
+	if (kIODirectionOut & dir)
+	{
+	    data = ((uint32_t*) bmd->getBytesNoCopy())[0];
+	    assertf((0x53535300 | dir) == data, "mismatch 0x%x", data);
+	}
+	if (kIODirectionIn & dir)
+	{
+	     IOMappedWrite32(segments[0].fIOVMAddr, 0x11223300 | dir);
+	}
+
+	ret = dma->clearMemoryDescriptor(true);
+	assert(kIOReturnSuccess == ret);
+	dma->release();
+
+	bmd->complete((IODirection) dir);
+
+	if (kIODirectionIn & dir)
+	{
+	    data = ((uint32_t*) bmd->getBytesNoCopy())[0];
+	    assertf((0x11223300 | dir) == data, "mismatch 0x%x", data);
+	}
+
+	bmd->release();
+
+	if (dir == kIODirectionInOut) break;
+    }
+
+    return (0);
+}
+
+// <rdar://problem/30102458>
+static int
+IOMemoryRemoteTest(int newValue)
+{
+    IOReturn             ret;
+    IOMemoryDescriptor * md;
+    IOByteCount          offset, length;
+    addr64_t             addr;
+    uint32_t             idx;
+
+    IODMACommand       * dma;
+    IODMACommand::SegmentOptions segOptions =
+    {
+	.fStructSize      = sizeof(segOptions),
+	.fNumAddressBits  = 64,
+	.fMaxSegmentSize  = 0x2000,
+	.fMaxTransferSize = 128*1024,
+	.fAlignment       = 1,
+	.fAlignmentLength = 1,
+	.fAlignmentInternalSegments = 1
+    };
+    IODMACommand::Segment64 segments[1];
+    UInt32                  numSegments;
+    UInt64                  dmaOffset;
+
+    IOAddressRange ranges[2] = {
+	{ 0x1234567890123456ULL, 0x1000 }, { 0x5432109876543210, 0x2000 },
+    };
+
+    md = IOMemoryDescriptor::withAddressRanges(&ranges[0], 2, kIODirectionOutIn|kIOMemoryRemote, TASK_NULL);
+    assert(md);
+
+//    md->map();
+//    md->readBytes(0, &idx, sizeof(idx));
+
+    ret = md->prepare(kIODirectionOutIn);
+    assert(kIOReturnSuccess == ret);
+
+    printf("remote md flags 0x%qx, r %d\n",
+	md->getFlags(), (0 != (kIOMemoryRemote & md->getFlags())));
+
+    for (offset = 0, idx = 0; true; offset += length, idx++)
+    {
+	addr = md->getPhysicalSegment(offset, &length, 0);
+	if (!length) break;
+	assert(idx < 2);
+	assert(addr   == ranges[idx].address);
+	assert(length == ranges[idx].length);
+    }
+    assert(offset == md->getLength());
+
+    dma = IODMACommand::withSpecification(kIODMACommandOutputHost64, &segOptions,
+					  kIODMAMapOptionUnmapped | kIODMAMapOptionIterateOnly,
+					  NULL, NULL);
+    assert(dma);
+    ret = dma->setMemoryDescriptor(md, true);
+    assert(kIOReturnSuccess == ret);
+
+    for (dmaOffset = 0, idx = 0; dmaOffset < md->getLength(); idx++)
+    {
+	numSegments = 1;
+	ret = dma->gen64IOVMSegments(&dmaOffset, &segments[0], &numSegments);
+	assert(kIOReturnSuccess == ret);
+	assert(1 == numSegments);
+	assert(idx < 2);
+	assert(segments[0].fIOVMAddr == ranges[idx].address);
+	assert(segments[0].fLength   == ranges[idx].length);
+    }
+    assert(dmaOffset == md->getLength());
+
+    ret = dma->clearMemoryDescriptor(true);
+    assert(kIOReturnSuccess == ret);
+    dma->release();
+    md->complete(kIODirectionOutIn);
+    md->release();
+
+    return (0);
+}
+
+static IOReturn
+IOMemoryPrefaultTest(uint32_t options)
+{
+    IOBufferMemoryDescriptor * bmd;
+    IOMemoryMap              * map;
+    IOReturn       kr;
+    uint32_t       data;
+    uint32_t *     p;
+    IOSimpleLock * lock;
+
+    lock = IOSimpleLockAlloc();
+    assert(lock);
+
+    bmd = IOBufferMemoryDescriptor::inTaskWithOptions(current_task(),
+                        kIODirectionOutIn | kIOMemoryPageable, ptoa(8));
+    assert(bmd);
+    kr = bmd->prepare();
+    assert(KERN_SUCCESS == kr);
+
+    map = bmd->map(kIOMapPrefault);
+    assert(map);
+
+    p = (typeof(p)) map->getVirtualAddress();
+    IOSimpleLockLock(lock);
+    data = p[0];
+    IOSimpleLockUnlock(lock);
+
+    IOLog("IOMemoryPrefaultTest %d\n", data);
+
+    map->release();
+    bmd->release();
+    IOSimpleLockFree(lock);
+
+    return (kIOReturnSuccess);
+}
+
+
 // <rdar://problem/26375234>
 static IOReturn
 ZeroLengthTest(int newValue)
@@ -158,7 +356,6 @@ IODirectionPrepareNoZeroFillTest(int newValue)
     bmd->release();
     return (0);
 }
-
 
 // <rdar://problem/28190483>
 static IOReturn
@@ -233,6 +430,31 @@ IOMemoryMapCopyOnWriteTest(int newValue)
 {
     IOMemoryMapTest(0);
     IOMemoryMapTest(kIOMemoryMapCopyOnWrite);
+    return (0);
+}
+
+static int
+AllocationNameTest(int newValue)
+{
+    IOMemoryDescriptor * bmd;
+    kern_allocation_name_t name, prior;
+
+    name = kern_allocation_name_allocate("com.apple.iokit.test", 0);
+    assert(name);
+
+    prior = thread_set_allocation_name(name);
+
+    bmd = IOBufferMemoryDescriptor::inTaskWithOptions(TASK_NULL,
+                kIODirectionOutIn | kIOMemoryPageable | kIOMemoryKernelUserShared,
+                ptoa(13));
+    assert(bmd);
+    bmd->prepare();
+
+    thread_set_allocation_name(prior);
+    kern_allocation_name_release(name);
+
+    if (newValue != 7) bmd->release();
+
     return (0);
 }
 
@@ -466,6 +688,12 @@ int IOMemoryDescriptorTest(int newValue)
     }
 #endif
 
+    result = IODMACommandForceDoubleBufferTest(newValue);
+    if (result) return (result);
+
+    result = AllocationNameTest(newValue);
+    if (result) return (result);
+
     result = IOMemoryMapCopyOnWriteTest(newValue);
     if (result) return (result);
 
@@ -481,6 +709,12 @@ int IOMemoryDescriptorTest(int newValue)
     result = BadFixedAllocTest(newValue);
     if (result) return (result);
 
+    result = IOMemoryRemoteTest(newValue);
+    if (result) return (result);
+
+    result = IOMemoryPrefaultTest(newValue);
+    if (result) return (result);
+
     IOGeneralMemoryDescriptor * md;
     vm_offset_t data[2];
     vm_size_t  bsize = 16*1024*1024;
@@ -488,7 +722,7 @@ int IOMemoryDescriptorTest(int newValue)
     kern_return_t kr;
 
     data[0] = data[1] = 0;
-    kr = vm_allocate(kernel_map, &data[0], bsize, VM_FLAGS_ANYWHERE);
+    kr = vm_allocate_kernel(kernel_map, &data[0], bsize, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IOKIT);
     assert(KERN_SUCCESS == kr);
 
     vm_inherit(kernel_map, data[0] + ptoa(1), ptoa(1), VM_INHERIT_NONE);

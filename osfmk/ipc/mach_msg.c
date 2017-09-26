@@ -91,6 +91,7 @@
 #include <kern/kalloc.h>
 #include <kern/processor.h>
 #include <kern/syscall_subr.h>
+#include <kern/policy_internal.h>
 
 #include <vm/vm_map.h>
 
@@ -145,6 +146,14 @@ mach_msg_return_t msg_receive_error(
 	ipc_space_t		space,
 	mach_msg_size_t		*out_size);
 
+static mach_msg_return_t
+mach_msg_rcv_link_special_reply_port(
+	ipc_port_t special_reply_port,
+	mach_port_name_t dest_name_port);
+
+static void
+mach_msg_rcv_unlink_special_reply_port(void);
+
 security_token_t KERNEL_SECURITY_TOKEN = KERNEL_SECURITY_TOKEN_VALUE;
 audit_token_t KERNEL_AUDIT_TOKEN = KERNEL_AUDIT_TOKEN_VALUE;
 
@@ -196,7 +205,9 @@ mach_msg_send(
 	mach_msg_size_t	msg_and_trailer_size;
 	mach_msg_max_trailer_t	*trailer;
 
-	if ((send_size < sizeof(mach_msg_header_t)) || (send_size & 3))
+	if ((send_size & 3) ||
+	    send_size < sizeof(mach_msg_header_t) ||
+	    (send_size < sizeof(mach_msg_base_t) && (msg->msgh_bits & MACH_MSGH_BITS_COMPLEX)))
 		return MACH_SEND_MSG_TOO_SMALL;
 
 	if (send_size > MACH_MSG_SIZE_MAX - MAX_TRAILER_SIZE)
@@ -309,6 +320,8 @@ mach_msg_receive_results(
 	mach_msg_trailer_size_t trailer_size;
 	mach_msg_size_t   size = 0;
 
+	/* unlink the special_reply_port before releasing reference to object */
+	mach_msg_rcv_unlink_special_reply_port();
 	io_release(object);
 
 	if (mr != MACH_MSG_SUCCESS) {
@@ -475,6 +488,7 @@ mach_msg_receive(
 	self->ith_msize = 0;
 	self->ith_option = option;
 	self->ith_continuation = continuation;
+	self->ith_knote = ITH_KNOTE_NULL;
 
 	ipc_mqueue_receive(mqueue, option, rcv_size, rcv_timeout, THREAD_ABORTSAFE);
 	if ((option & MACH_RCV_TIMEOUT) && rcv_timeout == 0)
@@ -576,6 +590,18 @@ mach_msg_overwrite_trap(
 		}
 		/* hold ref for object */
 
+		if ((option & MACH_RCV_SYNC_WAIT) && !(option & MACH_SEND_SYNC_OVERRIDE)) {
+			ipc_port_t special_reply_port;
+			__IGNORE_WCASTALIGN(special_reply_port = (ipc_port_t) object);
+			/* link the special reply port to the destination */
+			mr = mach_msg_rcv_link_special_reply_port(special_reply_port,
+					(mach_port_name_t)override);
+			if (mr != MACH_MSG_SUCCESS) {
+				io_release(object);
+				return mr;
+			}
+		}
+
 		if (rcv_msg_addr != (mach_vm_address_t)0)
 			self->ith_msg_addr = rcv_msg_addr;
 		else
@@ -586,6 +612,7 @@ mach_msg_overwrite_trap(
 		self->ith_option = option;
 		self->ith_receiver_name = MACH_PORT_NULL;
 		self->ith_continuation = thread_syscall_return;
+		self->ith_knote = ITH_KNOTE_NULL;
 
 		ipc_mqueue_receive(mqueue, option, rcv_size, msg_timeout, THREAD_ABORTSAFE);
 		if ((option & MACH_RCV_TIMEOUT) && msg_timeout == 0)
@@ -594,6 +621,82 @@ mach_msg_overwrite_trap(
 	}
 
 	return MACH_MSG_SUCCESS;
+}
+
+/*
+ *	Routine:	mach_msg_rcv_link_special_reply_port
+ *	Purpose:
+ *		Link the special reply port(rcv right) to the
+ *		other end of the sync ipc channel.
+ *	Conditions:
+ *		Nothing locked.
+ *	Returns:
+ *		None.
+ */
+static mach_msg_return_t
+mach_msg_rcv_link_special_reply_port(
+	ipc_port_t special_reply_port,
+	mach_port_name_t dest_name_port)
+{
+	ipc_port_t dest_port = IP_NULL;
+	kern_return_t kr;
+	int qos;
+
+	if (current_thread()->ith_special_reply_port != special_reply_port) {
+		return MACH_RCV_INVALID_NOTIFY;
+	}
+
+	/* Copyin the destination port */
+	if (!MACH_PORT_VALID(dest_name_port)) {
+		return MACH_RCV_INVALID_NOTIFY;
+	}
+
+	kr = ipc_object_copyin(current_space(),
+			       dest_name_port, MACH_MSG_TYPE_COPY_SEND,
+			       (ipc_object_t *) &dest_port);
+
+	/*
+	 * The receive right of dest port might have gone away,
+	 * do not fail the receive in that case.
+	 */
+	if (kr == KERN_SUCCESS && IP_VALID(dest_port)) {
+
+		/* Get the effective qos of the thread */
+		qos = proc_get_effective_thread_policy(current_thread(), TASK_POLICY_QOS);
+
+		ipc_port_link_special_reply_port_with_qos(special_reply_port,
+			dest_port, qos);
+
+		/* release the send right */
+		ipc_port_release_send(dest_port);
+	}
+	return MACH_MSG_SUCCESS;
+}
+
+/*
+ *	Routine:	mach_msg_rcv_unlink_special_reply_port
+ *	Purpose:
+ *		Unlink the special reply port to the other end
+ *		of the sync ipc channel.
+ *	Condition:
+ *		Nothing locked.
+ *	Returns:
+ *		None.
+ */
+static void
+mach_msg_rcv_unlink_special_reply_port(void)
+{
+	thread_t self = current_thread();
+	ipc_port_t special_reply_port = self->ith_special_reply_port;
+	mach_msg_option_t option = self->ith_option;
+
+	if ((special_reply_port == IP_NULL) ||
+	    !(option & MACH_RCV_SYNC_WAIT)) {
+		return;
+	}
+
+	ipc_port_unlink_special_reply_port(special_reply_port,
+		IPC_PORT_UNLINK_SR_ALLOW_SYNC_QOS_LINKAGE);
 }
 
 /*

@@ -1,0 +1,2 @@
+# The KASan kext is expected to exist for both KASan and non-KASan configurations,
+# so we generate an empty export list for non-KASan.

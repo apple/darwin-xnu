@@ -1,0 +1,24 @@
+# This file declares the list of source files that should be exempt from
+# AddressSanitizer instrumentation. Usually, this is because a file is used by
+# the AddressSanitizer runtime itself, or because the code executes before
+# the runtime has been initialized.
+
+# Exclude linker sets
+type:struct linker_set_entry
+type:linker_set_entry
+
+# Exclude KASAN itself
+src:./san/kasan.c
+src:./san/kasan-fakestack.c
+src:./san/kasan-x86_64.c
+src:./san/kasan-memintrinsics.c
+src:./san/kasan_dynamic_blacklist.c
+
+# Try really hard to avoid panicing while debugging
+src:./osfmk/kdp/*
+src:./osfmk/kern/debug.c
+
+# Exclude KASAN dependencies
+# XXX: could this be relaxed since fakestack is reentrant?
+src:./osfmk/kern/zalloc.c
+

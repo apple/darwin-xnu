@@ -108,6 +108,7 @@ extern kern_return_t task_importance(task_t task, integer_t importance);
 #define TASK_POLICY_QOS_AND_RELPRIO     0x38 /* QoS as value1, relative priority as value2 */
 #define TASK_POLICY_QOS_PROMOTE         0x3C
 #define TASK_POLICY_QOS_IPC_OVERRIDE    0x3D
+#define TASK_POLICY_QOS_SYNC_IPC_OVERRIDE    0x3E
 
 #define TASK_POLICY_MAX                 0x3F
 
@@ -151,8 +152,13 @@ extern void proc_inherit_task_role(task_t new_task, task_t old_task);
 #define THROTTLE_LEVEL_COMPRESSOR_TIER1         THROTTLE_LEVEL_TIER1
 #define THROTTLE_LEVEL_COMPRESSOR_TIER2         THROTTLE_LEVEL_TIER2
 
+#if CONFIG_EMBEDDED
+#define THROTTLE_LEVEL_PAGEOUT_THROTTLED        THROTTLE_LEVEL_TIER3
+#define THROTTLE_LEVEL_PAGEOUT_UNTHROTTLED      THROTTLE_LEVEL_TIER1
+#else
 #define THROTTLE_LEVEL_PAGEOUT_THROTTLED        THROTTLE_LEVEL_TIER2
 #define THROTTLE_LEVEL_PAGEOUT_UNTHROTTLED      THROTTLE_LEVEL_TIER1
+#endif
 
 #if CONFIG_IOSCHED
 #define IOSCHED_METADATA_TIER                   THROTTLE_LEVEL_TIER1
@@ -190,6 +196,10 @@ extern void proc_thread_qos_deallocate(thread_t thread);
 
 extern int task_clear_cpuusage(task_t task, int cpumon_entitled);
 
+#if CONFIG_EMBEDDED
+/* Taskwatch related external BSD interface */
+extern int proc_lf_pidbind(task_t curtask, uint64_t tid, task_t target_task, int bind);
+#endif /* CONFIG_EMBEDDED */
 
 /* Importance inheritance functions not under IMPORTANCE_INHERITANCE */
 extern void task_importance_mark_donor(task_t task, boolean_t donating);
@@ -239,13 +249,6 @@ extern void task_clear_has_been_notified(task_t task, int pressurelevel);
 extern void task_clear_used_for_purging(task_t task);
 extern int task_importance_estimate(task_t task);
 
-/*
- * Allocate/assign a single work interval ID for a thread,
- * and support deallocating it.
- */
-extern kern_return_t thread_policy_create_work_interval(thread_t thread, uint64_t *work_interval_id);
-extern kern_return_t thread_policy_destroy_work_interval(thread_t thread, uint64_t work_interval_id);
-
 extern kern_return_t thread_policy_set_internal(thread_t thread, thread_policy_flavor_t flavor,
                                                 thread_policy_t policy_info, mach_msg_type_number_t count);
 
@@ -260,10 +263,18 @@ extern void thread_user_promotion_add(thread_t thread, thread_t promoter, struct
 extern void thread_user_promotion_update(thread_t thread, thread_t promoter, struct promote_token* promote_token);
 extern void thread_user_promotion_drop(thread_t thread);
 
+/* for thread exec promotion */
+#define EXEC_BOOST_PRIORITY 31
+
+extern void thread_set_exec_promotion(thread_t thread);
+extern void thread_clear_exec_promotion(thread_t thread);
+
 /* for IPC override management */
 extern void thread_add_ipc_override(thread_t thread, uint32_t qos_override);
 extern void thread_update_ipc_override(thread_t thread, uint32_t qos_override);
 extern void thread_drop_ipc_override(thread_t thread);
+extern void thread_add_sync_ipc_override(thread_t thread);
+extern void thread_drop_sync_ipc_override(thread_t thread);
 extern uint32_t thread_get_ipc_override(thread_t thread);
 
 /*
@@ -287,7 +298,8 @@ typedef struct task_pend_token {
 	                tpt_update_coal_sfi     :1,
 	                tpt_update_throttle     :1,
 	                tpt_update_thread_sfi   :1,
-	                tpt_force_recompute_pri :1;
+	                tpt_force_recompute_pri :1,
+	                tpt_update_tg_ui_flag   :1;
 } *task_pend_token_t;
 
 extern void task_policy_update_complete_unlocked(task_t task, task_pend_token_t pend_token);
@@ -325,6 +337,14 @@ extern void thread_policy_create(thread_t thread);
 extern boolean_t task_is_daemon(task_t task);
 extern boolean_t task_is_app(task_t task);
 
+#if CONFIG_EMBEDDED
+/* Taskwatch related external interface */
+extern void thead_remove_taskwatch(thread_t thread);
+extern void task_removewatchers(task_t task);
+extern void task_watch_init(void);
+
+typedef struct task_watcher task_watch_t;
+#endif /* CONFIG_EMBEDDED */
 
 #if IMPORTANCE_INHERITANCE
 extern boolean_t task_is_marked_importance_donor(task_t task);

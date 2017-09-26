@@ -193,6 +193,10 @@ struct clockinfo {
 };
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
+#ifdef XNU_KERNEL_PRIVATE
+#define SETTIME_ENTITLEMENT "com.apple.private.settime"
+#endif
+
 #ifdef KERNEL
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)

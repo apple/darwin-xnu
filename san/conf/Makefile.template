@@ -1,0 +1,91 @@
+#
+# Mach Operating System
+# Copyright (c) 1986 Carnegie-Mellon University
+# All rights reserved.  The CMU software License Agreement specifies
+# the terms and conditions for use and redistribution.
+#
+
+export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
+export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
+export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
+export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
+
+include $(MakeInc_cmd)
+include $(MakeInc_def)
+
+CFLAGS+=
+
+#
+# Directories for mig generated files
+#
+COMP_SUBDIRS =
+
+#
+#  Make sure we don't remove this by accident if interrupted at the wrong
+#  time.
+#
+.PRECIOUS: Makefile
+
+#
+#  Theses macros are filled in by the config program depending on the
+#  current configuration.  The MACHDEP macro is replaced by the
+#  contents of the machine dependent makefile template and the others
+#  are replaced by the corresponding symbol definitions for the
+#  configuration.
+#
+
+%OBJS
+
+%CFILES
+
+%CXXFILES
+
+%SFILES
+
+%MACHDEP
+
+# Rebuild if per-file overrides change
+${OBJS}: $(firstword $(MAKEFILE_LIST))
+
+ifneq ($(KASAN),1)
+# nothing to build for non-KASAN
+OBJS =
+COBJS =
+SOBJS =
+endif
+
+# Rebuild if global compile flags change
+$(COBJS): .CFLAGS
+.CFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+$(CXXOBJS): .CXXFLAGS
+.CXXFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
+$(SOBJS): .SFLAGS
+.SFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
+
+# rebuild file list if kasan-ness changes
+.KASANFLAGS: ALWAYS
+	$(_v)$(REPLACECONTENTS) $@ $(KASAN)
+
+$(COMPONENT).filelist: $(OBJS) .KASANFLAGS
+	@echo "$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0)"
+	$(_v)for obj in ${OBJS}; do	\
+		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
+	done > $(COMPONENT).filelist
+
+$(TARGET)/$(CURRENT_KERNEL_CONFIG)/kasan_blacklist_dynamic.h: $(SRCROOT)/$(COMPONENT)/kasan-blacklist-dynamic
+	@echo "$(ColorH)GENERATING$(Color0)    $(ColorLF)$(notdir $@)$(Color0)"
+	@$(SRCROOT)/$(COMPONENT)/tools/generate_dynamic_blacklist.py "$<" > "$@"
+
+$(SRCROOT)/$(COMPONENT)/kasan_dynamic_blacklist.c: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/kasan_blacklist_dynamic.h
+
+do_all: $(COMPONENT).filelist
+
+do_build_all:: do_all
+
+%RULES
+
+include $(MakeInc_rule)
+include $(MakeInc_dir)

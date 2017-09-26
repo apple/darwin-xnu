@@ -161,4 +161,6 @@ void cpu_pmc_control(void *);
 
 extern void pstate_trace(void);
 
+extern void mp_interrupt_watchdog(void);
+
 #endif /* _I386_MISC_PROTOS_H_ */

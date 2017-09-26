@@ -59,6 +59,13 @@
 #include <i386/asm.h>
 
 /*
+ * void *secure_memset(void * addr, int pattern, size_t length)
+ *
+ * It is important that this function remains defined in assembly to avoid
+ * compiler optimizations.
+ */
+ENTRY(secure_memset)
+/*
  * void *memset(void * addr, int pattern, size_t length)
  */
 

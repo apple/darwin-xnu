@@ -19,11 +19,17 @@ KERNELFILES = \
 	machine_cpuid.h		\
 	machine_routines.h	\
 	machine_kpc.h		\
+	monotonic.h \
 	pal_routines.h		\
 	pal_hibernate.h		\
 	simple_lock.h
 
+EXPORT_FILES =
+
+
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
+
+INSTALL_KF_MD_LCL_LIST = ${EXPORT_FILES}
 
 INSTALL_MI_DIR = machine
 

@@ -42,6 +42,7 @@
 #include <IOKit/IOKitDiagnosticsUserClient.h>
 
 #include <IOKit/system.h>
+#include <sys/csr.h>
 
 #include <libkern/c++/OSContainers.h>
 #include <libkern/crypto/sha1.h>
@@ -52,6 +53,16 @@ extern "C" {
 #include <pexpert/pexpert.h>
 #include <uuid/uuid.h>
 }
+
+#if defined(__x86_64__)
+/*
+ * This will eventually be properly exported in
+ * <rdar://problem/31181482> ER: Expose coprocessor version (T208/T290) in a kernel/kext header
+ * although we'll always need to hardcode this here since we won't be able to include whatever
+ * header this ends up in.
+ */
+#define kCoprocessorMinVersion 0x00020000
+#endif
 
 void printDictionaryKeys (OSDictionary * inDictionary, char * inMsg);
 static void getCStringForObject(OSObject *inObj, char *outStr, size_t outStrLen);
@@ -99,15 +110,28 @@ bool IOPlatformExpert::start( IOService * provider )
     IORangeAllocator *	physicalRanges;
     OSData *		busFrequency;
     uint32_t		debugFlags;
+
+#if defined(__x86_64__)
+    IORegistryEntry	*platform_entry = NULL;
+    OSData		*coprocessor_version_obj = NULL;
+    uint64_t		coprocessor_version = 0;
+#endif
     
     if (!super::start(provider))
       return false;
     
-    // Override the mapper present flag is requested by boot arguments.
-    if (PE_parse_boot_argn("dart", &debugFlags, sizeof (debugFlags)) && (debugFlags == 0))
-      removeProperty(kIOPlatformMapperPresentKey);
-    if (PE_parse_boot_argn("-x", &debugFlags, sizeof (debugFlags)))
-      removeProperty(kIOPlatformMapperPresentKey);
+    // Override the mapper present flag is requested by boot arguments, if SIP disabled.
+#if CONFIG_CSR
+    if (csr_check(CSR_ALLOW_UNRESTRICTED_FS) == 0)
+#endif /* CONFIG_CSR */
+    {
+	if (PE_parse_boot_argn("dart", &debugFlags, sizeof (debugFlags)) && (debugFlags == 0))
+	    removeProperty(kIOPlatformMapperPresentKey);
+#if DEBUG || DEVELOPMENT
+	if (PE_parse_boot_argn("-x", &debugFlags, sizeof (debugFlags)))
+	    removeProperty(kIOPlatformMapperPresentKey);
+#endif /* DEBUG || DEVELOPMENT */
+    }
 
     // Register the presence or lack thereof a system 
     // PCI address mapper with the IOMapper class
@@ -142,7 +166,21 @@ bool IOPlatformExpert::start( IOService * provider )
             serNoString->release();
         }
     }
-    
+
+#if defined(__x86_64__)
+    platform_entry = IORegistryEntry::fromPath(kIODeviceTreePlane ":/efi/platform");
+    if (platform_entry != NULL) {
+        coprocessor_version_obj = OSDynamicCast(OSData, platform_entry->getProperty("apple-coprocessor-version"));
+        if ((coprocessor_version_obj != NULL) && (coprocessor_version_obj->getLength() <= sizeof(coprocessor_version))) {
+            memcpy(&coprocessor_version, coprocessor_version_obj->getBytesNoCopy(), coprocessor_version_obj->getLength());
+            if (coprocessor_version >= kCoprocessorMinVersion) {
+                coprocessor_paniclog_flush = TRUE;
+            }
+        }
+        platform_entry->release();
+    }
+#endif /* defined(__x86_64__) */
+
     return( configure(provider) );
 }
 
@@ -260,9 +298,11 @@ int IOPlatformExpert::haltRestart(unsigned int type)
     type = kPEHaltCPU;
   }
 
+#if !CONFIG_EMBEDDED
   // On ARM kPEPanicRestartCPU is supported in the drivers
   if (type == kPEPanicRestartCPU)
 	  type = kPERestartCPU;
+#endif
 
   if (PE_halt_restart) return (*PE_halt_restart)(type);
   else return -1;
@@ -738,10 +778,16 @@ static void IOShutdownNotificationsTimedOut(
     thread_call_param_t p0, 
     thread_call_param_t p1)
 {
+#ifdef CONFIG_EMBEDDED
+    /* 30 seconds has elapsed - panic */
+    panic("Halt/Restart Timed Out");
+
+#else /* ! CONFIG_EMBEDDED */
     int type = (int)(long)p0;
 
     /* 30 seconds has elapsed - resume shutdown */
     if(gIOPlatform) gIOPlatform->haltRestart(type);
+#endif /* CONFIG_EMBEDDED */
 }
 
 
@@ -783,6 +829,7 @@ int PEHaltRestart(unsigned int type)
   IORegistryEntry   *node;
   OSData            *data;
   uint32_t          timeout = 30;
+  static boolean_t  panic_begin_called = FALSE;
   
   if(type == kPEHaltCPU || type == kPERestartCPU || type == kPEUPSDelayHaltCPU)
   {
@@ -797,7 +844,11 @@ int PEHaltRestart(unsigned int type)
        the timer expires. If the device wants a different
        timeout, use that value instead of 30 seconds.
      */
+#if CONFIG_EMBEDDED
+#define RESTART_NODE_PATH    "/defaults"
+#else
 #define RESTART_NODE_PATH    "/chosen"
+#endif
     node = IORegistryEntry::fromPath( RESTART_NODE_PATH, gIODTPlane );
     if ( node ) {
       data = OSDynamicCast( OSData, node->getProperty( "halt-restart-timeout" ) );
@@ -822,6 +873,12 @@ int PEHaltRestart(unsigned int type)
    }
    else if(type == kPEPanicRestartCPU || type == kPEPanicSync)
    {
+       if (type == kPEPanicRestartCPU) {
+           // Notify any listeners that we're done collecting
+           // panic data before we call through to do the restart
+           IOCPURunPlatformPanicActions(kPEPanicEnd);
+       }
+
        // Do an initial sync to flush as much panic data as possible,
        // in case we have a problem in one of the platorm panic handlers.
        // After running the platform handlers, do a final sync w/
@@ -829,6 +886,15 @@ int PEHaltRestart(unsigned int type)
        PE_sync_panic_buffers();
        IOCPURunPlatformPanicActions(type);
        PE_sync_panic_buffers();
+   }
+   else if (type == kPEPanicEnd) {
+       IOCPURunPlatformPanicActions(type);
+   } else if (type == kPEPanicBegin) {
+       // Only call the kPEPanicBegin callout once
+       if (!panic_begin_called) {
+           panic_begin_called = TRUE;
+           IOCPURunPlatformPanicActions(type);
+       }
    }
 
   if (gIOPlatform) return gIOPlatform->haltRestart(type);
@@ -841,6 +907,11 @@ UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length)
   else return 0;
 }
 
+void PESavePanicInfoAction(void *buffer, size_t length)
+{
+	IOCPURunPlatformPanicSyncAction(buffer, length);
+	return;
+}
 
 
 inline static int init_gIOOptionsEntry(void)
@@ -1050,6 +1121,41 @@ void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
     OSString *        string = 0;
     uuid_string_t     uuid;
 
+#if CONFIG_EMBEDDED
+    entry = IORegistryEntry::fromPath( "/chosen", gIODTPlane );
+    if ( entry )
+    {
+        OSData * data1;
+
+        data1 = OSDynamicCast( OSData, entry->getProperty( "unique-chip-id" ) );
+        if ( data1 && data1->getLength( ) == 8 )
+        {
+            OSData * data2;
+
+            data2 = OSDynamicCast( OSData, entry->getProperty( "chip-id" ) );
+            if ( data2 && data2->getLength( ) == 4 )
+            {
+                SHA1_CTX     context;
+                uint8_t      digest[ SHA_DIGEST_LENGTH ];
+                const uuid_t space = { 0xA6, 0xDD, 0x4C, 0xCB, 0xB5, 0xE8, 0x4A, 0xF5, 0xAC, 0xDD, 0xB6, 0xDC, 0x6A, 0x05, 0x42, 0xB8 };
+
+                SHA1Init( &context );
+                SHA1Update( &context, space, sizeof( space ) );
+                SHA1Update( &context, data1->getBytesNoCopy( ), data1->getLength( ) );
+                SHA1Update( &context, data2->getBytesNoCopy( ), data2->getLength( ) );
+                SHA1Final( digest, &context );
+
+                digest[ 6 ] = ( digest[ 6 ] & 0x0F ) | 0x50;
+                digest[ 8 ] = ( digest[ 8 ] & 0x3F ) | 0x80;
+
+                uuid_unparse( digest, uuid );
+                string = OSString::withCString( uuid );
+            }
+        }
+
+        entry->release( );
+    }
+#else /* !CONFIG_EMBEDDED */
     entry = IORegistryEntry::fromPath( "/efi/platform", gIODTPlane );
     if ( entry )
     {
@@ -1074,6 +1180,7 @@ void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
 
         entry->release( );
     }
+#endif /* !CONFIG_EMBEDDED */
 
     if ( string == 0 )
     {

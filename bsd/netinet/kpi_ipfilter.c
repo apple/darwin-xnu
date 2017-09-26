@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -36,10 +36,11 @@
 
 #include <machine/endian.h>
 
-#define _IP_VHL
+#define	_IP_VHL
 #include <net/if_var.h>
 #include <net/route.h>
 #include <net/kpi_protocol.h>
+#include <net/net_api_stats.h>
 
 #include <netinet/in_systm.h>
 #include <netinet/in.h>
@@ -51,12 +52,13 @@
 #include <netinet6/ip6_var.h>
 #include <netinet/kpi_ipfilter_var.h>
 
+#include <stdbool.h>
 
 /*
  * kipf_lock and kipf_ref protect the linkage of the list of IP filters
  * An IP filter can be removed only when kipf_ref is zero
- * If an IP filter cannot be removed because kipf_ref is not null, then 
- * the IP filter is marjed and kipf_delayed_remove is set so that when 
+ * If an IP filter cannot be removed because kipf_ref is not null, then
+ * the IP filter is marjed and kipf_delayed_remove is set so that when
  * kipf_ref eventually goes down to zero, the IP filter is removed
  */
 decl_lck_mtx_data(static, kipf_lock_data);
@@ -69,11 +71,21 @@ __private_extern__ struct ipfilter_list	ipv4_filters = TAILQ_HEAD_INITIALIZER(ip
 __private_extern__ struct ipfilter_list	ipv6_filters = TAILQ_HEAD_INITIALIZER(ipv6_filters);
 __private_extern__ struct ipfilter_list	tbr_filters = TAILQ_HEAD_INITIALIZER(tbr_filters);
 
+#undef ipf_addv4
+#undef ipf_addv6
+extern errno_t ipf_addv4(const struct ipf_filter *filter,
+    ipfilter_t *filter_ref);
+extern errno_t ipf_addv6(const struct ipf_filter *filter,
+    ipfilter_t *filter_ref);
+
+static errno_t ipf_add(const struct ipf_filter *filter,
+    ipfilter_t *filter_ref, struct ipfilter_list *head, bool is_internal);
+
 __private_extern__ void
 ipf_ref(void)
 {
 	lck_mtx_lock(kipf_lock);
-    kipf_ref++;
+	kipf_ref++;
 	lck_mtx_unlock(kipf_lock);
 }
 
@@ -82,17 +94,19 @@ ipf_unref(void)
 {
 	lck_mtx_lock(kipf_lock);
 
-    if (kipf_ref == 0)
-    	panic("ipf_unref: kipf_ref == 0\n");
-    	
-    kipf_ref--;
-    if (kipf_ref == 0 && kipf_delayed_remove != 0) {
-    	struct ipfilter *filter;
+	if (kipf_ref == 0)
+		panic("ipf_unref: kipf_ref == 0\n");
+
+	kipf_ref--;
+	if (kipf_ref == 0 && kipf_delayed_remove != 0) {
+		struct ipfilter *filter;
 
 		while ((filter = TAILQ_FIRST(&tbr_filters))) {
+			VERIFY(OSDecrementAtomic64(&net_api_stats.nas_ipf_add_count) > 0);
+
 			ipf_detach_func ipf_detach = filter->ipf_filter.ipf_detach;
 			void* cookie = filter->ipf_filter.cookie;
-			
+
 			TAILQ_REMOVE(filter->ipf_head, filter, ipf_link);
 			TAILQ_REMOVE(&tbr_filters, filter, ipf_tbr);
 			kipf_delayed_remove--;
@@ -104,57 +118,80 @@ ipf_unref(void)
 				/* In case some filter got to run while we released the lock */
 				if (kipf_ref != 0)
 					break;
-			}			
+			}
 		}
-   	} 
+	}
 	lck_mtx_unlock(kipf_lock);
 }
 
 static errno_t
 ipf_add(
-	const struct ipf_filter* filter,
+	const struct ipf_filter *filter,
 	ipfilter_t *filter_ref,
-	struct ipfilter_list *head)
+	struct ipfilter_list *head,
+	bool is_internal)
 {
 	struct ipfilter	*new_filter;
 	if (filter->name == NULL || (filter->ipf_input == NULL && filter->ipf_output == NULL))
-		return EINVAL;
-	
-	MALLOC(new_filter, struct ipfilter*, sizeof(*new_filter), M_IFADDR, M_WAITOK);
+		return (EINVAL);
+
+	MALLOC(new_filter, struct ipfilter *, sizeof(*new_filter), M_IFADDR, M_WAITOK);
 	if (new_filter == NULL)
-		return ENOMEM;
-	
+		return (ENOMEM);
+
 	lck_mtx_lock(kipf_lock);
 	new_filter->ipf_filter = *filter;
 	new_filter->ipf_head = head;
-	
+
 	TAILQ_INSERT_HEAD(head, new_filter, ipf_link);
-	
+
+	OSIncrementAtomic64(&net_api_stats.nas_ipf_add_count);
+	INC_ATOMIC_INT64_LIM(net_api_stats.nas_ipf_add_total);
+	if (is_internal) {
+		INC_ATOMIC_INT64_LIM(net_api_stats.nas_ipf_add_os_total);
+	}
+
 	lck_mtx_unlock(kipf_lock);
-	
+
 	*filter_ref = (ipfilter_t)new_filter;
 
 	/* This will force TCP to re-evaluate its use of TSO */
 	OSAddAtomic(1, &kipf_count);
 	routegenid_update();
 
-	return 0;
+	return (0);
+}
+
+errno_t
+ipf_addv4_internal(
+	const struct ipf_filter *filter,
+	ipfilter_t *filter_ref)
+{
+	return (ipf_add(filter, filter_ref, &ipv4_filters, true));
 }
 
 errno_t
 ipf_addv4(
-	const struct ipf_filter* filter,
+	const struct ipf_filter *filter,
 	ipfilter_t *filter_ref)
 {
-	return ipf_add(filter, filter_ref, &ipv4_filters);
+	return (ipf_add(filter, filter_ref, &ipv4_filters, false));
+}
+
+errno_t
+ipf_addv6_internal(
+	const struct ipf_filter *filter,
+	ipfilter_t *filter_ref)
+{
+	return (ipf_add(filter, filter_ref, &ipv6_filters, true));
 }
 
 errno_t
 ipf_addv6(
-	const struct ipf_filter* filter,
+	const struct ipf_filter *filter,
 	ipfilter_t *filter_ref)
 {
-	return ipf_add(filter, filter_ref, &ipv6_filters);
+	return (ipf_add(filter, filter_ref, &ipv6_filters, false));
 }
 
 static errno_t
@@ -185,20 +222,20 @@ errno_t
 ipf_remove(
 	ipfilter_t filter_ref)
 {
-	struct ipfilter	*match = (struct ipfilter*)filter_ref;
+	struct ipfilter	*match = (struct ipfilter *)filter_ref;
 	struct ipfilter_list *head;
-	
+
 	if (match == 0 || (match->ipf_head != &ipv4_filters && match->ipf_head != &ipv6_filters))
-		return EINVAL;
-	
+		return (EINVAL);
+
 	head = match->ipf_head;
-	
+
 	lck_mtx_lock(kipf_lock);
 	TAILQ_FOREACH(match, head, ipf_link) {
-		if (match == (struct ipfilter*)filter_ref) {
+		if (match == (struct ipfilter *)filter_ref) {
 			ipf_detach_func ipf_detach = match->ipf_filter.ipf_detach;
 			void* cookie = match->ipf_filter.cookie;
-			
+
 			/*
 			 * Cannot detach when they are filters running
 			 */
@@ -209,8 +246,11 @@ ipf_remove(
 				match->ipf_filter.ipf_output = ipf_output_detached;
 				lck_mtx_unlock(kipf_lock);
 			} else {
+				VERIFY(OSDecrementAtomic64(&net_api_stats.nas_ipf_add_count) > 0);
+
 				TAILQ_REMOVE(head, match, ipf_link);
 				lck_mtx_unlock(kipf_lock);
+
 				if (ipf_detach)
 					ipf_detach(cookie);
 				FREE(match, M_IFADDR);
@@ -220,12 +260,12 @@ ipf_remove(
 				routegenid_update();
 
 			}
-			return 0;
+			return (0);
 		}
 	}
 	lck_mtx_unlock(kipf_lock);
-	
-	return ENOENT;
+
+	return (ENOENT);
 }
 
 int log_for_en1 = 0;
@@ -235,7 +275,7 @@ ipf_inject_input(
 	mbuf_t data,
 	ipfilter_t filter_ref)
 {
-	struct mbuf	*m = (struct mbuf*)data;
+	struct mbuf *m = (struct mbuf *)data;
 	struct m_tag *mtag = 0;
 	struct ip *ip = mtod(m, struct ip *);
 	u_int8_t	vers;
@@ -244,7 +284,7 @@ ipf_inject_input(
 	protocol_family_t proto;
 
 	vers = IP_VHL_V(ip->ip_vhl);
-	
+
 	switch (vers) {
 		case 4:
 			proto = PF_INET;
@@ -256,7 +296,7 @@ ipf_inject_input(
 			error = ENOTSUP;
 			goto done;
 	}
-	
+
 	if (filter_ref == 0 && m->m_pkthdr.rcvif == 0) {
 		m->m_pkthdr.rcvif = lo_ifp;
 		m->m_pkthdr.csum_data = 0;
@@ -269,27 +309,27 @@ ipf_inject_input(
 	}
 	if (filter_ref != 0) {
 		mtag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPFILT,
-					 	   sizeof (ipfilter_t), M_NOWAIT, m);
+		    sizeof (ipfilter_t), M_NOWAIT, m);
 		if (mtag == NULL) {
 			error = ENOMEM;
 			goto done;
-		}	
-		*(ipfilter_t*)(mtag+1) = filter_ref;
+		}
+		*(ipfilter_t *)(mtag+1) = filter_ref;
 		m_tag_prepend(m, mtag);
 	}
-	
+
 	error = proto_inject(proto, data);
 
 done:
-	return error;
+	return (error);
 }
 
 static errno_t
 ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 {
 	struct route ro;
-	struct ip	*ip;
-	struct mbuf	*m = (struct mbuf*)data;
+	struct ip *ip;
+	struct mbuf *m = (struct mbuf *)data;
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip_moptions *imo = NULL;
@@ -365,8 +405,8 @@ static errno_t
 ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 {
 	struct route_in6 ro;
-	struct ip6_hdr	*ip6;
-	struct mbuf	*m = (struct mbuf*)data;
+	struct ip6_hdr *ip6;
+	struct mbuf *m = (struct mbuf *)data;
 	errno_t error = 0;
 	struct m_tag *mtag = NULL;
 	struct ip6_moptions *im6o = NULL;
@@ -379,7 +419,7 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 		if (m == NULL)
 			return (ENOMEM);
 	}
-	ip6 = (struct ip6_hdr*)m_mtod(m);
+	ip6 = (struct ip6_hdr *)m_mtod(m);
 
 	if (filter_ref != 0) {
 		mtag = m_tag_create(KERNEL_MODULE_TAG_ID,
@@ -419,7 +459,7 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 
 	/*
 	 * Send  mbuf and ifscope information. Check for correctness
-	 * of ifscope information is done while searching for a route in 
+	 * of ifscope information is done while searching for a route in
 	 * ip6_output.
 	 */
 	error = ip6_output(m, NULL, &ro, IPV6_OUTARGS, im6o, NULL, &ip6oa);
@@ -440,20 +480,19 @@ ipf_inject_output(
 	ipfilter_t filter_ref,
 	ipf_pktopts_t options)
 {
-	struct mbuf	*m = (struct mbuf*)data;
+	struct mbuf	*m = (struct mbuf *)data;
 	u_int8_t	vers;
 	errno_t		error = 0;
 
 	/* Make one byte of the header contiguous in the mbuf */
 	if (m->m_len < 1) {
 		m = m_pullup(m, 1);
-		if (m == NULL) 
+		if (m == NULL)
 			goto done;
 	}
-	
-	vers = (*(u_int8_t*)m_mtod(m)) >> 4;
-	switch (vers)
-	{
+
+	vers = (*(u_int8_t *)m_mtod(m)) >> 4;
+	switch (vers) {
 		case 4:
 			error = ipf_injectv4_out(data, filter_ref, options);
 			break;
@@ -468,8 +507,8 @@ ipf_inject_output(
 			break;
 	}
 
-done:	
-	return error;
+done:
+	return (error);
 }
 
 __private_extern__ ipfilter_t
@@ -477,14 +516,14 @@ ipf_get_inject_filter(struct mbuf *m)
 {
 	ipfilter_t filter_ref = 0;
 	struct m_tag *mtag;
-	
+
 	mtag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPFILT, NULL);
 	if (mtag) {
 		filter_ref = *(ipfilter_t *)(mtag+1);
-		
+
 		m_tag_delete(m, mtag);
 	}
-	return filter_ref;
+	return (filter_ref);
 }
 
 __private_extern__ int
@@ -494,28 +533,28 @@ ipf_init(void)
 	lck_grp_attr_t *grp_attributes = 0;
 	lck_attr_t *lck_attributes = 0;
 	lck_grp_t *lck_grp = 0;
-	
+
 	grp_attributes = lck_grp_attr_alloc_init();
 	if (grp_attributes == 0) {
 		printf("ipf_init: lck_grp_attr_alloc_init failed\n");
 		error = ENOMEM;
 		goto done;
 	}
-	
+
 	lck_grp = lck_grp_alloc_init("IP Filter", grp_attributes);
 	if (lck_grp == 0) {
 		printf("ipf_init: lck_grp_alloc_init failed\n");
 		error = ENOMEM;
 		goto done;
 	}
-	
+
 	lck_attributes = lck_attr_alloc_init();
 	if (lck_attributes == 0) {
 		printf("ipf_init: lck_attr_alloc_init failed\n");
 		error = ENOMEM;
 		goto done;
 	}
-	
+
 	lck_mtx_init(kipf_lock, lck_grp, lck_attributes);
 
 	done:
@@ -531,6 +570,6 @@ ipf_init(void)
 		lck_attr_free(lck_attributes);
 		lck_attributes = 0;
 	}
-	
-	return error;
+
+	return (error);
 }

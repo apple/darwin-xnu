@@ -128,6 +128,10 @@
 #include <vm/vm_pager.h>
 #include <vm/vm_protos.h>
 
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
+
 /*
  * XXX Internally, we use VM_PROT_* somewhat interchangeably, but the correct
  * XXX usage is PROT_* from an interface perspective.  Thus the values of
@@ -150,7 +154,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	vm_map_size_t		user_size;
 	vm_object_offset_t	pageoff;
 	vm_object_offset_t	file_pos;
-	int			alloc_flags=0;
+	int			alloc_flags = 0;
+	vm_tag_t		tag = VM_KERN_MEMORY_NONE;
+	vm_map_kernel_flags_t	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 	boolean_t		docow;
 	vm_prot_t		maxprot;
 	void 			*handle;
@@ -293,12 +299,15 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			 * Use "fd" to pass (some) Mach VM allocation flags,
 			 * (see the VM_FLAGS_* definitions).
 			 */
-			alloc_flags = fd & (VM_FLAGS_ALIAS_MASK | VM_FLAGS_SUPERPAGE_MASK |
+			alloc_flags = fd & (VM_FLAGS_ALIAS_MASK |
+					    VM_FLAGS_SUPERPAGE_MASK |
 					    VM_FLAGS_PURGABLE);
 			if (alloc_flags != fd) {
 				/* reject if there are any extra flags */
 				return EINVAL;
 			}
+			VM_GET_FLAGS_ALIAS(alloc_flags, tag);
+			alloc_flags &= ~VM_FLAGS_ALIAS_MASK;
 		}
 			
 		handle = NULL;
@@ -487,7 +496,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		alloc_flags |= VM_FLAGS_NO_CACHE;
 
 	if (flags & MAP_JIT) {
-		alloc_flags |= VM_FLAGS_MAP_JIT;
+		vmk_flags.vmkf_map_jit = TRUE;
 	}
 
 	if (flags & MAP_RESILIENT_CODESIGN) {
@@ -518,7 +527,8 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 map_anon_retry:
 		result = vm_map_enter_mem_object(user_map,
 						 &user_addr, user_size,
-						 0, alloc_flags,
+						 0, alloc_flags, vmk_flags,
+						 tag,
 						 IPC_PORT_NULL, 0, FALSE,
 						 prot, maxprot,
 						 (flags & MAP_SHARED) ?
@@ -599,7 +609,8 @@ map_file_retry:
 		}
 		result = vm_map_enter_mem_object_control(user_map,
 						 &user_addr, user_size,
-						 0, alloc_flags,
+						 0, alloc_flags, vmk_flags,
+						 tag,
 						 control, file_pos,
 						 docow, prot, maxprot, 
 						 (flags & MAP_SHARED) ?
@@ -650,8 +661,10 @@ bad:
 		fp_drop(p, fd, fp, 0);
 
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_mmap) | DBG_FUNC_NONE), fd, (uint32_t)(*retval), (uint32_t)user_size, error, 0);
+#ifndef	CONFIG_EMBEDDED
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO2, SYS_mmap) | DBG_FUNC_NONE), (uint32_t)(*retval >> 32), (uint32_t)(user_size >> 32),
 			      (uint32_t)(file_pos >> 32), (uint32_t)file_pos, 0);
+#endif
 	return(error);
 }
 
@@ -675,7 +688,9 @@ msync_nocancel(__unused proc_t p, struct msync_nocancel_args *uap, __unused int3
 	user_map = current_map();
 	addr = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t)uap->len;
+#ifndef	CONFIG_EMBEDDED
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_msync) | DBG_FUNC_NONE), (uint32_t)(addr >> 32), (uint32_t)(size >> 32), 0, 0, 0);
+#endif
 	if (addr & vm_map_page_mask(user_map)) {
 		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
 		return EINVAL;
@@ -802,6 +817,10 @@ mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 		prot |= VM_PROT_READ;
 #endif	/* 3936456 */
 
+#if defined(__arm64__)
+	if (prot & VM_PROT_STRIP_READ)
+		prot &= ~(VM_PROT_READ | VM_PROT_STRIP_READ);
+#endif
 
 #if CONFIG_MACF
 	/*
@@ -952,6 +971,24 @@ madvise(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
 	start = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t) uap->len;
 	
+#if __arm64__
+	if (start == 0 &&
+	    size != 0 &&
+	    (uap->behav == MADV_FREE ||
+	     uap->behav == MADV_FREE_REUSABLE)) {
+		printf("** FOURK_COMPAT: %d[%s] "
+		       "failing madvise(0x%llx,0x%llx,%s)\n",
+		       p->p_pid, p->p_comm, start, size,
+		       ((uap->behav == MADV_FREE_REUSABLE)
+			? "MADV_FREE_REUSABLE"
+			: "MADV_FREE"));
+		DTRACE_VM3(fourk_compat_madvise,
+			   uint64_t, start,
+			   uint64_t, size,
+			   int, uap->behav);
+		return EINVAL;
+	}
+#endif /* __arm64__ */
 
 	user_map = current_map();
 
@@ -971,17 +1008,19 @@ madvise(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
 int
 mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 {
-	mach_vm_offset_t addr, first_addr, end;
-	vm_map_t map;
-	user_addr_t vec;
-	int error;
-	int vecindex, lastvecindex;
+	mach_vm_offset_t addr = 0, first_addr = 0, end = 0, cur_end = 0;
+	vm_map_t map = VM_MAP_NULL;
+	user_addr_t vec = 0;
+	int error = 0;
+	int vecindex = 0, lastvecindex = 0;
 	int mincoreinfo=0;
-	int pqueryinfo;
-	kern_return_t	ret;
-	int numref;
-
-	char c;
+	int pqueryinfo = 0;
+	unsigned int pqueryinfo_vec_size = 0;
+	vm_page_info_basic_t info = NULL;
+	mach_msg_type_number_t count = 0;
+	char *kernel_vec = NULL;
+	int req_vec_size_pages = 0, cur_vec_size_pages = 0;
+	kern_return_t kr = KERN_SUCCESS;
 
 	map = current_map();
 
@@ -991,82 +1030,117 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	 */
 	first_addr = addr = vm_map_trunc_page(uap->addr,
 					      vm_map_page_mask(map));
-	end = addr + vm_map_round_page(uap->len,
+	end = vm_map_round_page(uap->addr + uap->len,
 				       vm_map_page_mask(map));
 
 	if (end < addr)
 		return (EINVAL);
+
+	if (end == addr)
+		return (0);
+
+	/*
+	 * We are going to loop through the whole 'req_vec_size' pages
+	 * range in chunks of 'cur_vec_size'.
+	 */
+
+	req_vec_size_pages = (end - addr) >> PAGE_SHIFT;
+	cur_vec_size_pages = MIN(req_vec_size_pages, (int)(MAX_PAGE_RANGE_QUERY >> PAGE_SHIFT));
+
+	kernel_vec = (void*) _MALLOC(cur_vec_size_pages * sizeof(char), M_TEMP, M_WAITOK);
+
+	if (kernel_vec == NULL) {
+		return (ENOMEM);
+	}
 
 	/*
 	 * Address of byte vector
 	 */
 	vec = uap->vec;
 
-	map = current_map();
+	pqueryinfo_vec_size = cur_vec_size_pages * sizeof(struct vm_page_info_basic);
+	info = (void*) _MALLOC(pqueryinfo_vec_size, M_TEMP, M_WAITOK);
 
-	/*
-	 * Do this on a map entry basis so that if the pages are not
-	 * in the current processes address space, we can easily look
-	 * up the pages elsewhere.
-	 */
-	lastvecindex = -1;
-	for( ; addr < end; addr += PAGE_SIZE ) {
-		pqueryinfo = 0;
-		ret = mach_vm_page_query(map, addr, &pqueryinfo, &numref);
-		if (ret != KERN_SUCCESS) 
-			pqueryinfo = 0;
-		mincoreinfo = 0;
-		if (pqueryinfo & VM_PAGE_QUERY_PAGE_PRESENT)
-			mincoreinfo |= MINCORE_INCORE;
-		if (pqueryinfo & VM_PAGE_QUERY_PAGE_REF)
-			mincoreinfo |= MINCORE_REFERENCED;
-		if (pqueryinfo & VM_PAGE_QUERY_PAGE_DIRTY)
-			mincoreinfo |= MINCORE_MODIFIED;
-		
-		
-		/*
-		 * calculate index into user supplied byte vector
-		 */
-		vecindex = (addr - first_addr)>> PAGE_SHIFT;
-
-		/*
-		 * If we have skipped map entries, we need to make sure that
-		 * the byte vector is zeroed for those skipped entries.
-		 */
-		while((lastvecindex + 1) < vecindex) {
-			c = 0;
-			error = copyout(&c, vec + lastvecindex, 1);
-			if (error) {
-				return (EFAULT);
-			}
-			++lastvecindex;
-		}
-
-		/*
-		 * Pass the page information to the user
-		 */
-		c = (char)mincoreinfo;
-		error = copyout(&c, vec + vecindex, 1);
-		if (error) {
-			return (EFAULT);
-		}
-		lastvecindex = vecindex;
+	if (info == NULL) {
+		FREE(kernel_vec, M_TEMP);
+		return (ENOMEM);
 	}
 
+	while (addr < end) {
 
-	/*
-	 * Zero the last entries in the byte vector.
-	 */
-	vecindex = (end - first_addr) >> PAGE_SHIFT;
-	while((lastvecindex + 1) < vecindex) {
-		c = 0;
-		error = copyout(&c, vec + lastvecindex, 1);
-		if (error) {
-			return (EFAULT);
+		cur_end = addr + (cur_vec_size_pages * PAGE_SIZE_64);
+
+		count =  VM_PAGE_INFO_BASIC_COUNT;
+		kr = vm_map_page_range_info_internal(map,
+				      addr,
+				      cur_end,
+				      VM_PAGE_INFO_BASIC,
+				      (vm_page_info_t) info,
+				      &count);
+
+		assert(kr == KERN_SUCCESS);
+
+		/*
+		 * Do this on a map entry basis so that if the pages are not
+		 * in the current processes address space, we can easily look
+		 * up the pages elsewhere.
+		 */
+		lastvecindex = -1;
+		for( ; addr < cur_end; addr += PAGE_SIZE ) {
+
+			pqueryinfo = info[lastvecindex + 1].disposition;
+
+			mincoreinfo = 0;
+
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_PRESENT)
+				mincoreinfo |= MINCORE_INCORE;
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_REF)
+				mincoreinfo |= MINCORE_REFERENCED;
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_DIRTY)
+				mincoreinfo |= MINCORE_MODIFIED;
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_PAGED_OUT)
+				mincoreinfo |= MINCORE_PAGED_OUT;
+			if (pqueryinfo & VM_PAGE_QUERY_PAGE_COPIED)
+				mincoreinfo |= MINCORE_COPIED;
+			if ((pqueryinfo & VM_PAGE_QUERY_PAGE_EXTERNAL) == 0)
+				mincoreinfo |= MINCORE_ANONYMOUS;
+			/*
+			 * calculate index into user supplied byte vector
+			 */
+			vecindex = (addr - first_addr)>> PAGE_SHIFT;
+			kernel_vec[vecindex] = (char)mincoreinfo;
+			lastvecindex = vecindex;
 		}
-		++lastvecindex;
+
+
+		assert(vecindex == (cur_vec_size_pages - 1));
+
+		error = copyout(kernel_vec, vec, cur_vec_size_pages * sizeof(char) /* a char per page */);
+
+		if (error) {
+			break;
+		}
+
+		/*
+		 * For the next chunk, we'll need:
+		 * - bump the location in the user buffer for our next disposition.
+		 * - new length
+		 * - starting address
+		 */
+		vec += cur_vec_size_pages * sizeof(char);
+		req_vec_size_pages = (end - addr) >> PAGE_SHIFT;
+		cur_vec_size_pages = MIN(req_vec_size_pages, (int)(MAX_PAGE_RANGE_QUERY >> PAGE_SHIFT));
+
+		first_addr = addr;
 	}
-	
+
+	FREE(kernel_vec, M_TEMP);
+	FREE(info, M_TEMP);
+
+	if (error) {
+		return (EFAULT);
+	}
+
 	return (0);
 }
 
@@ -1097,7 +1171,7 @@ mlock(__unused proc_t p, struct mlock_args *uap, __unused int32_t *retvalval)
 	size = vm_map_round_page(size+pageoff, vm_map_page_mask(user_map));
 
 	/* have to call vm_map_wire directly to pass "I don't know" protections */
-	result = vm_map_wire(user_map, addr, addr+size, VM_PROT_NONE | VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_MLOCK), TRUE);
+	result = vm_map_wire_kernel(user_map, addr, addr+size, VM_PROT_NONE, VM_KERN_MEMORY_MLOCK, TRUE);
 
 	if (result == KERN_RESOURCE_SHORTAGE)
 		return EAGAIN;
@@ -1125,7 +1199,7 @@ munlock(__unused proc_t p, struct munlock_args *uap, __unused int32_t *retval)
 	user_map = current_map();
 
 	/* JMM - need to remove all wirings by spec - this just removes one */
-	result = mach_vm_wire(host_priv_self(), user_map, addr, size, VM_PROT_NONE);
+	result = mach_vm_wire_kernel(host_priv_self(), user_map, addr, size, VM_PROT_NONE, VM_KERN_MEMORY_MLOCK);
 	return (result == KERN_SUCCESS ? 0 : ENOMEM);
 }
 

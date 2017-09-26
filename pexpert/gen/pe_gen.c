@@ -34,10 +34,17 @@
 #include <pexpert/device_tree.h>
 #include <kern/debug.h>
 
+#if CONFIG_EMBEDDED
+#include <libkern/section_keywords.h>
+#endif
 
 static int DEBUGFlag;
 
+#if CONFIG_EMBEDDED
+SECURITY_READ_ONLY_LATE(static uint32_t) gPEKernelConfigurationBitmask;
+#else
 static uint32_t gPEKernelConfigurationBitmask;
+#endif
 
 int32_t gPESerialBaud = -1;
 

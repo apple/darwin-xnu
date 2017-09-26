@@ -244,6 +244,15 @@ typedef struct package_ext_info {
     uint32_t    max_width;
 } package_ext_info;
 
+/* Disk conditioner configuration */
+typedef struct disk_conditioner_info {
+  int enabled;
+  uint64_t access_time_usec; // maximum latency until transfer begins
+  uint64_t read_throughput_mbps; // maximum throughput for reads
+  uint64_t write_throughput_mbps; // maximum throughput for writes
+  int is_ssd; // behave like an SSD
+} disk_conditioner_info;
+
 #define	FSCTL_SYNC_FULLSYNC	(1<<0)	/* Flush the data fully to disk, if supported by the filesystem */
 #define	FSCTL_SYNC_WAIT		(1<<1)	/* Wait for the sync to complete */
 
@@ -299,18 +308,16 @@ typedef struct package_ext_info {
 #define FSIOC_FIOSEEKDATA					  _IOWR('A', 17, off_t)
 #define	FSCTL_FIOSEEKDATA					  IOCBASECMD(FSIOC_FIOSEEKDATA)
 
-//
-// IO commands 16 and 17 are currently unused
-//
+/* Disk conditioner */
+#define DISK_CONDITIONER_IOC_GET		  _IOR('A', 18, disk_conditioner_info)
+#define DISK_CONDITIONER_FSCTL_GET		  IOCBASECMD(DISK_CONDITIONER_IOC_GET)
+#define DISK_CONDITIONER_IOC_SET		  _IOW('A', 19, disk_conditioner_info)
+#define DISK_CONDITIONER_FSCTL_SET		  IOCBASECMD(DISK_CONDITIONER_IOC_SET)
 
 //
 // Spotlight and fseventsd use these fsctl()'s to find out 
 // the mount time of a volume and the last time it was 
-// unmounted.  Both HFS and ZFS support these calls.
-//
-// User space code should pass the "_IOC_" macros while the 
-// kernel should test for the "_FSCTL_" variant of the macro 
-// in its vnop_ioctl function.
+// unmounted.  Both HFS and APFS support these calls.
 //
 // NOTE: the values for these defines should _not_ be changed
 //       or else it will break binary compatibility with mds
@@ -320,7 +327,6 @@ typedef struct package_ext_info {
 #define SPOTLIGHT_FSCTL_GET_MOUNT_TIME		  IOCBASECMD(SPOTLIGHT_IOC_GET_MOUNT_TIME)
 #define SPOTLIGHT_IOC_GET_LAST_MTIME		  _IOR('h', 19, u_int32_t)
 #define SPOTLIGHT_FSCTL_GET_LAST_MTIME		  IOCBASECMD(SPOTLIGHT_IOC_GET_LAST_MTIME)
-
 
 #ifndef KERNEL
 

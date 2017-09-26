@@ -193,7 +193,7 @@ proto_input_run(void)
 	mbuf_t packet_list;
 	int i, locked = 0;
 
-	lck_mtx_assert(&inp->input_lck, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&inp->input_lck, LCK_MTX_ASSERT_NOTOWNED);
 
 	if (inp->input_waiting & DLIL_PROTO_REGISTER) {
 		lck_mtx_lock_spin(&inp->input_lck);

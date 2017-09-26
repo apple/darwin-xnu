@@ -75,6 +75,8 @@ extern task_t port_name_to_task(
 	mach_port_name_t name);
 extern task_t port_name_to_task_inspect(
 	mach_port_name_t name);
+extern void ipc_port_release_send(
+	ipc_port_t	port);
 #endif /* _IPC_IPC_PORT_H_ */
 
 extern ipc_space_t  get_task_ipcspace(
@@ -100,6 +102,12 @@ extern int get_vmmap_entries(vm_map_t);
 extern int get_map_nentries(vm_map_t);
 
 extern vm_map_offset_t vm_map_page_mask(vm_map_t);
+
+extern kern_return_t vm_map_purgable_control(
+				vm_map_t		map,
+				vm_map_offset_t		address,
+				vm_purgable_t		control,
+				int			*state);
 
 #if CONFIG_COREDUMP
 extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);
@@ -170,6 +178,29 @@ extern memory_object_control_t swapfile_pager_control(memory_object_t mem_obj);
 #define SIXTEENK_PAGE_SHIFT	14
 #endif /* __arm64__ || ((__ARM_ARCH_7K__ >= 2) && defined(PLATFORM_WatchOS)) */
 
+#if __arm64__
+#define FOURK_PAGE_SIZE		0x1000
+#define FOURK_PAGE_MASK		0xFFF
+#define FOURK_PAGE_SHIFT	12
+
+extern unsigned int page_shift_user32;
+
+#define VM_MAP_DEBUG_FOURK	MACH_ASSERT
+#if VM_MAP_DEBUG_FOURK
+extern int vm_map_debug_fourk;
+#endif /* VM_MAP_DEBUG_FOURK */
+extern void fourk_pager_bootstrap(void);
+extern memory_object_t fourk_pager_create(void);
+extern vm_object_t fourk_pager_to_vm_object(memory_object_t mem_obj);
+extern kern_return_t fourk_pager_populate(
+	memory_object_t mem_obj,
+	boolean_t overwrite,
+	int index,
+	vm_object_t new_backing_object,
+	vm_object_offset_t new_backing_offset,
+	vm_object_t *old_backing_object,
+	vm_object_offset_t *old_backing_offset);
+#endif /* __arm64__ */
 
 /*
  * bsd
@@ -327,8 +358,6 @@ extern kern_return_t vnode_pager_terminate(
 	memory_object_t);
 extern void vnode_pager_vrele(
 	struct vnode *vp);
-extern void vnode_pager_release_from_cache(
-	int	*);
 extern struct vnode *vnode_pager_lookup_vnode(
 	memory_object_t);
 
@@ -428,6 +457,11 @@ extern boolean_t cs_validate_range(struct vnode *vp,
 				   vm_size_t size,
 				   unsigned *result);
 
+extern kern_return_t memory_entry_purgeable_control_internal(
+	ipc_port_t	entry_port,
+	vm_purgable_t	control,
+	int		*state);
+
 extern kern_return_t mach_memory_entry_purgable_control(
 	ipc_port_t	entry_port,
 	vm_purgable_t	control,
@@ -480,6 +514,7 @@ extern kern_return_t compressor_memory_object_create(
 	memory_object_t *);
 
 extern boolean_t vm_compressor_low_on_space(void);
+extern boolean_t vm_compressor_out_of_space(void);
 extern int	 vm_swap_low_on_space(void);
 void		 do_fastwake_warmup_all(void);
 #if CONFIG_JETSAM
@@ -540,45 +575,13 @@ extern int secluded_for_filecache;
 extern int secluded_for_fbdp;
 #endif
 
-/*
- * "secluded_aging_policy" controls the aging of secluded pages:
- *
- * SECLUDED_AGING_FIFO
- * When a page eligible for the secluded queue is activated or
- * deactivated, it is inserted in the secluded queue.
- * When it get pushed out of the secluded queue, it gets freed.
- *
- * SECLUDED_AGING_ALONG_ACTIVE
- * When a page eligible for the secluded queue is activated, it is
- * inserted in the secluded queue.
- * When it gets pushed out of the secluded queue, its "referenced" bit
- * is reset and it is inserted in the inactive queue.
- *
- * SECLUDED_AGING_AFTER_INACTIVE
- * A page eligible for the secluded queue first makes its way through the
- * active and inactive queues.
- * When it is pushed out of the inactive queue without being re-activated,
- * it is inserted in the secluded queue instead of being reclaimed.
- * When it is pushed out of the secluded queue, it is either freed if it
- * hasn't been re-referenced, or re-activated if it has been re-referenced.
- *
- * SECLUDED_AGING_BEFORE_ACTIVE
- * A page eligible for the secluded queue will first make its way through
- * the secluded queue.  When it gets pushed out of the secluded queue (by
- * new secluded pages), it goes back to the normal aging path, through the
- * active queue and then the inactive queue.
- */
-extern int secluded_aging_policy;
-#define SECLUDED_AGING_FIFO		0
-#define SECLUDED_AGING_ALONG_ACTIVE	1
-#define SECLUDED_AGING_AFTER_INACTIVE	2
-#define SECLUDED_AGING_BEFORE_ACTIVE	3
-
 extern void 		memory_object_mark_eligible_for_secluded(
 	memory_object_control_t		control,
 	boolean_t			eligible_for_secluded);
 
 #endif /* CONFIG_SECLUDED_MEMORY */
+
+#define MAX_PAGE_RANGE_QUERY	(1ULL * 1024 * 1024 * 1024) /* 1 GB */
 
 #ifdef __cplusplus
 }

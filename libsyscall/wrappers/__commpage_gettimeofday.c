@@ -24,56 +24,93 @@
 #include <sys/time.h>
 #include <mach/mach_time.h>
 #include <machine/cpu_capabilities.h>
+#include <os/overflow.h>
+#include <kern/arithmetic_128.h>
 
 int __commpage_gettimeofday(struct timeval *);
 
 __attribute__((visibility("hidden")))
 int __commpage_gettimeofday_internal(struct timeval *tp, uint64_t *tbr_out);
 
-#if   defined(__x86_64__) || defined(__i386__)
+int
+__commpage_gettimeofday(struct timeval *tp)
+{
+	return __commpage_gettimeofday_internal(tp, NULL);
+}
 
-// XXX: must be kept in sync with __commpage_gettimeofday.s
 int
 __commpage_gettimeofday_internal(struct timeval *tp, uint64_t *tbr_out)
 {
-	volatile uint32_t *gtod_generation_p = _COMM_PAGE_GTOD_GENERATION;
-	volatile uint64_t *gtod_sec_base_p = _COMM_PAGE_GTOD_SEC_BASE;
-	volatile uint64_t *gtod_ns_base_p = _COMM_PAGE_GTOD_NS_BASE;
+	uint64_t now, over;
+	uint64_t delta,frac;
+	uint64_t TimeStamp_tick;
+	uint64_t TimeStamp_sec;
+	uint64_t TimeStamp_frac;
+	uint64_t Tick_scale;
+	uint64_t Ticks_per_sec;
 
-	uint64_t tbr, gen, tod_secs, tod_nsecs, elapsed;
-	while(1) {
-		gen = *gtod_generation_p;
-		tbr = mach_absolute_time();
-		tod_secs = *gtod_sec_base_p;
-		tod_nsecs = *gtod_ns_base_p;
-		uint64_t gen2 = *gtod_generation_p;
-		if(__builtin_expect(gen, gen2) == gen2)
-			break;
+	volatile uint64_t *gtod_TimeStamp_tick_p;
+	volatile uint64_t *gtod_TimeStamp_sec_p;
+	volatile uint64_t *gtod_TimeStamp_frac_p;
+	volatile uint64_t *gtod_Ticks_scale_p;
+	volatile uint64_t *gtod_Ticks_per_sec_p;
+
+	new_commpage_timeofday_data_t *commpage_timeofday_datap;
+
+	commpage_timeofday_datap =  (new_commpage_timeofday_data_t *)_COMM_PAGE_NEWTIMEOFDAY_DATA;
+
+	gtod_TimeStamp_tick_p = &commpage_timeofday_datap->TimeStamp_tick;
+	gtod_TimeStamp_sec_p = &commpage_timeofday_datap->TimeStamp_sec;
+	gtod_TimeStamp_frac_p = &commpage_timeofday_datap->TimeStamp_frac;
+	gtod_Ticks_scale_p = &commpage_timeofday_datap->Ticks_scale;
+	gtod_Ticks_per_sec_p = &commpage_timeofday_datap->Ticks_per_sec;
+
+	do {
+		TimeStamp_tick = *gtod_TimeStamp_tick_p;
+		TimeStamp_sec = *gtod_TimeStamp_sec_p;
+		TimeStamp_frac = *gtod_TimeStamp_frac_p;
+		Tick_scale = *gtod_Ticks_scale_p;
+		Ticks_per_sec = *gtod_Ticks_per_sec_p;
+
+		/*
+		 * This call contains an instruction barrier which will ensure that the
+		 * second read of the abs time isn't speculated above the reads of the
+		 * other values above
+		 */
+		now = mach_absolute_time();
+	} while (TimeStamp_tick != *gtod_TimeStamp_tick_p);
+
+	if (TimeStamp_tick == 0)
+		return(1);
+
+	delta = now - TimeStamp_tick;
+
+	/* If more than one second force a syscall */
+	if (delta >= Ticks_per_sec)
+		return(1);
+
+	tp->tv_sec = TimeStamp_sec;
+
+	over = multi_overflow(Tick_scale, delta);
+	if(over){
+		tp->tv_sec += over;
 	}
-	if (gen == 0) return KERN_FAILURE;
-	elapsed = tbr - tod_nsecs;
 
-	unsigned long secs;
-	uint32_t nsec;
-#if defined(__x86_64__)
-	secs = elapsed/NSEC_PER_SEC;
-	nsec = elapsed % NSEC_PER_SEC;
-#elif defined(__i386__)
-	uint32_t secs1, secs2;
-	secs1 = elapsed >> 32;
-	secs2 = elapsed;
-	__asm__ (
-	  "divl %4"
-	  : "=a" (secs), "=d" (nsec)
-	  : "0" (secs2), "1" (secs1), "rm" (NSEC_PER_SEC)
-	);
-#endif /* __i386 or __x86_64__ */
-	tp->tv_sec = tod_secs + secs;
-	tp->tv_usec = nsec / NSEC_PER_USEC;
+	/* Sum scale*delta to TimeStamp_frac, if it overflows increment sec */
+	frac = TimeStamp_frac;
+	frac += Tick_scale * delta;
+	if( TimeStamp_frac > frac )
+		tp->tv_sec++;
 
-	if (tbr_out) *tbr_out = tbr;
+	/*
+	 * Convert frac (64 bit frac of a sec) to usec
+	 * usec = frac * USEC_PER_SEC / 2^64
+	 */
+	tp->tv_usec = ((uint64_t)1000000 * (uint32_t)(frac >> 32)) >> 32;
 
-	return KERN_SUCCESS;
+	if (tbr_out) {
+		*tbr_out = now;
+	}
+
+	return(0);
 }
-
-#endif

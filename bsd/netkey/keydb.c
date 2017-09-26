@@ -91,7 +91,7 @@ keydb_newsecpolicy(void)
 {
 	struct secpolicy *p;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	return (struct secpolicy *)_MALLOC(sizeof(*p), M_SECA,
 	    M_WAITOK | M_ZERO);
@@ -112,7 +112,7 @@ keydb_newsecashead(void)
 	struct secashead *p;
 	int i;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT | M_ZERO);
 	if (!p) {
@@ -147,7 +147,7 @@ keydb_newsecasvar()
 {
 	struct secasvar *p;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	p = (struct secasvar *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
 	if (!p)
@@ -162,7 +162,7 @@ keydb_refsecasvar(p)
 	struct secasvar *p;
 {
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	p->refcnt++;
 }
@@ -172,7 +172,7 @@ keydb_freesecasvar(p)
 	struct secasvar *p;
 {
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	p->refcnt--;
 	/* negative refcnt will cause panic intentionally */
@@ -200,7 +200,7 @@ keydb_newsecreplay(size_t wsize)
 {
 	struct secreplay *p;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT | M_ZERO);
 	if (!p) {

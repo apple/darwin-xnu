@@ -97,6 +97,7 @@ typedef struct fasttrap_provider {
 	uint_t ftp_retired;			/* mark when retired */
 	lck_mtx_t ftp_mtx;			/* provider lock */
 	lck_mtx_t ftp_cmtx;			/* lock on creating probes */
+	uint64_t ftp_pcount;			/* probes in provider count */
 	uint64_t ftp_rcount;			/* enabled probes ref count */
 	uint64_t ftp_ccount;			/* consumers creating probes */
 	uint64_t ftp_mcount;			/* meta provider count */
@@ -130,6 +131,7 @@ struct fasttrap_probe {
 	uint8_t *ftp_argmap;			/* native to translated args */
 	uint8_t ftp_nargs;			/* translated argument count */
 	uint8_t ftp_enabled;			/* is this probe enabled */
+	uint8_t ftp_triggered;
 	char *ftp_xtypes;			/* translated types index */
 	char *ftp_ntypes;			/* native types index */
 	fasttrap_id_tp_t ftp_tps[1];		/* flexible array */
@@ -188,6 +190,13 @@ extern fasttrap_hash_t		fasttrap_tpoints;
 #define	FASTTRAP_TPOINTS_INDEX(pid, pc) \
 	(((pc) / sizeof (fasttrap_instr_t) + (pid)) & fasttrap_tpoints.fth_mask)
 
+
+#ifdef CONFIG_EMBEDDED
+#define FASTTRAP_ASYNC_REMOVE
+#endif
+
+extern void fasttrap_tracepoint_retire(proc_t *p, fasttrap_tracepoint_t *tp);
+
 /*
  * Must be implemented by fasttrap_isa.c
  */
@@ -199,12 +208,16 @@ extern int fasttrap_tracepoint_remove(proc_t *, fasttrap_tracepoint_t *);
 #if defined(__x86_64__)
 extern int fasttrap_pid_probe(x86_saved_state_t *regs);
 extern int fasttrap_return_probe(x86_saved_state_t* regs);
+#elif defined(__arm__) || defined(__arm64__)
+extern int fasttrap_pid_probe(arm_saved_state_t *rp);
+extern int fasttrap_return_probe(arm_saved_state_t *regs);
 #else
 #error architecture not supported
 #endif
 
 extern uint64_t fasttrap_pid_getarg(void *, dtrace_id_t, void *, int, int);
 extern uint64_t fasttrap_usdt_getarg(void *, dtrace_id_t, void *, int, int);
+
 
 #ifdef	__cplusplus
 }

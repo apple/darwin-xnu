@@ -36,7 +36,9 @@ _mach_continuous_time_base(void)
 		volatile uint64_t *base_ptr = (volatile uint64_t*)_COMM_PAGE_CONT_TIMEBASE;
 		uint64_t read1, read2;
 		read1 = *base_ptr;
-#if   defined(__i386__)
+#if defined(__arm__)
+		__asm__ volatile("dsb sy" ::: "memory");
+#elif defined(__i386__)
 		__asm__ volatile("lfence" ::: "memory");
 #else
 #error "unsupported arch"
@@ -51,6 +53,21 @@ _mach_continuous_time_base(void)
 #endif // 64-bit
 }
 
+__attribute__((visibility("hidden")))
+kern_return_t
+_mach_continuous_hwclock(uint64_t *cont_time __unused)
+{
+#if defined(__arm64__)
+	uint8_t cont_hwclock = *((uint8_t*)_COMM_PAGE_CONT_HWCLOCK);
+	uint64_t timebase;
+	if (cont_hwclock) {
+		__asm__ volatile("isb\n" "mrs %0, CNTPCT_EL0" : "=r"(timebase));
+		*cont_time = timebase;
+		return KERN_SUCCESS;
+	}
+#endif
+	return KERN_NOT_SUPPORTED;
+}
 
 __attribute__((visibility("hidden")))
 kern_return_t
@@ -63,6 +80,13 @@ _mach_continuous_time(uint64_t* absolute_time, uint64_t* cont_time)
 	do {
         read1 = *base_ptr;
         absolute = mach_absolute_time();
+#if	defined(__arm__) || defined(__arm64__)
+            /*
+             * mach_absolute_time() contains an instruction barrier which will
+             * prevent the speculation of read2 above this point, so we don't
+             * need another barrier here.
+             */
+#endif
 		read2 = *base_ptr;
 	} while (__builtin_expect((read1 != read2), 0));
 
@@ -76,17 +100,18 @@ uint64_t
 mach_continuous_time(void)
 {
 	uint64_t cont_time;
-    _mach_continuous_time(NULL, &cont_time);
+	if (_mach_continuous_hwclock(&cont_time) != KERN_SUCCESS)
+		_mach_continuous_time(NULL, &cont_time);
 	return cont_time;
 }
 
 uint64_t
 mach_continuous_approximate_time(void)
 {
-    /*
-     * No retry loop here because if we use a slightly too old timebase that's
-     * okay, we are approximate time anyway.
-     */
-    volatile register uint64_t time_base = _mach_continuous_time_base();
-    return time_base + mach_approximate_time();
+	/*
+	 * No retry loop here because if we use a slightly too old timebase that's
+	 * okay, we are approximate time anyway.
+	*/
+	volatile register uint64_t time_base = _mach_continuous_time_base();
+	return time_base + mach_approximate_time();
 }

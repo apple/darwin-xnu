@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -46,20 +46,9 @@
 #include <net/pktsched/pktsched_tcq.h>
 #include <net/pktsched/pktsched_qfq.h>
 #include <net/pktsched/pktsched_fq_codel.h>
-#if PKTSCHED_PRIQ
-#include <net/pktsched/pktsched_priq.h>
-#endif /* PKTSCHED_PRIQ */
-#if PKTSCHED_FAIRQ
-#include <net/pktsched/pktsched_fairq.h>
-#endif /* PKTSCHED_FAIRQ */
-#if PKTSCHED_CBQ
-#include <net/pktsched/pktsched_cbq.h>
-#endif /* PKTSCHED_CBQ */
-#if PKTSCHED_HFSC
-#include <net/pktsched/pktsched_hfsc.h>
-#endif /* PKTSCHED_HFSC */
 
 #include <pexpert/pexpert.h>
+
 
 u_int32_t machclk_freq = 0;
 u_int64_t machclk_per_sec = 0;
@@ -83,18 +72,6 @@ pktsched_init(void)
 
 	tcq_init();
 	qfq_init();
-#if PKTSCHED_PRIQ
-	priq_init();
-#endif /* PKTSCHED_PRIQ */
-#if PKTSCHED_FAIRQ
-	fairq_init();
-#endif /* PKTSCHED_FAIRQ */
-#if PKTSCHED_CBQ
-	cbq_init();
-#endif /* PKTSCHED_CBQ */
-#if PKTSCHED_HFSC
-	hfsc_init();
-#endif /* PKTSCHED_HFSC */
 }
 
 static void
@@ -129,10 +106,10 @@ pktsched_nsecs_to_abstime(u_int64_t nsecs)
 }
 
 int
-pktsched_setup(struct ifclassq *ifq, u_int32_t scheduler, u_int32_t sflags)
+pktsched_setup(struct ifclassq *ifq, u_int32_t scheduler, u_int32_t sflags,
+    classq_pkt_type_t ptype)
 {
 	int error = 0;
-	u_int32_t qflags = sflags;
 	u_int32_t rflags;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
@@ -142,17 +119,6 @@ pktsched_setup(struct ifclassq *ifq, u_int32_t scheduler, u_int32_t sflags)
 	/* Nothing to do unless the scheduler type changes */
 	if (ifq->ifcq_type == scheduler)
 		return (0);
-
-	qflags &= (PKTSCHEDF_QALG_RED | PKTSCHEDF_QALG_RIO |
-	    PKTSCHEDF_QALG_BLUE | PKTSCHEDF_QALG_SFB);
-
-	/* These are mutually exclusive */
-	if (qflags != 0 &&
-	    qflags != PKTSCHEDF_QALG_RED && qflags != PKTSCHEDF_QALG_RIO &&
-	    qflags != PKTSCHEDF_QALG_BLUE && qflags != PKTSCHEDF_QALG_SFB) {
-		panic("%s: RED|RIO|BLUE|SFB mutually exclusive\n", __func__);
-		/* NOTREACHED */
-	}
 
 	/*
 	 * Remember the flags that need to be restored upon success, as
@@ -173,21 +139,15 @@ pktsched_setup(struct ifclassq *ifq, u_int32_t scheduler, u_int32_t sflags)
 	}
 
 	switch (scheduler) {
-#if PKTSCHED_PRIQ
-	case PKTSCHEDT_PRIQ:
-		error = priq_setup_ifclassq(ifq, sflags);
-		break;
-#endif /* PKTSCHED_PRIQ */
-
 	case PKTSCHEDT_TCQ:
-		error = tcq_setup_ifclassq(ifq, sflags);
+		error = tcq_setup_ifclassq(ifq, sflags, ptype);
 		break;
 
 	case PKTSCHEDT_QFQ:
-		error = qfq_setup_ifclassq(ifq, sflags);
+		error = qfq_setup_ifclassq(ifq, sflags, ptype);
 		break;
 	case PKTSCHEDT_FQ_CODEL:
-		error = fq_if_setup_ifclassq(ifq, sflags);
+		error = fq_if_setup_ifclassq(ifq, sflags, ptype);
 		break;
 	default:
 		error = ENXIO;
@@ -216,12 +176,6 @@ pktsched_teardown(struct ifclassq *ifq)
 	case PKTSCHEDT_NONE:
 		break;
 
-#if PKTSCHED_PRIQ
-	case PKTSCHEDT_PRIQ:
-		error = priq_teardown_ifclassq(ifq);
-		break;
-#endif /* PKTSCHED_PRIQ */
-
 	case PKTSCHEDT_TCQ:
 		error = tcq_teardown_ifclassq(ifq);
 		break;
@@ -249,12 +203,6 @@ pktsched_getqstats(struct ifclassq *ifq, u_int32_t qid,
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
 	switch (ifq->ifcq_type) {
-#if PKTSCHED_PRIQ
-	case PKTSCHEDT_PRIQ:
-		error = priq_getqstats_ifclassq(ifq, qid, ifqs);
-		break;
-#endif /* PKTSCHED_PRIQ */
-
 	case PKTSCHEDT_TCQ:
 		error = tcq_getqstats_ifclassq(ifq, qid, ifqs);
 		break;
@@ -272,4 +220,162 @@ pktsched_getqstats(struct ifclassq *ifq, u_int32_t qid,
 	}
 
 	return (error);
+}
+
+void
+pktsched_pkt_encap(pktsched_pkt_t *pkt, classq_pkt_type_t ptype, void *pp)
+{
+	pkt->pktsched_ptype = ptype;
+	pkt->pktsched_pkt = pp;
+
+	switch (ptype) {
+	case QP_MBUF:
+		pkt->pktsched_plen =
+		    (uint32_t)m_pktlen((struct mbuf *)pkt->pktsched_pkt);
+		break;
+
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+}
+
+void
+pktsched_free_pkt(pktsched_pkt_t *pkt)
+{
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF:
+		m_freem(pkt->pktsched_pkt);
+		break;
+
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	pkt->pktsched_pkt = NULL;
+	pkt->pktsched_plen = 0;
+	pkt->pktsched_ptype = 0;
+}
+
+uint32_t
+pktsched_get_pkt_len(pktsched_pkt_t *pkt)
+{
+	return (pkt->pktsched_plen);
+}
+
+mbuf_svc_class_t
+pktsched_get_pkt_svc(pktsched_pkt_t *pkt)
+{
+	mbuf_svc_class_t svc = MBUF_SC_UNSPEC;
+
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF:
+		svc = m_get_service_class((mbuf_t)pkt->pktsched_pkt);
+		break;
+
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	return (svc);
+}
+
+void
+pktsched_get_pkt_vars(pktsched_pkt_t *pkt, uint32_t **flags,
+    uint64_t **timestamp, uint32_t *flowid, uint8_t *flowsrc, uint8_t *proto,
+    uint32_t *tcp_start_seq)
+{
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF: {
+		struct mbuf *m = (struct mbuf *)pkt->pktsched_pkt;
+		struct pkthdr *pkth = &m->m_pkthdr;
+
+		if (flags != NULL)
+			*flags = &pkth->pkt_flags;
+		if (timestamp != NULL)
+			*timestamp = &pkth->pkt_timestamp;
+		if (flowid != NULL)
+			*flowid = pkth->pkt_flowid;
+		if (flowsrc != NULL)
+			*flowsrc = pkth->pkt_flowsrc;
+		if (proto != NULL)
+			*proto = pkth->pkt_proto;
+		/*
+		 * caller should use this value only if PKTF_START_SEQ
+		 * is set in the mbuf packet flags
+		 */
+		if (tcp_start_seq != NULL)
+			*tcp_start_seq = pkth->tx_start_seq;
+
+		break;
+	}
+
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+}
+
+struct flowadv_fcentry *
+pktsched_alloc_fcentry(pktsched_pkt_t *pkt, struct ifnet *ifp, int how)
+{
+#pragma unused(ifp)
+	struct flowadv_fcentry *fce = NULL;
+
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF: {
+		struct mbuf *m = (struct mbuf *)pkt->pktsched_pkt;
+
+		fce = flowadv_alloc_entry(how);
+		if (fce == NULL)
+			break;
+
+		_CASSERT(sizeof (m->m_pkthdr.pkt_flowid) ==
+		    sizeof (fce->fce_flowid));
+
+		fce->fce_flowsrc_type = m->m_pkthdr.pkt_flowsrc;
+		fce->fce_flowid = m->m_pkthdr.pkt_flowid;
+		break;
+	}
+
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	return (fce);
+}
+
+uint32_t *
+pktsched_get_pkt_sfb_vars(pktsched_pkt_t *pkt, uint32_t **sfb_flags)
+{
+	uint32_t *hashp = NULL;
+
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF: {
+		struct mbuf *m = (struct mbuf *)pkt->pktsched_pkt;
+		struct pkthdr *pkth = &m->m_pkthdr;
+
+		_CASSERT(sizeof (pkth->pkt_mpriv_hash) == sizeof (uint32_t));
+		_CASSERT(sizeof (pkth->pkt_mpriv_flags) == sizeof (uint32_t));
+
+		*sfb_flags = &pkth->pkt_mpriv_flags;
+		hashp = &pkth->pkt_mpriv_hash;
+		break;
+	}
+
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	return (hashp);
 }

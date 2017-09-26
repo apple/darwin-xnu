@@ -40,6 +40,7 @@
 
 #include <sys/cdefs.h>
 #include <sys/_types.h>
+#include <machine/types.h> /* __int32_t */
 
 /*
  * [XSI]	All of the symbols from <sys/ipc.h> SHALL be defined

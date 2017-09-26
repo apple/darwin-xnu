@@ -70,8 +70,9 @@
 extern int esp6_output(struct mbuf *, u_char *, struct mbuf *,
 	struct secasvar *);
 extern int esp6_input(struct mbuf **, int *, int);
+extern int esp6_input_extended(struct mbuf **mp, int *offp, int proto, ifnet_t interface);
 
-extern void esp6_ctlinput(int, struct sockaddr *, void *);
+extern void esp6_ctlinput(int, struct sockaddr *, void *, struct ifnet *);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETINET6_ESP6_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -99,10 +99,11 @@
 #include <net/if_ppp.h>
 #include <net/ethernet.h>
 #include <net/network_agent.h>
-
 #include <net/radix.h>
 #include <net/route.h>
 #include <net/dlil.h>
+#include <net/nwk_wq.h>
+
 #include <sys/domain.h>
 #include <libkern/OSAtomic.h>
 
@@ -128,10 +129,6 @@
 #if CONFIG_MACF_NET
 #include <security/mac_framework.h>
 #endif
-
-#if PF_ALTQ
-#include <net/altq/if_altq.h>
-#endif /* !PF_ALTQ */
 
 /*
  * System initialization
@@ -245,6 +242,9 @@ SYSCTL_DECL(_net_link_generic_system);
 static uint32_t if_verbose = 0;
 SYSCTL_INT(_net_link_generic_system, OID_AUTO, if_verbose,
     CTLFLAG_RW | CTLFLAG_LOCKED, &if_verbose, 0, "");
+
+/* Eventhandler context for interface events */
+struct eventhandler_lists_ctxt ifnet_evhdlr_ctxt;
 
 void
 ifa_init(void)
@@ -384,6 +384,7 @@ if_detach_ifa_common(struct ifnet *ifp, struct ifaddr *ifa, int link)
 
 	if (ifa->ifa_detached != NULL)
 		(*ifa->ifa_detached)(ifa);
+
 }
 
 #define	INITIAL_IF_INDEXLIM	8
@@ -1238,7 +1239,7 @@ link_rtrequest(int cmd, struct rtentry *rt, struct sockaddr *sa)
 	struct ifnet *ifp;
 	void (*ifa_rtrequest)(int, struct rtentry *, struct sockaddr *);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	if (cmd != RTM_ADD || ((ifa = rt->rt_ifa) == 0) ||
@@ -1369,12 +1370,6 @@ if_qflush(struct ifnet *ifp, int ifq_locked)
 
 	if (IFCQ_IS_ENABLED(ifq))
 		IFCQ_PURGE(ifq);
-#if PF_ALTQ
-	if (IFCQ_IS_DRAINING(ifq))
-		ifq->ifcq_drain = 0;
-	if (ALTQ_IS_ENABLED(IFCQ_ALTQ(ifq)))
-		ALTQ_PURGE(IFCQ_ALTQ(ifq));
-#endif /* PF_ALTQ */
 
 	VERIFY(IFCQ_IS_EMPTY(ifq));
 
@@ -1398,14 +1393,6 @@ if_qflush_sc(struct ifnet *ifp, mbuf_svc_class_t sc, u_int32_t flow,
 
 	if (IFCQ_IS_ENABLED(ifq))
 		IFCQ_PURGE_SC(ifq, sc, flow, cnt, len);
-#if PF_ALTQ
-	if (IFCQ_IS_DRAINING(ifq)) {
-		VERIFY((signed)(ifq->ifcq_drain - cnt) >= 0);
-		ifq->ifcq_drain -= cnt;
-	}
-	if (ALTQ_IS_ENABLED(IFCQ_ALTQ(ifq)))
-		ALTQ_PURGE_SC(IFCQ_ALTQ(ifq), sc, flow, a_cnt, a_len);
-#endif /* PF_ALTQ */
 
 	if (!ifq_locked)
 		IFCQ_UNLOCK(ifq);
@@ -1695,16 +1682,10 @@ ifioctl_linkparams(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
 		u_int64_t tbr_bw = 0, tbr_pct = 0;
 
 		IFCQ_LOCK(ifq);
-#if PF_ALTQ
-		if (ALTQ_IS_ENABLED(IFCQ_ALTQ(ifq))) {
-			sched_type = IFCQ_ALTQ(ifq)->altq_type;
-			flags |= IFLPRF_ALTQ;
-		} else
-#endif /* PF_ALTQ */
-		{
-			if (IFCQ_IS_ENABLED(ifq))
-				sched_type = ifq->ifcq_type;
-		}
+
+		if (IFCQ_IS_ENABLED(ifq))
+			sched_type = ifq->ifcq_type;
+
 		bcopy(&sched_type, &iflpr->iflpr_output_sched,
 		    sizeof (iflpr->iflpr_output_sched));
 
@@ -1843,6 +1824,116 @@ ifioctl_getnetagents(struct ifnet *ifp, u_int32_t *count, user_addr_t uuid_p)
 
 #define	IF_MAXAGENTS		64
 #define	IF_AGENT_INCREMENT	8
+static int
+if_add_netagent_locked(struct ifnet *ifp, uuid_t new_agent_uuid)
+{
+	uuid_t *first_empty_slot = NULL;
+	u_int32_t index = 0;
+	bool already_added = FALSE;
+
+	if (ifp->if_agentids != NULL) {
+		for (index = 0; index < ifp->if_agentcount; index++) {
+			uuid_t *netagent_uuid = &(ifp->if_agentids[index]);
+			if (uuid_compare(*netagent_uuid, new_agent_uuid) == 0) {
+				/* Already present, ignore */
+				already_added = TRUE;
+				break;
+			}
+			if (first_empty_slot == NULL &&
+				uuid_is_null(*netagent_uuid)) {
+				first_empty_slot = netagent_uuid;
+			}
+		}
+	}
+	if (already_added) {
+		/* Already added agent, don't return an error */
+		return (0);
+	}
+	if (first_empty_slot == NULL) {
+		if (ifp->if_agentcount >= IF_MAXAGENTS) {
+			/* No room for another netagent UUID, bail */
+			return (ENOMEM);
+		} else {
+			/* Calculate new array size */
+			u_int32_t new_agent_count =
+			MIN(ifp->if_agentcount + IF_AGENT_INCREMENT,
+			    IF_MAXAGENTS);
+
+			/* Reallocate array */
+			uuid_t *new_agent_array = _REALLOC(ifp->if_agentids,
+			    sizeof(uuid_t) * new_agent_count, M_NETAGENT,
+			    M_WAITOK | M_ZERO);
+			if (new_agent_array == NULL) {
+				return (ENOMEM);
+			}
+
+			/* Save new array */
+			ifp->if_agentids = new_agent_array;
+
+			/* Set first empty slot */
+			first_empty_slot =
+			    &(ifp->if_agentids[ifp->if_agentcount]);
+
+			/* Save new array length */
+			ifp->if_agentcount = new_agent_count;
+		}
+	}
+	uuid_copy(*first_empty_slot, new_agent_uuid);
+	netagent_post_updated_interfaces(new_agent_uuid);
+	return (0);
+}
+
+int
+if_add_netagent(struct ifnet *ifp, uuid_t new_agent_uuid)
+{
+	VERIFY(ifp != NULL);
+
+	ifnet_lock_exclusive(ifp);
+
+	int error = if_add_netagent_locked(ifp, new_agent_uuid);
+
+	ifnet_lock_done(ifp);
+
+	return (error);
+}
+
+static int
+if_delete_netagent_locked(struct ifnet *ifp, uuid_t remove_agent_uuid)
+{
+	u_int32_t index = 0;
+	bool removed_agent_id = FALSE;
+
+	if (ifp->if_agentids != NULL) {
+		for (index = 0; index < ifp->if_agentcount; index++) {
+			uuid_t *netagent_uuid = &(ifp->if_agentids[index]);
+			if (uuid_compare(*netagent_uuid,
+			    remove_agent_uuid) == 0) {
+				uuid_clear(*netagent_uuid);
+				removed_agent_id = TRUE;
+				break;
+			}
+		}
+	}
+	if (removed_agent_id)
+		netagent_post_updated_interfaces(remove_agent_uuid);
+
+	return (0);
+}
+
+int
+if_delete_netagent(struct ifnet *ifp, uuid_t remove_agent_uuid)
+{
+	VERIFY(ifp != NULL);
+
+	ifnet_lock_exclusive(ifp);
+
+	int error = if_delete_netagent_locked(ifp, remove_agent_uuid);
+
+	ifnet_lock_done(ifp);
+
+	return (error);
+}
+
 static __attribute__((noinline)) int
 ifioctl_netagent(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
 {
@@ -1852,7 +1943,6 @@ ifioctl_netagent(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
 		struct if_agentidsreq64 s64;
 	} u;
 	int error = 0;
-	u_int32_t index = 0;
 
 	VERIFY(ifp != NULL);
 
@@ -1870,82 +1960,19 @@ ifioctl_netagent(struct ifnet *ifp, u_long cmd, caddr_t data, struct proc *p)
 
 	switch (cmd) {
 		case SIOCAIFAGENTID: {		/* struct if_agentidreq */
-			uuid_t *first_empty_slot = NULL;
 			// TODO: Use priv_check_cred() instead of root check
 			if ((error = proc_suser(p)) != 0) {
 				break;
 			}
-			bool already_added = FALSE;
-			if (ifp->if_agentids != NULL) {
-				for (index = 0; index < ifp->if_agentcount; index++) {
-					uuid_t *netagent_uuid = &(ifp->if_agentids[index]);
-					if (uuid_compare(*netagent_uuid, ifar->ifar_uuid) == 0) {
-						/* Already present, ignore */
-						already_added = TRUE;
-						break;
-					}
-					if (first_empty_slot == NULL &&
-						uuid_is_null(*netagent_uuid)) {
-						first_empty_slot = netagent_uuid;
-					}
-				}
-			}
-			if (already_added) {
-				/* Already added agent, don't return an error */
-				break;
-			}
-			if (first_empty_slot == NULL) {
-				if (ifp->if_agentcount >= IF_MAXAGENTS) {
-					/* No room for another netagent UUID, bail */
-					error = ENOMEM;
-					break;
-				} else {
-					/* Calculate new array size */
-					u_int32_t new_agent_count =
-						MIN(ifp->if_agentcount + IF_AGENT_INCREMENT, IF_MAXAGENTS);
-
-					/* Reallocate array */
-					uuid_t *new_agent_array = _REALLOC(ifp->if_agentids,
-													   sizeof(uuid_t) * new_agent_count, M_NETAGENT,
-													   M_WAITOK | M_ZERO);
-					if (new_agent_array == NULL) {
-						error = ENOMEM;
-						break;
-					}
-
-					/* Save new array */
-					ifp->if_agentids = new_agent_array;
-
-					/* Set first empty slot */
-					first_empty_slot = &(ifp->if_agentids[ifp->if_agentcount]);
-
-					/* Save new array length */
-					ifp->if_agentcount = new_agent_count;
-				}
-			}
-			uuid_copy(*first_empty_slot, ifar->ifar_uuid);
-			netagent_post_updated_interfaces(ifar->ifar_uuid);
+			error = if_add_netagent_locked(ifp, ifar->ifar_uuid);
 			break;
 		}
 		case SIOCDIFAGENTID: {			/* struct if_agentidreq */
-			bool removed_agent_id = FALSE;
 			// TODO: Use priv_check_cred() instead of root check
 			if ((error = proc_suser(p)) != 0) {
 				break;
 			}
-			if (ifp->if_agentids != NULL) {
-				for (index = 0; index < ifp->if_agentcount; index++) {
-					uuid_t *netagent_uuid = &(ifp->if_agentids[index]);
-					if (uuid_compare(*netagent_uuid, ifar->ifar_uuid) == 0) {
-						uuid_clear(*netagent_uuid);
-						removed_agent_id = TRUE;
-						break;
-					}
-				}
-			}
-			if (removed_agent_id) {
-				netagent_post_updated_interfaces(ifar->ifar_uuid);
-			}
+			error = if_delete_netagent_locked(ifp, ifar->ifar_uuid);
 			break;
 		}
 		case SIOCGIFAGENTIDS32: {	/* struct if_agentidsreq32 */
@@ -2231,6 +2258,34 @@ ifioctl_netsignature(struct ifnet *ifp, u_long cmd, caddr_t data)
 	return (error);
 }
 
+#if INET6
+static __attribute__((noinline)) int
+ifioctl_nat64prefix(struct ifnet *ifp, u_long cmd, caddr_t data)
+{
+	struct if_nat64req *ifnat64 = (struct if_nat64req *)(void *)data;
+	int error = 0;
+
+	VERIFY(ifp != NULL);
+
+	switch (cmd) {
+	case SIOCSIFNAT64PREFIX:		/* struct if_nat64req */
+		error = ifnet_set_nat64prefix(ifp, ifnat64->ifnat64_prefixes);
+		break;
+
+	case SIOCGIFNAT64PREFIX:		/* struct if_nat64req */
+		error = ifnet_get_nat64prefix(ifp, ifnat64->ifnat64_prefixes);
+		break;
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
+	return (error);
+}
+#endif
+
+
 /*
  * Interface ioctls.
  *
@@ -2351,19 +2406,13 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCSIFDISABLEOUTPUT:		/* struct ifreq */
 #endif /* (DEBUG || DEVELOPMENT) */
 	case SIOCGECNMODE:			/* struct ifreq */
-	case SIOCSECNMODE: {			/* struct ifreq */
-		struct ifreq ifr;
-		bcopy(data, &ifr, sizeof (ifr));
-		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
-		bcopy(&ifr.ifr_name, ifname, IFNAMSIZ);
-		error = ifioctl_ifreq(so, cmd, &ifr, p);
-		bcopy(&ifr, data, sizeof (ifr));
-		goto done;
-	}
+	case SIOCSECNMODE:
 	case SIOCSQOSMARKINGMODE:		/* struct ifreq */
 	case SIOCSQOSMARKINGENABLED:		/* struct ifreq */
 	case SIOCGQOSMARKINGMODE:		/* struct ifreq */
 	case SIOCGQOSMARKINGENABLED:		/* struct ifreq */
+	case SIOCSIFLOWINTERNET:		/* struct ifreq */
+	case SIOCGIFLOWINTERNET:		/* struct ifreq */
 	{			/* struct ifreq */
 		struct ifreq ifr;
 		bcopy(data, &ifr, sizeof (ifr));
@@ -2548,6 +2597,12 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		error = ifioctl_netsignature(ifp, cmd, data);
 		break;
 
+#if INET6
+	case SIOCSIFNAT64PREFIX:		/* struct if_nsreq */
+	case SIOCGIFNAT64PREFIX:		/* struct if_nsreq */
+		error = ifioctl_nat64prefix(ifp, cmd, data);
+		break;
+#endif
 	default:
 		if (so->so_proto == NULL) {
 			error = EOPNOTSUPP;
@@ -2967,10 +3022,10 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 	case SIOCGIFLINKQUALITYMETRIC:
 		ifnet_lock_shared(ifp);
 		if ((ifp->if_interface_state.valid_bitmask &
-		    IF_INTERFACE_STATE_LQM_STATE_VALID))
+		    IF_INTERFACE_STATE_LQM_STATE_VALID)) {
 			ifr->ifr_link_quality_metric =
 			    ifp->if_interface_state.lqm_state;
-		else if ((ifp->if_refflags & IFRF_ATTACHED)) {
+		} else if (IF_FULLY_ATTACHED(ifp)) {
 			ifr->ifr_link_quality_metric =
 			    IFNET_LQM_THRESH_UNKNOWN;
 		} else {
@@ -3251,6 +3306,33 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 #else
 		error = EINVAL;
 #endif /* (DEBUG || DEVELOPMENT) */
+		break;
+	case SIOCSIFLOWINTERNET:
+		if ((error = priv_check_cred(kauth_cred_get(),
+		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0)
+			return (error);
+
+		ifnet_lock_exclusive(ifp);
+		if (ifr->ifr_low_internet & IFRTYPE_LOW_INTERNET_ENABLE_UL)
+			ifp->if_xflags |= IFXF_LOW_INTERNET_UL;
+		else
+			ifp->if_xflags &= ~(IFXF_LOW_INTERNET_UL);
+		if (ifr->ifr_low_internet & IFRTYPE_LOW_INTERNET_ENABLE_DL)
+			ifp->if_xflags |= IFXF_LOW_INTERNET_DL;
+		else
+			ifp->if_xflags &= ~(IFXF_LOW_INTERNET_DL);
+		ifnet_lock_done(ifp);
+		break;
+	case SIOCGIFLOWINTERNET:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_low_internet = 0;
+		if (ifp->if_xflags & IFXF_LOW_INTERNET_UL)
+			ifr->ifr_low_internet |=
+			    IFRTYPE_LOW_INTERNET_ENABLE_UL;
+		if (ifp->if_xflags & IFXF_LOW_INTERNET_DL)
+			ifr->ifr_low_internet |=
+			    IFRTYPE_LOW_INTERNET_ENABLE_DL;
+		ifnet_lock_done(ifp);
 		break;
 	default:
 		VERIFY(0);
@@ -4826,4 +4908,63 @@ ifioctl_cassert(void)
 	case SIOCGQOSMARKINGENABLED:
 		;
 	}
+}
+
+/*
+ * XXX: This API is only used by BSD stack and for now will always return 0.
+ * For Skywalk native drivers, preamble space need not be allocated in mbuf
+ * as the preamble will be reserved in the translated skywalk packet
+ * which is transmitted to the driver.
+ * For Skywalk compat drivers currently headroom is always set to zero.
+ */
+uint32_t
+ifnet_mbuf_packetpreamblelen(struct ifnet *ifp)
+{
+#pragma unused(ifp)
+	return (0);
+}
+
+/* The following is used to enqueue work items for interface events */
+struct intf_event {
+	struct ifnet *ifp;
+	union sockaddr_in_4_6 addr;
+	uint32_t intf_event_code;
+};
+
+static void
+intf_event_callback(void *arg)
+{
+	struct intf_event *p_intf_ev = (struct intf_event *)arg;
+
+	/* Call this before we walk the tree */
+	EVENTHANDLER_INVOKE(&ifnet_evhdlr_ctxt, ifnet_event, p_intf_ev->ifp,
+	    (struct sockaddr *)&(p_intf_ev->addr), p_intf_ev->intf_event_code);
+}
+
+struct intf_event_nwk_wq_entry {
+	struct nwk_wq_entry nwk_wqe;
+	struct intf_event intf_ev_arg;
+};
+
+void
+intf_event_enqueue_nwk_wq_entry(struct ifnet *ifp, struct sockaddr *addrp,
+    uint32_t intf_event_code)
+{
+#pragma unused(addrp)
+	struct intf_event_nwk_wq_entry *p_intf_ev = NULL;
+
+	MALLOC(p_intf_ev, struct intf_event_nwk_wq_entry *,
+	    sizeof(struct intf_event_nwk_wq_entry),
+	    M_NWKWQ, M_WAITOK | M_ZERO);
+
+	p_intf_ev->intf_ev_arg.ifp = ifp;
+	/*
+	 * XXX Not using addr in the arg. This will be used
+	 * once we need IP address add/delete events
+	 */
+	p_intf_ev->intf_ev_arg.intf_event_code = intf_event_code;
+	p_intf_ev->nwk_wqe.func = intf_event_callback;
+	p_intf_ev->nwk_wqe.is_arg_managed = TRUE;
+	p_intf_ev->nwk_wqe.arg = &p_intf_ev->intf_ev_arg;
+	nwk_wq_enqueue((struct nwk_wq_entry*)p_intf_ev);
 }

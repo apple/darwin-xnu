@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -828,7 +828,7 @@ esp_output(
 		    ip6 = mtod(m, struct ip6_hdr *);
 		    udp->uh_ulen = htons(plen + siz + extendsiz + esphlen);
 		    udp->uh_sum = in6_pseudo(&ip6->ip6_src, &ip6->ip6_dst, htonl(ntohs(udp->uh_ulen) + IPPROTO_UDP));
-		    m->m_pkthdr.csum_flags = CSUM_UDPIPV6;
+		    m->m_pkthdr.csum_flags = (CSUM_UDPIPV6|CSUM_ZERO_INVERT);
 		    m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
 		    break;
 		}

@@ -640,6 +640,8 @@ fasttrap_tracepoint_install(proc_t *p, fasttrap_tracepoint_t *tp)
 	if (uwrite(p, &instr, 1, tp->ftt_pc) != 0)
 		return (-1);
 
+	tp->ftt_installed = 1;
+
 	return (0);
 }
 
@@ -653,11 +655,13 @@ fasttrap_tracepoint_remove(proc_t *p, fasttrap_tracepoint_t *tp)
 	 * instruction.
 	 */
 	if (uread(p, &instr, 1, tp->ftt_pc) != 0)
-		return (0);
+		goto end;
 	if (instr != FASTTRAP_INSTR)
-		return (0);
+		goto end;
 	if (uwrite(p, &tp->ftt_instr[0], 1, tp->ftt_pc) != 0)
 		return (-1);
+end:
+	tp->ftt_installed = 0;
 
 	return (0);
 }
@@ -669,6 +673,7 @@ fasttrap_return_common(x86_saved_state_t *regs, user_addr_t pc, pid_t pid,
 	x86_saved_state64_t *regs64;
 	x86_saved_state32_t *regs32;
 	unsigned int p_model;
+	int retire_tp = 1;
 
 	dtrace_icookie_t cookie;
 
@@ -708,6 +713,7 @@ fasttrap_return_common(x86_saved_state_t *regs, user_addr_t pc, pid_t pid,
 	}
 
 	for (id = tp->ftt_retids; id != NULL; id = id->fti_next) {
+		fasttrap_probe_t *probe = id->fti_probe;
 		/*
 		 * If there's a branch that could act as a return site, we
 		 * need to trace it, and check here if the program counter is
@@ -715,10 +721,23 @@ fasttrap_return_common(x86_saved_state_t *regs, user_addr_t pc, pid_t pid,
 		 */
 		if (tp->ftt_type != FASTTRAP_T_RET &&
 		    tp->ftt_type != FASTTRAP_T_RET16 &&
-		    new_pc - id->fti_probe->ftp_faddr <
-		    id->fti_probe->ftp_fsize)
+		    new_pc - probe->ftp_faddr < probe->ftp_fsize)
 			continue;
 
+		if (probe->ftp_prov->ftp_provider_type == DTFTP_PROVIDER_ONESHOT) {
+			uint8_t already_triggered = atomic_or_8(&probe->ftp_triggered, 1);
+			if (already_triggered) {
+				continue;
+			}
+		}
+		/*
+		 * If we have at least one probe associated that
+		 * is not a oneshot probe, don't remove the
+		 * tracepoint
+		 */
+		else {
+			retire_tp = 0;
+		}
 		/*
 		 * Provide a hint to the stack trace functions to add the
 		 * following pc to the top of the stack since it's missing
@@ -727,14 +746,14 @@ fasttrap_return_common(x86_saved_state_t *regs, user_addr_t pc, pid_t pid,
 		cookie = dtrace_interrupt_disable();
 		cpu_core[CPU->cpu_id].cpuc_missing_tos = pc;
 		if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
-			dtrace_probe(dtrace_probeid_error, 0 /* state */, id->fti_probe->ftp_id, 
+			dtrace_probe(dtrace_probeid_error, 0 /* state */, probe->ftp_id,
 				     1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
 		} else if (p_model == DATAMODEL_LP64) {
-			dtrace_probe(id->fti_probe->ftp_id,
+			dtrace_probe(probe->ftp_id,
 				     pc - id->fti_probe->ftp_faddr,
 				     regs64->rax, regs64->rdx, 0, 0);
 		} else {
-			dtrace_probe(id->fti_probe->ftp_id,
+			dtrace_probe(probe->ftp_id,
 				     pc - id->fti_probe->ftp_faddr,
 				     regs32->eax, regs32->edx, 0, 0);
 		}
@@ -953,7 +972,7 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 	fasttrap_tracepoint_t *tp, tp_local;
 	pid_t pid;
 	dtrace_icookie_t cookie;
-	uint_t is_enabled = 0;
+	uint_t is_enabled = 0, retire_tp = 1;
 
 	uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());
 
@@ -1046,44 +1065,58 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 			if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
 				dtrace_probe(dtrace_probeid_error, 0 /* state */, probe->ftp_id, 
 					     1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
-			} else if (id->fti_ptype == DTFTP_ENTRY) {
-				/*
-				 * We note that this was an entry
-				 * probe to help ustack() find the
-				 * first caller.
-				 */
-				cookie = dtrace_interrupt_disable();
-				DTRACE_CPUFLAG_SET(CPU_DTRACE_ENTRY);
-				dtrace_probe(probe->ftp_id, s1, s2,
-					     s3, s4, s5);
-				DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_ENTRY);
-				dtrace_interrupt_enable(cookie);
-			} else if (id->fti_ptype == DTFTP_IS_ENABLED) {
-				/*
-				 * Note that in this case, we don't
-				 * call dtrace_probe() since it's only
-				 * an artificial probe meant to change
-				 * the flow of control so that it
-				 * encounters the true probe.
-				 */
-				is_enabled = 1;
-			} else if (probe->ftp_argmap == NULL) {
-				dtrace_probe(probe->ftp_id, s0, s1,
-					     s2, s3, s4);
 			} else {
-				uint32_t t[5];
-				
-				fasttrap_usdt_args32(probe, regs32,
-						     sizeof (t) / sizeof (t[0]), t);
-				
-				dtrace_probe(probe->ftp_id, t[0], t[1],
-					     t[2], t[3], t[4]);
-			}
+				if (probe->ftp_prov->ftp_provider_type == DTFTP_PROVIDER_ONESHOT) {
+					uint8_t already_triggered = atomic_or_8(&probe->ftp_triggered, 1);
+					if (already_triggered) {
+						continue;
+					}
+				}
+				/*
+				 * If we have at least one probe associated that
+				 * is not a oneshot probe, don't remove the
+				 * tracepoint
+				 */
+				else {
+					retire_tp = 0;
+				}
+				if (id->fti_ptype == DTFTP_ENTRY) {
+					/*
+					 * We note that this was an entry
+					 * probe to help ustack() find the
+					 * first caller.
+					 */
+					cookie = dtrace_interrupt_disable();
+					DTRACE_CPUFLAG_SET(CPU_DTRACE_ENTRY);
+					dtrace_probe(probe->ftp_id, s1, s2,
+						     s3, s4, s5);
+					DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_ENTRY);
+					dtrace_interrupt_enable(cookie);
+				} else if (id->fti_ptype == DTFTP_IS_ENABLED) {
+					/*
+					 * Note that in this case, we don't
+					 * call dtrace_probe() since it's only
+					 * an artificial probe meant to change
+					 * the flow of control so that it
+					 * encounters the true probe.
+					 */
+					is_enabled = 1;
+				} else if (probe->ftp_argmap == NULL) {
+					dtrace_probe(probe->ftp_id, s0, s1,
+						     s2, s3, s4);
+				} else {
+					uint32_t t[5];
 
-			/* APPLE NOTE: Oneshot probes get one and only one chance... */
-			if (probe->ftp_prov->ftp_provider_type == DTFTP_PROVIDER_ONESHOT) {
-				fasttrap_tracepoint_remove(p, tp);
+					fasttrap_usdt_args32(probe, regs32,
+							     sizeof (t) / sizeof (t[0]), t);
+
+					dtrace_probe(probe->ftp_id, t[0], t[1],
+						     t[2], t[3], t[4]);
+				}
 			}
+		}
+		if (retire_tp) {
+			fasttrap_tracepoint_retire(p, tp);
 		}
 	}
 
@@ -1512,6 +1545,7 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 	pid_t pid;
 	dtrace_icookie_t cookie;
 	uint_t is_enabled = 0;
+	int retire_tp = 1;
 
 	uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());
 
@@ -1585,6 +1619,20 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 		for (id = tp->ftt_ids; id != NULL; id = id->fti_next) {
 			fasttrap_probe_t *probe = id->fti_probe;
 			
+			if (probe->ftp_prov->ftp_provider_type == DTFTP_PROVIDER_ONESHOT) {
+				uint8_t already_triggered = atomic_or_8(&probe->ftp_triggered, 1);
+				if (already_triggered) {
+					continue;
+				}
+			}
+			/*
+			 * If we have at least probe associated that
+			 * is not a oneshot probe, don't remove the
+			 * tracepoint
+			 */
+			else {
+				retire_tp = 0;
+			}
 			if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
 				dtrace_probe(dtrace_probeid_error, 0 /* state */, probe->ftp_id, 
 					     1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
@@ -1624,10 +1672,9 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 					     t[2], t[3], t[4]);
 			}
 
-			/* APPLE NOTE: Oneshot probes get one and only one chance... */
-			if (probe->ftp_prov->ftp_provider_type == DTFTP_PROVIDER_ONESHOT) {
-				fasttrap_tracepoint_remove(p, tp);
-			}
+		}
+		if (retire_tp) {
+			fasttrap_tracepoint_retire(p, tp);
 		}
 	}
 

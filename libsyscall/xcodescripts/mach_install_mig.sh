@@ -42,17 +42,17 @@ MACH_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/mach"
 
 # from old Libsystem makefiles
 MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 1`
-if [[ ( "$MACHINE_ARCH" = "arm64" || "$MACHINE_ARCH" = "x86_64" || "$MACHINE_ARCH" = "x86_64h" ) && `echo $ARCHS | wc -w` -gt 1 ]]
+if [[ ( "$MACHINE_ARCH" =~ ^"arm64" || "$MACHINE_ARCH" =~ ^"x86_64" ) && `echo $ARCHS | wc -w` -gt 1 ]]
 then
 	# MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
 	MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 2`
-    if [[ ( "$MACHINE_ARCH" = "arm64" || "$MACHINE_ARCH" = "x86_64" || "$MACHINE_ARCH" = "x86_64h" ) && `echo $ARCHS | wc -w` -gt 1 ]]
+    if [[ ( "$MACHINE_ARCH" =~ ^"arm64" || "$MACHINE_ARCH" =~ ^"x86_64" ) && `echo $ARCHS | wc -w` -gt 1 ]]
     then
 	    # MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
 	    MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 3`
     fi
 fi
-if [[ ( "$MACHINE_ARCH" = "arm64" ) ]]
+if [[ ( "$MACHINE_ARCH" =~ ^"arm64" ) ]]
 then
     # MACHINE_ARCH *really* needs to be a 32-bit arch to generate vm_map_internal.h correctly, even if there are no 32-bit targets.
     MACHINE_ARCH="armv7"
@@ -88,7 +88,7 @@ MIGS_PRIVATE=""
 
 MIGS_DUAL_PUBLIC_PRIVATE=""
 
-if ( echo {iphone,tv,appletv,watch}{os,simulator} iphone{osnano,nanosimulator} | grep -wFq "$PLATFORM_NAME" )
+if ( echo {iphone,tv,appletv,watch,bridge}{os,simulator} iphone{osnano,nanosimulator} | grep -wFq "$PLATFORM_NAME" )
 then
 	MIGS_PRIVATE="mach_vm.defs"
 else

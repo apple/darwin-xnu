@@ -48,7 +48,7 @@ int apple_key_store(
 	uint32_t * output_count
 );
 int spawn_proc(char * const command[]);
-int supports_content_prot();
+int supports_content_prot(void);
 char* dp_class_num_to_string(int num);
 int lock_device(void);
 int unlock_device(char * passcode);

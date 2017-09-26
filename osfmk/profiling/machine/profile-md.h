@@ -30,6 +30,8 @@
 
 #if defined (__i386__) || defined (__x86_64__)
 #include "profiling/i386/profile-md.h"
+#elif defined (__arm__) || defined (__arm64__)
+#include "profiling/arm/profile-md.h"
 #else
 #error architecture not supported
 #endif

@@ -105,17 +105,14 @@
 
 #include <libkern/OSAtomic.h>
 
-int	tcp_do_sack = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack, CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_do_sack, 0,
-	"Enable/Disable TCP SACK support");
-static int tcp_sack_maxholes = 128;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack_maxholes, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&tcp_sack_maxholes, 0, 
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, sack, CTLFLAG_RW | CTLFLAG_LOCKED,
+	int, tcp_do_sack, 1, "Enable/Disable TCP SACK support");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, sack_maxholes, CTLFLAG_RW | CTLFLAG_LOCKED,
+	static int, tcp_sack_maxholes, 128,
     "Maximum number of TCP SACK holes allowed per connection");
 
-static int tcp_sack_globalmaxholes = 65536;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack_globalmaxholes, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&tcp_sack_globalmaxholes, 0, 
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, sack_globalmaxholes,
+	CTLFLAG_RW | CTLFLAG_LOCKED, static int, tcp_sack_globalmaxholes, 65536,
     "Global maximum number of TCP SACK holes");
 
 static SInt32 tcp_sack_globalholes = 0;

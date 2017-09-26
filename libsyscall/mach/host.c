@@ -46,16 +46,33 @@ kern_return_t
 host_get_multiuser_config_flags(host_t host __unused,
 								uint32_t *multiuser_flags)
 {
+#if TARGET_OS_EMBEDDED
+	volatile uint32_t *multiuser_flag_address = (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_MULTIUSER_CONFIG);
+	*multiuser_flags = *multiuser_flag_address;
+	return KERN_SUCCESS;
+#else
 	(void)multiuser_flags;
 	return KERN_NOT_SUPPORTED;
+#endif
 }
 
 kern_return_t
 host_check_multiuser_mode(host_t host __unused,
 						  uint32_t *multiuser_mode)
 {
+#if TARGET_OS_EMBEDDED
+	uint32_t multiuser_flags;
+	kern_return_t kr;
+
+	kr = host_get_multiuser_config_flags(host, &multiuser_flags);
+	if (kr != KERN_SUCCESS)
+		return kr;
+	*multiuser_mode = (multiuser_flags & kIsMultiUserDevice) == kIsMultiUserDevice;
+	return KERN_SUCCESS;
+#else
 	(void)multiuser_mode;
 	return KERN_NOT_SUPPORTED;
+#endif
 }
 
 extern kern_return_t

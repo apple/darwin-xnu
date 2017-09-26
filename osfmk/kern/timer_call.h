@@ -124,7 +124,16 @@ extern boolean_t	timer_call_enter_with_leeway(
 						uint32_t 		flags,
 						boolean_t		ratelimited);
 
+extern boolean_t	timer_call_quantum_timer_enter(
+						timer_call_t            call,
+						timer_call_param_t      param1,
+						uint64_t		deadline,
+						uint64_t		ctime);
+
 extern boolean_t	timer_call_cancel(
+				timer_call_t	call);
+
+extern boolean_t	timer_call_quantum_timer_cancel(
 				timer_call_t	call);
 
 extern void		timer_call_init(void);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -2168,6 +2168,11 @@ vnode_get_filesec(vnode_t vp, kauth_filesec_t *fsecp, vfs_context_t ctx)
 				
 	/* how many entries would fit? */
 	fsec_size = KAUTH_FILESEC_COUNT(xsize);
+	if (fsec_size > KAUTH_ACL_MAX_ENTRIES) {
+		KAUTH_DEBUG("    ERROR - Bogus (too large) kauth_fiilesec_t: %ld bytes", xsize);
+		error = 0;
+		goto out;
+	}
 
 	/* get buffer and uio */
 	if (((fsec = kauth_filesec_alloc(fsec_size)) == NULL) ||
@@ -2314,6 +2319,7 @@ out:
 /*
  * Returns:	0			Success
  *		ENOMEM			Not enough space [only if has filesec]
+ *		EINVAL			Requested unknown attributes
  *		VNOP_GETATTR:		???
  *		vnode_get_filesec:	???
  *		kauth_cred_guid2uid:	???
@@ -2328,6 +2334,12 @@ vnode_getattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	int	error;
 	uid_t	nuid;
 	gid_t	ngid;
+
+	/*
+	 * Reject attempts to fetch unknown attributes.
+	 */
+	if (vap->va_active & ~VNODE_ATTR_ALL)
+		return (EINVAL);
 
 	/* don't ask for extended security data if the filesystem doesn't support it */
 	if (!vfs_extendedsecurity(vnode_mount(vp))) {
@@ -2555,7 +2567,18 @@ out:
 int
 vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 {
-	int	error, is_perm_change=0;
+	int	error;
+#if CONFIG_FSE
+	uint64_t active;
+	int	is_perm_change = 0;
+	int	is_stat_change = 0;
+#endif
+
+	/*
+	 * Reject attempts to set unknown attributes.
+	 */
+	if (vap->va_active & ~VNODE_ATTR_ALL)
+		return (EINVAL);
 
 	/*
 	 * Make sure the filesystem is mounted R/W.
@@ -2615,11 +2638,6 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 		VATTR_CLEAR_ACTIVE(vap, va_gid);
 	}
 
-	if (   VATTR_IS_ACTIVE(vap, va_uid)  || VATTR_IS_ACTIVE(vap, va_gid)
-	    || VATTR_IS_ACTIVE(vap, va_mode) || VATTR_IS_ACTIVE(vap, va_acl)) {
-	    is_perm_change = 1;
-	}
-	
 	/*
 	 * Make sure that extended security is enabled if we're going to try
 	 * to set any.
@@ -2636,23 +2654,55 @@ vnode_setattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	    vap->va_flags &= (SF_SUPPORTED | UF_SETTABLE);
 	}
 
+#if CONFIG_FSE
+	/*
+	 * Remember all of the active attributes that we're
+	 * attempting to modify.
+	 */
+	active = vap->va_active & ~VNODE_ATTR_RDONLY;
+#endif
+
 	error = VNOP_SETATTR(vp, vap, ctx);
 
 	if ((error == 0) && !VATTR_ALL_SUPPORTED(vap))
 		error = vnode_setattr_fallback(vp, vap, ctx);
 
 #if CONFIG_FSE
-	// only send a stat_changed event if this is more than
-	// just an access or backup time update
-	if (error == 0 && (vap->va_active != VNODE_ATTR_BIT(va_access_time)) && (vap->va_active != VNODE_ATTR_BIT(va_backup_time))) {
+#define	PERMISSION_BITS	(VNODE_ATTR_BIT(va_uid) | VNODE_ATTR_BIT(va_uuuid) | \
+			 VNODE_ATTR_BIT(va_gid) | VNODE_ATTR_BIT(va_guuid) | \
+			 VNODE_ATTR_BIT(va_mode) | VNODE_ATTR_BIT(va_acl))
+
+	/*
+	 * Now that we've changed them, decide whether to send an
+	 * FSevent.
+	 */
+	if ((active & PERMISSION_BITS) & vap->va_supported) {
+		is_perm_change = 1;
+	} else {
+		/*
+		 * We've already checked the permission bits, and we
+		 * also want to filter out access time / backup time
+		 * changes.
+		 */
+		active &= ~(PERMISSION_BITS |
+			    VNODE_ATTR_BIT(va_access_time) |
+			    VNODE_ATTR_BIT(va_backup_time));
+
+		/* Anything left to notify about? */
+		if (active & vap->va_supported)
+			is_stat_change = 1;
+	}
+
+	if (error == 0) {
 	    if (is_perm_change) {
 		if (need_fsevent(FSE_CHOWN, vp)) {
 		    add_fsevent(FSE_CHOWN, ctx, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
 		}
-	    } else if(need_fsevent(FSE_STAT_CHANGED, vp)) {
+	    } else if (is_stat_change && need_fsevent(FSE_STAT_CHANGED, vp)) {
 		add_fsevent(FSE_STAT_CHANGED, ctx, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
 	    }
 	}
+#undef PERMISSION_BITS
 #endif
 
 out:
@@ -4013,14 +4063,17 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 	 */
 	if (_err == 0) {
 		_err = vnode_flags(tdvp, &tdfflags, ctx);
-		if (_err == 0 && (tdfflags & SF_RESTRICTED)) {
-			uint32_t fflags;
-			_err = vnode_flags(*fvpp, &fflags, ctx);
-			if (_err == 0 && !(fflags & SF_RESTRICTED)) {
-				struct vnode_attr va;
-				VATTR_INIT(&va);
-				VATTR_SET(&va, va_flags, fflags | SF_RESTRICTED);
-				_err = vnode_setattr(*fvpp, &va, ctx);
+		if (_err == 0) {
+			uint32_t inherit_flags = tdfflags & (UF_DATAVAULT | SF_RESTRICTED);
+			if (inherit_flags) {
+				uint32_t fflags;
+				_err = vnode_flags(*fvpp, &fflags, ctx);
+				if (_err == 0 && fflags != (fflags | inherit_flags)) {
+					struct vnode_attr va;
+					VATTR_INIT(&va);
+					VATTR_SET(&va, va_flags, fflags | inherit_flags);
+					_err = vnode_setattr(*fvpp, &va, ctx);
+				}
 			}
 		}
 	}
@@ -5383,6 +5436,7 @@ struct vnop_clonefile_args {
 			vnode_t sdvp, /* source directory vnode pointer (optional) */
 			mount_t mp, /* mount point of filesystem */
 			dir_clone_authorizer_op_t vattr_op, /* specific operation requested : setup, authorization or cleanup  */
+			uint32_t flags; /* value passed in a_flags to the VNOP */
 			vfs_context_t ctx, 		/* As passed to VNOP */
 			void *reserved);		/* Always NULL */
 	void *a_reserved;		/* Currently unused */

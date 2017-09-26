@@ -124,6 +124,11 @@ kperf_kdebug_callback(uint32_t debugid, uintptr_t *starting_fp)
  */
 extern void kperf_reset(void);
 
+/*
+ * Configure kperf from the kernel (e.g. during boot).
+ */
+void kperf_kernel_configure(const char *config);
+
 /* get and set whether we're recording stacks on interesting kdebug events */
 extern int kperf_kdbg_get_stacks(void);
 extern int kperf_kdbg_set_stacks(int);

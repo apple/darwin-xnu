@@ -325,7 +325,6 @@ routine thread_get_assignment(
 		thread		: thread_act_t;
 	out	assigned_set	: processor_set_name_t);
 
-
 /*
  * OBSOLETE interface.
  */

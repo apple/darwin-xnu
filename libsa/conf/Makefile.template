@@ -17,6 +17,7 @@ include $(MakeInc_def)
 # CFLAGS
 #
 CFLAGS+= -include meta_features.h -DLIBSA_KERNEL_PRIVATE
+SFLAGS+= -include meta_features.h
 
 #
 # Directories for mig generated files

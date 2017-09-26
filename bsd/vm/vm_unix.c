@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,9 +37,6 @@
  * is included in support of clause 2.2 (b) of the Apple Public License,
  * Version 2.0.
  */
-
-#include <meta_features.h>
-
 #include <vm/vm_options.h>
 
 #include <kern/task.h>
@@ -82,6 +79,9 @@
 #include <sys/kas_info.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
 
 #include <security/audit/audit.h>
 #include <security/mac.h>
@@ -92,8 +92,6 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_pageout.h>
 
-#include <machine/spl.h>
-
 #include <mach/shared_region.h>
 #include <vm/vm_shared_region.h>
 
@@ -101,6 +99,9 @@
 
 #include <sys/kern_memorystatus.h>
 
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 int _shared_region_map_and_slide(struct proc*, int, unsigned int, struct shared_file_mapping_np*, uint32_t, user_addr_t, user_addr_t);
 int shared_region_copyin_mappings(struct proc*, user_addr_t, unsigned int, struct shared_file_mapping_np *);
@@ -145,6 +146,22 @@ SYSCTL_INT(_vm, OID_AUTO, region_footprint, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_reg
 #endif /* DEVELOPMENT || DEBUG */
 
 
+#if CONFIG_EMBEDDED
+
+#if DEVELOPMENT || DEBUG
+extern int panic_on_unsigned_execute;
+SYSCTL_INT(_vm, OID_AUTO, panic_on_unsigned_execute, CTLFLAG_RW | CTLFLAG_LOCKED, &panic_on_unsigned_execute, 0, "");
+#endif /* DEVELOPMENT || DEBUG */
+
+extern int log_executable_mem_entry;
+extern int cs_executable_create_upl;
+extern int cs_executable_mem_entry;
+extern int cs_executable_wire;
+SYSCTL_INT(_vm, OID_AUTO, log_executable_mem_entry, CTLFLAG_RD | CTLFLAG_LOCKED, &log_executable_mem_entry, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_executable_create_upl, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_executable_create_upl, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_executable_mem_entry, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_executable_mem_entry, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_executable_wire, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_executable_wire, 0, "");
+#endif /* CONFIG_EMBEDDED */
 
 #if DEVELOPMENT || DEBUG
 extern int radar_20146450;
@@ -156,7 +173,38 @@ SYSCTL_INT(_vm, OID_AUTO, macho_printf, CTLFLAG_RW | CTLFLAG_LOCKED, &macho_prin
 extern int apple_protect_pager_data_request_debug;
 SYSCTL_INT(_vm, OID_AUTO, apple_protect_pager_data_request_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &apple_protect_pager_data_request_debug, 0, "");
 
+#if __arm__ || __arm64__
+/* These are meant to support the page table accounting unit test. */
+extern unsigned int arm_hardware_page_size;
+extern unsigned int arm_pt_desc_size;
+extern unsigned int arm_pt_root_size;
+extern unsigned int free_page_size_tt_count;
+extern unsigned int free_two_page_size_tt_count;
+extern unsigned int free_tt_count;
+extern unsigned int inuse_user_tteroot_count;
+extern unsigned int inuse_kernel_tteroot_count;
+extern unsigned int inuse_user_ttepages_count;
+extern unsigned int inuse_kernel_ttepages_count;
+extern unsigned int inuse_user_ptepages_count;
+extern unsigned int inuse_kernel_ptepages_count;
+SYSCTL_UINT(_vm, OID_AUTO, native_hw_pagesize, CTLFLAG_RD | CTLFLAG_LOCKED, &arm_hardware_page_size, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, arm_pt_desc_size, CTLFLAG_RD | CTLFLAG_LOCKED, &arm_pt_desc_size, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, arm_pt_root_size, CTLFLAG_RD | CTLFLAG_LOCKED, &arm_pt_root_size, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, free_1page_tte_root, CTLFLAG_RD | CTLFLAG_LOCKED, &free_page_size_tt_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, free_2page_tte_root, CTLFLAG_RD | CTLFLAG_LOCKED, &free_two_page_size_tt_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, free_tte_root, CTLFLAG_RD | CTLFLAG_LOCKED, &free_tt_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, user_tte_root, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_user_tteroot_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, kernel_tte_root, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_kernel_tteroot_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, user_tte_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_user_ttepages_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, kernel_tte_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_kernel_ttepages_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, user_pte_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_user_ptepages_count, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, kernel_pte_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_kernel_ptepages_count, 0, "");
+#endif /* __arm__ || __arm64__ */
 
+#if __arm64__
+extern int fourk_pager_data_request_debug;
+SYSCTL_INT(_vm, OID_AUTO, fourk_pager_data_request_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &fourk_pager_data_request_debug, 0, "");
+#endif /* __arm64__ */
 #endif /* DEVELOPMENT || DEBUG */
 
 SYSCTL_INT(_vm, OID_AUTO, vm_do_collapse_compressor, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_counters.do_collapse_compressor, 0, "");
@@ -203,6 +251,12 @@ extern int allow_stack_exec, allow_data_exec;
 SYSCTL_INT(_vm, OID_AUTO, allow_stack_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_stack_exec, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, allow_data_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_data_exec, 0, "");
 
+#if __arm64__
+extern int fourk_binary_compatibility_unsafe;
+extern int fourk_binary_compatibility_allow_wx;
+SYSCTL_INT(_vm, OID_AUTO, fourk_binary_compatibility_unsafe, CTLFLAG_RW | CTLFLAG_LOCKED, &fourk_binary_compatibility_unsafe, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, fourk_binary_compatibility_allow_wx, CTLFLAG_RW | CTLFLAG_LOCKED, &fourk_binary_compatibility_allow_wx, 0, "");
+#endif /* __arm64__ */
 #endif /* DEVELOPMENT || DEBUG */
 
 static const char *prot_values[] = {
@@ -242,8 +296,13 @@ int shared_region_unnest_log_count_threshold = 5;
  * Shared cache path enforcement.
  */
 
+#ifndef CONFIG_EMBEDDED
 static int scdir_enforce = 1;
 static char scdir_path[] = "/var/db/dyld/";
+#else
+static int scdir_enforce = 0;
+static char scdir_path[] = "/System/Library/Caches/com.apple.dyld/";
+#endif
 
 #ifndef SECURE_KERNEL
 SYSCTL_INT(_vm, OID_AUTO, enforce_shared_cache_dir, CTLFLAG_RW | CTLFLAG_LOCKED, &scdir_enforce, 0, "");
@@ -325,12 +384,12 @@ vslock(
 	vm_map_t	map;
 
 	map = current_map();
-	kret = vm_map_wire(map,
+	kret = vm_map_wire_kernel(map,
 			   vm_map_trunc_page(addr,
 					     vm_map_page_mask(map)),
 			   vm_map_round_page(addr+len,
 					     vm_map_page_mask(map)), 
-			   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_BSD),
+			   VM_PROT_READ | VM_PROT_WRITE, VM_KERN_MEMORY_BSD,
 			   FALSE);
 
 	switch (kret) {
@@ -784,6 +843,14 @@ task_for_pid(
 		extmod_statistics_incr_task_for_pid(p->task);
 
 		sright = (void *) convert_task_to_port(p->task);
+
+		/* Check if the task has been corpsified */
+		if (is_corpsetask(p->task)) {
+			ipc_port_release_send(sright);
+			error = KERN_FAILURE;
+			goto tfpout;
+		}
+
 		tret = ipc_port_copyout_send(
 				sright, 
 				get_task_ipcspace(current_task()));
@@ -921,6 +988,7 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 	}
 
 	target = targetproc->task;
+#ifndef CONFIG_EMBEDDED
 	if (target != TASK_NULL) {
 		mach_port_t tfpport;
 
@@ -947,6 +1015,7 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 			}
 		}
 	}
+#endif
 
 	task_reference(target);
 	error = task_pidsuspend(target);
@@ -1005,6 +1074,7 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 	}
 
 	target = targetproc->task;
+#ifndef CONFIG_EMBEDDED
 	if (target != TASK_NULL) {
 		mach_port_t tfpport;
 
@@ -1031,7 +1101,13 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 			}
 		}
 	}
+#endif
 
+#if CONFIG_EMBEDDED
+#if SOCKETS
+	resume_proc_sockets(targetproc);
+#endif /* SOCKETS */
+#endif /* CONFIG_EMBEDDED */
 
 	task_reference(target);
 
@@ -1062,6 +1138,149 @@ out:
 	return error;
 }
 
+#if CONFIG_EMBEDDED
+/*
+ * Freeze the specified process (provided in args->pid), or find and freeze a PID.
+ * When a process is specified, this call is blocking, otherwise we wake up the
+ * freezer thread and do not block on a process being frozen.
+ */
+kern_return_t
+pid_hibernate(struct proc *p __unused, struct pid_hibernate_args *args, int *ret)
+{
+	int 	error = 0;
+	proc_t	targetproc = PROC_NULL;
+	int 	pid = args->pid;
+
+#ifndef CONFIG_FREEZE
+	#pragma unused(pid)
+#else
+
+#if CONFIG_MACF
+	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_HIBERNATE);
+	if (error) {
+		error = EPERM;
+		goto out;
+	}
+#endif
+
+	/*
+	 * If a pid has been provided, we obtain the process handle and call task_for_pid_posix_check().
+	 */
+
+	if (pid >= 0) {
+		targetproc = proc_find(pid);
+
+		if (targetproc == PROC_NULL) {
+			error = ESRCH;
+			goto out;
+		}
+
+		if (!task_for_pid_posix_check(targetproc)) {
+			error = EPERM;
+			goto out;
+		}
+	}
+
+	if (pid == -2) {
+		vm_pageout_anonymous_pages();
+	} else if (pid == -1) {
+		memorystatus_on_inactivity(targetproc);
+	} else {
+		error = memorystatus_freeze_process_sync(targetproc);
+	}
+
+out:
+
+#endif /* CONFIG_FREEZE */
+
+	if (targetproc != PROC_NULL)
+		proc_rele(targetproc);
+	*ret = error;
+	return error;
+}
+#endif /* CONFIG_EMBEDDED */
+
+#if SOCKETS
+static int
+shutdown_sockets_callout(proc_t p, void *arg)
+{
+	struct pid_shutdown_sockets_args *args = arg;
+	int pid = args->pid;
+	int level = args->level;
+	struct filedesc	*fdp;
+	struct fileproc	*fp;
+	int i;
+
+	proc_fdlock(p);
+	fdp = p->p_fd;
+	for (i = 0; i < fdp->fd_nfiles; i++) {
+		fp = fdp->fd_ofiles[i];
+		if (fp == NULL || (fdp->fd_ofileflags[i] & UF_RESERVED) != 0) {
+			continue;
+		}
+		if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_SOCKET) {
+			struct socket *so = (struct socket *)fp->f_fglob->fg_data;
+			if (p->p_pid == pid || so->last_pid == pid || 
+			    ((so->so_flags & SOF_DELEGATED) && so->e_pid == pid)) {
+				/* Call networking stack with socket and level */
+				(void) socket_defunct(p, so, level);
+			}
+		}
+#if NECP
+		else if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_NETPOLICY &&
+		    p->p_pid == pid) {
+			necp_defunct_client(p, fp);
+		}
+#endif /* NECP */
+	}
+	proc_fdunlock(p);
+
+	return (PROC_RETURNED);
+}
+
+int
+pid_shutdown_sockets(struct proc *p __unused, struct pid_shutdown_sockets_args *args, int *ret)
+{
+	int 				error = 0;
+	proc_t				targetproc = PROC_NULL;
+	int				pid = args->pid;
+	int				level = args->level;
+
+	if (level != SHUTDOWN_SOCKET_LEVEL_DISCONNECT_SVC &&
+	    level != SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL) {
+		error = EINVAL;
+		goto out;
+	}
+
+#if CONFIG_MACF
+	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_SHUTDOWN_SOCKETS);
+	if (error) {
+		error = EPERM;
+		goto out;
+	}
+#endif
+
+	targetproc = proc_find(pid);
+	if (targetproc == PROC_NULL) {
+		error = ESRCH;
+		goto out;
+	}
+
+	if (!task_for_pid_posix_check(targetproc)) {
+		error = EPERM;
+		goto out;
+	}
+
+	proc_iterate(PROC_ALLPROCLIST | PROC_NOWAITTRANS, shutdown_sockets_callout, args, NULL, NULL);
+
+out:
+	if (targetproc != PROC_NULL)
+		proc_rele(targetproc);
+	*ret = error;
+	return error;
+}
+
+#endif /* SOCKETS */
 
 static int
 sysctl_settfp_policy(__unused struct sysctl_oid *oidp, void *arg1,
@@ -1739,9 +1958,8 @@ extern unsigned int vm_pageout_freed_from_cleaned;
 SYSCTL_UINT(_vm, OID_AUTO, pageout_freed_from_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_freed_from_cleaned, 0, "");
 
 /* counts of pages entering the cleaned queue */
-extern unsigned int vm_pageout_enqueued_cleaned, vm_pageout_enqueued_cleaned_from_inactive_clean, vm_pageout_enqueued_cleaned_from_inactive_dirty;
+extern unsigned int vm_pageout_enqueued_cleaned, vm_pageout_enqueued_cleaned_from_inactive_dirty;
 SYSCTL_UINT(_vm, OID_AUTO, pageout_enqueued_cleaned, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_enqueued_cleaned, 0, ""); /* sum of next two */
-SYSCTL_UINT(_vm, OID_AUTO, pageout_enqueued_cleaned_from_inactive_clean, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_enqueued_cleaned_from_inactive_clean, 0, "");
 SYSCTL_UINT(_vm, OID_AUTO, pageout_enqueued_cleaned_from_inactive_dirty, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_enqueued_cleaned_from_inactive_dirty, 0, "");
 
 /* counts of pages leaving the cleaned queue */
@@ -1759,6 +1977,35 @@ SYSCTL_UINT(_vm, OID_AUTO, pageout_cleaned_nolock, CTLFLAG_RD | CTLFLAG_LOCKED, 
 extern int64_t vm_prefault_nb_pages, vm_prefault_nb_bailout;
 SYSCTL_QUAD(_vm, OID_AUTO, prefault_nb_pages, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_prefault_nb_pages, "");
 SYSCTL_QUAD(_vm, OID_AUTO, prefault_nb_bailout, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_prefault_nb_bailout, "");
+
+#if defined (__x86_64__)
+extern unsigned int vm_clump_promote_threshold;
+SYSCTL_UINT(_vm, OID_AUTO, vm_clump_promote_threshold, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_clump_promote_threshold, 0, "clump size threshold for promotes");
+#if DEVELOPMENT || DEBUG
+extern unsigned long vm_clump_stats[];
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats1, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[1], "free page allocations from clump of 1 page");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats2, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[2], "free page allocations from clump of 2 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats3, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[3], "free page allocations from clump of 3 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats4, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[4], "free page allocations from clump of 4 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats5, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[5], "free page allocations from clump of 5 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats6, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[6], "free page allocations from clump of 6 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats7, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[7], "free page allocations from clump of 7 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats8, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[8], "free page allocations from clump of 8 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats9, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[9], "free page allocations from clump of 9 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats10, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[10], "free page allocations from clump of 10 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats11, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[11], "free page allocations from clump of 11 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats12, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[12], "free page allocations from clump of 12 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats13, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[13], "free page allocations from clump of 13 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats14, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[14], "free page allocations from clump of 14 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats15, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[15], "free page allocations from clump of 15 pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_stats16, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_stats[16], "free page allocations from clump of 16 pages");
+extern unsigned long vm_clump_allocs, vm_clump_inserts, vm_clump_inrange, vm_clump_promotes;
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_alloc, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_allocs, "free page allocations");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_inserts, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_inserts, "free page insertions");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_inrange, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_inrange, "free page insertions that are part of vm_pages");
+SYSCTL_LONG(_vm, OID_AUTO, vm_clump_promotes, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_clump_promotes, "pages promoted to head");
+#endif  /* if DEVELOPMENT || DEBUG */
+#endif  /* #if defined (__x86_64__) */
 
 #if CONFIG_SECLUDED_MEMORY
 
@@ -1782,11 +2029,7 @@ SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_failure_dirty, CTLFLAG_RD | CTLFLA
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_for_iokit, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_for_iokit, 0, "");
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_grab_for_iokit_success, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.grab_for_iokit_success, 0, "");
 
-extern uint64_t vm_pageout_freed_from_secluded;
-extern uint64_t vm_pageout_secluded_reactivated;
 extern uint64_t vm_pageout_secluded_burst_count;
-SYSCTL_QUAD(_vm, OID_AUTO, pageout_freed_from_secluded, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_freed_from_secluded, "");
-SYSCTL_QUAD(_vm, OID_AUTO, pageout_secluded_reactivated, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_secluded_reactivated, "Secluded pages reactivated"); /* sum of all reactivated AND busy and nolock (even though those actually get reDEactivated */
 SYSCTL_QUAD(_vm, OID_AUTO, pageout_secluded_burst_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_pageout_secluded_burst_count, "");
 
 #endif /* CONFIG_SECLUDED_MEMORY */
@@ -1923,3 +2166,44 @@ kas_info(struct proc *p,
 	return 0;
 #endif /* !SECURE_KERNEL */
 }
+
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-qual"
+#pragma clang diagnostic ignored "-Wunused-function"
+
+static void asserts() {
+	static_assert(sizeof(vm_min_kernel_address) == sizeof(unsigned long));
+	static_assert(sizeof(vm_max_kernel_address) == sizeof(unsigned long));
+}
+
+SYSCTL_ULONG(_vm, OID_AUTO, vm_min_kernel_address, CTLFLAG_RD, (unsigned long *) &vm_min_kernel_address, "");
+SYSCTL_ULONG(_vm, OID_AUTO, vm_max_kernel_address, CTLFLAG_RD, (unsigned long *) &vm_max_kernel_address, "");
+#pragma clang diagnostic pop
+
+extern uint32_t vm_page_pages;
+SYSCTL_UINT(_vm, OID_AUTO, pages, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_pages, 0, "");
+
+#if (__arm__ || __arm64__) && (DEVELOPMENT || DEBUG)
+extern void pmap_footprint_suspend(vm_map_t map, boolean_t suspend);
+static int
+sysctl_vm_footprint_suspend SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error = 0;
+	int new_value;
+
+	if (req->newptr == USER_ADDR_NULL) {
+		return 0;
+	}
+	error = SYSCTL_IN(req, &new_value, sizeof(int));
+	if (error) {
+		return error;
+	}
+	pmap_footprint_suspend(current_map(), new_value);
+	return 0;
+}
+SYSCTL_PROC(_vm, OID_AUTO, footprint_suspend,
+	    CTLTYPE_INT|CTLFLAG_WR|CTLFLAG_ANYBODY|CTLFLAG_LOCKED|CTLFLAG_MASKED,
+	    0, 0, &sysctl_vm_footprint_suspend, "I", "");
+#endif /* (__arm__ || __arm64__) && (DEVELOPMENT || DEBUG) */

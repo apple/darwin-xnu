@@ -13,6 +13,7 @@
 #include <security/mac.h>
 #include <security/mac_policy.h>
 
+#include <libkern/section_keywords.h>
 #include <libkern/OSDebug.h>	/* OSBPrintBacktrace */
 
 
@@ -118,7 +119,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 47)
+#if (MAC_POLICY_OPS_VERSION != 52)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -127,7 +128,7 @@ common_hook(void)
  * Please note that this struct initialization should be kept in sync with
  * security/mac_policy.h (mac_policy_ops struct definition).
  */
-static struct mac_policy_ops policy_ops = {
+const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(audit_check_postselect)
 	CHECK_SET_HOOK(audit_check_preselect)
 
@@ -275,7 +276,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(proc_check_set_host_exception_port)
 	CHECK_SET_HOOK(exc_action_check_exception_send)
 	CHECK_SET_HOOK(exc_action_label_associate)
-	CHECK_SET_HOOK(exc_action_label_copy)
+	CHECK_SET_HOOK(exc_action_label_populate)
 	CHECK_SET_HOOK(exc_action_label_destroy)
 	CHECK_SET_HOOK(exc_action_label_init)
 	CHECK_SET_HOOK(exc_action_label_update)
@@ -284,8 +285,8 @@ static struct mac_policy_ops policy_ops = {
 	.mpo_reserved2 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved3 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved4 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved5 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved6 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(skywalk_flow_check_connect)
+	CHECK_SET_HOOK(skywalk_flow_check_listen)
 
 	CHECK_SET_HOOK(posixsem_check_create)
 	CHECK_SET_HOOK(posixsem_check_open)
@@ -363,7 +364,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(system_check_settime)
 	CHECK_SET_HOOK(system_check_swapoff)
 	CHECK_SET_HOOK(system_check_swapon)
-	.mpo_reserved7 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(socket_check_ioctl)
 
 	CHECK_SET_HOOK(sysvmsg_label_associate)
 	CHECK_SET_HOOK(sysvmsg_label_destroy)
@@ -396,7 +397,7 @@ static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(sysvshm_label_init)
 	CHECK_SET_HOOK(sysvshm_label_recycle)
 
-	.mpo_reserved8 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(proc_notify_exit)
 	CHECK_SET_HOOK(mount_check_snapshot_revert)
 	CHECK_SET_HOOK(vnode_check_getattr)
 	CHECK_SET_HOOK(mount_check_snapshot_create)
@@ -493,7 +494,7 @@ static struct mac_policy_ops policy_ops = {
 
 	CHECK_SET_HOOK(system_check_kas_info)
 
-	CHECK_SET_HOOK(proc_check_cpumon)
+	CHECK_SET_HOOK(vnode_check_lookup_preflight)
 
 	CHECK_SET_HOOK(vnode_notify_open)
 
@@ -519,7 +520,7 @@ static struct mac_policy_ops policy_ops = {
 /*
  * Policy definition
  */
-static struct mac_policy_conf policy_conf = {
+static SECURITY_READ_ONLY_LATE(struct mac_policy_conf) policy_conf = {
 	.mpc_name               = "CHECK",
 	.mpc_fullname           = "Check Assumptions Policy",
 	.mpc_field_off          = NULL,		/* no label slot */
@@ -530,7 +531,7 @@ static struct mac_policy_conf policy_conf = {
 	.mpc_runtime_flags      = 0,
 };
 
-static mac_policy_handle_t policy_handle;
+static SECURITY_READ_ONLY_LATE(mac_policy_handle_t) policy_handle;
 
 /*
  * Init routine; for a loadable policy, this would be called during the KEXT

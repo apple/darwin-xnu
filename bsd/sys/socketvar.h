@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -74,6 +74,7 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
+#include <sys/types.h> /* u_quad_t */
 #ifdef KERNEL_PRIVATE
 #include <sys/queue.h>			/* for TAILQ macros */
 #include <sys/select.h>			/* for struct selinfo */
@@ -222,6 +223,7 @@ struct socket {
 #define	SB_TRIM		0x800		/* Trim the socket buffer */
 #define	SB_NOCOMPRESS	0x1000		/* do not compress socket buffer */
 #define	SB_SNDBYTE_CNT	0x2000		/* keep track of snd bytes per interface */
+#define	SB_UPCALL_LOCK	0x4000		/* Keep socket locked when doing the upcall */
 	caddr_t	so_tpcb;		/* Misc. protocol control block, used
 					by some kexts */
 
@@ -274,12 +276,10 @@ struct socket {
 #define	SOF_FLOW_DIVERT		0x00800000 /* Flow Divert is enabled */
 #define	SOF_MP_SUBFLOW		0x01000000 /* is a multipath subflow socket */
 #define	SOF_MPTCP_TRUE		0x02000000 /* Established e2e MPTCP connection */
-#define	SOF_MPTCP_CLIENT	0x04000000 /* Only client starts addtnal flows */
-#define	SOF_MP_SEC_SUBFLOW	0x08000000 /* Set up secondary flow */
-#define	SOF_MP_TRYFAILOVER	0x10000000 /* Failing subflow */
-#define	SOF_DELEGATED		0x20000000 /* on behalf of another process */
-#define	SOF_MPTCP_FASTJOIN	0x40000000 /* fast join support */
-#define	SOF_CONTENT_FILTER	0x80000000 /* Content filter enabled */
+#define	SOF_MP_SEC_SUBFLOW	0x04000000 /* Set up secondary flow */
+#define	SOF_MP_TRYFAILOVER	0x08000000 /* Failing subflow */
+#define	SOF_DELEGATED		0x10000000 /* on behalf of another process */
+#define	SOF_CONTENT_FILTER	0x20000000 /* Content filter enabled */
 
 	uint32_t	so_upcallusecount; /* number of upcalls in progress */
 	int		so_usecount;	/* refcounting of socket use */;
@@ -344,6 +344,12 @@ struct socket {
 #define	SOF1_QOSMARKING_POLICY_OVERRIDE	0x00008000 /* Opt-out of QoS marking NECP policy */
 #define	SOF1_DATA_AUTHENTICATED		0x00010000 /* idempotent data is authenticated */
 #define	SOF1_ACCEPT_LIST_HELD		0x00020000 /* Another thread is accessing one of the accept lists */
+#define	SOF1_CONTENT_FILTER_SKIP	0x00040000 /* Content filter should be skipped, socket is blessed */
+#define	SOF1_HAS_NECP_CLIENT_UUID	0x00080000 /* NECP client UUID option set */
+#define	SOF1_IN_KERNEL_SOCKET		0x00100000 /* Socket created in kernel via KPI */
+#define	SOF1_CONNECT_COUNTED		0x00200000 /* connect() call was counted */
+#define	SOF1_DNS_COUNTED		0x00400000 /* socket counted to send DNS queries */
+
 	u_int64_t	so_extended_bk_start;
 };
 
@@ -441,6 +447,7 @@ struct	xsocket {
 	uid_t			so_uid;		/* XXX */
 };
 
+#if !CONFIG_EMBEDDED
 struct	xsocket64 {
 	u_int32_t		xso_len;	/* length of this structure */
 	u_int64_t		xso_so;		/* makes a convenient handle */
@@ -462,6 +469,7 @@ struct	xsocket64 {
 	struct xsockbuf		so_snd;
 	uid_t			so_uid;		/* XXX */
 };
+#endif /* !CONFIG_EMBEDDED */
 
 #ifdef PRIVATE
 #define	XSO_SOCKET	0x001
@@ -580,35 +588,32 @@ struct kextcb {
 #define	EXT_NULL	0x0		/* STATE: Not in use */
 
 /* Hints for socket event processing */
-#define	SO_FILT_HINT_LOCKED	0x00000001	/* socket is already locked */
-#define	SO_FILT_HINT_CONNRESET	0x00000002	/* Reset is received */
+#define	SO_FILT_HINT_LOCKED		0x00000001	/* socket is already locked */
+#define	SO_FILT_HINT_CONNRESET		0x00000002	/* Reset is received */
 #define	SO_FILT_HINT_CANTRCVMORE	0x00000004	/* No more data to read */
 #define	SO_FILT_HINT_CANTSENDMORE	0x00000008	/* Can't write more data */
-#define	SO_FILT_HINT_TIMEOUT	0x00000010	/* timeout */
-#define	SO_FILT_HINT_NOSRCADDR	0x00000020	/* No src address available */
-#define	SO_FILT_HINT_IFDENIED	0x00000040	/* interface denied access */
-#define	SO_FILT_HINT_SUSPEND	0x00000080	/* output queue suspended */
-#define	SO_FILT_HINT_RESUME	0x00000100	/* output queue resumed */
-#define	SO_FILT_HINT_KEEPALIVE	0x00000200	/* TCP Keepalive received */
-#define	SO_FILT_HINT_ADAPTIVE_WTIMO	0x00000400  /* TCP adaptive write timeout */
-#define	SO_FILT_HINT_ADAPTIVE_RTIMO	0x00000800  /* TCP adaptive read timeout */
-#define	SO_FILT_HINT_CONNECTED	0x00001000	/* socket is connected */
+#define	SO_FILT_HINT_TIMEOUT		0x00000010	/* timeout */
+#define	SO_FILT_HINT_NOSRCADDR		0x00000020	/* No src address available */
+#define	SO_FILT_HINT_IFDENIED		0x00000040	/* interface denied access */
+#define	SO_FILT_HINT_SUSPEND		0x00000080	/* output queue suspended */
+#define	SO_FILT_HINT_RESUME		0x00000100	/* output queue resumed */
+#define	SO_FILT_HINT_KEEPALIVE		0x00000200	/* TCP Keepalive received */
+#define	SO_FILT_HINT_ADAPTIVE_WTIMO	0x00000400	/* TCP adaptive write timeout */
+#define	SO_FILT_HINT_ADAPTIVE_RTIMO	0x00000800	/* TCP adaptive read timeout */
+#define	SO_FILT_HINT_CONNECTED		0x00001000	/* socket is connected */
 #define	SO_FILT_HINT_DISCONNECTED	0x00002000	/* socket is disconnected */
-#define	SO_FILT_HINT_CONNINFO_UPDATED	0x00004000 /* updated conninfo avail. */
-#define	SO_FILT_HINT_MPFAILOVER	0x00008000	/* multipath failover */
-#define	SO_FILT_HINT_MPSTATUS	0x00010000	/* multipath status */
-#define	SO_FILT_HINT_MUSTRST	0x00020000	/* must send RST and close */
-#define	SO_FILT_HINT_MPFASTJ	0x00040000	/* can do MPTCP fast join */
-#define	SO_FILT_HINT_DELETEOK	0x00100000	/* Ok to delete socket */
-#define	SO_FILT_HINT_MPCANTRCVMORE	0x00200000	/* MPTCP DFIN Received */
-#define	SO_FILT_HINT_NOTIFY_ACK	0x00400000	/* Notify Acknowledgement */
+#define	SO_FILT_HINT_CONNINFO_UPDATED	0x00004000	/* updated conninfo avail. */
+#define	SO_FILT_HINT_MPFAILOVER		0x00008000	/* multipath failover */
+#define	SO_FILT_HINT_MPSTATUS		0x00010000	/* multipath status */
+#define	SO_FILT_HINT_MUSTRST		0x00020000	/* must send RST and close */
+#define	SO_FILT_HINT_MPCANTRCVMORE	0x00040000	/* MPTCP DFIN Received */
+#define	SO_FILT_HINT_NOTIFY_ACK		0x00080000	/* Notify Acknowledgement */
 
 #define	SO_FILT_HINT_BITS \
 	"\020\1LOCKED\2CONNRESET\3CANTRCVMORE\4CANTSENDMORE\5TIMEOUT"	\
 	"\6NOSRCADDR\7IFDENIED\10SUSPEND\11RESUME\12KEEPALIVE\13AWTIMO"	\
-	"\14ARTIMO\15CONNECTED\16DISCONNECTED\17CONNINFO_UPDATED" 	\
-	"\20MPFAILOVER\21MPSTATUS\22MUSTRST\23MPFASTJ\25DELETEOK" 	\
-	"\26MPCANTRCVMORE\27NOTIFYACK"
+	"\14ARTIMO\15CONNECTED\16DISCONNECTED\17CONNINFO_UPDATED"	\
+	"\20MPFAILOVER\21MPSTATUS\22MUSTRST\23MPCANTRCVMORE\24NOTIFYACK"
 
 /* Mask for hints that have corresponding kqueue events */
 #define	SO_FILT_HINT_EV							\
@@ -701,9 +706,10 @@ extern int sothrottlelog;
 extern int sorestrictrecv;
 extern int sorestrictsend;
 extern int somaxconn;
+extern uint32_t tcp_do_autosendbuf;
 extern uint32_t tcp_autosndbuf_max;
+extern uint32_t tcp_autosndbuf_inc;
 extern u_int32_t sotcdb;
-extern u_int32_t net_io_policy_throttled;
 extern u_int32_t net_io_policy_log;
 extern u_int32_t net_io_policy_throttle_best_effort;
 #if CONFIG_PROC_UUID_POLICY
@@ -763,6 +769,7 @@ extern int sopoll(struct socket *so, int events, struct ucred *cred, void *wql);
 extern int sooptcopyin(struct sockopt *sopt, void *data, size_t len,
     size_t minlen);
 extern int sooptcopyout(struct sockopt *sopt, void *data, size_t len);
+extern int soopt_cred_check(struct socket *so, int priv, boolean_t allow_root);
 extern int soreceive(struct socket *so, struct sockaddr **paddr,
     struct uio *uio, struct mbuf **mp0, struct mbuf **controlp, int *flagsp);
 extern int soreserve(struct socket *so, u_int32_t sndcc, u_int32_t rcvcc);
@@ -853,11 +860,9 @@ extern int soconnectxlocked(struct socket *so, struct sockaddr *src,
     sae_connid_t *, uint32_t, void *, u_int32_t, uio_t, user_ssize_t *);
 extern int sodisconnectx(struct socket *so, sae_associd_t, sae_connid_t);
 extern int sodisconnectxlocked(struct socket *so, sae_associd_t, sae_connid_t);
-extern int sopeelofflocked(struct socket *so, sae_associd_t, struct socket **);
 extern void soevupcall(struct socket *, u_int32_t);
 /* flags for socreate_internal */
 #define	SOCF_ASYNC	0x1	/* non-blocking socket */
-#define	SOCF_MP_SUBFLOW	0x2	/* multipath subflow socket */
 extern int socreate_internal(int dom, struct socket **aso, int type, int proto,
     struct proc *, uint32_t, struct proc *);
 extern int socreate(int dom, struct socket **aso, int type, int proto);
@@ -882,10 +887,13 @@ extern int soisprivilegedtraffic(struct socket *so);
 extern int soissrcbackground(struct socket *so);
 extern int soissrcrealtime(struct socket *so);
 extern int soissrcbesteffort(struct socket *so);
+extern void soclearfastopen(struct socket *so);
 extern int solisten(struct socket *so, int backlog);
 extern struct socket *sodropablereq(struct socket *head);
-extern int socket_lock(struct socket *so, int refcount);
-extern int socket_unlock(struct socket *so, int refcount);
+extern void socket_lock(struct socket *so, int refcount);
+extern void socket_lock_assert_owned(struct socket *so);
+extern int socket_try_lock(struct socket *so);
+extern void socket_unlock(struct socket *so, int refcount);
 extern int sogetaddr_locked(struct socket *, struct sockaddr **, int);
 extern const char *solockhistory_nr(struct socket *);
 extern void soevent(struct socket *so, long hint);
@@ -899,7 +907,9 @@ extern int soshutdown(struct socket *so, int how);
 extern int soshutdownlock(struct socket *so, int how);
 extern int soshutdownlock_final(struct socket *so, int how);
 extern void sotoxsocket(struct socket *so, struct xsocket *xso);
+#if !CONFIG_EMBEDDED
 extern void sotoxsocket64(struct socket *so, struct xsocket64 *xso);
+#endif /* !CONFIG_EMBEDDED */
 extern int sosendallatonce(struct socket *so);
 extern int soreadable(struct socket *so);
 extern int sowriteable(struct socket *so);
@@ -910,7 +920,8 @@ extern int sosendcheck(struct socket *, struct sockaddr *, user_ssize_t,
 extern int soo_ioctl(struct fileproc *, u_long, caddr_t, vfs_context_t);
 extern int soo_stat(struct socket *, void *, int);
 extern int soo_select(struct fileproc *, int, void *, vfs_context_t);
-extern int soo_kqfilter(struct fileproc *, struct knote *, vfs_context_t);
+extern int soo_kqfilter(struct fileproc *, struct knote *,
+    struct kevent_internal_s *kev, vfs_context_t);
 
 /* Service class flags used for setting service class on a packet */
 #define	PKT_SCF_IPV6		0x00000001	/* IPv6 packet */
@@ -965,10 +976,11 @@ extern int soopt_mcopyin(struct sockopt *sopt, struct mbuf *m);
 extern int soopt_mcopyout(struct sockopt *sopt, struct mbuf *m);
 extern boolean_t so_cache_timer(void);
 
+extern void mptcp_fallback_sbdrop(struct socket *so, struct mbuf *m, int len);
 extern void mptcp_preproc_sbdrop(struct socket *, struct mbuf *, unsigned int);
 extern void mptcp_postproc_sbdrop(struct mbuf *, u_int64_t, u_int32_t,
     u_int32_t);
-extern int mptcp_adj_rmap(struct socket *, struct mbuf *);
+extern void mptcp_adj_rmap(struct socket *, struct mbuf *, int);
 
 extern void netpolicy_post_msg(uint32_t, struct netpolicy_event_data *,
     uint32_t);

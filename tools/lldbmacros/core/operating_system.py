@@ -670,7 +670,7 @@ def GetUniqueSessionID(process_obj):
     return hash(session_key_str)
 
 
-(archX86_64, archARMv7_family, archI386, archARMv8) = ("x86_64", ("armv7", "armv7s", "armv7k") , "i386", "arm64")
+(archX86_64, archARMv7, archI386, archARMv8) = ("x86_64", "armv7", "i386", "arm64")
 
 class OperatingSystemPlugIn(object):
     """Class that provides data for an instance of a LLDB 'OperatingSystemPython' plug-in class"""
@@ -712,11 +712,12 @@ class OperatingSystemPlugIn(object):
                 print "Target arch: x86_64"
                 self.register_set = X86_64RegisterSet()
                 self.kernel_context_size = self._target.FindFirstType('x86_kernel_state').GetByteSize()
-            elif arch in archARMv7_family :
+                self.kernel_thread_state_size = self._target.FindFirstType('struct thread_kernel_state').GetByteSize()
+            elif arch.startswith(archARMv7) :
                 self.target_arch = arch
                 print "Target arch: " + self.target_arch
                 self.register_set = Armv7_RegisterSet()
-            elif arch == archARMv8:
+            elif arch.startswith(archARMv8):
                 self.target_arch = arch
                 print "Target arch: " + self.target_arch
                 self.register_set = Armv8_RegisterSet()
@@ -734,7 +735,7 @@ class OperatingSystemPlugIn(object):
                 print "Instantiating threads completely from saved state in memory."
 
     def create_thread(self, tid, context):
-        # if tid is deadbeef means its a custom thread which kernel does not know of.
+        # tid == deadbeef means its a custom thread which kernel does not know of.
         if tid == 0xdeadbeef :
             # tid manipulation should be the same as in "switchtoregs" code in lldbmacros/process.py .
             tid = 0xdead0000 | (context & ~0xffff0000)
@@ -872,21 +873,21 @@ class OperatingSystemPlugIn(object):
             if int(PluginValue(thobj).GetChildMemberWithName('kernel_stack').GetValueAsUnsigned()) != 0 :
                 if self.target_arch == archX86_64 :
                     # we do have a stack so lets get register information
-                    saved_state_addr = PluginValue(thobj).GetChildMemberWithName('kernel_stack').GetValueAsUnsigned() + self.kernel_stack_size - self.kernel_context_size
+                    saved_state_addr = PluginValue(thobj).GetChildMemberWithName('kernel_stack').GetValueAsUnsigned() + self.kernel_stack_size - self.kernel_thread_state_size
                     regs.ReadRegisterDataFromKernelStack(saved_state_addr, self.version)
                     return regs.GetPackedRegisterState()
-                elif self.target_arch in archARMv7_family and int(PluginValue(thobj).GetChildMemberWithName('machine').GetChildMemberWithName('kstackptr').GetValueAsUnsigned()) != 0:
+                elif self.target_arch.startswith(archARMv7) and int(PluginValue(thobj).GetChildMemberWithName('machine').GetChildMemberWithName('kstackptr').GetValueAsUnsigned()) != 0:
                     #we have stack on the machine.kstackptr.
                     saved_state_addr = PluginValue(thobj).GetChildMemberWithName('machine').GetChildMemberWithName('kstackptr').GetValueAsUnsigned()
                     regs.ReadRegisterDataFromKernelStack(saved_state_addr, self.version)
                     return regs.GetPackedRegisterState()
-                elif self.target_arch == archARMv8 and int(PluginValue(thobj).GetChildMemberWithName('machine').GetChildMemberWithName('kstackptr').GetValueAsUnsigned()) != 0:
+                elif self.target_arch.startswith(archARMv8) and int(PluginValue(thobj).GetChildMemberWithName('machine').GetChildMemberWithName('kstackptr').GetValueAsUnsigned()) != 0:
                     saved_state_addr = PluginValue(thobj).GetChildMemberWithName('machine').GetChildMemberWithName('kstackptr').GetValueAsUnsigned()
                     arm_ctx = PluginValue(self.version.CreateValueFromExpression(None, '(struct arm_context *) ' + str(saved_state_addr)))
                     ss_64_addr = arm_ctx.GetChildMemberWithName('ss').GetChildMemberWithName('uss').GetChildMemberWithName('ss_64').GetLoadAddress()
                     regs.ReadRegisterDataFromKernelStack(ss_64_addr, self.version)
                     return regs.GetPackedRegisterState()
-            elif self.target_arch == archX86_64 or self.target_arch in archARMv7_family or self.target_arch == archARMv8:
+            elif self.target_arch == archX86_64 or self.target_arch.startswith(archARMv7) or self.target_arch.startswith(archARMv8):
                 regs.ReadRegisterDataFromContinuation( PluginValue(thobj).GetChildMemberWithName('continuation').GetValueAsUnsigned())
                 return regs.GetPackedRegisterState()
             #incase we failed very miserably

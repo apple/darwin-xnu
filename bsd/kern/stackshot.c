@@ -178,7 +178,8 @@ kern_stack_snapshot_with_reason(__unused char *reason)
 
 	config.sc_pid = -1;
 	config.sc_flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_GET_GLOBAL_MEM_STATS | STACKSHOT_SAVE_IN_KERNEL_BUFFER |
-				STACKSHOT_KCDATA_FORMAT | STACKSHOT_ENABLE_UUID_FAULTING);
+				STACKSHOT_KCDATA_FORMAT | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_THREAD_WAITINFO |
+				STACKSHOT_NO_IO_STATS);
 	config.sc_delta_timestamp = 0;
 	config.sc_out_buffer_addr = 0;
 	config.sc_out_size_addr = 0;

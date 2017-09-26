@@ -63,6 +63,9 @@
 #if defined(__i386__) || defined(__x86_64__)
 #include <i386/pmap.h>
 #endif
+#if defined(__arm__) || defined(__arm64__)
+#include <arm/pmap.h>
+#endif
 #include <IOKit/IOTypes.h>
 
 #define EXTERN
@@ -511,8 +514,13 @@ kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t p
 	case kIOMapCopybackCache:
 	    flags = VM_WIMG_COPYBACK;
 	    break;
+
 	case kIOMapCopybackInnerCache:
 	    flags = VM_WIMG_INNERWBACK;
+	    break;
+
+	case kIOMapPostedWrite:
+	    flags = VM_WIMG_POSTED;
 	    break;
     }
 
@@ -522,9 +530,7 @@ kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t p
 
 
     // Set up a block mapped area
-    pmap_map_block(pmap, va, pagenum, (uint32_t) atop_64(round_page_64(length)), prot, 0, 0);
-
-    return( KERN_SUCCESS );
+    return pmap_map_block(pmap, va, pagenum, (uint32_t) atop_64(round_page_64(length)), prot, 0, 0);
 }
 
 kern_return_t IOUnmapPages(vm_map_t map, mach_vm_address_t va, mach_vm_size_t length)
@@ -571,6 +577,14 @@ kern_return_t IOProtectCacheMode(vm_map_t __unused map, mach_vm_address_t __unus
 	case kIOMapCopybackCache:
 	    flags = VM_WIMG_COPYBACK;
 	    break;
+
+	case kIOMapCopybackInnerCache:
+	    flags = VM_WIMG_INNERWBACK;
+	    break;
+
+	case kIOMapPostedWrite:
+	    flags = VM_WIMG_POSTED;
+	    break;
     }
 
     pmap_flush_context_init(&pmap_flush_context_storage);
@@ -605,6 +619,8 @@ ppnum_t IOGetLastPageNumber(void)
 			highest = lastPage;
 	}
 	return (highest);
+#elif __arm__ || __arm64__
+	return 0;
 #else
 #error unknown arch
 #endif

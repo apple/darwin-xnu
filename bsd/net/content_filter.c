@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -32,7 +32,7 @@
  * also kept in kernel buffer until the user space agents makes a pass or drop
  * decision. This unidirectional flow of content avoids unnecessary data copies
  * back to the kernel.
- * *
+ * 
  * A user space filter agent opens a kernel control socket with the name
  * CONTENT_FILTER_CONTROL_NAME to attach to the socket content filter subsystem.
  * When connected, a "struct content_filter" is created and set as the
@@ -54,7 +54,7 @@
  * NECP FILTER CONTROL UNIT
  *
  * A user space filter agent uses the Network Extension Control Policy (NECP)
- * database specify which TCP/IP sockets needs to be filtered. The NECP
+ * database to specify which TCP/IP sockets need to be filtered. The NECP
  * criteria may be based on a variety of properties like user ID or proc UUID.
  *
  * The NECP "filter control unit" is used by the socket content filter subsystem
@@ -77,7 +77,7 @@
  * 4) The NECP filter control unit is then used to find the corresponding
  *    kernel control socket instance.
  *
- * Note: NECP currently supports a ingle filter control unit per TCP/IP socket
+ * Note: NECP currently supports a single filter control unit per TCP/IP socket
  *       but this restriction may be soon lifted.
  *
  *
@@ -117,15 +117,18 @@
  *
  * After a CFM_OP_SOCKET_ATTACHED is delivered, CFM_OP_DATA_OUT and
  * CFM_OP_DATA_OUT events are not delivered until a CFM_OP_DATA_UPDATE
- * action message is send by the user space filter agent.
+ * action message is sent by the user space filter agent.
  *
  * Note: absolute 64 bits offsets should be large enough for the foreseeable
- * future.  A 64-bits counter will wrap after 468 years are 10 Gbit/sec:
+ * future.  A 64-bits counter will wrap after 468 years at 10 Gbit/sec:
  *   2E64 / ((10E9 / 8) * 60 * 60 * 24 * 365.25) = 467.63
  *
- * They are two kinds of content filter actions:
+ * They are two kinds of primary content filter actions:
  * - CFM_OP_DATA_UPDATE: to update pass or peek offsets for each direction.
  * - CFM_OP_DROP: to shutdown socket and disallow further data flow
+ *
+ * There is also an action to mark a given client flow as already filtered
+ * at a higher level, CFM_OP_BLESS_CLIENT.
  *
  *
  * ACTION MESSAGES
@@ -196,7 +199,7 @@
  * CONTENT FILTER QUEUES
  *
  * Data that is being filtered is steered away from the TCP/IP socket buffer
- * and instead will sit in one of three content filter queue until the data
+ * and instead will sit in one of three content filter queues until the data
  * can be re-injected into the TCP/IP socket buffer.
  *
  * A content filter queue is represented by "struct cfil_queue" that contains
@@ -209,7 +212,7 @@
  * b) The "cfe_pending_q" of "struct cfil_entry"
  * c) The "cfi_inject_q" of "struct cfil_info"
  *
- * Note: The seqyence (a),(b) may be repeated several times if there are more
+ * Note: The sequence (a),(b) may be repeated several times if there is more
  * than one content filter attached to the TCP/IP socket.
  *
  * The "cfe_ctl_q" queue holds data than cannot be delivered to the
@@ -417,6 +420,16 @@ struct cfil_entry {
 #define	CFEF_SENT_SOCK_CLOSED		0x0040	/* closed event was sent */
 #define	CFEF_CFIL_DETACHED		0x0080	/* filter was detached */
 
+
+#define CFI_ADD_TIME_LOG(cfil, t1, t0, op)											\
+		struct timeval _tdiff;												\
+		if ((cfil)->cfi_op_list_ctr < CFI_MAX_TIME_LOG_ENTRY) {								\
+			timersub(t1, t0, &_tdiff);										\
+			(cfil)->cfi_op_time[(cfil)->cfi_op_list_ctr] = (uint32_t)(_tdiff.tv_sec * 1000 + _tdiff.tv_usec / 1000);\
+			(cfil)->cfi_op_list[(cfil)->cfi_op_list_ctr] = (unsigned char)op;					\
+			(cfil)->cfi_op_list_ctr ++;										\
+		}
+
 /*
  * struct cfil_info
  *
@@ -427,6 +440,10 @@ struct cfil_info {
 	struct socket		*cfi_so;
 	uint64_t		cfi_flags;
 	uint64_t		cfi_sock_id;
+	struct timeval64	cfi_first_event;
+	uint32_t		cfi_op_list_ctr;
+	uint32_t		cfi_op_time[CFI_MAX_TIME_LOG_ENTRY];	/* time interval in microseconds since first event */
+	unsigned char		cfi_op_list[CFI_MAX_TIME_LOG_ENTRY];
 
 	struct cfi_buf {
 		/*
@@ -451,7 +468,7 @@ struct cfil_info {
 	} cfi_snd, cfi_rcv;
 
 	struct cfil_entry	cfi_entries[MAX_CONTENT_FILTER];
-};
+} __attribute__((aligned(8)));
 
 #define	CFIF_DROP		0x0001	/* drop action applied */
 #define	CFIF_CLOSE_WAIT		0x0002	/* waiting for filter to close */
@@ -527,6 +544,7 @@ SYSCTL_STRUCT(_net_cfil, OID_AUTO, stats, CTLFLAG_RD|CTLFLAG_LOCKED,
 static int cfil_action_data_pass(struct socket *, uint32_t, int,
 	uint64_t, uint64_t);
 static int cfil_action_drop(struct socket *, uint32_t);
+static int cfil_action_bless_client(uint32_t, struct cfil_msg_hdr *);
 static int cfil_dispatch_closed_event(struct socket *, int);
 static int cfil_data_common(struct socket *, int, struct sockaddr *,
 	struct mbuf *, struct mbuf *, uint32_t);
@@ -541,6 +559,7 @@ static void cfil_info_free(struct socket *, struct cfil_info *);
 static struct cfil_info * cfil_info_alloc(struct socket *);
 static int cfil_info_attach_unit(struct socket *, uint32_t);
 static struct socket * cfil_socket_from_sock_id(cfil_sock_id_t);
+static struct socket *cfil_socket_from_client_uuid(uuid_t, bool *);
 static int cfil_service_pending_queue(struct socket *, uint32_t, int);
 static int cfil_data_service_ctl_q(struct socket *, uint32_t, int);
 static void cfil_info_verify(struct cfil_info *);
@@ -647,21 +666,11 @@ cfil_rw_lock_exclusive_to_shared(lck_rw_t *lck)
 static void
 cfil_rw_lock_assert_held(lck_rw_t *lck, int exclusive)
 {
-	lck_rw_assert(lck,
+#if !MACH_ASSERT
+#pragma unused(lck, exclusive)
+#endif
+	LCK_RW_ASSERT(lck,
 	    exclusive ? LCK_RW_ASSERT_EXCLUSIVE : LCK_RW_ASSERT_HELD);
-}
-
-static void
-socket_lock_assert_owned(struct socket *so)
-{
-	lck_mtx_t *mutex_held;
-
-	if (so->so_proto->pr_getlock != NULL)
-		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
-	else
-		mutex_held = so->so_proto->pr_domain->dom_mtx;
-
-	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 }
 
 /*
@@ -1131,11 +1140,11 @@ cfil_acquire_sockbuf(struct socket *so, int outgoing)
 	while ((sb->sb_flags & SB_LOCK) ||
 		(sb->sb_cfil_thread != NULL && sb->sb_cfil_thread != tp)) {
 		if (so->so_proto->pr_getlock != NULL)
-			mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+			mutex_held = (*so->so_proto->pr_getlock)(so, PR_F_WILLUNLOCK);
 		else
 			mutex_held = so->so_proto->pr_domain->dom_mtx;
 
-		lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
 
 		sb->sb_wantlock++;
 		VERIFY(sb->sb_wantlock != 0);
@@ -1244,6 +1253,28 @@ cfil_socket_from_sock_id(cfil_sock_id_t cfil_sock_id)
 	return (so);
 }
 
+static struct socket *
+cfil_socket_from_client_uuid(uuid_t necp_client_uuid, bool *cfil_attached)
+{
+	struct socket *so = NULL;
+	struct inpcb *inp = NULL;
+	struct inpcbinfo *pcbinfo = &tcbinfo;
+
+	lck_rw_lock_shared(pcbinfo->ipi_lock);
+	LIST_FOREACH(inp, pcbinfo->ipi_listhead, inp_list) {
+		if (inp->inp_state != INPCB_STATE_DEAD &&
+			inp->inp_socket != NULL &&
+			uuid_compare(inp->necp_client_uuid, necp_client_uuid) == 0) {
+			*cfil_attached = (inp->inp_socket->so_cfil != NULL);
+			so = inp->inp_socket;
+			break;
+		}
+	}
+	lck_rw_done(pcbinfo->ipi_lock);
+
+	return (so);
+}
+
 static errno_t
 cfil_ctl_send(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo, mbuf_t m,
 		int flags)
@@ -1295,6 +1326,17 @@ cfil_ctl_send(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo, mbuf_t m,
 		case CFM_OP_DROP:
 			OSIncrementAtomic(&cfil_stats.cfs_ctl_action_drop);
 			break;
+		case CFM_OP_BLESS_CLIENT:
+			if (msghdr->cfm_len != sizeof(struct cfil_msg_bless_client)) {
+				OSIncrementAtomic(&cfil_stats.cfs_ctl_action_bad_len);
+				error = EINVAL;
+				CFIL_LOG(LOG_ERR, "bad len: %u for op %u",
+						 msghdr->cfm_len,
+						 msghdr->cfm_op);
+				goto done;
+			}
+			error = cfil_action_bless_client(kcunit, msghdr);
+			goto done;
 		default:
 			OSIncrementAtomic(&cfil_stats.cfs_ctl_action_bad_op);
 			CFIL_LOG(LOG_ERR, "bad op %u", msghdr->cfm_op);
@@ -1360,6 +1402,7 @@ cfil_ctl_send(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo, mbuf_t m,
 	}
 
 	microuptime(&entry->cfe_last_action);
+	CFI_ADD_TIME_LOG(so->so_cfil, &entry->cfe_last_action, &so->so_cfil->cfi_first_event, msghdr->cfm_op);
 
 	action_msg = (struct cfil_msg_action *)msghdr;
 
@@ -1440,15 +1483,98 @@ cfil_ctl_getopt(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo,
 				error = EINVAL;
 				goto done;
 			}
-			if (data != NULL)
+			if (data != NULL) {
 				*(uint32_t *)data = cfc->cf_necp_control_unit;
+			}
 			break;
+		case CFIL_OPT_GET_SOCKET_INFO:
+			if (*len != sizeof(struct cfil_opt_sock_info)) {
+				CFIL_LOG(LOG_ERR, "len does not match %lu", *len);
+				error = EINVAL;
+				goto done;
+			}
+			if (data == NULL) {
+				CFIL_LOG(LOG_ERR, "data not passed");
+				error = EINVAL;
+				goto done;
+			}
+
+			struct cfil_opt_sock_info *sock_info = 
+											(struct cfil_opt_sock_info *) data;
+			struct socket *sock = 
+							cfil_socket_from_sock_id(sock_info->cfs_sock_id);
+			if (sock == NULL) {
+				CFIL_LOG(LOG_NOTICE, "bad sock_id %llx",
+					sock_info->cfs_sock_id);
+				error = ENOENT;
+				goto done;
+			}
+
+			// Unlock here so that we never hold both cfil_lck_rw and the
+			// socket_lock at the same time. Otherwise, this can deadlock 
+			// because soclose() takes the socket_lock and then exclusive 
+			// cfil_lck_rw and we require the opposite order. 
+
+			// WARNING: Be sure to never use anything protected 
+			//     by cfil_lck_rw beyond this point. 
+			// WARNING: Be sure to avoid fallthrough and 
+			//     goto return_already_unlocked from this branch. 
+			cfil_rw_unlock_shared(&cfil_lck_rw);
+
+			socket_lock(sock, 1);
+
+			if (sock->so_cfil == NULL) {
+				CFIL_LOG(LOG_NOTICE, "so %llx not attached, cannot fetch info", 
+					(uint64_t)VM_KERNEL_ADDRPERM(sock));
+				error = EINVAL;
+				socket_unlock(sock, 1);
+				goto return_already_unlocked;
+			}
+
+			// Fill out family, type, and protocol
+			sock_info->cfs_sock_family = sock->so_proto->pr_domain->dom_family;
+			sock_info->cfs_sock_type = sock->so_proto->pr_type;
+			sock_info->cfs_sock_protocol = sock->so_proto->pr_protocol;
+
+			// Source and destination addresses
+			struct inpcb *inp = sotoinpcb(sock);
+			if (inp->inp_vflag & INP_IPV6) {
+				fill_ip6_sockaddr_4_6(&sock_info->cfs_local, 
+					&inp->in6p_laddr, inp->inp_lport);
+				fill_ip6_sockaddr_4_6(&sock_info->cfs_remote,
+					&inp->in6p_faddr, inp->inp_fport);
+			} else if (inp->inp_vflag & INP_IPV4) {
+				fill_ip_sockaddr_4_6(&sock_info->cfs_local,
+					inp->inp_laddr, inp->inp_lport);
+				fill_ip_sockaddr_4_6(&sock_info->cfs_remote,
+					inp->inp_faddr, inp->inp_fport);
+			}
+
+			// Set the pid info 
+			sock_info->cfs_pid = sock->last_pid;
+			memcpy(sock_info->cfs_uuid, sock->last_uuid, sizeof(uuid_t));
+
+			if (sock->so_flags & SOF_DELEGATED) {
+				sock_info->cfs_e_pid = sock->e_pid;
+				memcpy(sock_info->cfs_e_uuid, sock->e_uuid, sizeof(uuid_t));
+			} else {
+				sock_info->cfs_e_pid = sock->last_pid;
+				memcpy(sock_info->cfs_e_uuid, sock->last_uuid, sizeof(uuid_t));
+			}
+
+			socket_unlock(sock, 1);
+
+			goto return_already_unlocked;
 		default:
 			error = ENOPROTOOPT;
 			break;
 	}
 done:
 	cfil_rw_unlock_shared(&cfil_lck_rw);
+
+	return (error);
+
+return_already_unlocked: 
 
 	return (error);
 }
@@ -1547,7 +1673,7 @@ cfil_ctl_rcvd(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo, int flags)
 	cfc->cf_flags &= ~CFF_FLOW_CONTROLLED;
 
 		cfil_rw_lock_exclusive_to_shared(&cfil_lck_rw);
-		lck_rw_assert(&cfil_lck_rw, LCK_RW_ASSERT_SHARED);
+		LCK_RW_ASSERT(&cfil_lck_rw, LCK_RW_ASSERT_SHARED);
 	}
 	/*
 	 * Flow control will be raised again as soon as an entry cannot enqueue
@@ -1915,7 +2041,8 @@ cfil_sock_attach(struct socket *so)
 		so->so_proto->pr_domain->dom_family != PF_INET6) ||
 		so->so_proto->pr_type != SOCK_STREAM ||
 		so->so_proto->pr_protocol != IPPROTO_TCP ||
-		(so->so_flags & SOF_MP_SUBFLOW) != 0)
+		(so->so_flags & SOF_MP_SUBFLOW) != 0 ||
+		(so->so_flags1 & SOF1_CONTENT_FILTER_SKIP) != 0)
 		goto done;
 
 	filter_control_unit = necp_socket_get_content_filter_control_unit(so);
@@ -1990,7 +2117,7 @@ cfil_dispatch_attach_event(struct socket *so, uint32_t filter_control_unit)
 	struct cfil_entry *entry = NULL;
 	struct cfil_msg_sock_attached msg_attached;
 	uint32_t kcunit;
-	struct content_filter *cfc;
+	struct content_filter *cfc = NULL;
 
 	socket_lock_assert_owned(so);
 
@@ -2063,6 +2190,9 @@ cfil_dispatch_attach_event(struct socket *so, uint32_t filter_control_unit)
 		goto done;
 	}
 	microuptime(&entry->cfe_last_event);
+	so->so_cfil->cfi_first_event.tv_sec = entry->cfe_last_event.tv_sec;
+	so->so_cfil->cfi_first_event.tv_usec = entry->cfe_last_event.tv_usec;
+
 	entry->cfe_flags |= CFEF_SENT_SOCK_ATTACHED;
 	OSIncrementAtomic(&cfil_stats.cfs_attach_event_ok);
 done:
@@ -2158,6 +2288,7 @@ cfil_dispatch_disconnect_event(struct socket *so, uint32_t kcunit, int outgoing)
 		goto done;
 	}
 	microuptime(&entry->cfe_last_event);
+	CFI_ADD_TIME_LOG(so->so_cfil, &entry->cfe_last_event, &so->so_cfil->cfi_first_event, msg_disconnected.cfm_op);
 
 	/* Remember we have sent the disconnection message */
 	if (outgoing) {
@@ -2193,7 +2324,7 @@ int
 cfil_dispatch_closed_event(struct socket *so, int kcunit)
 {
 	struct cfil_entry *entry;
-	struct cfil_msg_hdr msg_closed;
+	struct cfil_msg_sock_closed msg_closed;
 	errno_t error = 0;
 	struct content_filter *cfc;
 
@@ -2222,23 +2353,42 @@ cfil_dispatch_closed_event(struct socket *so, int kcunit)
 	if ((entry->cfe_flags & CFEF_SENT_SOCK_ATTACHED) == 0)
 		goto done;
 
-	bzero(&msg_closed, sizeof(struct cfil_msg_hdr));
-	msg_closed.cfm_len = sizeof(struct cfil_msg_hdr);
-	msg_closed.cfm_version = CFM_VERSION_CURRENT;
-	msg_closed.cfm_type = CFM_TYPE_EVENT;
-	msg_closed.cfm_op = CFM_OP_SOCKET_CLOSED;
-	msg_closed.cfm_sock_id = entry->cfe_cfil_info->cfi_sock_id;
+	microuptime(&entry->cfe_last_event);
+	CFI_ADD_TIME_LOG(so->so_cfil, &entry->cfe_last_event, &so->so_cfil->cfi_first_event, CFM_OP_SOCKET_CLOSED);
+
+	bzero(&msg_closed, sizeof(struct cfil_msg_sock_closed));
+	msg_closed.cfc_msghdr.cfm_len = sizeof(struct cfil_msg_sock_closed);
+	msg_closed.cfc_msghdr.cfm_version = CFM_VERSION_CURRENT;
+	msg_closed.cfc_msghdr.cfm_type = CFM_TYPE_EVENT;
+	msg_closed.cfc_msghdr.cfm_op = CFM_OP_SOCKET_CLOSED;
+	msg_closed.cfc_msghdr.cfm_sock_id = entry->cfe_cfil_info->cfi_sock_id;
+	msg_closed.cfc_first_event.tv_sec = so->so_cfil->cfi_first_event.tv_sec;
+	msg_closed.cfc_first_event.tv_usec = so->so_cfil->cfi_first_event.tv_usec;
+	memcpy(msg_closed.cfc_op_time, so->so_cfil->cfi_op_time, sizeof(uint32_t)*CFI_MAX_TIME_LOG_ENTRY);
+	memcpy(msg_closed.cfc_op_list, so->so_cfil->cfi_op_list, sizeof(unsigned char)*CFI_MAX_TIME_LOG_ENTRY);
+	msg_closed.cfc_op_list_ctr = so->so_cfil->cfi_op_list_ctr;
+
+	CFIL_LOG(LOG_INFO, "sock id %llu, op ctr %d, start time %llu.%llu", msg_closed.cfc_msghdr.cfm_sock_id, so->so_cfil->cfi_op_list_ctr, so->so_cfil->cfi_first_event.tv_sec, so->so_cfil->cfi_first_event.tv_usec);
+	/* for debugging
+	if (msg_closed.cfc_op_list_ctr > CFI_MAX_TIME_LOG_ENTRY) {
+		msg_closed.cfc_op_list_ctr  = CFI_MAX_TIME_LOG_ENTRY;       // just in case
+	}
+	for (unsigned int i = 0; i < msg_closed.cfc_op_list_ctr ; i++) {
+		CFIL_LOG(LOG_ERR, "MD: socket %llu event %2u, time + %u msec", msg_closed.cfc_msghdr.cfm_sock_id, (unsigned short)msg_closed.cfc_op_list[i], msg_closed.cfc_op_time[i]);
+	}
+	*/
+
 	error = ctl_enqueuedata(entry->cfe_filter->cf_kcref,
 				entry->cfe_filter->cf_kcunit,
 				&msg_closed,
-				sizeof(struct cfil_msg_hdr),
+				sizeof(struct cfil_msg_sock_closed),
 				CTL_DATA_EOR);
 	if (error != 0) {
 		CFIL_LOG(LOG_ERR, "ctl_enqueuedata() failed: %d",
 			error);
 		goto done;
 	}
-	microuptime(&entry->cfe_last_event);
+
 	entry->cfe_flags |= CFEF_SENT_SOCK_CLOSED;
 	OSIncrementAtomic(&cfil_stats.cfs_closed_event_ok);
 done:
@@ -2305,6 +2455,7 @@ cfil_dispatch_data_event(struct socket *so, uint32_t kcunit, int outgoing,
 	struct cfil_entry *entry;
 	struct cfe_buf *entrybuf;
 	struct content_filter *cfc;
+	struct timeval tv;
 
 	cfil_rw_lock_shared(&cfil_lck_rw);
 
@@ -2395,6 +2546,9 @@ cfil_dispatch_data_event(struct socket *so, uint32_t kcunit, int outgoing,
 				inp->inp_laddr, inp->inp_lport);
 		}
 	}
+
+	microuptime(&tv);
+	CFI_ADD_TIME_LOG(so->so_cfil, &tv, &so->so_cfil->cfi_first_event, data_req->cfd_msghdr.cfm_op);
 
 	/* Pass the message to the content filter */
 	error = ctl_enqueuembuf(entry->cfe_filter->cf_kcref,
@@ -3230,6 +3384,35 @@ done:
 	return (error);
 }
 
+int
+cfil_action_bless_client(uint32_t kcunit, struct cfil_msg_hdr *msghdr)
+{
+	errno_t error = 0;
+
+	cfil_rw_lock_exclusive(&cfil_lck_rw);
+
+	bool cfil_attached = false;
+	struct cfil_msg_bless_client *blessmsg = (struct cfil_msg_bless_client *)msghdr;
+	struct socket *so = cfil_socket_from_client_uuid(blessmsg->cfb_client_uuid, &cfil_attached);
+	if (so == NULL) {
+		error = ENOENT;
+	} else {
+		// The client gets a pass automatically
+		socket_lock(so, 1);
+		if (cfil_attached) {
+			(void)cfil_action_data_pass(so, kcunit, 1, CFM_MAX_OFFSET, CFM_MAX_OFFSET);
+			(void)cfil_action_data_pass(so, kcunit, 0, CFM_MAX_OFFSET, CFM_MAX_OFFSET);
+		} else {
+			so->so_flags1 |= SOF1_CONTENT_FILTER_SKIP;
+		}
+		socket_unlock(so, 1);
+	}
+
+	cfil_rw_unlock_exclusive(&cfil_lck_rw);
+
+	return (error);
+}
+
 static int
 cfil_update_entry_offsets(struct socket *so, int outgoing, unsigned int datalen)
 {
@@ -3608,10 +3791,10 @@ cfil_sock_close_wait(struct socket *so)
 	CFIL_LOG(LOG_INFO, "so %llx", (uint64_t)VM_KERNEL_ADDRPERM(so));
 
 	if (so->so_proto->pr_getlock != NULL)
-		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+		mutex_held = (*so->so_proto->pr_getlock)(so, PR_F_WILLUNLOCK);
 	else
 		mutex_held = so->so_proto->pr_domain->dom_mtx;
-	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
 
 	while (cfil_filters_attached(so)) {
 		/*

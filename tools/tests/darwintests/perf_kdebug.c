@@ -117,7 +117,12 @@ static void loop_getppid(dt_stat_time_t s) {
 	} while (!dt_stat_stable(s));
 }
 
+static void reset_kdebug_trace(void) {
+	_sysctl_reset();
+}
+
 static void test(const char* test_name, void (^pretest_setup)(void), void (*test)(dt_stat_time_t s)) {
+	T_ATEND(reset_kdebug_trace);
 	_sysctl_reset();
 	_sysctl_setbuf(1000000);
 	_sysctl_nowrap(false);
@@ -129,7 +134,6 @@ static void test(const char* test_name, void (^pretest_setup)(void), void (*test
 
 	test(s);
 
-	_sysctl_reset();
 	dt_stat_finalize(s);
 }
 

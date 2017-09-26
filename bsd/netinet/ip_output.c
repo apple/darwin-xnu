@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -206,6 +206,10 @@ SYSCTL_PROC(_net_inet_ip, OID_AUTO, output_perf_data,
 	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 	0, 0, sysctl_ip_output_getperf, "S,net_perf",
 	"IP output performance data (struct net_perf, net/net_perf.h)");
+
+__private_extern__ int rfc6864 = 1;
+SYSCTL_INT(_net_inet_ip, OID_AUTO, rfc6864, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&rfc6864, 0, "updated ip id field behavior");
 
 #define	IMO_TRACE_HIST_SIZE	32	/* size of trace history */
 
@@ -586,7 +590,12 @@ loopit:
 	if (!(flags & (IP_FORWARDING|IP_RAWOUTPUT))) {
 		ip->ip_vhl = IP_MAKE_VHL(IPVERSION, hlen >> 2);
 		ip->ip_off &= IP_DF;
-		ip->ip_id = ip_randomid();
+		if (rfc6864 && IP_OFF_IS_ATOMIC(ip->ip_off)) {
+			// Per RFC6864, value of ip_id is undefined for atomic ip packets
+			ip->ip_id = 0;
+		} else {
+			ip->ip_id = ip_randomid();
+		}
 		OSAddAtomic(1, &ipstat.ips_localout);
 	} else {
 		hlen = IP_VHL_HL(ip->ip_vhl) << 2;
@@ -901,7 +910,7 @@ loopit:
 	if (IN_MULTICAST(ntohl(pkt_dst.s_addr))) {
 		struct ifnet *srcifp = NULL;
 		struct in_multi *inm;
-		u_int32_t vif;
+		u_int32_t vif = 0;
 		u_int8_t ttl = IP_DEFAULT_MULTICAST_TTL;
 		u_int8_t loop = IP_DEFAULT_MULTICAST_LOOP;
 
@@ -1209,6 +1218,7 @@ sendit:
 				/* Check if the interface is allowed */
 				if (!necp_packet_is_allowed_over_interface(m, ifp)) {
 					error = EHOSTUNREACH;
+					OSAddAtomic(1, &ipstat.ips_necp_policy_drop);
 					goto bad;
 				}
 				goto skip_ipsec;
@@ -1216,6 +1226,7 @@ sendit:
 			case NECP_KERNEL_POLICY_RESULT_SOCKET_DIVERT:
 				/* Flow divert packets should be blocked at the IP layer */
 				error = EHOSTUNREACH;
+				OSAddAtomic(1, &ipstat.ips_necp_policy_drop);
 				goto bad;
 			case NECP_KERNEL_POLICY_RESULT_IP_TUNNEL: {
 				/* Verify that the packet is being routed to the tunnel */
@@ -1224,6 +1235,7 @@ sendit:
 					/* Check if the interface is allowed */
 					if (!necp_packet_is_allowed_over_interface(m, ifp)) {
 						error = EHOSTUNREACH;
+						OSAddAtomic(1, &ipstat.ips_necp_policy_drop);
 						goto bad;
 					}
 					goto skip_ipsec;
@@ -1232,6 +1244,7 @@ sendit:
 						/* Check if the interface is allowed */
 						if (!necp_packet_is_allowed_over_interface(m, policy_ifp)) {
 							error = EHOSTUNREACH;
+							OSAddAtomic(1, &ipstat.ips_necp_policy_drop);
 							goto bad;
 						}
 
@@ -1241,6 +1254,7 @@ sendit:
 						goto skip_ipsec;
 					} else {
 						error = ENETUNREACH;
+						OSAddAtomic(1, &ipstat.ips_necp_policy_drop);
 						goto bad;
 					}
 				}
@@ -1252,6 +1266,7 @@ sendit:
 	/* Catch-all to check if the interface is allowed */
 	if (!necp_packet_is_allowed_over_interface(m, ifp)) {
 		error = EHOSTUNREACH;
+		OSAddAtomic(1, &ipstat.ips_necp_policy_drop);
 		goto bad;
 	}
 #endif /* NECP */
@@ -2256,7 +2271,8 @@ in_finalize_cksum(struct mbuf *m, uint32_t hoff, uint32_t csum_flags)
 		ip_out_cksum_stats(ip->ip_p, len);
 
 		/* RFC1122 4.1.3.4 */
-		if (csum == 0 && (m->m_pkthdr.csum_flags & CSUM_UDP))
+		if (csum == 0 &&
+		    (m->m_pkthdr.csum_flags & (CSUM_UDP|CSUM_ZERO_INVERT)))
 			csum = 0xffff;
 
 		/* Insert the checksum in the ULP csum field */
@@ -2268,8 +2284,8 @@ in_finalize_cksum(struct mbuf *m, uint32_t hoff, uint32_t csum_flags)
 		} else {
 			bcopy(&csum, (mtod(m, char *) + offset), sizeof (csum));
 		}
-		m->m_pkthdr.csum_flags &=
-		    ~(CSUM_DELAY_DATA | CSUM_DATA_VALID | CSUM_PARTIAL);
+		m->m_pkthdr.csum_flags &= ~(CSUM_DELAY_DATA | CSUM_DATA_VALID |
+		    CSUM_PARTIAL | CSUM_ZERO_INVERT);
 	}
 
 	if (sw_csum & CSUM_DELAY_IP) {
@@ -2449,8 +2465,10 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 			m->m_len = sopt->sopt_valsize;
 			error = sooptcopyin(sopt, mtod(m, char *),
 			    m->m_len, m->m_len);
-			if (error)
+			if (error) {
+				m_freem(m);
 				break;
+			}
 
 			return (ip_pcbopts(sopt->sopt_name,
 			    &inp->inp_options, m));
@@ -3089,7 +3107,7 @@ ip_mloopback(struct ifnet *srcifp, struct ifnet *origifp, struct mbuf *m,
 	 * interface itself is lo0, this will be overridden by if_loop.
 	 */
 	if (hwcksum_rx) {
-		copym->m_pkthdr.csum_flags &= ~CSUM_PARTIAL;
+		copym->m_pkthdr.csum_flags &= ~(CSUM_PARTIAL|CSUM_ZERO_INVERT);
 		copym->m_pkthdr.csum_flags |=
 		    CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
 		copym->m_pkthdr.csum_data = 0xffff;
@@ -3443,10 +3461,13 @@ ip_output_checksum(struct ifnet *ifp, struct mbuf *m, int hlen, int ip_len,
 		/*
 		 * Partial checksum offload, if non-IP fragment, and TCP only
 		 * (no UDP support, as the hardware may not be able to convert
-		 * +0 to -0 (0xffff) per RFC1122 4.1.3.4.)
+		 * +0 to -0 (0xffff) per RFC1122 4.1.3.4. unless the interface
+		 * supports "invert zero" capability.)
 		 */
 		if (hwcksum_tx && !tso &&
-		    (m->m_pkthdr.csum_flags & CSUM_TCP) &&
+		    ((m->m_pkthdr.csum_flags & CSUM_TCP) ||
+		    ((hwcap & CSUM_ZERO_INVERT) &&
+		    (m->m_pkthdr.csum_flags & CSUM_ZERO_INVERT))) &&
 		    ip_len <= ifp->if_mtu) {
 			uint16_t start = sizeof (struct ip);
 			uint16_t ulpoff = m->m_pkthdr.csum_data & 0xffff;

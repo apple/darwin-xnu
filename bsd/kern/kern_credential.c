@@ -74,6 +74,8 @@
 #include <security/_label.h>
 #endif
 
+#include <IOKit/IOBSD.h>
+
 void mach_kauth_cred_uthread_update( void );
 
 #define CRED_DIAGNOSTIC 0
@@ -185,6 +187,22 @@ TAILQ_HEAD(kauth_resolver_done_head, kauth_resolver_work)	kauth_resolver_done;
 /* Number of resolver timeouts between logged complaints */
 #define KAUTH_COMPLAINT_INTERVAL 1000
 int kauth_resolver_timeout_cnt = 0;
+
+#if DEVELOPMENT || DEBUG
+/* Internal builds get different (less ambiguous) breadcrumbs. */
+#define	KAUTH_RESOLVER_FAILED_ERRCODE	EOWNERDEAD
+#else
+/* But non-Internal builds get errors that are allowed by standards. */
+#define	KAUTH_RESOLVER_FAILED_ERRCODE	EIO
+#endif /* DEVELOPMENT || DEBUG */
+
+int kauth_resolver_failed_cnt = 0;
+#define	RESOLVER_FAILED_MESSAGE(fmt, args...)				\
+do {									\
+	if (!(kauth_resolver_failed_cnt++ % 100)) {			\
+		printf("%s: " fmt "\n", __PRETTY_FUNCTION__, ##args);	\
+	}								\
+} while (0)
 
 static int	kauth_resolver_submit(struct kauth_identity_extlookup *lkp, uint64_t extend_data);
 static int	kauth_resolver_complete(user_addr_t message);
@@ -318,7 +336,8 @@ __KERNEL_IS_WAITING_ON_EXTERNAL_CREDENTIAL_RESOLVER__(
 			break;
 		/* woken because the resolver has died? */
 		if (kauth_resolver_identity == 0) {
-			error = EIO;
+			RESOLVER_FAILED_MESSAGE("kauth external resolver died while while waiting for work to complete");
+			error = KAUTH_RESOLVER_FAILED_ERRCODE;
 			break;
 		}
 		/* an error? */
@@ -578,6 +597,11 @@ identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused int3
 	int error;
 	pid_t new_id;
 
+	if (!IOTaskHasEntitlement(current_task(), IDENTITYSVC_ENTITLEMENT)) {
+		KAUTH_DEBUG("RESOLVER - pid %d not entitled to call identitysvc", current_proc()->p_pid);
+		return(EPERM);
+	}
+
 	/*
 	 * New server registering itself.
 	 */
@@ -755,8 +779,10 @@ kauth_resolver_getwork_continue(int result)
 		 * If this is a wakeup from another thread in the resolver
 		 * deregistering it, error out the request-for-work thread
 		 */
-		if (!kauth_resolver_identity)
-			error = EIO;
+		if (!kauth_resolver_identity) {
+			RESOLVER_FAILED_MESSAGE("external resolver died");
+			error = KAUTH_RESOLVER_FAILED_ERRCODE;
+		}
 		KAUTH_RESOLVER_UNLOCK();
 		return(error);
 	}
@@ -897,8 +923,10 @@ kauth_resolver_getwork(user_addr_t message)
 		 * If this is a wakeup from another thread in the resolver
 		 * deregistering it, error out the request-for-work thread
 		 */
-		if (!kauth_resolver_identity)
-			error = EIO;
+		if (!kauth_resolver_identity) {
+			printf("external resolver died");
+			error = KAUTH_RESOLVER_FAILED_ERRCODE;
+		}
 		return(error);
 	}
 	return kauth_resolver_getwork2(message);
@@ -922,7 +950,7 @@ kauth_resolver_complete(user_addr_t message)
 	struct kauth_identity_extlookup	extl;
 	struct kauth_resolver_work *workp;
 	struct kauth_resolver_work *killp;
-	int error, result, request_flags;
+	int error, result, want_extend_data;
 
 	/*
 	 * Copy in the mesage, including the extension field, since we are
@@ -956,6 +984,7 @@ kauth_resolver_complete(user_addr_t message)
 	case KAUTH_EXTLOOKUP_FATAL:
 		/* fatal error means the resolver is dead */
 		KAUTH_DEBUG("RESOLVER - resolver %d died, waiting for a new one", kauth_resolver_identity);
+		RESOLVER_FAILED_MESSAGE("resolver %d died, waiting for a new one", kauth_resolver_identity);
 		/*
 		 * Terminate outstanding requests; without an authoritative
 		 * resolver, we are now back on our own authority.  Tag the
@@ -973,7 +1002,7 @@ kauth_resolver_complete(user_addr_t message)
 		/* Cause all waiting-for-work threads to return EIO */
 		wakeup((caddr_t)&kauth_resolver_unsubmitted);
 		/* and return EIO to the caller */
-		error = EIO;
+		error = KAUTH_RESOLVER_FAILED_ERRCODE;
 		break;
 
 	case KAUTH_EXTLOOKUP_BADRQ:
@@ -983,12 +1012,14 @@ kauth_resolver_complete(user_addr_t message)
 
 	case KAUTH_EXTLOOKUP_FAILURE:
 		KAUTH_DEBUG("RESOLVER - resolver reported transient failure for request %d", extl.el_seqno);
-		result = EIO;
+		RESOLVER_FAILED_MESSAGE("resolver reported transient failure for request %d", extl.el_seqno);
+		result = KAUTH_RESOLVER_FAILED_ERRCODE;
 		break;
 
 	default:
 		KAUTH_DEBUG("RESOLVER - resolver returned unexpected status %d", extl.el_result);
-		result = EIO;
+		RESOLVER_FAILED_MESSAGE("resolver returned unexpected status %d", extl.el_result);
+		result = KAUTH_RESOLVER_FAILED_ERRCODE;
 		break;
 	}
 
@@ -1004,9 +1035,9 @@ kauth_resolver_complete(user_addr_t message)
 			/* found it? */
 			if (workp->kr_seqno == extl.el_seqno) {
 				/*
-				 * Take a snapshot of the original request flags.
+				 * Do we want extend_data?
 				 */
-				request_flags = workp->kr_work.el_flags;
+				want_extend_data = (workp->kr_work.el_flags & (KAUTH_EXTLOOKUP_WANT_PWNAM|KAUTH_EXTLOOKUP_WANT_GRNAM));
 
 				/*
 				 * Get the request of the submitted queue so
@@ -1049,11 +1080,13 @@ kauth_resolver_complete(user_addr_t message)
 				 * part of a user's address space if they return
 				 * flags that mismatch the original request's flags.
 				 */
-				if ((extl.el_flags & request_flags) & (KAUTH_EXTLOOKUP_VALID_PWNAM|KAUTH_EXTLOOKUP_VALID_GRNAM)) {
+				if (want_extend_data && (extl.el_flags & (KAUTH_EXTLOOKUP_VALID_PWNAM|KAUTH_EXTLOOKUP_VALID_GRNAM))) {
 					size_t actual;	/* notused */
 
 					KAUTH_RESOLVER_UNLOCK();
 					error = copyinstr(extl.el_extend, CAST_DOWN(void *, workp->kr_extend), MAXPATHLEN, &actual);
+					KAUTH_DEBUG("RESOLVER - resolver got name :%*s: len = %d\n", (int)actual,
+						    actual ? "null" : (char *)extl.el_extend, actual);
 					KAUTH_RESOLVER_LOCK();
 				} else if (extl.el_flags &  (KAUTH_EXTLOOKUP_VALID_PWNAM|KAUTH_EXTLOOKUP_VALID_GRNAM)) {
 					error = EFAULT;
@@ -2608,7 +2641,10 @@ kauth_cred_cache_lookup(int from, int to, void *src, void *dst)
 	 * atomically.
 	 */
 	if (to == KI_VALID_PWNAM || to == KI_VALID_GRNAM) {
+		if (dst == NULL)
+			return (EINVAL);
 		namebuf = dst;
+		*namebuf = '\0';
 	}
 	ki.ki_valid = 0;
 	switch(from) {
@@ -2632,6 +2668,9 @@ kauth_cred_cache_lookup(int from, int to, void *src, void *dst)
 	default:
 		return(EINVAL);
 	}
+	/* If we didn't get what we're asking for. Call the resolver */
+	if (!error && !(to & ki.ki_valid))
+		error = ENOENT;
 	/* lookup failure or error */
 	if (error != 0) {
 		/* any other error is fatal */
@@ -4574,7 +4613,6 @@ int kauth_proc_label_update(struct proc *p, struct label *label)
 			/* update cred on proc */
 			PROC_UPDATE_CREDS_ONPROC(p);
 
-			mac_proc_set_enforce(p, MAC_ALL_ENFORCE);
 			proc_ucred_unlock(p);
 		}
 		break;
@@ -4653,7 +4691,6 @@ kauth_proc_label_update_execve(struct proc *p, vfs_context_t ctx,
 			p->p_ucred = my_new_cred;
 			/* update cred on proc */
 			PROC_UPDATE_CREDS_ONPROC(p);
-			mac_proc_set_enforce(p, MAC_ALL_ENFORCE);
 			proc_ucred_unlock(p);
 		}
 		break;

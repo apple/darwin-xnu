@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2017 Apple Inc. All rights reserved.
 #
 # MakeInc.def contains global definitions for building,
 # linking, and installing files.
@@ -14,7 +14,7 @@ SUPPORTED_ARCH_CONFIGS := X86_64 X86_64H
 #
 # Kernel Configuration options
 #
-SUPPORTED_KERNEL_CONFIGS = RELEASE DEVELOPMENT DEBUG PROFILE
+SUPPORTED_KERNEL_CONFIGS = RELEASE DEVELOPMENT DEBUG PROFILE KASAN
 
 #
 # Machine Configuration options
@@ -43,7 +43,7 @@ endif
 #
 # Component List
 #
-COMPONENT_LIST	= osfmk bsd libkern iokit pexpert libsa security
+COMPONENT_LIST	= osfmk bsd libkern iokit pexpert libsa security san
 COMPONENT	= $(if $(word 2,$(subst /, ,$(RELATIVE_SOURCE_PATH))),$(word 2,$(subst /, ,$(RELATIVE_SOURCE_PATH))),$(firstword $(subst /, ,$(RELATIVE_SOURCE_PATH))))
 COMPONENT_IMPORT_LIST = $(filter-out $(COMPONENT),$(COMPONENT_LIST))
 
@@ -59,6 +59,8 @@ else ifeq ($(PLATFORM),tvOS)
     DEPLOYMENT_TARGET_FLAGS = -mtvos-version-min=$(SDKVERSION)
 else ifeq ($(PLATFORM),AppleTVOS)
     DEPLOYMENT_TARGET_FLAGS = -mtvos-version-min=$(SDKVERSION)
+else ifeq ($(PLATFORM),BridgeOS)
+    DEPLOYMENT_TARGET_FLAGS = -mbridgeos-version-min=$(SDKVERSION)
 else ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
     DEPLOYMENT_TARGET_FLAGS = -miphoneos-version-min=$(SDKVERSION)
 else ifneq ($(filter $(SUPPORTED_SIMULATOR_PLATFORMS),$(PLATFORM)),)
@@ -89,11 +91,29 @@ GENASSYM_KCC = $(CC)
 # Compiler warning flags
 #
 
-CWARNFLAGS_STD = \
-	-Weverything -Werror -Wextra -Wstrict-prototypes \
-	-Wmissing-prototypes -Wpointer-arith -Wreturn-type -Wcast-qual \
-	-Wwrite-strings -Wswitch -Wshadow -Wcast-align -Wchar-subscripts \
-	-Winline -Wnested-externs -Wredundant-decls -Wextra-tokens \
+USE_WERROR := 1
+ifneq ($(BUILD_WERROR),)
+USE_WERROR := $(BUILD_WERROR)
+endif
+
+ifeq ($(USE_WERROR),1)
+WERROR := -Werror
+endif
+
+# Shared C/C++ warning flags
+WARNFLAGS_STD := \
+	-Weverything \
+	-Wextra \
+	$(WERROR) \
+	-Wpointer-arith \
+	-Wreturn-type \
+	-Wcast-qual \
+	-Wwrite-strings \
+	-Wswitch \
+	-Wcast-align \
+	-Wchar-subscripts \
+	-Wredundant-decls \
+	-Wextra-tokens \
 	-Wunreachable-code \
 	-Wno-assign-enum \
 	-Wno-bad-function-cast \
@@ -101,6 +121,15 @@ CWARNFLAGS_STD = \
 	-Wno-c++-compat \
 	-Wno-conditional-uninitialized \
 	-Wno-conversion \
+	-Wnull-conversion \
+	-Wstring-conversion \
+	-Wliteral-conversion \
+	-Wnon-literal-null-conversion \
+	-Wint-conversion \
+	-Wenum-conversion  \
+	-Wfloat-conversion \
+	-Wconstant-conversion \
+	-Wpointer-bool-conversion \
 	-Wno-covered-switch-default \
 	-Wno-disabled-macro-expansion \
 	-Wno-documentation-unknown-command \
@@ -121,6 +150,14 @@ CWARNFLAGS_STD = \
 	-Wno-variadic-macros \
 	-Wno-vla \
 	-Wno-zero-length-array
+
+CWARNFLAGS_STD = \
+	$(WARNFLAGS_STD) \
+	-Wstrict-prototypes \
+	-Wmissing-prototypes \
+	-Wshadow \
+	-Winline \
+	-Wnested-externs
 
 # Can be overridden in Makefile.template or Makefile.$arch
 export CWARNFLAGS ?= $(CWARNFLAGS_STD)
@@ -130,40 +167,11 @@ $(1)_CWARNFLAGS_ADD += $2
 endef
 
 CXXWARNFLAGS_STD = \
-	-Weverything -Werror -Wextra -Wpointer-arith -Wreturn-type \
-	-Wcast-qual -Wwrite-strings -Wswitch -Wcast-align -Wchar-subscripts \
-	-Wredundant-decls -Wextra-tokens \
-	-Wunreachable-code \
-	-Wno-assign-enum \
-	-Wno-bad-function-cast \
-	-Wno-c++98-compat \
+	$(WARNFLAGS_STD) \
 	-Wno-c++98-compat-pedantic \
-	-Wno-c++-compat \
-	-Wno-conditional-uninitialized \
-	-Wno-conversion \
-	-Wno-covered-switch-default \
-	-Wno-disabled-macro-expansion \
-	-Wno-documentation-unknown-command \
 	-Wno-exit-time-destructors \
-	-Wno-format-non-iso \
-	-Wno-format-nonliteral \
 	-Wno-global-constructors \
-	-Wno-reserved-id-macro \
-	-Wno-language-extension-token \
-	-Wno-missing-variable-declarations \
-	-Wno-old-style-cast \
-	-Wno-packed \
-	-Wno-padded \
-	-Wno-partial-availability \
-	-Wno-pedantic \
-	-Wno-shift-sign-overflow \
-	-Wno-switch-enum \
-	-Wno-undef \
-	-Wno-unused-macros \
-	-Wno-used-but-marked-unused \
-	-Wno-variadic-macros \
-	-Wno-vla \
-	-Wno-zero-length-array
+	-Wno-old-style-cast
 
 # overloaded-virtual warnings are non-fatal (9000888)
 CXXWARNFLAGS_STD += -Wno-error=overloaded-virtual
@@ -186,8 +194,8 @@ ARCH_FLAGS_X86_64H	  = -arch x86_64h
 #
 # Default CFLAGS
 #
-ifdef RC_CFLAGS
-OTHER_CFLAGS	= $(subst $(addprefix -arch ,$(RC_ARCHS)),,$(RC_CFLAGS))
+ifdef RC_NONARCH_CFLAGS
+OTHER_CFLAGS = $(RC_NONARCH_CLFAGS)
 endif
 
 #
@@ -198,7 +206,7 @@ DSYMKGMACROSDIR	= Contents/Resources
 DSYMLLDBMACROSDIR = Contents/Resources/Python
 DSYMDWARFDIR	= Contents/Resources/DWARF
 
-DEBUG_CFLAGS := -gdwarf-2
+DEBUG_CFLAGS := -g
 BUILD_DSYM := 1
 
 #
@@ -212,6 +220,7 @@ CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc \
 CFLAGS_RELEASE	=
 CFLAGS_DEVELOPMENT	=
 CFLAGS_DEBUG	=
+CFLAGS_KASAN = $(CFLAGS_DEVELOPMENT)
 CFLAGS_PROFILE	=  -pg
 
 CFLAGS_X86_64	= -Dx86_64 -DX86_64 -D__X86_64__ -DLP64 \
@@ -222,12 +231,14 @@ CFLAGS_X86_64H = $(CFLAGS_X86_64)
 
 CFLAGS_RELEASEX86_64 = -O2
 CFLAGS_DEVELOPMENTX86_64 = -O2
+CFLAGS_KASANX86_64 = $(CFLAGS_DEVELOPMENTX86_64)
 # No space optimization for the DEBUG kernel for the benefit of gdb:
 CFLAGS_DEBUGX86_64 = -O0
 CFLAGS_PROFILEX86_64 = -O2
 
 CFLAGS_RELEASEX86_64H = -O2
 CFLAGS_DEVELOPMENTX86_64H = -O2
+CFLAGS_KASANX86_64H = $(CFLAGS_DEVELOPMENTX86_64H)
 # No space optimization for the DEBUG kernel for the benefit of gdb:
 CFLAGS_DEBUGX86_64H = -O0
 CFLAGS_PROFILEX86_64H = -O2
@@ -237,6 +248,30 @@ CFLAGS_DEVELOPMENTARM = -O2
 CFLAGS_DEBUGARM = -O0
 CFLAGS_PROFILEARM = -O2
 
+
+
+#
+# KASAN support
+#
+
+
+ifeq ($(CURRENT_KERNEL_CONFIG),KASAN)
+KASAN = 1
+endif
+
+ifeq ($(KASAN),1)
+
+BUILD_LTO = 0
+KASAN_SHIFT_X86_64=0xdffffe1000000000
+KASAN_SHIFT_X86_64H=$(KASAN_SHIFT_X86_64)
+KASAN_SHIFT=$($(addsuffix $(CURRENT_ARCH_CONFIG),KASAN_SHIFT_))
+KASAN_BLACKLIST=$(OBJROOT)/san/kasan-blacklist-$(CURRENT_ARCH_CONFIG_LC)
+CFLAGS_GEN += -DKASAN=1 -DKASAN_SHIFT=$(KASAN_SHIFT) -fsanitize=address \
+		-mllvm -asan-globals-live-support \
+		-mllvm -asan-mapping-offset=$(KASAN_SHIFT) \
+		-fsanitize-blacklist=$(KASAN_BLACKLIST)
+
+endif
 
 CFLAGS	= $(CFLAGS_GEN) \
 		  $($(addsuffix $(CURRENT_MACHINE_CONFIG),MACHINE_FLAGS_$(CURRENT_ARCH_CONFIG)_)) \
@@ -273,6 +308,7 @@ SFLAGS_GEN = -D__ASSEMBLER__ -DASSEMBLER $(OTHER_CFLAGS)
 
 SFLAGS_RELEASE	=
 SFLAGS_DEVELOPMENT	=
+SFLAGS_KASAN = $(SFLAGS_DEVELOPMENT) -DKASAN=1
 SFLAGS_DEBUG	=
 SFLAGS_PROFILE	=
 
@@ -323,7 +359,8 @@ LDFLAGS_KERNEL_GEN = \
 LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -lfirehose_kernel
 
 LDFLAGS_KERNEL_RELEASE	=
-LDFLAGS_KERNEL_DEVELOPMENT	=
+LDFLAGS_KERNEL_DEVELOPMENT     =
+LDFLAGS_KERNEL_KASAN = $(LDFLAGS_KERNEL_DEVELOPMENT)
 LDFLAGS_KERNEL_DEBUG	=
 LDFLAGS_KERNEL_PROFILE	=
 
@@ -362,17 +399,29 @@ LDFLAGS_KERNEL_RELEASEX86_64 = \
 	-Wl,-no_zero_fill_sections \
 	$(LDFLAGS_NOSTRIP_FLAG)
 
+ifeq ($(KASAN),1)
+LDFLAGS_KERNEL_RELEASEX86_64 += \
+	-Wl,-sectalign,__HIB,__cstring,0x1000 \
+	-Wl,-sectalign,__HIB,__asan_globals,0x1000 \
+	-Wl,-sectalign,__HIB,__asan_liveness,0x1000 \
+	-Wl,-sectalign,__HIB,__mod_term_func,0x1000 \
+	-Wl,-rename_section,__HIB,__mod_init_func,__NULL,__mod_init_func \
+	-Wl,-rename_section,__HIB,__eh_frame,__NULL,__eh_frame
+endif
+
 # Define KERNEL_BASE_OFFSET so known at compile time:
 CFLAGS_X86_64 += -DKERNEL_BASE_OFFSET=$(KERNEL_BASE_OFFSET)
 CFLAGS_X86_64H += -DKERNEL_BASE_OFFSET=$(KERNEL_BASE_OFFSET)
 
 LDFLAGS_KERNEL_DEBUGX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 LDFLAGS_KERNEL_DEVELOPMENTX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
+LDFLAGS_KERNEL_KASANX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 LDFLAGS_KERNEL_PROFILEX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 
 LDFLAGS_KERNEL_RELEASEX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64)
 LDFLAGS_KERNEL_DEBUGX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64H)
 LDFLAGS_KERNEL_DEVELOPMENTX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64H)
+LDFLAGS_KERNEL_KASANX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64H)
 LDFLAGS_KERNEL_PROFILEX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64H)
 
 
@@ -458,6 +507,7 @@ endif
 LTO_ENABLED_RELEASE = 1
 LTO_ENABLED_DEVELOPMENT = 1
 LTO_ENABLED_DEBUG = 0
+LTO_ENABLED_KASAN = 0
 
 ifneq ($(BUILD_LTO),)
 USE_LTO = $(BUILD_LTO)
@@ -553,6 +603,7 @@ EXPDIR = EXPORT_HDRS/$(COMPONENT)
 #
 STRIP_FLAGS_RELEASE	= -S -x
 STRIP_FLAGS_DEVELOPMENT	= -S
+STRIP_FLAGS_KASAN = $(STRIP_FLAGS_DEVELOPMENT)
 STRIP_FLAGS_DEBUG	= -S
 STRIP_FLAGS_PROFILE	= -S -x
 
@@ -577,7 +628,7 @@ MANDIR = /usr/share/man
 #
 # DEBUG alias location
 #
-DEVELOPER_EXTRAS_DIR = /AppleInternal/CoreOS/xnu_debug
+DEVELOPER_EXTRAS_DIR = /AppleInternal/CoreOS/xnu_$(CURRENT_KERNEL_CONFIG_LC)
 
 #
 # mach_kernel install location
@@ -643,6 +694,14 @@ INSTALL_KERNEL_DIR := $(DEVELOPER_EXTRAS_DIR)
 INSTALL_KERNEL_SYM_DIR := $(DEVELOPER_EXTRAS_DIR)
 INSTALL_KERNEL_SYM_TO_KDK = 1
 INSTALL_XNU_DEBUG_FILES = 1
+else ifeq ($(RC_ProjectName),xnu_kasan)
+ifeq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
+# MacOS
+INSTALL_KERNEL_DIR := $(DEVELOPER_EXTRAS_DIR)
+INSTALL_KERNEL_SYM_DIR := $(DEVELOPER_EXTRAS_DIR)
+endif
+INSTALL_KERNEL_SYM_TO_KDK = 1
+INSTALL_KASAN_ONLY = 1
 else ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
 INSTALL_KERNEL_SYM_TO_KDK = 1
 USE_BINARY_PLIST = 1

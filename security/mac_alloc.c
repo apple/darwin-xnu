@@ -122,8 +122,8 @@ int
 mac_wire(void *start, void *end)
 {
 
-	return (vm_map_wire(kalloc_map, CAST_USER_ADDR_T(start),
-		CAST_USER_ADDR_T(end), VM_PROT_READ|VM_PROT_WRITE, FALSE));
+	return (vm_map_wire_kernel(kalloc_map, CAST_USER_ADDR_T(start),
+		CAST_USER_ADDR_T(end), VM_PROT_READ|VM_PROT_WRITE, VM_KERN_MEMORY_SECURITY, FALSE));
 }
 
 int

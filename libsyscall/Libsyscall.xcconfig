@@ -1,7 +1,7 @@
 #include "<DEVELOPER_DIR>/Makefiles/CoreOS/Xcode/BSD.xcconfig"
 
 BUILD_VARIANTS = normal
-SUPPORTED_PLATFORMS = macosx iphoneos iphoneosnano tvos appletvos watchos
+SUPPORTED_PLATFORMS = macosx iphoneos iphoneosnano tvos appletvos watchos bridgeos
 ONLY_ACTIVE_ARCH = NO
 DEAD_CODE_STRIPPING = YES
 DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
@@ -20,6 +20,7 @@ OTHER_CFLAGS[sdk=iphoneos*] = $(inherited) -DNO_SYSCALL_LEGACY
 OTHER_CFLAGS[sdk=watchos*] = $(inherited) -DNO_SYSCALL_LEGACY
 OTHER_CFLAGS[sdk=tvos*] = $(inherited) -DNO_SYSCALL_LEGACY
 OTHER_CFLAGS[sdk=appletvos*] = $(inherited) -DNO_SYSCALL_LEGACY
+OTHER_CFLAGS[sdk=bridgeos*] = $(inherited) -DNO_SYSCALL_LEGACY
 GCC_PREPROCESSOR_DEFINITIONS = CF_OPEN_SOURCE CF_EXCLUDE_CSTD_HEADERS DEBUG _FORTIFY_SOURCE=0
 HEADER_SEARCH_PATHS = $(PROJECT_DIR)/mach $(PROJECT_DIR)/os $(PROJECT_DIR)/wrappers $(PROJECT_DIR)/wrappers/string $(PROJECT_DIR)/wrappers/libproc $(PROJECT_DIR)/wrappers/libproc/spawn $(BUILT_PRODUCTS_DIR)/internal_hdr/include $(BUILT_PRODUCTS_DIR)/mig_hdr/local/include $(BUILT_PRODUCTS_DIR)/mig_hdr/include $(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 WARNING_CFLAGS = -Wmost
@@ -27,11 +28,12 @@ GCC_TREAT_WARNINGS_AS_ERRORS = YES
 GCC_WARN_ABOUT_MISSING_NEWLINE = YES
 CODE_SIGN_IDENTITY = -
 DYLIB_CURRENT_VERSION = $(RC_ProjectSourceVersion)
-DYLIB_LDFLAGS = -umbrella System -all_load
+DYLIB_LDFLAGS = -umbrella System -all_load -lCrashReporterClient
 DYLIB_LDFLAGS[sdk=iphoneos*] = $(inherited) -Wl,-sectalign,__DATA,__data,1000
 DYLIB_LDFLAGS[sdk=watchos*] = $(inherited) -Wl,-sectalign,__DATA,__data,1000
 DYLIB_LDFLAGS[sdk=tvos*] = $(inherited) -Wl,-sectalign,__DATA,__data,1000
 DYLIB_LDFLAGS[sdk=appletvos*] = $(inherited) -Wl,-sectalign,__DATA,__data,1000
+DYLIB_LDFLAGS[sdk=bridgeos*] = $(inherited) -Wl,-sectalign,__DATA,__data,1000
 OTHER_LDFLAGS =
 INSTALLHDRS_SCRIPT_PHASE = YES
 INSTALLHDRS_COPY_PHASE = YES

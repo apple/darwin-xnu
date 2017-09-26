@@ -53,12 +53,12 @@ SYSCTL_NODE(_net_inet6, OID_AUTO, send, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
 	"IPv6 Secure Neighbor Discovery");
 
 static int nd6_send_opmode = ND6_SEND_OPMODE_CGA_QUIET;
-SYSCTL_INT(_net_inet6_send, OID_AUTO, opstate, CTLFLAG_RD | CTLFLAG_LOCKED,
-	&nd6_send_opstate, 0, "current SEND operating state");
+SYSCTL_INT(_net_inet6_send, OID_AUTO, opmode, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &nd6_send_opmode, 0, "configured SEND operating mode");
 
 int nd6_send_opstate = ND6_SEND_OPMODE_DISABLED;
-SYSCTL_INT(_net_inet6_send, OID_AUTO, opmode, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&nd6_send_opmode, 0, "configured SEND operating mode");
+SYSCTL_INT(_net_inet6_send, OID_AUTO, opstate, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &nd6_send_opstate, 0, "current SEND operating state");
 
 static int sysctl_cga_parameters SYSCTL_HANDLER_ARGS;
 

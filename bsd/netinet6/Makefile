@@ -22,9 +22,9 @@ PRIVATE_DATAFILES = \
 	scope6_var.h
 
 PRIVATE_KERNELFILES = \
-	ah6.h esp6.h esp_rijndael.h in6_gif.h in6_ifattach.h \
-	ip6_ecn.h ip6protosw.h ipcomp6.h ipsec6.h \
-	tcp6_var.h udp6_var.h
+	ah6.h esp6.h esp_rijndael.h esp_chachapoly.h \
+	in6_gif.h in6_ifattach.h ip6_ecn.h ip6protosw.h \
+	ipcomp6.h ipsec6.h tcp6_var.h udp6_var.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

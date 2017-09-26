@@ -98,7 +98,6 @@
 #include <sys/subr_prf.h>
 
 #include <kern/cpu_number.h>	/* for cpu_number() */
-#include <machine/spl.h>
 #include <libkern/libkern.h>
 #include <os/log_private.h>
 
@@ -117,10 +116,10 @@ struct snprintf_arg {
 
 /*
  * In case console is off,
- * panicstr contains argument to last
+ * debugger_panic_str contains argument to last
  * call to panic.
  */
-extern const char	*panicstr;
+extern const char	*debugger_panic_str;
 
 extern	void cnputc(char);		/* standard console putc */
 void	(*v_putc)(char) = cnputc;	/* routine to putc on virtual console */
@@ -417,7 +416,7 @@ putchar(int c, void *arg)
 	struct putchar_args *pca = arg;
 	char **sp = (char**) pca->tty;
 
-	if (panicstr)
+	if (debugger_panic_str)
 		constty = 0;
 	if ((pca->flags & TOCONS) && pca->tty == NULL && constty) {
 		pca->tty = constty;
@@ -449,6 +448,7 @@ vprintf_log_locked(const char *fmt, va_list ap)
 	return 0;
 }
 
+#if !CONFIG_EMBEDDED
 
 /*
  * Scaled down version of vsprintf(3).
@@ -471,6 +471,7 @@ vsprintf(char *buf, const char *cfmt, va_list ap)
 	}
 	return 0;
 }
+#endif	/* !CONFIG_EMBEDDED */
 
 /*
  * Scaled down version of snprintf(3).

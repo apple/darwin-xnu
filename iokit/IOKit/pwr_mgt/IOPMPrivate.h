@@ -103,6 +103,9 @@ enum {
 #define kIOPMMessageSystemSleepPreventers \
                 iokit_family_msg(sub_iokit_powermanagement, 0x430)
 
+#define kIOPMMessageLaunchBootSpinDump \
+                iokit_family_msg(sub_iokit_powermanagement, 0x440)
+
 /* @enum SystemSleepReasons
  * @abstract The potential causes for system sleep as logged in the system event record.
  */
@@ -623,6 +626,13 @@ enum {
  */
 #define kIOPMAutoPowerOffTimerKey           "AutoPowerOff Timer"
 
+/* kIOPMDeepSleepTimerKey
+ * Key refers to a CFNumberRef that indicates the time in seconds until the
+ * expiration of the Standby delay period. This value should be used
+ * to program a wake alarm before system sleep.
+ */
+#define kIOPMDeepSleepTimerKey                "Standby Timer"
+
 /* kIOPMUserWakeAlarmScheduledKey
  * Key refers to a boolean value that indicates if an user alarm was scheduled
  * or pending.
@@ -706,6 +716,7 @@ struct IOPMSystemSleepPolicyVariables
     uint32_t    hibernateMode;              // current hibernate mode
 
     uint32_t    standbyDelay;               // standby delay in seconds
+    uint32_t    standbyTimer;               // standby timer in seconds
     uint32_t    poweroffDelay;              // auto-poweroff delay in seconds
     uint32_t    scheduledAlarms;            // bitmask of scheduled alarm types
     uint32_t    poweroffTimer;              // auto-poweroff timer in seconds
@@ -788,7 +799,18 @@ enum {
     kIOPMWakeEventUserPME                   = 0x00000400,
     kIOPMWakeEventSleepTimer                = 0x00000800,
     kIOPMWakeEventBatteryLow                = 0x00001000,
-    kIOPMWakeEventDarkPME                   = 0x00002000
+    kIOPMWakeEventDarkPME                   = 0x00002000,
+    kIOPMWakeEventWifi                      = 0x00004000,
+    kIOPMWakeEventRTCSystem                 = 0x00008000,  // Maintenance RTC wake
+    kIOPMWakeEventUSBCPlugin                = 0x00010000,  // USB-C Plugin
+    kIOPMWakeEventHID                       = 0x00020000,
+    kIOPMWakeEventBluetooth                 = 0x00040000,
+    kIOPMWakeEventDFR                       = 0x00080000,
+    kIOPMWakeEventSD                        = 0x00100000,  // SD card
+    kIOPMWakeEventLANWake                   = 0x00200000,  // Wake on Lan
+    kIOPMWakeEventLANPlugin                 = 0x00400000,  // Ethernet media sense
+    kIOPMWakeEventThunderbolt               = 0x00800000,
+    kIOPMWakeEventRTCUser                   = 0x01000000,  // User requested RTC wake
 };
 
 /*!

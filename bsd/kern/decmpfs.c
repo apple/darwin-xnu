@@ -68,6 +68,7 @@ UNUSED_SYMBOL(decmpfs_validate_compressed_file)
 #include <sys/decmpfs.h>
 #include <sys/uio_internal.h>
 #include <libkern/OSByteOrder.h>
+#include <libkern/section_keywords.h>
 
 #pragma mark --- debugging ---
 
@@ -196,7 +197,7 @@ _free(char *ret, __unused int type, const char *file, int line)
 
 static lck_grp_t *decmpfs_lockgrp;
 
-static decmpfs_registration * decompressors[CMP_MAX]; /* the registered compressors */
+SECURITY_READ_ONLY_EARLY(static decmpfs_registration *) decompressors[CMP_MAX]; /* the registered compressors */
 static lck_rw_t * decompressorsLock;
 static int decompress_channel; /* channel used by decompress_file to wake up waiters */
 static lck_mtx_t *decompress_channel_mtx;
@@ -211,10 +212,10 @@ static void *
 _func_from_offset(uint32_t type, uintptr_t offset)
 {
     /* get the function at the given offset in the registration for the given type */
-    decmpfs_registration *reg = decompressors[type];
-    char *regChar = (char*)reg;
-    char *func = &regChar[offset];
-    void **funcPtr = (void**)func;
+    const decmpfs_registration *reg = decompressors[type];
+    const char *regChar = (const char*)reg;
+    const char *func = &regChar[offset];
+    void * const * funcPtr = (void * const *) func;
 
     switch (reg->decmpfs_registration) {
         case DECMPFS_REGISTRATION_VERSION_V1:
@@ -948,13 +949,13 @@ decmpfs_hides_xattr(vfs_context_t ctx, decmpfs_cnode *cp, const char *xattr)
 
 #pragma mark --- registration/validation routines ---
 
-static inline int registration_valid(decmpfs_registration *registration)
+static inline int registration_valid(const decmpfs_registration *registration)
 {
     return registration && ((registration->decmpfs_registration == DECMPFS_REGISTRATION_VERSION_V1) || (registration->decmpfs_registration == DECMPFS_REGISTRATION_VERSION_V3));
 }
 
 errno_t
-register_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration *registration)
+register_decmpfs_decompressor(uint32_t compression_type, const decmpfs_registration *registration)
 {
     /* called by kexts to register decompressors */
     
@@ -1375,7 +1376,7 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
         }
         
         /* create the upl */
-        kr = ubc_create_upl(vp, curUplPos, curUplSize, &upl, &pli, UPL_SET_LITE);
+        kr = ubc_create_upl_kernel(vp, curUplPos, curUplSize, &upl, &pli, UPL_SET_LITE, VM_KERN_MEMORY_FILE);
         if (kr != KERN_SUCCESS) {
             ErrorLogWithPath("ubc_create_upl error %d\n", (int)kr);
             err = EINVAL;
@@ -1842,7 +1843,7 @@ out:
     return err;
 }
 
-static decmpfs_registration Type1Reg =
+SECURITY_READ_ONLY_EARLY(static decmpfs_registration) Type1Reg =
 {
     .decmpfs_registration = DECMPFS_REGISTRATION_VERSION,
     .validate          = decmpfs_validate_compressed_file_Type1,

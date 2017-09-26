@@ -330,6 +330,8 @@ L_common_dispatch:
 	mov	%rcx, %cr3
 4:
 	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Get the active thread */
+	testq	%rcx, %rcx
+	je	5f
 	movl	$-1, TH_IOTIER_OVERRIDE(%rcx)	/* Reset IO tier override to -1 before handling trap */
 	cmpq	$0, TH_PCB_IDS(%rcx)	/* Is there a debug register state? */
 	je	5f
@@ -1087,11 +1089,9 @@ L_return_from_trap_with_ast:
 	movl	%eax, R64_RBX(%r15)	/* let the PFZ know we've pended an AST */
 	jmp	EXT(return_to_user)
 2:	
-	sti				/* interrupts always enabled on return to user mode */
 
-	xor	%edi, %edi		/* zero %rdi */
 	xorq	%rbp, %rbp		/* clear framepointer */
-	CCALL(i386_astintr)		/* take the AST */
+	CCALL(ast_taken_user)		/* handle all ASTs (enables interrupts, may return via continuation) */
 
 	cli
 	mov	%rsp, %r15		/* AST changes stack, saved state */
@@ -1131,7 +1131,7 @@ trap_from_kernel:
 	testq	%rcx,%rcx		/* are we on the kernel stack? */
 	jne	ret_to_kernel		/* no, skip it */
 
-	CCALL1(i386_astintr, $1)	/* take the AST */
+	CCALL(ast_taken_kernel)         /* take the AST */
 
 	mov	%rsp, %r15		/* AST changes stack, saved state */
 	jmp	ret_to_kernel
@@ -1242,7 +1242,7 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 	 * to do as much as the case where the interrupt came from user
 	 * space.
 	 */
-	CCALL1(i386_astintr, $1)
+	CCALL(ast_taken_kernel)
 
 	mov	%rsp, %r15		/* AST changes stack, saved state */
 	jmp	ret_to_kernel

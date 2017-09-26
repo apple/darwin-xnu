@@ -134,14 +134,14 @@ bond_lock_init(void)
 static __inline__ void
 bond_assert_lock_held(void)
 {
-    lck_mtx_assert(bond_lck_mtx, LCK_MTX_ASSERT_OWNED);
+    LCK_MTX_ASSERT(bond_lck_mtx, LCK_MTX_ASSERT_OWNED);
     return;
 }
 
 static __inline__ void
 bond_assert_lock_not_held(void)
 {
-    lck_mtx_assert(bond_lck_mtx, LCK_MTX_ASSERT_NOTOWNED);
+    LCK_MTX_ASSERT(bond_lck_mtx, LCK_MTX_ASSERT_NOTOWNED);
     return;
 }
 

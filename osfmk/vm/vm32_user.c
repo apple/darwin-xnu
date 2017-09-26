@@ -114,7 +114,7 @@ vm32_allocate(
 	kern_return_t		result;
 
 	maddr = *addr;
-	result = mach_vm_allocate(map, &maddr, size, flags);
+	result = mach_vm_allocate_external(map, &maddr, size, flags);
 	*addr = CAST_DOWN_EXPLICIT(vm32_offset_t, maddr);
 	
 	return result;
@@ -265,7 +265,7 @@ vm32_map_64(
 	kern_return_t		result;
 
 	maddress = *address;
-	result = mach_vm_map(target_map, &maddress, size, mask,
+	result = mach_vm_map_external(target_map, &maddress, size, mask,
 						 flags, port, offset, copy,
 						 cur_protection, max_protection, inheritance);
 	*address = CAST_DOWN_EXPLICIT(vm32_offset_t, maddress);
@@ -310,7 +310,7 @@ vm32_remap(
 	kern_return_t		result;
 	
 	maddress = *address;
-	result = mach_vm_remap(target_map, &maddress, size, mask,
+	result = mach_vm_remap_external(target_map, &maddress, size, mask,
 						 anywhere, src_map, memory_address, copy,
 						 cur_protection, max_protection, inheritance);
 	*address = CAST_DOWN_EXPLICIT(vm32_offset_t, maddress);

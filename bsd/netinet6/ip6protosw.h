@@ -168,7 +168,7 @@ struct ip6protosw {
 		    (struct mbuf *m, struct socket *so,
 		    struct sockaddr_in6 *, struct mbuf *);
 	void	(*pr_ctlinput)		/* control input (from below) */
-		    (int, struct sockaddr *, void *);
+		    (int, struct sockaddr *, void *, struct ifnet *);
 	int	(*pr_ctloutput)		/* control output (from above) */
 		    (struct socket *, struct sockopt *);
 	/*
@@ -184,11 +184,11 @@ struct ip6protosw {
 	/* for compat. with IPv4 protosw */
 	int	(*pr_sysctl)(void);	/* sysctl for protocol */
 	int	(*pr_lock)		/* lock function for protocol */
-		    (struct socket *so, int locktype, void *debug);
+		    (struct socket *so, int refcnt, void *debug);
 	int	(*pr_unlock)		/* unlock for protocol */
-		    (struct socket *so, int locktype, void *debug);
+		    (struct socket *so, int refcnt, void *debug);
 	lck_mtx_t *(*pr_getlock)	/* retrieve protocol lock */
-		    (struct socket *so, int locktype);
+		    (struct socket *so, int flags);
 	/*
 	 * misc
 	 */

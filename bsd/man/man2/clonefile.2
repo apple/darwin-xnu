@@ -61,7 +61,9 @@ or
 .Xr mkdirat 2
 or
 .Xr symlinkat 2
-if the current user does not have privileges to change ownership.
+if the current user does not have privileges to change ownership. If the optional
+flag CLONE_NOOWNERCOPY is passed, the ownership information is the same as if the
+the current user does not have privileges to change ownership
 
 .
 .It
@@ -133,6 +135,17 @@ names a symbolic link.
 .
 .El
 .Pp
+.Bl -tag -width CLONE_NOOWNERCOPY 
+.
+.It CLONE_NOOWNERCOPY 
+Don't copy ownership information from the source when run called with superuser privileges.
+The symbolic link is itself cloned if
+.Fa src
+names a symbolic link.
+.
+.El
+.Pp
+The
 The
 .Fn clonefile ,
 .Fn clonefileat

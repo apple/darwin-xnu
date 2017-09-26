@@ -40,8 +40,6 @@
 #include <sys/vnode.h>
 #include <sys/kernel.h>
 
-#include <machine/spl.h>
-
 #include <kern/queue.h>
 #include <sys/lock.h>
 #include <kern/thread.h>

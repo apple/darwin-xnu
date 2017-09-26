@@ -112,10 +112,13 @@
 #include <kern/syscall_subr.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/thread_group.h>
+#include <kern/coalition.h>
 #include <kern/host.h>
 #include <kern/zalloc.h>
 #include <kern/assert.h>
 #include <kern/exc_resource.h>
+#include <kern/exc_guard.h>
 #include <kern/telemetry.h>
 #include <kern/policy_internal.h>
 
@@ -123,6 +126,11 @@
 #if KPC
 #include <kern/kpc.h>
 #endif
+
+#if MONOTONIC
+#include <kern/monotonic.h>
+#include <machine/monotonic.h>
+#endif /* MONOTONIC */
 
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
@@ -134,6 +142,9 @@
 #include <sys/kdebug.h>
 #include <sys/bsdtask_info.h>
 #include <mach/sdt.h>
+#include <san/kasan.h>
+
+#include <stdatomic.h>
 
 /*
  * Exported interfaces
@@ -164,9 +175,10 @@ decl_simple_lock_data(static,thread_exception_lock)
 static queue_head_t		thread_exception_queue;
 
 struct thread_exception_elt {
-	queue_chain_t	elt;
-	task_t		exception_task;
-	thread_t	exception_thread;
+	queue_chain_t		elt;
+	exception_type_t	exception_type;
+	task_t			exception_task;
+	thread_t		exception_thread;
 };
 
 static struct thread	thread_template, init_thread;
@@ -179,6 +191,7 @@ static void		sched_call_null(
 extern void proc_exit(void *);
 extern mach_exception_data_type_t proc_encode_exit_exception_code(void *);
 extern uint64_t get_dispatchqueue_offset_from_proc(void *);
+extern uint64_t get_return_to_kernel_offset_from_proc(void *p);
 extern int      proc_selfpid(void);
 extern char *   proc_name_address(void *p);
 #endif /* MACH_BSD */
@@ -271,7 +284,9 @@ thread_bootstrap(void)
 
 	thread_template.quantum_remaining = 0;
 	thread_template.last_run_time = 0;
-	thread_template.last_made_runnable_time = 0;
+	thread_template.last_made_runnable_time = THREAD_NOT_RUNNABLE;
+	thread_template.last_basepri_change_time = THREAD_NOT_RUNNABLE;
+	thread_template.same_pri_latency = 0;
 
 	thread_template.computation_metered = 0;
 	thread_template.computation_epoch = 0;
@@ -284,6 +299,11 @@ thread_bootstrap(void)
 #endif
 	thread_template.c_switch = thread_template.p_switch = thread_template.ps_switch = 0;
 
+#if MONOTONIC
+	memset(&thread_template.t_monotonic, 0,
+			sizeof(thread_template.t_monotonic));
+#endif /* MONOTONIC */
+
 	thread_template.bound_processor = PROCESSOR_NULL;
 	thread_template.last_processor = PROCESSOR_NULL;
 
@@ -291,6 +311,7 @@ thread_bootstrap(void)
 
 	timer_init(&thread_template.user_timer);
 	timer_init(&thread_template.system_timer);
+	timer_init(&thread_template.ptime);
 	thread_template.user_timer_save = 0;
 	thread_template.system_timer_save = 0;
 	thread_template.vtimer_user_save = 0;
@@ -347,18 +368,20 @@ thread_bootstrap(void)
 
 	thread_template.t_ledger = LEDGER_NULL;
 	thread_template.t_threadledger = LEDGER_NULL;
-#ifdef CONFIG_BANK
 	thread_template.t_bankledger = LEDGER_NULL;
 	thread_template.t_deduct_bank_ledger_time = 0;
-#endif
 
 	thread_template.requested_policy = (struct thread_requested_policy) {};
 	thread_template.effective_policy = (struct thread_effective_policy) {};
 
 	bzero(&thread_template.overrides, sizeof(thread_template.overrides));
+	thread_template.sync_ipc_overrides = 0;
 
 	thread_template.iotier_override = THROTTLE_LEVEL_NONE;
 	thread_template.thread_io_stats = NULL;
+#if CONFIG_EMBEDDED
+	thread_template.taskwatch = NULL;
+#endif /* CONFIG_EMBEDDED */
 	thread_template.thread_callout_interrupt_wakeups = thread_template.thread_callout_platform_idle_wakeups = 0;
 
 	thread_template.thread_timer_wakeups_bin_1 = thread_template.thread_timer_wakeups_bin_2 = 0;
@@ -369,7 +392,7 @@ thread_bootstrap(void)
 	thread_template.ith_voucher_name = MACH_PORT_NULL;
 	thread_template.ith_voucher = IPC_VOUCHER_NULL;
 
-	thread_template.work_interval_id = 0;
+	thread_template.th_work_interval = NULL;
 
 	init_thread = thread_template;
 	machine_set_current_thread(&init_thread);
@@ -432,8 +455,14 @@ thread_corpse_continue(void)
 	thread_t thread = current_thread();
 
 	thread_terminate_internal(thread);
-	ml_set_interrupts_enabled(FALSE);
-	ast_taken(AST_APC, TRUE);
+
+	/*
+	 * Handle the thread termination directly
+	 * here instead of returning to userspace.
+	 */
+	assert(thread->active == FALSE);
+	thread_ast_clear(thread, AST_APC);
+	thread_apc_ast(thread);
 
 	panic("thread_corpse_continue");
 	/*NOTREACHED*/
@@ -499,6 +528,11 @@ thread_terminate_self(void)
 	thread_unlock(thread);
 	splx(s);
 
+#if CONFIG_EMBEDDED
+	thead_remove_taskwatch(thread);
+#endif /* CONFIG_EMBEDDED */
+
+	work_interval_thread_terminate(thread);
 
 	thread_mtx_lock(thread);
 
@@ -506,19 +540,30 @@ thread_terminate_self(void)
 
 	thread_mtx_unlock(thread);
 
+	bank_swap_thread_bank_ledger(thread, NULL);
+
 	task = thread->task;
 	uthread_cleanup(task, thread->uthread, task->bsd_info);
-	threadcnt = hw_atomic_sub(&task->active_thread_count, 1);
 
 	if (task->bsd_info && !task_is_exec_copy(task)) {
 		/* trace out pid before we sign off */
-		long	dbg_arg1 = 0;
-
-		kdbg_trace_data(thread->task->bsd_info, &dbg_arg1);
+		long dbg_arg1 = 0;
+		long dbg_arg2 = 0; 
+		
+		kdbg_trace_data(thread->task->bsd_info, &dbg_arg1, &dbg_arg2);
 
 		KERNEL_DEBUG_CONSTANT(TRACE_DATA_THREAD_TERMINATE_PID | DBG_FUNC_NONE,
 			dbg_arg1, 0, 0, 0, 0);
 	}
+
+	/*
+	 * After this subtraction, this thread should never access
+	 * task->bsd_info unless it got 0 back from the hw_atomic_sub.  It
+	 * could be racing with other threads to be the last thread in the
+	 * process, and the last thread in the process will tear down the proc
+	 * structure and zero-out task->bsd_info.
+	 */
+	threadcnt = hw_atomic_sub(&task->active_thread_count, 1);
 
 	/*
 	 * If we are the last thread to terminate and the task is
@@ -545,7 +590,7 @@ thread_terminate_self(void)
 		 * last thread for this task.
 		 */
 		if (task->corpse_info) {
-			task_deliver_crash_notification(task, current_thread(), subcode);
+			task_deliver_crash_notification(task, current_thread(), EXC_RESOURCE, subcode);
 		}
 	}
 
@@ -613,7 +658,7 @@ thread_deallocate_safe(thread_t thread)
 {
 	assert_thread_magic(thread);
 
-	uint32_t old_refcount = hw_atomic_sub(&(thread)->ref_count, 1) + 1;
+	uint32_t old_refcount = atomic_fetch_sub_explicit(&thread->ref_count, 1, memory_order_release);
 
 	if (__improbable(old_refcount <= 1))
 		panic("bad thread refcount: %d", old_refcount);
@@ -624,17 +669,24 @@ thread_deallocate(
 	thread_t			thread)
 {
 	task_t				task;
+	__assert_only uint32_t		th_ref_count;
 
 	if (thread == THREAD_NULL)
 		return;
 
 	assert_thread_magic(thread);
-	assert(thread->ref_count > 0);
 
-	if (__probable(hw_atomic_sub(&(thread)->ref_count, 1) > 0))
-		return;
+	if (__probable(atomic_fetch_sub_explicit(&thread->ref_count, 1,
+                       memory_order_release) - 1 > 0)) {
+                return;
+        }
 
-	if(!(thread->state & TH_TERMINATE2))
+	th_ref_count = atomic_load_explicit(&thread->ref_count, memory_order_acquire);
+	assert(th_ref_count == 0);
+
+	assert(thread_owned_workloops_count(thread) == 0);
+
+	if (!(thread->state & TH_TERMINATE2))
 		panic("thread_deallocate: thread not properly terminated\n");
 
 	assert(thread->runq == PROCESSOR_NULL);
@@ -687,6 +739,29 @@ thread_deallocate(
 	zfree(thread_zone, thread);
 }
 
+void
+thread_starts_owning_workloop(thread_t thread)
+{
+	atomic_fetch_add_explicit(&thread->kqwl_owning_count, 1,
+			memory_order_relaxed);
+}
+
+void
+thread_ends_owning_workloop(thread_t thread)
+{
+	__assert_only uint32_t count;
+	count = atomic_fetch_sub_explicit(&thread->kqwl_owning_count, 1,
+			memory_order_relaxed);
+	assert(count > 0);
+}
+
+uint32_t
+thread_owned_workloops_count(thread_t thread)
+{
+	return atomic_load_explicit(&thread->kqwl_owning_count,
+			memory_order_relaxed);
+}
+
 /*
  *	thread_inspect_deallocate:
  *
@@ -702,7 +777,7 @@ thread_inspect_deallocate(
 /*
  *	thread_exception_daemon:
  *
- *	Deliver EXC_RESOURCE exception
+ *	Deliver EXC_{RESOURCE,GUARD} exception
  */
 static void
 thread_exception_daemon(void)
@@ -710,16 +785,18 @@ thread_exception_daemon(void)
 	struct thread_exception_elt *elt;
 	task_t task;
 	thread_t thread;
+	exception_type_t etype;
 
 	simple_lock(&thread_exception_lock);
 	while ((elt = (struct thread_exception_elt *)dequeue_head(&thread_exception_queue)) != NULL) {
 		simple_unlock(&thread_exception_lock);
 
+		etype = elt->exception_type;
 		task = elt->exception_task;
 		thread = elt->exception_thread;
 		assert_thread_magic(thread);
 
-		kfree(elt, sizeof(struct thread_exception_elt));
+		kfree(elt, sizeof (*elt));
 
 		/* wait for all the threads in the task to terminate */
 		task_lock(task);
@@ -731,8 +808,8 @@ thread_exception_daemon(void)
 		/* Consumes the thread ref returned by task_generate_corpse_internal */
 		thread_deallocate(thread);
 
-		/* Deliver the EXC_RESOURCE notification, also clears the corpse. */
-		task_deliver_crash_notification(task, thread, 0);
+		/* Deliver the notification, also clears the corpse. */
+		task_deliver_crash_notification(task, thread, etype, 0);
 
 		simple_lock(&thread_exception_lock);
 	}
@@ -746,16 +823,17 @@ thread_exception_daemon(void)
 /*
  *	thread_exception_enqueue:
  *
- *	Enqueue a corpse port to be delivered an EXC_RESOURCE.
+ *	Enqueue a corpse port to be delivered an EXC_{RESOURCE,GUARD}.
  */
 void
 thread_exception_enqueue(
 	task_t		task,
-	thread_t	thread)
+	thread_t	thread,
+	exception_type_t etype)
 {
-	struct thread_exception_elt *elt = (struct thread_exception_elt*) kalloc(
-						sizeof(struct thread_exception_elt));
-
+	assert(EXC_RESOURCE == etype || EXC_GUARD == etype);
+	struct thread_exception_elt *elt = kalloc(sizeof (*elt));
+	elt->exception_type = etype;
 	elt->exception_task = task;
 	elt->exception_thread = thread;
 
@@ -784,12 +862,16 @@ thread_copy_resource_info(
 	dst_thread->precise_user_kernel_time = src_thread->precise_user_kernel_time;
 	dst_thread->user_timer = src_thread->user_timer;
 	dst_thread->user_timer_save = src_thread->user_timer_save;
+	dst_thread->system_timer = src_thread->system_timer;
 	dst_thread->system_timer_save = src_thread->system_timer_save;
+	dst_thread->vtimer_user_save = src_thread->vtimer_user_save;
+	dst_thread->vtimer_prof_save = src_thread->vtimer_prof_save;
+	dst_thread->vtimer_rlim_save = src_thread->vtimer_rlim_save;
+	dst_thread->vtimer_qos_save = src_thread->vtimer_qos_save;
 	dst_thread->syscalls_unix = src_thread->syscalls_unix;
 	dst_thread->syscalls_mach = src_thread->syscalls_mach;
 	ledger_rollup(dst_thread->t_threadledger, src_thread->t_threadledger);
 	*dst_thread->thread_io_stats = *src_thread->thread_io_stats;
-
 }
 
 /*
@@ -829,6 +911,7 @@ thread_terminate_daemon(void)
 
 		task_lock(task);
 		task->total_user_time += timer_grab(&thread->user_timer);
+		task->total_ptime += timer_grab(&thread->ptime);
 		if (thread->precise_user_kernel_time) {
 			task->total_system_time += timer_grab(&thread->system_timer);
 		} else {
@@ -846,6 +929,10 @@ thread_terminate_daemon(void)
 		task->task_timer_wakeups_bin_2 += thread->thread_timer_wakeups_bin_2;
 		task->task_gpu_ns += ml_gpu_stat(thread);
 		task->task_energy += ml_energy_stat(thread);
+
+#if MONOTONIC
+		mt_terminate_update(task, thread);
+#endif /* MONOTONIC */
 
 		thread_update_qos_cpu_time(thread);
 
@@ -1016,7 +1103,7 @@ thread_daemon_init(void)
 	simple_lock_init(&thread_stack_lock, 0);
 	queue_init(&thread_stack_queue);
 
-	result = kernel_thread_start_priority((thread_continue_t)thread_stack_daemon, NULL, BASEPRI_PREEMPT, &thread);
+	result = kernel_thread_start_priority((thread_continue_t)thread_stack_daemon, NULL, BASEPRI_PREEMPT_HIGH, &thread);
 	if (result != KERN_SUCCESS)
 		panic("thread_daemon_init: thread_stack_daemon");
 
@@ -1112,6 +1199,11 @@ thread_create_internal(
 	new_thread->thread_io_stats = (io_stat_info_t)kalloc(sizeof(struct io_stat_info));
 	assert(new_thread->thread_io_stats != NULL);
 	bzero(new_thread->thread_io_stats, sizeof(struct io_stat_info));
+	new_thread->sync_ipc_overrides = 0;
+
+#if KASAN
+	kasan_init_thread(&new_thread->kasan_data);
+#endif
 
 #if CONFIG_IOSCHED
 	/* Clear out the I/O Scheduling info for AppleFSCompression */
@@ -1171,10 +1263,9 @@ thread_create_internal(
 		ledger_entry_setactive(new_thread->t_threadledger, thread_ledgers.cpu_time);
 	}
 
-#ifdef CONFIG_BANK
 	new_thread->t_bankledger = LEDGER_NULL;
 	new_thread->t_deduct_bank_ledger_time = 0;
-#endif
+	new_thread->t_deduct_bank_ledger_energy = 0;
 
 	new_thread->t_ledger = new_thread->task->ledger;
 	if (new_thread->t_ledger)
@@ -1204,6 +1295,11 @@ thread_create_internal(
 	new_priority = (priority < 0)? parent_task->priority: priority;
 	if (new_priority > new_thread->max_priority)
 		new_priority = new_thread->max_priority;
+#if CONFIG_EMBEDDED
+	if (new_priority < MAXPRI_THROTTLE) {
+		new_priority = MAXPRI_THROTTLE;
+	}
+#endif /* CONFIG_EMBEDDED */
 
 	new_thread->importance = new_priority - new_thread->task_priority;
 
@@ -1214,6 +1310,10 @@ thread_create_internal(
 	new_thread->pri_shift = sched_pri_shifts[new_thread->th_sched_bucket];
 #endif /* defined(CONFIG_SCHED_TIMESHARE_CORE) */
 
+#if CONFIG_EMBEDDED
+	if (parent_task->max_priority <= MAXPRI_THROTTLE)
+		sched_thread_mode_demote(new_thread, TH_SFLAG_THROTTLED);
+#endif /* CONFIG_EMBEDDED */
 
 	thread_policy_create(new_thread);
 
@@ -1226,6 +1326,7 @@ thread_create_internal(
 
 	/* Protected by the tasks_threads_lock */
 	new_thread->thread_id = ++thread_unique_id;
+
 
 	queue_enter(&threads, new_thread, thread_t, threads);
 	threads_count++;
@@ -1243,7 +1344,7 @@ thread_create_internal(
 	{
 		long	dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4;
 
-		kdbg_trace_data(parent_task->bsd_info, &dbg_arg2);
+		kdbg_trace_data(parent_task->bsd_info, &dbg_arg2, &dbg_arg4);
 
 		/*
 		 * Starting with 26604425, exec'ing creates a new task/thread.
@@ -1260,9 +1361,10 @@ thread_create_internal(
 		 */
 		dbg_arg3 = (task_is_exec_copy(parent_task)) ? TRUE : 0;
 
+
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 			TRACE_DATA_NEWTHREAD | DBG_FUNC_NONE,
-			(vm_address_t)(uintptr_t)thread_tid(new_thread), dbg_arg2, dbg_arg3, 0, 0);
+			(vm_address_t)(uintptr_t)thread_tid(new_thread), dbg_arg2, dbg_arg3, dbg_arg4, 0);
 
 		kdbg_trace_string(parent_task->bsd_info,
 							&dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
@@ -1532,7 +1634,7 @@ kernel_thread_create(
 	thread_t			thread;
 	task_t				task = kernel_task;
 
-	result = thread_create_internal(task, priority, continuation, TH_OPTION_NONE, &thread);
+	result = thread_create_internal(task, priority, continuation, TH_OPTION_NOCRED | TH_OPTION_NONE, &thread);
 	if (result != KERN_SUCCESS)
 		return (result);
 
@@ -1541,6 +1643,9 @@ kernel_thread_create(
 
 	stack_alloc(thread);
 	assert(thread->kernel_stack != 0);
+#if CONFIG_EMBEDDED
+	if (priority > BASEPRI_KERNEL)
+#endif
 	thread->reserved_stack = thread->kernel_stack;
 
 	thread->parameter = parameter;
@@ -2039,13 +2144,16 @@ clear_thread_rwlock_boost(void)
 	}
 }
 
+
 /*
  * XXX assuming current thread only, for now...
  */
 void
-thread_guard_violation(thread_t thread, unsigned type)
+thread_guard_violation(thread_t thread,
+    mach_exception_data_type_t code, mach_exception_data_type_t subcode)
 {
 	assert(thread == current_thread());
+	assert(thread->task != kernel_task);
 
 	spl_t s = splsched();
 	/*
@@ -2053,9 +2161,11 @@ thread_guard_violation(thread_t thread, unsigned type)
 	 * to store all info required to handle the AST when
 	 * returning to userspace
 	 */
-	thread->guard_exc_info.type = type;
+	assert(EXC_GUARD_DECODE_GUARD_TYPE(code));
+	thread->guard_exc_info.code = code;
+	thread->guard_exc_info.subcode = subcode;
 	thread_ast_set(thread, AST_GUARD);
-	ast_propagate(thread->ast);
+	ast_propagate(thread);
 
 	splx(s);
 }
@@ -2070,12 +2180,27 @@ thread_guard_violation(thread_t thread, unsigned type)
  *	info and raises the exception.
  */
 void
-guard_ast(thread_t thread)
+guard_ast(thread_t t)
 {
-	if (thread->guard_exc_info.type == GUARD_TYPE_MACH_PORT)
-		mach_port_guard_ast(thread);
-	else
-		fd_guard_ast(thread);
+	const mach_exception_data_type_t
+		code = t->guard_exc_info.code,
+		subcode = t->guard_exc_info.subcode;
+
+	switch (EXC_GUARD_DECODE_GUARD_TYPE(code)) {
+	case GUARD_TYPE_MACH_PORT:
+		mach_port_guard_ast(t, code, subcode);
+	        break;
+	case GUARD_TYPE_FD:
+		fd_guard_ast(t, code, subcode);
+		break;
+#if CONFIG_VNGUARD
+	case GUARD_TYPE_VN:
+		vn_guard_ast(t, code, subcode);
+		break;
+#endif
+	default:
+		panic("guard_exc_info %llx %llx", code, subcode);
+	}
 }
 
 static void
@@ -2310,7 +2435,8 @@ init_thread_ledgers(void) {
 	}
 
 	thread_ledgers.cpu_time = idx;
-	
+
+	ledger_template_complete(t);
 	thread_ledger_template = t;
 }
 
@@ -2558,6 +2684,37 @@ thread_dispatchqaddr(
 	return dispatchqueue_addr;
 }
 
+uint64_t
+thread_rettokern_addr(
+	thread_t		thread)
+{
+	uint64_t	rettokern_addr;
+	uint64_t	rettokern_offset;
+	uint64_t	thread_handle;
+
+	if (thread == THREAD_NULL)
+		return 0;
+
+	thread_handle = thread->machine.cthread_self;
+	if (thread_handle == 0)
+		return 0;
+
+	if (thread->task->bsd_info) {
+		rettokern_offset = get_return_to_kernel_offset_from_proc(thread->task->bsd_info);
+
+		/* Return 0 if return to kernel offset is not initialized. */
+		if (rettokern_offset == 0) {
+			rettokern_addr = 0;
+		} else {
+			rettokern_addr = thread_handle + rettokern_offset;
+		}
+	} else {
+		rettokern_addr = 0;
+	}
+
+	return rettokern_addr;
+}
+
 /*
  * Export routines to other components for things that are done as macros
  * within the osfmk component.
@@ -2598,9 +2755,8 @@ thread_set_voucher_name(mach_port_name_t voucher_name)
 	thread_t thread = current_thread();
 	ipc_voucher_t new_voucher = IPC_VOUCHER_NULL;
 	ipc_voucher_t voucher;
-#ifdef CONFIG_BANK
 	ledger_t bankledger = NULL;
-#endif
+	thread_group_t banktg = NULL;
 
 	if (MACH_PORT_DEAD == voucher_name)
 		return KERN_INVALID_RIGHT;
@@ -2613,18 +2769,15 @@ thread_set_voucher_name(mach_port_name_t voucher_name)
 		if (IPC_VOUCHER_NULL == new_voucher)
 			return KERN_INVALID_ARGUMENT;
 	}
-#ifdef CONFIG_BANK
-	bankledger = bank_get_voucher_ledger(new_voucher);
-#endif
+	bank_get_bank_ledger_and_thread_group(new_voucher, &bankledger, &banktg);
 
 	thread_mtx_lock(thread);
 	voucher = thread->ith_voucher;
 	thread->ith_voucher_name = voucher_name;
 	thread->ith_voucher = new_voucher;
-#ifdef CONFIG_BANK
-	bank_swap_thread_bank_ledger(thread, bankledger);
-#endif
 	thread_mtx_unlock(thread);
+
+	bank_swap_thread_bank_ledger(thread, bankledger);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
@@ -2727,29 +2880,25 @@ thread_set_mach_voucher(
 	ipc_voucher_t		voucher)
 {
 	ipc_voucher_t old_voucher;
-#ifdef CONFIG_BANK
 	ledger_t bankledger = NULL;
-#endif
+	thread_group_t banktg = NULL;
 
 	if (THREAD_NULL == thread)
 		return KERN_INVALID_ARGUMENT;
 
-	if (thread != current_thread() || thread->started)
+	if (thread != current_thread() && thread->started)
 		return KERN_INVALID_ARGUMENT;
 
-
 	ipc_voucher_reference(voucher);
-#ifdef CONFIG_BANK
-	bankledger = bank_get_voucher_ledger(voucher);
-#endif
+	bank_get_bank_ledger_and_thread_group(voucher, &bankledger, &banktg);
+
 	thread_mtx_lock(thread);
 	old_voucher = thread->ith_voucher;
 	thread->ith_voucher = voucher;
 	thread->ith_voucher_name = MACH_PORT_NULL;
-#ifdef CONFIG_BANK
-	bank_swap_thread_bank_ledger(thread, bankledger);
-#endif
 	thread_mtx_unlock(thread);
+
+	bank_swap_thread_bank_ledger(thread, bankledger);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
@@ -2781,19 +2930,16 @@ thread_swap_mach_voucher(
 {
 	mach_port_name_t old_voucher_name;
 	ipc_voucher_t old_voucher;
-#ifdef CONFIG_BANK
 	ledger_t bankledger = NULL;
-#endif
+	thread_group_t banktg = NULL;
 
 	if (THREAD_NULL == thread)
 		return KERN_INVALID_TASK;
 
-	if (thread != current_thread() || thread->started)
+	if (thread != current_thread() && thread->started)
 		return KERN_INVALID_ARGUMENT;
 
-#ifdef CONFIG_BANK
-	bankledger = bank_get_voucher_ledger(new_voucher);
-#endif
+	bank_get_bank_ledger_and_thread_group(new_voucher, &bankledger, &banktg);
 
 	thread_mtx_lock(thread);
 
@@ -2823,10 +2969,8 @@ thread_swap_mach_voucher(
 		ipc_voucher_reference(new_voucher);
 		thread->ith_voucher = new_voucher;
 		thread->ith_voucher_name = MACH_PORT_NULL;
-#ifdef CONFIG_BANK
-		bank_swap_thread_bank_ledger(thread, bankledger);
-#endif
 		thread_mtx_unlock(thread);
+		bank_swap_thread_bank_ledger(thread, bankledger);
 
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 					  MACHDBG_CODE(DBG_MACH_IPC,MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
@@ -2871,6 +3015,7 @@ thread_get_current_voucher_origin_pid(
 	return kr;
 }
 
+
 boolean_t
 thread_has_thread_name(thread_t th)
 {
@@ -2902,6 +3047,20 @@ void thread_enable_send_importance(thread_t thread, boolean_t enable)
 		thread->options |= TH_OPT_SEND_IMPORTANCE;
 	else
 		thread->options &= ~TH_OPT_SEND_IMPORTANCE;
+}
+
+/*
+ * thread_set_allocation_name - .
+ */
+
+kern_allocation_name_t thread_set_allocation_name(kern_allocation_name_t new_name)
+{
+	kern_allocation_name_t ret;
+	thread_kernel_state_t kstate = thread_get_kernel_state(current_thread());
+	ret = kstate->allocation_name;
+	// fifo
+	if (!new_name || !kstate->allocation_name) kstate->allocation_name = new_name;
+	return ret;
 }
 
 #if CONFIG_DTRACE
@@ -2953,6 +3112,14 @@ vm_offset_t dtrace_get_kernel_stack(thread_t thread)
 	else
 		return 0;
 }
+
+#if KASAN
+struct kasan_thread_data *
+kasan_get_thread_data(thread_t thread)
+{
+	return &thread->kasan_data;
+}
+#endif
 
 int64_t dtrace_calc_thread_recent_vtime(thread_t thread)
 {

@@ -361,7 +361,7 @@
 #define F_GETCONFINED		96	/* is-fd-confined? */
 #endif
 
-#define F_ADDFILESIGS_RETURN	97	/* Add signature from same file, return end offset in structure on sucess */
+#define F_ADDFILESIGS_RETURN	97	/* Add signature from same file, return end offset in structure on success */
 #define F_CHECK_LV		98	/* Check if Library Validation allows this Mach-O file to be mapped into the calling process */
 
 #define F_PUNCHHOLE	99		/* Deallocate a range of the file */

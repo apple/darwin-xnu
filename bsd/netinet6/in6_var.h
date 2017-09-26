@@ -227,6 +227,11 @@ struct in6_ifstat {
 					/* NOTE: increment on final dst if */
 	u_quad_t ifs6_in_mcast;		/* # of inbound multicast datagrams */
 	u_quad_t ifs6_out_mcast;	/* # of outbound multicast datagrams */
+
+	u_quad_t ifs6_cantfoward_icmp6;	/* # of ICMPv6 packets received for unreachable dest */
+	u_quad_t ifs6_addr_expiry_cnt;	/* # of address expiry events (excluding privacy addresses) */
+	u_quad_t ifs6_pfx_expiry_cnt;	/* # of prefix expiry events */
+	u_quad_t ifs6_defrtr_expiry_cnt;	/* # of default router expiry events */
 };
 
 /*
@@ -865,9 +870,11 @@ struct in6_multi_mship {
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <netinet6/nd6_var.h>
+#include <net/if_llatbl.h>
+
 /*
- *  * Per-interface IPv6 structures.
- *   */
+ * Per-interface IPv6 structures.
+ */
 struct in6_ifextra {
 	struct scope6_id        scope6_id;
 	struct in6_ifstat       in6_ifstat;
@@ -875,8 +882,11 @@ struct in6_ifextra {
 	struct nd_ifinfo        nd_ifinfo;
 	uint32_t                netsig_len;
 	u_int8_t                netsig[IFNET_SIGNATURELEN];
+	struct ipv6_prefix      nat64_prefixes[NAT64_MAX_NUM_PREFIXES];
+	struct lltable		*ii_llt;	/* NDP state */
 };
 #define IN6_IFEXTRA(_ifp)       ((struct in6_ifextra *)(_ifp->if_inet6data))
+#define	LLTABLE6(ifp)		((IN6_IFEXTRA(ifp) == NULL) ? NULL : IN6_IFEXTRA(ifp)->ii_llt)
 #endif /* BSD_KERNEL_PRIVATE */
 
 struct mld_ifinfo;
@@ -949,10 +959,10 @@ struct in6_multi {
 };
 
 #define	IN6M_LOCK_ASSERT_HELD(_in6m)					\
-	lck_mtx_assert(&(_in6m)->in6m_lock, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&(_in6m)->in6m_lock, LCK_MTX_ASSERT_OWNED)
 
 #define	IN6M_LOCK_ASSERT_NOTHELD(_in6m)					\
-	lck_mtx_assert(&(_in6m)->in6m_lock, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&(_in6m)->in6m_lock, LCK_MTX_ASSERT_NOTOWNED)
 
 #define	IN6M_LOCK(_in6m)						\
 	lck_mtx_lock(&(_in6m)->in6m_lock)
@@ -1070,7 +1080,7 @@ struct ip6_pktopts;
 
 /* Multicast private KPIs. */
 extern int im6o_mc_filter(const struct ip6_moptions *, const struct ifnet *,
-    const struct sockaddr *, const struct sockaddr *);
+    const struct sockaddr_in6 *, const struct sockaddr_in6 *);
 extern int in6_mc_join(struct ifnet *, const struct in6_addr *,
     struct in6_mfilter *, struct in6_multi **, int);
 extern int in6_mc_leave(struct in6_multi *, struct in6_mfilter *);
@@ -1152,6 +1162,11 @@ extern ssize_t in6_cga_parameters_prepare(void *, size_t,
     const struct in6_addr *, u_int8_t, const struct in6_cga_modifier *);
 extern int in6_cga_generate(struct in6_cga_prepare *, u_int8_t,
     struct in6_addr *);
+extern int in6_getconninfo(struct socket *, sae_connid_t, uint32_t *,
+    uint32_t *, int32_t *, user_addr_t, socklen_t *,
+    user_addr_t, socklen_t *, uint32_t *, user_addr_t, uint32_t *);
+extern void in6_ip6_to_sockaddr(const struct in6_addr *ip6, u_int16_t port,
+								struct sockaddr_in6 *sin6, u_int32_t maxlen);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET6_IN6_VAR_H_ */

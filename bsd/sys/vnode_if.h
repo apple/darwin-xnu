@@ -1374,6 +1374,7 @@ struct vnop_clonefile_args {
 			vnode_t sdvp, /* source directory vnode pointer (optional) */
 			mount_t mp, /* mount point of filesystem */
 			dir_clone_authorizer_op_t vattr_op, /* specific operation requested : setup, authorization or cleanup  */
+			uint32_t flags, /* needs to have the value passed to a_flags */
 			vfs_context_t ctx, 		/* As passed to VNOP */
 			void *reserved);		/* Always NULL */
 	void *a_reserved;		/* Currently unused */
@@ -1690,6 +1691,9 @@ errno_t VNOP_SETLABEL(vnode_t, struct label *, vfs_context_t);
 
 enum nsoperation	{ NS_OPEN, NS_CREATE, NS_DELETE };
 
+/* a_flags for vnop_getnamedstream_args: */
+#define NS_GETRAWENCRYPTED 0x00000001
+
 struct vnop_getnamedstream_args {
 	struct vnodeop_desc *a_desc;
 	vnode_t a_vp;
@@ -1712,7 +1716,7 @@ struct vnop_getnamedstream_args {
  @param operation Operation to perform.  In HFS and AFP, this parameter is only considered as follows:
  if the resource fork has not been opened and the operation is not NS_OPEN, fail with ENOATTR.  Currently
  only passed as NS_OPEN by VFS.
- @param flags Currently unused.
+ @param flags Flags used to control getnamedstream behavior. Currently only used for raw-encrypted-requests.
  @param ctx Context to authenticate for getting named stream.
  @return 0 for success, else an error code.
  */

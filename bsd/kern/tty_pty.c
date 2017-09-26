@@ -92,12 +92,9 @@
 #warning	You have only one pty defined, redefining to 32.
 #endif
 
-#define PTY_MAJOR 5
-#define TTY_MAJOR 4
-
 /*
- * pts == /dev/tty[pqrsPQRS][0123456789abcdefghijklmnopqrstuv]
- * ptc == /dev/pty[pqrsPQRS][0123456789abcdefghijklmnopqrstuv]
+ * pts == /dev/tty[pqrsPQRS][0-9a-v]
+ * ptc == /dev/pty[pqrsPQRS][0-9a-v]
  */
 static struct ptmx_ioctl pt_ioctl[NPTY];
 
@@ -154,23 +151,32 @@ pty_init(int n_ptys)
 	for (j = 0; j < 10; j++) {
 		for (i = 0; i < HEX_BASE; i++) {
 			int m = j * HEX_BASE + i;
-			if (m >= n_ptys)
+			if (m >= n_ptys) {
 				goto done;
-			pt_ioctl[m].pt_devhandle = devfs_make_node(makedev(TTY_MAJOR, m),
-								   DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,
-								   "tty%c%x", j + START_CHAR, i);
-			(void)devfs_make_node(makedev(PTY_MAJOR, m),
-					      DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,
-					      "pty%c%x", j + START_CHAR, i);
+			}
+			pt_ioctl[m].pt_devhandle = devfs_make_node(makedev(PTS_MAJOR, m),
+					DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,
+					"tty%c%x", j + START_CHAR, i);
+			(void)devfs_make_node(makedev(PTC_MAJOR, m),
+					DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,
+					"pty%c%x", j + START_CHAR, i);
 		}
 	}
+
 done:
-	_pty_driver.master = PTY_MAJOR;
-	_pty_driver.slave = TTY_MAJOR;
+	_pty_driver.master = PTC_MAJOR;
+	_pty_driver.slave = PTS_MAJOR;
 	_pty_driver.open_reset = 1;
 	_pty_driver.open = &pty_get_ioctl;
 	_pty_driver.name = &pty_get_name;
 	tty_dev_register(&_pty_driver);
-	return (0);
+
+	if (cdevsw_setkqueueok(PTC_MAJOR, &cdevsw[PTC_MAJOR], CDEVSW_IS_PTC) == -1) {
+		panic("Can't mark ptc as kqueue ok");
+	}
+	if (cdevsw_setkqueueok(PTS_MAJOR, &cdevsw[PTS_MAJOR], CDEVSW_IS_PTS) == -1) {
+		panic("Can't mark pts as kqueue ok");
+	}
+	return 0;
 }
 #endif // DEVFS

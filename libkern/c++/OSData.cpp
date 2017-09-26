@@ -76,8 +76,8 @@ bool OSData::initWithCapacity(unsigned int inCapacity)
 	if (inCapacity < page_size) data = (void *) kalloc_container(inCapacity);
 	else {
 	    kern_return_t kr;
-	    inCapacity = round_page_32(inCapacity);
-	    kr = kmem_alloc(kernel_map, (vm_offset_t *)&data, inCapacity, IOMemoryTag(kernel_map));
+	    if (round_page_overflow(inCapacity, &inCapacity)) kr = KERN_RESOURCE_SHORTAGE;
+	    else kr = kmem_alloc(kernel_map, (vm_offset_t *)&data, inCapacity, IOMemoryTag(kernel_map));
 	    if (KERN_SUCCESS != kr) data = NULL;
 	}
         if (!data)

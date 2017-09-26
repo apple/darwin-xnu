@@ -32,6 +32,7 @@
 // early abort detection (Derek Kumar)
 
 #include "lz4.h"
+#define memcpy __builtin_memcpy
 
 size_t lz4raw_decode_buffer(uint8_t * __restrict dst_buffer, size_t dst_size,
                             const uint8_t * __restrict src_buffer, size_t src_size,

@@ -1,3 +1,4 @@
+_absolutetime_to_continuoustime
 _absolutetime_to_nanoseconds
 _assert_wait
 _assert_wait_deadline
@@ -12,6 +13,7 @@ _clock_get_uptime
 _clock_interval_to_absolutetime_interval
 _clock_interval_to_deadline
 _clock_timebase_info
+_continuoustime_to_absolutetime
 _current_task
 _current_thread
 _kernel_task
@@ -45,6 +47,7 @@ _task_reference
 _thread_block
 _thread_block_parameter
 _thread_call_allocate
+_thread_call_allocate_with_options
 _thread_call_cancel
 _thread_call_enter
 _thread_call_enter1
@@ -57,5 +60,7 @@ _thread_reference
 _thread_terminate
 _thread_tid
 _thread_wakeup_prim
+_vm_kernel_addrhash:_vm_kernel_addrhash_external
+_vm_kernel_addrhide
 _vm_kernel_addrperm_external
 _vm_kernel_unslide_or_perm_external

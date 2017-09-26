@@ -20,8 +20,16 @@ IS_64BIT_BOOTED_OS=$?
 
 if [ -e $MPMMTEST ] && [ -x $MPMMTEST ]
 then
-	echo ""; echo " Running $MPMMTEST";
-	$MPMMTEST -perf || { x=$?; echo "$MPMMTEST failed $x "; exit $x; }
+	# Tentatively test for 32-bit support
+	$MPMMTEST -count 0 -servers 0 -clients 0 &> /dev/null
+
+	if [ $? == 0 ] || [ $IS_64BIT_BOOTED_OS == 0 ]
+	then
+		# If 32-bit support appears to be present OR if this is not
+		# a 64-bit environment, run the test.
+		echo ""; echo " Running $MPMMTEST";
+		$MPMMTEST -perf || { x=$?; echo "$MPMMTEST failed $x "; exit $x; }
+	fi
 fi
 
 if [ -e $MPMMTEST_64 ] && [ -x $MPMMTEST_64 ] && [ $IS_64BIT_BOOTED_OS == 1 ]
@@ -32,8 +40,16 @@ fi
 
 if [ -e $KQMPMMTEST ] && [ -x $KQMPMMTEST ]
 then
-	echo ""; echo " Running $KQMPMMTEST"
-	$KQMPMMTEST -perf || { x=$?; echo "$KQMPMMTEST failed $x"; exit $x; }
+	# Tentatively test for 32-bit support
+	$KQMPMMTEST -count 0 -servers 0 -clients 0 &> /dev/null
+
+	if [ $? == 0 ] || [ $IS_64BIT_BOOTED_OS == 0 ]
+	then
+		# If 32-bit support appears to be present OR if this is not
+		# a 64-bit environment, run the test.
+		echo ""; echo " Running $KQMPMMTEST"
+		$KQMPMMTEST -perf || { x=$?; echo "$KQMPMMTEST failed $x"; exit $x; }
+	fi
 fi
 
 if [ -e $KQMPMMTEST_64 ] && [ -x $KQMPMMTEST_64 ] && [ $IS_64BIT_BOOTED_OS == 1 ]

@@ -190,7 +190,11 @@ typedef struct boot_args {
     uint16_t    bootProgressMeterStart;
     uint16_t    bootProgressMeterEnd;
     Boot_Video	Video;		/* Video Information */
-    uint32_t    __reserved4[712];
+
+    uint32_t    apfsDataStart; /* Physical address of apfs volume key structure */
+    uint32_t    apfsDataSize;
+
+    uint32_t    __reserved4[710];
 
 } boot_args;
 

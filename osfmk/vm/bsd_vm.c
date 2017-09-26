@@ -111,15 +111,13 @@ const struct memory_object_pager_ops vnode_pager_ops = {
 };
 
 typedef struct vnode_pager {
-	struct ipc_object_header	pager_header;	/* fake ip_kotype()		*/
-	memory_object_pager_ops_t pager_ops;	/* == &vnode_pager_ops	     */
+	/* mandatory generic header */
+	struct memory_object vn_pgr_hdr;
+
+	/*  pager-specific */
 	unsigned int		ref_count;	/* reference count	     */
-	memory_object_control_t control_handle;	/* mem object control handle */
 	struct vnode		*vnode_handle;	/* vnode handle 	     */
 } *vnode_pager_t;
-
-
-#define pager_ikot pager_header.io_bits
 
 
 kern_return_t
@@ -257,13 +255,6 @@ memory_object_control_uiomove(
 			if (dst_page->laundry)
 				vm_pageout_steal_laundry(dst_page, FALSE);
 
-			/*
-			 * this routine is only called when copying
-			 * to/from real files... no need to consider
-			 * encrypted swap pages
-			 */
-			assert(!dst_page->encrypted);
-
 		        if (mark_dirty) {
 				if (dst_page->dirty == FALSE)
 					dirty_count++;
@@ -375,6 +366,9 @@ vnode_pager_bootstrap(void)
 	apple_protect_pager_bootstrap();
 #endif	/* CONFIG_CODE_DECRYPTION */
 	swapfile_pager_bootstrap();
+#if __arm64__
+	fourk_pager_bootstrap();
+#endif /* __arm64__ */
 	return;
 }
 
@@ -419,7 +413,7 @@ vnode_pager_init(memory_object_t mem_obj,
 
 	memory_object_control_reference(control);
 
-	vnode_object->control_handle = control;
+	vnode_object->vn_pgr_hdr.mo_control = control;
 
 	attributes.copy_strategy = MEMORY_OBJECT_COPY_DELAY;
 	/* attributes.cluster_size = (1 << (CLUSTER_SHIFT + PAGE_SHIFT));*/
@@ -633,7 +627,9 @@ vnode_pager_data_request(
 	size = MAX_UPL_TRANSFER_BYTES;
 	base_offset = offset;
 
-	if (memory_object_cluster_size(vnode_object->control_handle, &base_offset, &size, &io_streaming, fault_info) != KERN_SUCCESS)
+	if (memory_object_cluster_size(vnode_object->vn_pgr_hdr.mo_control,
+				       &base_offset, &size, &io_streaming,
+				       fault_info) != KERN_SUCCESS)
 	        size = PAGE_SIZE;
 
 	assert(offset >= base_offset &&
@@ -699,20 +695,13 @@ vnode_pager_terminate(
  */
 kern_return_t
 vnode_pager_synchronize(
-	memory_object_t		mem_obj,
-	memory_object_offset_t	offset,
-	memory_object_size_t		length,
+	__unused memory_object_t	mem_obj,
+	__unused memory_object_offset_t	offset,
+	__unused memory_object_size_t	length,
 	__unused vm_sync_t		sync_flags)
 {
-	vnode_pager_t	vnode_object;
-
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_synchronize: %p\n", mem_obj));
-
-	vnode_object = vnode_pager_lookup(mem_obj);
-
-	memory_object_synchronize_completed(vnode_object->control_handle, offset, length);
-
-	return (KERN_SUCCESS);
+	panic("vnode_pager_synchronize: memory_object_synchronize no longer supported\n");
+	return (KERN_FAILURE);
 }
 
 /*
@@ -882,9 +871,9 @@ vnode_pager_cluster_read(
 			    UPL_SET_INTERNAL);
 		count = 0;
 		assert((upl_size_t) cnt == cnt);
-		kr = memory_object_upl_request(vnode_object->control_handle,
+		kr = memory_object_upl_request(vnode_object->vn_pgr_hdr.mo_control,
 					       base_offset, (upl_size_t) cnt,
-					       &upl, NULL, &count, uplflags);
+					       &upl, NULL, &count, uplflags, VM_KERN_MEMORY_NONE);
 		if (kr == KERN_SUCCESS) {
 			upl_abort(upl, 0);
 			upl_deallocate(upl);
@@ -903,18 +892,6 @@ vnode_pager_cluster_read(
 
 	return KERN_SUCCESS;
 
-}
-
-
-/*
- *
- */
-void
-vnode_pager_release_from_cache(
-		int	*cnt)
-{
-	memory_object_free_from_cache(
-			&realhost, &vnode_pager_ops, cnt);
 }
 
 /*
@@ -937,10 +914,11 @@ vnode_object_create(
 	 * we reserve the first word in the object for a fake ip_kotype
 	 * setting - that will tell vm_map to use it as a memory object.
 	 */
-	vnode_object->pager_ops = &vnode_pager_ops;
-	vnode_object->pager_ikot = IKOT_MEMORY_OBJECT;
+	vnode_object->vn_pgr_hdr.mo_ikot = IKOT_MEMORY_OBJECT;
+	vnode_object->vn_pgr_hdr.mo_pager_ops = &vnode_pager_ops;
+	vnode_object->vn_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
+
 	vnode_object->ref_count = 1;
-	vnode_object->control_handle = MEMORY_OBJECT_CONTROL_NULL;
 	vnode_object->vnode_handle = vp;
 
 	return(vnode_object);
@@ -956,7 +934,7 @@ vnode_pager_lookup(
 	vnode_pager_t	vnode_object;
 
 	vnode_object = (vnode_pager_t)name;
-	assert(vnode_object->pager_ops == &vnode_pager_ops);
+	assert(vnode_object->vn_pgr_hdr.mo_pager_ops == &vnode_pager_ops);
 	return (vnode_object);
 }
 
@@ -967,7 +945,7 @@ vnode_pager_lookup_vnode(
 {
 	vnode_pager_t   vnode_object;
 	vnode_object = (vnode_pager_t)name;
-	if(vnode_object->pager_ops == &vnode_pager_ops)
+	if(vnode_object->vn_pgr_hdr.mo_pager_ops == &vnode_pager_ops)
 		return (vnode_object->vnode_handle);
 	else
 		return NULL;

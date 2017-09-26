@@ -80,6 +80,10 @@
 #include <security/audit/audit.h>
 #include <pexpert/pexpert.h>
 
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
+
 lck_grp_t * sysctl_lock_group = NULL;
 lck_rw_t * sysctl_geometry_lock = NULL;
 lck_mtx_t * sysctl_unlocked_node_lock = NULL;

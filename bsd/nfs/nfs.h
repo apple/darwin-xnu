@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -200,7 +200,7 @@ extern int nfs_ticks;
 #define NFS_MFLAG_MUTEJUKEBOX		8	/* don't treat jukebox errors as unresponsive */
 #define NFS_MFLAG_EPHEMERAL		9	/* ephemeral (mirror) mount */
 #define NFS_MFLAG_NOCALLBACK		10	/* don't provide callback RPC service */
-#define NFS_MFLAG_NONAMEDATTR		11	/* don't use named attributes */
+#define NFS_MFLAG_NAMEDATTR		11	/* don't use named attributes */
 #define NFS_MFLAG_NOACL			12	/* don't support ACLs */
 #define NFS_MFLAG_ACLONLY		13	/* only support ACLs - not mode */
 #define NFS_MFLAG_NFC			14	/* send NFC strings */
@@ -771,14 +771,19 @@ struct nfsstats {
 #include <sys/_types/_guid_t.h> /* for guid_t below */
 #define MAXIDNAMELEN		1024
 struct nfs_testmapid {
-	uint32_t		ntm_name2id;	/* lookup name 2 id or id 2 name */
+	uint32_t		ntm_lookup;	/* lookup name 2 id or id 2 name */
 	uint32_t		ntm_grpflag;	/* Is this a group or user maping */
 	uint32_t		ntm_id;		/* id to map or return */
 	uint32_t		pad;	
 	guid_t			ntm_guid;	/* intermidiate guid used in conversion */
 	char			ntm_name[MAXIDNAMELEN]; /* name to map or return */
 };
-	
+
+#define NTM_ID2NAME	0
+#define NTM_NAME2ID	1
+#define NTM_NAME2GUID	2
+#define NTM_GUID2NAME	3
+
 /*
  * fs.nfs sysctl(3) identifiers
  */
@@ -998,9 +1003,6 @@ extern uint32_t nfs_debug_ctl;
 /* bits for nfs_idmap_ctrl: */
 #define NFS_IDMAP_CTRL_USE_IDMAP_SERVICE		0x00000001 /* use the ID mapping service */
 #define NFS_IDMAP_CTRL_FALLBACK_NO_COMMON_IDS		0x00000002 /* fallback should NOT handle common IDs like "root" and "nobody" */
-#define NFS_IDMAP_CTRL_FALLBACK_NO_WELLKNOWN_IDS	0x00000004 /* fallback should NOT handle the well known "XXX@" IDs */
-#define NFS_IDMAP_CTRL_UNKNOWN_IS_99			0x00000008 /* for unknown IDs use uid/gid 99 instead of -2/nobody */
-#define NFS_IDMAP_CTRL_COMPARE_RESULTS			0x00000010 /* compare results of ID mapping service and fallback */
 #define NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS		0x00000020 /* log failed ID mapping attempts */
 #define NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS		0x00000040 /* log successful ID mapping attempts */
 
@@ -1150,7 +1152,7 @@ extern thread_call_t	nfsrv_fmod_timer_call;
 #endif
 
 /* nfs 4 default domain for user mapping */
-extern char nfs4_domain[MAXPATHLEN];
+extern char nfs4_default_domain[MAXPATHLEN];
 
 __BEGIN_DECLS
 
@@ -1261,7 +1263,7 @@ uint32_t nfs4_ace_vfsflags_to_nfsflags(uint32_t);
 uint32_t nfs4_ace_nfsmask_to_vfsrights(uint32_t);
 uint32_t nfs4_ace_vfsrights_to_nfsmask(uint32_t);
 int nfs4_id2guid(char *, guid_t *, int);
-int nfs4_guid2id(guid_t *, char *, int *, int);
+int nfs4_guid2id(guid_t *, char *, size_t *, int);
 
 int	nfs_parsefattr(struct nfsm_chain *, int, struct nfs_vattr *);
 int	nfs4_parsefattr(struct nfsm_chain *, struct nfs_fsattr *, struct nfs_vattr *, fhandle_t *, struct dqblk *, struct nfs_fs_locations *);

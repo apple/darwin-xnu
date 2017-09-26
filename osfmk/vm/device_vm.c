@@ -48,6 +48,7 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_protos.h>
+#include <mach/sdt.h>
 
 
 /* Device VM COMPONENT INTERFACES */
@@ -85,17 +86,30 @@ typedef uintptr_t device_port_t;
  * The start of "struct device_pager" MUST match a "struct memory_object".
  */
 typedef struct device_pager {
-	struct ipc_object_header	pager_header;	/* fake ip_kotype()	*/
-	memory_object_pager_ops_t pager_ops; /* == &device_pager_ops	*/
+	/* mandatory generic header */
+	struct memory_object dev_pgr_hdr;
+
+	/* pager-specific data */
+	lck_mtx_t	lock;
 	unsigned int	ref_count;	/* reference count		*/
-	memory_object_control_t	control_handle;	/* mem object's cntrl handle */
 	device_port_t   device_handle;  /* device_handle */
 	vm_size_t	size;
 	int		flags;
+	boolean_t	is_mapped;
 } *device_pager_t;
 
-#define pager_ikot pager_header.io_bits
+lck_grp_t	device_pager_lck_grp;
+lck_grp_attr_t	device_pager_lck_grp_attr;
+lck_attr_t	device_pager_lck_attr;
 
+#define device_pager_lock_init(pager)				\
+	lck_mtx_init(&(pager)->lock,				\
+		     &device_pager_lck_grp,			\
+		     &device_pager_lck_attr)
+#define device_pager_lock_destroy(pager)			\
+	lck_mtx_destroy(&(pager)->lock, &device_pager_lck_grp)
+#define device_pager_lock(pager) lck_mtx_lock(&(pager)->lock)
+#define device_pager_unlock(pager) lck_mtx_unlock(&(pager)->lock)
 
 device_pager_t
 device_pager_lookup(		/* forward */
@@ -128,6 +142,11 @@ device_pager_bootstrap(void)
 	device_pager_zone = zinit(size, (vm_size_t) MAX_DNODE*size,
 				PAGE_SIZE, "device node pager structures");
 	zone_change(device_pager_zone, Z_CALLERACCT, FALSE);
+
+	lck_grp_attr_setdefault(&device_pager_lck_grp_attr);
+	lck_grp_init(&device_pager_lck_grp, "device_pager", &device_pager_lck_grp_attr);
+	lck_attr_setdefault(&device_pager_lck_attr);
+
 	return;
 }
 
@@ -142,6 +161,8 @@ device_pager_setup(
 	int		flags)
 {
 	device_pager_t	device_object;
+	memory_object_control_t control;
+	vm_object_t	object;
 
 	device_object = device_object_create();
 	if (device_object == DEVICE_PAGER_NULL)
@@ -151,7 +172,20 @@ device_pager_setup(
 	device_object->size = size;
 	device_object->flags = flags;
 
-	return((memory_object_t)device_object);
+	memory_object_create_named((memory_object_t) device_object,
+				   size,
+				   &control);
+	object = memory_object_control_to_vm_object(control);
+
+	assert(object != VM_OBJECT_NULL);
+	vm_object_lock(object);
+	object->true_share = TRUE;
+	if (object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC) {
+		object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
+	}
+	vm_object_unlock(object);
+
+	return (memory_object_t)device_object;
 }
 
 /*
@@ -174,7 +208,7 @@ device_pager_populate_object(
 		return KERN_FAILURE;
 
 	vm_object = (vm_object_t)memory_object_control_to_vm_object(
-					device_object->control_handle);
+					device_object->dev_pgr_hdr.mo_control);
 	if(vm_object == NULL) 
 		return KERN_FAILURE;
 
@@ -190,7 +224,8 @@ device_pager_populate_object(
 					   (vm_object_offset_t)offset,
 					   (upl_size_t) size, &upl,  NULL,
 					   &null_size,
-					   (UPL_NO_SYNC | UPL_CLEAN_IN_PLACE));
+					   (UPL_NO_SYNC | UPL_CLEAN_IN_PLACE),
+					   VM_KERN_MEMORY_NONE);
 		if(kr != KERN_SUCCESS)
 			panic("device_pager_populate_object: list_req failed");
 
@@ -207,13 +242,14 @@ device_pager_populate_object(
  */
 device_pager_t
 device_pager_lookup(
-	memory_object_t	name)
+	memory_object_t	mem_obj)
 {
 	device_pager_t	device_object;
 
-	device_object = (device_pager_t)name;
-	assert(device_object->pager_ops == &device_pager_ops);
-	return (device_object);
+	assert(mem_obj->mo_pager_ops == &device_pager_ops);
+	device_object = (device_pager_t)mem_obj;
+	assert(device_object->ref_count > 0);
+	return device_object;
 }
 
 /*
@@ -238,7 +274,7 @@ device_pager_init(
 	device_object = device_pager_lookup(mem_obj);
 
 	memory_object_control_reference(control);
-	device_object->control_handle = control;
+	device_object->dev_pgr_hdr.mo_control = control;
 
 
 /* The following settings should be done through an expanded change */
@@ -337,6 +373,10 @@ device_pager_reference(
 	device_object = device_pager_lookup(mem_obj);
 	new_ref_count = hw_atomic_add(&device_object->ref_count, 1);
 	assert(new_ref_count > 1);
+	DTRACE_VM2(device_pager_reference,
+		   device_pager_t, device_object,
+		   unsigned int, device_object->ref_count);
+
 }
 
 /*
@@ -348,27 +388,43 @@ device_pager_deallocate(
 {
 	device_pager_t		device_object;
 	memory_object_control_t	device_control;
+	unsigned int		ref_count;
 
 	device_object = device_pager_lookup(mem_obj);
+	assert(device_object->ref_count > 0);
 
-	if (hw_atomic_sub(&device_object->ref_count, 1) == 0) {
+	DTRACE_VM2(device_pager_deallocate,
+		   device_pager_t, device_object,
+		   unsigned int, device_object->ref_count);
+
+	ref_count = hw_atomic_sub(&device_object->ref_count, 1);
+
+	if (ref_count == 1) {
+		/*
+		 * The last reference is our "named" reference.
+		 * Close the device and "destroy" the VM object.
+		 */
+
+		DTRACE_VM2(device_pager_destroy,
+			   device_pager_t, device_object,
+			   unsigned int, device_object->ref_count);
+
+		assert(device_object->is_mapped == FALSE);
 		if (device_object->device_handle != (device_port_t) NULL) {
 			device_close(device_object->device_handle);
 			device_object->device_handle = (device_port_t) NULL;
 		}
-		device_control = device_object->control_handle;
-		if (device_control != MEMORY_OBJECT_CONTROL_NULL) {
-			/*
-			 * The VM object should already have been disconnected
-			 * from the pager at this point.
-			 * We still have to release the "memory object control"
-			 * handle.
-			 */
-			assert(device_control->moc_object == VM_OBJECT_NULL);
-			memory_object_control_deallocate(device_control);
-			device_object->control_handle =
-				MEMORY_OBJECT_CONTROL_NULL;
-		}
+		device_control = device_object->dev_pgr_hdr.mo_control;
+		memory_object_destroy(device_control, 0);
+	} else if (ref_count == 0) {
+		/*
+		 * No more references: free the pager.
+		 */
+		DTRACE_VM2(device_pager_free,
+			   device_pager_t, device_object,
+			   unsigned int, device_object->ref_count);
+
+		device_pager_lock_destroy(device_object);
 
 		zfree(device_pager_zone, device_object);
 	}
@@ -409,19 +465,13 @@ device_pager_terminate(
  */
 kern_return_t
 device_pager_synchronize(
-	memory_object_t		mem_obj,
-	memory_object_offset_t	offset,
-	memory_object_size_t		length,
+	__unused memory_object_t	mem_obj,
+	__unused memory_object_offset_t	offset,
+	__unused memory_object_size_t	length,
 	__unused vm_sync_t		sync_flags)
 {
-	device_pager_t	device_object;
-
-	device_object = device_pager_lookup(mem_obj);
-
-	memory_object_synchronize_completed(
-			device_object->control_handle, offset, length);
-
-	return KERN_SUCCESS;
+	panic("device_pager_synchronize: memory_object_synchronize no longer supported\n");
+	return KERN_FAILURE;
 }
 
 /*
@@ -429,16 +479,52 @@ device_pager_synchronize(
  */
 kern_return_t
 device_pager_map(
-	__unused memory_object_t	mem_obj,
+	memory_object_t	mem_obj,
 	__unused vm_prot_t		prot)
 {
+	device_pager_t		device_object;
+
+	device_object = device_pager_lookup(mem_obj);
+
+	device_pager_lock(device_object);
+	assert(device_object->ref_count > 0);
+	if (device_object->is_mapped == FALSE) {
+		/*
+		 * First mapping of this pager: take an extra reference
+		 * that will remain until all the mappings of this pager
+		 * are removed.
+		 */
+		device_object->is_mapped = TRUE;
+		device_pager_reference(mem_obj);
+	}
+	device_pager_unlock(device_object);
+
 	return KERN_SUCCESS;
 }
 
 kern_return_t
 device_pager_last_unmap(
-	__unused memory_object_t	mem_obj)
+	memory_object_t	mem_obj)
 {
+	device_pager_t	device_object;
+	boolean_t	drop_ref;
+
+	device_object = device_pager_lookup(mem_obj);
+
+	device_pager_lock(device_object);
+	assert(device_object->ref_count > 0);
+	if (device_object->is_mapped) {
+		device_object->is_mapped = FALSE;
+		drop_ref = TRUE;
+	} else {
+		drop_ref = FALSE;
+	}
+	device_pager_unlock(device_object);
+
+	if (drop_ref) {
+		device_pager_deallocate(mem_obj);
+	}
+
 	return KERN_SUCCESS;
 }
 
@@ -455,11 +541,20 @@ device_object_create(void)
 	device_object = (struct device_pager *) zalloc(device_pager_zone);
 	if (device_object == DEVICE_PAGER_NULL)
 		return(DEVICE_PAGER_NULL);
-	device_object->pager_ops = &device_pager_ops;
-	device_object->pager_ikot = IKOT_MEMORY_OBJECT;
-	device_object->ref_count = 1;
-	device_object->control_handle = MEMORY_OBJECT_CONTROL_NULL;
 
+	bzero(device_object, sizeof (*device_object));
+
+	device_object->dev_pgr_hdr.mo_ikot = IKOT_MEMORY_OBJECT;
+	device_object->dev_pgr_hdr.mo_pager_ops = &device_pager_ops;
+	device_object->dev_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
+
+	device_pager_lock_init(device_object);
+	device_object->ref_count = 1;
+	device_object->is_mapped = FALSE;
+
+	DTRACE_VM2(device_pager_create,
+		   device_pager_t, device_object,
+		   unsigned int, device_object->ref_count);
 
 	return(device_object);
 }

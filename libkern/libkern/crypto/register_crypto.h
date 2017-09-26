@@ -39,6 +39,7 @@ extern "C" {
 #include <corecrypto/ccrc4.h>
 #include <corecrypto/ccrng.h>
 #include <corecrypto/ccrsa.h>
+#include <corecrypto/ccchacha20poly1305.h>
 
 /* Function types */
 
@@ -68,7 +69,19 @@ typedef int (*ccgcm_init_with_iv_fn_t)(const struct ccmode_gcm *mode, ccgcm_ctx 
                                        size_t key_nbytes, const void *key,
                                        const void *iv);
 typedef int (*ccgcm_inc_iv_fn_t)(const struct ccmode_gcm *mode, ccgcm_ctx *ctx, void *iv);
-
+    
+typedef const struct ccchacha20poly1305_fns {
+    const struct ccchacha20poly1305_info *(*info)(void);
+    int (*init)(const struct ccchacha20poly1305_info *info, ccchacha20poly1305_ctx *ctx, const uint8_t *key);
+    int (*reset)(const struct ccchacha20poly1305_info *info, ccchacha20poly1305_ctx *ctx);
+    int (*setnonce)(const struct ccchacha20poly1305_info *info, ccchacha20poly1305_ctx *ctx, const uint8_t *nonce);
+    int (*incnonce)(const struct ccchacha20poly1305_info *info, ccchacha20poly1305_ctx *ctx, uint8_t *nonce);
+    int	(*aad)(const struct ccchacha20poly1305_info *info, ccchacha20poly1305_ctx *ctx, size_t nbytes, const void *aad);
+    int	(*encrypt)(const struct ccchacha20poly1305_info *info, ccchacha20poly1305_ctx *ctx, size_t nbytes, const void *ptext, void *ctext);
+    int	(*finalize)(const struct ccchacha20poly1305_info *info, ccchacha20poly1305_ctx *ctx, uint8_t *tag);
+    int	(*decrypt)(const struct ccchacha20poly1305_info *info, ccchacha20poly1305_ctx *ctx, size_t nbytes, const void *ctext, void *ptext);
+    int	(*verify)(const struct ccchacha20poly1305_info *info, ccchacha20poly1305_ctx *ctx, const uint8_t *tag);
+} *ccchacha20poly1305_fns_t;
 
 /* pbkdf2 */
 typedef void (*ccpbkdf2_hmac_fn_t)(const struct ccdigest_info *di,
@@ -130,6 +143,7 @@ typedef struct crypto_functions {
     const struct ccmode_ecb *ccaes_ecb_decrypt;
     const struct ccmode_cbc *ccaes_cbc_encrypt;
     const struct ccmode_cbc *ccaes_cbc_decrypt;
+    const struct ccmode_ctr *ccaes_ctr_crypt;
     const struct ccmode_xts *ccaes_xts_encrypt;
     const struct ccmode_xts *ccaes_xts_decrypt;
     const struct ccmode_gcm *ccaes_gcm_encrypt;
@@ -137,6 +151,8 @@ typedef struct crypto_functions {
 
     ccgcm_init_with_iv_fn_t ccgcm_init_with_iv_fn;
     ccgcm_inc_iv_fn_t ccgcm_inc_iv_fn;
+    
+    ccchacha20poly1305_fns_t ccchacha20poly1305_fns;
 
     /* DES, ecb and cbc */
     const struct ccmode_ecb *ccdes_ecb_encrypt;

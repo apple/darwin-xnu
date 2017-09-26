@@ -1331,6 +1331,41 @@ posix_spawnattr_getcpumonitor(posix_spawnattr_t * __restrict attr,
 	return (0);
 }
 
+#if TARGET_OS_EMBEDDED
+/*
+ * posix_spawnattr_setjetsam
+ *
+ * Description:	Set jetsam attributes for the spawn attribute object
+ *		referred to by 'attr'.
+ *
+ * Parameters:	flags			The flags value to set
+ *		priority		Relative jetsam priority
+ *		memlimit		Value in megabytes; a memory footprint
+ *					above this level may result in termination.
+ *					Implies both active and inactive limits.
+ *
+ * Returns:	0			Success
+ *
+ * Note: to be deprecated (not available on desktop)
+ *
+ */
+int
+posix_spawnattr_setjetsam(posix_spawnattr_t * __restrict attr,
+		short flags, int priority, int memlimit)
+{
+	short flags_ext = flags;
+
+        if (flags & POSIX_SPAWN_JETSAM_MEMLIMIT_FATAL) {
+                flags_ext |= POSIX_SPAWN_JETSAM_MEMLIMIT_ACTIVE_FATAL;
+                flags_ext |= POSIX_SPAWN_JETSAM_MEMLIMIT_INACTIVE_FATAL;
+        } else {
+                flags_ext &= ~POSIX_SPAWN_JETSAM_MEMLIMIT_ACTIVE_FATAL;
+                flags_ext &= ~POSIX_SPAWN_JETSAM_MEMLIMIT_INACTIVE_FATAL;
+        }
+
+	return (posix_spawnattr_setjetsam_ext(attr, flags_ext, priority, memlimit, memlimit));
+}
+#endif /* TARGET_OS_EMBEDDED */
 
 /*
  * posix_spawnattr_setjetsam_ext

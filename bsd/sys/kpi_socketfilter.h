@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2016 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008-2017 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -569,8 +569,16 @@ struct sflt_filter {
 	@param protocol The protocol these filters will be attached to.
 	@result 0 on success otherwise the errno error.
  */
+#ifdef KERNEL_PRIVATE
+extern errno_t sflt_register_internal(const struct sflt_filter *filter,
+    int domain, int type, int protocol);
+
+#define	sflt_register(filter, domain, type, protocol) \
+    sflt_register_internal((filter), (domain), (type), (protocol))
+#else
 extern errno_t sflt_register(const struct sflt_filter *filter, int domain,
     int type, int protocol);
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@function sflt_unregister

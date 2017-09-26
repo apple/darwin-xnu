@@ -112,6 +112,10 @@
 #include <sys/bsdtask_info.h>
 #include <sys/persona.h>
 
+#if CONFIG_CSR
+#include <sys/csr.h>
+#endif
+
 #if CONFIG_MEMORYSTATUS
 #include <sys/kern_memorystatus.h>
 #endif
@@ -150,12 +154,20 @@ extern struct tty cons;
 
 extern int cs_debug;
 
+#if DEVELOPMENT || DEBUG
+extern int cs_enforcement_enable;
+#endif
+
 #if DEBUG
 #define __PROC_INTERNAL_DEBUG 1
 #endif
 #if CONFIG_COREDUMP
 /* Name to give to core files */
+#if CONFIG_EMBEDDED
+__XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/private/var/cores/%N.core"};
+#else
 __XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};
+#endif
 #endif
 
 #if PROC_REF_DEBUG
@@ -488,11 +500,16 @@ proc_t
 proc_ref_locked(proc_t p)
 {
 	proc_t p1 = p;
+	int pid = proc_pid(p);
 	
-	/* if process still in creation return failure */
-	if ((p == PROC_NULL) || ((p->p_listflag & P_LIST_INCREATE) != 0))
-			return (PROC_NULL);
 retry:
+	/*
+	 * if process still in creation or proc got recycled
+	 * during msleep then return failure.
+	 */
+	if ((p == PROC_NULL) || (p1 != p) || ((p->p_listflag & P_LIST_INCREATE) != 0))
+			return (PROC_NULL);
+
 	/*
 	 * Do not return process marked for termination
 	 * or proc_refdrain called without ref wait.
@@ -508,6 +525,11 @@ retry:
 	     ((p->p_listflag & P_LIST_REFWAIT) != 0))) {
 		if ((p->p_listflag & P_LIST_REFWAIT) != 0 && uthread_needs_to_wait_in_proc_refwait()) {
 			msleep(&p->p_listflag, proc_list_mlock, 0, "proc_refwait", 0) ;
+			/*
+			 * the proc might have been recycled since we dropped
+			 * the proc list lock, get the proc again.
+			 */
+			p = pfind_locked(pid);
 			goto retry;
 		}
 		p->p_refcount++;
@@ -1148,6 +1170,7 @@ bsd_set_dependency_capable(task_t task)
 }
 
 
+#ifndef	__arm__
 int
 IS_64BIT_PROCESS(proc_t p)
 {
@@ -1156,6 +1179,7 @@ IS_64BIT_PROCESS(proc_t p)
 	else
 		return(0);
 }
+#endif
 
 /*
  * Locate a process by number
@@ -1297,6 +1321,7 @@ pinsertchild(proc_t parent, proc_t child)
 	child->p_pptr = parent;
 	child->p_ppid = parent->p_pid;
 	child->p_puniqueid = parent->p_uniqueid;
+	child->p_xhighbits = 0;
 
 	pg = proc_pgrp(parent);
 	pgrp_add(pg, parent, child);
@@ -1949,6 +1974,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		case CS_OPS_MARKRESTRICT:
 		case CS_OPS_SET_STATUS:
 		case CS_OPS_CLEARINSTALLER:
+		case CS_OPS_CLEARPLATFORM:
 			if ((error = mac_proc_check_set_cs_info(current_proc(), pt, ops)))
 				goto out;
 			break;
@@ -2149,7 +2175,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 				error = ENOENT;
 				break;
 			}
-			
+
 			length = strlen(identity) + 1; /* include NUL */
 			idlen = htonl(length + sizeof(fakeheader));
 			memcpy(&fakeheader[4], &idlen, sizeof(idlen));
@@ -2168,9 +2194,33 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 
 		case CS_OPS_CLEARINSTALLER:
 			proc_lock(pt);
-			pt->p_csflags &= ~(CS_INSTALLER | CS_EXEC_SET_INSTALLER);
+			pt->p_csflags &= ~(CS_INSTALLER | CS_DATAVAULT_CONTROLLER | CS_EXEC_INHERIT_SIP);
 			proc_unlock(pt);
 			break;
+
+		case CS_OPS_CLEARPLATFORM:
+#if DEVELOPMENT || DEBUG
+			if (cs_enforcement_enable) {
+				error = ENOTSUP;
+				break;
+			}
+
+#if CONFIG_CSR
+			if (csr_check(CSR_ALLOW_APPLE_INTERNAL) != 0) {
+				error = ENOTSUP;
+				break;
+			}
+#endif
+
+			proc_lock(pt);
+			pt->p_csflags &= ~(CS_PLATFORM_BINARY|CS_PLATFORM_PATH);
+			csproc_clear_platform_binary(pt);
+			proc_unlock(pt);
+			break;
+#else
+			error = ENOTSUP;
+			break;
+#endif /* !DEVELOPMENT || DEBUG */
 
 		default:
 			error = EINVAL;
@@ -2201,7 +2251,7 @@ proc_iterate(
 	for (;;) {
 		proc_list_lock();
 
-		pid_count_available = nprocs;
+		pid_count_available = nprocs + 1; //kernel_task is not counted in nprocs
 		assert(pid_count_available > 0);
 
 		pid_list_size_needed = pid_count_available * sizeof(pid_t);
@@ -3170,6 +3220,10 @@ extern boolean_t kill_on_no_paging_space;
 #endif /* DEVELOPMENT || DEBUG */
 
 #define MB_SIZE	(1024 * 1024ULL)
+boolean_t	memorystatus_kill_on_VM_thrashing(boolean_t);
+
+extern int32_t	max_kill_priority;
+extern int	memorystatus_get_proccnt_upto_priority(int32_t max_bucket_index);
 
 int
 no_paging_space_action()
@@ -3235,6 +3289,22 @@ no_paging_space_action()
 		}
 	}
 
+	/*
+	 * We have some processes within our jetsam bands of consideration and hence can be killed.
+	 * So we will invoke the memorystatus thread to go ahead and kill something.
+	 */
+	if (memorystatus_get_proccnt_upto_priority(max_kill_priority) > 0) {
+
+		last_no_space_action = now;
+		memorystatus_kill_on_VM_thrashing(TRUE /* async */);
+		return (1);
+	}
+
+	/*
+	 * No eligible processes to kill. So let's suspend/kill the largest
+	 * process depending on its policy control specifications.
+	 */
+
 	if (nps.pcs_max_size > 0) {
 		if ((p = proc_find(nps.pcs_pid)) != PROC_NULL) {
 
@@ -3246,22 +3316,6 @@ no_paging_space_action()
 				 */
 				last_no_space_action = now;
 		
-#if DEVELOPMENT || DEBUG
-				if (kill_on_no_paging_space == TRUE) {
-					/*
-					 * We found the largest process that has a process policy i.e. one of
-					 * PC_KILL, PC_SUSP, PC_THROTTLE.
-					 * But we are in a mode where we will kill it regardless of its policy.
-					 */
-					printf("low swap: killing largest process with pid %d (%s) and size %llu MB\n", p->p_pid, p->p_comm, (nps.pcs_max_size/MB_SIZE));
-					psignal(p, SIGKILL);
-
-					proc_rele(p);
-
-					return 1;
-				}
-#endif /* DEVELOPMENT || DEBUG */
-
 				proc_dopcontrol(p);
 			
 				proc_rele(p);

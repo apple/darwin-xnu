@@ -118,7 +118,7 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 			x86_saved_state64_t *saved_state = saved_state64(tagged_regs);
 
 			if (argno <= inreg) {
-				stack = (uintptr_t *)&saved_state->rdi;
+				stack = (uintptr_t *)(void*)&saved_state->rdi;
 			} else {
 				fp = (struct frame *)(saved_state->isf.rsp);
 				stack = (uintptr_t *)&fp[0]; /* Find marshalled

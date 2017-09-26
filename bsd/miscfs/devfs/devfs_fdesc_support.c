@@ -568,9 +568,15 @@ devfs_devfd_readdir(struct vnop_readdir_args *ap)
 	if (ap->a_flags & (VNODE_READDIR_EXTENDED | VNODE_READDIR_REQSEEKOFF))
 		return (EINVAL);
 
+	/*
+	 * There needs to be space for at least one entry.
+	 */
+	if (uio_resid(uio) < UIO_MX)
+		return (EINVAL);
+
 	i = uio->uio_offset / UIO_MX;
 	error = 0;
-	while (uio_resid(uio) > 0) {
+	while (uio_resid(uio) >= UIO_MX) {
 		if (i >= p->p_fd->fd_nfiles)
 			break;
 

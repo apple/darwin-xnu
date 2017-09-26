@@ -77,7 +77,7 @@ void IOKitInitializeTime( void )
 		IOService::resourceMatching("IONVRAM"), &t );
 #endif
 
-    clock_initialize_calendar();
+	clock_initialize_calendar();
 }
 
 void iokit_post_constructor_init(void)
@@ -112,9 +112,6 @@ void iokit_post_constructor_init(void)
     }
 }
 
-// From <osfmk/kern/debug.c>
-extern int debug_mode;
-
 /*****
  * Pointer into bootstrap KLD segment for functions never used past startup.
  */
@@ -137,10 +134,6 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
     // Compat for boot-args
     gIOKitTrace |= (gIOKitDebug & kIOTraceCompatBootArgs);
 	
-    // Check for the log synchronous bit set in io
-    if (gIOKitDebug & kIOLogSynchronous)
-        debug_mode = true;
-
     if( PE_parse_boot_argn( "pmtimeout", &debugFlags, sizeof (debugFlags) ))
         gCanSleepTimeout = debugFlags;
     //

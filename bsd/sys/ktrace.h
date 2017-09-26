@@ -43,7 +43,11 @@ enum ktrace_state {
 	KTRACE_STATE_BG
 };
 
-extern lck_mtx_t *ktrace_lock;
+void ktrace_lock(void);
+void ktrace_unlock(void);
+void ktrace_assert_lock_held(void);
+void ktrace_start_single_threaded(void);
+void ktrace_end_single_threaded(void);
 
 /*
  * Subsystems that use ktrace to manage ownership.  These values are passed as
@@ -125,7 +129,7 @@ bool ktrace_background_active(void);
  * These functions exist for the transition for kperf to allow blessing other
  * processes.  They should not be used by other clients.
  */
-extern boolean_t ktrace_keep_ownership_on_reset;
+extern bool ktrace_keep_ownership_on_reset;
 extern int ktrace_root_set_owner_allowed;
 int ktrace_set_owning_pid(int pid);
 

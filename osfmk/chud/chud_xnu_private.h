@@ -35,6 +35,8 @@
 
 #if defined (__i386__) || defined (__x86_64__)
 #include "chud/i386/chud_xnu_private.h"
+#elif defined (__arm__) || defined (__arm64__)
+#include "chud/arm/chud_xnu_private.h"
 #else
 #error architecture not supported
 #endif

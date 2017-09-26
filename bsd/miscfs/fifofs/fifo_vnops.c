@@ -117,7 +117,7 @@ struct vnodeopv_entry_desc fifo_vnodeop_entries[] = {
 	{ &vnop_blktooff_desc, (VOPFUNC)err_blktooff },		/* blktooff */
 	{ &vnop_offtoblk_desc, (VOPFUNC)err_offtoblk },		/* offtoblk */
 	{ &vnop_blockmap_desc, (VOPFUNC)err_blockmap },			/* blockmap */
-	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
+	{ (struct vnodeop_desc*)NULL, (int(*)(void *))NULL }
 };
 struct vnodeopv_desc fifo_vnodeop_opv_desc =
 	{ &fifo_vnodeop_p, fifo_vnodeop_entries };

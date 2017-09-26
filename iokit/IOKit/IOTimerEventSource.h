@@ -48,6 +48,56 @@ __END_DECLS
 #include <IOKit/IOTypes.h>
 
 /*!
+	@enum IOTimerEventSource constructor options
+	@abstract Constants defining behavior of the IOTimerEventSource.
+	@constant kIOTimerEventSourceOptionsPriorityHigh Importance above everything but realtime.
+	Thread calls allocated with this priority execute at extremely high priority,
+	above everything but realtime threads.  They are generally executed in serial.
+	Though they may execute concurrently under some circumstances, no fan-out is implied.
+	These work items should do very small amounts of work or risk disrupting system
+	responsiveness.
+	@constant kIOTimerEventSourceOptionsPriorityKernelHigh Importance higher than most kernel
+	threads.
+	@constant kIOTimerEventSourceOptionsPriorityKernel Importance similar to that of normal kernel
+	threads.
+	@constant kIOTimerEventSourceOptionsPriorityUser Importance similar to that of normal user threads.
+	@constant kIOTimerEventSourceOptionsPriorityLow Very low importance.
+	@constant kIOTimerEventSourceOptionsPriorityWorkLoop Run the callout on the thread of the IOWorkLoop
+	the event source has been added to.
+	@constant kIOTimerEventSourceOptionsAllowReenter Allow the callout to be rescheduled and potentially
+	re-entered, if the IOWorkLoop lock has been released (eg. with commandSleep) during its invocation.
+	@constant kIOTimerEventSourceOptionsDefault Recommended default options.
+ */
+enum
+{
+    kIOTimerEventSourceOptionsPriorityMask       = 0x000000ff,
+    kIOTimerEventSourceOptionsPriorityHigh       = 0x00000000,
+    kIOTimerEventSourceOptionsPriorityKernelHigh = 0x00000001,
+    kIOTimerEventSourceOptionsPriorityKernel     = 0x00000002,
+    kIOTimerEventSourceOptionsPriorityUser       = 0x00000003,
+    kIOTimerEventSourceOptionsPriorityLow        = 0x00000004,
+    kIOTimerEventSourceOptionsPriorityWorkLoop   = 0x000000ff,
+
+    kIOTimerEventSourceOptionsAllowReenter       = 0x00000100,
+
+    kIOTimerEventSourceOptionsDefault            = kIOTimerEventSourceOptionsPriorityKernelHigh
+};
+
+#define IOTIMEREVENTSOURCEOPTIONS_DEFINED	1
+
+/*!
+	@enum IOTimerEventSource setTimeout/wakeAtTime options
+	@abstract Constants defining behavior of a scheduled call from IOTimerEventSource.
+	@constant kIOTimeOptionsWithLeeway Use the leeway parameter to the call.
+	@constant kIOTimeOptionsContinuous Use mach_continuous_time() to generate the callback.
+*/
+enum
+{
+    kIOTimeOptionsWithLeeway = 0x00000020,
+    kIOTimeOptionsContinuous = 0x00000100,
+};
+
+/*!
     @class IOTimerEventSource : public IOEventSource
     @abstract Time based event source mechanism.
     @discussion An event source that implements a simple timer.	 A timeout handler is called once the timeout period expires.  This timeout handler will be called by the work-loop that this event source is attached to.
@@ -56,6 +106,7 @@ __END_DECLS
 <br><br>
 	Remember the system doesn't guarantee the accuracy of the callout.	It is possible that a higher priority thread is running which will delay the execution of the action routine.  In fact the thread will be made runable at the exact requested time, within the accuracy of the CPU's decrementer based interrupt, but the scheduler will then control execution.
 */
+
 class IOTimerEventSource : public IOEventSource
 {
     OSDeclareDefaultStructors(IOTimerEventSource)
@@ -73,6 +124,7 @@ protected:
     struct ExpansionData
     {
         SInt32	     calloutGeneration;
+        SInt32	     calloutGenerationSignaled;
         IOWorkLoop * workLoop;
     };
 
@@ -105,11 +157,17 @@ public:
     @param sender The object that timed out. */
     typedef void (*Action)(OSObject *owner, IOTimerEventSource *sender);
 
-/*! @function timerEventSource
-    @abstract Allocates and returns an initialized timer instance.
-    */
     static IOTimerEventSource *
 	timerEventSource(OSObject *owner, Action action = 0);
+
+/*! @function timerEventSource
+    @abstract Allocates and returns an initialized timer instance.
+    @param options Mask of kIOTimerEventSourceOptions* options.
+    @param owner The object that that will be passed to the Action callback.
+    @param action 'C' Function pointer for the callout routine of this event source.
+    */
+    static IOTimerEventSource *
+	timerEventSource(uint32_t options, OSObject *owner, Action action = 0);
 
 /*! @function init
     @abstract Initializes the timer with an owner, and a handler to call when the timeout expires.
@@ -126,6 +184,11 @@ public:
     @discussion When disable returns the action will not be called until the next time enable(qv) is called. */
     virtual void disable() APPLE_KEXT_OVERRIDE;
 
+/*! @function checkForWork
+    @abstract Pure Virtual member function used by IOWorkLoop for issuing a client calls.
+    @discussion This function called when the work-loop is ready to check for any work to do and then to call out the owner/action.
+    @result Return true if this function needs to be called again before all its outstanding events have been processed. */
+    virtual bool checkForWork() APPLE_KEXT_OVERRIDE;
 
 /*! @function setTimeoutTicks
     @abstract Setup a callback at after the delay in scheduler ticks.  See wakeAtTime(AbsoluteTime).
@@ -197,7 +260,7 @@ public:
 
 /*! @function wakeAtTime
     @abstract Setup a callback at this absolute time.
-    @discussion Starts the timer, which will expire at abstime. After it expires, the timer will call the 'action' registered in the init() function. This timer is not periodic, a further call is needed to reset and restart the timer after it expires.  
+    @discussion Starts the timer, which will expire at abstime. After it expires, the timer will call the 'action' registered in the init() function. This timer is not periodic, a further call is needed to reset and restart the timer after it expires.
     @param abstime Absolute Time when to wake up, counted in 'decrementer' units and starts at zero when system boots.
     @result kIOReturnSuccess if everything is fine, kIOReturnNoResources if action hasn't been declared by init or IOEventSource::setAction (qqv). */
     virtual IOReturn wakeAtTime(AbsoluteTime abstime);
@@ -207,13 +270,36 @@ public:
     @discussion Clear down any oustanding calls.  By the time this function completes it is guaranteed that the action will not be called again. */
    virtual void cancelTimeout();
 
-private:
-    static void timeoutAndRelease(void *self, void *wl);
+/*! @function init
+    @abstract Initializes the timer with an owner, and a handler to call when the timeout expires.
+    */
+    virtual bool init(uint32_t options, OSObject *inOwner, Action inAction);
+
+/*! @function setTimeout
+    @abstract Setup a callback at after the delay in decrementer ticks.	 See wakeAtTime(AbsoluteTime).
+    @param options see kIOTimeOptionsWithLeeway and kIOTimeOptionsContinuous
+    @param interval Delay from now to wake up in decrementer ticks.
+    @param leeway Allowable leeway to wake time, if the kIOTimeOptionsWithLeeway option is set
+    @result kIOReturnSuccess if everything is fine, kIOReturnNoResources if action hasn't been declared. */
+    virtual IOReturn setTimeout(uint32_t options, AbsoluteTime interval, AbsoluteTime leeway);
+
+/*! @function wakeAtTime
+    @abstract Setup a callback at this absolute time.
+    @discussion Starts the timer, which will expire at abstime. After it expires, the timer will call the 'action' registered in the init() function. This timer is not periodic, a further call is needed to reset and restart the timer after it expires.
+    @param options see kIOTimeOptionsWithLeeway and kIOTimeOptionsContinuous
+    @param abstime Absolute Time when to wake up, counted in 'decrementer' units and starts at zero when system boots.
+    @param leeway Allowable leeway to wake time, if the kIOTimeOptionsWithLeeway option is set
+    @result kIOReturnSuccess if everything is fine, kIOReturnNoResources if action hasn't been declared by init or IOEventSource::setAction (qqv). */
+    virtual IOReturn wakeAtTime(uint32_t options, AbsoluteTime abstime, AbsoluteTime leeway);
 
 private:
-    OSMetaClassDeclareReservedUnused(IOTimerEventSource, 0);
-    OSMetaClassDeclareReservedUnused(IOTimerEventSource, 1);
-    OSMetaClassDeclareReservedUnused(IOTimerEventSource, 2);
+    static void timeoutAndRelease(void *self, void *c);
+    static void timeoutSignaled(void *self, void *c);
+
+private:
+    OSMetaClassDeclareReservedUsed(IOTimerEventSource, 0);
+    OSMetaClassDeclareReservedUsed(IOTimerEventSource, 1);
+    OSMetaClassDeclareReservedUsed(IOTimerEventSource, 2);
     OSMetaClassDeclareReservedUnused(IOTimerEventSource, 3);
     OSMetaClassDeclareReservedUnused(IOTimerEventSource, 4);
     OSMetaClassDeclareReservedUnused(IOTimerEventSource, 5);

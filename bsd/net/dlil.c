@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -73,6 +73,8 @@
 #include <net/classq/classq_sfb.h>
 #include <net/flowhash.h>
 #include <net/ntstat.h>
+#include <net/if_llatbl.h>
+#include <net/net_api_stats.h>
 
 #if INET
 #include <netinet/in_var.h>
@@ -113,14 +115,12 @@
 #if PF
 #include <net/pfvar.h>
 #endif /* PF */
-#if PF_ALTQ
-#include <net/altq/altq.h>
-#endif /* PF_ALTQ */
 #include <net/pktsched/pktsched.h>
 
 #if NECP
 #include <net/necp.h>
 #endif /* NECP */
+
 
 #define	DBG_LAYER_BEG		DLILDBG_CODE(DBG_DLIL_STATIC, 0)
 #define	DBG_LAYER_END		DLILDBG_CODE(DBG_DLIL_STATIC, 2)
@@ -186,7 +186,6 @@ struct if_proto {
 
 SLIST_HEAD(proto_hash_entry, if_proto);
 
-#define	DLIL_SDLMAXLEN	64
 #define	DLIL_SDLDATALEN	\
 	(DLIL_SDLMAXLEN - offsetof(struct sockaddr_dl, sdl_data[0]))
 
@@ -353,8 +352,6 @@ static errno_t ifproto_media_send_arp(struct ifnet *, u_short,
     const struct sockaddr_dl *, const struct sockaddr *,
     const struct sockaddr_dl *, const struct sockaddr *);
 
-static errno_t ifp_if_output(struct ifnet *, struct mbuf *);
-static void ifp_if_start(struct ifnet *);
 static errno_t ifp_if_input(struct ifnet *ifp, struct mbuf *m_head,
     struct mbuf *m_tail, const struct ifnet_stat_increment_param *s,
     boolean_t poll, struct thread *tp);
@@ -367,8 +364,14 @@ static errno_t ifp_if_add_proto(struct ifnet *, protocol_family_t,
     const struct ifnet_demux_desc *, u_int32_t);
 static errno_t ifp_if_del_proto(struct ifnet *, protocol_family_t);
 static errno_t ifp_if_check_multi(struct ifnet *, const struct sockaddr *);
+#if CONFIG_EMBEDDED
+static errno_t ifp_if_framer(struct ifnet *, struct mbuf **,
+    const struct sockaddr *, const char *, const char *,
+    u_int32_t *, u_int32_t *);
+#else
 static errno_t ifp_if_framer(struct ifnet *, struct mbuf **,
     const struct sockaddr *, const char *, const char *);
+#endif /* CONFIG_EMBEDDED */
 static errno_t ifp_if_framer_extended(struct ifnet *, struct mbuf **,
     const struct sockaddr *, const char *, const char *,
     u_int32_t *, u_int32_t *);
@@ -391,9 +394,9 @@ static void dlil_input_packet_list_common(struct ifnet *, struct mbuf *,
 static errno_t ifnet_input_common(struct ifnet *, struct mbuf *, struct mbuf *,
     const struct ifnet_stat_increment_param *, boolean_t, boolean_t);
 
-#if DEBUG
+#if DEBUG || DEVELOPMENT
 static void dlil_verify_sum16(void);
-#endif /* DEBUG */
+#endif /* DEBUG || DEVELOPMENT */
 static void dlil_output_cksum_dbg(struct ifnet *, struct mbuf *, uint32_t,
     protocol_family_t);
 static void dlil_input_cksum_dbg(struct ifnet *, struct mbuf *, char *,
@@ -408,6 +411,8 @@ static struct ifnet *ifnet_detaching_dequeue(void);
 static void ifnet_start_thread_fn(void *, wait_result_t);
 static void ifnet_poll_thread_fn(void *, wait_result_t);
 static void ifnet_poll(struct ifnet *);
+static errno_t ifnet_enqueue_common(struct ifnet *, void *,
+    classq_pkt_type_t, boolean_t, boolean_t *);
 
 static void ifp_src_route_copyout(struct ifnet *, struct route *);
 static void ifp_src_route_copyin(struct ifnet *, struct route *);
@@ -431,6 +436,10 @@ static int sysctl_get_ports_used SYSCTL_HANDLER_ARGS;
 
 struct chain_len_stats tx_chain_len_stats;
 static int sysctl_tx_chain_len_stats SYSCTL_HANDLER_ARGS;
+
+#if TEST_INPUT_THREAD_TERMINATION
+static int sysctl_input_thread_termination_spin SYSCTL_HANDLER_ARGS;
+#endif /* TEST_INPUT_THREAD_TERMINATION */
 
 /* The following are protected by dlil_ifnet_lock */
 static TAILQ_HEAD(, ifnet) ifnet_detaching_head;
@@ -489,7 +498,11 @@ extern uint32_t tcp_count_opportunistic(unsigned int ifindex,
 __private_extern__ void link_rtrequest(int, struct rtentry *, struct sockaddr *);
 
 #if CONFIG_MACF
+#ifdef CONFIG_EMBEDDED
+int dlil_lladdr_ckreq = 1;
+#else
 int dlil_lladdr_ckreq = 0;
+#endif
 #endif
 
 #if DEBUG
@@ -588,13 +601,14 @@ SYSCTL_PROC(_net_link_generic_system, OID_AUTO, rxpoll,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &if_rxpoll, 0,
     sysctl_rxpoll, "I", "enable opportunistic input polling");
 
-u_int32_t if_bw_smoothing_val = 3;
-SYSCTL_UINT(_net_link_generic_system, OID_AUTO, if_bw_smoothing_val,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &if_bw_smoothing_val, 0, "");
-
-u_int32_t if_bw_measure_size = 10;
-SYSCTL_INT(_net_link_generic_system, OID_AUTO, if_bw_measure_size,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &if_bw_measure_size, 0, "");
+#if TEST_INPUT_THREAD_TERMINATION
+static u_int32_t if_input_thread_termination_spin = 0;
+SYSCTL_PROC(_net_link_generic_system, OID_AUTO, input_thread_termination_spin,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &if_input_thread_termination_spin, 0,
+    sysctl_input_thread_termination_spin,
+    "I", "input thread termination spin limit");
+#endif /* TEST_INPUT_THREAD_TERMINATION */
 
 static u_int32_t cur_dlil_input_threads = 0;
 SYSCTL_UINT(_net_link_generic_system, OID_AUTO, dlil_input_threads,
@@ -723,11 +737,24 @@ SYSCTL_UINT(_net_link_generic_system, OID_AUTO, tx_chain_len_count,
 SYSCTL_NODE(_net_link_generic_system, OID_AUTO, get_ports_used,
     CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_get_ports_used, "");
 
+static uint32_t threshold_notify = 1;		/* enable/disable */
+SYSCTL_UINT(_net_link_generic_system, OID_AUTO, threshold_notify,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &threshold_notify, 0, "");
+
+static uint32_t threshold_interval = 2;		/* in seconds */
+SYSCTL_UINT(_net_link_generic_system, OID_AUTO, threshold_interval,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &threshold_interval, 0, "");
+
 #if (DEVELOPMENT || DEBUG)
 static int sysctl_get_kao_frames SYSCTL_HANDLER_ARGS;
 SYSCTL_NODE(_net_link_generic_system, OID_AUTO, get_kao_frames,
     CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_get_kao_frames, "");
 #endif /* DEVELOPMENT || DEBUG */
+
+struct net_api_stats net_api_stats;
+SYSCTL_STRUCT(_net, OID_AUTO, api_stats, CTLFLAG_RD|CTLFLAG_LOCKED,
+	&net_api_stats, net_api_stats, "");
+
 
 unsigned int net_rxpoll = 1;
 unsigned int net_affinity = 1;
@@ -737,6 +764,24 @@ extern u_int32_t	inject_buckets;
 
 static	lck_grp_attr_t	*dlil_grp_attributes = NULL;
 static	lck_attr_t	*dlil_lck_attributes = NULL;
+
+/* DLIL data threshold thread call */
+static void dlil_dt_tcall_fn(thread_call_param_t, thread_call_param_t);
+
+static void dlil_mit_tcall_fn(thread_call_param_t, thread_call_param_t);
+
+uint32_t dlil_rcv_mit_pkts_min = 5;
+uint32_t dlil_rcv_mit_pkts_max = 64;
+uint32_t dlil_rcv_mit_interval = (500 * 1000);
+
+#if (DEVELOPMENT || DEBUG)
+SYSCTL_UINT(_net_link_generic_system, OID_AUTO, rcv_mit_pkts_min,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &dlil_rcv_mit_pkts_min, 0, "");
+SYSCTL_UINT(_net_link_generic_system, OID_AUTO, rcv_mit_pkts_max,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &dlil_rcv_mit_pkts_max, 0, "");
+SYSCTL_UINT(_net_link_generic_system, OID_AUTO, rcv_mit_interval,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &dlil_rcv_mit_interval, 0, "");
+#endif /* DEVELOPMENT || DEBUG */
 
 
 #define	DLIL_INPUT_CHECK(m, ifp) {					\
@@ -878,6 +923,9 @@ if_proto_free(struct if_proto *proto)
 __private_extern__ void
 ifnet_lock_assert(struct ifnet *ifp, ifnet_lock_assert_t what)
 {
+#if !MACH_ASSERT
+#pragma unused(ifp)
+#endif
 	unsigned int type = 0;
 	int ass = 1;
 
@@ -904,7 +952,7 @@ ifnet_lock_assert(struct ifnet *ifp, ifnet_lock_assert_t what)
 		/* NOTREACHED */
 	}
 	if (ass)
-		lck_rw_assert(&ifp->if_lock, type);
+		LCK_RW_ASSERT(&ifp->if_lock, type);
 }
 
 __private_extern__ void
@@ -986,7 +1034,7 @@ ifnet_head_done(void)
 __private_extern__ void
 ifnet_head_assert_exclusive(void)
 {
-	lck_rw_assert(&ifnet_head_lock, LCK_RW_ASSERT_EXCLUSIVE);
+	LCK_RW_ASSERT(&ifnet_head_lock, LCK_RW_ASSERT_EXCLUSIVE);
 }
 
 /*
@@ -1208,11 +1256,11 @@ dlil_create_input_thread(ifnet_t ifp, struct dlil_threading_info *inp)
 		limit = (u_int32_t)-1;
 	}
 
-	_qinit(&inp->rcvq_pkts, Q_DROPTAIL, limit);
+	_qinit(&inp->rcvq_pkts, Q_DROPTAIL, limit, QP_MBUF);
 	if (inp == dlil_main_input_thread) {
 		struct dlil_main_threading_info *inpm =
 		    (struct dlil_main_threading_info *)inp;
-		_qinit(&inpm->lo_rcvq_pkts, Q_DROPTAIL, limit);
+		_qinit(&inpm->lo_rcvq_pkts, Q_DROPTAIL, limit, QP_MBUF);
 	}
 
 	error = kernel_thread_start(func, inp, &inp->input_thr);
@@ -1231,7 +1279,7 @@ dlil_create_input_thread(ifnet_t ifp, struct dlil_threading_info *inp)
 			 * Randomize to reduce the probability
 			 * of affinity tag namespace collision.
 			 */
-			read_random(&tag, sizeof (tag));
+			read_frandom(&tag, sizeof (tag));
 			if (dlil_affinity_set(tp, tag) == KERN_SUCCESS) {
 				thread_reference(tp);
 				inp->tag = tag;
@@ -1251,23 +1299,37 @@ dlil_create_input_thread(ifnet_t ifp, struct dlil_threading_info *inp)
 	return (error);
 }
 
-static void
-dlil_terminate_input_thread(struct dlil_threading_info *inp)
+#if TEST_INPUT_THREAD_TERMINATION
+static int
+sysctl_input_thread_termination_spin SYSCTL_HANDLER_ARGS
 {
-	struct ifnet *ifp;
+#pragma unused(arg1, arg2)
+	uint32_t i;
+	int err;
 
-	VERIFY(current_thread() == inp->input_thr);
-	VERIFY(inp != dlil_main_input_thread);
+	i = if_input_thread_termination_spin;
 
-	OSAddAtomic(-1, &cur_dlil_input_threads);
+	err = sysctl_handle_int(oidp, &i, 0, req);
+	if (err != 0 || req->newptr == USER_ADDR_NULL)
+		return (err);
 
+	if (net_rxpoll == 0)
+		return (ENXIO);
+
+	if_input_thread_termination_spin = i;
+	return (err);
+}
+#endif /* TEST_INPUT_THREAD_TERMINATION */
+
+static void
+dlil_clean_threading_info(struct dlil_threading_info *inp)
+{
 	lck_mtx_destroy(&inp->input_lck, inp->lck_grp);
 	lck_grp_free(inp->lck_grp);
 
 	inp->input_waiting = 0;
 	inp->wtot = 0;
 	bzero(inp->input_name, sizeof (inp->input_name));
-	ifp = inp->ifp;
 	inp->ifp = NULL;
 	VERIFY(qhead(&inp->rcvq_pkts) == NULL && qempty(&inp->rcvq_pkts));
 	qlimit(&inp->rcvq_pkts) = 0;
@@ -1293,14 +1355,43 @@ dlil_terminate_input_thread(struct dlil_threading_info *inp)
 #if IFNET_INPUT_SANITY_CHK
 	inp->input_mbuf_cnt = 0;
 #endif /* IFNET_INPUT_SANITY_CHK */
+}
+
+static void
+dlil_terminate_input_thread(struct dlil_threading_info *inp)
+{
+	struct ifnet *ifp = inp->ifp;
+
+	VERIFY(current_thread() == inp->input_thr);
+	VERIFY(inp != dlil_main_input_thread);
+
+	OSAddAtomic(-1, &cur_dlil_input_threads);
+
+#if TEST_INPUT_THREAD_TERMINATION
+	{ /* do something useless that won't get optimized away */
+		uint32_t	v = 1;
+		for (uint32_t i = 0;
+		     i < if_input_thread_termination_spin;
+		     i++) {
+			v = (i + 1) * v;
+		}
+		printf("the value is %d\n", v);
+	}
+#endif /* TEST_INPUT_THREAD_TERMINATION */
+
+	lck_mtx_lock_spin(&inp->input_lck);
+	VERIFY((inp->input_waiting & DLIL_INPUT_TERMINATE) != 0);
+	inp->input_waiting |= DLIL_INPUT_TERMINATE_COMPLETE;
+	wakeup_one((caddr_t)&inp->input_waiting);
+	lck_mtx_unlock(&inp->input_lck);
+
+	/* for the extra refcnt from kernel_thread_start() */
+	thread_deallocate(current_thread());
 
 	if (dlil_verbose) {
 		printf("%s: input thread terminated\n",
 		    if_name(ifp));
 	}
-
-	/* for the extra refcnt from kernel_thread_start() */
-	thread_deallocate(current_thread());
 
 	/* this is the end */
 	thread_terminate(current_thread());
@@ -1370,6 +1461,7 @@ dlil_init(void)
 	_CASSERT(IF_HWASSIST_CSUM_UDPIPV6 == IFNET_CSUM_UDPIPV6);
 	_CASSERT(IF_HWASSIST_CSUM_FRAGMENT_IPV6 == IFNET_IPV6_FRAGMENT);
 	_CASSERT(IF_HWASSIST_CSUM_PARTIAL == IFNET_CSUM_PARTIAL);
+	_CASSERT(IF_HWASSIST_CSUM_ZERO_INVERT == IFNET_CSUM_ZERO_INVERT);
 	_CASSERT(IF_HWASSIST_VLAN_TAGGING == IFNET_VLAN_TAGGING);
 	_CASSERT(IF_HWASSIST_VLAN_MTU == IFNET_VLAN_MTU);
 	_CASSERT(IF_HWASSIST_TSO_V4 == IFNET_TSO_IPV4);
@@ -1387,6 +1479,7 @@ dlil_init(void)
 	_CASSERT(CSUM_UDPIPV6 == IF_HWASSIST_CSUM_UDPIPV6);
 	_CASSERT(CSUM_FRAGMENT_IPV6 == IF_HWASSIST_CSUM_FRAGMENT_IPV6);
 	_CASSERT(CSUM_PARTIAL == IF_HWASSIST_CSUM_PARTIAL);
+	_CASSERT(CSUM_ZERO_INVERT == IF_HWASSIST_CSUM_ZERO_INVERT);
 	_CASSERT(CSUM_VLAN_TAG_VALID == IF_HWASSIST_VLAN_TAGGING);
 
 	/*
@@ -1524,6 +1617,7 @@ dlil_init(void)
 	zone_change(dlif_udpstat_zone, Z_CALLERACCT, FALSE);
 
 	ifnet_llreach_init();
+	eventhandler_lists_ctxt_init(&ifnet_evhdlr_ctxt);
 
 	TAILQ_INIT(&dlil_ifnet_head);
 	TAILQ_INIT(&ifnet_head);
@@ -1590,10 +1684,13 @@ dlil_init(void)
 	/* Initialize the service class to dscp map */
 	net_qos_map_init();
 
-#if DEBUG
+#if DEBUG || DEVELOPMENT
 	/* Run self-tests */
 	dlil_verify_sum16();
-#endif /* DEBUG */
+#endif /* DEBUG || DEVELOPMENT */
+
+	/* Initialize link layer table */
+	lltable_glbl_init();
 
 	/*
 	 * Create and start up the main DLIL input thread and the interface
@@ -1607,12 +1704,13 @@ dlil_init(void)
 		/* NOTREACHED */
 	}
 	thread_deallocate(thread);
+
 }
 
 static void
 if_flt_monitor_busy(struct ifnet *ifp)
 {
-	lck_mtx_assert(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
 
 	++ifp->if_flt_busy;
 	VERIFY(ifp->if_flt_busy != 0);
@@ -1627,7 +1725,7 @@ if_flt_monitor_unbusy(struct ifnet *ifp)
 static void
 if_flt_monitor_enter(struct ifnet *ifp)
 {
-	lck_mtx_assert(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
 
 	while (ifp->if_flt_busy) {
 		++ifp->if_flt_waiters;
@@ -1640,7 +1738,7 @@ if_flt_monitor_enter(struct ifnet *ifp)
 static void
 if_flt_monitor_leave(struct ifnet *ifp)
 {
-	lck_mtx_assert(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
 
 	VERIFY(ifp->if_flt_busy != 0);
 	--ifp->if_flt_busy;
@@ -1692,7 +1790,7 @@ dlil_attach_filter(struct ifnet	*ifp, const struct iff_filter *if_filter,
 	lck_mtx_lock(&ifp->if_flt_lock);
 	if_flt_monitor_enter(ifp);
 
-	lck_mtx_assert(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
 	TAILQ_INSERT_TAIL(&ifp->if_flt_head, filter, filt_next);
 
 	if_flt_monitor_leave(ifp);
@@ -1707,6 +1805,11 @@ dlil_attach_filter(struct ifnet	*ifp, const struct iff_filter *if_filter,
 	if ((filter->filt_flags & DLIL_IFF_TSO) == 0) {
 		OSAddAtomic(1, &dlil_filter_disable_tso_count);
 		routegenid_update();
+	}
+	OSIncrementAtomic64(&net_api_stats.nas_iflt_attach_count);
+	INC_ATOMIC_INT64_LIM(net_api_stats.nas_iflt_attach_total);
+	if ((filter->filt_flags & DLIL_IFF_INTERNAL)) {
+		INC_ATOMIC_INT64_LIM(net_api_stats.nas_iflt_attach_os_total);
 	}
 	if (dlil_verbose) {
 		printf("%s: %s filter attached\n", if_name(ifp),
@@ -1753,7 +1856,7 @@ dlil_detach_filter_internal(interface_filter_t	filter, int detached)
 
 				lck_mtx_lock(&ifp->if_flt_lock);
 				if_flt_monitor_enter(ifp);
-				lck_mtx_assert(&ifp->if_flt_lock,
+				LCK_MTX_ASSERT(&ifp->if_flt_lock,
 				    LCK_MTX_ASSERT_OWNED);
 
 				/* Remove the filter from the list */
@@ -1794,6 +1897,8 @@ destroy:
 		OSAddAtomic(-1, &dlil_filter_disable_tso_count);
 		routegenid_update();
 	}
+
+	VERIFY(OSDecrementAtomic64(&net_api_stats.nas_iflt_attach_count) > 0);
 
 	/* Free the filter */
 	zfree(dlif_filt_zone, filter);
@@ -1958,7 +2063,7 @@ dlil_input_thread_func(void *v, wait_result_t w)
 
 		inp->wtot = 0;
 
-		dlil_input_stats_sync(ifp, inp);
+			dlil_input_stats_sync(ifp, inp);
 
 		lck_mtx_unlock(&inp->input_lck);
 
@@ -2033,7 +2138,12 @@ dlil_rxpoll_input_thread_func(void *v, wait_result_t w)
 
 		if (inp->input_waiting & DLIL_INPUT_TERMINATE) {
 			/* Free up pending packets */
+			lck_mtx_convert_spin(&inp->input_lck);
 			_flushq(&inp->rcvq_pkts);
+			if (inp->input_mit_tcall != NULL) {
+				if (thread_call_isactive(inp->input_mit_tcall))
+					thread_call_cancel(inp->input_mit_tcall);
+			}
 			lck_mtx_unlock(&inp->input_lck);
 
 			dlil_terminate_input_thread(inp);
@@ -2257,7 +2367,7 @@ dlil_rxpoll_set_params(struct ifnet *ifp, struct ifnet_poll_params *p,
 	if (!locked)
 		lck_mtx_lock(&inp->input_lck);
 
-	lck_mtx_assert(&inp->input_lck, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&inp->input_lck, LCK_MTX_ASSERT_OWNED);
 
 	/*
 	 * Normally, we'd reset the parameters to the auto-tuned values
@@ -2380,7 +2490,7 @@ static errno_t
 ifnet_input_common(struct ifnet *ifp, struct mbuf *m_head, struct mbuf *m_tail,
     const struct ifnet_stat_increment_param *s, boolean_t ext, boolean_t poll)
 {
-	ifnet_input_handler_func handler_func;
+	dlil_input_func input_func;
 	struct ifnet_stat_increment_param _s;
 	u_int32_t m_cnt = 0, m_size = 0;
 	struct mbuf *last;
@@ -2407,8 +2517,8 @@ ifnet_input_common(struct ifnet *ifp, struct mbuf *m_head, struct mbuf *m_tail,
 		return (EINVAL);
 	}
 
-	handler_func = ifp->if_input_handler;
-	VERIFY(handler_func != NULL);
+	input_func = ifp->if_input_dlil;
+	VERIFY(input_func != NULL);
 
 	if (m_tail == NULL) {
 		last = m_head;
@@ -2476,7 +2586,7 @@ ifnet_input_common(struct ifnet *ifp, struct mbuf *m_head, struct mbuf *m_tail,
 	_s.packets_in = m_cnt;
 	_s.bytes_in = m_size;
 
-	err = (*handler_func)(ifp, m_head, m_tail, s, poll, current_thread());
+	err = (*input_func)(ifp, m_head, m_tail, s, poll, current_thread());
 
 	if (ifp != lo_ifp) {
 		/* Release the IO refcnt */
@@ -2486,31 +2596,6 @@ ifnet_input_common(struct ifnet *ifp, struct mbuf *m_head, struct mbuf *m_tail,
 	return (err);
 }
 
-errno_t
-ifnet_set_input_handler(struct ifnet *ifp, ifnet_input_handler_func fn)
-{
-	return (atomic_test_set_ptr(&ifp->if_input_handler,
-	    dlil_input_handler, fn) ? 0 : EBUSY);
-}
-
-void
-ifnet_reset_input_handler(struct ifnet *ifp)
-{
-	atomic_set_ptr(&ifp->if_input_handler, dlil_input_handler);
-}
-
-errno_t
-ifnet_set_output_handler(struct ifnet *ifp, ifnet_output_handler_func fn)
-{
-	return (atomic_test_set_ptr(&ifp->if_output_handler,
-	    dlil_output_handler, fn) ? 0 : EBUSY);
-}
-
-void
-ifnet_reset_output_handler(struct ifnet *ifp)
-{
-	atomic_set_ptr(&ifp->if_output_handler, dlil_output_handler);
-}
 
 errno_t
 dlil_output_handler(struct ifnet *ifp, struct mbuf *m)
@@ -2555,7 +2640,7 @@ dlil_input_handler(struct ifnet *ifp, struct mbuf *m_head,
 
 		/*
 		 * Take a reference on the current thread; during detach,
-		 * we will need to refer to it in order ot tear down its
+		 * we will need to refer to it in order to tear down its
 		 * affinity.
 		 */
 		thread_reference(tp);
@@ -2612,15 +2697,30 @@ dlil_input_handler(struct ifnet *ifp, struct mbuf *m_head,
 	if (inp == dlil_main_input_thread)
 		dlil_input_stats_sync(ifp, inp);
 
-	inp->input_waiting |= DLIL_INPUT_WAITING;
-	if (!(inp->input_waiting & DLIL_INPUT_RUNNING)) {
-		inp->wtot++;
-		wakeup_one((caddr_t)&inp->input_waiting);
+	if (qlen(&inp->rcvq_pkts) >= dlil_rcv_mit_pkts_min &&
+	    qlen(&inp->rcvq_pkts) < dlil_rcv_mit_pkts_max &&
+	    (ifp->if_family == IFNET_FAMILY_ETHERNET ||
+	    ifp->if_type == IFT_CELLULAR)
+	    ) {
+		if (!thread_call_isactive(inp->input_mit_tcall)) {
+			uint64_t deadline;
+			clock_interval_to_deadline(dlil_rcv_mit_interval,
+			    1, &deadline);
+			(void) thread_call_enter_delayed(
+			    inp->input_mit_tcall, deadline);
+		}
+	} else {
+		inp->input_waiting |= DLIL_INPUT_WAITING;
+		if (!(inp->input_waiting & DLIL_INPUT_RUNNING)) {
+			inp->wtot++;
+			wakeup_one((caddr_t)&inp->input_waiting);
+		}
 	}
 	lck_mtx_unlock(&inp->input_lck);
 
 	return (0);
 }
+
 
 static void
 ifnet_start_common(struct ifnet *ifp, int resetfc)
@@ -2645,7 +2745,8 @@ ifnet_start_common(struct ifnet *ifp, int resetfc)
 	    (resetfc || !(ifp->if_eflags & IFEF_ENQUEUE_MULTI) ||
 	    IFCQ_LEN(&ifp->if_snd) >= ifp->if_start_delay_qlen ||
 	    ifp->if_start_delayed == 0)) {
-		wakeup_one((caddr_t)&ifp->if_start_thread);
+		(void) thread_wakeup_thread((caddr_t)&ifp->if_start_thread,
+		    ifp->if_start_thread);
 	}
 	lck_mtx_unlock(&ifp->if_start_lock);
 }
@@ -2669,7 +2770,8 @@ ifnet_start_thread_fn(void *v, wait_result_t w)
 
 	/* Construct the name for this thread, and then apply it. */
 	bzero(thread_name, sizeof(thread_name));
-	snprintf(thread_name, sizeof(thread_name), "ifnet_start_%s", ifp->if_xname);
+	(void) snprintf(thread_name, sizeof (thread_name),
+	    "ifnet_start_%s", ifp->if_xname);
 	thread_set_thread_name(ifp->if_start_thread, thread_name);
 
 	/*
@@ -2699,17 +2801,16 @@ ifnet_start_thread_fn(void *v, wait_result_t w)
 		}
 	}
 
-	snprintf(ifname, sizeof (ifname), "%s_starter",
-	    if_name(ifp));
+	(void) snprintf(ifname, sizeof (ifname), "%s_starter", if_name(ifp));
 
 	lck_mtx_lock_spin(&ifp->if_start_lock);
 
 	for (;;) {
-		if (ifp->if_start_thread != NULL)
+		if (ifp->if_start_thread != NULL) {
 			(void) msleep(&ifp->if_start_thread,
 			    &ifp->if_start_lock,
 			    (PZERO - 1) | PSPIN, ifname, ts);
-
+		}
 		/* interface is detached? */
 		if (ifp->if_start_thread == THREAD_NULL) {
 			ifnet_set_start_cycle(ifp, NULL);
@@ -3131,34 +3232,86 @@ ifnet_get_rcvq_maxlen(struct ifnet *ifp, u_int32_t *maxqlen)
 	return (0);
 }
 
-errno_t
-ifnet_enqueue(struct ifnet *ifp, struct mbuf *m)
+void
+ifnet_enqueue_multi_setup(struct ifnet *ifp, uint16_t delay_qlen,
+    uint16_t delay_timeout)
 {
-	int error;
-	struct timespec now;
-	u_int64_t now_nsec;
+	if (delay_qlen > 0 && delay_timeout > 0) {
+		ifp->if_eflags |= IFEF_ENQUEUE_MULTI;
+		ifp->if_start_delay_qlen = min(100, delay_qlen);
+		ifp->if_start_delay_timeout = min(20000, delay_timeout);
+		/* convert timeout to nanoseconds */
+		ifp->if_start_delay_timeout *= 1000;
+		kprintf("%s: forced IFEF_ENQUEUE_MULTI qlen %u timeout %u\n",
+		    ifp->if_xname, (uint32_t)delay_qlen,
+		    (uint32_t)delay_timeout);
+	} else {
+		ifp->if_eflags &= ~IFEF_ENQUEUE_MULTI;
+	}
+}
 
-	if (ifp == NULL || m == NULL || !(m->m_flags & M_PKTHDR) ||
-	    m->m_nextpkt != NULL) {
-		if (m != NULL)
-			m_freem_list(m);
-		return (EINVAL);
-	} else if (!(ifp->if_eflags & IFEF_TXSTART) ||
-	    !(ifp->if_refflags & IFRF_ATTACHED)) {
-		/* flag tested without lock for performance */
-		m_freem(m);
-		return (ENXIO);
-	} else if (!(ifp->if_flags & IFF_UP)) {
-		m_freem(m);
-		return (ENETDOWN);
+static inline errno_t
+ifnet_enqueue_common(struct ifnet *ifp, void *p, classq_pkt_type_t ptype,
+    boolean_t flush, boolean_t *pdrop)
+{
+	volatile uint64_t *fg_ts = NULL;
+	volatile uint64_t *rt_ts = NULL;
+	struct mbuf *m = p;
+	struct timespec now;
+	u_int64_t now_nsec = 0;
+	int error = 0;
+
+	ASSERT(ifp->if_eflags & IFEF_TXSTART);
+
+	/*
+	 * If packet already carries a timestamp, either from dlil_output()
+	 * or from flowswitch, use it here.  Otherwise, record timestamp.
+	 * PKTF_TS_VALID is always cleared prior to entering classq, i.e.
+	 * the timestamp value is used internally there.
+	 */
+	switch (ptype) {
+	case QP_MBUF:
+		ASSERT(m->m_flags & M_PKTHDR);
+		ASSERT(m->m_nextpkt == NULL);
+
+		if (!(m->m_pkthdr.pkt_flags & PKTF_TS_VALID) ||
+		    m->m_pkthdr.pkt_timestamp == 0) {
+			nanouptime(&now);
+			net_timernsec(&now, &now_nsec);
+			m->m_pkthdr.pkt_timestamp = now_nsec;
+		}
+		m->m_pkthdr.pkt_flags &= ~PKTF_TS_VALID;
+		/*
+		 * If the packet service class is not background,
+		 * update the timestamp to indicate recent activity
+		 * on a foreground socket.
+		 */
+		if ((m->m_pkthdr.pkt_flags & PKTF_FLOW_ID) &&
+		    m->m_pkthdr.pkt_flowsrc == FLOWSRC_INPCB) {
+			if (!(m->m_pkthdr.pkt_flags & PKTF_SO_BACKGROUND)) {
+				ifp->if_fg_sendts = _net_uptime;
+				if (fg_ts != NULL)
+					*fg_ts = _net_uptime;
+			}
+			if (m->m_pkthdr.pkt_flags & PKTF_SO_REALTIME) {
+				ifp->if_rt_sendts = _net_uptime;
+				if (rt_ts != NULL)
+					*rt_ts = _net_uptime;
+			}
+		}
+		break;
+
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
 	}
 
-	nanouptime(&now);
-	net_timernsec(&now, &now_nsec);
-	m->m_pkthdr.pkt_timestamp = now_nsec;
-	m->m_pkthdr.pkt_flags &= ~PKTF_DRV_TS_VALID;
-
 	if (ifp->if_eflags & IFEF_ENQUEUE_MULTI) {
+		if (now_nsec == 0) {
+			nanouptime(&now);
+			net_timernsec(&now, &now_nsec);
+		}
 		/*
 		 * If the driver chose to delay start callback for
 		 * coalescing multiple packets, Then use the following
@@ -3213,8 +3366,17 @@ ifnet_enqueue(struct ifnet *ifp, struct mbuf *m)
 		ifp->if_eflags &= ~(IFEF_DELAY_START);
 	}
 
-	/* enqueue the packet */
-	error = ifclassq_enqueue(&ifp->if_snd, m);
+	switch (ptype) {
+	case QP_MBUF:
+		/* enqueue the packet (caller consumes object) */
+		error = ifclassq_enqueue(&ifp->if_snd, m, QP_MBUF, pdrop);
+		m = NULL;
+		break;
+
+
+	default:
+		break;
+	}
 
 	/*
 	 * Tell the driver to start dequeueing; do this even when the queue
@@ -3222,16 +3384,51 @@ ifnet_enqueue(struct ifnet *ifp, struct mbuf *m)
 	 * be dequeueing from other unsuspended queues.
 	 */
 	if (!(ifp->if_eflags & IFEF_ENQUEUE_MULTI) &&
-	    (error == 0 || error == EQFULL || error == EQSUSPENDED))
+	    ((error == 0 && flush) || error == EQFULL || error == EQSUSPENDED))
 		ifnet_start(ifp);
 
 	return (error);
 }
 
 errno_t
+ifnet_enqueue(struct ifnet *ifp, struct mbuf *m)
+{
+	boolean_t pdrop;
+	return (ifnet_enqueue_mbuf(ifp, m, TRUE, &pdrop));
+}
+
+errno_t
+ifnet_enqueue_mbuf(struct ifnet *ifp, struct mbuf *m, boolean_t flush,
+    boolean_t *pdrop)
+{
+	if (ifp == NULL || m == NULL || !(m->m_flags & M_PKTHDR) ||
+	    m->m_nextpkt != NULL) {
+		if (m != NULL) {
+			m_freem_list(m);
+			*pdrop = TRUE;
+		}
+		return (EINVAL);
+	} else if (!(ifp->if_eflags & IFEF_TXSTART) ||
+	    !IF_FULLY_ATTACHED(ifp)) {
+		/* flag tested without lock for performance */
+		m_freem(m);
+		*pdrop = TRUE;
+		return (ENXIO);
+	} else if (!(ifp->if_flags & IFF_UP)) {
+		m_freem(m);
+		*pdrop = TRUE;
+		return (ENETDOWN);
+	}
+
+	return (ifnet_enqueue_common(ifp, m, QP_MBUF, flush, pdrop));
+}
+
+
+errno_t
 ifnet_dequeue(struct ifnet *ifp, struct mbuf **mp)
 {
 	errno_t rc;
+	classq_pkt_type_t ptype;
 	if (ifp == NULL || mp == NULL)
 		return (EINVAL);
 	else if (!(ifp->if_eflags & IFEF_TXSTART) ||
@@ -3239,8 +3436,10 @@ ifnet_dequeue(struct ifnet *ifp, struct mbuf **mp)
 		return (ENXIO);
 	if (!ifnet_is_attached(ifp, 1))
 		return (ENXIO);
+
 	rc = ifclassq_dequeue(&ifp->if_snd, 1, CLASSQ_DEQUEUE_MAX_BYTE_LIMIT,
-	    mp, NULL, NULL, NULL);
+	    (void **)mp, NULL, NULL, NULL, &ptype);
+	VERIFY((*mp == NULL) || (ptype == QP_MBUF));
 	ifnet_decr_iorefcnt(ifp);
 
 	return (rc);
@@ -3251,6 +3450,7 @@ ifnet_dequeue_service_class(struct ifnet *ifp, mbuf_svc_class_t sc,
     struct mbuf **mp)
 {
 	errno_t rc;
+	classq_pkt_type_t ptype;
 	if (ifp == NULL || mp == NULL || !MBUF_VALID_SC(sc))
 		return (EINVAL);
 	else if (!(ifp->if_eflags & IFEF_TXSTART) ||
@@ -3259,7 +3459,10 @@ ifnet_dequeue_service_class(struct ifnet *ifp, mbuf_svc_class_t sc,
 	if (!ifnet_is_attached(ifp, 1))
 		return (ENXIO);
 
-	rc = ifclassq_dequeue_sc(&ifp->if_snd, sc, 1, mp, NULL, NULL, NULL);
+	rc = ifclassq_dequeue_sc(&ifp->if_snd, sc, 1,
+	    CLASSQ_DEQUEUE_MAX_BYTE_LIMIT, (void **)mp, NULL, NULL,
+			    NULL, &ptype);
+	VERIFY((*mp == NULL) || (ptype == QP_MBUF));
 	ifnet_decr_iorefcnt(ifp);
 	return (rc);
 }
@@ -3269,6 +3472,7 @@ ifnet_dequeue_multi(struct ifnet *ifp, u_int32_t pkt_limit,
     struct mbuf **head, struct mbuf **tail, u_int32_t *cnt, u_int32_t *len)
 {
 	errno_t rc;
+	classq_pkt_type_t ptype;
 	if (ifp == NULL || head == NULL || pkt_limit < 1)
 		return (EINVAL);
 	else if (!(ifp->if_eflags & IFEF_TXSTART) ||
@@ -3278,7 +3482,9 @@ ifnet_dequeue_multi(struct ifnet *ifp, u_int32_t pkt_limit,
 		return (ENXIO);
 
 	rc = ifclassq_dequeue(&ifp->if_snd, pkt_limit,
-	    CLASSQ_DEQUEUE_MAX_BYTE_LIMIT, head, tail, cnt, len);
+	    CLASSQ_DEQUEUE_MAX_BYTE_LIMIT, (void **)head, (void **)tail, cnt,
+	    len, &ptype);
+	VERIFY((*head == NULL) || (ptype == QP_MBUF));
 	ifnet_decr_iorefcnt(ifp);
 	return (rc);
 }
@@ -3288,6 +3494,7 @@ ifnet_dequeue_multi_bytes(struct ifnet *ifp, u_int32_t byte_limit,
     struct mbuf **head, struct mbuf **tail, u_int32_t *cnt, u_int32_t *len)
 {
 	errno_t rc;
+	classq_pkt_type_t ptype;
 	if (ifp == NULL || head == NULL || byte_limit < 1)
 		return (EINVAL);
 	else if (!(ifp->if_eflags & IFEF_TXSTART) ||
@@ -3297,7 +3504,8 @@ ifnet_dequeue_multi_bytes(struct ifnet *ifp, u_int32_t byte_limit,
 		return (ENXIO);
 
 	rc = ifclassq_dequeue(&ifp->if_snd, CLASSQ_DEQUEUE_MAX_PKT_LIMIT,
-	    byte_limit, head, tail, cnt, len);
+	    byte_limit, (void **)head, (void **)tail, cnt, len, &ptype);
+	VERIFY((*head == NULL) || (ptype == QP_MBUF));
 	ifnet_decr_iorefcnt(ifp);
 	return (rc);
 }
@@ -3308,6 +3516,7 @@ ifnet_dequeue_service_class_multi(struct ifnet *ifp, mbuf_svc_class_t sc,
     u_int32_t *len)
 {
 	errno_t rc;
+	classq_pkt_type_t ptype;
 	if (ifp == NULL || head == NULL || pkt_limit < 1 ||
 	    !MBUF_VALID_SC(sc))
 		return (EINVAL);
@@ -3316,12 +3525,16 @@ ifnet_dequeue_service_class_multi(struct ifnet *ifp, mbuf_svc_class_t sc,
 		return (ENXIO);
 	if (!ifnet_is_attached(ifp, 1))
 		return (ENXIO);
-	rc = ifclassq_dequeue_sc(&ifp->if_snd, sc, pkt_limit, head,
-	    tail, cnt, len);
+
+	rc = ifclassq_dequeue_sc(&ifp->if_snd, sc, pkt_limit,
+	    CLASSQ_DEQUEUE_MAX_BYTE_LIMIT, (void **)head,
+	    (void **)tail, cnt, len, &ptype);
+	VERIFY((*head == NULL) || (ptype == QP_MBUF));
 	ifnet_decr_iorefcnt(ifp);
 	return (rc);
 }
 
+#if !CONFIG_EMBEDDED
 errno_t
 ifnet_framer_stub(struct ifnet *ifp, struct mbuf **m,
     const struct sockaddr *dest, const char *dest_linkaddr,
@@ -3334,6 +3547,7 @@ ifnet_framer_stub(struct ifnet *ifp, struct mbuf **m,
 
 	return (ifp->if_framer_legacy(ifp, m, dest, dest_linkaddr, frame_type));
 }
+#endif /* !CONFIG_EMBEDDED */
 
 static int
 dlil_interface_filters_input(struct ifnet *ifp, struct mbuf **m_p,
@@ -3522,17 +3736,12 @@ dlil_input_stats_sync(struct ifnet *ifp, struct dlil_threading_info *inp)
 		atomic_add_64(&ifp->if_data.ifi_iqdrops, s->dropped);
 		s->dropped = 0;
 	}
-	/*
-	 * If we went over the threshold, notify NetworkStatistics.
-	 */
-	if (ifp->if_data_threshold &&
-	    (ifp->if_ibytes + ifp->if_obytes) - ifp->if_dt_bytes >
-	    ifp->if_data_threshold) {
-		ifp->if_dt_bytes = ifp->if_ibytes + ifp->if_obytes;
 
+	if (ifp->if_data_threshold != 0) {
 		lck_mtx_convert_spin(&inp->input_lck);
-		nstat_ifnet_threshold_reached(ifp->if_index);
+		ifnet_notify_data_threshold(ifp);
 	}
+
 	/*
 	 * No need for atomic operations as they are modified here
 	 * only from within the DLIL input thread context.
@@ -3612,7 +3821,10 @@ dlil_input_packet_list_common(struct ifnet *ifp_param, struct mbuf *m,
 				goto next;
 			}
 			iorefcnt = 1;
-			pktf_mask = 0;
+			/*
+			 * Preserve the time stamp if it was set.
+			 */
+			pktf_mask = PKTF_TS_VALID;
 		} else {
 			/*
 			 * If this arrived on lo0, preserve interface addr
@@ -3954,81 +4166,6 @@ dlil_get_socket_type(struct mbuf **mp, int family, int raw)
 }
 #endif
 
-/*
- * This is mostly called from the context of the DLIL input thread;
- * because of that there is no need for atomic operations.
- */
-static __inline void
-ifp_inc_traffic_class_in(struct ifnet *ifp, struct mbuf *m)
-{
-	if (!(m->m_flags & M_PKTHDR))
-		return;
-
-	switch (m_get_traffic_class(m)) {
-	case MBUF_TC_BE:
-		ifp->if_tc.ifi_ibepackets++;
-		ifp->if_tc.ifi_ibebytes += m->m_pkthdr.len;
-		break;
-	case MBUF_TC_BK:
-		ifp->if_tc.ifi_ibkpackets++;
-		ifp->if_tc.ifi_ibkbytes += m->m_pkthdr.len;
-		break;
-	case MBUF_TC_VI:
-		ifp->if_tc.ifi_ivipackets++;
-		ifp->if_tc.ifi_ivibytes += m->m_pkthdr.len;
-		break;
-	case MBUF_TC_VO:
-		ifp->if_tc.ifi_ivopackets++;
-		ifp->if_tc.ifi_ivobytes += m->m_pkthdr.len;
-		break;
-	default:
-		break;
-	}
-
-	if (mbuf_is_traffic_class_privileged(m)) {
-		ifp->if_tc.ifi_ipvpackets++;
-		ifp->if_tc.ifi_ipvbytes += m->m_pkthdr.len;
-	}
-}
-
-/*
- * This is called from DLIL output, hence multiple threads could end
- * up modifying the statistics.  We trade off acccuracy for performance
- * by not using atomic operations here.
- */
-static __inline void
-ifp_inc_traffic_class_out(struct ifnet *ifp, struct mbuf *m)
-{
-	if (!(m->m_flags & M_PKTHDR))
-		return;
-
-	switch (m_get_traffic_class(m)) {
-	case MBUF_TC_BE:
-		ifp->if_tc.ifi_obepackets++;
-		ifp->if_tc.ifi_obebytes += m->m_pkthdr.len;
-		break;
-	case MBUF_TC_BK:
-		ifp->if_tc.ifi_obkpackets++;
-		ifp->if_tc.ifi_obkbytes += m->m_pkthdr.len;
-		break;
-	case MBUF_TC_VI:
-		ifp->if_tc.ifi_ovipackets++;
-		ifp->if_tc.ifi_ovibytes += m->m_pkthdr.len;
-		break;
-	case MBUF_TC_VO:
-		ifp->if_tc.ifi_ovopackets++;
-		ifp->if_tc.ifi_ovobytes += m->m_pkthdr.len;
-		break;
-	default:
-		break;
-	}
-
-	if (mbuf_is_traffic_class_privileged(m)) {
-		ifp->if_tc.ifi_opvpackets++;
-		ifp->if_tc.ifi_opvbytes += m->m_pkthdr.len;
-	}
-}
-
 static void
 dlil_count_chain_len(mbuf_t m, struct chain_len_stats *cls)
 {
@@ -4082,7 +4219,6 @@ errno_t
 dlil_output(ifnet_t ifp, protocol_family_t proto_family, mbuf_t packetlist,
     void *route, const struct sockaddr *dest, int raw, struct flowadv *adv)
 {
-	ifnet_output_handler_func handler_func;
 	char *frame_type = NULL;
 	char *dst_linkaddr = NULL;
 	int retval = 0;
@@ -4096,6 +4232,8 @@ dlil_output(ifnet_t ifp, protocol_family_t proto_family, mbuf_t packetlist,
 	u_int32_t pre = 0, post = 0;
 	u_int32_t fpkts = 0, fbytes = 0;
 	int32_t flen = 0;
+	struct timespec now;
+	u_int64_t now_nsec;
 
 	KERNEL_DEBUG(DBG_FNC_DLIL_OUTPUT | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
@@ -4109,8 +4247,7 @@ dlil_output(ifnet_t ifp, protocol_family_t proto_family, mbuf_t packetlist,
 	}
 	iorefcnt = 1;
 
-	handler_func = ifp->if_output_handler;
-	VERIFY(handler_func != NULL);
+	VERIFY(ifp->if_output_dlil != NULL);
 
 	/* update the driver's multicast filter, if needed */
 	if (ifp->if_updatemcasts > 0 && if_mcasts_update(ifp) == 0)
@@ -4276,20 +4413,6 @@ preout_again:
 			goto cleanup;
 		}
 
-		/*
-		 * If the packet service class is not background,
-		 * update the timestamp to indicate recent activity
-		 * on a foreground socket.
-		 */
-		if ((m->m_pkthdr.pkt_flags & PKTF_FLOW_ID) &&
-		    m->m_pkthdr.pkt_flowsrc == FLOWSRC_INPCB) {
-			if (!(m->m_pkthdr.pkt_flags & PKTF_SO_BACKGROUND))
-				ifp->if_fg_sendts = net_uptime();
-
-			if (m->m_pkthdr.pkt_flags & PKTF_SO_REALTIME)
-				ifp->if_rt_sendts = net_uptime();
-		}
-
 		ifp_inc_traffic_class_out(ifp, m);
 		pktap_output(ifp, proto_family, m, pre, post);
 
@@ -4298,6 +4421,29 @@ preout_again:
 		 */
 		if (tx_chain_len_count) {
 			dlil_count_chain_len(m, &tx_chain_len_stats);
+		}
+
+		/*
+		 * Record timestamp; ifnet_enqueue() will use this info
+		 * rather than redoing the work.  An optimization could
+		 * involve doing this just once at the top, if there are
+		 * no interface filters attached, but that's probably
+		 * not a big deal.
+		 */
+		nanouptime(&now);
+		net_timernsec(&now, &now_nsec);
+		(void) mbuf_set_timestamp(m, now_nsec, TRUE);
+
+		/*
+		 * Discard partial sum information if this packet originated
+		 * from another interface; the packet would already have the
+		 * final checksum and we shouldn't recompute it.
+		 */
+		if ((m->m_pkthdr.pkt_flags & PKTF_FORWARDED) &&
+		    (m->m_pkthdr.csum_flags & (CSUM_DATA_VALID|CSUM_PARTIAL)) ==
+		    (CSUM_DATA_VALID|CSUM_PARTIAL)) {
+			m->m_pkthdr.csum_flags &= ~CSUM_TX_FLAGS;
+			m->m_pkthdr.csum_data = 0;
 		}
 
 		/*
@@ -4319,7 +4465,7 @@ preout_again:
 			}
 			KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START,
 			    0, 0, 0, 0, 0);
-			retval = (*handler_func)(ifp, m);
+			retval = (*ifp->if_output_dlil)(ifp, m);
 			if (retval == EQFULL || retval == EQSUSPENDED) {
 				if (adv != NULL && adv->code == FADV_SUCCESS) {
 					adv->code = (retval == EQFULL ?
@@ -4354,7 +4500,7 @@ next:
 		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START,
 		    0, 0, 0, 0, 0);
 		if (ifp->if_eflags & IFEF_SENDLIST) {
-			retval = (*handler_func)(ifp, send_head);
+			retval = (*ifp->if_output_dlil)(ifp, send_head);
 			if (retval == EQFULL || retval == EQSUSPENDED) {
 				if (adv != NULL) {
 					adv->code = (retval == EQFULL ?
@@ -4379,7 +4525,7 @@ next:
 				send_m = send_head;
 				send_head = send_m->m_nextpkt;
 				send_m->m_nextpkt = NULL;
-				retval = (*handler_func)(ifp, send_m);
+				retval = (*ifp->if_output_dlil)(ifp, send_m);
 				if (retval == EQFULL || retval == EQSUSPENDED) {
 					if (adv != NULL) {
 						adv->code = (retval == EQFULL ?
@@ -4853,7 +4999,7 @@ ifnet_lookup(struct ifnet *ifp)
 {
 	struct ifnet *_ifp;
 
-	lck_rw_assert(&ifnet_head_lock, LCK_RW_ASSERT_HELD);
+	LCK_RW_ASSERT(&ifnet_head_lock, LCK_RW_ASSERT_HELD);
 	TAILQ_FOREACH(_ifp, &ifnet_head, if_link) {
 		if (_ifp == ifp)
 			break;
@@ -4872,8 +5018,7 @@ ifnet_is_attached(struct ifnet *ifp, int refio)
 	int ret;
 
 	lck_mtx_lock_spin(&ifp->if_ref_lock);
-	if ((ret = ((ifp->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) ==
-	    IFRF_ATTACHED))) {
+	if ((ret = IF_FULLY_ATTACHED(ifp))) {
 		if (refio > 0)
 			ifp->if_refio++;
 	}
@@ -4891,8 +5036,7 @@ void
 ifnet_incr_iorefcnt(struct ifnet *ifp)
 {
 	lck_mtx_lock_spin(&ifp->if_ref_lock);
-	VERIFY((ifp->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) ==
-	    IFRF_ATTACHED);
+	VERIFY(IF_FULLY_ATTACHED(ifp));
 	VERIFY(ifp->if_refio > 0);
 	ifp->if_refio++;
 	lck_mtx_unlock(&ifp->if_ref_lock);
@@ -4903,17 +5047,16 @@ ifnet_decr_iorefcnt(struct ifnet *ifp)
 {
 	lck_mtx_lock_spin(&ifp->if_ref_lock);
 	VERIFY(ifp->if_refio > 0);
-	VERIFY((ifp->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) != 0);
+	VERIFY(ifp->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING));
 	ifp->if_refio--;
 
 	/*
 	 * if there are no more outstanding io references, wakeup the
 	 * ifnet_detach thread if detaching flag is set.
 	 */
-	if (ifp->if_refio == 0 &&
-		(ifp->if_refflags & IFRF_DETACHING) != 0) {
+	if (ifp->if_refio == 0 && (ifp->if_refflags & IFRF_DETACHING))
 		wakeup(&(ifp->if_refio));
-	}
+
 	lck_mtx_unlock(&ifp->if_ref_lock);
 }
 
@@ -4967,26 +5110,39 @@ errno_t
 dlil_if_free(struct ifnet *ifp)
 {
 	struct dlil_ifnet *dl_if = (struct dlil_ifnet *)ifp;
+	bool need_release = FALSE;
 
 	if (dl_if == NULL)
 		return (EINVAL);
 
 	lck_mtx_lock_spin(&dl_if->dl_if_lock);
-	if (dl_if->dl_if_refcnt == 0) {
+	switch (dl_if->dl_if_refcnt) {
+	case 0:
 		panic("%s: negative refcnt for ifp=%p", __func__, ifp);
 		/* NOTREACHED */
+		break;
+	case 1:
+		if ((ifp->if_refflags & IFRF_EMBRYONIC) != 0) {
+			need_release = TRUE;
+		}
+		break;
+	default:
+		break;
 	}
 	--dl_if->dl_if_refcnt;
 	if (dl_if->dl_if_trace != NULL)
 		(*dl_if->dl_if_trace)(dl_if, FALSE);
 	lck_mtx_unlock(&dl_if->dl_if_lock);
-
+	if (need_release) {
+		dlil_if_release(ifp);
+	}
 	return (0);
 }
 
 static errno_t
 dlil_attach_protocol_internal(struct if_proto *proto,
-    const struct ifnet_demux_desc *demux_list, u_int32_t demux_count)
+    const struct ifnet_demux_desc *demux_list, u_int32_t demux_count,
+    uint32_t * proto_count)
 {
 	struct kev_dl_proto_data ev_pr_data;
 	struct ifnet *ifp = proto->ifp;
@@ -5041,6 +5197,9 @@ dlil_attach_protocol_internal(struct if_proto *proto,
 	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_PROTO_ATTACHED,
 	    (struct net_event_data *)&ev_pr_data,
 	    sizeof (struct kev_dl_proto_data));
+	if (proto_count != NULL) {
+		*proto_count = ev_pr_data.proto_remaining_count;
+	}
 	return (retval);
 }
 
@@ -5050,6 +5209,7 @@ ifnet_attach_protocol(ifnet_t ifp, protocol_family_t protocol,
 {
 	int retval = 0;
 	struct if_proto  *ifproto = NULL;
+	uint32_t proto_count = 0;
 
 	ifnet_head_lock_shared();
 	if (ifp == NULL || protocol == 0 || proto_details == NULL) {
@@ -5082,21 +5242,25 @@ ifnet_attach_protocol(ifnet_t ifp, protocol_family_t protocol,
 	ifproto->kpi.v1.send_arp = proto_details->send_arp;
 
 	retval = dlil_attach_protocol_internal(ifproto,
-	    proto_details->demux_list, proto_details->demux_count);
-
-	if (dlil_verbose) {
-		printf("%s: attached v1 protocol %d\n", if_name(ifp),
-		    protocol);
-	}
+			proto_details->demux_list, proto_details->demux_count,
+			&proto_count);
 
 end:
 	if (retval != 0 && retval != EEXIST && ifp != NULL) {
 		DLIL_PRINTF("%s: failed to attach v1 protocol %d (err=%d)\n",
 		    if_name(ifp), protocol, retval);
+	} else {
+		if (dlil_verbose) {
+			printf("%s: attached v1 protocol %d (count = %d)\n",
+			       if_name(ifp),
+			       protocol, proto_count);
+		}
 	}
 	ifnet_head_done();
-	if (retval != 0 && ifproto != NULL)
+	if (retval == 0) {
+	} else if (ifproto != NULL) {
 		zfree(dlif_proto_zone, ifproto);
+	}
 	return (retval);
 }
 
@@ -5106,6 +5270,7 @@ ifnet_attach_protocol_v2(ifnet_t ifp, protocol_family_t protocol,
 {
 	int retval = 0;
 	struct if_proto  *ifproto = NULL;
+	uint32_t proto_count = 0;
 
 	ifnet_head_lock_shared();
 	if (ifp == NULL || protocol == 0 || proto_details == NULL) {
@@ -5138,21 +5303,25 @@ ifnet_attach_protocol_v2(ifnet_t ifp, protocol_family_t protocol,
 	ifproto->kpi.v2.send_arp = proto_details->send_arp;
 
 	retval = dlil_attach_protocol_internal(ifproto,
-	    proto_details->demux_list, proto_details->demux_count);
-
-	if (dlil_verbose) {
-		printf("%s: attached v2 protocol %d\n", if_name(ifp),
-		    protocol);
-	}
+			proto_details->demux_list, proto_details->demux_count,
+			&proto_count);
 
 end:
 	if (retval != 0 && retval != EEXIST && ifp != NULL) {
 		DLIL_PRINTF("%s: failed to attach v2 protocol %d (err=%d)\n",
 		    if_name(ifp), protocol, retval);
+	} else {
+		if (dlil_verbose) {
+			printf("%s: attached v2 protocol %d (count = %d)\n",
+			       if_name(ifp),
+			       protocol, proto_count);
+		}
 	}
 	ifnet_head_done();
-	if (retval != 0 && ifproto != NULL)
+	if (retval == 0) {
+	} else if (ifproto != NULL) {
 		zfree(dlif_proto_zone, ifproto);
+	}
 	return (retval);
 }
 
@@ -5316,8 +5485,8 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	}
 
 	lck_mtx_lock_spin(&ifp->if_ref_lock);
-	if (ifp->if_refflags & IFRF_ATTACHED) {
-		panic_plain("%s: flags mismatch (attached set) ifp=%p",
+	if (!(ifp->if_refflags & IFRF_EMBRYONIC)) {
+		panic_plain("%s: flags mismatch (embryonic not set) ifp=%p",
 		    __func__, ifp);
 		/* NOTREACHED */
 	}
@@ -5396,7 +5565,6 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	VERIFY(ifindex2ifnet[ifp->if_index] == NULL);
 
 	/* allocate (if needed) and initialize a link address */
-	VERIFY(!(dl_if->dl_if_flags & DLIF_REUSE) || ifp->if_lladdr != NULL);
 	ifa = dlil_alloc_lladdr(ifp, ll_addr);
 	if (ifa == NULL) {
 		ifnet_lock_done(ifp);
@@ -5453,6 +5621,10 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	if (if_delaybased_queue)
 		sflags |= PKTSCHEDF_QALG_DELAYBASED;
 
+	if (ifp->if_output_sched_model ==
+	    IFNET_SCHED_MODEL_DRIVER_MANAGED)
+		sflags |= PKTSCHEDF_QALG_DRIVER_MANAGED;
+
 	/* Initialize transmit queue(s) */
 	err = ifclassq_setup(ifp, sflags, (dl_if->dl_if_flags & DLIF_REUSE));
 	if (err != 0) {
@@ -5500,6 +5672,12 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 		}
 	}
 
+	if (ifp->if_inp != NULL && ifp->if_inp->input_mit_tcall == NULL) {
+		ifp->if_inp->input_mit_tcall =
+		    thread_call_allocate_with_priority(dlil_mit_tcall_fn,
+			ifp, THREAD_CALL_PRIORITY_KERNEL);
+	}
+
 	/*
 	 * If the driver supports the new transmit model, calculate flow hash
 	 * and create a workloop starter thread to invoke the if_start callback
@@ -5508,19 +5686,19 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	if (ifp->if_eflags & IFEF_TXSTART) {
 		ifp->if_flowhash = ifnet_calc_flowhash(ifp);
 		VERIFY(ifp->if_flowhash != 0);
-
-		VERIFY(ifp->if_start != NULL);
 		VERIFY(ifp->if_start_thread == THREAD_NULL);
 
 		ifnet_set_start_cycle(ifp, NULL);
 		ifp->if_start_active = 0;
 		ifp->if_start_req = 0;
 		ifp->if_start_flags = 0;
-		if ((err = kernel_thread_start(ifnet_start_thread_fn, ifp,
-		    &ifp->if_start_thread)) != KERN_SUCCESS) {
-			panic_plain("%s: ifp=%p couldn't get a start thread; "
+		VERIFY(ifp->if_start != NULL);
+		if ((err = kernel_thread_start(ifnet_start_thread_fn,
+		    ifp, &ifp->if_start_thread)) != KERN_SUCCESS) {
+			panic_plain("%s: "
+			    "ifp=%p couldn't get a start thread; "
 			    "err=%d", __func__, ifp, err);
-			/* NOTREACHED */
+		/* NOTREACHED */
 		}
 		ml_thread_policy(ifp->if_start_thread, MACHINE_GROUP,
 		    (MACHINE_NETWORK_GROUP|MACHINE_NETWORK_WORKLOOP));
@@ -5577,7 +5755,10 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 
 	/* Clear logging parameters */
 	bzero(&ifp->if_log, sizeof (ifp->if_log));
+
+	/* Clear foreground/realtime activity timestamps */
 	ifp->if_fg_sendts = 0;
+	ifp->if_rt_sendts = 0;
 
 	VERIFY(ifp->if_delegated.ifp == NULL);
 	VERIFY(ifp->if_delegated.type == 0);
@@ -5636,6 +5817,7 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	ifnet_lock_done(ifp);
 	ifnet_head_done();
 
+
 	lck_mtx_lock(&ifp->if_cached_route_lock);
 	/* Enable forwarding cached route */
 	ifp->if_fwd_cacheok = 1;
@@ -5679,6 +5861,7 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 #endif /* INET6 */
 
 	VERIFY(ifp->if_data_threshold == 0);
+	VERIFY(ifp->if_dt_tcall != NULL);
 
 	/*
 	 * Finally, mark this ifnet as attached.
@@ -5686,7 +5869,7 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	lck_mtx_lock(rnh_lock);
 	ifnet_lock_exclusive(ifp);
 	lck_mtx_lock_spin(&ifp->if_ref_lock);
-	ifp->if_refflags = IFRF_ATTACHED;
+	ifp->if_refflags = IFRF_ATTACHED;	/* clears embryonic */
 	lck_mtx_unlock(&ifp->if_ref_lock);
 	if (net_rtref) {
 		/* boot-args override; enable idle notification */
@@ -5887,6 +6070,7 @@ ifnet_detach(ifnet_t ifp)
 		lck_mtx_unlock(rnh_lock);
 		return (ENXIO);
 	}
+	VERIFY(!(ifp->if_refflags & IFRF_EMBRYONIC));
 	/* Indicate this interface is being detached */
 	ifp->if_refflags &= ~IFRF_ATTACHED;
 	ifp->if_refflags |= IFRF_DETACHING;
@@ -5932,6 +6116,7 @@ ifnet_detach(ifnet_t ifp)
 	ifnet_lock_done(ifp);
 	ifnet_head_done();
 	lck_mtx_unlock(rnh_lock);
+
 
 	/* Release reference held on the delegated interface */
 	if (delegated_ifp != NULL)
@@ -5982,7 +6167,11 @@ ifnet_detach(ifnet_t ifp)
 	ifp->if_fwd_cacheok = 0;
 	lck_mtx_unlock(&ifp->if_cached_route_lock);
 
+	/* Disable data threshold and wait for any pending event posting */
 	ifp->if_data_threshold = 0;
+	VERIFY(ifp->if_dt_tcall != NULL);
+	(void) thread_call_cancel_wait(ifp->if_dt_tcall);
+
 	/*
 	 * Drain any deferred IGMPv3/MLDv2 query responses, but keep the
 	 * references to the info structures and leave them attached to
@@ -6114,7 +6303,7 @@ ifnet_detach_final(struct ifnet *ifp)
 	lck_mtx_lock(&ifp->if_flt_lock);
 	if_flt_monitor_enter(ifp);
 
-	lck_mtx_assert(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ifp->if_flt_lock, LCK_MTX_ASSERT_OWNED);
 	fhead = ifp->if_flt_head;
 	TAILQ_INIT(&ifp->if_flt_head);
 
@@ -6242,22 +6431,36 @@ ifnet_detach_final(struct ifnet *ifp)
 		/* disassociate ifp DLIL input thread */
 		ifp->if_inp = NULL;
 
+		/* tell the input thread to terminate */
 		lck_mtx_lock_spin(&inp->input_lck);
 		inp->input_waiting |= DLIL_INPUT_TERMINATE;
 		if (!(inp->input_waiting & DLIL_INPUT_RUNNING)) {
 			wakeup_one((caddr_t)&inp->input_waiting);
 		}
 		lck_mtx_unlock(&inp->input_lck);
+
+		/* wait for the input thread to terminate */
+		lck_mtx_lock_spin(&inp->input_lck);
+		while ((inp->input_waiting & DLIL_INPUT_TERMINATE_COMPLETE)
+		       == 0) {
+			(void) msleep(&inp->input_waiting, &inp->input_lck,
+			    (PZERO - 1) | PSPIN, inp->input_name, NULL);
+		}
+		lck_mtx_unlock(&inp->input_lck);
+
+		/* clean-up input thread state */
+		dlil_clean_threading_info(inp);
+
 	}
 
 	/* The driver might unload, so point these to ourselves */
 	if_free = ifp->if_free;
-	ifp->if_output_handler = ifp_if_output;
+	ifp->if_output_dlil = ifp_if_output;
 	ifp->if_output = ifp_if_output;
 	ifp->if_pre_enqueue = ifp_if_output;
 	ifp->if_start = ifp_if_start;
 	ifp->if_output_ctl = ifp_if_ctl;
-	ifp->if_input_handler = ifp_if_input;
+	ifp->if_input_dlil = ifp_if_input;
 	ifp->if_input_poll = ifp_if_input_poll;
 	ifp->if_input_ctl = ifp_if_ctl;
 	ifp->if_ioctl = ifp_if_ioctl;
@@ -6287,6 +6490,7 @@ ifnet_detach_final(struct ifnet *ifp)
 	/* QoS marking get cleared */
 	ifp->if_eflags &= ~IFEF_QOSMARKING_ENABLED;
 	if_set_qosmarking_mode(ifp, IFRTYPE_QOSMARKING_MODE_NONE);
+
 
 	ifnet_lock_done(ifp);
 
@@ -6319,6 +6523,8 @@ ifnet_detach_final(struct ifnet *ifp)
 	lck_mtx_unlock(&ifp->if_cached_route_lock);
 
 	VERIFY(ifp->if_data_threshold == 0);
+	VERIFY(ifp->if_dt_tcall != NULL);
+	VERIFY(!thread_call_isactive(ifp->if_dt_tcall));
 
 	ifnet_llreach_ifdetach(ifp);
 
@@ -6345,7 +6551,7 @@ ifnet_detach_final(struct ifnet *ifp)
 	ifnet_release(ifp);
 }
 
-static errno_t
+errno_t
 ifp_if_output(struct ifnet *ifp, struct mbuf *m)
 {
 #pragma unused(ifp)
@@ -6353,7 +6559,7 @@ ifp_if_output(struct ifnet *ifp, struct mbuf *m)
 	return (0);
 }
 
-static void
+void
 ifp_if_start(struct ifnet *ifp)
 {
 	ifnet_purge(ifp);
@@ -6421,12 +6627,23 @@ ifp_if_check_multi(struct ifnet *ifp, const struct sockaddr *sa)
 	return (EOPNOTSUPP);
 }
 
+#if CONFIG_EMBEDDED
+static errno_t
+ifp_if_framer(struct ifnet *ifp, struct mbuf **m,
+    const struct sockaddr *sa, const char *ll, const char *t,
+    u_int32_t *pre, u_int32_t *post)
+#else
 static errno_t
 ifp_if_framer(struct ifnet *ifp, struct mbuf **m,
     const struct sockaddr *sa, const char *ll, const char *t)
+#endif /* !CONFIG_EMBEDDED */
 {
 #pragma unused(ifp, m, sa, ll, t)
+#if CONFIG_EMBEDDED
+	return (ifp_if_framer_extended(ifp, m, sa, ll, t, pre, post));
+#else
 	return (ifp_if_framer_extended(ifp, m, sa, ll, t, NULL, NULL));
+#endif /* !CONFIG_EMBEDDED */
 }
 
 static errno_t
@@ -6535,7 +6752,7 @@ int dlil_if_acquire(u_int32_t family, const void *uniqueid,
 		MALLOC(dlifp1->dl_if_uniqueid, void *, uniqueid_len,
 		    M_NKE, M_WAITOK);
 		if (dlifp1->dl_if_uniqueid == NULL) {
-			zfree(dlif_zone, dlifp1);
+			zfree(dlif_zone, buf);
 			ret = ENOMEM;
 			goto end;
 		}
@@ -6556,6 +6773,7 @@ int dlil_if_acquire(u_int32_t family, const void *uniqueid,
 	ifp1->if_desc.ifd_maxlen = IF_DESCSIZE;
 	ifp1->if_desc.ifd_len = 0;
 	ifp1->if_desc.ifd_desc = dlifp1->dl_if_descstorage;
+
 
 #if CONFIG_MACF_NET
 	mac_ifnet_label_init(ifp1);
@@ -6601,6 +6819,14 @@ int dlil_if_acquire(u_int32_t family, const void *uniqueid,
 	lck_mtx_init(&ifp1->if_poll_lock, ifnet_rcv_lock_group,
 	    ifnet_lock_attr);
 
+	/* thread call allocation is done with sleeping zalloc */
+	ifp1->if_dt_tcall = thread_call_allocate_with_options(dlil_dt_tcall_fn,
+	    ifp1, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+	if (ifp1->if_dt_tcall == NULL) {
+		panic_plain("%s: couldn't create if_dt_tcall", __func__);
+		/* NOTREACHED */
+	}
+
 	TAILQ_INSERT_TAIL(&dlil_ifnet_head, dlifp1, dl_if_link);
 
 	*ifp = ifp1;
@@ -6618,6 +6844,11 @@ __private_extern__ void
 dlil_if_release(ifnet_t	ifp)
 {
 	struct dlil_ifnet *dlifp = (struct dlil_ifnet *)ifp;
+
+	VERIFY(OSDecrementAtomic64(&net_api_stats.nas_ifnet_alloc_count) > 0);
+	if (!(ifp->if_xflags & IFXF_ALLOC_KPI)) {
+		VERIFY(OSDecrementAtomic64(&net_api_stats.nas_ifnet_alloc_os_count) > 0);
+	}
 
 	ifnet_lock_exclusive(ifp);
 	lck_mtx_lock(&dlifp->dl_if_lock);
@@ -6656,7 +6887,7 @@ dlil_if_unlock(void)
 __private_extern__ void
 dlil_if_lock_assert(void)
 {
-	lck_mtx_assert(&dlil_ifnet_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dlil_ifnet_lock, LCK_MTX_ASSERT_OWNED);
 }
 
 __private_extern__ void
@@ -6750,17 +6981,16 @@ ifnet_cached_rtlookup_inet(struct ifnet	*ifp, struct in_addr src_ip)
 		}
 		dst->sin_addr = src_ip;
 
-		if (src_rt.ro_rt == NULL) {
-			src_rt.ro_rt = rtalloc1_scoped((struct sockaddr *)dst,
-			    0, 0, ifp->if_index);
+		VERIFY(src_rt.ro_rt == NULL);
+		src_rt.ro_rt = rtalloc1_scoped((struct sockaddr *)dst,
+		    0, 0, ifp->if_index);
 
-			if (src_rt.ro_rt != NULL) {
-				/* retain a ref, copyin consumes one */
-				struct rtentry	*rte = src_rt.ro_rt;
-				RT_ADDREF(rte);
-				ifp_src_route_copyin(ifp, &src_rt);
-				src_rt.ro_rt = rte;
-			}
+		if (src_rt.ro_rt != NULL) {
+			/* retain a ref, copyin consumes one */
+			struct rtentry	*rte = src_rt.ro_rt;
+			RT_ADDREF(rte);
+			ifp_src_route_copyin(ifp, &src_rt);
+			src_rt.ro_rt = rte;
 		}
 	}
 
@@ -6814,12 +7044,21 @@ if_lqm_update(struct ifnet *ifp, int lqm, int locked)
 	VERIFY(lqm >= IFNET_LQM_MIN && lqm <= IFNET_LQM_MAX);
 
 	/* Normalize to edge */
-	if (lqm >= 0 && lqm <= IFNET_LQM_THRESH_BAD)
-		lqm = IFNET_LQM_THRESH_BAD;
-	else if (lqm > IFNET_LQM_THRESH_BAD && lqm <= IFNET_LQM_THRESH_POOR)
+	if (lqm >= 0 && lqm <= IFNET_LQM_THRESH_ABORT) {
+		lqm = IFNET_LQM_THRESH_ABORT;
+		atomic_bitset_32(&tcbinfo.ipi_flags,
+		    INPCBINFO_HANDLE_LQM_ABORT);
+		inpcb_timer_sched(&tcbinfo, INPCB_TIMER_FAST);
+	} else if (lqm > IFNET_LQM_THRESH_ABORT &&
+	    lqm <= IFNET_LQM_THRESH_MINIMALLY_VIABLE) {
+		lqm = IFNET_LQM_THRESH_MINIMALLY_VIABLE;
+	} else if (lqm > IFNET_LQM_THRESH_MINIMALLY_VIABLE &&
+	    lqm <= IFNET_LQM_THRESH_POOR) {
 		lqm = IFNET_LQM_THRESH_POOR;
-	else if (lqm > IFNET_LQM_THRESH_POOR && lqm <= IFNET_LQM_THRESH_GOOD)
+	} else if (lqm > IFNET_LQM_THRESH_POOR &&
+	    lqm <= IFNET_LQM_THRESH_GOOD) {
 		lqm = IFNET_LQM_THRESH_GOOD;
+	}
 
 	/*
 	 * Take the lock if needed
@@ -6999,6 +7238,10 @@ if_probe_connectivity(struct ifnet *ifp, u_int32_t conn_probe)
 	else
 		ifp->if_eflags |= IFEF_PROBE_CONNECTIVITY;
 	ifnet_lock_done(ifp);
+
+#if NECP
+	necp_update_all_clients();
+#endif /* NECP */
 
 	tcp_probe_connectivity(ifp, conn_probe);
 	return (0);
@@ -7265,19 +7508,7 @@ dlil_ifaddr_bytes(const struct sockaddr_dl *sdl, size_t *sizep,
 			    [0] = 2
 			};
 
-			switch (sdl->sdl_type) {
-			case IFT_ETHER:
-				VERIFY(size == ETHER_ADDR_LEN);
-				bytes = unspec;
-				break;
-			case IFT_IEEE1394:
-				VERIFY(size == FIREWIRE_EUI64_LEN);
-				bytes = unspec;
-				break;
-			default:
-				VERIFY(FALSE);
-				break;
-			};
+			bytes = unspec;
 		}
 	}
 #else
@@ -7402,11 +7633,6 @@ ifnet_set_throttle(struct ifnet *ifp, u_int32_t level)
 	switch (level) {
 	case IFNET_THROTTLE_OFF:
 	case IFNET_THROTTLE_OPPORTUNISTIC:
-#if PF_ALTQ
-		/* Throttling works only for IFCQ, not ALTQ instances */
-		if (ALTQ_IS_ENABLED(IFCQ_ALTQ(ifq)))
-			return (ENXIO);
-#endif /* PF_ALTQ */
 		break;
 	default:
 		return (EINVAL);
@@ -7569,7 +7795,7 @@ ifnet_flowid(struct ifnet *ifp, uint32_t *flowid)
 	if (ifp == NULL || flowid == NULL) {
 		return (EINVAL);
 	} else if (!(ifp->if_eflags & IFEF_TXSTART) ||
-	    !(ifp->if_refflags & IFRF_ATTACHED)) {
+	    !IF_FULLY_ATTACHED(ifp)) {
 		return (ENXIO);
 	}
 
@@ -7586,7 +7812,7 @@ ifnet_disable_output(struct ifnet *ifp)
 	if (ifp == NULL) {
 		return (EINVAL);
 	} else if (!(ifp->if_eflags & IFEF_TXSTART) ||
-	    !(ifp->if_refflags & IFRF_ATTACHED)) {
+	    !IF_FULLY_ATTACHED(ifp)) {
 		return (ENXIO);
 	}
 
@@ -7604,7 +7830,7 @@ ifnet_enable_output(struct ifnet *ifp)
 	if (ifp == NULL) {
 		return (EINVAL);
 	} else if (!(ifp->if_eflags & IFEF_TXSTART) ||
-	    !(ifp->if_refflags & IFRF_ATTACHED)) {
+	    !IF_FULLY_ATTACHED(ifp)) {
 		return (ENXIO);
 	}
 
@@ -7838,7 +8064,7 @@ ifnet_get_netsignature(struct ifnet *ifp, uint8_t family, uint8_t *len,
 {
 	int error = 0;
 
-	if (ifp == NULL || len == NULL || flags == NULL || data == NULL)
+	if (ifp == NULL || len == NULL || data == NULL)
 		return (EINVAL);
 
 	switch (family) {
@@ -7883,11 +8109,103 @@ ifnet_get_netsignature(struct ifnet *ifp, uint8_t family, uint8_t *len,
 		break;
 	}
 
-	if (error == 0)
+	if (error == 0 && flags != NULL)
 		*flags = 0;
 
 	return (error);
 }
+
+#if INET6
+int
+ifnet_set_nat64prefix(struct ifnet *ifp, struct ipv6_prefix *prefixes)
+{
+	int i, error = 0, one_set = 0;
+
+	if_inet6data_lock_exclusive(ifp);
+
+	if (IN6_IFEXTRA(ifp) == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < NAT64_MAX_NUM_PREFIXES; i++) {
+		uint32_t prefix_len =
+		    prefixes[i].prefix_len;
+		struct in6_addr *prefix =
+		    &prefixes[i].ipv6_prefix;
+
+		if (prefix_len == 0) {
+			/* Allow clearing the signature */
+			IN6_IFEXTRA(ifp)->nat64_prefixes[i].prefix_len = 0;
+			bzero(&IN6_IFEXTRA(ifp)->nat64_prefixes[i].ipv6_prefix,
+			    sizeof(struct in6_addr));
+
+			continue;
+		} else if (prefix_len != NAT64_PREFIX_LEN_32 &&
+			   prefix_len != NAT64_PREFIX_LEN_40 &&
+			   prefix_len != NAT64_PREFIX_LEN_48 &&
+			   prefix_len != NAT64_PREFIX_LEN_56 &&
+			   prefix_len != NAT64_PREFIX_LEN_64 &&
+			   prefix_len != NAT64_PREFIX_LEN_96) {
+			error = EINVAL;
+			goto out;
+		}
+
+		if (IN6_IS_SCOPE_EMBED(prefix)) {
+			error = EINVAL;
+			goto out;
+		}
+
+		IN6_IFEXTRA(ifp)->nat64_prefixes[i].prefix_len = prefix_len;
+		bcopy(prefix, &IN6_IFEXTRA(ifp)->nat64_prefixes[i].ipv6_prefix,
+		    sizeof(struct in6_addr));
+		one_set = 1;
+	}
+
+out:
+	if_inet6data_lock_done(ifp);
+
+	if (error == 0 && one_set != 0)
+		necp_update_all_clients();
+
+	return (error);
+}
+
+int
+ifnet_get_nat64prefix(struct ifnet *ifp, struct ipv6_prefix *prefixes)
+{
+	int i, found_one = 0, error = 0;
+
+	if (ifp == NULL)
+		return (EINVAL);
+
+	if_inet6data_lock_shared(ifp);
+
+	if (IN6_IFEXTRA(ifp) == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < NAT64_MAX_NUM_PREFIXES; i++) {
+		if (IN6_IFEXTRA(ifp)->nat64_prefixes[i].prefix_len != 0)
+			found_one = 1;
+	}
+
+	if (found_one == 0) {
+		error = ENOENT;
+		goto out;
+	}
+
+	if (prefixes)
+		bcopy(IN6_IFEXTRA(ifp)->nat64_prefixes, prefixes,
+		    sizeof(IN6_IFEXTRA(ifp)->nat64_prefixes));
+
+out:
+	if_inet6data_lock_done(ifp);
+
+	return (error);
+}
+#endif
 
 static void
 dlil_output_cksum_dbg(struct ifnet *ifp, struct mbuf *m, uint32_t hoff,
@@ -7932,7 +8250,7 @@ static void
 dlil_input_cksum_dbg(struct ifnet *ifp, struct mbuf *m, char *frame_header,
     protocol_family_t pf)
 {
-	uint16_t sum;
+	uint16_t sum = 0;
 	uint32_t hlen;
 
 	if (frame_header == NULL ||
@@ -8042,7 +8360,8 @@ dlil_input_cksum_dbg(struct ifnet *ifp, struct mbuf *m, char *frame_header,
 			if (aoff == rxoff || aoff > (uint32_t)m->m_pkthdr.len)
 				return;
 
-			sum = m_adj_sum16(m, rxoff, aoff, sum);
+			sum = m_adj_sum16(m, rxoff, aoff,
+			    m_pktlen(m) - aoff, sum);
 
 			m->m_pkthdr.csum_rx_val = sum;
 			m->m_pkthdr.csum_rx_start = (aoff + hlen);
@@ -8137,7 +8456,7 @@ sysctl_tx_chain_len_stats SYSCTL_HANDLER_ARGS
 }
 
 
-#if DEBUG
+#if DEBUG || DEVELOPMENT
 /* Blob for sum16 verification */
 static uint8_t sumdata[] = {
 	0x1f, 0x8b, 0x08, 0x08, 0x4c, 0xe5, 0x9a, 0x4f, 0x00, 0x03,
@@ -8177,19 +8496,26 @@ static uint8_t sumdata[] = {
 
 /* Precomputed 16-bit 1's complement sums for various spans of the above data */
 static struct {
-	int		len;
-	uint16_t	sum;
+	boolean_t	init;
+	uint16_t	len;
+	uint16_t	sumr;	/* reference */
+	uint16_t	sumrp;	/* reference, precomputed */
 } sumtbl[] = {
-	{	11,	0xcb6d	},
-	{	20,	0x20dd	},
-	{	27,	0xbabd	},
-	{	32,	0xf3e8	},
-	{	37,	0x197d	},
-	{	43,	0x9eae	},
-	{	64,	0x4678	},
-	{	127,	0x9399	},
-	{	256,	0xd147	},
-	{	325,	0x0358	}
+	{ FALSE, 0,   0, 0x0000 },
+	{ FALSE, 1,   0, 0x001f },
+	{ FALSE, 2,   0, 0x8b1f },
+	{ FALSE, 3,   0, 0x8b27 },
+	{ FALSE, 7,   0, 0x790e },
+	{ FALSE, 11,  0, 0xcb6d },
+	{ FALSE, 20,  0, 0x20dd },
+	{ FALSE, 27,  0, 0xbabd },
+	{ FALSE, 32,  0, 0xf3e8 },
+	{ FALSE, 37,  0, 0x197d },
+	{ FALSE, 43,  0, 0x9eae },
+	{ FALSE, 64,  0, 0x4678 },
+	{ FALSE, 127, 0, 0x9399 },
+	{ FALSE, 256, 0, 0xd147 },
+	{ FALSE, 325, 0, 0x0358 },
 };
 #define	SUMTBL_MAX	((int)sizeof (sumtbl) / (int)sizeof (sumtbl[0]))
 
@@ -8203,6 +8529,8 @@ dlil_verify_sum16(void)
 	/* Make sure test data plus extra room for alignment fits in cluster */
 	_CASSERT((sizeof (sumdata) + (sizeof (uint64_t) * 2)) <= MCLBYTES);
 
+	kprintf("DLIL: running SUM16 self-tests ... ");
+
 	m = m_getcl(M_WAITOK, MT_DATA, M_PKTHDR);
 	MH_ALIGN(m, sizeof (uint32_t));		/* 32-bit starting alignment */
 	buf = mtod(m, uint8_t *);		/* base address */
@@ -8213,7 +8541,7 @@ dlil_verify_sum16(void)
 
 		/* Verify for all possible alignments */
 		for (i = 0; i < (int)sizeof (uint64_t); i++) {
-			uint16_t sum;
+			uint16_t sum, sumr;
 			uint8_t *c;
 
 			/* Copy over test data to mbuf */
@@ -8226,11 +8554,25 @@ dlil_verify_sum16(void)
 			m->m_len = len;
 			sum = m_sum16(m, 0, len);
 
+			if (!sumtbl[n].init) {
+				sumr = in_cksum_mbuf_ref(m, len, 0, 0);
+				sumtbl[n].sumr = sumr;
+				sumtbl[n].init = TRUE;
+			} else {
+				sumr = sumtbl[n].sumr;
+			}
+
 			/* Something is horribly broken; stop now */
-			if (sum != sumtbl[n].sum) {
-				panic("%s: broken m_sum16 for len=%d align=%d "
-				    "sum=0x%04x [expected=0x%04x]\n", __func__,
-				    len, i, sum, sumtbl[n].sum);
+			if (sumr != sumtbl[n].sumrp) {
+				panic_plain("\n%s: broken in_cksum_mbuf_ref() "
+				    "for len=%d align=%d sum=0x%04x "
+				    "[expected=0x%04x]\n", __func__,
+				    len, i, sum, sumr);
+				/* NOTREACHED */
+			} else if (sum != sumr) {
+				panic_plain("\n%s: broken m_sum16() for len=%d "
+				    "align=%d sum=0x%04x [expected=0x%04x]\n",
+				    __func__, len, i, sum, sumr);
 				/* NOTREACHED */
 			}
 
@@ -8240,10 +8582,10 @@ dlil_verify_sum16(void)
 			sum = m_sum16(m, i, len);
 
 			/* Something is horribly broken; stop now */
-			if (sum != sumtbl[n].sum) {
-				panic("%s: broken m_sum16 for len=%d offset=%d "
-				    "sum=0x%04x [expected=0x%04x]\n", __func__,
-				    len, i, sum, sumtbl[n].sum);
+			if (sum != sumr) {
+				panic_plain("\n%s: broken m_sum16() for len=%d "
+				    "offset=%d sum=0x%04x [expected=0x%04x]\n",
+				    __func__, len, i, sum, sumr);
 				/* NOTREACHED */
 			}
 #if INET
@@ -8251,10 +8593,10 @@ dlil_verify_sum16(void)
 			sum = b_sum16(c, len);
 
 			/* Something is horribly broken; stop now */
-			if (sum != sumtbl[n].sum) {
-				panic("%s: broken b_sum16 for len=%d align=%d "
-				    "sum=0x%04x [expected=0x%04x]\n", __func__,
-				    len, i, sum, sumtbl[n].sum);
+			if (sum != sumr) {
+				panic_plain("\n%s: broken b_sum16() for len=%d "
+				    "align=%d sum=0x%04x [expected=0x%04x]\n",
+				    __func__, len, i, sum, sumr);
 				/* NOTREACHED */
 			}
 #endif /* INET */
@@ -8262,9 +8604,9 @@ dlil_verify_sum16(void)
 	}
 	m_freem(m);
 
-	printf("DLIL: SUM16 self-tests PASSED\n");
+	kprintf("PASSED\n");
 }
-#endif /* DEBUG */
+#endif /* DEBUG || DEVELOPMENT */
 
 #define	CASE_STRINGIFY(x) case x: return #x
 
@@ -8353,7 +8695,7 @@ sysctl_get_ports_used SYSCTL_HANDLER_ARGS
 	ifp = ifindex2ifnet[idx];
 	ifnet_head_done();
 
-	bitfield = _MALLOC(bitstr_size(65536), M_TEMP, M_WAITOK);
+	bitfield = _MALLOC(bitstr_size(65536), M_TEMP, M_WAITOK | M_ZERO);
 	if (bitfield == NULL) {
 		error = ENOMEM;
 		goto done;
@@ -8369,6 +8711,48 @@ done:
 	if (bitfield != NULL)
 		_FREE(bitfield, M_TEMP);
 	return (error);
+}
+
+static void
+dlil_dt_tcall_fn(thread_call_param_t arg0, thread_call_param_t arg1)
+{
+#pragma unused(arg1)
+	struct ifnet *ifp = arg0;
+
+	if (ifnet_is_attached(ifp, 1)) {
+		nstat_ifnet_threshold_reached(ifp->if_index);
+		ifnet_decr_iorefcnt(ifp);
+	}
+}
+
+void
+ifnet_notify_data_threshold(struct ifnet *ifp)
+{
+	uint64_t bytes = (ifp->if_ibytes + ifp->if_obytes);
+	uint64_t oldbytes = ifp->if_dt_bytes;
+
+	ASSERT(ifp->if_dt_tcall != NULL);
+
+	/*
+	 * If we went over the threshold, notify NetworkStatistics.
+	 * We rate-limit it based on the threshold interval value.
+	 */
+	if (threshold_notify && (bytes - oldbytes) > ifp->if_data_threshold &&
+	    OSCompareAndSwap64(oldbytes, bytes, &ifp->if_dt_bytes) &&
+	    !thread_call_isactive(ifp->if_dt_tcall)) {
+		uint64_t tival = (threshold_interval * NSEC_PER_SEC);
+		uint64_t now = mach_absolute_time(), deadline = now;
+		uint64_t ival;
+
+		if (tival != 0) {
+			nanoseconds_to_absolutetime(tival, &ival);
+			clock_deadline_for_periodic_event(ival, now, &deadline);
+			(void) thread_call_enter_delayed(ifp->if_dt_tcall,
+			    deadline);
+		} else {
+			(void) thread_call_enter(ifp->if_dt_tcall);
+		}
+	}
 }
 
 #if (DEVELOPMENT || DEBUG)
@@ -8468,3 +8852,34 @@ done:
 	return (error);
 }
 #endif /* DEVELOPMENT || DEBUG */
+
+void
+ifnet_update_stats_per_flow(struct ifnet_stats_per_flow *ifs,
+    struct ifnet *ifp)
+{
+	tcp_update_stats_per_flow(ifs, ifp);
+}
+
+static void
+dlil_mit_tcall_fn(thread_call_param_t arg0, thread_call_param_t arg1)
+{
+#pragma unused(arg1)
+	struct ifnet *ifp = (struct ifnet *)arg0;
+	struct dlil_threading_info *inp = ifp->if_inp;
+
+	ifnet_lock_shared(ifp);
+	if (!IF_FULLY_ATTACHED(ifp) || inp == NULL) {
+		ifnet_lock_done(ifp);
+		return;
+	}
+
+	lck_mtx_lock_spin(&inp->input_lck);
+	inp->input_waiting |= DLIL_INPUT_WAITING;
+	if (!(inp->input_waiting & DLIL_INPUT_RUNNING) ||
+	    !qempty(&inp->rcvq_pkts)) {
+		inp->wtot++;
+		wakeup_one((caddr_t)&inp->input_waiting);
+	}
+	lck_mtx_unlock(&inp->input_lck);
+	ifnet_lock_done(ifp);
+}

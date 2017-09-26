@@ -52,7 +52,8 @@ typedef union {
 		uint8_t  fcp_stream;
 		uint8_t  fcp_flag_full : 1;
 		uint8_t  fcp_flag_io : 1;
-		uint8_t  _fcp_flag_unused : 6;
+		uint8_t  fcp_quarantined : 1;
+		uint8_t  _fcp_flag_unused : 5;
 	};
 } firehose_chunk_pos_u;
 

@@ -196,16 +196,17 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 ALL_SUBDIRS = \
+	security \
 	bsd  \
 	iokit \
 	osfmk \
 	pexpert \
 	libkern \
 	libsa \
-	security \
-	config
+	config \
+	san
 
-CONFIG_SUBDIRS = config tools
+CONFIG_SUBDIRS = config tools san
 
 INSTINC_SUBDIRS = $(ALL_SUBDIRS) EXTERNAL_HEADERS
 INSTINC_SUBDIRS_X86_64 = $(INSTINC_SUBDIRS)
@@ -219,7 +220,7 @@ EXPINC_SUBDIRS_X86_64H = $(EXPINC_SUBDIRS)
 EXPINC_SUBDIRS_ARM = $(EXPINC_SUBDIRS)
 EXPINC_SUBDIRS_ARM64 = $(EXPINC_SUBDIRS)
 
-SETUP_SUBDIRS = SETUP
+SETUP_SUBDIRS = SETUP san
 
 COMP_SUBDIRS_X86_64 = $(ALL_SUBDIRS)
 COMP_SUBDIRS_X86_64H = $(ALL_SUBDIRS)

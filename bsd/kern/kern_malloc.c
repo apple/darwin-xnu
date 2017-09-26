@@ -300,6 +300,9 @@ const char *memname[] = {
 	"fdvnodedata"	/* 122 M_FD_VN_DATA */
 	"fddirbuf",	/* 123 M_FD_DIRBUF */
 	"netagent",	/* 124 M_NETAGENT */
+	"Event Handler",/* 125 M_EVENTHANDLER */
+	"Link Layer Table",	/* 126 M_LLTABLE */
+	"Network Work Queue",	/* 127 M_NWKWQ */
 	""
 };
 
@@ -485,6 +488,9 @@ struct kmzones {
 	{ 0,		KMZ_MALLOC, FALSE },		/* 122 M_FD_VN_DATA */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 123 M_FD_DIRBUF */
 	{ 0,		KMZ_MALLOC, FALSE },		/* 124 M_NETAGENT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 125 M_EVENTHANDLER */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 126 M_LLTABLE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 127 M_NWKWQ */
 #undef	SOS
 #undef	SOX
 };
@@ -557,7 +563,7 @@ _MALLOC_external(
 	int		type,
 	int		flags)
 {
-    static vm_allocation_site_t site = { VM_KERN_MEMORY_KALLOC, VM_TAG_BT };
+    static vm_allocation_site_t site = { .tag = VM_KERN_MEMORY_KALLOC, .flags = VM_TAG_BT };
     return (__MALLOC(size, type, flags, &site));
 }
 
@@ -650,9 +656,9 @@ __REALLOC(
 	if (kalloc_bucket_size(size) == alloc) {
 		if (flags & M_ZERO) { 
 			if (alloc < size)
-				bzero((uintptr_t)addr + alloc, (size - alloc));
+				bzero(addr + alloc, (size - alloc));
 			else
-				bzero((uintptr_t)addr + size, (alloc - size));
+				bzero(addr + size, (alloc - size));
 		}
 		return addr;
 	}
@@ -750,6 +756,51 @@ _FREE_ZONE(
 	else
 		kfree(elem, size);
 }
+
+#if DEBUG || DEVELOPMENT
+
+extern unsigned int zone_map_jetsam_limit;
+
+static int
+sysctl_zone_map_jetsam_limit SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int oldval = 0, val = 0, error = 0;
+
+	oldval = zone_map_jetsam_limit;
+	error = sysctl_io_number(req, oldval, sizeof(int), &val, NULL);
+	if (error || !req->newptr) {
+		return (error);
+	}
+
+	if (val <= 0 || val > 100) {
+		printf("sysctl_zone_map_jetsam_limit: new jetsam limit value is invalid.\n");
+		return EINVAL;
+	}
+
+	zone_map_jetsam_limit = val;
+	return (0);
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, zone_map_jetsam_limit, CTLTYPE_INT|CTLFLAG_RW, 0, 0,
+		sysctl_zone_map_jetsam_limit, "I", "Zone map jetsam limit");
+
+extern boolean_t run_zone_test(void);
+
+static int
+sysctl_run_zone_test SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int ret_val = run_zone_test();
+
+	return SYSCTL_OUT(req, &ret_val, sizeof(ret_val));
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, run_zone_test,
+	CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED,
+	0, 0, &sysctl_run_zone_test, "I", "Test zone allocator KPI");
+
+#endif /* DEBUG || DEVELOPMENT */
 
 #if CONFIG_ZLEAKS
 
@@ -863,3 +914,18 @@ SYSCTL_PROC(_kern_zleak, OID_AUTO, zone_threshold,
     sysctl_zleak_threshold, "Q", "zleak per-zone threshold");
 
 #endif	/* CONFIG_ZLEAKS */
+
+extern uint64_t get_zones_collectable_bytes(void);
+
+static int
+sysctl_zones_collectable_bytes SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	uint64_t zones_free_mem = get_zones_collectable_bytes();
+
+	return SYSCTL_OUT(req, &zones_free_mem, sizeof(zones_free_mem));
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, zones_collectable_bytes,
+	CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED,
+	0, 0, &sysctl_zones_collectable_bytes, "Q", "Collectable memory in zones");

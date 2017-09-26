@@ -60,25 +60,39 @@
 typedef int (*getint_t)(void);
 typedef int (*setint_t)(int);
 
-/* safety */
 static int kpc_initted = 0;
 
-/* locking and buffer for large data requests */
-#define SYSCTL_BUFFER_SIZE (33 * sizeof(uint64_t))
-static lck_grp_attr_t *sysctl_buffer_lckgrp_attr = NULL;
-static lck_grp_t      *sysctl_buffer_lckgrp = NULL;
-static lck_mtx_t       sysctl_buffer_lock;
-static void           *sysctl_buffer = NULL;
+static lck_grp_attr_t *sysctl_lckgrp_attr = NULL;
+static lck_grp_t *sysctl_lckgrp = NULL;
+static lck_mtx_t sysctl_lock;
+
+#if defined(__x86_64__)
+/* 18 cores, 7 counters each */
+#define KPC_MAX_COUNTERS_COPIED (18 * 7)
+#elif defined(__arm64__)
+#include <pexpert/arm64/board_config.h>
+#if defined(CPU_COUNT)
+#define KPC_MAX_COUNTERS_COPIED (CPU_COUNT * 10)
+#else /* defined(CPU_COUNT) */
+#define KPC_MAX_COUNTERS_COPIED (2 * 10)
+#endif /* !defined(CPU_COUNT) */
+#elif defined(__arm__)
+#define KPC_MAX_COUNTERS_COPIED (16)
+#else /* !defined(__arm__) && !defined(__arm64__) && !defined(__x86_64__) */
+#error "unknown architecture for kpc buffer sizes"
+#endif /* !defined(__arm__) && !defined(__arm64__) && !defined(__x86_64__) */
+
+static_assert((KPC_MAX_COUNTERS_COPIED * sizeof(uint64_t)) < 1024,
+		"kpc's stack could grow too large");
 
 typedef int (*setget_func_t)(int);
 
 void
 kpc_init(void)
 {
-	sysctl_buffer_lckgrp_attr = lck_grp_attr_alloc_init();
-        sysctl_buffer_lckgrp = lck_grp_alloc_init("kpc", 
-                                                  sysctl_buffer_lckgrp_attr);
-	lck_mtx_init(&sysctl_buffer_lock, sysctl_buffer_lckgrp, LCK_ATTR_NULL);
+	sysctl_lckgrp_attr = lck_grp_attr_alloc_init();
+	sysctl_lckgrp = lck_grp_alloc_init("kpc", sysctl_lckgrp_attr);
+	lck_mtx_init(&sysctl_lock, sysctl_lckgrp, LCK_ATTR_NULL);
 
 	kpc_arch_init();
 	kpc_common_init();
@@ -156,26 +170,6 @@ sysctl_setget_int( struct sysctl_req *req,
 }
 
 static int
-kpc_sysctl_acquire_buffer(void)
-{
-	if( sysctl_buffer == NULL )
-	{
-		sysctl_buffer = kalloc(SYSCTL_BUFFER_SIZE);
-		if( sysctl_buffer )
-		{
-			bzero( sysctl_buffer, SYSCTL_BUFFER_SIZE );
-		}
-	}
-
-	if( !sysctl_buffer )
-	{
-		return ENOMEM;
-	}
-
-	return 0;
-}
-
-static int 
 sysctl_kpc_get_counters(uint32_t counters,
                       uint32_t *size, void *buf)
 {
@@ -218,7 +212,7 @@ sysctl_kpc_get_shadow_counters(uint32_t counters,
 	return 0;
 }
 
-static int 
+static int
 sysctl_kpc_get_thread_counters(uint32_t tid,
                              uint32_t *size, void *buf)
 {
@@ -233,7 +227,7 @@ sysctl_kpc_get_thread_counters(uint32_t tid,
 		*size = count * sizeof(uint64_t);
 
 	return r;
-}   
+}
 
 static int
 sysctl_kpc_get_config(uint32_t classes, void* buf)
@@ -279,35 +273,23 @@ sysctl_kpc_set_actionid(uint32_t classes, void* buf)
 
 
 static int
-sysctl_get_bigarray( struct sysctl_req *req, 
-                     int (*get_fn)(uint32_t, uint32_t*, void*) )
+sysctl_get_bigarray(struct sysctl_req *req,
+		int (*get_fn)(uint32_t, uint32_t*, void*))
 {
-	int error = 0;
-	uint32_t bufsize = SYSCTL_BUFFER_SIZE;
+	uint64_t buf[KPC_MAX_COUNTERS_COPIED] = {};
+	uint32_t bufsize = sizeof(buf);
 	uint32_t arg = 0;
 
 	/* get the argument */
-	error = SYSCTL_IN( req, &arg, sizeof(arg) );
-	if(error)
-	{
-		printf( "kpc: no arg?\n" );
+	int error = SYSCTL_IN(req, &arg, sizeof(arg));
+	if (error) {
 		return error;
 	}
 
-	/* get the wired buffer */
-	error = kpc_sysctl_acquire_buffer();
-	if (error)
-		return error;
-
-	/* atomically get the array into the wired buffer. We have a double
-	 * copy, but this is better than page faulting / interrupting during
-	 * a copy.
-	 */
-	error = get_fn( arg, &bufsize, sysctl_buffer );
-
-	/* do the copy out */
-	if( !error )
-		error = SYSCTL_OUT( req, sysctl_buffer, bufsize );
+	error = get_fn(arg, &bufsize, &buf);
+	if (!error) {
+		error = SYSCTL_OUT(req, &buf, bufsize);
+	}
 
 	return error;
 }
@@ -332,79 +314,53 @@ sysctl_actionid_size( uint32_t classes )
 }
 
 static int
-sysctl_getset_bigarray( struct sysctl_req *req, 
-                        int (*size_fn)(uint32_t arg),
-                        int (*get_fn)(uint32_t, void*),
-                        int (*set_fn)(uint32_t, void*) )
+sysctl_getset_bigarray(struct sysctl_req *req, int (*size_fn)(uint32_t arg),
+		int (*get_fn)(uint32_t, void*), int (*set_fn)(uint32_t, void*))
 {
 	int error = 0;
-	uint32_t bufsize = SYSCTL_BUFFER_SIZE;
-	uint32_t regsize = 0;
+	uint64_t buf[KPC_MAX_COUNTERS_COPIED] = {};
+	uint32_t bufsize = sizeof(buf);
 	uint64_t arg;
 
 	/* get the config word */
-	error = SYSCTL_IN( req, &arg, sizeof(arg) );
-	if(error)
-	{
-		printf( "kpc: no arg?\n" );
+	error = SYSCTL_IN(req, &arg, sizeof(arg));
+	if (error) {
 		return error;
 	}
 
-	/* Work out size of registers */
-	regsize = size_fn((uint32_t)arg);
-
-	/* Ignore NULL requests */
-	if(regsize == 0)
+	/* Determine the size of registers to modify. */
+	uint32_t regsize = size_fn((uint32_t)arg);
+	if (regsize == 0 || regsize > bufsize) {
 		return EINVAL;
+	}
 
-	/* ensure not too big */
-	if( regsize > bufsize )
-		return EINVAL;
+	/* if writing */
+	if (req->newptr) {
+		/* copy the rest -- SYSCTL_IN knows the copyin should be shifted */
+		error = SYSCTL_IN(req, &buf, regsize);
 
-	/* get the wired buffer */
-	error = kpc_sysctl_acquire_buffer();
-	if (error)
-		return error;
-
-	// if writing...
-	if(req->newptr)
-	{
-		// copy in the rest in -- sysctl remembers we did one already
-		error = SYSCTL_IN( req, sysctl_buffer, 
-		                   regsize );
-
-		// if SYSCTL_IN fails it means we are only doing a read
-		if(!error) {
-			// set it
-			error = set_fn( (uint32_t)arg, sysctl_buffer );
-			if( error )
-				goto fail;
+		/* SYSCTL_IN failure means only need to read */
+		if (!error) {
+			error = set_fn((uint32_t)arg, &buf);
+			if (error) {
+				return error;
+			}
 		}
 	}
 
-	// if reading
-	if(req->oldptr)
-	{
-		// read it
-		error = get_fn( (uint32_t)arg, sysctl_buffer );
-		if( error )
-			goto fail;
+	/* if reading */
+	if (req->oldptr) {
+		error = get_fn((uint32_t)arg, &buf);
+		if (error) {
+			return error;
+		}
 
-		// copy out the full set
-		error = SYSCTL_OUT( req, sysctl_buffer, regsize );
+		error = SYSCTL_OUT(req, &buf, regsize);
 	}
-   
-fail:
+
 	return error;
 }
 
-
-
-/*
- * #define SYSCTL_HANDLER_ARGS (struct sysctl_oid *oidp,         \
- *                                void *arg1, int arg2,                 \
- *                              struct sysctl_req *req )
- */
 static int
 kpc_sysctl SYSCTL_HANDLER_ARGS
 {
@@ -412,11 +368,11 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 
 	// __unused struct sysctl_oid *unused_oidp = oidp;
 	(void)arg2;
-    
+
 	if( !kpc_initted )
 		panic("kpc_init not called");
 
-	lck_mtx_lock(ktrace_lock);
+	ktrace_lock();
 
 	// Most sysctls require an access check, but a few are public.
 	switch( (uintptr_t) arg1 ) {
@@ -430,15 +386,15 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 		// Require kperf access to read or write anything else.
 		// This is either root or the blessed pid.
 		if ((ret = ktrace_read_check())) {
-			lck_mtx_unlock(ktrace_lock);
+			ktrace_unlock();
 			return ret;
 		}
 		break;
 	}
 
-	lck_mtx_unlock(ktrace_lock);
+	ktrace_unlock();
 
-	lck_mtx_lock(&sysctl_buffer_lock);
+	lck_mtx_lock(&sysctl_lock);
 
 	/* which request */
 	switch( (uintptr_t) arg1 )
@@ -505,7 +461,7 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 
 	case REQ_SW_INC:
 		ret = sysctl_set_int( req, (setget_func_t)kpc_set_sw_inc );
-		break;		
+		break;
 
 	case REQ_PMU_VERSION:
 		ret = sysctl_get_int(oidp, req, kpc_get_pmu_version());
@@ -516,8 +472,8 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 		break;
 	}
 
-	lck_mtx_unlock(&sysctl_buffer_lock);
- 
+	lck_mtx_unlock(&sysctl_lock);
+
 	return ret;
 }
 

@@ -109,7 +109,7 @@ typedef struct mach_zone_info_data {
 	uint64_t	mzi_count;	/* count of elements in use */
 	uint64_t	mzi_cur_size;	/* current memory utilization */
 	uint64_t	mzi_max_size;	/* how large can this zone grow */
-        uint64_t	mzi_elem_size;	/* size of an element */
+	uint64_t	mzi_elem_size;	/* size of an element */
 	uint64_t	mzi_alloc_size;	/* size used for more memory */
 	uint64_t	mzi_sum_size;	/* sum of all allocs (life of zone) */
 	uint64_t	mzi_exhaustible;	/* merely return if empty? */
@@ -122,7 +122,7 @@ typedef struct task_zone_info_data {
 	uint64_t	tzi_count;	/* count of elements in use */
 	uint64_t	tzi_cur_size;	/* current memory utilization */
 	uint64_t	tzi_max_size;	/* how large can this zone grow */
-        uint64_t	tzi_elem_size;	/* size of an element */
+	uint64_t	tzi_elem_size;	/* size of an element */
 	uint64_t	tzi_alloc_size;	/* size used for more memory */
 	uint64_t	tzi_sum_size;	/* sum of all allocs (life of zone) */
 	uint64_t	tzi_exhaustible;	/* merely return if empty? */
@@ -134,14 +134,22 @@ typedef struct task_zone_info_data {
 
 typedef task_zone_info_t *task_zone_info_array_t;
 
+#define MACH_MEMORY_INFO_NAME_MAX_LEN	80
+
 typedef struct mach_memory_info {
-    uint64_t flags;
-    uint64_t site;
-    uint64_t size;
-    uint64_t free;
-    uint64_t largest;
+	uint64_t flags;
+	uint64_t site;
+	uint64_t size;
+	uint64_t free;
+	uint64_t largest;
 	uint64_t collectable_bytes;
-    uint64_t _resv[2];
+	uint64_t mapped;
+	uint64_t peak;
+	uint16_t tag;
+	uint16_t zone;
+	uint16_t _resvA[2];
+	uint64_t _resv[3];
+	char     name[MACH_MEMORY_INFO_NAME_MAX_LEN];
 } mach_memory_info_t;
 
 typedef mach_memory_info_t *mach_memory_info_array_t;

@@ -53,6 +53,6 @@ struct kperf_sample {
 };
 
 /* cache of threads on each CPU during a timer fire */
-extern thread_t *kperf_thread_on_cpus;
+extern uint64_t *kperf_tid_on_cpus;
 
 #endif /* !defined(KPERF_SAMPLE_H) */

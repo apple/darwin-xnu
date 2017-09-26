@@ -27,5 +27,6 @@
  */
 #ifndef _INO_T 
 #define _INO_T 
+#include <sys/_types.h> /* __darwin_ino_t */
 typedef	__darwin_ino_t		ino_t;		/* inode number */
 #endif  /* _INO_T */

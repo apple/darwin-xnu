@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -79,6 +79,7 @@
 #include <net/if_types.h>
 #include <net/if_llreach.h>
 #include <net/route.h>
+#include <net/nwk_wq.h>
 
 #include <netinet/if_ether.h>
 #include <netinet/in_var.h>
@@ -121,20 +122,22 @@ struct llinfo_arp {
 	 * The following are protected by rnh_lock
 	 */
 	LIST_ENTRY(llinfo_arp) la_le;
-	struct	rtentry *la_rt;
+	struct  rtentry *la_rt;
 	/*
 	 * The following are protected by rt_lock
 	 */
-	class_queue_t la_holdq;		/* packets awaiting resolution */
-	struct	if_llreach *la_llreach;	/* link-layer reachability record */
-	u_int64_t la_lastused;		/* last used timestamp */
-	u_int32_t la_asked;		/* # of requests sent */
-	u_int32_t la_maxtries;		/* retry limit */
-	u_int64_t la_probeexp;		/* probe deadline timestamp */
+	class_queue_t la_holdq;         /* packets awaiting resolution */
+	struct  if_llreach *la_llreach; /* link-layer reachability record */
+	u_int64_t la_lastused;          /* last used timestamp */
+	u_int32_t la_asked;             /* # of requests sent */
+	u_int32_t la_maxtries;          /* retry limit */
+	u_int64_t la_probeexp;          /* probe deadline timestamp */
+	u_int32_t la_prbreq_cnt;        /* probe request count */
 	u_int32_t la_flags;
-#define LLINFO_RTRFAIL_EVTSENT		0x1 /* sent an ARP event */
-#define LLINFO_PROBING			0x2 /* waiting for an ARP reply */
+#define LLINFO_RTRFAIL_EVTSENT         0x1 /* sent an ARP event */
+#define LLINFO_PROBING                 0x2 /* waiting for an ARP reply */
 };
+
 static LIST_HEAD(, llinfo_arp) llinfo_arp;
 
 static thread_call_t arp_timeout_tcall;
@@ -163,7 +166,7 @@ static void arp_llinfo_refresh(struct rtentry *);
 static __inline void arp_llreach_use(struct llinfo_arp *);
 static __inline int arp_llreach_reachable(struct llinfo_arp *);
 static void arp_llreach_alloc(struct rtentry *, struct ifnet *, void *,
-    unsigned int, boolean_t);
+    unsigned int, boolean_t, uint32_t *);
 
 extern int tvtohz(struct timeval *);
 
@@ -290,7 +293,7 @@ arp_llinfo_alloc(int how)
 		 * a head drop, details in arp_llinfo_addq().
 		 */
 		_qinit(&la->la_holdq, Q_DROPHEAD, (arp_maxhold == 0) ?
-		    (uint32_t)-1 : arp_maxhold);
+		    (uint32_t)-1 : arp_maxhold, QP_MBUF);
 	}
 
 	return (la);
@@ -349,11 +352,13 @@ arp_llinfo_flushq(struct llinfo_arp *la)
 {
 	uint32_t held = qlen(&la->la_holdq);
 
-	atomic_add_32(&arpstat.purged, held);
-	atomic_add_32(&arpstat.held, -held);
-	_flushq(&la->la_holdq);
+	if (held != 0) {
+		atomic_add_32(&arpstat.purged, held);
+		atomic_add_32(&arpstat.held, -held);
+		_flushq(&la->la_holdq);
+	}
+	la->la_prbreq_cnt = 0;
 	VERIFY(qempty(&la->la_holdq));
-
 	return (held);
 }
 
@@ -523,7 +528,7 @@ arp_llreach_reachable(struct llinfo_arp *la)
  */
 static void
 arp_llreach_alloc(struct rtentry *rt, struct ifnet *ifp, void *addr,
-    unsigned int alen, boolean_t solicited)
+    unsigned int alen, boolean_t solicited, uint32_t *p_rt_event_code)
 {
 	VERIFY(rt->rt_expire == 0 || rt->rt_rmx.rmx_expire != 0);
 	VERIFY(rt->rt_expire != 0 || rt->rt_rmx.rmx_expire == 0);
@@ -554,7 +559,15 @@ arp_llreach_alloc(struct rtentry *rt, struct ifnet *ifp, void *addr,
 				lr = NULL;
 				why = " for different target HW address; "
 				    "using new llreach record";
+				*p_rt_event_code = ROUTE_LLENTRY_CHANGED;
 			} else {
+				/*
+				 * If we were doing unicast probing, we need to
+				 * deliver an event for neighbor cache resolution
+				 */
+				if (lr->lr_probes != 0)
+					*p_rt_event_code = ROUTE_LLENTRY_RESOLVED;
+
 				lr->lr_probes = 0;	/* reset probe count */
 				IFLR_UNLOCK(lr);
 				if (solicited) {
@@ -572,6 +585,7 @@ arp_llreach_alloc(struct rtentry *rt, struct ifnet *ifp, void *addr,
 				if (why == NULL)
 					why = "creating new llreach record";
 			}
+			*p_rt_event_code = ROUTE_LLENTRY_RESOLVED;
 		}
 
 		if (arp_verbose > 1 && lr != NULL && why != NULL) {
@@ -605,7 +619,7 @@ arptfree(struct llinfo_arp *la, void *arg)
 	struct rtentry *rt = la->la_rt;
 	uint64_t timenow;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	/* rnh_lock acquired by caller protects rt from going away */
 	RT_LOCK(rt);
@@ -623,9 +637,22 @@ arptfree(struct llinfo_arp *la, void *arg)
 		if (sdl != NULL)
 			sdl->sdl_alen = 0;
 		(void) arp_llinfo_flushq(la);
+		/*
+		 * Enqueue work item to invoke callback for this route entry
+		 */
+		route_event_enqueue_nwk_wq_entry(rt, NULL,
+		    ROUTE_LLENTRY_UNREACH, NULL, TRUE);
 	}
 
+	/*
+	 * The following is mostly being used to arm the timer
+	 * again and for logging.
+	 * qlen is used to re-arm the timer. Therefore, pure probe
+	 * requests can be considered as 0 length packets
+	 * contributing only to length but not to the size.
+	 */
 	ap->qlen += qlen(&la->la_holdq);
+	ap->qlen += la->la_prbreq_cnt;
 	ap->qsize += qsize(&la->la_holdq);
 
 	if (rt->rt_expire == 0 || (rt->rt_flags & RTF_STATIC)) {
@@ -742,7 +769,7 @@ arp_timeout(thread_call_param_t arg0, thread_call_param_t arg1)
 static void
 arp_sched_timeout(struct timeval *atv)
 {
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (!arp_timeout_run) {
 		struct timeval tv;
@@ -811,7 +838,7 @@ arp_probe(thread_call_param_t arg0, thread_call_param_t arg1)
 static void
 arp_sched_probe(struct timeval *atv)
 {
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (!arp_probe_run) {
 		struct timeval tv;
@@ -856,7 +883,7 @@ arp_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 	char buf[MAX_IPv4_STR_LEN];
 
 	VERIFY(arpinit_done);
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	if (rt->rt_flags & RTF_GATEWAY)
@@ -1160,6 +1187,19 @@ arp_lookup_route(const struct in_addr *addr, int create, int proxy,
 	return (0);
 }
 
+boolean_t
+arp_is_entry_probing (route_t p_route)
+{
+	struct llinfo_arp *llinfo = p_route->rt_llinfo;
+
+	if (llinfo != NULL &&
+	    llinfo->la_llreach != NULL &&
+	    llinfo->la_llreach->lr_probes != 0)
+		return (TRUE);
+
+	return (FALSE);
+}
+
 /*
  * This is the ARP pre-output routine; care must be taken to ensure that
  * the "hint" route never gets freed via rtfree(), since the caller may
@@ -1182,6 +1222,7 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 	struct sockaddr *sa;
 	uint32_t rtflags;
 	struct sockaddr_dl sdl;
+	boolean_t send_probe_notif = FALSE;
 
 	if (ifp == NULL || net_dest == NULL)
 		return (EINVAL);
@@ -1316,6 +1357,13 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 			if (lr->lr_probes == 0) {
 				llinfo->la_probeexp = (timenow + arpt_probe);
 				llinfo->la_flags |= LLINFO_PROBING;
+				/*
+				 * Provide notification that ARP unicast
+				 * probing has started.
+				 * We only do it for the first unicast probe
+				 * attempt.
+				 */
+				send_probe_notif = TRUE;
 			}
 
 			/*
@@ -1371,7 +1419,8 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 	 */
 	if (packet != NULL)
 		arp_llinfo_addq(llinfo, packet);
-
+	else
+		llinfo->la_prbreq_cnt++;
 	/*
 	 * Regardless of permanent vs. expirable entry, we need to
 	 * avoid having packets sit in la_holdq forever; thus mark the
@@ -1380,10 +1429,11 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 	 * moment we get an ARP reply.
 	 */
 	probing = TRUE;
-	if (qlen(&llinfo->la_holdq) == 1) {
+	if ((qlen(&llinfo->la_holdq) + llinfo->la_prbreq_cnt) == 1) {
 		llinfo->la_probeexp = (timenow + arpt_probe);
 		llinfo->la_flags |= LLINFO_PROBING;
 	}
+
 	if (route->rt_expire) {
 		route->rt_flags &= ~RTF_REJECT;
 		if (llinfo->la_asked == 0 || route->rt_expire != timenow) {
@@ -1464,6 +1514,12 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 					VERIFY(_m == packet);
 				}
 				result = EHOSTUNREACH;
+
+				/*
+				 * Enqueue work item to invoke callback for this route entry
+				 */
+				route_event_enqueue_nwk_wq_entry(route, NULL,
+				    ROUTE_LLENTRY_UNREACH, NULL, TRUE);
 				goto release;
 			}
 		}
@@ -1477,6 +1533,30 @@ release:
 		atomic_add_32(&arpstat.dropped, 1);
 
 	if (route != NULL) {
+		if (send_probe_notif) {
+			route_event_enqueue_nwk_wq_entry(route, NULL,
+			    ROUTE_LLENTRY_PROBED, NULL, TRUE);
+
+			if (route->rt_flags & RTF_ROUTER) {
+				struct radix_node_head  *rnh = NULL;
+				struct route_event rt_ev;
+				route_event_init(&rt_ev, route, NULL, ROUTE_LLENTRY_PROBED);
+				/*
+				 * We already have a reference on rt. The function
+				 * frees it before returning.
+				 */
+				RT_UNLOCK(route);
+				lck_mtx_lock(rnh_lock);
+				rnh = rt_tables[AF_INET];
+
+				if (rnh != NULL)
+					(void) rnh->rnh_walktree(rnh,
+					    route_event_walktree, (void *)&rt_ev);
+				lck_mtx_unlock(rnh_lock);
+				RT_LOCK(route);
+			}
+		}
+
 		if (route == hint) {
 			RT_REMREF_LOCKED(route);
 			RT_UNLOCK(route);
@@ -1512,6 +1592,7 @@ arp_ip_handle_input(ifnet_t ifp, u_short arpop,
 	errno_t	error;
 	int created_announcement = 0;
 	int bridged = 0, is_bridge = 0;
+	uint32_t rt_evcode = 0;
 
 	/*
 	 * Here and other places within this routine where we don't hold
@@ -1927,7 +2008,7 @@ match:
 
 	/* cache the gateway (sender HW) address */
 	arp_llreach_alloc(route, ifp, LLADDR(gateway), gateway->sdl_alen,
-	    (arpop == ARPOP_REPLY));
+	    (arpop == ARPOP_REPLY), &rt_evcode);
 
 	llinfo = route->rt_llinfo;
 	/* send a notification that the route is back up */
@@ -1956,6 +2037,34 @@ match:
 	/* Update the llinfo, send out all queued packets at once */
 	llinfo->la_asked = 0;
 	llinfo->la_flags &= ~LLINFO_PROBING;
+	llinfo->la_prbreq_cnt = 0;
+
+	if (rt_evcode) {
+		/*
+		 * Enqueue work item to invoke callback for this route entry
+		 */
+		route_event_enqueue_nwk_wq_entry(route, NULL, rt_evcode, NULL, TRUE);
+
+		if (route->rt_flags & RTF_ROUTER) {
+			struct radix_node_head  *rnh = NULL;
+			struct route_event rt_ev;
+			route_event_init(&rt_ev, route, NULL, rt_evcode);
+			/*
+			 * We already have a reference on rt. The function
+			 * frees it before returning.
+			 */
+			RT_UNLOCK(route);
+			lck_mtx_lock(rnh_lock);
+			rnh = rt_tables[AF_INET];
+
+			if (rnh != NULL)
+				(void) rnh->rnh_walktree(rnh, route_event_walktree,
+				    (void *)&rt_ev);
+			lck_mtx_unlock(rnh_lock);
+			RT_LOCK(route);
+		}
+	}
+
 	if (!qempty(&llinfo->la_holdq)) {
 		uint32_t held;
 		struct mbuf *m0 =
@@ -1972,7 +2081,6 @@ match:
 		RT_REMREF(route);
 		route = NULL;
 	}
-
 
 respond:
 	if (route != NULL) {

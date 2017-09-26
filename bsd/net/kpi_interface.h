@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -49,9 +49,17 @@ struct if_interface_state;
 #include <sys/_types/_sa_family_t.h>
 
 #ifdef XNU_KERNEL_PRIVATE
-#define	KPI_INTERFACE_EMBEDDED 0
+#if CONFIG_EMBEDDED
+#define	KPI_INTERFACE_EMBEDDED 1
 #else
 #define	KPI_INTERFACE_EMBEDDED 0
+#endif
+#else
+#if TARGET_OS_EMBEDDED
+#define	KPI_INTERFACE_EMBEDDED 1
+#else
+#define	KPI_INTERFACE_EMBEDDED 0
+#endif
 #endif
 
 struct timeval;
@@ -124,6 +132,7 @@ enum {
 	IFNET_SUBFAMILY_RESERVED	= 5,
 	IFNET_SUBFAMILY_INTCOPROC	= 6,
 	IFNET_SUBFAMILY_UTUN		= 7,
+	IFNET_SUBFAMILY_IPSEC		= 8,
 };
 
 /*
@@ -219,6 +228,7 @@ enum {
 #ifdef KERNEL_PRIVATE
 	IFNET_CSUM_PARTIAL	= 0x00001000,
 	IFNET_CSUM_SUM16	= IFNET_CSUM_PARTIAL,
+	IFNET_CSUM_ZERO_INVERT	= 0x00002000,
 #endif /* KERNEL_PRIVATE */
 	IFNET_VLAN_TAGGING	= 0x00010000,
 	IFNET_VLAN_MTU		= 0x00020000,
@@ -238,14 +248,14 @@ typedef u_int32_t ifnet_offload_t;
 #ifdef KERNEL_PRIVATE
 #define	IFNET_OFFLOADF_BITS \
 	"\020\1CSUM_IP\2CSUM_TCP\3CSUM_UDP\4CSUM_IP_FRAGS\5IP_FRAGMENT" \
-	"\6CSUM_TCPIPV6\7CSUM_UDPIPV6\10IPV6_FRAGMENT\15CSUM_PARTIAL"	 \
-	"\20VLAN_TAGGING\21VLAN_MTU\25MULTIPAGES\26TSO_IPV4\27TSO_IPV6" \
-	"\30TXSTATUS\31HW_TIMESTAMP\32SW_TIMESTAMP"
+	"\6CSUM_TCPIPV6\7CSUM_UDPIPV6\10IPV6_FRAGMENT\15CSUM_PARTIAL"	\
+	"\16CSUM_ZERO_INVERT\20VLAN_TAGGING\21VLAN_MTU\25MULTIPAGES"	\
+	"\26TSO_IPV4\27TSO_IPV6\30TXSTATUS\31HW_TIMESTAMP\32SW_TIMESTAMP"
 
 #define	IFNET_CHECKSUMF							\
 	(IFNET_CSUM_IP | IFNET_CSUM_TCP | IFNET_CSUM_UDP |		\
 	IFNET_CSUM_FRAGMENT | IFNET_CSUM_TCPIPV6 | IFNET_CSUM_UDPIPV6 | \
-	IFNET_CSUM_PARTIAL)
+	IFNET_CSUM_PARTIAL | IFNET_CSUM_ZERO_INVERT)
 
 #define	IFNET_TSOF							\
 	(IFNET_TSO_IPV4	| IFNET_TSO_IPV6)
@@ -698,6 +708,8 @@ struct ifnet_init_params {
 /* Valid values for flags */
 #define	IFNET_INIT_LEGACY	0x1	/* legacy network interface model */
 #define	IFNET_INIT_INPUT_POLL	0x2	/* opportunistic input polling model */
+#define	IFNET_INIT_NX_NOAUTO	0x4	/* do not auto config nexus */
+#define	IFNET_INIT_ALLOC_KPI	0x8	/* allocated via the ifnet_alloc() KPI */
 
 /*
 	@typedef ifnet_pre_enqueue_func
@@ -747,20 +759,6 @@ typedef void (*ifnet_input_poll_func)(ifnet_t interface, u_int32_t flags,
     u_int32_t max_count, mbuf_t *first_packet, mbuf_t *last_packet,
     u_int32_t *cnt, u_int32_t *len);
 
-#ifdef BSD_KERNEL_PRIVATE
-struct thread;
-typedef errno_t (*ifnet_input_handler_func)(ifnet_t ifp, mbuf_t m_head,
-    mbuf_t m_tail, const struct ifnet_stat_increment_param *s,
-    boolean_t poll, struct thread *tp);
-typedef errno_t (*ifnet_output_handler_func)(ifnet_t interface, mbuf_t data);
-
-extern errno_t ifnet_set_input_handler(struct ifnet *ifp,
-    ifnet_input_handler_func fn);
-extern errno_t ifnet_set_output_handler(struct ifnet *ifp,
-    ifnet_output_handler_func fn);
-extern void ifnet_reset_input_handler(struct ifnet *ifp);
-extern void ifnet_reset_output_handler(struct ifnet *ifp);
-#endif /* BSD_KERNEL_PRIVATE */
 /*
 	@enum Interface control commands
 	@abstract Constants defining control commands.
@@ -1052,6 +1050,13 @@ typedef errno_t (*ifnet_ctl_func)(ifnet_t interface, ifnet_ctl_cmd_t cmd,
 	@field broadcast_addr The link-layer broadcast address for this
 		interface.
 	@field broadcast_len The length of the link-layer broadcast address.
+	@field tx_headroom The amount of headroom space to be reserved in the
+		packet being transmitted on the interface, specified in bytes.
+		Must be a multiple of 8 bytes.
+	@field tx_trailer The amount of trailer space to be reserved in the
+		packet being transmitted on the interface, specified in bytes.
+	@field rx_mit_ival mitigation interval for the rx mitigation logic,
+		specified in microseconds.
 */
 struct ifnet_init_eparams {
 	u_int32_t		ver;			/* required */
@@ -1104,11 +1109,14 @@ struct ifnet_init_eparams {
 	u_int32_t		broadcast_len;		/* required for non point-to-point interfaces */
 	ifnet_framer_extended_func framer_extended;	/* optional */
 	ifnet_subfamily_t	subfamily;		/* optional */
+	u_int16_t		tx_headroom;		/* optional */
+	u_int16_t		tx_trailer;		/* optional */
+	u_int32_t		rx_mit_ival;		/* optional */
 #if !defined(__LP64__)
-	u_int64_t		_____reserved[3];	/* for future use */
+	u_int64_t		____reserved[2];	/* for future use */
 #else
-	u_int32_t		____reserved;		/* pad */
-	u_int64_t		_____reserved[2];	/* for future use */
+	u_int32_t		____reserved;		/* for future use */
+	u_int64_t		_____reserved[1];	/* for future use */
 #endif /* __LP64__ */
 };
 #endif /* KERNEL_PRIVATE */
@@ -1236,8 +1244,16 @@ __BEGIN_DECLS
 		if an interface with the same uniqueid and family has already
 		been allocated and is in use.
  */
+#ifdef KERNEL_PRIVATE
+extern errno_t ifnet_allocate_internal(const struct ifnet_init_params *init,
+    ifnet_t *interface);
+
+#define ifnet_allocate(init, interface) \
+	ifnet_allocate_internal((init), (interface))
+#else
 extern errno_t ifnet_allocate(const struct ifnet_init_params *init,
     ifnet_t *interface);
+#endif /* KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
 /*
@@ -1582,39 +1598,6 @@ extern errno_t ifnet_poll_params(ifnet_t interface,
 	@param interface The interface to start the transmission on.
  */
 extern void ifnet_start(ifnet_t interface);
-
-/*
-	@function ifnet_transmit_burst_start
-	@discussion Inform the kernel about the beginning of transmission
-		of a burst.  This function should be called when a burst of
-		packets are scheduled to get transmitted over the link. The
-		callback will be used by the system to start measuring
-		bandwidth available on that link.  The driver may choose to
-		adopt this scheme for uplink bandwidth measurement, in case
-		the information can't be obtained from the hardware.  Else
-		it may alternatively inform the network stack about the
-		information using ifnet_set_bandwidths.
-	@param interface The interface.
-	@param mbuf_t The first packet in a burst of packets that has been
-		scheduled to transmit.
-*/
-extern void ifnet_transmit_burst_start(ifnet_t interface, mbuf_t pkt);
-
-/*
-	@function ifnet_transmit_burst_end
-	@discussion Inform the kernel about the end of transmission of a burst.
-		This function should be called when the transmission of a burst
-		of packets is done. This information will be used by the
-		system to estimate bandwidth available on that link.  The
-		driver may choose to adopt this scheme for uplink bandwidth
-		measurement, in case the information can't be obtained from
-		the hardware.  Else it may alternatively inform the network
-		stack about the information using ifnet_set_bandwidths.
-	@param interface The interface.
-	@param mbuf_t The last packet in the burst that has been successfully
-		transmitted.
-*/
-extern void ifnet_transmit_burst_end(ifnet_t interface, mbuf_t pkt);
 
 /*
 	@function ifnet_flowid
@@ -3237,7 +3220,7 @@ extern errno_t ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield);
 		IFNET_GET_LOCAL_PORTS_EXTBGIDLEONLY: When bit is set, the
 		port is in the list only if the socket has the option
 		SO_EXTENDED_BK_IDLE set
-		IFNET_GET_LOCAL_PORTS_ACTIVETCPONLY: When bit is set, the
+		IFNET_GET_LOCAL_PORTS_ACTIVEONLY: When bit is set, the
 		port is in the list only if the socket is not in a final TCP
 		state or the connection is not idle in a final TCP state
 	@param bitfield A pointer to 8192 bytes.
@@ -3517,46 +3500,6 @@ extern errno_t ifnet_get_keepalive_offload_frames(ifnet_t ifp,
 */
 extern errno_t ifnet_link_status_report(ifnet_t ifp, const void *buffer,
 	size_t buffer_len);
-
-/*************************************************************************/
-/* Packet preamble                                                       */
-/*************************************************************************/
-/*!
-	@function ifnet_set_packetpreamblelen
-	@discussion
-		Allows a driver to specify a leading space to be
-		reserved in front of the link layer header.
-		The preamble is logically adjoining the link layer which
-		itself is logically contiguous to the network protocol header
-		(e.g. IP).
-		There is no guarantee that packets being sent to the
-		driver has leading space reserved for the preamble.
-		There is also no guarantee the packet will be laid out in a
-		contiguous block of memory.
-		The network protocol header is 32 bit aligned and this dictates
-		the alignment of the link layer header which in turn affects
-		the alignment the packet preamble.
-		This function is intended to be called by the driver. A kext
-		must not call this function on an interface the kext does not
-		own.
-	@param interface The interface.
-	@param len The length of the packet preamble.
-	@result 0 on success otherwise the errno error.
- */
-extern errno_t ifnet_set_packetpreamblelen(ifnet_t interface, u_int32_t len);
-
-/*!
-	@function ifnet_packetpreamblelen
-	@param interface The interface.
-	@result The current packet preamble length.
- */
-extern u_int32_t ifnet_packetpreamblelen(ifnet_t interface);
-
-/*!
-	@function ifnet_maxpacketpreamblelen
-	@result The maximum packet preamble length supported by the system
- */
-extern u_int32_t ifnet_maxpacketpreamblelen(void);
 
 /*************************************************************************/
 /* QoS Fastlane                                                          */

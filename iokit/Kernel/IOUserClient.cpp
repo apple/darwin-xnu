@@ -647,6 +647,7 @@ public:
                        void * reference, vm_size_t referenceSize,
 		       bool clientIs64 );
     virtual void free() APPLE_KEXT_OVERRIDE;
+    void invalidatePort(void);
 
     static bool _handler( void * target,
                           void * ref, IOService * newService, IONotifier * notifier );
@@ -680,6 +681,7 @@ public:
 		       bool clientIs64 );
 
     virtual void free() APPLE_KEXT_OVERRIDE;
+    void invalidatePort(void);
     
     static IOReturn _handler( void * target, void * ref,
                               UInt32 messageType, IOService * provider,
@@ -783,6 +785,11 @@ bool IOServiceUserNotification::init( mach_port_t port, natural_t type,
     bcopy( reference, pingMsg->notifyHeader.reference, referenceSize );
 
     return( true );
+}
+
+void IOServiceUserNotification::invalidatePort(void)
+{
+    if (pingMsg) pingMsg->msgHdr.msgh_remote_port = MACH_PORT_NULL;
 }
 
 void IOServiceUserNotification::free( void )
@@ -939,6 +946,11 @@ bool IOServiceMessageUserNotification::init( mach_port_t port, natural_t type,
     bcopy( reference, pingMsg->notifyHeader.reference, referenceSize );
 
     return( true );
+}
+
+void IOServiceMessageUserNotification::invalidatePort(void)
+{
+    if (pingMsg) pingMsg->msgHdr.msgh_remote_port = MACH_PORT_NULL;
 }
 
 void IOServiceMessageUserNotification::free( void )
@@ -1922,38 +1934,36 @@ kern_return_t is_io_object_get_superclass(
 	io_name_t obj_name, 
 	io_name_t class_name)
 {
-	const OSMetaClass* my_obj = NULL;
-	const OSMetaClass* superclass = NULL;
-	const OSSymbol *my_name = NULL;
-	const char *my_cstr = NULL;
+    IOReturn            ret;
+    const OSMetaClass * meta;
+    const OSMetaClass * super;
+    const OSSymbol    * name;
+    const char        * cstr;
 
-	if (!obj_name || !class_name) 
-		return (kIOReturnBadArgument);
+    if (!obj_name || !class_name)          return (kIOReturnBadArgument);
+    if (master_port != master_device_port) return( kIOReturnNotPrivileged);
 
-    if( master_port != master_device_port)
-        return( kIOReturnNotPrivileged);
+    ret = kIOReturnNotFound;
+    meta = 0;
+    do
+    {
+        name = OSSymbol::withCString(obj_name);
+        if (!name) break;
+        meta = OSMetaClass::copyMetaClassWithName(name);
+        if (!meta) break;
+        super = meta->getSuperClass();
+        if (!super) break;
+        cstr = super->getClassName();
+        if (!cstr) break;
+        strlcpy(class_name, cstr, sizeof(io_name_t));
+        ret = kIOReturnSuccess;
+    }
+    while (false);
 
-	my_name = OSSymbol::withCString(obj_name);
-	
-	if (my_name) {
-		my_obj = OSMetaClass::getMetaClassWithName(my_name);
-		my_name->release();
-	}
-	if (my_obj) {
-		superclass = my_obj->getSuperClass();
-	}
-	
-	if (!superclass)  {
-		return( kIOReturnNotFound );
-	}
+    OSSafeReleaseNULL(name);
+    if (meta) meta->releaseMetaClass();
 
-	my_cstr = superclass->getClassName();
-		
-	if (my_cstr) {
-		strlcpy(class_name, my_cstr, sizeof(io_name_t));
-		return( kIOReturnSuccess );
-	}
-	return (kIOReturnNotFound);
+    return (ret);
 }
 
 /* Routine io_object_get_bundle_identifier */
@@ -1962,38 +1972,36 @@ kern_return_t is_io_object_get_bundle_identifier(
 	io_name_t obj_name, 
 	io_name_t bundle_name)
 {
-	const OSMetaClass* my_obj = NULL;
-	const OSSymbol *my_name = NULL;
-	const OSSymbol *identifier = NULL;
-	const char *my_cstr = NULL;
+    IOReturn            ret;
+    const OSMetaClass * meta;
+    const OSSymbol    * name;
+    const OSSymbol    * identifier;
+    const char        * cstr;
 
-	if (!obj_name || !bundle_name) 
-		return (kIOReturnBadArgument);
+    if (!obj_name || !bundle_name)         return (kIOReturnBadArgument);
+    if (master_port != master_device_port) return( kIOReturnNotPrivileged);
 
-    if( master_port != master_device_port)
-        return( kIOReturnNotPrivileged);
-	
-	my_name = OSSymbol::withCString(obj_name);	
-	
-	if (my_name) {
-		my_obj = OSMetaClass::getMetaClassWithName(my_name);
-		my_name->release();
-	}
+    ret = kIOReturnNotFound;
+    meta = 0;
+    do
+    {
+        name = OSSymbol::withCString(obj_name);
+        if (!name) break;
+        meta = OSMetaClass::copyMetaClassWithName(name);
+        if (!meta) break;
+        identifier = meta->getKmodName();
+        if (!identifier) break;
+        cstr = identifier->getCStringNoCopy();
+        if (!cstr) break;
+        strlcpy(bundle_name, identifier->getCStringNoCopy(), sizeof(io_name_t));
+        ret = kIOReturnSuccess;
+    }
+    while (false);
 
-	if (my_obj) {
-		identifier = my_obj->getKmodName();
-	}
-	if (!identifier) {
-		return( kIOReturnNotFound );
-	}
-	
-	my_cstr = identifier->getCStringNoCopy();
-	if (my_cstr) {
-		strlcpy(bundle_name, identifier->getCStringNoCopy(), sizeof(io_name_t));
-		return( kIOReturnSuccess );
-	}
+    OSSafeReleaseNULL(name);
+    if (meta) meta->releaseMetaClass();
 
-	return (kIOReturnBadArgument);
+    return (ret);
 }
 
 /* Routine io_object_conforms_to */
@@ -2328,7 +2336,8 @@ static kern_return_t internal_io_service_add_notification(
 	else if( (sym == gIOMatchedNotification)
 	      || (sym == gIOFirstMatchNotification))
 	    userMsgType = kIOServiceMatchedNotificationType;
-	else if( sym == gIOTerminatedNotification)
+	else if ((sym == gIOTerminatedNotification)
+	      || (sym == gIOWillTerminateNotification))
 	    userMsgType = kIOServiceTerminatedNotificationType;
 	else
 	    userMsgType = kLastIOKitNotificationType;
@@ -2337,7 +2346,6 @@ static kern_return_t internal_io_service_add_notification(
 
         if( userNotify && !userNotify->init( port, userMsgType,
                                              reference, referenceSize, client64)) {
-			iokit_release_port_send(port);
             userNotify->release();
             userNotify = 0;
         }
@@ -2354,6 +2362,13 @@ static kern_return_t internal_io_service_add_notification(
 	    err = kIOReturnUnsupported;
 
     } while( false );
+
+    if ((kIOReturnSuccess != err) && userNotify)
+    {
+	userNotify->invalidatePort();
+	userNotify->release();
+	userNotify = 0;
+    }
 
     if( sym)
 	sym->release();
@@ -2530,7 +2545,6 @@ static kern_return_t internal_io_service_add_interest_notification(
                                              reference, referenceSize,
 					     kIOUserNotifyMaxMessageSize,
 					     client64 )) {
-			iokit_release_port_send(port);
             userNotify->release();
             userNotify = 0;
         }
@@ -2549,6 +2563,13 @@ static kern_return_t internal_io_service_add_interest_notification(
 	sym->release();
 
     } while( false );
+
+    if ((kIOReturnSuccess != err) && userNotify)
+    {
+	userNotify->invalidatePort();
+	userNotify->release();
+	userNotify = 0;
+    }
 
     return( err );
 }
@@ -3974,6 +3995,8 @@ kern_return_t is_io_connect_async_method
     args.asyncReference      = reference;
     args.asyncReferenceCount = referenceCnt;
 
+    args.structureVariableOutputData = 0;
+
     args.scalarInput = scalar_input;
     args.scalarInputCount = scalar_inputCnt;
     args.structureInput = inband_input;
@@ -5120,7 +5143,7 @@ kern_return_t is_io_catalog_get_data(
         vm_size_t size;
 
         size = s->getLength();
-        kr = vm_allocate(kernel_map, &data, size, VM_FLAGS_ANYWHERE);
+        kr = vm_allocate_kernel(kernel_map, &data, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IOKIT);
         if ( kr == kIOReturnSuccess ) {
             bcopy(s->text(), (void *)data, size);
             kr = vm_map_copyin(kernel_map, (vm_map_address_t)data,

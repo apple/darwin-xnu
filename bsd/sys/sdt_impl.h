@@ -77,6 +77,10 @@ extern int          sdt_probetab_mask;
 
 #if defined(__x86_64__)
 typedef uint8_t sdt_instr_t;
+#elif defined(__arm__)
+typedef uint16_t sdt_instr_t;
+#elif defined(__arm64__)
+typedef uint32_t sdt_instr_t;
 #else
 #error Unknown implementation
 #endif

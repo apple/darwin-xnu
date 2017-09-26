@@ -33,6 +33,7 @@
 
 #include <sys/cdefs.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <uuid/uuid.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
@@ -189,7 +190,6 @@ enum generic_snapshot_flags {
 	kKernel64_p 		= 0x2
 };
 
-
 #define VM_PRESSURE_TIME_WINDOW 5 /* seconds */
 
 enum {
@@ -238,120 +238,90 @@ enum {
 	STACKSHOT_NO_IO_STATS                      = 0x800000,
 	/* Report owners of and pointers to kernel objects that threads are blocked on */
 	STACKSHOT_THREAD_WAITINFO                  = 0x1000000,
+	STACKSHOT_THREAD_GROUP                     = 0x2000000,
+	STACKSHOT_SAVE_JETSAM_COALITIONS           = 0x4000000,
+	STACKSHOT_INSTRS_CYCLES                    = 0x8000000,
 };
 
-#define STACKSHOT_THREAD_SNAPSHOT_MAGIC 	0xfeedface
-#define STACKSHOT_TASK_SNAPSHOT_MAGIC   	0xdecafbad
-#define STACKSHOT_MEM_AND_IO_SNAPSHOT_MAGIC	0xbfcabcde
-#define STACKSHOT_MICRO_SNAPSHOT_MAGIC		0x31c54011
+#define STACKSHOT_THREAD_SNAPSHOT_MAGIC     0xfeedface
+#define STACKSHOT_TASK_SNAPSHOT_MAGIC       0xdecafbad
+#define STACKSHOT_MEM_AND_IO_SNAPSHOT_MAGIC 0xbfcabcde
+#define STACKSHOT_MICRO_SNAPSHOT_MAGIC      0x31c54011
+
+#define KF_INITIALIZED (0x1)
+#define KF_SERIAL_OVRD (0x2)
+#define KF_PMAPV_OVRD (0x4)
+#define KF_MATV_OVRD (0x8)
+#define KF_STACKSHOT_OVRD (0x10)
+#define KF_COMPRSV_OVRD (0x20)
+
+boolean_t kern_feature_override(uint32_t fmask);
+
+/*
+ * Any updates to this header should be also updated in astris as it can not
+ * grab this header from the SDK.
+ *
+ * NOTE: DO NOT REMOVE OR CHANGE THE MEANING OF ANY FIELDS FROM THIS STRUCTURE.
+ *       Any modifications should add new fields at the end, bump the version number
+ *       and be done alongside astris and DumpPanic changes.
+ */
+struct embedded_panic_header {
+	uint32_t eph_magic;                /* PANIC_MAGIC if valid */
+	uint32_t eph_crc;                  /* CRC of everything following the ph_crc in the header and the contents */
+	uint32_t eph_version;              /* embedded_panic_header version */
+	uint64_t eph_panic_flags;          /* Flags indicating any state or relevant details */
+	uint32_t eph_panic_log_offset;     /* Offset of the beginning of the panic log from the beginning of the header */
+	uint32_t eph_panic_log_len;        /* length of the panic log */
+	uint32_t eph_stackshot_offset;     /* Offset of the beginning of the panic stackshot from the beginning of the header */
+	uint32_t eph_stackshot_len;        /* length of the panic stackshot (0 if not valid ) */
+	uint32_t eph_other_log_offset;     /* Offset of the other log (any logging subsequent to the stackshot) from the beginning of the header */
+	uint32_t eph_other_log_len;        /* length of the other log */
+} __attribute__((packed));
+
+#define EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_COMPLETE             0x01
+#define EMBEDDED_PANIC_HEADER_FLAG_STACKSHOT_SUCCEEDED           0x02
+#define EMBEDDED_PANIC_HEADER_FLAG_STACKSHOT_FAILED_DEBUGGERSYNC 0x04
+#define EMBEDDED_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR        0x08
+#define EMBEDDED_PANIC_HEADER_FLAG_STACKSHOT_FAILED_INCOMPLETE   0x10
+#define EMBEDDED_PANIC_HEADER_FLAG_STACKSHOT_FAILED_NESTED       0x20
+#define EMBEDDED_PANIC_HEADER_FLAG_NESTED_PANIC                  0x40
+#define EMBEDDED_PANIC_HEADER_FLAG_BUTTON_RESET_PANIC            0x80
+#define EMBEDDED_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC        0x100
+
+#define EMBEDDED_PANIC_HEADER_CURRENT_VERSION 1
+#define EMBEDDED_PANIC_MAGIC 0x46554E4B /* FUNK */
+
+struct macos_panic_header {
+	uint32_t mph_magic;              /* PANIC_MAGIC if valid */
+	uint32_t mph_crc;                /* CRC of everything following mph_crc in the header and the contents */
+	uint32_t mph_version;            /* macos_panic_header version */
+	uint32_t mph_padding;            /* unused */
+	uint64_t mph_panic_flags;        /* Flags indicating any state or relevant details */
+	uint32_t mph_panic_log_offset;   /* Offset of the panic log from the beginning of the header */
+	uint32_t mph_panic_log_len;      /* length of the panic log */
+	char     mph_data[];             /* panic data -- DO NOT ACCESS THIS FIELD DIRECTLY. Use the offsets above relative to the beginning of the header */
+} __attribute__((packed));
+
+#define MACOS_PANIC_HEADER_CURRENT_VERSION 1
+#define MACOS_PANIC_MAGIC 0x44454544 /* DEED */
+
+#define MACOS_PANIC_HEADER_FLAG_NESTED_PANIC            0x01
+#define MACOS_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC  0x02
 
 #endif /* __APPLE_API_UNSTABLE */
 #endif /* __APPLE_API_PRIVATE */
 
-#ifdef	KERNEL_PRIVATE
+#ifdef KERNEL
 
-extern unsigned int	systemLogDiags;
-#if (!defined(__arm64__) && !defined(NAND_PANIC_DEVICE)) || defined(LEGACY_PANIC_LOGS)
-extern char debug_buf[];
-#endif
-extern char *debug_buf_addr;
-extern char *debug_buf_stackshot_start;
-extern char *debug_buf_stackshot_end;
+__BEGIN_DECLS
 
-extern unsigned int	debug_boot_arg;
-extern unsigned char *kernel_uuid;
-extern char kernel_uuid_string[];
-extern char   panic_disk_error_description[];
-extern size_t panic_disk_error_description_size;
+extern void panic(const char *string, ...) __printflike(1,2);
 
-#ifdef MACH_KERNEL_PRIVATE
+__END_DECLS
 
-extern boolean_t	doprnt_hide_pointers;
+#endif /* KERNEL */
 
-extern unsigned int	halt_in_debugger;
-
-extern unsigned int     switch_debugger;
-
-extern unsigned int     current_debugger;
-#define NO_CUR_DB       0x0
-#define KDP_CUR_DB      0x1
-//#define KDB_CUR_DB      0x2
-#define HW_SHM_CUR_DB   0x3
-
-extern unsigned int 	active_debugger;
-extern unsigned int 	debug_mode; 
-extern unsigned int 	disable_debug_output; 
-
-extern unsigned int 	panicDebugging;
-extern unsigned int 	logPanicDataToScreen;
-extern unsigned int 	kdebug_serial;
-
-extern int db_run_mode;
-
-/* modes the system may be running in */
-
-#define	STEP_NONE	0
-#define	STEP_ONCE	1
-#define	STEP_RETURN	2
-#define	STEP_CALLT	3
-#define	STEP_CONTINUE	4
-#define STEP_INVISIBLE	5
-#define	STEP_COUNT	6
-#define STEP_TRACE	7	/* Show all calls to functions and returns */
-
-extern const char		*panicstr;
-extern volatile unsigned int	nestedpanic;
-extern int unsigned long panic_caller;
-
-extern char *debug_buf_ptr;
-extern unsigned int debug_buf_size;
-
-extern void	debug_log_init(void);
-extern void	debug_putc(char);
-
-extern void	panic_init(void);
-
-int	packA(char *inbuf, uint32_t length, uint32_t buflen);
-void	unpackA(char *inbuf, uint32_t length);
-
-void	panic_display_system_configuration(boolean_t launchd_exit);
-void	panic_display_zprint(void);
-void	panic_display_kernel_aslr(void);
-void	panic_display_hibb(void);
-void	panic_display_model_name(void);
-void	panic_display_kernel_uuid(void);
-#if CONFIG_ZLEAKS
-void	panic_display_ztrace(void);
-#endif /* CONFIG_ZLEAKS */
-#if CONFIG_ECC_LOGGING
-void 	panic_display_ecc_errors(void);
-#endif /* CONFIG_ECC_LOGGING */
-#endif /* MACH_KERNEL_PRIVATE */
-
-#define DB_HALT		0x1
-#define DB_PRT		0x2
-#define DB_NMI		0x4
-#define DB_KPRT		0x8
-#define DB_KDB		0x10
-#define DB_SLOG		0x20
-#define DB_ARP          0x40
-#define DB_KDP_BP_DIS   0x80
-#define DB_LOG_PI_SCRN	0x100
-#define DB_KDP_GETC_ENA 0x200
-
-#define DB_KERN_DUMP_ON_PANIC		0x400 /* Trigger core dump on panic*/
-#define DB_KERN_DUMP_ON_NMI		0x800 /* Trigger core dump on NMI */
-#define DB_DBG_POST_CORE		0x1000 /*Wait in debugger after NMI core */
-#define DB_PANICLOG_DUMP		0x2000 /* Send paniclog on panic,not core*/
-#define DB_REBOOT_POST_CORE		0x4000 /* Attempt to reboot after
-						* post-panic crashdump/paniclog
-						* dump.
-						*/
-#define DB_NMI_BTN_ENA  	0x8000  /* Enable button to directly trigger NMI */
-#define DB_PRT_KDEBUG   	0x10000 /* kprintf KDEBUG traces */
-#define DB_DISABLE_LOCAL_CORE   0x20000 /* ignore local kernel core dump support */
-#define DB_DISABLE_GZIP_CORE    0x40000 /* don't gzip kernel core dumps */
-
+#ifdef KERNEL_PRIVATE
 #if DEBUG
 /*
  * For the DEBUG kernel, support the following:
@@ -397,38 +367,73 @@ enum {
 #define DEBUG_KPRINT_SYSCALL_IPC(fmt, args...)				\
 	DEBUG_KPRINT_SYSCALL_MASK(DEBUG_KPRINT_SYSCALL_IPC_MASK,fmt,args)
 
+/* Debug boot-args */
+#define DB_HALT		0x1
+//#define DB_PRT          0x2 -- obsolete
+#define DB_NMI		0x4
+#define DB_KPRT		0x8
+#define DB_KDB		0x10
+#define DB_ARP          0x40
+#define DB_KDP_BP_DIS   0x80
+//#define DB_LOG_PI_SCRN  0x100 -- obsolete
+#define DB_KDP_GETC_ENA 0x200
+
+#define DB_KERN_DUMP_ON_PANIC		0x400 /* Trigger core dump on panic*/
+#define DB_KERN_DUMP_ON_NMI		0x800 /* Trigger core dump on NMI */
+#define DB_DBG_POST_CORE		0x1000 /*Wait in debugger after NMI core */
+#define DB_PANICLOG_DUMP		0x2000 /* Send paniclog on panic,not core*/
+#define DB_REBOOT_POST_CORE		0x4000 /* Attempt to reboot after
+						* post-panic crashdump/paniclog
+						* dump.
+						*/
+#define DB_NMI_BTN_ENA  	0x8000  /* Enable button to directly trigger NMI */
+#define DB_PRT_KDEBUG   	0x10000 /* kprintf KDEBUG traces */
+#define DB_DISABLE_LOCAL_CORE   0x20000 /* ignore local kernel core dump support */
+#define DB_DISABLE_GZIP_CORE    0x40000 /* don't gzip kernel core dumps */
+
+/*
+ * Values for a 64-bit mask that's passed to the debugger.
+ */
+#define DEBUGGER_OPTION_NONE			0x0ULL
+#define DEBUGGER_OPTION_PANICLOGANDREBOOT	0x1ULL /* capture a panic log and then reboot immediately */
+#define DEBUGGER_OPTION_RECURPANIC_ENTRY        0x2ULL
+#define DEBUGGER_OPTION_RECURPANIC_PRELOG       0x4ULL
+#define DEBUGGER_OPTION_RECURPANIC_POSTLOG      0x8ULL
+#define DEBUGGER_OPTION_RECURPANIC_POSTCORE     0x10ULL
+#define DEBUGGER_OPTION_INITPROC_PANIC          0x20ULL
+#define DEBUGGER_OPTION_COPROC_INITIATED_PANIC  0x40ULL /* panic initiated by a co-processor */
+#define DEBUGGER_OPTION_SKIP_LOCAL_COREDUMP     0x80ULL /* don't try to save local coredumps for this panic */
+
+__BEGIN_DECLS
+
+#define panic_plain(ex, ...)  (panic)(ex, ## __VA_ARGS__)
+
+#define __STRINGIFY(x) #x
+#define LINE_NUMBER(x) __STRINGIFY(x)
+#define PANIC_LOCATION __FILE__ ":" LINE_NUMBER(__LINE__)
+
+#if CONFIG_EMBEDDED
+#define panic(ex, ...) (panic)(# ex, ## __VA_ARGS__)
+#else
+#define panic(ex, ...) (panic)(# ex "@" PANIC_LOCATION, ## __VA_ARGS__)
+#endif
+
+void panic_context(unsigned int reason, void *ctx, const char *string, ...);
+void panic_with_options(unsigned int reason, void *ctx, uint64_t debugger_options_mask, const char *str, ...);
+void Debugger(const char * message);
+void populate_model_name(char *);
+
+unsigned panic_active(void);
+
+__END_DECLS
+
 #endif	/* KERNEL_PRIVATE */
 
-
-#ifdef XNU_KERNEL_PRIVATE
-
-/*
- * @var not_in_kdp
- *
- * @abstract True if we're in normal kernel operation, False if we're in a
- * single-core debugger context.
- */
-extern unsigned int not_in_kdp;
-
-/*
- * @function DebuggerWithCallback
- *
- * @abstract Enter single-core debugger context and call a callback function.
- *
- * @param proceed_on_sync_failure If true, then go ahead and try to debug even
- * if we can't synch with the other cores.  This is inherently unsafe and should
- * only be used if the kernel is going down in flames anyway.
- *
- * @result returns KERN_OPERATION_TIMED_OUT if synchronization times out and
- * proceed_on_sync_failure is false.  Otherwise return the return value of the
- * callback.
- */
-kern_return_t
-DebuggerWithCallback(kern_return_t (*callback) (void*),
-					 void *callback_context,
-					 boolean_t proceed_on_sync_failure);
+#if XNU_KERNEL_PRIVATE
 
 boolean_t oslog_is_safe(void);
+boolean_t debug_mode_active(void);
+boolean_t stackshot_active(void);
 
 /*
  * @function stack_snapshot_from_kernel
@@ -453,55 +458,111 @@ stack_snapshot_from_kernel(int pid, void *buf, uint32_t size, uint32_t flags,
 }
 #endif
 
+#if !CONFIG_EMBEDDED
+extern char debug_buf[];
+extern boolean_t coprocessor_paniclog_flush;
+#endif /* !CONFIG_EMBEDDED */
 
-#endif /* XNU_KERNEL_PRIVATE */
+extern char	*debug_buf_base;
 
-#ifdef KERNEL
+extern char	kernel_uuid_string[];
+extern char   	panic_disk_error_description[];
+extern size_t	panic_disk_error_description_size;
 
-__BEGIN_DECLS
+extern unsigned char	*kernel_uuid;
+extern unsigned int	debug_boot_arg;
 
-extern void panic(const char *string, ...) __printflike(1,2);
+#ifdef XNU_KERNEL_PRIVATE
 
-#if KERNEL_PRIVATE
-void _consume_panic_args(int, ...);
-void panic_context(unsigned int reason, void *ctx, const char *string, ...);
-void panic_with_options(unsigned int reason, void *ctx, uint64_t debugger_options_mask, const char *str, ...);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-/* launchd crashed prefix in message to signal special panic handling */
-#define	LAUNCHD_CRASHED_PREFIX			"initproc exited"
+extern boolean_t	doprnt_hide_pointers;
+
+#ifdef __cplusplus
+}
+#endif
+
+extern unsigned int	halt_in_debugger; /* pending halt in debugger after boot */
+extern unsigned int     current_debugger;
+#define NO_CUR_DB       0x0
+#define KDP_CUR_DB      0x1
+
+extern unsigned int 	active_debugger;
+extern unsigned int 	kernel_debugger_entry_count;
+
+extern unsigned int 	panicDebugging;
+extern unsigned int	kdebug_serial;
+
+extern const char	*debugger_panic_str;
+
+extern char *debug_buf_ptr;
+
+#if CONFIG_EMBEDDED
+extern unsigned int debug_buf_size;
+#else
+extern const unsigned int debug_buf_size;
+#endif
+
+extern void	debug_log_init(void);
+extern void	debug_putc(char);
+
+extern void	panic_init(void);
+
+#if defined (__x86_64__)
+int	packA(char *inbuf, uint32_t length, uint32_t buflen);
+void	unpackA(char *inbuf, uint32_t length);
+
+#if DEVELOPMENT || DEBUG
+#define PANIC_STACKSHOT_BUFSIZE (1024 * 1024)
+
+extern uintptr_t panic_stackshot_buf;
+extern size_t panic_stackshot_len;
+#endif /* DEVELOPMENT || DEBUG */
+#endif /* defined (__x86_64__) */
+
+void 	SavePanicInfo(const char *message, uint64_t panic_options);
+void    paniclog_flush(void);
+void	panic_display_system_configuration(boolean_t launchd_exit);
+void	panic_display_zprint(void);
+void	panic_display_kernel_aslr(void);
+void	panic_display_hibb(void);
+void	panic_display_model_name(void);
+void	panic_display_kernel_uuid(void);
+#if CONFIG_ZLEAKS
+void	panic_display_ztrace(void);
+#endif /* CONFIG_ZLEAKS */
+#if CONFIG_ECC_LOGGING
+void 	panic_display_ecc_errors(void);
+#endif /* CONFIG_ECC_LOGGING */
+#endif /* MACH_KERNEL_PRIVATE */
 
 /*
- * Values for a 64-bit mask that's passed to the debugger.
+ * @var not_in_kdp
+ *
+ * @abstract True if we're in normal kernel operation, False if we're in a
+ * single-core debugger context.
  */
-#define DEBUGGER_OPTION_NONE			0x0ULL
-#define DEBUGGER_OPTION_PANICLOGANDREBOOT	0x1ULL /* capture a panic log and then reboot immediately */
-#endif
+extern unsigned int not_in_kdp;
 
-#ifdef CONFIG_NO_PANIC_STRINGS
-#if KERNEL_PRIVATE
-#define panic_plain(x, ...) _consume_panic_args( 0, ## __VA_ARGS__ )
-#define panic(x, ...) _consume_panic_args( 0, ## __VA_ARGS__ )
-#else
-#define panic_plain(...) (panic)((char *)0)
-#define panic(...)  (panic)((char *)0)
-#endif
-#else /* CONFIGS_NO_PANIC_STRINGS */
-#define panic_plain(ex, ...) \
-	(panic)(ex, ## __VA_ARGS__)
-#define __STRINGIFY(x) #x
-#define LINE_NUMBER(x) __STRINGIFY(x)
-#define PANIC_LOCATION __FILE__ ":" LINE_NUMBER(__LINE__)
-#define panic(ex, ...) \
-	(panic)(# ex "@" PANIC_LOCATION, ## __VA_ARGS__)
-#endif /* CONFIGS_NO_PANIC_STRINGS */
+#define DEBUGGER_NO_CPU -1
 
-#ifdef KERNEL_PRIVATE
-void 		populate_model_name(char *);
-unsigned	panic_active(void);
-#endif
+typedef enum {
+	DBOP_NONE,
+	DBOP_STACKSHOT,
+	DBOP_RESET_PGO_COUNTERS,
+	DBOP_PANIC,
+	DBOP_DEBUGGER,
+	DBOP_BREAKPOINT,
+} debugger_op;
 
+kern_return_t DebuggerTrapWithState(debugger_op db_op, const char *db_message, const char *db_panic_str, va_list *db_panic_args,
+		uint64_t db_panic_options, boolean_t db_proceed_on_sync_failure, unsigned long db_panic_caller);
+void handle_debugger_trap(unsigned int exception, unsigned int code, unsigned int subcode, void *state);
 
-#if XNU_KERNEL_PRIVATE
+void DebuggerWithContext(unsigned int reason, void *ctx, const char *message, uint64_t debugger_options_mask);
+
 #if DEBUG || DEVELOPMENT
 /* leak pointer scan definitions */
 
@@ -518,20 +579,24 @@ enum
 typedef void (*leak_site_proc)(void * refCon, uint32_t siteCount, uint32_t zoneSize,
                                uintptr_t * backtrace, uint32_t btCount);
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern kern_return_t
 zone_leaks(const char * zoneName, uint32_t nameLen, leak_site_proc proc, void * refCon);
 
 extern void
 zone_leaks_scan(uintptr_t * instances, uint32_t count, uint32_t zoneSize, uint32_t * found);
 
+#ifdef __cplusplus
+}
+#endif
+
 extern boolean_t
 kdp_is_in_zone(void *addr, const char *zone_name);
 
 #endif  /* DEBUG || DEVELOPMENT */
 #endif  /* XNU_KERNEL_PRIVATE */
-
-__END_DECLS
-
-#endif /* KERNEL */
 
 #endif	/* _KERN_DEBUG_H_ */

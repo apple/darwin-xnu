@@ -198,7 +198,7 @@ IOReturn RootDomainUserClient::secureSetUserAssertionLevels(
 }
 
 IOReturn RootDomainUserClient::secureGetSystemSleepType(
-    uint32_t    *outSleepType)
+    uint32_t    *outSleepType, uint32_t *sleepTimer)
 {
     int                     admin_priv = 0;
     IOReturn                ret;
@@ -207,7 +207,7 @@ IOReturn RootDomainUserClient::secureGetSystemSleepType(
     admin_priv = (kIOReturnSuccess == ret);
 
     if (admin_priv && fOwner) {
-        ret = fOwner->getSystemSleepType(outSleepType);
+        ret = fOwner->getSystemSleepType(outSleepType, sleepTimer);
     } else {
         ret = kIOReturnNotPrivileged;
     }
@@ -333,10 +333,11 @@ IOReturn RootDomainUserClient::externalMethod(
             break;
 
         case kPMGetSystemSleepType:
-            if (1 == arguments->scalarOutputCount)
+            if (2 == arguments->scalarOutputCount)
             {
                 ret = this->secureGetSystemSleepType(
-                        (uint32_t *) &arguments->scalarOutput[0]);
+                        (uint32_t *) &arguments->scalarOutput[0],
+                        (uint32_t *) &arguments->scalarOutput[1]);
             }
             break;
 

@@ -78,16 +78,17 @@
 #include <sys/tree.h>
 #include <kern/locks.h>
 #include <kern/zalloc.h>
+#include <netinet/in_stat.h>
 #endif /* BSD_KERNEL_PRIVATE */
 
+#if IPSEC
 #include <netinet6/ipsec.h> /* for IPSEC */
+#endif /* IPSEC */
+
 #if NECP
 #include <net/necp.h>
 #endif
 
-#if IPSEC
-#include <netinet6/ipsec.h> /* for IPSEC */
-#endif
 
 #ifdef BSD_KERNEL_PRIVATE
 /*
@@ -219,6 +220,8 @@ struct inpcb {
 		char *inp_account;
 	} inp_necp_attributes;
 	struct necp_inpcb_result inp_policyresult;
+	uuid_t necp_client_uuid;
+	void	(*necp_cb)(void *, int, struct necp_client_flow *);
 #endif
 	u_char *inp_keepalive_data;	/* for keepalive offload */
 	u_int8_t inp_keepalive_datalen; /* keepalive data length */
@@ -233,6 +236,8 @@ struct inpcb {
 	u_int8_t inp_cstat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
 	u_int8_t inp_wstat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
 	u_int8_t inp_Wstat_store[sizeof (struct inp_stat) + sizeof (u_int64_t)];
+	activity_bitmap_t inp_nw_activity;
+	u_int64_t inp_start_timestamp;
 };
 
 #define	INP_ADD_STAT(_inp, _cnt_cellular, _cnt_wifi, _cnt_wired, _a, _n)\
@@ -367,6 +372,7 @@ struct	xinpcb {
 	u_quad_t	xi_alignment_hack;
 };
 
+#if !CONFIG_EMBEDDED
 struct inpcb64_list_entry {
     u_int64_t   le_next;
     u_int64_t   le_prev;
@@ -408,6 +414,7 @@ struct	xinpcb64 {
 	struct  xsocket64 xi_socket;
 	u_quad_t	xi_alignment_hack;
 };
+#endif /* !CONFIG_EMBEDDED */
 
 #ifdef PRIVATE
 struct xinpcb_list_entry {
@@ -596,6 +603,7 @@ struct inpcbinfo {
 	lck_grp_attr_t		*ipi_lock_grp_attr;
 
 #define	INPCBINFO_UPDATE_MSS	0x1
+#define	INPCBINFO_HANDLE_LQM_ABORT	0x2
 	u_int32_t		ipi_flags;
 };
 
@@ -699,6 +707,7 @@ struct inpcbinfo {
 #define	INP2_AWDL_UNRESTRICTED	0x00000020 /* AWDL restricted mode allowed */
 #define	INP2_KEEPALIVE_OFFLOAD	0x00000040 /* Enable UDP or TCP keepalive offload */
 #define INP2_INTCOPROC_ALLOWED	0x00000080 /* Allow communication via internal co-processor interfaces */
+#define INP2_CONNECT_IN_PROGRESS	0x00000100 /* A connect call is in progress, so binds are intermediate steps */
 
 /*
  * Flags passed to in_pcblookup*() functions.
@@ -768,13 +777,14 @@ extern void in_pcbnotifyall(struct inpcbinfo *, struct in_addr, int,
     void (*)(struct inpcb *, int));
 extern void in_pcbrehash(struct inpcb *);
 extern int in_getpeeraddr(struct socket *, struct sockaddr **);
-extern int in_getpeeraddr_s(struct socket *, struct sockaddr_storage *);
 extern int in_getsockaddr(struct socket *, struct sockaddr **);
-extern int in_getsockaddr_s(struct socket *, struct sockaddr_storage *);
+extern int in_getsockaddr_s(struct socket *, struct sockaddr_in *);
 extern int in_pcb_checkstate(struct inpcb *, int, int);
 extern void in_pcbremlists(struct inpcb *);
 extern void inpcb_to_compat(struct inpcb *, struct inpcb_compat *);
+#if !CONFIG_EMBEDDED
 extern void inpcb_to_xinpcb64(struct inpcb *, struct xinpcb64 *);
+#endif
 
 extern int get_pcblist_n(short, struct sysctl_req *, struct inpcbinfo *);
 #define	INPCB_GET_PORTS_USED_WILDCARDOK	0x01
@@ -825,6 +835,8 @@ extern void inp_incr_sndbytes_unsent(struct socket *, int32_t);
 extern void inp_decr_sndbytes_unsent(struct socket *, int32_t);
 extern int32_t inp_get_sndbytes_allunsent(struct socket *, u_int32_t);
 extern void inp_decr_sndbytes_allunsent(struct socket *, u_int32_t);
+extern void inp_set_activity_bitmap(struct inpcb *inp);
+extern void inp_get_activity_bitmap(struct inpcb *inp, activity_bitmap_t *b);
 #endif /* BSD_KERNEL_PRIVATE */
 #ifdef KERNEL_PRIVATE
 /* exported for PPP */

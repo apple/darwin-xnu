@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,9 +76,8 @@ struct tcp_cc_debug_state {
 	} u;
 };
 
-int tcp_cc_debug = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, cc_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&tcp_cc_debug, 0, "Enable debug data collection");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, cc_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
+	int, tcp_cc_debug, 0, "Enable debug data collection");
 
 extern struct tcp_cc_algo tcp_cc_newreno;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, newreno_sockets,
@@ -95,9 +94,8 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, cubic_sockets,
 	CTLFLAG_RD | CTLFLAG_LOCKED,&tcp_cc_cubic.num_sockets, 
 	0, "Number of sockets using cubic");
 
-int tcp_use_newreno = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, use_newreno,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_use_newreno, 0, 
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, use_newreno,
+	CTLFLAG_RW | CTLFLAG_LOCKED, int, tcp_use_newreno, 0,
 	"Use TCP NewReno by default");
 
 static int tcp_check_cwnd_nonvalidated = 1;
@@ -299,7 +297,7 @@ void tcp_bad_rexmt_fix_sndbuf(struct tcpcb *tp)
 	sb = &tp->t_inpcb->inp_socket->so_snd;
 	if ((sb->sb_flags & (SB_TRIM|SB_AUTOSIZE)) == (SB_TRIM|SB_AUTOSIZE)) {
 		/*
-		 * If there was a retransmission that was not necessary 
+		 * If there was a retransmission that was not necessary
 		 * then the size of socket buffer can be restored to
 		 * what it was before
 		 */
@@ -426,11 +424,19 @@ tcp_cc_after_idle_stretchack(struct tcpcb *tp)
 inline uint32_t
 tcp_cc_is_cwnd_nonvalidated(struct tcpcb *tp)
 {
+	struct socket *so = tp->t_inpcb->inp_socket;
 	if (tp->t_pipeack == 0 || tcp_check_cwnd_nonvalidated == 0) {
 		tp->t_flagsext &= ~TF_CWND_NONVALIDATED;
 		return (0);
 	}
-	if (tp->t_pipeack >= (tp->snd_cwnd) >> 1)
+
+	/*
+	 * The congestion window is validated if the number of bytes acked
+	 * is more than half of the current window or if there is more
+	 * data to send in the send socket buffer
+	 */
+	if (tp->t_pipeack >= (tp->snd_cwnd >> 1) ||
+	    (so != NULL && so->so_snd.sb_cc > tp->snd_cwnd))
 		tp->t_flagsext &= ~TF_CWND_NONVALIDATED;
 	else
 		tp->t_flagsext |= TF_CWND_NONVALIDATED;

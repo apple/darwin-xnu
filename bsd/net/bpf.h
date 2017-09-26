@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1203,8 +1203,12 @@ struct bpf_mtag {
  */
 #define DLT_NFC_LLCP		245
 
+/*
+ * USB packets, beginning with a Darwin (macOS, etc.) USB header.
+ */
+#define DLT_USB_DARWIN		266
 
-#define DLT_MATCHING_MAX	245	/* highest value in the "matching" range */
+#define DLT_MATCHING_MAX	266	/* highest value in the "matching" range */
 
 /*
  * The instruction encodings.
@@ -1299,6 +1303,21 @@ struct bpf_dltlist {
 struct ifnet;
 struct mbuf;
 
+#define BPF_PACKET_TYPE_MBUF	0
+
+struct bpf_packet {
+	int	bpfp_type;
+	void *	bpfp_header;		/* optional */
+	size_t	bpfp_header_length;
+	union {
+		struct mbuf	*bpfpu_mbuf;
+		void *		bpfpu_ptr;
+	} bpfp_u;
+#define bpfp_mbuf	bpfp_u.bpfpu_mbuf
+#define bpfp_ptr	bpfp_u.bpfpu_ptr
+	size_t	bpfp_total_length;	/* length including optional header */
+};
+
 extern int	bpf_validate(const struct bpf_insn *, int);
 extern void	bpfdetach(struct ifnet *);
 extern void	bpfilterattach(int);
@@ -1341,7 +1360,7 @@ typedef u_int32_t bpf_tap_mode;
 	@param packet The packet to be sent.
  */
 typedef errno_t (*bpf_send_func)(ifnet_t interface, u_int32_t data_link_type,
-								 mbuf_t packet);
+    mbuf_t packet);
 
 /*!
 	@typedef bpf_tap_func
@@ -1359,7 +1378,7 @@ typedef errno_t (*bpf_send_func)(ifnet_t interface, u_int32_t data_link_type,
 	@param direction The direction of the tap.
  */
 typedef errno_t (*bpf_tap_func)(ifnet_t interface, u_int32_t data_link_type,
-								bpf_tap_mode direction);
+    bpf_tap_mode direction);
 
 /*!
 	@function bpfattach
@@ -1412,7 +1431,7 @@ extern void bpf_tap_in(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
 
 /*!
 	@function bpf_tap_out
-	@discussion Call this function when your interface trasmits a
+	@discussion Call this function when your interface transmits a
 		packet. This function will check if any bpf devices need a
 		a copy of the packet.
 	@param interface The interface the packet was or will be transmitted on.

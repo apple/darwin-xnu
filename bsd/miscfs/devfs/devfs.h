@@ -57,6 +57,7 @@
 #define	_MISCFS_DEVFS_DEVFS_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 #define DEVFS_CHAR 	0
 #define DEVFS_BLOCK 	1

@@ -65,6 +65,12 @@
 #define _NET_IF_DL_H_
 #include <sys/appleapiopts.h>
 
+#include <sys/types.h>
+
+#ifdef BSD_KERNEL_PRIVATE
+#define	DLIL_SDLMAXLEN	64
+#endif /* BSD_KERNEL_PRIVATE */
+
 /*
  * A Link-Level Sockaddr may specify the interface in one of two
  * ways: either by means of a system-provided index number (computed

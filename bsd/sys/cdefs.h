@@ -498,6 +498,12 @@
 #define __DARWIN_ONLY_UNIX_CONFORMANCE	1
 #define __DARWIN_ONLY_VERS_1050		1
 #endif /* PLATFORM_WatchSimulator */
+#ifdef PLATFORM_BridgeOS
+/* Platform: BridgeOS */
+#define __DARWIN_ONLY_64_BIT_INO_T	1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE	1
+#define __DARWIN_ONLY_VERS_1050		1
+#endif /* PLATFORM_BridgeOS */
 #ifdef PLATFORM_MacOSX
 /* Platform: MacOSX */
 #define __DARWIN_ONLY_64_BIT_INO_T	0
@@ -849,6 +855,8 @@
  */
 #if !defined(__sys_cdefs_arch_unknown__) && defined(__i386__)
 #elif !defined(__sys_cdefs_arch_unknown__) && defined(__x86_64__)
+#elif !defined(__sys_cdefs_arch_unknown__) && defined(__arm__)
+#elif !defined(__sys_cdefs_arch_unknown__) && defined(__arm64__)
 #else
 #error Unsupported architecture
 #endif

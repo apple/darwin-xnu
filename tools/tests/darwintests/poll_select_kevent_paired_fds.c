@@ -1,11 +1,14 @@
 #ifdef T_NAMESPACE
 #undef T_NAMESPACE
 #endif
+
 #include <darwintest.h>
+#include <mach/mach.h>
 #include <darwintest_multiprocess.h>
 
 #include <assert.h>
 #include <dispatch/dispatch.h>
+#include <dispatch/private.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -26,7 +29,10 @@
 #include <util.h>
 #include <System/sys/event.h> /* kevent_qos */
 
-T_GLOBAL_META(T_META_NAMESPACE("xnu.poll_select_kevent_paired_fds"));
+T_GLOBAL_META(
+		T_META_NAMESPACE("xnu.kevent"),
+		T_META_CHECK_LEAKS(false),
+		T_META_LTEPHASE(LTE_POSTINIT));
 
 /*
  * Test to validate that monitoring a PTY device, FIFO, pipe, or socket pair in
@@ -48,8 +54,12 @@ T_GLOBAL_META(T_META_NAMESPACE("xnu.poll_select_kevent_paired_fds"));
 
 #define READ_SETUP_TIMEOUT_SECS       2
 #define WRITE_TIMEOUT_SECS            4
-#define READ_TIMEOUT_SECS             2
+#define READ_TIMEOUT_SECS             4
 #define INCREMENTAL_WRITE_SLEEP_USECS 50
+
+static mach_timespec_t READ_SETUP_timeout = {.tv_sec = READ_SETUP_TIMEOUT_SECS, .tv_nsec = 0};
+static mach_timespec_t READ_timeout = {.tv_sec = READ_TIMEOUT_SECS, .tv_nsec = 0};
+static mach_timespec_t WRITE_timeout = {.tv_sec = WRITE_TIMEOUT_SECS, .tv_nsec = 0};
 
 enum fd_pair {
 	PTY_PAIR,
@@ -95,14 +105,14 @@ static struct {
 		PROCESS_WRITER /* fd */
 	} wr_kind;
 	union {
-		dispatch_semaphore_t sem;
+		semaphore_t sem;
 		struct {
 			int in_fd;
 			int out_fd;
 		};
 	} wr_wait;
-	dispatch_semaphore_t wr_finished;
-	dispatch_semaphore_t rd_finished;
+	semaphore_t wr_finished;
+	semaphore_t rd_finished;
 } shared;
 
 static bool handle_reading(enum fd_pair fd_pair, int fd);
@@ -119,7 +129,8 @@ wake_writer(void)
 
 	switch (shared.wr_kind) {
 	case THREAD_WRITER:
-		dispatch_semaphore_signal(shared.wr_wait.sem);
+		T_LOG("signal shared.wr_wait.sem");
+		semaphore_signal(shared.wr_wait.sem);
 		break;
 	case PROCESS_WRITER: {
 		char tmp = 'a';
@@ -136,12 +147,16 @@ writer_wait(void)
 {
 	switch (shared.wr_kind) {
 	case THREAD_WRITER:
-		T_QUIET; T_ASSERT_EQ(dispatch_semaphore_wait(
-				shared.wr_wait.sem,
-				dispatch_time(DISPATCH_TIME_NOW,
-				READ_SETUP_TIMEOUT_SECS * NSEC_PER_SEC)), 0L,
-				NULL);
+		T_LOG("wait shared.wr_wait.sem");
+		kern_return_t kret = semaphore_timedwait(shared.wr_wait.sem, READ_SETUP_timeout);
+
+		if (kret == KERN_OPERATION_TIMED_OUT) {
+			T_ASSERT_FAIL("THREAD_WRITER semaphore timedout after %d seconds", READ_SETUP_timeout.tv_sec);
+		}
+		T_QUIET;
+		T_ASSERT_MACH_SUCCESS(kret, "semaphore_timedwait shared.wr_wait.sem");
 		break;
+
 	case PROCESS_WRITER: {
 		char tmp;
 		close(shared.wr_wait.in_fd);
@@ -193,7 +208,8 @@ workqueue_write_fn(void ** __unused buf, int * __unused count)
 			// "writer thread should be woken up at correct QoS");
 	if (!handle_writing(shared.fd_pair, shared.wr_fd)) {
 		/* finished handling the fd, tear down the source */
-		dispatch_semaphore_signal(shared.wr_finished);
+		T_LOG("signal shared.wr_finished");
+		semaphore_signal(shared.wr_finished);
 		return;
 	}
 
@@ -309,10 +325,6 @@ drive_kq(bool reading, union mode mode, enum fd_pair fd_pair, int fd)
 			continue;
 		}
 		T_QUIET; T_ASSERT_POSIX_SUCCESS(kev, "kevent");
-		/* <rdar://problem/28747760> */
-		if (shared.fd_pair == PTY_PAIR) {
-			T_MAYFAIL;
-		}
 		T_QUIET; T_ASSERT_NE(kev, 0, "kevent timed out");
 
 		if (reading) {
@@ -368,14 +380,18 @@ write_to_fd(void * __unused ctx)
 	}
 
 	case WORKQ_INCREMENTAL_WRITE: {
+		// prohibit ourselves from going multi-threaded see:rdar://33296008
+		_dispatch_prohibit_transition_to_multithreaded(true);
 		int changes = 1;
 
-		shared.wr_finished = dispatch_semaphore_create(0);
-		T_QUIET; T_ASSERT_NOTNULL(shared.wr_finished,
-				"dispatch_semaphore_create");
+		T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.wr_finished, SYNC_POLICY_FIFO, 0),
+		                      "semaphore_create shared.wr_finished");
 
-		T_QUIET; T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_kevent(
-				workqueue_fn, workqueue_write_fn, 0, 0), NULL);
+		T_QUIET;
+		T_ASSERT_NE_UINT(shared.wr_finished, (unsigned)MACH_PORT_NULL, "wr_finished semaphore_create");
+
+		T_QUIET;
+		T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_kevent(workqueue_fn, workqueue_write_fn, 0, 0), NULL);
 
 		struct kevent_qos_s events[] = {{
 			.ident = (uint64_t)shared.wr_fd,
@@ -406,9 +422,11 @@ write_to_fd(void * __unused ctx)
 	case DISPATCH_INCREMENTAL_WRITE: {
 		dispatch_source_t write_src;
 
-		shared.wr_finished = dispatch_semaphore_create(0);
-		T_QUIET; T_ASSERT_NOTNULL(shared.wr_finished,
-				"dispatch_semaphore_create");
+		T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.wr_finished, SYNC_POLICY_FIFO, 0),
+		                      "semaphore_create shared.wr_finished");
+
+		T_QUIET;
+		T_ASSERT_NE_UINT(shared.wr_finished, (unsigned)MACH_PORT_NULL, "semaphore_create");
 
 		write_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_WRITE,
 				(uintptr_t)shared.wr_fd, 0, NULL);
@@ -424,7 +442,8 @@ write_to_fd(void * __unused ctx)
 				/* finished handling the fd, tear down the source */
 				dispatch_source_cancel(write_src);
 				dispatch_release(write_src);
-				dispatch_semaphore_signal(shared.wr_finished);
+				T_LOG("signal shared.wr_finished");
+				semaphore_signal(shared.wr_finished);
 			}
 		});
 
@@ -440,17 +459,14 @@ write_to_fd(void * __unused ctx)
 	}
 
 	if (shared.wr_finished) {
-		long sem_timed_out = dispatch_semaphore_wait(shared.wr_finished,
-				dispatch_time(DISPATCH_TIME_NOW,
-				WRITE_TIMEOUT_SECS * NSEC_PER_SEC));
-		dispatch_release(shared.wr_finished);
-		/* <rdar://problem/28747760> */
-		if (shared.fd_pair == PTY_PAIR) {
-			T_MAYFAIL;
+		T_LOG("wait shared.wr_finished");
+		kern_return_t kret = semaphore_timedwait(shared.wr_finished, WRITE_timeout);
+		if (kret == KERN_OPERATION_TIMED_OUT) {
+			T_ASSERT_FAIL("write side semaphore timedout after %d seconds", WRITE_timeout.tv_sec);
 		}
-		T_QUIET; T_ASSERT_EQ(sem_timed_out, 0L,
-				"write side semaphore timed out after %d seconds",
-				WRITE_TIMEOUT_SECS);
+		T_QUIET;
+		T_ASSERT_MACH_SUCCESS(kret, "semaphore_timedwait shared.wr_finished");
+		semaphore_destroy(mach_task_self(), shared.wr_finished);
 	}
 
 	T_LOG("writer finished, closing fd");
@@ -482,6 +498,8 @@ handle_reading(enum fd_pair fd_pair, int fd)
 		bytes_rd = read(fd, read_buf, sizeof(read_buf) - 1);
 	} while (bytes_rd == -1 && errno == EINTR);
 
+	// T_LOG("read %zd bytes: '%s'", bytes_rd, read_buf);
+
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(bytes_rd, "reading from file");
 	T_QUIET; T_ASSERT_LE(bytes_rd, (ssize_t)EXPECTED_LEN,
 			"read too much from file");
@@ -495,8 +513,6 @@ handle_reading(enum fd_pair fd_pair, int fd)
 	strlcpy(&(final_string[final_length]), read_buf,
 			sizeof(final_string) - final_length);
 	final_length += (size_t)bytes_rd;
-
-	// T_LOG("read %zd bytes: '%s'", bytes_rd, read_buf);
 
 	T_QUIET; T_ASSERT_LE(final_length, EXPECTED_LEN,
 			"should not read more from file than what can be sent");
@@ -519,7 +535,8 @@ workqueue_read_fn(void ** __unused buf, int * __unused count)
 	// T_QUIET; T_ASSERT_EFFECTIVE_QOS_EQ(EXPECTED_QOS,
 			// "reader thread should be requested at correct QoS");
 	if (!handle_reading(shared.fd_pair, shared.rd_fd)) {
-		dispatch_semaphore_signal(shared.rd_finished);
+		T_LOG("signal shared.rd_finished");
+		semaphore_signal(shared.rd_finished);
 	}
 
 	reenable_workq(shared.rd_fd, EVFILT_READ);
@@ -547,20 +564,19 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 	case POLL_READ: {
 		struct pollfd fds[] = { { .fd = fd, .events = POLLIN } };
 		wake_writer();
+
 		for (;;) {
 			fds[0].revents = 0;
 			int pol = poll(fds, 1, READ_TIMEOUT_SECS * 1000);
 			T_QUIET; T_ASSERT_POSIX_SUCCESS(pol, "poll");
-			/* <rdar://problem/28747760> */
-			if (shared.fd_pair == PTY_PAIR) {
-				T_MAYFAIL;
-			}
 			T_QUIET; T_ASSERT_NE(pol, 0,
 					"poll should not time out after %d seconds, read %zd out "
 					"of %zu bytes",
 					READ_TIMEOUT_SECS, final_length, strlen(EXPECTED_STRING));
 			T_QUIET; T_ASSERT_FALSE(fds[0].revents & POLLERR,
 					"should not see an error on the device");
+			T_QUIET; T_ASSERT_FALSE(fds[0].revents & POLLNVAL,
+					"should not set up an invalid poll");
 
 			if (!handle_reading(fd_pair, fd)) {
 				break;
@@ -591,10 +607,6 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 
 			T_QUIET; T_ASSERT_POSIX_SUCCESS(sel, "select");
 
-			/* <rdar://problem/28747760> */
-			if (shared.fd_pair == PTY_PAIR) {
-				T_MAYFAIL;
-			}
 			T_QUIET; T_ASSERT_NE(sel, 0,
 				"select waited for %d seconds and timed out",
 				READ_TIMEOUT_SECS);
@@ -624,12 +636,16 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 	}
 
 	case WORKQ_READ: {
-		T_QUIET; T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_kevent(
+		// prohibit ourselves from going multi-threaded see:rdar://33296008
+		_dispatch_prohibit_transition_to_multithreaded(true);
+		T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_kevent(
 				workqueue_fn, workqueue_read_fn, 0, 0), NULL);
 
-		shared.rd_finished = dispatch_semaphore_create(0);
-		T_QUIET; T_ASSERT_NOTNULL(shared.rd_finished,
-				"dispatch_semaphore_create");
+		T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.rd_finished, SYNC_POLICY_FIFO, 0),
+		                      "semaphore_create shared.rd_finished");
+
+		T_QUIET;
+		T_ASSERT_NE_UINT(shared.rd_finished, (unsigned)MACH_PORT_NULL, "semaphore_create");
 
 		int changes = 1;
 		struct kevent_qos_s events[] = {{
@@ -663,9 +679,11 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 	case DISPATCH_READ: {
 		dispatch_source_t read_src;
 
-		shared.rd_finished = dispatch_semaphore_create(0);
-		T_QUIET; T_ASSERT_NOTNULL(shared.rd_finished,
-				"dispatch_semaphore_create");
+		T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.rd_finished, SYNC_POLICY_FIFO, 0),
+		                      "semaphore_create shared.rd_finished");
+
+		T_QUIET;
+		T_ASSERT_NE_UINT(shared.rd_finished, (unsigned)MACH_PORT_NULL, "semaphore_create");
 
 		read_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
 				(uintptr_t)fd, 0, NULL);
@@ -682,7 +700,8 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 				/* finished handling the fd, tear down the source */
 				dispatch_source_cancel(read_src);
 				dispatch_release(read_src);
-				dispatch_semaphore_signal(shared.rd_finished);
+				T_LOG("signal shared.rd_finished");
+				semaphore_signal(shared.rd_finished);
 			}
 		});
 
@@ -699,16 +718,13 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 	}
 
 	if (shared.rd_finished) {
-		long timed_out = dispatch_semaphore_wait(shared.rd_finished,
-				dispatch_time(DISPATCH_TIME_NOW,
-				READ_TIMEOUT_SECS * NSEC_PER_SEC));
-		/* <rdar://problem/28747760> */
-		if (shared.fd_pair == PTY_PAIR) {
-			T_MAYFAIL;
+		T_LOG("wait shared.rd_finished");
+		kern_return_t kret = semaphore_timedwait(shared.rd_finished, READ_timeout);
+		if (kret == KERN_OPERATION_TIMED_OUT) {
+			T_ASSERT_FAIL("reading timed out after %d seconds", READ_timeout.tv_sec);
 		}
-		T_QUIET; T_ASSERT_EQ(timed_out, 0L,
-				"reading timed out after %d seconds", READ_TIMEOUT_SECS);
-
+		T_QUIET;
+		T_ASSERT_MACH_SUCCESS(kret, "semaphore_timedwait shared.rd_finished");
 	}
 
 	T_EXPECT_EQ_STR(final_string, EXPECTED_STRING,
@@ -784,7 +800,8 @@ drive_threads(enum fd_pair fd_pair, enum read_mode rd_mode,
 	fd_pair_init(fd_pair, &(shared.rd_fd), &(shared.wr_fd));
 
 	shared.wr_kind = THREAD_WRITER;
-	shared.wr_wait.sem = dispatch_semaphore_create(0);
+	T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.wr_wait.sem, SYNC_POLICY_FIFO, 0),
+	                      "semaphore_create shared.wr_wait.sem");
 
 	T_QUIET;
 	T_ASSERT_POSIX_ZERO(pthread_create(&thread, NULL, write_to_fd, NULL),
@@ -792,6 +809,9 @@ drive_threads(enum fd_pair fd_pair, enum read_mode rd_mode,
 	T_LOG("created writer thread");
 
 	read_from_fd(shared.rd_fd, fd_pair, rd_mode);
+
+	T_ASSERT_POSIX_ZERO(pthread_join(thread, NULL), NULL);
+
 	T_END;
 }
 
@@ -840,7 +860,7 @@ T_HELPER_DECL(writer_helper, "Write asynchronously")
 
 #define WR_DECL_PROCESSES(desc_name, fd_pair, write_name, write_str, \
 				write_mode, read_name, read_mode) \
-		T_DECL(processes_##desc_name##_##read_name##_##write_name, "read changes to a " \
+		T_DECL(desc_name##_r##read_name##_w##write_name##_procs, "read changes to a " \
 				#desc_name " with " #read_name " and writing " #write_str \
 				" across two processes") \
 		{ \
@@ -848,7 +868,7 @@ T_HELPER_DECL(writer_helper, "Write asynchronously")
 		}
 #define WR_DECL_THREADS(desc_name, fd_pair, write_name, write_str, \
 				write_mode, read_name, read_mode) \
-		T_DECL(threads_##desc_name##_##read_name##_##write_name, "read changes to a " \
+		T_DECL(desc_name##_r##read_name##_w##write_name##_thds, "read changes to a " \
 				#desc_name " with " #read_name " and writing " #write_str) \
 		{ \
 			drive_threads(fd_pair, read_mode, write_mode); \
@@ -864,17 +884,17 @@ T_HELPER_DECL(writer_helper, "Write asynchronously")
 #define RD_DECL_SAFE(desc_name, fd_pair, read_name, read_mode) \
 		WR_DECL(desc_name, fd_pair, full, "the full string", FULL_WRITE, \
 				read_name, read_mode) \
-		WR_DECL(desc_name, fd_pair, incremental, "incrementally", \
+		WR_DECL(desc_name, fd_pair, inc, "incrementally", \
 				INCREMENTAL_WRITE, read_name, read_mode)
 
 #define RD_DECL_DISPATCH_ONLY(suffix, desc_name, fd_pair, read_name, \
 				read_mode) \
-		WR_DECL##suffix(desc_name, fd_pair, incremental_dispatch, \
+		WR_DECL##suffix(desc_name, fd_pair, inc_dispatch, \
 				"incrementally with a dispatch source", \
 				DISPATCH_INCREMENTAL_WRITE, read_name, read_mode)
 #define RD_DECL_WORKQ_ONLY(suffix, desc_name, fd_pair, read_name, \
 				read_mode) \
-		WR_DECL##suffix(desc_name, fd_pair, incremental_workq, \
+		WR_DECL##suffix(desc_name, fd_pair, inc_workq, \
 				"incrementally with the workqueue", \
 				WORKQ_INCREMENTAL_WRITE, read_name, read_mode)
 

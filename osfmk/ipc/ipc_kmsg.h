@@ -92,6 +92,9 @@
  *
  *	The ikm_header.msgh_remote_port field is the destination
  *	of the message.
+ *
+ *	sync_qos and special_port_qos stores the qos for prealloced
+ *	port, this fields could be deleted once we remove ip_prealloc.
  */
 
 struct ipc_kmsg {
@@ -105,6 +108,8 @@ struct ipc_kmsg {
 	mach_msg_priority_t        ikm_qos_override; /* qos override on this kmsg */
 	struct ipc_importance_elem *ikm_importance;  /* inherited from */
 	queue_chain_t              ikm_inheritance;  /* inherited from link */
+	sync_qos_count_t sync_qos[THREAD_QOS_LAST];  /* sync qos counters for ikm_prealloc port */
+	sync_qos_count_t special_port_qos;           /* special port qos for ikm_prealloc port */
 #if MACH_FLIPC
 	struct mach_node           *ikm_node;        /* Originating node - needed for ack */
 #endif
@@ -164,10 +169,15 @@ MACRO_BEGIN                                                     \
 	(kmsg)->ikm_prealloc = IP_NULL;                             \
 	(kmsg)->ikm_voucher = IP_NULL;                              \
 	(kmsg)->ikm_importance = IIE_NULL;                          \
-	(kmsg)->ikm_qos = MACH_MSG_PRIORITY_UNSPECIFIED;            \
-	(kmsg)->ikm_qos_override = MACH_MSG_PRIORITY_UNSPECIFIED;   \
+	ikm_qos_init(kmsg);                                         \
 	ikm_flipc_init(kmsg);                                       \
 	assert((kmsg)->ikm_prev = (kmsg)->ikm_next = IKM_BOGUS);    \
+MACRO_END
+
+#define ikm_qos_init(kmsg)                                              \
+MACRO_BEGIN                                                             \
+        (kmsg)->ikm_qos = MACH_MSG_PRIORITY_UNSPECIFIED;                \
+        (kmsg)->ikm_qos_override = MACH_MSG_PRIORITY_UNSPECIFIED;       \
 MACRO_END
 
 #define	ikm_check_init(kmsg, size)					\

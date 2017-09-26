@@ -76,6 +76,7 @@
 #include <machine/sched_param.h>
 #include <machine/machine_cpu.h>
 #include <machine/machlimits.h>
+#include <machine/atomic.h>
 
 #ifdef CONFIG_MACH_APPROXIMATE_TIME
 #include <machine/commpage.h>
@@ -92,6 +93,9 @@
 #include <kern/macro_help.h>
 #include <kern/machine.h>
 #include <kern/misc_protos.h>
+#if MONOTONIC
+#include <kern/monotonic.h>
+#endif /* MONOTONIC */
 #include <kern/processor.h>
 #include <kern/queue.h>
 #include <kern/sched.h>
@@ -108,30 +112,34 @@
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
+#include <vm/vm_pageout.h>
 
 #include <mach/sdt.h>
+#include <mach/mach_host.h>
+#include <mach/host_info.h>
 
 #include <sys/kdebug.h>
 #include <kperf/kperf.h>
 #include <kern/kpc.h>
-
+#include <san/kasan.h>
 #include <kern/pms.h>
+#include <kern/host.h>
+#include <stdatomic.h>
 
-struct rt_queue	rt_runq;
+int rt_runq_count(processor_set_t pset)
+{
+    return atomic_load_explicit(&SCHED(rt_runq)(pset)->count, memory_order_relaxed);
+}
 
-uintptr_t sched_thread_on_rt_queue = (uintptr_t)0xDEAFBEE0;
+void rt_runq_count_incr(processor_set_t pset)
+{
+    atomic_fetch_add_explicit(&SCHED(rt_runq)(pset)->count, 1, memory_order_relaxed);
+}
 
-/* Lock RT runq, must be done with interrupts disabled (under splsched()) */
-#if __SMP__
-decl_simple_lock_data(static,rt_lock);
-#define rt_lock_init()		simple_lock_init(&rt_lock, 0)
-#define rt_lock_lock()		simple_lock(&rt_lock)
-#define rt_lock_unlock()	simple_unlock(&rt_lock)
-#else
-#define rt_lock_init()		do { } while(0)
-#define rt_lock_lock()		do { } while(0)
-#define rt_lock_unlock()	do { } while(0)
-#endif
+void rt_runq_count_decr(processor_set_t pset)
+{
+    atomic_fetch_sub_explicit(&SCHED(rt_runq)(pset)->count, 1, memory_order_relaxed);
+}
 
 #define		DEFAULT_PREEMPTION_RATE		100		/* (1/s) */
 int			default_preemption_rate = DEFAULT_PREEMPTION_RATE;
@@ -198,6 +206,16 @@ uint64_t timer_deadline_tracking_bin_2;
 
 thread_t sched_maintenance_thread;
 
+#if __arm__ || __arm64__
+/* interrupts disabled lock to guard recommended cores state */
+decl_simple_lock_data(static,sched_recommended_cores_lock);
+static void sched_recommended_cores_maintenance(void);
+static void sched_update_recommended_cores(uint32_t recommended_cores);
+
+uint64_t    perfcontrol_failsafe_starvation_threshold;
+extern char *proc_name_address(struct proc *p);
+
+#endif /* __arm__ || __arm64__ */
 
 uint64_t	sched_one_second_interval;
 
@@ -209,11 +227,6 @@ static void load_shift_init(void);
 static void preempt_pri_init(void);
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
-
-static thread_t	thread_select(
-					thread_t			thread,
-					processor_t			processor,
-					ast_t				reason);
 
 #if CONFIG_SCHED_IDLE_IN_PLACE
 static thread_t	thread_select_idle(
@@ -234,9 +247,6 @@ static void processor_setrun(
 				 processor_t			processor,
 				 thread_t			thread,
 				 integer_t			options);
-
-static void
-sched_realtime_init(void);
 
 static void
 sched_realtime_timebase_init(void);
@@ -285,38 +295,25 @@ const struct sched_dispatch_table *sched_current_dispatch = NULL;
  */
 char sched_string[SCHED_STRING_MAX_LENGTH];
 
-uint32_t sched_debug_flags;
+uint32_t sched_debug_flags = SCHED_DEBUG_FLAG_CHOOSE_PROCESSOR_TRACEPOINTS;
 
 /* Global flag which indicates whether Background Stepper Context is enabled */
 static int cpu_throttle_enabled = 1;
 
-void
-sched_init(void)
+#if DEBUG
+
+/* Since using the indirect function dispatch table has a negative impact on 
+ * context switch performance, only allow DEBUG kernels to use that mechanism.
+ */
+static void
+sched_init_override(void)
 {
 	char sched_arg[SCHED_STRING_MAX_LENGTH] = { '\0' };
 
 	/* Check for runtime selection of the scheduler algorithm */
 	if (!PE_parse_boot_argn("sched", sched_arg, sizeof (sched_arg))) {
-		/* If no boot-args override, look in device tree */
-		if (!PE_get_default("kern.sched", sched_arg,
-							SCHED_STRING_MAX_LENGTH)) {
-			sched_arg[0] = '\0';
-		}
+		sched_arg[0] = '\0';
 	}
-
-	
-	if (!PE_parse_boot_argn("sched_pri_decay_limit", &sched_pri_decay_band_limit, sizeof(sched_pri_decay_band_limit))) {
-		/* No boot-args, check in device tree */
-		if (!PE_get_default("kern.sched_pri_decay_limit",
-							&sched_pri_decay_band_limit,
-							sizeof(sched_pri_decay_band_limit))) {
-			/* Allow decay all the way to normal limits */
-			sched_pri_decay_band_limit = DEFAULT_DECAY_BAND_LIMIT;
-		}
-	}
-
-	kprintf("Setting scheduler priority decay band limit %d\n", sched_pri_decay_band_limit);
-
 	if (strlen(sched_arg) > 0) {
 		if (0) {
 			/* Allow pattern below */
@@ -325,14 +322,6 @@ sched_init(void)
 			sched_current_dispatch = &sched_traditional_dispatch;
 		} else if (0 == strcmp(sched_arg, sched_traditional_with_pset_runqueue_dispatch.sched_name)) {
 			sched_current_dispatch = &sched_traditional_with_pset_runqueue_dispatch;
-#endif
-#if defined(CONFIG_SCHED_PROTO)
-		} else if (0 == strcmp(sched_arg, sched_proto_dispatch.sched_name)) {
-			sched_current_dispatch = &sched_proto_dispatch;
-#endif
-#if defined(CONFIG_SCHED_GRRR)
-		} else if (0 == strcmp(sched_arg, sched_grrr_dispatch.sched_name)) {
-			sched_current_dispatch = &sched_grrr_dispatch;
 #endif
 #if defined(CONFIG_SCHED_MULTIQ)
 		} else if (0 == strcmp(sched_arg, sched_multiq_dispatch.sched_name)) {
@@ -355,25 +344,43 @@ sched_init(void)
 		sched_current_dispatch = &sched_multiq_dispatch;
 #elif defined(CONFIG_SCHED_TRADITIONAL)
 		sched_current_dispatch = &sched_traditional_with_pset_runqueue_dispatch;
-#elif defined(CONFIG_SCHED_PROTO)
-		sched_current_dispatch = &sched_proto_dispatch;
-#elif defined(CONFIG_SCHED_GRRR)
-		sched_current_dispatch = &sched_grrr_dispatch;
 #else
 #error No default scheduler implementation
 #endif
 		kprintf("Scheduler: Default of %s\n", SCHED(sched_name));
 	}
+}
 
-	strlcpy(sched_string, SCHED(sched_name), sizeof(sched_string));
+#endif /* DEBUG */
 
+void
+sched_init(void)
+{
+#if DEBUG
+	sched_init_override();
+#else /* DEBUG */
+	kprintf("Scheduler: Default of %s\n", SCHED(sched_name));
+#endif /* DEBUG */
+
+	if (!PE_parse_boot_argn("sched_pri_decay_limit", &sched_pri_decay_band_limit, sizeof(sched_pri_decay_band_limit))) {
+		/* No boot-args, check in device tree */
+		if (!PE_get_default("kern.sched_pri_decay_limit",
+							&sched_pri_decay_band_limit,
+							sizeof(sched_pri_decay_band_limit))) {
+			/* Allow decay all the way to normal limits */
+			sched_pri_decay_band_limit = DEFAULT_DECAY_BAND_LIMIT;
+		}
+	}
+
+	kprintf("Setting scheduler priority decay band limit %d\n", sched_pri_decay_band_limit);
+	
 	if (PE_parse_boot_argn("sched_debug", &sched_debug_flags, sizeof(sched_debug_flags))) {
 		kprintf("Scheduler: Debug flags 0x%08x\n", sched_debug_flags);
 	}
-	
+	strlcpy(sched_string, SCHED(sched_name), sizeof(sched_string));
+
 	SCHED(init)();
-	sched_realtime_init();
-	ast_init();
+	SCHED(rt_init)(&pset0);
 	sched_timer_deadline_tracking_init();
 
 	SCHED(pset_init)(&pset0);
@@ -467,17 +474,48 @@ sched_timeshare_timebase_init(void)
 	default_timeshare_computation = std_quantum / 2;
 	default_timeshare_constraint = std_quantum;
 
+#if __arm__ || __arm64__
+	       perfcontrol_failsafe_starvation_threshold = (2 * sched_tick_interval);
+#endif /* __arm__ || __arm64__ */
 }
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
-static void
-sched_realtime_init(void)
+void
+pset_rt_init(processor_set_t pset)
 {
-	rt_lock_init();
+	rt_lock_init(pset);
 
-	rt_runq.count = 0;
-	queue_init(&rt_runq.queue);
+	pset->rt_runq.count = 0;
+	queue_init(&pset->rt_runq.queue);
+	memset(&pset->rt_runq.runq_stats, 0, sizeof pset->rt_runq.runq_stats);
+}
+
+rt_queue_t
+sched_rtglobal_runq(processor_set_t pset)
+{
+	(void)pset;
+
+	return &pset0.rt_runq;
+}
+
+void
+sched_rtglobal_init(processor_set_t pset)
+{
+	if (pset == &pset0) {
+		return pset_rt_init(pset);
+	}
+
+	/* Only pset0 rt_runq is used, so make it easy to detect
+	 * buggy accesses to others.
+	 */
+	memset(&pset->rt_runq, 0xfd, sizeof pset->rt_runq);
+}
+
+void
+sched_rtglobal_queue_shutdown(processor_t processor)
+{
+	(void)processor;
 }
 
 static void
@@ -496,6 +534,23 @@ sched_realtime_timebase_init(void)
 	assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
 	max_rt_quantum = (uint32_t)abstime;
 
+}
+
+void
+sched_check_spill(processor_set_t pset, thread_t thread)
+{
+	(void)pset;
+	(void)thread;
+
+	return;
+}
+
+bool
+sched_thread_should_yield(processor_t processor, thread_t thread)
+{
+	(void)thread;
+
+	return (!SCHED(processor_queue_empty)(processor) || rt_runq_count(processor->processor_set) > 0);
 }
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
@@ -630,7 +685,7 @@ thread_unblock(
 
 	if (!(thread->state & TH_RUN)) {
 		thread->state |= TH_RUN;
-		thread->last_made_runnable_time = mach_approximate_time();
+		thread->last_made_runnable_time = thread->last_basepri_change_time = mach_approximate_time();
 
 		ready_for_runq = TRUE;
 
@@ -855,28 +910,6 @@ thread_interrupt_level(
 	thread->options = (thread->options & ~TH_OPT_INTMASK) | (new_level & TH_OPT_INTMASK);
 
 	return result;
-}
-
-/*
- * Check to see if an assert wait is possible, without actually doing one.
- * This is used by debug code in locks and elsewhere to verify that it is
- * always OK to block when trying to take a blocking lock (since waiting
- * for the actual assert_wait to catch the case may make it hard to detect
- * this case.
- */
-boolean_t
-assert_wait_possible(void)
-{
-
-	thread_t thread;
-
-#if	DEBUG
-	if(debug_mode) return TRUE;		/* Always succeed in debug mode */
-#endif
-	
-	thread = current_thread();
-
-	return (thread == NULL || waitq_wait_possible(thread));
 }
 
 /*
@@ -1407,6 +1440,9 @@ thread_wakeup_thread(
 	if (__improbable(event == NO_EVENT))
 		panic("%s() called with NO_EVENT", __func__);
 
+	if (__improbable(thread == THREAD_NULL))
+		panic("%s() called with THREAD_NULL", __func__);
+
 	struct waitq *wq = global_eventq(event);
 
 	return waitq_wakeup64_thread(wq, CAST_EVENT64_T(event), thread, THREAD_AWAKENED);
@@ -1679,7 +1715,7 @@ int sched_smt_balance = 1;
 
 #if __SMP__
 /* Invoked with pset locked, returns with pset unlocked */
-static void
+void
 sched_SMT_balance(processor_t cprocessor, processor_set_t cpset) {
 	processor_t ast_processor = NULL;
 
@@ -1702,15 +1738,19 @@ sched_SMT_balance(processor_t cprocessor, processor_set_t cpset) {
 
 	processor_t sprocessor;
 
+	sched_ipi_type_t ipi_type = SCHED_IPI_NONE;
 	qe_foreach_element(sprocessor, &cpset->active_queue, processor_queue) {
 		if ((sprocessor->state == PROCESSOR_RUNNING) &&
 		    (sprocessor->processor_primary != sprocessor) &&
 		    (sprocessor->processor_primary->state == PROCESSOR_RUNNING) &&
-		    (sprocessor->current_pri < BASEPRI_RTQUEUES) &&
-		    ((cpset->pending_AST_cpu_mask & (1ULL << sprocessor->cpu_id)) == 0)) {
-			assert(sprocessor != cprocessor);
-			ast_processor = sprocessor;
-			break;
+		    (sprocessor->current_pri < BASEPRI_RTQUEUES)) {
+
+		    ipi_type = sched_ipi_action(sprocessor, NULL, false, SCHED_IPI_EVENT_SMT_REBAL);
+		    if (ipi_type != SCHED_IPI_NONE) {
+                assert(sprocessor != cprocessor);
+                ast_processor = sprocessor;
+                break;
+		    }
 		}
 	}
 
@@ -1719,8 +1759,15 @@ smt_balance_exit:
 
 	if (ast_processor) {
 		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_SMT_BALANCE), ast_processor->cpu_id, ast_processor->state, ast_processor->processor_primary->state, 0, 0);
-		cause_ast_check(ast_processor);
+		sched_ipi_perform(ast_processor, ipi_type);
 	}
+}
+#else
+/* Invoked with pset locked, returns with pset unlocked */
+void
+sched_SMT_balance(__unused processor_t cprocessor, processor_set_t cpset)
+{
+	pset_unlock(cpset);
 }
 #endif /* __SMP__ */
 
@@ -1732,10 +1779,9 @@ smt_balance_exit:
  *	May select the current thread, which must be locked.
  */
 static thread_t
-thread_select(
-	thread_t			thread,
-	processor_t			processor,
-	ast_t				reason)
+thread_select(thread_t          thread,
+              processor_t       processor,
+              ast_t            *reason)
 {
 	processor_set_t		pset = processor->processor_set;
 	thread_t			new_thread = THREAD_NULL;
@@ -1750,9 +1796,7 @@ thread_select(
 		if (SCHED(can_update_priority)(thread))
 			SCHED(update_priority)(thread);
 		
-		processor->current_pri = thread->sched_pri;
-		processor->current_thmode = thread->sched_mode;
-		processor->current_sfi_class = thread->sfi_class;
+		processor_state_update_from_thread(processor, thread);
 
 		pset_lock(pset);
 
@@ -1775,12 +1819,11 @@ thread_select(
 			 * An exception is that bound threads are dispatched to a processor without going through
 			 * choose_processor(), so in those cases we should continue trying to dequeue work.
 			 */
-			if (!SCHED(processor_bound_count)(processor) && !queue_empty(&pset->idle_queue) && !rt_runq.count) {
+			if (!SCHED(processor_bound_count)(processor) &&
+				!queue_empty(&pset->idle_queue) && !rt_runq_count(pset)) {
 				goto idle;
 			}
 		}
-
-		rt_lock_lock();
 
 		/*
 		 *	Test to see if the current thread should continue
@@ -1793,78 +1836,111 @@ thread_select(
 		 *	This code is very insanely tricky.
 		 */
 
-		if (((thread->state & (TH_TERMINATE|TH_IDLE|TH_WAIT|TH_RUN|TH_SUSP)) == TH_RUN) &&
-		    (thread->sched_pri >= BASEPRI_RTQUEUES     || processor->processor_primary == processor) &&
-		    (thread->bound_processor == PROCESSOR_NULL || thread->bound_processor == processor)      &&
-		    (thread->affinity_set == AFFINITY_SET_NULL || thread->affinity_set->aset_pset == pset)) {
+		/* i.e. not waiting, not TH_SUSP'ed */
+		boolean_t still_running = ((thread->state & (TH_TERMINATE|TH_IDLE|TH_WAIT|TH_RUN|TH_SUSP)) == TH_RUN);
+
+		/*
+		 * Threads running on SMT processors are forced to context switch. Don't rebalance realtime threads.
+		 * TODO: This should check if it's worth it to rebalance, i.e. 'are there any idle primary processors'
+		 */
+		boolean_t needs_smt_rebalance = (thread->sched_pri < BASEPRI_RTQUEUES && processor->processor_primary != processor);
+
+		boolean_t affinity_mismatch   = (thread->affinity_set != AFFINITY_SET_NULL && thread->affinity_set->aset_pset != pset);
+
+		boolean_t bound_elsewhere     = (thread->bound_processor != PROCESSOR_NULL && thread->bound_processor != processor);
+
+		boolean_t avoid_processor     = (SCHED(avoid_processor_enabled) && SCHED(thread_avoid_processor)(processor, thread));
+
+		if (still_running && !needs_smt_rebalance && !affinity_mismatch && !bound_elsewhere && !avoid_processor) {
 			/*
+			 * This thread is eligible to keep running on this processor.
+			 *
 			 * RT threads with un-expired quantum stay on processor,
 			 * unless there's a valid RT thread with an earlier deadline.
 			 */
 			if (thread->sched_pri >= BASEPRI_RTQUEUES && processor->first_timeslice) {
-				if (rt_runq.count > 0) {
-					thread_t next_rt = qe_queue_first(&rt_runq.queue, struct thread, runq_links);
+				if (rt_runq_count(pset) > 0) {
 
-					assert(next_rt->runq == THREAD_ON_RT_RUNQ);
+					rt_lock_lock(pset);
+					
+					if (rt_runq_count(pset) > 0) {
+			
+					    thread_t next_rt = qe_queue_first(&SCHED(rt_runq)(pset)->queue, struct thread, runq_links);
 
-					if (next_rt->realtime.deadline < processor->deadline &&
-					    (next_rt->bound_processor == PROCESSOR_NULL ||
-					     next_rt->bound_processor == processor)) {
-						/* The next RT thread is better, so pick it off the runqueue. */
-						goto pick_new_rt_thread;
+					    if (next_rt->realtime.deadline < processor->deadline &&
+						(next_rt->bound_processor == PROCESSOR_NULL ||
+						next_rt->bound_processor == processor)) {
+						    /* The next RT thread is better, so pick it off the runqueue. */
+						    goto pick_new_rt_thread;
+					    }
 					}
+
+					rt_lock_unlock(pset);
 				}
 
 				/* This is still the best RT thread to run. */
 				processor->deadline = thread->realtime.deadline;
 
-				rt_lock_unlock();
+				sched_update_pset_load_average(pset);
 				pset_unlock(pset);
 
 				return (thread);
 			}
 
-			if ((rt_runq.count == 0) &&
+			if ((rt_runq_count(pset) == 0) &&
 			    SCHED(processor_queue_has_priority)(processor, thread->sched_pri, TRUE) == FALSE) {
 				/* This thread is still the highest priority runnable (non-idle) thread */
 				processor->deadline = UINT64_MAX;
 
-				rt_lock_unlock();
+				sched_update_pset_load_average(pset);
 				pset_unlock(pset);
 
 				return (thread);
 			}
+		} else {
+			/*
+			 * This processor must context switch.
+			 * If it's due to a rebalance, we should aggressively find this thread a new home.
+			 */
+			if (needs_smt_rebalance || affinity_mismatch || bound_elsewhere || avoid_processor)
+			    *reason |= AST_REBALANCE;
 		}
 
 		/* OK, so we're not going to run the current thread. Look at the RT queue. */
-		if (rt_runq.count > 0) {
-			thread_t next_rt = qe_queue_first(&rt_runq.queue, struct thread, runq_links);
+		if (rt_runq_count(pset) > 0) {
 
-			assert(next_rt->runq == THREAD_ON_RT_RUNQ);
+			rt_lock_lock(pset);
+		
+			if (rt_runq_count(pset) > 0) {
+			    thread_t next_rt = qe_queue_first(&SCHED(rt_runq)(pset)->queue, struct thread, runq_links);
 
-			if (__probable((next_rt->bound_processor == PROCESSOR_NULL ||
+			    if (__probable((next_rt->bound_processor == PROCESSOR_NULL ||
 			               (next_rt->bound_processor == processor)))) {
 pick_new_rt_thread:
-				new_thread = qe_dequeue_head(&rt_runq.queue, struct thread, runq_links);
+				    new_thread = qe_dequeue_head(&SCHED(rt_runq)(pset)->queue, struct thread, runq_links);
 
-				new_thread->runq = PROCESSOR_NULL;
-				SCHED_STATS_RUNQ_CHANGE(&rt_runq.runq_stats, rt_runq.count);
-				rt_runq.count--;
+				    new_thread->runq = PROCESSOR_NULL;
+				    SCHED_STATS_RUNQ_CHANGE(&SCHED(rt_runq)(pset)->runq_stats, rt_runq_count(pset));
+				    rt_runq_count_decr(pset);
 
-				processor->deadline = new_thread->realtime.deadline;
+				    processor->deadline = new_thread->realtime.deadline;
 
-				rt_lock_unlock();
-				pset_unlock(pset);
+				    rt_lock_unlock(pset);
+				    sched_update_pset_load_average(pset);
+				    pset_unlock(pset);
 
-				return (new_thread);
+				    return (new_thread);
+			    }
 			}
+
+			rt_lock_unlock(pset);
 		}
 
 		processor->deadline = UINT64_MAX;
-		rt_lock_unlock();
 
 		/* No RT threads, so let's look at the regular threads. */
-		if ((new_thread = SCHED(choose_thread)(processor, MINPRI, reason)) != THREAD_NULL) {
+		if ((new_thread = SCHED(choose_thread)(processor, MINPRI, *reason)) != THREAD_NULL) {
+			sched_update_pset_load_average(pset);
 			pset_unlock(pset);
 			return (new_thread);
 		}
@@ -1884,7 +1960,7 @@ pick_new_rt_thread:
 			 * If other threads have appeared, shortcut
 			 * around again.
 			 */
-			if (!SCHED(processor_queue_empty)(processor) || rt_runq.count > 0)
+			if (!SCHED(processor_queue_empty)(processor) || rt_runq_count(pset) > 0)
 				continue;
 
 			pset_lock(pset);
@@ -1899,16 +1975,21 @@ pick_new_rt_thread:
 		if (processor->state == PROCESSOR_RUNNING) {
 			processor->state = PROCESSOR_IDLE;
 
-			if (processor->processor_primary == processor) {
+			if (!processor->is_recommended) {
+				re_queue_head(&pset->unused_queue, &processor->processor_queue);
+			} else if (processor->processor_primary == processor) {
 				re_queue_head(&pset->idle_queue, &processor->processor_queue);
 			} else {
 				re_queue_head(&pset->idle_secondary_queue, &processor->processor_queue);
 			}
+
+			pset->active_processor_count--;
+			sched_update_pset_load_average(pset);
 		}
 
 #if __SMP__
 		/* Invoked with pset locked, returns with pset unlocked */
-		sched_SMT_balance(processor, pset);
+		SCHED(processor_balance)(processor, pset);
 #else
 		pset_unlock(pset);
 #endif
@@ -1966,9 +2047,7 @@ thread_select_idle(
 	sched_run_decr(thread);
 
 	thread->state |= TH_IDLE;
-	processor->current_pri = IDLEPRI;
-	processor->current_thmode = TH_MODE_NONE;
-	processor->current_sfi_class = SFI_CLASS_KERNEL;
+	processor_state_update_idle(procssor);
 
 	/* Reload precise timing global policy to thread-local policy */
 	thread->precise_user_kernel_time = use_precise_user_kernel_time(thread);
@@ -1988,10 +2067,11 @@ thread_select_idle(
 	thread_timer_event(processor->last_dispatch, &processor->idle_thread->system_timer);
 	PROCESSOR_DATA(processor, kernel_timer) = &processor->idle_thread->system_timer;
 
+
 	/*
 	 *	Cancel the quantum timer while idling.
 	 */
-	timer_call_cancel(&processor->quantum_timer);
+	timer_call_quantum_timer_cancel(&processor->quantum_timer);
 	processor->first_timeslice = FALSE;
 
 	(*thread->sched_call)(SCHED_CALL_BLOCK, thread);
@@ -2019,10 +2099,10 @@ thread_select_idle(
 		processor->last_dispatch = mach_absolute_time();
 		thread_timer_event(processor->last_dispatch, &thread->system_timer);
 		PROCESSOR_DATA(processor, kernel_timer) = &thread->system_timer;
-
 		thread_quantum_init(thread);
 		processor->quantum_end = processor->last_dispatch + thread->quantum_remaining;
-		timer_call_enter1(&processor->quantum_timer, thread, processor->quantum_end, TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL);
+		timer_call_quantum_timer_enter(&processor->quantum_timer,
+			thread, processor->quantum_end, processor->last_dispatch);
 		processor->first_timeslice = TRUE;
 
 		thread->computation_epoch = processor->last_dispatch;
@@ -2078,8 +2158,13 @@ thread_invoke(
 #endif
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
-	sched_timeshare_consider_maintenance(ctime);
+	if ((thread->state & TH_IDLE) == 0)
+		sched_timeshare_consider_maintenance(ctime);
 #endif
+
+#if MONOTONIC
+	mt_sched_update(self);
+#endif /* MONOTONIC */
 
 	assert_thread_magic(self);
 	assert(self == current_thread());
@@ -2098,10 +2183,24 @@ thread_invoke(
 
 	/* Update SFI class based on other factors */
 	thread->sfi_class = sfi_thread_classify(thread);
+	   
+	/* Update the same_pri_latency for the thread (used by perfcontrol callouts) */
+	thread->same_pri_latency = ctime - thread->last_basepri_change_time;
+	/* 
+	 * In case a base_pri update happened between the timestamp and 
+	 * taking the thread lock 
+	 */
+	if (ctime <= thread->last_basepri_change_time)
+		thread->same_pri_latency = ctime - thread->last_made_runnable_time;
 
 	/* Allow realtime threads to hang onto a stack. */
 	if ((self->sched_mode == TH_MODE_REALTIME) && !self->reserved_stack)
 		self->reserved_stack = self->kernel_stack;
+
+    /* Prepare for spin debugging */
+#if INTERRUPT_MASKED_DEBUG
+    ml_spin_debug_clear(thread);
+#endif
 
 	if (continuation != NULL) {
 		if (!thread->kernel_stack) {
@@ -2121,9 +2220,8 @@ thread_invoke(
 
 			processor = current_processor();
 			processor->active_thread = thread;
-			processor->current_pri = thread->sched_pri;
-			processor->current_thmode = thread->sched_mode;
-			processor->current_sfi_class = thread->sfi_class;
+			processor_state_update_from_thread(processor, thread);
+
 			if (thread->last_processor != processor && thread->last_processor != NULL) {
 				if (thread->last_processor->processor_set != processor->processor_set)
 					thread->ps_switch++;
@@ -2177,6 +2275,11 @@ thread_invoke(
 			kperf_on_cpu(thread, continuation, NULL);
 #endif /* KPERF */
 
+#if KASAN
+			kasan_unpoison_fakestack(self);
+			kasan_unpoison_stack(thread->kernel_stack, kernel_stack_size);
+#endif
+
 			thread_dispatch(self, thread);
 
 			thread->continuation = thread->parameter = NULL;
@@ -2203,6 +2306,11 @@ thread_invoke(
 			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
 				self->reason, (uintptr_t)thread_tid(thread), self->sched_pri, thread->sched_pri, 0);
+
+#if KASAN
+			kasan_unpoison_fakestack(self);
+			kasan_unpoison_stack(self->kernel_stack, kernel_stack_size);
+#endif
 
 			self->continuation = self->parameter = NULL;
 
@@ -2241,9 +2349,8 @@ need_stack:
 	 */
 	processor = current_processor();
 	processor->active_thread = thread;
-	processor->current_pri = thread->sched_pri;
-	processor->current_thmode = thread->sched_mode;
-	processor->current_sfi_class = thread->sfi_class;
+	processor_state_update_from_thread(processor, thread);
+	
 	if (thread->last_processor != processor && thread->last_processor != NULL) {
 		if (thread->last_processor->processor_set != processor->processor_set)
 			thread->ps_switch++;
@@ -2394,8 +2501,8 @@ pset_cancel_deferred_dispatch(
 			 * interrupt while IDLE.
 			 */
 			if ((active_processor->state == PROCESSOR_DISPATCHING) &&
-			    (pset->pending_deferred_AST_cpu_mask & (1ULL << active_processor->cpu_id)) &&
-			    (!(pset->pending_AST_cpu_mask & (1ULL << active_processor->cpu_id))) &&
+			    (bit_test(pset->pending_deferred_AST_cpu_mask, active_processor->cpu_id)) &&
+			    (!bit_test(pset->pending_AST_cpu_mask, active_processor->cpu_id)) &&
 			    (active_processor != processor)) {
 				/*
 				 * Squash all of the processor state back to some
@@ -2407,16 +2514,22 @@ pset_cancel_deferred_dispatch(
 				 * The tail?  At the (relative) old position in the
 				 * queue?  Or something else entirely?
 				 */
-				re_queue_head(&pset->idle_queue, &active_processor->processor_queue);
+				if (!active_processor->is_recommended) {
+					re_queue_head(&pset->unused_queue, &active_processor->processor_queue);
+				} else if (active_processor->processor_primary == active_processor) {
+					re_queue_head(&pset->idle_queue, &active_processor->processor_queue);
+				} else {
+					re_queue_head(&pset->idle_secondary_queue, &active_processor->processor_queue);
+				}
+
+				pset->active_processor_count--;
+				sched_update_pset_load_average(pset);
 
 				assert(active_processor->next_thread == THREAD_NULL);
-
-				active_processor->current_pri = IDLEPRI;
-				active_processor->current_thmode = TH_MODE_FIXED;
-				active_processor->current_sfi_class = SFI_CLASS_KERNEL;
+				processor_state_update_idle(active_processor);
 				active_processor->deadline = UINT64_MAX;
 				active_processor->state = PROCESSOR_IDLE;
-				pset->pending_deferred_AST_cpu_mask &= ~(1U << active_processor->cpu_id);
+				bit_clear(pset->pending_deferred_AST_cpu_mask, active_processor->cpu_id);
 				machine_signal_idle_cancel(active_processor);
 			}
 
@@ -2428,6 +2541,19 @@ pset_cancel_deferred_dispatch(
 #else
 /* We don't support deferred ASTs; everything is candycanes and sunshine. */
 #endif
+
+static void
+thread_csw_callout(
+	thread_t	    old,
+	thread_t	    new,
+	uint64_t	    timestamp)
+{
+	perfcontrol_event event = (new->state & TH_IDLE) ? IDLE : CONTEXT_SWITCH;
+	uint64_t same_pri_latency = (new->state & TH_IDLE) ? 0 : new->same_pri_latency;
+	machine_switch_perfcontrol_context(event, timestamp, 0, 
+		same_pri_latency, old, new);
+}
+
 
 /*
  *	thread_dispatch:
@@ -2454,6 +2580,20 @@ thread_dispatch(
 	assert(thread != self);
 
 	if (thread != THREAD_NULL) {
+		/* 
+		 * Do the perfcontrol callout for context switch. 
+		 * The reason we do this here is:
+		 * - thread_dispatch() is called from various places that are not 
+		 *   the direct context switch path for eg. processor shutdown etc.
+		 *   So adding the callout here covers all those cases.
+		 * - We want this callout as early as possible to be close 
+		 *   to the timestamp taken in thread_invoke()
+		 * - We want to avoid holding the thread lock while doing the 
+		 *   callout
+		 * - We do not want to callout if "thread" is NULL.
+		 */
+		thread_csw_callout(thread, self, processor->last_dispatch);	
+		
 		/*
 		 *	If blocked at a continuation, discard
 		 *	the stack.
@@ -2485,7 +2625,6 @@ thread_dispatch(
 				    task_ledgers.cpu_time, consumed);
 				ledger_credit(thread->t_threadledger,
 				    thread_ledgers.cpu_time, consumed);
-#ifdef CONFIG_BANK
 				if (thread->t_bankledger) {
 					ledger_credit(thread->t_bankledger,
 				    		bank_ledgers.cpu_time,
@@ -2493,7 +2632,6 @@ thread_dispatch(
 
 				}
 				thread->t_deduct_bank_ledger_time =0;
-#endif
 			}
 
 			wake_lock(thread);
@@ -2575,16 +2713,34 @@ thread_dispatch(
 				/*
 				 *	Still runnable.
 				 */
-				thread->last_made_runnable_time = mach_approximate_time();
+				thread->last_made_runnable_time = thread->last_basepri_change_time = processor->last_dispatch;
 
 				machine_thread_going_off_core(thread, FALSE, processor->last_dispatch);
 
-				if (thread->reason & AST_QUANTUM)
-					thread_setrun(thread, SCHED_TAILQ);
-				else if (thread->reason & AST_PREEMPT)
-					thread_setrun(thread, SCHED_HEADQ);
+				ast_t reason = thread->reason;
+				sched_options_t options = SCHED_NONE;
+
+				if (reason & AST_REBALANCE) {
+					options |= SCHED_REBALANCE;
+					if (reason & AST_QUANTUM) {
+						/* Having gone to the trouble of forcing this thread off a less preferred core,
+						 * we should force the preferable core to reschedule immediatey to give this
+						 * thread a chance to run instead of just sitting on the run queue where
+						 * it may just be stolen back by the idle core we just forced it off.
+						 * But only do this at the end of a quantum to prevent cascading effects.
+						 */
+						options |= SCHED_PREEMPT;
+					}
+				}
+
+				if (reason & AST_QUANTUM)
+					options |= SCHED_TAILQ;
+				else if (reason & AST_PREEMPT)
+					options |= SCHED_HEADQ;
 				else
-					thread_setrun(thread, SCHED_PREEMPT | SCHED_TAILQ);
+					options |= (SCHED_PREEMPT | SCHED_TAILQ);
+
+				thread_setrun(thread, options);
 
 				KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 				        MACHDBG_CODE(DBG_MACH_SCHED,MACH_DISPATCH) | DBG_FUNC_NONE,
@@ -2618,7 +2774,7 @@ thread_dispatch(
 				}
 
 				thread->state &= ~TH_RUN;
-				thread->last_made_runnable_time = ~0ULL;
+				thread->last_made_runnable_time = thread->last_basepri_change_time = THREAD_NOT_RUNNABLE;
 				thread->chosen_processor = PROCESSOR_NULL;
 
 				new_run_count = sched_run_decr(thread);
@@ -2657,12 +2813,14 @@ thread_dispatch(
 		}
 	}
 
+	int urgency = THREAD_URGENCY_NONE;
+	uint64_t latency = 0;
+
 	/* Update (new) current thread and reprogram quantum timer */
 	thread_lock(self);
+	
 	if (!(self->state & TH_IDLE)) {
 		uint64_t        arg1, arg2;
-		int             urgency;
-		uint64_t		latency;
 
 #if CONFIG_SCHED_SFI
 		ast_t			new_ast;
@@ -2674,15 +2832,19 @@ thread_dispatch(
 		}
 #endif
 
-		assertf(processor->last_dispatch >= self->last_made_runnable_time, "Non-monotonic time? dispatch at 0x%llx, runnable at 0x%llx", processor->last_dispatch, self->last_made_runnable_time);
+		assertf(processor->last_dispatch >= self->last_made_runnable_time,
+		        "Non-monotonic time? dispatch at 0x%llx, runnable at 0x%llx",
+		        processor->last_dispatch, self->last_made_runnable_time);
+
+		assert(self->last_made_runnable_time <= self->last_basepri_change_time);
+
 		latency = processor->last_dispatch - self->last_made_runnable_time;
+		assert(latency >= self->same_pri_latency);
 
 		urgency = thread_get_urgency(self, &arg1, &arg2);
 
 		thread_tell_urgency(urgency, arg1, arg2, latency, self);
 
-		machine_thread_going_on_core(self, urgency, latency, processor->last_dispatch);
-		
 		/*
 		 *	Get a new quantum if none remaining.
 		 */
@@ -2694,15 +2856,15 @@ thread_dispatch(
 		 *	Set up quantum timer and timeslice.
 		 */
 		processor->quantum_end = processor->last_dispatch + self->quantum_remaining;
-		timer_call_enter1(&processor->quantum_timer, self, processor->quantum_end, TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL);
+		timer_call_quantum_timer_enter(&processor->quantum_timer, self,
+			processor->quantum_end, processor->last_dispatch);
 
 		processor->first_timeslice = TRUE;
 	} else {
-		timer_call_cancel(&processor->quantum_timer);
+		timer_call_quantum_timer_cancel(&processor->quantum_timer);
 		processor->first_timeslice = FALSE;
 
 		thread_tell_urgency(THREAD_URGENCY_NONE, 0, 0, 0, self);
-		machine_thread_going_on_core(self, THREAD_URGENCY_NONE, 0, processor->last_dispatch);
 	}
 
 	assert(self->block_hint == kThreadWaitNone);
@@ -2711,6 +2873,9 @@ thread_dispatch(
 	processor->starting_pri = self->sched_pri;
 
 	thread_unlock(self);
+
+	machine_thread_going_on_core(self, urgency, latency, self->same_pri_latency,
+	                             processor->last_dispatch);
 
 #if defined(CONFIG_SCHED_DEFERRED_AST)
 	/*
@@ -2781,7 +2946,7 @@ thread_block_reason(
 
 	do {
 		thread_lock(self);
-		new_thread = thread_select(self, processor, reason);
+		new_thread = thread_select(self, processor, &reason);
 		thread_unlock(self);
 	} while (!thread_invoke(self, new_thread, reason));
 
@@ -2827,18 +2992,20 @@ thread_run(
 	void				*parameter,
 	thread_t			new_thread)
 {
-	ast_t		handoff = AST_HANDOFF;
+	ast_t reason = AST_HANDOFF;
 
 	self->continuation = continuation;
 	self->parameter = parameter;
 
-	while (!thread_invoke(self, new_thread, handoff)) {
-		processor_t		processor = current_processor();
+	while (!thread_invoke(self, new_thread, reason)) {
+		/* the handoff failed, so we have to fall back to the normal block path */
+		processor_t processor = current_processor();
+
+		reason = AST_NONE;
 
 		thread_lock(self);
-		new_thread = thread_select(self, processor, AST_NONE);
+		new_thread = thread_select(self, processor, &reason);
 		thread_unlock(self);
-		handoff = AST_NONE;
 	}
 
 	return (self->wait_result);
@@ -2870,6 +3037,11 @@ thread_continue(
 	thread_dispatch(thread, self);
 
 	self->continuation = self->parameter = NULL;
+
+#if INTERRUPT_MASKED_DEBUG
+    /* Reset interrupt-masked spin debugging timeout */
+    ml_spin_debug_clear(self);
+#endif
 
 	if (thread != THREAD_NULL)
 		(void)spllo();
@@ -3029,24 +3201,31 @@ run_queue_remove(
 
 /* Assumes RT lock is not held, and acquires splsched/rt_lock itself */
 void
-rt_runq_scan(sched_update_scan_context_t scan_context)
+sched_rtglobal_runq_scan(sched_update_scan_context_t scan_context)
 {
 	spl_t		s;
 	thread_t	thread;
 
-	s = splsched();
-	rt_lock_lock();
+	processor_set_t pset = &pset0;
 
-	qe_foreach_element_safe(thread, &rt_runq.queue, runq_links) {
+	s = splsched();
+	rt_lock_lock(pset);
+
+	qe_foreach_element_safe(thread, &pset->rt_runq.queue, runq_links) {
 		if (thread->last_made_runnable_time < scan_context->earliest_rt_make_runnable_time) {
 			scan_context->earliest_rt_make_runnable_time = thread->last_made_runnable_time;
 		}
 	}
 
-	rt_lock_unlock();
+	rt_lock_unlock(pset);
 	splx(s);
 }
 
+int64_t
+sched_rtglobal_runq_count_sum(void)
+{
+	return pset0.rt_runq.runq_stats.count_sum;
+}
 
 /*
  *	realtime_queue_insert:
@@ -3054,13 +3233,13 @@ rt_runq_scan(sched_update_scan_context_t scan_context)
  *	Enqueue a thread for realtime execution.
  */
 static boolean_t
-realtime_queue_insert(thread_t thread)
+realtime_queue_insert(processor_t processor, processor_set_t pset, thread_t thread)
 {
-	queue_t     queue       = &rt_runq.queue;
+	queue_t     queue       = &SCHED(rt_runq)(pset)->queue;
 	uint64_t    deadline    = thread->realtime.deadline;
 	boolean_t   preempt     = FALSE;
 
-	rt_lock_lock();
+	rt_lock_lock(pset);
 
 	if (queue_empty(queue)) {
 		enqueue_tail(queue, &thread->runq_links);
@@ -3084,11 +3263,11 @@ realtime_queue_insert(thread_t thread)
 		}
 	}
 
-	thread->runq = THREAD_ON_RT_RUNQ;
-	SCHED_STATS_RUNQ_CHANGE(&rt_runq.runq_stats, rt_runq.count);
-	rt_runq.count++;
+	thread->runq = processor;
+	SCHED_STATS_RUNQ_CHANGE(&SCHED(rt_runq)(pset)->runq_stats, rt_runq_count(pset));
+	rt_runq_count_incr(pset);
 
-	rt_lock_unlock();
+	rt_lock_unlock(pset);
 
 	return (preempt);
 }
@@ -3109,7 +3288,7 @@ realtime_setrun(
 	processor_set_t		pset = processor->processor_set;
 	ast_t				preempt;
 
-	boolean_t do_signal_idle = FALSE, do_cause_ast = FALSE;
+	sched_ipi_type_t ipi_type = SCHED_IPI_NONE;
 
 	thread->chosen_processor = processor;
 
@@ -3123,25 +3302,17 @@ realtime_setrun(
 		&& processor->state == PROCESSOR_IDLE) {
 		re_queue_tail(&pset->active_queue, &processor->processor_queue);
 
+		pset->active_processor_count++;
+		sched_update_pset_load_average(pset);
+
 		processor->next_thread = thread;
-		processor->current_pri = thread->sched_pri;
-		processor->current_thmode = thread->sched_mode;
-		processor->current_sfi_class = thread->sfi_class;
+		processor_state_update_from_thread(processor, thread);
 		processor->deadline = thread->realtime.deadline;
 		processor->state = PROCESSOR_DISPATCHING;
 
-		if (processor != current_processor()) {
-			if (!(pset->pending_AST_cpu_mask & (1ULL << processor->cpu_id))) {
-				/* cleared on exit from main processor_idle() loop */
-				pset->pending_AST_cpu_mask |= (1ULL << processor->cpu_id);
-				do_signal_idle = TRUE;
-			}
-		}
+		ipi_type = sched_ipi_action(processor, thread, true, SCHED_IPI_EVENT_BOUND_THR);
 		pset_unlock(pset);
-
-		if (do_signal_idle) {
-			machine_signal_idle(processor);
-		}
+		sched_ipi_perform(processor, ipi_type);
 		return;
 	}
 
@@ -3152,43 +3323,35 @@ realtime_setrun(
 	else
 		preempt = AST_NONE;
 
-	realtime_queue_insert(thread);
+	realtime_queue_insert(processor, pset, thread);
 
+	ipi_type = SCHED_IPI_NONE;
 	if (preempt != AST_NONE) {
 		if (processor->state == PROCESSOR_IDLE) {
 			re_queue_tail(&pset->active_queue, &processor->processor_queue);
+			
+			pset->active_processor_count++;
+			sched_update_pset_load_average(pset);
 
 			processor->next_thread = THREAD_NULL;
-			processor->current_pri = thread->sched_pri;
-			processor->current_thmode = thread->sched_mode;
-			processor->current_sfi_class = thread->sfi_class;
+			processor_state_update_from_thread(processor, thread);
 			processor->deadline = thread->realtime.deadline;
 			processor->state = PROCESSOR_DISPATCHING;
 			if (processor == current_processor()) {
 				ast_on(preempt);
 			} else {
-				if (!(pset->pending_AST_cpu_mask & (1ULL << processor->cpu_id))) {
-					/* cleared on exit from main processor_idle() loop */
-					pset->pending_AST_cpu_mask |= (1ULL << processor->cpu_id);
-					do_signal_idle = TRUE;
-				}
+				ipi_type = sched_ipi_action(processor, thread, true, SCHED_IPI_EVENT_PREEMPT);
 			}
 		} else if (processor->state == PROCESSOR_DISPATCHING) {
 			if ((processor->next_thread == THREAD_NULL) && ((processor->current_pri < thread->sched_pri) || (processor->deadline > thread->realtime.deadline))) {
-				processor->current_pri = thread->sched_pri;
-				processor->current_thmode = thread->sched_mode;
-				processor->current_sfi_class = thread->sfi_class;
+				processor_state_update_from_thread(processor, thread);
 				processor->deadline = thread->realtime.deadline;
 			}
 		} else {
 			if (processor == current_processor()) {
 				ast_on(preempt);
 			} else {
-				if (!(pset->pending_AST_cpu_mask & (1ULL << processor->cpu_id))) {
-					/* cleared after IPI causes csw_check() to be called */
-					pset->pending_AST_cpu_mask |= (1ULL << processor->cpu_id);
-					do_cause_ast = TRUE;
-				}
+				ipi_type = sched_ipi_action(processor, thread, false, SCHED_IPI_EVENT_PREEMPT);
 			}
 		}
 	} else {
@@ -3196,14 +3359,116 @@ realtime_setrun(
 	}
 
 	pset_unlock(pset);
-
-	if (do_signal_idle) {
-		machine_signal_idle(processor);
-	} else if (do_cause_ast) {
-		cause_ast_check(processor);
-	}
+	sched_ipi_perform(processor, ipi_type);
 }
 
+
+sched_ipi_type_t sched_ipi_deferred_policy(processor_set_t pset, processor_t dst, 
+	__unused sched_ipi_event_t event)
+{
+#if defined(CONFIG_SCHED_DEFERRED_AST)
+    if (!bit_test(pset->pending_deferred_AST_cpu_mask, dst->cpu_id)) {
+        return SCHED_IPI_DEFERRED;
+    }
+#else /* CONFIG_SCHED_DEFERRED_AST */
+    panic("Request for deferred IPI on an unsupported platform; pset: %p CPU: %d", pset, dst->cpu_id);
+#endif /* CONFIG_SCHED_DEFERRED_AST */
+    return SCHED_IPI_NONE;
+}
+
+sched_ipi_type_t sched_ipi_action(processor_t dst, thread_t thread, boolean_t dst_idle, sched_ipi_event_t event)
+{
+    sched_ipi_type_t ipi_type = SCHED_IPI_NONE;
+    assert(dst != NULL);
+
+    processor_set_t pset = dst->processor_set;
+    if (current_processor() == dst) {
+        return SCHED_IPI_NONE;
+    }
+
+    if (bit_test(pset->pending_AST_cpu_mask, dst->cpu_id)) {
+        return SCHED_IPI_NONE;
+    }
+
+    ipi_type = SCHED(ipi_policy)(dst, thread, dst_idle, event);
+    switch(ipi_type) {
+	case SCHED_IPI_NONE:
+	    return SCHED_IPI_NONE;
+#if defined(CONFIG_SCHED_DEFERRED_AST)	
+	case SCHED_IPI_DEFERRED:
+	    bit_set(pset->pending_deferred_AST_cpu_mask, dst->cpu_id);
+	    break;
+#endif /* CONFIG_SCHED_DEFERRED_AST */
+	default:
+	    bit_set(pset->pending_AST_cpu_mask, dst->cpu_id);
+	    break;
+    }
+    return ipi_type;
+}
+
+sched_ipi_type_t sched_ipi_policy(processor_t dst, thread_t thread, boolean_t dst_idle, sched_ipi_event_t event)
+{
+    sched_ipi_type_t ipi_type = SCHED_IPI_NONE;
+    boolean_t deferred_ipi_supported = false;
+    processor_set_t pset = dst->processor_set;
+
+#if defined(CONFIG_SCHED_DEFERRED_AST)
+    deferred_ipi_supported = true;
+#endif /* CONFIG_SCHED_DEFERRED_AST */
+
+    switch(event) {
+	case SCHED_IPI_EVENT_SPILL:
+	case SCHED_IPI_EVENT_SMT_REBAL:
+	case SCHED_IPI_EVENT_REBALANCE:
+	case SCHED_IPI_EVENT_BOUND_THR:
+	    /* 
+	     * The spill, SMT rebalance, rebalance and the bound thread 
+	     * scenarios use immediate IPIs always.
+	     */
+	    ipi_type = dst_idle ? SCHED_IPI_IDLE : SCHED_IPI_IMMEDIATE;
+	    break;
+	case SCHED_IPI_EVENT_PREEMPT:
+	    /* In the preemption case, use immediate IPIs for RT threads */
+	    if (thread && (thread->sched_pri >= BASEPRI_RTQUEUES)) {
+            ipi_type = dst_idle ? SCHED_IPI_IDLE : SCHED_IPI_IMMEDIATE;
+            break;
+	    }
+
+	    /* 
+	     * For Non-RT threads preemption,
+	     * If the core is active, use immediate IPIs.
+	     * If the core is idle, use deferred IPIs if supported; otherwise immediate IPI.
+	     */
+	    if (deferred_ipi_supported && dst_idle) {
+            return sched_ipi_deferred_policy(pset, dst, event);
+	    }
+	    ipi_type = dst_idle ? SCHED_IPI_IDLE : SCHED_IPI_IMMEDIATE;
+	    break;
+	default:
+	    panic("Unrecognized scheduler IPI event type %d", event);
+    }
+    assert(ipi_type != SCHED_IPI_NONE);
+    return ipi_type;
+}
+
+void sched_ipi_perform(processor_t dst, sched_ipi_type_t ipi)
+{
+    switch (ipi) {
+	case SCHED_IPI_NONE:
+	    break;
+	case SCHED_IPI_IDLE:
+	    machine_signal_idle(dst);
+	    break;
+	case SCHED_IPI_IMMEDIATE:
+	    cause_ast_check(dst);
+	    break;
+	case SCHED_IPI_DEFERRED:
+	    machine_signal_idle_deferred(dst);
+	    break;
+	default:
+	    panic("Unrecognized scheduler IPI type: %d", ipi);
+    }
+}
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
@@ -3233,9 +3498,8 @@ processor_setrun(
 	processor_set_t		pset = processor->processor_set;
 	ast_t				preempt;
 	enum { eExitIdle, eInterruptRunning, eDoNothing } ipi_action = eDoNothing;
-	enum { eNoSignal, eDoSignal, eDoDeferredSignal } do_signal_idle = eNoSignal;
 
-	boolean_t do_cause_ast = FALSE;
+	sched_ipi_type_t ipi_type = SCHED_IPI_NONE;
 
 	thread->chosen_processor = processor;
 
@@ -3248,25 +3512,17 @@ processor_setrun(
 
 		re_queue_tail(&pset->active_queue, &processor->processor_queue);
 
+		pset->active_processor_count++;
+		sched_update_pset_load_average(pset);
+
 		processor->next_thread = thread;
-		processor->current_pri = thread->sched_pri;
-		processor->current_thmode = thread->sched_mode;
-		processor->current_sfi_class = thread->sfi_class;
+		processor_state_update_from_thread(processor, thread);
 		processor->deadline = UINT64_MAX;
 		processor->state = PROCESSOR_DISPATCHING;
 
-		if (!(pset->pending_AST_cpu_mask & (1ULL << processor->cpu_id))) {
-			/* cleared on exit from main processor_idle() loop */
-			pset->pending_AST_cpu_mask |= (1ULL << processor->cpu_id);
-			do_signal_idle = eDoSignal;
-		}
-
+		ipi_type = sched_ipi_action(processor, thread, true, SCHED_IPI_EVENT_BOUND_THR);
 		pset_unlock(pset);
-
-		if (do_signal_idle == eDoSignal) {
-			machine_signal_idle(processor);
-		}
-
+		sched_ipi_perform(processor, ipi_type);
 		return;
 	}
 
@@ -3290,24 +3546,20 @@ processor_setrun(
 		preempt = (options & SCHED_PREEMPT)? AST_PREEMPT: AST_NONE;
 
 	SCHED(processor_enqueue)(processor, thread, options);
+	sched_update_pset_load_average(pset);
 
 	if (preempt != AST_NONE) {
 		if (processor->state == PROCESSOR_IDLE) {
 			re_queue_tail(&pset->active_queue, &processor->processor_queue);
-
+			pset->active_processor_count++;
 			processor->next_thread = THREAD_NULL;
-			processor->current_pri = thread->sched_pri;
-			processor->current_thmode = thread->sched_mode;
-			processor->current_sfi_class = thread->sfi_class;
+			processor_state_update_from_thread(processor, thread);
 			processor->deadline = UINT64_MAX;
 			processor->state = PROCESSOR_DISPATCHING;
-
 			ipi_action = eExitIdle;
 		} else if ( processor->state == PROCESSOR_DISPATCHING) {
 			if ((processor->next_thread == THREAD_NULL) && (processor->current_pri < thread->sched_pri)) {
-				processor->current_pri = thread->sched_pri;
-				processor->current_thmode = thread->sched_mode;
-				processor->current_sfi_class = thread->sfi_class;
+				processor_state_update_from_thread(processor, thread);
 				processor->deadline = UINT64_MAX;
 			}
 		} else if (	(processor->state == PROCESSOR_RUNNING		||
@@ -3326,10 +3578,11 @@ processor_setrun(
 		} else if (processor->state == PROCESSOR_IDLE) {
 			re_queue_tail(&pset->active_queue, &processor->processor_queue);
 
+			pset->active_processor_count++;
+			// sched_update_pset_load_average(pset);
+
 			processor->next_thread = THREAD_NULL;
-			processor->current_pri = thread->sched_pri;
-			processor->current_thmode = thread->sched_mode;
-			processor->current_sfi_class = thread->sfi_class;
+			processor_state_update_from_thread(processor, thread);
 			processor->deadline = UINT64_MAX;
 			processor->state = PROCESSOR_DISPATCHING;
 
@@ -3337,67 +3590,17 @@ processor_setrun(
 		}
 	}
 
-	switch (ipi_action) {
-		case eDoNothing:
-			break;
-		case eExitIdle:
-			if (processor == current_processor()) {
-				if (csw_check_locked(processor, pset, AST_NONE) != AST_NONE)
-					ast_on(preempt);
-			} else {
-#if defined(CONFIG_SCHED_DEFERRED_AST)
-				if (!(pset->pending_deferred_AST_cpu_mask & (1ULL << processor->cpu_id)) &&
-				    !(pset->pending_AST_cpu_mask & (1ULL << processor->cpu_id))) {
-					/* cleared on exit from main processor_idle() loop */
-					pset->pending_deferred_AST_cpu_mask |= (1ULL << processor->cpu_id);
-					do_signal_idle = eDoDeferredSignal;
-				}
-#else
-				if (!(pset->pending_AST_cpu_mask & (1ULL << processor->cpu_id))) {
-					/* cleared on exit from main processor_idle() loop */
-					pset->pending_AST_cpu_mask |= (1ULL << processor->cpu_id);
-					do_signal_idle = eDoSignal;
-				}
-#endif
-			}
-			break;
-		case eInterruptRunning:
-			if (processor == current_processor()) {
-				if (csw_check_locked(processor, pset, AST_NONE) != AST_NONE)
-					ast_on(preempt);
-			} else {
-				if (!(pset->pending_AST_cpu_mask & (1ULL << processor->cpu_id))) {
-					/* cleared after IPI causes csw_check() to be called */
-					pset->pending_AST_cpu_mask |= (1ULL << processor->cpu_id);
-					do_cause_ast = TRUE;
-				}
-			}
-			break;
+	if (ipi_action != eDoNothing) {
+        if (processor == current_processor()) {
+            if (csw_check_locked(processor, pset, AST_NONE) != AST_NONE)
+                ast_on(preempt);
+	    } else {
+            sched_ipi_event_t event = (options & SCHED_REBALANCE) ? SCHED_IPI_EVENT_REBALANCE : SCHED_IPI_EVENT_PREEMPT;
+            ipi_type = sched_ipi_action(processor, thread, (ipi_action == eExitIdle), event);
+	    }
 	}
-
 	pset_unlock(pset);
-
-	if (do_signal_idle == eDoSignal) {
-		machine_signal_idle(processor);
-	}
-#if defined(CONFIG_SCHED_DEFERRED_AST)
-	else if (do_signal_idle == eDoDeferredSignal) {
-		/*
-		 * TODO: The ability to cancel this signal could make
-		 * sending it outside of the pset lock an issue.  Do
-		 * we need to address this?  Or would the only fallout
-		 * be that the core takes a signal?  As long as we do
-		 * not run the risk of having a core marked as signal
-		 * outstanding, with no real signal outstanding, the
-		 * only result should be that we fail to cancel some
-		 * signals.
-		 */
-		machine_signal_idle_deferred(processor);
-	}
-#endif
-	else if (do_cause_ast) {
-		cause_ast_check(processor);
-	}
+	sched_ipi_perform(processor, ipi_type);
 }
 
 /*
@@ -3729,6 +3932,10 @@ choose_processor(
 
 	} while (processor == PROCESSOR_NULL);
 
+	if (processor->state == PROCESSOR_RUNNING) {
+		re_queue_tail(&cset->active_queue, &processor->processor_queue);
+	}
+
 	return (processor);
 }
 
@@ -3775,6 +3982,7 @@ thread_setrun(
 			pset_lock(pset);
 
 			processor = SCHED(choose_processor)(pset, PROCESSOR_NULL, thread);
+			pset = processor->processor_set;
 
 			SCHED_DEBUG_CHOOSE_PROCESSOR_KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHOOSE_PROCESSOR)|DBG_FUNC_NONE,
 									  (uintptr_t)thread_tid(thread), (uintptr_t)-1, processor->cpu_id, processor->state, 0);
@@ -3786,6 +3994,7 @@ thread_setrun(
 			pset = processor->processor_set;
 			pset_lock(pset);
 			processor = SCHED(choose_processor)(pset, processor, thread);
+			pset = processor->processor_set;
 
 			SCHED_DEBUG_CHOOSE_PROCESSOR_KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHOOSE_PROCESSOR)|DBG_FUNC_NONE,
 								  (uintptr_t)thread_tid(thread), thread->last_processor->cpu_id, processor->cpu_id, processor->state, 0);
@@ -3806,7 +4015,8 @@ thread_setrun(
 			pset_lock(pset);
 
 			processor = SCHED(choose_processor)(pset, PROCESSOR_NULL, thread);
-			task->pset_hint = processor->processor_set;
+			pset = processor->processor_set;
+			task->pset_hint = pset;
 
 			SCHED_DEBUG_CHOOSE_PROCESSOR_KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHOOSE_PROCESSOR)|DBG_FUNC_NONE,
 									  (uintptr_t)thread_tid(thread), (uintptr_t)-1, processor->cpu_id, processor->state, 0);
@@ -3836,10 +4046,15 @@ thread_setrun(
 	 *	Dispatch the thread on the chosen processor.
 	 *	TODO: This should be based on sched_mode, not sched_pri
 	 */
-	if (thread->sched_pri >= BASEPRI_RTQUEUES)
+	if (thread->sched_pri >= BASEPRI_RTQUEUES) {
 		realtime_setrun(processor, thread);
-	else
+	} else {
 		processor_setrun(processor, thread, options);
+		/* pset is now unlocked */
+		if (thread->bound_processor == PROCESSOR_NULL) {
+			SCHED(check_spill)(pset, thread);
+		}
+	}
 }
 
 processor_set_t
@@ -3871,7 +4086,7 @@ csw_check(
 	pset_lock(pset);
 
 	/* If we were sent a remote AST and interrupted a running processor, acknowledge it here with pset lock held */
-	pset->pending_AST_cpu_mask &= ~(1ULL << processor->cpu_id);
+	bit_clear(pset->pending_AST_cpu_mask, processor->cpu_id);
 
 	result = csw_check_locked(processor, pset, check_reason);
 
@@ -3887,18 +4102,18 @@ csw_check(
 ast_t
 csw_check_locked(
 	processor_t		processor,
-	processor_set_t	pset __unused,
+	processor_set_t		pset,
 	ast_t			check_reason)
 {
 	ast_t			result;
 	thread_t		thread = processor->active_thread;
 
 	if (processor->first_timeslice) {
-		if (rt_runq.count > 0)
+		if (rt_runq_count(pset) > 0)
 			return (check_reason | AST_PREEMPT | AST_URGENT);
 	}
 	else {
-		if (rt_runq.count > 0) {
+		if (rt_runq_count(pset) > 0) {
 			if (BASEPRI_RTQUEUES > processor->current_pri)
 				return (check_reason | AST_PREEMPT | AST_URGENT);
 			else
@@ -3917,8 +4132,18 @@ csw_check_locked(
 	 * (non-urgently) get to a point and then block, and which point thread_select() should
 	 * try to idle the processor and re-dispatch the thread to a recommended processor.
 	 */
-	if (!processor->is_recommended)
+	if (!processor->is_recommended) {
 		return (check_reason | AST_PREEMPT);
+	}
+
+	/*
+	 * Same for avoid-processor
+	 *
+	 * TODO: Should these set AST_REBALANCE?
+	 */
+	if (SCHED(avoid_processor_enabled) && SCHED(thread_avoid_processor)(processor, thread)) {
+		return (check_reason | AST_PREEMPT);
+	}
 
 	/*
 	 * Even though we could continue executing on this processor, a
@@ -3967,7 +4192,7 @@ csw_check_locked(
 void
 set_sched_pri(
               thread_t        thread,
-              int             priority)
+              int             new_priority)
 {
 	thread_t cthread = current_thread();
 	boolean_t is_current_thread = (thread == cthread) ? TRUE : FALSE;
@@ -3975,8 +4200,10 @@ set_sched_pri(
 	uint64_t urgency_param1, urgency_param2;
 	boolean_t removed_from_runq = FALSE;
 
+	int old_priority = thread->sched_pri;
+
 	/* If we're already at this priority, no need to mess with the runqueue */
-	if (priority == thread->sched_pri)
+	if (new_priority == old_priority)
 		return;
 
 	if (is_current_thread) {
@@ -3986,7 +4213,7 @@ set_sched_pri(
 		removed_from_runq = thread_run_queue_remove(thread);
 	}
 
-	thread->sched_pri = priority;
+	thread->sched_pri = new_priority;
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHANGE_PRIORITY),
 	                      (uintptr_t)thread_tid(thread),
@@ -4003,28 +4230,35 @@ set_sched_pri(
 		 * those are lazily handled. QoS classes have distinct priority bands, and QoS
 		 * inheritance is expected to involve priority changes.
 		 */
+		uint64_t ctime = mach_approximate_time();
 		if (nurgency != curgency) {
 			thread_tell_urgency(nurgency, urgency_param1, urgency_param2, 0, thread);
-			machine_thread_going_on_core(thread, nurgency, 0, 0);
 		}
+		machine_thread_going_on_core(thread, nurgency, 0, 0, ctime);
 	}
 
-	/* TODO: Should this be TAILQ if it went down, HEADQ if it went up? */
 	if (removed_from_runq)
 		thread_run_queue_reinsert(thread, SCHED_PREEMPT | SCHED_TAILQ);
 	else if (thread->state & TH_RUN) {
 		processor_t processor = thread->last_processor;
 
 		if (is_current_thread) {
-			ast_t preempt;
+			processor_state_update_from_thread(processor, thread);
 
-			processor->current_pri = priority;
-			processor->current_thmode = thread->sched_mode;
-			processor->current_sfi_class = thread->sfi_class = sfi_thread_classify(thread);
-			if ((preempt = csw_check(processor, AST_NONE)) != AST_NONE)
-				ast_on(preempt);
-		} else if (processor != PROCESSOR_NULL && processor->active_thread == thread)
+			/*
+			 * When dropping in priority, check if the thread no longer belongs on core.
+			 * If a thread raises its own priority, don't aggressively rebalance it.
+			 * <rdar://problem/31699165>
+			 */
+			if (new_priority < old_priority) {
+				ast_t preempt;
+
+				if ((preempt = csw_check(processor, AST_NONE)) != AST_NONE)
+					ast_on(preempt);
+			}
+		} else if (processor != PROCESSOR_NULL && processor->active_thread == thread) {
 			cause_ast_check(processor);
+		}
 	}
 }
 
@@ -4117,7 +4351,9 @@ thread_run_queue_remove(
 		return SCHED(processor_queue_remove)(processor, thread);
 	}
 
-	rt_lock_lock();
+	processor_set_t pset = processor->processor_set;
+
+	rt_lock_lock(pset);
 
 	if (thread->runq != PROCESSOR_NULL) {
 		/*
@@ -4125,18 +4361,16 @@ thread_run_queue_remove(
 		 *	that run queue.
 		 */
 
-		assert(thread->runq == THREAD_ON_RT_RUNQ);
-
 		remqueue(&thread->runq_links);
-		SCHED_STATS_RUNQ_CHANGE(&rt_runq.runq_stats, rt_runq.count);
-		rt_runq.count--;
+		SCHED_STATS_RUNQ_CHANGE(&SCHED(rt_runq)(pset)->runq_stats, rt_runq_count(pset));
+		rt_runq_count_decr(pset);
 
 		thread->runq = PROCESSOR_NULL;
 
 		removed = TRUE;
 	}
 
-	rt_lock_unlock();
+	rt_lock_unlock(pset);
 
 	return (removed);
 }
@@ -4152,10 +4386,9 @@ void
 thread_run_queue_reinsert(thread_t thread, integer_t options)
 {
 	assert(thread->runq == PROCESSOR_NULL);
+	assert(thread->state & (TH_RUN));
 
-		assert(thread->state & (TH_RUN));
-		thread_setrun(thread, options);
-
+	thread_setrun(thread, options);
 }
 
 void
@@ -4200,6 +4433,29 @@ thread_get_urgency(thread_t thread, uint64_t *arg1, uint64_t *arg2)
 	}
 }
 
+perfcontrol_class_t
+thread_get_perfcontrol_class(thread_t thread)
+{
+    /* Special case handling */
+    if (thread->state & TH_IDLE)
+        return PERFCONTROL_CLASS_IDLE;
+    if (thread->task == kernel_task)
+        return PERFCONTROL_CLASS_KERNEL;
+    if (thread->sched_mode == TH_MODE_REALTIME)
+        return PERFCONTROL_CLASS_REALTIME;
+
+    /* perfcontrol_class based on base_pri */
+    if (thread->base_pri <= MAXPRI_THROTTLE)
+        return PERFCONTROL_CLASS_BACKGROUND;
+    else if (thread->base_pri <= BASEPRI_UTILITY)
+        return PERFCONTROL_CLASS_UTILITY;
+    else if (thread->base_pri <= BASEPRI_DEFAULT)
+        return PERFCONTROL_CLASS_NONUI;
+    else if (thread->base_pri <= BASEPRI_FOREGROUND)
+        return PERFCONTROL_CLASS_UI;
+    else
+        return PERFCONTROL_CLASS_ABOVEUI;
+}
 
 /*
  *	This is the processor idle loop, which just looks for other threads
@@ -4236,12 +4492,24 @@ processor_idle(
 	PROCESSOR_DATA(processor, current_state) = &PROCESSOR_DATA(processor, idle_state);
 
 	while (1) {
-		if (processor->state != PROCESSOR_IDLE) /* unsafe, but worst case we loop around once */
+		/*
+		 * Ensure that updates to my processor and pset state,
+		 * made by the IPI source processor before sending the IPI,
+		 * are visible on this processor now (even though we don't
+		 * take the pset lock yet).
+		 */
+		atomic_thread_fence(memory_order_acquire);
+
+		if (processor->state != PROCESSOR_IDLE)
 			break;
-		if (pset->pending_AST_cpu_mask & (1ULL << processor->cpu_id))
+		if (bit_test(pset->pending_AST_cpu_mask, processor->cpu_id))
 			break;
+#if defined(CONFIG_SCHED_DEFERRED_AST)
+		if (bit_test(pset->pending_deferred_AST_cpu_mask, processor->cpu_id))
+			break;
+#endif
 		if (processor->is_recommended) {
-			if (rt_runq.count)
+			if (rt_runq_count(pset))
 				break;
 		} else {
 			if (SCHED(processor_bound_count)(processor))
@@ -4257,7 +4525,7 @@ processor_idle(
 #endif
 
 		IDLE_KERNEL_DEBUG_CONSTANT(
-			MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_NONE, (uintptr_t)thread_tid(thread), rt_runq.count, SCHED(processor_runq_count)(processor), -1, 0);
+			MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_NONE, (uintptr_t)thread_tid(thread), rt_runq_count(pset), SCHED(processor_runq_count)(processor), -1, 0);
 
 		machine_track_platform_idle(TRUE);
 
@@ -4268,7 +4536,7 @@ processor_idle(
 		(void)splsched();
 
 		IDLE_KERNEL_DEBUG_CONSTANT(
-			MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_NONE, (uintptr_t)thread_tid(thread), rt_runq.count, SCHED(processor_runq_count)(processor), -2, 0);
+			MACHDBG_CODE(DBG_MACH_SCHED,MACH_IDLE) | DBG_FUNC_NONE, (uintptr_t)thread_tid(thread), rt_runq_count(pset), SCHED(processor_runq_count)(processor), -2, 0);
 
 		if (!SCHED(processor_queue_empty)(processor)) {
 			/* Secondary SMT processors respond to directed wakeups
@@ -4286,9 +4554,9 @@ processor_idle(
 	pset_lock(pset);
 
 	/* If we were sent a remote AST and came out of idle, acknowledge it here with pset lock held */
-	pset->pending_AST_cpu_mask &= ~(1ULL << processor->cpu_id);
+	bit_clear(pset->pending_AST_cpu_mask, processor->cpu_id);
 #if defined(CONFIG_SCHED_DEFERRED_AST)
-	pset->pending_deferred_AST_cpu_mask &= ~(1ULL << processor->cpu_id);
+	bit_clear(pset->pending_deferred_AST_cpu_mask, processor->cpu_id);
 #endif
 
 	state = processor->state;
@@ -4301,17 +4569,15 @@ processor_idle(
 		processor->state = PROCESSOR_RUNNING;
 
 		if ((new_thread != THREAD_NULL) && (SCHED(processor_queue_has_priority)(processor, new_thread->sched_pri, FALSE)					||
-											(rt_runq.count > 0))	) {
+											(rt_runq_count(pset) > 0))	) {
    			/* Something higher priority has popped up on the runqueue - redispatch this thread elsewhere */
-			processor->current_pri = IDLEPRI;
-			processor->current_thmode = TH_MODE_FIXED;
-			processor->current_sfi_class = SFI_CLASS_KERNEL;
+			processor_state_update_idle(processor);
 			processor->deadline = UINT64_MAX;
 
 			pset_unlock(pset);
 
 			thread_lock(new_thread);
-			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_REDISPATCH), (uintptr_t)thread_tid(new_thread), new_thread->sched_pri, rt_runq.count, 0, 0);
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_REDISPATCH), (uintptr_t)thread_tid(new_thread), new_thread->sched_pri, rt_runq_count(pset), 0, 0);
 			thread_setrun(new_thread, SCHED_HEADQ);
 			thread_unlock(new_thread);
 
@@ -4321,6 +4587,8 @@ processor_idle(
 
 			return (THREAD_NULL);
 		}
+
+		sched_update_pset_load_average(pset);
 
 		pset_unlock(pset);
 
@@ -4333,10 +4601,11 @@ processor_idle(
 	} else if (state == PROCESSOR_IDLE) {
 		re_queue_tail(&pset->active_queue, &processor->processor_queue);
 
+		pset->active_processor_count++;
+		sched_update_pset_load_average(pset);
+
 		processor->state = PROCESSOR_RUNNING;
-		processor->current_pri = IDLEPRI;
-		processor->current_thmode = TH_MODE_FIXED;
-		processor->current_sfi_class = SFI_CLASS_KERNEL;
+		processor_state_update_idle(processor);
 		processor->deadline = UINT64_MAX;
 
 	} else if (state == PROCESSOR_SHUTDOWN) {
@@ -4346,9 +4615,7 @@ processor_idle(
 		 */
 		if ((new_thread = processor->next_thread) != THREAD_NULL) {
 			processor->next_thread = THREAD_NULL;
-			processor->current_pri = IDLEPRI;
-			processor->current_thmode = TH_MODE_FIXED;
-			processor->current_sfi_class = SFI_CLASS_KERNEL;
+			processor_state_update_idle(processor);
 			processor->deadline = UINT64_MAX;
 
 			pset_unlock(pset);
@@ -4402,10 +4669,14 @@ idle_thread_create(
 	kern_return_t	result;
 	thread_t		thread;
 	spl_t			s;
+	char			name[MAXTHREADNAMESIZE];
 
 	result = kernel_thread_create((thread_continue_t)idle_thread, NULL, MAXPRI_KERNEL, &thread);
 	if (result != KERN_SUCCESS)
 		return (result);
+
+	snprintf(name, sizeof(name), "idle #%d", processor->cpu_id);
+	thread_set_thread_name(thread, name);
 
 	s = splsched();
 	thread_lock(thread);
@@ -4437,6 +4708,9 @@ sched_startup(void)
 
 	simple_lock_init(&sched_vm_group_list_lock, 0);
 
+#if __arm__ || __arm64__
+	simple_lock_init(&sched_recommended_cores_lock, 0);
+#endif /* __arm__ || __arm64__ */
 
 	result = kernel_thread_start_priority((thread_continue_t)sched_init_thread,
 	    (void *)SCHED(maintenance_continuation), MAXPRI_KERNEL, &thread);
@@ -4458,12 +4732,19 @@ sched_startup(void)
 	thread_block(THREAD_CONTINUE_NULL);
 }
 
+#if __arm64__
+static _Atomic uint64_t sched_perfcontrol_callback_deadline;
+#endif /* __arm64__ */
+
+
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
 static volatile uint64_t 		sched_maintenance_deadline;
 static uint64_t				sched_tick_last_abstime;
 static uint64_t				sched_tick_delta;
 uint64_t				sched_tick_max_delta;
+
+
 /*
  *	sched_init_thread:
  *
@@ -4518,6 +4799,8 @@ sched_timeshare_maintenance_continue(void)
 
 	sched_tick += sched_tick_delta;
 
+	update_vm_info();
+
 	/*
 	 *  Compute various averages.
 	 */
@@ -4530,7 +4813,7 @@ sched_timeshare_maintenance_continue(void)
 	 */
 	SCHED(thread_update_scan)(&scan_context);
 
-	rt_runq_scan(&scan_context);
+	SCHED(rt_runq_scan)(&scan_context);
 
 	uint64_t ctime = mach_absolute_time();
 
@@ -4550,6 +4833,19 @@ sched_timeshare_maintenance_continue(void)
 	 */
 	sched_vm_group_maintenance();
 
+#if __arm__ || __arm64__
+	/* Check to see if the recommended cores failsafe is active */
+	sched_recommended_cores_maintenance();
+#endif /* __arm__ || __arm64__ */
+
+ 
+#if DEBUG || DEVELOPMENT
+#if __x86_64__
+#include <i386/misc_protos.h>
+	/* Check for long-duration interrupts */
+	mp_interrupt_watchdog();
+#endif /* __x86_64__ */
+#endif /* DEBUG || DEVELOPMENT */
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_MAINTENANCE) | DBG_FUNC_END,
 	        sched_pri_shifts[TH_BUCKET_SHARE_FG], sched_pri_shifts[TH_BUCKET_SHARE_BG],
@@ -4588,6 +4884,19 @@ sched_timeshare_consider_maintenance(uint64_t ctime) {
 			sched_maintenance_wakeups++;
 		}
 	}
+
+#if __arm64__
+	uint64_t perf_deadline = __c11_atomic_load(&sched_perfcontrol_callback_deadline, memory_order_relaxed);
+
+	if (__improbable(perf_deadline && ctime >= perf_deadline)) {
+		/* CAS in 0, if success, make callback. Otherwise let the next context switch check again. */
+		if (__c11_atomic_compare_exchange_strong(&sched_perfcontrol_callback_deadline, &perf_deadline, 0,
+		                                         memory_order_relaxed, memory_order_relaxed)) {
+			machine_perfcontrol_deadline_passed(perf_deadline);
+		}
+	}
+#endif /* __arm64__ */
+
 }
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
@@ -4841,36 +5150,353 @@ sched_timer_deadline_tracking_init(void) {
 	nanoseconds_to_absolutetime(TIMER_DEADLINE_TRACKING_BIN_2_DEFAULT, &timer_deadline_tracking_bin_2);
 }
 
+#if __arm__ || __arm64__
 
-kern_return_t
-sched_work_interval_notify(thread_t thread, uint64_t work_interval_id, uint64_t start, uint64_t finish, uint64_t deadline, uint64_t next_start, uint32_t flags)
+uint32_t    perfcontrol_requested_recommended_cores = ALL_CORES_RECOMMENDED;
+uint32_t    perfcontrol_requested_recommended_core_count = MAX_CPUS;
+boolean_t   perfcontrol_failsafe_active = FALSE;
+
+uint64_t    perfcontrol_failsafe_maintenance_runnable_time;
+uint64_t    perfcontrol_failsafe_activation_time;
+uint64_t    perfcontrol_failsafe_deactivation_time;
+
+/* data covering who likely caused it and how long they ran */
+#define FAILSAFE_NAME_LEN       33 /* (2*MAXCOMLEN)+1 from size of p_name */
+char        perfcontrol_failsafe_name[FAILSAFE_NAME_LEN];
+int         perfcontrol_failsafe_pid;
+uint64_t    perfcontrol_failsafe_tid;
+uint64_t    perfcontrol_failsafe_thread_timer_at_start;
+uint64_t    perfcontrol_failsafe_thread_timer_last_seen;
+uint32_t    perfcontrol_failsafe_recommended_at_trigger;
+
+/*
+ * Perf controller calls here to update the recommended core bitmask.
+ * If the failsafe is active, we don't immediately apply the new value.
+ * Instead, we store the new request and use it after the failsafe deactivates.
+ *
+ * If the failsafe is not active, immediately apply the update.
+ *
+ * No scheduler locks are held, no other locks are held that scheduler might depend on,
+ * interrupts are enabled
+ *
+ * currently prototype is in osfmk/arm/machine_routines.h
+ */
+void
+sched_perfcontrol_update_recommended_cores(uint32_t recommended_cores)
 {
-	int urgency;
-	uint64_t urgency_param1, urgency_param2;
-	spl_t s;
+	assert(preemption_enabled());
 
-	if (work_interval_id == 0) {
-		return (KERN_INVALID_ARGUMENT);
+	spl_t s = splsched();
+	simple_lock(&sched_recommended_cores_lock);
+
+	perfcontrol_requested_recommended_cores = recommended_cores;
+	perfcontrol_requested_recommended_core_count = __builtin_popcountll(recommended_cores);
+
+	if (perfcontrol_failsafe_active == FALSE)
+		sched_update_recommended_cores(perfcontrol_requested_recommended_cores);
+	else
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		        MACHDBG_CODE(DBG_MACH_SCHED,MACH_REC_CORES_FAILSAFE) | DBG_FUNC_NONE,
+		        perfcontrol_requested_recommended_cores,
+		        sched_maintenance_thread->last_made_runnable_time, 0, 0, 0);
+
+	simple_unlock(&sched_recommended_cores_lock);
+	splx(s);
+}
+
+/*
+ * Consider whether we need to activate the recommended cores failsafe
+ *
+ * Called from quantum timer interrupt context of a realtime thread
+ * No scheduler locks are held, interrupts are disabled
+ */
+void
+sched_consider_recommended_cores(uint64_t ctime, thread_t cur_thread)
+{
+	/*
+	 * Check if a realtime thread is starving the system
+	 * and bringing up non-recommended cores would help
+	 *
+	 * TODO: Is this the correct check for recommended == possible cores?
+	 * TODO: Validate the checks without the relevant lock are OK.
+	 */
+
+	if (__improbable(perfcontrol_failsafe_active == TRUE)) {
+		/* keep track of how long the responsible thread runs */
+
+		simple_lock(&sched_recommended_cores_lock);
+
+		if (perfcontrol_failsafe_active == TRUE &&
+		    cur_thread->thread_id == perfcontrol_failsafe_tid) {
+			perfcontrol_failsafe_thread_timer_last_seen = timer_grab(&cur_thread->user_timer) +
+			                                              timer_grab(&cur_thread->system_timer);
+		}
+
+		simple_unlock(&sched_recommended_cores_lock);
+
+		/* we're already trying to solve the problem, so bail */
+		return;
 	}
 
-	assert(thread == current_thread());
+	/* The failsafe won't help if there are no more processors to enable */
+	if (__probable(perfcontrol_requested_recommended_core_count >= processor_count))
+		return;
 
-	thread_mtx_lock(thread);
-	if (thread->work_interval_id != work_interval_id) {
-		thread_mtx_unlock(thread);
-		return (KERN_INVALID_ARGUMENT);
+	uint64_t too_long_ago = ctime - perfcontrol_failsafe_starvation_threshold;
+
+	/* Use the maintenance thread as our canary in the coal mine */
+	thread_t m_thread = sched_maintenance_thread;
+
+	/* If it doesn't look bad, nothing to see here */
+	if (__probable(m_thread->last_made_runnable_time >= too_long_ago))
+		return;
+
+	/* It looks bad, take the lock to be sure */
+	thread_lock(m_thread);
+
+	if (m_thread->runq == PROCESSOR_NULL ||
+	   (m_thread->state & (TH_RUN|TH_WAIT)) != TH_RUN ||
+	    m_thread->last_made_runnable_time >= too_long_ago) {
+		/*
+		 * Maintenance thread is either on cpu or blocked, and
+		 * therefore wouldn't benefit from more cores
+		 */
+		thread_unlock(m_thread);
+		return;
 	}
-	thread_mtx_unlock(thread);
 
-	s = splsched();
-	thread_lock(thread);
-	urgency = thread_get_urgency(thread, &urgency_param1, &urgency_param2);
-	thread_unlock(thread);
+	uint64_t maintenance_runnable_time = m_thread->last_made_runnable_time;
+
+	thread_unlock(m_thread);
+
+	/*
+	 * There are cores disabled at perfcontrol's recommendation, but the
+	 * system is so overloaded that the maintenance thread can't run.
+	 * That likely means that perfcontrol can't run either, so it can't fix
+	 * the recommendation.  We have to kick in a failsafe to keep from starving.
+	 *
+	 * When the maintenance thread has been starved for too long,
+	 * ignore the recommendation from perfcontrol and light up all the cores.
+	 *
+	 * TODO: Consider weird states like boot, sleep, or debugger
+	 */
+
+	simple_lock(&sched_recommended_cores_lock);
+
+	if (perfcontrol_failsafe_active == TRUE) {
+		simple_unlock(&sched_recommended_cores_lock);
+		return;
+	}
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	        MACHDBG_CODE(DBG_MACH_SCHED,MACH_REC_CORES_FAILSAFE) | DBG_FUNC_START,
+	        perfcontrol_requested_recommended_cores, maintenance_runnable_time, 0, 0, 0);
+
+	perfcontrol_failsafe_active = TRUE;
+	perfcontrol_failsafe_activation_time = mach_absolute_time();
+	perfcontrol_failsafe_maintenance_runnable_time = maintenance_runnable_time;
+	perfcontrol_failsafe_recommended_at_trigger = perfcontrol_requested_recommended_cores;
+
+	/* Capture some data about who screwed up (assuming that the thread on core is at fault) */
+	task_t task = cur_thread->task;
+	perfcontrol_failsafe_pid = task_pid(task);
+	strlcpy(perfcontrol_failsafe_name, proc_name_address(task->bsd_info), sizeof(perfcontrol_failsafe_name));
+
+	perfcontrol_failsafe_tid = cur_thread->thread_id;
+
+	/* Blame the thread for time it has run recently */
+	uint64_t recent_computation = (ctime - cur_thread->computation_epoch) + cur_thread->computation_metered;
+
+	uint64_t last_seen = timer_grab(&cur_thread->user_timer) + timer_grab(&cur_thread->system_timer);
+
+	/* Compute the start time of the bad behavior in terms of the thread's on core time */
+	perfcontrol_failsafe_thread_timer_at_start  = last_seen - recent_computation;
+	perfcontrol_failsafe_thread_timer_last_seen = last_seen;
+
+	/* Ignore the previously recommended core configuration */
+	sched_update_recommended_cores(ALL_CORES_RECOMMENDED);
+
+	simple_unlock(&sched_recommended_cores_lock);
+}
+
+/*
+ * Now that our bacon has been saved by the failsafe, consider whether to turn it off
+ *
+ * Runs in the context of the maintenance thread, no locks held
+ */
+static void
+sched_recommended_cores_maintenance(void)
+{
+	/* Common case - no failsafe, nothing to be done here */
+	if (__probable(perfcontrol_failsafe_active == FALSE))
+		return;
+
+	uint64_t ctime = mach_absolute_time();
+
+	boolean_t print_diagnostic = FALSE;
+	char p_name[FAILSAFE_NAME_LEN] = "";
+
+	spl_t s = splsched();
+	simple_lock(&sched_recommended_cores_lock);
+
+	/* Check again, under the lock, to avoid races */
+	if (perfcontrol_failsafe_active == FALSE)
+		goto out;
+
+	/*
+	 * Ensure that the other cores get another few ticks to run some threads
+	 * If we don't have this hysteresis, the maintenance thread is the first
+	 * to run, and then it immediately kills the other cores
+	 */
+	if ((ctime - perfcontrol_failsafe_activation_time) < perfcontrol_failsafe_starvation_threshold)
+		goto out;
+
+	/* Capture some diagnostic state under the lock so we can print it out later */
+
+	int      pid = perfcontrol_failsafe_pid;
+	uint64_t tid = perfcontrol_failsafe_tid;
+
+	uint64_t thread_usage       = perfcontrol_failsafe_thread_timer_last_seen -
+	                              perfcontrol_failsafe_thread_timer_at_start;
+	uint32_t rec_cores_before   = perfcontrol_failsafe_recommended_at_trigger;
+	uint32_t rec_cores_after    = perfcontrol_requested_recommended_cores;
+	uint64_t failsafe_duration  = ctime - perfcontrol_failsafe_activation_time;
+	strlcpy(p_name, perfcontrol_failsafe_name, sizeof(p_name));
+
+	print_diagnostic = TRUE;
+
+	/* Deactivate the failsafe and reinstate the requested recommendation settings */
+
+	perfcontrol_failsafe_deactivation_time = ctime;
+	perfcontrol_failsafe_active = FALSE;
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	        MACHDBG_CODE(DBG_MACH_SCHED,MACH_REC_CORES_FAILSAFE) | DBG_FUNC_END,
+	        perfcontrol_requested_recommended_cores, failsafe_duration, 0, 0, 0);
+
+	sched_update_recommended_cores(perfcontrol_requested_recommended_cores);
+
+out:
+	simple_unlock(&sched_recommended_cores_lock);
 	splx(s);
 
-	machine_work_interval_notify(thread, work_interval_id, start, finish, deadline, next_start, urgency, flags);
-	return (KERN_SUCCESS);
+	if (print_diagnostic) {
+		uint64_t failsafe_duration_ms = 0, thread_usage_ms = 0;
+
+		absolutetime_to_nanoseconds(failsafe_duration, &failsafe_duration_ms);
+		failsafe_duration_ms = failsafe_duration_ms / NSEC_PER_MSEC;
+
+		absolutetime_to_nanoseconds(thread_usage, &thread_usage_ms);
+		thread_usage_ms = thread_usage_ms / NSEC_PER_MSEC;
+
+		printf("recommended core failsafe kicked in for %lld ms "
+		       "likely due to %s[%d] thread 0x%llx spending "
+		       "%lld ms on cpu at realtime priority - "
+		       "new recommendation: 0x%x -> 0x%x\n",
+		       failsafe_duration_ms, p_name, pid, tid, thread_usage_ms,
+		       rec_cores_before, rec_cores_after);
+	}
 }
+
+/*
+ * Apply a new recommended cores mask to the processors it affects
+ * Runs after considering failsafes and such
+ *
+ * Iterate over processors and update their ->is_recommended field.
+ * If a processor is running, we let it drain out at its next
+ * quantum expiration or blocking point. If a processor is idle, there
+ * may be more work for it to do, so IPI it.
+ *
+ * interrupts disabled, sched_recommended_cores_lock is held
+ */
+static void
+sched_update_recommended_cores(uint32_t recommended_cores)
+{
+	processor_set_t pset, nset;
+	processor_t     processor;
+	uint64_t        needs_exit_idle_mask = 0x0;
+
+	processor = processor_list;
+	pset = processor->processor_set;
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	        MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED_UPDATE_REC_CORES) | DBG_FUNC_START,
+	        recommended_cores, perfcontrol_failsafe_active, 0, 0, 0);
+
+	if (__builtin_popcount(recommended_cores) == 0) {
+		recommended_cores |= 0x1U; /* add boot processor or we hang */
+	}
+
+	/* First set recommended cores */
+	pset_lock(pset);
+	do {
+
+		nset = processor->processor_set;
+		if (nset != pset) {
+			pset_unlock(pset);
+			pset = nset;
+			pset_lock(pset);
+		}
+
+		pset->recommended_bitmask = recommended_cores;
+
+		if (recommended_cores & (1ULL << processor->cpu_id)) {
+			processor->is_recommended = TRUE;
+
+			if (processor->state == PROCESSOR_IDLE) {
+				if (processor->processor_primary == processor) {
+					re_queue_head(&pset->idle_queue, &processor->processor_queue);
+				} else {
+					re_queue_head(&pset->idle_secondary_queue, &processor->processor_queue);
+				}
+				if (processor != current_processor()) {
+					needs_exit_idle_mask |= (1ULL << processor->cpu_id);
+				}
+			}
+		}
+	} while ((processor = processor->processor_list) != NULL);
+	pset_unlock(pset);
+
+	/* Now shutdown not recommended cores */
+	processor = processor_list;
+	pset = processor->processor_set;
+
+	pset_lock(pset);
+	do {
+
+		nset = processor->processor_set;
+		if (nset != pset) {
+			pset_unlock(pset);
+			pset = nset;
+			pset_lock(pset);
+		}
+
+		if (!(recommended_cores & (1ULL << processor->cpu_id))) {
+			processor->is_recommended = FALSE;
+			if (processor->state == PROCESSOR_IDLE) {
+				re_queue_head(&pset->unused_queue, &processor->processor_queue);
+			}
+			SCHED(processor_queue_shutdown)(processor);
+			/* pset unlocked */
+
+			SCHED(rt_queue_shutdown)(processor);
+
+			pset_lock(pset);
+		}
+	} while ((processor = processor->processor_list) != NULL);
+	pset_unlock(pset);
+
+	/* Issue all pending IPIs now that the pset lock has been dropped */
+	for (int cpuid = lsb_first(needs_exit_idle_mask); cpuid >= 0; cpuid = lsb_next(needs_exit_idle_mask, cpuid)) {
+		processor = processor_array[cpuid];
+		machine_signal_idle(processor);
+	}
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+		MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED_UPDATE_REC_CORES) | DBG_FUNC_END,
+							  needs_exit_idle_mask, 0, 0, 0, 0);
+}
+#endif /* __arm__ || __arm64__ */
 
 void thread_set_options(uint32_t thopt) {
  	spl_t x;
@@ -4887,4 +5513,90 @@ void thread_set_options(uint32_t thopt) {
 
 void thread_set_pending_block_hint(thread_t thread, block_hint_t block_hint) {
 	thread->pending_block_hint = block_hint;
+}
+
+uint32_t qos_max_parallelism(int qos, uint64_t options)
+{
+    return SCHED(qos_max_parallelism)(qos, options);
+}
+
+uint32_t sched_qos_max_parallelism(__unused int qos, uint64_t options)
+{
+    host_basic_info_data_t hinfo;
+    mach_msg_type_number_t count = HOST_BASIC_INFO_COUNT;
+    /* Query the machine layer for core information */
+    __assert_only kern_return_t kret = host_info(host_self(), HOST_BASIC_INFO,
+            (host_info_t)&hinfo, &count);
+    assert(kret == KERN_SUCCESS);
+
+    /* We would not want multiple realtime threads running on the 
+     * same physical core; even for SMT capable machines.
+     */
+    if (options & QOS_PARALLELISM_REALTIME) {
+        return hinfo.physical_cpu;
+    }
+
+    if (options & QOS_PARALLELISM_COUNT_LOGICAL) {
+        return hinfo.logical_cpu;
+    } else {
+        return hinfo.physical_cpu;
+    }
+}
+
+#if __arm64__
+
+/*
+ * Set up or replace old timer with new timer
+ *
+ * Returns true if canceled old timer, false if it did not
+ */
+boolean_t
+sched_perfcontrol_update_callback_deadline(uint64_t new_deadline)
+{
+	/*
+	 * Exchange deadline for new deadline, if old deadline was nonzero,
+	 * then I cancelled the callback, otherwise I didn't
+	 */
+
+	uint64_t old_deadline = __c11_atomic_load(&sched_perfcontrol_callback_deadline,
+	                                          memory_order_relaxed);
+
+
+	while (!__c11_atomic_compare_exchange_weak(&sched_perfcontrol_callback_deadline,
+	                                           &old_deadline, new_deadline,
+	                                           memory_order_relaxed, memory_order_relaxed));
+
+
+	/* now old_deadline contains previous value, which might not be the same if it raced */
+
+	return (old_deadline != 0) ? TRUE : FALSE;
+}
+
+#endif /* __arm64__ */
+
+int
+sched_get_pset_load_average(processor_set_t pset)
+{
+	return pset->load_average >> (PSET_LOAD_NUMERATOR_SHIFT - PSET_LOAD_FRACTIONAL_SHIFT);
+}
+
+void
+sched_update_pset_load_average(processor_set_t pset)
+{
+#if DEBUG
+	queue_entry_t iter;
+	int count = 0;
+	qe_foreach(iter, &pset->active_queue) {
+		count++;
+	}
+	assertf(count == pset->active_processor_count, "count %d pset->active_processor_count %d\n", count, pset->active_processor_count);
+#endif
+
+	int load = ((pset->active_processor_count + pset->pset_runq.count + rt_runq_count(pset)) << PSET_LOAD_NUMERATOR_SHIFT);
+	int new_load_average = (pset->load_average + load) >> 1;
+
+	pset->load_average = new_load_average;
+
+#if (DEVELOPMENT || DEBUG)
+#endif
 }

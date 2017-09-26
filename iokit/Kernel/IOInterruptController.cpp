@@ -397,6 +397,54 @@ void IOInterruptController::causeVector(IOInterruptVectorNumber /*vectorNumber*/
 {
 }
 
+void IOInterruptController::timeStampSpuriousInterrupt(void)
+{
+  uint64_t providerID = 0;
+  IOService * provider = getProvider();
+
+  if (provider) {
+    providerID = provider->getRegistryEntryID();
+  }
+
+  IOTimeStampConstant(IODBG_INTC(IOINTC_SPURIOUS), providerID);
+}
+
+void IOInterruptController::timeStampInterruptHandlerInternal(bool isStart, IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector)
+{
+  uint64_t providerID = 0;
+  vm_offset_t unslidHandler = 0;
+  vm_offset_t unslidTarget = 0;
+
+  IOService * provider = getProvider();
+
+  if (provider) {
+    providerID = provider->getRegistryEntryID();
+  }
+
+  if (vector) {
+    unslidHandler = VM_KERNEL_UNSLIDE((vm_offset_t)vector->handler);
+    unslidTarget = VM_KERNEL_UNSLIDE_OR_PERM((vm_offset_t)vector->target);
+  }
+
+
+  if (isStart) {
+    IOTimeStampStartConstant(IODBG_INTC(IOINTC_HANDLER), (uintptr_t)vectorNumber, (uintptr_t)unslidHandler,
+                           (uintptr_t)unslidTarget, (uintptr_t)providerID);
+  } else {
+    IOTimeStampEndConstant(IODBG_INTC(IOINTC_HANDLER), (uintptr_t)vectorNumber, (uintptr_t)unslidHandler,
+                           (uintptr_t)unslidTarget, (uintptr_t)providerID);
+  }
+}
+
+void IOInterruptController::timeStampInterruptHandlerStart(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector)
+{
+  timeStampInterruptHandlerInternal(true, vectorNumber, vector);
+}
+
+void IOInterruptController::timeStampInterruptHandlerEnd(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector)
+{
+  timeStampInterruptHandlerInternal(false, vectorNumber, vector);
+}
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -691,26 +739,23 @@ IOReturn IOSharedInterruptController::handleInterrupt(void * /*refCon*/,
     OSMemoryBarrier();
 #endif
 
-	if (!vector->interruptDisabledSoft) {
-	  
-	  // Call the handler if it exists.
-	  if (vector->interruptRegistered) {
-		  
-		  bool	trace = (gIOKitTrace & kIOTraceInterrupts) ? true : false;
-		  
-		  if (trace)
-			  IOTimeStampStartConstant(IODBG_INTC(IOINTC_HANDLER),
-									   (uintptr_t) vectorNumber, (uintptr_t) vector->handler, (uintptr_t)vector->target);
-		  
-		  // Call handler.
-		  vector->handler(vector->target, vector->refCon, vector->nub, vector->source);
-		  
-		  if (trace)
-			  IOTimeStampEndConstant(IODBG_INTC(IOINTC_HANDLER),
-									 (uintptr_t) vectorNumber, (uintptr_t) vector->handler, (uintptr_t)vector->target);
-		  
-		}
-	}
+    if (!vector->interruptDisabledSoft) {
+
+      // Call the handler if it exists.
+      if (vector->interruptRegistered) {
+
+        bool trace = (gIOKitTrace & kIOTraceInterrupts) ? true : false;
+
+        if (trace)
+          timeStampInterruptHandlerStart(vectorNumber, vector);
+
+        // Call handler.
+        vector->handler(vector->target, vector->refCon, vector->nub, vector->source);
+
+        if (trace)
+          timeStampInterruptHandlerEnd(vectorNumber, vector);
+      }
+    }
     
     vector->interruptActive = 0;
   }

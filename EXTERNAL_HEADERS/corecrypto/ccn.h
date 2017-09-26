@@ -402,8 +402,8 @@ void ccn_mul(cc_size n, cc_unit *r_2n, const cc_unit *s, const cc_unit *t);
  { n bit, n bit -> 2 * n bit } n = count * sizeof(cc_unit) * 8
  { N bit, N bit -> 2N bit } N = ccn_bitsof(n) 
  Provide a workspace for potential speedup */
-CC_NONNULL((2, 3, 4, 5))
-void ccn_mul_ws(cc_size count, cc_unit *r, const cc_unit *s, const cc_unit *t, cc_ws_t ws);
+CC_NONNULL((1, 3, 4, 5))
+void ccn_mul_ws(cc_ws_t ws, cc_size count, cc_unit *r, const cc_unit *s, const cc_unit *t);
 
 /* s[0..n) * v -> r[0..n)+return value
  { N bit, sizeof(cc_unit) * 8 bit -> N + sizeof(cc_unit) * 8 bit } N = n * sizeof(cc_unit) * 8 */
@@ -500,8 +500,8 @@ void ccn_sqr(cc_size n, cc_unit *r, const cc_unit *s);
 
 /* s^2 -> r
  { n bit -> 2 * n bit } */
-CC_NONNULL((2, 3, 4))
-void ccn_sqr_ws(cc_size n, cc_unit *r, const cc_unit *s, cc_ws_t ws);
+CC_NONNULL((1, 3, 4))
+void ccn_sqr_ws(cc_ws_t ws, cc_size n, cc_unit *r, const cc_unit *s);
 
 #else
 
@@ -515,8 +515,8 @@ void ccn_sqr(cc_size n, cc_unit *r, const cc_unit *s) {
 /* s^2 -> r
  { n bit -> 2 * n bit } */
 CC_INLINE CC_NONNULL((2, 3, 4))
-void ccn_sqr_ws(cc_size n, cc_unit *r, const cc_unit *s, cc_ws_t ws) {
-    ccn_mul_ws(n, r, s, s, ws);
+void ccn_sqr_ws(cc_ws_t ws, cc_size n, cc_unit *r, const cc_unit *s) {
+    ccn_mul_ws(ws, n, r, s, s);
 }
 
 #endif
@@ -639,30 +639,12 @@ int ccn_random_bits(cc_size nbits, cc_unit *r, struct ccrng_state *rng);
  @param d       input number d
 */
 CC_NONNULL((2, 3))
-void ccn_make_recip(cc_size nd, cc_unit *recip, const cc_unit *d);
+int ccn_make_recip(cc_size nd, cc_unit *recip, const cc_unit *d);
 
 CC_NONNULL((6, 8))
 int ccn_div_euclid(cc_size nq, cc_unit *q, cc_size nr, cc_unit *r, cc_size na, const cc_unit *a, cc_size nd, const cc_unit *d);
 
 #define ccn_div(nq, q, na, a, nd, d) ccn_div_euclid(nq, q, 0, NULL, na, a, nd, d)
 #define ccn_mod(nr, r, na, a, nd, d) ccn_div_euclid(0 , NULL, nr, r, na, a, nd, d)
-
-/*!
- @brief ccn_div_use_recip(nq, q, nr, r, na, a, nd, d) comutes q=a/d and r=a%d
- @discussion q and rcan be NULL. Reads na from a and nd from d. Writes nq in q and nr in r. nq and nr must be large enough to accomodate results, otherwise error is retuned. Execution time depends on the size of a. Computation is perfomed on of fixedsize and the leadig zeros of a of q are are also used in the computation.
- @param nq length of array q that hold the quotients. The maximum length of quotient is the actual length of dividend a
- @param q  returned quotient. If nq is larger than needed, it is filled with leading zeros. If it is smaller, error is returned. q can be set to NULL, if not needed.
- @param nr length of array r that hold the remainder. The maximum length of remainder is the actual length of divisor d
- @param r  returned remainder. If nr is larger than needed, it is filled with leading zeros. Ifi is smaller error is returned. r can be set to NULL if not required.
- @param na length of dividend. Dividend may have leading zeros.
- @param a  input Dividend
- @param nd length of input divisor. Divisor may have leading zeros.
- @param d  input Divisor
- @param recip_d The reciprocal of d, of length nd+1.
-
- @return  returns 0 if successful, negative of error.
- */
-CC_NONNULL((6, 8, 9))
-int ccn_div_use_recip(cc_size nq, cc_unit *q, cc_size nr, cc_unit *r, cc_size na, const cc_unit *a, cc_size nd, const cc_unit *d, const cc_unit *recip_d);
 
 #endif /* _CORECRYPTO_CCN_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -118,73 +118,6 @@ struct priq_classstats {
 	classq_state_t		qstate;
 };
 
-#ifdef BSD_KERNEL_PRIVATE
-struct priq_class {
-	u_int32_t	cl_handle;	/* class handle */
-	class_queue_t	cl_q;		/* class queue structure */
-	u_int32_t	cl_qflags;	/* class queue flags */
-	union {
-		void		*ptr;
-		struct red	*red;	/* RED state */
-		struct rio	*rio;	/* RIO state */
-		struct blue	*blue;	/* BLUE state */
-		struct sfb	*sfb;	/* SFB state */
-	} cl_qalg;
-	int32_t		cl_pri;		/* priority */
-	u_int32_t	cl_flags;	/* class flags */
-	struct priq_if	*cl_pif;	/* back pointer to pif */
-
-	/* statistics */
-	u_int32_t	cl_period;	/* backlog period */
-	struct pktcntr  cl_xmitcnt;	/* transmitted packet counter */
-	struct pktcntr  cl_dropcnt;	/* dropped packet counter */
-};
-
-#define	cl_red	cl_qalg.red
-#define	cl_rio	cl_qalg.rio
-#define	cl_blue	cl_qalg.blue
-#define	cl_sfb	cl_qalg.sfb
-
-/* priq_if flags */
-#define	PRIQIFF_ALTQ		0x1	/* configured via PF/ALTQ */
-
-/*
- * priq interface state
- */
-struct priq_if {
-	struct ifclassq		*pif_ifq;	/* backpointer to ifclassq */
-	int			pif_maxpri;	/* max priority in use */
-	u_int32_t		pif_flags;	/* flags */
-	u_int32_t		pif_throttle;	/* throttling level */
-	pktsched_bitmap_t	pif_bitmap;	/* active class bitmap */
-	struct priq_class	*pif_default;	/* default class */
-	struct priq_class	*pif_classes[PRIQ_MAXPRI]; /* classes */
-};
-
-#define	PRIQIF_IFP(_pif)	((_pif)->pif_ifq->ifcq_ifp)
-
-struct if_ifclassq_stats;
-
-extern void priq_init(void);
-extern struct priq_if *priq_alloc(struct ifnet *, int, boolean_t);
-extern int priq_destroy(struct priq_if *);
-extern void priq_purge(struct priq_if *);
-extern void priq_event(struct priq_if *, cqev_t);
-extern int priq_add_queue(struct priq_if *, int, u_int32_t, int, u_int32_t,
-    struct priq_class **);
-extern int priq_remove_queue(struct priq_if *, u_int32_t);
-extern int priq_get_class_stats(struct priq_if *, u_int32_t,
-    struct priq_classstats *);
-extern int priq_enqueue(struct priq_if *, struct priq_class *, struct mbuf *,
-    struct pf_mtag *);
-extern struct mbuf *priq_dequeue(struct priq_if *, cqdq_op_t);
-extern int priq_setup_ifclassq(struct ifclassq *, u_int32_t);
-extern int priq_teardown_ifclassq(struct ifclassq *ifq);
-extern int priq_getqstats_ifclassq(struct ifclassq *, u_int32_t,
-    struct if_ifclassq_stats *);
-extern int priq_set_throttle(struct ifclassq *, u_int32_t);
-extern int priq_get_throttle(struct ifclassq *, u_int32_t *);
-#endif /* BSD_KERNEL_PRIVATE */
 #ifdef __cplusplus
 }
 #endif

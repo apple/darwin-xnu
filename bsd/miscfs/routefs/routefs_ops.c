@@ -553,7 +553,7 @@ static struct vnodeopv_entry_desc routefs_vnodeop_entries[] = {
 #if CONFIG_MACF
     { &vnop_setlabel_desc, (VOPFUNC)routefserr_setlabel },       /* setlabel */
 #endif
-    { (struct vnodeop_desc*)NULL, (int(*)())NULL }
+    { (struct vnodeop_desc*)NULL, (int(*)(void *))NULL }
 };
 struct vnodeopv_desc routefs_vnodeop_opv_desc =
 { &routefs_vnodeop_p, routefs_vnodeop_entries };

@@ -156,7 +156,6 @@ static int connectx_nocancel(struct proc *, struct connectx_args *, int *);
 static int connectitx(struct socket *, struct sockaddr *,
     struct sockaddr *, struct proc *, uint32_t, sae_associd_t,
     sae_connid_t *, uio_t, unsigned int, user_ssize_t *);
-static int peeloff_nocancel(struct proc *, struct peeloff_args *, int *);
 static int disconnectx_nocancel(struct proc *, struct disconnectx_args *,
     int *);
 static int socket_common(struct proc *, int, int, int, pid_t, int32_t *, int);
@@ -439,7 +438,7 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 	socket_lock(head, 1);
 
 	if (head->so_proto->pr_getlock != NULL)  {
-		mutex_held = (*head->so_proto->pr_getlock)(head, 0);
+		mutex_held = (*head->so_proto->pr_getlock)(head, PR_F_WILLUNLOCK);
 		dosocklock = 1;
 	} else {
 		mutex_held = head->so_proto->pr_domain->dom_mtx;
@@ -931,7 +930,7 @@ connectit(struct socket *so, struct sockaddr *sa)
 		lck_mtx_t *mutex_held;
 
 		if (so->so_proto->pr_getlock != NULL)
-			mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+			mutex_held = (*so->so_proto->pr_getlock)(so, PR_F_WILLUNLOCK);
 		else
 			mutex_held = so->so_proto->pr_domain->dom_mtx;
 		error = msleep((caddr_t)&so->so_timeo, mutex_held,
@@ -979,7 +978,7 @@ connectitx(struct socket *so, struct sockaddr *src,
 		so->so_flags1 |= SOF1_DATA_IDEMPOTENT;
 
 		if (flags & CONNECT_DATA_AUTHENTICATED)
-			so->so_flags |= SOF1_DATA_AUTHENTICATED;
+			so->so_flags1 |= SOF1_DATA_AUTHENTICATED;
 	}
 
 	/*
@@ -1029,7 +1028,7 @@ connectitx(struct socket *so, struct sockaddr *src,
 		lck_mtx_t *mutex_held;
 
 		if (so->so_proto->pr_getlock != NULL)
-			mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+			mutex_held = (*so->so_proto->pr_getlock)(so, PR_F_WILLUNLOCK);
 		else
 			mutex_held = so->so_proto->pr_domain->dom_mtx;
 		error = msleep((caddr_t)&so->so_timeo, mutex_held,
@@ -1052,80 +1051,13 @@ out:
 int
 peeloff(struct proc *p, struct peeloff_args *uap, int *retval)
 {
+#pragma unused(p, uap, retval)
 	/*
 	 * Due to similiarity with a POSIX interface, define as
 	 * an unofficial cancellation point.
 	 */
 	__pthread_testcancel(1);
-	return (peeloff_nocancel(p, uap, retval));
-}
-
-static int
-peeloff_nocancel(struct proc *p, struct peeloff_args *uap, int *retval)
-{
-	struct fileproc *fp;
-	struct socket *mp_so, *so = NULL;
-	int newfd, fd = uap->s;
-	short fflag;		/* type must match fp->f_flag */
-	int error;
-
-	*retval = -1;
-
-	error = fp_getfsock(p, fd, &fp, &mp_so);
-	if (error != 0) {
-		if (error == EOPNOTSUPP)
-			error = ENOTSOCK;
-		goto out_nofile;
-	}
-	if (mp_so == NULL) {
-		error = EBADF;
-		goto out;
-	}
-
-	socket_lock(mp_so, 1);
-	error = sopeelofflocked(mp_so, uap->aid, &so);
-	if (error != 0) {
-		socket_unlock(mp_so, 1);
-		goto out;
-	}
-	VERIFY(so != NULL);
-	socket_unlock(mp_so, 0);		/* keep ref on mp_so for us */
-
-	fflag = fp->f_flag;
-	error = falloc(p, &fp, &newfd, vfs_context_current());
-	if (error != 0) {
-		/* drop this socket (probably ran out of file descriptors) */
-		soclose(so);
-		sodereference(mp_so);		/* our mp_so ref */
-		goto out;
-	}
-
-	fp->f_flag = fflag;
-	fp->f_ops = &socketops;
-	fp->f_data = (caddr_t)so;
-
-	/*
-	 * If the socket has been marked as inactive by sosetdefunct(),
-	 * disallow further operations on it.
-	 */
-	if (so->so_flags & SOF_DEFUNCT) {
-		sodefunct(current_proc(), so,
-		    SHUTDOWN_SOCKET_LEVEL_DISCONNECT_INTERNAL);
-	}
-
-	proc_fdlock(p);
-	procfdtbl_releasefd(p, newfd, NULL);
-	fp_drop(p, newfd, fp, 1);
-	proc_fdunlock(p);
-
-	sodereference(mp_so);			/* our mp_so ref */
-	*retval = newfd;
-
-out:
-	file_drop(fd);
-
-out_nofile:
-	return (error);
+	return (0);
 }
 
 int

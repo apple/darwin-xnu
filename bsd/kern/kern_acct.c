@@ -93,7 +93,6 @@
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/sysproto.h>
-#include <machine/spl.h>
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #endif

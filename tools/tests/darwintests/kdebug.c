@@ -1,8 +1,8 @@
 #include <darwintest.h>
 #include <dispatch/dispatch.h>
 #include <inttypes.h>
-#include <ktrace.h>
-#include <ktrace_private.h>
+#include <ktrace/session.h>
+#include <ktrace/private.h>
 #include <mach/dyld_kernel.h>
 #include <mach/host_info.h>
 #include <mach/mach.h>
@@ -13,7 +13,20 @@
 #include <sys/kdebug_signpost.h>
 #include <sys/sysctl.h>
 
-#define KTRACE_WAIT_TIMEOUT_S (10)
+#define KDBG_TEST_MACROS    1
+#define KDBG_TEST_OLD_TIMES 2
+
+static void
+assert_kdebug_test(unsigned int flavor)
+{
+    size_t size = flavor;
+    int mib[] = { CTL_KERN, KERN_KDEBUG, KERN_KDTEST };
+    T_ASSERT_POSIX_SUCCESS(
+        sysctl(mib, sizeof(mib) / sizeof(mib[0]), NULL, &size, NULL, 0),
+        "KERN_KDTEST sysctl");
+}
+
+#pragma mark kdebug syscalls
 
 #define TRACE_DEBUGID (0xfedfed00U)
 
@@ -21,7 +34,6 @@ T_DECL(kdebug_trace_syscall, "test that kdebug_trace(2) emits correct events",
        T_META_ASROOT(true))
 {
     ktrace_session_t s;
-    dispatch_time_t timeout;
     __block int events_seen = 0;
 
     s = ktrace_session_create();
@@ -65,7 +77,6 @@ T_DECL(kdebug_signpost_syscall,
     ktrace_session_t s;
     __block int single_seen = 0;
     __block int paired_seen = 0;
-    dispatch_time_t timeout;
 
     s = ktrace_session_create();
     T_ASSERT_NOTNULL(s, NULL);
@@ -134,11 +145,13 @@ T_DECL(kdebug_signpost_syscall,
     dispatch_main();
 }
 
+#pragma mark kdebug behaviors
+
 #define WRAPPING_EVENTS_COUNT     (150000)
 #define TRACE_ITERATIONS          (5000)
 #define WRAPPING_EVENTS_THRESHOLD (100)
 
-T_DECL(kdebug_wrapping,
+T_DECL(wrapping,
     "ensure that wrapping traces lost events and no events prior to the wrap",
     T_META_ASROOT(true), T_META_CHECK_LEAKS(false))
 {
@@ -217,6 +230,91 @@ T_DECL(kdebug_wrapping,
 
     dispatch_main();
 }
+
+T_DECL(reject_old_events,
+        "ensure that kdebug rejects events from before tracing began",
+        T_META_ASROOT(true), T_META_CHECK_LEAKS(false))
+{
+    __block uint64_t event_horizon_ts;
+    __block int events = 0;
+
+    ktrace_session_t s = ktrace_session_create();
+    T_QUIET; T_ASSERT_NOTNULL(s, "ktrace_session_create");
+
+    ktrace_events_range(s, KDBG_EVENTID(DBG_BSD, DBG_BSD_KDEBUG_TEST, 0),
+        KDBG_EVENTID(DBG_BSD + 1, 0, 0),
+        ^(struct trace_point *tp)
+    {
+        events++;
+        T_EXPECT_GT(tp->timestamp, event_horizon_ts,
+                "events in trace should be from after tracing began");
+    });
+
+    ktrace_set_completion_handler(s, ^{
+        T_EXPECT_EQ(events, 2, "should see only two events");
+        ktrace_session_destroy(s);
+        T_END;
+    });
+
+    event_horizon_ts = mach_absolute_time();
+
+    T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()), NULL);
+    /* first, try an old event at the beginning of trace */
+    assert_kdebug_test(KDBG_TEST_OLD_TIMES);
+    /* after a good event has been traced, old events should be rejected */
+    assert_kdebug_test(KDBG_TEST_OLD_TIMES);
+    ktrace_end(s, 0);
+
+    dispatch_main();
+}
+
+#define ORDERING_TIMEOUT_SEC 5
+
+T_DECL(ascending_time_order,
+        "ensure that kdebug events are in ascending order based on time",
+        T_META_ASROOT(true), T_META_CHECK_LEAKS(false))
+{
+    __block uint64_t prev_ts = 0;
+    __block uint32_t prev_debugid = 0;
+    __block unsigned int prev_cpu = 0;
+    __block bool in_order = true;
+
+    ktrace_session_t s = ktrace_session_create();
+    T_QUIET; T_ASSERT_NOTNULL(s, "ktrace_session_create");
+
+    ktrace_events_all(s, ^(struct trace_point *tp) {
+        if (tp->timestamp < prev_ts) {
+            in_order = false;
+            T_FAIL("found timestamps out of order");
+            T_LOG("%" PRIu64 ": %#" PRIx32 " (cpu %d)",
+                    prev_ts, prev_debugid, prev_cpu);
+            T_LOG("%" PRIu64 ": %#" PRIx32 " (cpu %d)",
+                    tp->timestamp, tp->debugid, tp->cpuid);
+        }
+    });
+
+    ktrace_set_completion_handler(s, ^{
+        ktrace_session_destroy(s);
+        T_EXPECT_TRUE(in_order, "event timestamps were in-order");
+        T_END;
+    });
+
+    T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()), NULL);
+
+    /* try to inject old timestamps into trace */
+    assert_kdebug_test(KDBG_TEST_OLD_TIMES);
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, ORDERING_TIMEOUT_SEC * NSEC_PER_SEC),
+            dispatch_get_main_queue(), ^{
+        T_LOG("ending test after timeout");
+        ktrace_end(s, 1);
+    });
+
+    dispatch_main();
+
+}
+
+#pragma mark dyld tracing
 
 __attribute__((aligned(8)))
 static const char map_uuid[16] = "map UUID";
@@ -404,6 +502,8 @@ T_DECL(dyld_events, "test that dyld registering libraries emits events",
     dispatch_main();
 }
 
+#pragma mark kdebug kernel macros
+
 #define EXP_KERNEL_EVENTS 5U
 
 static const uint32_t dev_evts[EXP_KERNEL_EVENTS] = {
@@ -447,15 +547,6 @@ is_development_kernel(void)
     });
 
     return is_development;
-}
-
-static void
-assert_kdebug_test(void)
-{
-    int mib[] = { CTL_KERN, KERN_KDEBUG, KERN_KDTEST };
-    T_ASSERT_POSIX_SUCCESS(
-        sysctl(mib, sizeof(mib) / sizeof(mib[0]), NULL, NULL, NULL, 0),
-        "KERN_KDTEST");
 }
 
 static void
@@ -533,13 +624,17 @@ T_DECL(kernel_events, "ensure kernel macros work",
          * Development-only events are only filtered if running on an embedded
          * OS.
          */
-        unsigned dev_exp;
+        unsigned int dev_exp;
+#if TARGET_OS_EMBEDDED
+        dev_exp = is_development_kernel() ? EXP_KERNEL_EVENTS : 0U;
+#else
         dev_exp = EXP_KERNEL_EVENTS;
+#endif
 
         T_EXPECT_EQ(rel_seen, EXP_KERNEL_EVENTS,
                 "release and development events seen");
         T_EXPECT_EQ(dev_seen, dev_exp, "development-only events seen/not seen");
-        T_EXPECT_EQ(filt_seen, EXP_KERNEL_EVENTS, "filter-only events seen");
+        T_EXPECT_EQ(filt_seen, dev_exp, "filter-only events seen");
         ktrace_session_destroy(s);
         T_END;
     });
@@ -547,7 +642,7 @@ T_DECL(kernel_events, "ensure kernel macros work",
     ktrace_filter_pid(s, getpid());
 
     T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()), NULL);
-    assert_kdebug_test();
+    assert_kdebug_test(KDBG_TEST_MACROS);
 
     ktrace_end(s, 0);
 
@@ -576,16 +671,20 @@ T_DECL(kernel_events_filtered, "ensure that the filtered kernel macros work",
         ktrace_session_destroy(s);
 
         T_EXPECT_EQ(rel_seen, EXP_KERNEL_EVENTS, NULL);
+#if defined(__arm__) || defined(__arm64__)
+        T_EXPECT_EQ(dev_seen, is_development_kernel() ? EXP_KERNEL_EVENTS : 0U,
+            NULL);
+#else
         T_EXPECT_EQ(dev_seen, EXP_KERNEL_EVENTS, NULL);
+#endif /* defined(__arm__) || defined(__arm64__) */
         T_EXPECT_EQ(filt_seen, 0U, NULL);
         T_END;
     });
 
     T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()), NULL);
-    assert_kdebug_test();
+    assert_kdebug_test(KDBG_TEST_MACROS);
 
     ktrace_end(s, 0);
 
     dispatch_main();
 }
-

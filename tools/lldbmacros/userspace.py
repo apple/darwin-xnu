@@ -140,7 +140,7 @@ def ShowThreadUserStack(cmd_args=None):
         ShowX86UserStack(thread)
     elif kern.arch == "arm":
         ShowARMUserStack(thread)
-    elif kern.arch == "arm64":
+    elif kern.arch.startswith("arm64"):
         ShowARM64UserStack(thread)
     return True
 
@@ -273,11 +273,14 @@ Synthetic crash log generated from Kernel userstacks
 """
     user_lib_rex = re.compile("([0-9a-fx]+)\s-\s([0-9a-fx]+)\s+(.*?)\s", re.IGNORECASE|re.MULTILINE)
     from datetime import datetime
-    ts = datetime.fromtimestamp(int(pval.p_start.tv_sec))
-    date_string = ts.strftime('%Y-%m-%d %H:%M:%S')
-    is_64 = False
-    if pval.p_flag & 0x4 :
-        is_64 = True
+    if pval:
+        ts = datetime.fromtimestamp(int(pval.p_start.tv_sec))
+        date_string = ts.strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        date_string = "none"
+    is_64 = True
+    if pval and (pval.p_flag & 0x4) == 0 :
+        is_64 = False
 
     parch_s = ""
     if kern.arch == "x86_64" or kern.arch == "i386":
@@ -289,15 +292,25 @@ Synthetic crash log generated from Kernel userstacks
         parch_s = kern.arch
         osversion = "iOS"
     osversion += " ({:s})".format(kern.globals.osversion)
-    print crash_report_format_string.format(pid = pval.p_pid,
-            pname = pval.p_comm,
-            path = pval.p_comm,
-            ppid = pval.p_ppid,
-            ppname = GetProcNameForPid(pval.p_ppid),
+    if pval:
+        pid = pval.p_pid
+        pname = pval.p_comm
+        path = pval.p_comm
+        ppid = pval.p_ppid
+    else:
+        pid = 0
+        pname = "unknown"
+        path = "unknown"
+        ppid = 0
+
+    print crash_report_format_string.format(pid = pid,
+            pname = pname,
+            path = path,
+            ppid = ppid,
+            ppname = GetProcNameForPid(ppid),
             timest = date_string,
             parch = parch_s,
             osversion = osversion
-
         )
     print "Binary Images:"
     ShowTaskUserLibraries([hex(task)])
@@ -313,7 +326,7 @@ Synthetic crash log generated from Kernel userstacks
     printthread_user_stack_ptr = ShowX86UserStack
     if kern.arch == "arm":
         printthread_user_stack_ptr = ShowARMUserStack
-    elif kern.arch =="arm64":
+    elif kern.arch.startswith("arm64"):
         printthread_user_stack_ptr = ShowARM64UserStack
 
     counter = 0
@@ -383,7 +396,7 @@ def GetUserDataAsString(task, addr, size):
         if not WriteInt64ToMemoryAddress(0, kdp_pmap_addr):
             debuglog("Failed to reset in kdp_pmap from GetUserDataAsString.")
             return ""
-    elif kern.arch in ['arm', 'arm64', 'x86_64'] and long(size) < (2 * kern.globals.page_size):
+    elif (kern.arch == 'x86_64' or kern.arch.startswith('arm')) and (long(size) < (2 * kern.globals.page_size)):
         # Without the benefit of a KDP stub on the target, try to
         # find the user task's physical mapping and memcpy the data.
         # If it straddles a page boundary, copy in two passes
@@ -881,6 +894,9 @@ def SaveKCDataToFile(cmd_args=None, cmd_options={}):
         memory_data = GetUserDataAsString(task, memory_begin_address, memory_size)
     else:
         data_ptr = kern.GetValueFromAddress(memory_begin_address, 'uint8_t *')
+        if data_ptr == 0:
+            print "Kcdata descriptor is NULL"
+            return False
         memory_data = []
         for i in range(memory_size):
             memory_data.append(chr(data_ptr[i]))

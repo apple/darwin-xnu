@@ -27,5 +27,6 @@
  */
 #ifndef _IN_ADDR_T
 #define _IN_ADDR_T
+#include <machine/types.h> /* __uint32_t */
 typedef	__uint32_t	in_addr_t;	/* base type for internet address */
 #endif /* _IN_ADDR_T */

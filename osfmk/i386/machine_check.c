@@ -242,14 +242,14 @@ mca_report_cpu_info(void)
 {
 	i386_cpu_info_t *infop = cpuid_info();
 
-	kdb_printf(" family: %d model: %d stepping: %d microcode: %d\n",
+	paniclog_append_noflush(" family: %d model: %d stepping: %d microcode: %d\n",
 		infop->cpuid_family,
 		infop->cpuid_model,
 		infop->cpuid_stepping,
 		infop->cpuid_microcode_version);
-	kdb_printf(" signature: 0x%x\n",
+	paniclog_append_noflush(" signature: 0x%x\n",
 		infop->cpuid_signature);
-	kdb_printf(" %s\n",
+	paniclog_append_noflush(" %s\n",
 		infop->cpuid_brand_string);
 
 }
@@ -265,15 +265,15 @@ mca_dump_bank(mca_state_t *state, int i)
 	if (!status.bits.val)
 		return;
 
-	kdb_printf(" IA32_MC%d_STATUS(0x%x): 0x%016qx\n",
+	paniclog_append_noflush(" IA32_MC%d_STATUS(0x%x): 0x%016qx\n",
 		i, IA32_MCi_STATUS(i), status.u64);
 
 	if (status.bits.addrv)
-		kdb_printf(" IA32_MC%d_ADDR(0x%x):   0x%016qx\n",
+		paniclog_append_noflush(" IA32_MC%d_ADDR(0x%x):   0x%016qx\n",
 			i, IA32_MCi_ADDR(i), bank->mca_mci_addr);
 
 	if (status.bits.miscv)
-		kdb_printf(" IA32_MC%d_MISC(0x%x):   0x%016qx\n",
+		paniclog_append_noflush(" IA32_MC%d_MISC(0x%x):   0x%016qx\n",
 			i, IA32_MCi_MISC(i), bank->mca_mci_misc);
 }
 
@@ -332,11 +332,11 @@ mca_dump(void)
 	/*
 	 * Report machine-check capabilities:
 	 */
-	kdb_printf("Machine-check capabilities: 0x%016qx\n", ia32_mcg_cap.u64);
+	paniclog_append_noflush("Machine-check capabilities: 0x%016qx\n", ia32_mcg_cap.u64);
 
 	mca_report_cpu_info();
 
-	kdb_printf(" %d error-reporting banks\n", mca_error_bank_count);
+	paniclog_append_noflush(" %d error-reporting banks\n", mca_error_bank_count);
  
 	/*
 	 * Dump all processor state:
@@ -352,7 +352,7 @@ mca_dump(void)
 			continue;
 		}
 		status = mcsp->mca_mcg_status;
-		kdb_printf("Processor %d: IA32_MCG_STATUS: 0x%016qx\n",
+		paniclog_append_noflush("Processor %d: IA32_MCG_STATUS: 0x%016qx\n",
 			i, status.u64);
 		mca_cpu_dump_error_banks(mcsp);
 	}

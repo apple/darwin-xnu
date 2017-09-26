@@ -268,6 +268,8 @@ chudxnu_private_chud_ast_callback(ast_t reasons, ast_t *myast)
 	return retval;
 }
 
+volatile perfASTCallback perfASTHook;
+
 __private_extern__ kern_return_t
 chudxnu_perfmon_ast_callback_enter(chudxnu_perfmon_ast_callback_func_t func)
 {

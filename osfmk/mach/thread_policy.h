@@ -404,8 +404,9 @@ struct thread_requested_policy {
 	                thrp_qos_promote        :3,     /* thread qos class from promotion */
 	                thrp_qos_ipc_override   :3,     /* thread qos class from ipc override */
 	                thrp_terminated         :1,     /* heading for termination */
+	                thrp_qos_sync_ipc_override:3,   /* thread qos class from sync ipc override */
 
-	                thrp_reserved           :32;
+	                thrp_reserved           :29;
 };
 
 struct thread_effective_policy {

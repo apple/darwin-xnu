@@ -1,0 +1,5 @@
+san/kasan.c standard
+san/kasan-fakestack.c standard
+san/kasan-test.c standard
+san/kasan-memintrinsics.c standard
+san/kasan_dynamic_blacklist.c standard

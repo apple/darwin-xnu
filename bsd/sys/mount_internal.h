@@ -196,6 +196,8 @@ struct mount {
 
 	uint32_t	mnt_iobufinuse;
 
+	void *mnt_disk_conditioner_info;
+
 	lck_mtx_t	mnt_iter_lock;		/* mutex that protects iteration of vnodes */
 };
 

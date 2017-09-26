@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -601,6 +601,7 @@ flow_divert_add_data_statistics(struct flow_divert_pcb *fd_cb, int data_len, Boo
 		INP_ADD_STAT(inp, cell, wifi, wired, rxpackets, 1);
 		INP_ADD_STAT(inp, cell, wifi, wired, rxbytes, data_len);
 	}
+	inp_set_activity_bitmap(inp);
 }
 
 static errno_t
@@ -1037,7 +1038,11 @@ flow_divert_create_connect_packet(struct flow_divert_pcb *fd_cb, struct sockaddr
 	if (signing_id != NULL) {
 		uint16_t result = NULL_TRIE_IDX;
 		lck_rw_lock_shared(&fd_cb->group->lck);
-		result = flow_divert_trie_search(&fd_cb->group->signing_id_trie, (uint8_t *)signing_id);
+		if (fd_cb->group->flags & FLOW_DIVERT_GROUP_FLAG_NO_APP_MAP) {
+			result = 1;
+		} else {
+			result = flow_divert_trie_search(&fd_cb->group->signing_id_trie, (uint8_t *)signing_id);
+		}
 		lck_rw_done(&fd_cb->group->lck);
 		if (result != NULL_TRIE_IDX) {
 			error = 0;
@@ -1360,9 +1365,11 @@ flow_divert_send_data_packet(struct flow_divert_pcb *fd_cb, mbuf_t data, size_t 
 		}
 	}
 
-	last = m_last(packet);
-	mbuf_setnext(last, data);
-	mbuf_pkthdr_adjustlen(packet, data_len);
+	if (data_len > 0 && data != NULL) {
+		last = m_last(packet);
+		mbuf_setnext(last, data);
+		mbuf_pkthdr_adjustlen(packet, data_len);
+	}
 	error = flow_divert_send_packet(fd_cb, packet, force);
 
 	if (error) {
@@ -1447,11 +1454,15 @@ flow_divert_send_buffered_data(struct flow_divert_pcb *fd_cb, Boolean force)
 				}
 			}
 			data_len = mbuf_pkthdr_len(m);
-			FDLOG(LOG_DEBUG, fd_cb, "mbuf_copym() data_len = %lu", data_len);
-			error = mbuf_copym(m, 0, data_len, MBUF_DONTWAIT, &data);
-			if (error) {
-				FDLOG(LOG_ERR, fd_cb, "mbuf_copym failed: %d", error);
-				break;
+			if (data_len > 0) {
+				FDLOG(LOG_DEBUG, fd_cb, "mbuf_copym() data_len = %lu", data_len);
+				error = mbuf_copym(m, 0, data_len, MBUF_DONTWAIT, &data);
+				if (error) {
+					FDLOG(LOG_ERR, fd_cb, "mbuf_copym failed: %d", error);
+					break;
+				}
+			} else {
+				data = NULL;
 			}
 			error = flow_divert_send_data_packet(fd_cb, data, data_len, toaddr, force);
 			if (error) {
@@ -1551,7 +1562,7 @@ flow_divert_send_app_data(struct flow_divert_pcb *fd_cb, mbuf_t data, struct soc
 			}
 		}
 	} else if (SOCK_TYPE(fd_cb->so) == SOCK_DGRAM) {
-		if (to_send) {
+		if (to_send || mbuf_pkthdr_len(data) == 0) {
 			error = flow_divert_send_data_packet(fd_cb, data, to_send, toaddr, FALSE);
 			if (error) {
 				FDLOG(LOG_ERR, fd_cb, "flow_divert_send_data_packet failed. send data size = %lu", to_send);
@@ -2041,6 +2052,7 @@ flow_divert_handle_group_init(struct flow_divert_group *group, mbuf_t packet, in
 	int error = 0;
 	uint32_t key_size = 0;
 	int log_level;
+	uint32_t flags = 0;
 
 	error = flow_divert_packet_get_tlv(packet, offset, FLOW_DIVERT_TLV_TOKEN_KEY, 0, NULL, &key_size);
 	if (error) {
@@ -2071,6 +2083,11 @@ flow_divert_handle_group_init(struct flow_divert_group *group, mbuf_t packet, in
 	}
 
 	group->token_key_size = key_size;
+
+	error = flow_divert_packet_get_tlv(packet, offset, FLOW_DIVERT_TLV_FLAGS, sizeof(flags), &flags, NULL);
+	if (!error) {
+		group->flags = flags;
+	}
 
 	lck_rw_done(&group->lck);
 }
@@ -3133,7 +3150,7 @@ flow_divert_preconnect(struct socket *so)
 		fd_cb->flags |= FLOW_DIVERT_CONNECT_STARTED;
 	}
 
-	so->so_flags1 &= ~SOF1_PRECONNECT_DATA;
+	soclearfastopen(so);
 
 	return error;
 }

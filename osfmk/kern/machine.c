@@ -128,6 +128,8 @@ processor_up(
 	++pset->online_processor_count;
 	enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
 	processor->state = PROCESSOR_RUNNING;
+	pset->active_processor_count++;
+	sched_update_pset_load_average(pset);
 	(void)hw_atomic_add(&processor_avail_count, 1);
 	commpage_update_active_cpus();
 	pset_unlock(pset);
@@ -228,11 +230,13 @@ processor_shutdown(
 		return (KERN_SUCCESS);
 	}
 
-	if (processor->state == PROCESSOR_IDLE)
+	if (processor->state == PROCESSOR_IDLE) {
 		remqueue((queue_entry_t)processor);
-	else
-	if (processor->state == PROCESSOR_RUNNING)
+	} else if (processor->state == PROCESSOR_RUNNING) {
 		remqueue((queue_entry_t)processor);
+		pset->active_processor_count--;
+		sched_update_pset_load_average(pset);
+	}
 
 	processor->state = PROCESSOR_SHUTDOWN;
 
@@ -287,6 +291,7 @@ processor_doshutdown(
 	commpage_update_active_cpus();
 	SCHED(processor_queue_shutdown)(processor);
 	/* pset lock dropped */
+	SCHED(rt_queue_shutdown)(processor);
 
 	/*
 	 * Continue processor shutdown in shutdown context.
@@ -327,10 +332,8 @@ processor_offline(
 	thread_t new_thread = processor->idle_thread;
 
 	processor->active_thread = new_thread;
-	processor->current_pri = IDLEPRI;
-	processor->current_thmode = TH_MODE_NONE;
+	processor_state_update_idle(processor);
 	processor->starting_pri = IDLEPRI;
-	processor->current_sfi_class = SFI_CLASS_KERNEL;
 	processor->deadline = UINT64_MAX;
 	new_thread->last_processor = processor;
 
@@ -342,7 +345,6 @@ processor_offline(
 	/* Update processor->thread_timer and ->kernel_timer to point to the new thread */
 	thread_timer_event(ctime, &new_thread->system_timer);
 	PROCESSOR_DATA(processor, kernel_timer) = &new_thread->system_timer;
-
 	timer_stop(PROCESSOR_DATA(processor, current_state), ctime);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
@@ -431,7 +433,7 @@ unsigned long long ml_io_read(uintptr_t vaddr, int size) {
 		(void)ml_set_interrupts_enabled(istate);
 
 		if (__improbable((eabs - sabs) > reportphyreaddelayabs)) {
-			if (phyreadpanic) {
+			if (phyreadpanic && (machine_timeout_suspended() == FALSE)) {
 				panic("Read from IO virtual addr 0x%lx took %llu ns, result: 0x%llx (start: %llu, end: %llu), ceiling: %llu", vaddr, (eabs - sabs), result, sabs, eabs, reportphyreaddelayabs);
 			}
 #if CONFIG_DTRACE

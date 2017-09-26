@@ -837,7 +837,7 @@ ipc_right_destroy(
 /*
  *	Routine:	ipc_right_dealloc
  *	Purpose:
- *		Releases a send/send-once/dead-name user ref.
+ *		Releases a send/send-once/dead-name/port_set user ref.
  *		Like ipc_right_delta with a delta of -1,
  *		but looks at the entry to determine the right.
  *	Conditions:
@@ -865,6 +865,26 @@ ipc_right_dealloc(
 	assert(is_active(space));
 
 	switch (type) {
+	    case MACH_PORT_TYPE_PORT_SET: {
+		ipc_pset_t pset;
+
+		assert(IE_BITS_UREFS(bits) == 0);
+		assert(entry->ie_request == IE_REQ_NONE);
+
+		pset = (ipc_pset_t) entry->ie_object;
+		assert(pset != IPS_NULL);
+
+		entry->ie_object = IO_NULL;
+		ipc_entry_dealloc(space, name, entry);
+
+		ips_lock(pset);
+		assert(ips_active(pset));
+		is_write_unlock(space);
+
+		ipc_pset_destroy(pset); /* consumes ref, unlocks */
+		break;
+	    }
+
 	    case MACH_PORT_TYPE_DEAD_NAME: {
 	    dead_name:
 
@@ -1412,8 +1432,12 @@ ipc_right_delta(
 		break;
 	    }
 
+	    case MACH_PORT_RIGHT_LABELH:
+		goto invalid_right;
+
 	    default:
-		panic("ipc_right_delta: strange right");
+		panic("ipc_right_delta: strange right %d for 0x%x (%p) in space:%p",
+		      right, name, (void *)entry, (void *)space);
 	}
 
 	return KERN_SUCCESS;
@@ -1720,6 +1744,9 @@ ipc_right_copyin_check(
 		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0)
 			return FALSE;
 		if (io_kotype(entry->ie_object) != IKOT_NONE)
+			return FALSE;
+		port = (ipc_port_t) entry->ie_object;
+		if (port->ip_specialreply)
 			return FALSE;
 		break;
 
@@ -2517,8 +2544,13 @@ ipc_right_copyout(
 		assert(IE_BITS_UREFS(bits) == 0);
 		assert(port->ip_sorights > 0);
 
-		/* transfer send-once right and ref to entry */
-		ip_unlock(port);
+		if (port->ip_specialreply) {
+			ipc_port_unlink_special_reply_port_locked(port,
+				current_thread()->ith_knote, IPC_PORT_UNLINK_SR_NONE);
+			/* port unlocked on return */
+		} else {
+			ip_unlock(port);
+		}
 
 		entry->ie_bits = bits | (MACH_PORT_TYPE_SEND_ONCE | 1); /* set urefs to 1 */
 		ipc_entry_modified(space, name, entry);
@@ -2578,10 +2610,20 @@ ipc_right_copyout(
 
 	    case MACH_MSG_TYPE_PORT_RECEIVE: {
 		ipc_port_t dest;
+		sync_qos_count_t max_sync_qos = THREAD_QOS_UNSPECIFIED;
+		sync_qos_count_t sync_qos_delta_add[THREAD_QOS_LAST] = {0};
+		sync_qos_count_t sync_qos_delta_sub[THREAD_QOS_LAST] = {0};
 
 #if IMPORTANCE_INHERITANCE
 		natural_t assertcnt = port->ip_impcount;
 #endif /* IMPORTANCE_INHERITANCE */
+		/* Capture the sync qos count delta */
+		for (int i = 0; i < THREAD_QOS_LAST; i++) {
+			sync_qos_delta_sub[i] = port_sync_qos(port, i);
+			if (sync_qos_delta_sub[i] != 0) {
+				max_sync_qos = i;
+			}
+		}
 
 		assert(port->ip_mscount == 0);
 		assert(port->ip_receiver_name == MACH_PORT_NULL);
@@ -2614,6 +2656,11 @@ ipc_right_copyout(
 		entry->ie_bits = bits | MACH_PORT_TYPE_RECEIVE;
 		ipc_entry_modified(space, name, entry);
 
+		/* update the sync qos count on knote */
+		if (ITH_KNOTE_VALID(current_thread()->ith_knote)) {
+			knote_adjust_sync_qos(current_thread()->ith_knote, max_sync_qos, TRUE);
+		}
+
 		if (dest != IP_NULL) {
 #if IMPORTANCE_INHERITANCE
 			/*
@@ -2626,6 +2673,8 @@ ipc_right_copyout(
 			ipc_port_impcount_delta(dest, 0 - assertcnt, IP_NULL);
 			ip_unlock(dest);
 #endif /* IMPORTANCE_INHERITANCE */
+			/* Adjust the sync qos of destination */
+			ipc_port_adjust_sync_qos(dest, sync_qos_delta_add, sync_qos_delta_sub);
 			ip_release(dest);
 		}
 		break;

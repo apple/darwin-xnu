@@ -120,6 +120,8 @@ osfmk/kperf/x86_64/kperf_mp.c   optional kperf
 osfmk/kperf/x86_64/kperf_meminfo.c  optional kperf
 osfmk/x86_64/kpc_x86.c              optional kpc
 
+osfmk/x86_64/monotonic_x86_64.c optional monotonic
+
 osfmk/i386/startup64.c		standard
 osfmk/x86_64/idt64.s		standard
 

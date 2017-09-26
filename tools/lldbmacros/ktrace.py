@@ -72,7 +72,7 @@ def GetKdebugTypefilter(typefilter):
             if print_class:
                 subclasses[j] = element
 
-        # if any of the bits were set in a class, print the entire class
+        ## if any of the bits were set in a class, print the entire class
         if print_class:
             out_str += '{:<20s}'.format(GetKdebugClassName(i))
             for element in subclasses:
@@ -119,7 +119,7 @@ def GetKdebugStatus():
     kdebug_flags = kern.globals.kd_ctrl_page.kdebug_flags
     out += 'kdebug flags: {}\n'.format(xnudefines.GetStateString(xnudefines.kdebug_flags_strings, kdebug_flags))
     events = kern.globals.nkdbufs
-    buf_mb = events * (64 if kern.arch == 'x86_64' or kern.arch == 'arm64' else 32) / 1000000
+    buf_mb = events * (64 if kern.arch == 'x86_64' or kern.arch.startswith('arm64') else 32) / 1000000
     out += 'events allocated: {:<d} ({:<d} MB)\n'.format(events, buf_mb)
     out += 'enabled: {}\n'.format('yes' if kern.globals.kdebug_enable != 0 else 'no')
     if kdebug_flags & xnudefines.kdebug_typefilter_check:
@@ -139,7 +139,7 @@ def ShowKdebug(cmd_args=None):
         usage: showkdebug
     """
 
-    print GetKdebugSummary()
+    print GetKdebugStatus()
 
 @lldb_type_summary(['kperf_timer'])
 @header('{:<10s} {:<7s} {:<20s}'.format('period-ns', 'action', 'pending'))

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -92,11 +92,10 @@
  *
  *	@(#)udp_var.h	8.1 (Berkeley) 6/10/93
  */
-
-#include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
+#include <sys/param.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -113,6 +112,7 @@
 #include <net/if_types.h>
 #include <net/ntstat.h>
 #include <net/dlil.h>
+#include <net/net_api_stats.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -218,6 +218,7 @@ udp6_append(struct inpcb *last, struct ip6_hdr *ip6,
 	if (nstat_collect) {
 		INP_ADD_STAT(last, cell, wifi, wired, rxpackets, 1);
 		INP_ADD_STAT(last, cell, wifi, wired, rxbytes, n->m_pkthdr.len);
+		inp_set_activity_bitmap(last);
 	}
 	so_recv_data_stat(last->in6p_socket, n, 0);
 	if (sbappendaddr(&last->in6p_socket->so_rcv,
@@ -374,8 +375,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 				mcaddr.sin6_addr = ip6->ip6_dst;
 
 				blocked = im6o_mc_filter(imo, ifp,
-				    (struct sockaddr *)&mcaddr,
-				    (struct sockaddr *)&fromsa);
+				    &mcaddr, &fromsa);
 				IM6O_UNLOCK(imo);
 				if (blocked != MCAST_PASS) {
 					udp_unlock(in6p->in6p_socket, 1, 0);
@@ -582,6 +582,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	if (nstat_collect) {
 		INP_ADD_STAT(in6p, cell, wifi, wired, rxpackets, 1);
 		INP_ADD_STAT(in6p, cell, wifi, wired, rxbytes, m->m_pkthdr.len);
+		inp_set_activity_bitmap(in6p);
 	}
 	so_recv_data_stat(in6p->in6p_socket, m, 0);
 	if (sbappendaddr(&in6p->in6p_socket->so_rcv,
@@ -604,13 +605,14 @@ bad:
 }
 
 void
-udp6_ctlinput(int cmd, struct sockaddr *sa, void *d)
+udp6_ctlinput(int cmd, struct sockaddr *sa, void *d, __unused struct ifnet *ifp)
 {
 	struct udphdr uh;
 	struct ip6_hdr *ip6;
 	struct mbuf *m;
 	int off = 0;
 	struct ip6ctlparam *ip6cp = NULL;
+	struct icmp6_hdr *icmp6 = NULL;
 	const struct sockaddr_in6 *sa6_src = NULL;
 	void (*notify)(struct inpcb *, int) = udp_notify;
 	struct udp_portonly {
@@ -635,6 +637,7 @@ udp6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 	/* if the parameter is from icmp6, decode it. */
 	if (d != NULL) {
 		ip6cp = (struct ip6ctlparam *)d;
+		icmp6 = ip6cp->ip6c_icmp6;
 		m = ip6cp->ip6c_m;
 		ip6 = ip6cp->ip6c_ip6;
 		off = ip6cp->ip6c_off;
@@ -650,7 +653,6 @@ udp6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 		 * XXX: We assume that when IPV6 is non NULL,
 		 * M and OFF are valid.
 		 */
-
 		/* check if we can safely examine src and dst ports */
 		if (m->m_pkthdr.len < off + sizeof (*uhp))
 			return;
@@ -780,6 +782,12 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 			if (inp->inp_faddr.s_addr != INADDR_ANY)
 				return (EISCONN);
+
+			if (!(so->so_flags1 & SOF1_CONNECT_COUNTED)) {
+				so->so_flags1 |= SOF1_CONNECT_COUNTED;
+				INC_ATOMIC_INT64_LIM(net_api_stats.nas_socket_inet_dgram_connected);
+			}
+
 			in6_sin6_2_sin(&sin, sin6_p);
 #if defined(NECP) && defined(FLOW_DIVERT)
 			if (should_use_flow_divert) {
@@ -789,6 +797,14 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 			error = in_pcbconnect(inp, (struct sockaddr *)&sin,
 			    p, IFSCOPE_NONE, NULL);
 			if (error == 0) {
+#if NECP
+				/* Update NECP client with connected five-tuple */
+				if (!uuid_is_null(inp->necp_client_uuid)) {
+					socket_unlock(so, 0);
+					necp_client_assign_from_socket(so->last_pid, inp->necp_client_uuid, inp);
+					socket_lock(so, 0);
+				}
+#endif /* NECP */
 				inp->inp_vflag |= INP_IPV4;
 				inp->inp_vflag &= ~INP_IPV6;
 				soisconnected(so);
@@ -799,6 +815,11 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 	if (!IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr))
 		return (EISCONN);
+
+	if (!(so->so_flags1 & SOF1_CONNECT_COUNTED)) {
+		so->so_flags1 |= SOF1_CONNECT_COUNTED;
+		INC_ATOMIC_INT64_LIM(net_api_stats.nas_socket_inet6_dgram_connected);
+	}
 
 #if defined(NECP) && defined(FLOW_DIVERT)
 do_flow_divert:
@@ -824,6 +845,14 @@ do_flow_divert:
 			inp->inp_vflag &= ~INP_IPV4;
 			inp->inp_vflag |= INP_IPV6;
 		}
+#if NECP
+		/* Update NECP client with connected five-tuple */
+		if (!uuid_is_null(inp->necp_client_uuid)) {
+			socket_unlock(so, 0);
+			necp_client_assign_from_socket(so->last_pid, inp->necp_client_uuid, inp);
+			socket_lock(so, 0);
+		}
+#endif /* NECP */
 		soisconnected(so);
 		if (inp->inp_flowhash == 0)
 			inp->inp_flowhash = inp_calc_flowhash(inp);
@@ -890,6 +919,7 @@ udp6_disconnect(struct socket *so)
 
 	inp->in6p_laddr = in6addr_any;
 	inp->in6p_last_outifp = NULL;
+
 	so->so_state &= ~SS_ISCONNECTED;		/* XXX */
 	return (0);
 }
@@ -1014,17 +1044,22 @@ udp6_input_checksum(struct mbuf *m, struct udphdr *uh, int off, int ulen)
 		if (m->m_pkthdr.csum_flags & CSUM_PSEUDO_HDR) {
 			uh->uh_sum = m->m_pkthdr.csum_rx_val;
 		} else {
-			uint16_t sum = m->m_pkthdr.csum_rx_val;
-			uint16_t start = m->m_pkthdr.csum_rx_start;
+			uint32_t sum = m->m_pkthdr.csum_rx_val;
+			uint32_t start = m->m_pkthdr.csum_rx_start;
+			int32_t trailer = (m_pktlen(m) - (off + ulen));
 
 			/*
 			 * Perform 1's complement adjustment of octets
 			 * that got included/excluded in the hardware-
-			 * calculated checksum value.
+			 * calculated checksum value.  Also take care
+			 * of any trailing bytes and subtract out
+			 * their partial sum.
 			 */
+			ASSERT(trailer >= 0);
 			if ((m->m_pkthdr.csum_flags & CSUM_PARTIAL) &&
-			    start != off) {
-				uint16_t s, d;
+			    (start != off || trailer != 0)) {
+				uint32_t swbytes = (uint32_t)trailer;
+				uint16_t s = 0, d = 0;
 
 				if (IN6_IS_SCOPE_EMBED(&ip6->ip6_src)) {
 					s = ip6->ip6_src.s6_addr16[1];
@@ -1036,12 +1071,21 @@ udp6_input_checksum(struct mbuf *m, struct udphdr *uh, int off, int ulen)
 				}
 
 				/* callee folds in sum */
-				sum = m_adj_sum16(m, start, off, sum);
+				sum = m_adj_sum16(m, start, off, ulen, sum);
+				if (off > start)
+					swbytes += (off - start);
+				else
+					swbytes += (start - off);
 
 				if (IN6_IS_SCOPE_EMBED(&ip6->ip6_src))
 					ip6->ip6_src.s6_addr16[1] = s;
 				if (IN6_IS_SCOPE_EMBED(&ip6->ip6_dst))
 					ip6->ip6_dst.s6_addr16[1] = d;
+
+				if (swbytes != 0)
+					udp_in_cksum_stats(swbytes);
+				if (trailer != 0)
+					m_adj(m, -trailer);
 			}
 
 			uh->uh_sum = in6_pseudo(&ip6->ip6_src, &ip6->ip6_dst,

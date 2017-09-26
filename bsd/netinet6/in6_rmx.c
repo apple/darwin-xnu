@@ -143,8 +143,6 @@ static struct radix_node *in6_matroute_args(void *, struct radix_node_head *,
 static void in6_clsroute(struct radix_node *, struct radix_node_head *);
 static int in6_rtqkill(struct radix_node *, void *);
 
-#define	RTPRF_OURS		RTF_PROTO3	/* set on routes we manage */
-
 /*
  * Accessed by in6_addroute(), in6_deleteroute() and in6_rtqkill(), during
  * which the routing lock (rnh_lock) is held and thus protects the variable.
@@ -165,7 +163,7 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 	uint32_t flags = rt->rt_flags;
 	boolean_t verbose = (rt_verbose > 1);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	if (verbose)
@@ -334,7 +332,7 @@ in6_deleteroute(void *v_arg, void *netmask_arg, struct radix_node_head *head)
 {
 	struct radix_node *rn;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	rn = rn_delete(v_arg, netmask_arg, head);
 	if (rn != NULL) {
@@ -449,11 +447,11 @@ in6_clsroute(struct radix_node *rn, struct radix_node_head *head)
 	struct rtentry *rt = (struct rtentry *)rn;
 	boolean_t verbose = (rt_verbose > 1);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	if (!(rt->rt_flags & RTF_UP))
-		return;		/* prophylactic measures */
+		return;         /* prophylactic measures */
 
 	if ((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST)
 		return;
@@ -517,9 +515,9 @@ in6_clsroute(struct radix_node *rn, struct radix_node_head *head)
 
 		if (verbose) {
 			log(LOG_DEBUG, "%s: route to %s->%s->%s invalidated, "
-			    "flags=%b, expire=T+%u\n", __func__, dbuf, gbuf,
-			    (rt->rt_ifp != NULL) ? rt->rt_ifp->if_xname : "",
-			    rt->rt_flags, RTF_BITS, rt->rt_expire - timenow);
+					"flags=%b, expire=T+%u\n", __func__, dbuf, gbuf,
+					(rt->rt_ifp != NULL) ? rt->rt_ifp->if_xname : "",
+					rt->rt_flags, RTF_BITS, rt->rt_expire - timenow);
 		}
 
 		/* We have at least one entry; arm the timer if not already */
@@ -553,7 +551,7 @@ in6_rtqkill(struct radix_node *rn, void *rock)
 	int err;
 
 	timenow = net_uptime();
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	RT_LOCK(rt);
 	if (rt->rt_flags & RTPRF_OURS) {
@@ -574,6 +572,7 @@ in6_rtqkill(struct radix_node *rn, void *rock)
 				    rt, rt->rt_refcnt);
 				/* NOTREACHED */
 			}
+
 			if (verbose) {
 				log(LOG_DEBUG, "%s: deleting route to "
 				    "%s->%s->%s, flags=%b, draining=%d\n",
@@ -708,7 +707,7 @@ in6_rtqtimo(void *targ)
 static void
 in6_sched_rtqtimo(struct timeval *atv)
 {
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (!in6_rtqtimo_run) {
 		struct timeval tv;

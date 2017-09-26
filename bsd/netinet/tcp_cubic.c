@@ -89,20 +89,14 @@ const float tcp_cubic_backoff = 0.2; /* multiplicative decrease factor */
 const float tcp_cubic_coeff = 0.4;
 const float tcp_cubic_fast_convergence_factor = 0.875;
 
-static int tcp_cubic_tcp_friendliness = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, cubic_tcp_friendliness,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_cubic_tcp_friendliness, 0,
-	"Enable TCP friendliness");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, cubic_tcp_friendliness, CTLFLAG_RW | CTLFLAG_LOCKED,
+	static int, tcp_cubic_tcp_friendliness, 0, "Enable TCP friendliness");
 
-static int tcp_cubic_fast_convergence = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, cubic_fast_convergence,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_cubic_fast_convergence, 0,
-	"Enable fast convergence");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, cubic_fast_convergence, CTLFLAG_RW | CTLFLAG_LOCKED,
+	static int, tcp_cubic_fast_convergence, 0, "Enable fast convergence");
 
-static int tcp_cubic_use_minrtt = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, cubic_use_minrtt,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_cubic_use_minrtt, 0,
-	"use a min of 5 sec rtt");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, cubic_use_minrtt, CTLFLAG_RW | CTLFLAG_LOCKED,
+	static int, tcp_cubic_use_minrtt, 0, "use a min of 5 sec rtt");
 
 static int tcp_cubic_init(struct tcpcb *tp)
 {
@@ -214,7 +208,7 @@ tcp_cubic_update(struct tcpcb *tp, u_int32_t rtt)
 	var = (elapsed_time  - tp->t_ccstate->cub_epoch_period) / TCP_RETRANSHZ;
 	var = var * var * var * (tcp_cubic_coeff * tp->t_maxseg);
 
-	tp->t_ccstate->cub_target_win = tp->t_ccstate->cub_origin_point + var;
+	tp->t_ccstate->cub_target_win = (u_int32_t)(tp->t_ccstate->cub_origin_point + var);
 	return (tp->t_ccstate->cub_target_win);
 }
 
@@ -355,7 +349,7 @@ tcp_cubic_ack_rcvd(struct tcpcb *tp, struct tcphdr *th)
 static void
 tcp_cubic_pre_fr(struct tcpcb *tp)
 {
-	uint32_t win, avg;
+	u_int32_t win, avg;
 	int32_t dev;
 	tp->t_ccstate->cub_epoch_start = 0;
 	tp->t_ccstate->cub_tcp_win = 0;
@@ -382,8 +376,8 @@ tcp_cubic_pre_fr(struct tcpcb *tp)
 	 */
 	if (win < tp->t_ccstate->cub_last_max &&
 		tcp_cubic_fast_convergence == 1)
-		tp->t_ccstate->cub_last_max = win * 
-			tcp_cubic_fast_convergence_factor;
+		tp->t_ccstate->cub_last_max = (u_int32_t)(win *
+			tcp_cubic_fast_convergence_factor);
 	else
 		tp->t_ccstate->cub_last_max = win;
 
@@ -429,7 +423,7 @@ tcp_cubic_pre_fr(struct tcpcb *tp)
 	}
 
 	/* Backoff congestion window by tcp_cubic_backoff factor */
-	win = win - (win * tcp_cubic_backoff);
+	win = (u_int32_t)(win - (win * tcp_cubic_backoff));
 	win = (win / tp->t_maxseg);
 	if (win < 2)
 		win = 2;

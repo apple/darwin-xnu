@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -91,6 +91,7 @@
 #include <net/dlil.h>
 #include <net/ntstat.h>
 #include <net/net_osdep.h>
+#include <net/nwk_wq.h>
 
 #include <netinet/in.h>
 #include <netinet/in_arp.h>
@@ -226,7 +227,7 @@ static int nd6_sysctl_prlist SYSCTL_HANDLER_ARGS;
  * Insertion and removal from llinfo_nd6 must be done with rnh_lock held.
  */
 #define	LN_DEQUEUE(_ln) do {						\
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);			\
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);			\
 	RT_LOCK_ASSERT_HELD((_ln)->ln_rt);				\
 	(_ln)->ln_next->ln_prev = (_ln)->ln_prev;			\
 	(_ln)->ln_prev->ln_next = (_ln)->ln_next;			\
@@ -235,7 +236,7 @@ static int nd6_sysctl_prlist SYSCTL_HANDLER_ARGS;
 } while (0)
 
 #define	LN_INSERTHEAD(_ln) do {						\
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);			\
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);			\
 	RT_LOCK_ASSERT_HELD((_ln)->ln_rt);				\
 	(_ln)->ln_next = llinfo_nd6.ln_next;				\
 	llinfo_nd6.ln_next = (_ln);					\
@@ -500,7 +501,7 @@ nd6_ifreset(struct ifnet *ifp)
 	VERIFY(NULL != ndi);
 	VERIFY(ndi->initialized);
 
-	lck_mtx_assert(&ndi->lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ndi->lock, LCK_MTX_ASSERT_OWNED);
 	ndi->linkmtu = ifp->if_mtu;
 	ndi->chlim = IPV6_DEFHLIM;
 	ndi->basereachable = REACHABLE_TIME;
@@ -713,6 +714,7 @@ nd6_options(union nd_opts *ndopts)
 			    (struct nd_opt_prefix_info *)nd_opt;
 			break;
 		case ND_OPT_RDNSS:
+		case ND_OPT_DNSSL:
 			/* ignore */
 			break;
 		default:
@@ -762,11 +764,12 @@ nd6_service(void *arg)
 	struct ifnet *ifp = NULL;
 	struct in6_ifaddr *ia6, *nia6;
 	uint64_t timenow;
-	bool send_nc_failure_kev = false;
+	boolean_t send_nc_failure_kev = FALSE;
 	struct nd_drhead nd_defrouter_tmp;
 	struct nd_defrouter *ndr = NULL;
+	struct radix_node_head  *rnh = rt_tables[AF_INET6];
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	/*
 	 * Since we may drop rnh_lock and nd6_mutex below, we want
 	 * to run this entire operation single threaded.
@@ -778,7 +781,7 @@ nd6_service(void *arg)
 		nd6_service_waiters++;
 		(void) msleep(nd6_service_wc, rnh_lock, (PZERO-1),
 		    __func__, NULL);
-		lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	}
 
 	/* We are busy now; tell everyone else to go away */
@@ -829,7 +832,7 @@ again:
 		dlil_post_complete_msg(NULL, &ev_msg);
 	}
 
-	send_nc_failure_kev = false;
+	send_nc_failure_kev = FALSE;
 	ifp = NULL;
 	/*
 	 * The global list llinfo_nd6 is modified by nd6_request() and is
@@ -843,7 +846,7 @@ again:
 	 * pass thru the entries and clear the flag so they can be processed
 	 * during the next timeout.
 	 */
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	ln = llinfo_nd6.ln_next;
 	while (ln != NULL && ln != &llinfo_nd6) {
@@ -852,6 +855,7 @@ again:
 		struct llinfo_nd6 *next;
 		u_int32_t retrans, flags;
 		struct nd_ifinfo *ndi = NULL;
+		boolean_t is_router = FALSE;
 
 		/* ln_next/prev/rt is protected by rnh_lock */
 		next = ln->ln_next;
@@ -931,6 +935,7 @@ again:
 		flags = ndi->flags;
 
 		RT_LOCK_ASSERT_HELD(rt);
+		is_router = (rt->rt_flags & RTF_ROUTER) ? TRUE : FALSE;
 
 		switch (ln->ln_state) {
 		case ND6_LLINFO_INCOMPLETE:
@@ -954,7 +959,7 @@ again:
 			} else {
 				struct mbuf *m = ln->ln_hold;
 				ln->ln_hold = NULL;
-				send_nc_failure_kev = (rt->rt_flags & RTF_ROUTER) ? true : false;
+				send_nc_failure_kev = is_router;
 				if (m != NULL) {
 					RT_ADDREF_LOCKED(rt);
 					RT_UNLOCK(rt);
@@ -974,12 +979,34 @@ again:
 					RT_UNLOCK(rt);
 					lck_mtx_unlock(rnh_lock);
 				}
+
+				/*
+				 * Enqueue work item to invoke callback for
+				 * this route entry
+				 */
+				route_event_enqueue_nwk_wq_entry(rt, NULL,
+				    ROUTE_LLENTRY_UNREACH, NULL, FALSE);
 				nd6_free(rt);
 				ap->killed++;
 				lck_mtx_lock(rnh_lock);
+				/*
+				 * nd6_free above would flush out the routing table of
+				 * any cloned routes with same next-hop.
+				 * Walk the tree anyways as there could be static routes
+				 * left.
+				 *
+				 * We also already have a reference to rt that gets freed right
+				 * after the block below executes. Don't need an extra reference
+				 * on rt here.
+				 */
+				if (is_router) {
+					struct route_event rt_ev;
+					route_event_init(&rt_ev, rt, NULL, ROUTE_LLENTRY_UNREACH);
+					(void) rnh->rnh_walktree(rnh, route_event_walktree, (void *)&rt_ev);
+				}
 				rtfree_locked(rt);
 			}
-			lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+			LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 			goto again;
 
 		case ND6_LLINFO_REACHABLE:
@@ -987,8 +1014,24 @@ again:
 				ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_STALE);
 				ln_setexpire(ln, timenow + nd6_gctimer);
 				ap->aging_lazy++;
+				/*
+				 * Enqueue work item to invoke callback for
+				 * this route entry
+				 */
+				route_event_enqueue_nwk_wq_entry(rt, NULL,
+				    ROUTE_LLENTRY_STALE, NULL, TRUE);
+
+				RT_ADDREF_LOCKED(rt);
+				RT_UNLOCK(rt);
+				if (is_router) {
+					struct route_event rt_ev;
+					route_event_init(&rt_ev, rt, NULL, ROUTE_LLENTRY_STALE);
+					(void) rnh->rnh_walktree(rnh, route_event_walktree, (void *)&rt_ev);
+				}
+				rtfree_locked(rt);
+			} else {
+				RT_UNLOCK(rt);
 			}
-			RT_UNLOCK(rt);
 			break;
 
 		case ND6_LLINFO_STALE:
@@ -1043,16 +1086,41 @@ again:
 				ap->aging++;
 				lck_mtx_lock(rnh_lock);
 			} else {
-				send_nc_failure_kev = (rt->rt_flags & RTF_ROUTER) ? true : false;
+				is_router = (rt->rt_flags & RTF_ROUTER) ? TRUE : FALSE;
+				send_nc_failure_kev = is_router;
 				RT_ADDREF_LOCKED(rt);
 				RT_UNLOCK(rt);
 				lck_mtx_unlock(rnh_lock);
 				nd6_free(rt);
 				ap->killed++;
+
+				/*
+				 * Enqueue work item to invoke callback for
+				 * this route entry
+				 */
+				route_event_enqueue_nwk_wq_entry(rt, NULL,
+				    ROUTE_LLENTRY_UNREACH, NULL, FALSE);
+
 				lck_mtx_lock(rnh_lock);
+				/*
+				 * nd6_free above would flush out the routing table of
+				 * any cloned routes with same next-hop.
+				 * Walk the tree anyways as there could be static routes
+				 * left.
+				 *
+				 * We also already have a reference to rt that gets freed right
+				 * after the block below executes. Don't need an extra reference
+				 * on rt here.
+				 */
+				if (is_router) {
+					struct route_event rt_ev;
+					route_event_init(&rt_ev, rt, NULL, ROUTE_LLENTRY_UNREACH);
+					(void) rnh->rnh_walktree(rnh,
+					    route_event_walktree, (void *)&rt_ev);
+				}
 				rtfree_locked(rt);
 			}
-			lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+			LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 			goto again;
 
 		default:
@@ -1061,7 +1129,7 @@ again:
 		}
 		ln = next;
 	}
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	/* Now clear the flag from all entries */
 	ln = llinfo_nd6.ln_next;
@@ -1084,6 +1152,10 @@ again:
 	TAILQ_FOREACH_SAFE(dr, &nd_defrouter, dr_entry, ndr) {
 		ap->found++;
 		if (dr->expire != 0 && dr->expire < timenow) {
+			VERIFY(dr->ifp != NULL);
+			in6_ifstat_inc(dr->ifp, ifs6_defrtr_expiry_cnt);
+			in6_event_enqueue_nwk_wq_entry(IN6_NDP_RTR_EXPIRY, dr->ifp,
+			    &dr->rtaddr, dr->rtlifetime);
 			if (dr->ifp != NULL &&
 			    dr->ifp->if_type == IFT_CELLULAR) {
 				/*
@@ -1211,6 +1283,12 @@ addrloop:
 			in6_purgeaddr(&ia6->ia_ifa);
 			ap->killed++;
 
+			if ((ia6->ia6_flags & IN6_IFF_TEMPORARY) == 0) {
+				in6_ifstat_inc(ia6->ia_ifa.ifa_ifp, ifs6_addr_expiry_cnt);
+				in6_event_enqueue_nwk_wq_entry(IN6_NDP_ADDR_EXPIRY,
+				    ia6->ia_ifa.ifa_ifp, &ia6->ia_addr.sin6_addr,
+				    0);
+			}
 			/* Release extra reference taken above */
 			IFA_REMREF(&ia6->ia_ifa);
 			goto addrloop;
@@ -1228,9 +1306,17 @@ addrloop:
 		IFA_LOCK_ASSERT_HELD(&ia6->ia_ifa);
 		if (IFA6_IS_DEPRECATED(ia6, timenow)) {
 			int oldflags = ia6->ia6_flags;
-
 			ia6->ia6_flags |= IN6_IFF_DEPRECATED;
 
+			/*
+			 * Only enqueue the Deprecated event when the address just
+			 * becomes deprecated
+			 */
+			if((oldflags & IN6_IFF_DEPRECATED) == 0) {
+				in6_event_enqueue_nwk_wq_entry(IN6_ADDR_MARKED_DEPRECATED,
+				    ia6->ia_ifa.ifa_ifp, &ia6->ia_addr.sin6_addr,
+				    0);
+			}
 			/*
 			 * If a temporary address has just become deprecated,
 			 * regenerate a new one if possible.
@@ -1271,7 +1357,7 @@ addrloop:
 			ia6->ia6_flags &= ~IN6_IFF_DEPRECATED;
 			IFA_UNLOCK(&ia6->ia_ifa);
 		}
-		lck_rw_assert(&in6_ifaddr_rwlock, LCK_RW_ASSERT_EXCLUSIVE);
+		LCK_RW_ASSERT(&in6_ifaddr_rwlock, LCK_RW_ASSERT_EXCLUSIVE);
 		/* Release extra reference taken above */
 		IFA_REMREF(&ia6->ia_ifa);
 	}
@@ -1304,6 +1390,11 @@ addrloop:
 			NDPR_ADDREF_LOCKED(pr);
 			prelist_remove(pr);
 			NDPR_UNLOCK(pr);
+
+			in6_ifstat_inc(pr->ndpr_ifp, ifs6_pfx_expiry_cnt);
+			in6_event_enqueue_nwk_wq_entry(IN6_NDP_PFX_EXPIRY,
+			    pr->ndpr_ifp, &pr->ndpr_prefix.sin6_addr,
+			    0); 
 			NDPR_REMREF(pr);
 			pfxlist_onlink_check();
 			pr = nd_prefix.lh_first;
@@ -1406,7 +1497,7 @@ nd6_sched_timeout(struct timeval *atv, struct timeval *ltv)
 {
 	struct timeval tv;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	if (atv == NULL) {
 		tv.tv_usec = 0;
 		tv.tv_sec = MAX(nd6_prune, 1);
@@ -1466,7 +1557,7 @@ nd6_sched_timeout(struct timeval *atv, struct timeval *ltv)
  */
 void
 nd6_post_msg(u_int32_t code, struct nd_prefix_list *prefix_list,
-    u_int32_t list_length, u_int32_t mtu, char *dl_addr, u_int32_t dl_addr_len)
+    u_int32_t list_length, u_int32_t mtu)
 {
 	struct kev_msg ev_msg;
 	struct kev_nd6_ra_data nd6_ra_msg_data;
@@ -1479,9 +1570,6 @@ nd6_post_msg(u_int32_t code, struct nd_prefix_list *prefix_list,
 	ev_msg.event_code	= code;
 
 	bzero(&nd6_ra_msg_data, sizeof (nd6_ra_msg_data));
-	nd6_ra_msg_data.lladdrlen = (dl_addr_len <= ND6_ROUTER_LL_SIZE) ?
-	    dl_addr_len : ND6_ROUTER_LL_SIZE;
-	bcopy(dl_addr, &nd6_ra_msg_data.lladdr, nd6_ra_msg_data.lladdrlen);
 
 	if (mtu > 0 && mtu >= IPV6_MMTU) {
 		nd6_ra_msg_data.mtu = mtu;
@@ -1750,7 +1838,7 @@ again:
 			 */
 			nd6_free(rt);
 			RT_REMREF(rt);
-			lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+			LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 			goto again;
 		} else {
 			RT_UNLOCK(rt);
@@ -1781,7 +1869,7 @@ nd6_lookup(struct in6_addr *addr6, int create, struct ifnet *ifp, int rt_locked)
 
 	ifscope = (ifp != NULL) ? ifp->if_index : IFSCOPE_NONE;
 	if (rt_locked) {
-		lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 		rt = rtalloc1_scoped_locked(SA(&sin6), create, 0, ifscope);
 	} else {
 		rt = rtalloc1_scoped(SA(&sin6), create, 0, ifscope);
@@ -1924,7 +2012,7 @@ nd6_is_new_addr_neighbor(struct sockaddr_in6 *addr, struct ifnet *ifp)
 	struct nd_prefix *pr;
 	struct ifaddr *dstaddr;
 
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_OWNED);
 
 	/*
 	 * A link-local address is always a neighbor.
@@ -2001,7 +2089,7 @@ nd6_is_addr_neighbor(struct sockaddr_in6 *addr, struct ifnet *ifp,
 {
 	struct rtentry *rt;
 
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(nd6_mutex);
 	if (nd6_is_new_addr_neighbor(addr, ifp)) {
 		lck_mtx_unlock(nd6_mutex);
@@ -2036,7 +2124,7 @@ nd6_free(struct rtentry *rt)
 	struct in6_addr in6;
 	struct nd_defrouter *dr;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	RT_LOCK_ASSERT_NOTHELD(rt);
 	lck_mtx_lock(nd6_mutex);
 
@@ -2134,7 +2222,7 @@ nd6_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 
 	VERIFY((NULL != ndi) && (TRUE == ndi->initialized));
 	VERIFY(nd6_init_done);
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	/*
@@ -2497,7 +2585,7 @@ nd6_siocgdrlst(void *data, int data_is_64)
 	struct nd_defrouter *dr;
 	int i = 0;
 
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_OWNED);
 
 	dr = TAILQ_FIRST(&nd_defrouter);
 
@@ -2580,7 +2668,7 @@ nd6_siocgprlst(void *data, int data_is_64)
 	struct nd_prefix *pr;
 	int i = 0;
 
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_OWNED);
 
 	pr = nd_prefix.lh_first;
 
@@ -3172,7 +3260,7 @@ fail:
 	 *	1	--	y	--	(7) * STALE
 	 */
 
-	if (lladdr) {		/* (3-5) and (7) */
+	if (lladdr != NULL) {		/* (3-5) and (7) */
 		/*
 		 * Record source link-layer address
 		 * XXX is it dependent to ifp->if_type?
@@ -3184,7 +3272,7 @@ fail:
 		nd6_llreach_alloc(rt, ifp, LLADDR(sdl), sdl->sdl_alen, FALSE);
 	}
 
-	if (!is_newentry) {
+	if (is_newentry == 0) {
 		if ((!olladdr && lladdr != NULL) ||	/* (3) */
 		    (olladdr && lladdr != NULL && llchange)) {	/* (5) */
 			do_update = 1;
@@ -3313,6 +3401,39 @@ fail:
 			ln->ln_router = 1;
 		}
 		break;
+	}
+
+	if (do_update) {
+		int route_ev_code = 0;
+
+		if (llchange)
+			route_ev_code = ROUTE_LLENTRY_CHANGED;
+		else
+			route_ev_code = ROUTE_LLENTRY_RESOLVED;
+
+		/* Enqueue work item to invoke callback for this route entry */
+		route_event_enqueue_nwk_wq_entry(rt, NULL, route_ev_code, NULL, TRUE);
+
+		if (ln->ln_router || (rt->rt_flags & RTF_ROUTER)) {
+			struct radix_node_head  *rnh = NULL;
+			struct route_event rt_ev;
+			route_event_init(&rt_ev, rt, NULL, llchange ? ROUTE_LLENTRY_CHANGED :
+			    ROUTE_LLENTRY_RESOLVED);
+			/*
+			 * We already have a valid reference on rt.
+			 * The function frees that before returning.
+			 * We therefore don't need an extra reference here
+			 */
+			RT_UNLOCK(rt);
+			lck_mtx_lock(rnh_lock);
+
+			rnh = rt_tables[AF_INET6];
+			if (rnh != NULL)
+				(void) rnh->rnh_walktree(rnh, route_event_walktree,
+				    (void *)&rt_ev);
+			lck_mtx_unlock(rnh_lock);
+			RT_LOCK(rt);
+		}
 	}
 
 	/*
@@ -3748,8 +3869,7 @@ lookup:
 	if (ln->ln_hold)
 		m_freem_list(ln->ln_hold);
 	ln->ln_hold = m0;
-	if (ln->ln_expire != 0 && ln->ln_asked < nd6_mmaxtries &&
-	    ln->ln_expire <= timenow) {
+	if (!ND6_LLINFO_PERMANENT(ln) && ln->ln_asked == 0) {
 		ln->ln_asked++;
 		ndi = ND_IFINFO(ifp);
 		VERIFY(ndi != NULL && ndi->initialized);
@@ -3767,9 +3887,6 @@ lookup:
 		nd6_sched_timeout(NULL, NULL);
 		lck_mtx_unlock(rnh_lock);
 	} else {
-		if(ln->ln_state == ND6_LLINFO_INCOMPLETE) {
-			ln_setexpire(ln, timenow);
-		}
 		RT_UNLOCK(rt);
 	}
 	/*

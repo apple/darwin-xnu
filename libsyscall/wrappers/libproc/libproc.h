@@ -138,6 +138,10 @@ int proc_terminate(pid_t pid, int *sig);
  * failure and errno set appropriately.
  */
 int proc_list_uptrs(pid_t pid, uint64_t *buffer, uint32_t buffersize);
+
+int proc_list_dynkqueueids(int pid, kqueue_id_t *buf, uint32_t bufsz);
+int proc_piddynkqueueinfo(int pid, int flavor, kqueue_id_t kq_id, void *buffer,
+		int buffersize);
 #endif /* PRIVATE */
 
 __END_DECLS

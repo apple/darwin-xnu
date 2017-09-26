@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003,2008,2017 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -204,8 +204,16 @@ struct iff_filter {
 	@param filter_ref A reference to the filter used to detach.
 	@result 0 on success otherwise the errno error.
  */
+#ifdef KERNEL_PRIVATE
+extern errno_t iflt_attach_internal(ifnet_t interface, const struct iff_filter *filter,
+    interface_filter_t *filter_ref);
+
+#define iflt_attach(interface, filter, filter_ref) \
+	iflt_attach_internal((interface), (filter), (filter_ref))
+#else
 extern errno_t iflt_attach(ifnet_t interface, const struct iff_filter *filter,
     interface_filter_t *filter_ref);
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@function iflt_detach

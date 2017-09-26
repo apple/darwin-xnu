@@ -27,12 +27,15 @@ def GetStateString(strings_dict, state):
     mask = 0x1
     while mask <= max_mask:
         bit = int(state & mask)
-        if bit and bit in strings_dict:
-            if not first:
-                output += ' '
+        if bit:
+            if bit in strings_dict:
+                if not first:
+                    output += ' '
+                else:
+                    first = False
+                output += strings_dict[int(state & mask)]
             else:
-                first = False
-            output += strings_dict[int(state & mask)]
+                output += '{:#x}'.format(mask)
         mask = mask << 1
 
     return output
@@ -66,9 +69,77 @@ arm_level2_access_strings = [ " noaccess",
                               " supervisor(readonly) user(readonly)",
                               " "
                              ]
-kq_state_strings = {0:"", 1:"SEL", 2:"SLEEP", 4:"PROCWAIT", 8:"KEV32", 16:"KEV64", 32:"QOS", 64:"WORKQ", 128:"PROCESS", 256: "DRAIN"}
 
-kn_state_strings = {0:"", 1:"ACTIVE", 2:"QUEUED", 4:"DISABLED", 8:"DROPPING", 16:"USERWAIT", 32:"ATTACHING", 64:"STAYQUED", 128:"DEFERDROP"}
+kq_state_strings = { 0x000: '',
+                     0x001: 'SEL',
+                     0x002: 'SLEEP',
+                     0x004: 'PROCWAIT',
+                     0x008: 'KEV32',
+                     0x010: 'KEV64',
+                     0x020: 'KEVQOS',
+                     0x040: 'WORKQ',
+                     0x080: 'WORKLOOP',
+                     0x100: 'PROCESS',
+                     0x200: 'DRAIN',
+                     0x400: 'WAKEUP' }
+
+kn_state_strings = { 0x0000: '',
+                     0x0001: 'ACTIVE',
+                     0x0002: 'QUEUED',
+                     0x0004: 'DISABLED',
+                     0x0008: 'DROPPING',
+                     0x0010: 'USERWAIT',
+                     0x0020: 'ATTACHING',
+                     0x0040: 'STAYACTIVE',
+                     0x0080: 'DEFERDROP',
+                     0x0100: 'ATTACHED',
+                     0x0200: 'DISPATCH',
+                     0x0400: 'UDATASPEC',
+                     0x0800: 'SUPPRESS',
+                     0x1000: 'STOLENDROP',
+                     0x2000: 'REQVANISH',
+                     0x4000: 'VANISHED' }
+
+kqrequest_state_strings = { 0x01: 'PROCESSING',
+                            0x02: 'THREQUESTED',
+                            0x04: 'WAKEUP',
+                            0x08: 'BOUND',
+                            0x20: 'THOVERCOMMIT',
+                            0x40: 'DRAIN' }
+
+thread_qos_short_strings = { 0: '--',
+                             1: 'MT',
+                             2: 'BG',
+                             3: 'UT',
+                             4: 'DF',
+                             5: 'IN',
+                             6: 'UI',
+                             7: 'MG' }
+
+KQ_WORKQ = 0x40
+KQ_WORKLOOP = 0x80
+KQWQ_NBUCKETS = 22
+KQWL_NBUCKETS = 8
+
+DTYPE_VNODE = 1
+DTYPE_SOCKET = 2
+DTYPE_PSXSHM = 3
+DTYPE_PSXSEM = 4
+DTYPE_KQUEUE = 5
+DTYPE_PIPE = 6
+DTYPE_FSEVENTS = 7
+DTYPE_ATALK = 8
+DTYPE_NETPOLICY = 9
+filetype_strings = { DTYPE_VNODE: 'VNODE',
+                     DTYPE_SOCKET: 'SOCKET',
+                     DTYPE_PSXSHM: 'PSXSHM',
+                     DTYPE_PSXSEM: 'PSXSEM',
+                     DTYPE_KQUEUE: 'KQUEUE',
+                     DTYPE_PIPE: 'PIPE',
+                     DTYPE_FSEVENTS: 'FSEVENTS',
+                     DTYPE_ATALK: 'APLTALK',
+                     DTYPE_NETPOLICY: 'NETPOLI'
+                     }
 
 mach_msg_type_descriptor_strings = {0: "PORT", 1: "OOLDESC", 2: "OOLPORTS", 3: "OOLVOLATILE"}
 
@@ -111,7 +182,7 @@ proc_flag_explain_strings = ["!0x00000004 - process is 32 bit",  #only exception
 # string representations for Kobject types
 kobject_types = ['', 'THREAD', 'TASK', 'HOST', 'HOST_PRIV', 'PROCESSOR', 'PSET', 'PSET_NAME', 'TIMER', 'PAGER_REQ', 'DEVICE', 'XMM_OBJECT', 'XMM_PAGER', 'XMM_KERNEL', 'XMM_REPLY', 
                      'NOTDEF 15', 'NOTDEF 16', 'HOST_SEC', 'LEDGER', 'MASTER_DEV', 'TASK_NAME', 'SUBSYTEM', 'IO_DONE_QUE', 'SEMAPHORE', 'LOCK_SET', 'CLOCK', 'CLOCK_CTRL' , 'IOKIT_SPARE', 
-                      'NAMED_MEM', 'IOKIT_CON', 'IOKIT_OBJ', 'UPL', 'MEM_OBJ_CONTROL', 'AU_SESSIONPORT', 'FILEPORT', 'LABELH', 'TASK_RESUME', 'VOUCHER', 'VOUCHER_ATTR_CONTROL']
+                      'NAMED_MEM', 'IOKIT_CON', 'IOKIT_OBJ', 'UPL', 'MEM_OBJ_CONTROL', 'AU_SESSIONPORT', 'FILEPORT', 'LABELH', 'TASK_RESUME', 'VOUCHER', 'VOUCHER_ATTR_CONTROL', 'IKOT_WORK_INTERVAL']
 
 def populate_kobject_types(xnu_dir_path):
     """ Function to read data from header file xnu/osfmk/kern/ipc_kobject.h
@@ -124,6 +195,19 @@ def populate_kobject_types(xnu_dir_path):
     for v in object_regex.findall(filedata):
         kobject_found_types.append(v[0])
     return kobject_found_types
+
+KDBG_BFINIT         = 0x80000000
+KDBG_WRAPPED        = 0x008
+KDCOPYBUF_COUNT     = 8192
+KDS_PTR_NULL        = 0xffffffff
+
+DBG_TRACE               = 1
+DBG_TRACE_INFO          = 2
+RAW_VERSION1            = 0x55aa0101
+EVENTS_PER_STORAGE_UNIT = 2048
+
+EMBEDDED_PANIC_MAGIC = 0x46554E4B
+EMBEDDED_PANIC_STACKSHOT_SUCCEEDED_FLAG = 0x02
 
 if __name__ == "__main__":
     populate_kobject_types("../../")

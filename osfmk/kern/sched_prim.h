@@ -86,6 +86,20 @@ extern void		sched_startup(void);
 
 extern void		sched_timebase_init(void);
 
+extern void		pset_rt_init(processor_set_t pset);
+
+extern void		sched_rtglobal_init(processor_set_t pset);
+
+extern rt_queue_t	sched_rtglobal_runq(processor_set_t pset);
+
+extern void		sched_rtglobal_queue_shutdown(processor_t processor);
+
+extern int64_t		sched_rtglobal_runq_count_sum(void);
+
+extern void		sched_check_spill(processor_set_t pset, thread_t thread);
+
+extern bool             sched_thread_should_yield(processor_t processor, thread_t thread);
+
 /* Force a preemption point for a thread and wait for it to stop running */
 extern boolean_t	thread_stop( 
 						thread_t	thread,
@@ -199,12 +213,13 @@ extern void		thread_setrun(
 					thread_t	thread,
 					integer_t	options);
 
-#define SCHED_TAILQ		1
-#define SCHED_HEADQ		2
-#define SCHED_PREEMPT	4
-
-extern uintptr_t sched_thread_on_rt_queue;
-#define THREAD_ON_RT_RUNQ  ((processor_t)(uintptr_t)&sched_thread_on_rt_queue)
+typedef enum {
+	SCHED_NONE      = 0x0,
+	SCHED_TAILQ     = 0x1,
+	SCHED_HEADQ     = 0x2,
+	SCHED_PREEMPT   = 0x4,
+	SCHED_REBALANCE = 0x8,
+} sched_options_t;
 
 extern processor_set_t	task_choose_pset(
 							task_t			task);
@@ -219,6 +234,9 @@ extern processor_t	choose_processor(
 									 processor_t			processor,
 									 thread_t			thread);
 
+extern void sched_SMT_balance(
+			      processor_t processor,
+			      processor_set_t pset);
 
 extern void thread_quantum_init(
 								thread_t thread);
@@ -247,6 +265,50 @@ struct sched_update_scan_context
 };
 typedef struct sched_update_scan_context *sched_update_scan_context_t;
 
+extern void		sched_rtglobal_runq_scan(sched_update_scan_context_t scan_context);
+
+/* 
+ * Enum to define various events which need IPIs. The IPI policy 
+ * engine decides what kind of IPI to use based on destination 
+ * processor state, thread and one of the following scheduling events.
+ */
+typedef enum {
+	SCHED_IPI_EVENT_BOUND_THR   = 0x1,
+	SCHED_IPI_EVENT_PREEMPT	    = 0x2,
+	SCHED_IPI_EVENT_SMT_REBAL   = 0x3,
+	SCHED_IPI_EVENT_SPILL	    = 0x4,
+	SCHED_IPI_EVENT_REBALANCE   = 0x5,
+} sched_ipi_event_t;
+
+
+/* Enum to define various IPI types used by the scheduler */
+typedef enum {
+	SCHED_IPI_NONE		    = 0x0,
+	SCHED_IPI_IMMEDIATE	    = 0x1,
+	SCHED_IPI_IDLE		    = 0x2,
+	SCHED_IPI_DEFERRED	    = 0x3,
+} sched_ipi_type_t;
+
+/* The IPI policy engine behaves in the following manner:
+ * - All scheduler events which need an IPI invoke sched_ipi_action() with  
+ *   the appropriate destination processor, thread and event.
+ * - sched_ipi_action() performs basic checks, invokes the scheduler specific
+ *   ipi_policy routine and sets pending_AST bits based on the result.
+ * - Once the pset lock is dropped, the scheduler invokes sched_ipi_perform()
+ *   routine which actually sends the appropriate IPI to the destination core.
+ */
+extern sched_ipi_type_t sched_ipi_action(processor_t dst, thread_t thread,
+         boolean_t dst_idle, sched_ipi_event_t event);
+extern void sched_ipi_perform(processor_t dst, sched_ipi_type_t ipi);
+
+/* sched_ipi_policy() is the global default IPI policy for all schedulers */
+extern sched_ipi_type_t sched_ipi_policy(processor_t dst, thread_t thread,
+         boolean_t dst_idle, sched_ipi_event_t event);
+
+/* sched_ipi_deferred_policy() is the global default deferred IPI policy for all schedulers */
+extern sched_ipi_type_t sched_ipi_deferred_policy(processor_set_t pset,
+         processor_t dst, sched_ipi_event_t event);
+
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
 extern boolean_t        thread_update_add_thread(thread_t thread);
@@ -263,8 +325,6 @@ extern uint32_t sched_timeshare_initial_quantum_size(thread_t thread);
 extern int sched_compute_timeshare_priority(thread_t thread);
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
-
-extern void        rt_runq_scan(sched_update_scan_context_t scan_context);
 
 /* Remove thread from its run queue */
 extern boolean_t	thread_run_queue_remove(thread_t thread);
@@ -306,6 +366,7 @@ extern void sched_stats_handle_runq_change(
 									int old_count);
 
 
+#if DEBUG
 
 #define	SCHED_STATS_CSW(processor, reasons, selfpri, otherpri) 		\
 do { 								\
@@ -323,6 +384,13 @@ do { 								\
 								(old_count));		\
 	}							\
 } while (0) 
+
+#else /* DEBUG */
+
+#define SCHED_STATS_CSW(processor, reasons, selfpri, otherpri) do { }while(0)
+#define SCHED_STATS_RUNQ_CHANGE(stats, old_count) do { }while(0)
+
+#endif /* DEBUG */
 
 extern uint32_t sched_debug_flags;
 #define SCHED_DEBUG_FLAG_PLATFORM_TRACEPOINTS	0x00000001
@@ -363,13 +431,24 @@ extern void	thread_tell_urgency(
 extern void	active_rt_threads(
     					boolean_t	active);
 
+/* Returns the perfcontrol attribute for the thread */
+extern perfcontrol_class_t thread_get_perfcontrol_class(
+					thread_t	thread);
+
+#define PSET_LOAD_NUMERATOR_SHIFT   16
+#define PSET_LOAD_FRACTIONAL_SHIFT   4
+
+extern int sched_get_pset_load_average(processor_set_t pset);
+extern void sched_update_pset_load_average(processor_set_t pset);
+
+/* Generic routine for Non-AMP schedulers to calculate parallelism */
+extern uint32_t sched_qos_max_parallelism(int qos, uint64_t options);
+
 #endif /* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
 
 #ifdef	XNU_KERNEL_PRIVATE
-
-extern boolean_t		assert_wait_possible(void);
 
 /* Toggles a global override to turn off CPU Throttling */
 #define CPU_THROTTLE_DISABLE	0
@@ -397,8 +476,6 @@ extern void		thread_exception_return(void) __dead2;
 /* String declaring the name of the current scheduler */
 extern char sched_string[SCHED_STRING_MAX_LENGTH];
 
-extern kern_return_t sched_work_interval_notify(thread_t thread, uint64_t work_interval_id, uint64_t start, uint64_t finish, uint64_t deadline, uint64_t next_start, uint32_t flags);
-
 extern thread_t port_name_to_thread_for_ulock(mach_port_name_t	thread_name);
 
 /* Attempt to context switch to a specific runnable thread */
@@ -417,6 +494,11 @@ extern thread_t thread_wakeup_identify(event_t event, int priority);
 extern void		thread_set_pending_block_hint(
 							thread_t			thread,
 							block_hint_t			block_hint);
+
+#define QOS_PARALLELISM_COUNT_LOGICAL   0x1
+#define QOS_PARALLELISM_REALTIME        0x2
+extern uint32_t qos_max_parallelism(int qos, uint64_t options);
+
 #endif /* KERNEL_PRIVATE */
 
 /* Context switch */
@@ -492,7 +574,18 @@ extern boolean_t preemption_enabled(void);
 #error Enable at least one scheduler algorithm in osfmk/conf/MASTER.XXX
 #endif
 
+#if DEBUG
 #define SCHED(f) (sched_current_dispatch->f)
+#else /* DEBUG */
+
+/* 
+ * For DEV & REL kernels, use a static dispatch table instead of 
+ * using the indirect function table.
+ */
+extern const struct sched_dispatch_table sched_multiq_dispatch;
+#define SCHED(f) (sched_multiq_dispatch.f)
+
+#endif /* DEBUG */
 
 struct sched_dispatch_table {
 	const char *sched_name;
@@ -629,6 +722,29 @@ struct sched_dispatch_table {
 	boolean_t   multiple_psets_enabled;
 	/* Supports scheduler groups */
 	boolean_t   sched_groups_enabled;
+
+	/* Supports avoid-processor */
+	boolean_t   avoid_processor_enabled;
+
+	/* Returns true if this processor should avoid running this thread. */
+	bool    (*thread_avoid_processor)(processor_t processor, thread_t thread);
+
+	/*
+	 * Invoked when a processor is about to choose the idle thread
+	 * Used to send IPIs to a processor which would be preferred to be idle instead.
+	 * Called with pset lock held, returns pset lock unlocked.
+	 */
+	void    (*processor_balance)(processor_t processor, processor_set_t pset);
+	rt_queue_t	(*rt_runq)(processor_set_t pset);
+	void	(*rt_init)(processor_set_t pset);
+	void	(*rt_queue_shutdown)(processor_t processor);
+	void	(*rt_runq_scan)(sched_update_scan_context_t scan_context);
+	int64_t	(*rt_runq_count_sum)(void);
+
+	uint32_t (*qos_max_parallelism)(int qos, uint64_t options);
+	void	(*check_spill)(processor_set_t pset, thread_t thread);
+	sched_ipi_type_t (*ipi_policy)(processor_t dst, thread_t thread, boolean_t dst_idle, sched_ipi_event_t event);
+	bool    (*thread_should_yield)(processor_t processor, thread_t thread);
 };
 
 #if defined(CONFIG_SCHED_TRADITIONAL)

@@ -595,41 +595,65 @@ area provided to
 .Fn kevent_qos
 if there is enough space remaining there.
 .It EVFILT_TIMER
-Establishes an interval timer with the data
-timer identified by
-.Va ident .
-When adding a timer,
+Establishes an interval timer identified by
+.Va ident
+where
 .Va data
-specifies the timeout period and
+specifies the timeout period (in milliseconds).
+.Pp
 .Va fflags
-can be set to one of the following:
-.Bl -tag -width NOTE_ABSOLUTE
+can include one of the following flags to specify a different unit:
+.Bl -tag -width NOTE_NSECONDS
 .It NOTE_SECONDS
-data is in seconds
+.Va data
+is in seconds
 .It NOTE_USECONDS
-data is in microseconds
+.Va data
+is in microseconds
 .It NOTE_NSECONDS
-data is in nanoseconds
-.It NOTE_ABSOLUTE
-data is an absolute timeout
-.It NOTE_CRITICAL
-system makes a best effort to fire this timer as scheduled.
-.It NOTE_BACKGROUND
-system has extra leeway to coalesce this timer.
-.It NOTE_LEEWAY
-ext[1] holds user-supplied slop in deadline for timer coalescing.
+.Va data
+is in nanoseconds
+.It NOTE_MACHTIME
+.Va data
+is in Mach absolute time units
 .El
 .Pp
-If fflags is not set, the default is milliseconds. The timer will be periodic unless EV_ONESHOT is specified.
+.Va fflags
+can also include
+.Dv NOTE_ABSOLUTE,
+which establishes an
+.Dv EV_ONESHOT
+timer with an absolute deadline instead of an interval.
+The absolute deadline is expressed in terms of
+.Xr gettimeofday 2 .
+With
+.Dv NOTE_MACHTIME,
+the deadline is expressed in terms of
+.Fn mach_absolute_time .
+.Pp
+The timer can be coalesced with other timers to save power. The following flags can be set in
+.Va fflags
+to modify this behavior:
+.Bl -tag -width NOTE_BACKGROUND
+.It NOTE_CRITICAL
+override default power-saving techniques to more strictly respect the leeway value
+.It NOTE_BACKGROUND
+apply more power-saving techniques to coalesce this timer with other timers
+.It NOTE_LEEWAY
+.Va ext[1]
+holds user-supplied slop in deadline for timer coalescing.
+.El
+.Pp
+The timer will be periodic unless
+.Dv EV_ONESHOT
+is specified.
 On return,
 .Va data
-contains the number of times the timeout has expired since the last call to
-.Fn kevent , 
-.Fn kevent64
-or
-.Fn kevent_qos .
-
-This filter automatically sets the EV_CLEAR flag internally.
+contains the number of times the timeout has expired since the last arming or last delivery of the timer event.
+.Pp
+This filter automatically sets the
+.Dv EV_CLEAR
+flag.
 .El
 .Pp
 ----

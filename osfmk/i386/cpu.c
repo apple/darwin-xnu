@@ -155,7 +155,7 @@ cpu_exit_wait(
 	 * a timeout if long-running interrupt were to occur here.
 	 */
 	intrs_enabled = ml_set_interrupts_enabled(FALSE);
-	simple_lock(&x86_topo_lock);
+	mp_safe_spin_lock(&x86_topo_lock);
 	/* Set a generous timeout of several seconds (in TSC ticks) */
 	tsc_timeout = rdtsc64() + (10ULL * 1000 * 1000 * 1000);
 	while ((cdp->lcpu.state != LCPU_HALT)
@@ -167,7 +167,7 @@ cpu_exit_wait(
 	    if (rdtsc64() > tsc_timeout)
 		panic("cpu_exit_wait(%d) timeout", cpu);
 	    ml_set_interrupts_enabled(FALSE);
-	    simple_lock(&x86_topo_lock);
+	    mp_safe_spin_lock(&x86_topo_lock);
 	}
 	simple_unlock(&x86_topo_lock);
 	ml_set_interrupts_enabled(intrs_enabled);

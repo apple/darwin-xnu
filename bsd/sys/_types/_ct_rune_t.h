@@ -28,5 +28,6 @@
 
 #ifndef _CT_RUNE_T
 #define _CT_RUNE_T
+#include <machine/_types.h> /* __darwin_ct_rune_t */
 typedef __darwin_ct_rune_t ct_rune_t;
 #endif /* _CT_RUNE_T */

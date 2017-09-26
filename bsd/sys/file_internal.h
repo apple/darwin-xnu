@@ -80,6 +80,8 @@
 struct proc;
 struct uio;
 struct knote;
+struct kevent_internal_s;
+
 #ifdef __APPLE_API_UNSTABLE
 
 struct file;
@@ -183,7 +185,7 @@ struct fileglob {
 					 void *wql, vfs_context_t ctx);
 		int	(*fo_close)	(struct fileglob *fg, vfs_context_t ctx);
 		int	(*fo_kqfilter)	(struct fileproc *fp, struct knote *kn,
-					 vfs_context_t ctx);
+					 struct kevent_internal_s *kev, vfs_context_t ctx);
 		int	(*fo_drain)	(struct fileproc *fp, vfs_context_t ctx);
 	} *fg_ops;
 	off_t	fg_offset;
@@ -213,7 +215,8 @@ int fo_write(struct fileproc *fp, struct uio *uio, int flags,
 int fo_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx);
 int fo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
 int fo_close(struct fileglob *fg, vfs_context_t ctx);
-int fo_kqfilter(struct fileproc *fp, struct knote *kn, vfs_context_t ctx);
+int fo_kqfilter(struct fileproc *fp, struct knote *kn,
+		struct kevent_internal_s *kev, vfs_context_t ctx);
 void fileproc_drain(proc_t, struct fileproc *);
 int fp_tryswap(proc_t, int fd, struct fileproc *nfp);
 int fp_drop(struct proc *p, int fd, struct fileproc *fp, int locked);

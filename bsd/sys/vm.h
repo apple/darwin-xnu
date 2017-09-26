@@ -136,6 +136,10 @@ struct user_vmspace {
 #include <kern/thread.h>
 
 #else /* BSD_KERNEL_PRIVATE */
+
+#include <sys/_types/_caddr_t.h> /* caddr_t */
+#include <sys/_types/_int32_t.h> /* int32_t */
+
 /* just to keep kinfo_proc happy */
 /* NOTE: Pointer fields are size variant for LP64 */
 struct vmspace {

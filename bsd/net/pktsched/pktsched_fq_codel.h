@@ -73,14 +73,13 @@ struct fcl_stat {
 #define	FQ_IF_HASH_TAG_MASK	0xFF
 #define	FQ_IF_HASH_TABLE_SIZE	(1 << FQ_IF_HASH_TAG_SIZE)
 
-/* maximum number f packets stored across all queues */
-#define	FQ_IF_MAX_PKT_LIMIT	2048
-
 /* Set the quantum to be one MTU */
 #define	FQ_IF_DEFAULT_QUANTUM	1500
 
 /* Max number of service classes currently supported */
 #define	FQ_IF_MAX_CLASSES	10
+
+#define	FQ_IF_LARGE_FLOW_BYTE_LIMIT	15000
 
 struct flowq;
 typedef u_int32_t pktsched_bitmap_t;
@@ -130,12 +129,29 @@ typedef struct fq_codel_sched_data {
 	pktsched_bitmap_t	fqs_bitmaps[FQ_IF_MAX_STATE];
 	u_int32_t	fqs_pkt_droplimit;	/* drop limit */
 	u_int8_t	fqs_throttle;	/* throttle on or off */
+	u_int8_t	fqs_flags;	/* flags */
+#define	FQS_DRIVER_MANAGED	0x1
 	fq_if_classq_t	fqs_classq[FQ_IF_MAX_CLASSES]; /* class queues */
 	struct flowadv_fclist	fqs_fclist; /* flow control state */
 	struct flowq	*fqs_large_flow; /* flow has highest number of bytes */
+	classq_pkt_type_t	fqs_ptype;
 } fq_if_t;
 
 #endif /* BSD_KERNEL_PRIVATE */
+
+struct fq_codel_flowstats {
+	u_int32_t	fqst_min_qdelay;
+#define	FQ_FLOWSTATS_OLD_FLOW	0x1
+#define	FQ_FLOWSTATS_NEW_FLOW	0x2
+#define	FQ_FLOWSTATS_LARGE_FLOW	0x4
+#define	FQ_FLOWSTATS_DELAY_HIGH	0x8
+#define	FQ_FLOWSTATS_FLOWCTL_ON	0x10
+	u_int32_t	fqst_flags;
+	u_int32_t	fqst_bytes;
+	u_int32_t	fqst_flowhash;
+};
+
+#define	FQ_IF_MAX_FLOWSTATS	20
 
 struct fq_codel_classstats {
 	u_int32_t	fcls_pri;
@@ -163,23 +179,28 @@ struct fq_codel_classstats {
 	u_int32_t	fcls_throttle_off;
 	u_int32_t	fcls_throttle_drops;
 	u_int32_t	fcls_dup_rexmts;
+	u_int32_t	fcls_flowstats_cnt;
+	struct fq_codel_flowstats fcls_flowstats[FQ_IF_MAX_FLOWSTATS];
 };
 
 #ifdef BSD_KERNEL_PRIVATE
 
 extern void fq_codel_scheduler_init(void);
 extern struct flowq *fq_if_hash_pkt(fq_if_t *, u_int32_t, mbuf_svc_class_t,
-    u_int64_t, boolean_t);
+    u_int64_t, boolean_t, classq_pkt_type_t);
 extern boolean_t fq_if_at_drop_limit(fq_if_t *);
 extern void fq_if_drop_packet(fq_if_t *);
 extern void fq_if_is_flow_heavy(fq_if_t *, struct flowq *);
-extern boolean_t fq_if_add_fcentry(fq_if_t *, struct pkthdr *,
-    fq_if_classq_t *);
+extern boolean_t fq_if_add_fcentry(fq_if_t *, pktsched_pkt_t *, uint32_t,
+    uint8_t, fq_if_classq_t *);
 extern void fq_if_flow_feedback(fq_if_t *, struct flowq *, fq_if_classq_t *);
-extern int fq_if_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags);
+extern int fq_if_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
+    classq_pkt_type_t ptype);
 extern int fq_if_teardown_ifclassq(struct ifclassq *ifq);
 extern int fq_if_getqstats_ifclassq(struct ifclassq *ifq, u_int32_t qid,
     struct if_ifclassq_stats *ifqs);
+extern void fq_if_destroy_flow(fq_if_t *, fq_if_classq_t *,
+    struct flowq *);
 
 
 #endif /* BSD_KERNEL_PRIVATE */

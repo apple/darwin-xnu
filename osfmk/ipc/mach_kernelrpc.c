@@ -51,7 +51,7 @@ _kernelrpc_mach_vm_allocate_trap(struct _kernelrpc_mach_vm_allocate_trap_args *a
 	if (copyin(args->addr, (char *)&addr, sizeof (addr)))
 		goto done;
 
-	rv = mach_vm_allocate(task->map, &addr, args->size, args->flags);
+	rv = mach_vm_allocate_external(task->map, &addr, args->size, args->flags);
 	if (rv == KERN_SUCCESS)
 		rv = copyout(&addr, args->addr, sizeof (addr));
 	
@@ -109,7 +109,7 @@ _kernelrpc_mach_vm_map_trap(struct _kernelrpc_mach_vm_map_trap_args *args)
 	if (copyin(args->addr, (char *)&addr, sizeof (addr)))
 		goto done;
 
-	rv = mach_vm_map(task->map, &addr, args->size, args->mask, args->flags,
+	rv = mach_vm_map_external(task->map, &addr, args->size, args->mask, args->flags,
 			IPC_PORT_NULL, 0, FALSE, args->cur_protection, VM_PROT_ALL,
 			VM_INHERIT_DEFAULT);
 	if (rv == KERN_SUCCESS)
@@ -400,7 +400,7 @@ host_create_mach_voucher_trap(struct host_create_mach_voucher_args *args)
 	if (args->recipes_size < MACH_VOUCHER_TRAP_STACK_LIMIT) {
 		/* keep small recipes on the stack for speed */
 		uint8_t krecipes[args->recipes_size];
-		if (copyin(args->recipes, (void *)krecipes, args->recipes_size)) {
+		if (copyin(CAST_USER_ADDR_T(args->recipes), (void *)krecipes, args->recipes_size)) {
 			kr = KERN_MEMORY_ERROR;
 			goto done;
 		}
@@ -412,7 +412,7 @@ host_create_mach_voucher_trap(struct host_create_mach_voucher_args *args)
 			goto done;
 		}
 
-		if (copyin(args->recipes, (void *)krecipes, args->recipes_size)) {
+		if (copyin(CAST_USER_ADDR_T(args->recipes), (void *)krecipes, args->recipes_size)) {
 			kfree(krecipes, (vm_size_t)args->recipes_size);
 			kr = KERN_MEMORY_ERROR;
 			goto done;
@@ -455,7 +455,7 @@ mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_ar
 	if (sz < MACH_VOUCHER_TRAP_STACK_LIMIT) {
 		/* keep small recipes on the stack for speed */
 		uint8_t krecipe[sz];
-		if (copyin(args->recipe, (void *)krecipe, sz)) {
+		if (copyin(CAST_USER_ADDR_T(args->recipe), (void *)krecipe, sz)) {
 			kr = KERN_MEMORY_ERROR;
 			goto done;
 		}
@@ -464,7 +464,7 @@ mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_ar
 		assert(sz <= max_sz);
 
 		if (kr == KERN_SUCCESS && sz > 0)
-			kr = copyout(krecipe, (void *)args->recipe, sz);
+			kr = copyout(krecipe, CAST_USER_ADDR_T(args->recipe), sz);
 	} else {
 		uint8_t *krecipe = kalloc((vm_size_t)max_sz);
 		if (!krecipe) {
@@ -472,7 +472,7 @@ mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_ar
 			goto done;
 		}
 
-		if (copyin(args->recipe, (void *)krecipe, sz)) {
+		if (copyin(CAST_USER_ADDR_T(args->recipe), (void *)krecipe, sz)) {
 			kfree(krecipe, (vm_size_t)max_sz);
 			kr = KERN_MEMORY_ERROR;
 			goto done;
@@ -483,7 +483,7 @@ mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_ar
 		assert(sz <= max_sz);
 
 		if (kr == KERN_SUCCESS && sz > 0)
-			kr = copyout(krecipe, (void *)args->recipe, sz);
+			kr = copyout(krecipe, CAST_USER_ADDR_T(args->recipe), sz);
 		kfree(krecipe, (vm_size_t)max_sz);
 	}
 

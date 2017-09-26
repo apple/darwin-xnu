@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -151,14 +151,14 @@
 #define SIOCGIFBOND	_IOWR('i', 71, struct ifreq)	/* get bond if config */
 
 #ifdef PRIVATE
-/* 
+/*
  * temporary control calls to attach/detach IP to/from an ethernet interface
  */
 #define	SIOCPROTOATTACH	_IOWR('i', 80, struct ifreq)	/* attach proto to interface */
 #define	SIOCPROTODETACH	_IOWR('i', 81, struct ifreq)	/* detach proto from interface */
 #endif /* PRIVATE */
 
-#define SIOCSIFCAP       _IOW('i', 90, struct ifreq)    /* set IF features */ 
+#define SIOCSIFCAP       _IOW('i', 90, struct ifreq)    /* set IF features */
 #define SIOCGIFCAP      _IOWR('i', 91, struct ifreq)    /* get IF features */
 
 #define	SIOCIFCREATE	_IOWR('i', 120, struct ifreq)	/* create clone if */
@@ -268,7 +268,9 @@
 #define	SIOCSIFPROBECONNECTIVITY _IOWR('i', 171, struct ifreq) /* Start/Stop probes to check connectivity */
 #define	SIOCGIFPROBECONNECTIVITY	_IOWR('i', 172, struct ifreq)	/* check if connectivity probes are enabled */
 
+#endif /* PRIVATE */
 #define	SIOCGIFFUNCTIONALTYPE	_IOWR('i', 173, struct ifreq) /* get interface functional type */
+#ifdef PRIVATE
 #define	SIOCSIFNETSIGNATURE	_IOWR('i', 174, struct if_nsreq)
 #define	SIOCGIFNETSIGNATURE	_IOWR('i', 175, struct if_nsreq)
 
@@ -293,10 +295,20 @@
 #define	SIOCSIFDISABLEOUTPUT	_IOWR('i', 187, struct ifreq)
 
 #define	SIOCGIFAGENTLIST	_IOWR('i', 190, struct netagentlist_req) /* Get netagent dump */
+
 #ifdef BSD_KERNEL_PRIVATE
 #define	SIOCGIFAGENTLIST32		_IOWR('i', 190, struct netagentlist_req32)
 #define	SIOCGIFAGENTLIST64		_IOWR('i', 190, struct netagentlist_req64)
 #endif /* BSD_KERNEL_PRIVATE */
+
+#define	SIOCSIFLOWINTERNET	_IOWR('i', 191, struct ifreq)
+#define	SIOCGIFLOWINTERNET	_IOWR('i', 192, struct ifreq)
+
+#if INET6
+#define	SIOCGIFNAT64PREFIX	_IOWR('i', 193, struct if_nat64req)
+#define	SIOCSIFNAT64PREFIX	_IOWR('i', 194, struct if_nat64req)
+#endif
+#define	SIOCGIFNEXUS		_IOWR('i', 195, struct if_nexusreq)
 
 #endif /* PRIVATE */
 

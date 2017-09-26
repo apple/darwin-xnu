@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -118,6 +118,7 @@
 #include <net/if.h>
 #include <net/route.h>
 #include <net/dlil.h>
+#include <net/net_api_stats.h>
 #include <net/net_osdep.h>
 #include <net/net_perf.h>
 
@@ -181,10 +182,6 @@ static int ip6_splithdr(struct mbuf *, struct ip6_exthdrs *);
 static void ip6_output_checksum(struct ifnet *, uint32_t, struct mbuf *,
     int, uint32_t, uint32_t);
 extern int udp_ctloutput(struct socket *, struct sockopt *);
-static int ip6_do_fragmentation(struct mbuf **morig,
-    uint32_t optlen, struct ifnet *ifp, uint32_t unfragpartlen,
-    struct ip6_hdr *ip6, struct ip6_exthdrs *exthdrsp, uint32_t mtu,
-    int nxt0);
 static int ip6_fragment_packet(struct mbuf **m,
     struct ip6_pktopts *opt, struct ip6_exthdrs *exthdrsp, struct ifnet *ifp,
     uint32_t mtu, boolean_t alwaysfrag, uint32_t unfragpartlen,
@@ -280,13 +277,13 @@ ip6_output_list(struct mbuf *m0, int packetchain, struct ip6_pktopts *opt,
 	struct mbuf *m, *mprev;
 	struct mbuf *sendchain = NULL, *sendchain_last = NULL;
 	struct mbuf *inputchain = NULL;
-	int nxt0;
+	int nxt0 = 0;
 	struct route_in6 *ro_pmtu = NULL;
 	struct rtentry *rt = NULL;
-	struct sockaddr_in6 *dst, src_sa, dst_sa;
+	struct sockaddr_in6 *dst = NULL, src_sa, dst_sa;
 	int error = 0;
 	struct in6_ifaddr *ia = NULL, *src_ia = NULL;
-	u_int32_t mtu;
+	u_int32_t mtu = 0;
 	boolean_t alwaysfrag = FALSE;
 	u_int32_t optlen = 0, plen = 0, unfragpartlen = 0;
 	struct ip6_rthdr *rh;
@@ -573,6 +570,7 @@ loopit:
 			 * layer.
 			 */
 			error = EHOSTUNREACH;
+			ip6stat.ip6s_necp_policy_drop++;
 			goto freehdrs;
 		case NECP_KERNEL_POLICY_RESULT_IP_TUNNEL: {
 			/*
@@ -612,6 +610,7 @@ loopit:
 					goto skip_ipsec;
 				} else {
 					error = ENETUNREACH;
+					ip6stat.ip6s_necp_policy_drop++;
 					goto freehdrs;
 				}
 			}
@@ -1175,6 +1174,7 @@ skip_ipsec:
 	/* Catch-all to check if the interface is allowed */
 	if (!necp_packet_is_allowed_over_interface(m, ifp)) {
 		error = EHOSTUNREACH;
+		ip6stat.ip6s_necp_policy_drop++;
 		goto bad;
 	}
 #endif /* NECP */
@@ -1662,8 +1662,19 @@ ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
 	size_t tlen = m->m_pkthdr.len;
 	boolean_t dontfrag = (opt != NULL && (opt->ip6po_flags & IP6PO_DONTFRAG));
 
-	if (m->m_pkthdr.pkt_flags & PKTF_FORWARDED)
+	if (m->m_pkthdr.pkt_flags & PKTF_FORWARDED) {
 		dontfrag = TRUE;
+		/*
+		 * Discard partial sum information if this packet originated
+		 * from another interface; the packet would already have the
+		 * final checksum and we shouldn't recompute it.
+		 */
+		if ((m->m_pkthdr.csum_flags & (CSUM_DATA_VALID|CSUM_PARTIAL)) ==
+		    (CSUM_DATA_VALID|CSUM_PARTIAL)) {
+			m->m_pkthdr.csum_flags &= ~CSUM_TX_FLAGS;
+			m->m_pkthdr.csum_data = 0;
+		}
+	}
 
 	if (dontfrag && alwaysfrag) {	/* case 4 */
 		/* conflicting request - can't transmit */
@@ -1720,7 +1731,7 @@ ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
  * of fragments is linked into the packet chain where morig existed. Otherwise,
  * an errno is returned.
  */
-static int
+int
 ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
     uint32_t unfragpartlen, struct ip6_hdr *ip6, struct ip6_exthdrs *exthdrsp,
     uint32_t mtu, int nxt0)
@@ -2051,7 +2062,8 @@ in6_finalize_cksum(struct mbuf *m, uint32_t hoff, int32_t optlen,
 	ip6_out_cksum_stats(nxt, plen - olen);
 
 	/* RFC1122 4.1.3.4 */
-	if (csum == 0 && (m->m_pkthdr.csum_flags & CSUM_UDPIPV6))
+	if (csum == 0 &&
+	    (m->m_pkthdr.csum_flags & (CSUM_UDPIPV6|CSUM_ZERO_INVERT)))
 		csum = 0xffff;
 
 	/* Insert the checksum in the ULP csum field */
@@ -2063,8 +2075,8 @@ in6_finalize_cksum(struct mbuf *m, uint32_t hoff, int32_t optlen,
 	} else {
 		bcopy(&csum, (mtod(m, char *) + offset), sizeof (csum));
 	}
-	m->m_pkthdr.csum_flags &=
-	    ~(CSUM_DELAY_IPV6_DATA | CSUM_DATA_VALID | CSUM_PARTIAL);
+	m->m_pkthdr.csum_flags &= ~(CSUM_DELAY_IPV6_DATA | CSUM_DATA_VALID |
+	    CSUM_PARTIAL | CSUM_ZERO_INVERT);
 
 done:
 	return (sw_csum);
@@ -2217,6 +2229,10 @@ ip6_getpmtu(struct route_in6 *ro_pmtu, struct route_in6 *ro,
 	u_int32_t mtu = 0;
 	boolean_t alwaysfrag = FALSE;
 	int error = 0;
+	boolean_t is_local = FALSE;
+
+	if (IN6_IS_SCOPE_LINKLOCAL(dst))
+		is_local = TRUE;
 
 	if (ro_pmtu != ro) {
 		/* The first hop and the final destination may differ. */
@@ -2287,7 +2303,7 @@ ip6_getpmtu(struct route_in6 *ro_pmtu, struct route_in6 *ro,
 	}
 
 	*mtup = mtu;
-	if (alwaysfragp != NULL)
+	if ((alwaysfragp != NULL) && !is_local)
 		*alwaysfragp = alwaysfrag;
 	return (error);
 }
@@ -2319,6 +2335,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 	privileged = (proc_suser(p) == 0);
 
 	if (level == IPPROTO_IPV6) {
+		boolean_t capture_exthdrstat_in = FALSE;
 		switch (op) {
 		case SOPT_SET:
 			switch (optname) {
@@ -2445,6 +2462,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 						break;
 					}
 					OPTSET(IN6P_HOPOPTS);
+					capture_exthdrstat_in = TRUE;
 					break;
 
 				case IPV6_RECVDSTOPTS:
@@ -2454,6 +2472,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 						break;
 					}
 					OPTSET(IN6P_DSTOPTS);
+					capture_exthdrstat_in = TRUE;
 					break;
 
 				case IPV6_RECVRTHDRDSTOPTS:
@@ -2463,6 +2482,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 						break;
 					}
 					OPTSET(IN6P_RTHDRDSTOPTS);
+					capture_exthdrstat_in = TRUE;
 					break;
 
 				case IPV6_RECVRTHDR:
@@ -2472,6 +2492,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 						break;
 					}
 					OPTSET(IN6P_RTHDR);
+					capture_exthdrstat_in = TRUE;
 					break;
 
 				case IPV6_RECVPATHMTU:
@@ -2566,15 +2587,18 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 					if (!privileged)
 						return (EPERM);
 					OPTSET2292(IN6P_HOPOPTS);
+					capture_exthdrstat_in = TRUE;
 					break;
 				case IPV6_2292DSTOPTS:
 					if (!privileged)
 						return (EPERM);
 					OPTSET2292(IN6P_DSTOPTS|
 					    IN6P_RTHDRDSTOPTS); /* XXX */
+					capture_exthdrstat_in = TRUE;
 					break;
 				case IPV6_2292RTHDR:
 					OPTSET2292(IN6P_RTHDR);
+					capture_exthdrstat_in = TRUE;
 					break;
 				}
 				break;
@@ -2721,6 +2745,13 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				error = ENOPROTOOPT;
 				break;
 			}
+			if (capture_exthdrstat_in) {
+				if (uproto == IPPROTO_TCP) {
+					INC_ATOMIC_INT64_LIM(net_api_stats.nas_sock_inet6_stream_exthdr_in);
+				} else if (uproto == IPPROTO_UDP) {
+					INC_ATOMIC_INT64_LIM(net_api_stats.nas_sock_inet6_dgram_exthdr_in);
+				}    
+			}    
 			break;
 
 		case SOPT_GET:
@@ -3520,6 +3551,7 @@ ip6_setpktopt(int optname, u_char *buf, int len, struct ip6_pktopts *opt,
 {
 	int minmtupolicy, preftemp;
 	int error;
+	boolean_t capture_exthdrstat_out = FALSE;
 
 	if (!sticky && !cmsg) {
 #ifdef DIAGNOSTIC
@@ -3747,7 +3779,7 @@ ip6_setpktopt(int optname, u_char *buf, int len, struct ip6_pktopts *opt,
 		if (opt->ip6po_hbh == NULL)
 			return (ENOBUFS);
 		bcopy(hbh, opt->ip6po_hbh, hbhlen);
-
+		capture_exthdrstat_out = TRUE;
 		break;
 	}
 
@@ -3811,6 +3843,7 @@ ip6_setpktopt(int optname, u_char *buf, int len, struct ip6_pktopts *opt,
 		if (*newdest == NULL)
 			return (ENOBUFS);
 		bcopy(dest, *newdest, destlen);
+		capture_exthdrstat_out = TRUE;
 		break;
 	}
 
@@ -3851,6 +3884,7 @@ ip6_setpktopt(int optname, u_char *buf, int len, struct ip6_pktopts *opt,
 		if (opt->ip6po_rthdr == NULL)
 			return (ENOBUFS);
 		bcopy(rth, opt->ip6po_rthdr, rthlen);
+		capture_exthdrstat_out = TRUE;
 		break;
 	}
 
@@ -3896,6 +3930,14 @@ ip6_setpktopt(int optname, u_char *buf, int len, struct ip6_pktopts *opt,
 	default:
 		return (ENOPROTOOPT);
 	} /* end of switch */
+
+	if (capture_exthdrstat_out) {
+		if (uproto == IPPROTO_TCP) {
+			INC_ATOMIC_INT64_LIM(net_api_stats.nas_sock_inet6_stream_exthdr_out);
+		} else if (uproto == IPPROTO_UDP) {
+			INC_ATOMIC_INT64_LIM(net_api_stats.nas_sock_inet6_dgram_exthdr_out);
+		}
+	}
 
 	return (0);
 }
@@ -4030,13 +4072,15 @@ ip6_output_checksum(struct ifnet *ifp, uint32_t mtu, struct mbuf *m,
 	} else if (!(sw_csum & CSUM_DELAY_IPV6_DATA) &&
 	    (hwcap & CSUM_PARTIAL)) {
 		/*
-		 * Partial checksum offload, ere), if no extension
-		 * headers, and TCP only (no UDP support, as the
-		 * hardware may not be able to convert +0 to
-		 * -0 (0xffff) per RFC1122 4.1.3.4.)
+		 * Partial checksum offload, ere), if no extension headers,
+		 * and TCP only (no UDP support, as the hardware may not be
+		 * able to convert +0 to -0 (0xffff) per RFC1122 4.1.3.4.
+		 * unless the interface supports "invert zero" capability.)
 		 */
 		if (hwcksum_tx && !tso &&
-		    (m->m_pkthdr.csum_flags & CSUM_TCPIPV6) &&
+		    ((m->m_pkthdr.csum_flags & CSUM_TCPIPV6) ||
+		    ((hwcap & CSUM_ZERO_INVERT) &&
+		    (m->m_pkthdr.csum_flags & CSUM_ZERO_INVERT))) &&
 		    tlen <= mtu) {
 			uint16_t start = sizeof (struct ip6_hdr);
 			uint16_t ulpoff =

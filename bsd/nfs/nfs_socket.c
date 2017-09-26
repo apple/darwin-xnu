@@ -3727,7 +3727,7 @@ nfs_request_destroy(struct nfsreq *req)
 
 	if (!req || !(req->r_flags & R_INITTED))
 		return;
-	nmp  = req->r_np ? NFSTONMP(req->r_np) : req->r_nmp;
+	nmp  = req->r_nmp;
 	req->r_flags &= ~R_INITTED;
 	if (req->r_lflags & RL_QUEUED)
 		nfs_reqdequeue(req);
@@ -3851,7 +3851,7 @@ nfs_request_add_header(struct nfsreq *req)
 		req->r_mhead = NULL;
 	}
 
-	nmp = req->r_np ? NFSTONMP(req->r_np) : req->r_nmp;
+	nmp = req->r_nmp;
 	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 
@@ -3860,7 +3860,7 @@ nfs_request_add_header(struct nfsreq *req)
 		return (error);
 
 	req->r_mreqlen = mbuf_pkthdr_len(req->r_mhead);
-	nmp = req->r_np ? NFSTONMP(req->r_np) : req->r_nmp;
+	nmp = req->r_nmp;
 	if (nfs_mount_gone(nmp))
 		return (ENXIO);
 	lck_mtx_lock(&nmp->nm_lock);
@@ -3889,7 +3889,7 @@ nfs_request_send(struct nfsreq *req, int wait)
 
 	lck_mtx_lock(nfs_request_mutex);
 
-	nmp = req->r_np ? NFSTONMP(req->r_np) : req->r_nmp;
+	nmp = req->r_nmp;
 	if (nfs_mount_gone(nmp)) {
 		lck_mtx_unlock(nfs_request_mutex);
 		return (ENXIO);
@@ -3963,7 +3963,7 @@ nfs_request_finish(
 
 	mrep = req->r_nmrep.nmc_mhead;
 
-	nmp = req->r_np ? NFSTONMP(req->r_np) : req->r_nmp;
+	nmp = req->r_nmp;
 
 	if ((req->r_flags & R_CWND) && nmp) {
 		/*

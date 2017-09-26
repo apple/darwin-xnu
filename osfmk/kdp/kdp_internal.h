@@ -31,6 +31,7 @@
  */
 
 #include <kdp/kdp.h>
+#include <kern/machine.h>
 #include <kdp/kdp_protocol.h>
 #include <mach/vm_types.h>
 #include <mach/boolean.h>
@@ -74,15 +75,6 @@ typedef boolean_t
     int	 *,
     unsigned short *
 );
-
-struct debugger_callback {
-	kern_return_t (*callback) (void*);
-	void *callback_context;
-	boolean_t proceed_on_sync_failure;
-	kern_return_t error;
-};
-
-extern struct debugger_callback *debugger_callback;
 
 extern
 boolean_t

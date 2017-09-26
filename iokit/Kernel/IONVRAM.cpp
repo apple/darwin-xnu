@@ -139,9 +139,11 @@ void IODTNVRAM::initNVRAMImage(void)
   // Look through the partitions to find the OF, MacOS partitions.
   while (currentOffset < kIODTNVRAMImageSize) {
     currentLength = ((UInt16 *)(_nvramImage + currentOffset))[1] * 16;
-    
+
+    if (currentLength < 16) break;
     partitionOffset = currentOffset + 16;
     partitionLength = currentLength - 16;
+    if ((partitionOffset + partitionLength) > kIODTNVRAMImageSize) break;
     
     if (strncmp((const char *)_nvramImage + currentOffset + 4,
 		kIODTNVRAMOFPartitionName, 12) == 0) {
@@ -582,7 +584,7 @@ IOReturn IODTNVRAM::readNVRAMPartition(const OSSymbol *partitionID,
 				       IOByteCount length)
 {
   OSNumber *partitionOffsetNumber, *partitionLengthNumber;
-  UInt32   partitionOffset, partitionLength;
+  UInt32   partitionOffset, partitionLength, end;
   
   partitionOffsetNumber =
     (OSNumber *)_nvramPartitionOffsets->getObject(partitionID);
@@ -595,8 +597,8 @@ IOReturn IODTNVRAM::readNVRAMPartition(const OSSymbol *partitionID,
   partitionOffset = partitionOffsetNumber->unsigned32BitValue();
   partitionLength = partitionLengthNumber->unsigned32BitValue();
   
-  if ((buffer == 0) || (length == 0) ||
-      (offset + length > partitionLength))
+  if (os_add_overflow(offset, length, &end)) return kIOReturnBadArgument;
+  if ((buffer == 0) || (length == 0) || (end > partitionLength))
     return kIOReturnBadArgument;
   
   bcopy(_nvramImage + partitionOffset + offset, buffer, length);
@@ -609,7 +611,7 @@ IOReturn IODTNVRAM::writeNVRAMPartition(const OSSymbol *partitionID,
 					IOByteCount length)
 {
   OSNumber *partitionOffsetNumber, *partitionLengthNumber;
-  UInt32   partitionOffset, partitionLength;
+  UInt32   partitionOffset, partitionLength, end;
   
   partitionOffsetNumber =
     (OSNumber *)_nvramPartitionOffsets->getObject(partitionID);
@@ -622,8 +624,8 @@ IOReturn IODTNVRAM::writeNVRAMPartition(const OSSymbol *partitionID,
   partitionOffset = partitionOffsetNumber->unsigned32BitValue();
   partitionLength = partitionLengthNumber->unsigned32BitValue();
   
-  if ((buffer == 0) || (length == 0) ||
-      (offset + length > partitionLength))
+  if (os_add_overflow(offset, length, &end)) return kIOReturnBadArgument;
+  if ((buffer == 0) || (length == 0) || (end > partitionLength))
     return kIOReturnBadArgument;
   
   bcopy(buffer, _nvramImage + partitionOffset + offset, length);
@@ -736,7 +738,6 @@ IOReturn IODTNVRAM::initOFVariables(void)
     }
   }
   
-  // Create the 'aapl,panic-info' property if needed.
   if (_piImage != 0) {
     propDataLength = *(UInt32 *)_piImage;
     if ((propDataLength != 0) && (propDataLength <= (_piPartitionSize - 4))) {
@@ -824,6 +825,7 @@ enum {
   kOWVariableOffsetString = 17
 };
 
+static const
 OFVariable gOFVariables[] = {
   {"little-endian?", kOFVariableTypeBoolean, kOFVariablePermUserRead, 0},
   {"real-mode?", kOFVariableTypeBoolean, kOFVariablePermUserRead, 1},
@@ -872,12 +874,22 @@ OFVariable gOFVariables[] = {
   {"security-password", kOFVariableTypeData, kOFVariablePermRootOnly, -1},
   {"boot-image", kOFVariableTypeData, kOFVariablePermUserWrite, -1},
   {"com.apple.System.fp-state", kOFVariableTypeData, kOFVariablePermKernelOnly, -1},
+#if CONFIG_EMBEDDED
+  {"backlight-level", kOFVariableTypeData, kOFVariablePermUserWrite, -1},
+  {"com.apple.System.sep.art", kOFVariableTypeData, kOFVariablePermKernelOnly, -1},
+  {"com.apple.System.boot-nonce", kOFVariableTypeString, kOFVariablePermKernelOnly, -1},
+  {"darkboot", kOFVariableTypeBoolean, kOFVariablePermUserWrite, -1},
+  {"acc-mb-ld-lifetime", kOFVariableTypeNumber, kOFVariablePermKernelOnly, -1},
+  {"acc-cm-override-charger-count", kOFVariableTypeNumber, kOFVariablePermKernelOnly, -1},
+  {"acc-cm-override-count", kOFVariableTypeNumber, kOFVariablePermKernelOnly, -1},
+  {"enter-tdm-mode", kOFVariableTypeBoolean, kOFVariablePermUserWrite, -1},
+#endif
   {0, kOFVariableTypeData, kOFVariablePermUserRead, -1}
 };
 
 UInt32 IODTNVRAM::getOFVariableType(const OSSymbol *propSymbol) const
 {
-  OFVariable *ofVar;
+  const OFVariable *ofVar;
   
   ofVar = gOFVariables;
   while (1) {
@@ -891,7 +903,7 @@ UInt32 IODTNVRAM::getOFVariableType(const OSSymbol *propSymbol) const
 
 UInt32 IODTNVRAM::getOFVariablePerm(const OSSymbol *propSymbol) const
 {
-  OFVariable *ofVar;
+  const OFVariable *ofVar;
   
   ofVar = gOFVariables;
   while (1) {
@@ -906,7 +918,7 @@ UInt32 IODTNVRAM::getOFVariablePerm(const OSSymbol *propSymbol) const
 bool IODTNVRAM::getOWVariableInfo(UInt32 variableNumber, const OSSymbol **propSymbol,
 				  UInt32 *propType, UInt32 *propOffset)
 {
-  OFVariable *ofVar;
+  const OFVariable *ofVar;
   
   ofVar = gOFVariables;
   while (1) {
@@ -999,7 +1011,7 @@ bool IODTNVRAM::convertObjectToProp(UInt8 *buffer, UInt32 *length,
 				    const OSSymbol *propSymbol, OSObject *propObject)
 {
   const UInt8    *propName;
-  UInt32         propNameLength, propDataLength;
+  UInt32         propNameLength, propDataLength, remaining;
   UInt32         propType, tmpValue;
   OSBoolean      *tmpBoolean = 0;
   OSNumber       *tmpNumber = 0;
@@ -1043,29 +1055,30 @@ bool IODTNVRAM::convertObjectToProp(UInt8 *buffer, UInt32 *length,
   
   // Copy the property name equal sign.
   buffer += snprintf((char *)buffer, *length, "%s=", propName);
-  
+  remaining = *length - propNameLength - 1;
+
   switch (propType) {
   case kOFVariableTypeBoolean :
     if (tmpBoolean->getValue()) {
-      strlcpy((char *)buffer, "true", *length - propNameLength);
+      strlcpy((char *)buffer, "true", remaining);
     } else {
-      strlcpy((char *)buffer, "false", *length - propNameLength);
+      strlcpy((char *)buffer, "false", remaining);
     }
     break;
     
   case kOFVariableTypeNumber :
     tmpValue = tmpNumber->unsigned32BitValue();
     if (tmpValue == 0xFFFFFFFF) {
-      strlcpy((char *)buffer, "-1", *length - propNameLength);
+      strlcpy((char *)buffer, "-1", remaining);
     } else if (tmpValue < 1000) {
-      snprintf((char *)buffer, *length - propNameLength, "%d", (uint32_t)tmpValue);
+      snprintf((char *)buffer, remaining, "%d", (uint32_t)tmpValue);
     } else {
-      snprintf((char *)buffer, *length - propNameLength, "0x%x", (uint32_t)tmpValue);
+      snprintf((char *)buffer, remaining, "0x%x", (uint32_t)tmpValue);
     }
     break;
     
   case kOFVariableTypeString :
-    strlcpy((char *)buffer, tmpString->getCStringNoCopy(), *length - propNameLength);
+    strlcpy((char *)buffer, tmpString->getCStringNoCopy(), remaining);
     break;
     
   case kOFVariableTypeData :

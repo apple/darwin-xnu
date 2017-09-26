@@ -127,27 +127,6 @@ struct user64_mac {
 #endif /* KERNEL */
 
 /*
- * Flags to control which MAC subsystems are enforced
- * on a per-process/thread/credential basis.
- */
-#define MAC_SYSTEM_ENFORCE	0x0001	/* system management */
-#define MAC_PROC_ENFORCE	0x0002	/* process management */
-#define MAC_MACH_ENFORCE	0x0004	/* mach interfaces */
-#define MAC_VM_ENFORCE		0x0008	/* VM interfaces */
-#define MAC_FILE_ENFORCE	0x0010	/* file operations */
-#define MAC_SOCKET_ENFORCE	0x0020	/* socket operations */
-#define MAC_PIPE_ENFORCE	0x0040	/* pipes */
-#define MAC_VNODE_ENFORCE	0x0080	/* vnode operations */
-#define MAC_NET_ENFORCE		0x0100	/* network management */
-#define MAC_MBUF_ENFORCE	0x0200	/* network traffic */
-#define MAC_POSIXSEM_ENFORCE	0x0400	/* posix semaphores */
-#define MAC_POSIXSHM_ENFORCE	0x0800	/* posix shared memory */
-#define MAC_SYSVMSG_ENFORCE	0x1000	/* SysV message queues */
-#define MAC_SYSVSEM_ENFORCE	0x2000	/* SysV semaphores */
-#define MAC_SYSVSHM_ENFORCE	0x4000	/* SysV shared memory */
-#define MAC_ALL_ENFORCE		0x7fff	/* enforce everything */
-
-/*
  * Device types for mac_iokit_check_device()
  */
 #define MAC_DEVICE_USB		"USB"

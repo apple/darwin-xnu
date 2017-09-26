@@ -305,7 +305,7 @@ uipc_detach(struct socket *so)
 	if (unp == 0)
 		return (EINVAL);
 
-	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
 	unp_detach(unp);
 	return (0);
 }
@@ -987,8 +987,18 @@ unp_bind(
 		return (EAFNOSUPPORT);
 	}
 
+	/*
+	 * Check if the socket is already bound to an address
+	 */
 	if (unp->unp_vnode != NULL)
 		return (EINVAL);
+	/*
+	 * Check if the socket may have been shut down
+	 */
+	if ((so->so_state & (SS_CANTRCVMORE | SS_CANTSENDMORE)) ==
+	    (SS_CANTRCVMORE | SS_CANTSENDMORE))
+		return (EINVAL);
+
 	namelen = soun->sun_len - offsetof(struct sockaddr_un, sun_path);
 	if (namelen <= 0)
 		return (EINVAL);
@@ -1311,7 +1321,7 @@ decref_out:
 	}
 
 out:
-	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
 	vnode_put(vp);
 	return (error);
 }
@@ -1332,8 +1342,8 @@ unp_connect2(struct socket *so, struct socket *so2)
 
 	unp2 = sotounpcb(so2);
 
-	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
 
 	/* Verify both sockets are still opened */
 	if (unp == 0 || unp2 == 0)
@@ -1397,8 +1407,8 @@ unp_connect2(struct socket *so, struct socket *so2)
 	default:
 		panic("unknown socket type %d in unp_connect2", so->so_type);
 	}
-	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
 	return (0);
 }
 
@@ -1460,8 +1470,8 @@ try_again:
 	}
 	so_locked = 1;
 
-	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
 
 	/* Check for the UNP_DONTDISCONNECT flag, if it
 	 * is set, release both sockets and go to sleep
@@ -1500,7 +1510,7 @@ try_again:
 
 	case SOCK_STREAM:
 		unp2->unp_conn = NULL;
-		VERIFY(so2->so_usecount > 0);
+		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
 
 		/* Set the socket state correctly but do a wakeup later when
@@ -1535,7 +1545,7 @@ out:
 		socket_lock(so,0);
 		soisdisconnected(so);
 	}
-	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
 	return;
 }
 
@@ -1707,6 +1717,7 @@ SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist,
             (caddr_t)(long)SOCK_STREAM, 0, unp_pcblist, "S,xunpcb",
             "List of active local stream sockets");
 
+#if !CONFIG_EMBEDDED
 
 static int
 unp_pcblist64 SYSCTL_HANDLER_ARGS
@@ -1855,6 +1866,7 @@ SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist64,
 	    (caddr_t)(long)SOCK_STREAM, 0, unp_pcblist64, "S,xunpcb64",
 	    "List of active local stream sockets 64 bit");
 
+#endif /* !CONFIG_EMBEDDED */
 
 static void
 unp_shutdown(struct unpcb *unp)
@@ -2461,7 +2473,7 @@ unp_unlock(struct socket *so, int refcount, void * lr)
         } else {
                 mutex_held = &((struct unpcb *)so->so_pcb)->unp_mtx;
         }
-        lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+        LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
         so->unlock_lr[so->next_unlock_lr] = lr_saved;
         so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 
@@ -2485,7 +2497,7 @@ unp_unlock(struct socket *so, int refcount, void * lr)
 }
 
 lck_mtx_t *
-unp_getlock(struct socket *so, __unused int locktype)
+unp_getlock(struct socket *so, __unused int flags)
 {
         struct unpcb *unp = (struct unpcb *)so->so_pcb;
 

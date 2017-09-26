@@ -563,7 +563,7 @@ def MbufShowMca(cmd_args=None):
 def MbufShowAll(cmd_args=None):
     """ Print all mbuf objects
     """
-    print GetMbufWalkAllSlabs(1, 1, 0)
+    print GetMbufWalkAllSlabs(1, 1, 1)
 # EndMacro: mbuf_showall
 
 # Macro: mbuf_countchain

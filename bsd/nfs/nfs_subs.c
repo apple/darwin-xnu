@@ -3240,7 +3240,7 @@ nfsrv_check_exports_allow_address(mbuf_t nam)
 {
 	struct nfs_exportfs		*nxfs;
 	struct nfs_export		*nx;
-	struct nfs_export_options	*nxo;
+	struct nfs_export_options	*nxo = NULL;
 
 	if (nam == NULL)
 		return (EACCES);

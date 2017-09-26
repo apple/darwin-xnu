@@ -104,6 +104,7 @@ struct buf {
 	LIST_ENTRY(buf) b_vnbufs;	/* Buffer's associated vnode. */
 	TAILQ_ENTRY(buf) b_freelist;	/* Free list position if not active. */
 	int	b_timestamp;		/* timestamp for queuing operation */
+	struct timeval b_timestamp_tv; /* microuptime for disk conditioner */
 	int	b_whichq;		/* the free list the buffer belongs to */
 	volatile uint32_t	b_flags;	/* B_* flags. */
 	volatile uint32_t	b_lflags;	/* BL_BUSY | BL_WANTED flags... protected by buf_mtx */

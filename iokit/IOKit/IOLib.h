@@ -80,7 +80,7 @@ typedef void (*IOThreadFunc)(void *argument);
     @param size Size of the memory requested.
     @result Pointer to the allocated memory, or zero on failure. */
 
-void * IOMalloc(vm_size_t size);
+void * IOMalloc(vm_size_t size)  __attribute__((alloc_size(1)));
 
 /*! @function IOFree
     @abstract Frees memory allocated with IOMalloc.
@@ -99,7 +99,7 @@ void   IOFree(void * address, vm_size_t size);
     @param alignment Byte count of the alignment for the memory. For example, pass 256 to get memory allocated at an address with bit 0-7 zero.
     @result Pointer to the allocated memory, or zero on failure. */
 
-void * IOMallocAligned(vm_size_t size, vm_offset_t alignment);
+void * IOMallocAligned(vm_size_t size, vm_offset_t alignment) __attribute__((alloc_size(1)));
 
 /*! @function IOFreeAligned
     @abstract Frees memory allocated with IOMallocAligned.
@@ -118,7 +118,7 @@ void   IOFreeAligned(void * address, vm_size_t size);
     @result Virtual address of the allocated memory, or zero on failure. */
 
 void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
-			   IOPhysicalAddress * physicalAddress) __attribute__((deprecated));
+			   IOPhysicalAddress * physicalAddress) __attribute__((deprecated)) __attribute__((alloc_size(1)));
 
 /*! @function IOFreeContiguous
     @abstract Deprecated - use IOBufferMemoryDescriptor. Frees memory allocated with IOMallocContiguous.
@@ -136,7 +136,7 @@ void   IOFreeContiguous(void * address, vm_size_t size) __attribute__((deprecate
     @param alignment Byte count of the alignment for the memory. For example, pass 256 to get memory allocated at an address with bits 0-7 zero.
     @result Pointer to the allocated memory, or zero on failure. */
 
-void * IOMallocPageable(vm_size_t size, vm_size_t alignment);
+void * IOMallocPageable(vm_size_t size, vm_size_t alignment) __attribute__((alloc_size(1)));
 
 /*! @function IOFreePageable
     @abstract Frees memory allocated with IOMallocPageable.
@@ -309,7 +309,8 @@ __attribute__((format(printf, 1, 2)));
     @param format A printf() style format string (see printf(3) documentation).
     @param ap stdarg(3) style variable arguments. */
 
-void IOLogv(const char *format, va_list ap);
+void IOLogv(const char *format, va_list ap)
+__attribute__((format(printf, 1, 0)));
 
 #ifndef _FN_KPRINTF
 #define	_FN_KPRINTF

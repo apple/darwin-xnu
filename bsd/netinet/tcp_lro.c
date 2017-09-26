@@ -460,6 +460,7 @@ tcp_lro_process_pkt(struct mbuf *lro_mb, int drop_hdrlen)
 	 * quickly get the values now and not bother calling
 	 * tcp_dooptions(), etc.
 	 */
+	bzero(&to, sizeof(to));
 	if ((optlen == TCPOLEN_TSTAMP_APPA ||
 			(optlen > TCPOLEN_TSTAMP_APPA &&
 			optp[TCPOLEN_TSTAMP_APPA] == TCPOPT_EOL)) &&

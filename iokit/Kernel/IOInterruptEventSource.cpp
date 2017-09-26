@@ -308,7 +308,8 @@ bool IOInterruptEventSource::checkForWork()
 	{
 		if (trace)
 			IOTimeStampStartConstant(IODBG_INTES(IOINTES_ACTION),
-						 VM_KERNEL_UNSLIDE(intAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+						 VM_KERNEL_ADDRHIDE(intAction), VM_KERNEL_ADDRHIDE(owner),
+						 VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 
 		if (reserved->statistics) {
 			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelSystemTimeIndex)) {
@@ -341,7 +342,8 @@ bool IOInterruptEventSource::checkForWork()
 		
 		if (trace)
 			IOTimeStampEndConstant(IODBG_INTES(IOINTES_ACTION),
-					       VM_KERNEL_UNSLIDE(intAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+						VM_KERNEL_ADDRHIDE(intAction), VM_KERNEL_ADDRHIDE(owner),
+						VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 		
 		consumerCount = cacheProdCount;
 		if (autoDisable && !explicitDisable)
@@ -352,7 +354,8 @@ bool IOInterruptEventSource::checkForWork()
 	{
 		if (trace)
 			IOTimeStampStartConstant(IODBG_INTES(IOINTES_ACTION),
-						 VM_KERNEL_UNSLIDE(intAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+						VM_KERNEL_ADDRHIDE(intAction), VM_KERNEL_ADDRHIDE(owner),
+						VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 
 		if (reserved->statistics) {
 			if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingSecondLevelSystemTimeIndex)) {
@@ -385,7 +388,8 @@ bool IOInterruptEventSource::checkForWork()
 		
 		if (trace)
 			IOTimeStampEndConstant(IODBG_INTES(IOINTES_ACTION),
-					       VM_KERNEL_UNSLIDE(intAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+							VM_KERNEL_ADDRHIDE(intAction), VM_KERNEL_ADDRHIDE(owner),
+							VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 		
 		consumerCount = cacheProdCount;
 		if (autoDisable && !explicitDisable)
@@ -404,7 +408,7 @@ void IOInterruptEventSource::normalInterruptOccurred
     producerCount++;
 	
 	if (trace)
-	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
+	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(owner));
 
     if (reserved->statistics) {
         if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {
@@ -415,7 +419,7 @@ void IOInterruptEventSource::normalInterruptOccurred
     signalWorkAvailable();
 	
 	if (trace)
-	    IOTimeStampEndConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
+	    IOTimeStampEndConstant(IODBG_INTES(IOINTES_SEMA), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(owner));
 }
 
 void IOInterruptEventSource::disableInterruptOccurred
@@ -429,7 +433,7 @@ void IOInterruptEventSource::disableInterruptOccurred
     producerCount++;
 	
 	if (trace)
-	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
+	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(owner));
 
     if (reserved->statistics) {
         if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {
@@ -440,7 +444,7 @@ void IOInterruptEventSource::disableInterruptOccurred
     signalWorkAvailable();
 	
 	if (trace)
-	    IOTimeStampEndConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
+	    IOTimeStampEndConstant(IODBG_INTES(IOINTES_SEMA), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(owner));
 }
 
 void IOInterruptEventSource::interruptOccurred

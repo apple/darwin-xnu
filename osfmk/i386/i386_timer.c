@@ -129,8 +129,16 @@ timer_intr(int		user_mode,
 			DECR_PM_DEADLINE | DBG_FUNC_END,
 			0, 0, 0, 0, 0);
 		timer_processed = TRUE;
+		abstime = mach_absolute_time(); /* Get the time again since we ran a bit */
 	}
 
+	uint64_t quantum_deadline = pp->quantum_timer_deadline;
+	/* is it the quantum timer expiration? */
+	if ((quantum_deadline <= abstime) && (quantum_deadline > 0)) {
+		pp->quantum_timer_deadline = 0;
+		quantum_timer_expire(abstime);
+	}
+	
 	/* schedule our next deadline */
 	x86_lcpu()->rtcDeadline = EndOfAllTime;
 	timer_resync_deadlines();
@@ -160,6 +168,18 @@ void timer_set_deadline(uint64_t deadline)
 	splx(s);
 }
 
+void
+quantum_timer_set_deadline(uint64_t deadline)
+{
+    cpu_data_t              *pp;
+    /* We should've only come into this path with interrupts disabled */
+    assert(ml_get_interrupts_enabled() == FALSE);
+
+    pp = current_cpu_datap();
+    pp->quantum_timer_deadline = deadline;
+    timer_resync_deadlines();
+}
+
 /*
  * Re-evaluate the outstanding deadlines and select the most proximate.
  *
@@ -170,6 +190,7 @@ timer_resync_deadlines(void)
 {
 	uint64_t		deadline = EndOfAllTime;
 	uint64_t		pmdeadline;
+	uint64_t		quantum_deadline;
 	rtclock_timer_t		*mytimer;
 	spl_t			s = splclock();
 	cpu_data_t		*pp;
@@ -195,6 +216,13 @@ timer_resync_deadlines(void)
 	if (0 < pmdeadline && pmdeadline < deadline)
 		deadline = pmdeadline;
 
+	/* If we have the quantum timer setup, check that */
+	quantum_deadline = pp->quantum_timer_deadline;
+	if ((quantum_deadline > 0) && 
+	    (quantum_deadline < deadline))
+		deadline = quantum_deadline;
+
+
 	/*
 	 * Go and set the "pop" event.
 	 */
@@ -202,11 +230,19 @@ timer_resync_deadlines(void)
 
 	/* Record non-PM deadline for latency tool */
 	if (decr != 0 && deadline != pmdeadline) {
+		uint64_t queue_count = 0;
+		if (deadline != quantum_deadline) {
+			/* 
+			 * For non-quantum timer put the queue count
+			 * in the tracepoint.
+			 */
+			queue_count = mytimer->queue.count;
+		}
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			DECR_SET_DEADLINE | DBG_FUNC_NONE,
-			decr, 2,
-			deadline,
-			mytimer->queue.count, 0);
+		    DECR_SET_DEADLINE | DBG_FUNC_NONE,
+		    decr, 2,
+		    deadline,
+		    queue_count, 0);
 	}
 	splx(s);
 }

@@ -42,7 +42,7 @@ extern void telemetry_init(void);
 
 extern void compute_telemetry(void *);
 
-extern void telemetry_ast(thread_t, boolean_t interrupted_userspace, boolean_t io_telemetry);
+extern void telemetry_ast(thread_t thread, uint32_t reasons);
 
 extern int telemetry_gather(user_addr_t buffer, uint32_t *length, boolean_t mark);
 

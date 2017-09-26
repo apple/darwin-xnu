@@ -81,13 +81,36 @@ enum {
 
     // debug aids - change behaviour
     kIONoFreeObjects    =         0x00100000ULL,
-    kIOLogSynchronous   =         0x00200000ULL,  // IOLog completes synchronously
+//    kIOLogSynchronous   =         0x00200000ULL,  // IOLog completes synchronously -- obsolete
     kIOTracking         =         0x00400000ULL,
     kIOWaitQuietPanics  =         0x00800000ULL,
     kIOWaitQuietBeforeRoot =      0x01000000ULL,
     kIOTrackingBoot     =         0x02000000ULL,
 
     _kIODebugTopFlag    = 0x8000000000000000ULL   // force enum to be 64 bits
+};
+
+enum {
+	kIOKitDebugUserOptions = 0
+                           | kIOLogAttach
+                           | kIOLogProbe
+                           | kIOLogStart
+                           | kIOLogRegister
+                           | kIOLogMatch
+                           | kIOLogConfig
+                           | kIOLogYield
+                           | kIOLogPower
+                           | kIOLogMapping
+                           | kIOLogCatalogue
+                           | kIOLogTracePower
+                           | kIOLogDebugPower
+                           | kOSLogRegistryMods
+                           | kIOLogPMRootDomain
+                           | kOSRegistryModsMode
+                           | kIOLogHibernate
+                           | kIOSleepWakeWdogOff
+                           | kIOKextSpinDump
+                           | kIOWaitQuietPanics
 };
 
 enum {
@@ -143,7 +166,9 @@ struct IOKitDiagnosticsParameters
     size_t    size;
     uint64_t  value;
     uint32_t  options;
-    uint32_t  reserved[3];
+    uint32_t  tag;
+    uint32_t  zsize;
+    uint32_t  reserved[8];
 };
 typedef struct IOKitDiagnosticsParameters IOKitDiagnosticsParameters;
 
@@ -166,7 +191,7 @@ struct IOTrackingCallSiteInfo
 #define kIOWireTrackingName	"IOWire"
 #define kIOMapTrackingName	"IOMap"
 
-#if KERNEL && IOTRACKING
+#if XNU_KERNEL_PRIVATE && IOTRACKING
 
 struct IOTrackingQueue;
 struct IOTrackingCallSite;
@@ -214,7 +239,7 @@ IOTrackingQueue * IOTrackingQueueAlloc(const char * name, uintptr_t btEntry,
 					size_t allocSize, size_t minCaptureSize,
 					uint32_t type, uint32_t numSiteQs);
 void              IOTrackingQueueFree(IOTrackingQueue * head);
-void              IOTrackingAdd(IOTrackingQueue * head, IOTracking * mem, size_t size, bool address);
+void              IOTrackingAdd(IOTrackingQueue * head, IOTracking * mem, size_t size, bool address, vm_tag_t tag);
 void              IOTrackingRemove(IOTrackingQueue * head, IOTracking * mem, size_t size);
 void              IOTrackingAddUser(IOTrackingQueue * queue, IOTrackingUser * mem, vm_size_t size);
 void              IOTrackingRemoveUser(IOTrackingQueue * head, IOTrackingUser * tracking);
@@ -231,7 +256,7 @@ extern IOTrackingQueue * gIOMallocTracking;
 extern IOTrackingQueue * gIOWireTracking;
 extern IOTrackingQueue * gIOMapTracking;
 
-#endif /* KERNEL && IOTRACKING */
+#endif /* XNU_KERNEL_PRIVATE && IOTRACKING */
 
 enum
 {

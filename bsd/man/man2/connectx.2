@@ -154,15 +154,6 @@ specifies the length of that buffer.
 .\" .Fn connectx
 .\" calls.
 .\" .Pp
-.\" If the initial connection is established without any protocol-level
-.\" multipath association, the error
-.\" .Er EPROTO
-.\" will be returned, and the connection can be extracted to a new socket with
-.\" the same properties of
-.\" .Fa socket ,
-.\" by calling
-.\" .Xr peeloff 2 .
-.\" .Pp
 .\" An association representing one or more connections, or a single connection
 .\" may be dissolved by calling
 .\" .Xr disconnectx 2 .
@@ -363,11 +354,6 @@ Because
 .Fa socket
 is listening, no connection is allowed.
 .\" ==========
-.\".It Bq Er EPROTO
-.\"The connection was successfully established without any protocol-level
-.\"association.  The connection can be extracted to a new socket using
-.\".Xr peeloff 2 .
-.\" ==========
 .\".It Bq Er EPROTOTYPE
 .\".Fa address
 .\"has a different type than the socket
@@ -385,7 +371,6 @@ Connection establishment timed out without establishing a connection.
 .Xr disconnectx 2 ,
 .Xr getsockopt 2 ,
 .\".Xr kqueue 2 ,
-.\".Xr peeloff 2 ,
 .\".Xr shutdown 2 ,
 .Xr select 2 ,
 .Xr socket 2 ,

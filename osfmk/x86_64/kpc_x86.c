@@ -33,7 +33,6 @@
 #include <i386/cpuid.h>
 #include <i386/proc_reg.h>
 #include <i386/mp.h>
-#include <i386/lapic.h>
 #include <sys/errno.h>
 #include <kperf/buffer.h>
 
@@ -601,8 +600,6 @@ int
 kpc_set_running_arch(struct kpc_running_remote *mp_config)
 {
 	assert(mp_config);
-
-	lapic_set_pmi_func((i386_intr_func_t)kpc_pmi_handler);
 
 	/* dispatch to all CPUs */
 	mp_cpus_call(CPUMASK_ALL, ASYNC, kpc_set_running_mp_call, mp_config);

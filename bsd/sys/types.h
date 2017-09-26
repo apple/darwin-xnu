@@ -81,9 +81,9 @@
 #include <machine/endian.h>
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-typedef	unsigned char		u_char;
-typedef	unsigned short		u_short;
-typedef	unsigned int		u_int;
+#include <sys/_types/_u_char.h>
+#include <sys/_types/_u_short.h>
+#include <sys/_types/_u_int.h>
 #ifndef _U_LONG
 typedef	unsigned long		u_long;
 #define _U_LONG
@@ -96,7 +96,8 @@ typedef	u_int64_t		u_quad_t;	/* quads */
 typedef	int64_t			quad_t;
 typedef	quad_t *		qaddr_t;
 
-typedef	char *			caddr_t;	/* core address */
+#include <sys/_types/_caddr_t.h>   	/* core address */
+
 typedef	int32_t			daddr_t;	/* disk address */
 
 #include <sys/_types/_dev_t.h>   		/* device number */

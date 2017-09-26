@@ -32,6 +32,7 @@
 #ifndef _BSM_AUDIT_RECORD_H_
 #define _BSM_AUDIT_RECORD_H_
 
+#include <bsm/audit.h>		/* token_t */
 #include <sys/time.h>			/* struct timeval */
 
 /*

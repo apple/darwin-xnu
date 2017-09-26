@@ -45,6 +45,7 @@
 
 #include <sys/cdefs.h>
 
+
 #ifdef	__LP64__
 
 typedef unsigned long		clock_sec_t;
@@ -78,7 +79,7 @@ struct	clock_ops {
 				clock_attr_t			attr,
 				mach_msg_type_number_t	*count);
 };
-typedef struct clock_ops	*clock_ops_t;
+typedef const struct clock_ops	*clock_ops_t;
 typedef struct clock_ops	clock_ops_data_t;
 
 /*
@@ -86,7 +87,7 @@ typedef struct clock_ops	clock_ops_data_t;
  * dependent operations list and clock operation ports.
  */
 struct	clock {
-	clock_ops_t			cl_ops;			/* operations list */
+	clock_ops_t		cl_ops;		/* operations list */
 	struct ipc_port		*cl_service;	/* service port */
 	struct ipc_port		*cl_control;	/* control port */
 };
@@ -111,12 +112,12 @@ extern void		clock_timebase_init(void);
  */
 extern void		clock_service_create(void);
 
-extern void			clock_gettimeofday_set_commpage(
-						uint64_t				abstime,
-						uint64_t				epoch,
-						uint64_t				offset,
-						clock_sec_t				*secs,
-						clock_usec_t			*microsecs);
+extern void clock_gettimeofday_set_commpage(
+		uint64_t				abstime,
+		uint64_t				sec,
+		uint64_t				frac,
+		uint64_t				scale,
+		uint64_t				tick_per_sec);
 
 extern void			machine_delay_until(uint64_t interval,
 						uint64_t		deadline);
@@ -142,6 +143,12 @@ extern void			clock_initialize_calendar(void);
 
 extern void			clock_wakeup_calendar(void);
 
+extern void 			clock_update_calendar(void);
+
+extern void 			clock_get_calendar_uptime(clock_sec_t		*secs);
+
+extern void clock_gettimeofday_new(clock_sec_t		*secs,
+	clock_usec_t	*microsecs);
 extern void			clock_gettimeofday(
 						clock_sec_t			*secs,
 						clock_usec_t		*microsecs);

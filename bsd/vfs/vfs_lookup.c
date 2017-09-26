@@ -182,6 +182,7 @@ namei(struct nameidata *ndp)
 #if CONFIG_VOLFS
 	int volfs_restarts = 0;
 #endif
+	size_t bytes_copied = 0;
 
 	fdp = p->p_fd;
 
@@ -244,10 +245,10 @@ vnode_recycled:
 retry_copy:
 	if (UIO_SEG_IS_USER_SPACE(ndp->ni_segflg)) {
 		error = copyinstr(ndp->ni_dirp, cnp->cn_pnbuf,
-			    cnp->cn_pnlen, (size_t *)&ndp->ni_pathlen);
+			    cnp->cn_pnlen, &bytes_copied);
 	} else {
 		error = copystr(CAST_DOWN(void *, ndp->ni_dirp), cnp->cn_pnbuf,
-			    cnp->cn_pnlen, (size_t *)&ndp->ni_pathlen);
+			    cnp->cn_pnlen, &bytes_copied);
 	}
 	if (error == ENAMETOOLONG && !(cnp->cn_flags & HASBUF)) {
 		MALLOC_ZONE(cnp->cn_pnbuf, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
@@ -258,11 +259,14 @@ retry_copy:
 
 		cnp->cn_flags |= HASBUF;
 		cnp->cn_pnlen = MAXPATHLEN;
+		bytes_copied = 0;
 		
 		goto retry_copy;
 	}
 	if (error)
 	        goto error_out;
+	ndp->ni_pathlen = bytes_copied;
+	bytes_copied = 0;
 
 	/*
 	 * Since the name cache may contain positive entries of
@@ -366,6 +370,21 @@ retry_copy:
 	ndp->ni_vp  = NULLVP;
 
 	for (;;) {
+#if CONFIG_MACF
+		/*
+		 * Give MACF policies a chance to reject the lookup
+		 * before performing any filesystem operations.
+		 * This hook is called before resolving the path and
+		 * again each time a symlink is encountered.
+		 * NB: policies receive path information as supplied
+		 *     by the caller and thus cannot be trusted.
+		 */
+		error = mac_vnode_check_lookup_preflight(ctx, dp, cnp->cn_nameptr, cnp->cn_namelen);
+		if (error) {
+			goto error_out;
+		}
+#endif
+
 		ndp->ni_startdir = dp;
 
 		if ( (error = lookup(ndp)) ) {
@@ -458,6 +477,7 @@ namei_compound_available(vnode_t dp, struct nameidata *ndp)
 
 	return 0;
 }
+
 static int
 lookup_authorize_search(vnode_t dp, struct componentname *cnp, int dp_authorized_in_cache, vfs_context_t ctx)
 {
@@ -531,6 +551,7 @@ lookup_handle_rsrc_fork(vnode_t dp, struct nameidata *ndp, struct componentname 
 {
 	vnode_t svp = NULLVP;
 	enum nsoperation nsop;
+	int nsflags;
 	int error;
 
 	if (dp->v_type != VREG) {
@@ -567,8 +588,13 @@ lookup_handle_rsrc_fork(vnode_t dp, struct nameidata *ndp, struct componentname 
 			error = EPERM;
 			goto out;
 	}
+
+	nsflags = 0;
+	if (cnp->cn_flags & CN_RAW_ENCRYPTED)
+		nsflags |= NS_GETRAWENCRYPTED;
+
 	/* Ask the file system for the resource fork. */
-	error = vnode_getnamedstream(dp, &svp, XATTR_RESOURCEFORK_NAME, nsop, 0, ctx);
+	error = vnode_getnamedstream(dp, &svp, XATTR_RESOURCEFORK_NAME, nsop, nsflags, ctx);
 
 	/* During a create, it OK for stream vnode to be missing. */
 	if (error == ENOATTR || error == ENOENT) {

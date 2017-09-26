@@ -92,7 +92,7 @@
 #define EXC_MACH_SYSCALL	8	/* Mach system calls. */
 
 #define EXC_RPC_ALERT		9	/* RPC alert */
- 
+
 #define EXC_CRASH		10	/* Abnormal process exit */
 
 #define EXC_RESOURCE		11	/* Hit resource consumption limit */
@@ -100,7 +100,9 @@
 
 #define EXC_GUARD		12	/* Violated guarded resource protections */
 
-#define EXC_CORPSE_NOTIFY	13 	/* Abnormal process exited to corpse state */
+#define EXC_CORPSE_NOTIFY	13	/* Abnormal process exited to corpse state */
+
+#define EXC_CORPSE_VARIANT_BIT	0x100  /* bit set for EXC_*_CORPSE variants of EXC_* */
 
 
 /*

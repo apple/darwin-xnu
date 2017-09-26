@@ -32,7 +32,9 @@ typedef boolean_t (*argsep_func_t) (char c);
 
 static boolean_t isargsep( char c);
 static boolean_t israngesep( char c);
+#ifndef CONFIG_EMBEDDED
 static int argstrcpy(char *from, char *to);
+#endif
 static int argstrcpy2(char *from,char *to, unsigned maxlen);
 static int argnumcpy(long long val, void *to, unsigned maxlen);
 static int getval(char *s, long long *val, argsep_func_t issep, boolean_t skip_equal_sign);
@@ -57,6 +59,10 @@ PE_parse_boot_arg(
 {
 	int max_len = -1;
 
+#if CONFIG_EMBEDDED
+	/* Limit arg size to 4 byte when no size is given */
+	max_len = 4;
+#endif
 
 	return PE_parse_boot_argn(arg_string, arg_ptr, max_len);
 }
@@ -79,6 +85,9 @@ PE_parse_boot_argn_internal(
 	args = PE_boot_args();
 	if (*args == '\0') return FALSE;
 
+#ifdef CONFIG_EMBEDDED
+	if (max_len == -1) return FALSE;
+#endif
 
 	arg_found = FALSE;
 
@@ -153,10 +162,12 @@ PE_parse_boot_argn_internal(
 					else if (max_len == 0) {
 						arg_found = TRUE;
 					}
+#if !CONFIG_EMBEDDED
 					else if (max_len == -1) { /* unreachable on embedded */
 						argstrcpy(++cp, (char *)arg_ptr);
 						arg_found = TRUE;
 					}
+#endif
 					break;
 			}
 			goto gotit;
@@ -208,6 +219,7 @@ israngesep(char c)
 		return (FALSE);
 }
 
+#if !CONFIG_EMBEDDED
 static int
 argstrcpy(
 	char *from,
@@ -222,6 +234,7 @@ argstrcpy(
 	*to = 0;
 	return(i);
 }
+#endif
 
 static int
 argstrcpy2(

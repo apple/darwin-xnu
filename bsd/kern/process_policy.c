@@ -34,6 +34,7 @@
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/priv.h>
 #include <sys/proc_internal.h>
 #include <sys/proc.h>
 #include <sys/kauth.h>
@@ -42,8 +43,6 @@
 #include <sys/ioctl.h>
 #include <sys/vm.h>
 #include <sys/user.h>
-
-#include <security/audit/audit.h>
 
 #include <mach/machine.h>
 #include <mach/mach_types.h>
@@ -72,6 +71,15 @@
 #include <kern/ipc_misc.h>
 #include <vm/vm_protos.h>
 
+#if CONFIG_EMBEDDED
+#include <sys/kern_memorystatus.h>
+#endif /* CONFIG_EMBEDDED */
+
+#if CONFIG_MACF
+#include <security/mac.h>
+#include <security/mac_framework.h>
+#endif /* CONFIG_MACF */
+
 static int handle_lowresource(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
 static int handle_cpuuse(int action, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
 static int handle_apptype(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
@@ -80,6 +88,9 @@ static int handle_boost(int scope, int action, int policy, int policy_subtype, u
 extern kern_return_t task_suspend(task_t);
 extern kern_return_t task_resume(task_t);
 
+#if CONFIG_EMBEDDED
+static int handle_applifecycle(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
+#endif /* CONFIG_EMBEDDED */
 
 /***************************** process_policy ********************/
 
@@ -104,8 +115,13 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 	pid_t target_pid = uap->target_pid;
 	uint64_t target_threadid = uap->target_threadid;
 	proc_t target_proc = PROC_NULL;
+#if CONFIG_MACF || !CONFIG_EMBEDDED
 	proc_t curp = current_proc();
+#endif
 	kauth_cred_t my_cred;
+#if CONFIG_EMBEDDED
+	kauth_cred_t target_cred;
+#endif
 
 	if ((scope != PROC_POLICY_SCOPE_PROCESS) && (scope != PROC_POLICY_SCOPE_THREAD)) {
 		return(EINVAL);
@@ -121,6 +137,13 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 
 	my_cred = kauth_cred_get();
 
+#if CONFIG_EMBEDDED
+	target_cred = kauth_cred_proc_ref(target_proc);
+
+	if (!kauth_cred_issuser(my_cred) && kauth_cred_getruid(my_cred) &&
+	    kauth_cred_getuid(my_cred) != kauth_cred_getuid(target_cred) &&
+	    kauth_cred_getruid(my_cred) != kauth_cred_getuid(target_cred))
+#else
 	/* 
 	 * Resoure starvation control can be used by unpriv resource owner but priv at the time of ownership claim. This is
 	 * checked in low resource handle routine. So bypass the checks here.
@@ -128,6 +151,7 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 	if ((policy != PROC_POLICY_RESOURCE_STARVATION) && 
 		(policy != PROC_POLICY_APPTYPE) && 
 		(!kauth_cred_issuser(my_cred) && curp != p))
+#endif
 	{
 		error = EPERM;
 		goto out;
@@ -137,6 +161,10 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 	switch (policy) {
 		case PROC_POLICY_BOOST:
 		case PROC_POLICY_RESOURCE_USAGE:
+#if CONFIG_EMBEDDED
+		case PROC_POLICY_APPTYPE:
+		case PROC_POLICY_APP_LIFECYCLE:
+#endif
 			/* These policies do their own appropriate mac checks */
 			break;
 		default:
@@ -175,6 +203,11 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 
 			error = handle_cpuuse(action, attrp, target_proc, target_threadid);
 			break;
+#if CONFIG_EMBEDDED
+		case PROC_POLICY_APP_LIFECYCLE:
+			error = handle_applifecycle(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
+			break;
+#endif /* CONFIG_EMBEDDED */
 		case PROC_POLICY_APPTYPE:
 			error = handle_apptype(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
 			break;
@@ -188,6 +221,9 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 
 out:
 	proc_rele(target_proc);
+#if CONFIG_EMBEDDED
+        kauth_cred_unref(&target_cred);
+#endif
 	return(error);
 }
 
@@ -217,39 +253,41 @@ static int
 handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t target_threadid)
 {
 	proc_policy_cpuusage_attr_t	cpuattr;
-#if CONFIG_MACF
+#if CONFIG_MACF || !CONFIG_EMBEDDED
 	proc_t 				curp = current_proc();
 #endif
-	int				entitled = FALSE;
+	Boolean				privileged = FALSE;
 	Boolean				canEnable = FALSE;
 	uint64_t			interval = -1ULL;	
 	int				error = 0;
 	uint8_t				percentage;
 
+#if !CONFIG_EMBEDDED
+	/* On macOS, tasks can only set and clear their own CPU limits. */
+	if ((action == PROC_POLICY_ACTION_APPLY || action == PROC_POLICY_ACTION_RESTORE)
+	     && curp != proc) {
+		return (EPERM);
+	}
+	/* No privilege required on macOS. */
+	privileged = TRUE;
+#endif
+
 #if CONFIG_MACF
-	/*
-	 * iOS only allows processes to override their own CPU usage monitor
-	 * parameters if they have com.apple.private.kernel.override-cpumon.
-	 *
-	 * Until rdar://24799462 improves our scheme, we are also using the
-	 * same entitlement to indicate which processes can resume monitoring
-	 * when they otherwise wouldn't be able to.
-	 */
-	entitled = (mac_proc_check_cpumon(curp) == 0) ? TRUE : FALSE;
-	canEnable = (entitled && action == PROC_POLICY_ACTION_ENABLE);
+	/* Is caller privileged to set less-restrictive scheduling parameters? */
+	if (!privileged) {
+		privileged = (priv_check_cred(kauth_cred_get(), PRIV_PROC_CPUMON_OVERRIDE, 0) == 0);
+	}
+	canEnable = (privileged && action == PROC_POLICY_ACTION_ENABLE);
 
 	if (!canEnable && curp != proc) {
-		/* can the current process change scheduling parameters? */
+		/*
+		 * Can the current process change scheduling parameters for
+		 * the target process?
+		 */
 		error = mac_proc_check_sched(curp, proc);
 		if (error) 	return error;
 	}
 #endif
-
-	// on macOS tasks can only set and clear their own CPU limits
-	if ((action == PROC_POLICY_ACTION_APPLY || action == PROC_POLICY_ACTION_RESTORE)
-	     && proc != current_proc()) {
-		return (EPERM);
-	}
 
 	switch (action) {
 		case PROC_POLICY_ACTION_GET: 
@@ -286,12 +324,12 @@ handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t targ
 					cpuattr.ppattr_cpu_percentage, 
 					interval, 
 					cpuattr.ppattr_cpu_attr_deadline,
-					entitled); 
+					privileged);
 			break;
 
 		/* restore process to prior state */
 		case PROC_POLICY_ACTION_RESTORE:
-			error = proc_clear_task_ruse_cpu(proc->task, entitled);
+			error = proc_clear_task_ruse_cpu(proc->task, privileged);
 			break;
 
 		/* re-enable suspended monitor */
@@ -310,6 +348,78 @@ handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t targ
 	return(error);
 }
 
+#if CONFIG_EMBEDDED
+static int 
+handle_applifecycle(__unused int scope,
+                             int action,
+                    __unused int policy,
+                             int policy_subtype,
+                             user_addr_t attrp,
+                             proc_t proc,
+                             uint64_t target_threadid)
+{
+	int error = 0;
+	int state = 0;
+
+	switch(policy_subtype) {
+		case PROC_POLICY_APPLIFE_NONE:
+			error = 0;
+			break;
+
+		case PROC_POLICY_APPLIFE_STATE:
+			/* appstate is no longer supported */
+			error = ENOTSUP;
+			break;
+
+		case PROC_POLICY_APPLIFE_DEVSTATUS:
+#if CONFIG_MACF
+			/* ToDo - this should be a generic check, since we could potentially hang other behaviours here. */
+			error = mac_proc_check_suspend_resume(current_proc(), MAC_PROC_CHECK_HIBERNATE);
+			if (error) {
+				error = EPERM;
+				goto out;
+			}
+#endif
+#if CONFIG_MEMORYSTATUS
+			if (action == PROC_POLICY_ACTION_APPLY) {
+				/* Used as a freeze hint */
+				memorystatus_on_inactivity(proc);
+				
+				/* in future use devicestatus for pid_socketshutdown() */
+				error = 0;
+			} else 
+#endif
+			{
+				error = EINVAL;
+			}
+			break;
+
+		case PROC_POLICY_APPLIFE_PIDBIND:
+#if CONFIG_MACF
+			error = mac_proc_check_suspend_resume(current_proc(), MAC_PROC_CHECK_PIDBIND);
+			if (error) {
+				error = EPERM;
+				goto out;
+			}
+#endif
+			error = copyin((user_addr_t)attrp, (int  *)&state, sizeof(int));
+			if (error != 0)
+				goto out;
+			if (action == PROC_POLICY_ACTION_APPLY) {
+				/* bind the thread in target_thread in current process to target_proc */
+				error = proc_lf_pidbind(current_task(), target_threadid, proc->task, state);
+			 } else
+				error = EINVAL;
+			break;
+		default:
+			error = EINVAL;
+			break;	
+	}
+
+out:
+	return(error);
+}
+#endif /* CONFIG_EMBEDDED */
 
 static int
 handle_apptype(         int scope,
@@ -499,7 +609,7 @@ proc_get_originatorbgstate(uint32_t *is_backgrounded)
 {
 	uint32_t bgstate;
 	proc_t p = current_proc();
-	uint32_t flagsp;
+	uint32_t flagsp = 0;
 	kern_return_t kr;
 	pid_t pid;
 	int ret;

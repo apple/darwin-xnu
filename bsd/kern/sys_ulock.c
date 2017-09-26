@@ -131,7 +131,6 @@ typedef struct ull {
 static const bool ull_debug = false;
 
 extern void ulock_initialize(void);
-extern void kdp_ulock_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
 
 #define ULL_MUST_EXIST	0x0001
 static ull_t *ull_get(ulk_t *, uint32_t);
@@ -141,7 +140,6 @@ static thread_t ull_promote_owner_locked(ull_t* ull, thread_t thread);
 
 #if DEVELOPMENT || DEBUG
 static int ull_simulate_copyin_fault = 0;
-static int ull_panic_on_corruption = 0;
 
 static void
 ull_dump(ull_t *ull)
@@ -210,13 +208,6 @@ ulock_initialize(void)
 	                 0, "ulocks");
 
 	zone_change(ull_zone, Z_NOENCRYPT, TRUE);
-
-#if DEVELOPMENT || DEBUG
-	if (!PE_parse_boot_argn("ulock_panic_on_corruption",
-			&ull_panic_on_corruption, sizeof(ull_panic_on_corruption))) {
-		ull_panic_on_corruption = 0;
-	}
-#endif
 }
 
 #if DEVELOPMENT || DEBUG
@@ -282,7 +273,7 @@ ull_free(ull_t *ull)
 {
 	assert(ull->ull_owner == THREAD_NULL);
 
-	lck_mtx_assert(&ull->ull_lock, LCK_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&ull->ull_lock, LCK_ASSERT_NOTOWNED);
 
 	lck_mtx_destroy(&ull->ull_lock, ull_lck_grp);
 
@@ -501,17 +492,6 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 
 		/* HACK: don't bail on MACH_PORT_DEAD, to avoid blowing up the no-tsd pthread lock */
 		if (owner_name != MACH_PORT_DEAD && owner_thread == THREAD_NULL) {
-#if DEBUG || DEVELOPMENT
-			if (ull_panic_on_corruption) {
-				if (flags & ULF_NO_ERRNO) {
-					// ULF_NO_ERRNO is used by libplatform ulocks, but not libdispatch ones.
-					// Don't panic on libdispatch ulock corruptions; the userspace likely
-					// mismanaged a dispatch queue.
-					panic("ulock_wait: ulock is corrupted; value=0x%x, ull=%p",
-							(uint32_t)(args->value), ull);
-				}
-			}
-#endif
 			/*
 			 * Translation failed - even though the lock value is up to date,
 			 * whatever was stored in the lock wasn't actually a thread port.
@@ -733,7 +713,7 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 	} else {
 		/*
 		 * TODO: WAITQ_SELECT_MAX_PRI forces a linear scan of the (hashed) global waitq.
-		 * Move to a ulock-private, priority sorted waitq to avoid that.
+		 * Move to a ulock-private, priority sorted waitq (i.e. SYNC_POLICY_FIXED_PRIORITY) to avoid that.
 		 *
 		 * TODO: 'owner is not current_thread (or null)' likely means we can avoid this wakeup
 		 * <rdar://problem/25487001>

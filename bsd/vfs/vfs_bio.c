@@ -132,6 +132,8 @@ static buf_t	buf_create_shadow_internal(buf_t bp, boolean_t force_copy,
 
 int  bdwrite_internal(buf_t, int);
 
+extern void disk_conditioner_delay(buf_t, int, int, uint64_t);
+
 /* zone allocated buffer headers */
 static void	bufzoneinit(void);
 static void	bcleanbuf_thread_init(void);
@@ -491,10 +493,16 @@ bufattr_markmeta(bufattr_t bap) {
 }
 
 int
+#if !CONFIG_EMBEDDED
 bufattr_delayidlesleep(bufattr_t bap) 
+#else /* !CONFIG_EMBEDDED */
+bufattr_delayidlesleep(__unused bufattr_t bap) 
+#endif /* !CONFIG_EMBEDDED */
 {
+#if !CONFIG_EMBEDDED
 	if ( (bap->ba_flags & BA_DELAYIDLESLEEP) )
 		return 1;
+#endif /* !CONFIG_EMBEDDED */
 	return 0;
 }
 
@@ -2629,12 +2637,13 @@ buf_brelse(buf_t bp)
 
 		if (upl == NULL) {
 		        if ( !ISSET(bp->b_flags, B_INVAL)) {
-				kret = ubc_create_upl(bp->b_vp, 
+				kret = ubc_create_upl_kernel(bp->b_vp,
 						      ubc_blktooff(bp->b_vp, bp->b_lblkno),
 						      bp->b_bufsize, 
 						      &upl,
 						      NULL,
-						      UPL_PRECIOUS);
+						      UPL_PRECIOUS,
+						      VM_KERN_MEMORY_FILE);
 
 				if (kret != KERN_SUCCESS)
 				        panic("brelse: Failed to create UPL");
@@ -3034,12 +3043,13 @@ start:
 			case BLK_READ:
 				upl_flags |= UPL_PRECIOUS;
 			        if (UBCINFOEXISTS(bp->b_vp) && bp->b_bufsize) {
-					kret = ubc_create_upl(vp,
+					kret = ubc_create_upl_kernel(vp,
 							      ubc_blktooff(vp, bp->b_lblkno), 
 							      bp->b_bufsize, 
 							      &upl, 
 							      &pl,
-							      upl_flags);
+							      upl_flags,
+							      VM_KERN_MEMORY_FILE);
 					if (kret != KERN_SUCCESS)
 					        panic("Failed to create UPL");
 
@@ -3183,12 +3193,13 @@ start:
 			f_offset = ubc_blktooff(vp, blkno);
 
 			upl_flags |= UPL_PRECIOUS;
-			kret = ubc_create_upl(vp,
+			kret = ubc_create_upl_kernel(vp,
 					      f_offset,
 					      bp->b_bufsize, 
 					      &upl,
 					      &pl,
-					      upl_flags);
+					      upl_flags,
+					      VM_KERN_MEMORY_FILE);
 
 			if (kret != KERN_SUCCESS)
 				panic("Failed to create UPL");
@@ -3968,6 +3979,8 @@ buf_biodone(buf_t bp)
 {
 	mount_t mp;
 	struct bufattr *bap;
+	struct timeval real_elapsed;
+	uint64_t real_elapsed_usec = 0;
 	
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 387)) | DBG_FUNC_START,
 		     bp, bp->b_datap, bp->b_flags, 0, 0);
@@ -4034,6 +4047,11 @@ buf_biodone(buf_t bp)
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
 		                          buf_kernel_addrperm_addr(bp), (uintptr_t)VM_KERNEL_ADDRPERM(bp->b_vp), bp->b_resid, bp->b_error, 0);
         }
+
+	microuptime(&real_elapsed);
+	timevalsub(&real_elapsed, &bp->b_timestamp_tv);
+	real_elapsed_usec = real_elapsed.tv_sec * USEC_PER_SEC + real_elapsed.tv_usec;
+	disk_conditioner_delay(bp, 1, bp->b_bcount, real_elapsed_usec);
 
 	/*
 	 * I/O was done, so don't believe
@@ -4484,12 +4502,13 @@ brecover_data(buf_t bp)
 		upl_flags |= UPL_WILL_MODIFY;
 	}
 		
-	kret = ubc_create_upl(vp,
+	kret = ubc_create_upl_kernel(vp,
 			      ubc_blktooff(vp, bp->b_lblkno), 
 			      bp->b_bufsize, 
 			      &upl, 
 			      &pl,
-			      upl_flags);
+			      upl_flags,
+			      VM_KERN_MEMORY_FILE);
 	if (kret != KERN_SUCCESS)
 	        panic("Failed to create UPL");
 

@@ -35,6 +35,7 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
+
 __BEGIN_DECLS
 
 #ifdef __APPLE_API_UNSTABLE
@@ -192,6 +193,7 @@ extern void kernel_debug_enter(
 #define DBG_WORKQUEUE   9
 #define DBG_CORESTORAGE 10
 #define DBG_CG          11
+#define DBG_MONOTONIC   12
 #define DBG_MISC        20
 #define DBG_SECURITY    30
 #define DBG_DYLD        31
@@ -354,37 +356,45 @@ extern void kdebug_reset(void);
 #endif /* XNU_KERNEL_PRIVATE */
 
 /* **** The Kernel Debug Sub Classes for Mach (DBG_MACH) **** */
-#define	DBG_MACH_EXCP_KTRAP_x86	0x02	/* Kernel Traps on x86 */
-#define	DBG_MACH_EXCP_DFLT	0x03	/* Data Translation Fault */
-#define	DBG_MACH_EXCP_IFLT	0x04	/* Inst Translation Fault */
-#define	DBG_MACH_EXCP_INTR	0x05	/* Interrupts */
-#define	DBG_MACH_EXCP_ALNG	0x06	/* Alignment Exception */
-#define	DBG_MACH_EXCP_UTRAP_x86	0x07	/* User Traps on x86 */
-#define	DBG_MACH_EXCP_FP	0x08	/* FP Unavail */
-#define	DBG_MACH_EXCP_DECI	0x09	/* Decrementer Interrupt */
-#define	DBG_MACH_CHUD		0x0A	/* deprecated name */
-#define	DBG_MACH_SIGNPOST	0x0A	/* kernel signposts */
-#define	DBG_MACH_EXCP_SC	0x0C	/* System Calls */
-#define	DBG_MACH_EXCP_TRACE	0x0D	/* Trace exception */
-#define	DBG_MACH_EXCP_EMUL	0x0E	/* Instruction emulated */
-#define	DBG_MACH_IHDLR		0x10	/* Interrupt Handlers */
-#define	DBG_MACH_IPC		0x20	/* Inter Process Comm */
-#define DBG_MACH_RESOURCE       0x25    /* tracing limits, etc */
-#define DBG_MACH_VM             0x30    /* Virtual Memory */
-#define DBG_MACH_LEAKS          0x31    /* alloc/free */
-#define DBG_MACH_WORKINGSET     0x32    /* private subclass for working set related debugging */
-#define DBG_MACH_SCHED          0x40    /* Scheduler */
-#define DBG_MACH_MSGID_INVALID  0x50    /* Messages - invalid */
-#define DBG_MACH_LOCKS		0x60	/* new lock APIs */
-#define DBG_MACH_PMAP		0x70	/* pmap */
-#define DBG_MACH_CLOCK		0x80	/* clock */
-#define DBG_MACH_MP		0x90	/* MP related */
-#define DBG_MACH_VM_PRESSURE	0xA0	/* Memory Pressure Events */
-#define DBG_MACH_STACKSHOT	0xA1	/* Stackshot/Microstackshot subsystem */
-#define DBG_MACH_SFI		0xA2	/* Selective Forced Idle (SFI) */
-#define DBG_MACH_ENERGY_PERF	0xA3 /* Energy/performance resource stats */
-#define DBG_MACH_SYSDIAGNOSE	0xA4	/* sysdiagnose keychord */
-#define DBG_MACH_ZALLOC 	0xA5 	/* Zone allocator */
+#define DBG_MACH_EXCP_KTRAP_x86 0x02 /* Kernel Traps on x86 */
+#define DBG_MACH_EXCP_DFLT      0x03 /* Data Translation Fault */
+#define DBG_MACH_EXCP_IFLT      0x04 /* Inst Translation Fault */
+#define DBG_MACH_EXCP_INTR      0x05 /* Interrupts */
+#define DBG_MACH_EXCP_ALNG      0x06 /* Alignment Exception */
+#define DBG_MACH_EXCP_UTRAP_x86 0x07 /* User Traps on x86 */
+#define DBG_MACH_EXCP_FP        0x08 /* FP Unavail */
+#define DBG_MACH_EXCP_DECI      0x09 /* Decrementer Interrupt */
+#define DBG_MACH_CHUD           0x0A /* deprecated name */
+#define DBG_MACH_SIGNPOST       0x0A /* kernel signposts */
+#define DBG_MACH_EXCP_SC        0x0C /* System Calls */
+#define DBG_MACH_EXCP_TRACE     0x0D /* Trace exception */
+#define DBG_MACH_EXCP_EMUL      0x0E /* Instruction emulated */
+#define DBG_MACH_IHDLR          0x10 /* Interrupt Handlers */
+#define DBG_MACH_IPC            0x20 /* Inter Process Comm */
+#define DBG_MACH_RESOURCE       0x25 /* tracing limits, etc */
+#define DBG_MACH_VM             0x30 /* Virtual Memory */
+#define DBG_MACH_LEAKS          0x31 /* alloc/free */
+#define DBG_MACH_WORKINGSET     0x32 /* private subclass for working set related debugging */
+#define DBG_MACH_SCHED          0x40 /* Scheduler */
+#define DBG_MACH_MSGID_INVALID  0x50 /* Messages - invalid */
+#define DBG_MACH_LOCKS          0x60 /* new lock APIs */
+#define DBG_MACH_PMAP           0x70 /* pmap */
+#define DBG_MACH_CLOCK          0x80 /* clock */
+#define DBG_MACH_MP             0x90 /* MP related */
+#define DBG_MACH_VM_PRESSURE    0xA0 /* Memory Pressure Events */
+#define DBG_MACH_STACKSHOT      0xA1 /* Stackshot/Microstackshot subsystem */
+#define DBG_MACH_SFI            0xA2 /* Selective Forced Idle (SFI) */
+#define DBG_MACH_ENERGY_PERF    0xA3 /* Energy/performance resource stats */
+#define DBG_MACH_SYSDIAGNOSE    0xA4 /* sysdiagnose */
+#define DBG_MACH_ZALLOC         0xA5 /* Zone allocator */
+#define DBG_MACH_THREAD_GROUP   0xA6 /* Thread groups */
+#define DBG_MACH_COALITION      0xA7 /* Coalitions */
+
+/* Interrupt type bits for DBG_MACH_EXCP_INTR */
+#define DBG_INTR_TYPE_UNKNOWN   0x0     /* default/unknown interrupt */
+#define DBG_INTR_TYPE_IPI       0x1     /* interprocessor interrupt */
+#define DBG_INTR_TYPE_TIMER     0x2     /* timer interrupt */
+#define DBG_INTR_TYPE_OTHER     0x3     /* other (usually external) interrupt */
 
 /* Codes for Scheduler (DBG_MACH_SCHED) */
 #define MACH_SCHED              0x0     /* Scheduler */
@@ -399,8 +409,8 @@ extern void kdebug_reset(void);
 #define MACH_IDLE               0x9	/* processor idling */
 #define MACH_STACK_DEPTH        0xa	/* stack depth at switch */
 #define MACH_MOVED              0xb	/* did not use original scheduling decision */
-/* unused                       0xc	*/
-/* unused                       0xd	*/
+#define MACH_PSET_LOAD_AVERAGE  0xc
+#define MACH_AMP_DEBUG          0xd
 #define MACH_FAILSAFE           0xe	/* tripped fixed-pri/RT failsafe */
 #define MACH_BLOCK              0xf	/* thread block */
 #define MACH_WAIT		0x10	/* thread wait assertion */
@@ -433,6 +443,10 @@ extern void kdebug_reset(void);
 #define MACH_SCHED_LOAD            0x2d /* load update */
 #define MACH_REC_CORES_FAILSAFE    0x2e /* recommended processor failsafe kicked in */
 #define MACH_SCHED_QUANTUM_EXPIRED 0x2f /* thread quantum expired */
+#define MACH_EXEC_PROMOTE          0x30 /* Thread promoted by exec boost */
+#define MACH_EXEC_DEMOTE           0x31 /* Thread demoted from exec boost */
+#define MACH_AMP_SIGNAL_SPILL      0x32 /* AMP spill signal sent to cpuid */
+#define MACH_AMP_STEAL             0x33 /* AMP thread stolen or spilled */
 
 /* Variants for MACH_MULTIQ_DEQUEUE */
 #define MACH_MULTIQ_BOUND     1
@@ -465,6 +479,21 @@ extern void kdebug_reset(void);
 #define MACH_IPC_KMSG_INFO			0xa	/* Send/Receive info for a kmsg */
 #define MACH_IPC_KMSG_LINK			0xb	/* link a kernel kmsg pointer to user mach_msg_header_t */
 
+/* Codes for thread groups (DBG_MACH_THREAD_GROUP) */
+#define MACH_THREAD_GROUP_NEW           0x0
+#define MACH_THREAD_GROUP_FREE          0x1
+#define MACH_THREAD_GROUP_SET           0x2
+#define MACH_THREAD_GROUP_NAME          0x3
+#define MACH_THREAD_GROUP_NAME_FREE     0x4
+#define MACH_THREAD_GROUP_FLAGS         0x5
+
+/* Codes for coalitions (DBG_MACH_COALITION) */
+#define	MACH_COALITION_NEW                      0x0
+#define	MACH_COALITION_FREE                     0x1
+#define	MACH_COALITION_ADOPT                    0x2
+#define	MACH_COALITION_REMOVE                   0x3
+#define	MACH_COALITION_THREAD_GROUP_SET         0x4
+
 /* Codes for pmap (DBG_MACH_PMAP) */
 #define PMAP__CREATE		0x0
 #define PMAP__DESTROY		0x1
@@ -477,23 +506,26 @@ extern void kdebug_reset(void);
 #define PMAP__FLUSH_TLBS	0x8
 #define PMAP__UPDATE_INTERRUPT	0x9
 #define PMAP__ATTRIBUTE_CLEAR	0xa
-#define PMAP__REUSABLE		0xb
+#define PMAP__REUSABLE		0xb	/* This appears to be unused */
 #define PMAP__QUERY_RESIDENT	0xc
 #define PMAP__FLUSH_KERN_TLBS	0xd
 #define PMAP__FLUSH_DELAYED_TLBS	0xe
 #define PMAP__FLUSH_TLBS_TO	0xf
 #define PMAP__FLUSH_EPT 	0x10
+#define PMAP__FAST_FAULT	0x11
 
 /* Codes for clock (DBG_MACH_CLOCK) */
 #define	MACH_EPOCH_CHANGE	0x0	/* wake epoch change */
-
 
 /* Codes for Stackshot/Microstackshot (DBG_MACH_STACKSHOT) */
 #define MICROSTACKSHOT_RECORD	0x0
 #define MICROSTACKSHOT_GATHER	0x1
 
-/* Codes for sysdiagnose */
-#define SYSDIAGNOSE_NOTIFY_USER	0x0
+/* Codes for sysdiagnose (DBG_MACH_SYSDIAGNOSE) */
+#define SYSDIAGNOSE_NOTIFY_USER 0x0
+#define SYSDIAGNOSE_FULL        0x1
+#define SYSDIAGNOSE_STACKSHOT   0x2
+#define SYSDIAGNOSE_TAILSPIN    0x3
 
 /* Codes for Selective Forced Idle (DBG_MACH_SFI) */
 #define SFI_SET_WINDOW			0x0
@@ -597,35 +629,37 @@ extern void kdebug_reset(void);
 #define DBG_IOGRAPHICS		50	/* Graphics */
 #define DBG_HIBERNATE		51	/* hibernation related events */
 #define DBG_IOTHUNDERBOLT	52	/* Thunderbolt */
-
+#define DBG_BOOTER		53	/* booter related events */
 
 /* Backwards compatibility */
 #define	DBG_IOPOINTING		DBG_IOHID			/* OBSOLETE: Use DBG_IOHID instead */
 #define DBG_IODISK			DBG_IOSTORAGE		/* OBSOLETE: Use DBG_IOSTORAGE instead */
 
 /* **** The Kernel Debug Sub Classes for Device Drivers (DBG_DRIVERS) **** */
-#define DBG_DRVSTORAGE		1	/* Storage layers */
-#define	DBG_DRVNETWORK		2	/* Network layers */
-#define	DBG_DRVKEYBOARD		3	/* Keyboard */
-#define	DBG_DRVHID		4	/* HID Devices */
-#define	DBG_DRVAUDIO		5	/* Audio */
-#define	DBG_DRVSERIAL		7	/* Serial */
-#define DBG_DRVSAM		8	/* SCSI Architecture Model layers */
-#define DBG_DRVPARALLELATA  	9	/* Parallel ATA */
-#define DBG_DRVPARALLELSCSI	10	/* Parallel SCSI */
-#define DBG_DRVSATA		11	/* Serial ATA */
-#define DBG_DRVSAS		12	/* SAS */
-#define DBG_DRVFIBRECHANNEL	13	/* FiberChannel */
-#define DBG_DRVUSB		14	/* USB */
-#define DBG_DRVBLUETOOTH	15	/* Bluetooth */
-#define DBG_DRVFIREWIRE		16	/* FireWire */
-#define DBG_DRVINFINIBAND	17	/* Infiniband */
-#define DBG_DRVGRAPHICS		18  	/* Graphics */
-#define DBG_DRVSD		19 	/* Secure Digital */
-#define DBG_DRVNAND		20	/* NAND drivers and layers */
-#define DBG_SSD			21	/* SSD */
-#define DBG_DRVSPI		22	/* SPI */
-#define DBG_DRVWLAN_802_11	23	/* WLAN 802.11 */
+#define DBG_DRVSTORAGE       1 /* Storage layers */
+#define DBG_DRVNETWORK       2 /* Network layers */
+#define DBG_DRVKEYBOARD      3 /* Keyboard */
+#define DBG_DRVHID           4 /* HID Devices */
+#define DBG_DRVAUDIO         5 /* Audio */
+#define DBG_DRVSERIAL        7 /* Serial */
+#define DBG_DRVSAM           8 /* SCSI Architecture Model layers */
+#define DBG_DRVPARALLELATA   9 /* Parallel ATA */
+#define DBG_DRVPARALLELSCSI 10 /* Parallel SCSI */
+#define DBG_DRVSATA         11 /* Serial ATA */
+#define DBG_DRVSAS          12 /* SAS */
+#define DBG_DRVFIBRECHANNEL 13 /* FiberChannel */
+#define DBG_DRVUSB          14 /* USB */
+#define DBG_DRVBLUETOOTH    15 /* Bluetooth */
+#define DBG_DRVFIREWIRE     16 /* FireWire */
+#define DBG_DRVINFINIBAND   17 /* Infiniband */
+#define DBG_DRVGRAPHICS     18 /* Graphics */
+#define DBG_DRVSD           19 /* Secure Digital */
+#define DBG_DRVNAND         20 /* NAND drivers and layers */
+#define DBG_SSD             21 /* SSD */
+#define DBG_DRVSPI          22 /* SPI */
+#define DBG_DRVWLAN_802_11  23 /* WLAN 802.11 */
+#define DBG_DRVSSM          24 /* System State Manager(AppleSSM) */
+#define DBG_DRVSMC          25 /* System Management Controller */
 
 /* Backwards compatibility */
 #define	DBG_DRVPOINTING		DBG_DRVHID	/* OBSOLETE: Use DBG_DRVHID instead */
@@ -637,6 +671,7 @@ extern void kdebug_reset(void);
 #define DBG_DLIL_IF_MOD 3       /* DLIL Interface Module */
 #define DBG_DLIL_PR_FLT 4       /* DLIL Protocol Filter */
 #define DBG_DLIL_IF_FLT 5       /* DLIL Interface FIlter */
+
 
 /* The Kernel Debug Sub Classes for File System (DBG_FSYSTEM) */
 #define DBG_FSRW      0x1     /* reads and writes to the filesystem */
@@ -670,12 +705,12 @@ extern void kdebug_reset(void);
 /* The Kernel Debug Sub Classes for BSD */
 #define DBG_BSD_PROC              0x01 /* process/signals related */
 #define DBG_BSD_MEMSTAT           0x02 /* memorystatus / jetsam operations */
+#define DBG_BSD_KEVENT            0x03 /* kqueue / kevent related */
 #define DBG_BSD_EXCP_SC           0x0C /* System Calls */
 #define DBG_BSD_AIO               0x0D /* aio (POSIX async IO) */
 #define DBG_BSD_SC_EXTENDED_INFO  0x0E /* System Calls, extended info */
 #define DBG_BSD_SC_EXTENDED_INFO2 0x0F /* System Calls, extended info */
 #define DBG_BSD_KDEBUG_TEST       0xFF /* for testing kdebug */
-
 
 /* The Codes for BSD subcode class DBG_BSD_PROC */
 #define BSD_PROC_EXIT              1  /* process exit */
@@ -701,35 +736,65 @@ extern void kdebug_reset(void);
 #define BSD_MEMSTAT_DO_KILL         13  /* memorystatus kills */
 #endif /* PRIVATE */
 
+/* Codes for BSD subcode class DBG_BSD_KEVENT */
+#define BSD_KEVENT_KQ_PROCESS_BEGIN   1
+#define BSD_KEVENT_KQ_PROCESS_END     2
+#define BSD_KEVENT_KQWQ_PROCESS_BEGIN 3
+#define BSD_KEVENT_KQWQ_PROCESS_END   4
+#define BSD_KEVENT_KQWQ_BIND          5
+#define BSD_KEVENT_KQWQ_UNBIND        6
+#define BSD_KEVENT_KQWQ_THREQUEST     7
+#define BSD_KEVENT_KQWL_PROCESS_BEGIN 8
+#define BSD_KEVENT_KQWL_PROCESS_END   9
+#define BSD_KEVENT_KQWL_THREQUEST     10
+#define BSD_KEVENT_KQWL_THADJUST      11
+#define BSD_KEVENT_KQ_REGISTER        12
+#define BSD_KEVENT_KQWQ_REGISTER      13
+#define BSD_KEVENT_KQWL_REGISTER      14
+#define BSD_KEVENT_KNOTE_ACTIVATE     15
+#define BSD_KEVENT_KQ_PROCESS         16
+#define BSD_KEVENT_KQWQ_PROCESS       17
+#define BSD_KEVENT_KQWL_PROCESS       18
+#define BSD_KEVENT_KQWL_BIND          19
+#define BSD_KEVENT_KQWL_UNBIND        20
+#define BSD_KEVENT_KNOTE_ENABLE       21
+
 /* The Kernel Debug Sub Classes for DBG_TRACE */
 #define DBG_TRACE_DATA      0
 #define DBG_TRACE_STRING    1
 #define	DBG_TRACE_INFO	    2
 
 /* The Kernel Debug events: */
-#define	TRACE_DATA_NEWTHREAD		(TRACEDBG_CODE(DBG_TRACE_DATA, 1))
-#define	TRACE_DATA_EXEC			(TRACEDBG_CODE(DBG_TRACE_DATA, 2))
-#define	TRACE_DATA_THREAD_TERMINATE	(TRACEDBG_CODE(DBG_TRACE_DATA, 3))
-#define TRACE_DATA_THREAD_TERMINATE_PID	(TRACEDBG_CODE(DBG_TRACE_DATA, 4))
-#define TRACE_STRING_GLOBAL		(TRACEDBG_CODE(DBG_TRACE_STRING, 0))
-#define	TRACE_STRING_NEWTHREAD		(TRACEDBG_CODE(DBG_TRACE_STRING, 1))
-#define	TRACE_STRING_EXEC		(TRACEDBG_CODE(DBG_TRACE_STRING, 2))
-#define TRACE_STRING_PROC_EXIT		(TRACEDBG_CODE(DBG_TRACE_STRING, 3))
-#define TRACE_STRING_THREADNAME		(TRACEDBG_CODE(DBG_TRACE_STRING, 4))
-#define TRACE_STRING_THREADNAME_PREV	(TRACEDBG_CODE(DBG_TRACE_STRING, 5))
-#define	TRACE_PANIC			(TRACEDBG_CODE(DBG_TRACE_INFO, 0))
-#define	TRACE_TIMESTAMPS		(TRACEDBG_CODE(DBG_TRACE_INFO, 1))
-#define	TRACE_LOST_EVENTS		(TRACEDBG_CODE(DBG_TRACE_INFO, 2))
-#define	TRACE_WRITING_EVENTS		(TRACEDBG_CODE(DBG_TRACE_INFO, 3))
-#define	TRACE_INFO_STRING		(TRACEDBG_CODE(DBG_TRACE_INFO, 4))
+#define TRACE_DATA_NEWTHREAD            (TRACEDBG_CODE(DBG_TRACE_DATA, 1))
+#define TRACE_DATA_EXEC                 (TRACEDBG_CODE(DBG_TRACE_DATA, 2))
+#define TRACE_DATA_THREAD_TERMINATE     (TRACEDBG_CODE(DBG_TRACE_DATA, 3))
+#define TRACE_DATA_THREAD_TERMINATE_PID (TRACEDBG_CODE(DBG_TRACE_DATA, 4))
+#define TRACE_STRING_GLOBAL             (TRACEDBG_CODE(DBG_TRACE_STRING, 0))
+#define TRACE_STRING_NEWTHREAD          (TRACEDBG_CODE(DBG_TRACE_STRING, 1))
+#define TRACE_STRING_EXEC               (TRACEDBG_CODE(DBG_TRACE_STRING, 2))
+#define TRACE_STRING_PROC_EXIT          (TRACEDBG_CODE(DBG_TRACE_STRING, 3))
+#define TRACE_STRING_THREADNAME         (TRACEDBG_CODE(DBG_TRACE_STRING, 4))
+#define TRACE_STRING_THREADNAME_PREV    (TRACEDBG_CODE(DBG_TRACE_STRING, 5))
+#define TRACE_PANIC                     (TRACEDBG_CODE(DBG_TRACE_INFO, 0))
+#define TRACE_TIMESTAMPS                (TRACEDBG_CODE(DBG_TRACE_INFO, 1))
+#define TRACE_LOST_EVENTS               (TRACEDBG_CODE(DBG_TRACE_INFO, 2))
+#define TRACE_WRITING_EVENTS            (TRACEDBG_CODE(DBG_TRACE_INFO, 3))
+#define TRACE_INFO_STRING               (TRACEDBG_CODE(DBG_TRACE_INFO, 4))
+#define TRACE_RETROGRADE_EVENTS         (TRACEDBG_CODE(DBG_TRACE_INFO, 5))
 
 /* The Kernel Debug Sub Classes for DBG_CORESTORAGE */
 #define DBG_CS_IO	0
 
 /* The Kernel Debug Sub Classes for DBG_SECURITY */
-#define	DBG_SEC_KERNEL	0	/* raw entropy collected by the kernel */
+#define DBG_SEC_KERNEL  0 /* raw entropy collected by the kernel */
+#define DBG_SEC_SANDBOX 1
 
 /* Sub-class codes for CoreGraphics (DBG_CG) are defined in its component. */
+
+/* The Kernel Debug Sub Classes for DBG_MONOTONIC */
+#define DBG_MT_INSTRS_CYCLES 1
+#define DBG_MT_TMPTH 0xfe
+#define DBG_MT_TMPCPU 0xff
 
 /* The Kernel Debug Sub Classes for DBG_MISC */
 #define DBG_EVENT	0x10
@@ -782,6 +847,7 @@ extern void kdebug_reset(void);
 #define OPEN_THROTTLE_WINDOW	0x1
 #define PROCESS_THROTTLED	0x2
 #define IO_THROTTLE_DISABLE	0x3
+#define IO_TIER_UPL_MISMATCH    0x4
 
 
 /* Subclasses for MACH Importance Policies (DBG_IMPORTANCE) */
@@ -796,6 +862,7 @@ extern void kdebug_reset(void);
 #define IMP_USYNCH_QOS_OVERRIDE 0x1A    /* Userspace synchronization applied QoS override to resource owning thread */
 #define IMP_DONOR_CHANGE        0x1B    /* The iit_donor bit changed */
 #define IMP_MAIN_THREAD_QOS     0x1C    /* The task's main thread QoS was set */
+#define IMP_SYNC_IPC_QOS        0x1D    /* Sync IPC QOS override */
 /* DBG_IMPORTANCE subclasses  0x20 - 0x3F reserved for task policy flavors */
 
 /* Codes for IMP_ASSERTION */
@@ -822,6 +889,12 @@ extern void kdebug_reset(void);
 #define IMP_DONOR_UPDATE_LIVE_DONOR_STATE	0x0
 #define IMP_DONOR_INIT_DONOR_STATE		0x1
 
+/* Code for IMP_SYNC_IPC_QOS */
+#define IMP_SYNC_IPC_QOS_APPLIED                0x0
+#define IMP_SYNC_IPC_QOS_REMOVED                0x1
+#define IMP_SYNC_IPC_QOS_OVERFLOW               0x2
+#define IMP_SYNC_IPC_QOS_UNDERFLOW              0x3
+
 /* Subclasses for MACH Bank Voucher Attribute Manager (DBG_BANK) */
 #define BANK_ACCOUNT_INFO		0x10	/* Trace points related to bank account struct */
 #define BANK_TASK_INFO			0x11	/* Trace points related to bank task struct */
@@ -834,6 +907,7 @@ extern void kdebug_reset(void);
 /* Codes for BANK_ACCOUNT_INFO */
 #define BANK_SETTLE_CPU_TIME		0x1	/* Bank ledger(chit) rolled up to tasks. */
 #define BANK_SECURE_ORIGINATOR_CHANGED	0x2	/* Secure Originator changed. */
+#define BANK_SETTLE_ENERGY		0x3	/* Bank ledger(energy field) rolled up to tasks. */
 
 /* Codes for ATM_SUBAID_INFO */
 #define ATM_MIN_CALLED				0x1
@@ -848,7 +922,8 @@ extern void kdebug_reset(void);
 #define ATM_VALUE_DIFF_MAILBOX			0x2
 
 /* Kernel Debug Sub Classes for daemons (DBG_DAEMON) */
-#define DBG_DAEMON_COREDUET			0x1
+#define DBG_DAEMON_COREDUET 0x1
+#define DBG_DAEMON_POWERD   0x2
 
 /* Subclasses for the user space allocator */
 #define DBG_UMALLOC_EXTERNAL			0x1
@@ -893,6 +968,7 @@ extern void kdebug_reset(void);
 
 /* Kernel Debug Macros for specific daemons */
 #define COREDUETDBG_CODE(code) DAEMONDBG_CODE(DBG_DAEMON_COREDUET, code)
+#define POWERDDBG_CODE(code) DAEMONDBG_CODE(DBG_DAEMON_POWERD, code)
 
 /*
  * To use kdebug in the kernel:
@@ -1295,18 +1371,33 @@ extern void kernel_debug_disable(void);
 
 struct proc;
 
-extern boolean_t kdebug_debugid_enabled(uint32_t debugid);
-extern uint32_t kdebug_commpage_state(void);
-extern void kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp, boolean_t lookup);
-extern void kdbg_trace_data(struct proc *proc, long *arg_pid);
+/*
+ * Returns false if the debugid is disabled by filters, and true if the
+ * debugid is allowed to be traced.  A debugid may not be traced if the
+ * typefilter disables its class and subclass, it's outside a range
+ * check, or if it's not an allowed debugid in a value check.  Trace
+ * system events bypass this check.
+ */
+boolean_t kdebug_debugid_enabled(uint32_t debugid);
 
-extern void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4);
+/*
+ * Returns true only if the debugid is explicitly enabled by filters.  Returns
+ * false otherwise, including when no filters are active.
+ */
+boolean_t kdebug_debugid_explicitly_enabled(uint32_t debugid);
 
-extern void kdbg_dump_trace_to_file(const char *);
-void kdebug_boot_trace(unsigned int n_events, char *filterdesc);
-void kdebug_trace_start(unsigned int n_events, const char *filterdesc, boolean_t need_map);
+uint32_t kdebug_commpage_state(void);
+void kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp, boolean_t lookup);
+void kdbg_trace_data(struct proc *proc, long *arg_pid, long *arg_uniqueid);
+
+void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4);
+
+void kdbg_dump_trace_to_file(const char *);
+void kdebug_init(unsigned int n_events, char *filterdesc);
+void kdebug_trace_start(unsigned int n_events, const char *filterdesc, boolean_t at_wake);
+void kdebug_free_early_buf(void);
 struct task;
-extern void kdbg_get_task_name(char*, int, struct task *task);
+void kdbg_get_task_name(char*, int, struct task *task);
 boolean_t disable_wrap(uint32_t *old_slowcheck, uint32_t *old_flags);
 void enable_wrap(uint32_t old_slowcheck, boolean_t lostevents);
 void release_storage_unit(int cpu,  uint32_t storage_unit);
@@ -1626,8 +1717,10 @@ int kdbg_write_v3_chunk_to_fd(uint32_t tag, uint32_t sub_tag, uint64_t length, v
 #define VFS_LOOKUP	(FSDBG_CODE(DBG_FSRW,36))
 #define VFS_LOOKUP_DONE	(FSDBG_CODE(DBG_FSRW,39))
 
+#if !CONFIG_EMBEDDED
 #if defined(XNU_KERNEL_PRIVATE) && (DEVELOPMENT || DEBUG)
 #define KDEBUG_MOJO_TRACE 1
+#endif
 #endif
 
 #endif /* __APPLE_API_PRIVATE */

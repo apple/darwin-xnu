@@ -141,11 +141,9 @@ struct IODMACommandInternal
     UInt8  fDoubleBuffer;
     UInt8  fNewMD;
     UInt8  fLocalMapper;
-
-    vm_tag_t    fTag;
-#if IOTRACKING
-    IOTracking  fWireTracking;
-#endif /* IOTRACKING */
+    UInt8  fLocalMapperAllocValid;
+    UInt8  fIOVMAddrValid;
+    UInt8  fForceDoubleBuffer;
 
     vm_page_t fCopyPageAlloc;
     vm_page_t fCopyNext;
@@ -217,6 +215,8 @@ extern "C" struct timeval gIOLastWakeTime;
 
 extern clock_sec_t gIOConsoleLockTime;
 
+extern bool gCPUsRunning;
+
 extern OSSet * gIORemoveOnReadProperties;
 
 extern "C" void IOKitInitializeTime( void );
@@ -230,6 +230,7 @@ extern "C" OSString * IOCopyLogNameForPID(int pid);
 
 extern const OSSymbol * gIOCreateEFIDevicePathSymbol;
 extern "C" void IOSetKeyStoreData(IOMemoryDescriptor * data);
+extern "C" void IOSetAPFSKeyStoreData(IOMemoryDescriptor* data);
 #endif
 extern const  OSSymbol * gAKSGetKey;
 

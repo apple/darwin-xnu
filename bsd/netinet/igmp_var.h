@@ -273,10 +273,10 @@ struct igmp_ifinfo {
 };
 
 #define	IGI_LOCK_ASSERT_HELD(_igi)					\
-	lck_mtx_assert(&(_igi)->igi_lock, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&(_igi)->igi_lock, LCK_MTX_ASSERT_OWNED)
 
 #define	IGI_LOCK_ASSERT_NOTHELD(_igi)					\
-	lck_mtx_assert(&(_igi)->igi_lock, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&(_igi)->igi_lock, LCK_MTX_ASSERT_NOTOWNED)
 
 #define	IGI_LOCK(_igi)							\
 	lck_mtx_lock(&(_igi)->igi_lock)

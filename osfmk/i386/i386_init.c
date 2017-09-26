@@ -102,6 +102,13 @@
 #if DEBUG
 #include <machine/pal_routines.h>
 #endif
+
+#if MONOTONIC
+#include <kern/monotonic.h>
+#endif /* MONOTONIC */
+
+#include <san/kasan.h>
+
 #if DEBUG
 #define DBG(x...)       kprintf(x)
 #else
@@ -309,6 +316,47 @@ Idle_PTs_init(void)
 
 }
 
+extern void vstart_trap_handler;
+
+#define BOOT_TRAP_VECTOR(t)				\
+	[t] = {						\
+		(uintptr_t) &vstart_trap_handler,	\
+		KERNEL64_CS,				\
+		0,					\
+		ACC_P|ACC_PL_K|ACC_INTR_GATE,		\
+		0					\
+	},
+
+/* Recursive macro to iterate 0..31 */
+#define L0(x,n)	 x(n)
+#define L1(x,n)	 L0(x,n-1)     L0(x,n)
+#define L2(x,n)  L1(x,n-2)     L1(x,n)
+#define L3(x,n)  L2(x,n-4)     L2(x,n)
+#define L4(x,n)  L3(x,n-8)     L3(x,n)
+#define L5(x,n)  L4(x,n-16)    L4(x,n)
+#define FOR_0_TO_31(x) L5(x,31)
+
+/*
+ * Bootstrap IDT. Active only during early startup.
+ * Only the trap vectors are defined since interrupts are masked.
+ * All traps point to a common handler.
+ */
+struct fake_descriptor64 master_boot_idt64[IDTSZ]
+	__attribute__((section("__HIB,__desc")))
+	__attribute__((aligned(PAGE_SIZE))) = {
+	FOR_0_TO_31(BOOT_TRAP_VECTOR)
+};
+
+static void
+vstart_idt_init(void)
+{
+	x86_64_desc_register_t	vstart_idt = {
+					sizeof(master_boot_idt64),
+					master_boot_idt64 };
+	
+	fix_desc64(master_boot_idt64, 32);
+	lidt((void *)&vstart_idt);
+}
 
 /*
  * vstart() is called in the natural mode (64bit for K64, 32 for K32)
@@ -330,12 +378,18 @@ void
 vstart(vm_offset_t boot_args_start)
 {
 	boolean_t	is_boot_cpu = !(boot_args_start == 0);
-	int		cpu;
+	int		cpu = 0;
 	uint32_t	lphysfree;
 
 	postcode(VSTART_ENTRY);
 
 	if (is_boot_cpu) {
+		/*
+		 * Set-up temporary trap handlers during page-table set-up.
+		 */
+		vstart_idt_init();
+		postcode(VSTART_IDT_INIT);
+
 		/*
 		 * Get startup parameters.
 		 */
@@ -370,34 +424,49 @@ vstart(vm_offset_t boot_args_start)
 		    ml_static_ptovirt(boot_args_start);
 		DBG("i386_init(0x%lx) kernelBootArgs=%p\n",
 		    (unsigned long)boot_args_start, kernelBootArgs);
+
+#if KASAN
+		kasan_reserve_memory(kernelBootArgs);
+#endif
+
 		PE_init_platform(FALSE, kernelBootArgs);
 		postcode(PE_INIT_PLATFORM_D);
 
 		Idle_PTs_init();
 		postcode(VSTART_IDLE_PTS_INIT);
 
+#if KASAN
+		/* Init kasan and map whatever was stolen from physfree */
+		kasan_init();
+		kasan_notify_stolen((uintptr_t)ml_static_ptovirt((vm_offset_t)physfree));
+#endif
+
+#if MONOTONIC
+		mt_init();
+#endif /* MONOTONIC */
+
 		first_avail = (vm_offset_t)ID_MAP_VTOP(physfree);
 
-		cpu = 0;
 		cpu_data_alloc(TRUE);
+
+		cpu_desc_init(cpu_datap(0));
+		postcode(VSTART_CPU_DESC_INIT);
+		cpu_desc_load(cpu_datap(0));
+
+		postcode(VSTART_CPU_MODE_INIT);
+		cpu_syscall_init(cpu_datap(0)); /* cpu_syscall_init() will be
+						 * invoked on the APs
+						 * via i386_init_slave()
+						 */
 	} else {
 		/* Switch to kernel's page tables (from the Boot PTs) */
 		set_cr3_raw((uintptr_t)ID_MAP_VTOP(IdlePML4));
 		/* Find our logical cpu number */
 		cpu = lapic_to_cpu[(LAPIC_READ(ID)>>LAPIC_ID_SHIFT) & LAPIC_ID_MASK];
 		DBG("CPU: %d, GSBASE initial value: 0x%llx\n", cpu, rdmsr64(MSR_IA32_GS_BASE));
+		cpu_desc_load(cpu_datap(cpu));
 	}
 
-	postcode(VSTART_CPU_DESC_INIT);
-	if(is_boot_cpu)
-		cpu_desc_init64(cpu_datap(cpu));
-	cpu_desc_load64(cpu_datap(cpu));
-	postcode(VSTART_CPU_MODE_INIT);
-	if (is_boot_cpu)
-		cpu_mode_init(current_cpu_datap()); /* cpu_mode_init() will be
-						     * invoked on the APs
-						     * via i386_init_slave()
-						     */
 	postcode(VSTART_EXIT);
 	x86_init_wrapper(is_boot_cpu ? (uintptr_t) i386_init
 				     : (uintptr_t) i386_init_slave,
@@ -455,13 +524,23 @@ i386_init(void)
 		dgWork.dgFlags = 0;
 
 	serialmode = 0;
-	if(PE_parse_boot_argn("serial", &serialmode, sizeof (serialmode))) {
+	if (PE_parse_boot_argn("serial", &serialmode, sizeof(serialmode))) {
 		/* We want a serial keyboard and/or console */
 		kprintf("Serial mode specified: %08X\n", serialmode);
+		int force_sync = serialmode & SERIALMODE_SYNCDRAIN;
+		if (force_sync || PE_parse_boot_argn("drain_uart_sync", &force_sync, sizeof(force_sync))) {
+			if (force_sync) {
+				serialmode |= SERIALMODE_SYNCDRAIN;
+				kprintf(
+				    "WARNING: Forcing uart driver to output synchronously."
+				    "printf()s/IOLogs will impact kernel performance.\n"
+				    "You are advised to avoid using 'drain_uart_sync' boot-arg.\n");
+			}
+		}
 	}
-	if(serialmode & 1) {
+	if (serialmode & SERIALMODE_OUTPUT) {
 		(void)switch_to_serial_console();
-		disableConsoleOutput = FALSE;	/* Allow printfs to happen */
+		disableConsoleOutput = FALSE; /* Allow printfs to happen */
 	}
 
 	/* setup console output */
@@ -542,7 +621,7 @@ do_init_slave(boolean_t fast_restart)
   
 		assert(!ml_get_interrupts_enabled());
   
-		cpu_mode_init(current_cpu_datap());
+		cpu_syscall_init(current_cpu_datap());
 		pmap_cpu_init();
   
 #if CONFIG_MCA

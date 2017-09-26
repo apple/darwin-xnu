@@ -87,5 +87,7 @@ enum PMLogEnum {
     kPMLogDrvResponseDelay,         // 59   0x050700ec
     kPMLogPCIDevChangeStart,        // 60   0x050700f0
     kPMLogPCIDevChangeDone,         // 61   0x050700f4
+    kPMLogSleepWakeMessage,         // 62   0x050700f8
+    kPMLogDrvPSChangeDelay,         // 63   0x050700fc
     kIOPMlogLastEvent
 };

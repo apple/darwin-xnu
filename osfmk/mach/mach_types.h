@@ -89,6 +89,7 @@
 #include <mach/mach_voucher_types.h>
 #include <mach/processor_info.h>
 #include <mach/task_info.h>
+#include <mach/task_inspect.h>
 #include <mach/task_policy.h>
 #include <mach/task_special_ports.h>
 #include <mach/thread_info.h>

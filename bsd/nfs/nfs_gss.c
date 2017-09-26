@@ -629,7 +629,7 @@ nfs_gss_clnt_mnt_rele(struct nfsmount *nmp)
 	}
 }
 
-int nfs_root_steals_ctx = 1;
+int nfs_root_steals_ctx = 0;
 
 static int
 nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t plen, uint32_t nt)
@@ -1834,6 +1834,12 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp, uint32
 		cp->gss_clnt_token = NULL;
 		cp->gss_clnt_tokenlen = 0;
 		cp->gss_clnt_proc = RPCSEC_GSS_INIT;
+		/* Server's handle isn't valid. Don't reuse */
+		cp->gss_clnt_handle_len = 0;
+		if (cp->gss_clnt_handle != NULL) {
+			FREE(cp->gss_clnt_handle, M_TEMP);
+			cp->gss_clnt_handle = NULL;
+		}
 	}
 
 	NFS_GSS_DBG("Retrycnt = %d nm_etype.count = %d\n", retrycnt, nmp->nm_etype.count);
@@ -1879,10 +1885,7 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp, uint32
 		nt = cp->gss_clnt_prinnt;
 	} else if (nmp->nm_principal && IS_VALID_CRED(nmp->nm_mcred) && req->r_cred == nmp->nm_mcred) {
 		plen = (uint32_t)strlen(nmp->nm_principal);
-		MALLOC(principal, uint8_t *, plen, M_TEMP, M_WAITOK | M_ZERO);
-		if (principal == NULL)
-			return (ENOMEM);
-		bcopy(nmp->nm_principal, principal, plen);
+		principal = (uint8_t *)nmp->nm_principal;
 		cp->gss_clnt_prinnt = nt = GSSD_USER;
 	}
 	else if (nmp->nm_realm) {
@@ -1978,6 +1981,12 @@ skip:
 	    cp->gss_clnt_major != GSS_S_CONTINUE_NEEDED) {
 		NFS_GSS_DBG("Up call returned error\n");
 		nfs_gss_clnt_log_error(req, cp, major, minor);
+		/* Server's handle isn't valid. Don't reuse */
+		cp->gss_clnt_handle_len = 0;
+		if (cp->gss_clnt_handle != NULL) {
+			FREE(cp->gss_clnt_handle, M_TEMP);
+			cp->gss_clnt_handle = NULL;
+		}
 	}
 
 	if (lucidlen > 0) {
@@ -2045,6 +2054,12 @@ out:
 		FREE(cp->gss_clnt_token, M_TEMP);
 	cp->gss_clnt_token = NULL;
 	cp->gss_clnt_tokenlen = 0;
+	/* Server's handle isn't valid. Don't reuse */
+	cp->gss_clnt_handle_len = 0;
+	if (cp->gss_clnt_handle != NULL) {
+		FREE(cp->gss_clnt_handle, M_TEMP);
+		cp->gss_clnt_handle = NULL;
+	}
 	
 	NFS_GSS_DBG("Up call returned NFSERR_EAUTH");
 	return (NFSERR_EAUTH);
@@ -3728,18 +3743,18 @@ nfs_gss_mach_alloc_buffer(u_char *buf, uint32_t buflen, vm_map_copy_t *addr)
 
 	tbuflen = vm_map_round_page(buflen,
 				    vm_map_page_mask(ipc_kernel_map));
-	kr = vm_allocate(ipc_kernel_map, &kmem_buf, tbuflen, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_FILE));
+	kr = vm_allocate_kernel(ipc_kernel_map, &kmem_buf, tbuflen, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_FILE);
 	if (kr != 0) {
 		printf("nfs_gss_mach_alloc_buffer: vm_allocate failed\n");
 		return;
 	}
 
-	kr = vm_map_wire(ipc_kernel_map,
+	kr = vm_map_wire_kernel(ipc_kernel_map,
 			 vm_map_trunc_page(kmem_buf,
 					   vm_map_page_mask(ipc_kernel_map)),
 			 vm_map_round_page(kmem_buf + tbuflen,
 					   vm_map_page_mask(ipc_kernel_map)),
-		VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_FILE), FALSE);
+		VM_PROT_READ|VM_PROT_WRITE, VM_KERN_MEMORY_FILE, FALSE);
 	if (kr != 0) {
 		printf("nfs_gss_mach_alloc_buffer: vm_map_wire failed\n");
 		return;

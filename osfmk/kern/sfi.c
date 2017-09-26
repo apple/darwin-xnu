@@ -380,15 +380,14 @@ static void sfi_timer_global_off(
 
 	pset_unlock(pset);
 
-	processor = processor_list;
-	do {
-		if (needs_cause_ast_mask & (1U << processor->cpu_id)) {
-			if (processor == current_processor())
-				ast_on(AST_SFI);
-			else
-				cause_ast_check(processor);
+	for (int cpuid = lsb_first(needs_cause_ast_mask); cpuid >= 0; cpuid = lsb_next(needs_cause_ast_mask, cpuid)) {
+		processor = processor_array[cpuid];
+		if (processor == current_processor()) {
+			ast_on(AST_SFI);
+		} else {
+			cause_ast_check(processor);
 		}
-	} while ((processor = processor->processor_list) != NULL);
+	}
 
 	/* Re-arm timer if still enabled */
 	simple_lock(&sfi_lock);
@@ -915,7 +914,9 @@ static inline void _sfi_wait_cleanup(sched_call_t callback) {
 	simple_unlock(&sfi_lock);
 	splx(s);
 	assert((SFI_CLASS_UNSPECIFIED < current_sfi_wait_class) && (current_sfi_wait_class < MAX_SFI_CLASS_ID));
+#if !CONFIG_EMBEDDED	
 	ledger_credit(self->task->ledger, task_ledgers.sfi_wait_times[current_sfi_wait_class], sfi_wait_time);
+#endif /* !CONFIG_EMBEDDED */
 }
 
 /*

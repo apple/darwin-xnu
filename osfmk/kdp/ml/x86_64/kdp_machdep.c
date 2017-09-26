@@ -34,7 +34,6 @@
 #include <i386/trap.h>
 #include <i386/mp.h>
 #include <kdp/kdp_internal.h>
-#include <kdp/kdp_callout.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include <IOKit/IOPlatformExpert.h> /* for PE_halt_restart */
@@ -64,13 +63,10 @@ extern vm_map_t kernel_map;
 void		print_saved_state(void *);
 void		kdp_call(void);
 int		kdp_getc(void);
-boolean_t	kdp_call_kdb(void);
 void		kdp_getstate(x86_thread_state64_t *);
 void		kdp_setstate(x86_thread_state64_t *);
 void kdp_print_phys(int);
 unsigned machine_read64(addr64_t srcaddr, caddr_t dstaddr, uint32_t len);
-
-static void	kdp_callouts(kdp_event_t event);
 
 void
 kdp_exception(
@@ -285,18 +281,6 @@ kdp_panic(
     __asm__ volatile("hlt");	
 }
 
-
-void
-kdp_machine_reboot(void)
-{
-	printf("Attempting system restart...");
-	/* Call the platform specific restart*/
-	if (PE_halt_restart)
-		(*PE_halt_restart)(kPERestartCPU);
-	/* If we do reach this, give up */
-	halt_all_cpus(TRUE);
-}
-
 int
 kdp_intr_disbl(void)
 {
@@ -383,7 +367,8 @@ kdp_i386_trap(
     vm_offset_t		va
 )
 {
-    unsigned int exception, subcode = 0, code;
+    unsigned int exception, code, subcode = 0;
+    boolean_t prev_interrupts_state;
 
     if (trapno != T_INT3 && trapno != T_DEBUG) {
     	kprintf("Debugger: Unexpected kernel trap number: "
@@ -391,10 +376,10 @@ kdp_i386_trap(
 		trapno, saved_state->isf.rip, saved_state->cr2);
 	if (!kdp.is_conn)
 	    return FALSE;
-    }	
+    }
 
-    mp_kdp_enter();
-    kdp_callouts(KDP_EVENT_ENTER);
+    prev_interrupts_state = ml_set_interrupts_enabled(FALSE);
+    disable_preemption();
 
     if (saved_state->isf.rflags & EFL_TF) {
 	    enable_preemption_no_check();
@@ -468,14 +453,10 @@ kdp_i386_trap(
 	    saved_state = current_cpu_datap()->cpu_fatal_trap_state;
     }
 
-	if (debugger_callback) {
-		unsigned int	initial_not_in_kdp = not_in_kdp;
-		not_in_kdp = 0;
-		debugger_callback->error = debugger_callback->callback(debugger_callback->callback_context);
-		not_in_kdp = initial_not_in_kdp;
-	} else {
-		kdp_raise_exception(exception, code, subcode, saved_state);
-	}
+    handle_debugger_trap(exception, code, subcode, saved_state);
+
+    enable_preemption();
+    ml_set_interrupts_enabled(prev_interrupts_state);
 
     /* If the instruction single step bit is set, disable kernel preemption
      */
@@ -483,17 +464,7 @@ kdp_i386_trap(
 	    disable_preemption();
     }
 
-    kdp_callouts(KDP_EVENT_EXIT);
-    mp_kdp_exit();
-
     return TRUE;
-}
-
-boolean_t 
-kdp_call_kdb(
-        void) 
-{       
-        return(FALSE);
 }
 
 void
@@ -691,53 +662,6 @@ machine_trace_thread64(thread_t thread,
 	machine_trace_thread_clear_validation_cache();
 
 	return (uint32_t) (((char *) tracebuf) - tracepos);
-}
-
-static struct kdp_callout {
-	struct kdp_callout	*callout_next;
-	kdp_callout_fn_t	callout_fn;
-	void			*callout_arg;
-} *kdp_callout_list = NULL;
-
-
-/*
- * Called from kernel context to register a kdp event callout.
- */
-void
-kdp_register_callout(
-	kdp_callout_fn_t	fn,
-	void			*arg)
-{
-	struct kdp_callout	*kcp;
-	struct kdp_callout	*list_head;
-
-	kcp = kalloc(sizeof(*kcp));
-	if (kcp == NULL)
-		panic("kdp_register_callout() kalloc failed");
-
-	kcp->callout_fn  = fn;
-	kcp->callout_arg = arg;
-
-	/* Lock-less list insertion using compare and exchange. */
-	do {
-		list_head = kdp_callout_list;
-		kcp->callout_next = list_head;
-	} while (!OSCompareAndSwapPtr(list_head, kcp, (void * volatile *)&kdp_callout_list));
-}
-
-/*
- * Called at exception/panic time when extering or exiting kdp.  
- * We are single-threaded at this time and so we don't use locks.
- */
-static void
-kdp_callouts(kdp_event_t event)
-{
-	struct kdp_callout	*kcp = kdp_callout_list;
-
-	while (kcp) {
-		kcp->callout_fn(kcp->callout_arg, event); 
-		kcp = kcp->callout_next;
-	}	
 }
 
 void

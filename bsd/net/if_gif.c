@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -319,7 +319,7 @@ static int
 gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 {
 	struct gif_softc *sc = NULL;
-	struct ifnet_init_params gif_init_params;
+	struct ifnet_init_eparams gif_init_params;
 	errno_t error = 0;
 
 	lck_mtx_lock(gif_mtx);
@@ -345,6 +345,9 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 	lck_mtx_init(&sc->gif_lock, gif_mtx_grp, gif_mtx_attr);
 
 	bzero(&gif_init_params, sizeof (gif_init_params));
+	gif_init_params.ver = IFNET_INIT_CURRENT_VERSION;
+	gif_init_params.len = sizeof (gif_init_params);
+	gif_init_params.flags = IFNET_INIT_LEGACY;
 	gif_init_params.uniqueid = sc->gif_ifname;
 	gif_init_params.uniqueid_len = strlen(sc->gif_ifname);
 	gif_init_params.name = GIFNAME;
@@ -360,7 +363,7 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 	gif_init_params.set_bpf_tap = gif_set_bpf_tap;
 	gif_init_params.detach = gif_detach;
 
-	error = ifnet_allocate(&gif_init_params, &sc->gif_if);
+	error = ifnet_allocate_extended(&gif_init_params, &sc->gif_if);
 	if (error != 0) {
 		printf("gif_clone_create, ifnet_allocate failed - %d\n", error);
 		_FREE(sc, M_DEVBUF);

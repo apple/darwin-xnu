@@ -43,7 +43,7 @@ IOHistogramReporter::with(IOService *reportingService,
                           IOReportCategories categories,
                           uint64_t channelID,
                           const char *channelName,
-                          IOReportUnits unit,
+                          IOReportUnit unit,
                           int nSegments,
                           IOHistogramSegmentConfig *config)
 {
@@ -74,7 +74,7 @@ IOHistogramReporter::initWith(IOService *reportingService,
                               IOReportCategories categories,
                               uint64_t channelID,
                               const OSSymbol *channelName,
-                              IOReportUnits unit,
+                              IOReportUnit unit,
                               int nSegments,
                               IOHistogramSegmentConfig *config)
 {
@@ -272,34 +272,35 @@ IOHistogramReporter::free(void)
 IOReportLegendEntry*
 IOHistogramReporter::handleCreateLegend(void)
 {
-    OSData                  *tmpConfigData;
-    OSDictionary            *tmpDict;
-    IOReportLegendEntry     *legendEntry = NULL;
+    IOReportLegendEntry     *rval = NULL, *legendEntry = NULL;
+    OSData                  *tmpConfigData = NULL;
+    OSDictionary            *tmpDict;       // no refcount
         
     legendEntry = super::handleCreateLegend();
+    if (!legendEntry)       goto finish;
     
-    if (legendEntry) {
-        
-        PREFL_MEMOP_PANIC(_segmentCount, IOHistogramSegmentConfig);
-        tmpConfigData = OSData::withBytes(_histogramSegmentsConfig,
-                                          (unsigned)_segmentCount *
-                                            (unsigned)sizeof(IOHistogramSegmentConfig));
-        if (!tmpConfigData) {
-            legendEntry->release();
-            goto finish;
-        }
-        
-        tmpDict = OSDynamicCast(OSDictionary, legendEntry->getObject(kIOReportLegendInfoKey));
-        if (!tmpDict) {
-            legendEntry->release();
-            goto finish;
-        }
-        
-        tmpDict->setObject(kIOReportLegendConfigKey, tmpConfigData);
-    }
-    
+    PREFL_MEMOP_PANIC(_segmentCount, IOHistogramSegmentConfig);
+    tmpConfigData = OSData::withBytes(_histogramSegmentsConfig,
+                         (unsigned)_segmentCount *
+                             sizeof(IOHistogramSegmentConfig));
+    if (!tmpConfigData)         goto finish;
+
+    tmpDict = OSDynamicCast(OSDictionary,
+                    legendEntry->getObject(kIOReportLegendInfoKey));
+    if (!tmpDict)               goto finish;
+
+    tmpDict->setObject(kIOReportLegendConfigKey, tmpConfigData);
+
+    // success
+    rval = legendEntry;
+
 finish:
-    return legendEntry;
+    if (tmpConfigData)  tmpConfigData->release();
+    if (!rval && legendEntry) {
+        legendEntry->release();
+    }
+
+    return rval;
 }
 
 IOReturn

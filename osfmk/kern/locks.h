@@ -59,8 +59,9 @@ typedef	unsigned int		lck_sleep_action_t;
 #define	LCK_SLEEP_EXCLUSIVE	0x04	/* Reclaim the lock in exclusive mode (RW only) */
 #define	LCK_SLEEP_SPIN		0x08	/* Reclaim the lock in spin mode (mutex only) */
 #define	LCK_SLEEP_PROMOTED_PRI	0x10	/* Sleep at a promoted priority */
+#define	LCK_SLEEP_SPIN_ALWAYS	0x20	/* Reclaim the lock in spin-always mode (mutex only) */
 
-#define	LCK_SLEEP_MASK		0x1f	/* Valid actions */
+#define	LCK_SLEEP_MASK		0x3f	/* Valid actions */
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -358,14 +359,22 @@ extern void				lck_mtx_assert(
 
 #if MACH_ASSERT
 #define LCK_MTX_ASSERT(lck,type) lck_mtx_assert((lck),(type))
+#define LCK_SPIN_ASSERT(lck,type) lck_spin_assert((lck),(type))
+#define LCK_RW_ASSERT(lck,type) lck_rw_assert((lck),(type))
 #else /* MACH_ASSERT */
 #define LCK_MTX_ASSERT(lck,type)
+#define LCK_SPIN_ASSERT(lck,type)
+#define LCK_RW_ASSERT(lck,type)
 #endif /* MACH_ASSERT */
 
 #if DEBUG
 #define LCK_MTX_ASSERT_DEBUG(lck,type) lck_mtx_assert((lck),(type))
+#define LCK_SPIN_ASSERT_DEBUG(lck,type) lck_spin_assert((lck),(type))
+#define LCK_RW_ASSERT_DEBUG(lck,type) lck_rw_assert((lck),(type))
 #else /* DEBUG */
 #define LCK_MTX_ASSERT_DEBUG(lck,type)
+#define LCK_SPIN_ASSERT_DEBUG(lck,type)
+#define LCK_RW_ASSERT_DEBUG(lck,type)
 #endif /* DEBUG */
 
 __END_DECLS
@@ -436,6 +445,10 @@ extern void				lck_rw_lock_shared(
 
 extern void				lck_rw_unlock_shared(
 									lck_rw_t		*lck);
+
+extern boolean_t			lck_rw_lock_yield_shared(
+									lck_rw_t		*lck,
+									boolean_t	force_yield);
 
 extern void				lck_rw_lock_exclusive(
 									lck_rw_t		*lck);

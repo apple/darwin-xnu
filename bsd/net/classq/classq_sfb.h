@@ -104,7 +104,7 @@ struct sfb_fcl {
 #define	SFBF_FLOWCTL	0x04	/* enable flow control advisories */
 #define	SFBF_DELAYBASED	0x08	/* queueing is delay based */
 #define	SFBF_DELAYHIGH	0x10	/* Estimated delay is greater than target */
-#define SFBF_LAST_PKT_DROPPED	0x20	/* Last packet dropped */
+#define	SFBF_LAST_PKT_DROPPED	0x20	/* Last packet dropped */
 #define	SFBF_SUSPENDED	0x1000	/* queue is suspended */
 
 #define	SFBF_USERFLAGS							\
@@ -126,7 +126,7 @@ typedef struct sfb {
 	/* target queue delay and interval for queue sizing */
 	u_int64_t	sfb_target_qdelay;
 	struct timespec	sfb_update_interval;
-	u_int64_t	sfb_fc_threshold; /* for flow control feedback */ 
+	u_int64_t	sfb_fc_threshold; /* for flow control feedback */
 
 	/* variables for computing estimated delay of the queue */
 	u_int64_t	sfb_min_qdelay;
@@ -154,9 +154,9 @@ typedef struct sfb {
 extern void sfb_init(void);
 extern struct sfb *sfb_alloc(struct ifnet *, u_int32_t, u_int32_t, u_int32_t);
 extern void sfb_destroy(struct sfb *);
-extern int sfb_addq(struct sfb *, class_queue_t *, struct mbuf *,
+extern int sfb_addq(struct sfb *, class_queue_t *, pktsched_pkt_t *,
     struct pf_mtag *);
-extern struct mbuf *sfb_getq(struct sfb *, class_queue_t *);
+extern void sfb_getq(struct sfb *, class_queue_t *, pktsched_pkt_t *);
 extern void sfb_purgeq(struct sfb *, class_queue_t *, u_int32_t,
     u_int32_t *, u_int32_t *);
 extern void sfb_getstats(struct sfb *, struct sfb_stats *);

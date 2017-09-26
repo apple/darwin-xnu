@@ -28,6 +28,7 @@
  
 #define PTHREAD_INTERNAL 1
 
+#include <stdatomic.h>
 #include <kern/debug.h>
 #include <kern/mach_param.h>
 #include <kern/sched_prim.h>
@@ -41,7 +42,9 @@
 #include <mach/task.h>
 #include <mach/thread_act.h>
 #include <sys/param.h>
+#include <sys/eventvar.h>
 #include <sys/pthread_shims.h>
+#include <sys/proc_info.h>
 #include <sys/proc_internal.h>
 #include <sys/sysproto.h>
 #include <sys/systm.h>
@@ -53,7 +56,11 @@
 #define PTHREAD_SHIMS_VERSION 1
 
 /* on arm, the callbacks function has two #ifdef arm ponters */
+#if defined(__arm__)
+#define PTHREAD_CALLBACK_MEMBER map_is_1gb
+#else
 #define PTHREAD_CALLBACK_MEMBER ml_get_max_cpus
+#endif
 
 /* compile time asserts to check the length of structures in pthread_shims.h */
 static_assert((sizeof(struct pthread_functions_s) - offsetof(struct pthread_functions_s, psynch_rw_yieldwrlock) - sizeof(void*)) == (sizeof(void*) * 100));
@@ -62,10 +69,6 @@ static_assert((sizeof(struct pthread_callbacks_s) - offsetof(struct pthread_call
 /* old pthread code had definitions for these as they don't exist in headers */
 extern kern_return_t mach_port_deallocate(ipc_space_t, mach_port_name_t);
 extern kern_return_t semaphore_signal_internal_trap(mach_port_name_t);
-
-/* Used for stackshot introspection */
-extern void kdp_pthread_find_owner(thread_t thread, struct stackshot_thread_waitinfo *waitinfo);
-extern void* kdp_pthread_get_thread_kwq(thread_t thread);
 
 #define PTHREAD_STRUCT_ACCESSOR(get, set, rettype, structtype, member) \
 	static rettype \
@@ -84,7 +87,10 @@ PTHREAD_STRUCT_ACCESSOR(proc_get_stack_addr_hint, proc_set_stack_addr_hint, user
 PTHREAD_STRUCT_ACCESSOR(proc_get_dispatchqueue_offset, proc_set_dispatchqueue_offset, uint64_t, struct proc*, p_dispatchqueue_offset);
 PTHREAD_STRUCT_ACCESSOR(proc_get_dispatchqueue_serialno_offset, proc_set_dispatchqueue_serialno_offset, uint64_t, struct proc*, p_dispatchqueue_serialno_offset);
 PTHREAD_STRUCT_ACCESSOR(proc_get_pthread_tsd_offset, proc_set_pthread_tsd_offset, uint32_t, struct proc *, p_pth_tsd_offset);
+PTHREAD_STRUCT_ACCESSOR(proc_get_mach_thread_self_tsd_offset, proc_set_mach_thread_self_tsd_offset, uint64_t, struct proc *, p_mach_thread_self_offset);
 PTHREAD_STRUCT_ACCESSOR(proc_get_pthhash, proc_set_pthhash, void*, struct proc*, p_pthhash);
+PTHREAD_STRUCT_ACCESSOR(proc_get_return_to_kernel_offset, proc_set_return_to_kernel_offset, uint64_t, struct proc*, p_return_to_kernel_offset);
+PTHREAD_STRUCT_ACCESSOR(proc_get_user_stack, proc_set_user_stack, user_addr_t, struct proc*, user_stack);
 
 PTHREAD_STRUCT_ACCESSOR(uthread_get_threadlist, uthread_set_threadlist, void*, struct uthread*, uu_threadlist);
 PTHREAD_STRUCT_ACCESSOR(uthread_get_sigmask, uthread_set_sigmask, sigset_t, struct uthread*, uu_sigmask);
@@ -184,6 +190,14 @@ qos_main_thread_active(void)
 	return TRUE;
 }
 
+#if defined(__arm__)
+/* On iOS, the stack placement depends on the address space size */
+static uint32_t
+map_is_1gb(vm_map_t map)
+{
+	return ((!vm_map_is_64bit(map)) && (get_map_max(map) == ml_get_max_offset(FALSE, MACHINE_MAX_OFFSET_MIN)));
+}
+#endif
 
 static int proc_usynch_get_requested_thread_qos(struct uthread *uth)
 {
@@ -501,10 +515,17 @@ thread_qos_from_pthread_priority(unsigned long priority, unsigned long *flags)
 unsigned long
 pthread_priority_canonicalize(unsigned long priority, boolean_t propagation)
 {
-	if (pthread_functions->pthread_priority_canonicalize2) {
-		return pthread_functions->pthread_priority_canonicalize2(priority, propagation);
+	return pthread_functions->pthread_priority_canonicalize2(priority, propagation);
+}
+
+boolean_t
+workq_thread_has_been_unbound(thread_t th, int qos_class)
+{
+	if (pthread_functions->workq_thread_has_been_unbound) {
+		return pthread_functions->workq_thread_has_been_unbound(th, qos_class);
 	} else {
-		return pthread_functions->pthread_priority_canonicalize(priority);
+		panic("pthread kext does not support workq_thread_has_been_unbound");
+		return false;
 	}
 }
 
@@ -523,6 +544,28 @@ kdp_pthread_get_thread_kwq(thread_t thread)
 
 	return NULL;
 }
+
+static void
+thread_will_park_or_terminate(thread_t thread)
+{
+	if (thread_owned_workloops_count(thread)) {
+		(void)kevent_exit_on_workloop_ownership_leak(thread);
+	}
+}
+
+#if defined(__arm64__)
+static unsigned __int128
+atomic_fetch_add_128_relaxed(_Atomic unsigned __int128 *ptr, unsigned __int128 value)
+{
+	return atomic_fetch_add_explicit(ptr, value, memory_order_relaxed);
+}
+
+static unsigned __int128
+atomic_load_128_relaxed(_Atomic unsigned __int128 *ptr)
+{
+	return atomic_load_explicit(ptr, memory_order_relaxed);
+}
+#endif
 
 /*
  * The callbacks structure (defined in pthread_shims.h) contains a collection
@@ -559,7 +602,9 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.vm_map_page_info = vm_map_page_info,
 	.vm_map_switch = vm_map_switch,
 	.thread_set_wq_state32 = thread_set_wq_state32,
+#if !defined(__arm__)
 	.thread_set_wq_state64 = thread_set_wq_state64,
+#endif
 
 	.uthread_get_threadlist = uthread_get_threadlist,
 	.uthread_set_threadlist = uthread_set_threadlist,
@@ -593,6 +638,8 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.zfree = zfree,
 	.zinit = zinit,
 
+	.workloop_fulfill_threadreq = workloop_fulfill_threadreq,
+
 	.__pthread_testcancel = __pthread_testcancel,
 
 	.mach_port_deallocate = mach_port_deallocate,
@@ -604,6 +651,13 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.convert_thread_to_port = convert_thread_to_port,
 	.ml_get_max_cpus = (void*)ml_get_max_cpus,
 
+#if defined(__arm__)
+	.map_is_1gb = map_is_1gb,
+#endif
+#if defined(__arm64__)
+	.atomic_fetch_add_128_relaxed = atomic_fetch_add_128_relaxed,
+	.atomic_load_128_relaxed = atomic_load_128_relaxed,
+#endif
 
 	.proc_get_dispatchqueue_serialno_offset = proc_get_dispatchqueue_serialno_offset,
 	.proc_set_dispatchqueue_serialno_offset = proc_set_dispatchqueue_serialno_offset,
@@ -612,6 +666,8 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.proc_set_stack_addr_hint = proc_set_stack_addr_hint,
 	.proc_get_pthread_tsd_offset = proc_get_pthread_tsd_offset,
 	.proc_set_pthread_tsd_offset = proc_set_pthread_tsd_offset,
+	.proc_get_mach_thread_self_tsd_offset = proc_get_mach_thread_self_tsd_offset,
+	.proc_set_mach_thread_self_tsd_offset = proc_set_mach_thread_self_tsd_offset,
 
 	.thread_set_tsd_base = thread_set_tsd_base,
 
@@ -632,6 +688,15 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.proc_usynch_thread_qos_squash_override_for_resource = proc_usynch_thread_qos_squash_override_for_resource,
 	.task_get_default_manager_qos = task_get_default_manager_qos,
 	.thread_create_workq_waiting = thread_create_workq_waiting,
+
+	.proc_get_return_to_kernel_offset = proc_get_return_to_kernel_offset,
+	.proc_set_return_to_kernel_offset = proc_set_return_to_kernel_offset,
+	.thread_will_park_or_terminate = thread_will_park_or_terminate,
+
+	.qos_max_parallelism = qos_max_parallelism,
+
+	.proc_get_user_stack = proc_get_user_stack,
+	.proc_set_user_stack = proc_set_user_stack,
 };
 
 pthread_callbacks_t pthread_kern = &pthread_callbacks;

@@ -62,10 +62,11 @@
 /* Structure to save information about corpse data */
 struct kcdata_descriptor {
 	uint32_t            kcd_length;
-	uint32_t kcd_flags;
+	uint16_t kcd_flags;
 #define KCFLAG_USE_MEMCOPY 0x0
 #define KCFLAG_USE_COPYOUT 0x1
 #define KCFLAG_NO_AUTO_ENDBUFFER 0x2
+	uint16_t kcd_user_flags; /* reserved for subsystems using kcdata */
 	mach_vm_address_t kcd_addr_begin;
 	mach_vm_address_t kcd_addr_end;
 };
@@ -90,6 +91,7 @@ kern_return_t kcdata_add_uint32_with_description(kcdata_descriptor_t crashinfo, 
 kern_return_t kcdata_undo_add_container_begin(kcdata_descriptor_t data);
 
 kern_return_t kcdata_write_buffer_end(kcdata_descriptor_t data);
+void *kcdata_memory_get_begin_addr(kcdata_descriptor_t data);
 
 #else /* XNU_KERNEL_PRIVATE */
 

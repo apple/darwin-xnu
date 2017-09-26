@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -61,20 +61,4 @@
 #include <net/altq/altq.h>
 #include <net/pktsched/pktsched_priq.h>
 
-#ifdef BSD_KERNEL_PRIVATE
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-extern int	altq_priq_pfattach(struct pf_altq *);
-extern int	altq_priq_add(struct pf_altq *);
-extern int	altq_priq_remove(struct pf_altq *);
-extern int	altq_priq_add_queue(struct pf_altq *);
-extern int	altq_priq_remove_queue(struct pf_altq *);
-extern int	altq_priq_getqstats(struct pf_altq *, void *, int *);
-
-#ifdef __cplusplus
-}
-#endif
-#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NET_ALTQ_ALTQ_PRIQ_H_ */

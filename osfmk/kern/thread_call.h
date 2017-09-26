@@ -62,13 +62,26 @@ typedef void (*thread_call_func_t)(
  threads.
  @constant THREAD_CALL_PRIORITY_USER Importance similar to that of normal user threads.
  @constant THREAD_CALL_PRIORITY_LOW Very low importance.
+ @constant THREAD_CALL_PRIORITY_KERNEL_HIGH Importance higher than most kernel
+ threads.
  */
 typedef enum {
-	THREAD_CALL_PRIORITY_HIGH   = 0,
-	THREAD_CALL_PRIORITY_KERNEL = 1,
-	THREAD_CALL_PRIORITY_USER   = 2,
-	THREAD_CALL_PRIORITY_LOW    = 3
+	THREAD_CALL_PRIORITY_HIGH        = 0,
+	THREAD_CALL_PRIORITY_KERNEL      = 1,
+	THREAD_CALL_PRIORITY_USER        = 2,
+	THREAD_CALL_PRIORITY_LOW         = 3,
+	THREAD_CALL_PRIORITY_KERNEL_HIGH = 4
 } thread_call_priority_t;
+
+enum {
+	/* if call is re-submitted while the call is executing on a call thread, then delay the re-enqueue until it returns */
+	THREAD_CALL_OPTIONS_ONCE   = 0x00000001,
+#ifdef XNU_KERNEL_PRIVATE
+	/* execute call from the timer interrupt instead of from the thread call thread, private interface for IOTES workloop signaling */
+	THREAD_CALL_OPTIONS_SIGNAL = 0x00000002,
+#endif /* XNU_KERNEL_PRIVATE */
+};
+typedef uint32_t thread_call_options_t;
 
 __BEGIN_DECLS
 
@@ -255,6 +268,52 @@ extern thread_call_t	thread_call_allocate_with_priority(
 						thread_call_param_t	param0,
 						thread_call_priority_t  pri);
 
+ /*!
+  @function thread_call_allocate_with_options
+  @abstract Allocate a thread call to execute with a specified priority.
+  @discussion Identical to thread_call_allocate, except that priority
+  and options are specified by caller.
+  @param func Callback to invoke when thread call is scheduled.
+  @param param0 First argument to pass to callback.
+  @param pri Priority of item.
+  @param options Options for item.
+  @result Thread call which can be passed to thread_call_enter variants.
+  */
+extern thread_call_t	thread_call_allocate_with_options(
+						thread_call_func_t	func,
+						thread_call_param_t	param0,
+						thread_call_priority_t  pri,
+						thread_call_options_t   options);
+
+#ifdef KERNEL_PRIVATE
+ /*!
+  @function thread_call_allocate_with_qos
+  @abstract Allocate a thread call to execute with a specified QoS.
+  @discussion Identical to thread_call_allocate_with_options, except it uses the QoS namespace.
+        Private interface for pthread kext.
+  @param func Callback to invoke when thread call is scheduled.
+  @param param0 First argument to pass to callback.
+  @param qos_tier QoS tier to execute callback at (as in THREAD_QOS_POLICY)
+  @param options flags from thread_call_options_t to influence the thread call behavior
+  @result Thread call which can be passed to thread_call_enter variants.
+  */
+extern thread_call_t
+thread_call_allocate_with_qos(thread_call_func_t        func,
+                              thread_call_param_t       param0,
+                              int                       qos_tier,
+                              thread_call_options_t     options);
+
+/*!
+  @function thread_call_wait_once
+  @abstract Wait for a THREAD_CALL_OPTIONS_ONCE call to finish executing if it is executing
+  @discussion Only works on THREAD_CALL_OPTIONS_ONCE calls
+  @param call The thread call to wait for
+  @result True if it waited, false if it did not wait
+ */
+extern boolean_t
+thread_call_wait_once(thread_call_t call);
+#endif /* KERNEL_PRIVATE */
+
 /*!
  @function thread_call_free
  @abstract Release a thread call.
@@ -285,21 +344,38 @@ __END_DECLS
 
 #include <kern/call_entry.h>
 
+typedef enum {
+	THREAD_CALL_INDEX_HIGH          = 0,
+	THREAD_CALL_INDEX_KERNEL        = 1,
+	THREAD_CALL_INDEX_USER          = 2,
+	THREAD_CALL_INDEX_LOW           = 3,
+	THREAD_CALL_INDEX_KERNEL_HIGH   = 4,
+	THREAD_CALL_INDEX_QOS_UI        = 5,
+	THREAD_CALL_INDEX_QOS_IN        = 6,
+	THREAD_CALL_INDEX_QOS_UT        = 7,
+	THREAD_CALL_INDEX_MAX           = 8,    /* count of thread call indexes */
+} thread_call_index_t;
+
 struct thread_call {
-	struct call_entry 	tc_call;	/* Must be first */
+	struct call_entry		tc_call;                /* Must be first for queue macros */
 	uint64_t			tc_submit_count;
 	uint64_t			tc_finish_count;
-	uint64_t			ttd; /* Time to deadline at creation */
+	uint64_t			tc_ttd;                 /* Time to deadline at creation */
 	uint64_t			tc_soft_deadline;
-	thread_call_priority_t		tc_pri;
+	thread_call_index_t		tc_index;
 	uint32_t			tc_flags;
 	int32_t				tc_refs;
 };
 
-#define THREAD_CALL_ALLOC       0x01
-#define THREAD_CALL_WAIT        0x02
-#define THREAD_CALL_DELAYED     0x04
-#define THREAD_CALL_RATELIMITED TIMEOUT_URGENCY_RATELIMITED
+#define THREAD_CALL_ALLOC       0x01    /* memory owned by thread_call.c */
+#define THREAD_CALL_WAIT        0x02    /* thread waiting for call to finish running */
+#define THREAD_CALL_DELAYED     0x04    /* deadline based */
+#define THREAD_CALL_RUNNING     0x08    /* currently executing on a thread */
+#define THREAD_CALL_SIGNAL      0x10    /* call from timer interrupt instead of thread */
+#define THREAD_CALL_ONCE        0x20    /* pend the enqueue if re-armed while running */
+#define THREAD_CALL_RESCHEDULE  0x40    /* enqueue is pending due to re-arm while running */
+#define THREAD_CALL_RATELIMITED TIMEOUT_URGENCY_RATELIMITED     /* 0x80 */
+/*      THREAD_CALL_CONTINUOUS  0x100 */
 
 typedef struct thread_call thread_call_data_t;
 
@@ -336,6 +412,12 @@ extern void		thread_call_func_delayed_with_leeway(
 						uint64_t		leeway,
 						uint32_t		flags);
 
+/*
+ * This iterates all of the pending or delayed thread calls in the group,
+ * which is really inefficient.
+ *
+ * This is deprecated, switch to an allocated thread call instead.
+ */
 extern boolean_t	thread_call_func_cancel(
 						thread_call_func_t	func,
 						thread_call_param_t	param,

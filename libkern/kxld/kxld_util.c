@@ -784,7 +784,8 @@ kxld_strstr(const char *s, const char *find)
 #if KERNEL
     char c, sc;
     size_t len;
-
+    if (!s || !find)
+        return s;
     if ((c = *find++) != 0) {
         len = strlen(find);
         do {

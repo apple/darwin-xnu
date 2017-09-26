@@ -31,6 +31,7 @@
 #include <mach/mach_types.h>
 #include <kern/cpu_data.h> /* current_thread() */
 #include <kern/kalloc.h>
+#include <stdatomic.h>
 #include <sys/errno.h>
 #include <sys/vm.h>
 #include <sys/ktrace.h>
@@ -57,17 +58,6 @@ static unsigned int pet_timer_id = 999;
 
 /* maximum number of timers we can construct */
 #define TIMER_MAX (16)
-
-#if defined(__x86_64__)
-
-#define MIN_PERIOD_NS        (20 * NSEC_PER_USEC)
-#define MIN_PERIOD_BG_NS     (10 * NSEC_PER_MSEC)
-#define MIN_PERIOD_PET_NS    (2 * NSEC_PER_MSEC)
-#define MIN_PERIOD_PET_BG_NS (10 * NSEC_PER_MSEC)
-
-#else /* defined(__x86_64__) */
-#error "unsupported architecture"
-#endif /* defined(__x86_64__) */
 
 static uint64_t min_period_abstime;
 static uint64_t min_period_bg_abstime;
@@ -111,11 +101,11 @@ kperf_timer_schedule(struct kperf_timer *timer, uint64_t now)
 	timer_call_enter(&timer->tcall, deadline, TIMER_CALL_SYS_CRITICAL);
 }
 
-void
-kperf_ipi_handler(void *param)
+static void
+kperf_sample_cpu(struct kperf_timer *timer, bool system_sample,
+		bool only_system)
 {
 	struct kperf_context ctx;
-	struct kperf_timer *timer = param;
 
 	assert(timer != NULL);
 
@@ -135,7 +125,7 @@ kperf_ipi_handler(void *param)
 	ctx.trigger_id = (unsigned int)(timer - kperf_timerv);
 
 	if (ctx.trigger_id == pet_timer_id && ncpu < machine_info.logical_cpu_max) {
-		kperf_thread_on_cpus[ncpu] = ctx.cur_thread;
+		kperf_tid_on_cpus[ncpu] = thread_tid(ctx.cur_thread);
 	}
 
 	/* make sure sampling is on */
@@ -149,14 +139,21 @@ kperf_ipi_handler(void *param)
 	}
 
 	/* call the action -- kernel-only from interrupt, pend user */
-	int r = kperf_sample(intbuf, &ctx, timer->actionid, SAMPLE_FLAG_PEND_USER);
+	int r = kperf_sample(intbuf, &ctx, timer->actionid,
+			SAMPLE_FLAG_PEND_USER | (system_sample ? SAMPLE_FLAG_SYSTEM : 0) |
+			(only_system ? SAMPLE_FLAG_ONLY_SYSTEM : 0));
 
 	/* end tracepoint is informational */
 	BUF_INFO(PERF_TM_HNDLR | DBG_FUNC_END, r);
 
-#if defined(__x86_64__)
-	(void)atomic_bit_clear(&(timer->pending_cpus), ncpu, __ATOMIC_RELAXED);
-#endif /* defined(__x86_64__) */
+	(void)atomic_fetch_and_explicit(&timer->pending_cpus,
+			~(UINT64_C(1) << ncpu), memory_order_relaxed);
+}
+
+void
+kperf_ipi_handler(void *param)
+{
+	kperf_sample_cpu((struct kperf_timer *)param, false, false);
 }
 
 static void
@@ -165,6 +162,11 @@ kperf_timer_handler(void *param0, __unused void *param1)
 	struct kperf_timer *timer = param0;
 	unsigned int ntimer = (unsigned int)(timer - kperf_timerv);
 	unsigned int ncpus  = machine_info.logical_cpu_max;
+	bool system_only_self = true;
+
+	if (timer->actionid == 0) {
+		return;
+	}
 
 	timer->active = 1;
 
@@ -180,11 +182,20 @@ kperf_timer_handler(void *param0, __unused void *param1)
 		kperf_pet_fire_before();
 
 		/* clean-up the thread-on-CPUs cache */
-		bzero(kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus));
+		bzero(kperf_tid_on_cpus, ncpus * sizeof(*kperf_tid_on_cpus));
 	}
 
-	/* ping all CPUs */
-	kperf_mp_broadcast_running(timer);
+	/*
+	 * IPI other cores only if the action has non-system samplers.
+	 */
+	if (kperf_sample_has_non_system(timer->actionid)) {
+		/*
+		 * If the core that's handling the timer is not scheduling
+		 * threads, only run system samplers.
+		 */
+		system_only_self = kperf_mp_broadcast_other_running(timer);
+	}
+	kperf_sample_cpu(timer, true, system_only_self);
 
 	/* release the pet thread? */
 	if (ntimer == pet_timer_id) {
@@ -255,7 +266,7 @@ kperf_timer_pet_rearm(uint64_t elapsed_ticks)
 	BUF_INFO(PERF_PET_SCHED, timer->period, period, elapsed_ticks, deadline);
 
 	/* re-schedule the timer, making sure we don't apply slop */
-	timer_call_enter(&(timer->tcall), deadline, TIMER_CALL_SYS_CRITICAL);
+	timer_call_enter(&timer->tcall, deadline, TIMER_CALL_SYS_CRITICAL);
 
 	return;
 }
@@ -291,7 +302,7 @@ kperf_timer_stop(void)
 		/* wait for the timer to stop */
 		while (kperf_timerv[i].active);
 
-		timer_call_cancel(&(kperf_timerv[i].tcall));
+		timer_call_cancel(&kperf_timerv[i].tcall);
 	}
 
 	/* wait for PET to stop, too */
@@ -399,9 +410,7 @@ kperf_timer_reset(void)
 	for (unsigned int i = 0; i < kperf_timerc; i++) {
 		kperf_timerv[i].period = 0;
 		kperf_timerv[i].actionid = 0;
-#if defined(__x86_64__)
 		kperf_timerv[i].pending_cpus = 0;
-#endif /* defined(__x86_64__) */
 	}
 }
 
@@ -412,10 +421,10 @@ kperf_timer_set_count(unsigned int count)
 	unsigned int old_count;
 
 	if (min_period_abstime == 0) {
-		nanoseconds_to_absolutetime(MIN_PERIOD_NS, &min_period_abstime);
-		nanoseconds_to_absolutetime(MIN_PERIOD_BG_NS, &min_period_bg_abstime);
-		nanoseconds_to_absolutetime(MIN_PERIOD_PET_NS, &min_period_pet_abstime);
-		nanoseconds_to_absolutetime(MIN_PERIOD_PET_BG_NS,
+		nanoseconds_to_absolutetime(KP_MIN_PERIOD_NS, &min_period_abstime);
+		nanoseconds_to_absolutetime(KP_MIN_PERIOD_BG_NS, &min_period_bg_abstime);
+		nanoseconds_to_absolutetime(KP_MIN_PERIOD_PET_NS, &min_period_pet_abstime);
+		nanoseconds_to_absolutetime(KP_MIN_PERIOD_PET_BG_NS,
 			&min_period_pet_bg_abstime);
 		assert(min_period_abstime > 0);
 	}
@@ -471,7 +480,7 @@ kperf_timer_set_count(unsigned int count)
 
 	/* (re-)setup the timer call info for all entries */
 	for (unsigned int i = 0; i < count; i++) {
-		timer_call_setup(&(new_timerv[i].tcall), kperf_timer_handler, &(new_timerv[i]));
+		timer_call_setup(&new_timerv[i].tcall, kperf_timer_handler, &new_timerv[i]);
 	}
 
 	kperf_timerv = new_timerv;

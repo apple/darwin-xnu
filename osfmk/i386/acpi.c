@@ -68,6 +68,10 @@
 #include <IOKit/IOPlatformExpert.h>
 #include <sys/kdebug.h>
 
+#if MONOTONIC
+#include <kern/monotonic.h>
+#endif /* MONOTONIC */
+
 #if CONFIG_SLEEP
 extern void	acpi_sleep_cpu(acpi_sleep_callback, void * refcon);
 extern void	acpi_wake_prot(void);
@@ -169,6 +173,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	acpi_hibernate_callback_data_t data;
 #endif
 	boolean_t did_hibernate;
+	cpu_data_t *cdp = current_cpu_datap();
 	unsigned int	cpu;
 	kern_return_t	rc;
 	unsigned int	my_cpu;
@@ -176,13 +181,13 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	uint64_t	elapsed = 0;
 	uint64_t	elapsed_trace_start = 0;
 
-	kprintf("acpi_sleep_kernel hib=%d, cpu=%d\n",
-			current_cpu_datap()->cpu_hibernate, cpu_number());
+	my_cpu = cpu_number();
+	kprintf("acpi_sleep_kernel hib=%d, cpu=%d\n", cdp->cpu_hibernate,
+			my_cpu);
 
-    	/* Get all CPUs to be in the "off" state */
-    	my_cpu = cpu_number();
+	/* Get all CPUs to be in the "off" state */
 	for (cpu = 0; cpu < real_ncpus; cpu += 1) {
-	    	if (cpu == my_cpu)
+		if (cpu == my_cpu)
 			continue;
 		rc = pmCPUExitHaltToOff(cpu);
 		if (rc != KERN_SUCCESS)
@@ -198,6 +203,10 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	data.refcon = refcon;
 #endif
 
+#if MONOTONIC
+	mt_cpu_down(cdp);
+#endif /* MONOTONIC */
+
 	/* Save power management timer state */
 	pmTimerSave();
 
@@ -211,7 +220,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	 */
 	clear_ts(); 
 
-	KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_START, 0, 0, 0, 0, 0);
+	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_START);
 
 	save_kdebug_enable = kdebug_enable;
 	kdebug_enable = 0;
@@ -264,8 +273,8 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 		did_hibernate = FALSE;
 	}
 
-	/* Re-enable mode (including 64-bit if applicable) */
-	cpu_mode_init(current_cpu_datap());
+	/* Re-enable fast syscall */
+	cpu_syscall_init(current_cpu_datap());
 
 #if CONFIG_MCA
 	/* Re-enable machine check handling */
@@ -303,6 +312,14 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	if (lapic_probe())
 		lapic_configure();
 
+#if KASAN
+	/*
+	 * The sleep implementation uses indirect noreturn calls, so we miss stack
+	 * unpoisoning. Do it explicitly.
+	 */
+	__asan_handle_no_return();
+#endif
+
 #if HIBERNATION
 	hibernate_rebuild_vm_structs();
 #endif
@@ -329,18 +346,16 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 #if HIBERNATION
 	if (did_hibernate) {
-		elapsed += mach_absolute_time() - start;
-		
-		KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_START, elapsed, elapsed_trace_start, 0, 0, 0);
+		KDBG(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_START);
 		hibernate_machine_init();
-		KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_END, 0, 0, 0, 0, 0);
+		KDBG(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_END);
 
 		current_cpu_datap()->cpu_hibernate = 0;
-
-		KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_END, 0, 0, 0, 0, 0);
-	} else
+	}
 #endif /* HIBERNATION */
-		KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_END, 0, 0, 0, 0, 0);
+
+	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_END, start, elapsed,
+			elapsed_trace_start, acpi_wake_abstime);
 
 	/* Restore power management register state */
 	pmCPUMarkRunning(current_cpu_datap());
@@ -398,6 +413,8 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 	 * Call back to caller to indicate that interrupts will remain
 	 * disabled while we deep idle, wake and return.
 	 */ 
+	IOCPURunPlatformQuiesceActions();
+
 	func(refcon);
 
 	acpi_idle_abstime = mach_absolute_time();
@@ -441,8 +458,11 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
  
 	/* Like S3 sleep, turn on tracing if trace_wake boot-arg is present */ 
 	if (kdebug_enable == 0) {
-		if (wake_nkdbufs)
+		if (wake_nkdbufs) {
+			__kdebug_only uint64_t start = mach_absolute_time();
 			kdebug_trace_start(wake_nkdbufs, NULL, TRUE);
+			KDBG(IOKDBG_CODE(DBG_HIBERNATE, 15), start);
+		}
 	}
 
 	IOCPURunPlatformActiveActions();

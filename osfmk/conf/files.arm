@@ -1,0 +1,80 @@
+OPTIONS/fb			optional fb
+
+OPTIONS/debug			optional debug
+
+osfmk/vm/vm_apple_protect.c	 standard
+
+osfmk/arm/hi_res_clock_map.c 	optional hi_res_clock
+
+osfmk/arm/pmap.c		standard
+
+osfmk/arm/bsd_arm.c		optional mach_bsd
+osfmk/arm/machdep_call.c	optional mach_bsd
+
+osfmk/arm/caches.c		standard
+osfmk/arm/caches_asm.s		standard
+osfmk/arm/cpu.c		standard
+osfmk/arm/cpu_common.c		standard
+osfmk/arm/cpuid.c   standard
+osfmk/arm/data.s	standard
+osfmk/arm/dbgwrap.c	standard
+osfmk/arm/arm_timer.c		standard
+osfmk/arm/arm_init.c		standard
+osfmk/arm/arm_vm_init.c	standard
+osfmk/arm/io_map.c		standard
+osfmk/arm/loose_ends.c	standard
+osfmk/arm/locks_arm.c	standard
+osfmk/arm/locore.s	standard
+osfmk/arm/lowmem_vectors.c	standard
+osfmk/arm/start.s	standard
+osfmk/arm/cswitch.s	standard
+osfmk/arm/machine_cpuid.c	standard
+osfmk/arm/machine_routines.c		standard
+osfmk/arm/machine_routines_common.c	standard
+osfmk/arm/machine_routines_asm.s	standard
+osfmk/arm/machine_task.c		standard
+osfmk/arm/pal_routines.c		standard
+osfmk/arm/mcount.s		optional profile
+osfmk/arm/WKdmDecompress_new.s	standard
+osfmk/arm/WKdmCompress_new.s	standard
+osfmk/arm/WKdmData_new.s	standard
+osfmk/arm/lz4_decode_armv7NEON.s standard
+osfmk/arm/lz4_encode_armv7.s standard
+osfmk/arm/bcopy.s	standard
+osfmk/arm/bzero.s	standard
+osfmk/arm/strlen.s	standard
+osfmk/arm/strnlen.s	standard
+osfmk/arm/strncmp.s	standard
+osfmk/arm/strncpy.c	standard
+osfmk/arm/strlcpy.c	standard
+
+osfmk/arm/model_dep.c		standard
+osfmk/arm/pcb.c		standard
+osfmk/arm/conf.c		standard
+osfmk/arm/rtclock.c		standard
+osfmk/arm/status.c		standard
+osfmk/arm/status_shared.c	standard
+osfmk/arm/trap.c		standard
+
+osfmk/arm/commpage/commpage.c	standard
+
+osfmk/kdp/ml/arm/kdp_machdep.c	optional	mach_kdp
+osfmk/kdp/ml/arm/kdp_vm.c	optional	mach_kdp
+
+
+# DUMMIES TO FORCE GENERATION OF .h FILES
+osfmk/OPTIONS/ln		optional ln
+osfmk/OPTIONS/eisa		optional eisa
+osfmk/OPTIONS/himem		optional himem
+osfmk/OPTIONS/ec		optional ec
+osfmk/OPTIONS/hi_res_clock	optional hi_res_clock
+
+# Kernel performance monitoring
+osfmk/kperf/arm/kperf_mp.c      optional kperf
+osfmk/kperf/arm/kperf_meminfo.c optional kperf
+osfmk/arm/kpc_arm.c		optional kpc
+
+osfmk/arm/monotonic_arm.c optional monotonic
+
+# Support for early_random()
+osfmk/corecrypto/ccn/src/arm/ccn_set.s	standard

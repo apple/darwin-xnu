@@ -41,7 +41,7 @@ int
 inet_aton(const char *cp, struct in_addr *addr)
 {
 	u_long parts[4];
-	in_addr_t val;
+	in_addr_t val = 0;
 	const char *c;
 	char *endptr;
 	int gotend, n;

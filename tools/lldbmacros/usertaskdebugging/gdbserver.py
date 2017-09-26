@@ -39,7 +39,7 @@ class GDBServer(object):
                 p_end = readBytes.find('#')
                 if p_begin >= 0 and p_end >= 0 and p_end > p_begin:
                     break
-            #if empty message or acks just ignore
+            # ignore if empty or ack messages
             if readBytes in ('', '+'):
                 logging.debug('ignoring message: %s' % readBytes)
                 continue

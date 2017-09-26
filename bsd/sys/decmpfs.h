@@ -160,7 +160,7 @@ typedef struct {
 } decmpfs_registration;
 
 /* hooks for kexts to call */
-errno_t register_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration *registration);
+errno_t register_decmpfs_decompressor(uint32_t compression_type, const decmpfs_registration *registration);
 errno_t unregister_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration *registration);
 
 #endif /* KERNEL */

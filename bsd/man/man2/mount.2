@@ -39,6 +39,7 @@
 .Os BSD 4
 .Sh NAME
 .Nm mount ,
+.Nm fmount,
 .Nm unmount
 .Nd mount or dismount a filesystem
 .Sh SYNOPSIS
@@ -46,6 +47,8 @@
 .Fd #include <sys/mount.h>
 .Ft int
 .Fn mount "const char *type" "const char *dir" "int flags" "void *data"
+.Ft int
+.Fn fmount "const char *type" "int fd" "int flags" "void *data"
 .Ft int
 .Fn unmount "const char *dir" "int flags"
 .Sh DESCRIPTION
@@ -122,6 +125,15 @@ The format for these argument structures is described in the
 manual page for each filesystem.
 .Pp
 The
+.Fn fmount
+function call is equivalent to the
+.Fn mount
+function call, except in the use of the second argument.
+It takes an open file descriptor representing mount point
+instead of the string literal containing full path to the mount
+point in the filesystem hierarchy.
+.Pp
+The
 .Fn unmount
 function call disassociates the filesystem from the specified
 mount point
@@ -139,7 +151,9 @@ even if the filesystem is later remounted.
 .Sh RETURN VALUES
 The
 .Fn mount
-returns the value 0 if the mount was successful, otherwise -1 is returned
+and
+.Fn fmount
+return the value 0 if the mount was successful, otherwise -1 is returned
 and the variable
 .Va errno
 is set to indicate the error.
@@ -151,6 +165,8 @@ and the variable
 is set to indicate the error.
 .Sh ERRORS
 .Fn mount
+and
+.Fn fmount
 will fail when one of the following occurs:
 .Bl -tag -width [ENAMETOOLONG]
 .It Bq Er EPERM
@@ -217,7 +233,8 @@ points outside the process's allocated address space.
 .El
 .Sh SEE ALSO
 .Xr mount 8 ,
-.Xr unmount 8
+.Xr unmount 8 ,
+.Xr open 2
 .Sh BUGS
 Some of the error codes need translation to more obvious messages.
 .Sh HISTORY
@@ -226,3 +243,5 @@ and
 .Fn unmount
 function calls appeared in
 .At v6 .
+.Fn fmount
+function call first appeared in macOS version 10.13.

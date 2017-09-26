@@ -38,6 +38,8 @@
 typedef	int32_t	sy_call_t(struct proc *, void *, int *);
 #if CONFIG_REQUIRES_U32_MUNGING
 typedef	void	sy_munge_t(void *);
+#elif __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
+typedef	int	sy_munge_t(const void *, void *);
 #endif
 
 struct sysent {		/* system call table */

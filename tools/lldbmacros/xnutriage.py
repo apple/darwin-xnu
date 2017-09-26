@@ -56,7 +56,7 @@ def NewBt(cmd_args=None):
         return False
     a = ArgumentStringToInt(cmd_args[0])
     while a != 0:
-        if kern.arch == "x86_64" or kern.arch == "arm64":
+        if kern.arch == "x86_64" or kern.arch.startswith("arm64"):
             offset = 8
         else:
             offset = 4

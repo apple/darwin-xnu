@@ -124,6 +124,8 @@
     #else
         #if __i386__ || __x86_64__
             #define MAC_OS_X_VERSION_MIN_REQUIRED MAC_OS_X_VERSION_10_4
+        #elif __arm__ || __arm64__
+            #define MAC_OS_X_VERSION_MIN_REQUIRED MAC_OS_X_VERSION_10_5
         #else
             #define MAC_OS_X_VERSION_MIN_REQUIRED MAC_OS_X_VERSION_10_1
         #endif

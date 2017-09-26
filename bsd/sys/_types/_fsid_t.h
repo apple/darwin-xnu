@@ -27,5 +27,6 @@
  */
 #ifndef _FSID_T
 #define _FSID_T
+#include <sys/_types/_int32_t.h> /* int32_t */
 typedef struct fsid { int32_t val[2]; } fsid_t;	/* file system id type */
 #endif /* _FSID_T */

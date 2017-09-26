@@ -59,6 +59,8 @@
 #ifndef	_MACH_DEBUG_HASH_INFO_H_
 #define _MACH_DEBUG_HASH_INFO_H_
 
+#include <mach/machine/vm_types.h> /* natural_t */
+
 /*
  *	Remember to update the mig type definitions
  *	in mach_debug_types.defs when adding/removing fields.

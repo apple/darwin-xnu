@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -81,6 +81,9 @@
 
 #include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
+#include <sys/_types/_u_int32_t.h> /* u_int32_t */
+#include <sys/_types/_u_int64_t.h> /* u_int64_t */
+#include <sys/_types/_u_short.h> /* u_short */
 
 #ifdef XNU_KERNEL_PRIVATE
 
@@ -127,9 +130,11 @@
 /*
  * Macros for type conversion
  * mtod(m,t) -	convert mbuf pointer to data pointer of correct type
+ * mtodo(m, o) -- Same as above but with offset 'o' into data.
  * dtom(x) -	convert data pointer within mbuf to mbuf pointer (XXX)
  */
 #define	mtod(m, t)	((t)m_mtod(m))
+#define mtodo(m, o)     ((void *)(mtod(m, uint8_t *) + (o)))
 #define	dtom(x)		m_dtom(x)
 
 /* header at beginning of each mbuf: */
@@ -140,7 +145,18 @@ struct m_hdr {
 	int32_t		mh_len;		/* amount of data in this mbuf */
 	u_int16_t	mh_type;	/* type of data in this mbuf */
 	u_int16_t	mh_flags;	/* flags; see below */
+#if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
+/* This is needed because of how _MLEN is defined and used. Ideally, _MLEN
+ * should be defined using the offsetof(struct mbuf, M_dat), since there is
+ * no guarantee that mbuf.M_dat will start where mbuf.m_hdr ends. The compiler
+ * may (and does in the armv7k case) insert padding between m_hdr and M_dat in
+ * mbuf. We cannot easily use offsetof, however, since _MLEN is referenced
+ * in the definition of mbuf.
+ */
+} __attribute__((aligned(8)));
+#else
 };
+#endif
 
 /*
  * Packet tag structure (see below for details).
@@ -199,9 +215,6 @@ struct pf_mtag {
 	u_int16_t	pftag_rtableid;	/* alternate routing table id */
 	u_int16_t	pftag_tag;
 	u_int16_t	pftag_routed;
-#if PF_ALTQ
-	u_int32_t	pftag_qid;
-#endif /* PF_ALTQ */
 #if PF_ECN
 	void		*pftag_hdr;	/* saved hdr pos in mbuf, for ECN */
 #endif /* PF_ECN */
@@ -241,10 +254,12 @@ struct tcp_pktinfo {
 struct mptcp_pktinfo {
 	u_int64_t	mtpi_dsn;	/* MPTCP Data Sequence Number */
 	u_int32_t	mtpi_rel_seq;	/* Relative Seq Number */
-	u_int32_t	mtpi_length;	/* Length of mapping */
+	u_int16_t	mtpi_length;	/* Length of mapping */
+	u_int16_t	mtpi_csum;
 #define	mp_dsn		proto_mtag.__pr_u.tcp.tm_mptcp.mtpi_dsn
 #define	mp_rseq		proto_mtag.__pr_u.tcp.tm_mptcp.mtpi_rel_seq
 #define	mp_rlen		proto_mtag.__pr_u.tcp.tm_mptcp.mtpi_length
+#define	mp_csum		proto_mtag.__pr_u.tcp.tm_mptcp.mtpi_csum
 };
 
 /*
@@ -390,9 +405,6 @@ struct pkthdr {
 #define	bufstatus_if	_pkt_bsr.if_data
 #define	bufstatus_sndbuf	_pkt_bsr.sndbuf_data
 	};
-#if MEASURE_BW
-	u_int64_t pkt_bwseq;		/* sequence # */
-#endif /* MEASURE_BW */
 	u_int64_t pkt_timestamp;	/* enqueue time */
 
 	/*
@@ -403,7 +415,8 @@ struct pkthdr {
 	/*
 	 * Module private scratch space (32-bit aligned), currently 16-bytes
 	 * large. Anything stored here is not guaranteed to survive across
-	 * modules.
+	 * modules.  The AQM layer (outbound) uses all 16-bytes for both
+	 * packet scheduling and flow advisory information.
 	 */
 	struct {
 		union {
@@ -419,6 +432,11 @@ struct pkthdr {
 			u_int64_t	__mpriv64[2];
 		} __mpriv_u;
 	} pkt_mpriv __attribute__((aligned(4)));
+#define	pkt_mpriv_hash	pkt_mpriv.__mpriv_u.__mpriv32[0].__mpriv32_u.__val32
+#define	pkt_mpriv_flags	pkt_mpriv.__mpriv_u.__mpriv32[1].__mpriv32_u.__val32
+#define	pkt_mpriv_srcid	pkt_mpriv.__mpriv_u.__mpriv32[2].__mpriv32_u.__val32
+#define	pkt_mpriv_fidx	pkt_mpriv.__mpriv_u.__mpriv32[3].__mpriv32_u.__val32
+
 	u_int32_t redzone;		/* red zone */
 	u_int32_t pkt_compl_callbacks;	/* Packet completion callbacks */
 };
@@ -480,11 +498,12 @@ struct pkthdr {
 #define	PKTF_TCP_REXMT		0x200000 /* packet is TCP retransmission */
 #define	PKTF_REASSEMBLED	0x400000 /* Packet was reassembled */
 #define	PKTF_TX_COMPL_TS_REQ	0x800000 /* tx completion timestamp requested */
-#define	PKTF_DRV_TS_VALID	0x1000000 /* driver timestamp is valid */
+#define	PKTF_TS_VALID		0x1000000 /* pkt timestamp is valid */
 #define	PKTF_DRIVER_MTAG	0x2000000 /* driver mbuf tags fields inited */
 #define	PKTF_NEW_FLOW		0x4000000 /* Data from a new flow */
 #define	PKTF_START_SEQ		0x8000000 /* valid start sequence */
 #define	PKTF_LAST_PKT		0x10000000 /* last packet in the flow */
+#define	PKTF_MPTCP_REINJ	0x20000000 /* Packet has been reinjected for MPTCP */
 
 /* flags related to flow control/advisory and identification */
 #define	PKTF_FLOW_MASK	\
@@ -591,6 +610,7 @@ struct mbuf {
 #define	CSUM_DATA_VALID		0x0400		/* csum_data field is valid */
 #define	CSUM_PSEUDO_HDR		0x0800		/* csum_data has pseudo hdr */
 #define	CSUM_PARTIAL		0x1000		/* simple Sum16 computation */
+#define	CSUM_ZERO_INVERT	0x2000		/* invert 0 to -0 (0xffff) */
 
 #define	CSUM_DELAY_DATA		(CSUM_TCP | CSUM_UDP)
 #define	CSUM_DELAY_IP		(CSUM_IP)	/* IPv4 only: no IPv6 IP cksum */
@@ -599,7 +619,7 @@ struct mbuf {
 
 #define	CSUM_TX_FLAGS							\
 	(CSUM_DELAY_IP | CSUM_DELAY_DATA | CSUM_DELAY_IPV6_DATA |	\
-	CSUM_DATA_VALID | CSUM_PARTIAL)
+	CSUM_DATA_VALID | CSUM_PARTIAL | CSUM_ZERO_INVERT)
 
 #define	CSUM_RX_FLAGS							\
 	(CSUM_IP_CHECKED | CSUM_IP_VALID | CSUM_PSEUDO_HDR |		\
@@ -1454,10 +1474,11 @@ __private_extern__ mbuf_traffic_class_t m_get_traffic_class(struct mbuf *);
 } while (0)
 
 __private_extern__ u_int16_t m_adj_sum16(struct mbuf *, u_int32_t,
-    u_int32_t, u_int32_t);
+    u_int32_t, u_int32_t, u_int32_t);
 __private_extern__ u_int16_t m_sum16(struct mbuf *, u_int32_t, u_int32_t);
 
-__private_extern__ void m_set_ext(struct mbuf *, struct ext_ref *, m_ext_free_func_t, caddr_t);
+__private_extern__ void m_set_ext(struct mbuf *, struct ext_ref *,
+    m_ext_free_func_t, caddr_t);
 __private_extern__ struct ext_ref *m_get_rfa(struct mbuf *);
 __private_extern__ m_ext_free_func_t m_get_ext_free(struct mbuf *);
 __private_extern__ caddr_t m_get_ext_arg(struct mbuf *);

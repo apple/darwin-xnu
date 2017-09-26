@@ -130,6 +130,13 @@ extern int	vm_debug_events;
 #define VM_PAGEOUT_CACHE_EVICT		0x108
 #define VM_PAGEOUT_THREAD_BLOCK		0x109
 #define VM_PAGEOUT_JETSAM		0x10A
+#define VM_INFO1                        0x10B
+#define VM_INFO2                        0x10C
+#define VM_INFO3                        0x10D
+#define VM_INFO4                        0x10E
+#define VM_INFO5                        0x10F
+#define VM_INFO6                        0x110
+#define VM_INFO7                        0x111
 
 #define VM_UPL_PAGE_WAIT		0x120
 #define VM_IOPL_PAGE_WAIT		0x121
@@ -138,6 +145,7 @@ extern int	vm_debug_events;
 #if CONFIG_IOSCHED
 #define VM_PAGE_SLEEP			0x123
 #define VM_PAGE_EXPEDITE		0x124
+#define VM_PAGE_EXPEDITE_NO_MEMORY      0x125
 #endif
 
 #define VM_PRESSURE_EVENT		0x130
@@ -160,14 +168,12 @@ extern int	vm_debug_events;
 
 extern void memoryshot(unsigned int event, unsigned int control);
 
-extern kern_return_t vm_map_create_upl(
-	vm_map_t		map,
-	vm_map_address_t	offset,
-	upl_size_t		*upl_size,
-	upl_t			*upl,
-	upl_page_info_array_t	page_list,
-	unsigned int		*count,
-	upl_control_flags_t	*flags);
+extern void update_vm_info(void);
+
+#if CONFIG_IOSCHED
+extern int upl_get_cached_tier(
+       upl_t                   upl);
+#endif
 
 extern ppnum_t upl_get_highest_page(
 	upl_t			upl);
@@ -178,14 +184,21 @@ extern upl_size_t upl_get_size(
 extern upl_t upl_associated_upl(upl_t upl);
 extern void upl_set_associated_upl(upl_t upl, upl_t associated_upl);
 
-extern void iopl_valid_data(
-	upl_t			upl_ptr);
-
 #ifdef	XNU_KERNEL_PRIVATE
 
-extern vm_tag_t iopl_set_tag(
+extern kern_return_t vm_map_create_upl(
+	vm_map_t		map,
+	vm_map_address_t	offset,
+	upl_size_t		*upl_size,
+	upl_t			*upl,
+	upl_page_info_array_t	page_list,
+	unsigned int		*count,
+	upl_control_flags_t	*flags,
+	vm_tag_t            tag);
+
+extern void iopl_valid_data(
 	upl_t			upl_ptr,
-	vm_tag_t                tag);
+	vm_tag_t        tag);
 
 #endif	/* XNU_KERNEL_PRIVATE */
 
@@ -211,7 +224,9 @@ extern vm_page_t          vm_page_get_next(vm_page_t page);
 
 extern kern_return_t	mach_vm_pressure_level_monitor(boolean_t wait_for_pressure, unsigned int *pressure_level);
 
+#if !CONFIG_EMBEDDED
 extern kern_return_t 	vm_pageout_wait(uint64_t deadline);
+#endif
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -257,10 +272,8 @@ extern kern_return_t	vm_pageout_internal_start(void);
 extern void		vm_pageout_object_terminate(
 					vm_object_t	object);
 
-extern int		vm_pageout_cluster(
-	                                vm_page_t	m,
-					boolean_t	immediate_ok,
-					boolean_t	keep_object_locked);
+extern void		vm_pageout_cluster(
+					vm_page_t	m);
 
 extern void		vm_pageout_initialize_page(
 					vm_page_t	m);
@@ -357,7 +370,6 @@ struct upl {
 #define UPL_LITE		0x100
 #define UPL_IO_WIRE		0x200
 #define UPL_ACCESS_BLOCKED	0x400
-#define UPL_ENCRYPTED		0x800
 #define UPL_SHADOWED		0x1000
 #define UPL_KERNEL_OBJECT	0x2000
 #define UPL_VECTOR		0x4000
@@ -401,7 +413,8 @@ extern kern_return_t vm_object_iopl_request(
 	upl_t			*upl_ptr,
 	upl_page_info_array_t	user_page_list,
 	unsigned int		*page_list_count,
-	upl_control_flags_t	cntrl_flags);
+	upl_control_flags_t	cntrl_flags,
+	vm_tag_t            tag);
 
 extern kern_return_t vm_object_super_upl_request(
 	vm_object_t		object,
@@ -411,7 +424,8 @@ extern kern_return_t vm_object_super_upl_request(
 	upl_t			*upl,
 	upl_page_info_t		*user_page_list,
 	unsigned int		*page_list_count,
-	upl_control_flags_t	cntrl_flags);
+	upl_control_flags_t	cntrl_flags,
+	vm_tag_t            tag);
 
 /* should be just a regular vm_map_enter() */
 extern kern_return_t vm_map_enter_upl(
@@ -432,20 +446,6 @@ extern void vm_page_free_reserve(int pages);
 extern void vm_pageout_throttle_down(vm_page_t page);
 extern void vm_pageout_throttle_up(vm_page_t page);
 
-/*
- * ENCRYPTED SWAP:
- */
-extern void upl_encrypt(
-	upl_t			upl,
-	upl_offset_t		crypt_offset,
-	upl_size_t		crypt_size);
-extern void vm_page_encrypt(
-	vm_page_t		page,
-	vm_map_offset_t		kernel_map_offset);
-extern boolean_t vm_pages_encrypted; /* are there encrypted pages ? */
-extern void vm_page_decrypt(
-	vm_page_t		page,
-	vm_map_offset_t		kernel_map_offset);
 extern kern_return_t vm_paging_map_object(
 	vm_page_t		page,
 	vm_object_t		object,
@@ -538,8 +538,6 @@ extern void vm_set_restrictions(void);
 extern int vm_compressor_mode;
 extern int vm_compressor_thread_count;
 extern boolean_t vm_restricted_to_single_processor;
-extern boolean_t vm_compressor_immediate_preferred;
-extern boolean_t vm_compressor_immediate_preferred_override;
 extern kern_return_t vm_pageout_compress_page(void **, char *, vm_page_t, boolean_t);
 extern void vm_pageout_anonymous_pages(void);
 extern void vm_pageout_disconnect_all_pages(void);
@@ -575,4 +573,18 @@ extern	struct vm_config	vm_config;
 
 #endif	/* KERNEL_PRIVATE */
 
+#ifdef XNU_KERNEL_PRIVATE
+#define MAX_COMPRESSOR_THREAD_COUNT      8
+
+#if DEVELOPMENT || DEBUG
+typedef struct vmct_stats_s {
+	uint64_t vmct_runtimes[MAX_COMPRESSOR_THREAD_COUNT];
+	uint64_t vmct_pages[MAX_COMPRESSOR_THREAD_COUNT];
+	uint64_t vmct_iterations[MAX_COMPRESSOR_THREAD_COUNT];
+	uint64_t vmct_cthreads_total;
+	int32_t vmct_minpages[MAX_COMPRESSOR_THREAD_COUNT];
+	int32_t vmct_maxpages[MAX_COMPRESSOR_THREAD_COUNT];
+} vmct_stats_t;
+#endif
+#endif
 #endif	/* _VM_VM_PAGEOUT_H_ */

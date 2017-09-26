@@ -52,6 +52,18 @@
 
 #define membar_producer dtrace_membar_producer
 
+#define PROBE_ARGS0(a, b, c, d, e) "\000"
+#define PROBE_ARGS1(a, b, c, d, e) a "\000"
+#define PROBE_ARGS2(a, b, c, d, e) a "\000" b "\000"
+#define PROBE_ARGS3(a, b, c, d, e) a "\000" b "\000" c "\000"
+#define PROBE_ARGS4(a, b, c, d, e) a "\000" b "\000" c "\000" d "\000"
+#define PROBE_ARGS5(a, b, c, d, e) a "\000" b "\000" c "\000" d "\000" e "\000"
+#define PROBE_ARGS_(a, b, c, d, e, n, ...) PROBE_ARGS##n(a, b, c, d, e)
+#define PROBE_ARGS(...) PROBE_ARGS_(__VA_ARGS__, 5, 4, 3, 2, 1, 0)
+
+#define LOCKSTAT_PROBE(func, name, probe, ...) \
+	{func, name, probe, DTRACE_IDNONE, PROBE_ARGS(__VA_ARGS__)}
+
 /*
  * Hot patch values, x86
  */
@@ -59,6 +71,14 @@
 #define	NOP	0x90
 #define	RET	0xc3
 #define LOCKSTAT_AFRAMES 1
+#elif	defined(__arm__)
+#define NOP	0xE1A00000
+#define BXLR	0xE12FFF1E
+#define LOCKSTAT_AFRAMES 2
+#elif   defined(__arm64__)
+#define NOP	0xD503201F
+#define RET	0xD65f03c0
+#define LOCKSTAT_AFRAMES 2
 #else
 #error "not ported to this architecture"
 #endif
@@ -68,52 +88,90 @@ typedef struct lockstat_probe {
 	const char	*lsp_name;
 	int		lsp_probe;
 	dtrace_id_t	lsp_id;
+	const char	*lsp_args;
 } lockstat_probe_t;
 
 lockstat_probe_t lockstat_probes[] =
 {
 #if defined(__x86_64__)
 	/* Only provide implemented probes for each architecture  */
-	{ LS_LCK_MTX_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_LOCK_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_MTX_LOCK,	LSA_SPIN,	LS_LCK_MTX_LOCK_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_MTX_LOCK,	LSA_BLOCK,	LS_LCK_MTX_LOCK_BLOCK, DTRACE_IDNONE },	
-	{ LS_LCK_MTX_TRY_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_TRY_LOCK_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_MTX_TRY_SPIN_LOCK, LSA_ACQUIRE, LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_MTX_UNLOCK,	LSA_RELEASE,	LS_LCK_MTX_UNLOCK_RELEASE, DTRACE_IDNONE },
-	{ LS_LCK_MTX_EXT_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_EXT_LOCK_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_MTX_EXT_LOCK,	LSA_SPIN,	LS_LCK_MTX_EXT_LOCK_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_MTX_EXT_LOCK,	LSA_BLOCK,	LS_LCK_MTX_EXT_LOCK_BLOCK, DTRACE_IDNONE },
-//	{ LS_LCK_MTX_EXT_TRY_LOCK, LSA_ACQUIRE,	LS_LCK_MTX_TRY_EXT_LOCK_ACQUIRE, DTRACE_IDNONE },	
-	{ LS_LCK_MTX_EXT_UNLOCK,   LSA_RELEASE,	LS_LCK_MTX_EXT_UNLOCK_RELEASE, DTRACE_IDNONE },
-	{ LS_LCK_MTX_LOCK_SPIN_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_LOCK_SPIN_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_SHARED,	LSR_ACQUIRE,	LS_LCK_RW_LOCK_SHARED_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_SHARED,	LSR_BLOCK,	LS_LCK_RW_LOCK_SHARED_BLOCK, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_SHARED,	LSR_SPIN,	LS_LCK_RW_LOCK_SHARED_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_EXCL,		LSR_ACQUIRE,	LS_LCK_RW_LOCK_EXCL_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_EXCL,		LSR_BLOCK,	LS_LCK_RW_LOCK_EXCL_BLOCK, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_EXCL,		LSR_SPIN,	LS_LCK_RW_LOCK_EXCL_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_RW_DONE,		LSR_RELEASE,	LS_LCK_RW_DONE_RELEASE, DTRACE_IDNONE },
-	{ LS_LCK_RW_TRY_LOCK_SHARED,	LSR_ACQUIRE,	LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_RW_TRY_LOCK_EXCL,	LSR_ACQUIRE,	LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_SHARED_TO_EXCL, LSR_UPGRADE,	LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_SHARED_TO_EXCL,	LSR_SPIN,	LS_LCK_RW_LOCK_SHARED_TO_EXCL_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_RW_LOCK_SHARED_TO_EXCL,	LSR_BLOCK,	LS_LCK_RW_LOCK_SHARED_TO_EXCL_BLOCK, DTRACE_IDNONE },	
-	{ LS_LCK_RW_LOCK_EXCL_TO_SHARED,	LSR_DOWNGRADE,	LS_LCK_RW_LOCK_EXCL_TO_SHARED_DOWNGRADE, DTRACE_IDNONE },
+	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK, LSA_ACQUIRE, LS_LCK_MTX_LOCK_ACQUIRE, "lck_mtx_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK, LSA_SPIN, LS_LCK_MTX_LOCK_SPIN, "lck_mtx_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK, LSA_BLOCK, LS_LCK_MTX_LOCK_BLOCK, "lck_mtx_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_TRY_LOCK, LSA_ACQUIRE, LS_LCK_MTX_TRY_LOCK_ACQUIRE, "lck_mtx_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_TRY_SPIN_LOCK, LSA_ACQUIRE, LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE, "lck_mtx_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_UNLOCK, LSA_RELEASE, LS_LCK_MTX_UNLOCK_RELEASE, "lck_mtx_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_LOCK, LSA_ACQUIRE, LS_LCK_MTX_EXT_LOCK_ACQUIRE, "lck_mtx_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_LOCK, LSA_SPIN, LS_LCK_MTX_EXT_LOCK_SPIN, "lck_mtx_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_LOCK, LSA_BLOCK, LS_LCK_MTX_EXT_LOCK_BLOCK, "lck_mtx_t", "uint64_t"),
+//	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_TRY_LOCK, LSA_ACQUIRE, LS_LCK_MTX_TRY_EXT_LOCK_ACQUIRE)
+	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_UNLOCK, LSA_RELEASE, LS_LCK_MTX_EXT_UNLOCK_RELEASE, "lck_mtx_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK_SPIN_LOCK, LSA_ACQUIRE, LS_LCK_MTX_LOCK_SPIN_ACQUIRE, "lck_mtx_t"),
+	// TODO: This should not be a uint64_t !
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED, LSR_ACQUIRE, LS_LCK_RW_LOCK_SHARED_ACQUIRE, "lck_rw_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED, LSR_BLOCK, LS_LCK_RW_LOCK_SHARED_BLOCK, "lck_rw_t", "uint64_t", "_Bool", "_Bool", "int"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED, LSR_SPIN, LS_LCK_RW_LOCK_SHARED_SPIN, "lck_rw_t", "uint64_t", "_Bool", "_Bool", "int"),
+	// TODO: This should NOT be a uint64_t
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL, LSR_ACQUIRE, LS_LCK_RW_LOCK_EXCL_ACQUIRE, "lck_rw_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL, LSR_BLOCK, LS_LCK_RW_LOCK_EXCL_BLOCK, "lck_rw_t", "uint64_t", "_Bool", "_Bool", "int"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL, LSR_SPIN, LS_LCK_RW_LOCK_EXCL_SPIN, "lck_rw_t", "uint64_t", "int"),
+	LOCKSTAT_PROBE(LS_LCK_RW_DONE, LSR_RELEASE, LS_LCK_RW_DONE_RELEASE, "lck_rw_t", "_Bool"),
+	// TODO : This should NOT be a uint64_t
+	LOCKSTAT_PROBE(LS_LCK_RW_TRY_LOCK_SHARED, LSR_ACQUIRE, LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE, "lck_rw_t", "uint64_t"),
+	// See above
+	LOCKSTAT_PROBE(LS_LCK_RW_TRY_LOCK_EXCL, LSR_ACQUIRE, LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE, "lck_rw_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED_TO_EXCL, LSR_UPGRADE, LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE, "lck_rw_t", "_Bool"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED_TO_EXCL, LSR_SPIN, LS_LCK_RW_LOCK_SHARED_TO_EXCL_SPIN, "lck_rw_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED_TO_EXCL, LSR_BLOCK, LS_LCK_RW_LOCK_SHARED_TO_EXCL_BLOCK, "lck_rw_t", "uint64_t", "_Bool", "_Bool", "int"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL_TO_SHARED, LSR_DOWNGRADE, LS_LCK_RW_LOCK_EXCL_TO_SHARED_DOWNGRADE, "lck_rw_t"),
+	//TODO : Separate the probes for the hw_bit from the probe for the normal hw locks
+	LOCKSTAT_PROBE(LS_LCK_SPIN_LOCK, LSS_ACQUIRE, LS_LCK_SPIN_LOCK_ACQUIRE, "hw_lock_t"),
+	LOCKSTAT_PROBE(LS_LCK_SPIN_LOCK, LSS_SPIN, LS_LCK_SPIN_LOCK_SPIN, "hw_lock_t", "uint64_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_SPIN_UNLOCK, LSS_RELEASE, LS_LCK_SPIN_UNLOCK_RELEASE, "hw_lock_t"),
+#elif defined(__arm__) || defined(__arm64__)
+	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK, LSA_ACQUIRE, LS_LCK_MTX_LOCK_ACQUIRE, "lck_mtx_t"),
+//	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK, LSA_SPIN, LS_LCK_MTX_LOCK_SPIN, "lck_mtx_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK, LSA_BLOCK, LS_LCK_MTX_LOCK_BLOCK, "lck_mtx_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_TRY_LOCK, LSA_ACQUIRE, LS_LCK_MTX_TRY_LOCK_ACQUIRE, "lck_mtx_t"),
+//	LOCKSTAT_PROBE(LS_LCK_MTX_TRY_SPIN_LOCK, LSA_ACQUIRE, LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE, "lck_mtx_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_UNLOCK, LSA_RELEASE, LS_LCK_MTX_UNLOCK_RELEASE, "lck_mtx_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_LOCK, LSA_ACQUIRE, LS_LCK_MTX_EXT_LOCK_ACQUIRE, "lck_mtx_t"),
+//	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_LOCK, LSA_SPIN, LS_LCK_MTX_EXT_LOCK_SPIN, "lck_mtx_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_LOCK, LSA_BLOCK, LS_LCK_MTX_EXT_LOCK_BLOCK, "lck_mtx_t", "uint64_t"),
+//	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_TRY_LOCK, LSA_ACQUIRE, LS_LCK_MTX_TRY_EXT_LOCK_ACQUIRE)
+//	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_UNLOCK, LSA_RELEASE, LS_LCK_MTX_EXT_UNLOCK_RELEASE, "lck_mtx_t"),
+//	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK_SPIN_LOCK, LSA_ACQUIRE, LS_LCK_MTX_LOCK_SPIN_ACQUIRE, "lck_mtx_t"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED, LSR_ACQUIRE, LS_LCK_RW_LOCK_SHARED_ACQUIRE, "lck_rw_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED, LSR_BLOCK, LS_LCK_RW_LOCK_SHARED_BLOCK, "lck_rw_t", "uint64_t", "_Bool", "_Bool", "int"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED, LSR_SPIN, LS_LCK_RW_LOCK_SHARED_SPIN, "lck_rw_t", "uint64_t", "_Bool", "_Bool", "int"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL, LSR_ACQUIRE, LS_LCK_RW_LOCK_EXCL_ACQUIRE, "lck_rw_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL, LSR_BLOCK, LS_LCK_RW_LOCK_EXCL_BLOCK, "lck_rw_t", "uint64_t", "_Bool", "_Bool", "int"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL, LSR_SPIN, LS_LCK_RW_LOCK_EXCL_SPIN, "lck_rw_t", "uint64_t", "int"),
+	LOCKSTAT_PROBE(LS_LCK_RW_DONE, LSR_RELEASE, LS_LCK_RW_DONE_RELEASE, "lck_rw_t", "_Bool"),
+	// TODO : This should NOT be a uint64_t
+	LOCKSTAT_PROBE(LS_LCK_RW_TRY_LOCK_SHARED, LSR_ACQUIRE, LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE, "lck_rw_t", "uint64_t"),
+	// See above
+	LOCKSTAT_PROBE(LS_LCK_RW_TRY_LOCK_EXCL, LSR_ACQUIRE, LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE, "lck_rw_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED_TO_EXCL, LSR_UPGRADE, LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE, "lck_rw_t", "_Bool"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED_TO_EXCL, LSR_SPIN, LS_LCK_RW_LOCK_SHARED_TO_EXCL_SPIN, "lck_rw_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_SHARED_TO_EXCL, LSR_BLOCK, LS_LCK_RW_LOCK_SHARED_TO_EXCL_BLOCK, "lck_rw_t", "uint64_t", "_Bool", "_Bool", "int"),
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL_TO_SHARED, LSR_DOWNGRADE, LS_LCK_RW_LOCK_EXCL_TO_SHARED_DOWNGRADE, "lck_rw_t"),
+	//TODO : Separate the probes for the hw_bit from the probe for the normal hw locks
+	LOCKSTAT_PROBE(LS_LCK_SPIN_LOCK, LSS_ACQUIRE, LS_LCK_SPIN_LOCK_ACQUIRE, "hw_lock_t"),
+	LOCKSTAT_PROBE(LS_LCK_SPIN_LOCK, LSS_SPIN, LS_LCK_SPIN_LOCK_SPIN, "hw_lock_t", "uint64_t", "uint64_t"),
+	LOCKSTAT_PROBE(LS_LCK_SPIN_UNLOCK, LSS_RELEASE, LS_LCK_SPIN_UNLOCK_RELEASE, "hw_lock_t"),
 #endif
+	/* Interlock measurements would be nice, but later */
+
 #ifdef	LATER
-	/* Interlock and spinlock measurements would be nice, but later */
-	{ LS_LCK_SPIN_LOCK,	LSS_ACQUIRE,	LS_LCK_SPIN_LOCK_ACQUIRE, DTRACE_IDNONE },
-	{ LS_LCK_SPIN_LOCK,	LSS_SPIN,	LS_LCK_SPIN_LOCK_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_SPIN_UNLOCK,	LSS_RELEASE,	LS_LCK_SPIN_UNLOCK_RELEASE, DTRACE_IDNONE },
-
-	{ LS_LCK_RW_LOCK_EXCL_TO_SHARED,	LSA_ILK_SPIN,	LS_LCK_RW_LOCK_EXCL_TO_SHARED_ILK_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_MTX_LOCK,	LSA_ILK_SPIN,	LS_LCK_MTX_LOCK_ILK_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_MTX_EXT_LOCK,	LSA_ILK_SPIN,	LS_LCK_MTX_EXT_LOCK_ILK_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_RW_TRY_LOCK_EXCL,	LSA_ILK_SPIN,	LS_LCK_RW_TRY_LOCK_EXCL_ILK_SPIN, DTRACE_IDNONE },
-	{ LS_LCK_RW_TRY_LOCK_SHARED,	LSA_SPIN,	LS_LCK_RW_TRY_LOCK_SHARED_SPIN, DTRACE_IDNONE },
+	LOCKSTAT_PROBE(LS_LCK_RW_LOCK_EXCL_TO_SHARED, LSA_ILK_SPIN, LS_LCK_RW_LOCK_EXCL_TO_SHARED_ILK_SPIN),
+	LOCKSTAT_PROBE(LS_LCK_MTX_LOCK, LSA_ILK_SPIN, LS_LCK_MTX_LOCK_ILK_SPIN),
+	LOCKSTAT_PROBE(LS_LCK_MTX_EXT_LOCK, LSA_ILK_SPIN, LS_LCK_MTX_EXT_LOCK_ILK_SPIN),
+	LOCKSTAT_PROBE(LS_LCK_RW_TRY_LOCK_EXCL, LSA_ILK_SPIN, LS_LCK_RW_TRY_LOCK_EXCL_ILK_SPIN),
+	LOCKSTAT_PROBE(LS_LCK_RW_TRY_LOCK_SHARED, LSA_SPIN, LS_LCK_RW_TRY_LOCK_SHARED_SPIN)
 #endif
 
-	{ NULL, NULL, 0, 0 }
+	{ NULL, NULL, 0, 0, NULL}
 };
 
 dtrace_id_t lockstat_probemap[LS_NPROBES];
@@ -126,14 +184,15 @@ extern void lck_mtx_try_lock_spin_lockstat_patch_point(void);
 extern void lck_mtx_unlock_lockstat_patch_point(void);
 extern void lck_mtx_lock_ext_lockstat_patch_point(void);
 extern void lck_mtx_ext_unlock_lockstat_patch_point(void);
-extern void lck_rw_lock_shared_lockstat_patch_point(void);
-extern void lck_rw_lock_exclusive_lockstat_patch_point(void);
-extern void lck_rw_lock_shared_to_exclusive_lockstat_patch_point(void);
-extern void lck_rw_try_lock_shared_lockstat_patch_point(void);
-extern void lck_rw_try_lock_exclusive_lockstat_patch_point(void);
 extern void lck_mtx_lock_spin_lockstat_patch_point(void);
 #endif
+#if defined (__arm__)
 
+#endif
+
+#if defined (__arm64__)
+
+#endif
 #endif /* CONFIG_DTRACE */
 
 typedef struct lockstat_assembly_probe {
@@ -158,11 +217,6 @@ typedef struct lockstat_assembly_probe {
 		{ LS_LCK_MTX_UNLOCK_RELEASE,		(vm_offset_t *) lck_mtx_unlock_lockstat_patch_point },
 		{ LS_LCK_MTX_EXT_LOCK_ACQUIRE,		(vm_offset_t *) lck_mtx_lock_ext_lockstat_patch_point },
 		{ LS_LCK_MTX_EXT_UNLOCK_RELEASE,	(vm_offset_t *) lck_mtx_ext_unlock_lockstat_patch_point },
-		{ LS_LCK_RW_LOCK_SHARED_ACQUIRE,	(vm_offset_t *) lck_rw_lock_shared_lockstat_patch_point },
-		{ LS_LCK_RW_LOCK_EXCL_ACQUIRE,		(vm_offset_t *) lck_rw_lock_exclusive_lockstat_patch_point },
-		{ LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE,(vm_offset_t *) lck_rw_lock_shared_to_exclusive_lockstat_patch_point },
-		{ LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE,	(vm_offset_t *) lck_rw_try_lock_shared_lockstat_patch_point },
-		{ LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE,	(vm_offset_t *) lck_rw_try_lock_exclusive_lockstat_patch_point },
 		{ LS_LCK_MTX_LOCK_SPIN_ACQUIRE,		(vm_offset_t *) lck_mtx_lock_spin_lockstat_patch_point },
 #endif
 		/* No assembly patch points for ARM */
@@ -195,6 +249,20 @@ void lockstat_hot_patch(boolean_t active, int ls_probe)
 #if defined(__x86_64__)
 		{			
 			uint8_t instr;
+			instr = (active ? NOP : RET );
+			(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i].lsap_patch_point), 
+								sizeof(instr));
+		}
+#elif defined (__arm__)
+		{
+			uint32_t instr;
+			instr = (active ? NOP : BXLR );
+			(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i].lsap_patch_point), 
+								sizeof(instr));
+		}
+#elif defined (__arm64__)
+		{
+			uint32_t instr;
 			instr = (active ? NOP : RET );
 			(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i].lsap_patch_point), 
 								sizeof(instr));
@@ -310,6 +378,29 @@ lockstat_destroy(void *arg, dtrace_id_t id, void *parg)
 	probe->lsp_id = 0;
 }
 
+static void
+lockstat_getargdesc(void *arg, dtrace_id_t id, void *parg, dtrace_argdesc_t *desc)
+{
+#pragma unused(arg, id)
+	lockstat_probe_t *probe = parg;
+	const char* argdesc = probe->lsp_args;
+	int narg = 0;
+
+	desc->dtargd_native[0] = '\0';
+	desc->dtargd_xlate[0] = '\0';
+
+	while(argdesc[0] != '\0') {
+		if (narg == desc->dtargd_ndx) {
+			strlcpy(desc->dtargd_native, argdesc, DTRACE_ARGTYPELEN);
+			return;
+		}
+		argdesc += strlen(argdesc) + 1;
+		narg++;
+	}
+
+	desc->dtargd_ndx = DTRACE_ARGNONE;
+}
+
 static dtrace_pattr_t lockstat_attr = {
 { DTRACE_STABILITY_EVOLVING, DTRACE_STABILITY_EVOLVING, DTRACE_CLASS_COMMON },
 { DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
@@ -325,7 +416,7 @@ static dtrace_pops_t lockstat_pops = {
 	lockstat_disable,
 	NULL,
 	NULL,
-	NULL,
+	lockstat_getargdesc,
 	NULL,
 	NULL,
 	lockstat_destroy

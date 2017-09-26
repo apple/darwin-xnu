@@ -63,16 +63,15 @@
 
 #ifdef	PMAP_TRACES
 extern	boolean_t	pmap_trace;
-#define PMAP_TRACE(x,a,b,c,d,e)						\
-	if (pmap_trace) {						\
-		KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e);			\
+#define PMAP_TRACE(...) \
+	if (pmap_trace) { \
+		KDBG_RELEASE(__VA_ARGS__); \
 	}
 #else
-#define PMAP_TRACE(x,a,b,c,d,e)	KERNEL_DEBUG(x,a,b,c,d,e)
+#define PMAP_TRACE(...)	KDBG_DEBUG(__VA_ARGS__)
 #endif /* PMAP_TRACES */
 
-#define PMAP_TRACE_CONSTANT(x,a,b,c,d,e)				\
-	KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e);				\
+#define PMAP_TRACE_CONSTANT(...) KDBG_RELEASE(__VA_ARGS__)
 
 kern_return_t	pmap_expand_pml4(
 			pmap_t		map,
@@ -782,7 +781,7 @@ pmap_pv_remove_retry:
 		if (pac == PMAP_ACTION_IGNORE)
 			goto pmap_pv_remove_exit;
 		else if (pac == PMAP_ACTION_ASSERT)
-			panic("Possible memory corruption: pmap_pv_remove(%p,0x%llx,0x%x, 0x%llx, %p, %p): null pv_list!", pmap, vaddr, ppn, *pte, ppnp, pte);
+			panic("Possible memory corruption: pmap_pv_remove(%p,0x%llx,0x%x, 0x%llx, %p, %p): null pv_list, priors: %d", pmap, vaddr, ppn, *pte, ppnp, pte, pmap_pagetable_corruption_incidents);
 		else if (pac == PMAP_ACTION_RETRY_RELOCK) {
 			LOCK_PVH(ppn_to_pai(*ppnp));
 			pmap_phys_attributes[ppn_to_pai(*ppnp)] |= (PHYS_MODIFIED | PHYS_REFERENCED);
@@ -814,8 +813,8 @@ pmap_pv_remove_retry:
 			pprevh = pvhash(pvhash_idx);
 			if (PV_HASHED_ENTRY_NULL == *pprevh) {
 				panic("Possible memory corruption: pmap_pv_remove(%p,0x%llx,0x%x): "
-				      "empty hash, removing rooted",
-				      pmap, vaddr, ppn);
+				      "empty hash, removing rooted, priors: %d",
+				    pmap, vaddr, ppn, pmap_pagetable_corruption_incidents);
 			}
 			pmap_pvh_unlink(pvh_e);
 			UNLOCK_PV_HASH(pvhash_idx);
@@ -837,8 +836,8 @@ pmap_pv_remove_retry:
 		LOCK_PV_HASH(pvhash_idx);
 		pprevh = pvhash(pvhash_idx);
 		if (PV_HASHED_ENTRY_NULL == *pprevh) {
-			panic("Possible memory corruption: pmap_pv_remove(%p,0x%llx,0x%x, 0x%llx, %p): empty hash",
-			    pmap, vaddr, ppn, *pte, pte);
+			panic("Possible memory corruption: pmap_pv_remove(%p,0x%llx,0x%x, 0x%llx, %p): empty hash, priors: %d",
+			    pmap, vaddr, ppn, *pte, pte, pmap_pagetable_corruption_incidents);
 		}
 		pvh_e = *pprevh;
 		pmap_pv_hashlist_walks++;
@@ -857,7 +856,7 @@ pmap_pv_remove_retry:
 			pmap_pagetable_corruption_action_t pac = pmap_classify_pagetable_corruption(pmap, vaddr, ppnp, pte, ROOT_PRESENT);
 
 			if (pac == PMAP_ACTION_ASSERT)
-				panic("Possible memory corruption: pmap_pv_remove(%p, 0x%llx, 0x%x, 0x%llx, %p, %p): pv not on hash, head: %p, 0x%llx", pmap, vaddr, ppn, *pte, ppnp, pte, pv_h->pmap, PVE_VA(pv_h));
+				panic("Possible memory corruption: pmap_pv_remove(%p, 0x%llx, 0x%x, 0x%llx, %p, %p): pv not on hash, head: %p, 0x%llx, priors: %d", pmap, vaddr, ppn, *pte, ppnp, pte, pv_h->pmap, PVE_VA(pv_h), pmap_pagetable_corruption_incidents);
 			else {
 				UNLOCK_PV_HASH(pvhash_idx);
 				if (pac == PMAP_ACTION_RETRY_RELOCK) {

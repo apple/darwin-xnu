@@ -73,6 +73,30 @@ extern "C" {
 
 typedef unsigned int WK_word;
 
+#if defined(__arm64__)
+
+void
+WKdm_decompress_4k (const WK_word* src_buf,
+		    WK_word* dest_buf,
+		    WK_word* scratch,
+		    unsigned int bytes);
+int
+WKdm_compress_4k (const WK_word* src_buf,
+		  WK_word* dest_buf,
+		  WK_word* scratch,
+		  unsigned int limit);
+
+void
+WKdm_decompress_16k (WK_word* src_buf,
+		     WK_word* dest_buf,
+		     WK_word* scratch,
+		     unsigned int bytes);
+int
+WKdm_compress_16k (WK_word* src_buf,
+		   WK_word* dest_buf,
+		   WK_word* scratch,
+		   unsigned int limit);
+#else
 
 void
 WKdm_decompress_new (WK_word* src_buf,
@@ -84,6 +108,7 @@ WKdm_compress_new (const WK_word* src_buf,
 		   WK_word* dest_buf,
 		   WK_word* scratch,
 		   unsigned int limit);
+#endif
 
 #ifdef __cplusplus
 } /* extern "C" */

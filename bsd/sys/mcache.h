@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -50,11 +50,11 @@ extern "C" {
 #endif
 
 /*
- * Unlike VERIFY(), ASSERT() is evaluated only in DEBUG build.
+ * Unlike VERIFY(), ASSERT() is evaluated only in DEBUG/DEVELOPMENT build.
  */
 #define	VERIFY(EX)	\
 	((void)(__probable((EX)) || assfail(#EX, __FILE__, __LINE__)))
-#if DEBUG
+#if (DEBUG || DEVELOPMENT)
 #define	ASSERT(EX)	VERIFY(EX)
 #else
 #define	ASSERT(EX)	((void)0)
@@ -147,6 +147,9 @@ extern "C" {
 #define	atomic_bitset_32(a, n)						\
 	atomic_or_32(a, n)
 
+#define	atomic_bitset_32_ov(a, n)					\
+	atomic_or_32_ov(a, n)
+
 #define	atomic_and_8_ov(a, n)						\
 	((u_int8_t) OSBitAndAtomic8(n, (volatile UInt8 *)a))
 
@@ -197,6 +200,11 @@ extern "C" {
 #define	P2ROUNDDOWN(x, align) \
 	(((uintptr_t)(x)) & ~((uintptr_t)(align) - 1))
 #endif /* P2ROUNDDOWN */
+
+#ifndef P2ALIGN
+#define P2ALIGN(x, align) \
+	((uintptr_t)(x) & -((uintptr_t)(align)))
+#endif /* P2ALIGN */
 
 #define	MCACHE_FREE_PATTERN		0xdeadbeefdeadbeefULL
 #define	MCACHE_UNINITIALIZED_PATTERN	0xbaddcafebaddcafeULL
@@ -382,6 +390,7 @@ __private_extern__ unsigned int mcache_alloc_ext(mcache_t *, mcache_obj_t **,
     unsigned int, int);
 __private_extern__ void mcache_free_ext(mcache_t *, mcache_obj_t *);
 __private_extern__ void mcache_reap(void);
+__private_extern__ void mcache_reap_now(mcache_t *, boolean_t);
 __private_extern__ boolean_t mcache_purge_cache(mcache_t *, boolean_t);
 __private_extern__ void mcache_waiter_inc(mcache_t *);
 __private_extern__ void mcache_waiter_dec(mcache_t *);

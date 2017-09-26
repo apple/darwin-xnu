@@ -41,7 +41,7 @@ typedef union {
     typedef struct cczp* cczp_t;
     typedef const struct cczp* cczp_const_t;
 #endif
-typedef void (*ccmod_func_t)(cczp_const_t zp, cc_unit *r, const cc_unit *s, cc_ws_t ws);
+typedef void (*ccmod_func_t)(cc_ws_t ws, cczp_const_t zp, cc_unit *r, const cc_unit *s);
 
 // keep cczp_hd and cczp structures consistent
 // cczp_hd is typecasted to cczp to read EC curve params
@@ -168,7 +168,7 @@ CC_INLINE size_t cczp_bitlen(cczp_const_t zp) {
 /* Ensure both cczp_mod_prime(zp) and cczp_recip(zp) are valid. cczp_n and
    cczp_prime must have been previously initialized. */
 CC_NONNULL_TU((1))
-void cczp_init(cczp_t zp);
+int cczp_init(cczp_t zp);
 
 /* Compute r = s2n mod cczp_prime(zp). Will write cczp_n(zp)
  units to r and reads 2 * cczp_n(zp) units units from s2n. If r and s2n are not
@@ -176,7 +176,7 @@ void cczp_init(cczp_t zp);
  cczp_init(zp) must have been called or both CCZP_MOD_PRIME((cc_unit *)zp)
  and CCZP_RECIP((cc_unit *)zp) must be initialized some other way. */
 CC_NONNULL_TU((1)) CC_NONNULL((2, 3))
-void cczp_mod(cczp_const_t zp, cc_unit *r, const cc_unit *s2n, cc_ws_t ws);
+void cczp_mod(cc_ws_t ws, cczp_const_t zp, cc_unit *r, const cc_unit *s2n);
 
 /* Compute r = sn mod cczp_prime(zp), Will write cczp_n(zp)
  units to r and reads sn units units from s. If r and s are not
@@ -184,7 +184,6 @@ void cczp_mod(cczp_const_t zp, cc_unit *r, const cc_unit *s2n, cc_ws_t ws);
  cczp_init(zp) must have been called or both CCZP_MOD_PRIME((cc_unit *)zp)
  and CCZP_RECIP((cc_unit *)zp) must be initialized some other way. */
 CC_NONNULL_TU((1)) CC_NONNULL((2, 4))
-
 int cczp_modn(cczp_const_t zp, cc_unit *r, cc_size ns, const cc_unit *s);
 
 /* Compute r = x * y mod cczp_prime(zp). Will write cczp_n(zp) units to r
@@ -197,7 +196,7 @@ CC_NONNULL_TU((1)) CC_NONNULL((2, 3, 4))
 void cczp_mul(cczp_const_t zp, cc_unit *t, const cc_unit *x, const cc_unit *y);
 
 CC_NONNULL_TU((1)) CC_NONNULL((2, 3, 4, 5))
-void cczp_mul_ws(cczp_const_t zp, cc_unit *t, const cc_unit *x, const cc_unit *y, cc_ws_t ws);
+void cczp_mul_ws(cc_ws_t ws, cczp_const_t zp, cc_unit *t, const cc_unit *x, const cc_unit *y);
 
 /* Compute r = x * x mod cczp_prime(zp). Will write cczp_n(zp) units to r
    and reads cczp_n(zp) units from x. If r and x are not identical they must
@@ -208,7 +207,7 @@ CC_NONNULL_TU((1)) CC_NONNULL((2, 3))
 void cczp_sqr(cczp_const_t zp, cc_unit *r, const cc_unit *x);
 
 CC_NONNULL_TU((1)) CC_NONNULL((2, 3, 4))
-void cczp_sqr_ws(cczp_const_t zp, cc_unit *r, const cc_unit *x, cc_ws_t ws);
+void cczp_sqr_ws(cc_ws_t ws, cczp_const_t zp, cc_unit *r, const cc_unit *x);
 
 /* Compute r = x^(1/2) mod cczp_prime(zp). Will write cczp_n(zp) units to r
  and reads cczp_n(zp) units from x. If r and x are not identical they must
@@ -229,8 +228,8 @@ int cczp_sqrt(cczp_const_t zp, cc_unit *r, const cc_unit *x);
    be initialized some other way.
  */
 CC_NONNULL_TU((1)) CC_NONNULL((2, 3, 4))
-void cczp_power(cczp_const_t zp, cc_unit *r, const cc_unit *m,
-                const cc_unit *e);
+int cczp_power(cczp_const_t zp, cc_unit *r, const cc_unit *m,
+               const cc_unit *e);
 
 /* Compute r = m ^ e mod cczp_prime(zp), using Square Square Multiply Always.
  - writes cczp_n(zp) units to r
@@ -258,8 +257,8 @@ int cczp_power_ssma_ws(cc_ws_t ws, cczp_const_t zp, cc_unit *r, const cc_unit *s
  or both CCZP_MOD_PRIME((cc_unit *)zp) and CCZP_RECIP((cc_unit *)zp) must
  be initialized some other way. */
 CC_NONNULL_TU((1)) CC_NONNULL((2, 3, 5))
-void cczp_powern(cczp_const_t zp, cc_unit *r, const cc_unit *s,
-                 size_t ebitlen, const cc_unit *e);
+int cczp_powern(cczp_const_t zp, cc_unit *r, const cc_unit *s,
+                size_t ebitlen, const cc_unit *e);
 
 /* Compute r = x + y mod cczp_prime(zp). Will write cczp_n(zp) units to r and
    reads cczp_n(zp) units units from x and y. If r and x are not identical
@@ -270,8 +269,8 @@ void cczp_add(cczp_const_t zp, cc_unit *r, const cc_unit *x,
               const cc_unit *y);
 
 CC_NONNULL_TU((1)) CC_NONNULL((2, 3, 4, 5))
-void cczp_add_ws(cczp_const_t zp, cc_unit *r, const cc_unit *x,
-                 const cc_unit *y, cc_ws_t ws);
+void cczp_add_ws(cc_ws_t ws, cczp_const_t zp, cc_unit *r, const cc_unit *x,
+                 const cc_unit *y);
 
 /* Compute r = x - y mod cczp_prime(zp). Will write cczp_n(zp) units to r and
    reads cczp_n(zp) units units from x and y. If r and x are not identical
@@ -281,8 +280,8 @@ CC_NONNULL_TU((1)) CC_NONNULL((2, 3, 4))
 void cczp_sub(cczp_const_t zp, cc_unit *r, const cc_unit *x, const cc_unit *y);
 
 CC_NONNULL_TU((1)) CC_NONNULL((2, 3, 4, 5))
-void cczp_sub_ws(cczp_const_t zp, cc_unit *r, const cc_unit *x,
-                 const cc_unit *y, cc_ws_t ws);
+void cczp_sub_ws(cc_ws_t ws, cczp_const_t zp, cc_unit *r, const cc_unit *x,
+                 const cc_unit *y);
 
 /* Compute r = x / 2 mod cczp_prime(zp). Will write cczp_n(zp) units to r and
    reads cczp_n(zp) units units from x. If r and x are not identical

@@ -28,11 +28,17 @@
 
 /* Structure used in sigaltstack call. */
 #ifndef _STRUCT_SIGALTSTACK
+
+#include <sys/cdefs.h> /* __DARWIN_UNIX03 */
+
 #if __DARWIN_UNIX03
 #define _STRUCT_SIGALTSTACK	struct __darwin_sigaltstack
 #else /* !__DARWIN_UNIX03 */
 #define _STRUCT_SIGALTSTACK	struct sigaltstack
 #endif /* __DARWIN_UNIX03 */
+
+#include <machine/types.h> /* __darwin_size_t */
+
 _STRUCT_SIGALTSTACK
 {
 	void            *ss_sp;	        /* signal stack base */

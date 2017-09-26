@@ -676,13 +676,21 @@ extern void OSSpinLockUnlock(volatile OSSpinLock * lock);
  * @discussion
  * The OSSynchronizeIO routine ensures orderly load and store operations to noncached memory mapped I/O devices. It executes the eieio instruction on PowerPC processors.
  */
+#if defined(__arm__) || defined(__arm64__)
+extern void OSSynchronizeIO(void);
+#else
 static __inline__ void OSSynchronizeIO(void)
 {
 }
+#endif
 
 #if	defined(KERNEL_PRIVATE)
 
-#if   defined(__i386__) || defined(__x86_64__)
+#if	defined(__arm__) || defined(__arm64__)
+static inline void OSMemoryBarrier(void) {
+	__asm__ volatile("dmb ish" ::: "memory");
+}
+#elif defined(__i386__) || defined(__x86_64__)
 #if	defined(XNU_KERNEL_PRIVATE)
 static inline void OSMemoryBarrier(void) {
 	__asm__ volatile("mfence" ::: "memory");

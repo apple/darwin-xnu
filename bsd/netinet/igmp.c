@@ -190,9 +190,9 @@ static int current_state_timers_running;	/* IGMPv1/v2 host
 #define	IGMP_LOCK()			\
 	lck_mtx_lock(&igmp_mtx)
 #define	IGMP_LOCK_ASSERT_HELD()		\
-	lck_mtx_assert(&igmp_mtx, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&igmp_mtx, LCK_MTX_ASSERT_OWNED)
 #define	IGMP_LOCK_ASSERT_NOTHELD()	\
-	lck_mtx_assert(&igmp_mtx, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&igmp_mtx, LCK_MTX_ASSERT_NOTOWNED)
 #define	IGMP_UNLOCK()			\
 	lck_mtx_unlock(&igmp_mtx)
 
@@ -555,7 +555,7 @@ igmp_ra_alloc(void)
 	MGET(m, M_WAITOK, MT_DATA);
 	p = mtod(m, struct ipoption *);
 	p->ipopt_dst.s_addr = INADDR_ANY;
-	p->ipopt_list[0] = IPOPT_RA;	/* Router Alert Option */
+	p->ipopt_list[0] = (char)IPOPT_RA;	/* Router Alert Option */
 	p->ipopt_list[1] = 0x04;	/* 4 bytes long */
 	p->ipopt_list[2] = IPOPT_EOL;	/* End of IP option list */
 	p->ipopt_list[3] = 0x00;	/* pad byte */

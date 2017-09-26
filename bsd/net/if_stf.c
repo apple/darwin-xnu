@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -312,7 +312,7 @@ stfattach(void)
 	struct stf_softc *sc;
 	int error;
 	const struct encaptab *p;
-	struct ifnet_init_params	stf_init;
+	struct ifnet_init_eparams	stf_init;
 
 	stfinit();
 
@@ -338,6 +338,9 @@ stfattach(void)
 	lck_mtx_init(&sc->sc_ro_mtx, stf_mtx_grp, LCK_ATTR_NULL);
 	
 	bzero(&stf_init, sizeof(stf_init));
+	stf_init.ver = IFNET_INIT_CURRENT_VERSION;
+	stf_init.len = sizeof (stf_init);
+	stf_init.flags = IFNET_INIT_LEGACY;
 	stf_init.name = "stf";
 	stf_init.unit = 0;
 	stf_init.type = IFT_STF;
@@ -350,7 +353,7 @@ stfattach(void)
 	stf_init.ioctl = stf_ioctl;
 	stf_init.set_bpf_tap = stf_set_bpf_tap;
 	
-	error = ifnet_allocate(&stf_init, &sc->sc_if);
+	error = ifnet_allocate_extended(&stf_init, &sc->sc_if);
 	if (error != 0) {
 		printf("stfattach, ifnet_allocate failed - %d\n", error);
 		encap_detach(sc->encap_cookie);

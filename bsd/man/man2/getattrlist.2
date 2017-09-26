@@ -435,14 +435,19 @@ An
 structure that uniquely identifies the file system object within a mounted 
 volume for the duration of it's mount; this identifier is not guaranteed to be 
 persistent for the volume and may change every time the volume is mounted.
-If the VOL_CAP_FMT_64BIT_OBJECT_IDS capability is set, this is instead a 64-bit
-object identifier.
 .Pp
 On HFS+ volumes, the ATTR_CMN_OBJID of a file system object is distinct from 
 the ATTR_CMN_OBJID of any hard link to that file system object. Although the 
 ATTR_CMN_OBJID of a file system object may appear similar (in whole
 or in part) to it's ATTR_CMN_FILEID (see description of ATTR_CMN_FILEID below), 
 \fBno relation between the two attributes should ever be implied.\fP
+.Pp
+ATTR_CMN_OBJID is deprecated sarting with macOS 10.13, iOS 11.0, watchOS 4.0 and
+tvOS 11.0 and ATTR_CMNEXT_LINKID should be used in its place.
+ATTR_CMN_OBJID can only be used on older operating systems only if the file
+system doesn't 64 bit IDs. See the
+.Fn getLinkIDInfo
+function in the EXAMPLES section.
 .
 .It ATTR_CMN_OBJPERMANENTID
 An
@@ -450,8 +455,6 @@ An
 structure that uniquely and persistently identifies the file system object
 within its volume; persistence implies that this attribute is unaffected by
 mount/unmount operations on the volume.
-If the VOL_CAP_FMT_64BIT_OBJECT_IDS capability is set, this is instead a 64-bit
-object identifier.
 .Pp
 Some file systems can not return this attribute when the volume is mounted
 read-only and will fail the request with error
@@ -467,8 +470,6 @@ structure that uniquely identifies the parent directory of the file system
 object within a mounted volume, for the duration of the volume mount; this 
 identifier is not guaranteed to be persistent for the volume and may change 
 every time the volume is mounted.
-If the VOL_CAP_FMT_64BIT_OBJECT_IDS capability is set, this is instead a 64-bit
-object identifier.
 .Pp
 .
 If a file system object is hard linked from multiple directories, the parent
@@ -677,7 +678,7 @@ Analoguous to
 .It ATTR_CMN_FILEID
 A
 .Vt u_int64_t
-that uniquely identifies the file system object within it's mounted volume. 
+that uniquely identifies the file system object within its mounted volume.
 Equivalent to 
 .Fa st_ino
 field of the
@@ -1168,6 +1169,18 @@ An
 containing the number of bytes that are \fBnot\fP trapped inside a clone
 or snapshot, and which would be freed immediately if the file were deleted.
 .
+.It ATTR_CMNEXT_LINKID
+A
+.Vt u_int64_t
+that uniquely identifies the file system object within a mounted volume for the
+duration of its mount.
+.Pp
+On HFS+ and APFS volumes, the ATTR_CMNEXT_LINKID of a file system
+object is distinct from the ATTR_CMNEXT_LINKID of any hard link to that file
+system object. Although the ATTR_CMNEXT_LINKID of a file system object may appear
+similar (in whole or in part) to its ATTR_CMN_FILEID (see description of
+ATTR_CMN_FILEID above), \fBno relation between the two attributes should ever be implied.\fP
+.
 .El
 .
 .Sh VOLUME CAPABILITIES
@@ -1526,6 +1539,12 @@ native extended attributes (see
 If this bit is set, the file system supports cloning files and directories.
 See 
 .Xr clonefileat 2 
+for more details.
+.
+.It VOL_CAP_INT_SNAPSHOT
+If this bit is set, the file system supports snapshots.
+See
+.Xr fs_snapshot_create 2
 for more details.
 .
 .It VOL_CAP_INT_NAMEDSTREAMS
@@ -2048,6 +2067,56 @@ main(int argc, char **argv)
 		printf("%s:  Modification time = %s", argv[i], ctime(&myStat.st_modtime.tv_sec));
 	}
 	return 0;
+}
+.Ed
+.Pp
+ The getLinkIDInfo() function determines if ATTR_CMNEXT_LINKID and ATTR_CMN_OBJID
+ are valid to use on the file system specified by path.
+.
+.Bd -literal
+int getLinkIDInfo(const char *path, bool *cmnExtLinkIDValid, bool *cmnObjIDValid)
+{
+    int result;
+    struct statfs statfsBuf;
+    struct attrlist attrList;
+    struct volAttrsBuf {
+        u_int32_t length;
+        vol_capabilities_attr_t capabilities;
+        vol_attributes_attr_t attributes;
+    } __attribute__((aligned(4), packed));
+    struct volAttrsBuf volAttrs;
+.Pp
+    memset(&attrList, 0, sizeof(attrList));
+    attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
+    attrList.volattr = ATTR_VOL_INFO | ATTR_VOL_CAPABILITIES | ATTR_VOL_ATTRIBUTES;
+    // get the file system's mount point path for the input path
+    result = statfs(path, &statfsBuf);
+    if ( result == 0 ) {
+        // get the supported capabilities and attributes
+        result = getattrlist(statfsBuf.f_mntonname, &attrList, &volAttrs, sizeof(volAttrs), FSOPT_ATTR_CMN_EXTENDED);
+        if ( result == 0 ) {
+            if ( volAttrs.attributes.validattr.forkattr & ATTR_CMNEXT_LINKID ) {
+                // ATTR_CMNEXT_LINKID is available; do not use ATTR_CMN_OBJID
+                *cmnExtLinkIDValid = true;
+                *cmnObjIDValid = false;
+            }
+            else {
+                // ATTR_CMNEXT_LINKID is not available
+                cmnExtLinkIDValid = false;
+                // ATTR_CMN_OBJID can only be used if the file system does not use 64-bit object IDs
+                if ( (volAttrs.capabilities.capabilities[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_64BIT_OBJECT_IDS) && (volAttrs.capabilities.valid[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_64BIT_OBJECT_IDS) ) {
+                    *cmnObjIDValid = false;
+                }
+                else {
+                    *cmnObjIDValid = true;
+                }
+            }
+        }
+    }
+    if ( result != 0 ) {
+        *cmnExtLinkIDValid = *cmnObjIDValid = false;
+    }
+    return result;
 }
 .Ed
 .Pp

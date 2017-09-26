@@ -23,7 +23,7 @@ ifeq ($(PLATFORM),watchOS)
     PLATFORM := WatchOS
 endif
 
-SUPPORTED_EMBEDDED_PLATFORMS := iPhoneOS iPhoneOSNano tvOS AppleTVOS WatchOS
+SUPPORTED_EMBEDDED_PLATFORMS := iPhoneOS iPhoneOSNano tvOS AppleTVOS WatchOS BridgeOS
 Embedded = $(if $(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),YES,NO)
 
 #
@@ -37,6 +37,8 @@ else ifeq ($(PLATFORM),tvOS)
     DEPLOYMENT_TARGET_FLAGS = -mtvos-version-min=$(SDKVERSION)
 else ifeq ($(PLATFORM),AppleTVOS)
     DEPLOYMENT_TARGET_FLAGS = -mtvos-version-min=$(SDKVERSION)
+else ifeq ($(PLATFORM),BridgeOS)
+    DEPLOYMENT_TARGET_FLAGS = -mbridgeos-version-min=$(SDKVERSION)
 else ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
     DEPLOYMENT_TARGET_FLAGS = -miphoneos-version-min=$(SDKVERSION)
 else ifneq ($(filter $(SUPPORTED_SIMULATOR_PLATFORMS),$(PLATFORM)),)

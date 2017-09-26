@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -85,6 +85,7 @@
 #include <sys/mbuf.h>
 #include <sys/queue.h>			/* XXX */
 #include <sys/kernel.h>
+#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/time.h>
@@ -95,6 +96,8 @@
 #if DUMMYNET
 #include <net/kpi_protocol.h>
 #endif /* DUMMYNET */
+#include <net/nwk_wq.h>
+#include <net/pfvar.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/in_var.h>
@@ -167,7 +170,6 @@ static void dummynet_send(struct mbuf *m);
 static struct dn_pipe_head	pipehash[HASHSIZE];	/* all pipes */
 static struct dn_flow_set_head	flowsethash[HASHSIZE];	/* all flowsets */
 
-
 #ifdef SYSCTL_NODE
 SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet,
 		CTLFLAG_RW | CTLFLAG_LOCKED, 0, "Dummynet");
@@ -207,13 +209,6 @@ SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED, 
 #define	DPRINTF(X)
 #endif
 
-/* contrary to the comment above random(), it does not actually
- * return a value [0, 2^31 - 1], which breaks plr amongst other
- * things. Masking it should work even if the behavior of
- * the function is fixed.
- */
-#define MY_RANDOM (random() & 0x7FFFFFFF)
-
 /* dummynet lock */
 static lck_grp_t         *dn_mutex_grp;
 static lck_grp_attr_t    *dn_mutex_grp_attr;
@@ -229,8 +224,6 @@ static void dummynet_flush(void);
 void dummynet_drain(void);
 static ip_dn_io_t dummynet_io;
 
-int if_tx_rdy(struct ifnet *ifp);
-
 static void cp_flow_set_to_64_user(struct dn_flow_set *set, struct dn_flow_set_64 *fs_bp);
 static void cp_queue_to_64_user( struct dn_flow_queue *q, struct dn_flow_queue_64 *qp);
 static char *cp_pipe_to_64_user(struct dn_pipe *p, struct dn_pipe_64 *pipe_bp);
@@ -243,6 +236,16 @@ static char *cp_pipe_to_32_user(struct dn_pipe *p, struct dn_pipe_32 *pipe_bp);
 static char* dn_copy_set_32(struct dn_flow_set *set, char *bp);
 static int cp_pipe_from_user_32( struct sockopt *sopt, struct dn_pipe *p );
 
+struct eventhandler_lists_ctxt dummynet_evhdlr_ctxt;
+
+uint32_t my_random(void)
+{
+	uint32_t val;
+	read_frandom(&val, sizeof(val));
+	val &= 0x7FFFFFFF;
+
+	return (val);
+}
 
 /*
  * Heap management functions.
@@ -730,7 +733,7 @@ transmit_event(struct dn_pipe *pipe, struct mbuf **head, struct mbuf **tail)
 	struct dn_pkt_tag *pkt = NULL;
 	u_int64_t schedule_time;
 
-	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(dn_mutex, LCK_MTX_ASSERT_OWNED);
         ASSERT(serialize >= 0);
 	if (serialize == 0) {
 		while ((m = pipe->head) != NULL) {
@@ -817,7 +820,7 @@ ready_event(struct dn_flow_queue *q, struct mbuf **head, struct mbuf **tail)
     struct dn_pipe *p = q->fs->pipe ;
     int p_was_empty ;
 
-	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(dn_mutex, LCK_MTX_ASSERT_OWNED);
 
     if (p == NULL) {
 		printf("dummynet: ready_event pipe is gone\n");
@@ -884,7 +887,7 @@ ready_event_wfq(struct dn_pipe *p, struct mbuf **head, struct mbuf **tail)
     struct dn_heap *neh = &(p->not_eligible_heap) ;
 	int64_t p_numbytes = p->numbytes;
 
-	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(dn_mutex, LCK_MTX_ASSERT_OWNED);
 
     if (p->if_name[0] == 0) /* tx clock is simulated */
 	p_numbytes += ( curr_time - p->sched_time ) * p->bandwidth;
@@ -1143,58 +1146,6 @@ dummynet_send(struct mbuf *m)
 			break ;
 	}
 	}
-}
-
-
-
-/*
- * called by an interface when tx_rdy occurs.
- */
-int
-if_tx_rdy(struct ifnet *ifp)
-{
-    struct dn_pipe *p;
-	struct mbuf *head = NULL, *tail = NULL;
-	int i;
-
-	lck_mtx_lock(dn_mutex);
-
-	for (i = 0; i < HASHSIZE; i++)
-		SLIST_FOREACH(p, &pipehash[i], next)
-		if (p->ifp == ifp)
-			break ;
-    if (p == NULL) {
-	char buf[32];
-	snprintf(buf, sizeof(buf), "%s", if_name(ifp));
-	for (i = 0; i < HASHSIZE; i++)
-		SLIST_FOREACH(p, &pipehash[i], next)
-	    if (!strcmp(p->if_name, buf) ) {
-		p->ifp = ifp ;
-		DPRINTF(("dummynet: ++ tx rdy from %s (now found)\n", buf));
-		break ;
-	    }
-    }
-    if (p != NULL) {
-	DPRINTF(("dummynet: ++ tx rdy from %s - qlen %d\n", if_name(ifp),
-		IFCQ_LEN(&ifp->if_snd)));
-	p->numbytes = 0 ; /* mark ready for I/O */
-	ready_event_wfq(p, &head, &tail);
-    }
-
-	if (head != NULL) {
-		serialize++;
-	}
-
-	lck_mtx_unlock(dn_mutex);
-
-	/* Send out the de-queued list of ready-to-send packets */
-	if (head != NULL) {
-		dummynet_send(head);
-		lck_mtx_lock(dn_mutex);
-		serialize--;
-		lck_mtx_unlock(dn_mutex);
-	}
-    return 0;
 }
 
 /*
@@ -1460,7 +1411,7 @@ red_drops(struct dn_flow_set *fs, struct dn_flow_queue *q, int len)
     if (fs->flags_fs & DN_QSIZE_IS_BYTES)
 	p_b = (p_b * len) / fs->max_pkt_size;
     if (++q->count == 0)
-	q->random = MY_RANDOM & 0xffff;
+	q->random = (my_random() & 0xffff);
     else {
 	/*
 	 * q->count counts packets arrived since last drop, so a greater
@@ -1470,7 +1421,7 @@ red_drops(struct dn_flow_set *fs, struct dn_flow_queue *q, int len)
 	    q->count = 0;
 	    DPRINTF(("dummynet: - red drop"));
 	    /* after a drop we calculate a new random value */
-	    q->random = MY_RANDOM & 0xffff;
+	    q->random = (my_random() & 0xffff);
 	    return 1;    /* drop */
 	}
     }
@@ -1602,7 +1553,7 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa, int cl
      */
     q->tot_bytes += len ;
     q->tot_pkts++ ;
-    if ( fs->plr && (MY_RANDOM < fs->plr) )
+    if ( fs->plr && (my_random() < fs->plr))
 	goto dropit ;		/* random pkt drop			*/
     if ( fs->flags_fs & DN_QSIZE_IS_BYTES) {
     	if (q->len_bytes > fs->qsize)
@@ -1815,7 +1766,7 @@ purge_flow_set(struct dn_flow_set *fs, int all)
     struct dn_flow_queue *q, *qn ;
     int i ;
 
-	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(dn_mutex, LCK_MTX_ASSERT_OWNED);
 
     for (i = 0 ; i <= fs->rq_size ; i++ ) {
 	for (q = fs->rq[i] ; q ; q = qn ) {
@@ -2065,7 +2016,6 @@ set_fs_parms(struct dn_flow_set *x, struct dn_flow_set *src)
 /*
  * setup pipe or queue parameters.
  */
-
 static int
 config_pipe(struct dn_pipe *p)
 {
@@ -2087,7 +2037,7 @@ config_pipe(struct dn_pipe *p)
 	return EINVAL ;
     if (p->pipe_nr != 0) { /* this is a pipe */
 	struct dn_pipe *x, *b;
-
+	struct dummynet_event dn_event;
 	lck_mtx_lock(dn_mutex);
 
 	/* locate pipe */
@@ -2133,6 +2083,14 @@ config_pipe(struct dn_pipe *p)
 			    x, next);
 	}
 	lck_mtx_unlock(dn_mutex);
+
+	bzero(&dn_event, sizeof(dn_event));
+	dn_event.dn_event_code = DUMMYNET_PIPE_CONFIG;
+	dn_event.dn_event_pipe_config.bandwidth = p->bandwidth;
+	dn_event.dn_event_pipe_config.delay = p->delay;
+	dn_event.dn_event_pipe_config.plr = pfs->plr;
+
+	dummynet_event_enqueue_nwk_wq_entry(&dn_event);
     } else { /* config queue */
 	struct dn_flow_set *x, *b ;
 
@@ -2232,7 +2190,7 @@ dummynet_drain(void)
     struct mbuf *m, *mnext;
 	int i;
 
-	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(dn_mutex, LCK_MTX_ASSERT_OWNED);
 
     heap_free(&ready_heap);
     heap_free(&wfq_ready_heap);
@@ -2348,7 +2306,7 @@ char* dn_copy_set_32(struct dn_flow_set *set, char *bp)
     struct dn_flow_queue *q;
 	struct dn_flow_queue_32 *qp = (struct dn_flow_queue_32 *)bp;
 
-	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(dn_mutex, LCK_MTX_ASSERT_OWNED);
 
     for (i = 0 ; i <= set->rq_size ; i++)
 		for (q = set->rq[i] ; q ; q = q->next, qp++ ) {
@@ -2380,7 +2338,7 @@ char* dn_copy_set_64(struct dn_flow_set *set, char *bp)
     struct dn_flow_queue *q;
 	struct dn_flow_queue_64 *qp = (struct dn_flow_queue_64 *)bp;
 
-	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(dn_mutex, LCK_MTX_ASSERT_OWNED);
 
     for (i = 0 ; i <= set->rq_size ; i++)
 		for (q = set->rq[i] ; q ; q = q->next, qp++ ) {
@@ -2417,7 +2375,7 @@ dn_calc_size(int is64user)
 	size_t setsize;
 	int i;
 
-	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(dn_mutex, LCK_MTX_ASSERT_OWNED);
 	if ( is64user ){
 		pipesize = sizeof(struct dn_pipe_64);
 		queuesize = sizeof(struct dn_flow_queue_64);
@@ -2445,70 +2403,74 @@ dn_calc_size(int is64user)
 static int
 dummynet_get(struct sockopt *sopt)
 {
-    char *buf, *bp=NULL; /* bp is the "copy-pointer" */
-    size_t size ;
-    struct dn_flow_set *set ;
-    struct dn_pipe *p ;
-    int error=0, i ;
-	int	is64user = 0;
+	char *buf = NULL, *bp = NULL; /* bp is the "copy-pointer" */
+	size_t size = 0;
+	struct dn_flow_set *set;
+	struct dn_pipe *p;
+	int error = 0, i;
+	int is64user = 0;
 
-    /* XXX lock held too long */
-    lck_mtx_lock(dn_mutex);
-    /*
-     * XXX: Ugly, but we need to allocate memory with M_WAITOK flag and we
-     *      cannot use this flag while holding a mutex.
-     */
+	/* XXX lock held too long */
+	lck_mtx_lock(dn_mutex);
+	/*
+	 * XXX: Ugly, but we need to allocate memory with M_WAITOK flag
+	 * and we cannot use this flag while holding a mutex.
+	*/
 	if (proc_is64bit(sopt->sopt_p))
 		is64user = 1;
-    for (i = 0; i < 10; i++) {
+	for (i = 0; i < 10; i++) {
 		size = dn_calc_size(is64user);
 		lck_mtx_unlock(dn_mutex);
 		buf = _MALLOC(size, M_TEMP, M_WAITOK);
 		if (buf == NULL)
-			return ENOBUFS;
+			return(ENOBUFS);
 		lck_mtx_lock(dn_mutex);
 		if (size == dn_calc_size(is64user))
 			break;
 		FREE(buf, M_TEMP);
 		buf = NULL;
-    }
-    if (buf == NULL) {
+	}
+	if (buf == NULL) {
 		lck_mtx_unlock(dn_mutex);
-		return ENOBUFS ;
-    }
+		return(ENOBUFS);
+	}
 
-
-    bp = buf;
-    for (i = 0; i < HASHSIZE; i++)
-	SLIST_FOREACH(p, &pipehash[i], next) {
-		/*
-		 * copy pipe descriptor into *bp, convert delay back to ms,
-		 * then copy the flow_set descriptor(s) one at a time.
-		 * After each flow_set, copy the queue descriptor it owns.
-		 */
-		if ( is64user ){
-			bp = cp_pipe_to_64_user(p, (struct dn_pipe_64 *)bp);
+	bp = buf;
+	for (i = 0; i < HASHSIZE; i++) {
+		SLIST_FOREACH(p, &pipehash[i], next) {
+			/*
+			 * copy pipe descriptor into *bp, convert delay
+			 * back to ms, then copy the flow_set descriptor(s)
+			 * one at a time. After each flow_set, copy the
+			 * queue descriptor it owns.
+			 */
+			if ( is64user ) {
+				bp = cp_pipe_to_64_user(p,
+				    (struct dn_pipe_64 *)bp);
+			} else {
+				bp = cp_pipe_to_32_user(p,
+				    (struct dn_pipe_32 *)bp);
+			}
 		}
-		else{
-			bp = cp_pipe_to_32_user(p, (struct dn_pipe_32 *)bp);
+	}
+	for (i = 0; i < HASHSIZE; i++) {
+		SLIST_FOREACH(set, &flowsethash[i], next) {
+			struct dn_flow_set_64 *fs_bp =
+			    (struct dn_flow_set_64 *)bp ;
+			cp_flow_set_to_64_user(set, fs_bp);
+			/* XXX same hack as above */
+			fs_bp->next = CAST_DOWN(user64_addr_t,
+			    DN_IS_QUEUE);
+			fs_bp->pipe = USER_ADDR_NULL;
+			fs_bp->rq = USER_ADDR_NULL ;
+			bp += sizeof(struct dn_flow_set_64);
+			bp = dn_copy_set_64( set, bp );
 		}
-    }
-	for (i = 0; i < HASHSIZE; i++)
-	SLIST_FOREACH(set, &flowsethash[i], next) {
-		struct dn_flow_set_64 *fs_bp = (struct dn_flow_set_64 *)bp ;
-		cp_flow_set_to_64_user(set, fs_bp);
-		/* XXX same hack as above */
-		fs_bp->next = CAST_DOWN(user64_addr_t, DN_IS_QUEUE);
-		fs_bp->pipe = USER_ADDR_NULL;
-		fs_bp->rq = USER_ADDR_NULL ;
-		bp += sizeof(struct dn_flow_set_64);
-		bp = dn_copy_set_64( set, bp );
-    }
-    lck_mtx_unlock(dn_mutex);
-
-    error = sooptcopyout(sopt, buf, size);
-    FREE(buf, M_TEMP);
-    return error ;
+	}
+	lck_mtx_unlock(dn_mutex);
+	error = sooptcopyout(sopt, buf, size);
+	FREE(buf, M_TEMP);
+	return(error);
 }
 
 /*
@@ -2565,6 +2527,12 @@ ip_dn_ctl(struct sockopt *sopt)
 }
 
 void
+dummynet_init(void)
+{
+	eventhandler_lists_ctxt_init(&dummynet_evhdlr_ctxt);
+}
+
+void
 ip_dn_init(void)
 {
 	/* setup locks */
@@ -2594,8 +2562,41 @@ ip_dn_init(void)
 	default_rule.cmd[0].len = 1;
 	default_rule.cmd[0].opcode =
 #ifdef IPFIREWALL_DEFAULT_TO_ACCEPT
-                                (1) ? O_ACCEPT :
+	    (1) ? O_ACCEPT :
 #endif
-                                O_DENY;
+	    O_DENY;
 #endif
+}
+
+struct dn_event_nwk_wq_entry
+{
+	struct nwk_wq_entry nwk_wqe;
+	struct dummynet_event dn_ev_arg;
+};
+
+static void
+dummynet_event_callback(void *arg)
+{
+	struct dummynet_event *p_dn_ev = (struct dummynet_event *)arg;
+
+	EVENTHANDLER_INVOKE(&dummynet_evhdlr_ctxt, dummynet_event, p_dn_ev);
+	return;
+}
+
+void
+dummynet_event_enqueue_nwk_wq_entry(struct dummynet_event *p_dn_event)
+{
+	struct dn_event_nwk_wq_entry *p_dn_ev = NULL;
+
+	MALLOC(p_dn_ev, struct dn_event_nwk_wq_entry *,
+	    sizeof(struct dn_event_nwk_wq_entry),
+	    M_NWKWQ, M_WAITOK | M_ZERO);
+
+	p_dn_ev->nwk_wqe.func = dummynet_event_callback;
+	p_dn_ev->nwk_wqe.is_arg_managed = TRUE;
+	p_dn_ev->nwk_wqe.arg = &p_dn_ev->dn_ev_arg;
+
+	bcopy(p_dn_event, &(p_dn_ev->dn_ev_arg),
+	    sizeof(struct dummynet_event));
+	nwk_wq_enqueue((struct nwk_wq_entry*)p_dn_ev);
 }

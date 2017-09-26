@@ -33,44 +33,70 @@
 #include <sys/work_interval.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
-#include <kern/policy_internal.h>
+#include <kern/work_interval.h>
 
 #include <libkern/libkern.h>
 
 int
-work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap, __unused int32_t *retval)
+work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
+                  __unused int32_t *retval)
 {
-	uint32_t	operation = uap->operation;
-	int			error = 0;
-	kern_return_t	kret = KERN_SUCCESS;
-	uint64_t	work_interval_id;
-	struct work_interval_notification	notification;
+	uint32_t        operation = uap->operation;
+	int             error = 0;
+	kern_return_t   kret = KERN_SUCCESS;
+	struct work_interval_notification notification;
+
+	/* Two different structs, because headers are complicated */
+	struct work_interval_create_params create_params;
+	struct kern_work_interval_create_args create_args;
 
 	switch (operation) {
 		case WORK_INTERVAL_OPERATION_CREATE:
-			if (uap->arg == USER_ADDR_NULL || uap->work_interval_id != 0) {
+			return ENOTSUP;
+		case WORK_INTERVAL_OPERATION_CREATE2:
+			if (uap->arg == USER_ADDR_NULL || uap->work_interval_id != 0)
 				return EINVAL;
-			}
-			if (uap->len < sizeof(work_interval_id)) {
-				return ERANGE;
-			}
+			if (uap->len < sizeof(create_params))
+				return EINVAL;
 
 			/*
 			 * Privilege check performed up-front, and then the work
 			 * ID is allocated for use by the thread
 			 */
-			error = priv_check_cred(kauth_cred_get(), PRIV_WORK_INTERVAL, 0);
-			if (error) {
-				return (error);
-			}
+			if ((error = priv_check_cred(kauth_cred_get(), PRIV_WORK_INTERVAL, 0)))
+				return error;
 
-			kret = thread_policy_create_work_interval(current_thread(),
-													  &work_interval_id);
-			if (kret == KERN_SUCCESS) {
-				error = copyout(&work_interval_id, uap->arg, sizeof(work_interval_id));
-			} else {
-				error = EINVAL;
-			}
+			if ((error = copyin(uap->arg, &create_params, sizeof(create_params))))
+				return error;
+
+			create_args = (struct kern_work_interval_create_args) {
+				.wica_id            = create_params.wicp_id,
+				.wica_port          = create_params.wicp_port,
+				.wica_create_flags  = create_params.wicp_create_flags,
+			};
+
+			kret = kern_work_interval_create(current_thread(), &create_args);
+
+			/* thread already has a work interval */
+			if (kret == KERN_FAILURE)
+				return EALREADY;
+
+			/* port copyout failed */
+			if (kret == KERN_RESOURCE_SHORTAGE)
+				return ENOMEM;
+
+			/* some other failure */
+			if (kret != KERN_SUCCESS)
+				return EINVAL;
+
+			create_params = (struct work_interval_create_params) {
+				.wicp_id = create_args.wica_id,
+				.wicp_port = create_args.wica_port,
+				.wicp_create_flags = create_args.wica_create_flags,
+			};
+
+			if ((error = copyout(&create_params, uap->arg, sizeof(create_params))))
+				return error;
 
 			break;
 		case WORK_INTERVAL_OPERATION_DESTROY:
@@ -83,48 +109,61 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap, __unuse
 			 * operation would have allocated a work interval ID for the current
 			 * thread, which the scheduler will validate.
 			 */
-			kret = thread_policy_destroy_work_interval(current_thread(),
-													   uap->work_interval_id);
-			if (kret != KERN_SUCCESS) {
-				error = EINVAL;
-			}
+			kret = kern_work_interval_destroy(current_thread(), uap->work_interval_id);
+			if (kret != KERN_SUCCESS)
+				return EINVAL;
 
 			break;
 		case WORK_INTERVAL_OPERATION_NOTIFY:
-			if (uap->arg == USER_ADDR_NULL || uap->work_interval_id == 0) {
+			if (uap->arg == USER_ADDR_NULL || uap->work_interval_id == 0)
 				return EINVAL;
-			}
-			if (uap->len < sizeof(notification)) {
+
+			if (uap->len < sizeof(notification))
 				return EINVAL;
-			}
 
 			/*
 			 * No privilege check, we assume a previous WORK_INTERVAL_OPERATION_CREATE
 			 * operation would have allocated a work interval ID for the current
 			 * thread, which the scheduler will validate.
 			 */
-			error = copyin(uap->arg, &notification, sizeof(notification));
-			if (error) {
-				break;
-			}
+			if ((error = copyin(uap->arg, &notification, sizeof(notification))))
+				return error;
 
-			kret = sched_work_interval_notify(current_thread(),
-											  uap->work_interval_id,
-											  notification.start,
-											  notification.finish,
-											  notification.deadline,
-											  notification.next_start,
-											  notification.flags);
-			if (kret != KERN_SUCCESS) {
-				error = EINVAL;
-				break;
-			}
+			struct kern_work_interval_args kwi_args = {
+				.work_interval_id   = uap->work_interval_id,
+				.start              = notification.start,
+				.finish             = notification.finish,
+				.deadline           = notification.deadline,
+				.next_start         = notification.next_start,
+				.notify_flags       = notification.notify_flags,
+				.create_flags       = notification.create_flags,
+			};
+
+			kret = kern_work_interval_notify(current_thread(), &kwi_args);
+			if (kret != KERN_SUCCESS)
+				return EINVAL;
 
 			break;
+		case WORK_INTERVAL_OPERATION_JOIN:
+			if (uap->arg != USER_ADDR_NULL) {
+				return EINVAL;
+			}
+
+			/*
+			 * No privilege check, because the work interval port
+			 * is a capability.
+			 */
+			kret = kern_work_interval_join(current_thread(),
+			                               (mach_port_name_t)uap->work_interval_id);
+			if (kret != KERN_SUCCESS)
+				return EINVAL;
+
+			break;
+
 		default:
-			error = ENOTSUP;
-			break;
+			return ENOTSUP;
 	}
 
 	return (error);
 }
+

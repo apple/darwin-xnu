@@ -35,6 +35,9 @@ extern "C" {
 #ifdef KERNEL
 #include <libkern/crypto/aes.h>
 #include <uuid/uuid.h>
+#include <kern/debug.h>
+
+extern int kdb_printf(const char *format, ...) __printflike(1,2);
 #endif
 
 #ifndef __IOKIT_IOHIBERNATEPRIVATE_H
@@ -308,8 +311,7 @@ void     IOCloseDebugDataFile();
 IOReturn IOHibernateIOKitSleep(void);
 IOReturn IOHibernateSystemHasSlept(void);
 IOReturn IOHibernateSystemWake(void);
-IOReturn IOHibernateSystemPostWake(void);
-void     IOHibernateSystemPostWakeTrim(void * p1, void * p2);
+IOReturn IOHibernateSystemPostWake(bool now);
 uint32_t IOHibernateWasScreenLocked(void);
 void     IOHibernateSetScreenLocked(uint32_t lockState);
 void     IOHibernateSetWakeCapabilities(uint32_t capability);
@@ -362,6 +364,10 @@ void
 hibernate_vm_lock(void);
 void
 hibernate_vm_unlock(void);
+void
+hibernate_vm_lock_end(void);
+boolean_t
+hibernate_vm_locks_are_safe(void);
 
 // mark pages not to be saved, based on VM system accounting
 void
@@ -435,11 +441,15 @@ extern uint8_t     gIOHibernateRestoreStack[];
 extern uint8_t     gIOHibernateRestoreStackEnd[];
 extern IOHibernateImageHeader *    gIOHibernateCurrentHeader;
 
+#define HIBLOGFROMPANIC(fmt, args...) \
+    { if (kernel_debugger_entry_count) { kdb_printf(fmt, ## args); } }
+
 #define HIBLOG(fmt, args...)	\
-    { kprintf(fmt, ## args); printf(fmt, ## args); }
+    { if (kernel_debugger_entry_count) { kdb_printf(fmt, ## args); } else { kprintf(fmt, ## args); printf(fmt, ## args); } }
 
 #define HIBPRINT(fmt, args...)	\
-    { kprintf(fmt, ## args); }
+    { if (kernel_debugger_entry_count) { kdb_printf(fmt, ## args); } else { kprintf(fmt, ## args); } }
+
 
 #endif /* KERNEL */
 

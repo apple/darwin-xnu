@@ -64,17 +64,16 @@ static inline u_int64_t mh3_fmix64(u_int64_t);
 /*
  * The following hash algorithms are selected based on performance:
  *
- * Intel 32-bit:	MurmurHash3_x86_32
- * Intel 64-bit:	MurmurHash3_x64_128
- * ARM, et al:		JHash
+ * 64-bit:	MurmurHash3_x64_128
+ * 32-bit:	JHash
  */
-#if   defined(__x86_64__)
+#if   defined(__LP64__)
 net_flowhash_fn_t *net_flowhash = net_flowhash_mh3_x64_128;
-#else /* !__i386__ && !__x86_64__ */
+#else /* !__LP64__ */
 net_flowhash_fn_t *net_flowhash = net_flowhash_jhash;
-#endif /* !__i386__ && !__x86_64__ */
+#endif /* !__LP64__ */
 
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__) || defined(__arm64__)
 static inline u_int32_t
 getblock32(const u_int32_t *p, int i)
 {
@@ -86,7 +85,7 @@ getblock64(const u_int64_t *p, int i)
 {
 	return (p[i]);
 }
-#else /* !__i386__ && !__x86_64 */
+#else /* !__i386__ && !__x86_64__ && !__arm64__*/
 static inline u_int32_t
 getblock32(const u_int32_t *p, int i)
 {
@@ -146,7 +145,7 @@ getblock64(const u_int64_t *p, int i)
 	}
 	return (value);
 }
-#endif /* !__i386__ && !__x86_64 */
+#endif /* !__i386__ && !__x86_64 && !__arm64__ */
 
 static inline u_int32_t
 mh3_fmix32(u_int32_t h)
@@ -255,20 +254,44 @@ net_flowhash_mh3_x64_128(const void *key, u_int32_t len, const u_int32_t seed)
 		k2 = getblock64(blocks, i * 2 + 1);
 
 		k1 *= MH3_X64_128_C1;
+#if defined(__x86_64__)
+        __asm__ ( "rol   $31, %[k1]\n\t" :[k1] "+r" (k1) : :);
+#elif defined(__arm64__)
+        __asm__ ( "ror   %[k1], %[k1], #(64-31)\n\t" :[k1] "+r" (k1) : :);
+#else /* !__x86_64__ && !__arm64__ */
 		k1 = ROTL64(k1, 31);
+#endif /* !__x86_64__ && !__arm64__ */
 		k1 *= MH3_X64_128_C2;
 		h1 ^= k1;
 
-		h1 = ROTL64(h1, 27);
+#if defined(__x86_64__)
+        __asm__ ( "rol   $27, %[h1]\n\t" :[h1] "+r" (h1) : :);
+#elif defined(__arm64__)
+        __asm__ ( "ror   %[h1], %[h1], #(64-27)\n\t" :[h1] "+r" (h1) : :);
+#else /* !__x86_64__ && !__arm64__ */
+        h1 = ROTL64(h1, 27);
+#endif /* !__x86_64__ && !__arm64__ */
 		h1 += h2;
 		h1 = h1 * 5 + 0x52dce729;
 
 		k2 *= MH3_X64_128_C2;
-		k2 = ROTL64(k2, 33);
+#if defined(__x86_64__)
+        __asm__ ( "rol   $33, %[k2]\n\t" :[k2] "+r" (k2) : :);
+#elif defined(__arm64__)
+        __asm__ ( "ror   %[k2], %[k2], #(64-33)\n\t" :[k2] "+r" (k2) : :);
+#else /* !__x86_64__ && !__arm64__ */
+        k2 = ROTL64(k2, 33);
+#endif /* !__x86_64__ && !__arm64__ */
 		k2 *= MH3_X64_128_C1;
 		h2 ^= k2;
 
-		h2 = ROTL64(h2, 31);
+#if defined(__x86_64__)
+        __asm__ ( "rol   $31, %[h2]\n\t" :[h2] "+r" (h2) : :);
+#elif defined(__arm64__)
+        __asm__ ( "ror   %[h2], %[h2], #(64-31)\n\t" :[h2] "+r" (h2) : :);
+#else /* !__x86_64__ && !__arm64__ */
+        h2 = ROTL64(h2, 31);
+#endif /* !__x86_64__ && !__arm64__ */
 		h2 += h1;
 		h2 = h2 * 5+ 0x38495ab5;
 	}
@@ -300,7 +323,13 @@ net_flowhash_mh3_x64_128(const void *key, u_int32_t len, const u_int32_t seed)
 	case 9:
 		k2 ^= ((u_int64_t)tail[8]) << 0;
 		k2 *= MH3_X64_128_C2;
-		k2 = ROTL64(k2, 33);
+#if defined(__x86_64__)
+        __asm__ ( "rol   $33, %[k2]\n\t" :[k2] "+r" (k2) : :);
+#elif defined(__arm64__)
+        __asm__ ( "ror   %[k2], %[k2], #(64-33)\n\t" :[k2] "+r" (k2) : :);
+#else /* !__x86_64__ && !__arm64__ */
+        k2 = ROTL64(k2, 33);
+#endif /* !__x86_64__ && !__arm64__ */
 		k2 *= MH3_X64_128_C1;
 		h2 ^= k2;
 		/* FALLTHRU */
@@ -328,7 +357,13 @@ net_flowhash_mh3_x64_128(const void *key, u_int32_t len, const u_int32_t seed)
 	case 1:
 		k1 ^= ((u_int64_t)tail[0]) << 0;
 		k1 *= MH3_X64_128_C1;
-		k1 = ROTL64(k1, 31);
+#if defined(__x86_64__)
+        __asm__ ( "rol   $31, %[k1]\n\t" :[k1] "+r" (k1) : :);
+#elif defined(__arm64__)
+        __asm__ ( "ror   %[k1], %[k1], #(64-31)\n\t" :[k1] "+r" (k1) : :);
+#else /* !__x86_64__ && !__arm64__ */
+        k1 = ROTL64(k1, 31);
+#endif /* !__x86_64__ && !__arm64__ */
 		k1 *= MH3_X64_128_C2;
 		h1 ^= k1;
 	};

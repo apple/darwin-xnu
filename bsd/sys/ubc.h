@@ -129,7 +129,9 @@ cl_direct_read_lock_t *cluster_lock_direct_read(vnode_t vp, lck_rw_type_t exclus
 void cluster_unlock_direct_read(cl_direct_read_lock_t *lck);
 
 /* UPL routines */
+#ifndef XNU_KERNEL_PRIVATE
 int	ubc_create_upl(vnode_t, off_t, int, upl_t *, upl_page_info_t **, int);
+#endif /* XNU_KERNEL_PRIVATE */
 int	ubc_upl_map(upl_t, vm_offset_t *);
 int	ubc_upl_unmap(upl_t);
 int	ubc_upl_commit(upl_t);
@@ -146,6 +148,11 @@ int	is_file_clean(vnode_t, off_t);
 errno_t mach_to_bsd_errno(kern_return_t mach_err);
 
 #ifdef KERNEL_PRIVATE
+
+int	ubc_create_upl_external(vnode_t, off_t, int, upl_t *, upl_page_info_t **, int);
+#ifdef	XNU_KERNEL_PRIVATE
+int	ubc_create_upl_kernel(vnode_t, off_t, int, upl_t *, upl_page_info_t **, int, vm_tag_t);
+#endif  /* XNU_KERNEL_PRIVATE */
 
 __attribute__((pure)) boolean_t ubc_is_mapped(const struct vnode *, boolean_t *writable);
 __attribute__((pure)) boolean_t ubc_is_mapped_writable(const struct vnode *);

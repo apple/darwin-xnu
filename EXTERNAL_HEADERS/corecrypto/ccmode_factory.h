@@ -251,12 +251,13 @@ void ccmode_factory_cfb8_encrypt(struct ccmode_cfb8 *cfb8,
 
 int ccmode_ctr_init(const struct ccmode_ctr *ctr, ccctr_ctx *ctx,
                     size_t rawkey_len, const void *rawkey, const void *iv);
+int ccmode_ctr_setctr(const struct ccmode_ctr *mode, ccctr_ctx *ctx, const void *ctr);
 int ccmode_ctr_crypt(ccctr_ctx *ctx, size_t nbytes,
                      const void *in, void *out);
 
 struct _ccmode_ctr_key {
     const struct ccmode_ecb *ecb;
-    size_t pad_len;
+    size_t pad_offset;
     cc_unit u[];
 };
 
@@ -264,7 +265,9 @@ struct _ccmode_ctr_key {
 #define CCMODE_FACTORY_CTR_CRYPT(ECB_ENCRYPT) { \
 .size = ccn_sizeof_size(sizeof(struct _ccmode_ctr_key)) + 2 * ccn_sizeof_size((ECB_ENCRYPT)->block_size) + ccn_sizeof_size((ECB_ENCRYPT)->size), \
 .block_size = 1, \
+.ecb_block_size = (ECB_ENCRYPT)->block_size, \
 .init = ccmode_ctr_init, \
+.setctr = ccmode_ctr_setctr, \
 .ctr = ccmode_ctr_crypt, \
 .custom = (ECB_ENCRYPT) \
 }
@@ -292,13 +295,13 @@ int ccmode_gcm_encrypt(ccgcm_ctx *ctx, size_t nbytes, const void *in,
 /*!
  @function  ccmode_gcm_finalize() finalizes AES-GCM call sequence
  @param key encryption or decryption key
- @param tag_size
- @param tag
+ @param tag_nbytes length of tag in bytes
+ @param tag authentication tag
  @result	0=success or non zero= error
  @discussion For decryption, the tag parameter must be the expected-tag. A secure compare is performed between the provided expected-tag and the computed-tag. If they are the same, 0 is returned. Otherwise, non zero is returned. For encryption, tag is output and provides the authentication tag.
 
  */
-int ccmode_gcm_finalize(ccgcm_ctx *key, size_t tag_size, void *tag);
+int ccmode_gcm_finalize(ccgcm_ctx *key, size_t tag_nbytes, void *tag);
 int ccmode_gcm_reset(ccgcm_ctx *key);
 
 #define CCGCM_FLAGS_INIT_WITH_IV 1
@@ -331,7 +334,7 @@ struct _ccmode_gcm_key {
     int encdec; //is it an encrypt or decrypt object
 
     // Buffer with ECB key and H table if applicable
-    unsigned char u[] __attribute__ ((aligned (16))); // ecb key + tables
+    CC_ALIGNED(16) unsigned char u[]; // ecb key + tables
 };
 
 #define GCM_ECB_KEY_SIZE(ECB_ENCRYPT) \

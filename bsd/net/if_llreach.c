@@ -320,7 +320,7 @@ found:
 	if (!lck_rw_lock_shared_to_exclusive(&ifp->if_llreach_lock))
 		lck_rw_lock_exclusive(&ifp->if_llreach_lock);
 
-	lck_rw_assert(&ifp->if_llreach_lock, LCK_RW_ASSERT_EXCLUSIVE);
+	LCK_RW_ASSERT(&ifp->if_llreach_lock, LCK_RW_ASSERT_EXCLUSIVE);
 
 	/* in case things have changed while becoming writer */
 	lr = RB_FIND(ll_reach_tree, &ifp->if_ll_srcs, &find);

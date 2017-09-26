@@ -27,5 +27,6 @@
  */
 #ifndef _MODE_T 
 #define _MODE_T 
+#include <sys/_types.h> /* __darwin_mode_t */
 typedef	__darwin_mode_t		mode_t;
 #endif  /* _MODE_T */

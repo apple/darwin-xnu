@@ -128,7 +128,6 @@
  */
 #define	TIME_INT_EXIT							       \
 	NANOTIME				/* %rax := nanosecs */	     ; \
-	movq	%rax,%gs:CPU_INT_EVENT_TIME	/* save in cpu data */	     ; \
 	movq	%rax,%rsi			/* save timestamp */	     ; \
 	movq	%gs:CPU_PROCESSOR,%rdx		/* get processor */	     ; \
 	movq	KERNEL_TIMER(%rdx),%rcx		/* get kernel timer */	     ; \
@@ -142,7 +141,8 @@
 	TIMER_UPDATE(%rcx,%rax,0)		/* update timer */	     ; \
 	popq	%rcx				/* restore state */	     ; \
 	movq	%rcx,CURRENT_STATE(%rdx)	/* set current state */	     ; \
-	movq	%rsi,TIMER_TSTAMP(%rcx)		/* set timestamp */
+	movq	%rsi,TIMER_TSTAMP(%rcx)		/* set timestamp */	     ; \
+	movq	$0,%gs:CPU_INT_EVENT_TIME	/* clear interrupt entry time */
 
 
 /*

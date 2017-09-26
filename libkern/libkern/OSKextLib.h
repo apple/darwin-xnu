@@ -238,6 +238,12 @@ __BEGIN_DECLS
  */
 #define kOSKextReturnStopping                        libkern_kext_err(0x1a)
 
+/*!
+ * @define   kOSKextReturnSystemPolicy
+ * @abstract The kext was prevented from loading due to system policy.
+ */
+#define kOSKextReturnSystemPolicy                    libkern_kext_err(0x1b)
+
 #if PRAGMA_MARK
 #pragma mark -
 /********************************************************************/
@@ -914,7 +920,7 @@ OSKextGrabPgoData(uuid_t uuid,
  * Call this function before trapping into the debugger to call OSKextResetPgoCounters.
  */
 void
-OSKextResetPgoCountersLock();
+OSKextResetPgoCountersLock(void);
 
 /*!
  * @function OSKextResetPgoCountersUnlock
@@ -923,7 +929,7 @@ OSKextResetPgoCountersLock();
  * Call this function after trapping into the debugger to call OSKextResetPgoCounters.
  */
 void
-OSKextResetPgoCountersUnlock();
+OSKextResetPgoCountersUnlock(void);
 
 /*!
  * @function OSKextResetPgoCounters
@@ -932,7 +938,7 @@ OSKextResetPgoCountersUnlock();
  * context, while holding OSKextResetPgoCountersLock().
  */
 void
-OSKextResetPgoCounters();
+OSKextResetPgoCounters(void);
 
 
 #if PRAGMA_MARK

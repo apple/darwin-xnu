@@ -712,7 +712,13 @@ vm_purgeable_object_find_and_lock(
 
 		owner = object->vo_purgeable_owner;
 		if (owner) {
+#if CONFIG_EMBEDDED
+#if CONFIG_JETSAM
+ 			object_task_importance = proc_get_memstat_priority((struct proc *)get_bsdtask_info(owner), TRUE);
+#endif /* CONFIG_JETSAM */
+#else /* CONFIG_EMBEDDED */
 			object_task_importance = task_importance_estimate(owner);
+#endif /* CONFIG_EMBEDDED */
 		}
 
 		if (object_task_importance < best_object_task_importance) {

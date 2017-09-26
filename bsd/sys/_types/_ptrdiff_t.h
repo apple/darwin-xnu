@@ -28,5 +28,6 @@
 
 #ifndef _PTRDIFF_T
 #define _PTRDIFF_T
+#include <machine/types.h> /* __darwin_ptrdiff_t */
 typedef __darwin_ptrdiff_t ptrdiff_t;
 #endif /* _PTRDIFF_T */

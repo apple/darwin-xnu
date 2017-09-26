@@ -163,7 +163,7 @@ extern struct udpstat udpstat;
 extern int udp_log_in_vain;
 
 __BEGIN_DECLS
-extern void udp_ctlinput(int, struct sockaddr *, void *);
+extern void udp_ctlinput(int, struct sockaddr *, void *, struct ifnet *);
 extern int udp_ctloutput(struct socket *, struct sockopt *);
 extern void udp_init(struct protosw *, struct domain *);
 extern void udp_input(struct mbuf *, int);

@@ -25,7 +25,7 @@ class Process(object):
             'default_packet_timeout': '10', 'distribution_id': None
         }
 
-        # if cputype is arm assume its ios
+        ## if cputype is arm assume its ios
         if (cputype & 0xc) != 0xc:
             self.hinfo['ostype'] = 'ios'
         self.ptrsize = ptrsize

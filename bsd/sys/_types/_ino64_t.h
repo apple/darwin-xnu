@@ -27,5 +27,6 @@
  */
 #ifndef _INO64_T 
 #define _INO64_T 
+#include <sys/_types.h> /* __darwin_ino64_t */
 typedef __darwin_ino64_t        ino64_t; 	/* 64bit inode number */
 #endif  /* _INO64_T */

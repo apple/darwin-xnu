@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -80,6 +80,8 @@
 #define FLOW_DIVERT_TOKEN_FLAG_VALIDATED	0x0000001
 #define FLOW_DIVERT_TOKEN_FLAG_TFO			0x0000002
 #define FLOW_DIVERT_TOKEN_FLAG_MPTCP		0x0000004
+
+#define FLOW_DIVERT_GROUP_FLAG_NO_APP_MAP	0x0000001
 
 struct flow_divert_packet_header {
     uint8_t		packet_type;

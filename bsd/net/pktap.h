@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -137,9 +137,11 @@ struct pktap_header {
 #endif /* BSD_KERNEL_PRIVATE */
 #define PTH_FLAG_TSTAMP			0x2000	/* Has time stamp */
 #define	PTH_FLAG_NEW_FLOW		0x4000	/* Packet from a new flow */
-
+#define	PTH_FLAG_MSFSW			0x8000	/* Multi stack flow switch */
 
 #ifdef BSD_KERNEL_PRIVATE
+extern uint32_t pktap_total_tap_count;
+
 extern void pktap_init(void);
 extern void pktap_input(struct ifnet *, protocol_family_t, struct mbuf *, char *);
 extern void pktap_output(struct ifnet *, protocol_family_t, struct mbuf *, 

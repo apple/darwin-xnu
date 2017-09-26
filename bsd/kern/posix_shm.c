@@ -176,16 +176,17 @@ long	pshmnument;			/* number of cache entries allocated */
 struct pshmstats pshmstats;		/* cache effectiveness statistics */
 
 static int pshm_read (struct fileproc *fp, struct uio *uio,
-		    int flags, vfs_context_t ctx);
+		int flags, vfs_context_t ctx);
 static int pshm_write (struct fileproc *fp, struct uio *uio,
-		    int flags, vfs_context_t ctx);
+		int flags, vfs_context_t ctx);
 static int pshm_ioctl (struct fileproc *fp, u_long com,
-		    caddr_t data, vfs_context_t ctx);
+		caddr_t data, vfs_context_t ctx);
 static int pshm_select (struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
 static int pshm_close(struct pshminfo *pinfo, int dropref);
 static int pshm_closefile (struct fileglob *fg, vfs_context_t ctx);
 
-static int pshm_kqfilter(struct fileproc *fp, struct knote *kn, vfs_context_t ctx);
+static int pshm_kqfilter(struct fileproc *fp, struct knote *kn,
+		struct kevent_internal_s *kev, vfs_context_t ctx);
 
 int pshm_access(struct pshminfo *pinfo, int mode, kauth_cred_t cred, proc_t p);
 int pshm_cache_purge_all(proc_t p);
@@ -869,6 +870,7 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 	vm_object_offset_t map_pos;
 	vm_map_t	user_map;
 	int		alloc_flags;
+	vm_map_kernel_flags_t vmk_flags;
 	boolean_t 	docow;
 	kern_return_t	kret;
 	struct pshminfo * pinfo;
@@ -945,13 +947,15 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 	docow = FALSE;	
 
 	mapped_size = 0;
-
-	/* reserver the entire space first... */
+	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+	/* reserve the entire space first... */
 	kret = vm_map_enter_mem_object(user_map,
 				       &user_addr,
 				       user_size,
 				       0,
 				       alloc_flags,
+				       vmk_flags,
+				       VM_KERN_MEMORY_NONE,
 				       IPC_PORT_NULL,
 				       0,
 				       FALSE,
@@ -978,12 +982,15 @@ pshm_mmap(__unused proc_t p, struct mmap_args *uap, user_addr_t *retval, struct 
 		if (map_size > user_size) {
 			map_size = user_size;
 		}
+		vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 		kret = vm_map_enter_mem_object(
 			user_map,
 			&user_addr,
 			map_size,
 			0,
 			VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+			vmk_flags,
+			VM_KERN_MEMORY_NONE,
 			pshmobj->pshmo_memobject,
 			file_pos - map_pos,
 			docow,
@@ -1255,36 +1262,36 @@ pshm_closefile(struct fileglob *fg, __unused vfs_context_t ctx)
 }
 
 static int
-pshm_read(__unused struct fileproc *fp, __unused struct uio *uio, 
-			__unused int flags, __unused vfs_context_t ctx)
+pshm_read(__unused struct fileproc *fp, __unused struct uio *uio,
+		__unused int flags, __unused vfs_context_t ctx)
 {
 	return(ENOTSUP);
 }
 
 static int
-pshm_write(__unused struct fileproc *fp, __unused struct uio *uio, 
-			__unused int flags, __unused vfs_context_t ctx)
+pshm_write(__unused struct fileproc *fp, __unused struct uio *uio,
+		__unused int flags, __unused vfs_context_t ctx)
 {
 	return(ENOTSUP);
 }
 
 static int
-pshm_ioctl(__unused struct fileproc *fp, __unused u_long com, 
-			__unused caddr_t data, __unused vfs_context_t ctx)
+pshm_ioctl(__unused struct fileproc *fp, __unused u_long com,
+		__unused caddr_t data, __unused vfs_context_t ctx)
 {
 	return(ENOTSUP);
 }
 
 static int
-pshm_select(__unused struct fileproc *fp, __unused int which, __unused void *wql, 
-			__unused vfs_context_t ctx)
+pshm_select(__unused struct fileproc *fp, __unused int which, __unused void *wql,
+		__unused vfs_context_t ctx)
 {
 	return(ENOTSUP);
 }
 
 static int
 pshm_kqfilter(__unused struct fileproc *fp, struct knote *kn, 
-				__unused vfs_context_t ctx)
+		__unused struct kevent_internal_s *kev, __unused vfs_context_t ctx)
 {
 	kn->kn_flags = EV_ERROR;
 	kn->kn_data = ENOTSUP;

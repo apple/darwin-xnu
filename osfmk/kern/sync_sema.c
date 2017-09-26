@@ -119,12 +119,6 @@ semaphore_wait_internal(
 			int				option,
 			void (*caller_cont)(kern_return_t));
 
-void
-kdp_sema_find_owner(
-			struct waitq * 		waitq,
-			event64_t		event,
-			thread_waitinfo_t *	waitinfo);
-
 static __inline__ uint64_t
 semaphore_deadline(
 	unsigned int		sec,

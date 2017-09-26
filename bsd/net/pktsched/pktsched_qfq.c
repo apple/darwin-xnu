@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -78,20 +78,22 @@
 #include <net/pktsched/pktsched_qfq.h>
 #include <netinet/in.h>
 
+
 /*
  * function prototypes
  */
-static int qfq_enqueue_ifclassq(struct ifclassq *, struct mbuf *);
-static struct mbuf *qfq_dequeue_ifclassq(struct ifclassq *, cqdq_op_t);
+static int qfq_enqueue_ifclassq(struct ifclassq *, void *, classq_pkt_type_t,
+    boolean_t *);
+static void *qfq_dequeue_ifclassq(struct ifclassq *, classq_pkt_type_t *);
 static int qfq_request_ifclassq(struct ifclassq *, cqrq_t, void *);
 static int qfq_clear_interface(struct qfq_if *);
 static struct qfq_class *qfq_class_create(struct qfq_if *, u_int32_t,
-    u_int32_t, u_int32_t, u_int32_t, u_int32_t);
+    u_int32_t, u_int32_t, u_int32_t, u_int32_t, classq_pkt_type_t);
 static int qfq_class_destroy(struct qfq_if *, struct qfq_class *);
 static int qfq_destroy_locked(struct qfq_if *);
-static inline int qfq_addq(struct qfq_class *, struct mbuf *, struct pf_mtag *);
-static inline struct mbuf *qfq_getq(struct qfq_class *);
-static inline struct mbuf *qfq_pollq(struct qfq_class *);
+static inline int qfq_addq(struct qfq_class *, pktsched_pkt_t *,
+    struct pf_mtag *);
+static inline void qfq_getq(struct qfq_class *, pktsched_pkt_t *);
 static void qfq_purgeq(struct qfq_if *, struct qfq_class *, u_int32_t,
     u_int32_t *, u_int32_t *);
 static void qfq_purge_sc(struct qfq_if *, cqrq_purge_sc_t *);
@@ -179,7 +181,7 @@ qfq_init(void)
 }
 
 struct qfq_if *
-qfq_alloc(struct ifnet *ifp, int how, boolean_t altq)
+qfq_alloc(struct ifnet *ifp, int how)
 {
 	struct qfq_if	*qif;
 
@@ -189,22 +191,17 @@ qfq_alloc(struct ifnet *ifp, int how, boolean_t altq)
 
 	bzero(qif, qfq_size);
 	qif->qif_ifq = &ifp->if_snd;
-	if (altq) {
-		qif->qif_maxclasses = QFQ_MAX_CLASSES;
-		qif->qif_maxslots = QFQ_MAX_SLOTS;
-		qif->qif_flags |= QFQIFF_ALTQ;
-	} else {
-		qif->qif_maxclasses = IFCQ_SC_MAX;
-		/*
-		 * TODO: adi@apple.com
-		 *
-		 * Ideally I would like to have the following
-		 * but QFQ needs further modifications.
-		 *
-		 *	qif->qif_maxslots = IFCQ_SC_MAX;
-		 */
-		qif->qif_maxslots = QFQ_MAX_SLOTS;
-	}
+
+	qif->qif_maxclasses = IFCQ_SC_MAX;
+	/*
+	 * TODO: adi@apple.com
+	 *
+	 * Ideally I would like to have the following
+	 * but QFQ needs further modifications.
+	 *
+	 *	qif->qif_maxslots = IFCQ_SC_MAX;
+	 */
+	qif->qif_maxslots = QFQ_MAX_SLOTS;
 
 	if ((qif->qif_class_tbl = _MALLOC(sizeof (struct qfq_class *) *
 	    qif->qif_maxclasses, M_DEVBUF, M_WAITOK|M_ZERO)) == NULL) {
@@ -325,15 +322,7 @@ qfq_purge(struct qfq_if *qif)
 		if ((cl = qif->qif_class_tbl[i]) != NULL)
 			qfq_purgeq(qif, cl, 0, NULL, NULL);
 	}
-#if !PF_ALTQ
-	/*
-	 * This assertion is safe to be made only when PF_ALTQ is not
-	 * configured; otherwise, IFCQ_LEN represents the sum of the
-	 * packets managed by ifcq_disc and altq_disc instances, which
-	 * is possible when transitioning between the two.
-	 */
 	VERIFY(IFCQ_LEN(qif->qif_ifq) == 0);
-#endif /* !PF_ALTQ */
 }
 
 static void
@@ -383,7 +372,8 @@ qfq_event(struct qfq_if *qif, cqev_t ev)
 
 int
 qfq_add_queue(struct qfq_if *qif, u_int32_t qlimit, u_int32_t weight,
-    u_int32_t maxsz, u_int32_t flags, u_int32_t qid, struct qfq_class **clp)
+    u_int32_t maxsz, u_int32_t flags, u_int32_t qid, struct qfq_class **clp,
+    classq_pkt_type_t ptype)
 {
 	struct qfq_class *cl;
 	u_int32_t w;
@@ -404,7 +394,7 @@ qfq_add_queue(struct qfq_if *qif, u_int32_t qlimit, u_int32_t weight,
 	if (maxsz == 0 || maxsz > (1 << QFQ_MTU_SHIFT))
 		return (EINVAL);
 
-	cl = qfq_class_create(qif, weight, qlimit, flags, maxsz, qid);
+	cl = qfq_class_create(qif, weight, qlimit, flags, maxsz, qid, ptype);
 	if (cl == NULL)
 		return (ENOMEM);
 
@@ -416,7 +406,7 @@ qfq_add_queue(struct qfq_if *qif, u_int32_t qlimit, u_int32_t weight,
 
 static struct qfq_class *
 qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
-    u_int32_t flags, u_int32_t maxsz, u_int32_t qid)
+    u_int32_t flags, u_int32_t maxsz, u_int32_t qid, classq_pkt_type_t ptype)
 {
 	struct ifnet *ifp;
 	struct ifclassq *ifq;
@@ -427,49 +417,10 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 
 	IFCQ_LOCK_ASSERT_HELD(qif->qif_ifq);
 
-	/* Sanitize flags unless internally configured */
-	if (qif->qif_flags & QFQIFF_ALTQ)
-		flags &= QFCF_USERFLAGS;
-
 	if (qif->qif_classes >= qif->qif_maxclasses) {
 		log(LOG_ERR, "%s: %s out of classes! (max %d)\n",
 		    if_name(QFQIF_IFP(qif)), qfq_style(qif),
 		    qif->qif_maxclasses);
-		return (NULL);
-	}
-
-#if !CLASSQ_RED
-	if (flags & QFCF_RED) {
-		log(LOG_ERR, "%s: %s RED not available!\n",
-		    if_name(QFQIF_IFP(qif)), qfq_style(qif));
-		return (NULL);
-	}
-#endif /* !CLASSQ_RED */
-
-#if !CLASSQ_RIO
-	if (flags & QFCF_RIO) {
-		log(LOG_ERR, "%s: %s RIO not available!\n",
-		    if_name(QFQIF_IFP(qif)), qfq_style(qif));
-		return (NULL);
-	}
-#endif /* CLASSQ_RIO */
-
-#if !CLASSQ_BLUE
-	if (flags & QFCF_BLUE) {
-		log(LOG_ERR, "%s: %s BLUE not available!\n",
-		    if_name(QFQIF_IFP(qif)), qfq_style(qif));
-		return (NULL);
-	}
-#endif /* CLASSQ_BLUE */
-
-	/* These are mutually exclusive */
-	if ((flags & (QFCF_RED|QFCF_RIO|QFCF_BLUE|QFCF_SFB)) &&
-	    (flags & (QFCF_RED|QFCF_RIO|QFCF_BLUE|QFCF_SFB)) != QFCF_RED &&
-	    (flags & (QFCF_RED|QFCF_RIO|QFCF_BLUE|QFCF_SFB)) != QFCF_RIO &&
-	    (flags & (QFCF_RED|QFCF_RIO|QFCF_BLUE|QFCF_SFB)) != QFCF_BLUE &&
-	    (flags & (QFCF_RED|QFCF_RIO|QFCF_BLUE|QFCF_SFB)) != QFCF_SFB) {
-		log(LOG_ERR, "%s: %s more than one RED|RIO|BLUE|SFB\n",
-		    if_name(QFQIF_IFP(qif)), qfq_style(qif));
 		return (NULL);
 	}
 
@@ -487,7 +438,7 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 		if (qlimit == 0)
 			qlimit = DEFAULT_QLIMIT;  /* use default */
 	}
-	_qinit(&cl->cl_q, Q_DROPTAIL, qlimit);
+	_qinit(&cl->cl_q, Q_DROPTAIL, qlimit, ptype);
 	cl->cl_qif = qif;
 	cl->cl_flags = flags;
 	cl->cl_handle = qid;
@@ -561,80 +512,22 @@ qfq_class_create(struct qfq_if *qif, u_int32_t weight, u_int32_t qlimit,
 	if (flags & QFCF_DEFAULTCLASS)
 		qif->qif_default = cl;
 
-	if (flags & (QFCF_RED|QFCF_RIO|QFCF_BLUE|QFCF_SFB)) {
-#if CLASSQ_RED || CLASSQ_RIO
-		u_int64_t ifbandwidth = ifnet_output_linkrate(ifp);
-		int pkttime;
-#endif /* CLASSQ_RED || CLASSQ_RIO */
-
+	if (flags & QFCF_SFB) {
 		cl->cl_qflags = 0;
 		if (flags & QFCF_ECN) {
-			if (flags & QFCF_BLUE)
-				cl->cl_qflags |= BLUEF_ECN;
-			else if (flags & QFCF_SFB)
-				cl->cl_qflags |= SFBF_ECN;
-			else if (flags & QFCF_RED)
-				cl->cl_qflags |= REDF_ECN;
-			else if (flags & QFCF_RIO)
-				cl->cl_qflags |= RIOF_ECN;
+			cl->cl_qflags |= SFBF_ECN;
 		}
 		if (flags & QFCF_FLOWCTL) {
-			if (flags & QFCF_SFB)
-				cl->cl_qflags |= SFBF_FLOWCTL;
+			cl->cl_qflags |= SFBF_FLOWCTL;
 		}
 		if (flags & QFCF_DELAYBASED) {
-			if (flags & QFCF_SFB)
-				cl->cl_qflags |= SFBF_DELAYBASED;
+			cl->cl_qflags |= SFBF_DELAYBASED;
 		}
-		if (flags & QFCF_CLEARDSCP) {
-			if (flags & QFCF_RIO)
-				cl->cl_qflags |= RIOF_CLEARDSCP;
-		}
-#if CLASSQ_RED || CLASSQ_RIO
-		/*
-		 * XXX: RED & RIO should be watching link speed and MTU
-		 *	events and recompute pkttime accordingly.
-		 */
-		if (ifbandwidth < 8)
-			pkttime = 1000 * 1000 * 1000; /* 1 sec */
-		else
-			pkttime = (int64_t)ifp->if_mtu * 1000 * 1000 * 1000 /
-			    (ifbandwidth / 8);
-
-		/* Test for exclusivity {RED,RIO,BLUE,SFB} was done above */
-#if CLASSQ_RED
-		if (flags & QFCF_RED) {
-			cl->cl_red = red_alloc(ifp, 0, 0,
-			    qlimit(&cl->cl_q) * 10/100,
-			    qlimit(&cl->cl_q) * 30/100,
-			    cl->cl_qflags, pkttime);
-			if (cl->cl_red != NULL)
-				qtype(&cl->cl_q) = Q_RED;
-		}
-#endif /* CLASSQ_RED */
-#if CLASSQ_RIO
-		if (flags & QFCF_RIO) {
-			cl->cl_rio =
-			    rio_alloc(ifp, 0, NULL, cl->cl_qflags, pkttime);
-			if (cl->cl_rio != NULL)
-				qtype(&cl->cl_q) = Q_RIO;
-		}
-#endif /* CLASSQ_RIO */
-#endif /* CLASSQ_RED || CLASSQ_RIO */
-#if CLASSQ_BLUE
-		if (flags & QFCF_BLUE) {
-			cl->cl_blue = blue_alloc(ifp, 0, 0, cl->cl_qflags);
-			if (cl->cl_blue != NULL)
-				qtype(&cl->cl_q) = Q_BLUE;
-		}
-#endif /* CLASSQ_BLUE */
-		if (flags & QFCF_SFB) {
-			if (!(cl->cl_flags & QFCF_LAZY))
-				cl->cl_sfb = sfb_alloc(ifp, cl->cl_handle,
-				    qlimit(&cl->cl_q), cl->cl_qflags);
-			if (cl->cl_sfb != NULL || (cl->cl_flags & QFCF_LAZY))
-				qtype(&cl->cl_q) = Q_SFB;
-		}
+		if (!(cl->cl_flags & QFCF_LAZY))
+			cl->cl_sfb = sfb_alloc(ifp, cl->cl_handle,
+			    qlimit(&cl->cl_q), cl->cl_qflags);
+		if (cl->cl_sfb != NULL || (cl->cl_flags & QFCF_LAZY))
+			qtype(&cl->cl_q) = Q_SFB;
 	}
 
 	if (pktsched_verbose) {
@@ -665,6 +558,9 @@ qfq_class_destroy(struct qfq_if *qif, struct qfq_class *cl)
 {
 	struct ifclassq *ifq = qif->qif_ifq;
 	int i;
+#if !MACH_ASSERT
+#pragma unused(ifq)
+#endif
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
@@ -684,18 +580,6 @@ qfq_class_destroy(struct qfq_if *qif, struct qfq_class *cl)
 	qif->qif_classes--;
 
 	if (cl->cl_qalg.ptr != NULL) {
-#if CLASSQ_RIO
-		if (q_is_rio(&cl->cl_q))
-			rio_destroy(cl->cl_rio);
-#endif /* CLASSQ_RIO */
-#if CLASSQ_RED
-		if (q_is_red(&cl->cl_q))
-			red_destroy(cl->cl_red);
-#endif /* CLASSQ_RED */
-#if CLASSQ_BLUE
-		if (q_is_blue(&cl->cl_q))
-			blue_destroy(cl->cl_blue);
-#endif /* CLASSQ_BLUE */
 		if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
 			sfb_destroy(cl->cl_sfb);
 		cl->cl_qalg.ptr = NULL;
@@ -911,7 +795,7 @@ qfq_update_class(struct qfq_if *qif, struct qfq_group *grp,
 		u_int32_t len;
 		u_int64_t roundedS;
 
-		len = m_pktlen(qhead(&cl->cl_q));
+		len = m_pktlen((struct mbuf *)qhead(&cl->cl_q));
 		cl->cl_F = cl->cl_S + (u_int64_t)len * cl->cl_inv_w;
 		roundedS = qfq_round_down(cl->cl_S, grp->qfg_slot_shift);
 		if (roundedS == grp->qfg_S)
@@ -929,18 +813,19 @@ qfq_update_class(struct qfq_if *qif, struct qfq_group *grp,
  *	CLASSQDQ_REMOVE must return the same packet if called immediately
  *	after CLASSQDQ_POLL.
  */
-struct mbuf *
-qfq_dequeue(struct qfq_if *qif, cqdq_op_t op)
+void
+qfq_dequeue(struct qfq_if *qif, pktsched_pkt_t *pkt)
 {
 	pktsched_bitmap_t er_bits = qif->qif_bitmaps[ER];
 	struct ifclassq *ifq = qif->qif_ifq;
 	struct qfq_group *grp;
 	struct qfq_class *cl;
-	struct mbuf *m;
 	u_int64_t old_V;
 	u_int32_t len;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
+
+	pkt->pktsched_pkt = NULL;
 
 	for (;;) {
 		if (er_bits == 0) {
@@ -949,7 +834,7 @@ qfq_dequeue(struct qfq_if *qif, cqdq_op_t op)
 				qfq_dump_sched(qif, "start dequeue");
 #endif /* QFQ_DEBUG */
 			/* no eligible and ready packet */
-			return (NULL);
+			return;
 		}
 		grp = qfq_ffs(qif, er_bits);
 		/* if group is non-empty, use it */
@@ -965,12 +850,9 @@ qfq_dequeue(struct qfq_if *qif, cqdq_op_t op)
 	cl = grp->qfg_slots[grp->qfg_front];
 	VERIFY(cl != NULL && !qempty(&cl->cl_q));
 
-	if (op == CLASSQDQ_POLL)
-		return (qfq_pollq(cl));
-
-	m = qfq_getq(cl);
-	VERIFY(m != NULL);	/* qalg must be work conserving */
-	len = m_pktlen(m);
+	qfq_getq(cl, pkt);
+	VERIFY(pkt->pktsched_pkt != NULL); /* qalg must be work conserving */
+	len = pktsched_get_pkt_len(pkt);
 
 #if QFQ_DEBUG
 	qif->qif_queued--;
@@ -987,9 +869,10 @@ qfq_dequeue(struct qfq_if *qif, cqdq_op_t op)
 	qif->qif_V += (u_int64_t)len * QFQ_IWSUM;
 
 	if (pktsched_verbose > 2) {
-		log(LOG_DEBUG, "%s: %s qid=%d dequeue m=0x%llx F=0x%llx "
+		log(LOG_DEBUG, "%s: %s qid=%d dequeue pkt=0x%llx F=0x%llx "
 		    "V=0x%llx", if_name(QFQIF_IFP(qif)), qfq_style(qif),
-		    cl->cl_handle, (uint64_t)VM_KERNEL_ADDRPERM(m), cl->cl_F,
+		    cl->cl_handle,
+		    (uint64_t)VM_KERNEL_ADDRPERM(pkt->pktsched_pkt), cl->cl_F,
 		    qif->qif_V);
 	}
 
@@ -1026,8 +909,6 @@ skip_unblock:
 	if (!qif->qif_bitmaps[ER] && qif->qif_queued && pktsched_verbose > 1)
 		qfq_dump_sched(qif, "end dequeue");
 #endif /* QFQ_DEBUG */
-
-	return (m);
 }
 
 /*
@@ -1070,7 +951,7 @@ qfq_update_start(struct qfq_if *qif, struct qfq_class *cl)
 }
 
 int
-qfq_enqueue(struct qfq_if *qif, struct qfq_class *cl, struct mbuf *m,
+qfq_enqueue(struct qfq_if *qif, struct qfq_class *cl, pktsched_pkt_t *pkt,
     struct pf_mtag *t)
 {
 	struct ifclassq *ifq = qif->qif_ifq;
@@ -1082,45 +963,27 @@ qfq_enqueue(struct qfq_if *qif, struct qfq_class *cl, struct mbuf *m,
 	VERIFY(cl == NULL || cl->cl_qif == qif);
 
 	if (cl == NULL) {
-#if PF_ALTQ
-		cl = qfq_clh_to_clp(qif, t->pftag_qid);
-#else /* !PF_ALTQ */
 		cl = qfq_clh_to_clp(qif, 0);
-#endif /* !PF_ALTQ */
 		if (cl == NULL) {
 			cl = qif->qif_default;
 			if (cl == NULL) {
 				IFCQ_CONVERT_LOCK(ifq);
-				m_freem(m);
-				return (ENOBUFS);
+				return (CLASSQEQ_DROP);
 			}
 		}
 	}
 
-	len = m_pktlen(m);
+	VERIFY(pkt->pktsched_ptype == qptype(&cl->cl_q));
+	len = pktsched_get_pkt_len(pkt);
 
-	ret = qfq_addq(cl, m, t);
-	if (ret != 0) {
-		if (ret == CLASSQEQ_SUCCESS_FC) {
-			/* packet enqueued, return advisory feedback */
-			ret = EQFULL;
-		} else {
-			VERIFY(ret == CLASSQEQ_DROPPED ||
-			    ret == CLASSQEQ_DROPPED_FC ||
-			    ret == CLASSQEQ_DROPPED_SP);
-			/* packet has been freed in qfq_addq */
-			PKTCNTR_ADD(&cl->cl_dropcnt, 1, len);
-			IFCQ_DROP_ADD(ifq, 1, len);
-			switch (ret) {
-			case CLASSQEQ_DROPPED:
-				return (ENOBUFS);
-			case CLASSQEQ_DROPPED_FC:
-				return (EQFULL);
-			case CLASSQEQ_DROPPED_SP:
-				return (EQSUSPENDED);
-			}
-			/* NOT REACHED */
-		}
+	ret = qfq_addq(cl, pkt, t);
+	if ((ret != 0) && (ret != CLASSQEQ_SUCCESS_FC)) {
+		VERIFY(ret == CLASSQEQ_DROP ||
+		    ret == CLASSQEQ_DROP_FC ||
+		    ret == CLASSQEQ_DROP_SP);
+		PKTCNTR_ADD(&cl->cl_dropcnt, 1, len);
+		IFCQ_DROP_ADD(ifq, 1, len);
+		return (ret);
 	}
 	IFCQ_INC_LEN(ifq);
 	IFCQ_INC_BYTES(ifq, len);
@@ -1174,7 +1037,8 @@ qfq_enqueue(struct qfq_if *qif, struct qfq_class *cl, struct mbuf *m,
 		log(LOG_DEBUG, "%s: %s qid=%d enqueue m=0x%llx state=%s 0x%x "
 		    "S=0x%llx F=0x%llx V=0x%llx\n", if_name(QFQIF_IFP(qif)),
 		    qfq_style(qif), cl->cl_handle,
-		    (uint64_t)VM_KERNEL_ADDRPERM(m), qfq_state2str(s),
+		    (uint64_t)VM_KERNEL_ADDRPERM(pkt->pktsched_pkt),
+		    qfq_state2str(s),
 		    qif->qif_bitmaps[s], cl->cl_S, cl->cl_F, qif->qif_V);
 	}
 
@@ -1311,36 +1175,21 @@ qfq_state2str(int s)
 }
 
 static inline int
-qfq_addq(struct qfq_class *cl, struct mbuf *m, struct pf_mtag *t)
+qfq_addq(struct qfq_class *cl, pktsched_pkt_t *pkt, struct pf_mtag *t)
 {
 	struct qfq_if	*qif = cl->cl_qif;
 	struct ifclassq *ifq = qif->qif_ifq;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
-#if CLASSQ_RIO
-	if (q_is_rio(&cl->cl_q))
-		return (rio_addq(cl->cl_rio, &cl->cl_q, m, t));
-	else
-#endif /* CLASSQ_RIO */
-#if CLASSQ_RED
-	if (q_is_red(&cl->cl_q))
-		return (red_addq(cl->cl_red, &cl->cl_q, m, t));
-	else
-#endif /* CLASSQ_RED */
-#if CLASSQ_BLUE
-	if (q_is_blue(&cl->cl_q))
-		return (blue_addq(cl->cl_blue, &cl->cl_q, m, t));
-	else
-#endif /* CLASSQ_BLUE */
 	if (q_is_sfb(&cl->cl_q)) {
 		if (cl->cl_sfb == NULL) {
 			struct ifnet *ifp = QFQIF_IFP(qif);
 
 			VERIFY(cl->cl_flags & QFCF_LAZY);
 			cl->cl_flags &= ~QFCF_LAZY;
-			IFCQ_CONVERT_LOCK(ifq);
 
+			IFCQ_CONVERT_LOCK(ifq);
 			cl->cl_sfb = sfb_alloc(ifp, cl->cl_handle,
 			    qlimit(&cl->cl_q), cl->cl_qflags);
 			if (cl->cl_sfb == NULL) {
@@ -1368,55 +1217,34 @@ qfq_addq(struct qfq_class *cl, struct mbuf *m, struct pf_mtag *t)
 			}
 		}
 		if (cl->cl_sfb != NULL)
-			return (sfb_addq(cl->cl_sfb, &cl->cl_q, m, t));
+			return (sfb_addq(cl->cl_sfb, &cl->cl_q, pkt, t));
 	} else if (qlen(&cl->cl_q) >= qlimit(&cl->cl_q)) {
 		IFCQ_CONVERT_LOCK(ifq);
-		m_freem(m);
-		return (CLASSQEQ_DROPPED);
+		return (CLASSQEQ_DROP);
 	}
 
 #if PF_ECN
-	if (cl->cl_flags & QFCF_CLEARDSCP)
+	if (cl->cl_flags & QFCF_CLEARDSCP) {
+		/* not supported for non-mbuf type packets */
+		VERIFY(pkt->pktsched_ptype == QP_MBUF);
 		write_dsfield(m, t, 0);
+	}
 #endif /* PF_ECN */
 
-	_addq(&cl->cl_q, m);
-
+	VERIFY(pkt->pktsched_ptype == qptype(&cl->cl_q));
+	_addq(&cl->cl_q, pkt->pktsched_pkt);
 	return (0);
 }
 
-static inline struct mbuf *
-qfq_getq(struct qfq_class *cl)
+static inline void
+qfq_getq(struct qfq_class *cl, pktsched_pkt_t *pkt)
 {
 	IFCQ_LOCK_ASSERT_HELD(cl->cl_qif->qif_ifq);
 
-#if CLASSQ_RIO
-	if (q_is_rio(&cl->cl_q))
-		return (rio_getq(cl->cl_rio, &cl->cl_q));
-	else
-#endif /* CLASSQ_RIO */
-#if CLASSQ_RED
-	if (q_is_red(&cl->cl_q))
-		return (red_getq(cl->cl_red, &cl->cl_q));
-	else
-#endif /* CLASSQ_RED */
-#if CLASSQ_BLUE
-	if (q_is_blue(&cl->cl_q))
-		return (blue_getq(cl->cl_blue, &cl->cl_q));
-	else
-#endif /* CLASSQ_BLUE */
 	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
-		return (sfb_getq(cl->cl_sfb, &cl->cl_q));
+		return (sfb_getq(cl->cl_sfb, &cl->cl_q, pkt));
 
-	return (_getq(&cl->cl_q));
-}
-
-static inline struct mbuf *
-qfq_pollq(struct qfq_class *cl)
-{
-	IFCQ_LOCK_ASSERT_HELD(cl->cl_qif->qif_ifq);
-
-	return (qhead(&cl->cl_q));
+	return (pktsched_pkt_encap(pkt, qptype(&cl->cl_q), _getq(&cl->cl_q)));
 }
 
 static void
@@ -1431,24 +1259,7 @@ qfq_purgeq(struct qfq_if *qif, struct qfq_class *cl, u_int32_t flow,
 	if ((qlen = qlen(&cl->cl_q)) == 0)
 		goto done;
 
-	/* become regular mutex before freeing mbufs */
 	IFCQ_CONVERT_LOCK(ifq);
-
-#if CLASSQ_RIO
-	if (q_is_rio(&cl->cl_q))
-		rio_purgeq(cl->cl_rio, &cl->cl_q, flow, &cnt, &len);
-	else
-#endif /* CLASSQ_RIO */
-#if CLASSQ_RED
-	if (q_is_red(&cl->cl_q))
-		red_purgeq(cl->cl_red, &cl->cl_q, flow, &cnt, &len);
-	else
-#endif /* CLASSQ_RED */
-#if CLASSQ_BLUE
-	if (q_is_blue(&cl->cl_q))
-		blue_purgeq(cl->cl_blue, &cl->cl_q, flow, &cnt, &len);
-	else
-#endif /* CLASSQ_BLUE */
 	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
 		sfb_purgeq(cl->cl_sfb, &cl->cl_q, flow, &cnt, &len);
 	else
@@ -1498,18 +1309,6 @@ qfq_updateq(struct qfq_if *qif, struct qfq_class *cl, cqev_t ev)
 		    ifclassq_ev2str(ev));
 	}
 
-#if CLASSQ_RIO
-	if (q_is_rio(&cl->cl_q))
-		return (rio_updateq(cl->cl_rio, ev));
-#endif /* CLASSQ_RIO */
-#if CLASSQ_RED
-	if (q_is_red(&cl->cl_q))
-		return (red_updateq(cl->cl_red, ev));
-#endif /* CLASSQ_RED */
-#if CLASSQ_BLUE
-	if (q_is_blue(&cl->cl_q))
-		return (blue_updateq(cl->cl_blue, ev));
-#endif /* CLASSQ_BLUE */
 	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
 		return (sfb_updateq(cl->cl_sfb, ev));
 }
@@ -1537,18 +1336,7 @@ qfq_get_class_stats(struct qfq_if *qif, u_int32_t qid,
 
 	sp->qtype = qtype(&cl->cl_q);
 	sp->qstate = qstate(&cl->cl_q);
-#if CLASSQ_RED
-	if (q_is_red(&cl->cl_q))
-		red_getstats(cl->cl_red, &sp->red[0]);
-#endif /* CLASSQ_RED */
-#if CLASSQ_RIO
-	if (q_is_rio(&cl->cl_q))
-		rio_getstats(cl->cl_rio, &sp->red[0]);
-#endif /* CLASSQ_RIO */
-#if CLASSQ_BLUE
-	if (q_is_blue(&cl->cl_q))
-		blue_getstats(cl->cl_blue, &sp->blue);
-#endif /* CLASSQ_BLUE */
+
 	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
 		sfb_getstats(cl->cl_sfb, &sp->sfb);
 
@@ -1603,7 +1391,8 @@ qfq_clh_to_clp(struct qfq_if *qif, u_int32_t chandle)
 static const char *
 qfq_style(struct qfq_if *qif)
 {
-	return ((qif->qif_flags & QFQIFF_ALTQ) ? "ALTQ_QFQ" : "QFQ");
+#pragma unused(qif)
+	return ("QFQ");
 }
 
 /*
@@ -1726,26 +1515,73 @@ qfq_dump_sched(struct qfq_if *qif, const char *msg)
  * (*ifcq_enqueue) in struct ifclassq.
  */
 static int
-qfq_enqueue_ifclassq(struct ifclassq *ifq, struct mbuf *m)
+qfq_enqueue_ifclassq(struct ifclassq *ifq, void *p, classq_pkt_type_t ptype,
+    boolean_t *pdrop)
 {
-	u_int32_t i;
+	u_int32_t i = 0;
+	int ret;
+	pktsched_pkt_t pkt;
+	struct pf_mtag *t = NULL;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
-	if (!(m->m_flags & M_PKTHDR)) {
-		/* should not happen */
-		log(LOG_ERR, "%s: packet does not have pkthdr\n",
-		    if_name(ifq->ifcq_ifp));
-		IFCQ_CONVERT_LOCK(ifq);
-		m_freem(m);
-		return (ENOBUFS);
+	switch (ptype) {
+	case QP_MBUF: {
+		struct mbuf *m = p;
+		if (!(m->m_flags & M_PKTHDR)) {
+			/* should not happen */
+			log(LOG_ERR, "%s: packet does not have pkthdr\n",
+			    if_name(ifq->ifcq_ifp));
+			IFCQ_CONVERT_LOCK(ifq);
+			m_freem(m);
+			*pdrop = TRUE;
+			return (ENOBUFS);
+		}
+		i = MBUF_SCIDX(mbuf_get_service_class(m));
+		t =  m_pftag(m);
+		break;
 	}
 
-	i = MBUF_SCIDX(mbuf_get_service_class(m));
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+	}
+
 	VERIFY((u_int32_t)i < IFCQ_SC_MAX);
 
-	return (qfq_enqueue(ifq->ifcq_disc,
-	    ifq->ifcq_disc_slots[i].cl, m, m_pftag(m)));
+	pktsched_pkt_encap(&pkt, ptype, p);
+
+	ret = qfq_enqueue(ifq->ifcq_disc,
+	    ifq->ifcq_disc_slots[i].cl, &pkt, t);
+
+	if ((ret != 0) && (ret != CLASSQEQ_SUCCESS_FC)) {
+		pktsched_free_pkt(&pkt);
+		*pdrop = TRUE;
+	} else {
+		*pdrop = FALSE;
+	}
+
+	switch (ret) {
+	case CLASSQEQ_DROP:
+		ret = ENOBUFS;
+		break;
+	case CLASSQEQ_DROP_FC:
+		ret = EQFULL;
+		break;
+	case CLASSQEQ_DROP_SP:
+		ret = EQSUSPENDED;
+		break;
+	case CLASSQEQ_SUCCESS_FC:
+		ret = EQFULL;
+		break;
+	case CLASSQEQ_SUCCESS:
+		ret = 0;
+		break;
+	default:
+		VERIFY(0);
+	}
+	return (ret);
 }
 
 /*
@@ -1757,10 +1593,14 @@ qfq_enqueue_ifclassq(struct ifclassq *ifq, struct mbuf *m)
  *	CLASSQDQ_REMOVE must return the same packet if called immediately
  *	after CLASSQDQ_POLL.
  */
-static struct mbuf *
-qfq_dequeue_ifclassq(struct ifclassq *ifq, cqdq_op_t op)
+static void *
+qfq_dequeue_ifclassq(struct ifclassq *ifq, classq_pkt_type_t *ptype)
 {
-	return (qfq_dequeue(ifq->ifcq_disc, op));
+	pktsched_pkt_t pkt;
+	bzero(&pkt, sizeof (pkt));
+	qfq_dequeue(ifq->ifcq_disc, &pkt);
+	*ptype = pkt.pktsched_ptype;
+	return (pkt.pktsched_pkt);
 }
 
 static int
@@ -1795,7 +1635,8 @@ qfq_request_ifclassq(struct ifclassq *ifq, cqrq_t req, void *arg)
 }
 
 int
-qfq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags)
+qfq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
+    classq_pkt_type_t ptype)
 {
 	struct ifnet *ifp = ifq->ifcq_ifp;
 	struct qfq_class *cl0, *cl1, *cl2, *cl3, *cl4;
@@ -1808,12 +1649,6 @@ qfq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags)
 	VERIFY(ifq->ifcq_disc == NULL);
 	VERIFY(ifq->ifcq_type == PKTSCHEDT_NONE);
 
-	if (flags & PKTSCHEDF_QALG_RED)
-		qflags |= QFCF_RED;
-	if (flags & PKTSCHEDF_QALG_RIO)
-		qflags |= QFCF_RIO;
-	if (flags & PKTSCHEDF_QALG_BLUE)
-		qflags |= QFCF_BLUE;
 	if (flags & PKTSCHEDF_QALG_SFB)
 		qflags |= QFCF_SFB;
 	if (flags & PKTSCHEDF_QALG_ECN)
@@ -1823,7 +1658,7 @@ qfq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags)
 	if (flags & PKTSCHEDF_QALG_DELAYBASED)
 		qflags |= QFCF_DELAYBASED;
 
-	qif = qfq_alloc(ifp, M_WAITOK, FALSE);
+	qif = qfq_alloc(ifp, M_WAITOK);
 	if (qif == NULL)
 		return (ENOMEM);
 
@@ -1831,48 +1666,48 @@ qfq_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags)
 		maxlen = if_sndq_maxlen;
 
 	if ((err = qfq_add_queue(qif, maxlen, 300, 1200,
-	    qflags | QFCF_LAZY, SCIDX_BK_SYS, &cl0)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_BK_SYS, &cl0, ptype)) != 0)
 		goto cleanup;
 
 	if ((err = qfq_add_queue(qif, maxlen, 600, 1400,
-	    qflags | QFCF_LAZY, SCIDX_BK, &cl1)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_BK, &cl1, ptype)) != 0)
 		goto cleanup;
 
 	if ((err = qfq_add_queue(qif, maxlen, 2400, 600,
-	    qflags | QFCF_DEFAULTCLASS, SCIDX_BE, &cl2)) != 0)
+	    qflags | QFCF_DEFAULTCLASS, SCIDX_BE, &cl2, ptype)) != 0)
 		goto cleanup;
 
 	if ((err = qfq_add_queue(qif, maxlen, 2700, 600,
-	    qflags | QFCF_LAZY, SCIDX_RD, &cl3)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_RD, &cl3, ptype)) != 0)
 		goto cleanup;
 
 	if ((err = qfq_add_queue(qif, maxlen, 3000, 400,
-	    qflags | QFCF_LAZY, SCIDX_OAM, &cl4)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_OAM, &cl4, ptype)) != 0)
 		goto cleanup;
 
 	if ((err = qfq_add_queue(qif, maxlen, 8000, 1000,
-	    qflags | QFCF_LAZY, SCIDX_AV, &cl5)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_AV, &cl5, ptype)) != 0)
 		goto cleanup;
 
 	if ((err = qfq_add_queue(qif, maxlen, 15000, 1200,
-	    qflags | QFCF_LAZY, SCIDX_RV, &cl6)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_RV, &cl6, ptype)) != 0)
 		goto cleanup;
 
 	if ((err = qfq_add_queue(qif, maxlen, 20000, 1400,
-	    qflags | QFCF_LAZY, SCIDX_VI, &cl7)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_VI, &cl7, ptype)) != 0)
 		goto cleanup;
 
 	if ((err = qfq_add_queue(qif, maxlen, 23000, 200,
-	    qflags | QFCF_LAZY, SCIDX_VO, &cl8)) != 0)
+	    qflags | QFCF_LAZY, SCIDX_VO, &cl8, ptype)) != 0)
 		goto cleanup;
 
 	if ((err = qfq_add_queue(qif, maxlen, 25000, 200,
-	    qflags, SCIDX_CTL, &cl9)) != 0)
+	    qflags, SCIDX_CTL, &cl9, ptype)) != 0)
 		goto cleanup;
 
 	err = ifclassq_attach(ifq, PKTSCHEDT_QFQ, qif,
 	    qfq_enqueue_ifclassq, qfq_dequeue_ifclassq, NULL,
-	    NULL, qfq_request_ifclassq);
+	    NULL, NULL, qfq_request_ifclassq);
 
 	/* cache these for faster lookup */
 	if (err == 0) {
@@ -1958,7 +1793,6 @@ qfq_throttle(struct qfq_if *qif, cqrq_throttle_t *tr)
 	int err = 0;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
-	VERIFY(!(qif->qif_flags & QFQIFF_ALTQ));
 
 	if (!tr->set) {
 		tr->level = qif->qif_throttle;
@@ -2011,24 +1845,11 @@ qfq_resumeq(struct qfq_if *qif, struct qfq_class *cl)
 {
 	struct ifclassq *ifq = qif->qif_ifq;
 	int err = 0;
-
+#if !MACH_ASSERT
+#pragma unused(ifq)
+#endif
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
-#if CLASSQ_RIO
-	if (q_is_rio(&cl->cl_q))
-		err = rio_suspendq(cl->cl_rio, &cl->cl_q, FALSE);
-	else
-#endif /* CLASSQ_RIO */
-#if CLASSQ_RED
-	if (q_is_red(&cl->cl_q))
-		err = red_suspendq(cl->cl_red, &cl->cl_q, FALSE);
-	else
-#endif /* CLASSQ_RED */
-#if CLASSQ_BLUE
-	if (q_is_blue(&cl->cl_q))
-		err = blue_suspendq(cl->cl_blue, &cl->cl_q, FALSE);
-	else
-#endif /* CLASSQ_BLUE */
 	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL)
 		err = sfb_suspendq(cl->cl_sfb, &cl->cl_q, FALSE);
 
@@ -2043,24 +1864,11 @@ qfq_suspendq(struct qfq_if *qif, struct qfq_class *cl)
 {
 	struct ifclassq *ifq = qif->qif_ifq;
 	int err = 0;
-
+#if !MACH_ASSERT
+#pragma unused(ifq)
+#endif
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
-#if CLASSQ_RIO
-	if (q_is_rio(&cl->cl_q))
-		err = rio_suspendq(cl->cl_rio, &cl->cl_q, TRUE);
-	else
-#endif /* CLASSQ_RIO */
-#if CLASSQ_RED
-	if (q_is_red(&cl->cl_q))
-		err = red_suspendq(cl->cl_red, &cl->cl_q, TRUE);
-	else
-#endif /* CLASSQ_RED */
-#if CLASSQ_BLUE
-	if (q_is_blue(&cl->cl_q))
-		err = blue_suspendq(cl->cl_blue, &cl->cl_q, TRUE);
-	else
-#endif /* CLASSQ_BLUE */
 	if (q_is_sfb(&cl->cl_q)) {
 		if (cl->cl_sfb != NULL) {
 			err = sfb_suspendq(cl->cl_sfb, &cl->cl_q, TRUE);

@@ -97,22 +97,30 @@ void os_reason_free(os_reason_t cur_reason);
 #define OS_REASON_REPORTCRASH   12
 #define OS_REASON_COREANIMATION 13
 #define OS_REASON_AGGREGATED    14
+#define OS_REASON_ASSERTIOND    15
+#define OS_REASON_SKYWALK       16
+#define OS_REASON_SETTINGS      17
+#define OS_REASON_LIBSYSTEM     18
+#define OS_REASON_FOUNDATION    19
+#define OS_REASON_WATCHDOG      20
+#define OS_REASON_METAL         21
 
 /*
  * Update whenever new OS_REASON namespaces are added.
  */
-#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_AGGREGATED
+#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_METAL
 
 #define OS_REASON_BUFFER_MAX_SIZE 5120
 
-#define OS_REASON_FLAG_NO_CRASH_REPORT          0x1  /* Don't create a crash report */
-#define OS_REASON_FLAG_GENERATE_CRASH_REPORT    0x2  /* Create a crash report - the default for userspace requests */
-#define OS_REASON_FLAG_FROM_USERSPACE           0x4  /* Reason created from a userspace syscall */
-#define OS_REASON_FLAG_FAILED_DATA_COPYIN       0x8  /* We failed to copyin data from userspace */
-#define OS_REASON_FLAG_PAYLOAD_TRUNCATED        0x10 /* The payload was truncated because it was longer than allowed */
-#define OS_REASON_FLAG_BAD_PARAMS               0x20 /* Invalid parameters were passed involved with creating this reason */
-#define OS_REASON_FLAG_CONSISTENT_FAILURE       0x40 /* Whatever caused this reason to be created will happen again */
-#define OS_REASON_FLAG_ONE_TIME_FAILURE         0x80 /* Whatever caused this reason to be created was a one time issue */
+#define OS_REASON_FLAG_NO_CRASH_REPORT          0x1   /* Don't create a crash report */
+#define OS_REASON_FLAG_GENERATE_CRASH_REPORT    0x2   /* Create a crash report - the default for userspace requests */
+#define OS_REASON_FLAG_FROM_USERSPACE           0x4   /* Reason created from a userspace syscall */
+#define OS_REASON_FLAG_FAILED_DATA_COPYIN       0x8   /* We failed to copyin data from userspace */
+#define OS_REASON_FLAG_PAYLOAD_TRUNCATED        0x10  /* The payload was truncated because it was longer than allowed */
+#define OS_REASON_FLAG_BAD_PARAMS               0x20  /* Invalid parameters were passed involved with creating this reason */
+#define OS_REASON_FLAG_CONSISTENT_FAILURE       0x40  /* Whatever caused this reason to be created will happen again */
+#define OS_REASON_FLAG_ONE_TIME_FAILURE         0x80  /* Whatever caused this reason to be created was a one time issue */
+#define OS_REASON_FLAG_NO_CRASHED_TID           0x100 /* Don't include the TID that processed the exit in the crash report */
 
 /*
  * Set of flags that are allowed to be passed from userspace

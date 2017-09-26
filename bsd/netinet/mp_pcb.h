@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -30,6 +30,9 @@
 #define	_NETINET_MP_PCB_H_
 
 #ifdef BSD_KERNEL_PRIVATE
+#include <sys/domain.h>
+#include <sys/protosw.h>
+#include <sys/socketvar.h>
 #include <sys/types.h>
 #include <sys/queue.h>
 #include <kern/locks.h>
@@ -40,6 +43,10 @@ typedef enum mppcb_state {
 	MPPCB_STATE_DEAD	= 2,
 } mppcb_state_t;
 
+
+/* net/necp.h already includes mp_pcb.h - so we have to forward-declare */
+struct necp_client_flow;
+
 /*
  * Multipath Protocol Control Block
  */
@@ -47,17 +54,42 @@ struct mppcb {
 	TAILQ_ENTRY(mppcb)	mpp_entry;	/* glue to all PCBs */
 	decl_lck_mtx_data(, mpp_lock);		/* per PCB lock */
 	struct mppcbinfo	*mpp_pcbinfo;	/* PCB info */
-	void			*mpp_pcbe;	/* ptr to per-protocol ext */
+	struct mptses		*mpp_pcbe;	/* ptr to MPTCP-session */
 	struct socket		*mpp_socket;	/* back pointer to socket */
 	uint32_t		mpp_flags;	/* PCB flags */
 	mppcb_state_t		mpp_state;	/* PCB state */
+
+#if NECP
+	uuid_t necp_client_uuid;
+	void	(*necp_cb)(void *, int, struct necp_client_flow *);
+#endif
 };
 
-#define	sotomppcb(so)	((struct mppcb *)((so)->so_pcb))
+static inline struct mppcb *
+mpsotomppcb(struct socket *mp_so)
+{
+	VERIFY(SOCK_DOM(mp_so) == PF_MULTIPATH);
+	return ((struct mppcb *)mp_so->so_pcb);
+}
 
 /* valid values for mpp_flags */
-#define	MPP_ATTACHED	0x1
-#define MPP_DEFUNCT	0x2
+#define	MPP_ATTACHED		0x001
+#define	MPP_INSIDE_OUTPUT	0x002		/* MPTCP-stack is inside mptcp_subflow_output */
+#define	MPP_INSIDE_INPUT	0x004		/* MPTCP-stack is inside mptcp_subflow_input */
+#define	MPP_RUPCALL		0x008		/* MPTCP-stack is handling a read upcall */
+#define	MPP_WUPCALL		0x010		/* MPTCP-stack is handling a read upcall */
+#define	MPP_SHOULD_WORKLOOP	0x020		/* MPTCP-stack should call the workloop function */
+#define	MPP_SHOULD_RWAKEUP	0x040		/* MPTCP-stack should call sorwakeup */
+#define	MPP_SHOULD_WWAKEUP	0x080		/* MPTCP-stack should call sowwakeup */
+#define	MPP_CREATE_SUBFLOWS	0x100		/* This connection needs to create subflows */
+#define	MPP_SET_CELLICON	0x200		/* Set the cellicon (deferred) */
+#define	MPP_UNSET_CELLICON	0x400		/* Unset the cellicon (deferred) */
+
+static inline boolean_t
+mptcp_should_defer_upcall(struct mppcb *mpp)
+{
+	return !!(mpp->mpp_flags & (MPP_INSIDE_OUTPUT | MPP_INSIDE_INPUT | MPP_RUPCALL | MPP_WUPCALL));
+}
 
 /*
  * Multipath PCB Information
@@ -74,8 +106,6 @@ struct mppcbinfo {
 	decl_lck_mtx_data(, mppi_lock);		/* global PCB lock */
 	uint32_t (*mppi_gc)(struct mppcbinfo *); /* garbage collector func */
 	uint32_t (*mppi_timer)(struct mppcbinfo *); /* timer func */
-	/* Extended pcb create func */
-	void *(*mppi_pcbe_create) (struct socket *mp_so, struct mppcb *mpp);
 };
 
 __BEGIN_DECLS
@@ -83,10 +113,13 @@ extern void mp_pcbinit(void);
 extern void mp_pcbinfo_attach(struct mppcbinfo *);
 extern int mp_pcbinfo_detach(struct mppcbinfo *);
 extern int mp_pcballoc(struct socket *, struct mppcbinfo *);
-extern void mp_pcbdetach(struct mppcb *);
+extern void mp_pcbdetach(struct socket *);
 extern void mp_pcbdispose(struct mppcb *);
 extern void mp_gc_sched(void);
 extern void mptcp_timer_sched(void);
+extern void mptcp_handle_deferred_upcalls(struct mppcb *mpp, uint32_t flag);
+extern int mp_getsockaddr(struct socket *mp_so, struct sockaddr **nam);
+extern int mp_getpeeraddr(struct socket *mp_so, struct sockaddr **nam);
 __END_DECLS
 
 #endif /* BSD_KERNEL_PRIVATE */

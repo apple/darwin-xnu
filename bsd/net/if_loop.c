@@ -177,15 +177,6 @@ SYSCTL_DECL(_net_link);
 SYSCTL_NODE(_net_link, OID_AUTO, loopback, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "loopback interface");
 
-#define	LO_BW_SLEEP	10
-static u_int32_t lo_bw_sleep_usec = LO_BW_SLEEP;
-SYSCTL_UINT(_net_link_loopback, OID_AUTO, bw_sleep_usec,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &lo_bw_sleep_usec, LO_BW_SLEEP, "");
-
-static u_int32_t lo_bw_measure = 0;
-SYSCTL_UINT(_net_link_loopback, OID_AUTO, bw_measure,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &lo_bw_measure, 0, "");
-
 static u_int32_t lo_dequeue_max = LOSNDQ_MAXLEN;
 SYSCTL_PROC(_net_link_loopback, OID_AUTO, max_dequeue,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &lo_dequeue_max, LOSNDQ_MAXLEN,
@@ -405,8 +396,6 @@ lo_start(struct ifnet *ifp)
 	for (;;) {
 		struct mbuf *m = NULL, *m_tail = NULL;
 		u_int32_t cnt, len = 0;
-		int sleep_chan = 0;
-		struct timespec ts;
 
 		if (lo_sched_model == IFNET_SCHED_MODEL_NORMAL) {
 			if (ifnet_dequeue_multi(ifp, lo_dequeue_max, &m,
@@ -420,21 +409,6 @@ lo_start(struct ifnet *ifp)
 		}
 
 		LO_BPF_TAP_OUT_MULTI(m);
-
-		if (lo_bw_measure) {
-			if (cnt >= if_bw_measure_size)
-				ifnet_transmit_burst_start(ifp, m);
-			if (lo_bw_sleep_usec > 0) {
-				bzero(&ts, sizeof(ts));
-				ts.tv_nsec = (lo_bw_sleep_usec << 10) * cnt;
-
-				/* Add msleep with timeout */
-				(void) msleep(&sleep_chan, NULL,
-				    PSOCK, "lo_start", &ts);
-			}
-			if (cnt >= if_bw_measure_size)
-				ifnet_transmit_burst_end(ifp, m_tail);
-		}
 		lo_tx_compl(ifp, m);
 
 		/* stats are required for extended variant */
@@ -683,6 +657,7 @@ loopattach(void)
 		lo_init.flags		= IFNET_INIT_LEGACY;
 		lo_init.output		= lo_output;
 	}
+	lo_init.flags			|= IFNET_INIT_NX_NOAUTO;
 	lo_init.name			= "lo";
 	lo_init.unit			= 0;
 	lo_init.family			= IFNET_FAMILY_LOOPBACK;

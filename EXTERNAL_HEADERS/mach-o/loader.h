@@ -302,6 +302,8 @@ struct load_command {
 #define LC_LINKER_OPTIMIZATION_HINT 0x2E /* optimization hints in MH_OBJECT files */
 #define LC_VERSION_MIN_TVOS 0x2F /* build for AppleTV min OS version */
 #define LC_VERSION_MIN_WATCHOS 0x30 /* build for Watch min OS version */
+#define LC_NOTE 0x31 /* arbitrary data included within a Mach-O file */
+#define LC_BUILD_VERSION 0x32 /* build for platform min OS version */
 
 /*
  * A variable length string in a load command is represented by an lc_str
@@ -1203,12 +1205,44 @@ struct encryption_info_command_64 {
  */
 struct version_min_command {
     uint32_t	cmd;		/* LC_VERSION_MIN_MACOSX or
-				   LC_VERSION_MIN_IPHONEOS
-				   LC_VERSION_MIN_WATCHOS */
+				   LC_VERSION_MIN_IPHONEOS or
+				   LC_VERSION_MIN_WATCHOS or
+				   LC_VERSION_MIN_TVOS */
     uint32_t	cmdsize;	/* sizeof(struct min_version_command) */
     uint32_t	version;	/* X.Y.Z is encoded in nibbles xxxx.yy.zz */
     uint32_t	sdk;		/* X.Y.Z is encoded in nibbles xxxx.yy.zz */
 };
+
+/*
+ * The build_version_command contains the min OS version on which this
+ * binary was built to run for its platform.  The list of known platforms and
+ * tool values following it.
+ */
+struct build_version_command {
+    uint32_t	cmd;		/* LC_BUILD_VERSION */
+    uint32_t	cmdsize;	/* sizeof(struct build_version_command) plus */
+                                /* ntools * sizeof(struct build_tool_version) */
+    uint32_t	platform;	/* platform */
+    uint32_t	minos;		/* X.Y.Z is encoded in nibbles xxxx.yy.zz */
+    uint32_t	sdk;		/* X.Y.Z is encoded in nibbles xxxx.yy.zz */
+    uint32_t	ntools;		/* number of tool entries following this */
+};
+
+struct build_tool_version {
+    uint32_t	tool;		/* enum for the tool */
+    uint32_t	version;	/* version number of the tool */
+};
+
+/* Known values for the platform field above. */
+#define PLATFORM_MACOS 1
+#define PLATFORM_IOS 2
+#define PLATFORM_TVOS 3
+#define PLATFORM_WATCHOS 4
+
+/* Known values for the tool field above. */
+#define TOOL_CLANG 1
+#define TOOL_SWIFT 2
+#define TOOL_LD	3
 
 /*
  * The dyld_info_command contains the file offsets and sizes of 
@@ -1487,6 +1521,18 @@ struct tlv_descriptor
 	void*		(*thunk)(struct tlv_descriptor*);
 	unsigned long	key;
 	unsigned long	offset;
+};
+
+/*
+ * LC_NOTE commands describe a region of arbitrary data included in a Mach-O
+ * file.  Its initial use is to record extra data in MH_CORE files.
+ */
+struct note_command {
+    uint32_t	cmd;		/* LC_NOTE */
+    uint32_t	cmdsize;	/* sizeof(struct note_command) */
+    char	data_owner[16];	/* owner name for this LC_NOTE */
+    uint64_t	offset;		/* file offset of this data */
+    uint64_t	size;		/* length of data region */
 };
 
 #endif /* _MACHO_LOADER_H_ */

@@ -607,7 +607,7 @@ wait_for_granted:
 			    ((lastmsg + nmp->nm_tprintf_delay) < now.tv_sec)) {
 				lck_mtx_unlock(&nmp->nm_lock);
 				lastmsg = now.tv_sec;
-				nfs_down(nmp, thd, 0, NFSSTA_LOCKTIMEO, "lockd not responding", 0);
+				nfs_down(nmp, thd, 0, NFSSTA_LOCKTIMEO, "lockd not responding", 1);
 				wentdown = 1;
 			} else
 				lck_mtx_unlock(&nmp->nm_lock);

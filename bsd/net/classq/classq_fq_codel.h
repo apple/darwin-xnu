@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,7 +40,7 @@ extern "C" {
 #endif
 
 #define	FQ_MIN_FC_THRESHOLD_BYTES	7500
-#define	FQ_IS_DELAYHIGH(_fq_) ((_fq_)->fq_flags & FQF_DELAY_HIGH)
+#define	FQ_IS_DELAYHIGH(_fq_)	((_fq_)->fq_flags & FQF_DELAY_HIGH)
 #define	FQ_SET_DELAY_HIGH(_fq_) do { \
 	(_fq_)->fq_flags |= FQF_DELAY_HIGH; \
 } while (0)
@@ -49,7 +49,9 @@ extern "C" {
 } while (0)
 
 typedef struct flowq {
-	MBUFQ_HEAD(pktq_head) fq_mbufq; /* Packet queue */
+	union {
+		MBUFQ_HEAD(mbufq_head) __mbufq; /* mbuf packet queue */
+	} __fq_pktq_u;
 #define	FQF_FLOWCTL_CAPABLE 0x01 /* Use flow control instead of drop */
 #define	FQF_DELAY_HIGH	0x02	/* Min delay is greater than target */
 #define	FQF_NEW_FLOW	0x04	/* Currently on new flows queue */
@@ -65,19 +67,34 @@ typedef struct flowq {
 	SLIST_ENTRY(flowq) fq_hashlink; /* for flow queue hash table */
 	STAILQ_ENTRY(flowq) fq_actlink; /* for new/old flow queues */
 	u_int32_t	fq_flowhash;	/* Flow hash */
-	u_int32_t	fq_dequeue_seq;	/* Last dequeue seq */
+	classq_pkt_type_t	fq_ptype; /* Packet type */
 } fq_t;
+
+#define	fq_mbufq	__fq_pktq_u.__mbufq
+
+#define	fq_empty(_q)	MBUFQ_EMPTY(&(_q)->fq_mbufq)
+
+#define	fq_enqueue(_q, _p)	MBUFQ_ENQUEUE(&(_q)->fq_mbufq, (mbuf_t)_p)
+
+#define	fq_dequeue(_q, _p) do {						\
+	mbuf_t _m;							\
+	MBUFQ_DEQUEUE(&(_q)->fq_mbufq, _m);				\
+	(_p) = _m;							\
+} while (0)
 
 struct fq_codel_sched_data;
 struct fq_if_classq;
 
 /* Function definitions */
 extern void fq_codel_init(void);
-extern fq_t *fq_alloc(int);
+extern fq_t *fq_alloc(classq_pkt_type_t);
 extern void fq_destroy(fq_t *);
-extern int fq_addq(struct fq_codel_sched_data *, struct mbuf *,
+extern int fq_addq(struct fq_codel_sched_data *, pktsched_pkt_t *,
     struct fq_if_classq *);
-extern struct mbuf *fq_getq_flow(struct fq_codel_sched_data *, fq_t *);
+extern void *fq_getq_flow(struct fq_codel_sched_data *, fq_t *,
+    pktsched_pkt_t *);
+extern void *fq_getq_flow_internal(struct fq_codel_sched_data *,
+    fq_t *, pktsched_pkt_t *);
 extern void fq_head_drop(struct fq_codel_sched_data *, fq_t *);
 
 #ifdef __cplusplus

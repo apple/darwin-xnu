@@ -63,6 +63,7 @@ typedef struct _load_result {
 
 	mach_vm_address_t	all_image_info_addr;
 	mach_vm_size_t		all_image_info_size;
+    
 	int			thread_count;
 	unsigned int
 		/* boolean_t */	unixproc	:1,

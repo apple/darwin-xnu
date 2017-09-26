@@ -141,7 +141,7 @@
  *	+	print '+' if positive
  *	blank	print ' ' if positive
  *
- *	z	signed hexadecimal
+ *	z	set length equal to size_t
  *	r	signed, 'radix'
  *	n	unsigned, 'radix'
  *
@@ -159,6 +159,7 @@
 #include <mach/boolean.h>
 #include <kern/cpu_number.h>
 #include <kern/thread.h>
+#include <kern/debug.h>
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
 #include <stdarg.h>
@@ -169,6 +170,14 @@
 #endif
 #include <console/serial_protos.h>
 #include <os/log_private.h>
+
+#ifdef __x86_64__
+#include <i386/cpu_data.h>
+#endif /* __x86_64__ */
+
+#if __arm__ || __arm64__
+#include <arm/cpu_data_internal.h>
+#endif
 
 #define isdigit(d) ((d) >= '0' && (d) <= '9')
 #define Ctod(c) ((c) - '0')
@@ -331,7 +340,14 @@ __doprnt(
 	    } else if (c == 'q' || c == 'L') {
 	    	long_long = 1;
 		c = *++fmt;
-	    } 
+	    }
+
+	    if (c == 'z' || c == 'Z') {
+		    c = *++fmt;
+		    if (sizeof(size_t) == sizeof(unsigned long)){
+			    long_long = 1;
+		    }
+	    }
 
 	    truncate = FALSE;
 	    capitals=0;		/* Assume lower case printing */
@@ -518,17 +534,7 @@ __doprnt(
 		    base = 16;
 		    capitals=16;	/* Print in upper case */
 		    goto print_unsigned;
-
-		case 'z':
-		    truncate = _doprnt_truncates;
-		    base = 16;
-		    goto print_signed;
 			
-		case 'Z':
-		    base = 16;
-		    capitals=16;	/* Print in upper case */
-		    goto print_signed;
-
 		case 'r':
 		    truncate = _doprnt_truncates;
 		case 'R':
@@ -794,11 +800,11 @@ void
 conslog_putc(
 	char c)
 {
-	if ((debug_mode && !disable_debug_output) || !disableConsoleOutput)
+	if (!disableConsoleOutput)
 		cnputc(c);
 
 #ifdef	MACH_BSD
-	if (debug_mode == 0)
+	if (!kernel_debugger_entry_count)
 		log_putc(c);
 #endif
 }
@@ -807,26 +813,37 @@ void
 cons_putc_locked(
 	char c)
 {
-	if ((debug_mode && !disable_debug_output) || !disableConsoleOutput)
+	if (!disableConsoleOutput)
 		cnputc(c);
 }
 
 static int
 vprintf_internal(const char *fmt, va_list ap_in, void *caller)
 {
+	cpu_data_t * cpu_data_p;
 	if (fmt) {
+		struct console_printbuf_state info_data;
+		cpu_data_p = current_cpu_datap();
+
 		va_list ap;
 		va_copy(ap, ap_in);
-
-		disable_preemption();
-		_doprnt_log(fmt, &ap, cons_putc_locked, 16);
-		enable_preemption();
+		/*
+		 * for early boot printf()s console may not be setup,
+		 * fallback to good old cnputc
+		 */
+		if (cpu_data_p->cpu_console_buf != NULL) {
+			console_printbuf_state_init(&info_data, TRUE, TRUE);
+			__doprnt(fmt, ap, console_printbuf_putc, &info_data, 16, TRUE);
+			console_printbuf_clear(&info_data);
+		} else {
+			disable_preemption();
+			_doprnt_log(fmt, &ap, cons_putc_locked, 16);
+			enable_preemption();
+		}
 
 		va_end(ap);
 
-		if (debug_mode == 0) {
-			os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap_in, caller);
-		}
+		os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap_in, caller);
 	}
 	return 0;
 }
@@ -855,26 +872,24 @@ vprintf(const char *fmt, va_list ap)
 void
 consdebug_putc(char c)
 {
-	if ((debug_mode && !disable_debug_output) || !disableConsoleOutput)
+	if (!disableConsoleOutput)
 		cnputc(c);
 
 	debug_putc(c);
 
-	if (!console_is_serial())
-		if (!disable_serial_output)
-			PE_kputc(c);
+	if (!console_is_serial() && !disable_serial_output)
+		PE_kputc(c);
 }
 
 void
 consdebug_putc_unbuffered(char c)
 {
-	if ((debug_mode && !disable_debug_output) || !disableConsoleOutput)
+	if (!disableConsoleOutput)
 		cnputc_unbuffered(c);
 
 	debug_putc(c);
 
-	if (!console_is_serial())
-		if (!disable_serial_output)
+	if (!console_is_serial() && !disable_serial_output)
 			PE_kputc(c);
 }
 
@@ -882,6 +897,24 @@ void
 consdebug_log(char c)
 {
 	debug_putc(c);
+}
+
+/*
+ * Append contents to the paniclog buffer but don't flush
+ * it. This is mainly used for writing the actual paniclog
+ * contents since flushing once for every line written
+ * would be prohibitively expensive for the paniclog
+ */
+int
+paniclog_append_noflush(const char *fmt, ...)
+{
+	va_list	listp;
+
+	va_start(listp, fmt);
+	_doprnt_log(fmt, &listp, consdebug_putc, 16);
+	va_end(listp);
+
+	return 0;
 }
 
 int
@@ -892,6 +925,11 @@ kdb_printf(const char *fmt, ...)
 	va_start(listp, fmt);
 	_doprnt_log(fmt, &listp, consdebug_putc, 16);
 	va_end(listp);
+
+#if CONFIG_EMBEDDED
+	paniclog_flush();
+#endif
+
 	return 0;
 }
 
@@ -903,6 +941,11 @@ kdb_log(const char *fmt, ...)
 	va_start(listp, fmt);
 	_doprnt(fmt, &listp, consdebug_log, 16);
 	va_end(listp);
+
+#if CONFIG_EMBEDDED
+	paniclog_flush();
+#endif
+
 	return 0;
 }
 
@@ -914,9 +957,15 @@ kdb_printf_unbuffered(const char *fmt, ...)
 	va_start(listp, fmt);
 	_doprnt(fmt, &listp, consdebug_putc_unbuffered, 16);
 	va_end(listp);
+
+#if CONFIG_EMBEDDED
+	paniclog_flush();
+#endif
+
 	return 0;
 }
 
+#if !CONFIG_EMBEDDED
 
 static void
 copybyte(int c, void *arg)
@@ -949,3 +998,4 @@ sprintf(char *buf, const char *fmt, ...)
 	*copybyte_str = '\0';
         return (int)strlen(buf);
 }
+#endif /* !CONFIG_EMBEDDED */

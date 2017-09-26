@@ -342,6 +342,10 @@ typedef enum dtrace_probespec {
 #define DIF_VAR_DISPATCHQADDR	0x0201	/* Apple specific dispatch queue addr */
 #define DIF_VAR_MACHTIMESTAMP	0x0202	/* mach_absolute_timestamp() */
 #define DIF_VAR_CPU		0x0203	/* cpu number */
+#define DIF_VAR_CPUINSTRS	0x0204	/* cpu instructions */
+#define DIF_VAR_CPUCYCLES	0x0205	/* cpu cycles */
+#define DIF_VAR_VINSTRS		0x0206	/* virtual instructions */
+#define DIF_VAR_VCYCLES		0x0207	/* virtual cycles */
 #endif /* __APPLE __ */
 
 #define	DIF_SUBR_RAND			0
@@ -2508,6 +2512,9 @@ extern int (*dtrace_return_probe_ptr)(struct regs *);
 #if defined (__i386__) || defined(__x86_64__)
 extern int (*dtrace_pid_probe_ptr)(x86_saved_state_t *regs);
 extern int (*dtrace_return_probe_ptr)(x86_saved_state_t* regs);
+#elif defined (__arm__) || defined(__arm64__)
+extern int (*dtrace_pid_probe_ptr)(arm_saved_state_t *regs);
+extern int (*dtrace_return_probe_ptr)(arm_saved_state_t *regs);
 #else
 #error architecture not supported
 #endif
@@ -2579,6 +2586,13 @@ extern void *dtrace_invop_callsite_pre;
 extern void *dtrace_invop_callsite_post;
 #endif
 
+#if defined(__arm__) || defined(__arm64__)
+extern int dtrace_instr_size(uint32_t instr, int thumb_mode);
+extern void dtrace_invop_add(int (*)(uintptr_t, uintptr_t *, uintptr_t));    
+extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
+extern void *dtrace_invop_callsite_pre;
+extern void *dtrace_invop_callsite_post;
+#endif
     
 #undef proc_t
 #endif /* __APPLE__ */
@@ -2617,6 +2631,13 @@ extern void *dtrace_invop_callsite_post;
 
 #endif
 
+#if defined(__arm__) || defined(__arm64__)
+
+#define DTRACE_INVOP_NOP                4
+#define DTRACE_INVOP_RET                5
+#define DTRACE_INVOP_B			6
+
+#endif
 
 #endif /* __APPLE__ */
 

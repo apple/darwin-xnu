@@ -231,7 +231,7 @@ pfi_attach_ifnet(struct ifnet *ifp)
 {
 	struct pfi_kif *kif;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	pfi_update++;
 	if ((kif = pfi_kif_get(if_name(ifp))) == NULL)
@@ -253,7 +253,7 @@ pfi_detach_ifnet(struct ifnet *ifp)
 {
 	struct pfi_kif		*kif;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	if ((kif = (struct pfi_kif *)ifp->if_pf_kif) == NULL)
 		return;
@@ -310,7 +310,7 @@ pfi_dynaddr_setup(struct pf_addr_wrap *aw, sa_family_t af)
 	struct pf_ruleset	*ruleset = NULL;
 	int			 rv = 0;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (aw->type != PF_ADDR_DYNIFTL)
 		return (0);
@@ -378,7 +378,7 @@ pfi_kif_update(struct pfi_kif *kif)
 {
 	struct pfi_dynaddr	*p;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	/* update all dynaddr */
 	TAILQ_FOREACH(p, &kif->pfik_dynaddrs, entry)
@@ -576,7 +576,7 @@ pfi_kifaddr_update(void *v)
 {
 	struct pfi_kif		*kif = (struct pfi_kif *)v;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	pfi_update++;
 	pfi_kif_update(kif);
@@ -595,7 +595,7 @@ pfi_update_status(const char *name, struct pf_status *pfs)
 	struct pfi_kif_cmp	 key;
 	int			 i, j, k;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	strlcpy(key.pfik_name, name, sizeof (key.pfik_name));
 	p = RB_FIND(pfi_ifhead, &pfi_ifs, (struct pfi_kif *)(void *)&key);
@@ -627,7 +627,7 @@ pfi_get_ifaces(const char *name, user_addr_t buf, int *size)
 	struct pfi_kif	 *p, *nextp;
 	int		 n = 0;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	for (p = RB_MIN(pfi_ifhead, &pfi_ifs); p; p = nextp) {
 		nextp = RB_NEXT(pfi_ifhead, &pfi_ifs, p);
@@ -689,7 +689,7 @@ pfi_set_flags(const char *name, int flags)
 {
 	struct pfi_kif	*p;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	RB_FOREACH(p, pfi_ifhead, &pfi_ifs) {
 		if (pfi_skip_if(name, p))
@@ -704,7 +704,7 @@ pfi_clear_flags(const char *name, int flags)
 {
 	struct pfi_kif	*p;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	RB_FOREACH(p, pfi_ifhead, &pfi_ifs) {
 		if (pfi_skip_if(name, p))

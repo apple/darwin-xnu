@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -81,6 +81,7 @@
 #include <net/if_llreach.h>
 #include <net/route.h>
 #include <net/dlil.h>
+#include <net/nwk_wq.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -121,10 +122,10 @@ static struct zone *dad_zone;			/* zone for dadq */
 #define	DAD_ZONE_NAME	"nd6_dad"		/* zone name */
 
 #define	DAD_LOCK_ASSERT_HELD(_dp)					\
-	lck_mtx_assert(&(_dp)->dad_lock, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&(_dp)->dad_lock, LCK_MTX_ASSERT_OWNED)
 
 #define	DAD_LOCK_ASSERT_NOTHELD(_dp)					\
-	lck_mtx_assert(&(_dp)->dad_lock, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&(_dp)->dad_lock, LCK_MTX_ASSERT_NOTOWNED)
 
 #define	DAD_LOCK(_dp)							\
 	lck_mtx_lock(&(_dp)->dad_lock)
@@ -271,11 +272,6 @@ nd6_ns_input(
 	boolean_t advrouter;
 	boolean_t is_dad_probe;
 	int oflgclr = 0;
-
-	if ((ifp->if_eflags & IFEF_IPV6_ND6ALT) != 0) {
-		nd6log((LOG_INFO, "nd6_ns_input: on ND6ALT interface!\n"));
-		return;
-	}
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
@@ -1049,25 +1045,46 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 			ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_STALE);
 			ln_setexpire(ln, timenow + nd6_gctimer);
 		}
+
+
+		/*
+		 * Enqueue work item to invoke callback for this
+		 * route entry
+		 */
+		route_event_enqueue_nwk_wq_entry(rt, NULL,
+		    ROUTE_LLENTRY_RESOLVED, NULL, TRUE);
+
 		if ((ln->ln_router = is_router) != 0) {
+			struct radix_node_head  *rnh = NULL;
+			struct route_event rt_ev;
+			route_event_init(&rt_ev, rt, NULL, ROUTE_LLENTRY_RESOLVED);
 			/*
 			 * This means a router's state has changed from
 			 * non-reachable to probably reachable, and might
 			 * affect the status of associated prefixes..
+			 * We already have a reference on rt. Don't need to
+			 * take one for the unlock/lock.
 			 */
 			RT_UNLOCK(rt);
+			lck_mtx_lock(rnh_lock);
+			rnh = rt_tables[AF_INET6];
+
+			if (rnh != NULL)
+				(void) rnh->rnh_walktree(rnh, route_event_walktree,
+				    (void *)&rt_ev);
+			lck_mtx_unlock(rnh_lock);
 			lck_mtx_lock(nd6_mutex);
 			pfxlist_onlink_check();
 			lck_mtx_unlock(nd6_mutex);
 			RT_LOCK(rt);
 		}
 	} else {
-		int llchange;
+		int llchange = 0;
 
 		/*
 		 * Check if the link-layer address has changed or not.
 		 */
-		if (!lladdr)
+		if (lladdr == NULL)
 			llchange = 0;
 		else {
 			if (sdl->sdl_alen) {
@@ -1080,7 +1097,7 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		}
 
 		/*
-		 * This is VERY complex.  Look at it with care.
+		 * This is VERY complex. Look at it with care.
 		 *
 		 * override solicit lladdr llchange	action
 		 *					(L: record lladdr)
@@ -1148,6 +1165,44 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 					ND6_CACHE_STATE_TRANSITION(ln, ND6_LLINFO_STALE);
 					ln_setexpire(ln, timenow + nd6_gctimer);
 				}
+			}
+
+			/*
+			 * XXX
+			 * The above is somewhat convoluted, for now just
+			 * issue a callback for LLENTRY changed.
+			 */
+			/* Enqueue work item to invoke callback for this route entry */
+			route_event_enqueue_nwk_wq_entry(rt, NULL,
+			    ROUTE_LLENTRY_CHANGED, NULL, TRUE);
+
+			/*
+			 * If the entry is no longer a router, the logic post this processing
+			 * gets rid of all the route entries having the current entry as a next
+			 * hop.
+			 * So only walk the tree here when there's no such change.
+			 */
+			if (ln->ln_router && is_router) {
+				struct radix_node_head  *rnh = NULL;
+				struct route_event rt_ev;
+				route_event_init(&rt_ev, rt, NULL, ROUTE_LLENTRY_CHANGED);
+				/*
+				 * This means a router's state has changed from
+				 * non-reachable to probably reachable, and might
+				 * affect the status of associated prefixes..
+				 *
+				 * We already have a valid rt reference here.
+				 * We don't need to take another one for unlock/lock.
+				 */
+				RT_UNLOCK(rt);
+				lck_mtx_lock(rnh_lock);
+				rnh = rt_tables[AF_INET6];
+
+				if (rnh != NULL)
+					(void) rnh->rnh_walktree(rnh, route_event_walktree,
+					    (void *)&rt_ev);
+				lck_mtx_unlock(rnh_lock);
+				RT_LOCK(rt);
 			}
 		}
 
@@ -1244,13 +1299,15 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 	}
 	RT_REMREF_LOCKED(rt);
 	RT_UNLOCK(rt);
+	m_freem(m);
+	return;
 
 bad:
 	icmp6stat.icp6s_badna++;
 	/* fall through */
-
 freeit:
 	m_freem(m);
+	return;
 }
 
 /*
@@ -1614,11 +1671,11 @@ nd6_dad_start(
 	 */
 	IFA_LOCK(&ia->ia_ifa);
 	if (!(ia->ia6_flags & IN6_IFF_DADPROGRESS)) {
-		log(LOG_DEBUG,
+		nd6log0((LOG_DEBUG,
 			"nd6_dad_start: not a tentative or optimistic address "
 			"%s(%s)\n",
 			ip6_sprintf(&ia->ia_addr.sin6_addr),
-			ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???");
+			ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???"));
 		IFA_UNLOCK(&ia->ia_ifa);
 		return;
 	}
@@ -1642,10 +1699,10 @@ nd6_dad_start(
 
 	dp = zalloc(dad_zone);
 	if (dp == NULL) {
-		log(LOG_ERR, "nd6_dad_start: memory allocation failed for "
+		nd6log0((LOG_ERR, "nd6_dad_start: memory allocation failed for "
 			"%s(%s)\n",
 			ip6_sprintf(&ia->ia_addr.sin6_addr),
-			ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???");
+			ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???"));
 		return;
 	}
 	bzero(dp, dad_size);
@@ -1654,7 +1711,7 @@ nd6_dad_start(
 	/* Callee adds one reference for us */
 	dp = nd6_dad_attach(dp, ifa);
 
-	nd6log((LOG_DEBUG, "%s: starting %sDAD %sfor %s\n",
+	nd6log0((LOG_DEBUG, "%s: starting %sDAD %sfor %s\n",
 	    if_name(ifa->ifa_ifp),
 	    (ia->ia6_flags & IN6_IFF_OPTIMISTIC) ? "optimistic " : "",
 	    (tick_delay == NULL) ? "immediately " : "",
@@ -1793,7 +1850,7 @@ nd6_dad_timer(struct ifaddr *ifa)
 
 	/* Sanity check */
 	if (ia == NULL) {
-		log(LOG_ERR, "nd6_dad_timer: called with null parameter\n");
+		nd6log0((LOG_ERR, "nd6_dad_timer: called with null parameter\n"));
 		goto done;
 	}
 
@@ -1805,23 +1862,23 @@ nd6_dad_timer(struct ifaddr *ifa)
 
 	dp = nd6_dad_find(ifa, NULL);
 	if (dp == NULL) {
-		log(LOG_ERR, "nd6_dad_timer: DAD structure not found\n");
+		nd6log0((LOG_ERR, "nd6_dad_timer: DAD structure not found\n"));
 		goto done;
 	}
 	IFA_LOCK(&ia->ia_ifa);
 	if (ia->ia6_flags & IN6_IFF_DUPLICATED) {
-		log(LOG_ERR, "nd6_dad_timer: called with duplicated address "
+		nd6log0((LOG_ERR, "nd6_dad_timer: called with duplicated address "
 			"%s(%s)\n",
 			ip6_sprintf(&ia->ia_addr.sin6_addr),
-			ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???");
+			ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???"));
 		IFA_UNLOCK(&ia->ia_ifa);
 		goto done;
 	}
 	if ((ia->ia6_flags & IN6_IFF_DADPROGRESS) == 0) {
-		log(LOG_ERR, "nd6_dad_timer: not a tentative or optimistic "
+		nd6log0((LOG_ERR, "nd6_dad_timer: not a tentative or optimistic "
 			"address %s(%s)\n",
 			ip6_sprintf(&ia->ia_addr.sin6_addr),
-			ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???");
+			ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???"));
 		IFA_UNLOCK(&ia->ia_ifa);
 		goto done;
 	}
@@ -1831,7 +1888,7 @@ nd6_dad_timer(struct ifaddr *ifa)
 	DAD_LOCK(dp);
 	if (dp->dad_ns_tcount > dad_maxtry) {
 		DAD_UNLOCK(dp);
-		nd6log((LOG_INFO, "%s: could not run DAD, driver problem?\n",
+		nd6log0((LOG_INFO, "%s: could not run DAD, driver problem?\n",
 			if_name(ifa->ifa_ifp)));
 
 		nd6_dad_detach(dp, ifa);
@@ -1859,7 +1916,7 @@ nd6_dad_timer(struct ifaddr *ifa)
 		if (dp->dad_na_icount > 0 || dp->dad_ns_icount) {
 			 /* We've seen NS or NA, means DAD has failed. */
 			DAD_UNLOCK(dp);
-			nd6log((LOG_INFO,
+			nd6log0((LOG_INFO,
 			    "%s: duplicate IPv6 address %s [timer]\n",
 			    __func__, ip6_sprintf(&ia->ia_addr.sin6_addr),
 			    if_name(ia->ia_ifp)));
@@ -1883,7 +1940,7 @@ nd6_dad_timer(struct ifaddr *ifa)
 			  * additional probes until the loopback condition
 			  * becomes clear when a looped back probe is detected.
 			  */
-			nd6log((LOG_INFO,
+			nd6log0((LOG_INFO,
 			    "%s: a looped back NS message is "
 			    "detected during DAD for %s. "
 			    "Another DAD probe is being sent on interface.\n",
@@ -1917,14 +1974,14 @@ nd6_dad_timer(struct ifaddr *ifa)
 				nd6_unsol_na_output(ifa);
 			}
 
-			nd6log((LOG_DEBUG,
+			nd6log0((LOG_DEBUG,
 			    "%s: DAD complete for %s - no duplicates found%s\n",
 			    if_name(ifa->ifa_ifp),
 			    ip6_sprintf(&ia->ia_addr.sin6_addr),
 			    txunsolna ? ", tx unsolicited NA with O=1" : "."));
 
 			if (dp->dad_ns_lcount > 0)
-				nd6log((LOG_DEBUG,
+				nd6log0((LOG_DEBUG,
 				    "%s: DAD completed while "
 				    "a looped back NS message is detected "
 				    "during DAD for %s om interface %s\n",
@@ -2029,6 +2086,9 @@ nd6_dad_duplicated(struct ifaddr *ifa)
 
 	ia->ia6_flags &= ~IN6_IFF_DADPROGRESS;
 	ia->ia6_flags |= IN6_IFF_DUPLICATED;
+	in6_event_enqueue_nwk_wq_entry(IN6_ADDR_MARKED_DUPLICATED,
+	    ia->ia_ifa.ifa_ifp, &ia->ia_addr.sin6_addr,
+	    0);
 	IFA_UNLOCK(&ia->ia_ifa);
 
 	/* increment DAD collision counter */
@@ -2382,7 +2442,7 @@ nd6_alt_node_present(struct ifnet *ifp, struct sockaddr_in6 *sin6,
 {
 	struct rtentry *rt;
 	struct llinfo_nd6 *ln;
-	struct	if_llreach *lr;
+	struct	if_llreach *lr = NULL;
 	const uint16_t temp_embedded_id = sin6->sin6_addr.s6_addr16[1];
 
 	if (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr) &&
@@ -2392,7 +2452,7 @@ nd6_alt_node_present(struct ifnet *ifp, struct sockaddr_in6 *sin6,
 	nd6_cache_lladdr(ifp, &sin6->sin6_addr, LLADDR(sdl), sdl->sdl_alen,
 	    ND_NEIGHBOR_ADVERT, 0);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
 
 	rt = rtalloc1_scoped_locked((struct sockaddr *)sin6, 1, 0,
@@ -2449,7 +2509,7 @@ nd6_alt_node_absent(struct ifnet *ifp, struct sockaddr_in6 *sin6)
 	    (temp_embedded_id == 0))
 		sin6->sin6_addr.s6_addr16[1] = htons(ifp->if_index);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
 
 	rt = rtalloc1_scoped_locked((struct sockaddr *)sin6, 0, 0,

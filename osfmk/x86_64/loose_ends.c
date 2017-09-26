@@ -95,6 +95,9 @@
 
 #endif
 
+/* prevent infinite recursion when memmove calls bcopy; in string.h, bcopy is defined to call memmove */
+#undef bcopy
+
 /* XXX - should be gone from here */
 extern void		invalidate_icache64(addr64_t addr, unsigned cnt, int phys);
 extern void		flush_dcache64(addr64_t addr, unsigned count, int phys);
@@ -165,6 +168,40 @@ ffs(unsigned int mask)
 	 * 'ffs'
 	 */
 	return 1 + __builtin_ctz(mask);
+}
+
+int
+ffsll(unsigned long long mask)
+{
+	if (mask == 0)
+		return 0;
+
+	/*
+	 * NOTE: cannot use __builtin_ffsll because it generates a call to
+	 * 'ffsll'
+	 */
+	return 1 + __builtin_ctzll(mask);
+}
+
+/*
+ * Find last bit set in bit string.
+ */
+int
+fls(unsigned int mask)
+{
+	if (mask == 0)
+		return 0;
+
+	return (sizeof (mask) << 3) - __builtin_clz(mask);
+}
+
+int
+flsll(unsigned long long mask)
+{
+	if (mask == 0)
+		return 0;
+
+	return (sizeof (mask) << 3) - __builtin_clzll(mask);
 }
 
 void
@@ -253,6 +290,7 @@ ovbcopy(
 
 uint64_t reportphyreaddelayabs;
 uint32_t reportphyreadosbt;
+
 #if DEVELOPMENT || DEBUG
 uint32_t phyreadpanic = 1;
 #else
@@ -264,8 +302,8 @@ ml_phys_read_data(pmap_paddr_t paddr, int size) {
 	uint64_t result = 0;
 	unsigned char s1;
 	unsigned short s2;
-	boolean_t istate, timeread = FALSE;
-	uint64_t sabs, eabs;
+	boolean_t istate = TRUE, timeread = FALSE;
+	uint64_t sabs = 0, eabs;
 
 	if (__improbable(!physmap_enclosed(paddr)))
 		panic("%s: 0x%llx out of bounds\n", __FUNCTION__, paddr);
@@ -301,7 +339,7 @@ ml_phys_read_data(pmap_paddr_t paddr, int size) {
 		(void)ml_set_interrupts_enabled(istate);
 
 		if (__improbable((eabs - sabs) > reportphyreaddelayabs)) {
-			if (phyreadpanic) {
+			if (phyreadpanic && (machine_timeout_suspended() == FALSE)) {
 				panic_io_port_read();
 				panic("Read from physical addr 0x%llx took %llu ns, result: 0x%llx (start: %llu, end: %llu), ceiling: %llu", paddr, (eabs - sabs), result, sabs, eabs, reportphyreaddelayabs);
 			}
@@ -498,6 +536,7 @@ ml_probe_read_64(addr64_t paddr64, unsigned int *val)
 }
 
 
+#undef bcmp
 int bcmp(
 	const void	*pa,
 	const void	*pb,
@@ -517,6 +556,7 @@ int bcmp(
 	return (int)len;
 }
 
+#undef memcmp
 int
 memcmp(const void *s1, const void *s2, size_t n)
 {
@@ -531,6 +571,7 @@ memcmp(const void *s1, const void *s2, size_t n)
 	return (0);
 }
 
+#undef memmove
 void *
 memmove(void *dst, const void *src, size_t ulen)
 {
@@ -544,6 +585,7 @@ memmove(void *dst, const void *src, size_t ulen)
  * the terminating null character.
  */
 
+#undef strlen
 size_t
 strlen(
 	const char *string)

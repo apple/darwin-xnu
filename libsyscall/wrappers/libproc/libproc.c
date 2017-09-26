@@ -170,6 +170,17 @@ proc_pidfileportinfo(int pid, uint32_t fileport, int flavor, void *buffer, int b
 	return (retval);
 }
 
+int
+proc_piddynkqueueinfo(int pid, int flavor, kqueue_id_t kq_id, void *buffer, int buffersize)
+{
+	int ret;
+
+	if ((ret = __proc_info(PROC_INFO_CALL_PIDDYNKQUEUEINFO, pid, flavor, (uint64_t)kq_id, buffer, buffersize)) == -1) {
+		return 0;
+	}
+
+	return ret;
+}
 
 int
 proc_name(int pid, void * buffer, uint32_t buffersize)
@@ -199,7 +210,7 @@ proc_name(int pid, void * buffer, uint32_t buffersize)
 int 
 proc_regionfilename(int pid, uint64_t address, void * buffer, uint32_t buffersize)
 {
-	int retval = 0, len;
+	int retval;
 	struct proc_regionwithpathinfo reginfo;
 	
 	if (buffersize < MAXPATHLEN) {
@@ -209,17 +220,9 @@ proc_regionfilename(int pid, uint64_t address, void * buffer, uint32_t buffersiz
 	
 	retval = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO, (uint64_t)address, &reginfo, sizeof(struct proc_regionwithpathinfo));
 	if (retval != -1) {
-		len = (int)strlen(&reginfo.prp_vip.vip_path[0]);
-		if (len != 0) {
-			if (len > MAXPATHLEN)
-				len = MAXPATHLEN;
-			bcopy(&reginfo.prp_vip.vip_path[0], buffer, len);
-			return(len);
-		}
-		return(0);
+		return ((int)(strlcpy(buffer, reginfo.prp_vip.vip_path, MAXPATHLEN)));
 	}
-	return(0);
-			
+	return(0);			
 }
 
 int
@@ -557,81 +560,17 @@ proc_disable_wakemon(pid_t pid)
 int
 proc_list_uptrs(int pid, uint64_t *buf, uint32_t bufsz)
 {
-	int i, j;
-	int nfds, nkns;
-	int count = 0;
-	int knote_max = 4096; /* arbitrary starting point */
-
-	/* if buffer is empty, this call simply counts the knotes */
-	if (bufsz > 0 && buf == NULL) {
-		errno = EFAULT;
-		return -1;
-	}
-
-	/* get the list of FDs for this process */
-	struct proc_fdinfo fdlist[OPEN_MAX+1];
-	nfds = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fdlist[1], OPEN_MAX*sizeof(struct proc_fdinfo));
-	if (nfds < 0 || nfds > OPEN_MAX) {
-		return -1;
-	}
-
-	/* Add FD -1, the implicit workq kqueue */
-	fdlist[0].proc_fd = -1;
-	fdlist[0].proc_fdtype = PROX_FDTYPE_KQUEUE;
-	nfds++;
-
-	struct kevent_extinfo *kqext = malloc(knote_max * sizeof(struct kevent_extinfo));
-	if (!kqext) {
-		errno = ENOMEM;
-		return -1;
-	}
-
-	for (i = 0; i < nfds; i++) {
-		if (fdlist[i].proc_fdtype != PROX_FDTYPE_KQUEUE) {
-			continue;
-		}
-
- again:
-		nkns = __proc_info(PROC_INFO_CALL_PIDFDINFO, pid, PROC_PIDFDKQUEUE_EXTINFO,
-				(uint64_t)fdlist[i].proc_fd, kqext, knote_max * sizeof(struct kevent_extinfo));
-		if (nkns < 0) {
-			if (errno == EBADF) {
-				/* the FD table can change after enumerating the FDs */
-				errno = EAGAIN;
-			}
-			free(kqext);
-			return -1;
-		}
-
-		if (nkns > knote_max) {
-			/* there are more knotes than we requested - try again with a
-			 * larger buffer */
-			free(kqext);
-			knote_max = nkns + 32; /* small margin in case of extra knotes */
-			kqext = malloc(knote_max * sizeof(struct kevent_extinfo));
-			if (!kqext) {
-				errno = ENOMEM;
-				return -1;
-			}
-			goto again;
-		}
-
-		for (j = 0; j < nkns; j++) {
-			if (kqext[j].kqext_kev.udata == 0) {
-				continue;
-			}
-
-			if (bufsz >= sizeof(uint64_t)) {
-				*buf++ = kqext[j].kqext_kev.udata;
-				bufsz -= sizeof(uint64_t);
-			}
-			count++;
-		}
-	}
-
-	free(kqext);
-	return count;
+	return __proc_info(PROC_INFO_CALL_PIDINFO, pid, PROC_PIDLISTUPTRS, 0,
+			buf, bufsz);
 }
+
+int
+proc_list_dynkqueueids(int pid, kqueue_id_t *buf, uint32_t bufsz)
+{
+	return __proc_info(PROC_INFO_CALL_PIDINFO, pid, PROC_PIDLISTDYNKQUEUES, 0,
+			buf, bufsz);
+}
+
 
 int 
 proc_setcpu_percentage(pid_t pid, int action, int percentage)
@@ -656,6 +595,120 @@ proc_clear_cpulimits(pid_t pid)
 		return(errno);
 }
 
+#if TARGET_OS_EMBEDDED
+
+int
+proc_setcpu_deadline(pid_t pid, int action, uint64_t deadline)
+{
+	proc_policy_cpuusage_attr_t attr;
+
+	bzero(&attr, sizeof(proc_policy_cpuusage_attr_t));
+	attr.ppattr_cpu_attr = action;
+	attr.ppattr_cpu_attr_deadline = deadline;
+	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_RESOURCE_USAGE, PROC_POLICY_RUSAGE_CPU, (proc_policy_attribute_t*)&attr, pid, (uint64_t)0) != -1)
+		return(0);
+	else
+		return(errno);
+
+}
+
+int
+proc_setcpu_percentage_withdeadline(pid_t pid, int action, int percentage, uint64_t deadline)
+{
+	proc_policy_cpuusage_attr_t attr;
+
+	bzero(&attr, sizeof(proc_policy_cpuusage_attr_t));
+	attr.ppattr_cpu_attr = action;
+	attr.ppattr_cpu_percentage = percentage;
+	attr.ppattr_cpu_attr_deadline = deadline;
+	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_RESOURCE_USAGE, PROC_POLICY_RUSAGE_CPU, (proc_policy_attribute_t*)&attr, pid, (uint64_t)0) != -1)
+		return(0);
+	else
+		return(errno);
+}
+
+int
+proc_appstate(int pid, int * appstatep)
+{
+	int state;
+
+	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_GET, PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_STATE, (proc_policy_attribute_t*)&state, pid, (uint64_t)0) != -1) {
+		if (appstatep != NULL)
+			*appstatep = state;
+		return(0);
+	 } else
+		return(errno);
+
+}
+
+int
+proc_setappstate(int pid, int appstate)
+{
+	int state = appstate;
+
+	switch (state) {
+		case PROC_APPSTATE_NONE:
+		case PROC_APPSTATE_ACTIVE:
+		case PROC_APPSTATE_INACTIVE:
+		case PROC_APPSTATE_BACKGROUND:
+		case PROC_APPSTATE_NONUI:
+			break;
+		default:
+			return(EINVAL);
+	}
+	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_STATE, (proc_policy_attribute_t*)&state, pid, (uint64_t)0) != -1)
+		return(0);
+	else
+		return(errno);
+}
+
+int 
+proc_devstatusnotify(int devicestatus)
+{
+	int state = devicestatus;
+
+	switch (devicestatus) {
+		case PROC_DEVSTATUS_SHORTTERM:
+		case PROC_DEVSTATUS_LONGTERM:
+			break;
+		default:
+			return(EINVAL);
+	}
+
+	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_DEVSTATUS, (proc_policy_attribute_t*)&state, getpid(), (uint64_t)0) != -1) {
+		return(0);
+	 } else
+		return(errno);
+
+}
+
+int
+proc_pidbind(int pid, uint64_t threadid, int bind)
+{
+	int state = bind; 
+	pid_t passpid = pid;
+
+	switch (bind) {
+		case PROC_PIDBIND_CLEAR:
+			passpid = getpid();	/* ignore pid on clear */
+			break;
+		case PROC_PIDBIND_SET:
+			break;
+		default:
+			return(EINVAL);
+	}
+	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_PIDBIND, (proc_policy_attribute_t*)&state, passpid, threadid) != -1)
+		return(0);
+	else
+		return(errno);
+}
+
+int
+proc_can_use_foreground_hw(int pid, uint32_t *reason)
+{
+	return __proc_info(PROC_INFO_CALL_CANUSEFGHW, pid, 0,  NULL,  reason, sizeof(*reason));
+}
+#endif /* TARGET_OS_EMBEDDED */
 
 
 /* Donate importance to adaptive processes from this process */
@@ -664,11 +717,19 @@ proc_donate_importance_boost()
 {
 	int rval;
 
+#if TARGET_OS_EMBEDDED
+	rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
+							PROC_POLICY_ACTION_ENABLE,
+							PROC_POLICY_APPTYPE,
+							PROC_POLICY_IOS_DONATEIMP,
+							NULL, getpid(), (uint64_t)0);
+#else /* TARGET_OS_EMBEDDED */
 	rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
 							PROC_POLICY_ACTION_SET,
 							PROC_POLICY_BOOST,
 							PROC_POLICY_IMP_DONATION,
 							NULL, getpid(), 0);
+#endif /* TARGET_OS_EMBEDDED */
 
 	if (rval == 0)
 		return (0);
@@ -808,6 +869,7 @@ proc_denap_assertion_complete(uint64_t assertion_token)
 	return proc_importance_assertion_complete(assertion_token);
 }
 
+#if !TARGET_OS_EMBEDDED
 
 int
 proc_clear_vmpressure(pid_t pid)
@@ -903,6 +965,7 @@ proc_suppress(__unused pid_t pid, __unused uint64_t *generation)
 
 #endif /* !TARGET_IPHONE_SIMULATOR */
 
+#endif /* !TARGET_OS_EMBEDDED */
 
 
 

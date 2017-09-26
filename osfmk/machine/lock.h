@@ -32,6 +32,8 @@
 
 #if defined (__i386__) || defined (__x86_64__)
 #include "i386/lock.h"
+#elif defined (__arm__) || defined (__arm64__)
+#include "arm/lock.h"
 #else
 #error architecture not supported
 #endif

@@ -70,7 +70,6 @@
 #include <sys/kernel.h>
 #include <sys/proc_internal.h>
 #include <sys/user.h>
-#include <machine/spl.h>
 #include <machine/machine_routines.h>
 
 #include <sys/mount_internal.h>

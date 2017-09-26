@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -152,51 +152,6 @@ typedef struct cbq_classstats {
 	classq_state_t	qstate;
 } class_stats_t;
 
-#ifdef BSD_KERNEL_PRIVATE
-/*
- * Define macros only good for kernel drivers and modules.
- */
-#define	CBQ_WATCHDOG		(hz / 20)
-#define	CBQ_TIMEOUT		10
-#define	CBQ_LS_TIMEOUT		(20 * hz / 1000)
-
-#define	CBQ_MAX_CLASSES	256
-
-/* cbqstate flags */
-#define	CBQSF_ALTQ		0x1	/* configured via PF/ALTQ */
-
-/*
- * Define State structures.
- */
-typedef struct cbqstate {
-	int			 cbq_qlen;	/* # of packets in cbq */
-	u_int32_t		 cbq_flags;	/* flags */
-	struct rm_class		*cbq_class_tbl[CBQ_MAX_CLASSES];
-
-	struct rm_ifdat		 ifnp;
-	struct callout		 cbq_callout;	/* for timeouts */
-} cbq_state_t;
-
-#define	CBQS_IFP(_cs)		((_cs)->ifnp.ifq_->ifcq_ifp)
-
-extern void cbq_init(void);
-extern cbq_state_t *cbq_alloc(struct ifnet *, int, boolean_t);
-extern int cbq_destroy(cbq_state_t *);
-extern void cbq_purge(cbq_state_t *);
-extern void cbq_event(cbq_state_t *, cqev_t);
-extern int cbq_add_queue(cbq_state_t *, u_int32_t, u_int32_t, u_int32_t,
-    u_int32_t, u_int32_t, u_int32_t, u_int32_t, u_int32_t, int, u_int32_t,
-    u_int32_t, u_int32_t, u_int32_t, struct rm_class **);
-extern int cbq_remove_queue(cbq_state_t *, u_int32_t);
-extern int cbq_get_class_stats(cbq_state_t *, u_int32_t, class_stats_t *);
-extern int cbq_enqueue(cbq_state_t *, struct rm_class *, struct mbuf *,
-    struct pf_mtag *);
-extern struct mbuf *cbq_dequeue(cbq_state_t *, cqdq_op_t);
-extern int cqb_setup_ifclassq(struct ifclassq *, u_int32_t);
-extern int cbq_teardown_ifclassq(struct ifclassq *);
-extern int cbq_getqstats_ifclassq(struct ifclassq *, u_int32_t,
-    struct if_ifclassq_stats *);
-#endif /* BSD_KERNEL_PRIVATE */
 #ifdef __cplusplus
 }
 #endif

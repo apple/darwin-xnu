@@ -1,0 +1,126 @@
+.\" Copyright (c) 2017 Apple Computer, Inc. All rights reserved.
+.\"
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\"
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\"
+.\"     @(#)fsgetpath.2
+.
+.Dd July 27, 2017
+.Dt FSGETPATH 2
+.Os Darwin
+.Sh NAME
+.Nm fsgetpath
+.Nd get the path associated with filesystem node identifier (inode number/link id/object id)
+.Sh SYNOPSIS
+.Fd #include <sys/attr.h>
+.Fd #include <sys/fsgetpath.h>
+.Pp
+.Ft ssize_t
+.Fn fsgetpath  "char * restrict_buf" "size_t buflen" "fsid_t * fsid" "uint64_t obj_id"
+.
+.Sh DESCRIPTION
+The
+.Fn fsgetpath
+function  returns the path in a caller provided buffer
+.Fa restrict_buf
+of length indicated by
+.Fa buflen
+associated with a filesystem object identified by
+.Fa fsid
+and
+.Fa obj_id.
+.Fa fsid
+is a pointer to a structure which identifies a filesystem to which the object belongs.
+It is obtained by the value returned for ATTR_CMN_FSID in a previous call to
+.Xr getattrlist 2
+or the
+.Fa f_fsid
+field of the
+.Vt statfs
+structure returned by
+.Xr statfs 2 .
+.Fa obj_id
+can be any one of of a object identifier i.e. ATTR_CMN_FILEID returned by
+.Xr getattrlist 2
+or
+.Fa st_ino
+field of the
+.Vt stat
+structure returned by
+.Xr stat 2
+or a link id returned in ATTR_CMNEXT_LINKID by a previous call to
+.Xr getattrlist 2 .
+Using a linkid will result in a more accurate path in case the filesystem object is a
+hard link. If a inode number is passed and the object is a hard link, any one of the
+multiple paths to that filesystem object may be returned.
+.Sh RETURN VALUES
+Upon successful completion,
+.Fn fsgetpath
+returns the path length. Otherwise, a value of -1 is returned and errno is set to indicate the error.
+.Pp
+.Sh COMPATIBILITY
+Not all volumes support
+.Fn fsgetpath .
+A volume can be tested for
+.Fn fsgetpath
+support by using
+.Xr getattrlist 2
+to get the volume capabilities attribute ATTR_VOL_CAPABILITIES, and then testing the VOL_CAP_FMT_PATH_FROM_ID flag.
+.Pp
+.Sh ERRORS
+The
+.Fn fsgetpath
+function will fail if:
+.Bl -tag -width Er
+.
+.It Bq Er EACCES
+Read permissions are denied on any component of the pathname.
+.
+.It Bq Er ENOTSUP
+The underlying filesystem does not support this call.
+.
+.It Bq Er EINVAL
+.Fa buflen
+is larger than PAGE_SIZE
+.
+.It Bq Er EIO
+An I/O error occurred while reading from the file system.
+.
+.It Bq Er EPERM
+The calling process does not have appropriate privileges.
+.
+.It Bq Er ENOENT
+The Filesystem object does not exist.
+.
+.It Bq Er EFAULT
+restrict_buf points to memory not valid in the callers address space.
+.
+.It Bq Er ENOSPC
+restrict_buf is not large enough to hold the path.
+.
+.El
+.
+.Pp
+.
+.Sh SEE ALSO
+.
+.Xr getattrlist 2
+.Xr statfs 2
+.Xr stat 2
+.
+.Sh HISTORY
+The
+.Fn fsgetpath
+function call appeared in macOS version 10.13
+.

@@ -58,7 +58,13 @@ extern int mdevgetrange(int devid, uint64_t *base, uint64_t *size);
 extern void di_root_ramfile(IORegistryEntry * entry);
 
 
-#if   DEVELOPMENT
+#if CONFIG_EMBEDDED
+#define IOPOLLED_COREFILE 	(CONFIG_KDP_INTERACTIVE_DEBUGGING)
+#define kIOCoreDumpPath 	"/private/var/vm/kernelcore"
+#define kIOCoreDumpSize		350ULL*1024ULL*1024ULL
+// leave free space on volume:
+#define kIOCoreDumpFreeSize	350ULL*1024ULL*1024ULL
+#elif DEVELOPMENT
 #define IOPOLLED_COREFILE  	1
 // no sizing
 #define kIOCoreDumpSize		0ULL
@@ -657,6 +663,37 @@ bool IORamDiskBSDRoot(void)
 
 void IOSecureBSDRoot(const char * rootName)
 {
+#if CONFIG_EMBEDDED
+    int              tmpInt;
+    IOReturn         result;
+    IOPlatformExpert *pe;
+    OSDictionary     *matching;
+    const OSSymbol   *functionName = OSSymbol::withCStringNoCopy("SecureRootName");
+    
+    matching = IOService::serviceMatching("IOPlatformExpert");
+    assert(matching);
+    pe = (IOPlatformExpert *) IOService::waitForMatchingService(matching, 30ULL * kSecondScale);
+    matching->release();
+    assert(pe);
+    // Returns kIOReturnNotPrivileged is the root device is not secure.
+    // Returns kIOReturnUnsupported if "SecureRootName" is not implemented.
+    result = pe->callPlatformFunction(functionName, false, (void *)rootName, (void *)0, (void *)0, (void *)0);
+    functionName->release();
+    OSSafeReleaseNULL(pe);
+    
+    if (result == kIOReturnNotPrivileged) {
+        mdevremoveall();
+    } else if (result == kIOReturnSuccess) {
+        // If we are booting with a secure root, and we have the right
+	// boot-arg, we will want to panic on exception triage.  This
+	// behavior is intended as a debug aid (we can look at why an
+	// exception occured in the kernel debugger).
+        if (PE_parse_boot_argn("-panic_on_exception_triage", &tmpInt, sizeof(tmpInt))) {
+            panic_on_exception_triage = 1;
+        }
+    }
+
+#endif  // CONFIG_EMBEDDED
 }
 
 void *
@@ -848,6 +885,43 @@ IOBSDMountChange(struct mount * mp, uint32_t op)
     }
     while (false);
 
+#if CONFIG_EMBEDDED
+    uint64_t flags;
+    char path[128];
+    int pathLen;
+    vnode_t vn;
+    int result;
+
+    switch (op)
+    {
+	case kIOMountChangeMount:
+	case kIOMountChangeDidResize:
+
+	    if (gIOPolledCoreFileVars) break;
+	    flags = vfs_flags(mp);
+	    if (MNT_RDONLY & flags) break;
+	    if (!(MNT_LOCAL & flags)) break;
+
+	    vn = vfs_vnodecovered(mp);
+	    if (!vn) break;
+	    pathLen = sizeof(path);
+	    result = vn_getpath(vn, &path[0], &pathLen);
+	    vnode_put(vn);
+	    if (0 != result) break;
+	    if (!pathLen) break;
+	    if (0 != bcmp(path, kIOCoreDumpPath, pathLen - 1)) break;
+	    IOOpenPolledCoreFile(kIOCoreDumpPath);
+	    break;
+
+	case kIOMountChangeUnmount:
+	case kIOMountChangeWillResize:
+	    if (gIOPolledCoreFileVars && (mp == kern_file_mount(gIOPolledCoreFileVars->fileRef)))
+	    {
+		IOClosePolledCoreFile();
+	    }
+	    break;
+    }
+#endif /* CONFIG_EMBEDDED */
 #endif /* IOPOLLED_COREFILE */
 }
 

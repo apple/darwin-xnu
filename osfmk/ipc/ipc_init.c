@@ -71,7 +71,6 @@
  */
 
 #include <mach_debug.h>
-#include <mach_rt.h>
 
 #include <mach/port.h>
 #include <mach/message.h>
@@ -238,13 +237,21 @@ ipc_init(void)
 	vm_offset_t min;
 
 	retval = kmem_suballoc(kernel_map, &min, ipc_kernel_map_size,
-			       TRUE, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC), &ipc_kernel_map);
+			       TRUE,
+			       (VM_FLAGS_ANYWHERE),
+			       VM_MAP_KERNEL_FLAGS_NONE,
+			       VM_KERN_MEMORY_IPC,
+			       &ipc_kernel_map);
 
 	if (retval != KERN_SUCCESS)
 		panic("ipc_init: kmem_suballoc of ipc_kernel_map failed");
 
 	retval = kmem_suballoc(kernel_map, &min, ipc_kernel_copy_map_size,
-			       TRUE, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC), &ipc_kernel_copy_map);
+			       TRUE,
+			       (VM_FLAGS_ANYWHERE),
+			       VM_MAP_KERNEL_FLAGS_NONE,
+			       VM_KERN_MEMORY_IPC,
+			       &ipc_kernel_copy_map);
 
 	if (retval != KERN_SUCCESS)
 		panic("ipc_init: kmem_suballoc of ipc_kernel_copy_map failed");

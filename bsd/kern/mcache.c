@@ -69,7 +69,7 @@
 #include <sys/mcache.h>
 
 #define	MCACHE_SIZE(n) \
-	((size_t)(&((mcache_t *)0)->mc_cpu[n]))
+	__builtin_offsetof(mcache_t, mc_cpu[n])
 
 /* Allocate extra in case we need to manually align the pointer */
 #define	MCACHE_ALLOC_SIZE \
@@ -154,6 +154,7 @@ static void mcache_bkt_purge(mcache_t *);
 static void mcache_bkt_destroy(mcache_t *, mcache_bkttype_t *,
     mcache_bkt_t *, int);
 static void mcache_bkt_ws_update(mcache_t *);
+static void mcache_bkt_ws_zero(mcache_t *);
 static void mcache_bkt_ws_reap(mcache_t *);
 static void mcache_dispatch(void (*)(void *), void *);
 static void mcache_cache_reap(mcache_t *);
@@ -307,11 +308,7 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 			return (NULL);
 	}
 
-	if (!(wait & MCR_NOSLEEP))
-		buf = zalloc(mcache_zone);
-	else
-		buf = zalloc_noblock(mcache_zone);
-
+	buf = zalloc(mcache_zone);
 	if (buf == NULL)
 		goto fail;
 
@@ -333,10 +330,14 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	 * Guaranteed alignment is valid only when we use the internal
 	 * slab allocator (currently set to use the zone allocator).
 	 */
-	if (!need_zone)
+	if (!need_zone) {
 		align = 1;
-	else if (align == 0)
-		align = MCACHE_ALIGN;
+	} else {
+		/* Enforce 64-bit minimum alignment for zone-based buffers */
+		if (align == 0)
+			align = MCACHE_ALIGN;
+		align = P2ROUNDUP(align, MCACHE_ALIGN);
+	}
 
 	if ((align & (align - 1)) != 0)
 		panic("mcache_create: bad alignment %lu", align);
@@ -368,9 +369,8 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	 */
 	chunksize = MAX(bufsize, sizeof (u_int64_t));
 	if (need_zone) {
-		/* Enforce 64-bit minimum alignment for zone-based buffers */
-		align = MAX(align, sizeof (u_int64_t));
-		chunksize += sizeof (void *) + align;
+		VERIFY(align != 0 && (align % MCACHE_ALIGN) == 0);
+		chunksize += sizeof (uint64_t) + align;
 		chunksize = P2ROUNDUP(chunksize, align);
 		if ((cp->mc_slab_zone = zinit(chunksize, 64 * 1024 * ncpu,
 		    PAGE_SIZE, cp->mc_name)) == NULL)
@@ -898,11 +898,12 @@ mcache_destroy(mcache_t *cp)
  * implementation uses the zone allocator for simplicity reasons.
  */
 static unsigned int
-mcache_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num, int wait)
+mcache_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num,
+    int wait)
 {
+#pragma unused(wait)
 	mcache_t *cp = arg;
 	unsigned int need = num;
-	size_t offset = 0;
 	size_t rsize = P2ROUNDUP(cp->mc_bufsize, sizeof (u_int64_t));
 	u_int32_t flags = cp->mc_flags;
 	void *buf, *base, **pbuf;
@@ -910,26 +911,14 @@ mcache_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num, int wait)
 
 	*list = NULL;
 
-	/*
-	 * The address of the object returned to the caller is an
-	 * offset from the 64-bit aligned base address only if the
-	 * cache's alignment requirement is neither 1 nor 8 bytes.
-	 */
-	if (cp->mc_align != 1 && cp->mc_align != sizeof (u_int64_t))
-		offset = cp->mc_align;
-
 	for (;;) {
-		if (!(wait & MCR_NOSLEEP))
-			buf = zalloc(cp->mc_slab_zone);
-		else
-			buf = zalloc_noblock(cp->mc_slab_zone);
-
+		buf = zalloc(cp->mc_slab_zone);
 		if (buf == NULL)
 			break;
 
-		/* Get the 64-bit aligned base address for this object */
+		/* Get the aligned base address for this object */
 		base = (void *)P2ROUNDUP((intptr_t)buf + sizeof (u_int64_t),
-		    sizeof (u_int64_t));
+		    cp->mc_align);
 
 		/*
 		 * Wind back a pointer size from the aligned base and
@@ -937,6 +926,9 @@ mcache_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num, int wait)
 		 */
 		pbuf = (void **)((intptr_t)base - sizeof (void *));
 		*pbuf = buf;
+
+		VERIFY (((intptr_t)base + cp->mc_bufsize) <=
+		    ((intptr_t)buf + cp->mc_chunksize));
 
 		/*
 		 * If auditing is enabled, patternize the contents of
@@ -951,14 +943,8 @@ mcache_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num, int wait)
 			mcache_set_pattern(MCACHE_FREE_PATTERN, base, rsize);
 		}
 
-		/*
-		 * Fix up the object's address to fulfill the cache's
-		 * alignment requirement (if needed) and return this
-		 * to the caller.
-		 */
-		VERIFY(((intptr_t)base + offset + cp->mc_bufsize) <=
-		    ((intptr_t)buf + cp->mc_chunksize));
-		*list = (mcache_obj_t *)((intptr_t)base + offset);
+		VERIFY(IS_P2ALIGNED(base, cp->mc_align));
+		*list = (mcache_obj_t *)base;
 
 		(*list)->obj_next = NULL;
 		list = *plist = &(*list)->obj_next;
@@ -979,40 +965,31 @@ mcache_slab_free(void *arg, mcache_obj_t *list, __unused boolean_t purged)
 {
 	mcache_t *cp = arg;
 	mcache_obj_t *nlist;
-	size_t offset = 0;
 	size_t rsize = P2ROUNDUP(cp->mc_bufsize, sizeof (u_int64_t));
 	u_int32_t flags = cp->mc_flags;
 	void *base;
 	void **pbuf;
 
-	/*
-	 * The address of the object is an offset from a 64-bit
-	 * aligned base address only if the cache's alignment
-	 * requirement is neither 1 nor 8 bytes.
-	 */
-	if (cp->mc_align != 1 && cp->mc_align != sizeof (u_int64_t))
-		offset = cp->mc_align;
-
 	for (;;) {
 		nlist = list->obj_next;
 		list->obj_next = NULL;
 
-		/* Get the 64-bit aligned base address of this object */
-		base = (void *)((intptr_t)list - offset);
-		VERIFY(IS_P2ALIGNED(base, sizeof (u_int64_t)));
+		base = list;
+		VERIFY(IS_P2ALIGNED(base, cp->mc_align));
 
 		/* Get the original address since we're about to free it */
 		pbuf = (void **)((intptr_t)base - sizeof (void *));
 
+		VERIFY(((intptr_t)base + cp->mc_bufsize) <=
+		    ((intptr_t)*pbuf + cp->mc_chunksize));
+
 		if (flags & MCF_DEBUG) {
 			VERIFY(((intptr_t)base + rsize) <=
 			    ((intptr_t)*pbuf + cp->mc_chunksize));
-			mcache_audit_free_verify(NULL, base, offset, rsize);
+			mcache_audit_free_verify(NULL, base, 0, rsize);
 		}
 
 		/* Free it to zone */
-		VERIFY(((intptr_t)base + offset + cp->mc_bufsize) <=
-		    ((intptr_t)*pbuf + cp->mc_chunksize));
 		zfree(cp->mc_slab_zone, *pbuf);
 
 		/* No more objects to free; return to mcache */
@@ -1028,24 +1005,14 @@ static void
 mcache_slab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 {
 	mcache_t *cp = arg;
-	size_t offset = 0;
 	size_t rsize = P2ROUNDUP(cp->mc_bufsize, sizeof (u_int64_t));
 	void *base, **pbuf;
-
-	/*
-	 * The address of the object returned to the caller is an
-	 * offset from the 64-bit aligned base address only if the
-	 * cache's alignment requirement is neither 1 nor 8 bytes.
-	 */
-	if (cp->mc_align != 1 && cp->mc_align != sizeof (u_int64_t))
-		offset = cp->mc_align;
 
 	while (list != NULL) {
 		mcache_obj_t *next = list->obj_next;
 
-		/* Get the 64-bit aligned base address of this object */
-		base = (void *)((intptr_t)list - offset);
-		VERIFY(IS_P2ALIGNED(base, sizeof (u_int64_t)));
+		base = list;
+		VERIFY(IS_P2ALIGNED(base, cp->mc_align));
 
 		/* Get the original address */
 		pbuf = (void **)((intptr_t)base - sizeof (void *));
@@ -1056,7 +1023,7 @@ mcache_slab_audit(void *arg, mcache_obj_t *list, boolean_t alloc)
 		if (!alloc)
 			mcache_set_pattern(MCACHE_FREE_PATTERN, base, rsize);
 		else
-			mcache_audit_free_verify_set(NULL, base, offset, rsize);
+			mcache_audit_free_verify_set(NULL, base, 0, rsize);
 
 		list = list->obj_next = next;
 	}
@@ -1181,13 +1148,7 @@ mcache_bkt_purge(mcache_t *cp)
 			mcache_bkt_destroy(cp, btp, pbp, pobjs);
 	}
 
-	/*
-	 * Updating the working set back to back essentially sets
-	 * the working set size to zero, so everything is reapable.
-	 */
-	mcache_bkt_ws_update(cp);
-	mcache_bkt_ws_update(cp);
-
+	mcache_bkt_ws_zero(cp);
 	mcache_bkt_ws_reap(cp);
 }
 
@@ -1241,6 +1202,22 @@ mcache_bkt_ws_update(mcache_t *cp)
 	cp->mc_full.bl_reaplimit = cp->mc_full.bl_min;
 	cp->mc_full.bl_min = cp->mc_full.bl_total;
 	cp->mc_empty.bl_reaplimit = cp->mc_empty.bl_min;
+	cp->mc_empty.bl_min = cp->mc_empty.bl_total;
+
+	MCACHE_UNLOCK(&cp->mc_bkt_lock);
+}
+
+/*
+ * Mark everything as eligible for reaping (working set is zero).
+ */
+static void
+mcache_bkt_ws_zero(mcache_t *cp)
+{
+	MCACHE_LOCK(&cp->mc_bkt_lock);
+
+	cp->mc_full.bl_reaplimit = cp->mc_full.bl_total;
+	cp->mc_full.bl_min = cp->mc_full.bl_total;
+	cp->mc_empty.bl_reaplimit = cp->mc_empty.bl_total;
 	cp->mc_empty.bl_min = cp->mc_empty.bl_total;
 
 	MCACHE_UNLOCK(&cp->mc_bkt_lock);
@@ -1312,6 +1289,18 @@ mcache_reap(void)
 		return;
 
 	mcache_dispatch(mcache_reap_start, flag);
+}
+
+__private_extern__ void
+mcache_reap_now(mcache_t *cp, boolean_t purge)
+{
+	if (purge) {
+		mcache_bkt_purge(cp);
+		mcache_cache_bkt_enable(cp);
+	} else {
+		mcache_bkt_ws_zero(cp);
+		mcache_bkt_ws_reap(cp);
+	}
 }
 
 static void

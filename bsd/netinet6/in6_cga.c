@@ -81,8 +81,11 @@ static struct in6_cga_singleton in6_cga = {
 static void
 in6_cga_node_lock_assert(int owned)
 {
+#if !MACH_ASSERT
+#pragma unused(owned)
+#endif
 	VERIFY(in6_cga.cga_initialized);
-	lck_mtx_assert(&in6_cga.cga_mutex, owned);
+	LCK_MTX_ASSERT(&in6_cga.cga_mutex, owned);
 }
 
 static boolean_t

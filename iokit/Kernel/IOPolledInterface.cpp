@@ -336,9 +336,14 @@ IOStartPolledIO(IOPolledFilePollers * vars,
 
     poller = (IOPolledInterface *) vars->pollers->getObject(0);
     err = poller->startIO(operation, bufferOffset, deviceOffset, length, completion);
-    if (err)
-        HIBLOG("IOPolledInterface::startIO[%d] 0x%x\n", 0, err);
-
+    if (err) {
+	if (kernel_debugger_entry_count) {
+            HIBLOG("IOPolledInterface::startIO[%d] 0x%x\n", 0, err);
+	} else {
+            HIBLOGFROMPANIC("IOPolledInterface::IOStartPolledIO(0x%p, %d, 0x%x, 0x%llx, %llu) : poller->startIO(%d, 0x%x, 0x%llx, %llu, completion) returned 0x%x",
+			vars, operation, bufferOffset, deviceOffset, length, operation, bufferOffset, deviceOffset, length, err);
+	}
+    }
     return (err);
 }
 
@@ -462,6 +467,8 @@ IOCopyMediaForDev(dev_t device)
     return (result);
 }
 
+#define APFSMEDIA_GETHIBERKEY         "getHiberKey"
+
 static IOReturn 
 IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID, 
 		    uint8_t * volumeCryptKey, size_t keySize)
@@ -478,30 +485,49 @@ IOGetVolumeCryptKey(dev_t block_dev,  OSString ** pKeyUUID,
     part = IOCopyMediaForDev(block_dev);
     if (!part) return (kIOReturnNotFound);
 
-    err = part->callPlatformFunction(PLATFORM_FUNCTION_GET_MEDIA_ENCRYPTION_KEY_UUID, false, 
-				      (void *) &keyUUID, (void *) &keyStoreUUID, NULL, NULL);
+    // Try APFS first
+    {
+        uuid_t volUuid = {0};
+        size_t sizeOut = 0;
+        err = part->callPlatformFunction(APFSMEDIA_GETHIBERKEY, false, &volUuid, volumeCryptKey, &keySize, &sizeOut);
+        if (err == kIOReturnSuccess) {
+            // No need to create uuid string if it's not requested
+            if (pKeyUUID) {
+                uuid_string_t volUuidStr;
+                uuid_unparse(volUuid, volUuidStr);
+                *pKeyUUID = OSString::withCString(volUuidStr);
+            }
+
+            part->release();
+            return kIOReturnSuccess;
+        }
+    }
+
+    // Then old CS path
+    err = part->callPlatformFunction(PLATFORM_FUNCTION_GET_MEDIA_ENCRYPTION_KEY_UUID, false,
+                  (void *) &keyUUID, (void *) &keyStoreUUID, NULL, NULL);
     if ((kIOReturnSuccess == err) && keyUUID && keyStoreUUID)
     {
-//            IOLog("got volume key %s\n", keyStoreUUID->getCStringNoCopy());
+//        IOLog("got volume key %s\n", keyStoreUUID->getCStringNoCopy());
 
-	if (!sKeyStore)
-	    sKeyStore = (IOService *) IORegistryEntry::fromPath(AKS_SERVICE_PATH, gIOServicePlane);
-	if (sKeyStore)
-	    err = uuid_parse(keyStoreUUID->getCStringNoCopy(), volumeKeyUUID);
-	else
-	    err = kIOReturnNoResources;
-	if (kIOReturnSuccess == err)    
-	    err = sKeyStore->callPlatformFunction(gAKSGetKey, true, volumeKeyUUID, &vek, NULL, NULL);
-	if (kIOReturnSuccess != err)    
-	    IOLog("volume key err 0x%x\n", err);
-	else
-	{
-	    if (vek.key.keybytecount < keySize) keySize = vek.key.keybytecount;
-	    bcopy(&vek.key.keybytes[0], volumeCryptKey, keySize);
-	}
-	bzero(&vek, sizeof(vek));
-
+        if (!sKeyStore)
+            sKeyStore = (IOService *) IORegistryEntry::fromPath(AKS_SERVICE_PATH, gIOServicePlane);
+        if (sKeyStore)
+            err = uuid_parse(keyStoreUUID->getCStringNoCopy(), volumeKeyUUID);
+        else
+            err = kIOReturnNoResources;
+        if (kIOReturnSuccess == err)
+            err = sKeyStore->callPlatformFunction(gAKSGetKey, true, volumeKeyUUID, &vek, NULL, NULL);
+        if (kIOReturnSuccess != err)
+            IOLog("volume key err 0x%x\n", err);
+        else
+        {
+            if (vek.key.keybytecount < keySize) keySize = vek.key.keybytecount;
+            bcopy(&vek.key.keybytes[0], volumeCryptKey, keySize);
+        }
+        bzero(&vek, sizeof(vek));
     }
+
     part->release();
     if (pKeyUUID) *pKeyUUID = keyUUID;
 
@@ -521,7 +547,7 @@ IOPolledFileOpen(const char * filename,
     IOReturn             err = kIOReturnSuccess;
     IOPolledFileIOVars * vars;
     _OpenFileContext     ctx;
-    OSData *             extentsData;
+    OSData *             extentsData = NULL;
     OSNumber *           num;
     IOService *          part = 0;
     dev_t                block_dev;
@@ -642,6 +668,7 @@ IOPolledFileOpen(const char * filename,
     {
         HIBLOG("error 0x%x opening polled file\n", err);
     	IOPolledFileClose(&vars, 0, 0, 0, 0, 0);
+	if (extentsData) extentsData->release();
     }
 
     if (part) part->release();
@@ -734,6 +761,11 @@ IOPolledFileSeek(IOPolledFileIOVars * vars, uint64_t position)
 
     vars->position = position;
 
+    if (position > vars->fileSize) {
+	HIBLOG("IOPolledFileSeek: called to seek to 0x%llx greater than file size of 0x%llx\n", vars->position,  vars->fileSize);
+	return kIOReturnNoSpace;
+    }
+
     while (position >= extentMap->length)
     {
 	position -= extentMap->length;
@@ -760,7 +792,7 @@ IOPolledFileWrite(IOPolledFileIOVars * vars,
                     IOPolledFileCryptVars * cryptvars)
 {
     IOReturn    err = kIOReturnSuccess;
-    IOByteCount copy;
+    IOByteCount copy, original_size = size;
     bool	flush = false;
 
     do
@@ -844,8 +876,11 @@ if (vars->position & (vars->blockSize - 1)) HIBLOG("misaligned file pos %qx\n", 
 //if (length != vars->bufferSize) HIBLOG("short write of %qx ends@ %qx\n", length, offset + length);
 
 	    err = IOStartPolledIO(vars->pollers, kIOPolledWrite, vars->bufferHalf, offset, length);
-            if (kIOReturnSuccess != err)
+	    if (kIOReturnSuccess != err) {
+                HIBLOGFROMPANIC("IOPolledFileWrite(0x%p, 0x%p, %llu, 0x%p) : IOStartPolledIO(0x%p, kIOPolledWrite, %llu, 0x%llx, %d) returned 0x%x\n",
+                    vars, bytes, (uint64_t) original_size, cryptvars, vars->pollers, (uint64_t) vars->bufferHalf, offset, length, err);
                 break;
+	    }
 	    vars->pollers->io = true;
 
 	    vars->extentRemaining -= vars->bufferOffset;
@@ -875,6 +910,29 @@ if (vars->position & (vars->blockSize - 1)) HIBLOG("misaligned file pos %qx\n", 
     while (size);
 
     return (err);
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+IOReturn
+IOPolledFileFlush(IOPolledFileIOVars * vars)
+{
+    // Only supported by the underlying polled mode driver on embedded currently (expect kIOReturnUnsupported on other platforms)
+    IOReturn err = kIOReturnSuccess;
+
+    err = IOPolledFilePollersIODone(vars->pollers, true);
+    if (kIOReturnSuccess != err)
+	    return err;
+
+    err = IOStartPolledIO(vars->pollers, kIOPolledFlush, 0, 0, 0);
+    if (kIOReturnSuccess != err) {
+	    HIBLOGFROMPANIC("IOPolledFileFlush(0x%p) : IOStartPolledIO(0x%p, kIOPolledFlush, 0, 0, 0) returned 0x%x\n",
+                    vars, vars->pollers, err);
+	    return err;
+    }
+    vars->pollers->io = true;
+
+    return err;
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */

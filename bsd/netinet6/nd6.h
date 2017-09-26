@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -70,6 +70,7 @@
 #include <net/flowadv.h>
 #include <kern/locks.h>
 #include <sys/tree.h>
+#include <sys/eventhandler.h>
 #include <netinet6/nd6_var.h>
 
 struct	llinfo_nd6 {
@@ -117,17 +118,18 @@ struct	llinfo_nd6 {
 #ifdef BSD_KERNEL_PRIVATE
 
 #define ND6_CACHE_STATE_TRANSITION(ln, nstate) do {\
+	struct rtentry *ln_rt = (ln)->ln_rt; \
 	if (nd6_debug >= 1) {\
 		nd6log((LOG_INFO,\
 		    "[%s:%d]: NDP cache entry changed from %s -> %s",\
-		    __FILE__,\
+		    __func__,\
 		    __LINE__,\
 		    ndcache_state2str((ln)->ln_state),\
 		    ndcache_state2str(nstate)));\
-		if ((ln)->ln_rt)\
+		if (ln_rt != NULL)\
 			nd6log((LOG_INFO,\
 			    " for address: %s.\n",\
-			    ip6_sprintf(&SIN6(rt_key((ln)->ln_rt))->sin6_addr)));\
+			    ip6_sprintf(&SIN6(rt_key(ln_rt))->sin6_addr)));\
 		else\
 			nd6log((LOG_INFO, "\n"));\
 	}\
@@ -532,10 +534,10 @@ struct	nd_defrouter {
 };
 
 #define	NDDR_LOCK_ASSERT_HELD(_nddr)					\
-	lck_mtx_assert(&(_nddr)->nddr_lock, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&(_nddr)->nddr_lock, LCK_MTX_ASSERT_OWNED)
 
 #define	NDDR_LOCK_ASSERT_NOTHELD(_nddr)					\
-	lck_mtx_assert(&(_nddr)->nddr_lock, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&(_nddr)->nddr_lock, LCK_MTX_ASSERT_NOTOWNED)
 
 #define	NDDR_LOCK(_nddr)						\
 	lck_mtx_lock(&(_nddr)->nddr_lock)
@@ -610,10 +612,10 @@ struct nd_prefix {
 #define	NDPR_KEEP_EXPIRED	(1800 * 2)
 
 #define	NDPR_LOCK_ASSERT_HELD(_ndpr)					\
-	lck_mtx_assert(&(_ndpr)->ndpr_lock, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&(_ndpr)->ndpr_lock, LCK_MTX_ASSERT_OWNED)
 
 #define	NDPR_LOCK_ASSERT_NOTHELD(_ndpr)					\
-	lck_mtx_assert(&(_ndpr)->ndpr_lock, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&(_ndpr)->ndpr_lock, LCK_MTX_ASSERT_NOTOWNED)
 
 #define	NDPR_LOCK(_ndpr)						\
 	lck_mtx_lock(&(_ndpr)->ndpr_lock)
@@ -691,9 +693,6 @@ struct kev_nd6_ndalive {
 	struct net_event_data link_data;
 };
 
-/* ND6 RA L2 source address length */
-#define	ND6_ROUTER_LL_SIZE		64
-
 struct nd6_ra_prefix {
 	struct sockaddr_in6 prefix;
 	struct prf_ra raflags;
@@ -713,14 +712,18 @@ struct nd6_ra_prefix {
 #define	KEV_ND6_DATA_VALID_PREFIX	(0x1 << 1)
 
 struct kev_nd6_ra_data {
-	u_int8_t lladdr[ND6_ROUTER_LL_SIZE];
-	u_int32_t lladdrlen;
 	u_int32_t mtu;
 	u_int32_t list_index;
 	u_int32_t list_length;
 	u_int32_t flags;
 	struct nd6_ra_prefix prefix;
 	u_int32_t pad;
+};
+
+struct kev_nd6_event {
+	struct net_event_data link_data;
+	struct in6_addr in6_address;
+	uint32_t val;
 };
 
 struct nd6_lookup_ipv6_args {
@@ -754,6 +757,7 @@ extern int nd6_debug;
 extern int nd6_onlink_ns_rfc4861;
 extern int nd6_optimistic_dad;
 
+#define nd6log0(x)	do { log x; } while (0)
 #define	nd6log(x)	do { if (nd6_debug >= 1) log x; } while (0)
 #define	nd6log2(x)	do { if (nd6_debug >= 2) log x; } while (0)
 
@@ -839,7 +843,7 @@ extern int nd6_storelladdr(struct ifnet *, struct rtentry *, struct mbuf *,
 extern int nd6_need_cache(struct ifnet *);
 extern void nd6_drain(void *);
 extern void nd6_post_msg(u_int32_t, struct nd_prefix_list *, u_int32_t,
-    u_int32_t, char *, u_int32_t);
+    u_int32_t);
 extern int nd6_setifinfo(struct ifnet *, u_int32_t, u_int32_t);
 extern const char *ndcache_state2str(short);
 extern void ln_setexpire(struct llinfo_nd6 *, uint64_t);

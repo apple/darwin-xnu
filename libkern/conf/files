@@ -61,7 +61,6 @@ libkern/zlib/adler32.c                                  optional zlib
 libkern/zlib/compress.c                                 optional zlib
 libkern/zlib/crc32.c                                    optional zlib
 libkern/zlib/deflate.c                                  optional zlib
-#libkern/zlib/gzio.c            not needed for kernel   optional zlib
 libkern/zlib/infback.c                                  optional zlib
 libkern/zlib/inffast.c                                  optional zlib
 libkern/zlib/inflate.c                                  optional zlib
@@ -79,6 +78,7 @@ libkern/crypto/corecrypto_aes.c			optional crypto
 libkern/crypto/corecrypto_aesxts.c		optional crypto
 libkern/crypto/corecrypto_rand.c		optional crypto
 libkern/crypto/corecrypto_rsa.c		    optional crypto
+libkern/crypto/corecrypto_chacha20poly1305.c	optional	crypto
 
 libkern/stack_protector.c       standard
 

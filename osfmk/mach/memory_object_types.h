@@ -95,22 +95,27 @@ typedef unsigned long long 	vm_object_id_t;
 
 #ifdef	KERNEL_PRIVATE
 
+/* IMPORTANT: this type must match "ipc_object_bits_t" from ipc/ipc_port.h */
+typedef natural_t mo_ipc_object_bits_t;
+
 struct memory_object_pager_ops;	/* forward declaration */
 
+/*
+ * "memory_object" and "memory_object_control" types used to be Mach ports
+ * in user space and can be passed as such to some kernel APIs.
+ * Their first field must match the "io_bits" field of a
+ * "struct ipc_object" to identify them as a "IKOT_MEMORY_OBJECT" and
+ * "IKOT_MEM_OBJ_CONTROL" respectively.
+ */
 typedef struct 		memory_object {
-	unsigned int	_pad1; /* struct ipc_object_header */
-#ifdef __LP64__
-	unsigned int	_pad2; /* pad to natural boundary */
-#endif
+	mo_ipc_object_bits_t			mo_ikot; /* DO NOT CHANGE */
 	const struct memory_object_pager_ops	*mo_pager_ops;
+	struct memory_object_control		*mo_control;
 } *memory_object_t;
 
 typedef struct		memory_object_control {
-	unsigned int	moc_ikot; /* struct ipc_object_header */
-#ifdef __LP64__
-	unsigned int	_pad; /* pad to natural boundary */
-#endif
-	struct vm_object *moc_object;
+	mo_ipc_object_bits_t	moc_ikot; /* DO NOT CHANGE */
+	struct vm_object	*moc_object;
 } *memory_object_control_t;
 
 typedef const struct memory_object_pager_ops {
@@ -371,6 +376,7 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 #define MAP_MEM_WCOMB		4	/* Write combining mode */
 					/* aka store gather     */
 #define MAP_MEM_INNERWBACK	5
+#define MAP_MEM_POSTED		6
 
 #define GET_MAP_MEM(flags)	\
 	((((unsigned int)(flags)) >> 24) & 0xFF)
@@ -379,7 +385,8 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 	((flags) = ((((unsigned int)(caching)) << 24) \
 			& 0xFF000000) | ((flags) & 0xFFFFFF));
 
-/* leave room for vm_prot bits */
+/* leave room for vm_prot bits (0xFF ?) */
+#define MAP_MEM_PURGABLE_KERNEL_ONLY 0x004000 /* volatility controlled by kernel */
 #define MAP_MEM_GRAB_SECLUDED	0x008000 /* can grab secluded pages */
 #define MAP_MEM_ONLY		0x010000 /* change processor caching  */
 #define MAP_MEM_NAMED_CREATE	0x020000 /* create extant object      */
@@ -389,6 +396,19 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 #define MAP_MEM_VM_COPY		0x200000 /* make a copy of a VM range */
 #define MAP_MEM_VM_SHARE	0x400000 /* extract a VM range for remap */
 #define	MAP_MEM_4K_DATA_ADDR	0x800000 /* preserve 4K aligned address of data */
+
+#define MAP_MEM_FLAGS_MASK 0x00FFFF00
+#define MAP_MEM_FLAGS_USER ( 				   \
+	MAP_MEM_PURGABLE_KERNEL_ONLY |		   	   \
+	MAP_MEM_GRAB_SECLUDED |				   \
+	MAP_MEM_ONLY |					   \
+	MAP_MEM_NAMED_CREATE |				   \
+	MAP_MEM_PURGABLE |				   \
+	MAP_MEM_NAMED_REUSE |				   \
+	MAP_MEM_USE_DATA_ADDR |				   \
+	MAP_MEM_VM_COPY |				   \
+	MAP_MEM_VM_SHARE |				   \
+	MAP_MEM_4K_DATA_ADDR)
 
 #ifdef KERNEL
 
@@ -404,8 +424,10 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 #define MAX_UPL_TRANSFER_BYTES	(1024 * 1024)
 #define MAX_UPL_SIZE_BYTES	(1024 * 1024 * 64)
 
+#ifndef CONFIG_EMBEDDED
 #define MAX_UPL_SIZE		(MAX_UPL_SIZE_BYTES / PAGE_SIZE)
 #define	MAX_UPL_TRANSFER	(MAX_UPL_TRANSFER_BYTES / PAGE_SIZE)
+#endif
 
 
 struct upl_page_info {
@@ -485,11 +507,6 @@ typedef uint64_t upl_control_flags_t;
 #define UPL_REQUEST_NO_FAULT	0x20000000ULL /* fail if pages not all resident */
 #define UPL_NOZEROFILLIO	0x40000000ULL /* allow non zerofill pages present */
 #define UPL_REQUEST_FORCE_COHERENCY	0x80000000ULL
-
-#define UPL_MEMORY_TAG_MASK	0xFF00000000ULL
-#define UPL_MEMORY_TAG_SHIFT	32
-#define UPL_MEMORY_TAG(x)	(((x) >> UPL_MEMORY_TAG_SHIFT) & 0xFF)
-#define UPL_MEMORY_TAG_MAKE(x)	(((upl_control_flags_t)((x) & 0xFF)) << UPL_MEMORY_TAG_SHIFT)
 
 /* UPL flags known by this kernel */
 #define UPL_VALID_FLAGS		0xFFFFFFFFFFULL

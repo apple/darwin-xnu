@@ -549,10 +549,10 @@ enum {
 // PM Statistics & Diagnostics
 //******************************************************************************
 
-extern const OSSymbol *gIOPMStatsApplicationResponseTimedOut;
-extern const OSSymbol *gIOPMStatsApplicationResponseCancel;
-extern const OSSymbol *gIOPMStatsApplicationResponseSlow;
-extern const OSSymbol *gIOPMStatsApplicationResponsePrompt;
+extern const OSSymbol *gIOPMStatsResponseTimedOut;
+extern const OSSymbol *gIOPMStatsResponseCancel;
+extern const OSSymbol *gIOPMStatsResponseSlow;
+extern const OSSymbol *gIOPMStatsResponsePrompt;
 extern const OSSymbol *gIOPMStatsDriverPSChangeSlow;
 
 //******************************************************************************

@@ -61,12 +61,10 @@
  * Macro definitions for routines to manipulate the
  * floating-point processor.
  */
-#include <kern/thread.h>
 #include <kern/kern_types.h>
 #include <mach/i386/kern_return.h>
 #include <mach/i386/thread_status.h>
 #include <i386/proc_reg.h>
-#include <i386/thread.h>
 
 typedef	enum {
 		FXSAVE32 = 1,
@@ -76,12 +74,20 @@ typedef	enum {
 		FP_UNUSED = 5
 	} fp_save_layout_t;
 
-extern int		fp_kind;
+typedef enum {
+	UNDEFINED,
+	FP,
+	AVX,
+#if !defined(RC_HIDE_XNU_J137)
+	AVX512
+#endif
+} xstate_t;
 
 extern void		init_fpu(void);
 extern void		fpu_module_init(void);
 extern void		fpu_free(
-				void	* fps);
+				thread_t	thr_act,
+				void		*fps);
 extern kern_return_t	fpu_set_fxstate(
 				thread_t	thr_act,
 				thread_state_t	state,
@@ -100,7 +106,16 @@ extern void		fpSSEexterrflt(void);
 extern void		fpflush(thread_t);
 extern void		fp_setvalid(boolean_t);
 
-extern void clear_fpu(void);
-extern void fpu_save_context(thread_t thread);
+extern void		clear_fpu(void);
+extern void		fpu_switch_context(
+				thread_t	old,
+				thread_t	new);
+extern void		fpu_switch_addrmode(
+				thread_t	thread,
+				boolean_t	is_64bit);
+
+extern xstate_t		fpu_default;
+extern xstate_t		current_xstate(void);
+extern void		fpUDflt(user_addr_t rip);
 
 #endif	/* _I386_FPU_H_ */

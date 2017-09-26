@@ -69,8 +69,6 @@
  * HISTORY
  */
 
-#include <machine/spl.h>
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/time.h>
@@ -167,6 +165,8 @@ timeout_with_leeway(
 
 /*
  * Cancel a timeout.
+ * Deprecated because it's very inefficient.
+ * Switch to an allocated thread call instead.
  */
 void
 untimeout(
@@ -201,6 +201,8 @@ bsd_timeout(
 
 /*
  * Cancel a timeout.
+ * Deprecated because it's very inefficient.
+ * Switch to an allocated thread call instead.
  */
 void
 bsd_untimeout(
@@ -253,15 +255,14 @@ static int
 sysctl_clockrate
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, __unused struct sysctl_req *req)
 {
-	struct clockinfo clkinfo;
+	struct clockinfo clkinfo = {
+		.hz         = hz,
+		.tick       = tick,
+		.tickadj    = 0,
+		.stathz     = hz,
+		.profhz     = hz,
+	};
 
-	/*
-	 * Construct clockinfo structure.
-	 */
-	clkinfo.hz = hz;
-	clkinfo.tick = tick;
-	clkinfo.profhz = hz;
-	clkinfo.stathz = hz;
 	return sysctl_io_opaque(req, &clkinfo, sizeof(clkinfo), NULL);
 }
 

@@ -41,7 +41,8 @@ class OSDictionary;
 class OSSerialize;
 #ifdef XNU_KERNEL_PRIVATE
 class OSOrderedSet;
-#endif
+class OSCollection;
+#endif /* XNU_KERNEL_PRIVATE */
 
 
 /*!
@@ -59,14 +60,22 @@ class OSOrderedSet;
 
 #ifdef XNU_KERNEL_PRIVATE
 
+#ifdef CONFIG_EMBEDDED
+#define APPLE_KEXT_VTABLE_PADDING   0
+#else /* CONFIG_EMBEDDED */
 /*! @parseOnly */
 #define APPLE_KEXT_VTABLE_PADDING   1
+#endif /* CONFIG_EMBEDDED */
 
 #else /* XNU_KERNEL_PRIVATE */
 #include <TargetConditionals.h>
 
+#if TARGET_OS_EMBEDDED
+#define APPLE_KEXT_VTABLE_PADDING   0
+#else /* TARGET_OS_EMBEDDED */
 /*! @parseOnly */
 #define APPLE_KEXT_VTABLE_PADDING   1
+#endif /* TARGET_OS_EMBEDDED */
 
 #endif /* XNU_KERNEL_PRIVATE */
 
@@ -74,6 +83,8 @@ class OSOrderedSet;
 
 #if defined(__LP64__)
 /*! @parseOnly */
+#define APPLE_KEXT_LEGACY_ABI  0
+#elif defined(__arm__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 2))
 #define APPLE_KEXT_LEGACY_ABI  0
 #else
 #define APPLE_KEXT_LEGACY_ABI  1
@@ -346,7 +357,43 @@ _ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
 }
 
 #else /* !APPLE_KEXT_LEGACY_ABI */
-#if   defined(__i386__) || defined(__x86_64__)
+#if defined(__arm__) || defined(__arm64__)
+typedef long int ptrdiff_t;
+/*
+ * Ugly reverse engineered ABI.  Where does it come from?  Nobody knows.
+ * <rdar://problem/5641129> gcc 4.2-built ARM kernel panics with multiple inheritance (no, really)
+ */
+static inline _ptf_t
+_ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
+{
+    struct ptmf_t {
+        _ptf_t fPFN;
+        ptrdiff_t delta;
+    };
+    union {
+        void (OSMetaClassBase::*fIn)(void);
+        struct ptmf_t pTMF;
+    } map;
+
+
+    map.fIn = func;
+
+    if (map.pTMF.delta & 1) {
+        // virtual
+        union {
+            const OSMetaClassBase *fObj;
+            _ptf_t **vtablep;
+        } u;
+        u.fObj = self;
+
+        // Virtual member function so dereference table
+        return *(_ptf_t *)(((uintptr_t)*u.vtablep) + (uintptr_t)map.pTMF.fPFN);
+    } else {
+        // Not virtual, i.e. plain member func
+        return map.pTMF.fPFN;
+    } 
+}
+#elif defined(__i386__) || defined(__x86_64__)
 
 // Slightly less arcane and slightly less evil code to do
 // the same for kexts compiled with the standard Itanium C++
@@ -926,12 +973,42 @@ public:
     * @abstract
     * Look up a metaclass in the run-time type information system.
     *
-    * @param name The name of the desired class's metaclass. 
+    * @param name The name of the desired class's metaclass.
     *
     * @result
     * A pointer to the metaclass object if found, <code>NULL</code> otherwise.
     */
     static const OSMetaClass * getMetaClassWithName(const OSSymbol * name);
+
+#if XNU_KERNEL_PRIVATE
+
+   /*!
+    * @function copyMetaClassWithName
+    *
+    * @abstract
+    * Look up a metaclass in the run-time type information system.
+    *
+    * @param name The name of the desired class's metaclass.
+    *
+    * @result
+    * A pointer to the metaclass object if found, <code>NULL</code> otherwise.
+    * The metaclass will be protected from unloading until releaseMetaClass()
+    * is called.
+    */
+    static const OSMetaClass * copyMetaClassWithName(const OSSymbol * name);
+   /*!
+    * @function releaseMetaClass
+    *
+    * @abstract
+    * Releases reference obtained from copyMetaClassWithName().
+    *
+    * @discussion
+    * The metaclass will be protected from unloading until releaseMetaClass()
+    * is called.
+    */
+    void releaseMetaClass() const;
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 protected:
    /*!
@@ -1263,6 +1340,9 @@ public:
     */
     static void considerUnloads();
 
+#if XNU_KERNEL_PRIVATE
+    static bool removeClasses(OSCollection * metaClasses);
+#endif /* XNU_KERNEL_PRIVATE */
 
    /*!
     * @function allocClassWithName
@@ -1569,7 +1649,7 @@ private:
 			         OSMetaClassInstanceApplierFunction  applier,
                                  void * context);
 public:
-#endif
+#endif /* XNU_KERNEL_PRIVATE */
 
    /* Not to be included in headerdoc.
     *
@@ -2086,8 +2166,8 @@ public:
     void trackedFree(OSObject * instance) const;
     void trackedAccumSize(OSObject * instance, size_t size) const;
     struct IOTrackingQueue * getTracking() const;
-#endif
-#endif
+#endif /* IOTRACKING */
+#endif /* XNU_KERNEL_PRIVATE */
 
 private:
     // Obsolete APIs

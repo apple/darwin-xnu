@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,8 @@
 #ifdef BSD_KERNEL_PRIVATE
 
 #include <machine/endian.h>
+
+#include <libkern/crypto/sha1.h>
 
 #if BYTE_ORDER == BIG_ENDIAN
 #define	mptcp_hton64(x)  (x)
@@ -135,7 +137,7 @@ struct mptcp_mpjoin_opt_rsp2 {
 			mmjo_reserved1:4;
 #endif
 	u_int8_t	mmjo_reserved2;
-	u_int8_t	mmjo_mac[20]; /* This is 160 bits HMAC SHA-1 per RFC */
+	u_int8_t	mmjo_mac[SHA1_RESULTLEN]; /* This is 160 bits HMAC SHA-1 per RFC */
 } __attribute__((__packed__));
 
 

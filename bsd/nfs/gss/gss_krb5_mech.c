@@ -82,7 +82,7 @@ typedef struct crypt_walker_ctx {
 
 typedef struct hmac_walker_ctx {
 	const struct ccdigest_info *di;
-	cchmac_ctx_t hmac_ctx;
+	struct cchmac_ctx *hmac_ctx;
 } *hmac_walker_ctx_t;
 
 typedef size_t (*ccpad_func)(const struct ccmode_cbc *, cccbc_ctx *, cccbc_iv *,
@@ -521,10 +521,10 @@ do_crypt(void *walker, uint8_t *data, uint32_t len)
 void
 do_hmac_init(hmac_walker_ctx_t wctx, crypto_ctx_t cctx, void *key)
 {
-	size_t alloc_size = cc_ctx_n(struct cchmac_ctx, cchmac_di_size(cctx->di)) * sizeof(struct cchmac_ctx);
+	size_t alloc_size = cchmac_di_size(cctx->di);
 
 	wctx->di = cctx->di;
-	MALLOC(wctx->hmac_ctx.hdr, struct cchmac_ctx *, alloc_size, M_TEMP, M_WAITOK|M_ZERO);
+	MALLOC(wctx->hmac_ctx, struct cchmac_ctx *, alloc_size, M_TEMP, M_WAITOK|M_ZERO);
 	cchmac_init(cctx->di, wctx->hmac_ctx, cctx->keylen, key);
 }
 
@@ -622,7 +622,7 @@ krb5_mic_mbuf(crypto_ctx_t ctx, gss_buffer_t header,
 		cchmac_update(ctx->di, wctx.hmac_ctx, trailer->length, trailer->value);
 
 	cchmac_final(ctx->di, wctx.hmac_ctx, digest);
-	FREE(wctx.hmac_ctx.hdr, M_TEMP);
+	FREE(wctx.hmac_ctx, M_TEMP);
 
 	if (verify) {
 		*verify = (memcmp(mic, digest, ctx->digest_size) == 0);

@@ -100,6 +100,15 @@ kern_return_t kcdata_memory_static_init(kcdata_descriptor_t data, mach_vm_addres
 	return kcdata_get_memory_addr(data, data_type, 0, &user_addr);
 }
 
+void *kcdata_memory_get_begin_addr(kcdata_descriptor_t data)
+{
+	if (data == NULL) {
+		return NULL;
+	}
+
+	return (void *)data->kcd_addr_begin;
+}
+
 uint64_t kcdata_memory_get_used_bytes(kcdata_descriptor_t kcd)
 {
 	assert(kcd != NULL);
@@ -343,7 +352,7 @@ kern_return_t kcdata_add_type_definition(
 	uint32_t total_size = sizeof(struct kcdata_type_definition);
 	bzero(&kc_type_definition, sizeof(kc_type_definition));
 
-	if (strnlen(type_name, KCDATA_DESC_MAXLEN + 1) >= KCDATA_DESC_MAXLEN)
+	if (strlen(type_name) >= KCDATA_DESC_MAXLEN)
 		return KERN_INVALID_ARGUMENT;
 	strlcpy(&kc_type_definition.kct_name[0], type_name, KCDATA_DESC_MAXLEN);
 	kc_type_definition.kct_num_elements = elements_count;
@@ -380,7 +389,7 @@ struct _uint32_with_description_data {
 kern_return_t
 kcdata_add_uint64_with_description(kcdata_descriptor_t data_desc, uint64_t data, const char * description)
 {
-	if (strnlen(description, KCDATA_DESC_MAXLEN + 1) >= KCDATA_DESC_MAXLEN)
+	if (strlen(description) >= KCDATA_DESC_MAXLEN)
 		return KERN_INVALID_ARGUMENT;
 
 	kern_return_t kr = 0;
@@ -411,7 +420,7 @@ kern_return_t kcdata_add_uint32_with_description(
 				const char *description)
 {
 	assert(strlen(description) < KCDATA_DESC_MAXLEN);
-	if (strnlen(description, KCDATA_DESC_MAXLEN + 1) >= KCDATA_DESC_MAXLEN)
+	if (strlen(description) >= KCDATA_DESC_MAXLEN)
 		return KERN_INVALID_ARGUMENT;
 	kern_return_t kr = 0;
 	mach_vm_address_t user_addr;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -136,7 +136,7 @@ static int
 pflog_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 {
 	struct pflog_softc *pflogif;
-	struct ifnet_init_params pf_init;
+	struct ifnet_init_eparams pf_init;
 	int error = 0;
 
 	if (unit >= PFLOGIFS_MAX) {
@@ -153,6 +153,9 @@ pflog_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	}
 
 	bzero(&pf_init, sizeof (pf_init));
+	pf_init.ver = IFNET_INIT_CURRENT_VERSION;
+	pf_init.len = sizeof (pf_init);
+	pf_init.flags = IFNET_INIT_LEGACY;
 	pf_init.name = ifc->ifc_name;
 	pf_init.unit = unit;
 	pf_init.type = IFT_PFLOG;
@@ -168,7 +171,7 @@ pflog_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	bzero(pflogif, sizeof (*pflogif));
 	pflogif->sc_unit = unit;
 
-	error = ifnet_allocate(&pf_init, &pflogif->sc_if);
+	error = ifnet_allocate_extended(&pf_init, &pflogif->sc_if);
 	if (error != 0) {
 		printf("%s: ifnet_allocate failed - %d\n", __func__, error);
 		_FREE(pflogif, M_DEVBUF);
@@ -281,23 +284,27 @@ pflogfree(struct ifnet *ifp)
 }
 
 int
-pflog_packet(struct pfi_kif *kif, struct mbuf *m, sa_family_t af, u_int8_t dir,
+pflog_packet(struct pfi_kif *kif, pbuf_t *pbuf, sa_family_t af, u_int8_t dir,
     u_int8_t reason, struct pf_rule *rm, struct pf_rule *am,
     struct pf_ruleset *ruleset, struct pf_pdesc *pd)
 {
 #if NBPFILTER > 0
 	struct ifnet *ifn;
 	struct pfloghdr hdr;
+	struct mbuf *m;
 
-	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
-	if (kif == NULL || m == NULL || rm == NULL || pd == NULL)
+	if (kif == NULL || !pbuf_is_valid(pbuf) || rm == NULL || pd == NULL)
 		return (-1);
 
 	if (rm->logif >= PFLOGIFS_MAX ||
 	    (ifn = pflogifs[rm->logif]) == NULL || !ifn->if_bpf) {
 		return (0);
 	}
+
+	if ((m = pbuf_to_mbuf(pbuf, FALSE)) == NULL)
+		return (0);
 
 	bzero(&hdr, sizeof (hdr));
 	hdr.length = PFLOG_REAL_HDRLEN;

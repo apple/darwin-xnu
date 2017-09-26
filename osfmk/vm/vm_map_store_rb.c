@@ -553,6 +553,14 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 			copy_hole_info(hole_entry, &old_hole_entry);
 #endif /* DEBUG */
 
+			/*
+			 * This check makes sense only for regular maps, not copy maps.
+			 * With a regular map, the VM entry is first linked and then
+			 * the hole is deleted. So the check below, which makes sure that
+			 * the map's bounds are being respected, is valid.
+			 * But for copy maps, the hole is deleted before the VM entry is
+			 * linked (vm_map_store_copy_insert) and so this check is invalid.
+			 *
 			if (hole_entry == (vm_map_entry_t) map->holes_list) {
 
 				if (hole_entry->vme_next == (vm_map_entry_t) map->holes_list) {
@@ -561,6 +569,7 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 					assert(next_hole_entry->vme_end >= map->max_offset);
 				}
 			}
+			*/
 
 			vm_map_delete_hole(map, hole_entry);
 

@@ -36,7 +36,7 @@
 
 #include <mach/vm_param.h>
 #include <mach/thread_status.h>
-
+#include <sys/content_protection.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/signalvar.h>
@@ -83,6 +83,21 @@ mythread_state_flavor_t thread_flavor_array [] = {
 		{x86_EXCEPTION_STATE, x86_EXCEPTION_STATE_COUNT},
 		};
 int mynum_flavors=3;
+#elif defined (__arm__)
+mythread_state_flavor_t thread_flavor_array[]={
+		{ARM_THREAD_STATE , ARM_THREAD_STATE_COUNT},
+		{ARM_VFP_STATE, ARM_VFP_STATE_COUNT}, 
+		{ARM_EXCEPTION_STATE, ARM_EXCEPTION_STATE_COUNT}
+		};
+int mynum_flavors=3;
+
+#elif defined (__arm64__)
+mythread_state_flavor_t thread_flavor_array[]={
+		{ARM_THREAD_STATE64 , ARM_THREAD_STATE64_COUNT},
+		/* ARM64_TODO: VFP */
+		{ARM_EXCEPTION_STATE64, ARM_EXCEPTION_STATE64_COUNT}
+		};
+int mynum_flavors=2;
 #else
 #error architecture not supported
 #endif
@@ -124,6 +139,12 @@ process_cpu_type(proc_t core_proc)
 	} else {
 		what_we_think = CPU_TYPE_I386;
 	}
+#elif defined (__arm__) || defined(__arm64__)
+	if (IS_64BIT_PROCESS(core_proc)) {
+		what_we_think = CPU_TYPE_ARM64;
+	} else {
+		what_we_think = CPU_TYPE_ARM;
+	}
 #endif
 	return what_we_think;
 }
@@ -137,6 +158,12 @@ process_cpu_subtype(proc_t core_proc)
 		what_we_think = CPU_SUBTYPE_X86_64_ALL;
 	} else {
 		what_we_think = CPU_SUBTYPE_I386_ALL;
+	}
+#elif defined (__arm__) || defined(__arm64__)
+    if (IS_64BIT_PROCESS(core_proc)) {
+		what_we_think = CPU_SUBTYPE_ARM64_ALL;
+	} else {
+		what_we_think = CPU_SUBTYPE_ARM_ALL;
 	}
 #endif
 	return what_we_think;
@@ -310,6 +337,9 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 
 	VATTR_INIT(&va);	/* better to do it here than waste more stack in vnode_setsize */
 	VATTR_SET(&va, va_data_size, 0);
+	if (core_proc == initproc) {
+		VATTR_SET(&va, va_dataprotect_class, PROTECTION_CLASS_D);
+	}
 	vnode_setattr(vp, &va, ctx);
 	core_proc->p_acflag |= ACORE;
 

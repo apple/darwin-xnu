@@ -109,7 +109,7 @@ esp_aes_schedule(
 	struct secasvar *sav)
 {
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	aes_ctx *ctx = (aes_ctx*)sav->sched;
 	
 	aes_decrypt_key((const unsigned char *) _KEYBUF(sav->key_enc), _KEYLEN(sav->key_enc), &ctx->decrypt);
@@ -287,12 +287,25 @@ esp_cbc_decrypt_aes(
 		} else {
 			sp_unaligned = sp;
 			if (len > MAX_REALIGN_LEN) {
+				m_freem(m);
+				if (d0 != NULL) {
+				    m_freem(d0);
+				}
+				if (sp_aligned != NULL) {
+				    FREE(sp_aligned, M_SECA);
+				    sp_aligned = NULL;
+				}
 				return ENOBUFS;
 			}
 			if (sp_aligned == NULL) {
 				sp_aligned = (u_int8_t *)_MALLOC(MAX_REALIGN_LEN, M_SECA, M_DONTWAIT);
-				if (sp_aligned == NULL)
-					return ENOMEM;
+				if (sp_aligned == NULL) {
+				    m_freem(m);
+				    if (d0 != NULL) {
+					m_freem(d0);
+				    }
+				   return ENOMEM;
+				}
 			}
 			sp = sp_aligned;
 			memcpy(sp, sp_unaligned, len);
@@ -482,12 +495,25 @@ esp_cbc_encrypt_aes(
 		} else {
 			sp_unaligned = sp;
 			if (len > MAX_REALIGN_LEN) {
+				m_freem(m);
+				if (d0) {
+					m_freem(d0);
+				}
+				if (sp_aligned != NULL) {
+					FREE(sp_aligned, M_SECA);
+					sp_aligned = NULL;
+				}
 				return ENOBUFS;
 			}
 			if (sp_aligned == NULL) {
 				sp_aligned = (u_int8_t *)_MALLOC(MAX_REALIGN_LEN, M_SECA, M_DONTWAIT);
-				if (sp_aligned == NULL)
+				if (sp_aligned == NULL) {
+					m_freem(m);
+					if (d0) {
+						m_freem(d0);
+					}
 					return ENOMEM;
+				}
 			}
 			sp = sp_aligned;
 			memcpy(sp, sp_unaligned, len);
@@ -556,7 +582,7 @@ int
 esp_gcm_schedule( __unused const struct esp_algorithm *algo,
 		 struct secasvar *sav)
 {
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	aes_gcm_ctx *ctx = (aes_gcm_ctx*)P2ROUNDUP(sav->sched, ESP_GCM_ALIGN);
 	u_int ivlen = sav->ivlen;
 	unsigned char nonce[ESP_GCM_SALT_LEN+ivlen];
@@ -764,12 +790,25 @@ esp_gcm_encrypt_aes(
 		} else {
 			sp_unaligned = sp;
 			if (len > MAX_REALIGN_LEN) {
+				m_freem(m);
+				if (d0) {
+					m_freem(d0);
+				}
+				if (sp_aligned != NULL) {
+					FREE(sp_aligned, M_SECA);
+					sp_aligned = NULL;
+				}
 				return ENOBUFS;
 			}
 			if (sp_aligned == NULL) {
 				sp_aligned = (u_int8_t *)_MALLOC(MAX_REALIGN_LEN, M_SECA, M_DONTWAIT);
-				if (sp_aligned == NULL)
+				if (sp_aligned == NULL) {
+					m_freem(m);
+					if (d0) {
+						m_freem(d0);
+					}
 					return ENOMEM;
+				}
 			}
 			sp = sp_aligned;
 			memcpy(sp, sp_unaligned, len);
@@ -960,12 +999,25 @@ esp_gcm_decrypt_aes(
 		} else {
 			sp_unaligned = sp;
 			if (len > MAX_REALIGN_LEN) {
+				m_freem(m);
+				if (d0) {
+					m_freem(d0);
+				}
+				if (sp_aligned != NULL) {
+					FREE(sp_aligned, M_SECA);
+					sp_aligned = NULL;
+				}
 				return ENOBUFS;
 			}
 			if (sp_aligned == NULL) {
 				sp_aligned = (u_int8_t *)_MALLOC(MAX_REALIGN_LEN, M_SECA, M_DONTWAIT);
-				if (sp_aligned == NULL)
+				if (sp_aligned == NULL) {
+					m_freem(m);
+					if (d0) {
+						m_freem(d0);
+					}
 					return ENOMEM;
+				}
 			}
 			sp = sp_aligned;
 			memcpy(sp, sp_unaligned, len);

@@ -74,6 +74,8 @@
 
 #define TCP_CA_NAME_MAX 16		/* Maximum characters in the name of a CC algorithm */
 
+extern int tcp_recv_bg;
+
 /*
  * Structure to hold definition various actions defined by a congestion 
  * control algorithm for TCP. This can be used to change the congestion

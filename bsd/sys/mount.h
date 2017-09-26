@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -320,7 +320,8 @@ struct vfs_attr {
 #define MNT_NOUSERXATTR	0x01000000	/* Don't allow user extended attributes */
 #define MNT_DEFWRITE	0x02000000	/* filesystem should defer writes */
 #define MNT_MULTILABEL	0x04000000	/* MAC support for individual labels */
-#define MNT_NOATIME	0x10000000	/* disable update of file access time */
+#define MNT_NOATIME		0x10000000	/* disable update of file access time */
+#define MNT_SNAPSHOT	0x40000000 /* The mount is a snapshot */
 #ifdef BSD_KERNEL_PRIVATE
 /* #define MNT_IMGSRC_BY_INDEX 0x20000000 see sys/imgsrc.h */
 #endif /* BSD_KERNEL_PRIVATE */
@@ -340,7 +341,7 @@ struct vfs_attr {
 			MNT_ROOTFS	| MNT_DOVOLFS	| MNT_DONTBROWSE | \
 			MNT_IGNORE_OWNERSHIP | MNT_AUTOMOUNTED | MNT_JOURNALED | \
 			MNT_NOUSERXATTR | MNT_DEFWRITE	| MNT_MULTILABEL | \
-			MNT_NOATIME | MNT_CPROTECT)
+			MNT_NOATIME | MNT_SNAPSHOT | MNT_CPROTECT)
 /*
  * External filesystem command modifier flags.
  * Unmount can use the MNT_FORCE flag.
@@ -760,19 +761,16 @@ struct fs_snapshot_mount_args {
 };
 
 #define VFSIOC_MOUNT_SNAPSHOT  _IOW('V', 1, struct fs_snapshot_mount_args)
-#define VFSCTL_MOUNT_SNAPSHOT  IOCBASECMD(VFSIOC_MOUNT_SNAPSHOT)
 
 struct fs_snapshot_revert_args {
     struct componentname *sr_cnp;
 };
 #define VFSIOC_REVERT_SNAPSHOT  _IOW('V', 2, struct fs_snapshot_revert_args)
-#define VFSCTL_REVERT_SNAPSHOT  IOCBASECMD(VFSIOC_REVERT_SNAPSHOT)
 
 struct fs_snapshot_root_args {
     struct componentname *sr_cnp;
 };  
 #define VFSIOC_ROOT_SNAPSHOT  _IOW('V', 3, struct fs_snapshot_root_args)
-#define VFSCTL_ROOT_SNAPSHOT  IOCBASECMD(VFSIOC_ROOT_SNAPSHOT)
 
 #endif /* KERNEL */
 
@@ -1110,7 +1108,7 @@ void	vfs_setfsprivate(mount_t mp, void *mntdata);
   @abstract Get information about filesystem status.
   @discussion Each filesystem has a struct vfsstatfs associated with it which is updated as events occur; this function
   returns a pointer to it.  Note that the data in the structure will continue to change over time and also that it may
-  be quite stale of vfs_update_vfsstat has not been called recently.
+  be quite stale if vfs_update_vfsstat has not been called recently.
   @param mp Mount for which to get vfsstatfs pointer.
   @return Pointer to vfsstatfs.
   */
@@ -1262,6 +1260,13 @@ void	vfs_event_signal(fsid_t *fsid, u_int32_t event, intptr_t data);
   */
 void	vfs_event_init(void); /* XXX We should not export this */
 
+/*!
+  @function vfs_set_root_unmount_cleanly
+  @abstract This function should be called by the root file system
+  when it is being mounted if the file system state is consistent.
+*/
+void vfs_set_root_unmounted_cleanly(void);
+
 #ifdef KERNEL_PRIVATE
 int	vfs_getbyid(fsid_t *fsid, ino64_t ino, vnode_t *vpp, vfs_context_t ctx);
 int	vfs_getattr(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx);
@@ -1381,10 +1386,14 @@ int	getfsstat(struct statfs *, int, int) __DARWIN_INODE64(getfsstat);
 int	getfsstat64(struct statfs64 *, int, int) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
 #endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 int	getmntinfo(struct statfs **, int) __DARWIN_INODE64(getmntinfo);
+int	getmntinfo_r_np(struct statfs **, int) __DARWIN_INODE64(getmntinfo_r_np) 
+	    __OSX_AVAILABLE(10.13) __IOS_AVAILABLE(11.0)
+	    __TVOS_AVAILABLE(11.0) __WATCHOS_AVAILABLE(4.0);
 #if !__DARWIN_ONLY_64_BIT_INO_T
 int	getmntinfo64(struct statfs64 **, int) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
 #endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 int	mount(const char *, const char *, int, void *);
+int	fmount(const char *, int, int, void *) __OSX_AVAILABLE(10.13) __IOS_AVAILABLE(11.0) __TVOS_AVAILABLE(11.0) __WATCHOS_AVAILABLE(4.0);
 int	statfs(const char *, struct statfs *) __DARWIN_INODE64(statfs);
 #if !__DARWIN_ONLY_64_BIT_INO_T
 int	statfs64(const char *, struct statfs64 *) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_5,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);

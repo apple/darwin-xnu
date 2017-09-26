@@ -3,9 +3,12 @@ BUILD/
 build/
 .DS_Store
 
-# vim turds
+# vim swap files
 *~
 *.swp
+
+# JSON compilation definitions (for the YouCompleteMe vim plugin)
+compile_commands.json
 
 # /
 /.remotebuild_credential

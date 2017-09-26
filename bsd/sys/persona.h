@@ -225,7 +225,7 @@ struct persona {
 #define persona_try_lock(persona) lck_mtx_try_lock(&(persona)->pna_lock)
 
 #define persona_lock_assert_held(persona) \
-	lck_mtx_assert(&(persona)->pna_lock, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&(persona)->pna_lock, LCK_MTX_ASSERT_OWNED)
 
 #ifdef PERSONA_DEBUG
 static inline const char *persona_desc(struct persona *persona, int locked)

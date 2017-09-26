@@ -86,8 +86,6 @@
 #endif
 
 #include <string.h>
-#include <machine/spl.h>
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
@@ -908,7 +906,6 @@ add_entry6(struct ip6_fw_head *chainptr, struct ip6_fw *frwl)
 	struct ip6_fw *ftmp = 0;
 	struct ip6_fw_chain *fwc = 0, *fcp, *fcpl = 0;
 	u_short nbr = 0;
-	int s;
 
 	fwc = _MALLOC(sizeof *fwc, M_IP6FW, M_WAITOK);
 	ftmp = _MALLOC(sizeof *ftmp, M_IP6FW, M_WAITOK);
@@ -925,16 +922,12 @@ add_entry6(struct ip6_fw_head *chainptr, struct ip6_fw *frwl)
 	ftmp->fw_bcnt = 0L;
 	fwc->rule = ftmp;
 	
-	s = splnet();
-
 	if (!chainptr->lh_first) {
 		LIST_INSERT_HEAD(chainptr, fwc, chain);
-		splx(s);
 		return(0);
         } else if (ftmp->fw_number == (u_short)-1) {
 		if (fwc)  FREE(fwc, M_IP6FW);
 		if (ftmp) FREE(ftmp, M_IP6FW);
-		splx(s);
 		dprintf(("%s bad rule number\n", err_prefix));
 		return (EINVAL);
         }
@@ -967,7 +960,6 @@ add_entry6(struct ip6_fw_head *chainptr, struct ip6_fw *frwl)
 	}
 
 	bcopy(ftmp, frwl, sizeof(struct ip6_fw));
-	splx(s);
 	return (0);
 }
 
@@ -975,16 +967,12 @@ static int
 del_entry6(struct ip6_fw_head *chainptr, u_short number)
 {
 	struct ip6_fw_chain *fcp;
-	int s;
-
-	s = splnet();
 
 	fcp = chainptr->lh_first;
 	if (number != (u_short)-1) {
 		for (; fcp; fcp = fcp->chain.le_next) {
 			if (fcp->rule->fw_number == number) {
 				LIST_REMOVE(fcp, chain);
-				splx(s);
 				FREE(fcp->rule, M_IP6FW);
 				FREE(fcp, M_IP6FW);
 				return 0;
@@ -992,7 +980,6 @@ del_entry6(struct ip6_fw_head *chainptr, u_short number)
 		}
 	}
 
-	splx(s);
 	return (EINVAL);
 }
 
@@ -1000,20 +987,17 @@ static int
 zero_entry6(struct ip6_fw *frwl)
 {
 	struct ip6_fw_chain *fcp;
-	int s;
 
 	/*
 	 *	It's possible to insert multiple chain entries with the
 	 *	same number, so we don't stop after finding the first
 	 *	match if zeroing a specific entry.
 	 */
-	s = splnet();
 	for (fcp = ip6_fw_chain.lh_first; fcp; fcp = fcp->chain.le_next)
 		if (!frwl || frwl->fw_number == 0 || frwl->fw_number == fcp->rule->fw_number) {
 			fcp->rule->fw_bcnt = fcp->rule->fw_pcnt = 0;
 			fcp->rule->timestamp = 0;
 		}
-	splx(s);
 
 	if (fw6_verbose) {
 		if (frwl)
@@ -1282,7 +1266,6 @@ static int
 ip6_fw_ctl(struct sockopt *sopt)
 {
 	int error = 0;
-	int spl;
 	int valsize;
 	struct ip6_fw rule;
 	int is64user=0;
@@ -1336,8 +1319,6 @@ ip6_fw_ctl(struct sockopt *sopt)
 			size_t size = 0;
 			size_t rulesize = 0;
 
-			spl = splnet();
-			
 			if ( is64user )
 				rulesize = sizeof(struct ip6_fw_64 );
 			else
@@ -1369,7 +1350,6 @@ ip6_fw_ctl(struct sockopt *sopt)
 				}
 			}
 
-			splx(spl);
 			if (buf)
 			{
 				sopt->sopt_valsize = valsize;
@@ -1381,7 +1361,6 @@ ip6_fw_ctl(struct sockopt *sopt)
 		}
 
 		case IPV6_FW_FLUSH:
-			spl = splnet();
 			while (ip6_fw_chain.lh_first &&
 				ip6_fw_chain.lh_first->rule->fw_number != (u_short)-1)
 			{
@@ -1390,7 +1369,6 @@ ip6_fw_ctl(struct sockopt *sopt)
 				FREE(fcp->rule, M_IP6FW);
 				FREE(fcp, M_IP6FW);
 			}
-			splx(spl);
 			ip6fw_kev_post_msg(KEV_IP6FW_FLUSH);
 			break;
 

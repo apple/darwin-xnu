@@ -177,6 +177,12 @@ esp6_input_strip_udp_encap (struct mbuf *m, int ip6hlen)
 void
 esp4_input(struct mbuf *m, int off)
 {
+	(void)esp4_input_extended(m, off, NULL);
+}
+
+struct mbuf *
+esp4_input_extended(struct mbuf *m, int off, ifnet_t interface)
+{
 	struct ip *ip;
 #if INET6
 	struct ip6_hdr *ip6;
@@ -193,6 +199,7 @@ esp4_input(struct mbuf *m, int off)
 	size_t hlen;
 	size_t esplen;
 	sa_family_t	ifamily;
+	struct mbuf *out_m = NULL;
 
 	KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_START, 0,0,0,0,0);
 	/* sanity check for alignment. */
@@ -212,6 +219,8 @@ esp4_input(struct mbuf *m, int off)
 			goto bad;
 		}
 	}
+
+	m->m_pkthdr.csum_flags &= ~CSUM_RX_FLAGS;
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
@@ -235,9 +244,9 @@ esp4_input(struct mbuf *m, int off)
 	/* find the sassoc. */
 	spi = esp->esp_spi;
 
-	if ((sav = key_allocsa(AF_INET,
-	                      (caddr_t)&ip->ip_src, (caddr_t)&ip->ip_dst,
-	                      IPPROTO_ESP, spi)) == 0) {
+	if ((sav = key_allocsa_extended(AF_INET,
+									(caddr_t)&ip->ip_src, (caddr_t)&ip->ip_dst,
+									IPPROTO_ESP, spi, interface)) == 0) {
 		ipseclog((LOG_WARNING,
 		    "IPv4 ESP input: no key association found for spi %u\n",
 		    (u_int32_t)ntohl(spi)));
@@ -337,7 +346,7 @@ esp4_input(struct mbuf *m, int off)
 	}
 
 	if (cc_cmp_safe(siz, sum0, sum)) {
-		ipseclog((LOG_WARNING, "auth fail in IPv4 ESP input: %s %s\n",
+		ipseclog((LOG_WARNING, "cc_cmp fail in IPv4 ESP input: %s %s\n",
 		    ipsec4_logpacketstr(ip, spi), ipsec_logsastr(sav)));
 		IPSEC_STAT_INCREMENT(ipsecstat.in_espauthfail);
 		goto bad;
@@ -618,6 +627,13 @@ noreplaycheck:
 
 		// Input via IPSec interface
 		if (sav->sah->ipsec_if != NULL) {
+			// Return mbuf
+			if (interface != NULL &&
+				interface == sav->sah->ipsec_if) {
+				out_m = m;
+				goto done;
+			}
+
 			if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
 				m = NULL;
 				goto done;
@@ -670,6 +686,7 @@ noreplaycheck:
 		if (nxt == IPPROTO_TCP || nxt == IPPROTO_UDP) {
 			m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
 			m->m_pkthdr.csum_data = 0xFFFF;
+			_CASSERT(offsetof(struct pkthdr, csum_data) == offsetof(struct pkthdr, csum_rx_val));
 		}
 
 		if (nxt != IPPROTO_DONE) {
@@ -718,12 +735,28 @@ noreplaycheck:
                         	struct ip *, ip, struct ifnet *, m->m_pkthdr.rcvif,
                         	struct ip *, ip, struct ip6_hdr *, NULL);
 
-			// Input via IPSec interface
+			// Input via IPsec interface legacy path
 			if (sav->sah->ipsec_if != NULL) {
+				int mlen;
+				if ((mlen = m_length2(m, NULL)) < hlen) {
+					ipseclog((LOG_DEBUG,
+						"IPv4 ESP input: decrypted packet too short %d < %d\n",
+						mlen, hlen));
+					IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
+					goto bad;
+				}
 				ip->ip_len = htons(ip->ip_len + hlen);
 				ip->ip_off = htons(ip->ip_off);
 				ip->ip_sum = 0;
 				ip->ip_sum = ip_cksum_hdr_in(m, hlen);
+
+				// Return mbuf
+				if (interface != NULL &&
+					interface == sav->sah->ipsec_if) {
+					out_m = m;
+					goto done;
+				}
+
 				if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
 					m = NULL;
 					goto done;
@@ -733,8 +766,9 @@ noreplaycheck:
 			}
 			
 			ip_proto_dispatch_in(m, off, nxt, 0);
-		} else
+		} else {
 			m_freem(m);
+		}
 		m = NULL;
 	}
 
@@ -746,8 +780,7 @@ done:
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
 	IPSEC_STAT_INCREMENT(ipsecstat.in_success);
-	return;
-
+	return out_m;
 bad:
 	if (sav) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
@@ -755,16 +788,24 @@ bad:
 		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
-	if (m)
+	if (m) {
 		m_freem(m);
+	}
 	KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_END, 4,0,0,0,0);
-	return;
+	return out_m;
 }
 #endif /* INET */
 
 #if INET6
+
 int
 esp6_input(struct mbuf **mp, int *offp, int proto)
+{
+	return esp6_input_extended(mp, offp, proto, NULL);
+}
+
+int
+esp6_input_extended(struct mbuf **mp, int *offp, int proto, ifnet_t interface)
 {
 #pragma unused(proto)
 	struct mbuf *m = *mp;
@@ -802,6 +843,8 @@ esp6_input(struct mbuf **mp, int *offp, int proto)
 		return IPPROTO_DONE;
 	}
 #endif
+	m->m_pkthdr.csum_flags &= ~CSUM_RX_FLAGS;
+
 	/* Expect 32-bit data aligned pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
@@ -825,9 +868,9 @@ esp6_input(struct mbuf **mp, int *offp, int proto)
 	/* find the sassoc. */
 	spi = esp->esp_spi;
 
-	if ((sav = key_allocsa(AF_INET6,
-	                      (caddr_t)&ip6->ip6_src, (caddr_t)&ip6->ip6_dst,
-	                      IPPROTO_ESP, spi)) == 0) {
+	if ((sav = key_allocsa_extended(AF_INET6,
+									(caddr_t)&ip6->ip6_src, (caddr_t)&ip6->ip6_dst,
+									IPPROTO_ESP, spi, interface)) == 0) {
 		ipseclog((LOG_WARNING,
 		    "IPv6 ESP input: no key association found for spi %u\n",
 		    (u_int32_t)ntohl(spi)));
@@ -1190,6 +1233,12 @@ noreplaycheck:
 
 		// Input via IPSec interface
 		if (sav->sah->ipsec_if != NULL) {
+			// Return mbuf
+			if (interface != NULL &&
+				interface == sav->sah->ipsec_if) {
+				goto done;
+			}
+
 			if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
 				m = NULL;
 				nxt = IPPROTO_DONE;
@@ -1307,10 +1356,17 @@ noreplaycheck:
 		if (nxt == IPPROTO_TCP || nxt == IPPROTO_UDP) {
 			m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
 			m->m_pkthdr.csum_data = 0xFFFF;
+			_CASSERT(offsetof(struct pkthdr, csum_data) == offsetof(struct pkthdr, csum_rx_val));
 		}
 
 		// Input via IPSec interface
 		if (sav->sah->ipsec_if != NULL) {
+			// Return mbuf
+			if (interface != NULL &&
+				interface == sav->sah->ipsec_if) {
+				goto done;
+			}
+
 			if (ipsec_inject_inbound_packet(sav->sah->ipsec_if, m) == 0) {
 				m = NULL;
 				nxt = IPPROTO_DONE;
@@ -1341,13 +1397,17 @@ bad:
 		    (uint64_t)VM_KERNEL_ADDRPERM(sav)));
 		key_freesav(sav, KEY_SADB_UNLOCKED);
 	}
-	if (m)
+	if (m) {
 		m_freem(m);
+	}
+	if (interface != NULL) {
+		*mp = NULL;
+	}
 	return IPPROTO_DONE;
 }
 
 void
-esp6_ctlinput(int cmd, struct sockaddr *sa, void *d)
+esp6_ctlinput(int cmd, struct sockaddr *sa, void *d, __unused struct ifnet *ifp)
 {
 	const struct newesp *espp;
 	struct newesp esp;
@@ -1355,7 +1415,7 @@ esp6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 	struct secasvar *sav;
 	struct ip6_hdr *ip6;
 	struct mbuf *m;
-	int off;
+	int off = 0;
 	struct sockaddr_in6 *sa6_src, *sa6_dst;
 
 	if (sa->sa_family != AF_INET6 ||

@@ -110,6 +110,7 @@ IOLock * sStalledClassesLock = NULL;
 struct ExpansionData {
     OSOrderedSet    * instances;
     OSKext          * kext;
+    uint32_t          retain;
 #if IOTRACKING
     IOTrackingQueue * tracking;
 #endif
@@ -656,7 +657,11 @@ OSMetaClass::postModLoad(void * loadHandle)
                    /* Log this error here so we can include the class name.
                     * xxx - we should look up the other kext that defines the class
                     */
+#if CONFIG_EMBEDDED
+                    panic(
+#else
                     OSKextLog(myKext, kOSMetaClassLogSpec,
+#endif /* CONFIG_EMBEDDED */
                         "OSMetaClass: Kext %s class %s is a duplicate;"
                         "kext %s already has a class by that name.",
                          sStalled->kextIdentifier, (const char *)me->className,
@@ -946,6 +951,43 @@ OSMetaClass::considerUnloads()
 
 /*********************************************************************
 *********************************************************************/
+bool
+OSMetaClass::removeClasses(OSCollection * metaClasses)
+{
+    OSCollectionIterator * classIterator;
+    OSMetaClass          * checkClass;
+    bool                   result;
+
+    classIterator = OSCollectionIterator::withCollection(metaClasses);
+    if (!classIterator) return (false);
+
+    IOLockLock(sAllClassesLock);
+
+    result = false;
+    do
+    {
+        while ((checkClass = (OSMetaClass *)classIterator->getNextObject())
+            && !checkClass->getInstanceCount()
+            && !checkClass->reserved->retain) {}
+        if (checkClass) break;
+        classIterator->reset();
+        while ((checkClass = (OSMetaClass *)classIterator->getNextObject()))
+        {
+            sAllClassesDict->removeObject(checkClass->className);
+        }
+        result = true;
+    }
+    while (false);
+
+    IOLockUnlock(sAllClassesLock);
+    OSSafeReleaseNULL(classIterator);
+
+    return (result);
+}
+
+
+/*********************************************************************
+*********************************************************************/
 const OSMetaClass *
 OSMetaClass::getMetaClassWithName(const OSSymbol * name)
 {
@@ -966,15 +1008,46 @@ OSMetaClass::getMetaClassWithName(const OSSymbol * name)
 
 /*********************************************************************
 *********************************************************************/
+const OSMetaClass *
+OSMetaClass::copyMetaClassWithName(const OSSymbol * name)
+{
+    const OSMetaClass * meta;
+
+    if (!name) return (0);
+
+    meta = 0;
+    IOLockLock(sAllClassesLock);
+    if (sAllClassesDict) {
+        meta = (OSMetaClass *) sAllClassesDict->getObject(name);
+        if (meta) OSIncrementAtomic(&meta->reserved->retain);
+    }
+    IOLockUnlock(sAllClassesLock);
+
+    return (meta);
+}
+
+/*********************************************************************
+*********************************************************************/
+void
+OSMetaClass::releaseMetaClass() const
+{
+    OSDecrementAtomic(&reserved->retain);
+}
+
+/*********************************************************************
+*********************************************************************/
 OSObject *
 OSMetaClass::allocClassWithName(const OSSymbol * name)
 {
-    OSObject * result = 0;
+    const OSMetaClass * meta;
+    OSObject          * result;
 
-    const OSMetaClass * const meta = getMetaClassWithName(name);
-
-    if (meta) {
+    result = 0;
+    meta = copyMetaClassWithName(name);
+    if (meta)
+    {
         result = meta->alloc();
+        meta->releaseMetaClass();
     }
 
     return result;
@@ -1246,7 +1319,7 @@ void OSMetaClass::trackedInstance(OSObject * instance) const
 {
     IOTracking * mem = (typeof(mem)) instance; mem--;
 
-    return (IOTrackingAdd(reserved->tracking, mem, classSize, false));
+    return (IOTrackingAdd(reserved->tracking, mem, classSize, false, VM_KERN_MEMORY_NONE));
 }
 
 void OSMetaClass::trackedFree(OSObject * instance) const

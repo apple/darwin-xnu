@@ -120,6 +120,10 @@
 #include <mach/mach_port.h>
 #include <stdbool.h>
 
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
+
 kern_return_t ipc_object_copyin(ipc_space_t, mach_port_name_t,
     mach_msg_type_name_t, ipc_port_t *);
 void ipc_port_release_send(ipc_port_t);
@@ -418,6 +422,7 @@ _fdrelse(struct proc * p, int fd)
 	while ((nfd = fdp->fd_lastfile) > 0 &&
 			fdp->fd_ofiles[nfd] == NULL &&
 			!(fdp->fd_ofileflags[nfd] & UF_RESERVED))
+		/* JMM - What about files with lingering EV_VANISHED knotes? */
 		fdp->fd_lastfile--;
 }
 
@@ -1121,6 +1126,10 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 	case F_GETLK:
 	case F_OFD_GETLK:
+#if CONFIG_EMBEDDED
+	case F_GETLKPID:
+	case F_OFD_GETLKPID:
+#endif
 		if (fp->f_type != DTYPE_VNODE) {
 			error = EBADF;
 			goto out;
@@ -1966,7 +1975,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 			error = copyin(argp, &lv32, sizeof (lv32));
 			lv.lv_file_start = lv32.lv_file_start;
-			lv.lv_error_message = CAST_USER_ADDR_T(lv32.lv_error_message);
+			lv.lv_error_message = (void *)(uintptr_t)lv32.lv_error_message;
 			lv.lv_error_message_size = lv32.lv_error_message;
 		}
 		if (error)
@@ -1974,7 +1983,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 #if CONFIG_MACF
 		error = mac_file_check_library_validation(p, fg, lv.lv_file_start,
-		    lv.lv_error_message, lv.lv_error_message_size);
+		    (user_long_t)lv.lv_error_message, lv.lv_error_message_size);
 #endif
 
 		break;
@@ -4631,6 +4640,7 @@ fg_free(struct fileglob *fg)
 }
 
 
+
 /*
  * fdexec
  *
@@ -4648,16 +4658,39 @@ fg_free(struct fileglob *fg)
  * Returns:	void
  *
  * Locks:	This function internally takes and drops proc_fdlock()
+ *          But assumes tables don't grow/change while unlocked.
  *
  */
 void
-fdexec(proc_t p, short flags)
+fdexec(proc_t p, short flags, int self_exec)
 {
 	struct filedesc *fdp = p->p_fd;
 	int i;
 	boolean_t cloexec_default = (flags & POSIX_SPAWN_CLOEXEC_DEFAULT) != 0;
+	thread_t self = current_thread();
+	struct uthread *ut = get_bsdthread_info(self);
+	struct kqueue *dealloc_kq = NULL;
+
+	/*
+	 * If the current thread is bound as a workq/workloop
+	 * servicing thread, we need to unbind it first.
+	 */
+	if (ut->uu_kqueue_bound && self_exec) {
+		kevent_qos_internal_unbind(p, 0, self,
+		                           ut->uu_kqueue_flags);
+	}
 
 	proc_fdlock(p);
+
+	/*
+	 * Deallocate the knotes for this process
+	 * and mark the tables non-existent so
+	 * subsequent kqueue closes go faster.
+	 */
+	knotes_dealloc(p);
+	assert(fdp->fd_knlistsize == -1);
+	assert(fdp->fd_knhashmask == 0);
+
 	for (i = fdp->fd_lastfile; i >= 0; i--) {
 
 		struct fileproc *fp = fdp->fd_ofiles[i];
@@ -4681,8 +4714,6 @@ fdexec(proc_t p, short flags)
 		    || (fp && mac_file_check_inherit(proc_ucred(p), fp->f_fglob))
 #endif
 		) {
-			if (i < fdp->fd_knlistsize)
-				knote_fdclose(p, i, TRUE);
 			procfdtbl_clearfd(p, i);
 			if (i == fdp->fd_lastfile && i > 0)
 				fdp->fd_lastfile--;
@@ -4704,7 +4735,18 @@ fdexec(proc_t p, short flags)
 			fileproc_free(fp);
 		}
 	}
+
+	/* release the per-process workq kq */
+	if (fdp->fd_wqkqueue) {
+		dealloc_kq = fdp->fd_wqkqueue;
+		fdp->fd_wqkqueue = NULL;
+	}
+	   
 	proc_fdunlock(p);
+
+	/* Anything to free? */
+	if (dealloc_kq)
+		kqueue_dealloc(dealloc_kq);
 }
 
 
@@ -4892,10 +4934,6 @@ fdcopy(proc_t p, vnode_t uth_cdir)
 				if (*fpp == NULL && i == newfdp->fd_lastfile && i > 0)
 					newfdp->fd_lastfile--;
 			}
-			newfdp->fd_knlist = NULL;
-			newfdp->fd_knlistsize = -1;
-			newfdp->fd_knhash = NULL;
-			newfdp->fd_knhashmask = 0;
 		}
 		fpp = newfdp->fd_ofiles;
 		flags = newfdp->fd_ofileflags;
@@ -4931,6 +4969,20 @@ fdcopy(proc_t p, vnode_t uth_cdir)
 	}
 
 	proc_fdunlock(p);
+
+	/*
+	 * Initialize knote and kqueue tracking structs
+	 */
+	newfdp->fd_knlist = NULL;
+	newfdp->fd_knlistsize = -1;
+	newfdp->fd_knhash = NULL;
+	newfdp->fd_knhashmask = 0;
+	newfdp->fd_kqhash = NULL;
+	newfdp->fd_kqhashmask = 0;
+	newfdp->fd_wqkqueue = NULL;
+	lck_mtx_init(&newfdp->fd_kqhashlock, proc_kqhashlock_grp, proc_lck_attr);
+	lck_mtx_init(&newfdp->fd_knhashlock, proc_knhashlock_grp, proc_lck_attr);
+
 	return (newfdp);
 }
 
@@ -4954,6 +5006,7 @@ fdfree(proc_t p)
 {
 	struct filedesc *fdp;
 	struct fileproc *fp;
+	struct kqueue *dealloc_kq = NULL;
 	int i;
 
 	proc_fdlock(p);
@@ -4968,13 +5021,17 @@ fdfree(proc_t p)
 	if (&filedesc0 == fdp)
 		panic("filedesc0");
 
+	/* 
+	 * deallocate all the knotes up front and claim empty
+	 * tables to make any subsequent kqueue closes faster.
+	 */
+	knotes_dealloc(p);
+	assert(fdp->fd_knlistsize == -1);
+	assert(fdp->fd_knhashmask == 0);
+
+	/* close file descriptors */
 	if (fdp->fd_nfiles > 0 && fdp->fd_ofiles) {
 		for (i = fdp->fd_lastfile; i >= 0; i--) {
-
-			/* May still have knotes for fd without open file */
-			if (i < fdp->fd_knlistsize)
-				knote_fdclose(p, i, TRUE);
-
 			if ((fp = fdp->fd_ofiles[i]) != NULL) {
 
 			  if (fdp->fd_ofileflags[i] & UF_RESERVED)
@@ -4993,10 +5050,18 @@ fdfree(proc_t p)
 		fdp->fd_nfiles = 0;
 	}
 
+	if (fdp->fd_wqkqueue) {
+		dealloc_kq = fdp->fd_wqkqueue;
+		fdp->fd_wqkqueue = NULL;
+	}
+
 	proc_fdunlock(p);
 
+	if (dealloc_kq)
+		kqueue_dealloc(dealloc_kq);
+
 	if (fdp->fd_cdir)
-	        vnode_rele(fdp->fd_cdir);
+		vnode_rele(fdp->fd_cdir);
 	if (fdp->fd_rdir)
 		vnode_rele(fdp->fd_rdir);
 
@@ -5004,10 +5069,14 @@ fdfree(proc_t p)
 	p->p_fd = NULL;
 	proc_fdunlock(p);
 
-	if (fdp->fd_knlist)
-		FREE(fdp->fd_knlist, M_KQUEUE);
-	if (fdp->fd_knhash)
-		FREE(fdp->fd_knhash, M_KQUEUE);
+	if (fdp->fd_kqhash) {
+		for (uint32_t j = 0; j <= fdp->fd_kqhashmask; j++)
+			assert(SLIST_EMPTY(&fdp->fd_kqhash[j]));
+		FREE(fdp->fd_kqhash, M_KQUEUE);
+	}
+
+	lck_mtx_destroy(&fdp->fd_kqhashlock, proc_kqhashlock_grp);
+	lck_mtx_destroy(&fdp->fd_knhashlock, proc_knhashlock_grp);
 
 	FREE_ZONE(fdp, sizeof(*fdp), M_FILEDESC);
 }
@@ -5437,6 +5506,7 @@ fileport_makefd(proc_t p, struct fileport_makefd_args *uap, int32_t *retval)
 	err = fdalloc(p, 0, &fd);
 	if (err != 0) {
 		proc_fdunlock(p);
+		fg_drop(fp);
 		goto out;
 	}
 	*fdflags(p, fd) |= UF_EXCLOSE;
@@ -5885,9 +5955,10 @@ fo_close(struct fileglob *fg, vfs_context_t ctx)
  *		!0				Filter is active
  */
 int
-fo_kqfilter(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
+fo_kqfilter(struct fileproc *fp, struct knote *kn,
+		struct kevent_internal_s *kev, vfs_context_t ctx)
 {
-        return ((*fp->f_ops->fo_kqfilter)(fp, kn, ctx));
+        return ((*fp->f_ops->fo_kqfilter)(fp, kn, kev, ctx));
 }
 
 /*
@@ -5904,6 +5975,7 @@ file_issendable(proc_t p, struct fileproc *fp)
 	case DTYPE_SOCKET:
 	case DTYPE_PIPE:
 	case DTYPE_PSXSHM:
+	case DTYPE_NETPOLICY:
 		return (0 == (fp->f_fglob->fg_lflags & FG_CONFINED));
 	default:
 		/* DTYPE_KQUEUE, DTYPE_FSEVENTS, DTYPE_PSXSEM */

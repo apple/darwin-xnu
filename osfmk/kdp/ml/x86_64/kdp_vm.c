@@ -44,10 +44,10 @@ static const x86_state_hdr_t thread_flavor_array [] = {
 };
 
 void
-kern_collectth_state_size(uint32_t * tstate_count, size_t * ptstate_size)
+kern_collectth_state_size(uint64_t * tstate_count, uint64_t * ptstate_size)
 {
 	unsigned int i;
-	size_t tstate_size = 0;
+	uint64_t tstate_size = 0;
 
 	for (i = 0; i < sizeof(thread_flavor_array)/sizeof(thread_flavor_array[0]); i++)
 		tstate_size += sizeof(x86_state_hdr_t) +
@@ -58,11 +58,10 @@ kern_collectth_state_size(uint32_t * tstate_count, size_t * ptstate_size)
 }
 
 void
-kern_collectth_state(thread_t thread, void *buffer, size_t size, void ** iter)
+kern_collectth_state(thread_t thread, void *buffer, uint64_t size, void ** iter)
 {
 	size_t		hoffset;
-	size_t 		tstate_size;
-        uint32_t        tstate_count;
+	uint64_t 	tstate_size, tstate_count;
 	unsigned int	i;
 	struct thread_command	*tc;
 	

@@ -97,12 +97,25 @@ lck_grp_attr_t          timer_longterm_lck_grp_attr;
  * is responsible for moving each timer to its local timer queue
  * if and when that timer becomes due within the threshold.
  */
+
+/* Sentinel for "no time set": */
 #define TIMER_LONGTERM_NONE		EndOfAllTime
+/* The default threadhold is the delta above which a timer is "long-term" */ 
 #if defined(__x86_64__)
-#define	TIMER_LONGTERM_THRESHOLD	(1ULL * NSEC_PER_SEC)
+#define	TIMER_LONGTERM_THRESHOLD	(1ULL * NSEC_PER_SEC)	/* 1 sec */
 #else
-#define	TIMER_LONGTERM_THRESHOLD	TIMER_LONGTERM_NONE
+#define	TIMER_LONGTERM_THRESHOLD	TIMER_LONGTERM_NONE	/* disabled */
 #endif
+
+/*
+ * The scan limit throttles processing of the longterm queue.
+ * If the scan time exceeds this limit, we terminate, unlock 
+ * and repeat after this same interval. This prevents unbounded holding of
+ * timer queue locks with interrupts masked.
+ */
+#define TIMER_LONGTERM_SCAN_LIMIT	(1ULL * NSEC_PER_MSEC)	/* 1 msec */
+/* Sentinel for "scan limit exceeded": */
+#define TIMER_LONGTERM_SCAN_AGAIN	0
 
 typedef struct {
 	uint64_t	interval;	/* longterm timer interval */
@@ -127,9 +140,13 @@ typedef struct {
 	uint64_t	escalates;	/* num timers becoming shortterm */
 	uint64_t	scan_time;	/* last time the list was scanned */
 	threshold_t	threshold;	/* longterm timer threshold */
+	uint64_t	scan_limit;	/* maximum scan time */
+	uint64_t	scan_pauses;	/* num scans exceeding time limit */
 } timer_longterm_t;
 
-timer_longterm_t		timer_longterm;
+timer_longterm_t		timer_longterm = {
+					.scan_limit = TIMER_LONGTERM_SCAN_LIMIT,
+				};
 
 static mpqueue_head_t		*timer_longterm_queue = NULL;
 
@@ -503,6 +520,20 @@ timer_call_dequeue_unlocked(
 	return (old_queue);
 }
 
+static uint64_t
+past_deadline_timer_handle(uint64_t deadline, uint64_t ctime)
+{
+    uint64_t delta = (ctime - deadline);
+    
+    past_deadline_timers++;
+    past_deadline_deltas += delta;
+    if (delta > past_deadline_longest)
+	past_deadline_longest = deadline;
+    if (delta < past_deadline_shortest)
+	past_deadline_shortest = delta;
+
+    return (ctime + past_deadline_timer_adjustment);
+}
 
 /*
  * Timer call entry locking model
@@ -573,7 +604,7 @@ timer_call_enter_internal(
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
         	DECR_TIMER_ENTER | DBG_FUNC_START,
 	    VM_KERNEL_UNSLIDE_OR_PERM(call),
-	    VM_KERNEL_UNSLIDE_OR_PERM(param1), deadline, flags, 0); 
+	    VM_KERNEL_ADDRHIDE(param1), deadline, flags, 0);
 
 	urgency = (flags & TIMER_CALL_URGENCY_MASK);
 
@@ -590,16 +621,7 @@ timer_call_enter_internal(
 	}
 
 	if (__improbable(deadline < ctime)) {
-		uint64_t delta = (ctime - deadline);
-
-		past_deadline_timers++;
-		past_deadline_deltas += delta;
-		if (delta > past_deadline_longest)
-			past_deadline_longest = deadline;
-		if (delta < past_deadline_shortest)
-			past_deadline_shortest = delta;
-
-		deadline = ctime + past_deadline_timer_adjustment;
+		deadline = past_deadline_timer_handle(deadline, ctime);
 		sdeadline = deadline;
 	}
 
@@ -677,6 +699,81 @@ timer_call_enter_with_leeway(
 	boolean_t		ratelimited)
 {
 	return timer_call_enter_internal(call, param1, deadline, leeway, flags, ratelimited);
+}
+
+boolean_t 
+timer_call_quantum_timer_enter(
+	timer_call_t 		call,
+	timer_call_param_t	param1,
+	uint64_t 		deadline,
+	uint64_t		ctime)
+{
+	assert(call->call_entry.func != NULL);
+	assert(ml_get_interrupts_enabled() == FALSE);
+
+	uint32_t flags = TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL;
+
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_ENTER | DBG_FUNC_START,
+		VM_KERNEL_UNSLIDE_OR_PERM(call),
+		VM_KERNEL_ADDRHIDE(param1), deadline,
+		flags, 0); 
+	
+	if (__improbable(deadline < ctime)) {
+		deadline = past_deadline_timer_handle(deadline, ctime);
+	}
+
+	uint64_t ttd = deadline - ctime;
+#if CONFIG_DTRACE
+	DTRACE_TMR7(callout__create, timer_call_func_t, TCE(call)->func,
+		timer_call_param_t, TCE(call)->param0, uint32_t, flags, 0,
+		(ttd >> 32), (unsigned) (ttd & 0xFFFFFFFF), call);
+#endif
+	
+	quantum_timer_set_deadline(deadline);
+	TCE(call)->deadline = deadline;
+	TCE(call)->param1 = param1;
+	call->ttd = ttd;
+	call->flags = flags;
+
+#if TIMER_TRACE
+	TCE(call)->entry_time = ctime;
+#endif
+
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_ENTER | DBG_FUNC_END,
+		VM_KERNEL_UNSLIDE_OR_PERM(call),
+		1, deadline, 0, 0); 
+	
+	return true;
+}
+
+
+boolean_t
+timer_call_quantum_timer_cancel(
+	timer_call_t            call)
+{
+	assert(ml_get_interrupts_enabled() == FALSE);
+
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
+        	DECR_TIMER_CANCEL | DBG_FUNC_START,
+		VM_KERNEL_UNSLIDE_OR_PERM(call), TCE(call)->deadline, 
+		0, call->flags, 0);
+	
+	TCE(call)->deadline = 0;
+	quantum_timer_set_deadline(0);
+
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
+        	DECR_TIMER_CANCEL | DBG_FUNC_END,
+		VM_KERNEL_UNSLIDE_OR_PERM(call), 0,
+		TCE(call)->deadline - mach_absolute_time(),
+		TCE(call)->deadline - TCE(call)->entry_time, 0);
+	
+#if CONFIG_DTRACE
+	DTRACE_TMR6(callout__cancel, timer_call_func_t, TCE(call)->func,
+	    timer_call_param_t, TCE(call)->param0, uint32_t, call->flags, 0,
+	    (call->ttd >> 32), (unsigned) (call->ttd & 0xFFFFFFFF));
+#endif
+
+	return true;
 }
 
 boolean_t
@@ -782,17 +879,57 @@ timer_queue_shutdown(
 			timer_queue_shutdown_discarded++;
 		}
 
-		/* The only lingering LOCAL timer should be this thread's
-		 * quantum expiration timer.
-		 */
-		assert((call_local == FALSE) ||
-		    (TCE(call)->func == thread_quantum_expire));
-
+		assert(call_local == FALSE);
 		simple_unlock(&call->lock);
 	}
 
 	timer_queue_unlock(queue);
 	splx(s);
+}
+
+
+void
+quantum_timer_expire(
+	uint64_t		deadline)
+{
+	processor_t processor = current_processor();
+	timer_call_t call = TIMER_CALL(&(processor->quantum_timer));
+
+	if (__improbable(TCE(call)->deadline > deadline))
+		panic("CPU quantum timer deadlin out of sync with timer call deadline");
+
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
+	    DECR_TIMER_EXPIRE | DBG_FUNC_NONE,
+	    VM_KERNEL_UNSLIDE_OR_PERM(call),
+	    TCE(call)->deadline,
+	    TCE(call)->deadline,
+	    TCE(call)->entry_time, 0);
+	
+	timer_call_func_t func = TCE(call)->func;
+	timer_call_param_t param0 = TCE(call)->param0; 
+	timer_call_param_t param1 = TCE(call)->param1;
+	
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
+		DECR_TIMER_CALLOUT | DBG_FUNC_START,
+		VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_UNSLIDE(func),
+		VM_KERNEL_ADDRHIDE(param0),
+		VM_KERNEL_ADDRHIDE(param1),
+		0);
+
+#if CONFIG_DTRACE
+	DTRACE_TMR7(callout__start, timer_call_func_t, func,
+		timer_call_param_t, param0, unsigned, call->flags,
+		0, (call->ttd >> 32),
+		(unsigned) (call->ttd & 0xFFFFFFFF), call);
+#endif
+	(*func)(param0, param1);
+			
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
+		DECR_TIMER_CALLOUT | DBG_FUNC_END,
+		VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_UNSLIDE(func),
+		VM_KERNEL_ADDRHIDE(param0),
+		VM_KERNEL_ADDRHIDE(param1),
+		0);
 }
 
 static uint32_t	timer_queue_expire_lock_skips;
@@ -857,8 +994,8 @@ timer_queue_expire_with_options(
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 				DECR_TIMER_CALLOUT | DBG_FUNC_START,
 				VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_UNSLIDE(func),
-				VM_KERNEL_UNSLIDE_OR_PERM(param0),
-				VM_KERNEL_UNSLIDE_OR_PERM(param1),
+				VM_KERNEL_ADDRHIDE(param0),
+				VM_KERNEL_ADDRHIDE(param1),
 				0);
 
 #if CONFIG_DTRACE
@@ -882,8 +1019,8 @@ timer_queue_expire_with_options(
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 				DECR_TIMER_CALLOUT | DBG_FUNC_END,
 				VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_UNSLIDE(func),
-				VM_KERNEL_UNSLIDE_OR_PERM(param0),
-				VM_KERNEL_UNSLIDE_OR_PERM(param1),
+				VM_KERNEL_ADDRHIDE(param0),
+				VM_KERNEL_ADDRHIDE(param1),
 				0);
 			call = NULL;
 			timer_queue_lock_spin(queue);
@@ -1050,7 +1187,7 @@ timer_queue_trace_cpu(int ncpu)
 {
 	timer_call_nosync_cpu(
 		ncpu,
-		(void(*)())timer_queue_trace,
+		(void(*)(void *))timer_queue_trace,
 		(void*) timer_queue_cpu(ncpu));
 }
 
@@ -1193,24 +1330,26 @@ timer_longterm_enqueue_unlocked(timer_call_t	call,
  *    - enter on the local queue (unless being deleted), 
  *  - otherwise:
  *    - if sooner, deadline becomes the next threshold deadline.
+ * The total scan time is limited to TIMER_LONGTERM_SCAN_LIMIT. Should this be
+ * exceeded, we abort and reschedule again so that we don't shut others from
+ * the timer queues. Longterm timers firing late is not critical.
  */
 void
 timer_longterm_scan(timer_longterm_t	*tlp,
-		    uint64_t		now)
+		    uint64_t		time_start)
 {
 	queue_entry_t	qe;
 	timer_call_t	call;
 	uint64_t	threshold;
 	uint64_t	deadline;
+	uint64_t	time_limit = time_start + tlp->scan_limit;
 	mpqueue_head_t	*timer_master_queue;
 
 	assert(!ml_get_interrupts_enabled());
 	assert(cpu_number() == master_cpu);
 
 	if (tlp->threshold.interval != TIMER_LONGTERM_NONE)
-		threshold = now + tlp->threshold.interval;
-	else
-		threshold = TIMER_LONGTERM_NONE;
+		threshold = time_start + tlp->threshold.interval;
 
 	tlp->threshold.deadline = TIMER_LONGTERM_NONE;
 	tlp->threshold.call = NULL;
@@ -1245,12 +1384,12 @@ timer_longterm_scan(timer_longterm_t	*tlp,
 			 * to the local (boot) processor's queue.
 			 */
 #ifdef TIMER_ASSERT
-			if (deadline < now)
+			if (deadline < time_start)
 				TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
        		 			DECR_TIMER_OVERDUE | DBG_FUNC_NONE,
 					VM_KERNEL_UNSLIDE_OR_PERM(call),
 					deadline,
-					now,
+					time_start,
 					threshold,
 					0);
 #endif
@@ -1277,6 +1416,15 @@ timer_longterm_scan(timer_longterm_t	*tlp,
 			}
 		}
 		simple_unlock(&call->lock);
+
+		/* Abort scan if we're taking too long. */
+		if (mach_absolute_time() > time_limit) {
+			tlp->threshold.deadline = TIMER_LONGTERM_SCAN_AGAIN;
+			tlp->scan_pauses++;
+			DBG("timer_longterm_scan() paused %llu, qlen: %llu\n",
+			    time_limit, tlp->queue.count); 
+			break;
+		}
 	}
 
 	timer_queue_unlock(timer_master_queue);
@@ -1337,10 +1485,16 @@ timer_longterm_update_locked(timer_longterm_t *tlp)
 
 	tlp->threshold.deadline_set = tlp->threshold.deadline;
 	/* The next deadline timer to be set is adjusted */
-	if (tlp->threshold.deadline != TIMER_LONGTERM_NONE) {
+	if (tlp->threshold.deadline != TIMER_LONGTERM_NONE &&
+	    tlp->threshold.deadline != TIMER_LONGTERM_SCAN_AGAIN) {
 		tlp->threshold.deadline_set -= tlp->threshold.margin;
 		tlp->threshold.deadline_set -= tlp->threshold.latency;
 	}
+	
+	/* Throttle next scan time */
+	uint64_t scan_clamp = mach_absolute_time() + tlp->scan_limit;
+	if (tlp->threshold.deadline_set < scan_clamp)
+		tlp->threshold.deadline_set = scan_clamp;
 
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, 
 		DECR_TIMER_UPDATE | DBG_FUNC_END,
@@ -1423,7 +1577,7 @@ timer_longterm_init(void)
 enum {
 	THRESHOLD, QCOUNT,
 	ENQUEUES, DEQUEUES, ESCALATES, SCANS, PREEMPTS,
-	LATENCY, LATENCY_MIN, LATENCY_MAX
+	LATENCY, LATENCY_MIN, LATENCY_MAX, SCAN_LIMIT, PAUSES
 };
 uint64_t
 timer_sysctl_get(int oid)
@@ -1452,6 +1606,10 @@ timer_sysctl_get(int oid)
 		return tlp->threshold.latency_min;
 	case LATENCY_MAX:
 		return tlp->threshold.latency_max;
+	case SCAN_LIMIT:
+		return tlp->scan_limit;
+	case PAUSES:
+		return tlp->scan_pauses;
 	default:
 		return 0;
 	}
@@ -1563,6 +1721,7 @@ timer_sysctl_set_threshold(uint64_t value)
 	tlp->enqueues = 0;
 	tlp->dequeues = 0;
 	tlp->escalates = 0;
+	tlp->scan_pauses = 0;
 	tlp->threshold.scans = 0;
 	tlp->threshold.preempts = 0;
 	tlp->threshold.latency = 0;
@@ -1582,6 +1741,9 @@ timer_sysctl_set(int oid, uint64_t value)
 			master_cpu,
 			(void (*)(void *)) timer_sysctl_set_threshold,
 			(void *) value);
+		return KERN_SUCCESS;
+	case SCAN_LIMIT:
+		timer_longterm.scan_limit = value;
 		return KERN_SUCCESS;
 	default:
 		return KERN_INVALID_ARGUMENT;

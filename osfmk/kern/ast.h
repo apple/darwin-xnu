@@ -69,25 +69,28 @@
 #include <kern/spl.h>
 
 /*
- * A processor takes an AST when it is about to return from an
- * interrupt context, and calls ast_taken.
+ * A processor detects an AST when it is about to return from an
+ * interrupt context, and calls ast_taken_kernel or ast_taken_user
+ * depending on whether it was returning from userspace or kernelspace.
  *
  * Machine-dependent code is responsible for maintaining
- * a set of reasons for an AST, and passing this set to ast_taken.
+ * a set of reasons for an AST.
  */
-typedef uint32_t		ast_t;
+typedef uint32_t ast_t;
 
 /*
  * When returning from interrupt/trap context to kernel mode,
- * the pending ASTs are masked with AST_URGENT to determine if
- * ast_taken(AST_PREEMPTION) should be called, for instance to
- * effect preemption of a kernel thread by a realtime thread.
+ * if AST_URGENT is set, then ast_taken_kernel is called, for
+ * instance to effect preemption of a kernel thread by a realtime
+ * thread.
+ *
  * This is also done when re-enabling preemption or re-enabling
  * interrupts, since an AST may have been set while preemption
  * was disabled, and it should take effect as soon as possible.
  *
  * When returning from interrupt/trap/syscall context to user
- * mode, any and all ASTs that are pending should be handled.
+ * mode, any and all ASTs that are pending should be handled by
+ * calling ast_taken_user.
  *
  * If a thread context switches, only ASTs not in AST_PER_THREAD
  * remain active. The per-thread ASTs are stored in the thread_t
@@ -102,6 +105,8 @@ typedef uint32_t		ast_t;
 
 /*
  *      Bits for reasons
+ *      TODO: Split the context switch and return-to-user AST namespaces
+ *      NOTE: Some of these are exported as the 'reason' code in scheduler tracepoints
  */
 #define AST_PREEMPT		0x01
 #define AST_QUANTUM		0x02
@@ -121,6 +126,8 @@ typedef uint32_t		ast_t;
 #define AST_SFI			0x10000	/* Evaluate if SFI wait is needed before return to userspace */
 #define AST_DTRACE		0x20000
 #define AST_TELEMETRY_IO	0x40000 /* telemetry sample requested for I/O */
+#define AST_KEVENT		0x80000
+#define AST_REBALANCE           0x100000 /* thread context switched due to rebalancing */
 
 #define AST_NONE		0x00
 #define AST_ALL			(~AST_NONE)
@@ -132,15 +139,13 @@ typedef uint32_t		ast_t;
 #define AST_TELEMETRY_ALL	(AST_TELEMETRY_USER | AST_TELEMETRY_KERNEL | AST_TELEMETRY_IO)
 
 /* Per-thread ASTs follow the thread at context-switch time. */
-#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | AST_LEDGER | AST_GUARD | AST_TELEMETRY_ALL )
+#define AST_PER_THREAD	(AST_APC | AST_BSD | AST_MACF | AST_LEDGER | AST_GUARD | AST_TELEMETRY_ALL | AST_KEVENT)
 
-/* Initialize module */
-extern void		ast_init(void);
+/* Handle AST_URGENT detected while in the kernel */
+extern void ast_taken_kernel(void);
 
-/* Handle ASTs */
-extern void		ast_taken(
-					ast_t		mask,
-					boolean_t	enable);
+/* Handle an AST flag set while returning to user mode (may continue via thread_exception_return) */
+extern void ast_taken_user(void);
 
 /* Check for pending ASTs */
 extern void ast_check(processor_t processor);
@@ -154,10 +159,17 @@ extern void ast_on(ast_t reasons);
 /* Clear AST flags on current processor */
 extern void ast_off(ast_t reasons);
 
+/* Consume specified AST flags from current processor */
+extern ast_t ast_consume(ast_t reasons);
+
+/* Read specified AST flags from current processor */
+extern ast_t ast_peek(ast_t reasons);
+
 /* Re-set current processor's per-thread AST flags to those set on thread */
 extern void ast_context(thread_t thread);
 
-#define ast_propagate(reasons) ast_on(reasons)
+/* Propagate ASTs set on a thread to the current processor */
+extern void ast_propagate(thread_t thread);
 
 /*
  *	Set an AST on a thread with thread_ast_set.
@@ -179,6 +191,10 @@ extern void bsd_ast(thread_t);
 
 #ifdef CONFIG_DTRACE
 extern void ast_dtrace_on(void);
+extern void dtrace_ast(void);
 #endif /* CONFIG_DTRACE */
+
+extern void kevent_ast(thread_t thread, uint16_t bits);
+extern void act_set_astkevent(thread_t thread, uint16_t bits);
 
 #endif  /* _KERN_AST_H_ */

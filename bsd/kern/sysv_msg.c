@@ -67,6 +67,10 @@
 #include <sys/sysproto.h>
 #include <sys/ipcs.h>
 
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
+
 #if SYSV_MSG
 
 static int msginit(void *);
@@ -268,7 +272,7 @@ msginit(__unused void *dummy)
 	}
 
 	MALLOC(msqids, struct msqid_kernel *,
-			sizeof(struct user_msqid_ds) * msginfo.msgmni, 
+			sizeof(struct msqid_kernel) * msginfo.msgmni,
 			M_SHM, M_WAITOK);
 	if (msqids == NULL) {
 		printf("msginit: can't allocate msqids");

@@ -69,6 +69,7 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
+#include <sys/types.h> /* u_int32_t */
 #ifdef KERNEL_PRIVATE
 #include <kern/locks.h>
 #endif

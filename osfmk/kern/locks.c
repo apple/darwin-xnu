@@ -124,6 +124,14 @@ lck_grp_attr_t	LockDefaultGroupAttr;
 lck_grp_t		LockCompatGroup;
 lck_attr_t		LockDefaultLckAttr;
 
+#if CONFIG_DTRACE && __SMP__
+#if defined (__x86_64__)
+uint64_t dtrace_spin_threshold = 500; // 500ns
+#elif defined(__arm__) || defined(__arm64__)
+uint64_t dtrace_spin_threshold = LOCK_PANIC_TIMEOUT / 1000000; // 500ns
+#endif
+#endif
+
 /*
  * Routine:	lck_mod_init
  */
@@ -137,6 +145,12 @@ lck_mod_init(
 	 */
 	if (!PE_parse_boot_argn("lcks", &LcksOpts, sizeof (LcksOpts)))
 		LcksOpts = 0;
+
+
+#if (DEVELOPMENT || DEBUG) && defined(__x86_64__)
+	if (!PE_parse_boot_argn("-disable_mtx_chk", &LckDisablePreemptCheck, sizeof (LckDisablePreemptCheck)))
+		LckDisablePreemptCheck = 0;
+#endif /* (DEVELOPMENT || DEBUG) && defined(__x86_64__) */
 
 	queue_init(&lck_grp_queue);
 	
@@ -162,7 +176,6 @@ lck_mod_init(
 	lck_attr_setdefault(&LockDefaultLckAttr);
 	
 	lck_mtx_init_ext(&lck_grp_lock, &lck_grp_lock_ext, &LockCompatGroup, &LockDefaultLckAttr);
-	
 }
 
 /*
@@ -391,7 +404,10 @@ void
 lck_attr_setdefault(
 	lck_attr_t	*attr)
 {
-#if   __i386__ || __x86_64__
+#if __arm__ || __arm64__
+	/* <rdar://problem/4404579>: Using LCK_ATTR_DEBUG here causes panic at boot time for arm */
+	attr->lck_attr_val =  LCK_ATTR_NONE;
+#elif __i386__ || __x86_64__
 #if     !DEBUG
  	if (LcksOpts & enaLkDeb)
  		attr->lck_attr_val =  LCK_ATTR_DEBUG;
@@ -463,8 +479,8 @@ hw_lock_init(hw_lock_t lock)
  *	Routine: hw_lock_lock_contended
  *
  *	Spin until lock is acquired or timeout expires.
- *	timeout is in mach_absolute_time ticks.
- *	MACH_RT:  called with preemption disabled.
+ *	timeout is in mach_absolute_time ticks. Called with
+ *	preemption disabled.
  */
 
 #if	__SMP__
@@ -477,26 +493,35 @@ hw_lock_lock_contended(hw_lock_t lock, uintptr_t data, uint64_t timeout, boolean
 
 	if (timeout == 0)
 		timeout = LOCK_PANIC_TIMEOUT;
-
+#if CONFIG_DTRACE
+	uint64_t begin;
+	boolean_t dtrace_enabled = lockstat_probemap[LS_LCK_SPIN_LOCK_SPIN] != 0;
+	if (__improbable(dtrace_enabled))
+		begin = mach_absolute_time();
+#endif
 	for ( ; ; ) {	
 		for (i = 0; i < LOCK_SNOOP_SPINS; i++) {
-			boolean_t	wait = FALSE;
-
 			cpu_pause();
 #if (!__ARM_ENABLE_WFE_) || (LOCK_PRETEST)
 			holder = ordered_load_hw(lock);
 			if (holder != 0)
 				continue;
 #endif
-#if __ARM_ENABLE_WFE_
-			wait = TRUE;	// Wait for event
-#endif
 			if (atomic_compare_exchange(&lock->lock_data, 0, data,
-			    memory_order_acquire_smp, wait))
+			    memory_order_acquire_smp, TRUE)) {
+#if CONFIG_DTRACE
+				if (__improbable(dtrace_enabled)) {
+					uint64_t spintime = mach_absolute_time() - begin;
+					if (spintime > dtrace_spin_threshold)
+						LOCKSTAT_RECORD2(LS_LCK_SPIN_LOCK_SPIN, lock, spintime, dtrace_spin_threshold);
+				}
+#endif
 				return 1;
+			}
 		}
-		if (end == 0)
+		if (end == 0) {
 			end = ml_get_timebase() + timeout;
+		}
 		else if (ml_get_timebase() >= end)
 			break;
 	}
@@ -513,8 +538,8 @@ hw_lock_lock_contended(hw_lock_t lock, uintptr_t data, uint64_t timeout, boolean
 /*
  *	Routine: hw_lock_lock
  *
- *	Acquire lock, spinning until it becomes available.
- *	MACH_RT:  also return with preemption disabled.
+ *	Acquire lock, spinning until it becomes available,
+ *	return with preemption disabled.
  */
 void
 hw_lock_lock(hw_lock_t lock)
@@ -526,22 +551,28 @@ hw_lock_lock(hw_lock_t lock)
 	disable_preemption_for_thread(thread);
 	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
 #if	__SMP__
+
 #if	LOCK_PRETEST
 	if (ordered_load_hw(lock))
 		goto contended;
 #endif	// LOCK_PRETEST
 	if (atomic_compare_exchange(&lock->lock_data, 0, state,
-					memory_order_acquire_smp, TRUE))
-		return;
+					memory_order_acquire_smp, TRUE)) {
+		goto end;
+	}
 #if	LOCK_PRETEST
 contended:
 #endif	// LOCK_PRETEST
 	hw_lock_lock_contended(lock, state, 0, TRUE);
+end:
 #else	// __SMP__
 	if (lock->lock_data)
 		panic("Spinlock held %p", lock);
 	lock->lock_data = state;
 #endif	// __SMP__
+#if CONFIG_DTRACE
+	LOCKSTAT_RECORD(LS_LCK_SPIN_LOCK_ACQUIRE, lock, 0);
+#endif
 	return;
 }
 
@@ -549,43 +580,53 @@ contended:
  *	Routine: hw_lock_to
  *
  *	Acquire lock, spinning until it becomes available or timeout.
- *	timeout is in mach_absolute_time ticks.
- *	MACH_RT:  also return with preemption disabled.
+ *	Timeout is in mach_absolute_time ticks, return with
+ *	preemption disabled.
  */
 unsigned int
 hw_lock_to(hw_lock_t lock, uint64_t timeout)
 {
 	thread_t	thread;
 	uintptr_t	state;
+	unsigned int success = 0;
 
 	thread = current_thread();
 	disable_preemption_for_thread(thread);
 	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
 #if	__SMP__
+
 #if	LOCK_PRETEST
 	if (ordered_load_hw(lock))
 		goto contended;
 #endif	// LOCK_PRETEST
 	if (atomic_compare_exchange(&lock->lock_data, 0, state,
-					memory_order_acquire_smp, TRUE))
-		return 1;
+					memory_order_acquire_smp, TRUE)) {
+		success = 1;
+		goto end;
+	}
 #if	LOCK_PRETEST
 contended:
 #endif	// LOCK_PRETEST
-	return hw_lock_lock_contended(lock, state, timeout, FALSE);
+	success = hw_lock_lock_contended(lock, state, timeout, FALSE);
+end:
 #else	// __SMP__
 	(void)timeout;
 	if (ordered_load_hw(lock) == 0) {
 		ordered_store_hw(lock, state);
-		return 1;
+		success = 1;
 	}
-	return 0;
 #endif	// __SMP__
+#if CONFIG_DTRACE
+	if (success)
+		LOCKSTAT_RECORD(LS_LCK_SPIN_LOCK_ACQUIRE, lock, 0);
+#endif
+	return success;
 }
 
 /*
  *	Routine: hw_lock_try
- *	MACH_RT:  returns with preemption disabled on success.
+ *
+ *	returns with preemption disabled on success.
  */
 unsigned int
 hw_lock_try(hw_lock_t lock)
@@ -628,25 +669,34 @@ failed:
 	if (!success)
 		enable_preemption();
 #endif	// LOCK_TRY_DISABLE_INT
+#if CONFIG_DTRACE
+	if (success)
+		LOCKSTAT_RECORD(LS_LCK_SPIN_LOCK_ACQUIRE, lock, 0);
+#endif
 	return success;
 }
 
 /*
  *	Routine: hw_lock_unlock
  *
- *	Unconditionally release lock.
- *	MACH_RT:  release preemption level.
+ *	Unconditionally release lock, release preemption level.
  */
 void
 hw_lock_unlock(hw_lock_t lock)
 {
 	__c11_atomic_store((_Atomic uintptr_t *)&lock->lock_data, 0, memory_order_release_smp);
+#if __arm__ || __arm64__
+	// ARM tests are only for open-source exclusion
+	set_event();
+#endif	// __arm__ || __arm64__
+#if	CONFIG_DTRACE
+	LOCKSTAT_RECORD(LS_LCK_SPIN_UNLOCK_RELEASE, lock, 0);
+#endif /* CONFIG_DTRACE */
 	enable_preemption();
 }
 
 /*
- *	RoutineL hw_lock_held
- *	MACH_RT:  doesn't change preemption state.
+ *	Routine hw_lock_held, doesn't change preemption state.
  *	N.B.  Racy, of course.
  */
 unsigned int
@@ -785,6 +835,8 @@ lck_mtx_sleep(
 		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK)) {
 			if ((lck_sleep_action & LCK_SLEEP_SPIN))
 				lck_mtx_lock_spin(lck);
+			else if ((lck_sleep_action & LCK_SLEEP_SPIN_ALWAYS))
+				lck_mtx_lock_spin_always(lck);
 			else
 				lck_mtx_lock(lck);
 		}
@@ -939,7 +991,7 @@ lck_mtx_lock_wait (
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_END, 0, 0, 0, 0, 0);
 #if	CONFIG_DTRACE
 	/*
-	 * Record the Dtrace lockstat probe for blocking, block time
+	 * Record the DTrace lockstat probe for blocking, block time
 	 * measured from when we were entered.
 	 */
 	if (sleep_start) {

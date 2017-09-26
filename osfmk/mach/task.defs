@@ -118,11 +118,18 @@ routine	mach_ports_lookup(
 /*
  *      Returns information about the target task.
  */
+#ifdef KERNEL_SERVER
+routine task_info_from_user(
+                target_task     : mach_port_t;
+                flavor          : task_flavor_t;
+        out     task_info_out   : task_info_t, CountInOut);
+#else
 routine task_info(
                 target_task     : task_name_t;
                 flavor          : task_flavor_t;
         out     task_info_out   : task_info_t, CountInOut);
 
+#endif
 /*
  * Set task information.
  */
@@ -491,6 +498,11 @@ routine task_map_corpse_info_64(
 		corspe_task	:task_t;
 	out	kcd_addr_begin	:mach_vm_address_t;
 	out	kcd_size	:mach_vm_size_t);
+
+routine task_inspect(
+	    task     : task_inspect_t;
+	    flavor   : task_inspect_flavor_t;
+	out info_out : task_inspect_info_t, CountInOut);
 
 /* vim: set ft=c : */
 

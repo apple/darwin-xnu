@@ -170,50 +170,30 @@ extern unsigned int mac_label_mbufs;
 
 extern unsigned int mac_label_vnodes;
 
-static int mac_proc_check_enforce(proc_t p, int enforce_flags);
+static bool mac_proc_check_enforce(proc_t p);
 
-static __inline__ int mac_proc_check_enforce(proc_t p, int enforce_flags)
+static __inline__ bool mac_proc_check_enforce(proc_t p)
 {
 #if CONFIG_MACF
-#if SECURITY_MAC_CHECK_ENFORCE // 21167099 - only check if we allow write
-    return ((p->p_mac_enforce & enforce_flags) != 0);
+	// Don't apply policies to the kernel itself.
+	return (p != kernproc);
 #else
-#pragma unused(p,enforce_flags)
-    return 1;
-#endif // SECURITY_MAC_CHECK_ENFORCE
-#else
-#pragma unused(p,enforce_flags)
-	return 0;
+#pragma unused(p)
+	return false;
 #endif // CONFIG_MACF
 }
 
-static int mac_context_check_enforce(vfs_context_t ctx, int enforce_flags);
-static void mac_context_set_enforce(vfs_context_t ctx, int enforce_flags);
+static bool mac_cred_check_enforce(kauth_cred_t cred);
 
-static __inline__ int mac_context_check_enforce(vfs_context_t ctx, int enforce_flags)
-{
-	proc_t proc = vfs_context_proc(ctx);
-
-	if (proc == NULL)
-		return 0;
-
-	return (mac_proc_check_enforce(proc, enforce_flags));
-}
-
-static __inline__ void mac_context_set_enforce(vfs_context_t ctx, int enforce_flags)
+static __inline__ bool mac_cred_check_enforce(kauth_cred_t cred)
 {
 #if CONFIG_MACF
-	proc_t proc = vfs_context_proc(ctx);
-
-	if (proc == NULL)
-		return;
-
-	mac_proc_set_enforce(proc, enforce_flags);
+	return (cred != proc_ucred(kernproc));
 #else
-#pragma unused(ctx,enforce_flags)
-#endif
+#pragma unused(p)
+	return false;
+#endif // CONFIG_MACF
 }
-
 
 /*
  * MAC Framework infrastructure functions.

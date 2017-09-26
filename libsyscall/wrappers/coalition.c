@@ -50,3 +50,14 @@ int coalition_info_resource_usage(uint64_t cid, struct coalition_resource_usage 
 {
 	return __coalition_info(COALITION_INFO_RESOURCE_USAGE, &cid, cru, &sz);
 }
+
+int coalition_info_set_name(uint64_t cid, const char *name, size_t size)
+{
+	return __coalition_info(COALITION_INFO_SET_NAME, &cid, (void *)name, &size);
+}
+
+int coalition_info_set_efficiency(uint64_t cid, uint64_t flags)
+{
+    size_t size = sizeof(flags);
+    return __coalition_info(COALITION_INFO_SET_EFFICIENCY, &cid, (void *)&flags, &size);
+}

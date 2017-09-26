@@ -75,13 +75,20 @@ typedef struct fasttrap_probe_spec {
 #if defined(__APPLE__)
 	fasttrap_provider_type_t	ftps_provider_type;
 	fasttrap_probe_type_t		ftps_probe_type;
+#if defined(__arm__) || defined(__arm64__)
+	uint32_t			ftps_arch_subinfo;	// For any additional per probe architecture specific data
+#endif
 #endif
 	char				ftps_func[DTRACE_FUNCNAMELEN];
 	char				ftps_mod[DTRACE_MODNAMELEN];
 
 #if defined(__APPLE__)
+#if defined(__arm__) || defined(__arm64__)
+	// We already have 'padding' from the ftps_arch_subinfo above
+#else
 #if !defined(__LP64__)
 	uint32_t			pad; /* Explicit pad to keep ILP32 and LP64 lined up. */
+#endif
 #endif
 #endif
 	uint64_t			ftps_pc;

@@ -116,6 +116,7 @@
  */
 
 
+#include <stdatomic.h>
 #include <kern/assert.h>
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
@@ -128,6 +129,7 @@
 #include <kern/kalloc.h>
 #include <kern/kern_cdata.h>
 #include <mach/mach_vm.h>
+#include <kern/exc_guard.h>
 
 #if CONFIG_MACF
 #include <security/mac_mach_internal.h>
@@ -138,26 +140,32 @@
  */
 #include <mach/task_server.h>
 
-unsigned long  total_corpses_count = 0;
+union corpse_creation_gate {
+	struct {
+		uint16_t user_faults;
+		uint16_t corpses;
+	};
+	uint32_t value;
+};
+
+static _Atomic uint32_t inflight_corpses;
 unsigned long  total_corpses_created = 0;
 boolean_t corpse_enabled_config = TRUE;
 
 /* bootarg to turn on corpse forking for EXC_RESOURCE */
 int exc_via_corpse_forking = 1;
 
-/* bootarg to unify corpse blob allocation */
-int unify_corpse_blob_alloc = 1;
-
 /* bootarg to generate corpse for fatal high memory watermark violation */
 int corpse_for_fatal_memkill = 1;
 
-kcdata_descriptor_t task_get_corpseinfo(task_t task);
-kcdata_descriptor_t task_crashinfo_alloc_init(mach_vm_address_t crash_data_p, unsigned size, int get_corpseref, unsigned flags);
-kern_return_t task_crashinfo_destroy(kcdata_descriptor_t data, int release_corpseref);
-static kern_return_t task_crashinfo_get_ref();
-static kern_return_t task_crashinfo_release_ref();
+#ifdef	__arm__
+static inline int IS_64BIT_PROCESS(__unused void *p) { return 0; }
+#else
 extern int IS_64BIT_PROCESS(void *);
-extern void gather_populate_corpse_crashinfo(void *p, void *crash_info_ptr, mach_exception_data_type_t code, mach_exception_data_type_t subcode, uint64_t *udata_buffer, int num_udata);
+#endif /* __arm__ */
+extern void gather_populate_corpse_crashinfo(void *p, task_t task,
+		mach_exception_data_type_t code, mach_exception_data_type_t subcode,
+		uint64_t *udata_buffer, int num_udata, void *reason);
 extern void *proc_find(int pid);
 extern int proc_rele(void *p);
 
@@ -165,16 +173,12 @@ extern int proc_rele(void *p);
 void corpses_init(){
 	char temp_buf[20];
 	int exc_corpse_forking;
-	int corpse_blob_alloc;
 	int fatal_memkill;
 	if (PE_parse_boot_argn("-no_corpses", temp_buf, sizeof(temp_buf))) {
 		corpse_enabled_config = FALSE;
 	}
 	if (PE_parse_boot_argn("exc_via_corpse_forking", &exc_corpse_forking, sizeof(exc_corpse_forking))) {
 		exc_via_corpse_forking = exc_corpse_forking;
-	}
-	if (PE_parse_boot_argn("unify_corpse_blob_alloc", &corpse_blob_alloc, sizeof(corpse_blob_alloc))) {
-		unify_corpse_blob_alloc = corpse_blob_alloc;
 	}
 	if (PE_parse_boot_argn("corpse_for_fatal_memkill", &fatal_memkill, sizeof(fatal_memkill))) {
 		corpse_for_fatal_memkill = fatal_memkill;
@@ -190,57 +194,115 @@ boolean_t corpses_enabled()
 	return corpse_enabled_config;
 }
 
+unsigned long
+total_corpses_count(void)
+{
+	union corpse_creation_gate gate;
+
+	gate.value = atomic_load_explicit(&inflight_corpses, memory_order_relaxed);
+	return gate.corpses;
+}
+
 /*
  * Routine: task_crashinfo_get_ref()
  *          Grab a slot at creating a corpse.
  * Returns: KERN_SUCCESS if the policy allows for creating a corpse.
  */
-kern_return_t task_crashinfo_get_ref()
+static kern_return_t
+task_crashinfo_get_ref(uint16_t kcd_u_flags)
 {
-	unsigned long counter = total_corpses_count;
-	counter = OSIncrementAtomic((SInt32 *)&total_corpses_count);
-	if (counter >= TOTAL_CORPSES_ALLOWED) {
-		OSDecrementAtomic((SInt32 *)&total_corpses_count);
-		return KERN_RESOURCE_SHORTAGE;
+	union corpse_creation_gate oldgate, newgate;
+
+	assert(kcd_u_flags & CORPSE_CRASHINFO_HAS_REF);
+
+	oldgate.value = atomic_load_explicit(&inflight_corpses, memory_order_relaxed);
+	for (;;) {
+		newgate = oldgate;
+		if (kcd_u_flags & CORPSE_CRASHINFO_USER_FAULT) {
+			if (newgate.user_faults++ >= TOTAL_USER_FAULTS_ALLOWED) {
+				return KERN_RESOURCE_SHORTAGE;
+			}
+		}
+		if (newgate.corpses++ >= TOTAL_CORPSES_ALLOWED) {
+			return KERN_RESOURCE_SHORTAGE;
+		}
+
+		// this reloads the value in oldgate
+		if (atomic_compare_exchange_strong_explicit(&inflight_corpses,
+				&oldgate.value, newgate.value, memory_order_relaxed,
+				memory_order_relaxed)) {
+			return KERN_SUCCESS;
+		}
 	}
-	OSIncrementAtomicLong((volatile long *)&total_corpses_created);
-	return KERN_SUCCESS;
 }
 
 /*
  * Routine: task_crashinfo_release_ref
  *          release the slot for corpse being used.
  */
-kern_return_t task_crashinfo_release_ref()
+static kern_return_t
+task_crashinfo_release_ref(uint16_t kcd_u_flags)
 {
-	unsigned long __assert_only counter;
-	counter =	OSDecrementAtomic((SInt32 *)&total_corpses_count);
-	assert(counter > 0);
-	return KERN_SUCCESS;
+	union corpse_creation_gate oldgate, newgate;
+
+	assert(kcd_u_flags & CORPSE_CRASHINFO_HAS_REF);
+
+	oldgate.value = atomic_load_explicit(&inflight_corpses, memory_order_relaxed);
+	for (;;) {
+		newgate = oldgate;
+		if (kcd_u_flags & CORPSE_CRASHINFO_USER_FAULT) {
+			if (newgate.user_faults-- == 0) {
+				panic("corpse in flight count over-release");
+			}
+		}
+		if (newgate.corpses-- == 0) {
+			panic("corpse in flight count over-release");
+		}
+		// this reloads the value in oldgate
+		if (atomic_compare_exchange_strong_explicit(&inflight_corpses,
+				&oldgate.value, newgate.value, memory_order_relaxed,
+				memory_order_relaxed)) {
+			return KERN_SUCCESS;
+		}
+	}
 }
 
 
-kcdata_descriptor_t task_crashinfo_alloc_init(mach_vm_address_t crash_data_p, unsigned size, int get_corpseref, unsigned flags)
+kcdata_descriptor_t
+task_crashinfo_alloc_init(mach_vm_address_t crash_data_p, unsigned size,
+		uint32_t kc_u_flags, unsigned kc_flags)
 {
-	if(get_corpseref && KERN_SUCCESS != task_crashinfo_get_ref()) {
-		return NULL;
+	kcdata_descriptor_t kcdata;
+
+	if (kc_u_flags & CORPSE_CRASHINFO_HAS_REF) {
+		if (KERN_SUCCESS != task_crashinfo_get_ref(kc_u_flags)) {
+			return NULL;
+		}
 	}
 
-	return kcdata_memory_alloc_init(crash_data_p, TASK_CRASHINFO_BEGIN, size, flags);
+	kcdata = kcdata_memory_alloc_init(crash_data_p, TASK_CRASHINFO_BEGIN, size,
+			kc_flags);
+	if (kcdata) {
+		kcdata->kcd_user_flags = kc_u_flags;
+	} else if (kc_u_flags & CORPSE_CRASHINFO_HAS_REF) {
+		task_crashinfo_release_ref(kc_u_flags);
+	}
+	return kcdata;
 }
 
 
 /*
  * Free up the memory associated with task_crashinfo_data
  */
-kern_return_t task_crashinfo_destroy(kcdata_descriptor_t data, int release_corpseref)
+kern_return_t
+task_crashinfo_destroy(kcdata_descriptor_t data)
 {
 	if (!data) {
 		return KERN_INVALID_ARGUMENT;
 	}
-
-	if (release_corpseref)
-		task_crashinfo_release_ref();
+	if (data->kcd_user_flags & CORPSE_CRASHINFO_HAS_REF) {
+		task_crashinfo_release_ref(data->kcd_user_flags);
+	}
 	return kcdata_memory_destroy(data);
 }
 
@@ -301,10 +363,15 @@ task_purge_all_corpses(void)
 	/* Iterate through all the corpse tasks and clear all map entries */
 	queue_iterate(&corpse_tasks, task, task_t, corpse_tasks) {
 		vm_map_remove(task->map,
-		      task->map->min_offset,
-		      task->map->max_offset,
-		      /* no unnesting on final cleanup: */
-		      VM_MAP_REMOVE_NO_UNNESTING);
+			      task->map->min_offset,
+			      task->map->max_offset,
+			      /*
+			       * Final cleanup:
+			       * + no unnesting
+			       * + remove immutable mappings
+			       */
+			      (VM_MAP_REMOVE_NO_UNNESTING |
+			       VM_MAP_REMOVE_IMMUTABLE));
 	}
 
 	lck_mtx_unlock(&tasks_corpse_lock);
@@ -316,7 +383,7 @@ task_purge_all_corpses(void)
  *         corpse_task - task port of the generated corpse
  * returns: KERN_SUCCESS on Success.
  *          KERN_FAILURE on Failure.
- *          KERN_NO_SUPPORTED on corpse disabled.
+ *          KERN_NOT_SUPPORTED on corpse disabled.
  *          KERN_RESOURCE_SHORTAGE on memory alloc failure or reaching max corpse.
  */
 kern_return_t
@@ -342,7 +409,7 @@ task_generate_corpse(
 	task_unlock(task);
 
 	/* Generate a corpse for the given task, will return with a ref on corpse task */
-	kr = task_generate_corpse_internal(task, &new_task, &thread, 0, 0);
+	kr = task_generate_corpse_internal(task, &new_task, &thread, 0, 0, 0, NULL);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}
@@ -379,34 +446,42 @@ task_generate_corpse(
 /*
  * Routine: task_enqueue_exception_with_corpse
  * params: task - task to generate a corpse and enqueue it
+ *         etype - EXC_RESOURCE or EXC_GUARD
  *         code - exception code to be enqueued
  *         codeCnt - code array count - code and subcode
+ *
+ * returns: KERN_SUCCESS on Success.
+ *          KERN_FAILURE on Failure.
+ *          KERN_INVALID_ARGUMENT on invalid arguments passed.
+ *          KERN_NOT_SUPPORTED on corpse disabled.
+ *          KERN_RESOURCE_SHORTAGE on memory alloc failure or reaching max corpse.
  */
-void
+kern_return_t
 task_enqueue_exception_with_corpse(
 	task_t task,
+	exception_type_t etype,
 	mach_exception_data_t code,
-	mach_msg_type_number_t codeCnt)
+	mach_msg_type_number_t codeCnt,
+	void *reason)
 {
 	task_t new_task = TASK_NULL;
 	thread_t thread = THREAD_NULL;
 	kern_return_t kr;
 
 	if (codeCnt < 2) {
-		return;
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	/* Generate a corpse for the given task, will return with a ref on corpse task */
-	kr = task_generate_corpse_internal(task, &new_task, &thread, code[0], code[1]);
-	if (kr != KERN_SUCCESS) {
-		return;
+	kr = task_generate_corpse_internal(task, &new_task, &thread,
+			etype, code[0], code[1], reason);
+	if (kr == KERN_SUCCESS) {
+		assert(thread != THREAD_NULL);
+		assert(new_task != TASK_NULL);
+		assert(etype == EXC_RESOURCE || etype == EXC_GUARD);
+		thread_exception_enqueue(new_task, thread, etype);
 	}
-
-	assert(thread != THREAD_NULL);
-	assert(new_task != TASK_NULL);
-	thread_exception_enqueue(new_task, thread);
-
-	return;
+	return kr;
 }
 
 /*
@@ -414,11 +489,12 @@ task_enqueue_exception_with_corpse(
  * params: task - task to fork a corpse
  *         corpse_task - task of the generated corpse
  *         exc_thread - equivalent thread in corpse enqueuing exception
+ *         etype - EXC_RESOURCE or EXC_GUARD or 0
  *         code - mach exception code to be passed in corpse blob
- *         subcode - mach excpetion subcode to be passed in corpse blob
+ *         subcode - mach exception subcode to be passed in corpse blob
  * returns: KERN_SUCCESS on Success.
  *          KERN_FAILURE on Failure.
- *          KERN_NO_SUPPORTED on corpse disabled.
+ *          KERN_NOT_SUPPORTED on corpse disabled.
  *          KERN_RESOURCE_SHORTAGE on memory alloc failure or reaching max corpse.
  */
 kern_return_t
@@ -426,8 +502,10 @@ task_generate_corpse_internal(
 	task_t task,
 	task_t *corpse_task,
 	thread_t *exc_thread,
+	exception_type_t etype,
 	mach_exception_data_type_t code,
-	mach_exception_data_type_t subcode)
+	mach_exception_data_type_t subcode,
+	void *reason)
 {
 	task_t new_task = TASK_NULL;
 	thread_t thread = THREAD_NULL;
@@ -439,17 +517,24 @@ task_generate_corpse_internal(
 	uint64_t *udata_buffer = NULL;
 	int size = 0;
 	int num_udata = 0;
-	boolean_t release_corpse_ref = FALSE;
+	uint16_t kc_u_flags = CORPSE_CRASHINFO_HAS_REF;
 
+#if CONFIG_MACF
+	struct label *label = NULL;
+#endif
+	
 	if (!corpses_enabled()) {
 		return KERN_NOT_SUPPORTED;
 	}
 
-	kr = task_crashinfo_get_ref();
+	if (etype == EXC_GUARD && EXC_GUARD_DECODE_GUARD_TYPE(code) == GUARD_TYPE_USER) {
+		kc_u_flags |= CORPSE_CRASHINFO_USER_FAULT;
+	}
+
+	kr = task_crashinfo_get_ref(kc_u_flags);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}
-	release_corpse_ref = TRUE;
 
 	/* Having a task reference does not guarantee a proc reference */
 	p = proc_find(task_pid(task));
@@ -460,6 +545,11 @@ task_generate_corpse_internal(
 
 	is64bit = IS_64BIT_PROCESS(p);
 	t_flags = TF_CORPSE_FORK | TF_PENDING_CORPSE | TF_CORPSE | (is64bit ? TF_64B_ADDR : TF_NONE);
+
+#if CONFIG_MACF
+	/* Create the corpse label credentials from the process. */
+	label = mac_exc_create_label_for_proc(p);
+#endif
 
 	/* Create a task for corpse */
 	kr = task_create_internal(task,
@@ -480,13 +570,19 @@ task_generate_corpse_internal(
 		goto error_task_generate_corpse;
 	}
 
-	kr = task_collect_crash_info(new_task, p, TRUE);
+	kr = task_collect_crash_info(new_task,
+#if CONFIG_MACF
+								 label,
+#endif
+								 TRUE);
 	if (kr != KERN_SUCCESS) {
 		goto error_task_generate_corpse;
 	}
 
-	/* The corpse_info field in task in initialized, call to task_deallocate will drop corpse ref */
-	release_corpse_ref = FALSE;
+	/* transfer our references to the corpse info */
+	assert(new_task->corpse_info->kcd_user_flags == 0);
+	new_task->corpse_info->kcd_user_flags = kc_u_flags;
+	kc_u_flags = 0;
 
 	kr = task_start_halt(new_task);
 	if (kr != KERN_SUCCESS) {
@@ -497,7 +593,8 @@ task_generate_corpse_internal(
 	ipc_space_terminate(new_task->itk_space);
 
 	/* Populate the corpse blob, use the proc struct of task instead of corpse task */
-	gather_populate_corpse_crashinfo(p, task_get_corpseinfo(new_task), code, subcode, udata_buffer, num_udata);
+	gather_populate_corpse_crashinfo(p, new_task,
+			code, subcode, udata_buffer, num_udata, reason);
 
 	/* Add it to global corpse task list */
 	task_add_to_corpse_task_list(new_task);
@@ -506,6 +603,12 @@ task_generate_corpse_internal(
 	*exc_thread = thread;
 
 error_task_generate_corpse:
+#if CONFIG_MACF
+	if (label) {
+		mac_exc_free_label(label);
+	}
+#endif
+	
 	/* Release the proc reference */
 	if (p != NULL) {
 		proc_rele(p);
@@ -530,8 +633,8 @@ error_task_generate_corpse:
 			task_terminate_internal(new_task);
 			task_deallocate(new_task);
 		}
-		if (release_corpse_ref) {
-			task_crashinfo_release_ref();
+		if (kc_u_flags) {
+			task_crashinfo_release_ref(kc_u_flags);
 		}
 	}
 	/* Free the udata buffer allocated in task_duplicate_map_and_threads */
@@ -594,23 +697,31 @@ task_map_corpse_info_64(
 	kern_return_t kr;
 	mach_vm_offset_t crash_data_ptr = 0;
 	mach_vm_size_t size = CORPSEINFO_ALLOCATION_SIZE;
+	void *corpse_info_kernel = NULL;
 
 	if (task == TASK_NULL || task_is_a_corpse_fork(task)) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	if (corpse_task == TASK_NULL || !task_is_a_corpse(corpse_task) ||
-	    corpse_task->corpse_info == NULL || corpse_task->corpse_info_kernel == NULL) {
+	    kcdata_memory_get_begin_addr(corpse_task->corpse_info) == NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
-	kr = mach_vm_allocate(task->map, &crash_data_ptr, size,
-			(VM_MAKE_TAG(VM_MEMORY_CORPSEINFO) | VM_FLAGS_ANYWHERE));
+	corpse_info_kernel = kcdata_memory_get_begin_addr(corpse_task->corpse_info);
+	kr = mach_vm_allocate_kernel(task->map, &crash_data_ptr, size,
+			VM_FLAGS_ANYWHERE, VM_MEMORY_CORPSEINFO);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}
-	copyout(corpse_task->corpse_info_kernel, crash_data_ptr, size);
+	copyout(corpse_info_kernel, crash_data_ptr, size);
 	*kcd_addr_begin = crash_data_ptr;
 	*kcd_size = size;
 
 	return KERN_SUCCESS;
+}
+
+uint64_t
+task_corpse_get_crashed_thread_id(task_t corpse_task)
+{
+	return corpse_task->crashed_thread_id;
 }

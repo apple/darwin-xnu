@@ -5,6 +5,7 @@ import struct
 from xnu import *
 from core.operating_system import Armv8_RegisterSet, Armv7_RegisterSet, I386_RegisterSet, X86_64RegisterSet
 
+""" these defines should come from an authoritative header file """
 CPU_TYPE_I386 = 0x00000007
 CPU_TYPE_X86_64 = 0x01000007
 CPU_TYPE_ARM = 0x0000000c
@@ -20,14 +21,16 @@ CPU_SUBTYPE_ARM_V7K = 12
 
 
 def GetRegisterSetForCPU(cputype, subtype):
-    retval = X86_64RegisterSet
-    if cputype in (CPU_TYPE_ARM, CPU_TYPE_ARM64):
-        if subtype == CPU_SUBTYPE_ARMV8:
-            retval = Armv8_RegisterSet
-        else:
-            retval = Armv7_RegisterSet
+    if cputype ==  CPU_TYPE_ARM64:
+        retval = Armv8_RegisterSet
+    elif cputype == CPU_TYPE_ARM:
+        retval = Armv7_RegisterSet
     elif cputype == CPU_TYPE_I386:
         retval = I386_RegisterSet
+    elif cputype == CPU_TYPE_X86_64:
+        retval = X86_64RegisterSet
+    
+    """ crash if unknown cputype """
 
     return retval.register_info['registers']
 
@@ -110,6 +113,9 @@ class UserProcess(target.Process):
         cputype = CPU_TYPE_X86_64
         cpusubtype = CPU_SUBTYPE_X86_64_ALL
 
+
+        """ these computations should come out of the macho header i think """
+        """ where does kern.arch come from? what's kern.arch == armv8?? """ 
         if kern.arch in ('arm'):
             cputype = CPU_TYPE_ARM
             cpusubtype = CPU_SUBTYPE_ARM_V7

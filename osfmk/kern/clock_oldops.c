@@ -59,6 +59,7 @@
 
 #include <mach/mach_host_server.h>
 #include <mach/host_priv_server.h>
+#include <libkern/section_keywords.h>
 
 /*
  * Actual clock alarm structure. Used for user clock_sleep() and
@@ -137,7 +138,7 @@ kern_return_t	rtclock_getattr(
 	clock_attr_t			attr,
 	mach_msg_type_number_t	*count);
 
-struct clock_ops sysclk_ops = {
+SECURITY_READ_ONLY_EARLY(struct clock_ops) sysclk_ops = {
 	NULL,			rtclock_init,
 	rtclock_gettime,
 	rtclock_getattr,
@@ -151,7 +152,7 @@ kern_return_t	calend_getattr(
 	clock_attr_t			attr,
 	mach_msg_type_number_t	*count);
 
-struct clock_ops calend_ops = {
+SECURITY_READ_ONLY_EARLY(struct clock_ops) calend_ops = {
 	NULL, NULL,
 	calend_gettime,
 	calend_getattr,

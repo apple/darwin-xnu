@@ -298,23 +298,6 @@ mac_socket_check_kqfilter(kauth_cred_t cred, struct knote *kn,
 }
 
 static int
-mac_socket_check_label_update(kauth_cred_t cred, struct socket *so,
-    struct label *newlabel)
-{
-	int error;
-
-#if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_socket_enforce)
-        return 0;
-#endif
-
-	MAC_CHECK(socket_check_label_update, cred,
-		  (socket_t)so, so->so_label,
-		  newlabel);
-	return (error);
-}
-
 int
 mac_socket_check_select(kauth_cred_t cred, struct socket *so, int which)
 {
@@ -331,8 +314,8 @@ mac_socket_check_select(kauth_cred_t cred, struct socket *so, int which)
 	return (error);
 }
 
-int
-mac_socket_check_stat(kauth_cred_t cred, struct socket *so)
+mac_socket_check_label_update(kauth_cred_t cred, struct socket *so,
+    struct label *newlabel)
 {
 	int error;
 
@@ -342,11 +325,11 @@ mac_socket_check_stat(kauth_cred_t cred, struct socket *so)
         return 0;
 #endif
 
-	MAC_CHECK(socket_check_stat, cred,
-		  (socket_t)so, so->so_label);
+	MAC_CHECK(socket_check_label_update, cred,
+		  (socket_t)so, so->so_label,
+		  newlabel);
 	return (error);
 }
-
 
 int
 mac_socket_label_update(kauth_cred_t cred, struct socket *so, struct label *label)
@@ -484,6 +467,7 @@ mac_socketpeer_label_get(__unused kauth_cred_t cred, struct socket *so,
 
 	return (error);
 }
+
 #endif /* MAC_SOCKET */
 
 int
@@ -603,6 +587,39 @@ mac_socket_check_deliver(__unused struct socket *so, __unused struct mbuf *mbuf)
 	return (0);
 }
 #endif
+
+int
+mac_socket_check_ioctl(kauth_cred_t cred, struct socket *so,
+		       unsigned int cmd)
+{
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_socket_enforce)
+		return 0;
+#endif
+
+	MAC_CHECK(socket_check_ioctl, cred,
+		  (socket_t)so, cmd, so->so_label);
+	return (error);
+}
+
+int
+mac_socket_check_stat(kauth_cred_t cred, struct socket *so)
+{
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+    /* 21167099 - only check if we allow write */
+    if (!mac_socket_enforce)
+        return 0;
+#endif
+
+	MAC_CHECK(socket_check_stat, cred,
+		  (socket_t)so, so->so_label);
+	return (error);
+}
 
 int
 mac_socket_check_listen(kauth_cred_t cred, struct socket *so)

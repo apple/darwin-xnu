@@ -197,7 +197,18 @@ struct queue_entry {
 	struct queue_entry	*next;		/* next element */
 	struct queue_entry	*prev;		/* previous element */
 
+#if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
+/* For the newer ARMv7k ABI where 64-bit types are 64-bit aligned, but pointers
+ * are 32-bit:
+ * Since this type is so often cast to various 64-bit aligned types
+ * aligning it to 64-bits will avoid -wcast-align without needing
+ * to disable it entirely. The impact on memory footprint should be 
+ * negligible.
+ */
+} __attribute__ ((aligned (8)));
+#else
 };
+#endif
 
 typedef struct queue_entry	*queue_t;
 typedef	struct queue_entry	queue_head_t;

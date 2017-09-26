@@ -170,7 +170,6 @@ struct vm_named_entry {
 	decl_lck_mtx_data(,	Lock)		/* Synchronization */
 	union {
 		vm_object_t	object;		/* object I point to */
-		memory_object_t	pager;		/* amo pager port */
 		vm_map_t	map;		/* map backing submap */
 		vm_map_copy_t	copy;		/* a VM map copy */
 	} backing;
@@ -182,7 +181,6 @@ struct vm_named_entry {
 	unsigned int				/* Is backing.xxx : */
 	/* boolean_t */		internal:1,	/* ... an internal object */
 	/* boolean_t */		is_sub_map:1,	/* ... a submap? */
-	/* boolean_t */		is_pager:1,	/* ... a pager port */
 	/* boolean_t */		is_copy:1;	/* ... a VM map copy */
 };
 
@@ -385,6 +383,9 @@ struct _vm_map {
 	vm_map_size_t		size;		/* virtual size */
 	vm_map_size_t		user_wire_limit;/* rlimit on user locked memory */
 	vm_map_size_t		user_wire_size; /* current size of user locked memory in this map */
+#if __x86_64__
+	vm_map_offset_t		vmmap_high_start;
+#endif /* __x86_64__ */
 
 	union {
 		/*
@@ -562,6 +563,9 @@ struct vm_map_copy {
  */
 #define vm_map_lock_read_to_write(map)	(lck_rw_lock_shared_to_exclusive(&(map)->lock) != TRUE)
 
+#define vm_map_try_lock(map)		lck_rw_try_lock_exclusive(&(map)->lock)
+#define vm_map_try_lock_read(map)	lck_rw_try_lock_shared(&(map)->lock)
+
 #if MACH_ASSERT || DEBUG
 #define vm_map_lock_assert_held(map) \
 	lck_rw_assert(&(map)->lock, LCK_RW_ASSERT_HELD)
@@ -595,6 +599,8 @@ extern kern_return_t vm_map_find_space(
 				vm_map_size_t		size,
 				vm_map_offset_t		mask,
 				int			flags,
+				vm_map_kernel_flags_t	vmk_flags,
+				vm_tag_t		tag,
 				vm_map_entry_t		*o_entry);	/* OUT */
 
 extern void vm_map_clip_start(
@@ -662,7 +668,9 @@ extern vm_map_entry_t	vm_map_entry_insert(
 				boolean_t		permanent,
 				unsigned int		superpage_size,
 				boolean_t		clear_map_aligned,
-				boolean_t		is_submap);
+				boolean_t		is_submap,
+				boolean_t		used_for_jit,
+				int			alias);
 
 
 /*
@@ -678,11 +686,6 @@ extern vm_map_entry_t	vm_map_entry_insert(
 #define		vm_map_pmap(map)	((map)->pmap)
 						/* Physical map associated
 						 * with this address map */
-
-#define		vm_map_verify_done(map, version)    vm_map_unlock_read(map)
-						/* Operation that required
-						 * a verified lookup is
-						 * now complete */
 
 /*
  * Macros/functions for map residence counts and swapin/out of vm maps
@@ -848,6 +851,8 @@ extern kern_return_t	vm_map_enter(
 				vm_map_size_t		size,
 				vm_map_offset_t		mask,
 				int			flags,
+				vm_map_kernel_flags_t	vmk_flags,
+				vm_tag_t		tag,
 				vm_object_t		object,
 				vm_object_offset_t	offset,
 				boolean_t		needs_copy,
@@ -855,6 +860,22 @@ extern kern_return_t	vm_map_enter(
 				vm_prot_t		max_protection,
 				vm_inherit_t		inheritance);
 
+#if __arm64__
+extern kern_return_t	vm_map_enter_fourk(
+				vm_map_t		map,
+				vm_map_offset_t		*address,
+				vm_map_size_t		size,
+				vm_map_offset_t		mask,
+				int			flags,
+				vm_map_kernel_flags_t	vmk_flags,
+				vm_tag_t		tag,
+				vm_object_t		object,
+				vm_object_offset_t	offset,
+				boolean_t		needs_copy,
+				vm_prot_t		cur_protection,
+				vm_prot_t		max_protection,
+				vm_inherit_t		inheritance);
+#endif /* __arm64__ */
 
 /* XXX should go away - replaced with regular enter of contig object */
 extern  kern_return_t	vm_map_enter_cpm(
@@ -869,6 +890,8 @@ extern kern_return_t vm_map_remap(
 				vm_map_size_t		size,
 				vm_map_offset_t		mask,
 				int			flags,
+				vm_map_kernel_flags_t	vmk_flags,
+				vm_tag_t		tag,
 				vm_map_t		src_map,
 				vm_map_offset_t		memory_address,
 				boolean_t		copy,
@@ -927,12 +950,6 @@ extern kern_return_t	vm_map_behavior_set(
 				vm_map_offset_t		start,
 				vm_map_offset_t		end,
 				vm_behavior_t		new_behavior);
-
-extern kern_return_t vm_map_purgable_control(
-				vm_map_t		map,
-				vm_map_offset_t		address,
-				vm_purgable_t		control,
-				int			*state);
 
 extern kern_return_t vm_map_region(
 				vm_map_t		 map,
@@ -1001,23 +1018,6 @@ extern kern_return_t vm_map_set_cache_attr(
 
 extern int override_nx(vm_map_t map, uint32_t user_tag);
 
-
-/* kext exported versions */
-
-extern kern_return_t vm_map_wire_external(
-	vm_map_t		map,
-	vm_map_offset_t		start,
-	vm_map_offset_t		end,
-	vm_prot_t		caller_prot,
-	boolean_t		user_wire);
-
-extern kern_return_t vm_map_wire_and_extract_external(
-	vm_map_t	map,
-	vm_map_offset_t	start,
-	vm_prot_t	caller_prot,
-	boolean_t	user_wire,
-	ppnum_t		*physpage_p);
-
 #endif /* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -1059,6 +1059,43 @@ extern boolean_t vm_map_check_protection(
 				vm_prot_t		protection);
 
 /* wire down a region */
+
+#ifdef XNU_KERNEL_PRIVATE
+
+extern kern_return_t	vm_map_wire_kernel(
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				vm_prot_t		access_type,
+				vm_tag_t		tag,
+				boolean_t		user_wire);
+
+extern kern_return_t	vm_map_wire_and_extract_kernel(
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_prot_t		access_type,
+				vm_tag_t		tag,
+				boolean_t		user_wire,
+				ppnum_t			*physpage_p);
+
+/* kext exported versions */
+
+extern kern_return_t	vm_map_wire_external(
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				vm_prot_t		access_type,
+				boolean_t		user_wire);
+
+extern kern_return_t	vm_map_wire_and_extract_external(
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_prot_t		access_type,
+				boolean_t		user_wire,
+				ppnum_t			*physpage_p);
+
+#else /* XNU_KERNEL_PRIVATE */
+
 extern kern_return_t	vm_map_wire(
 				vm_map_t		map,
 				vm_map_offset_t		start,
@@ -1073,12 +1110,16 @@ extern kern_return_t	vm_map_wire_and_extract(
 				boolean_t		user_wire,
 				ppnum_t			*physpage_p);
 
+#endif /* !XNU_KERNEL_PRIVATE */
+
 /* unwire a region */
 extern kern_return_t	vm_map_unwire(
 				vm_map_t		map,
 				vm_map_offset_t		start,
 				vm_map_offset_t		end,
 				boolean_t		user_wire);
+
+#ifdef XNU_KERNEL_PRIVATE
 
 /* Enter a mapping of a memory object */
 extern kern_return_t	vm_map_enter_mem_object(
@@ -1087,6 +1128,8 @@ extern kern_return_t	vm_map_enter_mem_object(
 				vm_map_size_t		size,
 				vm_map_offset_t		mask,
 				int			flags,
+				vm_map_kernel_flags_t	vmk_flags,
+				vm_tag_t		tag,
 				ipc_port_t		port,
 				vm_object_offset_t	offset,
 				boolean_t		needs_copy,
@@ -1101,6 +1144,8 @@ extern kern_return_t	vm_map_enter_mem_object_prefault(
 				vm_map_size_t		size,
 				vm_map_offset_t		mask,
 				int			flags,
+				vm_map_kernel_flags_t	vmk_flags,
+				vm_tag_t		tag,
 				ipc_port_t		port,
 				vm_object_offset_t	offset,
 				vm_prot_t		cur_protection,
@@ -1115,12 +1160,16 @@ extern kern_return_t	vm_map_enter_mem_object_control(
 				vm_map_size_t		size,
 				vm_map_offset_t		mask,
 				int			flags,
+				vm_map_kernel_flags_t	vmk_flags,
+				vm_tag_t		tag,
 				memory_object_control_t	control,
 				vm_object_offset_t	offset,
 				boolean_t		needs_copy,
 				vm_prot_t		cur_protection,
 				vm_prot_t		max_protection,
 				vm_inherit_t		inheritance);
+
+#endif /* !XNU_KERNEL_PRIVATE */
 
 /* Deallocate a region */
 extern kern_return_t	vm_map_remove(
@@ -1232,8 +1281,12 @@ extern boolean_t	vm_map_has_hard_pagezero(
 				vm_map_offset_t		pagezero_size);
 extern void		vm_commit_pagezero_status(vm_map_t	tmap);
 
+#ifdef __arm__
+static inline boolean_t vm_map_is_64bit(__unused vm_map_t map) { return 0; }
+#else
 extern boolean_t	vm_map_is_64bit(
 			        vm_map_t		map);
+#endif
 
 
 extern kern_return_t	vm_map_raise_max_offset(
@@ -1243,19 +1296,32 @@ extern kern_return_t	vm_map_raise_max_offset(
 extern kern_return_t	vm_map_raise_min_offset(
 	vm_map_t	map,
 	vm_map_offset_t	new_min_offset);
+#if __x86_64__
+extern void vm_map_set_high_start(
+	vm_map_t	map,
+	vm_map_offset_t	high_start);
+#endif /* __x86_64__ */
 
 extern vm_map_offset_t	vm_compute_max_offset(
 				boolean_t		is64);
 
+extern void		vm_map_get_max_aslr_slide_section(
+				vm_map_t		map,
+				int64_t			*max_sections,
+				int64_t			*section_size);
+
 extern uint64_t 	vm_map_get_max_aslr_slide_pages(
 				vm_map_t map);
-	
+
+extern uint64_t 	vm_map_get_max_loader_aslr_slide_pages(
+				vm_map_t map);
+
 extern void		vm_map_set_user_wire_limit(
 				vm_map_t		map,
 				vm_size_t		limit);
 
 extern void vm_map_switch_protect(
-				vm_map_t		map, 
+				vm_map_t		map,
 				boolean_t		val);
 
 extern void vm_map_iokit_mapped_region(
@@ -1297,6 +1363,13 @@ extern kern_return_t vm_map_page_info(
 	vm_page_info_flavor_t	flavor,
 	vm_page_info_t		info,
 	mach_msg_type_number_t	*count);
+extern kern_return_t vm_map_page_range_info_internal(
+	vm_map_t		map,
+	vm_map_offset_t		start_offset,
+	vm_map_offset_t		end_offset,
+	vm_page_info_flavor_t	flavor,
+	vm_page_info_t		info,
+	mach_msg_type_number_t	*count);
 #endif /* XNU_KERNEL_PRIVATE */
 
 
@@ -1335,6 +1408,21 @@ extern kern_return_t vm_map_page_info(
 #define VM_MAP_PAGE_MASK(map) (VM_MAP_PAGE_SIZE((map)) - 1)
 #define VM_MAP_PAGE_ALIGNED(x,pgmask) (((x) & (pgmask)) == 0)
 
+static inline void vm_prot_to_wimg(unsigned int prot, unsigned int *wimg)
+{ 
+	switch (prot) {
+		case MAP_MEM_NOOP:		break;
+		case MAP_MEM_IO:		*wimg = VM_WIMG_IO; break;
+		case MAP_MEM_COPYBACK:		*wimg = VM_WIMG_USE_DEFAULT; break;
+		case MAP_MEM_INNERWBACK:	*wimg = VM_WIMG_INNERWBACK; break;
+		case MAP_MEM_POSTED:		*wimg = VM_WIMG_POSTED; break;
+		case MAP_MEM_WTHRU:		*wimg = VM_WIMG_WTHRU; break;
+		case MAP_MEM_WCOMB:		*wimg = VM_WIMG_WCOMB; break;
+		default:
+			panic("Unrecognized mapping type %u\n", prot);
+	}
+}
+
 #endif /* MACH_KERNEL_PRIVATE */
 
 #ifdef XNU_KERNEL_PRIVATE
@@ -1355,8 +1443,11 @@ extern kern_return_t vm_map_set_page_shift(vm_map_t map, int pageshift);
 #define VM_MAP_REMOVE_NO_PMAP_CLEANUP	0x10
 #define VM_MAP_REMOVE_NO_MAP_ALIGN	0x20
 #define VM_MAP_REMOVE_NO_UNNESTING	0x40
+#define VM_MAP_REMOVE_IMMUTABLE		0x80
 
 /* Support for UPLs from vm_maps */
+
+#ifdef XNU_KERNEL_PRIVATE
 
 extern kern_return_t vm_map_get_upl(
 				vm_map_t		target_map,
@@ -1366,7 +1457,10 @@ extern kern_return_t vm_map_get_upl(
 				upl_page_info_array_t	page_info,
 				unsigned int		*page_infoCnt,
 				upl_control_flags_t	*flags,
+				vm_tag_t		tag,
 				int			force_data_sync);
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 extern void
 vm_map_sizes(vm_map_t map,

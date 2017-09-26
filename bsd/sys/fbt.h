@@ -31,6 +31,10 @@
 
 #if defined (__x86_64__)
 typedef uint8_t machine_inst_t;
+#elif defined(__arm__)
+typedef uint16_t machine_inst_t;
+#elif defined(__arm64__)
+typedef uint32_t machine_inst_t;
 #else
 #error Unknown Architecture
 #endif
@@ -61,4 +65,11 @@ extern int dtrace_invop(uintptr_t, uintptr_t *, uintptr_t);
 extern int fbt_invop(uintptr_t, uintptr_t *, uintptr_t);
 extern void fbt_provide_module(void *, struct modctl *);
 extern int fbt_enable (void *arg, dtrace_id_t id, void *parg);
+
+extern int fbt_module_excluded(struct modctl*);
+extern int fbt_excluded(const char *);
+
+extern void fbt_provide_probe(struct modctl *ctl, uintptr_t instr_low, uintptr_t instr_high, char *modname, char* symbol_name, machine_inst_t* symbol_start);
+
+extern void fbt_provide_module_kernel_syms(struct modctl *ctl);
 #endif /* _FBT_H */

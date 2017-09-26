@@ -61,7 +61,10 @@
 /* mac_do_machexc() flags */
 #define	MAC_DOEXCF_TRACED	0x01	/* Only do mach exeception if
 					   being ptrace()'ed */
+struct exception_action;
 struct uthread;
+struct task;
+
 int	mac_do_machexc(int64_t code, int64_t subcode, uint32_t flags __unused);
 int	mac_schedule_userret(void);
 
@@ -84,16 +87,21 @@ void	act_set_astmacf(struct thread *);
 void	mac_thread_userret(struct thread *);
 
 /* exception actions */
-void mac_exc_action_label_init(struct exception_action *action);
-void mac_exc_action_label_inherit(struct exception_action *parent, struct exception_action *child);
-void mac_exc_action_label_destroy(struct exception_action *action);
-int mac_exc_action_label_update(struct task *task, struct exception_action *action);
-void mac_exc_action_label_reset(struct exception_action *action);
+struct label *mac_exc_create_label(void);
+void mac_exc_free_label(struct label *label);
 
-void mac_exc_action_label_task_update(struct task *task, struct proc *proc);
-void mac_exc_action_label_task_destroy(struct task *task);
+void mac_exc_associate_action_label(struct exception_action *action, struct label *label);
+void mac_exc_free_action_label(struct exception_action *action);
+
+int mac_exc_update_action_label(struct exception_action *action, struct label *newlabel);
+int mac_exc_inherit_action_label(struct exception_action *parent, struct exception_action *child);
+int mac_exc_update_task_crash_label(struct task *task, struct label *newlabel);
 
 int mac_exc_action_check_exception_send(struct task *victim_task, struct exception_action *action);
+
+struct label *mac_exc_create_label_for_proc(struct proc *proc);
+struct label *mac_exc_create_label_for_current_proc(void);
+
 #endif /* MAC */
 
 #endif	/* !_SECURITY_MAC_MACH_INTERNAL_H_ */

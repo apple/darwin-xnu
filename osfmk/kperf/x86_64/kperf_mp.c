@@ -26,43 +26,65 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <i386/mp.h>
 #include <mach/mach_types.h>
 #include <kern/processor.h>
-#include <i386/mp.h>
-
+#include <kperf/buffer.h>
 #include <kperf/kperf.h>
 #include <kperf/kperf_arch.h>
 #include <kperf/kperf_timer.h>
+#include <stdatomic.h>
 
-void
-kperf_mp_broadcast_running(struct kperf_timer *trigger)
+bool
+kperf_mp_broadcast_other_running(struct kperf_timer *trigger)
 {
+	int current_cpu = cpu_number();
 	int ncpus = machine_info.logical_cpu_max;
+	bool system_only_self = true;
 	cpumask_t cpu_mask = 0;
-	assert(ncpus < 64);
 
 	for (int i = 0; i < ncpus; i++) {
-		/* do not IPI processors that are not scheduling threads */
+		uint64_t i_bit = UINT64_C(1) << i;
 		processor_t processor = cpu_to_processor(i);
+
+		/* do not IPI processors that are not scheduling threads */
 		if (processor == PROCESSOR_NULL ||
-		    processor->state != PROCESSOR_RUNNING ||
-		    processor->active_thread == THREAD_NULL)
+				processor->state != PROCESSOR_RUNNING ||
+				processor->active_thread == THREAD_NULL)
 		{
+#if DEVELOPMENT || DEBUG
+			BUF_VERB(PERF_TM_SKIPPED, i,
+					processor != PROCESSOR_NULL ? processor->state : 0,
+					processor != PROCESSOR_NULL ? processor->active_thread : 0);
+#endif /* DEVELOPMENT || DEBUG */
+			continue;
+		}
+
+		/* don't run the handler on the current processor */
+		if (i == current_cpu) {
+			system_only_self = false;
 			continue;
 		}
 
 		/* nor processors that have not responded to the last IPI */
-		bool already_pending = atomic_bit_set(&(trigger->pending_cpus), i,
-			__ATOMIC_RELAXED);
-		if (already_pending) {
+		uint64_t already_pending = atomic_fetch_or_explicit(
+				&trigger->pending_cpus, i_bit,
+				memory_order_relaxed);
+		if (already_pending & i_bit) {
 #if DEVELOPMENT || DEBUG
-			__c11_atomic_fetch_add(&kperf_pending_ipis, 1, __ATOMIC_RELAXED);
-#endif
+			BUF_VERB(PERF_TM_PENDING, i_bit, already_pending);
+			atomic_fetch_add_explicit(&kperf_pending_ipis, 1,
+					memory_order_relaxed);
+#endif /* DEVELOPMENT || DEBUG */
 			continue;
 		}
 
 		cpu_mask |= cpu_to_cpumask(i);
 	}
 
-	mp_cpus_call(cpu_mask, NOSYNC, kperf_ipi_handler, trigger);
+	if (cpu_mask != 0) {
+		mp_cpus_call(cpu_mask, NOSYNC, kperf_ipi_handler, trigger);
+	}
+
+	return system_only_self;
 }

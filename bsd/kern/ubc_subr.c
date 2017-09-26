@@ -65,6 +65,7 @@
 #include <kern/kalloc.h>
 #include <kern/zalloc.h>
 #include <kern/thread.h>
+#include <vm/pmap.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_protos.h> /* last */
 
@@ -157,6 +158,12 @@ struct cs_hash {
     cs_md_update 	cs_update;
     cs_md_final		cs_final;
 };
+
+uint8_t cs_hash_type(
+    struct cs_hash const * const cs_hash)
+{
+    return cs_hash->cs_type;
+}
 
 static const struct cs_hash cs_hash_sha1 = {
     .cs_type = CS_HASHTYPE_SHA1,
@@ -495,6 +502,9 @@ cs_validate_csblob(
 		uint32_t n, count;
 		const CS_CodeDirectory *best_cd = NULL;
 		unsigned int best_rank = 0;
+#if PLATFORM_WatchOS
+		const CS_CodeDirectory *sha1_cd = NULL;
+#endif
 
 		if (length < sizeof(CS_SuperBlob))
 			return EBADEXEC;
@@ -543,6 +553,15 @@ cs_validate_csblob(
 					printf("multiple hash=%d CodeDirectories in signature; rejecting\n", best_cd->hashType);
 					return EBADEXEC;
 				}
+#if PLATFORM_WatchOS
+				if (candidate->hashType == CS_HASHTYPE_SHA1) {
+					if (sha1_cd != NULL) {
+						printf("multiple sha1 CodeDirectories in signature; rejecting\n");
+						return EBADEXEC;
+					}
+					sha1_cd = candidate;
+				}
+#endif
 			} else if (type == CSSLOT_ENTITLEMENTS) {
 				if (ntohl(subBlob->magic) != CSMAGIC_EMBEDDED_ENTITLEMENTS) {
 					return EBADEXEC;
@@ -554,6 +573,37 @@ cs_validate_csblob(
 				*rentitlements = subBlob;
 			}
 		}
+
+#if PLATFORM_WatchOS
+		/* To keep watchOS fast enough, we have to resort to sha1 for
+		 * some code.
+		 *
+		 * At the time of writing this comment, known sha1 attacks are
+		 * collision attacks (not preimage or second preimage
+		 * attacks), which do not apply to platform binaries since
+		 * they have a fixed hash in the trust cache.  Given this
+		 * property, we only prefer sha1 code directories for adhoc
+		 * signatures, which always have to be in a trust cache to be
+		 * valid (can-load-cdhash does not exist for watchOS). Those
+		 * are, incidentally, also the platform binaries, for which we
+		 * care about the performance hit that sha256 would bring us.
+		 *
+		 * Platform binaries may still contain a (not chosen) sha256
+		 * code directory, which keeps software updates that switch to
+		 * sha256-only small.
+		 */
+
+		if (*rcd != NULL && sha1_cd != NULL && (ntohl(sha1_cd->flags) & CS_ADHOC)) {
+			if (sha1_cd->flags != (*rcd)->flags) {
+				printf("mismatched flags between hash %d (flags: %#x) and sha1 (flags: %#x) cd.\n",
+					   (int)(*rcd)->hashType, (*rcd)->flags, sha1_cd->flags);
+				*rcd = NULL;
+				return EBADEXEC;
+			}
+
+			*rcd = sha1_cd;
+		}
+#endif
 
 	} else if (ntohl(blob->magic) == CSMAGIC_CODEDIRECTORY) {
 
@@ -1080,7 +1130,7 @@ errno_t ubc_setsize_ex(struct vnode *vp, off_t nsize, ubc_setsize_opts_t opts)
 		 * zero the tail of this page if it's currently
 		 * present in the cache
 		 */
-		kret = ubc_create_upl(vp, lastpg, PAGE_SIZE, &upl, &pl, UPL_SET_LITE);
+		kret = ubc_create_upl_kernel(vp, lastpg, PAGE_SIZE, &upl, &pl, UPL_SET_LITE, VM_KERN_MEMORY_FILE);
 
 		if (kret != KERN_SUCCESS)
 		        panic("ubc_setsize: ubc_create_upl (error = %d)\n", kret);
@@ -2285,13 +2335,26 @@ ubc_range_op(
  *		ubc_upl_abort(), or ubc_upl_abort_range().
  */
 kern_return_t
-ubc_create_upl(
+ubc_create_upl_external(
 	struct vnode	*vp,
 	off_t 		f_offset,
 	int		bufsize,
 	upl_t		*uplp,
 	upl_page_info_t	**plp,
 	int		uplflags)
+{
+    return (ubc_create_upl_kernel(vp, f_offset, bufsize, uplp, plp, uplflags, vm_tag_bt()));
+}
+
+kern_return_t
+ubc_create_upl_kernel(
+	struct vnode	*vp,
+	off_t 		f_offset,
+	int		bufsize,
+	upl_t		*uplp,
+	upl_page_info_t	**plp,
+	int		uplflags,
+	vm_tag_t tag)
 {
 	memory_object_control_t		control;
 	kern_return_t			kr;
@@ -2351,7 +2414,7 @@ ubc_create_upl(
 	if (control == MEMORY_OBJECT_CONTROL_NULL)
 		return KERN_INVALID_ARGUMENT;
 
-	kr = memory_object_upl_request(control, f_offset, bufsize, uplp, NULL, NULL, uplflags);
+	kr = memory_object_upl_request(control, f_offset, bufsize, uplp, NULL, NULL, uplflags, tag);
 	if (kr == KERN_SUCCESS && plp != NULL)
 		*plp = UPL_GET_INTERNAL_PAGE_LIST(*uplp);
 	return kr;
@@ -3080,6 +3143,7 @@ ubc_cs_blob_add(
 	blob->csb_mem_offset = 0;
 	blob->csb_mem_kaddr = *addr;
 	blob->csb_flags = 0;
+	blob->csb_signer_type = CS_SIGNER_TYPE_UNKNOWN;
 	blob->csb_platform_binary = 0;
 	blob->csb_platform_path = 0;
 	blob->csb_teamid = NULL;
@@ -3127,20 +3191,20 @@ ubc_cs_blob_add(
 					       kr);
 				}
 			} else {
-				memcpy(new_blob_addr, blob->csb_mem_kaddr, size);
+				memcpy((void *)new_blob_addr, (void *)blob->csb_mem_kaddr, size);
 				if (cd == NULL) {
 					new_cd = NULL;
 				} else {
-					new_cd = ((uintptr_t)cd
+					new_cd = (void *)(((uintptr_t)cd
 						  - (uintptr_t)blob->csb_mem_kaddr
-						  + (uintptr_t)new_blob_addr);
+						  + (uintptr_t)new_blob_addr));
 				}
 				if (entitlements == NULL) {
 					new_entitlements = NULL;
 				} else {
-					new_entitlements = ((uintptr_t)entitlements
+					new_entitlements = (void *)(((uintptr_t)entitlements
 							    - (uintptr_t)blob->csb_mem_kaddr
-							    + (uintptr_t)new_blob_addr);
+							    + (uintptr_t)new_blob_addr));
 				}
 //				printf("CODE SIGNING: %s:%d kaddr 0x%llx cd %p ents %p -> blob 0x%llx cd %p ents %p\n", __FUNCTION__, __LINE__, (uint64_t)blob->csb_mem_kaddr, cd, entitlements, (uint64_t)new_blob_addr, new_cd, new_entitlements);
 				ubc_cs_blob_deallocate(blob->csb_mem_kaddr,
@@ -3187,8 +3251,10 @@ ubc_cs_blob_add(
 	 */
 #if CONFIG_MACF
     unsigned int cs_flags = blob->csb_flags;
-	error = mac_vnode_check_signature(vp, blob, imgp, &cs_flags, flags);
+	unsigned int signer_type = blob->csb_signer_type;
+	error = mac_vnode_check_signature(vp, blob, imgp, &cs_flags, &signer_type, flags);
     blob->csb_flags = cs_flags;
+	blob->csb_signer_type = signer_type;
 
 	if (error) {
 		if (cs_debug) 
@@ -3201,8 +3267,8 @@ ubc_cs_blob_add(
 		error = EPERM;
 		goto out;
 	}
-#endif	
-	
+#endif
+
 	if (blob->csb_flags & CS_PLATFORM_BINARY) {
 		if (cs_debug > 1)
 			printf("check_signature[pid: %d]: platform binary\n", current_proc()->p_pid);
@@ -3252,8 +3318,11 @@ ubc_cs_blob_add(
 	     oblob = oblob->csb_next) {
 		 off_t oblob_start_offset, oblob_end_offset;
 
-		 /* check for conflicting teamid */
-		 if (blob->csb_platform_binary) { //platform binary needs to be the same for app slices
+		 if (blob->csb_signer_type != oblob->csb_signer_type) { // signer type needs to be the same for slices
+			 vnode_unlock(vp);
+			 error = EALREADY;
+			 goto out;
+		 } else if (blob->csb_platform_binary) { //platform binary needs to be the same for app slices
 			 if (!oblob->csb_platform_binary) {
 				 vnode_unlock(vp);
 				 error = EALREADY;
@@ -3575,20 +3644,22 @@ ubc_cs_blob_revalidate(
 	assert(size == blob->csb_mem_size);
 
     unsigned int cs_flags = (ntohl(cd->flags) & CS_ALLOWED_MACHO) | CS_VALID;
-    
+    unsigned int signer_type = CS_SIGNER_TYPE_UNKNOWN;
 	/* callout to mac_vnode_check_signature */
 #if CONFIG_MACF
-	error = mac_vnode_check_signature(vp, blob, imgp, &cs_flags, flags);
+	error = mac_vnode_check_signature(vp, blob, imgp, &cs_flags, &signer_type, flags);
 	if (cs_debug && error) {
 			printf("revalidate: check_signature[pid: %d], error = %d\n", current_proc()->p_pid, error);
 	}
 #else
 	(void)flags;
+	(void)signer_type;
 #endif
 
 	/* update generation number if success */
 	vnode_lock_spin(vp);
     blob->csb_flags = cs_flags;
+	blob->csb_signer_type = signer_type;
 	if (UBCINFOEXISTS(vp)) {
 		if (error == 0)
 			vp->v_ubcinfo->cs_add_gen = cs_blob_generation_count;
@@ -3957,7 +4028,7 @@ ubc_cs_is_range_codesigned(
 }
 
 #if CHECK_CS_VALIDATION_BITMAP
-#define stob(s)	((atop_64((s)) + 07) >> 3)
+#define stob(s)	(((atop_64(round_page_64(s))) + 07) >> 3)
 extern	boolean_t	root_fs_upgrade_try;
 
 /*

@@ -21,15 +21,20 @@
 // Printf for corecrypto
 // ========================
 #if CC_KERNEL
-#include <pexpert/pexpert.h>
-#define cc_printf(x...) kprintf(x)
-extern int printf(const char *format, ...) __printflike(1,2);
-#elif CC_USE_S3
-#include <stdio.h>
-#define cc_printf(x...) printf(x)
+    #include <pexpert/pexpert.h>
+    #define cc_printf(x...) kprintf(x)
+    #if !CONFIG_EMBEDDED
+        extern int printf(const char *format, ...) __printflike(1,2);
+    #endif
+#elif CC_USE_S3 || CC_IBOOT || CC_RTKIT
+    #include <stdio.h>
+    #define cc_printf(x...) printf(x)
+#elif defined(__ANDROID_API__)
+    #include <android/log.h>
+    #define cc_printf(x...) __android_log_print(ANDROID_LOG_DEBUG, "corecrypto", x);
 #else
-#include <stdio.h>
-#define cc_printf(x...) fprintf(stderr, x)
+    #include <stdio.h>
+    #define cc_printf(x...) fprintf(stderr, x)
 #endif
 
 // ========================

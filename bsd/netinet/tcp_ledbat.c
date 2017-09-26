@@ -91,9 +91,8 @@ struct tcp_cc_algo tcp_cc_ledbat = {
  * The LEDBAT draft says that target queue delay MUST be 100 ms for 
  * inter-operability.
  */
-int target_qdelay = 100;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, bg_target_qdelay, CTLFLAG_RW | CTLFLAG_LOCKED, 
-	&target_qdelay , 100, "Target queuing delay");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, bg_target_qdelay, CTLFLAG_RW | CTLFLAG_LOCKED,
+	int, target_qdelay, 100, "Target queuing delay");
 
 /* Allowed increase and tether are used to place an upper bound on
  * congestion window based on the amount of data that is outstanding.
@@ -112,23 +111,21 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, bg_target_qdelay, CTLFLAG_RW | CTLFLAG_LOCKE
  * 'Tether' is also set to 2. We do not want this to limit the growth of cwnd
  * during slow-start.
  */ 
-int allowed_increase = 8;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, bg_allowed_increase, CTLFLAG_RW | CTLFLAG_LOCKED, 
-	&allowed_increase, 1, "Additive constant used to calculate max allowed congestion window");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, bg_allowed_increase, CTLFLAG_RW | CTLFLAG_LOCKED,
+					   int, allowed_increase, 8,
+					   "Additive constant used to calculate max allowed congestion window");
 
 /* Left shift for cwnd to get tether value of 2 */
-int tether_shift = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, bg_tether_shift, CTLFLAG_RW | CTLFLAG_LOCKED, 
-	&tether_shift, 1, "Tether shift for max allowed congestion window");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, bg_tether_shift, CTLFLAG_RW | CTLFLAG_LOCKED,
+	int, tether_shift, 1, "Tether shift for max allowed congestion window");
 
 /* Start with an initial window of 2. This will help to get more accurate 
  * minimum RTT measurement in the beginning. It will help to probe
  * the path slowly and will not add to the existing delay if the path is
  * already congested. Using 2 packets will reduce the delay induced by delayed-ack.
  */
-uint32_t bg_ss_fltsz = 2;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, bg_ss_fltsz, CTLFLAG_RW | CTLFLAG_LOCKED,
-	&bg_ss_fltsz, 2, "Initial congestion window for background transport");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, bg_ss_fltsz, CTLFLAG_RW | CTLFLAG_LOCKED,
+	uint32_t, bg_ss_fltsz, 2, "Initial congestion window for background transport");
 
 extern int rtt_samples_per_slot;
 

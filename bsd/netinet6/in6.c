@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -105,9 +105,11 @@
 #include <sys/kern_event.h>
 #include <sys/mcache.h>
 #include <sys/protosw.h>
+#include <sys/sysctl.h>
 
 #include <kern/locks.h>
 #include <kern/zalloc.h>
+#include <kern/clock.h>
 #include <libkern/OSAtomic.h>
 #include <machine/machine_routines.h>
 #include <mach/boolean.h>
@@ -118,6 +120,7 @@
 #include <net/route.h>
 #include <net/if_dl.h>
 #include <net/kpi_protocol.h>
+#include <net/nwk_wq.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -142,6 +145,7 @@
 #include <net/net_osdep.h>
 
 #include <net/dlil.h>
+#include <net/if_llatbl.h>
 
 #if PF
 #include <net/pfvar.h>
@@ -211,9 +215,6 @@ static int in6_to_kamescope(struct sockaddr_in6 *, struct ifnet *);
 static int in6_getassocids(struct socket *, uint32_t *, user_addr_t);
 static int in6_getconnids(struct socket *, sae_associd_t, uint32_t *,
     user_addr_t);
-static int in6_getconninfo(struct socket *, sae_connid_t, uint32_t *,
-    uint32_t *, int32_t *, user_addr_t, socklen_t *, user_addr_t, socklen_t *,
-    uint32_t *, user_addr_t, uint32_t *);
 
 static void in6_if_up_dad_start(struct ifnet *);
 
@@ -259,6 +260,8 @@ static struct zone *in6ifa_zone;		/* zone for in6_ifaddr */
 
 #define	IN6IFA_ZONE_MAX		64		/* maximum elements in zone */
 #define	IN6IFA_ZONE_NAME	"in6_ifaddr"	/* zone name */
+
+struct eventhandler_lists_ctxt in6_evhdlr_ctxt;
 
 /*
  * Subroutine for in6_ifaddloop() and in6_ifremloop().
@@ -2377,7 +2380,7 @@ in6_purgeaddr(struct ifaddr *ifa)
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	struct in6_multi_mship *imm;
 
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	/* stop DAD processing */
 	nd6_dad_stop(ifa);
@@ -2435,7 +2438,7 @@ in6_unlink_ifa(struct in6_ifaddr *ia, struct ifnet *ifp)
 	struct ifaddr *ifa;
 	int unlinked;
 
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	ifa = &ia->ia_ifa;
 	IFA_ADDREF(ifa);
@@ -2532,7 +2535,7 @@ in6_purgeif(struct ifnet *ifp)
 	if (ifp == NULL)
 		return;
 
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	lck_rw_lock_exclusive(&in6_ifaddr_rwlock);
 	ia = in6_ifaddrs;
@@ -3466,6 +3469,15 @@ in6if_do_dad(
 	    (IFEF_IPV6_ND6ALT|IFEF_LOCALNET_PRIVATE|IFEF_DIRECTLINK))
 		return (0);
 
+	if (ifp->if_subfamily == IFNET_SUBFAMILY_IPSEC ||
+		ifp->if_subfamily == IFNET_SUBFAMILY_UTUN) {
+		/*
+		 * Ignore DAD for tunneling virtual interfaces, which get
+		 * their IPv6 address explicitly assigned.
+		 */
+		return (0);
+	}
+
 	switch (ifp->if_type) {
 #if IFT_DUMMY
 	case IFT_DUMMY:
@@ -3680,21 +3692,23 @@ in6_post_msg(struct ifnet *ifp, u_int32_t event_code, struct in6_ifaddr *ifa,
 	ev_msg.kev_subclass	= KEV_INET6_SUBCLASS;
 	ev_msg.event_code	= event_code;
 
-	IFA_LOCK(&ifa->ia_ifa);
-	in6_event_data.ia_addr		= ifa->ia_addr;
-	in6_event_data.ia_net		= ifa->ia_net;
-	in6_event_data.ia_dstaddr	= ifa->ia_dstaddr;
-	in6_event_data.ia_prefixmask	= ifa->ia_prefixmask;
-	in6_event_data.ia_plen		= ifa->ia_plen;
-	in6_event_data.ia6_flags	= (u_int32_t)ifa->ia6_flags;
+	if (ifa) {
+		IFA_LOCK(&ifa->ia_ifa);
+		in6_event_data.ia_addr		= ifa->ia_addr;
+		in6_event_data.ia_net		= ifa->ia_net;
+		in6_event_data.ia_dstaddr	= ifa->ia_dstaddr;
+		in6_event_data.ia_prefixmask	= ifa->ia_prefixmask;
+		in6_event_data.ia_plen		= ifa->ia_plen;
+		in6_event_data.ia6_flags	= (u_int32_t)ifa->ia6_flags;
 
-	/* retrieve time as calendar time (last arg is 1) */
-	in6ifa_getlifetime(ifa, &ia6_lt, 1);
-	in6_event_data.ia_lifetime.ia6t_expire = ia6_lt.ia6t_expire;
-	in6_event_data.ia_lifetime.ia6t_preferred = ia6_lt.ia6t_preferred;
-	in6_event_data.ia_lifetime.ia6t_vltime = ia6_lt.ia6t_vltime;
-	in6_event_data.ia_lifetime.ia6t_pltime = ia6_lt.ia6t_pltime;
-	IFA_UNLOCK(&ifa->ia_ifa);
+		/* retrieve time as calendar time (last arg is 1) */
+		in6ifa_getlifetime(ifa, &ia6_lt, 1);
+		in6_event_data.ia_lifetime.ia6t_expire = ia6_lt.ia6t_expire;
+		in6_event_data.ia_lifetime.ia6t_preferred = ia6_lt.ia6t_preferred;
+		in6_event_data.ia_lifetime.ia6t_vltime = ia6_lt.ia6t_vltime;
+		in6_event_data.ia_lifetime.ia6t_pltime = ia6_lt.ia6t_pltime;
+		IFA_UNLOCK(&ifa->ia_ifa);
+	}
 
 	if (ifp != NULL) {
 		(void) strlcpy(&in6_event_data.link_data.if_name[0],
@@ -3923,13 +3937,12 @@ in6_getconnids(struct socket *so, sae_associd_t aid, uint32_t *cnt,
 /*
  * Handle SIOCGCONNINFO ioctl for PF_INET6 domain.
  */
-static int
+int
 in6_getconninfo(struct socket *so, sae_connid_t cid, uint32_t *flags,
     uint32_t *ifindex, int32_t *soerror, user_addr_t src, socklen_t *src_len,
     user_addr_t dst, socklen_t *dst_len, uint32_t *aux_type,
     user_addr_t aux_data, uint32_t *aux_len)
 {
-#pragma unused(aux_data)
 	struct in6pcb *in6p = sotoin6pcb(so);
 	struct sockaddr_in6 sin6;
 	struct ifnet *ifp = NULL;
@@ -3997,8 +4010,6 @@ in6_getconninfo(struct socket *so, sae_connid_t cid, uint32_t *flags,
 		}
 	}
 
-	*aux_type = 0;
-	*aux_len = 0;
 	if (SOCK_PROTO(so) == IPPROTO_TCP) {
 		struct conninfo_tcp tcp_ci;
 
@@ -4016,6 +4027,9 @@ in6_getconninfo(struct socket *so, sae_connid_t cid, uint32_t *flags,
 				*aux_len = copy_len;
 			}
 		}
+	} else {
+		*aux_type = 0;
+		*aux_len = 0;
 	}
 
 out:
@@ -4052,4 +4066,529 @@ in6ioctl_cassert(void)
 	case SIOCDRDEL_IN6_64:
 		;
 	}
+}
+
+struct in6_llentry {
+	struct llentry          base;
+};
+
+#define        IN6_LLTBL_DEFAULT_HSIZE 32
+#define        IN6_LLTBL_HASH(k, h) \
+	((((((((k) >> 8) ^ (k)) >> 8) ^ (k)) >> 8) ^ (k)) & ((h) - 1))
+
+/*
+ * Do actual deallocation of @lle.
+ */
+static void
+in6_lltable_destroy_lle_unlocked(struct llentry *lle)
+{
+	LLE_LOCK_DESTROY(lle);
+	LLE_REQ_DESTROY(lle);
+	FREE(lle, M_LLTABLE);
+}
+
+/*
+ * Called by LLE_FREE_LOCKED when number of references
+ * drops to zero.
+ */
+static void
+in6_lltable_destroy_lle(struct llentry *lle)
+{
+	LLE_WUNLOCK(lle);
+	/* XXX TBD */
+	//thread_call_free(lle->lle_timer);
+	in6_lltable_destroy_lle_unlocked(lle);
+}
+
+
+static struct llentry *
+in6_lltable_new(const struct in6_addr *addr6, u_int flags)
+{
+#pragma unused(flags)
+	struct in6_llentry *lle;
+
+	MALLOC(lle, struct in6_llentry *, sizeof(struct in6_llentry), M_LLTABLE, M_NOWAIT | M_ZERO);
+	if (lle == NULL)                /* NB: caller generates msg */
+		return NULL;
+
+	lle->base.r_l3addr.addr6 = *addr6;
+	lle->base.lle_refcnt = 1;
+	lle->base.lle_free = in6_lltable_destroy_lle;
+	LLE_LOCK_INIT(&lle->base);
+	LLE_REQ_INIT(&lle->base);
+#if 0
+	/* XXX TBD */
+	lle->base.lle_timer = thread_call_allocate(nd6_llinfo_timer, lle);
+
+	if (lle->base.lle_timer == NULL) {
+		printf("lle_timer thread call could not be allocated.\n");
+		LLE_LOCK_DESTROY(&lle->base);
+		LLE_REQ_DESTROY(&lle->base);
+		FREE(lle, M_LLTABLE);
+		return NULL;
+	}
+#endif
+	return (&lle->base);
+}
+
+static int
+in6_lltable_match_prefix(const struct sockaddr *saddr,
+		const struct sockaddr *smask, u_int flags, struct llentry *lle)
+{
+	const struct in6_addr *addr, *mask, *lle_addr;
+
+	addr = &((const struct sockaddr_in6 *)(const void *)saddr)->sin6_addr;
+	mask = &((const struct sockaddr_in6 *)(const void *)smask)->sin6_addr;
+	lle_addr = &lle->r_l3addr.addr6;
+
+	if (IN6_ARE_MASKED_ADDR_EQUAL(lle_addr, addr, mask) == 0)
+		return (0);
+
+	if (lle->la_flags & LLE_IFADDR) {
+		/*
+		 * Delete LLE_IFADDR records IFF address & flag matches.
+		 * Note that addr is the interface address within prefix
+		 * being matched.
+		 */
+		if (IN6_ARE_ADDR_EQUAL(addr, lle_addr) &&
+				(flags & LLE_STATIC) != 0)
+			return (1);
+		return (0);
+	}
+
+	/* flags & LLE_STATIC means deleting both dynamic and static entries */
+	if ((flags & LLE_STATIC) || !(lle->la_flags & LLE_STATIC))
+		return (1);
+
+	return (0);
+}
+
+static void
+in6_lltable_free_entry(struct lltable *llt, struct llentry *lle)
+{
+	struct ifnet *ifp;
+
+	LLE_WLOCK_ASSERT(lle);
+	KASSERT(llt != NULL, ("lltable is NULL"));
+
+	/* Unlink entry from table */
+	if ((lle->la_flags & LLE_LINKED) != 0) {
+		ifp = llt->llt_ifp;
+		if_afdata_wlock_assert(ifp, llt->llt_af);
+		lltable_unlink_entry(llt, lle);
+	}
+
+#if 0
+	/* XXX TBD */
+	if (thread_call_cancel(lle->lle_timer) == TRUE)
+		LLE_REMREF(lle);
+#endif
+	llentry_free(lle);
+}
+
+static int
+in6_lltable_rtcheck(struct ifnet *ifp,
+		u_int flags, const struct sockaddr *l3addr)
+{
+#pragma unused(flags)
+	struct rtentry *rt;
+
+	KASSERT(l3addr->sa_family == AF_INET6,
+			("sin_family %d", l3addr->sa_family));
+	/* XXX rtalloc1 should take a const param */
+	rt = rtalloc1(__DECONST(struct sockaddr *, l3addr), 0, 0);
+	if (rt == NULL || (rt->rt_flags & RTF_GATEWAY) || rt->rt_ifp != ifp) {
+		struct ifaddr *ifa;
+		/*
+		 * Create an ND6 cache for an IPv6 neighbor
+		 * that is not covered by our own prefix.
+		 */
+		/* XXX ifaof_ifpforaddr should take a const param */
+		ifa = ifaof_ifpforaddr(__DECONST(struct sockaddr *, l3addr), ifp);
+		if (ifa != NULL) {
+			IFA_REMREF(ifa);
+			if (rt != NULL)
+				rtfree(rt);
+			return 0;
+		}
+		log(LOG_INFO, "IPv6 address: \"%s\" is not on the network\n",
+		    ip6_sprintf(&((const struct sockaddr_in6 *)(const void *)l3addr)->sin6_addr));
+		if (rt != NULL)
+			rtfree(rt);
+		return EINVAL;
+	}
+	rtfree(rt);
+	return 0;
+}
+
+static inline uint32_t
+in6_lltable_hash_dst(const struct in6_addr *dst, uint32_t hsize)
+{
+	return (IN6_LLTBL_HASH(dst->s6_addr32[3], hsize));
+}
+
+static uint32_t
+in6_lltable_hash(const struct llentry *lle, uint32_t hsize)
+{
+	return (in6_lltable_hash_dst(&lle->r_l3addr.addr6, hsize));
+}
+
+static void
+in6_lltable_fill_sa_entry(const struct llentry *lle, struct sockaddr *sa)
+{
+	struct sockaddr_in6 *sin6;
+
+	sin6 = (struct sockaddr_in6 *)(void *)sa;
+	bzero(sin6, sizeof(*sin6));
+	sin6->sin6_family = AF_INET6;
+	sin6->sin6_len = sizeof(*sin6);
+	sin6->sin6_addr = lle->r_l3addr.addr6;
+}
+
+static inline struct llentry *
+in6_lltable_find_dst(struct lltable *llt, const struct in6_addr *dst)
+{
+	struct llentry *lle;
+	struct llentries *lleh;
+	u_int hashidx;
+
+	hashidx = in6_lltable_hash_dst(dst, llt->llt_hsize);
+	lleh = &llt->lle_head[hashidx];
+	LIST_FOREACH(lle, lleh, lle_next) {
+		if (lle->la_flags & LLE_DELETED)
+			continue;
+		if (IN6_ARE_ADDR_EQUAL(&lle->r_l3addr.addr6, dst))
+			break;
+	}
+
+	return (lle);
+}
+
+static void
+in6_lltable_delete_entry(struct lltable *llt, struct llentry *lle)
+{
+#pragma unused(llt)
+	lle->la_flags |= LLE_DELETED;
+	EVENTHANDLER_INVOKE(NULL, lle_event, lle, LLENTRY_DELETED);
+#ifdef DIAGNOSTIC
+	log(LOG_INFO, "ifaddr cache = %p is deleted\n", lle);
+#endif
+	llentry_free(lle);
+}
+
+static struct llentry *
+in6_lltable_alloc(struct lltable *llt, u_int flags,
+		const struct sockaddr *l3addr)
+{
+	const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)(const void *)l3addr;
+	struct ifnet *ifp = llt->llt_ifp;
+	struct llentry *lle;
+
+	KASSERT(l3addr->sa_family == AF_INET6,
+			("sin_family %d", l3addr->sa_family));
+
+	/*
+	 * A route that covers the given address must have
+	 * been installed 1st because we are doing a resolution,
+	 * verify this.
+	 */
+	if (!(flags & LLE_IFADDR) &&
+			in6_lltable_rtcheck(ifp, flags, l3addr) != 0)
+		return (NULL);
+
+	lle = in6_lltable_new(&sin6->sin6_addr, flags);
+	if (lle == NULL) {
+		log(LOG_INFO, "lla_lookup: new lle malloc failed\n");
+		return (NULL);
+	}
+	lle->la_flags = flags;
+	if ((flags & LLE_IFADDR) == LLE_IFADDR) {
+		lltable_set_entry_addr(ifp, lle, LLADDR(SDL(ifp->if_lladdr->ifa_addr)));
+		lle->la_flags |= LLE_STATIC;
+	}
+
+	if ((lle->la_flags & LLE_STATIC) != 0)
+		lle->ln_state = ND6_LLINFO_REACHABLE;
+
+	return (lle);
+}
+
+static struct llentry *
+in6_lltable_lookup(struct lltable *llt, u_int flags,
+		const struct sockaddr *l3addr)
+{
+	const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)(const void *)l3addr;
+	struct llentry *lle;
+
+	IF_AFDATA_LOCK_ASSERT(llt->llt_ifp, llt->llt_af);
+	KASSERT(l3addr->sa_family == AF_INET6,
+			("sin_family %d", l3addr->sa_family));
+
+	lle = in6_lltable_find_dst(llt, &sin6->sin6_addr);
+
+	if (lle == NULL)
+		return (NULL);
+
+	KASSERT((flags & (LLE_UNLOCKED|LLE_EXCLUSIVE)) !=
+			(LLE_UNLOCKED|LLE_EXCLUSIVE),("wrong lle request flags: 0x%X",
+				flags));
+
+	if (flags & LLE_UNLOCKED)
+		return (lle);
+
+	if (flags & LLE_EXCLUSIVE)
+		LLE_WLOCK(lle);
+	else
+		LLE_RLOCK(lle);
+	return (lle);
+}
+
+static int
+in6_lltable_dump_entry(struct lltable *llt, struct llentry *lle,
+		struct sysctl_req *wr)
+{
+	struct ifnet *ifp = llt->llt_ifp;
+	/* XXX stack use */
+	struct {
+		struct rt_msghdr        rtm;
+		struct sockaddr_in6     sin6;
+		/*
+		 * ndp.c assumes that sdl is word aligned
+		 */
+#ifdef __LP64__
+		uint32_t                pad;
+#endif
+		struct sockaddr_dl      sdl;
+	} ndpc;
+	struct sockaddr_dl *sdl;
+	int error;
+
+	bzero(&ndpc, sizeof(ndpc));
+	/* skip deleted entries */
+	if ((lle->la_flags & LLE_DELETED) == LLE_DELETED)
+		return (0);
+	/* Skip if jailed and not a valid IP of the prison. */
+	lltable_fill_sa_entry(lle,
+			(struct sockaddr *)&ndpc.sin6);
+	/*
+	 * produce a msg made of:
+	 *  struct rt_msghdr;
+	 *  struct sockaddr_in6 (IPv6)
+	 *  struct sockaddr_dl;
+	 */
+	ndpc.rtm.rtm_msglen = sizeof(ndpc);
+	ndpc.rtm.rtm_version = RTM_VERSION;
+	ndpc.rtm.rtm_type = RTM_GET;
+	ndpc.rtm.rtm_flags = RTF_UP;
+	ndpc.rtm.rtm_addrs = RTA_DST | RTA_GATEWAY;
+
+	/* publish */
+	if (lle->la_flags & LLE_PUB)
+		ndpc.rtm.rtm_flags |= RTF_ANNOUNCE;
+	sdl = &ndpc.sdl;
+	sdl->sdl_family = AF_LINK;
+	sdl->sdl_len = sizeof(*sdl);
+	sdl->sdl_index = ifp->if_index;
+	sdl->sdl_type = ifp->if_type;
+	if ((lle->la_flags & LLE_VALID) == LLE_VALID) {
+		sdl->sdl_alen = ifp->if_addrlen;
+		bcopy(&lle->ll_addr, LLADDR(sdl), ifp->if_addrlen);
+	} else {
+		sdl->sdl_alen = 0;
+		bzero(LLADDR(sdl), ifp->if_addrlen);
+	}
+	if (lle->la_expire != 0) {
+		clock_sec_t secs;
+		clock_usec_t usecs;
+
+		clock_get_calendar_microtime(&secs, &usecs);
+		ndpc.rtm.rtm_rmx.rmx_expire = lle->la_expire +
+			lle->lle_remtime / hz +
+			secs - net_uptime();
+	}
+	ndpc.rtm.rtm_flags |= (RTF_HOST | RTF_LLDATA);
+	if (lle->la_flags & LLE_STATIC)
+		ndpc.rtm.rtm_flags |= RTF_STATIC;
+	if (lle->la_flags & LLE_IFADDR)
+		ndpc.rtm.rtm_flags |= RTF_PINNED;
+	if (lle->ln_router != 0)
+		ndpc.rtm.rtm_flags |= RTF_GATEWAY;
+	ndpc.rtm.rtm_rmx.rmx_pksent = lle->la_asked;
+	/* Store state in rmx_weight value */
+	ndpc.rtm.rtm_rmx.rmx_state = lle->ln_state;
+	ndpc.rtm.rtm_index = ifp->if_index;
+	error = SYSCTL_OUT(wr, &ndpc, sizeof(ndpc));
+
+	return (error);
+}
+
+struct lltable *
+in6_lltattach(struct ifnet *ifp)
+{
+	struct lltable *llt;
+
+	llt = lltable_allocate_htbl(IN6_LLTBL_DEFAULT_HSIZE);
+	llt->llt_af = AF_INET6;
+	llt->llt_ifp = ifp;
+
+	llt->llt_lookup = in6_lltable_lookup;
+	llt->llt_alloc_entry = in6_lltable_alloc;
+	llt->llt_delete_entry = in6_lltable_delete_entry;
+	llt->llt_dump_entry = in6_lltable_dump_entry;
+	llt->llt_hash = in6_lltable_hash;
+	llt->llt_fill_sa_entry = in6_lltable_fill_sa_entry;
+	llt->llt_free_entry = in6_lltable_free_entry;
+	llt->llt_match_prefix = in6_lltable_match_prefix;
+	lltable_link(llt);
+
+	return (llt);
+}
+
+void
+in6_ip6_to_sockaddr(const struct in6_addr *ip6, u_int16_t port,
+					struct sockaddr_in6 *sin6, u_int32_t maxlen)
+{
+	if (maxlen < sizeof(struct sockaddr_in6)) {
+		return;
+	}
+
+	*sin6 = (struct sockaddr_in6) {
+		.sin6_family = AF_INET6,
+		.sin6_len = sizeof(*sin6),
+		.sin6_port = port,
+		.sin6_addr = *ip6,
+	};
+
+	if (IN6_IS_SCOPE_EMBED(&sin6->sin6_addr))
+	{
+		sin6->sin6_scope_id = ntohs(sin6->sin6_addr.s6_addr16[1]);
+		sin6->sin6_addr.s6_addr16[1] = 0;
+	}
+}
+
+/* IPv6 events */
+struct in6_event {
+	in6_evhdlr_code_t in6_event_code;
+	struct ifnet *in6_ifp;
+	struct in6_addr in6_address;
+	uint32_t val;
+};
+
+struct in6_event2kev in6_event2kev_array[IN6_EVENT_MAX] = {
+{
+	.in6_event_code = IN6_ADDR_MARKED_DUPLICATED,
+	.in6_event_kev_subclass = KEV_ND6_SUBCLASS,
+	.in6_event_kev_code = KEV_ND6_DAD_FAILURE,
+	.in6_event_str = "IN6_ADDR_MARKED_DUPLICATED",
+},
+{
+	.in6_event_code = IN6_ADDR_MARKED_DETACHED,
+	.in6_event_kev_subclass = KEV_ND6_SUBCLASS,
+	.in6_event_kev_code = KEV_ND6_ADDR_DETACHED,
+	.in6_event_str = "IN6_ADDR_MARKED_DETACHED",
+},
+{
+	.in6_event_code = IN6_ADDR_MARKED_DEPRECATED,
+	.in6_event_kev_subclass = KEV_ND6_SUBCLASS,
+	.in6_event_kev_code = KEV_ND6_ADDR_DEPRECATED,
+	.in6_event_str = "IN6_ADDR_MARKED_DEPRECATED",
+},
+{
+	.in6_event_code = IN6_NDP_RTR_EXPIRY,
+	.in6_event_kev_subclass = KEV_ND6_SUBCLASS,
+	.in6_event_kev_code = KEV_ND6_RTR_EXPIRED,
+	.in6_event_str = "IN6_NDP_RTR_EXPIRY",
+},
+{
+	.in6_event_code = IN6_NDP_PFX_EXPIRY,
+	.in6_event_kev_subclass = KEV_ND6_SUBCLASS,
+	.in6_event_kev_code = KEV_ND6_PFX_EXPIRED,
+	.in6_event_str = "IN6_NDP_PFX_EXPIRY",
+},
+{
+	.in6_event_code = IN6_NDP_ADDR_EXPIRY,
+	.in6_event_kev_subclass = KEV_ND6_SUBCLASS,
+	.in6_event_kev_code = KEV_ND6_ADDR_EXPIRED,
+	.in6_event_str = "IN6_NDP_ADDR_EXPIRY",
+},
+};
+
+void
+in6_eventhdlr_callback(struct eventhandler_entry_arg arg0 __unused,
+    in6_evhdlr_code_t in6_ev_code, struct ifnet *ifp,
+    struct in6_addr *p_addr6, uint32_t val)
+{
+	struct kev_msg ev_msg;
+	struct kev_nd6_event nd6_event;
+
+	bzero(&ev_msg, sizeof(ev_msg));
+	bzero(&nd6_event, sizeof(nd6_event));
+
+	nd6log0((LOG_INFO, "%s Event %s received for %s\n",
+	    __func__, in6_event2kev_array[in6_ev_code].in6_event_str,
+	    ip6_sprintf(p_addr6)));
+
+	ev_msg.vendor_code      = KEV_VENDOR_APPLE;
+	ev_msg.kev_class        = KEV_NETWORK_CLASS;
+	ev_msg.kev_subclass     =
+	    in6_event2kev_array[in6_ev_code].in6_event_kev_subclass;
+	ev_msg.event_code       =
+	    in6_event2kev_array[in6_ev_code].in6_event_kev_code;
+
+	nd6_event.link_data.if_family = ifp->if_family;
+	nd6_event.link_data.if_unit = ifp->if_unit;
+	strlcpy(nd6_event.link_data.if_name, ifp->if_name,
+	    sizeof(nd6_event.link_data.if_name));
+
+	VERIFY(p_addr6 != NULL);
+	bcopy(p_addr6, &nd6_event.in6_address,
+	    sizeof(nd6_event.in6_address));
+	nd6_event.val = val;
+
+	ev_msg.dv[0].data_ptr = &nd6_event;
+	ev_msg.dv[0].data_length = sizeof(nd6_event);
+
+	kev_post_msg(&ev_msg);
+}
+
+static void
+in6_event_callback(void *arg)
+{
+	struct in6_event *p_in6_ev = (struct in6_event *)arg;
+
+	EVENTHANDLER_INVOKE(&in6_evhdlr_ctxt, in6_event,
+	    p_in6_ev->in6_event_code, p_in6_ev->in6_ifp,
+	    &p_in6_ev->in6_address, p_in6_ev->val);
+}
+
+struct in6_event_nwk_wq_entry
+{
+	struct nwk_wq_entry nwk_wqe;
+	struct in6_event in6_ev_arg;
+};
+
+void
+in6_event_enqueue_nwk_wq_entry(in6_evhdlr_code_t in6_event_code,
+    struct ifnet *ifp, struct in6_addr *p_addr6,
+    uint32_t val)
+{
+	struct in6_event_nwk_wq_entry *p_in6_ev = NULL;
+
+	MALLOC(p_in6_ev, struct in6_event_nwk_wq_entry *,
+	    sizeof(struct in6_event_nwk_wq_entry),
+	    M_NWKWQ, M_WAITOK | M_ZERO);
+
+	p_in6_ev->nwk_wqe.func = in6_event_callback;
+	p_in6_ev->nwk_wqe.is_arg_managed = TRUE;
+	p_in6_ev->nwk_wqe.arg = &p_in6_ev->in6_ev_arg;
+
+	p_in6_ev->in6_ev_arg.in6_event_code = in6_event_code;
+	p_in6_ev->in6_ev_arg.in6_ifp = ifp;
+	if (p_addr6 != NULL) {
+		bcopy(p_addr6, &p_in6_ev->in6_ev_arg.in6_address,
+		    sizeof(p_in6_ev->in6_ev_arg.in6_address));
+	}
+	p_in6_ev->in6_ev_arg.val = val;
+
+	nwk_wq_enqueue((struct nwk_wq_entry*)p_in6_ev);
 }

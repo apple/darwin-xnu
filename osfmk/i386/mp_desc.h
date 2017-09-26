@@ -101,12 +101,10 @@ typedef struct cpu_desc_table64 {
 #define	ldt_desc_p(sel) \
 	(&((struct real_descriptor *)current_ldt())[sel_idx(sel)])
 
-extern void	cpu_mode_init(cpu_data_t *cdp);
+extern void	cpu_syscall_init(cpu_data_t *cdp);
 
 extern void	cpu_desc_init(cpu_data_t *cdp);
-extern void	cpu_desc_init64(cpu_data_t *cdp);
 extern void	cpu_desc_load(cpu_data_t *cdp);
-extern void	cpu_desc_load64(cpu_data_t *cdp);
 
 extern boolean_t
 valid_user_data_selector(uint16_t selector);

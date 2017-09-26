@@ -408,10 +408,15 @@ kdp_machine_init(void) {
 		return;
 
 	vm_map_entry_t e;
-	kern_return_t kr = vm_map_find_space(kernel_map,
-	    &debugger_window_kva,
-	    PAGE_SIZE, 0,
-	    VM_MAKE_TAG(VM_KERN_MEMORY_OSFMK), &e);
+	kern_return_t kr;
+
+	kr = vm_map_find_space(kernel_map,
+			       &debugger_window_kva,
+			       PAGE_SIZE, 0,
+			       0,
+			       VM_MAP_KERNEL_FLAGS_NONE,
+			       VM_KERN_MEMORY_OSFMK,
+			       &e);
 
 	if (kr != KERN_SUCCESS) {
 		panic("%s: vm_map_find_space failed with %d\n", __FUNCTION__, kr);

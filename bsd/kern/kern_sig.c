@@ -95,8 +95,6 @@
 
 #include <security/audit/audit.h>
 
-#include <machine/spl.h>
-
 #include <kern/cpu_number.h>
 
 #include <sys/vm.h>
@@ -116,6 +114,11 @@
 
 #include <sys/sdt.h>
 #include <sys/codesign.h>
+#include <libkern/section_keywords.h>
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 /*
  * Missing prototypes that Mach should export
@@ -149,13 +152,13 @@ kern_return_t semaphore_timedwait_trap_internal(mach_port_name_t, unsigned int, 
 kern_return_t semaphore_wait_signal_trap_internal(mach_port_name_t, mach_port_name_t, void (*)(kern_return_t));
 kern_return_t semaphore_wait_trap_internal(mach_port_name_t, void (*)(kern_return_t));
 
-static int	filt_sigattach(struct knote *kn);
+static int	filt_sigattach(struct knote *kn, struct kevent_internal_s *kev);
 static void	filt_sigdetach(struct knote *kn);
 static int	filt_signal(struct knote *kn, long hint);
 static int	filt_signaltouch(struct knote *kn, struct kevent_internal_s *kev);
 static int	filt_signalprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
 
-struct filterops sig_filtops = {
+SECURITY_READ_ONLY_EARLY(struct filterops) sig_filtops = {
         .f_attach = filt_sigattach,
         .f_detach = filt_sigdetach,
         .f_event = filt_signal,
@@ -481,11 +484,11 @@ sigaction(proc_t p, struct sigaction_args *uap, __unused int32_t *retval)
 			sa->sa_flags |= SA_NOCLDWAIT;
 
 		if (IS_64BIT_PROCESS(p)) {
-			struct user64_sigaction	vec64;
+			struct user64_sigaction	vec64 = {};
 			sigaction_kern_to_user64(sa, &vec64);
 			error = copyout(&vec64, uap->osa, sizeof(vec64));
 		} else {
-			struct user32_sigaction	vec32;
+			struct user32_sigaction	vec32 = {};
 			sigaction_kern_to_user32(sa, &vec32);
 			error = copyout(&vec32, uap->osa, sizeof(vec32));
 		}
@@ -1405,11 +1408,11 @@ sigaltstack(__unused proc_t p, struct sigaltstack_args *uap, __unused int32_t *r
 	onstack = pstk->ss_flags & SA_ONSTACK;
 	if (uap->oss) {
 		if (IS_64BIT_PROCESS(p)) {
-			struct user64_sigaltstack ss64;
+			struct user64_sigaltstack ss64 = {};
 			sigaltstack_kern_to_user64(pstk, &ss64);			
 			error = copyout(&ss64, uap->oss, sizeof(ss64));
 		} else {
-			struct user32_sigaltstack ss32;
+			struct user32_sigaltstack ss32 = {};
 			sigaltstack_kern_to_user32(pstk, &ss32);			
 			error = copyout(&ss32, uap->oss, sizeof(ss32));
 		}
@@ -1668,7 +1671,7 @@ terminate_with_payload_internal(struct proc *cur_proc, int target_pid, uint32_t 
 					reason_code, 0, 0);
 
 	signal_reason = build_userspace_exit_reason(reason_namespace, reason_code, payload, payload_size,
-							reason_string, reason_flags);
+							reason_string, (reason_flags | OS_REASON_FLAG_NO_CRASHED_TID));
 
 	if (target_pid == cur_proc->p_pid) {
 		/*
@@ -2507,6 +2510,7 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum,
 			assert(signal_reason == NULL);
 			OSBitOrAtomic(P_CONTINUED, &sig_proc->p_flag);
 			sig_proc->p_contproc = sig_proc->p_pid;
+			sig_proc->p_xstat = signum;
 
 			(void) task_resume_internal(sig_task);
 
@@ -2760,6 +2764,8 @@ issignal_locked(proc_t p)
 					proc_lock(pp);
 
 					pp->si_pid = p->p_pid;
+					pp->p_xhighbits = p->p_xhighbits;
+					p->p_xhighbits = 0;
 					pp->si_status = p->p_xstat;
 					pp->si_code = CLD_TRAPPED;
 					pp->si_uid = r_uid;
@@ -3211,7 +3217,7 @@ postsig_locked(int signum)
  */
 
 static int
-filt_sigattach(struct knote *kn)
+filt_sigattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 {
 	proc_t p = current_proc();  /* can attach only to oneself */
 

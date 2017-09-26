@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -211,6 +211,11 @@ SYSCTL_UINT(_net_inet6_ip6, OID_AUTO, adj_clear_hwcksum,
 	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_adj_clear_hwcksum, 0,
 	"Invalidate hwcksum info when adjusting length");
 
+static uint32_t ip6_adj_partial_sum = 1;
+SYSCTL_UINT(_net_inet6_ip6, OID_AUTO, adj_partial_sum,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_adj_partial_sum, 0,
+	"Perform partial sum adjustment of trailing bytes at IP layer");
+
 static int ip6_input_measure = 0;
 SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, input_perf,
 	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
@@ -304,6 +309,14 @@ ip6_init(struct ip6protosw *pp, struct domain *dp)
 	if (ip6_initialized)
 		return;
 	ip6_initialized = 1;
+
+	eventhandler_lists_ctxt_init(&in6_evhdlr_ctxt);
+	(void)EVENTHANDLER_REGISTER(&in6_evhdlr_ctxt, in6_event,
+	    in6_eventhdlr_callback, eventhandler_entry_dummy_arg,
+	    EVENTHANDLER_PRI_ANY);
+
+	for (i = 0; i < IN6_EVENT_MAX; i++)
+		VERIFY(in6_event2kev_array[i].in6_event_code == i);
 
 	pr = pffindproto_locked(PF_INET6, IPPROTO_RAW, SOCK_RAW);
 	if (pr == NULL) {
@@ -451,6 +464,78 @@ ip6_init_delayed(void)
 #if NSTF
 	stfattach();
 #endif /* NSTF */
+}
+
+static void
+ip6_input_adjust(struct mbuf *m, struct ip6_hdr *ip6, uint32_t plen,
+    struct ifnet *inifp)
+{
+	boolean_t adjust = TRUE;
+	uint32_t tot_len = sizeof (*ip6) + plen;
+
+	ASSERT(m_pktlen(m) > tot_len);
+
+	/*
+	 * Invalidate hardware checksum info if ip6_adj_clear_hwcksum
+	 * is set; useful to handle buggy drivers.  Note that this
+	 * should not be enabled by default, as we may get here due
+	 * to link-layer padding.
+	 */
+	if (ip6_adj_clear_hwcksum &&
+	    (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) &&
+	    !(inifp->if_flags & IFF_LOOPBACK) &&
+	    !(m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
+		m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
+		m->m_pkthdr.csum_data = 0;
+		ip6stat.ip6s_adj_hwcsum_clr++;
+	}
+
+	/*
+	 * If partial checksum information is available, subtract
+	 * out the partial sum of postpended extraneous bytes, and
+	 * update the checksum metadata accordingly.  By doing it
+	 * here, the upper layer transport only needs to adjust any
+	 * prepended extraneous bytes (else it will do both.)
+	 */
+	if (ip6_adj_partial_sum &&
+	    (m->m_pkthdr.csum_flags & (CSUM_DATA_VALID|CSUM_PARTIAL)) ==
+	    (CSUM_DATA_VALID|CSUM_PARTIAL)) {
+		m->m_pkthdr.csum_rx_val = m_adj_sum16(m,
+		    m->m_pkthdr.csum_rx_start, m->m_pkthdr.csum_rx_start,
+		    (tot_len - m->m_pkthdr.csum_rx_start),
+		    m->m_pkthdr.csum_rx_val);
+	} else if ((m->m_pkthdr.csum_flags &
+	    (CSUM_DATA_VALID|CSUM_PARTIAL)) ==
+	    (CSUM_DATA_VALID|CSUM_PARTIAL)) {
+		/*
+		 * If packet has partial checksum info and we decided not
+		 * to subtract the partial sum of postpended extraneous
+		 * bytes here (not the default case), leave that work to
+		 * be handled by the other layers.  For now, only TCP, UDP
+		 * layers are capable of dealing with this.  For all other
+		 * protocols (including fragments), trim and ditch the
+		 * partial sum as those layers might not implement partial
+		 * checksumming (or adjustment) at all.
+		 */
+		if (ip6->ip6_nxt == IPPROTO_TCP ||
+		    ip6->ip6_nxt == IPPROTO_UDP) {
+			adjust = FALSE;
+		} else {
+			m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
+			m->m_pkthdr.csum_data = 0;
+			ip6stat.ip6s_adj_hwcsum_clr++;
+		}
+	}
+
+	if (adjust) {
+		ip6stat.ip6s_adj++;
+		if (m->m_len == m->m_pkthdr.len) {
+			m->m_len = tot_len;
+			m->m_pkthdr.len = tot_len;
+		} else {
+			m_adj(m, tot_len - m->m_pkthdr.len);
+		}
+	}
 }
 
 void
@@ -911,6 +996,14 @@ check_with_pf:
 	if (!ip6_forwarding) {
 		ip6stat.ip6s_cantforward++;
 		in6_ifstat_inc(inifp, ifs6_in_discard);
+		/*
+		 * Raise a kernel event if the packet received on cellular
+		 * interface is not intended for local host.
+		 * For now limit it to ICMPv6 packets.
+		 */
+		if (inifp->if_type == IFT_CELLULAR &&
+		    ip6->ip6_nxt == IPPROTO_ICMPV6)
+			in6_ifstat_inc(inifp, ifs6_cantfoward_icmp6);
 		goto bad;
 	}
 
@@ -1004,29 +1097,7 @@ hbhcheck:
 		goto bad;
 	}
 	if (m->m_pkthdr.len > sizeof (struct ip6_hdr) + plen) {
-		/*
-		 * Invalidate hardware checksum info if ip6_adj_clear_hwcksum
-		 * is set; useful to handle buggy drivers.  Note that this
-		 * should not be enabled by default, as we may get here due
-		 * to link-layer padding.
-		 */
-		if (ip6_adj_clear_hwcksum &&
-		    (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) &&
-		    !(inifp->if_flags & IFF_LOOPBACK) &&
-		    !(m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
-			m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
-			m->m_pkthdr.csum_data = 0;
-			ip6stat.ip6s_adj_hwcsum_clr++;
-		}
-
-		ip6stat.ip6s_adj++;
-		if (m->m_len == m->m_pkthdr.len) {
-			m->m_len = sizeof (struct ip6_hdr) + plen;
-			m->m_pkthdr.len = sizeof (struct ip6_hdr) + plen;
-		} else {
-			m_adj(m, sizeof (struct ip6_hdr) + plen -
-			    m->m_pkthdr.len);
-		}
+		ip6_input_adjust(m, ip6, plen, inifp);
 	}
 
 	/*
@@ -1741,6 +1812,9 @@ ip6_notify_pmtu(struct inpcb *in6p, struct sockaddr_in6 *dst, u_int32_t *mtu)
 
 	so =  in6p->inp_socket;
 
+	if ((in6p->inp_flags & IN6P_MTU) == 0)
+		return;
+
 	if (mtu == NULL)
 		return;
 
@@ -1750,6 +1824,14 @@ ip6_notify_pmtu(struct inpcb *in6p, struct sockaddr_in6 *dst, u_int32_t *mtu)
 		/* NOTREACHED */
 	}
 #endif
+
+	if (IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr) &&
+	    (so->so_proto == NULL || so->so_proto->pr_protocol == IPPROTO_TCP))
+		return;
+
+	if (!IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr) &&
+	    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &dst->sin6_addr))
+		return;
 
 	bzero(&mtuctl, sizeof (mtuctl));	/* zero-clear for safety */
 	mtuctl.ip6m_mtu = *mtu;

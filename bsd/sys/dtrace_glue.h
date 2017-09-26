@@ -33,6 +33,7 @@
 
 #include <libkern/libkern.h>
 #include <kern/locks.h>
+#include <kern/debug.h>
 #include <kern/thread_call.h>
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
@@ -231,6 +232,8 @@ typedef struct modctl {
 #define MODCTL_HAS_UUID				0x40  // Module has UUID
 #define MODCTL_FBT_PRIVATE_PROBES_PROVIDED	0x80  // fbt private probes have been provided
 #define MODCTL_FBT_PROVIDE_PRIVATE_PROBES	0x100 // fbt provider must provide private probes
+#define MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES	0x200 // fbt provider must provide blacklisted probes
+#define MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED 0x400 // fbt blacklisted probes have been provided
 
 /* Simple/singular mod_flags accessors */
 #define MOD_IS_MACH_KERNEL(mod)			(mod->mod_flags & MODCTL_IS_MACH_KERNEL)
@@ -243,10 +246,13 @@ typedef struct modctl {
 #define MOD_HAS_UUID(mod)			(mod->mod_flags & MODCTL_HAS_UUID)
 #define MOD_FBT_PRIVATE_PROBES_PROVIDED(mod)	(mod->mod_flags & MODCTL_FBT_PRIVATE_PROBES_PROVIDED)
 #define MOD_FBT_PROVIDE_PRIVATE_PROBES(mod)	(mod->mod_flags & MODCTL_FBT_PROVIDE_PRIVATE_PROBES)
+#define MOD_FBT_BLACKLISTED_PROBES_PROVIDED(mod) (mod->mod_flags & MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED)
+#define MOD_FBT_PROVIDE_BLACKLISTED_PROBES(mod)	(mod->mod_flags & MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES)
 
 /* Compound accessors */
 #define MOD_FBT_PRIVATE_PROBES_DONE(mod)	(MOD_FBT_PRIVATE_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_PRIVATE_PROBES(mod))
-#define MOD_FBT_DONE(mod)			((MOD_FBT_PROBES_PROVIDED(mod) && MOD_FBT_PRIVATE_PROBES_DONE(mod)) || MOD_FBT_INVALID(mod))
+#define MOD_FBT_BLACKLISTED_PROBES_DONE(mod)	(MOD_FBT_BLACKLISTED_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_BLACKLISTED_PROBES(mod))
+#define MOD_FBT_DONE(mod)			((MOD_FBT_PROBES_PROVIDED(mod) && MOD_FBT_PRIVATE_PROBES_DONE(mod) && MOD_FBT_BLACKLISTED_PROBES_DONE(mod)) || MOD_FBT_INVALID(mod))
 #define MOD_SDT_DONE(mod)			(MOD_SDT_PROBES_PROVIDED(mod) || MOD_SDT_INVALID(mod))
 #define MOD_SYMBOLS_DONE(mod)			(MOD_FBT_DONE(mod) && MOD_SDT_DONE(mod))
 
@@ -324,12 +330,6 @@ extern void cyclic_remove_omni(cyclic_id_list_t);
 
 extern cyclic_id_t cyclic_timer_add(cyc_handler_t *, cyc_time_t *);
 extern void cyclic_timer_remove(cyclic_id_t);
-
-/*
- * timeout / untimeout (converted to dtrace_timeout / dtrace_untimeout due to name collision)
- */
-
-thread_call_t dtrace_timeout(void (*func)(void *, void *), void* arg, uint64_t nanos);
 
 /*
  * ddi
@@ -505,6 +505,16 @@ extern void vmem_free(vmem_t *vmp, void *vaddr, size_t size);
  * Atomic
  */
 
+static inline uint8_t atomic_or_8(uint8_t *addr, uint8_t mask)
+{
+	return OSBitOrAtomic8(mask, addr);
+}
+
+static inline uint32_t atomic_and_32( uint32_t *addr, int32_t mask)
+{
+	return OSBitAndAtomic(mask, addr);
+}
+
 static inline uint32_t atomic_add_32( uint32_t *theAddress, int32_t theAmount )
 {
 	return OSAddAtomic( theAmount, theAddress );
@@ -515,12 +525,22 @@ static inline void atomic_add_64( uint64_t *theAddress, int64_t theAmount )
 {
 	(void)OSAddAtomic64( theAmount, (SInt64 *)theAddress );
 }
-#endif
-
-static inline uint32_t atomic_and_32(uint32_t *addr, uint32_t mask)
+#elif defined(__arm__)
+static inline void atomic_add_64( uint64_t *theAddress, int64_t theAmount )
 {
-	return OSBitAndAtomic(mask, addr);
+	// FIXME
+	// atomic_add_64() is at present only called from fasttrap.c to increment
+	// or decrement a 64bit counter. Narrow to 32bits since arm has
+	// no convenient 64bit atomic op.
+	
+	(void)OSAddAtomic( (int32_t)theAmount, &(((SInt32 *)theAddress)[0]));
 }
+#elif defined (__arm64__)
+static inline void atomic_add_64( uint64_t *theAddress, int64_t theAmount )
+{
+	(void)OSAddAtomic64( theAmount, (SInt64 *)theAddress );
+}
+#endif
 
 static inline uint32_t atomic_or_32(uint32_t *addr, uint32_t mask)
 {
@@ -534,12 +554,14 @@ static inline uint32_t atomic_or_32(uint32_t *addr, uint32_t mask)
 
 typedef uintptr_t pc_t;
 typedef uintptr_t greg_t; /* For dtrace_impl.h prototype of dtrace_getfp() */
+#if defined(__arm__) || defined(__arm64__)
+#define regs arm_saved_state
+#endif
 extern struct regs *find_user_regs( thread_t thread);
 extern vm_offset_t dtrace_get_cpu_int_stack_top(void);
 extern vm_offset_t max_valid_stack_address(void); /* kern/thread.h */
 
-extern volatile int panicwait; /* kern/debug.c */
-#define panic_quiesce (panicwait)
+#define panic_quiesce (panic_active())
 
 #define	IS_P2ALIGNED(v, a) ((((uintptr_t)(v)) & ((uintptr_t)(a) - 1)) == 0)
 
@@ -548,6 +570,10 @@ extern int vuprintf(const char *, va_list);
 extern hrtime_t dtrace_abs_to_nano(uint64_t);
 
 __private_extern__ const char * strstr(const char *, const char *);
+const void* bsearch(const void*, const void*, size_t, size_t, int (*compar)(const void *, const void *));
+
+int dtrace_buffer_copyout(const void*, user_addr_t, vm_size_t);
+
 
 #define DTRACE_NCLIENTS 32
 

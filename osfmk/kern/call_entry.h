@@ -35,7 +35,9 @@
 #ifdef XNU_KERNEL_PRIVATE
 #include <kern/queue.h>
 
+#if !CONFIG_EMBEDDED
 #define TIMER_TRACE	1
+#endif
 
 typedef void		*call_entry_param_t;
 typedef void		(*call_entry_func_t)(
@@ -78,9 +80,9 @@ call_entry_enqueue_tail(
         queue_t                 old_queue = entry->queue;
 
         if (old_queue != NULL)
-                (void)remque(qe(entry));
-
-        enqueue_tail(queue, qe(entry));
+		re_queue_tail(queue, &entry->q_link);
+	else
+		enqueue_tail(queue, &entry->q_link);
 
         entry->queue = queue;
 

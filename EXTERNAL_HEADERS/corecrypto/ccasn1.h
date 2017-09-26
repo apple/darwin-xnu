@@ -88,7 +88,7 @@ size_t ccoid_size(ccoid_t oid) {
     return 2 + CCOID(oid)[1];
 }
 
-CC_INLINE CC_PURE CC_NONNULL((1)) CC_NONNULL((2))
+CC_INLINE CC_PURE CC_NONNULL_TU((1)) CC_NONNULL_TU((2))
 bool ccoid_equal(ccoid_t oid1, ccoid_t oid2) {
     return  (ccoid_size(oid1) == ccoid_size(oid2)
             && memcmp(CCOID(oid1), CCOID(oid2), ccoid_size(oid1))== 0);

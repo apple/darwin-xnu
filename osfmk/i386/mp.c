@@ -29,7 +29,6 @@
  * @OSF_COPYRIGHT@
  */
 
-#include <mach_rt.h>
 #include <mach_kdp.h>
 #include <kdp/kdp_internal.h>
 #include <mach_ldebug.h>
@@ -85,6 +84,10 @@
 
 #include <console/serial_protos.h>
 
+#if MONOTONIC
+#include <kern/monotonic.h>
+#endif /* MONOTONIC */
+
 #if	MP_DEBUG
 #define PAUSE		delay(1000000)
 #define DBG(x...)	kprintf(x)
@@ -112,7 +115,6 @@ void		i386_cpu_IPI(int cpu);
 static void	mp_kdp_wait(boolean_t flush, boolean_t isNMI);
 #endif /* MACH_KDP */
 
-static boolean_t	mp_safe_spin_lock(usimple_lock_t lock);
 #if MACH_KDP
 static boolean_t	cpu_signal_pending(int cpu, mp_event_t event);
 #endif /* MACH_KDP */
@@ -122,7 +124,10 @@ boolean_t 		smp_initialized = FALSE;
 uint32_t 		TSC_sync_margin = 0xFFF;
 volatile boolean_t	force_immediate_debugger_NMI = FALSE;
 volatile boolean_t	pmap_tlb_flush_timeout = FALSE;
-decl_simple_lock_data(,mp_kdp_lock);
+#if DEBUG || DEVELOPMENT
+boolean_t 		mp_interrupt_watchdog_enabled = TRUE;
+uint32_t		mp_interrupt_watchdog_events = 0;
+#endif
 
 decl_simple_lock_data(,debugger_callback_lock);
 struct debugger_callback *debugger_callback = NULL;
@@ -168,14 +173,14 @@ lck_mtx_ext_t	mp_bc_lock_ext;
 static	volatile int 	debugger_cpu = -1;
 volatile long	 NMIPI_acks = 0;
 volatile long	 NMI_count = 0;
+static NMI_reason_t	NMI_panic_reason = NONE;
+static int		vector_timed_out;
 
 extern void	NMI_cpus(void);
 
 static void	mp_cpus_call_init(void); 
 static void	mp_cpus_call_action(void); 
 static void	mp_call_PM(void);
-
-static boolean_t	mp_cpus_call_wait_timeout = FALSE;
 
 char		mp_slave_stack[PAGE_SIZE] __attribute__((aligned(PAGE_SIZE))); // Temp stack for slave init
 
@@ -227,7 +232,6 @@ static void		free_warm_timer_call(timer_call_t call);
 void
 smp_init(void)
 {
-	simple_lock_init(&mp_kdp_lock, 0);
 	simple_lock_init(&mp_rv_lock, 0);
 	simple_lock_init(&debugger_callback_lock, 0);
 	lck_grp_attr_setdefault(&smp_lck_grp_attr);
@@ -247,6 +251,15 @@ smp_init(void)
 
 	mp_cpus_call_init();
 	mp_cpus_call_cpu_init(master_cpu);
+
+#if DEBUG || DEVELOPMENT
+	if (PE_parse_boot_argn("interrupt_watchdog",
+			       &mp_interrupt_watchdog_enabled,
+			       sizeof(mp_interrupt_watchdog_enabled))) {
+		kprintf("Interrupt watchdog %sabled\n",
+			mp_interrupt_watchdog_enabled ? "en" : "dis");
+	}
+#endif
 
 	if (PE_parse_boot_argn("TSC_sync_margin",
 					&TSC_sync_margin, sizeof(TSC_sync_margin))) {
@@ -444,7 +457,7 @@ intel_startCPU(
 	 * Initialize (or re-initialize) the descriptor tables for this cpu.
 	 * Propagate processor mode to slave.
 	 */
-	cpu_desc_init64(cpu_datap(slot_num));
+	cpu_desc_init(cpu_datap(slot_num));
 
 	/* Serialize use of the slave boot stack, etc. */
 	lck_mtx_lock(&mp_cpu_boot_lock);
@@ -570,6 +583,8 @@ static int
 NMIInterruptHandler(x86_saved_state_t *regs)
 {
 	void 		*stackptr;
+	char		pstr[192];
+	uint64_t	now = mach_absolute_time();
 
 	if (panic_active() && !panicDebugging) {
 		if (pmsafe_debug)
@@ -586,29 +601,34 @@ NMIInterruptHandler(x86_saved_state_t *regs)
 	if (cpu_number() == debugger_cpu)
 		goto NMExit;
 
-	if (spinlock_timed_out) {
-		char pstr[192];
-		snprintf(&pstr[0], sizeof(pstr), "Panic(CPU %d): NMIPI for spinlock acquisition timeout, spinlock: %p, spinlock owner: %p, current_thread: %p, spinlock_owner_cpu: 0x%x\n", cpu_number(), spinlock_timed_out, (void *) spinlock_timed_out->interlock.lock_data, current_thread(), spinlock_owner_cpu);
+	if (NMI_panic_reason == SPINLOCK_TIMEOUT) {
+		snprintf(&pstr[0], sizeof(pstr),
+			"Panic(CPU %d, time %llu): NMIPI for spinlock acquisition timeout, spinlock: %p, spinlock owner: %p, current_thread: %p, spinlock_owner_cpu: 0x%x\n",
+			cpu_number(), now, spinlock_timed_out, (void *) spinlock_timed_out->interlock.lock_data, current_thread(), spinlock_owner_cpu);
 		panic_i386_backtrace(stackptr, 64, &pstr[0], TRUE, regs);
-	} else if (mp_cpus_call_wait_timeout) {
-		char pstr[192];
-		snprintf(&pstr[0], sizeof(pstr), "Panic(CPU %d): Unresponsive processor, this CPU timed-out during cross-call\n", cpu_number());
-		panic_i386_backtrace(stackptr, 64, &pstr[0], TRUE, regs);
-	} else if (pmap_tlb_flush_timeout == TRUE) {
-		char pstr[128];
-		snprintf(&pstr[0], sizeof(pstr), "Panic(CPU %d): Unresponsive processor (this CPU did not acknowledge interrupts) TLB state:0x%x\n", cpu_number(), current_cpu_datap()->cpu_tlb_invalid);
+	} else if (NMI_panic_reason == TLB_FLUSH_TIMEOUT) {
+		snprintf(&pstr[0], sizeof(pstr),
+			"Panic(CPU %d, time %llu): NMIPI for unresponsive processor: TLB flush timeout, TLB state:0x%x\n",
+			cpu_number(), now, current_cpu_datap()->cpu_tlb_invalid);
 		panic_i386_backtrace(stackptr, 48, &pstr[0], TRUE, regs);
-	} 
-
+	} else if (NMI_panic_reason == CROSSCALL_TIMEOUT) {
+		snprintf(&pstr[0], sizeof(pstr),
+			"Panic(CPU %d, time %llu): NMIPI for unresponsive processor: cross-call timeout\n",
+			cpu_number(), now);
+		panic_i386_backtrace(stackptr, 64, &pstr[0], TRUE, regs);
+	} else if (NMI_panic_reason == INTERRUPT_WATCHDOG) {
+		snprintf(&pstr[0], sizeof(pstr),
+			"Panic(CPU %d, time %llu): NMIPI for unresponsive processor: interrupt watchdog for vector 0x%x\n",
+			cpu_number(), now, vector_timed_out);
+		panic_i386_backtrace(stackptr, 64, &pstr[0], TRUE, regs);
+	}
+	
 #if MACH_KDP
 	if (pmsafe_debug && !kdp_snapshot)
 		pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
 	current_cpu_datap()->cpu_NMI_acknowledged = TRUE;
 	i_bit_clear(MP_KDP, &current_cpu_datap()->cpu_signals);
-	if (pmap_tlb_flush_timeout ||
-	    spinlock_timed_out ||
-	    mp_cpus_call_wait_timeout ||
-	    panic_active()) {
+	if (panic_active() || NMI_panic_reason != NONE) {
 		mp_kdp_wait(FALSE, TRUE);
 	} else if (!mp_kdp_trap &&
 		   !mp_kdp_is_NMI &&
@@ -791,7 +811,7 @@ mp_spin_timeout(uint64_t tsc_start)
  * are still serviced if interrupts are masked while we spin.
  * Returns current interrupt state.
  */
-static boolean_t
+boolean_t
 mp_safe_spin_lock(usimple_lock_t lock)
 {
 	if (ml_get_interrupts_enabled()) {
@@ -807,11 +827,9 @@ mp_safe_spin_lock(usimple_lock_t lock)
 						   lock->interlock.lock_data;
 				spinlock_timed_out = lock;
 				lock_cpu = spinlock_timeout_NMI(lowner);
-				panic("mp_safe_spin_lock() timed out,"
-				      " lock: %p, owner thread: 0x%lx,"
-				      " current_thread: %p, owner on CPU 0x%x",
-				      lock, lowner,
-				      current_thread(), lock_cpu);
+				NMIPI_panic(cpu_to_cpumask(lock_cpu), SPINLOCK_TIMEOUT);
+				panic("mp_safe_spin_lock() timed out, lock: %p, owner thread: 0x%lx, current_thread: %p, owner on CPU 0x%x, time: %llu",
+				      lock, lowner, current_thread(), lock_cpu, mach_absolute_time());
 			}
 		}
 		return FALSE;
@@ -1008,18 +1026,33 @@ mp_call_head_lock(mp_call_queue_t *cqp)
 	return intrs_enabled;
 }
 
+/*
+ * Deliver an NMIPI to a set of processors to cause them to panic .
+ */
 void
-mp_cpus_NMIPI(cpumask_t cpu_mask) {
+NMIPI_panic(cpumask_t cpu_mask, NMI_reason_t why) {
 	unsigned int cpu, cpu_bit;
 	uint64_t deadline;
 
+	NMI_panic_reason = why;
+
 	for (cpu = 0, cpu_bit = 1; cpu < real_ncpus; cpu++, cpu_bit <<= 1) {
-		if (cpu_mask & cpu_bit)
-			cpu_NMI_interrupt(cpu);
+		if ((cpu_mask & cpu_bit) == 0)
+			continue;
+		cpu_datap(cpu)->cpu_NMI_acknowledged = FALSE;
+		cpu_NMI_interrupt(cpu);
 	}
-	deadline = mach_absolute_time() + (LockTimeOut);
-	while (mach_absolute_time() < deadline)
-		cpu_pause();
+
+	/* Wait (only so long) for NMi'ed cpus to respond */
+	deadline = mach_absolute_time() + LockTimeOut;
+	for (cpu = 0, cpu_bit = 1; cpu < real_ncpus; cpu++, cpu_bit <<= 1) {
+		if ((cpu_mask & cpu_bit) == 0)
+			continue;
+		while (!cpu_datap(cpu)->cpu_NMI_acknowledged &&
+			mach_absolute_time() < deadline) {
+			cpu_pause();
+		}
+	}
 }
 
 #if MACH_ASSERT
@@ -1200,9 +1233,8 @@ mp_cpus_call_wait(boolean_t	intrs_enabled,
 		if (mp_spin_timeout(tsc_spin_start)) {
 			cpumask_t	cpus_unresponsive;
 
-			mp_cpus_call_wait_timeout = TRUE;
 			cpus_unresponsive = cpus_called & ~(*cpus_responded);
-			mp_cpus_NMIPI(cpus_unresponsive);
+			NMIPI_panic(cpus_unresponsive, CROSSCALL_TIMEOUT);
 			panic("mp_cpus_call_wait() timeout, cpus: 0x%llx",
 				cpus_unresponsive);
 		}
@@ -1452,7 +1484,7 @@ i386_activate_cpu(void)
 		return;
 	}
 
-	simple_lock(&x86_topo_lock);
+	mp_safe_spin_lock(&x86_topo_lock);
 	cdp->cpu_running = TRUE;
 	started_cpu();
 	simple_unlock(&x86_topo_lock);
@@ -1470,7 +1502,7 @@ i386_deactivate_cpu(void)
 		TRACE_MP_CPU_DEACTIVATE | DBG_FUNC_START,
 		0, 0, 0, 0, 0);
 
-	simple_lock(&x86_topo_lock);
+	mp_safe_spin_lock(&x86_topo_lock);
 	cdp->cpu_running = FALSE;
 	simple_unlock(&x86_topo_lock);
 
@@ -1480,6 +1512,10 @@ i386_deactivate_cpu(void)
 	 */
 	timer_queue_shutdown(&cdp->rtclock_timer.queue);
 	mp_cpus_call(cpu_to_cpumask(master_cpu), ASYNC, timer_queue_expire_local, NULL);
+
+#if MONOTONIC
+	mt_cpu_down(cdp);
+#endif /* MONOTONIC */
 
 	/*
 	 * Open an interrupt window
@@ -1514,7 +1550,7 @@ boolean_t		mp_kdp_state;
 
 
 void
-mp_kdp_enter(void)
+mp_kdp_enter(boolean_t proceed_on_failure)
 {
 	unsigned int	cpu;
 	unsigned int	ncpus = 0;
@@ -1522,11 +1558,6 @@ mp_kdp_enter(void)
 	uint64_t	tsc_timeout;
 
 	DBG("mp_kdp_enter()\n");
-
-#if DEBUG
-	if (!smp_initialized)
-		simple_lock_init(&mp_kdp_lock, 0);
-#endif
 
 	/*
 	 * Here to enter the debugger.
@@ -1542,26 +1573,44 @@ mp_kdp_enter(void)
 		return;
 	}
 
-	cpu_datap(my_cpu)->debugger_entry_time = mach_absolute_time();
-	simple_lock(&mp_kdp_lock);
+	uint64_t start_time = cpu_datap(my_cpu)->debugger_entry_time = mach_absolute_time();
+	int locked = 0;
+	while (!locked || mp_kdp_trap) {
+		if (locked) {
+			simple_unlock(&x86_topo_lock);
+		}
+		if (proceed_on_failure) {
+			if (mach_absolute_time() - start_time > 500000000ll) {
+				kprintf("mp_kdp_enter() can't get x86_topo_lock! Debugging anyway! #YOLO\n");
+				break;
+			}
+			locked = simple_lock_try(&x86_topo_lock);
+			if (!locked) {
+				cpu_pause();
+			}
+		} else {
+			mp_safe_spin_lock(&x86_topo_lock);
+			locked = TRUE;
+		}
+
+		if (locked && mp_kdp_trap) {
+			simple_unlock(&x86_topo_lock);
+			DBG("mp_kdp_enter() race lost\n");
+#if MACH_KDP
+			mp_kdp_wait(TRUE, FALSE);
+#endif
+			locked = FALSE;
+		}
+	}
 
 	if (pmsafe_debug && !kdp_snapshot)
-	    pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
+		pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
 
-	while (mp_kdp_trap) {
-		simple_unlock(&mp_kdp_lock);
-		DBG("mp_kdp_enter() race lost\n");
-#if MACH_KDP
-		mp_kdp_wait(TRUE, FALSE);
-#endif
-		simple_lock(&mp_kdp_lock);
-	}
 	debugger_cpu = my_cpu;
 	ncpus = 1;
-	mp_kdp_ncpus = 1;	/* self */
+	atomic_incl((volatile long *)&mp_kdp_ncpus, 1);
 	mp_kdp_trap = TRUE;
 	debugger_entry_time = cpu_datap(my_cpu)->debugger_entry_time;
-	simple_unlock(&mp_kdp_lock);
 
 	/*
 	 * Deliver a nudge to other cpus, counting how many
@@ -1625,6 +1674,10 @@ mp_kdp_enter(void)
 				continue;
 			cpu_NMI_interrupt(cpu);
 		}
+
+	if (locked) {
+		simple_unlock(&x86_topo_lock);
+	}
 
 	DBG("mp_kdp_enter() %d processors done %s\n",
 	    (int)mp_kdp_ncpus, (mp_kdp_ncpus == ncpus) ? "OK" : "timed out");
@@ -1737,35 +1790,7 @@ mp_kdp_exit(void)
 
 	DBG("mp_kdp_exit() done\n");
 	(void) ml_set_interrupts_enabled(mp_kdp_state);
-	postcode(0);
-}
-
-#define TRAP_DEBUGGER __asm__ volatile("int3")
-
-kern_return_t
-DebuggerWithCallback(kern_return_t (*callback) (void*),
-					 void *callback_context,
-					 boolean_t proceed_on_sync_failure)
-{
-	simple_lock(&debugger_callback_lock);
-
-	struct debugger_callback callback_buf = {
-		.callback = callback,
-		.callback_context = callback_context,
-		.proceed_on_sync_failure = proceed_on_sync_failure,
-		.error = KERN_FAILURE
-	};
-
-	assert(debugger_callback == NULL);
-	debugger_callback = &callback_buf;
-
-	TRAP_DEBUGGER;
-
-	debugger_callback = NULL;
-
-	simple_unlock(&debugger_callback_lock);
-
-	return callback_buf.error;
+	postcode(MP_KDP_EXIT);
 }
 
 #endif	/* MACH_KDP */
@@ -1941,14 +1966,95 @@ kernel_spin(uint64_t spin_ns)
 	boolean_t	istate;
 	uint64_t	spin_abs;
 	uint64_t	deadline;
+	cpu_data_t	*cdp;
 
 	kprintf("kernel_spin(%llu) spinning uninterruptibly\n", spin_ns);
 	istate = ml_set_interrupts_enabled(FALSE);
+	cdp = current_cpu_datap();
 	nanoseconds_to_absolutetime(spin_ns, &spin_abs);
+
+	/* Fake interrupt handler entry for testing mp_interrupt_watchdog() */
+	cdp->cpu_int_event_time = mach_absolute_time();
+	cdp->cpu_int_state = (void *) USER_STATE(current_thread());
+
 	deadline = mach_absolute_time() + spin_ns;
 	while (mach_absolute_time() < deadline)
 		cpu_pause();
+
+	cdp->cpu_int_event_time = 0;
+	cdp->cpu_int_state = NULL;
+
 	ml_set_interrupts_enabled(istate);
 	kprintf("kernel_spin() continuing\n");
+}
+
+/*
+ * Called from the scheduler's maintenance thread,
+ * scan running processors for long-running ISRs and:
+ *  - panic if longer than LockTimeOut, or
+ *  - log if more than a quantum.
+ */
+void
+mp_interrupt_watchdog(void)
+{
+	cpu_t			cpu;
+	boolean_t		intrs_enabled = FALSE;
+	uint16_t		cpu_int_num;
+	uint64_t		cpu_int_event_time;
+	uint64_t		cpu_rip;
+	uint64_t		cpu_int_duration;
+	uint64_t		now;
+	x86_saved_state_t	*cpu_int_state;
+
+	if (__improbable(!mp_interrupt_watchdog_enabled))
+		return;
+
+	intrs_enabled = ml_set_interrupts_enabled(FALSE);
+	now = mach_absolute_time();
+	/*
+	 * While timeouts are not suspended,
+	 * check all other processors for long outstanding interrupt handling.
+	 */
+	for (cpu = 0;
+	     cpu < (cpu_t) real_ncpus && !machine_timeout_suspended();
+	     cpu++) {
+		if ((cpu == (cpu_t) cpu_number()) ||
+		    (!cpu_datap(cpu)->cpu_running))
+			continue;
+		cpu_int_event_time = cpu_datap(cpu)->cpu_int_event_time;
+		if (cpu_int_event_time == 0)
+			continue;
+		if (__improbable(now < cpu_int_event_time))
+			continue;	/* skip due to inter-processor skew */
+		cpu_int_state = cpu_datap(cpu)->cpu_int_state;
+		if (__improbable(cpu_int_state == NULL))
+			/* The interrupt may have been dismissed */
+			continue;
+
+		/* Here with a cpu handling an interrupt */
+
+		cpu_int_duration = now - cpu_int_event_time;
+		if (__improbable(cpu_int_duration > LockTimeOut)) {
+			cpu_int_num = saved_state64(cpu_int_state)->isf.trapno;
+			cpu_rip = saved_state64(cpu_int_state)->isf.rip;
+			vector_timed_out = cpu_int_num;
+			NMIPI_panic(cpu_to_cpumask(cpu), INTERRUPT_WATCHDOG);
+			panic("Interrupt watchdog, "
+				"cpu: %d interrupt: 0x%x time: %llu..%llu state: %p RIP: 0x%llx",
+				cpu, cpu_int_num, cpu_int_event_time, now, cpu_int_state, cpu_rip);
+			/* NOT REACHED */
+		} else if (__improbable(cpu_int_duration > (uint64_t) std_quantum)) {
+			mp_interrupt_watchdog_events++;
+			cpu_int_num = saved_state64(cpu_int_state)->isf.trapno;
+			cpu_rip = saved_state64(cpu_int_state)->isf.rip;
+			ml_set_interrupts_enabled(intrs_enabled);
+			printf("Interrupt watchdog, "
+				"cpu: %d interrupt: 0x%x time: %llu..%llu RIP: 0x%llx\n",
+				cpu, cpu_int_num, cpu_int_event_time, now, cpu_rip);
+			return;
+		}
+	}
+
+	ml_set_interrupts_enabled(intrs_enabled);
 }
 #endif

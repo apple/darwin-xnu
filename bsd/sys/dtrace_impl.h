@@ -1343,7 +1343,7 @@ typedef struct dtrace_toxrange {
 	uintptr_t	dtt_limit;		/* limit of toxic range */
 } dtrace_toxrange_t;
 
-extern uint64_t dtrace_getarg(int, int);
+extern uint64_t dtrace_getarg(int, int, dtrace_mstate_t*, dtrace_vstate_t*);
 extern int dtrace_getipl(void);
 extern uintptr_t dtrace_caller(int);
 extern uint32_t dtrace_cas32(uint32_t *, uint32_t, uint32_t);
@@ -1353,6 +1353,9 @@ extern void dtrace_copyinstr(user_addr_t, uintptr_t, size_t, volatile uint16_t *
 extern void dtrace_copyout(uintptr_t, user_addr_t, size_t, volatile uint16_t *);
 extern void dtrace_copyoutstr(uintptr_t, user_addr_t, size_t, volatile uint16_t *);
 extern void dtrace_getpcstack(pc_t *, int, int, uint32_t *);
+extern uint64_t dtrace_load64(uintptr_t);
+extern int dtrace_canload(uint64_t, size_t, dtrace_mstate_t*, dtrace_vstate_t*);
+
 extern uint64_t dtrace_getreg(struct regs *, uint_t);
 extern int dtrace_getstackdepth(int);
 extern void dtrace_getupcstack(uint64_t *, int);

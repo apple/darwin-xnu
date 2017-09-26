@@ -54,7 +54,6 @@
  * the rights to redistribute these changes.
  */
 
-#include <mach_rt.h>
 #include <mach_debug.h>
 #include <mach_ldebug.h>
 
@@ -118,6 +117,11 @@ unsigned int _MachineStateCount[] = {
 	[x86_AVX_STATE32]	= x86_AVX_STATE32_COUNT,
 	[x86_AVX_STATE64]	= x86_AVX_STATE64_COUNT,
 	[x86_AVX_STATE]		= x86_AVX_STATE_COUNT,
+#if !defined(RC_HIDE_XNU_J137)
+	[x86_AVX512_STATE32]	= x86_AVX512_STATE32_COUNT,
+	[x86_AVX512_STATE64]	= x86_AVX512_STATE64_COUNT,
+	[x86_AVX512_STATE]	= x86_AVX512_STATE_COUNT,
+#endif /* not RC_HIDE_XNU_J137 */
 };
 
 zone_t		iss_zone;		/* zone for saved_state area */
@@ -127,7 +131,7 @@ zone_t		ids_zone;		/* zone for debug_state area */
 
 extern void		Thread_continue(void);
 extern void		Load_context(
-				thread_t			thread);
+				thread_t			thread) __attribute__((noreturn));
 
 static void
 get_exception_state32(thread_t thread, x86_exception_state32_t *es);
@@ -410,16 +414,16 @@ machine_switch_context(
 	thread_continue_t	continuation,
 	thread_t			new)
 {
-#if MACH_RT
 	assert(current_cpu_datap()->cpu_active_stack == old->kernel_stack);
-#endif
 
+#if KPC
 	kpc_off_cpu(old);
+#endif /* KPC */
 
 	/*
 	 *	Save FP registers if in use.
 	 */
-	fpu_save_context(old);
+	fpu_switch_context(old, new);
 
 	old->machine.specFlags &= ~OnProc;
 	new->machine.specFlags |= OnProc;
@@ -463,7 +467,7 @@ machine_processor_shutdown(
 #if CONFIG_VMX
 	vmx_suspend();
 #endif
-	fpu_save_context(thread);
+	fpu_switch_context(thread, NULL);
 	pmap_switch_context(thread, processor->idle_thread, cpu_number());
 	return(Shutdown_context(thread, doshutdown, processor));
 }
@@ -869,8 +873,12 @@ machine_thread_set_state(
 	}
 
 	case x86_FLOAT_STATE32:
+	case x86_AVX_STATE32:
+#if !defined(RC_HIDE_XNU_J137)
+	case x86_AVX512_STATE32:
+#endif /* not RC_HIDE_XNU_J137 */
 	{
-		if (count != x86_FLOAT_STATE32_COUNT)
+		if (count != _MachineStateCount[flavor])
 			return(KERN_INVALID_ARGUMENT);
 
 		if (thread_is_64bit(thr_act))
@@ -880,11 +888,15 @@ machine_thread_set_state(
 	}
 
 	case x86_FLOAT_STATE64:
+	case x86_AVX_STATE64:
+#if !defined(RC_HIDE_XNU_J137)
+	case x86_AVX512_STATE64:
+#endif /* not RC_HIDE_XNU_J137 */
 	{
-		if (count != x86_FLOAT_STATE64_COUNT)
+		if (count != _MachineStateCount[flavor])
 			return(KERN_INVALID_ARGUMENT);
 
-		if ( !thread_is_64bit(thr_act))
+		if (!thread_is_64bit(thr_act))
 			return(KERN_INVALID_ARGUMENT);
 
 		return fpu_set_fxstate(thr_act, tstate, flavor);
@@ -909,49 +921,33 @@ machine_thread_set_state(
 		return(KERN_INVALID_ARGUMENT);
 	}
 
-	case x86_AVX_STATE32:
-	{
-		if (count != x86_AVX_STATE32_COUNT)
-			return(KERN_INVALID_ARGUMENT);
-
-		if (thread_is_64bit(thr_act))
-			return(KERN_INVALID_ARGUMENT);
-
-		return fpu_set_fxstate(thr_act, tstate, flavor);
-	}
-
-	case x86_AVX_STATE64:
-	{
-		if (count != x86_AVX_STATE64_COUNT)
-			return(KERN_INVALID_ARGUMENT);
-
-		if (!thread_is_64bit(thr_act))
-			return(KERN_INVALID_ARGUMENT);
-
-		return fpu_set_fxstate(thr_act, tstate, flavor);
-	}
-
 	case x86_AVX_STATE:
+#if !defined(RC_HIDE_XNU_J137)
+	case x86_AVX512_STATE:
+#endif
 	{   
 		x86_avx_state_t       *state;
 
-		if (count != x86_AVX_STATE_COUNT)
+		if (count != _MachineStateCount[flavor])
 			return(KERN_INVALID_ARGUMENT);
 
 		state = (x86_avx_state_t *)tstate;
-		if (state->ash.flavor == x86_AVX_STATE64 &&
-		    state->ash.count  == x86_FLOAT_STATE64_COUNT &&
+		/* Flavors are defined to have sequential values: 32-bit, 64-bit, non-specific */
+		/* 64-bit flavor? */
+		if (state->ash.flavor == (flavor - 1) &&
+		    state->ash.count  == _MachineStateCount[flavor - 1] &&
 		    thread_is_64bit(thr_act)) {
 			return fpu_set_fxstate(thr_act,
 					       (thread_state_t)&state->ufs.as64,
-					       x86_FLOAT_STATE64);
+					       flavor - 1);
 		}
-		if (state->ash.flavor == x86_FLOAT_STATE32 &&
-		    state->ash.count  == x86_FLOAT_STATE32_COUNT &&
+		/* 32-bit flavor? */
+		if (state->ash.flavor == (flavor - 2) &&
+		    state->ash.count  == _MachineStateCount[flavor - 2] &&
 		    !thread_is_64bit(thr_act)) {
 			return fpu_set_fxstate(thr_act,
 					       (thread_state_t)&state->ufs.as32,
-					       x86_FLOAT_STATE32); 
+					       flavor - 2); 
 		}
 		return(KERN_INVALID_ARGUMENT);
 	}
@@ -1115,6 +1111,24 @@ machine_thread_get_state(
 		break;
 	    }
 
+#if !defined(RC_HIDE_XNU_J137)
+	    case THREAD_STATE_FLAVOR_LIST_10_13:
+	    {
+		if (*count < 6)
+		        return (KERN_INVALID_ARGUMENT);
+
+	        tstate[0] = x86_THREAD_STATE;
+		tstate[1] = x86_FLOAT_STATE;
+		tstate[2] = x86_EXCEPTION_STATE;
+		tstate[3] = x86_DEBUG_STATE;
+		tstate[4] = x86_AVX_STATE;
+		tstate[5] = x86_AVX512_STATE;
+
+		*count = 6;
+		break;
+	    }
+
+#endif
 	    case x86_SAVED_STATE32:
 	    {
 		x86_saved_state32_t	*state;
@@ -1224,58 +1238,64 @@ machine_thread_get_state(
 	    }
 
 	    case x86_AVX_STATE32:
+#if !defined(RC_HIDE_XNU_J137)
+	    case x86_AVX512_STATE32:
+#endif
 	    {
-		if (*count != x86_AVX_STATE32_COUNT)
+		if (*count != _MachineStateCount[flavor])
 			return(KERN_INVALID_ARGUMENT);
 
 		if (thread_is_64bit(thr_act))
 			return(KERN_INVALID_ARGUMENT);
 
-		*count = x86_AVX_STATE32_COUNT;
+		*count = _MachineStateCount[flavor];
 
 		return fpu_get_fxstate(thr_act, tstate, flavor);
 	    }
 
 	    case x86_AVX_STATE64:
+#if !defined(RC_HIDE_XNU_J137)
+	    case x86_AVX512_STATE64:
+#endif
 	    {
-		if (*count != x86_AVX_STATE64_COUNT)
+		if (*count != _MachineStateCount[flavor])
 			return(KERN_INVALID_ARGUMENT);
 
 		if ( !thread_is_64bit(thr_act))
 			return(KERN_INVALID_ARGUMENT);
 
-		*count = x86_AVX_STATE64_COUNT;
+		*count = _MachineStateCount[flavor];
 
 		return fpu_get_fxstate(thr_act, tstate, flavor);
 	    }
 
 	    case x86_AVX_STATE:
+#if !defined(RC_HIDE_XNU_J137)
+	    case x86_AVX512_STATE:
+#endif
 	    {
 	        x86_avx_state_t		*state;
-		kern_return_t		kret;
+		thread_state_t		fstate;
 
-		if (*count < x86_AVX_STATE_COUNT)
+		if (*count < _MachineStateCount[flavor])
 			return(KERN_INVALID_ARGUMENT);
 
+		*count = _MachineStateCount[flavor];
 		state = (x86_avx_state_t *)tstate;
 
-		bzero((char *)state, sizeof(x86_avx_state_t));
-		if (thread_is_64bit(thr_act)) {
-		        state->ash.flavor = x86_AVX_STATE64;
-		        state->ash.count  = x86_AVX_STATE64_COUNT;
-			kret = fpu_get_fxstate(thr_act,
-					       (thread_state_t)&state->ufs.as64,
-					       x86_AVX_STATE64);
-		} else {
-		        state->ash.flavor = x86_AVX_STATE32;
-			state->ash.count  = x86_AVX_STATE32_COUNT;
-			kret = fpu_get_fxstate(thr_act,
-					       (thread_state_t)&state->ufs.as32,
-					       x86_AVX_STATE32);
-		}
-		*count = x86_AVX_STATE_COUNT;
+		bzero((char *)state, *count * sizeof(int));
 
-		return(kret);
+		if (thread_is_64bit(thr_act)) {
+			flavor -= 1;	/* 64-bit flavor */
+			fstate = (thread_state_t) &state->ufs.as64;
+		} else {
+			flavor -= 2;	/* 32-bit flavor */
+			fstate = (thread_state_t) &state->ufs.as32;
+		}
+		state->ash.flavor = flavor; 
+		state->ash.count  = _MachineStateCount[flavor];
+
+		return fpu_get_fxstate(thr_act, fstate, flavor);
 	    }
 
 	    case x86_THREAD_STATE32: 
@@ -1642,6 +1662,9 @@ machine_thread_switch_addrmode(thread_t thread)
 	 */
 	machine_thread_create(thread, thread->task);
 
+	/* Adjust FPU state */
+	fpu_switch_addrmode(thread, task_has_64BitAddr(thread->task));
+
 	/* If we're switching ourselves, reset the pcb addresses etc. */
 	if (thread == current_thread()) {
 		boolean_t istate = ml_set_interrupts_enabled(FALSE);
@@ -1742,16 +1765,17 @@ machine_stack_attach(
 
 	assert(stack);
 	thread->kernel_stack = stack;
+	thread_initialize_kernel_state(thread);
 
 	statep = STACK_IKS(stack);
 #if defined(__x86_64__)
 	statep->k_rip = (unsigned long) Thread_continue;
 	statep->k_rbx = (unsigned long) thread_continue;
-	statep->k_rsp = (unsigned long) (STACK_IKS(stack) - 1);
+	statep->k_rsp = (unsigned long) STACK_IKS(stack);
 #else
 	statep->k_eip = (unsigned long) Thread_continue;
 	statep->k_ebx = (unsigned long) thread_continue;
-	statep->k_esp = (unsigned long) (STACK_IKS(stack) - 1);
+	statep->k_esp = (unsigned long) STACK_IKS(stack);
 #endif
 
 	return;
@@ -1785,7 +1809,7 @@ machine_stack_handoff(thread_t old,
 	 */
 	new->kernel_stack = stack;
 
-	fpu_save_context(old);
+	fpu_switch_context(old, new);
 	
 	old->machine.specFlags &= ~OnProc;
 	new->machine.specFlags |= OnProc;
@@ -1798,6 +1822,7 @@ machine_stack_handoff(thread_t old,
 #endif
 
 	machine_set_current_thread(new);
+	thread_initialize_kernel_state(new);
 
 	return;
 }

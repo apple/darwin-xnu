@@ -345,8 +345,7 @@ uint32_t
 PE_i_can_has_debugger(uint32_t *debug_flags)
 {
 #if CONFIG_CSR
-	if (csr_check(CSR_ALLOW_KERNEL_DEBUGGER) != 0 &&
-	    csr_check(CSR_ALLOW_APPLE_INTERNAL) != 0) {
+	if (csr_check(CSR_ALLOW_KERNEL_DEBUGGER) != 0) {
 		if (debug_flags)
 			*debug_flags = 0;
 		return FALSE;
@@ -356,4 +355,48 @@ PE_i_can_has_debugger(uint32_t *debug_flags)
 		*debug_flags = debug_boot_arg;
 	}
 	return TRUE;
+}
+
+uint32_t
+PE_get_offset_into_panic_region(char *location)
+{
+	assert(panic_info != NULL);
+	assert(location > (char *) panic_info);
+
+	return (uint32_t) (location - debug_buf);
+}
+
+void
+PE_init_panicheader()
+{
+	bzero(panic_info, offsetof(struct macos_panic_header, mph_data));
+	panic_info->mph_panic_log_offset = PE_get_offset_into_panic_region(debug_buf_base);
+
+	panic_info->mph_magic = MACOS_PANIC_MAGIC;
+	panic_info->mph_version = MACOS_PANIC_HEADER_CURRENT_VERSION;
+
+	return;
+}
+
+/*
+ * Tries to update the panic header to keep it consistent on nested panics.
+ *
+ * NOTE: The purpose of this function is NOT to detect/correct corruption in the panic region,
+ *       it is to update the panic header to make it consistent when we nest panics.
+ */
+void
+PE_update_panicheader_nestedpanic()
+{
+	/* If the panic log offset is not set, re-init the panic header */
+	if (panic_info->mph_panic_log_offset == 0) {
+		PE_init_panicheader();
+		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_NESTED_PANIC;
+		return;
+	}
+
+	panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_NESTED_PANIC;
+
+	/* macOS panic logs include nested panic data, so don't touch the panic log length here */
+
+	return;
 }

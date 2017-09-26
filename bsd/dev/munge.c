@@ -536,6 +536,22 @@ munge_lwww(void *args)
 	out_args[0] = *(volatile uint64_t*)&in_args[0];
 }
 
+void 
+munge_lwwwwwww(void *args)
+{
+	volatile uint64_t *out_args = (volatile uint64_t*)args;
+	volatile uint32_t *in_args = (volatile uint32_t*)args;
+
+	out_args[7] = in_args[8];
+	out_args[6] = in_args[7]; 
+	out_args[5] = in_args[6];
+	out_args[4] = in_args[5];
+	out_args[3] = in_args[4]; 
+	out_args[2] = in_args[3];
+	out_args[1] = in_args[2];
+	out_args[0] = *(volatile uint64_t*)&in_args[0];
+}
+
 void
 munge_wwlww(void *args)
 {

@@ -74,7 +74,6 @@
 
 #ifdef MACH_KERNEL_PRIVATE
 
-#include <mach_rt.h>
 #include <mach_assert.h>
 #include <mach_debug.h>
 
@@ -129,12 +128,19 @@ struct ipc_port {
 	union {
 		ipc_kobject_t kobject;
 		ipc_importance_task_t imp_task;
+		ipc_port_t sync_qos_override_port;
 	} kdata;
 		
 	struct ipc_port *ip_nsrequest;
 	struct ipc_port *ip_pdrequest;
 	struct ipc_port_request *ip_requests;
-	struct ipc_kmsg *ip_premsg;
+	union {
+		struct ipc_kmsg *premsg;
+		struct {
+			sync_qos_count_t sync_qos[THREAD_QOS_LAST];
+			sync_qos_count_t special_port_qos;
+		} qos_counter;
+	} kdata2;
 
 	mach_vm_address_t ip_context;
 
@@ -144,7 +150,8 @@ struct ipc_port {
 		  ip_tempowner:1,	/* dont give donations to current receiver */
 		  ip_guarded:1,         /* port guarded (use context value as guard) */
 		  ip_strict_guard:1,	/* Strict guarding; Prevents user manipulation of context values directly */
-		  ip_reserved:2,
+		  ip_specialreply:1,	/* port is a special reply port */
+		  ip_link_sync_qos:1,	/* link the special reply port to destination port */
 		  ip_impcount:24;	/* number of importance donations in nested queue */
 
 	mach_port_mscount_t ip_mscount;
@@ -175,6 +182,32 @@ struct ipc_port {
 
 #define ip_kobject		kdata.kobject
 #define ip_imp_task		kdata.imp_task
+#define ip_sync_qos_override_port	kdata.sync_qos_override_port
+
+#define ip_premsg		kdata2.premsg
+#define ip_sync_qos		kdata2.qos_counter.sync_qos
+#define ip_special_port_qos     kdata2.qos_counter.special_port_qos
+
+#define port_sync_qos(port, i)	(IP_PREALLOC(port) ? (port)->ip_premsg->sync_qos[(i)] : (port)->ip_sync_qos[(i)])
+#define port_special_qos(port)  (IP_PREALLOC(port) ? (port)->ip_premsg->special_port_qos : (port)->ip_special_port_qos)
+
+#define set_port_sync_qos(port, i, value)               \
+MACRO_BEGIN                                             \
+if (IP_PREALLOC(port)) {                                \
+        (port)->ip_premsg->sync_qos[(i)] = (value);     \
+} else {                                                \
+        (port)->ip_sync_qos[(i)] = (value);             \
+}                                                       \
+MACRO_END
+
+#define set_port_special_qos(port, value)               \
+MACRO_BEGIN                                             \
+if (IP_PREALLOC(port)) {                                \
+        (port)->ip_premsg->special_port_qos = (value);  \
+} else {                                                \
+        (port)->ip_special_port_qos = (value);          \
+}                                                       \
+MACRO_END
 
 #define IP_NULL			IPC_PORT_NULL
 #define IP_DEAD			IPC_PORT_DEAD
@@ -440,6 +473,48 @@ enum {
 	IPID_OPTION_NORMAL       = 0, /* normal boost */
 	IPID_OPTION_SENDPOSSIBLE = 1, /* send-possible induced boost */
 };
+
+/* link the destination port with special reply port */
+kern_return_t
+ipc_port_link_special_reply_port_with_qos(
+	ipc_port_t special_reply_port,
+	ipc_port_t dest_port,
+	int qos);
+
+/* link the destination port with locked special reply port */
+void ipc_port_unlink_special_reply_port_locked(
+	ipc_port_t special_reply_port,
+	struct knote *kn,
+	uint8_t flags);
+
+/* Unlink the destination port from special reply port */
+void
+ipc_port_unlink_special_reply_port(
+	ipc_port_t special_reply_port,
+	uint8_t flags);
+
+#define IPC_PORT_UNLINK_SR_NONE                      0
+#define IPC_PORT_UNLINK_SR_CLEAR_SPECIAL_REPLY       0x1
+#define IPC_PORT_UNLINK_SR_ALLOW_SYNC_QOS_LINKAGE    0x2
+
+/* Get the max sync qos override index applied to the port */
+sync_qos_count_t
+ipc_port_get_max_sync_qos_index(
+	ipc_port_t	port);
+
+/* Apply qos delta to the port */
+boolean_t
+ipc_port_sync_qos_delta(
+	ipc_port_t        port,
+	sync_qos_count_t *sync_qos_delta_add,
+	sync_qos_count_t *sync_qos_delta_sub);
+
+/* Adjust the sync qos of the port and it's destination port */
+void
+ipc_port_adjust_sync_qos(
+	ipc_port_t port,
+	sync_qos_count_t *sync_qos_delta_add,
+	sync_qos_count_t *sync_qos_delta_sub);
 
 /* apply importance delta to port only */
 extern mach_port_delta_t

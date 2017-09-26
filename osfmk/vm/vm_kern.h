@@ -97,6 +97,7 @@ extern kern_return_t	kernel_memory_allocate(
 #define KMA_VAONLY	0x200
 #define KMA_COMPRESSOR	0x400   /* Pages belonging to the compressor are not on the paging queues, nor are they counted as wired. */
 #define KMA_ATOMIC 	0x800
+#define KMA_ZERO 	0x1000
 
 extern kern_return_t kmem_alloc(
 				vm_map_t    map,
@@ -152,6 +153,8 @@ extern kern_return_t	kmem_suballoc(
 				vm_size_t	size,
 				boolean_t	pageable,
 				int		flags,
+				vm_map_kernel_flags_t vmk_flags,
+				vm_tag_t    tag,
 				vm_map_t	*new_map);
 
 extern kern_return_t	kmem_alloc_kobject(
@@ -180,55 +183,47 @@ extern kern_return_t	memory_object_iopl_request(
 	upl_t			*upl_ptr,
 	upl_page_info_array_t	user_page_list,
 	unsigned int		*page_list_count,
-	upl_control_flags_t	*flags);
+	upl_control_flags_t	*flags,
+	vm_tag_t        	tag);
 
 struct mach_memory_info;
-extern kern_return_t	vm_page_diagnose(struct mach_memory_info * sites, 
-					 unsigned int num_sites, uint64_t zones_collectable_bytes);
+extern kern_return_t	vm_page_diagnose(struct mach_memory_info * info,
+					 unsigned int num_info, uint64_t zones_collectable_bytes);
+
+extern uint32_t         vm_page_diagnose_estimate(void);
 
 #if DEBUG || DEVELOPMENT
-extern void kern_wired_diagnose(void);
+
+extern kern_return_t    mach_memory_info_check(void);
+
+extern kern_return_t    vm_kern_allocation_info(uintptr_t addr, vm_size_t * size, vm_tag_t * tag, vm_size_t * zone_size);
+
 #endif /* DEBUG || DEVELOPMENT */
 
 extern vm_tag_t 	vm_tag_bt(void);
 
 extern vm_tag_t		vm_tag_alloc(vm_allocation_site_t * site);
 
-extern void		vm_tag_alloc_locked(vm_allocation_site_t * site);
+extern void		vm_tag_alloc_locked(vm_allocation_site_t * site, vm_allocation_site_t ** releasesiteP);
+
+extern void		vm_tag_update_size(vm_tag_t tag, int64_t size);
+
+#if VM_MAX_TAG_ZONES
+extern void		vm_allocation_zones_init(void);
+extern void     vm_tag_will_update_zone(vm_tag_t tag, uint32_t zidx);
+extern void		vm_tag_update_zone_size(vm_tag_t tag, uint32_t zidx, int64_t delta, int64_t dwaste);
+
+extern vm_allocation_zone_total_t **   vm_allocation_zone_totals;
+
+#endif /* VM_MAX_TAG_ZONES */
 
 extern vm_tag_t 	vm_tag_bt_debug(void);
 
 extern uint32_t         vm_tag_get_kext(vm_tag_t tag, char * name, vm_size_t namelen);
 
-#if DEBUG || DEVELOPMENT
-
-struct vm_tag_set_entry
-{
-    vm_tag_t tag;
-    uint32_t count;
-};
-
-struct vm_tag_set
-{
-    lck_spin_t              lock;
-    struct vm_tag_set_entry entries[0];
-};
-
-typedef struct vm_tag_set * vm_tag_set_t;
-
-extern void             vm_tag_set_init(vm_tag_set_t, uint32_t count);
-extern kern_return_t    vm_tag_set_enter(vm_tag_set_t set, uint32_t count, vm_tag_t tag);
-extern kern_return_t    vm_tag_set_remove(vm_tag_set_t set, uint32_t count, vm_tag_t tag, vm_tag_t * new_tag);
-
-#endif /* DEBUG || DEVELOPMENT */
-
 extern boolean_t	vm_kernel_map_is_kernel(vm_map_t map);
 
 extern ppnum_t		kernel_pmap_present_mapping(uint64_t vaddr, uint64_t * pvincr, uintptr_t * pvphysaddr);
-#if DEBUG || DEVELOPMENT
-extern void		kernel_pmap_lock(void);
-extern void		kernel_pmap_unlock(void);
-#endif /* DEBUG || DEVELOPMENT */
 
 #else /* XNU_KERNEL_PRIVATE */
 
@@ -255,6 +250,23 @@ extern void		kmem_free(
 #endif /* !XNU_KERNEL_PRIVATE */
 
 
+#ifdef XNU_KERNEL_PRIVATE
+typedef struct vm_allocation_site kern_allocation_name;
+typedef kern_allocation_name * kern_allocation_name_t;
+#else /* XNU_KERNEL_PRIVATE */
+struct kern_allocation_name;
+typedef struct kern_allocation_name * kern_allocation_name_t;
+#endif /* !XNU_KERNEL_PRIVATE */
+
+extern kern_allocation_name_t	kern_allocation_name_allocate(const char * name, uint32_t suballocs);
+extern void			kern_allocation_name_release(kern_allocation_name_t allocation);
+extern const char *             kern_allocation_get_name(kern_allocation_name_t allocation);
+#ifdef XNU_KERNEL_PRIVATE
+extern void			kern_allocation_update_size(kern_allocation_name_t allocation, int64_t delta);
+extern void			kern_allocation_update_subtotal(kern_allocation_name_t allocation, uint32_t subtag, int64_t delta);
+extern vm_tag_t			kern_allocation_name_get_vm_tag(kern_allocation_name_t allocation);
+#endif /* XNU_KERNEL_PRIVATE */
+
 #ifdef	MACH_KERNEL_PRIVATE
 
 extern void		kmem_init(
@@ -274,13 +286,6 @@ extern kern_return_t	copyoutmap(
 				vm_map_offset_t	toaddr,
 				vm_size_t	length);
 
-extern kern_return_t	vm_conflict_check(
-				vm_map_t		map,
-				vm_map_offset_t		off,
-				vm_map_size_t		len,
-				memory_object_t		pager,
-				vm_object_offset_t	file_off);
-
 extern kern_return_t	kmem_alloc_external(
 				vm_map_t	map,
 				vm_offset_t	*addrp,
@@ -298,6 +303,120 @@ extern kern_return_t	kmem_alloc_pageable_external(
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
+#ifdef XNU_KERNEL_PRIVATE
+
+extern kern_return_t    mach_vm_allocate_kernel(
+	vm_map_t		map,
+	mach_vm_offset_t	*addr,
+	mach_vm_size_t	size,
+	int			flags,
+	vm_tag_t    tag);
+
+extern kern_return_t    vm_allocate_kernel(
+	vm_map_t	map,
+	vm_offset_t	*addr,
+	vm_size_t	size,
+	int         flags,
+	vm_tag_t    tag);
+
+
+extern kern_return_t mach_vm_map_kernel(
+	vm_map_t		target_map,
+	mach_vm_offset_t	*address,
+	mach_vm_size_t	initial_size,
+	mach_vm_offset_t	mask,
+	int			flags,
+	vm_tag_t		tag,
+	ipc_port_t		port,
+	vm_object_offset_t	offset,
+	boolean_t		copy,
+	vm_prot_t		cur_protection,
+	vm_prot_t		max_protection,
+	vm_inherit_t		inheritance);
+
+
+extern kern_return_t vm_map_kernel(
+	vm_map_t		target_map,
+	vm_offset_t		*address,
+	vm_size_t		size,
+	vm_offset_t		mask,
+	int			flags,
+	vm_tag_t		tag,
+	ipc_port_t		port,
+	vm_offset_t		offset,
+	boolean_t		copy,
+	vm_prot_t		cur_protection,
+	vm_prot_t		max_protection,
+	vm_inherit_t		inheritance);
+
+extern kern_return_t mach_vm_remap_kernel(
+	vm_map_t		target_map,
+	mach_vm_offset_t	*address,
+	mach_vm_size_t	size,
+	mach_vm_offset_t	mask,
+	int			flags,
+	vm_tag_t        tag,
+	vm_map_t		src_map,
+	mach_vm_offset_t	memory_address,
+	boolean_t		copy,
+	vm_prot_t		*cur_protection,
+	vm_prot_t		*max_protection,
+	vm_inherit_t		inheritance);
+
+extern kern_return_t vm_remap_kernel(
+	vm_map_t		target_map,
+	vm_offset_t		*address,
+	vm_size_t		size,
+	vm_offset_t		mask,
+	int			flags,
+	vm_tag_t        tag,
+	vm_map_t		src_map,
+	vm_offset_t		memory_address,
+	boolean_t		copy,
+	vm_prot_t		*cur_protection,
+	vm_prot_t		*max_protection,
+	vm_inherit_t		inheritance);
+
+extern kern_return_t vm_map_64_kernel(
+	vm_map_t		target_map,
+	vm_offset_t		*address,
+	vm_size_t		size,
+	vm_offset_t		mask,
+	int			flags,
+	vm_tag_t		tag,
+	ipc_port_t		port,
+	vm_object_offset_t	offset,
+	boolean_t		copy,
+	vm_prot_t		cur_protection,
+	vm_prot_t		max_protection,
+	vm_inherit_t		inheritance);
+
+extern kern_return_t mach_vm_wire_kernel(
+	host_priv_t		host_priv,
+	vm_map_t		map,
+	mach_vm_offset_t	start,
+	mach_vm_size_t	size,
+	vm_prot_t		access,
+	vm_tag_t		tag);
+
+extern kern_return_t vm_map_wire_kernel(
+	vm_map_t		map,
+	vm_map_offset_t		start,
+	vm_map_offset_t		end,
+	vm_prot_t		caller_prot,
+	vm_tag_t		tag,
+	boolean_t		user_wire);
+
+extern kern_return_t vm_map_wire_and_extract_kernel(
+	vm_map_t	map,
+	vm_map_offset_t	start,
+	vm_prot_t	caller_prot,
+	vm_tag_t	tag,
+	boolean_t	user_wire,
+	ppnum_t		*physpage_p);
+
+#endif	/* XNU_KERNEL_PRIVATE */
+
 extern vm_map_t	kernel_map;
 extern vm_map_t	kernel_pageable_map;
 extern vm_map_t ipc_kernel_map;
@@ -305,6 +424,14 @@ extern vm_map_t ipc_kernel_map;
 #endif	/* KERNEL_PRIVATE */
 
 #ifdef KERNEL
+
+__BEGIN_DECLS
+extern vm_offset_t vm_kernel_addrhash(vm_offset_t addr);
+__END_DECLS
+
+extern void vm_kernel_addrhide(
+	vm_offset_t addr,
+	vm_offset_t *hide_addr);
 
 extern vm_offset_t vm_kernel_addrperm_ext;
 
@@ -315,5 +442,17 @@ extern void	vm_kernel_addrperm_external(
 extern void	vm_kernel_unslide_or_perm_external(
 		vm_offset_t addr,
 		vm_offset_t *up_addr);
+
+#if MACH_KERNEL_PRIVATE
+extern uint64_t vm_kernel_addrhash_salt;
+extern uint64_t vm_kernel_addrhash_salt_ext;
+
+extern void vm_kernel_addrhash_external(
+			vm_offset_t addr,
+			vm_offset_t *perm_addr);
+#endif /* MACH_KERNEL_PRIVATE */
+
+extern void vm_init_before_launchd(void);
+
 #endif /* KERNEL */
 #endif	/* _VM_VM_KERN_H_ */

@@ -38,7 +38,12 @@
  * alignment and no straight forward way to specify section ordering.
  */
 
+#if defined(__arm64__)
+/* PAGE_SIZE on ARM64 is an expression derived from a non-const global variable */
+#define PAD_SIZE	PAGE_MAX_SIZE
+#else
 #define PAD_SIZE	PAGE_SIZE
+#endif
 
 static const uint8_t __attribute__((section("__DATA,__const"))) data_const_padding[PAD_SIZE] = {[0 ... PAD_SIZE-1] = 0xFF};
 const vm_offset_t    __attribute__((section("__DATA,__data")))  _lastkerneldataconst         = (vm_offset_t)&data_const_padding[0];

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -137,7 +137,6 @@ struct if_clonereq32 {
 #define	IFEF_VLAN		0x00000200	/* interface has one or more vlans */
 #define	IFEF_BOND		0x00000400	/* interface is part of bond */
 #define	IFEF_ARPLL		0x00000800	/* ARP for IPv4LL addresses */
-/* #define	IFEF_NOWINDOWSCALE	0x00001000 */	/* Don't scale TCP window on iface */
 /*
  * XXX IFEF_NOAUTOIPV6LL is deprecated and should be done away with.
  * Configd pretty much manages the interface configuration.
@@ -170,7 +169,12 @@ struct if_clonereq32 {
  * Extra flags
  */
 #define	IFXF_WAKE_ON_MAGIC_PACKET	0x00000001 /* wake on magic packet */
-#define	IFXF_TIMESTAMP_ENABLED			0x00000002 /* time stamping enabled */
+#define	IFXF_TIMESTAMP_ENABLED		0x00000002 /* time stamping enabled */
+#define	IFXF_NX_NOAUTO			0x00000004 /* no auto config nexus */
+#define	IFXF_MULTISTACK_BPF_TAP		0x00000008 /* multistack bpf tap */
+#define	IFXF_LOW_INTERNET_UL		0x00000010 /* Uplink Low Internet is confirmed */
+#define	IFXF_LOW_INTERNET_DL		0x00000020 /* Downlink Low Internet is confirmed */
+#define	IFXF_ALLOC_KPI			0x00000040 /* Allocated via the ifnet_alloc KPI */
 
 /*
  * Current requirements for an AWDL interface.  Setting/clearing IFEF_AWDL
@@ -217,7 +221,7 @@ struct if_clonereq32 {
  *   contains the enabled optional features & capabilites that can be used
  *   individually per packet and are specified in the mbuf pkthdr.csum_flags
  *   field.  IFCAP_* and IFNET_* do not match one to one and IFNET_* may be
- *   more detailed or differenciated than IFCAP_*.
+ *   more detailed or differentiated than IFCAP_*.
  *   IFNET_* hwassist flags have corresponding CSUM_* in sys/mbuf.h
  */
 #define	IFCAP_RXCSUM		0x00001	/* can offload checksum on RX */
@@ -233,13 +237,16 @@ struct if_clonereq32 {
 #define	IFCAP_SKYWALK		0x00400	/* Skywalk mode supported/enabled */
 #define	IFCAP_HW_TIMESTAMP	0x00800	/* Time stamping in hardware */
 #define	IFCAP_SW_TIMESTAMP	0x01000	/* Time stamping in software */
+#define	IFCAP_CSUM_PARTIAL	0x02000 /* can offload partial checksum */
+#define	IFCAP_CSUM_ZERO_INVERT	0x04000 /* can invert 0 to -0 (0xffff) */
 
 #define	IFCAP_HWCSUM	(IFCAP_RXCSUM | IFCAP_TXCSUM)
 #define	IFCAP_TSO	(IFCAP_TSO4 | IFCAP_TSO6)
 
 #define	IFCAP_VALID (IFCAP_HWCSUM | IFCAP_TSO | IFCAP_LRO | IFCAP_VLAN_MTU | \
 	IFCAP_VLAN_HWTAGGING | IFCAP_JUMBO_MTU | IFCAP_AV | IFCAP_TXSTATUS | \
-	IFCAP_SKYWALK | IFCAP_SW_TIMESTAMP | IFCAP_HW_TIMESTAMP)
+	IFCAP_SKYWALK | IFCAP_SW_TIMESTAMP | IFCAP_HW_TIMESTAMP | \
+	IFCAP_CSUM_PARTIAL | IFCAP_CSUM_ZERO_INVERT)
 
 #define	IFQ_MAXLEN	128
 #define	IFNET_SLOWHZ	1	/* granularity is 1 second */
@@ -460,6 +467,7 @@ struct	ifreq {
 #define	IFRTYPE_SUBFAMILY_RESERVED	5
 #define	IFRTYPE_SUBFAMILY_INTCOPROC	6
 		} ifru_type;
+#endif /* PRIVATE */
 		u_int32_t ifru_functional_type;
 #define IFRTYPE_FUNCTIONAL_UNKNOWN	0
 #define IFRTYPE_FUNCTIONAL_LOOPBACK	1
@@ -467,8 +475,9 @@ struct	ifreq {
 #define IFRTYPE_FUNCTIONAL_WIFI_INFRA	3
 #define IFRTYPE_FUNCTIONAL_WIFI_AWDL	4
 #define IFRTYPE_FUNCTIONAL_CELLULAR	5
-#define	IFRTYPE_FUNCTIONAL_INTCOPROC	6          
+#define	IFRTYPE_FUNCTIONAL_INTCOPROC	6
 #define IFRTYPE_FUNCTIONAL_LAST		6
+#ifdef PRIVATE
 		u_int32_t ifru_expensive;
 		u_int32_t ifru_2kcl;
 		struct {
@@ -486,6 +495,11 @@ struct	ifreq {
 #define	IFRTYPE_QOSMARKING_FASTLANE	1
 		u_int32_t ifru_qosmarking_enabled;
 		u_int32_t ifru_disable_output;
+		u_int32_t ifru_low_internet;
+#define	IFRTYPE_LOW_INTERNET_DISABLE_UL_DL	0x0000
+#define	IFRTYPE_LOW_INTERNET_ENABLE_UL		0x0001
+#define	IFRTYPE_LOW_INTERNET_ENABLE_DL		0x0002
+
 #endif /* PRIVATE */
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
@@ -534,6 +548,7 @@ struct	ifreq {
 #define ifr_qosmarking_enabled	ifr_ifru.ifru_qosmarking_enabled
 #define	ifr_fastlane_enabled	ifr_qosmarking_enabled
 #define	ifr_disable_output	ifr_ifru.ifru_disable_output
+#define	ifr_low_internet	ifr_ifru.ifru_low_internet
 
 #endif /* PRIVATE */
 };
@@ -696,10 +711,13 @@ struct kev_dl_proto_data {
 enum {
 	IFNET_LQM_THRESH_OFF		= (-2),
 	IFNET_LQM_THRESH_UNKNOWN	= (-1),
-	IFNET_LQM_THRESH_BAD		= 10,
+	IFNET_LQM_THRESH_ABORT		= 10,
+	IFNET_LQM_THRESH_MINIMALLY_VIABLE = 20,
 	IFNET_LQM_THRESH_POOR		= 50,
 	IFNET_LQM_THRESH_GOOD		= 100
 };
+#define	IFNET_LQM_THRESH_BAD	IFNET_LQM_THRESH_ABORT
+
 #ifdef XNU_KERNEL_PRIVATE
 #define	IFNET_LQM_MIN	IFNET_LQM_THRESH_OFF
 #define	IFNET_LQM_MAX	IFNET_LQM_THRESH_GOOD
@@ -864,6 +882,17 @@ struct if_agentidsreq {
 	uuid_t		*ifar_uuids;		/* array of agent UUIDs */
 };
 
+/*
+ * Structure for SIOCGIFNEXUS
+ */
+struct if_nexusreq {
+	char		ifnr_name[IFNAMSIZ];	/* interface name */
+	uint64_t	ifnr_flags;		/* unused, must be zero */
+	uuid_t		ifnr_netif;		/* netif nexus instance UUID */
+	uuid_t		ifnr_multistack;	/* multistack nexus UUID */
+	uint64_t	ifnr_reserved[5];
+};
+
 #ifdef BSD_KERNEL_PRIVATE
 struct if_agentidsreq32 {
 	char		ifar_name[IFNAMSIZ];
@@ -912,6 +941,30 @@ struct if_nsreq {
 	u_int8_t	ifnsr_len;	/* data length */
 	u_int16_t	ifnsr_flags;	/* for future */
 	u_int8_t	ifnsr_data[IFNET_SIGNATURELEN];
+};
+
+
+#define	NAT64_PREFIX_LEN_32	4
+#define	NAT64_PREFIX_LEN_40	5
+#define	NAT64_PREFIX_LEN_48	6
+#define	NAT64_PREFIX_LEN_56	7
+#define	NAT64_PREFIX_LEN_64	8
+#define	NAT64_PREFIX_LEN_96	12
+#define	NAT64_PREFIX_LEN_MAX	NAT64_PREFIX_LEN_96
+
+#define	NAT64_MAX_NUM_PREFIXES	4
+
+struct ipv6_prefix {
+	struct in6_addr	ipv6_prefix;
+	uint32_t	prefix_len;
+};
+
+/*
+ * Structure for SIOC[S/G]IFNAT64PREFIX
+ */
+struct if_nat64req {
+	char			ifnat64_name[IFNAMSIZ];
+	struct ipv6_prefix	ifnat64_prefixes[NAT64_MAX_NUM_PREFIXES];
 };
 
 /*

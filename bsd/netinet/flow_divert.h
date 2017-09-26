@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -84,6 +84,7 @@ struct flow_divert_group {
     MBUFQ_HEAD(send_queue_head)		send_queue;
     uint8_t							*token_key;
     size_t							token_key_size;
+    uint32_t						flags;
     struct flow_divert_trie			signing_id_trie;
 };
 

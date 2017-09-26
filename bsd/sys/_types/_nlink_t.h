@@ -27,5 +27,6 @@
  */
 #ifndef _NLINK_T 
 #define _NLINK_T 
+#include <machine/types.h> /* __uint16_t */
 typedef __uint16_t        nlink_t;  	/* link count */
 #endif  /* _NLINK_T */

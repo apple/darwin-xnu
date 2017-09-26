@@ -469,6 +469,13 @@ struct kcdata_type_definition {
 #define STACKSHOT_KCTYPE_STACKSHOT_FAULT_STATS 0x91bu /* struct stackshot_fault_stats */
 #define STACKSHOT_KCTYPE_KERNELCACHE_LOADINFO  0x91cu /* kernelcache UUID -- same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
 #define STACKSHOT_KCTYPE_THREAD_WAITINFO 0x91du       /* struct stackshot_thread_waitinfo */
+#define STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT 0x91eu /* struct thread_group_snapshot */
+#define STACKSHOT_KCTYPE_THREAD_GROUP 0x91fu          /* uint64_t */
+#define STACKSHOT_KCTYPE_JETSAM_COALITION_SNAPSHOT 0x920u /* struct jetsam_coalition_snapshot */
+#define STACKSHOT_KCTYPE_JETSAM_COALITION 0x921u      /* uint64_t */
+#define STACKSHOT_KCTYPE_INSTRS_CYCLES 0x923u         /* struct instrs_cycles_snapshot */
+
+#define STACKSHOT_KCTYPE_THREAD_POLICY_VERSION 0x922u /* THREAD_POLICY_INTERNAL_STRUCT_VERSION in uint32 */
 
 struct stack_snapshot_frame32 {
 	uint32_t lr;
@@ -544,6 +551,7 @@ enum thread_snapshot_flags {
 	kThreadTriedFaultBT   = 0x400,  /* We tried to fault in thread stack pages as part of BT */
 	kThreadOnCore         = 0x800,  /* Thread was on-core when we entered debugger context */
 	kThreadIdleWorker     = 0x1000, /* Thread is an idle libpthread worker thread */
+	kThreadMain           = 0x2000, /* Thread is the main thread */
 };
 
 struct mem_and_io_snapshot {
@@ -617,6 +625,57 @@ struct thread_snapshot_v3 {
 	uint8_t ths_rqos_override;
 	uint8_t ths_io_tier;
 	uint64_t ths_thread_t;
+} __attribute__((packed));
+
+
+struct thread_snapshot_v4 {
+	uint64_t ths_thread_id;
+	uint64_t ths_wait_event;
+	uint64_t ths_continuation;
+	uint64_t ths_total_syscalls;
+	uint64_t ths_voucher_identifier;
+	uint64_t ths_dqserialnum;
+	uint64_t ths_user_time;
+	uint64_t ths_sys_time;
+	uint64_t ths_ss_flags;
+	uint64_t ths_last_run_time;
+	uint64_t ths_last_made_runnable_time;
+	uint32_t ths_state;
+	uint32_t ths_sched_flags;
+	int16_t ths_base_priority;
+	int16_t ths_sched_priority;
+	uint8_t ths_eqos;
+	uint8_t ths_rqos;
+	uint8_t ths_rqos_override;
+	uint8_t ths_io_tier;
+	uint64_t ths_thread_t;
+	uint64_t ths_requested_policy;
+	uint64_t ths_effective_policy;
+} __attribute__((packed));
+
+
+struct thread_group_snapshot {
+	uint64_t tgs_id;
+	char tgs_name[16];
+} __attribute__((packed));
+
+enum coalition_flags {
+	kCoalitionTermRequested = 0x1,
+	kCoalitionTerminated    = 0x2,
+	kCoalitionReaped        = 0x4,
+	kCoalitionPrivileged    = 0x8,
+};
+
+struct jetsam_coalition_snapshot {
+	uint64_t jcs_id;
+	uint64_t jcs_flags;
+	uint64_t jcs_thread_group;
+	uint64_t jcs_leader_task_uniqueid;
+} __attribute__((packed));
+
+struct instrs_cycles_snapshot {
+	uint64_t ics_instructions;
+	uint64_t ics_cycles;
 } __attribute__((packed));
 
 struct thread_delta_snapshot_v2 {
@@ -722,6 +781,8 @@ typedef struct stackshot_thread_waitinfo {
 #define STACKSHOT_WAITOWNER_PSET_LOCKED    (UINT64_MAX - 3)
 #define STACKSHOT_WAITOWNER_INTRANSIT      (UINT64_MAX - 4)
 #define STACKSHOT_WAITOWNER_MTXSPIN        (UINT64_MAX - 5)
+#define STACKSHOT_WAITOWNER_THREQUESTED    (UINT64_MAX - 6) /* workloop waiting for a new worker thread */
+#define STACKSHOT_WAITOWNER_SUSPENDED      (UINT64_MAX - 7) /* workloop is suspended */
 
 
 /**************** definitions for crashinfo *********************/
@@ -776,6 +837,8 @@ typedef struct stackshot_thread_waitinfo {
 #define EXIT_REASON_USER_DESC           0x1002 /* string description of reason */
 #define EXIT_REASON_USER_PAYLOAD        0x1003 /* user payload data */
 #define EXIT_REASON_CODESIGNING_INFO    0x1004
+#define EXIT_REASON_WORKLOOP_ID         0x1005
+#define EXIT_REASON_DISPATCH_QUEUE_NO   0x1006
 
 struct exit_reason_snapshot {
         uint32_t ers_namespace;

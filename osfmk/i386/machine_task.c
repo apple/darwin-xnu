@@ -57,6 +57,7 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <i386/misc_protos.h>
+#include <i386/fpu.h>
 
 #if HYPERVISOR
 #include <kern/hv_support.h>
@@ -281,4 +282,25 @@ machine_thread_inherit_taskwide(
 	}
 
 	return KERN_SUCCESS;
+}
+
+void
+machine_task_init(task_t new_task,
+		  task_t parent_task,
+		  boolean_t inherit_memory)
+{
+	new_task->uexc_range_start = 0;
+	new_task->uexc_range_size = 0;
+	new_task->uexc_handler = 0;
+
+	new_task->i386_ldt = 0;
+
+	if (parent_task != TASK_NULL) {
+		if (inherit_memory && parent_task->i386_ldt)
+			new_task->i386_ldt = user_ldt_copy(parent_task->i386_ldt);
+		new_task->xstate = parent_task->xstate;
+	} else {
+		assert(fpu_default != UNDEFINED);
+		new_task->xstate = fpu_default;
+	}
 }

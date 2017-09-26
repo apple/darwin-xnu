@@ -57,6 +57,8 @@ boolean_t	vm_swappin_enabled = FALSE;
 unsigned int	vm_swapfile_total_segs_alloced = 0;
 unsigned int	vm_swapfile_total_segs_used = 0;
 
+char		swapfilename[MAX_SWAPFILENAME_LEN + 1] = SWAP_FILE_NAME;
+
 extern vm_map_t compressor_map;
 
 
@@ -102,12 +104,28 @@ static void vm_swap_free_now(struct swapfile *swf, uint64_t f_offset);
 static void vm_swapout_thread(void);
 static void vm_swapfile_create_thread(void);
 static void vm_swapfile_gc_thread(void);
-static void vm_swap_defragment();
+static void vm_swap_defragment(void);
 static void vm_swap_handle_delayed_trims(boolean_t);
-static void vm_swap_do_delayed_trim();
+static void vm_swap_do_delayed_trim(struct swapfile *);
 static void vm_swap_wait_on_trim_handling_in_progress(void);
 
 
+#if CONFIG_EMBEDDED
+/*
+ * Only 1 swap file currently allowed.
+ */
+#define VM_MAX_SWAP_FILE_NUM		1
+#define	VM_SWAPFILE_DELAYED_TRIM_MAX	4
+
+#define	VM_SWAP_SHOULD_DEFRAGMENT()	(c_swappedout_sparse_count > (vm_swapfile_total_segs_used / 16) ? 1 : 0)
+#define VM_SWAP_SHOULD_RECLAIM()	FALSE
+#define VM_SWAP_SHOULD_ABORT_RECLAIM()	FALSE
+#define VM_SWAP_SHOULD_PIN(_size)	FALSE
+#define VM_SWAP_SHOULD_CREATE(cur_ts)	((vm_num_swap_files < VM_MAX_SWAP_FILE_NUM) && ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) < (unsigned int)VM_SWAPFILE_HIWATER_SEGS) && \
+					 ((cur_ts - vm_swapfile_last_failed_to_create_ts) > VM_SWAPFILE_DELAYED_CREATE) ? 1 : 0)
+#define VM_SWAP_SHOULD_TRIM(swf)	((swf->swp_delayed_trim_count >= VM_SWAPFILE_DELAYED_TRIM_MAX) ? 1 : 0)
+
+#else /* CONFIG_EMBEDDED */
 
 #define VM_MAX_SWAP_FILE_NUM		100
 #define	VM_SWAPFILE_DELAYED_TRIM_MAX	128
@@ -120,6 +138,7 @@ static void vm_swap_wait_on_trim_handling_in_progress(void);
 					 ((cur_ts - vm_swapfile_last_failed_to_create_ts) > VM_SWAPFILE_DELAYED_CREATE) ? 1 : 0)
 #define VM_SWAP_SHOULD_TRIM(swf)	((swf->swp_delayed_trim_count >= VM_SWAPFILE_DELAYED_TRIM_MAX) ? 1 : 0)
 
+#endif /* CONFIG_EMBEDDED */
 
 #define	VM_SWAPFILE_DELAYED_CREATE	15
 
@@ -138,15 +157,6 @@ uint64_t	c_compressed_record_file_offset = 0;
 void	c_compressed_record_init(void);
 void	c_compressed_record_write(char *, int);
 #endif
-
-#if ENCRYPTED_SWAP
-extern boolean_t		swap_crypt_ctx_initialized;
-extern void 			swap_crypt_ctx_initialize(void);
-extern const unsigned char	swap_crypt_null_iv[AES_BLOCK_SIZE];
-extern aes_ctx			swap_crypt_ctx;
-extern unsigned long 		vm_page_encrypt_counter;
-extern unsigned long 		vm_page_decrypt_counter;
-#endif /* ENCRYPTED_SWAP */
 
 extern void			vm_pageout_io_throttle(void);
 
@@ -185,146 +195,116 @@ vm_swapfile_for_handle(uint64_t f_offset)
 	return swf;
 }
 
-void
-vm_compressor_swap_init()
-{
-	thread_t	thread = NULL;
-
-	lck_grp_attr_setdefault(&vm_swap_data_lock_grp_attr);
-	lck_grp_init(&vm_swap_data_lock_grp,
-		     "vm_swap_data",
-		     &vm_swap_data_lock_grp_attr);
-	lck_attr_setdefault(&vm_swap_data_lock_attr);
-	lck_mtx_init_ext(&vm_swap_data_lock,
-			 &vm_swap_data_lock_ext,
-			 &vm_swap_data_lock_grp,
-			 &vm_swap_data_lock_attr);
-
-	queue_init(&swf_global_queue);
-
-	
-	if (kernel_thread_start_priority((thread_continue_t)vm_swapout_thread, NULL,
-					 BASEPRI_PREEMPT - 1, &thread) != KERN_SUCCESS) {
-		panic("vm_swapout_thread: create failed");
-	}
-	vm_swapout_thread_id = thread->thread_id;
-
-	thread_deallocate(thread);
-
-	if (kernel_thread_start_priority((thread_continue_t)vm_swapfile_create_thread, NULL,
-				 BASEPRI_PREEMPT - 1, &thread) != KERN_SUCCESS) {
-		panic("vm_swapfile_create_thread: create failed");
-	}
-
-	thread_deallocate(thread);
-
-	if (kernel_thread_start_priority((thread_continue_t)vm_swapfile_gc_thread, NULL,
-				 BASEPRI_PREEMPT - 1, &thread) != KERN_SUCCESS) {
-		panic("vm_swapfile_gc_thread: create failed");
-	}
-	thread_deallocate(thread);
-
-	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
-	                                TASK_POLICY_INTERNAL, TASK_POLICY_IO, THROTTLE_LEVEL_COMPRESSOR_TIER2);
-	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
-	                                TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
-
 #if ENCRYPTED_SWAP
+
+#include <libkern/crypto/aes.h>
+extern u_int32_t random(void);	/* from <libkern/libkern.h> */
+
+#define SWAP_CRYPT_AES_KEY_SIZE 128     /* XXX 192 and 256 don't work ! */
+
+boolean_t		swap_crypt_ctx_initialized;
+void 			swap_crypt_ctx_initialize(void);
+
+aes_ctx			swap_crypt_ctx;
+const unsigned char     swap_crypt_null_iv[AES_BLOCK_SIZE] = {0xa, };
+uint32_t                swap_crypt_key[8]; /* big enough for a 256 key */
+
+unsigned long 		vm_page_encrypt_counter;
+unsigned long 		vm_page_decrypt_counter;
+
+
+#if DEBUG
+boolean_t		swap_crypt_ctx_tested = FALSE;
+unsigned char swap_crypt_test_page_ref[4096] __attribute__((aligned(4096)));
+unsigned char swap_crypt_test_page_encrypt[4096] __attribute__((aligned(4096)));
+unsigned char swap_crypt_test_page_decrypt[4096] __attribute__((aligned(4096)));
+#endif /* DEBUG */
+
+/*
+ * Initialize the encryption context: key and key size.
+ */
+void swap_crypt_ctx_initialize(void); /* forward */
+void
+swap_crypt_ctx_initialize(void)
+{
+	unsigned int	i;
+
+	/*
+	 * No need for locking to protect swap_crypt_ctx_initialized
+	 * because the first use of encryption will come from the
+	 * pageout thread (we won't pagein before there's been a pageout)
+	 * and there's only one pageout thread.
+	 */
 	if (swap_crypt_ctx_initialized == FALSE) {
-		swap_crypt_ctx_initialize();
-	}
-#endif /* ENCRYPTED_SWAP */
-		
-	memset(swapfilename, 0, MAX_SWAPFILENAME_LEN + 1);
-
-	printf("VM Swap Subsystem is ON\n");
-}
-
-
-#if RECORD_THE_COMPRESSED_DATA
-
-void
-c_compressed_record_init()
-{
-	if (c_compressed_record_init_done == FALSE) {
-		vm_swapfile_open("/tmp/compressed_data", &c_compressed_record_vp);
-		c_compressed_record_init_done = TRUE;
-	}
-}
-
-void
-c_compressed_record_write(char *buf, int size)
-{
-	if (c_compressed_record_write_error == 0) {
-		c_compressed_record_write_error = vm_record_file_write(c_compressed_record_vp, c_compressed_record_file_offset, buf, size);
-		c_compressed_record_file_offset += size;
-	}
-}
-#endif
-
-
-int		compaction_swapper_inited = 0;
-
-void
-vm_compaction_swapper_do_init(void)
-{
-	struct	vnode *vp;
-	char	*pathname;
-	int	namelen;
-
-	if (compaction_swapper_inited)
-		return;
-
-	if (vm_compressor_mode != VM_PAGER_COMPRESSOR_WITH_SWAP) {
-		compaction_swapper_inited = 1;
-		return;
-	}
-	lck_mtx_lock(&vm_swap_data_lock);
-
-	if ( !compaction_swapper_inited) {
-
-		if (strlen(swapfilename) == 0) {
-			/*
-			 * If no swapfile name has been set, we'll
-			 * use the default name.
-			 *
-			 * Also, this function is only called from the vm_pageout_scan thread
-			 * via vm_consider_waking_compactor_swapper, 
-			 * so we don't need to worry about a race in checking/setting the name here.
-			 */
-			strlcpy(swapfilename, SWAP_FILE_NAME, MAX_SWAPFILENAME_LEN);
+		for (i = 0;
+		     i < (sizeof (swap_crypt_key) /
+			  sizeof (swap_crypt_key[0]));
+		     i++) {
+			swap_crypt_key[i] = random();
 		}
-		namelen = (int)strlen(swapfilename) + SWAPFILENAME_INDEX_LEN + 1;
-		pathname = (char*)kalloc(namelen);
-		memset(pathname, 0, namelen);
-		snprintf(pathname, namelen, "%s%d", swapfilename, 0);
+		aes_encrypt_key((const unsigned char *) swap_crypt_key,
+				SWAP_CRYPT_AES_KEY_SIZE,
+				&swap_crypt_ctx.encrypt);
+		aes_decrypt_key((const unsigned char *) swap_crypt_key,
+				SWAP_CRYPT_AES_KEY_SIZE,
+				&swap_crypt_ctx.decrypt);
+		swap_crypt_ctx_initialized = TRUE;
+	}
 
-		vm_swapfile_open(pathname, &vp);
-
-		if (vp) {
-			
-			if (vnode_pager_isSSD(vp) == FALSE) {
-				vm_compressor_minorcompact_threshold_divisor = 18;
-				vm_compressor_majorcompact_threshold_divisor = 22;
-				vm_compressor_unthrottle_threshold_divisor = 32;
+#if DEBUG
+	/*
+	 * Validate the encryption algorithms.
+	 */
+	if (swap_crypt_ctx_tested == FALSE) {
+		/* initialize */
+		for (i = 0; i < 4096; i++) {
+			swap_crypt_test_page_ref[i] = (char) i;
+		}
+		/* encrypt */
+		aes_encrypt_cbc(swap_crypt_test_page_ref,
+				swap_crypt_null_iv,
+				PAGE_SIZE / AES_BLOCK_SIZE,
+				swap_crypt_test_page_encrypt,
+				&swap_crypt_ctx.encrypt);
+		/* decrypt */
+		aes_decrypt_cbc(swap_crypt_test_page_encrypt,
+				swap_crypt_null_iv,
+				PAGE_SIZE / AES_BLOCK_SIZE,
+				swap_crypt_test_page_decrypt,
+				&swap_crypt_ctx.decrypt);
+		/* compare result with original */
+		for (i = 0; i < 4096; i ++) {
+			if (swap_crypt_test_page_decrypt[i] !=
+			    swap_crypt_test_page_ref[i]) {
+				panic("encryption test failed");
 			}
-			vnode_setswapmount(vp);
-			vm_swappin_avail = vnode_getswappin_avail(vp);
-
-			if (vm_swappin_avail)
-				vm_swappin_enabled = TRUE;
-			vm_swapfile_close((uint64_t)pathname, vp);
 		}
-		kfree(pathname, namelen);
 
-		compaction_swapper_inited = 1;
+		/* encrypt again */
+		aes_encrypt_cbc(swap_crypt_test_page_decrypt,
+				swap_crypt_null_iv,
+				PAGE_SIZE / AES_BLOCK_SIZE,
+				swap_crypt_test_page_decrypt,
+				&swap_crypt_ctx.encrypt);
+		/* decrypt in place */
+		aes_decrypt_cbc(swap_crypt_test_page_decrypt,
+				swap_crypt_null_iv,
+				PAGE_SIZE / AES_BLOCK_SIZE,
+				swap_crypt_test_page_decrypt,
+				&swap_crypt_ctx.decrypt);
+		for (i = 0; i < 4096; i ++) {
+			if (swap_crypt_test_page_decrypt[i] !=
+			    swap_crypt_test_page_ref[i]) {
+				panic("in place encryption test failed");
+			}
+		}
+
+		swap_crypt_ctx_tested = TRUE;
 	}
-	lck_mtx_unlock(&vm_swap_data_lock);
+#endif /* DEBUG */
 }
 
 
-
-#if ENCRYPTED_SWAP
 void
 vm_swap_encrypt(c_segment_t c_seg)
 {
@@ -424,6 +404,143 @@ vm_swap_decrypt(c_segment_t c_seg)
 #endif
 }
 #endif /* ENCRYPTED_SWAP */
+
+
+void
+vm_compressor_swap_init()
+{
+	thread_t	thread = NULL;
+
+	lck_grp_attr_setdefault(&vm_swap_data_lock_grp_attr);
+	lck_grp_init(&vm_swap_data_lock_grp,
+		     "vm_swap_data",
+		     &vm_swap_data_lock_grp_attr);
+	lck_attr_setdefault(&vm_swap_data_lock_attr);
+	lck_mtx_init_ext(&vm_swap_data_lock,
+			 &vm_swap_data_lock_ext,
+			 &vm_swap_data_lock_grp,
+			 &vm_swap_data_lock_attr);
+
+	queue_init(&swf_global_queue);
+
+	
+	if (kernel_thread_start_priority((thread_continue_t)vm_swapout_thread, NULL,
+					 BASEPRI_VM, &thread) != KERN_SUCCESS) {
+		panic("vm_swapout_thread: create failed");
+	}
+	vm_swapout_thread_id = thread->thread_id;
+
+	thread_deallocate(thread);
+
+	if (kernel_thread_start_priority((thread_continue_t)vm_swapfile_create_thread, NULL,
+				 BASEPRI_VM, &thread) != KERN_SUCCESS) {
+		panic("vm_swapfile_create_thread: create failed");
+	}
+
+	thread_deallocate(thread);
+
+	if (kernel_thread_start_priority((thread_continue_t)vm_swapfile_gc_thread, NULL,
+				 BASEPRI_VM, &thread) != KERN_SUCCESS) {
+		panic("vm_swapfile_gc_thread: create failed");
+	}
+	thread_deallocate(thread);
+
+	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
+	                                TASK_POLICY_INTERNAL, TASK_POLICY_IO, THROTTLE_LEVEL_COMPRESSOR_TIER2);
+	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
+	                                TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
+
+#if ENCRYPTED_SWAP
+	if (swap_crypt_ctx_initialized == FALSE) {
+		swap_crypt_ctx_initialize();
+	}
+#endif /* ENCRYPTED_SWAP */
+
+#if CONFIG_EMBEDDED
+	/*
+	 * dummy value until the swap file gets created 
+	 * when we drive the first c_segment_t to the 
+	 * swapout queue... at that time we will
+	 * know the true size we have to work with
+	 */
+	c_overage_swapped_limit = 16;
+#endif
+	printf("VM Swap Subsystem is ON\n");
+}
+
+
+#if RECORD_THE_COMPRESSED_DATA
+
+void
+c_compressed_record_init()
+{
+	if (c_compressed_record_init_done == FALSE) {
+		vm_swapfile_open("/tmp/compressed_data", &c_compressed_record_vp);
+		c_compressed_record_init_done = TRUE;
+	}
+}
+
+void
+c_compressed_record_write(char *buf, int size)
+{
+	if (c_compressed_record_write_error == 0) {
+		c_compressed_record_write_error = vm_record_file_write(c_compressed_record_vp, c_compressed_record_file_offset, buf, size);
+		c_compressed_record_file_offset += size;
+	}
+}
+#endif
+
+
+int		compaction_swapper_inited = 0;
+
+void
+vm_compaction_swapper_do_init(void)
+{
+	struct	vnode *vp;
+	char	*pathname;
+	int	namelen;
+
+	if (compaction_swapper_inited)
+		return;
+
+	if (vm_compressor_mode != VM_PAGER_COMPRESSOR_WITH_SWAP) {
+		compaction_swapper_inited = 1;
+		return;
+	}
+	lck_mtx_lock(&vm_swap_data_lock);
+
+	if ( !compaction_swapper_inited) {
+
+		namelen = (int)strlen(swapfilename) + SWAPFILENAME_INDEX_LEN + 1;
+		pathname = (char*)kalloc(namelen);
+		memset(pathname, 0, namelen);
+		snprintf(pathname, namelen, "%s%d", swapfilename, 0);
+
+		vm_swapfile_open(pathname, &vp);
+
+		if (vp) {
+			
+			if (vnode_pager_isSSD(vp) == FALSE) {
+				vm_compressor_minorcompact_threshold_divisor = 18;
+				vm_compressor_majorcompact_threshold_divisor = 22;
+				vm_compressor_unthrottle_threshold_divisor = 32;
+			}
+#if !CONFIG_EMBEDDED
+			vnode_setswapmount(vp);
+			vm_swappin_avail = vnode_getswappin_avail(vp);
+
+			if (vm_swappin_avail)
+				vm_swappin_enabled = TRUE;
+#endif
+			vm_swapfile_close((uint64_t)pathname, vp);
+		}
+		kfree(pathname, namelen);
+
+		compaction_swapper_inited = 1;
+	}
+	lck_mtx_unlock(&vm_swap_data_lock);
+}
+
 
 
 void
@@ -945,18 +1062,6 @@ vm_swap_create_file()
 
 	if (swap_file_reuse == FALSE) {
 
-		if (strlen(swapfilename) == 0) {
-			/*
-			 * If no swapfile name has been set, we'll
-			 * use the default name.
-			 *
-			 * Also, this function is only called from the swapfile management thread.
-			 * So we don't need to worry about a race in checking/setting the name here.
-			 */
-
-			strlcpy(swapfilename, SWAP_FILE_NAME, MAX_SWAPFILENAME_LEN);
-		}
-
 		namelen = (int)strlen(swapfilename) + SWAPFILENAME_INDEX_LEN + 1;
 			
 		swf = (struct swapfile*) kalloc(sizeof *swf);
@@ -1039,6 +1144,15 @@ vm_swap_create_file()
 			lck_mtx_unlock(&vm_swap_data_lock);
 
 			thread_wakeup((event_t) &vm_num_swap_files);
+#if CONFIG_EMBEDDED
+			if (vm_num_swap_files == 1) {
+
+				c_overage_swapped_limit = (uint32_t)size / C_SEG_BUFSIZE;
+
+				if (VM_CONFIG_FREEZER_SWAP_IS_ACTIVE)
+					c_overage_swapped_limit /= 2;
+			}
+#endif
 			break;
 		} else {
 
@@ -1085,7 +1199,7 @@ vm_swap_get(c_segment_t c_seg, uint64_t f_offset, uint64_t size)
 	C_SEG_MAKE_WRITEABLE(c_seg);
 #endif
 	file_offset = (f_offset & SWAP_SLOT_MASK);
-	retval = vm_swapfile_io(swf->swp_vp, file_offset, c_seg->c_store.c_buffer, (int)(size / PAGE_SIZE_64), SWAP_READ);
+	retval = vm_swapfile_io(swf->swp_vp, file_offset, (uint64_t)c_seg->c_store.c_buffer, (int)(size / PAGE_SIZE_64), SWAP_READ);
 
 #if DEVELOPMENT || DEBUG
 	C_SEG_WRITE_PROTECT(c_seg);

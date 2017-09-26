@@ -62,6 +62,7 @@
 #include <bsm/audit_kevents.h>
 
 #include <pexpert/pexpert.h>
+#include <libkern/section_keywords.h>
 
 typedef struct kfs_event {
     LIST_ENTRY(kfs_event) kevent_list;
@@ -397,7 +398,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     // (as long as it's not an event type that can never be the
     // same as a previous event)
     //
-    if (type != FSE_CREATE_FILE && type != FSE_DELETE && type != FSE_RENAME && type != FSE_EXCHANGE && type != FSE_CHOWN && type != FSE_DOCID_CHANGED && type != FSE_DOCID_CREATED) {
+    if (type != FSE_CREATE_FILE && type != FSE_DELETE && type != FSE_RENAME && type != FSE_EXCHANGE && type != FSE_CHOWN && type != FSE_DOCID_CHANGED && type != FSE_DOCID_CREATED && type != FSE_CLONE) {
 	void *ptr=NULL;
 	int   vid=0, was_str=0, nlen=0;
 
@@ -465,7 +466,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 
 
     kfse = zalloc_noblock(event_zone);
-    if (kfse && (type == FSE_RENAME || type == FSE_EXCHANGE)) {
+    if (kfse && (type == FSE_RENAME || type == FSE_EXCHANGE || type == FSE_CLONE)) {
 	kfse_dest = zalloc_noblock(event_zone);
 	if (kfse_dest == NULL) {
 	    did_alloc = 1;
@@ -541,7 +542,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     kfse->type     = type;
     kfse->abstime  = now;
     kfse->pid      = p->p_pid;
-    if (type == FSE_RENAME || type == FSE_EXCHANGE) {
+    if (type == FSE_RENAME || type == FSE_EXCHANGE || type == FSE_CLONE) {
 	memset(kfse_dest, 0, sizeof(kfs_event));
 	kfse_dest->refcount = 1;
 	OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse_dest->flags);
@@ -1625,6 +1626,63 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 void
 fsevent_unmount(__unused struct mount *mp, __unused vfs_context_t ctx)
 {
+#if CONFIG_EMBEDDED
+    dev_t dev = mp->mnt_vfsstat.f_fsid.val[0];
+    int error, waitcount = 0;
+    struct timespec ts = {1, 0};
+
+    // wait for any other pending unmounts to complete
+    lock_watch_table();
+    while (fsevent_unmount_dev != 0) {
+        error = msleep((caddr_t)&fsevent_unmount_dev, &watch_table_lock, PRIBIO, "fsevent_unmount_wait", &ts);
+        if (error == EWOULDBLOCK)
+            error = 0;
+        if (!error && (++waitcount >= 10)) {
+            error = EWOULDBLOCK;
+            printf("timeout waiting to signal unmount pending for dev %d (fsevent_unmount_dev %d)\n", dev, fsevent_unmount_dev);
+        }
+        if (error) {
+            // there's a problem, bail out
+            unlock_watch_table();
+            return;
+        }
+    }
+    if (fs_event_type_watchers[FSE_UNMOUNT_PENDING] == 0) {
+        // nobody watching for unmount pending events
+        unlock_watch_table();
+        return;
+    }
+    // this is now the current unmount pending
+    fsevent_unmount_dev = dev;
+    fsevent_unmount_ack_count = fs_event_type_watchers[FSE_UNMOUNT_PENDING];
+    unlock_watch_table();
+
+    // send an event to notify the watcher they need to get off the mount
+    error = add_fsevent(FSE_UNMOUNT_PENDING, ctx, FSE_ARG_DEV, dev, FSE_ARG_DONE);
+
+    // wait for acknowledgment(s) (give up if it takes too long)
+    lock_watch_table();
+    waitcount = 0;
+    while (fsevent_unmount_dev == dev) {
+        error = msleep((caddr_t)&fsevent_unmount_dev, &watch_table_lock, PRIBIO, "fsevent_unmount_pending", &ts);
+        if (error == EWOULDBLOCK)
+            error = 0;
+        if (!error && (++waitcount >= 10)) {
+            error = EWOULDBLOCK;
+            printf("unmount pending ack timeout for dev %d\n", dev);
+        }
+        if (error) {
+            // there's a problem, bail out
+            if (fsevent_unmount_dev == dev) {
+                fsevent_unmount_dev = 0;
+                fsevent_unmount_ack_count = 0;
+	    }
+            wakeup((caddr_t)&fsevent_unmount_dev);
+            break;
+        }
+    }
+    unlock_watch_table();
+#endif
 }
 
 
@@ -1982,24 +2040,25 @@ filt_fsevent_process(struct knote *kn, struct filt_process_s *data, struct keven
 	return res;
 }
 
-struct  filterops fsevent_filtops = { 
-	.f_isfd = 1, 
-	.f_attach = NULL, 
-	.f_detach = filt_fsevent_detach, 
+SECURITY_READ_ONLY_EARLY(struct  filterops) fsevent_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_fsevent_detach,
 	.f_event = filt_fsevent,
 	.f_touch = filt_fsevent_touch,
 	.f_process = filt_fsevent_process,
 };
 
 static int
-fseventsf_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn, __unused vfs_context_t ctx)
+fseventsf_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn,
+		__unused struct kevent_internal_s *kev, __unused vfs_context_t ctx)
 {
     fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
     int res;
 
     kn->kn_hook = (void*)fseh;
     kn->kn_hookid = 1;
-   	kn->kn_filtid = EVFILTID_FSEVENT;
+	kn->kn_filtid = EVFILTID_FSEVENT;
 
     lock_watch_table();
 
@@ -2101,7 +2160,7 @@ parse_buffer_and_add_events(const char *buffer, int bufsize, vfs_context_t ctx, 
 
 	path_len = ptr - path;
 
-	if (type != FSE_RENAME && type != FSE_EXCHANGE) {
+	if (type != FSE_RENAME && type != FSE_EXCHANGE && type != FSE_CLONE) {
 	    event_start = ptr;   // record where the next event starts
 
 	    err = add_fsevent(type, ctx, FSE_ARG_STRING, path_len, path, FSE_ARG_FINFO, finfo, FSE_ARG_DONE);

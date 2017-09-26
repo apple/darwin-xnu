@@ -135,12 +135,6 @@ static boolean_t intcoproc_unrestricted = FALSE;
 
 extern char *proc_best_name(proc_t);
 
-/*
- * If the total number of gc reqs is above a threshold, schedule
- * garbage collect timer sooner
- */
-static boolean_t inpcb_toomany_gcreq = FALSE;
-
 #define	INPCB_GCREQ_THRESHOLD	50000
 
 static thread_call_t inpcb_thread_call, inpcb_fast_thread_call;
@@ -221,7 +215,16 @@ SYSCTL_PROC(_net_inet_ip_portrange, OID_AUTO, hilast,
 static uint32_t apn_fallbk_debug = 0;
 #define apn_fallbk_log(x)       do { if (apn_fallbk_debug >= 1) log x; } while (0)
 
+#if CONFIG_EMBEDDED
+static boolean_t apn_fallbk_enabled = TRUE;
+
+SYSCTL_DECL(_net_inet);
+SYSCTL_NODE(_net_inet, OID_AUTO, apn_fallback, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "APN Fallback");
+SYSCTL_UINT(_net_inet_apn_fallback, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &apn_fallbk_debug, 0, "APN fallback debug enable");
+#else
 static boolean_t apn_fallbk_enabled = FALSE;
+#endif
 
 extern int	udp_use_randomport;
 extern int	tcp_use_randomport;
@@ -315,16 +318,10 @@ in_pcbinit(void)
 static void
 inpcb_timeout(void *arg0, void *arg1)
 {
-#pragma unused(arg0)
+#pragma unused(arg0, arg1)
 	struct inpcbinfo *ipi;
 	boolean_t t, gc;
 	struct intimercount gccnt, tmcnt;
-	boolean_t toomany_gc = FALSE;
-
-	if (arg1 != NULL) {
-		VERIFY(arg1 == &inpcb_toomany_gcreq);
-		toomany_gc = *(boolean_t *)arg1;
-	}
 
 	/*
 	 * Update coarse-grained networking timestamp (in sec.); the idea
@@ -368,7 +365,7 @@ inpcb_timeout(void *arg0, void *arg1)
 					ipi->ipi_timer(ipi);
 					tmcnt.intimer_lazy +=
 					    ipi->ipi_timer_req.intimer_lazy;
-					tmcnt.intimer_lazy +=
+					tmcnt.intimer_fast +=
 					    ipi->ipi_timer_req.intimer_fast;
 					tmcnt.intimer_nodelay +=
 					    ipi->ipi_timer_req.intimer_nodelay;
@@ -386,12 +383,8 @@ inpcb_timeout(void *arg0, void *arg1)
 		inpcb_ticking = INPCB_HAVE_TIMER_REQ(tmcnt);
 
 	/* re-arm the timer if there's work to do */
-	if (toomany_gc) {
-		inpcb_toomany_gcreq = FALSE;
-	} else {
-		inpcb_timeout_run--;
-		VERIFY(inpcb_timeout_run >= 0 && inpcb_timeout_run < 2);
-	}
+	inpcb_timeout_run--;
+	VERIFY(inpcb_timeout_run >= 0 && inpcb_timeout_run < 2);
 
 	if (gccnt.intimer_nodelay > 0 || tmcnt.intimer_nodelay > 0)
 		inpcb_sched_timeout();
@@ -422,7 +415,7 @@ _inpcb_sched_timeout(unsigned int offset)
 	uint64_t deadline, leeway;
 
 	clock_interval_to_deadline(1, NSEC_PER_SEC, &deadline);
-	lck_mtx_assert(&inpcb_timeout_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&inpcb_timeout_lock, LCK_MTX_ASSERT_OWNED);
 	if (inpcb_timeout_run == 0 &&
 	    (inpcb_garbage_collecting || inpcb_ticking)) {
 		lck_mtx_convert_spin(&inpcb_timeout_lock);
@@ -457,25 +450,14 @@ void
 inpcb_gc_sched(struct inpcbinfo *ipi, u_int32_t type)
 {
 	u_int32_t gccnt;
-	uint64_t deadline;
 
 	lck_mtx_lock_spin(&inpcb_timeout_lock);
 	inpcb_garbage_collecting = TRUE;
 	gccnt = ipi->ipi_gc_req.intimer_nodelay +
 		ipi->ipi_gc_req.intimer_fast;
 
-	if (gccnt > INPCB_GCREQ_THRESHOLD && !inpcb_toomany_gcreq) {
-		inpcb_toomany_gcreq = TRUE;
-
-		/*
-		 * There are toomany pcbs waiting to be garbage collected,
-		 * schedule a much faster timeout in addition to
-		 * the caller's request
-		 */
-		lck_mtx_convert_spin(&inpcb_timeout_lock);
-		clock_interval_to_deadline(100, NSEC_PER_MSEC, &deadline);
-		thread_call_enter1_delayed(inpcb_thread_call,
-		    &inpcb_toomany_gcreq, deadline);
+	if (gccnt > INPCB_GCREQ_THRESHOLD) {
+		type = INPCB_TIMER_FAST;
 	}
 
 	switch (type) {
@@ -681,7 +663,7 @@ in_pcblookup_local_and_cleanup(struct inpcbinfo *pcbinfo, struct in_addr laddr,
 	if (inp != NULL && inp->inp_wantcnt == WNT_STOPUSING) {
 		struct socket *so = inp->inp_socket;
 
-		lck_mtx_lock(&inp->inpcb_mtx);
+		socket_lock(so, 0);
 
 		if (so->so_usecount == 0) {
 			if (inp->inp_state != INPCB_STATE_DEAD)
@@ -689,7 +671,7 @@ in_pcblookup_local_and_cleanup(struct inpcbinfo *pcbinfo, struct in_addr laddr,
 			in_pcbdispose(inp);	/* will unlock & destroy */
 			inp = NULL;
 		} else {
-			lck_mtx_unlock(&inp->inpcb_mtx);
+			socket_unlock(so, 0);
 		}
 	}
 
@@ -824,6 +806,7 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 			struct inpcb *t;
 			uid_t u;
 
+#if !CONFIG_EMBEDDED
 			if (ntohs(lport) < IPPORT_RESERVED) {
 				cred = kauth_cred_proc_ref(p);
 				error = priv_check_cred(cred,
@@ -835,6 +818,7 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 					return (EACCES);
 				}
 			}
+#endif /* !CONFIG_EMBEDDED */
 			if (!IN_MULTICAST(ntohl(SIN(nam)->sin_addr.s_addr)) &&
 			    (u = kauth_cred_getuid(so->so_cred)) != 0 &&
 			    (t = in_pcblookup_local_and_cleanup(
@@ -891,6 +875,7 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	if (lport == 0) {
 		u_short first, last;
 		int count;
+		bool found;
 
 		randomport = (so->so_flags & SOF_BINDRANDOMPORT) ||
 		    (so->so_type == SOCK_STREAM ? tcp_use_randomport :
@@ -935,16 +920,22 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 		 * is not being tested on each round of the loop.
 		 */
 		if (first > last) {
+			struct in_addr lookup_addr;
+
 			/*
 			 * counting down
 			 */
 			if (randomport) {
-				read_random(&rand_port, sizeof (rand_port));
+				read_frandom(&rand_port, sizeof (rand_port));
 				*lastport =
 				    first - (rand_port % (first - last));
 			}
 			count = first - last;
 
+			lookup_addr = (laddr.s_addr != INADDR_ANY) ? laddr :
+			    inp->inp_laddr;
+
+			found = false;
 			do {
 				if (count-- < 0) {	/* completely used? */
 					lck_rw_done(pcbinfo->ipi_lock);
@@ -955,20 +946,27 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				if (*lastport > first || *lastport < last)
 					*lastport = first;
 				lport = htons(*lastport);
-			} while (in_pcblookup_local_and_cleanup(pcbinfo,
-			    ((laddr.s_addr != INADDR_ANY) ? laddr :
-			    inp->inp_laddr), lport, wild));
+
+				found = in_pcblookup_local_and_cleanup(pcbinfo,
+				    lookup_addr, lport, wild) == NULL;
+			} while (!found);
 		} else {
+			struct in_addr lookup_addr;
+
 			/*
 			 * counting up
 			 */
 			if (randomport) {
-				read_random(&rand_port, sizeof (rand_port));
+				read_frandom(&rand_port, sizeof (rand_port));
 				*lastport =
 				    first + (rand_port % (first - last));
 			}
 			count = last - first;
 
+			lookup_addr = (laddr.s_addr != INADDR_ANY) ? laddr :
+			    inp->inp_laddr;
+
+			found = false;
 			do {
 				if (count-- < 0) {	/* completely used? */
 					lck_rw_done(pcbinfo->ipi_lock);
@@ -979,9 +977,10 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				if (*lastport < first || *lastport > last)
 					*lastport = first;
 				lport = htons(*lastport);
-			} while (in_pcblookup_local_and_cleanup(pcbinfo,
-			    ((laddr.s_addr != INADDR_ANY) ? laddr :
-			    inp->inp_laddr), lport, wild));
+
+				found = in_pcblookup_local_and_cleanup(pcbinfo,
+				    lookup_addr, lport, wild) == NULL;
+			} while (!found);
 		}
 	}
 	socket_lock(so, 0);
@@ -1586,6 +1585,12 @@ in_pcbdetach(struct inpcb *inp)
 	}
 #endif /* IPSEC */
 
+	if (inp->inp_stat != NULL && SOCK_PROTO(so) == IPPROTO_UDP) {
+		if (inp->inp_stat->rxpackets == 0 && inp->inp_stat->txpackets == 0) {
+			INC_ATOMIC_INT64_LIM(net_api_stats.nas_socket_inet_dgram_no_data);
+		}
+	}
+
 	/*
 	 * Let NetworkStatistics know this PCB is going away
 	 * before we detach it.
@@ -1664,7 +1669,7 @@ in_pcbdispose(struct inpcb *inp)
 		}
 	}
 
-	lck_rw_assert(ipi->ipi_lock, LCK_RW_ASSERT_EXCLUSIVE);
+	LCK_RW_ASSERT(ipi->ipi_lock, LCK_RW_ASSERT_EXCLUSIVE);
 
 	inp->inp_gencnt = ++ipi->ipi_gencnt;
 	/* access ipi in in_pcbremlists */
@@ -1687,6 +1692,11 @@ in_pcbdispose(struct inpcb *inp)
 				/* NOTREACHED */
 			}
 			lck_mtx_unlock(&inp->inpcb_mtx);
+
+#if NECP
+			necp_inpcb_remove_cb(inp);
+#endif /* NECP */
+
 			lck_mtx_destroy(&inp->inpcb_mtx, ipi->ipi_lock_grp);
 		}
 		/* makes sure we're not called twice from so_close */
@@ -1747,9 +1757,9 @@ in_getsockaddr(struct socket *so, struct sockaddr **nam)
 }
 
 int
-in_getsockaddr_s(struct socket *so, struct sockaddr_storage *ss)
+in_getsockaddr_s(struct socket *so, struct sockaddr_in *ss)
 {
-	struct sockaddr_in *sin = SIN(ss);
+	struct sockaddr_in *sin = ss;
 	struct inpcb *inp;
 
 	VERIFY(ss != NULL);
@@ -1758,12 +1768,8 @@ in_getsockaddr_s(struct socket *so, struct sockaddr_storage *ss)
 	sin->sin_family = AF_INET;
 	sin->sin_len = sizeof (*sin);
 
-	if ((inp = sotoinpcb(so)) == NULL
-#if NECP
-		|| (necp_socket_should_use_flow_divert(inp))
-#endif /* NECP */
-		)
-		return (inp == NULL ? EINVAL : EPROTOTYPE);
+	if ((inp = sotoinpcb(so)) == NULL)
+		return (EINVAL);
 
 	sin->sin_port = inp->inp_lport;
 	sin->sin_addr = inp->inp_laddr;
@@ -1794,31 +1800,6 @@ in_getpeeraddr(struct socket *so, struct sockaddr **nam)
 	sin->sin_addr = inp->inp_faddr;
 
 	*nam = (struct sockaddr *)sin;
-	return (0);
-}
-
-int
-in_getpeeraddr_s(struct socket *so, struct sockaddr_storage *ss)
-{
-	struct sockaddr_in *sin = SIN(ss);
-	struct inpcb *inp;
-
-	VERIFY(ss != NULL);
-	bzero(ss, sizeof (*ss));
-
-	sin->sin_family = AF_INET;
-	sin->sin_len = sizeof (*sin);
-
-	if ((inp = sotoinpcb(so)) == NULL
-#if NECP
-		|| (necp_socket_should_use_flow_divert(inp))
-#endif /* NECP */
-		) {
-		return (inp == NULL ? EINVAL : EPROTOTYPE);
-	}
-
-	sin->sin_port = inp->inp_fport;
-	sin->sin_addr = inp->inp_faddr;
 	return (0);
 }
 
@@ -2346,6 +2327,8 @@ in_pcbinshash(struct inpcb *inp, int locked)
 	}
 
 	VERIFY(!(inp->inp_flags2 & INP2_INHASHLIST));
+
+
 	inp->inp_phd = phd;
 	LIST_INSERT_HEAD(&phd->phd_pcblist, inp, inp_portlist);
 	LIST_INSERT_HEAD(pcbhash, inp, inp_hash);
@@ -2594,6 +2577,7 @@ inpcb_to_compat(struct inpcb *inp, struct inpcb_compat *inp_compat)
 	inp_compat->inp_depend6.inp6_hops = inp->inp_depend6.inp6_hops;
 }
 
+#if !CONFIG_EMBEDDED
 void
 inpcb_to_xinpcb64(struct inpcb *inp, struct xinpcb64 *xinp)
 {
@@ -2613,6 +2597,7 @@ inpcb_to_xinpcb64(struct inpcb *inp, struct xinpcb64 *xinp)
 	xinp->inp_depend6.inp6_ifindex = 0;
 	xinp->inp_depend6.inp6_hops = inp->inp_depend6.inp6_hops;
 }
+#endif /* !CONFIG_EMBEDDED */
 
 /*
  * The following routines implement this scheme:
@@ -2645,7 +2630,7 @@ inp_route_copyout(struct inpcb *inp, struct route *dst)
 {
 	struct route *src = &inp->inp_route;
 
-	lck_mtx_assert(&inp->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
+	socket_lock_assert_owned(inp->inp_socket);
 
 	/*
 	 * If the route in the PCB is stale or not for IPv4, blow it away;
@@ -2662,7 +2647,7 @@ inp_route_copyin(struct inpcb *inp, struct route *src)
 {
 	struct route *dst = &inp->inp_route;
 
-	lck_mtx_assert(&inp->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
+	socket_lock_assert_owned(inp->inp_socket);
 
 	/* Minor sanity check */
 	if (src->ro_rt != NULL && rt_key(src->ro_rt)->sa_family != AF_INET)
@@ -3486,4 +3471,17 @@ inp_decr_sndbytes_allunsent(struct socket *so, u_int32_t th_ack)
 
 	len = inp_get_sndbytes_allunsent(so, th_ack);
 	inp_decr_sndbytes_unsent(so, len);
+}
+
+
+inline void
+inp_set_activity_bitmap(struct inpcb *inp)
+{
+	in_stat_set_activity_bitmap(&inp->inp_nw_activity, net_uptime());
+}
+
+inline void
+inp_get_activity_bitmap(struct inpcb *inp, activity_bitmap_t *ab)
+{
+	bcopy(&inp->inp_nw_activity, ab, sizeof (*ab));
 }

@@ -30,6 +30,8 @@
 
 #if defined (__i386__) || defined (__x86_64__)
 #include "i386/xpr.h"
+#elif defined (__arm__) || defined (__arm64__)
+#include "arm/xpr.h"
 #else
 #error architecture not supported
 #endif

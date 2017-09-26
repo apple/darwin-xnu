@@ -38,15 +38,35 @@
 #define __TSD_THREAD_SELF 0
 #define __TSD_ERRNO 1
 #define __TSD_MIG_REPLY 2
+#define __TSD_MACH_THREAD_SELF 3
+#define __TSD_THREAD_QOS_CLASS 4
+#define __TSD_RETURN_TO_KERNEL 5
+/* slot 6 is reserved for Windows/WINE compatibility reasons */
 #define __TSD_SEMAPHORE_CACHE 9
 
+#ifdef __arm__
+#include <arm/arch.h>
+#endif
 
 __attribute__((always_inline))
 static __inline__ unsigned int
 _os_cpu_number(void)
 {
-	/* Not yet implemented */
-	return 0;
+#if defined(__arm__) && defined(_ARM_ARCH_6)
+	uintptr_t p;
+	__asm__("mrc	p15, 0, %[p], c13, c0, 3" : [p] "=&r" (p));
+	return (unsigned int)(p & 0x3ul);
+#elif defined(__arm64__)
+	uint64_t p;
+	__asm__("mrs	%[p], TPIDRRO_EL0" : [p] "=&r" (p));
+	return (unsigned int)p & 0x7;
+#elif defined(__x86_64__) || defined(__i386__)
+	struct { uintptr_t p1, p2; } p;
+	__asm__("sidt %[p]" : [p] "=&m" (p));
+	return (unsigned int)(p.p1 & 0xfff);
+#else
+#error _os_cpu_number not implemented on this architecture
+#endif
 }
 
 #if defined(__i386__) || defined(__x86_64__)
@@ -83,6 +103,28 @@ _os_tsd_set_direct(unsigned long slot, void *val)
 	return 0;
 }
 #endif
+
+#elif defined(__arm__) || defined(__arm64__)
+
+__attribute__((always_inline, pure))
+static __inline__ void**
+_os_tsd_get_base(void)
+{
+#if defined(__arm__) && defined(_ARM_ARCH_6)
+	uintptr_t tsd;
+	__asm__("mrc p15, 0, %0, c13, c0, 3" : "=r" (tsd));
+	tsd &= ~0x3ul; /* lower 2-bits contain CPU number */
+#elif defined(__arm__) && defined(_ARM_ARCH_5)
+	register uintptr_t tsd asm ("r9");
+#elif defined(__arm64__)
+	uint64_t tsd;
+	__asm__("mrs %0, TPIDRRO_EL0" : "=r" (tsd));
+	tsd &= ~0x7ull;
+#endif
+
+	return (void**)(uintptr_t)tsd;
+}
+#define _os_tsd_get_base()  _os_tsd_get_base()
 
 #else
 #error _os_tsd_get_base not implemented on this architecture

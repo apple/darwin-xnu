@@ -95,6 +95,10 @@
 
 #include <pexpert/pexpert.h>
 
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
+
 /* XXX ken/bsd_kern.c - prototype should be in common header */
 int get_task_userstop(task_t);
 
@@ -128,6 +132,10 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 	AUDIT_ARG(value32, uap->data);
 
 	if (uap->req == PT_DENY_ATTACH) {
+#if (DEVELOPMENT || DEBUG) && CONFIG_EMBEDDED
+		if (PE_i_can_has_debugger(NULL))
+			return(0);
+#endif
 		proc_lock(p);
 		if (ISSET(p->p_lflag, P_LTRACED)) {
 			proc_unlock(p);
@@ -227,6 +235,12 @@ retry_trace_me:;
 #pragma clang diagnostic pop
 		int		err;
 
+#if CONFIG_EMBEDDED
+		if (tr_sigexc == 0) {
+			error = ENOTSUP;
+			goto out;
+		}
+#endif
 
 		if ( kauth_authorize_process(proc_ucred(p), KAUTH_PROCESS_CANTRACE, 
 									 t, (uintptr_t)&err, 0, 0) == 0 ) {

@@ -101,9 +101,11 @@ cc_aligned_struct(16) ccctr_ctx;
 
 struct ccmode_ctr {
     size_t size;        /* first argument to ccctr_ctx_decl(). */
-    size_t block_size;
-    int (*init)(const struct ccmode_ctr *ctr, ccctr_ctx *ctx,
+    size_t block_size;  /* for historical reasons, this is set to 1 */
+    size_t ecb_block_size;  /* the actual block size of the underlying cipher */
+    int (*init)(const struct ccmode_ctr *mode, ccctr_ctx *ctx,
                 size_t key_len, const void *key, const void *iv);
+    int (*setctr)(const struct ccmode_ctr *mode, ccctr_ctx *ctx, const void *ctr);
     int (*ctr)(ccctr_ctx *ctx, size_t nbytes, const void *in, void *out);
     const void *custom;
 };
@@ -125,15 +127,13 @@ cc_aligned_struct(16) ccxts_ctx;
 cc_aligned_struct(16) ccxts_tweak;
 
 struct ccmode_xts {
-    size_t size;        /* first argument to ccxts_ctx_decl(). */
-    size_t tweak_size;  /* first argument to ccxts_tweak_decl(). */
+    size_t size;        /* first argument to ccxts_ctx_decl(). Size of the ctx data structure */
+    size_t tweak_size;  /* first argument to ccxts_tweak_decl(). Size of the tweak structure, not the expected tweak size */
     size_t block_size;
 
-    /* Create a xts key from a xts mode object.  The tweak_len here
-     determines how long the tweak is in bytes, for each subsequent call to
-     ccmode_xts->xts().
-     key must point to at least 'size' cc_units of free storage.
-     tweak_key must point to at least 'tweak_size' cc_units of free storage.
+    /* Create a xts key from a xts mode object.  
+     key must point to at least 'size' bytes of free storage.
+     tweak_key must point to at least 'tweak_size' bytes of free storage.
      key and tweak_key must differ.
      Returns nonzero on failure.
      */

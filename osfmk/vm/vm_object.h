@@ -171,7 +171,8 @@ struct vm_object {
 	int			ref_count;	/* Number of references */
 	unsigned int		resident_page_count;
 						/* number of resident pages */
-	unsigned int		wired_page_count; /* number of wired pages */
+	const unsigned int	wired_page_count; /* number of wired pages
+						     use VM_OBJECT_WIRED_PAGE_UPDATE macros to update */
 	unsigned int		reusable_page_count;
 
 	struct vm_object	*copy;		/* Object that should receive
@@ -255,15 +256,6 @@ struct vm_object {
 						 * therefore, managed by the
 						 * default memory manger)
 						 */
-	/* boolean_t */		temporary:1,	/* Permanent objects may be
-						 * changed externally by the 
-						 * memory manager, and changes
-						 * made in memory must be
-						 * reflected back to the memory
-						 * manager.  Temporary objects
-						 * lack both of these
-						 * characteristics.
-						 */
 	/* boolean_t */		private:1,	/* magic device_pager object,
 						 * holds private pages only */
 	/* boolean_t */		pageout:1,	/* pageout object. contains
@@ -274,16 +266,11 @@ struct vm_object {
 	/* boolean_t */		purgable:2,	/* Purgable state.  See
 						 * VM_PURGABLE_* 
 						 */
+	/* boolean_t */		purgeable_only_by_kernel:1,
 	/* boolean_t */		purgeable_when_ripe:1, /* Purgeable when a token
 							* becomes ripe.
 							*/
 	/* boolean_t */		shadowed:1,	/* Shadow may exist */
-	/* boolean_t */		advisory_pageout:1,
-						/* Instead of sending page
-						 * via OOL, just notify
-						 * pager that the kernel
-						 * wants to discard it, page
-						 * remains in object */
 	/* boolean_t */		true_share:1,
 						/* This object is mapped
 						 * in more than one place
@@ -323,22 +310,19 @@ struct vm_object {
 						 * memory rules w.r.t pmap
 						 * access bits.
 						 */
-	/* boolean_t */		nophyscache:1;
+	/* boolean_t */		nophyscache:1,
 						/* When mapped at the 
 						 * pmap level, don't allow
 						 * primary caching. (for
 						 * I/O)
 						 */
+	/* boolean_t */		_object5_unused_bits:1;
 
 	queue_chain_t		cached_list;	/* Attachment point for the
 						 * list of objects cached as a
 						 * result of their can_persist
 						 * value
 						 */
-
-	queue_head_t		msr_q;		/* memory object synchronise
-						   request queue */
-
   /*
    * the following fields are not protected by any locks
    * they are updated via atomic compare and swap
@@ -350,19 +334,12 @@ struct vm_object {
         uint32_t		pages_used;
 	vm_offset_t		cow_hint;	/* last page present in     */
 						/* shadow but not in object */
-#if	MACH_ASSERT
-	struct vm_object	*paging_object;	/* object which pages to be
-						 * swapped out are temporary
-						 * put in current object
-						 */
-#endif
 	/* hold object lock when altering */
 	unsigned	int
 		wimg_bits:8,	        /* cache WIMG bits         */		
 		code_signed:1,		/* pages are signed and should be
 					   validated; the signatures are stored
 					   with the pager */
-		hashed:1,		/* object/pager entered in hash */
 		transposed:1,		/* object was transposed with another */
 		mapping_in_progress:1,	/* pager being mapped/unmapped */
 		phantom_isssd:1,
@@ -375,6 +352,7 @@ struct vm_object {
 		purgeable_queue_type:2,
 		purgeable_queue_group:3,
 		io_tracking:1,
+		no_tag_update:1,	/*  */
 #if CONFIG_SECLUDED_MEMORY
 		eligible_for_secluded:1,
 		can_grab_secluded:1,
@@ -434,45 +412,21 @@ unsigned int	vm_object_absent_max;	/* maximum number of absent pages
 # define	VM_MSYNC_SYNCHRONIZING			1
 # define	VM_MSYNC_DONE				2
 
-struct msync_req {
-	queue_chain_t		msr_q;		/* object request queue */
-	queue_chain_t		req_q;		/* vm_msync request queue */
-	unsigned int		flag;
-	vm_object_offset_t	offset;
-	vm_object_size_t	length;
-	vm_object_t		object;		/* back pointer */
-	decl_lck_mtx_data(,	msync_req_lock)	/* Lock for this structure */
-};
-
-typedef struct msync_req	*msync_req_t;
-#define MSYNC_REQ_NULL		((msync_req_t) 0)
-
 
 extern lck_grp_t		vm_map_lck_grp;
 extern lck_attr_t		vm_map_lck_attr;
 
-/*
- * Macros to allocate and free msync_reqs
- */
-#define msync_req_alloc(msr)						\
-    MACRO_BEGIN							\
-        (msr) = (msync_req_t)kalloc(sizeof(struct msync_req));		\
-        lck_mtx_init(&(msr)->msync_req_lock, &vm_map_lck_grp, &vm_map_lck_attr);		\
-        msr->flag = VM_MSYNC_INITIALIZED;				\
-    MACRO_END
+#ifndef VM_TAG_ACTIVE_UPDATE
+#error VM_TAG_ACTIVE_UPDATE
+#endif
 
-#define msync_req_free(msr)						\
+#define VM_OBJECT_WIRED(object, tag)					\
     MACRO_BEGIN								\
-        lck_mtx_destroy(&(msr)->msync_req_lock, &vm_map_lck_grp);	\
-	kfree((msr), sizeof(struct msync_req));				\
-    MACRO_END
-
-#define msr_lock(msr)   lck_mtx_lock(&(msr)->msync_req_lock)
-#define msr_unlock(msr) lck_mtx_unlock(&(msr)->msync_req_lock)
-
-#define VM_OBJECT_WIRED(object)						\
-    MACRO_BEGIN								\
-    if ((object)->purgable == VM_PURGABLE_DENY)				\
+    assert(VM_KERN_MEMORY_NONE != (tag));				\
+    assert(VM_KERN_MEMORY_NONE == (object)->wire_tag);			\
+    (object)->wire_tag = (tag);       					\
+    if (!VM_TAG_ACTIVE_UPDATE   	 	 	 	 	\
+	&& ((object)->purgable == VM_PURGABLE_DENY))			\
     {									\
 	lck_spin_lock(&vm_objects_wired_lock);				\
 	assert(!(object)->objq.next);					\
@@ -482,16 +436,61 @@ extern lck_attr_t		vm_map_lck_attr;
     }									\
     MACRO_END
 
-#define VM_OBJECT_UNWIRED(object)					 \
-    MACRO_BEGIN								 \
-    (object)->wire_tag = VM_KERN_MEMORY_NONE;				 \
-    if (((object)->purgable == VM_PURGABLE_DENY) && (object)->objq.next) \
-    {									 \
-	lck_spin_lock(&vm_objects_wired_lock);				 \
-	queue_remove(&vm_objects_wired, (object), vm_object_t, objq);    \
-	lck_spin_unlock(&vm_objects_wired_lock);			 \
-    }									 \
+#define VM_OBJECT_UNWIRED(object)					       	 	\
+    MACRO_BEGIN								 	 	\
+    if (!VM_TAG_ACTIVE_UPDATE   	 	 	 	 	 	 	\
+	&& ((object)->purgable == VM_PURGABLE_DENY) && (object)->objq.next)  	 	\
+    {									   	 	\
+	lck_spin_lock(&vm_objects_wired_lock);				  	 	\
+	queue_remove(&vm_objects_wired, (object), vm_object_t, objq);   	 	\
+	lck_spin_unlock(&vm_objects_wired_lock);					\
+    }									   	 	\
+    if (VM_KERN_MEMORY_NONE != (object)->wire_tag) {			    	 	\
+	vm_tag_update_size((object)->wire_tag, -ptoa_64((object)->wired_page_count));   \
+	(object)->wire_tag = VM_KERN_MEMORY_NONE;       	 	 	 	\
+    }	   	 	 	 	 	 	 	 	 	 	\
     MACRO_END
+
+// These two macros start & end a C block
+#define VM_OBJECT_WIRED_PAGE_UPDATE_START(object)       	 	 	 	\
+    MACRO_BEGIN								 	 	\
+    {   	 	 	 	 	 	 	 	 	 	\
+	int64_t __wireddelta = 0; vm_tag_t __waswired = (object)->wire_tag;
+
+#define VM_OBJECT_WIRED_PAGE_UPDATE_END(object, tag)            	 	 	\
+	if (__wireddelta) {     	 	 	 	 	 	 	\
+	    boolean_t __overflow __assert_only =     	 	 	 	 	\
+	    os_add_overflow((object)->wired_page_count, __wireddelta,     	 	\
+			    (unsigned int *)(uintptr_t)&(object)->wired_page_count);    \
+	    assert(!__overflow);							\
+	    if (!(object)->pageout && !(object)->no_tag_update) {   	 	 	\
+		if (__wireddelta > 0) {      	 	 	 	 	    	\
+		    assert (VM_KERN_MEMORY_NONE != (tag));			    	\
+		    if (VM_KERN_MEMORY_NONE == __waswired) {  	 	 	   	\
+			VM_OBJECT_WIRED((object), (tag));     	   	 	 	\
+		    }       	 	 	 	 	 	 	     	\
+		    vm_tag_update_size((object)->wire_tag, ptoa_64(__wireddelta));  	\
+		} else if (VM_KERN_MEMORY_NONE != __waswired) {  	 	 	\
+		    assert (VM_KERN_MEMORY_NONE != (object)->wire_tag);			\
+		    vm_tag_update_size((object)->wire_tag, ptoa_64(__wireddelta));  	\
+		    if (!(object)->wired_page_count) { 	 	 	 	 	\
+			VM_OBJECT_UNWIRED((object));		  	 	        \
+		    }       	 	 	 	 	 	                \
+		}       	 	 	 	 	 	 	        \
+	    }       	 	 	 	 	 	 	                \
+	}	       	 	 	 	 	 	 	 	 	\
+    }   	 	 	 	 	 	 	 	 	 	\
+    MACRO_END
+
+#define VM_OBJECT_WIRED_PAGE_COUNT(object, delta)               \
+    __wireddelta += delta; \
+
+#define VM_OBJECT_WIRED_PAGE_ADD(object, m)                     \
+    if (!m->private && !m->fictitious) __wireddelta++;
+
+#define VM_OBJECT_WIRED_PAGE_REMOVE(object, m)                  \
+    if (!m->private && !m->fictitious) __wireddelta--;
+
 
 
 #define OBJECT_LOCK_SHARED	0
@@ -510,6 +509,7 @@ extern boolean_t	vm_object_lock_try(vm_object_t);
 extern boolean_t	_vm_object_lock_try(vm_object_t);
 extern boolean_t	vm_object_lock_avoid(vm_object_t);
 extern void		vm_object_lock_shared(vm_object_t);
+extern boolean_t	vm_object_lock_yield_shared(vm_object_t);
 extern boolean_t	vm_object_lock_try_shared(vm_object_t);
 extern void		vm_object_unlock(vm_object_t);
 extern boolean_t	vm_object_lock_upgrade(vm_object_t);
@@ -760,7 +760,8 @@ __private_extern__ kern_return_t vm_object_upl_request(
 				upl_t			*upl,
 				upl_page_info_t		*page_info,
 				unsigned int		*count,
-				upl_control_flags_t	flags);
+				upl_control_flags_t	flags,
+				vm_tag_t            tag);
 
 __private_extern__ kern_return_t vm_object_transpose(
 				vm_object_t		object1,
@@ -795,11 +796,10 @@ __private_extern__ kern_return_t vm_object_lock_request(
 
 
 
-__private_extern__ vm_object_t	vm_object_enter(
+__private_extern__ vm_object_t	vm_object_memory_object_associate(
 					memory_object_t		pager,
+					vm_object_t		object,
 					vm_object_size_t	size,
-					boolean_t		internal,
-					boolean_t		init,
 					boolean_t		check_named);
 
 

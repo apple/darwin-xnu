@@ -71,7 +71,6 @@
  */
 
 #include <mach_debug.h>
-#include <mach_rt.h>
 
 #include <mach/port.h>
 #include <mach/kern_return.h>
@@ -84,6 +83,7 @@
 #include <kern/counters.h>
 #include <kern/thread.h>
 #include <kern/kalloc.h>
+#include <kern/exc_guard.h>
 #include <mach/mach_port_server.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -288,11 +288,11 @@ mach_port_names(
 		}
 		size = size_needed;
 
-		kr = vm_allocate(ipc_kernel_map, &addr1, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
+		kr = vm_allocate_kernel(ipc_kernel_map, &addr1, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
-		kr = vm_allocate(ipc_kernel_map, &addr2, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
+		kr = vm_allocate_kernel(ipc_kernel_map, &addr2, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
 			return KERN_RESOURCE_SHORTAGE;
@@ -300,13 +300,13 @@ mach_port_names(
 
 		/* can't fault while we hold locks */
 
-		kr = vm_map_wire(
+		kr = vm_map_wire_kernel(
 			ipc_kernel_map,
 			vm_map_trunc_page(addr1,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr1 + size,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC),
+			VM_PROT_READ|VM_PROT_WRITE, VM_KERN_MEMORY_IPC,
 			FALSE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
@@ -314,13 +314,14 @@ mach_port_names(
 			return KERN_RESOURCE_SHORTAGE;
 		}
 
-		kr = vm_map_wire(
+		kr = vm_map_wire_kernel(
 			ipc_kernel_map,
 			vm_map_trunc_page(addr2,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr2 + size,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC),
+			VM_PROT_READ|VM_PROT_WRITE,
+			VM_KERN_MEMORY_IPC,
 			FALSE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
@@ -774,8 +775,8 @@ mach_port_destroy(
  *	Routine:	mach_port_deallocate [kernel call]
  *	Purpose:
  *		Deallocates a user reference from a send right,
- *		send-once right, or a dead-name right.  May
- *		deallocate the right, if this is the last uref,
+ *		send-once right, dead-name right or a port_set right.
+ *		May deallocate the right, if this is the last uref,
  *		and destroy the name, if it doesn't denote
  *		other rights.
  *	Conditions:
@@ -1253,14 +1254,14 @@ mach_port_get_set_status(
 		ipc_object_t psobj;
 		ipc_pset_t pset;
 
-		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
+		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
 		/* can't fault while we hold locks */
 
-		kr = vm_map_wire(ipc_kernel_map, addr, addr + size,
-				     VM_PROT_READ|VM_PROT_WRITE|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_IPC), FALSE);
+		kr = vm_map_wire_kernel(ipc_kernel_map, addr, addr + size,
+				     VM_PROT_READ|VM_PROT_WRITE, VM_KERN_MEMORY_IPC, FALSE);
 		assert(kr == KERN_SUCCESS);
 
 		kr = ipc_object_translate(space, name, MACH_PORT_RIGHT_PORT_SET, &psobj);
@@ -1930,9 +1931,10 @@ mach_port_set_attributes(
 
 		/* 
 		 * don't allow temp-owner importance donation if user
-		 * associated it with a kobject already (timer, host_notify target).
+		 * associated it with a kobject already (timer, host_notify target),
+		 * or is a special reply port.
 		 */
-		if (is_ipc_kobject(ip_kotype(port))) {
+		if (is_ipc_kobject(ip_kotype(port)) || port->ip_specialreply) {
 			ip_unlock(port);
 			return KERN_INVALID_ARGUMENT;
 		}
@@ -1984,9 +1986,10 @@ mach_port_set_attributes(
 
 		/* 
 		 * don't allow importance donation if user associated
-		 * it with a kobject already (timer, host_notify target).
+		 * it with a kobject already (timer, host_notify target),
+		 * or is a special reply port.
 		 */
-		if (is_ipc_kobject(ip_kotype(port))) {
+		if (is_ipc_kobject(ip_kotype(port)) || port->ip_specialreply) {
 			ip_unlock(port);
 			return KERN_INVALID_ARGUMENT;
 		}
@@ -2228,36 +2231,13 @@ mach_port_guard_exception(
 	uint64_t 			portguard,
 	unsigned 			reason)
 {
+	mach_exception_code_t code = 0;
+	EXC_GUARD_ENCODE_TYPE(code, GUARD_TYPE_MACH_PORT);
+	EXC_GUARD_ENCODE_FLAVOR(code, reason);
+	EXC_GUARD_ENCODE_TARGET(code, name);
+	mach_exception_subcode_t subcode = (uint64_t)portguard;
 	thread_t t = current_thread();
-	uint64_t code, subcode;
-
-	/*
-	 * EXC_GUARD namespace for mach ports
-	 *
-	 *
-	 * Mach Port guards use the exception codes like
-	 *
-	 * code:			
-	 * +----------------------------------------------------------------+
-	 * |[63:61] GUARD_TYPE_MACH_PORT | [60:32] flavor | [31:0] port name|
-	 * +----------------------------------------------------------------+
-	 *
-	 * subcode:
-	 * +----------------------------------------------------------------+
-	 * |       [63:0] guard value                                       |
-	 * +----------------------------------------------------------------+
-	 */
-
-	code =  (((uint64_t)GUARD_TYPE_MACH_PORT) << 61) |
-		(((uint64_t)reason) << 32) |
-		((uint64_t)name);
-	subcode = (uint64_t)(portguard);
-
-	t->guard_exc_info.code = code;
-	t->guard_exc_info.subcode = subcode;
-	
-	/* Mark thread with AST_GUARD */
-	thread_guard_violation(t, GUARD_TYPE_MACH_PORT);
+	thread_guard_violation(t, code, subcode);
 	return KERN_FAILURE;
 }
 
@@ -2273,14 +2253,16 @@ mach_port_guard_exception(
  */
 
 void
-mach_port_guard_ast(thread_t t)
+mach_port_guard_ast(thread_t __unused t,
+	mach_exception_data_type_t code, mach_exception_data_type_t subcode)
 {
+	assert(t->task != kernel_task);
+
 	/* Raise an EXC_GUARD exception */
-	task_exception_notify(EXC_GUARD, t->guard_exc_info.code, t->guard_exc_info.subcode);
+	task_exception_notify(EXC_GUARD, code, subcode);
 
 	/* Terminate task which caused the exception */
 	task_bsdtask_kill(current_task());
-	return;
 }
 
 /*

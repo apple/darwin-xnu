@@ -402,21 +402,9 @@ clock_get_system_nanotime(
 }
 
 void
-clock_gettimeofday_set_commpage(
-	uint64_t				abstime,
-	uint64_t				epoch,
-	uint64_t				offset,
-	clock_sec_t				*secs,
-	clock_usec_t			*microsecs)
+clock_gettimeofday_set_commpage(uint64_t abstime, uint64_t sec, uint64_t frac, uint64_t scale, uint64_t tick_per_sec)
 {
-	uint64_t	now = abstime + offset;
-	uint32_t	remain;
-
-	remain = _absolutetime_to_microtime(now, secs, microsecs);
-
-	*secs += (clock_sec_t)epoch;
-
-	commpage_set_timestamp(abstime - remain, *secs);
+	commpage_set_timestamp(abstime, sec, frac, scale, tick_per_sec);
 }
 
 void

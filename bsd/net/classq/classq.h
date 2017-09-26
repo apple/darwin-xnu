@@ -73,14 +73,19 @@ extern "C" {
 #endif
 
 /*
+ * Packet types
+ */
+typedef enum classq_pkt_type {
+	QP_INVALID = 0,
+	QP_MBUF,	/* mbuf packet */
+} classq_pkt_type_t;
+
+/*
  * Packet Queue types
  */
 typedef enum classq_type {
 	Q_DROPHEAD,
 	Q_DROPTAIL,
-	Q_RED,
-	Q_RIO,
-	Q_BLUE,
 	Q_SFB
 } classq_type_t;
 
@@ -114,21 +119,26 @@ struct pktcntr {
  * Packet Queue structures and macros to manipulate them.
  */
 typedef struct _class_queue_ {
-	MBUFQ_HEAD(mq_head) mbufq;	/* Packet queue */
+	union {
+		MBUFQ_HEAD(mq_head) __mbufq; /* mbuf packet queue */
+	} __pktq_u;
 	u_int32_t	qlen;	/* Queue length (in number of packets) */
 	u_int32_t	qlim;	/* Queue limit (in number of packets*) */
 	u_int64_t	qsize;	/* Approx. queue size (in number of bytes) */
 	classq_type_t	qtype;	/* Queue type */
 	classq_state_t	qstate;	/* Queue state */
+	classq_pkt_type_t	qptype; /* Packet type */
 } class_queue_t;
 
+#define	qmbufq(q)	(q)->__pktq_u.__mbufq	/* Get mbuf packet queue */
+#define	qptype(q)	(q)->qptype		/* Get queue packet type */
 #define	qtype(q)	(q)->qtype		/* Get queue type */
 #define	qstate(q)	(q)->qstate		/* Get queue state */
 #define	qlimit(q)	(q)->qlim		/* Max packets to be queued */
 #define	qlen(q)		(q)->qlen		/* Current queue length. */
 #define	qsize(q)	(q)->qsize		/* Approx. bytes in queue */
-/* #define	qtail(q)	MBUFQ_LAST(&(q)->mbufq) */
-#define	qhead(q)	MBUFQ_FIRST(&(q)->mbufq)
+
+#define	qhead(q)	MBUFQ_FIRST(&qmbufq(q))
 
 #define	qempty(q)	(qlen(q) == 0)	/* Is the queue empty?? */
 #define	q_is_red(q)	(qtype(q) == Q_RED)	/* Is the queue a RED queue */
@@ -157,18 +167,16 @@ extern u_int32_t classq_verbose;
 
 SYSCTL_DECL(_net_classq);
 
-extern void _qinit(class_queue_t *, int, int);
-extern void _addq(class_queue_t *, struct mbuf *);
-extern void _addq_multi(class_queue_t *, struct mbuf *, struct mbuf *,
-    u_int32_t, u_int32_t);
-extern struct mbuf *_getq(class_queue_t *);
-extern struct mbuf *_getq_all(class_queue_t *, struct mbuf **,
-    u_int32_t *, u_int64_t *);
-extern struct mbuf *_getq_tail(class_queue_t *);
-extern struct mbuf *_getq_random(class_queue_t *);
-extern struct mbuf *_getq_flow(class_queue_t *, u_int32_t);
-extern struct mbuf *_getq_scidx_lt(class_queue_t *, u_int32_t);
-extern void _removeq(class_queue_t *, struct mbuf *);
+extern void _qinit(class_queue_t *, int, int, classq_pkt_type_t);
+extern void _addq(class_queue_t *, void *);
+extern void _addq_multi(class_queue_t *, void *, void *, u_int32_t, u_int32_t);
+extern void *_getq(class_queue_t *);
+extern void *_getq_all(class_queue_t *, void **, u_int32_t *, u_int64_t *);
+extern void *_getq_tail(class_queue_t *);
+extern void *_getq_random(class_queue_t *);
+extern void *_getq_flow(class_queue_t *, u_int32_t);
+extern void *_getq_scidx_lt(class_queue_t *, u_int32_t);
+extern void _removeq(class_queue_t *, void *);
 extern void _flushq(class_queue_t *);
 extern void _flushq_flow(class_queue_t *, u_int32_t, u_int32_t *, u_int32_t *);
 

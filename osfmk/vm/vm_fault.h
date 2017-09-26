@@ -91,6 +91,9 @@ extern kern_return_t vm_fault(
 		vm_map_offset_t	vaddr,
 		vm_prot_t	fault_type,
 		boolean_t	change_wiring,
+#if XNU_KERNEL_PRIVATE
+		vm_tag_t	wire_tag,           /* if wiring must pass tag != VM_KERN_MEMORY_NONE */
+#endif
 		int             interruptible,
 		pmap_t		pmap,
 		vm_map_offset_t	pmap_addr);
@@ -104,6 +107,16 @@ extern void vm_pre_fault(vm_map_offset_t);
 #include <vm/vm_map.h>
 
 extern void vm_fault_init(void);
+
+/* exported kext version */
+extern kern_return_t vm_fault_external(
+	vm_map_t	map,
+	vm_map_offset_t	vaddr,
+	vm_prot_t	fault_type,
+	boolean_t	change_wiring,
+	int		interruptible,
+	pmap_t		caller_pmap,
+	vm_map_offset_t	caller_pmap_addr);
 
 /*
  *	Page fault handling based on vm_object only.
@@ -138,6 +151,7 @@ extern kern_return_t vm_fault_wire(
 		vm_map_t	map,
 		vm_map_entry_t	entry,
 		vm_prot_t       prot,
+		vm_tag_t	wire_tag,
 		pmap_t		pmap,
 		vm_map_offset_t	pmap_addr,
 		ppnum_t		*physpage_p);
@@ -167,6 +181,7 @@ extern kern_return_t vm_fault_enter(
 	vm_prot_t fault_type,
 	boolean_t wired,
 	boolean_t change_wiring,
+	vm_tag_t  wire_tag,  	 	/* if wiring must pass tag != VM_KERN_MEMORY_NONE */
 	boolean_t no_cache,
 	boolean_t cs_bypass,
 	int	  user_tag,

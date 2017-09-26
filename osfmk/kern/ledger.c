@@ -57,7 +57,7 @@
 #define	LF_REFILL_INPROGRESS    0x0800	/* the ledger is being refilled */
 #define	LF_CALLED_BACK          0x1000	/* callback was called for balance in deficit */
 #define	LF_WARNED               0x2000	/* callback was called for balance warning */ 
-#define	LF_TRACKING_MAX		0x4000	/* track max balance over user-specfied time */
+#define	LF_TRACKING_MAX		0x4000	/* track max balance. Exclusive w.r.t refill */
 #define LF_PANIC_ON_NEGATIVE	0x8000	/* panic if it goes negative */
 #define LF_TRACK_CREDIT_ONLY	0x10000	/* only update "credit" */
 
@@ -112,6 +112,7 @@ struct ledger_template {
 	int			lt_table_size;
 	volatile uint32_t	lt_inuse;
 	lck_mtx_t		lt_lock;
+	zone_t			lt_zone;
 	struct entry_template	*lt_entries;
 };
 
@@ -130,9 +131,9 @@ struct ledger_template {
 }
 
 /*
- * Use 2 "tocks" to track the rolling maximum balance of a ledger entry.
+ * Use NTOCKS "tocks" to track the rolling maximum balance of a ledger entry.
  */
-#define	NTOCKS 2
+#define	NTOCKS 1
 /*
  * The explicit alignment is to ensure that atomic operations don't panic
  * on ARM.
@@ -149,13 +150,16 @@ struct ledger_entry {
 			 * XXX - the following two fields can go away if we move all of
 			 * the refill logic into process policy
 			 */
-		        uint64_t	le_refill_period;
-		        uint64_t	le_last_refill;
+			uint64_t	le_refill_period;
+			uint64_t	le_last_refill;
 		} le_refill;
-		struct _le_peak {
-			uint32_t 	le_max;  /* Lower 32-bits of observed max balance */
-			uint32_t	le_time; /* time when this peak was observed */
-		} le_peaks[NTOCKS];
+		struct _le_maxtracking {
+			struct _le_peak {
+				uint32_t	le_max;  /* Lower 32-bits of observed max balance */
+				uint32_t	le_time; /* time when this peak was observed */
+			} le_peaks[NTOCKS];
+			ledger_amount_t    le_lifetime_max; /* greatest peak ever observed */
+		} le_maxtracking;
 	} _le;
 } __attribute__((aligned(8)));
 
@@ -226,6 +230,7 @@ ledger_template_create(const char *name)
 	template->lt_cnt = 0;
 	template->lt_table_size = 1;
 	template->lt_inuse = 0;
+	template->lt_zone = NULL;
 	lck_mtx_init(&template->lt_lock, &ledger_lck_grp, LCK_ATTR_NULL);
 
 	template->lt_entries = (struct entry_template *)
@@ -262,7 +267,7 @@ ledger_entry_add(ledger_template_t template, const char *key,
 	int idx;
 	struct entry_template *et;
 
-	if ((key == NULL) || (strlen(key) >= LEDGER_NAME_MAX))
+	if ((key == NULL) || (strlen(key) >= LEDGER_NAME_MAX) || (template->lt_zone != NULL))
 		return (-1);
 
 	template_lock(template);
@@ -348,6 +353,22 @@ ledger_key_lookup(ledger_template_t template, const char *key)
 }
 
 /*
+ * Complete the initialization of ledger template
+ * by initializing ledger zone. After initializing
+ * the ledger zone, adding an entry in the ledger
+ * template would fail.
+ */
+void
+ledger_template_complete(ledger_template_t template)
+{
+	size_t ledger_size;
+	ledger_size = sizeof(struct ledger) + (template->lt_cnt * sizeof(struct ledger_entry));
+	template->lt_zone = zinit(ledger_size, CONFIG_TASK_MAX * ledger_size,
+	                       ledger_size,
+	                       template->lt_name);
+}
+
+/*
  * Create a new ledger based on the specified template.  As part of the
  * ledger creation we need to allocate space for a table of ledger entries.
  * The size of the table is based on the size of the template at the time
@@ -358,17 +379,16 @@ ledger_t
 ledger_instantiate(ledger_template_t template, int entry_type)
 {
 	ledger_t ledger;
-	size_t cnt, sz;
+	size_t cnt;
 	int i;
 
 	template_lock(template);
 	template->lt_refs++;
 	cnt = template->lt_cnt;
+	assert(template->lt_zone);
 	template_unlock(template);
 
-	sz = sizeof(*ledger) + (cnt * sizeof(struct ledger_entry));
-
-	ledger = (ledger_t)kalloc(sz);
+	ledger = (ledger_t)zalloc(template->lt_zone);
 	if (ledger == NULL) {
 		ledger_template_dereference(template);
 		return LEDGER_NULL;
@@ -457,8 +477,7 @@ ledger_dereference(ledger_t ledger)
 
 	/* Just released the last reference.  Free it. */
 	if (v == 1) {
-		kfree(ledger,
-		      sizeof(*ledger) + ledger->l_size * sizeof(struct ledger_entry));
+		zfree(ledger->l_template->lt_zone, ledger);
 	}
 
 	return (KERN_SUCCESS);
@@ -685,7 +704,7 @@ ledger_entry_check_new_balance(ledger_t ledger, int entry, struct ledger_entry *
 	if (le->le_flags & LF_TRACKING_MAX) {
 		ledger_amount_t balance = le->le_credit - le->le_debit;
 		uint32_t now = CURRENT_TOCKSTAMP();
-		struct _le_peak *p = &le->_le.le_peaks[now % NTOCKS];
+		struct _le_peak *p = &le->_le.le_maxtracking.le_peaks[now % NTOCKS];
 
 		if (!TOCKSTAMP_IS_STALE(now, p->le_time) || (balance > p->le_max)) {
 			/*
@@ -700,10 +719,17 @@ ledger_entry_check_new_balance(ledger_t ledger, int entry, struct ledger_entry *
 			p->le_max = (uint32_t)balance;
 			p->le_time = now;
 		}
+
+		struct _le_maxtracking *m = &le->_le.le_maxtracking;
+		if(balance > m->le_lifetime_max){
+			m->le_lifetime_max = balance;
+		}
 	}
 
 	/* Check to see whether we're due a refill */
 	if (le->le_flags & LF_REFILL_SCHEDULED) {
+		assert(!(le->le_flags & LF_TRACKING_MAX));
+
 		uint64_t now = mach_absolute_time();
 		if ((now - le->_le.le_refill.le_last_refill) > le->_le.le_refill.le_refill_period)
 			ledger_refill(now, ledger, entry);
@@ -948,7 +974,10 @@ ledger_set_limit(ledger_t ledger, int entry, ledger_amount_t limit,
 	}
 
 	le->le_limit = limit;
-	le->_le.le_refill.le_last_refill = 0;
+	if (le->le_flags & LF_REFILL_SCHEDULED) {
+		assert(!(le->le_flags & LF_TRACKING_MAX));
+		le->_le.le_refill.le_last_refill = 0;
+	}
 	flag_clear(&le->le_flags, LF_CALLED_BACK);
 	flag_clear(&le->le_flags, LF_WARNED);        
 	ledger_limit_entry_wakeup(le);
@@ -966,7 +995,7 @@ ledger_set_limit(ledger_t ledger, int entry, ledger_amount_t limit,
 }
 
 kern_return_t
-ledger_get_maximum(ledger_t ledger, int entry,
+ledger_get_recent_max(ledger_t ledger, int entry,
 	ledger_amount_t *max_observed_balance)
 {
 	struct ledger_entry	*le;
@@ -986,17 +1015,34 @@ ledger_get_maximum(ledger_t ledger, int entry,
 	*max_observed_balance = le->le_credit - le->le_debit;
 
 	for (i = 0; i < NTOCKS; i++) {
-		if (!TOCKSTAMP_IS_STALE(now, le->_le.le_peaks[i].le_time) &&
-		    (le->_le.le_peaks[i].le_max > *max_observed_balance)) {
+		if (!TOCKSTAMP_IS_STALE(now, le->_le.le_maxtracking.le_peaks[i].le_time) &&
+		    (le->_le.le_maxtracking.le_peaks[i].le_max > *max_observed_balance)) {
 		    	/*
 		    	 * The peak for this time block isn't stale, and it
 		    	 * is greater than the current balance -- so use it.
 		    	 */
-		    	*max_observed_balance = le->_le.le_peaks[i].le_max;
+		    *max_observed_balance = le->_le.le_maxtracking.le_peaks[i].le_max;
 		}
 	}
-	
+
 	lprintf(("ledger_get_maximum: %lld\n", *max_observed_balance));
+
+	return (KERN_SUCCESS);
+}
+
+kern_return_t
+ledger_get_lifetime_max(ledger_t ledger, int entry,
+        ledger_amount_t *max_lifetime_balance)
+{
+	struct ledger_entry *le;
+	le = &ledger->l_entries[entry];
+
+	if (!ENTRY_VALID(ledger, entry) || !(le->le_flags & LF_TRACKING_MAX)) {
+		return (KERN_INVALID_VALUE);
+	}
+
+	*max_lifetime_balance = le->_le.le_maxtracking.le_lifetime_max;
+	lprintf(("ledger_get_lifetime_max: %lld\n", *max_lifetime_balance));
 
 	return (KERN_SUCCESS);
 }
@@ -1015,8 +1061,13 @@ ledger_track_maximum(ledger_template_t template, int entry,
 		return (KERN_INVALID_VALUE);
 	}
 
+	/* Refill is incompatible with max tracking. */
+	if (template->lt_entries[entry].et_flags & LF_REFILL_SCHEDULED) {
+		return (KERN_INVALID_VALUE);
+	}
+
 	template->lt_entries[entry].et_flags |= LF_TRACKING_MAX;
-	template_unlock(template);	
+	template_unlock(template);
 
 	return (KERN_SUCCESS);
 }
@@ -1410,6 +1461,8 @@ ledger_check_needblock(ledger_t l, uint64_t now)
 
 		/* We're over the limit, so refill if we are eligible and past due. */
 		if (le->le_flags & LF_REFILL_SCHEDULED) {
+			assert(!(le->le_flags & LF_TRACKING_MAX));
+
 			if ((le->_le.le_refill.le_last_refill + le->_le.le_refill.le_refill_period) > now) {
 				ledger_refill(now, l, i);
 				if (limit_exceeded(le) == FALSE)
@@ -1450,6 +1503,8 @@ ledger_perform_blocking(ledger_t l)
 		if ((!limit_exceeded(le)) ||
 		    ((le->le_flags & LEDGER_ACTION_BLOCK) == 0))
 			continue;
+
+		assert(!(le->le_flags & LF_TRACKING_MAX));
 
 		/* Prepare to sleep until the resource is refilled */
 		ret = assert_wait_deadline(le, TRUE,

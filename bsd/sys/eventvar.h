@@ -63,8 +63,40 @@
 
 #if defined(XNU_KERNEL_PRIVATE)
 
+typedef int (*kevent_callback_t)(struct kqueue *, struct kevent_internal_s *, void *);
+typedef void (*kqueue_continue_t)(struct kqueue *, void *, int);
+
+#include <stdint.h>
 #include <kern/locks.h>
+#include <sys/pthread_shims.h>
 #include <mach/thread_policy.h>
+
+/*
+ * Lock ordering:
+ *
+ * The kqueue locking order can follow a few different patterns:
+ *
+ * Standard file-based kqueues (from above):
+ *     proc fd lock -> kq lock -> kq-waitq-set lock -> thread lock
+ *
+ * WorkQ/WorkLoop kqueues (from above):
+ *     proc fd lock -> kq lock -> kq-request lock -> pthread kext locks -> thread lock
+ *
+ * Whenever kqueues interact with source locks, it drops all of its own
+ * locks in exchange for a use-reference on the knote used to synchronize
+ * with the source code. When those sources post events from below, they
+ * have the following lock hierarchy.
+ *
+ * Standard file-based kqueues (from below):
+ *     XXX lock -> kq lock -> kq-waitq-set lock -> thread lock
+ * Standard file-based kqueues with non-kq-aware sources (from below):
+ *     XXX lock -> kq-waitq-set lock -> thread lock
+ *
+ * WorkQ/WorkLoop kqueues (from below):
+ *     XXX lock -> kq lock -> kq-request lock -> pthread kext locks -> thread lock
+ * WorkQ/WorkLoop kqueues with non-kq-aware sources (from below):
+ *     XXX -> kq-waitq-set lock -> kq-request lock -> pthread kext locks -> thread lock
+ */
 
 #define KQEXTENT	256		/* linear growth by this amount */
 
@@ -85,17 +117,19 @@ struct kqueue {
 	struct kqtailq      kq_queue[1];  /* variable array of kqtailq structs */
 };
 
-#define KQ_SEL          0x001		/* select was recorded for kq */
-#define KQ_SLEEP        0x002		/* thread is waiting for events */
-#define KQ_PROCWAIT     0x004		/* thread waiting for processing */
-#define KQ_KEV32        0x008		/* kq is used with 32-bit events */
-#define KQ_KEV64        0x010		/* kq is used with 64-bit events */
-#define KQ_KEV_QOS      0x020		/* kq events carry QoS info */
-#define KQ_WORKQ        0x040		/* KQ is bould to process workq */
-#define KQ_PROCESSING   0x080		/* KQ is being processed */
-#define KQ_DRAIN        0x100		/* kq is draining */
-#define KQ_WAKEUP       0x200       /* kq awakened while processing */
-
+#define KQ_SEL            0x001  /* select was recorded for kq */
+#define KQ_SLEEP          0x002  /* thread is waiting for events */
+#define KQ_PROCWAIT       0x004  /* thread waiting for processing */
+#define KQ_KEV32          0x008  /* kq is used with 32-bit events */
+#define KQ_KEV64          0x010  /* kq is used with 64-bit events */
+#define KQ_KEV_QOS        0x020  /* kq events carry QoS info */
+#define KQ_WORKQ          0x040  /* KQ is bound to process workq */
+#define KQ_WORKLOOP       0x080  /* KQ is part of a workloop */
+#define KQ_PROCESSING     0x100  /* KQ is being processed */
+#define KQ_DRAIN          0x200  /* kq is draining */
+#define KQ_WAKEUP         0x400  /* kq awakened while processing */
+#define KQ_DYNAMIC        0x800  /* kqueue is dynamically managed */
+#define KQ_NO_WQ_THREAD   0x1000 /* kq will not have workqueue threads dynamically created */
 /*
  * kqfile - definition of a typical kqueue opened as a file descriptor
  *          via the kqueue() system call.
@@ -119,6 +153,53 @@ struct kqfile {
 
 #define QOS_INDEX_KQFILE   0          /* number of qos levels in a file kq */
 
+struct kqr_bound {
+	struct kqtailq   kqrb_suppressed;     /* Per-QoS suppression queues */
+	thread_t         kqrb_thread;         /* thread to satisfy request */
+};
+
+/*
+ * kqrequest - per-QoS thread request status
+ */
+struct kqrequest {
+#if 0
+	union {
+		struct kqr_bound kqru_bound;       /* used when thread is bound */
+		struct workq_threadreq_s kqru_req; /* used when request oustanding */
+	} kqr_u;
+#define kqr_suppressed kqr_u.kqru_bound.kqrb_suppressed
+#define kqr_thread     kqr_u.kqru_bound.kqrb_thread
+#define kqr_req        kqr_u.kqru_req
+#else
+	struct kqr_bound kqr_bound;            /* used when thread is bound */
+	struct workq_threadreq_s kqr_req;      /* used when request oustanding */
+#define kqr_suppressed kqr_bound.kqrb_suppressed
+#define kqr_thread     kqr_bound.kqrb_thread
+#endif
+	uint8_t          kqr_state;                    /* KQ/workq interaction state */
+	uint8_t          kqr_wakeup_indexes;           /* QoS/override levels that woke */
+	uint16_t         kqr_dsync_waiters:13,         /* number of dispatch sync waiters */
+	                 kqr_dsync_owner_qos:3;        /* Qos override on dispatch sync owner */
+	uint16_t         kqr_sync_suppress_count;      /* number of suppressed sync ipc knotes */
+	kq_index_t       kqr_stayactive_qos:3,         /* max QoS of statyactive knotes */
+	                 kqr_owner_override_is_sync:1, /* sync owner has sync ipc override */
+	                 kqr_override_index:3,         /* highest wakeup override index */
+	                 kqr_has_sync_override:1;      /* Qos/override at UI is sync ipc override */
+
+	/* set under both the kqlock and the filt_wllock */
+	kq_index_t       :0;                           /* prevent bitfields coalescing <rdar://problem/31854115> */
+	kq_index_t       kqr_qos_index:4,              /* QoS for the thread request */
+	                 kqr_dsync_waiters_qos:4;      /* override from dispatch sync waiters */
+};
+
+
+#define KQR_PROCESSING	             0x01	/* requested thread is running the q */
+#define KQR_THREQUESTED              0x02	/* thread has been requested from workq */
+#define KQR_WAKEUP                   0x04	/* wakeup called during processing */
+#define KQR_BOUND                    0x08       /* servicing thread is bound */
+#define KQR_THOVERCOMMIT             0x20       /* overcommit needed for thread requests */
+#define KQR_DRAIN                    0x40       /* cancel initiated - drain fulfill */
+#define KQR_R2K_NOTIF_ARMED          0x80       /* ast notifications armed */
 /*
  * WorkQ kqueues need to request threads to service the triggered
  * knotes in the queue.  These threads are brought up on a
@@ -135,17 +216,6 @@ struct kqfile {
 #if !defined(KQWQ_NQOS)
 #define KQWQ_NQOS    (KQWQ_QOS_MANAGER + 1)
 #endif
-
-
-/*
- * kqrequest - per-QoS thread request status
- */
-struct kqrequest {
-	struct kqtailq   kqr_suppressed;      /* Per-QoS suppression queues */
-	thread_t         kqr_thread;          /* thread to satisfy request */
-	uint8_t          kqr_state;           /* KQ/workq interaction state */
-	uint8_t          kqr_override_delta;  /* current override delta */
-};
 
 /*
  * Workq thread start out a particular effective-requested-QoS, but
@@ -202,21 +272,85 @@ struct kqworkq {
 #define kqwq_p       kqwq_kqueue.kq_p
 #define kqwq_queue   kqwq_kqueue.kq_queue
 
-#define kqwq_req_lock(kqwq)    (lck_spin_lock(&kqwq->kqwq_reqlock))
-#define kqwq_req_unlock(kqwq)  (lck_spin_unlock(&kqwq->kqwq_reqlock))
-#define kqwq_req_held(kqwq)    (lck_spin_held(&kqwq->kqwq_reqlock))
+#define kqwq_req_lock(kqwq)    lck_spin_lock(&kqwq->kqwq_reqlock)
+#define kqwq_req_unlock(kqwq)  lck_spin_unlock(&kqwq->kqwq_reqlock)
+#define kqwq_req_held(kqwq)    LCK_SPIN_ASSERT(&kqwq->kqwq_reqlock, LCK_ASSERT_OWNED)
 
-#define KQWQ_PROCESSING	  0x01		/* running the kq in workq mode */
-#define KQWQ_THREQUESTED  0x02		/* thread requested from workq */
-#define KQWQ_THMANAGER    0x04      /* expect manager thread to run the queue */
-#define KQWQ_HOOKCALLED	  0x10		/* hook called during processing */
-#define KQWQ_WAKEUP       0x20		/* wakeup called during processing */
+#define KQWQ_THMANAGER    0x10      /* expect manager thread to run the queue */
+
+/*
+ * WorkLoop kqueues need to request a thread to service the triggered
+ * knotes in the queue.  The thread is brought up on a
+ * effective-requested-QoS basis. Knotes are segregated based on
+ * that value. Once a request is made, it cannot be undone.  If
+ * events with higher QoS arrive after, they are stored in their
+ * own queues and an override applied to the original request based
+ * on the delta between the two QoS values.
+ */
+
+/*
+ * "Stay-active" knotes are held in a separate bucket that indicates
+ * special handling required. They are kept separate because the
+ * wakeups issued to them don't have context to tell us where to go
+ * to find and process them. All processing of them happens at the
+ * highest QoS. Unlike WorkQ kqueues, there is no special singular
+ * "manager thread" for a process. We simply request a servicing
+ * thread at the higest known QoS when these are woken (or override
+ * an existing request to that).
+ */
+#define KQWL_BUCKET_STAYACTIVE (THREAD_QOS_LAST)
+
+#if !defined(KQWL_NBUCKETS)
+#define KQWL_NBUCKETS    (KQWL_BUCKET_STAYACTIVE + 1)
+#endif
+
+/*
+ * kqworkloop - definition of a private kqueue used to coordinate event
+ *              handling for pthread workloops.
+ *
+ *              Workloops vary from workqs in that only a single thread is ever
+ *              requested to service a workloop at a time.  But unlike workqs,
+ *              workloops may be "owned" by user-space threads that are
+ *              synchronously draining an event off the workloop. In those cases,
+ *              any overrides have to be applied to the owner until it relinqueshes
+ *              ownership.
+ *
+ *      NOTE:   "lane" support is TBD.
+ */
+struct kqworkloop {
+	struct kqueue    kqwl_kqueue;                     /* queue of events */
+	struct kqtailq   kqwl_queuecont[KQWL_NBUCKETS-1]; /* continue array of queues */
+	struct kqrequest kqwl_request;                    /* thread request state */
+	lck_spin_t       kqwl_reqlock;                    /* kqueue request lock */
+	lck_mtx_t        kqwl_statelock;                  /* state/debounce lock */
+	thread_t         kqwl_owner;                      /* current [sync] owner thread */
+	uint32_t         kqwl_retains;                    /* retain references */
+	kqueue_id_t      kqwl_dynamicid;                  /* dynamic identity */
+	SLIST_ENTRY(kqworkloop) kqwl_hashlink;            /* linkage for search list */
+};
+
+SLIST_HEAD(kqlist, kqworkloop);
+
+#define kqwl_wqs     kqwl_kqueue.kq_wqs
+#define kqwl_lock    kqwl_kqueue.kq_lock
+#define kqwl_state   kqwl_kqueue.kq_state
+#define kqwl_level   kqwl_kqueue.kq_level
+#define kqwl_count   kqwl_kqueue.kq_count
+#define kqwl_p       kqwl_kqueue.kq_p
+#define kqwl_queue   kqwl_kqueue.kq_queue
+
+#define kqwl_req_lock(kqwl)    lck_spin_lock(&kqwl->kqwl_reqlock)
+#define kqwl_req_unlock(kqwl)  lck_spin_unlock(&kqwl->kqwl_reqlock)
+#define kqwl_req_held(kqwl)    LCK_SPIN_ASSERT(&kqwl->kqwl_reqlock, LCK_ASSERT_OWNED)
+
+#define KQ_WORKLOOP_RETAINS_MAX UINT32_MAX
+
+extern int workloop_fulfill_threadreq(struct proc *p, workq_threadreq_t req, thread_t thread, int flags);
 
 extern struct kqueue *kqueue_alloc(struct proc *, unsigned int);
 extern void kqueue_dealloc(struct kqueue *);
 
-typedef int (*kevent_callback_t)(struct kqueue *, struct kevent_internal_s *, void *);
-typedef void (*kqueue_continue_t)(struct kqueue *, void *, int);
+extern void knotes_dealloc(struct proc *);
 
 extern void kevent_register(struct kqueue *, struct kevent_internal_s *, struct proc *);
 extern int kqueue_scan(struct kqueue *, kevent_callback_t, kqueue_continue_t,

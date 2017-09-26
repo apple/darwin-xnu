@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003,2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2003,2013,2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -33,6 +33,26 @@
 #include <sys/socket.h>
 #include <sys/kern_event.h>
 #include <net/dlil.h>
+
+#undef iflt_attach
+errno_t
+iflt_attach(
+	ifnet_t interface,
+	const struct iff_filter *filter,
+	interface_filter_t *filter_ref);
+
+
+errno_t
+iflt_attach_internal(
+	ifnet_t interface,
+	const struct iff_filter *filter,
+	interface_filter_t *filter_ref)
+{
+	if (interface == NULL) return ENOENT;
+		
+	return dlil_attach_filter(interface, filter, filter_ref,
+	    DLIL_IFF_INTERNAL);
+}
 
 errno_t
 iflt_attach(

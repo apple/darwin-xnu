@@ -45,7 +45,6 @@ OPTIONS/mach_kprof		optional mach_kprof
 OPTIONS/mach_ldebug		optional mach_ldebug
 OPTIONS/mach_mp_debug		optional mach_mp_debug
 OPTIONS/mach_pagemap		optional mach_pagemap
-OPTIONS/mach_rt			optional mach_rt
 OPTIONS/mach_vm_debug		optional mach_vm_debug
 OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
 OPTIONS/mig_debug		optional mig_debug
@@ -88,6 +87,7 @@ osfmk/kdp/kdp.c			optional config_kdp_interactive_debugging
 osfmk/kern/kern_stackshot.c	standard
 osfmk/kdp/kdp_udp.c			optional mach_kdp
 osfmk/kdp/kdp_core.c			optional mach_kdp
+osfmk/kdp/processor_core.c		optional mach_kdp
 osfmk/kdp/kdp_serial.c			optional config_serial_kdp
 osfmk/ipc/ipc_entry.c			standard
 osfmk/ipc/ipc_hash.c			standard
@@ -169,15 +169,20 @@ osfmk/kern/task_swap.c		standard
 osfmk/kern/thread.c			standard
 osfmk/kern/thread_act.c		standard
 osfmk/kern/thread_call.c	standard
+osfmk/kern/thread_group.c	standard
 osfmk/kern/thread_policy.c	standard
 osfmk/kern/timer.c			standard
 osfmk/kern/timer_call.c		standard
 osfmk/kern/waitq.c			standard
+osfmk/kern/work_interval.c		standard
 osfmk/kern/xpr.c			optional xpr_debug
 osfmk/kern/zalloc.c			standard
 osfmk/kern/gzalloc.c		optional config_gzalloc
 osfmk/kern/bsd_kern.c		optional mach_bsd
 osfmk/kern/hibernate.c		optional hibernation
+osfmk/kern/memset_s.c		standard
+osfmk/kern/copyout_shim.c	optional copyout_shim
+
 ./mach/clock_server.c			standard
 ./mach/clock_priv_server.c		standard
 ./mach/clock_reply_user.c		standard
@@ -203,7 +208,7 @@ osfmk/kern/hibernate.c		optional hibernation
 osfmk/corpses/corpse.c			standard
 osfmk/kern/kern_cdata.c			standard
 ./mach/telemetry_notification_user.c optional config_telemetry
-osfmk/bank/bank.c		optional config_bank
+osfmk/bank/bank.c			standard
 osfmk/atm/atm.c			optional config_atm
 ./atm/atm_notification_user.c		optional config_atm
 osfmk/voucher/ipc_pthread_priority.c		standard
@@ -288,6 +293,8 @@ osfmk/kperf/kdebug_trigger.c            optional kperf
 osfmk/kern/kpc_thread.c                 optional kpc
 osfmk/kern/kpc_common.c                 optional kpc
 
+osfmk/kern/kern_monotonic.c optional monotonic
+
 osfmk/console/serial_general.c	standard
 osfmk/console/serial_console.c	optional	serial_console
 osfmk/console/video_scroll.c	optional	video_console
@@ -299,7 +306,7 @@ osfmk/kern/telemetry.c			optional config_telemetry
 # Built-in corecrypto for early_random():
 osfmk/corecrypto/cc/src/cc_clear.c          		standard
 osfmk/corecrypto/cc/src/cc_cmp_safe.c          		standard
-osfmk/corecrypto/cc/src/cc_abort.c          		standard
+osfmk/corecrypto/cc/src/cc_try_abort.c          	standard
 osfmk/corecrypto/ccdbrg/src/ccdrbg_nisthmac.c		standard
 osfmk/corecrypto/ccdigest/src/ccdigest_init.c		standard
 osfmk/corecrypto/ccdigest/src/ccdigest_update.c		standard
@@ -310,6 +317,18 @@ osfmk/corecrypto/cchmac/src/cchmac_final.c		standard
 osfmk/corecrypto/ccsha1/src/ccdigest_final_64be.c	standard
 osfmk/corecrypto/ccsha1/src/ccsha1_eay.c		standard
 osfmk/corecrypto/ccsha1/src/ccsha1_initial_state.c	standard
+
+osfmk/corecrypto/ccsha2/src/ccsha256_di.c	standard
+osfmk/corecrypto/ccsha2/src/ccsha256_initial_state.c	standard
+osfmk/corecrypto/ccsha2/src/ccsha256_K.c	standard
+osfmk/corecrypto/ccsha2/src/ccsha256_ltc_compress.c	standard
+osfmk/corecrypto/ccsha2/src/ccsha256_ltc_di.c	standard
+
+osfmk/corecrypto/ccaes/src/ccaes_ltc_ecb_encrypt_mode.c	standard
+osfmk/corecrypto/ccmode/src/ccmode_ctr_crypt.c	standard
+osfmk/corecrypto/ccmode/src/ccmode_ctr_init.c	standard
+osfmk/corecrypto/ccmode/src/ccmode_ctr_setctr.c	standard
+osfmk/corecrypto/ccmode/src/ccmode_factory_ctr_crypt.c	standard
 
 osfmk/prng/random.c			standard
 osfmk/prng/prng_yarrow.c		standard

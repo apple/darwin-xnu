@@ -59,11 +59,7 @@
 #ifndef	_KERN_CPU_NUMBER_H_
 #define	_KERN_CPU_NUMBER_H_
 
-#ifdef	MACH_KERNEL_PRIVATE
-
 extern int		master_cpu;
-
-#endif	/* MACH_KERNEL_PRIVATE */
 
 #include <machine/cpu_number.h>
 

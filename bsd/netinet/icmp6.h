@@ -329,7 +329,7 @@ struct nd_opt_hdr {		/* Neighbor discovery option header */
 #define ND_OPT_REDIRECTED_HEADER	4
 #define ND_OPT_MTU			5
 #define ND_OPT_NONCE			14	/* RFC 3971 */
-#define ND_OPT_RDNSS			25	/* RFC 5006 */
+#define ND_OPT_RDNSS			25	/* RFC 6106 */
 #define ND_OPT_DNSSL			31	/* RFC 6106 */
 
 #define ND_OPT_ROUTE_INFO		200	/* draft-ietf-ipngwg-router-preference, not officially assigned yet */

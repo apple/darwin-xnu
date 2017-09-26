@@ -30,9 +30,8 @@ extern "C" {
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
 #include <kern/cpu_number.h>
+extern void kperf_kernel_configure(char *);
 }
-
-#include <machine/machine_routines.h>
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -61,13 +60,17 @@ struct iocpu_platform_action_entry
     const char *		      name;
     void *	                      refcon0;
     void *			      refcon1;
+    boolean_t			      callout_in_progress;
     struct iocpu_platform_action_entry * alloc_list;
 };
 typedef struct iocpu_platform_action_entry iocpu_platform_action_entry_t;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define kBootCPUNumber  0
+static IOLock *gIOCPUsLock;
+static OSArray *gIOCPUs;
+static const OSSymbol *gIOCPUStateKey;
+static OSString *gIOCPUStateNames[kIOCPUStateCount];
 
 enum
 {
@@ -116,7 +119,7 @@ iocpu_remove_platform_action(iocpu_platform_action_entry_t * entry)
 
 static kern_return_t
 iocpu_run_platform_actions(queue_head_t * queue, uint32_t first_priority, uint32_t last_priority,
-					void * param1, void * param2, void * param3)
+					void * param1, void * param2, void * param3, boolean_t allow_nested_callouts)
 {
     kern_return_t                ret = KERN_SUCCESS;
     kern_return_t                result = KERN_SUCCESS;
@@ -128,7 +131,16 @@ iocpu_run_platform_actions(queue_head_t * queue, uint32_t first_priority, uint32
 	if ((pri >= first_priority) && (pri <= last_priority))
 	{
 	    //kprintf("[%p]", next->action);
-	    ret = (*next->action)(next->refcon0, next->refcon1, pri, param1, param2, param3, next->name);
+	    if (!allow_nested_callouts && !next->callout_in_progress)
+	    {
+		next->callout_in_progress = TRUE;
+		ret = (*next->action)(next->refcon0, next->refcon1, pri, param1, param2, param3, next->name);
+		next->callout_in_progress = FALSE;
+	    }
+	    else if (allow_nested_callouts)
+	    {
+		ret = (*next->action)(next->refcon0, next->refcon1, pri, param1, param2, param3, next->name);
+	    }
 	}
 	if (KERN_SUCCESS == result)
 	    result = ret;
@@ -142,14 +154,14 @@ extern "C" kern_return_t
 IOCPURunPlatformQuiesceActions(void)
 {
     return (iocpu_run_platform_actions(&gActionQueues[kQueueQuiesce], 0, 0U-1,
-				    NULL, NULL, NULL));
+				    NULL, NULL, NULL, TRUE));
 }
 
 extern "C" kern_return_t 
 IOCPURunPlatformActiveActions(void)
 {
     return (iocpu_run_platform_actions(&gActionQueues[kQueueActive], 0, 0U-1,
-				    NULL, NULL, NULL));
+				    NULL, NULL, NULL, TRUE));
 }
 
 extern "C" kern_return_t 
@@ -157,15 +169,27 @@ IOCPURunPlatformHaltRestartActions(uint32_t message)
 {
     if (!gActionQueues[kQueueHaltRestart].next) return (kIOReturnNotReady);
     return (iocpu_run_platform_actions(&gActionQueues[kQueueHaltRestart], 0, 0U-1,
-				     (void *)(uintptr_t) message, NULL, NULL));
+				     (void *)(uintptr_t) message, NULL, NULL, TRUE));
 }
 
 extern "C" kern_return_t 
 IOCPURunPlatformPanicActions(uint32_t message)
 {
+    // Don't allow nested calls of panic actions
     if (!gActionQueues[kQueuePanic].next) return (kIOReturnNotReady);
     return (iocpu_run_platform_actions(&gActionQueues[kQueuePanic], 0, 0U-1,
-				     (void *)(uintptr_t) message, NULL, NULL));
+				     (void *)(uintptr_t) message, NULL, NULL, FALSE));
+}
+
+
+extern "C" kern_return_t
+IOCPURunPlatformPanicSyncAction(void *addr, size_t len)
+{
+    // Don't allow nested calls of panic actions
+    if (!gActionQueues[kQueuePanic].next) return (kIOReturnNotReady);
+    return (iocpu_run_platform_actions(&gActionQueues[kQueuePanic], 0, 0U-1,
+				    (void *)(uintptr_t)(kPEPanicSync), addr, (void *)(uintptr_t)len, FALSE));
+
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -232,6 +256,7 @@ IOInstallServicePlatformAction(IOService * service, uint32_t qidx)
 	entry->priority = priority;
     entry->refcon0 = service;
     entry->refcon1 = (void *) key;
+    entry->callout_in_progress = FALSE;
 
     iocpu_add_platform_action(queue, entry);
 }
@@ -241,10 +266,24 @@ IOInstallServicePlatformAction(IOService * service, uint32_t qidx)
 void
 IOCPUInitialize(void)
 {
+    gIOCPUsLock = IOLockAlloc();
+    gIOCPUs     = OSArray::withCapacity(1);
+
     for (uint32_t qidx = kQueueSleep; qidx < kQueueCount; qidx++)
     {
 	queue_init(&gActionQueues[qidx]);
     }
+
+    gIOCPUStateKey = OSSymbol::withCStringNoCopy("IOCPUState");
+
+    gIOCPUStateNames[kIOCPUStateUnregistered] =
+      OSString::withCStringNoCopy("Unregistered");
+    gIOCPUStateNames[kIOCPUStateUninitalized] =
+      OSString::withCStringNoCopy("Uninitalized");
+    gIOCPUStateNames[kIOCPUStateStopped] =
+      OSString::withCStringNoCopy("Stopped");
+    gIOCPUStateNames[kIOCPUStateRunning] =
+      OSString::withCStringNoCopy("Running");
 
     gIOPlatformSleepActionKey	     = gActionSymbols[kQueueSleep]
     	= OSSymbol::withCStringNoCopy(kIOPlatformSleepActionKey);
@@ -263,8 +302,12 @@ IOCPUInitialize(void)
 IOReturn
 IOInstallServicePlatformActions(IOService * service)
 {
+    IOLockLock(gIOCPUsLock);
+
     IOInstallServicePlatformAction(service, kQueueHaltRestart);
     IOInstallServicePlatformAction(service, kQueuePanic);
+
+    IOLockUnlock(gIOCPUsLock);
 
     return (kIOReturnSuccess);
 }
@@ -274,6 +317,8 @@ IORemoveServicePlatformActions(IOService * service)
 {
     iocpu_platform_action_entry_t * entry;
     iocpu_platform_action_entry_t * next;
+
+    IOLockLock(gIOCPUsLock);
 
     for (uint32_t qidx = kQueueSleep; qidx < kQueueCount; qidx++)
     {
@@ -289,6 +334,8 @@ IORemoveServicePlatformActions(IOService * service)
 	    }
 	}
     }
+
+    IOLockUnlock(gIOCPUsLock);
 
     return (kIOReturnSuccess);
 }
@@ -340,16 +387,49 @@ void PE_cpu_machine_init(cpu_id_t target, boolean_t bootb)
 {
   IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
   
-  if (targetCPU) targetCPU->initCPU(bootb);
+  if (targetCPU) {
+   targetCPU->initCPU(bootb);
+#if defined(__arm__) || defined(__arm64__)
+   if (!bootb && (targetCPU->getCPUNumber() == (UInt32)master_cpu)) ml_set_is_quiescing(false);
+#endif /* defined(__arm__) || defined(__arm64__) */
+  }
 }
 
 void PE_cpu_machine_quiesce(cpu_id_t target)
 {
   IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
-
-  if (targetCPU) targetCPU->quiesceCPU();
+  if (targetCPU) {
+#if defined(__arm__) || defined(__arm64__)
+      if (targetCPU->getCPUNumber() == (UInt32)master_cpu) ml_set_is_quiescing(true);
+#endif /* defined(__arm__) || defined(__arm64__) */
+      targetCPU->quiesceCPU();
+  }
 }
 
+#if defined(__arm__) || defined(__arm64__)
+static perfmon_interrupt_handler_func pmi_handler = 0;
+
+kern_return_t PE_cpu_perfmon_interrupt_install_handler(perfmon_interrupt_handler_func handler)
+{
+    pmi_handler = handler;
+
+    return KERN_SUCCESS;
+}
+
+void PE_cpu_perfmon_interrupt_enable(cpu_id_t target, boolean_t enable)
+{
+    IOCPU *targetCPU = OSDynamicCast(IOCPU, (OSObject *)target);
+
+    if (targetCPU) {
+        if (enable) {
+	    targetCPU->getProvider()->registerInterrupt(1, targetCPU, (IOInterruptAction)pmi_handler, 0);
+	    targetCPU->getProvider()->enableInterrupt(1);
+	} else {
+	    targetCPU->getProvider()->disableInterrupt(1);
+	}
+    }
+}
+#endif
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -366,10 +446,6 @@ OSMetaClassDefineReservedUnused(IOCPU, 6);
 OSMetaClassDefineReservedUnused(IOCPU, 7);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-static OSArray *gIOCPUs;
-static const OSSymbol *gIOCPUStateKey;
-static OSString *gIOCPUStateNames[kIOCPUStateCount];
 
 void IOCPUSleepKernel(void)
 {
@@ -415,7 +491,7 @@ void IOCPUSleepKernel(void)
     }
 
     iocpu_run_platform_actions(&gActionQueues[kQueueSleep], 0, 0U-1,
-				NULL, NULL, NULL);
+				NULL, NULL, NULL, TRUE);
 
     rootDomain->tracePoint( kIOPMTracePointSleepCPUs );
 
@@ -429,7 +505,7 @@ void IOCPUSleepKernel(void)
         // We make certain that the bootCPU is the last to sleep
         // We'll skip it for now, and halt it after finishing the
         // non-boot CPU's.
-        if (target->getCPUNumber() == kBootCPUNumber) 
+        if (target->getCPUNumber() == (UInt32)master_cpu) 
         {
             bootCPU = target;
         } else if (target->getCPUState() == kIOCPUStateRunning)
@@ -439,7 +515,7 @@ void IOCPUSleepKernel(void)
     }
 
     assert(bootCPU != NULL);
-    assert(cpu_number() == 0);
+    assert(cpu_number() == master_cpu);
 
     console_suspend();
 
@@ -453,7 +529,7 @@ void IOCPUSleepKernel(void)
     console_resume();
 
     iocpu_run_platform_actions(&gActionQueues[kQueueWake], 0, 0U-1,
-				    NULL, NULL, NULL);
+				    NULL, NULL, NULL, TRUE);
 
     iocpu_platform_action_entry_t * entry;
     for (uint32_t qidx = kQueueSleep; qidx <= kQueueActive; qidx++)
@@ -472,32 +548,16 @@ void IOCPUSleepKernel(void)
     for (cnt = 0; cnt < numCPUs; cnt++) 
     {
         target = OSDynamicCast(IOCPU, gIOCPUs->getObject(cnt));
-        
+
         // Skip the already-woken boot CPU.
-        if ((target->getCPUNumber() != kBootCPUNumber)
-            && (target->getCPUState() == kIOCPUStateStopped))
-        {
-            processor_start(target->getMachProcessor());
+        if (target->getCPUNumber() != (UInt32)master_cpu) {
+            if (target->getCPUState() == kIOCPUStateRunning)
+                panic("Spurious wakeup of cpu %u", (unsigned int)(target->getCPUNumber()));		
+ 
+            if (target->getCPUState() == kIOCPUStateStopped)
+                processor_start(target->getMachProcessor());
         }
     }
-}
-
-void IOCPU::initCPUs(void)
-{
-  if (gIOCPUs == 0) {
-    gIOCPUs = OSArray::withCapacity(1);
-    
-    gIOCPUStateKey = OSSymbol::withCStringNoCopy("IOCPUState");
-    
-    gIOCPUStateNames[kIOCPUStateUnregistered] =
-      OSString::withCStringNoCopy("Unregistered");
-    gIOCPUStateNames[kIOCPUStateUninitalized] =
-      OSString::withCStringNoCopy("Uninitalized");
-    gIOCPUStateNames[kIOCPUStateStopped] =
-      OSString::withCStringNoCopy("Stopped");
-    gIOCPUStateNames[kIOCPUStateRunning] =
-      OSString::withCStringNoCopy("Running");
-  }
 }
 
 bool IOCPU::start(IOService *provider)
@@ -506,13 +566,13 @@ bool IOCPU::start(IOService *provider)
   
   if (!super::start(provider)) return false;
   
-  initCPUs();
-  
   _cpuGroup = gIOCPUs;
   cpuNub = provider;
   
+  IOLockLock(gIOCPUsLock);
   gIOCPUs->setObject(this);
-  
+  IOLockUnlock(gIOCPUsLock);
+
   // Correct the bus, cpu and timebase frequencies in the device tree.
   if (gPEClockFrequencyInfo.bus_frequency_hz < 0x100000000ULL) {
     busFrequency = OSData::withBytesNoCopy((void *)&gPEClockFrequencyInfo.bus_clock_rate_hz, 4);
@@ -658,7 +718,6 @@ processor_t IOCPU::getMachProcessor(void)
 
 OSDefineMetaClassAndStructors(IOCPUInterruptController, IOInterruptController);
 
-OSMetaClassDefineReservedUnused(IOCPUInterruptController, 0);
 OSMetaClassDefineReservedUnused(IOCPUInterruptController, 1);
 OSMetaClassDefineReservedUnused(IOCPUInterruptController, 2);
 OSMetaClassDefineReservedUnused(IOCPUInterruptController, 3);
@@ -669,28 +728,29 @@ OSMetaClassDefineReservedUnused(IOCPUInterruptController, 5);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-
 IOReturn IOCPUInterruptController::initCPUInterruptController(int sources)
+{
+	return initCPUInterruptController(sources, sources);
+}
+
+IOReturn IOCPUInterruptController::initCPUInterruptController(int sources, int cpus)
 {
   int cnt;
   
   if (!super::init()) return kIOReturnInvalid;
-  
-  numCPUs = sources;
-  
-  cpus = (IOCPU **)IOMalloc(numCPUs * sizeof(IOCPU *));
-  if (cpus == 0) return kIOReturnNoMemory;
-  bzero(cpus, numCPUs * sizeof(IOCPU *));
-  
-  vectors = (IOInterruptVector *)IOMalloc(numCPUs * sizeof(IOInterruptVector));
+
+  numSources = sources;
+  numCPUs = cpus;
+
+  vectors = (IOInterruptVector *)IOMalloc(numSources * sizeof(IOInterruptVector));
   if (vectors == 0) return kIOReturnNoMemory;
-  bzero(vectors, numCPUs * sizeof(IOInterruptVector));
-  
-  // Allocate locks for the
-  for (cnt = 0; cnt < numCPUs; cnt++) {
+  bzero(vectors, numSources * sizeof(IOInterruptVector));
+
+  // Allocate a lock for each vector
+  for (cnt = 0; cnt < numSources; cnt++) {
     vectors[cnt].interruptLock = IOLockAlloc();
     if (vectors[cnt].interruptLock == NULL) {
-      for (cnt = 0; cnt < numCPUs; cnt++) {
+      for (cnt = 0; cnt < numSources; cnt++) {
 	if (vectors[cnt].interruptLock != NULL)
 	  IOLockFree(vectors[cnt].interruptLock);
       }
@@ -698,7 +758,20 @@ IOReturn IOCPUInterruptController::initCPUInterruptController(int sources)
     }
   }
   
-  ml_init_max_cpus(numCPUs);
+  ml_init_max_cpus(numSources);
+
+#if KPERF
+  /*
+   * kperf allocates based on the number of CPUs and requires them to all be
+   * accounted for.
+   */
+  boolean_t found_kperf = FALSE;
+  char kperf_config_str[64];
+  found_kperf = PE_parse_boot_arg_str("kperf", kperf_config_str, sizeof(kperf_config_str));
+  if (found_kperf && kperf_config_str[0] != '\0') {
+    kperf_kernel_configure(kperf_config_str);
+  }
+#endif
   
   return kIOReturnSuccess;
 }
@@ -724,8 +797,8 @@ void IOCPUInterruptController::setCPUInterruptProperties(IOService *service)
     return;
   
   // Create the interrupt specifer array.
-  specifier = OSArray::withCapacity(numCPUs);
-  for (cnt = 0; cnt < numCPUs; cnt++) {
+  specifier = OSArray::withCapacity(numSources);
+  for (cnt = 0; cnt < numSources; cnt++) {
     tmpLong = cnt;
     tmpData = OSData::withBytes(&tmpLong, sizeof(tmpLong));
     specifier->setObject(tmpData);
@@ -733,8 +806,8 @@ void IOCPUInterruptController::setCPUInterruptProperties(IOService *service)
   };
   
   // Create the interrupt controller array.
-  controller = OSArray::withCapacity(numCPUs);
-  for (cnt = 0; cnt < numCPUs; cnt++) {
+  controller = OSArray::withCapacity(numSources);
+  for (cnt = 0; cnt < numSources; cnt++) {
     controller->setObject(gPlatformInterruptControllerName);
   }
   
@@ -750,15 +823,18 @@ void IOCPUInterruptController::enableCPUInterrupt(IOCPU *cpu)
 	IOInterruptHandler handler = OSMemberFunctionCast(
 		IOInterruptHandler, this, &IOCPUInterruptController::handleInterrupt);
 
+	assert(numCPUs > 0);
+
 	ml_install_interrupt_handler(cpu, cpu->getCPUNumber(), this, handler, 0);
 
-	// Ensure that the increment is seen by all processors
-	OSIncrementAtomic(&enabledCPUs);
+	IOTakeLock(vectors[0].interruptLock);
+	++enabledCPUs;
 
 	if (enabledCPUs == numCPUs) {
-    IOService::cpusRunning();
-    thread_wakeup(this);
-  }
+		IOService::cpusRunning();
+		thread_wakeup(this);
+  	}
+	IOUnlock(vectors[0].interruptLock);
 }
 
 IOReturn IOCPUInterruptController::registerInterrupt(IOService *nub,
@@ -768,39 +844,42 @@ IOReturn IOCPUInterruptController::registerInterrupt(IOService *nub,
 						     void *refCon)
 {
   IOInterruptVector *vector;
-  
-  if (source >= numCPUs) return kIOReturnNoResources;
-  
+
+  if (source >= numSources) return kIOReturnNoResources;
+
   vector = &vectors[source];
-  
+
   // Get the lock for this vector.
   IOTakeLock(vector->interruptLock);
-  
+
   // Make sure the vector is not in use.
   if (vector->interruptRegistered) {
     IOUnlock(vector->interruptLock);
     return kIOReturnNoResources;
   }
-  
+
   // Fill in vector with the client's info.
   vector->handler = handler;
   vector->nub     = nub;
   vector->source  = source;
   vector->target  = target;
   vector->refCon  = refCon;
-  
+
   // Get the vector ready.  It starts hard disabled.
   vector->interruptDisabledHard = 1;
   vector->interruptDisabledSoft = 1;
   vector->interruptRegistered   = 1;
-  
+
   IOUnlock(vector->interruptLock);
-  
+
+  IOTakeLock(vectors[0].interruptLock);
   if (enabledCPUs != numCPUs) {
     assert_wait(this, THREAD_UNINT);
+    IOUnlock(vectors[0].interruptLock);
     thread_block(THREAD_CONTINUE_NULL);
-  }
-  
+  } else
+    IOUnlock(vectors[0].interruptLock);
+
   return kIOReturnSuccess;
 }
 

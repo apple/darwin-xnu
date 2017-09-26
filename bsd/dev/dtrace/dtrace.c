@@ -100,6 +100,11 @@
 #include <libkern/sysctl.h>
 #include <sys/kdebug.h>
 
+#if MONOTONIC
+#include <kern/monotonic.h>
+#include <machine/monotonic.h>
+#endif /* MONOTONIC */
+
 #include <kern/cpu_data.h>
 extern uint32_t pmap_find_phys(void *, uint64_t);
 extern boolean_t pmap_valid_page(uint32_t);
@@ -145,7 +150,7 @@ uint64_t	dtrace_buffer_memory_inuse = 0;
 int		dtrace_destructive_disallow = 0;
 dtrace_optval_t	dtrace_nonroot_maxsize = (16 * 1024 * 1024);
 size_t		dtrace_difo_maxsize = (256 * 1024);
-dtrace_optval_t	dtrace_dof_maxsize = (384 * 1024);
+dtrace_optval_t	dtrace_dof_maxsize = (512 * 1024);
 dtrace_optval_t	dtrace_statvar_maxsize = (16 * 1024);
 dtrace_optval_t	dtrace_statvar_maxsize_max = (16 * 10 * 1024);
 size_t		dtrace_actions_max = (16 * 1024);
@@ -289,7 +294,7 @@ static int dtrace_module_unloaded(struct kmod_info *kmod);
  *
  * ASSERT(MUTEX_HELD(&cpu_lock));
  *	becomes:
- * lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+ * LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
  *
  */
 static lck_mtx_t	dtrace_lock;		/* probe state lock */
@@ -352,6 +357,15 @@ int	dtrace_helptrace_enabled = 1;
 int	dtrace_helptrace_enabled = 0;
 #endif
 
+#if defined (__arm64__)
+/*
+ * The ioctl for adding helper DOF is based on the
+ * size of a user_addr_t.  We need to recognize both
+ * U32 and U64 as the same action.
+ */
+#define DTRACEHIOC_ADDDOF_U32       _IOW('h', 4, user32_addr_t)								    
+#define DTRACEHIOC_ADDDOF_U64       _IOW('h', 4, user64_addr_t)
+#endif  /* __arm64__ */
 
 /*
  * DTrace Error Hashing
@@ -410,6 +424,25 @@ static lck_mtx_t dtrace_errlock;
  * signature.
  */
 #if defined (__x86_64__)
+/* FIXME: two function calls!! */
+#define	DTRACE_TLS_THRKEY(where) { \
+	uint_t intr = ml_at_interrupt_context(); /* Note: just one measly bit */ \
+	uint64_t thr = (uintptr_t)current_thread(); \
+	ASSERT(intr < (1 << 3)); \
+	(where) = ((thr + DIF_VARIABLE_MAX) & \
+	    (((uint64_t)1 << 61) - 1)) | ((uint64_t)intr << 61); \
+}
+#elif defined(__arm__)
+/* FIXME: three function calls!!! */
+#define	DTRACE_TLS_THRKEY(where) { \
+	uint_t intr = ml_at_interrupt_context(); /* Note: just one measly bit */ \
+	uint64_t thr = (uintptr_t)current_thread(); \
+	uint_t pid = (uint_t)dtrace_proc_selfpid(); \
+	ASSERT(intr < (1 << 3)); \
+	(where) = (((thr << 32 | pid) + DIF_VARIABLE_MAX) & \
+	    (((uint64_t)1 << 61) - 1)) | ((uint64_t)intr << 61); \
+}
+#elif defined (__arm64__)
 /* FIXME: two function calls!! */
 #define	DTRACE_TLS_THRKEY(where) { \
 	uint_t intr = ml_at_interrupt_context(); /* Note: just one measly bit */ \
@@ -786,13 +819,21 @@ sysctl_dtrace_provide_private_probes SYSCTL_HANDLER_ARGS
 	if (error)
 		return (error);
 
-	if (value != 0 && value != 1)
-		return (ERANGE);
+	if (req->newptr) {
+		if (value != 0 && value != 1)
+			return (ERANGE);
 
-	lck_mtx_lock(&dtrace_lock);
+		/*
+		 * We do not allow changing this back to zero, as private probes
+		 * would still be left registered
+		 */
+		if (value != 1)
+			return (EPERM);
+
+		lck_mtx_lock(&dtrace_lock);
 		dtrace_provide_private_probes = value;
-	lck_mtx_unlock(&dtrace_lock);
-
+		lck_mtx_unlock(&dtrace_lock);
+	}
 	return (0);
 }
 
@@ -1052,7 +1093,7 @@ dtrace_canstore_remains(uint64_t addr, size_t sz, size_t *remain,
  * DTrace subroutines (DIF_SUBR_*) should use this helper to implement
  * appropriate memory access protection.
  */
-static int
+int
 dtrace_canload(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
     dtrace_vstate_t *vstate)
 {
@@ -3180,6 +3221,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 			 * APPLE NOTE: Account for introduction of __dtrace_probe()
 			 */
 			int aframes = mstate->dtms_probe->dtpr_aframes + 3;
+			dtrace_vstate_t *vstate = &state->dts_vstate;
 			dtrace_provider_t *pv;
 			uint64_t val;
 
@@ -3194,7 +3236,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 			}
 
 			else
-				val = dtrace_getarg(ndx, aframes);
+				val = dtrace_getarg(ndx, aframes, mstate, vstate);
 
 			/*
 			 * This is regrettably required to keep the compiler
@@ -3467,27 +3509,47 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 
 
 	case DIF_VAR_ZONENAME:
-        {
-                /* scratch_size is equal to length('global') + 1 for the null-terminator. */
-                char *zname = (char *)mstate->dtms_scratch_ptr;
-                size_t scratch_size = 6 + 1;
+	{
+		/* scratch_size is equal to length('global') + 1 for the null-terminator. */
+		char *zname = (char *)mstate->dtms_scratch_ptr;
+		size_t scratch_size = 6 + 1;
 
 		if (!dtrace_priv_proc(state))
 			return (0);
 
-                /* The scratch allocation's lifetime is that of the clause. */
-                if (!DTRACE_INSCRATCH(mstate, scratch_size)) {
-                        DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
-                        return 0;
-                }
+		/* The scratch allocation's lifetime is that of the clause. */
+		if (!DTRACE_INSCRATCH(mstate, scratch_size)) {
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
+			return 0;
+		}
 
-                mstate->dtms_scratch_ptr += scratch_size;
+		mstate->dtms_scratch_ptr += scratch_size;
 
-                /* The kernel does not provide zonename, it will always return 'global'. */
-                strlcpy(zname, "global", scratch_size);
+		/* The kernel does not provide zonename, it will always return 'global'. */
+		strlcpy(zname, "global", scratch_size);
 
-                return ((uint64_t)(uintptr_t)zname);
-        }
+		return ((uint64_t)(uintptr_t)zname);
+	}
+
+#if MONOTONIC
+	case DIF_VAR_CPUINSTRS:
+		return mt_cur_cpu_instrs();
+
+	case DIF_VAR_CPUCYCLES:
+		return mt_cur_cpu_cycles();
+
+	case DIF_VAR_VINSTRS:
+		return mt_cur_thread_instrs();
+
+	case DIF_VAR_VCYCLES:
+		return mt_cur_thread_cycles();
+#else /* MONOTONIC */
+	case DIF_VAR_CPUINSTRS: /* FALLTHROUGH */
+	case DIF_VAR_CPUCYCLES: /* FALLTHROUGH */
+	case DIF_VAR_VINSTRS: /* FALLTHROUGH */
+	case DIF_VAR_VCYCLES: /* FALLTHROUGH */
+		return 0;
+#endif /* !MONOTONIC */
 
 	case DIF_VAR_UID:
 		if (!dtrace_priv_proc_relaxed(state))
@@ -3896,7 +3958,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		char c, target = (char)tupregs[1].dttk_value;
 
 		if (!dtrace_strcanload(addr, size, &lim, mstate, vstate)) {
-			regs[rd] = NULL;
+			regs[rd] = 0;
 			break;
 		}
 		addr_limit = addr + lim;
@@ -4156,7 +4218,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			 */
 			regs[rd] = 0;
 			mstate->dtms_strtok = 0;
-			mstate->dtms_strtok_limit = NULL;
+			mstate->dtms_strtok_limit = 0;
 			break;
 		}
 
@@ -4305,9 +4367,20 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 	case DIF_SUBR_LLTOSTR: {
 		int64_t i = (int64_t)tupregs[0].dttk_value;
-		int64_t val = i < 0 ? i * -1 : i;
-		uint64_t size = 22;	/* enough room for 2^64 in decimal */
+		uint64_t val, digit;
+		uint64_t size = 65;	/* enough room for 2^64 in binary */
 		char *end = (char *)mstate->dtms_scratch_ptr + size - 1;
+		int base = 10;
+
+		if (nargs > 1) {
+			if ((base = tupregs[1].dttk_value) <= 1 ||
+			     base > ('z' - 'a' + 1) + ('9' - '0' + 1)) {
+				*flags |= CPU_DTRACE_ILLOP;
+				break;
+			}
+		}
+
+		val = (base == 10 && i < 0) ? i * -1 : i;
 
 		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
@@ -4315,13 +4388,24 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			break;
 		}
 
-		for (*end-- = '\0'; val; val /= 10)
-			*end-- = '0' + (val % 10);
+		for (*end-- = '\0'; val; val /= base) {
+			if ((digit = val % base) <= '9' - '0') {
+				*end-- = '0' + digit;
+			} else {
+				*end-- = 'a' + (digit - ('9' - '0') - 1);
+			}
+		}
 
-		if (i == 0)
+		if (i == 0 && base == 16)
 			*end-- = '0';
 
-		if (i < 0)
+		if (base == 16)
+			*end-- = 'x';
+
+		if (i == 0 || base == 8 || base == 16)
+			*end-- = '0';
+
+		if (i < 0 && base == 10)
 			*end-- = '-';
 
 		regs[rd] = (uintptr_t)end + 1;
@@ -6458,7 +6542,7 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 
 		if (pred != NULL) {
 			dtrace_difo_t *dp = pred->dtp_difo;
-			int rval;
+			uint64_t rval;
 
 			rval = dtrace_dif_emulate(dp, &mstate, vstate, state);
 
@@ -7179,11 +7263,13 @@ dtrace_cred2priv(cred_t *cr, uint32_t *privp, uid_t *uidp, zoneid_t *zoneidp)
 
 	if (cr == NULL || PRIV_POLICY_ONLY(cr, PRIV_ALL, B_FALSE)) {
 		if (dtrace_is_restricted() && !dtrace_are_restrictions_relaxed()) {
-			priv = DTRACE_PRIV_USER | DTRACE_PRIV_PROC;
+			priv = DTRACE_PRIV_USER | DTRACE_PRIV_PROC | DTRACE_PRIV_OWNER;
 		}
 		else {
 			priv = DTRACE_PRIV_ALL;
 		}
+		*uidp = 0;
+		*zoneidp = 0;
 	} else {
 		*uidp = crgetuid(cr);
 		*zoneidp = crgetzoneid(cr);
@@ -7471,7 +7557,7 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 	int len, rc, best = INT_MAX, nmatched = 0;
 	dtrace_id_t i;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	/*
 	 * If the probe ID is specified in the key, just lookup by ID and
@@ -7730,8 +7816,8 @@ dtrace_register(const char *name, const dtrace_pattr_t *pap, uint32_t priv,
 	*idp = (dtrace_provider_id_t)provider;
 
 	if (pops == &dtrace_provider_ops) {
-		lck_mtx_assert(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
-		lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 		ASSERT(dtrace_anon.dta_enabling == NULL);
 
 		/*
@@ -7801,8 +7887,8 @@ dtrace_unregister(dtrace_provider_id_t id)
 		 */
 		ASSERT(old == dtrace_provider);
 		ASSERT(dtrace_devi != NULL);
-		lck_mtx_assert(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
-		lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 		self = 1;
 
 		if (dtrace_provider->dtpv_next != NULL) {
@@ -8035,7 +8121,7 @@ dtrace_probe_create(dtrace_provider_id_t prov, const char *mod,
 	dtrace_id_t id;
 
 	if (provider == dtrace_provider) {
-		lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	} else {
 		lck_mtx_lock(&dtrace_lock);
 	}
@@ -8108,7 +8194,7 @@ dtrace_probe_create(dtrace_provider_id_t prov, const char *mod,
 static dtrace_probe_t *
 dtrace_probe_lookup_id(dtrace_id_t id)
 {
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (id == 0 || id > (dtrace_id_t)dtrace_nprobes)
 		return (NULL);
@@ -8215,7 +8301,7 @@ dtrace_probe_provide(dtrace_probedesc_t *desc, dtrace_provider_t *prv)
 	struct modctl *ctl;
 	int all = 0;
 
-	lck_mtx_assert(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (prv == NULL) {
 		all = 1;
@@ -8295,7 +8381,7 @@ dtrace_probe_enable(const dtrace_probedesc_t *desc, dtrace_enabling_t *enab, dtr
 	uid_t uid;
 	zoneid_t zoneid;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	dtrace_ecb_create_cache = NULL;
 
@@ -8451,7 +8537,7 @@ dtrace_helper_provide(dof_helper_t *dhp, proc_t *p)
 	dof_hdr_t *dof = (dof_hdr_t *)daddr;
 	uint32_t i;
 
-	lck_mtx_assert(&dtrace_meta_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_meta_lock, LCK_MTX_ASSERT_OWNED);
 
 	for (i = 0; i < dof->dofh_secnum; i++) {
 		dof_sec_t *sec = (dof_sec_t *)(uintptr_t)(daddr +
@@ -8499,7 +8585,7 @@ dtrace_helper_provider_remove(dof_helper_t *dhp, proc_t *p)
 	dof_hdr_t *dof = (dof_hdr_t *)daddr;
 	uint32_t i;
 
-	lck_mtx_assert(&dtrace_meta_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_meta_lock, LCK_MTX_ASSERT_OWNED);
 
 	for (i = 0; i < dof->dofh_secnum; i++) {
 		dof_sec_t *sec = (dof_sec_t *)(uintptr_t)(daddr +
@@ -9318,7 +9404,7 @@ dtrace_difo_hold(dtrace_difo_t *dp)
 {
 	uint_t i;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	dp->dtdo_refcnt++;
 	ASSERT(dp->dtdo_refcnt != 0);
@@ -9502,7 +9588,7 @@ dtrace_difo_init(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 	int oldsvars, osz, nsz, otlocals, ntlocals;
 	uint_t i, id;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dp->dtdo_buf != NULL && dp->dtdo_len != 0);
 
 	for (i = 0; i < dp->dtdo_varlen; i++) {
@@ -9724,7 +9810,7 @@ dtrace_difo_release(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 {
 	uint_t i;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dp->dtdo_refcnt != 0);
 
 	for (i = 0; i < dp->dtdo_varlen; i++) {
@@ -9837,7 +9923,7 @@ dtrace_predicate_create(dtrace_difo_t *dp)
 {
 	dtrace_predicate_t *pred;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dp->dtdo_refcnt != 0);
 
 	pred = kmem_zalloc(sizeof (dtrace_predicate_t), KM_SLEEP);
@@ -9867,7 +9953,7 @@ dtrace_predicate_create(dtrace_difo_t *dp)
 static void
 dtrace_predicate_hold(dtrace_predicate_t *pred)
 {
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(pred->dtp_difo != NULL && pred->dtp_difo->dtdo_refcnt != 0);
 	ASSERT(pred->dtp_refcnt > 0);
 
@@ -9880,7 +9966,7 @@ dtrace_predicate_release(dtrace_predicate_t *pred, dtrace_vstate_t *vstate)
 	dtrace_difo_t *dp = pred->dtp_difo;
 #pragma unused(dp) /* __APPLE__ */
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dp != NULL && dp->dtdo_refcnt != 0);
 	ASSERT(pred->dtp_refcnt > 0);
 
@@ -9955,7 +10041,7 @@ dtrace_ecb_add(dtrace_state_t *state, dtrace_probe_t *probe)
 	dtrace_ecb_t *ecb;
 	dtrace_epid_t epid;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	ecb = kmem_zalloc(sizeof (dtrace_ecb_t), KM_SLEEP);
 	ecb->dte_predicate = NULL;
@@ -10021,8 +10107,8 @@ dtrace_ecb_enable(dtrace_ecb_t *ecb)
 {
 	dtrace_probe_t *probe = ecb->dte_probe;
 
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(ecb->dte_next == NULL);
 
 	if (probe == NULL) {
@@ -10367,7 +10453,7 @@ dtrace_ecb_action_add(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 	dtrace_optval_t nframes=0, strsize;
 	uint64_t arg = desc->dtad_arg;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(ecb->dte_action == NULL || ecb->dte_action->dta_refcnt == 1);
 
 	if (DTRACEACT_ISAGG(desc->dtad_kind)) {
@@ -10646,7 +10732,7 @@ dtrace_ecb_disable(dtrace_ecb_t *ecb)
 	dtrace_ecb_t *pecb, *prev = NULL;
 	dtrace_probe_t *probe = ecb->dte_probe;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (probe == NULL) {
 		/*
@@ -10725,7 +10811,7 @@ dtrace_ecb_destroy(dtrace_ecb_t *ecb)
 	dtrace_predicate_t *pred;
 	dtrace_epid_t epid = ecb->dte_epid;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(ecb->dte_next == NULL);
 	ASSERT(ecb->dte_probe == NULL || ecb->dte_probe->dtpr_ecb != ecb);
 
@@ -10750,7 +10836,7 @@ dtrace_ecb_create(dtrace_state_t *state, dtrace_probe_t *probe,
 	dtrace_provider_t *prov;
 	dtrace_ecbdesc_t *desc = enab->dten_current;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(state != NULL);
 
 	ecb = dtrace_ecb_add(state, probe);
@@ -10862,7 +10948,7 @@ dtrace_epid2ecb(dtrace_state_t *state, dtrace_epid_t id)
 	dtrace_ecb_t *ecb;
 #pragma unused(ecb) /* __APPLE__ */
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (id == 0 || id > (dtrace_epid_t)state->dts_necbs)
 		return (NULL);
@@ -10879,7 +10965,7 @@ dtrace_aggid2agg(dtrace_state_t *state, dtrace_aggid_t id)
 	dtrace_aggregation_t *agg;
 #pragma unused(agg) /* __APPLE__ */
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (id == 0 || id > (dtrace_aggid_t)state->dts_naggregations)
 		return (NULL);
@@ -10982,8 +11068,8 @@ dtrace_buffer_alloc(dtrace_buffer_t *bufs, size_t limit, size_t size, int flags,
 	dtrace_buffer_t *buf;
 	size_t size_before_alloc = dtrace_buffer_memory_inuse;
 
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (size > (size_t)dtrace_nonroot_maxsize &&
 	    !PRIV_POLICY_CHOICE(CRED(), PRIV_ALL, B_FALSE))
@@ -11008,7 +11094,6 @@ dtrace_buffer_alloc(dtrace_buffer_t *bufs, size_t limit, size_t size, int flags,
 		}
 
 		ASSERT(buf->dtb_xamot == NULL);
-
 
 		/* DTrace, please do not eat all the memory. */
 		if (dtrace_buffer_canalloc(size) == B_FALSE)
@@ -11346,7 +11431,7 @@ static void
 dtrace_buffer_polish(dtrace_buffer_t *buf)
 {
 	ASSERT(buf->dtb_flags & DTRACEBUF_RING);
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (!(buf->dtb_flags & DTRACEBUF_WRAPPED))
 		return;
@@ -11523,7 +11608,7 @@ dtrace_enabling_destroy(dtrace_enabling_t *enab)
 	dtrace_ecbdesc_t *ep;
 	dtrace_vstate_t *vstate = enab->dten_vstate;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	for (i = 0; i < enab->dten_ndesc; i++) {
 		dtrace_actdesc_t *act, *next;
@@ -11583,7 +11668,7 @@ dtrace_enabling_retain(dtrace_enabling_t *enab)
 {
 	dtrace_state_t *state;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(enab->dten_next == NULL && enab->dten_prev == NULL);
 	ASSERT(enab->dten_vstate != NULL);
 
@@ -11618,7 +11703,7 @@ dtrace_enabling_replicate(dtrace_state_t *state, dtrace_probedesc_t *match,
 	dtrace_enabling_t *new, *enab;
 	int found = 0, err = ENOENT;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(strlen(match->dtpd_provider) < DTRACE_PROVNAMELEN);
 	ASSERT(strlen(match->dtpd_mod) < DTRACE_MODNAMELEN);
 	ASSERT(strlen(match->dtpd_func) < DTRACE_FUNCNAMELEN);
@@ -11685,7 +11770,7 @@ dtrace_enabling_retract(dtrace_state_t *state)
 {
 	dtrace_enabling_t *enab, *next;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	/*
 	 * Iterate over all retained enablings, destroy the enablings retained
@@ -11715,8 +11800,8 @@ dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched, dtrace_match_cond_
 	int i = 0;
 	int total_matched = 0, matched = 0;
 
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	for (i = 0; i < enab->dten_ndesc; i++) {
 		dtrace_ecbdesc_t *ep = enab->dten_desc[i];
@@ -11867,8 +11952,8 @@ dtrace_enabling_provide(dtrace_provider_t *prv)
 	dtrace_probedesc_t desc;
         dtrace_genid_t gen;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (prv == NULL) {
 		all = 1;
@@ -11935,7 +12020,7 @@ dtrace_dof_create(dtrace_state_t *state)
 	    roundup(sizeof (dof_sec_t), sizeof (uint64_t)) +
 	    sizeof (dof_optdesc_t) * DTRACEOPT_MAX;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	dof = dt_kmem_zalloc_aligned(len, 8, KM_SLEEP);
 	dof->dofh_ident[DOF_ID_MAG0] = DOF_MAG_MAG0;
@@ -11988,7 +12073,7 @@ dtrace_dof_copyin(user_addr_t uarg, int *errp)
 {
 	dof_hdr_t hdr, *dof;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
 
 	/*
 	 * First, we're going to copyin() the sizeof (dof_hdr_t).
@@ -12032,7 +12117,7 @@ dtrace_dof_copyin_from_proc(proc_t* p, user_addr_t uarg, int *errp)
 {
 	dof_hdr_t hdr, *dof;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
 
 	/*
 	 * First, we're going to copyin() the sizeof (dof_hdr_t).
@@ -12638,7 +12723,7 @@ dtrace_dof_slurp(dof_hdr_t *dof, dtrace_vstate_t *vstate, cred_t *cr,
 	dtrace_enabling_t *enab;
 	uint_t i;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dof->dofh_loadsz >= sizeof (dof_hdr_t));
 
 	/*
@@ -12880,7 +12965,7 @@ dtrace_dstate_init(dtrace_dstate_t *dstate, size_t size)
 	dtrace_dynvar_t *dvar, *next, *start;
 	size_t i;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dstate->dtds_base == NULL && dstate->dtds_percpu == NULL);
 
 	bzero(dstate, sizeof (dtrace_dstate_t));
@@ -12979,7 +13064,7 @@ dtrace_dstate_init(dtrace_dstate_t *dstate, size_t size)
 static void
 dtrace_dstate_fini(dtrace_dstate_t *dstate)
 {
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (dstate->dtds_base == NULL)
 		return;
@@ -13061,8 +13146,8 @@ dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
 	dtrace_optval_t *opt;
 	int bufsize = (int)NCPU * sizeof (dtrace_buffer_t), i;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 
 	/* Cause restart */
 	*new_state = NULL;
@@ -13291,8 +13376,8 @@ dtrace_state_buffer(dtrace_state_t *state, dtrace_buffer_t *buf, int which)
 	size_t limit = buf->dtb_size;
 	int flags = 0, rval;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(which < DTRACEOPT_MAX);
 	ASSERT(state->dts_activity == DTRACE_ACTIVITY_INACTIVE ||
 	    (state == dtrace_anon.dta_state &&
@@ -13690,7 +13775,7 @@ dtrace_state_stop(dtrace_state_t *state, processorid_t *cpu)
 {
 	dtrace_icookie_t cookie;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (state->dts_activity != DTRACE_ACTIVITY_ACTIVE &&
 	    state->dts_activity != DTRACE_ACTIVITY_DRAINING)
@@ -13741,7 +13826,7 @@ static int
 dtrace_state_option(dtrace_state_t *state, dtrace_optid_t option,
     dtrace_optval_t val)
 {
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (state->dts_activity != DTRACE_ACTIVITY_INACTIVE)
 		return (EBUSY);
@@ -13808,8 +13893,8 @@ dtrace_state_destroy(dtrace_state_t *state)
 	int nspec = state->dts_nspeculations;
 	uint32_t match;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 
 	/*
 	 * First, retract any retained enablings for this state.
@@ -13920,7 +14005,7 @@ dtrace_anon_grab(void)
 {
 	dtrace_state_t *state;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if ((state = dtrace_anon.dta_state) == NULL) {
 		ASSERT(dtrace_anon.dta_enabling == NULL);
@@ -13945,8 +14030,8 @@ dtrace_anon_property(void)
 	dof_hdr_t *dof;
 	char c[32];		/* enough for "dof-data-" + digits */
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 
 	for (i = 0; ; i++) {
 		(void) snprintf(c, sizeof (c), "dof-data-%d", i);
@@ -14217,7 +14302,7 @@ dtrace_helper_destroygen(proc_t* p, int gen)
 	dtrace_vstate_t *vstate;
 	uint_t i;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (help == NULL || gen > help->dthps_generation)
 		return (EINVAL);
@@ -14394,7 +14479,7 @@ static void
 dtrace_helper_provider_register(proc_t *p, dtrace_helpers_t *help,
     dof_helper_t *dofhp)
 {
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
 
 	lck_mtx_lock(&dtrace_meta_lock);
 	lck_mtx_lock(&dtrace_lock);
@@ -14456,7 +14541,7 @@ dtrace_helper_provider_add(proc_t* p, dof_helper_t *dofhp, int gen)
 	dtrace_helper_provider_t *hprov, **tmp_provs;
 	uint_t tmp_maxprovs, i;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	help = p->p_dtrace_helpers;
 	ASSERT(help != NULL);
 
@@ -14752,7 +14837,7 @@ dtrace_helper_slurp(proc_t* p, dof_hdr_t *dof, dof_helper_t *dhp)
 	int i, gen, rv, nhelpers = 0, nprovs = 0, destroy = 1;
 	uintptr_t daddr = (uintptr_t)dof;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
 	if ((help = p->p_dtrace_helpers) == NULL)
 		help = dtrace_helpers_create(p);
@@ -15199,9 +15284,9 @@ dtrace_lazy_dofs_proc_iterate_doit(proc_t *p, void* ignored)
 static int
 dtrace_lazy_dofs_duplicate(proc_t *parent, proc_t *child)
 {
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
-	lck_mtx_assert(&parent->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
-	lck_mtx_assert(&child->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&parent->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&child->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
 
 	lck_rw_lock_shared(&dtrace_dof_mode_lock);
 	lck_mtx_lock(&parent->p_dtrace_sprlock);
@@ -15254,7 +15339,7 @@ dtrace_helpers_create(proc_t *p)
 {
 	dtrace_helpers_t *help;
 
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(p->p_dtrace_helpers == NULL);
 
 	help = kmem_zalloc(sizeof (dtrace_helpers_t), KM_SLEEP);
@@ -15600,7 +15685,7 @@ dtrace_modctl_add(struct modctl * newctl)
 	struct modctl *nextp, *prevp;
 
 	ASSERT(newctl != NULL);
-	lck_mtx_assert(&mod_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&mod_lock, LCK_MTX_ASSERT_OWNED);
 
 	// Insert new module at the front of the list,
 	
@@ -15646,7 +15731,7 @@ dtrace_modctl_add(struct modctl * newctl)
 static modctl_t *
 dtrace_modctl_lookup(struct kmod_info * kmod)
 {
-    lck_mtx_assert(&mod_lock, LCK_MTX_ASSERT_OWNED);
+    LCK_MTX_ASSERT(&mod_lock, LCK_MTX_ASSERT_OWNED);
 
     struct modctl * ctl;
 
@@ -15666,7 +15751,7 @@ static void
 dtrace_modctl_remove(struct modctl * ctl)
 {
 	ASSERT(ctl != NULL);
-	lck_mtx_assert(&mod_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&mod_lock, LCK_MTX_ASSERT_OWNED);
 	modctl_t *prevp, *nextp, *curp;
 
 	// Remove stale chain first
@@ -16047,7 +16132,7 @@ dtrace_resume(void)
 static int
 dtrace_cpu_setup(cpu_setup_t what, processorid_t cpu)
 {
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 	lck_mtx_lock(&dtrace_lock);
 
 	switch (what) {
@@ -16179,7 +16264,7 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 
 	register_cpu_setup_func((cpu_setup_func_t *)dtrace_cpu_setup, NULL);
 
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 
 	dtrace_arena = vmem_create("dtrace", (void *)1, UINT32_MAX, 1,
 	    NULL, NULL, NULL, 0, VM_SLEEP | VMC_IDENTIFIER);
@@ -16190,7 +16275,7 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    sizeof (dtrace_dstate_percpu_t) * (int)NCPU, DTRACE_STATE_ALIGN,
 	    NULL, NULL, NULL, NULL, NULL, 0);
 
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 
 	dtrace_bymod = dtrace_hash_create(offsetof(dtrace_probe_t, dtpr_mod),
 	    offsetof(dtrace_probe_t, dtpr_nextmod),
@@ -16235,6 +16320,13 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    dtrace_provider, NULL, NULL, "END", 0, NULL);
 	dtrace_probeid_error = dtrace_probe_create((dtrace_provider_id_t)
 	    dtrace_provider, NULL, NULL, "ERROR", 3, NULL);
+#elif (defined(__arm__) || defined(__arm64__))
+	dtrace_probeid_begin = dtrace_probe_create((dtrace_provider_id_t)
+	    dtrace_provider, NULL, NULL, "BEGIN", 2, NULL);
+	dtrace_probeid_end = dtrace_probe_create((dtrace_provider_id_t)
+	    dtrace_provider, NULL, NULL, "END", 1, NULL);
+	dtrace_probeid_error = dtrace_probe_create((dtrace_provider_id_t)
+	    dtrace_provider, NULL, NULL, "ERROR", 4, NULL);
 #else
 #error Unknown Architecture
 #endif
@@ -16515,7 +16607,12 @@ dtrace_ioctl_helper(u_long cmd, caddr_t arg, int *rv)
 		return KERN_SUCCESS;
 
 	switch (cmd) {
+#if defined (__arm64__)
+	case DTRACEHIOC_ADDDOF_U32:
+	case DTRACEHIOC_ADDDOF_U64:
+#else
 	case DTRACEHIOC_ADDDOF:
+#endif /* __arm64__*/
 	                {
 			dof_helper_t *dhp = NULL;
 			size_t dof_ioctl_data_size;
@@ -16528,6 +16625,16 @@ dtrace_ioctl_helper(u_long cmd, caddr_t arg, int *rv)
 			proc_t* p = current_proc();
 
 			/*
+			 * If this is a restricted process and dtrace is restricted,
+			 * do not allow DOFs to be registered
+			 */
+			if (dtrace_is_restricted() &&
+				!dtrace_are_restrictions_relaxed() &&
+				!dtrace_can_attach_to_proc(current_proc())) {
+				return (EACCES);
+			}
+
+			/*
 			 * Read the number of DOF sections being passed in.
 			 */
 			if (copyin(user_address + offsetof(dof_ioctl_data_t, dofiod_count),
@@ -16536,7 +16643,7 @@ dtrace_ioctl_helper(u_long cmd, caddr_t arg, int *rv)
 				dtrace_dof_error(NULL, "failed to copyin dofiod_count");
 				return (EFAULT);
 			}
-				   			
+
 			/*
 			 * Range check the count.
 			 */
@@ -17309,7 +17416,8 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 		/*
 		* We have our snapshot; now copy it out.
 		*/
-		if (copyout(buf->dtb_xamot, (user_addr_t)desc.dtbd_data,
+		if (dtrace_buffer_copyout(buf->dtb_xamot,
+					(user_addr_t)desc.dtbd_data,
 					buf->dtb_xamot_offset) != 0) {
 			lck_mtx_unlock(&dtrace_lock);
 			return (EFAULT);
@@ -18242,7 +18350,12 @@ dtrace_init( void )
 		 * makes no sense...
 		 */
 		if (!PE_parse_boot_argn("dtrace_dof_mode", &dtrace_dof_mode, sizeof (dtrace_dof_mode))) {
+#if CONFIG_EMBEDDED
+			/* Disable DOF mode by default for performance reasons */
+			dtrace_dof_mode = DTRACE_DOF_MODE_NEVER;
+#else
 			dtrace_dof_mode = DTRACE_DOF_MODE_LAZY_ON;
+#endif
 		}
 
 		/*
@@ -18306,6 +18419,10 @@ dtrace_postinit(void)
 
 	if (dtrace_module_loaded(&fake_kernel_kmod, 0) != 0) {
 		printf("dtrace_postinit: Could not register mach_kernel modctl\n");
+	}
+
+	if (!PE_parse_boot_argn("dtrace_provide_private_probes", &dtrace_provide_private_probes, sizeof (dtrace_provide_private_probes))) {
+			dtrace_provide_private_probes = 0;
 	}
 	
 	(void)OSKextRegisterKextsWithDTrace();

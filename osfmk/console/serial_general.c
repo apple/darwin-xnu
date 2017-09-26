@@ -54,7 +54,7 @@ serial_keyboard_init(void)
 	kern_return_t	result;
 	thread_t		thread;
 
-	if(!(serialmode & 2)) /* Leave if we do not want a serial console */
+	if(!(serialmode & SERIALMODE_INPUT)) /* Leave if we do not want a serial console */
 		return;
 
 	kprintf("Serial keyboard started\n");
@@ -130,3 +130,58 @@ switch_to_old_console(int old_console)
 	} else
 		cons_ops_index = ops;
 }
+
+void
+console_printbuf_state_init(struct console_printbuf_state * data, int write_on_newline, int can_block)
+{
+	if (data == NULL)
+		return;
+	bzero(data, sizeof(struct console_printbuf_state));
+	if (write_on_newline)
+		data->flags |= CONS_PB_WRITE_NEWLINE;
+	if (can_block)
+		data->flags |= CONS_PB_CANBLOCK;
+}
+
+void
+console_printbuf_putc(int ch, void * arg)
+{
+	struct console_printbuf_state * info = (struct console_printbuf_state *)arg;
+	info->total += 1;
+	if (info->pos < (SERIAL_CONS_BUF_SIZE - 1)) {
+		info->str[info->pos] = ch;
+		info->pos += 1;
+	} else {
+		/*
+		 * when len(line) > SERIAL_CONS_BUF_SIZE, we truncate the message
+		 * if boot-arg 'drain_uart_sync=1' is set, then
+		 * drain all the buffer right now and append new ch
+		 */
+		if (serialmode & SERIALMODE_SYNCDRAIN) {
+			info->str[info->pos] = '\0';
+			console_write(info->str, info->pos);
+			info->pos            = 0;
+			info->str[info->pos] = ch;
+			info->pos += 1;
+		}
+	}
+
+	info->str[info->pos] = '\0';
+	/* if newline, then try output to console */
+	if (ch == '\n' && info->flags & CONS_PB_WRITE_NEWLINE) {
+		console_write(info->str, info->pos);
+		info->pos            = 0;
+		info->str[info->pos] = '\0';
+	}
+}
+
+void
+console_printbuf_clear(struct console_printbuf_state * info) {
+	if (info->pos != 0) {
+		console_write(info->str, info->pos);
+	}
+	info->pos = 0;
+	info->str[info->pos] = '\0';
+	info->total = 0;
+}
+

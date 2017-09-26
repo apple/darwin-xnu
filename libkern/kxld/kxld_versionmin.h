@@ -58,6 +58,9 @@ struct kxld_versionmin {
 void kxld_versionmin_init_from_macho(KXLDversionmin *versionmin, struct version_min_command *src)
     __attribute__((nonnull, visibility("hidden")));
 
+void kxld_versionmin_init_from_build_cmd(KXLDversionmin *versionmin, struct build_version_command *src)
+    __attribute__((nonnull, visibility("hidden")));
+
 void kxld_versionmin_clear(KXLDversionmin *versionmin)
     __attribute__((nonnull, visibility("hidden")));
 
@@ -65,7 +68,7 @@ void kxld_versionmin_clear(KXLDversionmin *versionmin)
 * Accessors
 *******************************************************************************/
 
-u_long kxld_versionmin_get_macho_header_size(void)
+u_long kxld_versionmin_get_macho_header_size(const KXLDversionmin *versionmin)
     __attribute__((pure, visibility("hidden")));
 
 kern_return_t

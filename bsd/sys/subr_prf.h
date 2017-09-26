@@ -83,7 +83,7 @@
 #define TOSTR		0x00000008	/* output to string */
 #define TOLOGLOCKED	0x00000010	/* output to log (log lock held) */
 
-extern int prf(const char *fmt, va_list ap, int flags, struct tty *ttyp);
+extern int prf(const char *fmt, va_list ap, int flags, struct tty *ttyp) __printflike(1,0);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif	/* KERNEL_PRIVATE */

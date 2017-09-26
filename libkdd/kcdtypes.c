@@ -325,6 +325,8 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		_SUBTYPE(KC_ST_UINT8, struct thread_snapshot_v3, ths_rqos_override);
 		_SUBTYPE(KC_ST_UINT8, struct thread_snapshot_v3, ths_io_tier);
 		_SUBTYPE(KC_ST_UINT64, struct thread_snapshot_v3, ths_thread_t);
+		_SUBTYPE(KC_ST_UINT64, struct thread_snapshot_v4, ths_requested_policy);
+		_SUBTYPE(KC_ST_UINT64, struct thread_snapshot_v4, ths_effective_policy);
 
 		setup_type_definition(retval, type_id, i, "thread_snapshot");
 		break;
@@ -439,6 +441,13 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		i = 0;
 		setup_subtype_description(&subtypes[i++], KC_ST_UINT32, 0, "kernel_page_size");
 		setup_type_definition(retval, type_id, i, "kernel_page_size");
+		break;
+	}
+
+	case STACKSHOT_KCTYPE_THREAD_POLICY_VERSION: {
+		i = 0;
+		setup_subtype_description(&subtypes[i++], KC_ST_UINT32, 0, "thread_policy_version");
+		setup_type_definition(retval, type_id, i, "thread_policy_version");
 		break;
 	}
 
@@ -562,6 +571,46 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		setup_type_definition(retval, type_id, i, "thread_waitinfo");
 		break;
 	}
+
+	case STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT: {
+		i = 0;
+		_SUBTYPE(KC_ST_UINT64, struct thread_group_snapshot, tgs_id);
+		_SUBTYPE_ARRAY(KC_ST_CHAR, struct thread_group_snapshot, tgs_name, 16);
+		setup_type_definition(retval, type_id, i, "thread_group_snapshot");
+		break;
+	}
+
+	case STACKSHOT_KCTYPE_THREAD_GROUP: {
+		i = 0;
+		setup_subtype_description(&subtypes[i++], KC_ST_UINT64, 0, "thread_group");
+		setup_type_definition(retval, type_id, i, "thread_group");
+		break;
+	};
+
+	case STACKSHOT_KCTYPE_JETSAM_COALITION_SNAPSHOT: {
+		i = 0;
+		_SUBTYPE(KC_ST_UINT64, struct jetsam_coalition_snapshot, jcs_id);
+		_SUBTYPE(KC_ST_UINT64, struct jetsam_coalition_snapshot, jcs_flags);
+		_SUBTYPE(KC_ST_UINT64, struct jetsam_coalition_snapshot, jcs_thread_group);
+		_SUBTYPE(KC_ST_UINT64, struct jetsam_coalition_snapshot, jcs_leader_task_uniqueid);
+		setup_type_definition(retval, type_id, i, "jetsam_coalition_snapshot");
+		break;
+	 }
+
+	case STACKSHOT_KCTYPE_JETSAM_COALITION: {
+		i = 0;
+		setup_subtype_description(&subtypes[i++], KC_ST_UINT64, 0, "jetsam_coalition");
+		setup_type_definition(retval, type_id, i, "jetsam_coalition");
+		break;
+	};
+
+	case STACKSHOT_KCTYPE_INSTRS_CYCLES: {
+		i = 0;
+		_SUBTYPE(KC_ST_UINT64, struct instrs_cycles_snapshot, ics_instructions);
+		_SUBTYPE(KC_ST_UINT64, struct instrs_cycles_snapshot, ics_cycles);
+		setup_type_definition(retval, type_id, i, "instrs_cycles_snapshot");
+		break;
+	 }
 
 	case TASK_CRASHINFO_PROC_STARTTIME: {
 		i = 0;
@@ -735,6 +784,20 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		setup_type_definition(retval, type_id, i, "exit_reason_codesigning_info");
 
 		break;
+
+	case EXIT_REASON_WORKLOOP_ID: {
+		i = 0;
+		setup_subtype_description(&subtypes[i++], KC_ST_UINT64, 0, "exit_reason_workloop_id");
+		setup_type_definition(retval, type_id, i, "exit_reason_workloop_id");
+		break;
+	}
+
+	case EXIT_REASON_DISPATCH_QUEUE_NO: {
+		i = 0;
+		setup_subtype_description(&subtypes[i++], KC_ST_UINT64, 0, "exit_reason_dispatch_queue_no");
+		setup_type_definition(retval, type_id, i, "exit_reason_dispatch_queue_no");
+		break;
+	}
 
 	}
 

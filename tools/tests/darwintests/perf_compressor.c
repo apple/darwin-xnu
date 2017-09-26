@@ -50,17 +50,12 @@ void allocate_mostly_zero_pages(char **buf, int num_pages, int vmpgsize) {
 }
 
 void allocate_random_pages(char **buf, int num_pages, int vmpgsize) {
-	int fd, i;
-
-	fd = open("/dev/random", O_RDONLY);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(fd, "open /dev/random failed [%s]\n", strerror(errno));
+	int i;
 
 	for (i = 0; i < num_pages; i++) {
 		buf[i] = (char*)malloc((size_t)vmpgsize * sizeof(char));
-		T_QUIET; T_ASSERT_POSIX_SUCCESS(read(fd, buf[i], (size_t)vmpgsize),
-				"read from /dev/random failed [%s]\n", strerror(errno));
+		arc4random_buf((void*)buf[i], (size_t)vmpgsize);
 	}
-	close(fd);
 }
 
 // Gives us the compression ratio we see in the typical case (~2.7)

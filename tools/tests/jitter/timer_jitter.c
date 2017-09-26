@@ -49,6 +49,8 @@
 
 #include <libproc_internal.h>
 
+#include <os/tsd.h> /* private header for _os_cpu_number */
+
 typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY_FIXEDPRI } my_policy_type_t;
 
 #define DEFAULT_MAX_SLEEP_NS	2000000000ll /* Two seconds */
@@ -70,8 +72,6 @@ struct second_thread_args {
 	volatile uint64_t last_poke_time;
 	volatile int cpuno;
 };
-
-extern int cpu_number(void);
 
 void *
 second_thread(void *args);
@@ -390,7 +390,7 @@ main(int argc, char **argv)
 
 		if (wakeup_second_thread) {
 			secargs.last_poke_time = mach_absolute_time();
-			secargs.cpuno = cpu_number();
+			secargs.cpuno = _os_cpu_number();
 			OSMemoryBarrier();
 			kret = semaphore_signal(wakeup_semaphore);
 			if (kret != KERN_SUCCESS) {
@@ -465,7 +465,7 @@ second_thread(void *args)
 		}
 
 		wake_time = mach_absolute_time();
-		cpuno = cpu_number();
+		cpuno = _os_cpu_number();
 		if (wake_time < secargs->last_poke_time) {
 			/* Woke in past, unsynchronized mach_absolute_time()? */
 			

@@ -63,6 +63,8 @@
 #include <sys/queue.h>			/* for TAILQ macros */
 #include <sys/ev.h>
 #include <sys/cdefs.h>
+#include <sys/_types/_caddr_t.h>
+#include <sys/_types/_u_int.h>
 
 /*
  * Pipe buffer size, keep moderate in value, pipes take kva space.
@@ -167,7 +169,7 @@ struct pipe {
 
 #define PIPE_LOCK(pipe)		lck_mtx_lock(PIPE_MTX(pipe))
 #define PIPE_UNLOCK(pipe)	lck_mtx_unlock(PIPE_MTX(pipe))
-#define PIPE_LOCK_ASSERT(pipe, type)  lck_mtx_assert(PIPE_MTX(pipe), (type))
+#define PIPE_LOCK_ASSERT(pipe, type)  LCK_MTX_ASSERT(PIPE_MTX(pipe), (type))
 
 __BEGIN_DECLS
 void pipeinit(void);

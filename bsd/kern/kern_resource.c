@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -81,8 +81,6 @@
 #include <sys/malloc.h>
 #include <sys/proc_internal.h>
 #include <sys/kauth.h>
-#include <machine/spl.h>
-
 #include <sys/mount_internal.h>
 #include <sys/sysproto.h>
 
@@ -104,6 +102,9 @@
 #include <kern/clock.h>		/* for absolutetime_to_microtime() */
 #include <netinet/in.h>		/* for TRAFFIC_MGT_SO_* */
 #include <sys/socketvar.h>	/* for struct socket */
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
 
 #include <vm/vm_map.h>
 
@@ -111,6 +112,10 @@
 #include <sys/resource.h>
 #include <sys/priv.h>
 #include <IOKit/IOBSD.h>
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 int	donice(struct proc *curp, struct proc *chgp, int n);
 int	dosetrlimit(struct proc *p, u_int which, struct rlimit *limp);
@@ -128,7 +133,8 @@ int fill_task_rusage(task_t task, rusage_info_current *ri);
 void fill_task_billed_usage(task_t task, rusage_info_current *ri);
 int fill_task_io_rusage(task_t task, rusage_info_current *ri);
 int fill_task_qos_rusage(task_t task, rusage_info_current *ri);
-static void rusage_info_conversion(rusage_info_t ri_info, rusage_info_current *ri_current, int flavor);
+uint64_t get_task_logical_writes(task_t task);
+void fill_task_monotonic_rusage(task_t task, rusage_info_current *ri);
 
 int proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie);
 
@@ -583,7 +589,7 @@ static int
 proc_set_darwin_role(proc_t curp, proc_t targetp, int priority)
 {
 	int error = 0;
-	uint32_t flagsp;
+	uint32_t flagsp = 0;
 
 	kauth_cred_t ucred, target_cred;
 
@@ -762,16 +768,20 @@ do_background_socket(struct proc *p, thread_t thread)
 			fdp = p->p_fd;
 
 			for (i = 0; i < fdp->fd_nfiles; i++) {
-				struct socket       *sockp;
-
 				fp = fdp->fd_ofiles[i];
-				if (fp == NULL || (fdp->fd_ofileflags[i] & UF_RESERVED) != 0 ||
-				    FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_SOCKET) {
+				if (fp == NULL || (fdp->fd_ofileflags[i] & UF_RESERVED) != 0) {
 					continue;
 				}
-				sockp = (struct socket *)fp->f_fglob->fg_data;
-				socket_set_traffic_mgt_flags(sockp, TRAFFIC_MGT_SO_BACKGROUND);
-				sockp->so_background_thread = NULL;
+				if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_SOCKET) {
+					struct socket *sockp = (struct socket *)fp->f_fglob->fg_data;
+					socket_set_traffic_mgt_flags(sockp, TRAFFIC_MGT_SO_BACKGROUND);
+					sockp->so_background_thread = NULL;
+				}
+#if NECP
+				else if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_NETPOLICY) {
+					necp_set_client_as_background(p, fp, background);
+				}
+#endif /* NECP */
 			}
 		}
 	} else {
@@ -785,17 +795,23 @@ do_background_socket(struct proc *p, thread_t thread)
 			struct socket       *sockp;
 
 			fp = fdp->fd_ofiles[ i ];
-			if ( fp == NULL || (fdp->fd_ofileflags[ i ] & UF_RESERVED) != 0 ||
-			    FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_SOCKET ) {
+			if (fp == NULL || (fdp->fd_ofileflags[ i ] & UF_RESERVED) != 0) {
 				continue;
 			}
-			sockp = (struct socket *)fp->f_fglob->fg_data;
-			/* skip if only clearing this thread's sockets */
-			if ((thread) && (sockp->so_background_thread != thread)) {
-				continue;
+			if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_SOCKET) {
+				sockp = (struct socket *)fp->f_fglob->fg_data;
+				/* skip if only clearing this thread's sockets */
+				if ((thread) && (sockp->so_background_thread != thread)) {
+					continue;
+				}
+				socket_clear_traffic_mgt_flags(sockp, TRAFFIC_MGT_SO_BACKGROUND);
+				sockp->so_background_thread = NULL;
 			}
-			socket_clear_traffic_mgt_flags(sockp, TRAFFIC_MGT_SO_BACKGROUND);
-			sockp->so_background_thread = NULL;
+#if NECP
+			else if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_NETPOLICY) {
+				necp_set_client_as_background(p, fp, background);
+			}
+#endif /* NECP */
 		}
 	}
 
@@ -1509,9 +1525,15 @@ iopolicysys_disk(struct proc *p __unused, int cmd, int scope, int policy, struct
 			break;
 
 		case IOPOL_SCOPE_DARWIN_BG:
+#if CONFIG_EMBEDDED
+			/* Embedded doesn't want this as BG is always IOPOL_THROTTLE */
+			error = ENOTSUP;
+			goto out;
+#else /* CONFIG_EMBEDDED */
 			thread = THREAD_NULL;
 			policy_flavor = TASK_POLICY_DARWIN_BG_IOPOL;
 			break;
+#endif /* CONFIG_EMBEDDED */
 
 		default:
 			error = EINVAL;
@@ -1670,7 +1692,13 @@ gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor)
 	struct rusage_info_child *ri_child;
 
 	assert(p->p_stats != NULL);
+	memset(ru, 0, sizeof(*ru));
 	switch(flavor) {
+	case RUSAGE_INFO_V4:
+		ru->ri_logical_writes = get_task_logical_writes(p->task);
+		ru->ri_lifetime_max_phys_footprint = get_task_phys_footprint_lifetime_max(p->task);
+		fill_task_monotonic_rusage(p->task, ru);
+        /* fall through */
 
 	case RUSAGE_INFO_V3:
 		fill_task_qos_rusage(p->task, ru);
@@ -1705,131 +1733,57 @@ gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor)
 	}
 }
 
-static void
-rusage_info_conversion(rusage_info_t ri_info, rusage_info_current *ri_current, int flavor)
-{
-	struct rusage_info_v0 *ri_v0;
-	struct rusage_info_v1 *ri_v1;
-	struct rusage_info_v2 *ri_v2;
-
-	switch (flavor) {
-
-	case RUSAGE_INFO_V2:
-		ri_v2 = (struct rusage_info_v2 *)ri_info;
-		ri_v2->ri_diskio_bytesread = ri_current->ri_diskio_bytesread;
-		ri_v2->ri_diskio_byteswritten = ri_current->ri_diskio_byteswritten;
-		/* fall through */
-
-	case RUSAGE_INFO_V1:
-		ri_v1 = (struct rusage_info_v1 *)ri_info;
-		ri_v1->ri_child_user_time = ri_current->ri_child_user_time;
-		ri_v1->ri_child_system_time = ri_current->ri_child_system_time;
-		ri_v1->ri_child_pkg_idle_wkups = ri_current->ri_child_pkg_idle_wkups;
-		ri_v1->ri_child_interrupt_wkups = ri_current->ri_child_interrupt_wkups; 
-		ri_v1->ri_child_pageins = ri_current->ri_child_pageins;
-		ri_v1->ri_child_elapsed_abstime = ri_current->ri_child_elapsed_abstime;
-		/* fall through */
-
-	case RUSAGE_INFO_V0:
-		ri_v0 = (struct rusage_info_v0 *)ri_info;
-		memcpy(&ri_v0->ri_uuid[0], &ri_current->ri_uuid[0], sizeof(ri_v0->ri_uuid));	
-		ri_v0->ri_user_time = ri_current->ri_user_time;
-		ri_v0->ri_system_time = ri_current->ri_system_time;
-		ri_v0->ri_pkg_idle_wkups = ri_current->ri_pkg_idle_wkups;
-		ri_v0->ri_interrupt_wkups = ri_current->ri_interrupt_wkups;
-		ri_v0->ri_pageins = ri_current->ri_pageins;
-		ri_v0->ri_wired_size = ri_current->ri_wired_size;
-		ri_v0->ri_resident_size = ri_current->ri_resident_size;
-		ri_v0->ri_phys_footprint = ri_current->ri_phys_footprint;
-		ri_v0->ri_proc_start_abstime = ri_current->ri_proc_start_abstime;
-		ri_v0->ri_proc_exit_abstime = ri_current->ri_proc_exit_abstime;
-
-		break;
-	
-	default:
-		break;
-	}
-}
-
-
 int
 proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie)
 {
-	struct rusage_info_v0 ri_v0;
-	struct rusage_info_v1 ri_v1;
-	struct rusage_info_v2 ri_v2;
-	struct rusage_info_v3 ri_v3;
-
 	rusage_info_current ri_current;
 
 	int error = 0;
+	size_t size = 0;
 
 	switch (flavor) {
 	case RUSAGE_INFO_V0:
-		/*
-		 * If task is still alive, collect info from the live task itself.
-		 * Otherwise, look to the cached info in the zombie proc.
-		 */
-		if (p->p_ru == NULL) {
-			gather_rusage_info(p, &ri_current, flavor);
-			ri_current.ri_proc_exit_abstime = 0;
-			rusage_info_conversion(&ri_v0, &ri_current, flavor);
-		} else {
-			rusage_info_conversion(&ri_v0, &p->p_ru->ri, flavor);
-		}
-		error = copyout(&ri_v0, buffer, sizeof (ri_v0));
+		size = sizeof(struct rusage_info_v0);
 		break;
 
 	case RUSAGE_INFO_V1:
-		/*
-		 * If task is still alive, collect info from the live task itself.
-		 * Otherwise, look to the cached info in the zombie proc.
-		 */
-		if (p->p_ru == NULL) {
-			gather_rusage_info(p, &ri_current, flavor);
-			ri_current.ri_proc_exit_abstime = 0;
-			rusage_info_conversion(&ri_v1, &ri_current, flavor);
-		} else {
-			rusage_info_conversion(&ri_v1, &p->p_ru->ri, flavor);
-		}
-		error = copyout(&ri_v1, buffer, sizeof (ri_v1));
+		size = sizeof(struct rusage_info_v1);
 		break;
 
 	case RUSAGE_INFO_V2:
-		/*
-		 * If task is still alive, collect info from the live task itself.
-		 * Otherwise, look to the cached info in the zombie proc.
-		 */
-		if (p->p_ru == NULL) {
-			gather_rusage_info(p, &ri_current, flavor);
-			ri_current.ri_proc_exit_abstime = 0;
-			rusage_info_conversion(&ri_v2, &ri_current, flavor);
-		} else {
-			rusage_info_conversion(&ri_v2, &p->p_ru->ri, flavor);
-		}
-		error = copyout(&ri_v2, buffer, sizeof (ri_v2));
+		size = sizeof(struct rusage_info_v2);
 		break;
 
 	case RUSAGE_INFO_V3:
-		/*
-		 * If task is still alive, collect info from the live task itself.
-		 * Otherwise, look to the cached info in the zombie proc.
-		 */
-		if (p->p_ru == NULL) {
-			gather_rusage_info(p, &ri_v3, flavor);
-			ri_v3.ri_proc_exit_abstime = 0;
-		} else {
-			ri_v3 = p->p_ru->ri;
-		}
-		error = copyout(&ri_v3, buffer, sizeof (ri_v3));
+		size = sizeof(struct rusage_info_v3);
+		break;
+
+	case RUSAGE_INFO_V4:
+		size = sizeof(struct rusage_info_v4);
 		break;
 
 	default:
-		error = EINVAL;
-		break;
+		return EINVAL;
 	}
 
-	return (error);	
+	if(size == 0) {
+		return EINVAL;
+	}
+
+	 /*
+	 * If task is still alive, collect info from the live task itself.
+	 * Otherwise, look to the cached info in the zombie proc.
+	 */
+	if (p->p_ru == NULL) {
+		gather_rusage_info(p, &ri_current, flavor);
+		ri_current.ri_proc_exit_abstime = 0;
+		error = copyout(&ri_current, buffer, size);
+	} else {
+		ri_current = p->p_ru->ri;
+		error = copyout(&p->p_ru->ri, buffer, size);
+	}
+
+	return (error);
 }
 
 static int
@@ -1955,3 +1909,10 @@ int thread_selfusage(struct proc *p __unused, struct thread_selfusage_args *uap 
 
 	return (0);
 }
+
+#if !MONOTONIC
+int thread_selfcounts(__unused struct proc *p, __unused struct thread_selfcounts_args *uap, __unused int *ret_out)
+{
+	return ENOTSUP;
+}
+#endif /* !MONOTONIC */

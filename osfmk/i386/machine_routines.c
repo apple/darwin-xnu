@@ -65,6 +65,10 @@
 #define DBG(x...)
 #endif
 
+#if MONOTONIC
+#include <kern/monotonic.h>
+#endif /* MONOTONIC */
+
 extern void 	wakeup(void *);
 
 static int max_cpus_initialized = 0;
@@ -349,7 +353,7 @@ void ml_install_interrupt_handler(
 {
 	boolean_t current_state;
 
-	current_state = ml_get_interrupts_enabled();
+	current_state = ml_set_interrupts_enabled(FALSE);
 
 	PE_install_interrupt_handler(nub, source, target,
 	                             (IOInterruptHandler) handler, refCon);
@@ -612,6 +616,24 @@ ml_get_max_cpus(void)
         (void) ml_set_interrupts_enabled(current_state);
         return(machine_info.max_cpus);
 }
+
+boolean_t
+ml_wants_panic_trap_to_debugger(void)
+{
+	return FALSE;
+}
+
+void
+ml_panic_trap_to_debugger(__unused const char *panic_format_str,
+                          __unused va_list *panic_args,
+                          __unused unsigned int reason,
+                          __unused void *ctx,
+                          __unused uint64_t panic_options_mask,
+                          __unused unsigned long panic_caller)
+{
+	return;
+}
+
 /*
  *	Routine:        ml_init_lock_timeout
  *	Function:
@@ -656,7 +678,7 @@ ml_init_lock_timeout(void)
 	}
 
 #if DEVELOPMENT || DEBUG
-	reportphyreaddelayabs = LockTimeOut;
+	reportphyreaddelayabs = LockTimeOut >> 1;
 #endif
 	if (PE_parse_boot_argn("phyreadmaxus", &slto, sizeof (slto))) {
 		default_timeout_ns = slto * NSEC_PER_USEC;
@@ -823,6 +845,31 @@ vm_offset_t ml_stack_remaining(void)
 	}
 }
 
+#if KASAN
+vm_offset_t ml_stack_base(void);
+vm_size_t ml_stack_size(void);
+
+vm_offset_t
+ml_stack_base(void)
+{
+	if (ml_at_interrupt_context()) {
+		return current_cpu_datap()->cpu_int_stack_top - INTSTACK_SIZE;
+	} else {
+	    return current_thread()->kernel_stack;
+	}
+}
+
+vm_size_t
+ml_stack_size(void)
+{
+	if (ml_at_interrupt_context()) {
+	    return INTSTACK_SIZE;
+	} else {
+	    return kernel_stack_size;
+	}
+}
+#endif
+
 void
 kernel_preempt_check(void)
 {
@@ -928,4 +975,23 @@ void _enable_preemption(void) {
 
 void plctrace_disable(void) {
 	plctrace_enabled = 0;
+}
+
+static boolean_t ml_quiescing;
+
+void ml_set_is_quiescing(boolean_t quiescing)
+{
+    assert(FALSE == ml_get_interrupts_enabled());
+    ml_quiescing = quiescing;
+}
+
+boolean_t ml_is_quiescing(void)
+{
+    assert(FALSE == ml_get_interrupts_enabled());
+    return (ml_quiescing);
+}
+
+uint64_t ml_get_booter_memory_size(void)
+{
+    return (0);
 }

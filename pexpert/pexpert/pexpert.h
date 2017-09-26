@@ -51,6 +51,24 @@ typedef void *cpu_id_t;
 typedef void *cpu_id_t;
 #endif
 
+#if XNU_KERNEL_PRIVATE
+#if CONFIG_EMBEDDED
+extern struct embedded_panic_header *panic_info;
+extern vm_offset_t gPanicBase;
+extern unsigned int gPanicSize;
+
+/*
+ * If invoked with NULL first argument, return the max buffer size that can
+ * be saved in the second argument
+ */
+void PE_save_buffer_to_vram(
+	unsigned char *,
+	unsigned int *);
+
+#else /* CONFIG_EMBEDDED */
+extern struct macos_panic_header *panic_info;
+#endif /* CONFIG_EMBEDDED */
+#endif /* XNU_KERNEL_PRIVATE */
 
 void PE_enter_debugger(
 	const char *cause);
@@ -71,6 +89,21 @@ uint32_t PE_get_random_seed(
 uint32_t PE_i_can_has_debugger(
 	uint32_t *);
 
+#if defined(__arm__) || defined(__arm64__)
+void PE_mark_hwaccess(uint64_t thread);
+#endif /* defined(__arm__) || defined(__arm64__) */
+
+/* Return the offset of the specified address into the panic region */
+uint32_t PE_get_offset_into_panic_region(
+	char *location);
+
+/* Zeroes the panic header, sets the panic magic and initializes the header to be used */
+void PE_init_panicheader(
+	void);
+
+/* Updates the panic header during a nested panic */
+void PE_update_panicheader_nestedpanic(
+	void);
 
 #if KERNEL_PRIVATE
 
@@ -345,6 +378,16 @@ extern void pe_init_debug(void);
 
 extern boolean_t PE_imgsrc_mount_supported(void);
 
+#if defined(__arm__) || defined(__arm64__)
+typedef void (*perfmon_interrupt_handler_func)(cpu_id_t source);
+extern kern_return_t PE_cpu_perfmon_interrupt_install_handler(perfmon_interrupt_handler_func handler);
+extern void PE_cpu_perfmon_interrupt_enable(cpu_id_t target, boolean_t enable);
+
+extern void (*PE_arm_debug_panic_hook)(const char *str);
+#if DEVELOPMENT || DEBUG
+extern void PE_arm_debug_enable_trace(void);
+#endif
+#endif
 
 #if KERNEL_PRIVATE
 boolean_t PE_reboot_on_panic(void);

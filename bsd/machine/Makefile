@@ -20,7 +20,7 @@ KERNELFILES = \
 	disklabel.h \
 	byte_order.h  endian.h \
 	limits.h param.h   profile.h \
-	signal.h spl.h types.h \
+	signal.h types.h \
 	vmparam.h _types.h _limits.h _param.h \
 	_mcontext.h
 

@@ -35,7 +35,8 @@ PRIVATE_DATAFILES = \
 	tcp_debug.h \
 	tcp_var.h \
 	tcp_cache.h \
-	udp.h
+	udp.h \
+	in_stat.h
 
 PRIVATE_KERNELFILES = ${KERNELFILES} \
 	ip_ecn.h ip_encap.h

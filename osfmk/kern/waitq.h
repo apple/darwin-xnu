@@ -79,7 +79,17 @@ jenkins_hash(char *key, size_t length)
 }
 
 /* Opaque sizes and alignment used for struct verification */
-#if   __x86_64__
+#if __arm__ || __arm64__
+	#define WQ_OPAQUE_ALIGN   __BIGGEST_ALIGNMENT__
+	#define WQS_OPAQUE_ALIGN  __BIGGEST_ALIGNMENT__
+	#if __arm__
+		#define WQ_OPAQUE_SIZE   32
+		#define WQS_OPAQUE_SIZE  48
+	#else
+		#define WQ_OPAQUE_SIZE   40
+		#define WQS_OPAQUE_SIZE  56
+	#endif
+#elif __x86_64__
 	#define WQ_OPAQUE_ALIGN   8
 	#define WQS_OPAQUE_ALIGN  8
 	#define WQ_OPAQUE_SIZE   48
@@ -154,7 +164,11 @@ struct waitq {
 		waitq_isvalid:1, /* waitq structure is valid */
 		waitq_eventmask:_EVENT_MASK_BITS;
 		/* the wait queue set (set-of-sets) to which this queue belongs */
+#if __arm64__
+	hw_lock_bit_t	waitq_interlock;	/* interlock */
+#else
 	hw_lock_data_t	waitq_interlock;	/* interlock */
+#endif /* __arm64__ */
 
 	uint64_t waitq_set_id;
 	uint64_t waitq_prepost_id;
@@ -205,6 +219,15 @@ extern void waitq_invalidate_locked(struct waitq *wq);
 #define waitq_empty(wq) \
 	(queue_empty(&(wq)->waitq_queue))
 
+#if __arm64__
+
+#define waitq_held(wq) \
+	(hw_lock_bit_held(&(wq)->waitq_interlock, LCK_ILOCK))
+
+#define waitq_lock_try(wq) \
+	(hw_lock_bit_try(&(wq)->waitq_interlock, LCK_ILOCK))
+
+#else
 
 #define waitq_held(wq) \
 	(hw_lock_held(&(wq)->waitq_interlock))
@@ -212,12 +235,12 @@ extern void waitq_invalidate_locked(struct waitq *wq);
 #define waitq_lock_try(wq) \
 	(hw_lock_try(&(wq)->waitq_interlock))
 
+#endif /* __arm64__ */
 
 #define waitq_wait_possible(thread) \
 	((thread)->waitq == NULL)
 
 extern void waitq_lock(struct waitq *wq);
-extern void waitq_unlock(struct waitq *wq);
 
 #define waitq_set_lock(wqs)		waitq_lock(&(wqs)->wqset_q)
 #define waitq_set_unlock(wqs)		waitq_unlock(&(wqs)->wqset_q)
@@ -376,7 +399,7 @@ extern void waitq_set_deinit(struct waitq_set *wqset);
 
 extern kern_return_t waitq_set_free(struct waitq_set *wqset);
 
-#if defined(DEVELOPMENT) || defined(DEBUG)
+#if DEVELOPMENT || DEBUG
 #if CONFIG_WAITQ_DEBUG
 extern uint64_t wqset_id(struct waitq_set *wqset);
 
@@ -422,6 +445,7 @@ extern void waitq_set_clear_preposts(struct waitq_set *wqset);
  */
 extern uint64_t waitq_get_prepost_id(struct waitq *waitq);
 extern void     waitq_unlink_by_prepost_id(uint64_t wqp_id, struct waitq_set *wqset);
+extern struct waitq *waitq_lock_by_prepost_id(uint64_t wqp_id);
 
 /*
  * waitq attributes
@@ -506,6 +530,9 @@ waitq_wakeup64_identify(struct waitq    *waitq,
                         event64_t       wake_event,
                         wait_result_t   result,
                         int             priority);
+
+/* take the waitq lock */
+extern void waitq_unlock(struct waitq *wq);
 
 #endif /* XNU_KERNEL_PRIVATE */
 

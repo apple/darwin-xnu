@@ -48,76 +48,229 @@
 #include <prng/random.h>
 #include <corecrypto/ccdrbg.h>
 #include <corecrypto/ccsha1.h>
+#include <corecrypto/ccdigest.h>
+#include <corecrypto/ccsha2.h>
 
 #include <pexpert/pexpert.h>
 #include <console/serial_protos.h>
 #include <IOKit/IOPlatformExpert.h>
 
-static lck_grp_t *gPRNGGrp;
-static lck_attr_t *gPRNGAttr;
-static lck_grp_attr_t *gPRNGGrpAttr;
-static lck_mtx_t *gPRNGMutex = NULL;
+#if defined(__x86_64__)
+#include <i386/cpuid.h>
+
+static int rdseed_step(uint64_t *seed)
+{
+	uint8_t ok;
+	
+	asm volatile ("rdseed %0; setc %1" : "=r" (*seed), "=qm" (ok));
+	
+	return (int) ok;
+}
+
+static int rdseed_retry(uint64_t *seed, size_t nretries)
+{
+	size_t i;
+	
+	for (i = 0; i < nretries; i += 1) {
+		if (rdseed_step(seed)) {
+			return 1;
+		} else {
+			asm volatile ("pause");
+		}
+	}
+	
+	return 0;
+}
+
+static size_t rdseed_seed(void *buf, size_t nwords)
+{
+	uint64_t *buf_words;
+	size_t i;
+	
+	if (nwords > 8) {
+		nwords = 8;
+	}
+	
+	buf_words = buf;
+	for (i = 0; i < nwords; i += 1) {
+		if (!rdseed_retry(buf_words + i, 10)) {
+			return i;
+		}
+	}
+	
+	return nwords;
+}
+
+static int rdrand_step(uint64_t *rand)
+{
+	uint8_t ok;
+	
+	asm volatile ("rdrand %0; setc %1" : "=r" (*rand), "=qm" (ok));
+	
+	return (int) ok;
+}
+
+static int rdrand_retry(uint64_t *rand, size_t nretries)
+{
+	size_t i;
+	
+	for (i = 0; i < nretries; i += 1) {
+		if (rdrand_step(rand)) {
+			return 1;
+		}
+	}
+	
+	return 0;
+}
+
+static size_t rdrand_seed(void *buf, size_t nwords)
+{
+	size_t i;
+	uint64_t w;
+	uint8_t hash[CCSHA256_OUTPUT_SIZE];
+	const struct ccdigest_info *di = &ccsha256_ltc_di;
+	
+	ccdigest_di_decl(di, ctx);
+	ccdigest_init(di, ctx);
+	
+	for (i = 0; i < 1023; i += 1) {
+		if (!rdrand_retry(&w, 10)) {
+			nwords = 0;
+			goto out;
+		}
+		ccdigest_update(di, ctx, sizeof w, &w);
+	}
+	
+	ccdigest_final(di, ctx, hash);
+	
+	if (nwords > 2) {
+		nwords = 2;
+	}
+	
+	memcpy(buf, hash, nwords * sizeof (uint64_t));
+	
+out:
+	ccdigest_di_clear(di, ctx);
+	bzero(hash, sizeof hash);
+	bzero(&w, sizeof w);
+	
+	return nwords;
+}
+
+static void intel_entropysource(void *buf, size_t *nbytes)
+{
+	size_t nwords;
+	
+	/* only handle complete words */
+	assert(*nbytes % sizeof (uint64_t) == 0);
+	
+	nwords = (*nbytes) / sizeof (uint64_t);
+	if (cpuid_leaf7_features() & CPUID_LEAF7_FEATURE_RDSEED) {
+		nwords = rdseed_seed(buf, nwords);
+		*nbytes = nwords * sizeof (uint64_t);
+	} else if (cpuid_features() & CPUID_FEATURE_RDRAND) {
+		nwords = rdrand_seed(buf, nwords);
+		*nbytes = nwords * sizeof (uint64_t);
+	} else {
+		*nbytes = 0;
+	}
+}
+
+#endif
+
+typedef void (*entropysource)(void *buf, size_t *nbytes);
+
+static const entropysource entropysources[] = {
+	entropy_buffer_read,
+#if defined(__x86_64__)
+	intel_entropysource,
+#endif
+};
+
+static const size_t nsources = sizeof entropysources / sizeof entropysources[0];
+
+static size_t entropy_readall(void *buf, size_t nbytes_persource)
+{
+	uint8_t *buf_bytes = buf;
+	size_t i;
+	size_t nbytes_total = 0;
+	
+	for (i = 0; i < nsources; i += 1) {
+		size_t nbytes = nbytes_persource;
+		entropysources[i](buf_bytes, &nbytes);
+		bzero(buf_bytes + nbytes, nbytes_persource - nbytes);
+		nbytes_total += nbytes;
+		buf_bytes += nbytes_persource;
+	}
+	
+	return nbytes_total;
+}
+
+static struct {
+	lck_grp_t *group;
+	lck_attr_t *attrs;
+	lck_grp_attr_t *group_attrs;
+	lck_mtx_t *mutex;
+} lock;
 
 typedef struct prngContext {
-	struct ccdrbg_info	*infop;
-	struct ccdrbg_state	*statep;
-	uint64_t		bytes_generated;
-	uint64_t		bytes_reseeded;
+	struct ccdrbg_info *infop;
+	struct ccdrbg_state *statep;
+	uint64_t bytes_generated;
+	uint64_t bytes_reseeded;
 } *prngContextp;
 
 ccdrbg_factory_t prng_ccdrbg_factory = NULL;
 
-entropy_data_t	EntropyData = { .index_ptr = EntropyData.buffer };
-
-boolean_t		erandom_seed_set = FALSE;
-char			erandom_seed[EARLY_RANDOM_SEED_SIZE];
-typedef struct ccdrbg_state ccdrbg_state_t;
-uint8_t			master_erandom_state[EARLY_RANDOM_STATE_STATIC_SIZE];
-ccdrbg_state_t		*erandom_state[MAX_CPUS];
-struct ccdrbg_info	erandom_info;
-decl_simple_lock_data(,entropy_lock);
-
-struct ccdrbg_nisthmac_custom erandom_custom = {
-	.di = &ccsha1_eay_di,
-	.strictFIPS = 0,
+entropy_data_t EntropyData = {
+	.index_ptr = EntropyData.buffer
 };
 
-static void read_erandom(void *buffer, u_int numBytes);	/* Forward */
+static struct {
+	uint8_t seed[nsources][EARLY_RANDOM_SEED_SIZE];
+	size_t seedset;
+	uint8_t master_drbg_state[EARLY_RANDOM_STATE_STATIC_SIZE];
+	struct ccdrbg_state *drbg_states[MAX_CPUS];
+	struct ccdrbg_info drbg_info;
+	const struct ccdrbg_nisthmac_custom drbg_custom;
+} erandom = {
+	.drbg_custom = {
+		.di = &ccsha1_eay_di,
+		.strictFIPS = 0,
+	}
+};
+
+static void read_erandom(void *buf, uint32_t nbytes);
 
 void 
-entropy_buffer_read(char		*buffer,
-		    unsigned int	*count)
+entropy_buffer_read(void *buffer, size_t *count)
 {
-	boolean_t       current_state;
-	unsigned int    i, j;
+	boolean_t current_state;
+	unsigned int i, j;
 
-	if (!erandom_seed_set) {
+	if (!erandom.seedset) {
 		panic("early_random was never invoked");
 	}
 
-	if ((*count) > (ENTROPY_BUFFER_SIZE * sizeof(unsigned int)))
-		*count = ENTROPY_BUFFER_SIZE * sizeof(unsigned int);
+	if (*count > ENTROPY_BUFFER_BYTE_SIZE) {
+		*count = ENTROPY_BUFFER_BYTE_SIZE;
+	}
 
 	current_state = ml_set_interrupts_enabled(FALSE);
-#if defined (__x86_64__)
-	simple_lock(&entropy_lock);
-#endif
 
-	memcpy((char *) buffer, (char *) EntropyData.buffer, *count);
+	memcpy(buffer, EntropyData.buffer, *count);
 
+	/* Consider removing this mixing step rdar://problem/31668239 */
 	for (i = 0, j = (ENTROPY_BUFFER_SIZE - 1); i < ENTROPY_BUFFER_SIZE; j = i, i++)
 		EntropyData.buffer[i] = EntropyData.buffer[i] ^ EntropyData.buffer[j];
 
-#if defined (__x86_64__)
-	simple_unlock(&entropy_lock);
-#endif
 	(void) ml_set_interrupts_enabled(current_state);
 
 #if DEVELOPMENT || DEBUG
-	uint32_t	*word = (uint32_t *) (void *) buffer;
+	uint32_t *word = buffer;
 	/* Good for both 32-bit and 64-bit kernels. */
 	for (i = 0; i < ENTROPY_BUFFER_SIZE; i += 4)
-		/* 
+		/*
 		 * We use "EARLY" here so that we can grab early entropy on
 		 * ARM, where tracing is not started until after PRNG is
 		 * initialized.
@@ -136,7 +289,7 @@ entropy_buffer_read(char		*buffer,
  * This provides cryptographically secure randomness.
  * Each processor has its own generator instance.
  * It is seeded (lazily) with entropy provided by the Booter.
-*
+ *
  * For <rdar://problem/17292592> the algorithm switched from LCG to
  * NIST HMAC DBRG as follows:
  *  - When first called (on OSX this is very early while page tables are being
@@ -147,7 +300,7 @@ entropy_buffer_read(char		*buffer,
  *    The initial entropy is 16 bytes of boot entropy.
  *    The nonce is the first 8 bytes of entropy xor'ed with a timestamp
  *    from ml_get_timebase().
- *    The personalization data provided is null. 
+ *    The personalization data provided is null.
  *  - The first 64-bit random value is returned on the boot processor from
  *    an invocation of the ccdbrg_generate method.
  *  - Non-boot processor's DRBG state structures are allocated dynamically
@@ -157,7 +310,7 @@ entropy_buffer_read(char		*buffer,
  *    an 8-byte random value.  read_erandom() ensures that pre-emption is
  *    disabled and selects the DBRG state from the current processor.
  *    The ccdbrg_generate method is called for the required random output.
- *    If this method returns CCDRBG_STATUS_NEED_RESEED, the erandom_seed buffer
+ *    If this method returns CCDRBG_STATUS_NEED_RESEED, the erandom.seed buffer
  *    is re-filled with kernel-harvested entropy and the ccdbrg_reseed method is
  *    called with this new entropy. The kernel panics if a reseed fails.
  */
@@ -169,11 +322,10 @@ early_random(void)
 	uint64_t	nonce;
 	int		rc;
 	int		ps;
-	ccdrbg_state_t	*state;
+	struct ccdrbg_state *state;
 
-	if (!erandom_seed_set) {
-		simple_lock_init(&entropy_lock,0);
-		erandom_seed_set = TRUE;
+	if (!erandom.seedset) {
+		erandom.seedset = 1;
 		cnt = PE_get_random_seed((unsigned char *) EntropyData.buffer,
 					 sizeof(EntropyData.buffer));
 
@@ -186,34 +338,23 @@ early_random(void)
 				sizeof(EntropyData.buffer), cnt);
 		}		
 
-		/*
-		 * Use some of the supplied entropy as a basis for early_random;
-		 * reuse is ugly, but simplifies things. Ideally, we would guard
-		 * early random values well enough that it isn't safe to attack
-		 * them, but this cannot be guaranteed; thus, initial entropy
-		 * can be considered 8 bytes weaker for a given boot if any
-		 * early random values are conclusively determined.
-		 *
-		 * early_random_seed could be larger than EntopyData.buffer...
-		 * but it won't be.
-		 */
-		bcopy(EntropyData.buffer, &erandom_seed, sizeof(erandom_seed));
+		entropy_readall(&erandom.seed, EARLY_RANDOM_SEED_SIZE);
 
 		/* Init DRBG for NIST HMAC */
-		ccdrbg_factory_nisthmac(&erandom_info, &erandom_custom);
-		assert(erandom_info.size <= sizeof(master_erandom_state));
-		state = (ccdrbg_state_t *) master_erandom_state;
-		erandom_state[0] = state;
+		ccdrbg_factory_nisthmac(&erandom.drbg_info, &erandom.drbg_custom);
+		assert(erandom.drbg_info.size <= sizeof(erandom.master_drbg_state));
+		state = (struct ccdrbg_state *) erandom.master_drbg_state;
+		erandom.drbg_states[master_cpu] = state;
 
 		/*
 		 * Init our DBRG from the boot entropy and a timestamp as nonce
 		 * and the cpu number as personalization.
 		 */
-		assert(sizeof(erandom_seed) > sizeof(nonce));
+		assert(sizeof(erandom.seed) > sizeof(nonce));
 		nonce = ml_get_timebase();
 		ps = 0;				/* boot cpu */
-		rc = ccdrbg_init(&erandom_info, state,
-				 sizeof(erandom_seed), erandom_seed,
+		rc = ccdrbg_init(&erandom.drbg_info, state,
+				 sizeof(erandom.seed), erandom.seed,
 				 sizeof(nonce), &nonce,
 				 sizeof(ps), &ps);
 		cc_clear(sizeof(nonce), &nonce);
@@ -221,9 +362,9 @@ early_random(void)
 			panic("ccdrbg_init() returned %d", rc);
 
 		/* Generate output */
-		rc = ccdrbg_generate(&erandom_info, state,
-				     sizeof(result), &result,
-				     0, NULL);
+		rc = ccdrbg_generate(&erandom.drbg_info, state,
+					 sizeof(result), &result,
+					 0, NULL);
 		if (rc != CCDRBG_STATUS_OK)
 			panic("ccdrbg_generate() returned %d", rc);
 	
@@ -240,29 +381,28 @@ read_erandom(void *buffer, u_int numBytes)
 {
 	int		cpu;
 	int		rc;
-	uint32_t	cnt;
-	ccdrbg_state_t	*state;
+	size_t nbytes;
+	struct ccdrbg_state *state;
 
 	mp_disable_preemption();
 	cpu = cpu_number();
-	state = erandom_state[cpu];
+	state = erandom.drbg_states[cpu];
 	assert(state);
-	while (TRUE) {
+	for (;;) {
 		/* Generate output */
-		rc = ccdrbg_generate(&erandom_info, state,
-				     numBytes, buffer,
-				     0, NULL);
+		rc = ccdrbg_generate(&erandom.drbg_info, state,
+					 numBytes, buffer,
+					 0, NULL);
 		if (rc == CCDRBG_STATUS_OK)
 			break;
 		if (rc == CCDRBG_STATUS_NEED_RESEED) {
 			/* It's time to reseed. Get more entropy */
-			cnt = sizeof(erandom_seed);
-			entropy_buffer_read(erandom_seed, &cnt);
-			assert(cnt == sizeof(erandom_seed));
-			rc = ccdrbg_reseed(&erandom_info, state,
-					   sizeof(erandom_seed), erandom_seed,
+			nbytes = entropy_readall(erandom.seed, EARLY_RANDOM_SEED_SIZE);
+			assert(nbytes >= EARLY_RANDOM_SEED_SIZE);
+			rc = ccdrbg_reseed(&erandom.drbg_info, state,
+					   sizeof(erandom.seed), erandom.seed,
 					   0, NULL);
-			cc_clear(sizeof(erandom_seed), erandom_seed);
+			cc_clear(sizeof(erandom.seed), erandom.seed);
 			if (rc == CCDRBG_STATUS_OK)
 				continue;
 			panic("read_erandom reseed error %d\n", rc);
@@ -275,8 +415,8 @@ read_erandom(void *buffer, u_int numBytes)
 void
 read_frandom(void *buffer, u_int numBytes)
 {
-	char		*cp = (char *) buffer;
-	int		nbytes;
+	uint8_t *buffer_bytes = buffer;
+	int nbytes;
 
 	/*
 	 * Split up into requests for blocks smaller than
@@ -285,8 +425,8 @@ read_frandom(void *buffer, u_int numBytes)
 	 */
 	while (numBytes) {
 		nbytes = MIN(numBytes, PAGE_SIZE);
-		read_erandom(cp, nbytes);
-		cp += nbytes;
+		read_erandom(buffer_bytes, nbytes);
+		buffer_bytes += nbytes;
 		numBytes -= nbytes;
 	}
 }
@@ -307,28 +447,28 @@ prng_cpu_init(int cpu)
 {	
 	uint64_t	nonce;
 	int		rc;
-	ccdrbg_state_t	*state;
+	struct ccdrbg_state *state;
 	prngContextp	pp;
 
 	/*
 	 * Allocate state and initialize DBRG state for early_random()
 	 * for this processor, if necessary.
 	 */
-	if (erandom_state[cpu] == NULL) {
+	if (erandom.drbg_states[cpu] == NULL) {
 		
-		state = kalloc(erandom_info.size);
+		state = kalloc(erandom.drbg_info.size);
 		if (state == NULL) {
 			panic("prng_init kalloc failed\n");
 		}
-		erandom_state[cpu] = state;
+		erandom.drbg_states[cpu] = state;
 
 		/*
 		 * Init our DBRG from boot entropy, nonce as timestamp
 		 * and use the cpu number as the personalization parameter.
 		 */
 		nonce = ml_get_timebase();
-		rc = ccdrbg_init(&erandom_info, state,
-				 sizeof(erandom_seed), erandom_seed,
+		rc = ccdrbg_init(&erandom.drbg_info, state,
+				 sizeof(erandom.seed), erandom.seed,
 				 sizeof(nonce), &nonce,
 				 sizeof(cpu), &cpu);
 		cc_clear(sizeof(nonce), &nonce);
@@ -342,13 +482,13 @@ prng_cpu_init(int cpu)
 		return;
 	}
 
-	assert(gPRNGMutex == NULL);		/* Once only, please */
+	assert(lock.mutex == NULL);		/* Once only, please */
 
 	/* make a mutex to control access */
-	gPRNGGrpAttr = lck_grp_attr_alloc_init();
-	gPRNGGrp     = lck_grp_alloc_init("random", gPRNGGrpAttr);
-	gPRNGAttr    = lck_attr_alloc_init();
-	gPRNGMutex   = lck_mtx_alloc_init(gPRNGGrp, gPRNGAttr);
+	lock.group_attrs = lck_grp_attr_alloc_init();
+	lock.group = lck_grp_alloc_init("random", lock.group_attrs);
+	lock.attrs = lck_attr_alloc_init();
+	lock.mutex = lck_mtx_alloc_init(lock.group, lock.attrs);
 
 	pp = kalloc(sizeof(*pp));
 	if (pp == NULL)
@@ -363,10 +503,13 @@ prng_cpu_init(int cpu)
 	master_prng_context() = pp;
 }
 
-static ccdrbg_info_t *
+static struct ccdrbg_info *
 prng_infop(prngContextp pp)
 {
-	lck_mtx_assert(gPRNGMutex, LCK_MTX_ASSERT_OWNED);
+	uint8_t buf[nsources][ENTROPY_BUFFER_BYTE_SIZE];
+	size_t nbytes;
+	
+	lck_mtx_assert(lock.mutex, LCK_MTX_ASSERT_OWNED);
 
 	/* Usual case: the info is all set */
 	if (pp->infop)
@@ -379,18 +522,18 @@ prng_infop(prngContextp pp)
 	while (prng_ccdrbg_factory == NULL ) {
 		wait_result_t	wait_result;
 		assert_wait_timeout((event_t) &prng_ccdrbg_factory, TRUE,
-				    10, NSEC_PER_USEC);
-		lck_mtx_unlock(gPRNGMutex);
+					10, NSEC_PER_USEC);
+		lck_mtx_unlock(lock.mutex);
 		wait_result = thread_block(THREAD_CONTINUE_NULL);
 		if (wait_result == THREAD_TIMED_OUT)
 			panic("prng_ccdrbg_factory registration timeout");
-		lck_mtx_lock(gPRNGMutex);
+		lck_mtx_lock(lock.mutex);
 	}
 	/* Check we didn't lose the set-up race */
 	if (pp->infop)
 		return pp->infop;
 
-	pp->infop = (ccdrbg_info_t *) kalloc(sizeof(ccdrbg_info_t));
+	pp->infop = (struct ccdrbg_info *) kalloc(sizeof(struct ccdrbg_info));
 	if (pp->infop == NULL)
 		panic("Unable to allocate prng info");
 
@@ -400,32 +543,29 @@ prng_infop(prngContextp pp)
 	if (pp->statep == NULL)
 		panic("Unable to allocate prng state");
 
-	char rdBuffer[ENTROPY_BUFFER_BYTE_SIZE];
-	unsigned int bytesToInput = sizeof(rdBuffer);
-
-	entropy_buffer_read(rdBuffer, &bytesToInput);
+	nbytes = entropy_readall(buf, ENTROPY_BUFFER_BYTE_SIZE);
 
 	(void) ccdrbg_init(pp->infop, pp->statep,
-			   bytesToInput, rdBuffer,
+			   nbytes, buf,
 			   0, NULL,
 			   0, NULL);
-	cc_clear(sizeof(rdBuffer), rdBuffer);
+	cc_clear(sizeof (buf), buf);
 	return pp->infop;
 }
 
 static void
 Reseed(prngContextp pp)
 {
-	char		rdBuffer[ENTROPY_BUFFER_BYTE_SIZE];
-	unsigned int	bytesToInput = sizeof(rdBuffer);
-
-	entropy_buffer_read(rdBuffer, &bytesToInput);
+	uint8_t buf[nsources][ENTROPY_BUFFER_BYTE_SIZE];
+	size_t nbytes;
+	
+	nbytes = entropy_readall(buf, ENTROPY_BUFFER_BYTE_SIZE);
 
 	PRNG_CCDRBG((void) ccdrbg_reseed(pp->infop, pp->statep,
-					 bytesToInput, rdBuffer,
+					 nbytes, buf,
 					 0, NULL)); 
 
-	cc_clear(sizeof(rdBuffer), rdBuffer);
+	cc_clear(sizeof (buf), buf);
 	pp->bytes_reseeded = pp->bytes_generated;
 }
 
@@ -434,11 +574,11 @@ Reseed(prngContextp pp)
 void
 read_random(void* buffer, u_int numbytes)
 {
-	prngContextp	pp;
-	ccdrbg_info_t	*infop;
-	int		ccdrbg_err;
+	prngContextp pp;
+	struct ccdrbg_info *infop;
+	int ccdrbg_err;
 
-	lck_mtx_lock(gPRNGMutex);
+	lck_mtx_lock(lock.mutex);
 
 	pp = current_prng_context();
 	infop = prng_infop(pp);
@@ -446,11 +586,11 @@ read_random(void* buffer, u_int numbytes)
 	/*
 	 * Call DRBG, reseeding and retrying if requested.
 	 */
-	while (TRUE) {
+	for (;;) {
 		PRNG_CCDRBG(
 			ccdrbg_err = ccdrbg_generate(infop, pp->statep,
-						     numbytes, buffer,
-						     0, NULL));
+							 numbytes, buffer,
+							 0, NULL));
 		if (ccdrbg_err == CCDRBG_STATUS_OK)
 			break;
 		if (ccdrbg_err == CCDRBG_STATUS_NEED_RESEED) {
@@ -461,7 +601,7 @@ read_random(void* buffer, u_int numbytes)
 	}
 
 	pp->bytes_generated += numbytes;
-	lck_mtx_unlock(gPRNGMutex);
+	lck_mtx_unlock(lock.mutex);
 }
 
 int
@@ -471,7 +611,7 @@ write_random(void* buffer, u_int numbytes)
 	int		retval = 0;
 	prngContextp	pp;
 
-	lck_mtx_lock(gPRNGMutex);
+	lck_mtx_lock(lock.mutex);
 
 	pp = current_prng_context();
 
@@ -479,10 +619,10 @@ write_random(void* buffer, u_int numbytes)
 			  bytesToInput, rdBuffer, 0, NULL) != 0)
 		retval = EIO;
 
-	lck_mtx_unlock(gPRNGMutex);
+	lck_mtx_unlock(lock.mutex);
 	return retval;
 #else
-#pragma  unused(buffer, numbytes)
-    return 0;
+#pragma unused(buffer, numbytes)
+	return 0;
 #endif
 }

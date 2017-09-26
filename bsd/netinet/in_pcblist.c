@@ -71,6 +71,7 @@
 
 #include <net/route.h>
 #include <net/if_var.h>
+#include <net/ntstat.h>
 
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
@@ -269,22 +270,22 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 	if (proto == IPPROTO_TCP)
 		item_size += ROUNDUP64(sizeof (struct xtcpcb_n));
 
+	if (req->oldptr == USER_ADDR_NULL) {
+		n = pcbinfo->ipi_count;
+		req->oldidx = 2 * (sizeof (xig)) + (n + n/8 + 1) * item_size;
+		return 0;
+	}
+
+	if (req->newptr != USER_ADDR_NULL) {
+		return EPERM;
+	}
+
+
 	/*
 	 * The process of preparing the PCB list is too time-consuming and
 	 * resource-intensive to repeat twice on every request.
 	 */
 	lck_rw_lock_exclusive(pcbinfo->ipi_lock);
-	if (req->oldptr == USER_ADDR_NULL) {
-		n = pcbinfo->ipi_count;
-		req->oldidx = 2 * (sizeof (xig)) + (n + n/8) * item_size;
-		goto done;
-	}
-
-	if (req->newptr != USER_ADDR_NULL) {
-		error = EPERM;
-		goto done;
-	}
-
 	/*
 	 * OK, now we're committed to doing something.
 	 */
@@ -303,7 +304,7 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 	/*
 	 * We are done if there is no pcb
 	 */
-	if (n == 0) {
+	if (xig.xig_count == 0) {
 		goto done;
 	}
 
@@ -375,8 +376,12 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 				    inp->inp_ppcb, xt);
 			}
 			error = SYSCTL_OUT(req, buf, item_size);
+			if (error) {
+				break;
+			}
 		}
 	}
+
 	if (!error) {
 		/*
 		 * Give the user an updated idea of our state.
@@ -394,6 +399,7 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 	}
 done:
 	lck_rw_done(pcbinfo->ipi_lock);
+
 	if (inp_list != NULL)
 		FREE(inp_list, M_TEMP);
 	if (buf != NULL)
@@ -517,7 +523,7 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 		port = ntohs(inp->inp_lport);
 		if (port == 0)
 			continue;
-		bit_set(bitfield, port);
+		bitstr_set(bitfield, port);
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
 }

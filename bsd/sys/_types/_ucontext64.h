@@ -26,11 +26,19 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _STRUCT_UCONTEXT64
+
+#include <sys/cdefs.h> /* __DARWIN_UNIX03 */
+
 #if __DARWIN_UNIX03
 #define _STRUCT_UCONTEXT64	struct __darwin_ucontext64
 #else /* !__DARWIN_UNIX03 */
 #define _STRUCT_UCONTEXT64	struct ucontext64
 #endif /* __DARWIN_UNIX03 */
+
+#include <machine/types.h> /* __darwin_size_t */
+#include <machine/_mcontext.h> /* _STRUCT_MCONTEXT */
+#include <sys/_types.h> /* __darwin_sigset_t */
+
 _STRUCT_UCONTEXT64
 {
 	int                     uc_onstack;

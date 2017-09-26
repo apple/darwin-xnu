@@ -124,12 +124,14 @@ int shared_region_persistence = 0;	/* no by default */
 /* delay before reclaiming an unused shared region */
 int shared_region_destroy_delay = 120; /* in seconds */
 
+#ifndef CONFIG_EMBEDDED
 /* 
  * Only one cache gets to slide on Desktop, since we can't
  * tear down slide info properly today and the desktop actually 
  * produces lots of shared caches.
  */
 boolean_t shared_region_completed_slide = FALSE;
+#endif
 
 /* this lock protects all the shared region data structures */
 lck_grp_t *vm_shared_region_lck_grp;
@@ -642,6 +644,14 @@ vm_shared_region_create(
 	/* figure out the correct settings for the desired environment */
 	if (is_64bit) {
 		switch (cputype) {
+#if defined(__arm64__)
+		case CPU_TYPE_ARM64:
+			base_address = SHARED_REGION_BASE_ARM64;
+			size = SHARED_REGION_SIZE_ARM64;
+			pmap_nesting_start = SHARED_REGION_NESTING_BASE_ARM64;
+			pmap_nesting_size = SHARED_REGION_NESTING_SIZE_ARM64;
+			break;
+#elif !defined(__arm__)
 		case CPU_TYPE_I386:
 			base_address = SHARED_REGION_BASE_X86_64;
 			size = SHARED_REGION_SIZE_X86_64;
@@ -654,6 +664,7 @@ vm_shared_region_create(
 			pmap_nesting_start = SHARED_REGION_NESTING_BASE_PPC64;
 			pmap_nesting_size = SHARED_REGION_NESTING_SIZE_PPC64;
 			break;
+#endif
 		default:
 			SHARED_REGION_TRACE_ERROR(
 				("shared_region: create: unknown cpu type %d\n",
@@ -664,6 +675,15 @@ vm_shared_region_create(
 		}
 	} else {
 		switch (cputype) {
+#if defined(__arm__) || defined(__arm64__)
+		case CPU_TYPE_ARM:
+		case CPU_TYPE_ARM64:
+			base_address = SHARED_REGION_BASE_ARM;
+			size = SHARED_REGION_SIZE_ARM;
+			pmap_nesting_start = SHARED_REGION_NESTING_BASE_ARM;
+			pmap_nesting_size = SHARED_REGION_NESTING_SIZE_ARM;
+			break;
+#else
 		case CPU_TYPE_I386:
 			base_address = SHARED_REGION_BASE_I386;
 			size = SHARED_REGION_SIZE_I386;
@@ -676,6 +696,7 @@ vm_shared_region_create(
 			pmap_nesting_start = SHARED_REGION_NESTING_BASE_PPC;
 			pmap_nesting_size = SHARED_REGION_NESTING_SIZE_PPC;
 			break;
+#endif
 		default:
 			SHARED_REGION_TRACE_ERROR(
 				("shared_region: create: unknown cpu type %d\n",
@@ -698,10 +719,35 @@ vm_shared_region_create(
 		goto done;
 	}
 
+#if	defined(__arm__) || defined(__arm64__)
+	{
+		struct pmap *pmap_nested;
+
+		pmap_nested = pmap_create(NULL, 0, is_64bit);
+		if (pmap_nested != PMAP_NULL) {
+			pmap_set_nested(pmap_nested);
+			sub_map = vm_map_create(pmap_nested, 0, size, TRUE);
+#if defined(__arm64__)
+			if (is_64bit ||
+			    page_shift_user32 == SIXTEENK_PAGE_SHIFT) {
+				/* enforce 16KB alignment of VM map entries */
+				vm_map_set_page_shift(sub_map,
+						      SIXTEENK_PAGE_SHIFT);
+			}
+#elif (__ARM_ARCH_7K__ >= 2) && defined(PLATFORM_WatchOS)
+			/* enforce 16KB alignment for watch targets with new ABI */
+			vm_map_set_page_shift(sub_map, SIXTEENK_PAGE_SHIFT);
+#endif /* __arm64__ */
+		} else {
+			sub_map = VM_MAP_NULL;
+		}
+	}
+#else
 	/* create a VM sub map and its pmap */
 	sub_map = vm_map_create(pmap_create(NULL, 0, is_64bit),
 				0, size,
 				TRUE);
+#endif
 	if (sub_map == VM_MAP_NULL) {
 		ipc_port_release_send(mem_entry_port);
 		kfree(shared_region, sizeof (*shared_region));
@@ -753,6 +799,9 @@ vm_shared_region_create(
 	si->slide_info_size = 0;
 	si->slide_info_entry = NULL;
 
+	/* Initialize UUID */
+	memset(&shared_region->sr_uuid, '\0', sizeof(shared_region->sr_uuid));
+	shared_region->sr_uuid_copied = FALSE;
 done:
 	if (shared_region) {
 		SHARED_REGION_TRACE_INFO(
@@ -803,7 +852,6 @@ vm_shared_region_destroy(
 	mem_entry = (vm_named_entry_t) shared_region->sr_mem_entry->ip_kobject;
 	assert(mem_entry->is_sub_map);
 	assert(!mem_entry->internal);
-	assert(!mem_entry->is_pager);
 	assert(!mem_entry->is_copy);
 	map = mem_entry->backing.map;
 
@@ -1044,8 +1092,19 @@ vm_shared_region_map_file(
 	struct shared_file_mapping_np	*mapping_to_slide = NULL;
 	mach_vm_offset_t	first_mapping = (mach_vm_offset_t) -1;
 	vm_map_offset_t		lowest_unnestable_addr = 0;
+	vm_map_kernel_flags_t	vmk_flags;
 
 
+#if __arm64__
+	if ((shared_region->sr_64bit ||
+	     page_shift_user32 == SIXTEENK_PAGE_SHIFT) &&
+	    ((slide & SIXTEENK_PAGE_MASK) != 0)) {
+		printf("FOURK_COMPAT: %s: rejecting mis-aligned slide 0x%x\n",
+		       __FUNCTION__, slide);
+		kr = KERN_INVALID_ARGUMENT;
+		goto done;
+	}
+#endif /* __arm64__ */
 
 	kr = KERN_SUCCESS;
 
@@ -1096,6 +1155,8 @@ vm_shared_region_map_file(
 	/* get the VM object associated with the file to be mapped */
 	file_object = memory_object_control_to_vm_object(file_control);
 
+	assert(file_object);
+
 	/* establish the mappings */
 	for (i = 0; i < mappings_count; i++) {
 		SHARED_REGION_TRACE_INFO(
@@ -1143,6 +1204,9 @@ vm_shared_region_map_file(
 		target_address =
 			mappings[i].sfm_address - sr_base_address;
 
+		vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+		vmk_flags.vmkf_already = TRUE;
+
 		/* establish that mapping, OK if it's "already" there */
 		if (map_port == MACH_PORT_NULL) {
 			/*
@@ -1163,7 +1227,9 @@ vm_shared_region_map_file(
 					vm_map_round_page(mappings[i].sfm_size,
 							  VM_MAP_PAGE_MASK(sr_map)),
 					0,
-					VM_FLAGS_FIXED | VM_FLAGS_ALREADY,
+					VM_FLAGS_FIXED,
+					vmk_flags,
+					VM_KERN_MEMORY_NONE,
 					object,
 					0,
 					TRUE,
@@ -1179,7 +1245,9 @@ vm_shared_region_map_file(
 				vm_map_round_page(mappings[i].sfm_size,
 						  VM_MAP_PAGE_MASK(sr_map)),
 				0,
-				VM_FLAGS_FIXED | VM_FLAGS_ALREADY,
+				VM_FLAGS_FIXED,
+				vmk_flags,
+				VM_KERN_MEMORY_NONE,
 				map_port,
 				mappings[i].sfm_file_offset,
 				TRUE,
@@ -1312,6 +1380,30 @@ vm_shared_region_map_file(
 	    shared_region->sr_first_mapping == (mach_vm_offset_t) -1) {
 		shared_region->sr_first_mapping = first_mapping;
 	}
+
+
+	/* copy in the shared region UUID to the shared region structure */
+	if (kr == KERN_SUCCESS && !shared_region->sr_uuid_copied) {
+		 int error = copyin((shared_region->sr_base_address + shared_region->sr_first_mapping +
+					 offsetof(struct _dyld_cache_header, uuid)),
+				 (char *)&shared_region->sr_uuid,
+				 sizeof(shared_region->sr_uuid));
+		 if (error == 0) {
+			shared_region->sr_uuid_copied = TRUE;
+		 } else {
+#if DEVELOPMENT || DEBUG
+			panic("shared_region: copyin_UUID(sr_base_addr:0x%016llx sr_first_mapping:0x%016llx "
+				"offset:0x%016llx size:0x%016llx) failed with %d\n",
+				 (long long)shared_region->sr_base_address,
+				 (long long)shared_region->sr_first_mapping,
+				 (long long)offsetof(struct _dyld_cache_header, uuid),
+				 (long long)sizeof(shared_region->sr_uuid),
+				 error);
+#endif /* DEVELOPMENT || DEBUG */
+			shared_region->sr_uuid_copied = FALSE;
+		 }
+	}
+
 	/* we're done working on that shared region */
 	shared_region->sr_mapping_in_progress = FALSE;
 	thread_wakeup((event_t) &shared_region->sr_mapping_in_progress);
@@ -1409,6 +1501,8 @@ vm_shared_region_enter(
 			mapping_size,
 			0,
 			VM_FLAGS_FIXED,
+			VM_MAP_KERNEL_FLAGS_NONE,
+			VM_KERN_MEMORY_NONE,
 			sr_handle,
 			sr_offset,
 			TRUE,
@@ -1459,7 +1553,9 @@ vm_shared_region_enter(
 			&target_address,
 			mapping_size,
 			0,
-			(VM_FLAGS_FIXED | VM_MAKE_TAG(VM_MEMORY_SHARED_PMAP)),
+			VM_FLAGS_FIXED,
+			VM_MAP_KERNEL_FLAGS_NONE,
+			VM_MEMORY_SHARED_PMAP,
 			sr_handle,
 			sr_offset,
 			TRUE,
@@ -1498,6 +1594,8 @@ vm_shared_region_enter(
 			mapping_size,
 			0,
 			VM_FLAGS_FIXED,
+			VM_MAP_KERNEL_FLAGS_NONE,
+			VM_KERN_MEMORY_NONE,
 			sr_handle,
 			sr_offset,
 			TRUE,
@@ -2146,6 +2244,7 @@ vm_commpage_text_init(void)
 	commpage_text64_location = (user64_addr_t) (_COMM_PAGE64_TEXT_START + offset);
 
 	commpage_text_populate();
+#elif defined(__arm64__) || defined(__arm__)
 #else
 #error Unknown architecture.
 #endif /* __i386__ || __x86_64__ */
@@ -2201,10 +2300,23 @@ vm_commpage_enter(
 	task_t		task,
 	boolean_t	is64bit)
 {
+#if	defined(__arm__)
+#pragma unused(is64bit)
+	(void)task;
+	(void)map;
+	return KERN_SUCCESS;
+#elif 	defined(__arm64__)
+#pragma unused(is64bit)
+	(void)task;
+	(void)map;
+	pmap_insert_sharedpage(vm_map_pmap(map));
+	return KERN_SUCCESS;
+#else
 	ipc_port_t		commpage_handle, commpage_text_handle;
 	vm_map_offset_t		commpage_address, objc_address, commpage_text_address;
 	vm_map_size_t		commpage_size, objc_size, commpage_text_size;
 	int			vm_flags;
+	vm_map_kernel_flags_t	vmk_flags;
 	kern_return_t		kr;
 
 	SHARED_REGION_TRACE_DEBUG(
@@ -2214,7 +2326,9 @@ vm_commpage_enter(
 
 	commpage_text_size = _COMM_PAGE_TEXT_AREA_LENGTH;
 	/* the comm page is likely to be beyond the actual end of the VM map */
-	vm_flags = VM_FLAGS_FIXED | VM_FLAGS_BEYOND_MAX;
+	vm_flags = VM_FLAGS_FIXED;
+	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+	vmk_flags.vmkf_beyond_max = TRUE;
 
 	/* select the appropriate comm page for this task */
 	assert(! (is64bit ^ vm_map_is_64bit(map)));
@@ -2237,10 +2351,11 @@ vm_commpage_enter(
 		commpage_text_address = (vm_map_offset_t) commpage_text32_location;
 	}
 
+    vm_tag_t tag = VM_KERN_MEMORY_NONE;
 	if ((commpage_address & (pmap_nesting_size_min - 1)) == 0 &&
 	    (commpage_size & (pmap_nesting_size_min - 1)) == 0) {
 		/* the commpage is properly aligned or sized for pmap-nesting */
-		vm_flags |= VM_MAKE_TAG(VM_MEMORY_SHARED_PMAP);
+		tag = VM_MEMORY_SHARED_PMAP;
 	}
 	/* map the comm page in the task's address space */
 	assert(commpage_handle != IPC_PORT_NULL);
@@ -2250,6 +2365,8 @@ vm_commpage_enter(
 		commpage_size,
 		0,
 		vm_flags,
+		vmk_flags,
+		tag,
 		commpage_handle,
 		0,
 		FALSE,
@@ -2274,6 +2391,8 @@ vm_commpage_enter(
 		commpage_text_size,
 		0,
 		vm_flags,
+		vmk_flags,
+		tag,
 		commpage_text_handle,
 		0,
 		FALSE,
@@ -2300,7 +2419,9 @@ vm_commpage_enter(
 			&objc_address,
 			objc_size,
 			0,
-			VM_FLAGS_FIXED | VM_FLAGS_BEYOND_MAX,
+			VM_FLAGS_FIXED,
+			vmk_flags,
+			tag,
 			IPC_PORT_NULL,
 			0,
 			FALSE,
@@ -2322,6 +2443,7 @@ vm_commpage_enter(
 		 (void *)VM_KERNEL_ADDRPERM(map),
 		 (void *)VM_KERNEL_ADDRPERM(task), kr));
 	return kr;
+#endif
 }
 
 int
@@ -2357,7 +2479,9 @@ vm_shared_region_slide(uint32_t slide,
 		vm_shared_region_sleep(&sr->sr_slide_in_progress, THREAD_UNINT);
 	}
 	if (sr->sr_slid
+#ifndef CONFIG_EMBEDDED
 			|| shared_region_completed_slide
+#endif
 			) {
 		vm_shared_region_unlock();
 
@@ -2421,7 +2545,9 @@ done:
 		 * Therefore, take a dangling reference to prevent teardown.  
 		 */
 		sr->sr_ref_count++; 
+#ifndef CONFIG_EMBEDDED
 		shared_region_completed_slide = TRUE;
+#endif
 	}
 	vm_shared_region_unlock();
 

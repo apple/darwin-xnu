@@ -27,5 +27,6 @@
  */
 #ifndef _GID_T 
 #define _GID_T 
+#include <sys/_types.h> /* __darwin_gid_t */
 typedef __darwin_gid_t	gid_t; 
 #endif 

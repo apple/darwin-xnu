@@ -73,14 +73,13 @@
 
 #include <kern/assert.h>
 #include <sys/kdebug.h>
-#include <machine/spl.h>
-
 #include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
 #include <nfs/nfs.h>
 
 #include <vm/vm_protos.h>
 
+#include <vfs/vfs_disk_conditioner.h>
 
 void
 vnode_pager_throttle()
@@ -93,13 +92,10 @@ vnode_pager_throttle()
 		throttle_lowpri_io(1);
 }
 
-
 boolean_t
 vnode_pager_isSSD(vnode_t vp)
 {
-	if (vp->v_mount->mnt_kern_flag & MNTK_SSD)
-		return (TRUE);
-	return (FALSE);
+	return disk_conditioner_mount_is_ssd(vp->v_mount);
 }
 
 #if CONFIG_IOSCHED
@@ -251,7 +247,7 @@ u_int32_t vnode_trim (
 		 * in each call to ensure that the entire range is covered.
 		 */
 		error = VNOP_BLOCKMAP (vp, current_offset, remaining_length, 
-				&io_blockno, &io_bytecount, NULL, VNODE_READ, NULL);
+				&io_blockno, &io_bytecount, NULL, VNODE_READ | VNODE_BLOCKMAP_NO_TRACK, NULL);
 
 		if (error) {
 			goto trim_exit;
@@ -367,7 +363,7 @@ vnode_pageout(struct vnode *vp,
 		else
 			request_flags = UPL_UBC_PAGEOUT | UPL_RET_ONLY_DIRTY;
 		
-	        if (ubc_create_upl(vp, f_offset, size, &upl, &pl, request_flags) != KERN_SUCCESS) {
+	        if (ubc_create_upl_kernel(vp, f_offset, size, &upl, &pl, request_flags, VM_KERN_MEMORY_FILE) != KERN_SUCCESS) {
 			result    = PAGER_ERROR;
 			error_ret = EINVAL;
 			goto out;
@@ -601,7 +597,7 @@ vnode_pagein(
 			}
 			goto out;
 		}
-	        ubc_create_upl(vp, f_offset, size, &upl, &pl, UPL_UBC_PAGEIN | UPL_RET_ONLY_ABSENT);
+	        ubc_create_upl_kernel(vp, f_offset, size, &upl, &pl, UPL_UBC_PAGEIN | UPL_RET_ONLY_ABSENT, VM_KERN_MEMORY_FILE);
 
 		if (upl == (upl_t)NULL) {
 		        result =  PAGER_ABSENT;

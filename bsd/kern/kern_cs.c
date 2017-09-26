@@ -84,6 +84,7 @@ const int cs_enforcement_enable = 1;
 const int cs_library_val_enable = 1;
 #else /* !SECURE_KERNEL */
 int cs_enforcement_panic=0;
+int cs_relax_platform_task_ports = 0;
 
 #if CONFIG_ENFORCE_SIGNED_CODE
 #define DEFAULT_CS_ENFORCEMENT_ENABLE 1
@@ -120,6 +121,7 @@ SYSCTL_INT(_vm, OID_AUTO, cs_library_validation, CTLFLAG_RW | CTLFLAG_LOCKED, &c
 #endif /* !SECURE_KERNEL */
 
 int panic_on_cs_killed = 0;
+
 void
 cs_init(void)
 {
@@ -139,6 +141,10 @@ cs_init(void)
 		PE_parse_boot_argn("cs_enforcement_panic", &panic, sizeof(panic));
 		cs_enforcement_panic = (panic != 0);
 	}
+
+	PE_parse_boot_argn("cs_relax_platform_task_ports",
+			&cs_relax_platform_task_ports,
+			sizeof(cs_relax_platform_task_ports));
 
 	PE_parse_boot_argn("cs_debug", &cs_debug, sizeof (cs_debug));
 
@@ -180,7 +186,9 @@ cs_allow_invalid(struct proc *p)
 	{
 		p->p_csflags |= CS_DEBUGGED;
 	}
+	
 	proc_unlock(p);
+	
 	vm_map_switch_protect(get_task_map(p->task), FALSE);
 #endif
 	return (p->p_csflags & (CS_KILL | CS_HARD)) == 0;
@@ -379,6 +387,18 @@ csblob_get_flags(struct cs_blob *blob)
 }
 
 /*
+ * Function: csblob_get_hashtype
+ *
+ * Description: This function returns the hash type for a given blob
+*/
+
+uint8_t
+csblob_get_hashtype(struct cs_blob const * const blob)
+{
+    return blob->csb_hashtype != NULL ? cs_hash_type(blob->csb_hashtype) : 0;
+}
+
+/*
  * Function: csproc_get_blob
  *
  * Description: This function returns the cs_blob
@@ -453,6 +473,18 @@ csblob_get_cdhash(struct cs_blob *csblob)
 	return csblob->csb_cdhash;
 }
 
+/*
+ * Function: csblob_get_signer_type
+ *
+ * Description: This function returns the signer type
+ *		as an integer
+ */
+unsigned int
+csblob_get_signer_type(struct cs_blob *csblob)
+{
+	return csblob->csb_signer_type;
+}
+
 void *
 csblob_entitlements_dictionary_copy(struct cs_blob *csblob)
 {
@@ -485,6 +517,24 @@ csproc_get_teamid(struct proc *p)
 	    return NULL;
 
 	return csblob_get_teamid(csblob);
+}
+
+/*
+ * Function: csproc_get_signer_type 
+ *
+ * Description: This function returns the signer type
+ *		of the process p
+*/
+unsigned int
+csproc_get_signer_type(struct proc *p)
+{
+	struct cs_blob *csblob;
+
+	csblob = csproc_get_blob(p);
+	if (csblob == NULL)
+	    return CS_SIGNER_TYPE_UNKNOWN;
+
+	return csblob_get_signer_type(csblob);
 }
 
 /*
@@ -533,6 +583,26 @@ csproc_get_platform_path(struct proc *p)
 
 	return (csblob == NULL) ? 0 : csblob->csb_platform_path;
 }
+
+#if DEVELOPMENT || DEBUG
+void
+csproc_clear_platform_binary(struct proc *p)
+{
+	struct cs_blob *csblob = csproc_get_blob(p);
+
+	if (csblob == NULL) {
+		return;
+	}
+
+	if (cs_debug) {
+		printf("clearing platform binary on proc/task: pid = %d\n", p->p_pid);
+	}
+
+	csblob->csb_platform_binary = 0;
+	csblob->csb_platform_path = 0;
+	task_set_platform_binary(proc_task(p), FALSE);
+}
+#endif
 
 /*
  * Function: csproc_get_prod_signed
@@ -612,6 +682,46 @@ csfg_get_cdhash(struct fileglob *fg, uint64_t offset, size_t *cdhash_size)
 }
 
 /*
+ * Function: csfg_get_signer_type
+ *
+ * Description: This returns the signer type
+ * 		for the fileglob fg
+ */
+unsigned int
+csfg_get_signer_type(struct fileglob *fg)
+{
+	struct ubc_info *uip;
+	unsigned int signer_type = CS_SIGNER_TYPE_UNKNOWN;
+	vnode_t vp;
+
+	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
+		return CS_SIGNER_TYPE_UNKNOWN;
+	
+	vp = (struct vnode *)fg->fg_data;
+	if (vp == NULL)
+		return CS_SIGNER_TYPE_UNKNOWN;
+
+	vnode_lock(vp);
+	if (!UBCINFOEXISTS(vp))
+		goto out;
+	
+	uip = vp->v_ubcinfo;
+	if (uip == NULL)
+		goto out;
+	
+	if (uip->cs_blobs == NULL)
+		goto out;
+
+	/* It is OK to extract the signer type from the first blob,
+	   because all blobs of a vnode must have the same signer type. */	
+	signer_type = uip->cs_blobs->csb_signer_type;
+out:
+	vnode_unlock(vp);
+
+	return signer_type;
+}
+
+/*
  * Function: csfg_get_teamid
  *
  * Description: This returns a pointer to
@@ -666,11 +776,11 @@ csfg_get_prod_signed(struct fileglob *fg)
 	int prod_signed = 0;
 
 	if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE)
-		return NULL;
+		return 0;
 	
 	vp = (struct vnode *)fg->fg_data;
 	if (vp == NULL)
-		return NULL;
+		return 0;
 
 	vnode_lock(vp);
 	if (!UBCINFOEXISTS(vp))

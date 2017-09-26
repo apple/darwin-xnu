@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -83,11 +83,16 @@
 #include <net/if.h>
 #include <net/route.h>
 #include <net/ntstat.h>
+#include <net/nwk_wq.h>
+#if NECP
+#include <net/necp.h>
+#endif /* NECP */
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip6.h>
+#include <netinet/in_arp.h>
 
 #if INET6
 #include <netinet6/ip6_var.h>
@@ -208,7 +213,7 @@
 
 extern void kdp_set_gateway_mac(void *gatewaymac);
 
-__private_extern__ struct rtstat rtstat  = { 0, 0, 0, 0, 0 };
+__private_extern__ struct rtstat rtstat  = { 0, 0, 0, 0, 0, 0 };
 struct radix_node_head *rt_tables[AF_MAX+1];
 
 decl_lck_mtx_data(, rnh_lock_data);	/* global routing tables mutex */
@@ -224,7 +229,7 @@ static lck_grp_attr_t	*rte_mtx_grp_attr;
 
 int rttrash = 0;		/* routes not in table but not freed */
 
-unsigned int rte_debug;
+unsigned int rte_debug = 0;
 
 /* Possible flags for rte_debug */
 #define	RTD_DEBUG	0x1	/* enable or disable rtentry debug facility */
@@ -319,6 +324,7 @@ static void rtfree_common(struct rtentry *, boolean_t);
 static void rte_if_ref(struct ifnet *, int);
 static void rt_set_idleref(struct rtentry *);
 static void rt_clear_idleref(struct rtentry *);
+static void route_event_callback(void *);
 static void rt_str4(struct rtentry *, char *, uint32_t, char *, uint32_t);
 #if INET6
 static void rt_str6(struct rtentry *, char *, uint32_t, char *, uint32_t);
@@ -413,6 +419,8 @@ route_init(void)
 #if INET6
 	_CASSERT(offsetof(struct route, ro_rt) ==
 	    offsetof(struct route_in6, ro_rt));
+	_CASSERT(offsetof(struct route, ro_lle) ==
+	    offsetof(struct route_in6, ro_lle));
 	_CASSERT(offsetof(struct route, ro_srcia) ==
 	    offsetof(struct route_in6, ro_srcia));
 	_CASSERT(offsetof(struct route, ro_flags) ==
@@ -699,7 +707,7 @@ sa_trim(struct sockaddr *sa, int skip)
  */
 struct sockaddr *
 rtm_scrub(int type, int idx, struct sockaddr *hint, struct sockaddr *sa,
-    void *buf, uint32_t buflen, kauth_cred_t *credp, uint32_t rtm_hint_flags)
+    void *buf, uint32_t buflen, kauth_cred_t *credp)
 {
 	struct sockaddr_storage *ss = (struct sockaddr_storage *)buf;
 	struct sockaddr *ret = sa;
@@ -782,8 +790,7 @@ rtm_scrub(int type, int idx, struct sockaddr *hint, struct sockaddr *sa,
 		/* fallthrough */
 	}
 	case RTAX_IFP: {
-		if (sa->sa_family == AF_LINK && credp &&
-		    (rtm_hint_flags & RTMF_HIDE_LLADDR)) {
+		if (sa->sa_family == AF_LINK && credp) {
 			struct sockaddr_dl *sdl = SDL(buf);
 			const void *bytes;
 			size_t size;
@@ -893,7 +900,7 @@ rtalloc_ign_common_locked(struct route *ro, uint32_t ignore,
 void
 rtalloc_ign(struct route *ro, uint32_t ignore)
 {
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
 	rtalloc_ign_common_locked(ro, ignore, IFSCOPE_NONE);
 	lck_mtx_unlock(rnh_lock);
@@ -902,7 +909,7 @@ rtalloc_ign(struct route *ro, uint32_t ignore)
 void
 rtalloc_scoped_ign(struct route *ro, uint32_t ignore, unsigned int ifscope)
 {
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
 	rtalloc_ign_common_locked(ro, ignore, ifscope);
 	lck_mtx_unlock(rnh_lock);
@@ -1039,7 +1046,7 @@ struct rtentry *
 rtalloc1(struct sockaddr *dst, int report, uint32_t ignflags)
 {
 	struct rtentry *entry;
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
 	entry = rtalloc1_locked(dst, report, ignflags);
 	lck_mtx_unlock(rnh_lock);
@@ -1051,7 +1058,7 @@ rtalloc1_scoped(struct sockaddr *dst, int report, uint32_t ignflags,
     unsigned int ifscope)
 {
 	struct rtentry *entry;
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
 	entry = rtalloc1_scoped_locked(dst, report, ignflags, ifscope);
 	lck_mtx_unlock(rnh_lock);
@@ -1073,7 +1080,7 @@ rtfree_common(struct rtentry *rt, boolean_t locked)
 {
 	struct radix_node_head *rnh;
 
-	lck_mtx_assert(rnh_lock, locked ?
+	LCK_MTX_ASSERT(rnh_lock, locked ?
 	    LCK_MTX_ASSERT_OWNED : LCK_MTX_ASSERT_NOTOWNED);
 
 	/*
@@ -1119,7 +1126,7 @@ rtfree_common(struct rtentry *rt, boolean_t locked)
 	 */
 	RT_CONVERT_LOCK(rt);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	/* Negative refcnt must never happen */
 	if (rt->rt_refcnt != 0) {
@@ -1154,6 +1161,7 @@ rtfree_common(struct rtentry *rt, boolean_t locked)
 		struct rtentry *rt_parent;
 		struct ifaddr *rt_ifa;
 
+		rt->rt_flags |= RTF_DEAD;
 		if (rt->rt_nodes->rn_flags & (RNF_ACTIVE | RNF_ROOT)) {
 			panic("rt %p freed while in radix tree\n", rt);
 			/* NOTREACHED */
@@ -1189,11 +1197,15 @@ rtfree_common(struct rtentry *rt, boolean_t locked)
 			rt->rt_llinfo = NULL;
 		}
 
+		/* Destroy eventhandler lists context */
+		eventhandler_lists_ctxt_destroy(&rt->rt_evhdlr_ctxt);
+
 		/*
 		 * Route is no longer in the tree and refcnt is 0;
 		 * we have exclusive access, so destroy it.
 		 */
 		RT_UNLOCK(rt);
+		rte_lock_destroy(rt);
 
 		if (rt_parent != NULL)
 			rtfree_locked(rt_parent);
@@ -1216,7 +1228,6 @@ rtfree_common(struct rtentry *rt, boolean_t locked)
 		/*
 		 * and the rtentry itself of course
 		 */
-		rte_lock_destroy(rt);
 		rte_free(rt);
 	} else {
 		/*
@@ -1289,6 +1300,7 @@ rtref(struct rtentry *p)
 {
 	RT_LOCK_ASSERT_HELD(p);
 
+	VERIFY((p->rt_flags & RTF_DEAD) == 0);
 	if (++p->rt_refcnt == 0) {
 		panic("%s(%p) bad refcnt\n", __func__, p);
 		/* NOTREACHED */
@@ -1321,7 +1333,7 @@ rtref_audit(struct rtentry_dbg *rte)
 void
 rtsetifa(struct rtentry *rt, struct ifaddr *ifa)
 {
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	RT_LOCK_ASSERT_HELD(rt);
 
@@ -1363,7 +1375,7 @@ rtredirect(struct ifnet *ifp, struct sockaddr *dst, struct sockaddr *gateway,
 	struct sockaddr_storage ss;
 	int af = src->sa_family;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
 
 	/*
@@ -1554,7 +1566,7 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 	struct rtentry *rt = NULL;
 	struct sockaddr_storage dst_ss, gw_ss;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	/*
 	 * Just in case the sockaddr passed in by the caller
@@ -1734,7 +1746,7 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 
 #define	senderr(x) { error = x; goto bad; }
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	/*
 	 * Find the correct routing tree to use for this Address Family
 	 */
@@ -1785,6 +1797,8 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 	switch (req) {
 	case RTM_DELETE: {
 		struct rtentry *gwrt = NULL;
+		boolean_t was_router = FALSE;
+		uint32_t old_rt_refcnt = 0;
 		/*
 		 * Remove the item from the tree and return it.
 		 * Complain if it is not there and do no more processing.
@@ -1798,6 +1812,7 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		rt = (struct rtentry *)rn;
 
 		RT_LOCK(rt);
+		old_rt_refcnt = rt->rt_refcnt;
 		rt->rt_flags &= ~RTF_UP;
 		/*
 		 * Release any idle reference count held on the interface
@@ -1824,9 +1839,20 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		 * Clear RTF_ROUTER if it's set.
 		 */
 		if (rt->rt_flags & RTF_ROUTER) {
+			was_router = TRUE;
 			VERIFY(rt->rt_flags & RTF_HOST);
 			rt->rt_flags &= ~RTF_ROUTER;
 		}
+
+		/*
+		 * Enqueue work item to invoke callback for this route entry
+		 *
+		 * If the old count is 0, it implies that last reference is being
+		 * removed and there's no one listening for this route event.
+		 */
+		if (old_rt_refcnt != 0)
+			route_event_enqueue_nwk_wq_entry(rt, NULL,
+			    ROUTE_ENTRY_DELETED, NULL, TRUE);
 
 		/*
 		 * Now search what's left of the subtree for any cloned
@@ -1837,6 +1863,15 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 			RT_UNLOCK(rt);
 			rnh->rnh_walktree_from(rnh, dst, rt_mask(rt),
 			    rt_fixdelete, rt);
+			RT_LOCK(rt);
+		}
+
+		if (was_router) {
+			struct route_event rt_ev;
+			route_event_init(&rt_ev, rt, NULL, ROUTE_LLENTRY_DELETED);
+			RT_UNLOCK(rt);
+			(void) rnh->rnh_walktree(rnh,
+			    route_event_walktree, (void *)&rt_ev);
 			RT_LOCK(rt);
 		}
 
@@ -1877,6 +1912,16 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 			set_primary_ifscope(rt_key(rt)->sa_family,
 			    IFSCOPE_NONE);
 		}
+
+#if NECP
+		/*
+		 * If this is a change in a default route, update
+		 * necp client watchers to re-evaluate
+		 */
+		if (SA_DEFAULT(rt_key(rt))) {
+			necp_update_all_clients();
+		}
+#endif /* NECP */
 
 		RT_UNLOCK(rt);
 
@@ -2008,10 +2053,15 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		if (ifa == NULL)
 			senderr(ENETUNREACH);
 makeroute:
+		/*
+		 * We land up here for both RTM_RESOLVE and RTM_ADD
+		 * when we decide to create a route.
+		 */
 		if ((rt = rte_alloc()) == NULL)
 			senderr(ENOBUFS);
 		Bzero(rt, sizeof(*rt));
 		rte_lock_init(rt);
+		eventhandler_lists_ctxt_init(&rt->rt_evhdlr_ctxt);
 		getmicrotime(&caltime);
 		rt->base_calendartime = caltime.tv_sec;
 		rt->base_uptime = net_uptime();
@@ -2172,6 +2222,16 @@ makeroute:
 			    rt->rt_ifp->if_index);
 		}
 
+#if NECP
+		/*
+		 * If this is a change in a default route, update
+		 * necp client watchers to re-evaluate
+		 */
+		if (SA_DEFAULT(rt_key(rt))) {
+			necp_update_all_clients();
+		}
+#endif /* NECP */
+
 		/*
 		 * actually return a resultant rtentry and
 		 * give the caller a single reference.
@@ -2225,7 +2285,7 @@ rtrequest(int req, struct sockaddr *dst, struct sockaddr *gateway,
     struct sockaddr *netmask, int flags, struct rtentry **ret_nrt)
 {
 	int error;
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
 	error = rtrequest_locked(req, dst, gateway, netmask, flags, ret_nrt);
 	lck_mtx_unlock(rnh_lock);
@@ -2238,7 +2298,7 @@ rtrequest_scoped(int req, struct sockaddr *dst, struct sockaddr *gateway,
     unsigned int ifscope)
 {
 	int error;
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
 	error = rtrequest_scoped_locked(req, dst, gateway, netmask, flags,
 	    ret_nrt, ifscope);
@@ -2259,7 +2319,7 @@ rt_fixdelete(struct radix_node *rn, void *vp)
 	struct rtentry *rt = (struct rtentry *)rn;
 	struct rtentry *rt0 = vp;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	RT_LOCK(rt);
 	if (rt->rt_parent == rt0 &&
@@ -2300,7 +2360,7 @@ rt_fixchange(struct radix_node *rn, void *vp)
 	u_char *xk1, *xm1, *xk2, *xmp;
 	int i, len;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	RT_LOCK(rt);
 
@@ -2394,7 +2454,7 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 	}
 
 	rnh = rt_tables[dst->sa_family];
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	/*
@@ -2546,6 +2606,16 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 			    rt->rt_ifp->if_index);
 		}
 
+#if NECP
+		/*
+		 * If this is a change in a default route, update
+		 * necp client watchers to re-evaluate
+		 */
+		if (SA_DEFAULT(dst)) {
+			necp_update_all_clients();
+		}
+#endif /* NECP */
+
 		/*
 		 * Tell the kernel debugger about the new default gateway
 		 * if the gateway route uses the primary interface, or
@@ -2647,7 +2717,7 @@ rt_set_gwroute(struct rtentry *rt, struct sockaddr *dst, struct rtentry *gwrt)
 {
 	boolean_t gwrt_isrouter;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	if (gwrt != NULL)
@@ -2833,7 +2903,7 @@ rt_lookup_common(boolean_t lookup_only, boolean_t coarse, struct sockaddr *dst,
 #endif
 	VERIFY(!coarse || ifscope == IFSCOPE_NONE);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 #if INET6
 	/*
 	 * While we have rnh_lock held, see if we need to schedule the timer.
@@ -3109,7 +3179,7 @@ rtinit(struct ifaddr *ifa, int cmd, int flags)
 {
 	int error;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 
 	lck_mtx_lock(rnh_lock);
 	error = rtinit_locked(ifa, cmd, flags);
@@ -3137,7 +3207,7 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 	 * changing (e.g. in_ifinit), so it is safe to access its
 	 * ifa_{dst}addr (here and down below) without locking.
 	 */
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (flags & RTF_HOST) {
 		dst = ifa->ifa_dstaddr;
@@ -3681,6 +3751,10 @@ route_copyout(struct route *dst, const struct route *src, size_t length)
 	if (dst->ro_rt != NULL)
 		RT_ADDREF(dst->ro_rt);
 
+	/* Hold one reference for the local copy of struct lle */
+	if (dst->ro_lle != NULL)
+		LLE_ADDREF(dst->ro_lle);
+
 	/* Hold one reference for the local copy of struct ifaddr */
 	if (dst->ro_srcia != NULL)
 		IFA_ADDREF(dst->ro_srcia);
@@ -3689,8 +3763,18 @@ route_copyout(struct route *dst, const struct route *src, size_t length)
 void
 route_copyin(struct route *src, struct route *dst, size_t length)
 {
-	/* No cached route at the destination? */
+	/*
+	 * No cached route at the destination?
+	 * If none, then remove old references if present
+	 * and copy entire src route.
+	 */
 	if (dst->ro_rt == NULL) {
+		/*
+		 * Ditch the cached link layer reference (dst)
+		 * since we're about to take everything there is in src
+		 */
+		if (dst->ro_lle != NULL)
+			LLE_REMREF(dst->ro_lle);
 		/*
 		 * Ditch the address in the cached copy (dst) since
 		 * we're about to take everything there is in src.
@@ -3698,42 +3782,78 @@ route_copyin(struct route *src, struct route *dst, size_t length)
 		if (dst->ro_srcia != NULL)
 			IFA_REMREF(dst->ro_srcia);
 		/*
-		 * Copy everything (rt, srcia, flags, dst) from src; the
+		 * Copy everything (rt, ro_lle, srcia, flags, dst) from src; the
 		 * references to rt and/or srcia were held at the time
 		 * of storage and are kept intact.
 		 */
 		bcopy(src, dst, length);
-	} else if (src->ro_rt != NULL) {
-		/*
-		 * If the same, update srcia and flags, and ditch the route
-		 * in the local copy.  Else ditch the one that is currently
-		 * cached, and cache the new route.
-		 */
-		if (dst->ro_rt == src->ro_rt) {
-			dst->ro_flags = src->ro_flags;
-			if (dst->ro_srcia != src->ro_srcia) {
-				if (dst->ro_srcia != NULL)
-					IFA_REMREF(dst->ro_srcia);
-				dst->ro_srcia = src->ro_srcia;
-			} else if (src->ro_srcia != NULL) {
-				IFA_REMREF(src->ro_srcia);
-			}
-			rtfree(src->ro_rt);
-		} else {
-			rtfree(dst->ro_rt);
+		goto done;
+	}
+
+	/*
+	 * We know dst->ro_rt is not NULL here.
+	 * If the src->ro_rt is the same, update ro_lle, srcia and flags
+	 * and ditch the route in the local copy.
+	 */
+	if (dst->ro_rt == src->ro_rt) {
+		dst->ro_flags = src->ro_flags;
+
+		if (dst->ro_lle != src->ro_lle) {
+			if (dst->ro_lle != NULL)
+				LLE_REMREF(dst->ro_lle);
+			dst->ro_lle = src->ro_lle;
+		} else if (src->ro_lle != NULL) {
+			LLE_REMREF(src->ro_lle);
+		}
+
+		if (dst->ro_srcia != src->ro_srcia) {
 			if (dst->ro_srcia != NULL)
 				IFA_REMREF(dst->ro_srcia);
-			bcopy(src, dst, length);
+			dst->ro_srcia = src->ro_srcia;
+		} else if (src->ro_srcia != NULL) {
+			IFA_REMREF(src->ro_srcia);
 		}
-	} else if (src->ro_srcia != NULL) {
+		rtfree(src->ro_rt);
+		goto done;
+	}
+
+	/*
+	 * If they are dst's ro_rt is not equal to src's,
+	 * and src'd rt is not NULL, then remove old references
+	 * if present and copy entire src route.
+	 */
+	if (src->ro_rt != NULL) {
+		rtfree(dst->ro_rt);
+
+		if (dst->ro_lle != NULL)
+			LLE_REMREF(dst->ro_lle);
+		if (dst->ro_srcia != NULL)
+			IFA_REMREF(dst->ro_srcia);
+		bcopy(src, dst, length);
+		goto done;
+	}
+
+	/*
+	 * Here, dst's cached route is not NULL but source's is.
+	 * Just get rid of all the other cached reference in src.
+	 */
+	if (src->ro_srcia != NULL) {
 		/*
 		 * Ditch src address in the local copy (src) since we're
 		 * not caching the route entry anyway (ro_rt is NULL).
 		 */
 		IFA_REMREF(src->ro_srcia);
 	}
-
+	if (src->ro_lle != NULL) {
+		/*
+		 * Ditch cache lle in the local copy (src) since we're
+		 * not caching the route anyway (ro_rt is NULL).
+		 */
+		LLE_REMREF(src->ro_lle);
+	}
+done:
 	/* This function consumes the references on src */
+	src->ro_lle = NULL;
 	src->ro_rt = NULL;
 	src->ro_srcia = NULL;
 }
@@ -4075,3 +4195,173 @@ rt_str(struct rtentry *rt, char *ds, uint32_t dslen, char *gs, uint32_t gslen)
 		break;
 	}
 }
+
+void route_event_init(struct route_event *p_route_ev, struct rtentry *rt,
+    struct rtentry *gwrt, int route_ev_code)
+{
+	VERIFY(p_route_ev != NULL);
+	bzero(p_route_ev, sizeof(*p_route_ev));
+
+	p_route_ev->rt = rt;
+	p_route_ev->gwrt = gwrt;
+	p_route_ev->route_event_code = route_ev_code;
+}
+
+static void
+route_event_callback(void *arg)
+{
+	struct route_event *p_rt_ev = (struct route_event *)arg;
+	struct rtentry *rt = p_rt_ev->rt;
+	eventhandler_tag evtag = p_rt_ev->evtag;
+	int route_ev_code = p_rt_ev->route_event_code;
+
+	if (route_ev_code == ROUTE_EVHDLR_DEREGISTER) {
+		VERIFY(evtag != NULL);
+		EVENTHANDLER_DEREGISTER(&rt->rt_evhdlr_ctxt, route_event,
+		    evtag);
+		rtfree(rt);
+		return;
+	}
+
+	EVENTHANDLER_INVOKE(&rt->rt_evhdlr_ctxt, route_event, rt_key(rt),
+	    route_ev_code, (struct sockaddr *)&p_rt_ev->rt_addr,
+	    rt->rt_flags);
+
+	/* The code enqueuing the route event held a reference */
+	rtfree(rt);
+	/* XXX No reference is taken on gwrt */
+}
+
+int
+route_event_walktree(struct radix_node *rn, void *arg)
+{
+	struct route_event *p_route_ev = (struct route_event *)arg;
+	struct rtentry *rt = (struct rtentry *)rn;
+	struct rtentry *gwrt = p_route_ev->rt;
+
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
+
+	RT_LOCK(rt);
+
+	/* Return if the entry is pending cleanup */
+	if (rt->rt_flags & RTPRF_OURS) {
+		RT_UNLOCK(rt);
+		return (0);
+	}
+
+	/* Return if it is not an indirect route */
+	if (!(rt->rt_flags & RTF_GATEWAY)) {
+		RT_UNLOCK(rt);
+		return (0);
+	}
+
+	if (rt->rt_gwroute != gwrt) {
+		RT_UNLOCK(rt);
+		return (0);
+	}
+
+	route_event_enqueue_nwk_wq_entry(rt, gwrt, p_route_ev->route_event_code,
+	    NULL, TRUE);
+	RT_UNLOCK(rt);
+
+	return (0);
+}
+
+struct route_event_nwk_wq_entry
+{
+	struct nwk_wq_entry nwk_wqe;
+	struct route_event rt_ev_arg;
+};
+
+void
+route_event_enqueue_nwk_wq_entry(struct rtentry *rt, struct rtentry *gwrt,
+    uint32_t route_event_code, eventhandler_tag evtag, boolean_t rt_locked)
+{
+	struct route_event_nwk_wq_entry *p_rt_ev = NULL;
+	struct sockaddr *p_gw_saddr = NULL;
+
+	MALLOC(p_rt_ev, struct route_event_nwk_wq_entry *,
+	    sizeof(struct route_event_nwk_wq_entry),
+	    M_NWKWQ, M_WAITOK | M_ZERO);
+
+	/*
+	 * If the intent is to de-register, don't take
+	 * reference, route event registration already takes
+	 * a reference on route.
+	 */
+	if (route_event_code != ROUTE_EVHDLR_DEREGISTER) {
+		/* The reference is released by route_event_callback */
+		if (rt_locked)
+			RT_ADDREF_LOCKED(rt);
+		else
+			RT_ADDREF(rt);
+	}
+
+	p_rt_ev->rt_ev_arg.rt = rt;
+	p_rt_ev->rt_ev_arg.gwrt = gwrt;
+	p_rt_ev->rt_ev_arg.evtag = evtag;
+
+	if (gwrt != NULL)
+		p_gw_saddr = gwrt->rt_gateway;
+	else
+		p_gw_saddr = rt->rt_gateway;
+
+	VERIFY(p_gw_saddr->sa_len <= sizeof(p_rt_ev->rt_ev_arg.rt_addr));
+	bcopy(p_gw_saddr, &(p_rt_ev->rt_ev_arg.rt_addr), p_gw_saddr->sa_len);
+
+	p_rt_ev->rt_ev_arg.route_event_code = route_event_code;
+	p_rt_ev->nwk_wqe.func = route_event_callback;
+	p_rt_ev->nwk_wqe.is_arg_managed = TRUE;
+	p_rt_ev->nwk_wqe.arg = &p_rt_ev->rt_ev_arg;
+	nwk_wq_enqueue((struct nwk_wq_entry*)p_rt_ev);
+}
+
+const char *
+route_event2str(int route_event)
+{
+	const char *route_event_str = "ROUTE_EVENT_UNKNOWN";
+	switch (route_event) {
+		case ROUTE_STATUS_UPDATE:
+			route_event_str = "ROUTE_STATUS_UPDATE";
+			break;
+		case ROUTE_ENTRY_REFRESH:
+			route_event_str = "ROUTE_ENTRY_REFRESH";
+			break;
+		case ROUTE_ENTRY_DELETED:
+			route_event_str = "ROUTE_ENTRY_DELETED";
+			break;
+		case ROUTE_LLENTRY_RESOLVED:
+			route_event_str = "ROUTE_LLENTRY_RESOLVED";
+			break;
+		case ROUTE_LLENTRY_UNREACH:
+			route_event_str = "ROUTE_LLENTRY_UNREACH";
+			break;
+		case ROUTE_LLENTRY_CHANGED:
+			route_event_str = "ROUTE_LLENTRY_CHANGED";
+			break;
+		case ROUTE_LLENTRY_STALE:
+			route_event_str = "ROUTE_LLENTRY_STALE";
+			break;
+		case ROUTE_LLENTRY_TIMEDOUT:
+			route_event_str = "ROUTE_LLENTRY_TIMEDOUT";
+			break;
+		case ROUTE_LLENTRY_DELETED:
+			route_event_str = "ROUTE_LLENTRY_DELETED";
+			break;
+		case ROUTE_LLENTRY_EXPIRED:
+			route_event_str = "ROUTE_LLENTRY_EXPIRED";
+			break;
+		case ROUTE_LLENTRY_PROBED:
+			route_event_str = "ROUTE_LLENTRY_PROBED";
+			break;
+		case ROUTE_EVHDLR_DEREGISTER:
+			route_event_str = "ROUTE_EVHDLR_DEREGISTER";
+			break;
+		default:
+			/* Init'd to ROUTE_EVENT_UNKNOWN */
+			break;
+	}
+	return  route_event_str;
+}
+
+

@@ -172,6 +172,8 @@ struct vm_shared_region {
 	mach_vm_size_t		sr_pmap_nesting_size;
 	thread_call_t		sr_timer_call;
 	struct vm_shared_region_slide_info sr_slide_info;
+	uuid_t			sr_uuid;
+	boolean_t		sr_uuid_copied;
 };
 
 extern kern_return_t vm_shared_region_slide_page(vm_shared_region_slide_info_t si,

@@ -74,7 +74,7 @@ typedef struct session *tpr_t;
 __BEGIN_DECLS
 tpr_t	tprintf_open(struct proc *);
 void	tprintf_close(tpr_t);
-void	tprintf(tpr_t, const char *fmt, ...);
+void	tprintf(tpr_t, const char *fmt, ...) __printflike(2,3);
 __END_DECLS
 
 #endif /* __APPLE_API_UNSTABLE */

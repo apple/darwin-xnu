@@ -78,6 +78,9 @@
 #include <sys/types.h>
 #include <mach/vm_param.h>
 
+#if defined(__arm__) || defined(__arm64__)
+#include <arm/arch.h> /* for _ARM_ARCH_* */
+#endif
 
 #ifdef __APPLE_API_OBSOLETE
 /* BCD conversions. */
@@ -140,6 +143,9 @@ ulmin(u_int32_t a, u_int32_t b)
 
 /* Prototypes for non-quad routines. */
 extern int	ffs(int);
+extern int	ffsll(unsigned long long);
+extern int	fls(int);
+extern int	flsll(unsigned long long);
 extern u_int32_t	random(void);
 extern int	scanc(u_int, u_char *, const u_char *, int);
 extern int	skpc(int, int, char *);
@@ -154,7 +160,7 @@ extern void	url_decode(char *str);
 int	snprintf(char *, size_t, const char *, ...) __printflike(3,4);
 
 /* sprintf() is being deprecated. Please use snprintf() instead. */
-int	sprintf(char *bufp, const char *, ...) __deprecated;
+int	sprintf(char *bufp, const char *, ...) __deprecated __printflike(2,3);
 int	sscanf(const char *, char const *, ...) __scanflike(2,3);
 int	printf(const char *, ...) __printflike(1,2);
 
@@ -184,19 +190,23 @@ extern int copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_si
 
 int vsscanf(const char *, char const *, va_list);
 
-extern int	vprintf(const char *, va_list);
-extern int	vsnprintf(char *, size_t, const char *, va_list);
+extern int	vprintf(const char *, va_list) __printflike(1,0);
+extern int	vsnprintf(char *, size_t, const char *, va_list) __printflike(3,0);
 
 #if XNU_KERNEL_PRIVATE
-extern int	vprintf_log_locked(const char *, va_list);
+extern int	vprintf_log_locked(const char *, va_list) __printflike(1,0);
 extern void	osobject_retain(void * object);
 extern void	osobject_release(void * object);
 #endif
 
 /* vsprintf() is being deprecated. Please use vsnprintf() instead. */
-extern int	vsprintf(char *bufp, const char *, va_list) __deprecated;
+extern int	vsprintf(char *bufp, const char *, va_list) __deprecated __printflike(2,0);
 
 #ifdef KERNEL_PRIVATE
+#ifdef __arm__
+void flush_inner_dcaches(void);
+void clean_inner_dcaches(void);
+#endif
 extern void invalidate_icache(vm_offset_t, unsigned, int);
 extern void flush_dcache(vm_offset_t, unsigned, int);
 #else
@@ -210,8 +220,13 @@ extern void flush_dcache64(addr64_t, unsigned, int);
 static inline int
 clz(unsigned int num)
 {
+#if (__arm__ || __arm64__)
+	// On ARM, clz(0) is defined to return number of bits in the input type
+	return __builtin_clz(num);
+#else
 	// On Intel, clz(0) is undefined
 	return num ? __builtin_clz(num) : sizeof(num) * CHAR_BIT;
+#endif
 }
 
 __END_DECLS

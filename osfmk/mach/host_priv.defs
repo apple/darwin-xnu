@@ -72,6 +72,13 @@ subsystem
 userprefix r_;
 #endif	/* KERNEL_USER */
 
+#define CONCAT(a,b) a ## b
+#if	KERNEL_SERVER
+#define KERNEL_SERVER_SUFFIX(NAME) CONCAT(NAME, _external)
+#else
+#define KERNEL_SERVER_SUFFIX(NAME) NAME
+#endif
+
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
 #include <mach/clock_types.defs>
@@ -274,7 +281,7 @@ skip; /* old host_load_symbol_table */
  *
  *	[ To unwire the pages, specify VM_PROT_NONE. ]
  */
-routine	mach_vm_wire(
+routine	KERNEL_SERVER_SUFFIX(mach_vm_wire)(
 		host_priv	: host_priv_t;
 		task		: vm_map_t;
 		address		: mach_vm_address_t;
@@ -304,26 +311,9 @@ routine host_processor_set_priv(
 /*       The following routines are going away in a future release	*/
 /*	use the appropriate variant of host_set_special_port instead	*/
 /************************************************************************/
- 
-/*
- *	Set the dynamic_pager control port. Other entities
- *	can request a send right to this port to talk with
- *	the dynamic_pager utility, setting behavioral parameters
- *	within the dynamic pager and getting low/high backing store
- *	resource notifications.
- */
-routine set_dp_control_port(    
-		host		: host_priv_t;
-	in	control_port	: mach_port_t);
 
-/*
- *	Get the dynamic_pager control port.  This port
- *	allows the holder to talk directly with the dynamic
- *	pager utility.
- */
-routine get_dp_control_port(    
-		host		: host_priv_t;
-	out	contorl_port    :mach_port_t);
+skip;/* old set_dp_control_port */
+skip;/* old get_dp_control_port */
 
 /*
  *	Set the UserNotification daemon access port for this host. 

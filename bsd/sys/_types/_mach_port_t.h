@@ -46,5 +46,6 @@
 
 #ifndef _MACH_PORT_T
 #define _MACH_PORT_T
+#include <sys/_types.h> /* __darwin_mach_port_t */
 typedef __darwin_mach_port_t mach_port_t;
 #endif /* _MACH_PORT_T */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -202,6 +202,7 @@ struct dlil_threading_info {
 	 */
 	u_int64_t	input_mbuf_cnt;	/* total # of packets processed */
 #endif
+	thread_call_t	input_mit_tcall; /* coalescing input processing */
 };
 
 /*
@@ -221,11 +222,13 @@ struct dlil_main_threading_info {
 #define	DLIL_PROTO_REGISTER	0x20000000
 #define	DLIL_PROTO_WAITING	0x10000000
 #define	DLIL_INPUT_TERMINATE	0x08000000
+#define	DLIL_INPUT_TERMINATE_COMPLETE	0x04000000
 
 /*
  * Flags for dlil_attach_filter()
  */
 #define DLIL_IFF_TSO            0x01    /* Interface filter supports TSO */
+#define	DLIL_IFF_INTERNAL	0x02	/* Apple internal -- do not count towards stats */
 
 extern int dlil_verbose;
 extern uint32_t hwcksum_dbg;
@@ -236,6 +239,8 @@ extern struct dlil_threading_info *dlil_main_input_thread;
 extern void dlil_init(void);
 
 extern errno_t ifp_if_ioctl(struct ifnet *, unsigned long, void *);
+extern errno_t ifp_if_output(struct ifnet *, struct mbuf *);
+extern void ifp_if_start(struct ifnet *);
 
 extern errno_t dlil_set_bpf_tap(ifnet_t, bpf_tap_mode, bpf_packet_func);
 
@@ -325,6 +330,7 @@ extern int dlil_post_complete_msg(struct ifnet *, struct kev_msg *);
 
 extern int dlil_alloc_local_stats(struct ifnet *);
 
+
 /*
  * dlil_if_acquire is obsolete. Use ifnet_allocate.
  */
@@ -364,6 +370,83 @@ extern errno_t dlil_input_handler(struct ifnet *, struct mbuf *,
     struct mbuf *, const struct ifnet_stat_increment_param *,
     boolean_t, struct thread *);
 
+
+/*
+ * This is mostly called from the context of the DLIL input thread;
+ * because of that there is no need for atomic operations.
+ */
+__attribute__((always_inline))
+static inline void
+ifp_inc_traffic_class_in(struct ifnet *ifp, struct mbuf *m)
+{
+	if (!(m->m_flags & M_PKTHDR))
+		return;
+
+	switch (m_get_traffic_class(m)) {
+	case MBUF_TC_BE:
+		ifp->if_tc.ifi_ibepackets++;
+		ifp->if_tc.ifi_ibebytes += m->m_pkthdr.len;
+		break;
+	case MBUF_TC_BK:
+		ifp->if_tc.ifi_ibkpackets++;
+		ifp->if_tc.ifi_ibkbytes += m->m_pkthdr.len;
+		break;
+	case MBUF_TC_VI:
+		ifp->if_tc.ifi_ivipackets++;
+		ifp->if_tc.ifi_ivibytes += m->m_pkthdr.len;
+		break;
+	case MBUF_TC_VO:
+		ifp->if_tc.ifi_ivopackets++;
+		ifp->if_tc.ifi_ivobytes += m->m_pkthdr.len;
+		break;
+	default:
+		break;
+	}
+
+	if (mbuf_is_traffic_class_privileged(m)) {
+		ifp->if_tc.ifi_ipvpackets++;
+		ifp->if_tc.ifi_ipvbytes += m->m_pkthdr.len;
+	}
+}
+
+/*
+ * This is called from DLIL output, hence multiple threads could end
+ * up modifying the statistics.  We trade off acccuracy for performance
+ * by not using atomic operations here.
+ */
+__attribute__((always_inline))
+static inline void
+ifp_inc_traffic_class_out(struct ifnet *ifp, struct mbuf *m)
+{
+	if (!(m->m_flags & M_PKTHDR))
+		return;
+
+	switch (m_get_traffic_class(m)) {
+	case MBUF_TC_BE:
+		ifp->if_tc.ifi_obepackets++;
+		ifp->if_tc.ifi_obebytes += m->m_pkthdr.len;
+		break;
+	case MBUF_TC_BK:
+		ifp->if_tc.ifi_obkpackets++;
+		ifp->if_tc.ifi_obkbytes += m->m_pkthdr.len;
+		break;
+	case MBUF_TC_VI:
+		ifp->if_tc.ifi_ovipackets++;
+		ifp->if_tc.ifi_ovibytes += m->m_pkthdr.len;
+		break;
+	case MBUF_TC_VO:
+		ifp->if_tc.ifi_ovopackets++;
+		ifp->if_tc.ifi_ovobytes += m->m_pkthdr.len;
+		break;
+	default:
+		break;
+	}
+
+	if (mbuf_is_traffic_class_privileged(m)) {
+		ifp->if_tc.ifi_opvpackets++;
+		ifp->if_tc.ifi_opvbytes += m->m_pkthdr.len;
+	}
+}
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* KERNEL_PRIVATE */
 #endif /* KERNEL */

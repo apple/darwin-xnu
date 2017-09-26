@@ -124,10 +124,10 @@ struct tcptailq tcp_tw_tailq;
 static int
 sysctl_msec_to_ticks SYSCTL_HANDLER_ARGS
 {
-#pragma unused(arg1, arg2)
+#pragma unused(arg2)
 	int error, s, tt;
 
-	tt = *(int *)oidp->oid_arg1;
+	tt = *(int *)arg1;
 	s = tt * 1000 / TCP_RETRANSHZ;;
 
 	error = sysctl_handle_int(oidp, &s, 0, req);
@@ -138,34 +138,65 @@ sysctl_msec_to_ticks SYSCTL_HANDLER_ARGS
 	if (tt < 1)
 		return (EINVAL);
 
-	*(int *)oidp->oid_arg1 = tt;
-        return (0);
+	*(int *)arg1 = tt;
+	SYSCTL_SKMEM_UPDATE_AT_OFFSET(arg2, *(int*)arg1);
+	return (0);
 }
 
-int	tcp_keepinit;
+#if SYSCTL_SKMEM
+int	tcp_keepinit = TCPTV_KEEP_INIT;
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPINIT, keepinit,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_keepinit, offsetof(skmem_sysctl, tcp.keepinit),
+	sysctl_msec_to_ticks, "I", "");
+
+int	tcp_keepidle = TCPTV_KEEP_IDLE;
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPIDLE, keepidle,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_keepidle, offsetof(skmem_sysctl, tcp.keepidle),
+	sysctl_msec_to_ticks, "I", "");
+
+int	tcp_keepintvl = TCPTV_KEEPINTVL;
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPINTVL, keepintvl,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_keepintvl, offsetof(skmem_sysctl, tcp.keepintvl),
+	sysctl_msec_to_ticks, "I", "");
+
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, keepcnt,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    int, tcp_keepcnt, TCPTV_KEEPCNT, "number of times to repeat keepalive");
+
+int	tcp_msl = TCPTV_MSL;
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, msl,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_msl, offsetof(skmem_sysctl, tcp.msl),
+	sysctl_msec_to_ticks, "I", "Maximum segment lifetime");
+#else /* SYSCTL_SKMEM */
+int     tcp_keepinit;
 SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPINIT, keepinit,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_keepinit, 0, sysctl_msec_to_ticks, "I", "");
 
-int	tcp_keepidle;
+int     tcp_keepidle;
 SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPIDLE, keepidle,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_keepidle, 0, sysctl_msec_to_ticks, "I", "");
 
-int	tcp_keepintvl;
+int     tcp_keepintvl;
 SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPINTVL, keepintvl,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_keepintvl, 0, sysctl_msec_to_ticks, "I", "");
 
-int	tcp_keepcnt;
+int     tcp_keepcnt;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, keepcnt,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_keepcnt, 0, "number of times to repeat keepalive");
 
-int	tcp_msl;
+int     tcp_msl;
 SYSCTL_PROC(_net_inet_tcp, OID_AUTO, msl,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_msl, 0, sysctl_msec_to_ticks, "I", "Maximum segment lifetime");
+#endif /* SYSCTL_SKMEM */
 
 /*
  * Avoid DoS via TCP Robustness in Persist Condition
@@ -176,26 +207,32 @@ SYSCTL_PROC(_net_inet_tcp, OID_AUTO, msl,
  * Expressed in milliseconds to be consistent without timeout related
  * values, the TCP socket option is in seconds.
  */
+#if SYSCTL_SKMEM
+u_int32_t tcp_max_persist_timeout = 0;
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, max_persist_timeout,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_max_persist_timeout, offsetof(skmem_sysctl, tcp.max_persist_timeout),
+	sysctl_msec_to_ticks, "I", "Maximum persistence timeout for ZWP");
+#else /* SYSCTL_SKMEM */
 u_int32_t tcp_max_persist_timeout = 0;
 SYSCTL_PROC(_net_inet_tcp, OID_AUTO, max_persist_timeout,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_max_persist_timeout, 0, sysctl_msec_to_ticks, "I",
     "Maximum persistence timeout for ZWP");
+#endif /* SYSCTL_SKMEM */
 
-static int	always_keepalive = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, always_keepalive,
-    CTLFLAG_RW | CTLFLAG_LOCKED,
-    &always_keepalive , 0, "Assume SO_KEEPALIVE on all TCP connections");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, always_keepalive,
+    CTLFLAG_RW | CTLFLAG_LOCKED, static int, always_keepalive, 0,
+	"Assume SO_KEEPALIVE on all TCP connections");
 
 /*
  * This parameter determines how long the timer list will stay in fast or
  * quick mode even though all connections are idle. In this state, the
  * timer will run more frequently anticipating new data.
  */
-int timer_fastmode_idlemax = TCP_FASTMODE_IDLERUN_MAX;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, timer_fastmode_idlemax,
-    CTLFLAG_RW | CTLFLAG_LOCKED,
-    &timer_fastmode_idlemax, 0, "Maximum idle generations in fast mode");
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, timer_fastmode_idlemax,
+    CTLFLAG_RW | CTLFLAG_LOCKED, int, timer_fastmode_idlemax,
+	TCP_FASTMODE_IDLERUN_MAX, "Maximum idle generations in fast mode");
 
 /*
  * See tcp_syn_backoff[] for interval values between SYN retransmits;
@@ -204,10 +241,9 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, timer_fastmode_idlemax,
  * SYN retransmits.  Setting it to 0 disables the dropping off of those
  * two options.
  */
-static int tcp_broken_peer_syn_rxmit_thres = 10;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, broken_peer_syn_rexmit_thres,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_broken_peer_syn_rxmit_thres, 0,
-    "Number of retransmitted SYNs before disabling RFC 1323 "
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, broken_peer_syn_rexmit_thres,
+    CTLFLAG_RW | CTLFLAG_LOCKED, static int, tcp_broken_peer_syn_rxmit_thres,
+	10, "Number of retransmitted SYNs before disabling RFC 1323 "
     "options on local connections");
 
 static int tcp_timer_advanced = 0;
@@ -220,14 +256,12 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, tcp_resched_timerlist,
     CTLFLAG_RD | CTLFLAG_LOCKED, &tcp_resched_timerlist, 0,
     "Number of times timer list was rescheduled as part of processing a packet");
 
-int	tcp_pmtud_black_hole_detect = 1 ;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, pmtud_blackhole_detection,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_pmtud_black_hole_detect, 0,
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, pmtud_blackhole_detection,
+    CTLFLAG_RW | CTLFLAG_LOCKED, int, tcp_pmtud_black_hole_detect, 1,
     "Path MTU Discovery Black Hole Detection");
 
-int	tcp_pmtud_black_hole_mss = 1200 ;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, pmtud_blackhole_mss,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_pmtud_black_hole_mss, 0,
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, pmtud_blackhole_mss,
+    CTLFLAG_RW | CTLFLAG_LOCKED, int, tcp_pmtud_black_hole_mss, 1200,
     "Path MTU Discovery Black Hole Detection lowered MSS");
 
 static u_int32_t tcp_mss_rec_medium = 1200;
@@ -240,7 +274,7 @@ int tcp_report_stats_interval = TCP_REPORT_STATS_INTERVAL;
 static boolean_t tcp_gc_done = FALSE;
 
 /* max idle probes */
-int	tcp_maxpersistidle;
+int	tcp_maxpersistidle = TCPTV_KEEP_IDLE;
 
 /*
  * TCP delack timer is set to 100 ms. Since the processing of timer list
@@ -311,6 +345,36 @@ struct tcp_last_report_stats {
 	u_int32_t	tcps_tfo_no_cookie_rcv;
 	u_int32_t	tcps_tfo_heuristics_disable;
 	u_int32_t	tcps_tfo_sndblackhole;
+
+	/* MPTCP-related statistics */
+	u_int32_t	tcps_mptcp_handover_attempt;
+	u_int32_t	tcps_mptcp_interactive_attempt;
+	u_int32_t	tcps_mptcp_aggregate_attempt;
+	u_int32_t	tcps_mptcp_fp_handover_attempt;
+	u_int32_t	tcps_mptcp_fp_interactive_attempt;
+	u_int32_t	tcps_mptcp_fp_aggregate_attempt;
+	u_int32_t	tcps_mptcp_heuristic_fallback;
+	u_int32_t	tcps_mptcp_fp_heuristic_fallback;
+	u_int32_t	tcps_mptcp_handover_success_wifi;
+	u_int32_t	tcps_mptcp_handover_success_cell;
+	u_int32_t	tcps_mptcp_interactive_success;
+	u_int32_t	tcps_mptcp_aggregate_success;
+	u_int32_t	tcps_mptcp_fp_handover_success_wifi;
+	u_int32_t	tcps_mptcp_fp_handover_success_cell;
+	u_int32_t	tcps_mptcp_fp_interactive_success;
+	u_int32_t	tcps_mptcp_fp_aggregate_success;
+	u_int32_t	tcps_mptcp_handover_cell_from_wifi;
+	u_int32_t	tcps_mptcp_handover_wifi_from_cell;
+	u_int32_t	tcps_mptcp_interactive_cell_from_wifi;
+	u_int64_t	tcps_mptcp_handover_cell_bytes;
+	u_int64_t	tcps_mptcp_interactive_cell_bytes;
+	u_int64_t	tcps_mptcp_aggregate_cell_bytes;
+	u_int64_t	tcps_mptcp_handover_all_bytes;
+	u_int64_t	tcps_mptcp_interactive_all_bytes;
+	u_int64_t	tcps_mptcp_aggregate_all_bytes;
+	u_int32_t	tcps_mptcp_back_to_wifi;
+	u_int32_t	tcps_mptcp_wifi_proxy;
+	u_int32_t	tcps_mptcp_cell_proxy;
 };
 
 
@@ -422,7 +486,7 @@ add_to_time_wait_locked(struct tcpcb *tp, uint32_t delay)
 	uint32_t timer;
 
 	/* pcb list should be locked when we get here */
-	lck_rw_assert(pcbinfo->ipi_lock, LCK_RW_ASSERT_EXCLUSIVE);
+	LCK_RW_ASSERT(pcbinfo->ipi_lock, LCK_RW_ASSERT_EXCLUSIVE);
 
 	/* We may get here multiple times, so check */
 	if (!(inp->inp_flags2 & INP2_TIMEWAIT)) {
@@ -458,9 +522,9 @@ add_to_time_wait(struct tcpcb *tp, uint32_t delay)
 	nstat_pcb_detach(tp->t_inpcb);
 
 	if (!lck_rw_try_lock_exclusive(pcbinfo->ipi_lock)) {
-		tcp_unlock(tp->t_inpcb->inp_socket, 0, 0);
+		socket_unlock(tp->t_inpcb->inp_socket, 0);
 		lck_rw_lock_exclusive(pcbinfo->ipi_lock);
-		tcp_lock(tp->t_inpcb->inp_socket, 0, 0);
+		socket_lock(tp->t_inpcb->inp_socket, 0);
 	}
 	add_to_time_wait_locked(tp, delay);
 	lck_rw_done(pcbinfo->ipi_lock);
@@ -481,11 +545,21 @@ static boolean_t
 tcp_garbage_collect(struct inpcb *inp, int istimewait)
 {
 	boolean_t active = FALSE;
-	struct socket *so;
+	struct socket *so, *mp_so = NULL;
 	struct tcpcb *tp;
 
 	so = inp->inp_socket;
 	tp = intotcpcb(inp);
+
+	if (so->so_flags & SOF_MP_SUBFLOW) {
+		mp_so = mptetoso(tptomptp(tp)->mpt_mpte);
+		if (!socket_try_lock(mp_so)) {
+			mp_so = NULL;
+			active = TRUE;
+			goto out;
+		}
+		mp_so->so_usecount++;
+	}
 
 	/*
 	 * Skip if still in use or busy; it would have been more efficient
@@ -494,20 +568,21 @@ tcp_garbage_collect(struct inpcb *inp, int istimewait)
 	 * overflow sockets that are eligible for garbage collection have
 	 * their usecounts set to 1.
 	 */
-	if (!lck_mtx_try_lock_spin(&inp->inpcb_mtx))
-		return (TRUE);
+	if (!lck_mtx_try_lock_spin(&inp->inpcb_mtx)) {
+		active = TRUE;
+		goto out;
+	}
 
 	/* Check again under the lock */
 	if (so->so_usecount > 1) {
 		if (inp->inp_wantcnt == WNT_STOPUSING)
 			active = TRUE;
 		lck_mtx_unlock(&inp->inpcb_mtx);
-		return (active);
+		goto out;
 	}
 
-	if (istimewait &&
-		TSTMP_GEQ(tcp_now, tp->t_timer[TCPT_2MSL]) &&
-		tp->t_state != TCPS_CLOSED) {
+	if (istimewait && TSTMP_GEQ(tcp_now, tp->t_timer[TCPT_2MSL]) &&
+	    tp->t_state != TCPS_CLOSED) {
 		/* Become a regular mutex */
 		lck_mtx_convert_spin(&inp->inpcb_mtx);
 		tcp_close(tp);
@@ -544,10 +619,11 @@ tcp_garbage_collect(struct inpcb *inp, int istimewait)
 		if (inp->inp_wantcnt == WNT_STOPUSING)
 			active = TRUE;
 		lck_mtx_unlock(&inp->inpcb_mtx);
-		return (active);
+		goto out;
 	} else if (inp->inp_wantcnt != WNT_STOPUSING) {
 		lck_mtx_unlock(&inp->inpcb_mtx);
-		return (FALSE);
+		active = FALSE;
+		goto out;
 	}
 
 	/*
@@ -583,12 +659,28 @@ tcp_garbage_collect(struct inpcb *inp, int istimewait)
 #endif /* INET6 */
 				in_pcbdetach(inp);
 		}
+
+		if (mp_so) {
+			mptcp_subflow_del(tptomptp(tp)->mpt_mpte, tp->t_mpsub);
+
+			/* so is now unlinked from mp_so - let's drop the lock */
+			socket_unlock(mp_so, 1);
+			mp_so = NULL;
+		}
+
 		in_pcbdispose(inp);
-		return (FALSE);
+		active = FALSE;
+		goto out;
 	}
 
 	lck_mtx_unlock(&inp->inpcb_mtx);
-	return (TRUE);
+	active = TRUE;
+
+out:
+	if (mp_so)
+		socket_unlock(mp_so, 1);
+
+	return (active);
 }
 
 /*
@@ -758,6 +850,9 @@ tcp_pmtud_revert_segment_size(struct tcpcb *tp)
 		CC_ALGO(tp)->cwnd_init(tp);
 	tp->t_pmtud_start_ts = 0;
 	tcpstat.tcps_pmtudbh_reverted++;
+
+	/* change MSS according to recommendation, if there was one */
+	tcp_update_mss_locked(tp->t_inpcb->inp_socket, NULL);
 }
 
 /*
@@ -833,6 +928,20 @@ tcp_timers(struct tcpcb *tp, int timer)
 		    ((tp->t_flagsext & TF_RXTFINDROP) != 0 &&
 		    (tp->t_flags & TF_SENTFIN) != 0 && tp->t_rxtshift >= 4) ||
 		    (tp->t_rxtshift > 4 && last_sleep_ms >= TCP_SLEEP_TOO_LONG)) {
+			if (tp->t_state == TCPS_ESTABLISHED &&
+			    tp->t_rxt_minimum_timeout > 0) {
+				/*
+				 * Avoid dropping a connection if minimum
+				 * timeout is set and that time did not
+				 * pass. We will retry sending
+				 * retransmissions at the maximum interval
+				 */
+				if (TSTMP_LT(tcp_now, (tp->t_rxtstart +
+				    tp->t_rxt_minimum_timeout))) {
+					tp->t_rxtshift = TCP_MAXRXTSHIFT - 1;
+					goto retransmit_packet;
+				}
+			}
 			if ((tp->t_flagsext & TF_RXTFINDROP) != 0) {
 				tcpstat.tcps_rxtfindrop++;
 			} else if (last_sleep_ms >= TCP_SLEEP_TOO_LONG) {
@@ -863,7 +972,7 @@ tcp_timers(struct tcpcb *tp, int timer)
 
 			break;
 		}
-
+retransmit_packet:
 		tcpstat.tcps_rexmttimeo++;
 		tp->t_accsleep_ms = accsleep_ms;
 
@@ -885,6 +994,12 @@ tcp_timers(struct tcpcb *tp, int timer)
 		    (tp->t_mpflags & TMPF_MPTCP_TRUE)) {
 			mptcp_act_on_txfail(so);
 
+		}
+
+		if (so->so_flags & SOF_MP_SUBFLOW) {
+			struct mptses *mpte = tptomptp(tp)->mpt_mpte;
+
+			mptcp_check_subflows_and_add(mpte);
 		}
 #endif /* MPTCP */
 
@@ -921,7 +1036,8 @@ tcp_timers(struct tcpcb *tp, int timer)
 		if (tp->t_state == TCPS_SYN_RECEIVED)
 			tcp_disable_tfo(tp);
 
-		if ((tp->t_tfo_stats & TFO_S_SYN_DATA_SENT) &&
+		if (!(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
+		    (tp->t_tfo_stats & TFO_S_SYN_DATA_SENT) &&
 		    !(tp->t_tfo_flags & TFO_F_NO_SNDPROBING) &&
 		    ((tp->t_state != TCPS_SYN_SENT && tp->t_rxtshift > 1) ||
 		     tp->t_rxtshift > 2)) {
@@ -944,12 +1060,26 @@ tcp_timers(struct tcpcb *tp, int timer)
 			tcpstat.tcps_tfo_sndblackhole++;
 		}
 
+		if (!(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
+		    (tp->t_tfo_stats & TFO_S_SYN_DATA_ACKED) &&
+		    tp->t_rxtshift > 1) {
+			if (TSTMP_GT(tp->t_sndtime - 10 * TCP_RETRANSHZ, tp->t_rcvtime)) {
+				tcp_heuristic_tfo_middlebox(tp);
+
+				so->so_error = ENODATA;
+				sorwakeup(so);
+				sowwakeup(so);
+			}
+		}
+
 		if (tp->t_state == TCPS_SYN_SENT) {
 			rexmt = TCP_REXMTVAL(tp) * tcp_syn_backoff[tp->t_rxtshift];
 			tp->t_stat.synrxtshift = tp->t_rxtshift;
 
 			/* When retransmitting, disable TFO */
-			if (tfo_enabled(tp) && !(so->so_flags & SOF1_DATA_AUTHENTICATED)) {
+			if (tfo_enabled(tp) &&
+			    (!(so->so_flags1 & SOF1_DATA_AUTHENTICATED) ||
+			     (tp->t_flagsext & TF_FASTOPEN_HEUR))) {
 				tp->t_flagsext &= ~TF_FASTOPEN;
 				tp->t_tfo_flags |= TFO_F_SYN_LOSS;
 			}
@@ -1153,7 +1283,7 @@ fc_output:
 		 * Regular TCP connections do not send keepalives after closing
 		 * MPTCP must not also, after sending Data FINs.
 		 */
-		struct mptcb *mp_tp = tp->t_mptcb;
+		struct mptcb *mp_tp = tptomptp(tp);
 		if ((tp->t_mpflags & TMPF_MPTCP_TRUE) &&
 		    (tp->t_state > TCPS_ESTABLISHED)) {
 			goto dropit;
@@ -1261,7 +1391,8 @@ fc_output:
 			tp->t_timer[TCPT_KEEP] = min(OFFSET_FROM_START(
 			    tp, tcp_backoff[ind] * TCP_REXMTVAL(tp)),
 			    tp->t_timer[TCPT_KEEP]);
-		} else if (tp->t_tfo_probe_state == TFO_PROBE_WAIT_DATA) {
+		} else if (!(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
+			   tp->t_tfo_probe_state == TFO_PROBE_WAIT_DATA) {
 			/* Still no data! Let's assume a TFO-error and err out... */
 			tcp_heuristic_tfo_middlebox(tp);
 
@@ -1328,13 +1459,14 @@ fc_output:
 				tcpstat.tcps_timeoutdrop++;
 				postevent(so, 0, EV_TIMEOUT);
 				soevent(so,
-			    	    (SO_FILT_HINT_LOCKED|
+				    (SO_FILT_HINT_LOCKED|
 				    SO_FILT_HINT_TIMEOUT));
 				tp = tcp_drop(tp, tp->t_softerror ?
-			    	    tp->t_softerror : ETIMEDOUT);
+				    tp->t_softerror : ETIMEDOUT);
 				break;
 			}
 			tcpstat.tcps_join_rxmts++;
+			tp->t_mpflags |= TMPF_SND_JACK;
 			tp->t_flags |= TF_ACKNOW;
 
 			/*
@@ -1448,7 +1580,7 @@ tcp_remove_timer(struct tcpcb *tp)
 {
 	struct tcptimerlist *listp = &tcp_timer_list;
 
-	lck_mtx_assert(&tp->t_inpcb->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
+	socket_lock_assert_owned(tp->t_inpcb->inp_socket);
 	if (!(TIMER_IS_ON_LIST(tp))) {
 		return;
 	}
@@ -1521,10 +1653,11 @@ tcp_sched_timerlist(uint32_t offset)
 	uint64_t deadline = 0;
 	struct tcptimerlist *listp = &tcp_timer_list;
 
-	lck_mtx_assert(listp->mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(listp->mtx, LCK_MTX_ASSERT_OWNED);
 
 	offset = min(offset, TCP_TIMERLIST_MAX_OFFSET);
 	listp->runtime = tcp_now + offset;
+	listp->schedtime = tcp_now;
 	if (listp->runtime == 0) {
 		listp->runtime++;
 		offset++;
@@ -1560,7 +1693,7 @@ tcp_run_conn_timer(struct tcpcb *tp, u_int16_t *te_mode,
 	bzero(needtorun, sizeof(needtorun));
 	*te_mode = 0;
 
-	tcp_lock(tp->t_inpcb->inp_socket, 1, 0);
+	socket_lock(tp->t_inpcb->inp_socket, 1);
 
 	so = tp->t_inpcb->inp_socket;
 	/* Release the want count on inp */
@@ -1676,7 +1809,7 @@ done:
 		offset = 0;
 	}
 
-	tcp_unlock(so, 1, 0);
+	socket_unlock(so, 1);
 	return(offset);
 }
 
@@ -1695,6 +1828,27 @@ tcp_run_timerlist(void * arg1, void * arg2)
 	calculate_tcp_clock();
 
 	lck_mtx_lock(listp->mtx);
+
+	int32_t drift = tcp_now - listp->runtime;
+	if (drift <= 1) {
+		tcpstat.tcps_timer_drift_le_1_ms++;
+	} else if (drift <= 10) {
+		tcpstat.tcps_timer_drift_le_10_ms++;
+	} else if (drift <= 20) {
+		tcpstat.tcps_timer_drift_le_20_ms++;
+	} else if (drift <= 50) {
+		tcpstat.tcps_timer_drift_le_50_ms++;
+	} else if (drift <= 100) {
+		tcpstat.tcps_timer_drift_le_100_ms++;
+	} else if (drift <= 200) {
+		tcpstat.tcps_timer_drift_le_200_ms++;
+	} else if (drift <= 500) {
+		tcpstat.tcps_timer_drift_le_500_ms++;
+	} else if (drift <= 1000) {
+		tcpstat.tcps_timer_drift_le_1000_ms++;
+	} else {
+		tcpstat.tcps_timer_drift_gt_1000_ms++;
+	}
 
 	listp->running = TRUE;
 
@@ -1975,7 +2129,7 @@ tcp_set_lotimer_index(struct tcpcb *tp)
 void
 tcp_check_timer_state(struct tcpcb *tp)
 {
-	lck_mtx_assert(&tp->t_inpcb->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
+	socket_lock_assert_owned(tp->t_inpcb->inp_socket);
 
 	if (tp->t_inpcb->inp_flags2 & INP2_TIMEWAIT)
 		return;
@@ -1991,6 +2145,19 @@ tcp_cumulative_stat(u_int32_t cur, u_int32_t *prev, u_int32_t *dest)
 {
 	/* handle wrap around */
 	int32_t diff = (int32_t) (cur - *prev);
+	if (diff > 0)
+		*dest = diff;
+	else
+		*dest = 0;
+	*prev = cur;
+	return;
+}
+
+static inline void
+tcp_cumulative_stat64(u_int64_t cur, u_int64_t *prev, u_int64_t *dest)
+{
+	/* handle wrap around */
+	int64_t diff = (int64_t) (cur - *prev);
 	if (diff > 0)
 		*dest = diff;
 	else
@@ -2164,6 +2331,62 @@ tcp_report_stats(void)
 	    &prev.tcps_tfo_sndblackhole, &stat.tfo_sndblackhole);
 
 
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_handover_attempt,
+	    &prev.tcps_mptcp_handover_attempt , &stat.mptcp_handover_attempt);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_interactive_attempt,
+	    &prev.tcps_mptcp_interactive_attempt , &stat.mptcp_interactive_attempt);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_aggregate_attempt,
+	    &prev.tcps_mptcp_aggregate_attempt , &stat.mptcp_aggregate_attempt);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_fp_handover_attempt,
+	    &prev.tcps_mptcp_fp_handover_attempt , &stat.mptcp_fp_handover_attempt);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_fp_interactive_attempt,
+	    &prev.tcps_mptcp_fp_interactive_attempt , &stat.mptcp_fp_interactive_attempt);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_fp_aggregate_attempt,
+	    &prev.tcps_mptcp_fp_aggregate_attempt , &stat.mptcp_fp_aggregate_attempt);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_heuristic_fallback,
+	    &prev.tcps_mptcp_heuristic_fallback , &stat.mptcp_heuristic_fallback);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_fp_heuristic_fallback,
+	    &prev.tcps_mptcp_fp_heuristic_fallback , &stat.mptcp_fp_heuristic_fallback);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_handover_success_wifi,
+	    &prev.tcps_mptcp_handover_success_wifi , &stat.mptcp_handover_success_wifi);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_handover_success_cell,
+	    &prev.tcps_mptcp_handover_success_cell , &stat.mptcp_handover_success_cell);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_interactive_success,
+	    &prev.tcps_mptcp_interactive_success , &stat.mptcp_interactive_success);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_aggregate_success,
+	    &prev.tcps_mptcp_aggregate_success , &stat.mptcp_aggregate_success);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_fp_handover_success_wifi,
+	    &prev.tcps_mptcp_fp_handover_success_wifi , &stat.mptcp_fp_handover_success_wifi);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_fp_handover_success_cell,
+	    &prev.tcps_mptcp_fp_handover_success_cell , &stat.mptcp_fp_handover_success_cell);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_fp_interactive_success,
+	    &prev.tcps_mptcp_fp_interactive_success , &stat.mptcp_fp_interactive_success);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_fp_aggregate_success,
+	    &prev.tcps_mptcp_fp_aggregate_success , &stat.mptcp_fp_aggregate_success);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_handover_cell_from_wifi,
+	    &prev.tcps_mptcp_handover_cell_from_wifi , &stat.mptcp_handover_cell_from_wifi);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_handover_wifi_from_cell,
+	    &prev.tcps_mptcp_handover_wifi_from_cell , &stat.mptcp_handover_wifi_from_cell);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_interactive_cell_from_wifi,
+	    &prev.tcps_mptcp_interactive_cell_from_wifi , &stat.mptcp_interactive_cell_from_wifi);
+	tcp_cumulative_stat64(tcpstat.tcps_mptcp_handover_cell_bytes,
+	    &prev.tcps_mptcp_handover_cell_bytes , &stat.mptcp_handover_cell_bytes);
+	tcp_cumulative_stat64(tcpstat.tcps_mptcp_interactive_cell_bytes,
+	    &prev.tcps_mptcp_interactive_cell_bytes , &stat.mptcp_interactive_cell_bytes);
+	tcp_cumulative_stat64(tcpstat.tcps_mptcp_aggregate_cell_bytes,
+	    &prev.tcps_mptcp_aggregate_cell_bytes , &stat.mptcp_aggregate_cell_bytes);
+	tcp_cumulative_stat64(tcpstat.tcps_mptcp_handover_all_bytes,
+	    &prev.tcps_mptcp_handover_all_bytes , &stat.mptcp_handover_all_bytes);
+	tcp_cumulative_stat64(tcpstat.tcps_mptcp_interactive_all_bytes,
+	    &prev.tcps_mptcp_interactive_all_bytes , &stat.mptcp_interactive_all_bytes);
+	tcp_cumulative_stat64(tcpstat.tcps_mptcp_aggregate_all_bytes,
+	    &prev.tcps_mptcp_aggregate_all_bytes , &stat.mptcp_aggregate_all_bytes);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_back_to_wifi,
+	    &prev.tcps_mptcp_back_to_wifi , &stat.mptcp_back_to_wifi);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_wifi_proxy,
+	    &prev.tcps_mptcp_wifi_proxy , &stat.mptcp_wifi_proxy);
+	tcp_cumulative_stat(tcpstat.tcps_mptcp_cell_proxy,
+	    &prev.tcps_mptcp_cell_proxy , &stat.mptcp_cell_proxy);
 
 
 	nstat_sysinfo_send_data(&data);
@@ -2263,6 +2486,9 @@ tcp_disable_read_probe(struct tcpcb *tp)
 	    ((tp->t_flagsext & TF_DETECT_READSTALL) ||
 	    tp->t_rtimo_probes > 0)) {
 		tcp_keepalive_reset(tp);
+
+		if (tp->t_mpsub)
+			mptcp_reset_keepalive(tp);
 	}
 }
 
@@ -2297,12 +2523,12 @@ tcp_probe_connectivity(struct ifnet *ifp, u_int32_t enable)
 			continue;
 
 		/* Acquire lock to look at the state of the connection */
-		tcp_lock(inp->inp_socket, 1, 0);
+		socket_lock(inp->inp_socket, 1);
 
 		/* Release the want count */
 		if (inp->inp_ppcb == NULL ||
 		    (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING)) {
-			tcp_unlock(inp->inp_socket, 1, 0);
+			socket_unlock(inp->inp_socket, 1);
 			continue;
 		}
 		tp = intotcpcb(inp);
@@ -2311,7 +2537,7 @@ tcp_probe_connectivity(struct ifnet *ifp, u_int32_t enable)
 		else
 			tcp_disable_read_probe(tp);
 
-		tcp_unlock(inp->inp_socket, 1, 0);
+		socket_unlock(inp->inp_socket, 1);
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
 
@@ -2384,11 +2610,8 @@ tcp_update_mss_locked(struct socket *so, struct ifnet *ifp)
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp = intotcpcb(inp);
 
-	if (ifp == NULL && inp->inp_last_outifp == NULL)
+	if (ifp == NULL && (ifp = inp->inp_last_outifp) == NULL)
 		return;
-
-	if (ifp == NULL)
-		ifp = inp->inp_last_outifp;
 
 	if (!IFNET_IS_CELLULAR(ifp)) {
 		/*
@@ -2428,23 +2651,41 @@ tcp_itimer(struct inpcbinfo *ipi)
 
 	LIST_FOREACH_SAFE(inp, &tcb, inp_list, nxt) {
 		struct socket *so;
+		struct ifnet *ifp;
 
 		if (inp->inp_ppcb == NULL ||
 		    in_pcb_checkstate(inp, WNT_ACQUIRE, 0) == WNT_STOPUSING)
 			continue;
 		so = inp->inp_socket;
-		tcp_lock(so, 1, 0);
+		ifp = inp->inp_last_outifp;
+		socket_lock(so, 1);
 		if (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING) {
-			tcp_unlock(so, 1, 0);
+			socket_unlock(so, 1);
 			continue;
 		}
 		so_check_extended_bk_idle_time(so);
 		if (ipi->ipi_flags & INPCBINFO_UPDATE_MSS) {
 			tcp_update_mss_locked(so, NULL);
 		}
-		tcp_unlock(so, 1, 0);
+		socket_unlock(so, 1);
+
+		/*
+		 * Defunct all system-initiated background sockets if the
+		 * socket is using the cellular interface and the interface
+		 * has its LQM set to abort.
+		 */
+		if ((ipi->ipi_flags & INPCBINFO_HANDLE_LQM_ABORT) &&
+		    IS_SO_TC_BACKGROUNDSYSTEM(so->so_traffic_class) &&
+		    ifp != NULL && IFNET_IS_CELLULAR(ifp) &&
+		    (ifp->if_interface_state.valid_bitmask &
+		    IF_INTERFACE_STATE_LQM_STATE_VALID) &&
+		    ifp->if_interface_state.lqm_state ==
+		    IFNET_LQM_THRESH_ABORT) {
+			socket_defunct(current_proc(), so,
+			    SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL);
+		}
 	}
 
-	ipi->ipi_flags &= ~INPCBINFO_UPDATE_MSS;
+	ipi->ipi_flags &= ~(INPCBINFO_UPDATE_MSS | INPCBINFO_HANDLE_LQM_ABORT);
 	lck_rw_done(ipi->ipi_lock);
 }

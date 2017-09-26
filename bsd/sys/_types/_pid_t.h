@@ -27,5 +27,6 @@
  */
 #ifndef _PID_T 
 #define _PID_T 
+#include <sys/_types.h> /* __darwin_pid_t */
 typedef __darwin_pid_t        pid_t; 
 #endif  /* _PID_T */

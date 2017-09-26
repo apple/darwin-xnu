@@ -48,7 +48,12 @@ __BEGIN_DECLS
 
 extern void *__dso_handle;
 
-OS_ALWAYS_INLINE static inline void _os_log_verify_format_str(__unused const char *msg, ...) __attribute__((format(os_trace, 1, 2)));
+#ifdef XNU_KERNEL_PRIVATE
+extern bool startup_serial_logging_active;
+extern uint64_t startup_serial_num_procs;
+#endif /* XNU_KERNEL_PRIVATE */
+
+OS_ALWAYS_INLINE static inline void _os_log_verify_format_str(__unused const char *msg, ...) __attribute__((format(os_log, 1, 2)));
 OS_ALWAYS_INLINE static inline void _os_log_verify_format_str(__unused const char *msg, ...) { /* placeholder */ }
 
 #if OS_OBJECT_USE_OBJC
@@ -484,6 +489,13 @@ os_log_debug_enabled(os_log_t log);
     _os_log_sensitive(&__dso_handle, log, OS_LOG_TYPE_DEBUG, _os_log_fmt, ##__VA_ARGS__);                             \
     __asm__(""); /* avoid tailcall */                                                                                 \
 })
+
+#ifdef XNU_KERNEL_PRIVATE
+#define os_log_with_startup_serial(log, format, ...) __extension__({                                                  \
+    if (startup_serial_logging_active) { printf(format, ##__VA_ARGS__); }                                             \
+    else { os_log(log, format, ##__VA_ARGS__); }                                                                      \
+})
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*!
  * @function _os_log_internal

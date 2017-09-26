@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,6 +40,7 @@
 #include <sys/mbuf.h>
 #include <sys/queue.h>
 #include <sys/sysctl.h>
+#include <sys/sysproto.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
@@ -1093,10 +1094,8 @@ set_tcp_stream_priority(struct socket *so)
 		 * happen when there is no indication of foreground
 		 * activity.
 		 */
-		if (soissrcbackground(so) &&
-		    ((outifp->if_fg_sendts > 0 &&
-		    (int)(uptime - outifp->if_fg_sendts) <=
-		    TCP_BG_SWITCH_TIME) || net_io_policy_throttled))
+		if (soissrcbackground(so) && outifp->if_fg_sendts > 0 &&
+		    (int)(uptime - outifp->if_fg_sendts) <= TCP_BG_SWITCH_TIME)
 			fg_active = true;
 
 		/*
@@ -1816,5 +1815,85 @@ sysctl_reset_dscp_to_wifi_ac_map SYSCTL_HANDLER_ARGS
 
 	set_dscp_to_wifi_ac_map(default_dscp_to_wifi_ac_map, 1);
 
+	return (0);
+}
+
+/*
+ * Returns whether a large upload or download transfer should be marked as
+ * BK service type for network activity. This is a system level
+ * hint/suggestion to classify application traffic based on statistics
+ * collected from the current network attachment
+ *
+ * Returns 1 for BK and 0 for default
+ */
+
+int
+net_qos_guideline(struct proc *p, struct net_qos_guideline_args *arg,
+    int *retval)
+{
+#pragma unused(p)
+#define	RETURN_USE_BK	1
+#define	RETURN_USE_DEFAULT	0
+	struct net_qos_param qos_arg;
+	struct ifnet *ipv4_primary, *ipv6_primary;
+	int err = 0;
+
+	if (arg->param == USER_ADDR_NULL || retval == NULL ||
+	    arg->param_len != sizeof (qos_arg)) {
+		return (EINVAL);
+	}
+	err = copyin(arg->param, (caddr_t) &qos_arg, sizeof (qos_arg));
+	if (err != 0)
+		return (err);
+
+	*retval = RETURN_USE_DEFAULT;
+	ipv4_primary = ifindex2ifnet[get_primary_ifscope(AF_INET)];
+	ipv6_primary = ifindex2ifnet[get_primary_ifscope(AF_INET6)];
+
+	/*
+	 * If either of the interfaces is in Low Internet mode, enable
+	 * background delay based algorithms on this transfer
+	 */
+	if (qos_arg.nq_uplink) {
+		if ((ipv4_primary != NULL &&
+		    (ipv4_primary->if_xflags & IFXF_LOW_INTERNET_UL)) ||
+		    (ipv6_primary != NULL &&
+		    (ipv6_primary->if_xflags & IFXF_LOW_INTERNET_UL))) {
+			*retval = RETURN_USE_BK;
+			return (0);
+		}
+	} else {
+		if ((ipv4_primary != NULL &&
+		    (ipv4_primary->if_xflags & IFXF_LOW_INTERNET_DL)) ||
+		    (ipv6_primary != NULL &&
+		    (ipv6_primary->if_xflags & IFXF_LOW_INTERNET_DL))) {
+			*retval = RETURN_USE_BK;
+			return (0);
+		}
+	}
+
+	/*
+	 * Some times IPv4 and IPv6 primary interfaces can be different.
+	 * In this case, if either of them is non-cellular, we should mark
+	 * the transfer as BK as it can potentially get used based on
+	 * the host name resolution
+	 */
+	if (ipv4_primary != NULL && IFNET_IS_EXPENSIVE(ipv4_primary) &&
+	    ipv6_primary != NULL && IFNET_IS_EXPENSIVE(ipv6_primary)) {
+		if (qos_arg.nq_use_expensive) {
+			return (0);
+		} else {
+			*retval = RETURN_USE_BK;
+			return (0);
+		}
+	}
+	if (qos_arg.nq_transfer_size >= 5 * 1024 * 1024) {
+		*retval = RETURN_USE_BK;
+		return (0);
+	}
+
+
+#undef	RETURN_USE_BK
+#undef	RETURN_USE_DEFAULT
 	return (0);
 }

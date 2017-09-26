@@ -53,6 +53,14 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
+
+/*
+ * un-comment the following lines to debug the link/prepost tables
+ * NOTE: this expands each element by ~40 bytes
+ */
+//#define KEEP_WAITQ_LINK_STATS
+//#define KEEP_WAITQ_PREPOST_STATS
+
 #include <kern/ast.h>
 #include <kern/backtrace.h>
 #include <kern/kern_types.h>
@@ -72,11 +80,11 @@
 
 #include <sys/kdebug.h>
 
-#if defined(CONFIG_WAITQ_LINK_STATS) || defined(CONFIG_WAITQ_PREPOST_STATS)
-#  if !defined(CONFIG_LTABLE_STATS)
+#if defined(KEEP_WAITQ_LINK_STATS) || defined(KEEP_WAITQ_PREPOST_STATS)
+#  if !CONFIG_LTABLE_STATS
 #    error "You must configure LTABLE_STATS to use WAITQ_[LINK|PREPOST]_STATS"
 #  endif
-#  if !defined(CONFIG_WAITQ_STATS)
+#  if !CONFIG_WAITQ_STATS
 #    error "You must configure WAITQ_STATS to use WAITQ_[LINK|PREPOST]_STATS"
 #  endif
 #endif
@@ -101,14 +109,6 @@
 #define wqerr(fmt,...) \
 	printf("WQ[%s] ERROR: " fmt "\n", __func__, ## __VA_ARGS__)
 
-
-/*
- * un-comment the following lines to debug the link/prepost tables
- * NOTE: this expands each element by ~40 bytes
- */
-//#define CONFIG_WAITQ_LINK_STATS
-//#define CONFIG_WAITQ_PREPOST_STATS
-
 /*
  * file-static functions / data
  */
@@ -128,13 +128,25 @@ static zone_t waitq_set_zone;
 #define ROUNDDOWN(x,y)	(((x)/(y))*(y))
 
 
-#if defined(CONFIG_LTABLE_STATS) || defined(CONFIG_WAITQ_STATS)
+#if CONFIG_LTABLE_STATS || CONFIG_WAITQ_STATS
 static __inline__ void waitq_grab_backtrace(uintptr_t bt[NWAITQ_BTFRAMES], int skip);
 #endif
 
+#if __arm64__
 
 #define waitq_lock_to(wq,to) \
-	(hw_lock_to(&(wq)->waitq_interlock, to))
+	(hw_lock_bit_to(&(wq)->waitq_interlock, LCK_ILOCK, (uint32_t)to))
+
+#define waitq_lock_unlock(wq) \
+	(hw_unlock_bit(&(wq)->waitq_interlock, LCK_ILOCK))
+
+#define waitq_lock_init(wq) \
+	(wq->waitq_interlock = 0)
+
+#else
+
+#define waitq_lock_to(wq,to) \
+	(hw_lock_to(&(wq)->waitq_interlock, (uint32_t)to))
 
 #define waitq_lock_unlock(wq) \
 	(hw_lock_unlock(&(wq)->waitq_interlock))
@@ -142,6 +154,7 @@ static __inline__ void waitq_grab_backtrace(uintptr_t bt[NWAITQ_BTFRAMES], int s
 #define waitq_lock_init(wq) \
 	(hw_lock_init(&(wq)->waitq_interlock))
 
+#endif	/* __arm64__ */
 
 /*
  * Prepost callback function for specially marked waitq sets
@@ -184,7 +197,7 @@ struct waitq_link {
 			uint64_t          right_setid;
 		} wql_link;
 	};
-#ifdef CONFIG_WAITQ_LINK_STATS
+#ifdef KEEP_WAITQ_LINK_STATS
 	thread_t  sl_alloc_th;
 	task_t    sl_alloc_task;
 	uintptr_t sl_alloc_bt[NWAITQ_BTFRAMES];
@@ -196,7 +209,7 @@ struct waitq_link {
 	uint64_t  sl_free_ts;
 #endif
 };
-#if !defined(CONFIG_WAITQ_LINK_STATS)
+#if !defined(KEEP_WAITQ_LINK_STATS)
 static_assert((sizeof(struct waitq_link) & (sizeof(struct waitq_link) - 1)) == 0,
 	       "waitq_link struct must be a power of two!");
 #endif
@@ -237,7 +250,7 @@ static void wql_poison(struct link_table *table, struct lt_elem *elem)
 	default:
 		break;
 	}
-#ifdef CONFIG_WAITQ_LINK_STATS
+#ifdef KEEP_WAITQ_LINK_STATS
 	memset(link->sl_alloc_bt, 0, sizeof(link->sl_alloc_bt));
 	link->sl_alloc_ts = 0;
 	memset(link->sl_mkvalid_bt, 0, sizeof(link->sl_mkvalid_bt));
@@ -250,7 +263,7 @@ static void wql_poison(struct link_table *table, struct lt_elem *elem)
 #endif
 }
 
-#ifdef CONFIG_WAITQ_LINK_STATS
+#ifdef KEEP_WAITQ_LINK_STATS
 static __inline__ void wql_do_alloc_stats(struct lt_elem *elem)
 {
 	if (elem) {
@@ -297,7 +310,7 @@ static __inline__ void wql_do_mkvalid_stats(struct lt_elem *elem)
 #define wql_do_alloc_stats(e)
 #define wql_do_invalidate_stats(e)
 #define wql_do_mkvalid_stats(e)
-#endif /* CONFIG_WAITQ_LINK_STATS */
+#endif /* KEEP_WAITQ_LINK_STATS */
 
 static void wql_init(void)
 {
@@ -347,7 +360,7 @@ static struct waitq_link *wql_alloc_link(int type)
 static void wql_realloc_link(struct waitq_link *link, int type)
 {
 	ltable_realloc_elem(&g_wqlinktable, &link->wqte, type);
-#ifdef CONFIG_WAITQ_LINK_STATS
+#ifdef KEEP_WAITQ_LINK_STATS
 	memset(link->sl_alloc_bt, 0, sizeof(link->sl_alloc_bt));
 	link->sl_alloc_ts = 0;
 	wql_do_alloc_stats(&link->wqte);
@@ -585,13 +598,13 @@ struct wq_prepost {
 			uint64_t      wqp_wq_id;
 		} wqp_post;
 	};
-#ifdef CONFIG_WAITQ_PREPOST_STATS
+#ifdef KEEP_WAITQ_PREPOST_STATS
 	thread_t  wqp_alloc_th;
 	task_t    wqp_alloc_task;
 	uintptr_t wqp_alloc_bt[NWAITQ_BTFRAMES];
 #endif
 };
-#if !defined(CONFIG_WAITQ_PREPOST_STATS)
+#if !defined(KEEP_WAITQ_PREPOST_STATS)
 static_assert((sizeof(struct wq_prepost) & (sizeof(struct wq_prepost) - 1)) == 0,
 	       "wq_prepost struct must be a power of two!");
 #endif
@@ -630,7 +643,7 @@ static void wqp_poison(struct link_table *table, struct lt_elem *elem)
 	}
 }
 
-#ifdef CONFIG_WAITQ_PREPOST_STATS
+#ifdef KEEP_WAITQ_PREPOST_STATS
 static __inline__ void wqp_do_alloc_stats(struct lt_elem *elem)
 {
 	if (!elem)
@@ -653,7 +666,7 @@ static __inline__ void wqp_do_alloc_stats(struct lt_elem *elem)
 }
 #else
 #define wqp_do_alloc_stats(e)
-#endif /* CONFIG_WAITQ_LINK_STATS */
+#endif /* KEEP_WAITQ_LINK_STATS */
 
 static void wqp_init(void)
 {
@@ -1520,7 +1533,7 @@ static void wq_prepost_do_post_locked(struct waitq_set *wqset,
  * Stats collection / reporting
  *
  * ---------------------------------------------------------------------- */
-#if defined(CONFIG_LTABLE_STATS) && defined(CONFIG_WAITQ_STATS)
+#if CONFIG_LTABLE_STATS && CONFIG_WAITQ_STATS
 static void wq_table_stats(struct link_table *table, struct wq_table_stats *stats)
 {
 	stats->version = WAITQ_STATS_VERSION;
@@ -1590,7 +1603,7 @@ struct waitq *global_waitq(int index)
 }
 
 
-#if defined(CONFIG_LTABLE_STATS) || defined(CONFIG_WAITQ_STATS)
+#if CONFIG_LTABLE_STATS || CONFIG_WAITQ_STATS
 /* this global is for lldb */
 const uint32_t g_nwaitq_btframes = NWAITQ_BTFRAMES;
 
@@ -2149,64 +2162,6 @@ static __inline__ int waitq_select_n_locked(struct waitq *waitq,
 	return nthreads;
 }
 
-
-/**
- * callback function that uses thread parameters to determine wakeup eligibility
- *
- * Conditions:
- *	'waitq' is locked
- *	'thread' is not locked
- */
-static thread_t waitq_select_one_cb(void *ctx, struct waitq *waitq,
-				    int is_global, thread_t thread)
-{
-	int fifo_q, realtime;
-	boolean_t thread_imp_donor = FALSE;
-
-	(void)ctx;
-	(void)waitq;
-	(void)is_global;
-	realtime = 0;
-
-	fifo_q = 1; /* default to FIFO for all queues for now */
-#if IMPORTANCE_INHERITANCE
-	if (is_global)
-		fifo_q = 0; /* 'thread_imp_donor' takes the place of FIFO checking */
-#endif
-
-	if (thread->sched_pri >= BASEPRI_REALTIME)
-		realtime = 1;
-
-#if IMPORTANCE_INHERITANCE
-	/* 
-	 * Checking imp donor bit does not need thread lock or
-	 * or task lock since we have the wait queue lock and
-	 * thread can not be removed from it without acquiring
-	 * wait queue lock. The imp donor bit may change
-	 * once we read its value, but it is ok to wake
-	 * a thread while someone drops importance assertion
-	 * on the that thread.
-	 */
-	thread_imp_donor = task_is_importance_donor(thread->task);
-#endif /* IMPORTANCE_INHERITANCE */
-
-	if (fifo_q || thread_imp_donor == TRUE
-	    || realtime || (thread->options & TH_OPT_VMPRIV)) {
-		/*
-		 * If this thread's task is an importance donor,
-		 * or it's a realtime thread, or it's a VM privileged
-		 * thread, OR the queue is marked as FIFO:
-		 *     select the thread
-		 */
-		return thread;
-	}
-
-	/* by default, _don't_ select the thread */
-	return THREAD_NULL;
-}
-
-
-
 /**
  * select from a waitq a single thread waiting for a given event
  *
@@ -2228,7 +2183,7 @@ static thread_t waitq_select_one_locked(struct waitq *waitq, event64_t event,
 
 	queue_init(&threadq);
 
-	nthreads = waitq_select_n_locked(waitq, event, waitq_select_one_cb, NULL,
+	nthreads = waitq_select_n_locked(waitq, event, NULL, NULL,
 	                                 reserved_preposts, &threadq, 1, spl);
 
 	/* if we selected a thread, return it (still locked) */
@@ -3308,7 +3263,7 @@ kern_return_t waitq_set_free(struct waitq_set *wqset)
 	return KERN_SUCCESS;
 }
 
-#if defined(DEVLEOPMENT) || defined(DEBUG)
+#if DEVELOPMENT || DEBUG
 #if CONFIG_WAITQ_DEBUG
 /**
  * return the set ID of 'wqset'
@@ -4188,6 +4143,43 @@ void waitq_unlink_by_prepost_id(uint64_t wqp_id, struct waitq_set *wqset)
 	}
 	enable_preemption();
 	return;
+}
+
+
+/**
+ * reference and lock a waitq by its prepost ID
+ *
+ * Conditions:
+ *	wqp_id may be valid or invalid
+ *
+ * Returns:
+ *	a locked waitq if wqp_id was valid
+ *	NULL on failure
+ */
+struct waitq *waitq_lock_by_prepost_id(uint64_t wqp_id)
+{
+	struct waitq *wq = NULL;
+	struct wq_prepost *wqp;
+
+	disable_preemption();
+	wqp = wq_prepost_get(wqp_id);
+	if (wqp) {
+		wq = wqp->wqp_wq.wqp_wq_ptr;
+
+		assert(!waitq_irq_safe(wq));
+
+		waitq_lock(wq);
+		wq_prepost_put(wqp);
+
+		if (!waitq_valid(wq)) {
+			/* someone already tore down this waitq! */
+			waitq_unlock(wq);
+			enable_preemption();
+			return NULL;
+		}
+	}
+	enable_preemption();
+	return wq;
 }
 
 

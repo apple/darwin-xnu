@@ -40,7 +40,7 @@ IOStateReporter*
 IOStateReporter::with(IOService *reportingService,
                       IOReportCategories categories,
                       int nstates,
-                      IOReportUnits unit/* = kIOReportUnitHWTicks*/)
+                      IOReportUnit unit/* = kIOReportUnitHWTicks*/)
 {
     IOStateReporter *reporter, *rval = NULL;
     
@@ -68,7 +68,7 @@ bool
 IOStateReporter::initWith(IOService *reportingService,
                           IOReportCategories categories,
                           int16_t nstates,
-                          IOReportUnits unit)
+                          IOReportUnit unit)
 {
     bool success = false;
     

@@ -28,6 +28,8 @@
 #ifndef _FSOBJ_ID_T
 #define _FSOBJ_ID_T
 
+#include <sys/_types/_u_int32_t.h> /* u_int32_t */
+
 typedef struct fsobj_id {
 	u_int32_t fid_objno;
 	u_int32_t fid_generation;

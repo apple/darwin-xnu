@@ -131,12 +131,12 @@ void IOFilterInterruptEventSource::signalInterrupt()
     producerCount++;
 	
 	if (trace)
-	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
+	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(owner));
     
     signalWorkAvailable();
 	
 	if (trace)
-	    IOTimeStampEndConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
+	    IOTimeStampEndConstant(IODBG_INTES(IOINTES_SEMA), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(owner));
 	
 }
 
@@ -160,7 +160,7 @@ void IOFilterInterruptEventSource::normalInterruptOccurred
 	
 	if (trace)
 		IOTimeStampStartConstant(IODBG_INTES(IOINTES_FILTER),
-					 VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+					 VM_KERNEL_UNSLIDE(filterAction), VM_KERNEL_ADDRHIDE(owner), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 
     if (IOInterruptEventSource::reserved->statistics) {
         if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)) {
@@ -184,7 +184,8 @@ void IOFilterInterruptEventSource::normalInterruptOccurred
 	
 	if (trace)
 		IOTimeStampEndConstant(IODBG_INTES(IOINTES_FILTER),
-				       VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+				VM_KERNEL_ADDRHIDE(filterAction), VM_KERNEL_ADDRHIDE(owner),
+				VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 	
     if (filterRes)
         signalInterrupt();
@@ -200,7 +201,7 @@ void IOFilterInterruptEventSource::disableInterruptOccurred
 	
 	if (trace)
 		IOTimeStampStartConstant(IODBG_INTES(IOINTES_FILTER),
-					 VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+					 VM_KERNEL_UNSLIDE(filterAction), VM_KERNEL_ADDRHIDE(owner), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 
     if (IOInterruptEventSource::reserved->statistics) {
         if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)) {
@@ -224,7 +225,7 @@ void IOFilterInterruptEventSource::disableInterruptOccurred
 
 	if (trace)
 		IOTimeStampEndConstant(IODBG_INTES(IOINTES_FILTER),
-				       VM_KERNEL_UNSLIDE(filterAction), (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
+				       VM_KERNEL_UNSLIDE(filterAction), VM_KERNEL_ADDRHIDE(owner), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 	
     if (filterRes) {
         prov->disableInterrupt(source);	/* disable the interrupt */

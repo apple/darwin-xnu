@@ -40,6 +40,9 @@
 #include <sys/fcntl.h>
 #include <miscfs/devfs/devfs.h>
 
+#if CONFIG_EMBEDDED
+#include <arm/caches_internal.h>
+#endif
 
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
@@ -52,7 +55,19 @@ extern int dtrace_kernel_symbol_mode;
 /* #include <machine/trap.h */
 struct savearea_t; /* Used anonymously */
 
-#if   defined(__x86_64__)
+#if defined(__arm__)
+typedef kern_return_t (*perfCallback)(int, struct savearea_t *, __unused int, __unused int);
+extern perfCallback tempDTraceTrapHook;
+extern kern_return_t fbt_perfCallback(int, struct savearea_t *, __unused int, __unused int);
+#define	SDT_PATCHVAL	0xdefc
+#define	SDT_AFRAMES		7
+#elif defined(__arm64__)
+typedef kern_return_t (*perfCallback)(int, struct savearea_t *, __unused int, __unused int);
+extern perfCallback tempDTraceTrapHook;
+extern kern_return_t fbt_perfCallback(int, struct savearea_t *, __unused int, __unused int);
+#define	SDT_PATCHVAL    0xe7eeee7e
+#define	SDT_AFRAMES		7
+#elif defined(__x86_64__)
 typedef kern_return_t (*perfCallback)(int, struct savearea_t *, uintptr_t *, int);
 extern perfCallback tempDTraceTrapHook;
 extern kern_return_t fbt_perfCallback(int, struct savearea_t *, uintptr_t *, int);
@@ -564,6 +579,12 @@ void sdt_init( void )
 					strncpy(sdpd->sdpd_func, prev_name, len); /* NUL termination is ensured. */
 					
 					sdpd->sdpd_offset = *(unsigned long *)sym[i].n_value;
+#if defined(__arm__)
+					/* PR8353094 - mask off thumb-bit */
+					sdpd->sdpd_offset &= ~0x1U;
+#elif defined(__arm64__)
+					sdpd->sdpd_offset &= ~0x1LU;
+#endif  /* __arm__ */
 
 #if 0
 					printf("sdt_init: sdpd_offset=0x%lx, n_value=0x%lx, name=%s\n",
@@ -594,7 +615,7 @@ sdt_provide_module(void *arg, struct modctl *ctl)
 #pragma unused(arg)
 	ASSERT(ctl != NULL);
 	ASSERT(dtrace_kernel_symbol_mode != DTRACE_KERNEL_SYMBOLS_NEVER);
-	lck_mtx_assert(&mod_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&mod_lock, LCK_MTX_ASSERT_OWNED);
 	
 	if (MOD_SDT_DONE(ctl))
 		return;

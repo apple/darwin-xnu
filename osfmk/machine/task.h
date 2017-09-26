@@ -30,8 +30,12 @@
 
 #if defined (__i386__) || defined (__x86_64__)
 #include "i386/task.h"
+#elif defined (__arm__) || defined (__arm64__)
+#include "arm/task.h"
 #else
 #error architecture not supported
 #endif
+
+extern void machine_task_init(task_t new_task, task_t parent_task, boolean_t memory_inherit);
 
 #endif /* _MACHINE_TASK_H */

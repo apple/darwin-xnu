@@ -51,6 +51,7 @@
 extern int hz;
 
 extern void cnputcusr(char);
+extern void cnputsusr(char *, int);
 extern int  cngetc(void);
 
 void	kminit(void);
@@ -359,7 +360,13 @@ kmoutput(struct tty *tp)
 		(void) q_to_b(&tp->t_outq, buf, cc);
 		for (cp = buf; cp < &buf[cc]; cp++) {
 			/* output the buffer one charatcer at a time */
-			kmputc(tp->t_dev, *cp & 0x7f);
+			*cp = *cp & 0x7f;
+		}
+
+		if (cc > 1) {
+			cnputsusr((char *)buf, cc);
+		} else {
+			kmputc(tp->t_dev, *buf);
 		}
 	}
 	/*

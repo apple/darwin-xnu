@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.apple.xnu.test.kevent_qos</string>
+	<key>MachServices</key>
+	<dict>
+		<key>com.apple.xnu.test.kevent_qos</key>
+		<true/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>1</integer>
+	<key>UserName</key>
+	<string>root</string>
+	<key>ProcessType</key>
+	<string>Adaptive</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>MallocNanoZone</key>
+		<string>1</string>
+	</dict>
+</dict>
+</plist>

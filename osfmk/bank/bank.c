@@ -39,6 +39,8 @@
 #include <kern/host.h>
 #include <kern/kalloc.h>
 #include <kern/ledger.h>
+#include <kern/coalition.h>
+#include <kern/thread_group.h>
 #include <sys/kdebug.h>
 #include <IOKit/IOBSD.h>
 #include <mach/mach_voucher_attr_control.h>
@@ -63,7 +65,7 @@ queue_head_t bank_accounts_list;
 #endif
 
 static ledger_template_t bank_ledger_template = NULL;
-struct _bank_ledger_indices bank_ledgers = { -1 };
+struct _bank_ledger_indices bank_ledgers = { -1, -1 };
 
 static bank_task_t bank_task_alloc_init(task_t task);
 static bank_account_t bank_account_alloc_init(bank_task_t bank_holder, bank_task_t bank_merchant,
@@ -791,6 +793,7 @@ bank_account_alloc_init(
 		return BANK_ACCOUNT_NULL;
 
 	ledger_entry_setactive(new_ledger, bank_ledgers.cpu_time);
+	ledger_entry_setactive(new_ledger, bank_ledgers.energy);
 	new_bank_account = (bank_account_t) zalloc(bank_account_zone);
 	if (new_bank_account == BANK_ACCOUNT_NULL) {
 		ledger_dereference(new_ledger);
@@ -930,6 +933,7 @@ bank_task_dealloc(
 	lck_mtx_destroy(&bank_task->bt_acc_to_pay_lock, &bank_lock_grp);
 	lck_mtx_destroy(&bank_task->bt_acc_to_charge_lock, &bank_lock_grp);
 
+
 #if DEVELOPMENT || DEBUG
 	lck_mtx_lock(&bank_tasks_list_lock);
 	queue_remove(&bank_tasks_list, bank_task, bank_task_t, bt_global_elt);
@@ -1020,25 +1024,28 @@ bank_rollup_chit_to_tasks(
 		return;
 
 	ret = ledger_get_entries(bill, bank_ledgers.cpu_time, &credit, &debit);
-	if (ret != KERN_SUCCESS) {
-		return;
-	}
-
-#if DEVELOPMENT || DEBUG
-	if (debit != 0) {
-		panic("bank_rollup: debit: %lld non zero\n", debit);
-	}
-#endif
-
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_CPU_TIME))) | DBG_FUNC_NONE,
+	if (ret == KERN_SUCCESS) {
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+			(BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_CPU_TIME))) | DBG_FUNC_NONE,
 			bank_merchant->bt_pid, bank_holder->bt_pid, credit, debit, 0);
-#if CONFIG_BANK
-	ledger_credit(bank_holder->bt_creditcard, task_ledgers.cpu_time_billed_to_me, credit);
-	ledger_debit(bank_holder->bt_creditcard, task_ledgers.cpu_time_billed_to_me, debit);
-	
-	ledger_credit(bank_merchant->bt_creditcard, task_ledgers.cpu_time_billed_to_others, credit);
-	ledger_debit(bank_merchant->bt_creditcard, task_ledgers.cpu_time_billed_to_others, debit);
-#endif
+		ledger_credit(bank_holder->bt_creditcard, task_ledgers.cpu_time_billed_to_me, credit);
+		ledger_debit(bank_holder->bt_creditcard, task_ledgers.cpu_time_billed_to_me, debit);
+
+		ledger_credit(bank_merchant->bt_creditcard, task_ledgers.cpu_time_billed_to_others, credit);
+		ledger_debit(bank_merchant->bt_creditcard, task_ledgers.cpu_time_billed_to_others, debit);
+	}
+
+	ret = ledger_get_entries(bill, bank_ledgers.energy, &credit, &debit);
+	if (ret == KERN_SUCCESS) {
+		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+			(BANK_CODE(BANK_ACCOUNT_INFO, (BANK_SETTLE_ENERGY))) | DBG_FUNC_NONE,
+			bank_merchant->bt_pid, bank_holder->bt_pid, credit, debit, 0);
+		ledger_credit(bank_holder->bt_creditcard, task_ledgers.energy_billed_to_me, credit);
+		ledger_debit(bank_holder->bt_creditcard, task_ledgers.energy_billed_to_me, debit);
+
+		ledger_credit(bank_merchant->bt_creditcard, task_ledgers.energy_billed_to_others, credit);
+		ledger_debit(bank_merchant->bt_creditcard, task_ledgers.energy_billed_to_others, debit);
+	}
 }
 
 
@@ -1091,23 +1098,30 @@ init_bank_ledgers(void) {
 	if ((idx = ledger_entry_add(t, "cpu_time", "sched", "ns")) < 0) {
 		panic("couldn't create cpu_time entry for bank ledger template");
 	}
-
 	bank_ledgers.cpu_time = idx;
+
+	if ((idx = ledger_entry_add(t, "energy", "power", "nj")) < 0) {
+		panic("couldn't create energy entry for bank ledger template");
+	}
+	bank_ledgers.energy = idx;
+
+	ledger_template_complete(t);
 	bank_ledger_template = t;
 }
 
-/* Routine: bank_billed_time_safe
+/* Routine: bank_billed_balance_safe
  * Purpose: Walk through all the bank accounts billed to me by other tasks and get the current billing balance.
  *          Called from another task. It takes global bank task lock to make sure the bank context is
             not deallocated while accesing it.
- * Returns: balance.
+ * Returns: cpu balance and energy balance in out paremeters.
  */
-uint64_t
-bank_billed_time_safe(task_t task)
+void
+bank_billed_balance_safe(task_t task, uint64_t *cpu_time, uint64_t *energy)
 {
 	bank_task_t bank_task = BANK_TASK_NULL;
 	ledger_amount_t credit, debit;
-	uint64_t balance = 0;
+	uint64_t cpu_balance = 0;
+	uint64_t energy_balance = 0;
 	kern_return_t kr;
 
 	/* Task might be in exec, grab the global bank task lock before accessing bank context. */
@@ -1120,43 +1134,50 @@ bank_billed_time_safe(task_t task)
 	global_bank_task_unlock();
 
 	if (bank_task) {
-		balance = bank_billed_time(bank_task);
+		bank_billed_balance(bank_task, &cpu_balance, &energy_balance);
 		bank_task_dealloc(bank_task, 1);
 	} else {
 		kr = ledger_get_entries(task->ledger, task_ledgers.cpu_time_billed_to_me,
 			&credit, &debit);
 		if (kr == KERN_SUCCESS) {
-			balance = credit - debit;
+			cpu_balance = credit - debit;
+		}
+		kr = ledger_get_entries(task->ledger, task_ledgers.energy_billed_to_me,
+			&credit, &debit);
+		if (kr == KERN_SUCCESS) {
+			energy_balance = credit - debit;
 		}
 	}
 
-	return balance;
+	*cpu_time = cpu_balance;
+	*energy = energy_balance;
+	return;
 }
 
 /*
  * Routine: bank_billed_time
  * Purpose: Walk through the Accounts need to pay account list and get the current billing balance.
- * Returns: balance.
+ * Returns: cpu balance and energy balance in out paremeters.
  */
-uint64_t
-bank_billed_time(bank_task_t bank_task)
+void
+bank_billed_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energy)
 {
-	int64_t balance = 0;
-#ifdef CONFIG_BANK
+	int64_t cpu_balance = 0;
+	int64_t energy_balance = 0;
 	bank_account_t bank_account;
 	int64_t temp = 0;
 	kern_return_t kr;
-#endif
 	if (bank_task == BANK_TASK_NULL) {
-		return balance;
+		*cpu_time = 0;
+		*energy = 0;
+		return;
 	}
 	
-#ifdef CONFIG_BANK
 	lck_mtx_lock(&bank_task->bt_acc_to_pay_lock);
 
 	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.cpu_time_billed_to_me, &temp);
 	if (kr == KERN_SUCCESS && temp >= 0) {
-		balance += temp;
+		cpu_balance += temp;
 	}
 #if DEVELOPMENT || DEBUG
 	else {
@@ -1164,35 +1185,47 @@ bank_billed_time(bank_task_t bank_task)
 	}
 #endif /* DEVELOPMENT || DEBUG */
 
+	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.energy_billed_to_me, &temp);
+	if (kr == KERN_SUCCESS && temp >= 0) {
+		energy_balance += temp;
+	}
+
 	queue_iterate(&bank_task->bt_accounts_to_pay, bank_account, bank_account_t, ba_next_acc_to_pay) {
 		temp = 0;
 		kr = ledger_get_balance(bank_account->ba_bill, bank_ledgers.cpu_time, &temp);
 		if (kr == KERN_SUCCESS && temp >= 0) {
-			balance += temp;
+			cpu_balance += temp;
 		}
 #if DEVELOPMENT || DEBUG
 		else {
 			printf("bank_bill_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
 		}
 #endif /* DEVELOPMENT || DEBUG */
+
+		kr = ledger_get_balance(bank_account->ba_bill, bank_ledgers.energy, &temp);
+		if (kr == KERN_SUCCESS && temp >= 0) {
+			energy_balance += temp;
+		}
 	}
 	lck_mtx_unlock(&bank_task->bt_acc_to_pay_lock);
-#endif
-	return (uint64_t)balance;
+	*cpu_time = (uint64_t)cpu_balance;
+	*energy = (uint64_t)energy_balance;
+	return;
 }
 
-/* Routine: bank_serviced_time_safe
+/* Routine: bank_serviced_balance_safe
  * Purpose: Walk through the bank accounts billed to other tasks by me and get the current balance to be charged.
  *          Called from another task. It takes global bank task lock to make sure the bank context is
             not deallocated while accesing it.
- * Returns: balance.
+ * Returns: cpu balance and energy balance in out paremeters.
  */
-uint64_t
-bank_serviced_time_safe(task_t task)
+void
+bank_serviced_balance_safe(task_t task, uint64_t *cpu_time, uint64_t *energy)
 {
 	bank_task_t bank_task = BANK_TASK_NULL;
 	ledger_amount_t credit, debit;
-	uint64_t balance = 0;
+	uint64_t cpu_balance = 0;
+	uint64_t energy_balance = 0;
 	kern_return_t kr;
 
 	/* Task might be in exec, grab the global bank task lock before accessing bank context. */
@@ -1205,43 +1238,51 @@ bank_serviced_time_safe(task_t task)
 	global_bank_task_unlock();
 
 	if (bank_task) {
-		balance = bank_serviced_time(bank_task);
+		bank_serviced_balance(bank_task, &cpu_balance, &energy_balance);
 		bank_task_dealloc(bank_task, 1);
 	} else {
 		kr = ledger_get_entries(task->ledger, task_ledgers.cpu_time_billed_to_others,
 			&credit, &debit);
 		if (kr == KERN_SUCCESS) {
-			balance = credit - debit;
+			cpu_balance = credit - debit;
+		}
+
+		kr = ledger_get_entries(task->ledger, task_ledgers.energy_billed_to_others,
+			&credit, &debit);
+		if (kr == KERN_SUCCESS) {
+			energy_balance = credit - debit;
 		}
 	}
 
-	return balance;
+	*cpu_time = cpu_balance;
+	*energy = energy_balance;
+	return;
 }
 
 /*
- * Routine: bank_serviced_time
+ * Routine: bank_serviced_balance
  * Purpose: Walk through the Account need to charge account list and get the current balance to be charged.
- * Returns: balance.
+ * Returns: cpu balance and energy balance in out paremeters.
  */
-uint64_t
-bank_serviced_time(bank_task_t bank_task)
+void
+bank_serviced_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energy)
 {
-	int64_t balance = 0;
-#ifdef CONFIG_BANK
+	int64_t cpu_balance = 0;
+	int64_t energy_balance = 0;
 	bank_account_t bank_account;
 	int64_t temp = 0;
 	kern_return_t kr;
-#endif
 	if (bank_task == BANK_TASK_NULL) {
-		return balance;
+		*cpu_time = 0;
+		*energy = 0;
+		return;
 	}
 
-#ifdef CONFIG_BANK
 	lck_mtx_lock(&bank_task->bt_acc_to_charge_lock);
 
 	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.cpu_time_billed_to_others, &temp);
 	if (kr == KERN_SUCCESS && temp >= 0) {
-		balance += temp;
+		cpu_balance += temp;
 	}
 #if DEVELOPMENT || DEBUG
 	else {
@@ -1249,38 +1290,47 @@ bank_serviced_time(bank_task_t bank_task)
 	}
 #endif /* DEVELOPMENT || DEBUG */
 
+	kr = ledger_get_balance(bank_task->bt_creditcard, task_ledgers.energy_billed_to_others, &temp);
+	if (kr == KERN_SUCCESS && temp >= 0) {
+		energy_balance += temp;
+	}
+
 	queue_iterate(&bank_task->bt_accounts_to_charge, bank_account, bank_account_t, ba_next_acc_to_charge) {
 		temp = 0;
 		kr = ledger_get_balance(bank_account->ba_bill, bank_ledgers.cpu_time, &temp);
 		if (kr == KERN_SUCCESS && temp >= 0) {
-			balance += temp;
+			cpu_balance += temp;
 		}
 #if DEVELOPMENT || DEBUG
 		else {
 			printf("bank_serviced_time: ledger_get_balance failed or negative balance in ledger: %lld\n", temp);
 		}
 #endif /* DEVELOPMENT || DEBUG */
+
+		kr = ledger_get_balance(bank_account->ba_bill, bank_ledgers.energy, &temp);
+		if (kr == KERN_SUCCESS && temp >= 0) {
+			energy_balance += temp;
+		}
 	}
 	lck_mtx_unlock(&bank_task->bt_acc_to_charge_lock);
-#endif
-	return (uint64_t)balance;
+	*cpu_time = (uint64_t)cpu_balance;
+	*energy = (uint64_t)energy_balance;
+	return;
 }
 
 /*
- * Routine: bank_get_voucher_ledger
- * Purpose: Get the bankledger (chit) from the voucher.
- * Returns: bank_ledger if bank_account attribute present in voucher.
- *          NULL on no attribute ot bank_task attribute.
+ * Routine: bank_get_voucher_bank_account
+ * Purpose: Get the bank account from the voucher.
+ * Returns: bank_account if bank_account attribute present in voucher.
+ *          NULL on no attribute, no bank_element, or if holder and merchant bank accounts are the same.
  */
-ledger_t
-bank_get_voucher_ledger(ipc_voucher_t voucher)
+static bank_account_t
+bank_get_voucher_bank_account(ipc_voucher_t voucher)
 {
 	bank_element_t bank_element = BANK_ELEMENT_NULL;
 	bank_account_t bank_account = BANK_ACCOUNT_NULL;
 	mach_voucher_attr_value_handle_t vals[MACH_VOUCHER_ATTR_VALUE_MAX_NESTED];
 	mach_voucher_attr_value_handle_array_size_t val_count;
-	ledger_t bankledger = NULL;
-	bank_task_t bank_merchant;
 	kern_return_t kr;
 
 	val_count = MACH_VOUCHER_ATTR_VALUE_MAX_NESTED;
@@ -1289,53 +1339,85 @@ bank_get_voucher_ledger(ipc_voucher_t voucher)
 				vals,
 				&val_count);
 
-	if (kr != KERN_SUCCESS)
-		return NULL;
-
-	if (val_count == 0)
-		return NULL;
+	if (kr != KERN_SUCCESS || val_count == 0)
+		return BANK_ACCOUNT_NULL;
 
 	bank_element = HANDLE_TO_BANK_ELEMENT(vals[0]);
 	if (bank_element == BANK_DEFAULT_VALUE)
-		return NULL;
-
-	if (bank_element == BANK_DEFAULT_TASK_VALUE) {
+		return BANK_ACCOUNT_NULL;
+	if (bank_element == BANK_DEFAULT_TASK_VALUE)
 		bank_element = CAST_TO_BANK_ELEMENT(get_bank_task_context(current_task(), FALSE));
-	}
 
 	if (bank_element->be_type == BANK_TASK) {
-		bankledger = NULL;
+		return BANK_ACCOUNT_NULL;
 	} else if (bank_element->be_type == BANK_ACCOUNT) {
 		bank_account = CAST_TO_BANK_ACCOUNT(bank_element);
 		if (bank_account->ba_holder != bank_account->ba_merchant) {
-			/* Return the ledger, if the voucher is redeemed by currrent process. */
-			bank_merchant = get_bank_task_context(current_task(), FALSE);
-			if (bank_account->ba_merchant == bank_merchant) {
-				bankledger = bank_account->ba_bill;
-			}
+			bank_task_t bank_merchant = get_bank_task_context(current_task(), FALSE);
+			if (bank_account->ba_merchant == bank_merchant)
+				return bank_account;
+			else
+				return BANK_ACCOUNT_NULL;
+		} else {
+			return BANK_ACCOUNT_NULL;
 		}
 	} else {
-		panic("Bogus bank type: %d passed in bank_get_voucher_ledger\n", bank_element->be_type);
+		panic("Bogus bank type: %d passed in bank_get_voucher_bank_account\n", bank_element->be_type);
 	}
+	return BANK_ACCOUNT_NULL;
+}
+
+/*
+ * Routine: bank_get_bank_account_ledger
+ * Purpose: Get the bankledger from the bank account
+ */
+static ledger_t
+bank_get_bank_account_ledger(bank_account_t bank_account)
+{
+	ledger_t bankledger = NULL;
+
+	if (bank_account != BANK_ACCOUNT_NULL)
+		bankledger = bank_account->ba_bill;
 
 	return (bankledger);
+}
+
+
+/*
+ * Routine: bank_get_bank_ledger_and_thread_group
+ * Purpose: Get the bankledger (chit) and thread group from the voucher.
+ * Returns: bankledger and thread group if bank_account attribute present in voucher.
+ *
+ */
+kern_return_t
+bank_get_bank_ledger_and_thread_group(
+	ipc_voucher_t     voucher,
+	ledger_t          *bankledger,
+	thread_group_t    *banktg __unused)
+{
+	bank_account_t bank_account;
+
+	bank_account = bank_get_voucher_bank_account(voucher);
+	*bankledger = bank_get_bank_account_ledger(bank_account);
+	return KERN_SUCCESS;
 }
 
 /*
  * Routine: bank_swap_thread_bank_ledger
  * Purpose: swap the bank ledger on the thread.
- * Retunrs: None.
+ * Returns: None.
  * Note: Should be only called for current thread or thread which is not started.
  */
 void
 bank_swap_thread_bank_ledger(thread_t thread __unused, ledger_t new_ledger __unused)
 {
-#ifdef CONFIG_BANK 
 	spl_t			s;
 	processor_t		processor;
 	ledger_t old_ledger = thread->t_bankledger;
 	int64_t ctime, effective_ledger_time_consumed = 0; 
-	int64_t remainder = 0, consumed = 0; 
+	int64_t remainder = 0, consumed = 0;
+	int64_t effective_energy_consumed = 0;
+	uint64_t thread_energy;
 	
 	if (old_ledger == NULL && new_ledger == NULL)
 		return;
@@ -1372,15 +1454,24 @@ bank_swap_thread_bank_ledger(thread_t thread __unused, ledger_t new_ledger __unu
 
 	thread->t_deduct_bank_ledger_time = consumed;
 
+	thread_energy = ml_energy_stat(thread);
+	effective_energy_consumed =
+		thread_energy - thread->t_deduct_bank_ledger_energy;
+	assert(effective_energy_consumed >= 0);
+	thread->t_deduct_bank_ledger_energy = thread_energy;
+
 	thread->t_bankledger = new_ledger;
 
 	thread_unlock(thread);
 	splx(s);
 	
-	if (old_ledger != NULL)
+	if (old_ledger != NULL) {
 		ledger_credit(old_ledger,
 			bank_ledgers.cpu_time,
 			effective_ledger_time_consumed);
-#endif
+		ledger_credit(old_ledger,
+			bank_ledgers.energy,
+			effective_energy_consumed);
+	}
 }
 

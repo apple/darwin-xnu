@@ -64,12 +64,7 @@
  *   the disk blocks they were allocated.  The "super-user" could see the
  *   contents of free blocks anyway, so this is not a new security issue but
  *   it may be perceive as one.
- * * ENCRYPTED SWAP:
- *   When swap is encrypted, one does not expect to find any clear contents
- *   in the swap files.  Since unused blocks are not scrubbed, they could still
- *   contain clear contents.  If these contents are visible through a mapping
- *   of the swap file, it makes it look like swap is not really encrypted.
- *   
+ *
  * We can't legitimately prevent a user process with appropriate privileges
  * from mapping a swap file, but we can prevent it from accessing its actual
  * contents.
@@ -139,17 +134,17 @@ const struct memory_object_pager_ops swapfile_pager_ops = {
  * the "swapfile" EMM.
  */
 typedef struct swapfile_pager {
-	struct ipc_object_header pager_header;	/* fake ip_kotype() */
-	memory_object_pager_ops_t pager_ops;	/* == &swapfile_pager_ops */
+	/* mandatory generic header */
+	struct memory_object swp_pgr_hdr;
+
+	/* pager-specific data */
 	queue_chain_t		pager_queue;	/* next & prev pagers */
 	unsigned int		ref_count;	/* reference count */
 	boolean_t		is_ready;	/* is this pager ready ? */
 	boolean_t		is_mapped;	/* is this pager mapped ? */
-	memory_object_control_t pager_control;	/* mem object control handle */
 	struct vnode 		*swapfile_vnode;/* the swapfile's vnode */
 } *swapfile_pager_t;
 #define	SWAPFILE_PAGER_NULL	((swapfile_pager_t) NULL)
-#define pager_ikot pager_header.io_bits
 
 /*
  * List of memory objects managed by this EMM.
@@ -235,7 +230,7 @@ swapfile_pager_init(
 
 	memory_object_control_reference(control);
 
-	pager->pager_control = control;
+	pager->swp_pgr_hdr.mo_control = control;
 
 	attributes.copy_strategy = MEMORY_OBJECT_COPY_DELAY;
 	attributes.cluster_size = (1 << (PAGE_SHIFT));
@@ -343,7 +338,7 @@ swapfile_pager_data_request(
 	/*
 	 * Gather in a UPL all the VM pages requested by VM.
 	 */
-	mo_control = pager->pager_control;
+	mo_control = pager->swp_pgr_hdr.mo_control;
 
 	upl_size = length;
 	upl_flags =
@@ -355,7 +350,7 @@ swapfile_pager_data_request(
 	pl_count = 0;
 	kr = memory_object_upl_request(mo_control,
 				       offset, upl_size,
-				       &upl, NULL, NULL, upl_flags);
+				       &upl, NULL, NULL, upl_flags, VM_KERN_MEMORY_OSFMK);
 	if (kr != KERN_SUCCESS) {
 		retval = kr;
 		goto done;
@@ -374,6 +369,8 @@ swapfile_pager_data_request(
 			       PAGE_SIZE_64,
 			       0,
 			       0,
+			       VM_MAP_KERNEL_FLAGS_NONE,
+			       VM_KERN_MEMORY_NONE,
 			       &map_entry);
 	if (kr != KERN_SUCCESS) {
 		vm_object_deallocate(kernel_object);
@@ -408,13 +405,19 @@ swapfile_pager_data_request(
 		dst_pnum = (ppnum_t)
 			upl_phys_page(upl_pl, (int)(cur_offset / PAGE_SIZE));
 		assert(dst_pnum != 0);
-		pmap_enter(kernel_pmap,
-			   kernel_mapping,
-			   dst_pnum,
-			   VM_PROT_READ | VM_PROT_WRITE,
-			   VM_PROT_NONE,
-			   0,
-			   TRUE);
+		retval = pmap_enter(kernel_pmap,
+		                    kernel_mapping,
+		                    dst_pnum,
+		                    VM_PROT_READ | VM_PROT_WRITE,
+		                    VM_PROT_NONE,
+		                    0,
+		                    TRUE);
+
+		assert(retval == KERN_SUCCESS);
+
+		if (retval != KERN_SUCCESS) {
+			goto done;
+		}
 
 		memset(dst_ptr, '\0', PAGE_SIZE);
 		/* add an end-of-line to keep line counters happy */
@@ -542,7 +545,7 @@ swapfile_pager_terminate_internal(
 	}
 
 	/* trigger the destruction of the memory object */
-	memory_object_destroy(pager->pager_control, 0);
+	memory_object_destroy(pager->swp_pgr_hdr.mo_control, 0);
 }
 
 /*
@@ -582,9 +585,9 @@ swapfile_pager_deallocate_internal(
 		 * pager structure.
 		 */
 		lck_mtx_unlock(&swapfile_pager_lock);
-		if (pager->pager_control != MEMORY_OBJECT_CONTROL_NULL) {
-			memory_object_control_deallocate(pager->pager_control);
-			pager->pager_control = MEMORY_OBJECT_CONTROL_NULL;
+		if (pager->swp_pgr_hdr.mo_control != MEMORY_OBJECT_CONTROL_NULL) {
+			memory_object_control_deallocate(pager->swp_pgr_hdr.mo_control);
+			pager->swp_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
 		}
 		kfree(pager, sizeof (*pager));
 		pager = SWAPFILE_PAGER_NULL;
@@ -633,21 +636,13 @@ swapfile_pager_terminate(
  */
 kern_return_t
 swapfile_pager_synchronize(
-	memory_object_t		mem_obj,
-	memory_object_offset_t	offset,
-	memory_object_size_t		length,
+	__unused memory_object_t        mem_obbj,
+	__unused memory_object_offset_t	offset,
+	__unused memory_object_size_t	length,
 	__unused vm_sync_t		sync_flags)
 {
-	swapfile_pager_t	pager;
-
-	PAGER_DEBUG(PAGER_ALL, ("swapfile_pager_synchronize: %p\n", mem_obj));
-
-	pager = swapfile_pager_lookup(mem_obj);
-
-	memory_object_synchronize_completed(pager->pager_control,
-					    offset, length);
-
-	return KERN_SUCCESS;
+	panic("swapfile_pager_synchronize: memory_object_synchronize no longer supported\n");
+	return (KERN_FAILURE);
 }
 
 /*
@@ -728,8 +723,8 @@ swapfile_pager_lookup(
 {
 	swapfile_pager_t	pager;
 
+	assert(mem_obj->mo_pager_ops == &swapfile_pager_ops);
 	__IGNORE_WCASTALIGN(pager = (swapfile_pager_t) mem_obj);
-	assert(pager->pager_ops == &swapfile_pager_ops);
 	assert(pager->ref_count > 0);
 	return pager;
 }
@@ -754,12 +749,13 @@ swapfile_pager_create(
 	 * we reserve the second word in the object for a fake ip_kotype
 	 * setting - that will tell vm_map to use it as a memory object.
 	 */
-	pager->pager_ops = &swapfile_pager_ops;
-	pager->pager_ikot = IKOT_MEMORY_OBJECT;
+	pager->swp_pgr_hdr.mo_ikot = IKOT_MEMORY_OBJECT;
+	pager->swp_pgr_hdr.mo_pager_ops = &swapfile_pager_ops;
+	pager->swp_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
+
 	pager->is_ready = FALSE;/* not ready until it has a "name" */
 	pager->ref_count = 1;	/* setup reference */
 	pager->is_mapped = FALSE;
-	pager->pager_control = MEMORY_OBJECT_CONTROL_NULL;
 	pager->swapfile_vnode = vp;
 	
 	lck_mtx_lock(&swapfile_pager_lock);
@@ -872,7 +868,10 @@ swapfile_pager_control(
 {
 	swapfile_pager_t	pager;
 
+	if (mem_obj == MEMORY_OBJECT_NULL ||
+	    mem_obj->mo_pager_ops != &swapfile_pager_ops) {
+		return MEMORY_OBJECT_CONTROL_NULL;
+	}
 	pager = swapfile_pager_lookup(mem_obj);
-
-	return pager->pager_control;
+	return pager->swp_pgr_hdr.mo_control;
 }

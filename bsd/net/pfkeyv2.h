@@ -432,6 +432,7 @@ struct sadb_sastat {
 #define SADB_X_EALG_AESCBC      12
 #define SADB_X_EALG_AES		12
 #define SADB_X_EALG_AES_GCM     13
+#define SADB_X_EALG_CHACHA20POLY1305 14
 /* private allocations should use 249-255 (RFC2407) */
 
 #if 1	/*nonstandard */
@@ -469,6 +470,8 @@ struct sadb_sastat {
 #define SADB_X_EXT_PRAND	0x0100	/* random padding for ESP */
 #define SADB_X_EXT_PZERO	0x0200	/* zero padding for ESP */
 #define SADB_X_EXT_PMASK	0x0300	/* mask for padding flag */
+
+#define SADB_X_EXT_IIV		0x0400 /* Implicit IV */
 
 #ifdef PRIVATE
 #define SADB_X_EXT_NATT_DETECTED_PEER 0x1000

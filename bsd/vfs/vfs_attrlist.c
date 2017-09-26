@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -51,6 +51,7 @@
 #include <sys/fsevents.h>
 #include <kern/kalloc.h>
 #include <miscfs/specfs/specdev.h>
+#include <security/audit/audit.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -269,7 +270,7 @@ attrlist_pack_string(struct _attrlist_buf *ab, const char *source, ssize_t count
 #define ATTR_PACK8(AB, V)                                                 \
 	do {                                                              \
 		if ((AB.allocated - (AB.fixedcursor - AB.base)) >= 8) {   \
-			*(uint64_t *)AB.fixedcursor = *(uint64_t *)&V;    \
+			memcpy(AB.fixedcursor, &V, 8);                    \
 			AB.fixedcursor += 8;                              \
 		}                                                         \
 	} while (0)
@@ -356,8 +357,8 @@ static struct getvolattrlist_attrtab getvolattrlist_vol_tab[] = {
 	{ATTR_VOL_ENCODINGSUSED,	0,						sizeof(uint64_t)},
 	{ATTR_VOL_CAPABILITIES,		VFSATTR_BIT(f_capabilities),			sizeof(vol_capabilities_attr_t)},
 	{ATTR_VOL_UUID,			VFSATTR_BIT(f_uuid),				sizeof(uuid_t)},
-	{ATTR_VOL_QUOTA_SIZE,		VFSATTR_BIT(f_quota),				sizeof(off_t)},
-	{ATTR_VOL_RESERVED_SIZE,	VFSATTR_BIT(f_reserved),			sizeof(off_t)},
+	{ATTR_VOL_QUOTA_SIZE,		VFSATTR_BIT(f_quota) | VFSATTR_BIT(f_bsize),	sizeof(off_t)},
+	{ATTR_VOL_RESERVED_SIZE,	VFSATTR_BIT(f_reserved) | VFSATTR_BIT(f_bsize),	sizeof(off_t)},
 	{ATTR_VOL_ATTRIBUTES,		VFSATTR_BIT(f_attributes),			sizeof(vol_attributes_attr_t)},
 	{ATTR_VOL_INFO, 0, 0},
 	{0, 0, 0}
@@ -1394,6 +1395,21 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 			vs.f_capabilities.capabilities[VOL_CAPABILITIES_INTERFACES] &= ~VOL_CAP_INT_EXTENDED_SECURITY;
 		}
 		vs.f_capabilities.valid[VOL_CAPABILITIES_INTERFACES] |= VOL_CAP_INT_EXTENDED_SECURITY;
+
+		/*
+		 * if the filesystem doesn't mark either VOL_CAP_FMT_NO_IMMUTABLE_FILES
+		 * or VOL_CAP_FMT_NO_PERMISSIONS as valid, assume they're not supported
+		 */
+		if (!(vs.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_NO_IMMUTABLE_FILES)) {
+			vs.f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] &= ~VOL_CAP_FMT_NO_IMMUTABLE_FILES;
+			vs.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] |= VOL_CAP_FMT_NO_IMMUTABLE_FILES;
+		}
+
+		if (!(vs.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_NO_PERMISSIONS)) {
+			vs.f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] &= ~VOL_CAP_FMT_NO_PERMISSIONS;
+			vs.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] |= VOL_CAP_FMT_NO_PERMISSIONS;
+		}
+
 		ATTR_PACK(&ab, vs.f_capabilities);
 		ab.actual.volattr |= ATTR_VOL_CAPABILITIES;
 	}
@@ -2743,7 +2759,7 @@ out:
 static int
 getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
     user_addr_t attributeBuffer, size_t bufferSize, uint64_t options,
-    enum uio_seg segflg, char* alt_name, struct ucred *file_cred)
+    enum uio_seg segflg, char* authoritative_name, struct ucred *file_cred)
 {
 	struct vnode_attr va;
 	kauth_action_t	action;
@@ -2875,9 +2891,22 @@ getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
 				VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: cannot allocate va_name buffer");
 				goto out;
 			}
+			/*
+			 * If we have an authoritative_name, prefer that name.
+			 *
+			 * N.B. Since authoritative_name implies this is coming from getattrlistbulk,
+			 * we know the name is authoritative. For /dev/fd, we want to use the file
+			 * descriptor as the name not the underlying name of the associate vnode in a
+			 * particular file system.
+			 */
+			if (authoritative_name) {
+				/* Don't ask the file system */
+				VATTR_CLEAR_ACTIVE(&va, va_name);
+				strlcpy(va_name, authoritative_name, MAXPATHLEN);
+			}
 		}
 
-		va.va_name = va_name;
+		va.va_name = authoritative_name ? NULL : va_name;
 
 		/*
 		 * Call the filesystem.
@@ -2907,16 +2936,19 @@ getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
 #endif
 
 		/* 
-		 * If ATTR_CMN_NAME is not supported by filesystem and the
-		 * caller has provided a name, use that.
+		 * It we ask for the name, i.e., vname is non null and
+		 * we have an authoritative name, then reset va_name is
+		 * active and if needed set va_name is supported.
+		 *
 		 * A (buggy) filesystem may change fields which belong
 		 * to us. We try to deal with that here as well.
 		 */
 		va.va_active = va_active;
-		if (alt_name  && va_name &&
-		    !(VATTR_IS_SUPPORTED(&va, va_name))) {
-			strlcpy(va_name, alt_name, MAXPATHLEN);
-			VATTR_SET_SUPPORTED(&va, va_name);
+		if (authoritative_name  && va_name) {
+			VATTR_SET_ACTIVE(&va, va_name);
+			if (!(VATTR_IS_SUPPORTED(&va, va_name))) {
+				VATTR_SET_SUPPORTED(&va, va_name);
+			}
 		}
 		va.va_name = va_name;
 	}
@@ -3680,11 +3712,6 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
 	if (uap->options & FSOPT_LIST_SNAPSHOT) {
 		vnode_t snapdvp;
 
-		if (!vfs_context_issuser(ctx)) {
-			error = EPERM;
-			goto out;
-		}
-
 		if (!vnode_isvroot(dvp)) {
 			error = EINVAL;
 			goto out;
@@ -4124,6 +4151,10 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 		ATTR_UNPACK(va.va_guuid);
 		VATTR_SET_ACTIVE(&va, va_guuid);
 	}
+	if (al.commonattr & ATTR_CMN_ADDEDTIME) {
+		ATTR_UNPACK_TIME(va.va_addedtime, proc_is64);
+		VATTR_SET_ACTIVE(&va, va_addedtime);
+	}
 	/* Support setattrlist of data protection class */
 	if (al.commonattr & ATTR_CMN_DATA_PROTECT_FLAGS) {
 		ATTR_UNPACK(va.va_dataprotect_class);
@@ -4308,6 +4339,44 @@ out:
 	if (vp != NULL)
 		vnode_put(vp);
 	return error;
+}
+
+int
+setattrlistat(proc_t p, struct setattrlistat_args *uap, __unused int32_t *retval)
+{
+	struct setattrlist_args ap;
+	struct vfs_context *ctx;
+	struct nameidata nd;
+	vnode_t vp = NULLVP;
+	uint32_t nameiflags;
+	int error;
+
+	ctx = vfs_context_current();
+
+	AUDIT_ARG(fd, uap->fd);
+	/*
+	 * Look up the file.
+	 */
+	nameiflags = AUDITVNPATH1;
+	if (!(uap->options & FSOPT_NOFOLLOW))
+		nameiflags |= FOLLOW;
+	NDINIT(&nd, LOOKUP, OP_SETATTR, nameiflags, UIO_USERSPACE, uap->path, ctx);
+	if ((error = nameiat(&nd, uap->fd)) != 0)
+		goto out;
+	vp = nd.ni_vp;
+	nameidone(&nd);
+
+	ap.path = 0;
+	ap.alist = uap->alist;
+	ap.attributeBuffer = uap->attributeBuffer;
+	ap.bufferSize = uap->bufferSize;
+	ap.options = uap->options;
+
+	error = setattrlist_internal(vp, &ap, p, ctx);
+out:
+	if (vp)
+		vnode_put(vp);
+	return (error);
 }
 
 int

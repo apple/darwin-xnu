@@ -60,6 +60,7 @@
 #include <IOKit/IOStatisticsPrivate.h>
 #include <os/log_private.h>
 #include <sys/msgbuf.h>
+#include <console/serial_protos.h>
 
 #if IOKITSTATS
 
@@ -191,7 +192,9 @@ void IOLibInit(void)
                     &gIOKitPageableSpace.maps[0].address,
                     kIOPageableMapSize,
                     TRUE,
-                    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IOKIT),
+                    VM_FLAGS_ANYWHERE,
+		    VM_MAP_KERNEL_FLAGS_NONE,
+		    VM_KERN_MEMORY_IOKIT,
                     &gIOKitPageableSpace.maps[0].map);
     if (ret != KERN_SUCCESS)
         panic("failed to allocate iokit pageable map\n");
@@ -281,7 +284,7 @@ void * IOMalloc(vm_size_t size)
 	    bzero(&hdr->tracking, sizeof(hdr->tracking));
 	    hdr->tracking.address = ~(((uintptr_t) address) + sizeofIOLibMallocHeader);
 	    hdr->tracking.size    = size;
-	    IOTrackingAdd(gIOMallocTracking, &hdr->tracking.tracking, size, true);
+	    IOTrackingAdd(gIOMallocTracking, &hdr->tracking.tracking, size, true, VM_KERN_MEMORY_NONE);
 	}
 #endif
 	address = (typeof(address)) (((uintptr_t) address) + sizeofIOLibMallocHeader);
@@ -420,7 +423,7 @@ void * IOMallocAligned(vm_size_t size, vm_size_t alignment)
 	        bzero(&hdr->tracking, sizeof(hdr->tracking));
 	        hdr->tracking.address = ~address;
 	        hdr->tracking.size = size;
-	        IOTrackingAdd(gIOMallocTracking, &hdr->tracking.tracking, size, true);
+	        IOTrackingAdd(gIOMallocTracking, &hdr->tracking.tracking, size, true, VM_KERN_MEMORY_NONE);
 	    }
 #endif
 	} else
@@ -525,6 +528,9 @@ IOKernelFreePhysical(mach_vm_address_t address, mach_vm_size_t size)
 #endif
 }
 
+#if __arm__ || __arm64__
+extern unsigned long gPhysBase, gPhysSize;
+#endif
 
 mach_vm_address_t
 IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxPhys, 
@@ -560,6 +566,13 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
 
 	if (!contiguous)
 	{
+#if __arm__ || __arm64__
+	    if (maxPhys >= (mach_vm_address_t)(gPhysBase + gPhysSize))
+	    {
+	    	maxPhys = 0;
+	    }
+	    else
+#endif
 	    if (maxPhys <= 0xFFFFFFFF)
 	    {
 		maxPhys = 0;
@@ -613,7 +626,7 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
 	        bzero(&hdr->tracking, sizeof(hdr->tracking));
 	        hdr->tracking.address = ~address;
 	        hdr->tracking.size    = size;
-	        IOTrackingAdd(gIOMallocTracking, &hdr->tracking.tracking, size, true);
+	        IOTrackingAdd(gIOMallocTracking, &hdr->tracking.tracking, size, true, VM_KERN_MEMORY_NONE);
 	    }
 #endif
 	} else
@@ -778,7 +791,9 @@ kern_return_t IOIteratePageableMaps(vm_size_t size,
                     &min,
                     segSize,
                     TRUE,
-                    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IOKIT),
+                    VM_FLAGS_ANYWHERE,
+		    VM_MAP_KERNEL_FLAGS_NONE,
+		    VM_KERN_MEMORY_IOKIT,
                     &map);
         if( KERN_SUCCESS != kr) {
             lck_mtx_unlock( gIOKitPageableSpace.lock );
@@ -1132,12 +1147,7 @@ void IOPause(unsigned nanoseconds)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-static void _iolog_consputc(int ch, void *arg __unused)
-{
-    cons_putc_locked(ch);
-}
-
-static void _IOLogv(const char *format, va_list ap, void *caller);
+static void _IOLogv(const char *format, va_list ap, void *caller) __printflike(1,0);
 
 __attribute__((noinline,not_tail_called))
 void IOLog(const char *format, ...)
@@ -1160,16 +1170,18 @@ void IOLogv(const char *format, va_list ap)
 void _IOLogv(const char *format, va_list ap, void *caller)
 {
     va_list ap2;
-
-    /* Ideally not called at interrupt context or with interrupts disabled. Needs further validate */
-    /* assert(TRUE == ml_get_interrupts_enabled()); */
+    struct console_printbuf_state info_data;
+    console_printbuf_state_init(&info_data, TRUE, TRUE);
 
     va_copy(ap2, ap);
 
     os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, format, ap, caller);
 
-    __doprnt(format, ap2, _iolog_consputc, NULL, 16, TRUE);
+    __doprnt(format, ap2, console_printbuf_putc, &info_data, 16, TRUE);
+    console_printbuf_clear(&info_data);
     va_end(ap2);
+
+    assertf(ml_get_interrupts_enabled() || ml_is_quiescing() || debug_mode_active() || !gCPUsRunning, "IOLog called with interrupts disabled");
 }
 
 #if !__LP64__

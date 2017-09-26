@@ -47,10 +47,15 @@
 #include <i386/rtclock_protos.h>
 #include <i386/pmCPU.h>
 #include <i386/cpu_topology.h>
+#include <i386/seg.h>
 
 #if CONFIG_VMX
 #include <i386/vmx/vmx_cpu.h>
 #endif
+
+#if MONOTONIC
+#include <machine/monotonic.h>
+#endif /* MONOTONIC */
 
 #include <machine/pal_routines.h>
 
@@ -72,13 +77,10 @@ typedef struct rtclock_timer {
 	boolean_t		has_expired;
 } rtclock_timer_t;
 
-
 typedef struct {
 	struct x86_64_tss	*cdi_ktss;
-	struct __attribute__((packed)) {
-		uint16_t size;
-		void *ptr;
-	} cdi_gdt, cdi_idt;
+	x86_64_desc_register_t	cdi_gdt;
+	x86_64_desc_register_t	cdi_idt;
 	struct fake_descriptor	*cdi_ldt;
 	vm_offset_t		cdi_sstk;
 } cpu_desc_index_t;
@@ -149,8 +151,11 @@ typedef struct cpu_data
 							 */
 	ast_t			cpu_pending_ast;
 	volatile int		cpu_running;
+#if !MONOTONIC
 	boolean_t		cpu_fixed_pmcs_enabled;
+#endif /* !MONOTONIC */
 	rtclock_timer_t		rtclock_timer;
+	uint64_t		quantum_timer_deadline;
 	volatile addr64_t	cpu_active_cr3 __attribute((aligned(64)));
 	union {
 		volatile uint32_t cpu_tlb_invalid;
@@ -197,6 +202,9 @@ typedef struct cpu_data
 	uint64_t                *cpu_kpc_shadow;
 	uint64_t                *cpu_kpc_reload;
 #endif
+#if MONOTONIC
+	struct mt_cpu cpu_monotonic;
+#endif /* MONOTONIC */
 	uint32_t		cpu_pmap_pcid_enabled;
 	pcid_t			cpu_active_pcid;
 	pcid_t			cpu_last_pcid;
@@ -220,11 +228,13 @@ typedef struct cpu_data
 	uint64_t		cpu_rtime_total;
 	uint64_t		cpu_ixtime;
 	uint64_t                cpu_idle_exits;
- 	uint64_t		cpu_rtimes[CPU_RTIME_BINS];
- 	uint64_t		cpu_itimes[CPU_ITIME_BINS];
- 	uint64_t		cpu_cur_insns;
- 	uint64_t		cpu_cur_ucc;
- 	uint64_t		cpu_cur_urc;
+	uint64_t		cpu_rtimes[CPU_RTIME_BINS];
+	uint64_t		cpu_itimes[CPU_ITIME_BINS];
+#if !MONOTONIC
+	uint64_t		cpu_cur_insns;
+	uint64_t		cpu_cur_ucc;
+	uint64_t		cpu_cur_urc;
+#endif /* !MONOTONIC */
 	uint64_t		cpu_gpmcs[4];
 	uint64_t                cpu_max_observed_int_latency;
 	int                     cpu_max_observed_int_latency_vector;

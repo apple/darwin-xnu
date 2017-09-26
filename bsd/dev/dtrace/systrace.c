@@ -54,6 +54,7 @@
 
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
+#include <sys/systrace_args.h>
 #include "systrace.h"
 #include <sys/stat.h>
 #include <sys/systm.h>
@@ -65,9 +66,14 @@
 #if defined (__x86_64__)
 #define	SYSTRACE_ARTIFICIAL_FRAMES	2
 #define MACHTRACE_ARTIFICIAL_FRAMES 3
+#elif defined(__arm__) || defined(__arm64__)
+#define SYSTRACE_ARTIFICIAL_FRAMES  2
+#define MACHTRACE_ARTIFICIAL_FRAMES 3
 #else
 #error Unknown Architecture
 #endif
+
+#define SYSTRACE_NARGS (int)(sizeof(((uthread_t)NULL)->uu_arg) / sizeof(((uthread_t)NULL)->uu_arg[0]))
 
 #include <sys/sysent.h>
 #define sy_callc sy_call /* Map Solaris slot name to Darwin's */
@@ -89,7 +95,8 @@ static lck_mtx_t	dtrace_systrace_lock;		/* probe state lock */
 systrace_sysent_t *systrace_sysent = NULL;
 void (*systrace_probe)(dtrace_id_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
-static uint64_t systrace_getarg(void *, dtrace_id_t, void *, int, int);	
+static uint64_t systrace_getargval(void *, dtrace_id_t, void *, int, int);
+static void systrace_getargdesc(void *, dtrace_id_t, void *, dtrace_argdesc_t *);
 
 void
 systrace_stub(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
@@ -106,10 +113,8 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 	systrace_sysent_t *sy;
 	dtrace_id_t id;
 	int32_t rval;
-#if 0 /* XXX */
-	proc_t *p;
-#endif
 	syscall_arg_t *ip = (syscall_arg_t *)uap;
+	uint64_t uargs[SYSTRACE_NARGS] = {0};
 
 #if defined (__x86_64__)
 	{
@@ -135,6 +140,51 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 			}
 		}
 	}
+#elif defined(__arm__)
+	{
+		/*
+		 * On arm, syscall numbers depend on a flavor (indirect or not)
+		 * and can be in either r0 or r12  (always u32)
+		 */
+
+		/* See bsd/dev/arm/systemcalls.c:arm_get_syscall_number */
+		arm_saved_state_t *arm_regs = (arm_saved_state_t *) find_user_regs(current_thread());
+
+		/* Check for indirect system call */
+		if (arm_regs->r[12] != 0)
+			code = arm_regs->r[12];
+		else
+			code = arm_regs->r[0];
+	}
+#elif defined(__arm64__)
+	{
+		/*
+		 * On arm64, syscall numbers depend on a flavor (indirect or not)
+		 * ... and for u32 can be in either r0 or r12
+		 * ... and for u64 can be in either x0 or x16
+		 */
+
+		/* see bsd/dev/arm/systemcalls.c:arm_get_syscall_number */		
+		arm_saved_state_t *arm_regs = (arm_saved_state_t *) find_user_regs(current_thread());
+
+		if (is_saved_state32(arm_regs)) {
+			/* Check for indirect system call */			
+			if (saved_state32(arm_regs)->r[12] != 0) {
+				code = saved_state32(arm_regs)->r[12];
+			}
+			else {
+				code = saved_state32(arm_regs)->r[0];
+			}
+		} else {
+			/* Check for indirect system call */
+			if (saved_state64(arm_regs)->x[ARM64_SYSCALL_CODE_REG_NUM] != 0 ) {
+				code = saved_state64(arm_regs)->x[ARM64_SYSCALL_CODE_REG_NUM];
+			}
+			else {
+				code = saved_state64(arm_regs)->x[0];
+			}
+		}
+	}
 #else
 #error Unknown Architecture
 #endif
@@ -142,19 +192,21 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 	// Bounds "check" the value of code a la unix_syscall
 	sy = (code >= nsysent) ? &systrace_sysent[SYS_invalid] : &systrace_sysent[code];
 
+	systrace_args(code, ip, uargs);
+
 	if ((id = sy->stsy_entry) != DTRACE_IDNONE) {
 		uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());		
 		if (uthread)
-			uthread->t_dtrace_syscall_args = (void *)ip;
+			uthread->t_dtrace_syscall_args = uargs;
 		
-		if (ip)
-			(*systrace_probe)(id, *ip, *(ip+1), *(ip+2), *(ip+3), *(ip+4));
-		else
-			(*systrace_probe)(id, 0, 0, 0, 0, 0);
+		static_assert(SYSTRACE_NARGS >= 5, "not enough system call arguments");
+		(*systrace_probe)(id, uargs[0], uargs[1], uargs[2], uargs[3], uargs[4]);
 		
 		if (uthread)
-			uthread->t_dtrace_syscall_args = (void *)0;
+			uthread->t_dtrace_syscall_args = NULL;
 	}
+
+
 
 #if 0 /* XXX */
 	/*
@@ -356,11 +408,6 @@ systrace_init(struct sysent *actual, systrace_sysent_t **interposed)
 		if (a->sy_callc == dtrace_systrace_syscall)
 			continue;
 
-#ifdef _SYSCALL32_IMPL
-		if (a->sy_callc == dtrace_systrace_syscall32)
-			continue;
-#endif
-
 		s->stsy_underlying = a->sy_callc;
 		s->stsy_return_type = a->sy_return_type;
 	}
@@ -379,9 +426,6 @@ systrace_provide(void *arg, const dtrace_probedesc_t *desc)
 		return;
 
 	systrace_init(sysent, &systrace_sysent);
-#ifdef _SYSCALL32_IMPL
-	systrace_init(sysent32, &systrace_sysent32);
-#endif
 
 	for (i = 0; i < NSYSCALL; i++) {
 		if (systrace_sysent[i].stsy_underlying == NULL)
@@ -400,10 +444,6 @@ systrace_provide(void *arg, const dtrace_probedesc_t *desc)
 
 		systrace_sysent[i].stsy_entry = DTRACE_IDNONE;
 		systrace_sysent[i].stsy_return = DTRACE_IDNONE;
-#ifdef _SYSCALL32_IMPL
-		systrace_sysent32[i].stsy_entry = DTRACE_IDNONE;
-		systrace_sysent32[i].stsy_return = DTRACE_IDNONE;
-#endif
 	}
 }
 #undef systrace_init
@@ -423,14 +463,8 @@ systrace_destroy(void *arg, dtrace_id_t id, void *parg)
 	 */
 	if (SYSTRACE_ISENTRY((uintptr_t)parg)) {
 		ASSERT(systrace_sysent[sysnum].stsy_entry == DTRACE_IDNONE);
-#ifdef _SYSCALL32_IMPL
-		ASSERT(systrace_sysent32[sysnum].stsy_entry == DTRACE_IDNONE);
-#endif
 	} else {
 		ASSERT(systrace_sysent[sysnum].stsy_return == DTRACE_IDNONE);
-#ifdef _SYSCALL32_IMPL
-		ASSERT(systrace_sysent32[sysnum].stsy_return == DTRACE_IDNONE);
-#endif
 	}
 }
 
@@ -446,25 +480,14 @@ systrace_enable(void *arg, dtrace_id_t id, void *parg)
 
 	if (SYSTRACE_ISENTRY((uintptr_t)parg)) {
 		systrace_sysent[sysnum].stsy_entry = id;
-#ifdef _SYSCALL32_IMPL
-		systrace_sysent32[sysnum].stsy_entry = id;
-#endif
 	} else {
 		systrace_sysent[sysnum].stsy_return = id;
-#ifdef _SYSCALL32_IMPL
-		systrace_sysent32[sysnum].stsy_return = id;
-#endif
 	}
 
 	if (enabled) {
 		ASSERT(sysent[sysnum].sy_callc == dtrace_systrace_syscall);
 		return(0);
 	}
-#ifdef _SYSCALL32_IMPL
-	(void) casptr(&sysent32[sysnum].sy_callc,
-	    (void *)systrace_sysent32[sysnum].stsy_underlying,
-	    (void *)dtrace_systrace_syscall32);
-#endif
 
 	lck_mtx_lock(&dtrace_systrace_lock);
 	if (sysent[sysnum].sy_callc == systrace_sysent[sysnum].stsy_underlying) {
@@ -491,23 +514,12 @@ systrace_disable(void *arg, dtrace_id_t id, void *parg)
 			ml_nofault_copy((vm_offset_t)&systrace_sysent[sysnum].stsy_underlying, (vm_offset_t)&sysent[sysnum].sy_callc, sizeof(systrace_sysent[sysnum].stsy_underlying));
 		lck_mtx_unlock(&dtrace_systrace_lock);
 
-#ifdef _SYSCALL32_IMPL
-		(void) casptr(&sysent32[sysnum].sy_callc,
-		    (void *)dtrace_systrace_syscall32,
-		    (void *)systrace_sysent32[sysnum].stsy_underlying);
-#endif
 	}
 
 	if (SYSTRACE_ISENTRY((uintptr_t)parg)) {
 		systrace_sysent[sysnum].stsy_entry = DTRACE_IDNONE;
-#ifdef _SYSCALL32_IMPL
-		systrace_sysent32[sysnum].stsy_entry = DTRACE_IDNONE;
-#endif
 	} else {
 		systrace_sysent[sysnum].stsy_return = DTRACE_IDNONE;
-#ifdef _SYSCALL32_IMPL
-		systrace_sysent32[sysnum].stsy_return = DTRACE_IDNONE;
-#endif
 	}
 }
 
@@ -526,8 +538,8 @@ static dtrace_pops_t systrace_pops = {
 	systrace_disable,
 	NULL,
 	NULL,
-	NULL,
-	systrace_getarg,
+	systrace_getargdesc,
+	systrace_getargval,
 	NULL,
 	systrace_destroy
 };
@@ -672,6 +684,28 @@ dtrace_machtrace_syscall(struct mach_call_args *args)
 		} else {
 			code = -saved_state32(tagged_regs)->eax;
 		}
+	}
+#elif defined(__arm__)
+	{
+		/* r12 has the machcall number, but it is -ve */
+		arm_saved_state_t *arm_regs = (arm_saved_state_t *) find_user_regs(current_thread());
+		code = (int)arm_regs->r[12];
+		ASSERT(code < 0);    /* Otherwise it would be a Unix syscall */
+		code = -code;
+	}
+#elif defined(__arm64__)
+	{
+		/* From arm/thread_status.h:get_saved_state_svc_number */
+		arm_saved_state_t *arm_regs = (arm_saved_state_t *) find_user_regs(current_thread());
+		if (is_saved_state32(arm_regs)) {
+			code = (int)saved_state32(arm_regs)->r[12];
+		} else {
+			code = (int)saved_state64(arm_regs)->x[ARM64_SYSCALL_CODE_REG_NUM];
+		}
+
+                /* From bsd/arm64.c:mach_syscall */
+		ASSERT(code < 0);    /* Otherwise it would be a Unix syscall */
+		code = -code;		
 	}
 #else
 #error Unknown Architecture
@@ -966,27 +1000,55 @@ void systrace_init( void )
 #undef SYSTRACE_MAJOR
 
 static uint64_t
-systrace_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
+systrace_getargval(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 {
 #pragma unused(arg,id,parg,aframes)     /* __APPLE__ */
 	uint64_t val = 0;
-	syscall_arg_t *stack = (syscall_arg_t *)NULL;
+	uint64_t *uargs = NULL;
 
 	uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());	
 
 	if (uthread)
-		stack = (syscall_arg_t *)uthread->t_dtrace_syscall_args;
-
-	if (!stack)
+		uargs = uthread->t_dtrace_syscall_args;
+	if (!uargs)
+		return(0);
+	if (argno < 0 || argno > SYSTRACE_NARGS)
 		return(0);
 
 	DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
-	/* dtrace_probe arguments arg0 .. arg4 are 64bits wide */
-	val = (uint64_t)*(stack+argno);
+	val = uargs[argno];
 	DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 	return (val);
 }
 
+static void
+systrace_getargdesc(void *arg, dtrace_id_t id, void *parg,
+	dtrace_argdesc_t *desc)
+{
+#pragma unused(arg, id)
+	int sysnum = SYSTRACE_SYSNUM(parg);
+	uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());
+	uint64_t *uargs = NULL;
+
+	if (!uthread) {
+		desc->dtargd_ndx = DTRACE_ARGNONE;
+		return;
+	}
+
+	uargs = uthread->t_dtrace_syscall_args;
+
+	if (SYSTRACE_ISENTRY((uintptr_t)parg)) {
+		systrace_entry_setargdesc(sysnum, desc->dtargd_ndx,
+			desc->dtargd_native, sizeof(desc->dtargd_native));
+	}
+	else {
+		systrace_return_setargdesc(sysnum, desc->dtargd_ndx,
+			desc->dtargd_native, sizeof(desc->dtargd_native));
+	}
+
+	if (desc->dtargd_native[0] == '\0')
+		desc->dtargd_ndx = DTRACE_ARGNONE;
+}
 
 static uint64_t
 machtrace_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)

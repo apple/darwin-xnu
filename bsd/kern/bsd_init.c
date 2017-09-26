@@ -119,6 +119,7 @@
 #include <mach/exception_types.h>
 #include <dev/busvar.h>			/* for pseudo_inits */
 #include <sys/kdebug.h>
+#include <sys/monotonic.h>
 #include <sys/reason.h>
 
 #include <mach/mach_types.h>
@@ -134,6 +135,7 @@
 #include <sys/mcache.h>			/* for mcache_init() */
 #include <sys/mbuf.h>			/* for mbinit() */
 #include <sys/event.h>			/* for knote_init() */
+#include <sys/eventhandler.h>		/* for eventhandler_init() */
 #include <sys/kern_memorystatus.h>	/* for memorystatus_init() */
 #include <sys/aio_kern.h>		/* for aio_init() */
 #include <sys/semaphore.h>		/* for psem_cache_init() */
@@ -167,6 +169,7 @@
 #include <net/ntstat.h>			/* for nstat_init() */
 #include <netinet/tcp_cc.h>			/* for tcp_cc_init() */
 #include <netinet/mptcp_var.h>		/* for mptcp_control_register() */
+#include <net/nwk_wq.h>			/* for nwk_wq_init */
 #include <kern/assert.h>		/* for assert() */
 #include <sys/kern_overrides.h>		/* for init_system_override() */
 
@@ -240,7 +243,7 @@ int		hostnamelen;
 char	domainname[MAXDOMNAMELEN];
 int		domainnamelen;
 
-char rootdevice[16]; 	/* device names have at least 9 chars */
+char rootdevice[DEVMAXNAMESIZE];
 
 #if  KMEMSTATS
 struct	kmemstats kmemstats[M_LAST];
@@ -249,6 +252,9 @@ struct	kmemstats kmemstats[M_LAST];
 struct	vnode *rootvp;
 int boothowto = RB_DEBUG;
 int minimalboot = 0;
+#if CONFIG_EMBEDDED
+int darkboot = 0;
+#endif
 
 #if PROC_REF_DEBUG
 __private_extern__ int proc_ref_tracking_disabled = 0; /* disable panics on leaked proc refs across syscall boundary */
@@ -283,6 +289,9 @@ __private_extern__ vm_offset_t * execargs_cache = NULL;
 
 void bsd_exec_setup(int);
 
+#if __arm64__
+__private_extern__ int bootarg_no64exec = 0;
+#endif
 __private_extern__ int bootarg_vnode_cache_defeat = 0;
 
 #if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
@@ -381,6 +390,8 @@ extern int 	(*mountroot)(void);
 lck_grp_t * proc_lck_grp;
 lck_grp_t * proc_slock_grp;
 lck_grp_t * proc_fdmlock_grp;
+lck_grp_t * proc_kqhashlock_grp;
+lck_grp_t * proc_knhashlock_grp;
 lck_grp_t * proc_ucred_mlock_grp;
 lck_grp_t * proc_mlock_grp;
 lck_grp_attr_t * proc_lck_grp_attr;
@@ -476,13 +487,15 @@ bsd_init(void)
 	proc_lck_grp_attr= lck_grp_attr_alloc_init();
 
 	proc_lck_grp = lck_grp_alloc_init("proc",  proc_lck_grp_attr);
+
 #if CONFIG_FINE_LOCK_GROUPS
 	proc_slock_grp = lck_grp_alloc_init("proc-slock",  proc_lck_grp_attr);
-	proc_fdmlock_grp = lck_grp_alloc_init("proc-fdmlock",  proc_lck_grp_attr);
 	proc_ucred_mlock_grp = lck_grp_alloc_init("proc-ucred-mlock",  proc_lck_grp_attr);
 	proc_mlock_grp = lck_grp_alloc_init("proc-mlock",  proc_lck_grp_attr);
+	proc_fdmlock_grp = lck_grp_alloc_init("proc-fdmlock",  proc_lck_grp_attr);
 #endif
-
+	proc_kqhashlock_grp = lck_grp_alloc_init("proc-kqhashlock",  proc_lck_grp_attr);
+	proc_knhashlock_grp = lck_grp_alloc_init("proc-knhashlock",  proc_lck_grp_attr);
 	/* Allocate proc lock attribute */
 	proc_lck_attr = lck_attr_alloc_init();
 #if 0
@@ -526,7 +539,6 @@ bsd_init(void)
 	 * Initialize the MAC Framework
 	 */
 	mac_policy_initbsd();
-	kernproc->p_mac_enforce = 0;
 
 #if defined (__i386__) || defined (__x86_64__)
 	/*
@@ -653,6 +665,8 @@ bsd_init(void)
 	filedesc0.fd_knlist = NULL;
 	filedesc0.fd_knhash = NULL;
 	filedesc0.fd_knhashmask = 0;
+	lck_mtx_init(&filedesc0.fd_kqhashlock, proc_kqhashlock_grp, proc_lck_attr);
+	lck_mtx_init(&filedesc0.fd_knhashlock, proc_knhashlock_grp, proc_lck_attr);
 
 	/* Create the limits structures. */
 	kernproc->p_limit = &limit0;
@@ -689,7 +703,9 @@ bsd_init(void)
 				&minimum,
 				(vm_size_t)bsd_pageable_map_size,
 				TRUE,
-				VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_BSD),
+				VM_FLAGS_ANYWHERE,
+				VM_MAP_KERNEL_FLAGS_NONE,
+				VM_KERN_MEMORY_BSD,
 				&bsd_pageable_map);
 		if (ret != KERN_SUCCESS) 
 			panic("bsd_init: Failed to allocate bsd pageable map");
@@ -704,12 +720,6 @@ bsd_init(void)
 	 */
 	bsd_init_kprintf("calling bsd_bufferinit\n");
 	bsd_bufferinit();
-
-	/* Initialize the execve() semaphore */
-	bsd_init_kprintf("calling semaphore_create\n");
-
-	if (ret != KERN_SUCCESS)
-		panic("bsd_init: Failed to create execve semaphore");
 
 	/*
 	 * Initialize the calendar.
@@ -752,6 +762,10 @@ bsd_init(void)
 	/* Initialize kqueues */
 	bsd_init_kprintf("calling knote_init\n");
 	knote_init();
+
+	/* Initialize event handler */
+	bsd_init_kprintf("calling eventhandler_init\n");
+	eventhandler_init();
 
 	/* Initialize for async IO */
 	bsd_init_kprintf("calling aio_init\n");
@@ -797,6 +811,8 @@ bsd_init(void)
 	 * until everything is ready.
 	 */
 #if NETWORKING
+	bsd_init_kprintf("calling nwk_wq_init\n");
+	nwk_wq_init();
 	bsd_init_kprintf("calling dlil_init\n");
 	dlil_init();
 	bsd_init_kprintf("calling proto_kpi_init\n");
@@ -812,7 +828,6 @@ bsd_init(void)
 	flow_divert_init();
 #endif	/* FLOW_DIVERT */
 #endif /* SOCKETS */
-
 	kernproc->p_fd->fd_cdir = NULL;
 	kernproc->p_fd->fd_rdir = NULL;
 
@@ -1026,7 +1041,7 @@ bsd_init(void)
 		mountroot_post_hook();
 
 #if 0 /* not yet */
-	consider_zone_gc();
+	consider_zone_gc(FALSE);
 #endif
 
 	bsd_init_kprintf("done\n");
@@ -1056,6 +1071,10 @@ bsdinit_task(void)
 	mac_cred_label_associate_user(p->p_ucred);
 #endif
 
+    vm_init_before_launchd();
+
+
+	bsd_init_kprintf("bsd_do_post - done");
 
 	load_init_program(p);
 	lock_trace = 1;
@@ -1167,6 +1186,11 @@ parse_bsd_args(void)
 		minimalboot = 1;
 	}
 
+#if __arm64__
+	/* disable 64 bit grading */
+	if (PE_parse_boot_argn("-no64exec", namep, sizeof (namep)))
+		bootarg_no64exec = 1;
+#endif
 
 	/* disable vnode_cache_is_authorized() by setting vnode_cache_defeat */
 	if (PE_parse_boot_argn("-vnode_cache_defeat", namep, sizeof (namep)))
@@ -1204,6 +1228,18 @@ parse_bsd_args(void)
 #endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
 
 
+#if CONFIG_EMBEDDED
+	/*
+	 * The darkboot flag is specified by the bootloader and is stored in
+	 * boot_args->bootFlags. This flag is available starting revision 2.
+	 */
+	boot_args *args = (boot_args *) PE_state.bootArgs;
+	if ((args != NULL) && (args->Revision >= kBootArgsRevision2)) {
+		darkboot = (args->bootFlags & kBootFlagsDarkBoot) ? 1 : 0;
+	} else {
+		darkboot = 0;
+	}
+#endif
 
 #if PROC_REF_DEBUG
 	if (PE_parse_boot_argn("-disable_procref_tracking", namep, sizeof(namep))) {

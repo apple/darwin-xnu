@@ -1,4 +1,5 @@
 #include <kern/kern_types.h>
+#include <kern/thread_group.h>
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
 
@@ -31,6 +32,7 @@ coalition_create_syscall(user_addr_t cidp, uint32_t flags)
 	uint64_t cid;
 	coalition_t coal;
 	int type = COALITION_CREATE_FLAGS_GET_TYPE(flags);
+	int role = COALITION_CREATE_FLAGS_GET_ROLE(flags);
 	boolean_t privileged = !!(flags & COALITION_CREATE_FLAGS_PRIVILEGED);
 
 	if ((flags & (~COALITION_CREATE_FLAGS_MASK)) != 0)
@@ -38,7 +40,7 @@ coalition_create_syscall(user_addr_t cidp, uint32_t flags)
 	if (type < 0 || type > COALITION_TYPE_MAX)
 		return EINVAL;
 
-	kr = coalition_create_internal(type, privileged, &coal);
+	kr = coalition_create_internal(type, role, privileged, &coal);
 	if (kr != KERN_SUCCESS) {
 		/* for now, the only kr is KERN_RESOURCE_SHORTAGE */
 		error = ENOMEM;
@@ -118,7 +120,7 @@ coalition_request_terminate_syscall(user_addr_t cidp, uint32_t flags)
  * Request the kernel to deallocate the coalition identified by ID, which
  * must be both terminated and empty. This balances the reference taken
  * in coalition_create.
- * The memory containig the coalition object may not be freed just yet, if
+ * The memory containing the coalition object may not be freed just yet, if
  * other kernel operations still hold references to it.
  *
  * Returns:
@@ -232,6 +234,26 @@ coalition_info_resource_usage(coalition_t coal, user_addr_t buffer, user_size_t 
 	return copyout(&cru, buffer, MIN(bufsize, sizeof(cru)));
 }
 
+#define coalition_info_set_name_internal(...) 0
+
+static int
+coalition_info_efficiency(coalition_t coal, user_addr_t buffer, user_size_t bufsize)
+{
+	int error = 0;
+	if (coalition_type(coal) != COALITION_TYPE_JETSAM)
+		return EINVAL;
+	uint64_t flags = 0;	
+	error = copyin(buffer, &flags, MIN(bufsize, sizeof(flags)));
+	if (error)
+		return error;
+	if ((flags & COALITION_EFFICIENCY_VALID_FLAGS) == 0)
+		return EINVAL;
+	if (flags & COALITION_FLAGS_EFFICIENT) {
+	    coalition_set_efficient(coal);
+	}
+	return error;
+}
+
 int coalition_info(proc_t p, struct coalition_info_args *uap, __unused int32_t *retval)
 {
 	user_addr_t cidp = uap->cid;
@@ -271,6 +293,12 @@ int coalition_info(proc_t p, struct coalition_info_args *uap, __unused int32_t *
 	case COALITION_INFO_RESOURCE_USAGE:
 		error = coalition_info_resource_usage(coal, buffer, bufsize);
 		break;
+	case COALITION_INFO_SET_NAME:
+		error = coalition_info_set_name_internal(coal, buffer, bufsize);
+		break;
+	case COALITION_INFO_SET_EFFICIENCY:
+		error = coalition_info_efficiency(coal, buffer, bufsize);
+		break;
 	default:
 		error = EINVAL;
 	}
@@ -280,7 +308,7 @@ bad:
 	return error;
 }
 
-#if defined(DEVELOPMENT) || defined(DEBUG)
+#if DEVELOPMENT || DEBUG
 static int sysctl_coalition_get_ids SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)

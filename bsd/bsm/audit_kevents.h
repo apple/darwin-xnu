@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2005-2016 Apple Inc.
+ * Copyright (c) 2005-2017 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -612,6 +612,8 @@
 #define	AUE_OPENBYID_RWT	43209	/* Darwin. */
 #define	AUE_CLONEFILEAT		43210	/* Darwin. */
 #define	AUE_FCLONEFILEAT	43211	/* Darwin. */
+#define	AUE_SETATTRLISTAT	43212	/* Darwin. */
+#define	AUE_FMOUNT		43213	/* Darwin. */
 
 #define	AUE_SESSION_START	44901	/* Darwin. */
 #define	AUE_SESSION_UPDATE	44902	/* Darwin. */
@@ -817,5 +819,6 @@
 #define	AUE_USRCTL		AUE_NULL
 #define	AUE_NEXUS		AUE_NULL
 #define	AUE_CHANNEL		AUE_NULL
+#define	AUE_NET			AUE_NULL
 
 #endif /* !_BSM_AUDIT_KEVENTS_H_ */

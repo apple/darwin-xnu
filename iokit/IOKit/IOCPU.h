@@ -51,10 +51,6 @@ enum {
   kIOCPUStateCount
 };
 
-class IOCPUInterruptController;
-
-extern IOCPUInterruptController *gIOCPUInterruptController;
-
 class IOCPU : public IOService
 {
   OSDeclareAbstractStructors(IOCPU);
@@ -76,8 +72,6 @@ protected:
   virtual void           setCPUState(UInt32 cpuState);
   
 public:
-  static  void           initCPUs(void);
-  
   virtual bool           start(IOService *provider) APPLE_KEXT_OVERRIDE;
   virtual OSObject       *getProperty(const OSSymbol *aKey) const APPLE_KEXT_OVERRIDE;
   virtual bool           setProperty(const OSSymbol *aKey, OSObject *anObject) APPLE_KEXT_OVERRIDE;
@@ -116,6 +110,7 @@ extern "C" kern_return_t IOCPURunPlatformQuiesceActions(void);
 extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
 extern "C" kern_return_t IOCPURunPlatformHaltRestartActions(uint32_t message);
 extern "C" kern_return_t IOCPURunPlatformPanicActions(uint32_t message);
+extern "C" kern_return_t IOCPURunPlatformPanicSyncAction(void *addr, size_t len);
 
 class IOCPUInterruptController : public IOInterruptController
 {
@@ -126,8 +121,8 @@ private:
   
 protected:  
   int   numCPUs;
-  IOCPU **cpus;
-  
+  int   numSources;
+
   struct ExpansionData { };
   ExpansionData *reserved;
 
@@ -152,7 +147,8 @@ public:
   virtual IOReturn handleInterrupt(void *refCon, IOService *nub,
 				   int source) APPLE_KEXT_OVERRIDE;
 
-  OSMetaClassDeclareReservedUnused(IOCPUInterruptController, 0);
+  virtual IOReturn initCPUInterruptController(int sources, int cpus);
+
   OSMetaClassDeclareReservedUnused(IOCPUInterruptController, 1);
   OSMetaClassDeclareReservedUnused(IOCPUInterruptController, 2);
   OSMetaClassDeclareReservedUnused(IOCPUInterruptController, 3);

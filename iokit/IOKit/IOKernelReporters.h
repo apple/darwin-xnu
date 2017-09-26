@@ -147,7 +147,7 @@ protected:
 */
     virtual bool init(IOService *reportingService,
                       IOReportChannelType channelType,
-                      IOReportUnits unit);
+                      IOReportUnit unit);
 
 public:
 
@@ -736,7 +736,7 @@ private:
     static IOReportLegendEntry* legendWith(OSArray *channelIDs,
                                            OSArray *channelNames,
                                            IOReportChannelType channelType,
-                                           IOReportUnits unit);
+                                           IOReportUnit unit);
 
 // protected instance variables (want to get rid of these)
 protected:
@@ -761,7 +761,7 @@ protected:
 
 // private instance variables
 private:
-    IOReportUnits       _unit;
+    IOReportUnit       _unit;
 
     int                 _enabled;   // 'enabled' if _enabled > 0
 
@@ -805,7 +805,7 @@ public:
 */
     static IOSimpleReporter* with(IOService *reportingService,
                                   IOReportCategories categories,
-                                  IOReportUnits unit);
+                                  IOReportUnit unit);
     
 /*! @function   IOSimpleReporter::setValue
     @abstract   Thread safely set a channel's value
@@ -860,7 +860,7 @@ protected:
 */
     virtual bool initWith(IOService *reportingService,
                           IOReportCategories categories,
-                          IOReportUnits unit);
+                          IOReportUnit unit);
     
 private:
     
@@ -902,7 +902,7 @@ public:
     static IOStateReporter* with(IOService *reportingService,
                                  IOReportCategories categories,
                                  int nstates,
-                                 IOReportUnits unit = kIOReportUnitHWTicks);
+                                 IOReportUnit unit = kIOReportUnitHWTicks);
         
 /*! @function   IOStateReporter::setStateID
     @abstract   Assign a non-default ID to a state
@@ -1300,7 +1300,7 @@ protected:
 */
     virtual bool initWith(IOService *reportingService,
                           IOReportCategories categories,
-                          int16_t nstates, IOReportUnits unit);
+                          int16_t nstates, IOReportUnit unit);
 
     
 /*! @function   IOStateReporter::handleSwapPrepare
@@ -1482,7 +1482,7 @@ FIXME: need more explanation of the config
                                      IOReportCategories categories,
                                      uint64_t channelID,
                                      const char *channelName,
-                                     IOReportUnits unit,
+                                     IOReportUnit unit,
                                      int nSegments,
                                      IOHistogramSegmentConfig *config);
 
@@ -1558,7 +1558,7 @@ protected:
                           IOReportCategories categories,
                           uint64_t channelID,
                           const OSSymbol *channelName,
-                          IOReportUnits unit,
+                          IOReportUnit unit,
                           int nSegments,
                           IOHistogramSegmentConfig  *config);
     

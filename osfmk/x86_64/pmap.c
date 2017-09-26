@@ -138,6 +138,7 @@
 #endif
 
 #include <vm/vm_protos.h>
+#include <san/kasan.h>
 
 #include <i386/mp.h>
 #include <i386/mp_desc.h>
@@ -282,12 +283,21 @@ pmap_map(
 	vm_prot_t	prot,
 	unsigned int	flags)
 {
+	kern_return_t	kr;
 	int		ps;
 
 	ps = PAGE_SIZE;
 	while (start_addr < end_addr) {
-		pmap_enter(kernel_pmap, (vm_map_offset_t)virt,
-			   (ppnum_t) i386_btop(start_addr), prot, VM_PROT_NONE, flags, TRUE);
+		kr = pmap_enter(kernel_pmap, (vm_map_offset_t)virt,
+		                (ppnum_t) i386_btop(start_addr), prot, VM_PROT_NONE, flags, TRUE);
+
+		if (kr != KERN_SUCCESS) {
+			panic("%s: failed pmap_enter, "
+			      "virt=%p, start_addr=%p, end_addr=%p, prot=%#x, flags=%#x",
+			      __FUNCTION__,
+			      (void *)virt, (void *)start_addr, (void *)end_addr, prot, flags);
+		}
+
 		virt += ps;
 		start_addr += ps;
 	}
@@ -354,10 +364,12 @@ pmap_cpu_init(void)
 		}
 	}
 
+#if !MONOTONIC
 	if (cdp->cpu_fixed_pmcs_enabled) {
 		boolean_t enable = TRUE;
 		cpu_pmc_control(&enable);
 	}
+#endif /* !MONOTONIC */
 }
 
 static uint32_t pmap_scale_shift(void) {
@@ -489,6 +501,7 @@ pmap_bootstrap(
 	printf("Stack canary: 0x%lx\n", __stack_chk_guard[0]);
 	printf("early_random(): 0x%qx\n", early_random());
 #endif
+#if	DEVELOPMENT || DEBUG
 	boolean_t ptmp;
 	/* Check if the user has requested disabling stack or heap no-execute
 	 * enforcement. These are "const" variables; that qualifier is cast away
@@ -505,6 +518,7 @@ pmap_bootstrap(
 		boolean_t *pdknhp = (boolean_t *) &pmap_disable_kstack_nx;
 		*pdknhp = TRUE;
 	}
+#endif /* DEVELOPMENT || DEBUG */
 
 	boot_args *args = (boot_args *)PE_state.bootArgs;
 	if (args->efiMode == kBootArgsEfiMode32) {
@@ -521,17 +535,17 @@ pmap_bootstrap(
 	 * in the DEBUG kernel) to force the kernel to switch to its own map
 	 * (and cr3) when control is in kernelspace. The kernel's map does not
 	 * include (i.e. share) userspace so wild references will cause
-	 * a panic. Only copyin and copyout are exempt from this. 
+	 * a panic. Only copyin and copyout are exempt from this.
 	 */
 	(void) PE_parse_boot_argn("-no_shared_cr3",
 				  &no_shared_cr3, sizeof (no_shared_cr3));
 	if (no_shared_cr3)
 		kprintf("Kernel not sharing user map\n");
-		
+
 #ifdef	PMAP_TRACES
 	if (PE_parse_boot_argn("-pmap_trace", &pmap_trace, sizeof (pmap_trace))) {
 		kprintf("Kernel traces for pmap operations enabled\n");
-	}	
+	}
 #endif	/* PMAP_TRACES */
 
 #if MACH_ASSERT
@@ -799,6 +813,7 @@ pmap_init(void)
 	pv_hashed_list_zone = zinit(s, 10000*s /* Expandable zone */,
 	    4096 * 3 /* LCM x86_64*/, "pv_list");
 	zone_change(pv_hashed_list_zone, Z_NOENCRYPT, TRUE);
+	zone_change(pv_hashed_list_zone, Z_GZALLOC_EXEMPT, TRUE);
 
 	/* create pv entries for kernel pages mapped by low level
 	   startup code.  these have to exist so we can pmap_remove()
@@ -1284,8 +1299,7 @@ pmap_create_options(
 	pml4_entry_t    *pml4;
 	pml4_entry_t    *kpml4;
 
-	PMAP_TRACE(PMAP_CODE(PMAP__CREATE) | DBG_FUNC_START,
-		   (uint32_t) (sz>>32), (uint32_t) sz, flags, 0, 0);
+	PMAP_TRACE(PMAP_CODE(PMAP__CREATE) | DBG_FUNC_START, sz, flags);
 
 	size = (vm_size_t) sz;
 
@@ -1367,6 +1381,11 @@ pmap_create_options(
 		pml4[KERNEL_PML4_INDEX]    = kpml4[KERNEL_PML4_INDEX];
 		pml4[KERNEL_KEXTS_INDEX]   = kpml4[KERNEL_KEXTS_INDEX];
 		pml4[KERNEL_PHYSMAP_PML4_INDEX] = kpml4[KERNEL_PHYSMAP_PML4_INDEX];
+
+#if KASAN
+		pml4[KERNEL_KASAN_PML4_INDEX0] = kpml4[KERNEL_KASAN_PML4_INDEX0];
+		pml4[KERNEL_KASAN_PML4_INDEX1] = kpml4[KERNEL_KASAN_PML4_INDEX1];
+#endif
 	}
 
 #if MACH_ASSERT
@@ -1374,8 +1393,8 @@ pmap_create_options(
 	strlcpy(p->pmap_procname, "<nil>", sizeof (p->pmap_procname));
 #endif /* MACH_ASSERT */
 
-	PMAP_TRACE(PMAP_CODE(PMAP__CREATE) | DBG_FUNC_START,
-		   p, flags, 0, 0, 0);
+	PMAP_TRACE(PMAP_CODE(PMAP__CREATE) | DBG_FUNC_END,
+	           VM_KERNEL_ADDRHIDE(p));
 
 	return(p);
 }
@@ -1502,7 +1521,7 @@ pmap_destroy(pmap_t	p)
 		return;
 
 	PMAP_TRACE(PMAP_CODE(PMAP__DESTROY) | DBG_FUNC_START,
-		   p, 0, 0, 0, 0);
+	           VM_KERNEL_ADDRHIDe(p));
 
 	PMAP_LOCK(p);
 
@@ -1525,8 +1544,7 @@ pmap_destroy(pmap_t	p)
 	PMAP_UNLOCK(p);
 
 	if (c != 0) {
-		PMAP_TRACE(PMAP_CODE(PMAP__DESTROY) | DBG_FUNC_END,
-			   p, 1, 0, 0, 0);
+		PMAP_TRACE(PMAP_CODE(PMAP__DESTROY) | DBG_FUNC_END);
 		pmap_assert(p == kernel_pmap);
 	        return;	/* still in use */
 	}
@@ -1555,8 +1573,7 @@ pmap_destroy(pmap_t	p)
 	ledger_dereference(p->ledger);
 	zfree(pmap_zone, p);
 
-	PMAP_TRACE(PMAP_CODE(PMAP__DESTROY) | DBG_FUNC_END,
-		   0, 0, 0, 0, 0);
+	PMAP_TRACE(PMAP_CODE(PMAP__DESTROY) | DBG_FUNC_END);
 }
 
 /*
@@ -1630,10 +1647,10 @@ pmap_protect_options(
 		pmap_remove_options(map, sva, eva, options);
 		return;
 	}
+
 	PMAP_TRACE(PMAP_CODE(PMAP__PROTECT) | DBG_FUNC_START,
-		   map,
-		   (uint32_t) (sva >> 32), (uint32_t) sva,
-		   (uint32_t) (eva >> 32), (uint32_t) eva);
+	           VM_KERNEL_ADDRHIDE(map), VM_KERNEL_ADDRHIDE(sva),
+	           VM_KERNEL_ADDRHIDE(eva));
 
 	if ((prot & VM_PROT_EXECUTE) || !nx_enabled || !map->nx_enabled)
 		set_NX = FALSE;
@@ -1701,15 +1718,14 @@ pmap_protect_options(
 	}
 	PMAP_UNLOCK(map);
 
-	PMAP_TRACE(PMAP_CODE(PMAP__PROTECT) | DBG_FUNC_END,
-		   0, 0, 0, 0, 0);
+	PMAP_TRACE(PMAP_CODE(PMAP__PROTECT) | DBG_FUNC_END);
 
 }
 
 /* Map a (possibly) autogenned block */
-void
+kern_return_t
 pmap_map_block(
-	pmap_t		pmap, 
+	pmap_t		pmap,
 	addr64_t	va,
 	ppnum_t 	pa,
 	uint32_t	size,
@@ -1717,19 +1733,38 @@ pmap_map_block(
 	int		attr,
 	__unused unsigned int	flags)
 {
+	kern_return_t   kr;
+	addr64_t	original_va = va;
 	uint32_t        page;
 	int		cur_page_size;
 
 	if (attr & VM_MEM_SUPERPAGE)
 		cur_page_size =  SUPERPAGE_SIZE;
-	else 
+	else
 		cur_page_size =  PAGE_SIZE;
 
 	for (page = 0; page < size; page+=cur_page_size/PAGE_SIZE) {
-		pmap_enter(pmap, va, pa, prot, VM_PROT_NONE, attr, TRUE);
+		kr = pmap_enter(pmap, va, pa, prot, VM_PROT_NONE, attr, TRUE);
+
+		if (kr != KERN_SUCCESS) {
+			/*
+			 * This will panic for now, as it is unclear that
+			 * removing the mappings is correct.
+			 */
+			panic("%s: failed pmap_enter, "
+			      "pmap=%p, va=%#llx, pa=%u, size=%u, prot=%#x, flags=%#x",
+			      __FUNCTION__,
+			      pmap, va, pa, size, prot, flags);
+
+			pmap_remove(pmap, original_va, va - original_va);
+			return kr;
+		}
+
 		va += cur_page_size;
 		pa+=cur_page_size/PAGE_SIZE;
 	}
+
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -2439,7 +2474,7 @@ pmap_flush(
 	cpus_to_signal = pfc->pfc_cpus;
 
 	PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_DELAYED_TLBS) | DBG_FUNC_START,
-			    NULL, cpus_to_signal, 0, 0, 0);
+	                    NULL, cpus_to_signal);
 
 	for (cpu = 0, cpu_bit = 1; cpu < real_ncpus && cpus_to_signal; cpu++, cpu_bit <<= 1) {
 
@@ -2480,7 +2515,7 @@ pmap_flush(
 		deadline = mach_absolute_time() +
 				(TLBTimeOut ? TLBTimeOut : LockTimeOut);
 		boolean_t is_timeout_traced = FALSE;
-		
+
 		/*
 		 * Wait for those other cpus to acknowledge
 		 */
@@ -2508,23 +2543,23 @@ pmap_flush(
 				if (TLBTimeOut == 0) {
 					if (is_timeout_traced)
 						continue;
+
 					PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_TLBS_TO),
-			    			NULL, cpus_to_signal, cpus_to_respond, 0, 0);
+					                    NULL, cpus_to_signal, cpus_to_respond);
+
 					is_timeout_traced = TRUE;
 					continue;
 				}
-				pmap_tlb_flush_timeout = TRUE;
 				orig_acks = NMIPI_acks;
-				mp_cpus_NMIPI(cpus_to_respond);
-
-				panic("TLB invalidation IPI timeout: "
-				    "CPU(s) failed to respond to interrupts, unresponsive CPU bitmap: 0x%llx, NMIPI acks: orig: 0x%lx, now: 0x%lx",
-				    cpus_to_respond, orig_acks, NMIPI_acks);
+				NMIPI_panic(cpus_to_respond, TLB_FLUSH_TIMEOUT);
+				panic("TLB invalidation IPI timeout, unresponsive CPU bitmap: 0x%llx, NMIPI acks: 0x%lx, now: 0x%lx, deadline: %llu",
+				      cpus_to_respond, orig_acks, NMIPI_acks, deadline);
 			}
 		}
 	}
+
 	PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_DELAYED_TLBS) | DBG_FUNC_END,
-			    NULL, cpus_signaled, flush_self, 0, 0);
+	                    NULL, cpus_signaled, flush_self);
 
 	mp_enable_preemption();
 }
@@ -2587,7 +2622,8 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 	}
 
 	PMAP_TRACE_CONSTANT(event_code | DBG_FUNC_START,
-				VM_KERNEL_UNSLIDE_OR_PERM(pmap), options, event_startv, event_endv, 0);
+	                    VM_KERNEL_UNSLIDE_OR_PERM(pmap), options,
+	                    event_startv, event_endv);
 
 	if (is_ept) {
 		mp_cpus_call(CPUMASK_ALL, ASYNC, invept, (void*)pmap->pm_eptp);
@@ -2709,19 +2745,20 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 					/* cut tracepoint but don't panic */
 					if (is_timeout_traced)
 						continue;
-					PMAP_TRACE_CONSTANT(
-						PMAP_CODE(PMAP__FLUSH_TLBS_TO),
-						VM_KERNEL_UNSLIDE_OR_PERM(pmap), cpus_to_signal, cpus_to_respond, 0, 0);
+
+					PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__FLUSH_TLBS_TO),
+					                    VM_KERNEL_UNSLIDE_OR_PERM(pmap),
+					                    cpus_to_signal,
+					                    cpus_to_respond);
+
 					is_timeout_traced = TRUE;
 					continue;
 				}
-				pmap_tlb_flush_timeout = TRUE;
 				orig_acks = NMIPI_acks;
-				mp_cpus_NMIPI(cpus_to_respond);
 
-				panic("TLB invalidation IPI timeout: "
-				    "CPU(s) failed to respond to interrupts, unresponsive CPU bitmap: 0x%llx, NMIPI acks: orig: 0x%lx, now: 0x%lx",
-				    cpus_to_respond, orig_acks, NMIPI_acks);
+				NMIPI_panic(cpus_to_respond, TLB_FLUSH_TIMEOUT);
+				panic("TLB invalidation IPI timeout, unresponsive CPU bitmap: 0x%llx, NMIPI acks: 0x%lx, now: 0x%lx, deadline: %llu",
+				      cpus_to_respond, orig_acks, NMIPI_acks, deadline);
 			}
 		}
 	}
@@ -2732,7 +2769,8 @@ pmap_flush_tlbs(pmap_t	pmap, vm_map_offset_t startv, vm_map_offset_t endv, int o
 
 out:
 	PMAP_TRACE_CONSTANT(event_code | DBG_FUNC_END,
-				VM_KERNEL_UNSLIDE_OR_PERM(pmap), cpus_to_signal, event_startv, event_endv, 0);
+	                    VM_KERNEL_UNSLIDE_OR_PERM(pmap), cpus_to_signal,
+	                    event_startv, event_endv);
 
 }
 
@@ -2763,14 +2801,12 @@ process_pmap_updates(void)
 void
 pmap_update_interrupt(void)
 {
-        PMAP_TRACE(PMAP_CODE(PMAP__UPDATE_INTERRUPT) | DBG_FUNC_START,
-		   0, 0, 0, 0, 0);
+        PMAP_TRACE(PMAP_CODE(PMAP__UPDATE_INTERRUPT) | DBG_FUNC_START);
 
 	if (current_cpu_datap()->cpu_tlb_invalid)
 		process_pmap_updates();
 
-        PMAP_TRACE(PMAP_CODE(PMAP__UPDATE_INTERRUPT) | DBG_FUNC_END,
-		   0, 0, 0, 0, 0);
+        PMAP_TRACE(PMAP_CODE(PMAP__UPDATE_INTERRUPT) | DBG_FUNC_END);
 }
 
 #include <mach/mach_vm.h>	/* mach_vm_region_recurse() */
@@ -3251,3 +3287,11 @@ void pmap_verify_noncacheable(uintptr_t vaddr) {
 		return;
 	panic("pmap_verify_noncacheable: IO read from a cacheable address? address: 0x%lx, PTE: %p, *PTE: 0x%llx", vaddr, ptep, *ptep);
 }
+
+#if KASAN
+void kasan_map_low_fixed_regions(void) {
+	kasan_map_shadow(MASTER_GDT_ALIAS, PAGE_SIZE, false);
+	kasan_map_shadow(MASTER_IDT_ALIAS, PAGE_SIZE, false);
+	kasan_map_shadow(LOWGLOBAL_ALIAS, PAGE_SIZE, false);
+}
+#endif

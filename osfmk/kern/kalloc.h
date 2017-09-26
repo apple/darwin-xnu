@@ -86,64 +86,57 @@ extern vm_size_t
 kalloc_bucket_size(
 		vm_size_t 			   size);
 
-#define kalloc(size)					\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
-	vm_size_t tsize = (size);			\
+#define kalloc(size)                                \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                  \
+	vm_size_t tsize = (size);                       \
 	kalloc_canblock(&tsize, TRUE, &site); })
 
-#define kalloc_tag(size, tag)			\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), 0 }; 				\
-	vm_size_t tsize = (size);			\
+#define kalloc_tag(size, itag)                      \
+	({ VM_ALLOC_SITE_STATIC(0, (itag));             \
+	vm_size_t tsize = (size);                       \
 	kalloc_canblock(&tsize, TRUE, &site); })
 
-#define kalloc_tag_bt(size, tag)		\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), VM_TAG_BT }; 		\
-	vm_size_t tsize = (size);			\
+#define kalloc_tag_bt(size, itag)                   \
+	({ VM_ALLOC_SITE_STATIC(VM_TAG_BT, (itag));     \
+	vm_size_t tsize = (size);                       \
 	kalloc_canblock(&tsize, TRUE, &site); })
 
-#define kalloc_noblock(size)			\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
-	vm_size_t tsize = (size);			\
+#define kalloc_noblock(size)                        \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                  \
+	vm_size_t tsize = (size);                       \
 	kalloc_canblock(&tsize, FALSE, &site); })
 
-#define kalloc_noblock_tag(size, tag)	\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), 0 }; 		\
-	vm_size_t tsize = (size);			\
+#define kalloc_noblock_tag(size, itag)              \
+	({ VM_ALLOC_SITE_STATIC(0, (itag));             \
+	vm_size_t tsize = (size);                       \
 	kalloc_canblock(&tsize, FALSE, &site); })
 
-#define kalloc_noblock_tag_bt(size, tag)	\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), VM_TAG_BT }; 		\
-	vm_size_t tsize = (size);			\
+#define kalloc_noblock_tag_bt(size, itag)           \
+	({ VM_ALLOC_SITE_STATIC(VM_TAG_BT, (itag));     \
+	vm_size_t tsize = (size);                       \
 	kalloc_canblock(&tsize, FALSE, &site); })
 
 
 /* these versions update the size reference with the actual size allocated */
 
-#define kallocp(size)					\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+#define kallocp(size)                               \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                  \
 	kalloc_canblock((size), TRUE, &site); })
 
-#define kallocp_tag(size, tag)			\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), 0 }; 				\
+#define kallocp_tag(size, itag)                     \
+	({ VM_ALLOC_SITE_STATIC(0, (itag));             \
 	kalloc_canblock((size), TRUE, &site); })
 
-#define kallocp_tag_bt(size, tag)		\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), VM_TAG_BT }; 		\
+#define kallocp_tag_bt(size, itag)                  \
+	({ VM_ALLOC_SITE_STATIC(VM_TAG_BT, (itag));     \
 	kalloc_canblock((size), TRUE, &site); })
 
-#define kallocp_noblock(size)			\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+#define kallocp_noblock(size)                       \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                  \
 	kalloc_canblock((size), FALSE, &site); })
 
-#define kallocp_noblock_tag_bt(size, tag)	\
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
-		= { (tag), VM_TAG_BT }; 		\
+#define kallocp_noblock_tag_bt(size, itag)          \
+	({ VM_ALLOC_SITE_STATIC(VM_TAG_BT, (itag));     \
 	kalloc_canblock((size), FALSE, &site); })
 
 
@@ -153,9 +146,9 @@ extern void kfree(void		*data,
 
 #else /* XNU_KERNEL_PRIVATE */
 
-extern void *kalloc(vm_size_t	size);
+extern void *kalloc(vm_size_t	size) __attribute__((alloc_size(1)));
 
-extern void *kalloc_noblock(vm_size_t	size);
+extern void *kalloc_noblock(vm_size_t	size) __attribute__((alloc_size(1)));
 
 extern void kfree(void		*data,
 		  vm_size_t	size);

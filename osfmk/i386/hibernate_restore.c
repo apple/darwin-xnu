@@ -50,7 +50,7 @@ hibernate_restore_phys_page(uint64_t src, uint64_t dst, uint32_t len, uint32_t p
 	d = (uint64_t *)pal_hib_map(DEST_COPY_AREA, dst);
 	s = (uint64_t *) (uintptr_t)src;
 
-	memcpy(d, s, len);
+	__nosan_memcpy(d, s, len);
 
 	return (uintptr_t)d;
 }

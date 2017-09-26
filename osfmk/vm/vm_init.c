@@ -97,6 +97,9 @@ boolean_t zlog_ready = FALSE;
 vm_offset_t kmapoff_kaddr;
 unsigned int kmapoff_pgcnt;
 
+#if CONFIG_EMBEDDED
+extern int log_executable_mem_entry;
+#endif /* CONFIG_EMBEDDED */
 
 static inline void
 vm_mem_bootstrap_log(const char *message)
@@ -153,10 +156,15 @@ vm_mem_bootstrap(void)
 		kmapoff_pgcnt = early_random() & 0x1ff;	/* 9 bits */
 
 	if (kmapoff_pgcnt > 0 &&
-	    vm_allocate(kernel_map, &kmapoff_kaddr,
-	    kmapoff_pgcnt * PAGE_SIZE_64, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_OSFMK)) != KERN_SUCCESS)
+	    vm_allocate_kernel(kernel_map, &kmapoff_kaddr,
+	    kmapoff_pgcnt * PAGE_SIZE_64, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_OSFMK) != KERN_SUCCESS)
 		panic("cannot vm_allocate %u kernel_map pages", kmapoff_pgcnt);
 
+#if CONFIG_EMBEDDED
+	PE_parse_boot_argn("log_executable_mem_entry",
+			   &log_executable_mem_entry,
+			   sizeof (log_executable_mem_entry));
+#endif /* CONFIG_EMBEDDED */
 
 	vm_mem_bootstrap_log("pmap_init");
 	pmap_init();
@@ -181,6 +189,25 @@ vm_mem_bootstrap(void)
 		zsize = ZONE_MAP_MAX;	/* Clamp to 1.5GB max for K32 */
 #endif /* !__LP64__ */
 
+#if CONFIG_EMBEDDED
+#if defined(__LP64__)
+	{
+	mach_vm_size_t max_zsize;
+
+	/*
+	 * because of the limited kernel virtual space for embedded systems,
+	 * we need to clamp the size of the zone map being created... replicate
+	 * the above calculation for a 1Gbyte, LP64 system and use that as the
+	 * maximum size for the zone map
+	 */
+	max_zsize = (1024ULL * 1024ULL * 1024ULL) >> 2ULL;
+	max_zsize += max_zsize >> 1;
+
+	if (zsize > max_zsize)
+		zsize = max_zsize;
+	}
+#endif
+#endif
 	vm_mem_bootstrap_log("kext_alloc_init");
 	kext_alloc_init();
 

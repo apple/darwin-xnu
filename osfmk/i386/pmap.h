@@ -222,6 +222,8 @@ pmap_store_pte(pt_entry_t *entryp, pt_entry_t value)
 #define KERNEL_PML4_INDEX		511
 #define KERNEL_KEXTS_INDEX	510	/* Home of KEXTs - the basement */
 #define KERNEL_PHYSMAP_PML4_INDEX	509	/* virtual to physical map */ 
+#define KERNEL_KASAN_PML4_INDEX0	508
+#define KERNEL_KASAN_PML4_INDEX1	507
 #define KERNEL_BASE		(0ULL - NBPML4)
 #define KERNEL_BASEMENT		(KERNEL_BASE - NBPML4)
 
@@ -231,6 +233,7 @@ pmap_store_pte(pt_entry_t *entryp, pt_entry_t value)
 /* ?? intel ?? */
 #define VM_WIMG_IO		(VM_MEM_COHERENT | 	\
 				VM_MEM_NOT_CACHEABLE | VM_MEM_GUARDED)
+#define VM_WIMG_POSTED		VM_WIMG_IO
 #define VM_WIMG_WTHRU		(VM_MEM_WRITE_THROUGH | VM_MEM_COHERENT | VM_MEM_GUARDED)
 /* write combining mode, aka store gather */
 #define VM_WIMG_WCOMB		(VM_MEM_NOT_CACHEABLE | VM_MEM_COHERENT) 
@@ -595,7 +598,6 @@ extern unsigned pmap_memory_region_current;
 
 extern pmap_memory_region_t pmap_memory_regions[];
 #include <i386/pmap_pcid.h>
-#include <vm/vm_map.h>
 
 static inline void
 set_dirbase(pmap_t tpmap, thread_t thread, int my_cpu) {
@@ -713,15 +715,15 @@ extern void		pmap_cpu_free(
 				struct cpu_pmap	*cp);
 #endif
 
-extern void		pmap_map_block(
-				pmap_t pmap, 
+extern kern_return_t	pmap_map_block(
+				pmap_t pmap,
 				addr64_t va,
 				ppnum_t pa,
 				uint32_t size,
 				vm_prot_t prot,
 				int attr,
 				unsigned int flags);
-				
+
 extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
 extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 extern ppnum_t          pmap_find_phys(pmap_t map, addr64_t va);
@@ -730,7 +732,7 @@ extern void pmap_cpu_init(void);
 extern void pmap_disable_NX(pmap_t pmap);
 
 extern void pt_fake_zone_init(int);
-extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *, 
+extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *,
 			      uint64_t *, int *, int *, int *);
 extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__printflike(1,2));
 
@@ -741,7 +743,7 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 
 #include <kern/spl.h>
 
-				  
+
 #define PMAP_ACTIVATE_MAP(map, thread, my_cpu)	{				\
 	pmap_t		tpmap;					\
                                                                         \

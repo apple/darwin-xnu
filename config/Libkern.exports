@@ -591,8 +591,17 @@ __Znwm
 ___bzero
 ___cxa_pure_virtual
 ___llvm_profile_runtime
+___memcpy_chk
+___memmove_chk
+___memset_chk
 ___stack_chk_fail
 ___stack_chk_guard
+___strlcpy_chk
+___strlcat_chk
+___strncpy_chk
+___strncat_chk
+___strcpy_chk
+___strcat_chk
 __os_log_default
 __os_log_internal
 _adler32
@@ -684,6 +693,7 @@ _memcmp
 _memcpy
 _memmove
 _memset
+_memset_s
 _ml_at_interrupt_context
 _ml_get_interrupts_enabled
 _ml_set_interrupts_enabled

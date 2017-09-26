@@ -76,6 +76,7 @@
 #include <sys/lock.h>
 #include <sys/param.h>
 #include <sys/event.h>
+#include <sys/time.h>
 #ifdef KERNEL
 #include <sys/kernel_types.h>
 #include <uuid/uuid.h>
@@ -303,7 +304,11 @@ pid_t proc_pgrpid(proc_t p);
 #ifdef KERNEL_PRIVATE
 // mark a process as being allowed to call vfs_markdependency()
 void bsd_set_dependency_capable(task_t task);
+#ifdef	__arm__
+static inline int IS_64BIT_PROCESS(__unused proc_t p) { return 0; }
+#else
 extern int IS_64BIT_PROCESS(proc_t);
+#endif /* __arm__ */
 
 extern int	tsleep(void *chan, int pri, const char *wmesg, int timo);
 extern int	msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, u_int64_t timo);
@@ -388,7 +393,11 @@ __BEGIN_DECLS
 int pid_suspend(int pid);
 int pid_resume(int pid);
 
-
+#if defined(__arm__) || defined(__arm64__)
+int pid_hibernate(int pid);
+#endif /* defined(__arm__) || defined(__arm64__)  */
+int pid_shutdown_sockets(int pid, int level);
+int pid_shutdown_networking(int pid, int level);
 __END_DECLS
 
 #endif /* !KERNEL */

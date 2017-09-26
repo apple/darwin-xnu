@@ -76,9 +76,13 @@
 #include <sys/queue.h>
 
 #include <net/dlil.h>
+#include <net/nwk_wq.h>
 
 #include <mach/boolean.h>
 #include <pexpert/pexpert.h>
+
+/* Eventhandler context for protocol events */
+struct eventhandler_lists_ctxt protoctl_evhdlr_ctxt;
 
 static void pr_init_old(struct protosw *, struct domain *);
 static void init_proto(struct protosw *, struct domain *);
@@ -102,7 +106,7 @@ static lck_grp_attr_t	*domain_proto_mtx_grp_attr;
 decl_lck_mtx_data(static, domain_proto_mtx);
 decl_lck_mtx_data(static, domain_timeout_mtx);
 
-static u_int64_t _net_uptime;
+u_int64_t _net_uptime;
 
 #if (DEVELOPMENT || DEBUG)
 
@@ -637,7 +641,7 @@ done:
 static void
 domain_sched_timeout(void)
 {
-	lck_mtx_assert(&domain_timeout_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&domain_timeout_mtx, LCK_MTX_ASSERT_OWNED);
 
 	if (!domain_timeout_run && domain_draining) {
 		domain_timeout_run = TRUE;
@@ -705,6 +709,7 @@ domaininit(void)
 	struct domain *dp;
 	domain_guard_t guard;
 
+	eventhandler_lists_ctxt_init(&protoctl_evhdlr_ctxt);
 	/*
 	 * allocate lock group attribute and group for domain mutexes
 	 */
@@ -940,10 +945,22 @@ pfctlinput2(int cmd, struct sockaddr *sa, void *ctlparam)
 	TAILQ_FOREACH(dp, &domains, dom_entry) {
 		TAILQ_FOREACH(pp, &dp->dom_protosw, pr_entry) {
 			if (pp->pr_ctlinput != NULL)
-				(*pp->pr_ctlinput)(cmd, sa, ctlparam);
+				(*pp->pr_ctlinput)(cmd, sa, ctlparam, NULL);
 		}
 	}
 	domain_guard_release(guard);
+}
+
+void
+net_update_uptime_with_time(const struct timeval *tvp)
+{
+	_net_uptime = tvp->tv_sec;
+	/*
+	 * Round up the timer to the nearest integer value because otherwise
+	 * we might setup networking timers that are off by almost 1 second.
+	 */
+	if (tvp->tv_usec > 500000)
+		_net_uptime++;
 }
 
 void
@@ -952,19 +969,8 @@ net_update_uptime(void)
 	struct timeval tv;
 
 	microuptime(&tv);
-	_net_uptime = tv.tv_sec;
-	/*
-	 * Round up the timer to the nearest integer value because otherwise
-	 * we might setup networking timers that are off by almost 1 second.
-	 */
-	if (tv.tv_usec > 500000)
-		_net_uptime++;
-}
 
-void
-net_update_uptime_secs(uint64_t secs)
-{
-	_net_uptime = secs;
+	net_update_uptime_with_time(&tv);
 }
 
 /*
@@ -997,13 +1003,13 @@ net_uptime(void)
 void
 domain_proto_mtx_lock_assert_held(void)
 {
-	lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 }
 
 void
 domain_proto_mtx_lock_assert_notheld(void)
 {
-	lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
 }
 
 domain_guard_t
@@ -1013,11 +1019,11 @@ domain_guard_deploy(void)
 
 	marks = net_thread_marks_push(NET_THREAD_HELD_DOMAIN);
 	if (marks != net_thread_marks_none) {
-		lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
 		lck_mtx_lock(&domain_proto_mtx);
 	}
 	else
-		lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 
 	return ((domain_guard_t)(const void*)marks);
 }
@@ -1028,12 +1034,12 @@ domain_guard_release(domain_guard_t guard)
 	net_thread_marks_t marks = (net_thread_marks_t)(const void*)guard;
 
 	if (marks != net_thread_marks_none) {
-		lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 		lck_mtx_unlock(&domain_proto_mtx);
 		net_thread_marks_pop(marks);
 	}
 	else
-		lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
 }
 
 domain_unguard_t
@@ -1043,11 +1049,11 @@ domain_unguard_deploy(void)
 
 	marks = net_thread_unmarks_push(NET_THREAD_HELD_DOMAIN);
 	if (marks != net_thread_marks_none) {
-		lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 		lck_mtx_unlock(&domain_proto_mtx);
 	}
 	else
-		lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
 
 	return ((domain_unguard_t)(const void*)marks);
 }
@@ -1058,13 +1064,14 @@ domain_unguard_release(domain_unguard_t unguard)
 	net_thread_marks_t marks = (net_thread_marks_t)(const void*)unguard;
 
 	if (marks != net_thread_marks_none) {
-		lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
 		lck_mtx_lock(&domain_proto_mtx);
 		net_thread_unmarks_pop(marks);
 	}
 	else
-		lck_mtx_assert(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 }
+
 
 #if (DEVELOPMENT || DEBUG)
  
@@ -1085,4 +1092,3 @@ sysctl_do_drain_domains SYSCTL_HANDLER_ARGS
 }
 
 #endif /* DEVELOPMENT || DEBUG */
- 

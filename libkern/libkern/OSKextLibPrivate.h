@@ -926,7 +926,7 @@ void OSKextLoadedKextSummariesUpdated(void);
 #ifdef XNU_KERNEL_PRIVATE
 
 extern const vm_allocation_site_t * OSKextGetAllocationSiteForCaller(uintptr_t address);
-extern uint32_t                     OSKextGetKmodIDForSite(vm_allocation_site_t * site,
+extern uint32_t                     OSKextGetKmodIDForSite(const vm_allocation_site_t * site,
                                                            char * name, vm_size_t namelen);
 extern void                         OSKextFreeSite(vm_allocation_site_t * site);
 

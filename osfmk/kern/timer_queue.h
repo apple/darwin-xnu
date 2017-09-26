@@ -149,6 +149,9 @@ extern uint64_t		timer_queue_expire_with_options(
 				uint64_t,
 				boolean_t);
 
+extern void		quantum_timer_expire(
+				uint64_t		deadline);
+
 /* Shutdown a timer queue and reassign existing activities */
 extern void		timer_queue_shutdown(
 				mpqueue_head_t		*queue);
@@ -173,6 +176,8 @@ extern int		setPop(uint64_t time);
 extern void		timer_resync_deadlines(void);
 
 extern void		timer_set_deadline(uint64_t deadline);
+
+extern void		quantum_timer_set_deadline(uint64_t deadline);
 
 /* Migrate the local timer queue of a given cpu to the master cpu */
 extern uint32_t		timer_queue_migrate_cpu(int target_cpu);

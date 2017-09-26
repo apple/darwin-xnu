@@ -301,7 +301,11 @@ typedef struct wrap_timer_call {
 typedef struct cyc_list {
 	cyc_omni_handler_t cyl_omni;
 	wrap_timer_call_t cyl_wrap_by_cpus[];
+#if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
+} __attribute__ ((aligned (8))) cyc_list_t;
+#else
 } cyc_list_t;
+#endif
 
 /* CPU going online/offline notifications */
 void (*dtrace_cpu_state_changed_hook)(int, boolean_t) = NULL;
@@ -571,29 +575,6 @@ cyclic_remove(cyclic_id_t cyclic)
 		wrapTC->hdlr.cyh_func = noop_cyh_func;
 		wrapTC->when.cyt_interval = NEARLY_FOREVER;
 	}
-}
-
-/*
- * timeout / untimeout (converted to dtrace_timeout / dtrace_untimeout due to name collision)
- */ 
-
-thread_call_t
-dtrace_timeout(void (*func)(void *, void *), void* arg, uint64_t nanos)
-{
-#pragma unused(arg)
-	thread_call_t call = thread_call_allocate(func, NULL);
-
-	nanoseconds_to_absolutetime(nanos, &nanos);
-
-	/*
-	 * This method does not use clock_deadline_for_periodic_event() because it is a one-shot,
-	 * and clock drift on later invocations is not a worry.
-	 */
-	uint64_t deadline = mach_absolute_time() + nanos;
-	/* DRK: consider using a lower priority callout here */
-	thread_call_enter_delayed(call, deadline);
-
-	return call;
 }
 
 /*
@@ -1249,6 +1230,30 @@ dtrace_copyoutstr(uintptr_t src, user_addr_t dst, size_t len, volatile uint16_t 
 	}
 }
 
+extern const int copysize_limit_panic;
+
+int
+dtrace_buffer_copyout(const void *kaddr, user_addr_t uaddr, vm_size_t nbytes)
+{
+	/*
+	 * Partition the copyout in copysize_limit_panic-sized chunks
+	 */
+	while (nbytes >= (vm_size_t)copysize_limit_panic) {
+		if (copyout(kaddr, uaddr, copysize_limit_panic) != 0)
+			return (EFAULT);
+
+		nbytes -= copysize_limit_panic;
+		uaddr += copysize_limit_panic;
+		kaddr += copysize_limit_panic;
+	}
+	if (nbytes > 0) {
+		if (copyout(kaddr, uaddr, nbytes) != 0)
+			return (EFAULT);
+	}
+
+	return (0);
+}
+
 uint8_t
 dtrace_fuword8(user_addr_t uaddr)
 {
@@ -1483,6 +1488,8 @@ strstr(const char *in, const char *str)
 {
     char c;
     size_t len;
+    if (!in || !str)
+        return in;
 
     c = *str++;
     if (!c)
@@ -1500,6 +1507,26 @@ strstr(const char *in, const char *str)
     } while (strncmp(in, str, len) != 0);
 
     return (const char *) (in - 1);
+}
+
+const void*
+bsearch(const void *key, const void *base0, size_t nmemb, size_t size, int (*compar)(const void *, const void *))
+{
+	const char *base = base0;
+	size_t lim;
+	int cmp;
+	const void *p;
+	for (lim = nmemb; lim != 0; lim >>= 1) {
+		p = base + (lim >> 1) * size;
+		cmp = (*compar)(key, p);
+		if (cmp == 0)
+			return p;
+		if (cmp > 0) {	/* key > p: move right */
+			base = (const char *)p + size;
+			lim--;
+		}		/* else move left */
+	}
+	return (NULL);
 }
 
 /*

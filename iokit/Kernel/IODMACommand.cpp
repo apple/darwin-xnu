@@ -379,15 +379,7 @@ IODMACommand::setMemoryDescriptor(const IOMemoryDescriptor *mem, bool autoPrepar
 	fInternalState->fNewMD = true;
 	mem->retain();
 	fMemory = mem;
-        if (fMapper)
-        {
-#if IOTRACKING
-            fInternalState->fTag = IOMemoryTag(kernel_map);
-            __IODEQUALIFY(IOMemoryDescriptor *, mem)->prepare((IODirection)
-                    (kIODirectionDMACommand | (fInternalState->fTag << kIODirectionDMACommandShift)));
-            IOTrackingAdd(gIOWireTracking, &fInternalState->fWireTracking, fMemory->getLength(), false);
-#endif /* IOTRACKING */
-        }
+	if (!fMapper) mem->dmaCommandOperation(kIOMDSetDMAActive, this, 0);
 	if (autoPrepare) {
 	    err = prepare();
 	    if (err) {
@@ -407,14 +399,7 @@ IODMACommand::clearMemoryDescriptor(bool autoComplete)
     if (fMemory)
     {
 	while (fActive) complete();
-        if (fMapper)
-        {
-#if IOTRACKING
-            __IODEQUALIFY(IOMemoryDescriptor *, fMemory)->complete((IODirection)
-                    (kIODirectionDMACommand | (fInternalState->fTag << kIODirectionDMACommandShift)));
-            IOTrackingRemove(gIOWireTracking, &fInternalState->fWireTracking, fMemory->getLength());
-#endif /* IOTRACKING */
-        }
+	if (!fMapper) fMemory->dmaCommandOperation(kIOMDSetDMAInactive, this, 0);
 	fMemory->release();
 	fMemory = 0;
     }
@@ -455,7 +440,7 @@ IODMACommand::segmentOp(
 
     IODMACommandInternal * state = target->reserved;
 
-    if (target->fNumAddressBits && (target->fNumAddressBits < 64) && (state->fLocalMapperAlloc || !target->fMapper))
+    if (target->fNumAddressBits && (target->fNumAddressBits < 64) && (state->fLocalMapperAllocValid || !target->fMapper))
 	maxPhys = (1ULL << target->fNumAddressBits);
     else
 	maxPhys = 0;
@@ -464,7 +449,6 @@ IODMACommand::segmentOp(
     address = segment.fIOVMAddr;
     length = segment.fLength;
 
-    assert(address);
     assert(length);
 
     if (!state->fMisaligned)
@@ -610,7 +594,8 @@ IODMACommand::walkAll(UInt8 op)
 
 	op &= ~kWalkPreflight;
 
-	state->fDoubleBuffer = (state->fMisaligned || (kWalkDoubleBuffer & op));
+	state->fDoubleBuffer = (state->fMisaligned || state->fForceDoubleBuffer);
+	state->fForceDoubleBuffer = false;
 	if (state->fDoubleBuffer)
 	    state->fCopyPageCount = atop_64(round_page(state->fPreparedLength));
 
@@ -835,6 +820,7 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
 	state->fNextRemapPage  = NULL;
 	state->fCopyMD         = 0;
 	state->fLocalMapperAlloc       = 0;
+	state->fLocalMapperAllocValid  = false;
 	state->fLocalMapperAllocLength = 0;
 
 	state->fLocalMapper    = (fMapper && (fMapper != IOMapper::gSystem));
@@ -880,8 +866,7 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
 	    mapArgs.fMapSpec.numAddressBits = fNumAddressBits ? fNumAddressBits : 64;
 	    mapArgs.fLength = state->fPreparedLength;
 	    const IOMemoryDescriptor * md = state->fCopyMD;
-	    if (md) { mapArgs.fOffset = 0; }
-	    else
+	    if (md) { mapArgs.fOffset = 0; } else
 	    {
 		md = fMemory;
 		mapArgs.fOffset = state->fPreparedOffset;
@@ -892,6 +877,7 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
 	    if (kIOReturnSuccess == ret)
 	    {
 		state->fLocalMapperAlloc       = mapArgs.fAlloc;
+		state->fLocalMapperAllocValid  = true;
 		state->fLocalMapperAllocLength = mapArgs.fAllocLength;
 		state->fMapContig = mapArgs.fMapContig;
 	    }
@@ -907,17 +893,21 @@ IODMACommand::complete(bool invalidateCache, bool synchronize)
 {
     IODMACommandInternal * state = fInternalState;
     IOReturn               ret   = kIOReturnSuccess;
+    IOMemoryDescriptor   * copyMD;
 
     if (fActive < 1)
 	return kIOReturnNotReady;
 
     if (!--fActive)
     {
+        copyMD = state->fCopyMD;
+	if (copyMD) copyMD->retain();
+
 	if (IS_NONCOHERENT(fMappingOptions) && invalidateCache) 
 	{
-	    if (state->fCopyMD)
+	    if (copyMD)
 	    {
-		state->fCopyMD->performOperation(kIOMemoryIncoherentIOFlush, 0, state->fPreparedLength);
+		copyMD->performOperation(kIOMemoryIncoherentIOFlush, 0, state->fPreparedLength);
 	    }
 	    else
 	    {
@@ -933,17 +923,30 @@ IODMACommand::complete(bool invalidateCache, bool synchronize)
 			op |= kWalkSyncIn;
 		ret = walkAll(op);
 	}
-    	if (state->fLocalMapperAlloc)
+
+	if (state->fLocalMapperAllocValid)
     	{
-	    if (state->fLocalMapperAllocLength)
+	    IOMDDMAMapArgs mapArgs;
+	    bzero(&mapArgs, sizeof(mapArgs));
+	    mapArgs.fMapper = fMapper;
+	    mapArgs.fCommand = this;
+	    mapArgs.fAlloc = state->fLocalMapperAlloc;
+	    mapArgs.fAllocLength = state->fLocalMapperAllocLength;
+	    const IOMemoryDescriptor * md = copyMD;
+	    if (md) { mapArgs.fOffset = 0; }
+	    else
 	    {
-		fMapper->iovmUnmapMemory(getIOMemoryDescriptor(), this, 
-						state->fLocalMapperAlloc, state->fLocalMapperAllocLength);
+		md = fMemory;
+		mapArgs.fOffset = state->fPreparedOffset;
 	    }
+
+	    ret = md->dmaCommandOperation(kIOMDDMAUnmap, &mapArgs, sizeof(mapArgs));
+
 	    state->fLocalMapperAlloc       = 0;
+	    state->fLocalMapperAllocValid  = false;
 	    state->fLocalMapperAllocLength = 0;
 	}
-
+	if (copyMD) copyMD->release();
 	state->fPrepared = false;
     }
 
@@ -981,14 +984,13 @@ IODMACommand::synchronize(IOOptionBits options)
     op = 0;
     if (kForceDoubleBuffer & options)
     {
-	if (state->fDoubleBuffer)
-	    return kIOReturnSuccess;
-	if (state->fCursor)
-	    state->fCursor = false;
-	else
-	    ret = walkAll(kWalkComplete);
+	if (state->fDoubleBuffer) return kIOReturnSuccess;
+	ret = complete(false /* invalidateCache */, true /* synchronize */);
+	state->fCursor = false;
+	state->fForceDoubleBuffer = true;
+        ret = prepare(state->fPreparedOffset, state->fPreparedLength, false /* flushCache */, true /* synchronize */);
 
-	op |= kWalkPrepare | kWalkPreflight | kWalkDoubleBuffer;
+	return (ret);
     }
     else if (state->fCursor)
 	return kIOReturnSuccess;
@@ -1132,17 +1134,18 @@ IODMACommand::genIOVMSegments(uint32_t op,
 	return kIOReturnOverrun;
 
     if ((offset == internalState->fPreparedOffset) || (offset != state->fOffset) || internalState->fNewMD) {
-	state->fOffset                 = 0;
-	state->fIOVMAddr               = 0;
-	internalState->fNextRemapPage  = NULL;
-	internalState->fNewMD	       = false;
-	state->fMapped                 = (0 != fMapper);
-	mdOp                           = kIOMDFirstSegment;
+	state->fOffset                                   = 0;
+	internalState->fIOVMAddrValid = state->fIOVMAddr = 0;
+	internalState->fNextRemapPage                    = NULL;
+	internalState->fNewMD	                         = false;
+	state->fMapped                                   = (0 != fMapper);
+	mdOp                                             = kIOMDFirstSegment;
     };
 	
     UInt32    segIndex = 0;
     UInt32    numSegments = *numSegmentsP;
     Segment64 curSeg = { 0, 0 };
+    bool      curSegValid = false;
     addr64_t  maxPhys;
 
     if (fNumAddressBits && (fNumAddressBits < 64))
@@ -1151,17 +1154,17 @@ IODMACommand::genIOVMSegments(uint32_t op,
 	maxPhys = 0;
     maxPhys--;
 
-    while (state->fIOVMAddr || (state->fOffset < memLength))
+    while (internalState->fIOVMAddrValid || (state->fOffset < memLength))
     {
 	// state = next seg
-	if (!state->fIOVMAddr) {
+	if (!internalState->fIOVMAddrValid) {
 
 	    IOReturn rtn;
 
 	    state->fOffset = offset;
 	    state->fLength = memLength - offset;
 
-	    if (internalState->fMapContig && internalState->fLocalMapperAlloc)
+	    if (internalState->fMapContig && internalState->fLocalMapperAllocValid)
 	    {
 		state->fIOVMAddr = internalState->fLocalMapperAlloc + offset - internalState->fPreparedOffset;
 		rtn = kIOReturnSuccess;
@@ -1193,39 +1196,40 @@ IODMACommand::genIOVMSegments(uint32_t op,
 
 	    if (rtn == kIOReturnSuccess)
 	    {
-		assert(state->fIOVMAddr);
+		internalState->fIOVMAddrValid = true;
 		assert(state->fLength);
-		if ((curSeg.fIOVMAddr + curSeg.fLength) == state->fIOVMAddr) {
+		if (curSegValid && ((curSeg.fIOVMAddr + curSeg.fLength) == state->fIOVMAddr)) {
 		    UInt64 length = state->fLength;
 		    offset	    += length;
 		    curSeg.fLength  += length;
-		    state->fIOVMAddr = 0;
+		    internalState->fIOVMAddrValid = state->fIOVMAddr = 0;
 		}
 	    }
 	    else if (rtn == kIOReturnOverrun)
-		state->fIOVMAddr = state->fLength = 0;	// At end
+		internalState->fIOVMAddrValid = state->fIOVMAddr = state->fLength = 0;	// At end
 	    else
 		return rtn;
 	}
 
 	// seg = state, offset = end of seg
-	if (!curSeg.fIOVMAddr)
+	if (!curSegValid)
 	{
-	    UInt64 length = state->fLength;
-	    offset	    += length;
-	    curSeg.fIOVMAddr = state->fIOVMAddr;
-	    curSeg.fLength   = length;
-	    state->fIOVMAddr = 0;
+	    UInt64 length                 = state->fLength;
+	    offset	                 += length;
+	    curSeg.fIOVMAddr              = state->fIOVMAddr;
+	    curSeg.fLength                = length;
+	    curSegValid                   = true;
+	    internalState->fIOVMAddrValid = state->fIOVMAddr = 0;
 	}
 
-        if (!state->fIOVMAddr)
+        if (!internalState->fIOVMAddrValid)
 	{
 	    // maxPhys
 	    if ((kWalkClient & op) && (curSeg.fIOVMAddr + curSeg.fLength - 1) > maxPhys)
 	    {
 		if (internalState->fCursor)
 		{
-		    curSeg.fIOVMAddr = 0;
+		    curSegValid = curSeg.fIOVMAddr = 0;
 		    ret = kIOReturnMessageTooLarge;
 		    break;
 		}
@@ -1237,6 +1241,7 @@ IODMACommand::genIOVMSegments(uint32_t op,
 		    DEBG("trunc %qx, %qx-> %qx\n", curSeg.fIOVMAddr, curSeg.fLength, newLength);
 		    remain	     = curSeg.fLength - newLength;
 		    state->fIOVMAddr = newLength + curSeg.fIOVMAddr;
+		    internalState->fIOVMAddrValid = true;
 		    curSeg.fLength   = newLength;
 		    state->fLength   = remain;
 		    offset	    -= remain;
@@ -1264,6 +1269,7 @@ IODMACommand::genIOVMSegments(uint32_t op,
 
 		    curSeg.fIOVMAddr = ptoa_64(vm_page_get_phys_page(remap))
 					+ (addr & PAGE_MASK);
+		    curSegValid = true;
 		    internalState->fNextRemapPage = vm_page_get_next(remap);
 
 		    newLength		 = PAGE_SIZE - (addr & PAGE_MASK);
@@ -1271,6 +1277,7 @@ IODMACommand::genIOVMSegments(uint32_t op,
 		    {
 			remain		 = curSeg.fLength - newLength;
 			state->fIOVMAddr = addr + newLength;
+			internalState->fIOVMAddrValid = true;
 			curSeg.fLength	 = newLength;
 			state->fLength	 = remain;
 			offset		-= remain;
@@ -1288,6 +1295,7 @@ IODMACommand::genIOVMSegments(uint32_t op,
 		leftover      += curSeg.fLength - fMaxSegmentSize;
 		curSeg.fLength = fMaxSegmentSize;
 		state->fIOVMAddr = curSeg.fLength + curSeg.fIOVMAddr;
+		internalState->fIOVMAddrValid = true;
 	    }
 
 	    // alignment current length
@@ -1298,6 +1306,7 @@ IODMACommand::genIOVMSegments(uint32_t op,
 		leftover       += reduce;
 	    	curSeg.fLength -= reduce;
 		state->fIOVMAddr = curSeg.fLength + curSeg.fIOVMAddr;
+		internalState->fIOVMAddrValid = true;
 	    }
 
 	    // alignment next address
@@ -1308,6 +1317,7 @@ IODMACommand::genIOVMSegments(uint32_t op,
 		leftover       += reduce;
 	    	curSeg.fLength -= reduce;
 		state->fIOVMAddr = curSeg.fLength + curSeg.fIOVMAddr;
+		internalState->fIOVMAddrValid = true;
 	    }
 
 	    if (leftover)
@@ -1336,7 +1346,7 @@ IODMACommand::genIOVMSegments(uint32_t op,
 		if (misaligned)
 		{
 		    if (misaligned) DEBG("cursor misaligned %qx:%qx\n", curSeg.fIOVMAddr, curSeg.fLength);
-		    curSeg.fIOVMAddr = 0;
+		    curSegValid = curSeg.fIOVMAddr = 0;
 		    ret = kIOReturnNotAligned;
 		    break;
 		}
@@ -1346,23 +1356,23 @@ IODMACommand::genIOVMSegments(uint32_t op,
 	    {
 		curSeg.fLength   -= (offset - memLength);
 		offset = memLength;
-		state->fIOVMAddr = state->fLength = 0;	// At end
+		internalState->fIOVMAddrValid = state->fIOVMAddr = state->fLength = 0;	// At end
 		break;
 	    }
 	}
 
-        if (state->fIOVMAddr) {
+        if (internalState->fIOVMAddrValid) {
             if ((segIndex + 1 == numSegments))
                 break;
 
 	    ret = (*outSegFunc)(reference, this, curSeg, segmentsP, segIndex++);
-            curSeg.fIOVMAddr = 0;
+            curSegValid = curSeg.fIOVMAddr = 0;
 	    if (kIOReturnSuccess != ret)
 		break;
         }
     }
 
-    if (curSeg.fIOVMAddr) {
+    if (curSegValid) {
 	ret = (*outSegFunc)(reference, this, curSeg, segmentsP, segIndex++);
     }
 
@@ -1385,7 +1395,7 @@ IODMACommand::clientOutputSegment(
 
     if (target->fNumAddressBits && (target->fNumAddressBits < 64) 
 	&& ((segment.fIOVMAddr + segment.fLength - 1) >> target->fNumAddressBits)
-	&& (target->reserved->fLocalMapperAlloc || !target->fMapper))
+	&& (target->reserved->fLocalMapperAllocValid || !target->fMapper))
     {
 	DEBG("kIOReturnMessageTooLarge(fNumAddressBits) %qx, %qx\n", segment.fIOVMAddr, segment.fLength);
 	ret = kIOReturnMessageTooLarge;

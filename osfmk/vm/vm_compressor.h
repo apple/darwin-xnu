@@ -39,17 +39,36 @@
 
 #include <sys/kdebug.h>
 
+#if defined(__arm64__)
+#include <arm/proc_reg.h>
+#endif
+
 #define C_SEG_OFFSET_BITS	16
 #define C_SEG_BUFSIZE		(1024 * 256)
 #define	C_SEG_MAX_PAGES		(C_SEG_BUFSIZE / PAGE_SIZE)
 
+#if CONFIG_EMBEDDED
+#define C_SEG_OFF_LIMIT		(C_SEG_BYTES_TO_OFFSET((C_SEG_BUFSIZE - 512)))
+#define C_SEG_ALLOCSIZE		(C_SEG_BUFSIZE + PAGE_SIZE)
+#else
 #define C_SEG_OFF_LIMIT		(C_SEG_BYTES_TO_OFFSET((C_SEG_BUFSIZE - 128)))
 #define C_SEG_ALLOCSIZE		(C_SEG_BUFSIZE)
+#endif
 #define C_SEG_MAX_POPULATE_SIZE	(4 * PAGE_SIZE)
+
+#if defined(__arm64__)
+
+#if DEVELOPMENT || DEBUG
+
+
+#endif
+
+#endif
 
 #if DEBUG || COMPRESSOR_INTEGRITY_CHECKS
 #define ENABLE_SWAP_CHECKS 1
 #define ENABLE_COMPRESSOR_CHECKS 1
+#define POPCOUNT_THE_COMPRESSED_DATA (1)
 #else
 #define ENABLE_SWAP_CHECKS 0
 #define ENABLE_COMPRESSOR_CHECKS 0
@@ -64,15 +83,27 @@
 
 struct c_slot {
 	uint64_t	c_offset:C_SEG_OFFSET_BITS,
+#if defined(__arm64__)
+		        c_size:14,
+			c_codec:1,
+		        c_packed_ptr:33;
+#elif defined(__arm__)
+		        c_size:12,
+			c_codec:1,
+		        c_packed_ptr:35;
+#else
 			c_size:12,
 		        c_packed_ptr:36;
+#endif
 #if CHECKSUM_THE_DATA
 	unsigned int	c_hash_data;
 #endif
 #if CHECKSUM_THE_COMPRESSED_DATA
 	unsigned int	c_hash_compressed_data;
 #endif
-
+#if POPCOUNT_THE_COMPRESSED_DATA
+	unsigned int	c_pop_cdata;
+#endif
 };
 
 #define	C_IS_EMPTY		0
@@ -92,27 +123,29 @@ struct c_segment {
 	queue_chain_t	c_age_list;
 	queue_chain_t	c_list;
 
-	uint64_t	c_generation_id;
-	int32_t		c_bytes_used;
-	int32_t		c_bytes_unused;
-	
-#define C_SEG_MAX_LIMIT		(1 << 19)	/* this needs to track the size of c_mysegno */
-	uint32_t	c_mysegno:19,
+#define C_SEG_MAX_LIMIT		(1 << 20)	/* this needs to track the size of c_mysegno */
+	uint32_t	c_mysegno:20,
 		        c_busy:1,
 		        c_busy_swapping:1,
-			c_wanted:1,
+	                c_wanted:1,
 		        c_on_minorcompact_q:1,	/* can also be on the age_q, the majorcompact_q or the swappedin_q */
 
 		        c_state:4,		/* what state is the segment in which dictates which q to find it on */
 		        c_overage_swap:1,
-		        c_reserved:4;
+	                c_reserved:3;
+
+	uint32_t	c_creation_ts;
+	uint64_t	c_generation_id;
+
+        int32_t		c_bytes_used;
+        int32_t		c_bytes_unused;
+        uint32_t	c_slots_used;
 
 	uint16_t	c_firstemptyslot;
 	uint16_t	c_nextslot;
 	uint32_t	c_nextoffset;
 	uint32_t	c_populated_offset;
 
-	uint32_t	c_creation_ts;
 	uint32_t	c_swappedin_ts;
 
 	union {
@@ -139,6 +172,16 @@ struct c_segment {
 	struct	c_slot	c_slot_fixed_array[0];
 };
 
+
+struct  c_slot_mapping {
+        uint32_t        s_cseg:22, 	/* segment number + 1 */
+			s_cindx:10;	/* index in the segment */
+};
+#define C_SLOT_MAX_INDEX	(1 << 10)
+
+typedef struct c_slot_mapping *c_slot_mapping_t;
+
+
 #define C_SEG_SLOT_VAR_ARRAY_MIN_LEN	C_SEG_MAX_PAGES
 
 extern	int		c_seg_fixed_array_len;
@@ -151,13 +194,30 @@ extern	vm_offset_t	c_buffers;
 #define C_SEG_BYTES_TO_OFFSET(bytes)	((bytes) / (int) sizeof(int32_t))
 
 #define C_SEG_UNUSED_BYTES(cseg)	(cseg->c_bytes_unused + (C_SEG_OFFSET_TO_BYTES(cseg->c_populated_offset - cseg->c_nextoffset)))
+//todo opensource
 
-#define C_SEG_OFFSET_ALIGNMENT_MASK	0x3
+#ifndef __PLATFORM_WKDM_ALIGNMENT_MASK__
+#define C_SEG_OFFSET_ALIGNMENT_MASK	0x3ULL
+#define C_SEG_OFFSET_ALIGNMENT_BOUNDARY	0x4
+#else
+#define C_SEG_OFFSET_ALIGNMENT_MASK	__PLATFORM_WKDM_ALIGNMENT_MASK__
+#define C_SEG_OFFSET_ALIGNMENT_BOUNDARY	__PLATFORM_WKDM_ALIGNMENT_BOUNDARY__
+#endif
 
-#define	C_SEG_ONDISK_IS_SPARSE(cseg)	((cseg->c_bytes_used < (C_SEG_BUFSIZE / 2)) ? 1 : 0)
-#define C_SEG_SHOULD_MINORCOMPACT(cseg)	((C_SEG_UNUSED_BYTES(cseg) >= (C_SEG_BUFSIZE / 3)) ? 1 : 0)
-#define C_SEG_SHOULD_MAJORCOMPACT(cseg)	(((cseg->c_bytes_unused + (C_SEG_BUFSIZE - C_SEG_OFFSET_TO_BYTES(c_seg->c_nextoffset))) >= (C_SEG_BUFSIZE / 8)) ? 1 : 0)
+#define C_SEG_SHOULD_MINORCOMPACT_NOW(cseg)	((C_SEG_UNUSED_BYTES(cseg) >= (C_SEG_BUFSIZE / 4)) ? 1 : 0)
 
+/*
+ * the decsion to force a c_seg to be major compacted is based on 2 criteria
+ * 1) is the c_seg buffer almost empty (i.e. we have a chance to merge it with another c_seg)
+ * 2) are there at least a minimum number of slots unoccupied so that we have a chance
+ *    of combining this c_seg with another one.
+ */
+#define C_SEG_SHOULD_MAJORCOMPACT_NOW(cseg)											\
+	((((cseg->c_bytes_unused + (C_SEG_BUFSIZE - C_SEG_OFFSET_TO_BYTES(c_seg->c_nextoffset))) >= (C_SEG_BUFSIZE / 8)) &&	\
+	  ((C_SLOT_MAX_INDEX - cseg->c_slots_used) > (C_SEG_BUFSIZE / PAGE_SIZE))) \
+	? 1 : 0)
+
+#define	C_SEG_ONDISK_IS_SPARSE(cseg)	((cseg->c_bytes_used < cseg->c_bytes_unused) ? 1 : 0)
 #define C_SEG_IS_ONDISK(cseg)		((cseg->c_state == C_ON_SWAPPEDOUT_Q || cseg->c_state == C_ON_SWAPPEDOUTSPARSE_Q))
 
 
@@ -182,25 +242,37 @@ extern	vm_offset_t	c_buffers;
 	MACRO_END
 	
 
-#if DEVELOPMENT || DEBUG
 extern vm_map_t compressor_map;
+
+#if DEVELOPMENT || DEBUG
+extern boolean_t write_protect_c_segs;
+extern int vm_compressor_test_seg_wp;
 
 #define	C_SEG_MAKE_WRITEABLE(cseg)			\
 	MACRO_BEGIN					\
-	vm_map_protect(compressor_map,			\
-		       (vm_map_offset_t)cseg->c_store.c_buffer,		\
-		       (vm_map_offset_t)&cseg->c_store.c_buffer[C_SEG_BYTES_TO_OFFSET(C_SEG_ALLOCSIZE)],\
-		       VM_PROT_READ | VM_PROT_WRITE,	\
-		       0);				\
+	if (write_protect_c_segs) {			\
+		vm_map_protect(compressor_map,			\
+			       (vm_map_offset_t)cseg->c_store.c_buffer,		\
+			       (vm_map_offset_t)&cseg->c_store.c_buffer[C_SEG_BYTES_TO_OFFSET(C_SEG_ALLOCSIZE)],\
+			       VM_PROT_READ | VM_PROT_WRITE,	\
+			       0);				\
+	}				\
 	MACRO_END
 
 #define	C_SEG_WRITE_PROTECT(cseg)			\
 	MACRO_BEGIN					\
-	vm_map_protect(compressor_map,			\
-		       (vm_map_offset_t)cseg->c_store.c_buffer,		\
-		       (vm_map_offset_t)&cseg->c_store.c_buffer[C_SEG_BYTES_TO_OFFSET(C_SEG_ALLOCSIZE)],\
-		       VM_PROT_READ,			\
-		       0);				\
+	if (write_protect_c_segs) {			\
+		vm_map_protect(compressor_map,			\
+			       (vm_map_offset_t)cseg->c_store.c_buffer,		\
+			       (vm_map_offset_t)&cseg->c_store.c_buffer[C_SEG_BYTES_TO_OFFSET(C_SEG_ALLOCSIZE)],\
+			       VM_PROT_READ,			\
+			       0);				\
+	}							\
+	if (vm_compressor_test_seg_wp) {				\
+		volatile uint32_t vmtstmp = *(volatile uint32_t *)cseg->c_store.c_buffer; \
+		*(volatile uint32_t *)cseg->c_store.c_buffer = 0xDEADABCD; \
+		(void) vmtstmp;						\
+	}								\
 	MACRO_END
 #endif
 
@@ -299,7 +371,13 @@ extern uint64_t vm_compressor_compute_elapsed_msecs(clock_sec_t, clock_nsec_t, c
 #define	VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD	(((AVAILABLE_MEMORY) * 10) / (vm_compressor_unthrottle_threshold_divisor ? vm_compressor_unthrottle_threshold_divisor : 1))
 #define VM_PAGE_COMPRESSOR_SWAP_CATCHUP_THRESHOLD	(((AVAILABLE_MEMORY) * 10) / (vm_compressor_catchup_threshold_divisor ? vm_compressor_catchup_threshold_divisor : 1))
 
+#ifdef	CONFIG_EMBEDDED
+#define AVAILABLE_NON_COMPRESSED_MIN			20000
+#define COMPRESSOR_NEEDS_TO_SWAP() 		(((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_THRESHOLD) || \
+						  (AVAILABLE_NON_COMPRESSED_MEMORY < AVAILABLE_NON_COMPRESSED_MIN)) ? 1 : 0)
+#else
 #define COMPRESSOR_NEEDS_TO_SWAP() 		((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_THRESHOLD) ? 1 : 0)
+#endif
 
 #define VM_PAGEOUT_SCAN_NEEDS_TO_THROTTLE()				\
 	(vm_compressor_mode == VM_PAGER_COMPRESSOR_WITH_SWAP &&		\
@@ -309,7 +387,11 @@ extern uint64_t vm_compressor_compute_elapsed_msecs(clock_sec_t, clock_nsec_t, c
 #define COMPRESSOR_NEEDS_TO_MINOR_COMPACT()	((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD) ? 1 : 0)
 
 
+#ifdef	CONFIG_EMBEDDED
+#define COMPRESSOR_FREE_RESERVED_LIMIT		28
+#else
 #define COMPRESSOR_FREE_RESERVED_LIMIT		128
+#endif
 
 uint32_t vm_compressor_get_encode_scratch_size(void);
 uint32_t vm_compressor_get_decode_scratch_size(void);
@@ -322,3 +404,14 @@ extern void 	 c_compressed_record_write(char *, int);
 #endif
 
 extern lck_mtx_t	*c_list_lock;
+
+#if DEVELOPMENT || DEBUG
+extern uint32_t vm_ktrace_enabled;
+
+#define VMKDBG(x, ...)		\
+MACRO_BEGIN			\
+if (vm_ktrace_enabled) {	\
+	KDBG(x, ## __VA_ARGS__);\
+}				\
+MACRO_END
+#endif

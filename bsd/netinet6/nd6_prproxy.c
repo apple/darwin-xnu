@@ -285,13 +285,13 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 	struct nd6_prproxy_prelist *up, *down, *ndprl_tmp;
 	struct nd_prefix *pr;
 
-	lck_mtx_assert(&proxy6_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&proxy6_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	SLIST_FOREACH_SAFE(up, up_head, ndprl_le, ndprl_tmp) {
 		struct rtentry *rt;
 		boolean_t prproxy, set_allmulti = FALSE;
-		int allmulti_sw;
+		int allmulti_sw = FALSE;
 		struct ifnet *ifp = NULL;
 
 		SLIST_REMOVE(up_head, up, nd6_prproxy_prelist, ndprl_le);
@@ -347,7 +347,7 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 		struct nd_prefix *pr_up;
 		struct rtentry *rt;
 		boolean_t prproxy, set_allmulti = FALSE;
-		int allmulti_sw;
+		int allmulti_sw = FALSE;
 		struct ifnet *ifp = NULL;
 
 		SLIST_REMOVE(down_head, down, nd6_prproxy_prelist, ndprl_le);
@@ -744,7 +744,7 @@ nd6_prproxy_prelist_update(struct nd_prefix *pr_cur, struct nd_prefix *pr_up)
 	SLIST_INIT(&down_head);
 	VERIFY(pr_cur != NULL);
 
-	lck_mtx_assert(&proxy6_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proxy6_lock, LCK_MTX_ASSERT_OWNED);
 
 	/*
 	 * Upstream prefix.  If caller did not specify one, search for one
@@ -857,7 +857,7 @@ nd6_prproxy_ifaddr(struct in6_ifaddr *ia)
 	u_int32_t pr_len;
 	boolean_t proxied = FALSE;
 
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	IFA_LOCK(&ia->ia_ifa);
 	bcopy(&ia->ia_addr.sin6_addr, &addr, sizeof (addr));

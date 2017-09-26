@@ -30,7 +30,13 @@
 #ifndef _MACHINE_CPUID_H
 #define _MACHINE_CPUID_H
 
+#if defined (__arm__)
+#include <arm/machine_cpuid.h>
+#elif defined (__arm64__)
+#include <arm64/machine_cpuid.h>
+#else
 #error architecture not supported
+#endif
 
 #endif /* _MACHINE_CPUID_H */
 

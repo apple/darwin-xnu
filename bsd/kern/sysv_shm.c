@@ -483,11 +483,12 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 	mapped_size = 0;
 
 	/* first reserve enough space... */
-	rv = mach_vm_map(current_map(),
+	rv = mach_vm_map_kernel(current_map(),
 			 &attach_va,
 			 map_size,
 			 0,
 			 vm_flags,
+			 VM_KERN_MEMORY_NONE,
 			 IPC_PORT_NULL,
 			 0,
 			 FALSE,
@@ -511,6 +512,8 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 			shm_handle->shm_handle_size, /* segment size */
 			(mach_vm_offset_t)0,	/* alignment mask */
 			VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+			VM_MAP_KERNEL_FLAGS_NONE,
+			VM_KERN_MEMORY_NONE,
 			shm_handle->shm_object,
 			(mach_vm_offset_t)0,
 			FALSE,
@@ -622,7 +625,7 @@ shmctl(__unused struct proc *p, struct shmctl_args *uap, int32_t *retval)
 			
 			error = copyout(&shmid_ds, uap->buf, sizeof(shmid_ds));
 		} else {
-			struct user32_shmid_ds shmid_ds32;
+			struct user32_shmid_ds shmid_ds32 = {};
 			shmid_ds_64to32(&shmseg->u, &shmid_ds32);
 			
 			/* Clear kernel reserved pointer before copying to user space */
@@ -1166,7 +1169,7 @@ IPCS_shm_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		struct user32_IPCS_command u32;
 		struct user_IPCS_command u64;
 	} ipcs;
-	struct user32_shmid_ds shmid_ds32;	/* post conversion, 32 bit version */
+	struct user32_shmid_ds shmid_ds32 = {};	/* post conversion, 32 bit version */
 	struct user_shmid_ds   shmid_ds;	/* 64 bit version */
 	void *shmid_dsp;
 	size_t ipcs_sz = sizeof(struct user_IPCS_command);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -30,13 +30,14 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/net_api_stats.h>
+#include <netinet/in_stat.h>
 #include <netinet/tcp.h>
 
 #ifdef PRIVATE
-#pragma pack(push, 4)
 #pragma mark -- Common Data Structures --
 
-#define __NSTAT_REVISION__	8
+#define __NSTAT_REVISION__	9
 
 typedef	u_int32_t	nstat_provider_id_t;
 typedef	u_int64_t	nstat_src_ref_t;
@@ -60,10 +61,17 @@ enum
 typedef struct nstat_counts
 {
 	/* Counters */
-	u_int64_t	nstat_rxpackets	__attribute__((aligned(8)));
-	u_int64_t	nstat_rxbytes	__attribute__((aligned(8)));
-	u_int64_t	nstat_txpackets	__attribute__((aligned(8)));
-	u_int64_t	nstat_txbytes	__attribute__((aligned(8)));
+	u_int64_t	nstat_rxpackets	__attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	nstat_rxbytes	__attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	nstat_txpackets	__attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	nstat_txbytes	__attribute__((aligned(sizeof(u_int64_t))));
+
+	u_int64_t	nstat_cell_rxbytes	__attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	nstat_cell_txbytes	__attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	nstat_wifi_rxbytes	__attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	nstat_wifi_txbytes	__attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	nstat_wired_rxbytes	__attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	nstat_wired_txbytes	__attribute__((aligned(sizeof(u_int64_t))));
 
 	u_int32_t	nstat_rxduplicatebytes;
 	u_int32_t	nstat_rxoutoforderbytes;
@@ -75,15 +83,9 @@ typedef struct nstat_counts
 	u_int32_t	nstat_min_rtt;
 	u_int32_t	nstat_avg_rtt;
 	u_int32_t	nstat_var_rtt;
-
-	u_int64_t	nstat_cell_rxbytes	__attribute__((aligned(8)));
-	u_int64_t	nstat_cell_txbytes	__attribute__((aligned(8)));
-	u_int64_t	nstat_wifi_rxbytes	__attribute__((aligned(8)));
-	u_int64_t	nstat_wifi_txbytes	__attribute__((aligned(8)));
-	u_int64_t	nstat_wired_rxbytes	__attribute__((aligned(8)));
-	u_int64_t	nstat_wired_txbytes	__attribute__((aligned(8)));
 } nstat_counts;
 
+#define	NSTAT_SYSINFO_KEYVAL_STRING_MAXSIZE	24
 typedef struct nstat_sysinfo_keyval
 {
 	u_int32_t	nstat_sysinfo_key;
@@ -91,11 +93,15 @@ typedef struct nstat_sysinfo_keyval
 	union {
 			int64_t	nstat_sysinfo_scalar;
 			double	nstat_sysinfo_distribution;
+			u_int8_t nstat_sysinfo_string[NSTAT_SYSINFO_KEYVAL_STRING_MAXSIZE];
 	} u;
-} __attribute__((packed)) nstat_sysinfo_keyval;
+	u_int32_t	nstat_sysinfo_valsize;
+	u_int8_t	reserved[4];
+}  nstat_sysinfo_keyval;
 
 #define	NSTAT_SYSINFO_FLAG_SCALAR	0x0001
 #define	NSTAT_SYSINFO_FLAG_DISTRIBUTION	0x0002
+#define	NSTAT_SYSINFO_FLAG_STRING	0x0004
 
 #define NSTAT_MAX_MSG_SIZE	4096
 
@@ -105,7 +111,7 @@ typedef struct nstat_sysinfo_counts
 	u_int32_t	nstat_sysinfo_len;
 	u_int32_t	pad;
 	u_int8_t	nstat_sysinfo_keyvals[];
-} __attribute__((packed)) nstat_sysinfo_counts;
+}  nstat_sysinfo_counts;
 
 enum
 {
@@ -208,9 +214,115 @@ enum
 	,NSTAT_SYSINFO_IFNET_UNSENT_DATA = 97
 	,NSTAT_SYSINFO_ECN_IFNET_FALLBACK_DROPRST = 98
 	,NSTAT_SYSINFO_ECN_IFNET_FALLBACK_DROPRXMT = 99
+	,NSTAT_SYSINFO_LIM_IFNET_SIGNATURE = 100
+	,NSTAT_SYSINFO_LIM_IFNET_DL_MAX_BANDWIDTH = 101
+	,NSTAT_SYSINFO_LIM_IFNET_UL_MAX_BANDWIDTH = 102
+	,NSTAT_SYSINFO_LIM_IFNET_PACKET_LOSS_PERCENT = 103
+	,NSTAT_SYSINFO_LIM_IFNET_PACKET_OOO_PERCENT = 104
+	,NSTAT_SYSINFO_LIM_IFNET_RTT_VARIANCE = 105
+	,NSTAT_SYSINFO_LIM_IFNET_RTT_MIN = 106
+	,NSTAT_SYSINFO_LIM_IFNET_RTT_AVG = 107
+	,NSTAT_SYSINFO_LIM_IFNET_CONN_TIMEOUT_PERCENT = 108
+	,NSTAT_SYSINFO_LIM_IFNET_DL_DETECTED = 109
+	,NSTAT_SYSINFO_LIM_IFNET_UL_DETECTED = 110
+	,NSTAT_SYSINFO_LIM_IFNET_TYPE = 111
+
+	,NSTAT_SYSINFO_API_IF_FLTR_ATTACH = 112
+	,NSTAT_SYSINFO_API_IF_FLTR_ATTACH_OS = 113
+	,NSTAT_SYSINFO_API_IP_FLTR_ADD = 114
+	,NSTAT_SYSINFO_API_IP_FLTR_ADD_OS = 115
+	,NSTAT_SYSINFO_API_SOCK_FLTR_ATTACH = 116
+	,NSTAT_SYSINFO_API_SOCK_FLTR_ATTACH_OS = 117
+
+	,NSTAT_SYSINFO_API_SOCK_ALLOC_TOTAL = 118
+	,NSTAT_SYSINFO_API_SOCK_ALLOC_KERNEL = 119
+	,NSTAT_SYSINFO_API_SOCK_ALLOC_KERNEL_OS = 120
+	,NSTAT_SYSINFO_API_SOCK_NECP_CLIENTUUID = 121
+
+	,NSTAT_SYSINFO_API_SOCK_DOMAIN_LOCAL = 122
+	,NSTAT_SYSINFO_API_SOCK_DOMAIN_ROUTE = 123
+	,NSTAT_SYSINFO_API_SOCK_DOMAIN_INET = 124
+	,NSTAT_SYSINFO_API_SOCK_DOMAIN_INET6 = 125
+	,NSTAT_SYSINFO_API_SOCK_DOMAIN_SYSTEM = 126
+	,NSTAT_SYSINFO_API_SOCK_DOMAIN_MULTIPATH = 127
+	,NSTAT_SYSINFO_API_SOCK_DOMAIN_KEY = 128
+	,NSTAT_SYSINFO_API_SOCK_DOMAIN_NDRV = 129
+	,NSTAT_SYSINFO_API_SOCK_DOMAIN_OTHER = 130
+
+	,NSTAT_SYSINFO_API_SOCK_INET_STREAM= 131
+	,NSTAT_SYSINFO_API_SOCK_INET_DGRAM = 132
+	,NSTAT_SYSINFO_API_SOCK_INET_DGRAM_CONNECTED = 133
+	,NSTAT_SYSINFO_API_SOCK_INET_DGRAM_DNS = 134
+	,NSTAT_SYSINFO_API_SOCK_INET_DGRAM_NO_DATA = 135
+
+	,NSTAT_SYSINFO_API_SOCK_INET6_STREAM= 136
+	,NSTAT_SYSINFO_API_SOCK_INET6_DGRAM = 137
+	,NSTAT_SYSINFO_API_SOCK_INET6_DGRAM_CONNECTED = 138
+	,NSTAT_SYSINFO_API_SOCK_INET6_DGRAM_DNS = 139
+	,NSTAT_SYSINFO_API_SOCK_INET6_DGRAM_NO_DATA = 140
+
+	,NSTAT_SYSINFO_API_SOCK_INET_MCAST_JOIN = 141
+	,NSTAT_SYSINFO_API_SOCK_INET_MCAST_JOIN_OS = 142
+
+	,NSTAT_SYSINFO_API_SOCK_INET6_STREAM_EXTHDR_IN = 143
+	,NSTAT_SYSINFO_API_SOCK_INET6_STREAM_EXTHDR_OUT = 144
+	,NSTAT_SYSINFO_API_SOCK_INET6_DGRAM_EXTHDR_IN = 145
+	,NSTAT_SYSINFO_API_SOCK_INET6_DGRAM_EXTHDR_OUT = 146
+
+	,NSTAT_SYSINFO_API_NEXUS_FLOW_INET_STREAM = 147
+	,NSTAT_SYSINFO_API_NEXUS_FLOW_INET_DATAGRAM = 148
+
+	,NSTAT_SYSINFO_API_NEXUS_FLOW_INET6_STREAM = 149
+	,NSTAT_SYSINFO_API_NEXUS_FLOW_INET6_DATAGRAM = 150
+
+	,NSTAT_SYSINFO_API_IFNET_ALLOC = 151
+	,NSTAT_SYSINFO_API_IFNET_ALLOC_OS = 152
+
+	,NSTAT_SYSINFO_API_PF_ADDRULE = 153
+	,NSTAT_SYSINFO_API_PF_ADDRULE_OS = 154
+
+	,NSTAT_SYSINFO_API_VMNET_START = 155
+
+	,NSTAT_SYSINFO_API_IF_NETAGENT_ENABLED = 156
+
+	,NSTAT_SYSINFO_API_REPORT_INTERVAL = 157
+
+	,NSTAT_SYSINFO_MPTCP_HANDOVER_ATTEMPT = 158
+	,NSTAT_SYSINFO_MPTCP_INTERACTIVE_ATTEMPT = 159
+	,NSTAT_SYSINFO_MPTCP_AGGREGATE_ATTEMPT = 160
+	,NSTAT_SYSINFO_MPTCP_FP_HANDOVER_ATTEMPT = 161 /* _FP_ stands for first-party */
+	,NSTAT_SYSINFO_MPTCP_FP_INTERACTIVE_ATTEMPT = 162
+	,NSTAT_SYSINFO_MPTCP_FP_AGGREGATE_ATTEMPT = 163
+	,NSTAT_SYSINFO_MPTCP_HEURISTIC_FALLBACK = 164
+	,NSTAT_SYSINFO_MPTCP_FP_HEURISTIC_FALLBACK = 165
+	,NSTAT_SYSINFO_MPTCP_HANDOVER_SUCCESS_WIFI = 166
+	,NSTAT_SYSINFO_MPTCP_HANDOVER_SUCCESS_CELL = 167
+	,NSTAT_SYSINFO_MPTCP_INTERACTIVE_SUCCESS = 168
+	,NSTAT_SYSINFO_MPTCP_AGGREGATE_SUCCESS = 169
+	,NSTAT_SYSINFO_MPTCP_FP_HANDOVER_SUCCESS_WIFI = 170
+	,NSTAT_SYSINFO_MPTCP_FP_HANDOVER_SUCCESS_CELL = 171
+	,NSTAT_SYSINFO_MPTCP_FP_INTERACTIVE_SUCCESS = 172
+	,NSTAT_SYSINFO_MPTCP_FP_AGGREGATE_SUCCESS = 173
+	,NSTAT_SYSINFO_MPTCP_HANDOVER_CELL_FROM_WIFI = 174
+	,NSTAT_SYSINFO_MPTCP_HANDOVER_WIFI_FROM_CELL = 175
+	,NSTAT_SYSINFO_MPTCP_INTERACTIVE_CELL_FROM_WIFI = 176
+	,NSTAT_SYSINFO_MPTCP_HANDOVER_CELL_BYTES = 177
+	,NSTAT_SYSINFO_MPTCP_INTERACTIVE_CELL_BYTES = 178
+	,NSTAT_SYSINFO_MPTCP_AGGREGATE_CELL_BYTES = 179
+	,NSTAT_SYSINFO_MPTCP_HANDOVER_ALL_BYTES = 180
+	,NSTAT_SYSINFO_MPTCP_INTERACTIVE_ALL_BYTES = 181
+	,NSTAT_SYSINFO_MPTCP_AGGREGATE_ALL_BYTES = 182
+	,NSTAT_SYSINFO_MPTCP_BACK_TO_WIFI = 183
+	,NSTAT_SYSINFO_MPTCP_WIFI_PROXY = 184
+	,NSTAT_SYSINFO_MPTCP_CELL_PROXY = 185
+	,NSTAT_SYSINFO_ECN_IFNET_FALLBACK_SYNRST = 186
+
 // NSTAT_SYSINFO_ENUM_VERSION must be updated any time a value is added
-#define	NSTAT_SYSINFO_ENUM_VERSION	20160715
+#define	NSTAT_SYSINFO_ENUM_VERSION	20170623
 };
+
+#define	NSTAT_SYSINFO_API_FIRST	NSTAT_SYSINFO_API_IF_FLTR_ATTACH
+#define	NSTAT_SYSINFO_API_LAST	NSTAT_SYSINFO_API_REPORT_INTERVAL
 
 #pragma mark -- Network Statistics Providers --
 
@@ -226,6 +338,9 @@ enum
 #define NSTAT_IFNET_IS_EXPENSIVE         0x40
 #define NSTAT_IFNET_IS_VPN               0x80
 #define NSTAT_IFNET_VIA_CELLFALLBACK     0x100
+// Temporary properties of use for bringing up userland providers
+#define NSTAT_IFNET_ROUTE_VALUE_UNOBTAINABLE      0x1000
+#define NSTAT_IFNET_FLOWSWITCH_VALUE_UNOBTAINABLE 0x2000
 
 
 enum
@@ -273,20 +388,14 @@ typedef struct nstat_tcp_add_param
 
 typedef struct nstat_tcp_descriptor
 {
-	union
-	{
-		struct sockaddr_in	v4;
-		struct sockaddr_in6	v6;
-	} local;
+	u_int64_t	upid __attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	eupid __attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	start_timestamp __attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	timestamp __attribute__((aligned(sizeof(u_int64_t))));
 
-	union
-	{
-		struct sockaddr_in	v4;
-		struct sockaddr_in6	v6;
-	} remote;
+	activity_bitmap_t activity_bitmap;
 
 	u_int32_t	ifindex;
-
 	u_int32_t	state;
 
 	u_int32_t	sndbufsize;
@@ -298,25 +407,49 @@ typedef struct nstat_tcp_descriptor
 	u_int32_t	txcwindow;
 	u_int32_t	traffic_class;
 	u_int32_t	traffic_mgt_flags;
-	char		cc_algo[16];
 
-	u_int64_t	upid;
 	u_int32_t	pid;
-	char		pname[64];
-	u_int64_t	eupid;
 	u_int32_t	epid;
+
+	union
+	{
+		struct sockaddr_in	v4;
+		struct sockaddr_in6	v6;
+	} local;
+
+	union
+	{
+		struct sockaddr_in	v4;
+		struct sockaddr_in6	v6;
+	} remote;
+
+	char		cc_algo[16];
+	char		pname[64];
 
 	uuid_t		uuid;
 	uuid_t		euuid;
 	uuid_t		vuuid;
-	struct tcp_conn_status connstatus;
+	union {
+		struct tcp_conn_status connstatus;
+		// On armv7k, tcp_conn_status is 1 byte instead of 4
+		uint8_t 				__pad_connstatus[4];
+	};
 	uint16_t	ifnet_properties	__attribute__((aligned(4)));
+
+	u_int8_t	reserved[6];
 } nstat_tcp_descriptor;
 
 typedef struct nstat_tcp_add_param	nstat_udp_add_param;
 
 typedef struct nstat_udp_descriptor
 {
+	u_int64_t	upid __attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	eupid __attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	start_timestamp __attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	timestamp __attribute__((aligned(sizeof(u_int64_t))));
+
+	activity_bitmap_t activity_bitmap;
+
 	union
 	{
 		struct sockaddr_in	v4;
@@ -335,23 +468,23 @@ typedef struct nstat_udp_descriptor
 	u_int32_t	rcvbufused;
 	u_int32_t	traffic_class;
 
-	u_int64_t	upid;
 	u_int32_t	pid;
 	char		pname[64];
-	u_int64_t	eupid;
 	u_int32_t	epid;
 
 	uuid_t		uuid;
 	uuid_t		euuid;
 	uuid_t		vuuid;
 	uint16_t	ifnet_properties;
+
+	u_int8_t	reserved[6];
 } nstat_udp_descriptor;
 
 typedef struct nstat_route_descriptor
 {
-	u_int64_t	id;
-	u_int64_t	parent_id;
-	u_int64_t	gateway_id;
+	u_int64_t	id __attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	parent_id __attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t	gateway_id __attribute__((aligned(sizeof(u_int64_t))));
 
 	union
 	{
@@ -377,12 +510,15 @@ typedef struct nstat_route_descriptor
 	u_int32_t	ifindex;
 	u_int32_t	flags;
 
+	u_int8_t	reserved[4];
 } nstat_route_descriptor;
 
 typedef struct nstat_ifnet_add_param
 {
+	u_int64_t	threshold __attribute__((aligned(sizeof(u_int64_t))));
 	u_int32_t	ifindex;
-	u_int64_t	threshold;
+
+	u_int8_t	reserved[4];
 } nstat_ifnet_add_param;
 
 typedef struct nstat_ifnet_desc_cellular_status
@@ -436,6 +572,7 @@ typedef struct nstat_ifnet_desc_cellular_status
 #define	NSTAT_IFNET_DESC_MSS_RECOMMENDED_MEDIUM	0x1
 #define	NSTAT_IFNET_DESC_MSS_RECOMMENDED_LOW	0x2
 	u_int16_t mss_recommended; /* recommended MSS */
+	u_int8_t	reserved[2];
 } nstat_ifnet_desc_cellular_status;
 
 typedef struct nstat_ifnet_desc_wifi_status {
@@ -508,6 +645,7 @@ enum
 	NSTAT_IFNET_DESC_LINK_STATUS_TYPE_NONE = 0
 	,NSTAT_IFNET_DESC_LINK_STATUS_TYPE_CELLULAR = 1
 	,NSTAT_IFNET_DESC_LINK_STATUS_TYPE_WIFI	= 2
+	,NSTAT_IFNET_DESC_LINK_STATUS_TYPE_ETHERNET = 3
 };
 
 typedef struct nstat_ifnet_desc_link_status
@@ -524,12 +662,13 @@ typedef struct nstat_ifnet_desc_link_status
 #endif
 typedef struct nstat_ifnet_descriptor
 {
-	char				name[IFNAMSIZ+1];
+	u_int64_t			threshold __attribute__((aligned(sizeof(u_int64_t))));
 	u_int32_t			ifindex;
-	u_int64_t			threshold;
-	unsigned int			type;
-	char				description[IF_DESCSIZE];
 	nstat_ifnet_desc_link_status	link_status;
+	unsigned int		type;
+	char				description[IF_DESCSIZE];
+	char				name[IFNAMSIZ+1];
+	u_int8_t			reserved[3];
 } nstat_ifnet_descriptor;
 
 typedef struct nstat_sysinfo_descriptor
@@ -545,7 +684,9 @@ typedef struct nstat_sysinfo_add_param
 
 #define	NSTAT_SYSINFO_MBUF_STATS	0x0001
 #define	NSTAT_SYSINFO_TCP_STATS		0x0002
-#define NSTAT_SYSINFO_IFNET_ECN_STATS	0x0003
+#define	NSTAT_SYSINFO_IFNET_ECN_STATS	0x0003
+#define	NSTAT_SYSINFO_LIM_STATS		0x0004	/* Low Internet mode stats */
+#define	NSTAT_SYSINFO_NET_API_STATS	0x0005	/* API and KPI stats */
 
 #pragma mark -- Network Statistics User Client --
 
@@ -604,6 +745,7 @@ enum
 	,NSTAT_FILTER_TCP_NO_LISTENER        = 0x00001000
 	,NSTAT_FILTER_TCP_ONLY_LISTENER      = 0x00002000
 	,NSTAT_FILTER_TCP_INTERFACE_ATTACH   = 0x00004000
+	,NSTAT_FILTER_TCP_NO_EARLY_CLOSE     = 0x00008000
 	,NSTAT_FILTER_TCP_FLAGS              = 0x0000F000
 
 	,NSTAT_FILTER_UDP_INTERFACE_ATTACH   = 0x00010000
@@ -629,7 +771,7 @@ enum
 
 typedef struct nstat_msg_hdr
 {
-	u_int64_t	context;
+	u_int64_t	context __attribute__((aligned(sizeof(u_int64_t))));
 	u_int32_t	type;
 	u_int16_t	length;
 	u_int16_t	flags;
@@ -639,21 +781,45 @@ typedef struct nstat_msg_error
 {
 	nstat_msg_hdr	hdr;
 	u_int32_t		error;	// errno error
+	u_int8_t		reserved[4];
 } nstat_msg_error;
+
+#define NSTAT_ADD_SRC_FIELDS 		\
+	nstat_msg_hdr		hdr;		\
+	nstat_provider_id_t	provider;	\
+	u_int8_t			reserved[4]	\
 
 typedef struct nstat_msg_add_src
 {
-	nstat_msg_hdr		hdr;
-	nstat_provider_id_t	provider;
-	u_int8_t			param[];
+	NSTAT_ADD_SRC_FIELDS;
+	u_int8_t	param[];
 } nstat_msg_add_src_req;
+
+typedef struct nstat_msg_add_src_header
+{
+	NSTAT_ADD_SRC_FIELDS;
+} nstat_msg_add_src_header;
+
+typedef struct nstat_msg_add_src_convenient
+{
+	nstat_msg_add_src_header	hdr;
+	union {
+		nstat_route_add_param	route;
+		nstat_tcp_add_param		tcp;
+		nstat_udp_add_param		udp;
+		nstat_ifnet_add_param	ifnet;
+		nstat_sysinfo_add_param	sysinfo;
+	};
+} nstat_msg_add_src_convenient;
+
+#undef NSTAT_ADD_SRC_FIELDS
 
 typedef struct nstat_msg_add_all_srcs
 {
 	nstat_msg_hdr		hdr;
+	u_int64_t			filter __attribute__((aligned(sizeof(u_int64_t))));
+	nstat_event_flags_t	events __attribute__((aligned(sizeof(u_int64_t))));
 	nstat_provider_id_t	provider;
-	u_int64_t			filter;
-	nstat_event_flags_t	events;
 	pid_t				target_pid;
 	uuid_t				target_uuid;
 } nstat_msg_add_all_srcs;
@@ -661,76 +827,122 @@ typedef struct nstat_msg_add_all_srcs
 typedef struct nstat_msg_src_added
 {
 	nstat_msg_hdr		hdr;
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));
 	nstat_provider_id_t	provider;
-	nstat_src_ref_t		srcref;
+	u_int8_t			reserved[4];
 } nstat_msg_src_added;
 
 typedef struct nstat_msg_rem_src
 {
 	nstat_msg_hdr		hdr;
-	nstat_src_ref_t		srcref;
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));
 } nstat_msg_rem_src_req;
 
 typedef struct nstat_msg_get_src_description
 {
 	nstat_msg_hdr		hdr;
-	nstat_src_ref_t		srcref;
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));
 } nstat_msg_get_src_description;
 
 typedef struct nstat_msg_set_filter
 {
 	nstat_msg_hdr		hdr;
-	nstat_src_ref_t		srcref;
-	u_int32_t		filter;
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));
+	u_int32_t			filter;
+	u_int8_t			reserved[4];
 } nstat_msg_set_filter;
+
+#define NSTAT_SRC_DESCRIPTION_FIELDS 												\
+	nstat_msg_hdr		hdr;														\
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));			\
+	nstat_event_flags_t	event_flags __attribute__((aligned(sizeof(u_int64_t))));	\
+	nstat_provider_id_t	provider;													\
+	u_int8_t			reserved[4]
 
 typedef struct nstat_msg_src_description
 {
-	nstat_msg_hdr		hdr;
-	nstat_src_ref_t		srcref;
-	nstat_event_flags_t	event_flags;
-	nstat_provider_id_t	provider;
-	u_int8_t			data[];
+	NSTAT_SRC_DESCRIPTION_FIELDS;
+	u_int8_t	data[];
 } nstat_msg_src_description;
+
+typedef struct nstat_msg_src_description_header
+{
+	NSTAT_SRC_DESCRIPTION_FIELDS;
+} nstat_msg_src_description_header;
+
+typedef struct nstat_msg_src_description_convenient
+{
+	nstat_msg_src_description_header	hdr;
+	union {
+		nstat_tcp_descriptor			tcp;
+		nstat_udp_descriptor			udp;
+		nstat_route_descriptor			route;
+		nstat_ifnet_descriptor			ifnet;
+		nstat_sysinfo_descriptor		sysinfo;
+	};
+} nstat_msg_src_description_convenient;
+
+#undef NSTAT_SRC_DESCRIPTION_FIELDS
 
 typedef struct nstat_msg_query_src
 {
 	nstat_msg_hdr		hdr;
-	nstat_src_ref_t		srcref;
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));
 } nstat_msg_query_src_req;
 
 typedef struct nstat_msg_src_counts
 {
 	nstat_msg_hdr		hdr;
-	nstat_src_ref_t		srcref;
-	nstat_event_flags_t	event_flags;
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));
+	nstat_event_flags_t	event_flags __attribute__((aligned(sizeof(u_int64_t))));
 	nstat_counts		counts;
 } nstat_msg_src_counts;
 
+#define NSTAT_SRC_UPDATE_FIELDS 													\
+	nstat_msg_hdr		hdr;														\
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));			\
+	nstat_event_flags_t	event_flags __attribute__((aligned(sizeof(u_int64_t))));	\
+	nstat_counts		counts;														\
+	nstat_provider_id_t	provider;													\
+	u_int8_t			reserved[4]
+
 typedef struct nstat_msg_src_update
 {
-	nstat_msg_hdr		hdr;
-	nstat_src_ref_t		srcref;
-	nstat_event_flags_t	event_flags;
-	nstat_counts		counts;
-	nstat_provider_id_t	provider;
-	u_int8_t			data[];
+	NSTAT_SRC_UPDATE_FIELDS;
+	u_int8_t	data[];
 } nstat_msg_src_update;
+
+typedef struct nstat_msg_src_update_hdr
+{
+	NSTAT_SRC_UPDATE_FIELDS;
+} nstat_msg_src_update_hdr;
+
+typedef struct nstat_msg_src_update_convenient
+{
+	nstat_msg_src_update_hdr		hdr;
+	union {
+		nstat_tcp_descriptor		tcp;
+		nstat_udp_descriptor		udp;
+		nstat_route_descriptor		route;
+		nstat_ifnet_descriptor		ifnet;
+		nstat_sysinfo_descriptor	sysinfo;
+	};
+} nstat_msg_src_update_convenient;
+
+#undef NSTAT_SRC_UPDATE_FIELDS
 
 typedef struct nstat_msg_src_removed
 {
 	nstat_msg_hdr		hdr;
-	nstat_src_ref_t		srcref;
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));
 } nstat_msg_src_removed;
 
 typedef struct nstat_msg_sysinfo_counts
 {
 	nstat_msg_hdr		hdr;
-	nstat_src_ref_t		srcref;
+	nstat_src_ref_t		srcref __attribute__((aligned(sizeof(u_int64_t))));
 	nstat_sysinfo_counts	counts;
-} __attribute__((packed)) nstat_msg_sysinfo_counts;
-
-#pragma pack(pop)
+}  nstat_msg_sysinfo_counts;
 
 #pragma mark -- Statitiscs about Network Statistics --
 
@@ -775,6 +987,7 @@ typedef struct nstat_sysinfo_mbuf_stats
 
 typedef struct nstat_sysinfo_tcp_stats
 {
+	/* When adding/removing here, also adjust NSTAT_SYSINFO_TCP_STATS_COUNT */
 	u_int32_t		ipv4_avgrtt;	/* Average RTT for IPv4 */
 	u_int32_t		ipv6_avgrtt;	/* Average RTT for IPv6 */
 	u_int32_t		send_plr;	/* Average uplink packet loss rate */
@@ -817,7 +1030,37 @@ typedef struct nstat_sysinfo_tcp_stats
 	u_int32_t		tfo_no_cookie_rcv;	/* We asked for a cookie but didn't get one */
 	u_int32_t		tfo_heuristics_disable; /* TFO got disabled due to heuristics */
 	u_int32_t		tfo_sndblackhole;	/* TFO got blackholed in the sending direction */
+	u_int32_t		mptcp_handover_attempt;	/* Total number of MPTCP-attempts using handover mode */
+	u_int32_t		mptcp_interactive_attempt;	/* Total number of MPTCP-attempts using interactive mode */
+	u_int32_t		mptcp_aggregate_attempt;	/* Total number of MPTCP-attempts using aggregate mode */
+	u_int32_t		mptcp_fp_handover_attempt; /* Same as previous three but only for first-party apps */
+	u_int32_t		mptcp_fp_interactive_attempt;
+	u_int32_t		mptcp_fp_aggregate_attempt;
+	u_int32_t		mptcp_heuristic_fallback;	/* Total number of MPTCP-connections that fell back due to heuristics */
+	u_int32_t		mptcp_fp_heuristic_fallback;	/* Same as previous but for first-party apps */
+	u_int32_t		mptcp_handover_success_wifi;	/* Total number of successfull handover-mode connections that *started* on WiFi */
+	u_int32_t		mptcp_handover_success_cell;	/* Total number of successfull handover-mode connections that *started* on Cell */
+	u_int32_t		mptcp_interactive_success;		/* Total number of interactive-mode connections that negotiated MPTCP */
+	u_int32_t		mptcp_aggregate_success;		/* Same as previous but for aggregate */
+	u_int32_t		mptcp_fp_handover_success_wifi;	/* Same as previous four, but for first-party apps */
+	u_int32_t		mptcp_fp_handover_success_cell;
+	u_int32_t		mptcp_fp_interactive_success;
+	u_int32_t		mptcp_fp_aggregate_success;
+	u_int32_t		mptcp_handover_cell_from_wifi;	/* Total number of connections that use cell in handover-mode (coming from WiFi) */
+	u_int32_t		mptcp_handover_wifi_from_cell;	/* Total number of connections that use WiFi in handover-mode (coming from cell) */
+	u_int32_t		mptcp_interactive_cell_from_wifi;	/* Total number of connections that use cell in interactive mode (coming from WiFi) */
+	u_int32_t		mptcp_back_to_wifi;	/* Total number of connections that succeed to move traffic away from cell (when starting on cell) */
+	u_int64_t		mptcp_handover_cell_bytes;		/* Total number of bytes sent on cell in handover-mode (on new subflows, ignoring initial one) */
+	u_int64_t		mptcp_interactive_cell_bytes;	/* Same as previous but for interactive */
+	u_int64_t		mptcp_aggregate_cell_bytes;
+	u_int64_t		mptcp_handover_all_bytes;		/* Total number of bytes sent in handover */
+	u_int64_t		mptcp_interactive_all_bytes;
+	u_int64_t		mptcp_aggregate_all_bytes;
+	u_int32_t		mptcp_wifi_proxy;		/* Total number of new subflows that fell back to regular TCP on cell */
+	u_int32_t		mptcp_cell_proxy;		/* Total number of new subflows that fell back to regular TCP on WiFi */
+	/* When adding/removing here, also adjust NSTAT_SYSINFO_TCP_STATS_COUNT */
 } nstat_sysinfo_tcp_stats;
+#define NSTAT_SYSINFO_TCP_STATS_COUNT	70
 
 enum {
 	NSTAT_IFNET_ECN_PROTO_IPV4 = 1
@@ -836,15 +1079,33 @@ typedef struct nstat_sysinfo_ifnet_ecn_stats {
 	struct if_tcp_ecn_stat		ecn_stat;
 } nstat_sysinfo_ifnet_ecn_stats;
 
+/* Total number of Low Internet stats that will be reported */
+#define	NSTAT_LIM_STAT_KEYVAL_COUNT	12
+typedef struct nstat_sysinfo_lim_stats {
+	u_int8_t			ifnet_signature[NSTAT_SYSINFO_KEYVAL_STRING_MAXSIZE];
+	u_int32_t			ifnet_siglen;
+	u_int32_t			ifnet_type;
+	struct if_lim_perf_stat		lim_stat;
+} nstat_sysinfo_lim_stats;
+
+#define	NSTAT_NET_API_STAT_KEYVAL_COUNT	(NSTAT_SYSINFO_API_LAST - NSTAT_SYSINFO_API_FIRST + 1)
+typedef struct nstat_sysinfo_net_api_stats {
+	u_int32_t			report_interval;
+	u_int32_t			_padding;
+	struct net_api_stats		net_api_stats;
+} nstat_sysinfo_net_api_stats;
+
 typedef struct nstat_sysinfo_data
 {
-	u_int32_t		flags;
+	uint32_t		flags;
+	uint32_t		unsent_data_cnt; /* Before sleeping */
 	union {
 		nstat_sysinfo_mbuf_stats mb_stats;
 		nstat_sysinfo_tcp_stats tcp_stats;
 		nstat_sysinfo_ifnet_ecn_stats ifnet_ecn_stats;
+		nstat_sysinfo_lim_stats lim_stats;
+		nstat_sysinfo_net_api_stats net_api_stats;
 	} u;
-	uint32_t unsent_data_cnt; /* Before sleeping */
 } nstat_sysinfo_data;
 
 #pragma mark -- Generic Network Statistics Provider --
@@ -876,6 +1137,11 @@ void nstat_route_connect_success(struct rtentry *rte);
 void nstat_route_tx(struct rtentry *rte, u_int32_t packets, u_int32_t bytes, u_int32_t flags);
 void nstat_route_rx(struct rtentry *rte, u_int32_t packets, u_int32_t bytes, u_int32_t flags);
 void nstat_route_rtt(struct rtentry *rte, u_int32_t rtt, u_int32_t rtt_var);
+void nstat_route_update(struct rtentry *rte, uint32_t connect_attempts, uint32_t connect_successes,
+						uint32_t rx_packets, uint32_t rx_bytes, uint32_t rx_duplicatebytes, uint32_t rx_outoforderbytes,
+						uint32_t tx_packets, uint32_t tx_bytes, uint32_t tx_retransmit,
+						uint32_t rtt, uint32_t rtt_var);
+struct nstat_counts* nstat_route_attach(struct rtentry	*rte);
 void nstat_route_detach(struct rtentry *rte);
 
 // watcher support
@@ -892,37 +1158,9 @@ void nstat_ifnet_threshold_reached(unsigned int ifindex);
 
 void nstat_sysinfo_send_data(struct nstat_sysinfo_data *);
 
-// Userland stats reporting
 
-// Each side, NetworkStatistics and the kernel provider for userland,
-// pass opaque references.
-typedef void *userland_stats_provider_context;
-typedef void *nstat_userland_context;
-
-// When things have been set up, Netstats can request a refresh of its data.
-typedef bool (userland_stats_request_vals_fn)(userland_stats_provider_context *ctx,
-											  nstat_counts *countsp,
-											  void *metadatap);
-
-// Things get started with a call to netstats to say that there’s a new connection:
-nstat_userland_context ntstat_userland_stats_open(userland_stats_provider_context *ctx,
-												  int provider_id,
-												  u_int64_t properties,
-												  userland_stats_request_vals_fn req_fn);
-
-void ntstat_userland_stats_close(nstat_userland_context nstat_ctx);
-
-
-// There may be other occasions where the stats have changed and NECP should push the new values.
-// This is provisional, ahead of full implementation.
-
-typedef enum {
-	USERLAND_STATS_WILL_UPDATE,
-	USERLAND_STATS_DID_UPDATE
-} userland_stats_event_t;
-
-void ntstat_userland_stats_event(nstat_userland_context nstat_ctx, userland_stats_event_t event);
-
+// Utilities for userland stats reporting
+u_int16_t nstat_ifnet_to_flags(struct ifnet *ifp);
 
 // locked_add_64 uses atomic operations on 32bit so the 64bit
 // value can be properly read. The values are only ever incremented

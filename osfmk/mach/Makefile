@@ -137,6 +137,7 @@ DATAFILES = \
 	sync_policy.h \
         syscall_sw.h \
 	task_info.h \
+	task_inspect.h \
 	task_policy.h \
 	task_special_ports.h \
         thread_info.h \
@@ -182,6 +183,7 @@ PRIVATE_DATAFILES = \
 	syscall_sw.h \
 	sysdiagnose_notification.defs \
 	task_info.h \
+	task_inspect.h \
 	task_policy.h \
 	thread_policy.h \
 	thread_switch.h \

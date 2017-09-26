@@ -37,7 +37,7 @@ OSDefineMetaClassAndStructors(IOSimpleReporter, IOReporter);
 IOSimpleReporter*
 IOSimpleReporter::with(IOService *reportingService,
                        IOReportCategories categories,
-                       IOReportUnits unit)
+                       IOReportUnit unit)
 {
     IOSimpleReporter *reporter, *rval = NULL;
 
@@ -65,7 +65,7 @@ finish:
 bool
 IOSimpleReporter::initWith(IOService *reportingService,
                            IOReportCategories categories,
-                           IOReportUnits unit)
+                           IOReportUnit unit)
 {
     // fully specify the channel type for the superclass
     IOReportChannelType channelType = {

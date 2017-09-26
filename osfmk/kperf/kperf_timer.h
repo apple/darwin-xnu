@@ -59,6 +59,31 @@ void kperf_ipi_handler(void *param);
 #define TIMER_REPROGRAM (0)
 #define TIMER_STOP      (1)
 
+#if defined(__x86_64__)
+
+#define KP_MIN_PERIOD_NS        (20 * NSEC_PER_USEC)
+#define KP_MIN_PERIOD_BG_NS     (10 * NSEC_PER_MSEC)
+#define KP_MIN_PERIOD_PET_NS    (2 * NSEC_PER_MSEC)
+#define KP_MIN_PERIOD_PET_BG_NS (10 * NSEC_PER_MSEC)
+
+#elif defined(__arm64__)
+
+#define KP_MIN_PERIOD_NS        (50 * NSEC_PER_USEC)
+#define KP_MIN_PERIOD_BG_NS     (20 * NSEC_PER_MSEC)
+#define KP_MIN_PERIOD_PET_NS    (2 * NSEC_PER_MSEC)
+#define KP_MIN_PERIOD_PET_BG_NS (50 * NSEC_PER_MSEC)
+
+#elif defined(__arm__)
+
+#define KP_MIN_PERIOD_NS        (100 * NSEC_PER_USEC)
+#define KP_MIN_PERIOD_BG_NS     (50 * NSEC_PER_MSEC)
+#define KP_MIN_PERIOD_PET_NS    (2 * NSEC_PER_MSEC)
+#define KP_MIN_PERIOD_PET_BG_NS (100 * NSEC_PER_MSEC)
+
+#else /* defined(__x86_64__) */
+#error "unsupported architecture"
+#endif /* defined(__x86_64__) */
+
 /* getters and setters on timers */
 unsigned kperf_timer_get_count(void);
 int kperf_timer_set_count(unsigned int count);

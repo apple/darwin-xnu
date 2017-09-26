@@ -115,23 +115,10 @@ CC_INLINE int cccbc_update(const struct ccmode_cbc *mode,  cccbc_ctx *ctx,
 	return mode->cbc(ctx, iv, nblocks, in, out);
 }
 
-CC_INLINE int cccbc_one_shot(const struct ccmode_cbc *mode,
-                             size_t key_len, const void *key,
-                             const void *iv, size_t nblocks,
-                             const void *in, void *out)
-{
-    int rc;
-	cccbc_ctx_decl(mode->size, ctx);
-	cccbc_iv_decl(mode->block_size, iv_ctx);
-	rc = mode->init(mode, ctx, key_len, key);
-    if (iv)
-        cccbc_set_iv(mode, iv_ctx, iv);
-    else
-        cc_zero(mode->block_size, iv_ctx);
-    mode->cbc(ctx, iv_ctx, nblocks, in, out);
-	cccbc_ctx_clear(mode->size, ctx);
-    return rc;
-}
+int cccbc_one_shot(const struct ccmode_cbc *mode,
+                   size_t key_len, const void *key,
+                   const void *iv, size_t nblocks,
+                   const void *in, void *out);
 
 /* CFB mode. */
 
@@ -256,7 +243,8 @@ CC_INLINE int ccctr_one_shot(const struct ccmode_ctr *mode,
     int rc;
 	ccctr_ctx_decl(mode->size, ctx);
 	rc = mode->init(mode, ctx, key_len, key, iv);
-	mode->ctr(ctx, nbytes, in, out);
+    if (rc) return rc;
+	rc = mode->ctr(ctx, nbytes, in, out);
 	ccctr_ctx_clear(mode->size, ctx);
     return rc;
 }
@@ -429,6 +417,12 @@ int ccxts_one_shot(const struct ccmode_xts *mode,
 #define CCGCM_IV_NBYTES 12
 #define CCGCM_BLOCK_NBYTES 16
 
+/* (2^32 - 2) blocks */
+/* (2^36 - 32) bytes */
+/* (2^39 - 256) bits */
+/* Exceeding this figure breaks confidentiality and authenticity. */
+#define CCGCM_TEXT_MAX_NBYTES ((1ULL << 36) - 32ULL)
+
 CC_INLINE size_t ccgcm_context_size(const struct ccmode_gcm *mode)
 {
     return mode->size;
@@ -470,6 +464,7 @@ CC_INLINE size_t ccgcm_block_size(const struct ccmode_gcm *mode)
  
  @warning It is not permitted to call @p ccgcm_inc_iv after initializing the cipher via the @p ccgcm_init interface. Nonzero is returned in the event of an improper call sequence.
 
+ @warning This function is not FIPS-compliant. Use @p ccgcm_init_with_iv instead.
  */
 CC_INLINE int ccgcm_init(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
                          size_t key_nbytes, const void *key)
@@ -536,6 +531,8 @@ int ccgcm_init_with_iv(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
  In stateless protocols, it is recommended to choose a 16-byte value using a cryptographically-secure pseudorandom number generator (e.g. @p ccrng).
  
  @warning This function may not be used after initializing the cipher via @p ccgcm_init_with_iv. Nonzero is returned in the event of an improper call sequence.
+ 
+ @warning This function is not FIPS-compliant. Use @p ccgcm_init_with_iv instead.
  */
 CC_INLINE int ccgcm_set_iv(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
                             size_t iv_nbytes, const void *iv)
@@ -653,9 +650,9 @@ CC_INLINE int ccgcm_update(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
  
  On encryption, @p tag is purely an output parameter. The generated tag is written to @p tag.
  
- On decryption, @p tag is primarily an input parameter. The caller should provide the authentication tag generated during encryption. The function will return nonzero if the input tag does not match the generated tag.
+ On decryption, @p tag is both an input and an output parameter. Well-behaved callers should provide the authentication tag generated during encryption. The function will return nonzero if the input tag does not match the generated tag. The generated tag will be written into the @p tag buffer whether authentication succeeds or fails.
  
- @warning To support legacy applications, @p tag is also an output parameter during decryption. The generated tag is written to @p tag. Legacy callers may choose to compare this to the tag generated during encryption. Do not follow this usage pattern in new applications.
+ @warning The generated tag is written to @p tag to support legacy applications that perform authentication manually. Do not follow this usage pattern in new applications. Rely on the function's error code to verify authenticity.
  */
 CC_INLINE int ccgcm_finalize(const struct ccmode_gcm *mode, ccgcm_ctx *ctx,
                               size_t tag_nbytes, void *tag)
@@ -815,10 +812,10 @@ CC_INLINE int ccccm_reset(const struct ccmode_ccm *mode, ccccm_ctx *ctx, ccccm_n
 
 CC_INLINE int ccccm_one_shot(const struct ccmode_ccm *mode,
                               size_t key_len, const void *key,
-                              unsigned nonce_len, const void *nonce,
+                              size_t nonce_len, const void *nonce,
                               size_t nbytes, const void *in, void *out,
-                              unsigned adata_len, const void* adata,
-                              unsigned mac_size, void *mac)
+                              size_t adata_len, const void* adata,
+                              size_t mac_size, void *mac)
 {
     int rc=0;
 	ccccm_ctx_decl(mode->size, ctx);
@@ -829,7 +826,7 @@ CC_INLINE int ccccm_one_shot(const struct ccmode_ccm *mode,
 	if(rc==0) rc=mode->ccm(ctx, nonce_ctx, nbytes, in, out);
 	if(rc==0) rc=mode->finalize(ctx, nonce_ctx, mac);
 	ccccm_ctx_clear(mode->size, ctx);
-    ccccm_nonce_clear(mode->size, nonce_ctx);
+    ccccm_nonce_clear(mode->nonce_size, nonce_ctx);
 
     return rc;
 }

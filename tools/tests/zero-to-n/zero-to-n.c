@@ -44,8 +44,6 @@
 #include <sys/spawn_internal.h>
 #include <mach-o/dyld.h>
 
-#include <libkern/OSAtomic.h>
-
 #include <mach/mach_time.h>
 #include <mach/mach.h>
 #include <mach/task.h>
@@ -54,6 +52,8 @@
 #include <pthread/qos_private.h>
 
 #include <sys/resource.h>
+
+#include <stdatomic.h>
 
 typedef enum wake_type { WAKE_BROADCAST_ONESEM, WAKE_BROADCAST_PERTHREAD, WAKE_CHAIN, WAKE_HOP } wake_type_t;
 typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY_FIXEDPRI } my_policy_type_t;
@@ -65,6 +65,8 @@ typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY
 #define CONSTRAINT_NANOS	(20000000ll)	/* 20 ms */
 #define COMPUTATION_NANOS	(10000000ll)	/* 10 ms */
 #define TRACEWORTHY_NANOS	(10000000ll)	/* 10 ms */
+
+#define DEBUG 0
 
 #if DEBUG
 #define debug_log(args...) printf(args)
@@ -80,6 +82,10 @@ static my_policy_type_t         parse_thread_policy(const char *str);
 static void                     selfexec_with_apptype(int argc, char *argv[]);
 static void                     parse_args(int argc, char *argv[]);
 
+static __attribute__((aligned(128))) _Atomic uint32_t   g_done_threads;
+static __attribute__((aligned(128))) _Atomic boolean_t  g_churn_stop = FALSE;
+static __attribute__((aligned(128))) _Atomic uint64_t   g_churn_stopped_at = 0;
+
 /* Global variables (general) */
 static uint32_t                 g_numcpus;
 static uint32_t                 g_numthreads;
@@ -89,7 +95,6 @@ static uint32_t                 g_iterations;
 static struct mach_timebase_info g_mti;
 static semaphore_t              g_main_sem;
 static uint64_t                *g_thread_endtimes_abs;
-static volatile uint32_t        g_done_threads;
 static boolean_t                g_verbose       = FALSE;
 static boolean_t                g_do_affinity   = FALSE;
 static uint64_t                 g_starttime_abs;
@@ -97,8 +102,6 @@ static uint32_t                 g_iteration_sleeptime_us = 0;
 static uint32_t                 g_priority = 0;
 static uint32_t                 g_churn_pri = 0;
 static uint32_t                 g_churn_count = 0;
-static uint64_t                 g_churn_stopped_at = 0;
-static boolean_t                g_churn_stop = FALSE;
 
 static pthread_t*               g_churn_threads = NULL;
 
@@ -152,7 +155,9 @@ nanos_to_abs(uint64_t ns)
 inline static void
 yield(void)
 {
-#if   defined(__x86_64__) || defined(__i386__)
+#if defined(__arm__) || defined(__arm64__)
+	asm volatile("yield");
+#elif defined(__x86_64__) || defined(__i386__)
 	asm volatile("pause");
 #else
 #error Unrecognized architecture
@@ -176,7 +181,7 @@ churn_thread(__unused void *arg)
 	}
 
 	/* This is totally racy, but only here to detect if anyone stops early */
-	g_churn_stopped_at += spin_count;
+	atomic_fetch_add_explicit(&g_churn_stopped_at, spin_count, memory_order_relaxed);
 
 	return NULL;
 }
@@ -220,13 +225,11 @@ create_churn_threads()
 static void
 join_churn_threads(void)
 {
-	if (g_churn_stopped_at != 0)
+	if (atomic_load_explicit(&g_churn_stopped_at, memory_order_seq_cst) != 0)
 		printf("Warning: Some of the churn threads may have stopped early: %lld\n",
 		       g_churn_stopped_at);
 
-	OSMemoryBarrier();
-
-	g_churn_stop = TRUE;
+	atomic_store_explicit(&g_churn_stop, TRUE, memory_order_seq_cst);
 
 	/* Rejoin churn threads */
 	for (uint32_t i = 0; i < g_churn_count; i++) {
@@ -376,7 +379,7 @@ worker_thread(void *arg)
 
 			debug_log("%d Leader thread go\n", i);
 
-			assert_zero_t(my_id, g_done_threads);
+			assert_zero_t(my_id, atomic_load_explicit(&g_done_threads, memory_order_relaxed));
 
 			switch (g_waketype) {
 			case WAKE_BROADCAST_ONESEM:
@@ -476,10 +479,10 @@ worker_thread(void *arg)
 			}
 		}
 
-		int32_t new = OSAtomicIncrement32((volatile int32_t *)&g_done_threads);
-		(void)new;
+		uint32_t done_threads;
+		done_threads = atomic_fetch_add_explicit(&g_done_threads, 1, memory_order_relaxed) + 1;
 
-		debug_log("Thread %p new value is %d, iteration %d\n", pthread_self(), new, i);
+		debug_log("Thread %p new value is %d, iteration %d\n", pthread_self(), done_threads, i);
 
 		if (g_drop_priority) {
 			/* Drop priority to BG momentarily */
@@ -490,7 +493,7 @@ worker_thread(void *arg)
 		if (g_do_all_spin) {
 			/* Everyone spins until the last thread checks in. */
 
-			while (g_done_threads < g_numthreads) {
+			while (atomic_load_explicit(&g_done_threads, memory_order_relaxed) < g_numthreads) {
 				y = y + 1.5 + x;
 				x = sqrt(y);
 			}
@@ -673,8 +676,9 @@ main(int argc, char **argv)
 	kr = semaphore_create(mach_task_self(), &g_readysem, SYNC_POLICY_FIFO, 0);
 	mach_assert_zero(kr);
 
+	atomic_store_explicit(&g_done_threads, 0, memory_order_relaxed);
+
 	/* Create the threads */
-	g_done_threads = 0;
 	for (uint32_t i = 0; i < g_numthreads; i++) {
 		ret = pthread_create(&threads[i], NULL, worker_thread, (void*)(uintptr_t)i);
 		if (ret) errc(EX_OSERR, ret, "pthread_create %d", i);
@@ -708,8 +712,7 @@ main(int argc, char **argv)
 
 		debug_log("%d Main thread reset\n", i);
 
-		g_done_threads = 0;
-		OSMemoryBarrier();
+		atomic_store_explicit(&g_done_threads, 0, memory_order_seq_cst);
 
 		g_starttime_abs = mach_absolute_time();
 
@@ -718,6 +721,8 @@ main(int argc, char **argv)
 		mach_assert_zero(kr);
 
 		debug_log("%d Main thread return\n", i);
+
+		assert(atomic_load_explicit(&g_done_threads, memory_order_relaxed) == g_numthreads);
 
 		/*
 		 * We report the worst latencies relative to start time

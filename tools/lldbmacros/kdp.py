@@ -174,7 +174,7 @@ def KDPResumeON(cmd_args=None):
     return retval
 
 @lldb_command('resume_off')
-def KDPResumeON(cmd_args=None):
+def KDPResumeOFF(cmd_args=None):
     """ The target system will not resume when detaching  or exiting from lldb. 
     """
     subcmd = GetEnumValue('kdp_dumpinfo_t::KDP_DUMPINFO_SETINFO') | GetEnumValue('kdp_dumpinfo_t::KDP_DUMPINFO_NORESUME') 

@@ -55,34 +55,39 @@ typedef struct kcdata_item	*task_crashinfo_item_t;
 
 #define CORPSEINFO_ALLOCATION_SIZE (1024 * 16)
 #define TOTAL_CORPSES_ALLOWED 5
-
+#define TOTAL_USER_FAULTS_ALLOWED 1
 
 
 extern kern_return_t task_mark_corpse(task_t task);
 
-extern kern_return_t task_deliver_crash_notification(task_t task, thread_t thread, mach_exception_data_type_t subcode);
+extern kern_return_t task_deliver_crash_notification(task_t, thread_t, exception_type_t, mach_exception_subcode_t);
+
+/* In the corpseinfo kcd_user_flags */
+#define CORPSE_CRASHINFO_HAS_REF    0x1
+#define CORPSE_CRASHINFO_USER_FAULT 0x2
 
 extern kcdata_descriptor_t task_get_corpseinfo(task_t task);
 
-#define GET_CORPSE_REF TRUE
-#define RELEASE_CORPSE_REF TRUE
+extern unsigned long total_corposes_count(void) __attribute__((pure));
 
 extern kcdata_descriptor_t  task_crashinfo_alloc_init(
 					mach_vm_address_t crash_data_p,
-					unsigned size,
-					int get_corpseref, unsigned flags);
-extern kern_return_t  task_crashinfo_destroy(kcdata_descriptor_t data, int release_corpseref);
+					unsigned size, uint32_t kc_u_flags, unsigned kc_flags);
+extern kern_return_t task_crashinfo_destroy(kcdata_descriptor_t data);
 
 extern void corpses_init(void);
 
+extern unsigned long total_corpses_count(void);
 extern boolean_t corpses_enabled(void);
 
 extern kern_return_t task_generate_corpse_internal(
 			task_t task,
 			task_t *corpse_task,
 			thread_t *thread,
+			exception_type_t etype,
 			mach_exception_data_type_t code,
-			mach_exception_data_type_t subcode);
+			mach_exception_data_type_t subcode,
+			void *reason);
 
 extern void task_clear_corpse(task_t task);
 
@@ -93,16 +98,21 @@ extern kern_return_t task_duplicate_map_and_threads(
 			thread_t *thread,
 			uint64_t **udata_buffer,
 			int *size,
-			int*num_udata);
+			int *num_udata);
 
-extern void task_enqueue_exception_with_corpse(
+extern boolean_t task_allowed_vm_map_fork(task_t task __unused);
+
+extern kern_return_t task_enqueue_exception_with_corpse(
 	task_t task,
+	exception_type_t etype,
 	mach_exception_data_t code,
-	mach_msg_type_number_t codeCnt);
+	mach_msg_type_number_t codeCnt,
+	void *reason);
 
 extern void task_add_to_corpse_task_list(task_t corpse_task);
 void task_remove_from_corpse_task_list(task_t corpse_task);
 void task_purge_all_corpses(void);
+extern uint64_t task_corpse_get_crashed_thread_id(task_t corpse_task);
 
 #endif /* XNU_KERNEL_PRIVATE */
 

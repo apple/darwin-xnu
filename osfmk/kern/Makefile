@@ -7,14 +7,18 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 DATAFILES = \
+	exc_guard.h \
 	exc_resource.h \
 	kern_cdata.h \
 	kcdata.h
 
 PRIVATE_DATAFILES = \
+	cs_blobs.h \
 	debug.h \
 	ecc.h \
-	block_hint.h
+	block_hint.h \
+	monotonic.h \
+	arithmetic_128.h
 
 EXPORT_FILES = \
 	affinity.h \
@@ -55,13 +59,17 @@ EXPORT_FILES = \
 	telemetry.h \
 	thread.h \
 	thread_call.h \
+	thread_group.h \
 	timer_call.h \
 	waitq.h \
+	work_interval.h \
 	zalloc.h
 
 PRIVATE_EXPORT_FILES = \
 	build_config.h \
-	mach_node_link.h
+	mach_node_link.h \
+	copyout_shim.h
+
 
 INSTALL_MI_LIST = ${DATAFILES}
 

@@ -18,7 +18,8 @@ INSTALL_DTRACE_SCRIPTS_LIST =	\
 	unistd.d
 
 INSTALL_DTRACE_LIBEXEC_LIST = \
-	log_unnest_badness.d
+	log_unnest_badness.d \
+	vm_map_delete_permanent.d
 
 ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
 INSTALL_DTRACE_SCRIPTS_LIST += mptcp.d

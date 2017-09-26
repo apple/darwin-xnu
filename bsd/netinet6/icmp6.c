@@ -574,14 +574,12 @@ icmp6_input(struct mbuf **mp, int *offp, int proto)
 		icmp6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_dstunreach);
 		switch (code) {
 		case ICMP6_DST_UNREACH_NOROUTE:
+		case ICMP6_DST_UNREACH_ADDR:	/* PRC_HOSTDEAD is a DOS */
 			code = PRC_UNREACH_NET;
 			break;
 		case ICMP6_DST_UNREACH_ADMIN:
 			icmp6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_adminprohib);
 			code = PRC_UNREACH_PROTOCOL; /* is this a good code? */
-			break;
-		case ICMP6_DST_UNREACH_ADDR:
-			code = PRC_HOSTDEAD;
 			break;
 		case ICMP6_DST_UNREACH_BEYONDSCOPE:
 			/* I mean "source address was incorrect." */
@@ -942,7 +940,7 @@ icmp6_notify_error(struct mbuf *m, int off, int icmp6len, int code)
 
 	/* Detect the upper level protocol */
 	{
-		void (*ctlfunc)(int, struct sockaddr *, void *);
+		void (*ctlfunc)(int, struct sockaddr *, void *, struct ifnet *);
 		u_int8_t nxt = eip6->ip6_nxt;
 		int eoff = off + sizeof(struct icmp6_hdr) +
 			sizeof(struct ip6_hdr);
@@ -1133,11 +1131,10 @@ icmp6_notify_error(struct mbuf *m, int off, int icmp6len, int code)
 			icmp6_mtudisc_update(&ip6cp, 1);	/*XXX*/
 		}
 
-		ctlfunc = (void (*)(int, struct sockaddr *, void *))
-			(ip6_protox[nxt]->pr_ctlinput);
+		ctlfunc = ip6_protox[nxt]->pr_ctlinput;
 		if (ctlfunc) {
 			(void) (*ctlfunc)(code, (struct sockaddr *)&icmp6dst,
-					  &ip6cp);
+			    &ip6cp, m->m_pkthdr.rcvif);
 		}
 	}
 	return(0);
@@ -1288,7 +1285,7 @@ ni6_input(struct mbuf *m, int off)
 		    !(icmp6_nodeinfo & ICMP6_NODEINFO_TMPADDROK)) {
 			nd6log((LOG_DEBUG, "ni6_input: ignore node info to "
 				"a temporary address in %s:%d",
-			       __FILE__, __LINE__));
+			       __func__, __LINE__));
 			goto bad;
 		}
 	}
@@ -2150,7 +2147,7 @@ icmp6_reflect(struct mbuf *m, size_t off)
 		nd6log((LOG_DEBUG,
 		    "sanity fail: off=%lx, sizeof(ip6)=%lx in %s:%d\n",
 		    (u_int32_t)off, (u_int32_t)sizeof(struct ip6_hdr),
-		    __FILE__, __LINE__));
+		    __func__, __LINE__));
 		goto bad;
 	}
 
@@ -2784,7 +2781,7 @@ nolladdropt:;
 	 * and truncates if not.
 	 */
 	if (m0->m_next || m0->m_pkthdr.len != m0->m_len)
-		panic("assumption failed in %s:%d\n", __FILE__, __LINE__);
+		panic("assumption failed in %s:%d\n", __func__, __LINE__);
 
 	if (len - sizeof(*nd_opt_rh) < m0->m_pkthdr.len) {
 		/* not enough room, truncate */

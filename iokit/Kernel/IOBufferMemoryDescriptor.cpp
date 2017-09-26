@@ -66,7 +66,8 @@ enum
 {
     kInternalFlagPhysical      = 0x00000001,
     kInternalFlagPageSized     = 0x00000002,
-    kInternalFlagPageAllocated = 0x00000004
+    kInternalFlagPageAllocated = 0x00000004,
+    kInternalFlagInit          = 0x00000008
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -289,6 +290,11 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 				inTask, iomdOptions, /* System mapper */ 0))
 	return false;
 
+    _internalFlags |= kInternalFlagInit;
+#if IOTRACKING
+    if (!(options & kIOMemoryPageable))	trackingAccumSize(capacity);
+#endif /* IOTRACKING */
+
     // give any system mapper the allocation params
     if (kIOReturnSuccess != dmaCommandOperation(kIOMDAddDMAMapSpec, 
     						&mapSpec, sizeof(mapSpec)))
@@ -488,19 +494,26 @@ void IOBufferMemoryDescriptor::free()
 	    map->release();
     }
 
+    if ((options & kIOMemoryPageable)
+        || (kInternalFlagPageSized & internalFlags)) size = round_page(size);
+
+#if IOTRACKING
+    if (!(options & kIOMemoryPageable)
+	&& buffer
+	&& (kInternalFlagInit & _internalFlags)) trackingAccumSize(-size);
+#endif /* IOTRACKING */
+
     /* super::free may unwire - deallocate buffer afterwards */
     super::free();
 
     if (options & kIOMemoryPageable)
     {
 #if IOALLOCDEBUG
-	OSAddAtomicLong(-(round_page(size)), &debug_iomallocpageable_size);
+	OSAddAtomicLong(-size, &debug_iomallocpageable_size);
 #endif
     }
     else if (buffer)
     {
-	if (kInternalFlagPageSized & internalFlags) size = round_page(size);
-
         if (kInternalFlagPhysical & internalFlags)
         {
             IOKernelFreePhysical((mach_vm_address_t) buffer, size);

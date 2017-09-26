@@ -105,7 +105,7 @@ SYSCTL_DECL(_net_inet6_tcp6);
 extern	int tcp_v6mssdflt;	/* XXX */
 
 struct	ip6_hdr;
-void	tcp6_ctlinput(int, struct sockaddr *, void *);
+void	tcp6_ctlinput(int, struct sockaddr *, void *, struct ifnet *);
 void	tcp6_init(void);
 int	tcp6_input(struct mbuf **, int *, int);
 struct	rtentry *tcp_rtlookup6(struct inpcb *, unsigned int);

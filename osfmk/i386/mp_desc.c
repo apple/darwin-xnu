@@ -72,14 +72,18 @@
 #include <i386/misc_protos.h>
 #include <i386/mp.h>
 #include <i386/pmap.h>
-#if defined(__i386__) || defined(__x86_64__)
+#include <i386/postcode.h>
 #include <i386/pmap_internal.h>
-#endif /* i386 */
 #if CONFIG_MCA
 #include <i386/machine_check.h>
 #endif
 
 #include <kern/misc_protos.h>
+
+#if MONOTONIC
+#include <kern/monotonic.h>
+#endif /* MONOTONIC */
+#include <san/kasan.h>
 
 #define K_INTR_GATE (ACC_P|ACC_PL_K|ACC_INTR_GATE)
 #define U_INTR_GATE (ACC_P|ACC_PL_U|ACC_INTR_GATE)
@@ -368,13 +372,14 @@ cpu_gdt_alias(vm_map_offset_t gdt, vm_map_offset_t alias)
 					  | INTEL_PTE_VALID
 					  | INTEL_PTE_WRITE
 					  | INTEL_PTE_NX);
-
-	/* TLB flush unneccessry because target processor isn't running yet */
+#if KASAN
+	kasan_notify_address(alias, PAGE_SIZE);
+#endif
 }
 
 
 void
-cpu_desc_init64(cpu_data_t *cdp)
+cpu_desc_init(cpu_data_t *cdp)
 {
 	cpu_desc_index_t	*cdi = &cdp->cpu_desc_index;
 
@@ -412,7 +417,6 @@ cpu_desc_init64(cpu_data_t *cdp)
 		master_ktss64.ist2 = (uintptr_t) low_eintstack;
 		master_ktss64.ist1 = (uintptr_t) low_eintstack
 					- sizeof(x86_64_intr_stack_frame_t);
-
 	} else if (cdi->cdi_ktss == NULL) {	/* Skipping re-init on wake */
 		cpu_desc_table64_t	*cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
 
@@ -467,17 +471,21 @@ cpu_desc_init64(cpu_data_t *cdp)
 
 	/* Require that the top of the sysenter stack is 16-byte aligned */
 	if ((cdi->cdi_sstk % 16) != 0)
-		panic("cpu_desc_init64() sysenter stack not 16-byte aligned");
+		panic("cpu_desc_init() sysenter stack not 16-byte aligned");
 }
 
 
 void
-cpu_desc_load64(cpu_data_t *cdp)
+cpu_desc_load(cpu_data_t *cdp)
 {
 	cpu_desc_index_t	*cdi = &cdp->cpu_desc_index;
 
+	postcode(CPU_DESC_LOAD_ENTRY);
+
 	/* Stuff the kernel per-cpu data area address into the MSRs */
+	postcode(CPU_DESC_LOAD_GS_BASE);
 	wrmsr64(MSR_IA32_GS_BASE, (uintptr_t) cdp);
+	postcode(CPU_DESC_LOAD_KERNEL_GS_BASE);
 	wrmsr64(MSR_IA32_KERNEL_GS_BASE, (uintptr_t) cdp);
 
 	/*
@@ -490,23 +498,34 @@ cpu_desc_load64(cpu_data_t *cdp)
 	/* Load the GDT, LDT, IDT and TSS */
 	cdi->cdi_gdt.size = sizeof(struct real_descriptor)*GDTSZ - 1;
 	cdi->cdi_idt.size = 0x1000 + cdp->cpu_number;
+	
+	postcode(CPU_DESC_LOAD_GDT);
 	lgdt((uintptr_t *) &cdi->cdi_gdt);
+	postcode(CPU_DESC_LOAD_IDT);
 	lidt((uintptr_t *) &cdi->cdi_idt);
+	postcode(CPU_DESC_LOAD_LDT);
 	lldt(KERNEL_LDT);
+	postcode(CPU_DESC_LOAD_TSS);
 	set_tr(KERNEL_TSS);
 
 #if GPROF // Hack to enable mcount to work on K64
 	__asm__ volatile("mov %0, %%gs" : : "rm" ((unsigned short)(KERNEL_DS)));
 #endif
+	postcode(CPU_DESC_LOAD_EXIT);
 }
 
 
 /*
  * Set MSRs for sysenter/sysexit and syscall/sysret for 64-bit.
  */
-static void
-fast_syscall_init64(__unused cpu_data_t *cdp)
+void
+cpu_syscall_init(cpu_data_t *cdp)
 {
+#if MONOTONIC
+	mt_cpu_up(cdp);
+#else /* MONOTONIC */
+#pragma unused(cdp)
+#endif /* !MONOTONIC */
 	wrmsr64(MSR_IA32_SYSENTER_CS, SYSENTER_CS); 
 	wrmsr64(MSR_IA32_SYSENTER_EIP, (uintptr_t) hi64_sysenter);
 	wrmsr64(MSR_IA32_SYSENTER_ESP, current_sstk());
@@ -811,15 +830,6 @@ cpu_physwindow_init(int cpu)
 	}
 }
 #endif /* NCOPY_WINDOWS > 0 */
-
-/*
- * Load the segment descriptor tables for the current processor.
- */
-void
-cpu_mode_init(cpu_data_t *cdp)
-{
-	fast_syscall_init64(cdp);
-}
 
 /*
  * Allocate a new interrupt stack for the boot processor from the

@@ -88,6 +88,8 @@
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #endif
+#include <IOKit/IOBSD.h>
+#include <sys/time.h>
 
 #define HZ	100	/* XXX */
 
@@ -174,13 +176,20 @@ settimeofday(__unused struct proc *p, struct settimeofday_args  *uap, __unused i
 
 	bzero(&atv, sizeof(atv));
 
+	/* Check that this task is entitled to set the time or it is root */
+	if (!IOTaskHasEntitlement(current_task(), SETTIME_ENTITLEMENT)) {
+
 #if CONFIG_MACF
-	error = mac_system_check_settime(kauth_cred_get());
-	if (error)
-		return (error);
+		error = mac_system_check_settime(kauth_cred_get());
+		if (error)
+			return (error);
 #endif
-	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
-		return (error);
+#ifndef CONFIG_EMBEDDED
+		if ((error = suser(kauth_cred_get(), &p->p_acflag)))
+			return (error);
+#endif
+	}
+
 	/* Verify all parameters before changing time */
 	if (uap->tv) {
 		if (IS_64BIT_PROCESS(p)) {
@@ -218,59 +227,6 @@ setthetime(
 	struct timeval	*tv)
 {
 	clock_set_calendar_microtime(tv->tv_sec, tv->tv_usec);
-}
-
-/*
- * XXX Y2038 bug because of clock_adjtime() first argument
- */
-/* ARGSUSED */
-int
-adjtime(struct proc *p, struct adjtime_args *uap, __unused int32_t *retval)
-{
-	struct timeval atv;
-	int error;
-
-#if CONFIG_MACF
-	error = mac_system_check_settime(kauth_cred_get());
-	if (error)
-		return (error);
-#endif
-	if ((error = priv_check_cred(kauth_cred_get(), PRIV_ADJTIME, 0)))
-		return (error);
-	if (IS_64BIT_PROCESS(p)) {
-		struct user64_timeval user_atv;
-		error = copyin(uap->delta, &user_atv, sizeof(user_atv));
-		atv.tv_sec = user_atv.tv_sec;
-		atv.tv_usec = user_atv.tv_usec;
-	} else {
-		struct user32_timeval user_atv;
-		error = copyin(uap->delta, &user_atv, sizeof(user_atv));
-		atv.tv_sec = user_atv.tv_sec;
-		atv.tv_usec = user_atv.tv_usec;
-	}
-	if (error)
-		return (error);
-		
-	/*
-	 * Compute the total correction and the rate at which to apply it.
-	 */
-	clock_adjtime(&atv.tv_sec, &atv.tv_usec);
-
-	if (uap->olddelta) {
-		if (IS_64BIT_PROCESS(p)) {
-			struct user64_timeval user_atv;
-			user_atv.tv_sec = atv.tv_sec;
-			user_atv.tv_usec = atv.tv_usec;
-			error = copyout(&user_atv, uap->olddelta, sizeof(user_atv));
-		} else {
-			struct user32_timeval user_atv;
-			user_atv.tv_sec = atv.tv_sec;
-			user_atv.tv_usec = atv.tv_usec;
-			error = copyout(&user_atv, uap->olddelta, sizeof(user_atv));
-		}
-	}
-
-	return (0);
 }
 
 /*

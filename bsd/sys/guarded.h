@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,12 +59,10 @@ extern ssize_t guarded_pwrite_np(int fd, const guardid_t *guard, const void *buf
 extern ssize_t guarded_writev_np(int fd, const guardid_t *guard, const struct iovec *iovp, int iovcnt);
 #endif /* KERNEL */
 
-/*
- * Guard types.
- *
- * GUARD_TYPE_FD: Guarded file descriptor.
- */
-#define	GUARD_TYPE_FD		0x2
+#ifndef GUARD_TYPE_FD
+/* temporary source compat: use <kern/exc_guard.h> instead */
+#define GUARD_TYPE_FD		0x2
+#endif
 
 /*
  * File descriptor guard flavors.
@@ -102,7 +100,7 @@ extern ssize_t guarded_writev_np(int fd, const guardid_t *guard, const struct io
  * Violating a guard results in an error (EPERM), and potentially
  * an exception with one or more of the following bits set.
  */
-enum guard_exception_codes {
+enum guard_fd_exception_codes {
 	kGUARD_EXC_CLOSE	= 1u << 0,	/* close of a guarded fd */
 	kGUARD_EXC_DUP	   	= 1u << 1,	/* dup of a guarded fd */
 	kGUARD_EXC_NOCLOEXEC	= 1u << 2,	/* clear close-on-exec */
@@ -111,6 +109,60 @@ enum guard_exception_codes {
 	kGUARD_EXC_MISMATCH	= 1u << 5,	/* wrong guard for guarded fd */
 	kGUARD_EXC_WRITE   	= 1u << 6	/* write on a guarded fd */
 };
+
+/*
+ * Experimental guarded vnode support
+ */
+#define VNG_RENAME_TO		(1u << 0)
+#define VNG_RENAME_FROM		(1u << 1)
+#define VNG_UNLINK		(1u << 2)
+#define VNG_WRITE_OTHER		(1u << 3)
+#define VNG_TRUNC_OTHER		(1u << 4)
+#define VNG_LINK		(1u << 5)
+#define VNG_EXCHDATA		(1u << 6)
+
+#define VNG_ALL \
+	(VNG_RENAME_TO | VNG_RENAME_FROM | VNG_UNLINK | VNG_LINK | \
+	 VNG_WRITE_OTHER | VNG_TRUNC_OTHER | VNG_EXCHDATA)
+
+struct vnguard_set {
+	int vns_fd;
+	unsigned vns_attrs;
+	guardid_t vns_guard;
+};
+
+#define VNG_SYSC_PING		0
+#define VNG_SYSC_SET_GUARD	1
+
+#define VNG_POLICY_NAME		"vnguard"
+
+/*
+ * Violating a guard may result in an error (EPERM), and potentially
+ * an exception with one or more of the following bits set.
+ */
+enum guard_vn_exception_codes {
+	kGUARD_EXC_RENAME_TO	= VNG_RENAME_TO,
+	kGUARD_EXC_RENAME_FROM	= VNG_RENAME_FROM,
+	kGUARD_EXC_UNLINK	= VNG_UNLINK,
+	kGUARD_EXC_WRITE_OTHER	= VNG_WRITE_OTHER,
+	kGUARD_EXC_TRUNC_OTHER	= VNG_TRUNC_OTHER,
+	kGUARD_EXC_LINK		= VNG_LINK,
+	kGUARD_EXC_EXCHDATA	= VNG_EXCHDATA,
+};
+
+#if defined(KERNEL)
+
+/* Guard violation behaviors: not all combinations make sense */
+
+#define kVNG_POLICY_LOGMSG	(1u << 0)
+#define kVNG_POLICY_EPERM	(1u << 1)
+#define kVNG_POLICY_EXC		(1u << 2)
+#define kVNG_POLICY_EXC_CORPSE	(1u << 3)
+#define kVNG_POLICY_SIGKILL	(1u << 4)
+
+extern int vnguard_exceptions_active(void);
+extern void vnguard_policy_init(void);
+#endif /* KERNEL */
 
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 

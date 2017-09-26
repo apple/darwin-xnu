@@ -79,6 +79,9 @@ extern "C" {
 struct dtrace_ptss_page_entry {
 	struct dtrace_ptss_page_entry*	next;
 	user_addr_t			addr;
+#if CONFIG_EMBEDDED
+	user_addr_t			write_addr;
+#endif
 };
 
 struct dtrace_ptss_page {

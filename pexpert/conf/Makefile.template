@@ -17,6 +17,7 @@ include $(MakeInc_def)
 # CFLAGS
 #
 CFLAGS+= -include meta_features.h -DPEXPERT_KERNEL_PRIVATE
+SFLAGS+= -include meta_features.h
 
 # Objects that don't want -Wcast-align warning (8474835)
 pe_identify_machine.o_CWARNFLAGS_ADD = -Wno-cast-align

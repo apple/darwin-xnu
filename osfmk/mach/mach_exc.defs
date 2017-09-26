@@ -75,25 +75,15 @@ type mach_exception_data_t	= array[*:2] of int64_t;
 type exception_type_t		= int;
 
 routine		mach_exception_raise(
-#if	KERNEL_USER
-			exception_port	: mach_port_move_send_t;
-			thread		: mach_port_move_send_t;
-			task		: mach_port_move_send_t;
-#else	/* KERNEL_USER */
 			exception_port	: mach_port_t;
 			thread		: mach_port_t;
 			task		: mach_port_t;
-#endif	/* KERNEL_USER */
 			exception	: exception_type_t;
 			code		: mach_exception_data_t
 			);
 
 routine		mach_exception_raise_state(
-#if	KERNEL_USER
-			exception_port	: mach_port_move_send_t;
-#else	/* KERNEL_USER */
 			exception_port	: mach_port_t;
-#endif	/* KERNEL_USER */
 			exception	: exception_type_t;
 			code		: mach_exception_data_t, const;
 		  inout flavor		: int;
@@ -101,15 +91,9 @@ routine		mach_exception_raise_state(
 		    out new_state	: thread_state_t);
 
 routine		mach_exception_raise_state_identity(
-#if	KERNEL_USER
-			exception_port  : mach_port_move_send_t;
-			thread		: mach_port_move_send_t;
-			task		: mach_port_move_send_t;
-#else	/* KERNEL_USER */
 			exception_port  : mach_port_t;
 			thread          : mach_port_t;
 			task            : mach_port_t;
-#endif	/* KERNEL_USER */
 			exception       : exception_type_t;
 			code            : mach_exception_data_t;
 		  inout flavor          : int;

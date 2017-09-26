@@ -185,6 +185,20 @@ const struct sched_dispatch_table sched_proto_dispatch = {
 	.direct_dispatch_to_idle_processors             = TRUE,
 	.multiple_psets_enabled                         = TRUE,
 	.sched_groups_enabled                           = FALSE,
+	.avoid_processor_enabled                        = FALSE,
+	.thread_avoid_processor                         = NULL,
+	.processor_balance                              = sched_SMT_balance,
+
+	.rt_runq                                        = sched_rtglobal_runq,
+	.rt_init                                        = sched_rtglobal_init,
+	.rt_queue_shutdown                              = sched_rtglobal_queue_shutdown,
+	.rt_runq_scan                                   = sched_rtglobal_runq_scan,
+	.rt_runq_count_sum                              = sched_rtglobal_runq_count_sum,
+
+	.qos_max_parallelism                            = sched_qos_max_parallelism,
+	.check_spill                                    = sched_check_spill,
+	.ipi_policy                                     = sched_ipi_policy,
+	.thread_should_yield                            = sched_thread_should_yield,
 };
 
 static struct run_queue	*global_runq;
@@ -473,12 +487,10 @@ sched_proto_processor_queue_has_priority(processor_t		processor __unused,
 	
 	simple_lock(&global_runq_lock);
 
-	if (global_runq->count == 0)
-		result = FALSE;
-	else if (gte)
+	if (gte)
 		result = global_runq->highq >= priority;
 	else
-		result = global_runq->highq >= priority;
+		result = global_runq->highq > priority;
 
 	simple_unlock(&global_runq_lock);
 	

@@ -145,9 +145,14 @@ kperf_sysctl_get_set_unsigned_uint32(struct sysctl_req *req,
 	assert(get != NULL);
 	assert(set != NULL);
 
-	int error;
-	uint64_t inputs[2];
-	if ((error = SYSCTL_IN(req, inputs, sizeof(inputs)))) {
+	int error = 0;
+	uint64_t inputs[2] = {};
+
+	if (req->newptr == USER_ADDR_NULL) {
+		return EFAULT;
+	}
+
+	if ((error = copyin(req->newptr, inputs, sizeof(inputs)))) {
 		return error;
 	}
 
@@ -161,17 +166,10 @@ kperf_sysctl_get_set_unsigned_uint32(struct sysctl_req *req,
 		}
 
 		inputs[1] = value_out;
-	} else {
-		if ((error = set(action_id, new_value))) {
-			return error;
-		}
-	}
 
-	if (req->oldptr != USER_ADDR_NULL) {
-		error =  SYSCTL_OUT(req, inputs, sizeof(inputs));
-		return error;
+		return copyout(inputs, req->oldptr, sizeof(inputs));
 	} else {
-		return 0;
+		return set(action_id, new_value);
 	}
 }
 
@@ -183,11 +181,16 @@ kperf_sysctl_get_set_unsigned_uint32(struct sysctl_req *req,
 static int
 sysctl_timer_period(struct sysctl_req *req)
 {
+	int error;
+	uint64_t inputs[2] = {};
+
 	assert(req != NULL);
 
-	int error;
-	uint64_t inputs[2];
-	if ((error = SYSCTL_IN(req, inputs, sizeof(inputs)))) {
+	if (req->newptr == USER_ADDR_NULL) {
+		return EFAULT;
+	}
+
+	if ((error = copyin(req->newptr, inputs, sizeof(inputs)))) {
 		return error;
 	}
 
@@ -201,23 +204,26 @@ sysctl_timer_period(struct sysctl_req *req)
 		}
 
 		inputs[1] = period_out;
-	} else {
-		if ((error = kperf_timer_set_period(timer, new_period))) {
-			return error;
-		}
-	}
 
-	return SYSCTL_OUT(req, inputs, sizeof(inputs));
+		return copyout(inputs, req->oldptr, sizeof(inputs));
+	} else {
+		return kperf_timer_set_period(timer, new_period);
+	}
 }
 
 static int
-sysctl_action_filter(struct sysctl_req *req, boolean_t is_task_t)
+sysctl_action_filter(struct sysctl_req *req, bool is_task_t)
 {
+	int error = 0;
+	uint64_t inputs[2] = {};
+
 	assert(req != NULL);
 
-	int error;
-	uint64_t inputs[2];
-	if ((error = SYSCTL_IN(req, inputs, sizeof(inputs)))) {
+	if (req->newptr == USER_ADDR_NULL) {
+		return EFAULT;
+	}
+
+	if ((error = copyin(req->newptr, inputs, sizeof(inputs)))) {
 		return error;
 	}
 
@@ -231,16 +237,13 @@ sysctl_action_filter(struct sysctl_req *req, boolean_t is_task_t)
 		}
 
 		inputs[1] = filter_out;
+		return copyout(inputs, req->oldptr, sizeof(inputs));
 	} else {
 		int pid = is_task_t ? kperf_port_to_pid((mach_port_name_t)new_filter)
-		                    : new_filter;
+				: new_filter;
 
-		if ((error = kperf_action_set_filter(actionid, pid))) {
-		    return error;
-		}
+		return kperf_action_set_filter(actionid, pid);
 	}
-
-	return SYSCTL_OUT(req, inputs, sizeof(inputs));
 }
 
 static int
@@ -411,16 +414,16 @@ kperf_sysctl SYSCTL_HANDLER_ARGS
 	int ret;
 	uintptr_t type = (uintptr_t)arg1;
 
-	lck_mtx_lock(ktrace_lock);
+	ktrace_lock();
 
 	if (req->oldptr == USER_ADDR_NULL && req->newptr != USER_ADDR_NULL) {
 		if ((ret = ktrace_configure(KTRACE_KPERF))) {
-			lck_mtx_unlock(ktrace_lock);
+			ktrace_unlock();
 			return ret;
 		}
 	} else {
 		if ((ret = ktrace_read_check())) {
-			lck_mtx_unlock(ktrace_lock);
+			ktrace_unlock();
 			return ret;
 		}
 	}
@@ -455,10 +458,10 @@ kperf_sysctl SYSCTL_HANDLER_ARGS
 		ret = sysctl_kdbg_cswitch(req);
 		break;
 	case REQ_ACTION_FILTER_BY_TASK:
-		ret = sysctl_action_filter(req, TRUE);
+		ret = sysctl_action_filter(req, true);
 		break;
 	case REQ_ACTION_FILTER_BY_PID:
-		ret = sysctl_action_filter(req, FALSE);
+		ret = sysctl_action_filter(req, false);
 		break;
 	case REQ_KDEBUG_ACTION:
 		ret = sysctl_kdebug_action(req);
@@ -489,7 +492,7 @@ kperf_sysctl SYSCTL_HANDLER_ARGS
 		break;
 	}
 
-	lck_mtx_unlock(ktrace_lock);
+	ktrace_unlock();
 
 	return ret;
 }
@@ -500,7 +503,7 @@ kperf_sysctl_bless_handler SYSCTL_HANDLER_ARGS
 #pragma unused(oidp, arg2)
 	int ret;
 
-	lck_mtx_lock(ktrace_lock);
+	ktrace_lock();
 
 	/* if setting a new "blessed pid" (ktrace owning pid) */
 	if (req->newptr != USER_ADDR_NULL) {
@@ -515,13 +518,13 @@ kperf_sysctl_bless_handler SYSCTL_HANDLER_ARGS
 		      kauth_cred_issuser(kauth_cred_get())))
 		{
 			if ((ret = ktrace_configure(KTRACE_KPERF))) {
-				lck_mtx_unlock(ktrace_lock);
+				ktrace_unlock();
 				return ret;
 			}
 		}
 	} else {
 		if ((ret = ktrace_read_check())) {
-			lck_mtx_unlock(ktrace_lock);
+			ktrace_unlock();
 			return ret;
 		}
 	}
@@ -533,7 +536,7 @@ kperf_sysctl_bless_handler SYSCTL_HANDLER_ARGS
 		ret = ENOENT;
 	}
 
-	lck_mtx_unlock(ktrace_lock);
+	ktrace_unlock();
 
 	return ret;
 }
@@ -670,6 +673,64 @@ SYSCTL_PROC(_kperf, OID_AUTO, lightweight_pet,
             (void *)REQ_LIGHTWEIGHT_PET,
             sizeof(int), kperf_sysctl, "I",
             "Status of lightweight PET mode");
+
+/* limits */
+
+SYSCTL_NODE(_kperf, OID_AUTO, limits, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+            "limits");
+
+#define REQ_LIM_PERIOD_NS (1)
+#define REQ_LIM_BG_PERIOD_NS (2)
+#define REQ_LIM_PET_PERIOD_NS (3)
+#define REQ_LIM_BG_PET_PERIOD_NS (4)
+
+static int
+kperf_sysctl_limits SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg2)
+	int type = (int)arg1;
+	uint64_t limit = 0;
+
+	switch (type) {
+	case REQ_LIM_PERIOD_NS:
+		limit = KP_MIN_PERIOD_NS;
+		break;
+
+	case REQ_LIM_BG_PERIOD_NS:
+		limit = KP_MIN_PERIOD_BG_NS;
+		break;
+
+	case REQ_LIM_PET_PERIOD_NS:
+		limit = KP_MIN_PERIOD_PET_NS;
+		break;
+
+	case REQ_LIM_BG_PET_PERIOD_NS:
+		limit = KP_MIN_PERIOD_PET_BG_NS;
+		break;
+
+	default:
+		return ENOENT;
+	}
+
+	return sysctl_io_number(req, limit, sizeof(limit), &limit, NULL);
+}
+
+SYSCTL_PROC(_kperf_limits, OID_AUTO, timer_min_period_ns,
+		 CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_ANYBODY | CTLFLAG_LOCKED,
+		(void *)REQ_LIM_PERIOD_NS, sizeof(uint64_t), kperf_sysctl_limits,
+		"Q", "Minimum timer period in nanoseconds");
+SYSCTL_PROC(_kperf_limits, OID_AUTO, timer_min_bg_period_ns,
+		 CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_ANYBODY | CTLFLAG_LOCKED,
+		(void *)REQ_LIM_BG_PERIOD_NS, sizeof(uint64_t), kperf_sysctl_limits,
+		"Q", "Minimum background timer period in nanoseconds");
+SYSCTL_PROC(_kperf_limits, OID_AUTO, timer_min_pet_period_ns,
+		 CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_ANYBODY | CTLFLAG_LOCKED,
+		(void *)REQ_LIM_PET_PERIOD_NS, sizeof(uint64_t), kperf_sysctl_limits,
+		"Q", "Minimum PET timer period in nanoseconds");
+SYSCTL_PROC(_kperf_limits, OID_AUTO, timer_min_bg_pet_period_ns,
+		 CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_ANYBODY | CTLFLAG_LOCKED,
+		(void *)REQ_LIM_BG_PET_PERIOD_NS, sizeof(uint64_t), kperf_sysctl_limits,
+		"Q", "Minimum background PET timer period in nanoseconds");
 
 /* debug */
 SYSCTL_INT(_kperf, OID_AUTO, debug_level, CTLFLAG_RW | CTLFLAG_LOCKED,

@@ -62,6 +62,7 @@
 #include <machine/pmap.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
+#include <stdatomic.h>
 
 #include <ipc/ipc_port.h>
 
@@ -100,6 +101,9 @@ static commpage_address_t	commPageBaseOffset; // subtract from 32-bit runtime ad
 
 static	commpage_time_data	*time_data32 = NULL;
 static	commpage_time_data	*time_data64 = NULL;
+static  new_commpage_timeofday_data_t *gtod_time_data32 = NULL;
+static  new_commpage_timeofday_data_t *gtod_time_data64 = NULL;
+
 
 decl_simple_lock_data(static,commpage_active_cpus_lock);
 
@@ -126,11 +130,12 @@ commpage_allocate(
 	if (submap == NULL)
 		panic("commpage submap is null");
 
-	if ((kr = vm_map(kernel_map,
+	if ((kr = vm_map_kernel(kernel_map,
 			 &kernel_addr,
 			 area_used,
 			 0,
-			 VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_OSFMK),
+			 VM_FLAGS_ANYWHERE,
+			 VM_KERN_MEMORY_OSFMK,
 			 NULL,
 			 0,
 			 FALSE,
@@ -139,10 +144,10 @@ commpage_allocate(
 			 VM_INHERIT_NONE)))
 		panic("cannot allocate commpage %d", kr);
 
-	if ((kr = vm_map_wire(kernel_map,
+	if ((kr = vm_map_wire_kernel(kernel_map,
 			      kernel_addr,
 			      kernel_addr+area_used,
-			      VM_PROT_DEFAULT|VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_OSFMK),
+			      VM_PROT_DEFAULT, VM_KERN_MEMORY_OSFMK,
 			      FALSE)))
 		panic("cannot wire commpage: %d", kr);
 
@@ -166,11 +171,12 @@ commpage_allocate(
 				    NULL )))		// parent_entry (what is this?)
 		panic("cannot make entry for commpage %d", kr);
 
-	if ((kr = vm_map_64(	submap,				// target map (shared submap)
+	if ((kr = vm_map_64_kernel(	submap,				// target map (shared submap)
 			&zero,				// address (map into 1st page in submap)
 			area_used,			// size
 			0,				// mask
 			VM_FLAGS_FIXED,			// flags (it must be 1st page in submap)
+			VM_KERN_MEMORY_NONE,
 			handle,				// port is the memory entry we just made
 			0,                              // offset (map 1st page in memory entry)
 			FALSE,                          // copy
@@ -306,10 +312,32 @@ commpage_init_cpu_capabilities( void )
 	setif(bits, kHasADX,     cpuid_features() &
 					CPUID_LEAF7_FEATURE_ADX);
 	
+#if 0	/* The kernel doesn't support MPX or SGX */
 	setif(bits, kHasMPX,     cpuid_leaf7_features() &
 					CPUID_LEAF7_FEATURE_MPX);
 	setif(bits, kHasSGX,     cpuid_leaf7_features() &
 					CPUID_LEAF7_FEATURE_SGX);
+#endif
+
+#if !defined(RC_HIDE_XNU_J137)
+	if (ml_fpu_avx512_enabled()) {
+		setif(bits, kHasAVX512F,    cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_AVX512F);
+		setif(bits, kHasAVX512CD,   cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_AVX512CD);
+		setif(bits, kHasAVX512DQ,   cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_AVX512DQ);
+		setif(bits, kHasAVX512BW,   cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_AVX512BW);
+		setif(bits, kHasAVX512VL,   cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_AVX512VL);
+		setif(bits, kHasAVX512IFMA, cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_AVX512IFMA);
+		setif(bits, kHasAVX512VBMI, cpuid_leaf7_features() &
+					CPUID_LEAF7_FEATURE_AVX512VBMI);
+	}
+
+#endif /* not RC_HIDE_XNU_J137 */
 	uint64_t misc_enable = rdmsr64(MSR_IA32_MISC_ENABLE);
 	setif(bits, kHasENFSTRG, (misc_enable & 1ULL) &&
 				 (cpuid_leaf7_features() &
@@ -403,6 +431,7 @@ commpage_populate_one(
 	size_t		area_used,	// _COMM_PAGE32_AREA_USED or _COMM_PAGE64_AREA_USED
 	commpage_address_t base_offset,	// will become commPageBaseOffset
 	commpage_time_data** time_data,	// &time_data32 or &time_data64
+	new_commpage_timeofday_data_t** gtod_time_data, // &gtod_time_data32 or &gtod_time_data64
 	const char*	signature,	// "commpage 32-bit" or "commpage 64-bit"
 	vm_prot_t	uperm)
 {
@@ -419,6 +448,7 @@ commpage_populate_one(
 	commPageBaseOffset = base_offset;
 
 	*time_data = commpage_addr_of( _COMM_PAGE_TIME_DATA_START );
+	*gtod_time_data = commpage_addr_of( _COMM_PAGE_NEWTIMEOFDAY_DATA );
 
 	/* Stuff in the constants.  We move things into the comm page in strictly
 	* ascending order, so we can check for overlap and panic if so.
@@ -475,6 +505,7 @@ commpage_populate( void )
 				_COMM_PAGE32_AREA_USED,
 				_COMM_PAGE32_BASE_ADDRESS,
 				&time_data32,
+				&gtod_time_data32,
 				"commpage 32-bit",
 				VM_PROT_READ);
 #ifndef __LP64__
@@ -482,6 +513,7 @@ commpage_populate( void )
 			   _COMM_PAGE32_AREA_USED/INTEL_PGBYTES);
 #endif			   
 	time_data64 = time_data32;			/* if no 64-bit commpage, point to 32-bit */
+	gtod_time_data64 = gtod_time_data32;
 
 	if (_cpu_capabilities & k64Bit) {
 		commpage_populate_one(	commpage64_map, 
@@ -489,6 +521,7 @@ commpage_populate( void )
 					_COMM_PAGE64_AREA_USED,
 					_COMM_PAGE32_START_ADDRESS, /* commpage address are relative to 32-bit commpage placement */
 					&time_data64,
+					&gtod_time_data64,
 					"commpage 64-bit",
 					VM_PROT_READ);
 #ifndef __LP64__
@@ -611,51 +644,42 @@ commpage_set_nanotime(
 	p64->nt_generation = next_gen;
 }
 
-
-/* Disable commpage gettimeofday(), forcing commpage to call through to the kernel.  */
-
-void
-commpage_disable_timestamp( void )
-{
-	time_data32->gtod_generation = 0;
-	time_data64->gtod_generation = 0;
-}
-
-
 /* Update commpage gettimeofday() information.  As with nanotime(), we interleave
  * updates to the 32- and 64-bit commpage, in order to keep time more nearly in sync 
  * between the two environments.
  *
  * This routine must be serializeed by some external means, ie a lock.
  */
- 
- void
- commpage_set_timestamp(
-	uint64_t	abstime,
-	uint64_t	secs )
-{
-	commpage_time_data	*p32 = time_data32;
-	commpage_time_data	*p64 = time_data64;
-	static uint32_t	generation = 0;
-	uint32_t	next_gen;
-	
-	next_gen = ++generation;
-	if (next_gen == 0)
-		next_gen = ++generation;
-	
-	p32->gtod_generation = 0;		/* mark invalid, so commpage won't try to use it */
-	p64->gtod_generation = 0;
-	
-	p32->gtod_ns_base = abstime;
-	p64->gtod_ns_base = abstime;
-	
-	p32->gtod_sec_base = secs;
-	p64->gtod_sec_base = secs;
-	
-	p32->gtod_generation = next_gen;	/* mark data as valid */
-	p64->gtod_generation = next_gen;
-}
 
+void
+commpage_set_timestamp(
+		uint64_t	abstime,
+		uint64_t	sec,
+		uint64_t	frac,
+		uint64_t	scale,
+		uint64_t	tick_per_sec)
+{
+	new_commpage_timeofday_data_t	*p32 = gtod_time_data32;
+	new_commpage_timeofday_data_t	*p64 = gtod_time_data64;
+	
+	p32->TimeStamp_tick = 0x0ULL;
+	p64->TimeStamp_tick = 0x0ULL;
+
+	p32->TimeStamp_sec = sec;
+	p64->TimeStamp_sec = sec;
+
+	p32->TimeStamp_frac = frac;
+	p64->TimeStamp_frac = frac;
+
+	p32->Ticks_scale = scale;
+	p64->Ticks_scale = scale;
+
+	p32->Ticks_per_sec = tick_per_sec;
+	p64->Ticks_per_sec = tick_per_sec;
+
+	p32->TimeStamp_tick = abstime;
+	p64->TimeStamp_tick = abstime;
+}
 
 /* Update _COMM_PAGE_MEMORY_PRESSURE.  Called periodically from vm's compute_memory_pressure()  */
 
@@ -804,25 +828,27 @@ commpage_update_mach_approximate_time(uint64_t abstime)
 	cp = commPagePtr32;
 	if ( cp ) {
 		cp += (_COMM_PAGE_APPROX_TIME - _COMM_PAGE32_BASE_ADDRESS);
-		saved_data = *(uint64_t *)cp;
+		saved_data = atomic_load_explicit((_Atomic uint64_t *)(uintptr_t)cp, memory_order_relaxed);
 		if (saved_data < abstime) {
 			/* ignoring the success/fail return value assuming that
 			 * if the value has been updated since we last read it,
 			 * "someone" has a newer timestamp than us and ours is
 			 * now invalid. */
-			OSCompareAndSwap64(saved_data, abstime, (uint64_t *)cp);
+			atomic_compare_exchange_strong_explicit((_Atomic uint64_t *)(uintptr_t)cp, 
+				&saved_data, abstime, memory_order_relaxed, memory_order_relaxed);
 		}
 	}
 	cp = commPagePtr64;
 	if ( cp ) {
 		cp += (_COMM_PAGE_APPROX_TIME - _COMM_PAGE32_START_ADDRESS);
-		saved_data = *(uint64_t *)cp;
+		saved_data = atomic_load_explicit((_Atomic uint64_t *)(uintptr_t)cp, memory_order_relaxed);
 		if (saved_data < abstime) {
 			/* ignoring the success/fail return value assuming that
 			 * if the value has been updated since we last read it,
 			 * "someone" has a newer timestamp than us and ours is
 			 * now invalid. */
-			OSCompareAndSwap64(saved_data, abstime, (uint64_t *)cp);
+			atomic_compare_exchange_strong_explicit((_Atomic uint64_t *)(uintptr_t)cp, 
+				&saved_data, abstime, memory_order_relaxed, memory_order_relaxed);
 		}
 	}
 #else

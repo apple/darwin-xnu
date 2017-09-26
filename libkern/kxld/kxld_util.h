@@ -196,7 +196,7 @@ boolean_t kxld_is_32_bit(cpu_type_t)
     __attribute__((const, visibility("hidden")));
 
 const char * kxld_strstr(const char *s, const char *find)
-    __attribute__((pure, nonnull, visibility("hidden")));
+    __attribute__((pure, visibility("hidden")));
 
 /*******************************************************************************
 * Debugging

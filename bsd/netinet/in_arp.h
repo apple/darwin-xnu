@@ -61,6 +61,7 @@ struct sockaddr_in;
  *		the packet.
  */
 #ifdef BSD_KERNEL_PRIVATE
+extern boolean_t arp_is_entry_probing (route_t p_route);
 extern errno_t arp_lookup_ip(ifnet_t interface,
     const struct sockaddr_in *ip_dest, struct sockaddr_dl *ll_dest,
     size_t ll_dest_len, route_t hint, mbuf_t packet);

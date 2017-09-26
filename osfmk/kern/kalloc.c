@@ -79,6 +79,8 @@
 #include <libkern/OSMalloc.h>
 #include <sys/kdebug.h>
 
+#include <san/kasan.h>
+
 #ifdef MACH_BSD
 zone_t kalloc_zone(vm_size_t);
 #endif
@@ -300,6 +302,7 @@ kalloc_init(
 	vm_offset_t min;
 	vm_size_t size, kalloc_map_size;
 	int i;
+	vm_map_kernel_flags_t vmk_flags;
 
 	/* 
 	 * Scale the kalloc_map_size to physical memory size: stay below 
@@ -313,8 +316,14 @@ kalloc_init(
 	if (kalloc_map_size < KALLOC_MAP_SIZE_MIN)
 		kalloc_map_size = KALLOC_MAP_SIZE_MIN;
 
+	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+	vmk_flags.vmkf_permanent = TRUE;
+
 	retval = kmem_suballoc(kernel_map, &min, kalloc_map_size,
-			       FALSE, VM_FLAGS_ANYWHERE | VM_FLAGS_PERMANENT | VM_MAKE_TAG(0),
+			       FALSE,
+			       (VM_FLAGS_ANYWHERE),
+			       vmk_flags,
+			       VM_KERN_MEMORY_KALLOC,
 			       &kalloc_map);
 
 	if (retval != KERN_SUCCESS)
@@ -348,6 +357,10 @@ kalloc_init(
 	for (i = 0; i < (int)MAX_K_ZONE && (size = k_zone_size[i]) < kalloc_max; i++) {
 		k_zone[i] = zinit(size, size, size, k_zone_name[i]);
 		zone_change(k_zone[i], Z_CALLERACCT, FALSE);
+#if VM_MAX_TAG_ZONES
+		if (zone_tagging_on) zone_change(k_zone[i], Z_TAGS_ENABLED, TRUE);
+#endif
+		zone_change(k_zone[i], Z_KASAN_QUARANTINE, FALSE);
 	}
 
 	/*
@@ -466,6 +479,18 @@ vm_map_lookup_kalloc_entry_locked(
 	return (vm_entry->vme_end - vm_entry->vme_start);
 }
 
+#if KASAN_KALLOC
+/*
+ * KASAN kalloc stashes the original user-requested size away in the poisoned
+ * area. Return that directly.
+ */
+vm_size_t
+kalloc_size(void *addr)
+{
+	(void)vm_map_lookup_kalloc_entry_locked; /* silence warning */
+	return kasan_user_size((vm_offset_t)addr);
+}
+#else
 vm_size_t
 kalloc_size(
 		void 		*addr)
@@ -487,6 +512,7 @@ kalloc_size(
 	vm_map_unlock_read(map);
 	return size;
 }
+#endif
 
 vm_size_t
 kalloc_bucket_size(
@@ -513,6 +539,15 @@ kalloc_bucket_size(
 	return vm_map_round_page(size, VM_MAP_PAGE_MASK(map));
 }
 
+#if KASAN_KALLOC
+vm_size_t
+kfree_addr(void *addr)
+{
+	vm_size_t origsz = kalloc_size(addr);
+	kfree(addr, origsz);
+	return origsz;
+}
+#else
 vm_size_t
 kfree_addr(
 	void 		*addr)
@@ -559,7 +594,8 @@ kfree_addr(
 	KALLOC_ZINFO_SFREE(size);
 	return size;
 }
-			
+#endif
+
 void *
 kalloc_canblock(
 		vm_size_t	       * psize,
@@ -568,8 +604,17 @@ kalloc_canblock(
 {
 	zone_t z;
 	vm_size_t size;
+	void *addr;
+	vm_tag_t tag;
 
+	tag = VM_KERN_MEMORY_KALLOC;
 	size = *psize;
+
+#if KASAN_KALLOC
+	/* expand the allocation to accomodate redzones */
+	vm_size_t req_size = size;
+	size = kasan_alloc_resize(req_size);
+#endif
 
 	if (size < MAX_SIZE_ZDLUT)
 		z = get_zone_dlut(size);
@@ -582,20 +627,24 @@ kalloc_canblock(
 		 * krealloc can use kmem_realloc.)
 		 */
 		vm_map_t alloc_map;
-		void *addr;
 
 		/* kmem_alloc could block so we return if noblock */
 		if (!canblock) {
 			return(NULL);
 		}
 
+#if KASAN_KALLOC
+		/* large allocation - use guard pages instead of small redzones */
+		size = round_page(req_size + 2 * PAGE_SIZE);
+		assert(size >= MAX_SIZE_ZDLUT && size >= kalloc_max_prerounded);
+#endif
+
 		if (size >= kalloc_kernmap_size)
 		        alloc_map = kernel_map;
 		else
 			alloc_map = kalloc_map;
 
-		vm_tag_t tag;
-		tag = (site ? tag = vm_tag_alloc(site) : VM_KERN_MEMORY_KALLOC);
+		if (site) tag = vm_tag_alloc(site);
 
 		if (kmem_alloc_flags(alloc_map, (vm_offset_t *)&addr, size, tag, KMA_ATOMIC) != KERN_SUCCESS) {
 			if (alloc_map != kernel_map) {
@@ -629,7 +678,12 @@ kalloc_canblock(
 
 			KALLOC_ZINFO_SALLOC(size);
 		}
+#if KASAN_KALLOC
+		/* fixup the return address to skip the redzone */
+		addr = (void *)kasan_alloc((vm_offset_t)addr, size, req_size, PAGE_SIZE);
+#else
 		*psize = round_page(size);
+#endif
 		return(addr);
 	}
 #ifdef KALLOC_DEBUG
@@ -637,9 +691,29 @@ kalloc_canblock(
 		panic("%s: z %p (%s) but requested size %lu", __func__,
 		    z, z->zone_name, (unsigned long)size);
 #endif
+
 	assert(size <= z->elem_size);
+
+#if VM_MAX_TAG_ZONES
+    if (z->tags && site)
+    {
+		tag = vm_tag_alloc(site);
+		if (!canblock && !vm_allocation_zone_totals[tag]) tag = VM_KERN_MEMORY_KALLOC;
+    }
+#endif
+
+	addr =  zalloc_canblock_tag(z, canblock, size, tag);
+
+#if KASAN_KALLOC
+	/* fixup the return address to skip the redzone */
+	addr = (void *)kasan_alloc((vm_offset_t)addr, z->elem_size, req_size, KASAN_GUARD_SIZE);
+
+	/* For KASan, the redzone lives in any additional space, so don't
+	 * expand the allocation. */
+#else
 	*psize = z->elem_size;
-	void *addr = zalloc_canblock(z, canblock);
+#endif
+
 	return addr;
 }
 
@@ -661,6 +735,20 @@ kfree(
 	vm_size_t	size)
 {
 	zone_t z;
+
+#if KASAN_KALLOC
+	/*
+	 * Resize back to the real allocation size and hand off to the KASan
+	 * quarantine. `data` may then point to a different allocation.
+	 */
+	vm_size_t user_size = size;
+	kasan_check_free((vm_address_t)data, size, KASAN_HEAP_KALLOC);
+	data = (void *)kasan_dealloc((vm_address_t)data, &size);
+	kasan_free(&data, &size, KASAN_HEAP_KALLOC, NULL, user_size, true);
+	if (!data) {
+		return;
+	}
+#endif
 
 	if (size < MAX_SIZE_ZDLUT)
 		z = get_zone_dlut(size);
@@ -731,35 +819,6 @@ kalloc_zone(
 	return (ZONE_NULL);
 }
 #endif
-
-void
-kalloc_fake_zone_init(int zone_index)
-{
-	kalloc_fake_zone_index = zone_index;
-}
-
-void
-kalloc_fake_zone_info(int *count, 
-		      vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size, vm_size_t *alloc_size,
-		      uint64_t *sum_size, int *collectable, int *exhaustable, int *caller_acct)
-{
-	*count      = kalloc_large_inuse;
-	*cur_size   = kalloc_large_total;
-	*max_size   = kalloc_large_max;
-
-	if (kalloc_large_inuse) {
-		*elem_size  = kalloc_large_total / kalloc_large_inuse;
-		*alloc_size = kalloc_large_total / kalloc_large_inuse;
-	} else {
-		*elem_size  = 0;
-		*alloc_size = 0;
-	}
-	*sum_size   = kalloc_large_sum;
-	*collectable = 0;
-	*exhaustable = 0;
-	*caller_acct = 0;
-}
-
 
 void
 OSMalloc_init(

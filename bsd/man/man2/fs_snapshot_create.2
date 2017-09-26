@@ -1,0 +1,201 @@
+.\" Copyright (c) 2017 Apple Computer, Inc. All rights reserved.
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\"     @(#)fs_snapshot_create.2
+.
+.Dd July 4th, 2017
+.Dt FS_SNAPSHOT_CREATE 2
+.Os Darwin
+.Sh NAME
+.Nm fs_snasphot_create
+.Nd create read only snapshot of a mounted filesystem
+.Sh SYNOPSIS
+.Fd #include <sys/attr.h>
+.Fd #include <sys/snapshot.h>
+.Pp
+.Ft int
+.Fn fs_snapshot_create  "int dirfd" "const char * name" "uint32_t flags"
+.
+.Ft int
+.Fn fs_snapshot_delete  "int dirfd" "const char * name" "uint32_t flags"
+.
+.Ft int
+.Fn fs_snapshot_list  "int dirfd" "struct attrlist * name" "void * attrbuf" "size_t bufsize" "uint32_t flags"
+.
+.Ft int
+.Fn fs_snapshot_rename  "int dirfd" "const char * old" "const char * new" "uint32_t flags"
+.
+.Ft int
+.Fn fs_snapshot_mount  "int dirfd" "const char * dir" "const char * snapshot" "uint32_t flags"
+.
+.Ft int
+.Fn fs_snapshot_revert  "int dirfd" "const char * name" "uint32_t flags"
+.
+.Sh DESCRIPTION
+The
+.Fn fs_snapshot_create
+function, for supported Filesystems, causes a snapshot  of the Filesystem to be created. A snapshot is a read only copy
+of the filesystem frozen at a point in time.  The Filesystem is identified by the the
+.Fa dirfd
+parameter which should be a file descriptor associated with the root directory of the filesystem for the snapshot is to be created.
+.Fa name
+can be any valid name for a component name (except . and ..).
+.
+The
+.Fn fs_snapshot_delete
+function causes the named snapshot
+.Fa name
+to be deleted and the
+.Fn fs_snapshot_rename
+function causes the named snapshot
+.Fa old
+to be renamed to the name
+.Fa new .
+Available snapshots along with their attributes can be listed by calling
+.Fn fs_snapshot_list
+which is to be used in exactly the same way as
+.Xr getattrlistbulk 2 .
+.
+The
+.Fa flags
+parameter specifies the options that can be passed. No options are currently defined.
+.Pp
+Snapshots may be useful for backing up the Filesystem and to restore the Filesystem to a previous state.
+Snapshots are expected to consume no additional storage on creation but  might consume additional storage as the active
+Filesystem is modified. Similarly deletion of files on the active filesystem may not result in the storage being available
+if the snapshot contains the file. Additionally, the underlying Filesystem may impose a limit on the number
+of snapshots that can be taken. For supporting Filesystems, a snapshot may be used as a source for a mount. This can be done
+by the
+.Fn fs_snapshot_mount
+function. The snapshot will be mounted read only. When a snapshot is mounted, it cannot be deleted but it can be renamed.
+To revert the filesystem to a previous snapshot, the
+.Fn fs_snapshot_revert
+can be used. It should be noted that reverting a filesystem to a snapshot is a destructive operation and causes all
+changes made to the filesystem (including snapshots created after the snapshot being reverted to) to be lost.
+.
+.Pp
+All snapshot functions  require superuser privileges and also require an additional entitlement.
+.
+.Sh RETURN VALUES
+Upon successful completion,
+.Fn fs_snapshot_create
+,
+.Fn fs_snapshot_delete
+,
+.Fn fs_snapshot_rename
+and
+.Fn fs_snapshot_list
+returns 0. Otherwise, a value of -1 is returned and errno is set to indicate the error.
+.Pp
+.Sh COMPATIBILITY 
+Not all volumes support snapshots. A volume can be tested for snapshot support
+by using
+.Xr getattrlist 2
+to get the volume capabilities attribute ATTR_VOL_CAPABILITIES, and then testing the VOL_CAP_INT_SNAPSHOT flag.
+.Pp
+.Sh ERRORS
+The
+.Fn fs_snapshot_create
+,
+.Fn fs_snapshot_delete
+,
+.Fn fs_snapshot_rename
+and
+.Fn fs_snapshot_list
+function will fail if:
+.Bl -tag -width Er
+.
+.It Bq Er EACCES 
+Read permissions are denied for the caller on the filesystem
+.
+.It Bq Er ENOTSUP
+The underlying filesystem does not support this call.
+.
+.It Bq Er EINVAL
+The value of the 
+.Fa flags
+parameter is invalid.
+.
+.It Bq Er ENOSPC
+There is no free space remaining on the file system containing the file. 
+.
+.It Bq Er ENOSPC
+The limit for the maximum number of snapshots for a filesystem has been reached.
+.
+.It Bq Er EIO
+An I/O error occurred while reading from or writing to the file system.
+.
+.It Bq Er EPERM
+The calling process does not have appropriate privileges.
+.
+.It Bq Er EROFS
+The requested operation requires modifications in a read-only file system.
+.
+.It Bq Er ENAMETOOLONG
+The length of a component of a pathname is longer than {NAME_MAX}.
+.
+.It Bq Er EBADF
+dirfd is not a valid file descriptor.
+.
+.It Bq Er ENOTDIR
+dirfd is a file descriptor associated with a non-directory file.
+.El
+.Pp
+In addition, the
+.Fn fs_snapshot_create
+or
+.Fn fs_snapshot_rename
+functions may fail with the following errors
+.Bl -tag -width Er                                                                 
+.It Bq Er EEXIST
+The The named snapshot to be created already exists or the new name already
+exists for the snapshot being renamed.
+.
+.El
+.Pp
+.Fn fs_snapshot_create
+or
+.Fn fs_snapshot_rename
+functions may fail with the following errors
+.Bl -tag -width Er
+.It Bq Er ENOENT
+The named snapshot does not exist.
+.El  
+.
+.Pp
+.Fn fs_snapshot_delete
+function may fail with
+.Bl -tag -width Er
+.It Bq Er EBUSY
+The named snapshot is currently mounted.
+.El
+.
+.Sh SEE ALSO
+.
+.Xr getattrlist 2 ,
+.Xr getattrlistbulk 2
+.
+.Sh HISTORY
+The 
+.Fn fs_snapshot_create
+,
+.Fn fs_snapshot_delete
+,
+.Fn fs_snapshot_delete
+and
+.Fn fs_snapshot_list
+function calls appeared in macOS version 10.13
+.

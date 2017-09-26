@@ -59,6 +59,7 @@ class IOMapper : public IOService
     // Give the platform expert access to setMapperRequired();
     friend class IOPlatformExpert;
     friend class IOMemoryDescriptor;
+    friend class IOGeneralMemoryDescriptor;
 
 private:
     enum SystemMapperState {
@@ -69,7 +70,8 @@ private:
     };
 protected:
 #ifdef XNU_KERNEL_PRIVATE
-    uint64_t   __reservedA[7];
+    uint64_t   __reservedA[6];
+    kern_allocation_name_t fAllocName;
     uint32_t   __reservedB;
     uint32_t   fPageSize;
 #else

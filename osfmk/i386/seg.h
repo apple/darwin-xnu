@@ -177,10 +177,14 @@ struct fake_descriptor64 {
 	uint32_t	reserved:32;		/* reserved/zero */
 };
 
+typedef struct __attribute__((packed)) {
+	uint16_t	size;
+	void		*ptr;
+} x86_64_desc_register_t;
+
 /*
  * Boot-time data for master (or only) CPU
  */
-extern struct fake_descriptor	master_idt[IDTSZ];
 extern struct real_descriptor	master_gdt[GDTSZ];
 extern struct real_descriptor	master_ldt[LDTSZ];
 extern struct i386_tss		master_ktss;

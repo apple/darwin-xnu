@@ -74,6 +74,8 @@
 #include <kern/timer.h>
 #include <kern/affinity.h>
 
+#include <stdatomic.h>
+
 #include <security/mac_mach_internal.h>
 
 static void act_abort(thread_t thread);
@@ -191,26 +193,27 @@ kern_return_t
 thread_terminate(
 	thread_t		thread)
 {
-	kern_return_t	result;
-
 	if (thread == THREAD_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (	thread->task == kernel_task		&&
-			thread != current_thread()			)
+	/* Kernel threads can't be terminated without their own cooperation */
+	if (thread->task == kernel_task && thread != current_thread())
 		return (KERN_FAILURE);
 
-	result = thread_terminate_internal(thread);
+	kern_return_t result = thread_terminate_internal(thread);
 
 	/*
-	 * If a kernel thread is terminating itself, force an AST here.
-	 * Kernel threads don't normally pass through the AST checking
-	 * code - and all threads finish their own termination in mach_apc_ast.
+	 * If a kernel thread is terminating itself, force handle the APC_AST here.
+	 * Kernel threads don't pass through the return-to-user AST checking code,
+	 * but all threads must finish their own termination in thread_apc_ast.
 	 */
 	if (thread->task == kernel_task) {
-		ml_set_interrupts_enabled(FALSE);
-		ast_taken(AST_APC, TRUE);
+		assert(thread->active == FALSE);
+		thread_ast_clear(thread, AST_APC);
+		thread_apc_ast(thread);
+
 		panic("thread_terminate");
+		/* NOTREACHED */
 	}
 
 	return (result);
@@ -836,7 +839,7 @@ thread_set_apc_ast_locked(thread_t thread)
 	thread_ast_set(thread, AST_APC);
 
 	if (thread == current_thread()) {
-		ast_propagate(thread->ast);
+		ast_propagate(thread);
 	} else {
 		processor_t processor = thread->last_processor;
 
@@ -884,6 +887,7 @@ thread_suspended(__unused void *parameter, wait_result_t result)
 		if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
 			thread->sched_pri = DEPRESSPRI;
 			thread->last_processor->current_pri = thread->sched_pri;
+			thread->last_processor->current_perfctl_class = thread_get_perfcontrol_class(thread);
 
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_CHANGE_PRIORITY),
 			                      (uintptr_t)thread_tid(thread),
@@ -1002,7 +1006,7 @@ act_set_ast(
 
 	if (thread == current_thread()) {
 		thread_ast_set(thread, ast);
-		ast_propagate(thread->ast);
+		ast_propagate(thread);
 	} else {
 		processor_t processor;
 
@@ -1024,6 +1028,27 @@ act_set_astbsd(
 	thread_t	thread)
 {
 	act_set_ast( thread, AST_BSD );
+}
+
+void
+act_set_astkevent(thread_t thread, uint16_t bits)
+{
+	spl_t s = splsched();
+
+	/*
+	 * Do not send an IPI if the thread is running on
+	 * another processor, wait for the next quantum
+	 * expiration to load the AST.
+	 */
+
+	atomic_fetch_or(&thread->kevent_ast_bits, bits);
+	thread_ast_set(thread, AST_KEVENT);
+
+	if (thread == current_thread()) {
+		ast_propagate(thread);
+	}
+
+	splx(s);
 }
 
 void

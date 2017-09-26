@@ -154,7 +154,7 @@ flipc_port_destroy(ipc_port_t lport)
     int m = port_mq->data.port.msgcount;
     if (m > 0) {
         ipc_kmsg_t kmsg;
-#ifdef DEBUG
+#if DEBUG
         printf("flipc: destroying %p with %d undelivered msgs\n", lport, m);
 #endif
 

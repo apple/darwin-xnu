@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,6 +79,7 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/ip.h>
+#include <netinet/ip_var.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
@@ -204,7 +205,7 @@ frag6_restore_context(struct mbuf *m)
 static void
 frag6_icmp6_paramprob_error(struct fq6_head *diq6)
 {
-	lck_mtx_assert(&ip6qlock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&ip6qlock, LCK_MTX_ASSERT_NOTOWNED);
 
 	if (!MBUFQ_EMPTY(diq6)) {
 		struct mbuf *merr, *merr_tmp;
@@ -227,7 +228,7 @@ frag6_icmp6_paramprob_error(struct fq6_head *diq6)
 static void
 frag6_icmp6_timeex_error(struct fq6_head *diq6)
 {
-	lck_mtx_assert(&ip6qlock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&ip6qlock, LCK_MTX_ASSERT_NOTOWNED);
 
 	if (!MBUFQ_EMPTY(diq6)) {
 		struct mbuf *m, *m_tmp;
@@ -387,20 +388,24 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	 * as that is the most common case.
 	 *
 	 * Perform 1's complement adjustment of octets that got included/
-	 * excluded in the hardware-calculated checksum value.
+	 * excluded in the hardware-calculated checksum value.  Also take
+	 * care of any trailing bytes and subtract out their partial sum.
 	 */
 	if (ip6f->ip6f_nxt == IPPROTO_UDP &&
 	    offset == (sizeof (*ip6) + sizeof (*ip6f)) &&
 	    (m->m_pkthdr.csum_flags &
 	    (CSUM_DATA_VALID | CSUM_PARTIAL | CSUM_PSEUDO_HDR)) ==
 	    (CSUM_DATA_VALID | CSUM_PARTIAL)) {
-		uint32_t start;
+		uint32_t start = m->m_pkthdr.csum_rx_start;
+		uint32_t ip_len = (sizeof (*ip6) + ntohs(ip6->ip6_plen));
+		int32_t trailer = (m_pktlen(m) - ip_len);
+		uint32_t swbytes = (uint32_t)trailer;
 
-		start = m->m_pkthdr.csum_rx_start;
 		csum = m->m_pkthdr.csum_rx_val;
 
-		if (start != offset) {
-			uint16_t s, d;
+		ASSERT(trailer >= 0);
+		if (start != offset || trailer != 0) {
+			uint16_t s = 0, d = 0;
 
 			if (IN6_IS_SCOPE_EMBED(&ip6->ip6_src)) {
 				s = ip6->ip6_src.s6_addr16[1];
@@ -412,7 +417,12 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 			}
 
 			/* callee folds in sum */
-			csum = m_adj_sum16(m, start, offset, csum);
+			csum = m_adj_sum16(m, start, offset,
+			    (ip_len - offset), csum);
+			if (offset > start)
+				swbytes += (offset - start);
+			else
+				swbytes += (start - offset);
 
 			if (IN6_IS_SCOPE_EMBED(&ip6->ip6_src))
 				ip6->ip6_src.s6_addr16[1] = s;
@@ -421,6 +431,11 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 
 		}
 		csum_flags = m->m_pkthdr.csum_flags;
+
+		if (swbytes != 0)
+			udp_in6_cksum_stats(swbytes);
+		if (trailer != 0)
+			m_adj(m, -trailer);
 	} else {
 		csum = 0;
 		csum_flags = 0;
@@ -873,7 +888,7 @@ frag6_freef(struct ip6q *q6, struct fq6_head *dfq6, struct fq6_head *diq6)
 {
 	struct ip6asfrag *af6, *down6;
 
-	lck_mtx_assert(&ip6qlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ip6qlock, LCK_MTX_ASSERT_OWNED);
 
 	for (af6 = q6->ip6q_down; af6 != (struct ip6asfrag *)q6;
 	     af6 = down6) {
@@ -916,7 +931,7 @@ frag6_freef(struct ip6q *q6, struct fq6_head *dfq6, struct fq6_head *diq6)
 void
 frag6_enq(struct ip6asfrag *af6, struct ip6asfrag *up6)
 {
-	lck_mtx_assert(&ip6qlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ip6qlock, LCK_MTX_ASSERT_OWNED);
 
 	af6->ip6af_up = up6;
 	af6->ip6af_down = up6->ip6af_down;
@@ -930,7 +945,7 @@ frag6_enq(struct ip6asfrag *af6, struct ip6asfrag *up6)
 void
 frag6_deq(struct ip6asfrag *af6)
 {
-	lck_mtx_assert(&ip6qlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ip6qlock, LCK_MTX_ASSERT_OWNED);
 
 	af6->ip6af_up->ip6af_down = af6->ip6af_down;
 	af6->ip6af_down->ip6af_up = af6->ip6af_up;
@@ -939,7 +954,7 @@ frag6_deq(struct ip6asfrag *af6)
 void
 frag6_insque(struct ip6q *new, struct ip6q *old)
 {
-	lck_mtx_assert(&ip6qlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ip6qlock, LCK_MTX_ASSERT_OWNED);
 
 	new->ip6q_prev = old;
 	new->ip6q_next = old->ip6q_next;
@@ -950,7 +965,7 @@ frag6_insque(struct ip6q *new, struct ip6q *old)
 void
 frag6_remque(struct ip6q *p6)
 {
-	lck_mtx_assert(&ip6qlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ip6qlock, LCK_MTX_ASSERT_OWNED);
 
 	p6->ip6q_prev->ip6q_next = p6->ip6q_next;
 	p6->ip6q_next->ip6q_prev = p6->ip6q_prev;
@@ -1021,7 +1036,7 @@ frag6_timeout(void *arg)
 static void
 frag6_sched_timeout(void)
 {
-	lck_mtx_assert(&ip6qlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ip6qlock, LCK_MTX_ASSERT_OWNED);
 
 	if (!frag6_timeout_run && frag6_nfragpackets > 0) {
 		frag6_timeout_run = 1;
@@ -1125,7 +1140,7 @@ ip6af_free(struct ip6asfrag *af6)
 static void
 ip6q_updateparams(void)
 {
-	lck_mtx_assert(&ip6qlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ip6qlock, LCK_MTX_ASSERT_OWNED);
 	/*
 	 * -1 for unlimited allocation.
 	 */

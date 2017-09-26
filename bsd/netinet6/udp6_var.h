@@ -98,7 +98,7 @@ SYSCTL_DECL(_net_inet6_udp6);
 
 extern struct pr_usrreqs udp6_usrreqs;
 
-extern void udp6_ctlinput(int, struct sockaddr *, void *);
+extern void udp6_ctlinput(int, struct sockaddr *, void *, struct ifnet *);
 extern int udp6_input(struct mbuf **, int *, int);
 extern int udp6_output(struct inpcb *, struct mbuf *, struct sockaddr *,
     struct mbuf *, struct proc *);

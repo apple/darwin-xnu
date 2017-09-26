@@ -1,0 +1,4 @@
+_OSAddAtomic64
+_OSCompareAndSwap64
+__ZN12OSOrderedSet12withCapacityEjPFlPK15OSMetaClassBaseS2_PvES3_
+__ZN12OSOrderedSet16initWithCapacityEjPFlPK15OSMetaClassBaseS2_PvES3_

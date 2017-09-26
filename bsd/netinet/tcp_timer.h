@@ -177,6 +177,8 @@
 #define	TCPTV_PERSMIN	(  5*TCP_RETRANSHZ)	/* retransmit persistence */
 #define	TCPTV_PERSMAX	( 60*TCP_RETRANSHZ)	/* maximum persist interval */
 
+extern int tcptv_persmin_val;
+
 #define	TCPTV_KEEP_INIT	( 75*TCP_RETRANSHZ)	/* connect keep alive */
 #define	TCPTV_KEEP_IDLE	(120*60*TCP_RETRANSHZ)	/* time before probing */
 #define	TCPTV_KEEPINTVL	( 75*TCP_RETRANSHZ)	/* default probe interval */
@@ -248,6 +250,7 @@ struct tcptimerlist {
 	lck_grp_attr_t *mtx_grp_attr;	/* mutex group attributes */
 	thread_call_t call;	/* call entry */
 	uint32_t runtime;	/* time at which this list is going to run */
+	uint32_t schedtime;	/* time at which this list was scheduled */
 	uint32_t entries;	/* Number of entries on the list */
 	uint32_t maxentries;	/* Max number of entries at any time */
 

@@ -232,3 +232,47 @@ inet6_cksum(struct mbuf *m, uint32_t nxt, uint32_t off, uint32_t len)
 
 	return (~sum & 0xffff);
 }
+
+/*
+ * buffer MUST contain at least an IPv6 header, if nxt is specified;
+ * nxt is the upper layer protocol number;
+ * off is an offset where TCP/UDP/ICMP6 header starts;
+ * len is a total length of a transport segment (e.g. TCP header + TCP payload)
+ */
+u_int16_t
+inet6_cksum_buffer(const uint8_t *buffer, uint32_t nxt, uint32_t off,
+    uint32_t len)
+{
+	uint32_t sum;
+
+	if (off >= len)
+		panic("%s: off (%d) >= len (%d)", __func__, off, len);
+
+	sum = b_sum16(&((const uint8_t *)buffer)[off], len);
+
+	if (nxt != 0) {
+		const struct ip6_hdr *ip6;
+		unsigned char buf[sizeof (*ip6)] __attribute__((aligned(8)));
+
+		/*
+		 * In case the IPv6 header is not contiguous, or not 32-bit
+		 * aligned, copy it to a local buffer.  Note here that we
+		 * expect the data pointer to point to the IPv6 header.
+		 */
+		if (!IP6_HDR_ALIGNED_P(buffer)) {
+			memcpy(buf, buffer, sizeof (*ip6));
+			ip6 = (const struct ip6_hdr *)(const void *)buf;
+		} else {
+			ip6 = (const struct ip6_hdr *)buffer;
+		}
+
+		/* add pseudo header checksum */
+		sum += in6_pseudo(&ip6->ip6_src, &ip6->ip6_dst,
+		    htonl(nxt + len));
+
+		/* fold in carry bits */
+		ADDCARRY(sum);
+	}
+
+	return (~sum & 0xffff);
+}

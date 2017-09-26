@@ -54,6 +54,8 @@
  * the rights to redistribute these changes.
  */
 
+#include <stddef.h>
+
 #include <mach_ldebug.h>
 
 /*
@@ -83,9 +85,6 @@
 #include <mach/i386/thread_status.h>
 #include <machine/commpage.h>
 #include <pexpert/i386/boot.h>
-
-#undef offsetof
-#include <stddef.h>
 
 #if	CONFIG_DTRACE
 #define NEED_DTRACE_DEFS
@@ -193,19 +192,19 @@ main(
 	DECLARE("MAP_PMAP",	offsetof(struct _vm_map, pmap));
 
 #define IEL_SIZE		(sizeof(struct i386_exception_link *))
-	DECLARE("IKS_SIZE",	sizeof(struct x86_kernel_state));
+	DECLARE("IKS_SIZE",	sizeof(struct thread_kernel_state));
 
 	/*
 	 * KSS_* are offsets from the top of the kernel stack (cpu_kernel_stack)
 	 */
-	DECLARE("KSS_RBX",	offsetof(struct x86_kernel_state, k_rbx));
-	DECLARE("KSS_RSP",	offsetof(struct x86_kernel_state, k_rsp));
-	DECLARE("KSS_RBP",	offsetof(struct x86_kernel_state, k_rbp));
-	DECLARE("KSS_R12",	offsetof(struct x86_kernel_state, k_r12));
-	DECLARE("KSS_R13",	offsetof(struct x86_kernel_state, k_r13));
-	DECLARE("KSS_R14",	offsetof(struct x86_kernel_state, k_r14));
-	DECLARE("KSS_R15",	offsetof(struct x86_kernel_state, k_r15));
-	DECLARE("KSS_RIP",	offsetof(struct x86_kernel_state, k_rip));	
+	DECLARE("KSS_RBX",	offsetof(struct thread_kernel_state, machine.k_rbx));
+	DECLARE("KSS_RSP",	offsetof(struct thread_kernel_state, machine.k_rsp));
+	DECLARE("KSS_RBP",	offsetof(struct thread_kernel_state, machine.k_rbp));
+	DECLARE("KSS_R12",	offsetof(struct thread_kernel_state, machine.k_r12));
+	DECLARE("KSS_R13",	offsetof(struct thread_kernel_state, machine.k_r13));
+	DECLARE("KSS_R14",	offsetof(struct thread_kernel_state, machine.k_r14));
+	DECLARE("KSS_R15",	offsetof(struct thread_kernel_state, machine.k_r15));
+	DECLARE("KSS_RIP",	offsetof(struct thread_kernel_state, machine.k_rip));
 	
 	DECLARE("DS_DR0",	offsetof(struct x86_debug_state32, dr0));
 	DECLARE("DS_DR1",	offsetof(struct x86_debug_state32, dr1));
@@ -337,10 +336,8 @@ main(
 		offsetof(cpu_data_t, cpu_kernel_stack));
         DECLARE("CPU_INT_STACK_TOP",
 		offsetof(cpu_data_t, cpu_int_stack_top));
-#if	MACH_RT
         DECLARE("CPU_PREEMPTION_LEVEL",
 		offsetof(cpu_data_t, cpu_preemption_level));
-#endif	/* MACH_RT */
         DECLARE("CPU_HIBERNATE",
 		offsetof(cpu_data_t, cpu_hibernate));
         DECLARE("CPU_INTERRUPT_LEVEL",

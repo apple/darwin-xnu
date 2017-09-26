@@ -64,6 +64,7 @@ enum {
     kIOServiceRecursing		= 0x00100000,
     kIOServiceNeedWillTerminate = 0x00080000,
     kIOServiceWaitDetachState   = 0x00040000,
+    kIOServiceConfigRunning     = 0x00020000,
 };
 
 // notify state
@@ -88,6 +89,7 @@ public:
     OSOrderedSet *			whence;
 
     OSDictionary *			matching;
+    const OSSymbol *                    type;
     IOServiceMatchingNotificationHandler handler;
     IOServiceNotificationHandler	compatHandler;
     void *				target;

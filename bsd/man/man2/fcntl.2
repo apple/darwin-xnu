@@ -188,11 +188,11 @@ A value of zero in
 turns data caching on.
 .It Dv F_LOG2PHYS
 Get disk device information.
-Currently this only includes the
+Currently this only returns the
 disk device address that corresponds
-to the current file offset. Note that if the
-file offset is not backed by physical blocks
-we can return -1 as the offset. This is subject
+to the current file offset. Note that the system 
+may return -1 as the disk device address if the file is not 
+backed by physical blocks. This is subject
 to change.
 .It Dv F_LOG2PHYS_EXT
 Variant of F_LOG2PHYS that uses the passed in

@@ -60,7 +60,6 @@
 #include <sys/appleapiopts.h>
 
 #ifdef PRIVATE
-
 #include <netinet/ip_flowid.h>
 
 /* Apply ipv6 mask on ipv6 addr */
@@ -156,8 +155,11 @@ struct dn_heap {
  * processing requirements.
  */
 #ifdef KERNEL
+#include <net/if_var.h>
+#include <net/route.h>
 #include <netinet/ip_var.h>	/* for ip_out_args */
 #include <netinet/ip6.h>	/* for ip6_out_args */
+#include <netinet/in.h>
 #include <netinet6/ip6_var.h>	/* for ip6_out_args */
 
 struct dn_pkt_tag {
@@ -418,7 +420,7 @@ struct dn_pipe {		/* a pipe */
 SLIST_HEAD(dn_pipe_head, dn_pipe);
 
 #ifdef BSD_KERNEL_PRIVATE
-
+extern uint32_t my_random(void);
 void ip_dn_init(void); /* called from raw_ip.c:load_ipfw() */
 
 typedef	int ip_dn_ctl_t(struct sockopt *); /* raw_ip.c */
@@ -678,8 +680,6 @@ struct dn_pipe_64 {		/* a pipe */
     struct dn_flow_set_64 fs ; /* used with fixed-rate flows */
 };
 
-
-
 /*
  * Return the IPFW rule associated with the dummynet tag; if any.
  * Make sure that the dummynet tag is not reused by lower layers.
@@ -695,6 +695,64 @@ ip_dn_claim_rule(struct mbuf *m)
 	} else
 		return (NULL);
 }
+
+#include <sys/eventhandler.h>
+/* Dummynet event handling declarations */
+extern struct eventhandler_lists_ctxt dummynet_evhdlr_ctxt;
+extern void dummynet_init(void);
+
+struct dn_pipe_mini_config {
+	uint32_t bandwidth;
+	uint32_t delay;
+	uint32_t plr;
+};
+
+struct dn_rule_mini_config {
+	uint32_t dir;
+	uint32_t af;
+	uint32_t proto;
+	/*
+	 * XXX PF rules actually define ranges of ports and
+	 * along with range goes an opcode ((not) equal to, less than
+	 * greater than, etc.
+	 * For now the following works assuming there's no port range
+	 * and the rule is for specific port.
+	 * Also the operation is assumed as equal to.
+	 */
+	uint32_t src_port;
+	uint32_t dst_port;
+	char ifname[IFXNAMSIZ];
+};
+
+struct dummynet_event {
+	uint32_t dn_event_code;
+	union {
+		struct dn_pipe_mini_config _dnev_pipe_config;
+		struct dn_rule_mini_config _dnev_rule_config;
+	} dn_event;
+};
+
+#define	dn_event_pipe_config	dn_event._dnev_pipe_config
+#define	dn_event_rule_config	dn_event._dnev_rule_config
+
+extern void dummynet_event_enqueue_nwk_wq_entry(struct dummynet_event *);
+
+enum {
+	DUMMYNET_RULE_CONFIG,
+	DUMMYNET_RULE_DELETE,
+	DUMMYNET_PIPE_CONFIG,
+	DUMMYNET_PIPE_DELETE,
+	DUMMYNET_NLC_DISABLED,
+};
+
+enum    { DN_INOUT, DN_IN, DN_OUT };
+/*
+ * The signature for the callback is:
+ * eventhandler_entry_arg	__unused
+ * dummynet_event		pointer to dummynet event object
+ */
+typedef void (*dummynet_event_fn) (struct eventhandler_entry_arg, struct dummynet_event *);
+EVENTHANDLER_DECLARE(dummynet_event, dummynet_event_fn);
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* PRIVATE */
 #endif /* _IP_DUMMYNET_H */

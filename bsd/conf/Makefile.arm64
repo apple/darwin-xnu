@@ -1,0 +1,10 @@
+######################################################################
+#BEGIN  Machine dependent Makefile fragment for arm
+######################################################################
+
+# Inline assembly doesn't interact well with LTO
+fbt_arm.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
+
+######################################################################
+#END    Machine dependent Makefile fragment for arm
+######################################################################

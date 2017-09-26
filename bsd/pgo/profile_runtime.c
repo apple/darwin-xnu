@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <machine/machine_routines.h>
 #include <sys/sysproto.h>
 #include <sys/malloc.h>
 #include <sys/systm.h>
@@ -98,9 +99,8 @@ static int write_buffer(int flags, char *buffer)
 int kdp_pgo_reset_counters = 0;
 
 /* called in debugger context */
-static kern_return_t do_pgo_reset_counters(void *context)
+kern_return_t do_pgo_reset_counters()
 {
-#pragma unused(context)
 #ifdef PROFILE
     memset(&__pgo_hib_CountersStart, 0,
            ((uintptr_t)(&__pgo_hib_CountersEnd)) - ((uintptr_t)(&__pgo_hib_CountersStart)));
@@ -111,12 +111,26 @@ static kern_return_t do_pgo_reset_counters(void *context)
 }
 
 static kern_return_t
+kextpgo_trap()
+{
+    return DebuggerTrapWithState(DBOP_RESET_PGO_COUNTERS, NULL, NULL, NULL, 0, FALSE, 0);
+}
+
+static kern_return_t
 pgo_reset_counters()
 {
     kern_return_t r;
+    boolean_t istate;
+
     OSKextResetPgoCountersLock();
+
+    istate = ml_set_interrupts_enabled(FALSE);
+
     kdp_pgo_reset_counters = 1;
-    r = DebuggerWithCallback(do_pgo_reset_counters, NULL, FALSE);
+    r = kextpgo_trap();
+
+    ml_set_interrupts_enabled(istate);
+
     OSKextResetPgoCountersUnlock();
     return r;
 }
@@ -244,7 +258,7 @@ int grab_pgo_data(struct proc *p,
                         goto out;
                     }
 
-                    MALLOC(buffer, char *, size64, M_TEMP, M_WAITOK);
+                    MALLOC(buffer, char *, size64, M_TEMP, M_WAITOK | M_ZERO);
                     if (!buffer) {
                         err = ENOMEM;
                         goto out;
@@ -302,7 +316,7 @@ int grab_pgo_data(struct proc *p,
                 err = EINVAL;
                 goto out;
         } else {
-                MALLOC(buffer, char *, size, M_TEMP, M_WAITOK);
+                MALLOC(buffer, char *, size, M_TEMP, M_WAITOK | M_ZERO);
                 if (!buffer) {
                         err = ENOMEM;
                         goto out;

@@ -139,15 +139,14 @@ exception_deliver(
 	struct exception_action *excp,
 	lck_mtx_t			*mutex)
 {
-	ipc_port_t		exc_port;
+	ipc_port_t		exc_port = IPC_PORT_NULL;
 	exception_data_type_t	small_code[EXCEPTION_CODE_MAX];
 	int			code64;
 	int			behavior;
 	int			flavor;
 	kern_return_t		kr;
-	int use_fast_retrieve = TRUE;
 	task_t task;
-	ipc_port_t thread_port = NULL, task_port = NULL;
+	ipc_port_t thread_port = IPC_PORT_NULL, task_port = IPC_PORT_NULL;
 
 	/*
 	 *  Save work if we are terminating.
@@ -214,21 +213,25 @@ exception_deliver(
 	 * to the next level.
 	 */
 	if (mac_exc_action_check_exception_send(task, excp) != 0) {
-		return KERN_FAILURE;
+		kr = KERN_FAILURE;
+		goto out_release_right;
 	}
 #endif
 
-	if ((thread != current_thread() || exception == EXC_CORPSE_NOTIFY)
-			&& behavior != EXCEPTION_STATE) {
-		use_fast_retrieve = FALSE;
+	if (behavior != EXCEPTION_STATE) {
+		if (thread != current_thread() || exception == EXC_CORPSE_NOTIFY) {
 
-		task_reference(task);
-		task_port = convert_task_to_port(task);
-		/* task ref consumed */
-		thread_reference(thread);
-		thread_port = convert_thread_to_port(thread);
-		/* thread ref consumed */
-
+			task_reference(task);
+			task_port = convert_task_to_port(task);
+			/* task ref consumed */
+			thread_reference(thread);
+			thread_port = convert_thread_to_port(thread);
+			/* thread ref consumed */
+		}
+		else {
+			task_port = retrieve_task_self_fast(thread->task);
+			thread_port = retrieve_thread_self_fast(thread);
+		}
 	}
 
 	switch (behavior) {
@@ -258,38 +261,38 @@ exception_deliver(
 						state, state_cnt,
 						state, &state_cnt);
 			}
-			if (kr == MACH_MSG_SUCCESS && exception != EXC_CORPSE_NOTIFY)
-				kr = thread_setstatus(thread, flavor, 
-						(thread_state_t)state,
-						state_cnt);
+			if (kr == KERN_SUCCESS) {
+				if (exception != EXC_CORPSE_NOTIFY)
+					kr = thread_setstatus(thread, flavor,
+							(thread_state_t)state,
+							state_cnt);
+				goto out_release_right;
+			}
+
 		}
 
-		return kr;
+		goto out_release_right;
 	}
 
 	case EXCEPTION_DEFAULT:
 		c_thr_exc_raise++;
 		if (code64) {
 			kr = mach_exception_raise(exc_port,
-					use_fast_retrieve ? retrieve_thread_self_fast(thread) :
-						thread_port,
-					use_fast_retrieve ? retrieve_task_self_fast(thread->task) :
-						task_port,
+					thread_port,
+					task_port,
 					exception,
 					code, 
 					codeCnt);
 		} else {
 			kr = exception_raise(exc_port,
-					use_fast_retrieve ? retrieve_thread_self_fast(thread) :
-						thread_port,
-					use_fast_retrieve ? retrieve_task_self_fast(thread->task) :
-						task_port,
+					thread_port,
+					task_port,
 					exception,
 					small_code, 
 					codeCnt);
 		}
 
-		return kr;
+		goto out_release_right;
 
 	case EXCEPTION_STATE_IDENTITY: {
 		mach_msg_type_number_t state_cnt;
@@ -304,10 +307,8 @@ exception_deliver(
 			if (code64) {
 				kr = mach_exception_raise_state_identity(
 						exc_port,
-						use_fast_retrieve ? retrieve_thread_self_fast(thread) :
-							thread_port,
-						use_fast_retrieve ? retrieve_task_self_fast(thread->task) :
-							task_port,
+						thread_port,
+						task_port,
 						exception,
 						code, 
 						codeCnt,
@@ -316,10 +317,8 @@ exception_deliver(
 						state, &state_cnt);
 			} else {
 				kr = exception_raise_state_identity(exc_port,
-						use_fast_retrieve ? retrieve_thread_self_fast(thread) :
-							thread_port,
-						use_fast_retrieve ? retrieve_task_self_fast(thread->task) :
-							task_port,
+						thread_port,
+						task_port,
 						exception,
 						small_code, 
 						codeCnt,
@@ -327,19 +326,40 @@ exception_deliver(
 						state, state_cnt,
 						state, &state_cnt);
 			}
-			if (kr == MACH_MSG_SUCCESS && exception != EXC_CORPSE_NOTIFY)
-				kr = thread_setstatus(thread, flavor,
-						(thread_state_t)state,
-						state_cnt);
+
+			if (kr == KERN_SUCCESS) {
+				if (exception != EXC_CORPSE_NOTIFY)
+					kr = thread_setstatus(thread, flavor,
+							(thread_state_t)state,
+							state_cnt);
+				goto out_release_right;
+			}
+
 		}
 
-		return kr;
+		goto out_release_right;
 	}
 
 	default:
 	       panic ("bad exception behavior!");
 	       return KERN_FAILURE; 
 	}/* switch */
+
+out_release_right:
+
+	if (task_port) {
+		ipc_port_release_send(task_port);
+	}
+
+	if (thread_port) {
+		ipc_port_release_send(thread_port);
+	}
+
+	if (exc_port) {
+		ipc_port_release_send(exc_port);
+	}
+
+	return kr;
 }
 
 /*
@@ -446,7 +466,7 @@ exception_triage_thread(
 	 */
 	host_priv = host_priv_self();
 	mutex = &host_priv->lock;
-	
+
 	if (KERN_SUCCESS == check_exc_receiver_dependency(exception, host_priv->exc_actions, mutex))
 	{
 		kr = exception_deliver(thread, exception, code, codeCnt, host_priv->exc_actions, mutex);

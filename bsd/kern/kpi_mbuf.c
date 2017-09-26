@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1572,15 +1572,16 @@ mbuf_last_pkt(const mbuf_t m, u_int32_t *retval)
 errno_t
 mbuf_get_timestamp(mbuf_t m, u_int64_t *ts, boolean_t *valid)
 {
-	if (m == NULL || !(m->m_flags & M_PKTHDR) || ts == NULL ||
-	    valid == NULL)
+	if (m == NULL || !(m->m_flags & M_PKTHDR) || ts == NULL)
 		return (EINVAL);
 
-	if ((m->m_pkthdr.pkt_flags & PKTF_DRV_TS_VALID) == 0) {
-		*valid = FALSE;
+	if ((m->m_pkthdr.pkt_flags & PKTF_TS_VALID) == 0) {
+		if (valid != NULL)
+			*valid = FALSE;
 		*ts = 0;
 	} else {
-		*valid = TRUE;
+		if (valid != NULL)
+			*valid = TRUE;
 		*ts = m->m_pkthdr.pkt_timestamp;
 	}
 	return (0);
@@ -1593,10 +1594,10 @@ mbuf_set_timestamp(mbuf_t m, u_int64_t ts, boolean_t valid)
 		return (EINVAL);
 
 	if (valid == FALSE) {
-		m->m_pkthdr.pkt_flags &= ~PKTF_DRV_TS_VALID;
+		m->m_pkthdr.pkt_flags &= ~PKTF_TS_VALID;
 		m->m_pkthdr.pkt_timestamp = 0;
 	} else {
-		m->m_pkthdr.pkt_flags |= PKTF_DRV_TS_VALID;
+		m->m_pkthdr.pkt_flags |= PKTF_TS_VALID;
 		m->m_pkthdr.pkt_timestamp = ts;
 	}
 	return (0);
@@ -1846,7 +1847,7 @@ m_do_tx_compl_callback(struct mbuf *m, struct ifnet *ifp)
 #if (DEBUG || DEVELOPMENT)
 	if (mbuf_tx_compl_debug != 0 && ifp != NULL &&
 	    (ifp->if_xflags & IFXF_TIMESTAMP_ENABLED) != 0 &&
-	    (m->m_pkthdr.pkt_flags & PKTF_DRV_TS_VALID) == 0) {
+	    (m->m_pkthdr.pkt_flags & PKTF_TS_VALID) == 0) {
 		struct timespec now;
 
 		nanouptime(&now);
@@ -1866,7 +1867,9 @@ m_do_tx_compl_callback(struct mbuf *m, struct ifnet *ifp)
 
 		if (callback != NULL) {
 			callback(m->m_pkthdr.pkt_compl_context,
-			    ifp, m->m_pkthdr.pkt_timestamp,
+			    ifp,
+			    (m->m_pkthdr.pkt_flags & PKTF_TS_VALID) ?
+			    m->m_pkthdr.pkt_timestamp: 0,
 			    m->m_pkthdr.drv_tx_compl_arg,
 			    m->m_pkthdr.drv_tx_compl_data,
 			    m->m_pkthdr.drv_tx_status);

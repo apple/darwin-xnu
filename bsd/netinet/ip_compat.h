@@ -334,9 +334,9 @@ extern	vm_map_t	kmem_map;
 #  define	SPL_X(x)	(void) splx(x)
 # else
 #  if !SOLARIS && !defined(linux)
-#   define	SPL_IMP(x)	x = splimp()
-#   define	SPL_NET(x)	x = splnet()
-#   define	SPL_X(x)	(void) splx(x)
+#   define	SPL_IMP(x)	;
+#   define	SPL_NET(x)	;
+#   define	SPL_X(x)	;
 #  endif
 # endif /* NetBSD && NetBSD <= 1991011 && NetBSD >= 199407 */
 # define	PANIC(x,y)	if (x) panic y

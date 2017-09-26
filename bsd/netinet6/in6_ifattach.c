@@ -72,6 +72,7 @@
 #include <net/if_types.h>
 #include <net/route.h>
 #include <net/kpi_protocol.h>
+#include <net/if_llatbl.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -710,7 +711,7 @@ in6_ifattach_prelim(struct ifnet *ifp)
 	 *   (previously, this was a silent error.)
 	 */
 	if ((ifp->if_flags & IFF_MULTICAST) == 0) {
-		nd6log((LOG_INFO, "in6_ifattach: ",
+		nd6log0((LOG_INFO, "in6_ifattach: ",
 		    "%s is not multicast capable, IPv6 not enabled\n",
 		    if_name(ifp)));
 		return (EINVAL);
@@ -732,6 +733,7 @@ skipmcast:
 		pbuf = (void **)((intptr_t)base - sizeof(void *));
 		*pbuf = ext;
 		ifp->if_inet6data = base;
+		IN6_IFEXTRA(ifp)->ii_llt = in6_lltattach(ifp);
 		VERIFY(IS_P2ALIGNED(ifp->if_inet6data, sizeof(uint64_t)));
 	} else {
 		/*
@@ -744,6 +746,11 @@ skipmcast:
 		    sizeof(IN6_IFEXTRA(ifp)->icmp6_ifstat));
 		bzero(&IN6_IFEXTRA(ifp)->in6_ifstat,
 		    sizeof(IN6_IFEXTRA(ifp)->in6_ifstat));
+		IN6_IFEXTRA(ifp)->netsig_len = 0;
+		bzero(&IN6_IFEXTRA(ifp)->netsig,
+		    sizeof(IN6_IFEXTRA(ifp)->netsig));
+		bzero(IN6_IFEXTRA(ifp)->nat64_prefixes, sizeof(IN6_IFEXTRA(ifp)->nat64_prefixes));
+		/* XXX TBD Purge the layer two table */
 		/*
 		 * XXX When recycling, nd_ifinfo gets initialized, other
 		 * than the lock, inside nd6_ifattach
@@ -995,10 +1002,13 @@ in6_ifdetach(struct ifnet *ifp)
 	struct in6_multi_mship *imm;
 	int unlinked;
 
-	lck_mtx_assert(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	/* remove neighbor management table */
 	nd6_purge(ifp);
+
+	if (LLTABLE6(ifp))
+		lltable_free(LLTABLE6(ifp));
 
 	/* nuke any of IPv6 addresses we have */
 	lck_rw_lock_exclusive(&in6_ifaddr_rwlock);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,11 +65,8 @@
 #define	ALTQT_CBQ	PKTSCHEDT_CBQ	/* cbq */
 #define	ALTQT_HFSC	PKTSCHEDT_HFSC	/* hfsc */
 #define	ALTQT_PRIQ	PKTSCHEDT_PRIQ	/* priority queue */
-#define ALTQT_FAIRQ	PKTSCHEDT_FAIRQ	/* fairq */
-#define ALTQT_QFQ	PKTSCHEDT_QFQ	/* quick fair queueing */
+#define	ALTQT_FAIRQ	PKTSCHEDT_FAIRQ	/* fairq */
+#define	ALTQT_QFQ	PKTSCHEDT_QFQ	/* quick fair queueing */
 #define	ALTQT_MAX	PKTSCHEDT_MAX	/* should be max disc type + 1 */
 #endif /* PRIVATE */
-#ifdef BSD_KERNEL_PRIVATE
-#include <net/altq/altq_var.h>
-#endif /* BSD_KERNEL_PRIVATE */
 #endif /* _ALTQ_ALTQ_H_ */

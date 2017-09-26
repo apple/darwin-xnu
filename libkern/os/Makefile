@@ -16,9 +16,11 @@ KERNELFILES = \
 	overflow.h
 
 PRIVATE_KERNELFILES = \
-	object_private.h
+	object_private.h \
+	reason_private.h
 
-PRIVATE_DATAFILES =
+PRIVATE_DATAFILES = \
+	reason_private.h
 
 INSTALL_MI_LIST	= \
 	overflow.h

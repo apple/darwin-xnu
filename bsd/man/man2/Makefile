@@ -62,13 +62,19 @@ DATAFILES = \
 	fpathconf.2		\
 	fremovexattr.2		\
 	fsetxattr.2		\
+	fsgetpath.2		\
 	fstat.2			\
 	fstat64.2		\
 	fstatat.2		\
 	fstatfs.2		\
 	fstatfs64.2		\
 	fsync.2			\
+	fs_snapshot_create.2	\
+	fs_snapshot_list.2	\
+	fs_snapshot_delete.2	\
+	fs_snapshot_rename.2	\
 	ftruncate.2		\
+	futimens.2		\
 	futimes.2		\
 	getattrlist.2		\
 	getattrlistat.2		\
@@ -143,7 +149,6 @@ DATAFILES = \
 	poll.2			\
 	posix_madvise.2		\
 	pread.2			\
-	profil.2		\
 	pselect.2		\
 	pthread_setugid_np.2	\
 	ptrace.2		\
@@ -179,6 +184,7 @@ DATAFILES = \
 	sendmsg.2		\
 	sendto.2		\
 	setattrlist.2		\
+	setattrlistat.2		\
 	setaudit.2		\
 	setaudit_addr.2		\
 	setauid.2		\
@@ -227,6 +233,7 @@ DATAFILES = \
 	unlink.2		\
 	unlinkat.2		\
 	unmount.2		\
+	utimensat.2		\
 	utimes.2		\
 	vfork.2			\
 	wait.2			\

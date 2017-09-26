@@ -182,7 +182,7 @@ ccrsa_pubkeylength(ccrsa_pub_ctx_t pubk) {
 
 /* Initialize key based on modulus and e as cc_unit.  key->zp.n must already be set. */
 CC_NONNULL_TU((1)) CC_NONNULL((2, 3))
-void ccrsa_init_pub(ccrsa_pub_ctx_t key, const cc_unit *modulus,
+int ccrsa_init_pub(ccrsa_pub_ctx_t key, const cc_unit *modulus,
                     const cc_unit *e);
 
 /* Initialize key based on modulus and e as big endian byte array

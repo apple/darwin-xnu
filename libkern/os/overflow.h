@@ -131,6 +131,15 @@ __os_warn_unused(__const bool x)
 	_s | _t; \
 }))
 
+/* os_mul3_overflow(a, b, c) -> (a * b * c) */
+#define os_mul3_overflow(a, b, c, res) __os_warn_unused(__extension__({ \
+	__typeof(*(res)) _tmp; \
+	bool _s, _t; \
+	_s = os_mul_overflow((a), (b), &_tmp); \
+	_t = os_mul_overflow((c), _tmp, (res)); \
+	_s | _t; \
+}))
+
 /* os_add_and_mul_overflow(a, b, x) -> (a + b)*x */
 #define os_add_and_mul_overflow(a, b, x, res) __os_warn_unused(__extension__({ \
 	__typeof(*(res)) _tmp; \
@@ -148,5 +157,7 @@ __os_warn_unused(__const bool x)
 	_t = os_add_overflow((b), _tmp, (res)); \
 	_s | _t; \
 }))
+
+#define os_convert_overflow(a, res) os_add_overflow((a), 0, (res))
 
 #endif /* _OS_OVERFLOW_H */

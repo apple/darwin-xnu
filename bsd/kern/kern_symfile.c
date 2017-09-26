@@ -148,7 +148,7 @@ kern_ioctl_file_extents(struct kern_direct_file_io_ref_t * ref, u_long theIoctl,
 	    if (filechunk > (size_t)(end - offset))
 	    filechunk = (size_t)(end - offset);
             error = VNOP_BLOCKMAP(ref->vp, offset, filechunk, &blkno,
-								  &filechunk, NULL, VNODE_WRITE, NULL);
+								  &filechunk, NULL, VNODE_WRITE | VNODE_BLOCKMAP_NO_TRACK, NULL);
             if (error) break;
             if (-1LL == blkno) continue;
             fileblk = blkno * ref->blksize;
@@ -382,7 +382,7 @@ kern_open_file_for_direct_io(const char * name,
             daddr64_t blkno;
 
             error = VNOP_BLOCKMAP(ref->vp, f_offset, filechunk, &blkno,
-								  &filechunk, NULL, VNODE_WRITE, NULL);
+								  &filechunk, NULL, VNODE_WRITE | VNODE_BLOCKMAP_NO_TRACK, NULL);
             if (error) goto out;
             if (-1LL == blkno) continue;
             fileblk = blkno * ref->blksize;

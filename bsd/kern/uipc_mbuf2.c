@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -664,9 +664,8 @@ m_tag_init(struct mbuf *m, int all)
 	 * (e.g. m_dup_pkthdr), don't zero them out.
 	 */
 	if (all) {
-		bzero(m_pftag(m), sizeof (struct pf_mtag));
-		bzero(&m->m_pkthdr.proto_mtag, sizeof (m->m_pkthdr.proto_mtag));
-		bzero(&m->m_pkthdr.necp_mtag, sizeof (m->m_pkthdr.necp_mtag));
+		bzero(&m->m_pkthdr.builtin_mtag._net_mtag,
+		    sizeof (m->m_pkthdr.builtin_mtag._net_mtag));
 	}
 }
 
@@ -825,26 +824,74 @@ m_service_class_from_val(u_int32_t v)
 }
 
 uint16_t
-m_adj_sum16(struct mbuf *m, uint32_t start, uint32_t ulpoff, uint32_t sum)
+m_adj_sum16(struct mbuf *m, uint32_t start, uint32_t dataoff,
+    uint32_t datalen, uint32_t sum)
 {
-	int len = (ulpoff - start);
+	uint32_t total_sub = 0;			/* total to subtract */
+	uint32_t mlen = m_pktlen(m);		/* frame length */
+	uint32_t bytes = (dataoff + datalen);	/* bytes covered by sum */
+	int len;
 
+	ASSERT(bytes <= mlen);
+
+	/*
+	 * Take care of excluding (len > 0) or including (len < 0)
+	 * extraneous octets at the beginning of the packet, taking
+	 * into account the start offset.
+	 */
+	len = (dataoff - start);
+	if (len > 0)
+		total_sub = m_sum16(m, start, len);
+	else if (len < 0)
+		sum += m_sum16(m, dataoff, -len);
+
+	/*
+	 * Take care of excluding any postpended extraneous octets.
+	 */
+	len = (mlen - bytes);
 	if (len > 0) {
-		uint32_t adj = m_sum16(m, start, len);
-		if (adj >= sum)
-			sum = ~(adj - sum) & 0xffff;
+		struct mbuf *m0 = m;
+		uint32_t extra = m_sum16(m, bytes, len);
+		uint32_t off = bytes, off0 = off;
+
+		while (off > 0) {
+			if (__improbable(m == NULL)) {
+				panic("%s: invalid mbuf chain %p [off %u, "
+				    "len %u]", __func__, m0, off0, len);
+				/* NOTREACHED */
+			}
+			if (off < m->m_len)
+				break;
+			off -= m->m_len;
+			m = m->m_next;
+		}
+
+		/* if we started on odd-alignment, swap the value */
+		if ((uintptr_t)(mtod(m, uint8_t *) + off) & 1)
+			total_sub += ((extra << 8) & 0xffff) | (extra >> 8);
 		else
-			sum -= adj;
-	} else if (len < 0) {
-		sum += m_sum16(m, ulpoff, -len);
+			total_sub += extra;
+
+		total_sub = (total_sub >> 16) + (total_sub & 0xffff);
 	}
 
-	ADDCARRY(sum);
+	/*
+	 * 1's complement subtract any extraneous octets.
+	 */
+	if (total_sub != 0) {
+		if (total_sub >= sum)
+			sum = ~(total_sub - sum) & 0xffff;
+		else
+			sum -= total_sub;
+	}
 
-	return (sum);
+	/* fold 32-bit to 16-bit */
+	sum = (sum >> 16) + (sum & 0xffff);	/* 17-bit */
+	sum = (sum >> 16) + (sum & 0xffff);	/* 16-bit + carry */
+	sum = (sum >> 16) + (sum & 0xffff);	/* final carry */
+
+	return (sum & 0xffff);
 }
-
-extern int cpu_in_cksum(struct mbuf *m, int len, int off, uint32_t initial_sum);
 
 uint16_t
 m_sum16(struct mbuf *m, uint32_t off, uint32_t len)
@@ -859,9 +906,10 @@ m_sum16(struct mbuf *m, uint32_t off, uint32_t len)
 	 * a M_PKTHDR one.
 	 */
 	if ((mlen = m_length2(m, NULL)) < (off + len)) {
-		panic("%s: mbuf len (%d) < off+len (%d+%d)\n", __func__,
-		    mlen, off, len);
+		panic("%s: mbuf %p len (%d) < off+len (%d+%d)\n", __func__,
+		    m, mlen, off, len);
+		/* NOTREACHED */
 	}
 
-	return (~cpu_in_cksum(m, len, off, 0) & 0xffff);
+	return (os_cpu_in_cksum_mbuf(m, len, off, 0));
 }

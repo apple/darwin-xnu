@@ -30,6 +30,7 @@
 #define KPERF_ACTION_H
 
 #include <mach/kern_return.h>
+#include <stdbool.h>
 
 /* fwd decl */
 struct kperf_sample;
@@ -47,10 +48,12 @@ struct kperf_context;
 #define SAMPLER_TH_SCHEDULING (1U << 8)
 #define SAMPLER_TH_DISPATCH   (1U << 9)
 #define SAMPLER_TK_SNAPSHOT   (1U << 10)
+#define SAMPLER_SYS_MEM       (1U << 11)
+#define SAMPLER_TH_INSCYC     (1U << 12)
 
 /* flags for sample calls */
 
-/* pend certain samplers until AST boundary, instead of sampling them */
+/* pend samplers requiring copyin until AST boundary */
 #define SAMPLE_FLAG_PEND_USER       (1U << 0)
 /* sample idle threads */
 #define SAMPLE_FLAG_IDLE_THREADS    (1U << 1)
@@ -60,12 +63,19 @@ struct kperf_context;
 #define SAMPLE_FLAG_CONTINUATION    (1U << 3)
 /* sample is occurring outside of interrupt context */
 #define SAMPLE_FLAG_NON_INTERRUPT   (1U << 4)
+/* sample should include system samplers */
+#define SAMPLE_FLAG_SYSTEM          (1U << 5)
+/* sample should not include non-system samplers */
+#define SAMPLE_FLAG_ONLY_SYSTEM     (1U << 6)
 
 /*  Take a sample into "sbuf" using current thread "cur_thread" */
 kern_return_t kperf_sample(struct kperf_sample *sbuf,
                            struct kperf_context *ctx,
                            unsigned actionid,
                            unsigned sample_flags);
+
+/* Whether the action provided samples non-system values. */
+bool kperf_sample_has_non_system(unsigned actionid);
 
 /* return codes from taking a sample
  * either keep trigger, or something went wrong (or we're shutting down)

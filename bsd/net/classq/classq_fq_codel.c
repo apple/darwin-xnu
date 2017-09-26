@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -41,15 +41,19 @@
 #include <kern/zalloc.h>
 #include <netinet/in.h>
 
+#include <net/classq/classq.h>
+#include <net/classq/if_classq.h>
+#include <net/pktsched/pktsched.h>
 #include <net/pktsched/pktsched_fq_codel.h>
 #include <net/classq/classq_fq_codel.h>
 
 static struct zone *flowq_zone = NULL;
-static size_t flowq_size;
 
 #define	FQ_ZONE_MAX	(32 * 1024)	/* across all interfaces */
-#define	FQ_SEQ_LT(a,b)	((int)((a)-(b)) < 0)
-#define	FQ_SEQ_GT(a,b)	((int)((a)-(b)) > 0)
+
+#define	DTYPE_NODROP	0	/* no drop */
+#define	DTYPE_FORCED	1	/* a "forced" drop */
+#define	DTYPE_EARLY	2	/* an "unforced" (early) drop */
 
 void
 fq_codel_init(void)
@@ -57,9 +61,8 @@ fq_codel_init(void)
 	if (flowq_zone != NULL)
 		return;
 
-	flowq_size = sizeof (fq_t);
-	flowq_zone = zinit(flowq_size, FQ_ZONE_MAX * flowq_size,
-	    0, "flowq_zone");
+	flowq_zone = zinit(sizeof (struct flowq),
+	    FQ_ZONE_MAX * sizeof (struct flowq), 0, "flowq_zone");
 	if (flowq_zone == NULL) {
 		panic("%s: failed to allocate flowq_zone", __func__);
 		/* NOTREACHED */
@@ -69,27 +72,29 @@ fq_codel_init(void)
 }
 
 fq_t *
-fq_alloc(int how)
+fq_alloc(classq_pkt_type_t ptype)
 {
 	fq_t *fq = NULL;
-	fq = (how == M_WAITOK) ? zalloc(flowq_zone) :
-	    zalloc_noblock(flowq_zone);
+	fq = zalloc(flowq_zone);
 	if (fq == NULL) {
 		log(LOG_ERR, "%s: unable to allocate from flowq_zone\n");
 		return (NULL);
 	}
 
-	bzero(fq, flowq_size);
-	MBUFQ_INIT(&fq->fq_mbufq);
+	bzero(fq, sizeof (*fq));
+	fq->fq_ptype = ptype;
+	if (ptype == QP_MBUF) {
+		MBUFQ_INIT(&fq->fq_mbufq);
+	}
 	return (fq);
 }
 
 void
 fq_destroy(fq_t *fq)
 {
-	VERIFY(MBUFQ_EMPTY(&fq->fq_mbufq));
+	VERIFY(fq_empty(fq));
 	VERIFY(!(fq->fq_flags & (FQF_NEW_FLOW | FQF_OLD_FLOW)));
-	bzero(fq, flowq_size);
+	VERIFY(fq->fq_bytes == 0);
 	zfree(flowq_zone, fq);
 }
 
@@ -99,7 +104,7 @@ fq_detect_dequeue_stall(fq_if_t *fqs, fq_t *flowq, fq_if_classq_t *fq_cl,
 {
 	u_int64_t maxgetqtime;
 	if (FQ_IS_DELAYHIGH(flowq) || flowq->fq_getqtime == 0 ||
-	    MBUFQ_EMPTY(&flowq->fq_mbufq) ||
+	    fq_empty(flowq) ||
 	    flowq->fq_bytes < FQ_MIN_FC_THRESHOLD_BYTES)
 		return;
 	maxgetqtime = flowq->fq_getqtime + fqs->fqs_update_interval;
@@ -116,61 +121,78 @@ fq_detect_dequeue_stall(fq_if_t *fqs, fq_t *flowq, fq_if_classq_t *fq_cl,
 void
 fq_head_drop(fq_if_t *fqs, fq_t *fq)
 {
-	struct mbuf *m = NULL;
+	pktsched_pkt_t pkt;
+	uint32_t *pkt_flags;
+	uint64_t *pkt_timestamp;
 	struct ifclassq *ifq = fqs->fqs_ifq;
 
-	m = fq_getq_flow(fqs, fq);
-	if (m == NULL)
+	_PKTSCHED_PKT_INIT(&pkt);
+	if (fq_getq_flow_internal(fqs, fq, &pkt) == NULL)
 		return;
 
-	IFCQ_DROP_ADD(ifq, 1, m_length(m));
+	pktsched_get_pkt_vars(&pkt, &pkt_flags, &pkt_timestamp, NULL, NULL,
+	    NULL, NULL);
+
+	*pkt_timestamp = 0;
+	if (pkt.pktsched_ptype == QP_MBUF)
+		*pkt_flags &= ~PKTF_PRIV_GUARDED;
+
+	IFCQ_DROP_ADD(ifq, 1, pktsched_get_pkt_len(&pkt));
 	IFCQ_CONVERT_LOCK(ifq);
-	m_freem(m);
+	pktsched_free_pkt(&pkt);
 }
 
 int
-fq_addq(fq_if_t *fqs, struct mbuf *m, fq_if_classq_t *fq_cl)
+fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 {
-	struct pkthdr *pkt = &m->m_pkthdr;
 	int droptype = DTYPE_NODROP, fc_adv = 0, ret = CLASSQEQ_SUCCESS;
 	u_int64_t now;
 	fq_t *fq = NULL;
+	uint64_t *pkt_timestamp;
+	uint32_t *pkt_flags;
+	uint32_t pkt_flowid, pkt_tx_start_seq;
+	uint8_t pkt_proto, pkt_flowsrc;
 
-	VERIFY(!(pkt->pkt_flags & PKTF_PRIV_GUARDED));
-	pkt->pkt_flags |= PKTF_PRIV_GUARDED;
+	pktsched_get_pkt_vars(pkt, &pkt_flags, &pkt_timestamp, &pkt_flowid,
+	    &pkt_flowsrc, &pkt_proto, &pkt_tx_start_seq);
 
-	if (pkt->pkt_timestamp > 0) {
-		now = pkt->pkt_timestamp;
+	if (pkt->pktsched_ptype == QP_MBUF) {
+		/* See comments in <rdar://problem/14040693> */
+		VERIFY(!(*pkt_flags & PKTF_PRIV_GUARDED));
+		*pkt_flags |= PKTF_PRIV_GUARDED;
+	}
+
+	if (*pkt_timestamp > 0) {
+		now = *pkt_timestamp;
 	} else {
-		now = mach_absolute_time();
-		pkt->pkt_timestamp = now;
+		struct timespec now_ts;
+		nanouptime(&now_ts);
+		now = (now_ts.tv_sec * NSEC_PER_SEC) + now_ts.tv_nsec;
+		*pkt_timestamp = now;
 	}
 
 	/* find the flowq for this packet */
-	fq = fq_if_hash_pkt(fqs, pkt->pkt_flowid, m_get_service_class(m),
-	    now, TRUE);
+	fq = fq_if_hash_pkt(fqs, pkt_flowid, pktsched_get_pkt_svc(pkt),
+	    now, TRUE, pkt->pktsched_ptype);
 	if (fq == NULL) {
 		/* drop the packet if we could not allocate a flow queue */
 		fq_cl->fcl_stat.fcl_drop_memfailure++;
 		IFCQ_CONVERT_LOCK(fqs->fqs_ifq);
-		m_freem(m);
-		return (CLASSQEQ_DROPPED);
+		return (CLASSQEQ_DROP);
 	}
-
-	VERIFY(fq_cl->fcl_service_class ==
-	    (u_int32_t)mbuf_get_service_class(m));
+	VERIFY(fq->fq_ptype == pkt->pktsched_ptype);
 
 	fq_detect_dequeue_stall(fqs, fq, fq_cl, &now);
 
 	if (FQ_IS_DELAYHIGH(fq)) {
 		if ((fq->fq_flags & FQF_FLOWCTL_CAPABLE) &&
-		    (pkt->pkt_flags & PKTF_FLOW_ADV)) {
+		    (*pkt_flags & PKTF_FLOW_ADV)) {
 			fc_adv = 1;
 			/*
 			 * If the flow is suspended or it is not
 			 * TCP, drop the packet
 			 */
-			if (pkt->pkt_proto != IPPROTO_TCP) {
+			if (pkt_proto != IPPROTO_TCP) {
 				droptype = DTYPE_EARLY;
 				fq_cl->fcl_stat.fcl_drop_early++;
 			}
@@ -179,7 +201,7 @@ fq_addq(fq_if_t *fqs, struct mbuf *m, fq_if_classq_t *fq_cl)
 			 * Need to drop a packet, instead of dropping this
 			 * one, try to drop from the head of the queue
 			 */
-			if (!MBUFQ_EMPTY(&fq->fq_mbufq)) {
+			if (!fq_empty(fq)) {
 				fq_head_drop(fqs, fq);
 				droptype = DTYPE_NODROP;
 			} else {
@@ -190,28 +212,17 @@ fq_addq(fq_if_t *fqs, struct mbuf *m, fq_if_classq_t *fq_cl)
 
 	}
 
-	/*
-	 * check if this packet is a retransmission of another pkt already
-	 * in the queue
-	 */
-	if ((pkt->pkt_flags & (PKTF_TCP_REXMT|PKTF_START_SEQ)) ==
-	    (PKTF_TCP_REXMT|PKTF_START_SEQ) && fq->fq_dequeue_seq != 0) {
-		if (FQ_SEQ_GT(pkt->tx_start_seq, fq->fq_dequeue_seq)) {
-			fq_cl->fcl_stat.fcl_dup_rexmts++;
-			droptype = DTYPE_FORCED;
-		}
-	}
-
 	/* Set the return code correctly */
 	if (fc_adv == 1 && droptype != DTYPE_FORCED) {
-		if (fq_if_add_fcentry(fqs, pkt, fq_cl)) {
+		if (fq_if_add_fcentry(fqs, pkt, pkt_flowid, pkt_flowsrc,
+		    fq_cl)) {
 			fq->fq_flags |= FQF_FLOWCTL_ON;
 			/* deliver flow control advisory error */
 			if (droptype == DTYPE_NODROP) {
 				ret = CLASSQEQ_SUCCESS_FC;
 			} else {
 				/* dropped due to flow control */
-				ret = CLASSQEQ_DROPPED_FC;
+				ret = CLASSQEQ_DROP_FC;
 			}
 		} else {
 			/*
@@ -219,7 +230,7 @@ fq_addq(fq_if_t *fqs, struct mbuf *m, fq_if_classq_t *fq_cl)
 			 * better to drop
 			 */
 			droptype = DTYPE_FORCED;
-			ret = CLASSQEQ_DROPPED_FC;
+			ret = CLASSQEQ_DROP_FC;
 			fq_cl->fcl_stat.fcl_flow_control_fail++;
 		}
 	}
@@ -231,13 +242,38 @@ fq_addq(fq_if_t *fqs, struct mbuf *m, fq_if_classq_t *fq_cl)
 	 * tail drop.
 	 */
 	if (droptype == DTYPE_NODROP && fq_if_at_drop_limit(fqs)) {
-		fq_if_drop_packet(fqs);
+		if (fqs->fqs_large_flow == fq) {
+			/*
+			 * Drop from the head of the current fq. Since a
+			 * new packet will be added to the tail, it is ok
+			 * to leave fq in place.
+			 */
+			fq_head_drop(fqs, fq);
+		} else {
+			if (fqs->fqs_large_flow == NULL) {
+				droptype = DTYPE_FORCED;
+				fq_cl->fcl_stat.fcl_drop_overflow++;
+
+				/*
+				 * if this fq was freshly created and there
+				 * is nothing to enqueue, free it
+				 */
+				if (fq_empty(fq) && !(fq->fq_flags &
+				    (FQF_NEW_FLOW | FQF_OLD_FLOW))) {
+					fq_if_destroy_flow(fqs, fq_cl, fq);
+					fq = NULL;
+				}
+			} else {
+				fq_if_drop_packet(fqs);
+			}
+		}
 	}
 
 	if (droptype == DTYPE_NODROP) {
-		MBUFQ_ENQUEUE(&fq->fq_mbufq, m);
-		fq->fq_bytes += m_length(m);
-		fq_cl->fcl_stat.fcl_byte_cnt += m_length(m);
+		uint32_t pkt_len = pktsched_get_pkt_len(pkt);
+		fq_enqueue(fq, pkt->pktsched_pkt);
+		fq->fq_bytes += pkt_len;
+		fq_cl->fcl_stat.fcl_byte_cnt += pkt_len;
 		fq_cl->fcl_stat.fcl_pkt_cnt++;
 
 		/*
@@ -247,8 +283,7 @@ fq_addq(fq_if_t *fqs, struct mbuf *m, fq_if_classq_t *fq_cl)
 		fq_if_is_flow_heavy(fqs, fq);
 	} else {
 		IFCQ_CONVERT_LOCK(fqs->fqs_ifq);
-		m_freem(m);
-		return ((ret != CLASSQEQ_SUCCESS) ? ret : CLASSQEQ_DROPPED);
+		return ((ret != CLASSQEQ_SUCCESS) ? ret : CLASSQEQ_DROP);
 	}
 
 	/*
@@ -267,79 +302,97 @@ fq_addq(fq_if_t *fqs, struct mbuf *m, fq_if_classq_t *fq_cl)
 	return (ret);
 }
 
-struct mbuf *
-fq_getq_flow(fq_if_t *fqs, fq_t *fq)
+void *
+fq_getq_flow_internal(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
 {
-	struct mbuf *m = NULL;
-	struct ifclassq *ifq = fqs->fqs_ifq;
+	void *p;
+	uint32_t plen;
 	fq_if_classq_t *fq_cl;
-	u_int64_t now;
-	int64_t qdelay;
-	struct pkthdr *pkt;
-	u_int32_t mlen;
+	struct ifclassq *ifq = fqs->fqs_ifq;
 
-	MBUFQ_DEQUEUE(&fq->fq_mbufq, m);
-	if (m == NULL)
+	fq_dequeue(fq, p);
+	if (p == NULL)
 		return (NULL);
 
-	mlen = m_length(m);
+	pktsched_pkt_encap(pkt, fq->fq_ptype, p);
+	plen = pktsched_get_pkt_len(pkt);
 
-	VERIFY(fq->fq_bytes >= mlen);
-	fq->fq_bytes -= mlen;
+	VERIFY(fq->fq_bytes >= plen);
+	fq->fq_bytes -= plen;
 
 	fq_cl = &fqs->fqs_classq[fq->fq_sc_index];
-	fq_cl->fcl_stat.fcl_byte_cnt -= mlen;
+	fq_cl->fcl_stat.fcl_byte_cnt -= plen;
 	fq_cl->fcl_stat.fcl_pkt_cnt--;
 	IFCQ_DEC_LEN(ifq);
-	IFCQ_DEC_BYTES(ifq, mlen);
+	IFCQ_DEC_BYTES(ifq, plen);
 
-	pkt = &m->m_pkthdr;
-	now = mach_absolute_time();
+	/* Reset getqtime so that we don't count idle times */
+	if (fq_empty(fq))
+		fq->fq_getqtime = 0;
+
+	return (p);
+}
+
+void *
+fq_getq_flow(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
+{
+	void *p;
+	fq_if_classq_t *fq_cl;
+	u_int64_t now;
+	int64_t qdelay = 0;
+	struct timespec now_ts;
+	uint32_t *pkt_flags, pkt_tx_start_seq;
+	uint64_t *pkt_timestamp;
+
+	p = fq_getq_flow_internal(fqs, fq, pkt);
+	if (p == NULL)
+		return (NULL);
+
+	pktsched_get_pkt_vars(pkt, &pkt_flags, &pkt_timestamp, NULL, NULL,
+	    NULL, &pkt_tx_start_seq);
+
+	nanouptime(&now_ts);
+	now = (now_ts.tv_sec * NSEC_PER_SEC) + now_ts.tv_nsec;
 
 	/* this will compute qdelay in nanoseconds */
-	qdelay = now - pkt->pkt_timestamp;
+	if (now > *pkt_timestamp)
+		qdelay = now - *pkt_timestamp;
+	fq_cl = &fqs->fqs_classq[fq->fq_sc_index];
 
 	if (fq->fq_min_qdelay == 0 ||
 	    (qdelay > 0 && (u_int64_t)qdelay < fq->fq_min_qdelay))
 		fq->fq_min_qdelay = qdelay;
-	if (now >= fq->fq_updatetime || MBUFQ_EMPTY(&fq->fq_mbufq)) {
-		if (fq->fq_min_qdelay >= fqs->fqs_target_qdelay) {
+	if (now >= fq->fq_updatetime) {
+		if (fq->fq_min_qdelay > fqs->fqs_target_qdelay) {
 			if (!FQ_IS_DELAYHIGH(fq))
 				FQ_SET_DELAY_HIGH(fq);
+		} else {
+			FQ_CLEAR_DELAY_HIGH(fq);
 		}
 
-		if (!FQ_IS_DELAYHIGH(fq) || MBUFQ_EMPTY(&fq->fq_mbufq)) {
-			FQ_CLEAR_DELAY_HIGH(fq);
-			if (fq->fq_flags & FQF_FLOWCTL_ON) {
-				fq_if_flow_feedback(fqs, fq, fq_cl);
-			}
-		}
 
 		/* Reset measured queue delay and update time */
 		fq->fq_updatetime = now + fqs->fqs_update_interval;
 		fq->fq_min_qdelay = 0;
 	}
+	if (!FQ_IS_DELAYHIGH(fq) || fq_empty(fq)) {
+		FQ_CLEAR_DELAY_HIGH(fq);
+		if (fq->fq_flags & FQF_FLOWCTL_ON) {
+			fq_if_flow_feedback(fqs, fq, fq_cl);
+		}
+	}
 
-	if ((pkt->pkt_flags & PKTF_START_SEQ) && (fq->fq_dequeue_seq == 0 ||
-	    (FQ_SEQ_LT(fq->fq_dequeue_seq, pkt->tx_start_seq))))
-		fq->fq_dequeue_seq = pkt->tx_start_seq;
-
-	pkt->pkt_timestamp = 0;
-	pkt->pkt_flags &= ~PKTF_PRIV_GUARDED;
-
-	if (MBUFQ_EMPTY(&fq->fq_mbufq)) {
-		/*
-		 * Remove from large_flow field, if this happened to be
-		 * the one that is tagged.
-		 */
-		if (fqs->fqs_large_flow == fq)
-			fqs->fqs_large_flow = NULL;
-
+	if (fq_empty(fq)) {
 		/* Reset getqtime so that we don't count idle times */
 		fq->fq_getqtime = 0;
 	} else {
 		fq->fq_getqtime = now;
 	}
+	fq_if_is_flow_heavy(fqs, fq);
 
-	return (m);
+	*pkt_timestamp = 0;
+	if (pkt->pktsched_ptype == QP_MBUF)
+		*pkt_flags &= ~PKTF_PRIV_GUARDED;
+
+	return (p);
 }

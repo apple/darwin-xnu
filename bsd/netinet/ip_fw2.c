@@ -65,7 +65,6 @@
 #endif /* INET */
 
 #if IPFW2
-#include <machine/spl.h>
 
 #include <sys/param.h>
 #include <sys/systm.h>

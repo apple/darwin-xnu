@@ -62,6 +62,9 @@ extern int key_checkrequest(struct ipsecrequest *isr, struct secasindex *,
 	struct secasvar **sav);
 extern struct secasvar *key_allocsa(u_int, caddr_t, caddr_t,
 					u_int, u_int32_t);
+struct secasvar *
+key_allocsa_extended(u_int family, caddr_t src, caddr_t dst,
+					 u_int proto, u_int32_t spi, ifnet_t interface);
 extern u_int16_t key_natt_get_translated_port(struct secasvar *);
 extern void key_freesp(struct secpolicy *, int);
 extern void key_freesav(struct secasvar *, int);

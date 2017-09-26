@@ -39,6 +39,10 @@
 #include <kperf/ast.h>
 #include <sys/errno.h>
 
+#if defined(__arm__) || defined(__arm64__)
+#include <arm/cpu_data.h>
+#include <arm/cpu_data_internal.h>
+#endif
 
 static void
 callstack_fixup_user(struct callstack *cs, thread_t thread)
@@ -70,6 +74,20 @@ callstack_fixup_user(struct callstack *cs, thread_t thread)
 		(void)vm_map_read_user(get_task_map(get_threadtask(thread)), sp_user,
 			&fixup_val, user_64 ? sizeof(uint64_t) : sizeof(uint32_t));
 	}
+
+#elif defined(__arm64__) || defined(__arm__)
+
+	struct arm_saved_state *state = get_user_regs(thread);
+	if (!state) {
+		goto out;
+	}
+
+	/* encode thumb mode into low bit of PC */
+	if (get_saved_state_cpsr(state) & PSR_TF) {
+		cs->frames[0] |= 1ULL;
+	}
+
+	fixup_val = get_saved_state_lr(state);
 
 #else
 #error "callstack_fixup_user: unsupported architecture"
@@ -125,6 +143,44 @@ interrupted_kernel_sp_value(uintptr_t *sp_val)
 	return KERN_SUCCESS;
 }
 
+#elif defined(__arm64__)
+
+__attribute__((used))
+static kern_return_t
+interrupted_kernel_lr(uintptr_t *lr)
+{
+	struct arm_saved_state *state;
+
+	state = getCpuDatap()->cpu_int_state;
+
+	/* return early if interrupted a thread in user space */
+	if (PSR64_IS_USER(get_saved_state_cpsr(state))) {
+		return KERN_FAILURE;
+	}
+
+	*lr = get_saved_state_lr(state);
+	return KERN_SUCCESS;
+}
+
+#elif defined(__arm__)
+
+__attribute__((used))
+static kern_return_t
+interrupted_kernel_lr(uintptr_t *lr)
+{
+	struct arm_saved_state *state;
+
+	state = getCpuDatap()->cpu_int_state;
+
+	/* return early if interrupted a thread in user space */
+	if (PSR_IS_USER(get_saved_state_cpsr(state))) {
+		return KERN_FAILURE;
+	}
+
+	*lr = get_saved_state_lr(state);
+	return KERN_SUCCESS;
+}
+
 #else /* defined(__arm__) */
 #error "interrupted_kernel_{sp,lr}: unsupported architecture"
 #endif /* !defined(__arm__) */
@@ -142,11 +198,13 @@ callstack_fixup_interrupted(struct callstack *cs)
 #if DEVELOPMENT || DEBUG
 #if defined(__x86_64__)
 	(void)interrupted_kernel_sp_value(&fixup_val);
+#elif defined(__arm64__) || defined(__arm__)
+	(void)interrupted_kernel_lr(&fixup_val);
 #endif /* defined(__x86_64__) */
 #endif /* DEVELOPMENT || DEBUG */
 
-	cs->frames[cs->nframes++] = fixup_val ?
-		VM_KERNEL_UNSLIDE_OR_PERM(fixup_val) : 0;
+	assert(cs->flags & CALLSTACK_KERNEL);
+	cs->frames[cs->nframes++] = fixup_val;
 }
 
 void
@@ -293,10 +351,14 @@ kperf_ucallstack_sample(struct callstack *cs, struct kperf_context *context)
 }
 
 static inline uintptr_t
-scrub_kernel_frame(uintptr_t *bt, int n_frames, int frame)
+scrub_word(uintptr_t *bt, int n_frames, int frame, bool kern)
 {
 	if (frame < n_frames) {
-		return VM_KERNEL_UNSLIDE(bt[frame]);
+		if (kern) {
+			return VM_KERNEL_UNSLIDE(bt[frame]);
+		} else {
+			return bt[frame];
+		}
 	} else {
 		return 0;
 	}
@@ -321,29 +383,34 @@ callstack_log(struct callstack *cs, uint32_t hcode, uint32_t dcode)
 	BUF_DATA(hcode, cs->flags, cs->nframes);
 
 	/* how many batches of 4 */
-	unsigned int n = cs->nframes / 4;
-	unsigned int ovf = cs->nframes % 4;
+	unsigned int nframes = cs->nframes;
+	unsigned int n = nframes / 4;
+	unsigned int ovf = nframes % 4;
 	if (ovf != 0) {
 		n++;
 	}
 
+	bool kern = cs->flags & CALLSTACK_KERNEL;
+
 	if (cs->flags & CALLSTACK_KERNEL_WORDS) {
+		uintptr_t *frames = (uintptr_t *)cs->frames;
 		for (unsigned int i = 0; i < n; i++) {
 			unsigned int j = i * 4;
 			BUF_DATA(dcode,
-				scrub_kernel_frame((uintptr_t *)cs->frames, cs->nframes, j + 0),
-				scrub_kernel_frame((uintptr_t *)cs->frames, cs->nframes, j + 1),
-				scrub_kernel_frame((uintptr_t *)cs->frames, cs->nframes, j + 2),
-				scrub_kernel_frame((uintptr_t *)cs->frames, cs->nframes, j + 3));
+				scrub_word(frames, nframes, j + 0, kern),
+				scrub_word(frames, nframes, j + 1, kern),
+				scrub_word(frames, nframes, j + 2, kern),
+				scrub_word(frames, nframes, j + 3, kern));
 		}
 	} else {
 		for (unsigned int i = 0; i < n; i++) {
+			uint64_t *frames = cs->frames;
 			unsigned int j = i * 4;
 			BUF_DATA(dcode,
-				scrub_frame(cs->frames, cs->nframes, j + 0),
-				scrub_frame(cs->frames, cs->nframes, j + 1),
-				scrub_frame(cs->frames, cs->nframes, j + 2),
-				scrub_frame(cs->frames, cs->nframes, j + 3));
+				scrub_frame(frames, nframes, j + 0),
+				scrub_frame(frames, nframes, j + 1),
+				scrub_frame(frames, nframes, j + 2),
+				scrub_frame(frames, nframes, j + 3));
 		}
 	}
 

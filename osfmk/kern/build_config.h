@@ -31,7 +31,12 @@
 
 #include <stdbool.h>
 #include <os/base.h>
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
 
 bool kern_config_is_development(void) OS_CONST;
+
+__END_DECLS
 
 #endif /* _KERN_BUILD_CONFIG_H */

@@ -278,7 +278,7 @@ extern int mig_strncpy_zerofill(char	*dest, const char *src,	int	len);
 #ifdef KERNEL_PRIVATE
 
 /* Allocate memory for out-of-stack mig structures */
-extern char *mig_user_allocate(vm_size_t size);
+extern void *mig_user_allocate(vm_size_t size);
 
 /* Deallocate memory used for out-of-stack mig structures */
 extern void mig_user_deallocate(char *data, vm_size_t size);

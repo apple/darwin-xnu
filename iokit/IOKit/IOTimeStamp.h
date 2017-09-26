@@ -136,6 +136,7 @@ IOTimeStamp(uintptr_t csc,
 
 /* DBG_IOKIT/DBG_IOINTC codes */
 #define IOINTC_HANDLER	1	/* 0x05000004 */
+#define IOINTC_SPURIOUS	2	/* 0x05000008 */
 
 /* DBG_IOKIT/DBG_IOWORKLOOP codes */
 #define IOWL_CLIENT		1	/* 0x05010004 */

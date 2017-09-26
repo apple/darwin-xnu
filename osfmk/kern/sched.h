@@ -69,6 +69,7 @@
 
 #include <mach/policy.h>
 #include <kern/kern_types.h>
+#include <kern/smp.h>
 #include <kern/queue.h>
 #include <kern/macro_help.h>
 #include <kern/timer_call.h>
@@ -144,7 +145,10 @@
 #define BASEPRI_REALTIME	(MAXPRI - (NRQS / 4) + 1)			/* 96 */
 
 #define MAXPRI_KERNEL		(BASEPRI_REALTIME - 1)				/* 95 */
-#define BASEPRI_PREEMPT		(MAXPRI_KERNEL - 2)				/* 93 */
+#define BASEPRI_PREEMPT_HIGH	(BASEPRI_PREEMPT + 1)				/* 93 */
+#define BASEPRI_PREEMPT		(MAXPRI_KERNEL - 3)				/* 92 */
+#define BASEPRI_VM		(BASEPRI_PREEMPT - 1)				/* 91 */
+
 #define BASEPRI_KERNEL		(MINPRI_KERNEL + 1)				/* 81 */
 #define MINPRI_KERNEL		(MAXPRI_KERNEL - (NRQS / 8) + 1)		/* 80 */
 
@@ -223,11 +227,14 @@ rq_bitmap_clear(bitmap_t *map, u_int n)
 #endif /* defined(CONFIG_SCHED_TIMESHARE_CORE) || defined(CONFIG_SCHED_PROTO) */
 
 struct rt_queue {
-	int					count;				/* # of threads total */
+	_Atomic int		count;				/* # of threads total */
 	queue_head_t		queue;				/* all runnable RT threads */
-
+#if __SMP__
+	decl_simple_lock_data(,rt_lock)
+#endif
 	struct runq_stats	runq_stats;
 };
+typedef struct rt_queue *rt_queue_t;
 
 #if defined(CONFIG_SCHED_GRRR_CORE)
 
@@ -275,7 +282,9 @@ struct grrr_run_queue {
 
 #endif /* defined(CONFIG_SCHED_GRRR_CORE) */
 
-extern struct rt_queue		rt_runq;
+extern int rt_runq_count(processor_set_t);
+extern void rt_runq_count_incr(processor_set_t);
+extern void rt_runq_count_decr(processor_set_t);
 
 #if defined(CONFIG_SCHED_MULTIQ)
 sched_group_t   sched_group_create(void);

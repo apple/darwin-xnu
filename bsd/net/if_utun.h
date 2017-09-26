@@ -34,20 +34,6 @@
 
 #include <sys/kern_control.h>
 
-/* Control block allocated for each kernel control connection */
-struct utun_pcb {
-	kern_ctl_ref	utun_ctlref;
-	ifnet_t			utun_ifp;
-	u_int32_t		utun_unit;
-	u_int32_t		utun_flags;
-	int				utun_ext_ifdata_stats;
-	u_int32_t		utun_max_pending_packets;
-	int       utun_channel_enabled;
-	uuid_t		utun_channel_uuid;
-	void *		utun_channel_rxring;
-	u_int32_t	utun_channel_max_pktlen;
-};
-
 void* utun_alloc(size_t size);
 void utun_free(void *ptr);
 errno_t utun_register_control(void);
@@ -73,6 +59,7 @@ errno_t utun_register_control(void);
 															from the control socket at a time */
 #define UTUN_OPT_ENABLE_CHANNEL				17
 #define UTUN_OPT_GET_CHANNEL_UUID			18
+#define UTUN_OPT_ENABLE_FLOWSWITCH			19
 /*
  * Flags for by UTUN_OPT_FLAGS 
  */

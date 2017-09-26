@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2007-2016 Apple, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -393,6 +394,7 @@ __END_DECLS
 #define CPUFAMILY_INTEL_HASWELL		0x10b282dc
 #define CPUFAMILY_INTEL_BROADWELL	0x582ed09c
 #define CPUFAMILY_INTEL_SKYLAKE		0x37fc219f
+#define CPUFAMILY_INTEL_KABYLAKE	0x0f817246
 #define CPUFAMILY_ARM_9			0xe73283ae
 #define CPUFAMILY_ARM_11		0x8ff620d8
 #define CPUFAMILY_ARM_XSCALE		0x53b005f5

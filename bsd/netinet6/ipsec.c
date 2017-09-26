@@ -314,7 +314,7 @@ ipsec4_getpolicybysock(struct mbuf *m,
 	struct secpolicy *currsp = NULL;	/* policy on socket */
 	struct secpolicy *kernsp = NULL;	/* policy on kernel */
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL || so == NULL || error == NULL)
 		panic("ipsec4_getpolicybysock: NULL pointer was passed.\n");
@@ -518,7 +518,7 @@ ipsec4_getpolicybyaddr(struct mbuf *m,
 	if (ipsec_bypass != 0)
 		return 0;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (m == NULL || error == NULL)
@@ -652,7 +652,7 @@ ipsec6_getpolicybysock(struct mbuf *m,
 	struct secpolicy *currsp = NULL;	/* policy on socket */
 	struct secpolicy *kernsp = NULL;	/* policy on kernel */
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (m == NULL || so == NULL || error == NULL)
@@ -823,7 +823,7 @@ ipsec6_getpolicybyaddr(struct mbuf *m,
 {
 	struct secpolicy *sp = NULL;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (m == NULL || error == NULL)
@@ -1955,7 +1955,7 @@ ipsec4_in_reject_so(struct mbuf *m, struct socket *so)
 	int error;
 	int result;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL)
 		return 0;	/* XXX should be panic ? */
@@ -1985,7 +1985,7 @@ ipsec4_in_reject_so(struct mbuf *m, struct socket *so)
 int
 ipsec4_in_reject(struct mbuf *m, struct inpcb *inp)
 {
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	if (inp == NULL)
 		return ipsec4_in_reject_so(m, NULL);
 	if (inp->inp_socket)
@@ -2010,7 +2010,7 @@ ipsec6_in_reject_so(struct mbuf *m, struct socket *so)
 	int error;
 	int result;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL)
 		return 0;	/* XXX should be panic ? */
@@ -2040,7 +2040,7 @@ int
 ipsec6_in_reject(struct mbuf *m, struct in6pcb *in6p)
 {
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	if (in6p == NULL)
 		return ipsec6_in_reject_so(m, NULL);
 	if (in6p->in6p_socket)
@@ -2064,7 +2064,7 @@ ipsec_hdrsiz(struct secpolicy *sp)
 	struct ipsecrequest *isr;
 	size_t siz, clen;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	KEYDEBUG(KEYDEBUG_IPSEC_DATA,
 		printf("ipsec_hdrsiz: using SP\n");
 		kdebug_secpolicy(sp));
@@ -2138,7 +2138,7 @@ ipsec4_hdrsiz(struct mbuf *m, u_int dir, struct inpcb *inp)
 	int error;
 	size_t size;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL)
 		return 0;	/* XXX should be panic ? */
@@ -2179,7 +2179,7 @@ ipsec6_hdrsiz(struct mbuf *m, u_int dir, struct in6pcb *in6p)
 	int error;
 	size_t size;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (m == NULL)
 		return 0;	/* XXX shoud be panic ? */
@@ -2312,7 +2312,11 @@ ipsec4_encapsulate(struct mbuf *m, struct secasvar *sav)
 		ipseclog((LOG_ERR, "IPv4 ipsec: size exceeds limit: "
 			"leave ip_len as is (invalid packet)\n"));
 	}
-	ip->ip_id = ip_randomid();
+	if (rfc6864 && IP_OFF_IS_ATOMIC(ntohs(ip->ip_off))) {
+		ip->ip_id = 0;
+	} else {
+		ip->ip_id = ip_randomid();
+	}
 	bcopy(&((struct sockaddr_in *)&sav->sah->saidx.src)->sin_addr,
 		&ip->ip_src, sizeof(ip->ip_src));
 	bcopy(&((struct sockaddr_in *)&sav->sah->saidx.dst)->sin_addr,
@@ -3268,7 +3272,7 @@ ipsec4_interface_output(struct ipsec_output_state *state, ifnet_t interface)
 	int error = 0;
 	struct secasvar *sav = NULL;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	if (!state)
 		panic("state == NULL in ipsec4_output");
@@ -3310,7 +3314,7 @@ ipsec4_output(struct ipsec_output_state *state, struct secpolicy *sp, __unused i
 	int error = 0;
 	struct sockaddr_in *sin;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	if (!state)
 		panic("state == NULL in ipsec4_output");
@@ -3515,7 +3519,7 @@ ipsec6_output_trans(
 	struct sockaddr_in6 *sin6;
 	struct secasvar *sav = NULL;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	if (!state)
 		panic("state == NULL in ipsec6_output_trans");
@@ -3914,7 +3918,7 @@ ipsec6_output_tunnel(
 	struct secasvar *sav = NULL;
 	int error = 0;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	if (!state)
 		panic("state == NULL in ipsec6_output_tunnel");
@@ -4047,7 +4051,7 @@ ipsec6_interface_output(struct ipsec_output_state *state, ifnet_t interface, u_c
 	int error = 0;
 	struct secasvar *sav = NULL;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	if (!state)
 		panic("state == NULL in ipsec6_output");
@@ -4185,7 +4189,7 @@ ipsec4_tunnel_validate(
 	struct secpolicy *sp;
 	struct ip *oip;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 #if DIAGNOSTIC
 	if (m->m_len < sizeof(struct ip))
@@ -4303,7 +4307,7 @@ ipsec6_tunnel_validate(
 	struct secpolicy *sp;
 	struct ip6_hdr *oip6;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 #if DIAGNOSTIC
 	if (m->m_len < sizeof(struct ip6_hdr))
@@ -4506,7 +4510,15 @@ struct ipsec_tag {
 	struct socket			*socket;
 	u_int32_t				history_count;
 	struct ipsec_history	history[];
+#if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
+/* For the newer ARMv7k ABI where 64-bit types are 64-bit aligned, but pointers
+ * are 32-bit:
+ * Aligning to 64-bit since we case to m_tag which is 64-bit aligned.
+ */
+} __attribute__ ((aligned(8)));
+#else
 };
+#endif
 
 #define	IPSEC_TAG_SIZE		(MLEN - sizeof(struct m_tag))
 #define	IPSEC_TAG_HDR_SIZE	(offsetof(struct ipsec_tag, history[0]))
@@ -4674,7 +4686,7 @@ ipsec_send_natt_keepalive(
 	struct route        ro;
 	int keepalive_interval = natt_keepalive_interval;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 
 	if ((esp_udp_encap_port & 0xFFFF) == 0 || sav->remote_ike_port == 0) return FALSE;
 
@@ -4804,7 +4816,11 @@ ipsec_fill_offload_frame(ifnet_t ifp,
 			break;
 	}
 	ip->ip_len = htons(sizeof(struct udpiphdr) + 1);
-	ip->ip_id = ip_randomid();
+	if (rfc6864 && IP_OFF_IS_ATOMIC(htons(ip->ip_off))) {
+		ip->ip_id = 0;
+	} else {
+		ip->ip_id = ip_randomid();
+	}
 	ip->ip_ttl = ip_defttl;
 	ip->ip_p = IPPROTO_UDP;
 	ip->ip_sum = 0;

@@ -17,6 +17,7 @@ include $(MakeInc_def)
 # XXX: CFLAGS
 #
 CFLAGS+= -include meta_features.h -DMACH_KERNEL_PRIVATE -DMACH_KERNEL
+SFLAGS+= -include meta_features.h
 
 # Objects that don't want -Wcast-align warning (8474835)
 OBJS_NO_CAST_ALIGN =			\
@@ -72,6 +73,10 @@ OBJS_NO_CAST_ALIGN =			\
 		cchmac_init.o		\
 		ccsha1.o		\
 		ipc_object.o		\
+		ccmode_ctr_crypt.o	\
+		ccmode_factory_ctr_crypt.o	\
+		ccmode_ctr_init.o	\
+		ccmode_ctr_setctr.o	\
 		ipc_kmsg.o		\
 		ipc_right.o		\
 		bsd_vm.o		\

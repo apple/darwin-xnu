@@ -80,7 +80,7 @@
 #define	ERR_ROUTINE_NIL		(mach_error_fn_t)0
 
 
-#define	err_system(x)		(((x)&0x3f)<<26)
+#define	err_system(x)		((signed)((((unsigned)(x))&0x3f)<<26))
 #define err_sub(x)		(((x)&0xfff)<<14)
 
 #define err_get_system(err)	(((err)>>26)&0x3f)

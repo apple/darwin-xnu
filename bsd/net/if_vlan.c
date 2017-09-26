@@ -109,9 +109,6 @@
 
 #define VLANNAME	"vlan"
 
-typedef int (bpf_callback_func)(struct ifnet *, struct mbuf *);
-typedef int (if_set_bpf_tap_func)(struct ifnet *ifp, int mode, bpf_callback_func * func);
-
 /**
  ** vlan locks
  **/
@@ -153,14 +150,14 @@ vlan_lock_init(void)
 static __inline__ void
 vlan_assert_lock_held(void)
 {
-    lck_mtx_assert(vlan_lck_mtx, LCK_MTX_ASSERT_OWNED);
+    LCK_MTX_ASSERT(vlan_lck_mtx, LCK_MTX_ASSERT_OWNED);
     return;
 }
 
 static __inline__ void
 vlan_assert_lock_not_held(void)
 {
-    lck_mtx_assert(vlan_lck_mtx, LCK_MTX_ASSERT_NOTOWNED);
+    LCK_MTX_ASSERT(vlan_lck_mtx, LCK_MTX_ASSERT_NOTOWNED);
     return;
 }
 
@@ -224,8 +221,6 @@ struct ifvlan {
 #define IFVF_DETACHING		0x2		/* interface is detaching */
 #define IFVF_READY		0x4		/* interface is ready */
     u_int32_t			ifv_flags;
-    bpf_packet_func		ifv_bpf_input;
-    bpf_packet_func		ifv_bpf_output;
     int32_t			ifv_retain_count;
     u_int32_t			ifv_signature;	/* IFV_SIGNATURE */
 };
@@ -382,8 +377,6 @@ static	int vlan_input(ifnet_t ifp, protocol_family_t protocol,
 					   mbuf_t m, char *frame_header);
 static	int vlan_output(struct ifnet *ifp, struct mbuf *m);
 static	int vlan_ioctl(ifnet_t ifp, u_long cmd, void * addr);
-static  int vlan_set_bpf_tap(ifnet_t ifp, bpf_tap_mode mode,
-			     bpf_packet_func func);
 static 	int vlan_attach_protocol(struct ifnet *ifp);
 static	int vlan_detach_protocol(struct ifnet *ifp);
 static	int vlan_setmulti(struct ifnet *ifp);
@@ -564,39 +557,6 @@ siocsifaltmtu(struct ifnet * ifp, int mtu)
     bzero(&ifr, sizeof(ifr));
     ifr.ifr_mtu = mtu;
     return (ifnet_ioctl(ifp, 0, SIOCSIFALTMTU, &ifr));
-}
-
-static __inline__ void 
-vlan_bpf_output(struct ifnet * ifp, struct mbuf * m, 
-		bpf_packet_func func)
-{
-    if (func != NULL) {
-	(*func)(ifp, m);
-    }
-    return;
-}
-
-static __inline__ void 
-vlan_bpf_input(struct ifnet * ifp, struct mbuf * m, 
-	       bpf_packet_func func, char * frame_header,
-	       int frame_header_len, int encap_len)
-{
-    if (func != NULL) {
-	if (encap_len > 0) {
-	    /* present the right header to bpf */
-	    bcopy(frame_header, frame_header + encap_len, frame_header_len);
-	}
-	m->m_data -= frame_header_len;
-	m->m_len += frame_header_len;
-	(*func)(ifp, m);
-	m->m_data += frame_header_len;
-	m->m_len -= frame_header_len;
-	if (encap_len > 0) {
-	    /* restore the header */
-	    bcopy(frame_header + encap_len, frame_header, frame_header_len);
-	}
-    }
-    return;
 }
 
 /**
@@ -1010,7 +970,7 @@ vlan_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	vlan_init.framer_extended = ether_frameout_extended;
 	vlan_init.softc = ifv;
 	vlan_init.ioctl = vlan_ioctl;
-	vlan_init.set_bpf_tap = vlan_set_bpf_tap;
+	vlan_init.set_bpf_tap = NULL;
 	vlan_init.detach = vlan_if_free;
 	vlan_init.broadcast_addr = etherbroadcastaddr;
 	vlan_init.broadcast_len = ETHER_ADDR_LEN;
@@ -1075,45 +1035,9 @@ vlan_clone_destroy(struct ifnet *ifp)
     return 0;
 }
 
-static int 
-vlan_set_bpf_tap(ifnet_t ifp, bpf_tap_mode mode, bpf_packet_func func)
-{
-    ifvlan_ref	ifv;
-
-    vlan_lock();
-    ifv = ifnet_get_ifvlan_retained(ifp);
-    if (ifv == NULL) {
-	vlan_unlock();
-	return (ENODEV);
-    }
-    switch (mode) {
-        case BPF_TAP_DISABLE:
-            ifv->ifv_bpf_input = ifv->ifv_bpf_output = NULL;
-            break;
-
-        case BPF_TAP_INPUT:
-            ifv->ifv_bpf_input = func;
-            break;
-
-        case BPF_TAP_OUTPUT:
-	    ifv->ifv_bpf_output = func;
-            break;
-        
-        case BPF_TAP_INPUT_OUTPUT:
-            ifv->ifv_bpf_input = ifv->ifv_bpf_output = func;
-            break;
-        default:
-            break;
-    }
-    vlan_unlock();
-    ifvlan_release(ifv);
-    return 0;
-}
-
 static int
 vlan_output(struct ifnet * ifp, struct mbuf * m)
 {
-    bpf_packet_func 		bpf_func;
     struct ether_vlan_header *	evl;
     int				encaplen;
     ifvlan_ref			ifv;
@@ -1143,7 +1067,6 @@ vlan_output(struct ifnet * ifp, struct mbuf * m)
     p = vlp->vlp_ifp;
     (void)ifnet_stat_increment_out(ifp, 1, m->m_pkthdr.len, 0);
     soft_vlan = (ifnet_offload(p) & IF_HWASSIST_VLAN_TAGGING) == 0;
-    bpf_func = ifv->ifv_bpf_output;
     tag = ifv->ifv_tag;
     encaplen = ifv->ifv_encaplen;
     vlan_unlock();
@@ -1151,7 +1074,7 @@ vlan_output(struct ifnet * ifp, struct mbuf * m)
     ifvlan_release(ifv);
     vlan_parent_release(vlp);
 
-    vlan_bpf_output(ifp, m, bpf_func);
+    bpf_tap_out(ifp, DLT_EN10MB, m, NULL, 0);
 	
     /* do not run parent's if_output() if the parent is not up */
     if ((ifnet_flags(p) & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING)) {
@@ -1230,7 +1153,6 @@ static int
 vlan_input(ifnet_t p, __unused protocol_family_t protocol,
 					   mbuf_t m, char *frame_header)
 {
-    bpf_packet_func 		bpf_func = NULL;
     struct ether_vlan_header *	evl;
     struct ifnet *		ifp = NULL;
     int 			soft_vlan = 0;
@@ -1294,7 +1216,6 @@ vlan_input(ifnet_t p, __unused protocol_family_t protocol,
 	    m_freem(m);
 	    return 0;
 	}
-	bpf_func = ifv->ifv_bpf_input;
 	vlan_unlock();
     }
     if (soft_vlan) {
@@ -1313,8 +1234,7 @@ vlan_input(ifnet_t p, __unused protocol_family_t protocol,
 	m->m_pkthdr.pkt_hdr = frame_header;
 	(void)ifnet_stat_increment_in(ifp, 1, 
 				      m->m_pkthdr.len + ETHER_HDR_LEN, 0);
-	vlan_bpf_input(ifp, m, bpf_func, frame_header, ETHER_HDR_LEN, 
-		       soft_vlan ? ETHER_VLAN_ENCAP_LEN : 0);
+	bpf_tap_in(ifp, DLT_EN10MB, m, frame_header, ETHER_HDR_LEN);
 	/* We found a vlan interface, inject on that interface. */
 	dlil_input_packet_list(ifp, m);
     } else {
@@ -1899,6 +1819,8 @@ vlan_ioctl(ifnet_t ifp, u_long cmd, void * data)
 	    break;
 	}
 	p = NULL;
+	/* ensure nul termination */
+	vlr.vlr_parent[IFNAMSIZ - 1] = '\0';
 	if (vlr.vlr_parent[0] != '\0') {
 	    if (vlr.vlr_tag & ~EVL_VLID_MASK) {
 		/*

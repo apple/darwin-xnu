@@ -91,6 +91,9 @@ void			memory_object_control_collapse(
 __private_extern__
 vm_object_t 		memory_object_control_to_vm_object(
 				memory_object_control_t control);
+__private_extern__
+vm_object_t 		memory_object_to_vm_object(
+				memory_object_t mem_obj);
 
 extern
 mach_port_t		convert_mo_control_to_port(
@@ -117,11 +120,6 @@ extern upl_t convert_port_to_upl(
 extern ipc_port_t convert_upl_to_port( upl_t );
 
 __private_extern__ void upl_no_senders(ipc_port_t, mach_port_mscount_t);
-
-extern kern_return_t	memory_object_free_from_cache(
-	host_t				host,
-	memory_object_pager_ops_t	pager_ops,
-	int				*count);
 
 extern kern_return_t	memory_object_pages_resident(
 	memory_object_control_t		control,

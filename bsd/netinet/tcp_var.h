@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -198,14 +198,16 @@ struct tcptemp {
 };
 
 struct bwmeas {
-	tcp_seq bw_start;		/* start of bw measurement */
+	tcp_seq bw_start;	/* start of bw measurement */
 	uint32_t bw_ts;		/* timestamp when bw measurement started */
-	uint32_t bw_size;		/* burst size in bytes for this bw measurement */
-	uint32_t bw_minsizepkts;	/* Min burst size as segments */
-	uint32_t bw_maxsizepkts;	/* Max burst size as segments */
+	uint32_t bw_size;	/* burst size in bytes for this bw measurement */
+	uint32_t bw_minsizepkts; /* Min burst size as segments */
+	uint32_t bw_maxsizepkts; /* Max burst size as segments */
 	uint32_t bw_minsize;	/* Min size in bytes */
 	uint32_t bw_maxsize;	/* Max size in bytes */
-	uint32_t bw_sndbw;		/* Measured send bw */
+	uint32_t bw_sndbw;	/* Measured send bandwidth */
+	uint32_t bw_sndbw_max;	/* Max measured bandwidth */
+	uint32_t bw_rcvbw_max;	/* Max receive bandwidth measured */
 };
 
 /* MPTCP Data sequence map entry */
@@ -315,6 +317,7 @@ struct tcpcb {
 
 	u_int32_t	t_maxopd;	/* mss plus options */
 	u_int32_t	t_rcvtime;	/* time at which a packet was received */
+	u_int32_t	t_sndtime;	/* time at which we last sent new data */
 	u_int32_t	t_starttime;	/* time connection was established */
 	int	t_rtttime;		/* tcp clock when rtt calculation was started */
 	tcp_seq	t_rtseq;		/* sequence number being timed */
@@ -398,6 +401,7 @@ struct tcpcb {
 #define	TE_ECN_ON		(TE_SETUPSENT | TE_SETUPRECEIVED) /* Indicate ECN was successfully negotiated on a connection) */
 #define	TE_CEHEURI_SET		0x2000 /* We did our CE-probing at the beginning */
 #define	TE_CLIENT_SETUP		0x4000	/* setup from client side */
+#define	TE_RCVD_SYN_RST		0x8000	/* Received RST to the first ECN enabled SYN */
 
 	u_int32_t	t_ecn_recv_ce;	/* Received CE from the network */
 	u_int32_t	t_ecn_recv_cwr;	/* Packets received with CWR */
@@ -478,10 +482,11 @@ struct tcpcb {
 #define	TF_PROBING		0x200000	/* Trigger probe timeout */
 #define	TF_FASTOPEN		0x400000	/* TCP Fastopen is enabled */
 #define	TF_REASS_INPROG		0x800000	/* Reassembly is in progress */
+#define	TF_FASTOPEN_HEUR	0x1000000	/* Make sure that heuristics get never skipped */
 
 #if TRAFFIC_MGT
 	/* Inter-arrival jitter related state */
-	uint32_t 	iaj_rcv_ts;		/* tcp clock when the first packet was received */
+	uint32_t	iaj_rcv_ts;		/* tcp clock when the first packet was received */
 	uint16_t	iaj_size;		/* Size of packet for iaj measurement */
 	uint8_t		iaj_small_pkt;		/* Count of packets smaller than iaj_size */
 	uint8_t		t_pipeack_ind;		/* index for next pipeack sample */
@@ -514,8 +519,8 @@ struct tcpcb {
 #if MPTCP
 	u_int32_t	t_mpflags;		/* flags for multipath TCP */
 
-#define TMPF_PREESTABLISHED 	0x00000001 /* conn in pre-established state */
-#define TMPF_SENT_KEYS		0x00000002 /* indicates that keys were sent */
+#define TMPF_PREESTABLISHED	0x00000001 /* conn in pre-established state */
+#define TMPF_SND_KEYS		0x00000002 /* indicates that keys should be send */
 #define TMPF_MPTCP_TRUE		0x00000004 /* negotiated MPTCP successfully */
 #define TMPF_MPTCP_RCVD_KEY	0x00000008 /* state for 3-way handshake */
 #define TMPF_SND_MPPRIO		0x00000010 /* send priority of subflow */
@@ -536,12 +541,14 @@ struct tcpcb {
 #define TMPF_MPTCP_READY	0x00080000 /* Can send DSS options on data */
 #define TMPF_INFIN_SENT		0x00100000 /* Sent infinite mapping */
 #define TMPF_SND_MPFAIL		0x00200000 /* Received mapping csum failure */
-#define TMPF_FASTJOIN_SEND	0x00400000 /* Fast join early data send */
-#define TMPF_FASTJOINBY2_SEND	0x00800000 /* Fast join send after 3 WHS */
-#define TMPF_TFO_REQUEST	0x02000000 /* TFO Requested */
+#define TMPF_SND_JACK		0x00400000 /* Send a Join-ACK */
+#define TMPF_TFO_REQUEST	0x00800000 /* TFO Requested */
+
+#define	TMPF_MPTCP_SIGNALS	(TMPF_SND_MPPRIO | TMPF_SND_REM_ADDR | TMPF_SND_MPFAIL | TMPF_SND_KEYS | TMPF_SND_JACK)
 
 	tcp_seq			t_mpuna;	/* unacknowledged sequence */
-	void			*t_mptcb;	/* pointer to MPTCP TCB */
+	struct mptcb		*t_mptcb;	/* pointer to MPTCP TCB */
+	struct mptsub		*t_mpsub;	/* pointer to the MPTCP subflow */
 	struct mpt_dsn_map	t_rcv_map;	/* Receive mapping list */
 	u_int8_t		t_local_aid;	/* Addr Id for authentication */
 	u_int8_t		t_rem_aid;	/* Addr ID of another subflow */
@@ -553,8 +560,8 @@ struct tcpcb {
 #define	TFO_F_COOKIE_REQ	0x04 /* Client requested a new cookie */
 #define	TFO_F_COOKIE_SENT	0x08 /* Client did send a cookie in the SYN */
 #define	TFO_F_SYN_LOSS		0x10 /* A SYN-loss triggered a fallback to regular TCP on the client-side */
-#define	TFO_F_NO_RCVPROBING	0x20 /* This network is guaranteed to support TFO in the downstream direction */
-#define	TFO_F_NO_SNDPROBING	0x40 /* This network is guaranteed to support TFO in the upstream direction */
+#define	TFO_F_NO_SNDPROBING	0x20 /* This network is guaranteed to support TFO in the upstream direction */
+#define	TFO_F_HEURISTIC_DONE	0x40 /* We have already marked this network as bad */
 	u_int8_t		t_tfo_flags;
 #define	TFO_S_SYNDATA_RCV	0x01 /* SYN+data has been received */
 #define	TFO_S_COOKIEREQ_RECV	0x02 /* TFO-cookie request received */
@@ -570,6 +577,7 @@ struct tcpcb {
 #define	TFO_S_HEURISTICS_DISABLE 0x0800 /* TFO-heuristics disabled it for this connection */
 #define	TFO_S_SEND_BLACKHOLE	0x1000 /* TFO got blackholed in the send direction */
 #define	TFO_S_RECV_BLACKHOLE	0x2000 /* TFO got blackholed in the recv direction */
+#define	TFO_S_ONE_BYTE_PROXY	0x4000 /* TFO failed because of a proxy acknowledging just one byte */
 	u_int16_t		t_tfo_stats;
 
 	u_int8_t		t_tfo_probes; /* TFO-probes we did send */
@@ -610,6 +618,7 @@ struct tcpcb {
 	u_int32_t	t_dsack_recvd;		/* Received a valid DSACK option */
 	SLIST_HEAD(,tcp_notify_ack_marker) t_notify_ack; /* state for notifying data acknowledgements */
 	u_int32_t	t_recv_throttle_ts;	/* TS for start of recv throttle */
+	u_int32_t	t_rxt_minimum_timeout;	/* minimum retransmit timeout in ms */
 };
 
 #define IN_FASTRECOVERY(tp)	(tp->t_flags & TF_FASTRECOVERY)
@@ -705,6 +714,7 @@ extern int tcprexmtthresh;
 #define TCP_RESET_REXMT_STATE(_tp_) do { \
 	(_tp_)->t_rxtshift = 0; \
 	(_tp_)->t_rxtstart = 0; \
+	mptcp_reset_rexmit_state((_tp_)); \
 } while(0);
 
 #define	TCP_AUTORCVBUF_MAX(_ifp_) (((_ifp_) != NULL && \
@@ -781,22 +791,6 @@ struct rmxp_tao {
 
 #define	intotcpcb(ip)	((struct tcpcb *)(ip)->inp_ppcb)
 #define	sototcpcb(so)	(intotcpcb(sotoinpcb(so)))
-
-/*
- * The rtt measured is in milliseconds as the timestamp granularity is
- * a millisecond. The smoothed round-trip time and estimated variance
- * are stored as fixed point numbers scaled by the values below.
- * For convenience, these scales are also used in smoothing the average
- * (smoothed = (1/scale)sample + ((scale-1)/scale)smoothed).
- * With these scales, srtt has 5 bits to the right of the binary point,
- * and thus an "ALPHA" of 0.875.  rttvar has 4 bits to the right of the
- * binary point, and is smoothed with an ALPHA of 0.75.
- */
-#define	TCP_RTT_SCALE		32	/* multiplier for srtt; 3 bits frac. */
-#define	TCP_RTT_SHIFT		5	/* shift for srtt; 5 bits frac. */
-#define	TCP_RTTVAR_SCALE	16	/* multiplier for rttvar; 4 bits */
-#define	TCP_RTTVAR_SHIFT	4	/* shift for rttvar; 4 bits */
-#define	TCP_DELTA_SHIFT		2	/* see tcp_input.c */
 
 /* TFO-specific defines */
 #define	TFO_COOKIE_LEN_MIN	4
@@ -1162,6 +1156,51 @@ struct	tcpstat {
 	u_int32_t	tcps_mss_to_low;	/* Change MSS to low using link status report */
 	u_int32_t	tcps_ecn_fallback_droprst; /* ECN fallback caused by connection drop due to RST */
 	u_int32_t	tcps_ecn_fallback_droprxmt; /* ECN fallback due to drop after multiple retransmits */
+	u_int32_t	tcps_ecn_fallback_synrst; /* ECN fallback due to rst after syn */
+
+	u_int32_t	tcps_mptcp_rcvmemdrop;	/* MPTCP packets dropped for lack of memory */
+	u_int32_t	tcps_mptcp_rcvduppack;	/* MPTCP duplicate-only packets received */
+	u_int32_t	tcps_mptcp_rcvpackafterwin; /* MPTCP packets with data after window */
+
+	/* TCP timer statistics */
+	u_int32_t	tcps_timer_drift_le_1_ms;	/* Timer drift less or equal to 1 ms */
+	u_int32_t	tcps_timer_drift_le_10_ms;	/* Timer drift less or equal to 10 ms */
+	u_int32_t	tcps_timer_drift_le_20_ms;	/* Timer drift less or equal to 20 ms */
+	u_int32_t	tcps_timer_drift_le_50_ms;	/* Timer drift less or equal to 50 ms */
+	u_int32_t	tcps_timer_drift_le_100_ms;	/* Timer drift less or equal to 100 ms */
+	u_int32_t	tcps_timer_drift_le_200_ms;	/* Timer drift less or equal to 200 ms */
+	u_int32_t	tcps_timer_drift_le_500_ms;	/* Timer drift less or equal to 500 ms */
+	u_int32_t	tcps_timer_drift_le_1000_ms;	/* Timer drift less or equal to 1000 ms */
+	u_int32_t	tcps_timer_drift_gt_1000_ms;	/* Timer drift greater than 1000 ms */
+
+	u_int32_t	tcps_mptcp_handover_attempt;	/* Total number of MPTCP-attempts using handover mode */
+	u_int32_t	tcps_mptcp_interactive_attempt;	/* Total number of MPTCP-attempts using interactive mode */
+	u_int32_t	tcps_mptcp_aggregate_attempt;	/* Total number of MPTCP-attempts using aggregate mode */
+	u_int32_t	tcps_mptcp_fp_handover_attempt; /* Same as previous three but only for first-party apps */
+	u_int32_t	tcps_mptcp_fp_interactive_attempt;
+	u_int32_t	tcps_mptcp_fp_aggregate_attempt;
+	u_int32_t	tcps_mptcp_heuristic_fallback;	/* Total number of MPTCP-connections that fell back due to heuristics */
+	u_int32_t	tcps_mptcp_fp_heuristic_fallback;	/* Same as previous but for first-party apps */
+	u_int32_t	tcps_mptcp_handover_success_wifi;	/* Total number of successfull handover-mode connections that *started* on WiFi */
+	u_int32_t	tcps_mptcp_handover_success_cell;	/* Total number of successfull handover-mode connections that *started* on Cell */
+	u_int32_t	tcps_mptcp_interactive_success;		/* Total number of interactive-mode connections that negotiated MPTCP */
+	u_int32_t	tcps_mptcp_aggregate_success;		/* Same as previous but for aggregate */
+	u_int32_t	tcps_mptcp_fp_handover_success_wifi;	/* Same as previous four, but for first-party apps */
+	u_int32_t	tcps_mptcp_fp_handover_success_cell;
+	u_int32_t	tcps_mptcp_fp_interactive_success;
+	u_int32_t	tcps_mptcp_fp_aggregate_success;
+	u_int32_t	tcps_mptcp_handover_cell_from_wifi;	/* Total number of connections that use cell in handover-mode (coming from WiFi) */
+	u_int32_t	tcps_mptcp_handover_wifi_from_cell;	/* Total number of connections that use WiFi in handover-mode (coming from cell) */
+	u_int32_t	tcps_mptcp_interactive_cell_from_wifi;	/* Total number of connections that use cell in interactive mode (coming from WiFi) */
+	u_int64_t	tcps_mptcp_handover_cell_bytes;		/* Total number of bytes sent on cell in handover-mode (on new subflows, ignoring initial one) */
+	u_int64_t	tcps_mptcp_interactive_cell_bytes;	/* Same as previous but for interactive */
+	u_int64_t	tcps_mptcp_aggregate_cell_bytes;
+	u_int64_t	tcps_mptcp_handover_all_bytes;		/* Total number of bytes sent in handover */
+	u_int64_t	tcps_mptcp_interactive_all_bytes;
+	u_int64_t	tcps_mptcp_aggregate_all_bytes;
+	u_int32_t	tcps_mptcp_back_to_wifi;	/* Total number of connections that succeed to move traffic away from cell (when starting on cell) */
+	u_int32_t	tcps_mptcp_wifi_proxy;		/* Total number of new subflows that fell back to regular TCP on cell */
+	u_int32_t	tcps_mptcp_cell_proxy;		/* Total number of new subflows that fell back to regular TCP on WiFi */
 };
 
 
@@ -1206,6 +1245,7 @@ struct  xtcpcb {
         u_quad_t        xt_alignment_hack;
 };
 
+#if !CONFIG_EMBEDDED
 
 struct  xtcpcb64 {
         u_int32_t      		xt_len;
@@ -1286,6 +1326,7 @@ struct  xtcpcb64 {
         u_quad_t		xt_alignment_hack;
 };
 
+#endif /* !CONFIG_EMBEDDED */
 
 #ifdef PRIVATE
 
@@ -1365,6 +1406,22 @@ struct  xtcpcb_n {
 	u_int32_t snd_ssthresh_prev;    /* ssthresh prior to retransmit */
 };
 
+	/*
+	 * The rtt measured is in milliseconds as the timestamp granularity is
+	 * a millisecond. The smoothed round-trip time and estimated variance
+	 * are stored as fixed point numbers scaled by the values below.
+	 * For convenience, these scales are also used in smoothing the average
+	 * (smoothed = (1/scale)sample + ((scale-1)/scale)smoothed).
+	 * With these scales, srtt has 5 bits to the right of the binary point,
+	 * and thus an "ALPHA" of 0.875.  rttvar has 4 bits to the right of the
+	 * binary point, and is smoothed with an ALPHA of 0.75.
+	 */
+#define	TCP_RTT_SCALE		32	/* multiplier for srtt; 3 bits frac. */
+#define	TCP_RTT_SHIFT		5	/* shift for srtt; 5 bits frac. */
+#define	TCP_RTTVAR_SCALE	16	/* multiplier for rttvar; 4 bits */
+#define	TCP_RTTVAR_SHIFT	4	/* shift for rttvar; 4 bits */
+#define	TCP_DELTA_SHIFT		2	/* see tcp_input.c */
+	
 #endif /* PRIVATE */
 
 #pragma pack()
@@ -1424,20 +1481,19 @@ extern	int tcp_minmss;
 #define	TCP_FASTOPEN_SERVER 0x01
 #define	TCP_FASTOPEN_CLIENT 0x02
 
-extern	int tcp_tfo_halfcnt;
-extern	int tcp_tfo_backlog;
-extern	int tcp_fastopen;
-extern	int tcp_tfo_fallback_min;
-extern	int ss_fltsz;
-extern	int ss_fltsz_local;
-extern 	int tcp_do_rfc3390;		/* Calculate ss_fltsz according to RFC 3390 */
+extern int tcp_tfo_halfcnt;
+extern int tcp_tfo_backlog;
+extern int tcp_fastopen;
+extern int ss_fltsz;
+extern int ss_fltsz_local;
+extern int tcp_do_rfc3390;		/* Calculate ss_fltsz according to RFC 3390 */
 extern int tcp_do_rfc1323;
 extern int target_qdelay;
-extern	u_int32_t tcp_now;		/* for RFC 1323 timestamps */
+extern u_int32_t tcp_now;		/* for RFC 1323 timestamps */
 extern struct timeval tcp_uptime;
 extern lck_spin_t *tcp_uptime_lock;
-extern	int tcp_delack_enabled;
-extern	int tcp_do_sack;	/* SACK enabled/disabled */
+extern int tcp_delack_enabled;
+extern int tcp_do_sack;	/* SACK enabled/disabled */
 extern int tcp_do_rfc3465;
 extern int tcp_do_rfc3465_lim2;
 extern int maxseg_unacked;
@@ -1446,6 +1502,7 @@ extern struct zone *tcp_reass_zone;
 extern struct zone *tcp_rxt_seg_zone;
 extern int tcp_ecn_outbound;
 extern int tcp_ecn_inbound;
+extern u_int32_t tcp_do_autorcvbuf;
 extern u_int32_t tcp_autorcvbuf_max;
 extern u_int32_t tcp_autorcvbuf_max_ca;
 extern u_int32_t tcp_autorcvbuf_inc_shift;
@@ -1465,7 +1522,7 @@ struct tcp_respond_args {
 void	 tcp_canceltimers(struct tcpcb *);
 struct tcpcb *
 	 tcp_close(struct tcpcb *);
-void	 tcp_ctlinput(int, struct sockaddr *, void *);
+void	 tcp_ctlinput(int, struct sockaddr *, void *, struct ifnet *);
 int	 tcp_ctloutput(struct socket *, struct sockopt *);
 struct tcpcb *
 	 tcp_drop(struct tcpcb *, int);
@@ -1497,6 +1554,7 @@ void	 tcp_fillheaders(struct tcpcb *, void *, void *);
 struct tcpcb *tcp_timers(struct tcpcb *, int);
 void	 tcp_trace(int, int, struct tcpcb *, void *, struct tcphdr *, int);
 
+void tcp_fill_info(struct tcpcb *, struct tcp_info *);
 void tcp_sack_doack(struct tcpcb *, struct tcpopt *, struct tcphdr *,
     u_int32_t *);
 extern boolean_t tcp_sack_process_dsack(struct tcpcb *, struct tcpopt *,
@@ -1591,11 +1649,15 @@ extern bool tcp_notify_ack_active(struct socket *so);
 
 #if MPTCP
 extern int mptcp_input_preproc(struct tcpcb *, struct mbuf *, int);
-extern void mptcp_output_csum(struct tcpcb *, struct mbuf *, int32_t, unsigned,
-    u_int64_t, u_int32_t *);
+extern uint32_t mptcp_output_csum(struct mbuf *m, uint64_t dss_val,
+				  uint32_t sseq, uint16_t dlen);
 extern int mptcp_adj_mss(struct tcpcb *, boolean_t);
 extern void mptcp_insert_rmap(struct tcpcb *, struct mbuf *);
 #endif
+
+__private_extern__ void tcp_update_stats_per_flow(
+    struct ifnet_stats_per_flow *, struct ifnet *);
+
 #endif /* BSD_KERNEL_RPIVATE */
 
 #endif /* _NETINET_TCP_VAR_H_ */

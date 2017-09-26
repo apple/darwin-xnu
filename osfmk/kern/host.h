@@ -98,6 +98,10 @@ typedef struct {
 	uint64_t task_platform_idle_wakeups;
 	uint64_t task_timer_wakeups_bin_1;
 	uint64_t task_timer_wakeups_bin_2;
+	uint64_t total_ptime;
+	uint64_t total_pset_switches;
+	uint64_t task_gpu_ns;
+	uint64_t task_energy;
 } expired_task_statistics_t;
 
 extern expired_task_statistics_t dead_task_statistics;

@@ -250,6 +250,28 @@ def PrintPortSetMembers(space, setid, show_kmsg_summary):
         idx += 1
     return
 
+def FindEntryName(obj, space):
+    """ Routine to locate a port/ipc_object in an ipc_space
+        and return the name within that space.
+    """
+    if space == 0:
+        return 0
+
+    num_entries = int(space.is_table_size)
+    is_tableval = space.is_table
+    idx = 0
+    while idx < num_entries:
+        entry_val = GetObjectAtIndexFromArray(is_tableval, idx)
+        entry_bits= unsigned(entry_val.ie_bits)
+        entry_obj = 0
+        if (int(entry_bits) & 0x001f0000) != 0: ## it's a valid entry
+            entry_obj = unsigned(entry_val.ie_object)
+        if entry_obj == unsigned(obj):
+            nm = (idx << 8) | (entry_bits >> 24)
+            return nm
+        idx += 1
+    return 0
+
 
 @header("{0: <20s} {1: <28s} {2: <12s} {3: <6s} {4: <6s} {5: <20s} {6: <7s}\n".format(
             "portset", "waitqueue", "recvname", "flags", "refs", "recvname", "process"))
@@ -265,21 +287,22 @@ def PrintPortSetSummary(pset, space = 0):
     if config['verbosity'] > vHUMAN :
         show_kmsg_summary = True
 
+    local_name = FindEntryName(pset, space)
     setid = 0
     if pset.ips_object.io_bits & 0x80000000:
         setid = pset.ips_messages.data.pset.setq.wqset_id
         out_str += "{0: #019x}  {1: #019x} {2: <7s} {3: #011x}   {4: <4s} {5: >6d}  {6: #019x}   ".format(
                     unsigned(pset), addressof(pset.ips_messages), ' '*7,
-                    pset.ips_messages.data.pset.local_name, "ASet",
+                    local_name, "ASet",
                     pset.ips_object.io_references,
-                    pset.ips_messages.data.pset.local_name)
+                    local_name)
 
     else:
         out_str += "{0: #019x}  {1: #019x} {2: <7s} {3: #011x}   {4: <4s} {5: >6d}  {6: #019x}   ".format(
                     unsigned(pset), addressof(pset.ips_messages), ' '*7,
-                    pset.ips_messages.data.pset.local_name, "DSet",
+                    local_name, "DSet",
                     pset.ips_object.io_references,
-                    pset.ips_messages.data.pset.local_name)
+                    local_name)
     print out_str
 
     if setid != 0 and space != 0:

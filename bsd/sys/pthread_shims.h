@@ -37,21 +37,36 @@
 #include <kern/kern_types.h>
 #include <kern/kcdata.h>
 #include <kern/locks.h>
+#include <sys/user.h>
 #include <sys/_types.h>
 #include <sys/_types/_sigset_t.h>
 #include <sys/kernel_types.h>
-#include <sys/proc_info.h>
 
 #ifndef PTHREAD_INTERNAL
 struct uthread;
 #define M_PROC 41
 #endif
 
-#ifdef NEEDS_SCHED_CALL_T
+#if !defined(_SCHED_CALL_T_DEFINED)
+#define _SCHED_CALL_T_DEFINED
 typedef void (*sched_call_t)(int type, thread_t thread);
 #endif
 
 typedef struct workq_reqthreads_req_s {unsigned long priority; int count;} *workq_reqthreads_req_t;
+typedef struct workq_threadreq_s { void *opaqueptr[2]; uint32_t opaqueint[2];} *workq_threadreq_t;
+enum workq_threadreq_type {
+	WORKQ_THREADREQ_KEVENT = 1,
+	WORKQ_THREADREQ_WORKLOOP = 2,
+	WORKQ_THREADREQ_WORKLOOP_NO_THREAD_CALL = 3,
+	WORKQ_THREADREQ_REDRIVE = 4,
+};
+enum workq_threadreq_op {
+	WORKQ_THREADREQ_CHANGE_PRI = 1,
+	WORKQ_THREADREQ_CANCEL = 2,
+	WORKQ_THREADREQ_CHANGE_PRI_NO_THREAD_CALL = 3,
+};
+#define WORKQ_THREADREQ_FLAG_NOEMERGENCY 0x1
+
 
 /*
  * Increment each time new reserved slots are used. When the pthread
@@ -65,11 +80,10 @@ typedef const struct pthread_functions_s {
 
 	/* internal calls, kernel core -> kext */
 	void (*pthread_init)(void);
-	int (*fill_procworkqueue)(proc_t p, struct proc_workqueueinfo * pwqinfo);
+	int (*fill_procworkqueue)(proc_t p, void* pwqinfo);
 
-	// UNUSED - TO BE DELETED
-	void (*workqueue_init_lock)(proc_t p);
-	void (*workqueue_destroy_lock)(proc_t p);
+	void (*__unused1)(void);
+	void (*__unused2)(void);
 
 	void (*workqueue_exit)(struct proc *p);
 	void (*workqueue_mark_exiting)(struct proc *p);
@@ -115,14 +129,51 @@ typedef const struct pthread_functions_s {
 	/* try to get wq flags in debugger context */
 	uint32_t (*get_pwq_state_kdp)(proc_t p);
 
-	unsigned long (*pthread_priority_canonicalize)(unsigned long pthread_priority);
+	void (*__unused3)(void);
 	unsigned long (*pthread_priority_canonicalize2)(unsigned long pthread_priority, boolean_t propagation);
+
+	/* Returns true on success, false on mismatch */
+	boolean_t (*workq_thread_has_been_unbound)(thread_t th, int qos_class);
 
 	void (*pthread_find_owner)(thread_t thread, struct stackshot_thread_waitinfo *waitinfo);
 	void *(*pthread_get_thread_kwq)(thread_t thread);
 
+	/*
+	 * Submits a threadreq to the workq system.
+	 *
+	 * If type is WORKQ_THREADREQ_KEVENT, the semantics are similar to a call
+	 * to workq_reqthreads and the kevent bind function will be called to
+	 * indicate the thread fulfilling the request.  The req argument is ignored.
+	 *
+	 * If type is WORKQ_THREADREQ_WORKLOOP, The req argument should point to
+	 * allocated memory of at least the sizeof(workq_threadreq_t).  That memory
+	 * is lent to the workq system until workloop_fulfill_threadreq is called
+	 * and passed the pointer, at which point it may be freed.
+	 *
+	 * The properties of the request are passed in the (pthread) priority and flags arguments.
+	 *
+	 * Will return zero upon success or an error value on failure.  An error of
+	 * ENOTSUP means the type argument was not understood.
+	 */
+	int (*workq_threadreq)(struct proc *p, workq_threadreq_t req,
+		enum workq_threadreq_type, unsigned long priority, int flags);
+
+	/*
+	 * Modifies an already submitted thread request.
+	 *
+	 * If operation is WORKQ_THREADREQ_CHANGE_PRI, arg1 is the new priority and arg2 is unused.
+	 *
+	 * If operation is WORKQ_THREADREQ_CANCEL, arg1 and arg2 are unused.
+	 *
+	 * Will return zero upon success or an error value on failure.  An error of
+	 * ENOTSUP means the operation argument was not understood.
+	 */
+	int (*workq_threadreq_modify)(struct proc *t, workq_threadreq_t req,
+			enum workq_threadreq_op operation,
+			unsigned long arg1, unsigned long arg2);
+
 	/* padding for future */
-	void * _pad[90];
+	void * _pad[87];
 } * pthread_functions_t;
 
 typedef const struct pthread_callbacks_s {
@@ -142,8 +193,14 @@ typedef const struct pthread_callbacks_s {
 	void (*proc_set_wqthread)(struct proc *t, user_addr_t addr);
 	int (*proc_get_pthsize)(struct proc *t);
 	void (*proc_set_pthsize)(struct proc *t, int size);
+#if defined(__arm64__)
+	unsigned __int128 (*atomic_fetch_add_128_relaxed)(_Atomic unsigned __int128 *ptr,
+			unsigned __int128 value);
+	unsigned __int128 (*atomic_load_128_relaxed)(_Atomic unsigned __int128 *ptr);
+#else
 	void *unused_was_proc_get_targconc;
 	void *unused_was_proc_set_targconc;
+#endif
 	uint64_t (*proc_get_dispatchqueue_offset)(struct proc *t);
 	void (*proc_set_dispatchqueue_offset)(struct proc *t, uint64_t offset);
 	void *unused_was_proc_get_wqlockptr;
@@ -178,11 +235,13 @@ typedef const struct pthread_callbacks_s {
 
 	/* wq functions */
 	kern_return_t (*thread_set_wq_state32)(thread_t thread, thread_state_t state);
+#if !defined(__arm__)
 	kern_return_t (*thread_set_wq_state64)(thread_t thread, thread_state_t state);
+#endif
 
 	/* sched_prim.h */
-	void (*thread_exception_return)();
-	void (*thread_bootstrap_return)();
+	void (*thread_exception_return)(void);
+	void (*thread_bootstrap_return)(void);
 
 	/* kern/clock.h */
 	void (*absolutetime_to_microtime)(uint64_t abstime, clock_sec_t *secs, clock_usec_t *microsecs);
@@ -228,6 +287,9 @@ typedef const struct pthread_callbacks_s {
 	/* osfmk/<arch>/machine_routines.h */
 	int (*ml_get_max_cpus)(void);
 
+	#if defined(__arm__)
+	uint32_t (*map_is_1gb)(vm_map_t);
+	#endif
 
 	/* <rdar://problem/12809089> xnu: struct proc p_dispatchqueue_serialno_offset additions */
 	uint64_t (*proc_get_dispatchqueue_serialno_offset)(struct proc *p);
@@ -243,8 +305,8 @@ typedef const struct pthread_callbacks_s {
 	kern_return_t (*thread_set_tsd_base)(thread_t thread, mach_vm_offset_t tsd_base);
 
 	int	(*proc_usynch_get_requested_thread_qos)(struct uthread *);
-	void *unused_was_proc_usynch_thread_qos_add_override;
-	void *unused_was_proc_usynch_thread_qos_remove_override;
+	uint64_t (*proc_get_mach_thread_self_tsd_offset)(struct proc *p);
+	void (*proc_set_mach_thread_self_tsd_offset)(struct proc *p, uint64_t mach_thread_self_tsd_offset);
 
 	kern_return_t (*thread_policy_get)(thread_t t, thread_policy_flavor_t flavor, thread_policy_t info, mach_msg_type_number_t *count, boolean_t *get_default);
 	boolean_t (*qos_main_thread_active)(void);
@@ -268,8 +330,24 @@ typedef const struct pthread_callbacks_s {
 	user_addr_t (*proc_get_stack_addr_hint)(struct proc *p);
 	void (*proc_set_stack_addr_hint)(struct proc *p, user_addr_t stack_addr_hint);
 
+	uint64_t (*proc_get_return_to_kernel_offset)(struct proc *t);
+	void (*proc_set_return_to_kernel_offset)(struct proc *t, uint64_t offset);
+
+	/* indicates call is being made synchronously with workq_threadreq call */
+#	define WORKLOOP_FULFILL_THREADREQ_SYNC   0x1
+#	define WORKLOOP_FULFILL_THREADREQ_CANCEL 0x2
+	int (*workloop_fulfill_threadreq)(struct proc *p, workq_threadreq_t req, thread_t thread, int flags);
+	void (*thread_will_park_or_terminate)(thread_t thread);
+
+	/* For getting maximum parallelism for a given QoS */
+	uint32_t (*qos_max_parallelism)(int qos, uint64_t options);
+
+	/* proc_internal.h: struct proc user_stack accessor */
+	user_addr_t (*proc_get_user_stack)(struct proc *p);
+	void (*proc_set_user_stack)(struct proc *p, user_addr_t user_stack);
+
 	/* padding for future */
-	void* _pad[76];
+	void* _pad[69];
 
 } *pthread_callbacks_t;
 

@@ -97,10 +97,10 @@ RB_PROTOTYPE_SC_PREV(__private_extern__, ll_reach_tree, if_llreach,
     ls_link, ifllr_cmp);
 
 #define	IFLR_LOCK_ASSERT_HELD(_iflr)					\
-	lck_mtx_assert(&(_iflr)->lr_lock, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&(_iflr)->lr_lock, LCK_MTX_ASSERT_OWNED)
 
 #define	IFLR_LOCK_ASSERT_NOTHELD(_iflr)				\
-	lck_mtx_assert(&(_iflr)->lr_lock, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&(_iflr)->lr_lock, LCK_MTX_ASSERT_NOTOWNED)
 
 #define	IFLR_LOCK(_iflr)						\
 	lck_mtx_lock(&(_iflr)->lr_lock)

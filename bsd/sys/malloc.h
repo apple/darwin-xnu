@@ -217,8 +217,11 @@
 #define M_FD_VN_DATA	122	/* Per fd vnode data */
 #define M_FD_DIRBUF	123	/* Directory entries' buffer */
 #define M_NETAGENT	124	/* Network Agents */
+#define M_EVENTHANDLER	125	/* Eventhandler */
+#define M_LLTABLE	126	/* Link layer table */
+#define M_NWKWQ		127	/* Network work queue */
 
-#define	M_LAST		125	/* Must be last type + 1 */
+#define	M_LAST		128	/* Must be last type + 1 */
 
 #else /* BSD_KERNEL_PRIVATE */
 
@@ -263,22 +266,23 @@ extern struct kmemstats kmemstats[];
 
 #include <mach/vm_types.h>
 
-#define	MALLOC(space, cast, size, type, flags) \
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+#define	MALLOC(space, cast, size, type, flags)                   \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
 	(space) = (cast)__MALLOC(size, type, flags, &site); })
-#define	REALLOC(space, cast, addr, size, type, flags) \
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+
+#define	REALLOC(space, cast, addr, size, type, flags)            \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
 	(space) = (cast)__REALLOC(addr, size, type, flags, &site); })
 
-#define	_MALLOC(size, type, flags) \
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+#define	_MALLOC(size, type, flags)                               \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
 	__MALLOC(size, type, flags, &site); })
-#define	_REALLOC(addr, size, type, flags) \
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+#define	_REALLOC(addr, size, type, flags)                        \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
 	__REALLOC(addr, size, type, flags, &site); })
 
-#define	_MALLOC_ZONE(size, type, flags) \
-	({ static vm_allocation_site_t site __attribute__((section("__DATA, __data"))); \
+#define	_MALLOC_ZONE(size, type, flags)                          \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
 	__MALLOC_ZONE(size, type, flags, &site); })
 
 #define FREE(addr, type) \
@@ -294,7 +298,7 @@ extern void	*__MALLOC(
 			size_t		      size,
 			int		      type,
 			int		      flags,
-			vm_allocation_site_t *site);
+			vm_allocation_site_t *site)  __attribute__((alloc_size(1)));
 
 extern void	_FREE(
 			void		*addr,
@@ -305,7 +309,7 @@ extern void	*__REALLOC(
 			size_t		      size,
 			int		      type,
 			int		      flags,
-			vm_allocation_site_t *site);
+			vm_allocation_site_t *site)  __attribute__((alloc_size(2)));
 
 extern void	*__MALLOC_ZONE(
 			size_t		size,

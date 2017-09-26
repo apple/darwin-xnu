@@ -35,7 +35,6 @@
  * the terms and conditions for use and redistribution.
  */
 
-#include <mach_rt.h>
 #include <mach_ldebug.h>
 #include <i386/asm.h>
 #include <i386/eflags.h>
@@ -117,32 +116,6 @@
 	.text						;	\
 1:
 
-/*
- * If one or more simplelocks are currently held by a thread,
- * an attempt to acquire a mutex will cause this check to fail
- * (since a mutex lock may context switch, holding a simplelock
- * is not a good thing).
- */
-#if	MACH_RT
-#define CHECK_PREEMPTION_LEVEL()				\
-	cmpl	$0,%gs:CPU_HIBERNATE			;	\
-	jne	1f					;	\
-	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL		;	\
-	je	1f					;	\
-	ALIGN_STACK()					;	\
-	movl	%gs:CPU_PREEMPTION_LEVEL, %eax		;	\
-	LOAD_ARG1(%eax)					;	\
-	LOAD_STRING_ARG0(2f)				;	\
-	CALL_PANIC()					;	\
-	hlt						;	\
-	.data						;	\
-2:	String	"preemption_level(%d) != 0!"		;	\
-	.text						;	\
-1:
-#else	/* MACH_RT */
-#define	CHECK_PREEMPTION_LEVEL()
-#endif	/* MACH_RT */
-
 #define	CHECK_MYLOCK(current, owner)				\
 	cmp	current, owner				;	\
 	jne	1f					;	\
@@ -157,9 +130,36 @@
 
 #else	/* MACH_LDEBUG */
 #define	CHECK_MUTEX_TYPE()
-#define CHECK_PREEMPTION_LEVEL()
 #define	CHECK_MYLOCK(thd)
 #endif	/* MACH_LDEBUG */
+
+#if DEVELOPMENT || DEBUG
+/*
+ * If one or more simplelocks are currently held by a thread,
+ * an attempt to acquire a mutex will cause this check to fail
+ * (since a mutex lock may context switch, holding a simplelock
+ * is not a good thing).
+ */
+#define CHECK_PREEMPTION_LEVEL()				\
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL		;	\
+	je	1f					;	\
+	cmpl    $0,EXT(LckDisablePreemptCheck)(%rip)	;	\
+	jne	1f					;	\
+	cmpl	$0,%gs:CPU_HIBERNATE			;	\
+	jne	1f					;	\
+	ALIGN_STACK()					;	\
+	movl	%gs:CPU_PREEMPTION_LEVEL, %eax		;	\
+	LOAD_ARG1(%eax)					;	\
+	LOAD_STRING_ARG0(2f)				;	\
+	CALL_PANIC()					;	\
+	hlt						;	\
+	.data						;	\
+2:	String	"preemption_level(%d) != 0!"		;	\
+	.text						;	\
+1:
+#else /* DEVELOPMENT || DEBUG */
+#define CHECK_PREEMPTION_LEVEL()
+#endif /* DEVELOPMENT || DEBUG */
 
 #define PREEMPTION_DISABLE				\
 	incl	%gs:CPU_PREEMPTION_LEVEL
@@ -258,7 +258,7 @@ LEAF_ENTRY(hw_lock_byte_init)
  *	void	hw_lock_byte_lock(uint8_t *lock_byte)
  *
  *	Acquire byte sized lock operand, spinning until it becomes available.
- *	MACH_RT:  also return with preemption disabled.
+ *	return with preemption disabled.
  */
 
 LEAF_ENTRY(hw_lock_byte_lock)
@@ -278,477 +278,14 @@ LEAF_ENTRY(hw_lock_byte_lock)
 /*
  *	void hw_lock_byte_unlock(uint8_t *lock_byte)
  *
- *	Unconditionally release byte sized lock operand.
- *	MACH_RT:  release preemption level.
+ *	Unconditionally release byte sized lock operand,
+ *	release preemption level.
  */
 
 LEAF_ENTRY(hw_lock_byte_unlock)
 	movb $0, (%rdi)		/* Clear the lock byte */
 	PREEMPTION_ENABLE
 	LEAF_RET
-
-/*
- * Reader-writer lock fastpaths. These currently exist for the
- * shared lock acquire, the exclusive lock acquire, the shared to
- * exclusive upgrade and the release paths (where they reduce overhead
- * considerably) -- these are by far the most frequently used routines
- *
- * The following should reflect the layout of the bitfield embedded within
- * the lck_rw_t structure (see i386/locks.h).
- */
-#define LCK_RW_INTERLOCK	(0x1 << 16)
-
-#define LCK_RW_PRIV_EXCL	(0x1 << 24)
-#define LCK_RW_WANT_UPGRADE	(0x2 << 24)
-#define LCK_RW_WANT_WRITE	(0x4 << 24)
-#define LCK_R_WAITING		(0x8 << 24)
-#define LCK_W_WAITING		(0x10 << 24)
-
-#define LCK_RW_SHARED_MASK	(0xffff)
-
-/*
- * For most routines, the lck_rw_t pointer is loaded into a
- * register initially, and the flags bitfield loaded into another
- * register and examined
- */
- 
-#define	RW_LOCK_SHARED_MASK (LCK_RW_INTERLOCK | LCK_RW_WANT_UPGRADE | LCK_RW_WANT_WRITE)
-/*
- *	void lck_rw_lock_shared(lck_rw_t *)
- *
- */
-Entry(lck_rw_lock_shared)
-	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Load thread pointer */
-	incl	TH_RWLOCK_COUNT(%rcx)		/* Increment count before atomic CAS */
-1:
-	mov	(%rdi), %eax		/* Load state bitfield and interlock */
-	testl	$(RW_LOCK_SHARED_MASK), %eax	/* Eligible for fastpath? */
-	jne	3f
-
-	movl	%eax, %ecx			/* original value in %eax for cmpxchgl */
-	incl	%ecx				/* Increment reader refcount */
-	lock
-	cmpxchgl %ecx, (%rdi)			/* Attempt atomic exchange */
-	jne	2f
-
-#if	CONFIG_DTRACE
-	/*
-	 * Dtrace lockstat event: LS_LCK_RW_LOCK_SHARED_ACQUIRE
-	 * Implemented by swapping between return and no-op instructions.
-	 * See bsd/dev/dtrace/lockstat.c.
-	 */
-	LOCKSTAT_LABEL(_lck_rw_lock_shared_lockstat_patch_point)
-	ret
-	/*
-	Fall thru when patched, counting on lock pointer in %rdi
-	*/
-	LOCKSTAT_RECORD(LS_LCK_RW_LOCK_SHARED_ACQUIRE, %rdi)
-#endif
-	ret
-2:
-	PAUSE
-	jmp	1b
-3:
-	jmp	EXT(lck_rw_lock_shared_gen)
-
-
-	
-#define	RW_TRY_LOCK_SHARED_MASK (LCK_RW_WANT_UPGRADE | LCK_RW_WANT_WRITE)
-/*
- *	void lck_rw_try_lock_shared(lck_rw_t *)
- *
- */
-Entry(lck_rw_try_lock_shared)
-1:
-	mov	(%rdi), %eax		/* Load state bitfield and interlock */
-	testl	$(LCK_RW_INTERLOCK), %eax
-	jne	2f
-	testl	$(RW_TRY_LOCK_SHARED_MASK), %eax
-	jne	3f			/* lock is busy */
-
-	movl	%eax, %ecx			/* original value in %eax for cmpxchgl */
-	incl	%ecx				/* Increment reader refcount */
-	lock
-	cmpxchgl %ecx, (%rdi)			/* Attempt atomic exchange */
-	jne	2f
-
-	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Load thread pointer */
-	incl	TH_RWLOCK_COUNT(%rcx)		/* Increment count on success. */
-	/* There is a 3 instr window where preemption may not notice rwlock_count after cmpxchg */
-
-#if	CONFIG_DTRACE
-	movl	$1, %eax
-	/*
-	 * Dtrace lockstat event: LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE
-	 * Implemented by swapping between return and no-op instructions.
-	 * See bsd/dev/dtrace/lockstat.c.
-	 */
-	LOCKSTAT_LABEL(_lck_rw_try_lock_shared_lockstat_patch_point)
-	ret
-	/* Fall thru when patched, counting on lock pointer in %rdi  */
-	LOCKSTAT_RECORD(LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE, %rdi)
-#endif
-	movl	$1, %eax			/* return TRUE */
-	ret
-2:
-	PAUSE
-	jmp	1b
-3:
-	xorl	%eax, %eax
-	ret
-
-	
-#define	RW_LOCK_EXCLUSIVE_HELD	(LCK_RW_WANT_WRITE | LCK_RW_WANT_UPGRADE)
-/*
- *	int lck_rw_grab_shared(lck_rw_t *)
- *
- */
-Entry(lck_rw_grab_shared)
-1:
-	mov	(%rdi), %eax		/* Load state bitfield and interlock */
-	testl	$(LCK_RW_INTERLOCK), %eax
-	jne	5f
-	testl	$(RW_LOCK_EXCLUSIVE_HELD), %eax	
-	jne	3f
-2:	
-	movl	%eax, %ecx		/* original value in %eax for cmpxchgl */
-	incl	%ecx			/* Increment reader refcount */
-	lock
-	cmpxchgl %ecx, (%rdi)		/* Attempt atomic exchange */
-	jne	4f
-
-	movl	$1, %eax		/* return success */
-	ret
-3:
-	testl	$(LCK_RW_SHARED_MASK), %eax
-	je	4f
-	testl	$(LCK_RW_PRIV_EXCL), %eax
-	je	2b
-4:
-	xorl	%eax, %eax		/* return failure */
-	ret
-5:
-	PAUSE
-	jmp	1b
-
-
-	
-#define	RW_LOCK_EXCLUSIVE_MASK (LCK_RW_SHARED_MASK | LCK_RW_INTERLOCK | \
-	                        LCK_RW_WANT_UPGRADE | LCK_RW_WANT_WRITE)
-/*
- *	void lck_rw_lock_exclusive(lck_rw_t*)
- *
- */
-Entry(lck_rw_lock_exclusive)
-	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Load thread pointer */
-	incl	TH_RWLOCK_COUNT(%rcx)		/* Increment count before atomic CAS */
-1:
-	mov	(%rdi), %eax		/* Load state bitfield, interlock and shared count */
-	testl	$(RW_LOCK_EXCLUSIVE_MASK), %eax		/* Eligible for fastpath? */
-	jne	3f					/* no, go slow */
-
-	movl	%eax, %ecx				/* original value in %eax for cmpxchgl */
-	orl	$(LCK_RW_WANT_WRITE), %ecx
-	lock
-	cmpxchgl %ecx, (%rdi)			/* Attempt atomic exchange */
-	jne	2f
-
-#if	CONFIG_DTRACE
-	/*
-	 * Dtrace lockstat event: LS_LCK_RW_LOCK_EXCL_ACQUIRE
-	 * Implemented by swapping between return and no-op instructions.
-	 * See bsd/dev/dtrace/lockstat.c.
-	 */
-	LOCKSTAT_LABEL(_lck_rw_lock_exclusive_lockstat_patch_point)
-	ret
-	/* Fall thru when patched, counting on lock pointer in %rdi  */
-	LOCKSTAT_RECORD(LS_LCK_RW_LOCK_EXCL_ACQUIRE, %rdi)
-#endif
-	ret
-2:
-	PAUSE
-	jmp	1b
-3:
-	jmp	EXT(lck_rw_lock_exclusive_gen)
-
-
-	
-#define	RW_TRY_LOCK_EXCLUSIVE_MASK (LCK_RW_SHARED_MASK | LCK_RW_WANT_UPGRADE | LCK_RW_WANT_WRITE)
-/*
- *	void lck_rw_try_lock_exclusive(lck_rw_t *)
- *
- *		Tries to get a write lock.
- *
- *		Returns FALSE if the lock is not held on return.
- */
-Entry(lck_rw_try_lock_exclusive)
-1:
-	mov	(%rdi), %eax		/* Load state bitfield, interlock and shared count */
-	testl	$(LCK_RW_INTERLOCK), %eax
-	jne	2f
-	testl	$(RW_TRY_LOCK_EXCLUSIVE_MASK), %eax
-	jne	3f				/* can't get it */
-
-	movl	%eax, %ecx			/* original value in %eax for cmpxchgl */
-	orl	$(LCK_RW_WANT_WRITE), %ecx
-	lock
-	cmpxchgl %ecx, (%rdi)			/* Attempt atomic exchange */
-	jne	2f
-
-	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Load thread pointer */
-	incl	TH_RWLOCK_COUNT(%rcx)		/* Increment count on success. */
-	/* There is a 3 instr window where preemption may not notice rwlock_count after cmpxchg */
-
-#if	CONFIG_DTRACE
-	movl	$1, %eax
-	/*
-	 * Dtrace lockstat event: LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE
-	 * Implemented by swapping between return and no-op instructions.
-	 * See bsd/dev/dtrace/lockstat.c.
-	 */
-	LOCKSTAT_LABEL(_lck_rw_try_lock_exclusive_lockstat_patch_point)
-	ret
-	/* Fall thru when patched, counting on lock pointer in %rdi  */
-	LOCKSTAT_RECORD(LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE, %rdi)
-#endif
-	movl	$1, %eax			/* return TRUE */
-	ret
-2:
-	PAUSE
-	jmp	1b
-3:
-	xorl	%eax, %eax			/* return FALSE */
-	ret	
-
-
-
-/*
- *	void lck_rw_lock_shared_to_exclusive(lck_rw_t*)
- *
- *	fastpath can be taken if
- *	the current rw_shared_count == 1
- *	AND the interlock is clear
- *	AND RW_WANT_UPGRADE is not set
- *
- *	note that RW_WANT_WRITE could be set, but will not
- *	be indicative of an exclusive hold since we have
- * 	a read count on the lock that we have not yet released
- *	we can blow by that state since the lck_rw_lock_exclusive
- * 	function will block until rw_shared_count == 0 and 
- * 	RW_WANT_UPGRADE is clear... it does this check behind
- *	the interlock which we are also checking for
- *
- * 	to make the transition we must be able to atomically
- *	set RW_WANT_UPGRADE and get rid of the read count we hold
- */
-Entry(lck_rw_lock_shared_to_exclusive)
-1:
-	mov	(%rdi), %eax		/* Load state bitfield, interlock and shared count */
-	testl	$(LCK_RW_INTERLOCK), %eax
-	jne	7f
-	testl	$(LCK_RW_WANT_UPGRADE), %eax
-	jne	2f
-
-	movl	%eax, %ecx			/* original value in %eax for cmpxchgl */
-	orl	$(LCK_RW_WANT_UPGRADE), %ecx	/* ask for WANT_UPGRADE */
-	decl	%ecx				/* and shed our read count */
-	lock
-	cmpxchgl %ecx, (%rdi)			/* Attempt atomic exchange */
-	jne	7f
-						/* we now own the WANT_UPGRADE */
-	testl	$(LCK_RW_SHARED_MASK), %ecx	/* check to see if all of the readers are drained */
-	jne	8f				/* if not, we need to go wait */
-
-#if	CONFIG_DTRACE
-	movl	$1, %eax
-	/*
-	 * Dtrace lockstat event: LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE
-	 * Implemented by swapping between return and no-op instructions.
-	 * See bsd/dev/dtrace/lockstat.c.
-	 */
-	LOCKSTAT_LABEL(_lck_rw_lock_shared_to_exclusive_lockstat_patch_point)
-	ret
-    /* Fall thru when patched, counting on lock pointer in %rdi  */
-    LOCKSTAT_RECORD(LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE, %rdi)
-#endif
-	movl	$1, %eax			/* return success */
-	ret
-	
-2:						/* someone else already holds WANT_UPGRADE */
-	movl	%eax, %ecx			/* original value in %eax for cmpxchgl */
-	decl	%ecx				/* shed our read count */
-	testl	$(LCK_RW_SHARED_MASK), %ecx
-	jne	3f				/* we were the last reader */
-	andl	$(~LCK_W_WAITING), %ecx		/* so clear the wait indicator */
-3:	
-	lock
-	cmpxchgl %ecx, (%rdi)			/* Attempt atomic exchange */
-	jne	7f
-
-	mov	%eax, %esi			/* put old flags as second arg */
-						/* lock is alread in %rdi */
-	call	EXT(lck_rw_lock_shared_to_exclusive_failure)
-	ret					/* and pass the failure return along */	
-7:
-	PAUSE
-	jmp	1b
-8:
-	jmp	EXT(lck_rw_lock_shared_to_exclusive_success)
-
-
-	
-	.cstring
-rwl_release_error_str:
-	.asciz  "Releasing non-exclusive RW lock without a reader refcount!"
-	.text
-	
-/*
- *	lck_rw_type_t lck_rw_done(lck_rw_t *)
- *
- */
-Entry(lck_rw_done)
-1:
-	mov	(%rdi), %eax		/* Load state bitfield, interlock and reader count */
-	testl   $(LCK_RW_INTERLOCK), %eax
-	jne     7f				/* wait for interlock to clear */
-
-	movl	%eax, %ecx			/* keep original value in %eax for cmpxchgl */
-	testl	$(LCK_RW_SHARED_MASK), %ecx	/* if reader count == 0, must be exclusive lock */
-	je	2f
-	decl	%ecx				/* Decrement reader count */
-	testl	$(LCK_RW_SHARED_MASK), %ecx	/* if reader count has now gone to 0, check for waiters */
-	je	4f
-	jmp	6f
-2:	
-	testl	$(LCK_RW_WANT_UPGRADE), %ecx
-	je	3f
-	andl	$(~LCK_RW_WANT_UPGRADE), %ecx
-	jmp	4f
-3:	
-	testl	$(LCK_RW_WANT_WRITE), %ecx
-	je	8f				/* lock is not 'owned', go panic */
-	andl	$(~LCK_RW_WANT_WRITE), %ecx
-4:	
-	/*
-	 * test the original values to match what
-	 * lck_rw_done_gen is going to do to determine
-	 * which wakeups need to happen...
-	 *
-	 * if !(fake_lck->lck_rw_priv_excl && fake_lck->lck_w_waiting)
-	 */
-	testl	$(LCK_W_WAITING), %eax
-	je	5f
-	andl	$(~LCK_W_WAITING), %ecx
-
-	testl	$(LCK_RW_PRIV_EXCL), %eax
-	jne	6f
-5:	
-	andl	$(~LCK_R_WAITING), %ecx
-6:	
-	lock
-	cmpxchgl %ecx, (%rdi)			/* Attempt atomic exchange */
-	jne	7f
-
-	mov	%eax,%esi	/* old flags in %rsi */
-				/* lock is in %rdi already */
-	call	EXT(lck_rw_done_gen)	
-	ret
-7:
-	PAUSE
-	jmp	1b
-8:
-	ALIGN_STACK()
-	LOAD_STRING_ARG0(rwl_release_error_str)
-	CALL_PANIC()
-	
-
-	
-/*
- *	lck_rw_type_t lck_rw_lock_exclusive_to_shared(lck_rw_t *)
- *
- */
-Entry(lck_rw_lock_exclusive_to_shared)
-1:
-	mov	(%rdi), %eax		/* Load state bitfield, interlock and reader count */
-	testl   $(LCK_RW_INTERLOCK), %eax
-	jne     6f				/* wait for interlock to clear */
-
-	movl	%eax, %ecx			/* keep original value in %eax for cmpxchgl */
-	incl	%ecx				/* Increment reader count */
-
-	testl	$(LCK_RW_WANT_UPGRADE), %ecx
-	je	2f
-	andl	$(~LCK_RW_WANT_UPGRADE), %ecx
-	jmp	3f
-2:	
-	andl	$(~LCK_RW_WANT_WRITE), %ecx
-3:	
-	/*
-	 * test the original values to match what
-	 * lck_rw_lock_exclusive_to_shared_gen is going to do to determine
-	 * which wakeups need to happen...
-	 *
-	 * if !(fake_lck->lck_rw_priv_excl && fake_lck->lck_w_waiting)
-	 */
-	testl	$(LCK_W_WAITING), %eax
-	je	4f
-	testl	$(LCK_RW_PRIV_EXCL), %eax
-	jne	5f
-4:	
-	andl	$(~LCK_R_WAITING), %ecx
-5:	
-	lock
-	cmpxchgl %ecx, (%rdi)			/* Attempt atomic exchange */
-	jne	6f
-
-	mov	%eax,%esi
-	call	EXT(lck_rw_lock_exclusive_to_shared_gen)
-	ret
-6:
-	PAUSE
-	jmp	1b
-
-
-
-/*
- *	int lck_rw_grab_want(lck_rw_t *)
- *
- */
-Entry(lck_rw_grab_want)
-1:
-	mov	(%rdi), %eax		/* Load state bitfield, interlock and reader count */
-	testl   $(LCK_RW_INTERLOCK), %eax
-	jne     3f				/* wait for interlock to clear */
-	testl	$(LCK_RW_WANT_WRITE), %eax	/* want_write has been grabbed by someone else */
-	jne	2f				/* go return failure */
-	
-	movl	%eax, %ecx			/* original value in %eax for cmpxchgl */
-	orl	$(LCK_RW_WANT_WRITE), %ecx
-	lock
-	cmpxchgl %ecx, (%rdi)			/* Attempt atomic exchange */
-	jne	2f
-						/* we now own want_write */
-	movl	$1, %eax			/* return success */
-	ret
-2:
-	xorl	%eax, %eax			/* return failure */
-	ret
-3:
-	PAUSE
-	jmp	1b
-
-	
-#define	RW_LOCK_SHARED_OR_UPGRADE_MASK (LCK_RW_SHARED_MASK | LCK_RW_INTERLOCK | LCK_RW_WANT_UPGRADE)
-/*
- *	int lck_rw_held_read_or_upgrade(lck_rw_t *)
- *
- */
-Entry(lck_rw_held_read_or_upgrade)
-	mov	(%rdi), %eax
-	andl	$(RW_LOCK_SHARED_OR_UPGRADE_MASK), %eax
-	ret
-
-
 	
 /*
  * N.B.: On x86, statistics are currently recorded for all indirect mutexes.

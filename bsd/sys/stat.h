@@ -368,7 +368,15 @@ struct user32_stat64 {
 	__uint32_t	st_gen;					/* file generation number */
 	__uint32_t	st_lspare;				/* RESERVED: DO NOT USE! */
 	__int64_t	st_qspare[2];			/* RESERVED: DO NOT USE! */
+#if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
+/* For the newer ARMv7k ABI where 64-bit types are 64-bit aligned, but pointers
+ * are 32-bit:
+ * Applying attributes here causes a mismatch with the user-space struct stat64
+ */
+};
+#else
 } __attribute__((packed,aligned(4)));
+#endif
 
 extern void munge_user64_stat64(struct stat64 *sbp, struct user64_stat64 *usbp);
 extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
@@ -474,7 +482,10 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
    notifications for deletes or renames for files which have UF_TRACKED set. */
 #define UF_TRACKED		0x00000040
 
-/* Bits 0x0080 through 0x4000 are currently undefined. */
+#define UF_DATAVAULT	0x00000080	/* entitlement required for reading */
+					/* and writing */
+
+/* Bits 0x0100 through 0x4000 are currently undefined. */
 #define UF_HIDDEN	0x00008000	/* hint that this item should not be */
 					/* displayed in a GUI */
 /*
@@ -485,7 +496,7 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
 #define	SF_ARCHIVED	0x00010000	/* file is archived */
 #define	SF_IMMUTABLE	0x00020000	/* file may not be changed */
 #define	SF_APPEND	0x00040000	/* writes to file may only append */
-#define SF_RESTRICTED	0x00080000	/* restricted access */
+#define SF_RESTRICTED	0x00080000	/* entitlement required for writing */
 #define SF_NOUNLINK	0x00100000	/* Item may not be removed, renamed or mounted on */
 
 /*
@@ -523,6 +534,13 @@ mode_t	umask(mode_t);
 int	fchmodat(int, const char *, mode_t, int) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
 int	fstatat(int, const char *, struct stat *, int) __DARWIN_INODE64(fstatat) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
 int	mkdirat(int, const char *, mode_t) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0);
+
+#define	UTIME_NOW	-1
+#define	UTIME_OMIT	-2
+
+int	futimens(int __fd, const struct timespec __times[2]) __API_AVAILABLE(macosx(10.13), ios(11.0), tvos(11.0), watchos(4.0));
+int	utimensat(int __fd, const char *__path, const struct timespec __times[2],
+		int __flag) __API_AVAILABLE(macosx(10.13), ios(11.0), tvos(11.0), watchos(4.0));
 #endif
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)

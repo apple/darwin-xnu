@@ -574,7 +574,7 @@ _timevalfix
 _timevalsub
 _tvtoabstime
 _ubc_blktooff
-_ubc_create_upl
+_ubc_create_upl:_ubc_create_upl_external
 _ubc_getcred
 _ubc_getsize
 _ubc_msync
@@ -720,6 +720,7 @@ _vnode_isinuse
 _vnode_islnk
 _vnode_ismount
 _vnode_ismountedon
+_vnode_isnamedstream
 _vnode_isnocache
 _vnode_isnoreadahead
 _vnode_israge

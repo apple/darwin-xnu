@@ -41,10 +41,13 @@
 #include <kperf/pet.h>
 #include <kperf/sample.h>
 
+/* from libkern/libkern.h */
+extern uint64_t strtouq(const char *, char **, int);
+
 lck_grp_t kperf_lck_grp;
 
-/* thread on CPUs before starting the PET thread */
-thread_t *kperf_thread_on_cpus = NULL;
+/* IDs of threads on CPUs before starting the PET thread */
+uint64_t *kperf_tid_on_cpus = NULL;
 
 /* one wired sample buffer per CPU */
 static struct kperf_sample *intr_samplev;
@@ -76,8 +79,6 @@ kperf_init(void)
 {
 	static lck_grp_attr_t lck_grp_attr;
 
-	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
-
 	unsigned ncpus = 0;
 	int err;
 
@@ -91,13 +92,13 @@ kperf_init(void)
 	ncpus = machine_info.logical_cpu_max;
 
 	/* create buffers to remember which threads don't need to be sampled by PET */
-	kperf_thread_on_cpus = kalloc_tag(ncpus * sizeof(*kperf_thread_on_cpus),
+	kperf_tid_on_cpus = kalloc_tag(ncpus * sizeof(*kperf_tid_on_cpus),
 	                                  VM_KERN_MEMORY_DIAG);
-	if (kperf_thread_on_cpus == NULL) {
+	if (kperf_tid_on_cpus == NULL) {
 		err = ENOMEM;
 		goto error;
 	}
-	bzero(kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus));
+	bzero(kperf_tid_on_cpus, ncpus * sizeof(*kperf_tid_on_cpus));
 
 	/* create the interrupt buffers */
 	intr_samplec = ncpus;
@@ -124,9 +125,9 @@ error:
 		intr_samplec = 0;
 	}
 
-	if (kperf_thread_on_cpus) {
-		kfree(kperf_thread_on_cpus, ncpus * sizeof(*kperf_thread_on_cpus));
-		kperf_thread_on_cpus = NULL;
+	if (kperf_tid_on_cpus) {
+		kfree(kperf_tid_on_cpus, ncpus * sizeof(*kperf_tid_on_cpus));
+		kperf_tid_on_cpus = NULL;
 	}
 
 	return err;
@@ -135,8 +136,6 @@ error:
 void
 kperf_reset(void)
 {
-	lck_mtx_assert(ktrace_lock, LCK_MTX_ASSERT_OWNED);
-
 	/* turn off sampling first */
 	(void)kperf_sampling_disable();
 
@@ -148,6 +147,70 @@ kperf_reset(void)
 	/* timers, which require actions, first */
 	kperf_timer_reset();
 	kperf_action_reset();
+}
+
+void
+kperf_kernel_configure(const char *config)
+{
+	int pairs = 0;
+	char *end;
+	bool pet = false;
+
+	assert(config != NULL);
+
+	ktrace_start_single_threaded();
+
+	ktrace_kernel_configure(KTRACE_KPERF);
+
+	if (config[0] == 'p') {
+		pet = true;
+		config++;
+	}
+
+	do {
+		uint32_t action_samplers;
+		uint64_t timer_period;
+
+		pairs += 1;
+		kperf_action_set_count(pairs);
+		kperf_timer_set_count(pairs);
+
+		action_samplers = (uint32_t)strtouq(config, &end, 0);
+		if (config == end) {
+			kprintf("kperf: unable to parse '%s' as action sampler\n", config);
+			goto out;
+		}
+		config = end;
+
+		kperf_action_set_samplers(pairs, action_samplers);
+
+		if (config[0] == '\0') {
+			kprintf("kperf: missing timer period in config\n");
+			goto out;
+		}
+		config++;
+
+		timer_period = strtouq(config, &end, 0);
+		if (config == end) {
+			kprintf("kperf: unable to parse '%s' as timer period\n", config);
+			goto out;
+		}
+		config = end;
+
+		kperf_timer_set_period(pairs - 1, timer_period);
+		kperf_timer_set_action(pairs - 1, pairs);
+
+		if (pet) {
+			kperf_timer_set_petid(pairs - 1);
+			kperf_set_lightweight_pet(1);
+			pet = false;
+		}
+	} while (*(config++) == ',');
+
+	kperf_sampling_enable();
+
+out:
+	ktrace_end_single_threaded();
 }
 
 void

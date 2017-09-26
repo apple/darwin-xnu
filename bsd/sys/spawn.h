@@ -67,6 +67,9 @@
 #define	_POSIX_SPAWN_ALLOW_DATA_EXEC	0x2000
 #endif	/* PRIVATE */
 #define	POSIX_SPAWN_CLOEXEC_DEFAULT	0x4000
+#ifdef PRIVATE
+#define	_POSIX_SPAWN_HIGH_BITS_ASLR	0x8000
+#endif /* PRIVATE */
 
 /*
  * Possible values to be set for the process control actions on resource starvation.

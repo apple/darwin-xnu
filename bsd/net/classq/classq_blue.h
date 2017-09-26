@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -74,51 +74,6 @@ struct blue_stats {
 	u_int64_t		drop_unforced;
 	u_int64_t		marked_packets;
 };
-
-#ifdef BSD_KERNEL_PRIVATE
-/* blue flags */
-#define	BLUEF_ECN4	0x01	/* use packet marking for IPv4 packets */
-#define	BLUEF_ECN6	0x02	/* use packet marking for IPv6 packets */
-#define	BLUEF_ECN	(BLUEF_ECN4 | BLUEF_ECN6)
-
-#define	BLUEF_USERFLAGS							\
-	(BLUEF_ECN4 | BLUEF_ECN6)
-
-typedef struct blue {
-	u_int32_t blue_flags;	/* blue flags */
-
-	/* blue parameters */
-	int32_t	  blue_pmark;	  /* 0-1000 (mark probability*10000) */
-	int32_t   blue_max_pmark; /* sets precision of marking probability */
-	u_int32_t blue_hold_time; /* hold time in usec */
-	struct ifnet *blue_ifp;	  /* back pointer to ifnet */
-
-	/* variables for internal use */
-	u_int32_t blue_idle;	  /* queue was empty */
-	struct timeval blue_last; /* timestamp when the queue becomes idle */
-
-	/* statistics */
-	struct {
-		struct pktcntr	xmit_cnt;
-		struct pktcntr	drop_cnt;
-		u_int64_t	drop_forced;
-		u_int64_t	drop_unforced;
-		u_int64_t	marked_packets;
-	} blue_stats;
-} blue_t;
-
-extern void blue_init(void);
-extern struct blue *blue_alloc(struct ifnet *, u_int32_t, u_int32_t, u_int32_t);
-extern void blue_destroy(struct blue *);
-extern int blue_addq(struct blue *, class_queue_t *, struct mbuf *,
-    struct pf_mtag *);
-extern struct mbuf *blue_getq(struct blue *, class_queue_t *);
-extern void blue_purgeq(struct blue *, class_queue_t *, u_int32_t,
-    u_int32_t *, u_int32_t *);
-extern void blue_getstats(struct blue *, struct blue_stats *);
-extern void blue_updateq(struct blue *, cqev_t);
-extern int blue_suspendq(struct blue *, class_queue_t *, boolean_t);
-#endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef __cplusplus
 }

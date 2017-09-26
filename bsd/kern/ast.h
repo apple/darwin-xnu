@@ -39,6 +39,12 @@
 extern void act_set_astbsd(thread_t);
 extern void bsd_ast(thread_t);
 
+#define AST_KEVENT_RETURN_TO_KERNEL  0x0001
+#define AST_KEVENT_REDRIVE_THREADREQ 0x0002
+
+extern void kevent_ast(thread_t thread, uint16_t bits);
+extern void act_set_astkevent(thread_t thread, uint16_t bits);
+
 #if CONFIG_DTRACE
 extern void ast_dtrace_on(void);
 #endif

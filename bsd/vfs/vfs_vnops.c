@@ -112,18 +112,19 @@ int	ubc_setcred(struct vnode *, struct proc *);
 #endif
 
 #include <IOKit/IOBSD.h>
+#include <libkern/section_keywords.h>
 
 static int vn_closefile(struct fileglob *fp, vfs_context_t ctx);
 static int vn_ioctl(struct fileproc *fp, u_long com, caddr_t data,
-			vfs_context_t ctx);
+		vfs_context_t ctx);
 static int vn_read(struct fileproc *fp, struct uio *uio, int flags,
-			vfs_context_t ctx);
+		vfs_context_t ctx);
 static int vn_write(struct fileproc *fp, struct uio *uio, int flags,
-			vfs_context_t ctx);
+		vfs_context_t ctx);
 static int vn_select( struct fileproc *fp, int which, void * wql,
-			vfs_context_t ctx);
+		vfs_context_t ctx);
 static int vn_kqfilt_add(struct fileproc *fp, struct knote *kn,
-			vfs_context_t ctx);
+		struct kevent_internal_s *kev, vfs_context_t ctx);
 static void filt_vndetach(struct knote *kn);
 static int filt_vnode(struct knote *kn, long hint);
 static int filt_vnode_common(struct knote *kn, vnode_t vp, long hint);
@@ -147,10 +148,10 @@ const struct fileops vnops = {
 static int filt_vntouch(struct knote *kn, struct kevent_internal_s *kev);
 static int filt_vnprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
 
-struct  filterops vnode_filtops = { 
-	.f_isfd = 1, 
-	.f_attach = NULL, 
-	.f_detach = filt_vndetach, 
+SECURITY_READ_ONLY_EARLY(struct  filterops) vnode_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_vndetach,
 	.f_event = filt_vnode,
 	.f_touch = filt_vntouch,
 	.f_process = filt_vnprocess,
@@ -1342,7 +1343,7 @@ vn_stat_noauth(struct vnode *vp, void *sbptr, kauth_filesec_t *xsec, int isstat6
 	};
 	if (isstat64 != 0) {
 		sb64->st_mode = mode;
-		sb64->st_nlink = VATTR_IS_SUPPORTED(&va, va_nlink) ? (u_int16_t)va.va_nlink : 1;
+		sb64->st_nlink = VATTR_IS_SUPPORTED(&va, va_nlink) ? va.va_nlink > UINT16_MAX ? UINT16_MAX : (u_int16_t)va.va_nlink : 1;
 		sb64->st_uid = va.va_uid;
 		sb64->st_gid = va.va_gid;
 		sb64->st_rdev = va.va_rdev;
@@ -1360,7 +1361,7 @@ vn_stat_noauth(struct vnode *vp, void *sbptr, kauth_filesec_t *xsec, int isstat6
 		sb64->st_blocks = roundup(va.va_total_alloc, 512) / 512;
 	} else {
 		sb->st_mode = mode;
-		sb->st_nlink = VATTR_IS_SUPPORTED(&va, va_nlink) ? (u_int16_t)va.va_nlink : 1;
+		sb->st_nlink = VATTR_IS_SUPPORTED(&va, va_nlink) ? va.va_nlink > UINT16_MAX ? UINT16_MAX : (u_int16_t)va.va_nlink : 1;
 		sb->st_uid = va.va_uid;
 		sb->st_gid = va.va_gid;
 		sb->st_rdev = va.va_rdev;
@@ -1686,12 +1687,13 @@ vn_pathconf(vnode_t vp, int name, int32_t *retval, vfs_context_t ctx)
 }
 
 static int
-vn_kqfilt_add(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
+vn_kqfilt_add(struct fileproc *fp, struct knote *kn,
+		struct kevent_internal_s *kev, vfs_context_t ctx)
 {
 	struct vnode *vp;
 	int error = 0;
 	int result = 0;
-	
+
 	vp = (struct vnode *)fp->f_fglob->fg_data;
 
 	/*
@@ -1709,7 +1711,7 @@ vn_kqfilt_add(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
 
 				} else if (!vnode_isreg(vp)) {
 					if (vnode_ischr(vp)) {
-						result = spec_kqfilter(vp, kn);
+						result = spec_kqfilter(vp, kn, kev);
 						if ((kn->kn_flags & EV_ERROR) == 0) {
 							/* claimed by a special device */
 							vnode_put(vp);

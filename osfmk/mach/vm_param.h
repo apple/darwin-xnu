@@ -248,6 +248,8 @@ extern uint64_t		max_mem;		/* 64-bit size of memory - limited by maxmem */
 
 #ifdef	XNU_KERNEL_PRIVATE
 
+#include <kern/debug.h>
+
 extern uint64_t		mem_actual;		/* 64-bit size of memory - not limited by maxmem */
 extern uint64_t		sane_size;		/* Memory size to use for defaults calculations */
 extern addr64_t 	vm_last_addr;	/* Highest kernel virtual address known to the VM system */
@@ -280,50 +282,105 @@ extern vm_offset_t		vm_hib_base;
  * (e.g. stackshot, proc_info syscall, etc.). It is important to understand
  * the goal of each macro and choose the right one depending on what you are
  * trying to do. Misuse of these macros can result in critical data leaks
- * which in turn lead to all sorts of system vulnerabilities.
+ * which in turn lead to all sorts of system vulnerabilities. It is invalid to
+ * call these macros on a non-kernel address (NULL is allowed).
  *
- * Note that in general the ideal goal is to protect addresses from userspace
- * in a way that is reversible assuming you know the permutation and/or slide.
- *
- * The macros are as follows:
- * 
  * VM_KERNEL_UNSLIDE:
  *     Use this macro when you are exposing an address to userspace which is
- *     a "static" kernel or kext address (i.e. coming from text or data
- *     sections). These are the addresses which get "slid" via ASLR on kernel
- *     or kext load, and it's precisely the slide value we are trying to
+ *     *guaranteed* to be a "static" kernel or kext address (i.e. coming from text
+ *     or data sections). These are the addresses which get "slid" via ASLR on
+ *     kernel or kext load, and it's precisely the slide value we are trying to
  *     protect from userspace.
  *
- * VM_KERNEL_ADDRPERM:
- *     Use this macro when you are exposing an address to userspace which is
- *     coming from the kernel's "heap". Since these adresses are not "loaded"
- *     from anywhere, there is no slide applied and we instead apply the
- *     permutation value to obscure the address.
+ * VM_KERNEL_ADDRHIDE:
+ *     Use when exposing an address for internal purposes: debugging, tracing,
+ *     etc. The address will be unslid if necessary. Other addresses will be
+ *     hidden on customer builds, and unmodified on internal builds.
  *
- * VM_KERNEL_UNSLIDE_OR_ADDRPERM:
- *     Use this macro when you are exposing an address to userspace that could
- *     come from either kernel text/data *or* the heap. This is a rare case,
- *     but one that does come up and must be handled correctly. If the argument
- *     is known to be lower than any potential heap address, no transformation
- *     is applied, to avoid revealing the operation on a constant.
+ * VM_KERNEL_ADDRHASH:
+ *     Use this macro when exposing a kernel address to userspace on customer
+ *     builds. The address can be from the static kernel or kext regions, or the
+ *     kernel heap. The address will be unslid or hashed as appropriate.
+ *
+ *
+ * ** SECURITY WARNING: The following macros can leak kernel secrets.
+ *                      Use *only* in performance *critical* code.
+ *
+ * VM_KERNEL_ADDRPERM:
+ * VM_KERNEL_UNSLIDE_OR_PERM:
+ *     Use these macros when exposing a kernel address to userspace on customer
+ *     builds. The address can be from the static kernel or kext regions, or the
+ *     kernel heap. The address will be unslid or permuted as appropriate.
  *
  * Nesting of these macros should be considered invalid.
  */
-#define VM_KERNEL_UNSLIDE(_v)                                                  \
-		((VM_KERNEL_IS_SLID(_v)) ?                                     \
-			(vm_offset_t)(_v) - vm_kernel_slide :                   \
-			(vm_offset_t)(_v))
 
-#define	VM_KERNEL_ADDRPERM(_v)						       \
-		(((vm_offset_t)(_v) == 0) ?				       \
-			(vm_offset_t)(0) :				       \
-			(vm_offset_t)(_v) + vm_kernel_addrperm)
+__BEGIN_DECLS
+extern vm_offset_t vm_kernel_addrhash(vm_offset_t addr);
+__END_DECLS
 
-#define VM_KERNEL_UNSLIDE_OR_PERM(_v)					       \
-		((VM_KERNEL_IS_SLID(_v)) ?                                     \
-			(vm_offset_t)(_v) - vm_kernel_slide :    \
-		 ((vm_offset_t)(_v) >= VM_MIN_KERNEL_AND_KEXT_ADDRESS ? VM_KERNEL_ADDRPERM(_v) : (vm_offset_t)(_v)))
-	
+#define __DO_UNSLIDE(_v) ((vm_offset_t)(_v) - vm_kernel_slide)
+
+#if DEBUG || DEVELOPMENT
+# define VM_KERNEL_ADDRHIDE(_v) (VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_address_t)(_v))
+#else
+# define VM_KERNEL_ADDRHIDE(_v) (VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_address_t)0)
+#endif
+
+#define VM_KERNEL_ADDRHASH(_v) vm_kernel_addrhash((vm_offset_t)(_v))
+
+#define VM_KERNEL_UNSLIDE_OR_PERM(_v) ({ \
+		VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : \
+		VM_KERNEL_ADDRESS(_v) ? ((vm_offset_t)(_v) + vm_kernel_addrperm) : \
+		(vm_offset_t)(_v); \
+	})
+
+#define VM_KERNEL_UNSLIDE(_v) ({ \
+		VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_offset_t)0; \
+	})
+
+#define VM_KERNEL_ADDRPERM(_v) VM_KERNEL_UNSLIDE_OR_PERM(_v)
+
+#undef mach_vm_round_page
+#undef round_page
+#undef round_page_32
+#undef round_page_64
+
+static inline mach_vm_offset_t
+mach_vm_round_page(mach_vm_offset_t x)
+{
+	if (round_page_overflow(x, &x)) {
+		panic("overflow detected");
+	}
+	return x;
+}
+
+static inline vm_offset_t
+round_page(vm_offset_t x)
+{
+	if (round_page_overflow(x, &x)) {
+		panic("overflow detected");
+	}
+	return x;
+}
+
+static inline mach_vm_offset_t
+round_page_64(mach_vm_offset_t x)
+{
+	if (round_page_overflow(x, &x)) {
+		panic("overflow detected");
+	}
+	return x;
+}
+
+static inline uint32_t
+round_page_32(uint32_t x)
+{
+	if (round_page_overflow(x, &x)) {
+		panic("overflow detected");
+	}
+	return x;
+}
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

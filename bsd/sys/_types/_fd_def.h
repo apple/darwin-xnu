@@ -27,6 +27,9 @@
  */
 #ifndef _FD_SET
 #define _FD_SET
+
+#include <machine/types.h> /* __int32_t */
+
 /*
  * Select uses bit masks of file descriptors in longs.  These macros
  * manipulate such bit fields (the filesystem macros use chars).  The

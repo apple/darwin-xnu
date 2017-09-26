@@ -119,6 +119,9 @@ struct image_params {
 	void		*ip_px_smpx;		/* MAC-specific spawn attrs. */
 	void		*ip_px_persona;		/* persona args */
 	void		*ip_cs_error;		/* codesigning error reason */
+
+	uint64_t ip_dyld_fsid;
+	uint64_t ip_dyld_fsobjid;
 };
 
 /*
@@ -134,5 +137,6 @@ struct image_params {
 #define	IMGPF_ALLOW_DATA_EXEC	0x00000040	/* forcibly disallow data execution */
 #define	IMGPF_VFORK_EXEC	0x00000080	/* vfork followed by exec */
 #define	IMGPF_EXEC		0x00000100	/* exec */
+#define	IMGPF_HIGH_BITS_ASLR	0x00000200	/* randomize high bits of ASLR slide */
 
 #endif	/* !_SYS_IMGACT */

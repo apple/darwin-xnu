@@ -175,7 +175,8 @@ raw_input(struct mbuf *m0, struct sockproto *proto, struct sockaddr *src,
 
 /*ARGSUSED*/
 void
-raw_ctlinput(int cmd, __unused struct sockaddr *arg, __unused void *dummy)
+raw_ctlinput(int cmd, __unused struct sockaddr *arg, __unused void *dummy,
+    __unused struct ifnet *ifp)
 {
 
 	if (cmd < 0 || cmd >= PRC_NCMDS)
@@ -193,7 +194,7 @@ raw_uabort(struct socket *so)
 		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
 	else
 		mutex_held = so->so_proto->pr_domain->dom_mtx;
-	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
 
 	if (rp == 0)
 		return EINVAL;
@@ -242,7 +243,7 @@ raw_udetach(struct socket *so)
 		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
 	else
 		mutex_held = so->so_proto->pr_domain->dom_mtx;
-	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
 	if (rp == 0)
 		return EINVAL;
 
@@ -296,7 +297,7 @@ raw_usend(struct socket *so, int flags, struct mbuf *m,
 		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
 	else
 		mutex_held = so->so_proto->pr_domain->dom_mtx;
-	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
 
 	if (rp == 0) {
 		error = EINVAL;
@@ -348,7 +349,7 @@ raw_ushutdown(struct socket *so)
 		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
 	else
 		mutex_held = so->so_proto->pr_domain->dom_mtx;
-	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
 
 	if (rp == 0)
 		return EINVAL;

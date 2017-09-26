@@ -5,6 +5,8 @@
 #define _SYS_LCTX_H_
 
 #ifndef KERNEL
+#include <sys/errno.h> /* errno, ENOSYS */
+#include <sys/_types/_pid_t.h> /* pid_t */
 static __inline pid_t
 getlcid(pid_t pid)
 {

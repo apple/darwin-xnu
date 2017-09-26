@@ -92,12 +92,13 @@
 #define PRIV_SETPRIORITY_DARWIN_ROLE	1012	/* Allow setpriority(PRIO_DARWIN_ROLE) */
 #define PRIV_PACKAGE_EXTENSIONS		1013	/* Push package extension list used by vn_path_package_check() */
 #define PRIV_TRIM_ACTIVE_FILE		1014	/* Allow freeing space out from under an active file  */
+#define PRIV_PROC_CPUMON_OVERRIDE	1015	/* Allow CPU usage monitor parameters less restrictive than default */
 
 /*
  * Virtual memory privileges.
  */
 #define	PRIV_VM_PRESSURE	6000	/* Check VM pressure. */
-#define	PRIV_VM_JETSAM	   	6001	/* Adjust jetsam configuration. */
+#define	PRIV_VM_JETSAM		6001	/* Adjust jetsam configuration. */
 #define	PRIV_VM_FOOTPRINT_LIMIT 6002    /* Adjust physical footprint limit. */
 
 /*
@@ -112,6 +113,9 @@
 #define	PRIV_NET_PRIVILEGED_NECP_MATCH		10006	/* Privilege verified by Network Extension policies */
 #define	PRIV_NET_QOSMARKING_POLICY_OVERRIDE	10007	/* Privilege verified by Network Extension policies */
 #define	PRIV_NET_RESTRICTED_INTCOPROC		10008	/* Access to internal co-processor network interfaces */
+
+#define	PRIV_NET_PRIVILEGED_MULTIPATH		10009	/* Multipath usage */
+#define	PRIV_NET_RESTRICTED_MULTIPATH_EXTENDED	10010	/* Extended multipath (more aggressive on cell) */
 /*
  * IPv4 and IPv6 privileges.
  */
@@ -121,17 +125,28 @@
 /*
  * VFS privileges
  */
-#define PRIV_VFS_OPEN_BY_ID		14000 	/* Allow calling openbyid_np() */
+#define PRIV_VFS_OPEN_BY_ID		14000	/* Allow calling openbyid_np() */
 #define PRIV_VFS_MOVE_DATA_EXTENTS	14001   /* Allow F_MOVEDATAEXTENTS fcntl */
 #define PRIV_VFS_SNAPSHOT		14002	/* Allow create/rename/delete of snapshots */
 #define PRIV_VFS_SNAPSHOT_REVERT	14003	/* Allow reverting filesystem to a previous snapshot */
 
+#define PRIV_APFS_EMBED_DRIVER		14100	/* Allow embedding an EFI driver into the APFS container */
+#define PRIV_APFS_FUSION_DEBUG      14101   /* Allow getting internal statistics and controlling the APFS fusion container */
 #ifdef KERNEL
 /*
  * Privilege check interface.  No flags are currently defined for the API.
  */
+#include <sys/cdefs.h>
 #include <sys/kauth.h>
+
+/*
+ * flags for priv_check_cred
+ */
+#define PRIVCHECK_DEFAULT_UNPRIVILEGED_FLAG (1) /* Don't grant root privilege by default */
+
+__BEGIN_DECLS
 int	priv_check_cred(kauth_cred_t cred, int priv, int flags);
+__END_DECLS
 #endif
 
 #endif /* !_SYS_PRIV_H_ */

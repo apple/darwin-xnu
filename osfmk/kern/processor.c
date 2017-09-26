@@ -80,6 +80,7 @@
 
 #include <security/mac_mach_internal.h>
 
+
 /*
  * Exported interface
  */
@@ -110,6 +111,10 @@ uint32_t				processor_avail_count;
 processor_t		master_processor;
 int 			master_cpu = 0;
 boolean_t		sched_stats_active = FALSE;
+
+processor_t		processor_array[MAX_SCHED_CPUS] = { 0 };
+
+
 
 void
 processor_bootstrap(void)
@@ -145,16 +150,14 @@ processor_init(
 	spl_t		s;
 
 	if (processor != master_processor) {
-		/* Scheduler state deferred until sched_init() */
+		/* Scheduler state for master_processor initialized in sched_init() */
 		SCHED(processor_init)(processor);
 	}
 
 	processor->state = PROCESSOR_OFF_LINE;
 	processor->active_thread = processor->next_thread = processor->idle_thread = THREAD_NULL;
 	processor->processor_set = pset;
-	processor->current_pri = MINPRI;
-	processor->current_thmode = TH_MODE_NONE;
-	processor->current_sfi_class = SFI_CLASS_KERNEL;
+	processor_state_update_idle(processor);
 	processor->starting_pri = MINPRI;
 	processor->cpu_id = cpu_id;
 	timer_call_setup(&processor->quantum_timer, thread_quantum_expire, processor);
@@ -171,6 +174,7 @@ processor_init(
 
 	s = splsched();
 	pset_lock(pset);
+	bit_set(pset->cpu_bitmask, cpu_id);
 	if (pset->cpu_set_count++ == 0)
 		pset->cpu_set_low = pset->cpu_set_hi = cpu_id;
 	else {
@@ -187,6 +191,8 @@ processor_init(
 		processor_list_tail->processor_list = processor;
 	processor_list_tail = processor;
 	processor_count++;
+	assert(cpu_id < MAX_SCHED_CPUS);
+	processor_array[cpu_id] = processor;
 	simple_unlock(&processor_list_lock);
 }
 
@@ -218,6 +224,34 @@ processor_pset(
 	processor_t	processor)
 {
 	return (processor->processor_set);
+}
+
+void
+processor_state_update_idle(processor_t processor)
+{
+    processor->current_pri = IDLEPRI;
+    processor->current_sfi_class = SFI_CLASS_KERNEL;
+    processor->current_recommended_pset_type = PSET_SMP;
+    processor->current_perfctl_class = PERFCONTROL_CLASS_IDLE;
+}
+
+void
+processor_state_update_from_thread(processor_t processor, thread_t thread)
+{
+    processor->current_pri = thread->sched_pri;
+    processor->current_sfi_class = thread->sfi_class;
+    processor->current_recommended_pset_type = recommended_pset_type(thread);
+    processor->current_perfctl_class = thread_get_perfcontrol_class(thread);
+}
+
+void
+processor_state_update_explicit(processor_t processor, int pri, sfi_class_id_t sfi_class, 
+	pset_cluster_type_t pset_type, perfcontrol_class_t perfctl_class)
+{
+    processor->current_pri = pri;
+    processor->current_sfi_class = sfi_class;
+    processor->current_recommended_pset_type = pset_type;
+    processor->current_perfctl_class = perfctl_class;
 }
 
 pset_node_t
@@ -254,6 +288,33 @@ pset_create(
 }
 
 /*
+ *	Find processor set in specified node with specified cluster_id.
+ *	Returns default_pset if not found.
+ */
+processor_set_t
+pset_find(
+	uint32_t cluster_id,
+	processor_set_t default_pset)
+{
+	simple_lock(&pset_node_lock);
+	pset_node_t node = &pset_node0;
+	processor_set_t pset = NULL;
+
+	do {
+		pset = node->psets;
+		while (pset != NULL) {
+			if (pset->pset_cluster_id == cluster_id)
+				break;
+			pset = pset->pset_list;
+		}
+	} while ((node = node->node_list) != NULL);
+	simple_unlock(&pset_node_lock);
+	if (pset == NULL)
+		return default_pset;
+	return (pset);
+}
+
+/*
  *	Initialize the given processor_set structure.
  */
 void
@@ -262,26 +323,34 @@ pset_init(
 	pset_node_t			node)
 {
 	if (pset != &pset0) {
-		/* Scheduler state deferred until sched_init() */
+		/* Scheduler state for pset0 initialized in sched_init() */
 		SCHED(pset_init)(pset);
+		SCHED(rt_init)(pset);
 	}
 
 	queue_init(&pset->active_queue);
 	queue_init(&pset->idle_queue);
 	queue_init(&pset->idle_secondary_queue);
+	queue_init(&pset->unused_queue);
 	pset->online_processor_count = 0;
+	pset->active_processor_count = 0;
+	pset->load_average = 0;
 	pset->cpu_set_low = pset->cpu_set_hi = 0;
 	pset->cpu_set_count = 0;
+	pset->cpu_bitmask = 0;
 	pset->recommended_bitmask = ~0ULL;
 	pset->pending_AST_cpu_mask = 0;
 #if defined(CONFIG_SCHED_DEFERRED_AST)
 	pset->pending_deferred_AST_cpu_mask = 0;
 #endif
+	pset->pending_spill_cpu_mask = 0;
 	pset_lock_init(pset);
 	pset->pset_self = IP_NULL;
 	pset->pset_name_self = IP_NULL;
 	pset->pset_list = PROCESSOR_SET_NULL;
 	pset->node = node;
+	pset->pset_cluster_type = PSET_SMP;
+	pset->pset_cluster_id = 0;
 }
 
 kern_return_t
@@ -1071,6 +1140,15 @@ processor_set_threads(
 {
     return KERN_FAILURE;
 }
+#elif defined(CONFIG_EMBEDDED)
+kern_return_t
+processor_set_threads(
+	__unused processor_set_t		pset,
+	__unused thread_array_t		*thread_list,
+	__unused mach_msg_type_number_t	*count)
+{
+    return KERN_NOT_SUPPORTED;
+}
 #else
 kern_return_t
 processor_set_threads(
@@ -1126,4 +1204,11 @@ pset_reference(
 __unused processor_set_t	pset)
 {
 	return;
+}
+
+pset_cluster_type_t
+recommended_pset_type(thread_t thread)
+{
+	(void)thread;
+	return PSET_SMP;
 }

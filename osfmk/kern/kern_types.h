@@ -236,6 +236,66 @@ typedef struct _wait_queue_link	*wait_queue_link_t;
 typedef struct perfcontrol_state	*perfcontrol_state_t;
 #define PERFCONTROL_STATE_NULL		((perfcontrol_state_t)0)
 
+/*
+ * Enum to define the event which caused the CLPC callout
+ */
+typedef enum perfcontrol_event {
+    /*
+     * Thread State Update Events
+     * Used to indicate events that update properties for 
+     * a given thread. These events are passed as part of the 
+     * sched_perfcontrol_state_update_t callout
+     */
+    QUANTUM_EXPIRY          = 1,
+    THREAD_GROUP_UPDATE     = 2,
+    PERFCONTROL_ATTR_UPDATE = 3,
+    /*
+     * Context Switch Events
+     * Used to indicate events that switch from one thread
+     * to the other. These events are passed as part of the 
+     * sched_perfcontrol_csw_t callout.
+     */
+    CONTEXT_SWITCH          = 10,
+    IDLE                    = 11
+} perfcontrol_event;
+
+/* 
+ * Flags for the sched_perfcontrol_csw_t & sched_perfcontrol_state_update_t
+ * callouts.
+ * Currently defined flags are:
+ * PERFCONTROL_CALLOUT_WAKE_UNSAFE - Flag to indicate its unsafe to 
+ *      do a wakeup as part of this callout. If this is set, it 
+ *      indicates that the scheduler holds a spinlock which might be needed
+ *      in the wakeup path. In that case CLPC should do a thread_call
+ *      instead of a direct wakeup to run their workloop thread.
+ */
+#define PERFCONTROL_CALLOUT_WAKE_UNSAFE            0x1
+
+/*
+ * Enum to define the perfcontrol class for thread.
+ * thread_get_perfcontrol_class() takes the thread's 
+ * priority, QoS, urgency etc. into consideration and 
+ * produces a value in this enum.
+ */
+typedef enum perfcontrol_class {
+    /* Idle thread */
+    PERFCONTROL_CLASS_IDLE           = 1,
+    /* Kernel thread */
+    PERFCONTROL_CLASS_KERNEL         = 2,
+    /* Realtime Thread */
+    PERFCONTROL_CLASS_REALTIME       = 3,
+    /* Background Thread */
+    PERFCONTROL_CLASS_BACKGROUND     = 4,
+    /* Utility Thread */
+    PERFCONTROL_CLASS_UTILITY        = 5,
+    /* Non-UI Thread (Default/Legacy) */
+    PERFCONTROL_CLASS_NONUI          = 6,
+    /* UI Thread (UI/IN) */
+    PERFCONTROL_CLASS_UI             = 7,
+    /* Above UI Thread */
+    PERFCONTROL_CLASS_ABOVEUI        = 8,
+} perfcontrol_class_t;
+
 #endif	/* KERNEL_PRIVATE */
 
 #endif	/* _KERN_KERN_TYPES_H_ */

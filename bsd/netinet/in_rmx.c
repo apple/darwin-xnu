@@ -103,8 +103,6 @@ static int in_rtqkill(struct radix_node *, void *);
 
 static int in_ifadownkill(struct radix_node *, void *);
 
-#define	RTPRF_OURS		RTF_PROTO3	/* set on routes we manage */
-
 /*
  * Do what we need to do when inserting a route.
  */
@@ -119,7 +117,7 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 	uint32_t flags = rt->rt_flags;
 	boolean_t verbose = (rt_verbose > 1);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	if (verbose)
@@ -252,7 +250,7 @@ in_deleteroute(void *v_arg, void *netmask_arg, struct radix_node_head *head)
 {
 	struct radix_node *rn;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	rn = rn_delete(v_arg, netmask_arg, head);
 	if (rt_verbose > 1 && rn != NULL) {
@@ -362,11 +360,11 @@ in_clsroute(struct radix_node *rn, struct radix_node_head *head)
 	struct rtentry *rt = (struct rtentry *)rn;
 	boolean_t verbose = (rt_verbose > 1);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	if (!(rt->rt_flags & RTF_UP))
-		return;		/* prophylactic measures */
+		return;         /* prophylactic measures */
 
 	if ((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST)
 		return;
@@ -464,7 +462,7 @@ in_rtqkill(struct radix_node *rn, void *rock)
 	int err;
 
 	timenow = net_uptime();
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	RT_LOCK(rt);
 	if (rt->rt_flags & RTPRF_OURS) {
@@ -483,6 +481,7 @@ in_rtqkill(struct radix_node *rn, void *rock)
 				    rt, rt->rt_refcnt);
 				/* NOTREACHED */
 			}
+
 			if (verbose) {
 				log(LOG_DEBUG, "%s: deleting route to "
 				    "%s->%s->%s, flags=%b, draining=%d\n",
@@ -617,7 +616,7 @@ in_rtqtimo(void *targ)
 static void
 in_sched_rtqtimo(struct timeval *atv)
 {
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (!in_rtqtimo_run) {
 		struct timeval tv;
@@ -712,7 +711,7 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 	boolean_t verbose = (rt_verbose != 0);
 	int err;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	RT_LOCK(rt);
 	if (rt->rt_ifa == ap->ifa &&
@@ -765,7 +764,7 @@ in_ifadown(struct ifaddr *ifa, int delete)
 	struct in_ifadown_arg arg;
 	struct radix_node_head *rnh;
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	/*
 	 * Holding rnh_lock here prevents the possibility of

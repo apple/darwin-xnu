@@ -86,7 +86,6 @@ long strtol(const char *nptr, char **endptr, int base);
 unsigned long strtoul(const char *nptr, char **endptr, int base);
 quad_t strtoq(const char *nptr, char **endptr, int base);
 u_quad_t strtouq(const char *nptr, char **endptr, int base);
-char *strchr(const char *str, int ch);
 char *strncat(char *s1, const char *s2, unsigned long n);
 
 
@@ -468,19 +467,6 @@ strtouq(const char *nptr,
 	return (acc);
 }
 
-
-/*
- *
- */
-
-char *strchr(const char *str, int ch)
-{
-    do {
-	if (*str == ch)
-	    return(__CAST_AWAY_QUALIFIER(str, const, char *));
-    } while (*str++);
-    return ((char *) 0);
-}
 
 /*
  *

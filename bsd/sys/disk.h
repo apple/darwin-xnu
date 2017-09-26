@@ -331,10 +331,21 @@ typedef struct _dk_cs_unmap {
 #define _DKIOCCSMAP                           _IOWR('d', 202, _dk_cs_map_t)
 // No longer used: _DKIOCCSSETFSVNODE (203) & _DKIOCCSGETFREEBYTES (204)
 #define	_DKIOCCSUNMAP			      _IOWR('d', 205, _dk_cs_unmap_t)
+
+typedef enum {
+	DK_APFS_ONE_DEVICE = 1,
+	DK_APFS_FUSION
+} dk_apfs_flavour_t;
+
+#define DKIOCGETAPFSFLAVOUR	_IOR('d', 91, dk_apfs_flavour_t)
+
 #endif /* PRIVATE */
 #endif /* KERNEL */
 
 #ifdef PRIVATE
+#if TARGET_OS_EMBEDDED
+#define _DKIOCSETSTATIC                       _IO('d', 84)
+#endif /* TARGET_OS_EMBEDDED */
 #endif /* PRIVATE */
 
 #endif	/* _SYS_DISK_H_ */

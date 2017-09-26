@@ -96,6 +96,8 @@ struct cl_writebehind {
 
 struct cs_hash;
 
+uint8_t cs_hash_type(struct cs_hash const *);
+
 struct cs_blob {
 	struct cs_blob	*csb_next;
 	cpu_type_t	csb_cpu_type;
@@ -116,6 +118,9 @@ struct cs_blob {
 	const char 	*csb_teamid;
 	const CS_GenericBlob *csb_entitlements_blob;	/* raw blob, subrange of csb_mem_kaddr */
 	void *          csb_entitlements;	/* The entitlements as an OSDictionary */
+	unsigned int	csb_signer_type;
+
+	/* The following two will be replaced by the csb_signer_type. */
 	unsigned int	csb_platform_binary:1;
 	unsigned int	csb_platform_path:1;
 };

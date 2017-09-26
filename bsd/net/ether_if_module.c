@@ -102,10 +102,11 @@
 #if IF_BRIDGE
 #include <net/if_bridgevar.h>
 #endif /* IF_BRIDGE */
+#if IF_FAKE
+#include <net/if_fake_var.h>
+#endif /* IF_FAKE */
 
 #include <net/dlil.h>
-
-#define memcpy(x,y,z)	bcopy(y, x, z)
 
 SYSCTL_DECL(_net_link);
 SYSCTL_NODE(_net_link, IFT_ETHER, ether, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
@@ -118,7 +119,11 @@ struct en_desc {
 };
 
 /* descriptors are allocated in blocks of ETHER_DESC_BLK_SIZE */
+#if CONFIG_EMBEDDED
+#define ETHER_DESC_BLK_SIZE (2) /* IP, ARP */
+#else
 #define ETHER_DESC_BLK_SIZE (10)
+#endif
 
 /*
  * Header for the demux list, hangs off of IFP at if_family_cookie
@@ -636,6 +641,10 @@ ether_family_init(void)
 #if IF_BRIDGE
 	bridgeattach(0);
 #endif /* IF_BRIDGE */
+#if IF_FAKE
+	if_fake_init();
+#endif /* IF_FAKE */
+
 done:
 
 	return (error);

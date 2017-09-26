@@ -124,6 +124,9 @@ extern const char copyright[];		/* system copyright */
 extern int	boothowto;	/* reboot flags, from console subsystem */
 extern int	show_space;
 extern int	minimalboot;
+#if CONFIG_EMBEDDED
+extern int	darkboot;
+#endif
 
 extern const int nblkdev; /* number of entries in bdevsw */
 extern const int nchrdev; /* number of entries in cdevsw */
@@ -157,7 +160,7 @@ void	realitexpire(struct proc *);
 int	hzto(struct timeval *tv);
 void	tablefull(const char *);
 int	kvprintf(char const *, void (*)(int, void*), void *, int,
-		      __darwin_va_list);
+		      __darwin_va_list) __printflike(1,0);
 void	uprintf(const char *, ...) __printflike(1,2);
 int	copywithin(void *saddr, void *daddr, size_t len);
 int64_t	fulong(user_addr_t addr);

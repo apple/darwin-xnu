@@ -129,6 +129,7 @@ kernel_trap(macx_swapoff,-49, 2)
 kernel_trap(macx_swapon,-48, 5)
 kernel_trap(macx_swapoff,-49, 3)
 #endif	/* __LP64__ */
+kernel_trap(thread_get_special_reply_port,-50,0)
 kernel_trap(macx_triggers,-51, 4)
 kernel_trap(macx_backing_store_suspend,-52, 1)
 kernel_trap(macx_backing_store_recovery,-53, 1)

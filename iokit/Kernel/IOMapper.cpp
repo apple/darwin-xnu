@@ -30,6 +30,7 @@
 #include <IOKit/IODMACommand.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/OSDebug.h>
+#include <mach_debug/zone_info.h>
 #include "IOKitKernelInternal.h"
 
 __BEGIN_DECLS
@@ -142,20 +143,16 @@ IOMapper * IOMapper::copyMapperForDeviceWithIndex(IOService * device, unsigned i
     OSDictionary * matching;
     
     obj = device->copyProperty("iommu-parent");
-    if (!obj)
-        return (NULL);
+    if (!obj) return (NULL);
 
-    if ((mapper = OSDynamicCast(IOMapper, obj)))
-        return (mapper);
+    if ((mapper = OSDynamicCast(IOMapper, obj))) goto found;
 
     if ((data = OSDynamicCast(OSData, obj)))
     {
-        if (index >= data->getLength() / sizeof(UInt32))
-            goto done;
+        if (index >= data->getLength() / sizeof(UInt32)) goto done;
         
         data = OSData::withBytesNoCopy((UInt32 *)data->getBytesNoCopy() + index, sizeof(UInt32));
-        if (!data)
-            goto done;
+        if (!data) goto done;
 
         matching = IOService::propertyMatching(gIOMapperIDKey, data);
         data->release();
@@ -166,12 +163,31 @@ IOMapper * IOMapper::copyMapperForDeviceWithIndex(IOService * device, unsigned i
     if (matching)
     {
         mapper = OSDynamicCast(IOMapper, IOService::waitForMatchingService(matching));
-            matching->release();
+        matching->release();
     }
 
 done:
-    if (obj)
-            obj->release();
+    if (obj) obj->release();
+found:
+    if (mapper)
+    {
+        if (!mapper->fAllocName)
+        {
+            char name[MACH_ZONE_NAME_MAX_LEN];
+            char kmodname[KMOD_MAX_NAME];
+            vm_tag_t tag;
+            uint32_t kmodid;
+
+            tag = IOMemoryTag(kernel_map);
+            if (!(kmodid = vm_tag_get_kext(tag, &kmodname[0], KMOD_MAX_NAME)))
+            {
+                snprintf(kmodname, sizeof(kmodname), "%d", tag);
+            }
+            snprintf(name, sizeof(name), "%s.DMA.%s", kmodname, device->getName());
+            mapper->fAllocName = kern_allocation_name_allocate(name, 16);
+        }
+    }
+
     return (mapper);
 }
 

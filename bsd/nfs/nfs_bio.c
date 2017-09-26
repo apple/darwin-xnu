@@ -409,8 +409,8 @@ nfs_buf_upl_setup(struct nfsbuf *bp)
 		 */
 		upl_flags |= UPL_WILL_MODIFY;
 	}
-	kret = ubc_create_upl(NFSTOV(bp->nb_np), NBOFF(bp), bp->nb_bufsize,
-				&upl, NULL, upl_flags);
+	kret = ubc_create_upl_kernel(NFSTOV(bp->nb_np), NBOFF(bp), bp->nb_bufsize,
+				&upl, NULL, upl_flags, VM_KERN_MEMORY_FILE);
 	if (kret == KERN_INVALID_ARGUMENT) {
 		/* vm object probably doesn't exist any more */
 		bp->nb_pagelist = NULL;

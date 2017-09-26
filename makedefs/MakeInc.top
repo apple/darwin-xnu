@@ -56,8 +56,12 @@ endif
 # Kernel Configuration options
 #
 
+DEFAULT_PRODUCT_CONFIGS :=
+
 ifeq ($(RC_ProjectName),xnu_debug)
 override DEFAULT_KERNEL_CONFIG := DEBUG
+else ifeq ($(RC_ProjectName),xnu_kasan)
+override KERNEL_CONFIGS := KASAN
 else ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
 override DEFAULT_KERNEL_CONFIG := DEVELOPMENT
 else ifeq ($(PLATFORM),MacOSX)
@@ -69,6 +73,11 @@ endif
 # If KERNEL_CONFIGS is specified it should override default
 ifndef KERNEL_CONFIGS
 KERNEL_CONFIGS := DEFAULT
+endif
+
+# If PRODUCT_CONFIGS is specified it should override default
+ifndef PRODUCT_CONFIGS
+PRODUCT_CONFIGS := $(DEFAULT_PRODUCT_CONFIGS)
 endif
 
 #
@@ -158,7 +167,7 @@ TARGET_CONFIGS_ALIASES_UC := $(strip $(shell printf "%s" "$(TARGET_CONFIGS_ALIAS
 # TARGET_CONFIGS is unwieldy for use in Makefiles. Convert them to
 # "build configurations" which are tuples joined by "^". For
 # example, "RELEASE I386 DEFAULT DEVELOPMENT ARM DEFAULT" becomes
-# "RELEASE^I386^NONE DEVELOPMENT^ARM^S5L8920X", which can be looped
+# "RELEASE^I386^NONE DEVELOPMENT^ARM^T8002", which can be looped
 # over trivially. PRIMARY_BUILD_CONFIGS is the first config
 # for each architecture, used primarily for machine-dependent recursion.
 
@@ -342,6 +351,9 @@ exporthdrs_md: build_exporthdrs_md_bootstrap
 ifeq ($(RC_ProjectName),xnu_debug)
 installhdrs:
 	@:
+else ifeq ($(RC_ProjectName),xnu_kasan)
+installhdrs:
+	@:
 else
 
 installhdrs: installhdrs_mi installhdrs_md
@@ -469,6 +481,8 @@ final_touch_config_timestamps: config_install_bootstrap
 
 ifeq ($(RC_ProjectName),xnu_debug)
 install: install_kernels
+else ifeq ($(RC_ProjectName),xnu_kasan)
+install: install_config install_kernels
 else ifeq ($(RC_ProjectName),xnu_headers_Sim)
 install: installhdrs
 else

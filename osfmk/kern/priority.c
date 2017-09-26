@@ -81,6 +81,10 @@
 #include <machine/commpage.h>  /* for commpage_update_mach_approximate_time */
 #endif
 
+#if MONOTONIC
+#include <kern/monotonic.h>
+#endif /* MONOTONIC */
+
 static void sched_update_thread_bucket(thread_t thread);
 
 /*
@@ -122,19 +126,21 @@ thread_quantum_expire(
 	 */
 	ledger_credit(thread->t_ledger, task_ledgers.cpu_time, thread->quantum_remaining);
 	ledger_credit(thread->t_threadledger, thread_ledgers.cpu_time, thread->quantum_remaining);
-#ifdef CONFIG_BANK
 	if (thread->t_bankledger) {
 		ledger_credit(thread->t_bankledger, bank_ledgers.cpu_time,
 				(thread->quantum_remaining - thread->t_deduct_bank_ledger_time));
 	}
 	thread->t_deduct_bank_ledger_time = 0;
-#endif
 
 	ctime = mach_absolute_time();
 
 #ifdef CONFIG_MACH_APPROXIMATE_TIME
 	commpage_update_mach_approximate_time(ctime);
 #endif
+
+#if MONOTONIC
+	mt_sched_update(thread);
+#endif /* MONOTONIC */
 
 	thread_lock(thread);
 
@@ -176,12 +182,7 @@ thread_quantum_expire(
 	if (thread->sched_mode != TH_MODE_REALTIME)
 		SCHED(quantum_expire)(thread);
 
-	processor->current_pri = thread->sched_pri;
-	processor->current_thmode = thread->sched_mode;
-
-	/* Tell platform layer that we are still running this thread */
-	urgency = thread_get_urgency(thread, &ignore1, &ignore2);
-	machine_thread_going_on_core(thread, urgency, 0, 0);
+	processor_state_update_from_thread(processor, thread);
 
 	/*
 	 *	This quantum is up, give this thread another.
@@ -206,23 +207,49 @@ thread_quantum_expire(
 					 PROCESSOR_DATA(processor, thread_timer));
 	}
 
+
 	processor->quantum_end = ctime + thread->quantum_remaining;
 
 	/*
-	 *	Context switch check.
+	 * Context switch check
+	 *
+	 * non-urgent flags don't affect kernel threads, so upgrade to urgent
+	 * to ensure that rebalancing and non-recommendation kick in quickly.
 	 */
-	if ((preempt = csw_check(processor, AST_QUANTUM)) != AST_NONE)
+
+	ast_t check_reason = AST_QUANTUM;
+	if (thread->task == kernel_task)
+		check_reason |= AST_URGENT;
+
+	if ((preempt = csw_check(processor, check_reason)) != AST_NONE)
 		ast_on(preempt);
+
+	/*
+	 * AST_KEVENT does not send an IPI when setting the AST,
+	 * to avoid waiting for the next context switch to propagate the AST,
+	 * the AST is propagated here at quantum expiration.
+	 */
+	ast_propagate(thread);
 
 	thread_unlock(thread);
 
-	timer_call_enter1(&processor->quantum_timer, thread,
-	    processor->quantum_end, TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL);
+	timer_call_quantum_timer_enter(&processor->quantum_timer, thread,
+		processor->quantum_end, ctime);
+
+	/* Tell platform layer that we are still running this thread */
+	urgency = thread_get_urgency(thread, &ignore1, &ignore2);
+	machine_thread_going_on_core(thread, urgency, 0, 0, ctime);
+	machine_switch_perfcontrol_state_update(QUANTUM_EXPIRY, ctime,
+		0, thread);
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 	sched_timeshare_consider_maintenance(ctime);
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
+#if __arm__ || __arm64__
+	if (thread->sched_mode == TH_MODE_REALTIME)
+		sched_consider_recommended_cores(ctime, thread);
+#endif /* __arm__ || __arm64__ */
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_QUANTUM_EXPIRED) | DBG_FUNC_END, preempt, 0, 0, 0, 0);
 }
@@ -241,14 +268,37 @@ void
 sched_set_thread_base_priority(thread_t thread, int priority)
 {
 	assert(priority >= MINPRI);
+	uint64_t ctime = 0;
 
 	if (thread->sched_mode == TH_MODE_REALTIME)
 		assert(priority <= BASEPRI_RTQUEUES);
 	else
 		assert(priority < BASEPRI_RTQUEUES);
 
+	int old_base_pri = thread->base_pri;
 	thread->base_pri = priority;
 
+	if ((thread->state & TH_RUN) == TH_RUN) {
+		assert(thread->last_made_runnable_time != THREAD_NOT_RUNNABLE);
+		ctime = mach_approximate_time();
+		thread->last_basepri_change_time = ctime;
+	} else {
+		assert(thread->last_basepri_change_time == THREAD_NOT_RUNNABLE);
+		assert(thread->last_made_runnable_time == THREAD_NOT_RUNNABLE);
+	}
+
+	/* 
+	 * Currently the perfcontrol_attr depends on the base pri of the 
+	 * thread. Therefore, we use this function as the hook for the 
+	 * perfcontrol callout. 
+	 */
+	if (thread == current_thread() && old_base_pri != priority) {
+		if (!ctime) {
+		    ctime = mach_approximate_time();
+		}
+		machine_switch_perfcontrol_state_update(PERFCONTROL_ATTR_UPDATE,
+			ctime, PERFCONTROL_CALLOUT_WAKE_UNSAFE, thread);
+	}
 	sched_update_thread_bucket(thread);
 
 	thread_recompute_sched_pri(thread, FALSE);
@@ -377,6 +427,39 @@ static struct shift_data	sched_decay_shifts[SCHED_DECAY_TICKS] = {
  */
 extern int sched_pri_decay_band_limit;
 
+#ifdef CONFIG_EMBEDDED
+
+int
+sched_compute_timeshare_priority(thread_t thread)
+{
+	int decay_amount = (thread->sched_usage >> thread->pri_shift);
+	int decay_limit = sched_pri_decay_band_limit;
+
+	if (thread->base_pri > BASEPRI_FOREGROUND) {
+		decay_limit += (thread->base_pri - BASEPRI_FOREGROUND);
+	}
+
+	if (decay_amount > decay_limit) {
+		decay_amount = decay_limit;
+	}
+
+	/* start with base priority */
+	int priority = thread->base_pri - decay_amount;
+
+	if (priority < MAXPRI_THROTTLE) {
+		if (thread->task->max_priority > MAXPRI_THROTTLE) {
+			priority = MAXPRI_THROTTLE;
+		} else if (priority < MINPRI_USER) {
+			priority = MINPRI_USER;
+		}
+	} else if (priority > MAXPRI_KERNEL) {
+		priority = MAXPRI_KERNEL;
+	}
+
+	return priority;
+}
+
+#else /* CONFIG_EMBEDDED */
 
 int
 sched_compute_timeshare_priority(thread_t thread)
@@ -392,6 +475,7 @@ sched_compute_timeshare_priority(thread_t thread)
 	return priority;
 }
 
+#endif /* CONFIG_EMBEDDED */
 
 /*
  *	can_update_priority

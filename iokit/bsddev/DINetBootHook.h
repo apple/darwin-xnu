@@ -94,8 +94,9 @@ extern "C" {
 				dev_p	<-		combination of major/minor node
 	Comments:	
 */
-int di_root_image(const char *path, char devname[], dev_t *dev_p);
+int di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p);
 void di_root_ramfile( IORegistryEntry * entry );
+int di_root_ramfile_buf(void *buf, size_t bufsz, char *devname, size_t devsz, dev_t *dev_p);
 
 #ifdef __cplusplus
 };

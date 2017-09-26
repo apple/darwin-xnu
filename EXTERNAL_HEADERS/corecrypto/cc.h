@@ -39,26 +39,28 @@ uint8_t b[_alignment_]; \
 /* sizeof of a context declared with cc_ctx_decl */
 #define cc_ctx_sizeof(_type_, _size_) sizeof(_type_[cc_ctx_n(_type_, _size_)])
 
-//- WARNING: The _MSC_VER version of cc_ctx_decl() is not compatible with the way *_decl macros are used in CommonCrypto, AppleKeyStore and SecurityFrameworks
-//  to observe the incompatibilities and errors, use below definition. Corecrypto itself, accepts both deinitions
-//  #define cc_ctx_decl(_type_, _size_, _name_)  _type_ _name_ ## _array[cc_ctx_n(_type_, (_size_))]; _type_ *_name_ = _name_ ## _array
-//- Never use sizeof() operator for the variables declared with cc_ctx_decl(), because it is not be compatible with the _MSC_VER version of cc_ctx_decl().
+/*
+  1. _alloca cannot be removed becasue this header file is compiled with both MSVC++ and with clang.
+  2. The _MSC_VER version of cc_ctx_decl() is not compatible with the way *_decl macros as used in CommonCrypto, AppleKeyStore and SecurityFrameworks. To observe the incompatibilities and errors, use below definition. Corecrypto itself, accepts both deinitions
+      #define cc_ctx_decl(_type_, _size_, _name_)  _type_ _name_ ## _array[cc_ctx_n(_type_, (_size_))]; _type_ *_name_ = _name_ ## _array
+  3. Never use sizeof() operator for the variables declared with cc_ctx_decl(), because it is not be compatible with the _MSC_VER version of cc_ctx_decl().
+ */
 #if defined(_MSC_VER)
- #define UNIQUE_ARRAY(data_type, _var_, total_count) data_type* _var_ = (data_type*)_alloca(sizeof(data_type)*(total_count));
- #define cc_ctx_decl(_type_, _size_, _name_)  UNIQUE_ARRAY(_type_, _name_,cc_ctx_n(_type_, (_size_)))
+#define cc_ctx_decl(_type_, _size_, _name_)  _type_ * _name_ = (_type_ *) _alloca(sizeof(_type_) * cc_ctx_n(_type_, _size_) )
 #else
- #define cc_ctx_decl(_type_, _size_, _name_)  _type_ _name_ [cc_ctx_n(_type_, _size_)]
+#define cc_ctx_decl(_type_, _size_, _name_)  _type_ _name_ [cc_ctx_n(_type_, _size_)]
 #endif
 
 /* bzero is deprecated. memset is the way to go */
 /* FWIW, L4, HEXAGON and ARMCC even with gnu compatibility mode don't have bzero */
 #define cc_zero(_size_,_data_) memset((_data_),0 ,(_size_))
 
-/* cc_clear:
- Set "len" bytes of memory to zero at address "dst".
- cc_clear has been developed so that it won't be optimized out.
- To be used to clear key buffers or sensitive data.
-*/
+/*!
+ @brief cc_clear(len, dst) zeroizes array dst and it will not be optimized out.
+ @discussion It is used to clear sensitive data, particularly when the are defined in the stack
+ @param len number of bytes to be cleared in dst
+ @param dst input array
+ */
 CC_NONNULL2
 void cc_clear(size_t len, void *dst);
 

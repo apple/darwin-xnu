@@ -364,7 +364,7 @@ static void
 pmLockCPUTopology(int lock)
 {
     if (lock) {
-	simple_lock(&x86_topo_lock);
+	mp_safe_spin_lock(&x86_topo_lock);
     } else {
 	simple_unlock(&x86_topo_lock);
     }
@@ -747,7 +747,7 @@ thread_tell_urgency(int urgency,
     uint64_t sched_latency,
     thread_t nthread)
 {
-	uint64_t	urgency_notification_time_start, delta;
+	uint64_t	urgency_notification_time_start = 0, delta;
 	boolean_t	urgency_assert = (urgency_notification_assert_abstime_threshold != 0);
 	assert(get_preemption_level() > 0 || ml_get_interrupts_enabled() == FALSE);
 #if	DEBUG
@@ -788,6 +788,7 @@ void
 machine_thread_going_on_core(__unused thread_t      new_thread,
 							 __unused int           urgency,
 							 __unused uint64_t      sched_latency,
+							 __unused uint64_t      same_pri_latency,
 							 __unused uint64_t      dispatch_time)
 {
 }
@@ -806,13 +807,23 @@ machine_max_runnable_latency(__unused uint64_t bg_max_latency,
 
 void
 machine_work_interval_notify(__unused thread_t thread,
-							 __unused uint64_t work_interval_id,
-							 __unused uint64_t start_abstime,
-							 __unused uint64_t finish_abstime,
-							 __unused uint64_t deadline_abstime,
-							 __unused uint64_t next_start_abstime,
-							 __unused uint16_t urgency,
-							 __unused uint32_t flags)
+                             __unused struct kern_work_interval_args* kwi_args)
+{
+}
+
+void machine_switch_perfcontrol_context(__unused perfcontrol_event event,
+					__unused uint64_t timestamp,
+					__unused uint32_t flags,
+					__unused uint64_t new_thread_same_pri_latency,
+					__unused thread_t old,
+					__unused thread_t new)
+{
+}
+
+void machine_switch_perfcontrol_state_update(__unused perfcontrol_event event,
+					     __unused uint64_t timestamp,
+					     __unused uint32_t flags,
+					     __unused thread_t thread)
 {
 }
 

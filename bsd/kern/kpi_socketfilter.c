@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,6 +40,7 @@
 #include <kern/debug.h>
 #include <net/kext_net.h>
 #include <net/if.h>
+#include <net/net_api_stats.h>
 #include <netinet/in_var.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
@@ -51,6 +52,7 @@
 #include <libkern/libkern.h>
 #include <libkern/OSAtomic.h>
 
+#include <stdbool.h>
 #include <string.h>
 
 #define	SFEF_ATTACHED		0x1	/* SFE is on socket list */
@@ -90,6 +92,13 @@ static thread_t				sock_filter_cleanup_thread = NULL;
 
 static void sflt_cleanup_thread(void *, wait_result_t);
 static void sflt_detach_locked(struct socket_filter_entry *entry);
+
+#undef sflt_register
+static errno_t sflt_register_common(const struct sflt_filter *filter, int domain,
+    int type, int protocol, bool is_internal);
+errno_t sflt_register(const struct sflt_filter *filter, int domain,
+    int type, int protocol);
+
 
 #pragma mark -- Internal State Management --
 
@@ -1249,9 +1258,9 @@ struct solist {
 	struct socket *so;
 };
 
-errno_t
-sflt_register(const struct sflt_filter *filter, int domain, int type,
-    int	 protocol)
+static errno_t
+sflt_register_common(const struct sflt_filter *filter, int domain, int type,
+    int	 protocol, bool is_internal)
 {
 	struct socket_filter *sock_filt = NULL;
 	struct socket_filter *match = NULL;
@@ -1317,6 +1326,12 @@ sflt_register(const struct sflt_filter *filter, int domain, int type,
 			sock_filt->sf_proto = pr;
 		}
 		sflt_retain_locked(sock_filt);
+
+		OSIncrementAtomic64(&net_api_stats.nas_sfltr_register_count);
+		INC_ATOMIC_INT64_LIM(net_api_stats.nas_sfltr_register_total);
+		if (is_internal) {
+			INC_ATOMIC_INT64_LIM(net_api_stats.nas_sfltr_register_os_total);
+		}
 	}
 	lck_rw_unlock_exclusive(sock_filter_lock);
 
@@ -1415,6 +1430,20 @@ sflt_register(const struct sflt_filter *filter, int domain, int type,
 }
 
 errno_t
+sflt_register_internal(const struct sflt_filter *filter, int domain, int type,
+    int	 protocol)
+{
+	return (sflt_register_common(filter, domain, type, protocol, true));
+}
+
+errno_t
+sflt_register(const struct sflt_filter *filter, int domain, int type,
+    int	 protocol)
+{
+	return (sflt_register_common(filter, domain, type, protocol, false));
+}
+
+errno_t
 sflt_unregister(sflt_handle handle)
 {
 	struct socket_filter *filter;
@@ -1427,6 +1456,8 @@ sflt_unregister(sflt_handle handle)
 	}
 
 	if (filter) {
+		VERIFY(OSDecrementAtomic64(&net_api_stats.nas_sfltr_register_count) > 0);
+
 		/* Remove it from the global list */
 		TAILQ_REMOVE(&sock_filter_head, filter, sf_global_next);
 

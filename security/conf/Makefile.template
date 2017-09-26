@@ -17,6 +17,7 @@ include $(MakeInc_def)
 # XXX: CFLAGS
 #
 CFLAGS+= -include meta_features.h -DBSD_KERNEL_PRIVATE
+SFLAGS+= -include meta_features.h
 
 # Objects that don't want -Wcast-align warning (8474835)
 OBJS_NO_CAST_ALIGN =		\

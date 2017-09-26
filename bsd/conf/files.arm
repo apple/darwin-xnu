@@ -1,0 +1,20 @@
+bsd/dev/arm/conf.c		standard
+bsd/dev/arm/cons.c		standard
+bsd/dev/arm/km.c		standard
+bsd/dev/arm/kern_machdep.c	standard
+bsd/dev/arm/stubs.c		standard
+bsd/dev/arm/systemcalls.c           standard
+bsd/dev/arm/sysctl.c           standard
+bsd/dev/arm/unix_signal.c	standard
+bsd/dev/arm/cpu_in_cksum.s	standard
+
+bsd/dev/arm/dtrace_isa.c	optional config_dtrace
+bsd/dev/arm/dtrace_subr_arm.c	optional config_dtrace
+bsd/dev/arm/fbt_arm.c		optional config_dtrace
+bsd/dev/arm/fasttrap_isa.c	optional config_dtrace
+bsd/dev/arm/disassembler.c	optional config_dtrace
+bsd/dev/arm/sdt_arm.c		optional config_dtrace
+
+bsd/dev/arm/munge.c		standard
+
+bsd/kern/bsd_stubs.c		standard

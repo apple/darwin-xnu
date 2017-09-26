@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1400,6 +1400,8 @@ nfs4_vnop_getattr(
 	error = nfs_getattr(VTONFS(ap->a_vp), &nva, ap->a_context, ngaflags);
 	if (error)
 		return (error);
+
+	vap->va_flags |= VA_64BITOBJIDS;
 
 	/* copy what we have in nva to *a_vap */
 	if (VATTR_IS_ACTIVE(vap, va_rdev) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_RAWDEV)) {

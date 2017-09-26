@@ -389,10 +389,9 @@ mac_vnode_notify_create(vfs_context_t ctx, struct mount *mp,
 	if (!mac_vnode_enforce)
 		return (0);
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return (0);
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_notify_create, cred, mp, mp->mnt_mntlabel,
 	    dvp, dvp->v_label, vp, vp->v_label, cnp);
 
@@ -410,10 +409,9 @@ mac_vnode_notify_rename(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_rename, cred, vp, vp->v_label,
 	    dvp, dvp->v_label, cnp);
 }
@@ -428,10 +426,9 @@ mac_vnode_notify_open(vfs_context_t ctx, struct vnode *vp, int acc_flags)
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_open, cred, vp, vp->v_label, acc_flags);
 }
 
@@ -446,10 +443,9 @@ mac_vnode_notify_link(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_link, cred, dvp, dvp->v_label, vp, vp->v_label, cnp);
 }
 
@@ -463,10 +459,9 @@ mac_vnode_notify_deleteextattr(vfs_context_t ctx, struct vnode *vp, const char *
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_deleteextattr, cred, vp, vp->v_label, name);
 }
 
@@ -480,10 +475,9 @@ mac_vnode_notify_setacl(vfs_context_t ctx, struct vnode *vp, struct kauth_acl *a
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_setacl, cred, vp, vp->v_label, acl);
 }
 
@@ -497,10 +491,9 @@ mac_vnode_notify_setattrlist(vfs_context_t ctx, struct vnode *vp, struct attrlis
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_setattrlist, cred, vp, vp->v_label, alist);
 }
 
@@ -514,10 +507,9 @@ mac_vnode_notify_setextattr(vfs_context_t ctx, struct vnode *vp, const char *nam
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_setextattr, cred, vp, vp->v_label, name, uio);
 }
 
@@ -531,10 +523,9 @@ mac_vnode_notify_setflags(vfs_context_t ctx, struct vnode *vp, u_long flags)
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_setflags, cred, vp, vp->v_label, flags);
 }
 
@@ -548,10 +539,9 @@ mac_vnode_notify_setmode(vfs_context_t ctx, struct vnode *vp, mode_t mode)
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_setmode, cred, vp, vp->v_label, mode);
 }
 
@@ -565,10 +555,9 @@ mac_vnode_notify_setowner(vfs_context_t ctx, struct vnode *vp, uid_t uid, gid_t 
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_setowner, cred, vp, vp->v_label, uid, gid);
 }
 
@@ -582,10 +571,9 @@ mac_vnode_notify_setutimes(vfs_context_t ctx, struct vnode *vp, struct timespec 
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_setutimes, cred, vp, vp->v_label, atime, mtime);
 }
 
@@ -599,10 +587,9 @@ mac_vnode_notify_truncate(vfs_context_t ctx, kauth_cred_t file_cred, struct vnod
 	if (!mac_vnode_enforce)
 		return;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return;
 	MAC_PERFORM(vnode_notify_truncate, cred, file_cred, vp, vp->v_label);
 }
 
@@ -648,11 +635,12 @@ mac_vnode_label_store(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_label_vnodes ||
-	    !mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
+	if (!mac_label_vnodes)
 		return 0;
 
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_label_store, cred, vp, vp->v_label, intlabel);
 
 	return (error);
@@ -802,10 +790,9 @@ mac_vnode_check_access(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	/* Convert {R,W,X}_OK values to V{READ,WRITE,EXEC} for entry points */
 	mask = ACCESS_MODE_TO_VNODE_MASK(acc_mode);
 	MAC_CHECK(vnode_check_access, cred, vp, vp->v_label, mask);
@@ -823,10 +810,9 @@ mac_vnode_check_chdir(vfs_context_t ctx, struct vnode *dvp)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_chdir, cred, dvp, dvp->v_label);
 	return (error);
 }
@@ -843,10 +829,9 @@ mac_vnode_check_chroot(vfs_context_t ctx, struct vnode *dvp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_chroot, cred, dvp, dvp->v_label, cnp);
 	return (error);
 }
@@ -863,10 +848,9 @@ mac_vnode_check_clone(vfs_context_t ctx, struct vnode *dvp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_clone, cred, dvp, dvp->v_label, vp,
 	    vp->v_label, cnp);
 	return (error);
@@ -883,10 +867,9 @@ mac_vnode_check_create(vfs_context_t ctx, struct vnode *dvp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_create, cred, dvp, dvp->v_label, cnp, vap);
 	return (error);
 }
@@ -903,10 +886,9 @@ mac_vnode_check_unlink(vfs_context_t ctx, struct vnode *dvp, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_unlink, cred, dvp, dvp->v_label, vp,
 	    vp->v_label, cnp);
 	return (error);
@@ -924,10 +906,9 @@ mac_vnode_check_deleteacl(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_deleteacl, cred, vp, vp->v_label, type);
 	return (error);
 }
@@ -945,10 +926,9 @@ mac_vnode_check_deleteextattr(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_deleteextattr, cred, vp, vp->v_label, name);
 	return (error);
 }
@@ -964,10 +944,9 @@ mac_vnode_check_exchangedata(vfs_context_t ctx,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_exchangedata, cred, v1, v1->v_label, 
 	    v2, v2->v_label);
 
@@ -986,10 +965,9 @@ mac_vnode_check_getacl(vfs_context_t ctx, struct vnode *vp, acl_type_t type)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_getacl, cred, vp, vp->v_label, type);
 	return (error);
 }
@@ -1007,10 +985,9 @@ mac_vnode_check_getattr(vfs_context_t ctx, struct ucred *file_cred,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_getattr, cred, file_cred, vp, vp->v_label, va);
 	return (error);
 }
@@ -1027,10 +1004,9 @@ mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_getattrlist, cred, vp, vp->v_label, alist);
 
 	/* Falsify results instead of returning error? */
@@ -1116,10 +1092,9 @@ mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_fsgetpath, cred, vp, vp->v_label);
 	return (error);
 }
@@ -1127,7 +1102,8 @@ mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp)
 int
 mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 								  struct image_params *imgp,
-								  unsigned int *cs_flags, int flags)
+								  unsigned int *cs_flags, unsigned int *signer_type,
+								  int flags)
 {
 	 int error;
 	 char *fatal_failure_desc = NULL;
@@ -1144,7 +1120,7 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 #endif
 
 	 MAC_CHECK(vnode_check_signature, vp, vp->v_label, cs_blob,
-				  cs_flags, flags, &fatal_failure_desc, &fatal_failure_desc_len);
+			   cs_flags, signer_type, flags, &fatal_failure_desc, &fatal_failure_desc_len);
 
 	 if (fatal_failure_desc_len) {
 		  // A fatal code signature validation failure occured, formulate a crash
@@ -1245,10 +1221,9 @@ mac_vnode_check_getacl(vfs_context_t ctx, struct vnode *vp, acl_type_t type)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_getacl, cred, vp, vp->v_label, type);
 	return (error);
 }
@@ -1266,10 +1241,9 @@ mac_vnode_check_getextattr(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_getextattr, cred, vp, vp->v_label,
 	    name, uio);
 	return (error);
@@ -1286,10 +1260,9 @@ mac_vnode_check_ioctl(vfs_context_t ctx, struct vnode *vp, u_int cmd)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_ioctl, cred, vp, vp->v_label, cmd);
 	return (error);
 }
@@ -1306,10 +1279,9 @@ mac_vnode_check_kqfilter(vfs_context_t ctx, kauth_cred_t file_cred,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_kqfilter, cred, file_cred, kn, vp,
 	    vp->v_label);
 
@@ -1328,10 +1300,9 @@ mac_vnode_check_link(vfs_context_t ctx, struct vnode *dvp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_link, cred, dvp, dvp->v_label, vp,
 	    vp->v_label, cnp);
 	return (error);
@@ -1348,11 +1319,29 @@ mac_vnode_check_listextattr(vfs_context_t ctx, struct vnode *vp)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_listextattr, cred, vp, vp->v_label);
+	return (error);
+}
+
+int
+mac_vnode_check_lookup_preflight(vfs_context_t ctx, struct vnode *dvp,
+    const char *path, size_t pathlen)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce)
+		return 0;
+#endif
+	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
+	MAC_CHECK(vnode_check_lookup_preflight, cred, dvp, dvp->v_label, path, pathlen);
 	return (error);
 }
 
@@ -1368,10 +1357,9 @@ mac_vnode_check_lookup(vfs_context_t ctx, struct vnode *dvp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_lookup, cred, dvp, dvp->v_label, cnp);
 	return (error);
 }
@@ -1387,10 +1375,9 @@ mac_vnode_check_open(vfs_context_t ctx, struct vnode *vp, int acc_mode)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_open, cred, vp, vp->v_label, acc_mode);
 	return (error);
 }
@@ -1407,10 +1394,9 @@ mac_vnode_check_read(vfs_context_t ctx, struct ucred *file_cred,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_read, cred, file_cred, vp,
 	    vp->v_label);
 
@@ -1428,10 +1414,9 @@ mac_vnode_check_readdir(vfs_context_t ctx, struct vnode *dvp)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_readdir, cred, dvp, dvp->v_label);
 	return (error);
 }
@@ -1447,10 +1432,9 @@ mac_vnode_check_readlink(vfs_context_t ctx, struct vnode *vp)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_readlink, cred, vp, vp->v_label);
 	return (error);
 }
@@ -1467,10 +1451,9 @@ mac_vnode_check_label_update(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_label_update, cred, vp, vp->v_label, newlabel);
 
 	return (error);
@@ -1489,10 +1472,9 @@ mac_vnode_check_rename(vfs_context_t ctx, struct vnode *dvp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 
 	MAC_CHECK(vnode_check_rename_from, cred, dvp, dvp->v_label, vp,
 	    vp->v_label, cnp);
@@ -1521,10 +1503,9 @@ mac_vnode_check_revoke(vfs_context_t ctx, struct vnode *vp)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_revoke, cred, vp, vp->v_label);
 	return (error);
 }
@@ -1540,10 +1521,9 @@ mac_vnode_check_searchfs(vfs_context_t ctx, struct vnode *vp, struct attrlist *a
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_searchfs, cred, vp, vp->v_label, alist);
 	return (error);
 }
@@ -1559,10 +1539,9 @@ mac_vnode_check_select(vfs_context_t ctx, struct vnode *vp, int which)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_select, cred, vp, vp->v_label, which);
 	return (error);
 }
@@ -1579,10 +1558,9 @@ mac_vnode_check_setacl(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_setacl, cred, vp, vp->v_label, acl);
 	return (error);
 }
@@ -1599,10 +1577,9 @@ mac_vnode_check_setattrlist(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_setattrlist, cred, vp, vp->v_label, alist);
 	return (error);
 }
@@ -1619,10 +1596,9 @@ mac_vnode_check_setextattr(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_setextattr, cred, vp, vp->v_label,
 	    name, uio);
 	return (error);
@@ -1639,10 +1615,9 @@ mac_vnode_check_setflags(vfs_context_t ctx, struct vnode *vp, u_long flags)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_setflags, cred, vp, vp->v_label, flags);
 	return (error);
 }
@@ -1658,10 +1633,9 @@ mac_vnode_check_setmode(vfs_context_t ctx, struct vnode *vp, mode_t mode)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_setmode, cred, vp, vp->v_label, mode);
 	return (error);
 }
@@ -1678,10 +1652,9 @@ mac_vnode_check_setowner(vfs_context_t ctx, struct vnode *vp, uid_t uid,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_setowner, cred, vp, vp->v_label, uid, gid);
 	return (error);
 }
@@ -1698,10 +1671,9 @@ mac_vnode_check_setutimes(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_setutimes, cred, vp, vp->v_label, atime,
 	    mtime);
 	return (error);
@@ -1719,10 +1691,9 @@ mac_vnode_check_stat(vfs_context_t ctx, struct ucred *file_cred,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_stat, cred, file_cred, vp,
 	    vp->v_label);
 	return (error);
@@ -1740,10 +1711,9 @@ mac_vnode_check_truncate(vfs_context_t ctx, struct ucred *file_cred,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_truncate, cred, file_cred, vp,
 	    vp->v_label);
 
@@ -1762,10 +1732,9 @@ mac_vnode_check_write(vfs_context_t ctx, struct ucred *file_cred,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-    if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-        return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_write, cred, file_cred, vp, vp->v_label);
 
 	return (error);
@@ -1783,10 +1752,9 @@ mac_vnode_check_uipc_bind(vfs_context_t ctx, struct vnode *dvp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_uipc_bind, cred, dvp, dvp->v_label, cnp, vap);
 	return (error);
 }
@@ -1802,10 +1770,9 @@ mac_vnode_check_uipc_connect(vfs_context_t ctx, struct vnode *vp, struct socket 
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(vnode_check_uipc_connect, cred, vp, vp->v_label, (socket_t) so);
 	return (error);
 }
@@ -1911,10 +1878,9 @@ mac_mount_check_mount(vfs_context_t ctx, struct vnode *vp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_mount, cred, vp, vp->v_label, cnp, vfc_name);
 
 	return (error);
@@ -1932,10 +1898,9 @@ mac_mount_check_snapshot_create(vfs_context_t ctx, struct mount *mp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_snapshot_create, cred, mp, name);
 	return (error);
 }
@@ -1952,10 +1917,9 @@ mac_mount_check_snapshot_delete(vfs_context_t ctx, struct mount *mp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_snapshot_delete, cred, mp, name);
 	return (error);
 }
@@ -1972,10 +1936,9 @@ mac_mount_check_snapshot_revert(vfs_context_t ctx, struct mount *mp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_snapshot_revert, cred, mp, name);
 	return (error);
 }
@@ -1991,10 +1954,9 @@ mac_mount_check_remount(vfs_context_t ctx, struct mount *mp)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_remount, cred, mp, mp->mnt_mntlabel);
 
 	return (error);
@@ -2011,10 +1973,9 @@ mac_mount_check_umount(vfs_context_t ctx, struct mount *mp)
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_umount, cred, mp, mp->mnt_mntlabel);
 
 	return (error);
@@ -2032,10 +1993,9 @@ mac_mount_check_getattr(vfs_context_t ctx, struct mount *mp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_getattr, cred, mp, mp->mnt_mntlabel, vfa);
 	return (error);
 }
@@ -2052,10 +2012,9 @@ mac_mount_check_setattr(vfs_context_t ctx, struct mount *mp,
 	if (!mac_vnode_enforce)
 		return 0;
 #endif
-	if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-		return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_setattr, cred, mp, mp->mnt_mntlabel, vfa);
 	return (error);
 }
@@ -2067,14 +2026,13 @@ mac_mount_check_stat(vfs_context_t ctx, struct mount *mount)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_vnode_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce)
+		return 0;
 #endif
-    if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-        return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_stat, cred, mount, mount->mnt_mntlabel);
 
 	return (error);
@@ -2087,14 +2045,13 @@ mac_mount_check_label_update(vfs_context_t ctx, struct mount *mount)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_vnode_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce)
+		return 0;
 #endif
-    if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-        return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_label_update, cred, mount, mount->mnt_mntlabel);
 
 	return (error);
@@ -2107,14 +2064,13 @@ mac_mount_check_fsctl(vfs_context_t ctx, struct mount *mp, u_int cmd)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_vnode_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce)
+		return 0;
 #endif
-    if (!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
-        return 0;
-
 	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred))
+		return (0);
 	MAC_CHECK(mount_check_fsctl, cred, mp, mp->mnt_mntlabel, cmd);
 
 	return (error);
@@ -2125,9 +2081,9 @@ mac_devfs_label_associate_device(dev_t dev, struct devnode *de,
     const char *fullpath)
 {
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_device_enforce)
-        return;
+	/* 21167099 - only check if we allow write */
+	if (!mac_device_enforce)
+		return;
 #endif
 
 	MAC_PERFORM(devfs_label_associate_device, dev, de, de->dn_label,
@@ -2139,9 +2095,9 @@ mac_devfs_label_associate_directory(const char *dirname, int dirnamelen,
     struct devnode *de, const char *fullpath)
 {
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_device_enforce)
-        return;
+	/* 21167099 - only check if we allow write */
+	if (!mac_device_enforce)
+		return;
 #endif
 
 	MAC_PERFORM(devfs_label_associate_directory, dirname, dirnamelen, de,
@@ -2154,9 +2110,9 @@ vn_setlabel(struct vnode *vp, struct label *intlabel, vfs_context_t context)
 	int error;
 
 #if SECURITY_MAC_CHECK_ENFORCE
-    /* 21167099 - only check if we allow write */
-    if (!mac_vnode_enforce)
-        return 0;
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce)
+		return 0;
 #endif
 	if (!mac_label_vnodes)
 		return (0);

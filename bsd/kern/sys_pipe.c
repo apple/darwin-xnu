@@ -146,6 +146,11 @@
 #include <kern/kalloc.h>
 #include <vm/vm_kern.h>
 #include <libkern/OSAtomic.h>
+#include <libkern/section_keywords.h>
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 #define f_flag f_fglob->fg_flag
 #define f_msgcount f_fglob->fg_msgcount
@@ -158,14 +163,14 @@
  * interfaces to the outside world exported through file operations 
  */
 static int pipe_read(struct fileproc *fp, struct uio *uio,
-                int flags, vfs_context_t ctx);
+		int flags, vfs_context_t ctx);
 static int pipe_write(struct fileproc *fp, struct uio *uio,
-                int flags, vfs_context_t ctx);
+		int flags, vfs_context_t ctx);
 static int pipe_close(struct fileglob *fg, vfs_context_t ctx);
 static int pipe_select(struct fileproc *fp, int which, void * wql,
 		vfs_context_t ctx);
 static int pipe_kqfilter(struct fileproc *fp, struct knote *kn,
-		vfs_context_t ctx);
+		struct kevent_internal_s *kev, vfs_context_t ctx);
 static int pipe_ioctl(struct fileproc *fp, u_long cmd, caddr_t data,
 		vfs_context_t ctx);
 static int pipe_drain(struct fileproc *fp,vfs_context_t ctx);
@@ -191,7 +196,7 @@ static int filt_pipewrite(struct knote *kn, long hint);
 static int filt_pipewritetouch(struct knote *kn, struct kevent_internal_s *kev);
 static int filt_pipewriteprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
 
-struct filterops pipe_rfiltops = {
+SECURITY_READ_ONLY_EARLY(struct filterops) pipe_rfiltops = {
         .f_isfd = 1,
         .f_detach = filt_pipedetach,
         .f_event = filt_piperead,
@@ -199,7 +204,7 @@ struct filterops pipe_rfiltops = {
 	.f_process = filt_pipereadprocess,
 };
 
-struct filterops pipe_wfiltops = {
+SECURITY_READ_ONLY_EARLY(struct filterops) pipe_wfiltops = {
         .f_isfd = 1,
         .f_detach = filt_pipedetach,
         .f_event = filt_pipewrite,
@@ -299,6 +304,7 @@ pipeinit(void)
 	
 }
 
+#ifndef	CONFIG_EMBEDDED
 /* Bitmap for things to touch in pipe_touch() */
 #define	PIPE_ATIME	0x00000001	/* time of last access */
 #define	PIPE_MTIME	0x00000002	/* time of last modification */
@@ -307,25 +313,26 @@ pipeinit(void)
 static void
 pipe_touch(struct pipe *tpipe, int touch)
 {
-	struct timeval now;
+	struct timespec now;
 
-	microtime(&now);
+	nanotime(&now);
 
 	if (touch & PIPE_ATIME) {
 		tpipe->st_atimespec.tv_sec  = now.tv_sec;
-		tpipe->st_atimespec.tv_nsec = now.tv_usec * 1000;
+		tpipe->st_atimespec.tv_nsec = now.tv_nsec;
 	}
 
 	if (touch & PIPE_MTIME) {
 		tpipe->st_mtimespec.tv_sec  = now.tv_sec;
-		tpipe->st_mtimespec.tv_nsec = now.tv_usec * 1000;
+		tpipe->st_mtimespec.tv_nsec = now.tv_nsec;
 	}
 
 	if (touch & PIPE_CTIME) {
 		tpipe->st_ctimespec.tv_sec  = now.tv_sec;
-		tpipe->st_ctimespec.tv_nsec = now.tv_usec * 1000;
+		tpipe->st_ctimespec.tv_nsec = now.tv_nsec;
 	}
 }
+#endif
 
 static const unsigned int pipesize_blocks[] = {512,1024,2048,4096, 4096 * 2, PIPE_SIZE , PIPE_SIZE * 4 };
 
@@ -658,8 +665,10 @@ pipe_create(struct pipe **cpipep)
 	 */
 	bzero(cpipe, sizeof *cpipe);
 
+#ifndef	CONFIG_EMBEDDED
 	/* Initial times are all the time of creation of the pipe */
 	pipe_touch(cpipe, PIPE_ATIME | PIPE_MTIME | PIPE_CTIME);
+#endif
 	return (0);
 }
 
@@ -860,8 +869,10 @@ unlocked_error:
 	if ((rpipe->pipe_buffer.size - rpipe->pipe_buffer.cnt) > 0)
 		pipeselwakeup(rpipe, rpipe->pipe_peer);
 
+#ifndef	CONFIG_EMBEDDED
 	/* update last read time */
 	pipe_touch(rpipe, PIPE_ATIME);
+#endif
 
 	PIPE_UNLOCK(rpipe);
 
@@ -1117,9 +1128,11 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 		pipeselwakeup(wpipe, wpipe);
 	}
 
+#ifndef	CONFIG_EMBEDDED
 	/* Update modification, status change (# of bytes in pipe) times */
 	pipe_touch(rpipe, PIPE_MTIME | PIPE_CTIME);
 	pipe_touch(wpipe, PIPE_MTIME | PIPE_CTIME);
+#endif
 	PIPE_UNLOCK(rpipe);
 
 	return (error);
@@ -1536,7 +1549,8 @@ filt_pipewriteprocess(struct knote *kn, struct filt_process_s *data, struct keve
 
 /*ARGSUSED*/
 static int
-pipe_kqfilter(__unused struct fileproc *fp, struct knote *kn, __unused vfs_context_t ctx)
+pipe_kqfilter(__unused struct fileproc *fp, struct knote *kn,
+		__unused struct kevent_internal_s *kev, __unused vfs_context_t ctx)
 {
 	struct pipe *cpipe = (struct pipe *)kn->kn_fp->f_data;
 	int res;
@@ -1623,7 +1637,7 @@ fill_pipeinfo(struct pipe * cpipe, struct pipe_info * pinfo)
 #if CONFIG_MACF
         int error;
 #endif
-	struct timeval now;
+	struct timespec now;
 	struct vinfo_stat * ub;
 	int pipe_size = 0;
 	int pipe_count;
@@ -1676,15 +1690,15 @@ fill_pipeinfo(struct pipe * cpipe, struct pipe_info * pinfo)
 	ub->vst_uid = kauth_getuid();
 	ub->vst_gid = kauth_getgid();
 
-	microtime(&now);
+	nanotime(&now);
 	ub->vst_atime  = now.tv_sec;
-	ub->vst_atimensec = now.tv_usec * 1000;
+	ub->vst_atimensec = now.tv_nsec;
 
 	ub->vst_mtime  = now.tv_sec;
-	ub->vst_mtimensec = now.tv_usec * 1000;
+	ub->vst_mtimensec = now.tv_nsec;
 
 	ub->vst_ctime  = now.tv_sec;
-	ub->vst_ctimensec = now.tv_usec * 1000;
+	ub->vst_ctimensec = now.tv_nsec;
 
 	/*
 	 * Left as 0: st_dev, st_ino, st_nlink, st_rdev, st_flags, st_gen, st_uid, st_gid.

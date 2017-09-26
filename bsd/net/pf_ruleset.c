@@ -74,6 +74,7 @@
 #endif /* KERNEL */
 #include <sys/mbuf.h>
 
+#include <netinet/ip_dummynet.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
@@ -245,7 +246,7 @@ pf_find_ruleset_with_owner(const char *path, const char *owner, int is_anchor,
 struct pf_ruleset *
 pf_find_or_create_ruleset(const char *path)
 {
-	char			*p, *q, *r;
+	char			*p, *q = NULL, *r;
 	struct pf_ruleset	*ruleset;
 	struct pf_anchor	*anchor = 0, *dup, *parent = NULL;
 
@@ -329,6 +330,11 @@ pf_find_or_create_ruleset(const char *path)
 			q = r + 1;
 		else
 			*q = 0;
+#if DUMMYNET
+		if(strncmp("com.apple.nlc", anchor->name,
+		    sizeof("com.apple.nlc")) == 0)
+			is_nlc_enabled_glb = TRUE;
+#endif
 	}
 	rs_free(p);
 	return (anchor ? &anchor->ruleset : 0);
@@ -352,6 +358,16 @@ pf_remove_if_empty_ruleset(struct pf_ruleset *ruleset)
 			    ruleset->rules[i].inactive.open)
 				return;
 		RB_REMOVE(pf_anchor_global, &pf_anchors, ruleset->anchor);
+#if DUMMYNET
+		if(strncmp("com.apple.nlc", ruleset->anchor->name,
+		    sizeof("com.apple.nlc")) == 0) {
+			struct dummynet_event dn_event;
+			bzero(&dn_event, sizeof(dn_event));
+			dn_event.dn_event_code = DUMMYNET_NLC_DISABLED;
+			dummynet_event_enqueue_nwk_wq_entry(&dn_event);
+			is_nlc_enabled_glb = FALSE;
+		}
+#endif
 		if ((parent = ruleset->anchor->parent) != NULL)
 			RB_REMOVE(pf_anchor_node, &parent->children,
 			    ruleset->anchor);

@@ -98,6 +98,7 @@
 #include <netinet6/esp6.h>
 #endif
 #include <netinet6/esp_rijndael.h>
+#include <netinet6/esp_chachapoly.h>
 #include <net/pfkeyv2.h>
 #include <netkey/keydb.h>
 #include <netkey/key.h>
@@ -183,6 +184,14 @@ static const struct esp_algorithm aes_gcm =
 		esp_gcm_encrypt_aes, esp_gcm_schedule,
 	        0, 0,
 	        16, esp_gcm_decrypt_finalize, esp_gcm_encrypt_finalize};
+static const struct esp_algorithm chacha_poly =
+	{ ESP_CHACHAPOLY_PAD_BOUND, ESP_CHACHAPOLY_IV_LEN,
+		esp_chachapoly_mature, ESP_CHACHAPOLY_KEYBITS_WITH_SALT,
+		ESP_CHACHAPOLY_KEYBITS_WITH_SALT, esp_chachapoly_schedlen,
+		"chacha-poly", esp_common_ivlen, esp_chachapoly_decrypt,
+		esp_chachapoly_encrypt, esp_chachapoly_schedule,
+		NULL, NULL, ESP_CHACHAPOLY_ICV_LEN,
+		esp_chachapoly_decrypt_finalize, esp_chachapoly_encrypt_finalize};
 
 static const struct esp_algorithm *esp_algorithms[] = {
 	&des_cbc,
@@ -190,6 +199,7 @@ static const struct esp_algorithm *esp_algorithms[] = {
 	&null_esp,
 	&aes_cbc,
 	&aes_gcm,
+	&chacha_poly,
 };
 
 const struct esp_algorithm *
@@ -206,6 +216,8 @@ esp_algorithm_lookup(int idx)
 		return &aes_cbc;
 	case SADB_X_EALG_AES_GCM:
 		return &aes_gcm;
+	case SADB_X_EALG_CHACHA20POLY1305:
+		return &chacha_poly;
 	default:
 		return NULL;
 	}
@@ -248,6 +260,17 @@ esp_schedule(const struct esp_algorithm *algo, struct secasvar *sav)
 		lck_mtx_unlock(sadb_mutex);
 		return 0;
 	}
+
+	/* prevent disallowed implicit IV */
+	if (((sav->flags & SADB_X_EXT_IIV) != 0) &&
+		(sav->alg_enc != SADB_X_EALG_AES_GCM) &&
+		(sav->alg_enc != SADB_X_EALG_CHACHA20POLY1305)) {
+		ipseclog((LOG_ERR,
+		    "esp_schedule %s: implicit IV not allowed\n",
+			algo->name));
+		return EINVAL;
+	}
+
 	/* no schedule necessary */
 	if (!algo->schedule || !algo->schedlen) {
 		lck_mtx_unlock(sadb_mutex);
@@ -384,7 +407,7 @@ esp_des_schedule(
 	struct secasvar *sav)
 {
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	if (des_ecb_key_sched((des_cblock *)_KEYBUF(sav->key_enc),
 	    (des_ecb_key_schedule *)sav->sched))
 		return EINVAL;
@@ -498,6 +521,11 @@ esp_gcm_mature(struct secasvar *sav)
 		    "esp_gcm_mature: algorithm incompatible with derived\n"));
 		return 1;
 	}
+	if (sav->flags & SADB_X_EXT_IIV) {
+		ipseclog((LOG_ERR,
+		    "esp_gcm_mature: implicit IV not currently implemented\n"));
+		return 1;
+	}
 
 	if (!sav->key_enc) {
 		ipseclog((LOG_ERR, "esp_gcm_mature: no key is given.\n"));
@@ -550,7 +578,7 @@ esp_3des_schedule(
 	__unused const struct esp_algorithm *algo,
 	struct secasvar *sav)
 {
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 
 	if (des3_ecb_key_sched((des_cblock *)_KEYBUF(sav->key_enc),
 	    (des3_ecb_key_schedule *)sav->sched))

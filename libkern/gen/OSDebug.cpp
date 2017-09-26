@@ -56,6 +56,11 @@ extern boolean_t doprnt_hide_pointers;
 extern void kmod_dump_log(vm_offset_t *addr, unsigned int cnt, boolean_t doUnslide);
 
 extern addr64_t kvtophys(vm_offset_t va);
+#if __arm__ 
+extern int copyinframe(vm_address_t fp, char *frame);
+#elif defined(__arm64__)
+extern int copyinframe(vm_address_t fp, char *frame, boolean_t is64bit);
+#endif
 
 __END_DECLS
 
@@ -96,7 +101,7 @@ void
 OSReportWithBacktrace(const char *str, ...)
 {
     char buf[128];
-    void *bt[9];
+    void *bt[9] = {};
     const unsigned cnt = sizeof(bt) / sizeof(bt[0]);
     va_list listp;
 
@@ -217,6 +222,42 @@ pad:
 
     for ( ; frame_index < maxAddrs; frame_index++)
 	    bt[frame_index] = (void *) 0;
+#elif __arm__ || __arm64__
+    uint32_t i = 0;
+    uintptr_t frameb[2];
+    uintptr_t fp = 0;
+    
+    // get the current frame pointer for this thread
+#if defined(__arm__)
+#define OSBacktraceFrameAlignOK(x) (((x) & 0x3) == 0)
+    __asm__ volatile("mov %0,r7" : "=r" (fp)); 
+#elif defined(__arm64__)
+#define OSBacktraceFrameAlignOK(x) (((x) & 0xf) == 0)
+    __asm__ volatile("mov %0, fp" : "=r" (fp)); 
+#else
+#error Unknown architecture.
+#endif
+    
+    // now crawl up the stack recording the link value of each frame
+    do {
+      // check bounds
+      if ((fp == 0) || (!OSBacktraceFrameAlignOK(fp)) || (fp > VM_MAX_KERNEL_ADDRESS) || (fp < VM_MIN_KERNEL_AND_KEXT_ADDRESS)) {
+	break;
+      }
+      // safely read frame
+#ifdef __arm64__
+      if (copyinframe(fp, (char*)frameb, TRUE) != 0) {
+#else
+      if (copyinframe(fp, (char*)frameb) != 0) {
+#endif
+	break;
+      }
+      
+      // No need to use copyin as this is always a kernel address, see check above
+      bt[i] = (void*)frameb[1];        // link register
+      fp = frameb[0]; 
+    } while (++i < maxAddrs);
+    frame= i;
 #else
 #error arch
 #endif

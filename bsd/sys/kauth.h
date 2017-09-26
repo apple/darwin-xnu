@@ -138,6 +138,8 @@ struct kauth_cache_sizes {
 #define	KAUTH_SET_CACHE_SIZES		(1<<4)
 #define	KAUTH_CLEAR_CACHES		(1<<5)
 
+#define	IDENTITYSVC_ENTITLEMENT		"com.apple.private.identitysvc"
+
 
 #ifdef KERNEL
 /*

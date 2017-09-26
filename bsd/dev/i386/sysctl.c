@@ -812,6 +812,13 @@ SYSCTL_UINT(_machdep_tsc_nanotime, OID_AUTO, generation,
 SYSCTL_NODE(_machdep, OID_AUTO, misc, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"Miscellaneous x86 kernel parameters");
 
+#if (DEVELOPMENT || DEBUG)
+extern uint32_t mp_interrupt_watchdog_events;
+SYSCTL_UINT(_machdep_misc, OID_AUTO, interrupt_watchdog_events,
+	CTLFLAG_RW|CTLFLAG_LOCKED, &mp_interrupt_watchdog_events, 0, "");
+#endif
+
+
 SYSCTL_PROC(_machdep_misc, OID_AUTO, panic_restart_timeout,
 	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, 
 	    0, 0,

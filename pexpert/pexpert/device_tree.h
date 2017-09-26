@@ -63,26 +63,7 @@ enum {
 /* length of DTEntryNameBuf = kDTMaxEntryNameLength +1*/
 typedef char DTEntryNameBuf[kDTMaxEntryNameLength+1];
 
-
-/* Entry*/
-typedef struct OpaqueDTEntry* DTEntry;
-
-/* Entry Iterator*/
-typedef struct OpaqueDTEntryIterator* DTEntryIterator;
-
-/* Property Iterator*/
-typedef struct OpaqueDTPropertyIterator* DTPropertyIterator;
-
-
-/* status values*/
-enum {
-		kError = -1,
-		kIterationDone = 0,
-		kSuccess = 1
-};
-
 /*
-
 Structures for a Flattened Device Tree
  */
 
@@ -101,6 +82,48 @@ typedef struct OpaqueDTEntry {
 //  DeviceTreeNodeProperty	props[];// array size == nProperties
 //  DeviceTreeNode	children[];	// array size == nChildren
 } DeviceTreeNode;
+
+typedef DeviceTreeNode *RealDTEntry;
+
+typedef struct DTSavedScope {
+	struct DTSavedScope * nextScope;
+	RealDTEntry scope;
+	RealDTEntry entry;
+	unsigned long index;		
+} *DTSavedScopePtr;
+
+/* Entry Iterator*/
+typedef struct OpaqueDTEntryIterator {
+	RealDTEntry outerScope;
+	RealDTEntry currentScope;
+	RealDTEntry currentEntry;
+	DTSavedScopePtr savedScope;
+	unsigned long currentIndex;		
+} OpaqueDTEntryIterator, *DTEntryIterator;
+
+/* Property Iterator*/
+typedef struct OpaqueDTPropertyIterator {
+	RealDTEntry entry;
+	DeviceTreeNodeProperty *currentProperty;
+	unsigned long currentIndex;
+} OpaqueDTPropertyIterator, *DTPropertyIterator;
+
+/* Entry*/
+typedef struct OpaqueDTEntry* DTEntry;
+
+/* Entry Iterator*/
+typedef struct OpaqueDTEntryIterator* DTEntryIterator;
+
+/* Property Iterator*/
+typedef struct OpaqueDTPropertyIterator* DTPropertyIterator;
+
+
+/* status values*/
+enum {
+		kError = -1,
+		kIterationDone = 0,
+		kSuccess = 1
+};
 
 
 #ifndef	__MWERKS__
@@ -158,16 +181,13 @@ extern int DTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntr
  currently in. And third is a "currentPosition" which is the last entry returned
  during an iteration.
 
- Create Entry Iterator
- Create the iterator structure. The outermostScope and currentScope of the iterator
+ Initialize Entry Iterator
+ Fill out the iterator structure. The outermostScope and currentScope of the iterator
  are set to "startEntry".  If "startEntry" = NULL, the outermostScope and
  currentScope are set to the root entry.  The currentPosition for the iterator is
  set to "nil".
 */
-extern int DTCreateEntryIterator(const DTEntry startEntry, DTEntryIterator *iterator);
-
-/* Dispose Entry Iterator*/
-extern int DTDisposeEntryIterator(DTEntryIterator iterator);
+extern int DTInitEntryIterator(const DTEntry startEntry, DTEntryIterator iter);
 
 /*
  Enter Child Entry
@@ -223,15 +243,10 @@ extern int DTGetProperty(const DTEntry entry, const char *propertyName, void **p
 -------------------------------------------------------------------------------
 */
 /*
- Create Property Iterator
- Create the property iterator structure. The target entry is defined by entry.
+ Initialize Property Iterator
+ Fill out the property iterator structure. The target entry is defined by entry.
 */
-
-extern int DTCreatePropertyIterator(const DTEntry entry,
-					DTPropertyIterator *iterator);
-
-/* Dispose Property Iterator*/
-extern int DTDisposePropertyIterator(DTPropertyIterator iterator);
+extern int DTInitPropertyIterator(const DTEntry entry, DTPropertyIterator iter);
 
 /*
  Iterate Properites

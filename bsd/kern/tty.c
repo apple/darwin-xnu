@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -113,18 +113,8 @@
 #include <dev/kmreg_com.h>
 #include <machine/cons.h>
 #include <sys/resource.h>	/* averunnable */
-
-/*
- * Debugging assertions for tty locks
- */
-#define TTY_DEBUG 1
-#if TTY_DEBUG
-#define	TTY_LOCK_OWNED(tp) do {lck_mtx_assert(&tp->t_lock, LCK_MTX_ASSERT_OWNED); } while (0)
-#define	TTY_LOCK_NOTOWNED(tp) do {lck_mtx_assert(&tp->t_lock, LCK_MTX_ASSERT_NOTOWNED); } while (0)
-#else
-#define TTY_LOCK_OWNED(tp)
-#define TTY_LOCK_NOTOWNED(tp)
-#endif
+#include <kern/waitq.h>
+#include <libkern/section_keywords.h>
 
 static lck_grp_t	*tty_lck_grp;
 static lck_grp_attr_t	*tty_lck_grp_attr;
@@ -142,7 +132,7 @@ static void	ttyunblock(struct tty *tp);
 static int	ttywflush(struct tty *tp);
 static int	proc_compare(proc_t p1, proc_t p2);
 
-static void	ttyhold(struct tty *tp);
+void ttyhold(struct tty *tp);
 static void	ttydeallocate(struct tty *tp);
 
 static int isctty(proc_t p, struct tty  *tp);
@@ -330,7 +320,6 @@ tty_unlock(struct tty *tp)
 	lck_mtx_unlock(&tp->t_lock);
 }
 
-
 /*
  * ttyopen (LDISC)
  *
@@ -372,6 +361,7 @@ ttyclose(struct tty *tp)
 {
 	struct pgrp * oldpg;
 	struct session * oldsessp;
+	struct knote *kn;
 
 	TTY_LOCK_OWNED(tp);	/* debug assert */
 
@@ -408,8 +398,15 @@ ttyclose(struct tty *tp)
 		pg_rele(oldpg);
 	tty_lock(tp);
 	tp->t_state = 0;
+	SLIST_FOREACH(kn, &tp->t_wsel.si_note, kn_selnext) {
+		KNOTE_DETACH(&tp->t_wsel.si_note, kn);
+	}
 	selthreadclear(&tp->t_wsel);
+	SLIST_FOREACH(kn, &tp->t_rsel.si_note, kn_selnext) {
+		KNOTE_DETACH(&tp->t_rsel.si_note, kn);
+	}
 	selthreadclear(&tp->t_rsel);
+
 	return (0);
 }
 
@@ -1517,18 +1514,27 @@ int
 ttyselect(struct tty *tp, int rw, void *wql, proc_t p)
 {
 	int retval = 0;
+	/*
+	 * Attaching knotes to TTYs needs to call selrecord in order to hook
+	 * up the waitq to the selinfo, regardless of data being ready.  See
+	 * filt_ttyattach.
+	 */
+	bool needs_selrecord = rw & FMARK;
+	rw &= ~FMARK;
 
-	if (tp == NULL)
-		return (ENXIO);
+	if (tp == NULL) {
+		return ENXIO;
+	}
 
-	TTY_LOCK_OWNED(tp);	/* debug assert */
+	TTY_LOCK_OWNED(tp);
+
+	if (tp->t_state & TS_ZOMBIE) {
+		retval = 1;
+		goto out;
+	}
 
 	switch (rw) {
 	case FREAD:
-		if (ISSET(tp->t_state, TS_ZOMBIE)) {
-			return(1);
-		}
-
 		retval = ttnread(tp);
 		if (retval > 0) {
 			break;
@@ -1537,12 +1543,8 @@ ttyselect(struct tty *tp, int rw, void *wql, proc_t p)
 		selrecord(p, &tp->t_rsel, wql);
 		break;
 	case FWRITE:
-		if (ISSET(tp->t_state, TS_ZOMBIE)) {
-			return(1);
-		}
-
 		if ((tp->t_outq.c_cc <= tp->t_lowat) &&
-				ISSET(tp->t_state, TS_CONNECTED)) {
+		    (tp->t_state & TS_CONNECTED)) {
 			retval = tp->t_hiwat - tp->t_outq.c_cc;
 			break;
 		}
@@ -1550,6 +1552,19 @@ ttyselect(struct tty *tp, int rw, void *wql, proc_t p)
 		selrecord(p, &tp->t_wsel, wql);
 		break;
 	}
+
+out:
+	if (retval > 0 && needs_selrecord) {
+		switch (rw) {
+		case FREAD:
+			selrecord(p, &tp->t_rsel, wql);
+			break;
+		case FWRITE:
+			selrecord(p, &tp->t_wsel, wql);
+			break;
+		}
+	}
+
 	return retval;
 }
 
@@ -3066,7 +3081,7 @@ ttymalloc(void)
 /*
  * Increment the reference count on a tty.
  */
-static void
+void
 ttyhold(struct tty *tp)
 {
 	TTY_LOCK_OWNED(tp);
@@ -3145,4 +3160,388 @@ isctty_sp(proc_t p, struct tty  *tp, struct session *sessp)
 {
 	return(sessp == tp->t_session && p->p_flag & P_CONTROLT);
 
+}
+
+
+static int  filt_ttyattach(struct knote *kn, struct kevent_internal_s *kev);
+static void filt_ttydetach(struct knote *kn);
+static int  filt_ttyevent(struct knote *kn, long hint);
+static int  filt_ttytouch(struct knote *kn, struct kevent_internal_s *kev);
+static int  filt_ttyprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+
+SECURITY_READ_ONLY_EARLY(struct filterops) tty_filtops = {
+	.f_isfd    = 1,
+	.f_attach  = filt_ttyattach,
+	.f_detach  = filt_ttydetach,
+	.f_event   = filt_ttyevent,
+	.f_touch   = filt_ttytouch,
+	.f_process = filt_ttyprocess
+};
+
+/*
+ * Called with struct tty locked. Returns non-zero if there is data to be read
+ * or written.
+ */
+static int
+filt_tty_common(struct knote *kn, struct tty *tp)
+{
+	int retval = 0;
+
+	TTY_LOCK_OWNED(tp); /* debug assert */
+
+	if (tp->t_state & TS_ZOMBIE) {
+		kn->kn_flags |= EV_EOF;
+		return 1;
+	}
+
+	switch (knote_get_seltype(kn)) {
+	case FREAD:
+		retval = ttnread(tp);
+		break;
+	case FWRITE:
+		if ((tp->t_outq.c_cc <= tp->t_lowat) &&
+		    (tp->t_state & TS_CONNECTED)) {
+			retval = tp->t_hiwat - tp->t_outq.c_cc;
+		}
+		break;
+	}
+
+	kn->kn_data = retval;
+
+	/*
+	 * TODO(mwidmann, jandrus): For native knote low watermark support,
+	 * check the kn_sfflags for NOTE_LOWAT and check against kn_sdata.
+	 *
+	 * res = ((kn->kn_sfflags & NOTE_LOWAT) != 0) ?
+	 *        (kn->kn_data >= kn->kn_sdata) : kn->kn_data;
+	 */
+
+	return retval;
+}
+
+/*
+ * Find the struct tty from a waitq, which is a member of one of the two struct
+ * selinfos inside the struct tty.  Use the seltype to determine which selinfo.
+ */
+static struct tty *
+tty_from_waitq(struct waitq *wq, int seltype)
+{
+	struct selinfo *si;
+	struct tty *tp = NULL;
+
+	/*
+	 * The waitq is part of the selinfo structure managed by the driver. For
+	 * certain drivers, we want to hook the knote into the selinfo
+	 * structure's si_note field so selwakeup can call KNOTE.
+	 *
+	 * While 'wq' is not really a queue element, this macro only uses the
+	 * pointer to calculate the offset into a structure given an element
+	 * name.
+	 */
+	si = qe_element(wq, struct selinfo, si_waitq);
+
+	/*
+	 * For TTY drivers, the selinfo structure is somewhere in the struct
+	 * tty. There are two different selinfo structures, and the one used
+	 * corresponds to the type of filter requested.
+	 *
+	 * While 'si' is not really a queue element, this macro only uses the
+	 * pointer to calculate the offset into a structure given an element
+	 * name.
+	 */
+	switch (seltype) {
+	case FREAD:
+		tp = qe_element(si, struct tty, t_rsel);
+		break;
+	case FWRITE:
+		tp = qe_element(si, struct tty, t_wsel);
+		break;
+	}
+
+	return tp;
+}
+
+static struct tty *
+tty_from_knote(struct knote *kn)
+{
+	return (struct tty *)kn->kn_hook;
+}
+
+/*
+ * Try to lock the TTY structure associated with a knote.
+ *
+ * On success, this function returns a locked TTY structure.  Otherwise, NULL is
+ * returned.
+ */
+__attribute__((warn_unused_result))
+static struct tty *
+tty_lock_from_knote(struct knote *kn)
+{
+	struct tty *tp = tty_from_knote(kn);
+	if (tp) {
+		tty_lock(tp);
+	}
+
+	return tp;
+}
+
+/*
+ * Set the knote's struct tty to the kn_hook field.
+ *
+ * The idea is to fake a call to select with our own waitq set.  If the driver
+ * calls selrecord, we'll get a link to their waitq and access to the tty
+ * structure.
+ *
+ * Returns -1 on failure, with the error set in the knote, or selres on success.
+ */
+static int
+tty_set_knote_hook(struct knote *kn)
+{
+	uthread_t uth;
+	vfs_context_t ctx;
+	vnode_t vp;
+	kern_return_t kr;
+	struct waitq *wq = NULL;
+	struct waitq_set *old_wqs;
+	struct waitq_set tmp_wqs;
+	uint64_t rsvd, rsvd_arg;
+	uint64_t *rlptr = NULL;
+	int selres = -1;
+	struct tty *tp;
+
+	uth = get_bsdthread_info(current_thread());
+
+	ctx = vfs_context_current();
+	vp = (vnode_t)kn->kn_fp->f_fglob->fg_data;
+
+	/*
+	 * Reserve a link element to avoid potential allocation under
+	 * a spinlock.
+	 */
+	rsvd = rsvd_arg = waitq_link_reserve(NULL);
+	rlptr = (void *)&rsvd_arg;
+
+	/*
+	 * Trick selrecord into hooking a known waitq set into the device's selinfo
+	 * waitq.  Once the link is in place, we can get back into the selinfo from
+	 * the waitq and subsequently the tty (see tty_from_waitq).
+	 *
+	 * We can't use a real waitq set (such as the kqueue's) because wakeups
+	 * might happen before we can unlink it.
+	 */
+	kr = waitq_set_init(&tmp_wqs, SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST, NULL,
+			NULL);
+	assert(kr == KERN_SUCCESS);
+
+	old_wqs = uth->uu_wqset;
+	uth->uu_wqset = &tmp_wqs;
+	/*
+	 * FMARK forces selects to always call selrecord, even if data is
+	 * available.  See ttselect, ptsselect, ptcselect.
+	 *
+	 * selres also contains the data currently available in the tty.
+	 */
+	selres = VNOP_SELECT(vp, knote_get_seltype(kn) | FMARK, 0, rlptr, ctx);
+	uth->uu_wqset = old_wqs;
+
+	/*
+	 * Make sure to cleanup the reserved link - this guards against
+	 * drivers that may not actually call selrecord().
+	 */
+	waitq_link_release(rsvd);
+	if (rsvd == rsvd_arg) {
+		/*
+		 * The driver didn't call selrecord -- there's no tty hooked up so we
+		 * can't attach.
+		 */
+		knote_set_error(kn, ENOTTY);
+		selres = -1;
+		goto out;
+	}
+
+	/* rlptr may not point to a properly aligned pointer */
+	memcpy(&wq, rlptr, sizeof(void *));
+
+	tp = tty_from_waitq(wq, knote_get_seltype(kn));
+	assert(tp != NULL);
+
+	/*
+	 * Take a reference and stash the tty in the knote.
+	 */
+	tty_lock(tp);
+	ttyhold(tp);
+	kn->kn_hook = tp;
+	tty_unlock(tp);
+
+out:
+	/*
+	 * Cleaning up the wqset will unlink its waitq and clean up any preposts
+	 * that occurred as a result of data coming in while the tty was attached.
+	 */
+	waitq_set_deinit(&tmp_wqs);
+
+	return selres;
+}
+
+static int
+filt_ttyattach(struct knote *kn, __unused struct kevent_internal_s *kev)
+{
+	int selres = 0;
+	struct tty *tp;
+
+	/*
+	 * This function should be called from filt_specattach (spec_vnops.c),
+	 * so most of the knote data structure should already be initialized.
+	 */
+
+	/* don't support offsets in ttys or drivers that don't use struct tty */
+	if (kn->kn_vnode_use_ofst || !kn->kn_vnode_kqok) {
+		knote_set_error(kn, ENOTSUP);
+		return 0;
+	}
+
+	/*
+	 * Connect the struct tty to the knote through the selinfo structure
+	 * referenced by the waitq within the selinfo.
+	 */
+	selres = tty_set_knote_hook(kn);
+	if (selres < 0) {
+		return 0;
+	}
+
+	/*
+	 * Attach the knote to selinfo's klist.
+	 */
+	tp = tty_lock_from_knote(kn);
+	if (!tp) {
+		knote_set_error(kn, ENOENT);
+		return 0;
+	}
+
+	switch (knote_get_seltype(kn)) {
+	case FREAD:
+		KNOTE_ATTACH(&tp->t_rsel.si_note, kn);
+		break;
+	case FWRITE:
+		KNOTE_ATTACH(&tp->t_wsel.si_note, kn);
+		break;
+	}
+
+	tty_unlock(tp);
+
+	return selres;
+}
+
+static void
+filt_ttydetach(struct knote *kn)
+{
+	struct tty *tp;
+
+	tp = tty_lock_from_knote(kn);
+	if (!tp) {
+		knote_set_error(kn, ENOENT);
+		return;
+	}
+
+	struct selinfo *si = NULL;
+	switch (knote_get_seltype(kn)) {
+	case FREAD:
+		si = &tp->t_rsel;
+		break;
+	case FWRITE:
+		si = &tp->t_wsel;
+		break;
+	/* knote_get_seltype will panic on default */
+	}
+
+	KNOTE_DETACH(&si->si_note, kn);
+	kn->kn_hook = NULL;
+
+	tty_unlock(tp);
+	ttyfree(tp);
+}
+
+static int
+filt_ttyevent(struct knote *kn, long hint)
+{
+	int ret;
+	struct tty *tp;
+	bool revoked = hint & NOTE_REVOKE;
+	hint &= ~NOTE_REVOKE;
+
+	tp = tty_from_knote(kn);
+	if (!tp) {
+		knote_set_error(kn, ENOENT);
+		return 0;
+	}
+
+	if (!hint) {
+		tty_lock(tp);
+	}
+
+	if (revoked) {
+		kn->kn_flags |= EV_EOF | EV_ONESHOT;
+		ret = 1;
+	} else {
+		ret = filt_tty_common(kn, tp);
+	}
+
+	if (!hint) {
+		tty_unlock(tp);
+	}
+
+	return ret;
+}
+
+static int
+filt_ttytouch(struct knote *kn, struct kevent_internal_s *kev)
+{
+	struct tty *tp;
+	int res = 0;
+
+	tp = tty_lock_from_knote(kn);
+	if (!tp) {
+		knote_set_error(kn, ENOENT);
+		return 0;
+	}
+
+	kn->kn_sdata = kev->data;
+	kn->kn_sfflags = kev->fflags;
+	if ((kn->kn_status & KN_UDATA_SPECIFIC) == 0)
+		kn->kn_udata = kev->udata;
+
+	if (kn->kn_vnode_kqok) {
+		res = filt_tty_common(kn, tp);
+	}
+
+	tty_unlock(tp);
+
+	return res;
+}
+
+static int
+filt_ttyprocess(struct knote *kn, __unused struct filt_process_s *data, struct kevent_internal_s *kev)
+{
+	struct tty *tp;
+	int res;
+
+	tp = tty_lock_from_knote(kn);
+	if (!tp) {
+		knote_set_error(kn, ENOENT);
+		return 0;
+	}
+
+	res = filt_tty_common(kn, tp);
+
+	if (res) {
+		*kev = kn->kn_kevent;
+		if (kn->kn_flags & EV_CLEAR) {
+			kn->kn_fflags = 0;
+			kn->kn_data = 0;
+		}
+	}
+
+	tty_unlock(tp);
+
+	return res;
 }

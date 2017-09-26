@@ -35,14 +35,30 @@
 #ifndef _CONSOLE_SERIAL_PROTOS_H_
 #define _CONSOLE_SERIAL_PROTOS_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 void serial_keyboard_init(void);
 void serial_keyboard_start(void);
 void serial_keyboard_poll(void);
 
 extern uint32_t serialmode;
+
+#define SERIALMODE_OUTPUT    0x1
+#define SERIALMODE_INPUT     0x2
+#define SERIALMODE_SYNCDRAIN 0x4
+
 extern uint32_t cons_ops_index;
 extern const uint32_t nconsops;
 extern unsigned int disable_serial_output;
+#if defined(__arm__) || defined(__arm64__)
+/* ARM64_TODO */
+extern void *console_cpu_alloc(boolean_t);
+extern void console_cpu_free(void *);
+void console_init(void);
+#endif
 
 int _serial_getc(int unit, int line, boolean_t wait, boolean_t raw);
 
@@ -58,5 +74,31 @@ void switch_to_old_console(int old_console);
 
 #define SERIAL_CONS_OPS 0
 #define VC_CONS_OPS 1
+
+#ifdef XNU_KERNEL_PRIVATE
+
+#define SERIAL_CONS_BUF_SIZE  256
+struct console_printbuf_state {
+	int pos;
+	int total;
+	int flags;
+#define CONS_PB_WRITE_NEWLINE  0x1
+#define CONS_PB_CANBLOCK       0x2
+	char str[SERIAL_CONS_BUF_SIZE];
+};
+
+extern int console_printbuf_drain_initialized;
+void console_printbuf_state_init(struct console_printbuf_state * data, int write_on_newline, int can_block);
+void console_printbuf_putc(int ch, void *arg);
+void console_printbuf_clear(struct console_printbuf_state * info);
+int console_write_try(char * str, int size);
+
+
+#endif /* XNU_KERNEL_PRIVATE */
+
+#ifdef __cplusplus
+}
+#endif
+
 
 #endif /* _CONSOLE_SERIAL_PROTOS_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -195,14 +195,14 @@ ip_randomid(void)
 		if (random_id_statistics && new_id != 0)
 			random_id_collisions++;
 		read_random(&new_id, sizeof (new_id));
-	} while (bit_test(id_bits, new_id) || new_id == 0);
+	} while (bitstr_test(id_bits, new_id) || new_id == 0);
 
 	/*
 	 * These require serialization to maintain correctness.
 	 */
 	lck_mtx_lock_spin(&ipid_lock);
-	bit_clear(id_bits, id_array[array_ptr]);
-	bit_set(id_bits, new_id);
+	bitstr_clear(id_bits, id_array[array_ptr]);
+	bitstr_set(id_bits, new_id);
 	id_array[array_ptr] = new_id;
 	if (++array_ptr == ARRAY_SIZE)
 		array_ptr = 0;

@@ -54,7 +54,6 @@
  * the rights to redistribute these changes.
  */
 
-#include <mach_rt.h>
 #include <mach_debug.h>
 #include <mach_ldebug.h>
 
@@ -429,7 +428,7 @@ machine_thread_destroy(
 #endif
 
 	if (pcb->ifps != 0)
-		fpu_free(pcb->ifps);
+		fpu_free(thread, pcb->ifps);
 	if (pcb->iss != 0) {
 		zfree(iss_zone, pcb->iss);
 		pcb->iss = 0;

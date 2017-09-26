@@ -44,8 +44,9 @@
 #define FSE_DOCID_CREATED       11
 #define FSE_DOCID_CHANGED       12
 #define FSE_UNMOUNT_PENDING     13 // iOS-only: client must respond via FSEVENTS_UNMOUNT_PENDING_ACK
+#define FSE_CLONE               14
 
-#define FSE_MAX_EVENTS          14
+#define FSE_MAX_EVENTS          15
 #define FSE_ALL_EVENTS         998
 
 #define FSE_EVENTS_DROPPED     999
@@ -99,6 +100,7 @@
 #define FSE_MODE_LAST_HLINK    (1 << 30)    // link count == 0 on a hard-link delete 
 #define FSE_REMOTE_DIR_EVENT   (1 << 29)    // this is a remotely generated directory-level granularity event
 #define FSE_TRUNCATED_PATH     (1 << 28)    // the path for this item had to be truncated
+#define FSE_MODE_CLONE         (1 << 27)    // notification is for a clone
 
 // ioctl's on /dev/fsevents
 typedef struct fsevent_clone_args {

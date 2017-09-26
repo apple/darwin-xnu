@@ -74,10 +74,7 @@ url_decode(char *str)
 				 * string down a few characters */
 				*esc++ = c;
 				str = memmove(esc, str, strlen(str)+1);
-			} else {
-				str++;
 			}
-
 		} else {
 			str++;
 		}

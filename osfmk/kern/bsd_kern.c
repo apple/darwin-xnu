@@ -45,6 +45,13 @@
 #include <sys/resource.h>
 #include <sys/signal.h>
 
+#if MONOTONIC
+#include <kern/monotonic.h>
+#include <machine/monotonic.h>
+#endif /* MONOTONIC */
+
+#include <machine/limits.h>
+
 #undef thread_should_halt
 
 /* BSD KERN COMPONENT INTERFACE */
@@ -60,11 +67,14 @@ kern_return_t get_signalact(task_t , thread_t *, int);
 int fill_task_rusage(task_t task, rusage_info_current *ri);
 int fill_task_io_rusage(task_t task, rusage_info_current *ri);
 int fill_task_qos_rusage(task_t task, rusage_info_current *ri);
+void fill_task_monotonic_rusage(task_t task, rusage_info_current *ri);
+uint64_t get_task_logical_writes(task_t task);
 void fill_task_billed_usage(task_t task, rusage_info_current *ri);
 void task_bsdtask_kill(task_t);
 
 extern uint64_t get_dispatchqueue_serialno_offset_from_proc(void *p);
 extern uint64_t proc_uniqueid(void *p);
+extern int proc_pidversion(void *p);
 
 #if MACH_BSD
 extern void psignal(void *, int);
@@ -326,7 +336,11 @@ swap_task_map(task_t task, thread_t thread, vm_map_t map)
 	vm_commit_pagezero_status(map);
 
 	if (doswitch) {
+#if	defined(__arm__) || defined(__arm64__)
+		PMAP_SWITCH_USER(thread, map, cpu_number())
+#else
 		pmap_switch(map->pmap);
+#endif
 	}
 	mp_enable_preemption();
 	task_unlock(task);
@@ -403,11 +417,11 @@ uint64_t get_task_purgeable_size(task_t task)
 /*
  *
  */
-uint64_t get_task_phys_footprint(task_t task) 
-{	
+uint64_t get_task_phys_footprint(task_t task)
+{
 	kern_return_t ret;
 	ledger_amount_t credit, debit;
-	
+
 	ret = ledger_get_entries(task->ledger, task_ledgers.phys_footprint, &credit, &debit);
 	if (KERN_SUCCESS == ret) {
 		return (credit - debit);
@@ -419,13 +433,30 @@ uint64_t get_task_phys_footprint(task_t task)
 /*
  *
  */
-uint64_t get_task_phys_footprint_max(task_t task) 
-{	
+uint64_t get_task_phys_footprint_recent_max(task_t task)
+{
 	kern_return_t ret;
 	ledger_amount_t max;
-	
-	ret = ledger_get_maximum(task->ledger, task_ledgers.phys_footprint, &max);
+
+	ret = ledger_get_recent_max(task->ledger, task_ledgers.phys_footprint, &max);
 	if (KERN_SUCCESS == ret) {
+		return max;
+	}
+
+	return 0;
+}
+
+/*
+ *
+ */
+uint64_t get_task_phys_footprint_lifetime_max(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t max;
+
+	ret = ledger_get_lifetime_max(task->ledger, task_ledgers.phys_footprint, &max);
+
+	if(KERN_SUCCESS == ret) {
 		return max;
 	}
 
@@ -971,13 +1002,8 @@ fill_task_rusage(task_t task, rusage_info_current *ri)
 void
 fill_task_billed_usage(task_t task __unused, rusage_info_current *ri)
 {
-#if CONFIG_BANK
-	ri->ri_billed_system_time = bank_billed_time_safe(task);
-	ri->ri_serviced_system_time = bank_serviced_time_safe(task);
-#else
-	ri->ri_billed_system_time = 0;
-	ri->ri_serviced_system_time = 0;
-#endif
+	bank_billed_balance_safe(task, &ri->ri_billed_system_time, &ri->ri_billed_energy);
+	bank_serviced_balance_safe(task, &ri->ri_serviced_system_time, &ri->ri_serviced_energy);
 }
 
 int
@@ -1025,6 +1051,40 @@ fill_task_qos_rusage(task_t task, rusage_info_current *ri)
 	return (0);
 }
 
+void
+fill_task_monotonic_rusage(task_t task, rusage_info_current *ri)
+{
+#if MONOTONIC
+	if (!mt_core_supported) {
+		return;
+	}
+
+	assert(task != TASK_NULL);
+
+	uint64_t counts[MT_CORE_NFIXED] = {};
+	mt_fixed_task_counts(task, counts);
+#ifdef MT_CORE_INSTRS
+	ri->ri_instructions = counts[MT_CORE_INSTRS];
+#endif /* defined(MT_CORE_INSTRS) */
+	ri->ri_cycles = counts[MT_CORE_CYCLES];
+#else /* MONOTONIC */
+#pragma unused(task, ri)
+#endif /* !MONOTONIC */
+}
+
+uint64_t
+get_task_logical_writes(task_t task)
+{
+    assert(task != TASK_NULL);
+    struct ledger_entry_info lei;
+
+    task_lock(task);
+    ledger_get_entry_info(task->ledger, task_ledgers.logical_writes, &lei);
+
+    task_unlock(task);
+    return lei.lei_balance;
+}
+
 uint64_t
 get_task_dispatchqueue_serialno_offset(task_t task)
 {
@@ -1047,16 +1107,20 @@ get_task_uniqueid(task_t task)
 	}
 }
 
+int
+get_task_version(task_t task)
+{
+	if (task->bsd_info) {
+		return proc_pidversion(task->bsd_info);
+	} else {
+		return INT_MAX;
+	}
+}
+
 #if CONFIG_MACF
 struct label *
 get_task_crash_label(task_t task)
 {
 	return task->crash_label;
-}
-
-void
-set_task_crash_label(task_t task, struct label *label)
-{
-	task->crash_label = label;
 }
 #endif

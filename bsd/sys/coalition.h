@@ -47,6 +47,8 @@ int coalition_reap(uint64_t cid, uint32_t flags);
 
 /* Wrappers around __coalition_info syscall (with proper struct types) */
 int coalition_info_resource_usage(uint64_t cid, struct coalition_resource_usage *cru, size_t sz);
+int coalition_info_set_name(uint64_t cid, const char *name, size_t size);
+int coalition_info_set_efficiency(uint64_t cid, uint64_t flags);
 
 #else /* KERNEL */
 

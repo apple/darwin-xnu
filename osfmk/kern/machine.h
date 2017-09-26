@@ -35,6 +35,10 @@
 #include <mach/kern_return.h>
 #include <mach/processor_info.h>
 #include <kern/kern_types.h>
+#include <kern/thread_group.h>
+
+#include <kern/work_interval.h>
+
 
 /*
  * Machine support declarations.
@@ -131,6 +135,7 @@ extern void consider_machine_collect(void);
 extern void	machine_thread_going_on_core(thread_t	new_thread,
 					int		urgency,
 					uint64_t	sched_latency,
+					uint64_t	same_pri_latency,
 					uint64_t	dispatch_time);
 
 extern void machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating, uint64_t last_dispatch);
@@ -139,13 +144,21 @@ extern void machine_max_runnable_latency(uint64_t bg_max_latency,
 										 uint64_t default_max_latency,
 										 uint64_t realtime_max_latency);
 
-extern void machine_work_interval_notify(thread_t thread,
-										 uint64_t work_id,
-										 uint64_t start_abstime,
-										 uint64_t finish_abstime,
-										 uint64_t deadline_abstime,
-										 uint64_t next_start_abstime,
-										 uint16_t urgency,
-										 uint32_t flags);
+extern void machine_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_args);
+
+extern void machine_perfcontrol_deadline_passed(uint64_t deadline);
+
+extern void machine_switch_perfcontrol_context(perfcontrol_event event,
+					       uint64_t timestamp,
+					       uint32_t flags,
+					       uint64_t new_thread_same_pri_latency,
+					       thread_t old,
+					       thread_t new);
+
+extern void machine_switch_perfcontrol_state_update(perfcontrol_event event,
+						    uint64_t timestamp,
+						    uint32_t flags,
+						    thread_t thread);
+
 
 #endif	/* _KERN_MACHINE_H_ */

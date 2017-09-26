@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -84,82 +84,6 @@ struct red_stats {
 	u_int32_t	drop_unforced;
 	u_int32_t	marked_packets;
 };
-
-#ifdef BSD_KERNEL_PRIVATE
-/* weight table structure for idle time calibration */
-struct wtab {
-	struct wtab	*w_next;
-	int		 w_weight;
-	int		 w_param_max;
-	int		 w_refcount;
-	int32_t		 w_tab[32];
-};
-
-/* red flags */
-#define	REDF_ECN4	0x01	/* use packet marking for IPv4 packets */
-#define	REDF_ECN6	0x02	/* use packet marking for IPv6 packets */
-#define	REDF_ECN	(REDF_ECN4 | REDF_ECN6)
-#define	REDF_FLOWVALVE	0x04	/* use flowvalve (aka penalty-box) */
-
-#define	REDF_USERFLAGS							\
-	(REDF_ECN4 | REDF_ECN6 | REDF_FLOWVALVE)
-
-typedef struct red {
-	int		red_pkttime;	/* average packet time in micro sec */
-					/*   used for idle calibration */
-	int		red_flags;	/* red flags */
-	struct ifnet	*red_ifp;	/* back pointer to ifnet */
-
-	/* red parameters */
-	int		red_weight;	/* weight for EWMA */
-	int		red_inv_pmax;	/* inverse of max drop probability */
-	int		red_thmin;	/* red min threshold */
-	int		red_thmax;	/* red max threshold */
-
-	/* variables for internal use */
-	int		red_wshift;	/* log(red_weight) */
-	int		red_thmin_s;	/* th_min scaled by avgshift */
-	int		red_thmax_s;	/* th_max scaled by avgshift */
-	int		red_probd;	/* drop probability denominator */
-
-	int		red_avg;	/* queue len avg scaled by avgshift */
-	int		red_count;	/* packet count since last dropped/ */
-					/*   marked packet */
-	int		red_idle;	/* queue was empty */
-	int		red_old;	/* avg is above th_min */
-	struct wtab	*red_wtab;	/* weight table */
-	struct timeval	 red_last;	/* time when the queue becomes idle */
-
-	struct {
-		struct pktcntr	xmit_cnt;
-		struct pktcntr	drop_cnt;
-		u_int32_t	drop_forced;
-		u_int32_t	drop_unforced;
-		u_int32_t	marked_packets;
-	} red_stats;
-} red_t;
-
-/* red drop types */
-#define	DTYPE_NODROP	0	/* no drop */
-#define	DTYPE_FORCED	1	/* a "forced" drop */
-#define	DTYPE_EARLY	2	/* an "unforced" (early) drop */
-
-extern void red_init(void);
-extern red_t *red_alloc(struct ifnet *, int, int, int, int, int, int);
-extern void red_destroy(red_t *);
-extern void red_getstats(red_t *, struct red_stats *);
-extern int red_addq(red_t *, class_queue_t *, struct mbuf *, struct pf_mtag *);
-extern struct mbuf *red_getq(red_t *, class_queue_t *);
-extern void red_purgeq(struct red *, class_queue_t *, u_int32_t,
-    u_int32_t *, u_int32_t *);
-extern void red_updateq(red_t *, cqev_t);
-extern int red_suspendq(red_t *, class_queue_t *, boolean_t);
-
-extern int drop_early(int, int, int);
-extern struct wtab *wtab_alloc(int);
-extern void wtab_destroy(struct wtab *);
-extern int32_t pow_w(struct wtab *, int);
-#endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef __cplusplus
 }

@@ -72,8 +72,6 @@
 
 #include  <sys/appleapiopts.h>
 
-#include <security/mac.h>
-
 __BEGIN_DECLS
 #ifdef __APPLE_API_PRIVATE
 #define DEVMAXNAMESIZE 	32 		/* XXX */

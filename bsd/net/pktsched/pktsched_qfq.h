@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -204,9 +204,6 @@ struct qfq_class {
 	u_int32_t	cl_qflags;	/* class queue flags */
 	union {
 		void		*ptr;
-		struct red	*red;	/* RED state */
-		struct rio	*rio;	/* RIO state */
-		struct blue	*blue;	/* BLUE state */
 		struct sfb	*sfb;	/* SFB state */
 	} cl_qalg;
 	struct qfq_if	*cl_qif;	/* back pointer to qif */
@@ -229,9 +226,6 @@ struct qfq_class {
 	struct pktcntr  cl_dropcnt;	/* dropped packet counter */
 };
 
-#define	cl_red	cl_qalg.red
-#define	cl_rio	cl_qalg.rio
-#define	cl_blue	cl_qalg.blue
 #define	cl_sfb	cl_qalg.sfb
 
 /*
@@ -249,15 +243,11 @@ struct qfq_group {
 	struct qfq_class **qfg_slots;
 };
 
-/* qfq_if flags */
-#define	QFQIFF_ALTQ		0x1	/* configured via PF/ALTQ */
-
 /*
  * qfq interface state
  */
 struct qfq_if {
 	struct ifclassq		*qif_ifq;	/* backpointer to ifclassq */
-	u_int32_t		qif_flags;	/* flags */
 	u_int32_t		qif_throttle;	/* throttling level */
 	u_int8_t		qif_classes;	/* # of classes in table */
 	u_int8_t		qif_maxclasses;	/* max # of classes in table */
@@ -281,19 +271,19 @@ struct qfq_if {
 struct if_ifclassq_stats;
 
 extern void qfq_init(void);
-extern struct qfq_if *qfq_alloc(struct ifnet *, int, boolean_t);
+extern struct qfq_if *qfq_alloc(struct ifnet *, int);
 extern int qfq_destroy(struct qfq_if *);
 extern void qfq_purge(struct qfq_if *);
 extern void qfq_event(struct qfq_if *, cqev_t);
 extern int qfq_add_queue(struct qfq_if *, u_int32_t, u_int32_t, u_int32_t,
-    u_int32_t, u_int32_t, struct qfq_class **);
+    u_int32_t, u_int32_t, struct qfq_class **, classq_pkt_type_t);
 extern int qfq_remove_queue(struct qfq_if *, u_int32_t);
 extern int qfq_get_class_stats(struct qfq_if *, u_int32_t,
     struct qfq_classstats *);
-extern int qfq_enqueue(struct qfq_if *, struct qfq_class *, struct mbuf *,
+extern int qfq_enqueue(struct qfq_if *, struct qfq_class *, pktsched_pkt_t *,
     struct pf_mtag *);
-extern struct mbuf *qfq_dequeue(struct qfq_if *, cqdq_op_t);
-extern int qfq_setup_ifclassq(struct ifclassq *, u_int32_t);
+extern void qfq_dequeue(struct qfq_if *, pktsched_pkt_t *);
+extern int qfq_setup_ifclassq(struct ifclassq *, u_int32_t, classq_pkt_type_t);
 extern int qfq_teardown_ifclassq(struct ifclassq *ifq);
 extern int qfq_getqstats_ifclassq(struct ifclassq *, u_int32_t,
     struct if_ifclassq_stats *);

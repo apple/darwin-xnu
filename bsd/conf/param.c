@@ -82,15 +82,24 @@
 
 struct	timezone tz = { 0, 0 };
 
+#if CONFIG_EMBEDDED
+#define	NPROC 1000          /* Account for TOTAL_CORPSES_ALLOWED by making this slightly lower than we can. */
+#define	NPROC_PER_UID 950
+#else
 #define	NPROC (20 + 16 * 32)
 #define	NPROC_PER_UID (NPROC/2)
+#endif
 
 /* NOTE: maxproc and hard_maxproc values are subject to device specific scaling in bsd_scale_setup */
 #define HNPROC 2500	/* based on thread_max */
 int	maxproc = NPROC;
 int	maxprocperuid = NPROC_PER_UID;
 
+#if CONFIG_EMBEDDED
+int hard_maxproc = NPROC;	/* hardcoded limit -- for embedded the number of processes is limited by the ASID space */
+#else
 int hard_maxproc = HNPROC;	/* hardcoded limit */
+#endif
 
 int nprocs = 0; /* XXX */
 

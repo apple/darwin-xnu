@@ -36,7 +36,9 @@
 #ifndef __KDP_CORE_H
 #define __KDP_CORE_H
 
+#include <kern/thread.h>
 #include <kdp/kdp_protocol.h>
+#include <string.h>
 
 /*
  * Packet types.
@@ -48,6 +50,7 @@
 #define	KDP_ERROR 5			/* error code */
 #define KDP_SEEK  6                     /* Seek to specified offset */
 #define KDP_EOF   7                     /* signal end of file */
+#define KDP_FLUSH 8                     /* flush outstanding data */
 #define KDP_FEATURE_MASK_STRING		"features"
 
 enum	{KDP_FEATURE_LARGE_CRASHDUMPS = 1, KDP_FEATURE_LARGE_PKT_SIZE = 2};
@@ -82,7 +85,7 @@ struct	corehdr {
 
 #define CORE_REMOTE_PORT 1069 /* hardwired, we can't really query the services file */
 
-#if WITH_CONSISTENT_DBG
+#if CONFIG_EMBEDDED
 /*
  * xnu shared memory hardware debugger support
  *
@@ -117,9 +120,12 @@ struct xnu_hw_shmem_dbg_command_info {
 #define XHSDCI_COREDUMP_ERROR           7 /* indicates an error was encountered */
 #define XHSDCI_COREDUMP_REMOTE_DONE     8 /* indicates that hardware debugger is done */
 
-#endif /* WITH_CONSISTENT_DBG */
+void panic_spin_shmcon(void);
+
+#endif /* CONFIG_EMBEDDED */
 
 void kdp_panic_dump (void);
+void begin_panic_transfer(void);
 void abort_panic_transfer (void);
 void kdp_set_dump_info(const uint32_t flags, const char *file, const char *destip,
                        const char *routerip, const uint32_t port);
@@ -128,12 +134,14 @@ void kdp_get_dump_info(kdp_dumpinfo_reply_t *rp);
 enum kern_dump_type {
 	KERN_DUMP_DISK, /* local, on device core dump */
 	KERN_DUMP_NET, /* kdp network core dump */
-#if WITH_CONSISTENT_DBG
+#if CONFIG_EMBEDDED
 	KERN_DUMP_HW_SHMEM_DBG, /* coordinated hardware shared memory debugger core dump */
 #endif
 };
 
-extern int kern_dump(enum kern_dump_type kd_variant);
+int kern_dump(enum kern_dump_type kd_variant);
+
+boolean_t dumped_kernel_core(void);
 
 struct corehdr *create_panic_header(unsigned int request, const char *corename, unsigned length, unsigned block);
 
@@ -143,9 +151,9 @@ int 	kdp_send_crashdump_pkt(unsigned int request, char *corename,
 int	kdp_send_crashdump_data(unsigned int request, char *corename,
     			    uint64_t length, void * txstart);
 
-void kern_collectth_state_size(uint32_t * tstate_count, size_t * tstate_size);
+void kern_collectth_state_size(uint64_t * tstate_count, uint64_t * tstate_size);
 
-void kern_collectth_state(thread_t thread, void *buffer, size_t size, void **iter);
+void kern_collectth_state(thread_t thread, void *buffer, uint64_t size, void **iter);
 
 boolean_t kdp_has_polled_corefile(void);
 
@@ -154,5 +162,23 @@ void kdp_core_init(void);
 extern boolean_t kdp_corezip_disabled;
 
 #define KDP_CRASHDUMP_POLL_COUNT (2500)
+
+#if PRIVATE
+kern_return_t kdp_core_output(void *kdp_core_out_vars, uint64_t length, void * data);
+
+kern_return_t kdp_reset_output_vars(void *kdp_core_out_vars, uint64_t totalbytes);
+
+int kern_dump_record_file(void *kdp_core_out_vars, const char *filename, uint64_t file_offset, uint64_t *out_file_length);
+
+int kern_dump_seek_to_next_file(void *kdp_core_out_varss, uint64_t next_file_offset);
+
+extern boolean_t efi_valid_page(ppnum_t ppn);
+#if defined(__x86_64__)
+#define EFI_VALID_PAGE(x)	efi_valid_page(x)
+#elif defined(__arm__) || defined(__arm64__)
+#define EFI_VALID_PAGE(x)	(FALSE)
+#endif /* defined (__x86_64__) */
+
+#endif /* PRIVATE */
 
 #endif /* __KDP_CORE_H */

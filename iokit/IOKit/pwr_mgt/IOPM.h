@@ -614,6 +614,26 @@ enum {
 #define kIOPMPSAdapterDetailsPMUConfigurationKey    "PMUConfiguration"
 #define kIOPMPSAdapterDetailsVoltage            "AdapterVoltage"
 
+// values for kIOPSPowerAdapterFamilyKey
+enum {
+    kIOPSFamilyCodeDisconnected     = 0,
+    kIOPSFamilyCodeUnsupported      = kIOReturnUnsupported,
+    kIOPSFamilyCodeFirewire     = iokit_family_err(sub_iokit_firewire, 0),
+    kIOPSFamilyCodeUSBHost      = iokit_family_err(sub_iokit_usb, 0),
+    kIOPSFamilyCodeUSBHostSuspended   = iokit_family_err(sub_iokit_usb, 1),
+    kIOPSFamilyCodeUSBDevice      = iokit_family_err(sub_iokit_usb, 2),
+    kIOPSFamilyCodeUSBAdapter     = iokit_family_err(sub_iokit_usb, 3),
+    kIOPSFamilyCodeUSBChargingPortDedicated = iokit_family_err(sub_iokit_usb, 4),
+    kIOPSFamilyCodeUSBChargingPortDownstream  = iokit_family_err(sub_iokit_usb, 5),
+    kIOPSFamilyCodeUSBChargingPort    = iokit_family_err(sub_iokit_usb, 6),
+    kIOPSFamilyCodeUSBUnknown     = iokit_family_err(sub_iokit_usb, 7),
+    kIOPSFamilyCodeAC       = iokit_family_err(sub_iokit_pmu, 0),
+    kIOPSFamilyCodeExternal     = iokit_family_err(sub_iokit_pmu, 1),
+    kIOPSFamilyCodeExternal2     = iokit_family_err(sub_iokit_pmu, 2),
+    kIOPSFamilyCodeExternal3     = iokit_family_err(sub_iokit_pmu, 3),
+    kIOPSFamilyCodeExternal4     = iokit_family_err(sub_iokit_pmu, 4),
+};
+
 // Battery's time remaining estimate is invalid this long (seconds) after a wake
 #define kIOPMPSInvalidWakeSecondsKey           "BatteryInvalidWakeSeconds"
 

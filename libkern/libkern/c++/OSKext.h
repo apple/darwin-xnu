@@ -528,12 +528,18 @@ private:
 
    /* panic() support.
     */
+public:
+    enum {
+        kPrintKextsLock    = 0x01,
+        kPrintKextsUnslide = 0x02,
+        kPrintKextsTerse   = 0x04
+    };
     static void printKextsInBacktrace(
         vm_offset_t   * addr,
         unsigned int    cnt,
         int          (* printf_func)(const char *fmt, ...),
-        bool            lockFlag,
-        bool            doUnslide);
+        uint32_t        flags);
+private:
     static OSKextLoadedKextSummary *summaryForAddress(const uintptr_t addr);
     static void *kextForAddress(const void *addr);
     static boolean_t summaryIsInBacktrace(
@@ -543,7 +549,7 @@ private:
     static void printSummary(
         OSKextLoadedKextSummary * summary,
         int                    (* printf_func)(const char *fmt, ...),
-        bool                      doUnslide);
+        uint32_t                  flags);
 
     static int saveLoadedKextPanicListTyped(
         const char * prefix,
@@ -624,6 +630,8 @@ public:
                                             OSDictionary * theDictionary,
                                             OSCollectionIterator * theIterator);
     static void     createExcludeListFromPrelinkInfo(OSArray * theInfoArray);
+
+    static bool     isWaitingKextd(void);
 
     virtual bool    setAutounloadEnabled(bool flag);
 

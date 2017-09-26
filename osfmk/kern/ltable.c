@@ -50,7 +50,7 @@ static lck_grp_t  g_lt_lck_grp;
 /* default VA space for link tables (zone allocated) */
 #define DEFAULT_MAX_TABLE_SIZE  P2ROUNDUP(8 * 1024 * 1024, PAGE_SIZE)
 
-#if defined(DEVELOPMENT) || defined(DEBUG)
+#if DEVELOPMENT || DEBUG
 /* global for lldb macros */
 uint64_t g_lt_idx_max = LT_IDX_MAX;
 #endif
@@ -61,7 +61,7 @@ uint64_t g_lt_idx_max = LT_IDX_MAX;
 	/* cast through 'void *' to avoid compiler alignment warning messages */ \
 	((struct lt_elem *)((void *)((uintptr_t)(slab) + ((ofst) & (slab_msk)))))
 
-#if defined(CONFIG_LTABLE_STATS)
+#if CONFIG_LTABLE_STATS
 /* version that makes no assumption on waste within a slab */
 static inline struct lt_elem *
 lt_elem_idx(struct link_table *table, uint32_t idx)
@@ -87,7 +87,7 @@ lt_elem_idx(struct link_table *table, uint32_t idx)
 	assert(slab->lt_id.idx <= idx && (slab->lt_id.idx + table->slab_elem) > idx);
 	return lt_elem_ofst_slab(slab, table->slab_msk, ofst);
 }
-#endif /* !CONFIG_LTABLE_STATS */
+#endif /* CONFIG_LTABLE_STATS */
 
 static int __assert_only
 lt_elem_in_range(struct lt_elem *elem, struct link_table *table)

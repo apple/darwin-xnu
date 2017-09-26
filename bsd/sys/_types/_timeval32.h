@@ -27,6 +27,9 @@
  */
 #ifndef _STRUCT_TIMEVAL32
 #define _STRUCT_TIMEVAL32	struct timeval32
+
+#include <machine/types.h> /* __int32_t */
+
 _STRUCT_TIMEVAL32
 {
 	__int32_t		tv_sec;		/* seconds */

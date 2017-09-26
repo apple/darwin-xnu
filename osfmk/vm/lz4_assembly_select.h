@@ -32,7 +32,10 @@
 //  Rule: one define for each assembly source file
 
 //  To enable assembly
-#if   defined __ARM_NEON__
+#if defined __arm64__
+#define LZ4_ENABLE_ASSEMBLY_ENCODE_ARM64 1
+#define LZ4_ENABLE_ASSEMBLY_DECODE_ARM64 1
+#elif defined __ARM_NEON__
 #define LZ4_ENABLE_ASSEMBLY_ENCODE_ARMV7 1
 #define LZ4_ENABLE_ASSEMBLY_DECODE_ARMV7 1
 #elif defined __x86_64__

@@ -44,9 +44,7 @@ class IOPMPowerStateQueue;
 class RootDomainUserClient;
 class PMAssertionsTracker;
 
-#define OBFUSCATE(x) \
-    (((((uintptr_t)(x)) >= VM_MIN_KERNEL_AND_KEXT_ADDRESS) && (((uintptr_t)(x)) < VM_MAX_KERNEL_ADDRESS)) ? \
-        ((void *)(VM_KERNEL_ADDRPERM(x))) : (void *)(x))
+#define OBFUSCATE(x) (void *)VM_KERNEL_UNSLIDE_OR_PERM(x)
 
 #endif
 
@@ -490,7 +488,7 @@ public:
     IOReturn    setMaintenanceWakeCalendar(
                     const IOPMCalendarStruct * calendar );
 
-    IOReturn    getSystemSleepType( uint32_t * sleepType );
+    IOReturn    getSystemSleepType(uint32_t * sleepType, uint32_t * standbyTimer);
 
     // Handle callbacks from IOService::systemWillShutdown()
     void        acknowledgeSystemWillShutdown( IOService * from );
@@ -511,8 +509,12 @@ public:
 
     void        kdebugTrace(uint32_t event, uint64_t regId,
                             uintptr_t param1, uintptr_t param2, uintptr_t param3 = 0);
-    void        tracePoint( uint8_t point );
-    void        traceDetail(uint32_t msgType, uint32_t msgIndex, uintptr_t handler);
+    void        tracePoint(uint8_t point);
+    void        traceDetail(uint32_t msgType, uint32_t msgIndex, uint32_t delay);
+    void        traceDetail(OSObject *notifier);
+    void        traceAckDelay(OSObject *notifier, uint32_t response, uint32_t delay_ms);
+
+    void        startSpinDump(uint32_t spindumpKind);
 
     bool        systemMessageFilter(
                     void * object, void * arg1, void * arg2, void * arg3 );

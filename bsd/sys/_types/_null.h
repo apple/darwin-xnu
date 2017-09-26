@@ -25,6 +25,7 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#ifndef NULL 
+#ifndef NULL
+#include <sys/_types.h> /* __DARWIN_NULL */
 #define NULL  __DARWIN_NULL
 #endif  /* NULL */

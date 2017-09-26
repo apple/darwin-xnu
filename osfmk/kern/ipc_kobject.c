@@ -72,8 +72,6 @@
 
 #include <mach_debug.h>
 #include <mach_ipc_test.h>
-#include <mach_rt.h>
-
 #include <mach/mig.h>
 #include <mach/port.h>
 #include <mach/kern_return.h>
@@ -131,6 +129,7 @@
 #include <ipc/ipc_voucher.h>
 #include <kern/sync_sema.h>
 #include <kern/counters.h>
+#include <kern/work_interval.h>
 
 #include <vm/vm_protos.h>
 
@@ -616,6 +615,12 @@ ipc_kobject_notify(
 
 	trailer = (mach_msg_max_trailer_t *)
 	          ((vm_offset_t)request_header + request_header->msgh_size);
+
+	/*
+	 * The kobject notification is privileged and can change the
+	 * refcount on kernel-internal objects - make sure
+	 * that the message wasn't faked!
+	 */
 	if (0 != bcmp(&trailer->msgh_audit, &KERNEL_AUDIT_TOKEN,
 			sizeof(trailer->msgh_audit))) {
 		return FALSE;
@@ -673,8 +678,13 @@ ipc_kobject_notify(
 			case IKOT_FILEPORT:
 				fileport_notify(request_header);
 				return TRUE;
+
+			case IKOT_WORK_INTERVAL:
+				work_interval_port_notify(request_header);
+				return TRUE;
+
 			}
-	  	   break;
+		break;
 
 		case MACH_NOTIFY_PORT_DELETED:
 		case MACH_NOTIFY_PORT_DESTROYED:

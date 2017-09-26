@@ -1,4 +1,4 @@
-import sys, subprocess, os, re, time, getopt, shlex
+import sys, subprocess, os, re, time, getopt, shlex, xnudefines
 import lldb
 from functools import wraps
 from ctypes import c_ulonglong as uint64_t
@@ -12,15 +12,24 @@ from core.kernelcore import *
 from utils import *
 from core.lazytarget import *
 
-MODULE_NAME=__name__ 
+MODULE_NAME=__name__
 
 """ Kernel Debugging macros for lldb.
     Please make sure you read the README COMPLETELY BEFORE reading anything below.
-    It is very critical that you read coding guidelines in Section E in README file. 
+    It is very critical that you read coding guidelines in Section E in README file.
 """
 
+COMMON_HELP_STRING = """
+    -h  Show the help string for the command.
+    -o <path/to/filename>   The output of this command execution will be saved to file. Parser information or errors will
+                            not be sent to file though. eg /tmp/output.txt
+    -s <filter_string>      The "filter_string" param is parsed to python regex expression and each line of output
+                            will be printed/saved only if it matches the expression.
+    -v [-v...]  Each additional -v will increase the verbosity of the command.
+    -p <plugin_name>        Send the output of the command to plugin. Please see README for usage of plugins.
+"""
 # End Utility functions
-# Debugging specific utility functions 
+# Debugging specific utility functions
 
 #decorators. Not to be called directly.
 
@@ -147,6 +156,7 @@ However, it is recommended that you report the exception to lldb/kernel debuggin
         if not obj.__doc__ :
             print "ERROR: Cannot register command({:s}) without documentation".format(cmd_name)
             return obj
+        obj.__doc__ += "\n" + COMMON_HELP_STRING
         command_function.__doc__ = obj.__doc__
         global lldb_command_documentation
         if cmd_name in lldb_command_documentation:
@@ -298,7 +308,7 @@ def GetKextSymbolInfo(load_addr):
     symbol_name = "None"
     symbol_offset = load_addr
     kmod_val = kern.globals.kmod
-    if kern.arch not in ('arm64',):
+    if not kern.arch.startswith('arm64'):
         for kval in IterateLinkedList(kmod_val, 'next'):
             if load_addr >= unsigned(kval.address) and \
                 load_addr <= (unsigned(kval.address) + unsigned(kval.size)):
@@ -450,18 +460,9 @@ def KernelDebugCommandsHelp(cmd_args=None):
             print " {0: <20s} - {1}".format(cmd , lldb_command_documentation[cmd][1].split("\n")[0].strip())
         else:
             print " {0: <20s} - {1}".format(cmd , "No help string found.")
-    print """
-    Each of the functions listed here accept the following common options. 
-        -h  Show the help string for the command.
-        -o <path/to/filename>   The output of this command execution will be saved to file. Parser information or errors will 
-                                not be sent to file though. eg /tmp/output.txt
-        -s <filter_string>      The "filter_string" param is parsed to python regex expression and each line of output 
-                                will be printed/saved only if it matches the expression. 
-        -v [-v...]  Each additional -v will increase the verbosity of the command.
-        -p <plugin_name>        Send the output of the command to plugin. Please see README for usage of plugins.
-
-    Additionally, each command implementation may have more options. "(lldb) help <command> " will show these options.
-    """
+    print 'Each of the functions listed here accept the following common options. '
+    print COMMON_HELP_STRING
+    print 'Additionally, each command implementation may have more options. "(lldb) help <command> " will show these options.'
     return None
 
 
@@ -572,65 +573,91 @@ def ShowPanicLog(cmd_args=None, cmd_options={}):
             -v : increase verbosity
             -S : parse stackshot data (if panic stackshot available)
     """
-    binary_data_bytes_to_skip = 0
-    if hasattr(kern.globals, "kc_panic_data"):
-        binary_data_bytes_to_skip = unsigned(kern.globals.kc_panic_data.kcd_addr_end) - unsigned(kern.globals.kc_panic_data.kcd_addr_begin)
-        if binary_data_bytes_to_skip > 0:
-            binary_data_bytes_to_skip += sizeof("struct kcdata_item")
-        else:
-            binary_data_bytes_to_skip = 0
 
     if "-S" in cmd_options:
         if hasattr(kern.globals, "kc_panic_data"):
-            kc_data = unsigned(addressof(kern.globals.kc_panic_data))
-            ts = int(time.time())
-            ss_binfile = "/tmp/panic_%d.bin" % ts
-            ss_ipsfile = "/tmp/stacks_%d.ips" % ts
-            print "savekcdata  0x%x -O %s" % (kc_data, ss_binfile)
-            SaveKCDataToFile(["0x%x" % kc_data], {"-O":ss_binfile})
-            self_path = str(__file__)
-            base_dir_name = self_path[:self_path.rfind("/")]
-            print "python %s/kcdata.py %s -s %s" % (base_dir_name, ss_binfile, ss_ipsfile)
-            (c,so,se) = RunShellCommand("python %s/kcdata.py %s -s %s" % (base_dir_name, ss_binfile, ss_ipsfile))
-            if c == 0:
-                print "Saved ips stackshot file as %s" % ss_ipsfile
+            stackshot_saved = False
+            if kern.arch == 'x86_64':
+                if kern.globals.panic_stackshot_len != 0:
+                    stackshot_saved = True
+                else:
+                    print "No panic stackshot available"
             else:
-                print "Failed to run command: exit code: %d, SO: %s SE: %s" % (c, so, se)
+                if unsigned(kern.globals.panic_info.eph_panic_flags) & xnudefines.EMBEDDED_PANIC_STACKSHOT_SUCCEEDED_FLAG:
+                    stackshot_saved = True
+                else:
+                    print "No panic stackshot available"
+            if stackshot_saved:
+                kc_data = unsigned(addressof(kern.globals.kc_panic_data))
+                ts = int(time.time())
+                ss_binfile = "/tmp/panic_%d.bin" % ts
+                ss_ipsfile = "/tmp/stacks_%d.ips" % ts
+                print "savekcdata  0x%x -O %s" % (kc_data, ss_binfile)
+                SaveKCDataToFile(["0x%x" % kc_data], {"-O":ss_binfile})
+                self_path = str(__file__)
+                base_dir_name = self_path[:self_path.rfind("/")]
+                print "python %s/kcdata.py %s -s %s" % (base_dir_name, ss_binfile, ss_ipsfile)
+                (c,so,se) = RunShellCommand("python %s/kcdata.py %s -s %s" % (base_dir_name, ss_binfile, ss_ipsfile))
+                if c == 0:
+                    print "Saved ips stackshot file as %s" % ss_ipsfile
+                else:
+                    print "Failed to run command: exit code: %d, SO: %s SE: %s" % (c, so, se)
         else:
             print "kc_panic_data is unavailable for this kernel config."
 
-    panic_buf = kern.globals.debug_buf_addr
-    panic_buf_start = unsigned(panic_buf)
-    panic_buf_end = unsigned(kern.globals.debug_buf_ptr)
-    num_bytes = panic_buf_end - panic_buf_start
-    if num_bytes == 0 :
-        return
     out_str = ""
     warn_str = ""
-    num_print_bytes = 0
-    in_binary_data_region = False
-    pos = 0
-    while pos < num_bytes:
-        p_char = str(panic_buf[pos])
-        out_str += p_char
-        if p_char == '\n':
-            if not in_binary_data_region:
-                num_print_bytes += 1
-                print out_str[:-1]
-            if (out_str.find("Data: BEGIN>>") >= 0):
-                in_binary_data_region = True
-                pos += binary_data_bytes_to_skip - 1
-            if (out_str.find("<<END") >= 0):
-                in_binary_data_region = False
-            out_str = ""
-        if num_print_bytes > 4096 and config['verbosity'] == vHUMAN:
-            warn_str = "LLDBMacro Warning: The paniclog is too large. Trimming to 4096 bytes."
-            warn_str += " If you wish to see entire log please use '-v' argument."
-            break
-        pos += 1
+
+    if kern.arch == 'x86_64':
+        panic_buf = kern.globals.debug_buf_base
+        panic_buf_start = unsigned(panic_buf)
+        panic_buf_end = unsigned(kern.globals.debug_buf_ptr)
+        num_bytes = panic_buf_end - panic_buf_start
+        if num_bytes == 0:
+            return
+        num_print_bytes = 0
+        pos = 0
+        while pos < num_bytes:
+            p_char = str(panic_buf[pos])
+            out_str += p_char
+            pos += 1
+    else:
+        panic_buf = Cast(kern.globals.panic_info, 'char *')
+        panic_log_magic = unsigned(kern.globals.panic_info.eph_magic)
+        panic_log_begin_offset = unsigned(kern.globals.panic_info.eph_panic_log_offset)
+        panic_log_len = unsigned(kern.globals.panic_info.eph_panic_log_len)
+        other_log_begin_offset = unsigned(kern.globals.panic_info.eph_other_log_offset)
+        other_log_len = unsigned(kern.globals.panic_info.eph_other_log_len)
+
+        if panic_log_begin_offset == 0:
+            return
+
+        if panic_log_magic != 0 and panic_log_magic != xnudefines.EMBEDDED_PANIC_MAGIC:
+            warn_str += "BAD MAGIC! Found 0x%x expected 0x%x".format(panic_log_magic,
+                    xnudefines.EMBEDDED_PANIC_MAGIC)
+
+        if panic_log_begin_offset == 0:
+            if warn_str:
+                print "\n %s" % warn_str
+            return
+
+        panic_log_curindex = 0
+        while panic_log_curindex < panic_log_len:
+            p_char = str(panic_buf[(panic_log_begin_offset + panic_log_curindex)])
+            out_str += p_char
+            panic_log_curindex += 1
+
+        if other_log_begin_offset != 0:
+            other_log_curindex = 0
+            while other_log_curindex < other_log_len:
+                p_char = str(panic_buf[(other_log_begin_offset + other_log_curindex)])
+                out_str += p_char
+                other_log_curindex += 1
+
+    print out_str
 
     if warn_str:
-        print warn_str
+        print "\n %s" % warn_str
 
     return
 
@@ -784,9 +811,13 @@ from atm import *
 from structanalyze import *
 from ipcimportancedetail import *
 from bank import *
+from kasan import *
 from kauth import *
 from waitq import *
 from usertaskgdbserver import *
 from ktrace import *
 from pgtrace import *
 from xnutriage import *
+from kevent import *
+from ntstat import *
+

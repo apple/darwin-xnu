@@ -28,5 +28,6 @@
 
 #ifndef _MBSTATE_T
 #define _MBSTATE_T
+#include <machine/types.h> /* __darwin_mbstate_t */
 typedef __darwin_mbstate_t mbstate_t;
 #endif /* _MBSTATE_T */

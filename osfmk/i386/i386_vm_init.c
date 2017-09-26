@@ -165,12 +165,57 @@ uint64_t firmware_MMIO_bytes;
  */
 extern void 	*last_kernel_symbol;
 
-#if	DEBUG
-#define	PRINT_PMAP_MEMORY_TABLE
-#define DBG(x...)       kprintf(x)
+boolean_t	memmap = FALSE;
+#if	DEBUG || DEVELOPMENT
+static void
+kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount) {
+    unsigned int         i;
+    unsigned int         j;
+    pmap_memory_region_t *p = pmap_memory_regions;
+    EfiMemoryRange       *mptr; 
+    addr64_t             region_start, region_end;
+    addr64_t             efi_start, efi_end;
+
+    for (j = 0; j < pmap_memory_region_count; j++, p++) {
+        kprintf("pmap region %d type %d base 0x%llx alloc_up 0x%llx alloc_down 0x%llx top 0x%llx\n",
+            j, p->type,
+            (addr64_t) p->base  << I386_PGSHIFT,
+            (addr64_t) p->alloc_up << I386_PGSHIFT,
+            (addr64_t) p->alloc_down << I386_PGSHIFT,
+            (addr64_t) p->end   << I386_PGSHIFT);
+        region_start = (addr64_t) p->base << I386_PGSHIFT;
+        region_end = ((addr64_t) p->end << I386_PGSHIFT) - 1;
+        mptr = (EfiMemoryRange *) maddr; 
+        for (i = 0; 
+             i < mcount;
+             i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
+            if (mptr->Type != kEfiLoaderCode &&
+                mptr->Type != kEfiLoaderData &&
+                mptr->Type != kEfiBootServicesCode &&
+                mptr->Type != kEfiBootServicesData &&
+                mptr->Type != kEfiConventionalMemory) {
+                efi_start = (addr64_t)mptr->PhysicalStart;
+                efi_end = efi_start + ((vm_offset_t)mptr->NumberOfPages << I386_PGSHIFT) - 1;
+                if ((efi_start >= region_start && efi_start <= region_end) ||
+                    (efi_end >= region_start && efi_end <= region_end)) {
+                    kprintf(" *** Overlapping region with EFI runtime region %d\n", i);
+                }
+            }
+        }
+    }
+}
+#define DPRINTF(x...)	do { if (memmap) kprintf(x); } while (0)
+
 #else
-#define DBG(x...)
+
+static void
+kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount) {
+#pragma unused(maddr, msize, mcount)
+}
+
+#define DPRINTF(x...)
 #endif /* DEBUG */
+
 /*
  * Basic VM initialization.
  */
@@ -184,6 +229,7 @@ i386_vm_init(uint64_t	maxmem,
 	EfiMemoryRange *mptr;
         unsigned int mcount;
         unsigned int msize;
+	vm_offset_t maddr;
 	ppnum_t fap;
 	unsigned int i;
 	ppnum_t maxpg = 0;
@@ -197,6 +243,8 @@ i386_vm_init(uint64_t	maxmem,
 	vm_offset_t base_address;
 	vm_offset_t static_base_address;
     
+	PE_parse_boot_argn("memmap", &memmap, sizeof(memmap));
+
 	/*
 	 * Establish the KASLR parameters.
 	 */
@@ -284,21 +332,21 @@ i386_vm_init(uint64_t	maxmem,
 
 	assert(((sconst|econst) & PAGE_MASK) == 0);
 	
-	DBG("segTEXTB    = %p\n", (void *) segTEXTB);
-	DBG("segDATAB    = %p\n", (void *) segDATAB);
-	DBG("segLINKB    = %p\n", (void *) segLINKB);
-	DBG("segHIBB     = %p\n", (void *) segHIBB);
-	DBG("segPRELINKTEXTB = %p\n", (void *) segPRELINKTEXTB);
-	DBG("segPRELINKINFOB = %p\n", (void *) segPRELINKINFOB);
-	DBG("sHIB        = %p\n", (void *) sHIB);
-	DBG("eHIB        = %p\n", (void *) eHIB);
-	DBG("stext       = %p\n", (void *) stext);
-	DBG("etext       = %p\n", (void *) etext);
-	DBG("sdata       = %p\n", (void *) sdata);
-	DBG("edata       = %p\n", (void *) edata);
-	DBG("sconst      = %p\n", (void *) sconst);
-	DBG("econst      = %p\n", (void *) econst);
-	DBG("kernel_top  = %p\n", (void *) &last_kernel_symbol);
+	DPRINTF("segTEXTB    = %p\n", (void *) segTEXTB);
+	DPRINTF("segDATAB    = %p\n", (void *) segDATAB);
+	DPRINTF("segLINKB    = %p\n", (void *) segLINKB);
+	DPRINTF("segHIBB     = %p\n", (void *) segHIBB);
+	DPRINTF("segPRELINKTEXTB = %p\n", (void *) segPRELINKTEXTB);
+	DPRINTF("segPRELINKINFOB = %p\n", (void *) segPRELINKINFOB);
+	DPRINTF("sHIB        = %p\n", (void *) sHIB);
+	DPRINTF("eHIB        = %p\n", (void *) eHIB);
+	DPRINTF("stext       = %p\n", (void *) stext);
+	DPRINTF("etext       = %p\n", (void *) etext);
+	DPRINTF("sdata       = %p\n", (void *) sdata);
+	DPRINTF("edata       = %p\n", (void *) edata);
+	DPRINTF("sconst      = %p\n", (void *) sconst);
+	DPRINTF("econst      = %p\n", (void *) econst);
+	DPRINTF("kernel_top  = %p\n", (void *) &last_kernel_symbol);
 
 	vm_kernel_base  = sHIB;
 	vm_kernel_top   = (vm_offset_t) &last_kernel_symbol;
@@ -309,9 +357,9 @@ i386_vm_init(uint64_t	maxmem,
 	vm_prelink_sinfo = segPRELINKINFOB;
 	vm_prelink_einfo = segPRELINKINFOB + segSizePRELINKINFO;
 	vm_slinkedit = segLINKB;
-	vm_elinkedit = segLINKB + segSizePRELINKTEXT;
-	vm_kernel_slid_base = vm_kext_base;
-	vm_kernel_slid_top = vm_elinkedit;
+	vm_elinkedit = segLINKB + segSizeLINK;
+	vm_kernel_slid_base = vm_kext_base + vm_kernel_slide;
+	vm_kernel_slid_top = vm_prelink_einfo;
 
 	vm_set_page_size();
 
@@ -326,7 +374,8 @@ i386_vm_init(uint64_t	maxmem,
 	pmap_memory_region_count = pmap_memory_region_current = 0;
 	fap = (ppnum_t) i386_btop(first_avail);
 
-	mptr = (EfiMemoryRange *)ml_static_ptovirt((vm_offset_t)args->MemoryMap);
+	maddr = ml_static_ptovirt((vm_offset_t)args->MemoryMap);
+	mptr = (EfiMemoryRange *)maddr;
         if (args->MemoryMapDescriptorSize == 0)
 	        panic("Invalid memory map descriptor size");
         msize = args->MemoryMapDescriptorSize;
@@ -436,7 +485,7 @@ i386_vm_init(uint64_t	maxmem,
 			break;
 		}
 
-		DBG("EFI region %d: type %u/%d, base 0x%x, top 0x%x %s\n",
+		DPRINTF("EFI region %d: type %u/%d, base 0x%x, top 0x%x %s\n",
 		    i, mptr->Type, pmap_type, base, top,
 		    (mptr->Attribute&EFI_MEMORY_KERN_RESERVED)? "RESERVED" :
 		    (mptr->Attribute&EFI_MEMORY_RUNTIME)? "RUNTIME" : "");
@@ -570,39 +619,9 @@ i386_vm_init(uint64_t	maxmem,
 		}
 	}
 
-#ifdef PRINT_PMAP_MEMORY_TABLE
-	{
-        unsigned int j;
-        pmap_memory_region_t *p = pmap_memory_regions;
-        addr64_t region_start, region_end;
-        addr64_t efi_start, efi_end;
-        for (j=0;j<pmap_memory_region_count;j++, p++) {
-            kprintf("pmap region %d type %d base 0x%llx alloc_up 0x%llx alloc_down 0x%llx top 0x%llx\n",
-		    j, p->type,
-                    (addr64_t) p->base  << I386_PGSHIFT,
-		    (addr64_t) p->alloc_up << I386_PGSHIFT,
-		    (addr64_t) p->alloc_down << I386_PGSHIFT,
-		    (addr64_t) p->end   << I386_PGSHIFT);
-            region_start = (addr64_t) p->base << I386_PGSHIFT;
-            region_end = ((addr64_t) p->end << I386_PGSHIFT) - 1;
-	    mptr = (EfiMemoryRange *) ml_static_ptovirt((vm_offset_t)args->MemoryMap);
-            for (i=0; i<mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
-                if (mptr->Type != kEfiLoaderCode &&
-                    mptr->Type != kEfiLoaderData &&
-                    mptr->Type != kEfiBootServicesCode &&
-                    mptr->Type != kEfiBootServicesData &&
-                    mptr->Type != kEfiConventionalMemory) {
-                efi_start = (addr64_t)mptr->PhysicalStart;
-                efi_end = efi_start + ((vm_offset_t)mptr->NumberOfPages << I386_PGSHIFT) - 1;
-                if ((efi_start >= region_start && efi_start <= region_end) ||
-                    (efi_end >= region_start && efi_end <= region_end)) {
-                    kprintf(" *** Overlapping region with EFI runtime region %d\n", i);
-                }
-              }
-            }
-          }
+	if (memmap) {
+		kprint_memmap(maddr, msize, mcount);
 	}
-#endif
 
 	avail_start = first_avail;
 	mem_actual = args->PhysicalMemorySize;

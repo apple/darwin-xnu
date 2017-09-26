@@ -17,6 +17,7 @@ include $(MakeInc_def)
 # CFLAGS
 #
 CFLAGS+= -include meta_features.h -DLIBKERN_KERNEL_PRIVATE -DOSALLOCDEBUG=1
+SFLAGS+= -include meta_features.h
 
 # Objects that don't want -Wcast-align warning (8474835)
 OSKextLib.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -48,6 +48,7 @@
 #include <net/if_arp.h>
 #include <net/if_llreach.h>
 #include <net/if_ether.h>
+#include <net/net_api_stats.h>
 #include <net/route.h>
 #include <libkern/libkern.h>
 #include <libkern/OSAtomic.h>
@@ -70,6 +71,7 @@
 #include <netinet6/mld6_var.h>
 #endif
 #include <netkey/key.h>
+#include <stdbool.h>
 
 #include "net/net_str_id.h"
 
@@ -77,6 +79,15 @@
 #include <sys/kauth.h>
 #include <security/mac_framework.h>
 #endif
+
+
+#undef ifnet_allocate
+errno_t ifnet_allocate(const struct ifnet_init_params *init,
+    ifnet_t *ifp);
+
+static errno_t ifnet_allocate_common(const struct ifnet_init_params *init,
+    ifnet_t *ifp, bool is_internal);
+
 
 #define	TOUCHLASTCHANGE(__if_lastchange) {				\
 	(__if_lastchange)->tv_sec = net_uptime();			\
@@ -117,7 +128,8 @@ ifnet_kpi_free(ifnet_t ifp)
 }
 
 errno_t
-ifnet_allocate(const struct ifnet_init_params *init, ifnet_t *interface)
+ifnet_allocate_common(const struct ifnet_init_params *init,
+    ifnet_t *ifp, bool is_internal)
 {
 	struct ifnet_init_eparams einit;
 
@@ -125,7 +137,10 @@ ifnet_allocate(const struct ifnet_init_params *init, ifnet_t *interface)
 
 	einit.ver		= IFNET_INIT_CURRENT_VERSION;
 	einit.len		= sizeof (einit);
-	einit.flags		= IFNET_INIT_LEGACY;
+	einit.flags		= IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO;
+	if (!is_internal) {
+		einit.flags |= IFNET_INIT_ALLOC_KPI;
+	}
 	einit.uniqueid		= init->uniqueid;
 	einit.uniqueid_len	= init->uniqueid_len;
 	einit.name		= init->name;
@@ -146,7 +161,19 @@ ifnet_allocate(const struct ifnet_init_params *init, ifnet_t *interface)
 	einit.broadcast_addr	= init->broadcast_addr;
 	einit.broadcast_len	= init->broadcast_len;
 
-	return (ifnet_allocate_extended(&einit, interface));
+	return (ifnet_allocate_extended(&einit, ifp));
+}
+
+errno_t
+ifnet_allocate_internal(const struct ifnet_init_params *init, ifnet_t *ifp)
+{
+	return (ifnet_allocate_common(init, ifp, true));
+}
+
+errno_t
+ifnet_allocate(const struct ifnet_init_params *init, ifnet_t *ifp)
+{
+	return (ifnet_allocate_common(init, ifp, false));
 }
 
 errno_t
@@ -169,8 +196,10 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 	    (einit.type & 0xFFFFFF00) != 0 || einit.type == 0)
 		return (EINVAL);
 
+
 	if (einit.flags & IFNET_INIT_LEGACY) {
-		if (einit.output == NULL || einit.flags != IFNET_INIT_LEGACY)
+		if (einit.output == NULL ||
+		    (einit.flags & IFNET_INIT_INPUT_POLL))
 			return (EINVAL);
 
 		einit.pre_enqueue = NULL;
@@ -198,8 +227,8 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 
 	if (einit.uniqueid == NULL) {
 		/* Initialize external name (name + unit) */
-		snprintf(if_xname, IFXNAMSIZ,
-				"%s%d", einit.name, einit.unit);
+		(void) snprintf(if_xname, sizeof (if_xname), "%s%d",
+		    einit.name, einit.unit);
 		einit.uniqueid = if_xname;
 		einit.uniqueid_len = strlen(if_xname);
 	}
@@ -268,12 +297,17 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		 * Internally, DLIL will only use the extended callback
 		 * variant which is represented by if_framer.
 		 */
+#if CONFIG_EMBEDDED
+		if (ifp->if_framer == NULL && ifp->if_framer_legacy != NULL)
+			ifp->if_framer = ifp->if_framer_legacy;
+#else /* !CONFIG_EMBEDDED */
 		if (ifp->if_framer == NULL && ifp->if_framer_legacy != NULL) {
 			if (ifp->if_framer_legacy == ether_frameout)
 				ifp->if_framer = ether_frameout_extended;
 			else
 				ifp->if_framer = ifnet_framer_stub;
 		}
+#endif /* !CONFIG_EMBEDDED */
 
 		if (ifp->if_output_bw.eff_bw > ifp->if_output_bw.max_bw)
 			ifp->if_output_bw.max_bw = ifp->if_output_bw.eff_bw;
@@ -313,6 +347,7 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		if (ifp->if_ioctl == NULL)
 			ifp->if_ioctl = ifp_if_ioctl;
 
+		ifp->if_eflags = 0;
 		if (ifp->if_start != NULL) {
 			ifp->if_eflags |= IFEF_TXSTART;
 			if (ifp->if_pre_enqueue == NULL)
@@ -327,8 +362,8 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		else
 			ifp->if_eflags &= ~IFEF_RXPOLL;
 
-		ifp->if_output_handler = dlil_output_handler;
-		ifp->if_input_handler = dlil_input_handler;
+		ifp->if_output_dlil = dlil_output_handler;
+		ifp->if_input_dlil = dlil_input_handler;
 
 		VERIFY(!(einit.flags & IFNET_INIT_LEGACY) ||
 		    (ifp->if_pre_enqueue == NULL && ifp->if_start == NULL &&
@@ -359,6 +394,8 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 			bzero(&ifp->if_broadcast, sizeof (ifp->if_broadcast));
 		}
 
+		ifp->if_xflags = 0;
+
 		/*
 		 * output target queue delay is specified in millisecond
 		 * convert it to nanoseconds
@@ -367,15 +404,29 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		    einit.output_target_qdelay * 1000 * 1000;
 		IFCQ_MAXLEN(&ifp->if_snd) = einit.sndq_maxlen;
 
-		if (einit.start_delay_qlen > 0 &&
-		    einit.start_delay_timeout > 0) {
-			ifp->if_eflags |= IFEF_ENQUEUE_MULTI;
-			ifp->if_start_delay_qlen =
-			    min(100, einit.start_delay_qlen);
-			ifp->if_start_delay_timeout =
-			    min(20000, einit.start_delay_timeout);
-			/* convert timeout to nanoseconds */
-			ifp->if_start_delay_timeout *= 1000;
+		ifnet_enqueue_multi_setup(ifp, einit.start_delay_qlen,
+		    einit.start_delay_timeout);
+
+		IFCQ_PKT_DROP_LIMIT(&ifp->if_snd) = IFCQ_DEFAULT_PKT_DROP_LIMIT;
+
+		/*
+		 * Set embryonic flag; this will be cleared
+		 * later when it is fully attached.
+		 */
+		ifp->if_refflags = IFRF_EMBRYONIC;
+
+		/*
+		 * Count the newly allocated ifnet
+		 */
+		OSIncrementAtomic64(&net_api_stats.nas_ifnet_alloc_count);
+		INC_ATOMIC_INT64_LIM(net_api_stats.nas_ifnet_alloc_total);
+		if (einit.flags & IFNET_INIT_ALLOC_KPI) {
+			ifp->if_xflags |= IFXF_ALLOC_KPI;
+		} else {
+			OSIncrementAtomic64(
+			    &net_api_stats.nas_ifnet_alloc_os_count);
+			INC_ATOMIC_INT64_LIM(
+			    net_api_stats.nas_ifnet_alloc_os_total);
 		}
 
 		if (error == 0) {
@@ -387,17 +438,6 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 			*interface = NULL;
 		}
 	}
-
-	/*
-	 * Note: We should do something here to indicate that we haven't been
-	 * attached yet. By doing so, we can catch the case in ifnet_release
-	 * where the reference count reaches zero and call the recycle
-	 * function. If the interface is attached, the interface will be
-	 * recycled when the interface's if_free function is called. If the
-	 * interface is never attached, the if_free function will never be
-	 * called and the interface will never be recycled.
-	 */
-
 	return (error);
 }
 
@@ -617,7 +657,7 @@ ifnet_set_idle_flags_locked(ifnet_t ifp, u_int32_t new_flags, u_int32_t mask)
 	if (ifp == NULL)
 		return (EINVAL);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	ifnet_lock_assert(ifp, IFNET_LCK_ASSERT_EXCLUSIVE);
 
 	/*
@@ -848,9 +888,10 @@ ifnet_capabilities_enabled(ifnet_t ifp)
 static const ifnet_offload_t offload_mask =
 	(IFNET_CSUM_IP | IFNET_CSUM_TCP | IFNET_CSUM_UDP | IFNET_CSUM_FRAGMENT |
 	IFNET_IP_FRAGMENT | IFNET_CSUM_TCPIPV6 | IFNET_CSUM_UDPIPV6 |
-	IFNET_IPV6_FRAGMENT | IFNET_CSUM_PARTIAL | IFNET_VLAN_TAGGING |
-	IFNET_VLAN_MTU | IFNET_MULTIPAGES | IFNET_TSO_IPV4 | IFNET_TSO_IPV6 |
-	IFNET_TX_STATUS | IFNET_HW_TIMESTAMP | IFNET_SW_TIMESTAMP);
+	IFNET_IPV6_FRAGMENT | IFNET_CSUM_PARTIAL | IFNET_CSUM_ZERO_INVERT |
+	IFNET_VLAN_TAGGING | IFNET_VLAN_MTU | IFNET_MULTIPAGES |
+	IFNET_TSO_IPV4 | IFNET_TSO_IPV6 | IFNET_TX_STATUS | IFNET_HW_TIMESTAMP |
+	IFNET_SW_TIMESTAMP);
 
 static const ifnet_offload_t any_offload_csum = IFNET_CHECKSUMF;
 
@@ -864,6 +905,7 @@ ifnet_set_offload(ifnet_t interface, ifnet_offload_t offload)
 
 	ifnet_lock_exclusive(interface);
 	interface->if_hwassist = (offload & offload_mask);
+
 	/*
 	 * Hardware capable of partial checksum offload is
 	 * flexible enough to handle any transports utilizing
@@ -897,6 +939,10 @@ ifnet_set_offload(ifnet_t interface, ifnet_offload_t offload)
 		ifcaps |= IFCAP_HW_TIMESTAMP;
 	if ((offload & IFNET_SW_TIMESTAMP))
 		ifcaps |= IFCAP_SW_TIMESTAMP;
+	if ((offload & IFNET_CSUM_PARTIAL))
+		ifcaps |= IFCAP_CSUM_PARTIAL;
+	if ((offload & IFNET_CSUM_ZERO_INVERT))
+		ifcaps |= IFCAP_CSUM_ZERO_INVERT;
 	if (ifcaps != 0) {
 		(void) ifnet_set_capabilities_supported(interface, ifcaps,
 		    IFCAP_VALID);
@@ -1525,6 +1571,9 @@ ifnet_stat_increment(struct ifnet *ifp,
 	/* Touch the last change time. */
 	TOUCHLASTCHANGE(&ifp->if_lastchange);
 
+	if (ifp->if_data_threshold != 0)
+		ifnet_notify_data_threshold(ifp);
+
 	return (0);
 }
 
@@ -1544,6 +1593,9 @@ ifnet_stat_increment_in(struct ifnet *ifp, u_int32_t packets_in,
 
 	TOUCHLASTCHANGE(&ifp->if_lastchange);
 
+	if (ifp->if_data_threshold != 0)
+		ifnet_notify_data_threshold(ifp);
+
 	return (0);
 }
 
@@ -1562,6 +1614,9 @@ ifnet_stat_increment_out(struct ifnet *ifp, u_int32_t packets_out,
 		atomic_add_64(&ifp->if_data.ifi_oerrors, errors_out);
 
 	TOUCHLASTCHANGE(&ifp->if_lastchange);
+
+	if (ifp->if_data_threshold != 0)
+		ifnet_notify_data_threshold(ifp);
 
 	return (0);
 }
@@ -1589,6 +1644,9 @@ ifnet_set_stat(struct ifnet *ifp, const struct ifnet_stats_param *s)
 	/* Touch the last change time. */
 	TOUCHLASTCHANGE(&ifp->if_lastchange);
 
+	if (ifp->if_data_threshold != 0)
+		ifnet_notify_data_threshold(ifp);
+
 	return (0);
 }
 
@@ -1611,6 +1669,9 @@ ifnet_stat(struct ifnet *ifp, struct ifnet_stats_param *s)
 	atomic_get_64(s->collisions, &ifp->if_data.ifi_collisions);
 	atomic_get_64(s->dropped, &ifp->if_data.ifi_iqdrops);
 	atomic_get_64(s->no_protocol, &ifp->if_data.ifi_noproto);
+
+	if (ifp->if_data_threshold != 0)
+		ifnet_notify_data_threshold(ifp);
 
 	return (0);
 }
@@ -1964,6 +2025,8 @@ ifnet_set_lladdr_internal(ifnet_t interface, const void *lladdr,
 
 	/* Generate a kernel event */
 	if (error == 0) {
+		intf_event_enqueue_nwk_wq_entry(interface, NULL,
+		    INTF_EVENT_CODE_LLADDR_UPDATE);
 		dlil_post_msg(interface, KEV_DL_SUBCLASS,
 		    KEV_DL_LINK_ADDRESS_CHANGED, NULL, 0);
 	}
@@ -2197,97 +2260,6 @@ ifnet_list_free(ifnet_t *interfaces)
 		ifnet_release(interfaces[i]);
 
 	FREE(interfaces, M_TEMP);
-}
-
-void
-ifnet_transmit_burst_start(ifnet_t ifp, mbuf_t pkt)
-{
-#if MEASURE_BW
-	uint32_t orig_flags;
-
-	if (ifp == NULL || !(pkt->m_flags & M_PKTHDR))
-		return;
-
-	orig_flags = OSBitOrAtomic(IF_MEASURED_BW_INPROGRESS,
-	    &ifp->if_bw.flags);
-	if (orig_flags & IF_MEASURED_BW_INPROGRESS) {
-		/* There is already a measurement in progress; skip this one */
-		return;
-	}
-
-	ifp->if_bw.start_seq = pkt->m_pkthdr.pkt_bwseq;
-	ifp->if_bw.start_ts = mach_absolute_time();
-#else /* !MEASURE_BW */
-#pragma unused(ifp, pkt)
-#endif /* !MEASURE_BW */
-}
-
-void
-ifnet_transmit_burst_end(ifnet_t ifp, mbuf_t pkt)
-{
-#if MEASURE_BW
-	uint64_t oseq, ots, bytes, ts, t;
-	uint32_t flags;
-
-	if (ifp == NULL || !(pkt->m_flags & M_PKTHDR))
-		return;
-
-	flags = OSBitOrAtomic(IF_MEASURED_BW_CALCULATION, &ifp->if_bw.flags);
-
-	/* If a calculation is already in progress, just return */
-	if (flags & IF_MEASURED_BW_CALCULATION)
-		return;
-
-	/* Check if a measurement was started at all */
-	if (!(flags & IF_MEASURED_BW_INPROGRESS)) {
-		/*
-		 * It is an error to call burst_end before burst_start.
-		 * Reset the calculation flag and return.
-		 */
-		goto done;
-	}
-
-	oseq = pkt->m_pkthdr.pkt_bwseq;
-	ots = mach_absolute_time();
-
-	if (ifp->if_bw.start_seq > 0 && oseq > ifp->if_bw.start_seq) {
-		ts = ots - ifp->if_bw.start_ts;
-		if (ts > 0) {
-			absolutetime_to_nanoseconds(ts, &t);
-			bytes = oseq - ifp->if_bw.start_seq;
-			ifp->if_bw.bytes = bytes;
-			ifp->if_bw.ts = ts;
-
-			if (t > 0) {
-				uint64_t bw = 0;
-
-				/* Compute bandwidth as bytes/ms */
-				bw = (bytes * NSEC_PER_MSEC) / t;
-				if (bw > 0) {
-					if (ifp->if_bw.bw > 0) {
-						u_int32_t shft;
-
-						shft = if_bw_smoothing_val;
-						/* Compute EWMA of bw */
-						ifp->if_bw.bw = (bw +
-						    ((ifp->if_bw.bw << shft) -
-						    ifp->if_bw.bw)) >> shft;
-					} else {
-						ifp->if_bw.bw = bw;
-					}
-				}
-			}
-			ifp->if_bw.last_seq = oseq;
-			ifp->if_bw.last_ts = ots;
-		}
-	}
-
-done:
-	flags = ~(IF_MEASURED_BW_INPROGRESS | IF_MEASURED_BW_CALCULATION);
-	OSBitAndAtomic(flags, &ifp->if_bw.flags);
-#else /* !MEASURE_BW */
-#pragma unused(ifp, pkt)
-#endif /* !MEASURE_BW */
 }
 
 /*************************************************************************/
@@ -2627,17 +2599,6 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 	u_int32_t ifindex;
 	u_int32_t inp_flags = 0;
 
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_WILDCARDOK) ?
-		INPCB_GET_PORTS_USED_WILDCARDOK : 0);
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_NOWAKEUPOK) ?
-		INPCB_GET_PORTS_USED_NOWAKEUPOK : 0);
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_RECVANYIFONLY) ?
-		INPCB_GET_PORTS_USED_RECVANYIFONLY : 0);
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_EXTBGIDLEONLY) ?
-		INPCB_GET_PORTS_USED_EXTBGIDLEONLY : 0);
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_ACTIVEONLY) ?
-		INPCB_GET_PORTS_USED_ACTIVEONLY : 0);
-
 	if (bitfield == NULL)
 		return (EINVAL);
 
@@ -2653,14 +2614,27 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 	/* bit string is long enough to hold 16-bit port values */
 	bzero(bitfield, bitstr_size(65536));
 
-	ifindex = (ifp != NULL) ? ifp->if_index : 0;
+		inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_WILDCARDOK) ?
+			INPCB_GET_PORTS_USED_WILDCARDOK : 0);
+		inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_NOWAKEUPOK) ?
+			INPCB_GET_PORTS_USED_NOWAKEUPOK : 0);
+		inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_RECVANYIFONLY) ?
+			INPCB_GET_PORTS_USED_RECVANYIFONLY : 0);
+		inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_EXTBGIDLEONLY) ?
+			INPCB_GET_PORTS_USED_EXTBGIDLEONLY : 0);
+		inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_ACTIVEONLY) ?
+			INPCB_GET_PORTS_USED_ACTIVEONLY : 0);
 
-	if (!(flags & IFNET_GET_LOCAL_PORTS_TCPONLY))
-		udp_get_ports_used(ifindex, protocol, inp_flags, bitfield);
+		
+		ifindex = (ifp != NULL) ? ifp->if_index : 0;
 
-	if (!(flags & IFNET_GET_LOCAL_PORTS_UDPONLY))
-		tcp_get_ports_used(ifindex, protocol, inp_flags, bitfield);
+		if (!(flags & IFNET_GET_LOCAL_PORTS_TCPONLY))
+			udp_get_ports_used(ifindex, protocol, inp_flags,
+			    bitfield);
 
+		if (!(flags & IFNET_GET_LOCAL_PORTS_UDPONLY))
+			tcp_get_ports_used(ifindex, protocol, inp_flags,
+			    bitfield);
 	return (0);
 }
 
@@ -2669,7 +2643,7 @@ ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield)
 {
 	u_int32_t flags = IFNET_GET_LOCAL_PORTS_WILDCARDOK;
 	return (ifnet_get_local_ports_extended(ifp, PF_UNSPEC, flags,
-		bitfield));
+	    bitfield));
 }
 
 errno_t
@@ -2945,6 +2919,9 @@ ifnet_link_status_report(ifnet_t ifp, const void *buffer,
 			atomic_bitset_32(&tcbinfo.ipi_flags,
 			    INPCBINFO_UPDATE_MSS);
 			inpcb_timer_sched(&tcbinfo, INPCB_TIMER_FAST);
+#if NECP
+			necp_update_all_clients();
+#endif
 		}
 
 		/* Finally copy the new information */
@@ -3022,39 +2999,6 @@ done:
 }
 
 /*************************************************************************/
-/* Packet preamble						*/
-/*************************************************************************/
-
-#define	MAX_IF_PACKET_PREAMBLE_LEN 32
-
-errno_t
-ifnet_set_packetpreamblelen(ifnet_t interface, u_int32_t len)
-{
-	errno_t err = 0;
-
-	if (interface == NULL || len > MAX_IF_PACKET_PREAMBLE_LEN) {
-		err = EINVAL;
-		goto done;
-	}
-	interface->if_data.ifi_preamblelen = len;
-done:
-	return (err);
-}
-
-u_int32_t
-ifnet_packetpreamblelen(ifnet_t interface)
-{
-	return ((interface == NULL) ? 0 : interface->if_data.ifi_preamblelen);
-}
-
-u_int32_t
-ifnet_maxpacketpreamblelen(void)
-{
-	return (MAX_IF_PACKET_PREAMBLE_LEN);
-}
-
-
-/*************************************************************************/
 /* Fastlane QoS Ca						*/
 /*************************************************************************/
 
@@ -3092,8 +3036,7 @@ ifnet_get_unsent_bytes(ifnet_t interface, int64_t *unsent_bytes)
 
 	bytes = *unsent_bytes = 0;
 
-	if ((interface->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) !=
-	    IFRF_ATTACHED)
+	if (!IF_FULLY_ATTACHED(interface))
 		return (ENXIO);
 
 	bytes = interface->if_sndbyte_unsent;
@@ -3113,14 +3056,14 @@ ifnet_get_buffer_status(const ifnet_t ifp, ifnet_buffer_status_t *buf_status)
 
 	bzero(buf_status, sizeof (*buf_status));
 
-	if ((ifp->if_refflags & (IFRF_ATTACHED | IFRF_DETACHING)) !=
-		IFRF_ATTACHED)
+	if (!IF_FULLY_ATTACHED(ifp))
 		return (ENXIO);
-
-	buf_status->buf_sndbuf = ifp->if_sndbyte_unsent;
 
 	if (ifp->if_eflags & IFEF_TXSTART)
 		buf_status->buf_interface = IFCQ_BYTES(&ifp->if_snd);
+
+	buf_status->buf_sndbuf = ((buf_status->buf_interface != 0) ||
+	    (ifp->if_sndbyte_unsent != 0)) ? 1 : 0;
 
 	return (0);
 }
@@ -3133,8 +3076,7 @@ ifnet_normalise_unsent_data(void)
 	ifnet_head_lock_shared();
 	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
 		ifnet_lock_exclusive(ifp);
-		if ((ifp->if_refflags & (IFRF_ATTACHED|IFRF_DETACHING)) !=
-		    IFRF_ATTACHED) {
+		if (!IF_FULLY_ATTACHED(ifp)) {
 			ifnet_lock_done(ifp);
 			continue;
 		}

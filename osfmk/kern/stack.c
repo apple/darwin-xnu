@@ -45,6 +45,7 @@
 #include <vm/vm_kern.h>
 
 #include <mach_debug.h>
+#include <san/kasan.h>
 
 /*
  *	We allocate stacks from generic kernel VM.
@@ -79,25 +80,6 @@ unsigned int			kernel_stack_pages;
 vm_offset_t			kernel_stack_size;
 vm_offset_t			kernel_stack_mask;
 vm_offset_t			kernel_stack_depth_max;
-
-static inline void
-STACK_ZINFO_PALLOC(thread_t thread)
-{
-	ledger_credit(thread->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
-}
-
-static inline void
-STACK_ZINFO_PFREE(thread_t thread)
-{
-	ledger_debit(thread->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
-}
-
-static inline void
-STACK_ZINFO_HANDOFF(thread_t from, thread_t to)
-{
-	ledger_debit(from->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
-	ledger_credit(to->t_ledger, task_ledgers.tkm_private, kernel_stack_size);
-}
 
 /*
  *	The next field is at the base of the stack,
@@ -160,9 +142,10 @@ stack_init(void)
 static vm_offset_t 
 stack_alloc_internal(void)
 {
-	vm_offset_t		stack;
+	vm_offset_t		stack = 0;
 	spl_t			s;
-	int			guard_flags;
+	int			flags = 0;
+	kern_return_t		kr = KERN_SUCCESS;
 
 	s = splsched();
 	stack_lock();
@@ -189,14 +172,15 @@ stack_alloc_internal(void)
 		 * for these.
 		 */
 
-		guard_flags = KMA_GUARD_FIRST | KMA_GUARD_LAST;
-		if (kernel_memory_allocate(kernel_map, &stack,
+		flags = KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT;
+		kr = kernel_memory_allocate(kernel_map, &stack,
 					   kernel_stack_size + (2*PAGE_SIZE),
 					   stack_addr_mask,
-					   KMA_KSTACK | KMA_KOBJECT | guard_flags,
-					   VM_KERN_MEMORY_STACK)
-		    != KERN_SUCCESS)
-			panic("stack_alloc: kernel_memory_allocate");
+					   flags,
+					   VM_KERN_MEMORY_STACK);
+		if (kr != KERN_SUCCESS) {
+			panic("stack_alloc: kernel_memory_allocate(size:0x%llx, mask: 0x%llx, flags: 0x%x) failed with %d\n", (uint64_t)(kernel_stack_size + (2*PAGE_SIZE)), (uint64_t)stack_addr_mask, flags, kr);
+		}
 
 		/*
 		 * The stack address that comes back is the address of the lower
@@ -215,7 +199,6 @@ stack_alloc(
 
 	assert(thread->kernel_stack == 0);
 	machine_stack_attach(thread, stack_alloc_internal());
-	STACK_ZINFO_PALLOC(thread);
 }
 
 void
@@ -223,7 +206,6 @@ stack_handoff(thread_t from, thread_t to)
 {
 	assert(from == current_thread());
 	machine_stack_handoff(from, to);
-	STACK_ZINFO_HANDOFF(from, to);
 }
 
 /*
@@ -237,9 +219,13 @@ stack_free(
 {
     vm_offset_t		stack = machine_stack_detach(thread);
 
+#if KASAN
+	kasan_unpoison_stack(stack, kernel_stack_size);
+	kasan_unpoison_fakestack(thread);
+#endif
+
 	assert(stack);
 	if (stack != thread->reserved_stack) {
-		STACK_ZINFO_PFREE(thread);
 		stack_free_stack(stack);
 	}
 }
@@ -249,8 +235,10 @@ stack_free_reserved(
 	thread_t	thread)
 {
 	if (thread->reserved_stack != thread->kernel_stack) {
+#if KASAN
+		kasan_unpoison_stack(thread->reserved_stack, kernel_stack_size);
+#endif
 		stack_free_stack(thread->reserved_stack);
-		STACK_ZINFO_PFREE(thread);
 	}
 }
 
@@ -300,7 +288,6 @@ stack_alloc_try(
 	cache = &PROCESSOR_DATA(current_processor(), stack_cache);
 	stack = cache->free;
 	if (stack != 0) {
-		STACK_ZINFO_PALLOC(thread);
 		cache->free = stack_next(stack);
 		cache->count--;
 	}
@@ -309,7 +296,6 @@ stack_alloc_try(
 			stack_lock();
 			stack = stack_free_list;
 			if (stack != 0) {
-				STACK_ZINFO_PALLOC(thread);
 				stack_free_list = stack_next(stack);
 				stack_free_count--;
 				stack_free_delta--;

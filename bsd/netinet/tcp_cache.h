@@ -42,10 +42,9 @@ extern int tcp_cache_get_cookie(struct tcpcb *tp, u_char *cookie, u_int8_t *len)
 extern unsigned int tcp_cache_get_cookie_len(struct tcpcb *tp);
 
 extern void tcp_heuristic_tfo_loss(struct tcpcb *tp);
+extern void tcp_heuristic_tfo_rst(struct tcpcb *tp);
 extern void tcp_heuristic_mptcp_loss(struct tcpcb *tp);
 extern void tcp_heuristic_ecn_loss(struct tcpcb *tp);
-extern void tcp_heuristic_tfo_snd_good(struct tcpcb *tp);
-extern void tcp_heuristic_tfo_rcv_good(struct tcpcb *tp);
 extern void tcp_heuristic_tfo_middlebox(struct tcpcb *tp);
 extern void tcp_heuristic_ecn_aggressive(struct tcpcb *tp);
 extern void tcp_heuristic_tfo_success(struct tcpcb *tp);
@@ -56,6 +55,18 @@ extern boolean_t tcp_heuristic_do_mptcp(struct tcpcb *tp);
 extern boolean_t tcp_heuristic_do_ecn(struct tcpcb *tp);
 extern void tcp_heuristic_ecn_droprst(struct tcpcb *tp);
 extern void tcp_heuristic_ecn_droprxmt(struct tcpcb *tp);
+extern void tcp_heuristic_ecn_synrst(struct tcpcb *tp);
+
+extern boolean_t tcp_heuristic_do_ecn_with_address(struct ifnet *ifp,
+	union sockaddr_in_4_6 *local_address);
+extern void tcp_heuristics_ecn_update(struct necp_tcp_ecn_cache *necp_buffer,
+	struct ifnet *ifp, union sockaddr_in_4_6 *local_address);
+extern boolean_t tcp_heuristic_do_tfo_with_address(struct ifnet *ifp,
+	union sockaddr_in_4_6 *local_address, union sockaddr_in_4_6 *remote_address,
+	u_int8_t *cookie, u_int8_t *cookie_len);
+extern void tcp_heuristics_tfo_update(struct necp_tcp_tfo_cache *necp_buffer,
+	struct ifnet *ifp, union sockaddr_in_4_6 *local_address,
+	union sockaddr_in_4_6 *remote_address);
 
 extern void tcp_cache_init(void);
 

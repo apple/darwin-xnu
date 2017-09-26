@@ -569,9 +569,16 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_DEFHLIM,
 SYSCTL_PROC(_net_inet6_ip6, IPV6CTL_STATS, stats,
 	CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 	0, 0, ip6_getstat, "S,ip6stat", "");
+
+#if (DEVELOPMENT || DEBUG)
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_ACCEPT_RTADV,
+	accept_rtadv, CTLFLAG_RW | CTLFLAG_LOCKED,
+        &ip6_accept_rtadv, 0, "");
+#else
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_ACCEPT_RTADV,
 	accept_rtadv, CTLFLAG_RD | CTLFLAG_LOCKED,
-	&ip6_accept_rtadv,	0, "");
+	&ip6_accept_rtadv, 0, "");
+#endif /* (DEVELOPMENT || DEBUG) */
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_KEEPFAITH,
 	keepfaith, CTLFLAG_RD | CTLFLAG_LOCKED,		&ip6_keepfaith,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_LOG_INTERVAL,

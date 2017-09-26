@@ -66,6 +66,7 @@
 #include <sys/types.h>
 #include <sys/appleapiopts.h>
 #include <machine/endian.h>
+#include <machine/types.h> /* __uint32_t */
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 typedef	__uint32_t tcp_seq;
@@ -224,8 +225,8 @@ struct tcphdr {
 #define	TCP_CONNECTION_INFO	0x106	/* State of TCP connection */
 
 #ifdef PRIVATE
-#define	TCP_INFO		0x200	/* retrieve tcp_info structure */
-#define TCP_MEASURE_SND_BW	0x202	/* Measure sender's bandwidth for this connection */
+#define	TCP_INFO			0x200	/* retrieve tcp_info structure */
+#define	TCP_MEASURE_SND_BW		0x202	/* Measure sender's bandwidth for this connection */
 #endif /* PRIVATE */
 
 
@@ -280,6 +281,21 @@ struct tcp_notify_ack_complete {
 };
 
 #define	TCP_NOTIFY_ACKNOWLEDGEMENT	0x212	/* Notify when data is acknowledged */
+#define	MPTCP_SERVICE_TYPE		0x213	/* MPTCP Service type */
+#define	TCP_FASTOPEN_FORCE_HEURISTICS	0x214	/* Make sure TFO-heuristics never get disabled */
+
+#define	MPTCP_SVCTYPE_HANDOVER		0 /* Default 0 */
+#define	MPTCP_SVCTYPE_INTERACTIVE	1
+#define	MPTCP_SVCTYPE_AGGREGATE		2
+#define	MPTCP_SVCTYPE_MAX		3
+/*
+ * Specify minimum time in seconds before which an established
+ * TCP connection will not be dropped when there is no response from the
+ * peer
+ */
+#define	TCP_RXT_MINIMUM_TIMEOUT		0x215
+
+#define	TCP_RXT_MINIMUM_TIMEOUT_LIMIT	(5 * 60) /* Limit is 5 minutes */
 
 /*
  * The TCP_INFO socket option is a private API and is subject to change
@@ -380,7 +396,8 @@ struct tcp_info {
 		tcpi_tfo_no_cookie_rcv:1, /* We did not receive a cookie upon our request */
 		tcpi_tfo_heuristics_disable:1, /* TFO-heuristics disabled it */
 		tcpi_tfo_send_blackhole:1, /* A sending-blackhole got detected */
-		tcpi_tfo_recv_blackhole:1; /* A receiver-blackhole got detected */
+		tcpi_tfo_recv_blackhole:1, /* A receiver-blackhole got detected */
+		tcpi_tfo_onebyte_proxy:1; /* A proxy acknowledges all but one byte of the SYN */
 
 	u_int16_t	tcpi_ecn_client_setup:1,	/* Attempted ECN setup from client side */
 			tcpi_ecn_server_setup:1,	/* Attempted ECN setup from server side */
@@ -388,8 +405,13 @@ struct tcp_info {
 			tcpi_ecn_lost_syn:1,		/* Lost SYN with ECN setup */
 			tcpi_ecn_lost_synack:1,		/* Lost SYN-ACK with ECN setup */
 			tcpi_local_peer:1,		/* Local to the host or the subnet */
-			tcpi_if_cell:1,			/* Interface is cellular */
-			tcpi_if_wifi:1;			/* Interface is WiFi */
+			tcpi_if_cell:1,		/* Interface is cellular */
+			tcpi_if_wifi:1,		/* Interface is WiFi */
+			tcpi_if_wired:1,	/* Interface is wired - ethernet , thunderbolt etc,. */
+			tcpi_if_wifi_infra:1,	/* Interface is wifi infrastructure */
+			tcpi_if_wifi_awdl:1,	/* Interface is wifi AWDL */
+			tcpi_snd_background:1,	/* Using delay based algorithm on sender side */
+			tcpi_rcv_background:1;	/* Using delay based algorithm on receive side */
 
 	u_int32_t	tcpi_ecn_recv_ce;	/* Packets received with CE */
 	u_int32_t	tcpi_ecn_recv_cwr;	/* Packets received with CWR */
@@ -429,16 +451,16 @@ struct info_tuple {
 };
 
 #define itpl_local_sa		itpl_localaddr._itpl_sa
-#define itpl_local_sin 		itpl_localaddr._itpl_sin
+#define itpl_local_sin		itpl_localaddr._itpl_sin
 #define itpl_local_sin6		itpl_localaddr._itpl_sin6
-#define itpl_remote_sa 		itpl_remoteaddr._itpl_sa
+#define itpl_remote_sa		itpl_remoteaddr._itpl_sa
 #define itpl_remote_sin		itpl_remoteaddr._itpl_sin
 #define itpl_remote_sin6	itpl_remoteaddr._itpl_sin6
 
 /*
  * TCP connection info auxiliary data (CIAUX_TCP)
  *
- * Do not add new fields to this structure, just add them to tcp_info 
+ * Do not add new fields to this structure, just add them to tcp_info
  * structure towards the end. This will preserve binary compatibility.
  */
 typedef struct conninfo_tcp {
@@ -447,6 +469,31 @@ typedef struct conninfo_tcp {
 } conninfo_tcp_t;
 
 #pragma pack()
+
+struct mptcp_itf_stats {
+	uint16_t	ifindex;
+	uint16_t	switches;
+	uint32_t	is_expensive:1;
+	uint64_t	mpis_txbytes __attribute__((aligned(8)));
+	uint64_t	mpis_rxbytes __attribute__((aligned(8)));
+};
+
+/* Version solely used to let libnetcore survive */
+#define	CONNINFO_MPTCP_VERSION	3
+typedef struct conninfo_multipathtcp {
+	uint32_t	mptcpci_subflow_count;
+	uint32_t	mptcpci_switch_count;
+	sae_connid_t	mptcpci_subflow_connids[4];
+
+	uint64_t	mptcpci_init_rxbytes;
+	uint64_t	mptcpci_init_txbytes;
+
+#define	MPTCP_ITFSTATS_SIZE	4
+	struct mptcp_itf_stats mptcpci_itfstats[MPTCP_ITFSTATS_SIZE];
+
+	uint32_t	mptcpci_flags;
+#define	MPTCPCI_FIRSTPARTY	0x01
+} conninfo_multipathtcp_t;
 
 #endif /* PRIVATE */
 
@@ -488,7 +535,8 @@ struct tcp_connection_info {
 			tcpi_tfo_heuristics_disable:1, /* TFO-heuristics disabled it */
 			tcpi_tfo_send_blackhole:1, /* A sending-blackhole got detected */
 			tcpi_tfo_recv_blackhole:1, /* A receiver-blackhole got detected */
-			__pad2:18;
+			tcpi_tfo_onebyte_proxy:1, /* A proxy acknowledges all but one byte of the SYN */
+			__pad2:17;
         u_int64_t	tcpi_txpackets __attribute__((aligned(8)));
         u_int64_t	tcpi_txbytes __attribute__((aligned(8)));
         u_int64_t	tcpi_txretransmitbytes __attribute__((aligned(8)));

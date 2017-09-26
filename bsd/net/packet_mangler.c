@@ -822,7 +822,7 @@ static errno_t pktmnglr_ipfilter_output(void *cookie, mbuf_t *data, ipf_pktopts_
 	if (ip.ip_v != 4) {
 		PKT_MNGLR_LOG(LOG_INFO,
 		    "%s:%d Not handling IP version %d\n",
-		    __FILE__, __LINE__, ip.ip_v);
+		    __func__, __LINE__, ip.ip_v);
 		goto output_done;
 	}
 

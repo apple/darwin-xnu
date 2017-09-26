@@ -52,7 +52,9 @@ int fs_snapshot_mount(int, const char *, const char *, uint32_t) __OSX_AVAILABLE
 
 int fs_snapshot_revert(int, const char *, uint32_t) __OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __TVOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0);
 
+#ifdef PRIVATE
 int fs_snapshot_root(int, const char *, uint32_t) __OSX_AVAILABLE(10.12.4) __IOS_AVAILABLE(10.3) __TVOS_AVAILABLE(10.3) __WATCHOS_AVAILABLE(3.3);
+#endif
 
 __END_DECLS
 

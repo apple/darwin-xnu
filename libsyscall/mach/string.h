@@ -39,8 +39,8 @@
 // of Libc's string.h (which no one should be using bar MIG) in order
 // to override their use of memcpy.
 
-int _mach_snprintf(char *buffer, int length, const char *fmt, ...);
-int _mach_vsnprintf(char *buffer, int length, const char *fmt, va_list ap);
+int _mach_snprintf(char *buffer, int length, const char *fmt, ...) __printflike(3, 4);
+int _mach_vsnprintf(char *buffer, int length, const char *fmt, va_list ap) __printflike(3, 0);
 
 // Actually in memcpy.c but MIG likes to include string.h
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2016 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2017 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,7 @@ __BEGIN_DECLS
 #define PROC_UID_ONLY		4
 #define PROC_RUID_ONLY		5
 #define PROC_PPID_ONLY		6
+#define PROC_KDBG_ONLY		7
 
 struct proc_bsdinfo {
 	uint32_t		pbi_flags;		/* 64bit; emulated etc */
@@ -636,6 +637,19 @@ struct kqueue_info {
 	uint32_t		rfu_1;	/* reserved */
 };
 
+struct kqueue_dyninfo {
+	struct kqueue_info kqdi_info;
+	uint64_t kqdi_servicer;
+	uint64_t kqdi_owner;
+	uint32_t kqdi_sync_waiters;
+	uint8_t  kqdi_sync_waiter_qos;
+	uint8_t  kqdi_async_qos;
+	uint16_t kqdi_request_state;
+	uint8_t  kqdi_events_qos;
+	uint8_t  _kqdi_reserved0[7];
+	uint64_t _kqdi_reserved1[4];
+};
+
 /* keep in sync with KQ_* in sys/eventvar.h */
 #define PROC_KQUEUE_SELECT	0x01
 #define PROC_KQUEUE_SLEEP	0x02
@@ -773,6 +787,12 @@ struct proc_fileportinfo {
 #define PROC_PIDEXITREASONBASICINFO	25
 #define PROC_PIDEXITREASONBASICINFOSIZE	(sizeof(struct proc_exitreasonbasicinfo))
 
+#define PROC_PIDLISTUPTRS      26
+#define PROC_PIDLISTUPTRS_SIZE (sizeof(uint64_t))
+
+#define PROC_PIDLISTDYNKQUEUES      27
+#define PROC_PIDLISTDYNKQUEUES_SIZE (sizeof(kqueue_id_t))
+
 #endif
 
 /* Flavors for proc_pidfdinfo */
@@ -805,6 +825,7 @@ struct proc_fileportinfo {
 #define PROC_PIDFDKQUEUE_EXTINFO	9
 #define PROC_PIDFDKQUEUE_EXTINFO_SIZE	(sizeof(struct kevent_extinfo))
 #define PROC_PIDFDKQUEUE_KNOTES_MAX	(1024 * 128)
+#define PROC_PIDDYNKQUEUES_MAX	(1024 * 128)
 #endif /* PRIVATE */
 
 
@@ -883,19 +904,28 @@ struct proc_fileportinfo {
 #define PROC_FGHW_VOUCHER_ERROR         98 /* error in voucher / originator callout */
 #define PROC_FGHW_ERROR                 99 /* syscall parameter/permissions error */
 
+/* flavors for proc_piddynkqueueinfo */
+#ifdef PRIVATE
+#define PROC_PIDDYNKQUEUE_INFO         0
+#define PROC_PIDDYNKQUEUE_INFO_SIZE    (sizeof(struct kqueue_dyninfo))
+#define PROC_PIDDYNKQUEUE_EXTINFO      1
+#define PROC_PIDDYNKQUEUE_EXTINFO_SIZE (sizeof(struct kevent_extinfo))
+#endif
+
 /* __proc_info() call numbers */
-#define PROC_INFO_CALL_LISTPIDS         0x1
-#define PROC_INFO_CALL_PIDINFO          0x2
-#define PROC_INFO_CALL_PIDFDINFO        0x3
-#define PROC_INFO_CALL_KERNMSGBUF       0x4
-#define PROC_INFO_CALL_SETCONTROL       0x5
-#define PROC_INFO_CALL_PIDFILEPORTINFO  0x6
-#define PROC_INFO_CALL_TERMINATE        0x7
-#define PROC_INFO_CALL_DIRTYCONTROL     0x8
-#define PROC_INFO_CALL_PIDRUSAGE        0x9
+#define PROC_INFO_CALL_LISTPIDS          0x1
+#define PROC_INFO_CALL_PIDINFO           0x2
+#define PROC_INFO_CALL_PIDFDINFO         0x3
+#define PROC_INFO_CALL_KERNMSGBUF        0x4
+#define PROC_INFO_CALL_SETCONTROL        0x5
+#define PROC_INFO_CALL_PIDFILEPORTINFO   0x6
+#define PROC_INFO_CALL_TERMINATE         0x7
+#define PROC_INFO_CALL_DIRTYCONTROL      0x8
+#define PROC_INFO_CALL_PIDRUSAGE         0x9
 #define PROC_INFO_CALL_PIDORIGINATORINFO 0xa
-#define PROC_INFO_CALL_LISTCOALITIONS   0xb
-#define PROC_INFO_CALL_CANUSEFGHW       0xc
+#define PROC_INFO_CALL_LISTCOALITIONS    0xb
+#define PROC_INFO_CALL_CANUSEFGHW        0xc
+#define PROC_INFO_CALL_PIDDYNKQUEUEINFO  0xd
 
 #endif /* PRIVATE */
 
@@ -921,6 +951,10 @@ extern int pid_kqueue_extinfo(proc_t, struct kqueue * kq, user_addr_t buffer,
 			      uint32_t buffersize, int32_t * retval);
 extern int pid_kqueue_udatainfo(proc_t p, struct kqueue *kq, uint64_t *buf,
 				uint32_t bufsize);
+extern int pid_kqueue_listdynamickqueues(proc_t p, user_addr_t ubuf,
+		uint32_t bufsize, int32_t *retval);
+extern int pid_dynamickqueue_extinfo(proc_t p, kqueue_id_t kq_id,
+		user_addr_t ubuf, uint32_t bufsize, int32_t *retval);
 extern int fill_procworkqueue(proc_t, struct proc_workqueueinfo *);
 extern boolean_t workqueue_get_pwq_exceeded(void *v, boolean_t *exceeded_total,
                                             boolean_t *exceeded_constrained);

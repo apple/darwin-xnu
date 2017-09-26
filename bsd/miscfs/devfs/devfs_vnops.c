@@ -115,6 +115,7 @@ static int 		devfs_update(struct vnode *vp, struct timeval *access,
 void			devfs_rele_node(devnode_t *);
 static void		devfs_consider_time_update(devnode_t *dnp, uint32_t just_changed_flags);
 static boolean_t 	devfs_update_needed(long now_s, long last_s);
+static boolean_t	devfs_is_name_protected(struct vnode *dvp, const char *name);
 void 			dn_times_locked(devnode_t * dnp, struct timeval *t1, struct timeval *t2, struct timeval *t3, uint32_t just_changed_flags);
 void			dn_times_now(devnode_t *dnp, uint32_t just_changed_flags);
 void			dn_mark_for_delayed_times_update(devnode_t *dnp, uint32_t just_changed_flags);
@@ -182,6 +183,33 @@ dn_times_now(devnode_t * dnp, uint32_t just_changed_flags)
 	microtime(&now);
 	dn_times_locked(dnp, &now, &now, &now, just_changed_flags);
 	DEVFS_ATTR_UNLOCK();
+}
+
+/*
+ * Critical devfs devices cannot be renamed or removed.
+ * However, links to them may be moved/unlinked. So we block
+ * remove/rename on a per-name basis, rather than per-node.
+ */
+static boolean_t
+devfs_is_name_protected(struct vnode *dvp, const char *name)
+{
+    /*
+     * Only names in root are protected. E.g. /dev/null is protected,
+     * but /dev/foo/null isn't.
+     */
+    if (!vnode_isvroot(dvp))
+        return FALSE;
+
+    if ((strcmp("console", name) == 0) ||
+        (strcmp("tty", name) == 0) ||
+        (strcmp("null", name) == 0) ||
+        (strcmp("zero", name) == 0) ||
+        (strcmp("klog", name) == 0)) {
+
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 
@@ -795,6 +823,7 @@ devfs_vnop_remove(struct vnop_remove_args *ap)
 	 * are the end of the path. Get pointers to all our
 	 * devfs structures.
 	 */
+
 	DEVFS_LOCK();
 
 	tp = VTODN(vp);
@@ -807,6 +836,14 @@ devfs_vnop_remove(struct vnop_remove_args *ap)
 	        error = ENOENT;
 		goto abort;
 	}
+
+	/*
+	 * Don't allow removing critical devfs devices
+	 */
+	if (devfs_is_name_protected(dvp, cnp->cn_nameptr)) {
+		error = EINVAL;
+		goto abort;
+}
 
 	/*
 	 * Make sure that we don't try do something stupid
@@ -1004,6 +1041,15 @@ devfs_rename(struct vnop_rename_args *ap)
 			goto out;
 		}
 		doingdirectory++;
+	}
+
+	/*
+	 * Don't allow renaming critical devfs devices
+	 */
+	if (devfs_is_name_protected(fdvp, fcnp->cn_nameptr) ||
+	    devfs_is_name_protected(tdvp, tcnp->cn_nameptr)) {
+		error = EINVAL;
+		goto out;
 	}
 
 	/*
@@ -1570,7 +1616,7 @@ static struct vnodeopv_entry_desc devfs_vnodeop_entries[] = {
 #if CONFIG_MACF
 	{ &vnop_setlabel_desc, (VOPFUNC)devfs_setlabel },       /* setlabel */
 #endif
-	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
+	{ (struct vnodeop_desc*)NULL, (int(*)(void *))NULL }
 };
 struct vnodeopv_desc devfs_vnodeop_opv_desc =
 	{ &devfs_vnodeop_p, devfs_vnodeop_entries };
@@ -1616,7 +1662,7 @@ static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
 #if CONFIG_MACF
 	{ &vnop_setlabel_desc, (VOPFUNC)devfs_setlabel },	/* setlabel */
 #endif
-	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
+	{ (struct vnodeop_desc*)NULL, (int(*)(void *))NULL }
 };
 struct vnodeopv_desc devfs_spec_vnodeop_opv_desc =
 	{ &devfs_spec_vnodeop_p, devfs_spec_vnodeop_entries };
@@ -1640,7 +1686,7 @@ static struct vnodeopv_entry_desc devfs_devfd_vnodeop_entries[] = {
 #if CONFIG_MACF
 	{ &vnop_setlabel_desc, (VOPFUNC)devfs_setlabel },       /* setlabel */
 #endif
-	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
+	{ (struct vnodeop_desc*)NULL, (int(*)(void *))NULL }
 };
 struct vnodeopv_desc devfs_devfd_vnodeop_opv_desc =
 	{ &devfs_devfd_vnodeop_p, devfs_devfd_vnodeop_entries};

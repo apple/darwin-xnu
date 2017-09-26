@@ -33,13 +33,17 @@ __BEGIN_DECLS
 
 #ifdef XNU_KERNEL_PRIVATE
 
-#define	ENTROPY_BUFFER_BYTE_SIZE	64
+#define ENTROPY_BUFFER_BYTE_SIZE 64
 
-#define	ENTROPY_BUFFER_SIZE		ENTROPY_BUFFER_BYTE_SIZE/sizeof(uint32_t)
+#define ENTROPY_BUFFER_SIZE (ENTROPY_BUFFER_BYTE_SIZE / sizeof(uint32_t))
 
 typedef struct entropy_data {
-	uint32_t	*index_ptr;
-	uint32_t	buffer[ENTROPY_BUFFER_SIZE];
+	/*
+	 * TODO: Should index_ptr be volatile?  Are we exposed to any races that
+	 * we care about if it is not?
+	 */
+	uint32_t *index_ptr;
+	uint32_t buffer[ENTROPY_BUFFER_SIZE];
 } entropy_data_t;
 
 extern entropy_data_t EntropyData;
@@ -49,11 +53,15 @@ extern entropy_data_t EntropyData;
 
 /*
  * Early_random implementation params: */
-#define	EARLY_RANDOM_SEED_SIZE		(16)
-#define	EARLY_RANDOM_STATE_STATIC_SIZE	(264)
+#define	EARLY_RANDOM_SEED_SIZE (16)
+#define	EARLY_RANDOM_STATE_STATIC_SIZE (264)
 
 #if defined (__x86_64__)
 #define current_prng_context()	(current_cpu_datap()->cpu_prng)
+#define master_prng_context()	(cpu_datap(master_cpu)->cpu_prng)
+#elif defined (__arm__) || defined(__arm64__)
+#include <arm/cpu_data_internal.h>		// For MAX_CPUS
+#define current_prng_context()  (getCpuDatap()->cpu_prng)
 #define master_prng_context()	(cpu_datap(master_cpu)->cpu_prng)
 #else
 #error architecture unknown
@@ -62,16 +70,15 @@ extern entropy_data_t EntropyData;
 #include <corecrypto/ccdrbg.h>
 #include <corecrypto/ccsha1.h>
 
-typedef struct	ccdrbg_info ccdrbg_info_t;
-typedef void  (*ccdrbg_factory_t)(ccdrbg_info_t *info, const void *custom);
+typedef void (*ccdrbg_factory_t)(struct ccdrbg_info *info, const void *custom);
 
-extern void	ccdrbg_factory_yarrow(ccdrbg_info_t *info, const void *custom);
+extern void	ccdrbg_factory_yarrow(struct ccdrbg_info *info, const void *custom);
 
-void		prng_factory_register(ccdrbg_factory_t factory);
-void		prng_cpu_init(int cpu);
+void prng_factory_register(ccdrbg_factory_t factory);
+void prng_cpu_init(int cpu);
 
-void		entropy_buffer_read(char *buffer, unsigned int *count);
-void		entropy_boot_trace(void);
+void entropy_buffer_read(void *buffer, size_t *count);
+void entropy_boot_trace(void);
 
 /*
  * Wrapper for requesting a CCDRBG operation.

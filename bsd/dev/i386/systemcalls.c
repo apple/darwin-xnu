@@ -229,6 +229,12 @@ unix_syscall(x86_saved_state_t *state)
 
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
 
+#if DEBUG || DEVELOPMENT
+	kern_allocation_name_t
+	prior __assert_only = thread_set_allocation_name(NULL);
+	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
+#endif /* DEBUG || DEVELOPMENT */
+
 	if (__improbable(uthread->uu_lowpri_window)) {
 	        /*
 		 * task is marked as a low priority I/O type
@@ -432,6 +438,12 @@ unix_syscall64(x86_saved_state_t *state)
 	
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
 
+#if DEBUG || DEVELOPMENT
+	kern_allocation_name_t
+	prior __assert_only = thread_set_allocation_name(NULL);
+	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
+#endif /* DEBUG || DEVELOPMENT */
+
 	if (__improbable(uthread->uu_lowpri_window)) {
 	        /*
 		 * task is marked as a low priority I/O type
@@ -564,6 +576,12 @@ unix_syscall_return(int error)
 
 
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
+
+#if DEBUG || DEVELOPMENT
+	kern_allocation_name_t
+	prior __assert_only = thread_set_allocation_name(NULL);
+	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
+#endif /* DEBUG || DEVELOPMENT */
 
 	if (uthread->uu_lowpri_window) {
 	        /*

@@ -170,6 +170,8 @@ Following is a step by step guideline on how to add a new command ( e.g showtask
 
   6. If your function finds issue with the passed argument then you can `raise ArgumentError('error_message')` to notify the user. The framework will automatically catch this and show appropriate help using the function doc string.
 
+  7. Please use "##" for commenting your code. This is important because single "#" based strings may be mistakenly considered in `unifdef` program.
+
  Time for some code example? Try reading the code for function ShowTaskVmeHelper in memory.py.
 
 SPECIAL Note: Very often you will find yourself making changes to a file for some command/summary and would like to test it out in lldb.

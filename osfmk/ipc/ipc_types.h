@@ -60,6 +60,7 @@ typedef struct ipc_table_size *ipc_table_size_t;
 typedef struct ipc_port_request *ipc_port_request_t;
 typedef struct ipc_pset *ipc_pset_t;
 typedef struct ipc_kmsg *ipc_kmsg_t;
+typedef uint8_t sync_qos_count_t;
 
 #define	IE_NULL	((ipc_entry_t) 0)
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,7 +76,7 @@ struct pktap_softc {
 };
 
 #ifndef PKTAP_DEBUG
-#define	PKTAP_DEBUG 1
+#define	PKTAP_DEBUG 0
 #endif /* PKTAP_DEBUG */
 
 #define	PKTAP_FILTER_OK	0		/* Packet passes filter checks */
@@ -88,8 +88,8 @@ SYSCTL_DECL(_net_link);
 SYSCTL_NODE(_net_link, IFT_PKTAP, pktap,
     CTLFLAG_RW  |CTLFLAG_LOCKED, 0, "pktap virtual interface");
 
-static int pktap_total_tap_count = 0;
-SYSCTL_INT(_net_link_pktap, OID_AUTO, total_tap_count,
+uint32_t pktap_total_tap_count = 0;
+SYSCTL_UINT(_net_link_pktap, OID_AUTO, total_tap_count,
     CTLFLAG_RD | CTLFLAG_LOCKED, &pktap_total_tap_count, 0, "");
 
 static u_int64_t pktap_count_unknown_if_type = 0;
@@ -208,7 +208,7 @@ pktap_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 {
 	int error = 0;
 	struct pktap_softc *pktap = NULL;
-	struct ifnet_init_params if_init;
+	struct ifnet_init_eparams if_init;
 
 	PKTAP_LOG(PKTP_LOG_FUNC, "unit %u\n", unit);
 
@@ -228,9 +228,15 @@ pktap_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	pktap->pktp_filters[0].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
 	pktap->pktp_filters[0].filter_param_if_type = IFT_ETHER;
 
+#if CONFIG_EMBEDDED
+	pktap->pktp_filters[1].filter_op = PKTAP_FILTER_OP_PASS;
+	pktap->pktp_filters[1].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
+	pktap->pktp_filters[1].filter_param_if_type = IFT_CELLULAR;
+#else /* CONFIG_EMBEDDED */
 	pktap->pktp_filters[1].filter_op = PKTAP_FILTER_OP_PASS;
 	pktap->pktp_filters[1].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
 	pktap->pktp_filters[1].filter_param_if_type = IFT_IEEE1394;
+#endif /* CONFIG_EMBEDDED */
 
 #if (DEVELOPMENT || DEBUG)
 	pktap->pktp_filters[2].filter_op = PKTAP_FILTER_OP_PASS;
@@ -242,7 +248,10 @@ pktap_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	 * We do not use a set_bpf_tap() function as we rather rely on the more
 	 * accurate callback passed to bpf_attach()
 	 */
-	bzero(&if_init, sizeof(struct ifnet_init_params));
+	bzero(&if_init, sizeof(if_init));
+	if_init.ver = IFNET_INIT_CURRENT_VERSION;
+	if_init.len = sizeof (if_init);
+	if_init.flags = IFNET_INIT_LEGACY;
 	if_init.name = ifc->ifc_name;
 	if_init.unit = unit;
 	if_init.type = IFT_PKTAP;
@@ -255,7 +264,7 @@ pktap_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	if_init.ioctl = pktap_ioctl;
 	if_init.detach = pktap_detach;
 
-	error = ifnet_allocate(&if_init, &pktap->pktp_ifp);
+	error = ifnet_allocate_extended(&if_init, &pktap->pktp_ifp);
 	if (error != 0) {
 		printf("%s: ifnet_allocate failed, error %d\n",
 		    __func__, error);
@@ -835,7 +844,7 @@ pktap_fill_proc_info(struct pktap_header *hdr, protocol_family_t proto,
 			errno_t error;
 			size_t hlen;
 			struct in_addr faddr, laddr;
-			u_short fport, lport;
+			u_short fport = 0, lport = 0;
 			struct inpcbinfo *pcbinfo = NULL;
 			int wildcard = 0;
 
@@ -899,7 +908,7 @@ pktap_fill_proc_info(struct pktap_header *hdr, protocol_family_t proto,
 			errno_t error;
 			struct in6_addr *faddr;
 			struct in6_addr *laddr;
-			u_short fport, lport;
+			u_short fport = 0, lport = 0;
 			struct inpcbinfo *pcbinfo = NULL;
 			int wildcard = 0;
 
@@ -1082,15 +1091,22 @@ pktap_bpf_tap(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 							goto done;
 						if (proto == AF_INET6 && (size_t) m_pktlen(m) - 4 < sizeof(struct ip6_hdr))
 							goto done;
+
 						/*
-						 * Skip the protocol in the mbuf as it's in network order
+						 * Handle two cases:
+						 * - The old utun encapsulation with the protocol family in network order
+						 * - A raw IPv4 or IPv6 packet
 						 */
-						pre = 4;
-						data_adjust = 4;
-						hdr->pth_dlt = DLT_NULL;
-						hdr_buffer.proto = proto;
-						hdr_size = sizeof(hdr_buffer);
-						break;
+						uint8_t data = *(uint8_t *)mbuf_data(m);
+						if ((data >> 4) == 4 || (data >> 4) == 6) {
+							pre = 4;
+						} else {
+							/*
+							 * Skip the protocol in the mbuf as it's in network order
+							 */
+							pre = 4;
+							data_adjust = 4;
+						}
 					}
 					hdr->pth_dlt = DLT_NULL;
 					hdr_buffer.proto = proto;
@@ -1109,8 +1125,8 @@ pktap_bpf_tap(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 				    ifp->if_type, ifp->if_xname);
 				pktap_count_unknown_if_type += 1;
 			} else {
-				snprintf(hdr->pth_ifname, sizeof(hdr->pth_ifname), "%s",
-					ifp->if_xname);
+				strlcpy(hdr->pth_ifname, ifp->if_xname,
+				    sizeof(hdr->pth_ifname));
 				hdr->pth_flags |= outgoing ? PTH_FLAG_DIR_OUT : PTH_FLAG_DIR_IN;
 				hdr->pth_protocol_family = proto;
 				hdr->pth_frame_pre_length = pre + pre_adjust;
@@ -1146,13 +1162,15 @@ __private_extern__ void
 pktap_input(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
     char *frame_header)
 {
-	char *hdr = (char *)mbuf_data(m);
-	char *start = (char *)mbuf_datastart(m);
+	char *hdr;
+	char *start;
 
 	/* Fast path */
 	if (pktap_total_tap_count == 0)
 		return;
 
+	hdr = (char *)mbuf_data(m);
+	start = (char *)mbuf_datastart(m);
 	/* Make sure the frame header is fully contained in the  mbuf */
 	if (frame_header != NULL && frame_header >= start && frame_header <= hdr) {
 		size_t o_len = m->m_len;
@@ -1186,3 +1204,4 @@ pktap_output(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 
 	pktap_bpf_tap(ifp, proto, m, pre, post, 1);
 }
+

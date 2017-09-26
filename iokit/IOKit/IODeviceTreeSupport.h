@@ -71,8 +71,13 @@ enum {
 OSCollectionIterator * IODTFindMatchingEntries( IORegistryEntry * from,
 			IOOptionBits options, const char * keys );
 
+#if !defined(__arm64__)
 typedef SInt32 (*IODTCompareAddressCellFunc)
 	(UInt32 cellCount, UInt32 left[], UInt32 right[]);
+#else
+typedef SInt64 (*IODTCompareAddressCellFunc)
+	(UInt32 cellCount, UInt32 left[], UInt32 right[]);
+#endif
 
 typedef void (*IODTNVLocationFunc)
 	(IORegistryEntry * entry,

@@ -109,6 +109,16 @@ public:
   OSMetaClassDeclareReservedUnused(IOInterruptController, 3);
   OSMetaClassDeclareReservedUnused(IOInterruptController, 4);
   OSMetaClassDeclareReservedUnused(IOInterruptController, 5);
+
+public:
+  // Generic methods (not to be overriden).
+
+  void timeStampSpuriousInterrupt(void);
+  void timeStampInterruptHandlerStart(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
+  void timeStampInterruptHandlerEnd(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
+
+private:
+  void timeStampInterruptHandlerInternal(bool isStart, IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
 };
 
 

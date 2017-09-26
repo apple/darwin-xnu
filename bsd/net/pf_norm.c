@@ -134,6 +134,8 @@ struct pf_fragment {
 		LIST_HEAD(pf_fragq, pf_frent) fru_queue;	/* buffering */
 		LIST_HEAD(pf_cacheq, pf_frcache) fru_cache;	/* non-buf */
 	} fr_u;
+	uint32_t	fr_csum_flags;	/* checksum flags */
+	uint32_t	fr_csum;	/* partial checksum value */
 };
 
 static TAILQ_HEAD(pf_fragqueue, pf_fragment)	pf_fragqueue;
@@ -160,7 +162,7 @@ static __inline struct pf_fragment *
 static __inline struct pf_fragment *
     pf_find_fragment_by_ipv6_header(struct ip6_hdr *, struct ip6_frag *,
     struct pf_frag_tree *);
-static struct mbuf *pf_reassemble(struct mbuf **, struct pf_fragment **,
+static struct mbuf *pf_reassemble(struct mbuf *, struct pf_fragment **,
     struct pf_frent *, int);
 static struct mbuf *pf_fragcache(struct mbuf **, struct ip *,
     struct pf_fragment **, int, int, int *);
@@ -169,7 +171,7 @@ static struct mbuf *pf_reassemble6(struct mbuf **, struct pf_fragment **,
 static struct mbuf *pf_frag6cache(struct mbuf **, struct ip6_hdr*,
     struct ip6_frag *, struct pf_fragment **, int, int, int, int *);
 static int pf_normalize_tcpopt(struct pf_rule *, int, struct pfi_kif *,
-    struct pf_pdesc *, struct mbuf *, struct tcphdr *, int, int *);
+    struct pf_pdesc *, pbuf_t *, struct tcphdr *, int, int *);
 
 #define	DPFPRINTF(x) do {				\
 	if (pf_status.debug >= PF_DEBUG_MISC) {		\
@@ -246,13 +248,13 @@ pf_frag_compare(struct pf_fragment *a, struct pf_fragment *b)
 		case AF_INET:
 			if ((diff = a->fr_id - b->fr_id))
 				return (diff);
-			else if (sa->v4.s_addr < sb->v4.s_addr)
+			else if (sa->v4addr.s_addr < sb->v4addr.s_addr)
 				return (-1);
-			else if (sa->v4.s_addr > sb->v4.s_addr)
+			else if (sa->v4addr.s_addr > sb->v4addr.s_addr)
 				return (1);
-			else if (da->v4.s_addr < db->v4.s_addr)
+			else if (da->v4addr.s_addr < db->v4addr.s_addr)
 				return (-1);
-			else if (da->v4.s_addr > db->v4.s_addr)
+			else if (da->v4addr.s_addr > db->v4addr.s_addr)
 				return (1);
 			break;
 #endif
@@ -432,8 +434,8 @@ pf_ip6hdr2key(struct pf_fragment *key, struct ip6_hdr *ip6,
 	key->fr_p = fh->ip6f_nxt;
 	key->fr_id6 = fh->ip6f_ident;
 	key->fr_af = AF_INET6;
-	key->fr_srcx.v6 = ip6->ip6_src;
-	key->fr_dstx.v6 = ip6->ip6_dst;
+	key->fr_srcx.v6addr = ip6->ip6_src;
+	key->fr_dstx.v6addr = ip6->ip6_dst;
 }
  
 static void
@@ -442,8 +444,8 @@ pf_ip2key(struct pf_fragment *key, struct ip *ip)
 	key->fr_p = ip->ip_p;
 	key->fr_id = ip->ip_id;
 	key->fr_af = AF_INET;
-	key->fr_srcx.v4.s_addr = ip->ip_src.s_addr;
-	key->fr_dstx.v4.s_addr = ip->ip_dst.s_addr;
+	key->fr_srcx.v4addr.s_addr = ip->ip_src.s_addr;
+	key->fr_dstx.v4addr.s_addr = ip->ip_dst.s_addr;
 }
 
 static struct pf_fragment *
@@ -502,19 +504,78 @@ pf_remove_fragment(struct pf_fragment *frag)
 
 #define FR_IP_OFF(fr)	((ntohs((fr)->fr_ip->ip_off) & IP_OFFMASK) << 3)
 static struct mbuf *
-pf_reassemble(struct mbuf **m0, struct pf_fragment **frag,
+pf_reassemble(struct mbuf *m0, struct pf_fragment **frag,
     struct pf_frent *frent, int mff)
 {
-	struct mbuf	*m = *m0, *m2;
+	struct mbuf	*m = m0, *m2;
 	struct pf_frent	*frea, *next;
 	struct pf_frent	*frep = NULL;
 	struct ip	*ip = frent->fr_ip;
-	int		 hlen = ip->ip_hl << 2;
+	uint32_t	 hlen = ip->ip_hl << 2;
 	u_int16_t	 off = (ntohs(ip->ip_off) & IP_OFFMASK) << 3;
 	u_int16_t	 ip_len = ntohs(ip->ip_len) - ip->ip_hl * 4;
 	u_int16_t	 fr_max = ip_len + off;
+	uint32_t	 csum, csum_flags;
 
 	VERIFY(*frag == NULL || BUFFER_FRAGMENTS(*frag));
+
+	/*
+	 * Leverage partial checksum offload for IP fragments.  Narrow down
+	 * the scope to cover only UDP without IP options, as that is the
+	 * most common case.
+	 *
+	 * Perform 1's complement adjustment of octets that got included/
+	 * excluded in the hardware-calculated checksum value.  Ignore cases
+	 * where the value includes the entire IPv4 header span, as the sum
+	 * for those octets would already be 0 by the time we get here; IP
+	 * has already performed its header checksum validation.  Also take
+	 * care of any trailing bytes and subtract out their partial sum.
+	 */
+	if (ip->ip_p == IPPROTO_UDP && hlen == sizeof (struct ip) &&
+	    (m->m_pkthdr.csum_flags &
+	    (CSUM_DATA_VALID | CSUM_PARTIAL | CSUM_PSEUDO_HDR)) ==
+	    (CSUM_DATA_VALID | CSUM_PARTIAL)) {
+		uint32_t start = m->m_pkthdr.csum_rx_start;
+		int32_t trailer = (m_pktlen(m) - ntohs(ip->ip_len));
+		uint32_t swbytes = (uint32_t)trailer;
+
+		csum = m->m_pkthdr.csum_rx_val;
+
+		ASSERT(trailer >= 0);
+		if ((start != 0 && start != hlen) || trailer != 0) {
+#if BYTE_ORDER != BIG_ENDIAN
+			if (start < hlen) {
+				HTONS(ip->ip_len);
+				HTONS(ip->ip_off);
+			}
+#endif /* BYTE_ORDER != BIG_ENDIAN */
+			/* callee folds in sum */
+			csum = m_adj_sum16(m, start, hlen,
+			    (ip->ip_len - hlen), csum);
+			if (hlen > start)
+				swbytes += (hlen - start);
+			else
+				swbytes += (start - hlen);
+#if BYTE_ORDER != BIG_ENDIAN
+			if (start < hlen) {
+				NTOHS(ip->ip_off);
+				NTOHS(ip->ip_len);
+			}
+#endif /* BYTE_ORDER != BIG_ENDIAN */
+		}
+		csum_flags = m->m_pkthdr.csum_flags;
+
+		if (swbytes != 0)
+			udp_in_cksum_stats(swbytes);
+		if (trailer != 0)
+			m_adj(m, -trailer);
+	} else {
+		csum = 0;
+		csum_flags = 0;
+	}
+
+	/* Invalidate checksum */
+	m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
 
 	/* Strip off ip header */
 	m->m_data += hlen;
@@ -533,11 +594,15 @@ pf_reassemble(struct mbuf **m0, struct pf_fragment **frag,
 		(*frag)->fr_flags = 0;
 		(*frag)->fr_max = 0;
 		(*frag)->fr_af = AF_INET;
-		(*frag)->fr_srcx.v4 = frent->fr_ip->ip_src;
-		(*frag)->fr_dstx.v4 = frent->fr_ip->ip_dst;
+		(*frag)->fr_srcx.v4addr = frent->fr_ip->ip_src;
+		(*frag)->fr_dstx.v4addr = frent->fr_ip->ip_dst;
 		(*frag)->fr_p = frent->fr_ip->ip_p;
 		(*frag)->fr_id = frent->fr_ip->ip_id;
 		(*frag)->fr_timeout = pf_time_second();
+		if (csum_flags != 0) {
+			(*frag)->fr_csum_flags = csum_flags;
+			(*frag)->fr_csum = csum;
+		}
 		LIST_INIT(&(*frag)->fr_queue);
 
 		RB_INSERT(pf_frag_tree, &pf_frag_tree, *frag);
@@ -547,6 +612,16 @@ pf_reassemble(struct mbuf **m0, struct pf_fragment **frag,
 		frep = NULL;
 		goto insert;
 	}
+
+	/*
+	 * If this fragment contains similar checksum offload info
+	 * as that of the existing ones, accumulate checksum.  Otherwise,
+	 * invalidate checksum offload info for the entire datagram.
+	 */
+	if (csum_flags != 0 && csum_flags == (*frag)->fr_csum_flags)
+		(*frag)->fr_csum += csum;
+	else if ((*frag)->fr_csum_flags != 0)
+		(*frag)->fr_csum_flags = 0;
 
 	/*
 	 * Find a fragment after the current one:
@@ -665,8 +740,26 @@ insert:
 		m_cat(m, m2);
 	}
 
-	ip->ip_src = (*frag)->fr_srcx.v4;
-	ip->ip_dst = (*frag)->fr_dstx.v4;
+	ip->ip_src = (*frag)->fr_srcx.v4addr;
+	ip->ip_dst = (*frag)->fr_dstx.v4addr;
+
+	if ((*frag)->fr_csum_flags != 0) {
+		csum = (*frag)->fr_csum;
+
+		ADDCARRY(csum);
+
+		m->m_pkthdr.csum_rx_val = csum;
+		m->m_pkthdr.csum_rx_start = sizeof (struct ip);
+		m->m_pkthdr.csum_flags = (*frag)->fr_csum_flags;
+	} else if ((m->m_pkthdr.rcvif->if_flags & IFF_LOOPBACK) ||
+	    (m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
+		/* loopback checksums are always OK */
+		m->m_pkthdr.csum_data = 0xffff;
+		m->m_pkthdr.csum_flags &= ~CSUM_PARTIAL;
+		m->m_pkthdr.csum_flags =
+		    CSUM_DATA_VALID | CSUM_PSEUDO_HDR |
+		    CSUM_IP_CHECKED | CSUM_IP_VALID;
+	}
 
 	/* Remove from fragment queue */
 	pf_remove_fragment(*frag);
@@ -733,8 +826,8 @@ pf_fragcache(struct mbuf **m0, struct ip *h, struct pf_fragment **frag, int mff,
 		(*frag)->fr_flags = PFFRAG_NOBUFFER;
 		(*frag)->fr_max = 0;
 		(*frag)->fr_af = AF_INET;
-		(*frag)->fr_srcx.v4 = h->ip_src;
-		(*frag)->fr_dstx.v4 = h->ip_dst;
+		(*frag)->fr_srcx.v4addr = h->ip_src;
+		(*frag)->fr_dstx.v4addr = h->ip_dst;
 		(*frag)->fr_p = h->ip_p;
 		(*frag)->fr_id = h->ip_id;
 		(*frag)->fr_timeout = pf_time_second();
@@ -1008,19 +1101,84 @@ pf_reassemble6(struct mbuf **m0, struct pf_fragment **frag,
 	struct mbuf *m, *m2;
 	struct pf_frent *frea, *frep, *next;
 	struct ip6_hdr *ip6;
+	struct ip6_frag *ip6f;
 	int plen, off, fr_max;
+	uint32_t uoff, csum, csum_flags;
 	
 	VERIFY(*frag == NULL || BUFFER_FRAGMENTS(*frag));
 	m = *m0;
 	frep = NULL;
 	ip6 = frent->fr_ip6;
+	ip6f = &frent->fr_ip6f_opt;
 	off = FR_IP6_OFF(frent);
+	uoff = frent->fr_ip6f_hlen;
 	plen = FR_IP6_PLEN(frent);
 	fr_max = off + plen - (frent->fr_ip6f_hlen - sizeof *ip6);
 
 	DPFPRINTF(("0x%llx IPv6 frag plen %u off %u fr_ip6f_hlen %u "
 	    "fr_max %u m_len %u\n", (uint64_t)VM_KERNEL_ADDRPERM(m), plen, off,
 	    frent->fr_ip6f_hlen, fr_max, m->m_len));
+
+	/*
+	 * Leverage partial checksum offload for simple UDP/IP fragments,
+	 * as that is the most common case.
+	 *
+	 * Perform 1's complement adjustment of octets that got included/
+	 * excluded in the hardware-calculated checksum value.  Also take
+	 * care of any trailing bytes and subtract out their partial sum.
+	 */
+	if (ip6f->ip6f_nxt == IPPROTO_UDP &&
+	    uoff == (sizeof (*ip6) + sizeof (*ip6f)) &&
+	    (m->m_pkthdr.csum_flags &
+	    (CSUM_DATA_VALID | CSUM_PARTIAL | CSUM_PSEUDO_HDR)) ==
+	    (CSUM_DATA_VALID | CSUM_PARTIAL)) {
+		uint32_t start = m->m_pkthdr.csum_rx_start;
+		uint32_t ip_len = (sizeof (*ip6) + ntohs(ip6->ip6_plen));
+		int32_t trailer = (m_pktlen(m) - ip_len);
+		uint32_t swbytes = (uint32_t)trailer;
+
+		csum = m->m_pkthdr.csum_rx_val;
+
+		ASSERT(trailer >= 0);
+		if (start != uoff || trailer != 0) {
+			uint16_t s = 0, d = 0;
+
+			if (IN6_IS_SCOPE_EMBED(&ip6->ip6_src)) {
+				s = ip6->ip6_src.s6_addr16[1];
+				ip6->ip6_src.s6_addr16[1] = 0 ;
+			}
+			if (IN6_IS_SCOPE_EMBED(&ip6->ip6_dst)) {
+				d = ip6->ip6_dst.s6_addr16[1];
+				ip6->ip6_dst.s6_addr16[1] = 0;
+			}
+
+			/* callee folds in sum */
+			csum = m_adj_sum16(m, start, uoff,
+			    (ip_len - uoff), csum);
+			if (uoff > start)
+				swbytes += (uoff - start);
+			else
+				swbytes += (start - uoff);
+
+			if (IN6_IS_SCOPE_EMBED(&ip6->ip6_src))
+				ip6->ip6_src.s6_addr16[1] = s;
+			if (IN6_IS_SCOPE_EMBED(&ip6->ip6_dst))
+				ip6->ip6_dst.s6_addr16[1] = d;
+
+		}
+		csum_flags = m->m_pkthdr.csum_flags;
+
+		if (swbytes != 0)
+			udp_in6_cksum_stats(swbytes);
+		if (trailer != 0)
+			m_adj(m, -trailer);
+	} else {
+		csum = 0;
+		csum_flags = 0;
+	}
+
+	/* Invalidate checksum */
+	m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
 	
 	/* strip off headers up to the fragment payload */
 	m->m_data += frent->fr_ip6f_hlen;
@@ -1039,11 +1197,15 @@ pf_reassemble6(struct mbuf **m0, struct pf_fragment **frag,
 		(*frag)->fr_flags = 0;
 		(*frag)->fr_max = 0;
 		(*frag)->fr_af = AF_INET6;
-		(*frag)->fr_srcx.v6 = frent->fr_ip6->ip6_src;
-		(*frag)->fr_dstx.v6 = frent->fr_ip6->ip6_dst;
+		(*frag)->fr_srcx.v6addr = frent->fr_ip6->ip6_src;
+		(*frag)->fr_dstx.v6addr = frent->fr_ip6->ip6_dst;
 		(*frag)->fr_p = frent->fr_ip6f_opt.ip6f_nxt;
 		(*frag)->fr_id6 = frent->fr_ip6f_opt.ip6f_ident;
 		(*frag)->fr_timeout = pf_time_second();
+		if (csum_flags != 0) {
+			(*frag)->fr_csum_flags = csum_flags;
+			(*frag)->fr_csum = csum;
+		}
 		LIST_INIT(&(*frag)->fr_queue);
 		
 		RB_INSERT(pf_frag_tree, &pf_frag_tree, *frag);
@@ -1053,6 +1215,16 @@ pf_reassemble6(struct mbuf **m0, struct pf_fragment **frag,
 		frep = NULL;
 		goto insert;
 	}
+
+	/*
+	 * If this fragment contains similar checksum offload info
+	 * as that of the existing ones, accumulate checksum.  Otherwise,
+	 * invalidate checksum offload info for the entire datagram.
+	 */
+	if (csum_flags != 0 && csum_flags == (*frag)->fr_csum_flags)
+		(*frag)->fr_csum += csum;
+	else if ((*frag)->fr_csum_flags != 0)
+		(*frag)->fr_csum_flags = 0;
 	
 	/*
 	 * Find a fragment after the current one:
@@ -1159,8 +1331,24 @@ pf_reassemble6(struct mbuf **m0, struct pf_fragment **frag,
 	ip6 = frent->fr_ip6;
 	ip6->ip6_nxt = (*frag)->fr_p;
 	ip6->ip6_plen = htons(off);
-	ip6->ip6_src = (*frag)->fr_srcx.v6;
-	ip6->ip6_dst = (*frag)->fr_dstx.v6;
+	ip6->ip6_src = (*frag)->fr_srcx.v6addr;
+	ip6->ip6_dst = (*frag)->fr_dstx.v6addr;
+
+	if ((*frag)->fr_csum_flags != 0) {
+		csum = (*frag)->fr_csum;
+
+		ADDCARRY(csum);
+
+		m->m_pkthdr.csum_rx_val = csum;
+		m->m_pkthdr.csum_rx_start = sizeof (struct ip6_hdr);
+		m->m_pkthdr.csum_flags = (*frag)->fr_csum_flags;
+	} else if ((m->m_pkthdr.rcvif->if_flags & IFF_LOOPBACK) ||
+	    (m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
+		/* loopback checksums are always OK */
+		m->m_pkthdr.csum_data = 0xffff;
+		m->m_pkthdr.csum_flags &= ~CSUM_PARTIAL;
+		m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
+	}
 	
 	/* Remove from fragment queue */
 	pf_remove_fragment(*frag);
@@ -1263,8 +1451,8 @@ pf_frag6cache(struct mbuf **m0, struct ip6_hdr *h, struct ip6_frag *fh,
 		(*frag)->fr_flags = PFFRAG_NOBUFFER;
 		(*frag)->fr_max = 0;
 		(*frag)->fr_af = AF_INET6;
-		(*frag)->fr_srcx.v6 = h->ip6_src;
-		(*frag)->fr_dstx.v6 = h->ip6_dst;
+		(*frag)->fr_srcx.v6addr = h->ip6_src;
+		(*frag)->fr_dstx.v6addr = h->ip6_dst;
 		(*frag)->fr_p = fh->ip6f_nxt;
 		(*frag)->fr_id6 = fh->ip6f_ident;
 		(*frag)->fr_timeout = pf_time_second();
@@ -1530,14 +1718,14 @@ pf_frag6cache(struct mbuf **m0, struct ip6_hdr *h, struct ip6_frag *fh,
 }
 
 int
-pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
+pf_normalize_ip(pbuf_t *pbuf, int dir, struct pfi_kif *kif, u_short *reason,
     struct pf_pdesc *pd)
 {
-	struct mbuf		*m = *m0;
+	struct mbuf		*m;
 	struct pf_rule		*r;
 	struct pf_frent		*frent;
 	struct pf_fragment	*frag = NULL;
-	struct ip		*h = mtod(m, struct ip *);
+	struct ip		*h = pbuf->pb_data;
 	int			 mff = (ntohs(h->ip_off) & IP_MF);
 	int			 hlen = h->ip_hl << 2;
 	u_int16_t		 fragoff = (ntohs(h->ip_off) & IP_OFFMASK) << 3;
@@ -1546,6 +1734,7 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 	int			 ip_off;
 	int			 asd = 0;
 	struct pf_ruleset	*ruleset = NULL;
+	struct ifnet		*ifp = pbuf->pb_ifp;
 
 	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_SCRUB].active.ptr);
 	while (r != NULL) {
@@ -1639,10 +1828,21 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 		    fr_max > frag->fr_max)
 			goto bad;
 
+		if ((m = pbuf_to_mbuf(pbuf, TRUE)) == NULL) {
+			REASON_SET(reason, PFRES_MEMORY);
+			return (PF_DROP);
+		}
+
+		VERIFY(!pbuf_is_valid(pbuf));
+
+		/* Restore iph pointer after pbuf_to_mbuf() */
+		h = mtod(m, struct ip *);
+
 		/* Get an entry for the fragment queue */
 		frent = pool_get(&pf_frent_pl, PR_NOWAIT);
 		if (frent == NULL) {
 			REASON_SET(reason, PFRES_MEMORY);
+			m_freem(m);
 			return (PF_DROP);
 		}
 		pf_nfrents++;
@@ -1652,29 +1852,34 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 		/* Might return a completely reassembled mbuf, or NULL */
 		DPFPRINTF(("reass IPv4 frag %d @ %d-%d\n", ntohs(h->ip_id),
 		    fragoff, fr_max));
-		*m0 = m = pf_reassemble(m0, &frag, frent, mff);
+		m = pf_reassemble(m, &frag, frent, mff);
 
 		if (m == NULL)
 			return (PF_DROP);
 
 		VERIFY(m->m_flags & M_PKTHDR);
+		pbuf_init_mbuf(pbuf, m, ifp);
 
 		/* use mtag from concatenated mbuf chain */
-		pd->pf_mtag = pf_find_mtag(m);
+		pd->pf_mtag = pf_find_mtag_pbuf(pbuf);
+#if 0
+// SCW: This check is superfluous
 #if DIAGNOSTIC
 		if (pd->pf_mtag == NULL) {
 			printf("%s: pf_find_mtag returned NULL(1)\n", __func__);
 			if ((pd->pf_mtag = pf_get_mtag(m)) == NULL) {
 				m_freem(m);
-				m = *m0 = NULL;
+				m = NULL;
 				goto no_mem;
 			}
 		}
 #endif
-		if (frag != NULL && (frag->fr_flags & PFFRAG_DROP))
-			goto drop;
+#endif
 
 		h = mtod(m, struct ip *);
+
+		if (frag != NULL && (frag->fr_flags & PFFRAG_DROP))
+			goto drop;
 	} else {
 		/* non-buffering fragment cache (drops or masks overlaps) */
 		int	nomem = 0;
@@ -1698,33 +1903,49 @@ pf_normalize_ip(struct mbuf **m0, int dir, struct pfi_kif *kif, u_short *reason,
 			goto bad;
 		}
 
-		*m0 = m = pf_fragcache(m0, h, &frag, mff,
+		if ((m = pbuf_to_mbuf(pbuf, TRUE)) == NULL) {
+			REASON_SET(reason, PFRES_MEMORY);
+			goto bad;
+		}
+
+		VERIFY(!pbuf_is_valid(pbuf));
+
+		/* Restore iph pointer after pbuf_to_mbuf() */
+		h = mtod(m, struct ip *);
+
+		m = pf_fragcache(&m, h, &frag, mff,
 		    (r->rule_flag & PFRULE_FRAGDROP) ? 1 : 0, &nomem);
 		if (m == NULL) {
+			// Note: pf_fragcache() has already m_freem'd the mbuf
 			if (nomem)
 				goto no_mem;
 			goto drop;
 		}
 
 		VERIFY(m->m_flags & M_PKTHDR);
+		pbuf_init_mbuf(pbuf, m, ifp);
 
 		/* use mtag from copied and trimmed mbuf chain */
-		pd->pf_mtag = pf_find_mtag(m);
+		pd->pf_mtag = pf_find_mtag_pbuf(pbuf);
+#if 0
+// SCW: This check is superfluous
 #if DIAGNOSTIC
 		if (pd->pf_mtag == NULL) {
 			printf("%s: pf_find_mtag returned NULL(2)\n", __func__);
 			if ((pd->pf_mtag = pf_get_mtag(m)) == NULL) {
 				m_freem(m);
-				m = *m0 = NULL;
+				m = NULL;
 				goto no_mem;
 			}
 		}
+#endif
 #endif
 		if (dir == PF_IN)
 			pd->pf_mtag->pftag_flags |= PF_TAG_FRAGCACHE;
 
 		if (frag != NULL && (frag->fr_flags & PFFRAG_DROP))
 			goto drop;
+
 		goto fragment_pass;
 	}
 
@@ -1747,7 +1968,11 @@ no_fragment:
 	if (r->rule_flag & PFRULE_RANDOMID) {
 		u_int16_t oip_id = h->ip_id;
 
-		h->ip_id = ip_randomid();
+		if (rfc6864 && IP_OFF_IS_ATOMIC(ntohs(h->ip_off))) {
+			h->ip_id = 0;
+		} else {
+			h->ip_id = ip_randomid();
+		}
 		h->ip_sum = pf_cksum_fixup(h->ip_sum, oip_id, h->ip_id, 0);
 	}
 	if ((r->rule_flag & (PFRULE_FRAGCROP|PFRULE_FRAGDROP)) == 0)
@@ -1769,15 +1994,15 @@ fragment_pass:
 
 no_mem:
 	REASON_SET(reason, PFRES_MEMORY);
-	if (r != NULL && r->log)
-		PFLOG_PACKET(kif, h, m, AF_INET, dir, *reason, r,
+	if (r != NULL && r->log && pbuf_is_valid(pbuf))
+		PFLOG_PACKET(kif, h, pbuf, AF_INET, dir, *reason, r,
 		    NULL, NULL, pd);
 	return (PF_DROP);
 
 drop:
 	REASON_SET(reason, PFRES_NORM);
-	if (r != NULL && r->log)
-		PFLOG_PACKET(kif, h, m, AF_INET, dir, *reason, r,
+	if (r != NULL && r->log && pbuf_is_valid(pbuf))
+		PFLOG_PACKET(kif, h, pbuf, AF_INET, dir, *reason, r,
 		    NULL, NULL, pd);
 	return (PF_DROP);
 
@@ -1789,20 +2014,20 @@ bad:
 		pf_free_fragment(frag);
 
 	REASON_SET(reason, PFRES_FRAG);
-	if (r != NULL && r->log)
-		PFLOG_PACKET(kif, h, m, AF_INET, dir, *reason, r, NULL, NULL, pd);
+	if (r != NULL && r->log && pbuf_is_valid(pbuf))
+		PFLOG_PACKET(kif, h, pbuf, AF_INET, dir, *reason, r, NULL, NULL, pd);
 
 	return (PF_DROP);
 }
 
 #if INET6
 int
-pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kif *kif,
+pf_normalize_ip6(pbuf_t *pbuf, int dir, struct pfi_kif *kif,
     u_short *reason, struct pf_pdesc *pd)
 {
-	struct mbuf		*m = *m0;
+	struct mbuf		*m;
 	struct pf_rule		*r;
-	struct ip6_hdr		*h = mtod(m, struct ip6_hdr *);
+	struct ip6_hdr		*h = pbuf->pb_data;
 	int			 off;
 	struct ip6_ext		 ext;
 /* adi XXX */
@@ -1823,6 +2048,7 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kif *kif,
 	u_int16_t		 fr_max;
 	int			 asd = 0;
 	struct pf_ruleset	*ruleset = NULL;
+	struct ifnet		*ifp = pbuf->pb_ifp;
 
 	r = TAILQ_FIRST(pf_main_ruleset.rules[PF_RULESET_SCRUB].active.ptr);
 	while (r != NULL) {
@@ -1838,11 +2064,11 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kif *kif,
 			r = r->skip[PF_SKIP_PROTO].ptr;
 #endif
 		else if (PF_MISMATCHAW(&r->src.addr,
-		    (struct pf_addr *)&h->ip6_src, AF_INET6,
+		    (struct pf_addr *)(uintptr_t)&h->ip6_src, AF_INET6,
 		    r->src.neg, kif))
 			r = r->skip[PF_SKIP_SRC_ADDR].ptr;
 		else if (PF_MISMATCHAW(&r->dst.addr,
-		    (struct pf_addr *)&h->ip6_dst, AF_INET6,
+		    (struct pf_addr *)(uintptr_t)&h->ip6_dst, AF_INET6,
 		    r->dst.neg, NULL))
 			r = r->skip[PF_SKIP_DST_ADDR].ptr;
 		else {
@@ -1865,7 +2091,8 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kif *kif,
 	}
 
 	/* Check for illegal packets */
-	if ((int)(sizeof (struct ip6_hdr) + IPV6_MAXPACKET) < m->m_pkthdr.len)
+	if ((uint32_t)(sizeof (struct ip6_hdr) + IPV6_MAXPACKET) <
+	    pbuf->pb_packet_len)
 		goto drop;
 
 	off = sizeof (struct ip6_hdr);
@@ -1879,7 +2106,7 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kif *kif,
 		case IPPROTO_AH:
 		case IPPROTO_ROUTING:
 		case IPPROTO_DSTOPTS:
-			if (!pf_pull_hdr(m, off, &ext, sizeof (ext), NULL,
+			if (!pf_pull_hdr(pbuf, off, &ext, sizeof (ext), NULL,
 			    NULL, AF_INET6))
 				goto shortpkt;
 			/*
@@ -1964,7 +2191,7 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kif *kif,
 		plen = ntohs(h->ip6_plen);
 	if (plen == 0)
 		goto drop;
-	if ((int)(sizeof (struct ip6_hdr) + plen) > m->m_pkthdr.len)
+	if ((uint32_t)(sizeof (struct ip6_hdr) + plen) > pbuf->pb_packet_len)
 		goto shortpkt;
 
 	/* Enforce a minimum ttl, may cause endless packet loops */
@@ -1978,7 +2205,7 @@ fragment:
 		goto drop;
 	plen = ntohs(h->ip6_plen);
 
-	if (!pf_pull_hdr(m, off, &frag, sizeof (frag), NULL, NULL, AF_INET6))
+	if (!pf_pull_hdr(pbuf, off, &frag, sizeof (frag), NULL, NULL, AF_INET6))
 		goto shortpkt;
 	fragoff = ntohs(frag.ip6f_offlg & IP6F_OFF_MASK);
 	pd->proto = frag.ip6f_nxt;
@@ -1988,9 +2215,10 @@ fragment:
 	       goto badfrag;
 	
 	fr_max = fragoff + plen - (off - sizeof(struct ip6_hdr));
-	DPFPRINTF(("0x%llx IPv6 frag plen %u mff %d off %u fragoff %u "
-	    "fr_max %u\n", (uint64_t)VM_KERNEL_ADDRPERM(m), plen, mff, off,
-	    fragoff, fr_max));
+// XXX SCW: mbuf-specific
+//	DPFPRINTF(("0x%llx IPv6 frag plen %u mff %d off %u fragoff %u "
+//	    "fr_max %u\n", (uint64_t)VM_KERNEL_ADDRPERM(m), plen, mff, off,
+//	    fragoff, fr_max));
 	
 	if ((r->rule_flag & (PFRULE_FRAGCROP|PFRULE_FRAGDROP)) == 0) {
 		/* Fully buffer all of the fragments */
@@ -2003,13 +2231,22 @@ fragment:
 		if (pff != NULL && (pff->fr_flags & PFFRAG_SEENLAST) &&
 		    fr_max > pff->fr_max)
 			goto badfrag;
+
+		if ((m = pbuf_to_mbuf(pbuf, TRUE)) == NULL) {
+			REASON_SET(reason, PFRES_MEMORY);
+			return (PF_DROP);
+		}
 		
+		/* Restore iph pointer after pbuf_to_mbuf() */
+		h = mtod(m, struct ip6_hdr *);
+
 		/* Get an entry for the fragment queue */
 		frent = pool_get(&pf_frent_pl, PR_NOWAIT);
 		if (frent == NULL) {
 			REASON_SET(reason, PFRES_MEMORY);
 			return (PF_DROP);
 		}
+
 		pf_nfrents++;
 		frent->fr_ip6 = h;
 		frent->fr_m = m;
@@ -2019,15 +2256,16 @@ fragment:
 		/* Might return a completely reassembled mbuf, or NULL */
 		DPFPRINTF(("reass IPv6 frag %d @ %d-%d\n",
 		     ntohl(frag.ip6f_ident), fragoff, fr_max));
-		*m0 = m = pf_reassemble6(m0, &pff, frent, mff);
+		m = pf_reassemble6(&m, &pff, frent, mff);
 		
 		if (m == NULL)
 			return (PF_DROP);
+
+		pbuf_init_mbuf(pbuf, m, ifp);
+		h = pbuf->pb_data;
 		
 		if (pff != NULL && (pff->fr_flags & PFFRAG_DROP))
 			goto drop;
-		
-		h = mtod(m, struct ip6_hdr *);
 	}
 	else if (dir == PF_IN || !(pd->pf_mtag->pftag_flags & PF_TAG_FRAGCACHE)) {
 		/* non-buffering fragment cache (overlaps: see RFC 5722) */
@@ -2044,14 +2282,26 @@ fragment:
 		       goto badfrag;
 		}
 		
-		*m0 = m = pf_frag6cache(m0, h, &frag, &pff, off, mff,
+		if ((m = pbuf_to_mbuf(pbuf, TRUE)) == NULL) {
+			goto no_mem;
+		}
+
+		/* Restore iph pointer after pbuf_to_mbuf() */
+		h = mtod(m, struct ip6_hdr *);
+
+		m = pf_frag6cache(&m, h, &frag, &pff, off, mff,
 		     (r->rule_flag & PFRULE_FRAGDROP) ? 1 : 0, &nomem);
 		if (m == NULL) {
+			// Note: pf_frag6cache() has already m_freem'd the mbuf
 			if (nomem)
 				goto no_mem;
 			goto drop;
 		}
 		
+		pbuf_init_mbuf(pbuf, m, ifp);
+		pd->pf_mtag = pf_find_mtag_pbuf(pbuf);
+		h = pbuf->pb_data;
+
 		if (dir == PF_IN)
 			pd->pf_mtag->pftag_flags |= PF_TAG_FRAGCACHE;
 		
@@ -2084,14 +2334,14 @@ fragment:
   dropout:
 	if (pff != NULL)
 		pf_free_fragment(pff);
-	if (r != NULL && r->log)
-		PFLOG_PACKET(kif, h, m, AF_INET6, dir, *reason, r, NULL, NULL, pd);
+	if (r != NULL && r->log && pbuf_is_valid(pbuf))
+		PFLOG_PACKET(kif, h, pbuf, AF_INET6, dir, *reason, r, NULL, NULL, pd);
 	return (PF_DROP);
 }
 #endif /* INET6 */
 
 int
-pf_normalize_tcp(int dir, struct pfi_kif *kif, struct mbuf *m, int ipoff,
+pf_normalize_tcp(int dir, struct pfi_kif *kif, pbuf_t *pbuf, int ipoff,
     int off, void *h, struct pf_pdesc *pd)
 {
 #pragma unused(ipoff, h)
@@ -2134,7 +2384,7 @@ pf_normalize_tcp(int dir, struct pfi_kif *kif, struct mbuf *m, int ipoff,
 		    &r->dst.xport, &dxport))
 			r = r->skip[PF_SKIP_DST_PORT].ptr;
 		else if (r->os_fingerprint != PF_OSFP_ANY &&
-		    !pf_osfp_match(pf_osfp_fingerprint(pd, m, off, th),
+		    !pf_osfp_match(pf_osfp_fingerprint(pd, pbuf, off, th),
 		    r->os_fingerprint))
 			r = TAILQ_NEXT(r, entries);
 		else {
@@ -2208,25 +2458,24 @@ pf_normalize_tcp(int dir, struct pfi_kif *kif, struct mbuf *m, int ipoff,
 	/* copy back packet headers if we sanitized */
 	/* Process options */
 	if (r->max_mss) {
-		int rv = pf_normalize_tcpopt(r, dir, kif, pd, m, th, off,
+		int rv = pf_normalize_tcpopt(r, dir, kif, pd, pbuf, th, off,
 		    &rewrite);
 		if (rv == PF_DROP)
 			return rv;
-		m = pd->mp;
+		pbuf = pd->mp;
 	}
 
 	if (rewrite) {
-		struct mbuf *mw = pf_lazy_makewritable(pd, m,
-		    off + sizeof (*th));
-		if (!mw) {
+		if (pf_lazy_makewritable(pd, pbuf,
+		    off + sizeof (*th)) == NULL) {
 			REASON_SET(&reason, PFRES_MEMORY);
 			if (r->log)
-				PFLOG_PACKET(kif, h, m, AF_INET, dir, reason,
+				PFLOG_PACKET(kif, h, pbuf, AF_INET, dir, reason,
 				    r, 0, 0, pd);
 			return PF_DROP;
 		}
 
-		m_copyback(mw, off, sizeof (*th), th);
+		pbuf_copy_back(pbuf, off, sizeof (*th), th);
 	}
 
 	return (PF_PASS);
@@ -2234,12 +2483,12 @@ pf_normalize_tcp(int dir, struct pfi_kif *kif, struct mbuf *m, int ipoff,
 tcp_drop:
 	REASON_SET(&reason, PFRES_NORM);
 	if (rm != NULL && r->log)
-		PFLOG_PACKET(kif, h, m, AF_INET, dir, reason, r, NULL, NULL, pd);
+		PFLOG_PACKET(kif, h, pbuf, AF_INET, dir, reason, r, NULL, NULL, pd);
 	return (PF_DROP);
 }
 
 int
-pf_normalize_tcp_init(struct mbuf *m, int off, struct pf_pdesc *pd,
+pf_normalize_tcp_init(pbuf_t *pbuf, int off, struct pf_pdesc *pd,
     struct tcphdr *th, struct pf_state_peer *src, struct pf_state_peer *dst)
 {
 #pragma unused(dst)
@@ -2257,14 +2506,14 @@ pf_normalize_tcp_init(struct mbuf *m, int off, struct pf_pdesc *pd,
 	switch (pd->af) {
 #if INET
 	case AF_INET: {
-		struct ip *h = mtod(m, struct ip *);
+		struct ip *h = pbuf->pb_data;
 		src->scrub->pfss_ttl = h->ip_ttl;
 		break;
 	}
 #endif /* INET */
 #if INET6
 	case AF_INET6: {
-		struct ip6_hdr *h = mtod(m, struct ip6_hdr *);
+		struct ip6_hdr *h = pbuf->pb_data;
 		src->scrub->pfss_ttl = h->ip6_hlim;
 		break;
 	}
@@ -2281,7 +2530,7 @@ pf_normalize_tcp_init(struct mbuf *m, int off, struct pf_pdesc *pd,
 
 
 	if (th->th_off > (sizeof (struct tcphdr) >> 2) && src->scrub &&
-	    pf_pull_hdr(m, off, hdr, th->th_off << 2, NULL, NULL, pd->af)) {
+	    pf_pull_hdr(pbuf, off, hdr, th->th_off << 2, NULL, NULL, pd->af)) {
 		/* Diddle with TCP options */
 		int hlen;
 		opt = hdr + sizeof (struct tcphdr);
@@ -2334,12 +2583,12 @@ pf_normalize_tcp_cleanup(struct pf_state *state)
 }
 
 int
-pf_normalize_tcp_stateful(struct mbuf *m, int off, struct pf_pdesc *pd,
+pf_normalize_tcp_stateful(pbuf_t *pbuf, int off, struct pf_pdesc *pd,
     u_short *reason, struct tcphdr *th, struct pf_state *state,
     struct pf_state_peer *src, struct pf_state_peer *dst, int *writeback)
 {
 	struct timeval uptime;
-	u_int32_t tsval, tsecr;
+	u_int32_t tsval = 0, tsecr = 0;
 	u_int tsval_from_last;
 	u_int8_t hdr[60];
 	u_int8_t *opt;
@@ -2357,7 +2606,7 @@ pf_normalize_tcp_stateful(struct mbuf *m, int off, struct pf_pdesc *pd,
 #if INET
 	case AF_INET: {
 		if (src->scrub) {
-			struct ip *h = mtod(m, struct ip *);
+			struct ip *h = pbuf->pb_data;
 			if (h->ip_ttl > src->scrub->pfss_ttl)
 				src->scrub->pfss_ttl = h->ip_ttl;
 			h->ip_ttl = src->scrub->pfss_ttl;
@@ -2368,7 +2617,7 @@ pf_normalize_tcp_stateful(struct mbuf *m, int off, struct pf_pdesc *pd,
 #if INET6
 	case AF_INET6: {
 		if (src->scrub) {
-			struct ip6_hdr *h = mtod(m, struct ip6_hdr *);
+			struct ip6_hdr *h = pbuf->pb_data;
 			if (h->ip6_hlim > src->scrub->pfss_ttl)
 				src->scrub->pfss_ttl = h->ip6_hlim;
 			h->ip6_hlim = src->scrub->pfss_ttl;
@@ -2381,7 +2630,7 @@ pf_normalize_tcp_stateful(struct mbuf *m, int off, struct pf_pdesc *pd,
 	if (th->th_off > (sizeof (struct tcphdr) >> 2) &&
 	    ((src->scrub && (src->scrub->pfss_flags & PFSS_TIMESTAMP)) ||
 	    (dst->scrub && (dst->scrub->pfss_flags & PFSS_TIMESTAMP))) &&
-	    pf_pull_hdr(m, off, hdr, th->th_off << 2, NULL, NULL, pd->af)) {
+	    pf_pull_hdr(pbuf, off, hdr, th->th_off << 2, NULL, NULL, pd->af)) {
 		/* Diddle with TCP options */
 		int hlen;
 		opt = hdr + sizeof (struct tcphdr);
@@ -2451,13 +2700,13 @@ pf_normalize_tcp_stateful(struct mbuf *m, int off, struct pf_pdesc *pd,
 			/* Copyback the options, caller copys back header */
 			int optoff = off + sizeof (*th);
 			int optlen = (th->th_off << 2) - sizeof (*th);
-			m = pf_lazy_makewritable(pd, m, optoff + optlen);
-			if (!m) {
+			if (pf_lazy_makewritable(pd, pbuf, optoff + optlen) ==
+			    NULL) {
 				REASON_SET(reason, PFRES_MEMORY);
 				return PF_DROP;
 			}
 			*writeback = optoff + optlen;
-			m_copyback(m, optoff, optlen, hdr + sizeof (*th));
+			pbuf_copy_back(pbuf, optoff, optlen, hdr + sizeof(*th));
 		}
 	}
 
@@ -2735,7 +2984,7 @@ pf_normalize_tcp_stateful(struct mbuf *m, int off, struct pf_pdesc *pd,
 
 static int
 pf_normalize_tcpopt(struct pf_rule *r, int dir, struct pfi_kif *kif,
-    struct pf_pdesc *pd, struct mbuf *m, struct tcphdr *th, int off,
+    struct pf_pdesc *pd, pbuf_t *pbuf, struct tcphdr *th, int off,
     int *rewrptr)
 {
 #pragma unused(dir, kif)
@@ -2750,7 +2999,7 @@ pf_normalize_tcpopt(struct pf_rule *r, int dir, struct pfi_kif *kif,
 	thoff = th->th_off << 2;
 	cnt = thoff - sizeof (struct tcphdr);
 
-	if (cnt > 0 && !pf_pull_hdr(m, off + sizeof (*th), opts, cnt,
+	if (cnt > 0 && !pf_pull_hdr(pbuf, off + sizeof (*th), opts, cnt,
 	    NULL, NULL, af))
 		return PF_DROP;
 
@@ -2776,8 +3025,8 @@ pf_normalize_tcpopt(struct pf_rule *r, int dir, struct pfi_kif *kif,
 				 *  Only do the TCP checksum fixup if delayed
 				 * checksum calculation will not be performed.
 				 */
-				if (m->m_pkthdr.rcvif ||
-				    !(m->m_pkthdr.csum_flags & CSUM_TCP))
+				if (pbuf->pb_ifp ||
+				    !(*pbuf->pb_csum_flags & CSUM_TCP))
 					th->th_sum = pf_cksum_fixup(th->th_sum,
 					    *mss, htons(r->max_mss), 0);
 				*mss = htons(r->max_mss);
@@ -2790,21 +3039,21 @@ pf_normalize_tcpopt(struct pf_rule *r, int dir, struct pfi_kif *kif,
 	}
 
 	if (rewrite) {
-		struct mbuf *mw;
 		u_short reason;
 
-		mw = pf_lazy_makewritable(pd, pd->mp,
-		    off + sizeof (*th) + thoff);
-		if (!mw) {
+		VERIFY(pbuf == pd->mp);
+
+		if (pf_lazy_makewritable(pd, pd->mp,
+		    off + sizeof (*th) + thoff) == NULL) {
 			REASON_SET(&reason, PFRES_MEMORY);
 			if (r->log)
-				PFLOG_PACKET(kif, h, m, AF_INET, dir, reason,
+				PFLOG_PACKET(kif, h, pbuf, AF_INET, dir, reason,
 				    r, 0, 0, pd);
 			return PF_DROP;
 		}
 
 		*rewrptr = 1;
-		m_copyback(mw, off + sizeof (*th), thoff - sizeof (*th), opts);
+		pbuf_copy_back(pd->mp, off + sizeof (*th), thoff - sizeof (*th), opts);
 	}
 
 	return PF_PASS;

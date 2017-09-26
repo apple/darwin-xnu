@@ -280,8 +280,6 @@ struct vm_page {
 					   start again at top of chain */
 			unusual:1,	/* Page is absent, error, restart or
 					   page locked */
-			encrypted:1,	/* encrypted for secure swap (O) */
-			encrypted_cleaning:1,	/* encrypting page */
 			cs_validated:1,    /* code-signing: page was checked */	
 			cs_tainted:1,	   /* code-signing: page is tainted */
 			cs_nx:1,	   /* code-signing: page is nx */
@@ -289,10 +287,12 @@ struct vm_page {
 		        lopage:1,
 			slid:1,
 		        written_by_kernel:1,	/* page was written by kernel (i.e. decompressed) */
-			__unused_object_bits:5;  /* 5 bits available here */
+			__unused_object_bits:7;  /* 7 bits available here */
 
+#if    !defined(__arm__) && !defined(__arm64__)
 	ppnum_t		phys_page;	/* Physical address of page, passed
 					 *  to pmap_enter (read-only) */
+#endif
 };
 
 
@@ -302,6 +302,36 @@ extern vm_page_t	vm_page_array_beginning_addr;
 extern vm_page_t	vm_page_array_ending_addr;
 
 
+#if defined(__arm__) || defined(__arm64__)
+
+extern	unsigned int vm_first_phys_ppnum;
+
+struct vm_page_with_ppnum {
+	struct	vm_page	vm_page_wo_ppnum;
+
+	ppnum_t	phys_page;
+};
+typedef struct vm_page_with_ppnum *vm_page_with_ppnum_t;
+
+
+static inline ppnum_t VM_PAGE_GET_PHYS_PAGE(vm_page_t m)
+{
+	if (m >= vm_page_array_beginning_addr && m < vm_page_array_ending_addr)
+		return ((ppnum_t)((uintptr_t)(m - vm_page_array_beginning_addr) + vm_first_phys_ppnum));
+	else
+		return (((vm_page_with_ppnum_t)m)->phys_page);
+}
+
+#define VM_PAGE_SET_PHYS_PAGE(m, ppnum)		\
+	MACRO_BEGIN				\
+	if ((m) < vm_page_array_beginning_addr || (m) >= vm_page_array_ending_addr)	\
+		((vm_page_with_ppnum_t)(m))->phys_page = ppnum;	\
+	assert(ppnum == VM_PAGE_GET_PHYS_PAGE(m));		\
+	MACRO_END
+
+#define VM_PAGE_GET_COLOR(m)    (VM_PAGE_GET_PHYS_PAGE(m) & vm_color_mask)
+
+#else	/* defined(__arm__) || defined(__arm64__) */
 
 
 struct vm_page_with_ppnum {
@@ -316,21 +346,10 @@ typedef struct vm_page_with_ppnum *vm_page_with_ppnum_t;
 	(page)->phys_page = ppnum;		\
 	MACRO_END
 
+#define VM_PAGE_GET_CLUMP(m)    ((VM_PAGE_GET_PHYS_PAGE(m)) >> vm_clump_shift)
+#define VM_PAGE_GET_COLOR(m)    ((VM_PAGE_GET_CLUMP(m)) & vm_color_mask)
 
-
-
-#define DEBUG_ENCRYPTED_SWAP	1
-#if DEBUG_ENCRYPTED_SWAP
-#define ASSERT_PAGE_DECRYPTED(page) 					\
-	MACRO_BEGIN							\
-	if ((page)->encrypted) {					\
-		panic("VM page %p should not be encrypted here\n",	\
-		      (page));						\
-	}								\
-	MACRO_END
-#else	/* DEBUG_ENCRYPTED_SWAP */
-#define ASSERT_PAGE_DECRYPTED(page) assert(!(page)->encrypted)
-#endif	/* DEBUG_ENCRYPTED_SWAP */
+#endif	/* defined(__arm__) || defined(__arm64__) */
 
 
 
@@ -474,6 +493,122 @@ MACRO_END
 
 
 /*
+ * These are helper macros for vm_page_queue_enter_clump to assist
+ * with conditional compilation (release / debug / development)
+ */
+#if DEVELOPMENT || DEBUG
+
+#define __DEBUG_CHECK_BUDDIES(__check, __prev, __p, field)                                               \
+MACRO_BEGIN                                                                                              \
+    if(__check) {   /* if first forward buddy.. */                                                       \
+        if(__prev) {   /* ..and if a backward buddy was found, verify link consistency  */               \
+            assert(__p == (vm_page_t) VM_PAGE_UNPACK_PTR(__prev->next));                                 \
+            assert(__prev == (vm_page_queue_entry_t) VM_PAGE_UNPACK_PTR(__p->field.prev));               \
+        }                                                                                                \
+        __check=0;                                                                                       \
+    }                                                                                                    \
+MACRO_END
+
+#define __DEBUG_VERIFY_LINKS(__i, __first, __n_free, __last_next)                                        \
+MACRO_BEGIN                                                                                              \
+    vm_page_queue_entry_t __tmp;                                                                         \
+    for(__i=0, __tmp=__first; __i<__n_free; __i++)                                                       \
+        __tmp=(vm_page_queue_entry_t) VM_PAGE_UNPACK_PTR(__tmp->next);                                   \
+    assert(__tmp == __last_next);                                                                        \
+MACRO_END
+
+#define __DEBUG_STAT_INCREMENT_INRANGE              vm_clump_inrange++
+#define __DEBUG_STAT_INCREMENT_INSERTS              vm_clump_inserts++
+#define __DEBUG_STAT_INCREMENT_PROMOTES(__n_free)   vm_clump_promotes+=__n_free
+
+#else
+
+#define __DEBUG_CHECK_BUDDIES(__check, __prev, __p, field)  __check=1
+#define __DEBUG_VERIFY_LINKS(__i, __first, __n_free, __last_next)
+#define __DEBUG_STAT_INCREMENT_INRANGE
+#define __DEBUG_STAT_INCREMENT_INSERTS
+#define __DEBUG_STAT_INCREMENT_PROMOTES(__n_free)
+
+#endif  /* if DEVELOPMENT || DEBUG */
+
+/*
+ *	Macro:	vm_page_queue_enter_clump
+ *	Function:
+ *		Insert a new element into the free queue and clump pages within the same 16K boundary together
+ *		
+ *	Header:
+ *		void vm_page_queue_enter_clump(q, elt, type, field)
+ *			queue_t q;
+ *			<type> elt;
+ *			<type> is what's in our queue
+ *			<field> is the chain field in (*<type>)
+ *	Note:
+ *		This should only be used with Method 2 queue iteration (element chains)
+ */
+#if defined(__x86_64__)
+#define vm_page_queue_enter_clump(head, elt, type, field)                                                \
+MACRO_BEGIN                                                                                              \
+    ppnum_t __clump_num;                                                                                 \
+    unsigned int __i, __n, __n_free=1, __check=1;                                                        \
+    vm_page_queue_entry_t __prev=0, __next, __last, __last_next, __first, __first_prev, __head_next;     \
+    vm_page_t __p;                                                                                       \
+                                                                                                         \
+    /* if elt is part of vm_pages[] */                                                                   \
+    if((elt) >= vm_page_array_beginning_addr && (elt) < vm_page_array_boundary) {                        \
+        __first = __last = (vm_page_queue_entry_t) (elt);                                                \
+        __clump_num = VM_PAGE_GET_CLUMP(elt);                                                            \
+        __n = VM_PAGE_GET_PHYS_PAGE(elt) & vm_clump_mask;                                                \
+        /* scan backward looking for a buddy page */                                                     \
+        for(__i=0, __p=(elt)-1; __i<__n && __p>=vm_page_array_beginning_addr; __i++, __p--) {            \
+            if(__p->vm_page_q_state == VM_PAGE_ON_FREE_Q && __clump_num == VM_PAGE_GET_CLUMP(__p)) {     \
+                if(__prev == 0) __prev = (vm_page_queue_entry_t) __p;                                    \
+                __first = (vm_page_queue_entry_t) __p;                                                   \
+                __n_free++;                                                                              \
+            }                                                                                            \
+        }                                                                                                \
+        /* scan forward looking for a buddy page */                                                      \
+        for(__i=__n+1, __p=(elt)+1; __i<vm_clump_size && __p<vm_page_array_boundary; __i++, __p++) {     \
+            if(__p->vm_page_q_state == VM_PAGE_ON_FREE_Q && __clump_num == VM_PAGE_GET_CLUMP(__p)) {     \
+                __DEBUG_CHECK_BUDDIES(__check, __prev, __p, field);                                      \
+                if(__prev == 0) __prev = (vm_page_queue_entry_t) VM_PAGE_UNPACK_PTR(__p->field.prev);    \
+                __last = (vm_page_queue_entry_t) __p;                                                    \
+                __n_free++;                                                                              \
+            }                                                                                            \
+        }                                                                                                \
+        __DEBUG_STAT_INCREMENT_INRANGE;                                                                  \
+    }                                                                                                    \
+    /* if elt is not part of vm_pages or if 1st page in clump, insert at tail */                         \
+    if(__prev == 0) __prev = (vm_page_queue_entry_t) VM_PAGE_UNPACK_PTR((head)->prev);                   \
+                                                                                                         \
+    /* insert the element */                                                                             \
+    __next = (vm_page_queue_entry_t) VM_PAGE_UNPACK_PTR(__prev->next);                                   \
+    (elt)->field.next = __prev->next;                                                                    \
+    (elt)->field.prev = __next->prev;                                                                    \
+    __prev->next = __next->prev = VM_PAGE_PACK_PTR(elt);                                                 \
+    __DEBUG_STAT_INCREMENT_INSERTS;                                                                      \
+                                                                                                         \
+    /* check if clump needs to be promoted to head */                                                    \
+    if(__n_free >= vm_clump_promote_threshold && __n_free > 1) {                                         \
+        __first_prev = (vm_page_queue_entry_t) VM_PAGE_UNPACK_PTR(__first->prev);                        \
+        if(__first_prev != (head)) { /* if not at head already */                                        \
+            __last_next = (vm_page_queue_entry_t) VM_PAGE_UNPACK_PTR(__last->next);                      \
+            /* verify that the links within the clump are consistent */                                  \
+            __DEBUG_VERIFY_LINKS(__i, __first, __n_free, __last_next);                                   \
+            /* promote clump to head */                                                                  \
+            __first_prev->next = __last->next;                                                           \
+            __last_next->prev = __first->prev;                                                           \
+            __first->prev = VM_PAGE_PACK_PTR(head);                                                      \
+            __last->next = (head)->next;                                                                 \
+            __head_next = (vm_page_queue_entry_t) VM_PAGE_UNPACK_PTR((head)->next);                      \
+            __head_next->prev = VM_PAGE_PACK_PTR(__last);                                                \
+            (head)->next = VM_PAGE_PACK_PTR(__first);                                                    \
+            __DEBUG_STAT_INCREMENT_PROMOTES(__n_free);                                                   \
+        }                                                                                                \
+    }                                                                                                    \
+MACRO_END
+#endif
+
+/*
  *	Macro:	vm_page_queue_enter_first
  *	Function:
  *	Insert a new element at the head of the queue.
@@ -563,6 +698,44 @@ MACRO_BEGIN							\
 	(entry)->field.prev = 0;				\
 MACRO_END
 
+
+/*
+ *	Macro:  vm_page_queue_remove_first_with_clump
+ *	Function:
+ *		Remove and return the entry at the head of the free queue
+ *      end is set to 1 to indicate that we just returned the last page in a clump
+ *
+ *	Header:
+ *		vm_page_queue_remove_first_with_clump(head, entry, type, field, end)
+ *		entry is returned by reference
+ *		end is returned by reference
+ *	Note:
+ *		This should only be used with Method 2 queue iteration (element chains)
+ */
+#if defined(__x86_64__)
+#define vm_page_queue_remove_first_with_clump(head, entry, type, field, end)                              \
+MACRO_BEGIN                                                                                               \
+    vm_page_queue_entry_t   __next;                                                                       \
+                                                                                                          \
+    (entry) = (type)(void *) VM_PAGE_UNPACK_PTR(((head)->next));                                          \
+    __next = ((vm_page_queue_entry_t)VM_PAGE_UNPACK_PTR((entry)->field.next));                            \
+                                                                                                          \
+    (end)=0;                                                                                              \
+    if ((head) == __next) {                                                                               \
+        (head)->prev = VM_PAGE_PACK_PTR(head);                                                            \
+        (end)=1;                                                                                          \
+    }                                                                                                     \
+    else {                                                                                                \
+        ((type)(void *)(__next))->field.prev = VM_PAGE_PACK_PTR(head);                                    \
+        if(VM_PAGE_GET_CLUMP(entry) != VM_PAGE_GET_CLUMP(((type)(void *)(__next)))) (end)=1;              \
+    }                                                                                                     \
+    (head)->next = VM_PAGE_PACK_PTR(__next);                                                              \
+                                                                                                          \
+    (entry)->field.next = 0;                                                                              \
+    (entry)->field.prev = 0;                                                                              \
+                                                                                                          \
+MACRO_END
+#endif
 
 /*
  *	Macro:	vm_page_queue_end
@@ -910,8 +1083,6 @@ lck_spin_t	vm_objects_wired_lock;
 
 #define	VM_PAGE_BG_DISABLED	0
 #define	VM_PAGE_BG_LEVEL_1	1
-#define	VM_PAGE_BG_LEVEL_2	2
-#define	VM_PAGE_BG_LEVEL_3	3
 
 extern
 vm_page_queue_head_t	vm_page_queue_background;
@@ -919,8 +1090,6 @@ extern
 uint64_t	vm_page_background_promoted_count;
 extern
 uint32_t	vm_page_background_count;
-extern
-uint32_t	vm_page_background_limit;
 extern
 uint32_t	vm_page_background_target;
 extern
@@ -1021,10 +1190,10 @@ extern unsigned int	vm_page_free_wanted_secluded;
 				/* how many threads are waiting for secluded memory */
 #endif /* CONFIG_SECLUDED_MEMORY */
 
-extern ppnum_t	vm_page_fictitious_addr;
+extern const ppnum_t	vm_page_fictitious_addr;
 				/* (fake) phys_addr of fictitious pages */
 
-extern ppnum_t	vm_page_guard_addr;
+extern const ppnum_t	vm_page_guard_addr;
 				/* (fake) phys_addr of guard pages */
 
 
@@ -1145,8 +1314,7 @@ extern void		vm_page_reactivate_local(uint32_t lid, boolean_t force, boolean_t n
 extern void		vm_page_rename(
 					vm_page_t		page,
 					vm_object_t		new_object,
-					vm_object_offset_t	new_offset,
-					boolean_t		encrypted_ok);
+					vm_object_offset_t	new_offset);
 
 extern void		vm_page_insert(
 					vm_page_t		page,
@@ -1253,9 +1421,15 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
 
 #else /* CONFIG_JETSAM */
 
+#if CONFIG_EMBEDDED
+
+#define VM_CHECK_MEMORYSTATUS do {} while(0)
+
+#else /* CONFIG_EMBEDDED */
 
 #define VM_CHECK_MEMORYSTATUS	vm_pressure_response()
 
+#endif /* CONFIG_EMBEDDED */
 
 #endif /* CONFIG_JETSAM */
 
@@ -1264,11 +1438,22 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
  *	protected by the object lock.
  */
 
+#if CONFIG_EMBEDDED
+#define SET_PAGE_DIRTY(m, set_pmap_modified)				\
+		MACRO_BEGIN						\
+		vm_page_t __page__ = (m);				\
+		if (__page__->dirty == FALSE && (set_pmap_modified)) {	\
+			pmap_set_modify(VM_PAGE_GET_PHYS_PAGE(__page__)); \
+		}							\
+		__page__->dirty = TRUE;					\
+		MACRO_END
+#else /* CONFIG_EMBEDDED */
 #define SET_PAGE_DIRTY(m, set_pmap_modified)				\
 		MACRO_BEGIN						\
 		vm_page_t __page__ = (m);				\
 		__page__->dirty = TRUE;					\
 		MACRO_END
+#endif /* CONFIG_EMBEDDED */
 
 #define PAGE_ASSERT_WAIT(m, interruptible)			\
 		(((m)->wanted = TRUE),				\

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -196,7 +196,7 @@ flowadv_thread_cont(int err)
 {
 #pragma unused(err)
 	for (;;) {
-		lck_mtx_assert(&fadv_lock, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(&fadv_lock, LCK_MTX_ASSERT_OWNED);
 		while (STAILQ_EMPTY(&fadv_list)) {
 			VERIFY(!fadv_active);
 			(void) msleep0(&fadv_list, &fadv_lock, (PSOCK | PSPIN),
@@ -215,7 +215,7 @@ flowadv_thread_cont(int err)
 			STAILQ_NEXT(fce, fce_link) = NULL;
 
 			lck_mtx_unlock(&fadv_lock);
-			switch (fce->fce_flowsrc) {
+			switch (fce->fce_flowsrc_type) {
 			case FLOWSRC_INPCB:
 				inp_flowadv(fce->fce_flowid);
 				break;
@@ -223,6 +223,7 @@ flowadv_thread_cont(int err)
 			case FLOWSRC_IFNET:
 				ifnet_flowadv(fce->fce_flowid);
 				break;
+
 
 			case FLOWSRC_PF:
 			default:

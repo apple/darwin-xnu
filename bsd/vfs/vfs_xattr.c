@@ -376,7 +376,7 @@ xattr_validatename(const char *name)
 	if (name == NULL || name[0] == '\0') {
 		return (EINVAL);
 	}
-	namelen = strnlen(name, XATTR_MAXNAMELEN);
+	namelen = strlen(name);
 	if (name[namelen] != '\0') 
 		return (ENAMETOOLONG);
 	
@@ -407,10 +407,14 @@ vnode_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsoperati
 {
 	int error;
 
-	if (vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS)
+	if (vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) {
 		error = VNOP_GETNAMEDSTREAM(vp, svpp, name, op, flags, context);
-	else
-		error = default_getnamedstream(vp, svpp, name, op, context);
+	} else {
+		if (flags)
+			error = ENOTSUP;
+		else
+			error = default_getnamedstream(vp, svpp, name, op, context);
+	}
 
 	if (error == 0) {
 		uint32_t streamflags = VISNAMEDSTREAM;
@@ -1602,7 +1606,7 @@ default_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size,
 	int error;
 
 	fileflags = FREAD;
-	if (bcmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
+	if (strcmp(name, XATTR_RESOURCEFORK_NAME) == 0) {
 		isrsrcfork = 1;
 		/*
 		 * Open the file locked (shared) since the Carbon
@@ -1623,7 +1627,7 @@ default_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size,
 	}
 
 	/* Get the Finder Info. */
-	if (bcmp(name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
+	if (strcmp(name, XATTR_FINDERINFO_NAME) == 0) {
 	
 		if (ainfo.finderinfo == NULL || ainfo.emptyfinderinfo) {
 			error = ENOATTR;
@@ -2113,7 +2117,7 @@ default_removexattr(vnode_t vp, const char *name, __unused int options, vfs_cont
 	int error;
 
 	fileflags = FREAD | FWRITE;
-	if (bcmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
+	if (strncmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
 		isrsrcfork = 1;
 		/*
 		 * Open the file locked (exclusive) since the Carbon
@@ -2140,7 +2144,7 @@ default_removexattr(vnode_t vp, const char *name, __unused int options, vfs_cont
 		++attrcount;
 
 	/* Clear the Finder Info. */
-	if (bcmp(name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
+	if (strncmp(name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
 		if (ainfo.finderinfo == NULL || ainfo.emptyfinderinfo) {
 			error = ENOATTR;
 			goto out;
@@ -2380,7 +2384,9 @@ default_listxattr(vnode_t vp, uio_t uio, size_t *size, __unused int options, vfs
 		count = ainfo.attrhdr->num_attrs;
 		for (i = 0, entry = ainfo.attr_entry; i < count && ATTR_VALID(entry, ainfo); i++) {
 			if (xattr_protected((const char *)entry->name) ||
-			    xattr_validatename((const char *)entry->name) != 0) {
+			    ((entry->namelen < XATTR_MAXNAMELEN) &&
+			     (entry->name[entry->namelen] == '\0') &&
+			     (xattr_validatename((const char *)entry->name) != 0))) {
 				entry = ATTR_NEXT(entry);
 				continue;
 			}

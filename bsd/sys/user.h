@@ -75,7 +75,9 @@ struct waitq_set;
 #include <sys/uio.h>
 #endif
 #ifdef XNU_KERNEL_PRIVATE
+#include <sys/resource.h>
 #include <sys/resourcevar.h>
+#include <sys/signal.h>
 #include <sys/signalvar.h>
 #endif
 #include <sys/vm.h>		/* XXX */
@@ -84,6 +86,7 @@ struct waitq_set;
 #ifdef KERNEL
 #ifdef BSD_KERNEL_PRIVATE
 #include <sys/pthread_internal.h> /* for uu_kwe entry */
+#include <sys/eventvar.h>
 #endif  /* BSD_KERNEL_PRIVATE */
 #ifdef __APPLE_API_PRIVATE
 #include <sys/eventvar.h>
@@ -134,14 +137,13 @@ struct uthread {
 			kevent_callback_t call;             /* per-event callback */
 			kqueue_continue_t cont;             /* whole call continuation */
 			filt_process_data_t process_data;   /* needed for filter processing */
-			uint8_t servicer_qos_index;         /* requested qos index of servicer */
 			uint64_t deadline;                  /* computed deadline for operation */
 			void *data;                         /* caller's private data */
 		} ss_kqueue_scan;                           /* saved state for kevent_scan() */
 		struct _kevent {
 			struct _kqueue_scan scan;           /* space for the generic data */
 			struct fileproc *fp;                /* fileproc we hold iocount on */
-			int fd;			            /* filedescriptor for kq */
+			int fd;                             /* fd for fileproc (if held) */
 			int eventcount;	                    /* user-level event count */
 			int eventout;                       /* number of events output */
 			struct filt_process_s process_data; /* space for process data fed thru */
@@ -216,8 +218,10 @@ struct uthread {
 	int		uu_dupfd;		/* fd in fdesc_open/dupfdopen */
         int		uu_defer_reclaims;
 
-	unsigned int uu_kqueue_bound;      /* qos index we are bound to service */
-	unsigned int uu_kqueue_flags;      /* if so, the flags being using */
+	struct kqueue *uu_kqueue_bound;           /* kqueue we are bound to service */
+	unsigned int uu_kqueue_qos_index;         /* qos index we are bound to service */
+	unsigned int uu_kqueue_flags;             /* the flags we are using */
+	boolean_t uu_kqueue_override_is_sync;     /* sync qos override applied to servicer */
 
 #ifdef JOE_DEBUG
         int		uu_iocount;

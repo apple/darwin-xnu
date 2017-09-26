@@ -83,6 +83,15 @@ const qos_policy_params_t thread_qos_policy_params = {
 	 * This table defines the highest IO priority that a thread marked with this
 	 * QoS class can have.
 	 */
+#if CONFIG_EMBEDDED
+	.qos_iotier[THREAD_QOS_UNSPECIFIED]             = THROTTLE_LEVEL_TIER0,
+	.qos_iotier[THREAD_QOS_USER_INTERACTIVE]        = THROTTLE_LEVEL_TIER0,
+	.qos_iotier[THREAD_QOS_USER_INITIATED]          = THROTTLE_LEVEL_TIER0,
+	.qos_iotier[THREAD_QOS_LEGACY]                  = THROTTLE_LEVEL_TIER0,
+	.qos_iotier[THREAD_QOS_UTILITY]                 = THROTTLE_LEVEL_TIER0,
+	.qos_iotier[THREAD_QOS_BACKGROUND]              = THROTTLE_LEVEL_TIER3,
+	.qos_iotier[THREAD_QOS_MAINTENANCE]             = THROTTLE_LEVEL_TIER3,
+#else
 	.qos_iotier[THREAD_QOS_UNSPECIFIED]             = THROTTLE_LEVEL_TIER0,
 	.qos_iotier[THREAD_QOS_USER_INTERACTIVE]        = THROTTLE_LEVEL_TIER0,
 	.qos_iotier[THREAD_QOS_USER_INITIATED]          = THROTTLE_LEVEL_TIER0,
@@ -90,6 +99,7 @@ const qos_policy_params_t thread_qos_policy_params = {
 	.qos_iotier[THREAD_QOS_UTILITY]                 = THROTTLE_LEVEL_TIER1,
 	.qos_iotier[THREAD_QOS_BACKGROUND]              = THROTTLE_LEVEL_TIER2, /* possibly overridden by bg_iotier */
 	.qos_iotier[THREAD_QOS_MAINTENANCE]             = THROTTLE_LEVEL_TIER3,
+#endif
 
 	/*
 	 * This table defines the highest QoS level that
@@ -433,6 +443,37 @@ thread_policy_set_internal(
 		return thread_affinity_set(thread, info->affinity_tag);
 	}
 
+#if CONFIG_EMBEDDED
+	case THREAD_BACKGROUND_POLICY:
+	{
+		thread_background_policy_t info;
+
+		if (count < THREAD_BACKGROUND_POLICY_COUNT) {
+			result = KERN_INVALID_ARGUMENT;
+			break;
+		}
+
+		if (thread->task != current_task()) {
+			result = KERN_PROTECTION_FAILURE;
+			break;
+		}
+
+		info = (thread_background_policy_t) policy_info;
+
+		int enable;
+
+		if (info->priority == THREAD_BACKGROUND_POLICY_DARWIN_BG)
+			enable = TASK_POLICY_ENABLE;
+		else
+			enable = TASK_POLICY_DISABLE;
+
+		int category = (current_thread() == thread) ? TASK_POLICY_INTERNAL : TASK_POLICY_EXTERNAL;
+
+		proc_set_thread_policy_locked(thread, category, TASK_POLICY_DARWIN_BG, enable, 0, &pend_token);
+
+		break;
+	}
+#endif /* CONFIG_EMBEDDED */
 
 	case THREAD_THROUGHPUT_QOS_POLICY:
 	{
@@ -854,6 +895,11 @@ thread_recompute_priority(
 			priority = BASEPRI_DEFAULT;
 	}
 
+#if CONFIG_EMBEDDED
+	/* No one can have a base priority less than MAXPRI_THROTTLE */
+	if (priority < MAXPRI_THROTTLE)
+		priority = MAXPRI_THROTTLE;
+#endif /* CONFIG_EMBEDDED */
 
 	sched_set_thread_base_priority(thread, priority);
 }
@@ -882,6 +928,23 @@ thread_policy_update_tasklocked(
 	thread->task_priority = priority;
 	thread->max_priority = max_priority;
 
+#if CONFIG_EMBEDDED
+	/*
+	 * When backgrounding a thread, iOS has the semantic that
+	 * realtime and fixed priority threads should be demoted
+	 * to timeshare background threads.
+	 *
+	 * On OSX, realtime and fixed priority threads don't lose their mode.
+	 *
+	 * TODO: Do this inside the thread policy update routine in order to avoid double
+	 * remove/reinsert for a runnable thread
+	 */
+	if ((max_priority <= MAXPRI_THROTTLE) && (old_max_priority > MAXPRI_THROTTLE)) {
+		sched_thread_mode_demote(thread, TH_SFLAG_THROTTLED);
+	} else if ((max_priority > MAXPRI_THROTTLE) && (old_max_priority <= MAXPRI_THROTTLE)) {
+		sched_thread_mode_undemote(thread, TH_SFLAG_THROTTLED);
+	}
+#endif /* CONFIG_EMBEDDED */
 
 	thread_policy_update_spinlocked(thread, TRUE, pend_token);
 
@@ -1195,45 +1258,6 @@ thread_policy_get(
 	return (result);
 }
 
-static volatile uint64_t unique_work_interval_id = 1; /* Start at 1, 0 is not a valid work interval ID */
-
-kern_return_t
-thread_policy_create_work_interval(
-	thread_t		thread,
-	uint64_t		*work_interval_id)
-{
-	thread_mtx_lock(thread);
-	if (thread->work_interval_id) {
-		/* already assigned a work interval ID */
-		thread_mtx_unlock(thread);
-		return (KERN_INVALID_VALUE);
-	}
-
-	thread->work_interval_id = OSIncrementAtomic64((volatile int64_t *)&unique_work_interval_id);
-	*work_interval_id = thread->work_interval_id;
-
-	thread_mtx_unlock(thread);
-	return KERN_SUCCESS;
-}
-
-kern_return_t
-thread_policy_destroy_work_interval(
-	thread_t		thread,
-	uint64_t		work_interval_id)
-{
-	thread_mtx_lock(thread);
-	if (work_interval_id == 0 || thread->work_interval_id == 0 || thread->work_interval_id != work_interval_id) {
-		/* work ID isn't valid or doesn't match previously assigned work interval ID */
-		thread_mtx_unlock(thread);
-		return (KERN_INVALID_ARGUMENT);
-	}
-
-	thread->work_interval_id = 0;
-
-	thread_mtx_unlock(thread);
-	return KERN_SUCCESS;
-}
-
 void
 thread_policy_create(thread_t thread)
 {
@@ -1338,6 +1362,10 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	    next.thep_qos                  != THREAD_QOS_UNSPECIFIED) {
 		next.thep_qos = MIN(task_effective.tep_qos_ceiling, next.thep_qos);
 	}
+
+	/* Apply the sync ipc qos override */
+	if (requested.thrp_qos_sync_ipc_override != THREAD_QOS_UNSPECIFIED)
+		next.thep_qos = MAX(requested.thrp_qos_sync_ipc_override, next.thep_qos);
 
 	/*
 	 * The QoS relative priority is only applicable when the original programmer's
@@ -1769,6 +1797,11 @@ thread_set_requested_policy_spinlocked(thread_t     thread,
 		case TASK_POLICY_QOS_IPC_OVERRIDE:
 			assert(category == TASK_POLICY_ATTRIBUTE);
 			requested.thrp_qos_ipc_override = value;
+			break;
+
+		case TASK_POLICY_QOS_SYNC_IPC_OVERRIDE:
+			assert(category == TASK_POLICY_ATTRIBUTE);
+			requested.thrp_qos_sync_ipc_override = value;
 			break;
 
 		case TASK_POLICY_TERMINATED:
@@ -2489,13 +2522,19 @@ proc_thread_qos_remove_override_internal(thread_t       thread,
 	prev_qos_override = thread_get_requested_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_OVERRIDE, NULL);
 
 	if (squash) {
+		int prev_ipc_override;
+		int prev_override;
+
 		/*
 		 * Remove the specified overrides, and set the current override as the new base QoS.
 		 * Return the new QoS value.
 		 */
+		prev_ipc_override = thread_get_requested_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_IPC_OVERRIDE, NULL);
+		prev_override = MAX(prev_qos_override, prev_ipc_override);
+
 		prev_qos = thread_get_requested_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS, NULL);
 
-		new_qos = MAX(prev_qos, prev_qos_override);
+		new_qos = MAX(prev_qos, prev_override);
 		if (new_qos != prev_qos)
 			proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS, new_qos, 0, &pend_token);
 	}
@@ -2621,6 +2660,8 @@ void proc_thread_qos_deallocate(thread_t thread)
 	/* This thread must have no more IPC overrides. */
 	assert(thread->ipc_overrides == 0);
 	assert(thread->requested_policy.thrp_qos_ipc_override == THREAD_QOS_UNSPECIFIED);
+	assert(thread->sync_ipc_overrides == 0);
+	assert(thread->requested_policy.thrp_qos_sync_ipc_override == THREAD_QOS_UNSPECIFIED);
 
 	/*
 	 * Clear out any lingering override objects.
@@ -2849,12 +2890,15 @@ thread_ipc_override(thread_t    thread,
                     boolean_t   is_new_override)
 {
 	struct task_pend_token pend_token = {};
+	boolean_t needs_update;
 
 	spl_t s = splsched();
 	thread_lock(thread);
 
 	uint32_t old_override = thread->requested_policy.thrp_qos_ipc_override;
 
+	assert(qos_override > THREAD_QOS_UNSPECIFIED);
+	assert(qos_override < THREAD_QOS_LAST);
 	if (is_new_override) {
 		if (thread->ipc_overrides++ == 0) {
 			/* This add is the first override for this thread */
@@ -2869,13 +2913,22 @@ thread_ipc_override(thread_t    thread,
 		assert(old_override > THREAD_QOS_UNSPECIFIED);
 	}
 
-	uint32_t new_override = MAX(old_override, qos_override);
+	/*
+	 * We can't allow lowering if there are several IPC overrides because
+	 * the caller can't possibly know the whole truth
+	 */
+	if (thread->ipc_overrides == 1) {
+		needs_update = qos_override != old_override;
+	} else {
+		needs_update = qos_override > old_override;
+	}
 
-	proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
-	                                  TASK_POLICY_QOS_IPC_OVERRIDE,
-	                                  new_override, 0, &pend_token);
-
-	assert(pend_token.tpt_update_sockets == 0);
+	if (needs_update) {
+		proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
+		                                  TASK_POLICY_QOS_IPC_OVERRIDE,
+		                                  qos_override, 0, &pend_token);
+		assert(pend_token.tpt_update_sockets == 0);
+	}
 
 	thread_unlock(thread);
 	splx(s);
@@ -2932,6 +2985,76 @@ thread_drop_ipc_override(thread_t thread)
 	thread_policy_update_complete_unlocked(thread, &pend_token);
 }
 
+void
+thread_add_sync_ipc_override(thread_t	thread)
+{
+	struct task_pend_token pend_token = {};
+
+	spl_t s = splsched();
+	thread_lock(thread);
+
+	uint32_t old_override __unused = thread->requested_policy.thrp_qos_sync_ipc_override;
+
+	if (thread->sync_ipc_overrides++ == 0) {
+		/* This add is the first override for this thread */
+		assert(old_override == THREAD_QOS_UNSPECIFIED);
+	} else {
+		/* There are already other overrides in effect for this thread */
+		assert(old_override == THREAD_QOS_USER_INTERACTIVE);
+		thread_unlock(thread);
+		splx(s);
+		return;
+	}
+
+	uint32_t new_override = THREAD_QOS_USER_INTERACTIVE;
+
+	proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
+	                                  TASK_POLICY_QOS_SYNC_IPC_OVERRIDE,
+	                                  new_override, 0, &pend_token);
+
+	assert(pend_token.tpt_update_sockets == 0);
+
+	thread_unlock(thread);
+	splx(s);
+
+	/*
+	 * this is only safe after rethrottle_thread supports
+	 * being called from spinlock context
+	 */
+	thread_policy_update_complete_unlocked(thread, &pend_token);
+}
+
+void
+thread_drop_sync_ipc_override(thread_t thread)
+{
+	struct task_pend_token pend_token = {};
+
+	spl_t s = splsched();
+	thread_lock(thread);
+
+	assert(thread->sync_ipc_overrides > 0);
+
+	if (--thread->sync_ipc_overrides == 0) {
+		/*
+		 * There are no more overrides for this thread, so we should
+		 * clear out the saturated override value
+		 */
+
+		proc_set_thread_policy_spinlocked(thread, TASK_POLICY_ATTRIBUTE,
+		                                  TASK_POLICY_QOS_SYNC_IPC_OVERRIDE, THREAD_QOS_UNSPECIFIED,
+		                                  0, &pend_token);
+	}
+
+	thread_unlock(thread);
+	splx(s);
+
+	/*
+	 * this is only safe after rethrottle_thread supports
+	 * being called from spinlock context
+	 */
+	thread_policy_update_complete_unlocked(thread, &pend_token);
+}
+
 /* Get current IPC override, may be called from spinlock context */
 uint32_t
 thread_get_ipc_override(thread_t thread)
@@ -2939,3 +3062,72 @@ thread_get_ipc_override(thread_t thread)
 	return proc_get_thread_policy_locked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_IPC_OVERRIDE, NULL);
 }
 
+/*
+ * This function will promote the thread priority
+ * since exec could block other threads calling
+ * proc_find on the proc. This boost must be removed
+ * via call to thread_clear_exec_promotion.
+ */
+void
+thread_set_exec_promotion(thread_t thread)
+{
+	spl_t s;
+
+	s = splsched();
+	thread_lock(thread);
+
+	assert((thread->sched_flags & TH_SFLAG_EXEC_PROMOTED) == 0);
+
+	if (thread->sched_pri < EXEC_BOOST_PRIORITY ||
+	    !(thread->sched_flags & TH_SFLAG_EXEC_PROMOTED)) {
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_PROMOTE) | DBG_FUNC_NONE,
+				      (uintptr_t)thread_tid(thread),
+				      thread->sched_pri, thread->base_pri,
+				      EXEC_BOOST_PRIORITY, 0);
+		thread->sched_flags |= TH_SFLAG_EXEC_PROMOTED;
+		if (thread->sched_pri < EXEC_BOOST_PRIORITY)
+			set_sched_pri(thread, EXEC_BOOST_PRIORITY);
+	}
+
+	thread_unlock(thread);
+	splx(s);
+}
+
+/*
+ * This function will clear the exec thread
+ * promotion set on the thread by thread_set_exec_promotion.
+ */
+void
+thread_clear_exec_promotion(thread_t thread)
+{
+	spl_t s;
+
+	s = splsched();
+	thread_lock(thread);
+	assert(thread->sched_flags & TH_SFLAG_EXEC_PROMOTED);
+
+	if (thread->sched_flags & TH_SFLAG_EXEC_PROMOTED) {
+		thread->sched_flags &= ~TH_SFLAG_EXEC_PROMOTED;
+
+		if (thread->sched_flags & TH_SFLAG_PROMOTED_MASK) {
+			/* it still has other promotions (mutex/rw_lock) */
+		} else if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_DEMOTE) | DBG_FUNC_NONE,
+					      (uintptr_t)thread_tid(thread),
+					      thread->sched_pri,
+					      thread->base_pri,
+					      DEPRESSPRI, 0);
+			set_sched_pri(thread, DEPRESSPRI);
+		} else {
+			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_DEMOTE) | DBG_FUNC_NONE,
+					      (uintptr_t)thread_tid(thread),
+					      thread->sched_pri,
+					      thread->base_pri,
+					      thread->base_pri, 0);
+			thread_recompute_sched_pri(thread, FALSE);
+		}
+	}
+
+	thread_unlock(thread);
+	splx(s);
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -63,6 +63,29 @@ struct so_tcdbg {
 #define	NET_QOS_MARKING_POLICY_DEFAULT QOS_MODE_MARKING_POLICY_DEFAULT /* obsolete, to be removed */
 #define	NET_QOS_MARKING_POLICY_ENABLE QOS_MODE_MARKING_POLICY_ENABLE /* obsolete, to be removed */
 #define	NET_QOS_MARKING_POLICY_DISABLE QOS_MODE_MARKING_POLICY_DISABLE /* obsolete, to be removed */
+
+struct net_qos_param {
+	u_int64_t nq_transfer_size;	/* transfer size in bytes */
+	u_int32_t nq_use_expensive:1,	/* allowed = 1 otherwise 0 */
+	          nq_uplink:1;		/* uplink = 1 otherwise 0 */
+	u_int32_t nq_unused;		/* for future expansion */
+};
+
+#ifndef KERNEL
+
+/*
+ * Returns whether a large upload or download transfer should be marked as
+ * BK service type for network activity. This is a system level
+ * hint/suggestion to classify application traffic based on statistics
+ * collected from the current network attachment
+ *
+ *	@param	param	transfer parameters
+ *	@param	param_len parameter length
+ *	@return	returns 1 for BK and 0 for default
+ */
+extern int net_qos_guideline(struct net_qos_param *param, size_t param_len);
+
+#endif /* !KERNEL */
 
 #ifdef BSD_KERNEL_PRIVATE
 

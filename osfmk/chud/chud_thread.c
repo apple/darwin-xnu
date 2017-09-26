@@ -54,6 +54,8 @@
 // include the correct file to find real_ncpus
 #if defined(__i386__) || defined(__x86_64__)
 #	include <i386/mp.h>	
+#elif defined(__arm__) || defined (__arm64__)
+#	include <arm/cpu_internal.h>
 #else
 // fall back on declaring it extern.  The linker will sort us out.
 extern unsigned int real_ncpus;

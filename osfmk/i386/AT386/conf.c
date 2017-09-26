@@ -62,6 +62,7 @@
 
 #include <types.h>
 #include <kern/clock.h>
+#include <libkern/section_keywords.h>
 
 /*
  * Clock device subsystem configuration. The clock_list[]
@@ -69,12 +70,12 @@
  * the system.
  */
 
-extern	struct clock_ops	sysclk_ops, calend_ops;
+extern const struct clock_ops	sysclk_ops, calend_ops;
 
 /*
  * List of clock devices.
  */
-struct	clock	clock_list[] = {
+SECURITY_READ_ONLY_LATE(struct	clock) clock_list[] = {
 
 	/* SYSTEM_CLOCK */
 	{ &sysclk_ops, 0, 0 },

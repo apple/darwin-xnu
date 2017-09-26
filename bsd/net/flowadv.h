@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <sys/queue.h>
 
+
 #define	FADV_SUCCESS		0	/* success */
 #define	FADV_FLOW_CONTROLLED	1	/* regular flow control */
 #define	FADV_SUSPENDED		2	/* flow control due to suspension */
@@ -44,7 +45,7 @@ struct flowadv {
 #ifdef BSD_KERNEL_PRIVATE
 struct flowadv_fcentry {
 	STAILQ_ENTRY(flowadv_fcentry) fce_link;
-	u_int32_t	fce_flowsrc;	/* FLOWSRC values */
+	u_int32_t	fce_flowsrc_type;	/* FLOWSRC values */
 	u_int32_t	fce_flowid;
 };
 

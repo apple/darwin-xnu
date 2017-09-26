@@ -173,15 +173,31 @@
 #define	XCR0_YMM	(1ULL << 2)	/* YMM state available */
 #define	XCR0_BNDREGS	(1ULL << 3)	/* MPX Bounds register state */
 #define	XCR0_BNDCSR	(1ULL << 4)	/* MPX Bounds configuration/state  */
+#if !defined(RC_HIDE_XNU_J137)
+#define	XCR0_OPMASK	(1ULL << 5)	/* Opmask register state */
+#define	XCR0_ZMM_HI256	(1ULL << 6)	/* ZMM upper 256-bit state */
+#define	XCR0_HI16_ZMM	(1ULL << 7)	/* ZMM16..ZMM31 512-bit state */
+#endif /* not RC_HIDE_XNU_J137 */
 #define XFEM_X87	XCR0_X87
 #define XFEM_SSE	XCR0_SSE
 #define	XFEM_YMM	XCR0_YMM
 #define	XFEM_BNDREGS	XCR0_BNDREGS
 #define	XFEM_BNDCSR	XCR0_BNDCSR
+#if !defined(XNU_HODE_J137)
+#define	XFEM_OPMASK	XCR0_OPMASK
+#define	XFEM_ZMM_HI256	XCR0_ZMM_HI256
+#define	XFEM_HI16_ZMM	XCR0_HI16_ZMM
+#define	XFEM_ZMM	(XFEM_ZMM_HI256 | XFEM_HI16_ZMM | XFEM_OPMASK)
+#endif /* not XNU_HODE_J137 */
 #define XCR0 (0)
 
 #define	PMAP_PCID_PRESERVE (1ULL << 63)
 #define	PMAP_PCID_MASK (0xFFF)
+
+/*
+ * If thread groups are needed for x86, set this to 1
+ */
+#define CONFIG_THREAD_GROUPS 0
 
 #ifndef	ASSEMBLER
 
@@ -358,6 +374,11 @@ static inline void swapgs(void)
 	__asm__ volatile("swapgs");
 }
 
+static inline void hlt(void)
+{
+	__asm__ volatile("hlt");
+}
+
 #ifdef MACH_KERNEL_PRIVATE
 
 static inline void flush_tlb_raw(void)
@@ -416,6 +437,7 @@ extern void do_mfence(void);
 #define mfence() do_mfence()
 #endif
 
+#ifdef __LP64__
 static inline uint64_t rdpmc64(uint32_t pmc)
 {
 	uint32_t lo=0, hi=0;
@@ -451,7 +473,7 @@ static inline uint64_t rdtscp64(uint32_t *aux)
 					 : "ecx");
 	return ((hi) << 32) | (lo);
 }
-
+#endif /* __LP64__ */
 
 /*
  * rdmsr_carefully() returns 0 when the MSR has been read successfully,

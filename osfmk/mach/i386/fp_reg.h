@@ -68,12 +68,20 @@ struct 	x86_fx_thread_state {
 	unsigned char  	fx_tag;         /* register tags */
 	unsigned char	fx_bbz1;	/* better be zero when calling fxrtstor */
 	unsigned short  fx_opcode;
-	unsigned int    fx_eip;         /* eip  instruction */
-	unsigned short  fx_cs;          /* cs instruction */
-	unsigned short  fx_bbz2;	/* better be zero when calling fxrtstor */ 
-	unsigned int    fx_dp;          /* data address */
-	unsigned short  fx_ds;          /* data segment */
-	unsigned short  fx_bbz3;	/* better be zero when calling fxrtstor */
+	union {
+	    struct {			/* 32-bit layout: */
+		unsigned int    fx_eip;         /* eip  instruction */
+		unsigned short  fx_cs;          /* cs instruction */
+		unsigned short  fx_bbz2;	/* better be zero when calling fxrtstor */ 
+		unsigned int    fx_dp;          /* data address */
+		unsigned short  fx_ds;          /* data segment */
+		unsigned short  fx_bbz3;	/* better be zero when calling fxrtstor */
+	    };
+	    struct { 			/* 64-bit layout: */
+		uint64_t	fx_rip;		/* instruction pointer */
+		uint64_t	fx_rdp;		/* data pointer */
+	    };
+	};
 	unsigned int  	fx_MXCSR;
 	unsigned int  	fx_MXCSR_MASK;
 	unsigned short  fx_reg_word[8][8];      /* STx/MMx registers */
@@ -87,35 +95,49 @@ struct 	x86_fx_thread_state {
 	unsigned char	fx_pad[8];
 }__attribute__ ((packed));
 
+struct	xsave_header {
+	uint64_t	xstate_bv;
+	uint64_t	xcomp_bv;
+	uint8_t		xhrsvd[48];
+};
+
+typedef struct { uint64_t lo64,  hi64;  }__attribute__ ((packed)) reg128_t;
+typedef struct { reg128_t lo128, hi128; }__attribute__ ((packed)) reg256_t;
+typedef struct { reg256_t lo256, hi256; }__attribute__ ((packed)) reg512_t;
+
 struct x86_avx_thread_state {
-	unsigned short  fx_control;     /* control */
-	unsigned short  fx_status;      /* status */
-	unsigned char  	fx_tag;         /* register tags */
-	unsigned char	fx_bbz1;	/* reserved zero */
-	unsigned short  fx_opcode;
-	unsigned int    fx_eip;         /* eip  instruction */
-	unsigned short  fx_cs;          /* cs instruction */
-	unsigned short  fx_bbz2;	/* reserved zero */
-	unsigned int    fx_dp;          /* data address */
-	unsigned short  fx_ds;          /* data segment */
-	unsigned short  fx_bbz3;	/* reserved zero */
-	unsigned int  	fx_MXCSR;
-	unsigned int  	fx_MXCSR_MASK;
-	unsigned short  fx_reg_word[8][8];      /* STx/MMx registers */
-	unsigned short  fx_XMM_reg[8][16];	/* XMM0-XMM15 on 64 bit processors */
-                                                /* XMM0-XMM7  on 32 bit processors... unused storage reserved */
-	unsigned char 	fx_reserved[16*5];	/* reserved */
-	unsigned int	fp_valid;
-	unsigned int	fp_save_layout;
-	unsigned char	fx_pad[8];
-
-	struct	xsave_header {			/* Offset 512, xsave header */
-		uint64_t xsbv;
-		char	xhrsvd[56];
-	}_xh;
-
-	unsigned int	x_YMMH_reg[4][16];	/* Offset 576, high YMMs*/
+	struct x86_fx_thread_state	fp;
+	struct xsave_header		_xh; 			/* Offset 512, xsave header */
+	reg128_t			x_YMM_Hi128[16];	/* Offset 576, high YMMs `*/
+								/* Offset 832, end */
 }__attribute__ ((packed));
+
+struct x86_avx512_thread_state {
+	struct x86_fx_thread_state	fp;
+	struct xsave_header		_xh; 			/* Offset 512, xsave header */
+	reg128_t			x_YMM_Hi128[16];	/* Offset 576, high YMMs */
+
+	uint64_t			x_pad[16];		/* Offset 832, unused AMD LWP */
+	uint64_t			x_BNDREGS[8];		/* Offset 960, unused MPX */
+	uint64_t			x_BNDCTL[8];		/* Offset 1024, unused MPX */
+	
+	uint64_t			x_Opmask[8];		/* Offset 1088, K0-K7 */
+	reg256_t			x_ZMM_Hi256[16];	/* Offset 1152, ZMM0..15[511:256] */
+	reg512_t			x_Hi16_ZMM[16];		/* Offset 1664, ZMM16..31[511:0] */
+								/* Offset 2688, end */
+}__attribute__ ((packed));
+
+typedef union {
+	struct x86_fx_thread_state	fx;
+	struct x86_avx_thread_state	avx;
+#if !defined(RC_HIDE_XNU_J137)
+	struct x86_avx512_thread_state	avx512;
+#endif
+} x86_ext_thread_state_t;
+
+#define	EVEX_PREFIX	0x62		/* AVX512's EVEX vector operation prefix */
+#define	VEX2_PREFIX	0xC5		/* VEX 2-byte prefix for Opmask instructions */
+#define	VEX3_PREFIX	0xC4		/* VEX 3-byte prefix for Opmask instructions */
 
 #endif /* MACH_KERNEL_PRIVATE */
 /*

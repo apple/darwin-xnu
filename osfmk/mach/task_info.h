@@ -112,8 +112,19 @@ typedef struct task_basic_info_32       *task_basic_info_32_t;
 /* Don't use this, use MACH_TASK_BASIC_INFO instead */
 struct task_basic_info_64 {
         integer_t       suspend_count;  /* suspend count for task */
+#if defined(__arm__) || defined(__arm64__)
+#if defined(KERNEL) 
+	/* Compatibility with old 32-bit mach_vm_size_t */
+        natural_t	virtual_size;   /* virtual memory size (bytes) */
+        natural_t	resident_size;  /* resident memory size (bytes) */
+#else 
         mach_vm_size_t  virtual_size;   /* virtual memory size (bytes) */
         mach_vm_size_t  resident_size;  /* resident memory size (bytes) */
+#endif 
+#else /* defined(__arm__) || defined(__arm64__) */
+        mach_vm_size_t  virtual_size;   /* virtual memory size (bytes) */
+        mach_vm_size_t  resident_size;  /* resident memory size (bytes) */
+#endif /* defined(__arm__) || defined(__arm64__) */
         time_value_t    user_time;      /* total user run time for
                                            terminated threads */
         time_value_t    system_time;    /* total system run time for
@@ -123,9 +134,39 @@ struct task_basic_info_64 {
 typedef struct task_basic_info_64       task_basic_info_64_data_t;
 typedef struct task_basic_info_64       *task_basic_info_64_t;
 
+#if defined(__arm__) || defined(__arm64__)
+	#if defined(KERNEL) 
+	/*
+	 * Backwards-compatibility for old mach_vm*_t types.
+	 * The kernel knows about old and new, and if you are compiled
+	 * to run on an earlier iOS version, you interact with the old 
+	 * (narrow) version.  If you are compiled for a newer OS 
+	 * version, however, you are mapped to the wide version.
+	 */
+
+	#define TASK_BASIC_INFO_64      5    
+	#define TASK_BASIC_INFO_64_COUNT   \
+                (sizeof(task_basic_info_64_data_t) / sizeof(natural_t))
+
+	#elif defined(__arm__) && defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && (__IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_5_0)
+	/* 
+	 * Note: arm64 can't use the old flavor.  If you somehow manage to,
+	 * you can cope with the nonsense data yourself.
+	 */
+	#define TASK_BASIC_INFO_64      5    
+	#define TASK_BASIC_INFO_64_COUNT   \
+                (sizeof(task_basic_info_64_data_t) / sizeof(natural_t))
+	
+	#else 
+	
+	#define TASK_BASIC_INFO_64      	TASK_BASIC_INFO_64_2	
+	#define TASK_BASIC_INFO_64_COUNT  	TASK_BASIC_INFO_64_2_COUNT
+	#endif 
+#else /* defined(__arm__) || defined(__arm64__) */
 #define TASK_BASIC_INFO_64      5       /* 64-bit capable basic info */
 #define TASK_BASIC_INFO_64_COUNT   \
                 (sizeof(task_basic_info_64_data_t) / sizeof(natural_t))
+#endif
 
 
 /* localized structure - cannot be safely passed between tasks of differing sizes */
@@ -249,6 +290,27 @@ typedef struct task_dyld_info	*task_dyld_info_t;
 #define TASK_DYLD_ALL_IMAGE_INFO_32	0	/* format value */
 #define TASK_DYLD_ALL_IMAGE_INFO_64	1	/* format value */
 
+#if defined(__arm__) || defined(__arm64__)
+
+/* Don't use this, use MACH_TASK_BASIC_INFO instead */
+/* Compatibility for old 32-bit mach_vm_*_t */
+#define TASK_BASIC_INFO_64_2     18       /* 64-bit capable basic info */
+
+struct task_basic_info_64_2 {
+        integer_t       suspend_count;  /* suspend count for task */
+        mach_vm_size_t  virtual_size;   /* virtual memory size (bytes) */
+        mach_vm_size_t  resident_size;  /* resident memory size (bytes) */
+        time_value_t    user_time;      /* total user run time for
+                                           terminated threads */
+        time_value_t    system_time;    /* total system run time for
+                                           terminated threads */
+	policy_t	policy;		/* default policy for new threads */
+};
+typedef struct task_basic_info_64_2       task_basic_info_64_2_data_t;
+typedef struct task_basic_info_64_2       *task_basic_info_64_2_t;
+#define TASK_BASIC_INFO_64_2_COUNT   \
+                (sizeof(task_basic_info_64_2_data_t) / sizeof(natural_t))
+#endif
 
 #define TASK_EXTMOD_INFO			19
 
@@ -377,13 +439,19 @@ typedef gpu_energy_data *gpu_energy_data_t;
 struct task_power_info_v2 {
 	task_power_info_data_t	cpu_energy;
 	gpu_energy_data gpu_energy;
+#if defined(__arm__) || defined(__arm64__)
+	uint64_t		task_energy;
+#endif
+	uint64_t		task_ptime;
+	uint64_t		task_pset_switches;
 };
 
 typedef struct task_power_info_v2	task_power_info_v2_data_t;
 typedef struct task_power_info_v2	*task_power_info_v2_t;
-#define TASK_POWER_INFO_V2_COUNT	((mach_msg_type_number_t) \
-		(sizeof (task_power_info_v2_data_t) / sizeof (natural_t)))
-
+#define TASK_POWER_INFO_V2_COUNT_OLD	\
+		((mach_msg_type_number_t) (sizeof (task_power_info_v2_data_t) - sizeof(uint64_t)*2) / sizeof (natural_t))
+#define TASK_POWER_INFO_V2_COUNT	\
+		((mach_msg_type_number_t) (sizeof (task_power_info_v2_data_t) / sizeof (natural_t)))
 
 #define TASK_VM_INFO_PURGEABLE_ACCOUNT 27 /* Used for xnu purgeable vm unit tests */
 

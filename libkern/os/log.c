@@ -72,7 +72,12 @@ uint32_t oslog_s_error_count = 0;
 uint32_t oslog_s_metadata_msgcount = 0;
 
 static bool oslog_boot_done = false;
-extern boolean_t oslog_early_boot_complete;
+extern boolean_t early_boot_complete;
+
+#ifdef XNU_KERNEL_PRIVATE
+bool startup_serial_logging_active = true;
+uint64_t startup_serial_num_procs = 300;
+#endif /* XNU_KERNEL_PRIVATE */
 
 // XXX
 firehose_tracepoint_id_t
@@ -166,9 +171,15 @@ _os_log_with_args_internal(os_log_t oslog, os_log_type_t type,
     if (format[0] == '\0') {
         return;
     }
-    /* cf. r24974766 & r25201228*/
-    safe    = (!oslog_early_boot_complete || oslog_is_safe());
-    logging = (!(logging_config & ATM_TRACE_DISABLE) || !(logging_config & ATM_TRACE_OFF));
+
+    /* early boot can log to dmesg for later replay (27307943) */
+    safe = (!early_boot_complete || oslog_is_safe());
+
+	if (logging_config & ATM_TRACE_DISABLE || logging_config & ATM_TRACE_OFF) {
+		logging = false;
+	} else {
+		logging = true;
+	}
 
     if (oslog != &_os_log_replay) {
         _os_log_to_msgbuf_internal(format, args, safe, logging);

@@ -44,11 +44,6 @@
 
 #if defined(_KERNEL) || defined(KERNEL)
 
-#if CONFIG_MACF
-#include <sys/queue.h>
-#include <security/mac_framework.h>
-#endif
-
 #include <bsm/audit.h>
 
 #include <sys/sysctl.h>

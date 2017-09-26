@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -91,6 +91,8 @@ extern "C" {
 
 #include <machine/endian.h>
 #include <sys/systm.h>
+#include <net/pf_pbuf.h>
+
 
 #if BYTE_ORDER == BIG_ENDIAN
 #define	htobe64(x)	(x)
@@ -231,17 +233,17 @@ enum	{ PF_ADDR_ADDRMASK, PF_ADDR_NOROUTE, PF_ADDR_DYNIFTL,
 
 struct pf_addr {
 	union {
-		struct in_addr		v4;
-		struct in6_addr		v6;
-		u_int8_t		addr8[16];
-		u_int16_t		addr16[8];
-		u_int32_t		addr32[4];
+		struct in_addr		_v4addr;
+		struct in6_addr		_v6addr;
+		u_int8_t		_addr8[16];
+		u_int16_t		_addr16[8];
+		u_int32_t		_addr32[4];
 	} pfa;		    /* 128-bit address */
-#define v4	pfa.v4
-#define v6	pfa.v6
-#define addr8	pfa.addr8
-#define addr16	pfa.addr16
-#define addr32	pfa.addr32
+#define v4addr	pfa._v4addr
+#define v6addr	pfa._v6addr
+#define addr8	pfa._addr8
+#define addr16	pfa._addr16
+#define addr32	pfa._addr32
 };
 
 #define	PF_TABLE_NAME_SIZE	 32
@@ -1431,7 +1433,7 @@ struct pf_pdesc {
 	struct pf_addr	*dst;
 	struct ether_header
 			*eh;
-	struct mbuf	*mp;
+	pbuf_t		*mp;
 	int		lmw;		/* lazy writable offset */
 	struct pf_mtag	*pf_mtag;
 	u_int16_t	*ip_sum;
@@ -2165,15 +2167,6 @@ TAILQ_HEAD(pf_poolqueue, pf_pool);
 extern struct pf_poolqueue	pf_pools[2];
 extern struct pf_palist	pf_pabuf;
 extern u_int32_t		ticket_pabuf;
-#if PF_ALTQ
-TAILQ_HEAD(pf_altqqueue, pf_altq);
-extern struct pf_altqqueue	pf_altqs[2];
-extern u_int32_t		ticket_altqs_active;
-extern u_int32_t		ticket_altqs_inactive;
-extern int			altqs_inactive_open;
-extern struct pf_altqqueue	*pf_altqs_active;
-extern struct pf_altqqueue	*pf_altqs_inactive;
-#endif /* PF_ALTQ */
 extern struct pf_poolqueue	*pf_pools_active;
 extern struct pf_poolqueue	*pf_pools_inactive;
 
@@ -2187,9 +2180,6 @@ __private_extern__ u_int32_t pf_calc_state_key_flowhash(struct pf_state_key *);
 extern struct pool pf_src_tree_pl, pf_rule_pl;
 extern struct pool pf_state_pl, pf_state_key_pl, pf_pooladdr_pl;
 extern struct pool pf_state_scrub_pl;
-#if PF_ALTQ
-extern struct pool pf_altq_pl;
-#endif /* PF_ALTQ */
 extern struct pool pf_app_state_pl;
 
 extern struct thread *pf_purge_thread;
@@ -2219,25 +2209,33 @@ __private_extern__ void pf_addrcpy(struct pf_addr *, struct pf_addr *,
 __private_extern__ void pf_rm_rule(struct pf_rulequeue *, struct pf_rule *);
 
 struct ip_fw_args;
+
+extern boolean_t is_nlc_enabled_glb;
+extern boolean_t pf_is_nlc_enabled(void);
+
 #if INET
-__private_extern__ int pf_test(int, struct ifnet *, struct mbuf **,
+__private_extern__ int pf_test(int, struct ifnet *, pbuf_t **,
+    struct ether_header *, struct ip_fw_args *);
+__private_extern__ int pf_test_mbuf(int, struct ifnet *, struct mbuf **,
     struct ether_header *, struct ip_fw_args *);
 #endif /* INET */
 
 #if INET6
-__private_extern__ int pf_test6(int, struct ifnet *, struct mbuf **,
+__private_extern__ int pf_test6(int, struct ifnet *, pbuf_t **,
+    struct ether_header *, struct ip_fw_args *);
+__private_extern__ int pf_test6_mbuf(int, struct ifnet *, struct mbuf **,
     struct ether_header *, struct ip_fw_args *);
 __private_extern__ void pf_poolmask(struct pf_addr *, struct pf_addr *,
     struct pf_addr *, struct pf_addr *, u_int8_t);
 __private_extern__ void pf_addr_inc(struct pf_addr *, sa_family_t);
 #endif /* INET6 */
 
-__private_extern__ struct mbuf *pf_lazy_makewritable(struct pf_pdesc *,
-    struct mbuf *, int);
-__private_extern__ void *pf_pull_hdr(struct mbuf *, int, void *, int,
+__private_extern__ void *pf_lazy_makewritable(struct pf_pdesc *,
+    pbuf_t *, int);
+__private_extern__ void *pf_pull_hdr(pbuf_t *, int, void *, int,
     u_short *, u_short *, sa_family_t);
 __private_extern__ void pf_change_a(void *, u_int16_t *, u_int32_t, u_int8_t);
-__private_extern__ int pflog_packet(struct pfi_kif *, struct mbuf *,
+__private_extern__ int pflog_packet(struct pfi_kif *, pbuf_t *,
     sa_family_t, u_int8_t, u_int8_t, struct pf_rule *, struct pf_rule *,
     struct pf_ruleset *, struct pf_pdesc *);
 __private_extern__ int pf_match_addr(u_int8_t, struct pf_addr *,
@@ -2253,17 +2251,17 @@ __private_extern__ int pf_match_gid(u_int8_t, gid_t, gid_t, gid_t);
 
 __private_extern__ void pf_normalize_init(void);
 __private_extern__ int pf_normalize_isempty(void);
-__private_extern__ int pf_normalize_ip(struct mbuf **, int, struct pfi_kif *,
+__private_extern__ int pf_normalize_ip(pbuf_t *, int, struct pfi_kif *,
     u_short *, struct pf_pdesc *);
-__private_extern__ int pf_normalize_ip6(struct mbuf **, int, struct pfi_kif *,
+__private_extern__ int pf_normalize_ip6(pbuf_t *, int, struct pfi_kif *,
     u_short *, struct pf_pdesc *);
-__private_extern__ int pf_normalize_tcp(int, struct pfi_kif *, struct mbuf *,
+__private_extern__ int pf_normalize_tcp(int, struct pfi_kif *, pbuf_t *,
     int, int, void *, struct pf_pdesc *);
 __private_extern__ void pf_normalize_tcp_cleanup(struct pf_state *);
-__private_extern__ int pf_normalize_tcp_init(struct mbuf *, int,
+__private_extern__ int pf_normalize_tcp_init(pbuf_t *, int,
     struct pf_pdesc *, struct tcphdr *, struct pf_state_peer *,
     struct pf_state_peer *);
-__private_extern__ int pf_normalize_tcp_stateful(struct mbuf *, int,
+__private_extern__ int pf_normalize_tcp_stateful(pbuf_t *, int,
     struct pf_pdesc *, u_short *, struct tcphdr *, struct pf_state *,
     struct pf_state_peer *, struct pf_state_peer *, int *);
 __private_extern__ u_int64_t pf_state_expires(const struct pf_state *);
@@ -2347,7 +2345,7 @@ __private_extern__ u_int16_t pf_tagname2tag(char *);
 __private_extern__ void pf_tag2tagname(u_int16_t, char *);
 __private_extern__ void pf_tag_ref(u_int16_t);
 __private_extern__ void pf_tag_unref(u_int16_t);
-__private_extern__ int pf_tag_packet(struct mbuf *, struct pf_mtag *,
+__private_extern__ int pf_tag_packet(pbuf_t *, struct pf_mtag *,
     int, unsigned int, struct pf_pdesc *);
 __private_extern__ void pf_step_into_anchor(int *, struct pf_ruleset **, int,
     struct pf_rule **, struct pf_rule **,  int *);
@@ -2384,10 +2382,6 @@ extern int16_t pf_nat64_configured;
 #define PF_IS_ENABLED (pf_is_enabled != 0)
 extern u_int32_t pf_hash_seed;
 
-#if PF_ALTQ
-extern u_int32_t altq_allowed;
-#endif /* PF_ALTQ */
-
 /* these ruleset functions can be linked into userland programs (pfctl) */
 __private_extern__ int pf_get_ruleset_number(u_int8_t);
 __private_extern__ void pf_init_ruleset(struct pf_ruleset *);
@@ -2406,7 +2400,7 @@ __private_extern__ void pf_rs_initialize(void);
 
 __private_extern__ int pf_osfp_add(struct pf_osfp_ioctl *);
 __private_extern__ struct pf_osfp_enlist *pf_osfp_fingerprint(struct pf_pdesc *,
-    struct mbuf *, int, const struct tcphdr *);
+    pbuf_t *, int, const struct tcphdr *);
 __private_extern__ struct pf_osfp_enlist *pf_osfp_fingerprint_hdr(
     const struct ip *, const struct ip6_hdr *, const struct tcphdr *);
 __private_extern__ void pf_osfp_flush(void);
@@ -2415,7 +2409,9 @@ __private_extern__ void pf_osfp_initialize(void);
 __private_extern__ int pf_osfp_match(struct pf_osfp_enlist *, pf_osfp_t);
 __private_extern__ struct pf_os_fingerprint *pf_osfp_validate(void);
 __private_extern__ struct pf_mtag *pf_find_mtag(struct mbuf *);
+__private_extern__ struct pf_mtag *pf_find_mtag_pbuf(pbuf_t *);
 __private_extern__ struct pf_mtag *pf_get_mtag(struct mbuf *);
+__private_extern__ struct pf_mtag *pf_get_mtag_pbuf(pbuf_t *);
 #else /* !KERNEL */
 extern struct pf_anchor_global pf_anchors;
 extern struct pf_anchor pf_main_anchor;

@@ -47,6 +47,26 @@ typedef enum thread_snapshot_wait_flags {
 	kThreadWaitPThreadRWLockWrite   = 0x0d,
 	kThreadWaitPThreadCondVar       = 0x0e,
 	kThreadWaitParkedWorkQueue      = 0x0f,
+	kThreadWaitWorkloopSyncWait     = 0x10,
 } __attribute__((packed)) block_hint_t;
+
+#ifdef XNU_KERNEL_PRIVATE
+
+struct waitq;
+struct stackshot_thread_waitinfo;
+typedef struct stackshot_thread_waitinfo thread_waitinfo_t;
+
+/* Used for stackshot_thread_waitinfo_unsafe */
+extern void kdp_lck_mtx_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_sema_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_mqueue_send_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_mqueue_recv_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_ulock_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_rwlck_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_pthread_find_owner(thread_t thread, thread_waitinfo_t *waitinfo);
+extern void *kdp_pthread_get_thread_kwq(thread_t thread);
+extern void kdp_workloop_sync_wait_find_owner(thread_t thread, event64_t event, thread_waitinfo_t *waitinfo);
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* !_KERN_BLOCK_HINT_H_ */

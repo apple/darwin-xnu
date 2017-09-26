@@ -71,6 +71,57 @@
  * of uu_arg[] and work our way back to the beginning of the array.
  */
 
+#if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
+int munge_w(const void *regs, void *args);
+int munge_ww(const void *regs, void *args);
+int munge_www(const void *regs, void *args);
+int munge_wwww(const void *regs, void *args);
+int munge_wwwww(const void *regs, void *args);
+int munge_wwwwww(const void *regs, void *args);
+int munge_wwwwwww(const void *regs, void *args);
+int munge_wwwwwwww(const void *regs, void *args);
+int munge_wl(const void *regs, void *args);
+int munge_wwl(const void *regs, void *args);
+int munge_wwlw(const void *regs, void *args);
+int munge_wwlll(const void *regs, void *args);
+int munge_wwllww(const void *regs, void *args);
+int munge_wlw(const void *regs, void *args);
+int munge_wlww(const void *regs, void *args);
+int munge_wlwwwl(const void *regs, void *args);
+int munge_wlwwwll(const void *regs, void *args);
+int munge_wlwwwllw(const void *regs, void *args);
+int munge_wlwwlwlw(const void *regs, void *args);
+int munge_wll(const void *regs, void *args);
+int munge_wllww(const void *regs, void *args);
+int munge_wlll(const void *regs, void *args);
+int munge_wllll(const void *regs, void *args);
+int munge_wllwwll(const void *regs, void *args);
+int munge_wwwlw(const void *regs, void *args);
+int munge_wwwlww(const void *regs, void *args);
+int munge_wwwl(const void *regs, void *args);
+int munge_wwwwlw(const void *regs, void *args);
+int munge_wwwwl(const void *regs, void *args);
+int munge_wwwwwl(const void *regs, void *args);
+int munge_wwwwwlww(const void *regs, void *args);
+int munge_wwwwwllw(const void *regs, void *args);
+int munge_wwwwwlll(const void *regs, void *args);
+int munge_wwwwwwl(const void *regs, void *args);
+int munge_wwwwwwlw(const void *regs, void *args);
+int munge_wwwwwwll(const void *regs, void *args);
+int munge_wsw(const void *regs, void *args);
+int munge_wws(const void *regs, void *args);
+int munge_wwws(const void *regs, void *args);
+int munge_wwwsw(const void *regs, void *args);
+int munge_llllll(const void *regs, void *args);
+int munge_l(const void *regs, void *args);
+int munge_ll(const void *regs, void *args);
+int munge_lw(const void *regs, void *args);
+int munge_lwww(const void *regs, void *args);
+int munge_lwwwwwww(const void *regs, void *args);
+int munge_wwlww(const void *regs, void *args);
+int munge_wwlwww(const void *regs, void *args);
+int munge_wwlwwwl(const void *regs, void *args);
+#else
 void munge_w(void *args);
 void munge_ww(void *args);
 void munge_www(void *args);
@@ -116,7 +167,9 @@ void munge_l(void *args);
 void munge_ll(void *args);
 void munge_lw(void *args);
 void munge_lwww(void *args);
+void munge_lwwwwwww(void *args);
 void munge_wwlww(void *args);
 void munge_wwlwww(void *args);
 void munge_wwlwwwl(void *args);
+#endif /* __arm__ && (__BIGGEST_ALIGNMENT__ > 4) */
 #endif /* __MUNGE_H__ */

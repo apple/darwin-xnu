@@ -91,4 +91,9 @@ ssize_t grab_pgo_data(
 
 #endif
 
+#ifdef XNU_KERNEL_PRIVATE
+kern_return_t do_pgo_reset_counters(void);
+#endif
+
+
 #endif

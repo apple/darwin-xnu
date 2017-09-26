@@ -6,7 +6,11 @@
 #include <assert.h>
 #include <TargetConditionals.h>
 
+#if TARGET_OS_EMBEDDED
+#define MEMSIZE (1L<<28)
+#else
 #define MEMSIZE (1L<<30)
+#endif
 
 static char* memblock;
 

@@ -147,7 +147,8 @@ routine memory_object_upl_request(
 	in	size		: upl_size_t;
 	out	upl		: upl_t;
 	out	page_list	: upl_page_info_array_t, CountInOut;
-	in	cntrl_flags	: integer_t);
+	in	cntrl_flags	: integer_t;
+	in  tag         : integer_t);
 
 routine memory_object_super_upl_request(
 		memory_control		: memory_object_control_t;
@@ -156,7 +157,8 @@ routine memory_object_super_upl_request(
 	in	super_size	: upl_size_t;
 	out	upl		: upl_t;
 	out	page_list	: upl_page_info_array_t, CountInOut;
-	in	cntrl_flags	: integer_t);
+	in	cntrl_flags	: integer_t;
+	in  tag         : integer_t);
 
 
 routine memory_object_cluster_size(

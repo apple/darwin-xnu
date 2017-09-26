@@ -439,10 +439,10 @@ void kext_dump_panic_lists(int (*printf_func)(const char * fmt, ...))
 void
 kmod_panic_dump(vm_offset_t * addr, unsigned int cnt)
 {
-    extern int kdb_printf(const char *format, ...) __printflike(1,2);
+    extern int paniclog_append_noflush(const char *format, ...) __printflike(1,2);
 
-    OSKext::printKextsInBacktrace(addr, cnt, &kdb_printf,
-        /* takeLock? */ false, false);
+    OSKext::printKextsInBacktrace(addr, cnt, &paniclog_append_noflush, 0);
+
     return;
 }
 
@@ -455,7 +455,9 @@ kmod_dump_log(
     unsigned int cnt,
     boolean_t doUnslide)
 {
-    OSKext::printKextsInBacktrace(addr, cnt, &printf, /* lock? */ true, doUnslide);
+    uint32_t flags = OSKext::kPrintKextsLock;
+    if (doUnslide) flags |= OSKext::kPrintKextsUnslide;
+    OSKext::printKextsInBacktrace(addr, cnt, &printf, flags);
 }
 
 void *

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -75,6 +75,7 @@
 #include <sys/syslog.h>
 #include <sys/mcache.h>
 #include <kern/locks.h>
+#include <sys/codesign.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -131,7 +132,7 @@ static void rt_setif(struct rtentry *, struct sockaddr *, struct sockaddr *,
 static int rt_xaddrs(caddr_t, caddr_t, struct rt_addrinfo *);
 static struct mbuf *rt_msg1(int, struct rt_addrinfo *);
 static int rt_msg2(int, struct rt_addrinfo *, caddr_t, struct walkarg *,
-    kauth_cred_t *, uint32_t);
+    kauth_cred_t *);
 static int sysctl_dumpentry(struct radix_node *rn, void *vw);
 static int sysctl_dumpentry_ext(struct radix_node *rn, void *vw);
 static int sysctl_iflist(int af, struct walkarg *w);
@@ -144,6 +145,11 @@ SYSCTL_NODE(_net, PF_ROUTE, routetable, CTLFLAG_RD | CTLFLAG_LOCKED,
 	sysctl_rtsock, "");
 
 SYSCTL_NODE(_net, OID_AUTO, route, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "routing");
+
+/* Align x to 1024 (only power of 2) assuming x is positive */
+#define ALIGN_BYTES(x) do {						\
+	x = P2ALIGN(x, 1024);						\
+} while(0)
 
 #define	ROUNDUP32(a)							\
 	((a) > 0 ? (1 + (((a) - 1) | (sizeof (uint32_t) - 1))) :	\
@@ -307,7 +313,7 @@ route_output(struct mbuf *m, struct socket *so)
 	int sendonlytoself = 0;
 	unsigned int ifscope = IFSCOPE_NONE;
 	struct rawcb *rp = NULL;
-	uint32_t rtm_hint_flags = 0;
+	boolean_t is_router = FALSE;
 #define	senderr(e) { error = (e); goto flush; }
 	if (m == NULL || ((m->m_len < sizeof (intptr_t)) &&
 	    (m = m_pullup(m, sizeof (intptr_t))) == NULL))
@@ -535,9 +541,6 @@ route_output(struct mbuf *m, struct socket *so)
 			senderr(ESRCH);
 		RT_LOCK(rt);
 
-		if (rt->rt_ifp == lo_ifp)
-			rtm_hint_flags |= RTMF_HIDE_LLADDR;
-
 		/*
 		 * Holding rnh_lock here prevents the possibility of
 		 * ifa from changing (e.g. in_ifinit), so it is safe
@@ -577,9 +580,7 @@ report:
 			}
 			if (ifa2 != NULL)
 				IFA_LOCK(ifa2);
-
-			len = rt_msg2(rtm->rtm_type, &info, NULL, NULL, &cred, rtm_hint_flags);
-
+			len = rt_msg2(rtm->rtm_type, &info, NULL, NULL, &cred);
 			if (ifa2 != NULL)
 				IFA_UNLOCK(ifa2);
 			if (len > rtm->rtm_msglen) {
@@ -596,10 +597,8 @@ report:
 			}
 			if (ifa2 != NULL)
 				IFA_LOCK(ifa2);
-
 			(void) rt_msg2(rtm->rtm_type, &info, (caddr_t)rtm,
-			    NULL, &cred, rtm_hint_flags);
-
+			    NULL, &cred);
 			if (ifa2 != NULL)
 				IFA_UNLOCK(ifa2);
 			rtm->rtm_flags = rt->rt_flags;
@@ -607,10 +606,14 @@ report:
 			rtm->rtm_addrs = info.rti_addrs;
 			if (ifa2 != NULL)
 				IFA_REMREF(ifa2);
+
+			kauth_cred_unref(&cred);
 			break;
 		}
 
 		case RTM_CHANGE:
+			is_router = (rt->rt_flags & RTF_ROUTER) ? TRUE : FALSE;
+
 			if (info.rti_info[RTAX_GATEWAY] != NULL &&
 			    (error = rt_setgate(rt, rt_key(rt),
 			    info.rti_info[RTAX_GATEWAY]))) {
@@ -623,7 +626,7 @@ report:
 			 * the required gateway, then just use the old one.
 			 * This can happen if the user tries to change the
 			 * flags on the default route without changing the
-			 * default gateway.  Changing flags still doesn't work.
+			 * default gateway. Changing flags still doesn't work.
 			 */
 			if ((rt->rt_flags & RTF_GATEWAY) &&
 			    info.rti_info[RTAX_GATEWAY] == NULL)
@@ -646,6 +649,24 @@ report:
 			}
 			if (info.rti_info[RTAX_GENMASK])
 				rt->rt_genmask = info.rti_info[RTAX_GENMASK];
+
+			/*
+			 * Enqueue work item to invoke callback for this route entry
+			 * This may not be needed always, but for now issue it anytime
+			 * RTM_CHANGE gets called.
+			 */
+			route_event_enqueue_nwk_wq_entry(rt, NULL, ROUTE_ENTRY_REFRESH, NULL, TRUE);
+			/*
+			 * If the route is for a router, walk the tree to send refresh
+			 * event to protocol cloned entries
+			 */
+			if (is_router) {
+				struct route_event rt_ev;
+				route_event_init(&rt_ev, rt, NULL, ROUTE_ENTRY_REFRESH);
+				RT_UNLOCK(rt);
+				(void) rnh->rnh_walktree(rnh, route_event_walktree, (void *)&rt_ev);
+				RT_LOCK(rt);
+			}
 			/* FALLTHRU */
 		case RTM_LOCK:
 			rt->rt_rmx.rmx_locks &= ~(rtm->rtm_inits);
@@ -822,7 +843,7 @@ rt_setif(struct rtentry *rt, struct sockaddr *Ifpaddr, struct sockaddr *Ifaaddr,
 	struct ifnet *ifp = NULL;
 	void (*ifa_rtrequest)(int, struct rtentry *, struct sockaddr *);
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	RT_LOCK_ASSERT_HELD(rt);
 
@@ -1082,7 +1103,7 @@ rt_msg1(int type, struct rt_addrinfo *rtinfo)
 
 			/* Scrub away any trace of embedded interface scope */
 			sa = rtm_scrub(type, i, hint, sa, &ssbuf,
-			    sizeof (ssbuf), NULL, 0);
+			    sizeof (ssbuf), NULL);
 			break;
 
 		default:
@@ -1107,7 +1128,7 @@ rt_msg1(int type, struct rt_addrinfo *rtinfo)
 
 static int
 rt_msg2(int type, struct rt_addrinfo *rtinfo, caddr_t cp, struct walkarg *w,
-	kauth_cred_t* credp, uint32_t rtm_hint_flags)
+	kauth_cred_t* credp)
 {
 	int i;
 	int len, dlen, rlen, second_time = 0;
@@ -1173,12 +1194,12 @@ again:
 
 			/* Scrub away any trace of embedded interface scope */
 			sa = rtm_scrub(type, i, hint, sa, &ssbuf,
-			    sizeof (ssbuf), NULL, rtm_hint_flags);
+			    sizeof (ssbuf), NULL);
 			break;
 		case RTAX_GATEWAY:
 		case RTAX_IFP:
 			sa = rtm_scrub(type, i, NULL, sa, &ssbuf,
-			    sizeof (ssbuf), credp, rtm_hint_flags);
+			    sizeof (ssbuf), credp);
 			break;
 
 		default:
@@ -1298,7 +1319,7 @@ rt_newaddrmsg(int cmd, struct ifaddr *ifa, int error, struct rtentry *rt)
 	struct ifnet *ifp = ifa->ifa_ifp;
 	struct sockproto route_proto = { PF_ROUTE, 0 };
 
-	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
 	if (route_cb.any_count == 0)
@@ -1493,7 +1514,6 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	int error = 0, size;
 	struct rt_addrinfo info;
 	kauth_cred_t cred;
-	uint32_t rtm_hint_flags = 0;
 
 	cred = kauth_cred_proc_ref(current_proc());
 
@@ -1506,11 +1526,8 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
 	info.rti_info[RTAX_GENMASK] = rt->rt_genmask;
 
-	if (rt->rt_ifp == lo_ifp)
-		rtm_hint_flags |= RTMF_HIDE_LLADDR;
-
 	if (w->w_op != NET_RT_DUMP2) {
-		size = rt_msg2(RTM_GET, &info, NULL, w, &cred, rtm_hint_flags);
+		size = rt_msg2(RTM_GET, &info, NULL, w, &cred);
 		if (w->w_req != NULL && w->w_tmem != NULL) {
 			struct rt_msghdr *rtm =
 			    (struct rt_msghdr *)(void *)w->w_tmem;
@@ -1526,7 +1543,7 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 			error = SYSCTL_OUT(w->w_req, (caddr_t)rtm, size);
 		}
 	} else {
-		size = rt_msg2(RTM_GET2, &info, NULL, w, &cred, rtm_hint_flags);
+		size = rt_msg2(RTM_GET2, &info, NULL, w, &cred);
 		if (w->w_req != NULL && w->w_tmem != NULL) {
 			struct rt_msghdr2 *rtm =
 			    (struct rt_msghdr2 *)(void *)w->w_tmem;
@@ -1563,7 +1580,6 @@ sysctl_dumpentry_ext(struct radix_node *rn, void *vw)
 	int error = 0, size;
 	struct rt_addrinfo info;
 	kauth_cred_t cred;
-	uint32_t rtm_hint_flags = 0;
 
 	cred = kauth_cred_proc_ref(current_proc());
 
@@ -1576,10 +1592,7 @@ sysctl_dumpentry_ext(struct radix_node *rn, void *vw)
 	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
 	info.rti_info[RTAX_GENMASK] = rt->rt_genmask;
 
-	if (rt->rt_ifp == lo_ifp)
-		rtm_hint_flags |= RTMF_HIDE_LLADDR;
-
-	size = rt_msg2(RTM_GET_EXT, &info, NULL, w, &cred, rtm_hint_flags);
+	size = rt_msg2(RTM_GET_EXT, &info, NULL, w, &cred);
 	if (w->w_req != NULL && w->w_tmem != NULL) {
 		struct rt_msghdr_ext *ertm =
 		    (struct rt_msghdr_ext *)(void *)w->w_tmem;
@@ -1628,7 +1641,7 @@ sysctl_iflist(int af, struct walkarg *w)
 	struct ifnet *ifp;
 	struct ifaddr *ifa;
 	struct	rt_addrinfo info;
-	int	len, error = 0;
+	int	len = 0, error = 0;
 	int	pass = 0;
 	int	total_len = 0, current_len = 0;
 	char	*total_buffer = NULL, *cp = NULL;
@@ -1655,7 +1668,7 @@ sysctl_iflist(int af, struct walkarg *w)
 			 */
 			ifa = ifp->if_lladdr;
 			info.rti_info[RTAX_IFP] = ifa->ifa_addr;
-			len = rt_msg2(RTM_IFINFO, &info, NULL, NULL, &cred, RTMF_HIDE_LLADDR);
+			len = rt_msg2(RTM_IFINFO, &info, NULL, NULL, &cred);
 			if (pass == 0) {
 				total_len += len;
 			} else {
@@ -1668,7 +1681,7 @@ sysctl_iflist(int af, struct walkarg *w)
 				}
 				info.rti_info[RTAX_IFP] = ifa->ifa_addr;
 				len = rt_msg2(RTM_IFINFO, &info,
-				    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
+				    (caddr_t)cp, NULL, &cred);
 				info.rti_info[RTAX_IFP] = NULL;
 
 				ifm = (struct if_msghdr *)(void *)cp;
@@ -1677,6 +1690,14 @@ sysctl_iflist(int af, struct walkarg *w)
 				if_data_internal_to_if_data(ifp, &ifp->if_data,
 				    &ifm->ifm_data);
 				ifm->ifm_addrs = info.rti_addrs;
+				/*
+				 * <rdar://problem/32940901>
+				 * Round bytes only for non-platform
+				*/
+				if (!csproc_get_platform_binary(w->w_req->p)) {
+					ALIGN_BYTES(ifm->ifm_data.ifi_ibytes);
+					ALIGN_BYTES(ifm->ifm_data.ifi_obytes);
+				}
 
 				cp += len;
 				VERIFY(IS_P2ALIGNED(cp, sizeof (u_int32_t)));
@@ -1692,7 +1713,7 @@ sysctl_iflist(int af, struct walkarg *w)
 				info.rti_info[RTAX_NETMASK] = ifa->ifa_netmask;
 				info.rti_info[RTAX_BRD] = ifa->ifa_dstaddr;
 				len = rt_msg2(RTM_NEWADDR, &info, NULL, NULL,
-				    &cred, RTMF_HIDE_LLADDR);
+				    &cred);
 				if (pass == 0) {
 					total_len += len;
 				} else {
@@ -1704,7 +1725,7 @@ sysctl_iflist(int af, struct walkarg *w)
 						break;
 					}
 					len = rt_msg2(RTM_NEWADDR, &info,
-					    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
+					    (caddr_t)cp, NULL, &cred);
 
 					ifam = (struct ifa_msghdr *)(void *)cp;
 					ifam->ifam_index =
@@ -1770,7 +1791,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 	struct ifnet *ifp;
 	struct ifaddr *ifa;
 	struct	rt_addrinfo info;
-	int	len, error = 0;
+	int	len = 0, error = 0;
 	int	pass = 0;
 	int	total_len = 0, current_len = 0;
 	char	*total_buffer = NULL, *cp = NULL;
@@ -1799,7 +1820,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 			 */
 			ifa = ifp->if_lladdr;
 			info.rti_info[RTAX_IFP] = ifa->ifa_addr;
-			len = rt_msg2(RTM_IFINFO2, &info, NULL, NULL, &cred, RTMF_HIDE_LLADDR);
+			len = rt_msg2(RTM_IFINFO2, &info, NULL, NULL, &cred);
 			if (pass == 0) {
 				total_len += len;
 			} else {
@@ -1812,7 +1833,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 				}
 				info.rti_info[RTAX_IFP] = ifa->ifa_addr;
 				len = rt_msg2(RTM_IFINFO2, &info,
-				    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
+				    (caddr_t)cp, NULL, &cred);
 				info.rti_info[RTAX_IFP] = NULL;
 
 				ifm = (struct if_msghdr2 *)(void *)cp;
@@ -1826,6 +1847,14 @@ sysctl_iflist2(int af, struct walkarg *w)
 				ifm->ifm_timer = ifp->if_timer;
 				if_data_internal_to_if_data64(ifp,
 				    &ifp->if_data, &ifm->ifm_data);
+				/*
+				 * <rdar://problem/32940901>
+				 * Round bytes only for non-platform
+				*/
+				if (!csproc_get_platform_binary(w->w_req->p)) {
+					ALIGN_BYTES(ifm->ifm_data.ifi_ibytes);
+					ALIGN_BYTES(ifm->ifm_data.ifi_obytes);
+				}
 
 				cp += len;
 				VERIFY(IS_P2ALIGNED(cp, sizeof (u_int32_t)));
@@ -1841,7 +1870,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 				info.rti_info[RTAX_NETMASK] = ifa->ifa_netmask;
 				info.rti_info[RTAX_BRD] = ifa->ifa_dstaddr;
 				len = rt_msg2(RTM_NEWADDR, &info, NULL, NULL,
-				    &cred, RTMF_HIDE_LLADDR);
+				    &cred);
 				if (pass == 0) {
 					total_len += len;
 				} else {
@@ -1853,7 +1882,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 						break;
 					}
 					len = rt_msg2(RTM_NEWADDR, &info,
-					    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
+					    (caddr_t)cp, NULL, &cred);
 
 					ifam = (struct ifa_msghdr *)(void *)cp;
 					ifam->ifam_index =
@@ -1897,7 +1926,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 					info.rti_info[RTAX_GATEWAY] =
 					    ifma->ifma_ll->ifma_addr;
 				len = rt_msg2(RTM_NEWMADDR2, &info, NULL, NULL,
-				    &cred, RTMF_HIDE_LLADDR);
+				    &cred);
 				if (pass == 0) {
 					total_len += len;
 				} else {
@@ -1909,7 +1938,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 						break;
 					}
 					len = rt_msg2(RTM_NEWMADDR2, &info,
-					    (caddr_t)cp, NULL, &cred, RTMF_HIDE_LLADDR);
+					    (caddr_t)cp, NULL, &cred);
 
 					ifmam =
 					    (struct ifma_msghdr2 *)(void *)cp;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -133,97 +133,6 @@ struct fairq_classstats {
 	classq_state_t		qstate;
 };
 
-#ifdef BSD_KERNEL_PRIVATE
-
-typedef struct fairq_bucket {
-	struct fairq_bucket *next;	/* circular list */
-	struct fairq_bucket *prev;	/* circular list */
-	class_queue_t	queue;		/* the actual queue */
-	u_int64_t	bw_bytes;	/* statistics used to calculate bw */
-	u_int64_t	bw_delta;	/* statistics used to calculate bw */
-	u_int64_t	last_time;
-	int		in_use;
-} fairq_bucket_t;
-
-struct fairq_class {
-	u_int32_t	cl_handle;	/* class handle */
-	u_int32_t	cl_nbuckets;	/* (power of 2) */
-	u_int32_t	cl_nbucket_mask; /* bucket mask */
-	u_int32_t	cl_qflags;	/* class queue flags */
-	fairq_bucket_t	*cl_buckets;
-	fairq_bucket_t	*cl_head;	/* head of circular bucket list */
-	fairq_bucket_t	*cl_polled;
-	union {
-		void		*ptr;
-		struct red	*red;	/* RED state */
-		struct rio	*rio;	/* RIO state */
-		struct blue	*blue;	/* BLUE state */
-		struct sfb	*sfb;	/* SFB state */
-	} cl_qalg;
-	u_int64_t	cl_hogs_m1;
-	u_int64_t	cl_lssc_m1;
-	u_int64_t	cl_bandwidth;
-	u_int64_t	cl_bw_current;
-	u_int64_t	cl_bw_bytes;
-	u_int64_t	cl_bw_delta;
-	u_int64_t	cl_last_time;
-	classq_type_t	cl_qtype;	/* rollup */
-	classq_state_t	cl_qstate;	/* state */
-	int		cl_qlimit;
-	int		cl_pri;		/* priority */
-	int		cl_flags;	/* class flags */
-	struct fairq_if	*cl_fif;	/* back pointer to fif */
-
-	/* round robin index */
-
-	/* statistics */
-	struct pktcntr  cl_xmitcnt;	/* transmitted packet counter */
-	struct pktcntr  cl_dropcnt;	/* dropped packet counter */
-};
-
-#define	cl_red	cl_qalg.red
-#define	cl_rio	cl_qalg.rio
-#define	cl_blue	cl_qalg.blue
-#define	cl_sfb	cl_qalg.sfb
-
-/* fairq_if flags */
-#define	FAIRQIFF_ALTQ		0x1	/* configured via PF/ALTQ */
-
-/*
- * fairq interface state
- */
-struct fairq_if {
-	struct ifclassq		*fif_ifq;	/* backpointer to ifclassq */
-	int			fif_maxpri;	/* max priority in use */
-	u_int32_t		fif_flags;	/* flags */
-	struct fairq_class	*fif_poll_cache; /* cached poll */
-	struct fairq_class	*fif_default;	/* default class */
-	struct fairq_class	*fif_classes[FAIRQ_MAXPRI]; /* classes */
-};
-
-#define	FAIRQIF_IFP(_fif)	((_fif)->fif_ifq->ifcq_ifp)
-
-struct if_ifclassq_stats;
-
-extern void fairq_init(void);
-extern struct fairq_if *fairq_alloc(struct ifnet *, int, boolean_t);
-extern int fairq_destroy(struct fairq_if *);
-extern void fairq_purge(struct fairq_if *);
-extern void fairq_event(struct fairq_if *, cqev_t);
-extern int fairq_add_queue(struct fairq_if *, int, u_int32_t, u_int64_t,
-    u_int32_t, int, u_int64_t, u_int64_t, u_int64_t, u_int64_t, u_int32_t,
-    struct fairq_class **);
-extern int fairq_remove_queue(struct fairq_if *, u_int32_t);
-extern int fairq_get_class_stats(struct fairq_if *, u_int32_t,
-    struct fairq_classstats *);
-extern int fairq_enqueue(struct fairq_if *, struct fairq_class *,
-    struct mbuf *, struct pf_mtag *);
-extern struct mbuf *fairq_dequeue(struct fairq_if *, cqdq_op_t);
-extern int fairq_setup_ifclassq(struct ifclassq *, u_int32_t);
-extern int fairq_teardown_ifclassq(struct ifclassq *ifq);
-extern int fairq_getqstats_ifclassq(struct ifclassq *, u_int32_t,
-    struct if_ifclassq_stats *);
-#endif /* BSD_KERNEL_PRIVATE */
 #ifdef __cplusplus
 }
 #endif

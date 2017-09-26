@@ -132,9 +132,7 @@
 #include <sys/csr.h>
 #endif
 
-#if CONFIG_BANK
 #include <bank/bank_internal.h>
-#endif
 
 #if ALTERNATE_DEBUGGER
 #include <arm64/alternate_debugger.h>
@@ -146,6 +144,9 @@
 
 #if CONFIG_MACF
 #include <security/mac_mach_internal.h>
+#if CONFIG_VNGUARD
+extern void vnguard_policy_init(void);
+#endif
 #endif
 
 #if KPC
@@ -156,6 +157,11 @@
 #include <kern/hv_support.h>
 #endif
 
+#include <san/kasan.h>
+
+#if defined(__arm__) || defined(__arm64__)
+#include <arm/misc_protos.h> // for arm_vm_prot_finalize
+#endif
 
 #include <i386/pmCPU.h>
 static void		kernel_bootstrap_thread(void);
@@ -197,7 +203,7 @@ unsigned int wake_nkdbufs = 0;
 unsigned int write_trace_on_panic = 0;
 static char trace_typefilter[64] = { 0 };
 boolean_t trace_serial = FALSE;
-boolean_t oslog_early_boot_complete = FALSE;
+boolean_t early_boot_complete = FALSE;
 
 /* mach leak logging */
 int log_leaks = 0;
@@ -277,6 +283,11 @@ kernel_bootstrap(void)
 
 	oslog_init();
 
+#if KASAN
+	kernel_bootstrap_log("kasan_late_init");
+	kasan_late_init();
+#endif
+
 #if CONFIG_TELEMETRY
 	kernel_bootstrap_log("telemetry_init");
 	telemetry_init();
@@ -339,6 +350,7 @@ kernel_bootstrap(void)
 	/*
 	 *	Initialize the IPC, task, and thread subsystems.
 	 */
+
 #if CONFIG_COALITIONS
 	kernel_bootstrap_log("coalitions_init");
 	coalitions_init();
@@ -358,19 +370,15 @@ kernel_bootstrap(void)
 	kernel_bootstrap_log("mach_init_activity_id");
 	mach_init_activity_id();
 
-#if CONFIG_BANK
 	/* Initialize the BANK Manager. */
 	kernel_bootstrap_log("bank_init");
 	bank_init();
-#endif
 
 	kernel_bootstrap_log("ipc_pthread_priority_init");
 	ipc_pthread_priority_init();
 
 	/* initialize the corpse config based on boot-args */
 	corpses_init();
-
-	vm_user_init();
 
 	/*
 	 *	Create a kernel thread to execute the kernel bootstrap.
@@ -394,6 +402,8 @@ int kth_started = 0;
 vm_offset_t vm_kernel_addrperm;
 vm_offset_t buf_kernel_addrperm;
 vm_offset_t vm_kernel_addrperm_ext;
+uint64_t vm_kernel_addrhash_salt;
+uint64_t vm_kernel_addrhash_salt_ext;
 
 /*
  * Now running in a thread.  Kick off other services,
@@ -442,6 +452,11 @@ kernel_bootstrap_thread(void)
 	kernel_bootstrap_thread_log("thread_bind");
 	thread_bind(processor);
 
+#if __arm64__
+	if (IORamDiskBSDRoot()) {
+		cpm_preallocate_early();
+	}
+#endif /* __arm64__ */
 
 	/*
 	 * Initialize ipc thread call support.
@@ -511,9 +526,7 @@ kernel_bootstrap_thread(void)
 	kernel_bootstrap_thread_log("ktrace_init");
 	ktrace_init();
 
-	if (new_nkdbufs > 0 || kdebug_serial || log_leaks) {
-		kdebug_boot_trace(new_nkdbufs, trace_typefilter);
-	}
+	kdebug_init(new_nkdbufs, trace_typefilter);
 
 	kernel_bootstrap_log("prng_init");
 	prng_cpu_init(master_cpu);
@@ -523,6 +536,10 @@ kernel_bootstrap_thread(void)
 	bsd_early_init();
 #endif
 
+#if defined(__arm64__)
+    ml_lockdown_init();
+#endif
+
 #ifdef	IOKIT
 	kernel_bootstrap_log("PE_init_iokit");
 	PE_init_iokit();
@@ -530,10 +547,16 @@ kernel_bootstrap_thread(void)
 
 	assert(ml_get_interrupts_enabled() == FALSE);
 
-	// Set this flag to indicate that it is now okay to start testing
-	// for interrupts / preemeption disabled while logging
-	oslog_early_boot_complete = TRUE;
+	/*
+	 * Past this point, kernel subsystems that expect to operate with
+	 * interrupts or preemption enabled may begin enforcement.
+	 */
+	early_boot_complete = TRUE;
 
+#if INTERRUPT_MASKED_DEBUG
+	// Reset interrupts masked timeout before we enable interrupts
+	ml_spin_debug_clear_self();
+#endif
 	(void) spllo();		/* Allow interruptions */
 
 #if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
@@ -557,8 +580,20 @@ kernel_bootstrap_thread(void)
 #if CONFIG_MACF
 	kernel_bootstrap_log("mac_policy_initmach");
 	mac_policy_initmach();
+#if CONFIG_VNGUARD
+	vnguard_policy_init();
+#endif
 #endif
 
+#if defined(__arm__) || defined(__arm64__)
+#if CONFIG_KERNEL_INTEGRITY
+        machine_lockdown_preflight();
+#endif
+	/*
+	 *  Finalize protections on statically mapped pages now that comm page mapping is established.
+	 */
+	arm_vm_prot_finalize(PE_state.bootArgs); 
+#endif
 
 #if CONFIG_SCHED_SFI
 	kernel_bootstrap_log("sfi_init");
@@ -580,6 +615,8 @@ kernel_bootstrap_thread(void)
 	buf_kernel_addrperm |= 1;
 	read_random(&vm_kernel_addrperm_ext, sizeof(vm_kernel_addrperm_ext));
 	vm_kernel_addrperm_ext |= 1;
+	read_random(&vm_kernel_addrhash_salt, sizeof(vm_kernel_addrhash_salt));
+	read_random(&vm_kernel_addrhash_salt_ext, sizeof(vm_kernel_addrhash_salt_ext));
 
 	vm_set_restrictions();
 
@@ -597,6 +634,11 @@ kernel_bootstrap_thread(void)
      * the KLD, PRELINK symtab, LINKEDIT, and symtab segments/load commands.
      */
 	OSKextRemoveKextBootstrap();
+
+	/*
+	 * Get rid of pages used for early boot tracing.
+	 */
+	kdebug_free_early_buf();
 
 	serial_keyboard_init();		/* Start serial keyboard if wanted */
 
@@ -671,7 +713,7 @@ processor_start_thread(void *machine_param)
  *
  *	Start the first thread on a processor.
  */
-static void
+static void __attribute__((noreturn))
 load_context(
 	thread_t		thread)
 {
@@ -709,11 +751,9 @@ load_context(
 		sched_run_incr(thread);
 
 	processor->active_thread = thread;
-	processor->current_pri = thread->sched_pri;
-	processor->current_thmode = thread->sched_mode;
-	processor->current_sfi_class = SFI_CLASS_KERNEL;
+	processor_state_update_explicit(processor, thread->sched_pri, 
+		SFI_CLASS_KERNEL, PSET_SMP, thread_get_perfcontrol_class(thread));
 	processor->starting_pri = thread->sched_pri;
-
 	processor->deadline = UINT64_MAX;
 	thread->last_processor = processor;
 
@@ -723,6 +763,7 @@ load_context(
 
 	timer_start(&PROCESSOR_DATA(processor, system_state), processor->last_dispatch);
 	PROCESSOR_DATA(processor, current_state) = &PROCESSOR_DATA(processor, system_state);
+
 
 	PMAP_ACTIVATE_USER(thread, processor->cpu_id);
 
@@ -745,8 +786,15 @@ scale_setup()
 		if (scale > 16)
 			scale = 16;
 		task_max_base = 2500;
-	} else if ((uint64_t)sane_size >= (uint64_t)(3 * 1024 * 1024 *1024ULL))
-		scale = 2;
+	/* Raise limits for machines with >= 3GB */
+	} else if ((uint64_t)sane_size >= (uint64_t)(3 * 1024 * 1024 *1024ULL)) {
+		if ((uint64_t)sane_size < (uint64_t)(8 * 1024 * 1024 *1024ULL)) {
+			scale = 2;
+		} else {
+			/* limit to 64GB */
+			scale = MIN(16, (int)((uint64_t)sane_size / (uint64_t)(4 * 1024 * 1024 *1024ULL)));
+		}
+	}
 
 	task_max = MAX(task_max, task_max_base * scale);
 

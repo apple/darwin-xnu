@@ -72,6 +72,44 @@
 /* XXX: this will go away */
 #define	PR_SLOWHZ	2		/* 2 slow timeouts per second */
 
+/*
+ * The arguments to the ctlinput routine are
+ *      (*protosw[].pr_ctlinput)(cmd, sa, arg);
+ * where cmd is one of the commands below, sa is a pointer to a sockaddr,
+ * and arg is a `void *' argument used within a protocol family.
+ */
+#define	PRC_IFDOWN		0       /* interface transition */
+#define	PRC_ROUTEDEAD		1       /* select new route if possible ??? */
+#define	PRC_IFUP		2       /* interface has come back up */
+#define	PRC_QUENCH2		3       /* DEC congestion bit says slow down */
+#define	PRC_QUENCH		4       /* some one said to slow down */
+#define	PRC_MSGSIZE		5       /* message size forced drop */
+#define	PRC_HOSTDEAD		6       /* host appears to be down */
+#define	PRC_HOSTUNREACH		7       /* deprecated (use PRC_UNREACH_HOST) */
+#define	PRC_UNREACH_NET		8       /* no route to network */
+#define	PRC_UNREACH_HOST	9       /* no route to host */
+#define	PRC_UNREACH_PROTOCOL	10      /* dst says bad protocol */
+#define	PRC_UNREACH_PORT	11      /* bad port # */
+/* was PRC_UNREACH_NEEDFRAG	12         (use PRC_MSGSIZE) */
+#define	PRC_UNREACH_SRCFAIL	13      /* source route failed */
+#define	PRC_REDIRECT_NET	14      /* net routing redirect */
+#define	PRC_REDIRECT_HOST	15      /* host routing redirect */
+#define	PRC_REDIRECT_TOSNET	16      /* redirect for type of service & net */
+#define	PRC_REDIRECT_TOSHOST	17      /* redirect for tos & host */
+#define	PRC_TIMXCEED_INTRANS	18      /* packet lifetime expired in transit */
+#define	PRC_TIMXCEED_REASS	19      /* lifetime expired on reass q */
+#define	PRC_PARAMPROB		20      /* header incorrect */
+#define	PRC_UNREACH_ADMIN_PROHIB	21     /* packet administrativly prohibited */
+
+#define	PRC_NCMDS		22
+
+#define	PRC_IS_REDIRECT(cmd)    \
+	((cmd) >= PRC_REDIRECT_NET && (cmd) <= PRC_REDIRECT_TOSHOST)
+
+#ifdef BSD_KERNEL_PRIVATE
+#include <sys/eventhandler.h>
+#endif
+
 #ifdef KERNEL_PRIVATE
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -86,6 +124,7 @@ struct socket;
 struct sockopt;
 struct socket_filter;
 struct uio;
+struct ifnet;
 #ifdef XNU_KERNEL_PRIVATE
 struct domain_old;
 #endif /* XNU_KERNEL_PRIVATE */
@@ -118,7 +157,7 @@ struct protosw {
 	int	(*pr_output)		/* output to protocol (from above) */
 		    (struct mbuf *m, struct socket *so);
 	void	(*pr_ctlinput)		/* control input (from below) */
-		    (int, struct sockaddr *, void *);
+		    (int, struct sockaddr *, void *, struct ifnet *);
 	int	(*pr_ctloutput)		/* control output (from above) */
 		    (struct socket *, struct sockopt *);
 	/*
@@ -140,11 +179,11 @@ struct protosw {
 	struct	pr_usrreqs *pr_usrreqs;	/* supersedes pr_usrreq() */
 #endif /* !XNU_KERNEL_PRIVATE */
 	int	(*pr_lock)		/* lock function for protocol */
-		    (struct socket *so, int locktype, void *debug);
+		    (struct socket *so, int refcnt, void *debug);
 	int	(*pr_unlock)		/* unlock for protocol */
-		    (struct socket *so, int locktype, void *debug);
+		    (struct socket *so, int refcnt, void *debug);
 	lck_mtx_t *(*pr_getlock)	/* retrieve protocol lock */
-		    (struct socket *so, int locktype);
+		    (struct socket *so, int flags);
 	/*
 	 * Implant hooks
 	 */
@@ -204,7 +243,7 @@ struct protosw {
 	int	(*pr_output)		/* output to protocol (from above) */
 		    (struct mbuf *m, struct socket *so);
 	void	(*pr_ctlinput)		/* control input (from below) */
-		    (int, struct sockaddr *, void *);
+		    (int, struct sockaddr *, void *, struct ifnet *);
 	int	(*pr_ctloutput)		/* control output (from above) */
 		    (struct socket *, struct sockopt *);
 	/*
@@ -220,17 +259,23 @@ struct protosw {
 	int	(*pr_sysctl)		/* sysctl for protocol */
 		    (int *, u_int, void *, size_t *, void *, size_t);
 	int	(*pr_lock)		/* lock function for protocol */
-		    (struct socket *so, int locktype, void *debug);
+		    (struct socket *so, int refcnt, void *debug);
 	int	(*pr_unlock)		/* unlock for protocol */
-		    (struct socket *so, int locktype, void *debug);
+		    (struct socket *so, int refcnt, void *debug);
 	lck_mtx_t *(*pr_getlock)	/* retrieve protocol lock */
-		    (struct socket *so, int locktype);
+		    (struct socket *so, int flags);
 	/*
 	 * misc
 	 */
 	TAILQ_HEAD(, socket_filter) pr_filter_head;
 	struct protosw_old *pr_old;
 };
+
+/*
+ * Values for the flags argument of pr_getlock
+ */
+#define	PR_F_WILLUNLOCK	0x01	/* Will unlock (e.g., msleep) after the pr_getlock call */
+
 #endif /* XNU_KERNEL_PRIVATE */
 
 /*
@@ -268,40 +313,6 @@ struct protosw {
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
-/*
- * The arguments to the ctlinput routine are
- *	(*protosw[].pr_ctlinput)(cmd, sa, arg);
- * where cmd is one of the commands below, sa is a pointer to a sockaddr,
- * and arg is a `void *' argument used within a protocol family.
- */
-#define	PRC_IFDOWN		0	/* interface transition */
-#define	PRC_ROUTEDEAD		1	/* select new route if possible ??? */
-#define	PRC_IFUP		2	/* interface has come back up */
-#define	PRC_QUENCH2		3	/* DEC congestion bit says slow down */
-#define	PRC_QUENCH		4	/* some one said to slow down */
-#define	PRC_MSGSIZE		5	/* message size forced drop */
-#define	PRC_HOSTDEAD		6	/* host appears to be down */
-#define	PRC_HOSTUNREACH		7	/* deprecated (use PRC_UNREACH_HOST) */
-#define	PRC_UNREACH_NET		8	/* no route to network */
-#define	PRC_UNREACH_HOST	9	/* no route to host */
-#define	PRC_UNREACH_PROTOCOL	10	/* dst says bad protocol */
-#define	PRC_UNREACH_PORT	11	/* bad port # */
-/* was	PRC_UNREACH_NEEDFRAG	12	   (use PRC_MSGSIZE) */
-#define	PRC_UNREACH_SRCFAIL	13	/* source route failed */
-#define	PRC_REDIRECT_NET	14	/* net routing redirect */
-#define	PRC_REDIRECT_HOST	15	/* host routing redirect */
-#define	PRC_REDIRECT_TOSNET	16	/* redirect for type of service & net */
-#define	PRC_REDIRECT_TOSHOST	17	/* redirect for tos & host */
-#define	PRC_TIMXCEED_INTRANS	18	/* packet lifetime expired in transit */
-#define	PRC_TIMXCEED_REASS	19	/* lifetime expired on reass q */
-#define	PRC_PARAMPROB		20	/* header incorrect */
-#define	PRC_UNREACH_ADMIN_PROHIB 21	/* packet administrativly prohibited */
-
-#define	PRC_NCMDS		22
-
-#define	PRC_IS_REDIRECT(cmd)	\
-	((cmd) >= PRC_REDIRECT_NET && (cmd) <= PRC_REDIRECT_TOSHOST)
-
 #ifdef PRCREQUESTS
 char	*prcrequests[] = {
 	"IFDOWN", "ROUTEDEAD", "IFUP", "DEC-BIT-QUENCH2",
@@ -383,7 +394,6 @@ char *prurequests[] = {
 #endif /* PRUREQUESTS */
 #endif /* BSD_KERNEL_PRIVATE */
 
-struct ifnet;
 struct stat;
 struct ucred;
 struct uio;
@@ -463,8 +473,6 @@ struct pr_usrreqs {
 	int	(*pru_disconnectx)(struct socket *,
 		    sae_associd_t, sae_connid_t);
 	int	(*pru_listen)(struct socket *, struct proc *);
-	int	(*pru_peeloff)(struct socket *,
-		    sae_associd_t, struct socket **);
 	int	(*pru_peeraddr)(struct socket *, struct sockaddr **);
 	int	(*pru_rcvd)(struct socket *, int);
 	int	(*pru_rcvoob)(struct socket *, struct mbuf *, int);
@@ -493,6 +501,12 @@ struct pr_usrreqs {
 /* Values for pru_flags  */
 #define	PRUF_OLD	0x10000000	/* added via net_add_proto */
 
+#ifdef BSD_KERNEL_PRIVATE
+/*
+ * For faster access than net_uptime(), bypassing the initialization.
+ */
+extern u_int64_t _net_uptime;
+#endif /* BSD_KERNEL_PRIVATE */
 #endif /* XNU_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
@@ -511,7 +525,6 @@ extern int pru_connectx_notsupp(struct socket *, struct sockaddr *,
 extern int pru_disconnectx_notsupp(struct socket *, sae_associd_t,
     sae_connid_t);
 extern int pru_socheckopt_null(struct socket *, struct sockopt *);
-extern int pru_peeloff_notsupp(struct socket *, sae_associd_t, struct socket **);
 #endif /* XNU_KERNEL_PRIVATE */
 extern int pru_control_notsupp(struct socket *so, u_long cmd, caddr_t data,
     struct ifnet *ifp, struct proc *p);
@@ -555,7 +568,7 @@ extern int net_del_proto(int, int, struct domain *);
 extern int net_add_proto_old(struct protosw_old *, struct domain_old *);
 extern int net_del_proto_old(int, int, struct domain_old *);
 extern void net_update_uptime(void);
-extern void net_update_uptime_secs(uint64_t secs);
+extern void net_update_uptime_with_time(const struct timeval *);
 extern u_int64_t net_uptime(void);
 extern void net_uptime2timeval(struct timeval *);
 #else

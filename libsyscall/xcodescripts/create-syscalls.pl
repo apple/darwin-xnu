@@ -222,6 +222,7 @@ sub checkForCustomStubs {
             foreach my $subarch (@Architectures) {
                 (my $arch = $subarch) =~ s/arm(v.*)/arm/;
                 $arch =~ s/x86_64(.*)/x86_64/;
+                $arch =~ s/arm64(.*)/arm64/;
                 $$sym{aliases}{$arch} = [] unless $$sym{aliases}{$arch};
                 push(@{$$sym{aliases}{$arch}}, $$sym{asm_sym});
             }
@@ -244,6 +245,7 @@ sub readAliases {
     for my $arch (@Architectures) {
         (my $new_arch = $arch) =~ s/arm(v.*)/arm/g;
         $new_arch =~ s/x86_64(.*)/x86_64/g;
+        $new_arch =~ s/arm64(.*)/arm64/g;
         push(@a, $new_arch) unless grep { $_ eq $new_arch } @a;
     }
     
@@ -302,6 +304,7 @@ sub writeStubForSymbol {
     for my $subarch (@Architectures) {
         (my $arch = $subarch) =~ s/arm(v.*)/arm/;
         $arch =~ s/x86_64(.*)/x86_64/;
+        $arch =~ s/arm64(.*)/arm64/;
         push(@conditions, "defined(__${arch}__)") unless grep { $_ eq $arch } @{$$symbol{except}};
     }
 
@@ -334,6 +337,7 @@ sub writeAliasesForSymbol {
     foreach my $subarch (@Architectures) {
         (my $arch = $subarch) =~ s/arm(v.*)/arm/;
         $arch =~ s/x86_64(.*)/x86_64/;
+        $arch =~ s/arm64(.*)/arm64/;
         
         next unless scalar($$symbol{aliases}{$arch});
         

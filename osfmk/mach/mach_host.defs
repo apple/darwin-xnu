@@ -161,18 +161,8 @@ routine	kmod_get_info(
 		host		: host_t;
 	out	modules		: kmod_args_t);
 
-/*
- *	Returns information about the memory allocation zones.
- *      Supported in all kernels..
- *
- *	DEPRECATED!  Use mach_zone_info() instead.
- */
-routine host_zone_info(
-		host		: host_priv_t;
-	out	names		: zone_name_array_t,
-					Dealloc;
-	out	info		: zone_info_array_t,
-					Dealloc);
+
+skip; /* was host_zone_info */
 
 /*
  *	Returns information about the global VP table.
@@ -250,7 +240,7 @@ routine host_statistics64(
 /*
  *	Returns information about the memory allocation zones.
  *      Data returned is compatible with various caller and kernel
- *	address space sizes (unlike host_zone_info()).
+ *	address space sizes.
  */
 routine mach_zone_info(
 		host		: host_priv_t;

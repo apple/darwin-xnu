@@ -98,7 +98,6 @@ __END_DECLS
  * PFDL = Process File Desc Lock
  * PUCL = Process User Credentials Lock
  * PSL = Process Spin Lock
- * PPL = Parent Process Lock (planed for later usage)
  * LL = List Lock
  * SL = Session Lock
 */
@@ -255,6 +254,7 @@ struct	proc {
 
 	pid_t		p_oppid;	 	/* Save parent pid during ptrace. XXX */
 	u_int		p_xstat;		/* Exit status for wait; also stop signal. */
+	uint8_t p_xhighbits;		/* Stores the top byte of exit status to avoid truncation*/
 
 #ifdef _PROC_HAS_SCHEDINFO_
 	/* may need cleanup, not used */
@@ -318,10 +318,6 @@ struct	proc {
 	char	p_nice;		/* Process "nice" value.(PL) */
 	u_char	p_resv1;	/* (NU) User-priority based on p_cpu and p_nice. */
 
-#if CONFIG_MACF
-	int	p_mac_enforce;			/* MAC policy enforcement control */
-#endif
-
 	// types currently in sys/param.h
 	command_t   p_comm;
 	proc_name_t p_name;	/* can be changed by the process */
@@ -364,7 +360,6 @@ struct	proc {
 	uint32_t	p_pth_tsd_offset;	/* offset from pthread_t to TSD for new threads */
 	user_addr_t	p_stack_addr_hint;	/* stack allocation hint for wq threads */
 	void * 	p_wqptr;			/* workq ptr */
-	struct kqueue * p_wqkqueue;             /* private workq kqueue */
 
 	struct  timeval p_start;        	/* starting time */
 	void *	p_rcall;
@@ -384,6 +379,8 @@ struct	proc {
 #endif /* DIAGNOSTIC */
 	uint64_t	p_dispatchqueue_offset;
 	uint64_t	p_dispatchqueue_serialno_offset;
+	uint64_t	p_return_to_kernel_offset;
+	uint64_t	p_mach_thread_self_offset;
 #if VM_PRESSURE_EVENTS
 	struct timeval	vm_pressure_last_notify_tstamp;
 #endif
@@ -409,6 +406,7 @@ struct	proc {
 
 	/* cached proc-specific data required for corpse inspection */
 	pid_t             p_responsible_pid;	/* pid resonsible for this process */
+	_Atomic uint32_t  p_user_faults; /* count the number of user faults generated */
 
 	struct os_reason     *p_exit_reason;
 };
@@ -515,7 +513,9 @@ struct	proc {
 /* This packing breaks symmetry with userspace side (struct extern_proc 
  * of proc.h) for the ARMV7K ABI where 64-bit types are 64-bit aligned
  */
+#if !(__arm__ && (__BIGGEST_ALIGNMENT__ > 4))
 #pragma pack(4)
+#endif
 struct user32_extern_proc {
 	union {
 		struct {
@@ -655,9 +655,11 @@ extern LIST_HEAD(sesshashhead, session) *sesshashtbl;
 extern u_long sesshash;
 
 extern lck_grp_t * proc_lck_grp;
+extern lck_grp_t * proc_fdmlock_grp;
+extern lck_grp_t * proc_kqhashlock_grp;
+extern lck_grp_t * proc_knhashlock_grp;
 #if CONFIG_FINE_LOCK_GROUPS
 extern lck_grp_t * proc_mlock_grp;
-extern lck_grp_t * proc_fdmlock_grp;
 extern lck_grp_t * proc_ucred_mlock_grp;
 extern lck_grp_t * proc_slock_grp;
 #endif

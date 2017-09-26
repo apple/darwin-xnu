@@ -1,3 +1,7 @@
+#ifdef T_NAMESPACE
+#undef T_NAMESPACE
+#endif
+
 #include <darwintest.h>
 
 #include <mach/host_priv.h>
@@ -55,11 +59,20 @@ attempt_kernel_inspection(task_t task)
 	T_EXPECT_MACH_SUCCESS(task_threads(task, &threads, &thcnt), "task_threads");
 	T_LOG("Found %d kernel threads.", thcnt);
 	for (i = 0; i < thcnt; i++) {
+		kern_return_t kr;
 		thread_basic_info_data_t basic_info;
 		mach_msg_type_number_t bi_count = THREAD_BASIC_INFO_COUNT;
-		T_EXPECT_MACH_SUCCESS(thread_info(threads[i], THREAD_BASIC_INFO,
-		                                  (thread_info_t)&basic_info, &bi_count),
-		                      "thread_info(... THREAD_BASIC_INFO ...)");
+
+		kr = thread_info(threads[i], THREAD_BASIC_INFO,
+				(thread_info_t)&basic_info, &bi_count);
+		/*
+		 * Ignore threads that have gone away.
+		 */
+		if (kr == MACH_SEND_INVALID_DEST) {
+			T_LOG("ignoring thread that has been destroyed");
+			continue;
+		}
+		T_EXPECT_MACH_SUCCESS(kr, "thread_info(... THREAD_BASIC_INFO ...)");
 		(void)mach_port_deallocate(mach_task_self(), threads[i]);
 	}
 	mach_vm_deallocate(mach_task_self(),

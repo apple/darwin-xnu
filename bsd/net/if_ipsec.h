@@ -35,15 +35,6 @@
 #include <sys/kern_control.h>
 #include <netinet/ip_var.h>
 
-/* Control block allocated for each kernel control connection */
-struct ipsec_pcb {
-	kern_ctl_ref		ipsec_ctlref;
-	ifnet_t				ipsec_ifp;
-	u_int32_t			ipsec_unit;
-	u_int32_t			ipsec_flags;
-	int					ipsec_ext_ifdata_stats;
-	mbuf_svc_class_t	ipsec_output_service_class;
-};
 
 errno_t ipsec_register_control(void);
 
@@ -76,6 +67,11 @@ void ipsec_set_ip6oa_for_interface(ifnet_t interface, struct ip6_out_args *ip6oa
 #define IPSEC_OPT_INC_IFDATA_STATS_OUT			5	/* set to increment stat counters (type struct ipsec_stats_param) */
 #define IPSEC_OPT_SET_DELEGATE_INTERFACE		6	/* set the delegate interface (char[]) */
 #define IPSEC_OPT_OUTPUT_TRAFFIC_CLASS			7	/* set the traffic class for packets leaving the interface, see sys/socket.h */
+#define IPSEC_OPT_ENABLE_CHANNEL				8	/* enable a kernel pipe nexus that allows the owner to open a channel to act as a driver */
+#define IPSEC_OPT_GET_CHANNEL_UUID				9	/* get the uuid of the kernel pipe nexus instance */
+#define IPSEC_OPT_ENABLE_FLOWSWITCH				10	/* enable a flowswitch nexus that clients can use */
+#define IPSEC_OPT_INPUT_FRAG_SIZE				11	/* set the maximum size of input packets before fragmenting as a uint32_t */
+
 /*
  * ipsec stats parameter structure
  */

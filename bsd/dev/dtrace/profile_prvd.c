@@ -54,6 +54,8 @@
 
 #if defined(__x86_64__)
 extern x86_saved_state_t *find_kern_regs(thread_t);
+#elif defined (__arm__) || defined(__arm64__)
+extern struct arm_saved_state *find_kern_regs(thread_t);
 #else
 #error Unknown architecture
 #endif
@@ -98,6 +100,8 @@ static dtrace_provider_id_t profile_id;
 
 #if defined(__x86_64__)
 #define PROF_ARTIFICIAL_FRAMES  9
+#elif defined(__arm__) || defined(__arm64__)
+#define PROF_ARTIFICIAL_FRAMES 8
 #else
 #error Unknown architecture
 #endif
@@ -186,6 +190,50 @@ profile_fire(void *arg)
 			dtrace_probe(prof->prof_id, 0x0, regs->eip, late, 0, 0);
 		}
 	}
+#elif defined(__arm__)
+	{
+		arm_saved_state_t *arm_kern_regs = (arm_saved_state_t *) find_kern_regs(current_thread());
+
+		// We should only come in here from interrupt context, so we should always have valid kernel regs
+		assert(NULL != arm_kern_regs);
+
+		if (arm_kern_regs->cpsr & 0xF) {
+			/* Kernel was interrupted. */
+			dtrace_probe(prof->prof_id, arm_kern_regs->pc,  0x0, late, 0, 0);
+		} else {
+			/* Possibly a user interrupt */
+			arm_saved_state_t   *arm_user_regs = (arm_saved_state_t *)find_user_regs(current_thread());
+
+			if (NULL == arm_user_regs) {
+				/* Too bad, so sad, no useful interrupt state. */
+				dtrace_probe(prof->prof_id, 0xcafebabe, 0x0, late, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
+			} else {
+				dtrace_probe(prof->prof_id, 0x0, arm_user_regs->pc, late, 0, 0);
+			}
+		}
+	}
+#elif defined(__arm64__)
+	{
+		arm_saved_state_t *arm_kern_regs = (arm_saved_state_t *) find_kern_regs(current_thread());
+
+		// We should only come in here from interrupt context, so we should always have valid kernel regs
+		assert(NULL != arm_kern_regs);
+
+		if (saved_state64(arm_kern_regs)->cpsr & 0xF) {
+			/* Kernel was interrupted. */
+			dtrace_probe(prof->prof_id, saved_state64(arm_kern_regs)->pc,  0x0, late, 0, 0);
+		} else {
+			/* Possibly a user interrupt */
+			arm_saved_state_t   *arm_user_regs = (arm_saved_state_t *)find_user_regs(current_thread());
+
+			if (NULL == arm_user_regs) {
+				/* Too bad, so sad, no useful interrupt state. */
+				dtrace_probe(prof->prof_id, 0xcafebabe, 0x0, late, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
+			} else {
+				dtrace_probe(prof->prof_id, 0x0, get_saved_state_pc(arm_user_regs), late, 0, 0);
+			}
+		}
+	}
 #else
 #error Unknown architecture
 #endif
@@ -221,6 +269,45 @@ profile_tick(void *arg)
 			dtrace_probe(prof->prof_id, 0x0, regs->eip, 0, 0, 0);
 		}
 	}
+#elif defined(__arm__)
+	{
+		arm_saved_state_t *arm_kern_regs = (arm_saved_state_t *) find_kern_regs(current_thread());
+
+		if (NULL != arm_kern_regs) {
+			/* Kernel was interrupted. */
+			dtrace_probe(prof->prof_id, arm_kern_regs->pc,  0x0, 0, 0, 0);
+		} else {
+			/* Possibly a user interrupt */
+			arm_saved_state_t   *arm_user_regs = (arm_saved_state_t *)find_user_regs(current_thread());
+
+			if (NULL == arm_user_regs) {
+				/* Too bad, so sad, no useful interrupt state. */
+				dtrace_probe(prof->prof_id, 0xcafebabe, 0x0, 0, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
+			} else {
+				dtrace_probe(prof->prof_id, 0x0, arm_user_regs->pc, 0, 0, 0);
+			}
+		}
+	}
+#elif defined(__arm64__)
+	{
+		arm_saved_state_t *arm_kern_regs = (arm_saved_state_t *) find_kern_regs(current_thread());
+
+		if (NULL != arm_kern_regs) {
+			/* Kernel was interrupted. */
+			dtrace_probe(prof->prof_id, saved_state64(arm_kern_regs)->pc,  0x0, 0, 0, 0);
+		} else {
+			/* Possibly a user interrupt */
+			arm_saved_state_t   *arm_user_regs = (arm_saved_state_t *)find_user_regs(current_thread());
+
+			if (NULL == arm_user_regs) {
+				/* Too bad, so sad, no useful interrupt state. */
+				dtrace_probe(prof->prof_id, 0xcafebabe, 0x0, 0, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
+			} else {
+				dtrace_probe(prof->prof_id, 0x0, get_saved_state_pc(arm_user_regs), 0, 0, 0);
+			}
+		}
+	}
+
 #else
 #error Unknown architecture
 #endif
@@ -499,6 +586,46 @@ profile_disable(void *arg, dtrace_id_t id, void *parg)
 	prof->prof_cyclic = CYCLIC_NONE;
 }
 
+static uint64_t
+profile_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
+{
+#pragma unused(arg, id, parg, argno, aframes)
+	/*
+	 * All the required arguments for the profile probe are passed directly
+	 * to dtrace_probe, and we do not go through dtrace_getarg which doesn't
+	 * know how to hop to the kernel stack from the interrupt stack like
+	 * dtrace_getpcstack
+	 */
+	return 0;
+}
+
+static void
+profile_getargdesc(void *arg, dtrace_id_t id, void *parg, dtrace_argdesc_t *desc)
+{
+#pragma unused(arg, id)
+	profile_probe_t *prof = parg;
+	const char *argdesc = NULL;
+	switch (desc->dtargd_ndx) {
+		case 0:
+			argdesc = "void*";
+			break;
+		case 1:
+			argdesc = "user_addr_t";
+			break;
+		case 2:
+			if (prof->prof_kind == PROF_PROFILE) {
+				argdesc = "hrtime_t";
+			}
+			break;
+	}
+	if (argdesc) {
+		strlcpy(desc->dtargd_native, argdesc, DTRACE_ARGTYPELEN);
+	}
+	else {
+		desc->dtargd_ndx = DTRACE_ARGNONE;
+	}
+}
+
 /*
  * APPLE NOTE:  profile_usermode call not supported.
  */
@@ -524,8 +651,8 @@ static dtrace_pops_t profile_pops = {
 	profile_disable,
 	NULL,
 	NULL,
-	NULL,
-	NULL,
+	profile_getargdesc,
+	profile_getarg,
 	profile_usermode,
 	profile_destroy
 };

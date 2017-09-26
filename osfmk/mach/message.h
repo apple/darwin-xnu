@@ -496,6 +496,27 @@ typedef struct
   mach_port_context_t		msgh_context;
 } mach_msg_context_trailer_t;
 
+#if defined(MACH_KERNEL_PRIVATE) && defined(__arm64__)
+typedef struct 
+{
+  mach_msg_trailer_type_t	msgh_trailer_type;
+  mach_msg_trailer_size_t	msgh_trailer_size;
+  mach_port_seqno_t		msgh_seqno;
+  security_token_t		msgh_sender;
+  audit_token_t			msgh_audit;
+  mach_port_context32_t		msgh_context;
+} mach_msg_context_trailer32_t;
+
+typedef struct 
+{
+  mach_msg_trailer_type_t	msgh_trailer_type;
+  mach_msg_trailer_size_t	msgh_trailer_size;
+  mach_port_seqno_t		msgh_seqno;
+  security_token_t		msgh_sender;
+  audit_token_t			msgh_audit;
+  mach_port_context64_t		msgh_context;
+} mach_msg_context_trailer64_t;
+#endif
 
 
 typedef struct
@@ -520,6 +541,32 @@ typedef struct
   msg_labels_t                  msgh_labels;
 } mach_msg_mac_trailer_t;
 
+#if defined(MACH_KERNEL_PRIVATE) && defined(__arm64__)
+typedef struct
+{
+  mach_msg_trailer_type_t       msgh_trailer_type;
+  mach_msg_trailer_size_t       msgh_trailer_size;
+  mach_port_seqno_t             msgh_seqno;
+  security_token_t              msgh_sender;
+  audit_token_t                 msgh_audit;
+  mach_port_context32_t		msgh_context;
+  int				msgh_ad;
+  msg_labels_t                  msgh_labels;
+} mach_msg_mac_trailer32_t;
+
+typedef struct
+{
+  mach_msg_trailer_type_t       msgh_trailer_type;
+  mach_msg_trailer_size_t       msgh_trailer_size;
+  mach_port_seqno_t             msgh_seqno;
+  security_token_t              msgh_sender;
+  audit_token_t                 msgh_audit;
+  mach_port_context64_t		msgh_context;
+  int				msgh_ad;
+  msg_labels_t                  msgh_labels;
+} mach_msg_mac_trailer64_t;
+
+#endif
 
 #define MACH_MSG_TRAILER_MINIMUM_SIZE  sizeof(mach_msg_trailer_t)
 
@@ -532,6 +579,10 @@ typedef struct
  * another module may exceed the local modules notion of
  * MAX_TRAILER_SIZE.
  */
+#if defined(MACH_KERNEL_PRIVATE) && defined(__arm64__)
+typedef mach_msg_mac_trailer64_t mach_msg_max_trailer64_t;
+typedef mach_msg_mac_trailer32_t mach_msg_max_trailer32_t;
+#endif
 
 typedef mach_msg_mac_trailer_t mach_msg_max_trailer_t;
 #define MAX_TRAILER_SIZE ((mach_msg_size_t)sizeof(mach_msg_max_trailer_t))
@@ -669,6 +720,7 @@ typedef integer_t mach_msg_option_t;
 #define MACH_SEND_NOIMPORTANCE  0x00040000      /* msg won't carry importance */
 #define MACH_SEND_NODENAP	MACH_SEND_NOIMPORTANCE
 #define MACH_SEND_IMPORTANCE	0x00080000	/* msg carries importance - kernel only */
+#define MACH_SEND_SYNC_OVERRIDE	0x00100000	/* msg should do sync ipc override */
 
 
 #define MACH_RCV_TIMEOUT	0x00000100	/* timeout value applies to receive */	
@@ -676,6 +728,7 @@ typedef integer_t mach_msg_option_t;
 #define MACH_RCV_INTERRUPT	0x00000400	/* don't restart interrupted receive */
 #define MACH_RCV_VOUCHER	0x00000800	/* willing to receive voucher port */
 #define MACH_RCV_OVERWRITE	0x00001000	/* scatter receive (deprecated) */
+#define MACH_RCV_SYNC_WAIT	0x00004000	/* sync waiter waiting for rcv */
 
 #ifdef XNU_KERNEL_PRIVATE
 
@@ -718,11 +771,13 @@ typedef integer_t mach_msg_option_t;
 /* The options that the kernel honors when passed from user space */
 #define MACH_SEND_USER (MACH_SEND_MSG | MACH_SEND_TIMEOUT | \
 						MACH_SEND_NOTIFY | MACH_SEND_OVERRIDE | \
-						MACH_SEND_TRAILER | MACH_SEND_NOIMPORTANCE )
+						MACH_SEND_TRAILER | MACH_SEND_NOIMPORTANCE | \
+						MACH_SEND_SYNC_OVERRIDE)
 
 #define MACH_RCV_USER (MACH_RCV_MSG | MACH_RCV_TIMEOUT | \
 					   MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY | \
-					   MACH_RCV_VOUCHER | MACH_RCV_TRAILER_MASK)
+					   MACH_RCV_VOUCHER | MACH_RCV_TRAILER_MASK | \
+					   MACH_RCV_SYNC_WAIT)
 
 #define MACH_MSG_OPTION_USER	 (MACH_SEND_USER | MACH_RCV_USER)
 
@@ -770,7 +825,25 @@ typedef integer_t mach_msg_option_t;
 
 #ifdef XNU_KERNEL_PRIVATE
 
+#if defined(__arm64__)
+#define REQUESTED_TRAILER_SIZE(is64, y) 				\
+	((mach_msg_trailer_size_t)				\
+	 ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_NULL) ?	\
+	  sizeof(mach_msg_trailer_t) :				\
+	  ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_SEQNO) ?	\
+	   sizeof(mach_msg_seqno_trailer_t) :			\
+	  ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_SENDER) ?	\
+	   sizeof(mach_msg_security_trailer_t) :		\
+	   ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_AUDIT) ?	\
+	    sizeof(mach_msg_audit_trailer_t) :      		\
+	    ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_CTX) ?	\
+	     ((is64) ? sizeof(mach_msg_context_trailer64_t) : sizeof(mach_msg_context_trailer32_t)) : \
+	     ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_AV) ?	\
+	      ((is64) ? sizeof(mach_msg_mac_trailer64_t) : sizeof(mach_msg_mac_trailer32_t)) : \
+	       sizeof(mach_msg_max_trailer_t))))))))
+#else
 #define REQUESTED_TRAILER_SIZE(is64, y) REQUESTED_TRAILER_SIZE_NATIVE(y)
+#endif
 
 #else /* XNU_KERNEL_PRIVATE */
 #define REQUESTED_TRAILER_SIZE(y) REQUESTED_TRAILER_SIZE_NATIVE(y)

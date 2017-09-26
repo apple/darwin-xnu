@@ -105,6 +105,9 @@
 #include <security/mac_mach_internal.h>
 #endif
 
+#if CONFIG_EMBEDDED
+#include <libkern/section_keywords.h>
+#endif
 
 /* 
  * define MB_DEBUG to display run-time debugging information
@@ -181,17 +184,6 @@ SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, SECURITY_MAC_CTLFLAGS,
 unsigned int	mac_label_vnodes = 0;
 SYSCTL_UINT(_security_mac, OID_AUTO, labelvnodes, SECURITY_MAC_CTLFLAGS,
     &mac_label_vnodes, 0, "Label all vnodes");
-
-
-unsigned int	mac_mmap_revocation = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, mmap_revocation, SECURITY_MAC_CTLFLAGS,
-    &mac_mmap_revocation, 0, "Revoke mmap access to files on subject "
-    "relabel");
-
-unsigned int	mac_mmap_revocation_via_cow = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, mmap_revocation_via_cow, SECURITY_MAC_CTLFLAGS,
-    &mac_mmap_revocation_via_cow, 0, "Revoke mmap access to files via "
-    "copy-on-write semantics, or by removing all write access");
 
 unsigned int mac_device_enforce = 1;
 SYSCTL_UINT(_security_mac, OID_AUTO, device_enforce, SECURITY_MAC_CTLFLAGS,
@@ -276,7 +268,12 @@ static lck_mtx_t *mac_policy_mtx;
 
 static int mac_policy_busy;
 
+#if CONFIG_EMBEDDED
+SECURITY_READ_ONLY_LATE(mac_policy_list_t) mac_policy_list;
+SECURITY_READ_ONLY_LATE(static struct mac_policy_list_element) mac_policy_static_entries[MAC_POLICY_LIST_CHUNKSIZE];
+#else
 mac_policy_list_t mac_policy_list;
+#endif
 
 /*
  * mac_label_element_list holds the master list of label namespaces for
@@ -363,7 +360,11 @@ mac_policy_init(void)
 	mac_policy_list.freehint = 0;
 	mac_policy_list.chunks = 1;
 
+#if CONFIG_EMBEDDED
+	mac_policy_list.entries = mac_policy_static_entries;
+#else
 	mac_policy_list.entries = kalloc(sizeof(struct mac_policy_list_element) * MAC_POLICY_LIST_CHUNKSIZE);
+#endif
 
 	bzero(mac_policy_list.entries, sizeof(struct mac_policy_list_element) * MAC_POLICY_LIST_CHUNKSIZE); 
 
@@ -640,7 +641,9 @@ int
 mac_policy_register(struct mac_policy_conf *mpc, mac_policy_handle_t *handlep,
     void *xd)
 {
+#if !CONFIG_EMBEDDED
 	struct mac_policy_list_element *tmac_policy_list_element;
+#endif
 	int error, slot, static_entry = 0;
 	u_int i;
 
@@ -672,6 +675,7 @@ mac_policy_register(struct mac_policy_conf *mpc, mac_policy_handle_t *handlep,
 	}
 
 	if (mac_policy_list.numloaded >= mac_policy_list.max) {
+#if !CONFIG_EMBEDDED
 		/* allocate new policy list array, zero new chunk */
 		tmac_policy_list_element =
 		    kalloc((sizeof(struct mac_policy_list_element) *
@@ -695,6 +699,10 @@ mac_policy_register(struct mac_policy_conf *mpc, mac_policy_handle_t *handlep,
 		/* Update maximums, etc */
 		mac_policy_list.max += MAC_POLICY_LIST_CHUNKSIZE;
 		mac_policy_list.chunks++;
+#else
+		printf("out of space in mac_policy_list.\n");
+		return (ENOMEM);
+#endif /* CONFIG_EMBEDDED */
 	}
 
 	/* Check for policy with same name already loaded */
@@ -970,8 +978,8 @@ element_loop:
 			mpc = mac_policy_list.entries[mll->mll_handle].mpc;
 			if (mpc == NULL)
 				continue;
-			mpo_externalize = *(typeof(mpo_externalize) *)
-			    ((char *)mpc->mpc_ops + mpo_externalize_off);
+			mpo_externalize = *(const typeof(mpo_externalize) *)
+			    ((const char *)mpc->mpc_ops + mpo_externalize_off);
 			if (mpo_externalize == NULL)
 				continue;
 			error = sbuf_printf(sb, "%s/", name);
@@ -1099,8 +1107,8 @@ element_loop:
 			mpc = mac_policy_list.entries[mll->mll_handle].mpc;
 			if (mpc == NULL)
 				continue;
-			mpo_internalize = *(typeof(mpo_internalize) *)
-			    ((char *)mpc->mpc_ops + mpo_internalize_off);
+			mpo_internalize = *(const typeof(mpo_internalize) *)
+			    ((const char *)mpc->mpc_ops + mpo_internalize_off);
 			if (mpo_internalize == NULL)
 				continue;
 			error = mpo_internalize(label, element_name,
@@ -1991,12 +1999,6 @@ intptr_t mac_label_get(struct label *l __unused, int slot __unused)
 void mac_label_set(struct label *l __unused, int slot __unused, intptr_t v __unused)
 {
 		return;
-}
-
-void mac_proc_set_enforce(proc_t p, int enforce_flags);
-void mac_proc_set_enforce(proc_t p __unused, int enforce_flags __unused)
-{
-	return;
 }
 
 int mac_iokit_check_hid_control(kauth_cred_t cred __unused);

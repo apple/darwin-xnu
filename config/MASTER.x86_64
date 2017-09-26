@@ -1,7 +1,7 @@
 #
 # Mach Operating System
 # Copyright (c) 1986 Carnegie-Mellon University
-# Copyright 2001-2013 Apple Inc.
+# Copyright 2001-2016 Apple Inc.
 #
 # All rights reserved.  The CMU software License Agreement
 # specifies the terms and conditions for use and redistribution.
@@ -20,17 +20,18 @@
 #  KERNEL_RELEASE = [ KERNEL_BASE ]
 #  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug os_reason_debug ]
 #  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_waitq_debug ]
-#  BSD =            [ mach_bsd sysv_sem sysv_msg sysv_shm config_imageboot config_workqueue psynch config_proc_uuid_policy config_coredump pgo ]
+#  BSD_BASE =       [ mach_bsd sysv_sem sysv_msg sysv_shm config_imageboot config_workqueue psynch config_proc_uuid_policy config_coredump pgo ]
+#  BSD_RELEASE =    [ BSD_BASE ]
+#  BSD_DEV =        [ BSD_BASE config_vnguard ]
+#  BSD_DEBUG =      [ BSD_BASE config_vnguard ]
 #  FILESYS_BASE =   [ devfs fdesc config_dev_kmem config_fse quota namedstreams config_protect fifo config_volfs fs_compression config_imgsrc_access config_triggers config_ext_resolver config_searchfs config_appledouble nullfs config_mnt_suid ]
 #  FILESYS_RELEASE= [ FILESYS_BASE ]
 #  FILESYS_DEV =    [ FILESYS_BASE ]
 #  FILESYS_DEBUG =  [ FILESYS_BASE ]
 #  NFS =            [ nfsclient nfsserver ]
-#  NETWORKING =     [ inet inet6 ipv6send tcpdrop_synfin bpfilter dummynet traffic_mgt sendfile ah_all_crypto bond vlan gif stf ifnet_input_chk config_mbuf_jumbo if_bridge ipcomp_zlib MULTIPATH packet_mangler ]
+#  NETWORKING =     [ inet inet6 ipv6send tcpdrop_synfin bpfilter dummynet traffic_mgt sendfile ah_all_crypto bond vlan gif stf ifnet_input_chk config_mbuf_jumbo if_bridge ipcomp_zlib MULTIPATH packet_mangler if_fake ]
 #  VPN =            [ ipsec flow_divert necp content_filter ]
 #  PF =             [ pf pflog ]
-#  PKTSCHED =       [ pktsched_cbq pktsched_fairq pktsched_hfsc pktsched_priq ]
-#  CLASSQ =         [ classq_blue classq_red classq_rio ]
 #  MULTIPATH =      [ multipath mptcp ]
 #  IOKIT_BASE =     [ iokit iokitcpp hibernation config_sleep iokitstats hypervisor ]
 #  IOKIT_RELEASE =  [ IOKIT_BASE ]
@@ -40,20 +41,21 @@
 #  LIBKERN_RELEASE =[ LIBKERN_BASE ]
 #  LIBKERN_DEV =    [ LIBKERN_BASE iotracking ]
 #  LIBKERN_DEBUG =  [ LIBKERN_BASE iotracking ]
-#  PERF_DBG =       [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging kperf kpc zleaks config_gzalloc ]
-#  MACH_BASE =      [ mach config_kext_basement mdebug ipc_debug config_mca config_vmx config_mtrr config_lapic config_telemetry importance_inheritance config_atm config_bank config_coalitions hypervisor config_iosched config_sysdiagnose ]
+#  PERF_DBG =       [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging kperf kpc zleaks config_gzalloc MONOTONIC_BASE ]
+#  MACH_BASE =      [ mach config_kext_basement mdebug ipc_debug config_mca config_vmx config_mtrr config_lapic config_telemetry importance_inheritance config_atm config_coalitions hypervisor config_iosched config_sysdiagnose config_mach_bridge_send_time copyout_shim ]
 #  MACH_RELEASE =   [ MACH_BASE ]
-#  MACH_DEV =       [ MACH_BASE task_zone_info ]
-#  MACH_DEBUG =     [ MACH_BASE task_zone_info ]
+#  MACH_DEV =       [ MACH_BASE task_zone_info importance_trace ]
+#  MACH_DEBUG =     [ MACH_BASE task_zone_info importance_trace importance_debug ]
 #  SCHED_BASE =     [ config_sched_traditional config_sched_multiq config_sched_sfi ]
 #  SCHED_RELEASE =  [ SCHED_BASE ]
 #  SCHED_DEV =      [ SCHED_BASE ]
 #  SCHED_DEBUG =    [ SCHED_BASE config_sched_grrr config_sched_proto ]
 #  VM =             [ vm_pressure_events memorystatus dynamic_codesigning config_code_decryption encrypted_swap phantom_cache config_background_queue]
 #  SECURITY =       [ config_macf config_audit config_csr ]
-#  RELEASE =        [ KERNEL_RELEASE BSD FILESYS_RELEASE NFS SKYWALK_RELEASE NETWORKING PF VPN IOKIT_RELEASE LIBKERN_RELEASE PERF_DBG MACH_RELEASE SCHED_RELEASE VM SECURITY ]
-#  DEVELOPMENT =    [ KERNEL_DEV     BSD FILESYS_DEV NFS     SKYWALK_DEV     NETWORKING PF VPN IOKIT_DEV     LIBKERN_DEV     PERF_DBG MACH_DEV     SCHED_DEV     VM SECURITY ]
-#  DEBUG =          [ KERNEL_DEBUG   BSD FILESYS_DEBUG NFS   SKYWALK_DEBUG   NETWORKING PF VPN IOKIT_DEBUG   LIBKERN_DEBUG   PERF_DBG MACH_DEBUG   SCHED_DEBUG   VM SECURITY ]
+#  RELEASE =        [ KERNEL_RELEASE BSD_RELEASE FILESYS_RELEASE NFS SKYWALK_RELEASE NETWORKING PF VPN IOKIT_RELEASE LIBKERN_RELEASE PERF_DBG MACH_RELEASE SCHED_RELEASE VM SECURITY ]
+#  DEVELOPMENT =    [ KERNEL_DEV     BSD_DEV     FILESYS_DEV     NFS SKYWALK_DEV     NETWORKING PF VPN IOKIT_DEV     LIBKERN_DEV     PERF_DBG MACH_DEV     SCHED_DEV     VM SECURITY ]
+#  DEBUG =          [ KERNEL_DEBUG   BSD_DEBUG   FILESYS_DEBUG   NFS SKYWALK_DEBUG   NETWORKING PF VPN IOKIT_DEBUG   LIBKERN_DEBUG   PERF_DBG MACH_DEBUG   SCHED_DEBUG   VM SECURITY ]
+#  KASAN =          [ DEVELOPMENT ]
 #
 ######################################################################
 #

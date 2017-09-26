@@ -19,6 +19,8 @@
 #define CCAES_KEY_SIZE_192 24
 #define CCAES_KEY_SIZE_256 32
 
+#define CCAES_CTR_MAX_PARALLEL_NBLOCKS 8
+
 extern const struct ccmode_ecb ccaes_ltc_ecb_decrypt_mode;
 extern const struct ccmode_ecb ccaes_ltc_ecb_encrypt_mode;
 
@@ -46,8 +48,13 @@ extern const struct ccmode_ofb ccaes_arm_ofb_crypt_mode;
 extern const struct ccmode_cbc ccaes_ios_hardware_cbc_encrypt_mode;
 extern const struct ccmode_cbc ccaes_ios_hardware_cbc_decrypt_mode;
 
+extern const struct ccmode_ctr ccaes_ios_hardware_ctr_crypt_mode;
+
 extern const struct ccmode_cbc *ccaes_ios_mux_cbc_encrypt_mode(void);
 extern const struct ccmode_cbc *ccaes_ios_mux_cbc_decrypt_mode(void);
+
+extern const struct ccmode_ctr *ccaes_ios_mux_ctr_crypt_mode(void);
+
 #endif
 
 #if  CCAES_INTEL_ASM

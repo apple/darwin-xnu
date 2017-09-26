@@ -12,7 +12,7 @@ ifdef RC_ARCHS
   endif
 endif
 
-CFLAGS := -g $(patsubst %, -arch %, $(ARCHS)) -isysroot $(SDKROOT) -isystem $(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+CFLAGS := -Os -g $(patsubst %, -arch %, $(ARCHS)) -isysroot $(SDKROOT) -isystem $(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 
 DSTROOT?=$(shell /bin/pwd)
 SYMROOT?=$(shell /bin/pwd)

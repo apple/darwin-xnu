@@ -815,8 +815,11 @@ int IOStatistics::getUserClientStatistics(sysctl_req *req)
 		goto exit;
 	}
 
-	SYSCTL_IN(req, &requestedLoadTag, sizeof(requestedLoadTag));
-	
+	error = SYSCTL_IN(req, &requestedLoadTag, sizeof(requestedLoadTag));
+	if (error) {
+		goto exit;
+	}
+
 	LOG(2, "IOStatistics::getUserClientStatistics - requesting kext w/load tag: %d\n", requestedLoadTag);
 
 	buffer = (char*)kalloc(calculatedSize);

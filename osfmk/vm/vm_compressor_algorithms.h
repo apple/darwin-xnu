@@ -41,6 +41,7 @@ typedef struct {
 	uint64_t lz4_post_wk_compressions;
 	
 	uint64_t wk_compressions;
+	uint64_t wk_cabstime;
 	uint64_t wk_sv_compressions;
 	uint64_t wk_mzv_compressions;
 	uint64_t wk_compression_failures;
@@ -48,11 +49,27 @@ typedef struct {
 	uint64_t wk_compressions_exclusive;
 	uint64_t wk_compressed_bytes_exclusive;
 
+	uint64_t wkh_compressions;
+	uint64_t wkh_cabstime;
+	uint64_t wks_compressions;
+	uint64_t wks_cabstime;
+	uint64_t wks_compressed_bytes;
+	uint64_t wks_compression_failures;
+	uint64_t wks_sv_compressions;
+
 	uint64_t lz4_decompressions;
 	uint64_t lz4_decompressed_bytes;
 	uint64_t uc_decompressions;
 
 	uint64_t wk_decompressions;
+	uint64_t wk_dabstime;
+
+	uint64_t wkh_decompressions;
+	uint64_t wkh_dabstime;
+
+	uint64_t wks_decompressions;
+	uint64_t wks_dabstime;
+
 	uint64_t wk_decompressed_bytes;
 	uint64_t wk_sv_decompressions;
 } compressor_stats_t;
@@ -73,7 +90,7 @@ typedef struct {
 
 extern compressor_tuneables_t vmctune;
 
-int metacompressor(const uint8_t *in, uint8_t *cdst, int32_t outbufsz, uint16_t *codec, void *cscratch);
+int metacompressor(const uint8_t *in, uint8_t *cdst, int32_t outbufsz, uint16_t *codec, void *cscratch, boolean_t *);
 void metadecompressor(const uint8_t *source, uint8_t *dest, uint32_t csize, uint16_t ccodec, void *compressor_dscratch);
 
 typedef enum {

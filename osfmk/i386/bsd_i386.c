@@ -26,7 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifdef	MACH_BSD
-#include <mach_rt.h>
 #include <mach_debug.h>
 #include <mach_ldebug.h>
 
@@ -315,6 +314,12 @@ machdep_syscall(x86_saved_state_t *state)
 
 	DEBUG_KPRINT_SYSCALL_MDEP("machdep_syscall: retval=%u\n", regs->eax);
 
+#if DEBUG || DEVELOPMENT
+	kern_allocation_name_t
+	prior __assert_only = thread_get_kernel_state(current_thread())->allocation_name;
+	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
+#endif /* DEBUG || DEVELOPMENT */
+
 	throttle_lowpri_io(1);
 
 	thread_exception_return();
@@ -360,6 +365,12 @@ machdep_syscall64(x86_saved_state_t *state)
 	}
 
 	DEBUG_KPRINT_SYSCALL_MDEP("machdep_syscall: retval=%llu\n", regs->rax);
+
+#if DEBUG || DEVELOPMENT
+	kern_allocation_name_t
+	prior __assert_only = thread_get_kernel_state(current_thread())->allocation_name;
+	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
+#endif /* DEBUG || DEVELOPMENT */
 
 	throttle_lowpri_io(1);
 
@@ -477,6 +488,12 @@ mach_call_munger(x86_saved_state_t *state)
 
 	regs->eax = retval;
 
+#if DEBUG || DEVELOPMENT
+	kern_allocation_name_t
+	prior __assert_only = thread_get_kernel_state(current_thread())->allocation_name;
+	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
+#endif /* DEBUG || DEVELOPMENT */
+
 	throttle_lowpri_io(1);
 
 #if PROC_REF_DEBUG
@@ -560,6 +577,12 @@ mach_call_munger64(x86_saved_state_t *state)
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
 		MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_END, 
 		regs->rax, 0, 0, 0, 0);
+
+#if DEBUG || DEVELOPMENT
+	kern_allocation_name_t
+	prior __assert_only = thread_get_kernel_state(current_thread())->allocation_name;
+	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
+#endif /* DEBUG || DEVELOPMENT */
 
 	throttle_lowpri_io(1);
 

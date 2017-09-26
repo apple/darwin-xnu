@@ -145,8 +145,17 @@ unsigned	pmap_get_cache_attributes(ppnum_t pn, boolean_t is_ept) {
 boolean_t 
 pmap_has_managed_page(ppnum_t first, ppnum_t last)
 {
-	ppnum_t   pn;
-    boolean_t result;
+	ppnum_t     pn, kdata_start, kdata_end;
+	boolean_t   result;
+	boot_args * args;
+
+	args        = (boot_args *) PE_state.bootArgs;
+
+	// Allow pages that the booter added to the end of the kernel.
+	// We may miss reporting some pages in this range that were freed
+	// with ml_static_free()
+	kdata_start = atop_32(args->kaddr);
+	kdata_end   = atop_32(args->kaddr + args->ksize);
 
     assert(last_managed_page);
     assert(first <= last);
@@ -157,6 +166,7 @@ pmap_has_managed_page(ppnum_t first, ppnum_t last)
     	  && (pn <= last_managed_page); 
     	 pn++)
     {
+		if ((pn >= kdata_start) && (pn < kdata_end)) continue;
     	result = (0 != (pmap_phys_attributes[pn] & PHYS_MANAGED));
     }
 

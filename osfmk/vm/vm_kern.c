@@ -71,6 +71,7 @@
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
+#include <vm/vm_compressor.h>
 #include <vm/vm_pageout.h>
 #include <kern/misc_protos.h>
 #include <vm/cpm.h>
@@ -78,7 +79,10 @@
 #include <string.h>
 
 #include <libkern/OSDebug.h>
+#include <libkern/crypto/sha2.h>
 #include <sys/kdebug.h>
+
+#include <san/kasan.h>
 
 /*
  *	Variables exported by this module.
@@ -117,6 +121,8 @@ kmem_alloc_contig(
 	vm_page_t		m, pages;
 	kern_return_t		kr;
 
+    assert(VM_KERN_MEMORY_NONE != tag);
+
 	if (map == VM_MAP_NULL || (flags & ~(KMA_KOBJECT | KMA_LOMEM | KMA_NOPAGEWAIT))) 
 		return KERN_INVALID_ARGUMENT;
 
@@ -142,7 +148,8 @@ kmem_alloc_contig(
 		object = vm_object_allocate(map_size);
 	}
 
-	kr = vm_map_find_space(map, &map_addr, map_size, map_mask, 0, &entry);
+	kr = vm_map_find_space(map, &map_addr, map_size, map_mask, 0,
+			       VM_MAP_KERNEL_FLAGS_NONE, tag, &entry);
 	if (KERN_SUCCESS != kr) {
 		vm_object_deallocate(object);
 		return kr;
@@ -155,7 +162,6 @@ kmem_alloc_contig(
 	}
 	VME_OBJECT_SET(entry, object);
 	VME_OFFSET_SET(entry, offset);
-	VME_ALIAS_SET(entry, tag);
 
 	/* Take an extra object ref in case the map entry gets deleted */
 	vm_object_reference(object);
@@ -185,12 +191,12 @@ kmem_alloc_contig(
 	}
 	vm_object_unlock(object);
 
-	kr = vm_map_wire(map,
+	kr = vm_map_wire_kernel(map,
 			 vm_map_trunc_page(map_addr,
 					   VM_MAP_PAGE_MASK(map)),
 			 vm_map_round_page(map_addr + map_size,
 					   VM_MAP_PAGE_MASK(map)),
-			 VM_PROT_DEFAULT | VM_PROT_MEMORY_TAG_MAKE(tag),
+			 VM_PROT_DEFAULT, tag,
 			 FALSE);
 
 	if (kr != KERN_SUCCESS) {
@@ -210,11 +216,13 @@ kmem_alloc_contig(
 	}
 	vm_object_deallocate(object);
 
-	if (object == kernel_object)
+	if (object == kernel_object) {
 		vm_map_simplify(map, map_addr);
-
+	    vm_tag_update_size(tag, map_size);
+    }
 	*addrp = (vm_offset_t) map_addr;
 	assert((vm_map_offset_t) *addrp == map_addr);
+
 	return KERN_SUCCESS;
 }
 
@@ -259,6 +267,7 @@ kernel_memory_allocate(
 	int			wired_page_count = 0;
 	int			i;
 	int			vm_alloc_flags;
+	vm_map_kernel_flags_t	vmk_flags;
 	vm_prot_t		kma_prot;
 
 	if (! vm_kernel_ready) {
@@ -269,7 +278,8 @@ kernel_memory_allocate(
 				     VM_MAP_PAGE_MASK(map));
 	map_mask = (vm_map_offset_t) mask;
 
-	vm_alloc_flags = VM_MAKE_TAG(tag);
+	vm_alloc_flags = 0; //VM_MAKE_TAG(tag);
+	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 
 	/* Check for zero allocation size (either directly or via overflow) */
 	if (map_size == 0) {
@@ -307,7 +317,7 @@ kernel_memory_allocate(
 	fill_size = map_size;
 
 	if (flags & KMA_GUARD_FIRST) {
-		vm_alloc_flags |= VM_FLAGS_GUARD_BEFORE;
+		vmk_flags.vmkf_guard_before = TRUE;
 		fill_start += PAGE_SIZE_64;
 		fill_size -= PAGE_SIZE_64;
 		if (map_size < fill_start + fill_size) {
@@ -318,7 +328,7 @@ kernel_memory_allocate(
 		guard_page_count++;
 	}
 	if (flags & KMA_GUARD_LAST) {
-		vm_alloc_flags |= VM_FLAGS_GUARD_AFTER;
+		vmk_flags.vmkf_guard_after = TRUE;
 		fill_size -= PAGE_SIZE_64;
 		if (map_size <= fill_start + fill_size) {
 			/* no space for a guard page */
@@ -375,6 +385,7 @@ kernel_memory_allocate(
 			}
 			VM_PAGE_WAIT();
 		}
+		if (KMA_ZERO & flags) vm_page_zero_fill(mem);
 		mem->snext = wired_page_list;
 		wired_page_list = mem;
 	}
@@ -394,12 +405,12 @@ kernel_memory_allocate(
 		object = vm_object_allocate(map_size);
 	}
 
-	if (flags & KMA_ATOMIC) 
-		vm_alloc_flags |= VM_FLAGS_ATOMIC_ENTRY;
-		
+	if (flags & KMA_ATOMIC)
+		vmk_flags.vmkf_atomic_entry = TRUE;
+
 	kr = vm_map_find_space(map, &map_addr,
 			       fill_size, map_mask,
-			       vm_alloc_flags, &entry);
+			       vm_alloc_flags, vmk_flags, tag, &entry);
 	if (KERN_SUCCESS != kr) {
 		vm_object_deallocate(object);
 		goto out;
@@ -443,6 +454,13 @@ kernel_memory_allocate(
 
 	kma_prot = VM_PROT_READ | VM_PROT_WRITE;
 
+#if KASAN
+	if (!(flags & KMA_VAONLY)) {
+		/* for VAONLY mappings we notify in populate only */
+		kasan_notify_address(map_addr, size);
+	}
+#endif
+
 	if (flags & KMA_VAONLY) {
 		pg_offset = fill_start + fill_size;
 	} else {
@@ -478,16 +496,21 @@ kernel_memory_allocate(
 			vm_object_unlock(object);
 
 			PMAP_ENTER(kernel_pmap, map_addr + pg_offset, mem, 
-				   kma_prot, VM_PROT_NONE, ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE);
+				   kma_prot, VM_PROT_NONE, ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE,
+				   pe_result);
 
 			vm_object_lock(object);
 		}
+
+		assert(pe_result == KERN_SUCCESS);
+
 		if (flags & KMA_NOENCRYPT) {
 			bzero(CAST_DOWN(void *, (map_addr + pg_offset)), PAGE_SIZE);
 
 			pmap_set_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem));
 		}
 	}
+	if (kernel_object == object) vm_tag_update_size(tag, fill_size);
 	}
 	if ((fill_start + fill_size) < map_size) {
 		if (guard_page_list == NULL)
@@ -569,6 +592,7 @@ kernel_memory_populate(
 				
 				VM_PAGE_WAIT();
 			}
+			if (KMA_ZERO & flags) vm_page_zero_fill(mem);
 			mem->snext = page_list;
 			page_list = mem;
 
@@ -605,6 +629,13 @@ kernel_memory_populate(
 		}
 		vm_object_unlock(object);
 
+#if KASAN
+		if (map == compressor_map) {
+			kasan_notify_address_nopoison(addr, size);
+		} else {
+			kasan_notify_address(addr, size);
+		}
+#endif
 		return KERN_SUCCESS;
 	}
 
@@ -629,6 +660,7 @@ kernel_memory_populate(
 			}
 			VM_PAGE_WAIT();
 		}
+		if (KMA_ZERO & flags) vm_page_zero_fill(mem);
 		mem->snext = page_list;
 		page_list = mem;
 	}
@@ -687,10 +719,14 @@ kernel_memory_populate(
 
 			PMAP_ENTER(kernel_pmap, addr + pg_offset, mem,
 				   VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE,
-				   ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE);
+				   ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE,
+				   pe_result);
 
 			vm_object_lock(object);
 		}
+
+		assert(pe_result == KERN_SUCCESS);
+
 		if (flags & KMA_NOENCRYPT) {
 			bzero(CAST_DOWN(void *, (addr + pg_offset)), PAGE_SIZE);
 			pmap_set_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem));
@@ -700,8 +736,17 @@ kernel_memory_populate(
 	vm_page_wire_count += page_count;
 	vm_page_unlock_queues();
 
+	if (kernel_object == object) vm_tag_update_size(tag, size);
+
 	vm_object_unlock(object);
 
+#if KASAN
+	if (map == compressor_map) {
+		kasan_notify_address_nopoison(addr, size);
+	} else {
+		kasan_notify_address(addr, size);
+	}
+#endif
 	return KERN_SUCCESS;
 
 out:
@@ -734,7 +779,6 @@ kernel_memory_depopulate(
 	} else if (flags & KMA_KOBJECT) {
 		offset = addr;
 		object = kernel_object;
-
 		vm_object_lock(object);
 	} else {
 		offset = 0;
@@ -899,7 +943,10 @@ kmem_realloc(
 	 */
 
 	kr = vm_map_find_space(map, &newmapaddr, newmapsize,
-			       (vm_map_offset_t) 0, 0, &newentry);
+			       (vm_map_offset_t) 0, 0,
+			       VM_MAP_KERNEL_FLAGS_NONE,
+			       tag,
+			       &newentry);
 	if (kr != KERN_SUCCESS) {
 		vm_object_lock(object);
 		for(offset = oldmapsize; 
@@ -915,7 +962,6 @@ kmem_realloc(
 	}
 	VME_OBJECT_SET(newentry, object);
 	VME_OFFSET_SET(newentry, 0);
-	VME_ALIAS_SET(newentry, tag);
 	assert(newentry->wired_count == 0);
 
 	
@@ -924,8 +970,8 @@ kmem_realloc(
 	vm_object_reference(object);
 	vm_map_unlock(map);
 
-	kr = vm_map_wire(map, newmapaddr, newmapaddr + newmapsize,
-			 VM_PROT_DEFAULT | VM_PROT_MEMORY_TAG_MAKE(tag), FALSE);
+	kr = vm_map_wire_kernel(map, newmapaddr, newmapaddr + newmapsize,
+			 VM_PROT_DEFAULT, tag, FALSE);
 	if (KERN_SUCCESS != kr) {
 		vm_map_remove(map, newmapaddr, newmapaddr + newmapsize, 0);
 		vm_object_lock(object);
@@ -940,6 +986,8 @@ kmem_realloc(
 		return (kr);
 	}
 	vm_object_deallocate(object);
+
+	if (kernel_object == object) vm_tag_update_size(tag, newmapsize);
 
 	*newaddrp = CAST_DOWN(vm_offset_t, newmapaddr);
 	return KERN_SUCCESS;
@@ -1030,13 +1078,18 @@ kmem_alloc_pageable(
 
 	kr = vm_map_enter(map, &map_addr, map_size,
 			  (vm_map_offset_t) 0, 
-			  VM_FLAGS_ANYWHERE | VM_MAKE_TAG(tag),
+			  VM_FLAGS_ANYWHERE,
+			  VM_MAP_KERNEL_FLAGS_NONE,
+			  tag,
 			  VM_OBJECT_NULL, (vm_object_offset_t) 0, FALSE,
 			  VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
 
 	if (kr != KERN_SUCCESS)
 		return kr;
 
+#if KASAN
+	kasan_notify_address(map_addr, map_size);
+#endif
 	*addrp = CAST_DOWN(vm_offset_t, map_addr);
 	return KERN_SUCCESS;
 }
@@ -1136,6 +1189,8 @@ kmem_suballoc(
 	vm_size_t	size,
 	boolean_t	pageable,
 	int		flags,
+	vm_map_kernel_flags_t vmk_flags,
+	vm_tag_t    tag,
 	vm_map_t	*new_map)
 {
 	vm_map_t	map;
@@ -1159,7 +1214,7 @@ kmem_suballoc(
 					VM_MAP_PAGE_MASK(parent)));
 
 	kr = vm_map_enter(parent, &map_addr, map_size,
-			  (vm_map_offset_t) 0, flags,
+			  (vm_map_offset_t) 0, flags, vmk_flags, tag,
 			  vm_submap_object, (vm_object_offset_t) 0, FALSE,
 			  VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
 	if (kr != KERN_SUCCESS) {
@@ -1202,12 +1257,54 @@ kmem_init(
 {
 	vm_map_offset_t map_start;
 	vm_map_offset_t map_end;
+	vm_map_kernel_flags_t vmk_flags;
+
+	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+	vmk_flags.vmkf_permanent = TRUE;
+	vmk_flags.vmkf_no_pmap_check = TRUE;
 
 	map_start = vm_map_trunc_page(start,
 				      VM_MAP_PAGE_MASK(kernel_map));
 	map_end = vm_map_round_page(end,
 				    VM_MAP_PAGE_MASK(kernel_map));
 
+#if	defined(__arm__) || defined(__arm64__)
+	kernel_map = vm_map_create(pmap_kernel(),VM_MIN_KERNEL_AND_KEXT_ADDRESS,
+			    VM_MAX_KERNEL_ADDRESS, FALSE);
+	/*
+	 *	Reserve virtual memory allocated up to this time.
+	 */
+	{
+		unsigned int	region_select = 0;
+		vm_map_offset_t	region_start;
+		vm_map_size_t	region_size;
+		vm_map_offset_t map_addr;
+		kern_return_t kr;
+
+		while (pmap_virtual_region(region_select, &region_start, &region_size)) {
+
+			map_addr = region_start;
+			kr = vm_map_enter(kernel_map, &map_addr,
+					  vm_map_round_page(region_size,
+							    VM_MAP_PAGE_MASK(kernel_map)),
+					  (vm_map_offset_t) 0,
+			                  VM_FLAGS_FIXED,
+					  vmk_flags,
+					  VM_KERN_MEMORY_NONE,
+					  VM_OBJECT_NULL, 
+			                  (vm_object_offset_t) 0, FALSE, VM_PROT_NONE, VM_PROT_NONE,
+			                  VM_INHERIT_DEFAULT);
+
+			if (kr != KERN_SUCCESS) {
+				panic("kmem_init(0x%llx,0x%llx): vm_map_enter(0x%llx,0x%llx) error 0x%x\n",
+				       (uint64_t) start, (uint64_t) end, (uint64_t) region_start,
+				       (uint64_t) region_size, kr);
+			}	
+
+			region_select++;
+		}	
+	}
+#else
 	kernel_map = vm_map_create(pmap_kernel(),VM_MIN_KERNEL_AND_KEXT_ADDRESS,
 			    map_end, FALSE);
 	/*
@@ -1217,16 +1314,21 @@ kmem_init(
 		vm_map_offset_t map_addr;
 		kern_return_t kr;
  
+		vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+		vmk_flags.vmkf_no_pmap_check = TRUE;
+
 		map_addr = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
 		kr = vm_map_enter(kernel_map,
-			&map_addr, 
-		    	(vm_map_size_t)(map_start - VM_MIN_KERNEL_AND_KEXT_ADDRESS),
-			(vm_map_offset_t) 0,
-			VM_FLAGS_FIXED | VM_FLAGS_NO_PMAP_CHECK,
-			VM_OBJECT_NULL, 
-			(vm_object_offset_t) 0, FALSE,
-			VM_PROT_NONE, VM_PROT_NONE,
-			VM_INHERIT_DEFAULT);
+				  &map_addr, 
+				  (vm_map_size_t)(map_start - VM_MIN_KERNEL_AND_KEXT_ADDRESS),
+				  (vm_map_offset_t) 0,
+				  VM_FLAGS_FIXED,
+				  vmk_flags,
+				  VM_KERN_MEMORY_NONE,
+				  VM_OBJECT_NULL, 
+				  (vm_object_offset_t) 0, FALSE,
+				  VM_PROT_NONE, VM_PROT_NONE,
+				  VM_INHERIT_DEFAULT);
 		
 		if (kr != KERN_SUCCESS) {
 			panic("kmem_init(0x%llx,0x%llx): vm_map_enter(0x%llx,0x%llx) error 0x%x\n",
@@ -1236,6 +1338,7 @@ kmem_init(
 			      kr);
 		}	
 	}
+#endif
 
 	/*
 	 * Set the default global user wire limit which limits the amount of
@@ -1322,120 +1425,6 @@ copyoutmap(
 	return KERN_SUCCESS;
 }
 
-
-kern_return_t
-vm_conflict_check(
-	vm_map_t		map,
-	vm_map_offset_t	off,
-	vm_map_size_t		len,
-	memory_object_t	pager,
-	vm_object_offset_t	file_off)
-{
-	vm_map_entry_t		entry;
-	vm_object_t		obj;
-	vm_object_offset_t	obj_off;
-	vm_map_t		base_map;
-	vm_map_offset_t		base_offset;
-	vm_map_offset_t		original_offset;
-	kern_return_t		kr;
-	vm_map_size_t		local_len;
-
-	base_map = map;
-	base_offset = off;
-	original_offset = off;
-	kr = KERN_SUCCESS;
-	vm_map_lock(map);
-	while(vm_map_lookup_entry(map, off, &entry)) {
-		local_len = len;
-
-		if (VME_OBJECT(entry) == VM_OBJECT_NULL) {
-			vm_map_unlock(map);
-			return KERN_SUCCESS;
-		}
-		if (entry->is_sub_map) {
-			vm_map_t	old_map;
-
-			old_map = map;
-			vm_map_lock(VME_SUBMAP(entry));
-			map = VME_SUBMAP(entry);
-			off = VME_OFFSET(entry) + (off - entry->vme_start);
-			vm_map_unlock(old_map);
-			continue;
-		}
-		obj = VME_OBJECT(entry);
-		obj_off = (off - entry->vme_start) + VME_OFFSET(entry);
-		while(obj->shadow) {
-			obj_off += obj->vo_shadow_offset;
-			obj = obj->shadow;
-		}
-		if((obj->pager_created) && (obj->pager == pager)) {
-			if(((obj->paging_offset) + obj_off) == file_off) {
-				if(off != base_offset) {
-					vm_map_unlock(map);
-					return KERN_FAILURE;
-				}
-				kr = KERN_ALREADY_WAITING;
-			} else {
-			       	vm_object_offset_t	obj_off_aligned;
-				vm_object_offset_t	file_off_aligned;
-
-				obj_off_aligned = obj_off & ~PAGE_MASK;
-				file_off_aligned = file_off & ~PAGE_MASK;
-
-				if (file_off_aligned == (obj->paging_offset + obj_off_aligned)) {
-				        /*
-					 * the target map and the file offset start in the same page
-					 * but are not identical... 
-					 */
-				        vm_map_unlock(map);
-					return KERN_FAILURE;
-				}
-				if ((file_off < (obj->paging_offset + obj_off_aligned)) &&
-				    ((file_off + len) > (obj->paging_offset + obj_off_aligned))) {
-				        /*
-					 * some portion of the tail of the I/O will fall
-					 * within the encompass of the target map
-					 */
-				        vm_map_unlock(map);
-					return KERN_FAILURE;
-				}
-				if ((file_off_aligned > (obj->paging_offset + obj_off)) &&
-				    (file_off_aligned < (obj->paging_offset + obj_off) + len)) {
-				        /*
-					 * the beginning page of the file offset falls within
-					 * the target map's encompass
-					 */
-				        vm_map_unlock(map);
-					return KERN_FAILURE;
-				}
-			}
-		} else if(kr != KERN_SUCCESS) {
-		        vm_map_unlock(map);
-			return KERN_FAILURE;
-		}
-
-		if(len <= ((entry->vme_end - entry->vme_start) -
-						(off - entry->vme_start))) {
-			vm_map_unlock(map);
-			return kr;
-		} else {
-			len -= (entry->vme_end - entry->vme_start) -
-						(off - entry->vme_start);
-		}
-		base_offset = base_offset + (local_len - len);
-		file_off = file_off + (local_len - len);
-		off = base_offset;
-		if(map != base_map) {
-			vm_map_unlock(map);
-			vm_map_lock(base_map);
-			map = base_map;
-		}
-	}
-
-	vm_map_unlock(map);
-	return kr;
-}
-
 /*
  *
  *	The following two functions are to be used when exposing kernel
@@ -1447,43 +1436,84 @@ vm_conflict_check(
  *	NOTE: USE THE MACRO VERSIONS OF THESE FUNCTIONS (in vm_param.h) FROM WITHIN THE KERNEL
  */
 
+static void
+vm_kernel_addrhash_internal(
+	vm_offset_t addr,
+	vm_offset_t *hash_addr,
+	uint64_t salt)
+{
+	assert(salt != 0);
+
+	if (addr == 0) {
+		*hash_addr = 0;
+		return;
+	}
+
+	if (VM_KERNEL_IS_SLID(addr)) {
+		*hash_addr = VM_KERNEL_UNSLIDE(addr);
+		return;
+	}
+
+	vm_offset_t sha_digest[SHA256_DIGEST_LENGTH/sizeof(vm_offset_t)];
+	SHA256_CTX sha_ctx;
+
+	SHA256_Init(&sha_ctx);
+	SHA256_Update(&sha_ctx, &salt, sizeof(salt));
+	SHA256_Update(&sha_ctx, &addr, sizeof(addr));
+	SHA256_Final(sha_digest, &sha_ctx);
+
+	*hash_addr = sha_digest[0];
+}
+
+void
+vm_kernel_addrhash_external(
+	vm_offset_t addr,
+	vm_offset_t *hash_addr)
+{
+	return vm_kernel_addrhash_internal(addr, hash_addr, vm_kernel_addrhash_salt_ext);
+}
+
+vm_offset_t
+vm_kernel_addrhash(vm_offset_t addr)
+{
+	vm_offset_t hash_addr;
+	vm_kernel_addrhash_internal(addr, &hash_addr, vm_kernel_addrhash_salt);
+	return hash_addr;
+}
+
+void
+vm_kernel_addrhide(
+	vm_offset_t addr,
+	vm_offset_t *hide_addr)
+{
+	*hide_addr = VM_KERNEL_ADDRHIDE(addr);
+}
+
 /*
  *	vm_kernel_addrperm_external:
+ *	vm_kernel_unslide_or_perm_external:
  *
- *	Used when exposing an address to userspace which is in the kernel's
- *	"heap". These addresses are not loaded from anywhere and are resultingly
- *	unslid. We apply a permutation value to obscure the address.
+ *	Use these macros when exposing an address to userspace that could come from
+ *	either kernel text/data *or* the heap.
  */
 void
 vm_kernel_addrperm_external(
 	vm_offset_t addr,
 	vm_offset_t *perm_addr)
 {
-	if (addr == 0) {
-		*perm_addr = 0;
-		return;
+	if (VM_KERNEL_IS_SLID(addr)) {
+		*perm_addr = VM_KERNEL_UNSLIDE(addr);
+	} else if (VM_KERNEL_ADDRESS(addr)) {
+		*perm_addr = addr + vm_kernel_addrperm_ext;
+	} else {
+		*perm_addr = addr;
 	}
-
-	*perm_addr = (addr + vm_kernel_addrperm_ext);
-	return;
 }
 
-/*
- *	vm_kernel_unslide_or_perm_external:
- *
- *	Use this macro when exposing an address to userspace that could come from
- *	either kernel text/data *or* the heap.
- */
 void
 vm_kernel_unslide_or_perm_external(
 	vm_offset_t addr,
 	vm_offset_t *up_addr)
 {
-	if (VM_KERNEL_IS_SLID(addr)) {
-		*up_addr = addr - vm_kernel_slide;
-		return;
-	}
-
 	vm_kernel_addrperm_external(addr, up_addr);
-	return;
 }

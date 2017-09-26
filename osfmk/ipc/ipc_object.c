@@ -70,8 +70,6 @@
  *	Functions to manipulate IPC objects.
  */
 
-#include <mach_rt.h>
-
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
@@ -909,6 +907,8 @@ ipc_object_copyout_name(
 			if (ipc_importance_task_is_any_receiver_type(task_imp)) {
 				assertcnt = port->ip_impcount;
 				ipc_importance_task_reference(task_imp);
+			} else {
+				task_imp = IIT_NULL;
 			}
 		}
 

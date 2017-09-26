@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -50,11 +50,43 @@ __BEGIN_DECLS
 #define	CONTENT_FILTER_CONTROL_NAME "com.apple.content-filter"
 
 /*
+ * Opaque socket identifier
+ */
+typedef uint64_t cfil_sock_id_t;
+
+#define	CFIL_SOCK_ID_NONE UINT64_MAX
+
+
+/*
  * CFIL_OPT_NECP_CONTROL_UNIT
  * To set or get the NECP filter control unit for the kernel control socket
  * The option level is SYSPROTO_CONTROL
  */
 #define	CFIL_OPT_NECP_CONTROL_UNIT	1	/* uint32_t */
+
+/*
+ * CFIL_OPT_GET_SOCKET_INFO
+ * To get information about a given socket that is being filtered. 
+ */
+#define	CFIL_OPT_GET_SOCKET_INFO	2	/* uint32_t */
+
+/*
+ * struct cfil_opt_sock_info
+ *
+ * Contains information about a socket that is being filtered. 
+ */
+struct cfil_opt_sock_info {
+	cfil_sock_id_t	cfs_sock_id;
+	int				cfs_sock_family;	/* e.g. PF_INET */
+	int				cfs_sock_type;		/* e.g. SOCK_STREAM */
+	int				cfs_sock_protocol;	/* e.g. IPPROTO_TCP */
+	union sockaddr_in_4_6	cfs_local;
+	union sockaddr_in_4_6	cfs_remote;
+	pid_t			cfs_pid;
+	pid_t			cfs_e_pid;
+	uuid_t			cfs_uuid;
+	uuid_t			cfs_e_uuid;
+};
 
 /*
  * How many filter may be active simultaneously
@@ -87,13 +119,7 @@ __BEGIN_DECLS
  */
 #define	CFM_OP_DATA_UPDATE 16		/* update pass or peek offsets */
 #define	CFM_OP_DROP 17			/* shutdown socket, no more data */
-
-/*
- * Opaque socket identifier
- */
-typedef uint64_t cfil_sock_id_t;
-
-#define	CFIL_SOCK_ID_NONE UINT64_MAX
+#define	CFM_OP_BLESS_CLIENT 18		/* mark a client flow as already filtered, passes a uuid */
 
 /*
  * struct cfil_msg_hdr
@@ -158,6 +184,27 @@ struct cfil_msg_data_event {
 	/* Actual content data immediatly follows */
 };
 
+#define CFI_MAX_TIME_LOG_ENTRY 6
+/*
+ * struct cfil_msg_sock_closed
+ *
+ * Information about a socket being closed to the content filter
+ *
+ * Action: No reply is expected as this does not block the closing of the
+ * TCP/IP.
+ *
+ * Valid Types: CFM_TYPE_EVENT
+ *
+ * Valid Op: CFM_OP_SOCKET_CLOSED
+ */
+struct cfil_msg_sock_closed {
+	struct cfil_msg_hdr	cfc_msghdr;
+	struct timeval64	cfc_first_event;
+	uint32_t		cfc_op_list_ctr;
+	uint32_t		cfc_op_time[CFI_MAX_TIME_LOG_ENTRY];	/* time interval in microseconds since first event */
+	unsigned char		cfc_op_list[CFI_MAX_TIME_LOG_ENTRY];
+} __attribute__((aligned(8)));
+
 /*
  * struct cfil_msg_action
  *
@@ -181,6 +228,20 @@ struct cfil_msg_action {
 	uint64_t		cfa_in_peek_offset;
 	uint64_t		cfa_out_pass_offset;
 	uint64_t		cfa_out_peek_offset;
+};
+
+/*
+ * struct cfil_msg_bless_client
+ *
+ * Marks a client UUID as already filtered at a higher level.
+ *
+ * Valid Type: CFM_TYPE_ACTION
+ *
+ * Valid Ops: CFM_OP_BLESS_CLIENT
+ */
+struct cfil_msg_bless_client {
+	struct cfil_msg_hdr	cfb_msghdr;
+	uuid_t cfb_client_uuid;
 };
 
 #define	CFM_MAX_OFFSET	UINT64_MAX
@@ -361,8 +422,8 @@ extern void cfil_sock_buf_update(struct sockbuf *sb);
 
 extern cfil_sock_id_t cfil_sock_id_from_socket(struct socket *so);
 
-__END_DECLS
-
 #endif /* BSD_KERNEL_PRIVATE */
+
+__END_DECLS
 
 #endif /* __CONTENT_FILTER_H__ */

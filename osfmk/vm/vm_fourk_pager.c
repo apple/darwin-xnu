@@ -143,9 +143,10 @@ typedef struct fourk_pager_backing {
 	vm_object_offset_t	backing_offset;
 } *fourk_pager_backing_t;
 typedef struct fourk_pager {
-	struct ipc_object_header	pager_header;	/* fake ip_kotype() */
-	memory_object_pager_ops_t pager_ops; /* == &fourk_pager_ops */
-	memory_object_control_t pager_control;	/* mem object control handle */
+	/* mandatory generic header */
+	struct memory_object fourk_pgr_hdr;
+
+	/* pager-specific data */
 	queue_chain_t		pager_queue;	/* next & prev pagers */
 	unsigned int		ref_count;	/* reference count */
 	int	is_ready;	/* is this pager ready ? */
@@ -154,7 +155,6 @@ typedef struct fourk_pager {
 								4K-chunk */
 } *fourk_pager_t;
 #define	FOURK_PAGER_NULL	((fourk_pager_t) NULL)
-#define pager_ikot pager_header.io_bits
 
 /*
  * List of memory objects managed by this EMM.
@@ -249,7 +249,7 @@ fourk_pager_init(
 
 	memory_object_control_reference(control);
 
-	pager->pager_control = control;
+	pager->fourk_pgr_hdr.mo_control = control;
 
 	attributes.copy_strategy = MEMORY_OBJECT_COPY_DELAY;
 	/* attributes.cluster_size = (1 << (CLUSTER_SHIFT + PAGE_SHIFT));*/
@@ -395,7 +395,7 @@ fourk_pager_terminate_internal(
 	}
 	
 	/* trigger the destruction of the memory object */
-	memory_object_destroy(pager->pager_control, 0);
+	memory_object_destroy(pager->fourk_pgr_hdr.mo_control, 0);
 }
 
 /*
@@ -447,9 +447,9 @@ fourk_pager_deallocate_internal(
 		 * pager structure.
 		 */
 		lck_mtx_unlock(&fourk_pager_lock);
-		if (pager->pager_control != MEMORY_OBJECT_CONTROL_NULL) {
-			memory_object_control_deallocate(pager->pager_control);
-			pager->pager_control = MEMORY_OBJECT_CONTROL_NULL;
+		if (pager->fourk_pgr_hdr.mo_control != MEMORY_OBJECT_CONTROL_NULL) {
+			memory_object_control_deallocate(pager->fourk_pgr_hdr.mo_control);
+			pager->fourk_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
 		}
 		kfree(pager, sizeof (*pager));
 		pager = FOURK_PAGER_NULL;
@@ -501,21 +501,13 @@ fourk_pager_terminate(
  */
 kern_return_t
 fourk_pager_synchronize(
-	memory_object_t		mem_obj,
-	memory_object_offset_t	offset,
-	memory_object_size_t		length,
+	__unused memory_object_t	mem_obj,
+	__unused memory_object_offset_t	offset,
+	__unused memory_object_size_t	length,
 	__unused vm_sync_t		sync_flags)
 {
-	fourk_pager_t	pager;
-
-	PAGER_DEBUG(PAGER_ALL, ("fourk_pager_synchronize: %p\n", mem_obj));
-
-	pager = fourk_pager_lookup(mem_obj);
-
-	memory_object_synchronize_completed(pager->pager_control,
-					    offset, length);
-
-	return KERN_SUCCESS;
+	panic("fourk_pager_synchronize: memory_object_synchronize no longer supported\n");
+	return (KERN_FAILURE);
 }
 
 /*
@@ -604,8 +596,8 @@ fourk_pager_lookup(
 {
 	fourk_pager_t	pager;
 
+	assert(mem_obj->mo_pager_ops == &fourk_pager_ops);
 	pager = (fourk_pager_t) mem_obj;
-	assert(pager->pager_ops == &fourk_pager_ops);
 	assert(pager->ref_count > 0);
 	return pager;
 }
@@ -701,8 +693,8 @@ fourk_pager_to_vm_object(
 	}
 
 	assert(pager->ref_count > 0);
-	assert(pager->pager_control != MEMORY_OBJECT_CONTROL_NULL);
-	object = memory_object_control_to_vm_object(pager->pager_control);
+	assert(pager->fourk_pgr_hdr.mo_control != MEMORY_OBJECT_CONTROL_NULL);
+	object = memory_object_control_to_vm_object(pager->fourk_pgr_hdr.mo_control);
 	assert(object != VM_OBJECT_NULL);
 	return object;
 }
@@ -734,9 +726,10 @@ fourk_pager_create(void)
 	 * we reserve the first word in the object for a fake ip_kotype
 	 * setting - that will tell vm_map to use it as a memory object.
 	 */
-	pager->pager_ops = &fourk_pager_ops;
-	pager->pager_ikot = IKOT_MEMORY_OBJECT;
-	pager->pager_control = MEMORY_OBJECT_CONTROL_NULL;
+	pager->fourk_pgr_hdr.mo_ikot = IKOT_MEMORY_OBJECT;
+	pager->fourk_pgr_hdr.mo_pager_ops = &fourk_pager_ops;
+	pager->fourk_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
+
 	pager->ref_count = 2;	/* existence + setup reference */
 	pager->is_ready = FALSE;/* not ready until it has a "name" */
 	pager->is_mapped = FALSE;
@@ -821,7 +814,7 @@ fourk_pager_data_request(
 	/*
 	 * Gather in a UPL all the VM pages requested by VM.
 	 */
-	mo_control = pager->pager_control;
+	mo_control = pager->fourk_pgr_hdr.mo_control;
 
 	upl_size = length;
 	upl_flags =
@@ -833,7 +826,7 @@ fourk_pager_data_request(
 	pl_count = 0;
 	kr = memory_object_upl_request(mo_control,
 				       offset, upl_size,
-				       &upl, NULL, NULL, upl_flags);
+				       &upl, NULL, NULL, upl_flags, VM_KERN_MEMORY_NONE);
 	if (kr != KERN_SUCCESS) {
 		retval = kr;
 		goto done;
@@ -857,6 +850,7 @@ fourk_pager_data_request(
 			       2 * PAGE_SIZE_64,
 			       0,
 			       0,
+			       VM_MAP_KERNEL_FLAGS_NONE,
 			       &map_entry);
 	if (kr != KERN_SUCCESS) {
 		vm_object_deallocate(kernel_object);
@@ -899,14 +893,19 @@ fourk_pager_data_request(
 #if __x86_64__
 		dst_vaddr = (vm_map_offset_t)
 			PHYSMAP_PTOV((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
+#elif __arm__ || __arm64__
+		dst_vaddr = (vm_map_offset_t)
+			phystokv((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
 #else
-		pmap_enter(kernel_pmap,
-			   dst_vaddr,
-			   dst_pnum,
-			   VM_PROT_READ | VM_PROT_WRITE,
-			   VM_PROT_NONE,
-			   0,
-			   TRUE);
+		kr = pmap_enter(kernel_pmap,
+		                dst_vaddr,
+		                dst_pnum,
+		                VM_PROT_READ | VM_PROT_WRITE,
+		                VM_PROT_NONE,
+		                0,
+		                TRUE);
+
+		assert(kr == KERN_SUCCESS);
 #endif
 
 		/* retrieve appropriate data for each 4K-page in this page */
@@ -1087,18 +1086,24 @@ fourk_pager_data_request(
 			src_vaddr = (vm_map_offset_t)
 				PHYSMAP_PTOV((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
 					     << PAGE_SHIFT);
+#elif __arm__ || __arm64__
+			src_vaddr = (vm_map_offset_t)
+				phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
+					 << PAGE_SHIFT);
 #else
 			/*
 			 * Establish an explicit mapping of the source
 			 * physical page.
 			 */
-			pmap_enter(kernel_pmap,
-				   src_vaddr,
-				   VM_PAGE_GET_PHYS_PAGE(src_page),
-				   VM_PROT_READ,
-				   VM_PROT_NONE,
-				   0,
-				   TRUE);
+			kr = pmap_enter(kernel_pmap,
+			                src_vaddr,
+			                VM_PAGE_GET_PHYS_PAGE(src_page),
+			                VM_PROT_READ,
+			                VM_PROT_NONE,
+			                0,
+			                TRUE);
+
+			assert(kr == KERN_SUCCESS);
 #endif
 
 			/*
@@ -1327,7 +1332,7 @@ fourk_pager_populate(
 	}
 
 	assert(pager->ref_count > 0);
-	assert(pager->pager_control != MEMORY_OBJECT_CONTROL_NULL);
+	assert(pager->fourk_pgr_hdr.mo_control != MEMORY_OBJECT_CONTROL_NULL);
 
 	if (index < 0 || index > FOURK_PAGER_SLOTS) {
 		return KERN_INVALID_ARGUMENT;

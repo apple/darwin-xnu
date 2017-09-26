@@ -202,6 +202,9 @@
 #define	MINCORE_MODIFIED	 0x4	 /* Page has been modified by us */
 #define	MINCORE_REFERENCED_OTHER 0x8	 /* Page has been referenced */
 #define	MINCORE_MODIFIED_OTHER	0x10	 /* Page has been modified */
+#define MINCORE_PAGED_OUT       0x20     /* Page has been paged out */
+#define MINCORE_COPIED          0x40     /* Page has been copied */
+#define MINCORE_ANONYMOUS       0x80     /* Page belongs to an anonymous object */
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 

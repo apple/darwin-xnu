@@ -32,6 +32,8 @@
 #ifndef	_SYS_NETPORT_H_
 #define _SYS_NETPORT_H_
 
+#include <_types/_uint32_t.h> /* uint32_t */
+
 typedef uint32_t	netaddr_t;
 
 /*

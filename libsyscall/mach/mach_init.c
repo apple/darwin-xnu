@@ -115,6 +115,12 @@ _mach_fork_child(void)
 	return 0;
 }
 
+#if defined(__arm__) || defined(__arm64__)
+#if !defined(_COMM_PAGE_USER_PAGE_SHIFT_64) && defined(_COMM_PAGE_UNUSED0)
+#define _COMM_PAGE_USER_PAGE_SHIFT_32 (_COMM_PAGE_UNUSED0)
+#define _COMM_PAGE_USER_PAGE_SHIFT_64 (_COMM_PAGE_UNUSED0+1)
+#endif
+#endif
 
 void
 mach_init_doit(void)
@@ -136,7 +142,13 @@ mach_init_doit(void)
 	}
 	
 	if (vm_page_shift == 0) {
+#if defined(__arm64__)
+		vm_page_shift = *(uint8_t*) _COMM_PAGE_USER_PAGE_SHIFT_64;
+#elif defined(__arm__)
+		vm_page_shift = *(uint8_t*) _COMM_PAGE_USER_PAGE_SHIFT_32;
+#else
 		vm_page_shift = vm_kernel_page_shift;
+#endif
 		vm_page_size = 1 << vm_page_shift;
 		vm_page_mask = vm_page_size - 1;
 	}

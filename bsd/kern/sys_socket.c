@@ -189,6 +189,12 @@ soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	int error = 0;
 	int int_arg;
 
+#if CONFIG_MACF_SOCKET_SUBSET
+	error = mac_socket_check_ioctl(kauth_cred_get(), so, cmd);
+	if (error)
+		return (error);
+#endif
+
 	socket_lock(so, 1);
 
 	/* call the socket filter's ioctl handler anything but ours */
@@ -374,7 +380,7 @@ soo_stat(struct socket *so, void *ub, int isstat64)
 	/* warning avoidance ; protected by isstat64 */
 	struct stat64 *sb64 = (struct stat64 *)0;
 
-#if CONFIG_MACF_SOCKET
+#if CONFIG_MACF_SOCKET_SUBSET
 	ret = mac_socket_check_stat(kauth_cred_get(), so);
 	if (ret)
 		return (ret);

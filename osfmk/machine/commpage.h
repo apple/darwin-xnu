@@ -31,11 +31,14 @@
 
 #if defined (__i386__) || defined (__x86_64__)
 #include "i386/commpage/commpage.h"
+#elif defined (__arm__) || defined (__arm64__)
+#include "arm/commpage/commpage.h"
 #else
 #error architecture not supported
 #endif
 
 #ifndef	__ASSEMBLER__
+#include <sys/commpage.h>
 
 extern	void	commpage_populate( void ); 	/* called once during startup */
 extern  void	commpage_text_populate( void );

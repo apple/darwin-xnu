@@ -34,6 +34,9 @@
 #include <sys/vm.h>
 #include <kperf/buffer.h>
 #include <kern/thread.h>
+#if defined(__arm64__) || defined(__arm__)
+#include <arm/cpu_data_internal.h>
+#endif
 
 #include <kern/kpc.h>
 
@@ -59,9 +62,12 @@ static lck_mtx_t       kpc_config_lock;
 static boolean_t force_all_ctrs = FALSE;
 
 /* power manager */
-static kpc_pm_handler_t		kpc_pm_handler;
-static boolean_t		kpc_pm_has_custom_config;
-static uint64_t			kpc_pm_pmc_mask;
+static kpc_pm_handler_t kpc_pm_handler;
+static boolean_t kpc_pm_has_custom_config;
+static uint64_t kpc_pm_pmc_mask;
+#if MACH_ASSERT
+static bool kpc_calling_pm = false;
+#endif /* MACH_ASSERT */
 
 boolean_t kpc_context_switch_active = FALSE;
 
@@ -177,16 +183,48 @@ kpc_force_all_ctrs(task_t task, int val)
 		return 0;
 
 	/* notify the power manager */
-	if (kpc_pm_handler)
+	if (kpc_pm_handler) {
+#if MACH_ASSERT
+		kpc_calling_pm = true;
+#endif /* MACH_ASSERT */
 		kpc_pm_handler( new_state ? FALSE : TRUE );
+#if MACH_ASSERT
+		kpc_calling_pm = false;
+#endif /* MACH_ASSERT */
+	}
+
+	/*
+	 * This is a force -- ensure that counters are forced, even if power
+	 * management fails to acknowledge it.
+	 */
+	if (force_all_ctrs != new_state) {
+		force_all_ctrs = new_state;
+	}
 
 	/* update the task bits */
-	kpc_task_set_forced_all_ctrs(task, val);
-
-	/* update the internal state */
-	force_all_ctrs = val;
+	kpc_task_set_forced_all_ctrs(task, new_state);
 
 	return 0;
+}
+
+void
+kpc_pm_acknowledge(boolean_t available_to_pm)
+{
+	/*
+	 * Force-all-counters should still be true when the counters are being
+	 * made available to power management and false when counters are going
+	 * to be taken away.
+	 */
+	assert(force_all_ctrs == available_to_pm);
+	/*
+	 * Make sure power management isn't playing games with us.
+	 */
+	assert(kpc_calling_pm == true);
+
+	/*
+	 * Counters being available means no one is forcing all counters.
+	 */
+	force_all_ctrs = available_to_pm ? FALSE : TRUE;
 }
 
 int

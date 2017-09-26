@@ -37,12 +37,14 @@ LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	plugins/zprint_perf_log.py \
 	atm.py \
 	bank.py \
+	kevent.py \
 	xnu.py \
 	xnudefines.py \
 	ktrace.py \
 	macho.py \
 	mbufdefines.py \
 	netdefines.py \
+	ntstat.py \
 	routedefines.py \
 	ipc.py \
 	ipcimportancedetail.py \
@@ -61,6 +63,7 @@ LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	pci.py \
 	misc.py \
 	apic.py \
+	kasan.py \
 	kauth.py \
 	usertaskgdbserver.py \
 	waitq.py \
@@ -72,6 +75,7 @@ ifneq ($(PLATFORM),MacOSX)
 		plugins/iosspeedtracer.py \
 		plugins/iosspeedtracer.sh
 endif
+
 
 INSTALL_LLDBMACROS_PYTHON_FILES=$(addprefix $(LLDBMACROS_DEST), $(LLDBMACROS_PYTHON_FILES))
 

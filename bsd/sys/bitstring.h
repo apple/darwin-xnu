@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -68,11 +68,11 @@ typedef	uint8_t bitstr_t;
 
 /* internal macros */
 				/* byte of the bitstring bit is in */
-#define	_bit_byte(bit)							\
+#define	_bitstr_byte(bit)						\
 	((bit) >> 3)
 
 				/* mask for the bit within its byte */
-#define	_bit_mask(bit)							\
+#define	_bitstr_mask(bit)						\
 	(1 << ((bit) & 0x7))
 
 /* external macros */
@@ -85,31 +85,31 @@ typedef	uint8_t bitstr_t;
 	((name)[bitstr_size(nbits)])
 
 				/* is bit N of bitstring name set? */
-#define	bit_test(name, bit)						\
-	((name)[_bit_byte(bit)] & _bit_mask(bit))
+#define	bitstr_test(name, bit)						\
+	((name)[_bitstr_byte(bit)] & _bitstr_mask(bit))
 
 				/* set bit N of bitstring name */
-#define	bit_set(name, bit)						\
-	((name)[_bit_byte(bit)] |= _bit_mask(bit))
+#define	bitstr_set(name, bit)						\
+	((name)[_bitstr_byte(bit)] |= _bitstr_mask(bit))
 
 				/* set bit N of bitstring name (atomic) */
-#define	bit_set_atomic(name, bit)					\
-	atomic_bitset_8(&((name)[_bit_byte(bit)]), _bit_mask(bit))
+#define	bitstr_set_atomic(name, bit)					\
+	atomic_bitset_8(&((name)[_bitstr_byte(bit)]), _bitstr_mask(bit))
 
 				/* clear bit N of bitstring name */
-#define	bit_clear(name, bit)						\
-	((name)[_bit_byte(bit)] &= ~_bit_mask(bit))
+#define	bitstr_clear(name, bit)						\
+	((name)[_bitstr_byte(bit)] &= ~_bitstr_mask(bit))
 
 				/* clear bit N of bitstring name (atomic) */
-#define	bit_clear_atomic(name, bit)					\
-	atomic_bitclear_8(&((name)[_bit_byte(bit)]), _bit_mask(bit))
+#define	bitstr_clear_atomic(name, bit)					\
+	atomic_bitclear_8(&((name)[_bitstr_byte(bit)]), _bitstr_mask(bit))
 
 				/* clear bits start ... stop in bitstring */
-#define	bit_nclear(name, start, stop) do {				\
+#define	bitstr_nclear(name, start, stop) do {				\
 	bitstr_t *_name = (name);					\
 	int _start = (start), _stop = (stop);				\
-	int _startbyte = _bit_byte(_start);				\
-	int _stopbyte = _bit_byte(_stop);				\
+	int _startbyte = _bitstr_byte(_start);				\
+	int _stopbyte = _bitstr_byte(_stop);				\
 	if (_startbyte == _stopbyte) {					\
 		_name[_startbyte] &= ((0xff >> (8 - (_start & 0x7))) |	\
 		    (0xff << ((_stop & 0x7) + 1)));			\
@@ -122,11 +122,11 @@ typedef	uint8_t bitstr_t;
 } while (0)
 
 				/* set bits start ... stop in bitstring */
-#define	bit_nset(name, start, stop) do {				\
+#define	bitstr_nset(name, start, stop) do {				\
 	bitstr_t *_name = (name);					\
 	int _start = (start), _stop = (stop);				\
-	int _startbyte = _bit_byte(_start);				\
-	int _stopbyte = _bit_byte(_stop);				\
+	int _startbyte = _bitstr_byte(_start);				\
+	int _stopbyte = _bitstr_byte(_stop);				\
 	if (_startbyte == _stopbyte) {					\
 		_name[_startbyte] |= ((0xff << (_start & 0x7)) &	\
 		    (0xff >> (7 - (_stop & 0x7))));			\
@@ -139,10 +139,10 @@ typedef	uint8_t bitstr_t;
 } while (0)
 
 				/* find first bit clear in name */
-#define	bit_ffc(name, nbits, value) do {				\
+#define	bitstr_ffc(name, nbits, value) do {				\
 	bitstr_t *_name = (name);					\
 	int _byte, _nbits = (nbits);					\
-	int _stopbyte = _bit_byte(_nbits - 1), _value = -1;		\
+	int _stopbyte = _bitstr_byte(_nbits - 1), _value = -1;		\
 	if (_nbits > 0)							\
 		for (_byte = 0; _byte <= _stopbyte; ++_byte)		\
 			if (_name[_byte] != 0xff) {			\
@@ -158,10 +158,10 @@ typedef	uint8_t bitstr_t;
 } while (0)
 
 				/* find first bit set in name */
-#define	bit_ffs(name, nbits, value) do {				\
+#define	bitstr_ffs(name, nbits, value) do {				\
 	bitstr_t *_name = (name);					\
 	int _byte, _nbits = (nbits);					\
-	int _stopbyte = _bit_byte(_nbits - 1), _value = -1;		\
+	int _stopbyte = _bitstr_byte(_nbits - 1), _value = -1;		\
 	if (_nbits > 0)							\
 		for (_byte = 0; _byte <= _stopbyte; ++_byte)		\
 			if (_name[_byte]) {				\

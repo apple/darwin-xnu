@@ -104,6 +104,7 @@
 #define kIOMatchedNotification		"IOServiceMatched"
 #define kIOFirstMatchNotification	"IOServiceFirstMatch"
 #define kIOTerminatedNotification	"IOServiceTerminate"
+#define kIOWillTerminateNotification	"IOServiceWillTerminate"
 
 // IOService interest notification types
 #define kIOGeneralInterest		"IOGeneralInterest"

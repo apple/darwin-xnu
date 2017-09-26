@@ -102,6 +102,7 @@
 #include <sys/systm.h>
 
 #include <net/if.h>
+#include <net/net_api_stats.h>
 #include <net/route.h>
 #include <net/if_types.h>
 
@@ -282,7 +283,8 @@ void
 rip6_ctlinput(
 	int cmd,
 	struct sockaddr *sa,
-	void *d)
+	void *d,
+	__unused struct ifnet *ifp)
 {
 	struct ip6_hdr *ip6;
 	struct mbuf *m;
@@ -667,8 +669,9 @@ rip6_output(
 		 * the route interface index used by IP.
 		 */
 		if (rt != NULL &&
-		    (outif = rt->rt_ifp) != in6p->in6p_last_outifp)
+		    (outif = rt->rt_ifp) != in6p->in6p_last_outifp) {
 			in6p->in6p_last_outifp = outif;
+		}
 	} else {
 		ROUTE_RELEASE(&in6p->in6p_route);
 	}
@@ -886,6 +889,7 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	}
 	inp->in6p_laddr = sin6.sin6_addr;
 	inp->in6p_last_outifp = outif;
+
 	return (0);
 }
 
@@ -915,6 +919,12 @@ rip6_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 		return EADDRNOTAVAIL;
 	if (addr->sin6_family != AF_INET6)
 		return EAFNOSUPPORT;
+
+	if (!(so->so_flags1 & SOF1_CONNECT_COUNTED)) {
+		so->so_flags1 |= SOF1_CONNECT_COUNTED;
+		INC_ATOMIC_INT64_LIM(net_api_stats.nas_socket_inet6_dgram_connected);
+	}
+
 #if ENABLE_DEFAULT_SCOPE
 	if (addr->sin6_scope_id == 0) {	/* not change if specified  */
 		/* avoid overwrites */
@@ -941,6 +951,7 @@ rip6_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 	if (inp->in6p_route.ro_rt != NULL)
 		outif = inp->in6p_route.ro_rt->rt_ifp;
 	inp->in6p_last_outifp = outif;
+
 	soisconnected(so);
 	return 0;
 }

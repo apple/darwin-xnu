@@ -1,0 +1,81 @@
+.\" Copyright (c) 2017, Apple Inc.  All rights reserved.
+.\"
+.Dd March 1, 2017
+.Dt MONOTONIC 9
+.Os Darwin
+.\"
+.Sh NAME
+.Nm monotonic
+.Nd performance counter access system
+.\"
+.Sh DESCRIPTION
+.Nm
+allows kernel and user space clients to configure and read hardware performance
+counters.  The hardware counters can be virtualized to count per-thread and
+per-process.
+.Nm
+is split into three major layers:
+.Bl -dash
+.It
+The machine-dependent implementations manipulate hardware registers to configure
+and access the counters.  This layer provides a machine-independent interface
+that can be used by the next layer.
+.It
+A set of hooks and kernel routines manage the counters and provide higher-level
+abstractions, like 64-bit counters and counting only events that occurred on a
+thread or in a process.
+.It
+A user space interface that is presented as device nodes under
+.Pa /dev/monotonic .
+See
+.Xr monotonic 4 .
+Mach thread and task ports are used for the per-thread and per-process counts,
+with special inspection routines.  Some counter values are also reflected into
+.Fn getrusage ,
+for use after a process has exited.  See
+.Xr getrusage 2 .
+.El
+.Pp
+.\".Sh DIAGNOSTICS
+.\"
+.Sh SEE ALSO
+.Xr count 1 ,
+.Xr mperf 1 ,
+.Xr easyperf 1 ,
+.Xr getrusage 2 ,
+.Xr monotonic 4 ,
+.Xr perf 1
+.\"
+.Sh HISTORY
+.Nm
+replaces the kernel performance counter system, kpc.  For the time being,
+.Nm
+backs portions of the existing kpc
+.Fn sysctl
+interface.  Prior to kpc, the AppleProfileFamily kernel extensions provided
+performance counter interfaces.  The kernel extensions themselves expanded upon
+functionality provided for PowerPC by CHUD.
+.\".Sh CAVEATS
+.\"
+.Sh SECURITY CONSIDERATIONS
+.Pp
+.Pp
+.Bl -dash
+.It
+Hardware performance counters are an ideal tool for side-channel attacks.  By
+observing how the counters are affected by an otherwise opaque process, an
+attacker can obtain sensitive data or key material.
+.Pp
+For this reason, the hardware performance counters cannot be queried directly
+from user space.  Instead, all processes, including those owned by root, can
+only query the thread and process counters if they have the corresponding Mach
+thread or task port.
+.It
+When used in sampling mode, hardware performance counters can induce interrupt
+storms that translate to denial-of-service attacks on a system.  Even a careless
+user can stumble over this issue, since reasonable periods for some events are
+far too aggressive for others.
+.Pp
+If a hardware performance counter takes too many interrupts in a short amount of
+time, it will be disabled.
+.El

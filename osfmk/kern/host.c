@@ -294,9 +294,7 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 #if CONFIG_COALITIONS
 		debug_info->config_coalitions = 1;
 #endif
-#if CONFIG_BANK
 		debug_info->config_bank = 1;
-#endif
 #if CONFIG_ATM
 		debug_info->config_atm = 1;
 #endif
@@ -385,7 +383,11 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 			}
 		}
 		stat32->inactive_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_inactive_count);
+#if CONFIG_EMBEDDED
+		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count);
+#else
 		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count + vm_page_throttled_count + vm_lopage_free_count);
+#endif
 		stat32->zero_fill_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.zero_fill_count);
 		stat32->reactivations = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.reactivations);
 		stat32->pageins = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.pageins);
@@ -490,17 +492,30 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 			return (KERN_FAILURE);
 		}
 
-		task_power_info_t tinfo = (task_power_info_t)info;
+		task_power_info_t tinfo1 = (task_power_info_t)info;
+		task_power_info_v2_t tinfo2 = (task_power_info_v2_t)info;
 
-		tinfo->task_interrupt_wakeups = dead_task_statistics.task_interrupt_wakeups;
-		tinfo->task_platform_idle_wakeups = dead_task_statistics.task_platform_idle_wakeups;
+		tinfo1->task_interrupt_wakeups = dead_task_statistics.task_interrupt_wakeups;
+		tinfo1->task_platform_idle_wakeups = dead_task_statistics.task_platform_idle_wakeups;
 
-		tinfo->task_timer_wakeups_bin_1 = dead_task_statistics.task_timer_wakeups_bin_1;
+		tinfo1->task_timer_wakeups_bin_1 = dead_task_statistics.task_timer_wakeups_bin_1;
 
-		tinfo->task_timer_wakeups_bin_2 = dead_task_statistics.task_timer_wakeups_bin_2;
+		tinfo1->task_timer_wakeups_bin_2 = dead_task_statistics.task_timer_wakeups_bin_2;
 
-		tinfo->total_user = dead_task_statistics.total_user_time;
-		tinfo->total_system = dead_task_statistics.total_system_time;
+		tinfo1->total_user = dead_task_statistics.total_user_time;
+		tinfo1->total_system = dead_task_statistics.total_system_time;
+		if (*count < TASK_POWER_INFO_V2_COUNT) {
+			*count = TASK_POWER_INFO_COUNT;
+		}
+		else if (*count >= TASK_POWER_INFO_V2_COUNT) {
+			tinfo2->gpu_energy.task_gpu_utilisation = dead_task_statistics.task_gpu_ns;
+#if defined(__arm__) || defined(__arm64__)
+			tinfo2->task_energy = dead_task_statistics.task_energy;
+			tinfo2->task_ptime = dead_task_statistics.total_ptime;
+			tinfo2->task_pset_switches = dead_task_statistics.total_pset_switches;
+#endif
+			*count = TASK_POWER_INFO_V2_COUNT;
+		}
 
 		return (KERN_SUCCESS);
 	}
@@ -577,7 +592,11 @@ host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_ms
 			}
 		}
 		stat->inactive_count = vm_page_inactive_count;
+#if CONFIG_EMBEDDED
+		stat->wire_count = vm_page_wire_count;
+#else
 		stat->wire_count = vm_page_wire_count + vm_page_throttled_count + vm_lopage_free_count;
+#endif
 		stat->zero_fill_count = host_vm_stat.zero_fill_count;
 		stat->reactivations = host_vm_stat.reactivations;
 		stat->pageins = host_vm_stat.pageins;
@@ -703,7 +722,7 @@ get_sched_statistics(struct _processor_statistics_np * out, uint32_t * count)
 	/* And include RT Queue information */
 	bzero(out, sizeof(*out));
 	out->ps_cpuid = (-1);
-	out->ps_runq_count_sum = rt_runq.runq_stats.count_sum;
+	out->ps_runq_count_sum = SCHED(rt_runq_count_sum)();
 	out++;
 	*count += (uint32_t)sizeof(struct _processor_statistics_np);
 
@@ -1009,7 +1028,21 @@ host_set_atm_diagnostic_flag(host_priv_t host_priv, uint32_t diagnostic_flag)
 kern_return_t
 host_set_multiuser_config_flags(host_priv_t host_priv, uint32_t multiuser_config)
 {
+#if CONFIG_EMBEDDED
+	if (host_priv == HOST_PRIV_NULL)
+		return (KERN_INVALID_ARGUMENT);
+
+	assert(host_priv == &realhost);
+
+	/*
+	 * Always enforce that the multiuser bit is set
+	 * if a value is written to the commpage word.
+	 */
+	commpage_update_multiuser_config(multiuser_config | kIsMultiUserDevice);
+	return (KERN_SUCCESS);
+#else
 	(void)host_priv;
 	(void)multiuser_config;
 	return (KERN_NOT_SUPPORTED);
+#endif
 }

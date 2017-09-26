@@ -122,6 +122,21 @@ protected:
 	Is this event source enabled to deliver requests to the work-loop. */
     bool enabled;
 
+#if XNU_KERNEL_PRIVATE
+
+    enum
+    {
+        kPassive = 0x0001,
+        kActive  = 0x0002,
+    };
+    uint8_t  eventSourceReserved1[1];
+    uint16_t flags;
+#if __LP64__
+    uint8_t eventSourceReserved2[4];
+#endif /* __LP64__ */
+
+#endif /* XNU_KERNEL_PRIVATE */
+
 /*! @var workLoop What is the work-loop for this event source. */
     IOWorkLoop *workLoop;
 
@@ -147,9 +162,7 @@ protected:
     @abstract Primary initialiser for the IOEventSource class.
     @param owner
 	Owner of this instance of an event source.  Used as the first parameter
-of the action callout.	Owner will generally be an OSObject it doesn't have to
-be as no member functions will be called directly in it.  It can just be a
-refcon for a client routine.
+of the action callout.	Owner must be an OSObject.
     @param action
 	Pointer to C call out function.	 Action is a pointer to a C function
 that gets called when this event source has outstanding work.  It will usually

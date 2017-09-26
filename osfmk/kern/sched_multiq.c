@@ -319,6 +319,20 @@ const struct sched_dispatch_table sched_multiq_dispatch = {
 	.direct_dispatch_to_idle_processors             = FALSE,
 	.multiple_psets_enabled                         = FALSE,
 	.sched_groups_enabled                           = TRUE,
+	.avoid_processor_enabled                        = FALSE,
+	.thread_avoid_processor                         = NULL,
+	.processor_balance                              = sched_SMT_balance,
+
+	.rt_runq                                        = sched_rtglobal_runq,
+	.rt_init                                        = sched_rtglobal_init,
+	.rt_queue_shutdown                              = sched_rtglobal_queue_shutdown,
+	.rt_runq_scan                                   = sched_rtglobal_runq_scan,
+	.rt_runq_count_sum                              = sched_rtglobal_runq_count_sum,
+
+	.qos_max_parallelism                            = sched_qos_max_parallelism,
+	.check_spill                                    = sched_check_spill,
+	.ipi_policy                                     = sched_ipi_policy,
+	.thread_should_yield                            = sched_thread_should_yield,
 };
 
 
@@ -1218,9 +1232,6 @@ sched_multiq_processor_queue_has_priority(
 	run_queue_t main_runq  = multiq_main_entryq(processor);
 	run_queue_t bound_runq = multiq_bound_runq(processor);
 
-	if (main_runq->count == 0 && bound_runq->count == 0)
-		return FALSE;
-
 	int qpri = MAX(main_runq->highq, bound_runq->highq);
 
 	if (gte)
@@ -1457,5 +1468,3 @@ sched_multiq_thread_update_scan(sched_update_scan_context_t scan_context)
 
 	} while (restart_needed);
 }
-
-

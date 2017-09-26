@@ -22,7 +22,7 @@ INTP = ctypes.POINTER(ctypes.c_int)
 kgm_manual_pkt_ppc    = 0x549C
 kgm_manual_pkt_i386   = 0x249C
 kgm_manual_pkt_x86_64 = 0xFFFFFF8000002930
-kgm_manual_pkt_arm    = 0xFFFF04A0
+kgm_manual_pkt_arm    = 0xFFFF13A0
 kgm_kdp_pkt_data_len   = 128
 
 MCF_NOCPUCACHE = 0x10

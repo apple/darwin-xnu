@@ -161,7 +161,7 @@ finish:
 bool
 IOReporter::init(IOService *reportingService,
                  IOReportChannelType channelType,
-                 IOReportUnits unit)
+                 IOReportUnit unit)
 {
     bool success = false;
 
@@ -189,7 +189,9 @@ IOReporter::init(IOService *reportingService,
     _channelType = channelType;
     // FIXME: need to look up dynamically
     if (unit == kIOReportUnitHWTicks) {
-#if   defined(__i386__) || defined(__x86_64__)
+#if defined(__arm__) || defined(__arm64__)
+        unit = kIOReportUnit24MHzTicks;
+#elif defined(__i386__) || defined(__x86_64__)
         // Most, but not all Macs use 1GHz
         unit = kIOReportUnit1GHzTicks;
 #else
@@ -988,7 +990,7 @@ finish:
 IOReporter::legendWith(OSArray *channelIDs,
                        OSArray *channelNames,
                        IOReportChannelType channelType,
-                       IOReportUnits unit)
+                       IOReportUnit unit)
 {
     unsigned int            cnt, chCnt;
     uint64_t                type64;

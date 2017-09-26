@@ -35,6 +35,7 @@
 #ifdef	MACH_KERNEL_PRIVATE
 
 #include <kern/thread.h>
+#include <kern/thread_group.h>
 #include <kern/locks.h>
 #include <kern/queue.h>
 #include <ipc/ipc_voucher.h>
@@ -162,6 +163,7 @@ typedef struct bank_account * bank_account_t;
 
 struct _bank_ledger_indices {
 	int cpu_time;
+	int energy;
 };
 
 extern struct _bank_ledger_indices bank_ledgers;
@@ -169,11 +171,12 @@ extern struct _bank_ledger_indices bank_ledgers;
 extern void bank_init(void);
 extern void bank_task_destroy(task_t);
 extern void bank_task_initialize(task_t task);
-extern uint64_t bank_billed_time_safe(task_t task);
-extern uint64_t bank_billed_time(bank_task_t bank_task);
-extern uint64_t bank_serviced_time_safe(task_t task);
-extern uint64_t bank_serviced_time(bank_task_t bank_task);
-extern ledger_t bank_get_voucher_ledger(ipc_voucher_t voucher);
+extern void bank_billed_balance_safe(task_t task, uint64_t *cpu_time, uint64_t *energy);
+extern void bank_billed_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energy);
+extern void bank_serviced_balance_safe(task_t task, uint64_t *cpu_time, uint64_t *energy);
+extern void bank_serviced_balance(bank_task_t bank_task, uint64_t *cpu_time, uint64_t *energy);
+extern kern_return_t bank_get_bank_ledger_and_thread_group(ipc_voucher_t voucher,
+	ledger_t *bankledger, thread_group_t *banktg);
 extern void bank_swap_thread_bank_ledger(thread_t thread, ledger_t ledger);
 
 #endif /* MACH_KERNEL_PRIVATE */

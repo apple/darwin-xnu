@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -105,8 +105,17 @@ typedef void (*sock_evupcall)(socket_t so, void *cookie, u_int32_t event);
 		socket for tracking the connection.
 	@result 0 on success otherwise the errno error.
  */
+#ifdef KERNEL_PRIVATE
+extern errno_t sock_accept_internal(socket_t so, struct sockaddr *from, int fromlen,
+    int flags, sock_upcall callback, void *cookie, socket_t *new_so);
+
+#define	sock_accept(so, from, fromlen, flags, callback, cookie, new_so) \
+	sock_accept_internal((so), (from), (fromlen), (flags), (callback), \
+	(cookie), (new_so))
+#else
 extern errno_t sock_accept(socket_t so, struct sockaddr *from, int fromlen,
     int flags, sock_upcall callback, void *cookie, socket_t *new_so);
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@function sock_bind
@@ -364,8 +373,17 @@ extern errno_t sock_shutdown(socket_t so, int how);
 	@param new_so Upon success, a reference to the new socket.
 	@result 0 on success otherwise the errno error.
  */
+#ifdef KERNEL_PRIVATE
+extern errno_t sock_socket_internal(int domain, int type, int protocol,
+    sock_upcall callback, void *cookie, socket_t *new_so);
+    
+#define	sock_socket(domain, type, protocol, callback, cookie, new_so) \
+	sock_socket_internal((domain), (type), (protocol), \
+	(callback), (cookie), (new_so))
+#else
 extern errno_t sock_socket(int domain, int type, int protocol,
     sock_upcall callback, void *cookie, socket_t *new_so);
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@function sock_close
@@ -538,6 +556,17 @@ extern errno_t sock_setupcalls(socket_t sock, sock_upcall read_callback,
     void *read_context, sock_upcall write_callback, void *write_context);
 
 /*
+	@function sock_setupcalls_locked
+	@discussion The locked version of sock_setupcalls
+	@param locked: When sets, indicates that the callbacks expect to be
+		       on a locked socket. Thus, no unlock is done prior to
+		       calling the callback.
+ */
+extern void sock_setupcalls_locked(socket_t sock,
+    sock_upcall rcallback, void *rcontext,
+    sock_upcall wcallback, void *wcontext, int locked);
+
+/*
 	@function sock_catchevents
 	@discussion Set the notifier function to be called when an event
 		occurs on the socket. This may be set to NULL to disable
@@ -551,6 +580,11 @@ extern errno_t sock_setupcalls(socket_t sock, sock_upcall read_callback,
 */
 extern errno_t sock_catchevents(socket_t sock, sock_evupcall event_callback,
     void *event_context, u_int32_t event_mask);
+
+extern void sock_catchevents_locked(socket_t sock, sock_evupcall ecallback,
+    void *econtext, u_int32_t emask);
+
+
 /*
 	@function sock_iskernel
 	@discussion Returns true if the socket was created by the kernel or

@@ -898,10 +898,10 @@ def showinterruptstats(cmd_args=None):
         Workloop Time: Total time spent running the kernel context handler
     """
 
-    header_format = "{0: <20s} {1: >5s} {2: >20s} {3: >20s} {4: >20s} {5: >20s} {6: >20s}"
-    content_format = "{0: <20s} {1: >5d} {2: >20d} {3: >20d} {4: >20d} {5: >20d} {6: >20d}"
+    header_format = "{0: <20s} {1: >5s} {2: >20s} {3: >20s} {4: >20s} {5: >20s} {6: >20s} {7: >20s} {8: >20s} {9: >20s}"
+    content_format = "{0: <20s} {1: >5d} {2: >20d} {3: >20d} {4: >20d} {5: >20d} {6: >20d} {7: >20d} {8: >20d} {9: >#20x}"
 
-    print header_format.format("Name", "Index", "Interrupt Count", "Interrupt Time", "Workloop Count", "Workloop CPU Time", "Workloop Time")
+    print header_format.format("Name", "Index", "Interrupt Count", "Interrupt Time", "Avg Interrupt Time", "Workloop Count", "Workloop CPU Time", "Workloop Time", "Avg Workloop Time", "Owner")
     
     for i in kern.interrupt_stats:
         owner = CastIOKitClass(i.owner, 'IOInterruptEventSource *')
@@ -934,7 +934,16 @@ def showinterruptstats(cmd_args=None):
         second_level_cpu_time = i.interruptStatistics[3]
         second_level_system_time = i.interruptStatistics[4]
 
-        print content_format.format(nub_name, interrupt_index, first_level_count, first_level_time, second_level_count, second_level_cpu_time, second_level_system_time)
+        avg_first_level_time = 0
+        if first_level_count != 0:
+            avg_first_level_time = first_level_time / first_level_count
+
+        avg_second_level_time = 0
+        if second_level_count != 0:
+            avg_second_level_time = second_level_system_time / second_level_count
+
+        print content_format.format(nub_name, interrupt_index, first_level_count, first_level_time, avg_first_level_time,
+            second_level_count, second_level_cpu_time, second_level_system_time, avg_second_level_time, owner)
     
     return True
 

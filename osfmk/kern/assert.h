@@ -77,12 +77,7 @@ extern void	Assert(
 
 extern int kext_assertions_enable;
 
-#ifdef CONFIG_NO_PANIC_STRINGS
-#define Assert(file, line, ex) (Assert)("", line, "")
-#define __Panic(fmt, args...) panic("", ##args)
-#else /* CONFIG_NO_PANIC_STRINGS */
 #define __Panic(fmt, args...) panic(fmt, ##args)
-#endif /* CONFIG_NO_PANIC_STRINGS */
 
 __END_DECLS
 

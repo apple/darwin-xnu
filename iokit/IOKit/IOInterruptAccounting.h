@@ -29,6 +29,8 @@
 #ifndef __IOKIT_IOINTERRUPTACCOUNTING_H
 #define __IOKIT_IOINTERRUPTACCOUNTING_H
 
+#include <IOKit/IOReportTypes.h>
+
 /*
  * This header contains definitions that will be needed by userspace clients of the interrupt accounting
  * mechanisms.

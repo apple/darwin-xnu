@@ -57,6 +57,8 @@ typedef struct fasttrap_machtp {
 	uint8_t		ftmt_scale;	/* branch scale */
 	uint8_t		ftmt_segment;	/* segment for memory accesses */
 	user_addr_t	ftmt_dest;	/* destination of control flow */
+	uint8_t		ftmt_installed:1;
+	uint8_t		ftmt_retired:1;
 } fasttrap_machtp_t;
 
 #define	ftt_instr	ftt_mtp.ftmt_instr
@@ -70,6 +72,9 @@ typedef struct fasttrap_machtp {
 #define	ftt_scale	ftt_mtp.ftmt_scale
 #define	ftt_segment	ftt_mtp.ftmt_segment
 #define	ftt_dest	ftt_mtp.ftmt_dest
+#define ftt_installed	ftt_mtp.ftmt_installed
+#define ftt_retired	ftt_mtp.ftmt_retired
+
 
 #define	FASTTRAP_T_COMMON	0x00	/* common case -- no emulation */
 #define	FASTTRAP_T_JCC		0x01	/* near and far conditional jumps */

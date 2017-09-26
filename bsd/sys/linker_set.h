@@ -88,6 +88,12 @@
  *
  *  void const * __set_SET_sym_SYM __attribute__((section("__DATA,SET"))) = & SYM
  */
+
+/* Wrap entries in a type that can be blacklisted from KASAN */
+struct linker_set_entry {
+	void *ptr;
+} __attribute__((packed));
+
 #ifdef __LS_VA_STRINGIFY__
 #  undef __LS_VA_STRINGIFY__
 #endif
@@ -97,8 +103,8 @@
 #define __LS_VA_STRINGIFY(_x...)	#_x
 #define __LS_VA_STRCONCAT(_x,_y)	__LS_VA_STRINGIFY(_x,_y)
 #define __LINKER_MAKE_SET(_set, _sym)					\
-	/*__unused*/ /*static*/ void const * /*const*/ __set_##_set##_sym_##_sym		\
-	__attribute__ ((section(__LS_VA_STRCONCAT(__DATA,_set)),used)) = (void *)&_sym
+	/*__unused*/ /*static*/ const struct linker_set_entry /*const*/ __set_##_set##_sym_##_sym		\
+	__attribute__ ((section(__LS_VA_STRCONCAT(__DATA,_set)),used)) = { (void *)&_sym }
 /* the line above is very fragile - if your compiler breaks linker sets,
    just play around with "static", "const", "used" etc. :-) */
 

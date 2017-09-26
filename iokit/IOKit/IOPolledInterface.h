@@ -54,7 +54,8 @@ enum
 enum
 {
     kIOPolledWrite = 1,
-    kIOPolledRead  = 2
+    kIOPolledRead  = 2,
+    kIOPolledFlush = 3
 };
 
 typedef void (*IOPolledCompletionAction)( void *   target,
@@ -202,6 +203,8 @@ extern __C IOReturn IOPolledFileWrite(IOPolledFileIOVars * vars,
 extern __C IOReturn IOPolledFileRead(IOPolledFileIOVars * vars,
 			  uint8_t * bytes, IOByteCount size,
 			  IOPolledFileCryptVars * cryptvars);
+
+extern __C IOReturn IOPolledFileFlush(IOPolledFileIOVars * vars);
 
 extern __C IOReturn IOPolledFilePollersOpen(IOPolledFileIOVars * vars, uint32_t state, bool abortable);
 

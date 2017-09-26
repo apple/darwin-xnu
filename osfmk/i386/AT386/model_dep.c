@@ -67,6 +67,10 @@
  */
 
 
+#define __APPLE_API_PRIVATE 1
+#define __APPLE_API_UNSTABLE 1
+#include <kern/debug.h>
+
 #include <mach/i386/vm_param.h>
 
 #include <string.h>
@@ -77,7 +81,6 @@
 #include <sys/kdebug.h>
 #include <kern/spl.h>
 #include <kern/assert.h>
-#include <kern/debug.h>
 #include <kern/misc_protos.h>
 #include <kern/startup.h>
 #include <kern/clock.h>
@@ -126,7 +129,7 @@
 #include <mach/branch_predicates.h>
 #include <libkern/section_keywords.h>
 
-#if	DEBUG
+#if	DEBUG || DEVELOPMENT
 #define DPRINTF(x...)	kprintf(x)
 #else
 #define DPRINTF(x...)
@@ -134,6 +137,7 @@
 
 static void machine_conf(void);
 void panic_print_symbol_name(vm_address_t search);
+void RecordPanicStackshot(void);
 
 extern const char	version[];
 extern char 	osversion[];
@@ -148,8 +152,6 @@ extern int	proc_pid(void *p);
 #define FP_LR_OFFSET           ((uint32_t)4)
 #define FP_LR_OFFSET64         ((uint32_t)8)
 #define FP_MAX_NUM_TO_EVALUATE (50)
-
-int db_run_mode;
 
 volatile int pbtcpu = -1;
 hw_lock_data_t pbtlock;		/* backtrace print lock */
@@ -169,6 +171,22 @@ typedef struct _cframe_t {
 
 static unsigned panic_io_port;
 static unsigned	commit_paniclog_to_nvram;
+boolean_t coprocessor_paniclog_flush = FALSE;
+
+#if DEVELOPMENT || DEBUG
+struct kcdata_descriptor kc_panic_data;
+static boolean_t begun_panic_stackshot = FALSE;
+
+vm_offset_t panic_stackshot_buf = 0;
+size_t panic_stackshot_len = 0;
+
+extern kern_return_t	do_stackshot(void *);
+extern void	 	kdp_snapshot_preflight(int pid, void *tracebuf,
+					       uint32_t tracebuf_size, uint32_t flags,
+					       kcdata_descriptor_t data_p,
+						boolean_t enable_faulting);
+extern int 		kdp_stack_snapshot_bytes_traced(void);
+#endif
 
 SECURITY_READ_ONLY_LATE(unsigned int) debug_boot_arg;
 
@@ -177,7 +195,7 @@ SECURITY_READ_ONLY_LATE(unsigned int) debug_boot_arg;
  */
 void
 print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker,
-	boolean_t is_64_bit, boolean_t nvram_format) 
+	boolean_t is_64_bit)
 {
 	int		    i = 0;
 	addr64_t	lr;
@@ -219,9 +237,9 @@ print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker,
 			}
 		} else {
 			if (is_64_bit) {
-				kdb_printf("%s\t  Could not read LR from frame at 0x%016llx\n", cur_marker, fp + FP_LR_OFFSET64);
+				paniclog_append_noflush("%s\t  Could not read LR from frame at 0x%016llx\n", cur_marker, fp + FP_LR_OFFSET64);
 			} else {
-				kdb_printf("%s\t  Could not read LR from frame at 0x%08x\n", cur_marker, (uint32_t)(fp + FP_LR_OFFSET));
+				paniclog_append_noflush("%s\t  Could not read LR from frame at 0x%08x\n", cur_marker, (uint32_t)(fp + FP_LR_OFFSET));
 			}
 			break;
 		}
@@ -237,25 +255,17 @@ print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker,
 			}
 		} else {
 			if (is_64_bit) {
-				kdb_printf("%s\t  Could not read FP from frame at 0x%016llx\n", cur_marker, fp);
+				paniclog_append_noflush("%s\t  Could not read FP from frame at 0x%016llx\n", cur_marker, fp);
 			} else {
-				kdb_printf("%s\t  Could not read FP from frame at 0x%08x\n", cur_marker, (uint32_t)fp);
+				paniclog_append_noflush("%s\t  Could not read FP from frame at 0x%08x\n", cur_marker, (uint32_t)fp);
 			}
 			break;
 		}
 
-		if (nvram_format) {
-			if (is_64_bit) {
-				kdb_printf("%s\t0x%016llx\n", cur_marker, lr);
-			} else {
-				kdb_printf("%s\t0x%08x\n", cur_marker, (uint32_t)lr);
-			}
-		} else {		
-			if (is_64_bit) {
-				kdb_printf("%s\t  lr: 0x%016llx  fp: 0x%016llx\n", cur_marker, lr, fp);
-			} else {
-				kdb_printf("%s\t  lr: 0x%08x  fp: 0x%08x\n", cur_marker, (uint32_t)lr, (uint32_t)fp);
-			}
+		if (is_64_bit) {
+			paniclog_append_noflush("%s\t0x%016llx\n", cur_marker, lr);
+		} else {
+			paniclog_append_noflush("%s\t0x%08x\n", cur_marker, (uint32_t)lr);
 		}
 	} while ((++i < FP_MAX_NUM_TO_EVALUATE) && (fp != topfp));
 }
@@ -274,13 +284,9 @@ machine_startup(void)
 #if DEVELOPMENT || DEBUG
 		if (debug_boot_arg & DB_HALT) halt_in_debugger=1;
 #endif
-		if (debug_boot_arg & DB_PRT) disable_debug_output=FALSE; 
-		if (debug_boot_arg & DB_SLOG) systemLogDiags=TRUE; 
-		if (debug_boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE;
 #if KDEBUG_MOJO_TRACE
 		if (debug_boot_arg & DB_PRT_KDEBUG) {
 			kdebug_serial = TRUE;
-			disable_debug_output = FALSE;
 		}
 #endif
 	} else {
@@ -655,6 +661,17 @@ efi_init(void)
     return;
 }
 
+/* Returns TRUE if a page belongs to the EFI Runtime Services (code or data) */ 
+boolean_t
+efi_valid_page(ppnum_t ppn) 
+{
+    boot_args *args = (boot_args *)PE_state.bootArgs;
+    ppnum_t    pstart = args->efiRuntimeServicesPageStart;
+    ppnum_t    pend = pstart + args->efiRuntimeServicesPageCount;
+
+    return pstart <= ppn && ppn < pend;
+}
+
 /* Remap EFI runtime areas. */
 void
 hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_offset)
@@ -840,180 +857,156 @@ uint64_t panic_restart_timeout = ~(0ULL);
 
 #define PANIC_RESTART_TIMEOUT (3ULL * NSEC_PER_SEC)
 
-static void
-machine_halt_cpu(void) {
-	uint64_t deadline;
+void
+RecordPanicStackshot()
+{
+#if DEVELOPMENT || DEBUG
+	int err = 0, bytes_traced = 0, bytes_used = 0;
+	/* Try to take a stackshot once at panic time */
+	if (begun_panic_stackshot) {
+		return;
+	}
+	begun_panic_stackshot = TRUE;
 
-	panic_io_port_read();
-
-	/* Halt here forever if we're not rebooting */
-	if (!PE_reboot_on_panic() && panic_restart_timeout == ~(0ULL)) {
-		pmCPUHalt(PM_HALT_DEBUG);
+	if (panic_stackshot_buf == 0) {
+		kdb_printf("No stackshot buffer allocated, skipping...\n");
 		return;
 	}
 
-	if (PE_reboot_on_panic())
-		deadline = mach_absolute_time() + PANIC_RESTART_TIMEOUT;
-	else
-		deadline = mach_absolute_time() + panic_restart_timeout;
-
-	while (mach_absolute_time() < deadline)
-		cpu_pause();
-
-	kprintf("Invoking PE_halt_restart\n");
-	/* Attempt restart via ACPI RESET_REG; at the time of this
-	 * writing, this is routine is chained through AppleSMC->
-	 * AppleACPIPlatform
-	 */
-	if (PE_halt_restart)
-		(*PE_halt_restart)(kPERestartCPU);
-	pmCPUHalt(PM_HALT_DEBUG);
-}
-
-void
-DebuggerWithContext(
-	__unused unsigned int	reason,
-	__unused void 		*ctx,
-	const char		*message,
-	uint64_t		debugger_options_mask)
-{
-	if (debugger_options_mask != DEBUGGER_OPTION_NONE) {
-		kprintf("debugger options (%llx) not supported for desktop.\n", debugger_options_mask);
+	err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)panic_stackshot_buf, KCDATA_BUFFER_BEGIN_STACKSHOT,
+			PANIC_STACKSHOT_BUFSIZE, KCFLAG_USE_MEMCOPY);
+	if (err != KERN_SUCCESS) {
+		kdb_printf("Failed to initialize kcdata buffer for panic stackshot, skipping ...\n");
+		return;
 	}
 
-	Debugger(message);
+	kdp_snapshot_preflight(-1, (void *) panic_stackshot_buf, PANIC_STACKSHOT_BUFSIZE, (STACKSHOT_GET_GLOBAL_MEM_STATS | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
+									STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC | STACKSHOT_NO_IO_STATS
+									| STACKSHOT_THREAD_WAITINFO), &kc_panic_data, 0);
+	err = do_stackshot(NULL);
+	bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
+	if (bytes_traced > 0 && !err) {
+		panic_stackshot_len = bytes_traced;
+		kdb_printf("Panic stackshot succeeded, length: %u bytes\n", bytes_traced);
+	} else {
+		bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
+		if (bytes_used > 0) {
+			kdb_printf("Panic stackshot incomplete, consumed %u bytes\n", bytes_used);
+		} else {
+			kdb_printf("Panic stackshot incomplete, consumed %u bytes, error : %d \n", bytes_used, err);
+		}
+	}
+
+#endif /* DEVELOPMENT || DEBUG */
+	return;
 }
 
 void
-Debugger(
-	const char	*message)
+SavePanicInfo(
+	__unused const char *message, uint64_t panic_options)
 {
-	unsigned long pi_size = 0;
 	void *stackptr;
 	int cn = cpu_number();
 
-	boolean_t old_doprnt_hide_pointers = doprnt_hide_pointers;
+	/*
+	 * Issue an I/O port read if one has been requested - this is an event logic
+	 * analyzers can use as a trigger point.
+	 */
+	panic_io_port_read();
 
-	hw_atomic_add(&debug_mode, 1);   
-	if (!panic_is_inited) {
-		postcode(PANIC_HLT);
-		asm("hlt");
+	/* Obtain current frame pointer */
+	__asm__ volatile("movq %%rbp, %0" : "=m" (stackptr));
+
+    /* Print backtrace - callee is internally synchronized */
+	if (panic_options & DEBUGGER_OPTION_INITPROC_PANIC) {
+		/* Special handling of launchd died panics */
+		print_launchd_info();
+	} else {
+		panic_i386_backtrace(stackptr, ((panic_double_fault_cpu == cn) ? 80: 48), NULL, FALSE, NULL);
 	}
 
-	doprnt_hide_pointers = FALSE;
+	if (panic_options & DEBUGGER_OPTION_COPROC_INITIATED_PANIC) {
+		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_COPROC_INITIATED_PANIC;
+	}
 
-	printf("Debugger called: <%s>\n", message);
-	kprintf("Debugger called: <%s>\n", message);
+	/* Flush the paniclog */
+	paniclog_flush();
+
+	/* Try to take a panic stackshot */
+	RecordPanicStackshot();
+}
+
+void
+paniclog_flush()
+{
+	unsigned long pi_size = 0;
+
+	assert(panic_info != NULL);
+	panic_info->mph_panic_log_len = PE_get_offset_into_panic_region(debug_buf_ptr) - panic_info->mph_panic_log_offset;
 
 	/*
-	 * Skip the graphical panic box if no panic string.
-	 * This is the case if we're being called from
-	 *   host_reboot(,HOST_REBOOT_DEBUGGER)
-	 * as a quiet way into the debugger.
+	 * If we've detected that we're on a co-processor system we flush the panic log via the kPEPanicSync
+	 * panic callbacks, otherwise we flush via nvram (unless that has been disabled).
 	 */
+	if (coprocessor_paniclog_flush) {
+		/* Only need to calculate the CRC for co-processor platforms */
+		panic_info->mph_crc = crc32(0L, &panic_info->mph_version, (debug_buf_size - offsetof(struct macos_panic_header, mph_version)));
 
-	if (panicstr) {
-		disable_preemption();
+		PESavePanicInfoAction(debug_buf, debug_buf_size);
+	} else if(commit_paniclog_to_nvram) {
+		assert(debug_buf_size != 0);
+		unsigned int bufpos;
+		uintptr_t cr0;
 
-/* Issue an I/O port read if one has been requested - this is an event logic
- * analyzers can use as a trigger point.
- */
-		panic_io_port_read();
+		debug_putc(0);
 
-		/* Obtain current frame pointer */
-		__asm__ volatile("movq %%rbp, %0" : "=m" (stackptr));
 
-		/* Print backtrace - callee is internally synchronized */
-		if (strncmp(panicstr, LAUNCHD_CRASHED_PREFIX, strlen(LAUNCHD_CRASHED_PREFIX)) == 0) {
-			/* Special handling of launchd died panics */
-			print_launchd_info();
-		} else {
-			panic_i386_backtrace(stackptr, ((panic_double_fault_cpu == cn) ? 80: 48), NULL, FALSE, NULL);
-		}
-
-		/* everything should be printed now so copy to NVRAM
+		/*
+		 * Now call the compressor
+		 * XXX Consider using the WKdm compressor in the
+		 * future, rather than just packing - would need to
+		 * be co-ordinated with crashreporter, which decodes
+		 * this post-restart. The compressor should be
+		 * capable of in-place compression.
+		 *
+		 * Don't include the macOS panic header (for co-processor systems only)
 		 */
+		bufpos = packA(debug_buf_base, (unsigned int) (debug_buf_ptr - debug_buf_base),
+				debug_buf_size);
+		/*
+		 * If compression was successful, use the compressed length
+		 */
+		pi_size = bufpos ? bufpos : (unsigned) (debug_buf_ptr - debug_buf_base);
 
-		if( debug_buf_size > 0) {
-		  /* Optionally sync the panic log, if any, to NVRAM
-		   * This is the default.
-		   */
-		    if (commit_paniclog_to_nvram) {
-			unsigned int bufpos;
-			uintptr_t cr0;
-			
-			debug_putc(0);
+		/*
+		 * The following sequence is a workaround for:
+		 * <rdar://problem/5915669> SnowLeopard10A67: AppleEFINVRAM should not invoke
+		 * any routines that use floating point (MMX in this case) when saving panic
+		 * logs to nvram/flash.
+		 */
+		cr0 = get_cr0();
+		clear_ts();
 
-			/* Now call the compressor */
-			/* XXX Consider using the WKdm compressor in the
-			 * future, rather than just packing - would need to
-			 * be co-ordinated with crashreporter, which decodes
-			 * this post-restart. The compressor should be
-			 * capable of in-place compression.
-			 */
-			bufpos = packA(debug_buf,
-			    (unsigned int) (debug_buf_ptr - debug_buf), debug_buf_size);
-			/* If compression was successful,
-			 * use the compressed length
-			 */
-			pi_size = bufpos ? bufpos : (unsigned) (debug_buf_ptr - debug_buf);
+		/*
+		 * Save panic log to non-volatile store
+		 * Panic info handler must truncate data that is
+		 * too long for this platform.
+		 * This call must save data synchronously,
+		 * since we can subsequently halt the system.
+		 */
+		kprintf("Attempting to commit panic log to NVRAM\n");
+		pi_size = PESavePanicInfo((unsigned char *)debug_buf_base,
+				(uint32_t)pi_size );
+		set_cr0(cr0);
 
-			/* Save panic log to non-volatile store
-			 * Panic info handler must truncate data that is 
-			 * too long for this platform.
-			 * This call must save data synchronously,
-			 * since we can subsequently halt the system.
-			 */
-
-
-/* The following sequence is a workaround for:
- * <rdar://problem/5915669> SnowLeopard10A67: AppleEFINVRAM should not invoke
- * any routines that use floating point (MMX in this case) when saving panic
- * logs to nvram/flash.
- */
-			cr0 = get_cr0();
-			clear_ts();
-
-			kprintf("Attempting to commit panic log to NVRAM\n");
-			pi_size = PESavePanicInfo((unsigned char *)debug_buf,
-					(uint32_t)pi_size );
-			set_cr0(cr0);
-
-			/* Uncompress in-place, to permit examination of
-			 * the panic log by debuggers.
-			 */
-
-			if (bufpos) {
-			  unpackA(debug_buf, bufpos);
-			}
-                    }
-                }
-
-		if (!panicDebugging && !kdp_has_polled_corefile()) {
-			unsigned cnum;
-			/* Clear the MP rendezvous function lock, in the event
-			 * that a panic occurred while in that codepath.
-			 */
-			mp_rendezvous_break_lock();
-
-			/* Non-maskably interrupt all other processors
-			 * If a restart timeout is specified, this processor
-			 * will attempt a restart.
-			 */
-			kprintf("Invoking machine_halt_cpu on CPU %d\n", cn);
-			for (cnum = 0; cnum < real_ncpus; cnum++) {
-				if (cnum != (unsigned) cn) {
-					cpu_NMI_interrupt(cnum);
-				}
-			}
-			machine_halt_cpu();
-			/* NOT REACHED */
+		/*
+		 * Uncompress in-place, to permit examination of
+		 * the panic log by debuggers.
+		 */
+		if (bufpos) {
+			unpackA(debug_buf_base, bufpos);
 		}
-        }
-
-	doprnt_hide_pointers = old_doprnt_hide_pointers;
-	__asm__("int3");
-	hw_atomic_sub(&debug_mode, 1);   
+	}
 }
 
 char *
@@ -1089,9 +1082,9 @@ panic_print_macho_symbol_name(kernel_mach_header_t *mh, vm_address_t search, con
     
     if (bestsym != NULL) {
         if (diff != 0) {
-            kdb_printf("%s : %s + 0x%lx", module_name, bestsym, (unsigned long)diff);
+            paniclog_append_noflush("%s : %s + 0x%lx", module_name, bestsym, (unsigned long)diff);
         } else {
-            kdb_printf("%s : %s", module_name, bestsym);
+            paniclog_append_noflush("%s : %s", module_name, bestsym);
         }
         return 1;
     }
@@ -1115,7 +1108,7 @@ panic_print_kmod_symbol_name(vm_address_t search)
         {
             kernel_mach_header_t *header = (kernel_mach_header_t *)(uintptr_t) summary->address;
             if (panic_print_macho_symbol_name(header, search, summary->name) == 0) {
-                kdb_printf("%s + %llu", summary->name, (unsigned long)search - summary->address);
+                paniclog_append_noflush("%s + %llu", summary->name, (unsigned long)search - summary->address);
             }
             break;
         }
@@ -1173,12 +1166,12 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 	PE_parse_boot_argn("keepsyms", &keepsyms, sizeof (keepsyms));
 
 	if (msg != NULL) {
-		kdb_printf("%s", msg);
+		paniclog_append_noflush("%s", msg);
 	}
 
 	if ((regdump == TRUE) && (regs != NULL)) {
 		x86_saved_state64_t	*ss64p = saved_state64(regs);
-		kdb_printf(
+		paniclog_append_noflush(
 		    "RAX: 0x%016llx, RBX: 0x%016llx, RCX: 0x%016llx, RDX: 0x%016llx\n"
 		    "RSP: 0x%016llx, RBP: 0x%016llx, RSI: 0x%016llx, RDI: 0x%016llx\n"
 		    "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
@@ -1193,7 +1186,7 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 		PC = ss64p->isf.rip;
 	}
 
-	kdb_printf("Backtrace (CPU %d), "
+	paniclog_append_noflush("Backtrace (CPU %d), "
 #if PRINT_ARGS_FROM_STACK_FRAME
 	"Frame : Return Address (4 potential args on stack)\n", cn);
 #else
@@ -1207,23 +1200,23 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 			break;
 
 		if (curframep & 0x3) {
-			kdb_printf("Unaligned frame\n");
+			paniclog_append_noflush("Unaligned frame\n");
 			goto invalid;
 		}
 
 		if (!kvtophys(curframep) ||
 		    !kvtophys(curframep + sizeof(cframe_t) - 1)) {
-			kdb_printf("No mapping exists for frame pointer\n");
+			paniclog_append_noflush("No mapping exists for frame pointer\n");
 			goto invalid;
 		}
 
-		kdb_printf("%p : 0x%lx ", frame, frame->caller);
+		paniclog_append_noflush("%p : 0x%lx ", frame, frame->caller);
 		if (frame_index < DUMPFRAMES)
 			raddrs[frame_index] = frame->caller;
 
 #if PRINT_ARGS_FROM_STACK_FRAME
 		if (kvtophys((vm_offset_t)&(frame->args[3])))
-			kdb_printf("(0x%x 0x%x 0x%x 0x%x) ",
+			paniclog_append_noflush("(0x%x 0x%x 0x%x 0x%x) ",
 			    frame->args[0], frame->args[1],
 			    frame->args[2], frame->args[3]);
 #endif
@@ -1236,18 +1229,18 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 		if (keepsyms)
 			panic_print_symbol_name((vm_address_t)frame->caller);
 		
-		kdb_printf("\n");
+		paniclog_append_noflush("\n");
 
 		frame = frame->prev;
 	}
 
 	if (frame_index >= nframes)
-		kdb_printf("\tBacktrace continues...\n");
+		paniclog_append_noflush("\tBacktrace continues...\n");
 
 	goto out;
 
 invalid:
-	kdb_printf("Backtrace terminated-invalid frame pointer %p\n",frame);
+	paniclog_append_noflush("Backtrace terminated-invalid frame pointer %p\n",frame);
 out:
 
 	/* Identify kernel modules in the backtrace and display their
@@ -1309,7 +1302,7 @@ print_threads_registers(thread_t thread)
 	x86_saved_state_t *savestate;
 	
 	savestate = get_user_regs(thread);
-	kdb_printf(
+	paniclog_append_noflush(
 		"\nRAX: 0x%016llx, RBX: 0x%016llx, RCX: 0x%016llx, RDX: 0x%016llx\n"
 	    "RSP: 0x%016llx, RBP: 0x%016llx, RSI: 0x%016llx, RDI: 0x%016llx\n"
 	    "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
@@ -1336,13 +1329,13 @@ print_tasks_user_threads(task_t task)
 	for (j = 0, thread = (thread_t) queue_first(&task->threads); j < task->thread_count;
 			++j, thread = (thread_t) queue_next(&thread->task_threads)) {
 
-		kdb_printf("Thread %d: %p\n", j, thread);
+		paniclog_append_noflush("Thread %d: %p\n", j, thread);
 		pmap = get_task_pmap(task);
 		savestate = get_user_regs(thread);
 		rbp = savestate->ss_64.rbp;
-		kdb_printf("\t0x%016llx\n", savestate->ss_64.isf.rip);
-		print_one_backtrace(pmap, (vm_offset_t)rbp, cur_marker, TRUE, TRUE);
-		kdb_printf("\n");
+		paniclog_append_noflush("\t0x%016llx\n", savestate->ss_64.isf.rip);
+		print_one_backtrace(pmap, (vm_offset_t)rbp, cur_marker, TRUE);
+		paniclog_append_noflush("\n");
 	}
 }
 
@@ -1357,7 +1350,7 @@ print_thread_num_that_crashed(task_t task)
 			++j, thread = (thread_t) queue_next(&thread->task_threads)) {
 
 		if (c_thread == thread) {
-			kdb_printf("\nThread %d crashed\n", j);
+			paniclog_append_noflush("\nThread %d crashed\n", j);
 			break;
 		}
 	}
@@ -1402,7 +1395,7 @@ void print_uuid_info(task_t task)
 		char *current_uuid_buffer = NULL;
 		/* Copy in the UUID info array. It may be nonresident, in which case just fix up nloadinfos to 0 */
 		
-		kdb_printf("\nuuid info:\n");
+		paniclog_append_noflush("\nuuid info:\n");
 		while (uuid_array_size) {
 			if (uuid_array_size <= PANICLOG_UUID_BUF_SIZE) {
 				uuid_copy_size = uuid_array_size;
@@ -1413,7 +1406,7 @@ void print_uuid_info(task_t task)
 			}
 			if (have_pmap && !debug_copyin(task->map->pmap, uuid_info_addr, uuidbufptr,
 				uuid_copy_size)) {
-				kdb_printf("Error!! Failed to copy UUID info for task %p pid %d\n", task, task_pid);
+				paniclog_append_noflush("Error!! Failed to copy UUID info for task %p pid %d\n", task, task_pid);
 				uuid_image_count = 0;
 				break;
 			}
@@ -1421,10 +1414,10 @@ void print_uuid_info(task_t task)
 			if (uuid_image_count > 0) {
 				current_uuid_buffer = uuidbufptr;
 				for (k = 0; k < uuid_image_count; k++) {
-					kdb_printf(" %#llx", *(uint64_t *)current_uuid_buffer);
+					paniclog_append_noflush(" %#llx", *(uint64_t *)current_uuid_buffer);
 					current_uuid_buffer += sizeof(uint64_t);
 					uint8_t *uuid = (uint8_t *)current_uuid_buffer;
-					kdb_printf("\tuuid = <%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x>\n",
+					paniclog_append_noflush("\tuuid = <%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x>\n",
 					uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5], uuid[6], uuid[7], uuid[8],
 					uuid[9], uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15]);
 					current_uuid_buffer += 16;

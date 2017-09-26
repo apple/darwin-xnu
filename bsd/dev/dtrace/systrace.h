@@ -62,11 +62,6 @@ extern int32_t dtrace_systrace_syscall(struct proc *, void *, int *);
 
 extern void dtrace_systrace_syscall_return(unsigned short, int, int *);
 
-#ifdef _SYSCALL32_IMPL
-extern int64_t dtrace_systrace_syscall32(uintptr_t arg0, uintptr_t arg1,
-    uintptr_t arg2, uintptr_t arg3, uintptr_t arg4, uintptr_t arg5);
-#endif
-
 #endif /* _KERNEL */
 
 #ifdef	__cplusplus

@@ -124,6 +124,9 @@ struct domain {
 #pragma pack()
 
 #ifdef XNU_KERNEL_PRIVATE
+
+#include <sys/queue.h>
+
 /*
  * Internal, private and extendable representation of domain.
  */

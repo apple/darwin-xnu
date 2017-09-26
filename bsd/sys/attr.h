@@ -320,6 +320,8 @@ typedef struct vol_capabilities_attr {
  *
  * VOL_CAP_INT_CLONE: When set, the volume supports clones.
  *
+ * VOL_CAP_INT_SNAPSHOT: When set, the volume supports snapshots.
+ *
  * VOL_CAP_INT_RENAME_SWAP: When set, the volume supports swapping
  * file system objects.
  *
@@ -347,10 +349,7 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_INT_REMOTE_EVENT		0x00008000
 #endif /* PRIVATE */
 #define VOL_CAP_INT_CLONE			0x00010000
-#ifdef PRIVATE
-/* Volume supports snapshots */
 #define VOL_CAP_INT_SNAPSHOT			0x00020000
-#endif /* PRIVATE */
 #define VOL_CAP_INT_RENAME_SWAP			0x00040000
 #define VOL_CAP_INT_RENAME_EXCL			0x00080000
 
@@ -432,7 +431,7 @@ typedef struct vol_attributes_attr {
  * 
  * ATTR_CMN_DATA_PROTECT_FLAGS
  */
-#define ATTR_CMN_SETMASK			0x41C7FF00
+#define ATTR_CMN_SETMASK			0x51C7FF00
 #define ATTR_CMN_VOLSETMASK			0x00006700
 
 #define ATTR_VOL_FSTYPE				0x00000001
@@ -506,9 +505,7 @@ typedef struct vol_attributes_attr {
 /* CMNEXT attributes extend the common attributes, but in the forkattr field */
 #define ATTR_CMNEXT_RELPATH     0x00000004
 #define ATTR_CMNEXT_PRIVATESIZE 0x00000008
-#ifdef PRIVATE
 #define ATTR_CMNEXT_LINKID	0x00000010
-#endif /* PRIVATE */
 
 #define ATTR_CMNEXT_VALIDMASK	0x0000001c
 #define ATTR_CMNEXT_SETMASK		0x00000000

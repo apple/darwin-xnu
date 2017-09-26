@@ -130,6 +130,17 @@ struct	ether_addr *ether_aton(const char *);
 #ifdef BSD_KERNEL_PRIVATE
 extern u_char	etherbroadcastaddr[ETHER_ADDR_LEN];
 
+#if defined (__arm__)
+
+#include <string.h>
+
+static __inline__ int
+_ether_cmp(const void * a, const void * b)
+{
+	return (memcmp(a, b, ETHER_ADDR_LEN));
+}
+
+#else /* __arm__ */
 
 static __inline__ int
 _ether_cmp(const void * a, const void * b)
@@ -145,6 +156,7 @@ _ether_cmp(const void * a, const void * b)
 	return (0);
 }
 
+#endif /* __arm__ */
 #endif /* BSD_KERNEL_PRIVATE */
 
 #define ETHER_IS_MULTICAST(addr) (*(addr) & 0x01) /* is address mcast/bcast? */

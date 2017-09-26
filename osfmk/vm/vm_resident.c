@@ -90,6 +90,7 @@
 #include <mach_debug/zone_info.h>
 #include <vm/cpm.h>
 #include <pexpert/pexpert.h>
+#include <san/kasan.h>
 
 #include <vm/vm_protos.h>
 #include <vm/memory_object.h>
@@ -184,9 +185,25 @@ unsigned int	vm_page_hash_shift;		/* Shift for hash function */
 uint32_t	vm_page_bucket_hash;		/* Basic bucket hash */
 unsigned int	vm_page_bucket_lock_count = 0;		/* How big is array of locks? */
 
+#ifndef VM_TAG_ACTIVE_UPDATE
+#error VM_TAG_ACTIVE_UPDATE
+#endif
+#ifndef VM_MAX_TAG_ZONES
+#error VM_MAX_TAG_ZONES
+#endif
+
+boolean_t   vm_tag_active_update = VM_TAG_ACTIVE_UPDATE;
 lck_spin_t	*vm_page_bucket_locks;
 lck_spin_t	vm_objects_wired_lock;
 lck_spin_t	vm_allocation_sites_lock;
+
+vm_allocation_site_t            vm_allocation_sites_static[VM_KERN_MEMORY_FIRST_DYNAMIC + 1];
+vm_allocation_site_t *          vm_allocation_sites[VM_MAX_TAG_VALUE];
+#if VM_MAX_TAG_ZONES
+vm_allocation_zone_total_t **   vm_allocation_zone_totals;
+#endif /* VM_MAX_TAG_ZONES */
+
+vm_tag_t vm_allocation_tag_highest;
 
 #if VM_PAGE_BUCKETS_CHECK
 boolean_t vm_page_buckets_check_ready = FALSE;
@@ -244,9 +261,15 @@ hash_debug(void)
  *	module must use the PAGE_SIZE, PAGE_MASK and PAGE_SHIFT
  *	constants.
  */
+#if defined(__arm__) || defined(__arm64__)
+vm_size_t	page_size;
+vm_size_t	page_mask;
+int		page_shift;
+#else
 vm_size_t	page_size  = PAGE_SIZE;
 vm_size_t	page_mask  = PAGE_MASK;
 int		page_shift = PAGE_SHIFT;
+#endif
 
 /*
  *	Resident page structures are initialized from
@@ -261,6 +284,7 @@ struct vm_page	vm_page_template;
 vm_page_t	vm_pages = VM_PAGE_NULL;
 vm_page_t	vm_page_array_beginning_addr;
 vm_page_t	vm_page_array_ending_addr;
+vm_page_t	vm_page_array_boundary;
 
 unsigned int	vm_pages_count = 0;
 ppnum_t		vm_page_lowest = 0;
@@ -321,7 +345,7 @@ struct vplq     *vm_page_local_q = NULL;
  *	For debugging, this should be a strange value
  *	that the pmap module can recognize in assertions.
  */
-ppnum_t vm_page_fictitious_addr = (ppnum_t) -1;
+const ppnum_t vm_page_fictitious_addr = (ppnum_t) -1;
 
 /*
  *	Guard pages are not accessible so they don't
@@ -331,7 +355,7 @@ ppnum_t vm_page_fictitious_addr = (ppnum_t) -1;
  *	we don't use a real physical page with that
  *	physical address.
  */
-ppnum_t vm_page_guard_addr = (ppnum_t) -2;
+const ppnum_t vm_page_guard_addr = (ppnum_t) -2;
 
 /*
  *	Resident page structures are also chained on
@@ -355,7 +379,6 @@ queue_head_t	vm_objects_wired;
 
 #if CONFIG_BACKGROUND_QUEUE
 vm_page_queue_head_t	vm_page_queue_background __attribute__((aligned(VM_PACKED_POINTER_ALIGNMENT)));
-uint32_t	vm_page_background_limit;
 uint32_t	vm_page_background_target;
 uint32_t	vm_page_background_count;
 uint64_t	vm_page_background_promoted_count;
@@ -379,6 +402,7 @@ unsigned int	vm_page_throttled_count;
 unsigned int	vm_page_speculative_count;
 
 unsigned int	vm_page_wire_count;
+unsigned int	vm_page_wire_count_on_boot = 0;
 unsigned int	vm_page_stolen_count;
 unsigned int	vm_page_wire_count_initial;
 unsigned int	vm_page_pages_initial;
@@ -467,8 +491,50 @@ vm_set_page_size(void)
 			break;
 }
 
-#define COLOR_GROUPS_TO_STEAL	4
+#if defined (__x86_64__)
 
+#define MAX_CLUMP_SIZE      16
+#define DEFAULT_CLUMP_SIZE  4
+
+unsigned int vm_clump_size, vm_clump_mask, vm_clump_shift, vm_clump_promote_threshold;
+
+#if DEVELOPMENT || DEBUG
+unsigned long vm_clump_stats[MAX_CLUMP_SIZE+1];
+unsigned long vm_clump_allocs, vm_clump_inserts, vm_clump_inrange, vm_clump_promotes;
+
+static inline void vm_clump_update_stats(unsigned int c) {
+    assert(c<=vm_clump_size);
+    if(c>0 && c<=vm_clump_size) vm_clump_stats[c]+=c;
+    vm_clump_allocs+=c;
+}
+#endif  /*  if DEVELOPMENT || DEBUG */
+
+/* Called once to setup the VM clump knobs */
+static void
+vm_page_setup_clump( void )
+{
+    unsigned int override, n;
+
+    vm_clump_size = DEFAULT_CLUMP_SIZE;
+    if ( PE_parse_boot_argn("clump_size", &override, sizeof (override)) ) vm_clump_size = override;
+
+    if(vm_clump_size > MAX_CLUMP_SIZE) panic("vm_page_setup_clump:: clump_size is too large!");
+    if(vm_clump_size < 1) panic("vm_page_setup_clump:: clump_size must be >= 1");
+    if((vm_clump_size & (vm_clump_size-1)) != 0)  panic("vm_page_setup_clump:: clump_size must be a power of 2");
+
+    vm_clump_promote_threshold = vm_clump_size;
+    vm_clump_mask = vm_clump_size - 1;
+    for(vm_clump_shift=0, n=vm_clump_size; n>1; n>>=1, vm_clump_shift++);
+
+#if DEVELOPMENT || DEBUG
+    bzero(vm_clump_stats, sizeof(vm_clump_stats));
+    vm_clump_allocs = vm_clump_inserts = vm_clump_inrange = vm_clump_promotes = 0;
+#endif  /*  if DEVELOPMENT || DEBUG */
+}
+
+#endif	/* #if defined (__x86_64__) */
+
+#define COLOR_GROUPS_TO_STEAL	4
 
 /* Called once during statup, once the cache geometry is known.
  */
@@ -476,7 +542,11 @@ static void
 vm_page_set_colors( void )
 {
 	unsigned int	n, override;
-	
+
+#if defined (__x86_64__)	
+	/* adjust #colors because we need to color outside the clump boundary */
+	vm_cache_geometry_colors >>= vm_clump_shift;
+#endif
 	if ( PE_parse_boot_argn("colors", &override, sizeof (override)) )		/* colors specified as a boot-arg? */
 		n = override;	
 	else if ( vm_cache_geometry_colors )			/* do we know what the cache geometry is? */
@@ -490,12 +560,18 @@ vm_page_set_colors( void )
 		
 	/* the count must be a power of 2  */
 	if ( ( n & (n - 1)) != 0  )
-		panic("vm_page_set_colors");
+	        n = DEFAULT_COLORS;				/* use default if all else fails */
 	
 	vm_colors = n;
 	vm_color_mask = n - 1;
 
 	vm_free_magazine_refill_limit = vm_colors * COLOR_GROUPS_TO_STEAL;
+
+#if defined (__x86_64__)
+        /* adjust for reduction in colors due to clumping and multiple cores */
+	if (real_ncpus)
+		vm_free_magazine_refill_limit *= (vm_clump_size * real_ncpus);
+#endif
 }
 
 
@@ -541,7 +617,14 @@ vm_page_init_local_q()
 	 * no point in this for a uni-processor system
 	 */
 	if (num_cpus >= 2) {
+#if KASAN
+		/* KASAN breaks the expectation of a size-aligned object by adding a
+		 * rezone, so explicitly align. */
+		t_local_q = (struct vplq *)kalloc(num_cpus * sizeof(struct vplq) + VM_PACKED_POINTER_ALIGNMENT);
+		t_local_q = (void *)(((uintptr_t)t_local_q + (VM_PACKED_POINTER_ALIGNMENT-1)) & ~(VM_PACKED_POINTER_ALIGNMENT-1));
+#else
 		t_local_q = (struct vplq *)kalloc(num_cpus * sizeof(struct vplq));
+#endif
 
 		for (i = 0; i < num_cpus; i++) {
 			struct vpl	*lq;
@@ -557,6 +640,17 @@ vm_page_init_local_q()
 
 		vm_page_local_q = (struct vplq *)t_local_q;
 	}
+}
+
+/*
+ * vm_init_before_launchd
+ *
+ * This should be called right before launchd is loaded.
+ */
+void
+vm_init_before_launchd()
+{
+	vm_page_wire_count_on_boot = vm_page_wire_count;
 }
 
 
@@ -612,7 +706,9 @@ vm_page_bootstrap(
 	m->private = FALSE;
 	m->__unused_pageq_bits = 0;
 
+#if    !defined(__arm__) && !defined(__arm64__)
 	VM_PAGE_SET_PHYS_PAGE(m, 0);		/* reset later */
+#endif
 	m->busy = TRUE;
 	m->wanted = FALSE;
 	m->tabled = FALSE;
@@ -630,8 +726,6 @@ vm_page_bootstrap(
 	m->overwriting = FALSE;
 	m->restart = FALSE;
 	m->unusual = FALSE;
-	m->encrypted = FALSE;
-	m->encrypted_cleaning = FALSE;
 	m->cs_validated = FALSE;
 	m->cs_tainted = FALSE;
 	m->cs_nx = FALSE;
@@ -701,7 +795,6 @@ vm_page_bootstrap(
 
 	if (vm_page_background_target > VM_PAGE_BACKGROUND_TARGET_MAX)
 		vm_page_background_target = VM_PAGE_BACKGROUND_TARGET_MAX;
-	vm_page_background_limit = vm_page_background_target + 256;
 
 	vm_page_background_mode = VM_PAGE_BG_LEVEL_1;
 	vm_page_background_exclude_external = 0;
@@ -709,13 +802,9 @@ vm_page_bootstrap(
 	PE_parse_boot_argn("vm_page_bg_mode", &vm_page_background_mode, sizeof(vm_page_background_mode));
 	PE_parse_boot_argn("vm_page_bg_exclude_external", &vm_page_background_exclude_external, sizeof(vm_page_background_exclude_external));
 	PE_parse_boot_argn("vm_page_bg_target", &vm_page_background_target, sizeof(vm_page_background_target));
-	PE_parse_boot_argn("vm_page_bg_limit", &vm_page_background_limit, sizeof(vm_page_background_limit));
 
-	if (vm_page_background_mode > VM_PAGE_BG_LEVEL_3)
+	if (vm_page_background_mode > VM_PAGE_BG_LEVEL_1)
 		vm_page_background_mode = VM_PAGE_BG_LEVEL_1;
-
-	if (vm_page_background_limit <= vm_page_background_target)
-		vm_page_background_limit = vm_page_background_target + 256;
 #endif
 	vm_page_free_wanted = 0;
 	vm_page_free_wanted_privileged = 0;
@@ -723,6 +812,11 @@ vm_page_bootstrap(
 	vm_page_free_wanted_secluded = 0;
 #endif /* CONFIG_SECLUDED_MEMORY */
 	
+#if defined (__x86_64__)
+	/* this must be called before vm_page_set_colors() */
+	vm_page_setup_clump();
+#endif
+
 	vm_page_set_colors();
 
 	bzero(vm_page_inactive_states, sizeof(vm_page_inactive_states));
@@ -760,6 +854,15 @@ vm_page_bootstrap(
 	vm_page_active_or_inactive_states[VM_PAGE_ON_SECLUDED_Q] = 1;
 #endif /* CONFIG_SECLUDED_MEMORY */
 
+	for (i = 0; i < VM_KERN_MEMORY_FIRST_DYNAMIC; i++)
+	{
+		vm_allocation_sites_static[i].refcount = 2;
+		vm_allocation_sites_static[i].tag = i;
+		vm_allocation_sites[i] = &vm_allocation_sites_static[i];
+	}
+	vm_allocation_sites_static[VM_KERN_MEMORY_FIRST_DYNAMIC].refcount = 2;
+	vm_allocation_sites_static[VM_KERN_MEMORY_FIRST_DYNAMIC].tag = VM_KERN_MEMORY_ANY;
+	vm_allocation_sites[VM_KERN_MEMORY_ANY] = &vm_allocation_sites_static[VM_KERN_MEMORY_FIRST_DYNAMIC];
 
 	/*
 	 *	Steal memory for the map and zone subsystems.
@@ -916,8 +1019,9 @@ void *
 pmap_steal_memory(
 	vm_size_t size)
 {
+	kern_return_t kr;
 	vm_offset_t addr, vaddr;
-	ppnum_t	phys_page;
+	ppnum_t phys_page;
 
 	/*
 	 *	We round the size to a round multiple.
@@ -967,12 +1071,22 @@ pmap_steal_memory(
 		 *	but some pmap modules barf if they are.
 		 */
 #if defined(__LP64__)
+#ifdef	__arm64__
+		/* ARM64_TODO: verify that we really don't need this */
+#else
 		pmap_pre_expand(kernel_pmap, vaddr);
 #endif
+#endif
 
-		pmap_enter(kernel_pmap, vaddr, phys_page,
-			   VM_PROT_READ|VM_PROT_WRITE, VM_PROT_NONE,
-				VM_WIMG_USE_DEFAULT, FALSE);
+		kr = pmap_enter(kernel_pmap, vaddr, phys_page,
+		                VM_PROT_READ|VM_PROT_WRITE, VM_PROT_NONE,
+		                VM_WIMG_USE_DEFAULT, FALSE);
+
+		if (kr != KERN_SUCCESS) {
+			panic("pmap_steal_memory() pmap_enter failed, vaddr=%#lx, phys_page=%u",
+			      (unsigned long)vaddr, phys_page);
+		}
+
 		/*
 		 * Account for newly stolen memory
 		 */
@@ -980,6 +1094,9 @@ pmap_steal_memory(
 		vm_page_stolen_count++;
 	}
 
+#if KASAN
+	kasan_notify_address(round_page(addr), size);
+#endif
 	return (void *) addr;
 }
 
@@ -992,10 +1109,13 @@ int secluded_for_filecache = 2;		/* filecache can use seclude memory */
 #if 11
 int secluded_for_fbdp = 0;
 #endif
-int secluded_aging_policy = SECLUDED_AGING_BEFORE_ACTIVE;
 #endif /* CONFIG_SECLUDED_MEMORY */
 
 
+#if defined(__arm__) || defined(__arm64__)
+extern void patch_low_glo_vm_page_info(void *, void *, uint32_t);
+unsigned int vm_first_phys_ppnum = 0;
+#endif
 
 
 void vm_page_release_startup(vm_page_t mem);
@@ -1037,10 +1157,16 @@ pmap_startup(
 	vm_page_array_beginning_addr = &vm_pages[0];
 	vm_page_array_ending_addr = &vm_pages[npages];
 
-
 	for (i = 0, pages_initialized = 0; i < npages; i++) {
 		if (!pmap_next_page(&phys_page))
 			break;
+#if defined(__arm__) || defined(__arm64__)
+		if (pages_initialized == 0) {
+			vm_first_phys_ppnum = phys_page;
+			patch_low_glo_vm_page_info((void *)vm_page_array_beginning_addr, (void *)vm_page_array_ending_addr, vm_first_phys_ppnum);
+		}
+		assert((i + vm_first_phys_ppnum) == phys_page);
+#endif
 		if (pages_initialized == 0 || phys_page < vm_page_lowest)
 			vm_page_lowest = phys_page;
 
@@ -1049,6 +1175,7 @@ pmap_startup(
 		pages_initialized++;
 	}
 	vm_pages_count = pages_initialized;
+	vm_page_array_boundary = &vm_pages[pages_initialized];
 
 #if    defined(__LP64__)
 
@@ -1108,9 +1235,6 @@ pmap_startup(
 			   &secluded_for_fbdp,
 			   sizeof (secluded_for_fbdp));
 #endif
-	PE_parse_boot_argn("secluded_aging_policy",
-			   &secluded_aging_policy,
-			   sizeof (secluded_aging_policy));
 #endif /* CONFIG_SECLUDED_MEMORY */
 
 	// -debug code remove
@@ -1234,6 +1358,7 @@ vm_page_module_init(void)
 	zone_change(vm_page_zone, Z_EXHAUST, TRUE);
 	zone_change(vm_page_zone, Z_FOREIGN, TRUE);
 	zone_change(vm_page_zone, Z_GZALLOC_EXEMPT, TRUE);
+	zone_change(vm_page_zone, Z_ALIGNMENT_REQUIRED, TRUE);
 }
 
 /*
@@ -1346,6 +1471,7 @@ vm_page_insert_internal(
 	LCK_MTX_ASSERT(&vm_page_queue_lock,
 		       queues_lock_held ? LCK_MTX_ASSERT_OWNED
 		       			: LCK_MTX_ASSERT_NOTOWNED);
+
 	if (queues_lock_held == FALSE)
 		assert(!VM_PAGE_PAGEABLE(mem));
 
@@ -1356,7 +1482,11 @@ vm_page_insert_internal(
 			      "already in (obj=%p,off=0x%llx)",
 			      mem, object, offset, VM_PAGE_OBJECT(mem), mem->offset);
 #endif
-		assert(!object->internal || offset < object->vo_size);
+		if (object->internal && (offset >= object->vo_size)) {
+			panic("vm_page_insert_internal: (page=%p,obj=%p,off=0x%llx,size=0x%llx) inserted at offset past object bounds",
+			      mem, object, offset, object->vo_size);
+		}
+
 		assert(vm_page_lookup(object, offset) == VM_PAGE_NULL);
 		
 		/*
@@ -1416,17 +1546,9 @@ vm_page_insert_internal(
 	object->resident_page_count++;
 	if (VM_PAGE_WIRED(mem)) {
 	    assert(mem->wire_count > 0);
-
-	    if (!mem->private && !mem->fictitious) 
-	    {
-		if (!object->wired_page_count)
-		{
-		    assert(VM_KERN_MEMORY_NONE != tag);
-		    object->wire_tag = tag;
-		    VM_OBJECT_WIRED(object);
-		}
-	    }
-	    object->wired_page_count++;
+	    VM_OBJECT_WIRED_PAGE_UPDATE_START(object);
+	    VM_OBJECT_WIRED_PAGE_ADD(object, mem);
+	    VM_OBJECT_WIRED_PAGE_UPDATE_END(object, tag);
 	}
 	assert(object->resident_page_count >= object->wired_page_count);
 
@@ -1738,11 +1860,9 @@ vm_page_remove(
 
 	if (VM_PAGE_WIRED(mem)) {
 		assert(mem->wire_count > 0);
-		assert(m_object->wired_page_count > 0);
-		m_object->wired_page_count--;
-		if (!m_object->wired_page_count) {
-		    VM_OBJECT_UNWIRED(m_object);
-		}
+		VM_OBJECT_WIRED_PAGE_UPDATE_START(m_object);
+		VM_OBJECT_WIRED_PAGE_REMOVE(m_object, mem);
+		VM_OBJECT_WIRED_PAGE_UPDATE_END(m_object, m_object->wire_tag);
 	}
 	assert(m_object->resident_page_count >=
 	       m_object->wired_page_count);
@@ -1793,6 +1913,7 @@ vm_page_remove(
 			OSAddAtomic(-1, &vm_page_purgeable_count);
 		}
 	}
+
 	if (m_object->set_cache_attr == TRUE)
 		pmap_set_cache_attributes(VM_PAGE_GET_PHYS_PAGE(mem), 0);
 
@@ -2030,8 +2151,7 @@ void
 vm_page_rename(
 	vm_page_t		mem,
 	vm_object_t		new_object,
-	vm_object_offset_t	new_offset,
-	boolean_t		encrypted_ok)
+	vm_object_offset_t	new_offset)
 {
 	boolean_t	internal_to_external, external_to_internal;
 	vm_tag_t  	tag;
@@ -2041,23 +2161,6 @@ vm_page_rename(
 
 	assert(m_object != new_object);
         assert(m_object);
-
-	/*
-	 * ENCRYPTED SWAP:
-	 * The encryption key is based on the page's memory object
-	 * (aka "pager") and paging offset.  Moving the page to
-	 * another VM object changes its "pager" and "paging_offset"
-	 * so it has to be decrypted first, or we would lose the key.
-	 *
-	 * One exception is VM object collapsing, where we transfer pages
-	 * from one backing object to its parent object.  This operation also
-	 * transfers the paging information, so the <pager,paging_offset> info
-	 * should remain consistent.  The caller (vm_object_do_collapse())
-	 * sets "encrypted_ok" in this case.
-	 */
-	if (!encrypted_ok && mem->encrypted) {
-		panic("vm_page_rename: page %p is encrypted\n", mem);
-	}
 
         XPR(XPR_VM_PAGE,
                 "vm_page_rename, new object 0x%X, offset 0x%X page 0x%X\n",
@@ -2189,10 +2292,16 @@ vm_page_grab_fictitious(void)
 	return vm_page_grab_fictitious_common(vm_page_fictitious_addr);
 }
 
+int vm_guard_count;
+
+
 vm_page_t
 vm_page_grab_guard(void)
 {
-	return vm_page_grab_fictitious_common(vm_page_guard_addr);
+	vm_page_t page;
+	page = vm_page_grab_fictitious_common(vm_page_guard_addr);
+    if (page) OSAddAtomic(1, &vm_guard_count);
+	return page;
 }
 
 
@@ -2209,6 +2318,9 @@ vm_page_release_fictitious(
 	assert(m->fictitious);
 	assert(VM_PAGE_GET_PHYS_PAGE(m) == vm_page_fictitious_addr ||
 	       VM_PAGE_GET_PHYS_PAGE(m) == vm_page_guard_addr);
+
+
+if (VM_PAGE_GET_PHYS_PAGE(m) == vm_page_guard_addr) OSAddAtomic(-1, &vm_guard_count);
 
 	c_vm_page_release_fictitious++;
 
@@ -2273,7 +2385,7 @@ void vm_page_more_fictitious(void)
 	}
 
 	retval = kernel_memory_allocate(zone_map,
-					&addr, PAGE_SIZE, VM_PROT_ALL,
+					&addr, PAGE_SIZE, 0,
 					KMA_KOBJECT|KMA_NOPAGEWAIT, VM_KERN_MEMORY_ZONE);
 	if (retval != KERN_SUCCESS) { 
 		/*
@@ -2543,6 +2655,10 @@ vm_page_grab(void)
 	return vm_page_grab_options(0);
 }
 
+#if HIBERNATION
+boolean_t       hibernate_rebuild_needed = FALSE;
+#endif /* HIBERNATION */
+
 vm_page_t
 vm_page_grab_options(
 	int grab_options)
@@ -2555,6 +2671,11 @@ vm_page_grab_options(
 return_page_from_cpu_list:
 		assert(mem->vm_page_q_state == VM_PAGE_ON_FREE_LOCAL_Q);
 
+#if HIBERNATION
+		if (hibernate_rebuild_needed) {
+			panic("%s:%d should not modify cpu->free_pages while hibernating", __FUNCTION__, __LINE__);
+		}
+#endif /* HIBERNATION */
 	        PROCESSOR_DATA(current_processor(), page_grab_count) += 1;
 	        PROCESSOR_DATA(current_processor(), free_pages) = mem->snext;
 
@@ -2568,7 +2689,6 @@ return_page_from_cpu_list:
 		assert(!mem->laundry);
 		assert(pmap_verify_free(VM_PAGE_GET_PHYS_PAGE(mem)));
 		assert(mem->busy);
-		assert(!mem->encrypted);
 		assert(!mem->pmapped);
 		assert(!mem->wpmapped);
 		assert(!pmap_is_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem)));
@@ -2636,6 +2756,7 @@ return_page_from_cpu_list:
 	       vm_page_t	tail;
 	       unsigned int	pages_to_steal;
 	       unsigned int	color;
+	       unsigned int clump_end, sub_count;
 
 	       while ( vm_page_free_count == 0 ) {
 
@@ -2673,21 +2794,47 @@ return_page_from_cpu_list:
 		head = tail = NULL;
 
 		vm_page_free_count -= pages_to_steal;
+		clump_end = sub_count = 0;
 
 		while (pages_to_steal--) {
 
 			while (vm_page_queue_empty(&vm_page_queue_free[color].qhead))
 			        color = (color + 1) & vm_color_mask;
-		
+#if defined(__x86_64__)
+			vm_page_queue_remove_first_with_clump(&vm_page_queue_free[color].qhead,
+							      mem,
+							      vm_page_t,
+							      pageq,
+							      clump_end);
+#else
 			vm_page_queue_remove_first(&vm_page_queue_free[color].qhead,
-					   mem,
-					   vm_page_t,
-					   pageq);
+							      mem,
+							      vm_page_t,
+							      pageq);
+#endif
+
 			assert(mem->vm_page_q_state == VM_PAGE_ON_FREE_Q);
 
 			VM_PAGE_ZERO_PAGEQ_ENTRY(mem);
-			
+
+#if defined(__arm__) || defined(__arm64__)
 			color = (color + 1) & vm_color_mask;
+#else
+
+#if DEVELOPMENT || DEBUG
+
+			sub_count++;
+			if (clump_end) {
+				vm_clump_update_stats(sub_count);
+				sub_count = 0;
+				color = (color + 1) & vm_color_mask;
+			}
+#else
+			if (clump_end) color = (color + 1) & vm_color_mask;
+
+#endif /* if DEVELOPMENT || DEBUG */
+
+#endif  /* if defined(__arm__) || defined(__arm64__) */
 
 			if (head == NULL)
 				head = mem;
@@ -2704,13 +2851,20 @@ return_page_from_cpu_list:
 
 			assert(pmap_verify_free(VM_PAGE_GET_PHYS_PAGE(mem)));
 			assert(mem->busy);
-			assert(!mem->encrypted);
 			assert(!mem->pmapped);
 			assert(!mem->wpmapped);
 			assert(!pmap_is_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem)));
 		}
+#if defined (__x86_64__) && (DEVELOPMENT || DEBUG)
+		vm_clump_update_stats(sub_count);
+#endif
 		lck_mtx_unlock(&vm_page_queue_free_lock);
 
+#if HIBERNATION
+		if (hibernate_rebuild_needed) {
+			panic("%s:%d should not modify cpu->free_pages while hibernating", __FUNCTION__, __LINE__);
+		}
+#endif /* HIBERNATION */
 		PROCESSOR_DATA(current_processor(), free_pages) = head->snext;
 		PROCESSOR_DATA(current_processor(), start_color) = color;
 
@@ -2740,10 +2894,6 @@ return_page_from_cpu_list:
 	     ((vm_page_free_count < vm_page_free_target) &&
 	      ((vm_page_inactive_count + vm_page_speculative_count) < vm_page_inactive_min)))
 	         thread_wakeup((event_t) &vm_page_free_wanted);
-#if CONFIG_BACKGROUND_QUEUE
-	if (vm_page_background_mode == VM_PAGE_BG_LEVEL_3 && (vm_page_background_count > vm_page_background_limit))
-	         thread_wakeup((event_t) &vm_page_free_wanted);
-#endif
 
 	VM_CHECK_MEMORYSTATUS;
 
@@ -2801,7 +2951,7 @@ vm_page_grab_secluded(void)
 	}
 	assert(!vm_page_queue_empty(&vm_page_queue_secluded));
 	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
-	mem = vm_page_queue_first(&vm_page_queue_secluded);
+	mem = (vm_page_t)vm_page_queue_first(&vm_page_queue_secluded);
 	assert(mem->vm_page_q_state == VM_PAGE_ON_SECLUDED_Q);
 	vm_page_queues_remove(mem, TRUE);
 
@@ -3000,11 +3150,18 @@ vm_page_release(
 		mem->lopage = FALSE;
 		mem->vm_page_q_state = VM_PAGE_ON_FREE_Q;
 
-	        color = VM_PAGE_GET_PHYS_PAGE(mem) & vm_color_mask;
-		vm_page_queue_enter_first(&vm_page_queue_free[color].qhead,
+		color = VM_PAGE_GET_COLOR(mem);
+#if defined(__x86_64__)
+		vm_page_queue_enter_clump(&vm_page_queue_free[color].qhead,
 					  mem,
 					  vm_page_t,
 					  pageq);
+#else
+		vm_page_queue_enter(&vm_page_queue_free[color].qhead,
+					  mem,
+					  vm_page_t,
+					  pageq);
+#endif
 		vm_page_free_count++;
 		/*
 		 *	Check if we should wake up someone waiting for page.
@@ -3086,9 +3243,16 @@ vm_page_release_startup(
 		mem->lopage = FALSE;
 		mem->vm_page_q_state = VM_PAGE_ON_FREE_Q;
 		vm_page_free_count++;
-		queue_free = &vm_page_queue_free[VM_PAGE_GET_PHYS_PAGE(mem) & vm_color_mask].qhead;
+		queue_free = &vm_page_queue_free[VM_PAGE_GET_COLOR(mem)].qhead;
 	}
-	vm_page_queue_enter_first(queue_free, mem, vm_page_t, pageq);
+	if (mem->vm_page_q_state == VM_PAGE_ON_FREE_Q) {
+#if defined(__x86_64__)
+		vm_page_queue_enter_clump(queue_free, mem, vm_page_t, pageq);
+#else
+		vm_page_queue_enter(queue_free, mem, vm_page_t, pageq);
+#endif
+	} else
+		vm_page_queue_enter_first(queue_free, mem, vm_page_t, pageq);
 }
 
 /*
@@ -3294,11 +3458,10 @@ vm_page_free_prepare_queues(
 		assert(mem->wire_count > 0);
 
 		if (m_object) {
-			assert(m_object->wired_page_count > 0);
-			m_object->wired_page_count--;
-			if (!m_object->wired_page_count) {
-			    VM_OBJECT_UNWIRED(m_object);
-			}
+
+			VM_OBJECT_WIRED_PAGE_UPDATE_START(m_object);
+			VM_OBJECT_WIRED_PAGE_REMOVE(m_object, mem);
+			VM_OBJECT_WIRED_PAGE_UPDATE_END(m_object, m_object->wire_tag);
 
 			assert(m_object->resident_page_count >=
 			       m_object->wired_page_count);
@@ -3455,7 +3618,8 @@ vm_page_free_list(
 		 */
 		while (mem && pg_count < 64) {
 
-			assert(mem->vm_page_q_state == VM_PAGE_NOT_ON_Q);
+			assert((mem->vm_page_q_state == VM_PAGE_NOT_ON_Q) ||
+			       (mem->vm_page_q_state == VM_PAGE_IS_WIRED));
 #if CONFIG_BACKGROUND_QUEUE
 			assert(mem->vm_page_backgroundq.next == 0 &&
 			       mem->vm_page_backgroundq.prev == 0 &&
@@ -3529,11 +3693,18 @@ vm_page_free_list(
 				mem->lopage = FALSE;
 				mem->vm_page_q_state = VM_PAGE_ON_FREE_Q;
 
-				color = VM_PAGE_GET_PHYS_PAGE(mem) & vm_color_mask;
-				vm_page_queue_enter_first(&vm_page_queue_free[color].qhead,
+				color = VM_PAGE_GET_COLOR(mem);
+#if defined(__x86_64__)
+				vm_page_queue_enter_clump(&vm_page_queue_free[color].qhead,
 							  mem,
 							  vm_page_t,
 							  pageq);
+#else
+				vm_page_queue_enter(&vm_page_queue_free[color].qhead,
+							  mem,
+							  vm_page_t,
+							  pageq);
+#endif
 				mem = nxt;
 			}
 			vm_page_free_count += pg_count;
@@ -3680,16 +3851,9 @@ vm_page_wire(
 
 		if (m_object) {
 
-			if (!mem->private && !mem->fictitious) 
-			{
-			    if (!m_object->wired_page_count)
-			    {
-				assert(VM_KERN_MEMORY_NONE != tag);
-				m_object->wire_tag = tag;
-				VM_OBJECT_WIRED(m_object);
-			    }
-			}
-			m_object->wired_page_count++;
+			VM_OBJECT_WIRED_PAGE_UPDATE_START(m_object);
+			VM_OBJECT_WIRED_PAGE_ADD(m_object, mem);
+			VM_OBJECT_WIRED_PAGE_UPDATE_END(m_object, tag);
 
 			assert(m_object->resident_page_count >=
 			       m_object->wired_page_count);
@@ -3746,15 +3910,6 @@ vm_page_wire(
 		if (check_memorystatus == TRUE) {
 			VM_CHECK_MEMORYSTATUS;
 		}
-		/* 
-		 * ENCRYPTED SWAP:
-		 * The page could be encrypted, but
-		 * We don't have to decrypt it here
-		 * because we don't guarantee that the
-		 * data is actually valid at this point.
-		 * The page will get decrypted in
-		 * vm_fault_wire() if needed.
-		 */
 	}
 	assert(!mem->gobbled);
 	assert(mem->vm_page_q_state == VM_PAGE_IS_WIRED);
@@ -3792,16 +3947,16 @@ vm_page_unwire(
 	vm_object_lock_assert_exclusive(m_object);
 	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	if (--mem->wire_count == 0) {
+
 		mem->vm_page_q_state = VM_PAGE_NOT_ON_Q;
 
+		VM_OBJECT_WIRED_PAGE_UPDATE_START(m_object);
+		VM_OBJECT_WIRED_PAGE_REMOVE(m_object, mem);
+		VM_OBJECT_WIRED_PAGE_UPDATE_END(m_object, m_object->wire_tag);
 		if (!mem->private && !mem->fictitious) {
 			vm_page_wire_count--;
 		}
-		assert(m_object->wired_page_count > 0);
-		m_object->wired_page_count--;
-		if (!m_object->wired_page_count) {
-		    VM_OBJECT_UNWIRED(m_object);
-		}
+
 		assert(m_object->resident_page_count >=
 		       m_object->wired_page_count);
 		if (m_object->purgable == VM_PURGABLE_VOLATILE) {
@@ -3958,7 +4113,10 @@ void vm_page_enqueue_cleaned(vm_page_t m)
 	assert(VM_PAGE_GET_PHYS_PAGE(m) != vm_page_guard_addr);
 	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	assert( !(m->absent && !m->unusual));
-	assert( !VM_PAGE_WIRED(m));
+
+	if (VM_PAGE_WIRED(m)) {
+		return;
+	}
 
 	if (m->gobbled) {
 		if (!m->private && !m->fictitious)
@@ -4070,12 +4228,7 @@ vm_page_activate(
 			if (secluded_for_filecache &&
 			    vm_page_secluded_target != 0 &&
 			    num_tasks_can_use_secluded_mem == 0 &&
-			    m_object->eligible_for_secluded &&
-			    ((secluded_aging_policy == SECLUDED_AGING_FIFO) ||
-			     (secluded_aging_policy ==
-			      SECLUDED_AGING_ALONG_ACTIVE) ||
-			     (secluded_aging_policy ==
-			      SECLUDED_AGING_BEFORE_ACTIVE))) {
+			    m_object->eligible_for_secluded) {
 				vm_page_queue_enter(&vm_page_queue_secluded, m,
 						    vm_page_t, pageq);
 				m->vm_page_q_state = VM_PAGE_ON_SECLUDED_Q;
@@ -4542,10 +4695,6 @@ vm_page_part_copy(
  *	vm_page_copy:
  *
  *	Copy one page to another
- *
- * ENCRYPTED SWAP:
- * The source page should not be encrypted.  The caller should
- * make sure the page is decrypted first, if necessary.
  */
 
 int vm_page_copy_cs_validations = 0;
@@ -4574,17 +4723,6 @@ vm_page_copy(
 	VM_PAGE_CHECK(dest_m);
 #endif
 	vm_object_lock_assert_held(src_m_object);
-
-	/*
-	 * ENCRYPTED SWAP:
-	 * The source page should not be encrypted at this point.
-	 * The destination page will therefore not contain encrypted
-	 * data after the copy.
-	 */
-	if (src_m->encrypted) {
-		panic("vm_page_copy: source page %p is encrypted\n", src_m);
-	}
-	dest_m->encrypted = FALSE;
 
 	if (src_m_object != VM_OBJECT_NULL &&
 	    src_m_object->code_signed) {
@@ -4666,12 +4804,10 @@ _vm_page_print(
 	       (p->cleaning ? "" : "!"),
 	       (p->precious ? "" : "!"),
 	       (p->clustered ? "" : "!"));
-	printf("  %soverwriting, %srestart, %sunusual, %sencrypted, %sencrypted_cleaning\n",
+	printf("  %soverwriting, %srestart, %sunusual\n",
 	       (p->overwriting ? "" : "!"),
 	       (p->restart ? "" : "!"),
-	       (p->unusual ? "" : "!"),
-	       (p->encrypted ? "" : "!"),
-	       (p->encrypted_cleaning ? "" : "!"));
+	       (p->unusual ? "" : "!"));
 	printf("  %scs_validated, %scs_tainted, %scs_nx, %sno_cache\n",
 	       (p->cs_validated ? "" : "!"),
 	       (p->cs_tainted ? "" : "!"),
@@ -4753,9 +4889,9 @@ vm_page_verify_free_list(
 			panic("vm_page_verify_free_list(color=%u, npages=%u): page %p not busy\n",
 			      color, npages, m);
 		if (color != (unsigned int) -1) {
-			if ((VM_PAGE_GET_PHYS_PAGE(m) & vm_color_mask) != color)
+			if (VM_PAGE_GET_COLOR(m) != color)
 				panic("vm_page_verify_free_list(color=%u, npages=%u): page %p wrong color %u instead of %u\n",
-				      color, npages, m, VM_PAGE_GET_PHYS_PAGE(m) & vm_color_mask, color);
+				      color, npages, m, VM_PAGE_GET_COLOR(m), color);
 			if (m->vm_page_q_state != VM_PAGE_ON_FREE_Q)
 				panic("vm_page_verify_free_list(color=%u, npages=%u): page %p - expecting q_state == VM_PAGE_ON_FREE_Q, found %d\n",
 				      color, npages, m, m->vm_page_q_state);
@@ -4846,6 +4982,42 @@ vm_page_verify_free_lists( void )
 
 
 
+#if __arm64__
+/*
+ *	1 or more clients (currently only SEP) ask for a large contiguous chunk of memory 
+ *	after the system has 'aged'. To ensure that other allocation requests don't mess
+ *	with the chances of that request being satisfied, we pre-allocate a single contiguous
+ *	10MB buffer and hand it out to the first request of >= 4MB.
+ */
+
+kern_return_t cpm_preallocate_early(void);
+
+vm_page_t cpm_preallocated_pages_list = NULL;
+boolean_t preallocated_buffer_available = FALSE;
+
+#define	PREALLOCATED_CONTIG_BUFFER_PAGES_COUNT			((10 * 1024 * 1024) / PAGE_SIZE_64) /* 10 MB */
+#define MIN_CONTIG_PAGES_REQUEST_FOR_PREALLOCATED_BUFFER	((4 * 1024 *1024) / PAGE_SIZE_64)   /* 4 MB */
+
+kern_return_t
+cpm_preallocate_early(void)
+{
+
+	kern_return_t	kr = KERN_SUCCESS;
+	vm_map_size_t	prealloc_size = (PREALLOCATED_CONTIG_BUFFER_PAGES_COUNT * PAGE_SIZE_64);
+
+	printf("cpm_preallocate_early called to preallocate contiguous buffer of %llu pages\n", PREALLOCATED_CONTIG_BUFFER_PAGES_COUNT);
+
+	kr = cpm_allocate(CAST_DOWN(vm_size_t, prealloc_size), &cpm_preallocated_pages_list, 0, 0, TRUE, 0);
+
+	if (kr != KERN_SUCCESS) {
+		printf("cpm_allocate for preallocated contig buffer failed with %d.\n", kr);
+	} else {
+		preallocated_buffer_available = TRUE;
+	}
+
+	return kr;
+}
+#endif /* __arm64__ */
 
 
 extern boolean_t (* volatile consider_buffer_cache_collect)(int);
@@ -4925,17 +5097,18 @@ vm_page_find_contiguous(
 	int		flags)
 {
 	vm_page_t	m = NULL;
-	ppnum_t		prevcontaddr;
-	ppnum_t		start_pnum;
-	unsigned int	npages, considered, scanned;
-	unsigned int	page_idx, start_idx, last_idx, orig_last_idx;
+	ppnum_t		prevcontaddr = 0;
+	ppnum_t		start_pnum = 0;
+	unsigned int	npages = 0, considered = 0, scanned = 0;
+	unsigned int	page_idx = 0, start_idx = 0, last_idx = 0, orig_last_idx = 0;
 	unsigned int	idx_last_contig_page_found = 0;
-	int		free_considered, free_available;
-	int		substitute_needed;
+	int		free_considered = 0, free_available = 0;
+	int		substitute_needed = 0;
 	boolean_t	wrapped, zone_gc_called = FALSE;
+	kern_return_t	kr;
 #if DEBUG
-	clock_sec_t	tv_start_sec, tv_end_sec;
-	clock_usec_t	tv_start_usec, tv_end_usec;
+	clock_sec_t	tv_start_sec = 0, tv_end_sec = 0;
+	clock_usec_t	tv_start_usec = 0, tv_end_usec = 0;
 #endif
 
 	int		yielded = 0;
@@ -4959,6 +5132,57 @@ full_scan_again:
 
 	vm_page_lock_queues();
 
+#if __arm64__
+	if (preallocated_buffer_available) {
+
+		if ((contig_pages >= MIN_CONTIG_PAGES_REQUEST_FOR_PREALLOCATED_BUFFER) && (contig_pages <= PREALLOCATED_CONTIG_BUFFER_PAGES_COUNT)) {
+
+			m = cpm_preallocated_pages_list;
+
+			start_idx = (unsigned int) (m - &vm_pages[0]);
+
+			if (wire == FALSE) {
+			
+				last_idx = start_idx;
+
+				for(npages = 0; npages < contig_pages; npages++, last_idx++) {
+
+					assert(vm_pages[last_idx].gobbled == FALSE);
+
+					vm_pages[last_idx].gobbled = TRUE;
+					vm_page_gobble_count++;
+
+					assert(1 == vm_pages[last_idx].wire_count);
+					/*
+					 * Gobbled pages are counted as wired pages. So no need to drop
+					 * the global wired page count. Just the page's wire count is fine.
+					 */
+					vm_pages[last_idx].wire_count--;
+					vm_pages[last_idx].vm_page_q_state = VM_PAGE_NOT_ON_Q;
+				}
+			
+			}
+
+			last_idx = start_idx + contig_pages - 1;
+
+			vm_pages[last_idx].snext = NULL;
+
+			printf("Using preallocated buffer: Requested size (pages):%d... index range: %d-%d...freeing %llu pages\n", contig_pages, start_idx, last_idx, PREALLOCATED_CONTIG_BUFFER_PAGES_COUNT - contig_pages);
+
+			last_idx += 1;
+			for(npages = contig_pages; npages < PREALLOCATED_CONTIG_BUFFER_PAGES_COUNT; npages++, last_idx++) {
+
+				VM_PAGE_ZERO_PAGEQ_ENTRY(&vm_pages[last_idx]);
+				vm_page_free(&vm_pages[last_idx]);
+			}
+
+			cpm_preallocated_pages_list = NULL;
+			preallocated_buffer_available = FALSE;
+
+			goto done_scanning;
+		}
+	}
+#endif /* __arm64__ */
 
 	lck_mtx_lock(&vm_page_queue_free_lock);
 
@@ -5009,7 +5233,7 @@ retry:
 			RESET_STATE_OF_RUN();
 
 		} else if (VM_PAGE_WIRED(m) || m->gobbled ||
-			   m->encrypted_cleaning || m->laundry || m->wanted ||
+			   m->laundry || m->wanted ||
 			   m->cleaning || m->overwriting || m->free_when_done) {
 			/*
 			 * page is in a transient state
@@ -5192,7 +5416,7 @@ did_consider:
 			if (m1->vm_page_q_state == VM_PAGE_ON_FREE_Q) {
 				unsigned int color;
 
-				color = VM_PAGE_GET_PHYS_PAGE(m1) & vm_color_mask;
+				color = VM_PAGE_GET_COLOR(m1);
 #if MACH_ASSERT
 				vm_page_verify_free_list(&vm_page_queue_free[color].qhead, color, m1, TRUE);
 #endif
@@ -5272,7 +5496,7 @@ did_consider:
 				}
 				if (locked_object == VM_OBJECT_NULL || 
 				    (VM_PAGE_WIRED(m1) || m1->gobbled ||
-				     m1->encrypted_cleaning || m1->laundry || m1->wanted ||
+				     m1->laundry || m1->wanted ||
 				     m1->cleaning || m1->overwriting || m1->free_when_done || m1->busy) ||
 				    (m1->vm_page_q_state == VM_PAGE_ON_PAGEOUT_Q)) {
 
@@ -5356,8 +5580,6 @@ did_consider:
 					assert(!m1->overwriting);
 					m2->restart	= m1->restart;
 					m2->unusual	= m1->unusual;
-					m2->encrypted	= m1->encrypted;
-					assert(!m1->encrypted_cleaning);
 					m2->cs_validated = m1->cs_validated;
 					m2->cs_tainted	= m1->cs_tainted;
 					m2->cs_nx	= m1->cs_nx;
@@ -5421,7 +5643,9 @@ did_consider:
 						m2->wpmapped = TRUE;
 
 						PMAP_ENTER(kernel_pmap, m2->offset, m2,
-							   VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE, 0, TRUE);
+							   VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE, 0, TRUE, kr);
+
+						assert(kr == KERN_SUCCESS);
 
 						compressed_pages++;
 
@@ -5576,7 +5800,7 @@ done_scanning:
 			(void)(*consider_buffer_cache_collect)(1);
 		}
 
-		consider_zone_gc();
+		consider_zone_gc(FALSE);
 
 		zone_gc_called = TRUE;
 
@@ -5973,9 +6197,9 @@ hibernate_flush_queue(vm_page_queue_head_t *q, int qcount)
 	struct	vm_pageout_queue *eq;
 	struct	vm_pageout_queue *tq;
 
+	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 4) | DBG_FUNC_START,
+			VM_KERNEL_UNSLIDE_OR_PERM(q), qcount);
 
-	KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 4) | DBG_FUNC_START, q, qcount, 0, 0, 0);
-	
 	iq = &vm_pageout_queue_internal;
 	eq = &vm_pageout_queue_external;
 
@@ -6034,7 +6258,7 @@ hibernate_flush_queue(vm_page_queue_head_t *q, int qcount)
 				l_object = m_object;
 			}
 		}
-		if ( !m_object->alive || m->encrypted_cleaning || m->cleaning || m->laundry || m->busy || m->absent || m->error) {
+		if ( !m_object->alive || m->cleaning || m->laundry || m->busy || m->absent || m->error) {
 			/*
 			 * page is not to be cleaned
 			 * put it back on the head of its queue
@@ -6146,7 +6370,7 @@ hibernate_flush_queue(vm_page_queue_head_t *q, int qcount)
 		if (m_object->internal == TRUE)
 			pmap_disconnect_options(VM_PAGE_GET_PHYS_PAGE(m), PMAP_OPTIONS_COMPRESSOR, NULL);
 
-		(void)vm_pageout_cluster(m, FALSE, FALSE);
+		vm_pageout_cluster(m);
 
 		hibernate_stats.hibernate_found_dirty++;
 
@@ -6280,7 +6504,7 @@ hibernate_flush_memory()
 			orig_wire_count = vm_page_wire_count;
 			
 			(void)(*consider_buffer_cache_collect)(1);
-			consider_zone_gc();
+			consider_zone_gc(FALSE);
 
 			HIBLOG("hibernate_flush_memory: buffer_cache_gc freed up %d wired pages\n", orig_wire_count - vm_page_wire_count);
 
@@ -6600,6 +6824,7 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 #if MACH_ASSERT || DEBUG
     if (!preflight)
     {
+        assert(hibernate_vm_locks_are_safe());
         vm_page_lock_queues();
 	if (vm_page_local_q) {
 	    for (i = 0; i < vm_page_local_q_count; i++) {
@@ -6863,7 +7088,7 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
     }
 
     if (preflight == FALSE && discard_all == TRUE) {
-	    KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 12) | DBG_FUNC_START, 0, 0, 0, 0, 0);
+	    KDBG(IOKDBG_CODE(DBG_HIBERNATE, 12) | DBG_FUNC_START);
 
 	    HIBLOG("hibernate_teardown started\n");
 	    count_discard_vm_struct_pages = hibernate_teardown_vm_structs(page_list, page_list_wired);
@@ -6874,7 +7099,7 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 
 	    hibernate_stats.cd_vm_struct_pages_unneeded = count_discard_vm_struct_pages;
 
-	    KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 13) | DBG_FUNC_END, 0, 0, 0, 0, 0);
+	    KDBG(IOKDBG_CODE(DBG_HIBERNATE, 12) | DBG_FUNC_END);
     }
 
     if (!preflight) {
@@ -7070,7 +7295,6 @@ hibernate_page_list_discard(hibernate_page_list_t * page_list)
 }
 
 boolean_t       hibernate_paddr_map_inited = FALSE;
-boolean_t       hibernate_rebuild_needed = FALSE;
 unsigned int	hibernate_teardown_last_valid_compact_indx = -1;
 vm_page_t	hibernate_rebuild_hash_list = NULL;
 
@@ -7213,11 +7437,18 @@ hibernate_free_range(int sindx, int eindx)
 		mem->lopage = FALSE;
 		mem->vm_page_q_state = VM_PAGE_ON_FREE_Q;
 
-	        color = VM_PAGE_GET_PHYS_PAGE(mem) & vm_color_mask;
-		vm_page_queue_enter_first(&vm_page_queue_free[color].qhead,
+		color = VM_PAGE_GET_COLOR(mem);
+#if defined(__x86_64__)
+		vm_page_queue_enter_clump(&vm_page_queue_free[color].qhead,
 					  mem,
 					  vm_page_t,
 					  pageq);
+#else
+		vm_page_queue_enter(&vm_page_queue_free[color].qhead,
+					  mem,
+					  vm_page_t,
+					  pageq);
+#endif
 		vm_page_free_count++;
 
 		sindx++;
@@ -7230,7 +7461,7 @@ extern void hibernate_rebuild_pmap_structs(void);
 void
 hibernate_rebuild_vm_structs(void)
 {
-	int		cindx, sindx, eindx;
+	int		i, cindx, sindx, eindx;
 	vm_page_t	mem, tmem, mem_next;
 	AbsoluteTime	startTime, endTime;
 	uint64_t	nsec;
@@ -7238,7 +7469,7 @@ hibernate_rebuild_vm_structs(void)
 	if (hibernate_rebuild_needed == FALSE)
 		return;
 
-	KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 13) | DBG_FUNC_START, 0, 0, 0, 0, 0);
+	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 13) | DBG_FUNC_START);
 	HIBLOG("hibernate_rebuild started\n");
 
 	clock_get_uptime(&startTime);
@@ -7248,9 +7479,18 @@ hibernate_rebuild_vm_structs(void)
 	bzero(&vm_page_buckets[0], vm_page_bucket_count * sizeof(vm_page_bucket_t));
 	eindx = vm_pages_count;
 
+	/*
+	 * Mark all the vm_pages[] that have not been initialized yet as being 
+	 * transient. This is needed to ensure that buddy page search is corrrect.
+	 * Without this random data in these vm_pages[] can trip the buddy search 
+	 */
+	for (i = hibernate_teardown_last_valid_compact_indx+1; i < eindx; ++i) 
+		vm_pages[i].vm_page_q_state = VM_PAGE_NOT_ON_Q;
+
 	for (cindx = hibernate_teardown_last_valid_compact_indx; cindx >= 0; cindx--) {
 		
 		mem = &vm_pages[cindx];
+		assert(mem->vm_page_q_state != VM_PAGE_ON_FREE_Q);
 		/*
 		 * hibernate_teardown_vm_structs leaves the location where
 		 * this vm_page_t must be located in "next".
@@ -7305,7 +7545,7 @@ hibernate_rebuild_vm_structs(void)
 
 	hibernate_rebuild_needed = FALSE;
 
-	KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 13) | DBG_FUNC_END, 0, 0, 0, 0, 0);
+	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 13) | DBG_FUNC_END);
 }
 
 
@@ -7328,6 +7568,8 @@ hibernate_teardown_vm_structs(hibernate_page_list_t *page_list, hibernate_page_l
 	
 	if (hibernate_should_abort())
 		return (0);
+
+	hibernate_rebuild_needed = TRUE;
 
 	HIBLOG("hibernate_teardown: wired_pages %d, free_pages %d, active_pages %d, inactive_pages %d, speculative_pages %d, cleaned_pages %d, compressor_pages %d\n",
 	       vm_page_wire_count, vm_page_free_count, vm_page_active_count, vm_page_inactive_count, vm_page_speculative_count,
@@ -7365,7 +7607,7 @@ hibernate_teardown_vm_structs(hibernate_page_list_t *page_list, hibernate_page_l
 			assert(mem->busy);
 			assert(!mem->lopage);
 
-			color = VM_PAGE_GET_PHYS_PAGE(mem) & vm_color_mask;
+			color = VM_PAGE_GET_COLOR(mem);
 
 			vm_page_queue_remove(&vm_page_queue_free[color].qhead,
 					     mem,
@@ -7414,8 +7656,6 @@ hibernate_teardown_vm_structs(hibernate_page_list_t *page_list, hibernate_page_l
 		mark_as_unneeded_pages += unneeded_pmap_pages;
 	}
 	HIBLOG("hibernate_teardown: mark_as_unneeded_pages %d, %d, %d\n", unneeded_vm_page_bucket_pages, unneeded_vm_pages_pages, unneeded_pmap_pages);
-
-	hibernate_rebuild_needed = TRUE;
 
 	return (mark_as_unneeded_pages);
 }
@@ -7805,23 +8045,6 @@ vm_page_enqueue_inactive(vm_page_t mem, boolean_t first)
 	assert(mem->vm_page_q_state == VM_PAGE_NOT_ON_Q);
 	vm_page_check_pageable_safe(mem);
 
-#if CONFIG_SECLUDED_MEMORY
-	if (secluded_for_filecache &&
-	    vm_page_secluded_target != 0 &&
-	    num_tasks_can_use_secluded_mem == 0 &&
-	    m_object->eligible_for_secluded &&
-	    secluded_aging_policy == SECLUDED_AGING_FIFO) {
-		mem->vm_page_q_state = VM_PAGE_ON_SECLUDED_Q;
-		vm_page_queue_enter(&vm_page_queue_secluded, mem,
-				    vm_page_t, pageq);
-		vm_page_secluded_count++;
-		vm_page_secluded_count_inuse++;
-		assert(!m_object->internal);
-//		vm_page_pageable_external_count++;
-		return;
-	}
-#endif /* CONFIG_SECLUDED_MEMORY */
-
 	if (m_object->internal) {
 		mem->vm_page_q_state = VM_PAGE_ON_INACTIVE_INTERNAL_Q;
 
@@ -7916,8 +8139,14 @@ vm_page_check_pageable_safe(vm_page_t page)
 
 #include <libkern/OSKextLibPrivate.h>
 
-vm_allocation_site_t * 
-vm_allocation_sites[VM_KERN_MEMORY_COUNT];
+#define KA_SIZE(namelen, subtotalscount)	\
+	(sizeof(struct vm_allocation_site) + (namelen) + 1 + ((subtotalscount) * sizeof(struct vm_allocation_total)))
+
+#define KA_NAME(alloc)	\
+	((char *)(&(alloc)->subtotals[(alloc->subtotalscount)]))
+
+#define KA_NAME_LEN(alloc)	\
+    (VM_TAG_NAME_LEN_MAX & (alloc->flags >> VM_TAG_NAME_LEN_SHIFT))
 
 vm_tag_t 
 vm_tag_bt(void)
@@ -7928,9 +8157,16 @@ vm_tag_bt(void)
     uintptr_t kstackb, kstackt;
     const vm_allocation_site_t * site;
     thread_t cthread;
+    kern_allocation_name_t name;
     
     cthread = current_thread();
     if (__improbable(cthread == NULL)) return VM_KERN_MEMORY_OSFMK;
+
+    if ((name = thread_get_kernel_state(cthread)->allocation_name))
+    {
+	if (!name->tag) vm_tag_alloc(name);
+	return name->tag;
+    }
 
     kstackb = cthread->kernel_stack;
     kstackt = kstackb + kernel_stack_size;
@@ -7949,53 +8185,74 @@ vm_tag_bt(void)
 	/* Pull return address from one spot above the frame pointer */
 	retaddr = *(frameptr + 1);
 
+
 	if ((retaddr < vm_kernel_stext) || (retaddr > vm_kernel_top))
 	{
-	    site = OSKextGetAllocationSiteForCaller(retaddr);
-	    break;
+		site = OSKextGetAllocationSiteForCaller(retaddr);
+		break;
 	}
-
 	frameptr = frameptr_next;
     }
+
     return (site ? site->tag : VM_KERN_MEMORY_NONE);
 }
 
-static uint64_t free_tag_bits[256/64];
+static uint64_t free_tag_bits[VM_MAX_TAG_VALUE/64];
 
 void
-vm_tag_alloc_locked(vm_allocation_site_t * site)
+vm_tag_alloc_locked(vm_allocation_site_t * site, vm_allocation_site_t ** releasesiteP)
 {
     vm_tag_t tag;
     uint64_t avail;
-    uint64_t idx;
+    uint32_t idx;
+    vm_allocation_site_t * prev;
 
     if (site->tag) return;
 
     idx = 0;
     while (TRUE)
     {
-	avail = free_tag_bits[idx];
-	if (avail)
-	{
-	    tag = __builtin_clzll(avail);
-	    avail &= ~(1ULL << (63 - tag));
-	    free_tag_bits[idx] = avail;
-	    tag += (idx << 6);
-	    break;
-	}
-	idx++;
-	if (idx >= (sizeof(free_tag_bits) / sizeof(free_tag_bits[0])))
-	{
-	     tag = VM_KERN_MEMORY_ANY;
-	     break;
-	}
+		avail = free_tag_bits[idx];
+		if (avail)
+		{
+		    tag = __builtin_clzll(avail);
+		    avail &= ~(1ULL << (63 - tag));
+		    free_tag_bits[idx] = avail;
+		    tag += (idx << 6);
+		    break;
+		}
+		idx++;
+		if (idx >= ARRAY_COUNT(free_tag_bits))
+		{
+		    for (idx = 0; idx < ARRAY_COUNT(vm_allocation_sites); idx++)
+		    {
+				prev = vm_allocation_sites[idx];
+				if (!prev)               continue;
+				if (!KA_NAME_LEN(prev))  continue;
+				if (!prev->tag)          continue;
+				if (prev->total)         continue;
+				if (1 != prev->refcount) continue;
+
+				assert(idx == prev->tag);
+				tag = idx;
+				prev->tag = VM_KERN_MEMORY_NONE;
+				*releasesiteP = prev;
+				break;
+		    }
+		    if (idx >= ARRAY_COUNT(vm_allocation_sites))
+			{
+				tag = VM_KERN_MEMORY_ANY;
+			}
+		    break;
+		}
     }
     site->tag = tag;
-    if (VM_KERN_MEMORY_ANY != tag)
-    {
-	assert(!vm_allocation_sites[tag]);
-	vm_allocation_sites[tag] = site;
-    }
+
+    OSAddAtomic16(1, &site->refcount);
+
+    if (VM_KERN_MEMORY_ANY != tag) vm_allocation_sites[tag] = site;
+
+    if (tag > vm_allocation_tag_highest) vm_allocation_tag_highest = tag;
 }
 
 static void
@@ -8023,60 +8280,298 @@ vm_tag_init(void)
     {
         vm_tag_free_locked(tag);
     }
+
+    for (tag = VM_KERN_MEMORY_ANY + 1; tag < VM_MAX_TAG_VALUE; tag++)
+    {
+        vm_tag_free_locked(tag);
+    }
 }
 
 vm_tag_t
 vm_tag_alloc(vm_allocation_site_t * site)
 {
     vm_tag_t tag;
+    vm_allocation_site_t * releasesite;
 
     if (VM_TAG_BT & site->flags)
     {
-	tag = vm_tag_bt();
-	if (VM_KERN_MEMORY_NONE != tag) return (tag);
+		tag = vm_tag_bt();
+		if (VM_KERN_MEMORY_NONE != tag) return (tag);
     }
 
     if (!site->tag) 
     {
-	lck_spin_lock(&vm_allocation_sites_lock);
-	vm_tag_alloc_locked(site);
-	lck_spin_unlock(&vm_allocation_sites_lock);
+		releasesite = NULL;
+		lck_spin_lock(&vm_allocation_sites_lock);
+		vm_tag_alloc_locked(site, &releasesite);
+		lck_spin_unlock(&vm_allocation_sites_lock);
+        if (releasesite) kern_allocation_name_release(releasesite);
     }
 
     return (site->tag);
 }
 
+void
+vm_tag_update_size(vm_tag_t tag, int64_t delta)
+{
+    vm_allocation_site_t * allocation;
+    uint64_t prior;
+
+    assert(VM_KERN_MEMORY_NONE != tag);
+    assert(tag < VM_MAX_TAG_VALUE);
+
+    allocation = vm_allocation_sites[tag];
+    assert(allocation);
+
+    if (delta < 0) {
+		assertf(allocation->total >= ((uint64_t)-delta), "tag %d, site %p", tag, allocation);
+    }
+    prior = OSAddAtomic64(delta, &allocation->total);
+
+#if DEBUG || DEVELOPMENT
+
+    uint64_t new, peak;
+	new = prior + delta;
+    do
+    {
+        peak = allocation->peak;
+        if (new <= peak) break;
+    }
+    while (!OSCompareAndSwap64(peak, new, &allocation->peak));
+
+#endif /* DEBUG || DEVELOPMENT */
+
+    if (tag < VM_KERN_MEMORY_FIRST_DYNAMIC) return;
+
+    if (!prior && !allocation->tag) vm_tag_alloc(allocation);
+}
+
+void
+kern_allocation_update_size(kern_allocation_name_t allocation, int64_t delta)
+{
+    uint64_t prior;
+
+    if (delta < 0) {
+		assertf(allocation->total >= ((uint64_t)-delta), "name %p", allocation);
+    }
+    prior = OSAddAtomic64(delta, &allocation->total);
+
+#if DEBUG || DEVELOPMENT
+
+    uint64_t new, peak;
+	new = prior + delta;
+    do
+    {
+        peak = allocation->peak;
+        if (new <= peak) break;
+    }
+    while (!OSCompareAndSwap64(peak, new, &allocation->peak));
+
+#endif /* DEBUG || DEVELOPMENT */
+
+    if (!prior && !allocation->tag) vm_tag_alloc(allocation);
+}
+
+#if VM_MAX_TAG_ZONES
+
+void
+vm_allocation_zones_init(void)
+{
+    kern_return_t ret;
+	vm_offset_t	  addr;
+	vm_size_t     size;
+
+    size = VM_MAX_TAG_VALUE * sizeof(vm_allocation_zone_total_t **)
+         + 2 * VM_MAX_TAG_ZONES * sizeof(vm_allocation_zone_total_t);
+
+	ret = kernel_memory_allocate(kernel_map,
+					&addr, round_page(size), 0,
+					KMA_ZERO, VM_KERN_MEMORY_DIAG);
+    assert(KERN_SUCCESS == ret);
+
+    vm_allocation_zone_totals = (vm_allocation_zone_total_t **) addr;
+    addr += VM_MAX_TAG_VALUE * sizeof(vm_allocation_zone_total_t **);
+
+    // prepopulate VM_KERN_MEMORY_DIAG & VM_KERN_MEMORY_KALLOC so allocations
+    // in vm_tag_update_zone_size() won't recurse
+    vm_allocation_zone_totals[VM_KERN_MEMORY_DIAG]   = (vm_allocation_zone_total_t *) addr;
+    addr += VM_MAX_TAG_ZONES * sizeof(vm_allocation_zone_total_t);
+    vm_allocation_zone_totals[VM_KERN_MEMORY_KALLOC] = (vm_allocation_zone_total_t *) addr;
+}
+
+void
+vm_tag_will_update_zone(vm_tag_t tag, uint32_t zidx)
+{
+    vm_allocation_zone_total_t * zone;
+
+    assert(VM_KERN_MEMORY_NONE != tag);
+    assert(tag < VM_MAX_TAG_VALUE);
+
+    if (zidx >= VM_MAX_TAG_ZONES) return;
+
+	zone = vm_allocation_zone_totals[tag];
+    if (!zone)
+    {
+        zone = kalloc_tag(VM_MAX_TAG_ZONES * sizeof(*zone), VM_KERN_MEMORY_DIAG);
+        if (!zone) return;
+        bzero(zone, VM_MAX_TAG_ZONES * sizeof(*zone));
+        if (!OSCompareAndSwapPtr(NULL, zone, &vm_allocation_zone_totals[tag]))
+		{
+			kfree(zone, VM_MAX_TAG_ZONES * sizeof(*zone));
+		}
+    }
+}
+
+void
+vm_tag_update_zone_size(vm_tag_t tag, uint32_t zidx, int64_t delta, int64_t dwaste)
+{
+    vm_allocation_zone_total_t * zone;
+    uint32_t new;
+
+    assert(VM_KERN_MEMORY_NONE != tag);
+    assert(tag < VM_MAX_TAG_VALUE);
+
+    if (zidx >= VM_MAX_TAG_ZONES) return;
+
+	zone = vm_allocation_zone_totals[tag];
+    assert(zone);
+    zone += zidx;
+
+    /* the zone is locked */
+    if (delta < 0)
+    {
+		assertf(zone->total >= ((uint64_t)-delta), "zidx %d, tag %d, %p", zidx, tag, zone);
+	    zone->total += delta;
+    }
+    else
+    {
+		zone->total += delta;
+		if (zone->total > zone->peak) zone->peak = zone->total;
+        if (dwaste)
+        {
+			new = zone->waste;
+			if (zone->wastediv < 65536) zone->wastediv++;
+			else                        new -= (new >> 16);
+			__assert_only bool ov = os_add_overflow(new, dwaste, &new);
+			assert(!ov);
+			zone->waste = new;
+        }
+    }
+}
+
+#endif /* VM_MAX_TAG_ZONES */
+
+void
+kern_allocation_update_subtotal(kern_allocation_name_t allocation, uint32_t subtag, int64_t delta)
+{
+    kern_allocation_name_t other;
+	struct vm_allocation_total * total;
+    uint32_t subidx;
+
+    subidx = 0;
+    assert(VM_KERN_MEMORY_NONE != subtag);
+	for (; subidx < allocation->subtotalscount; subidx++)
+	{
+		if (VM_KERN_MEMORY_NONE == allocation->subtotals[subidx].tag)
+		{
+			allocation->subtotals[subidx].tag = subtag;
+			break;
+		}
+		if (subtag == allocation->subtotals[subidx].tag) break;
+	}
+    assert(subidx < allocation->subtotalscount);
+    if (subidx >= allocation->subtotalscount) return;
+
+    total = &allocation->subtotals[subidx];
+    other = vm_allocation_sites[subtag];
+    assert(other);
+
+    if (delta < 0)
+    {
+		assertf(total->total >= ((uint64_t)-delta), "name %p", allocation);
+	    OSAddAtomic64(delta, &total->total);
+		assertf(other->mapped >= ((uint64_t)-delta), "other %p", other);
+        OSAddAtomic64(delta, &other->mapped);
+    }
+    else
+    {
+        OSAddAtomic64(delta, &other->mapped);
+	    OSAddAtomic64(delta, &total->total);
+    }
+}
+
+const char *
+kern_allocation_get_name(kern_allocation_name_t allocation)
+{
+    return (KA_NAME(allocation));
+}
+
+kern_allocation_name_t
+kern_allocation_name_allocate(const char * name, uint32_t subtotalscount)
+{
+    uint32_t namelen;
+
+    namelen = (uint32_t) strnlen(name, MACH_MEMORY_INFO_NAME_MAX_LEN - 1);
+
+    kern_allocation_name_t allocation;
+    allocation = kalloc(KA_SIZE(namelen, subtotalscount));
+    bzero(allocation, KA_SIZE(namelen, subtotalscount));
+
+    allocation->refcount       = 1;
+    allocation->subtotalscount = subtotalscount;
+    allocation->flags          = (namelen << VM_TAG_NAME_LEN_SHIFT);
+    strlcpy(KA_NAME(allocation), name, namelen + 1);
+
+    return (allocation);
+}
+
+void
+kern_allocation_name_release(kern_allocation_name_t allocation)
+{
+    assert(allocation->refcount > 0);
+    if (1 == OSAddAtomic16(-1, &allocation->refcount))
+    {
+        kfree(allocation, KA_SIZE(KA_NAME_LEN(allocation), allocation->subtotalscount));
+    }
+}
+
+vm_tag_t
+kern_allocation_name_get_vm_tag(kern_allocation_name_t allocation)
+{
+    return (vm_tag_alloc(allocation));
+}
+
 static void 
-vm_page_count_object(mach_memory_info_t * sites, unsigned int __unused num_sites, vm_object_t object)
+vm_page_count_object(mach_memory_info_t * info, unsigned int __unused num_info, vm_object_t object)
 {
     if (!object->wired_page_count) return;
     if (object != kernel_object)
     {
-	assert(object->wire_tag < num_sites);
-	sites[object->wire_tag].size += ptoa_64(object->wired_page_count);
+		assert(object->wire_tag < num_info);
+		info[object->wire_tag].size += ptoa_64(object->wired_page_count);
     }
 }
 
-typedef void (*vm_page_iterate_proc)(mach_memory_info_t * sites, 
-				     unsigned int num_sites, vm_object_t object);
+typedef void (*vm_page_iterate_proc)(mach_memory_info_t * info,
+				     unsigned int num_info, vm_object_t object);
 
 static void 
-vm_page_iterate_purgeable_objects(mach_memory_info_t * sites, unsigned int num_sites,
+vm_page_iterate_purgeable_objects(mach_memory_info_t * info, unsigned int num_info,
 				  vm_page_iterate_proc proc, purgeable_q_t queue, 
 				  int group)
 {
     vm_object_t object;
 
     for (object = (vm_object_t) queue_first(&queue->objq[group]);
-	!queue_end(&queue->objq[group], (queue_entry_t) object);
-	object = (vm_object_t) queue_next(&object->objq))
+		!queue_end(&queue->objq[group], (queue_entry_t) object);
+		object = (vm_object_t) queue_next(&object->objq))
     {
-	proc(sites, num_sites, object);
+		proc(info, num_info, object);
     }
 }
 
 static void 
-vm_page_iterate_objects(mach_memory_info_t * sites, unsigned int num_sites,
+vm_page_iterate_objects(mach_memory_info_t * info, unsigned int num_info,
 			vm_page_iterate_proc proc)
 {
     purgeable_q_t   volatile_q;
@@ -8090,130 +8585,230 @@ vm_page_iterate_objects(mach_memory_info_t * sites, unsigned int num_sites,
 		  vm_object_t,
 		  objq)
     {
-	proc(sites, num_sites, object);
+		proc(info, num_info, object);
     }
     lck_spin_unlock(&vm_objects_wired_lock);
 
     lck_mtx_lock(&vm_purgeable_queue_lock);
     nonvolatile_q = &purgeable_nonvolatile_queue;
     for (object = (vm_object_t) queue_first(nonvolatile_q);
-	 !queue_end(nonvolatile_q, (queue_entry_t) object);
-	 object = (vm_object_t) queue_next(&object->objq))
+		 !queue_end(nonvolatile_q, (queue_entry_t) object);
+		 object = (vm_object_t) queue_next(&object->objq))
     {
-	proc(sites, num_sites, object);
+		proc(info, num_info, object);
     }
 
     volatile_q = &purgeable_queues[PURGEABLE_Q_TYPE_OBSOLETE];
-    vm_page_iterate_purgeable_objects(sites, num_sites, proc, volatile_q, 0);
+    vm_page_iterate_purgeable_objects(info, num_info, proc, volatile_q, 0);
 
     volatile_q = &purgeable_queues[PURGEABLE_Q_TYPE_FIFO];
     for (group = 0; group < NUM_VOLATILE_GROUPS; group++)
     {
-	vm_page_iterate_purgeable_objects(sites, num_sites, proc, volatile_q, group);
+		vm_page_iterate_purgeable_objects(info, num_info, proc, volatile_q, group);
     }
 
     volatile_q = &purgeable_queues[PURGEABLE_Q_TYPE_LIFO];
     for (group = 0; group < NUM_VOLATILE_GROUPS; group++)
     {
-	vm_page_iterate_purgeable_objects(sites, num_sites, proc, volatile_q, group);
+		vm_page_iterate_purgeable_objects(info, num_info, proc, volatile_q, group);
     }
     lck_mtx_unlock(&vm_purgeable_queue_lock);
 }
 
 static uint64_t
-process_account(mach_memory_info_t * sites, unsigned int __unused num_sites, uint64_t zones_collectable_bytes)
+process_account(mach_memory_info_t * info, unsigned int num_info, uint64_t zones_collectable_bytes, boolean_t iterated)
 {
-    uint64_t found;
-    unsigned int idx;
+    size_t                 namelen;
+    unsigned int           idx, count, nextinfo;
     vm_allocation_site_t * site;
-
-    assert(num_sites >= VM_KERN_MEMORY_COUNT);
-    found = 0;
-    for (idx = 0; idx < VM_KERN_MEMORY_COUNT; idx++) 
-    {
-	found += sites[idx].size;
-	if (idx < VM_KERN_MEMORY_FIRST_DYNAMIC)
-	{
-	    sites[idx].site   = idx;
-	    sites[idx].flags |= VM_KERN_SITE_TAG;
-	    if (VM_KERN_MEMORY_ZONE == idx)
-	    {
-                sites[idx].flags |= VM_KERN_SITE_HIDE;
-                sites[idx].collectable_bytes = zones_collectable_bytes;
-            } else sites[idx].flags |= VM_KERN_SITE_WIRED;
-            continue;
-	}
 	lck_spin_lock(&vm_allocation_sites_lock);
-	if ((site = vm_allocation_sites[idx]))
-	{
-	    if (sites[idx].size)
-	    {
-		sites[idx].flags |= VM_KERN_SITE_WIRED;
-		if (VM_TAG_KMOD == (VM_KERN_SITE_TYPE & site->flags))
+
+	for (idx = 0; idx <= vm_allocation_tag_highest; idx++)
+    {
+		site = vm_allocation_sites[idx];
+		if (!site) continue;
+		info[idx].mapped = site->mapped;
+		info[idx].tag    = site->tag;
+        if (!iterated)
+        {
+			info[idx].size = site->total;
+#if DEBUG || DEVELOPMENT
+			info[idx].peak = site->peak;
+#endif /* DEBUG || DEVELOPMENT */
+        }
+        else
+        {
+			if (!site->subtotalscount && (site->total != info[idx].size))
+			{
+			    printf("tag mismatch[%d] 0x%qx, iter 0x%qx\n", idx, site->total, info[idx].size);
+			    info[idx].size = site->total;
+			}
+        }
+    }
+
+    nextinfo = (vm_allocation_tag_highest + 1);
+    count    = nextinfo;
+    if (count >= num_info) count = num_info;
+
+    for (idx = 0; idx < count; idx++)
+    {
+		site = vm_allocation_sites[idx];
+		if (!site) continue;
+		info[idx].flags |= VM_KERN_SITE_WIRED;
+		if (idx < VM_KERN_MEMORY_FIRST_DYNAMIC)
 		{
-		    sites[idx].site   = OSKextGetKmodIDForSite(site, NULL, 0);
-		    sites[idx].flags |= VM_KERN_SITE_KMOD;
+		    info[idx].site   = idx;
+		    info[idx].flags |= VM_KERN_SITE_TAG;
+		    if (VM_KERN_MEMORY_ZONE == idx)
+		    {
+				info[idx].flags |= VM_KERN_SITE_HIDE;
+				info[idx].flags &= ~VM_KERN_SITE_WIRED;
+				info[idx].collectable_bytes = zones_collectable_bytes;
+			}
+		}
+		else if ((namelen = (VM_TAG_NAME_LEN_MAX & (site->flags >> VM_TAG_NAME_LEN_SHIFT))))
+		{
+		    info[idx].site   = 0;
+		    info[idx].flags |= VM_KERN_SITE_NAMED;
+		    if (namelen > sizeof(info[idx].name)) namelen = sizeof(info[idx].name);
+		    strncpy(&info[idx].name[0], KA_NAME(site), namelen);
+		}
+		else if (VM_TAG_KMOD & site->flags)
+		{
+		    info[idx].site   = OSKextGetKmodIDForSite(site, NULL, 0);
+		    info[idx].flags |= VM_KERN_SITE_KMOD;
 		}
 		else
 		{
-		    sites[idx].site   = VM_KERNEL_UNSLIDE(site);
-		    sites[idx].flags |= VM_KERN_SITE_KERNEL;
+		    info[idx].site   = VM_KERNEL_UNSLIDE(site);
+		    info[idx].flags |= VM_KERN_SITE_KERNEL;
 		}
-		site = NULL;
-	    }
-	    else
-	    {
-#if 1
-		site = NULL;
-#else
-		/* this code would free a site with no allocations but can race a new
-		 * allocation being made */
-		vm_tag_free_locked(site->tag);
-	        site->tag = VM_KERN_MEMORY_NONE;
-	        vm_allocation_sites[idx] = NULL;
-		if (!(VM_TAG_UNLOAD & site->flags)) site = NULL;
-#endif
-	    }
+#if VM_MAX_TAG_ZONES
+		vm_allocation_zone_total_t * zone;
+		unsigned int                 zidx;
+		vm_size_t                    elem_size;
+
+        if (vm_allocation_zone_totals
+			&& (zone = vm_allocation_zone_totals[idx])
+			&& (nextinfo < num_info))
+        {
+            for (zidx = 0; zidx < VM_MAX_TAG_ZONES; zidx++)
+            {
+                if (!zone[zidx].peak)              continue;
+				info[nextinfo]                   = info[idx];
+				info[nextinfo].zone              = zone_index_from_tag_index(zidx, &elem_size);
+				info[nextinfo].flags            &= ~VM_KERN_SITE_WIRED;
+				info[nextinfo].flags            |= VM_KERN_SITE_ZONE;
+				info[nextinfo].size              = zone[zidx].total;
+				info[nextinfo].peak              = zone[zidx].peak;
+				info[nextinfo].mapped            = 0;
+                if (zone[zidx].wastediv)
+				{
+					info[nextinfo].collectable_bytes = ((zone[zidx].waste * zone[zidx].total / elem_size) / zone[zidx].wastediv);
+				}
+                nextinfo++;
+             }
+        }
+#endif /* VM_MAX_TAG_ZONES */
+        if (site->subtotalscount)
+        {
+			uint64_t mapped, mapcost, take;
+			uint32_t sub;
+			vm_tag_t alloctag;
+
+            info[idx].size = site->total;
+            mapped = info[idx].size;
+            info[idx].mapped = mapped;
+            mapcost = 0;
+            for (sub = 0; sub < site->subtotalscount; sub++)
+            {
+				alloctag = site->subtotals[sub].tag;
+				assert(alloctag < num_info);
+				if (info[alloctag].name[0]) continue;
+				take = info[alloctag].mapped;
+				if (take > info[alloctag].size) take = info[alloctag].size;
+				if (take > mapped) take = mapped;
+				info[alloctag].mapped  -= take;
+				info[alloctag].size    -= take;
+				mapped                 -= take;
+				mapcost                += take;
+            }
+            info[idx].size = mapcost;
+        }
 	}
 	lck_spin_unlock(&vm_allocation_sites_lock);
-        if (site) OSKextFreeSite(site);
-    }
 
-    return (found);
+    return (0);
 }
 
-kern_return_t 
-vm_page_diagnose(mach_memory_info_t * sites, unsigned int num_sites, uint64_t zones_collectable_bytes)
+uint32_t
+vm_page_diagnose_estimate(void)
 {
-    enum             	   { kMaxKernelDepth = 1 };
-    vm_map_t           	     maps   [kMaxKernelDepth];
-    vm_map_entry_t     	     entries[kMaxKernelDepth];
-    vm_map_t           	     map;
-    vm_map_entry_t     	     entry;
-    vm_object_offset_t 	     offset;
-    vm_page_t          	     page;
-    int                	     stackIdx, count;
+    vm_allocation_site_t * site;
+    uint32_t               count;
+    uint32_t               idx;
+
+	lck_spin_lock(&vm_allocation_sites_lock);
+	for (count = idx = 0; idx < VM_MAX_TAG_VALUE; idx++)
+    {
+		site = vm_allocation_sites[idx];
+		if (!site) continue;
+		count++;
+#if VM_MAX_TAG_ZONES
+		if (vm_allocation_zone_totals)
+		{
+			vm_allocation_zone_total_t * zone;
+			zone = vm_allocation_zone_totals[idx];
+			if (!zone) continue;
+			for (uint32_t zidx = 0; zidx < VM_MAX_TAG_ZONES; zidx++) if (zone[zidx].peak) count++;
+		}
+#endif
+    }
+	lck_spin_unlock(&vm_allocation_sites_lock);
+
+    /* some slop for new tags created */
+    count += 8;
+    count += VM_KERN_COUNTER_COUNT;
+
+    return (count);
+}
+
+
+kern_return_t 
+vm_page_diagnose(mach_memory_info_t * info, unsigned int num_info, uint64_t zones_collectable_bytes)
+{
     uint64_t	       	     wired_size;
     uint64_t	       	     wired_managed_size;
     uint64_t	       	     wired_reserved_size;
+    uint64_t	       	     booter_size;
+    boolean_t                iterate;
     mach_memory_info_t     * counts;
 
-    bzero(sites, num_sites * sizeof(mach_memory_info_t));
+    bzero(info, num_info * sizeof(mach_memory_info_t));
 
     if (!vm_page_wire_count_initial) return (KERN_ABORTED);
 
-    vm_page_iterate_objects(sites, num_sites, &vm_page_count_object);
-
+#if CONFIG_EMBEDDED
+    wired_size	        = ptoa_64(vm_page_wire_count);
+    wired_reserved_size = ptoa_64(vm_page_wire_count_initial - vm_page_stolen_count);
+#else
     wired_size          = ptoa_64(vm_page_wire_count + vm_lopage_free_count + vm_page_throttled_count);
     wired_reserved_size = ptoa_64(vm_page_wire_count_initial - vm_page_stolen_count + vm_page_throttled_count);
+#endif
     wired_managed_size  = ptoa_64(vm_page_wire_count - vm_page_wire_count_initial);
 
-    assert(num_sites >= (VM_KERN_MEMORY_COUNT + VM_KERN_COUNTER_COUNT));
-    counts = &sites[VM_KERN_MEMORY_COUNT];
+    booter_size = ml_get_booter_memory_size();
+    wired_size += booter_size;
 
-#define SET_COUNT(xcount, xsize, xflags)			\
-    counts[xcount].site  = (xcount);			\
-    counts[xcount].size  = (xsize);			\
+    assert(num_info >= VM_KERN_COUNTER_COUNT);
+    num_info -= VM_KERN_COUNTER_COUNT;
+    counts = &info[num_info];
+
+#define SET_COUNT(xcount, xsize, xflags)		        \
+    counts[xcount].tag   = VM_MAX_TAG_VALUE + xcount;   \
+    counts[xcount].site  = (xcount);			        \
+    counts[xcount].size  = (xsize);			            \
+    counts[xcount].mapped  = (xsize);			        \
     counts[xcount].flags = VM_KERN_SITE_COUNTER | xflags;
 
     SET_COUNT(VM_KERN_COUNT_MANAGED,		  ptoa_64(vm_page_pages),        0);
@@ -8222,10 +8817,13 @@ vm_page_diagnose(mach_memory_info_t * sites, unsigned int num_sites, uint64_t zo
     SET_COUNT(VM_KERN_COUNT_RESERVED,	  	  wired_reserved_size, 		 VM_KERN_SITE_WIRED);
     SET_COUNT(VM_KERN_COUNT_STOLEN,	          ptoa_64(vm_page_stolen_count), VM_KERN_SITE_WIRED);
     SET_COUNT(VM_KERN_COUNT_LOPAGE,	          ptoa_64(vm_lopage_free_count), VM_KERN_SITE_WIRED);
+    SET_COUNT(VM_KERN_COUNT_WIRED_BOOT,	          ptoa_64(vm_page_wire_count_on_boot), 0);
+    SET_COUNT(VM_KERN_COUNT_BOOT_STOLEN,	  booter_size,  	 	 VM_KERN_SITE_WIRED);
 
-#define SET_MAP(xcount, xsize, xfree, xlargest)		\
+#define SET_MAP(xcount, xsize, xfree, xlargest)	\
     counts[xcount].site    = (xcount);			\
     counts[xcount].size    = (xsize);			\
+    counts[xcount].mapped  = (xsize);			\
     counts[xcount].free    = (xfree);			\
     counts[xcount].largest = (xlargest);		\
     counts[xcount].flags   = VM_KERN_SITE_COUNTER;
@@ -8241,58 +8839,117 @@ vm_page_diagnose(mach_memory_info_t * sites, unsigned int num_sites, uint64_t zo
     vm_map_sizes(kalloc_map, &map_size, &map_free, &map_largest);
     SET_MAP(VM_KERN_COUNT_MAP_KALLOC, map_size, map_free, map_largest);
 
-    map = kernel_map;
-    stackIdx = 0;
-    while (map)
-    {
-	vm_map_lock(map);
-	for (entry = map->hdr.links.next; map; entry = entry->links.next)
+    iterate = !VM_TAG_ACTIVE_UPDATE;
+    if (iterate)
 	{
-	    if (entry->is_sub_map)
-	    {
-	    	assert(stackIdx < kMaxKernelDepth);
-		maps[stackIdx] = map;
-		entries[stackIdx] = entry;
-		stackIdx++;
-		map = VME_SUBMAP(entry);
-		entry = NULL;
-		break;
-	    }
-	    if (VME_OBJECT(entry) == kernel_object)
-	    {
-		count = 0;
-		vm_object_lock(VME_OBJECT(entry));
-		for (offset = entry->links.start; offset < entry->links.end; offset += page_size)
-		{
-			page = vm_page_lookup(VME_OBJECT(entry), offset);
-			if (page && VM_PAGE_WIRED(page)) count++;
-		}
-		vm_object_unlock(VME_OBJECT(entry));
+		enum             	   { kMaxKernelDepth = 1 };
+		vm_map_t           	     maps   [kMaxKernelDepth];
+		vm_map_entry_t     	     entries[kMaxKernelDepth];
+		vm_map_t           	     map;
+		vm_map_entry_t     	     entry;
+		vm_object_offset_t 	     offset;
+		vm_page_t          	     page;
+		int                	     stackIdx, count;
 
-		if (count)
-		{
-		    assert(VME_ALIAS(entry) < num_sites);
-		    sites[VME_ALIAS(entry)].size += ptoa_64(count);
-		}
-	    }
-	    while (map && (entry == vm_map_last_entry(map)))
+	    vm_page_iterate_objects(info, num_info, &vm_page_count_object);
+
+	    map = kernel_map;
+	    stackIdx = 0;
+	    while (map)
 	    {
-		vm_map_unlock(map);
-		if (!stackIdx) map = NULL;
-		else
-		{
-		    --stackIdx;
-		    map = maps[stackIdx];
-		    entry = entries[stackIdx];
-		}
+			vm_map_lock(map);
+			for (entry = map->hdr.links.next; map; entry = entry->links.next)
+			{
+			    if (entry->is_sub_map)
+			    {
+					assert(stackIdx < kMaxKernelDepth);
+					maps[stackIdx] = map;
+					entries[stackIdx] = entry;
+					stackIdx++;
+					map = VME_SUBMAP(entry);
+					entry = NULL;
+					break;
+			    }
+			    if (VME_OBJECT(entry) == kernel_object)
+			    {
+					count = 0;
+					vm_object_lock(VME_OBJECT(entry));
+					for (offset = entry->links.start; offset < entry->links.end; offset += page_size)
+					{
+						page = vm_page_lookup(VME_OBJECT(entry), offset);
+						if (page && VM_PAGE_WIRED(page)) count++;
+					}
+					vm_object_unlock(VME_OBJECT(entry));
+
+					if (count)
+					{
+					    assert(VME_ALIAS(entry) != VM_KERN_MEMORY_NONE);
+					    assert(VME_ALIAS(entry) < num_info);
+					    info[VME_ALIAS(entry)].size += ptoa_64(count);
+					}
+			    }
+			    while (map && (entry == vm_map_last_entry(map)))
+			    {
+					vm_map_unlock(map);
+					if (!stackIdx) map = NULL;
+					else
+					{
+					    --stackIdx;
+					    map = maps[stackIdx];
+					    entry = entries[stackIdx];
+					}
+			    }
+			}
 	    }
-	}
     }
 
-    process_account(sites, num_sites, zones_collectable_bytes);
+    process_account(info, num_info, zones_collectable_bytes, iterate);
     
     return (KERN_SUCCESS);
 }
+
+#if DEBUG || DEVELOPMENT
+
+kern_return_t
+vm_kern_allocation_info(uintptr_t addr, vm_size_t * size, vm_tag_t * tag, vm_size_t * zone_size)
+{
+    kern_return_t  ret;
+    vm_size_t      zsize;
+    vm_map_t       map;
+    vm_map_entry_t entry;
+
+    zsize = zone_element_info((void *) addr, tag);
+    if (zsize)
+    {
+		*zone_size = *size = zsize;
+		return (KERN_SUCCESS);
+    }
+
+	*zone_size = 0;
+    ret = KERN_INVALID_ADDRESS;
+    for (map = kernel_map; map; )
+	{
+		vm_map_lock(map);
+		if (!vm_map_lookup_entry(map, addr, &entry)) break;
+	    if (entry->is_sub_map)
+	    {
+            if (map != kernel_map)                   break;
+			map = VME_SUBMAP(entry);
+			continue;
+	    }
+		if (entry->vme_start != addr)                break;
+		*tag = VME_ALIAS(entry);
+		*size = (entry->vme_end - addr);
+		ret = KERN_SUCCESS;
+		break;
+	}
+	if (map != kernel_map) vm_map_unlock(map);
+	vm_map_unlock(kernel_map);
+
+	return (ret);
+}
+
+#endif /* DEBUG || DEVELOPMENT */
 
 uint32_t
 vm_tag_get_kext(vm_tag_t tag, char * name, vm_size_t namelen)
@@ -8304,7 +8961,7 @@ vm_tag_get_kext(vm_tag_t tag, char * name, vm_size_t namelen)
     lck_spin_lock(&vm_allocation_sites_lock);
     if ((site = vm_allocation_sites[tag]))
     {
-        if (VM_TAG_KMOD == (VM_KERN_SITE_TYPE & site->flags))
+        if (VM_TAG_KMOD & site->flags)
         {
             kmodId = OSKextGetKmodIDForSite(site, name, namelen);
         }
@@ -8313,94 +8970,3 @@ vm_tag_get_kext(vm_tag_t tag, char * name, vm_size_t namelen)
 
     return (kmodId);
 }
-
-#if DEBUG || DEVELOPMENT
-
-#define vm_tag_set_lock(set)    lck_spin_lock(&set->lock)
-#define vm_tag_set_unlock(set)  lck_spin_unlock(&set->lock)
-
-void
-vm_tag_set_init(vm_tag_set_t set, uint32_t count)
-{
-    lck_spin_init(&set->lock, &vm_page_lck_grp_bucket, &vm_page_lck_attr);
-    bzero(&set->entries, count * sizeof(struct vm_tag_set_entry));
-}
-
-kern_return_t
-vm_tag_set_enter(vm_tag_set_t set, uint32_t count, vm_tag_t tag)
-{
-    kern_return_t kr;
-    uint32_t      idx, free;
-
-    vm_tag_set_lock(set);
-
-    assert(tag != VM_KERN_MEMORY_NONE);
-
-    kr = KERN_NO_SPACE;
-    free = -1U;
-    for (idx = 0; idx < count; idx++)
-    {
-        if (tag == set->entries[idx].tag)
-        {
-            set->entries[idx].count++;
-            kr = KERN_SUCCESS;
-            break;
-        }
-        if ((free == -1U) && !set->entries[idx].count) free = idx;
-    }
-
-    if ((KERN_SUCCESS != kr) && (free != -1U))
-    {
-        set->entries[free].tag = tag;
-        set->entries[free].count = 1;
-        kr = KERN_SUCCESS;
-    }
-
-    vm_tag_set_unlock(set);
-
-    return (kr);
-}
-
-kern_return_t
-vm_tag_set_remove(vm_tag_set_t set, uint32_t count, vm_tag_t tag, vm_tag_t * new_tagp)
-{
-    kern_return_t kr;
-    uint32_t      idx;
-    vm_tag_t      new_tag;
-
-    assert(tag != VM_KERN_MEMORY_NONE);
-    new_tag = VM_KERN_MEMORY_NONE;
-    vm_tag_set_lock(set);
-
-    kr = KERN_NOT_IN_SET;
-    for (idx = 0; idx < count; idx++)
-    {
-        if ((tag != VM_KERN_MEMORY_NONE)
-          && (tag == set->entries[idx].tag)
-          && set->entries[idx].count)
-        {
-            set->entries[idx].count--;
-            kr = KERN_SUCCESS;
-            if (set->entries[idx].count)
-            {
-                new_tag = tag;
-                break;
-            }
-            if (!new_tagp) break;
-            tag = VM_KERN_MEMORY_NONE;
-        }
-
-        if (set->entries[idx].count && (VM_KERN_MEMORY_NONE == new_tag))
-        {
-            new_tag = set->entries[idx].tag;
-            if (VM_KERN_MEMORY_NONE == tag) break;
-        }
-    }
-
-    vm_tag_set_unlock(set);
-    if (new_tagp) *new_tagp = new_tag;
-
-    return (kr);
-}
-
-#endif /* DEBUG || DEVELOPMENT */

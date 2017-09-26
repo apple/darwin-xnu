@@ -40,6 +40,11 @@
 #include <kperf/thread_samplers.h>
 #include <kperf/ast.h>
 
+#if MONOTONIC
+#include <kern/monotonic.h>
+#include <machine/monotonic.h>
+#endif /* MONOTONIC */
+
 extern boolean_t stackshot_thread_is_idle_worker_unsafe(thread_t thread);
 
 /*
@@ -86,10 +91,12 @@ kperf_thread_info_runmode_legacy(thread_t thread)
 		kperf_state |= KPERF_TI_IDLE;
 	}
 
+#if !TARGET_OS_EMBEDDED
 	/* on desktop, if state is blank, leave not idle set */
 	if (kperf_state == 0) {
 		return (TH_IDLE << 16);
 	}
+#endif /* !TARGET_OS_EMBEDDED */
 
 	/* high two bytes are inverted mask, low two bytes are normal */
 	return (((~kperf_state & 0xffff) << 16) | (kperf_state & 0xffff));
@@ -149,6 +156,9 @@ kperf_thread_scheduling_sample(struct kperf_thread_scheduling *thsc,
 	thsc->kpthsc_effective_qos = thread->effective_policy.thep_qos;
 	thsc->kpthsc_requested_qos = thread->requested_policy.thrp_qos;
 	thsc->kpthsc_requested_qos_override = thread->requested_policy.thrp_qos_override;
+	thsc->kpthsc_requested_qos_promote = thread->requested_policy.thrp_qos_promote;
+	thsc->kpthsc_requested_qos_ipc_override = thread->requested_policy.thrp_qos_ipc_override;
+	thsc->kpthsc_requested_qos_sync_ipc_override = thread->requested_policy.thrp_qos_sync_ipc_override;
 	thsc->kpthsc_effective_latency_qos = thread->effective_policy.thep_latency_qos;
 
 	BUF_INFO(PERF_TI_SCHEDSAMPLE | DBG_FUNC_END);
@@ -160,27 +170,36 @@ kperf_thread_scheduling_log(struct kperf_thread_scheduling *thsc)
 {
 	assert(thsc != NULL);
 #if defined(__LP64__)
-	BUF_DATA(PERF_TI_SCHEDDATA, thsc->kpthsc_user_time,
-	                            thsc->kpthsc_system_time,
-	                            (((uint64_t)thsc->kpthsc_base_priority) << 48)
-	                            | ((uint64_t)thsc->kpthsc_sched_priority << 32)
-	                            | ((uint64_t)(thsc->kpthsc_state & 0xff) << 24)
-	                            | (thsc->kpthsc_effective_qos << 6)
-	                            | (thsc->kpthsc_requested_qos << 3)
-	                            | thsc->kpthsc_requested_qos_override,
-	                            ((uint64_t)thsc->kpthsc_effective_latency_qos << 61));
+	BUF_DATA(PERF_TI_SCHEDDATA_2, thsc->kpthsc_user_time,
+			thsc->kpthsc_system_time,
+			(((uint64_t)thsc->kpthsc_base_priority) << 48)
+			| ((uint64_t)thsc->kpthsc_sched_priority << 32)
+			| ((uint64_t)(thsc->kpthsc_state & 0xff) << 24)
+			| (thsc->kpthsc_effective_qos << 6)
+			| (thsc->kpthsc_requested_qos << 3)
+			| thsc->kpthsc_requested_qos_override,
+			((uint64_t)thsc->kpthsc_effective_latency_qos << 61)
+			| ((uint64_t)thsc->kpthsc_requested_qos_promote << 58)
+			| ((uint64_t)thsc->kpthsc_requested_qos_ipc_override << 55)
+			| ((uint64_t)thsc->kpthsc_requested_qos_sync_ipc_override << 52)
+			);
 #else
 	BUF_DATA(PERF_TI_SCHEDDATA1_32, UPPER_32(thsc->kpthsc_user_time),
-	                                LOWER_32(thsc->kpthsc_user_time),
-	                                UPPER_32(thsc->kpthsc_system_time),
-	                                LOWER_32(thsc->kpthsc_system_time));
-	BUF_DATA(PERF_TI_SCHEDDATA2_32, (((uint32_t)thsc->kpthsc_base_priority) << 16)
-	                                | thsc->kpthsc_sched_priority,
-	                                ((thsc->kpthsc_state & 0xff) << 24)
-	                                | (thsc->kpthsc_effective_qos << 6)
-	                                | (thsc->kpthsc_requested_qos << 3)
-	                                | thsc->kpthsc_requested_qos_override,
-	                                (uint32_t)thsc->kpthsc_effective_latency_qos << 29);
+			LOWER_32(thsc->kpthsc_user_time),
+			UPPER_32(thsc->kpthsc_system_time),
+			LOWER_32(thsc->kpthsc_system_time)
+			);
+	BUF_DATA(PERF_TI_SCHEDDATA2_32_2, (((uint32_t)thsc->kpthsc_base_priority) << 16)
+			| thsc->kpthsc_sched_priority,
+			((thsc->kpthsc_state & 0xff) << 24)
+			| (thsc->kpthsc_effective_qos << 6)
+			| (thsc->kpthsc_requested_qos << 3)
+			| thsc->kpthsc_requested_qos_override,
+			((uint32_t)thsc->kpthsc_effective_latency_qos << 29)
+			| ((uint32_t)thsc->kpthsc_requested_qos_promote << 26)
+			| ((uint32_t)thsc->kpthsc_requested_qos_ipc_override << 23)
+			| ((uint32_t)thsc->kpthsc_requested_qos_sync_ipc_override << 20)
+			);
 #endif /* defined(__LP64__) */
 }
 
@@ -314,4 +333,38 @@ kperf_thread_dispatch_log(struct kperf_thread_dispatch *thdi)
 	BUF_DATA(PERF_TI_DISPDATA_32, UPPER_32(thdi->kpthdi_dq_serialno),
 	                              LOWER_32(thdi->kpthdi_dq_serialno));
 #endif /* defined(__LP64__) */
+}
+
+/*
+ * A bit different from other samplers -- since logging disables interrupts,
+ * it's a fine place to sample the thread counters.
+ */
+void
+kperf_thread_inscyc_log(struct kperf_context *context)
+{
+#if MONOTONIC
+	thread_t cur_thread = current_thread();
+
+	if (context->cur_thread != cur_thread) {
+		/* can't safely access another thread's counters */
+		return;
+	}
+
+	uint64_t counts[MT_CORE_NFIXED];
+
+	int ret = mt_fixed_thread_counts(cur_thread, counts);
+	if (ret) {
+		return;
+	}
+
+#if defined(__LP64__)
+	BUF_DATA(PERF_TI_INSCYCDATA, counts[MT_CORE_INSTRS], counts[MT_CORE_CYCLES]);
+#else /* defined(__LP64__) */
+	/* 32-bit platforms don't count instructions */
+	BUF_DATA(PERF_TI_INSCYCDATA_32, 0, 0, UPPER_32(counts[MT_CORE_CYCLES]),
+			LOWER_32(counts[MT_CORE_CYCLES]));
+#endif /* !defined(__LP64__) */
+#else /* MONOTONIC */
+#pragma unused(context)
+#endif /* !MONOTONIC */
 }

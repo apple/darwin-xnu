@@ -33,6 +33,7 @@
 
 #include <kern/processor.h>
 #include <kern/timer.h>
+#include <kern/debug.h>
 
 void
 processor_data_init(
@@ -43,4 +44,6 @@ processor_data_init(
 	timer_init(&PROCESSOR_DATA(processor, idle_state));
 	timer_init(&PROCESSOR_DATA(processor, system_state));
 	timer_init(&PROCESSOR_DATA(processor, user_state));
+
+	PROCESSOR_DATA(processor, debugger_state).db_current_op = DBOP_NONE;
 }

@@ -568,12 +568,12 @@ struct	sigstack {
  *	signals delivered on a per-thread basis.
  */
 #define threadmask (sigmask(SIGILL)|sigmask(SIGTRAP)|\
-		    sigmask(SIGIOT)|sigmask(SIGEMT)|\
+		    sigmask(SIGABRT)|sigmask(SIGEMT)|\
 		    sigmask(SIGFPE)|sigmask(SIGBUS)|\
 		    sigmask(SIGSEGV)|sigmask(SIGSYS)|\
 		    sigmask(SIGPIPE)|sigmask(SIGKILL))
 
-#define workq_threadmask (threadmask | sigcantmask | sigmask(SIGPROF))
+#define workq_threadmask ((threadmask | sigcantmask | sigmask(SIGPROF)) & ~sigmask(SIGABRT))
 
 /*
  * Signals carried across exec.

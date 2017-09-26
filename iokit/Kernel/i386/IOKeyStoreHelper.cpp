@@ -47,6 +47,13 @@ IOGetBootKeyStoreData(void);
 void
 IOSetKeyStoreData(IOMemoryDescriptor * data);
 
+// APFS
+static volatile UInt32 apfsKeyFetched = 0;
+static IOMemoryDescriptor* apfsKeyData = NULL;
+
+IOMemoryDescriptor* IOGetAPFSKeyStoreData();
+void IOSetAPFSKeyStoreData(IOMemoryDescriptor* data);
+
 __END_DECLS
 
 #if 1
@@ -101,4 +108,53 @@ IOGetBootKeyStoreData(void)
   DEBG("%s: memory descriptor %p\n", __func__, memoryDescriptor);
 
   return memoryDescriptor;
+}
+
+// APFS volume key fetcher
+
+// Store in-memory key (could be used by IOHibernateDone)
+void
+IOSetAPFSKeyStoreData(IOMemoryDescriptor* data)
+{
+    // Do not allow re-fetching of the boot_args key by passing NULL here.
+    if (data != NULL)
+    {
+        apfsKeyData = data;
+        apfsKeyFetched = 0;
+    }
+}
+
+// Retrieve any key we may have (stored in boot_args or by Hibernate)
+IOMemoryDescriptor*
+IOGetAPFSKeyStoreData()
+{
+    // Check if someone got the key before us
+    if (!OSCompareAndSwap(0, 1, &apfsKeyFetched))
+        return NULL;
+
+    // Do we have in-memory key?
+    if (apfsKeyData)
+    {
+        IOMemoryDescriptor* data = apfsKeyData;
+        apfsKeyData = NULL;
+        return data;
+    }
+
+    // Looks like there was no in-memory key and it's the first call - try boot_args
+    boot_args* args = (boot_args*)PE_state.bootArgs;
+
+    DEBG("%s: data at address %u size %u\n", __func__, args->apfsDataStart, args->apfsDataSize);
+    if (args->apfsDataStart == 0)
+        return NULL;
+
+    // We have the key in the boot_args, create IOMemoryDescriptor for the blob
+    IOAddressRange ranges;
+    ranges.address = args->apfsDataStart;
+    ranges.length = args->apfsDataSize;
+
+    const IOOptionBits options = kIODirectionInOut | kIOMemoryTypePhysical64 | kIOMemoryMapperNone;
+
+    IOMemoryDescriptor* memoryDescriptor = IOMemoryDescriptor::withOptions(&ranges, 1, 0, NULL, options);
+    DEBG("%s: memory descriptor %p\n", __func__, memoryDescriptor);
+    return memoryDescriptor;
 }

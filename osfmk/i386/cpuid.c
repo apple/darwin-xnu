@@ -361,6 +361,12 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 			 */
 			if (type == L2U)
 				info_p->cpuid_cache_L2_associativity = cache_associativity;
+            /*
+             * Adjust #sets to account for the N CBos
+             * This is because addresses are hashed across CBos
+             */
+            if (type == L3U && info_p->core_count)
+                cache_sets = cache_sets / info_p->core_count;
 
 			/* Compute the number of page colors for this cache,
 			 * which is:
@@ -791,8 +797,15 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 			break;
 		case CPUID_MODEL_SKYLAKE:
 		case CPUID_MODEL_SKYLAKE_DT:
+#if !defined(RC_HIDE_XNU_J137)
+		case CPUID_MODEL_SKYLAKE_W:
+#endif
 			cpufamily = CPUFAMILY_INTEL_SKYLAKE;
 			break;
+               case CPUID_MODEL_KABYLAKE:
+               case CPUID_MODEL_KABYLAKE_DT:
+                       cpufamily = CPUFAMILY_INTEL_KABYLAKE;
+                       break;
 		}
 		break;
 	}
@@ -838,9 +851,10 @@ cpuid_set_info(void)
 	} else {
 		info_p->cpuid_cpu_subtype = CPU_SUBTYPE_X86_ARCH1;
 	}
+	/* cpuid_set_cache_info must be invoked after set_generic_info */
 
-	/* Must be invoked after set_generic_info */
-	cpuid_set_cache_info(info_p);
+	if (info_p->cpuid_cpufamily == CPUFAMILY_INTEL_PENRYN)
+		cpuid_set_cache_info(info_p);
 
 	/*
 	 * Find the number of enabled cores and threads
@@ -859,6 +873,9 @@ cpuid_set_info(void)
 		}
 	default: {
 		uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
+		if (msr == 0)
+			/* Provide a non-zero default for some VMMs */
+			msr = (1 << 16) + 1;
 		info_p->core_count   = bitfield32((uint32_t)msr, 31, 16);
 		info_p->thread_count = bitfield32((uint32_t)msr, 15,  0);
 		break;
@@ -868,6 +885,10 @@ cpuid_set_info(void)
 		info_p->core_count   = info_p->cpuid_cores_per_package;
 		info_p->thread_count = info_p->cpuid_logical_per_package;
 	}
+
+	if (info_p->cpuid_cpufamily != CPUFAMILY_INTEL_PENRYN)
+		cpuid_set_cache_info(info_p);
+
 	DBG("cpuid_set_info():\n");
 	DBG("  core_count   : %d\n", info_p->core_count);
 	DBG("  thread_count : %d\n", info_p->thread_count);
@@ -970,6 +991,15 @@ leaf7_feature_map[] = {
 	{CPUID_LEAF7_FEATURE_RDSEED,   "RDSEED"},
 	{CPUID_LEAF7_FEATURE_ADX,      "ADX"},
 	{CPUID_LEAF7_FEATURE_IPT,      "IPT"},
+#if !defined(RC_HIDE_XNU_J137)
+	{CPUID_LEAF7_FEATURE_AVX512F,  "AVX512F"},
+	{CPUID_LEAF7_FEATURE_AVX512CD, "AVX512CD"},	
+	{CPUID_LEAF7_FEATURE_AVX512DQ, "AVX512DQ"},
+	{CPUID_LEAF7_FEATURE_AVX512BW, "AVX512BW"},
+	{CPUID_LEAF7_FEATURE_AVX512VL, "AVX512VL"},
+	{CPUID_LEAF7_FEATURE_AVX512IFMA, "AVX512IFMA"},
+	{CPUID_LEAF7_FEATURE_AVX512VBMI, "AVX512VBMI"},
+#endif /* not RC_HIDE_XNU_J137 */
 	{CPUID_LEAF7_FEATURE_SGX,      "SGX"},
 	{CPUID_LEAF7_FEATURE_PQM,      "PQM"},
 	{CPUID_LEAF7_FEATURE_FPU_CSDS, "FPU_CSDS"},

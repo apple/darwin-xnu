@@ -73,18 +73,6 @@ enum IODirection
      kIODirectionCompleteWithDataValid = 0x00000080,
 };
 
-
-#if XNU_KERNEL_PRIVATE
-enum
-{
-     // prepare/complete() notify DMA command active
-    kIODirectionDMACommand         = 0x00000100,
-    kIODirectionDMACommandMask     = 0x0001FE00,
-    kIODirectionDMACommandShift    = 9,
-};
-#endif
-
-
 #ifdef __LP64__
 typedef IOOptionBits IODirection;
 #endif /* __LP64__ */
@@ -124,6 +112,7 @@ enum {
 #ifdef XNU_KERNEL_PRIVATE
     kIOMemoryMapCopyOnWrite	= 0x00020000,
 #endif
+    kIOMemoryRemote		= 0x00040000,
     kIOMemoryThreadSafe		= 0x00100000,	// Shared with Buffer MD
     kIOMemoryClearEncrypt	= 0x00200000,	// Shared with Buffer MD
     kIOMemoryUseReserve  	= 0x00800000,	// Shared with Buffer MD
@@ -217,6 +206,7 @@ enum  {
     kIOMDSetDMAInactive           = kIOMDDMAActive,
     kIOMDAddDMAMapSpec            = 0x04000000,
     kIOMDDMAMap                   = 0x05000000,
+    kIOMDDMAUnmap                 = 0x06000000,
     kIOMDDMACommandOperationMask  = 0xFF000000,
 };
 struct IOMDDMACharacteristics {
@@ -286,17 +276,22 @@ protected:
 #ifdef XNU_KERNEL_PRIVATE
 public:
     struct IOMemoryReference *	_memRef;
+    vm_tag_t _kernelTag;
+    vm_tag_t _userTag;
+    int16_t _dmaReferences;
+    uint16_t _internalFlags;
+    kern_allocation_name_t _mapName;
 protected:
-#else
-    void * __iomd_reserved5;
-#endif
+#else /* XNU_KERNEL_PRIVATE */
+    void *      	__iomd_reserved5;
+    uint16_t		__iomd_reserved1[4];
+    uintptr_t		__iomd_reserved2;
+#endif /* XNU_KERNEL_PRIVATE */
 
-#ifdef __LP64__
-    uint64_t		__iomd_reserved1;
-    uint64_t		__iomd_reserved2;
-    uint64_t		__iomd_reserved3;
-    uint64_t		__iomd_reserved4;
-#else /* !__LP64__ */
+    uintptr_t		__iomd_reserved3;
+    uintptr_t		__iomd_reserved4;
+
+#ifndef __LP64__
     IODirection         _direction;        /* use _flags instead */
 #endif /* !__LP64__ */
     IOByteCount         _length;           /* length of all ranges */
@@ -399,6 +394,16 @@ typedef IOOptionBits DMACommandOps;
 	uint64_t                      length,
 	uint64_t                    * mapAddress,
 	uint64_t                    * mapLength);
+    IOReturn dmaUnmap(
+	IOMapper                    * mapper,
+	IODMACommand                * command,
+	uint64_t                      offset,
+	uint64_t                      mapAddress,
+	uint64_t                      mapLength);
+    void dmaMapRecord(
+	IOMapper                    * mapper,
+	IODMACommand                * command,
+	uint64_t                      mapLength);
 
     void     setVMTags(vm_tag_t kernelTag, vm_tag_t userTag);
     vm_tag_t getVMTag(vm_map_t map);
@@ -616,6 +621,13 @@ public:
     @result The tag. */
 
     virtual IOOptionBits getTag( void );
+
+/*! @function getFlags
+    @abstract Accessor to the retrieve the options the memory descriptor was created with.
+    @discussion Accessor to the retrieve the options the memory descriptor was created with, and flags with its state. These bits are defined by the kIOMemory* enum.
+    @result The flags bitfield. */
+
+    uint64_t getFlags(void);
 
 /*! @function readBytes
     @abstract Copy data from the memory descriptor's buffer to the specified buffer.

@@ -441,7 +441,7 @@ class IPCGraph:
 
     def print_dot_edge(self, nm, edge, ofile):
         #weight = 100 * edge.dweight / self.maxdweight
-        #if weight < 1:
+        ##if weight < 1:
         #    weight = 1
         weight = edge.dweight
         penwidth = edge.weight / 512
@@ -464,18 +464,20 @@ class IPCGraph:
 
         if edge.data('vcpy') > (edge.data('ool') + edge.data('std')):
             attrs += ',style="dotted"'
-        #ltype = []
-        #if edge.flags & (edge.F_DST_NDFLTQ | edge.F_SRC_NDFLTQ):
-        #    ltype.append('dotted')
-        #if edge.flags & edge.F_APP_SRC:
-        #    ltype.append('bold')
-        #if len(ltype) > 0:
-        #    attrs += ',style="' + reduce(lambda a, v: a + ',' + v, ltype) + '"'
-        #
-        #if edge.data('ool') > (edge.data('std') + edge.data('vcpy')):
-        #    attrs += ",color=blue"
-        #if edge.data('vcpy') > (edge.data('ool') + edge.data('std')):
-        #    attrs += ",color=green"
+        """ # block comment
+         ltype = []
+         if edge.flags & (edge.F_DST_NDFLTQ | edge.F_SRC_NDFLTQ):
+             ltype.append('dotted')
+         if edge.flags & edge.F_APP_SRC:
+             ltype.append('bold')
+         if len(ltype) > 0:
+             attrs += ',style="' + reduce(lambda a, v: a + ',' + v, ltype) + '"'
+
+         if edge.data('ool') > (edge.data('std') + edge.data('vcpy')):
+             attrs += ",color=blue"
+         if edge.data('vcpy') > (edge.data('ool') + edge.data('std')):
+             attrs += ",color=green"
+        """
 
         ofile.write("\t{:s} [{:s}];\n".format(nm, attrs))
 

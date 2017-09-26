@@ -122,6 +122,26 @@ __thread_set_tsd_base:
 	MACHDEP_SYSCALL_TRAP
 	ret
 
+#elif defined(__arm__)
+
+	.align 2
+	.globl __thread_set_tsd_base
+__thread_set_tsd_base:
+	mov	r3, #2
+	mov	r12, #0x80000000
+	swi	#SWI_SYSCALL
+	bx	lr
+
+#elif defined(__arm64__)
+
+	.align 2
+	.globl __thread_set_tsd_base
+__thread_set_tsd_base:
+	mov	x3, #2
+	mov	x16, #0x80000000
+	svc 	#SWI_SYSCALL
+	ret
+
 #else
 #error unknown architecture
 #endif

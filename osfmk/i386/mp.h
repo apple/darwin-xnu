@@ -112,7 +112,7 @@ extern  uint32_t spinlock_timeout_NMI(uintptr_t thread_addr);
 
 extern	uint64_t	LastDebuggerEntryAllowance;
 
-extern	void	mp_kdp_enter(void);
+extern	void	mp_kdp_enter(boolean_t proceed_on_failure);
 extern	void	mp_kdp_exit(void);
 
 extern	boolean_t	mp_recent_debugger_activity(void);
@@ -187,7 +187,14 @@ extern cpu_t mp_cpus_call1(
 		void		*arg1,
 		cpumask_t	*cpus_calledp);
 
-extern void mp_cpus_NMIPI(cpumask_t cpus);
+typedef enum {
+	NONE = 0,
+	SPINLOCK_TIMEOUT,
+	TLB_FLUSH_TIMEOUT,
+	CROSSCALL_TIMEOUT,
+	INTERRUPT_WATCHDOG
+} NMI_reason_t;
+extern void NMIPI_panic(cpumask_t cpus, NMI_reason_t reason);
 
 /* Interrupt a set of cpus, forcing an exit out of non-root mode */
 extern void mp_cpus_kick(cpumask_t cpus);

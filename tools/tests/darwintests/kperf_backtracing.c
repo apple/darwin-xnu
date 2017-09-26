@@ -1,8 +1,13 @@
+#ifdef T_NAMESPACE
+#undef T_NAMESPACE
+#endif
+
 #include <CoreSymbolication/CoreSymbolication.h>
 #include <darwintest.h>
 #include <dispatch/dispatch.h>
 #include <kperf/kperf.h>
-#include <ktrace.h>
+#include <ktrace/session.h>
+#include <System/sys/kdebug.h>
 #include <pthread.h>
 
 #include "kperf_helpers.h"
@@ -11,6 +16,10 @@
 #define PERF_STK_UHDR  UINT32_C(0x25020018)
 #define PERF_STK_KDATA UINT32_C(0x2502000c)
 #define PERF_STK_UDATA UINT32_C(0x25020010)
+
+T_GLOBAL_META(
+		T_META_NAMESPACE("xnu.kperf"),
+		T_META_CHECK_LEAKS(false));
 
 static void
 expect_frame(const char **bt, unsigned int bt_len, CSSymbolRef symbol,
@@ -218,7 +227,21 @@ static const char *user_bt[USER_FRAMES] = {
     NULL
 };
 
-#if   defined(__x86_64__)
+#if defined(__arm__)
+
+#define KERNEL_FRAMES (2)
+static const char *kernel_bt[KERNEL_FRAMES] = {
+    "unix_syscall", "kdebug_trace64"
+};
+
+#elif defined(__arm64__)
+
+#define KERNEL_FRAMES (4)
+static const char *kernel_bt[KERNEL_FRAMES] = {
+    "fleh_synchronous", "sleh_synchronous", "unix_syscall", "kdebug_trace64"
+};
+
+#elif defined(__x86_64__)
 
 #define KERNEL_FRAMES (2)
 static const char *kernel_bt[KERNEL_FRAMES] = {
@@ -310,9 +333,13 @@ start_backtrace_thread(void)
     dispatch_semaphore_signal(backtrace_go);
 }
 
+#if TARGET_OS_WATCH
+#define TEST_TIMEOUT_NS (30 * NSEC_PER_SEC)
+#else /* TARGET_OS_WATCH */
 #define TEST_TIMEOUT_NS (5 * NSEC_PER_SEC)
+#endif /* !TARGET_OS_WATCH */
 
-T_DECL(kdebug_trigger_backtraces,
+T_DECL(backtraces_kdebug_trigger,
     "test that backtraces from kdebug trigger are correct",
     T_META_ASROOT(true))
 {
@@ -372,7 +399,7 @@ T_DECL(kdebug_trigger_backtraces,
     dispatch_main();
 }
 
-T_DECL(user_backtraces_timer,
+T_DECL(backtraces_user_timer,
     "test that user backtraces on a timer are correct",
     T_META_ASROOT(true))
 {

@@ -451,7 +451,7 @@ int vn_authorize_mkdir(vnode_t, struct componentname *, struct vnode_attr *, vfs
 int vn_authorize_null(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
 int vnode_attr_authorize_dir_clone(struct vnode_attr *vap, kauth_action_t action,
     struct vnode_attr *dvap, vnode_t sdvp, mount_t mp, dir_clone_authorizer_op_t vattr_op,
-    vfs_context_t ctx, void *reserved);
+    uint32_t flags, vfs_context_t ctx, void *reserved);
 /* End of authorization subroutines */
 
 #define VN_CREATE_NOAUTH		(1<<0)
@@ -601,6 +601,8 @@ int vnode_trigger_resolve(vnode_t, struct nameidata *, vfs_context_t);
 void vnode_trigger_rearm(vnode_t, vfs_context_t);
 void vfs_nested_trigger_unmounts(mount_t, int, vfs_context_t);
 #endif /* CONFIG_TRIGGERS */
+
+int	build_path_with_parent(vnode_t, vnode_t /* parent */, char *, int, int *, int, vfs_context_t);
 
 #endif /* BSD_KERNEL_PRIVATE */
 

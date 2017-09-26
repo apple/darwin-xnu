@@ -1256,6 +1256,20 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_UNMOUNT:
 		UPATH1_VNODE1_TOKENS;
 		break;
+	case AUE_FMOUNT:
+		if (ARG_IS_VALID(kar, ARG_FD)) {
+			tok = au_to_arg32(2, "dir fd", ar->ar_arg_fd);
+			kau_write(rec, tok);
+		}
+		if (ARG_IS_VALID(kar, ARG_FFLAGS)) {
+			tok = au_to_arg32(3, "flags", ar->ar_arg_fflags);
+			kau_write(rec, tok);
+		}
+		if (ARG_IS_VALID(kar, ARG_TEXT)) {
+			tok = au_to_text(ar->ar_arg_text);
+			kau_write(rec, tok);
+		}
+		break;
 
 	case AUE_MSGCTL:
 		ar->ar_event = audit_msgctl_to_event(ar->ar_arg_svipc_cmd);
@@ -1412,6 +1426,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_SYMLINKAT:
 	case AUE_MKDIRAT:
 	case AUE_GETATTRLISTAT:
+	case AUE_SETATTRLISTAT:
 		if (ARG_IS_VALID(kar, ARG_FD)) {
 			tok = au_to_arg32(1, "dir fd", ar->ar_arg_fd);
 			kau_write(rec, tok);

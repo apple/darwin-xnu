@@ -213,6 +213,7 @@ extern boolean_t kpc_register_pm_handler(void (*handler)(boolean_t));
  *
  * @param handler
  * Notification callback to use when PMCs are acquired/released by a task.
+ * Power management must acknowledge the change using kpc_pm_acknowledge.
  *
  * @param pmc_mask
  * Bitmask of the configurable PMCs used by the Power Manager. The number of bits
@@ -236,6 +237,16 @@ extern boolean_t kpc_reserve_pm_counters(uint64_t pmc_mask, kpc_pm_handler_t han
  * reserved counters.
  */
 extern void kpc_release_pm_counters(void);
+
+/*
+ * Acknowledge the callback that PMCs are available to power management.
+ *
+ * @param available_to_pm Whether the counters were made available to power
+ * management in the callback.  Pass in whatever was passed into the handler
+ * function.  After this point, power management is able to use POWER_CLASS
+ * counters.
+ */
+extern void kpc_pm_acknowledge(boolean_t available_to_pm);
 
 /*
  * Is the PMU used by both the power manager and userspace?

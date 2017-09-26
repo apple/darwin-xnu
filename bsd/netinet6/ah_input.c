@@ -996,7 +996,7 @@ ah6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 	struct ip6_hdr *ip6;
 	struct mbuf *m;
 	struct ip6ctlparam *ip6cp = NULL;
-	int off;
+	int off = 0;
 	struct sockaddr_in6 *sa6_src, *sa6_dst;
 
 	if (sa->sa_family != AF_INET6 ||

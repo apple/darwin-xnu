@@ -174,6 +174,7 @@ to restrict I/O ops.
 #include <machine/pal_hibernate.h>
 #include <i386/tsc.h>
 #include <i386/cpuid.h>
+#include <san/kasan.h>
 
 extern "C" addr64_t		kvtophys(vm_offset_t va);
 extern "C" ppnum_t		pmap_find_phys(pmap_t pmap, addr64_t va);
@@ -213,7 +214,7 @@ static IOLock             *     gDebugImageLock;
 #endif /* defined(__i386__) || defined(__x86_64__) */
 
 static IOLock *                           gFSLock;
-static uint32_t                           gFSState;
+ uint32_t                           gFSState;
 static thread_call_t                      gIOHibernateTrimCalloutEntry;
 static IOPolledFileIOVars	          gFileVars;
 static IOHibernateVars			  gIOHibernateVars;
@@ -235,6 +236,7 @@ enum
 static IOReturn IOHibernateDone(IOHibernateVars * vars);
 static IOReturn IOWriteExtentsToFile(IOPolledFileIOVars * vars, uint32_t signature);
 static void     IOSetBootImageNVRAM(OSData * data);
+static void     IOHibernateSystemPostWakeTrim(void * p1, void * p2);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -635,20 +637,37 @@ IOHibernateSystemSleep(void)
 	    rtcVars.signature[3] = 'L';
 	    rtcVars.revision     = 1;
 	    bcopy(&vars->wiredCryptKey[0], &rtcVars.wiredCryptKey[0], sizeof(rtcVars.wiredCryptKey));
-	    if (gIOHibernateBootSignature[0])
+
+            if (gIOChosenEntry
+		&& (data = OSDynamicCast(OSData, gIOChosenEntry->getProperty(kIOHibernateBootSignatureKey)))
+		&& (sizeof(rtcVars.booterSignature) <= data->getLength()))
+	    {
+		bcopy(data->getBytesNoCopy(), &rtcVars.booterSignature[0], sizeof(rtcVars.booterSignature));
+	    }
+	    else if (gIOHibernateBootSignature[0])
 	    {
 		char c;
 		uint8_t value = 0;
-		for (uint32_t i = 0;
-		    (c = gIOHibernateBootSignature[i]) && (i < (sizeof(rtcVars.booterSignature) << 1));
-		    i++)
+		uint32_t in, out, digits;
+		for (in = out = digits = 0;
+		    (c = gIOHibernateBootSignature[in]) && (in < sizeof(gIOHibernateBootSignature));
+		    in++)
 		{
-		    if (c >= 'a')      c -= 'a' - 10;
-		    else if (c >= 'A') c -= 'A' - 10;
-		    else if (c >= '0') c -= '0';
-		    else               continue;
+		    if      ((c >= 'a') && (c <= 'f')) c -= 'a' - 10;
+		    else if ((c >= 'A') && (c <= 'F')) c -= 'A' - 10;
+		    else if ((c >= '0') && (c <= '9')) c -= '0';
+		    else
+		    {
+		        if (c == '=') out = digits = value = 0;
+		        continue;
+		    }
 		    value = (value << 4) | c;
-		    if (i & 1) rtcVars.booterSignature[i >> 1] = value;
+		    if (digits & 1)
+		    {
+		        rtcVars.booterSignature[out++] = value;
+		        if (out >= sizeof(rtcVars.booterSignature)) break;
+		    }
+		    digits++;
 		}
 	    }
 	    data = OSData::withBytes(&rtcVars, sizeof(rtcVars));
@@ -1272,7 +1291,7 @@ IOHibernateDone(IOHibernateVars * vars)
     return (kIOReturnSuccess);
 }
 
-void
+static void
 IOHibernateSystemPostWakeTrim(void * p1, void * p2)
 {
     // invalidate & close the image file
@@ -1293,7 +1312,7 @@ IOHibernateSystemPostWakeTrim(void * p1, void * p2)
 }
 
 IOReturn
-IOHibernateSystemPostWake(void)
+IOHibernateSystemPostWake(bool now)
 {
     gIOHibernateCurrentHeader->signature = kIOHibernateHeaderInvalidSignature;
     IOLockLock(gFSLock);
@@ -1301,11 +1320,14 @@ IOHibernateSystemPostWake(void)
     else if (kFSOpened != gFSState) gFSState = kFSIdle;
     else
     {
-	AbsoluteTime deadline;
-
         gFSState = kFSTrimDelay;
-	clock_interval_to_deadline(TRIM_DELAY, kMillisecondScale, &deadline );
-	thread_call_enter1_delayed(gIOHibernateTrimCalloutEntry, NULL, deadline);
+	if (now) IOHibernateSystemPostWakeTrim(NULL, NULL);
+	else
+	{
+	    AbsoluteTime deadline;
+	    clock_interval_to_deadline(TRIM_DELAY, kMillisecondScale, &deadline );
+	    thread_call_enter1_delayed(gIOHibernateTrimCalloutEntry, NULL, deadline);
+	}
     }
     IOLockUnlock(gFSLock);
 
@@ -1478,7 +1500,7 @@ hibernate_write_image(void)
     if (kIOHibernateModeSleep & gIOHibernateMode)
 	kdebug_enable = save_kdebug_enable;
 
-    KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 1) | DBG_FUNC_START, 0, 0, 0, 0, 0);
+    KDBG(IOKDBG_CODE(DBG_HIBERNATE, 1) | DBG_FUNC_START);
     IOService::getPMRootDomain()->tracePoint(kIOPMTracePointHibernate);
 
     restore1Sum = sum1 = sum2 = 0;
@@ -1748,6 +1770,16 @@ hibernate_write_image(void)
                                         kIOHibernatePageStateFree);
             pageCount -= atop_32(segLen);
         }
+
+#if KASAN
+		vm_size_t shadow_pages_free = atop_64(shadow_ptop) - atop_64(shadow_pnext);
+
+		/* no need to save unused shadow pages */
+		hibernate_set_page_state(vars->page_list, vars->page_list_wired,
+						atop_64(shadow_pnext),
+						shadow_pages_free,
+						kIOHibernatePageStateFree);
+#endif
 
         src = (uint8_t *) vars->srcBuffer->getBytesNoCopy();
 	compressed = src + page_size;
@@ -2040,8 +2072,8 @@ hibernate_write_image(void)
     // should we come back via regular wake, set the state in memory.
     gIOHibernateState = kIOHibernateStateInactive;
 
-    KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 1) | DBG_FUNC_END,
-			  wiredPagesEncrypted, wiredPagesClear, dirtyPagesEncrypted, 0, 0);
+	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 1) | DBG_FUNC_END, wiredPagesEncrypted,
+			wiredPagesClear, dirtyPagesEncrypted);
 
     if (kIOReturnSuccess == err)
     {
@@ -2122,6 +2154,11 @@ hibernate_machine_init(void)
     gIOHibernateStats->image1Size  = gIOHibernateCurrentHeader->image1Size;
     gIOHibernateStats->imageSize   = gIOHibernateCurrentHeader->imageSize;
     gIOHibernateStats->image1Pages = pagesDone;
+
+	/* HIBERNATE_stats */
+	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 14), gIOHibernateStats->smcStart,
+			gIOHibernateStats->booterStart, gIOHibernateStats->booterDuration,
+			gIOHibernateStats->trampolineDuration);
 
     HIBLOG("booter start at %d ms smc %d ms, [%d, %d, %d] total %d ms, dsply %d, %d ms, tramp %d ms\n", 
 	   gIOHibernateStats->booterStart,
@@ -2403,7 +2440,7 @@ hibernate_machine_init(void)
 		nsec / 1000000ULL, 
 		nsec ? (((vars->fileVars->cryptBytes * 1000000000ULL) / 1024 / 1024) / nsec) : 0);
 
-    KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_NONE, pagesRead, pagesDone, 0, 0, 0);
+    KDBG(IOKDBG_CODE(DBG_HIBERNATE, 2), pagesRead, pagesDone);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */

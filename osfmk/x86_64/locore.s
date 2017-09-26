@@ -53,8 +53,8 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
+
 #include <debug.h>
-#include <mach_rt.h>
 #include <mach_kdp.h>
 #include <mach_assert.h>
 
@@ -62,6 +62,7 @@
 #include <i386/asm.h>
 #include <i386/cpuid.h>
 #include <i386/eflags.h>
+#include <i386/postcode.h>
 #include <i386/proc_reg.h>
 #include <i386/trap.h>
 #include <assym.s>
@@ -351,4 +352,13 @@ L_copyin_word_fail:
  */
 	RECOVERY_SECTION
 	RECOVER_TABLE_END
+
+
+/*
+ * Vector here on any exception at startup prior to switching to
+ * the kernel's idle page-tables and installing the kernel master IDT.
+ */
+Entry(vstart_trap_handler)
+	POSTCODE(BOOT_TRAP_HLT)
+	hlt
 

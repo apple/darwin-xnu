@@ -1045,79 +1045,17 @@ BYPASS_COW_COPYIN:
 }
 
 
-/*
- *	Routine:	memory_object_synchronize_completed [user interface]
- *
- *	Tell kernel that previously synchronized data
- *	(memory_object_synchronize) has been queue or placed on the
- *	backing storage.
- *
- *	Note: there may be multiple synchronize requests for a given
- *	memory object outstanding but they will not overlap.
- */
-
-kern_return_t
-memory_object_synchronize_completed(
-	memory_object_control_t	control,
-	memory_object_offset_t	offset,
-	memory_object_size_t    length)
-{
-	vm_object_t			object;
-	msync_req_t			msr;
-
-	object = memory_object_control_to_vm_object(control);
-
-        XPR(XPR_MEMORY_OBJECT,
-	    "m_o_sync_completed, object 0x%X, offset 0x%X length 0x%X\n",
-	    object, offset, length, 0, 0);
-
-	/*
-	 *      Look for bogus arguments
-	 */
-
-	if (object == VM_OBJECT_NULL)
-		return (KERN_INVALID_ARGUMENT);
-
-	vm_object_lock(object);
-
-/*
- *	search for sync request structure
- */
-	queue_iterate(&object->msr_q, msr, msync_req_t, msr_q) {
- 		if (msr->offset == offset && msr->length == length) {
-			queue_remove(&object->msr_q, msr, msync_req_t, msr_q);
-			break;
-		}
-        }/* queue_iterate */
-
-	if (queue_end(&object->msr_q, (queue_entry_t)msr)) {
-		vm_object_unlock(object);
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	msr_lock(msr);
-	vm_object_unlock(object);
-	msr->flag = VM_MSYNC_DONE;
-	msr_unlock(msr);
-	thread_wakeup((event_t) msr);
-
-	return KERN_SUCCESS;
-}/* memory_object_synchronize_completed */
-
 static kern_return_t
 vm_object_set_attributes_common(
 	vm_object_t	object,
 	boolean_t	may_cache,
-	memory_object_copy_strategy_t copy_strategy,
-	boolean_t	temporary,
-	__unused boolean_t	silent_overwrite,
-	boolean_t	advisory_pageout)
+	memory_object_copy_strategy_t copy_strategy)
 {
 	boolean_t	object_became_ready;
 
         XPR(XPR_MEMORY_OBJECT,
 	    "m_o_set_attr_com, object 0x%X flg %x strat %d\n",
-	    object, (may_cache&1)|((temporary&1)<1), copy_strategy, 0, 0);
+	    object, (may_cache&1), copy_strategy, 0, 0);
 
 	if (object == VM_OBJECT_NULL)
 		return(KERN_INVALID_ARGUMENT);
@@ -1136,8 +1074,6 @@ vm_object_set_attributes_common(
 
 	if (may_cache)
 		may_cache = TRUE;
-	if (temporary)
-		temporary = TRUE;
 
 	vm_object_lock(object);
 
@@ -1148,9 +1084,6 @@ vm_object_set_attributes_common(
 	object_became_ready = !object->pager_ready;
 	object->copy_strategy = copy_strategy;
 	object->can_persist = may_cache;
-	object->temporary = temporary;
-//	object->silent_overwrite = silent_overwrite;
-	object->advisory_pageout = advisory_pageout;
 
 	/*
 	 *	Wake up anyone waiting for the ready attribute
@@ -1166,6 +1099,18 @@ vm_object_set_attributes_common(
 
 	return(KERN_SUCCESS);
 }
+
+
+kern_return_t
+memory_object_synchronize_completed(
+			__unused    memory_object_control_t control,
+			__unused    memory_object_offset_t  offset,
+			__unused    memory_object_size_t    length)
+{
+        panic("memory_object_synchronize_completed no longer supported\n");
+	return(KERN_FAILURE);
+}
+
 
 /*
  *	Set the memory object attribute as provided.
@@ -1184,12 +1129,9 @@ memory_object_change_attributes(
 {
 	vm_object_t             	object;
 	kern_return_t   		result = KERN_SUCCESS;
-	boolean_t       		temporary;
 	boolean_t       		may_cache;
 	boolean_t       		invalidate;
 	memory_object_copy_strategy_t	copy_strategy;
-	boolean_t       		silent_overwrite;
-	boolean_t			advisory_pageout;
 
 	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL)
@@ -1197,12 +1139,8 @@ memory_object_change_attributes(
 
 	vm_object_lock(object);
 
-	temporary = object->temporary;
 	may_cache = object->can_persist;
 	copy_strategy = object->copy_strategy;
-//	silent_overwrite = object->silent_overwrite;
-	silent_overwrite = FALSE;
-	advisory_pageout = object->advisory_pageout;
 #if notyet
 	invalidate = object->invalidate;
 #endif
@@ -1220,7 +1158,6 @@ memory_object_change_attributes(
 
                 behave = (old_memory_object_behave_info_t) attributes;
 
-		temporary = behave->temporary;
 		invalidate = behave->invalidate;
 		copy_strategy = behave->copy_strategy;
 
@@ -1238,11 +1175,8 @@ memory_object_change_attributes(
 
                 behave = (memory_object_behave_info_t) attributes;
 
-		temporary = behave->temporary;
 		invalidate = behave->invalidate;
 		copy_strategy = behave->copy_strategy;
-		silent_overwrite = behave->silent_overwrite;
-		advisory_pageout = behave->advisory_pageout;
 		break;
 	    }
 
@@ -1292,7 +1226,6 @@ memory_object_change_attributes(
 
 		copy_strategy = attr->copy_strategy;
                 may_cache = attr->may_cache_object;
-		temporary = attr->temporary;
 
 		break;
 	    }
@@ -1307,9 +1240,6 @@ memory_object_change_attributes(
 
 	if (copy_strategy == MEMORY_OBJECT_COPY_TEMPORARY) {
 		copy_strategy = MEMORY_OBJECT_COPY_DELAY;
-		temporary = TRUE;
-	} else {
-		temporary = FALSE;
 	}
 
 	/*
@@ -1318,10 +1248,7 @@ memory_object_change_attributes(
 	 */
 	return (vm_object_set_attributes_common(object,
 						     may_cache,
-						     copy_strategy,
-						     temporary,
-						     silent_overwrite,
-						     advisory_pageout));
+						     copy_strategy));
 }
 
 kern_return_t
@@ -1352,7 +1279,7 @@ memory_object_get_attributes(
 
 		behave = (old_memory_object_behave_info_t) attributes;
 		behave->copy_strategy = object->copy_strategy;
-		behave->temporary = object->temporary;
+		behave->temporary = FALSE;
 #if notyet	/* remove when vm_msync complies and clean in place fini */
                 behave->invalidate = object->invalidate;
 #else
@@ -1374,14 +1301,13 @@ memory_object_get_attributes(
 
                 behave = (memory_object_behave_info_t) attributes;
                 behave->copy_strategy = object->copy_strategy;
-		behave->temporary = object->temporary;
+		behave->temporary = FALSE;
 #if notyet	/* remove when vm_msync complies and clean in place fini */
                 behave->invalidate = object->invalidate;
 #else
 		behave->invalidate = FALSE;
 #endif
-		behave->advisory_pageout = object->advisory_pageout;
-//		behave->silent_overwrite = object->silent_overwrite;
+		behave->advisory_pageout = FALSE;
 		behave->silent_overwrite = FALSE;
                 *count = MEMORY_OBJECT_BEHAVE_INFO_COUNT;
 		break;
@@ -1434,7 +1360,7 @@ memory_object_get_attributes(
         	attr->copy_strategy = object->copy_strategy;
 		attr->cluster_size = PAGE_SIZE;
         	attr->may_cache_object = object->can_persist;
-		attr->temporary = object->temporary;
+		attr->temporary = FALSE;
 
                 *count = MEMORY_OBJECT_ATTR_INFO_COUNT;
                 break;
@@ -1459,7 +1385,8 @@ memory_object_iopl_request(
 	upl_t			*upl_ptr,
 	upl_page_info_array_t	user_page_list,
 	unsigned int		*page_list_count,
-	upl_control_flags_t	*flags)
+	upl_control_flags_t	*flags,
+	vm_tag_t        	tag)
 {
 	vm_object_t		object;
 	kern_return_t		ret;
@@ -1512,45 +1439,9 @@ memory_object_iopl_request(
 		
 		named_entry_lock(named_entry);
 
-		if (named_entry->is_pager) {
-			object = vm_object_enter(named_entry->backing.pager, 
-					named_entry->offset + named_entry->size, 
-					named_entry->internal, 
-					FALSE,
-					FALSE);
-			if (object == VM_OBJECT_NULL) {
-				named_entry_unlock(named_entry);
-				return(KERN_INVALID_OBJECT);
-			}
-
-			/* JMM - drop reference on pager here? */
-
-			/* create an extra reference for the named entry */
-			vm_object_lock(object);
-			vm_object_reference_locked(object);
-			named_entry->backing.object = object;
-			named_entry->is_pager = FALSE;
-			named_entry_unlock(named_entry);
-
-			/* wait for object to be ready */
-			while (!object->pager_ready) {
-				vm_object_wait(object,
-						VM_OBJECT_EVENT_PAGER_READY,
-						THREAD_UNINT);
-				vm_object_lock(object);
-			}
-			vm_object_unlock(object);
-		} else {
-			/* This is the case where we are going to map */
-			/* an already mapped object.  If the object is */
-			/* not ready it is internal.  An external     */
-			/* object cannot be mapped until it is ready  */
-			/* we can therefore avoid the ready check     */
-			/* in this case.  */
-			object = named_entry->backing.object;
-			vm_object_reference(object);
-			named_entry_unlock(named_entry);
-		}
+		object = named_entry->backing.object;
+		vm_object_reference(object);
+		named_entry_unlock(named_entry);
 	} else if (ip_kotype(port) == IKOT_MEM_OBJ_CONTROL) {
 		memory_object_control_t	control;
 		control = (memory_object_control_t) port;
@@ -1582,7 +1473,8 @@ memory_object_iopl_request(
 				     upl_ptr,
 				     user_page_list,
 				     page_list_count,
-				     caller_flags);
+				     caller_flags,
+				     tag);
 	vm_object_deallocate(object);
 	return ret;
 }
@@ -1604,7 +1496,8 @@ memory_object_upl_request(
 	upl_t			*upl_ptr,
 	upl_page_info_array_t	user_page_list,
 	unsigned int		*page_list_count,
-	int			cntrl_flags)
+	int			cntrl_flags,
+	int		        tag)
 {
 	vm_object_t		object;
 
@@ -1618,7 +1511,8 @@ memory_object_upl_request(
 				     upl_ptr,
 				     user_page_list,
 				     page_list_count,
-				     (upl_control_flags_t)(unsigned int) cntrl_flags);
+				     (upl_control_flags_t)(unsigned int) cntrl_flags,
+				     tag);
 }
 
 /*  
@@ -1641,7 +1535,8 @@ memory_object_super_upl_request(
 	upl_t			*upl,
 	upl_page_info_t		*user_page_list,
 	unsigned int		*page_list_count,
-	int			cntrl_flags)
+	int			cntrl_flags,
+	int		        tag)
 {
 	vm_object_t		object;
 
@@ -1656,7 +1551,8 @@ memory_object_super_upl_request(
 					   upl,
 					   user_page_list,
 					   page_list_count,
-					   (upl_control_flags_t)(unsigned int) cntrl_flags);
+					   (upl_control_flags_t)(unsigned int) cntrl_flags,
+					   tag);
 }
 
 kern_return_t
@@ -1678,12 +1574,6 @@ memory_object_cluster_size(memory_object_control_t control, memory_object_offset
 
 	return (KERN_SUCCESS);
 }
-
-
-int vm_stat_discard_cleared_reply = 0;
-int vm_stat_discard_cleared_unset = 0;
-int vm_stat_discard_cleared_too_late = 0;
-
 
 
 /*
@@ -2102,6 +1992,22 @@ memory_object_control_to_vm_object(
 	return (control->moc_object);
 }
 
+__private_extern__ vm_object_t
+memory_object_to_vm_object(
+	memory_object_t mem_obj)
+{
+	memory_object_control_t mo_control;
+
+	if (mem_obj == MEMORY_OBJECT_NULL) {
+		return VM_OBJECT_NULL;
+	}
+	mo_control = mem_obj->mo_control;
+	if (mo_control == NULL) {
+		return VM_OBJECT_NULL;
+	}
+	return memory_object_control_to_vm_object(mo_control);
+}
+
 memory_object_control_t
 convert_port_to_mo_control(
 	__unused mach_port_t	port)
@@ -2296,6 +2202,8 @@ kern_return_t memory_object_synchronize
 	vm_sync_t sync_flags
 )
 {
+        panic("memory_object_syncrhonize no longer supported\n");
+
 	return (memory_object->mo_pager_ops->memory_object_synchronize)(
 		memory_object,
 		offset,

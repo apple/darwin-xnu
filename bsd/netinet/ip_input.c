@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -239,6 +239,11 @@ static uint32_t ip_adj_clear_hwcksum = 0;
 SYSCTL_UINT(_net_inet_ip, OID_AUTO, adj_clear_hwcksum,
 	CTLFLAG_RW | CTLFLAG_LOCKED, &ip_adj_clear_hwcksum, 0,
 	"Invalidate hwcksum info when adjusting length");
+
+static uint32_t ip_adj_partial_sum = 1;
+SYSCTL_UINT(_net_inet_ip, OID_AUTO, adj_partial_sum,
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip_adj_partial_sum, 0,
+	"Perform partial sum adjustment of trailing bytes at IP layer");
 
 /*
  * XXX - Setting ip_checkinterface mostly implements the receive side of
@@ -844,6 +849,76 @@ ip_input_setdst_chain(struct mbuf *m, uint32_t ifindex, struct in_ifaddr *ia)
 	}
 }
 
+static void
+ip_input_adjust(struct mbuf *m, struct ip *ip, struct ifnet *inifp)
+{
+	boolean_t adjust = TRUE;
+
+	ASSERT(m_pktlen(m) > ip->ip_len);
+
+	/*
+	 * Invalidate hardware checksum info if ip_adj_clear_hwcksum
+	 * is set; useful to handle buggy drivers.  Note that this
+	 * should not be enabled by default, as we may get here due
+	 * to link-layer padding.
+	 */
+	if (ip_adj_clear_hwcksum &&
+	    (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) &&
+	    !(inifp->if_flags & IFF_LOOPBACK) &&
+	    !(m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
+		m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
+		m->m_pkthdr.csum_data = 0;
+		ipstat.ips_adj_hwcsum_clr++;
+	}
+
+	/*
+	 * If partial checksum information is available, subtract
+	 * out the partial sum of postpended extraneous bytes, and
+	 * update the checksum metadata accordingly.  By doing it
+	 * here, the upper layer transport only needs to adjust any
+	 * prepended extraneous bytes (else it will do both.)
+	 */
+	if (ip_adj_partial_sum &&
+	    (m->m_pkthdr.csum_flags & (CSUM_DATA_VALID|CSUM_PARTIAL)) ==
+	    (CSUM_DATA_VALID|CSUM_PARTIAL)) {
+		m->m_pkthdr.csum_rx_val = m_adj_sum16(m,
+		    m->m_pkthdr.csum_rx_start, m->m_pkthdr.csum_rx_start,
+		    (ip->ip_len - m->m_pkthdr.csum_rx_start),
+		    m->m_pkthdr.csum_rx_val);
+	} else if ((m->m_pkthdr.csum_flags &
+	    (CSUM_DATA_VALID|CSUM_PARTIAL)) ==
+	    (CSUM_DATA_VALID|CSUM_PARTIAL)) {
+		/*
+		 * If packet has partial checksum info and we decided not
+		 * to subtract the partial sum of postpended extraneous
+		 * bytes here (not the default case), leave that work to
+		 * be handled by the other layers.  For now, only TCP, UDP
+		 * layers are capable of dealing with this.  For all other
+		 * protocols (including fragments), trim and ditch the
+		 * partial sum as those layers might not implement partial
+		 * checksumming (or adjustment) at all.
+		 */
+		if ((ip->ip_off & (IP_MF | IP_OFFMASK)) == 0 &&
+		    (ip->ip_p == IPPROTO_TCP || ip->ip_p == IPPROTO_UDP)) {
+			adjust = FALSE;
+		} else {
+			m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
+			m->m_pkthdr.csum_data = 0;
+			ipstat.ips_adj_hwcsum_clr++;
+		}
+	}
+
+	if (adjust) {
+		ipstat.ips_adj++;
+		if (m->m_len == m->m_pkthdr.len) {
+			m->m_len = ip->ip_len;
+			m->m_pkthdr.len = ip->ip_len;
+		} else {
+			m_adj(m, ip->ip_len - m->m_pkthdr.len);
+		}
+	}
+}
+
 /*
  * First pass does all essential packet validation and places on a per flow
  * queue for doing operations that have same outcome for all packets of a flow.
@@ -1123,27 +1198,7 @@ ipfw_tags_done:
 	}
 
 	if (m->m_pkthdr.len > ip->ip_len) {
-		/*
-		 * Invalidate hardware checksum info if ip_adj_clear_hwcksum
-		 * is set; useful to handle buggy drivers.  Note that this
-		 * should not be enabled by default, as we may get here due
-		 * to link-layer padding.
-		 */
-		if (ip_adj_clear_hwcksum &&
-		    (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) &&
-		    !(inifp->if_flags & IFF_LOOPBACK) &&
-		    !(m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
-			m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
-			m->m_pkthdr.csum_data = 0;
-			ipstat.ips_adj_hwcsum_clr++;
-		}
-
-		ipstat.ips_adj++;
-		if (m->m_len == m->m_pkthdr.len) {
-			m->m_len = ip->ip_len;
-			m->m_pkthdr.len = ip->ip_len;
-		} else
-			m_adj(m, ip->ip_len - m->m_pkthdr.len);
+		ip_input_adjust(m, ip, inifp);
 	}
 
 	/* for consistency */
@@ -1161,6 +1216,8 @@ check_with_pf:
 	if (PF_IS_ENABLED) {
 		int error;
 		ip_input_cpout_args(args, &args1, &init);
+		ip = mtod(m, struct ip *);
+		src_ip = ip->ip_src;
 
 #if DUMMYNET
 		error = pf_af_hook(inifp, NULL, &m, AF_INET, TRUE, &args1);
@@ -2014,27 +2071,7 @@ tooshort:
 		goto bad;
 	}
 	if (m->m_pkthdr.len > ip->ip_len) {
-		/*
-		 * Invalidate hardware checksum info if ip_adj_clear_hwcksum
-		 * is set; useful to handle buggy drivers.  Note that this
-		 * should not be enabled by default, as we may get here due
-		 * to link-layer padding.
-		 */
-		if (ip_adj_clear_hwcksum &&
-		    (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) &&
-		    !(inifp->if_flags & IFF_LOOPBACK) &&
-		    !(m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
-			m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
-			m->m_pkthdr.csum_data = 0;
-			ipstat.ips_adj_hwcsum_clr++;
-		}
-
-		ipstat.ips_adj++;
-		if (m->m_len == m->m_pkthdr.len) {
-			m->m_len = ip->ip_len;
-			m->m_pkthdr.len = ip->ip_len;
-		} else
-			m_adj(m, ip->ip_len - m->m_pkthdr.len);
+		ip_input_adjust(m, ip, inifp);
 	}
 
 	/* for consistency */
@@ -2446,7 +2483,7 @@ bad:
 static void
 ipq_updateparams(void)
 {
-	lck_mtx_assert(&ipqlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ipqlock, LCK_MTX_ASSERT_OWNED);
 	/*
 	 * -1 for unlimited allocation.
 	 */
@@ -2519,7 +2556,7 @@ done:
  * When IPDIVERT enabled, keep additional state with each packet that
  * tells us if we need to divert or tee the packet we're building.
  *
- * The IP header is *NOT* adjusted out of iplen.
+ * The IP header is *NOT* adjusted out of iplen (but in host byte order).
  */
 static struct mbuf *
 #if IPDIVERT
@@ -2617,35 +2654,49 @@ found:
 	 *
 	 * Perform 1's complement adjustment of octets that got included/
 	 * excluded in the hardware-calculated checksum value.  Ignore cases
-	 * where the value includes or excludes the IP header span, as the
-	 * sum for those octets would already be 0xffff and thus no-op.
+	 * where the value includes the entire IPv4 header span, as the sum
+	 * for those octets would already be 0 by the time we get here; IP
+	 * has already performed its header checksum validation.  Also take
+	 * care of any trailing bytes and subtract out their partial sum.
 	 */
 	if (ip->ip_p == IPPROTO_UDP && hlen == sizeof (struct ip) &&
 	    (m->m_pkthdr.csum_flags &
 	    (CSUM_DATA_VALID | CSUM_PARTIAL | CSUM_PSEUDO_HDR)) ==
 	    (CSUM_DATA_VALID | CSUM_PARTIAL)) {
-		uint32_t start;
+		uint32_t start = m->m_pkthdr.csum_rx_start;
+		int32_t trailer = (m_pktlen(m) - ip->ip_len);
+		uint32_t swbytes = (uint32_t)trailer;
 
-		start = m->m_pkthdr.csum_rx_start;
 		csum = m->m_pkthdr.csum_rx_val;
 
-		if (start != 0 && start != hlen) {
+		ASSERT(trailer >= 0);
+		if ((start != 0 && start != hlen) || trailer != 0) {
 #if BYTE_ORDER != BIG_ENDIAN
 			if (start < hlen) {
 				HTONS(ip->ip_len);
 				HTONS(ip->ip_off);
 			}
-#endif
+#endif /* BYTE_ORDER != BIG_ENDIAN */
 			/* callee folds in sum */
-			csum = m_adj_sum16(m, start, hlen, csum);
+			csum = m_adj_sum16(m, start, hlen,
+			    (ip->ip_len - hlen), csum);
+			if (hlen > start)
+				swbytes += (hlen - start);
+			else
+				swbytes += (start - hlen);
 #if BYTE_ORDER != BIG_ENDIAN
 			if (start < hlen) {
 				NTOHS(ip->ip_off);
 				NTOHS(ip->ip_len);
 			}
-#endif
+#endif /* BYTE_ORDER != BIG_ENDIAN */
 		}
 		csum_flags = m->m_pkthdr.csum_flags;
+
+		if (swbytes != 0)
+			udp_in_cksum_stats(swbytes);
+		if (trailer != 0)
+			m_adj(m, -trailer);
 	} else {
 		csum = 0;
 		csum_flags = 0;
@@ -3019,7 +3070,7 @@ dropfrag:
 static void
 frag_freef(struct ipqhead *fhp, struct ipq *fp)
 {
-	lck_mtx_assert(&ipqlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ipqlock, LCK_MTX_ASSERT_OWNED);
 
 	fp->ipq_nfrags = 0;
 	if (fp->ipq_frags != NULL) {
@@ -3085,7 +3136,7 @@ frag_timeout(void *arg)
 static void
 frag_sched_timeout(void)
 {
-	lck_mtx_assert(&ipqlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&ipqlock, LCK_MTX_ASSERT_OWNED);
 
 	if (!frag_timeout_run && nipq > 0) {
 		frag_timeout_run = 1;
@@ -3632,16 +3683,11 @@ ip_srcroute(void)
 }
 
 /*
- * Strip out IP options, at higher
- * level protocol in the kernel.
- * Second argument is buffer to which options
- * will be moved, and return value is their length.
- * XXX should be deleted; last arg currently ignored.
+ * Strip out IP options, at higher level protocol in the kernel.
  */
 void
-ip_stripoptions(struct mbuf *m, struct mbuf *mopt)
+ip_stripoptions(struct mbuf *m)
 {
-#pragma unused(mopt)
 	int i;
 	struct ip *ip = mtod(m, struct ip *);
 	caddr_t opts;
@@ -3650,6 +3696,7 @@ ip_stripoptions(struct mbuf *m, struct mbuf *mopt)
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
+	/* use bcopy() since it supports overlapping range */
 	olen = (IP_VHL_HL(ip->ip_vhl) << 2) - sizeof (struct ip);
 	opts = (caddr_t)(ip + 1);
 	i = m->m_len - (sizeof (struct ip) + olen);
@@ -3658,6 +3705,27 @@ ip_stripoptions(struct mbuf *m, struct mbuf *mopt)
 	if (m->m_flags & M_PKTHDR)
 		m->m_pkthdr.len -= olen;
 	ip->ip_vhl = IP_MAKE_VHL(IPVERSION, sizeof (struct ip) >> 2);
+
+	/*
+	 * We expect ip_{off,len} to be in host order by now, and
+	 * that the original IP header length has been subtracted
+	 * out from ip_len.  Temporarily adjust ip_len for checksum
+	 * recalculation, and restore it afterwards.
+	 */
+	ip->ip_len += sizeof (struct ip);
+
+	/* recompute checksum now that IP header is smaller */
+#if BYTE_ORDER != BIG_ENDIAN
+	HTONS(ip->ip_len);
+	HTONS(ip->ip_off);
+#endif /* BYTE_ORDER != BIG_ENDIAN */
+	ip->ip_sum = in_cksum_hdr(ip);
+#if BYTE_ORDER != BIG_ENDIAN
+	NTOHS(ip->ip_off);
+	NTOHS(ip->ip_len);
+#endif /* BYTE_ORDER != BIG_ENDIAN */
+
+	ip->ip_len -= sizeof (struct ip);
 }
 
 u_char inetctlerrmap[PRC_NCMDS] = {

@@ -41,19 +41,20 @@ NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\
 		     IOCommandQueue.h IOLocksPrivate.h		\
 		     IOSyncer.h AppleKeyStoreInterface.h	\
 		     IOStatistics.h IOStatisticsPrivate.h	\
-		     IOKernelReporters.h
+		     IOKernelReporters.h			\
+		     IOInterruptAccounting.h
 
 # These should be additionally installed in IOKit.framework's public Headers
-INSTALL_MI_LIST	= IOBSD.h IOKitKeys.h IOKitServer.h IOReturn.h\
-		  IOSharedLock.h IOTypes.h OSMessageNotification.h\
-		  IODataQueueShared.h IOMessage.h IOInterruptAccounting.h\
+INSTALL_MI_LIST	= IOBSD.h IOKitKeys.h IOKitServer.h IOReturn.h	    \
+		  IOSharedLock.h IOTypes.h OSMessageNotification.h  \
+		  IODataQueueShared.h IOMessage.h
 
 # These should be additionally installed in IOKit.framework's PrivateHeaders
-INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h IOHibernatePrivate.h \
-					  IOLocksPrivate.h IOStatistics.h \
-					  AppleKeyStoreInterface.h  \
-					  IOReportTypes.h IOKernelReportStructs.h \
-					  IOReportMacros.h
+INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h IOHibernatePrivate.h   \
+		      IOLocksPrivate.h IOStatistics.h 		\
+		      AppleKeyStoreInterface.h  		\
+		      IOReportTypes.h IOKernelReportStructs.h   \
+		      IOReportMacros.h IOInterruptAccounting.h
 
 INSTALL_MI_DIR = .
 

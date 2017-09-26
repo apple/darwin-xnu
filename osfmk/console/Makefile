@@ -9,7 +9,8 @@ include $(MakeInc_def)
 DATAFILES =
 
 PRIVATE_DATAFILES = \
-	video_console.h
+	video_console.h \
+	serial_protos.h
 
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 

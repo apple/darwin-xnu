@@ -110,20 +110,23 @@ extern int ledger_key_lookup(ledger_template_t template, const char *key);
 #define	LEDGER_CREATE_ACTIVE_ENTRIES	0
 #define	LEDGER_CREATE_INACTIVE_ENTRIES	1
 extern ledger_t ledger_instantiate(ledger_template_t template, int entry_type);
+extern void ledger_template_complete(ledger_template_t template);
 extern kern_return_t ledger_disable_callback(ledger_t ledger, int entry);
 extern kern_return_t ledger_enable_callback(ledger_t ledger, int entry);
 extern kern_return_t ledger_get_limit(ledger_t ledger, int entry,
 	ledger_amount_t *limit);
 extern kern_return_t ledger_set_limit(ledger_t ledger, int entry,
 	ledger_amount_t limit, uint8_t warn_level_percentage);
-extern kern_return_t ledger_get_maximum(ledger_t ledger, int entry,
+extern kern_return_t ledger_get_recent_max(ledger_t ledger, int entry,
 	ledger_amount_t *max_observed_balance);
+extern kern_return_t ledger_get_lifetime_max(ledger_t ledger, int entry,
+	ledger_amount_t *max_lifetime_balance);
 extern kern_return_t ledger_get_actions(ledger_t ledger, int entry, int *actions);
 extern kern_return_t ledger_set_action(ledger_t ledger, int entry, int action);
 extern kern_return_t ledger_get_period(ledger_t ledger, int entry,
-    uint64_t *period);
+	uint64_t *period);
 extern kern_return_t ledger_set_period(ledger_t ledger, int entry,
-    uint64_t period);
+	uint64_t period);
 extern kern_return_t ledger_disable_refill(ledger_t l, int entry);
 extern kern_return_t ledger_entry_setactive(ledger_t ledger, int entry);
 extern void ledger_check_new_balance(ledger_t ledger, int entry);

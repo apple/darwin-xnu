@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -173,7 +173,7 @@ SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, squishy_flags, CTLFLAG_RW | CTLFLA
 SYSCTL_UINT(_vfs_generic_nfs_client, OID_AUTO, debug_ctl, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_debug_ctl, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, readlink_nocache, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_readlink_nocache, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, root_steals_gss_context, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_root_steals_ctx, 0, "");
-SYSCTL_STRING(_vfs_generic_nfs_client, OID_AUTO, default_nfs4domain, CTLFLAG_RW | CTLFLAG_LOCKED, nfs4_domain, sizeof(nfs4_domain), "");
+SYSCTL_STRING(_vfs_generic_nfs_client, OID_AUTO, default_nfs4domain, CTLFLAG_RW | CTLFLAG_LOCKED, nfs4_default_domain, sizeof(nfs4_default_domain), "");
 #endif /* NFSCLIENT */
 
 #if NFSSERVER
@@ -226,7 +226,7 @@ static int
 mapid2name(struct nfs_testmapid *map)
 {
 	int error;
-	int len = sizeof(map->ntm_name);
+	size_t len = sizeof(map->ntm_name);
 	
 	if (map->ntm_grpflag)
 		error = kauth_cred_gid2guid((gid_t)map->ntm_id, &map->ntm_guid);
@@ -242,12 +242,12 @@ mapid2name(struct nfs_testmapid *map)
 	
 }
 
-
 static int
 nfsclnt_testidmap(proc_t p, user_addr_t argp)
 {
 	struct nfs_testmapid mapid;
 	int error, coerror;
+	size_t len = sizeof(mapid.ntm_name);
 		
         /* Let root make this call. */
 	error = proc_suser(p);
@@ -257,10 +257,22 @@ nfsclnt_testidmap(proc_t p, user_addr_t argp)
 	error = copyin(argp, &mapid, sizeof(mapid));
 	if (error)
 		return (error);
-	if (mapid.ntm_name2id)
+	switch (mapid.ntm_lookup) {
+	case NTM_NAME2ID:
 		error = mapname2id(&mapid);
-	else
+		break;
+	case NTM_ID2NAME:
 		error = mapid2name(&mapid);
+		break;
+	case NTM_NAME2GUID:
+		error = nfs4_id2guid(mapid.ntm_name, &mapid.ntm_guid, mapid.ntm_grpflag);
+		break;
+	case NTM_GUID2NAME:
+		error = nfs4_guid2id(&mapid.ntm_guid, mapid.ntm_name, &len, mapid.ntm_grpflag);
+		break;
+	default:
+		return (EINVAL);
+	}
 
 	coerror = copyout(&mapid, argp, sizeof(mapid));
 
@@ -581,6 +593,11 @@ out:
 	vnode_put(vp);
 	if (error)
 		return (error);
+	/*
+	 * At first blush, this may appear to leak a kernel stack
+	 * address, but the copyout() never reaches &nfh.nfh_fhp
+	 * (sizeof(fhandle_t) < sizeof(nfh)).
+	 */
 	error = copyout((caddr_t)&nfh, uap->fhp, sizeof(fhandle_t));
 	return (error);
 }

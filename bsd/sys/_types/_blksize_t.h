@@ -27,5 +27,6 @@
  */
 #ifndef _BLKSIZE_T 
 #define _BLKSIZE_T 
+#include <sys/_types.h> /* __darwin_blksize_t */
 typedef __darwin_blksize_t        blksize_t; 
 #endif  /* _BLKSIZE_T */

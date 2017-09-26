@@ -44,7 +44,9 @@
 
 #include <kdp/kdp_core.h>
 #include <kdp/kdp_internal.h>
+#if (MACH_KDP && CONFIG_KDP_INTERACTIVE_DEBUGGING)
 #include <kdp/kdp_en_debugger.h>
+#endif
 #include <kdp/kdp_callout.h>
 #include <kdp/kdp_udp.h>
 #include <kdp/kdp_core.h>
@@ -76,7 +78,6 @@
 
 extern unsigned int not_in_kdp;
 extern int kdp_snapshot;
-extern void do_stackshot(void);
 
 #ifdef CONFIG_KDP_INTERACTIVE_DEBUGGING
 
@@ -313,7 +314,6 @@ __private_extern__ volatile unsigned int flag_kdp_trigger_reboot = 0;
 extern unsigned int disableConsoleOutput;
 
 extern void 		kdp_call(void);
-extern boolean_t 	kdp_call_kdb(void);
 
 void *	kdp_get_interface(void);
 void    kdp_set_gateway_mac(void *gatewaymac);
@@ -333,11 +333,6 @@ uint32_t kdp_feature_large_crashdumps, kdp_feature_large_pkt_size;
 char kdp_kernelversion_string[256];
 
 static boolean_t	gKDPDebug = FALSE;
-
-#if WITH_CONSISTENT_DBG
-#include <arm/caches_internal.h>
-extern volatile struct xnu_hw_shmem_dbg_command_info *hwsd_info;
-#endif
 
 #define KDP_DEBUG(...) if (gKDPDebug) printf(__VA_ARGS__);
 
@@ -420,6 +415,14 @@ kdp_register_send_receive(
 
 	PE_parse_boot_argn("debug", &debug, sizeof (debug));
 
+#if defined(__arm__) || defined(__arm64__)
+	{
+		uint32_t debug_flags;
+
+        	if (!PE_i_can_has_debugger(&debug_flags))
+			debug = 0;
+	}
+#endif
 
 	if (!debug)
 		return;
@@ -1198,6 +1201,9 @@ kdp_connection_wait(void)
 	printf("\nWaiting for remote debugger connection.\n");
 	kprintf("\nWaiting for remote debugger connection.\n");
 
+#ifdef ARM
+	printf("\nPlease go to https://panic.apple.com to report this panic\n");
+#endif
 
 	if (reattach_wait == 0) {
 		if((kdp_flag & KDP_GETC_ENA) && (0 != kdp_getc())) {
@@ -1351,19 +1357,18 @@ kdp_debugger_loop(
 		kdp_panic("kdp_raise_exception");
 
 	if (((kdp_flag & KDP_PANIC_DUMP_ENABLED)
-	     || (kdp_flag & PANIC_LOG_DUMP)
-	     || kdp_has_polled_corefile())
-	    && (panicstr != (char *) 0)) {
+	     || (kdp_flag & PANIC_LOG_DUMP))
+	    && panic_active()) {
 		kdp_panic_dump();
-		if (kdp_flag & REBOOT_POST_CORE)
+		if (kdp_flag & REBOOT_POST_CORE && dumped_kernel_core())
 			kdp_machine_reboot();
 	} else {
-		if ((kdp_flag & PANIC_CORE_ON_NMI) && (panicstr == (char *) 0)
+		if ((kdp_flag & PANIC_CORE_ON_NMI) && panic_active()
 			&& !kdp.is_conn) {
 
-			disable_debug_output = disableConsoleOutput = FALSE;
+			disableConsoleOutput = FALSE;
 			kdp_panic_dump();
-			if (kdp_flag & REBOOT_POST_CORE)
+			if (kdp_flag & REBOOT_POST_CORE && dumped_kernel_core())
 				kdp_machine_reboot();
 
 			if (!(kdp_flag & DBG_POST_CORE))
@@ -1400,7 +1405,7 @@ again:
 	if (1 == kdp_trigger_core_dump) {
 		kdp_flag |= KDP_PANIC_DUMP_ENABLED;
 		kdp_panic_dump();
-		if (kdp_flag & REBOOT_POST_CORE)
+		if (kdp_flag & REBOOT_POST_CORE && dumped_kernel_core())
 			kdp_machine_reboot();
 		kdp_trigger_core_dump = 0;
 	}
@@ -1826,39 +1831,30 @@ kdp_set_dump_info(const uint32_t flags, const char *filename,
 		TRUE : FALSE;
 
 	reattach_wait          = 1;
-	logPanicDataToScreen   = 1;
 	disableConsoleOutput   = 0;
-	disable_debug_output   = 0;
 	kdp_trigger_core_dump  = 1;
 }
 
 void
 kdp_get_dump_info(kdp_dumpinfo_reply_t *rp)
 {
-	if (rp->destip) {
-		if (panicd_specified)
-			strlcpy(rp->destip, panicd_ip_str,
-                                sizeof(panicd_ip_str));
-		else 
-			rp->destip[0] = '\0';
-	}
+	if (panicd_specified)
+		strlcpy(rp->destip, panicd_ip_str,
+		    sizeof(rp->destip));
+	else
+		rp->destip[0] = '\0';
 
-	if (rp->routerip) {
-		if (router_specified)
-			strlcpy(rp->routerip, router_ip_str,
-                                sizeof(router_ip_str));
-		else
-			rp->routerip[0] = '\0';
-	}
+	if (router_specified)
+		strlcpy(rp->routerip, router_ip_str,
+		    sizeof(rp->routerip));
+	else
+		rp->routerip[0] = '\0';
 
-	if (rp->name) {
-		if (corename_specified)
-			strlcpy(rp->name, corename_str,
-                                sizeof(corename_str));
-		else 
-			rp->name[0] = '\0';
-
-	}
+	if (corename_specified)
+		strlcpy(rp->name, corename_str,
+		    sizeof(rp->name));
+	else
+		rp->name[0] = '\0';
 
 	rp->port = panicd_port;
 
@@ -1893,26 +1889,13 @@ kdp_panic_dump(void)
 		
 	printf("Entering system dump routine\n");
 
-	/* try a local disk dump */
-	if (kdp_has_polled_corefile()) {
-	    flag_panic_dump_in_progress = TRUE;
-	    kern_dump(KERN_DUMP_DISK);
-	    abort_panic_transfer();
-	}
-
-	if (!strcmp("local", panicd_ip_str)) return;	/* disk only request */
-
 	if (!kdp_en_recv_pkt || !kdp_en_send_pkt) {
-		if (!kdp_has_polled_corefile()) {
-		    kdb_printf("Error: No transport device registered for kernel crashdump\n");
-		}
+		kdb_printf("Error: No transport device registered for kernel crashdump\n");
 		return;
 	}
 
 	if (!panicd_specified) {
-		if (!kdp_has_polled_corefile()) {
-		    kdb_printf("A dump server was not specified in the boot-args, terminating kernel core dump.\n");
-                }
+		kdb_printf("A dump server was not specified in the boot-args, terminating kernel core dump.\n");
 		goto panic_dump_exit;
 	}
 
@@ -1926,7 +1909,7 @@ kdp_panic_dump(void)
 	if (!corename_specified) {
 		coresuffix[0] = 0;
 		/* Panic log bit takes precedence over core dump bit */
-		if ((panicstr != (char *) 0) && (kdp_flag & PANIC_LOG_DUMP))
+		if ((debugger_panic_str != (char *) 0) && (kdp_flag & PANIC_LOG_DUMP))
 			strlcpy(coreprefix, "paniclog", sizeof(coreprefix));
 		else if (kdp_flag & SYSTEM_LOG_DUMP)
 			strlcpy(coreprefix, "systemlog", sizeof(coreprefix));
@@ -1994,11 +1977,11 @@ kdp_panic_dump(void)
 	}
 
 	/* Just the panic log requested */
-	if ((panicstr != (char *) 0) && (kdp_flag & PANIC_LOG_DUMP)) {
+	if ((debugger_panic_str != (char *) 0) && (kdp_flag & PANIC_LOG_DUMP)) {
 		kdb_printf_unbuffered("Transmitting panic log, please wait: ");
 		kdp_send_crashdump_data(KDP_DATA, corename_str, 
-					debug_buf_ptr - debug_buf_addr,
-					debug_buf_addr);
+					debug_buf_ptr - debug_buf_base,
+					debug_buf_base);
 		kdp_send_crashdump_pkt (KDP_EOF, NULL, 0, ((void *) 0));
 		printf("Please file a bug report on this panic, if possible.\n");
 		goto panic_dump_exit;
@@ -2036,6 +2019,12 @@ panic_dump_exit:
 	abort_panic_transfer();
 	kdp_reset();
 	return;
+}
+
+void
+begin_panic_transfer(void)
+{
+	flag_panic_dump_in_progress = TRUE;
 }
 
 void 
@@ -2167,18 +2156,23 @@ kdp_init(void)
 	boolean_t kdp_match_name_found = PE_parse_boot_argn("kdp_match_name", kdpname, sizeof(kdpname));
 	boolean_t kdp_not_serial = kdp_match_name_found ? (strncmp(kdpname, "serial", sizeof(kdpname))) : TRUE;
 
+#if CONFIG_EMBEDDED
+       //respect any custom debugger boot-args
+	if(kdp_match_name_found && kdp_not_serial)
+		return;
+#else /* CONFIG_EMBEDDED */
         // serial must be explicitly requested
         if(!kdp_match_name_found || kdp_not_serial)
 		return;
+#endif /* CONFIG_EMBEDDED */
 
-#if WITH_CONSISTENT_DBG
+#if CONFIG_EMBEDDED
 	if (kdp_not_serial && PE_consistent_debug_enabled() && debug_boot_arg) {
-		current_debugger = HW_SHM_CUR_DB;
 		return;
 	} else {
 		printf("Serial requested, consistent debug disabled or debug boot arg not present, configuring debugging over serial\n");
 	}
-#endif /* WITH_CONSISTENT_DBG */
+#endif /* CONFIG_EMBEDDED */
 
 	kprintf("Initializing serial KDP\n");
 
@@ -2206,48 +2200,68 @@ kdp_init(void)
 }
 #endif /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
 
-#if   !CONFIG_KDP_INTERACTIVE_DEBUGGING
-__attribute__((noreturn))
-static void
-panic_spin_forever()
+#if !(MACH_KDP && CONFIG_KDP_INTERACTIVE_DEBUGGING)
+static struct kdp_ether_addr kdp_current_mac_address = {{0, 0, 0, 0, 0, 0}};
+
+/* XXX ugly forward declares to stop warnings */
+void *kdp_get_interface(void);
+void kdp_set_ip_and_mac_addresses(struct kdp_in_addr *, struct kdp_ether_addr *);
+void kdp_set_gateway_mac(void *);
+void kdp_set_interface(void *);
+void kdp_register_send_receive(void *, void *);
+void kdp_unregister_send_receive(void *, void *);
+
+uint32_t kdp_stack_snapshot_bytes_traced(void);
+
+void
+kdp_register_send_receive(__unused void *send, __unused void *receive)
+{}
+
+void
+kdp_unregister_send_receive(__unused void *send, __unused void *receive)
+{}
+
+void *
+kdp_get_interface( void)
 {
-	kdb_printf("\nPlease go to https://panic.apple.com to report this panic\n");
-
-	for (;;) { }
+        return(void *)0;
 }
-#endif
 
-#if WITH_CONSISTENT_DBG && CONFIG_KDP_INTERACTIVE_DEBUGGING
-__attribute__((noreturn))
-static void
-panic_spin_shmcon()
+unsigned int
+kdp_get_ip_address(void )
+{ return 0; }
+
+struct kdp_ether_addr
+kdp_get_mac_addr(void)
 {
-	kdb_printf("\nPlease go to https://panic.apple.com to report this panic\n");
-	kdb_printf("Waiting for hardware shared memory debugger, handshake structure is at virt: %p, phys %p\n",
-			hwsd_info, (void *)kvtophys((vm_offset_t)hwsd_info));
-
-	assert(hwsd_info != NULL);
-	hwsd_info->xhsdci_status = XHSDCI_STATUS_KERNEL_READY;
-	hwsd_info->xhsdci_seq_no = 0;
-	FlushPoC_DcacheRegion((vm_offset_t) hwsd_info, sizeof(*hwsd_info));
-
-	for (;;) {
-		FlushPoC_DcacheRegion((vm_offset_t) hwsd_info, sizeof(*hwsd_info));
-		if (hwsd_info->xhsdci_status == XHSDCI_COREDUMP_BEGIN) {
-			kern_dump(KERN_DUMP_HW_SHMEM_DBG);
-		}
-
-		if ((hwsd_info->xhsdci_status == XHSDCI_COREDUMP_REMOTE_DONE) ||
-				(hwsd_info->xhsdci_status == XHSDCI_COREDUMP_ERROR)) {
-			hwsd_info->xhsdci_status = XHSDCI_STATUS_KERNEL_READY;
-			hwsd_info->xhsdci_seq_no = 0;
-			FlushPoC_DcacheRegion((vm_offset_t) hwsd_info, sizeof(*hwsd_info));
-		}
-	}
+	return kdp_current_mac_address;
 }
-#endif /* WITH_CONSISTENT_DBG && CONFIG_KDP_INTERACTIVE_DEBUGGING */
+
+void
+kdp_set_ip_and_mac_addresses(
+        __unused struct kdp_in_addr          *ipaddr,
+        __unused struct kdp_ether_addr       *macaddr)
+{}
+
+void
+kdp_set_gateway_mac(__unused void *gatewaymac)
+{}
+
+void
+kdp_set_interface(__unused void *ifp)
+{}
+
+void kdp_register_link(__unused kdp_link_t link, __unused kdp_mode_t mode)
+{}
+
+void kdp_unregister_link(__unused kdp_link_t link, __unused kdp_mode_t mode)
+{}
+
+#endif /* !(MACH_KDP && CONFIG_KDP_INTERACTIVE_DEBUGGING) */
 
 #if !CONFIG_KDP_INTERACTIVE_DEBUGGING
+extern __attribute__((noreturn)) void panic_spin_forever(void);
+
 __attribute__((noreturn))
 void
 kdp_raise_exception(
@@ -2266,50 +2280,16 @@ kdp_raise_exception(
 		)
 #endif
 {
+#if CONFIG_EMBEDDED
+	assert(PE_i_can_has_debugger(NULL));
+#endif
 
 #if CONFIG_KDP_INTERACTIVE_DEBUGGING
 
-	unsigned int	initial_not_in_kdp = not_in_kdp;
-	not_in_kdp = 0;
-
-	disable_preemption();
-
-	if (current_debugger != KDP_CUR_DB) {
-		/* try a local disk dump */
-		if (kdp_has_polled_corefile()) {
-#if WITH_CONSISTENT_DBG
-			if (current_debugger == HW_SHM_CUR_DB) {
-				hwsd_info->xhsdci_status = XHSDCI_STATUS_KERNEL_BUSY;
-			}
-#endif /* WITH_CONSISTENT_DBG */
-			flag_panic_dump_in_progress = TRUE;
-			kern_dump(KERN_DUMP_DISK);
-			abort_panic_transfer();
-		}
-#if WITH_CONSISTENT_DBG
-		if (current_debugger == HW_SHM_CUR_DB) {
-			panic_spin_shmcon();
-		}
-#endif /* WITH_CONSISTENT_DBG */
-
-
-		if (!panicDebugging) {
-			kdp_machine_reboot();
-		}
-	}
-
 	kdp_debugger_loop(exception, code, subcode, saved_state);
-	not_in_kdp = initial_not_in_kdp;
-	enable_preemption();
 #else /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
 	assert(current_debugger != KDP_CUR_DB);
 
-	/*
-	 * If kernel debugging is enabled via boot-args, but KDP debugging
-	 * is not compiled into the kernel, spin here waiting for debugging
-	 * via another method.  Why here?  Because we want to have watchdog
-	 * disabled (via KDP callout) while sitting waiting to be debugged.
-	 */
 	panic_spin_forever();
 #endif /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
 }

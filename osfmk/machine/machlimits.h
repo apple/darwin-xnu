@@ -30,6 +30,8 @@
 
 #if defined (__i386__) || defined (__x86_64__)
 #include "i386/machlimits.h"
+#elif defined (__arm__) || defined (__arm64__)
+#include "arm/machlimits.h"
 #else
 #error architecture not supported
 #endif

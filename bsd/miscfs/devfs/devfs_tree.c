@@ -328,7 +328,7 @@ dev_finddir(const char * path,
 	    while (*scan != '/' && *scan)
 		scan++;
 
-	    strlcpy(component, start, scan - start);
+	    strlcpy(component, start, (scan - start) + 1);
 	    if (*scan == '/')
 		scan++;
 

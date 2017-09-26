@@ -887,7 +887,7 @@ def PmapWalk(pmap, vaddr, verbose_level = vHUMAN):
         return PmapWalkX86_64(pmap, vaddr, verbose_level)
     elif kern.arch == 'arm':
         return PmapWalkARM(pmap, vaddr, verbose_level)
-    elif kern.arch == 'arm64':
+    elif kern.arch.startswith('arm64'):
         return PmapWalkARM64(pmap, vaddr, verbose_level)
     else:
         raise NotImplementedError("PmapWalk does not support {0}".format(kern.arch))
@@ -915,7 +915,7 @@ def DecodeTTE(cmd_args=None):
         raise ArgumentError("Too few arguments to decode_tte.")
     if kern.arch == 'arm':
         PmapDecodeTTEARM(kern.GetValueFromAddress(cmd_args[0], "unsigned long"), ArgumentStringToInt(cmd_args[1]), vSCRIPT)
-    elif kern.arch == 'arm64':
+    elif kern.arch.startswith('arm64'):
         PmapDecodeTTEARM64(long(kern.GetValueFromAddress(cmd_args[0], "unsigned long")), ArgumentStringToInt(cmd_args[1]))
     else:
         raise NotImplementedError("decode_tte does not support {0}".format(kern.arch))
@@ -936,7 +936,7 @@ def PVWalkARM(pa):
         print "PVH type: NULL"
         return
     elif pvh_type == 3:
-        print "PVH type: page-table descriptor"
+        print "PVH type: page-table descriptor ({:#x})".format(pvh & ~0x3)
         return
     elif pvh_type == 2:
         ptep = pvh & ~0x3
@@ -951,9 +951,10 @@ def PVWalkARM(pa):
                 pve_str = ' (alt acct) '
             else:
                 pve_str = ''
+            current_pvep = pvep
             pvep = unsigned(pve.pve_next) & ~0x1
             ptep = unsigned(pve.pve_ptep) & ~0x3
-            print "PTE {:#x}{:s}: {:#x}".format(ptep, pve_str, dereference(kern.GetValueFromAddress(ptep, 'pt_entry_t *')))
+            print "PVE {:#x}, PTE {:#x}{:s}: {:#x}".format(current_pvep, ptep, pve_str, dereference(kern.GetValueFromAddress(ptep, 'pt_entry_t *')))
 
 @lldb_command('pv_walk')
 def PVWalk(cmd_args=None):
@@ -962,7 +963,7 @@ def PVWalk(cmd_args=None):
     """
     if cmd_args == None or len(cmd_args) < 1:
         raise ArgumentError("Too few arguments to pv_walk.")
-    if kern.arch != 'arm' and kern.arch != 'arm64':
+    if not kern.arch.startswith('arm'):
         raise NotImplementedError("pv_walk does not support {0}".format(kern.arch))
     PVWalkARM(kern.GetValueFromAddress(cmd_args[0], 'unsigned long'))
 
@@ -981,13 +982,13 @@ def ShowPTEARM(pte):
     print "pmap: {:#x}".format(ptd.pmap)
     pt_index = (pte % kern.globals.page_size) / page_size
     pte_pgoff = pte % page_size
-    if kern.arch == 'arm64':
+    if kern.arch.startswith('arm64'):
         pte_pgoff = pte_pgoff / 8
         nttes = page_size / 8
     else:
         pte_pgoff = pte_pgoff / 4
         nttes = page_size / 4
-    if ptd.pt_cnt[pt_index].refcnt == 0x8000:
+    if ptd.pt_cnt[pt_index].refcnt == 0x4000:
         level = 2
         granule = nttes * page_size
     else:
@@ -996,7 +997,7 @@ def ShowPTEARM(pte):
     print "maps VA: {:#x}".format(long(unsigned(ptd.pt_map[pt_index].va)) + (pte_pgoff * granule))
     pteval = long(unsigned(dereference(kern.GetValueFromAddress(unsigned(pte), 'pt_entry_t *'))))
     print "value: {:#x}".format(pteval)
-    if kern.arch == 'arm64':
+    if kern.arch.startswith('arm64'):
         print "level: {:d}".format(level)
         PmapDecodeTTEARM64(pteval, level)
     elif kern.arch == 'arm':
@@ -1009,7 +1010,7 @@ def ShowPTE(cmd_args=None):
     """
     if cmd_args == None or len(cmd_args) < 1:
         raise ArgumentError("Too few arguments to showpte.")
-    if kern.arch != 'arm' and kern.arch != 'arm64':
+    if not kern.arch.startswith('arm'):
         raise NotImplementedError("showpte does not support {0}".format(kern.arch))
     ShowPTEARM(kern.GetValueFromAddress(cmd_args[0], 'unsigned long'))
 
@@ -1098,12 +1099,12 @@ def ScanPageTables(action, targetPmap=None):
     """
     print "Scanning all available translation tables.  This may take a long time..."
     def ScanPmap(pmap, action):
-        if kern.arch == 'arm64':
+        if kern.arch.startswith('arm64'):
             granule = kern.globals.arm64_root_pgtable_num_ttes * 8
         elif kern.arch == 'arm':
             granule = pmap.tte_index_max * 4
         action(pmap, 1, 'root', pmap.tte, unsigned(pmap.ttep), granule)
-        if kern.arch == 'arm64':
+        if kern.arch.startswith('arm64'):
             FindMappingAtLevelARM64(pmap, pmap.tte, kern.globals.arm64_root_pgtable_num_ttes, kern.globals.arm64_root_pgtable_level, action)
         elif kern.arch == 'arm':
             FindMappingAtLevelARM(pmap, pmap.tte, pmap.tte_index_max, 1, action)
@@ -1124,7 +1125,7 @@ def ShowAllMappings(cmd_args=None):
     """
     if cmd_args == None or len(cmd_args) < 1:
         raise ArgumentError("Too few arguments to showallmappings.")
-    if kern.arch != 'arm' and kern.arch != 'arm64':
+    if not kern.arch.startswith('arm'):
         raise NotImplementedError("showallmappings does not support {0}".format(kern.arch))
     pa = kern.GetValueFromAddress(cmd_args[0], 'unsigned long')
     targetPmap = None
@@ -1147,7 +1148,7 @@ def checkPVList(pmap, level, type, tte, paddr, granule):
     vm_first_phys = unsigned(kern.globals.vm_first_phys)
     vm_last_phys = unsigned(kern.globals.vm_last_phys)
     page_size = kern.globals.arm_hardware_page_size
-    if kern.arch == 'arm64':
+    if kern.arch.startswith('arm64'):
         page_offset_mask = (page_size - 1)
         page_base_mask = ((1 << ARM64_VMADDR_BITS) - 1) & (~page_offset_mask)
         paddr = paddr & page_base_mask
@@ -1209,7 +1210,7 @@ def PVCheck(cmd_args=None, cmd_options={}):
         raise ArgumentError("Too few arguments to showallmappings.")
     if kern.arch == 'arm':
         level = 2
-    elif kern.arch == 'arm64':
+    elif kern.arch.startswith('arm64'):
         level = 3
     else:
         raise NotImplementedError("showallmappings does not support {0}".format(kern.arch))
@@ -1231,7 +1232,7 @@ def CheckPmapIntegrity(cmd_args=None):
         for kernel_pmap, as we do not create PV entries for static kernel mappings on ARM.
         Use of this macro without the [<pmap>] argument is heavily discouraged.
     """
-    if kern.arch != 'arm' and kern.arch != 'arm64':
+    if not kern.arch.startswith('arm'):
         raise NotImplementedError("showallmappings does not support {0}".format(kern.arch))
     targetPmap = None
     if len(cmd_args) > 0:
@@ -1245,7 +1246,7 @@ def PmapsForLedger(cmd_args=None):
     """
     if cmd_args == None or len(cmd_args) < 1:
         raise ArgumentError("Too few arguments to pmapsforledger.")
-    if kern.arch != 'arm' and kern.arch != 'arm64':
+    if not kern.arch.startswith('arm'):
         raise NotImplementedError("pmapsforledger does not support {0}".format(kern.arch))
     ledger = kern.GetValueFromAddress(cmd_args[0], 'ledger_t')
     for pmap in IterateQueue(kern.globals.map_pmap_list, 'pmap_t', 'pmaps'):

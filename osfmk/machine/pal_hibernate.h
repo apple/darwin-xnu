@@ -30,6 +30,8 @@
 
 #if defined (__i386__) || defined(__x86_64__)
 #include "i386/pal_hibernate.h"
+#elif defined (__arm__)
+//#include "arm/pal_hibernate.h"
 #else
 #error architecture not supported
 #endif

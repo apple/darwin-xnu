@@ -77,6 +77,7 @@ def __lldb_init_module(debugger, internal_dict):
     whitelist_trap_cmd = "settings set target.trap-handler-names %s %s" % (' '.join(intel_whitelist), ' '.join(arm_whitelist))
     xnu_debug_path = base_dir_name + "/lldbmacros/xnu.py"
     xnu_load_cmd = "command script import \"%s\"" % xnu_debug_path
+    disable_optimization_warnings_cmd = "settings set target.process.optimization-warnings false"
 
     source_map_cmd = ""
     try:
@@ -97,6 +98,8 @@ def __lldb_init_module(debugger, internal_dict):
         debugger.HandleCommand(whitelist_trap_cmd)
         print xnu_load_cmd
         debugger.HandleCommand(xnu_load_cmd)
+        print disable_optimization_warnings_cmd
+        debugger.HandleCommand(disable_optimization_warnings_cmd)
         if source_map_cmd:
             print source_map_cmd
             debugger.HandleCommand(source_map_cmd)

@@ -98,10 +98,16 @@
 
 #include <security/mac_mach_internal.h>
 
+#if CONFIG_EMBEDDED && !SECURE_KERNEL
+extern int cs_relax_platform_task_ports;
+#endif
+
 /* forward declarations */
 task_t convert_port_to_locked_task(ipc_port_t port);
 task_inspect_t convert_port_to_locked_task_inspect(ipc_port_t port);
-
+static void ipc_port_bind_special_reply_port_locked(ipc_port_t port);
+static kern_return_t ipc_port_unbind_special_reply_port(thread_t thread, boolean_t unbind_active_port);
+kern_return_t task_conversion_eval(task_t caller, task_t victim);
 
 /*
  *	Routine:	ipc_task_init
@@ -156,14 +162,17 @@ ipc_task_init(
 	task->itk_debug_control = IP_NULL;
 	task->itk_space = space;
 
+#if CONFIG_MACF
+	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+		mac_exc_associate_action_label(&task->exc_actions[i], mac_exc_create_label());
+	}
+#endif
+	
 	if (parent == TASK_NULL) {
 		ipc_port_t port;
 
 		for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 			task->exc_actions[i].port = IP_NULL;
-#if CONFIG_MACF
-			mac_exc_action_label_init(task->exc_actions + i);
-#endif
 		}/* for */
 		
 		kr = host_get_host_port(host_priv_self(), &port);
@@ -199,7 +208,7 @@ ipc_task_init(
 		    task->exc_actions[i].privileged =
 				parent->exc_actions[i].privileged;
 #if CONFIG_MACF
-		    mac_exc_action_label_inherit(parent->exc_actions + i, task->exc_actions + i);
+		    mac_exc_inherit_action_label(parent->exc_actions + i, task->exc_actions + i);
 #endif
 		}/* for */
 		task->itk_host =
@@ -336,7 +345,7 @@ ipc_task_terminate(
 			ipc_port_release_send(task->exc_actions[i].port);
 		}
 #if CONFIG_MACF
-		mac_exc_action_label_destroy(task->exc_actions + i);
+		mac_exc_free_action_label(task->exc_actions + i);
 #endif
 	}
 
@@ -392,6 +401,11 @@ ipc_task_reset(
 	ipc_port_t old_exc_actions[EXC_TYPES_COUNT];
 	int i;
 
+#if CONFIG_MACF
+	/* Fresh label to unset credentials in existing labels. */
+	struct label *unset_label = mac_exc_create_label();
+#endif
+	
 	new_kport = ipc_port_alloc_kernel();
 	if (new_kport == IP_NULL)
 		panic("ipc_task_reset");
@@ -404,6 +418,9 @@ ipc_task_reset(
 		/* the task is already terminated (can this happen?) */
 		itk_unlock(task);
 		ipc_port_dealloc_kernel(new_kport);
+#if CONFIG_MACF
+		mac_exc_free_label(unset_label);
+#endif
 		return;
 	}
 
@@ -428,7 +445,7 @@ ipc_task_reset(
 
 		if (!task->exc_actions[i].privileged) {
 #if CONFIG_MACF
-			mac_exc_action_label_reset(task->exc_actions + i);
+			mac_exc_update_action_label(task->exc_actions + i, unset_label);
 #endif
 			old_exc_actions[i] = task->exc_actions[i].port;
 			task->exc_actions[i].port = IP_NULL;
@@ -441,6 +458,10 @@ ipc_task_reset(
 	task->itk_debug_control = IP_NULL;
 	
 	itk_unlock(task);
+
+#if CONFIG_MACF
+	mac_exc_free_label(unset_label);
+#endif
 
 	/* release the naked send rights */
 
@@ -477,6 +498,7 @@ ipc_thread_init(
 
 	thread->ith_self = kport;
 	thread->ith_sself = ipc_port_make_send(kport);
+	thread->ith_special_reply_port = NULL;
 	thread->exc_actions = NULL;
 
 	ipc_kobject_set(kport, (ipc_kobject_t)thread, IKOT_THREAD);
@@ -501,7 +523,7 @@ ipc_thread_init_exc_actions(
 
 #if CONFIG_MACF
 	for (size_t i = 0; i < EXC_TYPES_COUNT; ++i) {
-		mac_exc_action_label_init(thread->exc_actions + i);
+		mac_exc_associate_action_label(thread->exc_actions + i, mac_exc_create_label());
 	}
 #endif
 }
@@ -513,7 +535,7 @@ ipc_thread_destroy_exc_actions(
 	if (thread->exc_actions != NULL) {
 #if CONFIG_MACF
 		for (size_t i = 0; i < EXC_TYPES_COUNT; ++i) {
-			mac_exc_action_label_destroy(thread->exc_actions + i);
+			mac_exc_free_action_label(thread->exc_actions + i);
 		}
 #endif
 
@@ -570,6 +592,11 @@ ipc_thread_terminate(
 	assert(thread->ith_assertions == 0);
 #endif
 
+	/* unbind the thread special reply port */
+	if (IP_VALID(thread->ith_special_reply_port)) {
+		ipc_port_unbind_special_reply_port(thread, TRUE);
+	}
+
 	assert(ipc_kmsg_queue_empty(&thread->ith_messages));
 
 	if (thread->ith_rpc_reply != IP_NULL)
@@ -600,6 +627,10 @@ ipc_thread_reset(
 	boolean_t  has_old_exc_actions = FALSE;	
 	int		   i;
 
+#if CONFIG_MACF
+	struct label *new_label = mac_exc_create_label();
+#endif
+	
 	new_kport = ipc_port_alloc_kernel();
 	if (new_kport == IP_NULL)
 		panic("ipc_task_reset");
@@ -612,6 +643,9 @@ ipc_thread_reset(
 		/* the  is already terminated (can this happen?) */
 		thread_mtx_unlock(thread);
 		ipc_port_dealloc_kernel(new_kport);
+#if CONFIG_MACF
+		mac_exc_free_label(new_label);
+#endif
 		return;
 	}
 
@@ -634,7 +668,7 @@ ipc_thread_reset(
 				old_exc_actions[i] = IP_NULL;
 			} else {
 #if CONFIG_MACF
-				mac_exc_action_label_reset(thread->exc_actions + i);
+				mac_exc_update_action_label(thread->exc_actions + i, new_label);
 #endif
 				old_exc_actions[i] = thread->exc_actions[i].port;
 				thread->exc_actions[i].port = IP_NULL;		
@@ -644,6 +678,10 @@ ipc_thread_reset(
 
 	thread_mtx_unlock(thread);
 
+#if CONFIG_MACF
+	mac_exc_free_label(new_label);
+#endif
+	
 	/* release the naked send rights */
 
 	if (IP_VALID(old_sself))
@@ -658,6 +696,11 @@ ipc_thread_reset(
 	/* destroy the kernel port */
 	if (old_kport != IP_NULL) {
 		ipc_port_dealloc_kernel(old_kport);
+	}
+
+	/* unbind the thread special reply port */
+	if (IP_VALID(thread->ith_special_reply_port)) {
+		ipc_port_unbind_special_reply_port(thread, TRUE);
 	}
 }
 
@@ -815,6 +858,101 @@ mach_reply_port(
 	else
 		name = MACH_PORT_NULL;
 	return name;
+}
+
+/*
+ *	Routine:	thread_get_special_reply_port [mach trap]
+ *	Purpose:
+ *		Allocate a special reply port for the calling thread.
+ *	Conditions:
+ *		Nothing locked.
+ *	Returns:
+ *		MACH_PORT_NULL if there are any resource failures
+ *		or other errors.
+ */
+
+mach_port_name_t
+thread_get_special_reply_port(
+	__unused struct thread_get_special_reply_port_args *args)
+{
+	ipc_port_t port;
+	mach_port_name_t name;
+	kern_return_t kr;
+	thread_t thread = current_thread();
+
+	/* unbind the thread special reply port */
+	if (IP_VALID(thread->ith_special_reply_port)) {
+		kr = ipc_port_unbind_special_reply_port(thread, TRUE);
+		if (kr != KERN_SUCCESS) {
+			return MACH_PORT_NULL;
+		}
+	}
+
+	kr = ipc_port_alloc(current_task()->itk_space, &name, &port);
+	if (kr == KERN_SUCCESS) {
+		ipc_port_bind_special_reply_port_locked(port);
+		ip_unlock(port);
+	} else {
+		name = MACH_PORT_NULL;
+	}
+	return name;
+}
+
+/*
+ *	Routine:	ipc_port_bind_special_reply_port_locked
+ *	Purpose:
+ *		Bind the given port to current thread as a special reply port.
+ *	Conditions:
+ *		Port locked.
+ *	Returns:
+ *		None.
+ */
+
+static void
+ipc_port_bind_special_reply_port_locked(
+	ipc_port_t port)
+{
+	thread_t thread = current_thread();
+	assert(thread->ith_special_reply_port == NULL);
+
+	ip_reference(port);
+	thread->ith_special_reply_port = port;
+	port->ip_specialreply = 1;
+	port->ip_link_sync_qos = 1;
+}
+
+/*
+ *	Routine:	ipc_port_unbind_special_reply_port
+ *	Purpose:
+ *		Unbind the thread's special reply port.
+ *		If the special port is linked to a port, adjust it's sync qos delta`.
+ *	Condition:
+ *		Nothing locked.
+ *	Returns:
+ *		None.
+ */
+static kern_return_t
+ipc_port_unbind_special_reply_port(
+	thread_t thread,
+	boolean_t unbind_active_port)
+{
+	ipc_port_t special_reply_port = thread->ith_special_reply_port;
+
+	ip_lock(special_reply_port);
+
+	/* Return error if port active and unbind_active_port set to FALSE */
+	if (unbind_active_port == FALSE && ip_active(special_reply_port)) {
+		ip_unlock(special_reply_port);
+		return KERN_FAILURE;
+	}
+
+	thread->ith_special_reply_port = NULL;
+	ipc_port_unlink_special_reply_port_locked(special_reply_port, NULL,
+		IPC_PORT_UNLINK_SR_CLEAR_SPECIAL_REPLY);
+	/* port unlocked */
+
+	ip_release(special_reply_port);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1208,6 +1346,50 @@ mach_ports_lookup(
 	return KERN_SUCCESS;
 }
 
+kern_return_t
+task_conversion_eval(task_t caller, task_t victim)
+{
+	/*
+	 * Tasks are allowed to resolve their own task ports, and the kernel is
+	 * allowed to resolve anyone's task port.
+	 */
+	if (caller == kernel_task) {
+		return KERN_SUCCESS;
+	}
+
+	if (caller == victim) {
+		return KERN_SUCCESS;
+	}
+
+	/*
+	 * Only the kernel can can resolve the kernel's task port. We've established
+	 * by this point that the caller is not kernel_task.
+	 */
+	if (victim == kernel_task) {
+		return KERN_INVALID_SECURITY;
+	}
+
+#if CONFIG_EMBEDDED
+	/*
+	 * On embedded platforms, only a platform binary can resolve the task port
+	 * of another platform binary.
+	 */
+	if ((victim->t_flags & TF_PLATFORM) && !(caller->t_flags & TF_PLATFORM)) {
+#if SECURE_KERNEL
+		return KERN_INVALID_SECURITY;
+#else
+		if (cs_relax_platform_task_ports) {
+			return KERN_SUCCESS;
+		} else {
+			return KERN_INVALID_SECURITY;
+		}
+#endif /* SECURE_KERNEL */
+	}
+#endif /* CONFIG_EMBEDDED */
+
+	return KERN_SUCCESS;
+}
+
 /*
  *	Routine: convert_port_to_locked_task
  *	Purpose:
@@ -1220,9 +1402,10 @@ mach_ports_lookup(
 task_t
 convert_port_to_locked_task(ipc_port_t port)
 {
-        int try_failed_count = 0;
+	int try_failed_count = 0;
 
 	while (IP_VALID(port)) {
+		task_t ct = current_task();
 		task_t task;
 
 		ip_lock(port);
@@ -1233,7 +1416,7 @@ convert_port_to_locked_task(ipc_port_t port)
 		task = (task_t) port->ip_kobject;
 		assert(task != TASK_NULL);
 
-		if (task == kernel_task && current_task() != kernel_task) {
+		if (task_conversion_eval(ct, task)) {
 			ip_unlock(port);
 			return TASK_NULL;
 		}
@@ -1333,10 +1516,11 @@ convert_port_to_task_with_exec_token(
 
 		if (	ip_active(port)					&&
 				ip_kotype(port) == IKOT_TASK		) {
+			task_t ct = current_task();
 			task = (task_t)port->ip_kobject;
 			assert(task != TASK_NULL);
 
-			if (task == kernel_task && current_task() != kernel_task) {
+			if (task_conversion_eval(ct, task)) {
 				ip_unlock(port);
 				return TASK_NULL;
 			}
@@ -1952,6 +2136,10 @@ thread_set_exception_ports(
 	boolean_t privileged = current_task()->sec_token.val[0] == 0;
 	register int	i;
 
+#if CONFIG_MACF
+	struct label *new_label;
+#endif
+	
 	if (thread == THREAD_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
@@ -1979,6 +2167,10 @@ thread_set_exception_ports(
 	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
 		return (KERN_INVALID_ARGUMENT);
 
+#if CONFIG_MACF
+	new_label = mac_exc_create_label_for_current_proc();
+#endif
+	
 	thread_mtx_lock(thread);
 
 	if (!thread->active) {
@@ -1993,7 +2185,7 @@ thread_set_exception_ports(
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; ++i) {
 		if ((exception_mask & (1 << i))
 #if CONFIG_MACF
-			&& mac_exc_action_label_update(current_task(), thread->exc_actions + i) == 0
+			&& mac_exc_update_action_label(&thread->exc_actions[i], new_label) == 0
 #endif
 			) {
 			old_port[i] = thread->exc_actions[i].port;
@@ -2008,6 +2200,10 @@ thread_set_exception_ports(
 
 	thread_mtx_unlock(thread);
 
+#if CONFIG_MACF
+	mac_exc_free_label(new_label);
+#endif
+	
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; ++i)
 		if (IP_VALID(old_port[i]))
 			ipc_port_release_send(old_port[i]);
@@ -2029,6 +2225,10 @@ task_set_exception_ports(
 	ipc_port_t		old_port[EXC_TYPES_COUNT];
 	boolean_t privileged = current_task()->sec_token.val[0] == 0;
 	register int	i;
+
+#if CONFIG_MACF
+	struct label *new_label;
+#endif	
 
 	if (task == TASK_NULL)
 		return (KERN_INVALID_ARGUMENT);
@@ -2057,6 +2257,10 @@ task_set_exception_ports(
 	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
 		return (KERN_INVALID_ARGUMENT);
 
+#if CONFIG_MACF
+	new_label = mac_exc_create_label_for_current_proc();
+#endif
+	
 	itk_lock(task);
 
 	if (task->itk_self == IP_NULL) {
@@ -2068,7 +2272,7 @@ task_set_exception_ports(
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; ++i) {
 		if ((exception_mask & (1 << i))
 #if CONFIG_MACF
-			&& mac_exc_action_label_update(current_task(), task->exc_actions + i) == 0
+			&& mac_exc_update_action_label(&task->exc_actions[i], new_label) == 0
 #endif
 			) {
 			old_port[i] = task->exc_actions[i].port;
@@ -2084,6 +2288,10 @@ task_set_exception_ports(
 
 	itk_unlock(task);
 
+#if CONFIG_MACF
+	mac_exc_free_label(new_label);
+#endif
+	
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; ++i)
 		if (IP_VALID(old_port[i]))
 			ipc_port_release_send(old_port[i]);
@@ -2138,6 +2346,10 @@ thread_swap_exception_ports(
 	boolean_t privileged = current_task()->sec_token.val[0] == 0;
 	unsigned int	i, j, count;
 
+#if CONFIG_MACF
+	struct label *new_label;
+#endif
+
 	if (thread == THREAD_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
@@ -2160,6 +2372,10 @@ thread_swap_exception_ports(
 	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
 		return (KERN_INVALID_ARGUMENT);
 
+#if CONFIG_MACF
+	new_label = mac_exc_create_label_for_current_proc();
+#endif
+
 	thread_mtx_lock(thread);
 
 	if (!thread->active) {
@@ -2176,7 +2392,7 @@ thread_swap_exception_ports(
 	for (count = 0, i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT && count < *CountCnt; ++i) {
 		if ((exception_mask & (1 << i))
 #if CONFIG_MACF
-			&& mac_exc_action_label_update(current_task(), thread->exc_actions + i) == 0
+			&& mac_exc_update_action_label(&thread->exc_actions[i], new_label) == 0
 #endif
 			) {
 			for (j = 0; j < count; ++j) {
@@ -2213,6 +2429,10 @@ thread_swap_exception_ports(
 
 	thread_mtx_unlock(thread);
 
+#if CONFIG_MACF
+	mac_exc_free_label(new_label);
+#endif
+	
 	while (--i >= FIRST_EXCEPTION) {
 		if (IP_VALID(old_port[i]))
 			ipc_port_release_send(old_port[i]);
@@ -2243,6 +2463,10 @@ task_swap_exception_ports(
 	boolean_t privileged = current_task()->sec_token.val[0] == 0;
 	unsigned int	i, j, count;
 
+#if CONFIG_MACF
+	struct label *new_label;
+#endif	
+	
 	if (task == TASK_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
@@ -2265,6 +2489,10 @@ task_swap_exception_ports(
 	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor))
 		return (KERN_INVALID_ARGUMENT);
 
+#if CONFIG_MACF
+	new_label = mac_exc_create_label_for_current_proc();
+#endif
+	
 	itk_lock(task);
 
 	if (task->itk_self == IP_NULL) {
@@ -2277,7 +2505,7 @@ task_swap_exception_ports(
 	for (count = 0, i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT && count < *CountCnt; ++i) {
 		if ((exception_mask & (1 << i))
 #if CONFIG_MACF
-			&& mac_exc_action_label_update(current_task(), task->exc_actions + i) == 0
+			&& mac_exc_update_action_label(&task->exc_actions[i], new_label) == 0
 #endif
 			) {
 			for (j = 0; j < count; j++) {
@@ -2314,6 +2542,10 @@ task_swap_exception_ports(
 
 	itk_unlock(task);
 
+#if CONFIG_MACF
+	mac_exc_free_label(new_label);
+#endif
+	
 	while (--i >= FIRST_EXCEPTION) {
 		if (IP_VALID(old_port[i]))
 			ipc_port_release_send(old_port[i]);

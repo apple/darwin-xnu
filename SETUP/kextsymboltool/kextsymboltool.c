@@ -597,11 +597,6 @@ int main(int argc, char * argv[])
 	else
 	    num_export_syms += files[filenum].nsyms;
     }
-    if (!num_export_syms)
-    {
-	fprintf(stderr, "no export names\n");
-	exit(1);
-    }
 
     import_symbols = calloc(num_import_syms, sizeof(struct symbol));
     export_symbols = calloc(num_export_syms, sizeof(struct symbol));

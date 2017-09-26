@@ -45,6 +45,7 @@ void workqueue_exit(struct proc *);
 void pthread_init(void);
 int thread_qos_from_pthread_priority(unsigned long, unsigned long *);
 unsigned long pthread_priority_canonicalize(unsigned long priority, boolean_t propagation);
+boolean_t workq_thread_has_been_unbound(thread_t th, int qos_class);
 
 #endif /* _SYS_PTHREAD_INTERNAL_H_ */
 

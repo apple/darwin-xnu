@@ -237,7 +237,7 @@ vm32_region_info(
 				vio->vio_internal =
 					cobject->internal;
 				vio->vio_temporary =
-					cobject->temporary;
+					FALSE;
 				vio->vio_alive =
 					cobject->alive;
 				vio->vio_purgable =
@@ -270,17 +270,18 @@ vm32_region_info(
 		size = vm_map_round_page(2 * used * sizeof(vm_info_object_t),
 					 VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
+		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
-		kr = vm_map_wire(
+		kr = vm_map_wire_kernel(
 			ipc_kernel_map,
 			vm_map_trunc_page(addr,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr + size,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			VM_PROT_READ|VM_PROT_WRITE,
+			VM_KERN_MEMORY_IPC,
 			FALSE);
 		assert(kr == KERN_SUCCESS);
 	}
@@ -451,7 +452,7 @@ vm32_region_info_64(
 				vio->vio_internal =
 					cobject->internal;
 				vio->vio_temporary =
-					cobject->temporary;
+					FALSE;
 				vio->vio_alive =
 					cobject->alive;
 				vio->vio_purgable =
@@ -484,17 +485,18 @@ vm32_region_info_64(
 		size = vm_map_round_page(2 * used * sizeof(vm_info_object_t),
 					 VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
+		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
-		kr = vm_map_wire(
+		kr = vm_map_wire_kernel(
 			ipc_kernel_map,
 			vm_map_trunc_page(addr,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr + size,
 					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			VM_PROT_READ|VM_PROT_WRITE,
+			VM_KERN_MEMORY_IPC,
 			FALSE);
 		assert(kr == KERN_SUCCESS);
 	}
@@ -562,7 +564,7 @@ vm32_mapped_pages_info(
 				 VM_MAP_PAGE_MASK(ipc_kernel_map));
 
 	for (;;) {
-	    (void) vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
+	    (void) vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
 	    (void) vm_map_unwire(
 		    ipc_kernel_map,
 		    vm_map_trunc_page(addr,
@@ -602,13 +604,14 @@ vm32_mapped_pages_info(
 	    size_used = (actual * sizeof(vm_offset_t));
 	    vmsize_used = vm_map_round_page(size_used,
 					    VM_MAP_PAGE_MASK(ipc_kernel_map));
-	    (void) vm_map_wire(
+	    (void) vm_map_wire_kernel(
 		    ipc_kernel_map,
 		    vm_map_trunc_page(addr,
 				      VM_MAP_PAGE_MASK(ipc_kernel_map)),
 		    vm_map_round_page(addr + size,
 				      VM_MAP_PAGE_MASK(ipc_kernel_map)), 
 		    VM_PROT_READ|VM_PROT_WRITE,
+		    VM_KERN_MEMORY_IPC,
 		    FALSE);
 	    (void) vm_map_copyin(ipc_kernel_map,
 				(vm_map_address_t)addr,
@@ -675,8 +678,8 @@ host_virtual_physical_table_info(
 
 		size = vm_map_round_page(actual * sizeof *info,
 					 VM_MAP_PAGE_MASK(ipc_kernel_map));
-		kr = vm_allocate(ipc_kernel_map, &addr, size,
-				 VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_IPC));
+		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size,
+				 VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 

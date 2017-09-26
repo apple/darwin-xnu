@@ -100,8 +100,9 @@
 #define HOST_CONTAINERD_PORT		(18 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_NODE_PORT			(19 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_RESOURCE_NOTIFY_PORT	(20 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_CLOSURED_PORT		(21 + HOST_MAX_SPECIAL_KERNEL_PORT)
 
-#define HOST_MAX_SPECIAL_PORT		HOST_RESOURCE_NOTIFY_PORT
+#define HOST_MAX_SPECIAL_PORT		HOST_CLOSURED_PORT
                                         /* MAX = last since rdar://19421223 */
 
 /*
@@ -235,6 +236,12 @@
 	HOST_LOCAL_NODE, HOST_NODE_PORT, (port)))
 #define host_set_node_port(host, port)	\
 	(host_set_special_port((host), HOST_NODE_PORT, (port)))
+
+#define host_get_closured_port(host, port)	\
+	(host_get_special_port((host),			\
+	HOST_LOCAL_NODE, HOST_CLOSURED_PORT, (port)))
+#define host_set_closured_port(host, port)	\
+	(host_set_special_port((host), HOST_CLOSURED_PORT, (port)))
 
 /* HOST_RESOURCE_NOTIFY_PORT doesn't #defines these conveniences.
    All lookups go through send_resource_violation()

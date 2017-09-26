@@ -140,7 +140,7 @@ extern "C" {
 				dev_p	<-		device number generated from major/minor numbers
 	Comments:	
 */
-int di_root_image(const char *path, char devname[], dev_t *dev_p)
+int di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p)
 {
 	IOReturn			res 				= 0;
 	IOService		*	controller			= 0;
@@ -196,8 +196,7 @@ int di_root_image(const char *path, char devname[], dev_t *dev_p)
 		
 	myDevName = OSDynamicCast(OSString, controller->getProperty(kDIRootImageDevNameKey));
 	if (myDevName) {
-		/* rootdevice is 16 chars in bsd_init.c */
-		strlcpy(devname, myDevName->getCStringNoCopy(), 16);
+		strlcpy(devname, myDevName->getCStringNoCopy(), devsz);
 	} else {
 		IOLog("could not get %s\n", kDIRootImageDevNameKey);
 		res = kIOReturnError;
@@ -212,6 +211,66 @@ NoIOHDIXController:
 	// clean up memory allocations
 	if (pathString)			pathString->release();
     if (controller)         controller->release();
+
+	return res;
+}
+
+int
+di_root_ramfile_buf(void *buf, size_t bufsz, char *devname, size_t devsz, dev_t *dev_p)
+{
+	IOReturn res = 0;
+	IOService *controller = 0;
+	OSNumber *myResult = 0;
+	OSString *myDevName = 0;
+	OSNumber *myDevT = 0;
+	IOMemoryDescriptor *mem = 0;
+
+	mem = IOMemoryDescriptor::withAddress(buf, bufsz, kIODirectionInOut);
+	assert(mem);
+
+	controller = di_load_controller();
+	if (controller) {
+		/* attach the image */
+		controller->setProperty(kDIRootRamFileKey, mem);
+		controller->release();
+	} else {
+		res = kIOReturnNotFound;
+		goto out;
+	}
+
+	myResult = OSDynamicCast(OSNumber, controller->getProperty(kDIRootImageResultKey));
+	res = kIOReturnError;
+	if (myResult) {
+		res = myResult->unsigned32BitValue();
+	}
+
+	if (res) {
+		IOLog("%s is 0x%08X/%d\n", kDIRootImageResultKey, res, res);
+		goto out;
+	}
+
+	myDevT = OSDynamicCast(OSNumber, controller->getProperty(kDIRootImageDevTKey));
+	if (myDevT)
+		*dev_p = myDevT->unsigned32BitValue();
+	else {
+		IOLog("could not get %s\n", kDIRootImageDevTKey);
+		res = kIOReturnError;
+		goto out;
+	}
+
+	myDevName = OSDynamicCast(OSString, controller->getProperty(kDIRootImageDevNameKey));
+	if (myDevName) {
+		strlcpy(devname, myDevName->getCStringNoCopy(), devsz);
+	} else {
+		IOLog("could not get %s\n", kDIRootImageDevNameKey);
+		res = kIOReturnError;
+		goto out;
+	}
+
+out:
+	if (res) {
+		OSSafeReleaseNULL(mem);
+	}
 
 	return res;
 }

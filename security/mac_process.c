@@ -301,14 +301,6 @@ mac_cred_check_visible(kauth_cred_t u1, kauth_cred_t u2)
 	return (error);
 }
 
-/*                                                                                                    
- * called with process locked.                                                                        
- */
-void mac_proc_set_enforce(proc_t p, int enforce_flags)
-{
-        p->p_mac_enforce |= enforce_flags;
-}
-
 int
 mac_proc_check_debug(proc_t curp, struct proc *proc)
 {
@@ -320,7 +312,7 @@ mac_proc_check_debug(proc_t curp, struct proc *proc)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
@@ -341,7 +333,7 @@ mac_proc_check_fork(proc_t curp)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
@@ -408,7 +400,7 @@ mac_proc_check_map_anon(proc_t proc, user_addr_t u_addr,
 	if (!mac_vm_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(proc, MAC_VM_ENFORCE))
+	if (!mac_proc_check_enforce(proc))
 		return (0);
 
 	cred = kauth_cred_proc_ref(proc);
@@ -430,7 +422,7 @@ mac_proc_check_mprotect(proc_t proc,
 	if (!mac_vm_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(proc, MAC_VM_ENFORCE))
+	if (!mac_proc_check_enforce(proc))
 		return (0);
 
 	cred = kauth_cred_proc_ref(proc);
@@ -467,7 +459,7 @@ mac_proc_check_sched(proc_t curp, struct proc *proc)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
@@ -488,7 +480,7 @@ mac_proc_check_signal(proc_t curp, struct proc *proc, int signum)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
@@ -509,7 +501,7 @@ mac_proc_check_wait(proc_t curp, struct proc *proc)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
@@ -517,6 +509,12 @@ mac_proc_check_wait(proc_t curp, struct proc *proc)
 	kauth_cred_unref(&cred);
 
 	return (error);
+}
+
+void
+mac_proc_notify_exit(struct proc *proc)
+{
+	MAC_PERFORM(proc_notify_exit, proc);
 }
 
 int
@@ -530,7 +528,7 @@ mac_proc_check_suspend_resume(proc_t curp, int sr)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
@@ -551,32 +549,11 @@ mac_proc_check_ledger(proc_t curp, proc_t proc, int ledger_op)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_ledger, cred, proc, ledger_op);
-	kauth_cred_unref(&cred);
-
-	return (error);
-}
-
-int
-mac_proc_check_cpumon(proc_t curp)
-{
-	kauth_cred_t cred;
-	int error = 0;
-
-#if SECURITY_MAC_CHECK_ENFORCE
-	/* 21167099 - only check if we allow write */
-	if (!mac_proc_enforce)
-		return 0;
-#endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
-		return 0;
-
-	cred = kauth_cred_proc_ref(curp);
-	MAC_CHECK(proc_check_cpumon, cred);
 	kauth_cred_unref(&cred);
 
 	return (error);
@@ -593,7 +570,7 @@ mac_proc_check_proc_info(proc_t curp, proc_t target, int callnum, int flavor)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
@@ -614,7 +591,7 @@ mac_proc_check_get_cs_info(proc_t curp, proc_t target, unsigned int op)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);
@@ -635,7 +612,7 @@ mac_proc_check_set_cs_info(proc_t curp, proc_t target, unsigned int op)
 	if (!mac_proc_enforce)
 		return 0;
 #endif
-	if (!mac_proc_check_enforce(curp, MAC_PROC_ENFORCE))
+	if (!mac_proc_check_enforce(curp))
 		return 0;
 
 	cred = kauth_cred_proc_ref(curp);

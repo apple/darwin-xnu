@@ -43,14 +43,14 @@ class value(object):
         return self._sbval19k84obscure747.__str__()
     
     def __cmp__(self, other):
-        if type(other) is int:
+        if type(other) is int or type(other) is long:
             me = int(self)
             if type(me) is long:
                 other = long(other)
             return me.__cmp__(other)
         if type(other) is value:
             return int(self).__cmp__(int(other))
-        raise TypeError("Cannot compare value with this type")
+        raise TypeError("Cannot compare value with type {}".format(type(other)))
     
     def __str__(self):
         global _cstring_rex
@@ -433,6 +433,14 @@ def gettype(target_type):
     if target_type in _value_types_cache:
         return _value_types_cache[target_type]
 
+    target_type = target_type.strip()
+
+    requested_type_is_struct = False
+    m = re.match(r'\s*struct\s*(.*)$', target_type)
+    if m:
+        requested_type_is_struct = True
+        target_type = m.group(1)
+
     tmp_type = None
     requested_type_is_pointer = False
     if target_type.endswith('*') :
@@ -441,6 +449,9 @@ def gettype(target_type):
     # tmp_type = LazyTarget.GetTarget().FindFirstType(target_type.rstrip('*').strip())
     search_type = target_type.rstrip('*').strip()
     type_arr = [t for t in LazyTarget.GetTarget().FindTypes(search_type)]
+
+    if requested_type_is_struct:
+        type_arr = [t for t in type_arr if t.type == lldb.eTypeClassStruct]
 
     # After the sort, the struct type with more fields will be at index [0].
     # This hueristic helps selecting struct type with more fields compared to ones with "opaque" members
@@ -462,6 +473,7 @@ def gettype(target_type):
 
 def getfieldoffset(struct_type, field_name):
     """ Returns the byte offset of a field inside a given struct
+        Understands anonymous unions and field names in sub-structs
         params:
             struct_type - str or lldb.SBType, ex. 'struct ipc_port *' or port.gettype()
             field_name  - str, name of the field inside the struct ex. 'ip_messages'
@@ -470,13 +482,23 @@ def getfieldoffset(struct_type, field_name):
         raises:
             TypeError  - - In case the struct_type has no field with the name field_name
     """
+
     if type(struct_type) == str:
         struct_type = gettype(struct_type)
+
+    if '.' in field_name :
+        # Handle recursive fields in sub-structs
+        components = field_name.split('.', 1)
+        for field in struct_type.get_fields_array():
+            if str(field.GetName()) == components[0]:
+                return getfieldoffset(struct_type, components[0]) + getfieldoffset(field.GetType(), components[1])
+        raise TypeError('Field name "%s" not found in type "%s"' % (components[0], str(struct_type)))
+
     offset = 0
     for field in struct_type.get_fields_array():
         if str(field.GetName()) == field_name:
             return field.GetOffsetInBytes()
-        
+
         # Hack for anonymous unions - the compiler does this, so cvalue should too
         if field.GetName() is None and field.GetType().GetTypeClass() == lldb.eTypeClassUnion :
             for union_field in field.GetType().get_fields_array():

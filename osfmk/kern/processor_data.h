@@ -40,6 +40,7 @@
 
 #include <ipc/ipc_kmsg.h>
 #include <kern/timer.h>
+#include <kern/debug.h>
 
 struct processor_sched_statistics {
 	uint32_t		csw_count;
@@ -97,6 +98,17 @@ struct processor_data {
 	uint64_t	wakeups_issued_total; /* Count of thread wakeups issued
 					       * by this processor
 					       */
+	struct debugger_state {
+		debugger_op db_current_op;
+		const char *db_message;
+		const char *db_panic_str; 
+		va_list *db_panic_args;
+		uint64_t db_panic_options;
+		boolean_t db_proceed_on_sync_failure;
+		uint32_t db_entry_count; /* incremented whenever we panic or call Debugger (current CPU panic level) */
+		kern_return_t db_op_return;
+		unsigned long db_panic_caller;
+	} debugger_state;
 };
 
 typedef struct processor_data	processor_data_t;

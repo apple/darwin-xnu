@@ -30,6 +30,9 @@ extern "C" {
 #include <libkern/kernel_mach_header.h>
 #include <libkern/prelink.h>
 
+#if CONFIG_EMBEDDED
+extern uuid_t kernelcache_uuid;
+#endif
 }
 
 #include <libkern/version.h>
@@ -243,6 +246,9 @@ KLDBootstrap::readPrelinkedExtensions(
     OSDictionary              * prelinkInfoDict         = NULL;  // do not release
     OSString                  * errorString             = NULL;  // must release
     OSKext                    * theKernel               = NULL;  // must release
+#if CONFIG_EMBEDDED
+    OSData                    * kernelcacheUUID         = NULL;  // do not release
+#endif
 
     kernel_segment_command_t  * prelinkTextSegment      = NULL;  // see code
     kernel_segment_command_t  * prelinkInfoSegment      = NULL;  // see code
@@ -368,6 +374,19 @@ KLDBootstrap::readPrelinkedExtensions(
     ramDiskBoot = IORamDiskBSDRoot();
 #endif /* NO_KEXTD */
 
+#if CONFIG_EMBEDDED
+    /* Copy in the kernelcache UUID */
+    kernelcacheUUID = OSDynamicCast(OSData,
+        prelinkInfoDict->getObject(kPrelinkInfoKCIDKey));
+    if (!kernelcacheUUID) {
+	bzero(&kernelcache_uuid, sizeof(kernelcache_uuid));
+    } else if (kernelcacheUUID->getLength() != sizeof(kernelcache_uuid)) {
+        panic("kernelcacheUUID length is %d, expected %lu", kernelcacheUUID->getLength(),
+            sizeof(kernelcache_uuid));
+    } else {
+        memcpy((void *)&kernelcache_uuid, (void *)kernelcacheUUID->getBytesNoCopy(), kernelcacheUUID->getLength());
+    }
+#endif /* CONFIG_EMBEDDED */
 
     infoDictArray = OSDynamicCast(OSArray, 
         prelinkInfoDict->getObject(kPrelinkInfoDictionaryKey));
@@ -383,7 +402,9 @@ KLDBootstrap::readPrelinkedExtensions(
         
     /* Create dictionary of excluded kexts
      */
+#ifndef CONFIG_EMBEDDED
     OSKext::createExcludeListFromPrelinkInfo(infoDictArray);
+#endif
     /* Create OSKext objects for each info dictionary. 
      */
     for (i = 0; i < infoDictArray->getCount(); ++i) {
@@ -432,7 +453,13 @@ KLDBootstrap::readPrelinkedExtensions(
             OSNumber *lengthNum = OSDynamicCast(OSNumber,
                 infoDict->getObject(kPrelinkExecutableSizeKey));
             if (addressNum && lengthNum) {
+#if __arm__ || __arm64__
+                vm_offset_t data = (vm_offset_t) ((addressNum->unsigned64BitValue()) + vm_kernel_slide);
+                vm_size_t length = (vm_size_t) (lengthNum->unsigned32BitValue());
+                ml_static_mfree(data, length);
+#else
 #error Pick the right way to free prelinked data on this arch
+#endif
             }
 
             infoDictArray->removeObject(i--);
@@ -605,7 +632,9 @@ KLDBootstrap::readBooterExtensions(void)
 
     /* Create dictionary of excluded kexts
      */
+#ifndef CONFIG_EMBEDDED
     OSKext::createExcludeListFromBooterData(propertyDict, keyIterator);
+#endif
     keyIterator->reset();
 
     while ( ( deviceTreeName =

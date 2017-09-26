@@ -85,7 +85,7 @@ int		nbuf_headers = 0;
 #endif
 
 SYSCTL_INT (_kern, OID_AUTO, nbuf, CTLFLAG_RD | CTLFLAG_LOCKED, &nbuf_headers, 0, "");
-SYSCTL_INT (_kern, OID_AUTO, maxnbuf, CTLFLAG_RW | CTLFLAG_LOCKED, &max_nbuf_headers, 0, "");
+SYSCTL_INT (_kern, OID_AUTO, maxnbuf, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_KERN, &max_nbuf_headers, 0, "");
 
 __private_extern__ int customnbuf = 0;
 int             serverperfmode = 0;	/* Flag indicates a server boot when set */
@@ -140,7 +140,9 @@ bsd_startupearly(void)
 			    &firstaddr,
 			    size,
 			    FALSE,
-			    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_FILE),
+			    VM_FLAGS_ANYWHERE,
+			    VM_MAP_KERNEL_FLAGS_NONE,
+			    VM_KERN_MEMORY_FILE,
 			    &bufferhdr_map);
 
 	if (ret != KERN_SUCCESS)
@@ -219,7 +221,9 @@ bsd_bufferinit(void)
 			    (vm_offset_t *) &mbutl,
 			    (vm_size_t) (nmbclusters * MCLBYTES),
 			    FALSE,
-			    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_MBUF),
+			    VM_FLAGS_ANYWHERE,
+			    VM_MAP_KERNEL_FLAGS_NONE,
+			    VM_KERN_MEMORY_MBUF,
 			    &mb_map);
 
 	if (ret != KERN_SUCCESS)
@@ -317,6 +321,10 @@ bsd_scale_setup(int scale)
 	if ((scale > 0) && (serverperfmode == 0)) {
 		maxproc *= scale;
 		maxprocperuid = (maxproc * 2) / 3;
+		if (scale > 2) {
+			maxfiles *= scale;
+			maxfilesperproc = maxfiles/2;
+		}
 	}
 	/* Apply server scaling rules */
 	if ((scale >  0) && (serverperfmode !=0)) {

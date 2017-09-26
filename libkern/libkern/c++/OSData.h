@@ -391,7 +391,7 @@ public:
     *
     * @abstract
     * Deallocates or releases any resources
-    * used by the OSDictionary instance.
+    * used by the OSData instance.
     *
     * @discussion
     * This function should not be called directly;

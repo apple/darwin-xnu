@@ -41,7 +41,7 @@
 #define CCDRBG_MAX_ENTROPY_SIZE         ((uint32_t)1<<16)
 #define CCDRBG_MAX_ADDITIONALINPUT_SIZE ((uint32_t)1<<16)
 #define CCDRBG_MAX_PSINPUT_SIZE         ((uint32_t)1<<16)
-#define CCDRBG_MAX_REQUEST_SIZE         ((uint32_t)1<<16) //this is the the absolute maximum in NIST 800-90A
+#define CCDRBG_MAX_REQUEST_SIZE         ((uint32_t)1<<16) //this is the absolute maximum in NIST 800-90A
 #define CCDRBG_RESEED_INTERVAL          ((uint64_t)1<<30) // must be able to fit the NIST maximum of 2^48
 
 
@@ -95,10 +95,10 @@ CC_INLINE size_t ccdrbg_context_size(const struct ccdrbg_info *drbg)
 
 /*
  * NIST SP 800-90 CTR_DRBG
- * the mximum security strengh of drbg equals to the block size of the corresponding ECB.
+ * the maximum security strengh of drbg equals to the block size of the corresponding ECB.
  */
 struct ccdrbg_nistctr_custom {
-    const struct ccmode_ecb *ecb;
+    const struct ccmode_ctr *ctr_info;
     size_t keylen;
     int strictFIPS;
     int use_df;

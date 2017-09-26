@@ -1,3 +1,5 @@
 #freebsd = https://github.com/freebsd/freebsd.git
 bsd/man/man2/access.2	freebsd	lib/libc/sys/access.2	5b882020081a138285227631c46a406c08e17bc8
 bsd/man/man7/sticky.7	freebsd	share/man/man7/sticky.7	5b882020081a138285227631c46a406c08e17bc8
+bsd/man/man2/utimensat.2	freebsd	lib/libc/sys/utimensat.2	89c1fcc0d088065021703b658ef547f46b5481f0
+tools/tests/darwintests/netbsd_utimensat.c	freebsd	contrib/netbsd-tests/lib/libc/c063/t_utimensat.c	89c1fcc0d088065021703b658ef547f46b5481f0

@@ -121,7 +121,7 @@ static void bstp_task_drain(struct bstp_task *);
 #define	BSTP_LOCK_DESTROY(_bs)	lck_mtx_free((_bs)->bs_mtx, bstp_lock_grp)
 #define	BSTP_LOCK(_bs)			lck_mtx_lock((_bs)->bs_mtx)
 #define	BSTP_UNLOCK(_bs)		lck_mtx_unlock((_bs)->bs_mtx)
-#define	BSTP_LOCK_ASSERT(_bs)	lck_mtx_assert((_bs)->bs_mtx, LCK_MTX_ASSERT_OWNED)
+#define	BSTP_LOCK_ASSERT(_bs)	LCK_MTX_ASSERT((_bs)->bs_mtx, LCK_MTX_ASSERT_OWNED)
 
 
 #ifdef	BRIDGESTP_DEBUG

@@ -84,6 +84,7 @@
 #include <pexpert/pexpert.h>
 
 #include <net/if.h>
+#include <net/net_api_stats.h>
 #include <net/route.h>
 
 #define _IP_VHL
@@ -436,7 +437,7 @@ rip_output(
 			m_freem(m);
 			return EINVAL;
 		}
-		if (ip->ip_id == 0)
+		if (ip->ip_id == 0 && !(rfc6864 && IP_OFF_IS_ATOMIC(ntohs(ip->ip_off))))
 			ip->ip_id = ip_randomid();
 		/* XXX prevent ip_output from overwriting header fields */
 		flags |= IP_RAWOUTPUT;
@@ -499,13 +500,6 @@ rip_output(
 			if (inp->inp_route.ro_rt != NULL)
 				rt_ifp = inp->inp_route.ro_rt->rt_ifp;
 
-			printf("%s inp %p last_pid %u inp_boundifp %d inp_last_outifp %d rt_ifp %d route_rule_id %u\n",
-				__func__, inp,
-				inp->inp_socket != NULL ? inp->inp_socket->last_pid : -1,
-				inp->inp_boundifp != NULL ? inp->inp_boundifp->if_index : -1,
-				inp->inp_last_outifp != NULL ?  inp->inp_last_outifp->if_index : -1,
-				rt_ifp != NULL ?  rt_ifp->if_index : -1,
-				route_rule_id);
 			necp_socket_update_qos_marking(inp, inp->inp_route.ro_rt,
 			    NULL, route_rule_id);
 		}
@@ -571,8 +565,10 @@ rip_output(
 		 * route is unicast, update outif with that of the
 		 * route interface used by IP.
 		 */
-		if (rt != NULL && (outif = rt->rt_ifp) != inp->inp_last_outifp)
+		if (rt != NULL &&
+		    (outif = rt->rt_ifp) != inp->inp_last_outifp) {
 			inp->inp_last_outifp = outif;
+		}
 	} else {
 		ROUTE_RELEASE(&inp->inp_route);
 	}
@@ -752,11 +748,12 @@ void
 rip_ctlinput(
 	int cmd,
 	struct sockaddr *sa,
-	__unused void *vip)
+	__unused void *vip,
+	__unused struct ifnet *ifp)
 {
-	struct in_ifaddr *ia;
-	struct ifnet *ifp;
-	int err;
+	struct in_ifaddr *ia = NULL;
+	struct ifnet *iaifp = NULL;
+	int err = 0;
 	int flags, done = 0;
 
 	switch (cmd) {
@@ -816,10 +813,10 @@ rip_ctlinput(
 		lck_rw_done(in_ifaddr_rwlock);
 
 		flags = RTF_UP;
-		ifp = ia->ia_ifa.ifa_ifp;
+		iaifp = ia->ia_ifa.ifa_ifp;
 
-		if ((ifp->if_flags & IFF_LOOPBACK)
-		    || (ifp->if_flags & IFF_POINTOPOINT))
+		if ((iaifp->if_flags & IFF_LOOPBACK)
+		    || (iaifp->if_flags & IFF_POINTOPOINT))
 			flags |= RTF_HOST;
 
 		err = rtinit(&ia->ia_ifa, RTM_ADD, flags);
@@ -940,6 +937,7 @@ rip_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	}
 	inp->inp_laddr = sin.sin_addr;
 	inp->inp_last_outifp = outif;
+
 	return (0);
 }
 
@@ -962,6 +960,12 @@ rip_connect(struct socket *so, struct sockaddr *nam, __unused  struct proc *p)
 	if ((addr->sin_family != AF_INET) &&
 	    (addr->sin_family != AF_IMPLINK))
 		return EAFNOSUPPORT;
+
+	if (!(so->so_flags1 & SOF1_CONNECT_COUNTED)) {
+		so->so_flags1 |= SOF1_CONNECT_COUNTED;
+		INC_ATOMIC_INT64_LIM(net_api_stats.nas_socket_inet_dgram_connected);
+	}
+
 	inp->inp_faddr = addr->sin_addr;
 	soisconnected(so);
 
@@ -1169,6 +1173,7 @@ SYSCTL_PROC(_net_inet_raw, OID_AUTO/*XXX*/, pcblist,
 	    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
 	    rip_pcblist, "S,xinpcb", "List of active raw IP sockets");
 
+#if !CONFIG_EMBEDDED
 
 static int
 rip_pcblist64 SYSCTL_HANDLER_ARGS
@@ -1272,6 +1277,7 @@ SYSCTL_PROC(_net_inet_raw, OID_AUTO, pcblist64,
             CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
             rip_pcblist64, "S,xinpcb64", "List of active raw IP sockets");
 
+#endif /* !CONFIG_EMBEDDED */
 
 
 static int

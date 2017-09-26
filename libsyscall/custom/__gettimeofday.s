@@ -91,6 +91,30 @@ LABEL(___gettimeofday)
 2:
     ret
 
+#elif defined(__arm__)
+
+__SYSCALL2(___gettimeofday_with_mach, gettimeofday, 3, cerror_nocancel)
+
+.text
+.align  2
+.globl ___gettimeofday
+___gettimeofday:
+    mov    r2, #0x0
+    SYSCALL_NONAME(gettimeofday, 3, cerror_nocancel)
+    bx lr
+
+#elif defined(__arm64__)
+
+__SYSCALL2(___gettimeofday_with_mach, gettimeofday, 3, cerror_nocancel)
+
+.text
+.align  2
+.globl ___gettimeofday
+___gettimeofday:
+    movz   x2, #0x0
+    SYSCALL_NONAME(gettimeofday, 3, cerror_nocancel)
+    ret
+
 #else
 #error Unsupported architecture
 #endif

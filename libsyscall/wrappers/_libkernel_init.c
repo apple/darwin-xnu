@@ -26,9 +26,19 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <TargetConditionals.h>
+#include <stdbool.h>
+#include <strings.h>
+#include <unistd.h>
 #include "_libkernel_init.h"
 
 extern int mach_init(void);
+
+#if TARGET_OS_OSX
+__attribute__((visibility("default")))
+extern bool _os_xbs_chrooted;
+bool _os_xbs_chrooted;
+#endif
 
 /* dlsym() funcptr is for legacy support in exc_catcher */
 void* (*_dlsym)(void*, const char*) __attribute__((visibility("hidden")));

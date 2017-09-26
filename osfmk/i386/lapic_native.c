@@ -108,6 +108,7 @@ static void
 legacy_init(void)
 {
 	int		result;
+	kern_return_t	kr;
 	vm_map_entry_t	entry;
 	vm_map_offset_t lapic_vbase64;
 	/* Establish a map to the local apic */
@@ -117,7 +118,10 @@ legacy_init(void)
 		result = vm_map_find_space(kernel_map,
 					   &lapic_vbase64,
 					   round_page(LAPIC_SIZE), 0,
-					   VM_MAKE_TAG(VM_KERN_MEMORY_IOKIT), &entry);
+					   0,
+					   VM_MAP_KERNEL_FLAGS_NONE,
+					   VM_KERN_MEMORY_IOKIT,
+					   &entry);
 		/* Convert 64-bit vm_map_offset_t to "pointer sized" vm_offset_t
 		 */
 		lapic_vbase = (vm_offset_t) lapic_vbase64;
@@ -133,13 +137,15 @@ legacy_init(void)
 		 * MTRR physical range containing the local APIC's MMIO space as
 		 * UC and this will override the default PAT setting.
 		 */
-		pmap_enter(pmap_kernel(),
-				lapic_vbase,
-				(ppnum_t) i386_btop(lapic_pbase),
-				VM_PROT_READ|VM_PROT_WRITE,
-				VM_PROT_NONE,
-				VM_WIMG_IO,
-				TRUE);
+		kr = pmap_enter(pmap_kernel(),
+		                lapic_vbase,
+		                (ppnum_t) i386_btop(lapic_pbase),
+		                VM_PROT_READ|VM_PROT_WRITE,
+		                VM_PROT_NONE,
+		                VM_WIMG_IO,
+		                TRUE);
+
+		assert(kr == KERN_SUCCESS);
 	}
 
 	/*

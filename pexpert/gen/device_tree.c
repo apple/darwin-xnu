@@ -35,43 +35,12 @@
 
 #include <mach/mach_types.h>
 #include <mach/machine/vm_types.h>
+#include <kern/debug.h>
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
+#include <os/overflow.h>
 
 #include <sys/types.h>
-
-#ifndef NULL
-#define       NULL    ((void *) 0)
-#endif
-
-#define round_long(x)	(((x) + 3UL) & ~(3UL))
-#define next_prop(x)	((DeviceTreeNodeProperty *) (((uintptr_t)x) + sizeof(DeviceTreeNodeProperty) + round_long(x->length)))
-
-/* Entry*/
-typedef DeviceTreeNode *RealDTEntry;
-
-typedef struct DTSavedScope {
-	struct DTSavedScope * nextScope;
-	RealDTEntry scope;
-	RealDTEntry entry;
-	unsigned long index;		
-} *DTSavedScopePtr;
-
-/* Entry Iterator*/
-typedef struct OpaqueDTEntryIterator {
-	RealDTEntry outerScope;
-	RealDTEntry currentScope;
-	RealDTEntry currentEntry;
-	DTSavedScopePtr savedScope;
-	unsigned long currentIndex;		
-} *RealDTEntryIterator;
-
-/* Property Iterator*/
-typedef struct OpaqueDTPropertyIterator {
-	RealDTEntry entry;
-	DeviceTreeNodeProperty *currentProperty;
-	unsigned long currentIndex;
-} *RealDTPropertyIterator;
 
 static int DTInitialized;
 static RealDTEntry DTRootNode;
@@ -79,6 +48,16 @@ static RealDTEntry DTRootNode;
 /*
  * Support Routines
  */
+static inline DeviceTreeNodeProperty*
+next_prop(DeviceTreeNodeProperty* prop)
+{
+	uintptr_t next_addr;
+	if (os_add3_overflow((uintptr_t)prop, prop->length, sizeof(DeviceTreeNodeProperty) + 3, &next_addr))
+		panic("Device tree property overflow: prop %p, length 0x%x\n", prop, prop->length);
+	next_addr &= ~(3ULL);
+	return (DeviceTreeNodeProperty*)next_addr;
+}
+
 static RealDTEntry
 skipProperties(RealDTEntry entry)
 {
@@ -280,15 +259,12 @@ DTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntry *foundEnt
 }
 
 int
-DTCreateEntryIterator(const DTEntry startEntry, DTEntryIterator *iterator)
+DTInitEntryIterator(const DTEntry startEntry, DTEntryIterator iter)
 {
-	RealDTEntryIterator iter;
-
 	if (!DTInitialized) {
 		return kError;
 	}
 
-	iter = (RealDTEntryIterator) kalloc(sizeof(struct OpaqueDTEntryIterator));
 	if (startEntry != NULL) {
 		iter->outerScope = (RealDTEntry) startEntry;
 		iter->currentScope = (RealDTEntry) startEntry;
@@ -300,28 +276,12 @@ DTCreateEntryIterator(const DTEntry startEntry, DTEntryIterator *iterator)
 	iter->savedScope = NULL;
 	iter->currentIndex = 0;
 
-	*iterator = iter;
 	return kSuccess;
 }
 
 int
-DTDisposeEntryIterator(DTEntryIterator iterator)
+DTEnterEntry(DTEntryIterator iter, DTEntry childEntry)
 {
-	RealDTEntryIterator iter = iterator;
-	DTSavedScopePtr scope;
-
-	while ((scope = iter->savedScope) != NULL) {
-		iter->savedScope = scope->nextScope;
-		kfree(scope, sizeof(struct DTSavedScope));
-	}
-	kfree(iterator, sizeof(struct OpaqueDTEntryIterator));
-	return kSuccess;
-}
-
-int
-DTEnterEntry(DTEntryIterator iterator, DTEntry childEntry)
-{
-	RealDTEntryIterator iter = iterator;
 	DTSavedScopePtr newScope;
 
 	if (childEntry == NULL) {
@@ -342,9 +302,8 @@ DTEnterEntry(DTEntryIterator iterator, DTEntry childEntry)
 }
 
 int
-DTExitEntry(DTEntryIterator iterator, DTEntry *currentPosition)
+DTExitEntry(DTEntryIterator iter, DTEntry *currentPosition)
 {
-	RealDTEntryIterator iter = iterator;
 	DTSavedScopePtr newScope;
 
 	newScope = iter->savedScope;
@@ -363,10 +322,8 @@ DTExitEntry(DTEntryIterator iterator, DTEntry *currentPosition)
 }
 
 int
-DTIterateEntries(DTEntryIterator iterator, DTEntry *nextEntry)
+DTIterateEntries(DTEntryIterator iter, DTEntry *nextEntry)
 {
-	RealDTEntryIterator iter = iterator;
-
 	if (iter->currentIndex >= iter->currentScope->nChildren) {
 		*nextEntry = NULL;
 		return kIterationDone;
@@ -383,9 +340,8 @@ DTIterateEntries(DTEntryIterator iterator, DTEntry *nextEntry)
 }
 
 int
-DTRestartEntryIteration(DTEntryIterator iterator)
+DTRestartEntryIteration(DTEntryIterator iter)
 {
-	RealDTEntryIterator iter = iterator;
 #if 0
 	// This commented out code allows a second argument (outer)
 	// which (if true) causes restarting at the outer scope
@@ -429,31 +385,18 @@ DTGetProperty(const DTEntry entry, const char *propertyName, void **propertyValu
 }
 
 int
-DTCreatePropertyIterator(const DTEntry entry, DTPropertyIterator *iterator)
+DTInitPropertyIterator(const DTEntry entry, DTPropertyIterator iter)
 {
-	RealDTPropertyIterator iter;
 
-	iter = (RealDTPropertyIterator) kalloc(sizeof(struct OpaqueDTPropertyIterator));
 	iter->entry = entry;
 	iter->currentProperty = NULL;
 	iter->currentIndex = 0;
-
-	*iterator = iter;
 	return kSuccess;
 }
 
 int
-DTDisposePropertyIterator(DTPropertyIterator iterator)
+DTIterateProperties(DTPropertyIterator iter, char **foundProperty)
 {
-	kfree(iterator, sizeof(struct OpaqueDTPropertyIterator));
-	return kSuccess;
-}
-
-int
-DTIterateProperties(DTPropertyIterator iterator, char **foundProperty)
-{
-	RealDTPropertyIterator iter = iterator;
-
 	if (iter->currentIndex >= iter->entry->nProperties) {
 		*foundProperty = NULL;
 		return kIterationDone;
@@ -470,10 +413,8 @@ DTIterateProperties(DTPropertyIterator iterator, char **foundProperty)
 }
 
 int
-DTRestartPropertyIteration(DTPropertyIterator iterator)
+DTRestartPropertyIteration(DTPropertyIterator iter)
 {
-	RealDTPropertyIterator iter = iterator;
-
 	iter->currentProperty = NULL;
 	iter->currentIndex = 0;
 	return kSuccess;

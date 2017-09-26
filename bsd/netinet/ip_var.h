@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -150,10 +150,10 @@ struct ip_moptions {
 };
 
 #define	IMO_LOCK_ASSERT_HELD(_imo)					\
-	lck_mtx_assert(&(_imo)->imo_lock, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&(_imo)->imo_lock, LCK_MTX_ASSERT_OWNED)
 
 #define	IMO_LOCK_ASSERT_NOTHELD(_imo)					\
-	lck_mtx_assert(&(_imo)->imo_lock, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&(_imo)->imo_lock, LCK_MTX_ASSERT_NOTOWNED)
 
 #define	IMO_LOCK(_imo)							\
 	lck_mtx_lock(&(_imo)->imo_lock)
@@ -228,7 +228,7 @@ struct	ipstat {
 	u_int32_t ips_rxc_chainsz_gt4;  /* rx chain size greater than 4 */
 	u_int32_t ips_rxc_notlist;	/* count of pkts through ip_input */
 	u_int32_t ips_raw_sappend_fail;	/* sock append failed */
-
+	u_int32_t ips_necp_policy_drop; /* NECP policy related drop */
 };
 
 struct ip_linklocal_stat {
@@ -254,6 +254,7 @@ struct ip_moptions;
 #define	IP_OUTARGS	0x100		/* has ancillary output info */
 
 #define	IP_HDR_ALIGNED_P(_ip)	((((uintptr_t)(_ip)) & ((uintptr_t)3)) == 0)
+#define	IP_OFF_IS_ATOMIC(_ip_off) ((_ip_off & (IP_DF | IP_MF | IP_OFFMASK)) == IP_DF)
 
 /*
  * On platforms which require strict alignment (currently for anything but
@@ -307,6 +308,7 @@ extern int ip_use_randomid;
 extern u_short ip_id;			/* ip packet ctr, for ids */
 extern int ip_defttl;			/* default IP ttl */
 extern int ipforwarding;		/* ip forwarding */
+extern int rfc6864;
 extern struct protosw *ip_protox[];
 extern struct pr_usrreqs rip_usrreqs;
 
@@ -334,7 +336,7 @@ extern struct in_ifaddr *ip_rtaddr(struct in_addr);
 extern int ip_savecontrol(struct inpcb *, struct mbuf **, struct ip *,
     struct mbuf *);
 extern struct mbuf *ip_srcroute(void);
-extern void  ip_stripoptions(struct mbuf *, struct mbuf *);
+extern void  ip_stripoptions(struct mbuf *);
 extern void ip_initid(void);
 extern u_int16_t ip_randomid(void);
 extern void ip_proto_dispatch_in_wrapper(struct mbuf *, int, u_int8_t);
@@ -346,7 +348,7 @@ extern int ip_getsrcifaddr_info(struct mbuf *, uint32_t *, uint32_t *);
 extern int ip_getdstifaddr_info(struct mbuf *, uint32_t *, uint32_t *);
 
 extern int rip_ctloutput(struct socket *, struct sockopt *);
-extern void rip_ctlinput(int, struct sockaddr *, void *);
+extern void rip_ctlinput(int, struct sockaddr *, void *, struct ifnet *);
 extern void rip_init(struct protosw *, struct domain *);
 extern void rip_input(struct mbuf *, int);
 extern int rip_output(struct mbuf *, struct socket *, u_int32_t, struct mbuf *);

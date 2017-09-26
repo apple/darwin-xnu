@@ -677,7 +677,7 @@ static void
 key_start_timehandler(void)
 {
 	/* must be called while locked */
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	if (key_timehandler_running == 0) {
 		key_timehandler_running = 1;
 		(void)timeout((void *)key_timehandler, (void *)0, hz);
@@ -703,7 +703,7 @@ key_allocsp(
 	struct secpolicy *sp;
 	struct timeval tv;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	/* sanity check */
 	if (spidx == NULL)
 		panic("key_allocsp: NULL pointer is passed.\n");
@@ -852,11 +852,14 @@ struct secasvar *key_alloc_outbound_sav_for_interface(ifnet_t interface, int fam
 	if (interface == NULL)
         return NULL;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	lck_mtx_lock(sadb_mutex);
 	
 	LIST_FOREACH(sah, &sahtree, chain) {
+		if (sah->state == SADB_SASTATE_DEAD) {
+			continue;
+		}
 		if (sah->ipsec_if == interface &&
 			(family == AF_INET6 || family == AF_INET) &&
 			sah->dir == IPSEC_DIR_OUTBOUND) {
@@ -907,7 +910,7 @@ key_checkrequest(
 	int error;
 	struct sockaddr_in *sin;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	*sav = NULL;
 	
@@ -1101,7 +1104,7 @@ key_do_allocsa_policy(
 {
 	struct secasvar *sav, *nextsav, *candidate, *natt_candidate, *no_natt_candidate, *d;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* initialize */
 	candidate = NULL;
@@ -1231,6 +1234,17 @@ key_allocsa(
 			u_int proto,
 			u_int32_t spi)
 {
+	return key_allocsa_extended(family, src, dst, proto, spi, NULL);
+}
+
+struct secasvar *
+key_allocsa_extended(u_int family,
+					 caddr_t src,
+					 caddr_t dst,
+					 u_int proto,
+					 u_int32_t spi,
+					 ifnet_t interface)
+{
 	struct secasvar *sav, *match;
 	u_int stateidx, state, tmpidx, matchidx;
 	struct sockaddr_in sin;
@@ -1238,7 +1252,7 @@ key_allocsa(
 	const u_int *saorder_state_valid;
 	int arraysize;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (src == NULL || dst == NULL)
@@ -1272,6 +1286,10 @@ key_allocsa(
 	LIST_FOREACH(sav, &spihash[SPIHASH(spi)], spihash) {
 		if (sav->spi != spi)
 			continue;
+		if (interface != NULL &&
+			sav->sah->ipsec_if != interface) {
+			continue;
+		}
 		if (proto != sav->sah->saidx.proto)
 			continue;
 		if (family != sav->sah->saidx.src.ss_family ||
@@ -1445,7 +1463,7 @@ key_do_get_translated_port(
 	struct secasvar *currsav, *nextsav, *candidate;
 	
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* initilize */
 	candidate = NULL;
@@ -1515,7 +1533,7 @@ key_freesp(
 	if (!locked)
 		lck_mtx_lock(sadb_mutex);
 	else
-		lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	sp->refcnt--;
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 	    printf("DP freesp cause refcnt--:%d SP:0x%llx\n",
@@ -1546,7 +1564,7 @@ key_freesav(
 	if (!locked)
 		lck_mtx_lock(sadb_mutex);
 	else
-		lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+		LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	sav->refcnt--;
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 	    printf("DP freesav cause refcnt--:%d SA:0x%llx SPI %u\n",
@@ -1573,7 +1591,7 @@ key_delsp(
 	if (sp == NULL)
 		panic("key_delsp: NULL pointer is passed.\n");
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	sp->state = IPSEC_SPSTATE_DEAD;
 	
 	if (sp->refcnt > 0)
@@ -1625,7 +1643,7 @@ key_getsp(
 {
 	struct secpolicy *sp;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* sanity check */
 	if (spidx == NULL)
@@ -1654,7 +1672,7 @@ key_getspbyid(
 {
 	struct secpolicy *sp;
 	
-    lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+    LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
     
     lck_mtx_lock(sadb_mutex);
     sp = __key_getspbyid(id);
@@ -1668,7 +1686,7 @@ __key_getspbyid(u_int32_t id)
 {
 	struct secpolicy *sp;
     
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
     
 	LIST_FOREACH(sp, &sptree[IPSEC_DIR_INBOUND], chain) {
 		if (sp->state == IPSEC_SPSTATE_DEAD)
@@ -1696,7 +1714,7 @@ key_newsp(void)
 {
 	struct secpolicy *newsp = NULL;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	newsp = keydb_newsecpolicy();
 	if (!newsp)
 		return newsp;
@@ -1720,7 +1738,7 @@ key_msg2sp(
 {
 	struct secpolicy *newsp;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (xpl0 == NULL)
@@ -1770,6 +1788,13 @@ key_msg2sp(
 			xisr = (struct sadb_x_ipsecrequest *)(xpl0 + 1);
 			
 			while (tlen > 0) {
+				if (tlen < sizeof(*xisr)) {
+					ipseclog((LOG_DEBUG, "key_msg2sp: "
+							  "invalid ipsecrequest.\n"));
+					key_freesp(newsp, KEY_SADB_UNLOCKED);
+					*error = EINVAL;
+					return NULL;
+				}
 				
 				/* length check */
 				if (xisr->sadb_x_ipsecrequest_len < sizeof(*xisr)) {
@@ -1873,8 +1898,25 @@ key_msg2sp(
 				/* set IP addresses if there */
 				if (xisr->sadb_x_ipsecrequest_len > sizeof(*xisr)) {
 					struct sockaddr *paddr;
+
+					if (tlen < xisr->sadb_x_ipsecrequest_len) {
+						ipseclog((LOG_DEBUG, "key_msg2sp: invalid request "
+								  "address length.\n"));
+						key_freesp(newsp, KEY_SADB_UNLOCKED);
+						*error = EINVAL;
+						return NULL;
+					}
 					
 					paddr = (struct sockaddr *)(xisr + 1);
+					uint8_t src_len = paddr->sa_len;
+
+					if (xisr->sadb_x_ipsecrequest_len < src_len) {
+						ipseclog((LOG_DEBUG, "key_msg2sp: invalid request "
+								  "invalid source address length.\n"));
+						key_freesp(newsp, KEY_SADB_UNLOCKED);
+						*error = EINVAL;
+						return NULL;
+					}
 					
 					/* validity check */
 					if (paddr->sa_len
@@ -1885,11 +1927,20 @@ key_msg2sp(
 						*error = EINVAL;
 						return NULL;
 					}
+
 					bcopy(paddr, &(*p_isr)->saidx.src,
-						  paddr->sa_len);
+						  MIN(paddr->sa_len, sizeof((*p_isr)->saidx.src)));
 					
-					paddr = (struct sockaddr *)((caddr_t)paddr
-												+ paddr->sa_len);
+					paddr = (struct sockaddr *)((caddr_t)paddr + paddr->sa_len);
+					uint8_t dst_len = paddr->sa_len;
+
+					if (xisr->sadb_x_ipsecrequest_len < (src_len + dst_len)) {
+						ipseclog((LOG_DEBUG, "key_msg2sp: invalid request "
+								  "invalid dest address length.\n"));
+						key_freesp(newsp, KEY_SADB_UNLOCKED);
+						*error = EINVAL;
+						return NULL;
+					}
 					
 					/* validity check */
 					if (paddr->sa_len
@@ -1900,8 +1951,9 @@ key_msg2sp(
 						*error = EINVAL;
 						return NULL;
 					}
+
 					bcopy(paddr, &(*p_isr)->saidx.dst,
-						  paddr->sa_len);
+						  MIN(paddr->sa_len, sizeof((*p_isr)->saidx.dst)));
 				}
 				
 				(*p_isr)->sp = newsp;
@@ -2134,7 +2186,7 @@ key_spdadd(
 		   struct mbuf *m,
 		   const struct sadb_msghdr *mhp)
 {
-	struct sadb_address *src0, *dst0, *src1, *dst1;
+	struct sadb_address *src0, *dst0, *src1 = NULL, *dst1 = NULL;
 	struct sadb_x_policy *xpl0, *xpl;
 	struct sadb_lifetime *lft = NULL;
 	struct secpolicyindex spidx;
@@ -2150,7 +2202,7 @@ key_spdadd(
 	int init_disabled = 0;
 	int address_family, address_len;
     
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -2536,7 +2588,7 @@ key_spddelete(
 			  struct mbuf *m,
 			  const struct sadb_msghdr *mhp)
 {
-	struct sadb_address *src0, *dst0, *src1, *dst1;
+	struct sadb_address *src0, *dst0, *src1 = NULL, *dst1 = NULL;
 	struct sadb_x_policy *xpl0;
 	struct secpolicyindex spidx;
 	struct secpolicy *sp;
@@ -2545,7 +2597,7 @@ key_spddelete(
     int use_src_range = 0;
     int use_dst_range = 0;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
     
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -2690,7 +2742,7 @@ key_spddelete2(
 	u_int32_t id;
 	struct secpolicy *sp;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -2780,7 +2832,7 @@ key_spdenable(
 	u_int32_t id;
 	struct secpolicy *sp;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -2840,7 +2892,7 @@ key_spddisable(
 	u_int32_t id;
 	struct secpolicy *sp;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -2913,7 +2965,7 @@ key_spdget(
 	struct secpolicy *sp;
 	struct mbuf *n;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -2967,7 +3019,7 @@ key_spdacquire(
 	struct secspacq *newspacq;
 	int error;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (sp == NULL)
@@ -3305,7 +3357,7 @@ key_spdexpire(
 	int error = EINVAL;
 	struct sadb_lifetime *lt;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (sp == NULL)
@@ -3512,7 +3564,7 @@ key_delsah(
 	u_int stateidx, state;
 	int zombie = 0;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* sanity check */
 	if (sah == NULL)
@@ -3598,7 +3650,7 @@ key_newsav(
 	struct secasvar *newsav;
 	const struct sadb_sa *xsa;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* sanity check */
 	if (m == NULL || mhp == NULL || mhp->msg == NULL || sah == NULL)
@@ -3763,7 +3815,7 @@ key_newsav2(struct secashead     *sah,
 {
 	struct secasvar *newsav;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* sanity check */
 	if (sah == NULL)
@@ -3861,7 +3913,7 @@ key_delsav(
 		   struct secasvar *sav)
 {
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* sanity check */
 	if (sav == NULL)
@@ -3930,7 +3982,7 @@ key_getsah(struct secasindex *saidx)
 {
 	struct secashead *sah;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	LIST_FOREACH(sah, &sahtree, chain) {
 		if (sah->state == SADB_SASTATE_DEAD)
@@ -3948,7 +4000,7 @@ key_newsah2 (struct secasindex *saidx,
 {
 	struct secashead *sah;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	sah = key_getsah(saidx);
 	if (!sah) {
@@ -3972,7 +4024,7 @@ key_checkspidup(
 	struct secasvar *sav;
 	u_int stateidx, state;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* check address family */
 	if (saidx->src.ss_family != saidx->dst.ss_family) {
@@ -4002,7 +4054,7 @@ key_setspi(
 		   struct secasvar *sav,
 		   u_int32_t spi)
 {
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	sav->spi = spi;
 	if (sav->spihash.le_prev || sav->spihash.le_next)
 		LIST_REMOVE(sav, spihash);
@@ -4024,7 +4076,7 @@ key_getsavbyspi(
 	struct secasvar *sav, *match;
 	u_int stateidx, state, matchidx;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	match = NULL;
 	matchidx = _ARRAYLEN(saorder_state_alive);
 	LIST_FOREACH(sav, &spihash[SPIHASH(spi)], spihash) {
@@ -4065,7 +4117,7 @@ key_setsaval(
 	int error = 0;
 	struct timeval tv;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* sanity check */
 	if (m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -4406,7 +4458,7 @@ key_setsaval2(struct secasvar      *sav,
 	int error = 0;
 	struct timeval tv;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* initialization */
 	sav->replay = NULL;
@@ -4611,7 +4663,7 @@ key_mature(
 	
 	mature = 0;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* check SPI value */
 	switch (sav->sah->saidx.proto) {
@@ -5296,7 +5348,7 @@ key_newbuf(
 {
 	caddr_t new;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	KMALLOC_NOWAIT(new, caddr_t, len);
 	if (new == NULL) {
 		lck_mtx_unlock(sadb_mutex);
@@ -6456,7 +6508,7 @@ key_getspi(
 	u_int32_t reqid;
 	int error;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -6658,7 +6710,7 @@ key_getspi2(struct sockaddr      *src,
 	u_int32_t         spi;
 	struct secasindex saidx;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* XXX boundary check against sa_len */
 	KEY_SETSECASIDX(proto, mode, reqid, src, dst, 0, &saidx);
@@ -6719,7 +6771,7 @@ key_do_getnewspi(
 	u_int32_t keymin, keymax;
 	int count = key_spi_trycnt;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* set spi range to allocate */
 	if (spirange != NULL) {
@@ -6812,7 +6864,7 @@ key_update(
 	u_int16_t flags2;
 	int error;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -6993,7 +7045,7 @@ key_migrate(struct socket *so,
 	struct secasvar *sav = NULL;
 	u_int16_t proto;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -7136,7 +7188,7 @@ key_getsavbyseq(
 	struct secasvar *sav;
 	u_int state;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	state = SADB_SASTATE_LARVAL;
 	
@@ -7191,7 +7243,7 @@ key_add(
 	u_int32_t reqid;
 	int error;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -7335,7 +7387,7 @@ key_setident(
 	const struct sadb_ident *idsrc, *iddst;
 	int idsrclen, iddstlen;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	/* sanity check */
 	if (sah == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -7473,7 +7525,7 @@ key_delete(
 	struct secasvar *sav = NULL;
 	u_int16_t proto;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -7588,7 +7640,7 @@ key_delete_all(
 	struct secasvar *sav, *nextsav;
 	u_int stateidx, state;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	src0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_SRC]);
 	dst0 = (struct sadb_address *)(mhp->ext[SADB_EXT_ADDRESS_DST]);
@@ -7680,7 +7732,7 @@ key_get(
 	struct secasvar *sav = NULL;
 	u_int16_t proto;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -8121,7 +8173,7 @@ key_acquire(
 	int error = -1;
 	u_int32_t seq;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (saidx == NULL)
@@ -8330,7 +8382,7 @@ key_getacq(
 {
 	struct secacq *acq;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	LIST_FOREACH(acq, &acqtree, chain) {
 		if (key_cmpsaidx(saidx, &acq->saidx, CMP_EXACTLY))
@@ -8346,7 +8398,7 @@ key_getacqbyseq(
 {
 	struct secacq *acq;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	LIST_FOREACH(acq, &acqtree, chain) {
 		if (acq->seq == seq)
@@ -8392,7 +8444,7 @@ key_getspacq(
 {
 	struct secspacq *acq;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	LIST_FOREACH(acq, &spacqtree, chain) {
 		if (key_cmpspidx_exactly(spidx, &acq->spidx))
@@ -8796,7 +8848,7 @@ key_expire(
 	int error = -1;
 	struct sadb_lifetime *lt;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (sav == NULL)
@@ -9020,7 +9072,7 @@ key_dump(
 	struct mbuf *n;
 	int error = 0;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
@@ -9365,7 +9417,7 @@ key_parse(
 	int target;
 	Boolean keyAligned = FALSE;
 
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	/* sanity check */
 	if (m == NULL || so == NULL)
@@ -9580,7 +9632,7 @@ key_senderror(
 {
 	struct sadb_msg *msg;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	if (m->m_len < sizeof(struct sadb_msg))
 		panic("invalid mbuf passed to key_senderror");
@@ -9721,7 +9773,7 @@ key_validate_ext(
 {
 	struct sockaddr *sa;
 	enum { NONE, ADDR } checktype = NONE;
-	int baselen;
+	int baselen = 0;
 	const int sal = offsetof(struct sockaddr, sa_len) + sizeof(sa->sa_len);
 	
 	if (len != PFKEY_UNUNIT64(ext->sadb_ext_len))
@@ -9891,7 +9943,7 @@ key_sa_chgstate(
 	if (sav->state == state)
 		return;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	
 	if (__LIST_CHAINED(sav))
 		LIST_REMOVE(sav, chain);
@@ -10049,7 +10101,7 @@ key_getsastat (struct socket *so,
 		return key_senderror(so, m, EINVAL);
 	}
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	// exit early if there are no active SAs
 	if (ipsec_sav_count <= 0) {
@@ -10256,7 +10308,7 @@ key_delsp_for_ipsec_if (ifnet_t ipsec_if)
 	if (ipsec_if == NULL)
         return;
 	
-	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
 	lck_mtx_lock(sadb_mutex);
     

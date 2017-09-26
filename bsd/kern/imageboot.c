@@ -42,6 +42,7 @@
 #include <sys/vnode.h>
 #include <sys/sysproto.h>
 #include <sys/csr.h>
+#include <miscfs/devfs/devfsdefs.h>
 #include <libkern/crypto/sha2.h>
 #include <libkern/crypto/rsa.h>
 #include <libkern/OSKextLibPrivate.h>
@@ -54,7 +55,7 @@
 extern struct filedesc filedesc0;
 
 extern int (*mountroot)(void);
-extern char rootdevice[];
+extern char rootdevice[DEVMAXNAMESIZE];
 
 #define DEBUG_IMAGEBOOT 0
 
@@ -64,7 +65,9 @@ extern char rootdevice[];
 #define DBG_TRACE(...) do {} while(0)
 #endif
 
-extern int di_root_image(const char *path, char devname[], dev_t *dev_p);
+extern int di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p);
+extern int di_root_ramfile_buf(void *buf, size_t bufsz, char *devname, size_t devsz, dev_t *dev_p);
+
 static boolean_t imageboot_setup_new(void);
 
 #define kIBFilePrefix "file://"
@@ -150,7 +153,7 @@ imageboot_mount_image(const char *root_path, int height)
 	vnode_t 	newdp;
 	mount_t 	new_rootfs;
 
-	error = di_root_image(root_path, rootdevice, &dev);
+	error = di_root_image(root_path, rootdevice, DEVMAXNAMESIZE, &dev);
 	if (error) {
 		panic("%s: di_root_image failed: %d\n", __FUNCTION__, error);
 	}
@@ -259,7 +262,7 @@ read_file(const char *path, void **bufp, size_t *bufszp)
 	proc_t p = vfs_context_proc(ctx);
 	kauth_cred_t kerncred = vfs_context_ucred(ctx);
 
-	NDINIT(&ndp, LOOKUP, OP_OPEN, LOCKLEAF, UIO_SYSSPACE, path, ctx);
+	NDINIT(&ndp, LOOKUP, OP_OPEN, LOCKLEAF, UIO_SYSSPACE, CAST_USER_ADDR_T(path), ctx);
 	if ((err = namei(&ndp)) != 0) {
 		AUTHPRNT("namei failed (%s)", path);
 		goto out;
@@ -493,7 +496,7 @@ validate_root_image(const char *root_path, void *chunklist)
 	/*
 	 * Open the DMG
 	 */
-	NDINIT(&ndp, LOOKUP, OP_OPEN, LOCKLEAF, UIO_SYSSPACE, root_path, ctx);
+	NDINIT(&ndp, LOOKUP, OP_OPEN, LOCKLEAF, UIO_SYSSPACE, CAST_USER_ADDR_T(root_path), ctx);
 	if ((err = namei(&ndp)) != 0) {
 		AUTHPRNT("namei failed (%s)", root_path);
 		goto out;
@@ -831,6 +834,96 @@ auth_imgboot_test(proc_t __unused ap, struct auth_imgboot_test_args *uap, int32_
 }
 #endif
 
+/*
+ * Attach the image at 'path' as a ramdisk and mount it as our new rootfs.
+ * All existing mounts are first umounted.
+ */
+static int
+imageboot_mount_ramdisk(const char *path)
+{
+	int err = 0;
+	size_t bufsz = 0;
+	void *buf = NULL;
+	dev_t dev;
+	vnode_t newdp;
+	mount_t new_rootfs;
+
+	/* Read our target image from disk */
+	err = read_file(path, &buf, &bufsz);
+	if (err) {
+		printf("%s: failed: read_file() = %d\n", __func__, err);
+		goto out;
+	}
+	DBG_TRACE("%s: read '%s' sz = %lu\n", __func__, path, bufsz);
+
+#if CONFIG_IMGSRC_ACCESS
+	/* Re-add all root mounts to the mount list in the correct order... */
+	mount_list_remove(rootvnode->v_mount);
+	for (int i = 0; i < MAX_IMAGEBOOT_NESTING; i++) {
+		struct vnode *vn = imgsrc_rootvnodes[i];
+		if (vn) {
+			vnode_getalways(vn);
+			imgsrc_rootvnodes[i] = NULLVP;
+
+			mount_t mnt = vn->v_mount;
+			mount_lock(mnt);
+			mnt->mnt_flag |= MNT_ROOTFS;
+			mount_list_add(mnt);
+			mount_unlock(mnt);
+
+			vnode_rele(vn);
+			vnode_put(vn);
+		}
+	}
+	mount_list_add(rootvnode->v_mount);
+#endif
+
+	/* ... and unmount everything */
+	vnode_get_and_drop_always(rootvnode);
+	filedesc0.fd_cdir = NULL;
+	rootvnode = NULL;
+	vfs_unmountall();
+
+	/* Attach the ramfs image ... */
+	err = di_root_ramfile_buf(buf, bufsz, rootdevice, DEVMAXNAMESIZE, &dev);
+	if (err) {
+		printf("%s: failed: di_root_ramfile_buf() = %d\n", __func__, err);
+		goto out;
+	}
+
+	/* ... and mount it */
+	rootdev = dev;
+	mountroot = NULL;
+	err = vfs_mountroot();
+	if (err) {
+		printf("%s: failed: vfs_mountroot() = %d\n", __func__, err);
+		goto out;
+	}
+
+	/* Switch to new root vnode */
+	if (VFS_ROOT(TAILQ_LAST(&mountlist,mntlist), &newdp, vfs_context_kernel())) {
+		panic("%s: cannot find root vnode", __func__);
+	}
+	rootvnode = newdp;
+	rootvnode->v_flag |= VROOT;
+	new_rootfs = rootvnode->v_mount;
+	mount_lock(new_rootfs);
+	new_rootfs->mnt_flag |= MNT_ROOTFS;
+	mount_unlock(new_rootfs);
+
+	vnode_ref(newdp);
+	vnode_put(newdp);
+	filedesc0.fd_cdir = newdp;
+
+	DBG_TRACE("%s: root switched\n", __func__);
+
+out:
+	if (err) {
+		kfree_safe(buf);
+	}
+	return err;
+}
+
 static boolean_t
 imageboot_setup_new()
 {
@@ -839,9 +932,15 @@ imageboot_setup_new()
 	int height = 0;
 	boolean_t done = FALSE;
 	boolean_t auth_root = FALSE;
+	boolean_t ramdisk_root = FALSE;
 
 	MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
 	assert(root_path != NULL);
+
+	unsigned imgboot_arg;
+	if (PE_parse_boot_argn("-rootdmg-ramdisk", &imgboot_arg, sizeof(imgboot_arg))) {
+		ramdisk_root = TRUE;
+	}
 
 	if (PE_parse_boot_argn(IMAGEBOOT_CONTAINER_ARG, root_path, MAXPATHLEN) == TRUE) {
 		printf("%s: container image url is %s\n", __FUNCTION__, root_path);
@@ -871,36 +970,41 @@ imageboot_setup_new()
 	}
 #endif
 
+	/* Make a copy of the path to URL-decode */
+	char *path_alloc = kalloc(MAXPATHLEN);
+	if (path_alloc == NULL) {
+		panic("imageboot path allocation failed\n");
+	}
+	char *path = path_alloc;
+
+	size_t len = strlen(kIBFilePrefix);
+	strlcpy(path, root_path, MAXPATHLEN);
+	if (strncmp(kIBFilePrefix, path, len) == 0) {
+		/* its a URL - remove the file:// prefix and percent-decode */
+		path += len;
+		url_decode(path);
+	}
+
 	if (auth_root) {
-		/* Copy the path to use locally */
-		char *path_alloc = kalloc(MAXPATHLEN);
-		if (path_alloc == NULL) {
-			panic("imageboot path allocation failed\n");
-		}
-
-		char *path = path_alloc;
-		strlcpy(path, root_path, MAXPATHLEN);
-
-		size_t len = strlen(kIBFilePrefix);
-		if (strncmp(kIBFilePrefix, path, len) == 0) {
-			/* its a URL - remove the file:// prefix and percent-decode */
-			path += len;
-			url_decode(path);
-		}
-
 		AUTHDBG("authenticating root image at %s", path);
 		error = authenticate_root(path);
 		if (error) {
 			panic("root image authentication failed (err = %d)\n", error);
 		}
 		AUTHDBG("successfully authenticated %s", path);
-
-		kfree_safe(path_alloc);
 	}
 
-	error = imageboot_mount_image(root_path, height);
-	if (error != 0) {
-		panic("Failed to mount root image.");
+	if (ramdisk_root) {
+		error = imageboot_mount_ramdisk(path);
+	} else {
+		error = imageboot_mount_image(root_path, height);
+	}
+
+	kfree_safe(path_alloc);
+
+	if (error) {
+		panic("Failed to mount root image (err=%d, auth=%d, ramdisk=%d)\n",
+				error, auth_root, ramdisk_root);
 	}
 
 	if (auth_root) {

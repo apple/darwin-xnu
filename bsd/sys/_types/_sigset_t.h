@@ -27,5 +27,6 @@
  */
 #ifndef _SIGSET_T 
 #define _SIGSET_T 
+#include <sys/_types.h> /* __darwin_sigset_t */
 typedef __darwin_sigset_t		sigset_t;
 #endif  /* _SIGSET_T */

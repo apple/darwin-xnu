@@ -137,7 +137,11 @@
 /*
  * default top of user stack... it grows down from here
  */
-#define VM_USRSTACK64		((user_addr_t) 0x00007FFF5FC00000ULL)
+#define VM_USRSTACK64		((user_addr_t) 0x00007FFEEFC00000ULL)
+
+/*
+ * XXX TODO: Obsolete?
+ */
 #define VM_DYLD64		((user_addr_t) 0x00007FFF5FC00000ULL)
 #define VM_LIB64_SHR_DATA	((user_addr_t) 0x00007FFF60000000ULL)
 #define VM_LIB64_SHR_TEXT	((user_addr_t) 0x00007FFF80000000ULL)
@@ -199,14 +203,22 @@
 #define KEXT_ALLOC_BASE(x)  ((x) - KEXT_ALLOC_MAX_OFFSET)
 #define KEXT_ALLOC_SIZE(x)  (KEXT_ALLOC_MAX_OFFSET - (x))
 
-
-#define KERNEL_STACK_SIZE	(I386_PGBYTES*4)
+#define VM_KERNEL_ADDRESS(va)	((((vm_address_t)(va))>=VM_MIN_KERNEL_AND_KEXT_ADDRESS) && \
+				(((vm_address_t)(va))<=VM_MAX_KERNEL_ADDRESS))
 
 #define VM_MAP_MIN_ADDRESS	MACH_VM_MIN_ADDRESS
 #define VM_MAP_MAX_ADDRESS	MACH_VM_MAX_ADDRESS
 
 /* FIXME  - always leave like this? */
-#define	INTSTACK_SIZE	(I386_PGBYTES*4)
+#if KASAN
+/* Increase the stack sizes to account for the redzones that get added to every
+ * stack object. */
+# define INTSTACK_SIZE (I386_PGBYTES*4*4)
+# define KERNEL_STACK_SIZE (I386_PGBYTES*4*4)
+#else
+# define INTSTACK_SIZE (I386_PGBYTES*4)
+# define KERNEL_STACK_SIZE (I386_PGBYTES*4)
+#endif
 
 #ifdef	MACH_KERNEL_PRIVATE
 

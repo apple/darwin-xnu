@@ -19,21 +19,21 @@ DATAFILES = \
 	appleapiopts.h	acct.h aio.h attr.h \
 	buf.h cdefs.h clonefile.h conf.h \
 	dir.h dirent.h disk.h dkstat.h dtrace.h dtrace_glue.h dtrace_impl.h \
-	errno.h ev.h event.h fasttrap.h fasttrap_isa.h fcntl.h file.h filedesc.h filio.h gmon.h \
+	errno.h ev.h event.h fasttrap.h fasttrap_isa.h fcntl.h file.h filedesc.h filio.h fsgetpath.h gmon.h \
 	ioccom.h ioctl.h \
 	ioctl_compat.h ipc.h kernel.h kernel_types.h kern_event.h lctx.h loadable_fs.h lock.h lockf.h \
 	kauth.h kdebug.h kdebug_signpost.h kern_control.h lockstat.h malloc.h \
 	mbuf.h mman.h mount.h msg.h msgbuf.h netport.h param.h paths.h pipe.h poll.h \
 	proc.h  proc_info.h ptrace.h queue.h quota.h reboot.h resource.h resourcevar.h \
 	sbuf.h posix_sem.h posix_shm.h random.h sdt.h\
-	select.h sem.h semaphore.h shm.h signal.h signalvar.h socket.h socketvar.h sockio.h stat.h stdio.h \
+	select.h sem.h semaphore.h shm.h signal.h signalvar.h snapshot.h socket.h socketvar.h sockio.h stat.h stdio.h \
 	sysctl.h syslimits.h syslog.h sys_domain.h termios.h  time.h \
 	timeb.h times.h tprintf.h trace.h tty.h  ttychars.h ttycom.h \
 	ttydefaults.h ttydev.h  types.h ubc.h ucontext.h ucred.h uio.h un.h unistd.h unpcb.h \
 	user.h utfconv.h utsname.h vadvise.h vcmd.h \
 	vm.h vmmeter.h vmparam.h vnioctl.h vnode.h vnode_if.h vstat.h wait.h xattr.h \
 	_select.h _structs.h _types.h _endian.h domain.h protosw.h \
-	spawn.h
+	spawn.h timex.h commpage.h
 
 # Installs header file for Apple internal use in user level -
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
@@ -67,6 +67,7 @@ PRIVATE_DATAFILES = \
 	kern_overrides.h \
 	mbuf.h \
 	mman.h \
+	monotonic.h \
 	persona.h \
 	priv.h \
 	proc.h \
@@ -94,7 +95,8 @@ PRIVATE_DATAFILES = \
 	proc_uuid_policy.h \
 	priv.h \
 	pgo.h \
-	memory_maintenance.h
+	memory_maintenance.h \
+	commpage.h
 
 # Installs header file for kernel extensions -
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
@@ -118,7 +120,7 @@ KERNELFILES = \
 	kpi_mbuf.h kpi_socket.h kpi_socketfilter.h \
 	ttycom.h termios.h msg.h \
 	wait.h \
-	spawn.h
+	spawn.h timex.h commpage.h
 # The last line was added to export needed headers for the MAC calls
 # whose source is outside of the xnu/bsd tree.
 
@@ -131,6 +133,7 @@ PRIVATE_KERNELFILES = \
 	csr.h \
 	decmpfs.h \
 	disktab.h \
+	eventhandler.h \
 	fbt.h \
 	fileport.h \
 	fsctl.h \
@@ -140,12 +143,14 @@ PRIVATE_KERNELFILES = \
 	kpi_private.h \
 	ktrace.h \
 	mach_swapon.h \
+	monotonic.h \
 	msgbuf.h \
 	eventvar.h \
 	persona.h \
 	proc_info.h \
 	pthread_shims.h \
 	quota.h \
+	reboot.h \
 	sem_internal.h \
 	shm_internal.h \
 	signalvar.h \
@@ -161,7 +166,8 @@ PRIVATE_KERNELFILES = \
 	pgo.h \
 	memory_maintenance.h \
 	doc_tombstone.h \
-	fsevents.h
+	fsevents.h \
+	work_interval.h \
 
 # /usr/include
 INSTALL_MI_LIST	= ${DATAFILES}

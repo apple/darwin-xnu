@@ -200,8 +200,10 @@ struct cdevsw {
 #ifdef BSD_KERNEL_PRIVATE
 
 extern uint64_t cdevsw_flags[];
-#define CDEVSW_SELECT_KQUEUE	0x01
-#define CDEVSW_USE_OFFSET	0x02
+#define CDEVSW_SELECT_KQUEUE 0x01
+#define CDEVSW_USE_OFFSET    0x02
+#define CDEVSW_IS_PTC        0x04
+#define CDEVSW_IS_PTS        0x08
 
 struct thread;
 

@@ -177,6 +177,48 @@
 #include <libkern/c++/OSData.h>
 #include "Tests.h"
 
+#include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOWorkLoop.h>
+
+#if DEVELOPMENT || DEBUG
+
+static uint64_t gIOWorkLoopTestDeadline;
+
+static void
+TESAction(OSObject * owner, IOTimerEventSource * tes)
+{
+    if (mach_absolute_time() < gIOWorkLoopTestDeadline) tes->setTimeout(1, kMicrosecondScale);
+}
+
+static int
+IOWorkLoopTest(int newValue)
+{
+    IOReturn err;
+    uint32_t idx;
+    IOWorkLoop * wl;
+    IOTimerEventSource * tes;
+
+    wl = IOWorkLoop::workLoop();
+    assert(wl);
+    tes = IOTimerEventSource::timerEventSource(kIOTimerEventSourceOptionsPriorityWorkLoop, wl, &TESAction);
+    assert(tes);
+    err = wl->addEventSource(tes);
+    assert(kIOReturnSuccess == err);
+    clock_interval_to_deadline(2000, kMillisecondScale, &gIOWorkLoopTestDeadline);
+    for (idx = 0; mach_absolute_time() < gIOWorkLoopTestDeadline; idx++)
+    {
+	tes->setTimeout(idx & 1023, kNanosecondScale);
+    }
+    tes->cancelTimeout();
+    wl->removeEventSource(tes);
+    tes->release();
+    wl->release();
+
+    return (0);
+}
+
+#endif  /* DEVELOPMENT || DEBUG */
+
 static int
 sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
@@ -194,7 +236,13 @@ sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused
 	data->release();
     }
 
-    if (changed && newValue) error = IOMemoryDescriptorTest(newValue);
+    if (changed && newValue)
+    {
+	error = IOWorkLoopTest(newValue);
+	assert(KERN_SUCCESS == error);
+	error = IOMemoryDescriptorTest(newValue);
+	assert(KERN_SUCCESS == error);
+    }
 #endif  /* DEVELOPMENT || DEBUG */
 
     return (error);

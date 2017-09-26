@@ -457,8 +457,7 @@ pet_sample_task(task_t task, uint32_t idle_rate)
 
 		/* do not sample the thread if it was on a CPU during the IPI. */
 		for (cpu = 0; cpu < machine_info.logical_cpu_max; cpu++) {
-			thread_t candidate = kperf_thread_on_cpus[cpu];
-			if (candidate && (thread_tid(candidate) == thread_tid(thread))) {
+			if (kperf_tid_on_cpus[cpu] == thread_tid(thread)) {
 				break;
 			}
 		}

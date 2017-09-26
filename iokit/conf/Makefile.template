@@ -18,6 +18,7 @@ include $(MakeInc_def)
 #
 CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE		\
 	-DIOKIT_KERNEL_PRIVATE -DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1
+SFLAGS+= -include meta_features.h
 #-DIOKITDEBUG=-1
 
 CWARNFLAGS   = $(CWARNFLAGS_STD) -Wno-unused-parameter

@@ -112,8 +112,8 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t
 		panic("pmap_nest: va_start(0x%llx) != nstart(0x%llx)\n", va_start, nstart);
 
 	PMAP_TRACE(PMAP_CODE(PMAP__NEST) | DBG_FUNC_START,
-	(uintptr_t) grand, (uintptr_t) subord,
-	    (uintptr_t) (va_start>>32), (uintptr_t) va_start, 0);
+	           VM_KERNEL_ADDRHIDE(grand), VM_KERNEL_ADDRHIDE(subord),
+	           VM_KERNEL_ADDRHIDE(va_start));
 
 	nvaddr = (vm_map_offset_t)nstart;
 	num_pde = size >> PDESHIFT;
@@ -201,7 +201,7 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t
 
 	PMAP_UNLOCK(grand);
 
-	PMAP_TRACE(PMAP_CODE(PMAP__NEST) | DBG_FUNC_END, 0, 0, 0, 0, 0);
+	PMAP_TRACE(PMAP_CODE(PMAP__NEST) | DBG_FUNC_END, KERN_SUCCESS);
 
 	return KERN_SUCCESS;
 }
@@ -216,7 +216,6 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t
  */
 
 kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr, uint64_t size) {
-			
 	pd_entry_t *pde;
 	unsigned int i;
 	uint64_t num_pde;
@@ -224,8 +223,7 @@ kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr, uint64_t size) {
 	uint64_t npdpt = PMAP_INVALID_PDPTNUM;
 
 	PMAP_TRACE(PMAP_CODE(PMAP__UNNEST) | DBG_FUNC_START,
-	    (uintptr_t) grand, 
-	    (uintptr_t) (vaddr>>32), (uintptr_t) vaddr, 0, 0);
+	           VM_KERNEL_ADDRHIDE(grand), VM_KERNEL_ADDRHIDE(vaddr));
 
 	if ((size & (pmap_nesting_size_min-1)) ||
 	    (vaddr & (pmap_nesting_size_min-1))) {
@@ -267,8 +265,8 @@ kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr, uint64_t size) {
 	PMAP_UPDATE_TLBS(grand, va_start, va_end);
 
 	PMAP_UNLOCK(grand);
-		
-	PMAP_TRACE(PMAP_CODE(PMAP__UNNEST) | DBG_FUNC_END, 0, 0, 0, 0, 0);
+
+	PMAP_TRACE(PMAP_CODE(PMAP__UNNEST) | DBG_FUNC_END, KERN_SUCCESS);
 
 	return KERN_SUCCESS;
 }
@@ -452,7 +450,7 @@ void x86_filter_TLB_coherency_interrupts(boolean_t dofilter) {
  *	insert this page into the given map NOW.
  */
 
-void
+kern_return_t
 pmap_enter(
 	pmap_t		pmap,
  	vm_map_offset_t		vaddr,
@@ -462,7 +460,7 @@ pmap_enter(
 	unsigned int 		flags,
 	boolean_t		wired)
 {
-	(void) pmap_enter_options(pmap, vaddr, pn, prot, fault_type, flags, wired, PMAP_EXPAND_OPTIONS_NONE, NULL);
+	return pmap_enter_options(pmap, vaddr, pn, prot, fault_type, flags, wired, PMAP_EXPAND_OPTIONS_NONE, NULL);
 }
 
 
@@ -495,9 +493,11 @@ pmap_enter_options(
 	vm_object_t		delpage_pm_obj = NULL;
 	uint64_t		delpage_pde_index = 0;
 	pt_entry_t		old_pte;
-	kern_return_t		kr_expand;
+	kern_return_t		kr;
 	boolean_t		is_ept;
 	boolean_t		is_altacct;
+
+	kr = KERN_FAILURE;
 
 	pmap_intr_assert();
 
@@ -515,9 +515,8 @@ pmap_enter_options(
 		return KERN_INVALID_ARGUMENT;
 
 	PMAP_TRACE(PMAP_CODE(PMAP__ENTER) | DBG_FUNC_START,
-	    pmap,
-	    (uint32_t) (vaddr >> 32), (uint32_t) vaddr,
-	    pn, prot);
+	           VM_KERNEL_ADDRHIDE(pmap), VM_KERNEL_ADDRHIDE(vaddr), pn,
+	           prot);
 
 	if ((prot & VM_PROT_EXECUTE) || !nx_enabled || !pmap->nx_enabled)
 		set_NX = FALSE;
@@ -551,9 +550,9 @@ Retry:
 	 	while ((pte = pmap64_pde(pmap, vaddr)) == PD_ENTRY_NULL) {
 			/* need room for another pde entry */
 			PMAP_UNLOCK(pmap);
-			kr_expand = pmap_expand_pdpt(pmap, vaddr, options);
-			if (kr_expand != KERN_SUCCESS)
-				return kr_expand;
+			kr = pmap_expand_pdpt(pmap, vaddr, options);
+			if (kr != KERN_SUCCESS)
+				goto done;
 			PMAP_LOCK(pmap);
 		}
 	} else {
@@ -563,15 +562,16 @@ Retry:
 			 * going to grow pde level page(s)
 			 */
 			PMAP_UNLOCK(pmap);
-			kr_expand = pmap_expand(pmap, vaddr, options);
-			if (kr_expand != KERN_SUCCESS)
-				return kr_expand;
+			kr = pmap_expand(pmap, vaddr, options);
+			if (kr != KERN_SUCCESS)
+				goto done;
 			PMAP_LOCK(pmap);
 		}
 	}
 	if (options & PMAP_EXPAND_OPTIONS_NOENTER) {
 		PMAP_UNLOCK(pmap);
-		return KERN_SUCCESS;
+		kr = KERN_SUCCESS;
+		goto done;
 	}
 
 	if (superpage && *pte && !(*pte & PTE_PS)) {
@@ -709,7 +709,7 @@ Retry:
 		/* Determine delta, PV locked */
 		need_tlbflush =
 		    ((old_attributes ^ template) != PTE_WIRED);
-		
+
 		if (need_tlbflush == TRUE && !(old_attributes & PTE_WRITE(is_ept))) {
 			if ((old_attributes ^ template) == PTE_WRITE(is_ept))
 				need_tlbflush = FALSE;
@@ -752,7 +752,7 @@ dont_update_pte:
 	 */
 
 	if (old_pa != (pmap_paddr_t) 0) {
-		boolean_t	was_altacct;
+		boolean_t	was_altacct = FALSE;
 
 		/*
 	         *	Don't do anything to pages outside valid memory here.
@@ -934,7 +934,7 @@ dont_update_pte:
 					}
 				}
 			}
-			
+
 			if (PV_HASHED_ENTRY_NULL == pvh_e)
 				panic("Mapping alias chain exhaustion, possibly induced by numerous kernel virtual double mappings");
 
@@ -1115,8 +1115,10 @@ Done:
 		PMAP_ZINFO_PFREE(pmap, PAGE_SIZE);
 	}
 
-	PMAP_TRACE(PMAP_CODE(PMAP__ENTER) | DBG_FUNC_END, 0, 0, 0, 0, 0);
-	return KERN_SUCCESS;
+	kr = KERN_SUCCESS;
+done:
+	PMAP_TRACE(PMAP_CODE(PMAP__ENTER) | DBG_FUNC_END, kr);
+	return kr;
 }
 
 /*
@@ -1455,10 +1457,8 @@ pmap_remove_options(
 	is_ept = is_ept_pmap(map);
 
 	PMAP_TRACE(PMAP_CODE(PMAP__REMOVE) | DBG_FUNC_START,
-		   map,
-		   (uint32_t) (s64 >> 32), s64,
-		   (uint32_t) (e64 >> 32), e64);
-
+	           VM_KERNEL_ADDRHIDE(map), VM_KERNEL_ADDRHIDE(s64),
+	           VM_KERNEL_ADDRHIDE(e64));
 
 	PMAP_LOCK(map);
 
@@ -1539,8 +1539,7 @@ pmap_remove_options(
 
 	PMAP_UNLOCK(map);
 
-	PMAP_TRACE(PMAP_CODE(PMAP__REMOVE) | DBG_FUNC_END,
-		   map, 0, 0, 0, 0);
+	PMAP_TRACE(PMAP_CODE(PMAP__REMOVE) | DBG_FUNC_END);
 
 }
 
@@ -1593,8 +1592,8 @@ pmap_page_protect_options(
 	         */
 		return;
 	}
-	PMAP_TRACE(PMAP_CODE(PMAP__PAGE_PROTECT) | DBG_FUNC_START,
-		   pn, prot, 0, 0, 0);
+
+	PMAP_TRACE(PMAP_CODE(PMAP__PAGE_PROTECT) | DBG_FUNC_START, pn, prot);
 
 	/*
 	 * Determine the new protection.
@@ -1867,8 +1866,7 @@ pmap_page_protect_options(
 done:
 	UNLOCK_PVH(pai);
 
-	PMAP_TRACE(PMAP_CODE(PMAP__PAGE_PROTECT) | DBG_FUNC_END,
-		   0, 0, 0, 0, 0);
+	PMAP_TRACE(PMAP_CODE(PMAP__PAGE_PROTECT) | DBG_FUNC_END);
 }
 
 
@@ -1884,7 +1882,7 @@ phys_attribute_clear(
 {
 	pv_rooted_entry_t	pv_h;
 	pv_hashed_entry_t	pv_e;
-	pt_entry_t		*pte;
+	pt_entry_t		*pte = NULL;
 	int			pai;
 	pmap_t			pmap;
 	char			attributes = 0;
@@ -1919,8 +1917,7 @@ phys_attribute_clear(
 		return;
 	}
 
-	PMAP_TRACE(PMAP_CODE(PMAP__ATTRIBUTE_CLEAR) | DBG_FUNC_START,
-		   pn, bits, 0, 0, 0);
+	PMAP_TRACE(PMAP_CODE(PMAP__ATTRIBUTE_CLEAR) | DBG_FUNC_START, pn, bits);
 
 	pv_h = pai_to_pvh(pai);
 
@@ -2090,8 +2087,7 @@ phys_attribute_clear(
 
 	UNLOCK_PVH(pai);
 
-	PMAP_TRACE(PMAP_CODE(PMAP__ATTRIBUTE_CLEAR) | DBG_FUNC_END,
-		   0, 0, 0, 0, 0);
+	PMAP_TRACE(PMAP_CODE(PMAP__ATTRIBUTE_CLEAR) | DBG_FUNC_END);
 }
 
 /*
@@ -2305,9 +2301,8 @@ pmap_query_resident(
 	is_ept = is_ept_pmap(pmap);
 
 	PMAP_TRACE(PMAP_CODE(PMAP__QUERY_RESIDENT) | DBG_FUNC_START,
-		   pmap,
-		   (uint32_t) (s64 >> 32), s64,
-		   (uint32_t) (e64 >> 32), e64);
+	           VM_KERNEL_ADDRHIDE(pmap), VM_KERNEL_ADDRHIDE(s64),
+	           VM_KERNEL_ADDRHIDE(e64));
 
 	resident_bytes = 0;
 	compressed_bytes = 0;
@@ -2353,7 +2348,7 @@ pmap_query_resident(
 	PMAP_UNLOCK(pmap);
 
 	PMAP_TRACE(PMAP_CODE(PMAP__QUERY_RESIDENT) | DBG_FUNC_END,
-		   pmap, 0, 0, 0, 0);
+	           resident_bytes);
 
 	if (compressed_bytes_p) {
 		*compressed_bytes_p = compressed_bytes;
@@ -2426,16 +2421,23 @@ done:
 	return KERN_SUCCESS;
 }
 
-#if DEBUG || DEVELOPMENT
-void
-kernel_pmap_lock(void)
+void pmap_set_jit_entitled(__unused pmap_t pmap)
 {
-    PMAP_LOCK(kernel_pmap);
+	/* The x86 pmap layer does not care if a map has a JIT entry. */
+	return;
 }
 
-void
-kernel_pmap_unlock(void)
+bool pmap_has_prot_policy(__unused vm_prot_t prot)
 {
-    PMAP_UNLOCK(kernel_pmap);
+	/*
+	 * The x86 pmap layer does not apply any policy to any protection
+	 * types.
+	 */
+	return FALSE;
 }
-#endif /* DEBUG || DEVELOPMENT */
+
+void pmap_release_pages_fast(void)
+{
+	return;
+}
+

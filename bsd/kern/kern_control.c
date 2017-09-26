@@ -839,7 +839,7 @@ ctl_enqueuembuf_list(void *kctlref, u_int32_t unit, struct mbuf *m_list,
 	errno_t error = 0;
 	struct mbuf *m, *nextpkt;
 	int needwakeup = 0;
-	int len;
+	int len = 0;
 	u_int32_t kctlflags;
 
 	/*
@@ -1820,9 +1820,9 @@ ctl_unlock(struct socket *so, int refcount, void *lr)
 }
 
 static lck_mtx_t *
-ctl_getlock(struct socket *so, int locktype)
+ctl_getlock(struct socket *so, int flags)
 {
-#pragma unused(locktype)
+#pragma unused(flags)
 	struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
 
 	if (so->so_pcb)  {
@@ -1903,15 +1903,15 @@ kctl_reg_list SYSCTL_HANDLER_ARGS
 		xkr->xkr_sendbufsize = kctl->sendbufsize;
 		xkr->xkr_lastunit = kctl->lastunit;
 		xkr->xkr_pcbcount = pcbcount;
-		xkr->xkr_connect = (uint64_t)VM_KERNEL_ADDRPERM(kctl->connect);
+		xkr->xkr_connect = (uint64_t)VM_KERNEL_UNSLIDE(kctl->connect);
 		xkr->xkr_disconnect =
-		    (uint64_t)VM_KERNEL_ADDRPERM(kctl->disconnect);
-		xkr->xkr_send = (uint64_t)VM_KERNEL_ADDRPERM(kctl->send);
+		    (uint64_t)VM_KERNEL_UNSLIDE(kctl->disconnect);
+		xkr->xkr_send = (uint64_t)VM_KERNEL_UNSLIDE(kctl->send);
 		xkr->xkr_send_list =
-		    (uint64_t)VM_KERNEL_ADDRPERM(kctl->send_list);
-		xkr->xkr_setopt = (uint64_t)VM_KERNEL_ADDRPERM(kctl->setopt);
-		xkr->xkr_getopt = (uint64_t)VM_KERNEL_ADDRPERM(kctl->getopt);
-		xkr->xkr_rcvd = (uint64_t)VM_KERNEL_ADDRPERM(kctl->rcvd);
+		    (uint64_t)VM_KERNEL_UNSLIDE(kctl->send_list);
+		xkr->xkr_setopt = (uint64_t)VM_KERNEL_UNSLIDE(kctl->setopt);
+		xkr->xkr_getopt = (uint64_t)VM_KERNEL_UNSLIDE(kctl->getopt);
+		xkr->xkr_rcvd = (uint64_t)VM_KERNEL_UNSLIDE(kctl->rcvd);
 		strlcpy(xkr->xkr_name, kctl->name, sizeof(xkr->xkr_name));
 
 		error = SYSCTL_OUT(req, buf, item_size);

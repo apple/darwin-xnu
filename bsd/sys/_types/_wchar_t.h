@@ -30,6 +30,7 @@
 #ifndef __cplusplus
 #ifndef _WCHAR_T
 #define _WCHAR_T
+#include <machine/_types.h> /* __darwin_wchar_t */
 typedef __darwin_wchar_t wchar_t;
 #endif /* _WCHAR_T */
 #endif /* __cplusplus */

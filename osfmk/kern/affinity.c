@@ -84,8 +84,13 @@ static affinity_set_t affinity_set_remove(affinity_set_t aset, thread_t thread);
  * has a single pset, and last-processor affinity is
  * more important than pset affinity.
  */
+#if CONFIG_EMBEDDED
+boolean_t	affinity_sets_enabled = FALSE;
+int		affinity_sets_mapping = 0;
+#else /* !CONFIG_EMBEDDED */
 boolean_t	affinity_sets_enabled = TRUE;
 int		affinity_sets_mapping = 1;
+#endif /* !CONFIG_EMBEDDED */
 
 boolean_t
 thread_affinity_is_supported(void)

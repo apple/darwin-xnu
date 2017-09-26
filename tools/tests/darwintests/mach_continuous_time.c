@@ -12,11 +12,19 @@
 
 #include <darwintest.h>
 
+#if (defined(__arm__) || defined(__arm64__))
+#define HAS_KERNEL_TIME_TRAPS
+
+extern uint64_t mach_absolute_time_kernel(void);
+extern uint64_t mach_continuous_time_kernel(void);
+
+#endif
+ 
 extern char **environ;
 
 static const int64_t one_mil = 1000*1000;
 
-#define to_ns(ticks) ((ticks * tb_info.numer) / (tb_info.denom))
+#define to_ns(ticks) (((ticks) * tb_info.numer) / (tb_info.denom))
 #define to_ms(ticks) (to_ns(ticks)/one_mil)
 
 static mach_timebase_info_data_t tb_info;
@@ -30,14 +38,60 @@ T_DECL(mct_monotonic, "Testing mach_continuous_time returns sane, monotonic valu
 		T_META_ALL_VALID_ARCHS(true))
 {
 	mach_timebase_info(&tb_info);
+#ifdef HAS_KERNEL_TIME_TRAPS
+	bool kernel = false;
+#endif
 
 	volatile uint64_t multiple_test = to_ms(mach_continuous_time());
-	for(int i = 0; i < 10; i++) {
-		uint64_t tmp = to_ms(mach_continuous_time());
-		T_ASSERT_GE(tmp, multiple_test, "mach_continuous_time must be monotonic");
+	for(int i = 0; i < 20; i++) {
+		uint64_t tmp;
+		const char *test_type = "user";
+#ifdef HAS_KERNEL_TIME_TRAPS
+		if (kernel) {
+			test_type = "kernel";
+			tmp = mach_continuous_time_kernel();
+		} else
+			tmp = mach_continuous_time();
+		kernel = !kernel;
+#else
+		tmp = mach_continuous_time();
+#endif
+		tmp = to_ms(tmp);
+		T_ASSERT_GE(tmp, multiple_test, "mach_continuous_time (%s) must be monotonic", test_type);
 
-		// each successive call shouldn't be more than 50ms in the future
-		T_ASSERT_LE(tmp - multiple_test, 50ULL, "mach_continuous_time should not jump forward too fast");
+		// each successive call shouldn't be more than 100ms in the future
+		T_ASSERT_LE(tmp - multiple_test, 100ULL, "mach_continuous_time (%s) should not jump forward too fast", test_type);
+
+		multiple_test = tmp;
+	}
+}
+
+T_DECL(mat_monotonic, "Testing mach_absolute_time returns sane, monotonic values",
+		T_META_ALL_VALID_ARCHS(true))
+{
+	mach_timebase_info(&tb_info);
+#ifdef HAS_KERNEL_TIME_TRAPS
+	bool kernel = false;
+#endif
+
+	volatile uint64_t multiple_test = to_ms(mach_absolute_time());
+	for(int i = 0; i < 20; i++) {
+		uint64_t tmp;
+		const char *test_type = "user";
+#ifdef HAS_KERNEL_TIME_TRAPS
+		if (kernel) {
+			test_type = "kernel";
+			tmp = mach_absolute_time_kernel();
+		} else
+			tmp = mach_absolute_time();
+		kernel = !kernel;
+#endif
+		tmp = mach_absolute_time();
+		tmp = to_ms(tmp);
+		T_ASSERT_GE(tmp, multiple_test, "mach_absolute_time (%s) must be monotonic", test_type);
+
+		// each successive call shouldn't be more than 100ms in the future
+		T_ASSERT_LE(tmp - multiple_test, 100ULL, "mach_absolute_time (%s) should not jump forward too fast", test_type);
 
 		multiple_test = tmp;
 	}
@@ -61,6 +115,42 @@ T_DECL(mct_pause, "Testing mach_continuous_time and mach_absolute_time don't div
 
 	T_ASSERT_LE(abs(after_diff - before_diff), 1, "mach_continuous_time and mach_absolute_time should not diverge");
 }
+
+#ifdef HAS_KERNEL_TIME_TRAPS
+static void update_kern(uint64_t *abs, uint64_t *cont)
+{
+	uint64_t abs1, abs2, cont1, cont2;
+	do {
+		abs1 = mach_absolute_time_kernel();
+		cont1 = mach_continuous_time_kernel();
+		abs2 = mach_absolute_time_kernel();
+		cont2 = mach_continuous_time_kernel();
+	} while (to_ms(abs2 - abs1) || to_ms(cont2 - cont1));
+	*abs = abs2;
+	*cont = cont2;
+}
+#endif
+
+#ifdef HAS_KERNEL_TIME_TRAPS
+T_DECL(mct_pause_kern, "Testing kernel mach_continuous_time and mach_absolute_time don't diverge")
+{
+	mach_timebase_info(&tb_info);
+
+	uint64_t abs_now;
+	uint64_t cnt_now;
+	int before_diff, after_diff;
+
+	update_kern(&abs_now, &cnt_now);
+	before_diff = (int)(to_ms(cnt_now) - to_ms(abs_now));
+
+	sleep(1);
+
+	update_kern(&abs_now, &cnt_now);
+	after_diff = (int)(to_ms(cnt_now) - to_ms(abs_now));
+
+	T_ASSERT_LE(abs(after_diff - before_diff), 1, "mach_continuous_time_kernel and mach_absolute_time_kernel should not diverge");
+}
+#endif
 
 T_DECL(mct_sleep, "Testing mach_continuous_time behavior over system sleep"){
 #ifndef MCT_SLEEP_TEST
@@ -158,6 +248,34 @@ T_DECL(mct_settimeofday, "Testing mach_continuous_time behavior over settimeofda
 	T_ASSERT_LT(abs(before - after), 1000, "mach_continuous_time should not jump more than 1s");
 }
 
+#ifdef HAS_KERNEL_TIME_TRAPS
+T_DECL(mct_settimeofday_kern, "Testing kernel mach_continuous_time behavior over settimeofday"){
+	if (geteuid() != 0){
+		T_SKIP("The settimeofday() test requires root privileges to run.");
+	}
+	mach_timebase_info(&tb_info);
+
+	struct timeval saved_tv;
+	struct timezone saved_tz;
+	int before, after;
+
+	T_ASSERT_POSIX_ZERO(gettimeofday(&saved_tv, &saved_tz), NULL);
+
+	struct timeval forward_tv = saved_tv;
+	// move time forward by two minutes, ensure mach_continuous_time keeps
+	// chugging along with mach_absolute_time
+	forward_tv.tv_sec += 2*60;
+
+	before = (int)to_ms(mach_continuous_time_kernel());
+	T_ASSERT_POSIX_ZERO(settimeofday(&forward_tv, &saved_tz), NULL);
+
+	after = (int)to_ms(mach_continuous_time_kernel());
+	T_ASSERT_POSIX_ZERO(settimeofday(&saved_tv, &saved_tz), NULL);
+
+	T_ASSERT_LT(abs(before - after), 1000, "mach_continuous_time_kernel should not jump more than 1s");
+}
+#endif
+
 T_DECL(mct_aproximate, "Testing mach_continuous_approximate_time()",
 		T_META_ALL_VALID_ARCHS(true))
 {
@@ -168,3 +286,82 @@ T_DECL(mct_aproximate, "Testing mach_continuous_approximate_time()",
 
 	T_EXPECT_LE(llabs((long long)absolute - (long long)approximate), (long long)(25*NSEC_PER_MSEC), NULL);
 }
+
+T_DECL(mach_time_perf, "mach_time performance") {
+	{
+		dt_stat_time_t s = dt_stat_time_create("mach_absolute_time");
+		T_STAT_MEASURE_LOOP(s) {
+			uint64_t t;
+			t = mach_absolute_time();
+		}
+		dt_stat_finalize(s);
+	}
+	{
+		dt_stat_time_t s = dt_stat_time_create("mach_continuous_time");
+		T_STAT_MEASURE_LOOP(s) {
+			uint64_t t;
+			t = mach_continuous_time();
+		}
+		dt_stat_finalize(s);
+	}
+}
+
+T_DECL(mach_time_perf_instructions, "instructions retired for mach_time", T_META_TYPE_PERF, T_META_ASROOT(YES)) {
+	{
+		dt_stat_thread_instructions_t s = dt_stat_thread_instructions_create("mach_absolute_time");
+		T_STAT_MEASURE_LOOP(s) {
+			uint64_t t;
+			t = mach_absolute_time();
+		}
+		dt_stat_finalize(s);
+	}
+	{
+		dt_stat_thread_instructions_t s = dt_stat_thread_instructions_create("mach_continuous_time");
+		T_STAT_MEASURE_LOOP(s) {
+			uint64_t t;
+			t = mach_continuous_time();
+		}
+		dt_stat_finalize(s);
+	}
+}
+
+#ifdef HAS_KERNEL_TIME_TRAPS
+T_DECL(mach_time_perf_kern, "kernel mach_time performance") {
+	{
+		dt_stat_time_t s = dt_stat_time_create("mach_absolute_time_kernel");
+		T_STAT_MEASURE_LOOP(s) {
+			uint64_t t;
+			t = mach_absolute_time_kernel();
+		}
+		dt_stat_finalize(s);
+	}
+	{
+		dt_stat_time_t s = dt_stat_time_create("mach_continuous_time_kernel");
+		T_STAT_MEASURE_LOOP(s) {
+			uint64_t t;
+			t = mach_continuous_time_kernel();
+		}
+		dt_stat_finalize(s);
+	}
+}
+
+T_DECL(mach_time_perf_instructions_kern, "instructions retired for kernel mach_time", T_META_TYPE_PERF, T_META_ASROOT(YES)) {
+	{
+		dt_stat_thread_instructions_t s = dt_stat_thread_instructions_create("mach_absolute_time_kernel");
+		T_STAT_MEASURE_LOOP(s) {
+			uint64_t t;
+			t = mach_absolute_time_kernel();
+		}
+		dt_stat_finalize(s);
+	}
+	{
+		dt_stat_thread_instructions_t s = dt_stat_thread_instructions_create("mach_continuous_time_kernel");
+		T_STAT_MEASURE_LOOP(s) {
+			uint64_t t;
+			t = mach_continuous_time_kernel();
+		}
+		dt_stat_finalize(s);
+	}
+}
+#endif
+

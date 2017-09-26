@@ -82,6 +82,12 @@ _host_get_exception_ports
 _host_priv_self
 _hz
 _ipc_kernel_map
+_iflt_attach_internal
+_ifnet_allocate_internal
+_ifnet_set_fastlane_capable
+_ifnet_get_fastlane_capable
+_ipf_addv4_internal
+_ipf_addv6_internal
 _kalloc:_kalloc_external
 _kauth_cred_issuser
 _kauth_cred_label_update
@@ -151,8 +157,11 @@ _putc
 _rc4_crypt
 _rc4_init
 _securelevel
+_sflt_register_internal
 _sha1_hardware_hook
 _sleep
+_sock_accept_internal
+_sock_socket_internal
 _stack_privilege
 _task_get_special_port
 _task_resume
@@ -164,9 +173,8 @@ _tsleep
 _ubc_cs_blob_get
 _vfs_context_current
 _vfs_update_vfsstat
-_vm_allocate
+_vm_allocate:_vm_allocate_external
 _vm_deallocate
-_vm_map
 _vm_map_deallocate
 _vm_map_unwire
 _vm_map_wire:_vm_map_wire_external
@@ -174,7 +182,6 @@ _set_vm_privilege
 _vm_protect
 _vm_region
 _vm_region_object_create
-_vnode_isnamedstream
 _vnode_tag
 _vnop_getnamedstream_desc
 _vnop_kqfilt_add_desc

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -69,6 +69,14 @@ extern int ffsbit(
 	int		*bitmap);
 extern int ffs(
 	unsigned int	mask);
+extern int ffsll(
+	unsigned long long mask);
+
+/* Find the last set bit in a bit array */
+extern int fls(
+	unsigned int	mask);
+extern int flsll(
+	unsigned long long mask);
 
 /*
  * Test if indicated bit is set in bit string.
@@ -147,6 +155,8 @@ int     _consume_printf_args(int, ...);
 #endif
 #endif
 
+extern int paniclog_append_noflush(const char *format, ...) __printflike(1,2);
+
 extern int kdb_printf(const char *format, ...) __printflike(1,2);
 
 extern int kdb_log(const char *format, ...) __printflike(1,2);
@@ -188,6 +198,8 @@ extern void safe_gets(
 
 extern void cnputcusr(char);
 
+extern void cnputsusr(char *, int);
+
 extern void conslog_putc(char);
 
 extern void cons_putc_locked(char);
@@ -220,26 +232,6 @@ extern int _longjmp(
 	int		value);
 
 extern void bootstrap_create(void);
-
-/* 
- * Halt other cores before invoking debugger 
- * Halting other cores as early as possible helps preserve
- * the current system state for debugging
- */
-extern void DebuggerHaltOtherCores(void);
-
-/* Resume other cores */
-extern void DebuggerResumeOtherCores(void);
-
-extern void Debugger(
-		const char	* message);
-
-extern void DebuggerWithContext(
-		unsigned int	reason,
-		void		*ctx,
-		const char	*message,
-		uint64_t	debugger_options_mask);
-
 
 #if	DIPC
 extern boolean_t	no_bootstrap_task(void);

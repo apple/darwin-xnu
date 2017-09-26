@@ -32,6 +32,7 @@
 /* only kernel-private interfaces */
 #ifdef XNU_KERNEL_PRIVATE
 #include <mach/coalition.h>
+#include <kern/thread_group.h>
 
 #if CONFIG_COALITIONS
 
@@ -63,13 +64,23 @@ void     task_coalition_roles(task_t task, int roles[COALITION_NUM_TYPES]);
 int      coalition_type(coalition_t coal);
 
 void     task_coalition_update_gpu_stats(task_t task, uint64_t gpu_ns_delta);
-uint32_t task_coalition_adjust_focal_count(task_t task, int count);
+boolean_t task_coalition_adjust_focal_count(task_t task, int count, uint32_t *new_count);
 uint32_t task_coalition_focal_count(task_t task);
-uint32_t task_coalition_adjust_nonfocal_count(task_t task, int count);
+boolean_t task_coalition_adjust_nonfocal_count(task_t task, int count, uint32_t *new_count);
 uint32_t task_coalition_nonfocal_count(task_t task);
+thread_group_t task_coalition_get_thread_group(task_t task);
+void	 coalition_set_thread_group(coalition_t coal, thread_group_t tg);
+thread_group_t kdp_coalition_get_thread_group(coalition_t coal);
+thread_group_t coalition_get_thread_group(coalition_t coal);
+void task_coalition_thread_group_focal_update(task_t task);
 
 void coalition_for_each_task(coalition_t coal, void *ctx,
 			     void (*callback)(coalition_t, void *, task_t));
+
+void coalition_set_efficient(coalition_t coal);
+
+typedef void (*coalition_iterate_fn_t)(void*, int, coalition_t);
+kern_return_t coalition_iterate_stackshot(coalition_iterate_fn_t callout, void *arg, uint32_t coalition_type);
 
 /* Returns with a reference, or COALITION_NULL.
  * There is no coalition with id 0.
@@ -110,17 +121,22 @@ kern_return_t coalition_request_terminate_internal(coalition_t coal);
  * KERN_RESOURCE_SHORTAGE	Unable to allocate kernel resources for a
  *				new coalition.
  */
-kern_return_t coalition_create_internal(int type, boolean_t privileged, coalition_t *out);
+kern_return_t coalition_create_internal(int type, int role, boolean_t privileged, coalition_t *out);
 
+boolean_t coalition_term_requested(coalition_t coal);
+boolean_t coalition_is_terminated(coalition_t coal);
+boolean_t coalition_is_reaped(coalition_t coal);
 boolean_t coalition_is_privileged(coalition_t coal);
 boolean_t task_is_in_privileged_coalition(task_t task, int type);
 
 kern_return_t coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_usage *cru_out);
 
+task_t kdp_coalition_get_leader(coalition_t coal);
+
 /*
  * development/debug interfaces
  */
-#if defined(DEVELOPMENT) || defined(DEBUG)
+#if DEVELOPMENT || DEBUG
 int coalition_should_notify(coalition_t coal);
 void coalition_set_notify(coalition_t coal, int notify);
 #endif
@@ -133,16 +149,18 @@ static inline void task_coalition_update_gpu_stats(__unused task_t task,
 	return;
 }
 
-static inline uint32_t task_coalition_adjust_focal_count(__unused task_t task,
-							 __unused int count)
+static inline boolean_t task_coalition_adjust_focal_count(__unused task_t task,
+							 __unused int count,
+							 __unused uint32_t *new_count)
 {
-	return 0;
+	return FALSE;
 }
 
-static inline uint32_t task_coalition_adjust_nonfocal_count(__unused task_t task,
-							    __unused int count)
+static inline boolean_t task_coalition_adjust_nonfocal_count(__unused task_t task,
+							    __unused int count,
+							    __unused uint32_t *new_count)
 {
-	return 0;
+	return FALSE;
 }
 
 static inline uint32_t task_coalition_focal_count(__unused task_t task)

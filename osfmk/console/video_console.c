@@ -106,7 +106,9 @@
 #include <sys/kdebug.h>
 
 #include "iso_font.c"
+#if !CONFIG_EMBEDDED
 #include "progress_meter_data.c"
+#endif
 
 #include "sys/msgbuf.h"
 
@@ -243,7 +245,11 @@ enum
 {
     /* secs */
     kProgressAcquireDelay   = 0,
+#if CONFIG_EMBEDDED
     kProgressReacquireDelay = 5,
+#else
+    kProgressReacquireDelay = 5,
+#endif
 };
 
 static int8_t vc_rotate_matr[4][2][2] = {
@@ -1287,7 +1293,7 @@ gc_update_color(int color, boolean_t fore)
 void
 vcputc(__unused int l, __unused int u, int c)
 {
-	if ( gc_initialized && ( gc_enabled || debug_mode ) )
+	if ( gc_initialized && gc_enabled )
 	{
 		spl_t s;
 
@@ -1296,7 +1302,7 @@ vcputc(__unused int l, __unused int u, int c)
 		x86_filter_TLB_coherency_interrupts(TRUE);
 #endif
 		VCPUTC_LOCK_LOCK();
-		if ( gc_enabled || debug_mode )
+		if ( gc_enabled )
 		{
 			gc_hide_cursor(gc_x, gc_y);
 			gc_putchar(c);
@@ -1353,6 +1359,7 @@ static int vc_rendered_char_size = 0;
 #define REN_MAX_DEPTH	32
 static unsigned char vc_rendered_char[ISO_CHAR_HEIGHT * ((REN_MAX_DEPTH / 8) * ISO_CHAR_WIDTH)];
 
+#if !CONFIG_EMBEDDED
 static void
 internal_set_progressmeter(int new_value);
 static void
@@ -1370,6 +1377,7 @@ enum
     kProgressMeterEnd    = 512,
 };
 
+#endif	/* !CONFIG_EMBEDDED */
 
 static boolean_t vc_progress_white = 
 #ifdef CONFIG_VC_PROGRESS_WHITE
@@ -1865,6 +1873,7 @@ vc_progress_user_options        vc_user_options;
 
 decl_simple_lock_data(,vc_progress_lock)
 
+#if !CONFIG_EMBEDDED
 static int           		vc_progress_withmeter = 3;
 int                             vc_progressmeter_enable;
 static int                      vc_progressmeter_drawn;
@@ -1879,6 +1888,7 @@ static void *                   vc_progressmeter_backbuffer;
 static boolean_t                vc_progressmeter_hold;
 static uint32_t                 vc_progressmeter_diskspeed = 256;
 
+#endif  /* !CONFIG_EMBEDDED */
 
 enum {
     kSave          = 0x10,
@@ -1923,7 +1933,9 @@ static void vc_blit_rect_30(int x, int y, int bx,
 			    unsigned int * backBuffer,
 			    unsigned int flags);
 static void vc_progress_task( void * arg0, void * arg );
+#if !CONFIG_EMBEDDED
 static void vc_progressmeter_task( void * arg0, void * arg );
+#endif	/* !CONFIG_EMBEDDED */
 
 static void vc_blit_rect(int x, int y, int bx,
 			    int width, int height,
@@ -1999,6 +2011,20 @@ vc_blit_rect_8(int x, int y, __unused int bx,
 
 /* For ARM, 16-bit is 565 (RGB); it is 1555 (XRGB) on other platforms */
 
+#ifdef __arm__
+#define CLUT_MASK_R	0xf8
+#define CLUT_MASK_G	0xfc
+#define CLUT_MASK_B	0xf8
+#define CLUT_SHIFT_R	<< 8
+#define CLUT_SHIFT_G	<< 3
+#define CLUT_SHIFT_B	>> 3
+#define MASK_R		0xf800
+#define MASK_G		0x07e0
+#define MASK_B		0x001f
+#define MASK_R_8	0x7f800
+#define MASK_G_8	0x01fe0
+#define MASK_B_8	0x000ff
+#else
 #define CLUT_MASK_R	0xf8
 #define CLUT_MASK_G	0xf8
 #define CLUT_MASK_B	0xf8
@@ -2011,6 +2037,7 @@ vc_blit_rect_8(int x, int y, __unused int bx,
 #define MASK_R_8	0x3fc00
 #define MASK_G_8	0x01fe0
 #define MASK_B_8	0x000ff
+#endif
 
 static void vc_blit_rect_16( int x, int y, int bx,
 			     int width, int height,
@@ -2211,11 +2238,13 @@ static void vc_blit_rect_30(int x, int y, int bx,
 
 static void vc_clean_boot_graphics(void)
 {
+#if !CONFIG_EMBEDDED
     // clean up possible FDE login graphics
     vc_progress_set(FALSE, 0);
     const unsigned char *
     color = (typeof(color))(uintptr_t)(vc_progress_white ? 0x00000000 : 0xBFBFBFBF);
     vc_blit_rect(0, 0, 0, vinfo.v_width, vinfo.v_height, 0, 0, color, NULL, 0);
+#endif
 }
 
 /*
@@ -2412,9 +2441,11 @@ vc_progress_initialize( vc_progress_element * desc,
     clock_interval_to_absolutetime_interval(vc_progress->time, 1000 * 1000, &abstime);
     vc_progress_interval = (uint32_t)abstime;
 
+#if !CONFIG_EMBEDDED
     thread_call_setup(&vc_progressmeter_call, vc_progressmeter_task, NULL);
     clock_interval_to_absolutetime_interval(1000 / 8, 1000 * 1000, &abstime);
     vc_progressmeter_interval = (uint32_t)abstime;
+#endif	/* !CONFIG_EMBEDDED */
 
 }
 
@@ -2432,6 +2463,7 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
     unsigned int     pdata32;
     unsigned int *   buf32;
 
+#if !CONFIG_EMBEDDED
 
     if (kBootArgsFlagBlack & ((boot_args *) PE_state.bootArgs)->flags) return;
 
@@ -2462,11 +2494,12 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
 	return;
     }
 
+#endif /* !CONFIG_EMBEDDED */
 
     if(!vc_progress) return;
 
     if( enable) {
-        saveLen = (vc_progress->width * vc_uiscale) * (vc_progress->height * vc_uiscale) * vinfo.v_depth / 8;
+        saveLen = (vc_progress->width * vc_uiscale) * (vc_progress->height * vc_uiscale) * ((vinfo.v_depth + 7) / 8);
         saveBuf = kalloc( saveLen );
 
 	switch( vinfo.v_depth) {
@@ -2544,6 +2577,7 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
         kfree( saveBuf, saveLen );
 }
 
+#if !CONFIG_EMBEDDED
 
 static uint32_t vc_progressmeter_range(uint32_t pos)
 {
@@ -2589,6 +2623,7 @@ void vc_progress_setdiskspeed(uint32_t speed)
     vc_progressmeter_diskspeed = speed;
 }
 
+#endif	/* !CONFIG_EMBEDDED */
 
 static void
 vc_progress_task(__unused void *arg0, __unused void *arg)
@@ -2710,8 +2745,10 @@ gc_pause( boolean_t pause, boolean_t graphics_now )
 
     if (vc_progress_enable)
     {
+#if !CONFIG_EMBEDDED
 	if (1 & vc_progress_withmeter) thread_call_enter_delayed(&vc_progressmeter_call, vc_progressmeter_deadline);
 	else                           
+#endif /* !CONFIG_EMBEDDED */
 	thread_call_enter_delayed(&vc_progress_call, vc_progress_deadline);
     }
 
@@ -2722,6 +2759,20 @@ gc_pause( boolean_t pause, boolean_t graphics_now )
 static void
 vc_initialize(__unused struct vc_info * vinfo_p)
 {
+#ifdef __arm__
+	unsigned long cnt, data16, data32;
+
+	if (vinfo.v_depth == 16) {
+		for (cnt = 0; cnt < 8; cnt++) {
+			data32 = vc_colors[cnt][2];
+			data16  = (data32 & 0x0000F8) <<  8;
+			data16 |= (data32 & 0x00FC00) >>  5;
+			data16 |= (data32 & 0xF80000) >> 19;
+			data16 |= data16 << 16;
+			vc_colors[cnt][1] = data16;
+		}
+	}
+#endif
 
 	vinfo.v_rows = vinfo.v_height / ISO_CHAR_HEIGHT;
 	vinfo.v_columns = vinfo.v_width / ISO_CHAR_WIDTH;
@@ -2878,7 +2929,6 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			break;
 
 		case kPETextMode:
-			disable_debug_output = FALSE;
 			gc_graphics_boot = FALSE;
 			break;
 
@@ -2918,7 +2968,6 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		case kPETextScreen:
 			if ( console_is_serial() ) break;
 
-			disable_debug_output = FALSE;
 			if ( gc_acquired == FALSE )
 			{
 				gc_desire_text = TRUE;
@@ -2927,7 +2976,9 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			if ( gc_graphics_boot == FALSE ) break;
 
 			vc_progress_set( FALSE, 0 );
+#if !CONFIG_EMBEDDED
 			vc_enable_progressmeter( FALSE );
+#endif
 			gc_enable( TRUE );
 			break;
 
@@ -2940,12 +2991,15 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			vc_progress_set( FALSE, 0 );
 			vc_acquire_delay = kProgressReacquireDelay;
 			vc_progress_white      = TRUE;
+#if !CONFIG_EMBEDDED
 			vc_enable_progressmeter(FALSE);
 			vc_progress_withmeter &= ~1;
+#endif
 			vc_clut8 = NULL;
 			break;
 
 
+#if !CONFIG_EMBEDDED
 		case kPERefreshBootGraphics:
 		{
 		    spl_t     s;
@@ -2970,6 +3024,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		    internal_enable_progressmeter(kProgressMeterOff);
 		    vc_progress_white = save;
 		}
+#endif
 	}
 }
 
@@ -2980,6 +3035,7 @@ vcattach(void)
 {
 	vm_initialized = TRUE;
 
+#if !CONFIG_EMBEDDED
         const boot_args * bootargs  = (typeof(bootargs)) PE_state.bootArgs;
 
 	vc_progress_white = (0 != ((kBootArgsFlagBlackBg | kBootArgsFlagLoginUI) 
@@ -2996,6 +3052,7 @@ vcattach(void)
 	    vc_progress_meter_start = 0;
 	    vc_progress_meter_end   = kProgressMeterMax;
 	}
+#endif
 	simple_lock_init(&vc_progress_lock, 0);
 
 	if ( gc_graphics_boot == FALSE )
@@ -3025,6 +3082,7 @@ vcattach(void)
 	}
 }
 
+#if !CONFIG_EMBEDDED
 
 // redraw progress meter between pixels x1, x2, position at x3
 static void
@@ -3224,6 +3282,7 @@ vc_set_progressmeter(int new_value)
     splx(s);
 }
 
+#endif /* !CONFIG_EMBEDDED */
 
 
 

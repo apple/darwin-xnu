@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -101,6 +101,7 @@
 #define	KEV_INET6_NEW_LL_ADDR           4 /* Autoconf LL address appeared */
 #define	KEV_INET6_NEW_RTADV_ADDR        5 /* Autoconf address has appeared */
 #define	KEV_INET6_DEFROUTER             6 /* Default router detected */
+#define	KEV_INET6_REQUEST_NAT64_PREFIX	7 /* Asking for the NAT64-prefix */
 
 #ifdef PRIVATE
 #define	KEV_ND6_SUBCLASS	7	/* IPv6 NDP subclass */
@@ -108,6 +109,13 @@
 #define	KEV_ND6_RA                      1
 #define	KEV_ND6_NDFAILURE               2 /* IPv6 neighbor cache entry expiry */
 #define	KEV_ND6_NDALIVE                 3 /* IPv6 neighbor reachable */
+#define	KEV_ND6_DAD_FAILURE		4 /* IPv6 address failed DAD */
+#define	KEV_ND6_DAD_SUCCESS		5 /* IPv6 address completed DAD */
+#define	KEV_ND6_ADDR_DETACHED		6 /* IPv6 address is deemed detached */
+#define	KEV_ND6_ADDR_DEPRECATED		7 /* IPv6 address's preferred lifetime expired */
+#define	KEV_ND6_ADDR_EXPIRED		8 /* IPv6 address has expired */
+#define	KEV_ND6_RTR_EXPIRED		9 /* IPv6 default router has expired */
+#define	KEV_ND6_PFX_EXPIRED		10 /* IPv6 prefix has expired */
 
 #define	KEV_NECP_SUBCLASS	8	/* NECP subclasss */
 /* KEV_NECP_SUBCLASS event codes */
@@ -127,8 +135,11 @@
 #define	KEV_NETEVENT_SUBCLASS	11	/* Generic Net events subclass */
 /* KEV_NETEVENT_SUBCLASS event codes */
 #define	KEV_NETEVENT_APNFALLBACK                1
+
+#define	KEV_MPTCP_SUBCLASS	12	/* Global MPTCP events subclass */
+/* KEV_MPTCP_SUBCLASS event codes */
+#define	KEV_MPTCP_CELLUSE	1
+
 #endif /* PRIVATE */
-
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
-
 #endif /* _NET_NETKEV_H_ */

@@ -46,6 +46,8 @@ boolean_t pie_required(cpu_type_t, cpu_subtype_t);
 
 #if defined (__i386__) || defined(__x86_64__)
 #include "i386/exec.h"
+#elif defined (__arm__) || defined (__arm64__)
+#include "arm/exec.h"
 #else
 #error architecture not supported
 #endif

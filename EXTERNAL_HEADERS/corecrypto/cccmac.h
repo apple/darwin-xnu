@@ -89,16 +89,6 @@ typedef struct cccmac_ctx* cccmac_ctx_t;
 
 /* CMAC as defined in NIST SP800-38B - 2005 */
 
-/* HACK: 
- To change the prototype of cccmac_init (and preserve the name) we need to
- proceed in steps:
- 1) Make corecrypto change (23557380)
- 2) Have all clients define "CC_CHANGEFUNCTION_28544056_cccmac_init"
- 3) Remove CC_CHANGEFUNCTION_28544056_cccmac_init logic and old functions of corecrypto
- 4) Clients can remove CC_CHANGEFUNCTION_28544056_cccmac_init at their leisure
- 
- */
-
 /* =============================================================================
 
                                 ONE SHOT
@@ -169,25 +159,9 @@ int cccmac_one_shot_verify(const struct ccmode_cbc *cbc,
  @discussion Only supports CMAC_BLOCKSIZE block ciphers
  */
 
-
-
-#ifndef CC_CHANGEFUNCTION_28544056_cccmac_init
-int cccmac_init(const struct ccmode_cbc *cbc,
-                  cccmac_ctx_t ctx,
-                  size_t key_nbytes, const void *key)
-__attribute__((deprecated("see guidelines in corecrypto/cccmac.h for migration", "define 'CC_CHANGEFUNCTION_28544056_cccmac_init' and use new cccmac_init with parameter key_nbytes")));
-// If you see this deprecate warning
-// Define CC_CHANGEFUNCTION_28544056_cccmac_init and use "cccmac_init(...,...,16,...)"
-// This will be removed with 28544056
-#define cccmac_init(cbc,ctx,key) cccmac_init(cbc,ctx,16,key)
-
-#else
-
-// This is the authoritative prototype, which will be left after 28544056
 int cccmac_init(const struct ccmode_cbc *cbc,
                 cccmac_ctx_t ctx,
                 size_t key_nbytes, const void *key);
-#endif
 
 /*!
  @function   cccmac_update
@@ -234,71 +208,5 @@ int cccmac_final_generate(cccmac_ctx_t ctx,
  */
 int cccmac_final_verify(cccmac_ctx_t ctx,
                         size_t expected_mac_nbytes, const void *expected_mac);
-
-
-/* =============================================================================
-
- Legacy - Please migrate to new functions above
-
- ==============================================================================*/
-
-/*
- Guidelines for switching to new CMAC functions
-
- Legacy                        New functions
- cccmac_init         -> cccmac_init w/ key kength in bytes
- cccmac_block_update -> cccmac_update w/ size in bytes instead of blocks
- cccmac_final        -> cccmac_final_generate or cccmac_final_verify
- depending the use case preceeded
- by cccmac_update if any leftover bytes.
- cccmac              -> cccmac_one_shot_generate or cccmac_one_shot_verify
- depending the use case
-
- */
-
-/*!
- @function   cccmac_block_update
- @abstract   Process data
- */
-
-CC_INLINE void cccmac_block_update(CC_UNUSED const struct ccmode_cbc *cbc, cccmac_ctx_t ctx,
-                         size_t nblocks, const void *data)
-__attribute__((deprecated("see guidelines in corecrypto/cccmac.h for migration", "cccmac_update")));
-
-CC_INLINE void cccmac_block_update(CC_UNUSED const struct ccmode_cbc *cbc, cccmac_ctx_t ctx,
-                                   size_t nblocks, const void *data) {
-    cccmac_update(ctx,(nblocks)*CMAC_BLOCKSIZE,data);
-}
-
-/*!
- @function   cccmac_final
- @abstract   Finalize CMAC generation
- */
-CC_INLINE void cccmac_final(CC_UNUSED const struct ccmode_cbc *cbc, cccmac_ctx_t ctx,
-                            size_t nbytes, const void *in, void *out)
-__attribute__((deprecated("see guidelines in corecrypto/cccmac.h for migration", "cccmac_final_generate or cccmac_final_verify")));
-
-CC_INLINE void cccmac_final(CC_UNUSED const struct ccmode_cbc *cbc, cccmac_ctx_t ctx,
-                 size_t nbytes, const void *in, void *out) {
-    cccmac_update(ctx, nbytes, in);
-    cccmac_final_generate(ctx,CMAC_BLOCKSIZE,out);
-}
-
-/*!
- @function   cccmac
- @abstract   One shot CMAC generation with 128bit key
- */
-CC_INLINE void cccmac(const struct ccmode_cbc *cbc,
-                      const void *key,
-                      size_t data_len, const void *data, void *mac)
-__attribute__((deprecated("see guidelines in corecrypto/cccmac.h for migration", "cccmac_one_shot_generate or cccmac_one_shot_verify")));
-
-CC_INLINE void cccmac(const struct ccmode_cbc *cbc,
-           const void *key,
-           size_t data_len, const void *data, void *mac) {
-    cccmac_one_shot_generate(cbc,16,key,data_len,data,16,mac);
-}
-
-
 
 #endif /* _CORECRYPTO_cccmac_H_ */

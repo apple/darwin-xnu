@@ -37,6 +37,9 @@
 #include <i386/hw_lock_types.h>
 
 extern	unsigned int	LcksOpts;
+#if DEVELOPMENT || DEBUG
+extern  unsigned int	LckDisablePreemptCheck;
+#endif
 
 #define enaLkDeb		0x00000001	/* Request debug in default attribute */
 #define enaLkStat		0x00000002	/* Request statistic in default attribute */
@@ -174,25 +177,51 @@ typedef struct __lck_mtx_ext_t__	lck_mtx_ext_t;
 
 #ifdef	MACH_KERNEL_PRIVATE
 #pragma pack(1)		/* Make sure the structure stays as we defined it */
-typedef struct _lck_rw_t_internal_ {
-	volatile uint16_t	lck_rw_shared_count;	/* No. of accepted readers */
-	volatile uint8_t	lck_rw_interlock; 	/* Interlock byte */
-	volatile uint8_t
-				lck_rw_priv_excl:1,	/* Writers prioritized if set */
-				lck_rw_want_upgrade:1,	/* Read-to-write upgrade waiting */
-				lck_rw_want_write:1,	/* Writer waiting or locked for write */
-				lck_r_waiting:1,	/* Reader is sleeping on lock */
-				lck_w_waiting:1,	/* Writer is sleeping on lock */
-				lck_rw_can_sleep:1,	/* Can attempts to lock go to sleep? */
-				lck_rw_padb6:2; 		/* padding */
-
-	uint32_t		lck_rw_tag; /* This can be obsoleted when stats
-					     * are in
-					     */
-	uint32_t		lck_rw_pad8;
-	uint32_t		lck_rw_pad12;
+typedef union _lck_rw_t_internal_ {
+	struct {
+		volatile uint16_t	lck_rw_shared_count;	/* No. of accepted readers */
+		volatile uint8_t	lck_rw_interlock; 	/* Interlock byte */
+		volatile uint8_t
+					lck_rw_priv_excl:1,	/* Writers prioritized if set */
+					lck_rw_want_upgrade:1,	/* Read-to-write upgrade waiting */
+					lck_rw_want_write:1,	/* Writer waiting or locked for write */
+					lck_r_waiting:1,	/* Reader is sleeping on lock */
+					lck_w_waiting:1,	/* Writer is sleeping on lock */
+					lck_rw_can_sleep:1,	/* Can attempts to lock go to sleep? */
+					lck_rw_padb6:2; 	/* padding */
+		uint32_t		lck_rw_tag; 		/* This can be obsoleted when stats are in */
+		thread_t		lck_rw_owner;		/* Unused */
+	};
+	struct {
+		uint32_t 		data;			/* Single word for count, ilk, and bitfields */
+		uint32_t		lck_rw_pad4;
+		uint32_t		lck_rw_pad8;
+		uint32_t		lck_rw_pad12;
+	};
 } lck_rw_t;
 #pragma pack()
+
+#define LCK_RW_SHARED_SHIFT	 0
+#define LCK_RW_INTERLOCK_BIT	16
+#define LCK_RW_PRIV_EXCL_BIT	24
+#define LCK_RW_WANT_UPGRADE_BIT	25
+#define LCK_RW_WANT_EXCL_BIT	26
+#define LCK_RW_R_WAITING_BIT	27
+#define LCK_RW_W_WAITING_BIT	28
+#define LCK_RW_CAN_SLEEP_BIT	29
+
+#define LCK_RW_INTERLOCK	(1 << LCK_RW_INTERLOCK_BIT)
+#define LCK_RW_WANT_UPGRADE	(1 << LCK_RW_WANT_UPGRADE_BIT)
+#define LCK_RW_WANT_EXCL	(1 << LCK_RW_WANT_EXCL_BIT)
+#define LCK_RW_R_WAITING	(1 << LCK_RW_R_WAITING_BIT)
+#define LCK_RW_W_WAITING	(1 << LCK_RW_W_WAITING_BIT)
+#define LCK_RW_PRIV_EXCL	(1 << LCK_RW_PRIV_EXCL_BIT)
+#define LCK_RW_TAG_VALID	(1 << LCK_RW_TAG_VALID_BIT)
+#define LCK_RW_SHARED_MASK	(0xffff << LCK_RW_SHARED_SHIFT)
+#define LCK_RW_SHARED_READER	(1 << LCK_RW_SHARED_SHIFT)
+
+#define LCK_RW_WANT_WRITE	LCK_RW_WANT_EXCL
+
 
 #define	LCK_RW_ATTR_DEBUG	0x1
 #define	LCK_RW_ATTR_DEBUGb	0

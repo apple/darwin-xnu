@@ -290,8 +290,13 @@ struct ipsecstat {
 	{ "esp_randpad", CTLTYPE_INT }, \
 }
 
+#if defined(__ARM__)
+#define IPSEC_IS_P2ALIGNED(p)        IS_P2ALIGNED(p, sizeof (u_int32_t))
+#define IPSEC_GET_P2UNALIGNED_OFS(p) (sizeof(u_int32_t) - (((uintptr_t)(p)) & ((uintptr_t)(sizeof(u_int32_t)) - 1)))
+#else
 #define IPSEC_IS_P2ALIGNED(p)        1
 #define IPSEC_GET_P2UNALIGNED_OFS(p) 0
+#endif
 
 struct ipsec_output_state {
 	int tunneled;

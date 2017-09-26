@@ -17,6 +17,7 @@ EXPINC_SUBDIRS =
 DATAFILES = \
 	_blkcnt_t.h \
 	_blksize_t.h \
+	_caddr_t.h \
 	_clock_t.h \
 	_ct_rune_t.h \
 	_dev_t.h \
@@ -79,16 +80,23 @@ DATAFILES = \
 	_ucontext.h \
 	_ucontext64.h \
 	_uid_t.h \
+	_u_char.h \
+	_u_int.h \
 	_u_int16_t.h \
 	_u_int32_t.h \
 	_u_int64_t.h \
 	_u_int8_t.h \
+	_u_short.h \
 	_uintptr_t.h \
 	_useconds_t.h \
 	_uuid_t.h \
 	_va_list.h \
 	_wchar_t.h \
 	_wint_t.h \
+	_user32_timex.h \
+	_user64_timex.h \
+	_user32_ntptimeval.h \
+	_user64_ntptimeval.h \
 
 # Installs header file for Apple internal use in user level -
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders

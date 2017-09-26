@@ -86,6 +86,9 @@ mac_priv_check(kauth_cred_t cred, int priv)
 {
 	int error;
 
+	if (!mac_cred_check_enforce(cred))
+		return 0;
+
 	MAC_CHECK(priv_check, cred, priv);
 
 	return (error);
@@ -99,6 +102,9 @@ int
 mac_priv_grant(kauth_cred_t cred, int priv)
 {
 	int error;
+
+	if (!mac_cred_check_enforce(cred))
+		return 0;
 
 	MAC_GRANT(priv_grant, cred, priv);
 

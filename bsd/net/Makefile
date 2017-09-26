@@ -50,10 +50,12 @@ PRIVATE_DATAFILES = \
 	if_utun.h \
 	if_var.h \
 	if_vlan_var.h \
+	if_fake_var.h \
 	iptap.h \
 	lacp.h \
 	ndrv_var.h \
 	necp.h \
+	net_api_stats.h \
 	netsrc.h \
 	network_agent.h \
 	ntstat.h \

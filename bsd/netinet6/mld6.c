@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -182,7 +182,7 @@ static const char *	mld_rec_type_to_str(const int);
 #endif
 static uint32_t	mld_set_version(struct mld_ifinfo *, const int);
 static void	mld_flush_relq(struct mld_ifinfo *, struct mld_in6m_relhead *);
-static void	mld_dispatch_queue(struct mld_ifinfo *, struct ifqueue *, int);
+static void	mld_dispatch_queue_locked(struct mld_ifinfo *, struct ifqueue *, int);
 static int	mld_v1_input_query(struct ifnet *, const struct ip6_hdr *,
 		    /*const*/ struct mld_hdr *);
 static int	mld_v1_input_report(struct ifnet *, struct mbuf *,
@@ -228,15 +228,16 @@ static int interface_timers_running6;
 static int state_change_timers_running6;
 static int current_state_timers_running6;
 
+static unsigned int mld_mli_list_genid;
 /*
  * Subsystem lock macros.
  */
 #define	MLD_LOCK()			\
 	lck_mtx_lock(&mld_mtx)
 #define	MLD_LOCK_ASSERT_HELD()		\
-	lck_mtx_assert(&mld_mtx, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&mld_mtx, LCK_MTX_ASSERT_OWNED)
 #define	MLD_LOCK_ASSERT_NOTHELD()	\
-	lck_mtx_assert(&mld_mtx, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&mld_mtx, LCK_MTX_ASSERT_NOTOWNED)
 #define	MLD_UNLOCK()			\
 	lck_mtx_unlock(&mld_mtx)
 
@@ -487,11 +488,19 @@ out_locked:
  * Dispatch an entire queue of pending packet chains.
  *
  * Must not be called with in6m_lock held.
+ * XXX This routine unlocks MLD global lock and also mli locks.
+ * Make sure that the calling routine takes reference on the mli
+ * before calling this routine.
+ * Also if we are traversing mli_head, remember to check for
+ * mli list generation count and restart the loop if generation count
+ * has changed.
  */
 static void
-mld_dispatch_queue(struct mld_ifinfo *mli, struct ifqueue *ifq, int limit)
+mld_dispatch_queue_locked(struct mld_ifinfo *mli, struct ifqueue *ifq, int limit)
 {
 	struct mbuf *m;
+
+	MLD_LOCK_ASSERT_HELD();
 
 	if (mli != NULL)
 		MLI_LOCK_ASSERT_HELD(mli);
@@ -503,11 +512,17 @@ mld_dispatch_queue(struct mld_ifinfo *mli, struct ifqueue *ifq, int limit)
 		MLD_PRINTF(("%s: dispatch 0x%llx from 0x%llx\n", __func__,
 		    (uint64_t)VM_KERNEL_ADDRPERM(ifq),
 		    (uint64_t)VM_KERNEL_ADDRPERM(m)));
+
 		if (mli != NULL)
 			MLI_UNLOCK(mli);
+		MLD_UNLOCK();
+
 		mld_dispatch_packet(m);
+
+		MLD_LOCK();
 		if (mli != NULL)
 			MLI_LOCK(mli);
+
 		if (--limit == 0)
 			break;
 	}
@@ -575,6 +590,7 @@ mld_domifattach(struct ifnet *ifp, int how)
 	ifnet_lock_done(ifp);
 
 	LIST_INSERT_HEAD(&mli_head, mli, mli_link);
+	mld_mli_list_genid++;
 
 	MLD_UNLOCK();
 
@@ -608,6 +624,7 @@ mld_domifreattach(struct mld_ifinfo *mli)
 	ifnet_lock_done(ifp);
 
 	LIST_INSERT_HEAD(&mli_head, mli, mli_link);
+	mld_mli_list_genid++;
 
 	MLD_UNLOCK();
 
@@ -664,6 +681,7 @@ mli_delete(const struct ifnet *ifp, struct mld_in6m_relhead *in6m_dthead)
 
 			LIST_REMOVE(mli, mli_link);
 			MLI_REMREF(mli); /* release mli_head reference */
+			mld_mli_list_genid++;
 			return;
 		}
 		MLI_UNLOCK(mli);
@@ -1563,6 +1581,8 @@ mld_timeout(void *arg)
 	struct mld_ifinfo	*mli;
 	struct in6_multi	*inm;
 	int			 uri_sec = 0;
+	unsigned int genid = mld_mli_list_genid;
+
 	SLIST_HEAD(, in6_multi)	in6m_dthead;
 
 	SLIST_INIT(&in6m_dthead);
@@ -1600,12 +1620,30 @@ mld_timeout(void *arg)
 	if (interface_timers_running6) {
 		MLD_PRINTF(("%s: interface timers running\n", __func__));
 		interface_timers_running6 = 0;
-		LIST_FOREACH(mli, &mli_head, mli_link) {
+		mli = LIST_FIRST(&mli_head);
+
+		while (mli != NULL) {
+			if (mli->mli_flags & MLIF_PROCESSED) {
+				mli = LIST_NEXT(mli, mli_link);
+				continue;
+			}
+
 			MLI_LOCK(mli);
 			if (mli->mli_version != MLD_VERSION_2) {
 				MLI_UNLOCK(mli);
+				mli = LIST_NEXT(mli, mli_link);
 				continue;
 			}
+			/*
+			 * XXX The logic below ends up calling
+			 * mld_dispatch_packet which can unlock mli
+			 * and the global MLD lock.
+			 * Therefore grab a reference on MLI and also
+			 * check for generation count to see if we should
+			 * iterate the list again.
+			 */
+			MLI_ADDREF_LOCKED(mli);
+
 			if (mli->mli_v2_timer == 0) {
 				/* Do nothing. */
 			} else if (--mli->mli_v2_timer == 0) {
@@ -1614,9 +1652,26 @@ mld_timeout(void *arg)
 			} else {
 				interface_timers_running6 = 1;
 			}
+			mli->mli_flags |= MLIF_PROCESSED;
 			MLI_UNLOCK(mli);
+			MLI_REMREF(mli);
+
+			if (genid != mld_mli_list_genid) {
+				MLD_PRINTF(("%s: MLD information list changed "
+				    "in the middle of iteration! Restart iteration.\n",
+				    __func__));
+				mli = LIST_FIRST(&mli_head);
+				genid = mld_mli_list_genid;
+			} else {
+				mli = LIST_NEXT(mli, mli_link);
+			}
 		}
+
+		LIST_FOREACH(mli, &mli_head, mli_link)
+			mli->mli_flags &= ~MLIF_PROCESSED;
 	}
+
+
 
 	if (!current_state_timers_running6 &&
 	    !state_change_timers_running6)
@@ -1637,8 +1692,15 @@ mld_timeout(void *arg)
 	 * MLD host report and state-change timer processing.
 	 * Note: Processing a v2 group timer may remove a node.
 	 */
-	LIST_FOREACH(mli, &mli_head, mli_link) {
+	mli = LIST_FIRST(&mli_head);
+
+	while (mli != NULL) {
 		struct in6_multistep step;
+
+		if (mli->mli_flags & MLIF_PROCESSED) {
+			mli = LIST_NEXT(mli, mli_link);
+			continue;
+		}
 
 		MLI_LOCK(mli);
 		ifp = mli->mli_ifp;
@@ -1670,13 +1732,22 @@ next:
 		}
 		in6_multihead_lock_done();
 
+		/*
+		 * XXX The logic below ends up calling
+		 * mld_dispatch_packet which can unlock mli
+		 * and the global MLD lock.
+		 * Therefore grab a reference on MLI and also
+		 * check for generation count to see if we should
+		 * iterate the list again.
+		 */
 		MLI_LOCK(mli);
+		MLI_ADDREF_LOCKED(mli);
 		if (mli->mli_version == MLD_VERSION_1) {
-			mld_dispatch_queue(mli, &mli->mli_v1q, 0);
+			mld_dispatch_queue_locked(mli, &mli->mli_v1q, 0);
 		} else if (mli->mli_version == MLD_VERSION_2) {
 			MLI_UNLOCK(mli);
-			mld_dispatch_queue(NULL, &qrq, 0);
-			mld_dispatch_queue(NULL, &scq, 0);
+			mld_dispatch_queue_locked(NULL, &qrq, 0);
+			mld_dispatch_queue_locked(NULL, &scq, 0);
 			VERIFY(qrq.ifq_len == 0);
 			VERIFY(scq.ifq_len == 0);
 			MLI_LOCK(mli);
@@ -1694,11 +1765,26 @@ next:
 		 */
 		mld_flush_relq(mli, (struct mld_in6m_relhead *)&in6m_dthead);
 		VERIFY(SLIST_EMPTY(&mli->mli_relinmhead));
+		mli->mli_flags |= MLIF_PROCESSED;
 		MLI_UNLOCK(mli);
+		MLI_REMREF(mli);
 
 		IF_DRAIN(&qrq);
 		IF_DRAIN(&scq);
+
+		if (genid != mld_mli_list_genid) {
+			MLD_PRINTF(("%s: MLD information list changed "
+			    "in the middle of iteration! Restart iteration.\n",
+			    __func__));
+			mli = LIST_FIRST(&mli_head);
+			genid = mld_mli_list_genid;
+		} else {
+			mli = LIST_NEXT(mli, mli_link);
+		}
 	}
+
+	LIST_FOREACH(mli, &mli_head, mli_link)
+		mli->mli_flags &= ~MLIF_PROCESSED;
 
 out_locked:
 	/* re-arm the timer if there's work to do */
@@ -3407,7 +3493,7 @@ next:
 	in6_multihead_lock_done();
 
 	MLI_LOCK(mli);
-	mld_dispatch_queue(mli, &mli->mli_gq, MLD_MAX_RESPONSE_BURST);
+	mld_dispatch_queue_locked(mli, &mli->mli_gq, MLD_MAX_RESPONSE_BURST);
 	MLI_LOCK_ASSERT_HELD(mli);
 
 	/*

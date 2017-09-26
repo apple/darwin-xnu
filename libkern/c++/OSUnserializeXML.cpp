@@ -159,7 +159,8 @@
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSLib.h>
 
-#define MAX_OBJECTS	65535
+#define MAX_OBJECTS	         131071
+#define MAX_REFED_OBJECTS	 65535
 
 #define YYSTYPE object_t *
 #define YYPARSE_PARAM	state
@@ -192,6 +193,7 @@ typedef struct parser_state {
 	OSString	**errorString;		// parse error with line
 	OSObject	*parsedObject;		// resultant object of parsed text
 	int		parsedObjectCount;
+	int		retrievedObjectCount;
 } parser_state_t;
 
 #define STATE		((parser_state_t *)state)
@@ -1632,6 +1634,11 @@ yyreduce:
 #line 246 "OSUnserializeXML.y"
     { (yyval) = retrieveObject(STATE, (yyvsp[(1) - (1)])->idref);
 				  if ((yyval)) {
+				    STATE->retrievedObjectCount++;
+				    if (STATE->retrievedObjectCount > MAX_REFED_OBJECTS) {
+				      yyerror("maximum object reference count");
+				      YYERROR;
+				    }
 				    (yyval)->object->retain();
 				  } else { 
 				    yyerror("forward reference detected");
@@ -2835,6 +2842,7 @@ OSUnserializeXML(const char *buffer, OSString **errorString)
 	state->errorString = errorString;
 	state->parsedObject = 0;
 	state->parsedObjectCount = 0;
+	state->retrievedObjectCount = 0;
 
 	(void)yyparse((void *)state);
 

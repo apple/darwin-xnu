@@ -28,5 +28,6 @@
 
 #ifndef _VA_LIST_T
 #define _VA_LIST_T
+#include <machine/types.h> /* __darwin_va_list */
 typedef __darwin_va_list va_list;
 #endif /* _VA_LIST_T */

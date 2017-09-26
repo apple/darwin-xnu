@@ -269,6 +269,9 @@ type task_purgable_info_t	= struct[68] of integer_t;
 type task_policy_flavor_t	= natural_t;
 type task_policy_t		= array[*:16] of integer_t;
 
+type task_inspect_flavor_t = natural_t;
+type task_inspect_info_t = array[*:4] of integer_t;
+
 type mem_entry_name_port_t = mach_port_t
 #if     KERNEL_SERVER
 		intran: mem_entry_name_port_t null_conversion(mach_port_t)
@@ -583,9 +586,6 @@ type mach_voucher_selector_t = uint32_t;
 type mach_voucher_attr_value_handle_t = uint64_t;
 type mach_voucher_attr_value_handle_array_t = array[*:4] of mach_voucher_attr_value_handle_t;
 type mach_voucher_attr_value_reference_t = uint32_t;
-
-type task_inspect_flavor_t = natural_t;
-type task_inspect_data_t = array[] of char;
 
 /* kernel module loader */
 type kmod_t = int;

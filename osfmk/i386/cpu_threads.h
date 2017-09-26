@@ -62,6 +62,8 @@
 #define cpu_is_same_package(cpu1,cpu2)	(cpu_to_package(cpu1) == cpu_to_package(cpu2))
 #define cpus_share_cache(cpu1,cpu2,_cl) (cpu_to_lcpu(cpu1)->caches[_cl] == cpu_to_lcpu(cpu2)->caches[_cl])
 
+/* always take the x86_topo_lock with mp_safe_spin_lock */
+boolean_t	mp_safe_spin_lock(usimple_lock_t lock);
 extern decl_simple_lock_data(, x86_topo_lock);
 
 extern void *cpu_thread_alloc(int);

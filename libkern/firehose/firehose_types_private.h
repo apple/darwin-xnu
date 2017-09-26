@@ -91,6 +91,7 @@ OS_ENUM(firehose_tracepoint_namespace, uint8_t,
 	firehose_tracepoint_namespace_trace					= 0x03,
 	firehose_tracepoint_namespace_log					= 0x04,
 	firehose_tracepoint_namespace_metadata				= 0x05,
+	firehose_tracepoint_namespace_signpost				= 0x06,
 );
 
 /*!
@@ -130,13 +131,6 @@ OS_ENUM(firehose_tracepoint_flags, uint16_t,
 	_firehose_tracepoint_flags_pc_style__unused6		= 0x0006 << 1,
 	_firehose_tracepoint_flags_pc_style__unused7		= 0x0007 << 1,
 	_firehose_tracepoint_flags_base_has_unique_pid		= 0x0010,
-
-	_firehose_tracepoint_flags_base_main_executable __deprecated =
-			_firehose_tracepoint_flags_pc_style_main_exe,
-	_firehose_tracepoint_flags_base_shared_cache __deprecated =
-			_firehose_tracepoint_flags_pc_style_shared_cache,
-	_firehose_tracepoint_flags_base_caller_pc __deprecated =
-			_firehose_tracepoint_flags_pc_style_absolute,
 );
 
 /*!
@@ -207,8 +201,8 @@ OS_ENUM(_firehose_tracepoint_type_log, firehose_tracepoint_type_t,
 OS_ENUM(_firehose_tracepoint_flags_log, uint16_t,
 	_firehose_tracepoint_flags_log_has_private_data		= 0x0100,
 	_firehose_tracepoint_flags_log_has_subsystem		= 0x0200,
-	_firehose_tracepoint_flags_log_has_rules		= 0x0400,
-	_firehose_tracepoint_flags_log_has_oversize		= 0x0800,
+	_firehose_tracepoint_flags_log_has_rules			= 0x0400,
+	_firehose_tracepoint_flags_log_has_oversize			= 0x0800,
 );
 
 /*!
@@ -221,6 +215,36 @@ OS_ENUM(_firehose_tracepoint_type_metadata, firehose_tracepoint_type_t,
 	_firehose_tracepoint_type_metadata_dyld				= 0x01,
 	_firehose_tracepoint_type_metadata_subsystem		= 0x02,
 	_firehose_tracepoint_type_metadata_kext				= 0x03,
+);
+
+/*!
+ * @enum firehose_tracepoint_type_signpost_t
+ *
+ * @abstract
+ * Types of Log tracepoints (namespace signpost).
+ */
+OS_ENUM(_firehose_tracepoint_type_signpost, firehose_tracepoint_type_t,
+	_firehose_tracepoint_type_signpost_event			= 0x00,
+	_firehose_tracepoint_type_signpost_interval_begin	= 0x01,
+	_firehose_tracepoint_type_signpost_interval_end		= 0x02,
+
+	_firehose_tracepoint_type_signpost_scope_mask		= 0xc0,
+	_firehose_tracepoint_type_signpost_scope_thread		= 0x40,
+	_firehose_tracepoint_type_signpost_scope_process	= 0x80,
+	_firehose_tracepoint_type_signpost_scope_system		= 0xc0,
+);
+
+/*!
+ * @enum firehose_tracepoint_flags_signpost_t
+ *
+ * @abstract
+ * Flags for Log tracepoints (namespace signpost).
+ */
+OS_ENUM(_firehose_tracepoint_flags_signpost, uint16_t,
+	_firehose_tracepoint_flags_signpost_has_private_data	= 0x0100,
+	_firehose_tracepoint_flags_signpost_has_subsystem		= 0x0200,
+	_firehose_tracepoint_flags_signpost_has_rules			= 0x0400,
+	_firehose_tracepoint_flags_signpost_has_oversize		= 0x0800,
 );
 
 /* MIG firehose push reply structure */

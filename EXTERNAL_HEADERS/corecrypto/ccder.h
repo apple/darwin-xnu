@@ -17,82 +17,76 @@
 #define CCDER_MULTIBYTE_TAGS  1
 
 #ifdef CCDER_MULTIBYTE_TAGS
- #if defined(_MSC_VER)
-   //TODO related to rdar://problem/24868013
-   typedef int ccder_tag; //MSVC forces enums to be ints
-  #else
-   typedef unsigned long ccder_tag;
-  #endif
+typedef unsigned long ccder_tag;
 #else
 typedef uint8_t ccder_tag;
 #endif
 
 /* DER types to be used with ccder_decode and ccder_encode functions. */
-enum {
-    CCDER_EOL               = CCASN1_EOL,
-    CCDER_BOOLEAN           = CCASN1_BOOLEAN,
-    CCDER_INTEGER           = CCASN1_INTEGER,
-    CCDER_BIT_STRING        = CCASN1_BIT_STRING,
-    CCDER_OCTET_STRING      = CCASN1_OCTET_STRING,
-    CCDER_NULL              = CCASN1_NULL,
-    CCDER_OBJECT_IDENTIFIER = CCASN1_OBJECT_IDENTIFIER,
-    CCDER_OBJECT_DESCRIPTOR = CCASN1_OBJECT_DESCRIPTOR,
+#define    CCDER_EOL               CCASN1_EOL
+#define    CCDER_BOOLEAN           CCASN1_BOOLEAN
+#define    CCDER_INTEGER           CCASN1_INTEGER
+#define    CCDER_BIT_STRING        CCASN1_BIT_STRING
+#define    CCDER_OCTET_STRING      CCASN1_OCTET_STRING
+#define    CCDER_NULL              CCASN1_NULL
+#define    CCDER_OBJECT_IDENTIFIER CCASN1_OBJECT_IDENTIFIER
+#define    CCDER_OBJECT_DESCRIPTOR CCASN1_OBJECT_DESCRIPTOR
     /* External or instance-of 0x08 */
-    CCDER_REAL              = CCASN1_REAL,
-    CCDER_ENUMERATED        = CCASN1_ENUMERATED,
-    CCDER_EMBEDDED_PDV      = CCASN1_EMBEDDED_PDV,
-    CCDER_UTF8_STRING       = CCASN1_UTF8_STRING,
+#define    CCDER_REAL              CCASN1_REAL
+#define    CCDER_ENUMERATED        CCASN1_ENUMERATED
+#define    CCDER_EMBEDDED_PDV      CCASN1_EMBEDDED_PDV
+#define    CCDER_UTF8_STRING       CCASN1_UTF8_STRING
     /*                         0x0d */
     /*                         0x0e */
     /*                         0x0f */
-    CCDER_SEQUENCE          = CCASN1_SEQUENCE,
-    CCDER_SET               = CCASN1_SET,
-    CCDER_NUMERIC_STRING    = CCASN1_NUMERIC_STRING,
-    CCDER_PRINTABLE_STRING  = CCASN1_PRINTABLE_STRING,
-    CCDER_T61_STRING        = CCASN1_T61_STRING,
-    CCDER_VIDEOTEX_STRING   = CCASN1_VIDEOTEX_STRING,
-    CCDER_IA5_STRING        = CCASN1_IA5_STRING,
-    CCDER_UTC_TIME          = CCASN1_UTC_TIME,
-    CCDER_GENERALIZED_TIME  = CCASN1_GENERALIZED_TIME,
-    CCDER_GRAPHIC_STRING    = CCASN1_GRAPHIC_STRING,
-    CCDER_VISIBLE_STRING    = CCASN1_VISIBLE_STRING,
-    CCDER_GENERAL_STRING    = CCASN1_GENERAL_STRING,
-    CCDER_UNIVERSAL_STRING  = CCASN1_UNIVERSAL_STRING,
+#define    CCDER_SEQUENCE          CCASN1_SEQUENCE
+#define    CCDER_SET               CCASN1_SET
+#define    CCDER_NUMERIC_STRING    CCASN1_NUMERIC_STRING
+#define    CCDER_PRINTABLE_STRING  CCASN1_PRINTABLE_STRING
+#define    CCDER_T61_STRING        CCASN1_T61_STRING
+#define    CCDER_VIDEOTEX_STRING   CCASN1_VIDEOTEX_STRING
+#define    CCDER_IA5_STRING        CCASN1_IA5_STRING
+#define    CCDER_UTC_TIME          CCASN1_UTC_TIME
+#define    CCDER_GENERALIZED_TIME  CCASN1_GENERALIZED_TIME
+#define    CCDER_GRAPHIC_STRING    CCASN1_GRAPHIC_STRING
+#define    CCDER_VISIBLE_STRING    CCASN1_VISIBLE_STRING
+#define    CCDER_GENERAL_STRING    CCASN1_GENERAL_STRING
+#define    CCDER_UNIVERSAL_STRING  CCASN1_UNIVERSAL_STRING
     /*                         0x1d */
-    CCDER_BMP_STRING        = CCASN1_BMP_STRING,
-    CCDER_HIGH_TAG_NUMBER   = CCASN1_HIGH_TAG_NUMBER,
-    CCDER_TELETEX_STRING    = CCDER_T61_STRING,
+#define    CCDER_BMP_STRING        CCASN1_BMP_STRING
+#define    CCDER_HIGH_TAG_NUMBER   CCASN1_HIGH_TAG_NUMBER
+#define    CCDER_TELETEX_STRING    CCDER_T61_STRING
 
 #ifdef CCDER_MULTIBYTE_TAGS
-    CCDER_TAG_MASK          = ((ccder_tag)~0),
-    CCDER_TAGNUM_MASK       = ((ccder_tag)~((ccder_tag)7 << (sizeof(ccder_tag) * 8 - 3))),
+#define    CCDER_TAG_MASK          ((ccder_tag)~0)
+#define    CCDER_TAGNUM_MASK       ((ccder_tag)~((ccder_tag)7 << (sizeof(ccder_tag) * 8 - 3)))
 
-    CCDER_METHOD_MASK       = ((ccder_tag)1 << (sizeof(ccder_tag) * 8 - 3)),
-    CCDER_PRIMITIVE         = ((ccder_tag)0 << (sizeof(ccder_tag) * 8 - 3)),
-    CCDER_CONSTRUCTED       = ((ccder_tag)1 << (sizeof(ccder_tag) * 8 - 3)),
+#define    CCDER_METHOD_MASK       ((ccder_tag)1 << (sizeof(ccder_tag) * 8 - 3))
+#define    CCDER_PRIMITIVE         ((ccder_tag)0 << (sizeof(ccder_tag) * 8 - 3))
+#define    CCDER_CONSTRUCTED       ((ccder_tag)1 << (sizeof(ccder_tag) * 8 - 3))
 
-    CCDER_CLASS_MASK        = ((ccder_tag)3 << (sizeof(ccder_tag) * 8 - 2)),
-    CCDER_UNIVERSAL         = ((ccder_tag)0 << (sizeof(ccder_tag) * 8 - 2)),
-    CCDER_APPLICATION       = ((ccder_tag)1 << (sizeof(ccder_tag) * 8 - 2)),
-    CCDER_CONTEXT_SPECIFIC  = ((ccder_tag)2 << (sizeof(ccder_tag) * 8 - 2)),
-    CCDER_PRIVATE           = ((ccder_tag)3 << (sizeof(ccder_tag) * 8 - 2)),
-#else
-    CCDER_TAG_MASK			= CCASN1_TAG_MASK,
-    CCDER_TAGNUM_MASK		= CCASN1_TAGNUM_MASK,
+#define    CCDER_CLASS_MASK        ((ccder_tag)3 << (sizeof(ccder_tag) * 8 - 2))
+#define    CCDER_UNIVERSAL         ((ccder_tag)0 << (sizeof(ccder_tag) * 8 - 2))
+#define    CCDER_APPLICATION       ((ccder_tag)1 << (sizeof(ccder_tag) * 8 - 2))
+#define    CCDER_CONTEXT_SPECIFIC  ((ccder_tag)2 << (sizeof(ccder_tag) * 8 - 2))
+#define    CCDER_PRIVATE           ((ccder_tag)3 << (sizeof(ccder_tag) * 8 - 2))
+#else /* !CCDER_MULTIBYTE_TAGS */
+#define    CCDER_TAG_MASK			CCASN1_TAG_MASK
+#define    CCDER_TAGNUM_MASK		CCASN1_TAGNUM_MASK
 
-    CCDER_METHOD_MASK		= CCASN1_METHOD_MASK,
-    CCDER_PRIMITIVE         = CCASN1_PRIMITIVE,
-    CCDER_CONSTRUCTED		= CCASN1_CONSTRUCTED,
+#define    CCDER_METHOD_MASK		CCASN1_METHOD_MASK
+#define    CCDER_PRIMITIVE          CCASN1_PRIMITIVE
+#define    CCDER_CONSTRUCTED		CCASN1_CONSTRUCTED
 
-    CCDER_CLASS_MASK		= CCASN1_CLASS_MASK,
-    CCDER_UNIVERSAL         = CCASN1_UNIVERSAL,
-    CCDER_APPLICATION		= CCASN1_APPLICATION,
-    CCDER_CONTEXT_SPECIFIC	= CCASN1_CONTEXT_SPECIFIC,
-    CCDER_PRIVATE			= CCASN1_PRIVATE,
-#endif
-    CCDER_CONSTRUCTED_SET   = CCDER_SET | CCDER_CONSTRUCTED,
-    CCDER_CONSTRUCTED_SEQUENCE = CCDER_SEQUENCE | CCDER_CONSTRUCTED,
-};
+#define    CCDER_CLASS_MASK		    CCASN1_CLASS_MASK
+#define    CCDER_UNIVERSAL          CCASN1_UNIVERSAL
+#define    CCDER_APPLICATION		CCASN1_APPLICATION
+#define    CCDER_CONTEXT_SPECIFIC	CCASN1_CONTEXT_SPECIFIC
+#define    CCDER_PRIVATE			CCASN1_PRIVATE
+#endif /* !CCDER_MULTIBYTE_TAGS */
+#define    CCDER_CONSTRUCTED_SET    (CCDER_SET | CCDER_CONSTRUCTED)
+#define    CCDER_CONSTRUCTED_SEQUENCE (CCDER_SEQUENCE | CCDER_CONSTRUCTED)
+
 
 // MARK: ccder_sizeof_ functions
 

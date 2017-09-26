@@ -27,5 +27,6 @@
  */
 #ifndef _RUNE_T 
 #define _RUNE_T 
+#include <machine/_types.h> /* __darwin_rune_t */
 typedef __darwin_rune_t rune_t; 
 #endif /* _RUNE_T */

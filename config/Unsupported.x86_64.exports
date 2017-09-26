@@ -18,6 +18,7 @@ _dsmos_page_transform_hook
 _gPEEFIRuntimeServices
 _gPEEFISystemTable
 _hibernate_vm_lock
+_hibernate_vm_lock_end
 _hibernate_vm_unlock
 _kdp_register_callout
 _kdp_set_ip_and_mac_addresses
@@ -42,4 +43,5 @@ _sock_retain
 _tmrCvt
 _tsc_get_info
 _PE_state
+_vm_map
 

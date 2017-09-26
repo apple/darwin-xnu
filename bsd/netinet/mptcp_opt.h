@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -41,25 +41,19 @@
 #define	MPTCP_CAPABLE_RETRIES	(2)
 
 __BEGIN_DECLS
+extern void mptcp_data_ack_rcvd(struct mptcb *mp_tp, struct tcpcb *tp, u_int64_t full_dack);
+extern void mptcp_update_window_fallback(struct tcpcb *tp);
 extern void tcp_do_mptcp_options(struct tcpcb *, u_char *, struct tcphdr *,
     struct tcpopt *, int);
-extern unsigned mptcp_setup_syn_opts(struct socket *, int, u_char*, unsigned);
+extern unsigned mptcp_setup_syn_opts(struct socket *, u_char*, unsigned);
 extern unsigned mptcp_setup_join_ack_opts(struct tcpcb *, u_char*, unsigned);
-extern void mptcp_update_dss_send_state(struct mptcb *, u_int64_t);
-extern void mptcp_send_addaddr_opt(struct tcpcb *, struct mptcp_addaddr_opt *);
-extern void mptcp_send_remaddr_opt(struct tcpcb *, struct mptcp_remaddr_opt *);
-extern unsigned int mptcp_setup_opts(struct tcpcb *, int, u_char *,
-    unsigned int, int, int, unsigned int **, u_int8_t **, u_int64_t *,
-    u_int32_t **, boolean_t *);
+extern unsigned int mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
+				     unsigned int optlen, int flags, int len,
+				     boolean_t *p_mptcp_acknow);
 extern void mptcp_update_dss_rcv_state(struct mptcp_dsn_opt *, struct tcpcb *,
     uint16_t);
-extern void mptcp_update_rcv_state_f(struct mptcp_dss_ack_opt *,
-    struct tcpcb *, uint16_t);
-extern void mptcp_update_rcv_state_g(struct mptcp_dss64_ack32_opt *,
-    struct tcpcb *, uint16_t);
 extern void mptcp_update_rcv_state_meat(struct mptcb *, struct tcpcb *,
     u_int64_t, u_int32_t, u_int16_t, uint16_t);
-extern void mptcp_data_ack_rcvd(struct mptcb *, struct tcpcb *, u_int64_t);
 __END_DECLS
 
 #endif /* BSD_KERNEL_PRIVATE */

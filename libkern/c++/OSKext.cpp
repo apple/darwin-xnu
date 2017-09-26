@@ -71,6 +71,8 @@ extern "C" {
 #include <IOKit/IOStatisticsPrivate.h>
 #include <IOKit/IOBSD.h>
 
+#include <san/kasan.h>
+
 #if PRAGMA_MARK
 #pragma mark External & Internal Function Protos
 #endif
@@ -121,6 +123,9 @@ static void * GetAppleTEXTHashForKext(OSKext * theKext, OSDictionary *theInfoDic
 #define VM_MAPPED_KEXTS 1
 #define KASLR_KEXT_DEBUG 0
 #define KASLR_IOREG_DEBUG 0
+#elif __arm__ || __arm64__
+#define VM_MAPPED_KEXTS 0
+#define KASLR_KEXT_DEBUG 0
 #else
 #error Unsupported architecture
 #endif
@@ -314,7 +319,7 @@ kmod_info_t g_kernel_kmod_info = {
     /* version         */ "0",               // filled in in OSKext::initialize()
     /* reference_count */ -1,                // never adjusted; kernel never unloads
     /* reference_list  */ NULL,
-    /* address         */ NULL,
+    /* address         */ 0,
     /* size            */ 0,                 // filled in in OSKext::initialize()
     /* hdr_size        */ 0,
     /* start           */ 0,
@@ -681,6 +686,10 @@ OSKext::initialize(void)
     }
 
     PE_parse_boot_argn("keepsyms", &sKeepSymbols, sizeof(sKeepSymbols));
+#if KASAN_DYNAMIC_BLACKLIST
+    /* needed for function lookup */
+    sKeepSymbols = true;
+#endif
 
    /* Set up an OSKext instance to represent the kernel itself.
     */
@@ -812,6 +821,11 @@ OSKext::removeKextBootstrap(void)
 
     kernel_segment_command_t * seg_to_remove         = NULL;
 
+#if __arm__ || __arm64__
+    const char               * dt_segment_name       = NULL;
+    void                     * segment_paddress      = NULL;
+    int                        segment_size          = 0;
+#endif
 
    /* This must be the very first thing done by this function.
     */
@@ -854,7 +868,21 @@ OSKext::removeKextBootstrap(void)
         OSRuntimeUnloadCPPForSegment(seg_to_remove);
     }
 
-#if   __i386__ || __x86_64__
+#if __arm__ || __arm64__
+#if !(defined(KERNEL_INTEGRITY_KTRR))
+   /* Free the memory that was set up by bootx.
+    */
+    dt_segment_name = "Kernel-__KLD";
+    if (0 == IODTGetLoaderInfo(dt_segment_name, &segment_paddress, &segment_size)) {
+       /* We cannot free this with KTRR enabled, as we cannot
+        * update the permissions on the KLD range this late
+        * in the boot process.
+        */
+        IODTFreeLoaderInfo(dt_segment_name, (void *)segment_paddress,
+            (int)segment_size);
+    }
+#endif /* !(defined(KERNEL_INTEGRITY_KTRR)) */
+#elif __i386__ || __x86_64__
    /* On x86, use the mapping data from the segment load command to
     * unload KLD directly.
     * This may invalidate any assumptions about  "avail_start"
@@ -890,6 +918,9 @@ OSKext::removeKextBootstrap(void)
      * managed memory, then copy the segment back in.
      */
 #if CONFIG_KXLD
+#if (__arm__ || __arm64__)
+#error CONFIG_KXLD not expected for this arch
+#endif
     if (!sKeepSymbols) {
         kern_return_t mem_result;
         void *seg_copy = NULL;
@@ -930,6 +961,8 @@ OSKext::removeKextBootstrap(void)
             &seg_offset,
             seg_length, /* mask */ 0, 
             VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, 
+	    VM_MAP_KERNEL_FLAGS_NONE,
+	    VM_KERN_MEMORY_NONE,
             (ipc_port_t)NULL,
             (vm_object_offset_t) 0,
             /* copy */ FALSE,
@@ -956,7 +989,9 @@ OSKext::removeKextBootstrap(void)
         kmem_free(kernel_map, seg_copy_offset, seg_length);
     }
 #else /* we are not CONFIG_KXLD */
+#if !(__arm__ || __arm64__)
 #error CONFIG_KXLD is expected for this arch
+#endif
 
     /*****
     * Dump the LINKEDIT segment, unless keepsyms is set.
@@ -3427,8 +3462,20 @@ bool OSKext::isKextWithIdentifierLoaded(const char * kextIdentifier)
 OSReturn
 OSKext::removeKext(
     OSKext * aKext,
+#if CONFIG_EMBEDDED
+    __unused
+#endif
     bool     terminateServicesAndRemovePersonalitiesFlag)
  {
+#if CONFIG_EMBEDDED
+    OSKextLog(aKext,
+        kOSKextLogErrorLevel |
+        kOSKextLogKextBookkeepingFlag,
+        "removeKext() called for %s, not supported on embedded",
+        aKext->getIdentifier() ? aKext->getIdentifierCString() : "unknown kext");
+
+    return kOSReturnSuccess;
+#else /* CONFIG_EMBEDDED */
 
     OSReturn result    = kOSKextReturnInUse;
     OSKext * checkKext = NULL;   // do not release
@@ -3524,6 +3571,7 @@ OSKext::removeKext(
 finish:
     IORecursiveLockUnlock(sKextLock);
     return result;
+#endif /* CONFIG_EMBEDDED */
  }
 
 /*********************************************************************
@@ -4112,9 +4160,30 @@ finish:
 
 /*********************************************************************
 *********************************************************************/
+#if defined (__arm__)
+#include <arm/arch.h>
+#endif
 
 #if   defined (__x86_64__)
 #define ARCHNAME "x86_64"
+#elif defined (__arm64__)
+#define ARCHNAME "arm64"
+#elif defined (__arm__)
+
+#if defined (__ARM_ARCH_7S__)
+#define ARCHNAME "armv7s"
+#elif defined (__ARM_ARCH_7F__)
+#define ARCHNAME "armv7f"
+#elif defined (__ARM_ARCH_7K__)
+#define ARCHNAME "armv7k"
+#elif defined (_ARM_ARCH_7) /* umbrella for all remaining */
+#define ARCHNAME "armv7"
+#elif defined (_ARM_ARCH_6) /* umbrella for all armv6 */
+#define ARCHNAME "armv6"
+#endif
+
+#elif defined (__arm64__)
+#define ARCHNAME "arm64"
 #else
 #error architecture not supported
 #endif
@@ -4700,6 +4769,7 @@ OSKext::load(
     }
     bzero(account, sizeof(*account));
     account->loadTag = kmod_info->id;
+    account->site.refcount = 0;
     account->site.flags = VM_TAG_KMOD;
     account->kext = this;
 
@@ -5404,6 +5474,21 @@ register_kmod:
         goto finish;
     }
 
+#if KASAN
+    kasan_load_kext((vm_offset_t)linkedExecutable->getBytesNoCopy(),
+                    linkedExecutable->getLength(), getIdentifierCString());
+#else
+    if (lookupSection(KASAN_GLOBAL_SEGNAME, KASAN_GLOBAL_SECTNAME)) {
+        OSKextLog(this,
+                kOSKextLogErrorLevel | kOSKextLogLoadFlag,
+                "KASAN: cannot load KASAN-ified kext %s on a non-KASAN kernel\n",
+                getIdentifierCString()
+                );
+        result = KERN_FAILURE;
+        goto finish;
+    }
+#endif
+
     result = kOSReturnSuccess;
 
 finish:
@@ -5679,7 +5764,40 @@ OSKext::unregisterWithDTrace(void)
 * called only by loadExecutable()
 *********************************************************************/
 #if !VM_MAPPED_KEXTS
+#if defined(__arm__) || defined(__arm64__)
+static inline kern_return_t
+OSKext_protect(
+    vm_map_t   map,
+    vm_map_offset_t    start,
+    vm_map_offset_t    end,
+    vm_prot_t  new_prot,
+    boolean_t  set_max)
+{
+#pragma unused(map)
+    assert(map == kernel_map); // we can handle KEXTs arising from the PRELINK segment and no others
+    assert(start <= end);
+    if (start >= end)
+        return KERN_SUCCESS; // Punt segments of length zero (e.g., headers) or less (i.e., blunders)
+    else if (set_max)
+        return KERN_SUCCESS; // Punt set_max, as there's no mechanism to record that state
+    else
+        return ml_static_protect(start, end - start, new_prot);
+}
+
+static inline kern_return_t
+OSKext_wire(
+    vm_map_t   map,
+    vm_map_offset_t    start,
+    vm_map_offset_t    end,
+    vm_prot_t  access_type,
+    boolean_t       user_wire)
+{
+#pragma unused(map,start,end,access_type,user_wire)
+	return KERN_SUCCESS; // No-op as PRELINK kexts are cemented into physical memory at boot
+}
+#else
 #error Unrecognized architecture 
+#endif
 #else
 static inline kern_return_t
 OSKext_protect(
@@ -5703,7 +5821,7 @@ OSKext_wire(
     vm_prot_t  access_type,
     boolean_t       user_wire)
 {
-	return vm_map_wire(map, start, end, access_type | VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_KEXT), user_wire);
+	return vm_map_wire_kernel(map, start, end, access_type, VM_KERN_MEMORY_KEXT, user_wire);
 }
 #endif
 
@@ -5754,6 +5872,11 @@ OSKext::setVMAttributes(bool protect, bool wire)
     seg = firstsegfromheader((kernel_mach_header_t *)kmod_info->address);
     while (seg) {
 
+#if __arm__
+        /* We build all ARM kexts, so we can ensure they are aligned */
+        assert((seg->vmaddr & PAGE_MASK) == 0);
+        assert((seg->vmsize & PAGE_MASK) == 0);
+#endif
 
         start = round_page(seg->vmaddr);
         end = trunc_page(seg->vmaddr + seg->vmsize);
@@ -6332,7 +6455,17 @@ OSKext::unload(void)
         goto finish;
     }
 
-    if (hasOSMetaClassInstances()) {
+    if (!isLoaded()) {
+        result = kOSReturnSuccess;
+        goto finish;
+    }
+
+    if (isKernelComponent()) {
+        result = kOSKextReturnInvalidArgument;
+        goto finish;
+    }
+
+    if (metaClasses && !OSMetaClass::removeClasses(metaClasses)) {
         OSKextLog(this,
             kOSKextLogErrorLevel |
             kOSKextLogLoadFlag | kOSKextLogKextBookkeepingFlag,
@@ -6341,16 +6474,6 @@ OSKext::unload(void)
         reportOSMetaClassInstances(kOSKextLogErrorLevel |
             kOSKextLogLoadFlag | kOSKextLogKextBookkeepingFlag);
         result = kOSKextReturnInUse;
-        goto finish;
-    }
-
-    if (!isLoaded()) {
-        result = kOSReturnSuccess;
-        goto finish;
-    }
-
-    if (isKernelComponent()) {
-        result = kOSKextReturnInvalidArgument;
         goto finish;
     }
     
@@ -6474,6 +6597,10 @@ OSKext::unload(void)
     /* Unwire and free the linked executable.
      */
     if (linkedExecutable) {
+#if KASAN
+        kasan_unload_kext((vm_offset_t)linkedExecutable->getBytesNoCopy(), linkedExecutable->getLength());
+#endif
+
 #if VM_MAPPED_KEXTS
         if (!isInterface()) {
             kernel_segment_command_t *seg = NULL;
@@ -8234,7 +8361,6 @@ size_t OSKextPgoMetadataSize(OSKext *kext)
     return position;
 }
 
-
 int OSKextGrabPgoDataLocked(OSKext *kext,
                             bool metadata,
                             uuid_t instance_uuid,
@@ -8242,7 +8368,6 @@ int OSKextGrabPgoDataLocked(OSKext *kext,
                             char *pBuffer,
                             uint64_t bufferSize)
 {
-
     int err = 0;
 
     kernel_section_t *sect_prf_data = NULL;
@@ -8767,6 +8892,7 @@ OSKext::copyInfo(OSArray * infoKeys)
                                 segp->filesize = 0;
                             }
                         }
+
 #if 0
                         OSKextLog(/* kext */ NULL,
                                   kOSKextLogErrorLevel |
@@ -8788,7 +8914,7 @@ OSKext::copyInfo(OSArray * infoKeys)
                         }
 #endif
                         segp->vmaddr = VM_KERNEL_UNSLIDE(segp->vmaddr);
-                        
+
                         for (secp = firstsect(segp); secp != NULL; secp = nextsect(segp, secp)) {
                             secp->addr = VM_KERNEL_UNSLIDE(secp->addr);
                         }
@@ -9470,6 +9596,17 @@ OSKext::dequeueCallbackForRequestTag(
 
 finish:
     return result;
+}
+
+
+/*********************************************************************
+* Busy timeout triage
+*********************************************************************/
+/* static */
+bool
+OSKext::isWaitingKextd(void)
+{
+    return sRequestCallbackRecords && sRequestCallbackRecords->getCount();
 }
 
 /*********************************************************************
@@ -10741,15 +10878,14 @@ OSKext::printKextsInBacktrace(
     vm_offset_t  * addr,
     unsigned int   cnt,
     int         (* printf_func)(const char *fmt, ...),
-    bool           lockFlag,
-    bool           doUnslide)
+    uint32_t       flags)
 {
     addr64_t    summary_page = 0;
     addr64_t    last_summary_page = 0;
     bool        found_kmod = false;
     u_int       i = 0;
 
-    if (lockFlag) {
+    if (kPrintKextsLock & flags) {
         if (!sKextSummariesLock) return;
         IOLockLock(sKextSummariesLock);
     }
@@ -10782,15 +10918,17 @@ OSKext::printKextsInBacktrace(
         }
         
         if (!found_kmod) {
-            (*printf_func)("      Kernel Extensions in backtrace:\n");
+            if (!(kPrintKextsTerse & flags)) {
+                (*printf_func)("      Kernel Extensions in backtrace:\n");
+            }
             found_kmod = true;
         }
 
-        printSummary(summary, printf_func, doUnslide);
+        printSummary(summary, printf_func, flags);
     }
 
 finish:
-    if (lockFlag) {
+    if (kPrintKextsLock & flags) {
         IOLockUnlock(sKextSummariesLock);
     }
 
@@ -10919,7 +11057,7 @@ static void findSummaryUUID(
 void OSKext::printSummary(
     OSKextLoadedKextSummary * summary,
     int                    (* printf_func)(const char *fmt, ...),
-    bool                      doUnslide)
+    uint32_t                  flags)
 {
     kmod_reference_t * kmod_ref = NULL;
     uuid_string_t uuid;
@@ -10931,15 +11069,18 @@ void OSKext::printSummary(
     }
     (void) uuid_unparse(summary->uuid, uuid);
     
-    if (doUnslide) {
+    if (kPrintKextsUnslide & flags) {
         tmpAddr = VM_KERNEL_UNSLIDE(summary->address);
     }
     else {
         tmpAddr = summary->address;
     }
-    (*printf_func)("         %s(%s)[%s]@0x%llx->0x%llx\n",
+    (*printf_func)("%s%s(%s)[%s]@0x%llx->0x%llx\n",
+		(kPrintKextsTerse & flags) ? "" : "         ",
         summary->name, version, uuid,
         tmpAddr, tmpAddr + summary->size - 1);
+
+    if (kPrintKextsTerse & flags) return;
     
     /* print dependency info */
     for (kmod_ref = (kmod_reference_t *) summary->reference_list; 
@@ -10950,7 +11091,7 @@ void OSKext::printSummary(
         if (pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)kmod_ref)) == 0) {
             (*printf_func)("            kmod dependency scan stopped "
                            "due to missing dependency page: %p\n",
-			   doUnslide ? (void *)VM_KERNEL_UNSLIDE(kmod_ref) : kmod_ref);
+			   (kPrintKextsUnslide & flags) ? (void *)VM_KERNEL_UNSLIDE(kmod_ref) : kmod_ref);
             break;
         }
         rinfo = kmod_ref->info;
@@ -10958,7 +11099,7 @@ void OSKext::printSummary(
         if (pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)rinfo)) == 0) {
             (*printf_func)("            kmod dependency scan stopped "
                            "due to missing kmod page: %p\n",
-			   doUnslide ? (void *)VM_KERNEL_UNSLIDE(rinfo) : rinfo);
+			   (kPrintKextsUnslide & flags) ? (void *)VM_KERNEL_UNSLIDE(rinfo) : rinfo);
             break;
         }
         
@@ -10969,7 +11110,7 @@ void OSKext::printSummary(
         /* locate UUID in gLoadedKextSummaries */
         findSummaryUUID(rinfo->id, uuid);
         
-        if (doUnslide) {
+        if (kPrintKextsUnslide & flags) {
             tmpAddr = VM_KERNEL_UNSLIDE(rinfo->address);
         }
         else {
@@ -11597,11 +11738,14 @@ OSKextGetAllocationSiteForCaller(uintptr_t address)
 {
     OSKextActiveAccount *  active;
     vm_allocation_site_t * site;
+    vm_allocation_site_t * releasesite;
+
     uint32_t baseIdx;
     uint32_t lim;
 
     IOSimpleLockLock(sKextAccountsLock);
-    site = NULL;
+    site = releasesite = NULL;
+    
     // bsearch sKextAccounts list
     for (baseIdx = 0, lim = sKextAccountsCount; lim; lim >>= 1)
     {
@@ -11609,7 +11753,7 @@ OSKextGetAllocationSiteForCaller(uintptr_t address)
 	if ((address >= active->address) && (address < active->address_end))
 	{
 	    site = &active->account->site;
-	    if (!site->tag) vm_tag_alloc_locked(site);
+	    if (!site->tag) vm_tag_alloc_locked(site, &releasesite);
 	    break;
 	}
 	else if (address > active->address) 
@@ -11621,12 +11765,13 @@ OSKextGetAllocationSiteForCaller(uintptr_t address)
 	// else move left
     }
     IOSimpleLockUnlock(sKextAccountsLock);
+    if (releasesite) kern_allocation_name_release(releasesite);
 
     return (site);
 }
 
 extern "C" uint32_t 
-OSKextGetKmodIDForSite(vm_allocation_site_t * site, char * name, vm_size_t namelen)
+OSKextGetKmodIDForSite(const vm_allocation_site_t * site, char * name, vm_size_t namelen)
 {
     OSKextAccount * account = (typeof(account)) site;
     const char    * kname;

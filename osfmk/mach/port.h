@@ -343,8 +343,8 @@ typedef integer_t *mach_port_info_t;		/* varying array of natural_t */
 
 /* Flavors for mach_port_get/set_attributes() */
 typedef int	mach_port_flavor_t;
-#define MACH_PORT_LIMITS_INFO		1	/* uses mach_port_status_t */
-#define MACH_PORT_RECEIVE_STATUS	2	/* uses mach_port_limits_t */
+#define MACH_PORT_LIMITS_INFO		1	/* uses mach_port_limits_t */
+#define MACH_PORT_RECEIVE_STATUS	2	/* uses mach_port_status_t */
 #define MACH_PORT_DNREQUESTS_SIZE	3	/* info is int */
 #define MACH_PORT_TEMPOWNER		4	/* indicates receive right will be reassigned to another task */
 #define MACH_PORT_IMPORTANCE_RECEIVER	5	/* indicates recieve right accepts priority donation */

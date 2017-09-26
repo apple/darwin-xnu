@@ -38,6 +38,8 @@
 #include <kern/thread.h>
 #include <sys/errno.h>
 #include <sys/vm.h>
+#include <vm/vm_page.h>
+#include <vm/vm_pageout.h>
 
 #include <kperf/action.h>
 #include <kperf/ast.h>
@@ -71,6 +73,29 @@ static struct action *actionv = NULL;
 /* should emit tracepoint on context switch */
 int kperf_kdebug_cswitch = 0;
 
+bool
+kperf_sample_has_non_system(unsigned actionid)
+{
+	if (actionid > actionc) {
+		return false;
+	}
+
+	if (actionv[actionid - 1].sample & ~SAMPLER_SYS_MEM) {
+		return true;
+	} else {
+		return false;
+	}
+}
+
+static void
+kperf_system_memory_log(void)
+{
+	BUF_DATA(PERF_MI_SYS_DATA, (uintptr_t)vm_page_free_count,
+			(uintptr_t)vm_page_wire_count, (uintptr_t)vm_page_external_count,
+			(uintptr_t)(vm_page_active_count + vm_page_inactive_count +
+			vm_page_speculative_count));
+}
+
 static kern_return_t
 kperf_sample_internal(struct kperf_sample *sbuf,
                       struct kperf_context *context,
@@ -79,6 +104,8 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 {
 	int pended_ucallstack = 0;
 	int pended_th_dispatch = 0;
+	bool on_idle_thread = false;
+	uint32_t userdata = actionid;
 
 	/* not much point continuing here, but what to do ? return
 	 * Shutdown? cut a tracepoint and continue?
@@ -90,6 +117,10 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 	/* callstacks should be explicitly ignored */
 	if (sample_flags & SAMPLE_FLAG_EMPTY_CALLSTACK) {
 		sample_what &= ~(SAMPLER_KSTACK | SAMPLER_USTACK);
+	}
+
+	if (sample_flags & SAMPLE_FLAG_ONLY_SYSTEM) {
+		sample_what &= SAMPLER_SYS_MEM;
 	}
 
 	context->cur_thread->kperf_pet_gen = kperf_pet_gen;
@@ -121,7 +152,8 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 		/* See if we should drop idle thread samples */
 		if (!(sample_flags & SAMPLE_FLAG_IDLE_THREADS)) {
 			if (sbuf->th_info.kpthi_runmode & 0x40) {
-				return SAMPLE_CONTINUE;
+				on_idle_thread = true;
+				goto log_sample;
 			}
 		}
 	}
@@ -177,12 +209,10 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 		kperf_kpc_cpu_sample(&(sbuf->kpcdata), sample_what);
 	}
 
+log_sample:
 	/* lookup the user tag, if any */
-	uint32_t userdata;
 	if (actionid && (actionid <= actionc)) {
 		userdata = actionv[actionid - 1].userdata;
-	} else {
-		userdata = actionid;
 	}
 
 	/* avoid logging if this sample only pended samples */
@@ -200,6 +230,15 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 	BUF_DATA(PERF_GEN_EVENT | DBG_FUNC_START, sample_what,
 	         actionid, userdata, sample_flags);
 
+	if (sample_flags & SAMPLE_FLAG_SYSTEM) {
+		if (sample_what & SAMPLER_SYS_MEM) {
+			kperf_system_memory_log();
+		}
+	}
+	if (on_idle_thread) {
+		goto log_sample_end;
+	}
+
 	if (sample_what & SAMPLER_TH_INFO) {
 		kperf_thread_info_log(&sbuf->th_info);
 	}
@@ -211,6 +250,9 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 	}
 	if (sample_what & SAMPLER_KSTACK) {
 		kperf_kcallstack_log(&sbuf->kcallstack);
+	}
+	if (sample_what & SAMPLER_TH_INSCYC) {
+		kperf_thread_inscyc_log(context);
 	}
 	if (sample_what & SAMPLER_TK_SNAPSHOT) {
 		kperf_task_snapshot_log(&(sbuf->tk_snapshot));
@@ -248,7 +290,8 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 		kperf_kpc_cpu_log(&(sbuf->kpcdata));
 	}
 
-	BUF_DATA(PERF_GEN_EVENT | DBG_FUNC_END, sample_what);
+log_sample_end:
+	BUF_DATA(PERF_GEN_EVENT | DBG_FUNC_END, sample_what, on_idle_thread ? 1 : 0);
 
 	/* intrs back on */
 	ml_set_interrupts_enabled(enabled);

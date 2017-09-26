@@ -68,6 +68,8 @@
  */
 #if CONFIG_REQUIRES_U32_MUNGING
 typedef	void	mach_munge_t(void *);
+#elif __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
+typedef	int	mach_munge_t(const void *, void *);
 #endif
 
 typedef struct {

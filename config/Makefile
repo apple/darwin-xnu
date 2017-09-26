@@ -13,6 +13,7 @@ INSTALL_KEXT_DIR = $(DSTROOT)$(INSTALL_EXTENSIONS_DIR)
 
 KEXT_PLIST_LIST = \
 	System.kext/Info.plist \
+	System.kext/PlugIns/Kasan.kext/Info.plist \
 	System.kext/PlugIns/AppleNMI.kext/Info.plist \
 	System.kext/PlugIns/ApplePlatformFamily.kext/Info.plist \
 	System.kext/PlugIns/IONVRAMFamily.kext/Info.plist \
@@ -128,12 +129,15 @@ $(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) $(DSTROOT)/$(KRESDIR)/$(MI_SU
 	@echo "$(ColorH)INSTALL$(Color0)    $(ColorF)$*$(Color0)"
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
+ifneq ($(INSTALL_KASAN_ONLY),1)
 do_config_install::	$(SYMROOT_INSTALL_KEXT_MACHO_FILES) \
 				$(SYMROOT_INSTALL_KEXT_PLISTS) \
 				$(DSTROOT_INSTALL_KEXT_MACHO_FILES) \
 				$(DSTROOT_INSTALL_KEXT_PLISTS) \
 				$(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) \
 				$(DSTROOT)/$(KRESDIR)/$(MI_SUPPORTED_KPI_FILENAME)
+endif
+
 
 $(OBJPATH)/all-kpi.exp: $(EXPORTS_FILES)
 	$(_v)$(SOURCE)/generate_linker_exports.sh $@ $+

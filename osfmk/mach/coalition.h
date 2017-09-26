@@ -31,7 +31,7 @@
 
 /* code shared by userspace and xnu */
 
-#define COALITION_CREATE_FLAGS_MASK       ((uint32_t)0xF1)
+#define COALITION_CREATE_FLAGS_MASK       ((uint32_t)0xFF1)
 #define COALITION_CREATE_FLAGS_PRIVILEGED ((uint32_t)0x01)
 
 #define COALITION_CREATE_FLAGS_TYPE_MASK  ((uint32_t)0xF0)
@@ -47,6 +47,28 @@
 			   & COALITION_CREATE_FLAGS_TYPE_MASK); \
 	} while (0)
 
+#define COALITION_CREATE_FLAGS_ROLE_MASK  ((uint32_t)0xF00)
+#define COALITION_CREATE_FLAGS_ROLE_SHIFT (8)
+
+#define COALITION_CREATE_FLAGS_GET_ROLE(flags) \
+    (((flags) & COALITION_CREATE_FLAGS_ROLE_MASK) >> COALITION_CREATE_FLAGS_ROLE_SHIFT)
+
+#define COALITION_CREATE_FLAGS_SET_ROLE(flags, role) \
+    do { \
+        flags &= ~COALITION_CREATE_FLAGS_ROLE_MASK; \
+        flags |= (((role) << COALITION_CREATE_FLAGS_ROLE_SHIFT) \
+               & COALITION_CREATE_FLAGS_ROLE_MASK); \
+    } while (0)
+
+/*
+ * Default scheduling policy of the lead/parent task in a coalition
+ */
+#define COALITION_ROLE_UNDEF       (0)
+#define COALITION_ROLE_SYSTEM      (1)
+#define COALITION_ROLE_BACKGROUND  (2)
+#define COALITION_ROLE_ADAPTIVE    (3)
+#define COALITION_ROLE_INTERACTIVE (4)
+#define COALITION_NUM_ROLES        (5)
 
 #define COALITION_TYPE_RESOURCE  (0)
 #define COALITION_TYPE_JETSAM    (1)
@@ -54,6 +76,7 @@
 
 #define COALITION_NUM_TYPES      (COALITION_TYPE_MAX + 1)
 
+#define COALITION_TASKROLE_NONE   (-1) /* task plays no role in the given coalition */
 #define COALITION_TASKROLE_UNDEF  (0)
 #define COALITION_TASKROLE_LEADER (1)
 #define COALITION_TASKROLE_XPC    (2)
@@ -76,6 +99,26 @@
 
 #define COALITION_NUM_SORT        (6)
 
+/* Coalition Efficiency Interface Support */
+
+/* Flags for coalition efficiency */
+#define COALITION_FLAGS_EFFICIENT       (0x1)
+
+/*
+ * Mapping of launchd plist values to coalition efficiency flags.
+ * Launchd uses this mapping to pass the correct flags to
+ * coalition_info_set_efficiency(cid, flags);
+ *
+ * Current supported values mapping:
+ * { "Efficient" : COALITION_FLAGS_EFFICIENT, }
+ */
+static const char *coalition_efficiency_names[] = {
+    "Efficient",
+};
+static const uint64_t coalition_efficiency_flags[] = {
+    COALITION_FLAGS_EFFICIENT,
+};
+
 struct coalition_resource_usage {
 	uint64_t tasks_started;
 	uint64_t tasks_exited;
@@ -93,6 +136,9 @@ struct coalition_resource_usage {
 	uint64_t logical_deferred_writes;
 	uint64_t logical_invalidated_writes;
 	uint64_t logical_metadata_writes;
+	uint64_t energy_billed_to_me;
+	uint64_t energy_billed_to_others;
+	uint64_t cpu_ptime;
 };
 
 #ifdef PRIVATE
@@ -105,6 +151,10 @@ struct coalition_resource_usage {
 
 /* coalition_info flavors */
 #define COALITION_INFO_RESOURCE_USAGE 1
+#define COALITION_INFO_SET_NAME 2
+#define COALITION_INFO_SET_EFFICIENCY 3
+
+#define COALITION_EFFICIENCY_VALID_FLAGS    (COALITION_FLAGS_EFFICIENT)
 
 /* structure returned from libproc coalition listing interface */
 struct procinfo_coalinfo {

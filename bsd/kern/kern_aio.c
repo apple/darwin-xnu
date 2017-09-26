@@ -1465,6 +1465,8 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 	struct user_sigevent		aiosigev;
 	aio_lio_context		*lio_context;
 	boolean_t 			free_context = FALSE;
+    uint32_t *paio_offset;
+    uint32_t *paio_nbytes;
 	
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_listio)) | DBG_FUNC_START,
 		     	  (int)p, uap->nent, uap->mode, 0, 0 );
@@ -1596,9 +1598,15 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 		aio_enqueue_work(p, entryp, 1);
 		aio_proc_unlock(p);
 		
-		KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_NONE,
-				  (int)p, (int)entryp->uaiocbp, 0, 0, 0 );
-	}
+        KERNEL_DEBUG_CONSTANT( (BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_START,
+                      (int)p, (int)entryp->uaiocbp, entryp->flags, entryp->aiocb.aio_fildes, 0 );
+        paio_offset = (uint32_t*) &entryp->aiocb.aio_offset;
+        paio_nbytes = (uint32_t*) &entryp->aiocb.aio_nbytes;
+        KERNEL_DEBUG_CONSTANT( (BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_END,
+                              paio_offset[0], (sizeof(entryp->aiocb.aio_offset) == sizeof(uint64_t) ? paio_offset[1] : 0),
+                              paio_nbytes[0], (sizeof(entryp->aiocb.aio_nbytes) == sizeof(uint64_t) ? paio_nbytes[1] : 0),
+                              0 );
+    }
 
 	switch(uap->mode) {
 	case LIO_WAIT:
@@ -1930,9 +1938,11 @@ static int
 aio_queue_async_request(proc_t procp, user_addr_t aiocbp, int kindOfIO )
 {
 	aio_workq_entry	*entryp;
-	int		result;
-	int		old_count;
-
+	int		 result;
+	int		 old_count;
+    uint32_t *paio_offset;
+    uint32_t *paio_nbytes;
+    
 	old_count = aio_increment_total_count();
 	if (old_count >= aio_max_requests) {
 		result = EAGAIN;
@@ -1965,10 +1975,16 @@ aio_queue_async_request(proc_t procp, user_addr_t aiocbp, int kindOfIO )
 	aio_enqueue_work(procp, entryp, 1);
 	
 	aio_proc_unlock(procp);
-	
-	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_NONE,
-		     	  (int)procp, (int)aiocbp, 0, 0, 0 );
-
+    
+    paio_offset = (uint32_t*) &entryp->aiocb.aio_offset;
+    paio_nbytes = (uint32_t*) &entryp->aiocb.aio_nbytes;
+    KERNEL_DEBUG_CONSTANT( (BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_START,
+                 (int)procp, (int)aiocbp, entryp->flags, entryp->aiocb.aio_fildes, 0 );
+    KERNEL_DEBUG_CONSTANT( (BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_END,
+                          paio_offset[0], (sizeof(entryp->aiocb.aio_offset) == sizeof(uint64_t) ? paio_offset[1] : 0),
+                          paio_nbytes[0], (sizeof(entryp->aiocb.aio_nbytes) == sizeof(uint64_t) ? paio_nbytes[1] : 0),
+                          0 );
+    
 	return( 0 );
 	
 error_exit:

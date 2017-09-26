@@ -26,7 +26,6 @@ COMMON_TARGETS = unit_tests \
 		packetdrill		\
 		affinity		\
 		execperf		\
-		kqueue_tests		\
 		superpages		\
 		zero-to-n		\
 		jitter			\
@@ -65,9 +64,10 @@ $(DSTSUBPATH)/%: always
 	$(_v)mkdir -p $(OBJROOT)/$(notdir $@)
 	$(_v)mkdir -p $(SYMROOT)/$(notdir $@)
 	$(_v)$(MAKE) -C $(SRCROOT)/$(notdir $@) SRCROOT=$(SRCROOT)/$(notdir $@) DSTROOT=$@ OBJROOT=$(OBJROOT)/$(notdir $@) SYMROOT=$(SYMROOT)/$(notdir $@) SDKROOT=$(SDKROOT) BASEDSTROOT=$(DSTROOT)
+	$(_v)find $@ -type d -name "*.dSYM" -exec cp -a {} $(SYMROOT)/ ';'
 
 $(BATS_TARGET): $(TARGETS)
 	$(_v)mkdir -p $@
 	$(_v)mkdir -p $(OBJROOT)/$(notdir $@)
 	$(_v)mkdir -p $(SYMROOT)
-	$(_v)$(MAKE) -C $(SRCROOT)/$(notdir $@) SRCROOT=$(SRCROOT)/$(notdir $@) DSTROOT=$@ OBJROOT=$(OBJROOT)/$(notdir $@) SDKROOT=$(SDKROOT) BASEDSTROOT=$(DSTROOT)
+	$(_v)$(MAKE) -C $(SRCROOT)/$(notdir $@) SRCROOT=$(SRCROOT)/$(notdir $@) DSTROOT=$@ OBJROOT=$(OBJROOT)/$(notdir $@) SDKROOT=$(SDKROOT) BASEDSTROOT=$(DSTROOT) BASEDSTSUBPATH=$(DSTSUBPATH)

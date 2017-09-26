@@ -69,16 +69,27 @@
 #include <mach_debug/hash_info.h>
 #include <mach_debug/lockgroup_info.h>
 
+#define MACH_CORE_FILEHEADER_SIGNATURE	0x0063614d20646152ULL
+#define MACH_CORE_FILEHEADER_MAXFILES 16
+#define MACH_CORE_FILEHEADER_NAMELEN 16
+
 typedef	char	symtab_name_t[32];
+
+struct mach_core_details
+{
+     uint64_t gzip_offset;
+     uint64_t gzip_length;
+     char core_name[MACH_CORE_FILEHEADER_NAMELEN];
+};
 
 struct mach_core_fileheader
 {
      uint64_t signature;
      uint64_t log_offset;
      uint64_t log_length;
-     uint64_t gzip_offset;
-     uint64_t gzip_length;
+     uint64_t num_files;
+     struct mach_core_details files[MACH_CORE_FILEHEADER_MAXFILES];
 };
-#define MACH_CORE_FILEHEADER_SIGNATURE	0x0063614d20646153ULL
+
 
 #endif	/* _MACH_DEBUG_MACH_DEBUG_TYPES_H_ */

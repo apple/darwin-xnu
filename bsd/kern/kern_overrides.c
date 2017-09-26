@@ -39,7 +39,6 @@
 #include <sys/kauth.h>
 #include <sys/unistd.h>
 #include <sys/priv.h>
-#include <security/audit/audit.h>
 
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>

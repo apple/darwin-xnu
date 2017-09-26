@@ -23,6 +23,8 @@
 		0860F87B1BFC3857007E1301 /* stackshot-sample-tailspin-2.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 0860F8791BFC3845007E1301 /* stackshot-sample-tailspin-2.plist.gz */; };
 		086395B51BF5655D005ED913 /* kdd_main.m in Sources */ = {isa = PBXBuildFile; fileRef = 086395B41BF5655D005ED913 /* kdd_main.m */; };
 		086395B91BF565A2005ED913 /* libkdd.a in Frameworks */ = {isa = PBXBuildFile; fileRef = C91C93C71ACB58B700119B60 /* libkdd.a */; };
+		088C36E01EF323C300ABB2E0 /* stackshot-sample-thread-policy in Resources */ = {isa = PBXBuildFile; fileRef = 088C36DF1EF323AE00ABB2E0 /* stackshot-sample-thread-policy */; };
+		088C36E11EF323C300ABB2E0 /* stackshot-sample-thread-policy.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 088C36DE1EF323AE00ABB2E0 /* stackshot-sample-thread-policy.plist.gz */; };
 		08A4C94C1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m in Sources */ = {isa = PBXBuildFile; fileRef = 08A4C94B1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m */; };
 		08A4C94F1C470F1C00D5F010 /* nested-sample in Resources */ = {isa = PBXBuildFile; fileRef = 08A4C94D1C470F0900D5F010 /* nested-sample */; };
 		08A4C9501C470F1C00D5F010 /* nested-sample.plist in Resources */ = {isa = PBXBuildFile; fileRef = 08A4C94E1C470F0900D5F010 /* nested-sample.plist */; };
@@ -58,6 +60,10 @@
 		13DBA26A1CAB1BA000227EB2 /* stackshot-sample-sharedcachev2 in Resources */ = {isa = PBXBuildFile; fileRef = 13DBA2691CAB1B9C00227EB2 /* stackshot-sample-sharedcachev2 */; };
 		13F3DA9C1C7C1BEE00ACFFCC /* corpse-twr-sample-v2 in Resources */ = {isa = PBXBuildFile; fileRef = 13F3DA9B1C7C1BE700ACFFCC /* corpse-twr-sample-v2 */; };
 		13F3DA9E1C7C1C6600ACFFCC /* corpse-twr-sample-v2.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 13F3DA9D1C7C1C6000ACFFCC /* corpse-twr-sample-v2.plist.gz */; };
+		1862B0341E7A083F0005ADF4 /* stackshot-sample-thread-groups in Resources */ = {isa = PBXBuildFile; fileRef = 1862B0321E7A083F0005ADF4 /* stackshot-sample-thread-groups */; };
+		1862B0351E7A083F0005ADF4 /* stackshot-sample-thread-groups.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 1862B0331E7A083F0005ADF4 /* stackshot-sample-thread-groups.plist.gz */; };
+		18E592981E9451A20018612A /* stackshot-sample-coalitions in Resources */ = {isa = PBXBuildFile; fileRef = 18E592961E9451A20018612A /* stackshot-sample-coalitions */; };
+		18E592991E9451A20018612A /* stackshot-sample-coalitions.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 18E592971E9451A20018612A /* stackshot-sample-coalitions.plist.gz */; };
 		C91C93CB1ACB58B700119B60 /* kdd.h in Headers */ = {isa = PBXBuildFile; fileRef = C91C93CA1ACB58B700119B60 /* kdd.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		C91C93CD1ACB58B700119B60 /* kdd.m in Sources */ = {isa = PBXBuildFile; fileRef = C91C93CC1ACB58B700119B60 /* kdd.m */; };
 		C91C93E41ACB598700119B60 /* KCDBasicTypeDescription.h in Headers */ = {isa = PBXBuildFile; fileRef = C91C93E01ACB598700119B60 /* KCDBasicTypeDescription.h */; };
@@ -67,6 +73,8 @@
 		C9C5C68C1ACDAFDB00BE0E5E /* kcdtypes.c in Sources */ = {isa = PBXBuildFile; fileRef = C9C5C68B1ACDAFDB00BE0E5E /* kcdtypes.c */; };
 		C9D7B53F1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = C9D7B53D1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz */; };
 		C9D7B5401D1B41D700F1019D /* xnupost_testconfig-sample in Resources */ = {isa = PBXBuildFile; fileRef = C9D7B53E1D1B41D700F1019D /* xnupost_testconfig-sample */; };
+		C9DCEF011F01C3810000BD02 /* stackshot-sample-instrs-cycles in Resources */ = {isa = PBXBuildFile; fileRef = C9DCEF001F01C3790000BD02 /* stackshot-sample-instrs-cycles */; };
+		C9DCEF021F01C3810000BD02 /* stackshot-sample-instrs-cycles.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = C9DCEEFF1F01C3790000BD02 /* stackshot-sample-instrs-cycles.plist.gz */; };
 		C9DE39141ACB5A540020F4A3 /* kcdata_core.m in Sources */ = {isa = PBXBuildFile; fileRef = C9DE39131ACB5A540020F4A3 /* kcdata_core.m */; };
 /* End PBXBuildFile section */
 
@@ -117,6 +125,8 @@
 		0860F8791BFC3845007E1301 /* stackshot-sample-tailspin-2.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-tailspin-2.plist.gz"; path = "tests/stackshot-sample-tailspin-2.plist.gz"; sourceTree = SOURCE_ROOT; };
 		086395B21BF5655D005ED913 /* kdd */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = kdd; sourceTree = BUILT_PRODUCTS_DIR; };
 		086395B41BF5655D005ED913 /* kdd_main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = kdd_main.m; sourceTree = "<group>"; };
+		088C36DE1EF323AE00ABB2E0 /* stackshot-sample-thread-policy.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-thread-policy.plist.gz"; sourceTree = "<group>"; };
+		088C36DF1EF323AE00ABB2E0 /* stackshot-sample-thread-policy */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-thread-policy"; sourceTree = "<group>"; };
 		08A4C94A1C47019E00D5F010 /* KCDEmbeddedBufferDescription.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = KCDEmbeddedBufferDescription.h; sourceTree = "<group>"; };
 		08A4C94B1C4701B800D5F010 /* KCDEmbeddedBufferDescription.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = KCDEmbeddedBufferDescription.m; sourceTree = "<group>"; };
 		08A4C94D1C470F0900D5F010 /* nested-sample */ = {isa = PBXFileReference; lastKnownFileType = file; name = "nested-sample"; path = "tests/nested-sample"; sourceTree = SOURCE_ROOT; };
@@ -153,6 +163,10 @@
 		13EADC171C4DCDA100468D97 /* test-twr-sample.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "test-twr-sample.plist.gz"; path = "tests/test-twr-sample.plist.gz"; sourceTree = SOURCE_ROOT; };
 		13F3DA9B1C7C1BE700ACFFCC /* corpse-twr-sample-v2 */ = {isa = PBXFileReference; lastKnownFileType = file; name = "corpse-twr-sample-v2"; path = "tests/corpse-twr-sample-v2"; sourceTree = SOURCE_ROOT; };
 		13F3DA9D1C7C1C6000ACFFCC /* corpse-twr-sample-v2.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "corpse-twr-sample-v2.plist.gz"; path = "tests/corpse-twr-sample-v2.plist.gz"; sourceTree = SOURCE_ROOT; };
+		1862B0321E7A083F0005ADF4 /* stackshot-sample-thread-groups */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-thread-groups"; sourceTree = "<group>"; };
+		1862B0331E7A083F0005ADF4 /* stackshot-sample-thread-groups.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-thread-groups.plist.gz"; sourceTree = "<group>"; };
+		18E592961E9451A20018612A /* stackshot-sample-coalitions */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-coalitions"; sourceTree = "<group>"; };
+		18E592971E9451A20018612A /* stackshot-sample-coalitions.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-coalitions.plist.gz"; sourceTree = "<group>"; };
 		C91C93C71ACB58B700119B60 /* libkdd.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libkdd.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		C91C93CA1ACB58B700119B60 /* kdd.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = kdd.h; sourceTree = "<group>"; };
 		C91C93CC1ACB58B700119B60 /* kdd.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = kdd.m; sourceTree = "<group>"; };
@@ -163,6 +177,8 @@
 		C9C5C68B1ACDAFDB00BE0E5E /* kcdtypes.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = kcdtypes.c; sourceTree = "<group>"; };
 		C9D7B53D1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "xnupost_testconfig-sample.plist.gz"; sourceTree = "<group>"; };
 		C9D7B53E1D1B41D700F1019D /* xnupost_testconfig-sample */ = {isa = PBXFileReference; lastKnownFileType = file; path = "xnupost_testconfig-sample"; sourceTree = "<group>"; };
+		C9DCEEFF1F01C3790000BD02 /* stackshot-sample-instrs-cycles.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-instrs-cycles.plist.gz"; sourceTree = "<group>"; };
+		C9DCEF001F01C3790000BD02 /* stackshot-sample-instrs-cycles */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-instrs-cycles"; sourceTree = "<group>"; };
 		C9DE39131ACB5A540020F4A3 /* kcdata_core.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = kcdata_core.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -198,6 +214,14 @@
 		08603F351BF69EDE007D3784 /* tests */ = {
 			isa = PBXGroup;
 			children = (
+				C9DCEF001F01C3790000BD02 /* stackshot-sample-instrs-cycles */,
+				C9DCEEFF1F01C3790000BD02 /* stackshot-sample-instrs-cycles.plist.gz */,
+				088C36DF1EF323AE00ABB2E0 /* stackshot-sample-thread-policy */,
+				088C36DE1EF323AE00ABB2E0 /* stackshot-sample-thread-policy.plist.gz */,
+				18E592961E9451A20018612A /* stackshot-sample-coalitions */,
+				18E592971E9451A20018612A /* stackshot-sample-coalitions.plist.gz */,
+				1862B0321E7A083F0005ADF4 /* stackshot-sample-thread-groups */,
+				1862B0331E7A083F0005ADF4 /* stackshot-sample-thread-groups.plist.gz */,
 				C9D7B53D1D1B41D700F1019D /* xnupost_testconfig-sample.plist.gz */,
 				C9D7B53E1D1B41D700F1019D /* xnupost_testconfig-sample */,
 				04C64AC91D25C43400C6C781 /* stackshot-with-waitinfo */,
@@ -374,12 +398,12 @@
 			isa = PBXProject;
 			attributes = {
 				LastSwiftUpdateCheck = 0730;
-				LastUpgradeCheck = 0730;
+				LastUpgradeCheck = 0830;
 				ORGANIZATIONNAME = "Vishal Patel";
 				TargetAttributes = {
 					08603F331BF69EDE007D3784 = {
 						CreatedOnToolsVersion = 7.3;
-						LastSwiftMigration = 0800;
+						LastSwiftMigration = 0830;
 					};
 					086395B11BF5655D005ED913 = {
 						CreatedOnToolsVersion = 7.3;
@@ -413,9 +437,14 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C9DCEF011F01C3810000BD02 /* stackshot-sample-instrs-cycles in Resources */,
+				C9DCEF021F01C3810000BD02 /* stackshot-sample-instrs-cycles.plist.gz in Resources */,
+				088C36E01EF323C300ABB2E0 /* stackshot-sample-thread-policy in Resources */,
+				088C36E11EF323C300ABB2E0 /* stackshot-sample-thread-policy.plist.gz in Resources */,
 				045F7F131D2ADE8000B4808B /* stackshot-with-waitinfo.plist.gz in Resources */,
 				045F7F121D2ADE7C00B4808B /* stackshot-with-waitinfo in Resources */,
 				08A4C94F1C470F1C00D5F010 /* nested-sample in Resources */,
+				1862B0341E7A083F0005ADF4 /* stackshot-sample-thread-groups in Resources */,
 				08A4C9501C470F1C00D5F010 /* nested-sample.plist in Resources */,
 				13D6C5D21C4DDDBE005E617C /* test-twr-sample in Resources */,
 				13D6C5D01C4DDDB6005E617C /* corpse-twr-sample in Resources */,
@@ -440,9 +469,11 @@
 				13CC08441CB97F8D00EA6069 /* stackshot-fault-stats in Resources */,
 				13F3DA9C1C7C1BEE00ACFFCC /* corpse-twr-sample-v2 in Resources */,
 				13D6C5D31C4DDE0D005E617C /* test-twr-sample.plist.gz in Resources */,
+				1862B0351E7A083F0005ADF4 /* stackshot-sample-thread-groups.plist.gz in Resources */,
 				1368F0851C87E06A00940FC6 /* exitreason-codesigning.plist.gz in Resources */,
 				08C9D83D1BFFF8E100DF6C05 /* exitreason-sample in Resources */,
 				08C9D83E1BFFF8E100DF6C05 /* exitreason-sample.plist.gz in Resources */,
+				18E592981E9451A20018612A /* stackshot-sample-coalitions in Resources */,
 				08B4808B1BF9474A00B4AAE0 /* corpse-sample in Resources */,
 				13D6C5D11C4DDDB8005E617C /* corpse-twr-sample.plist.gz in Resources */,
 				08B4808C1BF9474A00B4AAE0 /* corpse-sample.plist.gz in Resources */,
@@ -458,6 +489,7 @@
 				08B4807B1BF8297500B4AAE0 /* stackshot-sample-old-arrays.plist.gz in Resources */,
 				0843EE941BF6BAC100CD4150 /* stackshot-sample.plist.gz in Resources */,
 				0843EE921BF6AFC600CD4150 /* stackshot-sample in Resources */,
+				18E592991E9451A20018612A /* stackshot-sample-coalitions.plist.gz in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -518,13 +550,12 @@
 				ENABLE_TESTABILITY = YES;
 				INFOPLIST_FILE = tests/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 10.11;
 				PRODUCT_BUNDLE_IDENTIFIER = apple.com.Tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = tests/kdd_bridge.h;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 2.3;
+				SWIFT_VERSION = 3.0;
 			};
 			name = Debug;
 		};
@@ -536,12 +567,11 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				INFOPLIST_FILE = tests/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 10.11;
 				PRODUCT_BUNDLE_IDENTIFIER = apple.com.Tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = tests/kdd_bridge.h;
-				SWIFT_VERSION = 2.3;
+				SWIFT_VERSION = 3.0;
 			};
 			name = Release;
 		};

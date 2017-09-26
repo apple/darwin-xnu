@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -187,7 +187,7 @@ iptap_clone_create(struct if_clone *ifc, u_int32_t unit, void *params)
 
 	int error = 0;
 	struct iptap_softc *iptap = NULL;
-	struct ifnet_init_params if_init;
+	struct ifnet_init_eparams if_init;
 	
 	iptap = _MALLOC(sizeof(struct iptap_softc), M_DEVBUF, M_WAITOK | M_ZERO);
 	if (iptap == NULL) {
@@ -201,7 +201,10 @@ iptap_clone_create(struct if_clone *ifc, u_int32_t unit, void *params)
 	 * We do not use a set_bpf_tap() function as we rather rely on the more 
 	 * accurate callback passed to bpf_attach()
 	 */
-	bzero(&if_init, sizeof(struct ifnet_init_params));
+	bzero(&if_init, sizeof(if_init));
+	if_init.ver = IFNET_INIT_CURRENT_VERSION;
+	if_init.len = sizeof (if_init);
+	if_init.flags = IFNET_INIT_LEGACY;
 	if_init.name = ifc->ifc_name;
 	if_init.unit = unit;
 	if_init.type = IFT_OTHER;
@@ -214,7 +217,7 @@ iptap_clone_create(struct if_clone *ifc, u_int32_t unit, void *params)
 	if_init.ioctl = iptap_ioctl;
 	if_init.detach = iptap_detach;
 
-	error = ifnet_allocate(&if_init, &iptap->iptap_ifp);
+	error = ifnet_allocate_extended(&if_init, &iptap->iptap_ifp);
 	if (error != 0) {
 		printf("%s: ifnet_allocate failed, error %d\n", __func__, error);
 		goto done;
@@ -581,6 +584,23 @@ iptap_bpf_tap(struct mbuf *m, u_int32_t proto,  int outgoing)
 	struct iptap_softc *iptap;
 	void (*bpf_tap_func)(ifnet_t , u_int32_t , mbuf_t , void * , size_t ) = 
 		outgoing ? bpf_tap_out : bpf_tap_in;
+	uint16_t src_scope_id = 0;
+	uint16_t dst_scope_id = 0;
+
+	if (proto == AF_INET6) {
+		struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+		/*
+		 * Clear the embedded scope ID
+		 */
+		if (IN6_IS_SCOPE_EMBED(&ip6->ip6_src)) {
+			src_scope_id = ip6->ip6_src.s6_addr16[1];
+			ip6->ip6_src.s6_addr16[1] = 0;
+		}
+		if (IN6_IS_SCOPE_EMBED(&ip6->ip6_dst)) {
+			dst_scope_id = ip6->ip6_dst.s6_addr16[1];
+			ip6->ip6_dst.s6_addr16[1] = 0;
+		}
+	}
 
 	iptap_lock_shared();
 
@@ -625,4 +645,18 @@ iptap_bpf_tap(struct mbuf *m, u_int32_t proto,  int outgoing)
 	}
 	
 	iptap_lock_done();
+	
+	if (proto == AF_INET6) {
+		struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+
+		/*
+		 * Restore the embedded scope ID
+		 */
+		if (IN6_IS_SCOPE_EMBED(&ip6->ip6_src)) {
+			ip6->ip6_src.s6_addr16[1] = src_scope_id;
+		}
+		if (IN6_IS_SCOPE_EMBED(&ip6->ip6_dst)) {
+			ip6->ip6_dst.s6_addr16[1] = dst_scope_id;
+		}
+	}
 }

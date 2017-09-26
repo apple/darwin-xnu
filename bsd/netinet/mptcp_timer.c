@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -75,8 +75,7 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 
 	DTRACE_MPTCP2(timer, struct mptses *, mpte, struct mptcb *, mp_tp);
 
-	MPTE_LOCK_ASSERT_HELD(mpte);
-	MPT_LOCK(mp_tp);
+	mpte_lock_assert_held(mpte);
 	switch (mp_tp->mpt_timer_vals) {
 	case MPTT_REXMT:
 		if (mp_tp->mpt_rxtstart == 0)
@@ -95,13 +94,11 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 				DTRACE_MPTCP1(error, struct mptcb *, mp_tp);
 			} else {
 				mp_tp->mpt_sndnxt = mp_tp->mpt_rtseq;
-				MPT_UNLOCK(mp_tp);
 				mptcplog((LOG_DEBUG, "MPTCP Socket: "
 				   "%s: REXMT %d times.\n",
 				    __func__, mp_tp->mpt_rxtshift),
 				    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_LOG);
 				mptcp_output(mpte);
-				MPT_LOCK(mp_tp);
 			}
 		} else {
 			resched_timer = 1;
@@ -125,7 +122,6 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 	default:
 		break;
 	}
-	MPT_UNLOCK(mp_tp);
 
 	return (resched_timer);
 }
@@ -138,7 +134,7 @@ mptcp_timer(struct mppcbinfo *mppi)
 	u_int32_t now_msecs;
 	uint32_t resched_timer = 0;
 
-	lck_mtx_assert(&mppi->mppi_lock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&mppi->mppi_lock, LCK_MTX_ASSERT_OWNED);
 
 	microuptime(&now);
 	now_msecs = TIMEVAL_TO_HZ(now);
@@ -150,17 +146,12 @@ mptcp_timer(struct mppcbinfo *mppi)
 		VERIFY(mp_so != NULL);
 		mpte = mptompte(mpp);
 		VERIFY(mpte != NULL);
-		MPTE_LOCK(mpte);
+		mpte_lock(mpte);
 		VERIFY(mpp->mpp_flags & MPP_ATTACHED);
-
-		if (mpp->mpp_flags & MPP_DEFUNCT) {
-			MPTE_UNLOCK(mpte);
-			continue;
-		}
 
 		if (mptcp_timer_demux(mpte, now_msecs))
 			resched_timer = 1;
-		MPTE_UNLOCK(mpte);
+		mpte_unlock(mpte);
 	}
 
 	return (resched_timer);
@@ -178,21 +169,19 @@ mptcp_start_timer(struct mptses *mpte, int timer_type)
 	mptcplog((LOG_DEBUG, "MPTCP Socket: %s: %d\n", __func__, timer_type),
 	    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_VERBOSE);
 
+	mpte_lock_assert_held(mpte);
+
 	switch (timer_type) {
 	case MPTT_REXMT:
-		MPT_LOCK(mp_tp);
 		mp_tp->mpt_timer_vals |= MPTT_REXMT;
 		mp_tp->mpt_rxtstart = TIMEVAL_TO_HZ(now);
 		mp_tp->mpt_rxtshift = 0;
 		mp_tp->mpt_rtseq = mp_tp->mpt_sndnxt;
-		MPT_UNLOCK(mp_tp);
 		break;
 	case MPTT_TW:
 		/* XXX: Not implemented yet */
-		MPT_LOCK(mp_tp);
 		mp_tp->mpt_timer_vals |= MPTT_TW;
 		mp_tp->mpt_timewait = TIMEVAL_TO_HZ(now);
-		MPT_UNLOCK(mp_tp);
 		break;
 	case MPTT_FASTCLOSE:
 		/* NO-OP */
@@ -207,7 +196,7 @@ mptcp_start_timer(struct mptses *mpte, int timer_type)
 void
 mptcp_cancel_timer(struct mptcb *mp_tp, int timer_type)
 {
-	MPT_LOCK_ASSERT_HELD(mp_tp);
+	mpte_lock_assert_held(mp_tp->mpt_mpte);
 	DTRACE_MPTCP2(cancel__timer, struct mptcb *, mp_tp, int, timer_type);
 
 	switch (timer_type) {

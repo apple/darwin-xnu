@@ -533,7 +533,9 @@ mach_msg_overwrite(
 		mach_msg_size_t	msg_and_trailer_size;
 		mach_msg_max_trailer_t	*max_trailer;
 
-		if ((send_size < sizeof(mach_msg_header_t)) || (send_size & 3))
+		if ((send_size & 3) ||
+		    send_size < sizeof(mach_msg_header_t) ||
+		    (send_size < sizeof(mach_msg_body_t) && (msg->msgh_bits & MACH_MSGH_BITS_COMPLEX)))
 			return MACH_SEND_MSG_TOO_SMALL;
 
 		if (send_size > MACH_MSG_SIZE_MAX - MAX_TRAILER_SIZE)
@@ -771,7 +773,7 @@ mig_strncpy_zerofill(
 	return retval;
 }
 
-char *
+void *
 mig_user_allocate(
 	vm_size_t	size)
 {

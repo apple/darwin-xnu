@@ -38,11 +38,19 @@
 #include <libkern/crypto/aes.h>
 #include <kern/host_statistics.h>
 
+#if CONFIG_EMBEDDED
+
+#define MIN_SWAP_FILE_SIZE		(64 * 1024 * 1024)
+
+#define MAX_SWAP_FILE_SIZE		(128 * 1024 * 1024)
+
+#else /* CONFIG_EMBEDDED */
 
 #define MIN_SWAP_FILE_SIZE		(256 * 1024 * 1024)
 
 #define MAX_SWAP_FILE_SIZE		(1 * 1024 * 1024 * 1024)
 
+#endif /* CONFIG_EMBEDDED */
 
 #define	COMPRESSED_SWAP_CHUNK_SIZE	(C_SEG_BUFSIZE)
 
@@ -52,10 +60,8 @@
 #define SWAPFILE_RECLAIM_MINIMUM_SEGS	((13 * (MAX_SWAP_FILE_SIZE / COMPRESSED_SWAP_CHUNK_SIZE)) / 10)
 
 
-#define SWAP_FILE_NAME		"/var/vm/swapfile"
+#define SWAP_FILE_NAME		"/private/var/vm/swapfile"
 #define SWAPFILENAME_LEN	(int)(strlen(SWAP_FILE_NAME))
-
-char	swapfilename[MAX_SWAPFILENAME_LEN + 1];
 
 
 #define SWAP_SLOT_MASK		0x1FFFFFFFF

@@ -48,12 +48,16 @@
 #if CONFIG_TELEMETRY
 #include <kern/telemetry.h>
 #endif
+#if CONFIG_EMBEDDED
+#include <kern/kalloc.h>
+#include <sys/errno.h>
+#endif /* CONFIG_EMBEDDED */
 
 #if IMPORTANCE_INHERITANCE
 #include <ipc/ipc_importance.h>
-#if IMPORTANCE_DEBUG
+#if IMPORTANCE_TRACE
 #include <mach/machine/sdt.h>
-#endif /* IMPORTANCE_DEBUG */
+#endif /* IMPORTANCE_TRACE */
 #endif /* IMPORTANCE_INHERITACE */
 
 #include <sys/kdebug.h>
@@ -141,9 +145,7 @@ static void task_policy_update_internal_locked(task_t task, boolean_t in_create,
 static void proc_set_task_policy2(task_t task, int category, int flavor, int value1, int value2);
 static void proc_get_task_policy2(task_t task, int category, int flavor, int *value1, int *value2);
 
-#if CONFIG_SCHED_SFI
-static boolean_t task_policy_update_coalition_focal_tasks(task_t task, int prev_role, int next_role);
-#endif
+static boolean_t task_policy_update_coalition_focal_tasks(task_t task, int prev_role, int next_role, task_pend_token_t pend_token);
 
 static uint64_t task_requested_bitfield(task_t task);
 static uint64_t task_effective_bitfield(task_t task);
@@ -176,6 +178,32 @@ extern int proc_pidpathinfo_internal(proc_t p, uint64_t arg,
 #endif /* MACH_BSD */
 
 
+#if CONFIG_EMBEDDED
+/* TODO: make CONFIG_TASKWATCH */
+/* Taskwatch related helper functions */
+static void set_thread_appbg(thread_t thread, int setbg,int importance);
+static void add_taskwatch_locked(task_t task, task_watch_t * twp);
+static void remove_taskwatch_locked(task_t task, task_watch_t * twp);
+static void task_watch_lock(void);
+static void task_watch_unlock(void);
+static void apply_appstate_watchers(task_t task);
+
+typedef struct task_watcher {
+	queue_chain_t   tw_links;       /* queueing of threads */
+	task_t          tw_task;        /* task that is being watched */
+	thread_t        tw_thread;      /* thread that is watching the watch_task */
+	int             tw_state;       /* the current app state of the thread */
+	int             tw_importance;  /* importance prior to backgrounding */
+} task_watch_t;
+
+typedef struct thread_watchlist {
+	thread_t        thread;         /* thread being worked on for taskwatch action */
+	int             importance;     /* importance to be restored if thread is being made active */
+} thread_watchlist_t;
+
+#endif /* CONFIG_EMBEDDED */
+
+extern int memorystatus_update_priority_for_appnap(proc_t p, boolean_t is_appnap);
 
 /* Importance Inheritance related helper functions */
 
@@ -198,11 +226,11 @@ static void task_set_boost_locked(task_t task, boolean_t boost_active);
 
 #endif /* IMPORTANCE_INHERITANCE */
 
-#if IMPORTANCE_DEBUG
-#define __impdebug_only
-#else
-#define __impdebug_only __unused
-#endif
+#if IMPORTANCE_TRACE
+#define __imptrace_only
+#else /* IMPORTANCE_TRACE */
+#define __imptrace_only __unused
+#endif /* !IMPORTANCE_TRACE */
 
 #if IMPORTANCE_INHERITANCE
 #define __imp_only
@@ -220,7 +248,11 @@ int proc_tal_disk_tier        = THROTTLE_LEVEL_TIER1;
 
 int proc_graphics_timer_qos   = (LATENCY_QOS_TIER_0 & 0xFF);
 
+#if CONFIG_EMBEDDED
+const int proc_default_bg_iotier  = THROTTLE_LEVEL_TIER3;
+#else
 const int proc_default_bg_iotier  = THROTTLE_LEVEL_TIER2;
+#endif
 
 /* Latency/throughput QoS fields remain zeroed, i.e. TIER_UNSPECIFIED at creation */
 const struct task_requested_policy default_task_requested_policy = {
@@ -314,6 +346,11 @@ task_policy_set(
 		if (count < TASK_CATEGORY_POLICY_COUNT)
 			return (KERN_INVALID_ARGUMENT);
 
+#if CONFIG_EMBEDDED
+		/* On embedded, you can't modify your own role. */
+		if (current_task() == task)
+			return (KERN_INVALID_ARGUMENT);
+#endif
 
 		switch(info->role) {
 			case TASK_FOREGROUND_APPLICATION:
@@ -400,6 +437,14 @@ task_policy_set(
 
 	case TASK_SUPPRESSION_POLICY:
 	{
+#if CONFIG_EMBEDDED
+		/*
+		 * Suppression policy is not enabled for embedded
+		 * because apps aren't marked as denap receivers
+		 */
+		result = KERN_INVALID_ARGUMENT;
+		break;
+#else /* CONFIG_EMBEDDED */
 
 		task_suppression_policy_t info = (task_suppression_policy_t)policy_info;
 
@@ -450,6 +495,7 @@ task_policy_set(
 
 		break;
 
+#endif /* CONFIG_EMBEDDED */
 	}
 
 	default:
@@ -895,8 +941,13 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 		next.tep_io_passive = 1;
 
 	/* Calculate suppression-active flag */
+	boolean_t memorystatus_appnap_transition = FALSE;
+
 	if (requested.trp_sup_active && requested.trp_boosted == 0)
 		next.tep_sup_active = 1;
+
+	if (task->effective_policy.tep_sup_active != next.tep_sup_active)
+		memorystatus_appnap_transition = TRUE;
 
 	/* Calculate timer QOS */
 	int latency_qos = requested.trp_base_latency_qos;
@@ -1015,6 +1066,10 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 	if (prev.tep_latency_qos > next.tep_latency_qos)
 		pend_token->tpt_update_timers = 1;
 
+#if CONFIG_EMBEDDED
+	if (prev.tep_watchers_bg != next.tep_watchers_bg)
+		pend_token->tpt_update_watchers = 1;
+#endif /* CONFIG_EMBEDDED */
 
 	if (prev.tep_live_donor != next.tep_live_donor)
 		pend_token->tpt_update_live_donor = 1;
@@ -1053,15 +1108,11 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 	    prev.tep_sfi_managed != next.tep_sfi_managed )
 		update_sfi = TRUE;
 
-#if CONFIG_SCHED_SFI
 	/* Reflect task role transitions into the coalition role counters */
 	if (prev.tep_role != next.tep_role) {
-		if (task_policy_update_coalition_focal_tasks(task, prev.tep_role, next.tep_role)) {
+		if (task_policy_update_coalition_focal_tasks(task, prev.tep_role, next.tep_role, pend_token))
 			update_sfi = TRUE;
-			pend_token->tpt_update_coal_sfi = 1;
-		}
 	}
-#endif /* !CONFIG_SCHED_SFI */
 
 	boolean_t update_priority = FALSE;
 
@@ -1139,40 +1190,62 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 			thread_policy_update_complete_unlocked(thread, &thread_pend_token);
 		}
 	}
+
+	/*
+	 * Use the app-nap transitions to influence the
+	 * transition of the process within the jetsam band.
+	 * On macOS only.
+	 */
+	if (memorystatus_appnap_transition == TRUE) {
+		if (task->effective_policy.tep_sup_active == 1) {
+			memorystatus_update_priority_for_appnap(((proc_t) task->bsd_info), TRUE);
+		} else {
+			memorystatus_update_priority_for_appnap(((proc_t) task->bsd_info), FALSE);
+		}
+	}
 }
 
 
-#if CONFIG_SCHED_SFI
 /*
  * Yet another layering violation. We reach out and bang on the coalition directly.
  */
 static boolean_t
-task_policy_update_coalition_focal_tasks(task_t     task,
-                                         int        prev_role,
-                                         int        next_role)
+task_policy_update_coalition_focal_tasks(task_t            task,
+                                         int               prev_role,
+                                         int               next_role,
+                                         task_pend_token_t pend_token)
 {
 	boolean_t sfi_transition = FALSE;
-
+	uint32_t new_count = 0;
+	
 	/* task moving into/out-of the foreground */
 	if (prev_role != TASK_FOREGROUND_APPLICATION && next_role == TASK_FOREGROUND_APPLICATION) {
-		if (task_coalition_adjust_focal_count(task, 1) == 1)
+		if (task_coalition_adjust_focal_count(task, 1, &new_count) && (new_count == 1)) {
 			sfi_transition = TRUE;
+			pend_token->tpt_update_tg_ui_flag = TRUE;
+		}
 	} else if (prev_role == TASK_FOREGROUND_APPLICATION && next_role != TASK_FOREGROUND_APPLICATION) {
-		if (task_coalition_adjust_focal_count(task, -1) == 0)
+		if (task_coalition_adjust_focal_count(task, -1, &new_count) && (new_count == 0)) {
 			sfi_transition = TRUE;
+			pend_token->tpt_update_tg_ui_flag = TRUE;
+		}
 	}
 
 	/* task moving into/out-of background */
 	if (prev_role != TASK_BACKGROUND_APPLICATION && next_role == TASK_BACKGROUND_APPLICATION) {
-		if (task_coalition_adjust_nonfocal_count(task, 1) == 1)
+		if (task_coalition_adjust_nonfocal_count(task, 1, &new_count) && (new_count == 1))
 			sfi_transition = TRUE;
 	} else if (prev_role == TASK_BACKGROUND_APPLICATION && next_role != TASK_BACKGROUND_APPLICATION) {
-		if (task_coalition_adjust_nonfocal_count(task, -1) == 0)
+		if (task_coalition_adjust_nonfocal_count(task, -1, &new_count) && (new_count == 0))
 			sfi_transition = TRUE;
 	}
 
+	if (sfi_transition)
+	    pend_token->tpt_update_coal_sfi = 1;
 	return sfi_transition;
 }
+
+#if CONFIG_SCHED_SFI
 
 /* coalition object is locked */
 static void
@@ -1212,6 +1285,10 @@ task_policy_update_complete_unlocked(task_t task, task_pend_token_t pend_token)
 	if (pend_token->tpt_update_timers)
 		ml_timer_evaluate();
 
+#if CONFIG_EMBEDDED
+	if (pend_token->tpt_update_watchers)
+		apply_appstate_watchers(task);
+#endif /* CONFIG_EMBEDDED */
 
 	if (pend_token->tpt_update_live_donor)
 		task_importance_update_live_donor(task);
@@ -1222,6 +1299,7 @@ task_policy_update_complete_unlocked(task_t task, task_pend_token_t pend_token)
 		coalition_for_each_task(task->coalition[COALITION_TYPE_RESOURCE],
 					(void *)task, task_sfi_reevaluate_cb);
 #endif /* CONFIG_SCHED_SFI */
+
 }
 
 /*
@@ -1739,8 +1817,12 @@ proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
 			task_importance_mark_donor(task, FALSE);
 			task_importance_mark_live_donor(task, TRUE);
 			task_importance_mark_receiver(task, FALSE);
+#if CONFIG_EMBEDDED
+			task_importance_mark_denap_receiver(task, FALSE);
+#else
 			/* Apps are de-nap recievers on desktop for suppression behaviors */
 			task_importance_mark_denap_receiver(task, TRUE);
+#endif /* CONFIG_EMBEDDED */
 			break;
 
 		case TASK_APPTYPE_DAEMON_INTERACTIVE:
@@ -1812,6 +1894,12 @@ proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
 		task->requested_policy.trp_apptype = apptype;
 	}
 
+#if CONFIG_EMBEDDED
+	/* Remove this after launchd starts setting it properly */
+	if (apptype == TASK_APPTYPE_APP_DEFAULT && role == TASK_UNSPECIFIED) {
+		task->requested_policy.trp_role = TASK_FOREGROUND_APPLICATION;
+	} else
+#endif
 	if (role != TASK_UNSPECIFIED) {
 		task->requested_policy.trp_role = role;
 	}
@@ -1951,6 +2039,13 @@ proc_get_darwinbgstate(task_t task, uint32_t * flagsp)
 	if (task->requested_policy.trp_int_darwinbg)
 		*flagsp |= PROC_FLAG_DARWINBG;
 
+#if CONFIG_EMBEDDED
+	if (task->requested_policy.trp_apptype == TASK_APPTYPE_DAEMON_BACKGROUND)
+		*flagsp |= PROC_FLAG_IOS_APPLEDAEMON;
+
+	if (task->requested_policy.trp_apptype == TASK_APPTYPE_DAEMON_ADAPTIVE)
+		*flagsp |= PROC_FLAG_IOS_IMPPROMOTION;
+#endif /* CONFIG_EMBEDDED */
 
 	if (task->requested_policy.trp_apptype == TASK_APPTYPE_APP_DEFAULT ||
 	    task->requested_policy.trp_apptype == TASK_APPTYPE_APP_TAL)
@@ -2713,6 +2808,292 @@ task_action_cpuusage(thread_call_param_t param0, __unused thread_call_param_t pa
  * Routines for taskwatch and pidbind
  */
 
+#if CONFIG_EMBEDDED
+
+lck_mtx_t	task_watch_mtx;
+
+void
+task_watch_init(void)
+{
+	lck_mtx_init(&task_watch_mtx, &task_lck_grp, &task_lck_attr);
+}
+
+static void
+task_watch_lock(void)
+{
+	lck_mtx_lock(&task_watch_mtx);
+}
+
+static void
+task_watch_unlock(void)
+{
+	lck_mtx_unlock(&task_watch_mtx);
+}
+
+static void
+add_taskwatch_locked(task_t task, task_watch_t * twp)
+{
+	queue_enter(&task->task_watchers, twp, task_watch_t *, tw_links);
+	task->num_taskwatchers++;
+
+}
+
+static void
+remove_taskwatch_locked(task_t task, task_watch_t * twp)
+{
+	queue_remove(&task->task_watchers, twp, task_watch_t *, tw_links);
+	task->num_taskwatchers--;
+}
+
+
+int 
+proc_lf_pidbind(task_t curtask, uint64_t tid, task_t target_task, int bind)
+{
+	thread_t target_thread = NULL;
+	int ret = 0, setbg = 0;
+	task_watch_t *twp = NULL;
+	task_t task = TASK_NULL;
+
+	target_thread = task_findtid(curtask, tid);
+	if (target_thread == NULL)
+		return ESRCH;
+	/* holds thread reference */
+
+	if (bind != 0) {
+		/* task is still active ? */
+		task_lock(target_task);
+		if (target_task->active == 0) {
+			task_unlock(target_task);
+			ret = ESRCH;
+			goto out;
+		}
+		task_unlock(target_task);
+
+		twp = (task_watch_t *)kalloc(sizeof(task_watch_t));
+		if (twp == NULL) {
+			task_watch_unlock();
+			ret = ENOMEM;
+			goto out;
+		}
+
+		bzero(twp, sizeof(task_watch_t));
+
+		task_watch_lock();
+
+		if (target_thread->taskwatch != NULL){
+			/* already bound to another task */
+			task_watch_unlock();
+
+			kfree(twp, sizeof(task_watch_t));
+			ret = EBUSY;
+			goto out;
+		}
+
+		task_reference(target_task);
+
+		setbg = proc_get_effective_task_policy(target_task, TASK_POLICY_WATCHERS_BG);
+
+		twp->tw_task = target_task;		/* holds the task reference */
+		twp->tw_thread = target_thread;		/* holds the thread reference */
+		twp->tw_state = setbg;
+		twp->tw_importance = target_thread->importance;
+	
+		add_taskwatch_locked(target_task, twp);
+
+		target_thread->taskwatch = twp;
+
+		task_watch_unlock();
+
+		if (setbg)
+			set_thread_appbg(target_thread, setbg, INT_MIN);
+
+		/* retain the thread reference as it is in twp */
+		target_thread = NULL;
+	} else {
+		/* unbind */		
+		task_watch_lock();
+		if ((twp = target_thread->taskwatch) != NULL) {
+			task = twp->tw_task;
+			target_thread->taskwatch = NULL;
+			remove_taskwatch_locked(task, twp);
+
+			task_watch_unlock();
+
+			task_deallocate(task);			/* drop task ref in twp */
+			set_thread_appbg(target_thread, 0, twp->tw_importance);
+			thread_deallocate(target_thread);	/* drop thread ref in twp */
+			kfree(twp, sizeof(task_watch_t));
+		} else {
+			task_watch_unlock();
+			ret = 0;		/* return success if it not alredy bound */
+			goto out;
+		}
+	}
+out:
+	thread_deallocate(target_thread);	/* drop thread ref acquired in this routine */
+	return(ret);
+}
+
+static void
+set_thread_appbg(thread_t thread, int setbg, __unused int importance)
+{
+	int enable = (setbg ? TASK_POLICY_ENABLE : TASK_POLICY_DISABLE);
+
+	proc_set_thread_policy(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_PIDBIND_BG, enable);
+}
+
+static void
+apply_appstate_watchers(task_t task)
+{
+	int numwatchers = 0, i, j, setbg;
+	thread_watchlist_t * threadlist;
+	task_watch_t * twp;
+
+retry:
+	/* if no watchers on the list return */
+	if ((numwatchers = task->num_taskwatchers) == 0)
+		return;
+
+	threadlist = (thread_watchlist_t *)kalloc(numwatchers*sizeof(thread_watchlist_t));
+	if (threadlist == NULL)
+		return;
+
+	bzero(threadlist, numwatchers*sizeof(thread_watchlist_t));
+
+	task_watch_lock();
+	/*serialize application of app state changes */
+
+	if (task->watchapplying != 0) {
+		lck_mtx_sleep(&task_watch_mtx, LCK_SLEEP_DEFAULT, &task->watchapplying, THREAD_UNINT);
+		task_watch_unlock();
+		kfree(threadlist, numwatchers*sizeof(thread_watchlist_t));
+		goto retry;
+	}
+
+	if (numwatchers != task->num_taskwatchers) {
+		task_watch_unlock();
+		kfree(threadlist, numwatchers*sizeof(thread_watchlist_t));
+		goto retry;
+	}
+	
+	setbg = proc_get_effective_task_policy(task, TASK_POLICY_WATCHERS_BG);
+
+	task->watchapplying = 1;
+	i = 0;
+	queue_iterate(&task->task_watchers, twp, task_watch_t *, tw_links) {
+
+		threadlist[i].thread = twp->tw_thread;
+		thread_reference(threadlist[i].thread);
+		if (setbg != 0) {
+			twp->tw_importance = twp->tw_thread->importance;
+			threadlist[i].importance = INT_MIN;
+		} else
+			threadlist[i].importance = twp->tw_importance;
+		i++;
+		if (i > numwatchers)
+			break;
+	}
+
+	task_watch_unlock();
+
+	for (j = 0; j< i; j++) {
+		set_thread_appbg(threadlist[j].thread, setbg, threadlist[j].importance);
+		thread_deallocate(threadlist[j].thread);
+	}
+	kfree(threadlist, numwatchers*sizeof(thread_watchlist_t));
+
+
+	task_watch_lock();
+	task->watchapplying = 0;
+	thread_wakeup_one(&task->watchapplying);
+	task_watch_unlock();
+}
+
+void
+thead_remove_taskwatch(thread_t thread)
+{
+	task_watch_t * twp;
+	int importance = 0;
+
+	task_watch_lock();
+	if ((twp = thread->taskwatch) != NULL) {
+		thread->taskwatch = NULL;
+		remove_taskwatch_locked(twp->tw_task, twp);
+	}
+	task_watch_unlock();
+	if (twp != NULL) {
+		thread_deallocate(twp->tw_thread);
+		task_deallocate(twp->tw_task);
+		importance = twp->tw_importance;
+		kfree(twp, sizeof(task_watch_t));
+		/* remove the thread and networkbg */
+		set_thread_appbg(thread, 0, importance);
+	}
+}
+
+void
+task_removewatchers(task_t task)
+{
+	int numwatchers = 0, i, j;
+	task_watch_t ** twplist = NULL;
+	task_watch_t * twp = NULL;
+
+retry:
+	if ((numwatchers = task->num_taskwatchers) == 0)
+		return;
+
+	twplist = (task_watch_t **)kalloc(numwatchers*sizeof(task_watch_t *));
+	if (twplist == NULL)
+		return;
+
+	bzero(twplist, numwatchers*sizeof(task_watch_t *));
+
+	task_watch_lock();
+	if (task->num_taskwatchers == 0) {
+		task_watch_unlock();
+		goto out;
+	}
+
+	if (numwatchers != task->num_taskwatchers) {
+		task_watch_unlock();
+		kfree(twplist, numwatchers*sizeof(task_watch_t *));
+		numwatchers = 0;
+		goto retry;
+	}
+	
+	i = 0;
+	while((twp = (task_watch_t *)dequeue_head(&task->task_watchers)) != NULL)
+	{
+		twplist[i] = twp;
+		task->num_taskwatchers--;	
+
+		/* 
+		 * Since the linkage is removed and thead state cleanup is already set up,
+		 * remove the refernce from the thread.
+		 */
+		twp->tw_thread->taskwatch = NULL;	/* removed linkage, clear thread holding ref */
+		i++;
+		if ((task->num_taskwatchers == 0) || (i > numwatchers))
+			break;
+	}
+
+	task_watch_unlock();
+
+	for (j = 0; j< i; j++) {
+		
+		twp = twplist[j];
+		/* remove thread and network bg */
+		set_thread_appbg(twp->tw_thread, 0, twp->tw_importance);
+		thread_deallocate(twp->tw_thread);
+		task_deallocate(twp->tw_task);
+		kfree(twp, sizeof(task_watch_t));
+	}
+
+out:
+	kfree(twplist, numwatchers*sizeof(task_watch_t *));
+
+}
+#endif /* CONFIG_EMBEDDED */
 
 /*
  * Routines for importance donation/inheritance/boosting
@@ -2812,14 +3193,14 @@ task_importance_reset(__imp_only task_t task)
 static void
 task_set_boost_locked(task_t task, boolean_t boost_active)
 {
-#if IMPORTANCE_DEBUG
+#if IMPORTANCE_TRACE
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_BOOST, (boost_active ? IMP_BOOSTED : IMP_UNBOOSTED)) | DBG_FUNC_START),
 	                          proc_selfpid(), task_pid(task), trequested_0(task), trequested_1(task), 0);
-#endif
+#endif /* IMPORTANCE_TRACE */
 
 	task->requested_policy.trp_boosted = boost_active;
 
-#if IMPORTANCE_DEBUG
+#if IMPORTANCE_TRACE
 	if (boost_active == TRUE){
 		DTRACE_BOOST2(boost, task_t, task, int, task_pid(task));
 	} else {
@@ -2828,7 +3209,7 @@ task_set_boost_locked(task_t task, boolean_t boost_active)
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_BOOST, (boost_active ? IMP_BOOSTED : IMP_UNBOOSTED)) | DBG_FUNC_END),
 	                          proc_selfpid(), task_pid(task),
 	                          trequested_0(task), trequested_1(task), 0);
-#endif
+#endif /* IMPORTANCE_TRACE */
 }
 
 /*
@@ -3030,8 +3411,8 @@ task_add_importance_watchport(task_t task, mach_port_t port, int *boostp)
 {
 	int boost = 0;
 
-	__impdebug_only int released_pid = 0;
-	__impdebug_only int pid = task_pid(task);
+	__imptrace_only int released_pid = 0;
+	__imptrace_only int pid = task_pid(task);
 
 	ipc_importance_task_t release_imp_task = IIT_NULL;
 
@@ -3080,10 +3461,10 @@ task_add_importance_watchport(task_t task, mach_port_t port, int *boostp)
 			// released_pid = task_pid(release_imp_task); /* TODO: Need ref-safe way to get pid */
 			ipc_importance_task_release(release_imp_task);
 		}
-#if IMPORTANCE_DEBUG
+#if IMPORTANCE_TRACE
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_WATCHPORT, 0)) | DBG_FUNC_NONE,
 		        proc_selfpid(), pid, boost, released_pid, 0);
-#endif /* IMPORTANCE_DEBUG */
+#endif /* IMPORTANCE_TRACE */
 	}
 
 	*boostp = boost;

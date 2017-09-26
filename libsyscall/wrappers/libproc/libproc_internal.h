@@ -41,6 +41,52 @@ int proc_clear_cpulimits(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_12_2, __IP
 /* CPU limits, applies to current thread only. 0% unsets limit */
 int proc_setthread_cpupercent(uint8_t percentage, uint32_t ms_refill) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_5_0);
 
+#if TARGET_OS_EMBEDDED
+
+/* CPU monitor action, continued */
+#define PROC_SETCPU_ACTION_SUSPEND	2
+#define PROC_SETCPU_ACTION_TERMINATE	3
+#define PROC_SETCPU_ACTION_NOTIFY	4
+
+int proc_setcpu_deadline(pid_t pid, int action, uint64_t deadline) __OSX_AVAILABLE_STARTING(__MAC_NA, __IPHONE_5_0);
+int proc_setcpu_percentage_withdeadline(pid_t pid, int action, int percentage, uint64_t deadline) __OSX_AVAILABLE_STARTING(__MAC_NA, __IPHONE_5_0);
+
+#define PROC_APPSTATE_NONE		0
+#define PROC_APPSTATE_ACTIVE		1
+#define PROC_APPSTATE_BACKGROUND	2
+#define PROC_APPSTATE_NONUI		3
+#define PROC_APPSTATE_INACTIVE		4
+
+int proc_setappstate(int pid, int appstate);
+int proc_appstate(int pid, int * appstatep);
+
+#define PROC_DEVSTATUS_SHORTTERM	1
+#define PROC_DEVSTATUS_LONGTERM		2
+
+int proc_devstatusnotify(int devicestatus);
+
+#define PROC_PIDBIND_CLEAR	0
+#define PROC_PIDBIND_SET	1
+int proc_pidbind(int pid, uint64_t threadid, int bind);
+
+/*
+ * High level check to see if a process is allowed to use HW
+ * resources reserved for foreground applications.
+ * Returns:
+ *	 1 if the PID is allowed
+ *	 0 if the PID is NOT allowed
+ *	<0 on error
+ *
+ *	When 0 is returned, 'reason' is set to indicate why
+ *	the pid is not allowed to use foreground-only hardware.
+ *	Reasons returned by the kernel are found in <sys/proc_info.h>
+ *
+ *	When <0 is returned, errno indicates the reason
+ *	for the failure.
+ */
+int proc_can_use_foreground_hw(int pid, uint32_t *reason);
+
+#else /* TARGET_OS_EMBEDDED */
 
 /* resume the process suspend due to low VM resource */
 int proc_clear_vmpressure(pid_t pid);
@@ -67,6 +113,7 @@ int proc_clear_delayidlesleep(void);
 int proc_disable_apptype(pid_t pid, int apptype);
 int proc_enable_apptype(pid_t pid, int apptype);
 
+#endif /* TARGET_OS_EMBEDDED */
 
 /* mark process as importance donating */
 int proc_donate_importance_boost(void);

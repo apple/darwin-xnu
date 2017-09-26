@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -314,6 +314,11 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	if (af == AF_INET)
 		hlen = sizeof (struct ip);
 
+	if (fport == htons(53) && !(so->so_flags1 & SOF1_DNS_COUNTED)) {
+	    	so->so_flags1 |= SOF1_DNS_COUNTED;
+		INC_ATOMIC_INT64_LIM(net_api_stats.nas_socket_inet_dgram_dns);
+	}
+
 	/*
 	 * Calculate data length and get a mbuf
 	 * for UDP and IP6 headers.
@@ -353,7 +358,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 
 		udp6->uh_sum = in6_pseudo(laddr, faddr,
 		    htonl(plen + IPPROTO_UDP));
-		m->m_pkthdr.csum_flags = CSUM_UDPIPV6;
+		m->m_pkthdr.csum_flags = (CSUM_UDPIPV6|CSUM_ZERO_INVERT);
 		m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
 
 		if (!IN6_IS_ADDR_UNSPECIFIED(laddr))
@@ -477,6 +482,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			}
 			INP_ADD_STAT(in6p, cell, wifi, wired, txpackets, 1);
 			INP_ADD_STAT(in6p, cell, wifi, wired, txbytes, ulen);
+			inp_set_activity_bitmap(in6p);
 		}
 
 		if (flowadv && (adv->code == FADV_FLOW_CONTROLLED ||
@@ -500,7 +506,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			    sizeof(struct udphdr) +
 			    hlen +
 			    ifnet_hdrlen(outif) +
-			    ifnet_packetpreamblelen(outif),
+			    ifnet_mbuf_packetpreamblelen(outif),
 			    sizeof(u_int32_t));
 		}
 
@@ -533,7 +539,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 				    sizeof(struct udphdr) +
 				    hlen +
 				    ifnet_hdrlen(outif) +
-				    ifnet_packetpreamblelen(outif),
+				    ifnet_mbuf_packetpreamblelen(outif),
 				    sizeof(u_int32_t));
 			}
 		} else {

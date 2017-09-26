@@ -224,7 +224,7 @@ void IOWorkLoop::free()
 
         is = IOSimpleLockLockDisableInterrupt(workToDoLock);
 	SETP(&fFlags, kLoopTerminate);
-        thread_wakeup_one((void *) &workToDo);
+        thread_wakeup_thread((void *) &workToDo, workThread);
         IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
 
 	openGate();
@@ -350,7 +350,7 @@ void IOWorkLoop::disableAllInterrupts() const
 		goto abort;
 	
     if (traceWL)
-    	IOTimeStampStartConstant(IODBG_WORKLOOP(IOWL_WORK), (uintptr_t) this);
+		IOTimeStampStartConstant(IODBG_WORKLOOP(IOWL_WORK), VM_KERNEL_ADDRHIDE(this));
 	
     bool more;
     do {
@@ -363,12 +363,12 @@ void IOWorkLoop::disableAllInterrupts() const
 		for (IOEventSource *evnt = eventChain; evnt; evnt = evnt->getNext()) {
 			
 			if (traceES)
-				IOTimeStampStartConstant(IODBG_WORKLOOP(IOWL_CLIENT), (uintptr_t) this, (uintptr_t) evnt);
+				IOTimeStampStartConstant(IODBG_WORKLOOP(IOWL_CLIENT), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(evnt));
 			
 			more |= evnt->checkForWork();
 			
 			if (traceES)
-				IOTimeStampEndConstant(IODBG_WORKLOOP(IOWL_CLIENT), (uintptr_t) this, (uintptr_t) evnt);
+				IOTimeStampEndConstant(IODBG_WORKLOOP(IOWL_CLIENT), VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(evnt));
 			
 			if (ISSETP(&fFlags, kLoopTerminate))
 				goto abort;
@@ -382,7 +382,7 @@ void IOWorkLoop::disableAllInterrupts() const
     res = true;
 	
     if (traceWL)
-    	IOTimeStampEndConstant(IODBG_WORKLOOP(IOWL_WORK), (uintptr_t) this);
+		IOTimeStampEndConstant(IODBG_WORKLOOP(IOWL_WORK), VM_KERNEL_ADDRHIDE(this));
 	
 abort:
     openGate();
@@ -445,7 +445,7 @@ void IOWorkLoop::signalWorkAvailable()
     if (workToDoLock) {
         IOInterruptState is = IOSimpleLockLockDisableInterrupt(workToDoLock);
         workToDo = true;
-        thread_wakeup_one((void *) &workToDo);
+        thread_wakeup_thread((void *) &workToDo, workThread);
         IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
     }
 }
@@ -633,7 +633,10 @@ IOWorkLoop::eventSourcePerformsWork(IOEventSource *inEventSource)
 	 * checkForWork() here. We're just testing to see if it's the same or not.
 	 *
 	 */
-	if (controlG) {
+
+	if (IOEventSource::kPassive & inEventSource->flags) result = false;
+	else if (IOEventSource::kActive & inEventSource->flags) result = true;
+	else if (controlG) {
 		void *	ptr1;
 		void *	ptr2;
 		

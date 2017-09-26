@@ -207,7 +207,7 @@ IOReturn IOCommandGate::runAction(Action inAction,
     bool trace = ( gIOKitTrace & kIOTraceCommandGates ) ? true : false;
 	
     if (trace) IOTimeStampStartConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-					 VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
+					 VM_KERNEL_ADDRHIDE(inAction), VM_KERNEL_ADDRHIDE(owner));
 	
     IOStatisticsActionCall();
 	
@@ -218,7 +218,7 @@ IOReturn IOCommandGate::runAction(Action inAction,
     *sleepersP -= kSleepersActions;
 
     if (trace) IOTimeStampEndConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-				       VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
+				       VM_KERNEL_ADDRHIDE(inAction), VM_KERNEL_ADDRHIDE(owner));
 
     if (kSleepersRemoved == ((kSleepersActionsMask|kSleepersRemoved) & *sleepersP))
     {
@@ -257,7 +257,7 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
 		
         if (trace)
             IOTimeStampStartConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-				     VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
+				     VM_KERNEL_ADDRHIDE(inAction), VM_KERNEL_ADDRHIDE(owner));
         
         IOStatisticsActionCall();
         
@@ -265,7 +265,7 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
 		
         if (trace)
             IOTimeStampEndConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-				   VM_KERNEL_UNSLIDE(inAction), (uintptr_t) owner);
+				   VM_KERNEL_ADDRHIDE(inAction), VM_KERNEL_ADDRHIDE(owner));
     }
 
     wl->openGate();

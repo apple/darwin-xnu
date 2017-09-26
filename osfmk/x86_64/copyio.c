@@ -38,8 +38,13 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_fault.h>
+#include <san/kasan.h>
 
 #include <sys/kdebug.h>
+
+#include <kern/copyout_shim.h>
+
+
 
 static int copyio(int, user_addr_t, char *, vm_size_t, vm_size_t *, int);
 static int copyio_phys(addr64_t, addr64_t, vm_size_t, int);
@@ -52,7 +57,7 @@ static int copyio_phys(addr64_t, addr64_t, vm_size_t, int);
  * user and wired kernel memory in a single invocation on this
  * platform.
  */
-#define COPYSIZELIMIT_PANIC     (64*MB)
+const int copysize_limit_panic = (64 * MB);
 
 /*
  * The copy engine has the following characteristics
@@ -163,7 +168,9 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 #endif
 	boolean_t nopagezero = thread->map->pmap->pagezero_accessible;
 
-	assert(nbytes < COPYSIZELIMIT_PANIC);
+	if (__improbable(nbytes > copysize_limit_panic))
+		panic("%s(%p, %p, %lu) - transfer too large", __func__,
+		       (void *)user_addr, (void *)kernel_addr, nbytes);
 
 	COPYIO_TRACE(debug_type | DBG_FUNC_START,
 	    user_addr, kernel_addr, nbytes, use_kernel_map, 0);
@@ -184,6 +191,14 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		error = EFAULT;
 		goto out;
 	}
+
+#if KASAN
+	if (copy_type == COPYIN || copy_type == COPYINSTR || copy_type == COPYINWORD) {
+		__asan_storeN((uptr)kernel_addr, nbytes);
+	} else if (copy_type == COPYOUT) {
+		__asan_loadN((uptr)kernel_addr, nbytes);
+	}
+#endif
 
 	/*
 	 * If the no_shared_cr3 boot-arg is set (true), the kernel runs on 
@@ -344,6 +359,7 @@ copyio_phys(addr64_t source, addr64_t sink, vm_size_t csize, int which)
 	        paddr  = (char *)source;
 		vaddr  = (user_addr_t)sink;
 		ctype  = COPYOUTPHYS;
+        CALL_COPYOUT_SHIM_PHYS((void *)PHYSMAP_PTOV(source),sink,csize)
 	}
 	return copyio(ctype, vaddr, paddr, csize, NULL, which & cppvKmap);
 }
@@ -389,12 +405,14 @@ copyinstr(const user_addr_t user_addr,  char *kernel_addr, vm_size_t nbytes, vm_
 int
 copyoutmsg(const char *kernel_addr, user_addr_t user_addr, mach_msg_size_t nbytes)
 {
+    CALL_COPYOUT_SHIM_MSG(kernel_addr,user_addr,(vm_size_t)nbytes)
     return copyio(COPYOUT, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0);
 }
 
 int
 copyout(const void *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
 {
+    CALL_COPYOUT_SHIM_NRML(kernel_addr,user_addr,nbytes)
     return copyio(COPYOUT, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0);
 }
 

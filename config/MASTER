@@ -72,20 +72,13 @@ options		NO_DIRECT_RPC	# for untyped mig servers	#
 options		LOOP		# loopback support		# <loop>
 options		VLAN		#				# <vlan>
 options		BOND		#				# <bond>
+options		IF_FAKE		#				# <if_fake>
 options		AH_ALL_CRYPTO	# AH all crypto algs		# <ah_all_crypto>
 options		IPCOMP_ZLIB	# IP compression using zlib	# <ipcomp_zlib>
 options		PF		# Packet Filter			# <pf>
-options		PF_ALTQ		# PF ALTQ (Alternate Queueing)	# <pf_altq>
 options		PF_ECN		# PF use ECN marking		# <pf_ecn>
 options		PFLOG		# PF log interface		# <pflog>
-options		PKTSCHED_CBQ	# CBQ packet scheduler		# <pktsched_cbq>
-options		PKTSCHED_HFSC	# H-FSC packet scheduler	# <pktsched_hfsc>
-options		PKTSCHED_PRIQ	# PRIQ packet scheduler		# <pktsched_priq>
-options		PKTSCHED_FAIRQ	# FAIRQ packet scheduler	# <pktsched_fairq>
 options		MEASURE_BW	# interface bandwidth measurement # <measure_bw>
-options		CLASSQ_BLUE	# BLUE queueing algorithm	# <classq_blue>
-options		CLASSQ_RED	# RED queueing algorithm	# <classq_red>
-options		CLASSQ_RIO	# RIO queueing algorithm	# <classq_rio>
 options		DUMMYNET	# dummynet support		# <dummynet>
 options		TRAFFIC_MGT	# traffic management support		# <traffic_mgt>
 options		MULTICAST	# Internet Protocol Class-D	$
@@ -193,7 +186,6 @@ options   CONFIG_KN_HASHSIZE=20		# <bsmall>
 #
 #  configurable vfs related resources 
 #  CONFIG_VNODES - used to pre allocate vnode related resources 
-#  CONFIG_VNODE_FREE_MIN - mininmum number of free vnodes 
 #  CONFIG_NC_HASH - name cache hash table allocation
 #  CONFIG_VFS_NAMES - name strings
 #
@@ -207,12 +199,6 @@ options   CONFIG_VNODES=263168		# <large,xlarge>
 options   CONFIG_VNODES=263168		# <medium>
 options   CONFIG_VNODES=10240		# <small>
 options   CONFIG_VNODES=750		# <bsmall>
-
-options   CONFIG_VNODE_FREE_MIN=500	# <large,xlarge>
-options   CONFIG_VNODE_FREE_MIN=300	# <medium>
-options   CONFIG_VNODE_FREE_MIN=200	# <small>
-options   CONFIG_VNODE_FREE_MIN=100	# <xsmall>
-options   CONFIG_VNODE_FREE_MIN=75	# <bsmall>
 
 options   CONFIG_NC_HASH=5120		# <large,xlarge>
 options   CONFIG_NC_HASH=4096		# <medium>
@@ -295,8 +281,12 @@ options   CONFIG_MFCTBLSIZ=16			# <bsmall>
 #
 # configurable kernel message buffer size
 #
-options   CONFIG_MSG_BSIZE=4096			# <bsmall,small,xsmall>
-options   CONFIG_MSG_BSIZE=16384		# <medium,large,xlarge>
+options   CONFIG_MSG_BSIZE_REL=4096		# <bsmall,small,xsmall>
+options   CONFIG_MSG_BSIZE_DEV=4096		# <bsmall,small,xsmall>
+options   CONFIG_MSG_BSIZE_REL=16384		# <medium,large,xlarge>
+options   CONFIG_MSG_BSIZE_DEV=131072		# <medium,large,xlarge>
+options   CONFIG_MSG_BSIZE=CONFIG_MSG_BSIZE_REL	# <!development,debug>
+options   CONFIG_MSG_BSIZE=CONFIG_MSG_BSIZE_DEV	# <development,debug>
 
 #
 # maximum size of the per-process Mach IPC table
@@ -304,14 +294,11 @@ options   CONFIG_MSG_BSIZE=16384		# <medium,large,xlarge>
 options   CONFIG_IPC_TABLE_ENTRIES_STEPS=64  	# 137898 entries	# <bsmall,small,xsmall>
 options   CONFIG_IPC_TABLE_ENTRIES_STEPS=256 	# 300714 entries	# <medium,large,xlarge>
 
-
 #
 #  configurable kernel - use these options to strip strings from panic
 #  and printf calls.
-#  no_panic_str - saves around 50K of kernel footprint.
 #  no_printf_str - saves around 45K of kernel footprint.
 #
-options   CONFIG_NO_PANIC_STRINGS		# <no_panic_str>
 options   CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
 options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 
@@ -399,7 +386,8 @@ options 	CONFIG_IO_ACCOUNTING 		# <config_io_accounting>
 # For now debug is enabled wherever inheritance is
 #
 options		IMPORTANCE_INHERITANCE		# <importance_inheritance>
-options		IMPORTANCE_DEBUG		# <importance_inheritance>
+options		IMPORTANCE_TRACE		# <importance_trace>
+options		IMPORTANCE_DEBUG		# <importance_debug>
 
 options		CONFIG_TELEMETRY		# <config_telemetry>
 
@@ -414,6 +402,11 @@ options		CONFIG_ECC_LOGGING		# <config_ecc_logging>
 # Application core dumps
 #
 options		CONFIG_COREDUMP			# <config_coredump>
+
+#
+# Vnode guards
+#
+options		CONFIG_VNGUARD			# <config_vnguard>
 
 #
 #  Ethernet (ARP)
@@ -464,6 +457,7 @@ pseudo-device	sdt		1	init	sdt_init	# <config_dtrace>
 pseudo-device	systrace	1	init	systrace_init	# <config_dtrace>
 pseudo-device	fbt		1	init	fbt_init	# <config_dtrace>
 pseudo-device	profile_prvd	1	init	profile_init	# <config_dtrace>
+
 
 #
 # IOKit configuration options
@@ -525,7 +519,6 @@ options		CONFIG_AUDIT	    # Kernel auditing	    # <config_audit>
 #	forcibly suspending tasks when the demand exceeds supply. This
 #	option should be on.
 #
-options		MACH_RT
 options		TASK_SWAPPER	#	<task_swapper_disabled>
 
 #
@@ -606,6 +599,7 @@ options		CONFIG_DTRACE		#		    # <config_dtrace>
 # kernel performance tracing
 options     KPERF                  # <kperf>
 options     KPC                    # <kpc>
+
 
 options     PGO                    # <pgo>
 
@@ -716,12 +710,6 @@ options OS_REASON_DEBUG					# <os_reason_debug>
 #
 options 	CONFIG_ATM				# <config_atm>
 
-#
-# Kernel Voucher Attr Manager for BANK
-#
-options 	CONFIG_BANK				# <config_bank>
-
-
 # Group related tasks together into coalitions
 options		CONFIG_COALITIONS			# <config_coalitions>
 
@@ -741,3 +729,9 @@ options		VIDEO_CONSOLE	# uni-directional output over framebuffer
 # Syscall options
 #
 options		CONFIG_REQUIRES_U32_MUNGING	# incoming U32 argument structures must be munged to match U64	# <config_requires_u32_munging>
+
+#
+# copyout() instrumentation
+#
+options		COPYOUT_SHIM			# Shim for copyout memory analysis via kext #<copyout_shim>
+

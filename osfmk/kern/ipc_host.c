@@ -133,10 +133,10 @@ void ipc_host_init(void)
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 			realhost.exc_actions[i].port = IP_NULL;
-			realhost.exc_actions[i].label = NULL;
 			/* The mac framework is not yet initialized, so we defer
 			 * initializing the labels to later, when they are set
 			 * for the first time. */
+			realhost.exc_actions[i].label = NULL;
 		}/* for */
 
 	/*
@@ -550,6 +550,11 @@ host_set_exception_ports(
 	int	i;
 	ipc_port_t	old_port[EXC_TYPES_COUNT];
 
+#if CONFIG_MACF
+	struct label *deferred_labels[EXC_TYPES_COUNT];
+	struct label *new_label;
+#endif	
+
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -580,6 +585,16 @@ host_set_exception_ports(
 #if CONFIG_MACF
 	if (mac_task_check_set_host_exception_ports(current_task(), exception_mask) != 0)
 		return KERN_NO_ACCESS;
+
+	new_label = mac_exc_create_label_for_current_proc();
+
+	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+		if (host_priv->exc_actions[i].label == NULL) {
+			deferred_labels[i] = mac_exc_create_label();
+		} else {
+			deferred_labels[i] = NULL;
+		}
+	}
 #endif
 
 	assert(host_priv == &realhost);
@@ -590,13 +605,14 @@ host_set_exception_ports(
 #if CONFIG_MACF
 		if (host_priv->exc_actions[i].label == NULL) {
 			// Lazy initialization (see ipc_port_init).
-			mac_exc_action_label_init(host_priv->exc_actions + i);
+			mac_exc_associate_action_label(&host_priv->exc_actions[i], deferred_labels[i]);
+			deferred_labels[i] = NULL; // Label is used, do not free.
 		}
 #endif
 
 		if ((exception_mask & (1 << i))
 #if CONFIG_MACF
-			&& mac_exc_action_label_update(current_task(), host_priv->exc_actions + i) == 0
+			&& mac_exc_update_action_label(&host_priv->exc_actions[i], new_label) == 0
 #endif
 			) {
 			old_port[i] = host_priv->exc_actions[i].port;
@@ -614,9 +630,21 @@ host_set_exception_ports(
 	 * Consume send rights without any lock held.
 	 */
 	host_unlock(host_priv);
-	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++)
+
+#if CONFIG_MACF
+	mac_exc_free_label(new_label);
+#endif
+	
+	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 		if (IP_VALID(old_port[i]))
 			ipc_port_release_send(old_port[i]);
+#if CONFIG_MACF
+		if (deferred_labels[i] != NULL) {
+			/* Deferred label went unused: Another thread has completed the lazy initialization. */
+			mac_exc_free_label(deferred_labels[i]);
+		}
+#endif
+	}
 	if (IP_VALID(new_port))		 /* consume send right */
 		ipc_port_release_send(new_port);
 
@@ -667,13 +695,6 @@ host_get_exception_ports(
 	count = 0;
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
-#if CONFIG_MACF
-		if (host_priv->exc_actions[i].label == NULL) {
-			// Lazy initialization (see ipc_port_init).
-			mac_exc_action_label_init(host_priv->exc_actions + i);
-		}
-#endif
-
 		if (exception_mask & (1 << i)) {
 			for (j = 0; j < count; j++) {
 /*
@@ -725,6 +746,11 @@ host_swap_exception_ports(
 			count;
 	ipc_port_t	old_port[EXC_TYPES_COUNT];
 
+#if CONFIG_MACF
+	struct label *deferred_labels[EXC_TYPES_COUNT];
+	struct label *new_label;
+#endif	
+
 	if (host_priv == HOST_PRIV_NULL)
 		return KERN_INVALID_ARGUMENT;
 
@@ -749,6 +775,16 @@ host_swap_exception_ports(
 #if CONFIG_MACF
 	if (mac_task_check_set_host_exception_ports(current_task(), exception_mask) != 0)
 		return KERN_NO_ACCESS;
+
+	new_label = mac_exc_create_label_for_current_proc();
+	
+	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+		if (host_priv->exc_actions[i].label == NULL) {
+			deferred_labels[i] = mac_exc_create_label();
+		} else {
+			deferred_labels[i] = NULL;
+		}
+	}
 #endif /* CONFIG_MACF */
 
 	host_lock(host_priv);
@@ -758,13 +794,14 @@ host_swap_exception_ports(
 #if CONFIG_MACF
 		if (host_priv->exc_actions[i].label == NULL) {
 			// Lazy initialization (see ipc_port_init).
-			mac_exc_action_label_init(host_priv->exc_actions + i);
+			mac_exc_associate_action_label(&host_priv->exc_actions[i], deferred_labels[i]);
+			deferred_labels[i] = NULL; // Label is used, do not free.
 		}
 #endif
 
 		if ((exception_mask & (1 << i))
 #if CONFIG_MACF
-			&& mac_exc_action_label_update(current_task(), host_priv->exc_actions + i) == 0
+			&& mac_exc_update_action_label(&host_priv->exc_actions[i], new_label) == 0
 #endif
 			) {
 			for (j = 0; j < count; j++) {
@@ -793,17 +830,27 @@ host_swap_exception_ports(
 				ipc_port_copy_send(new_port);
 			host_priv->exc_actions[i].behavior = new_behavior;
 			host_priv->exc_actions[i].flavor = new_flavor;
-		} else
+		} else {
 			old_port[i] = IP_NULL;
+		}
 	}/* for */
 	host_unlock(host_priv);
 
+#if CONFIG_MACF
+	mac_exc_free_label(new_label);
+#endif
+	
 	/*
 	 * Consume send rights without any lock held.
 	 */
 	while (--i >= FIRST_EXCEPTION) {
 		if (IP_VALID(old_port[i]))
 			ipc_port_release_send(old_port[i]);
+#if CONFIG_MACF
+		if (deferred_labels[i] != NULL) {
+			mac_exc_free_label(deferred_labels[i]); // Label unused.
+		}
+#endif
 	}
 
 	if (IP_VALID(new_port))		 /* consume send right */

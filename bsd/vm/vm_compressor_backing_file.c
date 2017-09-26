@@ -182,8 +182,7 @@ vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flag
 	int		upl_control_flags = 0;
 	upl_size_t	upl_size = 0;
 
-	upl_create_flags = UPL_SET_INTERNAL | UPL_SET_LITE
-			| UPL_MEMORY_TAG_MAKE(VM_KERN_MEMORY_OSFMK);
+	upl_create_flags = UPL_SET_INTERNAL | UPL_SET_LITE;
 
 #if ENCRYPTED_SWAP
 	upl_control_flags = UPL_IOSYNC | UPL_PAGING_ENCRYPTED;
@@ -201,7 +200,8 @@ vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flag
 				&upl,
 				NULL,
 				&count,
-				&upl_create_flags);
+				&upl_create_flags,
+				VM_KERN_MEMORY_OSFMK);
 
 	if (kr != KERN_SUCCESS || (upl_size != io_size)) {
 		panic("vm_map_create_upl failed with %d\n", kr);
@@ -322,17 +322,17 @@ u_int32_t vnode_trim_list (vnode_t vp, struct trim_list *tl, boolean_t route_onl
 			 * in each call to ensure that the entire range is covered.
 			 */
 			error = VNOP_BLOCKMAP (vp, current_offset, remaining_length, 
-					       &io_blockno, &io_bytecount, NULL, VNODE_READ, NULL);
+					       &io_blockno, &io_bytecount, NULL, VNODE_READ | VNODE_BLOCKMAP_NO_TRACK, NULL);
 
 			if (error) {
 				goto trim_exit;
 			}
+			if (io_blockno != -1) {
+			        extents[trim_index].offset = (uint64_t) io_blockno * (u_int64_t) blocksize;
+				extents[trim_index].length = io_bytecount;
 
-			extents[trim_index].offset = (uint64_t) io_blockno * (u_int64_t) blocksize;
-			extents[trim_index].length = io_bytecount;
-
-			trim_index++;
-
+				trim_index++;
+			}
 			if (trim_index == MAX_BATCH_TO_TRIM) {
 
 				if (vp->v_mount->mnt_ioflags & MNT_IOFLAGS_CSUNMAP_SUPPORTED) {

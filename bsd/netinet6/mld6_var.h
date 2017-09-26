@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -90,6 +90,7 @@ struct mld_ifinfo_u {
 
 #define MLIF_SILENT	0x00000001	/* Do not use MLD on this ifp */
 #define MLIF_USEALLOW	0x00000002	/* Use ALLOW/BLOCK for joins/leaves */
+#define	MLIF_PROCESSED	0x00000004	/* Entry has been processed and can be skipped */
 
 /*
  * MLD version tag.
@@ -193,10 +194,10 @@ struct mld_ifinfo {
 };
 
 #define	MLI_LOCK_ASSERT_HELD(_mli)					\
-	lck_mtx_assert(&(_mli)->mli_lock, LCK_MTX_ASSERT_OWNED)
+	LCK_MTX_ASSERT(&(_mli)->mli_lock, LCK_MTX_ASSERT_OWNED)
 
 #define	MLI_LOCK_ASSERT_NOTHELD(_mli)					\
-	lck_mtx_assert(&(_mli)->mli_lock, LCK_MTX_ASSERT_NOTOWNED)
+	LCK_MTX_ASSERT(&(_mli)->mli_lock, LCK_MTX_ASSERT_NOTOWNED)
 
 #define	MLI_LOCK(_mli)							\
 	lck_mtx_lock(&(_mli)->mli_lock)

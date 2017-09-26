@@ -68,11 +68,11 @@ queue_head_t atm_values_list;
 ipc_voucher_attr_control_t  voucher_attr_control;    /* communication channel from ATM to voucher system */
 static zone_t atm_value_zone, atm_descriptors_zone, atm_link_objects_zone;
 
-static aid_t get_aid();
-static mach_atm_subaid_t get_subaid();
+static aid_t get_aid(void);
+static mach_atm_subaid_t get_subaid(void);
 static atm_value_t atm_value_alloc_init(aid_t);
 static void atm_value_dealloc(atm_value_t atm_value);
-static void atm_hash_table_init();
+static void atm_hash_table_init(void);
 static kern_return_t atm_value_hash_table_insert(atm_value_t new_atm_value);
 static void atm_value_hash_table_delete(atm_value_t atm_value);
 static atm_value_t get_atm_value_from_aid(aid_t aid) __unused;

@@ -154,7 +154,11 @@ const static int icmp_datalen = 8;
 
 /* Default values in case CONFIG_ICMP_BANDLIM is not defined in the MASTER file */
 #ifndef CONFIG_ICMP_BANDLIM
+#if !CONFIG_EMBEDDED
 #define CONFIG_ICMP_BANDLIM 250
+#else /* CONFIG_EMBEDDED */
+#define CONFIG_ICMP_BANDLIM 50
+#endif /* CONFIG_EMBEDDED */
 #endif /* CONFIG_ICMP_BANDLIM */
 
 /*    
@@ -379,7 +383,7 @@ icmp_input(struct mbuf *m, int hlen)
 	int icmplen;
 	int i;
 	struct in_ifaddr *ia;
-	void (*ctlfunc)(int, struct sockaddr *, void *);
+	void (*ctlfunc)(int, struct sockaddr *, void *, struct ifnet *);
 	int code;
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
@@ -536,7 +540,7 @@ icmp_input(struct mbuf *m, int hlen)
 		ctlfunc = ip_protox[icp->icmp_ip.ip_p]->pr_ctlinput;
 		if (ctlfunc)
 			(*ctlfunc)(code, (struct sockaddr *)&icmpsrc,
-				   (void *)&icp->icmp_ip);
+				   (void *)&icp->icmp_ip, m->m_pkthdr.rcvif);
 		break;
 
 	badcode:

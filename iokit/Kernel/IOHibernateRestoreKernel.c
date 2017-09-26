@@ -73,17 +73,7 @@ extern void acpi_wake_prot_entry(void);
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #if defined(__i386__) || defined(__x86_64__)
-
-#define rdtsc(lo,hi) \
-    __asm__ volatile("lfence; rdtsc; lfence" : "=a" (lo), "=d" (hi))
-
-static inline uint64_t rdtsc64(void)
-{
-    uint64_t lo, hi;
-    rdtsc(lo, hi);
-    return ((hi) << 32) | (lo);
-}
-
+#include <i386/proc_reg.h>
 #else
 
 static inline uint64_t rdtsc64(void)
@@ -409,7 +399,7 @@ store_one_page(uint32_t procFlags, uint32_t * src, uint32_t compressedSize,
 
 			s = *src;
 			d = (uint32_t *)(uintptr_t)dst;
-            if (!s) bzero((void *) dst, PAGE_SIZE);
+            if (!s) __nosan_bzero((void *) dst, PAGE_SIZE);
             else    for (i = 0; i < (PAGE_SIZE / sizeof(int32_t)); i++) *d++ = s;
 		}
 	}
@@ -465,7 +455,7 @@ hibernate_kernel_entrypoint(uint32_t p1,
 
     debug_code(kIOHibernateRestoreCodeImageStart, headerPhys);
 
-    memcpy(gIOHibernateCurrentHeader,
+    __nosan_memcpy(gIOHibernateCurrentHeader,
 	   (void *) pal_hib_map(IMAGE_AREA, headerPhys), 
 	   sizeof(IOHibernateImageHeader));
 
@@ -638,7 +628,7 @@ hibernate_kernel_entrypoint(uint32_t p1,
 		    // alloc new buffer page
 		    bufferPage = hibernate_page_list_grab(map, &nextFree);
 		    dst = (uint32_t *)pal_hib_map(DEST_COPY_AREA, ptoa_64(bufferPage));
-		    memcpy(dst, src, compressedSize);
+		    __nosan_memcpy(dst, src, compressedSize);
 		}
 		if (copyPageIndex > ((PAGE_SIZE >> 2) - 3))
 		{

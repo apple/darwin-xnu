@@ -100,6 +100,59 @@ L2:
 	addq	$24, %rsp   // restore the stack
 	ret
 
+#elif defined(__arm__)
+	
+MI_ENTRY_POINT(___fork)
+	stmfd	sp!, {r4, r7, lr}
+	add	r7, sp, #4
+
+	mov	r1, #1					// prime results
+	mov	r12, #SYS_fork
+	swi	#SWI_SYSCALL				// make the syscall
+	bcs	Lbotch					// error?
+
+	cmp	r1, #0					// parent (r1=0) or child(r1=1)
+	beq	Lparent
+
+	//child here...
+	MI_GET_ADDRESS(r3, __current_pid)
+	mov	r0, #0
+	str	r0, [r3]		// clear cached pid in child
+	ldmfd   sp!, {r4, r7, pc}
+
+Lbotch:
+	MI_CALL_EXTERNAL(_cerror)			// jump here on error
+	mov	r0,#-1					// set the error
+	// fall thru
+Lparent:	
+	ldmfd   sp!, {r4, r7, pc}			// pop and return
+
+#elif defined(__arm64__)
+
+#include <mach/arm64/asm.h>
+	
+MI_ENTRY_POINT(___fork)
+	PUSH_FRAME
+	// ARM moves a 1 in to r1 here, but I can't see why.
+	mov		x16, #SYS_fork				// Syscall code
+	svc		#SWI_SYSCALL				// Trap to kernel
+	b.cs	Lbotch						// Carry bit indicates failure
+	cbz		x1, Lparent					// x1 == 0 indicates that we are the parent
+
+	// Child
+	MI_GET_ADDRESS(x9, __current_pid)	// Get address of cached "current pid"
+	mov		w0, #0	
+	str		w0, [x9]					// Clear cached current pid				
+	POP_FRAME							// And done
+	ret
+
+Lbotch:
+	MI_CALL_EXTERNAL(_cerror)			// Handle error
+	mov		w0, #-1						// Return value is -1
+Lparent:
+	POP_FRAME							// Return
+	ret
+
 #else
 #error Unsupported architecture
 #endif
