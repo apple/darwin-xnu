@@ -15,21 +15,22 @@ AlignEscapedNewlinesLeft: true
 # }
 
 AlignTrailingComments: true
-# align all comments to right based of //
+# Align all comments to right based of //
 # == Avoid using // based comments altogether ==
 
 AllowAllParametersOfDeclarationOnNextLine: true
-# allow funtion definition as
+# Allow funtion definition as
 # someFunction(foo,
 #             bar,
 #             baz);
 
 AlignConsecutiveAssignments:  true
-# aligns consecutive assignments with '=' operator
+# Align consecutive assignments with '=' operator
 
 AllowShortBlocksOnASingleLine: true
-# single statement block can be merged on one line 
-# e.g if (a) { return; }
+# Single statement block can be merged on one line
+# e.g.
+# if (a) { return; }
 
 AllowShortCaseLabelsOnASingleLine: false
 # Single statement case statements should be on their own lines
@@ -39,10 +40,10 @@ AllowShortFunctionsOnASingleLine: None
 # int foo() { return 123; }
 
 AllowShortIfStatementsOnASingleLine: false
-# Bad: 
-# if (someOtherVar) return; 
+# Bad:
+# if (someOtherVar) return;
 # Good:
-# if (someOtherVar) 
+# if (someOtherVar)
 #     return;
 
 AllowShortLoopsOnASingleLine: false
@@ -54,58 +55,59 @@ AllowShortLoopsOnASingleLine: false
 #     }
 
 AlwaysBreakAfterDefinitionReturnType: true
-# Ensures return type is one its own line
-# e.g. unsigned int
+# Ensure return type is on its own line
+# e.g.
+# unsigned int
 # function(char param) { }
 
 AlwaysBreakBeforeMultilineStrings: true
-# multine strings should begin on new line
+# Multiline strings should begin on new line
 
 BinPackArguments: true
 BinPackParameters: false
-# functions arguments should all be on one line or have a single line for each param
+# Function arguments should either be on one line, or have a single line for each param
 
 BreakBeforeBinaryOperators: None
-# break for new line after binary operator in case of length is over ColumnLimit
+# Break for new line after binary operator if line exceeds ColumnLimit
 # e.g.
 # int foo = bar +
 #           baz;
 
 BreakBeforeBraces: Linux
 # Always attach braces to surrounding context except -
-# break before braces on function, namespace and class definitions
+# break before braces on function, namespace, and class definitions
 
 ColumnLimit: 132
-# every body has wide screen now. 132 seems to be reasonable limit now.
+# Everybody has a wide screen now, so 132 seems a reasonable limit.
 
 IndentCaseLabels: false
-# case labels have same indentation as switch statement.
+# Case labels have same indentation as switch statement.
 
 IndentWidth: 4
 # 4 spaces for indentation
 TabWidth: 4
-# tabwidth is 4 spaces
+# Tab width is 4 spaces
 
 UseTab: ForIndentation
-# tab for indentation only. All alignment should happen with spaces
-# Simple rule to check. 
-# No tabs allowed after first 'non-tab' character in a line
+# Tab for indentation only. All alignment should happen with spaces.
+# Simple rule to check; no tabs allowed after first 'non-tab' character in a line
 
 IndentWrappedFunctionNames: false
 KeepEmptyLinesAtTheStartOfBlocks: false
-# remove excess empty lines at start of blocks.
+# Remove excess empty lines at start of blocks.
 
 PointerAlignment: Middle
 
 SpaceAfterCStyleCast: false
-# No space after (cast). E.g
+# No space after (cast).
+# e.g.
 # int blah = (int)((void *)foo + bar)
 
 SpaceBeforeAssignmentOperators: true
 # Assignment = should be seperated by spaces on both sides.
 
 SpaceBeforeParens: ControlStatements
-# for control statements a space is required before '('
+# For control statements, a space must precede '('
 # Bad: for() { statement; }
 # Good: for () { statement; }
 # This setting distinguishes functions() from keywords like 'if' and 'for'.
@@ -117,6 +119,7 @@ SpacesInCStyleCastParentheses: false
 # No spaces required for (unsigned int) type cast
 
 SpacesInParentheses: false
+# No spaces after '(' or before ')'
 
 SpacesInSquareBrackets: false
-# No spaces in [count] style invocations of []
+# No spaces after '[' or before ']'
