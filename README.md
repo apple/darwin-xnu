@@ -1,9 +1,9 @@
 What is XNU?
 ===========
 
-XNU kernel is part of the Darwin operating system for use in OS X and iOS operating systems. XNU is an acronym for XNU is Not Unix.
+XNU kernel is part of the Darwin operating system for use in macOS and iOS operating systems. XNU is an acronym for XNU is Not Unix.
 XNU is a hybrid kernel combining the Mach kernel developed at Carnegie Mellon University with components from FreeBSD and C++ API for writing drivers called IOKit.
-XNU runs on I386, X86_64 for both single processor and multi-processor configurations.
+XNU runs on i386, x86_64 for both single processor and multi-processor configurations.
 
 XNU Source Tree
 ===============
@@ -35,7 +35,7 @@ Here is the syntax:
 
 Where:
 
-  * \<sdkroot>: path to MacOS SDK on disk. (defaults to `/`)
+  * \<sdkroot>: path to macOS SDK on disk. (defaults to `/`)
   * \<variant>: can be `debug`, `development`, `release`, `profile` and configures compilation flags and asserts throughout kernel code.
   * \<arch>   : can be valid arch to build for. (E.g. `i386` or `X86_64`)
 
