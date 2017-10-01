@@ -122,7 +122,7 @@ LEXT(LowResetVectorBase)
 	// load stashed rorgn_begin
 	adrp	x17, EXT(rorgn_begin)@page
 	add		x17, x17, EXT(rorgn_begin)@pageoff
-	ldr		x17, [x17]
+	mov x17, xzr
 	// if rorgn_begin is zero, we're debugging. skip enabling ktrr
 	cbz		x17, 1f
 
@@ -175,7 +175,7 @@ Lfound_cpu_data_entry:
 	adrp	x2, EXT(start_cpu)@page
 	add		x2, x2, EXT(start_cpu)@pageoff
 	cmp		x0, x2
-	bne	Lskip_cpu_reset_handler
+	nop
 1:
 
 
