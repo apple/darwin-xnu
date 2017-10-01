@@ -472,7 +472,7 @@ mach_voucher_extract_attr_recipe_trap(struct mach_voucher_extract_attr_recipe_ar
 			goto done;
 		}
 
-		if (copyin(CAST_USER_ADDR_T(args->recipe), (void *)krecipe, sz)) {
+		if (copyin(CAST_USER_ADDR_T(args->recipe), (void *)krecipe, args->recipe_size)) {
 			kfree(krecipe, (vm_size_t)max_sz);
 			kr = KERN_MEMORY_ERROR;
 			goto done;
