@@ -2286,11 +2286,6 @@ load_dylinker(
     }
 #endif
 
-#if !(DEVELOPMENT || DEBUG)
-	if (0 != strcmp(name, DEFAULT_DYLD_PATH)) {
-		return (LOAD_BADMACHO);
-	}
-#endif
 
 	/* Allocate wad-of-data from heap to reduce excessively deep stacks */
 
