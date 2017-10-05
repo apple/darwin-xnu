@@ -1,8 +1,8 @@
 # What is XNU?
 
-XNU kernel is part of the Darwin operating system for use in OS X and iOS operating systems. XNU is an acronym for XNU is Not Unix.
+XNU kernel is part of the Darwin operating system for use in macOS and iOS operating systems. XNU is an acronym for X is Not Unix.
 XNU is a hybrid kernel combining the Mach kernel developed at Carnegie Mellon University with components from FreeBSD and C++ API
-for writing drivers called IOKit. XNU runs on I386, X86_64 for both single processor and multi-processor configurations.
+for writing drivers called IOKit. XNU runs on `i386` and `x86_64` for both single processor and multi-processor configurations.
 
 # XNU Source Tree
 
@@ -32,10 +32,10 @@ $ make ARCH_CONFIGS=<arch> SDKROOT=<sdkroot> KERNEL_CONFIGS=<variant>
 ```
 
 Where:
+- `<arch>` can be valid arch to build for (e.g. `I386` or `X86_64`)
 - `<sdkroot>` is the path to macOS SDK on disk (defaults to `/`)
-- `<variant>` can be `debug`, `development`, `release`, `profile` and configures compilation flags and asserts throughout kernel
-code.
-- `<arch>` can be valid arch to build for (e.g. `i386` or `X86_64`)
+- `<variant>` can be `DEBUG`, `DEVELOPMENT`, `RELEASE`, `PROFILE`, or some combination thereof when surrounded by double-quotes.
+    - These configure compilation flags and assertions throughout kernel code.
 
 To build a kernel for the same architecture as running OS, just type
 
@@ -44,7 +44,7 @@ $ make
 $ make SDKROOT=macosx.internal
 ```
 
-Additionally, there is support for configuring architectures through `ARCH_CONFIGS` and kernel configurations with `KERNEL_CONFIGS`.
+Additionally, there is support for configuring architectures through `ARCH_CONFIGS` and kernel configurations with `KERNEL_CONFIGS`;
 ```sh
 $ make SDKROOT=macosx.internal ARCH_CONFIGS=X86_64 KERNEL_CONFIGS=DEVELOPMENT
 $ make SDKROOT=macosx.internal ARCH_CONFIGS=X86_64 KERNEL_CONFIGS="RELEASE DEVELOPMENT DEBUG"
@@ -68,14 +68,34 @@ Define architectures in your environment or when running a make command.
 $ make ARCH_CONFIGS="I386 X86_64" exporthdrs all
 ```
 
-## Other `makefile` options
+## Other `Makefile` options
 
-- $ make MAKEJOBS=-j8    # this will use 8 processes during the build. The default is 2x the number of active CPUS.
-- $ make -j8             # the standard command-line option is also accepted
-- $ make -w              # trace recursive make invocations. Useful in combination with VERBOSE=YES
-- $ make BUILD_LTO=0      # build without LLVM Link Time Optimization
-- $ make REMOTEBUILD=user@remotehost # perform build on remote host
-- $ make BUILD_JSON_COMPILATION_DATABASE=1 # Build Clang JSON Compilation Database
+- Use 8 processes during the build. The default is 2x the number of active CPUS.
+    ```sh
+    $ make MAKEJOBS=-j8
+    # Equivalently:
+    $ make -j8
+    ```
+
+- Trace recursive `make` invocations _(useful in combination with `VERBOSE=YES`)_:
+    ```sh
+    $ make -w
+    ```
+
+- Build without LLVM Link Time Optimization:
+    ```sh
+    $ make BUILD_LTO=0
+    ```
+
+- Perform build on remote host:
+    ```sh
+    $ make REMOTEBUILD=user@remotehost
+    ```
+
+- Build Clang JSON Compilation Database:
+    ```sh
+    $ make BUILD_JSON_COMPILATION_DATABASE=1
+    ```
 
 The XNU build system can optionally output color-formatted build output. To enable this, you can either
 set the `XNU_LOGCOLORS` environment variable to `y`, or you can pass `LOGCOLORS=y` to the make command.
@@ -92,14 +112,12 @@ $ make
 
 ## Building KernelCaches
 
-To test the xnu kernel, you need to build a `kernelcache` that links the kexts and
-kernel together into a single bootable image.
-To build a `kernelcache` you can use the following mechanisms:
+To test the xnu kernel, you need to build a `kernelcache` which links the kernel extensions and kernel together into a single,
+bootable image. To build a `kernelcache` you can use the following mechanisms:
 
 - **Using automatic `kernelcache` generation with `kextd`**
 
-    The `kextd` daemon keeps watching for changing in `/System/Library/Extensions` directory.
-    So you can setup new kernel as
+    The `kextd` daemon keeps watching for changing in `/System/Library/Extensions` directory. You can set up a new kernel with:
     ```sh
     $ cp BUILD/obj/DEVELOPMENT/X86_64/kernel.development /System/Library/Kernels/
     $ touch /System/Library/Extensions
@@ -111,13 +129,15 @@ To build a `kernelcache` you can use the following mechanisms:
     $ kextcache -q -z -a x86_64 -l -n -c /var/tmp/kernelcache.test -K /var/tmp/kernel.test /System/Library/Extensions
     ```
 
-## Running KernelCache on Target machine
+## Running KernelCache on a Target machine
 
-The development kernel and iBoot supports configuring boot arguments so that we can safely boot into test kernel and, if things go wrong, safely fall back to previously used `kernelcache`.
-Following are the steps to get such a setup:
+The development kernel and iBoot supports configuring boot arguments so that we can safely boot into test kernel and, if things go
+wrong, safely fall back to previously used `kernelcache`.
+
+Following these steps to get such a setup:
 
 1. Create kernel cache using the `kextcache` command as `/kernelcache.test`.
-1. Copy exiting boot configurations to alternate file:
+1. Copy existing boot configurations to an alternate file:
     ```sh
     $ cp /Library/Preferences/SystemConfiguration/com.apple.Boot.plist /next_boot.plist
     ```
@@ -146,11 +166,11 @@ $ make TAGS    # this will build etags
 $ make cscope  # this will build cscope database
 ```
 
-## Coding styles (Reindenting files)
+## Coding styles (Re-indenting files)
 
-Source files can be reindented using clang-format setup in `.clang-format`. XNU follows a variant of WebKit style for source code
-formatting. Please refer to format styles at [WebKit website](http://www.webkit.org/coding/coding-style.html). Further options about
-style options is available at [clang docs](http://clang.llvm.org/docs/ClangFormatStyleOptions.html)
+Source files can be re-indented using clang-format setup in `.clang-format`. XNU follows a variant of WebKit style for source code
+formatting. Please refer to format styles at [WebKit website]. Further options about
+style options is available at [clang docs].
 
 **Note:**
 The clang-format binary may not be part of base installation. It can be compiled from llvm clang sources, and is reachable in
@@ -228,7 +248,7 @@ lists, its member file lists and their default location are described below -
     Definition -
         INSTALL_KF_MI_LCL_LIST = `${KERNELFILES}` `${PRIVATE_KERNELFILES}`
 
-- `EXPORT_MI_LIST` : Exports header file to all of xnu (`bsd/`, `osfmk/`, etc.) for compilation only. Does not install anything into
+- `EXPORT_MI_LIST` : Exports header file to all of XNU (`bsd/`, `osfmk/`, etc.) for compilation only. Does not install anything into
 the SDK.
     Definition -
         EXPORT_MI_LIST = `${KERNELFILES}` `${PRIVATE_KERNELFILES}`
@@ -302,19 +322,19 @@ provided by the same version of kernel. The kernel chunked data format is descri
 
 ## Debugging the kernel
 
-The xnu kernel supports debugging with a remote kernel debugging protocol (kdp). Please refer documentation at [technical note] [TN2063]
-By default the kernel is setup to reboot on a panic. To debug a live kernel, the kdp server is setup to listen for UDP connections
-over ethernet. For machines without ethernet port, this behavior can be altered with use of kernel boot-args. Following are some
-common options.
+The XNU kernel supports debugging with a remote kernel debugging protocol (`kdp`). Please refer documentation at [technical note] [TN2063]
+By default the kernel is setup to reboot on a panic. To debug a live kernel, the `kdp` server is setup to listen for UDP connections
+over ethernet. For machines without ethernet port, this behavior can be altered with use of kernel boot-args.
 
+The following are some common options:
 - `debug=0x144` sets up debug variables to start `kdp` `debugserver` on panic
 - `-v` prints kernel logs on screen. By default XNU only shows grey screen with boot art.
 - `kdp_match_name=en1` overrides default port selection for `kdp`. Supported for ethernet, thunderbolt, and serial debugging.
 
 To debug a panic'ed kernel, use llvm debugger (lldb) along with unstripped symbol rich kernel binary.
-```sh
-$ lldb kernel.development.unstripped
-```
+    ```sh
+    $ lldb kernel.development.unstripped
+    ```
 
 And then you can connect to panic'ed machine with `kdp_remote [ip addr]` or `gdb_remote [hostip : port]` commands.
 
@@ -325,9 +345,19 @@ and scripts do not get loaded automatically when lldb is connected to machine. P
     settings set target.load-script-from-symbol-file true
     ```
 
-The `tools/lldbmacros` directory contains the source for each of these commands. Please follow the [README.md](tools/lldbmacros/README.md)
-for detailed explanation of commands and their usage.
+The `tools/lldbmacros` directory contains the source for each of these commands. Please follow the [the lldbmacros README] for
+detailed explanation of commands and their usage.
 
+[//]: # (External Links)
 [TN2118]: https://developer.apple.com/library/mac/technotes/tn2004/tn2118.html#//apple_ref/doc/uid/DTS10003352 "Kernel Core Dumps"
-[TN2063]: https://developer.apple.com/library/mac/technotes/tn2063/_index.html "Understanding and Debugging Kernel Panics"
+[the documentation on Understanding and Debugging Kernel Panics]: https://developer.apple.com/library/mac/technotes/tn2063/_index.html "Understanding and Debugging Kernel Panics"
 [Kernel Programming Guide]: https://developer.apple.com/library/mac/documentation/Darwin/Conceptual/KernelProgramming/build/build.html#//apple_ref/doc/uid/TP30000905-CH221-BABDGEGF
+[WebKit website]: http://www.webkit.org/coding/coding-style.html
+[clang docs]: http://clang.llvm.org/docs/ClangFormatStyleOptions.html
+
+[//]: # (Internal Links)
+[osfmk/tests/README.md](osfmk/tests/README.md)
+[the IOKit Makefile]: (iokit/IOKit/Makefile)
+[unit testing documentation]: (tools/tests/unit_tests/README.md)
+[the libkdd README]: libkdd/README.md
+[the lldbmacros README]: tools/lldbmacros/README.md
