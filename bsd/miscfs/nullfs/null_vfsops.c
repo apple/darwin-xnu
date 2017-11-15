@@ -77,8 +77,6 @@
 
 #include "nullfs.h"
 
-#define NULLFS_ENTITLEMENT "com.apple.private.nullfs_allow"
-
 #define SIZEOF_MEMBER(type, member) (sizeof(((type *)0)->member))
 #define MAX_MNT_FROM_LENGTH (SIZEOF_MEMBER(struct vfsstatfs, f_mntfromname))
 
@@ -135,11 +133,6 @@ nullfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
 	 */
 	if (vfs_isupdate(mp)) {
 		return ENOTSUP;
-	}
-
-	/* check entitlement */
-	if (!IOTaskHasEntitlement(current_task(), NULLFS_ENTITLEMENT)) {
-		return EPERM;
 	}
 
 	/*
@@ -320,8 +313,7 @@ nullfs_unmount(struct mount * mp, int mntflags, __unused vfs_context_t ctx)
 	NULLFSDEBUG("nullfs_unmount: mp = %p\n", (void *)mp);
 
 	/* check entitlement or superuser*/
-	if (!IOTaskHasEntitlement(current_task(), NULLFS_ENTITLEMENT) &&
-		vfs_context_suser(ctx) != 0) {
+	if (vfs_context_suser(ctx) != 0) {
 		return EPERM;
 	}
 
