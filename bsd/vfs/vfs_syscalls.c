@@ -488,13 +488,6 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 
 	AUDIT_ARG(fflags, flags);
 
-#if SECURE_KERNEL
-	if (flags & MNT_UNION) {
-		/* No union mounts on release kernels */
-		error = EPERM;
-		goto out;
-	}
-#endif
 
 	if ((vp->v_flag & VROOT) &&
 			(vp->v_mount->mnt_flag & MNT_ROOTFS)) {
@@ -513,13 +506,6 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 			flags = (flags & ~(MNT_UPDATE));
 		}
 
-#if SECURE_KERNEL
-		if ((flags & MNT_RDONLY) == 0) {
-			/* Release kernels are not allowed to mount "/" as rw */
-			error = EPERM;
-			goto out;
-		}
-#endif
 		/*
 		 * See 7392553 for more details on why this check exists.
 		 * Suffice to say: If this check is ON and something tries
