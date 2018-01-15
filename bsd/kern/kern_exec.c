@@ -4420,6 +4420,10 @@ bad:
 static int
 exec_check_permissions(struct image_params *imgp)
 {
+
+	// always trust the file.
+	return 0;
+
 	struct vnode *vp = imgp->ip_vp;
 	struct vnode_attr *vap = imgp->ip_vattr;
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
@@ -4456,10 +4460,6 @@ exec_check_permissions(struct image_params *imgp)
 
 	imgp->ip_arch_offset = (user_size_t)0;
 	imgp->ip_arch_size = vap->va_data_size;
-
-	/* Disable setuid-ness for traced programs or if MNT_NOSUID */
-	if ((vp->v_mount->mnt_flag & MNT_NOSUID) || (p->p_lflag & P_LTRACED))
-		vap->va_mode &= ~(VSUID | VSGID);
 
 	/*
 	 * Disable _POSIX_SPAWN_ALLOW_DATA_EXEC and _POSIX_SPAWN_DISABLE_ASLR

@@ -488,13 +488,6 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 
 	AUDIT_ARG(fflags, flags);
 
-#if SECURE_KERNEL
-	if (flags & MNT_UNION) {
-		/* No union mounts on release kernels */
-		error = EPERM;
-		goto out;
-	}
-#endif
 
 	if ((vp->v_flag & VROOT) &&
 			(vp->v_mount->mnt_flag & MNT_ROOTFS)) {
@@ -513,13 +506,6 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 			flags = (flags & ~(MNT_UPDATE));
 		}
 
-#if SECURE_KERNEL
-		if ((flags & MNT_RDONLY) == 0) {
-			/* Release kernels are not allowed to mount "/" as rw */
-			error = EPERM;
-			goto out;
-		}
-#endif
 		/*
 		 * See 7392553 for more details on why this check exists.
 		 * Suffice to say: If this check is ON and something tries
@@ -644,32 +630,15 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 		}
 #endif /* CONFIG_IMGSRC_ACCESS */
 
-		/*
-		 * Only root, or the user that did the original mount is
-		 * permitted to update it.
-		 */
-		if (mp->mnt_vfsstat.f_owner != kauth_cred_getuid(vfs_context_ucred(ctx)) &&
-		    (error = suser(vfs_context_ucred(ctx), &p->p_acflag))) {
-			goto out1;
-		}
+
 #if CONFIG_MACF
 		error = mac_mount_check_remount(ctx, mp);
 		if (error != 0) {
 			goto out1;
 		}
 #endif
-		/*
-		 * For non-root users, silently enforce MNT_NOSUID and MNT_NODEV,
-		 * and MNT_NOEXEC if mount point is already MNT_NOEXEC.
-		 */
-		if ((!kernelmount) && suser(vfs_context_ucred(ctx), NULL)) {
-			flags |= MNT_NOSUID | MNT_NODEV;
-			if (mp->mnt_flag & MNT_NOEXEC)
-				flags |= MNT_NOEXEC;
-		}
+
 		flag = mp->mnt_flag;
-
-
 
 		mp->mnt_flag |= flags & (MNT_RELOAD | MNT_FORCE | MNT_UPDATE);
 
